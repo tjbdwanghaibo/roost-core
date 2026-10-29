@@ -59,6 +59,12 @@ func (s *SpatialFrame) block(x, z float64) [2]int64 {
 // 新对象进入 radius，已可见对象保留到 radius+margin；进入发完整对象，离开发 remove 由 Cursor 负责。
 // XZ Block 粗筛后按 XYZ 中心距离裁剪，不作遮挡判定；自己始终可见，不让客户端指定观察坐标。
 func (s *SpatialFrame) Visible(observer uint64, radius, margin float64, previous map[uint64]bool) (chunksync.Snapshot, map[uint64]bool, error) {
+	return s.VisibleInto(nil, observer, radius, margin, previous)
+}
+
+// VisibleInto 与 Visible 相同，但把新可见集合写进调用方交回的 selected（先清空；nil 时新建）。
+// selected 必须归调用方独占且已不再使用，典型是 ACK 后被替换下来的旧视野；不能是 previous。
+func (s *SpatialFrame) VisibleInto(selected map[uint64]bool, observer uint64, radius, margin float64, previous map[uint64]bool) (chunksync.Snapshot, map[uint64]bool, error) {
 	if radius <= 0 || margin < 0 || math.IsNaN(radius+margin) || math.IsInf(radius+margin, 0) || radius+margin > 1000 {
 		return chunksync.Snapshot{}, nil, errors.New("physics: invalid AOI radius")
 	}
@@ -74,7 +80,11 @@ func (s *SpatialFrame) Visible(observer uint64, radius, margin float64, previous
 	}
 	// 稳定视野下本次可见数接近上次，按 previous 预留容量，避免逐个追加时反复扩容。
 	out := chunksync.Snapshot{Epoch: s.Snapshot.Epoch, Tick: s.Snapshot.Tick, Objects: make([]chunksync.Object, 0, len(previous))}
-	selected := make(map[uint64]bool, len(previous))
+	if selected == nil {
+		selected = make(map[uint64]bool, len(previous))
+	} else {
+		clear(selected)
+	}
 	for x := first[0]; x <= last[0]; x++ {
 		for z := first[1]; z <= last[1]; z++ {
 			for _, i := range s.blocks[[2]int64{x, z}] {

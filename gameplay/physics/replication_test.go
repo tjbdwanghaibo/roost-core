@@ -161,8 +161,15 @@ func BenchmarkRecipientViewIndex(b *testing.B) {
 }
 
 // 固定场景走完整房间复制链路（量化快照、AOI、视图分档、字段增量、私有确认），
-// 逐帧比较载荷与视图账本。分配优化不得改变任何一帧的字节或分档结果。
+// 逐帧比较载荷与视图账本。分配优化不得改变任何一帧的字节或分档结果；
+// 复用 ACK 后换下的视野与账本（VisibleInto/PlanInto）必须与每次新建的结果相同。
 func TestRoomReplicationPipelineStaysByteIdentical(t *testing.T) {
+	for _, reuse := range []bool{false, true} {
+		t.Run(fmt.Sprint("reuse=", reuse), func(t *testing.T) { checkRoomReplicationPipeline(t, reuse) })
+	}
+}
+
+func checkRoomReplicationPipeline(t *testing.T, reuse bool) {
 	bodies := CrowdScene()
 	tracks := []MotionTrack{{ID: 1, PeriodSeconds: 4, Axis: physx.Vec3{0, 1, 0}, AngularSpeed: 1}}
 	base := InitialFrame(9, bodies).States
@@ -174,6 +181,8 @@ func TestRoomReplicationPipelineStaysByteIdentical(t *testing.T) {
 		payload           []byte
 		view, nextView    map[uint64]ViewEntry
 		visible, nextSeen map[uint64]bool
+		spareView         map[uint64]ViewEntry
+		spareSeen         map[uint64]bool
 	}
 	members := []*member{{body: 51}, {body: 55}, {body: 60}, {body: 70}}
 	digest := sha256.New()
@@ -219,16 +228,20 @@ func TestRoomReplicationPipelineStaysByteIdentical(t *testing.T) {
 				if err = m.cursor.Commit(m.pending); err != nil {
 					t.Fatal(err)
 				}
+				if reuse {
+					m.spareView, m.spareSeen = m.view, m.visible
+				}
 				m.view, m.visible, m.pending = m.nextView, m.nextSeen, nil
 			}
-			snapshot, visible, err := spatial.Visible(m.body, 12, 2, m.visible)
+			snapshot, visible, err := spatial.VisibleInto(m.spareSeen, m.body, 12, 2, m.visible)
 			if err != nil {
 				t.Fatal(err)
 			}
-			plan, err := view.Plan(snapshot, m.body, grabs, m.view, DefaultReplicationPolicy())
+			plan, err := view.PlanInto(m.spareView, snapshot, m.body, grabs, m.view, DefaultReplicationPolicy())
 			if err != nil {
 				t.Fatal(err)
 			}
+			m.spareView, m.spareSeen = nil, nil
 			p, err := m.cursor.PlanFields(plan.Snapshot, QuantizedLayout())
 			if err != nil {
 				t.Fatal(err)

@@ -66,6 +66,10 @@ type memberState struct {
 	sequence                        uint64
 	visible, nextVisible            map[uint64]bool
 	view, nextView                  map[uint64]gamephysics.ViewEntry
+	// spareVisible / spareView 是 ACK 时被替换下来的上一代视野与视图账本，
+	// 只由本成员在 r.mu 下持有，下一次规划清空后复用；交给规划后即成为 next*。
+	spareVisible map[uint64]bool
+	spareView    map[uint64]gamephysics.ViewEntry
 }
 
 func New(cfg Config) (*Service, error) {
@@ -423,12 +427,13 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		}
 		metrics.ObserveHistogram("physics.room.ack_wait", nil, time.Since(v.sentAt))
 		metrics.IncCounter("physics.room.ack.total", nil, 1)
-		v.view = v.nextView
+		v.spareView, v.view = v.view, v.nextView
 		v.nextView = nil
 		v.pending = nil
 		v.pendingPayload = nil
 		v.sequence = ack
-		v.visible = v.nextVisible
+		v.spareVisible, v.visible = v.visible, v.nextVisible
+		v.nextVisible = nil
 	} else if ack != v.sequence {
 		return Delivery{}, ErrSequence
 	}
@@ -438,11 +443,14 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		if time.Since(v.sentAt) < 50*time.Millisecond {
 			return Delivery{Room: r.ref, Sequence: v.sequence}, nil
 		}
-		snapshot, visible, err := r.latest.Visible(v.body, s.cfg.Radius, s.cfg.Margin, v.visible)
+		snapshot, visible, err := r.latest.VisibleInto(v.spareVisible, v.body, s.cfg.Radius, s.cfg.Margin, v.visible)
 		if err != nil {
 			return Delivery{}, err
 		}
-		view, err := r.viewFrame.Plan(snapshot, v.body, r.grabs, v.view, s.cfg.Replication)
+		// 备用 map 交给规划后即归本次结果所有；失败时随结果丢弃，下次重新分配。
+		v.spareVisible = nil
+		view, err := r.viewFrame.PlanInto(v.spareView, snapshot, v.body, r.grabs, v.view, s.cfg.Replication)
+		v.spareView = nil
 		if err != nil {
 			return Delivery{}, err
 		}
