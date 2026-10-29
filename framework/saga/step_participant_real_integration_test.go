@@ -3,7 +3,7 @@
 package saga
 
 // 参与方新路径（第 3 批，未接线）在真实依赖上的用例：JetStream 协调器（NewEngine）+ 新步骤消费者
-// （SubscribeNativeStep / SubscribeMongoStep）。原生参与方是真实的 Nest 引擎 + nestwal WAL（strict）+ 手写的账户实体
+// （SubscribeNativeStep / SubscribeMongoStep）。原生参与方是真实的 Nest 引擎 + nestwal WAL + 手写的账户实体
 // （DAO 形状与生成 DAO 相同：字段补丁、回执 map 的逆操作按键登记），回执经 StepReceipts 适配放在实体文档的 r.<操作> 里。
 //
 //   - TestRealJetStreamNativeStepsEndToEnd：正向、业务拒绝后的补偿、“Nest 已提交但步骤体报错”的重投回放；另有一个从来没有命令的
@@ -11,7 +11,7 @@ package saga
 //   - TestRealJetStreamParticipantKill9：参与方子进程开 DataEngine 投影（共享隔离 Mongo，唯一库），10% 的步骤在 Nest 提交后报
 //     “结果未知”（重投必须回放），跑一批转账 saga 时 kill -9，
 //     同一 WAL 重启（先排空 WAL 进 Mongo 再加载），全部到终态后核对 Mongo 里每个账户的余额 = 按终态算出的预期：任何一个操作
-//     生效两次（重复扣款 / 重复退款）都会让余额对不上。
+//     生效两次（重复扣款 / 重复退款）都会让余额对不上。TestRealJetStreamParticipantKill9Strict 是同一用例固定用 strict。
 //   - TestRealMongoStepInboxSerializesConcurrentAttempts：同一操作的两次尝试并发进 Mongo 事务，写冲突让后者重跑并回放，业务写
 //     恰好一份。
 //   - TestRealJetStreamLoadPublisherDrivesAdmission：LoadPublisher 的积压关闭准入、回落重开、Remove 后不再计入。
@@ -23,8 +23,10 @@ package saga
 // ROOST_SAGA_MUTATE=noadmit 让协调器不做准入（原型 SAGAJS_MUTATE=noadmit 的迁移，设计 §11.2），TestRealJetStreamLoadPublisherDrivesAdmission
 // 必须变红。
 // 长停机：ROOST_SAGA_JS_RESTART_DELAY=60s 让 kill -9 之后过 60s 再拉起参与方（协调器在这期间按步骤超时反复重试）。
-// 异步完成：ROOST_SAGA_SCAN_PIPELINED_ASYNC=1 让参与方步骤 handler 用 DurabilityPipelined 并开 Nest pipelined 异步完成
-// （AfterCommit 在完成池执行，没有请求上下文、不持实体锁），端到端与 kill -9 用例在这一模式下照样核对至多一次与余额。
+// 提交方式：参与方缺省按生产方式跑——步骤 handler 用 DurabilityPipelined 并开 Nest pipelined 异步完成（点名步骤 handler；
+// AfterCommit 在完成池执行，没有请求上下文、不持实体锁），端到端与 kill -9 用例在这一模式下核对至多一次与余额。
+// strict 是显式选项（ptCommitStrict）：TestRealJetStreamParticipantKill9Strict 固定用它，保证 strict 路径仍有真实覆盖；
+// ROOST_SAGA_PT_STRICT=1 让本进程（含经环境继承的子进程）用 openPtParticipant 打开的参与方全部改用 strict，用来整批对照。
 
 import (
 	"bufio"
@@ -243,41 +245,59 @@ type ptParticipant struct {
 }
 
 // openPtParticipant 打开参与方：mongo 非空时走 DataEngine 投影（先排空 WAL 尾巴进 Mongo，再从 Mongo 加载账户——现行“先恢复再
-// 服务”），否则投影丢弃、账户全新（单进程用例）。
+// 服务”），否则投影丢弃、账户全新（单进程用例）。提交方式取生产缺省，ROOST_SAGA_PT_STRICT=1 时改为 strict（ptCommitFromEnv）。
 func openPtParticipant(walDir string, mongo fmongo.IMongo, database string, accounts int) (*ptParticipant, error) {
-	return openPtParticipantWith(walDir, mongo, database, accounts, ptParticipantOptions{})
+	return openPtParticipantWith(walDir, mongo, database, accounts, ptParticipantOptions{Commit: ptCommitFromEnv()})
 }
 
-// ptParticipantOptions 是压测档调的参与方参数，零值即 openPtParticipant 的缺省。
+// ptCommitMode 是参与方步骤 handler 的提交方式。零值是原生步骤的生产方式（维护者 2026-10-29，SAGA.md「原生步骤的提交方式」）。
+type ptCommitMode int
+
+const (
+	// ptCommitPipelinedAsync：durability=pipelined + Nest pipelined 异步完成点名步骤 handler（完成池取缺省 4 worker / 8192 队列）。
+	// 派发 worker 不在 WAL 票据上等，AfterCommit 与回复在完成池执行。
+	ptCommitPipelinedAsync ptCommitMode = iota
+	// ptCommitStrict：durability=strict，worker 锁内等所在 group commit 的 fsync（NEST_TRANSACTION_WAL.md）。
+	ptCommitStrict
+	// ptCommitPipelinedPhase1：durability=pipelined 但不开异步完成，worker 仍等票据（压测 native-pipelined 档）。
+	ptCommitPipelinedPhase1
+)
+
+func (m ptCommitMode) durability() nest.DurabilityPolicy {
+	if m == ptCommitStrict {
+		return nest.DurabilityStrict
+	}
+	return nest.DurabilityPipelined
+}
+
+func (m ptCommitMode) asyncCompletion() bool { return m == ptCommitPipelinedAsync }
+
+// ptStrictEnv 打开时，openPtParticipant（含 kill -9 用例经环境继承的子进程）打开的参与方改用 strict；压测脚本的 @strict<N>
+// 对照档也用它。
+const ptStrictEnv = "ROOST_SAGA_PT_STRICT"
+
+func ptCommitFromEnv() ptCommitMode {
+	if os.Getenv(ptStrictEnv) == "1" {
+		return ptCommitStrict
+	}
+	return ptCommitPipelinedAsync
+}
+
+// ptParticipantOptions 是参与方参数，零值即生产方式（pipelined + 异步完成）。
 type ptParticipantOptions struct {
-	// Durability 是步骤 handler 的持久化策略（零值 strict；压测的 pipelined 档用 DurabilityPipelined）。
-	Durability nest.DurabilityPolicy
+	// Commit 是步骤 handler 的提交方式（零值 ptCommitPipelinedAsync）。
+	Commit ptCommitMode
 	// NestWorkers 是 Nest short 池的 worker 数（零值 8）。strict 提交在 worker 上锁内等所在 group commit 的 fsync（NEST_TRANSACTION_WAL.md），
-	// 所以一次 group commit 至多带 NestWorkers 条记录：本机 fsync 约 8ms 时，原生步骤吞吐上限约 NestWorkers / 8ms。
+	// 所以 strict 下一次 group commit 至多带 NestWorkers 条记录：本机 fsync 约 8ms 时，原生步骤吞吐上限约 NestWorkers / 8ms。
 	NestWorkers int
 	// ProjectDelayPerRecord 让投影每条记录多等这么久（只给准入档制造投影积压；零值不等）。
 	ProjectDelayPerRecord time.Duration
-	// PipelinedAsync 给步骤 handler 打开 Nest 的 pipelined 异步完成（NestOptionWithPipelinedAsyncCompletion 点名 ptStepHandler，完成池取
-	// 缺省 4 worker / 8192 队列）：派发 worker 不在 WAL 票据上等，AfterCommit 与回复在完成池执行。按 handler 生效，别的 handler 不受影响。
-	PipelinedAsync bool
 }
 
-// ptPipelinedAsyncEnv 打开时，本进程（含 kill -9 用例经环境继承的子进程）打开的每个参与方都把步骤 handler 注册为
-// DurabilityPipelined 并开 pipelined 异步完成：用同一批真实用例核对 saga 步骤“落盘后才发”在异步完成下仍成立。
-const ptPipelinedAsyncEnv = "ROOST_SAGA_SCAN_PIPELINED_ASYNC"
-
-func ptPipelinedAsyncFromEnv() bool { return os.Getenv(ptPipelinedAsyncEnv) == "1" }
-
-// openPtParticipantWith 同 openPtParticipant，参数见 ptParticipantOptions。
+// openPtParticipantWith 同 openPtParticipant，参数见 ptParticipantOptions（不读 ROOST_SAGA_PT_STRICT）。
 func openPtParticipantWith(walDir string, mongo fmongo.IMongo, database string, accounts int, options ptParticipantOptions) (*ptParticipant, error) {
-	if options.Durability == 0 {
-		options.Durability = nest.DurabilityStrict
-	}
 	if options.NestWorkers <= 0 {
 		options.NestWorkers = 8
-	}
-	if ptPipelinedAsyncFromEnv() {
-		options.Durability, options.PipelinedAsync = nest.DurabilityPipelined, true
 	}
 	p := &ptParticipant{manager: entity.NewEntityManager()}
 	wal, err := nestwal.Open(nestwal.DefaultOptions(walDir))
@@ -312,12 +332,12 @@ func openPtParticipantWith(walDir string, mongo fmongo.IMongo, database string, 
 	}
 	nestOptions := []nest.NestOption{nest.NestOptionWithGetter(entity.NewManagerAccess(p.manager)), nest.NestOptionWithTransactionCommitter(p.projector),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: options.NestWorkers, QueueCap: 4096}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{})}
-	if options.PipelinedAsync {
+	if options.Commit.asyncCompletion() {
 		nestOptions = append(nestOptions, nest.NestOptionWithPipelinedAsyncCompletion(0, 0, ptStepHandler.String()))
-		fmt.Fprintln(os.Stderr, "participant: step handler", options.Durability, "with Nest pipelined async completion")
 	}
+	fmt.Fprintln(os.Stderr, "participant: step handler", options.Commit.durability(), "async completion", options.Commit.asyncCompletion(), "short workers", options.NestWorkers)
 	p.mgr = nest.NewEngine(nestOptions...)
-	p.mgr.MustRegisterHandlerWithMeta(ptStepHandler, p.step, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: options.Durability})
+	p.mgr.MustRegisterHandlerWithMeta(ptStepHandler, p.step, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: options.Commit.durability()})
 	open := nest.NewHandlerName("saga_pt_open")
 	p.mgr.MustRegisterHandlerWithMeta(open, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		dao := es[0].(*ptAccount).dao
@@ -787,13 +807,18 @@ type ptChild struct {
 	stopped chan bool
 }
 
-func startPtChild(t *testing.T, layout Layout, walDir, database string, accounts int) *ptChild {
+// startPtChild 拉起参与方子进程。strict 为真时子进程固定用 strict（经 ROOST_SAGA_PT_STRICT=1 传过去，后写的同名变量生效）；
+// 否则子进程继承本进程的 ROOST_SAGA_PT_STRICT（缺省生产方式）。
+func startPtChild(t *testing.T, layout Layout, walDir, database string, accounts int, strict bool) *ptChild {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=^TestRealJetStreamParticipantChild$", "-test.v", "-test.timeout=15m")
 	cmd.Env = append(os.Environ(), ptChildEnv+"=1",
 		"ROOST_SAGA_JS_PREFIX="+layout.Prefix, "ROOST_SAGA_JS_STREAM="+layout.Stream,
 		"ROOST_SAGA_JS_PARTITIONS="+strconv.Itoa(layout.Partitions), "ROOST_SAGA_JS_GROUPS="+strconv.Itoa(layout.Groups),
 		"ROOST_SAGA_JS_ACCOUNTS="+strconv.Itoa(accounts), "ROOST_SAGA_JS_WAL="+walDir, "ROOST_SAGA_JS_DB="+database)
+	if strict {
+		cmd.Env = append(cmd.Env, ptStrictEnv+"=1")
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -852,7 +877,13 @@ func (c *ptChild) stop(t *testing.T) {
 	}
 }
 
-func TestRealJetStreamParticipantKill9(t *testing.T) {
+func TestRealJetStreamParticipantKill9(t *testing.T) { runPtKill9(t, false) }
+
+// TestRealJetStreamParticipantKill9Strict 同 TestRealJetStreamParticipantKill9，参与方固定用 strict：缺省改成生产方式之后，
+// strict 路径（worker 锁内等 fsync 再回复）仍要有一条真实的崩溃重启覆盖。
+func TestRealJetStreamParticipantKill9Strict(t *testing.T) { runPtKill9(t, true) }
+
+func runPtKill9(t *testing.T, strict bool) {
 	url := realJSURL(t)
 	mongo := ptMongoClient(t)
 	database := ptDatabase(t, mongo)
@@ -861,7 +892,7 @@ func TestRealJetStreamParticipantKill9(t *testing.T) {
 	owner := startPtCoordinator(t, conn, layout, func(o *Options) { o.SnapshotEveryEvents = 64 })
 	const accounts = 16
 	walDir := t.TempDir()
-	first := startPtChild(t, layout, walDir, database, accounts)
+	first := startPtChild(t, layout, walDir, database, accounts, strict)
 	var killed atomic.Bool
 	restarted := make(chan *ptChild, 1)
 	transfers := ptStartAll(t, owner, 300, 8, accounts, func(i int) {
@@ -871,7 +902,7 @@ func TestRealJetStreamParticipantKill9(t *testing.T) {
 				if d, _ := time.ParseDuration(os.Getenv("ROOST_SAGA_JS_RESTART_DELAY")); d > 0 {
 					time.Sleep(d) // 诊断：参与方停得比步骤预算的一部分还久
 				}
-				restarted <- startPtChild(t, layout, walDir, database, accounts)
+				restarted <- startPtChild(t, layout, walDir, database, accounts, strict)
 			}()
 		}
 	})

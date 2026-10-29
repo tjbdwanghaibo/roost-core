@@ -13,10 +13,11 @@
 # 正确性是硬门槛：一档的非期望终态、余额不符、发布结果未知、积压 30s 内不归零任何一项不为 0，这一档的测试失败（结果仍写盘）。
 #
 # 原生参与方的提交方式（维护者 2026-10-29 决定，SAGA.md「原生步骤的提交方式」）：
-#   - 不带后缀的原生档（native-*、admission、snapshot）按生产推荐跑：步骤 handler durability=pipelined + Nest pipelined 异步完成
-#     （ROOST_SAGA_SCAN_PIPELINED_ASYNC=1），Nest short 池 worker 数 = 生产缺省 GOMAXPROCS = 4，不放大。
-#   - 后缀 @strict<N> 是对照档：步骤 handler durability=strict、short 池 N 个 worker（缺省计划带 @strict4 与 @strict64：strict 在
-#     生产缺省 short 池上等 fsync 会占满 worker，64 是原型压测放大池的口径）。
+#   - 不带后缀的原生档（native-forward、native-compensate、admission、snapshot）按生产推荐跑：步骤 handler durability=pipelined
+#     + Nest pipelined 异步完成（测试参与方的缺省，脚本显式清掉 ROOST_SAGA_PT_STRICT），Nest short 池 worker 数 = 生产缺省
+#     GOMAXPROCS = 4，不放大。native-pipelined 是 pipelined 不开异步完成的诊断档，不在缺省计划里。
+#   - 后缀 @strict<N> 是对照档：步骤 handler durability=strict（ROOST_SAGA_PT_STRICT=1）、short 池 N 个 worker（缺省计划带
+#     @strict4 与 @strict64：strict 在生产缺省 short 池上等 fsync 会占满 worker，64 是原型压测放大池的口径）。
 #   - mongo-forward / replay 没有 Nest 参与方，后缀不适用。
 # 缺省计划 15 档，每档 30s 加启动与排空，整轮 ≤ 30 分钟。summary.tsv 带 durability / 异步完成 / short 池 worker 数与忙占比、
 # 每个作业平均等 worker 的时长，对照 strict 档能直接看出差别。
@@ -32,7 +33,8 @@
 #   ROOST_SCAN_DATA            私有 NATS / mongod 数据目录（缺省 ${TMPDIR:-/tmp}/roost-saga-js-scan-<label>，结束删除）
 #   ROOST_SAGA_SCAN_PARTITIONS / ROOST_SAGA_SCAN_PROJECT_DELAY_US
 #                              透传给测试（P 缺省 16、准入档投影每条记录延迟缺省 10ms），见 TestRealSagaJSScanLevel；
-#                              short 池 worker 数与 pipelined 异步完成由每档的后缀决定（见上），不透传
+#                              short 池 worker 数与提交方式（ROOST_SAGA_SCAN_NEST_WORKERS / ROOST_SAGA_PT_STRICT）由每档的
+#                              后缀决定（见上），不透传
 #
 # 不碰共享环境：端口与目录私有，开跑前检查端口空闲；结束（含失败）停掉私有实例、删数据目录；结果目录保留。
 set -euo pipefail
@@ -168,16 +170,16 @@ for entry in $PLAN; do
   env_args=(ROOST_SAGA_SCAN_OUTPUT="$OUT/$name.json" ROOST_SAGA_SCAN_SCENARIO="$scenario" ROOST_SAGA_SCAN_SECONDS="$SECONDS_PER_LEVEL" ROOST_SAGA_SCAN_WARMUP="$WARMUP")
   case "$scenario:$variant" in
     mongo-forward:|replay:)
-      env_args+=(ROOST_SAGA_SCAN_PIPELINED_ASYNC=) ;;
+      env_args+=(ROOST_SAGA_PT_STRICT=) ;;
     mongo-forward:*|replay:*)
       echo "level $entry: @$variant does not apply to $scenario (no Nest participant)" >&2; exit 2 ;;
     *:)
-      # 生产推荐：pipelined + 异步完成，short 池 = GOMAXPROCS（Nest 缺省）。
-      env_args+=(ROOST_SAGA_SCAN_PIPELINED_ASYNC=1 ROOST_SAGA_SCAN_NEST_WORKERS="$GOMAXPROCS") ;;
+      # 生产推荐：pipelined + 异步完成（参与方缺省），short 池 = GOMAXPROCS（Nest 缺省）。
+      env_args+=(ROOST_SAGA_PT_STRICT= ROOST_SAGA_SCAN_NEST_WORKERS="$GOMAXPROCS") ;;
     *:strict[0-9]*)
       workers="${variant#strict}"
       case "$workers" in *[!0-9]*) echo "level $entry: want @strict<N>" >&2; exit 2 ;; esac
-      env_args+=(ROOST_SAGA_SCAN_PIPELINED_ASYNC=0 ROOST_SAGA_SCAN_NEST_WORKERS="$workers") ;;
+      env_args+=(ROOST_SAGA_PT_STRICT=1 ROOST_SAGA_SCAN_NEST_WORKERS="$workers") ;;
     *)
       echo "level $entry: unknown variant @$variant (want @strict<N>)" >&2; exit 2 ;;
   esac

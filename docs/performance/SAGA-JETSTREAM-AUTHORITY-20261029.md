@@ -64,3 +64,4 @@ fsync 频率始终约 124 次/s，吞吐只取决于一次 fsync 带几条记录
 - 单样本为主，时段间波动约 25%；c128 第二样本与第一个样本差 0.6%。
 - 异步完成是 Nest 引擎级开关：saga 进程里用户自己声明 pipelined 的 handler 也会在完成池上跑 AfterCommit（SAGA.md 已写明）。
 - `framework/saga` 真实用例的参与方零值仍是 strict，新默认靠 `ROOST_SAGA_SCAN_PIPELINED_ASYNC=1` 打开（压测脚本已打开）。
+  后续已改（2026-10-29）：参与方零值就是 pipelined + 异步完成，strict 改为显式选项（`ROOST_SAGA_PT_STRICT=1`、`TestRealJetStreamParticipantKill9Strict`），`ROOST_SAGA_SCAN_PIPELINED_ASYNC` 已删除。
