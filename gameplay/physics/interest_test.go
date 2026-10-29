@@ -1,6 +1,9 @@
 package physics
 
 import (
+	"math"
+	"math/rand/v2"
+	"slices"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync"
@@ -71,6 +74,58 @@ func TestSpatialVisibilityMatchesBruteForce(t *testing.T) {
 			want := self.ID == other.ID || dx*dx+dz*dz+dy*dy <= limit*limit
 			if got[other.ID] != want {
 				t.Fatalf("self=%d other=%d: selected=%v want=%v", self.ID, other.ID, got[other.ID], want)
+			}
+		}
+	}
+}
+
+// 可见对象的输出次序决定下游组帧字节：按 Block 的 x、z 升序，同一 Block 内按对象下标。
+// 用逐对象的参考实现对照，覆盖 ID 有序（物理房间原生输出）与乱序两种输入、跨负坐标的多个 Block。
+func TestSpatialVisibilityKeepsBlockOrder(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	for _, shuffled := range []bool{false, true} {
+		states := make([]physx.State, 120)
+		for i := range states {
+			states[i] = physx.State{ID: uint64(i + 1), Position: physx.Vec3{rng.Float32()*60 - 30, rng.Float32() * 4, rng.Float32()*60 - 30}, Rotation: physx.Quat{0, 0, 0, 1}}
+		}
+		if shuffled {
+			rng.Shuffle(len(states), func(i, j int) { states[i], states[j] = states[j], states[i] })
+		}
+		spatial, err := NewSpatialFrame(Frame{Epoch: 1, Tick: 1, States: states}, 25, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous := map[uint64]bool{3: true, 40: true, 77: true}
+		for _, self := range states {
+			view, _, err := spatial.Visible(self.ID, 12, 2, previous)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got, want []uint64
+			for _, o := range view.Objects {
+				got = append(got, o.ID)
+			}
+			block := func(v float32) int64 { return int64(math.Floor(float64(v) / 10)) }
+			cx, cz := float64(self.Position[0]), float64(self.Position[2])
+			for x := block(float32(cx - 14)); x <= block(float32(cx+14)); x++ {
+				for z := block(float32(cz - 14)); z <= block(float32(cz+14)); z++ {
+					for _, o := range states {
+						if block(o.Position[0]) != x || block(o.Position[2]) != z {
+							continue
+						}
+						limit := 12.0
+						if previous[o.ID] {
+							limit = 14
+						}
+						dx, dy, dz := float64(o.Position[0])-cx, float64(o.Position[1])-float64(self.Position[1]), float64(o.Position[2])-cz
+						if o.ID == self.ID || dx*dx+dy*dy+dz*dz <= limit*limit {
+							want = append(want, o.ID)
+						}
+					}
+				}
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("shuffled=%v self=%d: got %v want %v", shuffled, self.ID, got, want)
 			}
 		}
 	}
