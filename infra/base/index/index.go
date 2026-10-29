@@ -37,11 +37,8 @@ func (i *Index[K, V]) Upsert(key K, value V) {
 		}
 	}
 	i.primary[key] = value
-	if value != value {
-		// 不等于自身的值（NaN，或装着 NaN 的接口 / 结构体）作 map 键取不回来：反查桶建了也查不到、删不掉。
-		// 先建桶再按同一个值取回写入会在第一次插入就 panic。这种值只进主表，
-		// Get / Delete / Len 照常；Query 按 Go map 语义本来就命中不了它。
-		return
+	if containsNaN(value) {
+		return // 只进主表：Get / Delete / Len 照常，Query 按 Go map 语义本来就查不到它
 	}
 	keys := i.reverse[value]
 	if keys == nil {
@@ -50,6 +47,11 @@ func (i *Index[K, V]) Upsert(key K, value V) {
 	}
 	keys[key] = struct{}{}
 }
+
+// containsNaN 报告 v 是否含 NaN（float / complex 的 NaN，或装着 NaN 的数组、结构体、接口）。
+// Go 里只有含 NaN 的值不等于自身，所以 v != v 正是这个判断，并且覆盖任意嵌套，不需要反射。
+// 这类值作 map 键写得进、查不到、删不掉，不能进反查表。
+func containsNaN[V comparable](v V) bool { return v != v }
 
 func (i *Index[K, V]) Delete(key K) {
 	if i == nil {
