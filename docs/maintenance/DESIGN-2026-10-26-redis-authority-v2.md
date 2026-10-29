@@ -9,7 +9,7 @@
 
 本文自成一体，接手人不需要先读原草稿。依据：
 
-- **原草稿**：主检出未提交的 `docs/framework/REDIS-COMMIT-AND-STORE-SERVICE.md`（另一会话所写，不在仓库提交里）。本文吸收了它的方向、不变量、普通 Entity 状态机与验收矩阵（下文“草稿 §N”）。
+- **原草稿**：主检出未提交的 `docs/framework/REDIS-COMMIT-AND-STORE-SERVICE.md`（另一会话所写，从未入库，2026-10-29 删除）。本文吸收了它的方向、不变量、普通 Entity 状态机与验收矩阵（下文“草稿 §N”）。
 - **审查**：[PROPOSAL-2026-10-26-redis-authority-review.md](PROPOSAL-2026-10-26-redis-authority-review.md)（`5b6b846d`，下文“审查 §N”）：R1～R18 问题清单、§6 往返审计、§8 分期门槛、§9 第 2 步记录结构草案。
 - **第 0 步测量**：[SAGA-CLOUD-MONGO-20261026.md](../performance/SAGA-CLOUD-MONGO-20261026.md)（`30243c9b`，下文“报告 §N”）：本机 / 云 Mongo 闭环并发扫描、阶段拆分、往返实测、领取查询 explain、本机 Redis AOF 提交代价。
 - **源码基线**：main `30243c9b`。它与审查基线 `5b6b846d` 之间只改了 Saga 的测试夹具与 `scripts/perf/*`，产品源码没有变化；本文行号按 `30243c9b` 读出。codebase-memory 图谱的根是主检出，结论以 worktree 源码为准。

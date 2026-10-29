@@ -4,10 +4,10 @@
 
 **状态：审查与提案，未实施，不是现行契约。** 维护者 2026-10-26 要求先对方案做代码审查。本篇只读审查，不改产品代码；第 1 步协议与第 2 步记录结构都是草案，等维护者拍板后再登记到 DESIGN-TODO。
 
-- **审查对象**：主检出未提交草稿（2026-10-26）`docs/framework/REDIS-COMMIT-AND-STORE-SERVICE.md`（下称“方案”，引用写“方案 §N”）。草稿不在本仓库提交里，本篇不复制它。
+- **审查对象**：主检出未提交草稿（2026-10-26）`docs/framework/REDIS-COMMIT-AND-STORE-SERVICE.md`（下称“方案”，引用写“方案 §N”）。草稿从未入库，路线放弃后已于 2026-10-29 删除；它的方向与不变量见 [Redis 权威设计 v2](DESIGN-2026-10-26-redis-authority-v2.md)。
 - **源码基线**：main `044f6086`。方案的文档基线是 `ce49b3c3`，两者之间只改了物理房间与 `framework/nest/try_batch.go` 的时间片，本篇涉及的 DataEngine / Saga / Remote / Redis 源码没有变化。
 - **图谱**：codebase-memory 项目根是主检出（`ce49b3c3`）。本篇的结论以 worktree 当前源码为准，行号都按源码直接读出。
-- **性能数据**：本地逐跳样本见 [Saga 单笔时间线](../performance/benchmarks/saga-timeline-20261023/README.md)。云库数据有两份：一份是主检出未提交样本 `docs/performance/benchmarks/saga-cloudmongo-20261026/` 与 `mongo-cloud-20261026/`，另一份是协调方转述的中途数据（本机到云 Mongo RTT 约 61ms，服务端单次写 4～5ms；原生步骤一笔串行约 50 多次 Mongo 往返，并发 1 时一笔 3.9s；投影事务每条约 530ms，并发 16 起出现 Failed）。正式报告 `SAGA-CLOUD-MONGO-20261026.md` 在收尾时还没写出，凡是依赖它的结论都标了“待云库数据”。
+- **性能数据**：本地逐跳样本见 [Saga 单笔时间线](../performance/benchmarks/saga-timeline-20261023/README.md)。云库数据有两份：一份是主检出未提交样本 `saga-cloudmongo-20261026/` 与 `mongo-cloud-20261026/`（从未入库，2026-10-29 删除；正式数据见 [SAGA-CLOUD-MONGO-20261026](../performance/SAGA-CLOUD-MONGO-20261026.md)），另一份是协调方转述的中途数据（本机到云 Mongo RTT 约 61ms，服务端单次写 4～5ms；原生步骤一笔串行约 50 多次 Mongo 往返，并发 1 时一笔 3.9s；投影事务每条约 530ms，并发 16 起出现 Failed）。正式报告 `SAGA-CLOUD-MONGO-20261026.md` 在收尾时还没写出，凡是依赖它的结论都标了“待云库数据”。
 
 ## 0. 结论
 
