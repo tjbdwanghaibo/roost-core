@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **物理房间：Go 分配约降六成（2026-10-29，维护者批准）**：macOS ARM64 同机交替 3 轮，机关 8 房间 81.57→31.15 MB/s、520k→191k allocs/s，普通 8 房间 70.04→27.38 MB/s、451k→173k allocs/s，复制载荷逐帧字节不变（新增金样 `TestPlanFramesStayByteIdentical`、`TestRoomReplicationPipelineStaysByteIdentical`）。抓取校验改查已提交帧共享索引并删除每帧状态副本；`chunksync.Cursor` 组帧精确预算一次分配（去掉 `binary.Write` 装箱、分组 map、中间编码），基线未变时沿用旧副本，`Commit` 换下的基线 map 与临时变化表留给下一次 plan；成员视野 / 视图账本 ACK 后双缓冲，房间级 Poll 临时对象表复用；`physx.World.Step` 交换缓冲复用；量化快照载荷共用一块数组；输入命令一次预留。新增 API：`SpatialFrame.VisibleInto`、`ReplicationFrame.PlanInto`、`AppendMotionCommands`；原 `Visible` / `Plan` / `MotionCommands` 语义不变。`chunksync.Cursor` 不能按值复制后分别使用（之前也不应这样用，现在会共用复用的 map）。多房间负载测试输出新增 `MallocsPerSecond` / `AllocKBPerFrame` / `AllocsPerFrame`。见 [PHYSICS-ROOM-SERVICE §Go 分配 profile 与削减](docs/framework/PHYSICS-ROOM-SERVICE.md#go-分配-profile-与削减2026-10-29macos-arm64)。
+
 - **Saga 压测夹具：余额核对分项、未观察终态补查、逐秒序列**（`TestRealSagaJSScanLevel`，[复现报告](docs/performance/SAGA-CLOUD-C128-REPRO-20261029.md)）：
   - 读失败 / 超时与 Nest、Mongo 不符分开计数，不再 `t.Fatal` 中断；发起方没观察到终态的笔在追平后补查，补到的计入预期。
   - 记实际加压时长与停止加压时的积压；`series` 逐秒记 WAL、投影器、积压与准入信号，脚本写 `<档>.series.tsv`。

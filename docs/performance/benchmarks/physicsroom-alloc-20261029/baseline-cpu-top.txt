@@ -1,0 +1,38 @@
+File: base.test
+Type: cpu
+Time: 2026-10-29 18:39:56 CST
+Duration: 12.13s, Total samples = 3.83s (31.57%)
+Showing nodes accounting for 3.35s, 87.47% of 3.83s total
+Dropped 114 nodes (cum <= 0.02s)
+Showing top 30 nodes out of 179
+      flat  flat%   sum%        cum   cum%
+     0.56s 14.62% 14.62%      0.56s 14.62%  runtime.pthread_cond_wait
+     0.47s 12.27% 26.89%      0.47s 12.27%  runtime.usleep
+     0.43s 11.23% 38.12%      0.43s 11.23%  <unknown>
+     0.41s 10.70% 48.83%      0.41s 10.70%  runtime.pthread_cond_signal
+     0.24s  6.27% 55.09%      0.24s  6.27%  runtime.madvise
+     0.19s  4.96% 60.05%      0.19s  4.96%  runtime.pthread_kill
+     0.18s  4.70% 64.75%      0.18s  4.70%  runtime.cgocall
+     0.15s  3.92% 68.67%      0.15s  3.92%  runtime.kevent
+     0.08s  2.09% 70.76%      0.24s  6.27%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.(*ReplicationFrame).Plan
+     0.08s  2.09% 72.85%      0.10s  2.61%  runtime.tryDeferToSpanScan
+     0.07s  1.83% 74.67%      0.07s  1.83%  [libroost_physx.dylib]
+     0.05s  1.31% 75.98%      0.10s  2.61%  runtime.mapaccess2_fast64
+     0.05s  1.31% 77.28%      0.13s  3.39%  runtime.scanObject
+     0.04s  1.04% 78.33%      0.04s  1.04%  internal/runtime/maps.(*Iter).Next
+     0.04s  1.04% 79.37%      0.05s  1.31%  runtime.scanObjectsSmall
+     0.03s  0.78% 80.16%      0.03s  0.78%  internal/runtime/maps.(*groupReference).key (inline)
+     0.03s  0.78% 80.94%      0.03s  0.78%  runtime.memclrNoHeapPointers
+     0.02s  0.52% 81.46%      0.16s  4.18%  github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync.(*Cursor).plan
+     0.02s  0.52% 81.98%      0.02s  0.52%  internal/runtime/maps.ctrlGroupMatchEmpty (inline)
+     0.02s  0.52% 82.51%      0.02s  0.52%  runtime.(*m).clearAllpSnapshot
+     0.02s  0.52% 83.03%      0.02s  0.52%  runtime.arenaIndex (inline)
+     0.02s  0.52% 83.55%      0.04s  1.04%  runtime.bulkBarrierPreWrite
+     0.02s  0.52% 84.07%      0.06s  1.57%  runtime.growslice
+     0.02s  0.52% 84.60%      0.07s  1.83%  runtime.mallocgcSmallScanNoHeaderSC5
+     0.02s  0.52% 85.12%      0.10s  2.61%  runtime.mapassign_fast64
+     0.02s  0.52% 85.64%      0.02s  0.52%  runtime.memequal
+     0.02s  0.52% 86.16%      0.02s  0.52%  runtime.memmove
+     0.02s  0.52% 86.68%      0.02s  0.52%  runtime.procyieldAsm
+     0.02s  0.52% 87.21%      0.02s  0.52%  runtime.walltime
+     0.01s  0.26% 87.47%      0.02s  0.52%  encoding/binary.Write

@@ -1,0 +1,32 @@
+File: base.test
+Type: alloc_space
+Time: 2026-10-29 18:38:18 CST
+Showing nodes accounting for 473.48MB, 96.94% of 488.43MB total
+Dropped 155 nodes (cum <= 2.44MB)
+Showing top 25 nodes out of 57
+      flat  flat%   sum%        cum   cum%
+   95.05MB 19.46% 19.46%   106.24MB 21.75%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.(*ReplicationFrame).Plan
+   55.71MB 11.41% 30.87%    55.71MB 11.41%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.(*SpatialFrame).Visible
+   48.54MB  9.94% 40.80%    93.48MB 19.14%  github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync.(*Cursor).plan
+   41.55MB  8.51% 49.31%    41.55MB  8.51%  github.com/tjbdwanghaibo/roost-core/service/physicsroom.(*Service).updateGrabs
+   37.96MB  7.77% 57.08%    37.96MB  7.77%  slices.Clone[[]physx.State] { InputGeneration uint64; InputSequence uint64; InputActive bool; ID uint64; P
+   37.14MB  7.60% 64.69%    37.14MB  7.60%  github.com/tjbdwanghaibo/roost-core/infra/physics/physx.(*World).Step
+   29.65MB  6.07% 70.76%    29.65MB  6.07%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.(*ReplicationScene).Frame
+   19.45MB  3.98% 74.74%    19.45MB  3.98%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.spatialFrame
+   17.28MB  3.54% 78.28%    17.28MB  3.54%  slices.Clone[go.shape.[]uint8,go.shape.uint8] (inline)
+   16.57MB  3.39% 81.67%    16.57MB  3.39%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.QuantizedSnapshot
+   13.88MB  2.84% 84.51%    13.88MB  2.84%  bytes.Clone (inline)
+   13.11MB  2.68% 87.20%    13.11MB  2.68%  bytes.growSlice
+   10.94MB  2.24% 89.44%    10.94MB  2.24%  internal/bytealg.MakeNoZero
+   10.82MB  2.21% 91.65%    10.82MB  2.21%  github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync.FieldLayout.encode
+    7.71MB  1.58% 93.23%     7.71MB  1.58%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.RoomPayload (inline)
+    6.35MB  1.30% 94.53%    25.63MB  5.25%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.(*StateDAO).Accept
+    5.69MB  1.16% 95.70%     6.50MB  1.33%  github.com/tjbdwanghaibo/roost-core/service/physicsroom.(*Service).run.func3
+    2.56MB  0.52% 96.22%     6.08MB  1.24%  encoding/binary.Write
+    1.44MB  0.29% 96.51%    14.55MB  2.98%  bytes.(*Buffer).grow
+    1.25MB  0.26% 96.77%     2.56MB  0.52%  internal/reflectlite.Swapper
+    0.45MB 0.093% 96.86%   282.32MB 57.80%  github.com/tjbdwanghaibo/roost-core/wiring/physicsroom.runRoomLoad.func2
+    0.31MB 0.064% 96.93%   280.16MB 57.36%  github.com/tjbdwanghaibo/roost-core/service/physicsroom.(*Service).Poll
+    0.06MB 0.013% 96.94%    28.76MB  5.89%  github.com/tjbdwanghaibo/roost-core/framework/nest.runNestLogic
+         0     0% 96.94%    13.11MB  2.68%  bytes.(*Buffer).Write
+         0     0% 96.94%    27.70MB  5.67%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*NestMgr).dispatchLoadedEntities
