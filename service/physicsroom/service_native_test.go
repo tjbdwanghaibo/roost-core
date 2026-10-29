@@ -298,34 +298,22 @@ func TestMechanismsGrabExpiryAndSampledInput(t *testing.T) {
 	}
 	wait(func() bool { return r.grabs[1] == 3 })
 	wait(func() bool {
-		for _, v := range r.states {
-			if v.ID == 1 {
-				return v.InputSequence == 1 && v.InputGeneration == member.InputGeneration && v.InputActive
-			}
-		}
-		return false
+		v, ok := r.viewFrame.State(1)
+		return ok && v.InputSequence == 1 && v.InputGeneration == member.InputGeneration && v.InputActive
 	})
 	wait(func() bool {
 		if len(r.grabs) != 0 {
 			return false
 		}
-		for _, v := range r.states {
-			if v.ID == 1 {
-				return v.InputSequence == 1 && !v.InputActive
-			}
-		}
-		return false
+		v, ok := r.viewFrame.State(1)
+		return ok && v.InputSequence == 1 && !v.InputActive
 	})
 	if err = s.Submit(ctx, member, Input{Sequence: 2, GrabTarget: 100}); err != nil {
 		t.Fatal(err)
 	} // 静态地面不可抓。
 	wait(func() bool {
-		for _, v := range r.states {
-			if v.ID == 1 {
-				return v.InputSequence == 2
-			}
-		}
-		return false
+		v, ok := r.viewFrame.State(1)
+		return ok && v.InputSequence == 2
 	})
 	r.mu.Lock()
 	count := len(r.grabs)
@@ -347,12 +335,8 @@ func TestMechanismsGrabExpiryAndSampledInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	wait(func() bool {
-		for _, v := range r.states {
-			if v.ID == 1 {
-				return v.InputGeneration == next.InputGeneration && v.InputSequence == 1
-			}
-		}
-		return false
+		v, ok := r.viewFrame.State(1)
+		return ok && v.InputGeneration == next.InputGeneration && v.InputSequence == 1
 	})
 }
 
@@ -407,12 +391,7 @@ func TestExpiredJumpIsNotConsumedAfterSlowCommit(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		r.mu.Lock()
-		var state physx.State
-		for _, v := range r.states {
-			if v.ID == 1 {
-				state = v
-			}
-		}
+		state, _ := r.viewFrame.State(1)
 		r.mu.Unlock()
 		if state.InputSequence == 6 {
 			if state.Velocity[1] > 1 {
@@ -457,15 +436,9 @@ func TestPrivateInputAckAndRetryStayWithTheirFrame(t *testing.T) {
 		deadline := time.Now().Add(time.Second)
 		for time.Now().Before(deadline) {
 			r.mu.Lock()
-			ready, otherReady := false, false
-			for _, v := range r.states {
-				if v.ID == 2 && v.InputSequence == 22 {
-					otherReady = true
-				}
-				if v.ID == 1 && v.InputSequence == seq {
-					ready = true
-				}
-			}
+			self, _ := r.viewFrame.State(1)
+			other, _ := r.viewFrame.State(2)
+			ready, otherReady := self.InputSequence == seq, other.InputSequence == 22
 			r.mu.Unlock()
 			if ready && otherReady {
 				return

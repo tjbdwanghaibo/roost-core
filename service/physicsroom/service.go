@@ -47,9 +47,11 @@ type room struct {
 	members     map[int64]*memberState
 	latest      *gamephysics.SpatialFrame
 	replication *gamephysics.ReplicationScene
-	viewFrame   *gamephysics.ReplicationFrame
-	states      []physx.State
-	grabs       map[uint64]uint64
+	// viewFrame 是最近一个已提交帧的只读索引；Poll 规划视图与 updateGrabs 校验距离共用它。
+	viewFrame *gamephysics.ReplicationFrame
+	// dynamic 是建房时固定的可控刚体集合，建房后只读，不随 Tick 重建。
+	dynamic map[uint64]bool
+	grabs   map[uint64]uint64
 }
 type memberState struct {
 	member                          Member
@@ -202,9 +204,14 @@ func (s *Service) Create(ctx context.Context, spec Spec) (Ref, error) {
 	spec.Bodies = slices.Clone(spec.Bodies)
 	spec.Motions = slices.Clone(spec.Motions)
 	spec.Joints = slices.Clone(spec.Joints)
-	r := &room{ref: ref, spec: spec, world: w, cancel: cancel, done: make(chan struct{}), members: make(map[int64]*memberState), latest: initial, states: gamephysics.InitialFrame(ref.Epoch, spec.Bodies).States, grabs: make(map[uint64]uint64)}
+	r := &room{ref: ref, spec: spec, world: w, cancel: cancel, done: make(chan struct{}), members: make(map[int64]*memberState), latest: initial, dynamic: make(map[uint64]bool), grabs: make(map[uint64]uint64)}
+	for _, b := range spec.Bodies {
+		if b.MotionType() == physx.Dynamic {
+			r.dynamic[b.ID] = true
+		}
+	}
 	r.replication = gamephysics.NewReplicationScene(spec.Bodies, spec.Motions)
-	r.viewFrame = r.replication.Frame(r.states)
+	r.viewFrame = r.replication.Frame(gamephysics.InitialFrame(ref.Epoch, spec.Bodies).States)
 	s.rooms[ref.ID] = r
 	s.metrics.Accepted("create")
 	s.metrics.Depth("rooms", int64(len(s.rooms)))
@@ -294,7 +301,6 @@ func (s *Service) run(ctx context.Context, r *room) {
 		r.mu.Lock()
 		r.latest = frame
 		r.viewFrame = viewFrame
-		r.states = slices.Clone(f.States)
 		r.mu.Unlock()
 		return nil
 	})
@@ -326,13 +332,7 @@ func (s *Service) Join(ctx context.Context, ref Ref, binding gateway.Binding, bo
 		old.seenAt = time.Now()
 		return old.member, nil
 	}
-	valid := false
-	for _, b := range r.spec.Bodies {
-		if b.ID == bodyID && b.MotionType() == physx.Dynamic {
-			valid = true
-		}
-	}
-	if !valid {
+	if !r.dynamic[bodyID] {
 		return Member{}, ErrRequestInvalid
 	}
 	for _, m := range r.members {

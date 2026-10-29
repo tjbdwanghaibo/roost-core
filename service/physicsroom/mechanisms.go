@@ -8,26 +8,19 @@ import (
 
 // updateGrabs 只从物理执行器调用，基于上一已提交帧验证距离。每个控制者至多
 // 一条约束；松手、过期、离开都会释放。拒绝非法目标不终止房间、不允许客户端造关节。
+// 位置直接查 r.viewFrame 的共享索引、可控集合用建房时的 r.dynamic，每 Tick 不再复制全部刚体。
 func (s *Service) updateGrabs(r *room) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	poses := make(map[uint64]physx.State, len(r.states))
-	for _, v := range r.states {
-		poses[v.ID] = v
-	}
-	dynamic := make(map[uint64]bool, len(r.spec.Bodies))
-	for _, b := range r.spec.Bodies {
-		dynamic[b.ID] = b.MotionType() == physx.Dynamic
-	}
 	desired := make(map[uint64]uint64)
 	now := time.Now()
 	for _, m := range r.members {
 		target := m.input.GrabTarget
-		if target == 0 || target == m.body || !dynamic[target] || now.Sub(m.inputAt) > s.cfg.InputTTL || now.Sub(m.seenAt) > s.cfg.MemberTTL {
+		if target == 0 || target == m.body || !r.dynamic[target] || now.Sub(m.inputAt) > s.cfg.InputTTL || now.Sub(m.seenAt) > s.cfg.MemberTTL {
 			continue
 		}
-		a, aok := poses[m.body]
-		b, bok := poses[target]
+		a, aok := r.viewFrame.State(m.body)
+		b, bok := r.viewFrame.State(target)
 		if !aok || !bok {
 			continue
 		}
