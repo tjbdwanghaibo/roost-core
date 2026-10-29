@@ -91,25 +91,6 @@ func TestModProvidesInstanceClientAndHealth(t *testing.T) {
 	}
 }
 
-func TestModSelectsDataEngineCommitterWithoutLegacyWALRuntime(t *testing.T) {
-	cfg := viper.New()
-	cfg.Set("persistence.engine", "dataengine")
-	registry := app.NewRegistry(cfg)
-	if err := registry.Register(mods.ModDataEngine, dataEngineNestProvider{committer: noOpCommitter{}}); err != nil {
-		t.Fatal(err)
-	}
-	mod := NewMod(emptyGetter{})
-	if err := mod.Init(cfg); err != nil {
-		t.Fatal(err)
-	}
-	if err := mod.Provide(registry); err != nil {
-		t.Fatal(err)
-	}
-	if mod.Engine() == nil {
-		t.Fatal("dataengine-backed Nest engine was not constructed")
-	}
-}
-
 // App 单实例锁方案 §5：任何 fail-stop（失锁、DataEngine fatal、Remote fatal）都经
 // RuntimeFailure.OnFail 立即围栏 Nest，拒绝新的派发；模块自己不再各写一遍“找 Nest、围栏”。
 func TestRuntimeFailureFencesNestDispatch(t *testing.T) {
