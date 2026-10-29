@@ -118,5 +118,5 @@ ROOST_PROJPAR_TARGET=cloud ROOST_PROJPAR_SHAPES=plain ROOST_PROJPAR_RECORDS=1000
 ROOST_SCAN_TARGET=local ROOST_SCAN_SCENARIOS=native-forward ROOST_SCAN_LEVELS="16 64" ROOST_SCAN_HOPS=0 scripts/perf/saga-scan.sh
 ```
 
-原型对照用分支 `proto/saga-jetstream-log` 的 `scripts/perf/saga-jslog-proto/run-perf.sh cloud-part`，把该目录复制到要测的代码版本的临时工作树里运行；
+（历史记录：原型目录 `scripts/perf/saga-jslog-proto/` 已在 saga 第 6 批删除（正式实现与压测入口 `scripts/perf/saga-js-scan.sh` 取代它）；下文的命令与路径是历史记录，取回用 `git checkout c565c81b -- scripts/perf/saga-jslog-proto`。）原型对照用分支 `proto/saga-jetstream-log` 的 `scripts/perf/saga-jslog-proto/run-perf.sh cloud-part`，把该目录复制到要测的代码版本的临时工作树里运行；
 本轮另在 `tee` 前加了脱敏过滤（临时修改，未提交到任何分支）。

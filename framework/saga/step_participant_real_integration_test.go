@@ -19,7 +19,9 @@ package saga
 // 环境：ROOST_NATS_CLUSTER_URL（scripts/nats-cluster.sh 起的私有集群）；Mongo 用例另要 ROOST_DATAENGINE_IT_MONGO_URI（source
 // ~/.roost-it/roost-dataengine-it/env.sh，运行期间持有 $ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock），库名
 // roost_sagajs3_<pid>_<ns>，用后删除。Mongo 地址只经环境变量传给子进程，不打印。
-// 变异：ROOST_SAGA_MUTATE=noreceipt 让账户 handler 的 Begin 看不到已有回执，kill -9 与端到端用例必须变红。
+// 变异：ROOST_SAGA_MUTATE=noreceipt 让账户 handler 的 Begin 看不到已有回执，kill -9 与端到端用例必须变红；
+// ROOST_SAGA_MUTATE=noadmit 让协调器不做准入（原型 SAGAJS_MUTATE=noadmit 的迁移，设计 §11.2），TestRealJetStreamLoadPublisherDrivesAdmission
+// 必须变红。
 // 长停机：ROOST_SAGA_JS_RESTART_DELAY=60s 让 kill -9 之后过 60s 再拉起参与方（协调器在这期间按步骤超时反复重试）。
 
 import (
@@ -241,6 +243,11 @@ type ptParticipant struct {
 // openPtParticipant 打开参与方：mongo 非空时走 DataEngine 投影（先排空 WAL 尾巴进 Mongo，再从 Mongo 加载账户——现行“先恢复再
 // 服务”），否则投影丢弃、账户全新（单进程用例）。
 func openPtParticipant(walDir string, mongo fmongo.IMongo, database string, accounts int) (*ptParticipant, error) {
+	return openPtParticipantWith(walDir, mongo, database, accounts, nest.DurabilityStrict)
+}
+
+// openPtParticipantWith 同 openPtParticipant，步骤 handler 用给定的持久化策略（压测的 pipelined 档用 DurabilityPipelined）。
+func openPtParticipantWith(walDir string, mongo fmongo.IMongo, database string, accounts int, durability nest.DurabilityPolicy) (*ptParticipant, error) {
 	p := &ptParticipant{manager: entity.NewEntityManager()}
 	wal, err := nestwal.Open(nestwal.DefaultOptions(walDir))
 	if err != nil {
@@ -274,7 +281,7 @@ func openPtParticipant(walDir string, mongo fmongo.IMongo, database string, acco
 	}
 	p.mgr = nest.NewEngine(nest.NestOptionWithGetter(entity.NewManagerAccess(p.manager)), nest.NestOptionWithTransactionCommitter(p.projector),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 4096}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
-	p.mgr.MustRegisterHandlerWithMeta(ptStepHandler, p.step, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	p.mgr.MustRegisterHandlerWithMeta(ptStepHandler, p.step, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: durability})
 	open := nest.NewHandlerName("saga_pt_open")
 	p.mgr.MustRegisterHandlerWithMeta(open, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		dao := es[0].(*ptAccount).dao
@@ -922,6 +929,9 @@ func TestRealJetStreamLoadPublisherDrivesAdmission(t *testing.T) {
 	layout := realLayout(t, url, 1, 1)
 	conn := dialRealJS(t, url)
 	admission := AdmissionOptions{Enabled: true, HighRecords: 100, LowRecords: 50, StaleAfter: time.Second, SignalTTL: 10 * time.Second, HintEvery: 200 * time.Millisecond}
+	if os.Getenv("ROOST_SAGA_MUTATE") == "noadmit" {
+		admission.Enabled = false // 变异：协调器不做准入，积压再高也不关闭，本用例必须变红
+	}
 	owner := startRealEngine(t, conn, nil, func() Options {
 		o := realEngineOptions(layout, []int{0})
 		o.Admission = admission

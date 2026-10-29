@@ -1,6 +1,9 @@
 # Saga 协调器以 JetStream 为权威日志：设计稿与原型（2026-10-27）
 
 **状态：原型；维护者 2026-10-28 决定正式实施、放弃 Redis 权威路线（§17 第 12 条），函数级设计见 [DESIGN-2026-10-28-saga-jetstream-authority](DESIGN-2026-10-28-saga-jetstream-authority.md)。（第二轮：维护者 2026-10-27 决定按推荐，补了投影打开的实现与压测，见 §12、§17）。** 代码在 `scripts/perf/saga-jslog-proto/`（实验包，不进生产路径，不改 `framework/saga` 的 Store / 引擎 / wiring），
+
+> 原型目录 `scripts/perf/saga-jslog-proto/` 已在 saga 第 6 批删除（正式实现与压测入口 `scripts/perf/saga-js-scan.sh` 取代它）；下文的命令与路径是历史记录，取回用 `git checkout c565c81b -- scripts/perf/saga-jslog-proto`。
+
 分支 `proto/saga-jetstream-log` 只在本地提交。压测报告见 [SAGA-JETSTREAM-LOG-PROTO-20261027](../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)。
 本文先写前提与实测语义，再写设计；凡是实测改变了设计的地方都标“实测”。
 
@@ -315,6 +318,7 @@ Remote 实体的“单写者 + 版本 fence”与这里同构：每个 Remote �
 
 ```bash
 export SAGAJS_ROOT=<私有目录>  # 数据与日志
+# 原型目录 `scripts/perf/saga-jslog-proto/` 已在 saga 第 6 批删除（正式实现与压测入口 `scripts/perf/saga-js-scan.sh` 取代它）；下文的命令与路径是历史记录，取回用 `git checkout c565c81b -- scripts/perf/saga-jslog-proto`。
 scripts/perf/saga-jslog-proto/nats-cluster.sh start     # 私有三节点（缺省 25622-25624）
 export SAGAJS_URL=nats://127.0.0.1:25622,nats://127.0.0.1:25623,nats://127.0.0.1:25624
 GOWORK=off go test -race -count=1 -v ./scripts/perf/saga-jslog-proto/...      # 语义 + 正确性 + kill -9（投影用例要 SAGAJS_MONGO_URI，否则跳过）
