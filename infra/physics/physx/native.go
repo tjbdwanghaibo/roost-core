@@ -10,9 +10,11 @@ package physx
 import "C"
 import (
 	"errors"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"slices"
 	"sync"
 	"unsafe"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 type World struct {
@@ -21,6 +23,11 @@ type World struct {
 	ids     map[uint64]Motion
 	dynamic int
 	joints  map[uint64]bool
+	// input / raw / seen 是 Step 的交换缓冲，只在 w.mu 下使用并在每次使用前清零。
+	// C 侧在调用返回前读写完毕、不保留指针；返回给调用方的 []State 每次新建，不与之共享。
+	input []C.rp_command
+	raw   []C.rp_state
+	seen  map[uint64]bool
 }
 
 func New(gravity float32, workers int) (*World, error) {
@@ -37,7 +44,7 @@ func New(gravity float32, workers int) (*World, error) {
 	if p == nil {
 		return nil, errors.New("physx: create failed")
 	}
-	return &World{native: p, ids: make(map[uint64]Motion), joints: make(map[uint64]bool)}, nil
+	return &World{native: p, ids: make(map[uint64]Motion), joints: make(map[uint64]bool), seen: make(map[uint64]bool)}, nil
 }
 func (w *World) Add(b Body) error {
 	if err := fctx.BlockingError("physx.Add"); err != nil {
@@ -84,8 +91,11 @@ func (w *World) Step(dt float32, commands []Command) ([]State, error) {
 	if w.native == nil {
 		return nil, ErrClosed
 	}
-	input := make([]C.rp_command, len(commands))
-	seen := make(map[uint64]bool, len(commands))
+	input := slices.Grow(w.input[:0], len(commands))[:len(commands)]
+	clear(input) // 下面只在为真时写 target/jump，复用前必须清零。
+	w.input = input
+	seen := w.seen
+	clear(seen)
 	for i, c := range commands {
 		motion, ok := w.ids[c.ID]
 		if !ok || motion == Static || seen[c.ID] || !validVec(c.Acceleration) || (motion == Kinematic) != c.Target || c.Target && (!validVec(c.Position) || !validQuat(c.Rotation) || c.Jump || c.Acceleration != (Vec3{})) {
@@ -119,7 +129,9 @@ func (w *World) Step(dt float32, commands []Command) ([]State, error) {
 	if w.dynamic == 0 {
 		return nil, nil
 	}
-	raw := make([]C.rp_state, w.dynamic)
+	raw := slices.Grow(w.raw[:0], w.dynamic)[:w.dynamic]
+	clear(raw)
+	w.raw = raw
 	if int(C.rp_read(w.native, &raw[0], C.uint(len(raw)))) != w.dynamic {
 		return nil, errors.New("physx: incomplete snapshot")
 	}
