@@ -225,8 +225,9 @@ return left, step.Complete(true, "")
 
 **推荐 `durability=pipelined`，由框架配好 Nest 的 pipelined 白名单与异步完成；`strict` 仍是合法的显式选择。** 其他 handler 不受影响：
 它们照旧按自己的声明提交（不写时 async），Nest 的 short / long / io 池缺省不变，也没有专门的 saga 池。Nest 异步完成**按 handler 生效**，
-只给声明 pipelined 的原生步骤：同一进程里别的代码也可以声明 pipelined（例如心跳的 `heartbeat.WithDurability(nest.DurabilityPipelined)`），
-但仍是第一阶段（派发 worker 等票据、AfterCommit 在派发 goroutine 上、回复之前执行），不会悄悄得到异步完成。
+只给声明 pipelined 的原生步骤。目前框架里只有 saga 原生步骤用 pipelined（心跳不支持 pipelined，`heartbeat.WithDurability(nest.DurabilityPipelined)`
+在登记时被拒绝）；Nest 仍允许其他 handler 自己声明 pipelined，这类 handler 仍是第一阶段（派发 worker 等票据、AfterCommit 在派发 goroutine 上、
+回复之前执行），不会悄悄得到异步完成。
 
 **为什么**：原生步骤跑在参与方 Nest 的 short 池上。`strict` 在锁内等所在 group commit 的 fsync，worker 整段被占住；生产缺省 short 池只有
 GOMAXPROCS 个 worker，步骤一多，同进程其他实体的消息就排队。`pipelined` 在 WAL 记录入队后就放实体锁，异步完成再把“等落盘 → AfterCommit →
@@ -250,10 +251,10 @@ GOMAXPROCS 个 worker，步骤一多，同进程其他实体的消息就排队�
   - Nest 异步完成的 handler 名单**就是这些原生步骤**（`NestOptionWithPipelinedAsyncCompletion(workers, queueCap, handlers...)`），没有开关配置；
     没有这类原生步骤时名单为空，Nest 不建完成池。原来的 `nest.pipelined.async` 已删除（写了不再生效，doctor 按未声明的键报 FAIL）。
 - 异步完成按 handler 生效（维护者 2026-10-29 决定）：Nest 在注册 / 引擎构造时把名单解析成每个 handler 的标志，只有被点名的 pipelined 事务
-  交给完成泵；没被点名的 pipelined handler（包括心跳 `heartbeat.beat.pipelined`）在派发 worker 上等票据，只在同实体的完成链上排队，
+  交给完成泵；没被点名的 pipelined handler（业务自己声明的；框架内目前没有）在派发 worker 上等票据，只在同实体的完成链上排队，
   保持与异步完成事务之间的 LSN 序（NEST_PIPELINED_COMMIT.md §11）。strict / async / memory 走 `commitDurable` 或内存路径。
   对照用例：`TestAsyncCompletionIsPerHandler`、`TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged`（strict / async / 未点名的 pipelined 在
-  有 / 没有完成泵的引擎上观察一致）、`TestAsyncAndPhase1CompletionsKeepSameEntityLSNOrder`、心跳的 `TestPipelinedBeatDoesNotUseAsyncCompletionOfNativeSteps`。
+  有 / 没有完成泵的引擎上观察一致）、`TestAsyncAndPhase1CompletionsKeepSameEntityLSNOrder`。
   白名单让未列入的 handler 声明 pipelined 也只会在派发时得到 `ErrPipelinedNotAllowed`，不会被悄悄放开。
 - 手写装配（不经 `wiring/dataengine`）自己传 `nest.NestOptionWithPipelinedAllowlist` 与 `NestOptionWithPipelinedAsyncCompletion(workers, queueCap,
   saga.PipelinedNativeStepHandlers()...)`。

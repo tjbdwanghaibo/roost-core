@@ -154,7 +154,7 @@ func (c *RegenComponent) onBeat(b heartbeat.Beat) error {
 | `Reg.Start` / `Stop` / `SetPeriod` | 启停、换档。在事务里调用时**提交后生效、回滚作废**；不在事务里（加载发布前）立即生效。回调里调用的随本拍事务。`Start` 返回 `error`：Remote 托管实体处于共享模式时返回 `ErrHeartbeatRemoteShared`、不启动，其余情况为 nil |
 | `Reg.Close()` | 撤销一个登记：立即离开驱动、释放名字（同一实例上马上可以同名再 `Register`），之后 `Start` / `SetPeriod` 返回 `ErrRegClosed`。已经投出、还在队列里的拍到达时不执行回调（按过期丢弃）。与 `Register` 一样不随事务回滚。行为组件换场景重建时经 `Behavior.Close` / `Controller.Close` 调用（§4D） |
 | `Host.OnDestroy()` | 卸载、删档、撤销新建时由组件调用：实例永久离开驱动，之后的启停被忽略。组件漏调时，驱动在登记到期、发现实例已移除时替它撤销（计 `dropped{reason="removed"}`），但要等到期，最多一个最长档位的周期 |
-| `WithDurability(policy)` | 本登记心跳 handler 的持久级别，缺省 `async`。心跳本身什么都不持久；回调改了持久字段时按这里提交（`memory` 下改持久字段在提交点被拒）。**`strict` 每一拍都在实体 worker 上、持实体锁等提交落盘**（改了持久字段的拍要等一次 WAL 持久化才释放 worker），快池实体的高频心跳不要用；要“这一拍的结果一定落盘才算”的少数登记才用，并选低档位 |
+| `WithDurability(policy)` | 本登记心跳 handler 的持久级别，缺省 `async`；只支持 `memory` / `async` / `strict`，选 `pipelined` 等其他级别时 `Register` 返回 `ErrUnsupportedDurability`。心跳本身什么都不持久；回调改了持久字段时按这里提交（`memory` 下改持久字段在提交点被拒）。**`strict` 每一拍都在实体 worker 上、持实体锁等提交落盘**（改了持久字段的拍要等一次 WAL 持久化才释放 worker），快池实体的高频心跳不要用；要“这一拍的结果一定落盘才算”的少数登记才用，并选低档位 |
 | `WithTimeDomain(d)` | 本登记按场景的时间域计时（§4D）：调度仍按真实时间，`Beat.Now` / `Elapsed` 是域时间 |
 
 **档位**：只有 10 个固定档位，不支持任意周期（维护者决定 ⑥）：50ms、100ms、200ms、500ms、1s、2s、5s、10s、30s、60s。建议：移动 200ms（MMO / SLG 常见 2～5Hz，`movement.DefaultMovePeriod`；动作游戏要更细时在动作参数里给 100ms）、AI 200ms～500ms、Buff / 回复 / 冷却 1s，空闲时 `Stop`（停止的登记不占调度）。驱动 10ms 一格，**相位 = hash(实体 ID)**：同档的实体均匀落在周期内的各格，没有整点尖峰；同一实体的同档登记落在同一格（仍是各自一条消息）。首拍在启动生效后的 (0, 周期] 内。

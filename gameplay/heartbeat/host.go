@@ -21,6 +21,9 @@ var (
 	ErrHostClosed = errors.New("heartbeat: host is closed")
 	// ErrRegClosed 表示登记已撤销（Reg.Close 之后），不能再启动或换档。
 	ErrRegClosed = errors.New("heartbeat: registration is closed")
+	// ErrUnsupportedDurability 表示 WithDurability 选了心跳不支持的持久级别。支持 memory / async / strict；pipelined 不支持
+	// （维护者 2026-10-29：只有 saga 原生步骤真正需要 pipelined，心跳不为它单独注册 handler）。
+	ErrUnsupportedDurability = errors.New("heartbeat: unsupported durability (supported: memory, async, strict)")
 	// ErrHeartbeatRemoteShared 表示 Remote 托管实体处于共享模式（Sharing / Shared），不允许挂载心跳：
 	// 共享模式下各写者进程的实例状态都是 Shared、都经分布式锁写，本地分不出谁该跳，心跳无法执行。Register 与 Start
 	// 在共享模式下返回它；运行期才进入共享模式的，已挂的心跳由下一拍在实体锁内停掉（计数 heartbeat.stopped_total、打
@@ -64,8 +67,9 @@ type regOptions struct {
 }
 
 // WithDurability 选本登记心跳 handler 的持久级别（缺省 nest.DurabilityAsync）。心跳本身什么都不持久；回调里改了持久
-// 字段时按这里的级别提交，持久级别由业务自己选。DurabilityMemory 下改持久字段会在提交点被拒绝；
-// DurabilityPipelined 要求引擎装了 pipelined 提交器。回滚策略固定 undo。
+// 字段时按这里的级别提交，持久级别由业务自己选。只支持 DurabilityMemory / DurabilityAsync / DurabilityStrict，
+// 其他级别（包括 DurabilityPipelined）由 Register 返回 ErrUnsupportedDurability。DurabilityMemory 下改持久字段会在
+// 提交点被拒绝。回滚策略固定 undo。
 func WithDurability(policy nest.DurabilityPolicy) RegOption {
 	return func(o *regOptions) { o.durability = policy }
 }
@@ -154,7 +158,7 @@ func (h *Host) Register(name string, period time.Duration, fn Func, opts ...RegO
 	}
 	handler, ok := beatHandlerFor(o.durability)
 	if !ok {
-		return nil, fmt.Errorf("heartbeat: registration %q: unsupported durability %v", name, o.durability)
+		return nil, fmt.Errorf("%w: registration %q asked for %v", ErrUnsupportedDurability, name, o.durability)
 	}
 	r := &Reg{host: h, name: name, fn: fn, handler: handler, tier: t, domain: o.domain}
 	// 追加在实体锁内；同时持 Driver.mu，让 OnDestroy（卸载流程里解锁之后调用）读到完整的列表。
@@ -318,7 +322,8 @@ func (r *Reg) change(active bool, t tier) {
 // --- 心跳 handler ---
 
 // 心跳 handler 按持久级别各注册一个（包级，进程内全部驱动共用）：参数是这一次投递的凭据（*beatTicket，见
-// delivery.go），回滚策略 undo。
+// delivery.go），回滚策略 undo。没有 pipelined：只有 saga 原生步骤需要它（维护者 2026-10-29），心跳选 pipelined 由
+// Register 拒绝（ErrUnsupportedDurability）。Nest 本身仍允许别的 handler 声明 pipelined。
 var beatHandlers = [...]struct {
 	durability nest.DurabilityPolicy
 	name       nest.HandlerName
@@ -326,7 +331,6 @@ var beatHandlers = [...]struct {
 	{nest.DurabilityMemory, nest.NewHandlerName("heartbeat.beat.memory")},
 	{nest.DurabilityAsync, nest.NewHandlerName("heartbeat.beat.async")},
 	{nest.DurabilityStrict, nest.NewHandlerName("heartbeat.beat.strict")},
-	{nest.DurabilityPipelined, nest.NewHandlerName("heartbeat.beat.pipelined")},
 }
 
 func init() {

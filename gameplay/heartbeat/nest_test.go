@@ -862,60 +862,25 @@ func TestCloseInsideATransactionIsImmediateAndIgnoresEarlierStarts(t *testing.T)
 	})
 }
 
-// pipelinedCommitter 是支持 pipelined 提交的替身：Enqueue 当场给出已持久的票据。
-type pipelinedCommitter struct {
-	nullCommitter
-	lsn      atomic.Uint64
-	enqueued atomic.Int64
-}
-
-type durableTicket struct{ lsn uint64 }
-
-var closedDone = func() chan struct{} { ch := make(chan struct{}); close(ch); return ch }()
-
-func (t durableTicket) LSN() uint64           { return t.lsn }
-func (t durableTicket) Done() <-chan struct{} { return closedDone }
-func (t durableTicket) Err() error            { return nil }
-
-func (c *pipelinedCommitter) Enqueue(context.Context, nest.CommitRecord) (nest.CommitTicket, error) {
-	c.enqueued.Add(1)
-	return durableTicket{lsn: c.lsn.Add(1)}, nil
-}
-
-func (c *pipelinedCommitter) DurableLSN() uint64 { return c.lsn.Load() }
-
-// 维护者 2026-10-29 决定：Nest 异步完成按 handler 生效，只给 saga 原生步骤。进程里有原生步骤（引擎的异步完成名单非空，
-// 这里用一个名字代替）时，WithDurability(pipelined) 的心跳仍是第一阶段：AfterCommit 在实体的 short 派发 worker 上执行，
-// 不交给完成池。单目标投递走提前放锁的 pipelined 路径（名单不按 handler 时会进完成池），批量投递锁内提交。
-func TestPipelinedBeatDoesNotUseAsyncCompletionOfNativeSteps(t *testing.T) {
-	forEachDelivery(t, func(t *testing.T) {
-		committer := &pipelinedCommitter{}
-		f := newNestFixture(t, nil,
-			nest.NestOptionWithTransactionCommitter(committer),
-			nest.NestOptionWithPipelinedAsyncCompletion(0, 0, "saga.test.native_step"))
-		e := newHBEntity(t, f.driver, 1, kindShort)
-		f.manager.Add(e)
-		var hookRan, hookInRequestContext atomic.Bool // 完成池 goroutine 也有 fctx（池名），但不在 short 通道上
-		r, err := e.host.Register("p", 50*time.Millisecond, func(Beat) error {
-			nest.AfterCommit(func() {
-				hookInRequestContext.Store(fctx.InShortWorker())
-				hookRan.Store(true)
-			})
-			return nest.Emit(nest.Effect{Topic: "heartbeat.test", Payload: []byte("beat")})
-		}, WithDurability(nest.DurabilityPipelined))
-		if err != nil {
-			t.Fatal(err)
+// 维护者 2026-10-29 决定：只有 saga 原生步骤需要 pipelined，心跳不注册 pipelined handler。WithDurability(pipelined) 与不认识的
+// 持久级别在 Register 就被拒绝（ErrUnsupportedDurability），不留下登记，也不会在投递时才发现 handler 不存在；支持的三档照常登记。
+func TestRegisterRejectsUnsupportedDurability(t *testing.T) {
+	f := newNestFixture(t, nil)
+	e := newHBEntity(t, f.driver, 1, kindShort)
+	f.manager.Add(e)
+	noop := func(Beat) error { return nil }
+	for _, policy := range []nest.DurabilityPolicy{nest.DurabilityPipelined, nest.DurabilityPolicy(99)} {
+		r, err := e.host.Register("p", 50*time.Millisecond, noop, WithDurability(policy))
+		if !errors.Is(err, ErrUnsupportedDurability) || r != nil {
+			t.Fatalf("Register with durability %v = %v, %v; want nil, ErrUnsupportedDurability", policy, r, err)
 		}
-		if err := r.Start(); err != nil {
-			t.Fatal(err)
+	}
+	if len(e.host.regs) != 0 {
+		t.Fatalf("rejected registrations left %d entries on the host", len(e.host.regs))
+	}
+	for i, policy := range []nest.DurabilityPolicy{nest.DurabilityMemory, nest.DurabilityAsync, nest.DurabilityStrict} {
+		if _, err := e.host.Register(fmt.Sprintf("ok-%d", i), 50*time.Millisecond, noop, WithDurability(policy)); err != nil {
+			t.Fatalf("Register with durability %v: %v", policy, err)
 		}
-		f.stepUntilDelivered(1)
-		waitFor(t, "the pipelined beat's AfterCommit", hookRan.Load)
-		if committer.enqueued.Load() == 0 && testDelivery == DeliveryDispatch {
-			t.Fatal("single-target pipelined beat never went through Enqueue; the check would not reach the pipelined completion path")
-		}
-		if !hookInRequestContext.Load() {
-			t.Fatal("pipelined beat's AfterCommit ran off the short dispatch worker: it was handed to the async completion pool meant for other handlers")
-		}
-	})
+	}
 }

@@ -36,7 +36,7 @@ var heartbeatHandlers = func() map[nest.HandlerName]nest.BaseHandler {
 	return out
 }()
 
-var heartbeatDurabilities = []nest.DurabilityPolicy{nest.DurabilityMemory, nest.DurabilityAsync, nest.DurabilityStrict, nest.DurabilityPipelined}
+var heartbeatDurabilities = []nest.DurabilityPolicy{nest.DurabilityMemory, nest.DurabilityAsync, nest.DurabilityStrict}
 
 var beatTestRun = nest.NewHandlerName("combatcomponent_test.beat_run")
 

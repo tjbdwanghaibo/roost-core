@@ -170,8 +170,8 @@ Checkpoint Mod。
 - **只有 `handlers` 点名的 pipelined handler 走异步完成**。名单在引擎构造（包级注册表快照）、实例注册
   （`NestMgr.RegisterHandlerWithMeta`）与包级回退查找时解析成 `handlerEntry.asyncCompletion`，派发热路径只读这个布尔，
   不按名字查表。`handlers` 为空等于不开异步完成（不建完成泵），**没有“全部”通配**；点名的 handler 不是 pipelined 时没有作用。
-  多次调用名单累加。生产装配（`wiring/dataengine`）传 `saga.PipelinedNativeStepHandlers()`，别的代码声明 pipelined（例如
-  心跳）不会悄悄得到异步完成。
+  多次调用名单累加。生产装配（`wiring/dataengine`）传 `saga.PipelinedNativeStepHandlers()`；框架内目前只有 saga 原生步骤用
+  pipelined（心跳不支持 pipelined，维护者 2026-10-29），业务自己声明 pipelined 的 handler 不会悄悄得到异步完成。
 - 没被点名的 pipelined handler 在有完成泵的引擎上仍是 Phase 1：派发 worker 等票据，AfterCommit 在派发 goroutine 上执行，
   回复照常由派发路径发出（错误注解、重排判断、await 计划都不变）。唯一的差别是它**仍持锁时在完成链上占位**，AfterCommit
   之前等同主实体前驱完成——前驱可能是完成池上的异步完成事务（A 先提交、作业结束放掉 ID tail，B 接着在同一实体上提交）；
