@@ -253,12 +253,15 @@ func runRoomLoad(t *testing.T, scene string, roomCount int, mechanisms bool) {
 		}
 		return float64(sorted[int(float64(len(sorted)-1)*q)].Microseconds()) / 1000
 	}
+	mallocs := after.Mallocs - before.Mallocs
 	report := struct {
 		Scene                                                                                                                                                            string
 		Rooms, Clients, NonstaticPerRoom, GOMAXPROCS                                                                                                                     int
 		Seconds, MeanPhysicsHz, DeliveredHzPerClient, PayloadKBpsPerClient, StepP95ms, StepP99ms, CommitP99ms, TickIntervalP99ms, PollP99ms, AllocatedMB, AllocationMBps float64
 		Frames, EmptyPolls, GCs, PauseNS                                                                                                                                 uint64
-	}{scene, roomCount, len(observers), nonstatic, runtime.GOMAXPROCS(0), elapsed.Seconds(), float64(ticks) / float64(roomCount) / elapsed.Seconds(), float64(frames) / float64(len(observers)) / elapsed.Seconds(), float64(payload) / 1000 / float64(len(observers)) / elapsed.Seconds(), percentile(steps, .95), percentile(steps, .99), percentile(commits, .99), percentile(intervals, .99), percentile(polls, .99), float64(after.TotalAlloc-before.TotalAlloc) / 1e6, float64(after.TotalAlloc-before.TotalAlloc) / 1e6 / elapsed.Seconds(), frames, empty, uint64(after.NumGC - before.NumGC), after.PauseTotalNs - before.PauseTotalNs}
+		// 进程级分配次数；按交付帧摊分只用于同口径前后对照，包含每 Tick 与驱动本身的分配。
+		MallocsPerSecond, AllocKBPerFrame, AllocsPerFrame float64
+	}{scene, roomCount, len(observers), nonstatic, runtime.GOMAXPROCS(0), elapsed.Seconds(), float64(ticks) / float64(roomCount) / elapsed.Seconds(), float64(frames) / float64(len(observers)) / elapsed.Seconds(), float64(payload) / 1000 / float64(len(observers)) / elapsed.Seconds(), percentile(steps, .95), percentile(steps, .99), percentile(commits, .99), percentile(intervals, .99), percentile(polls, .99), float64(after.TotalAlloc-before.TotalAlloc) / 1e6, float64(after.TotalAlloc-before.TotalAlloc) / 1e6 / elapsed.Seconds(), frames, empty, uint64(after.NumGC - before.NumGC), after.PauseTotalNs - before.PauseTotalNs, float64(mallocs) / elapsed.Seconds(), float64(after.TotalAlloc-before.TotalAlloc) / 1e3 / float64(max(frames, 1)), float64(mallocs) / float64(max(frames, 1))}
 	encoded, _ := json.Marshal(report)
 	t.Log("MULTI_ROOM_RESULT " + string(encoded))
 }
