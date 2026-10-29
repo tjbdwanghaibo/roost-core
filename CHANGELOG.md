@@ -12,6 +12,8 @@
   - 新增 `ROOST_SAGA_SCAN_DRAIN_SECONDS`（缺省 30）。只改测试与脚本，不改框架行为。
   - 原型第三轮云 c128 的积压异常已解释，余额 false 仍尚未确认。正式实现在云 Mongo 上 c128 追平 40～46s，超过 30s 门槛，已记入 KNOWN-LIMITS。
 
+- **v1.31.0 发布后补跑 Remote 故障矩阵与生成工程验收**（只是验证，不改代码）：main `5c85223c`（Remote 链路与 tag 逐字相同）上 `scripts/test-remote-matrix.sh` 两次均 21/21、`scripts/test-remote-generated.sh` 通过，见 [v1.31.0 验收补记](docs/release/v1.31.0-VALIDATION.md#v10-addendum)。
+
 ### 修复
 
 - **JetStream 日志：`DurableAckFloors` 不再信消费者副本报的待投递数（saga 分区清理守卫，KNOWN-LIMITS“清理守卫的 floor”由“尚未确认”转为已确认并修复，[设计 §16](docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md#16-风险与未核实项)）**：

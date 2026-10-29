@@ -4,6 +4,7 @@
 
 | 报告 | 范围与结论 |
 | --- | --- |
+| [Remote 故障矩阵：v1.31.0 发布后补跑（2026-10-29）](benchmarks/remote-matrix-20261029/README.md) | 正确性验收，不是性能结论：main `5c85223c`（Remote 链路与 tag 相同）共享隔离环境 `scripts/test-remote-matrix.sh` 两次均 21/21（265s / 250s），生成工程 Remote 功能验收 15 PASS、3 个按设计 SKIP；业务格只有 2 个实体，负载下未测 |
 | Saga 正式实现（JetStream 协调器）验收（2026-10-29）：**达标** | [SAGA-JETSTREAM-AUTHORITY-20261029](SAGA-JETSTREAM-AUTHORITY-20261029.md)：生产推荐配置（原生步骤 pipelined + Nest 异步完成、short 池缺省 4）原生正向 c128 1047～1053 笔/s、c1 P50 23.6ms，准入关 / 开各 6 次，15 档正确性全 0；第一轮封顶约 500 笔/s 定位为 strict 在 short worker 上等 fsync（非实现退化），strict 4 worker 对照 254 笔/s。入口 [saga-js-scan.sh](../../scripts/perf/saga-js-scan.sh)，样本 [benchmarks/saga-jetstream-authority-20261029](benchmarks/saga-jetstream-authority-20261029/) |
 | [投影器按实体分片并行投影（2026-10-27）](PROJECTOR-ENTITY-PARALLEL-20261027.md) | 分支 `feat/projector-entity-parallel`：普通记录本机 6.8k → 24.7k 条/s、云（RTT 64ms）431 → 1653 条/s（w8）；带回执记录随通道数近线性；带 effect 的记录（原生步骤）不变（effect 顺序不放宽），实验 B 本机 saga scan c16 / c64 约 +30% / +60%；原型 cloud-part 参与方投影 384～400 → 950～1365 条/s，c64 / c128 积压仍增长 |
 | [Saga 正式实现：云 Mongo c128 复现（2026-10-29）](SAGA-CLOUD-C128-REPRO-20261029.md) | 原型第三轮云 c128 两处“尚未确认”的复核：积压“加压时下降”已解释（原型那一档有 worker 等终态到 150s，读数在 150s 时，非记账 / checkpoint 跳变）；余额 false 倾向同源、尚未确认。正式实现同条件三档（c128 生产缺省 2084 saga/s、@strict64 1904、c64 1292）未复现：读错误 / 不符 / 未观察终态全 0，加压期积压单调；投影器约 1.5～1.8k 条/s，c128 追平 40～46s 超 30s 门槛。样本 [benchmarks/saga-cloud-c128-repro-20261029](benchmarks/saga-cloud-c128-repro-20261029/) |
