@@ -79,6 +79,8 @@ jobs:
         run: sh codegen/scripts/cfggen-golden-runtime.sh
       - name: tablegen output against roost-core configdata (RR-20261005-NC-75)
         run: sh codegen/scripts/tablegen-runtime.sh
+      - name: awaitflow generated chain (await on long pool, dispatch business time) against this checkout
+        run: sh codegen/scripts/awaitflow-runtime.sh
 
   # The test suite runs in shards because the single job that used to run it
   # will not hold the merged module: kit and codegen are about to move in

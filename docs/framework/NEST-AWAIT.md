@@ -105,13 +105,19 @@ return nest.Await(work,
 
 仓库内的 [Player 示例](../../codegen/internal/entity/testdata/awaitflow/player.go) 同时使用 entity 和 nest 两个正式生成器。[消费端测试](../../codegen/internal/entity/testdata/awaitflow/await_test.go) 通过生成的 Sync_ClaimReward 调用，使用真实 EntityManager/ManagerAccess，没有 mock Getter。测试还验证第二次领取能看到第一次恢复后的状态。
 
-在仓库根目录运行（PowerShell 先设置 `$env:GOWORK='off'`）：
+testdata 不在 `go test ./...` 里，自动入口是 [`codegen/scripts/awaitflow-runtime.sh`](../../codegen/scripts/awaitflow-runtime.sh)：用当前生成器重新生成，生成物与提交的不一致即失败，再跑 `go test -race` 与 glsvet；ci.yml 的 generated-code job 无条件调用它，根包 `TestEveryCodegenRuntimeGuardRunsInSomeWorkflow` 要求每个 `codegen/scripts/*-runtime.sh` 都有 workflow 无条件调用。在仓库根目录运行：
+
+```sh
+sh codegen/scripts/awaitflow-runtime.sh
+```
+
+等价的手动步骤：
 
 ```sh
 go run ./codegen/cmd/entity -dir ./codegen/internal/entity/testdata/awaitflow
 go run ./codegen/cmd/nest -dir ./codegen/internal/entity/testdata/awaitflow
-go test ./codegen/internal/entity/testdata/awaitflow/... -count=2
-go run ./cmd/glsvet ./codegen/internal/entity/testdata/awaitflow
+go test -race ./codegen/internal/entity/testdata/awaitflow/... -count=1
+go run ./cmd/glsvet ./codegen/internal/entity/testdata/awaitflow/...
 ```
 
 ## 验证记录
