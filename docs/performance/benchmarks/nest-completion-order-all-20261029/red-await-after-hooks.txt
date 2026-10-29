@@ -1,0 +1,8 @@
+--- FAIL: TestOrdinaryCommitsWaitForEarlierAsyncCompletion (0.61s)
+    --- FAIL: TestOrdinaryCommitsWaitForEarlierAsyncCompletion/async (0.20s)
+        pipelined_completion_test.go:1321: AfterCommit ran ahead of T1: [C2]
+    --- FAIL: TestOrdinaryCommitsWaitForEarlierAsyncCompletion/strict (0.20s)
+        pipelined_completion_test.go:1321: AfterCommit ran ahead of T1: [S2]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	1.288s
+FAIL

@@ -1,0 +1,18 @@
+--- FAIL: TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged (0.11s)
+    pipelined_completion_test.go:951: strict handler outside the async set: engine with pump, pending async completion = {commits:1 enqueued:0 lockFreeInHook:true hookBeforeReply:true hookOnDispatch:true repliedBeforeEarlierAsync:true reply:11}, without = {commits:1 enqueued:0 lockFreeInHook:true hookBeforeReply:true hookOnDispatch:true repliedBeforeEarlierAsync:false reply:11}; want identical
+    pipelined_completion_test.go:951: async handler outside the async set: engine with pump, pending async completion = {commits:1 enqueued:0 lockFreeInHook:true hookBeforeReply:true hookOnDispatch:true repliedBeforeEarlierAsync:true reply:11}, without = {commits:1 enqueued:0 lockFreeInHook:true hookBeforeReply:true hookOnDispatch:true repliedBeforeEarlierAsync:false reply:11}; want identical
+--- FAIL: TestOrdinaryCommitsWaitForEarlierAsyncCompletion (0.00s)
+    --- FAIL: TestOrdinaryCommitsWaitForEarlierAsyncCompletion/async (0.00s)
+        pipelined_completion_test.go:1314: T2 replied while T1 (earlier commit) was not yet durable: got 2
+    --- FAIL: TestOrdinaryCommitsWaitForEarlierAsyncCompletion/strict (0.00s)
+        pipelined_completion_test.go:1314: T2 replied while T1 (earlier commit) was not yet durable: got 2
+    --- FAIL: TestOrdinaryCommitsWaitForEarlierAsyncCompletion/memory (0.00s)
+        pipelined_completion_test.go:1314: T2 replied while T1 (earlier commit) was not yet durable: got M1
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.822s
+FAIL
+--- FAIL: TestTryBatchTargetBehindAsyncCompletionIsConverted (0.10s)
+    pipelined_completion_test.go:1405: hooks while T1 pending = [C1 C2], want [C1] (Y only; X waits behind T1)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.642s
+FAIL

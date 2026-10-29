@@ -1,0 +1,4 @@
+level	scenario	concurrency	durability	async	short_workers	per_second	p50_ms	p99_ms	short_busy	worker_wait_us	sagas	unexpected	balance_mismatch	publish_unknown	backlog_peak	drain_s	replay_messages	replay_start_s
+01-native-forward-128	native-forward	128	pipelined	on	4	1011.4	123.4	205.9	0.04	26	30311	0	0	0	234	0.1		
+02-native-forward-128-strict4	native-forward	128	strict	off	4	250.2	487.4	937.1	1	99832	7633	0	0	0	56	0.1		
+03-native-forward-128	native-forward	128	pipelined	on	4	996.3	125.6	207.3	0.05	35	29949	0	0	0	302	0.1		

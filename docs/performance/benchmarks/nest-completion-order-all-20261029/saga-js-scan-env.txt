@@ -1,0 +1,12 @@
+label: orderall-20261029
+mode: full
+plan: native-forward:128 native-forward:128@strict4 native-forward:128
+seconds_per_level: 30 warmup: 5
+commit: 13390a8ce7fe0c0a4e50e796a3fb7e64c5cf0a13
+dirty: 10 paths
+go: go version go1.27.3 darwin/arm64
+nats-server: nats-server: v2.14.5
+mongod: db version v8.0.32 (private, transactionLifetimeLimitSeconds=20)
+swap: total = 3072.00M  used = 1745.88M  free = 1326.12M  (encrypted)
+loadavg_start: { 5.60 5.91 4.52 }
+loadavg_end: { 6.49 6.23 4.81 }

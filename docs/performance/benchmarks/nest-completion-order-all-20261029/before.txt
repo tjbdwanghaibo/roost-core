@@ -1,0 +1,106 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/single/async=false-10         	  462130	      2485 ns/op	    1376 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/single/async=false-10         	  483210	      2469 ns/op	    1376 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/single/async=false-10         	  485577	      2471 ns/op	    1376 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/single/async=false-10         	  487131	      2470 ns/op	    1376 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/single/async=false-10         	  483799	      2551 ns/op	    1376 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/single/async=false-10         	  479478	      2472 ns/op	    1376 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/single/async=true-10          	  531554	      2246 ns/op	     997 B/op	      29 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/single/async=true-10          	  528774	      2943 ns/op	     998 B/op	      29 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/single/async=true-10          	  519928	      2251 ns/op	     998 B/op	      29 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/single/async=true-10          	  587871	      2260 ns/op	     998 B/op	      29 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/single/async=true-10          	  527191	      2263 ns/op	     998 B/op	      29 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/single/async=true-10          	  519315	      2257 ns/op	     997 B/op	      29 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/multi4/async=false-10         	  390914	      3067 ns/op	    1706 B/op	      39 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/multi4/async=false-10         	  388832	      3094 ns/op	    1707 B/op	      39 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/multi4/async=false-10         	  382359	      3099 ns/op	    1707 B/op	      39 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/multi4/async=false-10         	  386211	      3095 ns/op	    1707 B/op	      39 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/multi4/async=false-10         	  402055	      3103 ns/op	    1707 B/op	      39 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/multi4/async=false-10         	  387679	      3087 ns/op	    1707 B/op	      39 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/multi4/async=true-10          	  486784	      2818 ns/op	    1327 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/multi4/async=true-10          	  413482	      2827 ns/op	    1328 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/multi4/async=true-10          	  477790	      2817 ns/op	    1327 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/multi4/async=true-10          	  414699	      2826 ns/op	    1328 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/multi4/async=true-10          	  414538	      2837 ns/op	    1328 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=1/independent=true/multi4/async=true-10          	  411758	      2856 ns/op	    1328 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/single/async=false-10         	  603534	      2026 ns/op	    1380 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/single/async=false-10         	  592650	      2073 ns/op	    1380 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/single/async=false-10         	  599554	      2037 ns/op	    1380 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/single/async=false-10         	  609752	      2096 ns/op	    1380 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/single/async=false-10         	  548258	      2075 ns/op	    1380 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/single/async=false-10         	  572802	      2066 ns/op	    1380 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/single/async=true-10          	  827005	      1484 ns/op	    1007 B/op	      29 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/single/async=true-10          	  850065	      1481 ns/op	    1007 B/op	      29 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/single/async=true-10          	  814119	      1541 ns/op	    1007 B/op	      29 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/single/async=true-10          	  852504	      1510 ns/op	    1007 B/op	      29 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/single/async=true-10          	  807498	      1512 ns/op	    1007 B/op	      29 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/single/async=true-10          	  778731	      1497 ns/op	    1007 B/op	      29 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/multi4/async=false-10         	  495031	      2534 ns/op	    1711 B/op	      39 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/multi4/async=false-10         	  480004	      2560 ns/op	    1712 B/op	      39 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/multi4/async=false-10         	  476210	      2588 ns/op	    1712 B/op	      39 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/multi4/async=false-10         	  430525	      2565 ns/op	    1711 B/op	      39 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/multi4/async=false-10         	  461431	      2579 ns/op	    1712 B/op	      39 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/multi4/async=false-10         	  473716	      2529 ns/op	    1712 B/op	      39 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/multi4/async=true-10          	  587840	      2011 ns/op	    1339 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/multi4/async=true-10          	  639589	      2071 ns/op	    1341 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/multi4/async=true-10          	  595318	      2026 ns/op	    1340 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/multi4/async=true-10          	  665977	      2043 ns/op	    1340 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/multi4/async=true-10          	  573316	      2247 ns/op	    1341 B/op	      34 allocs/op
+BenchmarkNestHotPathCompletionPump/workers=8/independent=true/multi4/async=true-10          	  534913	      2058 ns/op	    1340 B/op	      34 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest
+cpu: Apple M5
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=false-10         	  488216	      2447 ns/op	    1375 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=false-10         	  480224	      2531 ns/op	    1376 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=false-10         	  460366	      2801 ns/op	    1376 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=false-10         	  484425	      2450 ns/op	    1376 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=false-10         	  492016	      2455 ns/op	    1376 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=false-10         	  505778	      2452 ns/op	    1376 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=true-10          	  530383	      2212 ns/op	     997 B/op	      29 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=true-10          	  528508	      2256 ns/op	     998 B/op	      29 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=true-10          	  522033	      2218 ns/op	     997 B/op	      29 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=true-10          	  533750	      2236 ns/op	     997 B/op	      29 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=true-10          	  525229	      2258 ns/op	     997 B/op	      29 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/single/async=true-10          	  531879	      2236 ns/op	     997 B/op	      29 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi4/async=false-10         	  386706	      3106 ns/op	    1706 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi4/async=false-10         	  384055	      3122 ns/op	    1707 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi4/async=false-10         	  388196	      3157 ns/op	    1707 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi4/async=false-10         	  349990	      3257 ns/op	    1707 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi4/async=false-10         	  369183	      3126 ns/op	    1707 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi4/async=false-10         	  389298	      3139 ns/op	    1707 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi4/async=true-10          	  415945	      2883 ns/op	    1327 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi4/async=true-10          	  409592	      3078 ns/op	    1329 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi4/async=true-10          	  417422	      2842 ns/op	    1328 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi4/async=true-10          	  424389	      2865 ns/op	    1328 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi4/async=true-10          	  418531	      2866 ns/op	    1328 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=1/independent=true/multi4/async=true-10          	  418761	      2842 ns/op	    1328 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-10         	  597876	      2029 ns/op	    1380 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-10         	  583596	      2035 ns/op	    1380 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-10         	  597045	      2013 ns/op	    1380 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-10         	  599487	      2023 ns/op	    1380 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-10         	  590980	      2039 ns/op	    1380 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=false-10         	  599085	      2048 ns/op	    1380 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-10          	  827131	      1477 ns/op	    1007 B/op	      29 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-10          	  825096	      1431 ns/op	    1007 B/op	      29 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-10          	  864828	      1423 ns/op	    1007 B/op	      29 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-10          	  831597	      1474 ns/op	    1007 B/op	      29 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-10          	  855309	      1442 ns/op	    1007 B/op	      29 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/single/async=true-10          	  836192	      1422 ns/op	    1007 B/op	      29 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/multi4/async=false-10         	  495393	      2444 ns/op	    1711 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/multi4/async=false-10         	  490993	      2438 ns/op	    1712 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/multi4/async=false-10         	  498098	      2439 ns/op	    1711 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/multi4/async=false-10         	  495313	      2455 ns/op	    1712 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/multi4/async=false-10         	  486735	      2449 ns/op	    1712 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/multi4/async=false-10         	  499564	      2461 ns/op	    1712 B/op	      39 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/multi4/async=true-10          	  644635	      1902 ns/op	    1339 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/multi4/async=true-10          	  648648	      1928 ns/op	    1341 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/multi4/async=true-10          	  643440	      1923 ns/op	    1341 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/multi4/async=true-10          	  646419	      1923 ns/op	    1340 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/multi4/async=true-10          	  623553	      1933 ns/op	    1340 B/op	      34 allocs/op
+BenchmarkNestHotPath/cpu=false/workers=8/independent=true/multi4/async=true-10          	  633531	      1969 ns/op	    1340 B/op	      34 allocs/op
+PASS

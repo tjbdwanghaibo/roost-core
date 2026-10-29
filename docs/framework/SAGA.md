@@ -252,9 +252,12 @@ GOMAXPROCS 个 worker，步骤一多，同进程其他实体的消息就排队�
     没有这类原生步骤时名单为空，Nest 不建完成池。原来的 `nest.pipelined.async` 已删除（写了不再生效，doctor 按未声明的键报 FAIL）。
 - 异步完成按 handler 生效（维护者 2026-10-29 决定）：Nest 在注册 / 引擎构造时把名单解析成每个 handler 的标志，只有被点名的 pipelined 事务
   交给完成泵；没被点名的 pipelined handler（业务自己声明的；框架内目前没有）在派发 worker 上等票据，只在同实体的完成链上排队，
-  保持与异步完成事务之间的 LSN 序（NEST_PIPELINED_COMMIT.md §11）。strict / async / memory 走 `commitDurable` 或内存路径。
+  保持与异步完成事务之间的 LSN 序（NEST_PIPELINED_COMMIT.md §11）。strict / async / memory 走 `commitDurable` 或内存路径；
+  实体上有在途的原生步骤异步完成时，它们在解锁后、AfterCommit 与回复之前等它完成（维护者 2026-10-29 决定 A：同实体上
+  每笔事务对外可见的效果按提交序），代价是这段时间里该实体的普通请求最多多等一次组提交、占一个 short 池 worker。
   对照用例：`TestAsyncCompletionIsPerHandler`、`TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged`（strict / async / 未点名的 pipelined 在
-  有 / 没有完成泵的引擎上观察一致）、`TestAsyncAndPhase1CompletionsKeepSameEntityLSNOrder`。
+  有 / 没有完成泵的引擎上观察一致，有在途异步完成时回复不先于它）、`TestAsyncAndPhase1CompletionsKeepSameEntityLSNOrder`、
+  `TestOrdinaryCommitsWaitForEarlierAsyncCompletion`。
   白名单让未列入的 handler 声明 pipelined 也只会在派发时得到 `ErrPipelinedNotAllowed`，不会被悄悄放开。
 - 手写装配（不经 `wiring/dataengine`）自己传 `nest.NestOptionWithPipelinedAllowlist` 与 `NestOptionWithPipelinedAsyncCompletion(workers, queueCap,
   saga.PipelinedNativeStepHandlers()...)`。

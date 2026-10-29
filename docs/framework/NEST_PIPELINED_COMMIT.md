@@ -183,7 +183,7 @@ Checkpoint Mod。
   慢钩子互不队头阻塞。
 - **同实体完成严格按提交（LSN）序，且无条件成立**：每个 pipelined 事务（有完成泵时，无论是否被点名）在实体锁内领取该
   实体的完成链节点（链序 = LSN 序），四条执行路径——泵→池、池饱和时泵内联、泵满时派发 worker 降级、未点名的 Phase 1
-  ——都先等前驱完成再执行。降级只牺牲延迟（worker 被占住），不牺牲顺序与正确性。链等待
+  ——都先等前驱完成再执行；同实体有在途异步完成时，strict / async / memory 事务同样上链（见本节下文“同实体上每笔事务”）。降级只牺牲延迟（worker 被占住），不牺牲顺序与正确性。链等待
   不会死锁：前驱只等更早的前驱与自己的 ticket，后者由 WAL 独立推进。
 - 完成体只捕获普通值（cap-1 缓冲的回包 channel、handler 返回值），不持有池化的 Msg；
   RetChan 缓冲保证客户端超时离开后回包发送也不阻塞。
@@ -196,7 +196,48 @@ Checkpoint Mod。
   延迟（并发采样），"占 worker 忙时比例"的读法只适用于 Phase 1；新增
   `nest.pipelined.async_total{result}` 计数。
 - 范围：走 dispatcher 的 single/multi/multi-group 路径对被点名的 handler 生效；直调、broadcast、批量作业（try-batch，
-  锁内提交、不传完成路线）、remote batch 维持原语义。完成链只排 pipelined 事务：同实体上的 strict / async handler 在锁内提交，
-  不在链上（与按 handler 之前相同）。
+  锁内提交、不传完成路线）、remote batch 维持原语义。
+- **同实体上每笔事务对外可见的效果都按提交序（维护者 2026-10-29 决定 A）**：异步完成事务 T1（saga 原生步骤，LSN 10）
+  Enqueue 后即放锁、作业结束；同实体上紧接着提交的普通事务 T2（strict / async / memory，以及回退到 strict 路径的 pipelined）
+  的回复与 AfterCommit 不会先于 T1 的完成。没有这一条时 T2 可以先回复、先跑 AfterCommit；async 的 T2 回复还可能把 T1 尚未
+  持久的状态带出进程。entitysync 外发本来就按持久水位放行，不受影响。实现（`framework/nest/pipelined_completion.go`
+  `commitOrdering`，入口在 `runTransaction`）：
+  - **计数**：完成泵按实体 ID 分片计数“已在链上占位、尚未释放的异步完成节点”（`completionPump.asyncPending`，256 片、每片
+    独占缓存行）：`linkAsync` 在持实体锁时先加，`release` 在节点完成（AfterCommit、回复）之后最后减。放在泵里按 ID 计而不是
+    放在实体上：链本身按 ID 登记，实例被替换（Destroy 后重建、卸载重载）时计数仍跟着 ID，也不给 entity 包加只为 Nest 用的
+    字段。分片只会多报（同分片别的 ID 有在途），多报的代价是一次链登记、前驱为空时不等；不会漏报——加在持锁时，读方取得
+    同一把锁后才读。
+  - **快路径**：引擎有完成泵时，不走 pipelined 提交的事务在 handler 开始前（仍持声明实体的锁）对每个声明实体做一次原子读；
+    全为 0 时什么都不做——不取 `chainMu`、不分配、不查 Guard。没有完成泵的引擎只多一次 nil 判断。
+  - **慢路径**：有在途的实体各在完成链上占一节（`pump.link`，链序 = 锁序 = 提交序），把 `await` 登记为 Guard 解锁后的**第一个**
+    回调，事务收尾时（`defer`，panic 同样执行）把 `release` 登记在解锁回调的末尾。于是：事务照常在锁内提交（strict 等 fsync、
+    async 写入、memory 无记录）→ Guard 放掉全部实体锁 → `await` 等前驱完成 → 嵌套独立事务与本事务的 AfterCommit →
+    `release` → `dispatchNest` 回复。
+  - **不持锁等待、不会死锁**：strict / async / memory 的 AfterCommit 本来就排在 Guard 解锁之后（`RollbackTx.commit` 在 Guard 内
+    把它们挂到 post-release），回复又在那之后，所以等待放在解锁之后、AfterCommit 之前，不需要改执行结构。等待期间不持任何
+    实体锁，只占着派发 worker 与本消息 ID 的准入链尾。`await` 只等链上严格更早的节点：异步完成节点只等自己的解锁屏障（放锁
+    时已关闭，早于 T2 取得锁）、更早的节点与 WAL 票据（WAL 独立推进）；它在完成池、泵内就地或派发 worker 降级时执行，都不
+    需要 T2 占着的 worker 或准入链尾。普通节点同样只等更早的节点。一个节点的全部登记都在它持有全部相关锁时完成，前驱放锁
+    之后后继才能取得同一把锁再登记，等待关系只指向登记更早的节点，构不成环。前提（第一阶段 pipelined 占位早已依赖它）：
+    异步完成的 AfterCommit 不同步等待同一实体上的 Nest 请求——那个请求排在 T2 占着的准入链尾之后；saga 原生步骤的回调只记下结论。
+  - **代价**：实体上有在途异步完成时，该实体上的普通请求在解锁后最多多等一次组提交（一个 fsync），期间占着一个 short 池
+    worker。这是 short 池上的一个新等待入口，与第一阶段 pipelined 在锁外等票据、等完成链前驱同类（不持锁、只等 WAL 独立
+    推进的结果），是选 A 的代价。没有在途异步完成的实体不受影响
+    （`TestOrdinaryCommitOnOtherEntityIsNotDelayed`）。
+  - **多实体**：普通事务按**全部声明实体**检查（主实体与次实体），每个有在途的实体各占一节、全部等完
+    （`TestMultiEntityCommitWaitsForAsyncCompletionOnSecondaryEntity`）。异步完成事务自己仍只在主实体（`completionEntityID`）
+    上占位、计数，所以只碰它**次实体**的普通事务不排在它后面；handler 内 Cast 动态取得的实体不检查（与同 ID 准入顺序只覆盖
+    声明 ID 一致）。框架内的异步完成事务只有 saga 原生步骤，原生步骤只写自己的实体。
+  - **批量作业**（try-batch，心跳）：不在 worker 上等——取得目标实体锁后读计数，有在途异步完成就放锁、与取不到锁相同转成单目标
+    作业，由普通派发排在后面（`TestTryBatchTargetBehindAsyncCompletionIsConverted`）。broadcast 每个目标在自己的 Guard 作用域
+    里走同一条规则。
+  - **不覆盖**：没有 Guard 作用域的直调（`RunIsolatedTransaction` / `RunDetachedTransaction` 不认领消息、不带完成路线，它们
+    在 handler 内的 AfterCommit 排在外层事务的等待之后）；第一阶段 pipelined 节点不计数（它的派发 worker 占着 ID 准入链尾直到
+    回复，同 ID 后继本来就排在后面）；带 Remote 批次的消息 `release` 在 Remote 收尾回调之前（等待仍在回复与全部回调之前）。
+  - 用例：`TestOrdinaryCommitsWaitForEarlierAsyncCompletion`（T2 = async / strict / memory：T1 票据未持久或 AfterCommit 卡住时
+    T2 不回复、不跑 AfterCommit，最终 [T1, T2]；T1 完成后计数回到 0，下一笔普通事务走快路径不上链）、
+    `TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged`（第三种引擎：有在途异步完成时除“回复不先于 T1”外观察不变）。
+    变异（跳过普通事务的等待）时前两者变红；红绿原文、快路径开销（allocs 不变、耗时在噪声内）与 saga 端到端短对照见
+    [证据](../performance/benchmarks/nest-completion-order-all-20261029/README.md)。
 
 实现与测试入口见[Nest实现篇](impl/02-nest-entity.md)。历史复测与默认档规划归上一节的固定提交，不作为当前接入要求。
