@@ -26,25 +26,35 @@ func (l FieldLayout) size() (int, error) {
 	}
 	return size, nil
 }
-func (l FieldLayout) encode(old, current []byte) ([]byte, error) {
-	size, err := l.size()
-	if err != nil {
-		return nil, err
-	}
-	if len(current) != size || old != nil && len(old) != size {
-		return nil, errors.New("chunksync: invalid field baseline")
-	}
-	out := []byte{0}
+
+// mask 返回 current 相对 old 变化的字段位图和编码后长度（含 mask 字节）；
+// old 为 nil 时写全部字段。调用方已确认 old/current 长度等于布局总长。
+func (l FieldLayout) mask(old, current []byte) (byte, int) {
+	mask, size := byte(0), 1
 	offset := 0
 	for i, n := range l {
 		end := offset + int(n)
 		if old == nil || !bytes.Equal(old[offset:end], current[offset:end]) {
-			out[0] |= 1 << i
-			out = append(out, current[offset:end]...)
+			mask |= 1 << i
+			size += int(n)
 		}
 		offset = end
 	}
-	return out, nil
+	return mask, size
+}
+
+// appendFields 按 mask 把 mask 字节和变化字段追加到 dst。
+func (l FieldLayout) appendFields(dst []byte, mask byte, current []byte) []byte {
+	dst = append(dst, mask)
+	offset := 0
+	for i, n := range l {
+		end := offset + int(n)
+		if mask&(1<<i) != 0 {
+			dst = append(dst, current[offset:end]...)
+		}
+		offset = end
+	}
+	return dst
 }
 func (l FieldLayout) decode(old, payload []byte) ([]byte, error) {
 	size, err := l.size()

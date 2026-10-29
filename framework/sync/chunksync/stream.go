@@ -4,12 +4,13 @@ package chunksync
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"math"
-	"sort"
+	"slices"
 )
 
 const MaxPayload = 1 << 20
@@ -52,8 +53,10 @@ func (c *Cursor) PlanFields(s Snapshot, layout FieldLayout) (*Plan, error) {
 }
 func (c *Cursor) plan(s Snapshot, layout FieldLayout) (*Plan, error) {
 	signature := ""
+	fieldBytes := 0
 	if layout != nil {
 		signature = fmt.Sprint(layout)
+		fieldBytes, _ = layout.size() // PlanFields 已校验布局。
 	}
 
 	if s.Epoch == 0 || len(s.Objects) > maxObjects {
@@ -67,8 +70,16 @@ func (c *Cursor) plan(s Snapshot, layout FieldLayout) (*Plan, error) {
 	if c.seq == math.MaxUint64 {
 		return nil, ErrSequence
 	}
-	groups := make(map[Key][]Object)
+	// changes 记录本帧要上线的对象；按 Chunk、ID 排序后连续同 Chunk 即一组，
+	// 线格式与逐 Chunk 分组后组内按 ID 排序完全相同。
+	type change struct {
+		object Object
+		base   []byte // RC2 字段增量的基线；nil 表示写全部字段
+		mask   byte
+	}
+	changes := make([]change, 0, len(s.Objects))
 	snapshotBytes := 36
+	frameBytes := 36
 	for _, o := range s.Objects {
 		snapshotBytes += 22 + len(o.Data)
 		if layout != nil {
@@ -83,23 +94,30 @@ func (c *Cursor) plan(s Snapshot, layout FieldLayout) (*Plan, error) {
 		if _, exists := next.objects[o.ID]; exists {
 			return nil, errors.New("chunksync: duplicate object")
 		}
-		o.Data = bytes.Clone(o.Data)
-		next.objects[o.ID] = o
 		old, ok := c.objects[o.ID]
-		if full || !ok || old.Chunk != o.Chunk || !bytes.Equal(old.Data, o.Data) {
-			wireObject := o
+		same := ok && bytes.Equal(old.Data, o.Data)
+		// 游标基线只保存自己持有的副本，调用方之后修改快照不影响基线。
+		// 内容未变时沿用上一基线那份（基线字节从不原地修改），不再重复复制。
+		if same {
+			o.Data = old.Data
+		} else {
+			o.Data = bytes.Clone(o.Data)
+		}
+		next.objects[o.ID] = o
+		if full || !ok || old.Chunk != o.Chunk || !same {
+			ch := change{object: o}
+			wire := len(o.Data)
 			if layout != nil {
-				var base []byte
+				if len(o.Data) != fieldBytes {
+					return nil, errors.New("chunksync: invalid field baseline")
+				}
 				if !full && ok && old.Chunk == o.Chunk {
-					base = old.Data
+					ch.base = old.Data
 				}
-				encoded, err := layout.encode(base, o.Data)
-				if err != nil {
-					return nil, err
-				}
-				wireObject.Data = encoded
+				ch.mask, wire = layout.mask(ch.base, o.Data)
 			}
-			groups[o.Chunk] = append(groups[o.Chunk], wireObject)
+			frameBytes += 10 + wire
+			changes = append(changes, ch)
 		}
 	}
 	var removed []uint64
@@ -110,54 +128,72 @@ func (c *Cursor) plan(s Snapshot, layout FieldLayout) (*Plan, error) {
 			}
 		}
 	}
-	sort.Slice(removed, func(i, j int) bool { return removed[i] < removed[j] })
-	keys := make([]Key, 0, len(groups))
-	for k := range groups {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].X != keys[j].X {
-			return keys[i].X < keys[j].X
+	slices.Sort(removed)
+	slices.SortFunc(changes, func(a, b change) int {
+		if a.object.Chunk.X != b.object.Chunk.X {
+			return cmp.Compare(a.object.Chunk.X, b.object.Chunk.X)
 		}
-		return keys[i].Z < keys[j].Z
+		if a.object.Chunk.Z != b.object.Chunk.Z {
+			return cmp.Compare(a.object.Chunk.Z, b.object.Chunk.Z)
+		}
+		return cmp.Compare(a.object.ID, b.object.ID)
 	})
-	var b bytes.Buffer
-	b.WriteString("RC")
-	if layout == nil {
-		b.WriteByte(1)
-	} else {
-		b.WriteByte(2)
-	}
-	if full {
-		b.WriteByte(1)
-	} else {
-		b.WriteByte(0)
-	}
-	put := func(v any) { _ = binary.Write(&b, binary.LittleEndian, v) }
-	put(s.Epoch)
-	put(next.seq)
-	put(s.Tick)
-	put(uint32(len(removed)))
-	put(uint32(len(keys)))
-	for _, id := range removed {
-		put(id)
-	}
-	for _, k := range keys {
-		entries := groups[k]
-		sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
-		put(k.X)
-		put(k.Z)
-		put(uint32(len(entries)))
-		for _, o := range entries {
-			put(o.ID)
-			put(uint16(len(o.Data)))
-			b.Write(o.Data)
+	groups := 0
+	for i := range changes {
+		if i == 0 || changes[i].object.Chunk != changes[i-1].object.Chunk {
+			groups++
 		}
 	}
-	if b.Len() > MaxPayload {
+	frameBytes += 8*len(removed) + 12*groups
+	if frameBytes > MaxPayload {
 		return nil, errors.New("chunksync: frame exceeds limit")
 	}
-	return &Plan{Data: b.Bytes(), previous: c.seq, next: next}, nil
+	// 帧长度已精确算出，一次分配；Plan.Data 归计划所有，重试发送同一份。
+	b := make([]byte, 0, frameBytes)
+	b = append(b, 'R', 'C')
+	if layout == nil {
+		b = append(b, 1)
+	} else {
+		b = append(b, 2)
+	}
+	if full {
+		b = append(b, 1)
+	} else {
+		b = append(b, 0)
+	}
+	le := binary.LittleEndian
+	b = le.AppendUint64(b, s.Epoch)
+	b = le.AppendUint64(b, next.seq)
+	b = le.AppendUint64(b, s.Tick)
+	b = le.AppendUint32(b, uint32(len(removed)))
+	b = le.AppendUint32(b, uint32(groups))
+	for _, id := range removed {
+		b = le.AppendUint64(b, id)
+	}
+	for i := 0; i < len(changes); {
+		chunk := changes[i].object.Chunk
+		end := i + 1
+		for end < len(changes) && changes[end].object.Chunk == chunk {
+			end++
+		}
+		b = le.AppendUint32(b, uint32(chunk.X))
+		b = le.AppendUint32(b, uint32(chunk.Z))
+		b = le.AppendUint32(b, uint32(end-i))
+		for _, ch := range changes[i:end] {
+			b = le.AppendUint64(b, ch.object.ID)
+			if layout == nil {
+				b = le.AppendUint16(b, uint16(len(ch.object.Data)))
+				b = append(b, ch.object.Data...)
+				continue
+			}
+			lengthAt := len(b)
+			b = le.AppendUint16(b, 0)
+			b = layout.appendFields(b, ch.mask, ch.object.Data)
+			le.PutUint16(b[lengthAt:], uint16(len(b)-lengthAt-2))
+		}
+		i = end
+	}
+	return &Plan{Data: b, previous: c.seq, next: next}, nil
 }
 func (c *Cursor) Commit(p *Plan) error {
 	if p == nil || p.previous != c.seq {
