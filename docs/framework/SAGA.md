@@ -94,6 +94,7 @@ durable `<stream>_G<g>-cold-copy`（消费者状态 R1、只放内存），缺�
   核对、发现后重建并从流里还在的事件重投，`saga.cold_copy.resubscribed_total`）。冷副本写不进 Mongo 时它的 floor 停住、清理也停住
   （`saga.cold_copy.write_failures_total`、`saga.log.purge_blocked_seconds{consumer="…-cold-copy"}`），流最终满了 fail-stop——冷副本开着就
   要求 Mongo 可写。
+- **冷副本 durable 所在节点回不来时由运维删除它**（维护者 2026-10-29 决定 A）：冷副本 durable 是 R1，承载它的节点停机或长时间不回答时，分区清理按 floor 0 停住，超过 `saga.purge_stall_alarm` 时 `saga.log.purge_blocked_seconds{consumer="…-cold-copy"}` 点名告警，流会继续增长。确认节点短期回不来后删掉这个 durable（`nats consumer rm <stream> <stream>_G<g>-cold-copy`），投影器 5s 内在活着的节点上重建，从流里还在的事件重投；冷副本只用于查询回落，进度允许丢。框架不自动删除。
 - **关掉冷副本后要删掉每条流上的 `-cold-copy` durable**（与下线步骤同一规则），否则它们一直挡住清理。开启之前已经被清理掉的终态不进冷副本。
 - kill -9 协调器：被杀进程取走、没确认的终态事件在 AckWait（30s）后重投给重启的进程，冷副本最终与权威终态一致（真实用例
   `TestRealJetStreamColdCopyKill9Converges`，3000 笔里最后一笔到终态后约 28s 追平）。冷副本文档不过期，需要时由运维按 `updated_at` 清理。
