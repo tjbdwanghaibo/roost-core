@@ -25,13 +25,16 @@ type InputAck struct {
 // 位置/线速度/角速度步长均 .01；Y 和线速度用 int32，避免高速下落静默饱和。
 func QuantizedSnapshot(f Frame) (chunksync.Snapshot, error) {
 	out := chunksync.Snapshot{Epoch: f.Epoch, Tick: f.Tick, Objects: make([]chunksync.Object, 0, len(f.States))}
-	for _, s := range f.States {
+	// 全部对象载荷切自同一块数组，每个对象一次分配变为每帧一次；容量截断到本对象，
+	// 调用方 append 不会越界写到相邻对象。载荷生成后不再修改。
+	backing := make([]byte, len(f.States)*QuantizedBodyBytes)
+	for i, s := range f.States {
 		x, z := math.Floor(float64(s.Position[0])/25), math.Floor(float64(s.Position[2])/25)
 		if !bounded(x, math.MaxInt32) || !bounded(z, math.MaxInt32) {
 			return out, errors.New("physics: quantized chunk range")
 		}
 		key := chunksync.Key{X: int32(x), Z: int32(z)}
-		data := make([]byte, QuantizedBodyBytes)
+		data := backing[i*QuantizedBodyBytes : (i+1)*QuantizedBodyBytes : (i+1)*QuantizedBodyBytes]
 		values := []struct {
 			at, bits int
 			v        float64
