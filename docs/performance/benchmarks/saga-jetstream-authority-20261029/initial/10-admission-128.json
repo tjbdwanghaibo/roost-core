@@ -1,0 +1,22 @@
+{
+  "scenario": "admission",
+  "concurrency": 128,
+  "seconds": 30,
+  "warmup": 5,
+  "gomaxprocs": 4,
+  "sagas": 14668,
+  "steady_sagas": 12120,
+  "per_second": 484.8,
+  "p50_ms": 258.238625,
+  "p99_ms": 390.546667,
+  "unexpected_terminals": 0,
+  "balance_mismatches": 0,
+  "publish_unknown": 0,
+  "admission_rejected": 0,
+  "start_retries": 0,
+  "backlog_peak_records": 112,
+  "backlog_after_drain": 0,
+  "drain_seconds": 0.050060625,
+  "snapshots": 0,
+  "purges": 0
+}

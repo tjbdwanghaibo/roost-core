@@ -1,0 +1,7 @@
+run	scenario	conc	workers	async	load1	gate_wait_s	swap_used	seconds	exit
+a	native-forward	128	4	0	2.40	0	1785.88M	36	0
+b	native-pipelined	128	4	1	3.58	0	1785.88M	34	0
+c	native-pipelined	128	8	1	7.05	0	1785.88M	35	0
+d	native-forward	128	64	0	4.97	0	1785.88M	35	0
+e	native-pipelined	128	4	1	6.32	0	1785.88M	35	0
+f	native-pipelined	16	4	1	4.92	0	1785.88M	34	0

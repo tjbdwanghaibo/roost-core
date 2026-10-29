@@ -1,0 +1,48 @@
+2026-10-29 14:18:29 start formal-a 01-nf128-w8 native-forward c128  load={3.18 4.64 5.46} swap_used=1793.88M
+2026-10-29 14:18:29 end formal-a 01-nf128-w8 exit=1 load={3.18 4.64 5.46} swap_used=1793.88M
+2026-10-29 14:18:29 start proto 02-proto-fwd-c128 c128 load={3.18 4.64 5.46} swap_used=1793.88M
+2026-10-29 14:19:03 end proto 02-proto-fwd-c128 load={2.65 4.36 5.33} swap_used=1793.88M
+2026-10-29 14:19:03 start formal-a 03-nf128-w16 native-forward c128 ROOST_SAGA_SCAN_NEST_WORKERS=16 load={2.65 4.36 5.33} swap_used=1793.88M
+2026-10-29 14:19:03 end formal-a 03-nf128-w16 exit=1 load={2.65 4.36 5.33} swap_used=1793.88M
+2026-10-29 14:19:13 start formal-a 01-nf128-w8 native-forward c128  load={3.88 4.56 5.38} swap_used=1793.88M
+2026-10-29 14:19:49 end formal-a 01-nf128-w8 exit=0 load={5.15 4.83 5.45} swap_used=1793.88M
+2026-10-29 14:19:49 start formal-a 03-nf128-w16 native-forward c128 ROOST_SAGA_SCAN_NEST_WORKERS=16 load={5.15 4.83 5.45} swap_used=1793.88M
+2026-10-29 14:20:24 end formal-a 03-nf128-w16 exit=0 load={5.13 4.81 5.41} swap_used=1793.88M
+2026-10-29 14:20:24 start formal-a 04-nf128-w32 native-forward c128 ROOST_SAGA_SCAN_NEST_WORKERS=32 load={5.13 4.81 5.41} swap_used=1793.88M
+2026-10-29 14:20:59 end formal-a 04-nf128-w32 exit=0 load={5.57 4.94 5.43} swap_used=1793.88M
+2026-10-29 14:21:09 start formal-a 05-nf128-w64 native-forward c128 ROOST_SAGA_SCAN_NEST_WORKERS=64 load={4.93 4.83 5.39} swap_used=1793.88M
+2026-10-29 14:21:44 end formal-a 05-nf128-w64 exit=0 load={7.67 5.54 5.62} swap_used=1793.88M
+2026-10-29 14:21:44 start proto 06-proto-fwd-c128 c128 load={7.67 5.54 5.62} swap_used=1793.88M
+2026-10-29 14:22:16 end proto 06-proto-fwd-c128 load={6.38 5.43 5.58} swap_used=1793.88M
+2026-10-29 14:22:16 start formal-a 07-nf128-w4 native-forward c128 ROOST_SAGA_SCAN_NEST_WORKERS=4 load={6.38 5.43 5.58} swap_used=1793.88M
+2026-10-29 14:22:51 end formal-a 07-nf128-w4 exit=0 load={5.84 5.37 5.55} swap_used=1793.88M
+2026-10-29 14:23:12 start formal-a 08-nf128-w64-prof native-forward c128 ROOST_SAGA_SCAN_NEST_WORKERS=64 load={4.62 5.12 5.46} swap_used=1793.88M
+2026-10-29 14:23:47 end formal-a 08-nf128-w64-prof exit=0 load={6.31 5.45 5.56} swap_used=1793.88M
+2026-10-29 14:23:47 start formal-a 09-np128-w8 native-pipelined c128  load={6.31 5.45 5.56} swap_used=1793.88M
+2026-10-29 14:24:22 end formal-a 09-np128-w8 exit=0 load={5.30 5.26 5.48} swap_used=1793.88M
+2026-10-29 14:26:44 start formal-b 10-nf128-w64 native-forward c128 ROOST_SAGA_SCAN_NEST_WORKERS=64 load={3.29 4.51 5.14} swap_used=1793.88M
+2026-10-29 14:27:20 end formal-b 10-nf128-w64 exit=0 load={4.36 4.61 5.15} swap_used=1793.88M
+2026-10-29 14:27:20 start formal-b 11-nf128-w8 native-forward c128  load={4.36 4.61 5.15} swap_used=1793.88M
+2026-10-29 14:27:55 end formal-b 11-nf128-w8 exit=0 load={2.98 4.23 4.99} swap_used=1793.88M
+2026-10-29 14:28:13 start formal-b 12-nf128-w64-p4 native-forward c128 ROOST_SAGA_SCAN_NEST_WORKERS=64 ROOST_SAGA_SCAN_PARTITIONS=4 load={2.90 4.15 4.95} swap_used=1793.88M
+2026-10-29 14:28:49 end formal-b 12-nf128-w64-p4 exit=0 load={5.32 4.60 5.08} swap_used=1793.88M
+2026-10-29 14:28:49 start proto 13-proto-fwd-c128 c128 load={5.06 4.56 5.06} swap_used=1793.88M
+2026-10-29 14:29:21 end proto 13-proto-fwd-c128 load={6.00 4.82 5.13} swap_used=1793.88M
+2026-10-29 14:31:32 start formal-c 14-admission-128 admission c128  load={1.92 3.60 4.60} swap_used=1793.88M
+2026-10-29 14:32:10 end formal-c 14-admission-128 exit=0 load={3.10 3.67 4.58} swap_used=1793.88M
+2026-10-29 14:32:23 start formal-a 15-before-nf16 native-forward c16  load={2.92 3.62 4.54} swap_used=1793.88M
+2026-10-29 14:32:58 end formal-a 15-before-nf16 exit=0 load={2.28 3.39 4.42} swap_used=1793.88M
+2026-10-29 14:32:58 start formal-c 16-after-nf16 native-forward c16  load={2.28 3.39 4.42} swap_used=1793.88M
+2026-10-29 14:33:32 end formal-c 16-after-nf16 exit=0 load={2.89 3.43 4.40} swap_used=1793.88M
+2026-10-29 14:33:32 start formal-a 17-before-nf128 native-forward c128  load={2.89 3.43 4.40} swap_used=1793.88M
+2026-10-29 14:34:07 end formal-a 17-before-nf128 exit=0 load={2.43 3.26 4.29} swap_used=1793.88M
+2026-10-29 14:34:07 start formal-c 18-after-nf128 native-forward c128  load={2.43 3.26 4.29} swap_used=1793.88M
+2026-10-29 14:34:42 end formal-c 18-after-nf128 exit=0 load={3.95 3.53 4.35} swap_used=1793.88M
+2026-10-29 14:34:52 start proto 19-proto-fwd-c128 c128 load={3.57 3.46 4.32} swap_used=1793.88M
+2026-10-29 14:35:24 end proto 19-proto-fwd-c128 load={4.43 3.72 4.38} swap_used=1793.88M
+2026-10-29 14:35:24 start formal-c 20-after-nf128 native-forward c128  load={4.43 3.72 4.38} swap_used=1793.88M
+2026-10-29 14:35:59 end formal-c 20-after-nf128 exit=0 load={4.28 3.76 4.36} swap_used=1793.88M
+2026-10-29 14:35:59 start formal-a 21-before-nf128 native-forward c128  load={4.28 3.76 4.36} swap_used=1793.88M
+2026-10-29 14:36:34 end formal-a 21-before-nf128 exit=0 load={3.82 3.72 4.32} swap_used=1793.88M
+2026-10-29 14:36:34 start formal-c 22-after-np128 native-pipelined c128  load={3.82 3.72 4.32} swap_used=1793.88M
+2026-10-29 14:37:09 end formal-c 22-after-np128 exit=0 load={5.74 4.18 4.47} swap_used=1793.88M

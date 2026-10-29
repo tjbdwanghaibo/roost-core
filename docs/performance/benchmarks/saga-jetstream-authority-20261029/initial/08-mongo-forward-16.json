@@ -1,0 +1,22 @@
+{
+  "scenario": "mongo-forward",
+  "concurrency": 16,
+  "seconds": 30,
+  "warmup": 5,
+  "gomaxprocs": 4,
+  "sagas": 16203,
+  "steady_sagas": 13516,
+  "per_second": 540.64,
+  "p50_ms": 28.14625,
+  "p99_ms": 55.865458,
+  "unexpected_terminals": 0,
+  "balance_mismatches": 0,
+  "publish_unknown": 0,
+  "admission_rejected": 0,
+  "start_retries": 0,
+  "backlog_peak_records": 0,
+  "backlog_after_drain": 0,
+  "drain_seconds": 8.3e-8,
+  "snapshots": 0,
+  "purges": 0
+}

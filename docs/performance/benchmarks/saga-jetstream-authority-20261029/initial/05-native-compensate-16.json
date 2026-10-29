@@ -1,0 +1,22 @@
+{
+  "scenario": "native-compensate",
+  "concurrency": 16,
+  "seconds": 30,
+  "warmup": 5,
+  "gomaxprocs": 4,
+  "sagas": 5093,
+  "steady_sagas": 4212,
+  "per_second": 168.48,
+  "p50_ms": 93.205708,
+  "p99_ms": 153.302959,
+  "unexpected_terminals": 0,
+  "balance_mismatches": 0,
+  "publish_unknown": 0,
+  "admission_rejected": 0,
+  "start_retries": 0,
+  "backlog_peak_records": 62,
+  "backlog_after_drain": 0,
+  "drain_seconds": 0.050050708,
+  "snapshots": 0,
+  "purges": 0
+}

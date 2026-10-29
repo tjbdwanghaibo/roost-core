@@ -1,0 +1,28 @@
+{
+  "scenario": "replay",
+  "concurrency": 64,
+  "seconds": 30,
+  "warmup": 5,
+  "gomaxprocs": 4,
+  "sagas": 0,
+  "steady_sagas": 0,
+  "per_second": 0,
+  "p50_ms": 0,
+  "p99_ms": 0,
+  "unexpected_terminals": 0,
+  "balance_mismatches": 0,
+  "publish_unknown": 0,
+  "admission_rejected": 0,
+  "start_retries": 0,
+  "backlog_peak_records": 0,
+  "backlog_after_drain": 0,
+  "drain_seconds": 0,
+  "snapshots": 0,
+  "purges": 0,
+  "replay": {
+    "messages": 9996,
+    "sagas": 1666,
+    "start_seconds": 0.062360625,
+    "replayed_events": 9996
+  }
+}

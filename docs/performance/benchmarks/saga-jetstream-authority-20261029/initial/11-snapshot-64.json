@@ -1,0 +1,22 @@
+{
+  "scenario": "snapshot",
+  "concurrency": 64,
+  "seconds": 30,
+  "warmup": 5,
+  "gomaxprocs": 4,
+  "sagas": 15079,
+  "steady_sagas": 12561,
+  "per_second": 502.44,
+  "p50_ms": 124.080167,
+  "p99_ms": 193.451792,
+  "unexpected_terminals": 0,
+  "balance_mismatches": 0,
+  "publish_unknown": 0,
+  "admission_rejected": 0,
+  "start_retries": 0,
+  "backlog_peak_records": 112,
+  "backlog_after_drain": 0,
+  "drain_seconds": 0.050018417,
+  "snapshots": 16,
+  "purges": 16
+}

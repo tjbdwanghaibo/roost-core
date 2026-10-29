@@ -1,0 +1,16 @@
+level	scenario	param	load1	gate_wait_s	seconds	exit
+1	native-forward	1	2.51	0	35	0
+2	native-forward	16	1.40	0	35	0
+3	native-forward	64	1.52	0	35	0
+4	native-forward	128	3.05	0	35	0
+5	native-compensate	16	4.84	0	34	0
+6	native-compensate	128	3.36	0	35	0
+7	native-forward	128	2.34	0	35	0
+8	native-forward	128	2.74	0	35	0
+9	mongo-forward	16	6.70	0	34	0
+10	mongo-forward	128	5.71	0	34	0
+11	admission	128	6.84	0	39	0
+12	snapshot	64	6.20	0	35	0
+13	replay	10000	5.30	0	1	0
+14	replay	50000	4.96	0	2	0
+15	native-forward	128	4.96	0	35	0

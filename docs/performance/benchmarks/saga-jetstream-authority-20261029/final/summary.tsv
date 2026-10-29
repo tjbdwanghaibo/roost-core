@@ -1,0 +1,16 @@
+level	scenario	concurrency	durability	async	short_workers	per_second	p50_ms	p99_ms	short_busy	worker_wait_us	sagas	unexpected	balance_mismatch	publish_unknown	backlog_peak	drain_s	replay_messages	replay_start_s
+01-native-forward-1	native-forward	1	pipelined	on	4	41.2	23.6	35.5	0.0	3	1227	0	0	0	4	0.1		
+02-native-forward-16	native-forward	16	pipelined	on	4	256.2	60.5	113.0	0.01	2	7732	0	0	0	69	0.1		
+03-native-forward-64	native-forward	64	pipelined	on	4	697.8	90.4	142.9	0.02	7	20954	0	0	0	166	0.1		
+04-native-forward-128	native-forward	128	pipelined	on	4	1047.5	118.7	208.9	0.04	24	31845	0	0	0	278	0.1		
+05-native-compensate-16	native-compensate	16	pipelined	on	4	174.2	89.4	149.5	0.01	2	5234	0	0	0	79	0.1		
+06-native-compensate-128	native-compensate	128	pipelined	on	4	717.3	176.5	287.9	0.05	44	21640	0	0	0	261	0.1		
+07-native-forward-128-strict4	native-forward	128	strict	off	4	254.5	480.3	879.3	1	99531	7753	0	0	0	44	0.1		
+08-native-forward-128-strict64	native-forward	128	strict	off	64	986.2	127.4	198.2	0.36	5	29969	0	0	0	348	0.1		
+09-mongo-forward-16	mongo-forward	16	-	off	-	514.1	29.8	56.5	0	0	15369	0	0	0	0	0.0		
+10-mongo-forward-128	mongo-forward	128	-	off	-	1090.5	113.5	208.0	0	0	32717	0	0	0	0	0.0		
+11-admission-128	admission	128	pipelined	on	4	413.5	61.9	4852.8	0.01	14	13440	0	0	0	5868	4.8		
+12-snapshot-64	snapshot	64	pipelined	on	4	679.3	92.6	152.8	0.02	7	20448	0	0	0	171	0.1		
+13-replay-10000	replay	64	-	off	-	0	0	0	0	0	0	0	0	0	0	0	9996	0.056
+14-replay-50000	replay	64	-	off	-	0	0	0	0	0	0	0	0	0	0	0	49998	0.198
+15-native-forward-128	native-forward	128	pipelined	on	4	1053.4	118.7	190.1	0.04	28	31573	0	0	0	255	0.1		

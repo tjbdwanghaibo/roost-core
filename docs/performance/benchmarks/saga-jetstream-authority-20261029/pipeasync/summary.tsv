@@ -1,0 +1,7 @@
+run	scenario	conc	workers	async	saga_s	p50_ms	p99_ms	unexpected	balance_mismatch	publish_unknown	backlog_after_drain	drain_s	wal_rec_per_fsync	short_busy	short_running_avg	short_wait_worker_avg	short_blocked_avg	short_worker_wait_mean_us	short_dep_wait_mean_us	short_max_worker_wait_ms	short_peak_waiting
+a	native-forward	128	4	False	242.3	500.9	988.2	0	0	0	0	0.1	3.99	1	4	51.34	7.39	104984	14952	186.1	61
+b	native-pipelined	128	4	True	1379.0	90.0	165.0	0	0	0	0	0.1	22.54	0.08	0.3	0.11	0.01	72	6	9.3	59
+c	native-pipelined	128	8	True	1379.3	89.5	164.9	0	0	0	0	0.1	22.58	0.04	0.3	0.08	0.02	35	4	9.9	49
+d	native-forward	128	64	False	1290.4	96.6	168.1	0	0	0	0	0.1	21.18	0.49	31.1	0	2.54	6	935	11.6	14
+e	native-pipelined	128	4	True	1350.1	91.7	168.5	0	0	0	0	0.1	22.07	0.06	0.24	0.12	0.01	64	4	10.0	53
+f	native-pipelined	16	4	True	290.8	54.0	89.3	0	0	0	0	0.1	4.53	0.01	0.03	0	0	3	0	3.9	3

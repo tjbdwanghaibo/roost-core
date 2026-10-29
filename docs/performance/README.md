@@ -4,7 +4,7 @@
 
 | 报告 | 范围与结论 |
 | --- | --- |
-| Saga 正式实现（JetStream 协调器）压测：**尚未运行** | 入口 [saga-js-scan.sh](../../scripts/perf/saga-js-scan.sh)（设计 [§12](../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md#12-性能验收整轮--30-分钟)，见下文“saga-js-scan.sh”）已就绪，只做过冒烟（一档 3s，证明脚本端到端能跑，数字不作结论）；正式一轮由维护者空闲时跑，报告与样本按设计放 `SAGA-JETSTREAM-AUTHORITY-<日期>.md` 与 `benchmarks/saga-jetstream-authority-<日期>/` |
+| Saga 正式实现（JetStream 协调器）验收（2026-10-29）：**达标** | [SAGA-JETSTREAM-AUTHORITY-20261029](SAGA-JETSTREAM-AUTHORITY-20261029.md)：生产推荐配置（原生步骤 pipelined + Nest 异步完成、short 池缺省 4）原生正向 c128 1047～1053 笔/s、c1 P50 23.6ms，准入关 / 开各 6 次，15 档正确性全 0；第一轮封顶约 500 笔/s 定位为 strict 在 short worker 上等 fsync（非实现退化），strict 4 worker 对照 254 笔/s。入口 [saga-js-scan.sh](../../scripts/perf/saga-js-scan.sh)，样本 [benchmarks/saga-jetstream-authority-20261029](benchmarks/saga-jetstream-authority-20261029/) |
 | [投影器按实体分片并行投影（2026-10-27）](PROJECTOR-ENTITY-PARALLEL-20261027.md) | 分支 `feat/projector-entity-parallel`：普通记录本机 6.8k → 24.7k 条/s、云（RTT 64ms）431 → 1653 条/s（w8）；带回执记录随通道数近线性；带 effect 的记录（原生步骤）不变（effect 顺序不放宽），实验 B 本机 saga scan c16 / c64 约 +30% / +60%；原型 cloud-part 参与方投影 384～400 → 950～1365 条/s，c64 / c128 积压仍增长 |
 | [Saga 协调器以 JetStream 为权威日志：原型压测（2026-10-27）](SAGA-JETSTREAM-LOG-PROTO-20261027.md) | 原型、压缩矩阵（每档 30s、单样本为主），只给量级。第五轮并行投影器（8 通道）+ 积压准入：云 Mongo（RTT 64ms）准入开时积压有界（约 2850～3050 笔、3s 内追平）、有效持续吞吐约 690～735 笔/s（= 投影器速率），准入关时积压 6～13 万条；本机准入从不关闭、约 1150～1210 笔/s。第三轮缺省配置（参与方投影开、冷副本关）：本机同盘正向 c128 约 1650～1790 TPS，积压按笔有 6 档短时超 2 倍；云 Mongo（RTT 约 8ms）关键路径 c128 约 1960～2690 TPS，参与方投影器上限约 500～590 条/s、c16 起积压持续增长，同时段 main / 2c 原生正向约 5.2～5.3 TPS；一处核对异常尚未确认。第二轮投影打开（参与方 DataEngine 投影 + saga 冷副本、4 条流、Mongo 与 NATS 同盘）：积压按笔 0.98～2.06 倍在途、44～88ms 追平、冷副本 0 差异，正向 c128 约 600～810 TPS、c1 P50 约 45ms，退化来自同盘 I/O 争用；第一轮私有 R3 集群 + 真实 Nest strict 参与方、不跑 Mongo：两步正向 c1 P50 约 11ms、c128 约 2500～2900 TPS 未饱和，补偿 c128 约 1900～2000；协调器关键路径 0 次本地 fsync，c128 每次发布合 8～9 条事件，参与方 WAL 每步约 0.04 次 fsync；余额与终态复读全部通过；与 main / 2a2b / 2c 口径不同（无 Mongo、步骤侧投影移出关键路径），不算倍数 |
 | [Saga 协调器存储迁 Redis 权威：2a / 2b 同机对照（2026-10-27）](SAGA-REDIS-AUTHORITY-2AB-20261027.md) | 分支 `feat/redis-authority-2ab` 对 main 交替两轮：每笔 Mongo 操作达到设计（Mongo 步骤 50 → 19，协调器 0），2b 门槛达标、冷热 0 差异；但权威 Redis 与 Mongo 同盘时，macOS 上每次写 `F_FULLFSYNC`（典型 16～18ms）且主线程同步落盘，Mongo 步骤饱和约 0.4～0.5 倍、原生约 0.8 倍，2a 三项性能门槛不达标；AOF 放内存盘诊断时 w16 达 3.1 倍；Linux 未测 |
@@ -158,7 +158,7 @@ ROOST_NEST_GAME_RACE=0 ROOST_NEST_GAME_SHORT_QUEUE=65536 ROOST_NEST_GAME_SHORT_W
 
 `ErrorDetails[].ElapsedMS` 从调用起算，属服务端。三份直方图常驻约 1.4MB 堆，长稳 `heap_bytes` 的基线相应抬高，增长趋势不受影响。
 
-### saga-js-scan.sh（saga 正式实现，尚未运行）
+### saga-js-scan.sh（saga 正式实现，2026-10-29 首轮验收见 [报告](SAGA-JETSTREAM-AUTHORITY-20261029.md)）
 
 `ROOST_PERF_LABEL=<唯一名> scripts/perf/saga-js-scan.sh`（整轮）或 `… saga-js-scan.sh smoke`（一档 native-forward c2、3s）。脚本自起私有三节点 NATS
 （`scripts/nats-cluster.sh`，端口 `ROOST_SCAN_NATS_PORT_BASE`，缺省 29622）与私有 mongod 单节点副本集（`ROOST_SCAN_MONGO_PORT`，缺省 29817，

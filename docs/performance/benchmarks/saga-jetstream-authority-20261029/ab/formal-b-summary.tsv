@@ -1,0 +1,3 @@
+level	scenario	concurrency	per_second	p50_ms	p99_ms	sagas	unexpected	balance_mismatch	publish_unknown	backlog_peak	drain_s	replay_messages	replay_start_s
+01-native-forward-16	native-forward	16	269.1	58.0	96.7	8106	0	0	0	69	0.1		
+02-native-forward-128	native-forward	128	496.1	251.0	405.6	14923	0	0	0	120	0.1		
