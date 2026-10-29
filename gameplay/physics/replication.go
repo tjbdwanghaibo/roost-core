@@ -2,6 +2,7 @@ package physics
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"math"
 	"slices"
@@ -70,19 +71,47 @@ func NewReplicationScene(bodies []physx.Body, tracks []MotionTrack) *Replication
 }
 
 // ReplicationFrame 每个已提交帧只创建一次；所有接收者共享只读索引。
+// states 按 ID 严格递增（同一 ID 只留最后一个，与按 ID 覆盖写入的语义相同），按 ID 二分查找；
+// 建好后不再修改。比每帧一张 map 少一次散列表分配，原生读出的状态本来就按 ID 有序。
 type ReplicationFrame struct {
-	scene *ReplicationScene
-	poses map[uint64]physx.State
+	scene  *ReplicationScene
+	states []physx.State
 }
 
+// Frame 复制 states 建索引；调用方之后可以继续使用、修改自己的切片。
 func (s *ReplicationScene) Frame(states []physx.State) *ReplicationFrame {
-	f := &ReplicationFrame{scene: s, poses: make(map[uint64]physx.State, len(states))}
-	for _, state := range states {
-		f.poses[state.ID] = state
-	}
-	return f
+	return s.AdoptFrame(slices.Clone(states))
 }
-func (f *ReplicationFrame) State(id uint64) (physx.State, bool) { s, ok := f.poses[id]; return s, ok }
+
+// AdoptFrame 与 Frame 相同，但直接接管 states、不复制：调用方交出后不得再修改这块切片，
+// 索引可能原地重排它。用于每帧新建、只交给本帧索引的状态（物理房间提交路径上 World.Step 的返回值，
+// DAO 与量化快照已各自复制所需内容）。
+func (s *ReplicationScene) AdoptFrame(states []physx.State) *ReplicationFrame {
+	increasing := true
+	for i := 1; i < len(states) && increasing; i++ {
+		increasing = states[i-1].ID < states[i].ID // 相等也走下面的去重
+	}
+	if !increasing {
+		slices.SortStableFunc(states, func(a, b physx.State) int { return cmp.Compare(a.ID, b.ID) })
+		// 稳定排序后同 ID 相邻且保持原次序，只留最后一个；out 的写位置不超过读位置。
+		out := states[:0]
+		for i := range states {
+			if i+1 < len(states) && states[i+1].ID == states[i].ID {
+				continue
+			}
+			out = append(out, states[i])
+		}
+		states = out
+	}
+	return &ReplicationFrame{scene: s, states: states}
+}
+func (f *ReplicationFrame) State(id uint64) (physx.State, bool) {
+	i, ok := slices.BinarySearchFunc(f.states, id, func(s physx.State, id uint64) int { return cmp.Compare(s.ID, id) })
+	if !ok {
+		return physx.State{}, false
+	}
+	return f.states[i], true
+}
 func (f *ReplicationFrame) Plan(snapshot chunksync.Snapshot, observer uint64, grabs map[uint64]uint64, previous map[uint64]ViewEntry, policy ReplicationPolicy) (ViewPlan, error) {
 	return f.PlanInto(nil, nil, snapshot, observer, grabs, previous, policy)
 }
@@ -104,8 +133,8 @@ func (f *ReplicationFrame) PlanInto(objects []chunksync.Object, entries map[uint
 	if err := policy.Validate(); err != nil {
 		return out, err
 	}
-	poses, radii, motions := f.poses, f.scene.radii, f.scene.motions
-	self, ok := poses[observer]
+	radii, motions := f.scene.radii, f.scene.motions
+	self, ok := f.State(observer)
 	if !ok {
 		return out, errors.New("physics: missing view observer")
 	}
@@ -117,7 +146,7 @@ func (f *ReplicationFrame) PlanInto(objects []chunksync.Object, entries map[uint
 		}
 	}
 	for _, object := range snapshot.Objects {
-		s, ok := poses[object.ID]
+		s, ok := f.State(object.ID)
 		if !ok || len(object.Data) != QuantizedBodyBytes {
 			return out, errors.New("physics: invalid view object")
 		}

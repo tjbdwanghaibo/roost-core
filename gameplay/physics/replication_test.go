@@ -133,6 +133,43 @@ func TestSharedReplicationFrameOwnsItsInputs(t *testing.T) {
 	}
 }
 
+// 帧索引按 ID 查找：输入无序或同 ID 重复时与按 ID 覆盖写入的结果相同（同 ID 取最后一个）；
+// Frame 不改调用方切片，AdoptFrame 接管后可原地重排。
+func TestReplicationFrameLookupMatchesLastWrite(t *testing.T) {
+	state := func(id uint64, x float32) physx.State {
+		return physx.State{ID: id, Position: physx.Vec3{x}, Rotation: physx.Quat{0, 0, 0, 1}}
+	}
+	inputs := [][]physx.State{
+		nil,
+		{state(3, 1), state(7, 2), state(9, 3)},
+		{state(9, 1), state(3, 2), state(7, 3), state(3, 4), state(5, 5), state(9, 6)},
+		{state(4, 1), state(4, 2), state(4, 3)},
+	}
+	scene := NewReplicationScene(nil, nil)
+	for _, input := range inputs {
+		want := make(map[uint64]physx.State)
+		for _, s := range input {
+			want[s.ID] = s
+		}
+		original := slices.Clone(input)
+		for _, adopt := range []bool{false, true} {
+			frame := scene.Frame(input)
+			if adopt {
+				frame = scene.AdoptFrame(slices.Clone(input))
+			} else if !slices.Equal(input, original) {
+				t.Fatal("Frame modified the caller slice")
+			}
+			for id := uint64(0); id <= 10; id++ {
+				got, ok := frame.State(id)
+				w, exists := want[id]
+				if ok != exists || got != w {
+					t.Fatalf("adopt=%v id=%d: got %v,%v want %v,%v", adopt, id, got, ok, w, exists)
+				}
+			}
+		}
+	}
+}
+
 func BenchmarkRecipientViewIndex(b *testing.B) {
 	bodies := CrowdScene()
 	states := InitialFrame(1, bodies).States
