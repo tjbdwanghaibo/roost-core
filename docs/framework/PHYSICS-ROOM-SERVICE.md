@@ -292,9 +292,11 @@ ROOST_PHYSICS_LOAD=1 go test -race -tags physx -run 'TestMultiRoomReplicationLoa
 
 ### Go 分配 profile 与削减（2026-10-29，macOS ARM64）
 
+**提交号**：本节与下一节的测量跑在 rebase 进 main 之前的等价提交上，表中已换成 main 上的对应提交。被测的物理房间依赖代码逐字相同：本节的差异只在 saga / NATS 代码与文档，下一节只差 `bb42ef9e`（`infra/base/index` 的 NaN 守卫重构，不在 `service/physicsroom` / `wiring/physicsroom` 的依赖里）。证据目录里的 pprof 文件名保留 rebase 前的前缀。
+
 **环境**：Apple M5（10 核）、macOS 26（Darwin 25.5）、Go 1.27.3、GOMAXPROCS=10；原生库按 [CHUNK-PHYSICS](CHUNK-PHYSICS.md#原生构建) 用同一份 PhysX 4.1.2 源码在私有构建目录重新编出 ABI 2 arm64 动态库。负载与上一节同口径（`TestMultiRoomReplicationLoad`，每房 20 个逻辑客户端，预热 1 秒、采集 5 秒），只跑 8 房间两档。与上一节 Linux amd64 / GOMAXPROCS=4 的数字不是同一台机器，只在本节内部比较。测试输出新增 `MallocsPerSecond`、`AllocKBPerFrame`、`AllocsPerFrame`：进程级分配按交付帧摊分，含每 Tick 与驱动本身的分配，只用于同口径前后对照。
 
-**结果**（基线 = c8825078 的代码加上报告字段的测试提交 e16f8417，之后 = 59211a6f；两个预编译测试二进制同机交替 3 轮，取中位数，方括号为 3 次样本范围）：
+**结果**（基线 = c8825078 的代码加上报告字段的测试提交 `48607d55`，之后 = `188e302e`；两个预编译测试二进制同机交替 3 轮，取中位数，方括号为 3 次样本范围）：
 
 | 场景 8 房间 / 160 客户端 | Go 分配 MB/s | 分配次数 k/s | KB / 交付帧 | 分配次数 / 交付帧 | 5 秒 GC 次数 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -315,18 +317,18 @@ ROOST_PHYSICS_LOAD=1 go test -race -tags physx -run 'TestMultiRoomReplicationLoa
 
 | 提交 | 改动 | 机关 | 普通 |
 | --- | --- | ---: | ---: |
-| fb3b2e0d | 抓取校验查已提交帧共享索引 `r.viewFrame`，可控集合建房时固定；删除只供它用的 `r.states` 每帧副本 | 81.30→71.10 | 69.85→59.64 |
-| f013f34c | `Plan` / `Visible` 对象表与可见集合按已知规模预留 | 71.14→63.54 | 59.96→53.31 |
-| 75293ef7 | `Cursor.plan` 精确算帧长一次分配，`AppendUint*` 代替 `binary.Write`，单切片按 (Chunk, ID) 排序代替分组 map，RC2 字段直接写进帧，基线未变时沿用旧副本 | 63.43→59.85（487k→267k allocs/s） | 53.45→50.74 |
-| 11581b1f | `Commit` 换下的基线 map 清空后留作下一次 plan 的 spare | 59.79→53.16 | 50.84→45.58 |
-| 2291e747 | 成员视野 / 视图账本双缓冲：ACK 换下的旧 map 交给 `VisibleInto` / `PlanInto` | 52.87→42.75 | 45.24→37.70 |
-| ee737862 | `World.Step` 的 input / raw / seen 交换缓冲按 World 复用 | 42.91→39.79 | 37.73→35.01 |
-| 91504ad8 | 量化快照对象载荷切自同一块数组 | 39.79→39.40（233k→200k allocs/s） | 35.01→34.77 |
-| 97101d6e | 每 Tick 输入命令按轨迹数 + 成员数一次预留（`AppendMotionCommands`） | 39.40→38.94 | 34.77→33.75 |
-| a6e326e8 + 92f7e6f9 | 游标临时变化表复用；房间级 Poll 临时对象表复用 | 38.78→33.62 | 33.77→28.83 |
-| 59211a6f | 修正 a6e326e8：`Commit` 的 `*c = p.next` 曾覆盖变化表，复用只在未提交重做时生效 | 33.81→31.15 | 28.96→27.38 |
+| `2eafcaaf` | 抓取校验查已提交帧共享索引 `r.viewFrame`，可控集合建房时固定；删除只供它用的 `r.states` 每帧副本 | 81.30→71.10 | 69.85→59.64 |
+| `eba63477` | `Plan` / `Visible` 对象表与可见集合按已知规模预留 | 71.14→63.54 | 59.96→53.31 |
+| `bfbffdbc` | `Cursor.plan` 精确算帧长一次分配，`AppendUint*` 代替 `binary.Write`，单切片按 (Chunk, ID) 排序代替分组 map，RC2 字段直接写进帧，基线未变时沿用旧副本 | 63.43→59.85（487k→267k allocs/s） | 53.45→50.74 |
+| `9a776601` | `Commit` 换下的基线 map 清空后留作下一次 plan 的 spare | 59.79→53.16 | 50.84→45.58 |
+| `7e231810` | 成员视野 / 视图账本双缓冲：ACK 换下的旧 map 交给 `VisibleInto` / `PlanInto` | 52.87→42.75 | 45.24→37.70 |
+| `af4b5092` | `World.Step` 的 input / raw / seen 交换缓冲按 World 复用 | 42.91→39.79 | 37.73→35.01 |
+| `fb4bf820` | 量化快照对象载荷切自同一块数组 | 39.79→39.40（233k→200k allocs/s） | 35.01→34.77 |
+| `2d70b207` | 每 Tick 输入命令按轨迹数 + 成员数一次预留（`AppendMotionCommands`） | 39.40→38.94 | 34.77→33.75 |
+| `59156e2b` + `c59eb16e` | 游标临时变化表复用；房间级 Poll 临时对象表复用 | 38.78→33.62 | 33.77→28.83 |
+| `188e302e` | 修正 `59156e2b`：`Commit` 的 `*c = p.next` 曾覆盖变化表，复用只在未提交重做时生效 | 33.81→31.15 | 28.96→27.38 |
 
-没有改动因无收益被回退；a6e326e8 单独时因上述覆盖几乎无效（变化表反而从一次预留变成逐次扩容），由 59211a6f 修正后计入收益。
+没有改动因无收益被回退；`59156e2b` 单独时因上述覆盖几乎无效（变化表反而从一次预留变成逐次扩容），由 `188e302e` 修正后计入收益。
 
 **复用缓冲的所有权**（都不离开所属锁、不交给网络或异步消费者）：
 
@@ -338,7 +340,7 @@ ROOST_PHYSICS_LOAD=1 go test -race -tags physx -run 'TestMultiRoomReplicationLoa
 
 **一致性证据**：`TestPlanFramesStayByteIdentical`（chunksync，RC1/RC2 进入、离开、跨 Chunk、未确认重做、epoch 切换）与 `TestRoomReplicationPipelineStaysByteIdentical`（physics，量化快照、AOI、视图分档、字段增量、私有确认，并断言场景覆盖 near / middle / far / motion / 暂缓 / 移出 / 跨 Chunk）的金样取自优化前代码，之后每个提交都逐帧字节相同；后者对“新建”和“按 Poll 方式复用”两种方式都校验，把 spare 错设为 previous 会变红。`-race`（含 `-tags physx` 与机关 8 房间负载）通过。
 
-**剩余**（92f7e6f9 的机关 8 房间 alloc_space，约 211MB / 7 秒；59211a6f 又去掉其中的变化表扩容）：每 Tick 部分占比升到约一半以上——`ReplicationScene.Frame` 每帧状态索引 map 15%、`spatialFrame` 位置 map 与 Block 切片 10%、`StateDAO.Accept` 的所有权副本与查重 map 12%、`World.Step` 返回状态 9%、`QuantizedSnapshot` 7%；每接收者部分剩 `PlanInto` 新载荷副本与分档计数 map、`RoomPayload` 拷贝与 `Delivery` 返回副本、帧缓冲、指标 key 拼接（`metrics.metricKey` 每次带标签调用拼一个字符串，约 4%）。这些要么是有意的所有权副本（DAO、Delivery），要么需要改变每帧索引结构（排序切片 / 按刚体槽位）才能再降，单项收益估计不超过 2MB/s，本轮未做（重新 profile 后其中状态索引与 AOI 索引两项实测约 5.4 与 1.9MB/s，已在同日晚削减；原生堆、RSS 与 macOS 长稳也已测，见下节）。未覆盖：Gate/NATS/TCP 链路。
+**剩余**（`c59eb16e` 的机关 8 房间 alloc_space，约 211MB / 7 秒；`188e302e` 又去掉其中的变化表扩容）：每 Tick 部分占比升到约一半以上——`ReplicationScene.Frame` 每帧状态索引 map 15%、`spatialFrame` 位置 map 与 Block 切片 10%、`StateDAO.Accept` 的所有权副本与查重 map 12%、`World.Step` 返回状态 9%、`QuantizedSnapshot` 7%；每接收者部分剩 `PlanInto` 新载荷副本与分档计数 map、`RoomPayload` 拷贝与 `Delivery` 返回副本、帧缓冲、指标 key 拼接（`metrics.metricKey` 每次带标签调用拼一个字符串，约 4%）。这些要么是有意的所有权副本（DAO、Delivery），要么需要改变每帧索引结构（排序切片 / 按刚体槽位）才能再降，单项收益估计不超过 2MB/s，本轮未做（重新 profile 后其中状态索引与 AOI 索引两项实测约 5.4 与 1.9MB/s，已在同日晚削减；原生堆、RSS 与 macOS 长稳也已测，见下节）。未覆盖：Gate/NATS/TCP 链路。
 
 复跑（证据、脚本与 pprof 在 [physicsroom-alloc-20261029](../performance/benchmarks/physicsroom-alloc-20261029/README.md)）：
 
@@ -356,7 +358,7 @@ python3 docs/performance/benchmarks/physicsroom-alloc-20261029/summ.py runs.txt
 
 **原生内存的口径**：binding 用 PhysX 自带 `PxDefaultAllocator`，没有分配回调或计数器；它在 macOS 上走 libc `malloc`，Go 运行时不用 malloc，所以 malloc 区已分配字节就是 PhysX 加少量 libSystem 的原生堆（空 Go 程序约 12KB）。另给“估算原生 = footprint − Go 映射 dirty”，它还包含 malloc 元数据、页表与库的 dirty 数据段。`vmmap` 会挂起目标进程约 0.4～0.5 秒，含它的窗口物理均频约 48.7Hz，下面的频率判断排除这些窗口。
 
-**结果**（20 分钟连续运行，0b8e20ff = ddc3d3d0 的产品代码；预热 5 分钟后为稳定窗口，斜率为最小二乘、每分钟）：
+**结果**（20 分钟连续运行，`067d4606`，物理房间依赖的产品代码同 `ddc3d3d0`；预热 5 分钟后为稳定窗口，斜率为最小二乘、每分钟）：
 
 | 指标 | 起点 | 5 分钟 | 终点 | 稳定窗口均值 | 斜率 / 分钟 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -377,15 +379,15 @@ python3 docs/performance/benchmarks/physicsroom-alloc-20261029/summ.py runs.txt
 
 **判断：没有发现无界增长。**footprint、Go 映射 dirty、Go 映射 − 已归还、goroutine 稳定窗口斜率均为 0 附近；Go heap 对象字节每 4 分钟段的采样最低值（第 4 分钟起）9.9 / 9.9 / 10.0 / 9.6MB，不随时间升高；PhysX 侧 malloc 已分配第 2～18 分钟 +0.04MB（10,087,424→10,126,336 字节，约 0.4%），分配个数 6513～6527 持平，没有逐 Tick 泄漏的形态（每秒 400 个 Tick，逐 Tick 泄漏哪怕 1 字节也会是每分钟 24KB 且个数随之增长）。RSS 稳定窗口 +0.035MB/分钟，而 footprint 持平、RSS − footprint 由 11MB 升到约 15.8MB：增长落在不计入 footprint 的干净页（代码段等文件映射逐步换入），**是推断，没有逐区域核对**。交付频率由前 8 分钟 19.66Hz 降到最后 8 分钟约 19.48Hz（−0.9%）：空 Poll 为 0，交付频率就是客户端循环频率（50ms 定时器 + 提交与 Poll），Poll P99 与物理频率没有同步变化，倾向本机定时器 / 后台负载，**原因尚未确认**。8 房间的 PhysX 原生堆约 9.6MiB（含 SDK / foundation 共用部分，平均每房间不超过约 1.2MiB），没有按房间分开测。
 
-**优化后复跑**：下文两项削减之后（0d6be921）同口径 4 分钟：估算原生 13.58MB 持平（+0.005MB/分钟）、malloc dirty 10.11MB 不变、footprint 41.7MB、goroutine 206、累计分配 23.66MB/s、GC 3.73 次/s。
+**优化后复跑**：下文两项削减之后（`c3946490`）同口径 4 分钟：估算原生 13.58MB 持平（+0.005MB/分钟）、malloc dirty 10.11MB 不变、footprint 41.7MB、goroutine 206、累计分配 23.66MB/s、GC 3.73 次/s。
 
 **每 Tick 分配的继续削减**（HEAD 重新 profile 后只做两项，各与前一状态同机交替 3 轮，取中位数）：
 
 | 提交 | 改动 | 机关 8 房间 MB/s | 普通 8 房间 MB/s |
 | --- | --- | ---: | ---: |
-| e9ec3cc2 + a5fa00ea | `ReplicationFrame` 每帧状态索引由 `map[uint64]State`（83 个刚体约 12KB / 帧）改为按 ID 严格递增的切片、二分查找；房间提交路径 `AdoptFrame` 直接只读引用本 Tick `World.Step` 新建的切片，不再复制 | 30.95→25.56 | 27.29→21.78 |
-| 0d6be921 | `SpatialFrame` 的位置 map 与 Block map 改为与对象同下标的位置切片、按 (Block, 下标) 稳定排序的条目切片，查询对每个 Block 二分找起点 | 25.44→23.54（187k→168k allocs/s） | 21.76→19.89 |
-| 合计（0b8e20ff 对 0d6be921） | | **30.90→23.46**（−24%，189.0k→167.5k allocs/s，GC 54→37～39 次 / 5 秒） | **27.29→19.87**（−27%，171.4k→151.8k） |
+| `e04c2efd` + `f9e01cfc` | `ReplicationFrame` 每帧状态索引由 `map[uint64]State`（83 个刚体约 12KB / 帧）改为按 ID 严格递增的切片、二分查找；房间提交路径 `AdoptFrame` 直接只读引用本 Tick `World.Step` 新建的切片，不再复制 | 30.95→25.56 | 27.29→21.78 |
+| `c3946490` | `SpatialFrame` 的位置 map 与 Block map 改为与对象同下标的位置切片、按 (Block, 下标) 稳定排序的条目切片，查询对每个 Block 二分找起点 | 25.44→23.54（187k→168k allocs/s） | 21.76→19.89 |
+| 合计（`067d4606` 对 `c3946490`） | | **30.90→23.46**（−24%，189.0k→167.5k allocs/s，GC 54→37～39 次 / 5 秒） | **27.29→19.87**（−27%，171.4k→151.8k） |
 
 物理 50.00Hz、交付 19.60Hz/客户端前后相同；`TestPlanFramesStayByteIdentical` 与 `TestRoomReplicationPipelineStaysByteIdentical` 逐帧字节不变。第二项单独约 1.9MB/s，在“约 2MB/s”门槛边上，保留的理由是三轮范围不重叠、分配次数降 10%，输出次序另由 `TestSpatialVisibilityKeepsBlockOrder`（逐对象参考实现对照有序 / 乱序输入；旧实现通过，同 Block 次序反转即变红）锁住；若维护者认为不值得，可单独回退这一提交。
 
@@ -394,7 +396,7 @@ python3 docs/performance/benchmarks/physicsroom-alloc-20261029/summ.py runs.txt
 - `ReplicationFrame.states` 建好后只读。`Frame` 复制输入；`AdoptFrame` 输入已按 ID 严格递增时直接引用、否则复制后排序（同 ID 取最后一个，与原 map 覆盖一致），从不修改调用方切片。房间提交回调里 `f.States` 是本 Tick `World.Step` 新建的切片（原生 `std::map` 按 ID 有序读出）：`Commit` 已返回、量化快照与 AOI 索引已复制所需值，之后没有人修改它。`service/physicsroom.Commit` 的注释写明返回后不得再修改 `Frame.States`，需要保留的实现自行复制；`EntityHost` 经 `StateDAO.Accept` 本来就复制。
 - `SpatialFrame.positions` / `blocks` 每帧新建、建好后只读。重复 ID 时非观察者对象改用各自位置（原来是同 ID 最后一个的位置），只影响随后被 `chunksync` 以 duplicate object 拒绝的出错路径；观察者仍取最后一个。
 
-**未做与原因**（0d6be921 机关 8 房间 alloc_space 约 142MB / 7 秒）：
+**未做与原因**（`c3946490` 机关 8 房间 alloc_space 约 142MB / 7 秒）：
 
 - `StateDAO.Accept` 的状态副本（约 14%，约 3MB/s）：这是 Nest undo 保护的权威事实与网络侧索引之间的所有权边界。去掉它要让 DAO 与本帧只读索引共用一块切片，经可插拔的 `Commit` 跨 service / wiring 两层传递“不得修改”的约定，一处违约就会静默改坏权威状态；收益约 3MB/s，判断为高风险，不做。查重 map（约 4%，约 0.8MB/s）低于门槛，不做。
 - `World.Step` 返回的状态切片（约 13%）：现在它本身就是被 `AdoptFrame` 引用的本帧索引，按帧保留，不能复用。

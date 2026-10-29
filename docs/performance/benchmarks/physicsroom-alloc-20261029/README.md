@@ -8,11 +8,13 @@
 | --- | --- |
 | `baseline-6levels.txt` | 基线（c8825078）六档各一次的原始 `MULTI_ROOM_RESULT` |
 | `m-c1.txt` … `m-c8.txt` | 逐项改动的同机交替 3 轮原始输出（标签对应前后两个测试二进制；c6 为 4 个二进制交替） |
-| `m-final.txt` | 基线与 92f7e6f9 交替 3 轮 |
-| `m-c8.txt` | 基线、92f7e6f9（c7）、59211a6f（c8）交替 3 轮，即最终表 |
+| `m-final.txt` | 基线与 `c59eb16e` 交替 3 轮 |
+| `m-c8.txt` | 基线、`c59eb16e`（c7）、`188e302e`（c8）交替 3 轮，即最终表 |
 | `baseline-mechanisms8.alloc.pprof` / `baseline-alloc-top.txt` | 基线机关 8 房间 alloc profile（memprofilerate=65536）及 top |
-| `92f7e6f9-mechanisms8.alloc.pprof` / `92f7e6f9-alloc-top.txt` | 92f7e6f9 同口径 profile 及 top |
+| `92f7e6f9-mechanisms8.alloc.pprof` / `92f7e6f9-alloc-top.txt` | `c59eb16e` 同口径 profile 及 top |
 | `baseline-8rooms.cpu.pprof` / `baseline-cpu-top.txt` | 基线两档 8 房间单独一次 CPU profile |
 | `measure.sh` / `summ.py` | 交替运行与中位数汇总脚本 |
 
-标签 `before` 是 c8825078 加上只增加报告字段的测试提交 e16f8417 编出的二进制。分配为进程级，包含驱动本身。
+标签 `before` 是 c8825078 加上只增加报告字段的测试提交 `48607d55` 编出的二进制。分配为进程级，包含驱动本身。
+
+提交号：测量跑在 rebase 进 main 之前的等价提交上，上表已换成 main 上的对应提交（物理房间依赖的代码逐字相同，见 [PHYSICS-ROOM-SERVICE §Go 分配 profile 与削减](../../../framework/PHYSICS-ROOM-SERVICE.md#go-分配-profile-与削减2026-10-29macos-arm64) 的说明）；pprof 文件名保留 rebase 前的前缀 92f7e6f9。
