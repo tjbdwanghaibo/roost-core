@@ -145,7 +145,14 @@ Checkpoint Mod。
   - 引擎选项使用 `dataEngineMod.NestOptions()`（committer + 配置驱动的
     `nest.pipelined.allowlist` / `nest.pipelined.async` /
     `nest.pipelined.async_workers` / `nest.pipelined.async_queue_capacity`），
-    不配置时与旧行为完全一致。
+    不配置且进程里没有 pipelined 的 saga 原生步骤时与旧行为完全一致。
+- **saga 原生步骤是白名单的标准用户**（维护者 2026-10-29 决定：只有它们用 pipelined + 异步完成，其他 handler
+  照旧，不改 Nest 池缺省、不加 saga 池）。生成的原生步骤 handler 声明 `durability=pipelined`，注册经
+  `saga.MustRegisterNativeStepHandler`；`wiring/dataengine` 的 Init 读 `saga.PipelinedNativeStepHandlers()`：
+  名单写了就把它们补进去（没写 = 全部允许，不收窄），`nest.pipelined.async` 不写时打开，显式 `false` 拒绝启动。
+  异步完成只作用于 pipelined 事务，strict / async / memory handler 不经过完成泵
+  （`TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged`）。理由与数字见
+  [SAGA §原生步骤的提交方式](SAGA.md#原生步骤的提交方式维护者-2026-10-29-决定)。
 - 已实现的指标：
   - `nest.pipelined.durable_wait`（按 handler 标签的时长分布）——worker 因等 ticket 的阻塞
     时长，**Phase 2 的决策输入**：若其占 worker 忙时比例持续偏高且加 worker 无效，才立项

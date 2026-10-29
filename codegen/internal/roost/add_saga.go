@@ -14,7 +14,7 @@ import (
 const (
 	sagaGuideURL        = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/framework/guide/06-saga.md"
 	sagaCapacityDocURL  = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md"
-	sagaCapacitySummary = "a native step's result goes back to the coordinator as soon as its Nest transaction is durable (strict: the WAL fsync, so keep the WAL on a fast disk); new sagas are refused with saga.ErrBackpressure (a start effect is retried) while a participant's projection backlog is above saga.admission.high_records; the coordinator prototype carried about 1200 sagas/s on one machine (three-node JetStream R3), and the formal implementation is measured in its own performance round"
+	sagaCapacitySummary = "a native step's result goes back to the coordinator as soon as its Nest transaction is durable (native steps are generated durability=pipelined: the lock is released before the WAL fsync and Nest's async completion frees the short-pool worker, so keep the WAL on a fast disk); new sagas are refused with saga.ErrBackpressure (a start effect is retried) while a participant's projection backlog is above saga.admission.high_records; the coordinator prototype carried about 1200 sagas/s on one machine (three-node JetStream R3), and the formal implementation is measured in its own performance round"
 )
 
 // sagaStep 是 -steps 里的一步：名字、是否原生步骤（-native），以及原生步骤的两个 Nest handler 名。
@@ -416,8 +416,9 @@ import (
 // Capacity: a step's durable is shared by every replica of the service and a
 // replica runs up to 32 commands at a time. A native step's result goes back to
 // the coordinator's partition as soon as its Nest transaction is durable
-// (strict: the WAL fsync, so keep the WAL on a fast disk), and the command is
-// acknowledged after that publish. While a participant's projection backlog is
+// (pipelined: the entity lock is released before the WAL fsync and the reply
+// waits for it off the Nest short pool; keep the WAL on a fast disk), and the
+// command is acknowledged after that publish. While a participant's projection backlog is
 // above saga.admission.high_records new sagas are refused
 // (saga.ErrBackpressure; a start effect is retried) and running ones carry on.
 // More load needs more processes: shard by sid (each process owns its sids'
@@ -606,7 +607,14 @@ import (
 // them from the step body in saga/%[5]s/steps.go; roost generate updates the
 // Sender.
 //
-//roost:nest rollback=undo durability=strict
+// durability=pipelined is the recommended setting for a native step: the
+// entity lock is released once the WAL record is queued and the result still
+// leaves only after it is durable, and the framework adds this handler to the
+// Nest pipelined allowlist and turns on async completion by itself (SAGA.md,
+// 原生步骤的提交方式). durability=strict is also allowed; it keeps a Nest
+// short-pool worker for the whole WAL fsync.
+//
+//roost:nest rollback=undo durability=pipelined
 func handler%[3]s(target %[1]s.I%[7]sEntity, step saga.NativeStep) error {
 	// TODO: call target.%[7]sComp().<BusinessMethod>(); on a coded business
 	// error return step.Complete(false, reason). Until then the step refuses.

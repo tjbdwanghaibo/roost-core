@@ -7,7 +7,7 @@ import (
 
 // handlerGiftDebit is the gift saga's debit: take the gift out of the sender's wallet.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=pipelined
 func handlerGiftDebit(target player.IWalletEntity, amount int64, step saga.NativeStep) error {
 	if err := target.WalletComp().Spend(amount); err != nil {
 		return step.Complete(false, err.Error())

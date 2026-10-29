@@ -18,8 +18,9 @@ import (
 // A refusal here (the stack filled up while the gift was in flight) is
 // reported as a failed compensation, which is what the coordinator turns into
 // manual_required — an operator decides, because the framework cannot.
+// Pipelined like the debit (see handlerGiftDebit).
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=pipelined
 func handlerGiftRefund(target player.IBagEntity, itemID int64, count int32, step saga.NativeStep) (int32, error) {
 	held, err := target.BagComp().AddItem(itemID, count)
 	if err != nil {

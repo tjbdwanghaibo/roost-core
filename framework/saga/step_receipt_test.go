@@ -5,11 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
@@ -367,5 +370,36 @@ func TestNativeStepSuccessCarriesItsCommandPayload(t *testing.T) {
 	refusing.success, refusing.reason = false, "no"
 	if refused := refusing.run(t, first); refused.Completion.Data != nil {
 		t.Fatalf("a refusal carries Data %q, want none", refused.Completion.Data)
+	}
+}
+
+// 原生步骤 handler 的登记（维护者 2026-10-29）：durability 只能 strict / pipelined（运行期与生成器同一条规则），登记同时进
+// Nest 的包级注册表；PipelinedNativeStepHandlers 只列 pipelined 的（装配层据此补白名单、开异步完成），Nest 拒绝注册时不登记。
+func TestNativeStepHandlerRegistration(t *testing.T) {
+	t.Cleanup(func() {
+		corenest.ResetHandlersForTest()
+		ResetNativeStepHandlersForTest()
+	})
+	noop := func([]entity.IThreadSafeEntity, []any, ...corenest.HandlerOption) (any, error) { return nil, nil }
+	for _, durability := range []corenest.DurabilityPolicy{corenest.DurabilityAsync, corenest.DurabilityMemory} {
+		name := corenest.NewHandlerName("test_native_" + durability.String())
+		if err := RegisterNativeStepHandler(name, noop, corenest.HandlerMeta{Rollback: corenest.RollbackUndo, Durability: durability}); err == nil || !strings.Contains(err.Error(), "strict or pipelined") {
+			t.Fatalf("durability %s: RegisterNativeStepHandler = %v, want a refusal", durability, err)
+		}
+		if corenest.GetHandler(name) != nil {
+			t.Fatalf("durability %s: a refused native step reached the Nest registry", durability)
+		}
+	}
+	MustRegisterNativeStepHandler(corenest.NewHandlerName("test_native_b"), noop, corenest.HandlerMeta{Rollback: corenest.RollbackUndo, Durability: corenest.DurabilityPipelined})
+	MustRegisterNativeStepHandler(corenest.NewHandlerName("test_native_a"), noop, corenest.HandlerMeta{Rollback: corenest.RollbackUndo, Durability: corenest.DurabilityPipelined})
+	MustRegisterNativeStepHandler(corenest.NewHandlerName("test_native_strict"), noop, corenest.HandlerMeta{Rollback: corenest.RollbackUndo, Durability: corenest.DurabilityStrict})
+	if corenest.GetHandler(corenest.NewHandlerName("test_native_a")) == nil {
+		t.Fatal("a native step handler must be registered with Nest")
+	}
+	if err := RegisterNativeStepHandler(corenest.NewHandlerName("test_native_a"), noop, corenest.HandlerMeta{Rollback: corenest.RollbackUndo, Durability: corenest.DurabilityStrict}); err == nil {
+		t.Fatal("a duplicate native step handler was accepted")
+	}
+	if got := PipelinedNativeStepHandlers(); !slices.Equal(got, []string{"test_native_a", "test_native_b"}) {
+		t.Fatalf("PipelinedNativeStepHandlers = %v, want the two pipelined steps, sorted (the duplicate must not overwrite a's durability)", got)
 	}
 }

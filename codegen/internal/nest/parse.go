@@ -33,9 +33,11 @@ type FuncInfo struct {
 	ReceiverType  string       // injected pointer receiver for method handlers
 	InvokeName    string       // package function or receiver method expression
 	// NativeStep / ReceiptTarget 非空表示原生步骤 handler：分发包装里 saga.NativeStep 参数与第一个锁目标的变量名
-	// （p<i> / e<i>），包装在调用业务函数之前调用 NativeStep.Begin(ReceiptTarget)。
+	// （p<i> / e<i>），包装在调用业务函数之前调用 NativeStep.Begin(ReceiptTarget)。NativeStepPkg 是源文件里 saga 包的
+	// 名字，注册函数用它调用 MustRegisterNativeStepHandler（登记为原生步骤，装配层据此放开 pipelined）。
 	NativeStep    string
 	ReceiptTarget string
+	NativeStepPkg string
 }
 
 type RemoteAccessInfo struct {
@@ -231,6 +233,7 @@ func bindNativeStep(fi *FuncInfo, imports []*ast.ImportSpec) error {
 		return errors.New("a native step handler's first lock target keeps the step receipts and must be a single entity, not a group")
 	}
 	fi.ReceiptTarget = "e" + strconv.Itoa(fi.Entities[0].Index)
+	fi.NativeStepPkg = alias
 	return nil
 }
 

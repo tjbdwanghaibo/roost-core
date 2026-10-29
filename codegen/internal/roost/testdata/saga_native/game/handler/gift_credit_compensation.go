@@ -7,7 +7,7 @@ import (
 
 // handlerGiftCreditCompensation is the gift saga's take the credit back.
 //
-//roost:nest rollback=undo durability=strict
+//roost:nest rollback=undo durability=pipelined
 func handlerGiftCreditCompensation(target player.IWalletEntity, amount int64, step saga.NativeStep) error {
 	if err := target.WalletComp().Spend(amount); err != nil {
 		return step.Complete(false, err.Error())

@@ -138,10 +138,10 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "dataengine.effects.max_bytes", Kind: "int", Default: "8589934592", Min: "1", Starter: true, Example: "8589934592"},
 		{Name: "dataengine.effects.duplicate_window", Kind: "duration", Default: "10m", Min: "1ns", Starter: true, Example: "10m"},
 		{Name: "dataengine.effects.replicas", Kind: "int", Default: "1", Min: "1", Starter: true, Example: "1"},
-		{Name: "nest.pipelined.allowlist", Kind: "strings", Starter: true, Example: "[]"},
-		{Name: "nest.pipelined.async", Kind: "bool", Starter: true, Example: "false"},
+		{Name: "nest.pipelined.allowlist", Kind: "strings", Help: "允许 durability=pipelined 的 handler；空表示全部允许。声明 pipelined 的 saga 原生步骤 handler 由框架自动加入，不用写", Starter: true, Example: "[]"},
+		{Name: "nest.pipelined.async", Kind: "bool", Help: "pipelined 提交的异步完成（只影响 pipelined 事务）。不写时：本进程有声明 pipelined 的 saga 原生步骤就自动打开，否则关闭；\n有这类原生步骤时写 false 拒绝启动（把它们改回 durability=strict，或删掉这一行）"},
 		{Name: "nest.pipelined.async_workers", Kind: "int", Min: "0", Starter: true, Example: "8"},
-		{Name: "nest.pipelined.async_queue_capacity", Kind: "int", Min: "0", Starter: true, Example: "4096"},
+		{Name: "nest.pipelined.async_queue_capacity", Kind: "int", Min: "0", Help: "完成队列容量（0 取缺省 8192）；队列满时该事务降级为在派发 worker 上等 WAL，计 nest.pipelined.async_total{result=\"degraded\"}", Starter: true, Example: "4096"},
 	}},
 	"directory": {Keys: []configschema.Key{
 		{Name: "service_metrics.enabled", Kind: "bool", Default: "true", Help: "false 关掉本进程全部服务的业务指标"},

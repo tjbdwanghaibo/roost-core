@@ -188,8 +188,9 @@ return left, step.Complete(true, "")
    回放时把同一份回执再写一次，让回放事务本身是一条 WAL 记录：pipelined 下回执可能是另一笔还没落盘的事务写的，这样结论一定晚于它的落盘外发。
 3. **生效点是 Nest 事务的 WAL 落盘**（strict：锁内 fsync；pipelined：本事务的 WAL 票据落盘）。结论经 `nest.AfterCommit` 交给这次运行，Nest 请求
    返回之后消费者把结果发到命令所属分区的 `in.res`（MsgID `res.<回执里的 CommandID>`），**PubAck 之后才 ack 命令**；过期未执行直接 ack
-   （`saga.step.expired_unexecuted_total`）；回放时命令过期也照样发回执里的成功（过期投递重发成功）。生成器要求这类 handler 的 `durability` 是
-   `strict` 或 `pipelined`（async 不满足“落盘后才发”）。截止检查在事务开始时，WAL 落盘可能晚于截止——只能由迟到成功补偿处理（第 5 条）。
+   （`saga.step.expired_unexecuted_total`）；回放时命令过期也照样发回执里的成功（过期投递重发成功）。这类 handler 的 `durability` 必须是
+   `strict` 或 `pipelined`（async 不满足“落盘后才发”）：生成器解析时拒绝，运行期 `saga.MustRegisterNativeStepHandler` 再拒绝一次；推荐
+   `pipelined`，见下面「原生步骤的提交方式」。截止检查在事务开始时，WAL 落盘可能晚于截止——只能由迟到成功补偿处理（第 5 条）。
 4. **步骤体返回错误 = 结果未知**（Nest 提交可能已经发生）：消费者 nak 退避重投，重投时 `Begin` 读到回执就回放。没有租约、操作状态文档或
    投影里的 fence。业务拒绝同样 `Complete(false, reason)`：只提交拒绝回执，协调器随即补偿（补偿被拒则 `ManualRequired`）。回执保留
    `saga.receipt_retention`（缺省 168h），`Complete` 在同一事务里顺手剪掉至多 16 条过期回执。
@@ -219,6 +220,46 @@ return left, step.Complete(true, "")
 
 转交路径（另一个进程的 `WithAdmit` 判定命令不归它后经业务自己的通道送来）用 `Steps.RunHandedOver`：核对步骤名与主题、截止与归属后经同一个
 `RunNativeStep` 运行步骤体，**不发布、不 ack**（原消息持有者的重投读到回执后发结果）；与消费者的互斥由实体锁与回执保证。
+
+#### 原生步骤的提交方式（维护者 2026-10-29 决定）
+
+**推荐 `durability=pipelined`，由框架配好 Nest 的 pipelined 白名单与异步完成；`strict` 仍是合法的显式选择。** 其他 handler 不受影响：
+它们照旧按自己的声明提交（不写时 async），Nest 的 short / long / io 池缺省不变，也没有专门的 saga 池。
+
+**为什么**：原生步骤跑在参与方 Nest 的 short 池上。`strict` 在锁内等所在 group commit 的 fsync，worker 整段被占住；生产缺省 short 池只有
+GOMAXPROCS 个 worker，步骤一多，同进程其他实体的消息就排队。`pipelined` 在 WAL 记录入队后就放实体锁，异步完成再把“等落盘 → AfterCommit →
+回复”交给完成池，worker 立即去处理下一条。结论仍在本事务的 WAL 票据落盘之后才交给消费者（契约第 3 条不变）：异步完成下的 AfterCommit 契约
+按源码核对过，真实 JetStream 的端到端与参与方 kill -9 用例在这个模式下（`-race`）通过。
+
+本机 c128、正确性门槛全部为 0（提交 f1bfc6ed，结果在主检出 `artifacts/perf/saga-js/saga-js-20261029-pipeasync/`，不随仓）：
+
+| 配置 | saga/s | short 池忙占比 | 其他实体等 worker |
+| --- | --- | --- | --- |
+| strict，short=4（生产缺省） | 242 | 100% | 105ms |
+| pipelined + `NestOptionWithPipelinedAsyncCompletion`，short=4 | 1350–1379 | 6–8% | 约 70µs |
+
+**框架怎么配**（项目不用手写配置）：
+
+- 生成的注册函数对原生步骤 handler 调用 `saga.MustRegisterNativeStepHandler`（不是 `nest.MustRegisterHandlerWithMeta`）：除了登记到 Nest，
+  还记下它是原生步骤、声明了什么 durability（`saga.PipelinedNativeStepHandlers`）。`roost add saga -native` 生成的 handler 是
+  `//roost:nest rollback=undo durability=pipelined`。
+- `wiring/dataengine` 的 Init（规则只执行这一次）按声明 pipelined 的原生步骤得出 Nest 的 pipelined 设置：
+  - `nest.pipelined.allowlist` 写了名单时把这些 handler 补进去；没写（空 = 全部允许）时不动——补名字会把“全部允许”收窄、改变别的 handler；
+  - `nest.pipelined.async` 不写时自动打开；**显式写 `false` 拒绝启动**，错误点名这些 handler（删掉这一行或写 `true`，或把它们改回
+    `durability=strict`）——不悄悄覆盖部署的明确选择，也不悄悄退回 strict。没有这类原生步骤时两项都按配置原样生效。
+- 异步完成只作用于 pipelined 事务：`framework/nest/execution.go` 里只有 `meta.Durability == DurabilityPipelined` 的事务拿到 pipelined
+  committer、进入 `commitPipelined` 与完成泵，strict / async / memory 走 `commitDurable` 或内存路径（`TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged`
+  对照开 / 关两种引擎）；白名单让未列入的 handler 声明 pipelined 也只会在派发时得到 `ErrPipelinedNotAllowed`，不会被悄悄放开。
+- 手写装配（不经 `wiring/dataengine`）自己传 `nest.NestOptionWithPipelinedAllowlist` 与 `NestOptionWithPipelinedAsyncCompletion`。
+
+**运维观察**：
+
+- 参与方 short 通道的 `NestMgr.Stats()`（`DispatchLaneStats`）：`WaitingForWorker` 长期大于 0、`Running` 贴着 worker 数说明 short 池被占满
+  （strict 原生步骤的典型症状）；压测结果的 `short_busy_fraction` / `short_worker_wait_mean_us` 是同一组数。
+- `nest.pipelined.async_total{result="degraded"}`：完成队列满，这笔事务降级为在派发 worker 上等 WAL（结论不变，只是又占住 worker）；持续增长
+  就调大队列。`result="indeterminate"` 是 WAL 结果未知（引擎随之 fence），`completion_failed` 是落盘后的回调失败。
+- 完成池配置：`nest.pipelined.async_queue_capacity`（0 取缺省 8192，生成的配置写 4096）与 `nest.pipelined.async_workers`（0 取缺省 4，生成的
+  配置写 8）。等落盘的时长看 `nest.pipelined.durable_wait{handler}`。
 
 #### Mongo 步骤（选项 M-A）
 
@@ -273,7 +314,7 @@ return left, step.Complete(true, "")
 | --- | --- |
 | 协调器 kill -9 | 已 PubAck 的事件在流里，内存丢失；同 sid 进程重启（单实例锁等旧锁过期）→ 快照 + 尾巴重放 → 服务。分区在重启前停顿 |
 | 旧协调器还活着（SIGSTOP 恢复、重叠） | 下一次发布被期望序号拒绝 → `ErrPartitionFenced` → fail-stop |
-| 参与方 kill -9 | strict 已确认的提交在 WAL；重启先排空 WAL 进 Mongo 再加载（回执随实体）；未 ack 的命令重投 → `Begin` 回放 |
+| 参与方 kill -9 | 已确认（strict / pipelined 落盘之后）的提交在 WAL；重启先排空 WAL 进 Mongo 再加载（回执随实体）；未 ack 的命令重投 → `Begin` 回放 |
 | 参与方长时间停机 | 协调器每个步骤超时派一次新尝试；回来后每条积压命令经 Nest 跑一次 Begin（回放或过期 ack），实测 300 笔停 60s 约 1～3s 排空 |
 | 发布结果未知 | 同 MsgID 重发判定；超过预算 fail-stop |
 | 快照写冲突 / 快照不兼容 | fail-stop / 分区不启动 |

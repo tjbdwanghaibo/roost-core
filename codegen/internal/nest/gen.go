@@ -53,6 +53,7 @@ func generateWithMode(funcs []*FuncInfo, pkg string, outFile string, force bool,
 		"extraImports":          extraImports,
 		"quote":                 func(s string) string { return fmt.Sprintf("%q", s) },
 		"rollbackMeta":          rollbackMeta,
+		"registerCall":          registerCall,
 		"remoteParamAccessors":  remoteParamAccessors,
 		"remoteKeyName":         remoteKeyName,
 		"remoteConsistencyExpr": remoteConsistencyExpr,
@@ -292,6 +293,15 @@ func joinEntityIds(entities []EntityParam) string {
 		}
 	}
 	return strings.Join(parts, ", ")
+}
+
+// registerCall 是 handler 的注册函数：原生步骤经 saga.MustRegisterNativeStepHandler 注册（同时登记为原生步骤，
+// 装配层据此把声明 pipelined 的原生步骤并进 Nest 的 pipelined 白名单并打开异步完成），其他 handler 照旧。
+func registerCall(f *FuncInfo) string {
+	if f.NativeStep != "" {
+		return f.NativeStepPkg + ".MustRegisterNativeStepHandler"
+	}
+	return "nest.MustRegisterHandlerWithMeta"
 }
 
 func rollbackMeta(f *FuncInfo) string {
@@ -938,9 +948,9 @@ func {{.RegisterFunc}}({{if .ReceiverType}}receiver {{.ReceiverType}}{{end}}) {
 	{{firstToLower .RegisterFunc}}Once.Do(func() {
 {{- range .Funcs}}
 		{{- if $.ReceiverType}}
-		nest.MustRegisterHandlerWithMeta(handlerName{{trimHandler .Name}}, func(es []entity.IThreadSafeEntity, params []any, opts ...nest.HandlerOption) (any, error) { return invoke{{trimHandler .Name}}(receiver, es, params, opts...) }, {{rollbackMeta .}})
+		{{registerCall .}}(handlerName{{trimHandler .Name}}, func(es []entity.IThreadSafeEntity, params []any, opts ...nest.HandlerOption) (any, error) { return invoke{{trimHandler .Name}}(receiver, es, params, opts...) }, {{rollbackMeta .}})
 		{{- else}}
-		nest.MustRegisterHandlerWithMeta(handlerName{{trimHandler .Name}}, invoke{{trimHandler .Name}}, {{rollbackMeta .}})
+		{{registerCall .}}(handlerName{{trimHandler .Name}}, invoke{{trimHandler .Name}}, {{rollbackMeta .}})
 		{{- end}}
 {{- end}}
 	})

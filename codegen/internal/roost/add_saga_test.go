@@ -146,7 +146,7 @@ func TestAddSagaNativeGeneratesStepsHandlersAndSenders(t *testing.T) {
 	}
 
 	debit := readProjectFile(t, root, "game/handler/gift_debit.go")
-	for _, want := range []string{"//roost:nest rollback=undo durability=strict", "func handlerGiftDebit(target player.IWalletEntity, step saga.NativeStep) error", "target.WalletComp()", `step.Complete(false, "gift.debit is not implemented")`} {
+	for _, want := range []string{"//roost:nest rollback=undo durability=pipelined", "func handlerGiftDebit(target player.IWalletEntity, step saga.NativeStep) error", "target.WalletComp()", `step.Complete(false, "gift.debit is not implemented")`} {
 		if !strings.Contains(debit, want) {
 			t.Errorf("gift_debit.go lacks %q:\n%s", want, debit)
 		}

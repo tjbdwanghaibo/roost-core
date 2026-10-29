@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
@@ -163,10 +165,10 @@ type config struct {
 	} `config:"dataengine.outbox"`
 	Effects   EffectsConfig `config:"dataengine.effects"`
 	Pipelined struct {
-		Allowlist          []string `config:"allowlist" example:"[]"`
-		Async              bool     `config:"async" example:"false"`
+		Allowlist          []string `config:"allowlist" example:"[]" help:"允许 durability=pipelined 的 handler；空表示全部允许。声明 pipelined 的 saga 原生步骤 handler 由框架自动加入，不用写"`
+		Async              bool     `config:"async" help:"pipelined 提交的异步完成（只影响 pipelined 事务）。不写时：本进程有声明 pipelined 的 saga 原生步骤就自动打开，否则关闭；\n有这类原生步骤时写 false 拒绝启动（把它们改回 durability=strict，或删掉这一行）"`
 		AsyncWorkers       int      `config:"async_workers" min:"0" example:"8"`
-		AsyncQueueCapacity int      `config:"async_queue_capacity" min:"0" example:"4096"`
+		AsyncQueueCapacity int      `config:"async_queue_capacity" min:"0" example:"4096" help:"完成队列容量（0 取缺省 8192）；队列满时该事务降级为在派发 worker 上等 WAL，计 nest.pipelined.async_total{result=\"degraded\"}"`
 	} `config:"nest.pipelined"`
 }
 
@@ -196,8 +198,13 @@ func (mod *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) 
 
 func (mod *Mod) Init(cfg *viper.Viper) error {
 	var settings config
-	if err := app.LoadConfig(cfg, &settings); err != nil {
+	present, err := app.LoadConfigWithPresence(cfg, &settings)
+	if err != nil {
 		return fmt.Errorf("dataengine mod: %w", err)
+	}
+	pipelined, err := pipelinedSettings(settings, present["nest.pipelined.async"], coresaga.PipelinedNativeStepHandlers())
+	if err != nil {
+		return err
 	}
 	sid := settings.Sid
 	dir := walDir(settings.WAL.Dir, sid)
@@ -275,12 +282,45 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 		},
 		startupTimeout:  settings.StartupTimeout,
 		shutdownTimeout: settings.ShutdownTimeout,
-		pipelined: engine.PipelinedRuntimeConfig{
-			Allowlist: settings.Pipelined.Allowlist, Async: settings.Pipelined.Async,
-			AsyncWorkers: settings.Pipelined.AsyncWorkers, AsyncQueueCap: settings.Pipelined.AsyncQueueCapacity,
-		},
+		pipelined:       pipelined,
 	}
 	return nil
+}
+
+// pipelinedSettings 由 nest.pipelined.* 与本进程登记的 pipelined 原生步骤 handler（saga.PipelinedNativeStepHandlers）
+// 得出 Nest 的 pipelined 设置（维护者 2026-10-29 决定：只有 saga 原生步骤用 pipelined + 异步完成，其他 handler 照旧）。
+//
+//   - 白名单：配置写了名单时把这些原生步骤补进去；没写（空 = 全部允许）时不动——补名字会把“全部允许”收窄成只剩原生步骤，
+//     改变别的 handler 的行为。
+//   - 异步完成：nest.pipelined.async 不写时有这类原生步骤就打开；显式写 false 拒绝启动并点名 handler——不悄悄覆盖部署的
+//     明确选择，也不悄悄退回 strict。异步完成只作用于 pipelined 事务（execution.go commitPipelined），strict / async /
+//     memory handler 不经过完成泵。
+//
+// 声明 strict 的原生步骤不在名单里，不受这里影响。规则只在这里（Init）执行一次，engine.Runtime 与 NestOptions 用结果。
+func pipelinedSettings(settings config, asyncSet bool, nativeSteps []string) (engine.PipelinedRuntimeConfig, error) {
+	result := engine.PipelinedRuntimeConfig{
+		Allowlist: settings.Pipelined.Allowlist, Async: settings.Pipelined.Async,
+		AsyncWorkers: settings.Pipelined.AsyncWorkers, AsyncQueueCap: settings.Pipelined.AsyncQueueCapacity,
+	}
+	if len(nativeSteps) == 0 {
+		return result, nil
+	}
+	if asyncSet && !result.Async {
+		return result, fmt.Errorf("dataengine mod: nest.pipelined.async is false, but saga native step handlers %v declare durability=pipelined, which needs Nest async completion: delete the key (native steps turn it on) or set it true, or declare those handlers durability=strict", nativeSteps)
+	}
+	result.Async = true
+	if len(result.Allowlist) > 0 {
+		allowlist := slices.Clone(result.Allowlist)
+		for _, name := range nativeSteps {
+			if !slices.Contains(allowlist, name) {
+				allowlist = append(allowlist, name)
+			}
+		}
+		result.Allowlist = allowlist
+	}
+	slog.Info("dataengine mod: saga native steps use pipelined durability with Nest async completion",
+		"handlers", nativeSteps, "allowlist_configured", len(settings.Pipelined.Allowlist) > 0)
+	return result, nil
 }
 
 // subjectPrefix 是去掉首尾点的主题前缀；只写了点时取缺省。

@@ -56,6 +56,11 @@ if err := steps.Start(ctx); err != nil { ... }                   // 登记错误
   回放、过了截止就跳过；业务在事务里改实体并调用 `step.Complete(success, reason)` 写回执。锁目标的实体要有回执字段（`roost add saga -native -entity X`
   生成 `SagaReceipts` 与 `game/entities/<x>/saga_receipts.go`）。业务拒绝同样 `Complete(false, reason)`：只提交拒绝回执，协调器随即补偿（补偿被拒则
   manual_required）。
+- **提交方式**（维护者 2026-10-29）：原生步骤推荐 `durability=pipelined`，`roost add saga -native` 就这样生成；saga 步骤是 Nest pipelined
+  白名单的标准用户。生成的注册经 `saga.MustRegisterNativeStepHandler` 记下“这是原生步骤”，`wiring/dataengine` 启动时自动把声明 pipelined 的
+  原生步骤补进 `nest.pipelined.allowlist`（写了名单时）并打开 Nest 异步完成（`nest.pipelined.async` 显式写 `false` 则拒绝启动），项目不用手写；
+  其他 handler 不受影响。strict 仍可显式选择，但在锁内等 fsync，会占满生产缺省的 short 池。数字与运维信号见
+  [SAGA §原生步骤的提交方式](../SAGA.md#原生步骤的提交方式维护者-2026-10-29-决定)。
 - **幂等键**是 `Command.IdempotencyKey`（一个操作实例）：同一操作实例的全部尝试至多一次生效，由实体锁与实体里的回执保证，步骤体不需要自己的幂等。
   **结果未知**：步骤体返回错误时 Nest 提交可能已经发生，消费者 nak，重投读到回执就回放。
 - **消费者怎样处理一条命令**：同一订阅同时在途至多 `min(32, MaxAckPending)` 条（原生）/ 1 条（Mongo，`MongoWorkers` 可调）；执行或回放后把结果发到
@@ -79,7 +84,8 @@ roost add effect player.level_up -consumer game
   表示还没开始，或结束超过 `saga.terminal_retention`；开启 `saga.cold_copy` 时保留期外的终态从 Mongo 冷副本读回）。
 - `saga/<name>/steps.go`：`State` 与编解码；每步正向与补偿的步骤体；`RegisterSteps(steps, deps)` 按 `-steps` 顺序、按主题常量登记；
   `StartSteps(ctx, registry, deps)` = `NewSteps(registry, "<service>-<name>")` + `RegisterSteps` + `Start`。
-- 每个原生步骤两个 Nest handler：`game/handler/<name>_<step>.go` 与 `<name>_<step>_compensation.go`，参数带 `saga.NativeStep`；`-entity` 的 DAO 加
+- 每个原生步骤两个 Nest handler：`game/handler/<name>_<step>.go` 与 `<name>_<step>_compensation.go`，参数带 `saga.NativeStep`，声明
+  `//roost:nest rollback=undo durability=pipelined`；`-entity` 的 DAO 加
   回执字段、实体加 `saga_receipts.go`（同一实体的第二个原生 saga 不再改动）。`-native` 必须是 `-steps` 的子集；服务要有 nest Mod。
 - 骨架默认拒绝：写完业务之前不会报告成功。`roost project doctor` 的 `saga-steps:<name>` / `effect-consumer:<service>/<func>`（只读 WARN）在生成了却没有
   服务启动时提示。

@@ -218,7 +218,7 @@ func handlerClaim(target player.IBagEntity, nowUnix int64, mailID string, nowUni
 // step.Begin(第一个锁目标)，回放 / 过期时以零值成功返回、不执行业务；durability 必须 strict / pipelined，第一个锁目标不能是组。
 func TestNativeStepHandlerDispatchBeginsBeforeTheBusinessCall(t *testing.T) {
 	const head = "package handler\nimport sg \"github.com/tjbdwanghaibo/roost-core/framework/saga\"\ntype IWalletEntity interface{ ID() int64 }\n"
-	path := writeTempGoFile(t, head+`//roost:nest rollback=undo durability=strict
+	path := writeTempGoFile(t, head+`//roost:nest rollback=undo durability=pipelined
 func handlerGiftDebit(target IWalletEntity, amount int64, step sg.NativeStep) (int64, error) { return amount, step.Complete(true, "") }
 `)
 	funcs, pkg, err := parseFile(path)
@@ -238,6 +238,10 @@ func handlerGiftDebit(target IWalletEntity, amount int64, step sg.NativeStep) (i
 	call := strings.Index(body, "handlerGiftDebit(e0, p0, p1)")
 	if begin < 0 || call < 0 || begin > call {
 		t.Fatalf("the dispatch must call p1.Begin(e0) before the business function:\n%s", body)
+	}
+	// 原生步骤经 saga 的注册函数登记（装配层据此把 pipelined 的原生步骤并进白名单、打开异步完成），用源文件里的 saga 包名。
+	if !strings.Contains(body, "sg.MustRegisterNativeStepHandler(handlerNameGiftDebit, invokeGiftDebit, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityPipelined})") || strings.Contains(body, "nest.MustRegisterHandlerWithMeta(handlerNameGiftDebit") {
+		t.Fatalf("a native step handler must register through sg.MustRegisterNativeStepHandler:\n%s", body)
 	}
 
 	for label, src := range map[string]string{

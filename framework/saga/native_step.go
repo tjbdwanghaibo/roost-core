@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
@@ -20,7 +22,7 @@ import (
 //		return err
 //	}
 //
-//	//roost:nest rollback=undo durability=strict
+//	//roost:nest rollback=undo durability=pipelined
 //	func handlerDebit(target player.IBagEntity, amount int32, step saga.NativeStep) (int32, error) {
 //		left, err := target.BagComp().Remove(amount)
 //		if err != nil {
@@ -97,4 +99,60 @@ func (step NativeStep) Complete(success bool, reason string) error {
 		return ErrNoNativeStep
 	}
 	return step.run.complete(success, reason)
+}
+
+// 原生步骤 handler 的登记（维护者 2026-10-29 决定：原生步骤推荐 durability=pipelined，配合 Nest 的 pipelined 异步完成）。
+//
+// 生成的注册函数对原生步骤 handler 调用 MustRegisterNativeStepHandler 而不是 nest.MustRegisterHandlerWithMeta：除了登记到
+// Nest 的包级注册表，这里另记一份“哪些 handler 是原生步骤、声明了什么 durability”。装配层（wiring/dataengine）在 Init 时
+// 读 PipelinedNativeStepHandlers，把它们并进 nest.pipelined 的白名单并要求打开异步完成——项目不用为原生步骤手写这两项配置，
+// 其他 handler 的提交方式不受影响。
+var (
+	nativeStepMu       sync.Mutex
+	nativeStepHandlers = make(map[nest.HandlerName]nest.DurabilityPolicy)
+)
+
+// RegisterNativeStepHandler 把原生步骤 handler 注册进 Nest 的包级注册表并记为原生步骤。durability 必须是 strict 或 pipelined：
+// 步骤结论在 Nest 返回后直接发回协调器，提交那时必须已经落盘（async / memory 不满足）。生成器在解析时已核对过同一条规则，
+// 这里是运行期的同一份强制，手写注册也逃不过。Nest 拒绝注册（重名、声明非法）时不登记。
+func RegisterNativeStepHandler(name nest.HandlerName, handler nest.BaseHandler, meta nest.HandlerMeta) error {
+	if meta.Durability != nest.DurabilityStrict && meta.Durability != nest.DurabilityPipelined {
+		return fmt.Errorf("saga: native step handler %q needs durability strict or pipelined (got %s): its result leaves the process right after Nest returns", name.String(), meta.Durability)
+	}
+	nativeStepMu.Lock()
+	defer nativeStepMu.Unlock()
+	if err := nest.RegisterHandlerWithMeta(name, handler, meta); err != nil {
+		return err
+	}
+	nativeStepHandlers[name] = meta.Durability
+	return nil
+}
+
+// MustRegisterNativeStepHandler 是 RegisterNativeStepHandler 的 panic 版本（生成的注册函数用它）。
+func MustRegisterNativeStepHandler(name nest.HandlerName, handler nest.BaseHandler, meta nest.HandlerMeta) {
+	if err := RegisterNativeStepHandler(name, handler, meta); err != nil {
+		panic(err)
+	}
+}
+
+// PipelinedNativeStepHandlers 返回已登记、声明 durability=pipelined 的原生步骤 handler 名（排序）。装配层据此给 Nest 的
+// pipelined 白名单补名字、要求异步完成；声明 strict 的原生步骤不在其中（strict 是合法的显式选择）。
+func PipelinedNativeStepHandlers() []string {
+	nativeStepMu.Lock()
+	defer nativeStepMu.Unlock()
+	var names []string
+	for name, durability := range nativeStepHandlers {
+		if durability == nest.DurabilityPipelined {
+			names = append(names, name.String())
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// ResetNativeStepHandlersForTest 清空原生步骤登记，只供测试使用（与 nest.ResetHandlersForTest 配对）。
+func ResetNativeStepHandlersForTest() {
+	nativeStepMu.Lock()
+	defer nativeStepMu.Unlock()
+	nativeStepHandlers = make(map[nest.HandlerName]nest.DurabilityPolicy)
 }

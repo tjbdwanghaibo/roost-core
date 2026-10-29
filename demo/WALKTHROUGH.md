@@ -185,6 +185,9 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
     `Steps.Native`：步骤体把框架的 `saga.NativeStep` 交给 Nest handler，handler 在自己的事务里 `step.Complete(...)`，
     于是背包变更、命令回执、协调器等的完成结果是**同一条 WAL 记录**。重投会撞上回执、回放已存的完成结果而不是再扣一次；
     提交前崩溃则三样都没发生。消费者自己不发布任何东西——它等回执被投影出来再 ack。
+    这两个 handler 声明 `durability=pipelined`（原生步骤的推荐写法）：WAL 记录入队后就放 Player 锁，结果仍在落盘之后才外发；
+    框架把声明 pipelined 的原生步骤自动加进 Nest 的 pipelined 白名单并打开异步完成，等 WAL 不占 Nest short 池的 worker，
+    配置里不用写 `nest.pipelined.*`（见 [Saga 契约](../docs/framework/SAGA.md)「原生步骤的提交方式」）。
   - deliver（查 Player 集合确认收件人进过游戏，再 `mail.Send` 带附件）的业务是一次 bus 调用，不是 Nest 事务，没有东西可以绑，
     收件人查的是 Player DAO 所在的物理库和集合：DAO 标记的 `db=main` 是逻辑库名，启动时经 `kitdataengine.DAOCollection` 按 `dataengine.databases` 换成物理库（生成配置为 `main: planet`），不是 `dataengine.database`（它只给原生步骤的 inbox 用），也不能把 `db.PlayerDaoDBName` 直接当库名。
     所以登记为 `Steps.Mongo`：Mongo inbox 与原生步骤同一套操作实例契约（已有结果的尝试回放、在途尝试等待、过期接替，

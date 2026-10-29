@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -820,5 +821,65 @@ func TestAsyncCompletionWaitsForEntityRelease(t *testing.T) {
 			t.Error("AfterCommit still held entity lock")
 		}
 	default:
+	}
+}
+
+// 异步完成只作用于 pipelined 事务（维护者 2026-10-29 决定 saga 原生步骤默认开启它时的前提）：同一个支持 pipelined 的
+// committer 下，strict 与 async handler 在异步完成开 / 关两种引擎上的观察完全一致——都走 Commit（不 Enqueue，不进完成泵），
+// AfterCommit 在回复之前执行，执行时实体锁的状态也相同。
+func TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged(t *testing.T) {
+	type observation struct {
+		commits, enqueued int
+		lockFreeInHook    bool
+		hookBeforeReply   bool
+		reply             any
+	}
+	run := func(t *testing.T, durability DurabilityPolicy, asyncCompletion bool) observation {
+		t.Helper()
+		id, e := newAsyncPilotEntity(t, 9990, 10)
+		getter := newMockGetter()
+		getter.Add(e)
+		committer := newPipelinedTestCommitter(true)
+		options := []NestOption{NestOptionWithGetter(getter), NestOptionWithTransactionCommitter(committer)}
+		if asyncCompletion {
+			options = append(options, NestOptionWithPipelinedAsyncCompletion(1, 4))
+		}
+		engine := NewEngine(options...)
+		var hookRan atomic.Bool
+		var lockFree atomic.Bool
+		name := NewHandlerName("non_pipelined_" + durability.String())
+		engine.MustRegisterHandlerWithMeta(name, func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+			AfterCommit(func() {
+				free := e.GetMutex().TryLock()
+				if free {
+					e.GetMutex().Unlock()
+				}
+				lockFree.Store(free)
+				hookRan.Store(true)
+			})
+			e.dao.Value++
+			return e.dao.Value, MarkPersist(e.dao, 1)
+		}, HandlerMeta{Rollback: RollbackState, Durability: durability})
+		if err := engine.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = engine.Shutdown(context.Background()) }()
+		reply, err := engine.Request(context.Background(), name, id, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hookBeforeReply := hookRan.Load()
+		committer.mu.Lock()
+		defer committer.mu.Unlock()
+		return observation{commits: committer.commits, enqueued: len(committer.tickets), lockFreeInHook: lockFree.Load(), hookBeforeReply: hookBeforeReply, reply: reply}
+	}
+	for _, durability := range []DurabilityPolicy{DurabilityStrict, DurabilityAsync} {
+		off, on := run(t, durability, false), run(t, durability, true)
+		if on != off {
+			t.Errorf("%s handler: async completion on = %+v, off = %+v; want identical", durability, on, off)
+		}
+		if on.commits != 1 || on.enqueued != 0 || !on.hookBeforeReply || on.reply != 11 {
+			t.Errorf("%s handler with async completion on = %+v; want one Commit, no Enqueue, AfterCommit before the reply", durability, on)
+		}
 	}
 }

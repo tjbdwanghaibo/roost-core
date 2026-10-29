@@ -50,7 +50,9 @@ import (
 //     skipped. The framework lets at most one attempt of one operation take
 //     effect (roost-core SAGA.md, 原生步骤执行契约), so the step needs no
 //     idempotency of its own. The result is published once the transaction is
-//     durable (strict: the WAL fsync).
+//     durable: the handlers are durability=pipelined, so the Player lock is
+//     released before the WAL fsync and Nest's async completion waits for it
+//     off the short pool (the framework allowlists them and turns that on).
 //   - **deliver is a mail call**, not a Nest transaction, so there is nothing
 //     to bind it to. It is registered with `Steps.Mongo`, whose inbox keeps one
 //     receipt per operation in the saga database and writes it in the step's
