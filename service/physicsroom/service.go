@@ -262,7 +262,7 @@ func (s *Service) run(ctx context.Context, r *room) {
 		defer r.mu.Unlock()
 		now := time.Now()
 		clear(active)
-		out := gamephysics.MotionCommands(r.spec.Bodies, r.spec.Motions, tick)
+		out := gamephysics.AppendMotionCommands(make([]physx.Command, 0, len(r.spec.Motions)+len(r.members)), r.spec.Bodies, r.spec.Motions, tick)
 		for player, m := range r.members {
 			if now.Sub(m.seenAt) > s.cfg.MemberTTL {
 				delete(r.members, player)

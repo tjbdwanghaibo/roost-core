@@ -152,7 +152,11 @@ func (l Level) Content() ([]byte, string, error) {
 	return data, hex.EncodeToString(sum[:]), nil
 }
 func MotionCommands(bodies []physx.Body, tracks []MotionTrack, tick uint64) []physx.Command {
-	out := make([]physx.Command, 0, len(tracks))
+	return AppendMotionCommands(make([]physx.Command, 0, len(tracks)), bodies, tracks, tick)
+}
+
+// AppendMotionCommands 把轨迹目标追加到 out；调用方还要追加玩家输入时可一次预留总容量。
+func AppendMotionCommands(out []physx.Command, bodies []physx.Body, tracks []MotionTrack, tick uint64) []physx.Command {
 	seconds := float64(tick) * float64(StepSeconds)
 	for _, m := range tracks {
 		var b physx.Body
