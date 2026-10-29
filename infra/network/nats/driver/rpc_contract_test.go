@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"errors"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"sync"
 	"sync/atomic"
@@ -74,10 +75,32 @@ func TestRPCBudgetPendingTerminalRacesCompleteOnce(t *testing.T) {
 	}
 }
 
+// 回调都已跑完的 RPC 客户端：Assembly.Close 返回 nil 时回调池确实停了（拒绝新任务），客户端拒绝之后的调用。
 func TestRPCBudgetAssemblyClosesCompletedPool(t *testing.T) {
 	r := NewRPCClient(nil, fnats.DefaultRetryPolicy(), 1)
+	ran := make(chan struct{})
+	r.dispatchCallback(1, &rpcTask{cb: func([]byte, error) { close(ran) }})
+	select {
+	case <-ran:
+	case <-time.After(time.Second):
+		t.Fatal("callback did not run before Close")
+	}
 	if err := (&Assembly{RPC: r}).Close(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+	if stats := r.pool.Stats(); !stats.Stopped {
+		t.Errorf("callback pool after Close = %+v, want stopped", stats)
+	}
+	if err := r.pool.TryDispatch(1, &rpcTask{cb: func([]byte, error) { t.Error("callback pool ran a task after Close") }}); !errors.Is(err, worker.ErrWorkerClosed) {
+		t.Errorf("callback pool accepted a task after Close: %v", err)
+	}
+	var callErr error
+	called := false
+	r.CallAsync("rpc.closed", nil, func(_ []byte, err error) { called, callErr = true, err })
+	// errRPCStopped 同时是 ErrCancelled 与 ErrClosed；夹具没有连接（nil Client 也报 ErrClosed），所以
+	// ErrCancelled 才说明拒绝来自 RPC 客户端自己的停止。
+	if !called || !errors.Is(callErr, fnats.ErrCancelled) || !errors.Is(callErr, fnats.ErrClosed) {
+		t.Errorf("CallAsync after Close: called=%v err=%v, want the immediate RPC-stopped result", called, callErr)
 	}
 }
 
