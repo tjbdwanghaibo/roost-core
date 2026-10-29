@@ -31,10 +31,15 @@ type Snapshot struct {
 
 // Cursor 属于单个可靠连接。Plan 不推进游标，整包写出成功后才 Commit。
 // 调用方串行执行 Plan/发送/Commit，失败必须关闭连接或重试同一计划。
+// Cursor 不能按值复制后分别使用：两份副本会共用 spare 基线 map。
 type Cursor struct {
 	epoch, seq, tick uint64
 	objects          map[uint64]Object
 	layout           string
+	// spare 是 Commit 换下并已清空的上一代基线 map，下一次 plan 取走复用。
+	// 换下后只有本游标持有它：旧 Plan 的 next 只在 Commit 通过序号校验时才被读取，
+	// 而持有这张 map 的那个 Plan 已经提交过，序号不会再匹配。
+	spare map[uint64]Object
 }
 type Plan struct {
 	Data     []byte
@@ -66,16 +71,20 @@ func (c *Cursor) plan(s Snapshot, layout FieldLayout) (*Plan, error) {
 	if !full && s.Tick < c.tick {
 		return nil, ErrSequence
 	}
-	next := Cursor{layout: signature, epoch: s.Epoch, seq: c.seq + 1, tick: s.Tick, objects: make(map[uint64]Object, len(s.Objects))}
 	if c.seq == math.MaxUint64 {
 		return nil, ErrSequence
 	}
+	objects := c.spare
+	c.spare = nil // 取走后归这个计划；计划未提交时随它一起丢弃。
+	if objects == nil {
+		objects = make(map[uint64]Object, len(s.Objects))
+	}
+	next := Cursor{layout: signature, epoch: s.Epoch, seq: c.seq + 1, tick: s.Tick, objects: objects}
 	// changes 记录本帧要上线的对象；按 Chunk、ID 排序后连续同 Chunk 即一组，
 	// 线格式与逐 Chunk 分组后组内按 ID 排序完全相同。
 	type change struct {
 		object Object
-		base   []byte // RC2 字段增量的基线；nil 表示写全部字段
-		mask   byte
+		mask   byte // RC2 变化字段位图，组帧时只写这些字段
 	}
 	changes := make([]change, 0, len(s.Objects))
 	snapshotBytes := 36
@@ -111,10 +120,11 @@ func (c *Cursor) plan(s Snapshot, layout FieldLayout) (*Plan, error) {
 				if len(o.Data) != fieldBytes {
 					return nil, errors.New("chunksync: invalid field baseline")
 				}
+				var base []byte // nil 表示首次、重入或换 Chunk，写全部字段
 				if !full && ok && old.Chunk == o.Chunk {
-					ch.base = old.Data
+					base = old.Data
 				}
-				ch.mask, wire = layout.mask(ch.base, o.Data)
+				ch.mask, wire = layout.mask(base, o.Data)
 			}
 			frameBytes += 10 + wire
 			changes = append(changes, ch)
@@ -199,7 +209,12 @@ func (c *Cursor) Commit(p *Plan) error {
 	if p == nil || p.previous != c.seq {
 		return ErrSequence
 	}
+	replaced := c.objects
 	*c = p.next
+	if replaced != nil {
+		clear(replaced)
+		c.spare = replaced
+	}
 	return nil
 }
 
