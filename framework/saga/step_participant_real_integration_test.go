@@ -23,6 +23,8 @@ package saga
 // ROOST_SAGA_MUTATE=noadmit 让协调器不做准入（原型 SAGAJS_MUTATE=noadmit 的迁移，设计 §11.2），TestRealJetStreamLoadPublisherDrivesAdmission
 // 必须变红。
 // 长停机：ROOST_SAGA_JS_RESTART_DELAY=60s 让 kill -9 之后过 60s 再拉起参与方（协调器在这期间按步骤超时反复重试）。
+// 异步完成：ROOST_SAGA_SCAN_PIPELINED_ASYNC=1 让参与方步骤 handler 用 DurabilityPipelined 并开 Nest pipelined 异步完成
+// （AfterCommit 在完成池执行，没有请求上下文、不持实体锁），端到端与 kill -9 用例在这一模式下照样核对至多一次与余额。
 
 import (
 	"bufio"
@@ -255,7 +257,16 @@ type ptParticipantOptions struct {
 	NestWorkers int
 	// ProjectDelayPerRecord 让投影每条记录多等这么久（只给准入档制造投影积压；零值不等）。
 	ProjectDelayPerRecord time.Duration
+	// PipelinedAsync 打开 Nest 的 pipelined 异步完成（NestOptionWithPipelinedAsyncCompletion，完成池取缺省 4 worker / 8192 队列）：
+	// 派发 worker 不在 WAL 票据上等，AfterCommit 与回复在完成池执行。只对 DurabilityPipelined 的 handler 生效。
+	PipelinedAsync bool
 }
+
+// ptPipelinedAsyncEnv 打开时，本进程（含 kill -9 用例经环境继承的子进程）打开的每个参与方都把步骤 handler 注册为
+// DurabilityPipelined 并开 pipelined 异步完成：用同一批真实用例核对 saga 步骤“落盘后才发”在异步完成下仍成立。
+const ptPipelinedAsyncEnv = "ROOST_SAGA_SCAN_PIPELINED_ASYNC"
+
+func ptPipelinedAsyncFromEnv() bool { return os.Getenv(ptPipelinedAsyncEnv) == "1" }
 
 // openPtParticipantWith 同 openPtParticipant，参数见 ptParticipantOptions。
 func openPtParticipantWith(walDir string, mongo fmongo.IMongo, database string, accounts int, options ptParticipantOptions) (*ptParticipant, error) {
@@ -264,6 +275,9 @@ func openPtParticipantWith(walDir string, mongo fmongo.IMongo, database string, 
 	}
 	if options.NestWorkers <= 0 {
 		options.NestWorkers = 8
+	}
+	if ptPipelinedAsyncFromEnv() {
+		options.Durability, options.PipelinedAsync = nest.DurabilityPipelined, true
 	}
 	p := &ptParticipant{manager: entity.NewEntityManager()}
 	wal, err := nestwal.Open(nestwal.DefaultOptions(walDir))
@@ -296,8 +310,13 @@ func openPtParticipantWith(walDir string, mongo fmongo.IMongo, database string, 
 			return nil, err
 		}
 	}
-	p.mgr = nest.NewEngine(nest.NestOptionWithGetter(entity.NewManagerAccess(p.manager)), nest.NestOptionWithTransactionCommitter(p.projector),
-		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: options.NestWorkers, QueueCap: 4096}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	nestOptions := []nest.NestOption{nest.NestOptionWithGetter(entity.NewManagerAccess(p.manager)), nest.NestOptionWithTransactionCommitter(p.projector),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: options.NestWorkers, QueueCap: 4096}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{})}
+	if options.PipelinedAsync {
+		nestOptions = append(nestOptions, nest.NestOptionWithPipelinedAsyncCompletion(0, 0))
+		fmt.Fprintln(os.Stderr, "participant: step handler", options.Durability, "with Nest pipelined async completion")
+	}
+	p.mgr = nest.NewEngine(nestOptions...)
 	p.mgr.MustRegisterHandlerWithMeta(ptStepHandler, p.step, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: options.Durability})
 	open := nest.NewHandlerName("saga_pt_open")
 	p.mgr.MustRegisterHandlerWithMeta(open, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
