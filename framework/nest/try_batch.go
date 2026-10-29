@@ -276,7 +276,7 @@ const (
 type tryBatchPlan struct {
 	step     tryBatchStep
 	claimed  bool
-	busy     bool  // 执行时实体锁 / 锁组取不到：撤销认领前转成单目标作业
+	busy     bool  // 执行时实体锁 / 锁组取不到（或同实体有在途异步完成）：撤销认领前转成单目标作业
 	handBack error // 非 nil 时交回
 }
 
@@ -593,7 +593,7 @@ func (exec *tryBatchExec) entry(name HandlerName) (handlerEntry, bool) {
 	return exec.lastEntry, exec.lastFound
 }
 
-// run 执行一个已认领的目标。busy 为 true 表示实体锁 / 锁组取不到或实体处于锁组迁移待定，调用方把它转成单目标作业；
+// run 执行一个已认领的目标。busy 为 true 表示实体锁 / 锁组取不到、实体处于锁组迁移待定或同实体有在途异步完成，调用方把它转成单目标作业；
 // handBack 非 nil 表示不执行、交回；两者都为零值表示 handler 已执行（提交或回滚，错误已记日志）。
 //
 // 步骤与单目标派发相同（singleDispatch → dispatchLoadedEntities → invokeHandlerTransaction），区别：只读已加载的
@@ -644,6 +644,12 @@ func (exec *tryBatchExec) runLocked(entry handlerEntry, e entity.IThreadSafeEnti
 		}()
 		releaseLocks, ok := tryLockTryBatchTarget(exec.locks, scope.Guard(), e, exec.store)
 		if !ok {
+			return
+		}
+		if pump := exec.mgr.completions; pump != nil && pump.asyncCompletionPending(e.GUId()) {
+			// 同实体有在途异步完成：普通事务要在解锁后等它完成才能回调与回复（commitOrdering），批量作业不在 worker 上等，
+			// 与取不到锁相同，放锁后转成单目标作业，由普通派发排在它后面。持锁读计数，结论对此前提交的异步完成成立。
+			releaseLocks()
 			return
 		}
 		locked = true

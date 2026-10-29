@@ -67,6 +67,38 @@ type completionPump struct {
 	// 泵内就地执行、派发 worker 降级——都先等前驱完成再运行，过载时同实体的完成顺序也无条件成立。
 	chainMu sync.Mutex
 	chains  map[int64]chan struct{}
+
+	// asyncPending 按实体 ID 分片计数“已在链上占位、尚未释放的异步完成节点”（linkAsync 加、release 减）。普通事务
+	// （strict / async / memory）提交时只读自己声明实体所在分片的计数：为 0 走快路径，不碰 chainMu、不分配；非 0 才在
+	// 链上占位并在回复前等待（见 orderBehindAsyncCompletions）。
+	//
+	// 放在泵里、按 ID 分片而不是放在实体上：链本身按 ID 登记，同 ID 的实例被替换（Destroy 后重建、卸载后重载）时
+	// 计数仍跟着 ID；也不给 entity 包加只为 Nest 服务的字段。分片只会多报（同分片别的 ID 有在途异步完成）：多报的
+	// 代价是一次链登记，前驱为空时不等待；不会漏报——计数在持实体锁时增加，读方取得同一把锁之后才读，减少发生在
+	// 节点完成（AfterCommit、回复）之后。
+	asyncPending [completionPendingShards]completionPendingShard
+	// orderedCommits 统计普通事务因同实体有在途异步完成而在链上排队的次数（慢路径才写；测试与排障用）。
+	orderedCommits atomic.Uint64
+}
+
+// completionPendingShards 是 asyncPending 的分片数（2 的幂）。每片独占一条缓存行，读多写少，256 片约 16KB。
+const completionPendingShards = 256
+
+// completionPendingShard 是一片计数，补齐到 64 字节避免相邻分片伪共享。
+type completionPendingShard struct {
+	n atomic.Int64
+	_ [56]byte
+}
+
+// pendingShard 返回实体 ID 所在的计数分片（乘法散列取高 8 位：ID 的低位按种类 / 序号编排，不能直接取模）。
+func (p *completionPump) pendingShard(entityID int64) *completionPendingShard {
+	return &p.asyncPending[(uint64(entityID)*0x9E3779B97F4A7C15)>>56]
+}
+
+// asyncCompletionPending 报告实体 ID 所在分片是否有在途的异步完成。只做一次原子读；调用方须持该实体的锁，
+// 结论才对“本事务之前提交的异步完成”成立。
+func (p *completionPump) asyncCompletionPending(entityID int64) bool {
+	return p.pendingShard(entityID).n.Load() != 0
 }
 
 // completionOrder 是一个实体完成链上的一节。
@@ -75,6 +107,7 @@ type completionOrder struct {
 	entityID    int64
 	prev        chan struct{}
 	mine        chan struct{}
+	async       bool // 异步完成节点：登记时计入 asyncPending，释放时扣回
 	releaseOnce sync.Once
 }
 
@@ -85,6 +118,15 @@ func (p *completionPump) link(entityID int64) *completionOrder {
 	order.prev = p.chains[entityID]
 	p.chains[entityID] = order.mine
 	p.chainMu.Unlock()
+	return order
+}
+
+// linkAsync 同 link，并把节点计入 asyncPending：之后在这个实体上提交的普通事务要排在它后面（见
+// orderBehindAsyncCompletions）。必须在持实体锁时调用，计数先于登记增加。
+func (p *completionPump) linkAsync(entityID int64) *completionOrder {
+	p.pendingShard(entityID).n.Add(1)
+	order := p.link(entityID)
+	order.async = true
 	return order
 }
 
@@ -111,6 +153,10 @@ func (o *completionOrder) release() {
 			delete(o.pump.chains, o.entityID)
 		}
 		o.pump.chainMu.Unlock()
+		if o.async {
+			// 最后扣回：读到 0 的普通事务可以确信此前的异步完成（含回调与回复）都已结束。
+			o.pump.pendingShard(o.entityID).n.Add(-1)
+		}
 	})
 }
 
@@ -202,8 +248,8 @@ func prepareCompletion(pump *completionPump, msg *Msg, es []entity.IThreadSafeEn
 	retChan := msg.RetChan
 	waitStart := time.Now()
 	entityID := completionEntityID(es, msg)
-	// 仍持实体锁时占位：链序即提交顺序。
-	order := pump.link(entityID)
+	// 仍持实体锁时占位：链序即提交顺序。计入在途异步完成，此后同实体的普通事务在回复前等它（orderBehindAsyncCompletions）。
+	order := pump.linkAsync(entityID)
 	complete := func(ticketErr error) {
 		unlockStart := startNestStage(tx.stageMetrics)
 		<-handoff.unlocked
@@ -271,6 +317,102 @@ func completionEntityID(es []entity.IThreadSafeEntity, msg *Msg) int64 {
 		}
 	}
 	return msg.Key()
+}
+
+// commitOrdering 是不走 pipelined 完成路径的事务（strict / async / memory，以及回退到 strict 路径的 pipelined）在完成链上
+// 的占位：只在它的某个声明实体有在途异步完成时建立。维护者 2026-10-29 决定（选 A）：同一实体上每笔事务对外可见的
+// 效果——回复、AfterCommit——都按提交（LSN / 准入）序；异步完成事务 T1 放锁后，同实体上紧接着提交的普通事务 T2 的
+// 回复与 AfterCommit 不能先于 T1 的完成，async 的 T2 回复更不能把 T1 尚未持久的状态带出进程。
+//
+// 时序（全部在派发 goroutine 上）：
+//  1. 开始执行 handler 之前、仍持声明实体的锁：按声明实体读 asyncPending，有在途的才在这些实体的链上占位（链序 = 锁序 =
+//     提交序），并把 await 登记为 Guard 解锁后的第一个回调；
+//  2. 事务照常在锁内提交（strict 等 fsync、async 写入、memory 无记录），AfterCommit 照常排到 Guard 解锁之后；
+//  3. Guard 释放全部实体锁之后先执行 await 等前驱完成，再执行嵌套独立事务与本事务的 AfterCommit，最后 release；
+//     回复由 dispatchNest 在这之后发出。
+//
+// 不持锁等待：await 在 Guard 释放全部实体锁之后运行，等待期间本事务不持任何实体锁，只占着派发 worker 与同 ID 准入链尾。
+// 不会死锁：await 只等链上严格更早的节点；异步完成节点只等它自己的解锁屏障（它在放锁时就已关闭，早于本事务取得锁）、
+// 更早的节点与 WAL 票据（WAL 独立推进），它的执行（完成池、泵内就地、派发 worker 降级）都不需要本事务占着的派发 worker
+// 或准入链尾；普通节点同理只等更早的节点。一个节点的全部登记都在它持有全部相关锁时完成，前驱放锁之后后继才能取得
+// 同一把锁再登记，所以“等待”只指向登记更早的节点，构不成环。前提（第一阶段 pipelined 占位早已依赖它）：异步完成的
+// AfterCommit 不同步等待同一实体上的 Nest 请求——那个请求排在本事务占着的准入链尾之后。框架内的异步完成只有 saga 原生
+// 步骤，回调只记下结论。
+//
+// 多实体：本事务按全部声明实体检查（主实体与次实体），每个有在途异步完成的实体各占一节、全部等完；异步完成事务自己
+// 只在主实体（completionEntityID）上占位，所以只碰它次实体的普通事务不排在它后面。handler 内 Cast 动态取得的实体
+// 不检查（与同 ID 准入顺序只覆盖声明 ID 一致）。没有 Guard 作用域（不经派发的直调）时不排序。
+type commitOrdering struct {
+	guard   *entity.EntityGuard
+	orders  []*completionOrder
+	handler string
+	stages  bool
+}
+
+// orderBehindAsyncCompletions 在仍持声明实体锁时检查 es 上有没有在途异步完成，有则建立 commitOrdering 并登记解锁后的
+// 等待；调用方在事务收尾时调用 finish 登记释放。没有在途（常见路径）返回 nil：每个实体一次原子读，不加锁、不分配。
+func (route completionRoute) orderBehindAsyncCompletions(es []entity.IThreadSafeEntity, handler string, stages bool) *commitOrdering {
+	pump := route.pump
+	if pump == nil {
+		return nil
+	}
+	var ordering *commitOrdering
+	for _, e := range es {
+		if e == nil {
+			continue
+		}
+		id := e.GUId()
+		if !pump.asyncCompletionPending(id) {
+			continue
+		}
+		if ordering == nil {
+			scope := entity.CurrentGuardScope()
+			if scope == nil || scope.Guard() == nil {
+				return nil
+			}
+			ordering = &commitOrdering{guard: scope.Guard(), handler: handler, stages: stages}
+		} else if ordering.holds(id) {
+			// es 可以有重复 ID：同一实体只占一节，否则后一节会等前一节——等自己。
+			continue
+		}
+		ordering.orders = append(ordering.orders, pump.link(id))
+	}
+	if ordering != nil {
+		pump.orderedCommits.Add(1)
+		ordering.guard.AppendPostRelease(ordering.await)
+	}
+	return ordering
+}
+
+// holds 报告本事务是否已在 entityID 的链上占位。
+func (o *commitOrdering) holds(entityID int64) bool {
+	for _, order := range o.orders {
+		if order.entityID == entityID {
+			return true
+		}
+	}
+	return false
+}
+
+// await 等全部占位实体上的前驱完成。作为 Guard 解锁后的回调运行，此时不持实体锁。
+func (o *commitOrdering) await() {
+	start := startNestStage(o.stages)
+	for _, order := range o.orders {
+		order.await()
+	}
+	observeNestStage(o.handler, "completion_order", start)
+}
+
+// finish 把释放登记在 Guard 解锁回调的末尾：排在本事务的 AfterCommit 之后。调用方用 defer 调用，handler 或提交
+// panic 时同样登记——未释放的节点会永久挡住该实体此后的异步完成。
+func (o *commitOrdering) finish() {
+	o.guard.AppendPostRelease(o.release)
+}
+
+func (o *commitOrdering) release() {
+	for _, order := range o.orders {
+		order.release()
+	}
 }
 
 // stop 排空全部已接受的完成并停止池。在派发器排空后调用，不会有新的提交与关闭竞争。

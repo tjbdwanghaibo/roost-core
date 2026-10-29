@@ -30,7 +30,9 @@ func BenchmarkNestHotPath(b *testing.B) {
 				for _, shape := range []string{"single", "multi2", "multi4", "groups1", "groups8", "groups32"} {
 					for _, async := range []bool{false, true} {
 						name := fmt.Sprintf("cpu=%t/workers=%d/independent=%t/%s/async=%t", cpu, workers, independent, shape, async)
-						b.Run(name, func(b *testing.B) { benchmarkNestHotPath(b, shape, workers, independent, async, cpu, iterations) })
+						b.Run(name, func(b *testing.B) {
+							benchmarkNestHotPath(b, shape, workers, independent, async, cpu, false, iterations)
+						})
 					}
 				}
 			}
@@ -38,7 +40,20 @@ func BenchmarkNestHotPath(b *testing.B) {
 	}
 }
 
-func benchmarkNestHotPath(b *testing.B, shape string, workers int, independent, async, cpu bool, iterations int) {
+// BenchmarkNestHotPathCompletionPump 同 BenchmarkNestHotPath，引擎带完成泵（点名的是另一个 handler）：被测的普通 handler
+// 每次提交都走“同实体有没有在途异步完成”的检查，没有时是快路径。与 BenchmarkNestHotPath 对照即这道检查的开销。
+func BenchmarkNestHotPathCompletionPump(b *testing.B) {
+	for _, workers := range []int{1, 8} {
+		for _, shape := range []string{"single", "multi4"} {
+			for _, async := range []bool{false, true} {
+				name := fmt.Sprintf("workers=%d/independent=true/%s/async=%t", workers, shape, async)
+				b.Run(name, func(b *testing.B) { benchmarkNestHotPath(b, shape, workers, true, async, false, true, 0) })
+			}
+		}
+	}
+}
+
+func benchmarkNestHotPath(b *testing.B, shape string, workers int, independent, async, cpu, pump bool, iterations int) {
 	entity.MustRegisterEntityKindCategory(nestLocalKind, entity.EntityCategory(1))
 	getter := newMockGetter()
 	const window = 64
@@ -78,7 +93,11 @@ func benchmarkNestHotPath(b *testing.B, shape string, workers int, independent, 
 			}
 		}
 	}
-	engine := NewEngine(NestOptionWithGetter(getter), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: workers, QueueCap: 1024}, WorkerPoolConfig{}, WorkerPoolConfig{}), NestOptionWithStageMetrics(false))
+	options := []NestOption{NestOptionWithGetter(getter), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: workers, QueueCap: 1024}, WorkerPoolConfig{}, WorkerPoolConfig{}), NestOptionWithStageMetrics(false)}
+	if pump {
+		options = append(options, NestOptionWithPipelinedAsyncCompletion(1, 64, "bench_hot_path_async_elsewhere"))
+	}
+	engine := NewEngine(options...)
 	name := NewHandlerName("bench_hot_path")
 	slots := make(chan int, window)
 	for slot := range window {

@@ -127,6 +127,13 @@ func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSaf
 		// 历史：RR-20260926-75、RR-20260926-84。
 		return nil, fmt.Errorf("%w: nested %q in message %q", ErrNestedTransactionInRemoteMessage, handler, msg.Name)
 	}
+	if !takesPipelinedCompletion(meta, releaseLocks, msg) {
+		// 同实体有在途异步完成时在完成链上占位，解锁后、AfterCommit 与回复之前等它们完成（见 commitOrdering）。
+		// 必须早于下面登记的任何解锁回调，并且在 handler 开始前：嵌套独立事务的 AfterCommit 同样排在等待之后。
+		if ordering := route.orderBehindAsyncCompletions(es, handler, msg != nil && msg.stageMetrics); ordering != nil {
+			defer ordering.finish()
+		}
+	}
 	var observer entity.SyncCommitObserver
 	if len(observers) > 0 {
 		observer = observers[0]
@@ -183,8 +190,7 @@ func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSaf
 			// 部署配置错误：直接报告，不静默降级为 strict 提交。
 			return nil, ErrPipelinedCommitterRequired
 		}
-		// Remote 批次保留自己的两阶段协议，走 strict 路径；没有提前放锁的广播同样走 strict 路径。
-		if releaseLocks != nil && (msg == nil || msg.RemoteWriteBatch == nil) {
+		if takesPipelinedCompletion(meta, releaseLocks, msg) {
 			pipelinedCommitter = pc
 		}
 	}
@@ -238,6 +244,13 @@ func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSaf
 		return ret, tx.commitPipelined(ctx, pipelinedCommitter, es, releaseLocks, route, msg, ret)
 	}
 	return ret, tx.commitDurable(ctx, committer, msg)
+}
+
+// takesPipelinedCompletion 报告事务是否走 pipelined 提交（commitPipelined）：声明 pipelined、有提前放锁闭包、消息不带
+// Remote 批次。Remote 批次保留自己的两阶段协议，走 strict 路径；没有提前放锁的广播与批量作业同样走 strict 路径。
+// 走 pipelined 提交的事务在 commitPipelined 里自己上完成链；其余事务由 orderBehindAsyncCompletions 按需上链。
+func takesPipelinedCompletion(meta HandlerMeta, releaseLocks func(), msg *Msg) bool {
+	return meta.Durability == DurabilityPipelined && releaseLocks != nil && (msg == nil || msg.RemoteWriteBatch == nil)
 }
 
 // callTransactionHandler 在事务上下文内执行业务调用，只恢复业务调用的 panic（先回滚再重新 panic）。

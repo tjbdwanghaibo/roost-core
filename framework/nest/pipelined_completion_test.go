@@ -830,24 +830,34 @@ func TestAsyncCompletionWaitsForEntityRelease(t *testing.T) {
 // 异步完成按 handler 生效（维护者 2026-10-29 决定）：引擎的异步完成名单只点名别的 handler 时，strict、async 与没被点名的
 // pipelined handler 在“有完成泵 / 没有完成泵”两种引擎上的观察完全一致——strict / async 走 Commit（不 Enqueue），pipelined
 // 走 Enqueue 后在派发 worker 上等票据；AfterCommit 都在派发 goroutine 上、回复之前执行，执行时实体锁的状态也相同。
+//
+// 第三种引擎（pending）：有完成泵，而且同一实体上先有一笔异步完成事务 T1（名单里的 handler，票据未持久）。被测事务在锁内
+// 提交之后不能先于 T1 完成而回复（维护者 2026-10-29 决定 A：同实体对外可见效果按提交序）；除此之外观察与前两种相同。
 func TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged(t *testing.T) {
 	type observation struct {
-		commits, enqueued int
-		lockFreeInHook    bool
-		hookBeforeReply   bool
-		hookOnDispatch    bool
-		reply             any
+		commits, enqueued         int
+		lockFreeInHook            bool
+		hookBeforeReply           bool
+		hookOnDispatch            bool
+		repliedBeforeEarlierAsync bool
+		reply                     any
 	}
-	run := func(t *testing.T, durability DurabilityPolicy, withPump bool) observation {
+	const (
+		noPump  = "no pump"
+		pump    = "pump"
+		pending = "pump, pending async completion"
+	)
+	run := func(t *testing.T, durability DurabilityPolicy, mode string) observation {
 		t.Helper()
 		id, e := newAsyncPilotEntity(t, 9990, 10)
 		getter := newMockGetter()
 		getter.Add(e)
-		committer := newPipelinedTestCommitter(true)
+		committer := newPipelinedTestCommitter(mode != pending)
 		options := []NestOption{NestOptionWithGetter(getter), NestOptionWithTransactionCommitter(committer)}
-		if withPump {
+		earlier := NewHandlerName("someone_else")
+		if mode != noPump {
 			// 名单点名的是另一个 handler：引擎有完成泵，但被测 handler 不在名单里。
-			options = append(options, NestOptionWithPipelinedAsyncCompletion(1, 4, "someone_else"))
+			options = append(options, NestOptionWithPipelinedAsyncCompletion(1, 4, earlier.String()))
 		}
 		engine := NewEngine(options...)
 		var hookRan, lockFree, onDispatch atomic.Bool
@@ -867,33 +877,89 @@ func TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged(t *testing.T) {
 			e.dao.Value++
 			return e.dao.Value, MarkPersist(e.dao, 1)
 		}, HandlerMeta{Rollback: RollbackState, Durability: durability})
+		// earlier 是名单里的 pipelined handler：持久写同一实体但不改值（被测事务的回复仍是 11）。
+		engine.MustRegisterHandlerWithMeta(earlier, func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+			RecordUndo(e.dao, 1, func() error { return nil })
+			return nil, MarkPersist(e.dao, 1)
+		}, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined})
 		if err := engine.Start(); err != nil {
 			t.Fatal(err)
 		}
 		defer func() { _ = engine.Shutdown(context.Background()) }()
-		reply, err := engine.Request(context.Background(), name, id, nil)
-		if err != nil {
+		defer committer.resolveAll(nil)
+		request := func(handler HandlerName) chan any {
+			done := make(chan any, 1)
+			go func() {
+				ret, err := engine.Request(context.Background(), handler, id, nil)
+				if err != nil {
+					done <- err
+					return
+				}
+				done <- ret
+			}()
+			return done
+		}
+		var obs observation
+		var replyEarlier chan any
+		if mode == pending {
+			replyEarlier = request(earlier)
+			awaitSignal(t, committer.enqueued, "earlier async completion enqueued")
+			for deadline := time.Now().Add(5 * time.Second); !engine.completions.asyncCompletionPending(id); time.Sleep(time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("earlier async completion never counted as pending")
+				}
+			}
+		}
+		replied := request(name)
+		var reply any
+		if mode == pending {
+			// 被测事务已在锁内提交（pipelined：已 Enqueue 且自己的票据已持久），T1 的票据仍未持久。
+			if durability == DurabilityPipelined {
+				awaitSignal(t, committer.enqueued, "tested transaction enqueued")
+				committer.resolveFrom(1, nil)
+			} else {
+				waitCommits(t, committer, 1)
+			}
+			select {
+			case reply = <-replied:
+				obs.repliedBeforeEarlierAsync = true
+			case <-time.After(100 * time.Millisecond):
+			}
+			committer.resolveAll(nil)
+			awaitSignal(t, replyEarlier, "earlier async completion reply")
+		}
+		if reply == nil {
+			reply = awaitSignal(t, replied, "tested transaction reply")
+		}
+		if err, ok := reply.(error); ok {
 			t.Fatal(err)
 		}
-		hookBeforeReply := hookRan.Load()
+		obs.hookBeforeReply = hookRan.Load()
+		obs.lockFreeInHook, obs.hookOnDispatch, obs.reply = lockFree.Load(), onDispatch.Load(), reply
 		committer.mu.Lock()
 		defer committer.mu.Unlock()
-		return observation{commits: committer.commits, enqueued: len(committer.tickets), lockFreeInHook: lockFree.Load(), hookBeforeReply: hookBeforeReply, hookOnDispatch: onDispatch.Load(), reply: reply}
+		obs.commits, obs.enqueued = committer.commits, len(committer.tickets)
+		if mode == pending {
+			obs.enqueued-- // 不计 T1 自己的 Enqueue
+		}
+		return obs
 	}
 	for _, durability := range []DurabilityPolicy{DurabilityStrict, DurabilityAsync, DurabilityPipelined} {
-		off, on := run(t, durability, false), run(t, durability, true)
-		if on != off {
-			t.Errorf("%s handler outside the async set: engine with completion pump = %+v, without = %+v; want identical", durability, on, off)
+		off := run(t, durability, noPump)
+		for _, mode := range []string{pump, pending} {
+			if on := run(t, durability, mode); on != off {
+				t.Errorf("%s handler outside the async set: engine with %s = %+v, without = %+v; want identical", durability, mode, on, off)
+			}
 		}
-		if !on.hookBeforeReply || !on.hookOnDispatch || on.reply != 11 {
-			t.Errorf("%s handler outside the async set = %+v; want AfterCommit on the dispatch goroutine before the reply", durability, on)
+		if !off.hookBeforeReply || !off.hookOnDispatch || !off.lockFreeInHook || off.reply != 11 {
+			t.Errorf("%s handler outside the async set = %+v; want AfterCommit on the dispatch goroutine, lock free, before the reply", durability, off)
 		}
 		wantCommits, wantEnqueued := 1, 0
 		if durability == DurabilityPipelined {
 			wantCommits, wantEnqueued = 0, 1
 		}
-		if on.commits != wantCommits || on.enqueued != wantEnqueued {
-			t.Errorf("%s handler outside the async set = %+v; want %d Commit, %d Enqueue", durability, on, wantCommits, wantEnqueued)
+		if off.commits != wantCommits || off.enqueued != wantEnqueued {
+			t.Errorf("%s handler outside the async set = %+v; want %d Commit, %d Enqueue", durability, off, wantCommits, wantEnqueued)
 		}
 	}
 }
@@ -1166,4 +1232,222 @@ func TestAsyncAndPhase1CompletionsKeepSameEntityLSNOrder(t *testing.T) {
 			t.Fatalf("AfterCommit order = %v, want [B1 A2]", hooks)
 		}
 	})
+}
+
+// ordinaryOrderEngine 是名单 = {A} 的引擎，另注册三个普通 handler：async（"C"）、strict（"S"）自增并持久，AfterCommit 按
+// “标签 + 自增后的值”记录；memory（"M"，rollback=none 快路径）只读值、没有 AfterCommit。
+func ordinaryOrderEngine(t *testing.T, es ...*rollbackTestEntity) (*asyncSetEngine, map[DurabilityPolicy]HandlerName) {
+	t.Helper()
+	names := map[DurabilityPolicy]HandlerName{
+		DurabilityAsync:  NewHandlerName("ordinary_order_async"),
+		DurabilityStrict: NewHandlerName("ordinary_order_strict"),
+		DurabilityMemory: NewHandlerName("ordinary_order_memory"),
+	}
+	var f *asyncSetEngine
+	f = newAsyncSetEngineWith(t, 4, NewHandlerName("ordinary_order_saga_step"), NewHandlerName("ordinary_order_phase1"), func(engine *NestMgr) {
+		for durability, tag := range map[DurabilityPolicy]string{DurabilityAsync: "C", DurabilityStrict: "S"} {
+			engine.MustRegisterHandlerWithMeta(names[durability], func(targets []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+				e := targets[0].(*rollbackTestEntity)
+				old := e.dao.Value
+				RecordUndo(e.dao, 1, func() error { e.dao.Value = old; return nil })
+				e.dao.Value++
+				label := tag + strconv.Itoa(e.dao.Value)
+				AfterCommit(func() {
+					f.mu.Lock()
+					f.hooks = append(f.hooks, label)
+					f.mu.Unlock()
+				})
+				return e.dao.Value, MarkPersist(e.dao, 1)
+			}, HandlerMeta{Rollback: RollbackUndo, Durability: durability})
+		}
+		engine.MustRegisterHandlerWithMeta(names[DurabilityMemory], func(targets []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+			return "M" + strconv.Itoa(targets[0].(*rollbackTestEntity).dao.Value), nil
+		}, HandlerMeta{})
+	}, es...)
+	return f, names
+}
+
+// waitCommits 等 committer 收到 n 次锁内 Commit（strict / async 已在锁内提交）。
+func waitCommits(t *testing.T, c *pipelinedTestCommitter, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.mu.Lock()
+		commits := c.commits
+		c.mu.Unlock()
+		if commits >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("commits = %d, want %d", commits, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// 维护者 2026-10-29 决定（选 A）：同一实体上每笔事务对外可见的效果按提交序。T1 是异步完成的 pipelined 事务（saga 原生步骤
+// 的形态，LSN 1），Enqueue 后即放锁、作业结束；T2 是同实体上的普通 async / strict / memory 事务，接着在锁内提交。T1 的票据
+// 未持久、或 AfterCommit 卡住时，T2 已提交也不能先回复、先执行 AfterCommit；最终顺序是 [T1, T2]。之后计数回到 0，同实体的
+// 下一笔普通事务走快路径（不上完成链）。
+func TestOrdinaryCommitsWaitForEarlierAsyncCompletion(t *testing.T) {
+	for i, durability := range []DurabilityPolicy{DurabilityAsync, DurabilityStrict, DurabilityMemory} {
+		t.Run(durability.String(), func(t *testing.T) {
+			id, e := newAsyncPilotEntity(t, 9980+int64(i), 0)
+			f, names := ordinaryOrderEngine(t, e)
+			pump := f.engine.completions
+			sagaStep := NewHandlerName("ordinary_order_saga_step")
+			gate := f.gate("A1")
+
+			replyT1 := f.request(sagaStep, id)
+			awaitSignal(t, f.committer.enqueued, "T1 enqueued")
+			// Enqueue 先于占位：等 T1 在完成链上占位并计入在途。
+			for deadline := time.Now().Add(5 * time.Second); !pump.asyncCompletionPending(id); time.Sleep(time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("T1 enqueued as an async completion but the entity never had a pending count")
+				}
+			}
+			orderedBefore := pump.orderedCommits.Load()
+			replyT2 := f.request(names[durability], id)
+			if durability != DurabilityMemory {
+				waitCommits(t, f.committer, 1) // T2 已在锁内提交
+			}
+			expectSilence(t, replyT2, "T2 replied while T1 (earlier commit) was not yet durable")
+			f.committer.resolveAll(nil) // T1 持久
+			if got := awaitSignal(t, f.entered, "T1 AfterCommit"); got != "A1" {
+				t.Fatalf("first AfterCommit = %s, want A1", got)
+			}
+			expectSilence(t, replyT2, "T2 replied while T1's AfterCommit was still running")
+			if hooks, _ := f.recorded(); len(hooks) != 0 {
+				t.Fatalf("AfterCommit ran ahead of T1: %v", hooks)
+			}
+			gate.open()
+
+			want2 := any(2)
+			if durability == DurabilityMemory {
+				want2 = "M1"
+			}
+			if got := awaitSignal(t, replyT2, "T2 reply"); got != want2 {
+				t.Fatalf("T2 reply = %v, want %v", got, want2)
+			}
+			select {
+			case got := <-replyT1:
+				if got != 1 {
+					t.Fatalf("T1 reply = %v, want 1", got)
+				}
+			default:
+				t.Fatal("T2 replied before T1's reply was sent")
+			}
+			wantHooks := []string{"A1"}
+			if durability != DurabilityMemory {
+				wantHooks = append(wantHooks, map[DurabilityPolicy]string{DurabilityAsync: "C2", DurabilityStrict: "S2"}[durability])
+			}
+			waitHooks(t, f, len(wantHooks))
+			if hooks, _ := f.recorded(); !slices.Equal(hooks, wantHooks) {
+				t.Fatalf("AfterCommit order = %v, want %v", hooks, wantHooks)
+			}
+			if got := pump.orderedCommits.Load() - orderedBefore; got != 1 {
+				t.Fatalf("ordered commits = %d, want 1 (T2 on the completion chain)", got)
+			}
+
+			// 计数回到 0：下一笔普通 async 事务走快路径，立刻回复，不上链。
+			if pump.asyncCompletionPending(id) {
+				t.Fatal("pending count did not return to 0 after T1 completed")
+			}
+			if got := awaitSignal(t, f.request(names[DurabilityAsync], id), "T3 reply"); got == nil {
+				t.Fatal("T3 reply = nil")
+			}
+			if got := pump.orderedCommits.Load() - orderedBefore; got != 1 {
+				t.Fatalf("ordered commits after T3 = %d, want 1 (T3 must take the fast path)", got)
+			}
+		})
+	}
+}
+
+// 隔离：T1（异步完成）在实体 X 上未完成时，另一个实体 Y 上的普通事务不受影响，立即回复。
+func TestOrdinaryCommitOnOtherEntityIsNotDelayed(t *testing.T) {
+	idX, entX := newAsyncPilotEntity(t, 9985, 0)
+	idY, entY := newAsyncPilotEntity(t, 9986, 0)
+	f, names := ordinaryOrderEngine(t, entX, entY)
+	replyT1 := f.request(NewHandlerName("ordinary_order_saga_step"), idX)
+	awaitSignal(t, f.committer.enqueued, "T1 enqueued")
+	for _, durability := range []DurabilityPolicy{DurabilityAsync, DurabilityStrict, DurabilityMemory} {
+		if got := awaitSignal(t, f.request(names[durability], idY), durability.String()+" on Y while T1 on X is pending"); got == nil {
+			t.Fatalf("%s reply on Y = nil", durability)
+		}
+	}
+	expectSilence(t, replyT1, "T1 replied before its ticket resolved")
+	f.committer.resolveAll(nil)
+	if got := awaitSignal(t, replyT1, "T1 reply"); got != 1 {
+		t.Fatalf("T1 reply = %v, want 1", got)
+	}
+}
+
+// 批量作业不在 worker 上等：目标实体有在途异步完成时转成单目标作业，由普通派发排在 T1 后面；别的目标照常就地执行。
+func TestTryBatchTargetBehindAsyncCompletionIsConverted(t *testing.T) {
+	idX, entX := newAsyncPilotEntity(t, 9987, 0)
+	idY, entY := newAsyncPilotEntity(t, 9988, 0)
+	f, names := ordinaryOrderEngine(t, entX, entY)
+	replyT1 := f.request(NewHandlerName("ordinary_order_saga_step"), idX)
+	awaitSignal(t, f.committer.enqueued, "T1 enqueued")
+	for deadline := time.Now().Add(5 * time.Second); !f.engine.completions.asyncCompletionPending(idX); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("T1 never counted as pending")
+		}
+	}
+	handedBack := make(chan error, 2)
+	targets := []TryBatchTarget{{Handler: names[DurabilityAsync], ID: idY}, {Handler: names[DurabilityAsync], ID: idX}}
+	if err := f.engine.DispatchTryBatch(context.Background(), targets, func(_ TryBatchTarget, err error) { handedBack <- err }); err != nil {
+		t.Fatal(err)
+	}
+	waitHooks(t, f, 1) // Y 的目标就地执行
+	expectSilence(t, handedBack, "try-batch handed a target back")
+	if hooks, _ := f.recorded(); !slices.Equal(hooks, []string{"C1"}) {
+		t.Fatalf("hooks while T1 pending = %v, want [C1] (Y only; X waits behind T1)", hooks)
+	}
+	f.committer.resolveAll(nil)
+	if got := awaitSignal(t, replyT1, "T1 reply"); got != 1 {
+		t.Fatalf("T1 reply = %v, want 1", got)
+	}
+	waitHooks(t, f, 3)
+	if hooks, _ := f.recorded(); !slices.Equal(hooks, []string{"C1", "A1", "C2"}) {
+		t.Fatalf("AfterCommit order = %v, want [C1 A1 C2]", hooks)
+	}
+}
+
+// 多实体：普通事务按全部声明实体检查。T1 的主实体 X 是 T2 的次实体（T2 声明 [Y, X]），T2 同样排在 T1 后面回复。
+func TestMultiEntityCommitWaitsForAsyncCompletionOnSecondaryEntity(t *testing.T) {
+	idX, entX := newAsyncPilotEntity(t, 9989, 0)
+	idY, entY := newAsyncPilotEntity(t, 9979, 0)
+	f, names := ordinaryOrderEngine(t, entX, entY)
+	replyT1 := f.request(NewHandlerName("ordinary_order_saga_step"), idX)
+	awaitSignal(t, f.committer.enqueued, "T1 enqueued")
+	for deadline := time.Now().Add(5 * time.Second); !f.engine.completions.asyncCompletionPending(idX); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("T1 never counted as pending")
+		}
+	}
+	replyT2 := make(chan any, 1)
+	go func() {
+		ret, err := f.engine.RequestMulti(context.Background(), names[DurabilityAsync], []int64{idY, idX}, nil)
+		if err != nil {
+			replyT2 <- err
+			return
+		}
+		replyT2 <- ret
+	}()
+	waitCommits(t, f.committer, 1)
+	expectSilence(t, replyT2, "T2 (declares X as a secondary entity) replied before T1 completed")
+	f.committer.resolveAll(nil)
+	if got := awaitSignal(t, replyT2, "T2 reply"); got != 1 {
+		t.Fatalf("T2 reply = %v, want 1", got)
+	}
+	select {
+	case <-replyT1:
+	default:
+		t.Fatal("T2 replied before T1's reply was sent")
+	}
+	waitHooks(t, f, 2)
+	if hooks, _ := f.recorded(); !slices.Equal(hooks, []string{"A1", "C1"}) {
+		t.Fatalf("AfterCommit order = %v, want [A1 C1]", hooks)
+	}
 }

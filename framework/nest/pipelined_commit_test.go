@@ -88,6 +88,20 @@ func (c *pipelinedTestCommitter) TransactionReleased(id TransactionID) {
 	c.mu.Unlock()
 }
 
+// resolveFrom 只落定第 from 个及以后的票据（按 Enqueue 顺序，从 0 起），前面的保持未决。
+func (c *pipelinedTestCommitter) resolveFrom(from int, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, ticket := range c.tickets[from:] {
+		select {
+		case <-ticket.done:
+		default:
+			ticket.err = err
+			close(ticket.done)
+		}
+	}
+}
+
 func (c *pipelinedTestCommitter) resolveAll(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
