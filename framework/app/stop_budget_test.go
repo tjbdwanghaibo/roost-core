@@ -269,25 +269,31 @@ func TestUndeclaredStopBudgetsKeepTheEvenSplit(t *testing.T) {
 }
 
 // 生成配置按服务实际注册的 Mod 计算 shutdown.total_timeout = 声明预算之和 + 3s × 未声明 Mod 数 + 5s（余量给先于 Mod 运行的
-// Service.Shutdown）。真实 game-demo 的 game 服务注册 23 个 Mod，dataengine 声明 30s、accessplayertcp 声明 10s，生成值是
-// 30s + 10s + 3s × 21 + 5s = 108s；这个总时长覆盖每个 Mod 的保底与声明预算。
-// codegen/internal/roost/shutdown_test.go 现在从生成工程的 bootstrap 数出 24 个 Mod（加了按亲和键路由所需的 etcd），
-// 钉住 30s + 10s + 3s × 22 + 5s + 3s 单实例锁释放 = 114s；本文件仍按上面 23 个 Mod 的清单与 108s 规划。
+// Service.Shutdown）+ 3s（带 dataengine 的服务启用单实例锁，App 把这 3s 留给全部 Mod 停完之后的 Release，见 modStopContext）。
+// 真实 game-demo 的 game 服务注册 25 个 Mod，dataengine 声明 30s、accessplayertcp 声明 10s，生成值是
+// 30s + 10s + 3s × 23 + 5s + 3s = 117s；Mod 停机窗口是 117s − 3s = 114s，它覆盖每个 Mod 的保底与声明预算。
+// 下面的清单与 117s 抄自 codegen/internal/roost/shutdown_test.go 的 TestGeneratedShutdownTimeoutFollowsEachServicesMods
+// （它从生成工程的 bootstrap 数出 Mod 并钉住 117s）；codegen 改了 game 服务的 Mod 时两边一起改。框架包不导入 codegen，
+// 所以这里不能直接读那份清单。
 // 历史：RR-20260926-66、RR-20260927-05。
 const (
-	generatedGameShutdownTotal  = 108 * time.Second
+	generatedGameShutdownTotal  = 117 * time.Second
 	generatedShutdownMargin     = 5 * time.Second
 	generatedDataEngineDeclared = 30 * time.Second
 	generatedPlayerTCPDeclared  = 10 * time.Second
 )
+
+// generatedModStopWindow 是 game 服务的 Mod 停机窗口：总时长减去单实例锁 Release 的预留（与 appRun.modStopContext 同一算法）。
+const generatedModStopWindow = generatedGameShutdownTotal - min(singletonReleaseBudget, generatedGameShutdownTotal/2)
 
 // generatedDeclared 是生成的 game 服务里声明停机预算的 Mod 及其声明值。
 var generatedDeclared = map[ModName]time.Duration{"dataengine": generatedDataEngineDeclared, "accessplayertcp": generatedPlayerTCPDeclared}
 
 // game-demo game 服务的 Mod（生成 bootstrap 的注册顺序）与共享 Mod。
 var (
-	generatedGameServiceMods = []ModName{"configdata", "mongo", "nats", "dataengine", "nest", "redis", "syncbus", "remote_entity", "saga",
-		"c_account", "c_activity", "c_chat", "c_global", "c_mail", "c_match", "c_platform", "c_rank", "c_session", "accessplayer", "accessplayertcp"}
+	generatedGameServiceMods = []ModName{"configdata", "mongo", "nats", "dataengine", "nest", "redis", "syncbus", "remote_entity", "saga", "etcd",
+		"c_account", "c_activity", "c_chat", "c_global", "c_mail", "c_match", "c_platform", "c_rank", "c_session", "account_serving_guard",
+		"accessplayer", "accessplayertcp"}
 	generatedSharedMods = []ModName{"lock", "ops", "statslog"}
 )
 
@@ -321,7 +327,7 @@ func buildPlanMods(names []ModName) []Mod {
 // Mod 要么立即结束，要么 dataengine 之前的每个 Mod 用满给它的预算（最坏情况：dataengine 最晚拿到剩余）。
 // 每个 Mod 都要拿到至少 3s 保底，dataengine 拿满声明的 30s、accessplayertcp 拿满 10s，且全程不进入缩放 / 均分分支（不告警）。
 func TestGeneratedGameServiceTotalCoversEveryModFloorAndTheDeclaredBudget(t *testing.T) {
-	assertGameServiceBudgets(t, generatedGameShutdownTotal)
+	assertGameServiceBudgets(t, generatedModStopWindow)
 }
 
 func assertGameServiceBudgets(t *testing.T, total time.Duration) {
@@ -379,7 +385,7 @@ func TestGeneratedGameServiceStopsWithoutBudgetWarnings(t *testing.T) {
 		}
 	}
 	shared := stopBudgetMods(generatedSharedMods, "", 0, rec)
-	ctx, cancel := context.WithTimeout(context.Background(), generatedGameShutdownTotal)
+	ctx, cancel := context.WithTimeout(context.Background(), generatedModStopWindow)
 	defer cancel()
 	if err := stopModsReverseBefore(ctx, service, shared, "svc"); err != nil {
 		t.Fatal(err)
