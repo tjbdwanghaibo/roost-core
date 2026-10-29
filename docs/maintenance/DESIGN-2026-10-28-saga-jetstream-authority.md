@@ -503,8 +503,8 @@ T-B（把缺省步骤预算拉到覆盖 60s）与 T-C（重启时主动终止遗
 | 3 | 参与方新路径并存：`StepReceipt*`、`NativeStep.Begin` 与新 `Complete` 分支（`run != nil` 时走新路径）、`SubscribeNativeStep`、`MongoStepInbox`、`publishCompletion`、`LoadPublisher`；codegen：`add saga -native` 生成回执字段与组件、`codegen/internal/nest` 的 Begin 包装（先在 testdata 生成工程里验证，不改 demo） | 3～5 笔 | 受影响包 `-race`；codegen golden（有意改动 `-update` 逐个看 diff）；参与方 kill -9；真实 Mongo 的 Mongo 步骤写冲突 | Redis 版照跑；生成器新输出只在 testdata（Begin 包装对 demo 生成物是空操作，见 §13.2 第 5 条）。**已完成**（2026-10-28，提交见 git log；实现与本文的差异见 §13.2） |
 | 4 | **切换与删除**：`wiring/saga` Mod / Steps / config 换新装配；`StartSaga` 等 API 定稿（删暂名）；启动中继；demo（赠礼 saga、gm、PlayerDao 回执字段、配置、部署清单）；生成器 catalog / render / kitconfig / help / doctor；sidmerge；删除 §3.3 第 4 批全部；文档（SAGA.md、guide/06、impl/06、OBSERVABILITY、PACKAGES、impl/13、CONSISTENCY、KNOWN-LIMITS、CHANGELOG 升级要求）；测试按 §11 迁移；遗留事务红绿 | 多笔，**整批一起推**：先在分支内按“接线 → 删 Redis/Store Service → 生成器与 demo → 文档 → 测试迁移”顺序提交，每笔可编译；全部门禁过后一次推 main | 全量 `go test ./...`；受影响包 `-race`；`-tags integration` 的 vet；真实 NATS + Mongo 集成；kill -9 两类；`go generate ./...` 无漂移；重新生成 game-demo build / vet / test；`scripts/test-demo-generated.sh`、`test-mmorpg-cross-sid.sh`（真实依赖）；`TestEveryDeclaredConfigFieldIsRead` / kitconfig 快照测试 | 切到 JetStream；Redis 版不再存在。**已完成**（2026-10-29，实施记录 §13.3） |
 | 5 | 删 DataEngine lease fence 机制（§3.3 第 5 批）与相关指标、文档；维护者 2026-10-29 的两项决定（`dataengine.startup_timeout` 缺省 60s、`saga.coordinators` 保持 sid + 部署规则） | 1～2 笔 | `framework/dataengine` 与 `framework/nest` `-race`；投影器真实 Mongo 用例；全量 `go test ./...` | 可用。**已完成**（2026-10-29，实施记录 §13.4） |
-| 6 | 冷副本（可选能力）：`ColdCopyProjector`、`Get` / `List` 回落、配置、kill -9 后最终一致用例 | 1～2 笔 | 真实 Mongo + JetStream；`-race` | 可用（缺省关） |
-| 7 | 性能验收（§12）、删除原型目录与旧压测脚本、报告与样本 | 1～2 笔 | 压测 ≤ 30 分钟；报告数字与样本一致 | 可用 |
+| 6 | 冷副本（可选能力）：`ColdCopyProjector`、`Get` / `List` 回落、配置、kill -9 后最终一致用例 | 1～2 笔 | 真实 Mongo + JetStream；`-race` | 可用（缺省关）。**已完成**（2026-10-29，实施记录 §13.5） |
+| 7 | 性能验收（§12）、删除原型目录与旧压测脚本、报告与样本 | 1～2 笔 | 压测 ≤ 30 分钟；报告数字与样本一致 | 可用。**代码部分已提前到第 6 批完成**（删原型目录、`scripts/perf/saga-js-scan.sh` 与 `TestRealSagaJSScanLevel`、只做冒烟，§13.5）；**压测本身、报告与样本待维护者空闲时跑** |
 
 Redis 删除放在第 4 批，与切换同一次推送：维护者要求“同一批删掉”，且切换后 Redis 代码再无调用方。第 2、3 批的并存代码（暂名 Engine、`NativeStep` 的双分支）在第 4 批删除，不留到 main 的稳定状态。
 
@@ -599,6 +599,31 @@ Redis 删除放在第 4 批，与切换同一次推送：维护者要求“同�
 2. **`saga.coordinators` 保持只写 sid**：部署规则“一个 sid 只能在一种服务类型里装 saga Mod”写进 SAGA.md「分区归属」、guide/06、impl/06、impl/13 与配置声明的说明。**没有加启动期检查**：每个服务类型的配置检查只看得到自己的配置；运行期能看到冲突的信号只有分区期望序号（已经 fail-stop）；可靠的跨类型检查要另建一份跨进程登记（带 TTL 就是模块自己的租约，与“App 级统一保证”相悖；不带 TTL 则迁移服务类型时要人工清理），不算便宜。
 
 **验证**：本机 macOS；私有单节点副本集 mongod（`transactionLifetimeLimitSeconds=20`）。结果与命令见提交说明与交接报告。
+
+### 13.5 第 6 批与第 7 批清理部分实施记录
+
+范围：冷副本（§8，选项 C-A，缺省关闭）；第 7 批的代码清理提前做（维护者 2026-10-29：删原型目录、准备正式压测入口，**压测本身不跑**，维护者空闲时跑）；§11.2 的遗留项。分支 `feat/saga-js-batch6`，基于 main `c565c81b`，提交见 git log（冷副本 → 清理与压测入口 → 文档）。
+
+**冷副本**（`framework/saga/cold_copy.go`）
+
+1. **装配**：`AssemblyConfig.ColdCopy *ColdCopySettings`（Mongo 客户端放在 `ColdCopySettings.Client`），`Assemble` 签名不变（初稿写 `Assemble(log, js, raw, mongo, cfg)`：改签名要动全部调用方，而 Mongo 只在冷副本开启时需要）。每个进程都建 `ColdCopy`（读回落，经 `Options.ColdCopy` 交给 Engine）；只有拥有分区的进程另建 `ColdCopyProjector`，`Assembly.Start` 在协调器之后、启动中继之前启动它，`Stop` 在中继之后、协调器之前排空它。`wiring/saga`：`saga.cold_copy.{enabled,terminal_only,collection,batch_size,max_wait}` 声明在 `config` 结构体上（缺省 false / true / `sagas` / 256 / 50ms，`batch_size` 1～1000、`max_wait` 1ms～10s），`kitconfig_gen.go` 重新生成；Mongo 是可选依赖（`OptionalDependsOn` 加 `mongo`），开了冷副本却没有 Mongo Mod 由 `CheckConfigAcrossMods` 拒绝、`Provide` 再查一次能力。
+2. **投影**：每条流一个 durable `ColdCopyDurable(stream) = <stream>-cold-copy`，消费者状态 R1 内存——`fnats.JetStreamConsumerConfig` 为此加了 `Replicas` / `MemoryStorage`（0 / false 跟随流，原有消费者不变，driver 映射到 nats.go）；过滤 `ev.done`（`terminal_only`）或 `<prefix>.*.ev.>`；坏信封（解码、版本、分区、内容校验与重放同一个 `decodeEvent`）Term。每条投递 `DeferSettle` 推迟结算、进批；一批不超过 `batch_size` 条或从第一条起 `max_wait`，同一 saga 取最新（`coldNewer`），一次 BulkWrite，**写成功逐条 ack、失败逐条 nak**（退避 250ms～10s，`MaxDeliver` 1e6），停止时手里没写的逐条 nak。AckWait 固定 30s（一批写入期限 10s）。
+3. **版本门与初稿的差异**：初稿写“版本更大才整文档替换”。只比版本在 ID 复用时是错的：终态过了保留期被剪掉之后同业务键可以再开一笔（ID 相同、版本从 1 重来），新一生的终态版本常常小于旧一生，永远写不进去。改为先比 `created_at`（一生，只在启动时设定）、相同再比版本（`coldCopyNewer` 管道 `$replaceWith` + `$cond`，`coldNewer` 是同一规则的内存版）。两生之间至少隔一个 `terminal_retention`，协调器时钟回拨超过它不在威胁模型内（KNOWN-LIMITS）。
+4. **回落读**：`Get` / `GetByBusinessKey` 只在所有者回答“内存里没有”时读 `ColdCopy.Get`；所有者不可用仍返回 `ErrPartitionUnavailable`（内存里可能有更新的版本）。`List`（初稿只写“由冷副本补”）：冷副本一页的 ID 随散播查询发给所有者（`queryRequest.Known`），所有者回答哪些在自己内存里（`queryReply.Held`，不论是否匹配条件），这些 ID 不用冷副本那条（落后的版本、或被新一生替代的旧一生）；结果截到冷副本已读的最后一条（按（更新时间，ID）的精确前缀），不够 `Limit` 再翻页，最多 4 页。**不参与判定**：启动判定补查（`submitIntent` 的 Get 补查）与 `WaitTerminal` 改用只看内存的 `getOwned`——否则冷副本里旧一生的记录（摘要不同）会被当成身份冲突、旧终态会被当成“下一个终态”。现有 Get / List / 唯一性断言一条未改（停止条件没有触发）。
+5. **清理守卫**：清理本来就把流上全部 durable 当守卫（`DurableAckFloors`），冷副本 durable 落后时自然不越过它；另加一条：冷副本开启时**找不到它就按 floor 0 计、不清理**（`partition.purge`）——R1 内存消费者随承载它的服务端重启消失，那段时间清理会删掉它还没投影的终态。投影器每 5s 核对（订阅意外结束、或 `DurableAckFloors` 里没有它），重建订阅（DeliverAll，从流里还在的事件重投），计 `saga.cold_copy.resubscribed_total`。冷副本开启前已清理掉的终态不进冷副本；关掉冷副本后要运维删 durable（SAGA.md）。
+6. **索引与文档形状**：`_id` + `(updated_at,_id)`、`(status,updated_at)`、`(type,updated_at)`、`(type,definition_version,status,updated_at)`；文档沿用原 `recordDoc`（去掉租约，加 `start_attempt`），时间存到毫秒，不设 TTL。
+
+**测试**（单元 `cold_copy_test.go`，真实 `cold_copy_real_integration_test.go`）：投影攒批 / 版本只升 / 每条恰好结算一次、写失败逐条 nak 且不留文档、乱序重投与再重投幂等、停止时 nak、坏信封 Term；回落读只在内存没有时、所有者不可用不回落；`List` 排除内存持有的 ID（含旧一生）、按页补齐；判定补查与 `WaitTerminal` 不读冷副本；清理守卫三种情形（跟上 / 落后 / 缺失）与冷副本关闭时不是守卫。真实：Mongo 版本门（同一生旧版本在同一批与之后都不回退、新一生覆盖、旧一生迟到不回退）、全部字段往返、`List` 过滤 / 顺序 / 分页；协调器（带投影）子进程 kill -9 后同布局重启，3000 笔（751 笔补偿）全部终态后冷副本逐笔与所有者内存里的终态一致（最后一笔到终态后约 28s 追平，即被杀进程取走未确认的事件等 AckWait 30s 重投）；正式装配（`Assemble` + 冷副本）每 8 条事件快照时清理照常推进、删掉冷副本 durable 后清理停住、投影器重建后冷副本补齐且清理恢复、durable 是 R1 内存。
+
+**变异**（必须变红，均已核对）：写失败仍逐条 ack（AckAll 同类：确认没写进去的投递）→ `TestColdCopyProjectorNaksEveryDeliveryOfAFailedBatchAndRedeliveryIsIdempotent` 红；内存版本门只比版本 → `TestColdCopyProjectorWritesTheNewestRecordPerSagaAndSettlesEachDelivery` 红；Mongo 版本门只比版本 / 去掉门 → `TestRealMongoColdCopyVersionGate` 红；清理时排除冷副本 durable → `TestColdCopyDurableGuardsThePartitionPurge` 红（落后、缺失两种）；判定补查 / `WaitTerminal` 用带回落的 `Get` → `TestStartVerdictPollIgnoresTheColdCopy`（得到 `ErrIdentityConflict`）/ `TestWaitTerminalIgnoresTheColdCopy` 红；所有者不回答 `Held` → 两个 `List` 用例红。
+
+**第 7 批的代码清理（提前）**
+
+1. 删除原型目录 `scripts/perf/saga-jslog-proto/`（Go 包 `jslogproto` 与 `run-perf.sh`、原型 `nats-cluster.sh`）；旧 `saga-scan.sh` / `saga.sh` 第 4 批已删。历史报告、样本与设计稿里的路径保留为历史，加了“已删除、`git checkout c565c81b -- scripts/perf/saga-jslog-proto` 取回”的说明（PROPOSAL、原型报告、投影器并行报告、DOCUMENTS、本文 §3.3 / §12）；性能 README 里旧 `saga.sh` 的字段一节标为历史口径。
+2. 正式压测入口 `scripts/perf/saga-js-scan.sh`：自起私有三节点 NATS 与私有 mongod（`transactionLifetimeLimitSeconds=20`），开跑前查端口，结束删数据目录；`GOMAXPROCS=4`；每档前负载门；测试二进制编译一次，逐档调用 `framework/saga` 的 `TestRealSagaJSScanLevel`（放在 `jetstream_performance_integration_test.go`）；缺省 15 档（§12 的 13 个计时档 + 两次重放）；结果在 `artifacts/perf/saga-js/<label>/`。正确性门槛写在用例里（非期望终态、Nest 与 Mongo 逐账户余额、发布结果未知、积压 30s 归零）。**与 §12 的差异**：参与方是框架层正式路径（真实 Nest + nestwal WAL + DataEngine 投影 8 通道 + 实体内回执 + `SubscribeNativeStep`；Mongo 步骤 `SubscribeMongoStep` + `MongoStepInbox`），账户 DAO 与生成 DAO 同形但手写（第 3 批参与方用例的夹具），`wiring/saga` 的 `Steps` 胶水不在路径上——要用生成工程跑需要另起一个生成工程夹具，工作量另计。**只跑了冒烟**（`smoke`：一档 native-forward c2、3s，端到端 14s、清理干净），另各场景直接调用用例各 3s 确认能跑（原生正向 / 全补偿 / pipelined / Mongo 步骤 / 准入 / 快照 / 重放 600 条），数字不作结论。
+3. §11.2 遗留：原型变异 `noadmit` 迁移为 `ROOST_SAGA_MUTATE=noadmit`（`TestRealJetStreamLoadPublisherDrivesAdmission` 在变异下红、正常绿）；mmorpg giftdrill 读 saga 库的问题第 4 批已改为经 `GiftStatus` 查分区所有者（`scripts/testdata/mmorpg/crosssid/main.go.txt`），本批核对无需再改。
+
+**验证**：本机 macOS；私有三节点 nats-server 2.14.5（端口 29622 起）、私有单节点副本集 mongod 8.0（端口 29717，`transactionLifetimeLimitSeconds=20`）；命令与结果见提交说明与交接报告。
 
 ## 14. 需要维护者选择的点
 

@@ -10,7 +10,7 @@
 
 ## 1. 实现边界
 
-`framework/saga`：协调器（JetStream 分区事件日志、单写者、快照与清理、准入、发起方 API）、参与方（原生步骤的实体内回执、Mongo 步骤收件箱、步骤消费者、准入信号）、纯状态机 `transition.go`。装配在 `wiring/saga`（saga Mod、`Steps` 步骤运行时、配置规则）。没有 Redis、Store Service、Mongo 冷副本（冷副本在第 6 批另做）。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`framework/saga`：协调器（JetStream 分区事件日志、单写者、快照与清理、准入、发起方 API）、参与方（原生步骤的实体内回执、Mongo 步骤收件箱、步骤消费者、准入信号）、纯状态机 `transition.go`。装配在 `wiring/saga`（saga Mod、`Steps` 步骤运行时、配置规则）。没有 Redis、Store Service；Mongo 冷副本是可选的只读回落（`cold_copy.go`，缺省关闭，第 6 批）。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
@@ -23,7 +23,8 @@
 7. **消费者结算**：执行或回放后把结果发到命令所属分区的 `in.res`（MsgID `res.<生效的 CommandID>`），PubAck 之后才 ack；过期未执行直接 ack；步骤体出错或发布失败 nak。在途处理数原生 `min(32, MaxAckPending)`、Mongo 1。回归：`TestNativeStepConsumerPublishesToThePartitionThenAcks`、`TestConsumerWorkersBoundExecutionAndDeferSettlement`。
 8. **准入只拦新启动**：参与方 `LoadPublisher` 把本进程 DataEngine 投影积压写进 LoadBucket，所有者 Watch、滞回、本机时钟判停更、初始化 fail-closed；被拒的启动返回 `ErrBackpressure`（这次没有建立，同一请求重试），已运行的 saga 不受影响。回归：`admission_test.go`、`TestRealJetStreamLoadPublisherDrivesAdmission`。
 9. **配置规则写一次**：`wiring/saga` 的配置声明（结构体 + tag）在 Init、`app.CheckConfig`、`--check-config` 与 doctor 共用；跨字段规则（每流 ≤ 50 分区、`stream_groups ≤ partitions`、结果未知预算 ≥ 21s 且大于发布超时、去重窗口 ≥ 2 × 预算、终态保留 ≤ 回执保留、准入滞回与停更、步骤超时 < `DefaultStepAckWait`）在 `ValidateConfig`，生产额外要求 `saga.replicas=3` 与协调器进程 `singleton.enabled`；跨 Mod 规则（效果流键一致、准入开启时 `dataengine.projection.max_unacked_records ≥ 4 × saga.admission.high_records`）在 `CheckConfigAcrossMods`。回归：`TestSagaConfigRulesNameTheirKeys`、`TestSagaProductionRules`、`TestConfigCheckRequiresAProjectionCapAboveTheAdmissionWatermark`。
-10. **遗留 Mongo 事务（设计 T-A）**：被杀进程的事务持锁到 Mongo `transactionLifetimeLimitSeconds` 才回收（服务端每半个参数扫一次，最晚 1.5 倍）。部署要求 20s；参与方 `Steps.Start` 只读探测并在超过缺省步骤预算窗口时告警（`probeTransactionLifetime`，不拒绝启动）；DataEngine 启动排空在 `dataengine.startup_timeout`（缺省 60s，第 5 批维护者决定）内退避重试（`Runtime.drainAtStartup` / `startupDrainContext`：给了期限只用它，调用方没给期限时上限 2 分钟）。回归：`TestStepsProbeTheMongoTransactionLifetimeAgainstTheStepWindow`、`TestAssemblyStartupDrainRetriesALeftoverTransactionWithinTheDeadline`、`TestStartupDrainDeadlineFollowsTheCallerAndCapsOnlyWithoutOne`、`TestDataEngineStartupTimeoutDefaultOutlastsALeftoverTransaction`、真实 `TestRealMongoStartupDrainOutlastsALeftoverTransaction`。
+10. **冷副本不进任何判定（第 6 批，设计 §8）**：`Engine.Get` / `GetByBusinessKey` 只在所有者回答“内存里没有”时回落 `ColdCopy.Get`（所有者不可用仍是 `ErrPartitionUnavailable`）；`List` 把冷副本一页的 ID 随散播发给所有者（`queryRequest.Known`），所有者回答其中在内存里的（`queryReply.Held`），这些 ID 不用冷副本那条，结果截到冷副本已读的最后一条（精确前缀，最多 4 页）。启动判定补查（`submitIntent`）与 `WaitTerminal` 用 `getOwned`，只看内存。投影器（`ColdCopyProjector`，只在拥有分区的进程）每条流一个 R1 内存 durable，攒批 ≤ `batch_size` / `max_wait`，同一 saga 取最新（`coldNewer`：先比 `created_at` 再比版本），一次 BulkWrite，每条是 `coldCopyNewer` 门控的 `$replaceWith` 管道 upsert；**每条投递由写它的那次 BulkWrite 逐条结算**（推迟结算 `DeferSettle`，写成功 ack、失败 nak），不用 AckAll。清理守卫：`partition.purge` 在冷副本开启时把缺失的 `-cold-copy` durable 按 floor 0 计（不清理），投影器每 5s 核对、缺了就重建订阅。回归：`TestColdCopyProjectorWritesTheNewestRecordPerSagaAndSettlesEachDelivery`、`TestColdCopyProjectorNaksEveryDeliveryOfAFailedBatchAndRedeliveryIsIdempotent`、`TestGetFallsBackToTheColdCopyOnlyWhenTheOwnerLacksTheRecord`、`TestListAddsOnlyColdRecordsTheOwnersDoNotHold`、`TestStartVerdictPollIgnoresTheColdCopy`、`TestWaitTerminalIgnoresTheColdCopy`、`TestColdCopyDurableGuardsThePartitionPurge`；真实 `TestRealMongoColdCopyVersionGate`、`TestRealJetStreamColdCopyKill9Converges`、`TestRealJetStreamColdCopyKeepsUpWithoutBlockingThePurge`。
+11. **遗留 Mongo 事务（设计 T-A）**：被杀进程的事务持锁到 Mongo `transactionLifetimeLimitSeconds` 才回收（服务端每半个参数扫一次，最晚 1.5 倍）。部署要求 20s；参与方 `Steps.Start` 只读探测并在超过缺省步骤预算窗口时告警（`probeTransactionLifetime`，不拒绝启动）；DataEngine 启动排空在 `dataengine.startup_timeout`（缺省 60s，第 5 批维护者决定）内退避重试（`Runtime.drainAtStartup` / `startupDrainContext`：给了期限只用它，调用方没给期限时上限 2 分钟）。回归：`TestStepsProbeTheMongoTransactionLifetimeAgainstTheStepWindow`、`TestAssemblyStartupDrainRetriesALeftoverTransactionWithinTheDeadline`、`TestStartupDrainDeadlineFollowsTheCallerAndCapsOnlyWithoutOne`、`TestDataEngineStartupTimeoutDefaultOutlastsALeftoverTransaction`、真实 `TestRealMongoStartupDrainOutlastsALeftoverTransaction`。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -60,14 +61,15 @@
 | [mongo_step_inbox.go](../../../framework/saga/mongo_step_inbox.go) | `MongoStepInbox`（M-A：按操作一个回执文档） |
 | [nest.go](../../../framework/saga/nest.go) | `EmitStart`、启动 effect 编解码 |
 | [nest_start_consumer.go](../../../framework/saga/nest_start_consumer.go) | `NestStartConsumerConfig`、`Starter`（启动中继：效果流 → 分区 `in.start`） |
+| [cold_copy.go](../../../framework/saga/cold_copy.go) | `ColdCopySettings`、`ColdCopy`（冷副本读写、版本门 `coldCopyNewer`）、`ColdCopyProjector`（每流一个 R1 内存 durable、攒批、逐条结算、durable 丢失后重建） |
 | [errors.go](../../../framework/saga/errors.go) | 对外错误（`ErrBackpressure`、`ErrStartUnconfirmed`、`ErrPartitionFenced` 等） |
 
 ### wiring/saga
 
 | 源码 | 职责 |
 | --- | --- |
-| [config.go](../../../wiring/saga/config.go) | 配置声明与 `ValidateConfig`、`ownedPartitions`（P-A） |
-| [mod.go](../../../wiring/saga/mod.go) | saga Mod（Writer = `<sid>-<单实例锁 incarnation>`）、`CheckConfigAcrossMods`、`ParticipantSettings`（含 `StepWindow`） |
+| [config.go](../../../wiring/saga/config.go) | 配置声明（含 `saga.cold_copy.*`）与 `ValidateConfig`、`ownedPartitions`（P-A） |
+| [mod.go](../../../wiring/saga/mod.go) | saga Mod（Writer = `<sid>-<单实例锁 incarnation>`；冷副本开启时取 Mongo 能力）、`CheckConfigAcrossMods`（含“冷副本要 Mongo Mod”）、`ParticipantSettings`（含 `StepWindow`） |
 | [steps.go](../../../wiring/saga/steps.go) | `Steps`：登记、订阅、准入信号、`RunHandedOver`、`probeTransactionLifetime`、Drain / Stop 与指标 |
 | [step_budgets.go](../../../wiring/saga/step_budgets.go) | `saga.step_defaults` / `saga.steps` → `coresaga.StepBudgets` |
 
@@ -90,11 +92,15 @@
 - [step_consumer_test.go](../../../framework/saga/step_consumer_test.go)、[consumer_test.go](../../../framework/saga/consumer_test.go)：消费者结算、配置拒绝、坏信封、准入、过期、在途上限；Mongo 收件箱规则
 - [start_contract_test.go](../../../framework/saga/start_contract_test.go)、[wire_validation_test.go](../../../framework/saga/wire_validation_test.go)、[log_wire_test.go](../../../framework/saga/log_wire_test.go)：启动身份、线格式
 - [assembly_test.go](../../../framework/saga/assembly_test.go)、[admission_test.go](../../../framework/saga/admission_test.go)、[wheel_test.go](../../../framework/saga/wheel_test.go)
+- [cold_copy_test.go](../../../framework/saga/cold_copy_test.go)：冷副本投影攒批 / 版本只升 / 逐条结算 / 写失败逐条 nak / 重投幂等 / 停止时 nak，回落读只在内存没有时、`List` 排除内存持有的 ID 并翻页，判定补查与 `WaitTerminal` 不读冷副本，冷副本 durable 的清理守卫
 
 ### saga（真实依赖，`-tags integration`）
 
 - [jetstream_coordinator_real_integration_test.go](../../../framework/saga/jetstream_coordinator_real_integration_test.go)：正向与补偿、结果未知、隔离旧写者、快照清理重放、流满 fail-stop、准入停更、协调器 kill -9、参与方停机重试、迟到成功补偿、装配启停顺序（`ROOST_NATS_CLUSTER_URL`，`scripts/nats-cluster.sh test`）
 - [step_participant_real_integration_test.go](../../../framework/saga/step_participant_real_integration_test.go)：端到端、参与方 kill -9（`ROOST_SAGA_JS_RESTART_DELAY` 模拟长停机，协调器 kill -9 用例同一个开关）、Mongo 步骤写冲突、准入信号（需要 Mongo 的在没有 `ROOST_DATAENGINE_IT_MONGO_URI` 时跳过）
+- [cold_copy_real_integration_test.go](../../../framework/saga/cold_copy_real_integration_test.go)：真实 Mongo 版本门与字段往返、协调器 kill -9 后冷副本与权威终态最终一致、跟得上时不挡清理与 durable 丢失后重建（要 `ROOST_NATS_CLUSTER_URL` 与 `ROOST_DATAENGINE_IT_MONGO_URI`）
+- 变异开关（只在测试里生效）：`ROOST_SAGA_MUTATE=nofence`（隔离用例必须红）、`noreceipt`（端到端与参与方 kill -9 必须红）、`noadmit`（`TestRealJetStreamLoadPublisherDrivesAdmission` 必须红）
+- 压测一档：[jetstream_performance_integration_test.go](../../../framework/saga/jetstream_performance_integration_test.go) 的 `TestRealSagaJSScanLevel`（`scripts/perf/saga-js-scan.sh` 逐档调用）
 - 基准：[mongo_step_benchmark_test.go](../../../framework/saga/mongo_step_benchmark_test.go)、[mongo_step_benchmark_real_mongo_integration_test.go](../../../framework/saga/mongo_step_benchmark_real_mongo_integration_test.go)、[mongo_step_latency_real_mongo_integration_test.go](../../../framework/saga/mongo_step_latency_real_mongo_integration_test.go)、[jetstream_performance_integration_test.go](../../../framework/saga/jetstream_performance_integration_test.go)
 
 ### wiring 与生成器
@@ -107,4 +113,4 @@
 
 ## 6. 验收与运维
 
-改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。真实协调器用例在私有三节点集群上跑（`ROOST_NATS_CLUSTER_ROOT=<私有目录> bash scripts/nats-cluster.sh start|test|stop|clean`），不要用共享的 nats-server。命令与发布记录见 [维护手册](../../maintenance/README.md)。没有新测量不能改容量承诺，性能结论以 [性能报告](../../performance/README.md) 为准（正式实现的性能验收在第 7 批）。
+改动后运行受影响包测试；跨包行为变更跑全仓测试，并发相关补 race，生成器相关验证重生成无漂移及正式消费工程。真实协调器用例在私有三节点集群上跑（`ROOST_NATS_CLUSTER_ROOT=<私有目录> bash scripts/nats-cluster.sh start|test|stop|clean`），不要用共享的 nats-server。命令与发布记录见 [维护手册](../../maintenance/README.md)。没有新测量不能改容量承诺，性能结论以 [性能报告](../../performance/README.md) 为准（正式实现的性能验收在第 7 批，入口 `scripts/perf/saga-js-scan.sh` 已就绪、尚未跑正式一轮）。

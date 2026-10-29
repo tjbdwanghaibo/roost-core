@@ -209,8 +209,12 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 
 - **分区归属是静态的（P-A）**：`saga.coordinators` 按 sid 分区，没有租约与再平衡；协调器进程停了，它的分区就停（新启动等判定超时 `ErrStartUnconfirmed`，在途 saga 不推进），同 sid 进程重启后从快照 + 日志恢复。改 `coordinators` / `partitions` 要先让全部 saga 终态、停全部协调器、删流与桶。
 - **同一个 sid 只能有一种服务类型装 saga Mod（部署规则，没有启动期检查）**：`coordinators` 只写 sid（维护者 2026-10-29“按推荐”保持），两种服务类型用同一个 sid 且都装 saga Mod 时会认领同样的分区（单实例锁按“服务类型 + sid”，挡不住），期望序号隔离会让其中一个 fail-stop（`saga.partition.fail_stop_total{reason="fenced"}`）。配置检查看不到别的服务类型的配置；可靠的跨类型检查要另建跨进程登记（带 TTL 即模块自己的租约，不带则迁移服务类型要人工清理），第 5 批没有加，规则写在 SAGA.md「分区归属」。
-- **没有冷副本**：`Get` / `GetByBusinessKey` / `List` 只看协调器内存里的记录，终态在 `saga.terminal_retention`（缺省 1h）后剪掉，业务键唯一性也只在这段时间内成立；`ManualRequired` 常驻。Mongo 冷副本与历史查询在第 6 批。
-- **性能未按正式实现测**：协调器原型的数字（约 1200 saga/s，三节点 R3，[原型报告](../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)）不代表正式实现；旧 Redis / 旧原生路径的容量结论不再适用。正式验收在第 7 批（≤ 30 分钟一轮）。
+- **冷副本是可选的只读回落（第 6 批，缺省关闭）**：不开时 `Get` / `GetByBusinessKey` / `List` 只看协调器内存，终态在 `saga.terminal_retention`（缺省 1h）后剪掉；开 `saga.cold_copy.enabled` 后，内存里没有的记录从 Mongo 冷副本读回（只读、最终一致，kill -9 后最晚约一个 AckWait 30s 追平）。不论开不开，**业务键唯一性只在运行期间 + 终态保留期内成立**（冷副本不参与唯一性），`ManualRequired` 常驻。边界：
+  - 冷副本 durable 是分区清理守卫：Mongo 不可写时它的 ack floor 停住、清理随之停住，流按 `stream_max_bytes` 满了会 fail-stop——开冷副本就要求 Mongo 可写；关掉冷副本后要由运维删掉每条流上的 `-cold-copy` durable，否则清理一直被挡（没有自动清理：不知道是“关了”还是“这台还没升级配置”）。
+  - 冷副本文档不过期（框架不设 TTL），历史量由运维按 `updated_at` 清理；开启之前已经被清理掉的终态不进冷副本。
+  - 版本门先比 `created_at`（一生）再比版本：同业务键两生之间至少隔一个 `terminal_retention`（≥ 1m），协调器时钟回拨超过它时旧一生可能盖住新一生（不在威胁模型内，没有单独防护）。
+  - `List` 回落冷副本时一页被内存持有的 ID 占掉会再翻页，最多 4 页，之后结果是精确前缀但可能少于 `Limit` 条（按 `UpdatedBefore` 缩小范围再查）。
+- **性能未按正式实现测**：协调器原型的数字（约 1200 saga/s，三节点 R3，[原型报告](../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)）不代表正式实现；旧 Redis / 旧原生路径的容量结论不再适用。正式验收入口 `scripts/perf/saga-js-scan.sh`（设计 §12，≤ 30 分钟一轮）已就绪、只做过冒烟（一档 3s），**正式一轮尚未跑**（维护者空闲时跑，第 7 批剩余部分）。参与方用的是框架层正式路径（Nest + WAL + DataEngine 投影 + 实体内回执 + `SubscribeNativeStep`），账户 DAO 是同形手写，不是 `roost add` 生成物，`wiring/saga` 的 `Steps` 胶水不在压测路径上。
 - **原生步骤的多进程分片**：准入与转交由业务写（框架提供 `WithAdmit` 与 `RunHandedOver`，生成的 `RegisterSteps` 注释点名要补），见 [DESIGN-TODO D12](DESIGN-TODO.md#d12-saga-原生实体步骤与事务性-effect-消费者的生成支持)。
 - **发起方查结果**：生成的 `Lookup` / `saga.Engine.GetByBusinessKey` 按 `(Type, BusinessKey)` 查；终态通知没有默认实现，需要时由最后一步 / 补偿步骤自己发 effect，或用 `Engine.WaitTerminal`（SAGA.md）。
 - **清理守卫的 floor**：`DurableAckFloors` 对没有待投递 / 待确认消息的 durable 报“列出之前读到的流末序号”。消费者 leader 在落后的副本上时，可能对流 leader 已有、它还没应用的命令报“没有待投递”，那条命令可能被清掉；后果只是活性（协调器按步骤超时重发），会不会发生**尚未确认**（取决于副本应用与清理在 Raft 日志里的先后）。

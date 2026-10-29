@@ -76,7 +76,7 @@ roost add effect player.level_up -consumer game
 ```
 
 - `saga/<name>/definition.go`：定义、步骤主题常量、`EmitStart` / `Start`、按业务键查结果的 `Lookup(ctx, engine, businessKey)`（`ErrNotFound`
-  表示还没开始，或结束超过 `saga.terminal_retention`）。
+  表示还没开始，或结束超过 `saga.terminal_retention`；开启 `saga.cold_copy` 时保留期外的终态从 Mongo 冷副本读回）。
 - `saga/<name>/steps.go`：`State` 与编解码；每步正向与补偿的步骤体；`RegisterSteps(steps, deps)` 按 `-steps` 顺序、按主题常量登记；
   `StartSteps(ctx, registry, deps)` = `NewSteps(registry, "<service>-<name>")` + `RegisterSteps` + `Start`。
 - 每个原生步骤两个 Nest handler：`game/handler/<name>_<step>.go` 与 `<name>_<step>_compensation.go`，参数带 `saga.NativeStep`；`-entity` 的 DAO 加
@@ -98,11 +98,17 @@ roost add effect player.level_up -consumer game
 `saga.terminal_retention`（缺省 1h，同业务键去重与迟到成功补偿的窗口），之后剪掉；`ManualRequired` 常驻。超时之后仍可能存在需要收尾的工作，停机必须
 排空已承担的责任（`Steps.Drain`、协调器三步停机）。
 
+需要更久的历史查询时开冷副本（`saga.cold_copy.enabled`，缺省关）：协调器进程把终态事件批量投影进 `<saga.database>.sagas`，
+`Get` / `GetByBusinessKey` / `List` 在所有者内存里没有这条记录时回落读它。它只读、最终一致（kill -9 后最晚一个 AckWait 追平），**不参与唯一性**：
+同一业务键在保留期之后仍可以再开一笔，冷副本里的旧一生被新一生覆盖。冷副本 durable 挡着分区清理，所以开着它就要求 Mongo 可写；关掉时删掉
+每条流上的 `-cold-copy` durable（[SAGA.md](../SAGA.md#协调器jetstream-分区事件日志)）。
+
 ## 5. 接入与运维
 
 业务给稳定业务键、可重复执行的步骤输入、补偿策略、有限超时与人工处理入口。观察准入状态、分区 fail-stop、清理阻塞、步骤时延、失败终态和补偿积压
 （[OBSERVABILITY](../OBSERVABILITY.md#sagacoresaga)）。容量应按全链路测，不用 handler 微基准代替；协调器原型的实测见
-[原型报告](../../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)，正式实现在性能验收批次另测，旧 Redis / 旧原生路径的历史数字不再适用。
+[原型报告](../../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)，正式实现的压测入口是 `scripts/perf/saga-js-scan.sh`（设计 §12，**尚未跑正式一轮**），
+旧 Redis / 旧原生路径的历史数字不再适用。
 
 ## 源码与核对范围
 

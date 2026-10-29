@@ -81,6 +81,23 @@ App 单实例锁按“服务类型 + sid”取锁，两种服务类型的同号�
 **内存**：保留期内终态笔数 × 单笔记录大小，分散在全部协调器进程上。按 700 笔/秒、记录 1 KiB、1h 约 2.5 GB；业务 Data 小、速率低时按比例缩小。
 配置检查不替部署算内存。
 
+**冷副本（可选，缺省关闭，设计 §8 选项 C-A）**：`saga.cold_copy.enabled: true` 时，**协调器进程**（sid 在 `coordinators` 里）在每条流上建一个
+durable `<stream>_G<g>-cold-copy`（消费者状态 R1、只放内存），缺省只过滤 `ev.done`（`terminal_only`），一批至多 `batch_size`（256）条、最多等
+`max_wait`（50ms），同一 saga 只写这批里最新的一条，一次 BulkWrite 写进 `<saga.database>.<saga.cold_copy.collection>`（缺省 `sagas`）。每条写是
+**版本门**控的整文档替换 upsert：同一生（`created_at` 相同）版本更大才替换；终态被剪掉后同业务键重开的一生（`created_at` 更晚、版本从头来）
+盖住旧一生；重投、乱序、多个协调器进程同时投影都幂等。**写成功后逐条 ack、写失败逐条 nak 重投**，不用 AckAll（原型里 AckAll 把前一个进程取走
+没确认的事件一并确认掉、冷副本永远缺那几条）。冷副本只供读回落（见「API」）：**不参与唯一性、启动判定、判定补查与 `WaitTerminal`**，Mongo
+不进任何判定路径。
+
+- **它是清理守卫**：分区清理不越过冷副本 durable 的 ack floor；**找不到它时不清理**（R1 内存消费者随承载它的服务端重启消失，投影器每 5s
+  核对、发现后重建并从流里还在的事件重投，`saga.cold_copy.resubscribed_total`）。冷副本写不进 Mongo 时它的 floor 停住、清理也停住
+  （`saga.cold_copy.write_failures_total`、`saga.log.purge_blocked_seconds{consumer="…-cold-copy"}`），流最终满了 fail-stop——冷副本开着就
+  要求 Mongo 可写。
+- **关掉冷副本后要删掉每条流上的 `-cold-copy` durable**（与下线步骤同一规则），否则它们一直挡住清理。开启之前已经被清理掉的终态不进冷副本。
+- kill -9 协调器：被杀进程取走、没确认的终态事件在 AckWait（30s）后重投给重启的进程，冷副本最终与权威终态一致（真实用例
+  `TestRealJetStreamColdCopyKill9Converges`，3000 笔里最后一笔到终态后约 28s 追平）。冷副本文档不过期，需要时由运维按 `updated_at` 清理。
+- 本进程没有 Mongo Mod 时开启冷副本，配置检查拒绝（`CheckConfigAcrossMods`）。
+
 **重放（先恢复再服务）**：所有者启动时读快照，从 `min(输入水位, 最后一条事件)+1` 读到分区过滤上的最后一条（`LastMsg` 的序号，确定终点）：事件只取快照之后的、
 按序覆盖；输入只留水位之后的、交给循环重新处理（都幂等）；时间轮按记录的 `NextRunAt` 重建。Mod Start 在全部拥有的分区重放完才返回（上限 2 分钟）。
 
@@ -89,8 +106,8 @@ App 单实例锁按“服务类型 + sid”取锁，两种服务类型的同号�
 | API | 语义 |
 | --- | --- |
 | `StartSaga(ctx, StartRequest)` | 追加启动意图到分区 `in.start` 后等所有者的判定：接受或同一意图已存在 → 返回记录；同业务键不同意图 → `ErrIdentityConflict`；准入关闭 → `ErrBackpressure`；所有者缺定义 → `ErrDefinitionMissing`；ctx 到期仍无判定 → `ErrStartUnconfirmed`（意图已持久、结果未知，**用同一请求重试安全**） |
-| `Get` / `GetByBusinessKey` | 由分区所有者从内存回答；还没启动、或终态过了保留期 → `ErrNotFound`；所有者不在 → `ErrPartitionUnavailable` |
-| `List(Query)` | 向全部分区所有者散播并合并；覆盖非终态、保留期内的终态与全部 `ManualRequired`；有分区没回答 → `ErrPartitionUnavailable`（点名），不返回残缺结果 |
+| `Get` / `GetByBusinessKey` | 由分区所有者从内存回答；内存里没有（还没启动、或终态过了保留期）时，冷副本开启则回落读冷副本，否则 → `ErrNotFound`；所有者不在 → `ErrPartitionUnavailable`（**不拿冷副本顶替**：内存里可能有更新的版本） |
+| `List(Query)` | 向全部分区所有者散播并合并；覆盖非终态、保留期内的终态与全部 `ManualRequired`；冷副本开启时再补上**内存里没有的 ID**（更早的终态）：冷副本的一页 ID 随散播发给所有者，所有者回答哪些在内存里，那些 ID 以内存为准；结果是按（更新时间，ID）排序的精确前缀，冷副本一页被内存持有的 ID 占掉时最多再翻 3 页，之后可能少于 `Limit` 条（按 `UpdatedBefore` 缩小范围再查）。有分区没回答 → `ErrPartitionUnavailable`（点名），不返回残缺结果 |
 | `Resume` / `Compensate` | 追加运维意图到 `in.op` 并等判定（规则见「失败语义」）；记录最后一次更新早于“回执保留期 − 最长步骤窗口” → `ErrReceiptsExpired`（选项 RR-A） |
 | `Complete(ctx, Completion) error` | 把结果追加到所属分区 `in.res`（MsgID `res.<CommandID>`），只承诺“已持久进入输入”；框架自带的步骤消费者直接发布，它留给自定义参与方 |
 | `WaitTerminal(ctx, id)` | 等这个 ID 下一个终态；同一 ID 的多个等待者全部唤醒 |
@@ -102,7 +119,7 @@ App 单实例锁按“服务类型 + sid”取锁，两种服务类型的同号�
 nak 重试。只有“收到拒绝后放弃、之后用同一业务键发**不同**意图”的调用方会得到身份冲突，业务不要这样用。
 
 **判定送达**：所有者处理后经核心 NATS 回复这一次尝试（写事件的判定在 PubAck 之后回复）；`saga.start_verdict_timeout`（2s）内没收到回复时每 200ms
-向所有者 `Get(id)`：有记录且启动摘要相同 → 视为已接受；摘要不同 → `ErrIdentityConflict`；没有 → 继续等。启动尝试标识 =
+向所有者的**内存**问 `Get(id)`（不回落冷副本：冷副本里旧一生的记录不能当成这次启动的判定）：有记录且启动摘要相同 → 视为已接受；摘要不同 → `ErrIdentityConflict`；没有 → 继续等。启动尝试标识 =
 `<Engine 实例随机 128 位>.<实例内序号>`，全局唯一；第一次发布就被判重复 → `ErrStartIdentityReused`（标识生成坏了的显式失败）。
 
 ## 定义
@@ -339,7 +356,10 @@ Nest handler 不应持有 Entity 锁等待整笔 Saga 完成。
 - NATS ≥ 2.12.1、JetStream 文件存储、saga 流 R3（`saga.replicas: 3`）；Mongo 副本集（Mongo 步骤与 DataEngine 投影的事务）且
   `transactionLifetimeLimitSeconds=20`；协调器进程 `singleton.enabled=true`。
 - 步骤消费者是每条 saga 流上的同名 durable（`<group>-<step>`），参与方必须与协调器用同一份 `saga.subject_prefix` / `stream` / `partitions` /
-  `stream_groups`（`kitsaga.ParticipantSettings`）。下线一个步骤时删掉它在每条流上的 durable，否则清理被它挡住。
+  `stream_groups`（`kitsaga.ParticipantSettings`）。下线一个步骤时删掉它在每条流上的 durable，否则清理被它挡住；关掉冷副本时同样删掉
+  `<stream>_G<g>-cold-copy`。
+- 冷副本（`saga.cold_copy.enabled`）要求协调器进程有 Mongo Mod、Mongo 可写；投影跑在协调器进程里（选项 C-A），Mongo 与协调器
+  同盘时有争用（原型第二轮），冷副本的 Mongo 不要与 NATS 数据盘共用。
 - **升级需清空**（格式与存储不兼容，线上未部署）：旧版本 saga 数据（Redis 权威、Mongo 冷副本 `_sagas` / `_saga_completions` / `_saga_operations`、
   `_dataengine_step_operations`、Mongo 步骤的 `_operations` 与按 CommandID 的回执）不迁移。先在旧版本让全部 saga 到终态（`List` 非终态为 0），
   停旧协调器与步骤进程、排空参与方 WAL，删除旧 saga 流 / Redis 键前缀 / 上述集合，再起新版本（新流、新桶）。WireVersion 1 的信封一律拒绝。
