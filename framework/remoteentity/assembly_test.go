@@ -416,88 +416,6 @@ func waitForGoroutineIn(t *testing.T, frame string) {
 	t.Fatalf("no goroutine reached %s", frame)
 }
 
-// awaitStopOrCancelWhileWaiting 返回 stopped 的结果；若停止先进入 waitingFrame（在等排空），先 cancel 再取结果。
-func awaitStopOrCancelWhileWaiting(t *testing.T, stopped <-chan error, cancel context.CancelFunc, waitingFrame string) error {
-	t.Helper()
-	buf := make([]byte, 1<<20)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case err := <-stopped:
-			return err
-		default:
-		}
-		n := runtime.Stack(buf, true)
-		if strings.Contains(string(buf[:n]), waitingFrame) {
-			cancel()
-			select {
-			case err := <-stopped:
-				return err
-			case <-time.After(5 * time.Second):
-				t.Fatal("Stop ignored its context while waiting for the handler")
-			}
-		}
-		runtime.Gosched()
-	}
-	t.Fatal("Stop neither returned nor waited")
-	return nil
-}
-
-func TestRemoteAssemblyStopWaitsForAnInFlightReplicaHandler(t *testing.T) {
-	a, _ := newLifecycleAssembly(t, func(context.Context) error { return nil })
-	bus := &handlerBus{}
-	if err := a.Start(context.Background(), bus); err != nil {
-		t.Fatal(err)
-	}
-	handler := bus.handler(SyncTopicInterest)
-	if handler == nil {
-		t.Fatal("interest replicator did not subscribe")
-	}
-	interest := entity.RemoteSnapshotInterest{Key: interestKeyFor(t, 244, 9471), ConsumerSID: 9, ExpiresAt: time.Now().Add(time.Hour).UnixNano(), Generation: 1}
-
-	// 测试持有兴趣表的锁：投递进入 ApplyReplica 后卡在 renew 上。
-	registry := a.Manager.snapshots.interests
-	registry.mu.Lock()
-	var unlockOnce sync.Once
-	unlock := func() { unlockOnce.Do(registry.mu.Unlock) }
-	defer unlock()
-	applied := make(chan error, 1)
-	go func() { applied <- handler(interestRenewMessage(t, interest)) }()
-	waitForGoroutineIn(t, "remoteInterestRegistry).renewIfNeeded")
-
-	// 第一次停止：在它等待在途 handler 时取消（预算耗尽）；修前 Stop 不等，直接返回。
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	stopped := make(chan error, 1)
-	go func() { stopped <- a.Stop(ctx) }()
-	stopErr := awaitStopOrCancelWhileWaiting(t, stopped, cancel, "mirror.(*Replicator).StopWithContext")
-	if stopErr == nil {
-		t.Errorf("Stop reported success while a replica handler was still applying")
-	} else if !errors.Is(stopErr, context.Canceled) {
-		t.Errorf("Stop = %v, want context.Canceled", stopErr)
-	}
-	select {
-	case err := <-applied:
-		t.Fatalf("handler finished while the test still held the registry lock: %v", err)
-	default:
-	}
-
-	// 退订已经发生：新投递不再进入；handler 放行后用新 ctx 重试，等到它返回才报告成功。
-	if bus.handler(SyncTopicInterest) != nil {
-		t.Error("timed-out Stop left the interest subscription in place")
-	}
-	unlock()
-	if err := <-applied; err != nil {
-		t.Fatalf("in-flight renew: %v", err)
-	}
-	if err := a.Stop(context.Background()); err != nil {
-		t.Fatalf("retry Stop after the handler returned = %v", err)
-	}
-	if !a.Manager.snapshots.interests.interested(interest.Key) {
-		t.Fatal("the admitted renewal was lost")
-	}
-}
-
 type retrySubscriptionBus struct {
 	calls, active int
 	failure       error
@@ -750,7 +668,14 @@ func TestRemoteAssemblyStopContract(t *testing.T) {
 			go func() { applied <- handler(interestRenewMessage(t, interest)) }()
 			waitForGoroutineIn(t, "remoteInterestRegistry).renewIfNeeded")
 		},
-		Stop:     func(ctx context.Context) error { return stop(ctx) },
+		Stop: func(ctx context.Context) error {
+			err := stop(ctx)
+			// 超时的停止也已经退订：新投递不再进入，只等已准入的那一个 handler。
+			if err != nil && bus.handler(SyncTopicInterest) != nil {
+				t.Error("timed-out Stop left the interest subscription in place")
+			}
+			return err
+		},
 		Release:  func() { unlock() },
 		Released: func() bool { return released() },
 	})
