@@ -84,20 +84,23 @@ func (s *ReplicationScene) Frame(states []physx.State) *ReplicationFrame {
 }
 func (f *ReplicationFrame) State(id uint64) (physx.State, bool) { s, ok := f.poses[id]; return s, ok }
 func (f *ReplicationFrame) Plan(snapshot chunksync.Snapshot, observer uint64, grabs map[uint64]uint64, previous map[uint64]ViewEntry, policy ReplicationPolicy) (ViewPlan, error) {
-	return f.PlanInto(nil, snapshot, observer, grabs, previous, policy)
+	return f.PlanInto(nil, nil, snapshot, observer, grabs, previous, policy)
 }
 
-// PlanInto 与 Plan 相同，但把新视图账本写进调用方交回的 entries（先清空；nil 时新建），
-// 返回的 ViewPlan.Entries 就是这张 map。entries 必须归调用方独占且已不再使用，
-// 典型是 ACK 后被替换下来的旧账本；不能是 previous，也不能仍被其他计划引用。
-func (f *ReplicationFrame) PlanInto(entries map[uint64]ViewEntry, snapshot chunksync.Snapshot, observer uint64, grabs map[uint64]uint64, previous map[uint64]ViewEntry, policy ReplicationPolicy) (ViewPlan, error) {
+// PlanInto 与 Plan 相同，但复用调用方交回的存储（nil 时新建）：
+//   - objects 截为 0 后作为 ViewPlan.Snapshot 的对象表，调用方在下一次复用前必须已用完上一次结果，
+//     也不能与 snapshot.Objects 共用底层数组；
+//   - entries 先清空再写入新视图账本，返回的 ViewPlan.Entries 就是这张 map；它必须已不再使用
+//     （典型是 ACK 后换下的旧账本），不能是 previous，也不能仍被其他计划引用。
+func (f *ReplicationFrame) PlanInto(objects []chunksync.Object, entries map[uint64]ViewEntry, snapshot chunksync.Snapshot, observer uint64, grabs map[uint64]uint64, previous map[uint64]ViewEntry, policy ReplicationPolicy) (ViewPlan, error) {
 	if entries == nil {
 		entries = make(map[uint64]ViewEntry, len(snapshot.Objects))
 	} else {
 		clear(entries)
 	}
 	// 每个输入对象恰好产出一个视图对象（暂缓的沿用旧对象），按输入长度一次预留。
-	out := ViewPlan{Snapshot: chunksync.Snapshot{Epoch: snapshot.Epoch, Tick: snapshot.Tick, Objects: make([]chunksync.Object, 0, len(snapshot.Objects))}, Entries: entries, Samples: make(map[string]int), Deferred: make(map[string]int)}
+	objects = slices.Grow(objects[:0], len(snapshot.Objects))
+	out := ViewPlan{Snapshot: chunksync.Snapshot{Epoch: snapshot.Epoch, Tick: snapshot.Tick, Objects: objects}, Entries: entries, Samples: make(map[string]int), Deferred: make(map[string]int)}
 	if err := policy.Validate(); err != nil {
 		return out, err
 	}

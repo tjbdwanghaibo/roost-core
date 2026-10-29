@@ -189,6 +189,7 @@ func checkRoomReplicationPipeline(t *testing.T, reuse bool) {
 	write := func(values ...any) { fmt.Fprintln(digest, values...) }
 	polls := 0
 	coverage := map[string]int{}
+	var seenObjects, viewObjects []chunksync.Object
 	for tick := uint64(1); tick <= 90; tick++ {
 		states := slices.Clone(base)
 		for i := range states {
@@ -233,11 +234,11 @@ func checkRoomReplicationPipeline(t *testing.T, reuse bool) {
 				}
 				m.view, m.visible, m.pending = m.nextView, m.nextSeen, nil
 			}
-			snapshot, visible, err := spatial.VisibleInto(m.spareSeen, m.body, 12, 2, m.visible)
+			snapshot, visible, err := spatial.VisibleInto(seenObjects, m.spareSeen, m.body, 12, 2, m.visible)
 			if err != nil {
 				t.Fatal(err)
 			}
-			plan, err := view.PlanInto(m.spareView, snapshot, m.body, grabs, m.view, DefaultReplicationPolicy())
+			plan, err := view.PlanInto(viewObjects, m.spareView, snapshot, m.body, grabs, m.view, DefaultReplicationPolicy())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -245,6 +246,9 @@ func checkRoomReplicationPipeline(t *testing.T, reuse bool) {
 			p, err := m.cursor.PlanFields(plan.Snapshot, QuantizedLayout())
 			if err != nil {
 				t.Fatal(err)
+			}
+			if reuse { // 与 Poll 一样，组帧后两张临时对象表即可给下一个成员复用。
+				seenObjects, viewObjects = snapshot.Objects, plan.Snapshot.Objects
 			}
 			var own InputAck
 			if state, ok := view.State(m.body); ok {

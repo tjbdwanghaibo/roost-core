@@ -52,6 +52,10 @@ type room struct {
 	// dynamic 是建房时固定的可控刚体集合，建房后只读，不随 Tick 重建。
 	dynamic map[uint64]bool
 	grabs   map[uint64]uint64
+	// visibleObjects / viewObjects 是 Poll 规划视图的临时对象表，只在 r.mu 下使用。
+	// Cursor.PlanFields 返回后它们不再被引用（游标与视图账本都复制对象值），
+	// 清零后留给本房间下一次 Poll；Poll 串行持有 r.mu，不会两次规划同时使用。
+	visibleObjects, viewObjects []chunksync.Object
 }
 type memberState struct {
 	member                          Member
@@ -443,18 +447,21 @@ func (s *Service) Poll(ctx context.Context, m Member, ack uint64) (Delivery, err
 		if time.Since(v.sentAt) < 50*time.Millisecond {
 			return Delivery{Room: r.ref, Sequence: v.sequence}, nil
 		}
-		snapshot, visible, err := r.latest.VisibleInto(v.spareVisible, v.body, s.cfg.Radius, s.cfg.Margin, v.visible)
+		snapshot, visible, err := r.latest.VisibleInto(r.visibleObjects, v.spareVisible, v.body, s.cfg.Radius, s.cfg.Margin, v.visible)
 		if err != nil {
 			return Delivery{}, err
 		}
 		// 备用 map 交给规划后即归本次结果所有；失败时随结果丢弃，下次重新分配。
 		v.spareVisible = nil
-		view, err := r.viewFrame.PlanInto(v.spareView, snapshot, v.body, r.grabs, v.view, s.cfg.Replication)
+		view, err := r.viewFrame.PlanInto(r.viewObjects, v.spareView, snapshot, v.body, r.grabs, v.view, s.cfg.Replication)
 		v.spareView = nil
 		if err != nil {
 			return Delivery{}, err
 		}
 		p, err := v.cursor.PlanFields(view.Snapshot, gamephysics.QuantizedLayout())
+		clear(snapshot.Objects) // 释放对载荷的引用，容量留给下一次 Poll。
+		clear(view.Snapshot.Objects)
+		r.visibleObjects, r.viewObjects = snapshot.Objects[:0], view.Snapshot.Objects[:0]
 		if err != nil {
 			return Delivery{}, err
 		}
