@@ -610,8 +610,8 @@ import (
 // durability=pipelined is the recommended setting for a native step: the
 // entity lock is released once the WAL record is queued and the result still
 // leaves only after it is durable, and the framework adds this handler to the
-// Nest pipelined allowlist and turns on async completion by itself (SAGA.md,
-// 原生步骤的提交方式). durability=strict is also allowed; it keeps a Nest
+// Nest pipelined allowlist and turns on Nest async completion for it (only
+// for native steps; SAGA.md, 原生步骤的提交方式). durability=strict is also allowed; it keeps a Nest
 // short-pool worker for the whole WAL fsync.
 //
 //roost:nest rollback=undo durability=pipelined

@@ -241,7 +241,7 @@ func TestNestStageMetricsFollowExecutionPaths(t *testing.T) {
 				opts = append(opts, NestOptionWithStageMetrics(true))
 			}
 			if mode == "async" {
-				opts = append(opts, NestOptionWithPipelinedAsyncCompletion(1, 4))
+				opts = append(opts, NestOptionWithPipelinedAsyncCompletion(1, 4, "stages_"+mode))
 			}
 			engine := NewEngine(opts...)
 			name := NewHandlerName("stages_" + mode)

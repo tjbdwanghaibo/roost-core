@@ -254,7 +254,7 @@ func TestKitModsRefuseConfigValuesOfTheWrongType(t *testing.T) {
 		{"remote_cache_entries_suffix", func() initer { return remoteentity.NewRemoteEntityMod(1000) }, "remote_entity:\n  snapshot_cache_entries: 10k\n", "remote_entity.snapshot_cache_entries"},
 		{"saga_tick_unitless", func() initer { return saga.NewMod() }, "saga:\n  coordinators: [\"1000\"]\n  tick: 15\n", "saga.tick"},
 		{"dataengine_outbox_workers_word", func() initer { return dataengine.NewMod() }, "dataengine:\n  outbox:\n    workers: two\n", "dataengine.outbox.workers"},
-		{"dataengine_pipelined_async_yes", func() initer { return dataengine.NewMod() }, "nest:\n  pipelined:\n    async: yes\n", "nest.pipelined.async"},
+		{"dataengine_pipelined_async_workers_word", func() initer { return dataengine.NewMod() }, "nest:\n  pipelined:\n    async_workers: four\n", "nest.pipelined.async_workers"},
 		{"syncbus_ack_wait_unitless", func() initer { return syncbus.NewSyncBusMod(1000) }, "syncbus:\n  transport: jetstream\n  ack_wait: 30\n", "syncbus.ack_wait"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

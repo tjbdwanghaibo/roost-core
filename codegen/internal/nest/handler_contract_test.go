@@ -239,7 +239,7 @@ func handlerGiftDebit(target IWalletEntity, amount int64, step sg.NativeStep) (i
 	if begin < 0 || call < 0 || begin > call {
 		t.Fatalf("the dispatch must call p1.Begin(e0) before the business function:\n%s", body)
 	}
-	// 原生步骤经 saga 的注册函数登记（装配层据此把 pipelined 的原生步骤并进白名单、打开异步完成），用源文件里的 saga 包名。
+	// 原生步骤经 saga 的注册函数登记（装配层据此把 pipelined 的原生步骤并进白名单、只为它们打开异步完成），用源文件里的 saga 包名。
 	if !strings.Contains(body, "sg.MustRegisterNativeStepHandler(handlerNameGiftDebit, invokeGiftDebit, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityPipelined})") || strings.Contains(body, "nest.MustRegisterHandlerWithMeta(handlerNameGiftDebit") {
 		t.Fatalf("a native step handler must register through sg.MustRegisterNativeStepHandler:\n%s", body)
 	}

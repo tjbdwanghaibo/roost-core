@@ -105,8 +105,8 @@ func (step NativeStep) Complete(success bool, reason string) error {
 //
 // 生成的注册函数对原生步骤 handler 调用 MustRegisterNativeStepHandler 而不是 nest.MustRegisterHandlerWithMeta：除了登记到
 // Nest 的包级注册表，这里另记一份“哪些 handler 是原生步骤、声明了什么 durability”。装配层（wiring/dataengine）在 Init 时
-// 读 PipelinedNativeStepHandlers，把它们并进 nest.pipelined 的白名单并要求打开异步完成——项目不用为原生步骤手写这两项配置，
-// 其他 handler 的提交方式不受影响。
+// 读 PipelinedNativeStepHandlers，把它们并进 nest.pipelined 的白名单，并把它们（只有它们）交给 Nest 的异步完成名单——项目不用
+// 为原生步骤手写配置；Nest 异步完成按 handler 生效，其他 handler（包括自己声明 pipelined 的）的提交方式不受影响。
 var (
 	nativeStepMu       sync.Mutex
 	nativeStepHandlers = make(map[nest.HandlerName]nest.DurabilityPolicy)
@@ -136,7 +136,7 @@ func MustRegisterNativeStepHandler(name nest.HandlerName, handler nest.BaseHandl
 }
 
 // PipelinedNativeStepHandlers 返回已登记、声明 durability=pipelined 的原生步骤 handler 名（排序）。装配层据此给 Nest 的
-// pipelined 白名单补名字、要求异步完成；声明 strict 的原生步骤不在其中（strict 是合法的显式选择）。
+// pipelined 白名单补名字，并以它们作为 Nest 异步完成的 handler 名单；声明 strict 的原生步骤不在其中（strict 是合法的显式选择）。
 func PipelinedNativeStepHandlers() []string {
 	nativeStepMu.Lock()
 	defer nativeStepMu.Unlock()

@@ -5,6 +5,9 @@ package nest
 import (
 	"context"
 	"errors"
+	"maps"
+	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -60,7 +63,7 @@ func TestAsyncCompletionFreesWorkerDuringDurableWait(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithPipelinedAsyncCompletion(0, 0),
+		NestOptionWithPipelinedAsyncCompletion(0, 0, "test_async_frees_worker"),
 		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
@@ -138,7 +141,7 @@ func TestAsyncCompletionKeepsSameEntityCommitOrder(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithPipelinedAsyncCompletion(0, 0),
+		NestOptionWithPipelinedAsyncCompletion(0, 0, "test_async_order_first", "test_async_order_second"),
 		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
@@ -209,7 +212,7 @@ func TestAsyncCompletionIndeterminateRepliesErrorWithoutRollback(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithPipelinedAsyncCompletion(0, 0),
+		NestOptionWithPipelinedAsyncCompletion(0, 0, "test_async_indeterminate"),
 		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
@@ -252,7 +255,7 @@ func TestAsyncCompletionShutdownDeliversPendingReplies(t *testing.T) {
 	InitNest(
 		NestOptionWithGetter(getter),
 		NestOptionWithTransactionCommitter(committer),
-		NestOptionWithPipelinedAsyncCompletion(0, 0),
+		NestOptionWithPipelinedAsyncCompletion(0, 0, "test_async_shutdown_drain"),
 		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
@@ -318,7 +321,7 @@ func TestAsyncCompletionKeepsOrderWhenPumpIsSaturated(t *testing.T) {
 		NestOptionWithTransactionCommitter(committer),
 		// Queue capacity 1: the pump holds one entry in flight and one in the
 		// queue, so the third transaction is forced onto the fallback path.
-		NestOptionWithPipelinedAsyncCompletion(1, 1),
+		NestOptionWithPipelinedAsyncCompletion(1, 1, "test_async_saturated_order"),
 		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 2, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
 		NestOptionWithTickDuration(100*time.Millisecond),
 	)
@@ -772,7 +775,7 @@ func TestAsyncCompletionWaitsForEntityRelease(t *testing.T) {
 	}
 	getter := newMockGetter()
 	getter.Add(e)
-	engine := NewEngine(NestOptionWithGetter(getter), NestOptionWithTransactionCommitter(newPipelinedTestCommitter(true)), NestOptionWithPipelinedAsyncCompletion(1, 4))
+	engine := NewEngine(NestOptionWithGetter(getter), NestOptionWithTransactionCommitter(newPipelinedTestCommitter(true)), NestOptionWithPipelinedAsyncCompletion(1, 4, "completion_unlock"))
 	releasing, allowRelease := make(chan struct{}), make(chan struct{})
 	var allowOnce sync.Once
 	allow := func() { allowOnce.Do(func() { close(allowRelease) }) }
@@ -824,30 +827,31 @@ func TestAsyncCompletionWaitsForEntityRelease(t *testing.T) {
 	}
 }
 
-// 异步完成只作用于 pipelined 事务（维护者 2026-10-29 决定 saga 原生步骤默认开启它时的前提）：同一个支持 pipelined 的
-// committer 下，strict 与 async handler 在异步完成开 / 关两种引擎上的观察完全一致——都走 Commit（不 Enqueue，不进完成泵），
-// AfterCommit 在回复之前执行，执行时实体锁的状态也相同。
+// 异步完成按 handler 生效（维护者 2026-10-29 决定）：引擎的异步完成名单只点名别的 handler 时，strict、async 与没被点名的
+// pipelined handler 在“有完成泵 / 没有完成泵”两种引擎上的观察完全一致——strict / async 走 Commit（不 Enqueue），pipelined
+// 走 Enqueue 后在派发 worker 上等票据；AfterCommit 都在派发 goroutine 上、回复之前执行，执行时实体锁的状态也相同。
 func TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged(t *testing.T) {
 	type observation struct {
 		commits, enqueued int
 		lockFreeInHook    bool
 		hookBeforeReply   bool
+		hookOnDispatch    bool
 		reply             any
 	}
-	run := func(t *testing.T, durability DurabilityPolicy, asyncCompletion bool) observation {
+	run := func(t *testing.T, durability DurabilityPolicy, withPump bool) observation {
 		t.Helper()
 		id, e := newAsyncPilotEntity(t, 9990, 10)
 		getter := newMockGetter()
 		getter.Add(e)
 		committer := newPipelinedTestCommitter(true)
 		options := []NestOption{NestOptionWithGetter(getter), NestOptionWithTransactionCommitter(committer)}
-		if asyncCompletion {
-			options = append(options, NestOptionWithPipelinedAsyncCompletion(1, 4))
+		if withPump {
+			// 名单点名的是另一个 handler：引擎有完成泵，但被测 handler 不在名单里。
+			options = append(options, NestOptionWithPipelinedAsyncCompletion(1, 4, "someone_else"))
 		}
 		engine := NewEngine(options...)
-		var hookRan atomic.Bool
-		var lockFree atomic.Bool
-		name := NewHandlerName("non_pipelined_" + durability.String())
+		var hookRan, lockFree, onDispatch atomic.Bool
+		name := NewHandlerName("non_async_" + durability.String())
 		engine.MustRegisterHandlerWithMeta(name, func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
 			AfterCommit(func() {
 				free := e.GetMutex().TryLock()
@@ -855,8 +859,11 @@ func TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged(t *testing.T) {
 					e.GetMutex().Unlock()
 				}
 				lockFree.Store(free)
+				onDispatch.Store(currentNestDispatchMsg() != nil)
 				hookRan.Store(true)
 			})
+			old := e.dao.Value
+			RecordUndo(e.dao, 1, func() error { e.dao.Value = old; return nil })
 			e.dao.Value++
 			return e.dao.Value, MarkPersist(e.dao, 1)
 		}, HandlerMeta{Rollback: RollbackState, Durability: durability})
@@ -871,15 +878,292 @@ func TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged(t *testing.T) {
 		hookBeforeReply := hookRan.Load()
 		committer.mu.Lock()
 		defer committer.mu.Unlock()
-		return observation{commits: committer.commits, enqueued: len(committer.tickets), lockFreeInHook: lockFree.Load(), hookBeforeReply: hookBeforeReply, reply: reply}
+		return observation{commits: committer.commits, enqueued: len(committer.tickets), lockFreeInHook: lockFree.Load(), hookBeforeReply: hookBeforeReply, hookOnDispatch: onDispatch.Load(), reply: reply}
 	}
-	for _, durability := range []DurabilityPolicy{DurabilityStrict, DurabilityAsync} {
+	for _, durability := range []DurabilityPolicy{DurabilityStrict, DurabilityAsync, DurabilityPipelined} {
 		off, on := run(t, durability, false), run(t, durability, true)
 		if on != off {
-			t.Errorf("%s handler: async completion on = %+v, off = %+v; want identical", durability, on, off)
+			t.Errorf("%s handler outside the async set: engine with completion pump = %+v, without = %+v; want identical", durability, on, off)
 		}
-		if on.commits != 1 || on.enqueued != 0 || !on.hookBeforeReply || on.reply != 11 {
-			t.Errorf("%s handler with async completion on = %+v; want one Commit, no Enqueue, AfterCommit before the reply", durability, on)
+		if !on.hookBeforeReply || !on.hookOnDispatch || on.reply != 11 {
+			t.Errorf("%s handler outside the async set = %+v; want AfterCommit on the dispatch goroutine before the reply", durability, on)
+		}
+		wantCommits, wantEnqueued := 1, 0
+		if durability == DurabilityPipelined {
+			wantCommits, wantEnqueued = 0, 1
+		}
+		if on.commits != wantCommits || on.enqueued != wantEnqueued {
+			t.Errorf("%s handler outside the async set = %+v; want %d Commit, %d Enqueue", durability, on, wantCommits, wantEnqueued)
 		}
 	}
+}
+
+// asyncSetEngine 是名单 = {asyncName} 的引擎：asyncName 与 phase1Name 都是 pipelined 自增 handler，AfterCommit 按
+// “标签 + 自增后的值”记录，并记下回调是否在派发 goroutine 上；gates 里登记的标签在回调里先报 entered、再等放行。
+type asyncSetEngine struct {
+	engine     *NestMgr
+	committer  *pipelinedTestCommitter
+	mu         sync.Mutex
+	hooks      []string
+	onDispatch map[string]bool
+	gates      map[string]*hookGate
+	entered    chan string
+}
+
+func newAsyncSetEngine(t *testing.T, workers int, asyncName, phase1Name HandlerName, es ...*rollbackTestEntity) *asyncSetEngine {
+	t.Helper()
+	return newAsyncSetEngineWith(t, workers, asyncName, phase1Name, nil, es...)
+}
+
+// newAsyncSetEngineWith 同 newAsyncSetEngine，extra 在 Start 之前再注册别的 handler。
+func newAsyncSetEngineWith(t *testing.T, workers int, asyncName, phase1Name HandlerName, extra func(*NestMgr), es ...*rollbackTestEntity) *asyncSetEngine {
+	t.Helper()
+	getter := newMockGetter()
+	for _, e := range es {
+		getter.Add(e)
+	}
+	f := &asyncSetEngine{committer: newPipelinedTestCommitter(false), onDispatch: map[string]bool{}, gates: map[string]*hookGate{}, entered: make(chan string, 8)}
+	f.engine = NewEngine(
+		NestOptionWithGetter(getter),
+		NestOptionWithTransactionCommitter(f.committer),
+		NestOptionWithPipelinedAsyncCompletion(2, 64, asyncName.String()),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: workers, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
+	)
+	register := func(name HandlerName, tag string) {
+		f.engine.MustRegisterHandlerWithMeta(name, func(targets []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+			e := targets[0].(*rollbackTestEntity)
+			old := e.dao.Value
+			RecordUndo(e.dao, 1, func() error { e.dao.Value = old; return nil })
+			e.dao.Value++
+			label := tag + strconv.Itoa(e.dao.Value)
+			AfterCommit(func() {
+				onDispatch := currentNestDispatchMsg() != nil
+				if gate := f.gates[label]; gate != nil {
+					f.entered <- label
+					<-gate.ch
+				}
+				f.mu.Lock()
+				f.hooks = append(f.hooks, label)
+				f.onDispatch[label] = onDispatch
+				f.mu.Unlock()
+			})
+			return e.dao.Value, MarkPersist(e.dao, 1)
+		}, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined})
+	}
+	register(asyncName, "A")
+	register(phase1Name, "B")
+	if extra != nil {
+		extra(f.engine)
+	}
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = f.engine.Shutdown(ctx)
+	})
+	// 后注册先执行：用例中途失败时先放行全部回调，Shutdown 才能排空。
+	t.Cleanup(func() {
+		for _, gate := range f.gates {
+			gate.open()
+		}
+		f.committer.resolveAll(nil)
+	})
+	return f
+}
+
+// hookGate 卡住一个 AfterCommit，open 幂等。
+type hookGate struct {
+	ch   chan struct{}
+	once sync.Once
+}
+
+func (g *hookGate) open() { g.once.Do(func() { close(g.ch) }) }
+
+// gate 在请求之前登记：标签为 label 的回调先报 entered，再等返回的 hookGate 放行。
+func (f *asyncSetEngine) gate(label string) *hookGate {
+	g := &hookGate{ch: make(chan struct{})}
+	f.gates[label] = g
+	return g
+}
+
+// request 异步发一个请求，回复（值或错误）进返回的 channel。
+func (f *asyncSetEngine) request(name HandlerName, id int64) chan any {
+	done := make(chan any, 1)
+	go func() {
+		ret, err := f.engine.Request(context.Background(), name, id, nil)
+		if err != nil {
+			done <- err
+			return
+		}
+		done <- ret
+	}()
+	return done
+}
+
+func (f *asyncSetEngine) recorded() ([]string, map[string]bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.hooks), maps.Clone(f.onDispatch)
+}
+
+func awaitSignal[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+	var zero T
+	return zero
+}
+
+func expectSilence[T any](t *testing.T, ch <-chan T, what string) {
+	t.Helper()
+	select {
+	case v := <-ch:
+		t.Fatalf("%s: got %v", what, v)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// 名单 = {A} 的引擎上：A 的事务交给完成泵（派发 worker 在票据落定前就空出来，AfterCommit 在完成池上），B 同样声明
+// pipelined 但不在名单里，保持第一阶段（派发 worker 停在票据上，AfterCommit 在派发 goroutine 上、回复之前执行）。
+func TestAsyncCompletionIsPerHandler(t *testing.T) {
+	asyncName, phase1Name, bystander := NewHandlerName("per_handler_async"), NewHandlerName("per_handler_phase1"), NewHandlerName("per_handler_bystander")
+	idA, entA := newAsyncPilotEntity(t, 9970, 10)
+	idB, entB := newAsyncPilotEntity(t, 9971, 10)
+	idC, entC := newAsyncPilotEntity(t, 9972, 0)
+	f := newAsyncSetEngineWith(t, 1, asyncName, phase1Name, func(engine *NestMgr) {
+		engine.MustRegisterHandlerWithMeta(bystander, func(_ []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+			return "bystander", nil
+		}, HandlerMeta{})
+	}, entA, entB, entC)
+
+	t.Run("named handler uses the completion pump", func(t *testing.T) {
+		replyA := f.request(asyncName, idA)
+		awaitSignal(t, f.committer.enqueued, "A enqueued")
+		if got := awaitSignal(t, f.request(bystander, idC), "bystander while A's ticket is pending"); got != "bystander" {
+			t.Fatalf("bystander = %v", got)
+		}
+		expectSilence(t, replyA, "A replied before its ticket resolved")
+		f.committer.resolveAll(nil)
+		if got := awaitSignal(t, replyA, "A reply"); got != 11 {
+			t.Fatalf("A reply = %v, want 11", got)
+		}
+		waitHooks(t, f, 1)
+		if _, onDispatch := f.recorded(); onDispatch["A11"] {
+			t.Fatal("A's AfterCommit ran on the dispatch goroutine; want the completion pool")
+		}
+	})
+	t.Run("pipelined handler outside the set stays on phase 1", func(t *testing.T) {
+		replyB := f.request(phase1Name, idB)
+		awaitSignal(t, f.committer.enqueued, "B enqueued")
+		other := f.request(bystander, idC)
+		expectSilence(t, other, "bystander ran while B's ticket was pending: the only worker was released (async completion for a handler outside the set)")
+		f.committer.resolveAll(nil)
+		if got := awaitSignal(t, replyB, "B reply"); got != 11 {
+			t.Fatalf("B reply = %v, want 11", got)
+		}
+		hooks, onDispatch := f.recorded()
+		if !slices.Contains(hooks, "B11") {
+			t.Fatalf("B's AfterCommit had not run when B replied: hooks=%v", hooks)
+		}
+		if !onDispatch["B11"] {
+			t.Fatal("B's AfterCommit ran off the dispatch goroutine; want phase 1 (in the dispatch worker, before the reply)")
+		}
+		awaitSignal(t, other, "bystander after B")
+	})
+}
+
+func waitHooks(t *testing.T, f *asyncSetEngine, n int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		hooks, _ := f.recorded()
+		if len(hooks) >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("hooks = %v, want %d", hooks, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// 同一实体先后被异步完成的 A 与第一阶段的 B 修改：AfterCommit 与回复都按 LSN 序。
+//   - A1 → B2 → A3：A1 的 AfterCommit 卡住时，B2 的票据已落定也不能先执行 AfterCommit、先回复（B2 在完成链上排在 A1 后面）；
+//     A3 要等 B2 的作业（含回复）结束才开始（同 ID 准入），所以 A3 的一切都在 B2 之后。
+//   - B1 → A2：A2 要等 B1 的作业结束才开始执行，B1 的 AfterCommit 卡住时 A2 连 Enqueue 都没有发生。
+func TestAsyncAndPhase1CompletionsKeepSameEntityLSNOrder(t *testing.T) {
+	asyncName, phase1Name := NewHandlerName("lsn_order_async"), NewHandlerName("lsn_order_phase1")
+	t.Run("async then phase1 then async", func(t *testing.T) {
+		id, e := newAsyncPilotEntity(t, 9975, 0)
+		f := newAsyncSetEngine(t, 4, asyncName, phase1Name, e)
+		gate := f.gate("A1")
+		replyA1 := f.request(asyncName, id)
+		awaitSignal(t, f.committer.enqueued, "A1 enqueued")
+		replyB2 := f.request(phase1Name, id)
+		awaitSignal(t, f.committer.enqueued, "B2 enqueued")
+		replyA3 := f.request(asyncName, id)
+		expectSilence(t, f.committer.enqueued, "A3 enqueued while B2's job was still running")
+		f.committer.resolveAll(nil) // LSN 1、2 都已持久
+		if got := awaitSignal(t, f.entered, "A1 AfterCommit"); got != "A1" {
+			t.Fatalf("first AfterCommit = %s, want A1", got)
+		}
+		expectSilence(t, replyB2, "B2 replied while A1 (LSN 1) had not completed")
+		if hooks, _ := f.recorded(); len(hooks) != 0 {
+			t.Fatalf("AfterCommit ran ahead of A1: %v", hooks)
+		}
+		gate.open()
+		if got := awaitSignal(t, replyA1, "A1 reply"); got != 1 {
+			t.Fatalf("A1 reply = %v, want 1", got)
+		}
+		if got := awaitSignal(t, replyB2, "B2 reply"); got != 2 {
+			t.Fatalf("B2 reply = %v, want 2", got)
+		}
+		awaitSignal(t, f.committer.enqueued, "A3 enqueued after B2")
+		f.committer.resolveAll(nil)
+		if got := awaitSignal(t, replyA3, "A3 reply"); got != 3 {
+			t.Fatalf("A3 reply = %v, want 3", got)
+		}
+		waitHooks(t, f, 3)
+		hooks, onDispatch := f.recorded()
+		if !slices.Equal(hooks, []string{"A1", "B2", "A3"}) {
+			t.Fatalf("AfterCommit order = %v, want [A1 B2 A3]", hooks)
+		}
+		if onDispatch["A1"] || !onDispatch["B2"] || onDispatch["A3"] {
+			t.Fatalf("AfterCommit goroutines = %v; want A on the completion pool, B on the dispatch goroutine", onDispatch)
+		}
+	})
+	t.Run("phase1 then async", func(t *testing.T) {
+		id, e := newAsyncPilotEntity(t, 9976, 0)
+		f := newAsyncSetEngine(t, 4, asyncName, phase1Name, e)
+		gate := f.gate("B1")
+		replyB1 := f.request(phase1Name, id)
+		awaitSignal(t, f.committer.enqueued, "B1 enqueued")
+		replyA2 := f.request(asyncName, id)
+		expectSilence(t, f.committer.enqueued, "A2 enqueued while B1's job was still running")
+		f.committer.resolveAll(nil)
+		if got := awaitSignal(t, f.entered, "B1 AfterCommit"); got != "B1" {
+			t.Fatalf("first AfterCommit = %s, want B1", got)
+		}
+		expectSilence(t, f.committer.enqueued, "A2 enqueued while B1's AfterCommit was running")
+		expectSilence(t, replyA2, "A2 replied before B1 completed")
+		gate.open()
+		if got := awaitSignal(t, replyB1, "B1 reply"); got != 1 {
+			t.Fatalf("B1 reply = %v, want 1", got)
+		}
+		awaitSignal(t, f.committer.enqueued, "A2 enqueued after B1")
+		f.committer.resolveAll(nil)
+		if got := awaitSignal(t, replyA2, "A2 reply"); got != 2 {
+			t.Fatalf("A2 reply = %v, want 2", got)
+		}
+		waitHooks(t, f, 2)
+		if hooks, _ := f.recorded(); !slices.Equal(hooks, []string{"B1", "A2"}) {
+			t.Fatalf("AfterCommit order = %v, want [B1 A2]", hooks)
+		}
+	})
 }

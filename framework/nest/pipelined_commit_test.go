@@ -534,7 +534,7 @@ func TestPipelinedAdmissionRunsBeforeUnlock(t *testing.T) {
 				// 精确控制持久化时机，无需 sleep：只有释放锁后才 resolve ticket。
 				committer.resolveAll(nil)
 			}
-			_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined}, es, committer, name, release, pump, func() (any, error) {
+			_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined}, es, committer, name, release, completionRoute{pump: pump, deferred: async}, func() (any, error) {
 				tx := CurrentRollbackTx()
 				tx.AfterAdmission(func() {
 					guard := entity.CurrentGuardScope()
@@ -574,7 +574,7 @@ func TestPipelinedAdmissionPanicStillCompletesDurableTransaction(t *testing.T) {
 	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityPipelined}, []entity.IThreadSafeEntity{ent}, committer, "admission-panic", func() {
 		order = append(order, "release")
 		committer.resolveAll(nil)
-	}, nil, func() (any, error) {
+	}, completionRoute{}, func() (any, error) {
 		tx := CurrentRollbackTx()
 		tx.AfterAdmission(func() { panic("admission failed") })
 		tx.AfterAdmission(func() { order = append(order, "admission") })
@@ -610,7 +610,7 @@ func TestPipelinedAdmissionRejectAndEmptyRecord(t *testing.T) {
 				if admitted != 1 {
 					t.Error("empty transaction released before admission callback")
 				}
-			}, nil, func() (any, error) {
+			}, completionRoute{}, func() (any, error) {
 				CurrentRollbackTx().AfterAdmission(func() { admitted++ })
 				if reject {
 					return nil, MarkPersist(ent.dao, 1)

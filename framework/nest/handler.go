@@ -19,6 +19,9 @@ var (
 type handlerEntry struct {
 	handler BaseHandler
 	meta    HandlerMeta
+	// asyncCompletion 只在引擎实例里取得的条目上有意义：本引擎的异步完成名单点名了这个 handler
+	// （NestOptionWithPipelinedAsyncCompletion）。在引擎构造、实例注册、包级回退时解析一次，派发热路径只读它。
+	asyncCompletion bool
 }
 
 // HandlerPatchName 返回 handler 在 hotcode 中的补丁名。
@@ -133,7 +136,10 @@ func (mgr *NestMgr) getHandlerEntry(name HandlerName) (handlerEntry, bool) {
 	}
 	entry, ok := mgr.handlers[name]
 	if !ok {
-		return GetHandlerEntry(name)
+		// 引擎构造之后才注册到包级表的 handler（测试常见；生产在 init 里注册，都在快照里）：在这里解析名单。
+		entry, ok = GetHandlerEntry(name)
+		entry.asyncCompletion = ok && mgr.usesAsyncCompletion(name)
+		return entry, ok
 	}
 	if entry.handler != nil {
 		entry.handler = hotcode.Resolve[BaseHandler](HandlerPatchName(name), entry.handler)
@@ -160,8 +166,14 @@ func (mgr *NestMgr) RegisterHandlerWithMeta(name HandlerName, handler BaseHandle
 	if _, ok := mgr.handlers[name]; ok {
 		return fmt.Errorf("nest: duplicate handler %q", name.String())
 	}
-	mgr.handlers[name] = handlerEntry{handler: handler, meta: meta}
+	mgr.handlers[name] = handlerEntry{handler: handler, meta: meta, asyncCompletion: mgr.usesAsyncCompletion(name)}
 	return nil
+}
+
+// usesAsyncCompletion 报告本引擎的异步完成名单是否点名 name。名单在 NewEngine 之后只读，不加锁。
+func (mgr *NestMgr) usesAsyncCompletion(name HandlerName) bool {
+	_, ok := mgr.asyncCompletion[name]
+	return ok
 }
 
 // MustRegisterHandlerWithMeta 是实例级 RegisterHandlerWithMeta 的 panic 版本。

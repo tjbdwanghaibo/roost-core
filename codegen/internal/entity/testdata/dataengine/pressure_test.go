@@ -225,7 +225,7 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 		t.Fatal(err)
 	}
 	access := entity.NewManagerAccess(entity.NewEntityManager())
-	rt, err := engine.NewRuntime(store, wal, projector, outbox, access, nil, nil, engine.PipelinedRuntimeConfig{Allowlist: []string{"trade_seed", "pressure_update"}, Async: true, AsyncWorkers: 2, AsyncQueueCap: 128})
+	rt, err := engine.NewRuntime(store, wal, projector, outbox, access, nil, nil, engine.PipelinedRuntimeConfig{Allowlist: []string{"trade_seed", "pressure_update"}, AsyncHandlers: []string{"trade_seed", "pressure_update"}, AsyncWorkers: 2, AsyncQueueCap: 128})
 	if err != nil {
 		t.Fatal(err)
 	}

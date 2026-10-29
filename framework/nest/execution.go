@@ -13,8 +13,9 @@ import (
 )
 
 // invokeHandlerTransaction 是派发侧进入消息自己事务的唯一入口：在任何 handler 代码运行前检查 pipelined
-// 白名单，提供引擎的完成泵，记录这次派发持有实体锁的时长；提交结果不确定时 fence 引擎。
-func (mgr *NestMgr) invokeHandlerTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, name string, releaseLocks func(), call func() (any, error)) (any, error) {
+// 白名单，按 handler 给出完成路线（entry.asyncCompletion），记录这次派发持有实体锁的时长；提交结果不确定时 fence 引擎。
+func (mgr *NestMgr) invokeHandlerTransaction(entry handlerEntry, es []entity.IThreadSafeEntity, name string, releaseLocks func(), call func() (any, error)) (any, error) {
+	meta := entry.meta
 	if meta.Durability == DurabilityPipelined && mgr != nil && mgr.pipelinedAllow != nil {
 		if _, ok := mgr.pipelinedAllow[name]; !ok {
 			return nil, fmt.Errorf("%w: %q", ErrPipelinedNotAllowed, name)
@@ -37,7 +38,8 @@ func (mgr *NestMgr) invokeHandlerTransaction(meta HandlerMeta, es []entity.IThre
 			releaseLocks()
 		}
 	}
-	ret, err := invokeWithTransaction(meta, es, mgr.committer, name, wrappedRelease, mgr.completions, call, mgr.entitySync)
+	route := completionRoute{pump: mgr.completions, deferred: entry.asyncCompletion}
+	ret, err := invokeWithTransaction(meta, es, mgr.committer, name, wrappedRelease, route, call, mgr.entitySync)
 	if errors.Is(err, ErrCommitIndeterminate) {
 		mgr.Fence(err)
 	}
@@ -61,7 +63,7 @@ func RunDetachedTransaction(ctx context.Context, committer TransactionCommitter,
 	}
 	release := fctx.BindBase(ctx)
 	defer release()
-	return runTransaction(false, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, nil, committer, handler, nil, nil, call)
+	return runTransaction(false, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, nil, committer, handler, nil, completionRoute{}, call)
 }
 
 // RunIsolatedTransaction 总是新建自己的 strict 持久事务，即使在已有 Nest handler 内调用。它用于提交点不能随外层
@@ -85,12 +87,12 @@ func RunIsolatedTransaction(ctx context.Context, committer TransactionCommitter,
 	}
 	release := fctx.BindBase(ctx)
 	defer release()
-	return runTransaction(false, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, nil, committer, handler, nil, nil, call)
+	return runTransaction(false, HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, nil, committer, handler, nil, completionRoute{}, call)
 }
 
 // invokeWithTransaction 是消息自己的事务入口（invokeHandlerTransaction）：它可以认领当前派发的消息。
-func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, committer TransactionCommitter, handler string, releaseLocks func(), completions *completionPump, call func() (any, error), observers ...entity.SyncCommitObserver) (any, error) {
-	return runTransaction(true, meta, es, committer, handler, releaseLocks, completions, call, observers...)
+func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, committer TransactionCommitter, handler string, releaseLocks func(), route completionRoute, call func() (any, error), observers ...entity.SyncCommitObserver) (any, error) {
+	return runTransaction(true, meta, es, committer, handler, releaseLocks, route, call, observers...)
 }
 
 // runTransaction 管理一次业务调用的回滚、准入和完成边界。顺序：
@@ -101,12 +103,12 @@ func invokeWithTransaction(meta HandlerMeta, es []entity.IThreadSafeEntity, comm
 //  5. 带 Remote 批次的消息先 finalize 批次，再按 pipelined / 持久提交收尾。
 //
 // releaseLocks 必须幂等：pipelined 在准入后提前释放，dispatch 还会 defer 兜底释放。没有 releaseLocks 的广播路径
-// 保持锁内提交；有完成池时可转移 WAL 等待和回复的所有权，队列满则在当前 worker 等待。Remote 批次保留两阶段
-// 最终确认协议，走 strict 路径。
+// 保持锁内提交；route 点名异步完成（route.deferred）时可把 WAL 等待和回复的所有权转给完成泵，队列满则在当前 worker
+// 等待。Remote 批次保留两阶段最终确认协议，走 strict 路径。
 //
 // claimsMessage 为真只来自 invokeWithTransaction（消息自己的事务入口）；RunIsolatedTransaction / RunDetachedTransaction
 // 新建的事务传假，任何时刻都不认领当前派发的消息。
-func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSafeEntity, committer TransactionCommitter, handler string, releaseLocks func(), completions *completionPump, call func() (any, error), observers ...entity.SyncCommitObserver) (ret any, err error) {
+func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSafeEntity, committer TransactionCommitter, handler string, releaseLocks func(), route completionRoute, call func() (any, error), observers ...entity.SyncCommitObserver) (ret any, err error) {
 	if meta.Durability == durabilityUnset {
 		// 注册表里的 meta 已在注册时归一（validateHandlerMeta）；这里只兜包内直接传 meta 的调用。
 		if meta.Rollback != RollbackNone {
@@ -233,7 +235,7 @@ func runTransaction(claimsMessage bool, meta HandlerMeta, es []entity.IThreadSaf
 		}
 	}
 	if pipelinedCommitter != nil {
-		return ret, tx.commitPipelined(ctx, pipelinedCommitter, es, releaseLocks, completions, msg, ret)
+		return ret, tx.commitPipelined(ctx, pipelinedCommitter, es, releaseLocks, route, msg, ret)
 	}
 	return ret, tx.commitDurable(ctx, committer, msg)
 }
@@ -334,9 +336,13 @@ func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCo
 	return tx.Commit()
 }
 
-// commitPipelined 是 pipelined 提交：锁内准备并 Enqueue（唯一拒绝点），提前放锁，然后等记录持久后完成。
-// 有完成泵时 WAL 等待与回复交给 completion（队列满则在本 worker 等待），本函数返回后调用方不再回复或操作 tx。
-func (tx *RollbackTx) commitPipelined(ctx context.Context, committer PipelinedTransactionCommitter, es []entity.IThreadSafeEntity, releaseLocks func(), pump *completionPump, msg *Msg, ret any) error {
+// commitPipelined 是 pipelined 提交：锁内准备并 Enqueue（唯一拒绝点），提前放锁，然后等记录持久后完成。完成按 route 分三种：
+//   - route.deferred（handler 被点名异步完成）：WAL 等待与回复交给完成泵（队列满则在本 worker 等待），本函数返回后
+//     调用方不再回复或操作 tx；
+//   - 引擎有完成泵、handler 没被点名：第一阶段——本 worker 等票据、AfterCommit 在这里执行、回复照常由派发路径发送；
+//     但锁内在完成链上占位，AfterCommit 之前等同实体前驱（可能是完成池上的异步完成）结束，保持同实体 LSN 序；
+//   - 没有完成泵：纯第一阶段。
+func (tx *RollbackTx) commitPipelined(ctx context.Context, committer PipelinedTransactionCommitter, es []entity.IThreadSafeEntity, releaseLocks func(), route completionRoute, msg *Msg, ret any) error {
 	// 准备和 Enqueue 是锁内的拒绝边界；准入后只允许完成或报告结果不确定。
 	ticket, err := tx.pipelinedEnqueue(ctx, committer)
 	if ticket != nil {
@@ -358,9 +364,9 @@ func (tx *RollbackTx) commitPipelined(ctx context.Context, committer PipelinedTr
 		txID := tx.ID()
 		tx.AfterCommit(func() { notifier.TransactionReleased(txID) })
 	}
-	if ticket != nil && pump != nil && msg != nil {
+	if ticket != nil && route.deferred && route.pump != nil && msg != nil {
 		// 排序位置在锁内占用；完成执行还必须等待所有实体实际解锁。
-		handoff := prepareCompletion(pump, msg, es, tx, ticket, tx.handler, ret)
+		handoff := prepareCompletion(route.pump, msg, es, tx, ticket, tx.handler, ret)
 		if !handoff.deferred {
 			defer handoff.releaseOrder()
 		}
@@ -377,6 +383,13 @@ func (tx *RollbackTx) commitPipelined(ctx context.Context, committer PipelinedTr
 		// 两种路径的回复均归 complete，调用方不再回复或操作 tx。
 		return nil
 	}
+	var order *completionOrder
+	if ticket != nil && route.pump != nil {
+		// 第一阶段事务与异步完成事务可能落在同一实体上：仍持锁时在完成链上占位（链序 = LSN 序），返回前释放。
+		// 同 ID 的后继要等本作业（含回复）结束才开始，所以只有“前驱是异步完成”需要在这里等；占位让顺序不依赖这一点。
+		order = route.pump.link(completionEntityID(es, msg))
+		defer order.release()
+	}
 	releaseErr := releaseAfterAdmission(releaseLocks)
 	if ticket != nil {
 		waitStart := time.Now()
@@ -389,6 +402,11 @@ func (tx *RollbackTx) commitPipelined(ctx context.Context, committer PipelinedTr
 			tx.abandon()
 			return errors.Join(releaseErr, err)
 		}
+	}
+	if order != nil {
+		orderStart := startNestStage(tx.stageMetrics)
+		order.await()
+		observeNestStage(tx.handler, "completion_order", orderStart)
 	}
 	// 记录已持久（或没有需要持久的内容）：此后的释放 / 回调错误由 dispatchNest 包 ErrAfterCommitFailed。
 	tx.dispatch.markTransactionCommitted()

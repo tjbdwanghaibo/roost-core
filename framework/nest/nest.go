@@ -205,9 +205,14 @@ type NestMgr struct {
 	// pipelinedAllow 非 nil 时是允许使用 DurabilityPipelined 的 handler 名单；nil 允许全部（开发默认）。
 	// 生产部署应固定名单，避免 handler 未经评审就采用提前放锁。
 	pipelinedAllow map[string]struct{}
-	// completions 非 nil 时启用 pipelined 第二阶段异步完成：派发 worker 把持久之后的工作（AfterCommit、
-	// 回复）交给完成泵，不在提交票据上等待。nil 时保持第一阶段在 worker 内等待。
+	// completions 非 nil 时，NestOptionWithPipelinedAsyncCompletion 点名的 pipelined handler（handlerEntry.asyncCompletion）
+	// 启用第二阶段异步完成：派发 worker 把持久之后的工作（AfterCommit、回复）交给完成泵，不在提交票据上等待。其余
+	// pipelined handler 仍是第一阶段在 worker 内等待，只在完成链上排队（同实体 LSN 序，见 commitPipelined）。nil 时
+	// 全部 pipelined handler 都是第一阶段。
 	completions *completionPump
+	// asyncCompletion 是启用异步完成的 handler 名单（冷路径用：注册与包级注册表回退时解析出 handlerEntry.asyncCompletion，
+	// 派发热路径只读那个布尔）。完成泵存在当且仅当名单非空。
+	asyncCompletion map[HandlerName]struct{}
 }
 
 func (mgr *NestMgr) groupLockManager() *entityLockGroupLockManager {
@@ -297,7 +302,7 @@ type NestOpts struct {
 	Committer              TransactionCommitter
 	EntitySync             entity.SyncCommitObserver
 	PipelinedAllowlist     []string
-	PipelinedAsync         bool
+	PipelinedAsyncHandlers []string
 	PipelinedAsyncWorkers  int
 	PipelinedAsyncQueueCap int
 	SlowLockThreshold      time.Duration
@@ -368,13 +373,18 @@ var (
 			opts.PipelinedAllowlist = append(opts.PipelinedAllowlist, names...)
 		}
 	}
-	// NestOptionWithPipelinedAsyncCompletion 启用 pipelined 提交第二阶段：派发 worker 不再在提交票据上等待，
-	// 记录持久后 AfterCommit 与回复在完成池执行（按实体哈希，同实体的完成保持提交顺序）。因此这些回调不带请求
-	// 上下文、也不持实体锁；启用前先读 NEST_PIPELINED_COMMIT.md §10。workers 与 queueCap <= 0 取默认值
-	// （4、8192）；队列满时单笔事务降级为第一阶段的 worker 内等待。
-	NestOptionWithPipelinedAsyncCompletion = func(workers, queueCap int) NestOption {
+	// NestOptionWithPipelinedAsyncCompletion 让 handlers 点名的 pipelined handler 使用提交第二阶段（异步完成）：派发 worker
+	// 不再在提交票据上等待，记录持久后 AfterCommit 与回复在完成池执行（按实体哈希，同实体的完成保持提交顺序）。因此
+	// 这些回调不带请求上下文、也不持实体锁；启用前先读 NEST_PIPELINED_COMMIT.md §11。
+	//
+	// 按 handler 生效（维护者 2026-10-29 决定）：没点名的 pipelined handler 保持第一阶段，worker 在票据上等、AfterCommit
+	// 在派发 goroutine 上回复之前执行；handlers 为空等于不开异步完成（不建完成泵），没有“全部”通配。点名的 handler
+	// 不是 pipelined 时没有作用（异步完成只改 pipelined 的完成路径）。多次调用名单累加，workers 与 queueCap 取最后一次。
+	//
+	// workers 与 queueCap <= 0 取默认值（4、8192）；队列满时单笔事务降级为第一阶段的 worker 内等待。
+	NestOptionWithPipelinedAsyncCompletion = func(workers, queueCap int, handlers ...string) NestOption {
 		return func(opts *NestOpts) {
-			opts.PipelinedAsync = true
+			opts.PipelinedAsyncHandlers = append(opts.PipelinedAsyncHandlers, handlers...)
 			opts.PipelinedAsyncWorkers = workers
 			opts.PipelinedAsyncQueueCap = queueCap
 		}
@@ -416,7 +426,16 @@ func NewEngine(opts ...NestOption) *NestMgr {
 			ret.pipelinedAllow[name] = struct{}{}
 		}
 	}
-	if params.PipelinedAsync {
+	if len(params.PipelinedAsyncHandlers) > 0 {
+		ret.asyncCompletion = make(map[HandlerName]struct{}, len(params.PipelinedAsyncHandlers))
+		for _, name := range params.PipelinedAsyncHandlers {
+			ret.asyncCompletion[NewHandlerName(name)] = struct{}{}
+		}
+		// 注册时解析：快照里的条目在这里定下 asyncCompletion，派发时不再按名字查名单。
+		for name, entry := range ret.handlers {
+			entry.asyncCompletion = ret.usesAsyncCompletion(name)
+			ret.handlers[name] = entry
+		}
 		ret.completions = newCompletionPump(params.PipelinedAsyncWorkers, params.PipelinedAsyncQueueCap)
 		ret.completions.fence = ret.Fence
 	}

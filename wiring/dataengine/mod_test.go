@@ -568,16 +568,17 @@ func TestDataEngineModDeclaresShutdownTimeoutAsStopBudget(t *testing.T) {
 	}
 }
 
-// 维护者 2026-10-29 决定：只有 saga 原生步骤用 pipelined + Nest 异步完成，其他 handler 照旧。Init 由本进程登记的 pipelined
-// 原生步骤（saga.MustRegisterNativeStepHandler）得出 Nest 的 pipelined 设置：异步完成不写时自动打开、显式 false 拒绝启动；
-// 写了白名单时补上这些 handler，没写（全部允许）时不收窄；声明 strict 的原生步骤与普通 handler 不影响结论。
+// 维护者 2026-10-29 决定：Nest 异步完成按 handler 生效，只给 saga 原生步骤用，其他 handler 照旧。Init 由本进程登记的
+// pipelined 原生步骤（saga.MustRegisterNativeStepHandler）得出 Nest 的 pipelined 设置：异步完成名单恰好是这些原生步骤
+// （没有就为空，Nest 不建完成池），没有配置项；写了白名单时补上它们，没写（全部允许）时不收窄；声明 strict 的原生步骤
+// 与普通 handler（含自己声明 pipelined 的）不进异步完成名单。
 func TestDataEngineModDerivesPipelinedSettingsFromSagaNativeSteps(t *testing.T) {
 	t.Cleanup(func() {
 		corenest.ResetHandlersForTest()
 		coresaga.ResetNativeStepHandlersForTest()
 	})
 	noop := func([]entity.IThreadSafeEntity, []any, ...corenest.HandlerOption) (any, error) { return nil, nil }
-	initWith := func(t *testing.T, keys map[string]any) (engine.PipelinedRuntimeConfig, error) {
+	initWith := func(t *testing.T, keys map[string]any) (engine.PipelinedRuntimeConfig, []corenest.NestOption, error) {
 		t.Helper()
 		cfg := viper.New()
 		cfg.Set("persistence.engine", "dataengine")
@@ -586,31 +587,36 @@ func TestDataEngineModDerivesPipelinedSettingsFromSagaNativeSteps(t *testing.T) 
 		}
 		mod := NewMod(WithEntityAccess(entity.NewManagerAccess(entity.NewEntityManager())))
 		err := mod.Init(cfg)
-		return mod.cfg.pipelined, err
+		return mod.cfg.pipelined, mod.NestOptions(), err
+	}
+	asyncHandlers := func(options []corenest.NestOption) []string {
+		var opts corenest.NestOpts
+		for _, option := range options {
+			option(&opts)
+		}
+		return opts.PipelinedAsyncHandlers
 	}
 
-	// 只有普通 handler（含一个显式 pipelined 的）与 strict 原生步骤：设置与配置一字不差。
+	// 只有普通 handler（含一个显式 pipelined 的）与 strict 原生步骤：异步完成名单为空，Nest 不建完成池。
 	corenest.MustRegisterHandlerWithMeta(corenest.NewHandlerName("test_plain_pipelined"), noop, corenest.HandlerMeta{Rollback: corenest.RollbackUndo, Durability: corenest.DurabilityPipelined})
 	coresaga.MustRegisterNativeStepHandler(corenest.NewHandlerName("test_step_strict"), noop, corenest.HandlerMeta{Rollback: corenest.RollbackUndo, Durability: corenest.DurabilityStrict})
-	if got, err := initWith(t, nil); err != nil || got.Async || got.Allowlist != nil {
-		t.Fatalf("without pipelined native steps: %+v, %v; want the configured (empty) settings", got, err)
+	if got, options, err := initWith(t, nil); err != nil || got.AsyncHandlers != nil || got.Allowlist != nil || asyncHandlers(options) != nil {
+		t.Fatalf("without pipelined native steps: %+v, %v; want no async completion and the configured (empty) allowlist", got, err)
 	}
-	if got, err := initWith(t, map[string]any{"nest.pipelined.async": false, "nest.pipelined.allowlist": []string{"test_plain_pipelined"}}); err != nil || got.Async || !slices.Equal(got.Allowlist, []string{"test_plain_pipelined"}) {
+	if got, _, err := initWith(t, map[string]any{"nest.pipelined.allowlist": []string{"test_plain_pipelined"}, "nest.pipelined.async_workers": 3}); err != nil || got.AsyncHandlers != nil || got.AsyncWorkers != 3 || !slices.Equal(got.Allowlist, []string{"test_plain_pipelined"}) {
 		t.Fatalf("without pipelined native steps, explicit settings: %+v, %v", got, err)
 	}
 
 	coresaga.MustRegisterNativeStepHandler(corenest.NewHandlerName("test_step_pipelined"), noop, corenest.HandlerMeta{Rollback: corenest.RollbackUndo, Durability: corenest.DurabilityPipelined})
-	if got, err := initWith(t, nil); err != nil || !got.Async || got.Allowlist != nil {
-		t.Fatalf("pipelined native step, nothing configured: %+v, %v; want async on and the allow-all list left alone", got, err)
+	got, options, err := initWith(t, nil)
+	if err != nil || !slices.Equal(got.AsyncHandlers, []string{"test_step_pipelined"}) || got.Allowlist != nil {
+		t.Fatalf("pipelined native step, nothing configured: %+v, %v; want async completion for exactly the native step and the allow-all list left alone", got, err)
 	}
-	got, err := initWith(t, map[string]any{"nest.pipelined.allowlist": []string{"test_plain_pipelined"}, "nest.pipelined.async_queue_capacity": 128})
-	if err != nil || !got.Async || got.AsyncQueueCap != 128 || !slices.Equal(got.Allowlist, []string{"test_plain_pipelined", "test_step_pipelined"}) {
-		t.Fatalf("pipelined native step with a configured allowlist: %+v, %v; want the step appended and async on", got, err)
+	if names := asyncHandlers(options); !slices.Equal(names, []string{"test_step_pipelined"}) {
+		t.Fatalf("Nest options name async handlers %v; want only the pipelined native step (not test_plain_pipelined)", names)
 	}
-	if got, err := initWith(t, map[string]any{"nest.pipelined.async": true}); err != nil || !got.Async {
-		t.Fatalf("explicit async=true: %+v, %v", got, err)
-	}
-	if _, err := initWith(t, map[string]any{"nest.pipelined.async": false}); err == nil || !strings.Contains(err.Error(), "test_step_pipelined") || !strings.Contains(err.Error(), "nest.pipelined.async is false") {
-		t.Fatalf("explicit async=false with a pipelined native step: Init = %v, want a refusal naming the handler", err)
+	got, _, err = initWith(t, map[string]any{"nest.pipelined.allowlist": []string{"test_plain_pipelined"}, "nest.pipelined.async_queue_capacity": 128})
+	if err != nil || !slices.Equal(got.AsyncHandlers, []string{"test_step_pipelined"}) || got.AsyncQueueCap != 128 || !slices.Equal(got.Allowlist, []string{"test_plain_pipelined", "test_step_pipelined"}) {
+		t.Fatalf("pipelined native step with a configured allowlist: %+v, %v; want the step appended and async completion for it only", got, err)
 	}
 }

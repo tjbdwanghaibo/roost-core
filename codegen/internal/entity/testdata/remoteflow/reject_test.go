@@ -323,7 +323,7 @@ func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis 
 		default:
 		}
 	}
-	rig.runtime, err = engine.NewRuntime(store, rig.wal, projector, outbox, rig.access, assembly.Manager, onFatal, engine.PipelinedRuntimeConfig{Allowlist: []string{rig.write.String()}, Async: true, AsyncWorkers: 2, AsyncQueueCap: 32})
+	rig.runtime, err = engine.NewRuntime(store, rig.wal, projector, outbox, rig.access, assembly.Manager, onFatal, engine.PipelinedRuntimeConfig{Allowlist: []string{rig.write.String()}, AsyncHandlers: []string{rig.write.String()}, AsyncWorkers: 2, AsyncQueueCap: 32})
 	if err != nil {
 		t.Fatal(err)
 	}

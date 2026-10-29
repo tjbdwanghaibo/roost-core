@@ -689,7 +689,7 @@ func (mgr *NestMgr) invokeTryBatchTransaction(meta HandlerMeta, es []entity.IThr
 			return nil, fmt.Errorf("%w: %q", ErrPipelinedNotAllowed, name)
 		}
 	}
-	ret, err := invokeWithTransaction(meta, es, mgr.committer, name, nil, nil, call, mgr.entitySync)
+	ret, err := invokeWithTransaction(meta, es, mgr.committer, name, nil, completionRoute{}, call, mgr.entitySync)
 	if errors.Is(err, ErrCommitIndeterminate) {
 		mgr.Fence(err)
 	}

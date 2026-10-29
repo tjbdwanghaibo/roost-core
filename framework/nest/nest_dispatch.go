@@ -485,7 +485,7 @@ func (mgr *NestMgr) dispatchLoadedEntities(entry handlerEntry, name string, es, 
 			slog.Error("nest entity release panic", "handler", name, "err", err)
 		}
 	}()
-	return mgr.invokeHandlerTransaction(entry.meta, es, name, release, func() (any, error) {
+	return mgr.invokeHandlerTransaction(entry, es, name, release, func() (any, error) {
 		msg := currentNestDispatchMsg()
 		if msg != nil {
 			msg.handlerEntities = es
@@ -651,7 +651,7 @@ func (mgr *NestMgr) broadcastDispatch(name string, ids []int64, params []any) {
 			}()
 			oneEntity[0] = e
 			// 广播没有提前放锁闭包：pipelined handler 在这条路径上按 strict 锁内提交执行。
-			if _, err := mgr.invokeHandlerTransaction(entry.meta, oneEntity, name, nil, func() (any, error) {
+			if _, err := mgr.invokeHandlerTransaction(entry, oneEntity, name, nil, func() (any, error) {
 				return entry.handler(oneEntity, params)
 			}); err != nil {
 				slog.Debug("nest broadcast handler failed", "id", meta.FullID, "handler", name, "err", err)

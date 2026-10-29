@@ -27,6 +27,14 @@ const (
 	defaultCompletionQueueCap = 8192
 )
 
+// completionRoute 是一笔事务的 pipelined 完成路线。pump 是引擎的完成泵（nil = 本引擎没有异步完成）；deferred 表示
+// 本事务的 handler 被 NestOptionWithPipelinedAsyncCompletion 点名使用异步完成（按 handler，维护者 2026-10-29 决定）。
+// pump 非 nil 而 deferred 为假：第一阶段 worker 内等待，只在完成链上占位（见 commitPipelined）。
+type completionRoute struct {
+	pump     *completionPump
+	deferred bool
+}
+
 // pipelinedCompletion 是提交给完成泵的一项：等 ticket 持久后执行 complete。
 type pipelinedCompletion struct {
 	ticket      CommitTicket

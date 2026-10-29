@@ -166,8 +166,7 @@ type config struct {
 	Effects   EffectsConfig `config:"dataengine.effects"`
 	Pipelined struct {
 		Allowlist          []string `config:"allowlist" example:"[]" help:"允许 durability=pipelined 的 handler；空表示全部允许。声明 pipelined 的 saga 原生步骤 handler 由框架自动加入，不用写"`
-		Async              bool     `config:"async" help:"pipelined 提交的异步完成（只影响 pipelined 事务）。不写时：本进程有声明 pipelined 的 saga 原生步骤就自动打开，否则关闭；\n有这类原生步骤时写 false 拒绝启动（把它们改回 durability=strict，或删掉这一行）"`
-		AsyncWorkers       int      `config:"async_workers" min:"0" example:"8"`
+		AsyncWorkers       int      `config:"async_workers" min:"0" example:"8" help:"异步完成池的 worker 数（0 取缺省 4）。异步完成只给本进程声明 durability=pipelined 的 saga 原生步骤 handler 用，\n没有这类 handler 时不建完成池、本项不起作用"`
 		AsyncQueueCapacity int      `config:"async_queue_capacity" min:"0" example:"4096" help:"完成队列容量（0 取缺省 8192）；队列满时该事务降级为在派发 worker 上等 WAL，计 nest.pipelined.async_total{result=\"degraded\"}"`
 	} `config:"nest.pipelined"`
 }
@@ -198,14 +197,10 @@ func (mod *Mod) ConfigSchema() app.ConfigSchema { return app.SchemaOf(config{}) 
 
 func (mod *Mod) Init(cfg *viper.Viper) error {
 	var settings config
-	present, err := app.LoadConfigWithPresence(cfg, &settings)
-	if err != nil {
+	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return fmt.Errorf("dataengine mod: %w", err)
 	}
-	pipelined, err := pipelinedSettings(settings, present["nest.pipelined.async"], coresaga.PipelinedNativeStepHandlers())
-	if err != nil {
-		return err
-	}
+	pipelined := pipelinedSettings(settings, coresaga.PipelinedNativeStepHandlers())
 	sid := settings.Sid
 	dir := walDir(settings.WAL.Dir, sid)
 	wal := nestwal.DefaultOptions(dir)
@@ -288,27 +283,23 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 }
 
 // pipelinedSettings 由 nest.pipelined.* 与本进程登记的 pipelined 原生步骤 handler（saga.PipelinedNativeStepHandlers）
-// 得出 Nest 的 pipelined 设置（维护者 2026-10-29 决定：只有 saga 原生步骤用 pipelined + 异步完成，其他 handler 照旧）。
+// 得出 Nest 的 pipelined 设置（维护者 2026-10-29 决定：Nest 异步完成按 handler 生效，只给 saga 原生步骤用；其他 handler
+// 照旧，包括自己声明 pipelined 的——它们仍在派发 worker 上等票据，不会悄悄得到异步完成）。
 //
 //   - 白名单：配置写了名单时把这些原生步骤补进去；没写（空 = 全部允许）时不动——补名字会把“全部允许”收窄成只剩原生步骤，
 //     改变别的 handler 的行为。
-//   - 异步完成：nest.pipelined.async 不写时有这类原生步骤就打开；显式写 false 拒绝启动并点名 handler——不悄悄覆盖部署的
-//     明确选择，也不悄悄退回 strict。异步完成只作用于 pipelined 事务（execution.go commitPipelined），strict / async /
-//     memory handler 不经过完成泵。
+//   - 异步完成名单就是这些原生步骤，没有配置项：没有这类原生步骤时名单为空，Nest 不建完成池。
 //
 // 声明 strict 的原生步骤不在名单里，不受这里影响。规则只在这里（Init）执行一次，engine.Runtime 与 NestOptions 用结果。
-func pipelinedSettings(settings config, asyncSet bool, nativeSteps []string) (engine.PipelinedRuntimeConfig, error) {
+func pipelinedSettings(settings config, nativeSteps []string) engine.PipelinedRuntimeConfig {
 	result := engine.PipelinedRuntimeConfig{
-		Allowlist: settings.Pipelined.Allowlist, Async: settings.Pipelined.Async,
+		Allowlist:    settings.Pipelined.Allowlist,
 		AsyncWorkers: settings.Pipelined.AsyncWorkers, AsyncQueueCap: settings.Pipelined.AsyncQueueCapacity,
 	}
 	if len(nativeSteps) == 0 {
-		return result, nil
+		return result
 	}
-	if asyncSet && !result.Async {
-		return result, fmt.Errorf("dataengine mod: nest.pipelined.async is false, but saga native step handlers %v declare durability=pipelined, which needs Nest async completion: delete the key (native steps turn it on) or set it true, or declare those handlers durability=strict", nativeSteps)
-	}
-	result.Async = true
+	result.AsyncHandlers = slices.Clone(nativeSteps)
 	if len(result.Allowlist) > 0 {
 		allowlist := slices.Clone(result.Allowlist)
 		for _, name := range nativeSteps {
@@ -320,7 +311,7 @@ func pipelinedSettings(settings config, asyncSet bool, nativeSteps []string) (en
 	}
 	slog.Info("dataengine mod: saga native steps use pipelined durability with Nest async completion",
 		"handlers", nativeSteps, "allowlist_configured", len(settings.Pipelined.Allowlist) > 0)
-	return result, nil
+	return result
 }
 
 // subjectPrefix 是去掉首尾点的主题前缀；只写了点时取缺省。
@@ -461,8 +452,8 @@ func (mod *Mod) NestOptions() []corenest.NestOption {
 	if len(mod.cfg.pipelined.Allowlist) > 0 {
 		options = append(options, corenest.NestOptionWithPipelinedAllowlist(mod.cfg.pipelined.Allowlist...))
 	}
-	if mod.cfg.pipelined.Async {
-		options = append(options, corenest.NestOptionWithPipelinedAsyncCompletion(mod.cfg.pipelined.AsyncWorkers, mod.cfg.pipelined.AsyncQueueCap))
+	if len(mod.cfg.pipelined.AsyncHandlers) > 0 {
+		options = append(options, corenest.NestOptionWithPipelinedAsyncCompletion(mod.cfg.pipelined.AsyncWorkers, mod.cfg.pipelined.AsyncQueueCap, mod.cfg.pipelined.AsyncHandlers...))
 	}
 	return options
 }

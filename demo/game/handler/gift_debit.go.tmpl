@@ -30,8 +30,9 @@ import (
 // durability=pipelined is the recommended setting for a native step: the
 // Player lock is released once the WAL record is queued, and the result still
 // leaves only after the record is durable. The framework adds this handler to
-// the Nest pipelined allowlist and turns on async completion, so the WAL wait
-// does not hold a Nest short-pool worker (roost-core SAGA.md, 原生步骤的提交方式).
+// the Nest pipelined allowlist and turns on Nest async completion for it (only
+// native steps get it), so the WAL wait does not hold a Nest short-pool worker
+// (roost-core SAGA.md, 原生步骤的提交方式).
 //
 //roost:nest rollback=undo durability=pipelined
 func handlerGiftDebit(target player.IBagEntity, itemID int64, count int32, step saga.NativeStep) (int32, error) {

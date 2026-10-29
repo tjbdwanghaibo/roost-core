@@ -104,7 +104,7 @@ func TestGeneratedDataEngineProcessLifecycle(t *testing.T) {
 			access := entity.NewManagerAccess(entity.NewEntityManager())
 			name := nest.NewHandlerName("generated_increment")
 			rollbackName := nest.NewHandlerName("generated_rollback")
-			runtime, err := engine.NewRuntime(store, wal, projector, outbox, access, nil, nil, engine.PipelinedRuntimeConfig{Allowlist: []string{name.String(), rollbackName.String()}, Async: true, AsyncWorkers: 2, AsyncQueueCap: 128})
+			runtime, err := engine.NewRuntime(store, wal, projector, outbox, access, nil, nil, engine.PipelinedRuntimeConfig{Allowlist: []string{name.String(), rollbackName.String()}, AsyncHandlers: []string{name.String(), rollbackName.String()}, AsyncWorkers: 2, AsyncQueueCap: 128})
 			if err != nil {
 				t.Fatal(err)
 			}

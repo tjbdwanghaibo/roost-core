@@ -303,7 +303,7 @@ func TestGeneratedRemoteNestFlow(t *testing.T) {
 			}
 			update, reject, panicName := nest.NewHandlerName("remote_update"), nest.NewHandlerName("remote_reject"), nest.NewHandlerName("remote_panic")
 			warmup := nest.NewHandlerName("remote_warmup")
-			runtime, err := engine.NewRuntime(store, wal, projector, outbox, access, assembly.Manager, nil, engine.PipelinedRuntimeConfig{Allowlist: []string{update.String(), reject.String(), panicName.String()}, Async: true, AsyncWorkers: 2, AsyncQueueCap: 32})
+			runtime, err := engine.NewRuntime(store, wal, projector, outbox, access, assembly.Manager, nil, engine.PipelinedRuntimeConfig{Allowlist: []string{update.String(), reject.String(), panicName.String()}, AsyncHandlers: []string{update.String(), reject.String(), panicName.String()}, AsyncWorkers: 2, AsyncQueueCap: 32})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -224,7 +224,9 @@ return left, step.Complete(true, "")
 #### 原生步骤的提交方式（维护者 2026-10-29 决定）
 
 **推荐 `durability=pipelined`，由框架配好 Nest 的 pipelined 白名单与异步完成；`strict` 仍是合法的显式选择。** 其他 handler 不受影响：
-它们照旧按自己的声明提交（不写时 async），Nest 的 short / long / io 池缺省不变，也没有专门的 saga 池。
+它们照旧按自己的声明提交（不写时 async），Nest 的 short / long / io 池缺省不变，也没有专门的 saga 池。Nest 异步完成**按 handler 生效**，
+只给声明 pipelined 的原生步骤：同一进程里别的代码也可以声明 pipelined（例如心跳的 `heartbeat.WithDurability(nest.DurabilityPipelined)`），
+但仍是第一阶段（派发 worker 等票据、AfterCommit 在派发 goroutine 上、回复之前执行），不会悄悄得到异步完成。
 
 **为什么**：原生步骤跑在参与方 Nest 的 short 池上。`strict` 在锁内等所在 group commit 的 fsync，worker 整段被占住；生产缺省 short 池只有
 GOMAXPROCS 个 worker，步骤一多，同进程其他实体的消息就排队。`pipelined` 在 WAL 记录入队后就放实体锁，异步完成再把“等落盘 → AfterCommit →
@@ -245,12 +247,16 @@ GOMAXPROCS 个 worker，步骤一多，同进程其他实体的消息就排队�
   `//roost:nest rollback=undo durability=pipelined`。
 - `wiring/dataengine` 的 Init（规则只执行这一次）按声明 pipelined 的原生步骤得出 Nest 的 pipelined 设置：
   - `nest.pipelined.allowlist` 写了名单时把这些 handler 补进去；没写（空 = 全部允许）时不动——补名字会把“全部允许”收窄、改变别的 handler；
-  - `nest.pipelined.async` 不写时自动打开；**显式写 `false` 拒绝启动**，错误点名这些 handler（删掉这一行或写 `true`，或把它们改回
-    `durability=strict`）——不悄悄覆盖部署的明确选择，也不悄悄退回 strict。没有这类原生步骤时两项都按配置原样生效。
-- 异步完成只作用于 pipelined 事务：`framework/nest/execution.go` 里只有 `meta.Durability == DurabilityPipelined` 的事务拿到 pipelined
-  committer、进入 `commitPipelined` 与完成泵，strict / async / memory 走 `commitDurable` 或内存路径（`TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged`
-  对照开 / 关两种引擎）；白名单让未列入的 handler 声明 pipelined 也只会在派发时得到 `ErrPipelinedNotAllowed`，不会被悄悄放开。
-- 手写装配（不经 `wiring/dataengine`）自己传 `nest.NestOptionWithPipelinedAllowlist` 与 `NestOptionWithPipelinedAsyncCompletion`。
+  - Nest 异步完成的 handler 名单**就是这些原生步骤**（`NestOptionWithPipelinedAsyncCompletion(workers, queueCap, handlers...)`），没有开关配置；
+    没有这类原生步骤时名单为空，Nest 不建完成池。原来的 `nest.pipelined.async` 已删除（写了不再生效，doctor 按未声明的键报 FAIL）。
+- 异步完成按 handler 生效（维护者 2026-10-29 决定）：Nest 在注册 / 引擎构造时把名单解析成每个 handler 的标志，只有被点名的 pipelined 事务
+  交给完成泵；没被点名的 pipelined handler（包括心跳 `heartbeat.beat.pipelined`）在派发 worker 上等票据，只在同实体的完成链上排队，
+  保持与异步完成事务之间的 LSN 序（NEST_PIPELINED_COMMIT.md §11）。strict / async / memory 走 `commitDurable` 或内存路径。
+  对照用例：`TestAsyncCompletionIsPerHandler`、`TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged`（strict / async / 未点名的 pipelined 在
+  有 / 没有完成泵的引擎上观察一致）、`TestAsyncAndPhase1CompletionsKeepSameEntityLSNOrder`、心跳的 `TestPipelinedBeatDoesNotUseAsyncCompletionOfNativeSteps`。
+  白名单让未列入的 handler 声明 pipelined 也只会在派发时得到 `ErrPipelinedNotAllowed`，不会被悄悄放开。
+- 手写装配（不经 `wiring/dataengine`）自己传 `nest.NestOptionWithPipelinedAllowlist` 与 `NestOptionWithPipelinedAsyncCompletion(workers, queueCap,
+  saga.PipelinedNativeStepHandlers()...)`。
 
 **运维观察**：
 
@@ -259,7 +265,7 @@ GOMAXPROCS 个 worker，步骤一多，同进程其他实体的消息就排队�
 - `nest.pipelined.async_total{result="degraded"}`：完成队列满，这笔事务降级为在派发 worker 上等 WAL（结论不变，只是又占住 worker）；持续增长
   就调大队列。`result="indeterminate"` 是 WAL 结果未知（引擎随之 fence），`completion_failed` 是落盘后的回调失败。
 - 完成池配置：`nest.pipelined.async_queue_capacity`（0 取缺省 8192，生成的配置写 4096）与 `nest.pipelined.async_workers`（0 取缺省 4，生成的
-  配置写 8）。等落盘的时长看 `nest.pipelined.durable_wait{handler}`。
+  配置写 8）；进程里没有 pipelined 原生步骤时不建完成池，两项不起作用。等落盘的时长看 `nest.pipelined.durable_wait{handler}`。
 
 #### Mongo 步骤（选项 M-A）
 

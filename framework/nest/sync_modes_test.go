@@ -74,7 +74,7 @@ func TestNestSyncModesShareCommitAndUnlockBoundaries(t *testing.T) {
 			scope, closeScope := entity.NewGuardScope("sync-modes")
 			defer closeScope()
 			scope.Guard().RequireEntity(e)
-			_, err := invokeWithTransaction(HandlerMeta{}, []entity.IThreadSafeEntity{e}, nil, "write", nil, nil, func() (any, error) { e.dao.Value = 11; e.MarkSyncDirty(1); return nil, nil }, m)
+			_, err := invokeWithTransaction(HandlerMeta{}, []entity.IThreadSafeEntity{e}, nil, "write", nil, completionRoute{}, func() (any, error) { e.dao.Value = 11; e.MarkSyncDirty(1); return nil, nil }, m)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -149,7 +149,7 @@ func TestNestSyncRollbackPreservesOlderPending(t *testing.T) {
 	defer closeScope()
 	scope.Guard().RequireEntity(e)
 	rejection := errors.New("reject")
-	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityMemory}, []entity.IThreadSafeEntity{e}, nil, "reject", nil, nil, func() (any, error) {
+	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityMemory}, []entity.IThreadSafeEntity{e}, nil, "reject", nil, completionRoute{}, func() (any, error) {
 		CurrentRollbackTx().DeferRollback(func() error { e.dao.Value = 10; return nil })
 		e.dao.Value = 99
 		e.MarkSyncDirty(1)
@@ -190,7 +190,7 @@ func TestNestPipelinedSyncWaitsForConfirmationAndUnlock(t *testing.T) {
 		default:
 		}
 		committer.resolveAll(nil)
-	}, nil, func() (any, error) { e.dao.Value++; e.MarkSyncDirty(1); return nil, MarkPersist(e.dao, 1) }, m)
+	}, completionRoute{}, func() (any, error) { e.dao.Value++; e.MarkSyncDirty(1); return nil, MarkPersist(e.dao, 1) }, m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +218,7 @@ func TestNestSyncRejectedCommitDoesNotFreezeOrPublish(t *testing.T) {
 	scope.Guard().RequireEntity(e)
 	rejection := errors.New("wal refused")
 	committer := &recordingCommitter{err: rejection}
-	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, []entity.IThreadSafeEntity{e}, committer, "reject", nil, nil, func() (any, error) {
+	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackUndo, Durability: DurabilityStrict}, []entity.IThreadSafeEntity{e}, committer, "reject", nil, completionRoute{}, func() (any, error) {
 		CurrentRollbackTx().DeferRollback(func() error { e.dao.Value = 10; return nil })
 		e.dao.Value = 99
 		e.MarkSyncDirty(1)
@@ -365,7 +365,7 @@ func TestPipelinedSyncReleasesDynamicLocksBeforeDurableWait(t *testing.T) {
 		scope.Guard().ReleaseEntity(a.ID())
 		// 只有另一个 goroutine 确实取得 Cast 的锁后，才允许 WAL 确认。
 		go func() { b.GetMutex().Lock(); b.GetMutex().Unlock(); close(unlocked); committer.resolveAll(nil) }()
-	}, nil, func() (any, error) {
+	}, completionRoute{}, func() (any, error) {
 		scope.Guard().RequireEntity(b)
 		entity.CurrentSyncMutation().Include([]entity.IThreadSafeEntity{b})
 		a.dao.Value++

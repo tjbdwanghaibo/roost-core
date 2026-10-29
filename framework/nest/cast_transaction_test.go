@@ -130,7 +130,7 @@ func TestCastPipelinedReleasesAndStampsWithoutSync(t *testing.T) {
 	}
 	_, err := invokeWithTransaction(HandlerMeta{Rollback: RollbackState, Durability: DurabilityPipelined},
 		[]entity.IThreadSafeEntity{primary}, committer, "cast-pipelined",
-		func() { scope.Guard().ReleaseEntity(primary.GUId()) }, nil, func() (any, error) {
+		func() { scope.Guard().ReleaseEntity(primary.GUId()) }, completionRoute{}, func() (any, error) {
 			cast, err := guardFixtureCastOne[*rollbackTestEntity](other.ID())
 			if err != nil {
 				return nil, err

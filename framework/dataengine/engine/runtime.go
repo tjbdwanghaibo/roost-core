@@ -45,9 +45,12 @@ type Runtime struct {
 }
 
 // PipelinedRuntimeConfig 是 Runtime 交给 Nest 的 pipelined 提交配置：允许名单与异步完成池。
+//
+// AsyncHandlers 是使用异步完成的 handler（按 handler 生效，NestOptionWithPipelinedAsyncCompletion）；为空时不开异步完成，
+// 全部 pipelined handler 在派发 worker 上等票据（第一阶段）。wiring/dataengine 把它设为本进程声明 pipelined 的 saga 原生步骤。
 type PipelinedRuntimeConfig struct {
 	Allowlist     []string
-	Async         bool
+	AsyncHandlers []string
 	AsyncWorkers  int
 	AsyncQueueCap int
 }
@@ -166,8 +169,8 @@ func (runtime *Runtime) NestOptions() []corenest.NestOption {
 	if len(runtime.pipelined.Allowlist) > 0 {
 		options = append(options, corenest.NestOptionWithPipelinedAllowlist(runtime.pipelined.Allowlist...))
 	}
-	if runtime.pipelined.Async {
-		options = append(options, corenest.NestOptionWithPipelinedAsyncCompletion(runtime.pipelined.AsyncWorkers, runtime.pipelined.AsyncQueueCap))
+	if len(runtime.pipelined.AsyncHandlers) > 0 {
+		options = append(options, corenest.NestOptionWithPipelinedAsyncCompletion(runtime.pipelined.AsyncWorkers, runtime.pipelined.AsyncQueueCap, runtime.pipelined.AsyncHandlers...))
 	}
 	return options
 }

@@ -143,15 +143,14 @@ Checkpoint Mod。
   - Data Engine Mod 独占 WAL，并在 recovery barrier 完成后提供 committer；
   - entitysync 闸门一行接线：`entitysync.ManagerConfig{DurableWatermark: dataEngineMod.DurableLSN}`；
   - 引擎选项使用 `dataEngineMod.NestOptions()`（committer + 配置驱动的
-    `nest.pipelined.allowlist` / `nest.pipelined.async` /
-    `nest.pipelined.async_workers` / `nest.pipelined.async_queue_capacity`），
-    不配置且进程里没有 pipelined 的 saga 原生步骤时与旧行为完全一致。
+    `nest.pipelined.allowlist` / `nest.pipelined.async_workers` / `nest.pipelined.async_queue_capacity`，
+    异步完成名单取本进程的 pipelined saga 原生步骤），不配置且进程里没有 pipelined 的 saga 原生步骤时与旧行为完全一致。
 - **saga 原生步骤是白名单的标准用户**（维护者 2026-10-29 决定：只有它们用 pipelined + 异步完成，其他 handler
   照旧，不改 Nest 池缺省、不加 saga 池）。生成的原生步骤 handler 声明 `durability=pipelined`，注册经
   `saga.MustRegisterNativeStepHandler`；`wiring/dataengine` 的 Init 读 `saga.PipelinedNativeStepHandlers()`：
-  名单写了就把它们补进去（没写 = 全部允许，不收窄），`nest.pipelined.async` 不写时打开，显式 `false` 拒绝启动。
-  异步完成只作用于 pipelined 事务，strict / async / memory handler 不经过完成泵
-  （`TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged`）。理由与数字见
+  名单写了就把它们补进去（没写 = 全部允许，不收窄），并以它们作为 Nest 异步完成的 handler 名单（§11，没有开关配置）。
+  别的 pipelined handler 与 strict / async / memory handler 不经过完成泵
+  （`TestAsyncCompletionIsPerHandler`、`TestAsyncCompletionLeavesNonPipelinedHandlersUnchanged`）。理由与数字见
   [SAGA §原生步骤的提交方式](SAGA.md#原生步骤的提交方式维护者-2026-10-29-决定)。
 - 已实现的指标：
   - `nest.pipelined.durable_wait`（按 handler 标签的时长分布）——worker 因等 ticket 的阻塞
@@ -165,15 +164,25 @@ Checkpoint Mod。
 
 ## 11. Phase 2 实现（异步完成）
 
-由 `NestOptionWithPipelinedAsyncCompletion(workers, queueCap)` 显式开启（默认关闭 = Phase 1
-行为原样）。机制（`framework/nest/pipelined_completion.go`）：
+由 `NestOptionWithPipelinedAsyncCompletion(workers, queueCap, handlers...)` 按 handler 显式开启（维护者 2026-10-29
+决定）：
 
+- **只有 `handlers` 点名的 pipelined handler 走异步完成**。名单在引擎构造（包级注册表快照）、实例注册
+  （`NestMgr.RegisterHandlerWithMeta`）与包级回退查找时解析成 `handlerEntry.asyncCompletion`，派发热路径只读这个布尔，
+  不按名字查表。`handlers` 为空等于不开异步完成（不建完成泵），**没有“全部”通配**；点名的 handler 不是 pipelined 时没有作用。
+  多次调用名单累加。生产装配（`wiring/dataengine`）传 `saga.PipelinedNativeStepHandlers()`，别的代码声明 pipelined（例如
+  心跳）不会悄悄得到异步完成。
+- 没被点名的 pipelined handler 在有完成泵的引擎上仍是 Phase 1：派发 worker 等票据，AfterCommit 在派发 goroutine 上执行，
+  回复照常由派发路径发出（错误注解、重排判断、await 计划都不变）。唯一的差别是它**仍持锁时在完成链上占位**，AfterCommit
+  之前等同主实体前驱完成——前驱可能是完成池上的异步完成事务（A 先提交、作业结束放掉 ID tail，B 接着在同一实体上提交）；
+  否则 B 的 AfterCommit 与回复可能先于 LSN 更小的 A。反方向（B 在前）由 ID tail 保证：同 ID 的后继要等 B 的作业（含回复）
+  结束才开始；占位让顺序不依赖这一点。`TestAsyncAndPhase1CompletionsKeepSameEntityLSNOrder` 覆盖两个方向。
 - 派发 worker 不再停在 ticket 上：完成体（AfterCommit 钩子、release 通知、RetChan 回包）
   在**实体锁内**提交给 engine 级完成泵，worker 立即处理下一条消息。
 - 泵只做"FIFO 等 ticket → 转发"，业务钩子在按实体哈希的完成 worker 池里执行；不同实体的
   慢钩子互不队头阻塞。
-- **同实体完成严格按提交（LSN）序，且无条件成立**：每个事务在实体锁内领取该实体的完成链
-  节点（链序 = LSN 序），三条执行路径——泵→池、池饱和时泵内联、泵满时派发 worker 降级
+- **同实体完成严格按提交（LSN）序，且无条件成立**：每个 pipelined 事务（有完成泵时，无论是否被点名）在实体锁内领取该
+  实体的完成链节点（链序 = LSN 序），四条执行路径——泵→池、池饱和时泵内联、泵满时派发 worker 降级、未点名的 Phase 1
   ——都先等前驱完成再执行。降级只牺牲延迟（worker 被占住），不牺牲顺序与正确性。链等待
   不会死锁：前驱只等更早的前驱与自己的 ticket，后者由 WAL 独立推进。
 - 完成体只捕获普通值（cap-1 缓冲的回包 channel、handler 返回值），不持有池化的 Msg；
@@ -186,7 +195,8 @@ Checkpoint Mod。
 - 指标口径变更：async 模式下 `nest.pipelined.durable_wait` 度量的是"入队→完成"的提交管道
   延迟（并发采样），"占 worker 忙时比例"的读法只适用于 Phase 1；新增
   `nest.pipelined.async_total{result}` 计数。
-- 范围：走 dispatcher 的 single/multi/multi-group 路径生效；直调、broadcast、remote batch
-  维持原语义。
+- 范围：走 dispatcher 的 single/multi/multi-group 路径对被点名的 handler 生效；直调、broadcast、批量作业（try-batch，
+  锁内提交、不传完成路线）、remote batch 维持原语义。完成链只排 pipelined 事务：同实体上的 strict / async handler 在锁内提交，
+  不在链上（与按 handler 之前相同）。
 
 实现与测试入口见[Nest实现篇](impl/02-nest-entity.md)。历史复测与默认档规划归上一节的固定提交，不作为当前接入要求。

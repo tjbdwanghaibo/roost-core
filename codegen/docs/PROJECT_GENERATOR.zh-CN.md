@@ -347,7 +347,7 @@ durable consumer、管理和恢复路径。生成的 bootstrap 会把 manifest �
 服务（doctor 的 `saga-steps:<saga>` 在没人启动时 WARN）。`-native` 的步骤各生成正向与补偿两个
 Nest handler（参数 `saga.NativeStep`，事务内 `step.Complete`，声明 `durability=pipelined`：saga 原生步骤是
 Nest pipelined 白名单的标准用户，生成的注册走 `saga.MustRegisterNativeStepHandler`，框架启动时自动补白名单、
-打开 `nest.pipelined.async`，生成的配置不再写 `nest.pipelined.async`；见 SAGA.md「原生步骤的提交方式」）；幂等键是 command 的
+只为它们打开 Nest 异步完成，配置里没有对应开关；见 SAGA.md「原生步骤的提交方式」）；幂等键是 command 的
 `IdempotencyKey`：原生步骤由收件箱保证至多一次生效，Mongo 步骤里事务外的调用要用它做幂等，不要以
 投递次数或 `CommandID` 作为业务幂等键。`Subscribe<Step>` 辅助函数已不再生成（2026-10-18，D12 方向 B）；
 按 sid 绑定实体的多进程部署要给原生步骤补 `WithAdmit` 准入（单进程原生步骤 saga 正向约 8/s、

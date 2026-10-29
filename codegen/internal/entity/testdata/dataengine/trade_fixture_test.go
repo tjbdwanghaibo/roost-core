@@ -167,7 +167,7 @@ func newTradeFixtureFull(t *testing.T, ctx context.Context, client fmongo.IMongo
 	names := []string{"trade_seed", "trade_buy", "trade_transfer", "trade_reject", "trade_panic"}
 	allow := slices.Clone(names)
 	allow = append(allow, b27HandlerNames...)
-	h.runtime, err = engine.NewRuntime(store, h.wal, projector, outbox, h.access, nil, nil, engine.PipelinedRuntimeConfig{Allowlist: allow, Async: true, AsyncWorkers: 2, AsyncQueueCap: 128})
+	h.runtime, err = engine.NewRuntime(store, h.wal, projector, outbox, h.access, nil, nil, engine.PipelinedRuntimeConfig{Allowlist: allow, AsyncHandlers: allow, AsyncWorkers: 2, AsyncQueueCap: 128})
 	if err != nil {
 		t.Fatal(err)
 	}

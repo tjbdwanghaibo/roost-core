@@ -257,8 +257,8 @@ type ptParticipantOptions struct {
 	NestWorkers int
 	// ProjectDelayPerRecord 让投影每条记录多等这么久（只给准入档制造投影积压；零值不等）。
 	ProjectDelayPerRecord time.Duration
-	// PipelinedAsync 打开 Nest 的 pipelined 异步完成（NestOptionWithPipelinedAsyncCompletion，完成池取缺省 4 worker / 8192 队列）：
-	// 派发 worker 不在 WAL 票据上等，AfterCommit 与回复在完成池执行。只对 DurabilityPipelined 的 handler 生效。
+	// PipelinedAsync 给步骤 handler 打开 Nest 的 pipelined 异步完成（NestOptionWithPipelinedAsyncCompletion 点名 ptStepHandler，完成池取
+	// 缺省 4 worker / 8192 队列）：派发 worker 不在 WAL 票据上等，AfterCommit 与回复在完成池执行。按 handler 生效，别的 handler 不受影响。
 	PipelinedAsync bool
 }
 
@@ -313,7 +313,7 @@ func openPtParticipantWith(walDir string, mongo fmongo.IMongo, database string, 
 	nestOptions := []nest.NestOption{nest.NestOptionWithGetter(entity.NewManagerAccess(p.manager)), nest.NestOptionWithTransactionCommitter(p.projector),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: options.NestWorkers, QueueCap: 4096}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{})}
 	if options.PipelinedAsync {
-		nestOptions = append(nestOptions, nest.NestOptionWithPipelinedAsyncCompletion(0, 0))
+		nestOptions = append(nestOptions, nest.NestOptionWithPipelinedAsyncCompletion(0, 0, ptStepHandler.String()))
 		fmt.Fprintln(os.Stderr, "participant: step handler", options.Durability, "with Nest pipelined async completion")
 	}
 	p.mgr = nest.NewEngine(nestOptions...)
