@@ -316,8 +316,27 @@ func TestDeclaredMemoryEffectsWriteTheirOwnSlot(t *testing.T) {
 	requireNoErrors(t, diagnostics)
 	host := runtimeTestHost(DefaultCompileEnvironment())
 	runtime := NewRuntime(host, RuntimeOptions{})
-	if _, err := runtime.Activate(program, CastInput{Caster: 1}); err != nil {
+	castID, err := runtime.Activate(program, CastInput{Caster: 1})
+	if err != nil {
 		t.Fatal(err)
+	}
+	// 读回槽位：每个效果写的是按名字解析出的那一个槽位，另一个槽位不被碰到（finish 后施法终态仍保留 memory）。
+	cast := runtime.casts[castID]
+	slot := func(name string) RuntimeValue {
+		t.Helper()
+		for _, declared := range cast.program.memory {
+			if declared.name == name {
+				return cast.memory[declared.index]
+			}
+		}
+		t.Fatalf("memory %q has no slot", name)
+		return RuntimeValue{}
+	}
+	if count, isInt := slot("count").Int(); !isInt || count != 2 {
+		t.Errorf("memory count = %d (int: %v), want int 2: add_memory did not write its own slot, or set_memory overwrote it", count, isInt)
+	}
+	if flag, isBool := slot("flag").Bool(); !isBool || !flag {
+		t.Errorf("memory flag = %v (bool: %v), want true: set_memory did not write its own slot", flag, isBool)
 	}
 }
 
