@@ -1,0 +1,20 @@
+Showing nodes accounting for 176.68MB, 94.41% of 187.13MB total
+Dropped 126 nodes (cum <= 0.94MB)
+Showing top 16 nodes out of 60
+      flat  flat%   sum%        cum   cum%
+   30.27MB 16.18% 16.18%    30.27MB 16.18%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.(*ReplicationScene).Frame
+   21.15MB 11.30% 27.48%    21.15MB 11.30%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.spatialFrame
+   19.61MB 10.48% 37.96%    19.68MB 10.51%  github.com/tjbdwanghaibo/roost-core/infra/physics/physx.(*World).Step
+   18.55MB  9.91% 47.87%    18.55MB  9.91%  slices.Clone[go.shape.[]github.com/tjbdwanghaibo/roost-core/infra/physics/physx.State,go.shape.struct { InputGeneration uint64; InputSequence uint64; InputActive bool; ID uint64; Position github.com/tjbdwanghaibo/roost-core/infra/physics/physx.Vec3; Rotation github.com/tjbdwanghaibo/roost-core/infra/physics/physx.Quat; Velocity github.com/tjbdwanghaibo/roost-core/infra/physics/physx.Vec3; AngularVelocity github.com/tjbdwanghaibo/roost-core/infra/physics/physx.Vec3; Sleeping bool }] (inline)
+   16.84MB  9.00% 56.87%    16.84MB  9.00%  slices.Clone[go.shape.[]uint8,go.shape.uint8] (inline)
+   15.44MB  8.25% 65.12%    15.44MB  8.25%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.QuantizedSnapshot
+   11.05MB  5.91% 71.03%    17.06MB  9.11%  github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync.(*Cursor).plan
+   10.19MB  5.44% 76.47%    21.25MB 11.36%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.(*ReplicationFrame).PlanInto
+    9.13MB  4.88% 81.35%     9.13MB  4.88%  internal/bytealg.MakeNoZero
+    6.21MB  3.32% 84.67%     6.21MB  3.32%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.RoomPayload
+    5.50MB  2.94% 87.61%     5.50MB  2.94%  bytes.Clone (inline)
+    4.90MB  2.62% 90.22%    24.57MB 13.13%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.(*StateDAO).Accept
+    4.31MB  2.30% 92.52%     4.31MB  2.30%  github.com/tjbdwanghaibo/roost-core/service/physicsroom.(*Service).run.func3
+    1.51MB   0.8% 93.33%     1.51MB   0.8%  github.com/tjbdwanghaibo/roost-core/framework/nest.NewRollbackTx
+    1.13MB   0.6% 93.93%     1.13MB   0.6%  github.com/tjbdwanghaibo/roost-core/framework/nest.(*RollbackTx).RecordUndoToken
+    0.90MB  0.48% 94.41%     1.97MB  1.05%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.(*RoomReplica).Apply

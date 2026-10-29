@@ -254,7 +254,7 @@ Gate Relay 从 **Poll 响应完成时** 安排下一次 50ms 轮询；等待与�
 
 ### 共享索引与多房间测量（2026-10-26）
 
-Room 建立一次 `ReplicationScene`，保存形状包围半径与轨迹 ID；每个已提交帧建立一次 `ReplicationFrame` 状态索引，与 AOI 帧在同一把锁内发布。所有接收成员共用只读索引，私有输入确认也直接按 body ID 查询。索引拥有输入副本，不引用可变调用方切片；ACK 后才提交的成员视图账本仍保持独立。独立调用 `PlanView` 的便捷接口保留，需要共享时使用 `NewReplicationScene(...).Frame(states).Plan(...)`。
+Room 建立一次 `ReplicationScene`，保存形状包围半径与轨迹 ID；每个已提交帧建立一次 `ReplicationFrame` 状态索引，与 AOI 帧在同一把锁内发布。所有接收成员共用只读索引，私有输入确认也直接按 body ID 查询。`Frame` 复制输入；房间提交路径用 `AdoptFrame` 直接只读引用本 Tick `World.Step` 新建的状态切片（2026-10-29 起，`Commit` 返回后不得再修改 `Frame.States`，见下文长稳一节），输入无序时先复制再排序，从不修改调用方切片；ACK 后才提交的成员视图账本仍保持独立。独立调用 `PlanView` 的便捷接口保留，需要共享时使用 `NewReplicationScene(...).Frame(states).Plan(...)`。
 
 Linux amd64、Go 1.27.2、GOMAXPROCS=4，CPU 型号 Xeon Platinum 8573C。`BenchmarkRecipientViewIndex` 在同一份 71 对象完整快照上比较每接收者重建与共享索引，三次测量：
 
@@ -338,7 +338,7 @@ ROOST_PHYSICS_LOAD=1 go test -race -tags physx -run 'TestMultiRoomReplicationLoa
 
 **一致性证据**：`TestPlanFramesStayByteIdentical`（chunksync，RC1/RC2 进入、离开、跨 Chunk、未确认重做、epoch 切换）与 `TestRoomReplicationPipelineStaysByteIdentical`（physics，量化快照、AOI、视图分档、字段增量、私有确认，并断言场景覆盖 near / middle / far / motion / 暂缓 / 移出 / 跨 Chunk）的金样取自优化前代码，之后每个提交都逐帧字节相同；后者对“新建”和“按 Poll 方式复用”两种方式都校验，把 spare 错设为 previous 会变红。`-race`（含 `-tags physx` 与机关 8 房间负载）通过。
 
-**剩余**（92f7e6f9 的机关 8 房间 alloc_space，约 211MB / 7 秒；59211a6f 又去掉其中的变化表扩容）：每 Tick 部分占比升到约一半以上——`ReplicationScene.Frame` 每帧状态索引 map 15%、`spatialFrame` 位置 map 与 Block 切片 10%、`StateDAO.Accept` 的所有权副本与查重 map 12%、`World.Step` 返回状态 9%、`QuantizedSnapshot` 7%；每接收者部分剩 `PlanInto` 新载荷副本与分档计数 map、`RoomPayload` 拷贝与 `Delivery` 返回副本、帧缓冲、指标 key 拼接（`metrics.metricKey` 每次带标签调用拼一个字符串，约 4%）。这些要么是有意的所有权副本（DAO、Delivery），要么需要改变每帧索引结构（排序切片 / 按刚体槽位）才能再降，单项收益估计不超过 2MB/s，本轮未做。未覆盖：PhysX 原生堆、RSS、长稳、Gate/NATS/TCP 链路。
+**剩余**（92f7e6f9 的机关 8 房间 alloc_space，约 211MB / 7 秒；59211a6f 又去掉其中的变化表扩容）：每 Tick 部分占比升到约一半以上——`ReplicationScene.Frame` 每帧状态索引 map 15%、`spatialFrame` 位置 map 与 Block 切片 10%、`StateDAO.Accept` 的所有权副本与查重 map 12%、`World.Step` 返回状态 9%、`QuantizedSnapshot` 7%；每接收者部分剩 `PlanInto` 新载荷副本与分档计数 map、`RoomPayload` 拷贝与 `Delivery` 返回副本、帧缓冲、指标 key 拼接（`metrics.metricKey` 每次带标签调用拼一个字符串，约 4%）。这些要么是有意的所有权副本（DAO、Delivery），要么需要改变每帧索引结构（排序切片 / 按刚体槽位）才能再降，单项收益估计不超过 2MB/s，本轮未做（重新 profile 后其中状态索引与 AOI 索引两项实测约 5.4 与 1.9MB/s，已在同日晚削减；原生堆、RSS 与 macOS 长稳也已测，见下节）。未覆盖：Gate/NATS/TCP 链路。
 
 复跑（证据、脚本与 pprof 在 [physicsroom-alloc-20261029](../performance/benchmarks/physicsroom-alloc-20261029/README.md)）：
 
@@ -346,4 +346,67 @@ ROOST_PHYSICS_LOAD=1 go test -race -tags physx -run 'TestMultiRoomReplicationLoa
 GOWORK=off go test -tags physx -c -o /tmp/after.test ./wiring/physicsroom
 docs/performance/benchmarks/physicsroom-alloc-20261029/measure.sh after=/tmp/after.test > runs.txt
 python3 docs/performance/benchmarks/physicsroom-alloc-20261029/summ.py runs.txt
+```
+
+### 长稳、RSS 与原生内存（2026-10-29，macOS ARM64）
+
+**只覆盖 macOS ARM64**：Apple M5（10 核）、macOS 26.5.2（25F84）、Go 1.27.3、GOMAXPROCS=10，PhysX 4.1.2 ABI 2 arm64 动态库（按 [CHUNK-PHYSICS](CHUNK-PHYSICS.md#原生构建) 用 `.physics-deps/PhysX-4.1` 源码在私有构建目录编出）。Linux 的复测、RSS 与长稳都没有做（本机 Docker 未运行）。
+
+**入口**：`TestPhysicsRoomSoak`（`wiring/physicsroom`，`physx && cgo`，`ROOST_PHYSICS_SOAK_MINUTES` 启用，缺省跳过）与上一节同一夹具：机关场景 8 房间 × 20 逻辑客户端（每房 83 个非静态刚体），每个客户端按 Relay 节奏提交输入后 Poll；不含 Gate/NATS/TCP。每 15 秒一行：Go `runtime/metrics`（heap 对象字节与个数、累计分配、GC 次数、goroutine、Go 映射与已归还）、`ps` RSS、该窗口的物理 / 交付频率与分位数；每个窗口的原始记录整体换出，夹具自身内存不随时长增长。进程外 `sample.py` 每 30 秒跑 `footprint`（物理占用；untagged VM_ALLOCATE 即 Go 堆与栈映射，MALLOC_* 即 libc malloc），每 2 分钟跑 `vmmap --summary`（malloc 区已分配字节与个数）。
+
+**原生内存的口径**：binding 用 PhysX 自带 `PxDefaultAllocator`，没有分配回调或计数器；它在 macOS 上走 libc `malloc`，Go 运行时不用 malloc，所以 malloc 区已分配字节就是 PhysX 加少量 libSystem 的原生堆（空 Go 程序约 12KB）。另给“估算原生 = footprint − Go 映射 dirty”，它还包含 malloc 元数据、页表与库的 dirty 数据段。`vmmap` 会挂起目标进程约 0.4～0.5 秒，含它的窗口物理均频约 48.7Hz，下面的频率判断排除这些窗口。
+
+**结果**（20 分钟连续运行，0b8e20ff = ddc3d3d0 的产品代码；预热 5 分钟后为稳定窗口，斜率为最小二乘、每分钟）：
+
+| 指标 | 起点 | 5 分钟 | 终点 | 稳定窗口均值 | 斜率 / 分钟 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| footprint（MB） | 25.7（建房中） | 42.5 | 40.9 | 41.4 | −0.020 |
+| Go 映射 dirty（MB） | 13.5 | 28.9 | 27.1 | 27.7 | −0.023 |
+| 估算原生 = footprint − Go dirty（MB） | 12.2 | 13.67 | 13.72 | 13.70 | +0.003 |
+| malloc 已分配（vmmap，MiB） | 9.15 | 9.64 | 9.66 | 9.64 | +0.002 |
+| malloc 分配个数（vmmap） | 6365 | 6527 | 6526 | 6525 | −0.07 |
+| RSS（ps，MB） | 49.9 | 56.2 | 56.7 | 56.5 | +0.035 |
+| Go heap 对象字节（MB，4 分钟段内最低 / 最高） | 8.3 / 14.0 | 9.9 / 14.1 | 9.6 / 13.9 | 12.0 | 锯齿 |
+| Go 映射 − 已归还（MB） | 25.9 | 31.4 | 30.5 | 31.2 | +0.003 |
+| goroutine | 206 | 206 | 206 | 206 | 0 |
+| 物理均频 / 房间（不含 vmmap 窗口最低） | — | — | — | 49.85（最低 49.93） | 0.000 |
+| 交付频率 / 客户端（Hz） | 19.33 | 19.73 | 19.53 | 19.55 | −0.016 |
+| Step P99 / Poll P99（ms） | 1.15 / 0.60 | 1.27 / 0.47 | 1.31 / 0.46 | 1.22 / 0.44 | ≈0 |
+
+累计分配 30.57MB/s、GC 4.8 次/s，80 个窗口空 Poll 合计 0，每个房间每个窗口已提交 tick 连续。
+
+**判断：没有发现无界增长。**footprint、Go 映射 dirty、Go 映射 − 已归还、goroutine 稳定窗口斜率均为 0 附近；Go heap 对象字节每 4 分钟段的采样最低值（第 4 分钟起）9.9 / 9.9 / 10.0 / 9.6MB，不随时间升高；PhysX 侧 malloc 已分配第 2～18 分钟 +0.04MB（10,087,424→10,126,336 字节，约 0.4%），分配个数 6513～6527 持平，没有逐 Tick 泄漏的形态（每秒 400 个 Tick，逐 Tick 泄漏哪怕 1 字节也会是每分钟 24KB 且个数随之增长）。RSS 稳定窗口 +0.035MB/分钟，而 footprint 持平、RSS − footprint 由 11MB 升到约 15.8MB：增长落在不计入 footprint 的干净页（代码段等文件映射逐步换入），**是推断，没有逐区域核对**。交付频率由前 8 分钟 19.66Hz 降到最后 8 分钟约 19.48Hz（−0.9%）：空 Poll 为 0，交付频率就是客户端循环频率（50ms 定时器 + 提交与 Poll），Poll P99 与物理频率没有同步变化，倾向本机定时器 / 后台负载，**原因尚未确认**。8 房间的 PhysX 原生堆约 9.6MiB（含 SDK / foundation 共用部分，平均每房间不超过约 1.2MiB），没有按房间分开测。
+
+**优化后复跑**：下文两项削减之后（0d6be921）同口径 4 分钟：估算原生 13.58MB 持平（+0.005MB/分钟）、malloc dirty 10.11MB 不变、footprint 41.7MB、goroutine 206、累计分配 23.66MB/s、GC 3.73 次/s。
+
+**每 Tick 分配的继续削减**（HEAD 重新 profile 后只做两项，各与前一状态同机交替 3 轮，取中位数）：
+
+| 提交 | 改动 | 机关 8 房间 MB/s | 普通 8 房间 MB/s |
+| --- | --- | ---: | ---: |
+| e9ec3cc2 + a5fa00ea | `ReplicationFrame` 每帧状态索引由 `map[uint64]State`（83 个刚体约 12KB / 帧）改为按 ID 严格递增的切片、二分查找；房间提交路径 `AdoptFrame` 直接只读引用本 Tick `World.Step` 新建的切片，不再复制 | 30.95→25.56 | 27.29→21.78 |
+| 0d6be921 | `SpatialFrame` 的位置 map 与 Block map 改为与对象同下标的位置切片、按 (Block, 下标) 稳定排序的条目切片，查询对每个 Block 二分找起点 | 25.44→23.54（187k→168k allocs/s） | 21.76→19.89 |
+| 合计（0b8e20ff 对 0d6be921） | | **30.90→23.46**（−24%，189.0k→167.5k allocs/s，GC 54→37～39 次 / 5 秒） | **27.29→19.87**（−27%，171.4k→151.8k） |
+
+物理 50.00Hz、交付 19.60Hz/客户端前后相同；`TestPlanFramesStayByteIdentical` 与 `TestRoomReplicationPipelineStaysByteIdentical` 逐帧字节不变。第二项单独约 1.9MB/s，在“约 2MB/s”门槛边上，保留的理由是三轮范围不重叠、分配次数降 10%，输出次序另由 `TestSpatialVisibilityKeepsBlockOrder`（逐对象参考实现对照有序 / 乱序输入；旧实现通过，同 Block 次序反转即变红）锁住；若维护者认为不值得，可单独回退这一提交。
+
+**所有权**：
+
+- `ReplicationFrame.states` 建好后只读。`Frame` 复制输入；`AdoptFrame` 输入已按 ID 严格递增时直接引用、否则复制后排序（同 ID 取最后一个，与原 map 覆盖一致），从不修改调用方切片。房间提交回调里 `f.States` 是本 Tick `World.Step` 新建的切片（原生 `std::map` 按 ID 有序读出）：`Commit` 已返回、量化快照与 AOI 索引已复制所需值，之后没有人修改它。`service/physicsroom.Commit` 的注释写明返回后不得再修改 `Frame.States`，需要保留的实现自行复制；`EntityHost` 经 `StateDAO.Accept` 本来就复制。
+- `SpatialFrame.positions` / `blocks` 每帧新建、建好后只读。重复 ID 时非观察者对象改用各自位置（原来是同 ID 最后一个的位置），只影响随后被 `chunksync` 以 duplicate object 拒绝的出错路径；观察者仍取最后一个。
+
+**未做与原因**（0d6be921 机关 8 房间 alloc_space 约 142MB / 7 秒）：
+
+- `StateDAO.Accept` 的状态副本（约 14%，约 3MB/s）：这是 Nest undo 保护的权威事实与网络侧索引之间的所有权边界。去掉它要让 DAO 与本帧只读索引共用一块切片，经可插拔的 `Commit` 跨 service / wiring 两层传递“不得修改”的约定，一处违约就会静默改坏权威状态；收益约 3MB/s，判断为高风险，不做。查重 map（约 4%，约 0.8MB/s）低于门槛，不做。
+- `World.Step` 返回的状态切片（约 13%）：现在它本身就是被 `AdoptFrame` 引用的本帧索引，按帧保留，不能复用。
+- `QuantizedSnapshot`（约 10%）：每帧一块不可变载荷，供所有接收者共享，已是一帧一次分配。
+- 每接收者部分（`PlanInto` 载荷副本、`Cursor.plan` 帧缓冲、`RoomPayload` 与 `Delivery` 返回副本）：都是交给网络或视图账本的所有权副本，上一轮已削到每次一次分配。
+
+**仍未覆盖**：Linux（amd64 / arm64）的复测、RSS 与长稳；比 20 分钟更长的运行（小时级、房间反复创建与销毁）；Gate/NATS/TCP 真实链路下的内存；PhysX 原生堆按房间、按刚体数的拆分。
+
+复跑（证据、脚本在 [physicsroom-soak-20261029](../performance/benchmarks/physicsroom-soak-20261029/README.md)）：
+
+```sh
+GOWORK=off go test -tags physx -c -o /tmp/soak.test ./wiring/physicsroom
+docs/performance/benchmarks/physicsroom-soak-20261029/run.sh /tmp/soak.test /tmp/soak20 20   # 约 20 分钟
+python3 docs/performance/benchmarks/physicsroom-soak-20261029/summ.py /tmp/soak20/go.tsv /tmp/soak20/proc.tsv 300
 ```

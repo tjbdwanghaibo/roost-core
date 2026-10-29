@@ -1,0 +1,20 @@
+Showing nodes accounting for 133.38MB, 93.80% of 142.20MB total
+Dropped 131 nodes (cum <= 0.71MB)
+Showing top 16 nodes out of 62
+      flat  flat%   sum%        cum   cum%
+   20.08MB 14.12% 14.12%    20.08MB 14.12%  slices.Clone[go.shape.[]github.com/tjbdwanghaibo/roost-core/infra/physics/physx.State,go.shape.struct { InputGeneration uint64; InputSequence uint64; InputActive bool; ID uint64; Position github.com/tjbdwanghaibo/roost-core/infra/physics/physx.Vec3; Rotation github.com/tjbdwanghaibo/roost-core/infra/physics/physx.Quat; Velocity github.com/tjbdwanghaibo/roost-core/infra/physics/physx.Vec3; AngularVelocity github.com/tjbdwanghaibo/roost-core/infra/physics/physx.Vec3; Sleeping bool }] (inline)
+   18.75MB 13.19% 27.31%    18.94MB 13.32%  github.com/tjbdwanghaibo/roost-core/infra/physics/physx.(*World).Step
+   16.58MB 11.66% 38.97%    16.58MB 11.66%  slices.Clone[go.shape.[]uint8,go.shape.uint8] (inline)
+   13.65MB  9.60% 48.57%    13.65MB  9.60%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.QuantizedSnapshot
+   10.32MB  7.26% 55.82%    10.32MB  7.26%  internal/bytealg.MakeNoZero
+   10.06MB  7.07% 62.90%    21.06MB 14.81%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.(*ReplicationFrame).PlanInto
+    9.65MB  6.78% 69.68%     9.65MB  6.78%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.spatialFrame
+    9.22MB  6.48% 76.16%    15.72MB 11.06%  github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync.(*Cursor).plan
+    6.31MB  4.44% 80.60%     6.31MB  4.44%  bytes.Clone (inline)
+    5.77MB  4.06% 84.66%     5.77MB  4.06%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.RoomPayload
+    5.40MB  3.80% 88.46%    25.98MB 18.27%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.(*StateDAO).Accept
+    3.80MB  2.67% 91.14%     3.80MB  2.67%  github.com/tjbdwanghaibo/roost-core/service/physicsroom.(*Service).run.func3
+    1.19MB  0.84% 91.97%     1.19MB  0.84%  github.com/tjbdwanghaibo/roost-core/framework/nest.NewRollbackTx
+       1MB   0.7% 92.68%        1MB   0.7%  github.com/tjbdwanghaibo/roost-core/infra/base/fctx.(*Context).Set
+    0.94MB  0.66% 93.34%     1.26MB  0.88%  github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync.(*Replica).apply
+    0.64MB  0.45% 93.80%     1.90MB  1.34%  github.com/tjbdwanghaibo/roost-core/gameplay/physics.(*RoomReplica).Apply
