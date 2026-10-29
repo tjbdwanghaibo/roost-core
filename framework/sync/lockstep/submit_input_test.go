@@ -33,9 +33,10 @@ func TestSubmitInputPromiseReplayAfterCutIsIdempotent(t *testing.T) {
 			if len(first.Inputs) != 1 || first.ID != target {
 				t.Fatalf("first input missing or misplaced: frame=%d target=%d inputs=%d", first.ID, target, len(first.Inputs))
 			}
+			// 重传按 SubmitInput 的契约应答当初折入的帧号、不报错（sequencer.go 的已记身份分支）。
 			again, err := s.SubmitInput(1, 1, []byte("fire"))
 			if err != nil {
-				return // rejecting a replay is acceptable
+				t.Fatalf("replay of an accepted input was rejected: %v", err)
 			}
 			repeated := s.Advance()
 			if len(repeated.Inputs) != 0 {

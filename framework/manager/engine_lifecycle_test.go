@@ -255,6 +255,8 @@ func TestReturnedStopErrorContinuesCleanup(t *testing.T) {
 	}
 }
 
+// 启动成功之后（未停止）再调 Start：按 Engine.Start 的契约返回 ErrStartState，不重复启动 manager。
+// 与 TestConcurrentStartHasOneOwner 不同，这里第一次 Start 已经返回；只有本用例挡得住“成功后放开启动权”的回归。
 func TestRepeatedStartDoesNotDuplicateManagers(t *testing.T) {
 	manager := &ownershipManager{name: "once"}
 	engine := NewEngine(manager)
@@ -264,9 +266,12 @@ func TestRepeatedStartDoesNotDuplicateManagers(t *testing.T) {
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
 	}
-	second := engine.Start() // either explicit rejection or idempotence is acceptable
-	stop := engine.Stop(context.Background())
-	t.Logf("second_start=%v stop=%v starts=%d stops=%d", second, stop, manager.starts.Load(), manager.stops.Load())
+	if second := engine.Start(); !errors.Is(second, ErrStartState) {
+		t.Fatalf("second Start after a successful start = %v, want ErrStartState", second)
+	}
+	if err := engine.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if manager.starts.Load() != 1 || manager.stops.Load() != 1 {
 		t.Fatalf("one lifecycle executed twice: starts=%d stops=%d", manager.starts.Load(), manager.stops.Load())
 	}
