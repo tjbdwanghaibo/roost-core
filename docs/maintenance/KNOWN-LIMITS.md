@@ -1,6 +1,6 @@
 # 当前已知限制与验证边界
 
-适用版本：v1.31.0（[发布说明](../release/v1.31.0-NOTES.md)、[发布验收](../release/v1.31.0-VALIDATION.md)）与 main 上未发版的改动（CHANGELOG `[Unreleased]`）。本文件只记**当前仍有效**的限制、维护者已接受的代价和验证边界；已修复问题的现象、根因、红绿证据与修法见 [CHANGELOG](../../CHANGELOG.md)、[docs/release](../release/) 与 Git 历史。审查发现的问题以 `RV-*` 登记在本文件开头（2026-10-22 审查的三项均已修复，没有未修复的问题，进度见 [COMMIT-REVIEW](COMMIT-REVIEW.md)）。拿不准是否仍有效的条目标“尚未确认”；v1.31 发版前要补测的项汇总在文末[待补测](#待补测v131-发版前)与[今晚压测清单](../performance/V1310-PRERELEASE-20261022.md)。
+适用版本：v1.31.1（[补丁说明](../release/v1.31.1-NOTES.md)、[验收](../release/v1.31.1-VALIDATION.md)；功能版本 v1.31.0 的[发布说明](../release/v1.31.0-NOTES.md)、[发布验收](../release/v1.31.0-VALIDATION.md)）与 main 上未发版的改动（CHANGELOG `[Unreleased]`）。本文件只记**当前仍有效**的限制、维护者已接受的代价和验证边界；已修复问题的现象、根因、红绿证据与修法见 [CHANGELOG](../../CHANGELOG.md)、[docs/release](../release/) 与 Git 历史。审查发现的问题以 `RV-*` 登记在本文件开头（2026-10-22 审查的三项均已修复，没有未修复的问题，进度见 [COMMIT-REVIEW](COMMIT-REVIEW.md)）。拿不准是否仍有效的条目标“尚未确认”；v1.31 发版前要补测的项汇总在文末[待补测](#待补测v131-发版前)与[今晚压测清单](../performance/V1310-PRERELEASE-20261022.md)。
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](../performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
@@ -220,7 +220,7 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
   - 原型第三轮云 c128 的余额 false 是否与“卡住的笔不进预期”同源，**尚未确认**（逐账户证据缺失，原型代码已删除）。积压一处已解释。
 - **原生步骤的多进程分片**：准入与转交由业务写（框架提供 `WithAdmit` 与 `RunHandedOver`，生成的 `RegisterSteps` 注释点名要补），见 [DESIGN-TODO D12](DESIGN-TODO.md#d12-saga-原生实体步骤与事务性-effect-消费者的生成支持)。
 - **发起方查结果**：生成的 `Lookup` / `saga.Engine.GetByBusinessKey` 按 `(Type, BusinessKey)` 查；终态通知没有默认实现，需要时由最后一步 / 补偿步骤自己发 effect，或用 `Engine.WaitTerminal`（SAGA.md）。
-- **清理守卫的 floor**：原登记的疑点**已确认并修复**（2026-10-29，[设计 §16](DESIGN-2026-10-28-saga-jetstream-authority.md#16-风险与未核实项) 第 3 批发现（2））：消费者信息由消费者 leader 按本机流副本回答，旧实现在副本追赶时把 floor 抬到流末（私有三节点 SIGSTOP 实测：修复前恢复后第一次回答就越过了未取的命令；修复后的用例里追赶期间消费者信息连续 17～83 次报“没有待投递”）；没回答的 durable 在 nats.go 的列表里会消失。现在 `DurableAckFloors` 只用消费者 Raft 的 AckFloor 与流 leader 的 `MSG.GET`，没回答的消费者记 0。剩下的边界：
+- **清理守卫的 floor**：原登记的疑点**已确认并修复**（2026-10-29，随 v1.31.1 发布，[设计 §16](DESIGN-2026-10-28-saga-jetstream-authority.md#16-风险与未核实项) 第 3 批发现（2））：消费者信息由消费者 leader 按本机流副本回答，旧实现在副本追赶时把 floor 抬到流末（私有三节点 SIGSTOP 实测：修复前恢复后第一次回答就越过了未取的命令；修复后的用例里追赶期间消费者信息连续 17～83 次报“没有待投递”）；没回答的 durable 在 nats.go 的列表里会消失。现在 `DurableAckFloors` 只用消费者 Raft 的 AckFloor 与流 leader 的 `MSG.GET`，没回答的消费者记 0。剩下的边界：
   - **依赖“回答的是当前流 leader”**：网络分区里被罢免、还没察觉的旧流 leader 可能短暂按旧状态回答（nats-server 的读没有 read-index / 租约），floor 可能越过它没见到的命令。不在威胁模型内（崩溃重启的短暂重叠），**没有防护**；后果同原疑点（步骤命令靠协调器超时重发；冷副本缺这条终态）。
   - **承载 R1 冷副本 durable 的节点停机或长时间不回答时，这条流的分区清理一直停住**（floor 0，超过 `saga.purge_stall_alarm` 点名告警）。服务端还登记着这个 durable，投影器不会重建；节点不回来就要由运维删掉它（投影器 5s 内在活着的节点上重建、从流里还在的事件重投）。修复前节点被服务端判为离线后，它以零状态出现在列表里、被当成追上了，清理会按流末进行、丢掉还没投影的终态。维护者 2026-10-29 选 A（“按推荐，选A”）：保持现状，不让投影器自动删除长时间不回答的冷副本 durable，节点回不来时由运维删除（处置见 SAGA.md“冷副本”运维条）；步骤 durable 跟随流 R3，只在选主的几秒内不回答。
   - 每次清理对每个 durable 的每个过滤多一次流 leader 的 `MSG.GET`（带消息正文，受 `max_payload_bytes` 约束）。

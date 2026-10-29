@@ -122,6 +122,9 @@
 
 ## docs/release
 
+- [v1.31.1-NOTES.md](../release/v1.31.1-NOTES.md)：v1.31.1 补丁说明（JetStream 清理守卫修复、物理房间分配削减与长稳、发布后 Remote 验证；维护者决定、升级注意、未验证项）
+- [v1.31.1-IMPLEMENTATION.md](../release/v1.31.1-IMPLEMENTATION.md)：v1.31.1 实现与核对（与说明篇同编号：提交、位置、强制点、红绿、review 检查点；最低 core 不动的依据）
+- [v1.31.1-VALIDATION.md](../release/v1.31.1-VALIDATION.md)：v1.31.1 发布验收
 - [v1.31.0-NOTES.md](../release/v1.31.0-NOTES.md)：v1.31.0 发布说明（维护者决定一览、升级清单、不兼容变化、按主题的新能力；Saga JetStream 协调器、投影器并行、Nest 异步完成按 handler 与同实体按提交序；边界与未验证项；最低 core v1.31.0）
 - [v1.31.0-IMPLEMENTATION.md](../release/v1.31.0-IMPLEMENTATION.md)：v1.31.0 实现与文件索引（与说明篇同编号：提交、源码位置、不变量与强制点、回归用例、review 重点、本轮清理）
 - [v1.31.0-VALIDATION.md](../release/v1.31.0-VALIDATION.md)：v1.31.0 发布验收
