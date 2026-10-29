@@ -1,0 +1,4 @@
+level	scenario	concurrency	durability	async	short_workers	per_second	p50_ms	p99_ms	short_busy	worker_wait_us	sagas	unexpected	balance_mismatch	balance_read_errors	mongo_checked	unobserved	publish_unknown	backlog_peak	load_s	backlog_at_load_end	max_drop_in_load	drain_s	replay_messages	replay_start_s
+01-native-forward-128	native-forward	128	pipelined	on	4	2083.8	59.4	107.0	0.13	35	62177	0	0	0	True	0	0	70202	30.0	70202	0	45.9		
+02-native-forward-128-strict64	native-forward	128	strict	off	64	1904.0	65.5	114.8	0.51	6	56877	0	0	0	True	0	0	61888	30.0	61888	0	39.8		
+03-native-forward-64	native-forward	64	pipelined	on	4	1291.6	46.9	108.6	0.06	11	38794	0	0	0	True	0	0	26072	30.1	26072	234	14.6		

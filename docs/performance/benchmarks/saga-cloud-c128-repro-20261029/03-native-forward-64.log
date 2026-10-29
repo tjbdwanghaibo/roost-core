@@ -1,0 +1,27 @@
+=== RUN   TestRealSagaJSScanLevel
+2026/10/29 18:32:57 INFO nats: connected url=nats://127.0.0.1:29722,nats://127.0.0.1:29723,nats://127.0.0.1:29724
+2026/10/29 18:32:58 INFO saga: partition replayed partition=0 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=1 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=2 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=3 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=4 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=5 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=6 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=7 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=8 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=9 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=10 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=11 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=12 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=13 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=14 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+2026/10/29 18:32:58 INFO saga: partition replayed partition=15 sagas=0 messages=0 last_event=0 input_watermark=0 pending_inputs=0 snapshot_revision=0
+participant: step handler pipelined async completion true short workers 4
+    jetstream_performance_integration_test.go:854: native-forward c64: 1291.6 saga/s p50 46.9ms p99 108.6ms (38794 sagas)
+    jetstream_performance_integration_test.go:854: nest_workers=4 wal_records/fsync=13.02 wal_fsync/saga=0.154 coordinator_events/saga=3.00 events/publish=1.72 publishes/saga=1.74 backlog_peak=26072 admission_rejected=0
+    jetstream_performance_integration_test.go:854: pipelined_async=true short: started=77588 busy=0.06 running_avg=0.24 waiting_for_worker_avg=0.00 blocked_avg=0.00 worker_wait_mean=11us dependency_wait_mean=1us max_worker_wait=4.5ms peak_waiting=33
+    jetstream_performance_integration_test.go:854: load=30.1s backlog_at_load_end=26072 peak_in_load=26052 max_drop_in_load=234 projected load/drain=53048/24540 drain=14.6s (limit 240s) balance: read_errors=0 nest_mismatch=0 mongo_mismatch=0 mongo_checked=true unobserved=0 late=0 not_started=0 unresolved=0
+2026/10/29 18:33:48 INFO nats: disconnected err=<nil>
+2026/10/29 18:33:48 INFO nats: connection closed
+--- PASS: TestRealSagaJSScanLevel (51.11s)
+PASS

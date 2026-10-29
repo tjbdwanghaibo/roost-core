@@ -1,0 +1,4 @@
+level	scenario	param	load1	gate_wait_s	seconds	exit
+1	native-forward	128	2.75	0	84	0
+2	native-forward	128	2.99	0	78	0
+3	native-forward	64	3.73	0	52	0

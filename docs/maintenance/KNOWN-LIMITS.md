@@ -214,7 +214,10 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
   - 冷副本文档不过期（框架不设 TTL），历史量由运维按 `updated_at` 清理；开启之前已经被清理掉的终态不进冷副本。
   - 版本门先比 `created_at`（一生）再比版本：同业务键两生之间至少隔一个 `terminal_retention`（≥ 1m），协调器时钟回拨超过它时旧一生可能盖住新一生（不在威胁模型内，没有单独防护）。
   - `List` 回落冷副本时一页被内存持有的 ID 占掉会再翻页，最多 4 页，之后结果是精确前缀但可能少于 `Limit` 条（按 `UpdatedBefore` 缩小范围再查）。
-- **正式实现的性能只在本机 macOS 单机测过**（2026-10-29，[验收报告](../performance/SAGA-JETSTREAM-AUTHORITY-20261029.md)，设计 §12 判据全部达标）：生产推荐配置（原生步骤 pipelined + Nest 异步完成、short 池 4）原生正向 c128 约 1050 saga/s、c1 P50 23.6ms，正确性门槛全 0；单样本为主，同配置跨时段差约 25%。**Linux、跨机、云 Mongo 的正式实现压测都没有跑**（原型的云 Mongo 数字不代表正式实现）。参与方是框架层正式路径（Nest + WAL + DataEngine 投影 + 实体内回执 + `SubscribeNativeStep`），账户 DAO 是同形手写，不是 `roost add` 生成物，`wiring/saga` 的 `Steps` 胶水不在压测路径上。旧 Redis / 旧原生路径的容量结论不再适用。
+- **正式实现的性能只在 macOS 单机测过（Mongo 在本机或云上）**（2026-10-29，[验收报告](../performance/SAGA-JETSTREAM-AUTHORITY-20261029.md)，设计 §12 判据全部达标）：生产推荐配置（原生步骤 pipelined + Nest 异步完成、short 池 4）原生正向 c128 约 1050 saga/s、c1 P50 23.6ms，正确性门槛全 0；单样本为主，同配置跨时段差约 25%。**Linux、跨机的正式实现压测都没有跑**（原型的云 Mongo 数字不代表正式实现）。参与方是框架层正式路径（Nest + WAL + DataEngine 投影 + 实体内回执 + `SubscribeNativeStep`），账户 DAO 是同形手写，不是 `roost add` 生成物，`wiring/saga` 的 `Steps` 胶水不在压测路径上。旧 Redis / 旧原生路径的容量结论不再适用。
+  - 云 Mongo 只有 2026-10-29 的三档单样本（[复现报告](../performance/SAGA-CLOUD-C128-REPRO-20261029.md)，RTT 约 9ms）：原生正向 c128 2084 saga/s（@strict64 1904）、c64 1292 saga/s，正确性全 0。
+  - 参与方投影器约 1.5～1.8k 条/s，低于 c128 的准入速率（约 4k 条/s），停止加压后追平 c128 45.9s、@strict64 39.8s，**超过设计 §12 的 30s 门槛**（c64 14.6s）。原生正向档不开准入，持续高于投影速率的负载要靠准入限流。
+  - 原型第三轮云 c128 的余额 false 是否与“卡住的笔不进预期”同源，**尚未确认**（逐账户证据缺失，原型代码已删除）。积压一处已解释。
 - **原生步骤的多进程分片**：准入与转交由业务写（框架提供 `WithAdmit` 与 `RunHandedOver`，生成的 `RegisterSteps` 注释点名要补），见 [DESIGN-TODO D12](DESIGN-TODO.md#d12-saga-原生实体步骤与事务性-effect-消费者的生成支持)。
 - **发起方查结果**：生成的 `Lookup` / `saga.Engine.GetByBusinessKey` 按 `(Type, BusinessKey)` 查；终态通知没有默认实现，需要时由最后一步 / 补偿步骤自己发 effect，或用 `Engine.WaitTerminal`（SAGA.md）。
 - **清理守卫的 floor**：`DurableAckFloors` 对没有待投递 / 待确认消息的 durable 报“列出之前读到的流末序号”。消费者 leader 在落后的副本上时，可能对流 leader 已有、它还没应用的命令报“没有待投递”，那条命令可能被清掉；后果只是活性（协调器按步骤超时重发），会不会发生**尚未确认**（取决于副本应用与清理在 Raft 日志里的先后）。

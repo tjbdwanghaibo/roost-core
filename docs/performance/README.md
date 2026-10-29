@@ -6,7 +6,8 @@
 | --- | --- |
 | Saga 正式实现（JetStream 协调器）验收（2026-10-29）：**达标** | [SAGA-JETSTREAM-AUTHORITY-20261029](SAGA-JETSTREAM-AUTHORITY-20261029.md)：生产推荐配置（原生步骤 pipelined + Nest 异步完成、short 池缺省 4）原生正向 c128 1047～1053 笔/s、c1 P50 23.6ms，准入关 / 开各 6 次，15 档正确性全 0；第一轮封顶约 500 笔/s 定位为 strict 在 short worker 上等 fsync（非实现退化），strict 4 worker 对照 254 笔/s。入口 [saga-js-scan.sh](../../scripts/perf/saga-js-scan.sh)，样本 [benchmarks/saga-jetstream-authority-20261029](benchmarks/saga-jetstream-authority-20261029/) |
 | [投影器按实体分片并行投影（2026-10-27）](PROJECTOR-ENTITY-PARALLEL-20261027.md) | 分支 `feat/projector-entity-parallel`：普通记录本机 6.8k → 24.7k 条/s、云（RTT 64ms）431 → 1653 条/s（w8）；带回执记录随通道数近线性；带 effect 的记录（原生步骤）不变（effect 顺序不放宽），实验 B 本机 saga scan c16 / c64 约 +30% / +60%；原型 cloud-part 参与方投影 384～400 → 950～1365 条/s，c64 / c128 积压仍增长 |
-| [Saga 协调器以 JetStream 为权威日志：原型压测（2026-10-27）](SAGA-JETSTREAM-LOG-PROTO-20261027.md) | 原型、压缩矩阵（每档 30s、单样本为主），只给量级。第五轮并行投影器（8 通道）+ 积压准入：云 Mongo（RTT 64ms）准入开时积压有界（约 2850～3050 笔、3s 内追平）、有效持续吞吐约 690～735 笔/s（= 投影器速率），准入关时积压 6～13 万条；本机准入从不关闭、约 1150～1210 笔/s。第三轮缺省配置（参与方投影开、冷副本关）：本机同盘正向 c128 约 1650～1790 TPS，积压按笔有 6 档短时超 2 倍；云 Mongo（RTT 约 8ms）关键路径 c128 约 1960～2690 TPS，参与方投影器上限约 500～590 条/s、c16 起积压持续增长，同时段 main / 2c 原生正向约 5.2～5.3 TPS；一处核对异常尚未确认。第二轮投影打开（参与方 DataEngine 投影 + saga 冷副本、4 条流、Mongo 与 NATS 同盘）：积压按笔 0.98～2.06 倍在途、44～88ms 追平、冷副本 0 差异，正向 c128 约 600～810 TPS、c1 P50 约 45ms，退化来自同盘 I/O 争用；第一轮私有 R3 集群 + 真实 Nest strict 参与方、不跑 Mongo：两步正向 c1 P50 约 11ms、c128 约 2500～2900 TPS 未饱和，补偿 c128 约 1900～2000；协调器关键路径 0 次本地 fsync，c128 每次发布合 8～9 条事件，参与方 WAL 每步约 0.04 次 fsync；余额与终态复读全部通过；与 main / 2a2b / 2c 口径不同（无 Mongo、步骤侧投影移出关键路径），不算倍数 |
+| [Saga 正式实现：云 Mongo c128 复现（2026-10-29）](SAGA-CLOUD-C128-REPRO-20261029.md) | 原型第三轮云 c128 两处“尚未确认”的复核：积压“加压时下降”已解释（原型那一档有 worker 等终态到 150s，读数在 150s 时，非记账 / checkpoint 跳变）；余额 false 倾向同源、尚未确认。正式实现同条件三档（c128 生产缺省 2084 saga/s、@strict64 1904、c64 1292）未复现：读错误 / 不符 / 未观察终态全 0，加压期积压单调；投影器约 1.5～1.8k 条/s，c128 追平 40～46s 超 30s 门槛。样本 [benchmarks/saga-cloud-c128-repro-20261029](benchmarks/saga-cloud-c128-repro-20261029/) |
+| [Saga 协调器以 JetStream 为权威日志：原型压测（2026-10-27）](SAGA-JETSTREAM-LOG-PROTO-20261027.md) | 原型、压缩矩阵（每档 30s、单样本为主），只给量级。第五轮并行投影器（8 通道）+ 积压准入：云 Mongo（RTT 64ms）准入开时积压有界（约 2850～3050 笔、3s 内追平）、有效持续吞吐约 690～735 笔/s（= 投影器速率），准入关时积压 6～13 万条；本机准入从不关闭、约 1150～1210 笔/s。第三轮缺省配置（参与方投影开、冷副本关）：本机同盘正向 c128 约 1650～1790 TPS，积压按笔有 6 档短时超 2 倍；云 Mongo（RTT 约 8ms）关键路径 c128 约 1960～2690 TPS，参与方投影器上限约 500～590 条/s、c16 起积压持续增长，同时段 main / 2c 原生正向约 5.2～5.3 TPS；c128 第一次的积压异常已解释（加压实际 150s，见 [复现](SAGA-CLOUD-C128-REPRO-20261029.md)），余额 false 倾向同源、尚未确认。第二轮投影打开（参与方 DataEngine 投影 + saga 冷副本、4 条流、Mongo 与 NATS 同盘）：积压按笔 0.98～2.06 倍在途、44～88ms 追平、冷副本 0 差异，正向 c128 约 600～810 TPS、c1 P50 约 45ms，退化来自同盘 I/O 争用；第一轮私有 R3 集群 + 真实 Nest strict 参与方、不跑 Mongo：两步正向 c1 P50 约 11ms、c128 约 2500～2900 TPS 未饱和，补偿 c128 约 1900～2000；协调器关键路径 0 次本地 fsync，c128 每次发布合 8～9 条事件，参与方 WAL 每步约 0.04 次 fsync；余额与终态复读全部通过；与 main / 2a2b / 2c 口径不同（无 Mongo、步骤侧投影移出关键路径），不算倍数 |
 | [Saga 协调器存储迁 Redis 权威：2a / 2b 同机对照（2026-10-27）](SAGA-REDIS-AUTHORITY-2AB-20261027.md) | 分支 `feat/redis-authority-2ab` 对 main 交替两轮：每笔 Mongo 操作达到设计（Mongo 步骤 50 → 19，协调器 0），2b 门槛达标、冷热 0 差异；但权威 Redis 与 Mongo 同盘时，macOS 上每次写 `F_FULLFSYNC`（典型 16～18ms）且主线程同步落盘，Mongo 步骤饱和约 0.4～0.5 倍、原生约 0.8 倍，2a 三项性能门槛不达标；AOF 放内存盘诊断时 w16 达 3.1 倍；Linux 未测 |
 | [Saga 并发吞吐：云 Mongo 与本机 Mongo 对照（2026-10-26）](SAGA-CLOUD-MONGO-20261026.md) | 闭环 1～128 并发、原生步骤正向 / 全补偿与 Mongo 步骤：本机饱和约 10 / 6 / 40～45 TPS，云 Mongo（本轮 RTT 约 60ms）0.88 / 0.62 / 2.1 TPS（worker 16 时 6.7）；瓶颈是串行工作池 × 往返（原生步骤卡在投影器），Mongo 服务端未饱和；领取查询积压下全量内存排序（云上 1 万积压单次约 0.4～0.65s）及候选索引；Redis 方案收益按段占比推算 |
 | [JetStream独立与Mongo混合资源对照](benchmarks/jetstream-isolation-20261023/README.md) | 独立约1.4ms、已测6.5万消息/s；Mongo同机负载复现约43ms；CPU/内存/网络未耗尽；采样确认Mongo journal同步与NATS pwrite驻留，保留睡眠无效样本 |
@@ -164,18 +165,22 @@ ROOST_NEST_GAME_RACE=0 ROOST_NEST_GAME_SHORT_QUEUE=65536 ROOST_NEST_GAME_SHORT_W
 （`scripts/nats-cluster.sh`，端口 `ROOST_SCAN_NATS_PORT_BASE`，缺省 29622）与私有 mongod 单节点副本集（`ROOST_SCAN_MONGO_PORT`，缺省 29817，
 `transactionLifetimeLimitSeconds=20`），开跑前查端口空闲，结束删数据目录；`GOMAXPROCS=4`；每档前等 loadavg < 8（最多 60s）。测试二进制编译一次，
 每档调用 `framework/saga` 的 `TestRealSagaJSScanLevel`，结果在 `artifacts/perf/saga-js/<label>/`：`env.txt`、`runs.tsv`（每档负载与耗时）、
-`<序号>-<场景>-<参数>.json` 与 `.log`、`summary.tsv`。缺省 15 档（设计 §12 的 13 个计时档 + 两次重放），约 20～28 分钟。
+`<序号>-<场景>-<参数>.json` 与 `.log`、`<档>.series.tsv`（逐秒：WAL 准入 / 追加 / 持久 LSN / fsync / checkpoint、投影器准入 / 投影 / 积压、准入信号）、`summary.tsv`。缺省 15 档（设计 §12 的 13 个计时档 + 两次重放），约 20～28 分钟。
 
 | 字段 | 含义 |
 | --- | --- |
 | `per_second` / `p50_ms` / `p99_ms` | 稳态窗口 [5s, 30s) 里到终态的笔数 / 秒；端到端 = 调用 `StartSaga` → `WaitTerminal` 返回 |
 | `unexpected_terminals` / `balance_mismatches` / `publish_unknown` / `backlog_after_drain` | 正确性硬门槛，任何一项非零这一档失败 |
+| `balance_read_errors` / `balance_nest_mismatches` / `balance_mongo_mismatches` / `mongo_checked` | 余额核对分项：读失败（含超时，Nest 读 30s）与不符分开计；`mongo_checked=false`（关闭时 WAL 没投影完或读失败）也判失败 |
+| `unobserved_sagas` / `late_terminals` / `unresolved_sagas` | 发起方没观察到终态的笔、追平后补查到终态（计入预期）的笔、补不到的笔（判失败） |
+| `load_seconds` / `backlog_at_load_end` / `backlog_max_drop_in_load` | 实际加压时长（到 worker 全部返回，超出设定秒数说明有 worker 卡在等终态）、那一刻的积压、逐秒序列里加压期相邻两秒的最大降幅 |
 | `backlog_peak_records` / `drain_seconds` | 参与方 DataEngine 投影积压峰值（准入档对照 1.3 × `high_records`）、停止加压后积压归零的用时 |
 | `replay.start_seconds` | 合成 `replay:<条数>` 条分区日志后（不快照），新协调器从头重放到开始服务的时长 |
 
 参与方是框架层正式路径（真实 Nest + nestwal WAL strict / pipelined + DataEngine 投影 8 通道 + 实体内回执 + `SubscribeNativeStep`；Mongo 步骤是
 `SubscribeMongoStep` + `MongoStepInbox`），账户 DAO 与生成 DAO 同形但手写，`wiring/saga` 的 `Steps` 胶水不在路径上；协调器是正式 `Engine`
-（P=16、G=4、R3）。云 Mongo 一轮用 `ROOST_SCAN_MONGO_URI`（不打印、不写盘），不计入 30 分钟。
+（P=16、G=4、R3）。云 Mongo 一轮用 `ROOST_SCAN_MONGO_URI`（不打印、不写盘），不计入 30 分钟；投影慢时用 `ROOST_SAGA_SCAN_DRAIN_SECONDS`
+（缺省 30）放宽追平上限，Mongo 余额才能核对，30s 门槛按 `drain_seconds` 判读。
 
 ### saga.sh（新拆分；脚本已在 saga 第 4 批删除，本节是历史口径）
 

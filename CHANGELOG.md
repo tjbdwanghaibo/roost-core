@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+- **Saga 压测夹具：余额核对分项、未观察终态补查、逐秒序列**（`TestRealSagaJSScanLevel`，[复现报告](docs/performance/SAGA-CLOUD-C128-REPRO-20261029.md)）：
+  - 读失败 / 超时与 Nest、Mongo 不符分开计数，不再 `t.Fatal` 中断；发起方没观察到终态的笔在追平后补查，补到的计入预期。
+  - 记实际加压时长与停止加压时的积压；`series` 逐秒记 WAL、投影器、积压与准入信号，脚本写 `<档>.series.tsv`。
+  - 新增 `ROOST_SAGA_SCAN_DRAIN_SECONDS`（缺省 30）。只改测试与脚本，不改框架行为。
+  - 原型第三轮云 c128 的积压异常已解释，余额 false 仍尚未确认。正式实现在云 Mongo 上 c128 追平 40～46s，超过 30s 门槛，已记入 KNOWN-LIMITS。
+
 ## [v1.31.0] - 2026-10-29
 
 次版本（v1.30.0 没有单独发版，并入本版）：实体心跳、移动与行为控制，业务时间取自 ctx 与场景时间域，视野模型与 Interest 单写者，Lockstep 快照恢复，DAO 逻辑库名映射、单实体运维、别名合服与全服邮件；**Saga 协调器权威改为 JetStream 分区事件日志**（参与方回执在实体里，删除 Redis 权威、Store Service 与 DataEngine lease fence，可选 Mongo 冷副本，原生步骤推荐 pipelined + Nest 异步完成）；DataEngine 投影器按实体并行；Nest 异步完成按 handler 生效、同实体每笔事务按提交序对外可见；物理房间服务与通用 LevelComponent。**含大量不兼容变化**（线上尚未部署，不做旧进程 / 旧数据 / 旧工程兼容）；生成物最低 core 由 v1.29.0 升到 **v1.31.0**（钉 v1.29.0 时生成的 game-demo 引用的 `gameplay/heartbeat` / `movement` / `state` / `timedomain`、`wiring/sidmerge` 不存在）。发布说明、实现与验收见 docs/release/v1.31.0-NOTES.md / -IMPLEMENTATION.md / -VALIDATION.md。
