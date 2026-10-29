@@ -526,7 +526,10 @@ func (p *ptParticipant) subscribe(ctx context.Context, js fnats.IJetStream, layo
 }
 
 // close 按三步停：停消费（Drain 等在途处理）、停 Nest、把 WAL 投影完并关闭。
-func (p *ptParticipant) close() error {
+func (p *ptParticipant) close() error { return p.closeWithin(60 * time.Second) }
+
+// closeWithin 同 close，停 Nest 与把 WAL 投影完共用 timeout（云 Mongo 上投影慢，压测档按追平上限放宽）。
+func (p *ptParticipant) closeWithin(timeout time.Duration) error {
 	for _, sub := range p.subs {
 		sub.Drain()
 	}
@@ -536,7 +539,7 @@ func (p *ptParticipant) close() error {
 		case <-time.After(20 * time.Second):
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	_ = p.mgr.Shutdown(ctx)
 	if err := p.projector.Flush(ctx); err != nil {
@@ -548,13 +551,22 @@ func (p *ptParticipant) close() error {
 // balance 经 Nest 读一个账户（与步骤事务串行，读写之间有同步）。
 func (p *ptParticipant) balance(t *testing.T, n int64) int64 {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	out, err := p.mgr.Request(ctx, ptReadHandler, ptAccountID(n), nil)
+	got, err := p.readBalance(10*time.Second, n)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return out.(int64)
+	return got
+}
+
+// readBalance 同 balance，读失败（含超时）原样返回、不判失败：压测核对要把“读不到”与“余额不符”分开计数。
+func (p *ptParticipant) readBalance(timeout time.Duration, n int64) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := p.mgr.Request(ctx, ptReadHandler, ptAccountID(n), nil)
+	if err != nil {
+		return 0, err
+	}
+	return out.(int64), nil
 }
 
 // ---- 共用：连接、协调器、发起与核对 ----

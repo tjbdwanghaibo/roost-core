@@ -395,7 +395,16 @@ func realRevn06s5Mongo(t *testing.T) (*driver.Client, string) {
 // 提交方式、mongo-forward / replay 没有 Nest 参与方，设了 ROOST_SAGA_PT_STRICT 都拒绝。
 //
 // 正确性（硬门槛，写进结果、不达标用例失败）：每笔终态符合预期（正向 Completed、拒绝的 Compensated）；原生档 Nest 内存与
-// Mongo 里每个账户的余额 = 按终态算出的预期；Mongo 档每个账户余额同样核对；发布结果未知 0；停止加压后 30s 内投影积压归零。
+// Mongo 里每个账户的余额 = 按终态算出的预期；Mongo 档每个账户余额同样核对；发布结果未知 0；停止加压后追平上限内投影积压归零
+// （ROOST_SAGA_SCAN_DRAIN_SECONDS，缺省 30；云 Mongo 一轮投影慢时放宽，只为让 Mongo 余额能核对，30s 门槛照旧按结果判读）。
+//
+// 余额核对分开计数（原型 10-27 云 c128 的“余额 false”无法区分读超时与不符，见 SAGA-CLOUD-C128-REPRO-20261029.md）：
+// 读失败 / 超时（balance_read_errors，Nest 读 30s 超时）、Nest 内存不符、Mongo 不符各记一项；发起方没观察到终态的笔
+// （StartSaga / WaitTerminal 出错）不静默丢出预期：排空后按协调器内存补查终态，补到的计入预期（late_terminals），补不到的记
+// unresolved_sagas。加压结束指 worker 全部返回的时刻（load_seconds 是实际时长，超出 seconds 说明有 worker 卡在等终态）。
+//
+// 逐秒序列（series，脚本另写 <档>.series.tsv）：参与方 WAL 准入 / 追加 / 持久 LSN / fsync / checkpoint 次数、投影器准入 /
+// 投影 / 积压（WALUnacked）、协调器准入判定与它看到的积压、已观察终态数，从开始加压到追平结束每秒一行。
 func TestRealSagaJSScanLevel(t *testing.T) {
 	output := os.Getenv("ROOST_SAGA_SCAN_OUTPUT")
 	if output == "" {
@@ -428,6 +437,7 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 		projectDelayDefault = 10_000
 	}
 	projectDelay := time.Duration(integer("ROOST_SAGA_SCAN_PROJECT_DELAY_US", projectDelayDefault, 0, 1_000_000)) * time.Microsecond
+	drainLimit := time.Duration(integer("ROOST_SAGA_SCAN_DRAIN_SECONDS", 30, 1, 900)) * time.Second
 	commit := ptCommitFromEnv()
 	if commit == ptCommitStrict && (scenario == "mongo-forward" || scenario == "replay" || scenario == "native-pipelined") {
 		t.Fatalf("%s=1 does not apply to scenario %q", ptStrictEnv, scenario)
@@ -468,7 +478,7 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	counted := &scanCountingLog{JetStreamLog: conn.log}
 	engine := startScanEngine(t, counted, conn, options, ptDefinition(), scanMongoDefinition())
 	const accounts = 256
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(seconds)*time.Second+5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(seconds)*time.Second+drainLimit+5*time.Minute)
 	defer cancel()
 	sagaType := "pt"
 	var participant *ptParticipant
@@ -547,6 +557,14 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	}
 	var mu sync.Mutex
 	var done []finished
+	// lost 是发起方没观察到终态的笔（StartSaga 非背压错误或 WaitTerminal 出错）：排空后补查，不能静默丢出余额预期。
+	type lostSaga struct {
+		bk       string
+		transfer ptTransfer
+		reason   string
+	}
+	var lost []lostSaga
+	var observed atomic.Int64
 	var seq atomic.Int64
 	var rejected atomic.Int64
 	walStats := func() (appended, syncs uint64) {
@@ -563,11 +581,51 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 		return participant.mgr.Stats().Queue.Short
 	}
 	appended0, syncs0 := walStats()
+	var projected0 uint64
+	if participant != nil {
+		projected0 = participant.projector.Stats().Projected
+	}
 	short0 := shortLane()
 	events0 := engine.Stats().Events
 	rounds0, roundEvents0 := counted.rounds.Load(), counted.roundEvents.Load()
 	start := time.Now()
 	deadline := start.Add(time.Duration(seconds) * time.Second)
+	// 逐秒序列：从开始加压到追平结束（stopSeries，结束时再补一行终值）。loadOver 在 worker 全部返回后置位，之后的行是 drain。
+	var loadOver atomic.Bool
+	var series []scanSecond
+	seriesDone := make(chan struct{})
+	seriesCtx, stopSeries := context.WithCancel(ctx)
+	go func() {
+		defer close(seriesDone)
+		tick := time.NewTicker(time.Second)
+		defer tick.Stop()
+		for last := false; !last; {
+			select {
+			case <-seriesCtx.Done():
+				last = true
+			default:
+			}
+			row := scanSecond{T: time.Since(start).Seconds(), Phase: "load", Terminals: observed.Load()}
+			if loadOver.Load() {
+				row.Phase = "drain"
+			}
+			if participant != nil {
+				w := participant.wal.Stats()
+				row.WALAdmitted, row.WALAppended, row.WALDurableLSN, row.WALSyncs, row.WALCheckpoints = w.Admitted, w.Appended, participant.wal.DurableLSN(), w.Syncs, w.Acknowledged
+				ps := participant.projector.Stats()
+				row.ProjCommitted, row.ProjProjected, row.Backlog = ps.Committed, ps.Projected, ps.WALUnacked
+			}
+			adm := engine.AdmissionState()
+			row.AdmissionOpen, row.AdmissionBacklog = adm.Open, adm.BacklogRecords
+			series = append(series, row) // 只有本 goroutine 写；读在 <-seriesDone 之后
+			if !last {
+				select {
+				case <-seriesCtx.Done():
+				case <-tick.C:
+				}
+			}
+		}
+	}()
 	// short 通道采样（稳态窗口内每 50ms 一次）：执行中（占 worker）、就绪等 worker、等同 ID 前驱的作业数。别的实体的作业
 	// 与步骤共用这个通道，执行中 / worker 数就是它们看到的 worker 占用，就绪等 worker 是它们排队的深度。
 	var shortSamples, shortRunning, shortWaiting, shortBlocked atomic.Int64
@@ -605,6 +663,9 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 					}
 					if !errors.Is(err, ErrBackpressure) {
 						t.Errorf("start %s: %v", bk, err)
+						mu.Lock()
+						lost = append(lost, lostSaga{bk: bk, transfer: transfer, reason: "start: " + err.Error()})
+						mu.Unlock()
 						return
 					}
 					rejected.Add(1)
@@ -615,6 +676,9 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 				waitCancel()
 				if err != nil {
 					t.Errorf("wait %s: %v", bk, err)
+					mu.Lock()
+					lost = append(lost, lostSaga{bk: bk, transfer: transfer, reason: "wait: " + err.Error()})
+					mu.Unlock()
 					return
 				}
 				if closedNow.Load() && time.Now().Before(deadline) {
@@ -623,12 +687,19 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 				mu.Lock()
 				done = append(done, finished{bk: bk, transfer: transfer, status: final.Status, at: time.Now(), latency: time.Since(began)})
 				mu.Unlock()
+				observed.Add(1)
 			}
 		})
 	}
 	wg.Wait()
+	loadOver.Store(true)
 	<-shortDone
 	loadEnded := time.Now()
+	result.LoadSeconds = loadEnded.Sub(start).Seconds()
+	if participant != nil {
+		ps := participant.projector.Stats()
+		result.BacklogAtLoadEnd, result.ProjectedDuringLoad = ps.WALUnacked, ps.Projected-projected0
+	}
 	appended1, syncs1 := walStats()
 	result.WALAppended, result.WALSyncs = appended1-appended0, syncs1-syncs0
 	if short1 := shortLane(); participant != nil {
@@ -649,13 +720,45 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	}
 	result.CoordinatorEvents = engine.Stats().Events - events0
 	result.CoordinatorPublishes, result.CoordinatorPublishedEvents = counted.rounds.Load()-rounds0, counted.roundEvents.Load()-roundEvents0
-	for backlog() > 0 && time.Since(loadEnded) < 30*time.Second {
+	for backlog() > 0 && time.Since(loadEnded) < drainLimit {
 		time.Sleep(50 * time.Millisecond)
 	}
 	result.DrainSeconds = time.Since(loadEnded).Seconds()
+	result.DrainLimitSeconds = drainLimit.Seconds()
 	result.BacklogAfterDrain = backlog()
+	if participant != nil {
+		result.ProjectedDuringDrain = participant.projector.Stats().Projected - projected0 - result.ProjectedDuringLoad
+	}
 	stopSampling()
 	<-sampleDone
+	stopSeries()
+	<-seriesDone
+	result.Series = series
+	result.BacklogPeakInLoad, result.BacklogMaxDropInLoad = scanLoadBacklog(series)
+
+	// 发起方没观察到终态的笔：按协调器内存补查（Get 不到即没开始，没有余额影响；非终态再等 30s）。补到的计入预期。
+	for _, l := range lost {
+		result.UnobservedSagas++
+		if result.UnobservedFirst == "" {
+			result.UnobservedFirst = l.bk + " " + l.reason
+		}
+		id := IDOf(sagaType, l.bk)
+		getCtx, getCancel := context.WithTimeout(ctx, 30*time.Second)
+		record, err := engine.Get(getCtx, id)
+		if err == nil && !record.Status.Terminal() {
+			record, err = engine.WaitTerminal(getCtx, id)
+		}
+		getCancel()
+		switch {
+		case errors.Is(err, ErrNotFound):
+			result.UnobservedNotStarted++
+		case err != nil:
+			result.UnresolvedSagas++
+		default:
+			result.LateTerminals++
+			done = append(done, finished{bk: l.bk, transfer: l.transfer, status: record.Status, at: time.Now()})
+		}
+	}
 
 	// 吞吐与延迟：稳态窗口里到终态的笔数。
 	windowStart, windowEnd := start.Add(time.Duration(warmup)*time.Second), deadline
@@ -698,35 +801,60 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 		}
 	}
 
-	// 余额逐账户核对：Nest 内存（原生）与 Mongo（投影完之后 / Mongo 步骤）。
+	// 余额逐账户核对：Nest 内存（原生）与 Mongo（投影完之后 / Mongo 步骤）。读失败（含超时）与不符分开计数，都不中断，
+	// 结果照样写盘；第一处问题原样记进 balance_first_problem。
+	problem := func(format string, args ...any) {
+		msg := fmt.Sprintf(format, args...)
+		t.Error(msg)
+		if result.BalanceFirstProblem == "" {
+			result.BalanceFirstProblem = msg
+		}
+	}
 	if participant != nil {
 		for n := range int64(accounts) {
-			if got := participant.balance(t, n); got != want[n] {
-				result.BalanceMismatches++
-				t.Errorf("account %d: Nest balance %d, want %d", n, got, want[n])
+			got, err := participant.readBalance(30*time.Second, n)
+			switch {
+			case err != nil:
+				result.BalanceReadErrors++
+				problem("account %d: Nest read: %v", n, err)
+			case got != want[n]:
+				result.BalanceNestMismatches++
+				problem("account %d: Nest balance %d, want %d", n, got, want[n])
 			}
 		}
-		if err := participant.close(); err != nil {
-			t.Fatal(err)
+		// 关闭时把 WAL 尾巴投影完：上限放到追平上限（至少 60s），没投影完 Mongo 就不能核对，记 close_error、不当作不符。
+		if err := participant.closeWithin(max(drainLimit, 60*time.Second)); err != nil {
+			result.CloseError = err.Error()
 		}
 		accountsColl = mongo.Database(database).Collection("account")
 	}
-	var docs []ptAccountDoc
-	if err := accountsColl.Find(ctx, bson.M{}, &docs); err != nil {
-		t.Fatal(err)
-	}
-	seen := map[int64]int64{}
-	for _, d := range docs {
-		seen[d.ID] = d.Balance
-	}
-	for n := range int64(accounts) {
-		if got := seen[ptAccountID(n)]; got != want[n] {
-			result.BalanceMismatches++
-			t.Errorf("account %d: Mongo balance %d, want %d", n, got, want[n])
+	if result.CloseError == "" {
+		var docs []ptAccountDoc
+		findCtx, findCancel := context.WithTimeout(ctx, 30*time.Second)
+		err := accountsColl.Find(findCtx, bson.M{}, &docs)
+		findCancel()
+		if err != nil {
+			result.BalanceReadErrors++
+			problem("Mongo accounts read: %v", err)
+		} else {
+			result.MongoChecked = true
+			seen := map[int64]int64{}
+			for _, d := range docs {
+				seen[d.ID] = d.Balance
+			}
+			for n := range int64(accounts) {
+				if got := seen[ptAccountID(n)]; got != want[n] {
+					result.BalanceMongoMismatches++
+					problem("account %d: Mongo balance %d, want %d", n, got, want[n])
+				}
+			}
 		}
 	}
+	result.BalanceMismatches = result.BalanceNestMismatches + result.BalanceMongoMismatches
 	writeScanResult(t, output, result)
-	if result.Unexpected != 0 || result.PublishUnknown != 0 || result.BalanceMismatches != 0 || result.BacklogAfterDrain != 0 {
+	if result.Unexpected != 0 || result.PublishUnknown != 0 || result.BalanceMismatches != 0 || result.BalanceReadErrors != 0 ||
+		!result.MongoChecked || result.UnresolvedSagas != 0 || result.BacklogAfterDrain != 0 {
+		result.Series = nil // 序列在结果文件里，失败信息里不重复
 		t.Fatalf("correctness gate failed: %+v", result)
 	}
 	// 准入档的判据（设计 §12）：准入真的关过又重开过、积压峰值 ≤ 1.3 × 高水位、关闭期间有效吞吐不为 0。
@@ -761,6 +889,30 @@ type scanResult struct {
 	Snapshots         uint64            `json:"snapshots"`
 	Purges            uint64            `json:"purges"`
 	Replay            *scanReplayResult `json:"replay,omitempty"`
+	// 余额核对分项（BalanceMismatches = Nest 不符 + Mongo 不符）：读失败 / 超时单独计；MongoChecked 为 false 表示 Mongo
+	// 没核对（关闭时 WAL 没投影完，CloseError，或读失败）。
+	BalanceReadErrors      int    `json:"balance_read_errors"`
+	BalanceNestMismatches  int    `json:"balance_nest_mismatches"`
+	BalanceMongoMismatches int    `json:"balance_mongo_mismatches"`
+	BalanceFirstProblem    string `json:"balance_first_problem,omitempty"`
+	MongoChecked           bool   `json:"mongo_checked"`
+	CloseError             string `json:"close_error,omitempty"`
+	// 发起方没观察到终态的笔与补查结果：补到终态（计入预期）/ 协调器里没有（没开始）/ 补不到。
+	UnobservedSagas      int    `json:"unobserved_sagas"`
+	UnobservedFirst      string `json:"unobserved_first,omitempty"`
+	LateTerminals        int    `json:"late_terminals"`
+	UnobservedNotStarted int    `json:"unobserved_not_started"`
+	UnresolvedSagas      int    `json:"unresolved_sagas"`
+	// 加压实际时长（到 worker 全部返回）、那一刻的积压与加压 / 追平期间投影的记录数；追平上限。
+	LoadSeconds          float64 `json:"load_seconds"`
+	BacklogAtLoadEnd     uint64  `json:"backlog_at_load_end"`
+	ProjectedDuringLoad  uint64  `json:"projected_during_load"`
+	ProjectedDuringDrain uint64  `json:"projected_during_drain"`
+	DrainLimitSeconds    float64 `json:"drain_limit_seconds"`
+	// 逐秒序列里加压期间的积压峰值与相邻两行之间的最大降幅（加压时积压是否会降、降多少）。
+	BacklogPeakInLoad    uint64       `json:"backlog_peak_in_load"`
+	BacklogMaxDropInLoad uint64       `json:"backlog_max_drop_in_load"`
+	Series               []scanSecond `json:"series,omitempty"`
 	// 定位用计数（加压期间的增量）：参与方 Nest short 池 worker 数、WAL 追加记录与 fsync 次数（记录 / fsync 即组提交批量）、
 	// 协调器提交的事件数。
 	NestWorkers       int    `json:"nest_workers,omitempty"`
@@ -792,6 +944,41 @@ type scanResult struct {
 	ShortWaitingForWorkerAvg  float64 `json:"short_waiting_for_worker_avg,omitempty"`
 	ShortBlockedAvg           float64 `json:"short_blocked_avg,omitempty"`
 	ShortBusyFraction         float64 `json:"short_busy_fraction,omitempty"`
+}
+
+// scanSecond 是逐秒序列的一行（计数都是进程内累计值，相邻两行相减即这一秒的量）。
+//   - WAL：准入（进追加队列）、追加、持久 LSN（pipelined 水位）、fsync 次数、checkpoint 次数（投影确认后 Ack 存盘的次数）。
+//   - 投影器：准入（Committed）、投影成功（Projected，含幂等重放）、积压（WALUnacked = 已准入、checkpoint 尚未确认的事务数；
+//     只在 checkpoint 成功后按条扣减，见 dataengine/engine Projector.acknowledge）。
+//   - 协调器准入：判定是否开、判定看到的积压（只有准入档发布积压信号；其余档恒为 0）。
+type scanSecond struct {
+	T                float64 `json:"t"`
+	Phase            string  `json:"phase"` // load：worker 还没全部返回；drain：之后到追平结束
+	Terminals        int64   `json:"terminals"`
+	WALAdmitted      uint64  `json:"wal_admitted"`
+	WALAppended      uint64  `json:"wal_appended"`
+	WALDurableLSN    uint64  `json:"wal_durable_lsn"`
+	WALSyncs         uint64  `json:"wal_syncs"`
+	WALCheckpoints   uint64  `json:"wal_checkpoints"`
+	ProjCommitted    uint64  `json:"proj_committed"`
+	ProjProjected    uint64  `json:"proj_projected"`
+	Backlog          uint64  `json:"backlog"`
+	AdmissionOpen    bool    `json:"admission_open"`
+	AdmissionBacklog uint64  `json:"admission_backlog"`
+}
+
+// scanLoadBacklog 返回逐秒序列加压阶段的积压峰值与相邻两行之间的最大降幅。
+func scanLoadBacklog(series []scanSecond) (peak, maxDrop uint64) {
+	for i, row := range series {
+		if row.Phase != "load" {
+			break
+		}
+		peak = max(peak, row.Backlog)
+		if i > 0 && series[i-1].Backlog > row.Backlog {
+			maxDrop = max(maxDrop, series[i-1].Backlog-row.Backlog)
+		}
+	}
+	return peak, maxDrop
 }
 
 // scanCountingLog 数分区事件的发布（带事件过滤的 fenced 发布；启动等输入的发布不带过滤，不计）。
@@ -857,6 +1044,12 @@ func writeScanResult(t *testing.T, path string, result scanResult) {
 		t.Logf("pipelined_async=%v short: started=%d busy=%.2f running_avg=%.2f waiting_for_worker_avg=%.2f blocked_avg=%.2f worker_wait_mean=%.0fus dependency_wait_mean=%.0fus max_worker_wait=%.1fms peak_waiting=%d",
 			result.PipelinedAsync, result.ShortStarted, result.ShortBusyFraction, result.ShortRunningAvg, result.ShortWaitingForWorkerAvg, result.ShortBlockedAvg,
 			result.ShortWorkerWaitMeanUs, result.ShortDependencyWaitMeanUs, result.ShortMaxWorkerWaitMs, result.ShortPeakWaiting)
+	}
+	if result.LoadSeconds > 0 {
+		t.Logf("load=%.1fs backlog_at_load_end=%d peak_in_load=%d max_drop_in_load=%d projected load/drain=%d/%d drain=%.1fs (limit %.0fs) balance: read_errors=%d nest_mismatch=%d mongo_mismatch=%d mongo_checked=%v unobserved=%d late=%d not_started=%d unresolved=%d",
+			result.LoadSeconds, result.BacklogAtLoadEnd, result.BacklogPeakInLoad, result.BacklogMaxDropInLoad, result.ProjectedDuringLoad, result.ProjectedDuringDrain,
+			result.DrainSeconds, result.DrainLimitSeconds, result.BalanceReadErrors, result.BalanceNestMismatches, result.BalanceMongoMismatches, result.MongoChecked,
+			result.UnobservedSagas, result.LateTerminals, result.UnobservedNotStarted, result.UnresolvedSagas)
 	}
 	if result.AdmissionHigh > 0 {
 		t.Logf("admission high=%d closures=%d reopens=%d closed=%.0f%% closed_terminals=%.1f/s backlog_peak=%d (%.2f x high) rejected=%d start_retries=%d",

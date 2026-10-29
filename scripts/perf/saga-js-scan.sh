@@ -20,7 +20,8 @@
 #     @strict4 与 @strict64：strict 在生产缺省 short 池上等 fsync 会占满 worker，64 是原型压测放大池的口径）。
 #   - mongo-forward / replay 没有 Nest 参与方，后缀不适用。
 # 缺省计划 15 档，每档 30s 加启动与排空，整轮 ≤ 30 分钟。summary.tsv 带 durability / 异步完成 / short 池 worker 数与忙占比、
-# 每个作业平均等 worker 的时长，对照 strict 档能直接看出差别。
+# 每个作业平均等 worker 的时长，对照 strict 档能直接看出差别；还带余额核对分项（读失败 / 不符）、实际加压时长与加压结束时的积压。
+# 每档另写 <档>.series.tsv：参与方 WAL / 投影器 / 积压 / 准入信号的逐秒累计值（JSON 的 series 字段）。
 #
 # 环境：
 #   ROOST_PERF_LABEL           结果目录名（artifacts/perf/saga-js/<label>/，不随仓）；必填
@@ -31,8 +32,9 @@
 #   ROOST_SCAN_MONGO_URI       给了就不起私有 mongod，用它（例如云 Mongo 一轮，设计 §12 不计入 30 分钟）；不打印、不写盘
 #   ROOST_SCAN_LOAD_MAX / ROOST_SCAN_LOAD_WAIT   负载门（缺省 8 / 60 秒）
 #   ROOST_SCAN_DATA            私有 NATS / mongod 数据目录（缺省 ${TMPDIR:-/tmp}/roost-saga-js-scan-<label>，结束删除）
-#   ROOST_SAGA_SCAN_PARTITIONS / ROOST_SAGA_SCAN_PROJECT_DELAY_US
-#                              透传给测试（P 缺省 16、准入档投影每条记录延迟缺省 10ms），见 TestRealSagaJSScanLevel；
+#   ROOST_SAGA_SCAN_PARTITIONS / ROOST_SAGA_SCAN_PROJECT_DELAY_US / ROOST_SAGA_SCAN_DRAIN_SECONDS
+#                              透传给测试（P 缺省 16、准入档投影每条记录延迟缺省 10ms、停止加压后等积压归零的上限缺省 30s——
+#                              云 Mongo 一轮投影慢时放宽，Mongo 余额才能核对），见 TestRealSagaJSScanLevel；
 #                              short 池 worker 数与提交方式（ROOST_SAGA_SCAN_NEST_WORKERS / ROOST_SAGA_PT_STRICT）由每档的
 #                              后缀决定（见上），不透传
 #
@@ -201,14 +203,22 @@ done
 python3 -I - "$OUT" > "$OUT/summary.tsv" <<'PY'
 import json, pathlib, sys
 out = pathlib.Path(sys.argv[1])
-print("level\tscenario\tconcurrency\tdurability\tasync\tshort_workers\tper_second\tp50_ms\tp99_ms\tshort_busy\tworker_wait_us\tsagas\tunexpected\tbalance_mismatch\tpublish_unknown\tbacklog_peak\tdrain_s\treplay_messages\treplay_start_s")
+print("level\tscenario\tconcurrency\tdurability\tasync\tshort_workers\tper_second\tp50_ms\tp99_ms\tshort_busy\tworker_wait_us\tsagas\tunexpected\tbalance_mismatch\tbalance_read_errors\tmongo_checked\tunobserved\tpublish_unknown\tbacklog_peak\tload_s\tbacklog_at_load_end\tmax_drop_in_load\tdrain_s\treplay_messages\treplay_start_s")
+cols = ("t", "phase", "terminals", "wal_admitted", "wal_appended", "wal_durable_lsn", "wal_syncs", "wal_checkpoints", "proj_committed", "proj_projected", "backlog", "admission_open", "admission_backlog")
 for path in sorted(out.glob("[0-9][0-9]-*.json")):
     r = json.loads(path.read_text())
     replay = r.get("replay") or {}
     print("\t".join(str(x) for x in (path.stem, r["scenario"], r["concurrency"], r.get("durability", "-"), "on" if r.get("pipelined_async") else "off",
         r.get("nest_workers", "-"), round(r["per_second"], 1), round(r["p50_ms"], 1), round(r["p99_ms"], 1),
-        round(r.get("short_busy_fraction", 0), 2), round(r.get("short_worker_wait_mean_us", 0)), r["sagas"], r["unexpected_terminals"], r["balance_mismatches"], r["publish_unknown"], r["backlog_peak_records"], round(r["drain_seconds"], 1),
+        round(r.get("short_busy_fraction", 0), 2), round(r.get("short_worker_wait_mean_us", 0)), r["sagas"], r["unexpected_terminals"], r["balance_mismatches"],
+        r.get("balance_read_errors", 0), r.get("mongo_checked", "-"), r.get("unobserved_sagas", 0), r["publish_unknown"], r["backlog_peak_records"],
+        round(r.get("load_seconds", 0), 1), r.get("backlog_at_load_end", 0), r.get("backlog_max_drop_in_load", 0), round(r["drain_seconds"], 1),
         replay.get("messages", ""), round(replay.get("start_seconds", 0), 3) if replay else "")))
+    if r.get("series"):
+        with open(path.with_suffix(".series.tsv"), "w") as f:
+            f.write("\t".join(cols) + "\n")
+            for row in r["series"]:
+                f.write("\t".join(str(round(row.get(c, 0), 2) if c == "t" else row.get(c, "")) for c in cols) + "\n")
 PY
 column -t -s $'\t' "$OUT/summary.tsv" || cat "$OUT/summary.tsv"
 echo "loadavg_end: $(sysctl -n vm.loadavg 2>/dev/null || uptime)" >> "$OUT/env.txt"
