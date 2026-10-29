@@ -26,13 +26,14 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
-// v1.29.0 生成物的 roost.yaml 带 services.<name>.port_block（端口块号），生成的 Makefile 按钉住的 core
-// 跑 cmd/roost；v1.28.0 的生成器读不了这个字段（`field port_block not found in type roost.ServiceSpec`），
-// make sync / generate / doctor / id-check 全部失败。更早的 API 要求（DAO 持久文档、saga 原生步骤、
+// v1.31.0 生成物用到只在 v1.31.0 才有的包与 API：game-demo 引用 gameplay/heartbeat、movement、state、timedomain 与
+// wiring/sidmerge，钉 v1.29.0 时 tidy 报 `module ...@latest found (v1.29.0), but does not contain package ...`；
+// 另有 DAO 包的 gen_databases.go、去掉业务时间实参的 Sender、saga 原生步骤的 MustRegisterNativeStepHandler 与
+// JetStream 协调器配置（saga.coordinators 等键）。更早的要求（roost.yaml 的 port_block、DAO 持久文档、
 // wiring/selfsync、entitytimer）同样包含在内，不能接入更早的 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 var minimumVersions = VersionSpec{
-	Core: "v1.29.0",
+	Core: "v1.31.0",
 }
 
 type Manifest struct {
