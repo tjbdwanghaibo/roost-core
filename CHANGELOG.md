@@ -12,6 +12,7 @@
   - 新增 `ROOST_SAGA_SCAN_DRAIN_SECONDS`（缺省 30）。只改测试与脚本，不改框架行为。
   - 原型第三轮云 c128 的积压异常已解释，余额 false 仍尚未确认。正式实现在云 Mongo 上 c128 追平 40～46s，超过 30s 门槛，已记入 KNOWN-LIMITS。
 
+- **`scripts/perf/remote.sh` 缺省时长 30m → 15m**（脚本缺省，不改框架行为）：维护者规定每轮性能测量不超过 30 分钟，原缺省 30m 加环境恢复、生成工程编译、预热与全量核验整轮超过 30 分钟；15m 与近几轮实际用法一致（2026-10-20 / 10-22 夜间 Remote 80TPS × 15m，整轮约 16 分钟）。长稳照旧显式设 `ROOST_REMOTE_DURATION=24h`（`ROOST_REMOTE_TIMEOUT` 缺省 25h 不变）。
 - **v1.31.0 发布后补跑 Remote 故障矩阵与生成工程验收**（只是验证，不改代码）：main `5c85223c`（Remote 链路与 tag 逐字相同）上 `scripts/test-remote-matrix.sh` 两次均 21/21、`scripts/test-remote-generated.sh` 通过，见 [v1.31.0 验收补记](docs/release/v1.31.0-VALIDATION.md#v10-addendum)。
 
 ### 修复

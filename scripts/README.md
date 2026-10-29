@@ -1,6 +1,6 @@
 # scripts/
 
-Remote 容量/长稳：`scripts/perf/remote.sh`（默认 30m，`ROOST_REMOTE_DURATION=24h` 可复跑 24 小时）；故障矩阵：`scripts/test-remote-matrix.sh`。两者独占隔离环境，原始日志和数据保存于 `artifacts/perf/remote/<label>/`；[负载、判据与结果](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-ACCEPTANCE-2026-09-24.md)。
+Remote 容量/长稳：`scripts/perf/remote.sh`（默认 15m，整轮约 16～20 分钟，满足每轮不超过 30 分钟；`ROOST_REMOTE_DURATION=24h` 可复跑 24 小时）；故障矩阵：`scripts/test-remote-matrix.sh`。两者独占隔离环境，原始日志和数据保存于 `artifacts/perf/remote/<label>/`；[负载、判据与结果](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-ACCEPTANCE-2026-09-24.md)。
 
 Remote 正式业务验收：加载隔离环境的 `ROOST_DATAENGINE_IT_MONGO_URI`、`ROOST_DATAENGINE_IT_REDIS_ADDR`、`ROOST_DATAENGINE_IT_NATS_URL` 后运行 `./scripts/test-remote-generated.sh`。正式 DAO/Entity 生成器构造两实体各两 DAO，经 Nest 与三种持久化策略提交，校验 Mongo、业务拒绝/panic 回滚和真实 NATS 快照接收；不依赖 demo。同一次运行还跑持久拒绝与收尾用例（`reject_test.go` / `outcome_test.go`：正式 `ManagerAccess` 作 Remote loader + entitysync，Durability 0～3 的持久拒绝后卸载、重载全量、重载后可写，以及 strict 确认截止、结果未知后停机、嵌套独立事务、业务 worker 上删除）；`ROOST_REMOTE_LOAD=1` 或设置了 `ROOST_REMOTE_FAULT` 时只跑 `TestGeneratedRemoteNestFlow`。`ROOST_REMOTE_COUNT` 设 `-count`，`ROOST_REMOTE_RUN` 覆盖 `-run`。脚本只清理自身临时工程，测试仅清理专属数据库和 Redis key。[完整验收及独立多进程故障命令](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-24-remote.md#第三轮进程故障与正式业务链路)。
 
@@ -63,7 +63,7 @@ DataEngine 多 DAO 批量优化后的验收与性能对比见
 
 Remote 的持久权限、最新故障矩阵和容量复跑见 [2026-09-25 实施报告](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-AUTHORITY-2026-09-25.md)。旧部署必须先停写、排空并迁移；脚本记录当前 Remote 源码摘要，不能拿旧协议长稳结果替代新协议验收。
 
-Remote 诊断可设置 `ROOST_REMOTE_CPU_PROFILE=/绝对路径/cpu.pprof` 和 `ROOST_REMOTE_TRACE=/绝对路径/trace.out`；`scripts/test-remote-generated.sh` 把它们传给 Go test。跟踪会覆盖初始化、预热和计时阶段，诊断结果应与不带 profile 的正式负载分开。长稳仍使用 `scripts/perf/remote.sh` 的 `ROOST_REMOTE_DURATION=30m` / `24h`；当时的实跑范围见 [Remote 统一实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-UNIFIED-2026-09-25.md)。
+Remote 诊断可设置 `ROOST_REMOTE_CPU_PROFILE=/绝对路径/cpu.pprof` 和 `ROOST_REMOTE_TRACE=/绝对路径/trace.out`；`scripts/test-remote-generated.sh` 把它们传给 Go test。跟踪会覆盖初始化、预热和计时阶段，诊断结果应与不带 profile 的正式负载分开。长稳仍使用 `scripts/perf/remote.sh`（缺省 15m，长稳显式设 `ROOST_REMOTE_DURATION=24h`）；当时的实跑范围见 [Remote 统一实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REMOTE-UNIFIED-2026-09-25.md)。
 
 Remote 阶段定位可设置 `ROOST_REMOTE_STAGE_METRICS=1`，结果包含 Nest 阶段 metrics 和最多 32 个请求错误样本。`ROOST_REMOTE_PROJECTION_WORKERS=1` 提供串行对照，默认使用正式 Projector 的 8 路独立 Entity 投影；`ROOST_REMOTE_RATE=60` 可验证 50 TPS 以上目标。脚本源码摘要包含 DataEngine。最新容量/长稳结果见 [吞吐与超时报告](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-25-remote-throughput.md)。
 

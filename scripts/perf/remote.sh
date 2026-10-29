@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# 正式生成业务链路；持续时间可以设为 30m / 24h，数据和日志保留在独立目录。
-# 内存调查：ROOST_REMOTE_HEAP_PROFILE_MINUTES=10,30,60 在对应分钟与结束时写 heap profile 到结果目录（默认关闭，见 REMOTE-ACCEPTANCE）。
+# 正式生成业务链路；数据和日志保留在独立目录。
+# 时长缺省 15m：维护者规定每轮性能测量（含环境恢复、生成工程编译、预热与最终全量核验）不超过 30 分钟，
+# 15m 计时段的整轮墙钟约 16～20 分钟；长稳显式设 ROOST_REMOTE_DURATION=24h（ROOST_REMOTE_TIMEOUT 缺省 25h 已够）。
+# 内存调查：ROOST_REMOTE_HEAP_PROFILE_MINUTES=5,10（长稳如 10,30,60）在对应分钟与结束时写 heap profile 到结果目录（默认关闭，见 REMOTE-ACCEPTANCE）。
 set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 label="${ROOST_REMOTE_LABEL:-remote-$(date +%Y%m%d-%H%M%S)}"
@@ -16,7 +18,7 @@ export ROOST_REMOTE_ACCEPTANCE_LOCK_HELD="$lock"
 mkdir -p "$output"
 export GOWORK=off GOMAXPROCS="${ROOST_REMOTE_CPU:-4}"
 export ROOST_REMOTE_LOAD=1 ROOST_REMOTE_OUTPUT="$output/result.json"
-export ROOST_REMOTE_DURATION="${ROOST_REMOTE_DURATION:-30m}" ROOST_REMOTE_TIMEOUT="${ROOST_REMOTE_TIMEOUT:-25h}"
+export ROOST_REMOTE_DURATION="${ROOST_REMOTE_DURATION:-15m}" ROOST_REMOTE_TIMEOUT="${ROOST_REMOTE_TIMEOUT:-25h}"
 export ROOST_REMOTE_POLICY="${ROOST_REMOTE_POLICY:-strict}" ROOST_REMOTE_RATE="${ROOST_REMOTE_RATE:-20}"
 export ROOST_REMOTE_ENTITIES="${ROOST_REMOTE_ENTITIES:-10000}" ROOST_REMOTE_SESSIONS="${ROOST_REMOTE_SESSIONS:-1000}"
 case "$ROOST_REMOTE_POLICY" in async|strict|pipelined) ;; *) echo 'Invalid policy' >&2; exit 2;; esac
