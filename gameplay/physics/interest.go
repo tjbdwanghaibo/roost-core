@@ -72,8 +72,9 @@ func (s *SpatialFrame) Visible(observer uint64, radius, margin float64, previous
 	if (last[0]-first[0]+1)*(last[1]-first[1]+1) > 4096 {
 		return chunksync.Snapshot{}, nil, errors.New("physics: AOI query exceeds block budget")
 	}
-	out := chunksync.Snapshot{Epoch: s.Snapshot.Epoch, Tick: s.Snapshot.Tick}
-	selected := make(map[uint64]bool)
+	// 稳定视野下本次可见数接近上次，按 previous 预留容量，避免逐个追加时反复扩容。
+	out := chunksync.Snapshot{Epoch: s.Snapshot.Epoch, Tick: s.Snapshot.Tick, Objects: make([]chunksync.Object, 0, len(previous))}
+	selected := make(map[uint64]bool, len(previous))
 	for x := first[0]; x <= last[0]; x++ {
 		for z := first[1]; z <= last[1]; z++ {
 			for _, i := range s.blocks[[2]int64{x, z}] {

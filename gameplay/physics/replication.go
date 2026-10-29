@@ -84,7 +84,8 @@ func (s *ReplicationScene) Frame(states []physx.State) *ReplicationFrame {
 }
 func (f *ReplicationFrame) State(id uint64) (physx.State, bool) { s, ok := f.poses[id]; return s, ok }
 func (f *ReplicationFrame) Plan(snapshot chunksync.Snapshot, observer uint64, grabs map[uint64]uint64, previous map[uint64]ViewEntry, policy ReplicationPolicy) (ViewPlan, error) {
-	out := ViewPlan{Snapshot: chunksync.Snapshot{Epoch: snapshot.Epoch, Tick: snapshot.Tick}, Entries: make(map[uint64]ViewEntry, len(snapshot.Objects)), Samples: make(map[string]int), Deferred: make(map[string]int)}
+	// 每个输入对象恰好产出一个视图对象（暂缓的沿用旧对象），按输入长度一次预留。
+	out := ViewPlan{Snapshot: chunksync.Snapshot{Epoch: snapshot.Epoch, Tick: snapshot.Tick, Objects: make([]chunksync.Object, 0, len(snapshot.Objects))}, Entries: make(map[uint64]ViewEntry, len(snapshot.Objects)), Samples: make(map[string]int), Deferred: make(map[string]int)}
 	if err := policy.Validate(); err != nil {
 		return out, err
 	}
