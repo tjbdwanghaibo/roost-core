@@ -80,18 +80,27 @@ type ReplicationFrame struct {
 
 // Frame 复制 states 建索引；调用方之后可以继续使用、修改自己的切片。
 func (s *ReplicationScene) Frame(states []physx.State) *ReplicationFrame {
-	return s.AdoptFrame(slices.Clone(states))
+	return s.frame(slices.Clone(states), true)
 }
 
-// AdoptFrame 与 Frame 相同，但直接接管 states、不复制：调用方交出后不得再修改这块切片，
-// 索引可能原地重排它。用于每帧新建、只交给本帧索引的状态（物理房间提交路径上 World.Step 的返回值，
-// DAO 与量化快照已各自复制所需内容）。
+// AdoptFrame 与 Frame 相同，但 states 已按 ID 严格递增时直接只读引用、不复制（否则复制后排序，
+// 从不修改 states）。调用方保证此后没有任何人再修改这块切片。用于每帧新建、交出后不再改动的
+// 状态：物理房间提交路径上 World.Step 的返回值（原生按 ID 有序读出），Commit 已返回，
+// 量化快照与 AOI 索引也已复制所需值。
 func (s *ReplicationScene) AdoptFrame(states []physx.State) *ReplicationFrame {
+	return s.frame(states, false)
+}
+
+// frame 建索引；owned 为真时 states 归索引所有，可以原地排序。
+func (s *ReplicationScene) frame(states []physx.State, owned bool) *ReplicationFrame {
 	increasing := true
 	for i := 1; i < len(states) && increasing; i++ {
 		increasing = states[i-1].ID < states[i].ID // 相等也走下面的去重
 	}
 	if !increasing {
+		if !owned {
+			states = slices.Clone(states)
+		}
 		slices.SortStableFunc(states, func(a, b physx.State) int { return cmp.Compare(a.ID, b.ID) })
 		// 稳定排序后同 ID 相邻且保持原次序，只留最后一个；out 的写位置不超过读位置。
 		out := states[:0]

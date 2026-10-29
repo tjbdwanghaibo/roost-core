@@ -305,8 +305,8 @@ func (s *Service) run(ctx context.Context, r *room) {
 		if err != nil {
 			return err
 		}
-		// f.States 是本 Tick World.Step 新建的切片：Commit 已结束（DAO 复制了自己的一份），量化快照与
-		// AOI 索引也已复制所需值，之后没有人再读写它，所以直接交给本帧的只读索引，不再复制。
+		// f.States 是本 Tick World.Step 新建的切片：Commit 已返回且按契约不再修改它（DAO 复制了自己的一份），
+		// 量化快照与 AOI 索引也已复制所需值，之后没有人再修改它，所以本帧只读索引直接引用，不再复制。
 		viewFrame := r.replication.AdoptFrame(f.States)
 		r.mu.Lock()
 		r.latest = frame

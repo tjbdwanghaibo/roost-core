@@ -57,6 +57,8 @@ type Delivery struct {
 
 // Commit 必须在业务 Nest Guard 中接受物理事实，等待提交完成后才返回。
 // 失败会停止所属房间；原生物理不可回滚，不会重试失败 Tick。
+// 返回后不得再修改 Frame.States：房间把这块切片直接用作本帧共享的只读视图索引；
+// 需要保留的实现自行复制（StateDAO.Accept 即如此）。
 type Commit func(context.Context, Ref, gamephysics.Frame) error
 
 type Config struct {
