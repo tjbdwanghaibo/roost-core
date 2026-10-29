@@ -17,7 +17,7 @@ const senderRestartAllowance = 45 * time.Second
 
 // stepRetryWindow 是协调器把一个步骤判为用尽之前至少会给它的时间：MaxAttempts 次尝试各等满
 // Timeout（发送方的 sid 不在时，别的进程只拒绝、不回答，每次尝试都是等到超时），相邻两次之间
-// 按 saga 引擎的退避取下界——saga/engine.go 的 backoff 从 BackoffMin 起翻倍、封顶 BackoffMax，
+// 按 saga 引擎的退避取下界——framework/saga/transition.go 的 backoff 从 BackoffMin 起翻倍、封顶 BackoffMax，
 // 再在 [d/2, d] 里抖动，这里取 d/2。
 func stepRetryWindow(step saga.Step) time.Duration {
 	window := time.Duration(step.MaxAttempts) * step.Timeout

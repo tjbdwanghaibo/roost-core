@@ -27,7 +27,7 @@ import (
 //
 //	REDIS_ADDR=127.0.0.1:6379 go test -tags integration ./wiring/redis/ -run Singleton
 //
-// Get 跨槽另在真实 Redis Cluster 上跑一次（ROOST_REVIEW_CLUSTER，入口 kit/scripts/integration/redis-cluster-suites.sh）。
+// Get 跨槽另在真实 Redis Cluster 上跑一次（ROOST_REVIEW_CLUSTER，入口 wiring/scripts/integration/redis-cluster-suites.sh）。
 
 func openSingletonStoreForTest(t *testing.T, cfg *viper.Viper) (app.SingletonStore, string) {
 	t.Helper()

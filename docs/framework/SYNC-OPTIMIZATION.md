@@ -252,7 +252,7 @@ Windows/amd64，Go 1.27.0，Ryzen 7 5800H，GOWORK=off，GOMAXPROCS=4。使用�
 
 完整证据：[原始基线](../performance/benchmarks/sync-relation-20261012/before.txt)、[修后及额外500ms样本](../performance/benchmarks/sync-relation-20261012/after.txt)、[规模基线](../performance/benchmarks/sync-relation-20261012/size-before.txt)、[同口径规模结果](../performance/benchmarks/sync-relation-20261012/size-after.txt)、[汇总](../performance/benchmarks/sync-relation-20261012/medians.csv)、[退出重加长测前](../performance/benchmarks/sync-relation-20261012/repeat-before.txt)、[长测后](../performance/benchmarks/sync-relation-20261012/repeat-after.txt)。另有一次长测启动时构建进程尚未确认退出，该[重叠样本](../performance/benchmarks/sync-relation-20261012/repeat-before-overlap-excluded.txt)完整保留并排除，不参与任何前后结论；正式长测在构建结束后串行重跑。
 
-复跑：`go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkRelationUpdates$' -benchmem -benchtime=500ms -count=3`；规模组替换为 `-bench '^BenchmarkRelationSetSize$' -benchtime=300ms`。旧版本对照只复制新增 benchmark，不复制实现。
+复跑（历史命令）：`go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkRelationUpdates$' -benchmem -benchtime=500ms -count=3`；规模组替换为 `-bench '^BenchmarkRelationSetSize$' -benchtime=300ms`。旧版本对照只复制新增 benchmark，不复制实现。**这两个 benchmark 已随 D19 删除 `RelationSource`（`d2c2cdce`）删除**，命令只能在该提交之前的版本上运行；现行关系视野的基准是 `BenchmarkRelationViewMemberChange` / `BenchmarkRelationViewAttach`（[impl/04-sync](impl/04-sync.md)）。
 
 ### Relation 重复更新的验证
 
@@ -277,7 +277,7 @@ Windows/amd64、Go 1.27.0、Ryzen 7 5800H，GOWORK=off、GOMAXPROCS=4，500ms ×
 
 增量避免随存量大小扫描、构建全表，处理成本主要随变化量增长。该测量仅含关系源及其事件收集，不含 Queue 的切片复制、政策聚合、订阅调整、DAO、网络和业务 handler；不能把表中比例当整服 TPS 提升。新 API 是显式接入，不会自动优化仍调用全量 QueueRelation 的业务。此次没有改变上一批 Set 的行为或退出重加代价。
 
-[全部原始样本](../performance/benchmarks/sync-delta-20261012/benchmark.txt)、[中位数汇总](../performance/benchmarks/sync-delta-20261012/medians.csv)。复跑：`go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkRelationMemberChange$' -benchmem -benchtime=500ms -count=3`。
+[全部原始样本](../performance/benchmarks/sync-delta-20261012/benchmark.txt)、[中位数汇总](../performance/benchmarks/sync-delta-20261012/medians.csv)。复跑（历史命令，`BenchmarkRelationMemberChange` 已随 D19 删除 `RelationSource`（`d2c2cdce`）删除，只能在该提交之前的版本上运行；现行对应基准是 `BenchmarkRelationViewMemberChange`）：`go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkRelationMemberChange$' -benchmem -benchtime=500ms -count=3`。
 
 ### 正式链路与验证边界
 

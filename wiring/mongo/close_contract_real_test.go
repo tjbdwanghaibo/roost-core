@@ -25,7 +25,7 @@ import (
 func TestRealMongoModCloseContract(t *testing.T) {
 	uri := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
 	if uri == "" {
-		t.Skip("ROOST_DATAENGINE_IT_MONGO_URI is not set; run against an isolated environment (scripts/mirror-local.sh or kit/scripts/integration/dataengine-env.sh)")
+		t.Skip("ROOST_DATAENGINE_IT_MONGO_URI is not set; run against an isolated environment (scripts/mirror-local.sh or wiring/scripts/integration/dataengine-env.sh)")
 	}
 	cfg := viper.New()
 	cfg.Set("mongo.uri", uri)

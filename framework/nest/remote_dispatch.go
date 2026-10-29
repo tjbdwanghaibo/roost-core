@@ -76,8 +76,8 @@ const localTaskName = "__nest_run_local"
 // 自己取所需的 Entity 锁（锁等待属于 Guard/本地锁豁免）。它走续行通道，不排在任何实体的同 ID 链上，
 // 所以等待它的调用方与同 ID 的 I/O 准备不会互相等待。
 //
-// 只能在业务池之外调用：I/O worker 或框架后台 goroutine（例如 DataEngine 驱逐被跳过的原生步骤留下的
-// 实体）。在业务 worker 上调用返回 fctx.ErrBlockingInBusinessWorker，不会自等。
+// 只能在业务池之外调用：I/O worker 或框架后台 goroutine（例如 DataEngine 运维卸载实体时在命令 goroutine
+// 上等投影、再交给业务池卸载）。在业务 worker 上调用返回 fctx.ErrBlockingInBusinessWorker，不会自等。
 // Nest 未启动、已开始停机或已 fence 时返回错误，fn 不会执行；一旦投递成功就
 // 等到 fn 结束，不因 ctx 提前返回——fn 仍可能正持有 Entity 锁。fn 的 panic 作为错误返回。
 func (mgr *NestMgr) RunLocal(ctx context.Context, fn func()) error {

@@ -53,7 +53,7 @@ func isolatedRealMongo(t *testing.T) (context.Context, fmongo.IMongo, string) {
 	t.Helper()
 	uri := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
 	if uri == "" {
-		t.Skip("ROOST_DATAENGINE_IT_MONGO_URI is not set; run through kit/scripts/integration/dataengine-env.sh")
+		t.Skip("ROOST_DATAENGINE_IT_MONGO_URI is not set; run through wiring/scripts/integration/dataengine-env.sh")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)

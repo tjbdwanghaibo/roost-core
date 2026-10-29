@@ -69,7 +69,7 @@ func (p ownProxy) call(t *testing.T, method, path string, body any) []byte {
 func newOwnProxy(t *testing.T) ownProxy {
 	t.Helper()
 	if os.Getenv("ROOST_DATAENGINE_IT") != "1" {
-		t.Skip("set ROOST_DATAENGINE_IT=1 or use scripts/integration/dataengine-env.sh test")
+		t.Skip("set ROOST_DATAENGINE_IT=1 or use wiring/scripts/integration/dataengine-env.sh test")
 	}
 	api, upstream := os.Getenv("ROOST_DATAENGINE_IT_TOXIPROXY_URL"), os.Getenv("ROOST_DATAENGINE_IT_REDIS_ADDR")
 	if api == "" || upstream == "" {

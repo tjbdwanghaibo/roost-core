@@ -143,7 +143,7 @@ func (c rpcToxiproxy) blackholeNATS(t *testing.T) {
 // 网络恢复后同一条总线照常服务。调用方写的超时就是契约。
 func TestToxicJetStreamRPCCallHonoursItsDeadlineWhileHalfOpen(t *testing.T) {
 	if os.Getenv("ROOST_DATAENGINE_IT") != "1" {
-		t.Skip("set ROOST_DATAENGINE_IT=1 or use scripts/integration/dataengine-env.sh test")
+		t.Skip("set ROOST_DATAENGINE_IT=1 or use wiring/scripts/integration/dataengine-env.sh test")
 	}
 	api, directURL := os.Getenv("ROOST_DATAENGINE_IT_TOXIPROXY_URL"), os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
 	if api == "" || directURL == "" {

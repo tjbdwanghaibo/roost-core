@@ -46,8 +46,7 @@ const (
 	// DestroyReasonCommon 是基础设施层移除实体的中性缺省原因，业务包可以给它起领域别名。
 	DestroyReasonCommon EntityDestroyReason = 0
 	// DestroyReasonMemoryUnload 表示框架只把实例从本进程内存卸载、不删除持久数据：实例的内存状态
-	// 已不可信（DataEngine 驱逐被跳过的原生步骤留下的实体；Remote 事务被持久拒绝后
-	// 内存仍留着被拒绝的修改），下一次访问从权威重新加载。业务的 OnDestroy 可据此只回收
+	// 已不可信（例如 Remote 事务被持久拒绝后内存仍留着被拒绝的修改），下一次访问从权威重新加载。业务的 OnDestroy 可据此只回收
 	// 内存资源，不当作业务删除；Sync 订阅不要注销，重载后框架 Rebind 强制全量。
 	DestroyReasonMemoryUnload EntityDestroyReason = 255
 	// DestroyReasonCreateRevoked 表示 Nest handler 内新建的实体随事务回滚 / 提交被明确拒绝而撤销发布：

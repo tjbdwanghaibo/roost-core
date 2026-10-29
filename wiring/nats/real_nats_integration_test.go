@@ -114,7 +114,7 @@ func realNatsURL(t *testing.T) string {
 	t.Helper()
 	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
 	if url == "" {
-		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run against an isolated environment (scripts/mirror-local.sh or kit/scripts/integration/dataengine-env.sh)")
+		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run against an isolated environment (scripts/mirror-local.sh or wiring/scripts/integration/dataengine-env.sh)")
 	}
 	return url
 }
@@ -341,7 +341,7 @@ func TestRealNatsModUndrainedCloseIsReportedOnce(t *testing.T) {
 func TestRealLightweightCallIntoJetStreamDeploymentIsRefused(t *testing.T) {
 	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
 	if url == "" {
-		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run through scripts/integration/dataengine-env.sh")
+		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run through wiring/scripts/integration/dataengine-env.sh")
 	}
 	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano())
 	prefix, reqStream, respStream := "rrnc92"+suffix, "RR_NC92_REQ_"+suffix, "RR_NC92_RESP_"+suffix
@@ -502,7 +502,7 @@ func deleteStreamsOn(t *testing.T, url string, streams ...string) {
 func TestRealJetStreamStopWaitsForInFlightHandler(t *testing.T) {
 	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
 	if url == "" {
-		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run through scripts/integration/dataengine-env.sh")
+		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run through wiring/scripts/integration/dataengine-env.sh")
 	}
 	suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano())
 	prefix, reqStream, respStream := "rrnc90"+suffix, "RR_NC90_REQ_"+suffix, "RR_NC90_RESP_"+suffix
@@ -595,7 +595,7 @@ func TestRealJetStreamStopWaitsForInFlightHandler(t *testing.T) {
 func TestRealNatsModStopAfterConnectionDrainBudgetConverges(t *testing.T) {
 	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
 	if url == "" {
-		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run through scripts/integration/dataengine-env.sh")
+		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run through wiring/scripts/integration/dataengine-env.sh")
 	}
 	asm, err := natsdriver.Assemble(fnats.DefaultConfig(url), natsdriver.ClientOptions{})
 	if err != nil {
@@ -658,7 +658,7 @@ func TestRealNatsModStopAfterConnectionDrainBudgetConverges(t *testing.T) {
 func TestRealNatsModProvideRefusesBareRegistriesAndReliableWithoutRedis(t *testing.T) {
 	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
 	if url == "" {
-		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run through scripts/integration/dataengine-env.sh")
+		t.Skip("ROOST_DATAENGINE_IT_NATS_URL is not set; run through wiring/scripts/integration/dataengine-env.sh")
 	}
 	ctx := context.Background()
 	bare := viper.New()

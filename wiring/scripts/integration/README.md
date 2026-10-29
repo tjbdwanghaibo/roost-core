@@ -86,7 +86,7 @@ source "$HOME/.roost-it/roost-dataengine-it/env.sh"
 这套隔离环境是**共享**的：多个会话（人或 agent）可以同时对它跑测试。为此：
 
 1. **跑 integration 一律加 `-run`**，只跑自己的用例，例如
-   `go test -tags integration -count=1 -run 'TestToxicNATSPartition' ./wiring/dataengine/`。不加 `-run` 会把别人
+   `go test -tags integration -count=1 -run 'TestToxicNATSLatencyKeepsTheCommitOnTheDurablePath' ./wiring/dataengine/`。不加 `-run` 会把别人
    的故障用例一起跑起来；整套故障矩阵走 `dataengine-env.sh test`（它持锁）。
 2. **故障注入一律自建代理或进程**：网络故障在 `ROOST_DATAENGINE_IT_TOXIPROXY_URL` 上建自己唯一命名、
    `listen: 127.0.0.1:0` 的代理，只删自己的毒，清理时删掉代理；要杀进程就自己起一个进程再杀（如

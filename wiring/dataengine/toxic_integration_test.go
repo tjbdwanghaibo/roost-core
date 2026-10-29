@@ -35,7 +35,7 @@ type natsToxiproxy struct {
 func toxiproxyEnv(t *testing.T) (natsToxiproxy, string) {
 	t.Helper()
 	if os.Getenv("ROOST_DATAENGINE_IT") != "1" {
-		t.Skip("set ROOST_DATAENGINE_IT=1 or use scripts/integration/dataengine-env.sh test")
+		t.Skip("set ROOST_DATAENGINE_IT=1 or use wiring/scripts/integration/dataengine-env.sh test")
 	}
 	api := os.Getenv("ROOST_DATAENGINE_IT_TOXIPROXY_URL")
 	directURL := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
