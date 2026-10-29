@@ -121,12 +121,18 @@ func (a *App) Singleton(open SingletonOpener) *App {
 // 写错类型（`enabled: on`、不带单位的时长）由声明检查报出，不管 enabled 读成了什么——宽松读取会把 `on` 读成 false，
 // 锁静默关闭。
 type singletonConfig struct {
-	Enabled       bool          `config:"enabled" help:"同一服务类型 + sid 只让一个进程运行 Mod（单实例锁）"`
+	SingletonSwitch
 	KeyPrefix     string        `config:"key_prefix" shared:"singleton.key_prefix" help:"锁键前缀，同一套部署的全部服务相同；启用时必填"`
 	TTL           time.Duration `config:"ttl" default:"15s" min:"1ns"`
 	RenewInterval time.Duration `config:"renew_interval" default:"3s" min:"1ns"`
 	Guard         time.Duration `config:"guard" default:"5s" min:"1ns"`
 	StartupWait   time.Duration `config:"startup_wait" min:"1ns" help:"启动时等锁的上限，不写取 2 × ttl"`
+}
+
+// SingletonSwitch 是 singleton.enabled 一个键的声明。App 与要按它定跨键规则的 Mod（例如 saga 协调器“生产要求单实例锁”）
+// 共用这一份：声明 Merge 要求同一键的声明完全相同。Mod 以 `config:"singleton"` 字段嵌入，只读不写。
+type SingletonSwitch struct {
+	Enabled bool `config:"enabled" help:"同一服务类型 + sid 只让一个进程运行 Mod（单实例锁）"`
 }
 
 // startupWait 是生效的启动等待：不写取 2 × ttl。

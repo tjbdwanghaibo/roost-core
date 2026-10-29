@@ -280,6 +280,18 @@ func loadBucketConfig(layout Layout, replicas int, opts AdmissionOptions) fnats.
 	return fnats.LogKVConfig{Bucket: layout.LoadBucket(), Replicas: replicas, History: 1, MaxAge: opts.SignalTTL, LimitMarkerTTL: opts.SignalTTL}
 }
 
+// OpenLoadBucket 打开（没有时按同一配置建出）准入信号桶 LoadBucket：参与方的 LoadPublisher 用，桶配置与协调器相同
+// （MaxAge 与 LimitMarkerTTL 都取 admission.SignalTTL，零值取缺省）。
+func OpenLoadBucket(ctx context.Context, log fnats.JetStreamLog, layout Layout, replicas int, admission AdmissionOptions) (fnats.LogKV, error) {
+	if log == nil {
+		return nil, fmt.Errorf("saga: JetStream log is required")
+	}
+	if err := layout.Validate(); err != nil {
+		return nil, err
+	}
+	return log.KeyValue(ctx, loadBucketConfig(layout, max(replicas, 1), admission.withDefaults()))
+}
+
 // errAdmissionClosed 包装准入关闭的原因。
 func errAdmissionClosed(reason string) error {
 	if reason == "" {

@@ -3,7 +3,10 @@ package saga
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -11,8 +14,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
-// saga.* 的声明（维护者决定）。缺省值与 coresaga.DefaultOptions 相同（TestSagaDeclaredDefaultsMatchCoreDefaults），
-// 写 0 或负数拒绝；要缺省就不写这个键。
+// saga.* 的声明（维护者决定）。缺省值与 coresaga.DefaultJetStreamOptions 相同（TestSagaDeclaredDefaultsMatchCoreDefaults），
+// 写 0 或负数拒绝；要缺省就不写这个键。协调器的权威是 JetStream 分区事件日志（设计
+// docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md §9）。
 
 // stepBudgetConfig 是一个步骤的超时与重试预算：saga.step_defaults 与 saga.steps.<type>.<step> 共用。
 // 没写的字段不覆盖（定义里的值、step_defaults、框架缺省依次生效）；段下没有声明的字段报错。
@@ -33,111 +37,175 @@ type consumerConfig struct {
 	NakBackoffMax  time.Duration `config:"nak_backoff_max" default:"30s" min:"1ns" example:"30s"`
 }
 
+// minPublishUnknownBudget 是 saga.publish_unknown_budget 的下限：一条流选主停顿实测 5～7s，结果未知的重发判定要撑过 3 次。
+const minPublishUnknownBudget = 3 * 7 * time.Second
+
+// productionReplicas 是生产要求的流与桶副本数（前提：JetStream R3 文件存储，收到 PubAck 即不丢）。
+const productionReplicas = 3
+
 type config struct {
 	app.ServiceIdentity
 	// saga.max_payload_bytes 与发起方（wiring/nest）共用一份声明。
 	mods.SagaPayloadConfig
-	Saga struct {
-		Database     string           `config:"database" shared:"saga.database" default:"saga" example:"{project_db}_saga"`
+	// singleton.enabled 与 App 共用一份声明：协调器进程在生产必须启用单实例锁（ValidateConfig）。
+	Singleton app.SingletonSwitch `config:"singleton"`
+	Saga      struct {
+		Database     string           `config:"database" shared:"saga.database" default:"saga" example:"{project_db}_saga" help:"Mongo 步骤收件箱（按操作的回执）所在的库"`
 		StepDefaults stepBudgetConfig `config:"step_defaults,closed" help:"Step timeout and retry budget. Fields a saga definition leaves unset\ntake these; one operation of a step gets up to max_attempts attempts, at most\none of which takes effect."`
 		// Steps 按 <saga type>.<step name> 覆盖，优先于定义与 step_defaults；类型与步骤名要对应已注册的定义。
-		Steps       map[string]map[string]stepBudgetConfig `config:"steps" example:"{}" help:"Per-step overrides, winning over the definition and step_defaults:\nsteps.<saga type>.<step name>.<timeout|max_attempts|backoff_min|backoff_max>."`
-		Owner       string                                 `config:"owner" help:"协调器租约的持有者名，不写取 saga-<sid>-<随机 id>"`
-		Collections struct {
-			Sagas       string `config:"sagas"`
-			Completions string `config:"completions"`
-			Operations  string `config:"operations"`
-		} `config:"collections" help:"Mongo 冷副本的集合名，不写取 core 的缺省"`
-		// Redis 是协调器的权威存储（权威 Redis 由 redis_authority.* 连接）。key_prefix 与 Store Service 共用一份声明。
-		Redis struct {
-			KeyPrefix            string        `config:"key_prefix" shared:"saga.redis.key_prefix" required:"true" example:"roost:{project}:saga" help:"权威 Redis 上全部 saga 键的前缀；同一个 Redis 上的不同部署必须不同，不能含 hash tag"`
-			Partitions           int           `config:"partitions" default:"16" min:"1" max:"1024" example:"16" help:"投影分区数：Store Service 按分区并行投影；改值要等全部分区日志投影完"`
-			WaitAOFTimeout       time.Duration `config:"waitaof_timeout" default:"1s" min:"1ms" example:"1s"`
-			TerminalRetention    time.Duration `config:"terminal_retention" default:"15m" min:"0" example:"15m" help:"终态记录投影后在 Redis 里再驻留多久"`
-			BusinessKeyGuard     time.Duration `config:"business_key_guard" default:"10m" min:"1ns" example:"10m" help:"记录驱逐后业务键守卫的保留期，必须不小于 10 × saga.store_timeout"`
-			MaxProjectionBacklog int64         `config:"max_projection_backlog" default:"20000" min:"1" example:"20000" help:"每个分区未投影日志的上限，超过时新 saga 返回可重试的积压错误"`
-		} `config:"redis"`
-		SubjectPrefix         string         `config:"subject_prefix" shared:"saga.subject_prefix" default:"roost.saga" example:"{project}.saga"`
-		Stream                string         `config:"stream" shared:"saga.stream" default:"ROOST_SAGA" example:"{PROJECT}_SAGA"`
-		CoordinatorWorkers    int            `config:"coordinator_workers" default:"4" min:"1" example:"4"`
-		PublisherWorkers      int            `config:"publisher_workers" default:"4" min:"1" example:"4"`
-		CoordinatorClaimBatch int            `config:"coordinator_claim_batch" default:"3" min:"1" example:"3"`
-		PublisherClaimBatch   int            `config:"publisher_claim_batch" default:"1" min:"1" example:"1"`
-		LeaseDuration         time.Duration  `config:"lease_duration" default:"15s" min:"1ns" example:"15s"`
-		StoreTimeout          time.Duration  `config:"store_timeout" default:"3s" min:"1ns" example:"3s"`
-		PollInterval          time.Duration  `config:"poll_interval" default:"100ms" min:"1ns" example:"100ms"`
-		PublishTimeout        time.Duration  `config:"publish_timeout" default:"3s" min:"1ns" example:"3s"`
-		PublishBackoffMin     time.Duration  `config:"publish_backoff_min" default:"50ms" min:"1ns" example:"50ms"`
-		PublishBackoffMax     time.Duration  `config:"publish_backoff_max" default:"5s" min:"1ns" example:"5s"`
-		CompletionReceiptTTL  time.Duration  `config:"completion_receipt_ttl" default:"720h" min:"1ns" example:"720h"`
-		StreamMaxAge          time.Duration  `config:"stream_max_age" default:"168h" min:"1ns" example:"168h"`
-		StreamMaxBytes        int64          `config:"stream_max_bytes" default:"8589934592" min:"1" example:"8589934592"`
-		DuplicateWindow       time.Duration  `config:"duplicate_window" default:"10m" min:"1ns" example:"10m"`
-		Replicas              int            `config:"replicas" default:"1" min:"1" example:"1"`
-		ResultDurable         string         `config:"result_durable" default:"roost-saga-coordinator"`
-		Result                consumerConfig `config:"result_"`
-		ResultWorkers         int            `config:"result_workers" default:"8" min:"1" example:"8" help:"saga 结果流消费者的并发处理数，不能超过 result_max_ack_pending"`
-		// 原生 Nest 步骤的开始请求与完成结果都在 DataEngine 的效果流上：流名与主题前缀不写时取 dataengine.effects 的值，
-		// 效果流只在一处配置（生成配置不再写这两个键）。同一进程注册了 DataEngine 时，写了就必须与 dataengine.effects
-		// 相同（CheckConfigAcrossMods）；只跑协调器、没有 DataEngine 的进程可以用它们指向别的流。
-		StartEffectStream   string         `config:"start_effect_stream" shared:"dataengine.effects.stream" follows:"dataengine.effects.stream" help:"不写取 dataengine.effects.stream；同进程有 DataEngine 时写了必须与它相同"`
-		StartEffectPrefix   string         `config:"start_effect_prefix" shared:"dataengine.effects.subject_prefix" follows:"dataengine.effects.subject_prefix" help:"不写取 dataengine.effects.subject_prefix；同进程有 DataEngine 时写了必须与它相同"`
-		StartEffectDurable  string         `config:"start_effect_durable" default:"roost-saga-start" example:"roost-saga-start"`
-		StartEffect         consumerConfig `config:"start_effect_"`
-		StartEffectWorkers  int            `config:"start_effect_workers" default:"4" min:"1" example:"4" help:"Nest 启动意图消费者的并发处理数，不能超过 start_effect_max_ack_pending"`
-		ResultEffectStream  string         `config:"result_effect_stream" help:"不写取 start_effect_stream"`
-		ResultEffectPrefix  string         `config:"result_effect_prefix" help:"不写取 start_effect_prefix"`
-		ResultEffectDurable string         `config:"result_effect_durable" example:"roost-saga-start-result" help:"不写由 core 推出"`
-		ResultEffect        consumerConfig `config:"result_effect_"`
-		ResultEffectWorkers int            `config:"result_effect_workers" default:"8" min:"1" example:"8" help:"原生步骤结果消费者的并发处理数，不能超过 result_effect_max_ack_pending"`
+		Steps         map[string]map[string]stepBudgetConfig `config:"steps" example:"{}" help:"Per-step overrides, winning over the definition and step_defaults:\nsteps.<saga type>.<step name>.<timeout|max_attempts|backoff_min|backoff_max>."`
+		SubjectPrefix string                                 `config:"subject_prefix" shared:"saga.subject_prefix" default:"roost.saga" example:"{project}.saga" help:"分区事件、输入与查询的 subject 前缀"`
+		Stream        string                                 `config:"stream" shared:"saga.stream" default:"ROOST_SAGA" example:"{PROJECT}_SAGA" help:"流名前缀：第 g 条流是 <stream>_G<g>，快照与准入桶由它派生"`
+		Partitions    int                                    `config:"partitions" shared:"saga.partitions" default:"16" min:"1" max:"1024" example:"16" help:"分区数（全部进程相同）。改值要先让全部 saga 终态、停全部协调器、删流与桶"`
+		StreamGroups  int                                    `config:"stream_groups" shared:"saga.stream_groups" default:"4" min:"1" max:"8" example:"4" help:"流数（≤ partitions，每条流的分区数 ceil(partitions/stream_groups) ≤ 50）；一条流选主时只停它上面的分区"`
+		Coordinators  []string                               `config:"coordinators" shared:"saga.coordinators" required:"true" example:"1" help:"跑协调器的 sid 列表（全部进程相同）：排序后第 i 个 sid 拥有 k mod len == i 的分区；不在列表里的进程只做发起方"`
+		Replicas      int                                    `config:"replicas" default:"1" min:"1" max:"5" example:"1" help:"流与桶的副本数；生产必须为 3"`
+		// 去重窗口要盖住一次发布结果未知的整个重发判定（publish_unknown_budget）两遍。
+		DuplicateWindow      time.Duration `config:"duplicate_window" default:"2m" min:"1s" example:"2m" help:"MsgID 去重窗口，≥ 2 × publish_unknown_budget"`
+		StreamMaxBytes       int64         `config:"stream_max_bytes" default:"8589934592" min:"1" example:"8589934592" help:"每条流的容量上限；满了拒新写（协调器 fail-stop 告警），只由快照后的清理删旧消息"`
+		MaxBatch             int           `config:"max_batch" default:"256" min:"1" max:"1000" example:"256" help:"分区一轮最多取的输入条数"`
+		Tick                 time.Duration `config:"tick" default:"5ms" min:"1ms" max:"100ms" example:"5ms" help:"分区时间轮的槽宽"`
+		SnapshotEveryEvents  int           `config:"snapshot_every_events" default:"2000" min:"1" example:"2000"`
+		SnapshotInterval     time.Duration `config:"snapshot_interval" default:"30s" min:"1s" example:"30s"`
+		TerminalRetention    time.Duration `config:"terminal_retention" default:"1h" min:"1m" example:"1h" help:"终态在内存与快照里留多久：期间 Get / Lookup 可读、同业务键去重、迟到成功可补偿；≤ receipt_retention"`
+		ReceiptRetention     time.Duration `config:"receipt_retention" default:"168h" min:"1m" example:"168h" help:"参与方回执保留期：必须长于步骤命令可能重投的最长时间；更早更新的记录拒绝 Resume"`
+		PublishTimeout       time.Duration `config:"publish_timeout" default:"3s" min:"1ns" max:"9s" example:"3s" help:"一次分区事件发布等 PubAck 的时长，< publish_unknown_budget"`
+		PublishUnknownBudget time.Duration `config:"publish_unknown_budget" default:"30s" min:"21s" example:"30s" help:"分区事件发布结果未知时重发判定的总时长（≥ 3 × 7s 选主停顿），超过 fail-stop"`
+		QueryTimeout         time.Duration `config:"query_timeout" default:"2s" min:"1ns" example:"2s"`
+		StartVerdictTimeout  time.Duration `config:"start_verdict_timeout" default:"2s" min:"1ns" example:"2s" help:"StartSaga / Resume / Compensate 等所有者判定回复多久后改为按 Get 补查"`
+		PurgeStallAlarm      time.Duration `config:"purge_stall_alarm" default:"10m" min:"1s" example:"10m" help:"某个步骤 durable 挡住清理多久告警（下线的步骤要由运维删掉它的 durable）"`
+		Admission            struct {
+			Enabled        bool          `config:"enabled" default:"true" example:"true" help:"按参与方投影积压准入新启动；在途推进不受影响"`
+			HighRecords    int64         `config:"high_records" default:"5000" min:"1" example:"5000" help:"积压（参与方 WAL 未投影记录数的最大值）≥ 它时关闭准入"`
+			LowRecords     int64         `config:"low_records" default:"2500" min:"0" example:"2500" help:"关闭后积压 ≤ 它才重开；< high_records"`
+			SignalInterval time.Duration `config:"signal_interval" default:"200ms" min:"1ms" example:"200ms" help:"参与方发布积压信号的间隔"`
+			StaleAfter     time.Duration `config:"stale_after" default:"2s" min:"1ms" example:"2s" help:"一个参与方的信号多久没更新算停更（关闭准入）；≥ 5 × signal_interval"`
+		} `config:"admission"`
+		// Nest 事务里提交的启动意图在 DataEngine 的效果流上：流名与主题前缀不写时取 dataengine.effects 的值，效果流只在一处
+		// 配置。同一进程注册了 DataEngine 时，写了就必须与 dataengine.effects 相同（CheckConfigAcrossMods）。
+		StartEffectStream  string         `config:"start_effect_stream" shared:"dataengine.effects.stream" follows:"dataengine.effects.stream" help:"不写取 dataengine.effects.stream；同进程有 DataEngine 时写了必须与它相同"`
+		StartEffectPrefix  string         `config:"start_effect_prefix" shared:"dataengine.effects.subject_prefix" follows:"dataengine.effects.subject_prefix" help:"不写取 dataengine.effects.subject_prefix；同进程有 DataEngine 时写了必须与它相同"`
+		StartEffectDurable string         `config:"start_effect_durable" default:"roost-saga-start" example:"roost-saga-start"`
+		StartEffect        consumerConfig `config:"start_effect_"`
+		StartEffectWorkers int            `config:"start_effect_workers" default:"4" min:"1" example:"4" help:"启动中继（Nest 启动意图 → 分区）的并发处理数，不能超过 start_effect_max_ack_pending"`
 	} `config:"saga"`
 }
 
-// ValidateConfig 是 saga.* 的跨键规则：业务键守卫至少 10 个存储超时；三类消费者的并发不超过各自的 max_ack_pending；
-// 配置里写的步骤超时必须短于步骤消费者的 AckWait。
-// 一次尝试的处理以命令截止（派发时刻 + 步骤 Timeout）为界，步骤消费者在 AckWait 之内 ack；Timeout 不短于 AckWait 时
-// JetStream 会在 handler 还在跑时把同一条命令重投给另一个消费者。步骤消费者的 AckWait 不是配置：生成的与 demo 的步骤消费者
-// 都取 coresaga.DefaultStepAckWait，这里与它比较（不另声明一个没人读的 ack_wait 键）。
-// 定义里写死的 Timeout 不在配置里，由 Init 在解析步骤预算之后用 checkStepTimeouts 查。
-func (c *config) ValidateConfig(bool) error {
-	var errs []error
-	// 业务键守卫要覆盖 Create 的“读 Mongo → 脚本”间隔（脚本要求不超过守卫的一半）与时钟偏差：至少 10 个存储超时。
-	if c.Saga.Redis.BusinessKeyGuard < 10*c.Saga.StoreTimeout {
-		errs = append(errs, fmt.Errorf("saga.redis.business_key_guard (%s) must be at least 10 × saga.store_timeout (%s)", c.Saga.Redis.BusinessKeyGuard, c.Saga.StoreTimeout))
-	}
-	for _, w := range []struct {
-		key             string
-		workers, maxAck int
-	}{
-		{"saga.result_workers", c.Saga.ResultWorkers, c.Saga.Result.MaxAckPending},
-		{"saga.result_effect_workers", c.Saga.ResultEffectWorkers, c.Saga.ResultEffect.MaxAckPending},
-		{"saga.start_effect_workers", c.Saga.StartEffectWorkers, c.Saga.StartEffect.MaxAckPending},
-	} {
-		if w.workers > w.maxAck {
-			errs = append(errs, fmt.Errorf("%s (%d) must not exceed the consumer's max_ack_pending (%d)", w.key, w.workers, w.maxAck))
+// layout 是声明里的分区布局（Layout.Validate 由 ValidateConfig 调用：每条流 ≤ 50 个分区等）。
+func (c *config) layout() coresaga.Layout {
+	return coresaga.Layout{Prefix: strings.Trim(strings.TrimSpace(c.Saga.SubjectPrefix), "."), Stream: strings.TrimSpace(c.Saga.Stream),
+		Partitions: c.Saga.Partitions, Groups: c.Saga.StreamGroups}
+}
+
+// coordinators 解析 saga.coordinators（sid 列表，去重前不排序）。
+func (c *config) coordinators() ([]int32, error) {
+	sids := make([]int32, 0, len(c.Saga.Coordinators))
+	for _, text := range c.Saga.Coordinators {
+		sid, err := strconv.ParseInt(strings.TrimSpace(text), 10, 32)
+		if err != nil || sid <= 0 {
+			return nil, fmt.Errorf("saga.coordinators: %q is not a positive sid", text)
 		}
+		if slices.Contains(sids, int32(sid)) {
+			return nil, fmt.Errorf("saga.coordinators: sid %d is listed twice", sid)
+		}
+		sids = append(sids, int32(sid))
 	}
-	if timeout := c.Saga.StepDefaults.Timeout; timeout >= coresaga.DefaultStepAckWait {
+	if len(sids) == 0 {
+		return nil, errors.New("saga.coordinators must list at least one sid")
+	}
+	return sids, nil
+}
+
+// ownedPartitions 是选项 P-A 的静态分配：saga.coordinators 排序后本进程 sid 的下标 i，拥有 {k : k mod len == i}。
+// 本进程不在列表里时返回 nil（只做发起方）。
+func ownedPartitions(coordinators []int32, sid int32, partitions int) []int {
+	sorted := slices.Sorted(slices.Values(coordinators))
+	index := slices.Index(sorted, sid)
+	if index < 0 {
+		return nil
+	}
+	var owned []int
+	for k := index; k < partitions; k += len(sorted) {
+		owned = append(owned, k)
+	}
+	return owned
+}
+
+// isCoordinator 报告本进程（sid）是否在 saga.coordinators 里。
+func (c *config) isCoordinator() bool {
+	sids, err := c.coordinators()
+	return err == nil && slices.Contains(sids, c.Sid)
+}
+
+// ValidateConfig 是 saga.* 的跨键规则（设计 §9.2）：
+//
+//   - 布局：Layout.Validate（前缀、流名、P / G 范围、每条流 ≤ 50 个分区）；saga.coordinators 是不重复的正整数 sid；
+//   - 发布：publish_timeout < publish_unknown_budget（声明已要求预算 ≥ 3 × 7s、超时 < 10s），duplicate_window ≥ 2 × 预算；
+//   - 保留：terminal_retention ≤ receipt_retention；
+//   - 准入：low_records < high_records，stale_after ≥ 5 × signal_interval；
+//   - 启动中继的并发不超过 max_ack_pending；配置里写的步骤超时必须短于步骤消费者的 AckWait（理由见 stepTimeoutError）；
+//   - 生产：replicas 必须为 3；本进程在 saga.coordinators 里时必须启用单实例锁（singleton.enabled，App 级“一个 sid 一个
+//     进程”的保证；崩溃重启的短暂重叠由期望序号隔离、旧进程 fail-stop）。
+func (c *config) ValidateConfig(production bool) error {
+	var errs []error
+	if err := c.layout().Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("saga.subject_prefix / stream / partitions / stream_groups: %w", err))
+	}
+	if _, err := c.coordinators(); err != nil {
+		errs = append(errs, err)
+	}
+	s := &c.Saga
+	if s.PublishTimeout >= s.PublishUnknownBudget {
+		errs = append(errs, fmt.Errorf("saga.publish_timeout (%s) must be shorter than saga.publish_unknown_budget (%s)", s.PublishTimeout, s.PublishUnknownBudget))
+	}
+	if s.DuplicateWindow < 2*s.PublishUnknownBudget {
+		errs = append(errs, fmt.Errorf("saga.duplicate_window (%s) must be at least 2 × saga.publish_unknown_budget (%s): a resent event must still be deduplicated", s.DuplicateWindow, s.PublishUnknownBudget))
+	}
+	if s.TerminalRetention > s.ReceiptRetention {
+		errs = append(errs, fmt.Errorf("saga.terminal_retention (%s) must not exceed saga.receipt_retention (%s)", s.TerminalRetention, s.ReceiptRetention))
+	}
+	if s.Admission.LowRecords >= s.Admission.HighRecords {
+		errs = append(errs, fmt.Errorf("saga.admission.low_records (%d) must be below saga.admission.high_records (%d)", s.Admission.LowRecords, s.Admission.HighRecords))
+	}
+	if s.Admission.StaleAfter < 5*s.Admission.SignalInterval {
+		errs = append(errs, fmt.Errorf("saga.admission.stale_after (%s) must be at least 5 × saga.admission.signal_interval (%s)", s.Admission.StaleAfter, s.Admission.SignalInterval))
+	}
+	if s.StartEffectWorkers > s.StartEffect.MaxAckPending {
+		errs = append(errs, fmt.Errorf("saga.start_effect_workers (%d) must not exceed the consumer's max_ack_pending (%d)", s.StartEffectWorkers, s.StartEffect.MaxAckPending))
+	}
+	if production && s.Replicas != productionReplicas {
+		errs = append(errs, fmt.Errorf("saga.replicas (%d) must be %d in production: the saga log is the coordinator's authority and relies on JetStream R3", s.Replicas, productionReplicas))
+	}
+	if production && c.isCoordinator() && !c.Singleton.Enabled {
+		errs = append(errs, fmt.Errorf("sid %d is in saga.coordinators, so production requires singleton.enabled=true: the process owning a saga partition must be the only one for its sid", c.Sid))
+	}
+	if timeout := s.StepDefaults.Timeout; timeout >= coresaga.DefaultStepAckWait {
 		errs = append(errs, stepTimeoutError("saga.step_defaults.timeout", timeout))
 	}
-	typeNames := make([]string, 0, len(c.Saga.Steps))
-	for name := range c.Saga.Steps {
+	typeNames := make([]string, 0, len(s.Steps))
+	for name := range s.Steps {
 		typeNames = append(typeNames, name)
 	}
 	sort.Strings(typeNames)
 	for _, typeName := range typeNames {
-		stepNames := make([]string, 0, len(c.Saga.Steps[typeName]))
-		for name := range c.Saga.Steps[typeName] {
+		stepNames := make([]string, 0, len(s.Steps[typeName]))
+		for name := range s.Steps[typeName] {
 			stepNames = append(stepNames, name)
 		}
 		sort.Strings(stepNames)
 		for _, stepName := range stepNames {
-			if timeout := c.Saga.Steps[typeName][stepName].Timeout; timeout >= coresaga.DefaultStepAckWait {
+			if timeout := s.Steps[typeName][stepName].Timeout; timeout >= coresaga.DefaultStepAckWait {
 				errs = append(errs, stepTimeoutError("saga.steps."+typeName+"."+stepName+".timeout", timeout))
 			}
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// admission 是声明里的准入参数（协调器与参与方的 LoadPublisher 共用）。
+func (c *config) admission() coresaga.AdmissionOptions {
+	a := c.Saga.Admission
+	return coresaga.AdmissionOptions{Enabled: a.Enabled, HighRecords: uint64(a.HighRecords), LowRecords: uint64(a.LowRecords), StaleAfter: a.StaleAfter}
 }
 
 // checkStepTimeouts 查解析完预算之后每个定义的每个步骤（包括定义里写死的 Timeout），规则同 ValidateConfig。

@@ -7,7 +7,7 @@
 //
 // 每一侧的事实都从那一侧部署用的服务配置读（Server.Config），与 game 进程同一份声明、同一条规则：逻辑库 → 物理库
 // 经 kitdataengine.LoadDatabaseMap（D9 映射，一次只换算一个 sid，所以两侧各算各的），WAL 目录经
-// kitdataengine.WALDir，控制库经 kitdataengine.EffectSettings，saga 存储经 kitsaga.LoadLocations 与 kitredis.LoadAuthorityConfig，总线经
+// kitdataengine.WALDir，控制库经 kitdataengine.EffectSettings，saga 分区布局经 kitsaga.ParticipantSettings（NATS 连接经 kitnats.Connect），总线经
 // kitnats.LoadBusPersistence。逻辑库清单是本进程链接的 DAO 包在 init 里登记的（dataengine.DeclaredDatabases），
 // 所以命令行要在工程里编译、导入工程的 db 包。
 //
@@ -28,7 +28,6 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
-	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
 	kitsyncbus "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
 	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
@@ -57,9 +56,10 @@ type side struct {
 	mongoURI   string
 	mongo      string // 归一化的 Mongo 地址（主机列表 + 副本集），不含凭据
 	databases  *coredata.DatabaseMap
-	controlDB  string // dataengine.database：receipts / transactions / outbox
-	saga       kitsaga.Locations
-	authority  kitredis.AuthorityConfig // redis_authority.*：saga 协调器记录所在的权威 Redis
+	controlDB  string              // dataengine.database：receipts / transactions / outbox
+	saga       kitsaga.Participant // saga.*：分区布局（流、前缀、分区数）与副本数
+	natsURL    string              // nats.url：saga 分区日志所在的 NATS
+	natsConfig *viper.Viper        // 这一侧的配置，离线读 saga 分区时按它连 NATS
 	walDir     string
 	walChecked bool
 	bus        kitnats.BusPersistence
@@ -76,6 +76,12 @@ type syncbusSettings struct {
 // TestToolKeysMatchModDeclarations 钉住）。
 type mongoKeys struct {
 	URI string `config:"mongo.uri" default:"mongodb://localhost:27017"`
+}
+
+// natsKeys 是 nats.url 的值（缺省与 wiring/nats 的声明相同，TestToolKeysMatchModDeclarations 钉住）：判断两侧是不是同一套
+// saga 分区日志。
+type natsKeys struct {
+	URL string `config:"nats.url" default:"nats://localhost:4222"`
 }
 
 type syncbusKeys struct {
@@ -117,12 +123,14 @@ func resolveSide(server Server) (side, error) {
 			return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
 		}
 	}
-	if result.saga, err = kitsaga.LoadLocations(cfg); err != nil {
+	if result.saga, err = kitsaga.ParticipantSettings(cfg); err != nil {
 		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
 	}
-	if result.authority, err = kitredis.LoadAuthorityConfig(cfg); err != nil {
+	var natsSettings natsKeys
+	if err := app.LoadConfig(cfg, &natsSettings); err != nil {
 		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
 	}
+	result.natsURL, result.natsConfig = strings.TrimSpace(natsSettings.URL), cfg
 	if result.bus, err = kitnats.LoadBusPersistence(cfg); err != nil {
 		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
 	}

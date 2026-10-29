@@ -41,10 +41,10 @@ func busChecklist(from side) []BusItem {
 		},
 		{
 			Name: "saga stream", Persistent: true,
-			Where:          fmt.Sprintf("JetStream stream %s (subjects %s.>); step consumers are shared durables (game-demo: game-gift-<step>)", from.saga.Stream, from.saga.SubjectPrefix),
+			Where:          fmt.Sprintf("JetStream streams %s_G0..G%d (subjects %s.<partition>.>); step consumers are shared durables (game-demo: game-gift-<step>)", from.saga.Layout.Stream, from.saga.Layout.Groups-1, from.saga.Layout.Prefix),
 			AddressedToSID: false,
 			AfterMerge:     "a step command can carry the sender's bound sid in its payload (game-demo gift.State.FromSID) and is admitted only by that sid's process, which no longer exists",
-			Action:         "every saga must be terminal before the merge (checked: saga:<database>)",
+			Action:         "every saga must be terminal before the merge (checked: saga:<stream>)",
 			Source:         "demo/internal/service/game/gift_saga.go.tmpl (admitOwned, giftHandoffRouter)",
 		},
 	}
@@ -136,7 +136,7 @@ type Checklist struct {
 	SID       int32          `json:"sid"`
 	Databases []DatabaseItem `json:"databases"`
 	Control   string         `json:"control_database"`
-	Saga      string         `json:"saga_database"`
+	Saga      string         `json:"saga_stream"`
 	Bus       []BusItem      `json:"bus"`
 	Business  []BusinessItem `json:"business"`
 }
@@ -157,7 +157,7 @@ func BuildChecklist(server Server, declared []coredata.LogicalDatabase) (Checkli
 	if err != nil {
 		return Checklist{}, err
 	}
-	list := Checklist{SID: resolved.sid, Control: resolved.controlDB, Saga: resolved.saga.Store.Database,
+	list := Checklist{SID: resolved.sid, Control: resolved.controlDB, Saga: resolved.saga.Layout.Stream,
 		Bus: busChecklist(resolved), Business: businessChecklist}
 	for _, database := range declared {
 		item := DatabaseItem{Logical: database.Name, ServerScoped: database.ServerScoped, Physical: resolved.databases.Physical(database.Name)}

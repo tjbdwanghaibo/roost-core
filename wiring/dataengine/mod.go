@@ -611,6 +611,16 @@ func EffectSettings(cfg *viper.Viper) (database, subjectPrefix, stream string, e
 	return settings.Database, settings.Effects.subjectPrefix(), settings.Effects.Stream, nil
 }
 
+// ProjectionMaxUnackedRecords 按 DataEngine Mod 的声明返回 dataengine.projection.max_unacked_records（0 = 不设上限）：
+// saga Mod 的跨 Mod 规则据它检查准入高水位与投影硬上限的关系。
+func ProjectionMaxUnackedRecords(cfg *viper.Viper) (int64, error) {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return 0, fmt.Errorf("dataengine: %w", err)
+	}
+	return settings.Projection.MaxUnackedRecords, nil
+}
+
 var _ app.Mod = (*Mod)(nil)
 var _ app.ModStopperWithContext = (*Mod)(nil)
 var _ app.ModStopBudgetProvider = (*Mod)(nil)

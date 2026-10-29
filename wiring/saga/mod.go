@@ -2,6 +2,7 @@ package saga
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,22 +13,21 @@ import (
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 )
 
-// Mod parses configuration, looks up the Mongo, authority Redis and JetStream
-// capabilities, hands them to core's saga.Assemble and forwards lifecycle
-// calls. The coordinator's authoritative store is the authority Redis
-// (redis_authority.*, saga.redis.*); Mongo holds the cold copy the Store
-// Service projects into. Consumer subscription, engine loop and
-// drain-then-stop live in core.
+// Mod 解析 saga.*，取 NATS 的三项能力（nats.log、nats.raw、nats.jetstream，同一条连接）交给 core 的 saga.Assemble，并转发
+// 生命周期。协调器的权威是 JetStream 分区事件日志：本进程 sid 在 saga.coordinators 里时拥有一部分分区（静态分配，选项 P-A），
+// 跑分区循环、回答查询、做准入；不在列表里的进程只做发起方（StartSaga、查询、WaitTerminal）。每个装了本 Mod 的进程都跑
+// 启动中继（Nest 事务里提交的启动意图 → 分区）。
+//
+// 写者身份（进事件的 MsgID）是 <sid>-<单实例锁本次启动的 token>：每次进程启动不同，崩溃重启的短暂重叠里新旧两个进程写同一
+// 分区时，期望序号让其中一个被隔离并 fail-stop。没有启用单实例锁的进程（开发环境）用 <sid>-<随机串>。
 type Mod struct {
 	definitions []coresaga.Definition
 	config      coresaga.AssemblyConfig
+	sid         int32
 	asm         *coresaga.Assembly
 }
 
@@ -50,51 +50,12 @@ func CombineDefinitions(groups ...[]coresaga.Definition) []coresaga.Definition {
 
 func (m *Mod) Name() app.ModName { return mods.ModSaga }
 
-// DependsOn names Mods: Mongo, the authority Redis and NATS. JetStream is the
-// NATS Mod's capability and health is a registry built-in — neither is a Mod
-// name, and app resolves dependencies by Mod name.
-func (m *Mod) DependsOn() []app.ModName {
-	return []app.ModName{mods.ModMongo, mods.ModRedisAuthority, mods.ModNats}
-}
+// DependsOn 只有 NATS：协调器的全部状态在 JetStream 里。health 是 Registry 内建能力，不是 Mod 名。
+func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }
 
+// OptionalDependsOn：同进程有 DataEngine 时在它之后启动——启动中继订阅的效果流由 DataEngine 建。
 func (m *Mod) OptionalDependsOn() []app.ModName {
 	return []app.ModName{mods.ModDataEngine}
-}
-
-// Locations 是 saga Mod 按配置使用的持久位置：权威 Redis 上的键前缀与分区（Redis 连接见 redis_authority.*）、Mongo
-// 冷副本（库与集合，没写的集合名为空、由 core 取缺省）与 JetStream 流名、主题前缀。
-type Locations struct {
-	Redis         coresaga.RedisStoreOptions
-	Store         coresaga.MongoStoreOptions
-	Stream        string
-	SubjectPrefix string
-}
-
-// LoadLocations 按 saga Mod 的声明读 Locations（与 Init 同一个结构体）：运维工具（cmd/sidmerge 的“全部 saga
-// 终态”检查）与 Store Service 用它找 saga 记录，不另抄缺省。
-func LoadLocations(cfg *viper.Viper) (Locations, error) {
-	var settings config
-	if err := app.LoadConfig(cfg, &settings); err != nil {
-		return Locations{}, fmt.Errorf("saga: %w", err)
-	}
-	return settings.locations(), nil
-}
-
-func (settings *config) locations() Locations {
-	c := settings.Saga
-	return Locations{
-		Redis: coresaga.RedisStoreOptions{KeyPrefix: c.Redis.KeyPrefix, Partitions: c.Redis.Partitions, WaitAOFTimeout: c.Redis.WaitAOFTimeout,
-			TerminalRetention: c.Redis.TerminalRetention, BusinessKeyGuard: c.Redis.BusinessKeyGuard, MaxProjectionBacklog: c.Redis.MaxProjectionBacklog},
-		Store: coresaga.MongoStoreOptions{Database: c.Database, SagaCollection: c.Collections.Sagas,
-			CompletionCollection: c.Collections.Completions, OperationCollection: c.Collections.Operations, CompletionReceiptTTL: c.CompletionReceiptTTL},
-		Stream: c.Stream, SubjectPrefix: c.SubjectPrefix,
-	}
-}
-
-// concurrency 是本 Mod 在权威 Redis 连接池上的并发上限：协调与发布循环各占一条连接，三类消费者的每个在途处理各占一条。
-func (settings *config) concurrency() int {
-	c := settings.Saga
-	return c.CoordinatorWorkers + c.PublisherWorkers + c.ResultWorkers + c.ResultEffectWorkers + c.StartEffectWorkers
 }
 
 // ConfigSchema 声明 saga.*。
@@ -105,46 +66,31 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return fmt.Errorf("saga: %w", err)
 	}
-	c := settings.Saga
-	defaults := coresaga.DefaultOptions()
-	owner := c.Owner
-	if owner == "" {
-		owner = fmt.Sprintf("saga-%d-%s", settings.Sid, coresaga.NewID())
+	c := &settings.Saga
+	coordinators, err := settings.coordinators()
+	if err != nil {
+		return fmt.Errorf("saga: %w", err)
 	}
 	effects, err := kitdataengine.LoadEffectsConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("saga: %w", err)
 	}
-	startStream, startPrefix, resultStream, resultPrefix := effectStreams(&settings, effects)
-	locations := settings.locations()
+	layout := settings.layout()
+	m.sid = settings.Sid
 	m.config = coresaga.AssemblyConfig{
-		Store: locations.Store,
-		Redis: locations.Redis,
-		Engine: coresaga.Options{Owner: owner, CoordinatorWorkers: c.CoordinatorWorkers, PublisherWorkers: c.PublisherWorkers,
-			CoordinatorBatch: c.CoordinatorClaimBatch, PublisherBatch: c.PublisherClaimBatch, LeaseDuration: c.LeaseDuration,
-			StoreTimeout: c.StoreTimeout, PollInterval: c.PollInterval, PublishTimeout: c.PublishTimeout,
-			PublishBackoffMin: c.PublishBackoffMin, PublishBackoffMax: c.PublishBackoffMax, MaxPayloadBytes: settings.SagaPayloadLimit(),
-			StepBudgets: defaults.StepBudgets},
-		Prefix: c.SubjectPrefix,
-		Stream: fnats.JetStreamConfig{Name: c.Stream, Subjects: []string{c.SubjectPrefix + ".>"}, Storage: fnats.JetStreamStorageFile,
-			MaxAge: c.StreamMaxAge, Duplicates: c.DuplicateWindow, Replicas: c.Replicas, MaxBytes: c.StreamMaxBytes},
-		Completions: coresaga.CompletionConsumerConfig{
-			Workers: c.ResultWorkers, Stream: c.Stream, Durable: c.ResultDurable, SubjectPrefix: c.SubjectPrefix,
-			AckWait: c.Result.AckWait, ProcessTimeout: c.Result.ProcessTimeout, MaxDeliver: c.Result.MaxDeliver,
-			MaxAckPending: c.Result.MaxAckPending, NakBackoffMin: c.Result.NakBackoffMin, NakBackoffMax: c.Result.NakBackoffMax,
-		},
-		// Native Nest steps commit their completion as an effect, so it
-		// arrives on the effect stream rather than the saga stream. Its
-		// consumer shares the start consumer's stream and prefix and takes
-		// its own durable; core derives the rest when these are empty.
-		NestResults: coresaga.NestCompletionConsumerConfig{
-			Workers: c.ResultEffectWorkers, Stream: resultStream, Durable: c.ResultEffectDurable, EffectPrefix: resultPrefix,
-			AckWait: c.ResultEffect.AckWait, ProcessTimeout: c.ResultEffect.ProcessTimeout, MaxDeliver: c.ResultEffect.MaxDeliver,
-			MaxAckPending: c.ResultEffect.MaxAckPending, NakBackoffMin: c.ResultEffect.NakBackoffMin, NakBackoffMax: c.ResultEffect.NakBackoffMax,
+		Engine: coresaga.JetStreamOptions{
+			Layout: layout, Owned: ownedPartitions(coordinators, settings.Sid, layout.Partitions),
+			Replicas: c.Replicas, StreamMaxBytes: c.StreamMaxBytes, DuplicateWindow: c.DuplicateWindow, MaxBatch: c.MaxBatch, Tick: c.Tick,
+			SnapshotEveryEvents: c.SnapshotEveryEvents, SnapshotInterval: c.SnapshotInterval,
+			TerminalRetention: c.TerminalRetention, ReceiptRetention: c.ReceiptRetention,
+			PublishTimeout: c.PublishTimeout, PublishUnknownBudget: c.PublishUnknownBudget,
+			QueryTimeout: c.QueryTimeout, StartVerdictTimeout: c.StartVerdictTimeout, PurgeStallAlarm: c.PurgeStallAlarm,
+			MaxPayloadBytes: settings.SagaPayloadLimit(), Admission: settings.admission(),
 		},
 		Starts: coresaga.NestStartConsumerConfig{
-			Workers: c.StartEffectWorkers, Stream: startStream, Durable: c.StartEffectDurable, EffectPrefix: startPrefix,
-			AckWait: c.StartEffect.AckWait, ProcessTimeout: c.StartEffect.ProcessTimeout, MaxDeliver: c.StartEffect.MaxDeliver,
+			Workers: c.StartEffectWorkers, Stream: stringDefault(c.StartEffectStream, effects.Stream), Durable: c.StartEffectDurable,
+			EffectPrefix: stringDefault(c.StartEffectPrefix, effects.Prefix()),
+			AckWait:      c.StartEffect.AckWait, ProcessTimeout: c.StartEffect.ProcessTimeout, MaxDeliver: c.StartEffect.MaxDeliver,
 			MaxAckPending: c.StartEffect.MaxAckPending, NakBackoffMin: c.StartEffect.NakBackoffMin, NakBackoffMax: c.StartEffect.NakBackoffMax,
 		},
 	}
@@ -153,131 +99,76 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("saga: %w", err)
 	}
 	m.config.Engine.StepBudgets = budgets
-	if err := checkStepTimeouts(budgets, m.definitions); err != nil {
-		return fmt.Errorf("saga: %w", err)
-	}
-	if m.config.Store.CompletionReceiptTTL <= m.config.Stream.MaxAge {
-		return fmt.Errorf("saga: completion receipt ttl must exceed stream max age")
-	}
-	return nil
-}
-
-// effectStreams 解析 saga 订阅的两条效果流（Nest start、原生步骤结果）：不写取 dataengine.effects 的值，结果流不写取
-// start 流。Init 装配消费者与配置检查（checkEffectRetention）用同一个解析。
-func effectStreams(settings *config, effects kitdataengine.EffectsConfig) (startStream, startPrefix, resultStream, resultPrefix string) {
-	c := &settings.Saga
-	startStream = stringDefault(c.StartEffectStream, effects.Stream)
-	startPrefix = stringDefault(c.StartEffectPrefix, effects.Prefix())
-	resultStream = stringDefault(c.ResultEffectStream, startStream)
-	resultPrefix = stringDefault(c.ResultEffectPrefix, startPrefix)
-	return startStream, startPrefix, resultStream, resultPrefix
+	return checkStepTimeouts(budgets, m.definitions)
 }
 
 // CheckConfigAcrossMods 是 saga 读别的 Mod 配置键的规则（App 在配置检查时调用：启动前任何 Mod Init 之前、
 // --check-config 与 doctor 的 config-check 同一处）：
 //
-//   - checkAuthorityPool：同一进程注册了权威 Redis Mod 时，redis_authority.pool_size 不小于本 Mod 的并发之和（同进程有
-//     Store Service 时由它加上分区循环一起检查）；不够时并发的消费者、循环排队等连接，存储超时被等连接吃掉。
-//   - checkEffectRetention：完成回执要比效果流里的结果活得久。不看本进程是否注册了 DataEngine——只跑协调器的进程
-//     读的仍是按 dataengine.effects 解析的那条流，它的保留期由别的进程的 DataEngine 按同一份配置建。
 //   - 同一进程注册了 DataEngine 时，saga.start_effect_* 写了就必须与 dataengine.effects 相同：Nest 的 saga start 由
-//     DataEngine 发布到 dataengine.effects 那条流，本 Mod 的 start 消费者订阅 saga.start_effect_*，两边写得不同，启动时
-//     只会得到 JetStream 的 "stream not found" 或永远收不到 start。这里点名两个键并给出改法。没有 DataEngine 的进程
-//     不比较（显式值就是它要订阅的流）。
+//     DataEngine 发布到 dataengine.effects 那条流，启动中继订阅 saga.start_effect_*，两边写得不同，启动时只会得到
+//     JetStream 的 "stream not found" 或永远收不到 start。
+//   - 同一进程注册了 DataEngine 且准入开启时，dataengine.projection.max_unacked_records 必须 > 0 且 ≥ 4 × saga.admission.high_records：
+//     准入只拦新启动，在途推进照常产生投影积压，硬上限是最后一道闸（到上限 DataEngine 在 WAL 准入前拒绝，命令 nak 重试）。
 func (m *Mod) CheckConfigAcrossMods(cfg *viper.Viper, registered func(app.ModName) bool) error {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return err
 	}
+	if !registered(mods.ModDataEngine) {
+		return nil
+	}
 	effects, err := kitdataengine.LoadEffectsConfig(cfg)
 	if err != nil {
 		return err
 	}
-	errs := []error{checkEffectRetention(&settings, effects)}
-	if registered(mods.ModRedisAuthority) && !registered(mods.ModStoreService) {
-		errs = append(errs, checkAuthorityPool(cfg, &settings))
-	}
-	if !registered(mods.ModDataEngine) {
-		return errors.Join(errs...)
-	}
+	var errs []error
 	if stream := strings.TrimSpace(settings.Saga.StartEffectStream); stream != "" && stream != effects.Stream {
 		errs = append(errs, effectKeyMismatch("saga.start_effect_stream", stream, "dataengine.effects.stream", effects.Stream))
 	}
 	if prefix := strings.Trim(strings.TrimSpace(settings.Saga.StartEffectPrefix), "."); prefix != "" && prefix != effects.Prefix() {
 		errs = append(errs, effectKeyMismatch("saga.start_effect_prefix", settings.Saga.StartEffectPrefix, "dataengine.effects.subject_prefix", effects.Prefix()))
 	}
+	if settings.Saga.Admission.Enabled {
+		maxUnacked, err := kitdataengine.ProjectionMaxUnackedRecords(cfg)
+		if err != nil {
+			return err
+		}
+		if high := settings.Saga.Admission.HighRecords; maxUnacked <= 0 || maxUnacked < 4*high {
+			errs = append(errs, fmt.Errorf("dataengine.projection.max_unacked_records (%d) must be set and at least 4 × saga.admission.high_records (%d = %d): "+
+				"admission only refuses new sagas, so in-flight steps keep adding projection backlog and the hard cap is the last stop", maxUnacked, high, 4*high))
+		}
+	}
 	return errors.Join(errs...)
-}
-
-// checkAuthorityPool：权威 Redis 连接池要容得下本进程同时在用的连接（saga 的并发，见 concurrency）。同进程注册了 Store Service
-// 时由它的 Mod 把两者加在一起检查（store_service 的键归它声明），这里不重复。
-func checkAuthorityPool(cfg *viper.Viper, settings *config) error {
-	authority, err := kitredis.LoadAuthorityConfig(cfg)
-	if err != nil {
-		return err
-	}
-	if need := settings.concurrency(); authority.PoolSize < need {
-		return fmt.Errorf("redis_authority.pool_size (%d) is smaller than the saga concurrency on it (%d = coordinator_workers + publisher_workers + "+
-			"result_workers + result_effect_workers + start_effect_workers); raise the pool or lower the workers", authority.PoolSize, need)
-	}
-	return nil
-}
-
-// Concurrency 按 saga Mod 的声明返回它在权威 Redis 连接池上的并发（协调与发布循环、三类消费者的在途处理）：Store Service
-// 与它同进程时把两者加在一起检查连接池。
-func Concurrency(cfg *viper.Viper) (int, error) {
-	var settings config
-	if err := app.LoadConfig(cfg, &settings); err != nil {
-		return 0, fmt.Errorf("saga: %w", err)
-	}
-	return settings.concurrency(), nil
 }
 
 func effectKeyMismatch(sagaKey, sagaValue, effectKey, effectValue string) error {
 	return fmt.Errorf("%s (%q) differs from %s (%q): this process's Data Engine publishes Nest saga starts on the effect stream, "+
-		"and the saga start consumer would subscribe elsewhere (startup fails with \"stream not found\" or never sees a start); "+
+		"and the saga start relay would subscribe elsewhere (startup fails with \"stream not found\" or never sees a start); "+
 		"delete %s so it follows %s, or set both to the same value", sagaKey, sagaValue, effectKey, effectValue, sagaKey, effectKey)
-}
-
-// checkEffectRetention 是跨 Mod 校验（维护者决定）：原生 Nest 步骤的完成结果在 DataEngine 的效果流上，回执必须比
-// 流里的结果活得久，否则回执过期后再投递的结果协调器分不清是已计入的重复还是放弃后生效的成功，只能 Term。saga 流的
-// 同一前提由 Init 校验；这里只在结果效果流就是 DataEngine 效果流（与 Init 同一个解析）时比较，别的流的保留期不归这份
-// 配置管。
-func checkEffectRetention(settings *config, effects kitdataengine.EffectsConfig) error {
-	_, _, resultStream, _ := effectStreams(settings, effects)
-	if strings.TrimSpace(resultStream) != effects.Stream {
-		return nil
-	}
-	if ttl := settings.Saga.CompletionReceiptTTL; ttl <= effects.MaxAge {
-		return fmt.Errorf("saga.completion_receipt_ttl (%s) must exceed dataengine.effects.max_age (%s): "+
-			"native step results are kept on the effect stream %s that long, and a result redelivered after its "+
-			"completion receipt expired can no longer be told from a late success and is terminated; "+
-			"raise saga.completion_receipt_ttl or lower dataengine.effects.max_age",
-			ttl, effects.MaxAge, effects.Stream)
-	}
-	return nil
 }
 
 func (m *Mod) Provide(registry *app.Registry) error {
 	if registry == nil {
 		return fmt.Errorf("saga mod: nil registry")
 	}
-	mongoClient, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
-	if !ok || mongoClient == nil {
-		return fmt.Errorf("saga mod: capability %q not found", mods.ModMongo)
+	log, ok := app.Lookup[fnats.JetStreamLog](registry, mods.ModNatsLog)
+	if !ok || log == nil {
+		return fmt.Errorf("saga mod: capability %q not found", mods.ModNatsLog)
 	}
-	authority, ok := app.Lookup[fredis.IRedis](registry, mods.ModRedisAuthority)
-	if !ok || authority == nil {
-		return fmt.Errorf("saga mod: capability %q not found; add wiring/redis.NewAuthorityMod()", mods.ModRedisAuthority)
+	raw, ok := app.Lookup[fnats.RawClient](registry, mods.ModNatsRaw)
+	if !ok || raw == nil {
+		return fmt.Errorf("saga mod: capability %q not found", mods.ModNatsRaw)
 	}
 	jetStream, ok := app.Lookup[fnats.IJetStream](registry, mods.ModNatsJetStream)
 	if !ok || jetStream == nil {
 		return fmt.Errorf("saga mod: capability %q not found", mods.ModNatsJetStream)
 	}
 	if failure, ok := app.Lookup[*app.RuntimeFailure](registry, mods.ModRuntimeFailure); ok {
-		m.config.Failure = failure
+		m.config.Engine.Failure = failure
 	}
-	asm, err := coresaga.Assemble(mongoClient, authority, jetStream, m.config, m.definitions...)
+	m.config.Engine.Writer = m.writer(registry)
+	asm, err := coresaga.Assemble(log, raw, jetStream, m.config, m.definitions...)
 	if err != nil {
 		return err
 	}
@@ -293,11 +184,21 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	return nil
 }
 
+// writer 是本进程的写者身份：<sid>-<单实例锁 token>，没有单实例锁时 <sid>-<随机串>。每次启动都不同。
+func (m *Mod) writer(registry *app.Registry) string {
+	if incarnation, ok := app.Lookup[app.SingletonIncarnation](registry, mods.ModSingletonIncarnation); ok && incarnation.Token != "" {
+		return fmt.Sprintf("%d-%s", m.sid, incarnation.Token)
+	}
+	return fmt.Sprintf("%d-%s", m.sid, rand.Text())
+}
+
+// Start 启动协调器（先恢复再服务：拥有的分区重放完才返回）与启动中继。重放时长随日志尾巴与快照大小变，上限 2 分钟（与 App
+// 的启动预算同一量级）。
 func (m *Mod) Start() error {
 	if m == nil || m.asm == nil {
 		return fmt.Errorf("saga mod: not provided")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	return m.asm.Start(ctx)
 }
@@ -310,42 +211,27 @@ func (m *Mod) StopWithContext(ctx context.Context) error {
 	return m.asm.Stop(ctx)
 }
 
-func (m *Mod) Engine() *coresaga.Engine {
+// Engine 返回协调器（发起方 API：StartSaga、Get、GetByBusinessKey、List、Resume、Compensate、Complete、WaitTerminal）。
+func (m *Mod) Engine() *coresaga.JetStreamEngine {
 	if m == nil || m.asm == nil {
 		return nil
 	}
 	return m.asm.Engine
 }
 
-// Store 返回协调器的权威存储（Redis）；Mongo 冷副本经 Store().Copy() 取。
-func (m *Mod) Store() *coresaga.RedisStore {
-	if m == nil || m.asm == nil {
-		return nil
-	}
-	return m.asm.Store
-}
-func (m *Mod) Transport() *coresaga.JetStreamPublisher {
-	if m == nil || m.asm == nil {
-		return nil
-	}
-	return m.asm.Transport
-}
-
-func (m *Mod) checkHealth(ctx context.Context) health.Result {
+func (m *Mod) checkHealth(context.Context) health.Result {
 	if m == nil || m.asm == nil || !m.asm.Running() {
-		return health.Result{Status: health.StatusFail, Message: "not initialized"}
-	}
-	if m.asm.ConsumersClosed() {
-		return health.Result{Status: health.StatusFail, Message: "durable consumer stopped"}
+		return health.Result{Status: health.StatusFail, Message: "not running"}
 	}
 	if err := m.asm.RunError(); err != nil {
-		return health.Result{Status: health.StatusFail, Message: "worker stopped", Err: err}
+		return health.Result{Status: health.StatusFail, Message: "coordinator failed", Err: err}
 	}
-	if err := m.asm.Store.Ping(ctx); err != nil {
-		return health.Result{Status: health.StatusFail, Message: "authority Redis or MongoDB copy unavailable", Err: err}
+	if m.asm.ConsumersClosed() {
+		return health.Result{Status: health.StatusFail, Message: "start relay stopped"}
 	}
-	stats := m.asm.Engine.Stats()
-	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("running conflicts=%d duplicates=%d publish_failures=%d store_failures=%d worker_failures=%d manual_required=%d late_after_abandon=%d reopened=%d", stats.Conflicts, stats.Duplicates, stats.PublishFailures, stats.StoreFailures, stats.WorkerFailures, stats.ManualRequired, stats.LateAfterAbandon, stats.Reopened)}
+	stats, admission := m.asm.Engine.Stats(), m.asm.Engine.AdmissionState()
+	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("running partitions=%d admission_open=%t manual_required=%d late_after_abandon=%d reopened=%d unknown_saga=%d publish_unknown=%d",
+		len(m.config.Engine.Owned), admission.Open, stats.ManualRequired, stats.LateAfterAbandon, stats.Reopened, stats.UnknownSaga, stats.PublishUnknown)}
 }
 
 func stringDefault(value, fallback string) string {
@@ -358,13 +244,30 @@ func stringDefault(value, fallback string) string {
 var _ app.Mod = (*Mod)(nil)
 var _ app.ModOptionalDependencyProvider = (*Mod)(nil)
 
-// StreamSettings 按 saga Mod 的声明（整份 saga.*，与 Mod Init 读的同一个结构体）返回步骤消费者与协调器会合要用的
-// 三样：命令主题前缀、saga 流名与 saga 库名。步骤运行时 Steps 用它；业务自己组装步骤消费者时同样经它，不直接读
+// Participant 是步骤一侧（参与方）与协调器会合要用的配置：分区布局（命令在哪些流上、结果发回哪个分区）、流与桶的副本数、
+// Mongo 步骤收件箱所在的库、回执保留期与准入信号参数。步骤运行时 Steps 用它；业务自己组装步骤消费者时同样经它，不直接读
 // viper、不另抄一份缺省值。
-func StreamSettings(cfg *viper.Viper) (subjectPrefix, stream, database string, err error) {
+type Participant struct {
+	Layout           coresaga.Layout
+	Replicas         int
+	Database         string
+	ReceiptRetention time.Duration
+	Admission        coresaga.AdmissionOptions
+	// SignalInterval 是 LoadPublisher 发布积压信号的间隔（saga.admission.signal_interval）。
+	SignalInterval time.Duration
+	// Sid 是本进程的 sid（准入信号的键名用）。
+	Sid int32
+}
+
+// ParticipantSettings 按 saga Mod 的声明（整份 saga.*，与 Mod Init 读的同一个结构体）返回 Participant。
+func ParticipantSettings(cfg *viper.Viper) (Participant, error) {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {
-		return "", "", "", fmt.Errorf("saga: %w", err)
+		return Participant{}, fmt.Errorf("saga: %w", err)
 	}
-	return settings.Saga.SubjectPrefix, settings.Saga.Stream, settings.Saga.Database, nil
+	return Participant{
+		Layout: settings.layout(), Replicas: settings.Saga.Replicas, Database: settings.Saga.Database,
+		ReceiptRetention: settings.Saga.ReceiptRetention, Admission: settings.admission(),
+		SignalInterval: settings.Saga.Admission.SignalInterval, Sid: settings.Sid,
+	}, nil
 }

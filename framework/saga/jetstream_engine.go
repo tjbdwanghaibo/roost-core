@@ -255,6 +255,7 @@ type JetStreamEngine struct {
 	stopAdmission func(context.Context) error
 	failed        chan struct{}
 	failOnce      sync.Once
+	failCause     error
 }
 
 // jetStreamHooks 只给本包测试用：发布之前回调（冻结旧写者、注入故障）。生产代码不设置。
@@ -352,7 +353,10 @@ func (e *JetStreamEngine) receiptsExpired(record Record, definition Definition, 
 }
 
 func (e *JetStreamEngine) reportFailure(err error) {
-	e.failOnce.Do(func() { close(e.failed) })
+	e.failOnce.Do(func() {
+		e.failCause = err
+		close(e.failed)
+	})
 	if e.opts.Failure != nil {
 		e.opts.Failure.Fail(err)
 	}
@@ -360,6 +364,16 @@ func (e *JetStreamEngine) reportFailure(err error) {
 
 // Failed 在任一分区 fail-stop 后关闭。
 func (e *JetStreamEngine) Failed() <-chan struct{} { return e.failed }
+
+// FailureCause 返回第一个 fail-stop 的原因；还没有 fail-stop 时返回 nil。
+func (e *JetStreamEngine) FailureCause() error {
+	select {
+	case <-e.failed:
+		return e.failCause // 写在 close(e.failed) 之前，读在它之后
+	default:
+		return nil
+	}
+}
 
 // ---- 生命周期 ----
 

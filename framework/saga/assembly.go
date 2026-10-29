@@ -5,127 +5,38 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 
-	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
-// AssemblyConfig 是配置解析后 saga 运行时需要的全部内容：权威 Redis 与 Mongo 冷副本的选项、引擎选项、线上前缀与流、
-// 持久消费者（步骤执行方的结果、Nest effect 的启动与原生步骤结果）。由 wiring 的 Mod 填写。
+// AssemblyConfig 是配置解析后 saga 运行时需要的全部内容：协调器选项（布局、本进程拥有的分区、写者身份、快照与准入参数）与
+// 启动中继（Nest effect 里的启动意图 → 分区 in.start）的持久消费者。由 wiring 的 Mod 填写。
 type AssemblyConfig struct {
-	// Store 是 Mongo 冷副本的库与集合。
-	Store MongoStoreOptions
-	// Redis 是权威 Redis 上的键前缀、分区与持久参数。
-	Redis RedisStoreOptions
-	// Failure 收 fail-stop：写已执行但 WAITAOF 没确认、脚本校验之后失败时报告给它（App 的 RuntimeFailure）。
-	Failure     *app.RuntimeFailure
-	Engine      Options
-	Prefix      string
-	Stream      fnats.JetStreamConfig
-	Completions CompletionConsumerConfig
-	Starts      NestStartConsumerConfig
-	// NestResults 是原生 Nest 步骤 completion effect 的消费者。零值时由 Starts 推导（同一 effect 流与前缀、自己的
-	// durable）：有原生步骤与没有原生步骤的部署配置相同，后者只是永远不会收到这些 effect。
-	NestResults NestCompletionConsumerConfig
+	Engine JetStreamOptions
+	Starts NestStartConsumerConfig
 }
 
-// nestResultsConfig 在 NestResults 为空时由 Starts 补齐。
-func (c AssemblyConfig) nestResultsConfig() NestCompletionConsumerConfig {
-	config := c.NestResults
-	if config.Stream == "" {
-		config.Stream = c.Starts.Stream
-	}
-	if config.EffectPrefix == "" {
-		config.EffectPrefix = c.Starts.EffectPrefix
-	}
-	if config.Durable == "" {
-		config.Durable = defaultNestResultDurable(c.Starts.Durable)
-	}
-	if config.AckWait == 0 {
-		config.AckWait = c.Starts.AckWait
-	}
-	if config.ProcessTimeout == 0 {
-		config.ProcessTimeout = c.Starts.ProcessTimeout
-	}
-	if config.MaxDeliver == 0 {
-		config.MaxDeliver = c.Starts.MaxDeliver
-	}
-	if config.MaxAckPending == 0 {
-		config.MaxAckPending = c.Starts.MaxAckPending
-	}
-	if config.Workers == 0 {
-		config.Workers = c.Starts.Workers
-	}
-	if config.NakBackoffMin == 0 {
-		config.NakBackoffMin = c.Starts.NakBackoffMin
-	}
-	if config.NakBackoffMax == 0 {
-		config.NakBackoffMax = c.Starts.NakBackoffMax
-	}
-	return config
-}
-
-// defaultNestResultDurable 推导一个不会与启动消费者冲突的 durable：共用 durable 的两个消费者共用一个游标，每条消息只会
-// 到达其中一个。
-func defaultNestResultDurable(startDurable string) string {
-	if startDurable == "" {
-		return "roost-saga-nest-result"
-	}
-	return startDurable + "-result"
-}
-
-// Assembly 在构造时建立 store、transport 和 engine；Start 建立基础设施、
-// 普通完成、启动意图、原生 Nest 完成三个持久消费者，并启动协调循环。
-// Stop 先排空消费者再停止循环；Kit 仅解析配置、发布能力和转发生命周期。
+// Assembly 在构造时建立协调器并登记定义；Start 先恢复再服务（建流与桶、重放拥有的分区、开始处理输入），再订阅启动中继；
+// Stop 先排空中继，再按三步停机停协调器。Kit 只解析配置、发布能力和转发生命周期。
 type Assembly struct {
-	// Store 是协调器的权威存储（Redis）；Copy 是它的 Mongo 冷副本。
-	Store     *RedisStore
-	Copy      *MongoStore
-	Transport *JetStreamPublisher
-	Engine    *Engine
+	Engine *JetStreamEngine
 
+	js  fnats.IJetStream
 	cfg AssemblyConfig
 
 	lifecycleMu sync.Mutex
 	stateMu     sync.RWMutex
-	resultSub   fnats.IJetStreamSubscription
 	startSub    fnats.IJetStreamSubscription
-	nestResults fnats.IJetStreamSubscription
-	cancel      context.CancelFunc
-	done        chan struct{}
-	errMu       sync.RWMutex
-	runErr      error
-	running     atomic.Bool
+	running     bool
 }
 
-// Assemble 构建存储、传输与引擎并登记定义，此时还不访问 Redis、Mongo 与 JetStream。authority 是权威 Redis（单主，
-// redis/driver.Client）。
-func Assemble(mongo fmongo.IMongo, authority fredis.IRedis, jetStream fnats.IJetStream, cfg AssemblyConfig, definitions ...Definition) (*Assembly, error) {
-	if mongo == nil {
-		return nil, errors.New("saga: mongo client is required")
+// Assemble 构建协调器并登记定义，此时还不访问 JetStream。log、raw、js 来自同一条 NATS 连接（wiring/nats 的
+// nats.log、nats.raw、nats.jetstream）。
+func Assemble(log fnats.JetStreamLog, raw fnats.RawClient, js fnats.IJetStream, cfg AssemblyConfig, definitions ...Definition) (*Assembly, error) {
+	if log == nil || raw == nil || js == nil {
+		return nil, errors.New("saga: JetStream log, raw NATS client and JetStream client are required")
 	}
-	if authority == nil {
-		return nil, errors.New("saga: authority redis client is required")
-	}
-	if jetStream == nil {
-		return nil, errors.New("saga: jetstream client is required")
-	}
-	copy, err := NewMongoStore(mongo, cfg.Store)
-	if err != nil {
-		return nil, err
-	}
-	store, err := NewRedisStore(authority, copy, cfg.Failure, cfg.Redis)
-	if err != nil {
-		return nil, err
-	}
-	transport, err := NewJetStreamPublisher(jetStream, cfg.Prefix)
-	if err != nil {
-		return nil, err
-	}
-	engine, err := NewEngine(store, transport, cfg.Engine)
+	engine, err := NewJetStreamEngine(log, raw, cfg.Engine)
 	if err != nil {
 		return nil, err
 	}
@@ -134,13 +45,13 @@ func Assemble(mongo fmongo.IMongo, authority fredis.IRedis, jetStream fnats.IJet
 			return nil, fmt.Errorf("saga: register definition: %w", err)
 		}
 	}
-	return &Assembly{Store: store, Copy: copy, Transport: transport, Engine: engine, cfg: cfg}, nil
+	return &Assembly{Engine: engine, js: js, cfg: cfg}, nil
 }
 
-// Start 先过权威 Redis 的启动关口（RedisStore.EnsureInfrastructure：拓扑、持久配置、探针写、元数据守卫）并确保冷副本索引与流存在，订阅结果与 Nest 启动消费者，在后台运行引擎循环。ctx 只约束基础设施调用；循环
-// 运行到 Stop。运行中再次 Start 无效果。
+// Start 启动协调器（返回时拥有的分区都已重放完、开始处理输入；不拥有分区的进程只建好发起方一侧），再订阅启动中继。
+// ctx 约束基础设施调用与重放；之后运行到 Stop。失败时已启动的部分全部停掉。只能成功一次（协调器不能重启，停了要重建）。
 func (a *Assembly) Start(ctx context.Context) error {
-	if a == nil || a.Engine == nil || a.Store == nil || a.Transport == nil {
+	if a == nil || a.Engine == nil || a.js == nil {
 		return errors.New("saga: not assembled")
 	}
 	if ctx == nil {
@@ -148,60 +59,26 @@ func (a *Assembly) Start(ctx context.Context) error {
 	}
 	a.lifecycleMu.Lock()
 	defer a.lifecycleMu.Unlock()
-	if a.running.Load() {
+	if a.running {
 		return nil
 	}
-	if err := a.Store.EnsureInfrastructure(ctx); err != nil {
+	if err := a.Engine.Start(ctx); err != nil {
 		return err
 	}
-	jetStream := a.Transport.Client()
-	if err := jetStream.EnsureStream(ctx, a.cfg.Stream); err != nil {
-		return fmt.Errorf("saga: ensure stream: %w", err)
-	}
-	runCtx, runCancel := context.WithCancel(context.Background())
-	resultSub, err := SubscribeCompletions(runCtx, jetStream, a.cfg.Completions, a.Engine)
+	// 中继的回调 ctx 不随启动 ctx 结束：消费者运行到 Stop 排空。
+	startSub, err := SubscribeNestStarts(context.WithoutCancel(ctx), a.js, a.cfg.Starts, a.Engine)
 	if err != nil {
-		runCancel()
-		return fmt.Errorf("saga: subscribe completions: %w", err)
+		stopErr := a.Engine.Stop(ctx)
+		return errors.Join(fmt.Errorf("saga: subscribe Nest starts: %w", err), stopErr)
 	}
-	startSub, err := SubscribeNestStarts(runCtx, jetStream, a.cfg.Starts, a.Engine)
-	if err != nil {
-		resultSub.Drain()
-		runCancel()
-		return fmt.Errorf("saga: subscribe Nest starts: %w", err)
-	}
-	// 第三个消费者：原生 Nest 步骤作为 effect 提交的 completion。没有它这些结果无人接收，saga 要等完每次超时。这里失败
-	// 时与其他部分启动失败一样，撤掉已启动的两个。
-	nestResultSub, err := SubscribeNestCompletions(runCtx, jetStream, a.cfg.nestResultsConfig(), a.Engine)
-	if err != nil {
-		startSub.Drain()
-		resultSub.Drain()
-		runCancel()
-		return fmt.Errorf("saga: subscribe Nest completions: %w", err)
-	}
-	done := make(chan struct{})
 	a.stateMu.Lock()
-	a.cancel, a.resultSub, a.startSub, a.nestResults, a.done = runCancel, resultSub, startSub, nestResultSub, done
+	a.startSub, a.running = startSub, true
 	a.stateMu.Unlock()
-	a.errMu.Lock()
-	a.runErr = nil
-	a.errMu.Unlock()
-	a.running.Store(true)
-	go func() {
-		defer a.running.Store(false)
-		defer close(done)
-		err := a.Engine.Run(runCtx)
-		if err != nil && runCtx.Err() == nil {
-			a.errMu.Lock()
-			a.runErr = err
-			a.errMu.Unlock()
-		}
-	}()
 	return nil
 }
 
-// Stop 排空三个消费者（在 ctx 内等它们关闭），取消循环、停止引擎并等待循环退出。排空未能及时完成时强制停止消费者，
-// 返回 ctx 的错误。
+// Stop 先排空启动中继（在 ctx 内等它关闭；超时强制停止并返回 ctx 错误，可以用新 ctx 再调用），再停协调器（三步停机，
+// 见 JetStreamEngine.Stop）。重复调用返回 nil。
 func (a *Assembly) Stop(ctx context.Context) error {
 	if a == nil {
 		return nil
@@ -212,93 +89,66 @@ func (a *Assembly) Stop(ctx context.Context) error {
 	a.lifecycleMu.Lock()
 	defer a.lifecycleMu.Unlock()
 	a.stateMu.RLock()
-	resultSub, startSub, nestResultSub, runCancel, done := a.resultSub, a.startSub, a.nestResults, a.cancel, a.done
+	startSub := a.startSub
 	a.stateMu.RUnlock()
-	subs := []fnats.IJetStreamSubscription{resultSub, startSub, nestResultSub}
-	if err := drainSubscriptions(ctx, subs); err != nil {
-		for _, sub := range subs {
-			if sub != nil {
-				sub.Stop()
-			}
+	if startSub != nil {
+		startSub.Drain()
+		select {
+		case <-startSub.Closed():
+		case <-ctx.Done():
+			startSub.Stop()
+			return ctx.Err()
 		}
-		if runCancel != nil {
-			runCancel()
-		}
+		a.stateMu.Lock()
+		a.startSub = nil
+		a.stateMu.Unlock()
+	}
+	if a.Engine == nil {
+		return nil
+	}
+	if err := a.Engine.Stop(ctx); err != nil {
 		return err
 	}
 	a.stateMu.Lock()
-	a.resultSub, a.startSub, a.nestResults, a.cancel = nil, nil, nil, nil
+	a.running = false
 	a.stateMu.Unlock()
-	if runCancel != nil {
-		runCancel()
-	}
-	if a.Engine != nil {
-		if err := a.Engine.Stop(ctx); err != nil {
-			return err
-		}
-	}
-	if done != nil {
-		select {
-		case <-done:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
 	return nil
 }
 
-// Running 报告引擎循环是否在运行。
-func (a *Assembly) Running() bool { return a != nil && a.running.Load() }
+// Running 报告协调器是否已启动且没有停。
+func (a *Assembly) Running() bool {
+	if a == nil {
+		return false
+	}
+	a.stateMu.RLock()
+	defer a.stateMu.RUnlock()
+	return a.running
+}
 
-// ConsumersClosed 检查三个必需消费者：缺失或任意一个退出都不是健康运行。
-// 原生 Nest 完成消费者遗漏时，循环仍能运行但无法接收业务回执。
+// ConsumersClosed 报告启动中继是否缺失或已退出：中继停了，经 EmitStart 提交的启动意图没人转发。
 func (a *Assembly) ConsumersClosed() bool {
 	if a == nil {
 		return true
 	}
 	a.stateMu.RLock()
-	resultSub, startSub, nestResults := a.resultSub, a.startSub, a.nestResults
+	startSub := a.startSub
 	a.stateMu.RUnlock()
-	return subscriptionClosed(resultSub) || subscriptionClosed(startSub) || subscriptionClosed(nestResults)
-}
-
-// RunError 返回引擎循环自行退出时的错误。
-func (a *Assembly) RunError() error {
-	if a == nil {
-		return nil
-	}
-	a.errMu.RLock()
-	defer a.errMu.RUnlock()
-	return a.runErr
-}
-
-func drainSubscriptions(ctx context.Context, subscriptions []fnats.IJetStreamSubscription) error {
-	for _, sub := range subscriptions {
-		if sub != nil {
-			sub.Drain()
-		}
-	}
-	for _, sub := range subscriptions {
-		if sub == nil {
-			continue
-		}
-		select {
-		case <-sub.Closed():
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	return nil
-}
-
-func subscriptionClosed(subscription fnats.IJetStreamSubscription) bool {
-	if subscription == nil {
+	if startSub == nil {
 		return true
 	}
 	select {
-	case <-subscription.Closed():
+	case <-startSub.Closed():
 		return true
 	default:
 		return false
 	}
+}
+
+// RunError 返回协调器 fail-stop 的原因（某个分区被隔离、发布结果未知超预算、流满等）；没有时返回 nil。fail-stop 同时经
+// Options.Failure 报给 App 的 RuntimeFailure，进程整体停机。
+func (a *Assembly) RunError() error {
+	if a == nil || a.Engine == nil {
+		return nil
+	}
+	return a.Engine.FailureCause()
 }

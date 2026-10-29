@@ -15,9 +15,7 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	engine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
-	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
+	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -356,78 +354,57 @@ func (r *run) outboxCheck(ctx context.Context) (Check, error) {
 	return check, nil
 }
 
-// nonTerminal 是 saga 的非终态。
-var nonTerminal = []coresaga.Status{coresaga.StatusPending, coresaga.StatusWaiting, coresaga.StatusCompensating}
-
 // sagaChecks：saga 状态里可能记着发起方的 sid 并按它路由（game-demo 赠礼的 FromSID），A 退役后指向 A 的非终态
-// saga 无法推进，所以合服前全部 saga 必须是终态，并且权威 Redis 上的日志已全部投影进 Mongo 冷副本（积压为 0）。saga 记录
-// 不带“属于哪个 sid”的字段，检查的是整个 saga 存储：两侧是同一套权威 Redis 前缀与冷副本时只查一次。合服要求先停协调器与
-// Store Service。
+// saga 无法推进，所以合服前全部 saga 必须是终态，且分区输入里没有还没判定的意图（启动意图还在输入里时 saga 还没建立）。
+// saga 记录不带“属于哪个 sid”的字段，检查的是整套 saga 分区日志（离线只读重放，coresaga.InspectPartitions）：两侧是同一个
+// NATS、同一个布局时只查一次。合服要求先停协调器（重放读的是那一刻的视图）。
 func (r *run) sagaChecks(ctx context.Context) ([]Check, error) {
 	stores := []side{r.from}
-	if r.into.authority.Addr != r.from.authority.Addr || r.into.authority.DB != r.from.authority.DB || r.into.saga.Redis.KeyPrefix != r.from.saga.Redis.KeyPrefix ||
-		r.into.mongo != r.from.mongo || r.into.saga.Store.Database != r.from.saga.Store.Database {
+	if r.into.natsURL != r.from.natsURL || r.into.saga.Layout != r.from.saga.Layout {
 		stores = append(stores, r.into)
 	}
 	var checks []Check
 	for _, s := range stores {
-		check := Check{Name: "saga:" + s.saga.Store.Database}
-		records, backlog, err := listNonTerminalSagas(ctx, s)
+		check := Check{Name: "saga:" + s.saga.Layout.Stream}
+		records, pending, err := inspectSagas(ctx, s)
 		if err != nil {
-			return nil, fmt.Errorf("sidmerge: saga records of sid %d: %w", s.sid, err)
+			return nil, fmt.Errorf("sidmerge: saga partitions of sid %d: %w", s.sid, err)
+		}
+		var open []coresaga.Record
+		for _, record := range records {
+			if !record.Status.Terminal() {
+				open = append(open, record)
+			}
 		}
 		switch {
-		case len(records) == 0 && backlog == 0:
-			check.Status, check.Detail = StatusOK, "every saga is terminal and projected"
-		case len(records) == 0:
+		case len(open) == 0 && pending == 0:
+			check.Status, check.Detail = StatusOK, "every saga is terminal and no input waits in the partitions"
+		case len(open) == 0:
 			check.Status = StatusFail
-			check.Detail = fmt.Sprintf("every saga is terminal but %d log entries are not projected into the mongo copy yet; run the store service until the backlog is 0", backlog)
+			check.Detail = fmt.Sprintf("every saga is terminal but %d inputs wait in the partitions (a start intent there is a saga not created yet); "+
+				"run the coordinators until they are decided, then stop them and check again", pending)
 		default:
 			var sample []string
-			for _, record := range records[:min(len(records), 10)] {
+			for _, record := range open[:min(len(open), 10)] {
 				sample = append(sample, fmt.Sprintf("%s(%s,%s)", record.ID, record.Type, record.Status))
 			}
-			more := ""
-			if len(records) == 1000 {
-				more = " (at least)"
-			}
 			check.Status = StatusFail
-			check.Detail = fmt.Sprintf("%d%s sagas are not terminal, e.g. %s; let them finish (or resolve them by the saga admin surface) before the merge",
-				len(records), more, strings.Join(sample, ", "))
+			check.Detail = fmt.Sprintf("%d sagas are not terminal, e.g. %s; let them finish (or resolve them by the saga admin surface) before the merge",
+				len(open), strings.Join(sample, ", "))
 		}
 		checks = append(checks, check)
 	}
 	return checks, nil
 }
 
-// listNonTerminalSagas 读权威 Redis：非终态 saga 全部驻留在 Redis（领取索引里），积压是各投影分区未投影的日志条目数。
-func listNonTerminalSagas(ctx context.Context, s side) ([]coresaga.Record, int64, error) {
-	cfg := fmongo.DefaultConfig(s.mongoURI)
-	cfg.RequireReplicaSet = false // 只读查询，不需要事务
-	client, err := mongodriver.NewClient(cfg, mongodriver.IndexMigrationPolicy{})
+// inspectSagas 连这一侧的 NATS，离线重放全部 saga 分区。
+func inspectSagas(ctx context.Context, s side) ([]coresaga.Record, int, error) {
+	connection, err := kitnats.Connect(s.natsConfig)
 	if err != nil {
 		return nil, 0, err
 	}
-	defer func() { _ = client.Close(context.Background()) }()
-	copy, err := coresaga.NewMongoStore(client, s.saga.Store)
-	if err != nil {
-		return nil, 0, err
-	}
-	authority, err := kitredis.NewAuthorityClient(s.authority)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer func() { _ = authority.Close() }()
-	store, err := coresaga.NewRedisStore(authority, copy, nil, s.saga.Redis)
-	if err != nil {
-		return nil, 0, err
-	}
-	records, err := store.List(ctx, coresaga.Query{Statuses: nonTerminal, Limit: 1000})
-	if err != nil {
-		return nil, 0, err
-	}
-	backlog, err := store.ProjectionBacklog(ctx)
-	return records, backlog, err
+	defer func() { _ = connection.Close(context.Background()) }()
+	return coresaga.InspectPartitions(ctx, connection.Log, s.saga.Layout, s.saga.Replicas)
 }
 
 // busCheck：发往 A 的持久消息无法由框架判断能否丢弃，清单里有要处理的项时记 confirm（runbook 第 2 步人工确认）。

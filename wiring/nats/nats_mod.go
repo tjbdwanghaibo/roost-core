@@ -108,6 +108,18 @@ func LoadBusPersistence(cfg *viper.Viper) (BusPersistence, error) {
 	}, nil
 }
 
+// Connect 按 NATS Mod 的声明（与 Init 同一个结构体：nats.url 与客户端选项）建一条连接，不登记能力、不建总线。
+// 运维工具（cmd/sidmerge 离线读 saga 分区）用；调用方负责 Close。
+func Connect(cfg *viper.Viper) (*natsdriver.Assembly, error) {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return nil, fmt.Errorf("nats: %w", err)
+	}
+	return natsdriver.Assemble(fnats.DefaultConfig(settings.URL), natsdriver.ClientOptions{
+		IgnoreDiscoveredServers: settings.IgnoreDiscoveredServers, InboxPrefix: settings.InboxPrefix, ReconnectBufferBytes: settings.ReconnectBufferBytes,
+	})
+}
+
 // NewNatsMod creates a NatsMod with an optional codec.
 // If codec is nil, the current MessagePack codec is used.
 func NewNatsMod(codec bus.Codec) *NatsMod {
