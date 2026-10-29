@@ -466,7 +466,9 @@ func realMixedRatioRecords(t *testing.T, database, resource string, workloadInde
 	return records, specialCount
 }
 
-func TestRealSagaReceiptTransactionThroughput(t *testing.T) {
+// 1000 笔 strict 事务逐条投影到同一文档，每笔带一个回执：核对版本链连续、事务标记与回执各 1000 条，并打印速率。
+// 原名 TestRealSagaReceiptTransactionThroughput（当时指旧 Mongo 步骤回执），现在只是带回执的 DataEngine 事务。
+func TestRealReceiptTransactionThroughputOnOneDocument(t *testing.T) {
 	fx := newRealFixture(t)
 	defer fx.close()
 
@@ -477,32 +479,32 @@ func TestRealSagaReceiptTransactionThroughput(t *testing.T) {
 		binary.BigEndian.PutUint64(id[8:], uint64(index+1))
 		var mutation coredata.Mutation
 		if index == 0 {
-			mutation = realPut(t, fx.database, "saga_entities", 701, 0, 1, bson.M{"step": int64(index)})
+			mutation = realPut(t, fx.database, "receipt_entities", 701, 0, 1, bson.M{"step": int64(index)})
 		} else {
 			set, err := bson.Marshal(bson.D{{Key: "step", Value: int64(index)}})
 			if err != nil {
 				t.Fatal(err)
 			}
 			mutation = coredata.Mutation{
-				Key:  coredata.DocumentKey{Database: fx.database, Resource: "saga_entities", ID: 701},
+				Key:  coredata.DocumentKey{Database: fx.database, Resource: "receipt_entities", ID: 701},
 				Kind: coredata.MutationPatch, ExpectedVersion: uint64(index), NextVersion: uint64(index + 1),
 				Mask: 1, Schema: 1, Codec: "bson-v2", Patch: coredata.FieldPatch{SetBSON: set},
 			}
 		}
 		record := coredata.CommitRecord{
-			ID: id, Handler: "saga-throughput", CreatedAt: time.Now().UnixNano(),
+			ID: id, Handler: "receipt-throughput", CreatedAt: time.Now().UnixNano(),
 			Durability: corenest.DurabilityStrict.Record(), Mutations: []coredata.Mutation{mutation},
-			Receipts: []coredata.Receipt{{Namespace: "saga-throughput", ID: strconv.Itoa(index + 1)}},
+			Receipts: []coredata.Receipt{{Namespace: "receipt-throughput", ID: strconv.Itoa(index + 1)}},
 		}
 		if err := fx.runtime.Store.Project(fx.context(), record); err != nil {
-			t.Fatalf("project Saga transaction %d: %v", index, err)
+			t.Fatalf("project receipt transaction %d: %v", index, err)
 		}
 	}
 	elapsed := time.Since(started)
-	assertDocumentVersion(t, fx, "saga_entities", 701, records)
+	assertDocumentVersion(t, fx, "receipt_entities", 701, records)
 	assertCollectionCount(t, fx, engine.TransactionCollection, records)
 	assertCollectionCount(t, fx, engine.ReceiptCollection, records)
-	t.Logf("Saga receipt transactions: %s (%.0f records/s)", elapsed, float64(records)/elapsed.Seconds())
+	t.Logf("receipt transactions on one document: %s (%.0f records/s)", elapsed, float64(records)/elapsed.Seconds())
 }
 
 func assertWALReplayIDs(t *testing.T, wal *nestwal.WAL, want []coredata.TransactionID) {
