@@ -107,6 +107,14 @@ func TestJetStreamConsumerConfigMappingDefaults(t *testing.T) {
 	if got.AckPolicy != gojs.AckExplicitPolicy || got.AckWait != 3*time.Second || got.MaxDeliver != 5 || got.MaxAckPending != 128 {
 		t.Fatalf("ack config mismatch: %+v", got)
 	}
+	if got.Replicas != 0 || got.MemoryStorage {
+		t.Fatalf("consumer state must follow the stream unless asked: %+v", got)
+	}
+	// 冷副本这类“进度可重投”的消费者：状态 R1、只放内存。
+	light := toJetStreamConsumerConfig(fnats.JetStreamConsumerConfig{Durable: "cold", Replicas: 1, MemoryStorage: true})
+	if light.Replicas != 1 || !light.MemoryStorage {
+		t.Fatalf("consumer state settings not mapped: %+v", light)
+	}
 }
 
 func TestJetStreamNakBackoffIsBounded(t *testing.T) {

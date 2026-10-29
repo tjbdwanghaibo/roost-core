@@ -47,7 +47,7 @@ type config struct {
 	// singleton.enabled 与 App 共用一份声明：协调器进程在生产必须启用单实例锁（ValidateConfig）。
 	Singleton app.SingletonSwitch `config:"singleton"`
 	Saga      struct {
-		Database     string           `config:"database" shared:"saga.database" default:"saga" example:"{project_db}_saga" help:"Mongo 步骤收件箱（按操作的回执）所在的库"`
+		Database     string           `config:"database" shared:"saga.database" default:"saga" example:"{project_db}_saga" help:"Mongo 步骤收件箱（按操作的回执）与冷副本（saga.cold_copy）所在的库"`
 		StepDefaults stepBudgetConfig `config:"step_defaults,closed" help:"Step timeout and retry budget. Fields a saga definition leaves unset\ntake these; one operation of a step gets up to max_attempts attempts, at most\none of which takes effect."`
 		// Steps 按 <saga type>.<step name> 覆盖，优先于定义与 step_defaults；类型与步骤名要对应已注册的定义。
 		Steps         map[string]map[string]stepBudgetConfig `config:"steps" example:"{}" help:"Per-step overrides, winning over the definition and step_defaults:\nsteps.<saga type>.<step name>.<timeout|max_attempts|backoff_min|backoff_max>."`
@@ -79,6 +79,15 @@ type config struct {
 			SignalInterval time.Duration `config:"signal_interval" default:"200ms" min:"1ms" example:"200ms" help:"参与方发布积压信号的间隔"`
 			StaleAfter     time.Duration `config:"stale_after" default:"2s" min:"1ms" example:"2s" help:"一个参与方的信号多久没更新算停更（关闭准入）；≥ 5 × signal_interval"`
 		} `config:"admission"`
+		// 冷副本（设计 §8，缺省关闭）：协调器进程把分区事件里的 saga 记录投影进 <saga.database>.<collection>，供
+		// Get / GetByBusinessKey / List 在所有者内存里没有这条记录时回落读取；不参与唯一性与任何判定。
+		ColdCopy struct {
+			Enabled      bool          `config:"enabled" default:"false" example:"false" help:"开启 Mongo 冷副本：终态过了 terminal_retention 之后 Get / Lookup / List 仍能从 <saga.database>.<collection> 读到（只读、最终一致，不参与唯一性）。\n需要本进程有 Mongo；关闭后要由运维删掉各流上的 <stream>_G<g>-cold-copy durable，否则它们挡住分区清理"`
+			TerminalOnly bool          `config:"terminal_only" default:"true" example:"true" help:"只投影终态事件（每笔一次写）；false 时投影全部事件（每次推进一次写）"`
+			Collection   string        `config:"collection" default:"sagas" example:"sagas" help:"冷副本集合名（库是 saga.database）"`
+			BatchSize    int           `config:"batch_size" default:"256" min:"1" max:"1000" example:"256" help:"一次 BulkWrite 最多的事件数"`
+			MaxWait      time.Duration `config:"max_wait" default:"50ms" min:"1ms" max:"10s" example:"50ms" help:"一批从第一条事件起最多等多久"`
+		} `config:"cold_copy"`
 		// Nest 事务里提交的启动意图在 DataEngine 的效果流上：流名与主题前缀不写时取 dataengine.effects 的值，效果流只在一处
 		// 配置。同一进程注册了 DataEngine 时，写了就必须与 dataengine.effects 相同（CheckConfigAcrossMods）。
 		StartEffectStream  string         `config:"start_effect_stream" shared:"dataengine.effects.stream" follows:"dataengine.effects.stream" help:"不写取 dataengine.effects.stream；同进程有 DataEngine 时写了必须与它相同"`

@@ -13,6 +13,7 @@ import (
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
@@ -29,6 +30,8 @@ type Mod struct {
 	config      coresaga.AssemblyConfig
 	sid         int32
 	asm         *coresaga.Assembly
+	// coldCopy 是 saga.cold_copy.* 解析后的参数（enabled=false 时为 nil）；Mongo 客户端在 Provide 时填。
+	coldCopy *coresaga.ColdCopySettings
 }
 
 func NewMod(definitions ...coresaga.Definition) *Mod {
@@ -53,9 +56,10 @@ func (m *Mod) Name() app.ModName { return mods.ModSaga }
 // DependsOn 只有 NATS：协调器的全部状态在 JetStream 里。health 是 Registry 内建能力，不是 Mod 名。
 func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }
 
-// OptionalDependsOn：同进程有 DataEngine 时在它之后启动——启动中继订阅的效果流由 DataEngine 建。
+// OptionalDependsOn：同进程有 DataEngine 时在它之后启动——启动中继订阅的效果流由 DataEngine 建；同进程有 Mongo 时在它之后
+// 启动——冷副本（saga.cold_copy.enabled）读写 Mongo（开启冷副本却没有 Mongo 由 CheckConfigAcrossMods 拒绝）。
 func (m *Mod) OptionalDependsOn() []app.ModName {
-	return []app.ModName{mods.ModDataEngine}
+	return []app.ModName{mods.ModDataEngine, mods.ModMongo}
 }
 
 // ConfigSchema 声明 saga.*。
@@ -99,6 +103,10 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("saga: %w", err)
 	}
 	m.config.Engine.StepBudgets = budgets
+	if cold := c.ColdCopy; cold.Enabled {
+		m.coldCopy = &coresaga.ColdCopySettings{Database: c.Database, Collection: cold.Collection, TerminalOnly: cold.TerminalOnly,
+			BatchSize: cold.BatchSize, MaxWait: cold.MaxWait}
+	}
 	return checkStepTimeouts(budgets, m.definitions)
 }
 
@@ -110,10 +118,15 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 //     JetStream 的 "stream not found" 或永远收不到 start。
 //   - 同一进程注册了 DataEngine 且准入开启时，dataengine.projection.max_unacked_records 必须 > 0 且 ≥ 4 × saga.admission.high_records：
 //     准入只拦新启动，在途推进照常产生投影积压，硬上限是最后一道闸（到上限 DataEngine 在 WAL 准入前拒绝，命令 nak 重试）。
+//   - saga.cold_copy.enabled 时本进程必须注册 Mongo Mod（冷副本的读写都在 saga.database）。
 func (m *Mod) CheckConfigAcrossMods(cfg *viper.Viper, registered func(app.ModName) bool) error {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return err
+	}
+	if settings.Saga.ColdCopy.Enabled && !registered(mods.ModMongo) {
+		return fmt.Errorf("saga.cold_copy.enabled needs the mongo Mod in this process: the cold copy is written to and read from %s.%s",
+			settings.Saga.Database, settings.Saga.ColdCopy.Collection)
 	}
 	if !registered(mods.ModDataEngine) {
 		return nil
@@ -168,6 +181,15 @@ func (m *Mod) Provide(registry *app.Registry) error {
 		m.config.Engine.Failure = failure
 	}
 	m.config.Engine.Writer = m.writer(registry)
+	if m.coldCopy != nil {
+		client, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
+		if !ok || client == nil {
+			return fmt.Errorf("saga mod: saga.cold_copy.enabled but capability %q not found", mods.ModMongo)
+		}
+		cold := *m.coldCopy
+		cold.Client = client
+		m.config.ColdCopy = &cold
+	}
 	asm, err := coresaga.Assemble(log, raw, jetStream, m.config, m.definitions...)
 	if err != nil {
 		return err
@@ -230,8 +252,8 @@ func (m *Mod) checkHealth(context.Context) health.Result {
 		return health.Result{Status: health.StatusFail, Message: "start relay stopped"}
 	}
 	stats, admission := m.asm.Engine.Stats(), m.asm.Engine.AdmissionState()
-	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("running partitions=%d admission_open=%t manual_required=%d late_after_abandon=%d reopened=%d unknown_saga=%d publish_unknown=%d",
-		len(m.config.Engine.Owned), admission.Open, stats.ManualRequired, stats.LateAfterAbandon, stats.Reopened, stats.UnknownSaga, stats.PublishUnknown)}
+	return health.Result{Status: health.StatusOK, Message: fmt.Sprintf("running partitions=%d cold_copy=%t admission_open=%t manual_required=%d late_after_abandon=%d reopened=%d unknown_saga=%d publish_unknown=%d",
+		len(m.config.Engine.Owned), m.coldCopy != nil, admission.Open, stats.ManualRequired, stats.LateAfterAbandon, stats.Reopened, stats.UnknownSaga, stats.PublishUnknown)}
 }
 
 func stringDefault(value, fallback string) string {

@@ -269,6 +269,8 @@ type queryRequest struct {
 	Kind  string `json:"kind"` // get / list
 	ID    string `json:"id,omitempty"`
 	Query *Query `json:"query,omitempty"`
+	// Known 是 list 时发起方从冷副本读到的 ID：所有者在 Held 里回答其中哪些在自己内存里（这些 ID 以内存为准，冷副本那条不用）。
+	Known []string `json:"known,omitempty"`
 }
 
 type queryReply struct {
@@ -277,7 +279,9 @@ type queryReply struct {
 	Found   bool     `json:"found"`
 	Record  *Record  `json:"record,omitempty"`
 	Records []Record `json:"records,omitempty"`
-	Error   string   `json:"error,omitempty"`
+	// Held 是 Known 里在本分区内存里的 ID（不论是否匹配查询条件）。
+	Held  []string `json:"held,omitempty"`
+	Error string   `json:"error,omitempty"`
 }
 
 // snapshotWireVersion 是快照清单与正文的版本（与 WireVersion 同步）。

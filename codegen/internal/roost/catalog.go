@@ -110,7 +110,7 @@ var modCatalog = map[string]modSpec{
 	"heartbeat": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/heartbeat", Alias: "kitheartbeat", Depends: []string{"nest"},
 	},
-	// saga 的协调器权威是 JetStream 分区事件日志（nats）；mongo 给 Mongo 步骤的回执收件箱用。原生步骤所在的服务另有 dataengine。
+	// saga 的协调器权威是 JetStream 分区事件日志（nats）；mongo 给 Mongo 步骤的回执收件箱与可选冷副本（saga.cold_copy）用。原生步骤所在的服务另有 dataengine。
 	"saga": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/saga", Alias: "kitsaga", Constructor: "kitsaga.NewMod()", Depends: []string{"mongo", "nats"},
 	},

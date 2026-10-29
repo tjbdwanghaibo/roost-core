@@ -9,6 +9,7 @@ import (
 	"time"
 
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 )
 
 // 装配的生命周期：Assemble 缺依赖拒绝、登记定义；未启动报告未运行、中继已关闭；Stop 先 Drain 启动中继、在 ctx 内等它真正关闭
@@ -209,4 +210,50 @@ func (j *recordingJetStream) deliver(t *testing.T, subject string, data []byte) 
 		t.Fatalf("no consumer claimed %q; subscribed subjects: %v", subject, j.subjects())
 	}
 	return handler(context.Background(), &fnats.JetStreamMsg{Subject: subject, Data: data})
+}
+
+// 冷副本的装配：每个进程都有回落读（Options.ColdCopy），只有拥有分区的进程跑投影；参数越界、缺 Mongo 时 Assemble 拒绝。
+func TestAssembleWiresTheColdCopyReaderEverywhereAndTheProjectorOnlyOnOwners(t *testing.T) {
+	layout := Layout{Prefix: "unit.saga", Stream: "UNIT_SAGA", Partitions: 2, Groups: 1}
+	client := mongotest.NewClient()
+	settings := &ColdCopySettings{Client: client, Database: "saga", TerminalOnly: true}
+	client0 := Options{Layout: layout}
+	owner := Options{Layout: layout, Owned: []int{0, 1}}
+	initiator, err := Assemble(stubLog{}, &stubRaw{}, assemblyJetStream{}, AssemblyConfig{Engine: client0, ColdCopy: settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initiator.Engine.opts.ColdCopy == nil || initiator.coldCopy != nil {
+		t.Fatalf("initiator: reader %v projector %v, want a reader and no projector", initiator.Engine.opts.ColdCopy != nil, initiator.coldCopy != nil)
+	}
+	coordinator, err := Assemble(stubLog{}, &stubRaw{}, assemblyJetStream{}, AssemblyConfig{Engine: owner, ColdCopy: settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coordinator.Engine.opts.ColdCopy == nil || coordinator.coldCopy == nil {
+		t.Fatal("coordinator: want both the reader and the projector")
+	}
+	if got := coordinator.coldCopy.settings; got.BatchSize != DefaultColdCopyBatchSize || got.MaxWait != DefaultColdCopyMaxWait || got.Collection != DefaultColdCopyCollection || !got.TerminalOnly {
+		t.Fatalf("projector settings %+v, want the defaults", got)
+	}
+	if config := coordinator.coldCopy.consumerConfig("UNIT_SAGA_G0"); config.Durable != "UNIT_SAGA_G0-cold-copy" || config.Replicas != 1 || !config.MemoryStorage || config.FilterSubject != "unit.saga.*.ev.done" || config.MaxAckPending < DefaultColdCopyBatchSize {
+		t.Fatalf("cold copy durable %+v", config)
+	}
+	off, err := Assemble(stubLog{}, &stubRaw{}, assemblyJetStream{}, AssemblyConfig{Engine: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off.Engine.opts.ColdCopy != nil || off.coldCopy != nil {
+		t.Fatal("cold copy wired while off")
+	}
+	for name, bad := range map[string]*ColdCopySettings{
+		"no client":   {Database: "saga"},
+		"no database": {Client: client},
+		"batch 1001":  {Client: client, Database: "saga", BatchSize: 1001},
+		"wait 11s":    {Client: client, Database: "saga", MaxWait: 11 * time.Second},
+	} {
+		if _, err := Assemble(stubLog{}, &stubRaw{}, assemblyJetStream{}, AssemblyConfig{Engine: owner, ColdCopy: bad}); err == nil {
+			t.Errorf("%s: Assemble accepted", name)
+		}
+	}
 }

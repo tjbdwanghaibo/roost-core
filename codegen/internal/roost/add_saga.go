@@ -288,7 +288,8 @@ func EmitStart(businessKey string, state []byte, deadline time.Time) error {
 // process hosting the coordinator (app.Lookup[*saga.Engine](registry, mods.ModSaga)).
 // saga.ErrNotFound means it has not started yet (the intent is still on its
 // way through the outbox, so treat it as pending, not as a failure) or that it
-// ended longer ago than saga.terminal_retention. A terminal record.Status
+// ended longer ago than saga.terminal_retention (with saga.cold_copy.enabled
+// such a record is read back from the Mongo cold copy instead). A terminal record.Status
 // (Completed / Compensated / Failed) is the outcome; ManualRequired waits for an
 // operator and is always kept.
 func Lookup(ctx context.Context, engine *saga.Engine, businessKey string) (saga.Record, error) {

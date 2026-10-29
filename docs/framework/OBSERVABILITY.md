@@ -166,6 +166,12 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `saga.query.dropped_total` | Counter | 协调器分区查询队列满、丢弃的查询（发起方超时） |
 | `saga.query.reply_failures_total` | Counter | 判定与查询回复经核心 NATS 发送失败（发起方按超时与 Get 补查兜底） |
 | `saga.query.subscription_errors_total` | Counter | 查询 / 回复订阅的慢消费者或订阅错误 |
+| `saga.cold_copy.events_total` | Counter | 冷副本投影（`saga.cold_copy.enabled`，协调器进程）收下并写过的事件条数（含重投）；与 `writes_total` 的差是同一批里同一 saga 的旧版本 |
+| `saga.cold_copy.writes_total` | Counter | 冷副本 BulkWrite 里的写模型数（每批按 saga 去重之后；版本门挡掉的旧版本也算一次写） |
+| `saga.cold_copy.write_failures_total` | Counter | 冷副本一批写失败：这批的投递逐条 nak、按退避重投（重写幂等）。持续增长说明 Mongo 不可写，冷副本 durable 的 ack floor 停住、**分区清理也停住**（它是清理守卫），流按 `stream_max_bytes` 满了会 fail-stop |
+| `saga.cold_copy.resubscribed_total` | Counter | 冷副本 durable 不见了（R1 内存消费者随承载它的服务端重启消失）或订阅意外结束、投影器重建了它；期间分区清理停着，重建后从流里还在的事件重投 |
+| `saga.cold_copy.corrupt_record_total` | Counter | 冷副本 `List` 跳过的校验不过的文档（手工改坏），ERROR 日志点名 `_id` |
+| `saga.cold_copy.fallback_reads_total{op}` | Counter | 发起方回落读冷副本的次数：`get` = 所有者内存里没有这条（`Get` / `GetByBusinessKey`），`list` = `List` 读冷副本的一页 |
 
 ### 技能运行时（core/skill）
 
@@ -494,6 +500,12 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `saga.query.dropped_total` | Counter | `saga/query.go:IncCounter` |
 | `saga.query.reply_failures_total` | Counter | `saga/query.go:IncCounter` |
 | `saga.query.subscription_errors_total` | Counter | `saga/query.go:IncCounter` |
+| `saga.cold_copy.corrupt_record_total` | Counter | `saga/cold_copy.go:IncCounter` |
+| `saga.cold_copy.events_total` | Counter | `saga/cold_copy.go:IncCounter` |
+| `saga.cold_copy.fallback_reads_total` | Counter | `saga/engine.go:IncCounter` |
+| `saga.cold_copy.resubscribed_total` | Counter | `saga/cold_copy.go:IncCounter` |
+| `saga.cold_copy.write_failures_total` | Counter | `saga/cold_copy.go:IncCounter` |
+| `saga.cold_copy.writes_total` | Counter | `saga/cold_copy.go:IncCounter` |
 | `saga.consumer.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
 | `saga.reopened_total` | Counter | `saga/observe.go:IncCounter` |
 | `saga.start.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |

@@ -59,6 +59,12 @@ type JetStreamConsumerConfig struct {
 	MaxAckPending int
 	NakBackoffMin time.Duration
 	NakBackoffMax time.Duration
+	// Replicas 是消费者状态（投递进度、ack floor）的副本数；0 跟随流。MemoryStorage 让消费者状态只放内存。
+	// 两者都只给“进度丢了可以从流里重投一遍”的消费者用（例如 saga 冷副本：版本只升、重投幂等），换掉每条 ack 一次 R3 共识写；
+	// 代价是承载它的服务端重启后消费者消失，使用方要自己发现并重建。已存在的 durable 不能原地改这两项（服务端拒绝，见
+	// driver 的 consumerConfigError）。
+	Replicas      int
+	MemoryStorage bool
 }
 
 type JetStreamHandler func(context.Context, *JetStreamMsg) error

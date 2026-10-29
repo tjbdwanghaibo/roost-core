@@ -228,6 +228,8 @@ func toJetStreamConsumerConfig(cfg fnats.JetStreamConsumerConfig) gojs.ConsumerC
 		AckWait:       cfg.AckWait,
 		MaxDeliver:    cfg.MaxDeliver,
 		MaxAckPending: cfg.MaxAckPending,
+		Replicas:      cfg.Replicas,
+		MemoryStorage: cfg.MemoryStorage,
 	}
 }
 

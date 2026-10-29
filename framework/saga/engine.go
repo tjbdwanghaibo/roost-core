@@ -15,6 +15,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // engine.go 是协调器的外观（设计 docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md）：协调器的权威是
@@ -65,6 +66,9 @@ type Options struct {
 	StepBudgets StepBudgets
 	// Admission 是按参与方投影积压的新启动准入（设计 §6）。
 	Admission AdmissionOptions
+	// ColdCopy 是可选的冷副本（设计 §8，缺省关闭）：非 nil 时 Get / GetByBusinessKey / List 在分区所有者内存里没有这条记录时
+	// 回落读它（只读，不参与唯一性与任何判定），拥有分区的进程清理时把它的 durable 当守卫（找不到就不清理）。
+	ColdCopy *ColdCopy
 	// Failure 收分区 fail-stop（被隔离、发布结果未知超预算、流满等），一般是 App 的 RuntimeFailure；nil 时只停这个分区。
 	Failure *app.RuntimeFailure
 	// Clock 是协调器时钟（测试注入）；nil 用 time.Now。准入的过期判定也用它（time.Now 带单调读数）。
@@ -644,8 +648,19 @@ func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, e
 	return e.submitIntent(ctx, e.layout.StartSubject(k), "start."+id+"."+attempt, attempt, data, id, digest)
 }
 
-// Get 从分区所有者的内存读一条记录。终态过了保留期返回 ErrNotFound；所有者不在返回 ErrPartitionUnavailable。
+// Get 从分区所有者的内存读一条记录；内存里没有（还没启动，或终态过了保留期被剪掉）时，冷副本开启则回落读冷副本，否则
+// 返回 ErrNotFound。所有者不在返回 ErrPartitionUnavailable（不拿冷副本顶替：内存里可能有更新的版本）。
 func (e *Engine) Get(ctx context.Context, id string) (Record, error) {
+	record, err := e.getOwned(ctx, id)
+	if errors.Is(err, ErrNotFound) && e.opts.ColdCopy != nil {
+		metrics.IncCounter("saga.cold_copy.fallback_reads_total", metrics.Labels{"op": "get"}, 1)
+		return e.opts.ColdCopy.Get(ctx, strings.TrimSpace(id))
+	}
+	return record, err
+}
+
+// getOwned 只问分区所有者的内存（没有返回 ErrNotFound）。启动判定的补查与 WaitTerminal 用它：冷副本不参与任何判定。
+func (e *Engine) getOwned(ctx context.Context, id string) (Record, error) {
 	id = strings.TrimSpace(id)
 	if !validSubjectToken(id, 128) {
 		return Record{}, ErrInvalidRecord
@@ -660,19 +675,23 @@ func (e *Engine) Get(ctx context.Context, id string) (Record, error) {
 	return *reply.Record, nil
 }
 
-// GetByBusinessKey = Get(IDOf(type, businessKey))。还没启动（或终态过了保留期）返回 ErrNotFound。
+// GetByBusinessKey = Get(IDOf(type, businessKey))。还没启动（或终态过了保留期、且冷副本关闭或没有它）返回 ErrNotFound。
 func (e *Engine) GetByBusinessKey(ctx context.Context, sagaType, businessKey string) (Record, error) {
 	return e.Get(ctx, IDOf(strings.TrimSpace(sagaType), strings.TrimSpace(businessKey)))
 }
 
 // List 向全部分区所有者散播查询并合并（按更新时间、ID 排序，截取 Limit）。覆盖非终态、保留期内的终态与全部 ManualRequired；
-// 有分区没回答返回 ErrPartitionUnavailable（点名），不返回残缺结果。Limit 缺省 100、上限 1000。
+// 冷副本开启时再补上内存里没有的记录（更早的终态，listWithColdCopy）。有分区没回答返回 ErrPartitionUnavailable（点名），
+// 不返回残缺结果。Limit 缺省 100、上限 1000。
 func (e *Engine) List(ctx context.Context, query Query) ([]Record, error) {
 	if query.Limit <= 0 {
 		query.Limit = 100
 	}
 	if query.Limit > 1000 {
 		return nil, ErrInvalidRecord
+	}
+	if e.opts.ColdCopy != nil {
+		return e.listWithColdCopy(ctx, query)
 	}
 	replies, err := e.askAll(ctx, queryRequest{Kind: "list", Query: &query})
 	if err != nil {

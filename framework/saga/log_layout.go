@@ -155,6 +155,30 @@ func (l Layout) CommandFilter(topic string) string {
 // DoneFilter 是全部分区的终态事件。
 func (l Layout) DoneFilter() string { return l.Prefix + ".*.ev." + eventDestDone }
 
+// AllEventsFilter 是全部分区的全部事件（冷副本 terminal_only=false 时用）。
+func (l Layout) AllEventsFilter() string { return l.Prefix + ".*.ev.>" }
+
+// partitionOfEvent 从事件 subject（<prefix>.<k>.ev.…）取出分区号；不是本布局的事件返回 false。
+func (l Layout) partitionOfEvent(subject string) (int, bool) {
+	rest, ok := strings.CutPrefix(subject, l.Prefix+".")
+	if !ok {
+		return 0, false
+	}
+	token, tail, ok := strings.Cut(rest, ".")
+	if !ok || !strings.HasPrefix(tail, "ev.") {
+		return 0, false
+	}
+	k, err := strconv.Atoi(token)
+	if err != nil || k < 0 || k >= l.Partitions || strconv.Itoa(k) != token {
+		return 0, false
+	}
+	return k, true
+}
+
+// ColdCopyDurable 是冷副本投影在流 stream 上的 durable 名（每条流一个，协调器进程共用）。它是清理守卫之一：冷副本开启时
+// 分区清理不越过它的 ack floor，找不到它（R1 内存消费者随服务端重启消失、还没重建）就不清理。
+func ColdCopyDurable(stream string) string { return stream + "-cold-copy" }
+
 // QuerySubject 是向分区 k 的所有者问记录的核心 NATS subject（不进流）；ListSubject 是向全部所有者散播的列表查询。
 func (l Layout) QuerySubject(k int) string { return l.Prefix + ".q." + strconv.Itoa(k) }
 func (l Layout) ListSubject() string       { return l.Prefix + ".q.list" }

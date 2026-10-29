@@ -125,7 +125,7 @@ func (e *Engine) submitIntent(ctx context.Context, subject, msgID, attempt strin
 				poll = ticker.C
 			}
 		case <-poll:
-			record, err := e.Get(ctx, id)
+			record, err := e.getOwned(ctx, id) // 只看内存：冷副本里旧一生的记录不能当成这次启动的判定
 			if err == nil {
 				if record.StartDigest == startDigest {
 					return record, nil
@@ -234,14 +234,78 @@ func (e *Engine) askAll(ctx context.Context, request queryRequest) ([]queryReply
 	return nil, fmt.Errorf("%w: partitions [%s] did not answer (%v)", ErrPartitionUnavailable, strings.Join(missing, " "), err)
 }
 
+// coldListPages 是 List 回落冷副本时最多翻的页数（每页 Limit 条）：页里被内存持有的 ID 被排除后不够 Limit 条时再翻一页。
+const coldListPages = 4
+
+// listWithColdCopy 是冷副本开启时的 List：内存里的记录（全部分区，与不开冷副本时相同）加上冷副本里内存没有的记录。
+//
+// “内存没有”按 ID 判定：冷副本的一页 ID 随列表查询发给全部所有者（Known），所有者回答其中哪些在自己内存里（Held，不论是否
+// 匹配查询条件）；这些 ID 以内存为准，冷副本那条（落后的版本，或已被剪掉、同业务键又开了一笔的旧一生）不用。
+//
+// 结果是全部记录按（更新时间，ID）排序后的前缀：冷副本按同一顺序分页读，没读到的冷副本记录都排在已读的最后一条之后，所以
+// 结果截到不超过它；不够 Limit 条时再翻一页，最多 coldListPages 页，之后可能少于 Limit 条（仍是精确前缀，按 UpdatedBefore
+// 缩小范围再查）。冷副本读失败时返回错误，不返回只有内存的结果。
+func (e *Engine) listWithColdCopy(ctx context.Context, query Query) ([]Record, error) {
+	var memory, cold []Record
+	held := map[string]bool{}
+	for page := range coldListPages {
+		batch, err := e.opts.ColdCopy.List(ctx, query, page*query.Limit)
+		if err != nil {
+			return nil, err
+		}
+		metrics.IncCounter("saga.cold_copy.fallback_reads_total", metrics.Labels{"op": "list"}, 1)
+		known := make([]string, len(batch))
+		for i := range batch {
+			known[i] = batch[i].ID
+		}
+		replies, err := e.askAll(ctx, queryRequest{Kind: "list", Query: &query, Known: known})
+		if err != nil {
+			return nil, err
+		}
+		for _, reply := range replies {
+			if page == 0 {
+				memory = append(memory, reply.Records...)
+			}
+			for _, id := range reply.Held {
+				held[id] = true
+			}
+		}
+		for _, record := range batch {
+			if !held[record.ID] {
+				cold = append(cold, record)
+			}
+		}
+		merged := append(slices.Clone(memory), cold...)
+		sortRecords(merged)
+		if len(batch) < query.Limit {
+			return merged[:min(len(merged), query.Limit)], nil // 冷副本已读完
+		}
+		last := batch[len(batch)-1]
+		cut := len(merged)
+		for i, record := range merged {
+			if compareRecords(record, last) > 0 {
+				cut = i
+				break
+			}
+		}
+		if cut >= query.Limit || page == coldListPages-1 {
+			return merged[:min(cut, query.Limit)], nil
+		}
+	}
+	return nil, nil // 不可达：最后一页一定返回
+}
+
+// compareRecords 是 List 的顺序：更新时间，再 ID。
+func compareRecords(a, b Record) int {
+	if c := a.UpdatedAt.Compare(b.UpdatedAt); c != 0 {
+		return c
+	}
+	return strings.Compare(a.ID, b.ID)
+}
+
 // sortRecords 按更新时间、ID 排序（List 的结果顺序）。
 func sortRecords(records []Record) {
-	slices.SortFunc(records, func(a, b Record) int {
-		if c := a.UpdatedAt.Compare(b.UpdatedAt); c != 0 {
-			return c
-		}
-		return strings.Compare(a.ID, b.ID)
-	})
+	slices.SortFunc(records, compareRecords)
 }
 
 // ---- 所有者一侧 ----

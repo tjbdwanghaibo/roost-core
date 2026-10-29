@@ -118,7 +118,7 @@ func (e *Engine) WaitTerminal(ctx context.Context, id string) (Record, error) {
 	defer cancel()
 	var known uint64
 	for {
-		record, err := e.Get(ctx, id)
+		record, err := e.getOwned(ctx, id) // 只看内存：冷副本里的旧终态不是“下一个终态”
 		if err == nil {
 			if record.Status.Terminal() {
 				return record, nil

@@ -14,6 +14,9 @@ import (
 type AssemblyConfig struct {
 	Engine Options
 	Starts NestStartConsumerConfig
+	// ColdCopy 非 nil 时装配冷副本（设计 §8，选项 C-A）：每个进程都能回落读（Engine.Get / List），拥有分区的进程另跑投影
+	// （ColdCopyProjector）。nil 表示关闭（缺省）。
+	ColdCopy *ColdCopySettings
 }
 
 // Assembly 在构造时建立协调器并登记定义；Start 先恢复再服务（建流与桶、重放拥有的分区、开始处理输入），再订阅启动中继；
@@ -23,6 +26,8 @@ type Assembly struct {
 
 	js  fnats.IJetStream
 	cfg AssemblyConfig
+	// coldCopy 是冷副本投影（只在冷副本开启且本进程拥有分区时存在）。
+	coldCopy *ColdCopyProjector
 
 	lifecycleMu sync.Mutex
 	stateMu     sync.RWMutex
@@ -36,6 +41,19 @@ func Assemble(log fnats.JetStreamLog, raw fnats.RawClient, js fnats.IJetStream, 
 	if log == nil || raw == nil || js == nil {
 		return nil, errors.New("saga: JetStream log, raw NATS client and JetStream client are required")
 	}
+	var coldCopy *ColdCopy
+	if cfg.ColdCopy != nil {
+		settings := cfg.ColdCopy.withDefaults()
+		if err := settings.validate(); err != nil {
+			return nil, err
+		}
+		cold, err := NewColdCopy(settings.Client, settings.Database, settings.Collection)
+		if err != nil {
+			return nil, err
+		}
+		coldCopy = cold
+		cfg.Engine.ColdCopy = coldCopy
+	}
 	engine, err := NewEngine(log, raw, cfg.Engine)
 	if err != nil {
 		return nil, err
@@ -45,7 +63,15 @@ func Assemble(log fnats.JetStreamLog, raw fnats.RawClient, js fnats.IJetStream, 
 			return nil, fmt.Errorf("saga: register definition: %w", err)
 		}
 	}
-	return &Assembly{Engine: engine, js: js, cfg: cfg}, nil
+	a := &Assembly{Engine: engine, js: js, cfg: cfg}
+	if coldCopy != nil && len(cfg.Engine.Owned) > 0 {
+		projector, err := NewColdCopyProjector(coldCopy, js, log, engine.layout, *cfg.ColdCopy)
+		if err != nil {
+			return nil, err
+		}
+		a.coldCopy = projector
+	}
+	return a, nil
 }
 
 // Start 启动协调器（返回时拥有的分区都已重放完、开始处理输入；不拥有分区的进程只建好发起方一侧），再订阅启动中继。
@@ -65,10 +91,20 @@ func (a *Assembly) Start(ctx context.Context) error {
 	if err := a.Engine.Start(ctx); err != nil {
 		return err
 	}
+	// 冷副本投影在协调器之后起：流由协调器建好；在它建好 durable 之前，分区清理因为找不到它而不清理（purge）。
+	if a.coldCopy != nil {
+		if err := a.coldCopy.Start(ctx); err != nil {
+			return errors.Join(fmt.Errorf("saga: start cold copy: %w", err), a.Engine.Stop(ctx))
+		}
+	}
 	// 中继的回调 ctx 不随启动 ctx 结束：消费者运行到 Stop 排空。
 	startSub, err := SubscribeNestStarts(context.WithoutCancel(ctx), a.js, a.cfg.Starts, a.Engine)
 	if err != nil {
-		stopErr := a.Engine.Stop(ctx)
+		var stopErr error
+		if a.coldCopy != nil {
+			stopErr = a.coldCopy.Stop(ctx)
+		}
+		stopErr = errors.Join(stopErr, a.Engine.Stop(ctx))
 		return errors.Join(fmt.Errorf("saga: subscribe Nest starts: %w", err), stopErr)
 	}
 	a.stateMu.Lock()
@@ -77,8 +113,8 @@ func (a *Assembly) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop 先排空启动中继（在 ctx 内等它关闭；超时强制停止并返回 ctx 错误，可以用新 ctx 再调用），再停协调器（三步停机，
-// 见 Engine.Stop）。重复调用返回 nil。
+// Stop 先排空启动中继（在 ctx 内等它关闭；超时强制停止并返回 ctx 错误，可以用新 ctx 再调用），再停冷副本投影（排空在途的
+// 批），最后停协调器（三步停机，见 Engine.Stop）。重复调用返回 nil。
 func (a *Assembly) Stop(ctx context.Context) error {
 	if a == nil {
 		return nil
@@ -102,6 +138,11 @@ func (a *Assembly) Stop(ctx context.Context) error {
 		a.stateMu.Lock()
 		a.startSub = nil
 		a.stateMu.Unlock()
+	}
+	if a.coldCopy != nil {
+		if err := a.coldCopy.Stop(ctx); err != nil {
+			return err
+		}
 	}
 	if a.Engine == nil {
 		return nil

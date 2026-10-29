@@ -8,8 +8,10 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
 )
 
 // Nest 发起的 start 由 DataEngine 发布到 dataengine.effects 那条流上，启动中继必须订阅同一条流、同一个主题前缀。没写
@@ -183,5 +185,38 @@ func TestCoordinatorsAssignPartitionsStaticallyBySid(t *testing.T) {
 func TestSagaModHealthBeforeStart(t *testing.T) {
 	if got := NewMod().checkHealth(context.Background()); got.Status != health.StatusFail {
 		t.Fatalf("health before Provide = %+v", got)
+	}
+}
+
+// 冷副本（saga.cold_copy.*，设计 §8）：缺省关闭；开启时 Init 交出的参数就是声明的缺省值（与 coresaga 的缺省相同），本进程必须有
+// Mongo Mod（配置检查拒绝，点名键与库），越界值在声明处拒绝。
+func TestColdCopyConfigNeedsMongoAndUsesTheDeclaredDefaults(t *testing.T) {
+	const identity = "sid: 1\nserver_type: game\nsaga:\n  coordinators: [\"1\"]\n"
+	off := NewMod()
+	if err := off.Init(yamlConfig(t, identity)); err != nil {
+		t.Fatal(err)
+	}
+	if off.coldCopy != nil {
+		t.Fatalf("cold copy is on by default: %+v", off.coldCopy)
+	}
+	on := NewMod()
+	if err := on.Init(yamlConfig(t, identity+"  cold_copy:\n    enabled: true\n")); err != nil {
+		t.Fatal(err)
+	}
+	want := coresaga.ColdCopySettings{Database: "saga", Collection: coresaga.DefaultColdCopyCollection, TerminalOnly: true,
+		BatchSize: coresaga.DefaultColdCopyBatchSize, MaxWait: coresaga.DefaultColdCopyMaxWait}
+	if on.coldCopy == nil || *on.coldCopy != want {
+		t.Fatalf("cold copy settings %+v, want %+v", on.coldCopy, want)
+	}
+	enabled := yamlConfig(t, identity+"  cold_copy:\n    enabled: true\n")
+	err := app.CheckConfig(enabled, NewMod())
+	if err == nil || !strings.Contains(err.Error(), "saga.cold_copy.enabled") || !strings.Contains(err.Error(), "mongo") {
+		t.Fatalf("cold copy without a Mongo Mod: %v, want a refusal naming saga.cold_copy.enabled and mongo", err)
+	}
+	if err := app.CheckConfig(enabled, NewMod(), kitmongo.NewMongoMod()); err != nil {
+		t.Fatalf("cold copy with a Mongo Mod: %v", err)
+	}
+	if err := NewMod().Init(yamlConfig(t, identity+"  cold_copy:\n    enabled: true\n    batch_size: 1001\n")); err == nil || !strings.Contains(err.Error(), "batch_size") {
+		t.Fatalf("batch_size 1001: %v, want a refusal naming the key", err)
 	}
 }

@@ -286,6 +286,11 @@ func purgeBound(view snapshotView, floors map[string]uint64) uint64 {
 	return bound
 }
 
+func hasDurable(floors map[string]uint64, name string) bool {
+	_, ok := floors[name]
+	return ok
+}
+
 // purge 在快照之后清理分区 k 的旧消息，并对卡住清理的 durable 告警。
 func (p *partition) purge(ctx context.Context, view snapshotView, now time.Time) {
 	e := p.e
@@ -295,6 +300,16 @@ func (p *partition) purge(ctx context.Context, view snapshotView, now time.Time)
 	if err != nil {
 		slog.Warn("saga: purge skipped: cannot list durable consumers", "partition", p.k, "err", err)
 		return
+	}
+	if e.opts.ColdCopy != nil {
+		// 冷副本 durable 是守卫之一：找不到它（R1 内存消费者随服务端重启消失、投影器还没重建，或冷副本刚开启还没建好）时按
+		// floor 0 算、不清理，否则会删掉它还没投影的终态事件。
+		if name := ColdCopyDurable(p.stream); !hasDurable(floors, name) {
+			if floors == nil {
+				floors = map[string]uint64{}
+			}
+			floors[name] = 0
+		}
 	}
 	bound := purgeBound(view, floors)
 	p.watchPurgeStalls(view, floors, now)

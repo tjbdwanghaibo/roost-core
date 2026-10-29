@@ -829,6 +829,11 @@ func (p *partition) answer(q pendingQuery) {
 	case "list":
 		reply.Found = true
 		reply.Records = listRecords(p.sagas, *q.request.Query)
+		for _, id := range q.request.Known {
+			if p.sagas[id] != nil {
+				reply.Held = append(reply.Held, id)
+			}
+		}
 	default:
 		reply.Error = "unknown query"
 	}
