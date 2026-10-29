@@ -150,7 +150,9 @@ case "${1:-}" in
     cd "$REPO"
     status=0
     GOWORK=off go test -tags integration -race -count="${ROOST_NATS_CLUSTER_COUNT:-1}" -timeout 20m -run '^TestRealLog' ./infra/network/nats/driver || status=$?
-    [ "$status" = 0 ] && { GOWORK=off go test -tags integration -race -count="${ROOST_NATS_CLUSTER_COUNT:-1}" -timeout 20m -run '^TestRealJetStream' ./framework/saga || status=$?; }
+    [ "$status" = 0 ] && { GOWORK=off go test -tags integration -race -count="${ROOST_NATS_CLUSTER_COUNT:-1}" -timeout 20m -run '^TestReal' ./framework/saga || status=$?; }
+    # 合服检查读 saga 分区日志（要 Mongo 的部分在没有 ROOST_DATAENGINE_IT_MONGO_URI 时跳过）。
+    [ "$status" = 0 ] && { GOWORK=off go test -tags integration -race -count="${ROOST_NATS_CLUSTER_COUNT:-1}" -timeout 10m -run '^TestSidMerge' ./wiring/sidmerge || status=$?; }
     if [ "$status" = 0 ]; then
       "$SELF" clean
     else

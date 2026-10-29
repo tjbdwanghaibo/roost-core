@@ -426,21 +426,23 @@ func TestDoctorChecksCrossModConfigRulesThroughTheProcess(t *testing.T) {
 			t.Errorf("mismatched saga effect stream: config-check:game = %s %q; want a FAIL naming both keys", item.Status, item.Detail)
 		}
 	}
-	// 效果流比完成回执活得久（D12 顺带项）：saga 的完成回执 TTL 与 dataengine.effects.max_age 的比较是跨 Mod 规则，
-	// 现在由 saga Mod 的 CheckConfigAcrossMods 做，doctor 经进程的 --check-config 报出；修前它在 saga Init 里，doctor 全部通过。
-	retention := strings.Replace(string(raw), "\n    max_age: 168h\n", "\n    max_age: 800h\n", 1)
-	if retention == string(raw) {
-		t.Fatal("config.game.yaml has no dataengine.effects max_age: 168h; update this test")
+	// 准入水位与投影硬上限（saga 第 4 批的跨 Mod 规则）：准入开启时 dataengine.projection.max_unacked_records 必须 ≥
+	// 4 × saga.admission.high_records，否则投影积压到不了关准入的水位、Nest 提交先被拒。规则在 saga Mod 的
+	// CheckConfigAcrossMods，doctor 经进程的 --check-config 报出。
+	// 历史：这里原来是“效果流比完成回执活得久”（saga.completion_receipt_ttl），完成结果不再走效果流，规则随之删除。
+	capped := strings.Replace(string(raw), "max_unacked_records: 20000\n", "max_unacked_records: 100\n", 1)
+	if capped == string(raw) {
+		t.Fatal("config.game.yaml has no dataengine.projection max_unacked_records: 20000; update this test")
 	}
-	if err := os.WriteFile(configPath, []byte(retention), 0o644); err != nil {
+	if err := os.WriteFile(configPath, []byte(capped), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, item := range checkConfigRules(root, m, process) {
 		if item.Name != "config-check:game" {
 			continue
 		}
-		if item.Status != StatusFail || !strings.Contains(item.Detail, "saga.completion_receipt_ttl") || !strings.Contains(item.Detail, "dataengine.effects.max_age") {
-			t.Errorf("effect stream outliving the completion receipts: config-check:game = %s %q; want a FAIL naming both keys", item.Status, item.Detail)
+		if item.Status != StatusFail || !strings.Contains(item.Detail, "dataengine.projection.max_unacked_records") || !strings.Contains(item.Detail, "saga.admission.high_records") {
+			t.Errorf("projection cap below the admission watermark: config-check:game = %s %q; want a FAIL naming both keys", item.Status, item.Detail)
 		}
 	}
 	// 业务时区：拼错的 IANA 名在进程的 --check-config 里拒绝、点名键；合法的 Asia/Shanghai 在看不到系统

@@ -118,9 +118,10 @@ func handlerRename(owner PlayerOwner, name string) error {
 }
 ```
 
-需要启动 Saga 时在 handler 内调用 `saga.EmitStart`；Native Entity step 使用 Data Engine
-inbox，把 mutation、step receipt 和 completion effect 放进一个 CommitRecord。Raw Mongo
-step 继续使用 `MongoCommandInbox`，不能在其 Mongo transaction 中混写 Nest Entity。
+需要启动 Saga 时在 handler 内调用 `saga.EmitStart`；原生实体步骤的 handler 带 `saga.NativeStep` 参数，
+生成的分发在业务之前调用 `step.Begin`，业务修改与这一步的回执（放在被改的实体里）是同一笔 Nest 事务、同一条
+CommitRecord，结果在落盘后直接发回协调器。Mongo 步骤使用 `MongoStepInbox`（一个 Mongo 事务里读回执、执行、写回执），
+不能在其 Mongo transaction 中混写 Nest Entity。见 [Saga 使用篇 §2.1](../../docs/framework/guide/06-saga.md#21-业务怎样写步骤步骤运行时)。
 
 从历史快照数据迁移时，先升级所有 WAL reader，再启用 writer v2，最后重新生成 DAO 并完成
 一次性数据验证。运行时只有 `persistence.engine=dataengine`，不存在双写或回切旧引擎；完整

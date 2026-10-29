@@ -542,7 +542,7 @@ Redis 删除放在第 4 批，与切换同一次推送：维护者要求“同�
 
 ### 13.3 第 4 批实施记录
 
-范围：`wiring/saga` Mod / Steps / config 换新装配，`framework/saga` 定名（`Engine`、`Options`、`NewEngine`、`SubscribeMongoStep`、`WireVersion` = 2），删除 §3.3 第 4 批全部（Redis 存储与 Lua、Mongo 协调器存储、`DataEngineStepInbox` 与操作状态文档、completion effect 与消费者、`framework/storeservice`、`wiring/storeservice`、`wiring/redis` 的 `AuthorityMod`、`infra/storage/redis` 的权威探针 / `DurableScriptBatch` / 流读取、Redis 版脚本），生成器与 game-demo，合服检查，文档，测试按 §11 迁移。提交按“接线 → 删除 → 生成器与 demo → 文档 → 测试迁移 → 决定 A 修复 → T-A 与定时不变量”（见 git log；中间提交只保证 `go build`，测试在测试迁移那一笔一起恢复）。
+范围：`wiring/saga` Mod / Steps / config 换新装配，`framework/saga` 定名（`Engine`、`Options`、`NewEngine`、`SubscribeMongoStep`、`WireVersion` = 2），删除 §3.3 第 4 批全部（Redis 存储与 Lua、Mongo 协调器存储、`DataEngineStepInbox` 与操作状态文档、completion effect 与消费者、`framework/storeservice`、`wiring/storeservice`、`wiring/redis` 的 `AuthorityMod`、`infra/storage/redis` 的权威探针 / `DurableScriptBatch` / 流读取、Redis 版脚本），生成器与 game-demo，合服检查，文档，测试按 §11 迁移。提交按“接线 → 删除 → 生成器与 demo → 文档 → 测试迁移 → 决定 A 修复 → T-A → 定时不变量 → 全量测试发现的漏项”共 9 笔（见 git log；中间提交只保证 `go build` / `go vet`，测试迁移那一笔起单元恢复，决定 A 的四个用例在那一笔为红、下一笔转绿）。
 
 **维护者决定的落实**
 
