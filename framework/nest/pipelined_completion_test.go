@@ -1068,6 +1068,18 @@ func (f *asyncSetEngine) request(name HandlerName, id int64) chan any {
 	return done
 }
 
+// requestRetChan 发一个请求并直接返回它的 RetChan（容量 1），不经 Request 的调用方 goroutine 转发。
+// 用来断言“T2 回复时 T1 的回复已经发出”：引擎保证 T1 的回复写进 RetChan 先于它释放完成链节点，T2 在那之后才回复；
+// 而经 request 的 goroutine 转发时，T1 的调用方 goroutine 可能还没被调度把值转进测试 channel，非阻塞检查会误报。
+func (f *asyncSetEngine) requestRetChan(t *testing.T, name HandlerName, id int64) <-chan any {
+	t.Helper()
+	ch, _, err := f.engine.beginRequest(context.Background(), name, id, nil)
+	if err != nil {
+		t.Fatalf("request %s on %d: %v", name, id, err)
+	}
+	return ch
+}
+
 func (f *asyncSetEngine) recorded() ([]string, map[string]bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1298,7 +1310,7 @@ func TestOrdinaryCommitsWaitForEarlierAsyncCompletion(t *testing.T) {
 			sagaStep := NewHandlerName("ordinary_order_saga_step")
 			gate := f.gate("A1")
 
-			replyT1 := f.request(sagaStep, id)
+			replyT1 := f.requestRetChan(t, sagaStep, id)
 			awaitSignal(t, f.committer.enqueued, "T1 enqueued")
 			// Enqueue 先于占位：等 T1 在完成链上占位并计入在途。
 			for deadline := time.Now().Add(5 * time.Second); !pump.asyncCompletionPending(id); time.Sleep(time.Millisecond) {
@@ -1419,7 +1431,7 @@ func TestMultiEntityCommitWaitsForAsyncCompletionOnSecondaryEntity(t *testing.T)
 	idX, entX := newAsyncPilotEntity(t, 9989, 0)
 	idY, entY := newAsyncPilotEntity(t, 9979, 0)
 	f, names := ordinaryOrderEngine(t, entX, entY)
-	replyT1 := f.request(NewHandlerName("ordinary_order_saga_step"), idX)
+	replyT1 := f.requestRetChan(t, NewHandlerName("ordinary_order_saga_step"), idX)
 	awaitSignal(t, f.committer.enqueued, "T1 enqueued")
 	for deadline := time.Now().Add(5 * time.Second); !f.engine.completions.asyncCompletionPending(idX); time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
