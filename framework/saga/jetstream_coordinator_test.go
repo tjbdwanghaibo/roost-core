@@ -139,7 +139,34 @@ func (u *unitPartition) round(at time.Time, inputs ...fnats.LogMsg) *round {
 		u.events = append(u.events, decoded)
 	}
 	u.p.install(r, u.seq)
+	if err := u.p.checkTimers(); err != nil {
+		u.t.Fatalf("after the round at input seq %d: %v", u.seq, err)
+	}
 	return r
+}
+
+// checkTimers 是分区的定时不变量（第 3 批评审建议，只在测试里查，不加热路径开销）：每条非终态 saga 在时间轮里都有一个
+// 恰好落在它当前 NextRunAt 的条目。缺了它，这条 saga 再也不会被看一眼（没有输入就停在 waiting / pending）——2026-10-28
+// 墙钟 / 单调钟比较导致的卡住就是这一类。陈旧条目（早于或晚于 NextRunAt）不算数：decide 按记录当前的 NextRunAt 判定。
+func (p *partition) checkTimers() error {
+	entries := make(map[string]map[int64]struct{}, p.wheel.pending())
+	for _, slot := range p.wheel.slots {
+		for _, entry := range slot {
+			if entries[entry.id] == nil {
+				entries[entry.id] = map[int64]struct{}{}
+			}
+			entries[entry.id][entry.at] = struct{}{}
+		}
+	}
+	for id, st := range p.sagas {
+		if st.Record.Status.Terminal() {
+			continue
+		}
+		if _, ok := entries[id][st.Record.NextRunAt.UnixNano()]; !ok {
+			return fmt.Errorf("partition %d: non-terminal saga %s (%s, next run %s) has no timer entry at its NextRunAt", p.k, id, st.Record.Status, st.Record.NextRunAt.Format(time.RFC3339Nano))
+		}
+	}
+	return nil
 }
 
 func (u *unitPartition) startInput(bk string, data []byte, attempt, reply string) fnats.LogMsg {
