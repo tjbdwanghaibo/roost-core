@@ -382,8 +382,14 @@ func realRevn06s5Mongo(t *testing.T) (*driver.Client, string) {
 // SubscribeNativeStep；Mongo 步骤是 SubscribeMongoStep + MongoStepInbox；准入档用 LoadPublisher 发投影积压。
 //
 // 场景（ROOST_SAGA_SCAN_SCENARIO）：native-forward、native-compensate（每笔 credit 被拒，全补偿）、native-pipelined（步骤
-// handler 用 DurabilityPipelined）、mongo-forward、admission（准入开，高 5000 / 低 2500）、snapshot（每 2000 事件快照）、
+// handler 用 DurabilityPipelined；Nest 没开 pipelined 异步完成，worker 仍等票据）、mongo-forward、admission（准入开，高 5000 /
+// 低 2500，投影每条记录多等 ROOST_SAGA_SCAN_PROJECT_DELAY_US，缺省 10ms，让积压越过高水位）、snapshot（每 2000 事件快照）、
 // replay（合成 ROOST_SAGA_SCAN_REPLAY_MESSAGES 条日志后量一次全量重放的启动时长）。
+//
+// 其他旋钮：ROOST_SAGA_SCAN_NEST_WORKERS（参与方 Nest short 池，缺省 64 同原型；strict 提交锁内等 fsync，group commit 一批至多
+// 这么多条，见 ptParticipantOptions）、ROOST_SAGA_SCAN_PARTITIONS（P，缺省 16，G 固定 4）。结果另记定位计数：WAL 记录 / fsync、
+// 分区事件 / 发布次数；准入档另记关闭 / 重开次数、关闭占比、关闭期间的有效吞吐，并加判据：关过又重开过、积压峰值 ≤ 1.3 × 高水位、
+// 关闭期间有效吞吐不为 0（设计 §12）。
 //
 // 正确性（硬门槛，写进结果、不达标用例失败）：每笔终态符合预期（正向 Completed、拒绝的 Compensated）；原生档 Nest 内存与
 // Mongo 里每个账户的余额 = 按终态算出的预期；Mongo 档每个账户余额同样核对；发布结果未知 0；停止加压后 30s 内投影积压归零。
@@ -410,6 +416,15 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	concurrency := integer("ROOST_SAGA_SCAN_CONCURRENCY", 16, 1, 512)
 	seconds := integer("ROOST_SAGA_SCAN_SECONDS", 30, 1, 120)
 	warmup := integer("ROOST_SAGA_SCAN_WARMUP", min(5, seconds/2), 0, seconds-1)
+	// 参与方 Nest short 池缺省 64，同原型压测（saga-jslog-proto perf_test.go 的 Workers: 64）：strict 提交锁内等 fsync，一次
+	// group commit 至多带 short 池 worker 数条记录，8 个 worker 时 c128 封顶约 500 笔/s（2026-10-29 定位，ptParticipantOptions）。
+	nestWorkers := integer("ROOST_SAGA_SCAN_NEST_WORKERS", 64, 1, 1024)
+	// 准入档缺省让投影每条记录多等 10ms（8 通道约 800 条/s，低于加压时的产出），积压才会越过高水位、准入真正关闭再重开。
+	projectDelayDefault := 0
+	if scenario == "admission" {
+		projectDelayDefault = 10_000
+	}
+	projectDelay := time.Duration(integer("ROOST_SAGA_SCAN_PROJECT_DELAY_US", projectDelayDefault, 0, 1_000_000)) * time.Microsecond
 	url := realJSURL(t)
 	mongo := ptMongoClient(t)
 	database := fmt.Sprintf("roost_sagajs_scan_%d_%d", os.Getpid(), time.Now().UnixNano())
@@ -420,9 +435,10 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 			t.Errorf("drop %s: %v", database, err)
 		}
 	})
-	layout := realLayout(t, url, 16, 4)
+	partitions := integer("ROOST_SAGA_SCAN_PARTITIONS", 16, 4, 64)
+	layout := realLayout(t, url, partitions, 4)
 	conn, js := ptJetStream(t, url)
-	result := scanResult{Scenario: scenario, Concurrency: concurrency, Seconds: seconds, Warmup: warmup, GOMAXPROCS: runtime.GOMAXPROCS(0)}
+	result := scanResult{Partitions: partitions, Scenario: scenario, Concurrency: concurrency, Seconds: seconds, Warmup: warmup, GOMAXPROCS: runtime.GOMAXPROCS(0)}
 	options := realEngineOptions(layout, allPartitions(layout.Partitions))
 	options.PublishUnknownBudget, options.DuplicateWindow = 30*time.Second, 2*time.Minute
 	options.Admission.Enabled = false
@@ -439,7 +455,8 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	default:
 		t.Fatalf("unknown ROOST_SAGA_SCAN_SCENARIO %q", scenario)
 	}
-	engine := startRealEngineWith(t, conn, options, ptDefinition(), scanMongoDefinition())
+	counted := &scanCountingLog{JetStreamLog: conn.log}
+	engine := startScanEngine(t, counted, conn, options, ptDefinition(), scanMongoDefinition())
 	const accounts = 256
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(seconds)*time.Second+5*time.Minute)
 	defer cancel()
@@ -455,7 +472,9 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 			durability = nest.DurabilityPipelined
 		}
 		var err error
-		participant, err = openPtParticipantWith(t.TempDir(), mongo, database, accounts, durability)
+		result.NestWorkers, result.ProjectDelayUs = nestWorkers, projectDelay.Microseconds()
+		participant, err = openPtParticipantWith(t.TempDir(), mongo, database, accounts,
+			ptParticipantOptions{Durability: durability, NestWorkers: nestWorkers, ProjectDelayPerRecord: projectDelay})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -484,6 +503,9 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 		return participant.projector.Stats().WALUnacked
 	}
 	var peak atomic.Uint64
+	// 准入采样（每 50ms 看一次本协调器的判定）：关闭的采样数、开→关与关→开的次数；closedNow 给发起方标记“在关闭期间到终态”。
+	var closedNow atomic.Bool
+	var closedSamples, allSamples, closures, reopens atomic.Int64
 	sampleDone := make(chan struct{})
 	sampleCtx, stopSampling := context.WithCancel(ctx)
 	go func() {
@@ -492,9 +514,23 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 			if b := backlog(); b > peak.Load() {
 				peak.Store(b)
 			}
+			if options.Admission.Enabled {
+				closed := !engine.AdmissionState().Open
+				switch was := closedNow.Swap(closed); {
+				case closed && !was:
+					closures.Add(1)
+				case !closed && was:
+					reopens.Add(1)
+				}
+				allSamples.Add(1)
+				if closed {
+					closedSamples.Add(1)
+				}
+			}
 			time.Sleep(50 * time.Millisecond)
 		}
 	}()
+	var closedTerminals atomic.Int64
 
 	type finished struct {
 		bk       string
@@ -507,6 +543,16 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	var done []finished
 	var seq atomic.Int64
 	var rejected atomic.Int64
+	walStats := func() (appended, syncs uint64) {
+		if participant == nil {
+			return 0, 0
+		}
+		s := participant.wal.Stats()
+		return s.Appended, s.Syncs
+	}
+	appended0, syncs0 := walStats()
+	events0 := engine.Stats().Events
+	rounds0, roundEvents0 := counted.rounds.Load(), counted.roundEvents.Load()
 	start := time.Now()
 	deadline := start.Add(time.Duration(seconds) * time.Second)
 	var wg sync.WaitGroup
@@ -540,6 +586,9 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 					t.Errorf("wait %s: %v", bk, err)
 					return
 				}
+				if closedNow.Load() && time.Now().Before(deadline) {
+					closedTerminals.Add(1)
+				}
 				mu.Lock()
 				done = append(done, finished{bk: bk, transfer: transfer, status: final.Status, at: time.Now(), latency: time.Since(began)})
 				mu.Unlock()
@@ -548,6 +597,10 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	}
 	wg.Wait()
 	loadEnded := time.Now()
+	appended1, syncs1 := walStats()
+	result.WALAppended, result.WALSyncs = appended1-appended0, syncs1-syncs0
+	result.CoordinatorEvents = engine.Stats().Events - events0
+	result.CoordinatorPublishes, result.CoordinatorPublishedEvents = counted.rounds.Load()-rounds0, counted.roundEvents.Load()-roundEvents0
 	for backlog() > 0 && time.Since(loadEnded) < 30*time.Second {
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -587,6 +640,15 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	stats := engine.Stats()
 	result.PublishUnknown, result.AdmissionRejected, result.StartRetries, result.BacklogPeak = stats.PublishUnknown, stats.AdmissionRejected, rejected.Load(), peak.Load()
 	result.Snapshots, result.Purges = stats.Snapshots, stats.Purges
+	if options.Admission.Enabled {
+		result.AdmissionHigh, result.AdmissionClosures, result.AdmissionReopens = options.Admission.HighRecords, closures.Load(), reopens.Load()
+		if n := allSamples.Load(); n > 0 {
+			result.AdmissionClosedFraction = float64(closedSamples.Load()) / float64(n)
+		}
+		if closedSeconds := float64(closedSamples.Load()) * 0.05; closedSeconds > 0 {
+			result.ClosedTerminalsPerSecond = float64(closedTerminals.Load()) / closedSeconds
+		}
+	}
 
 	// 余额逐账户核对：Nest 内存（原生）与 Mongo（投影完之后 / Mongo 步骤）。
 	if participant != nil {
@@ -619,6 +681,12 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	if result.Unexpected != 0 || result.PublishUnknown != 0 || result.BalanceMismatches != 0 || result.BacklogAfterDrain != 0 {
 		t.Fatalf("correctness gate failed: %+v", result)
 	}
+	// 准入档的判据（设计 §12）：准入真的关过又重开过、积压峰值 ≤ 1.3 × 高水位、关闭期间有效吞吐不为 0。
+	if options.Admission.Enabled && (result.AdmissionClosures == 0 || result.AdmissionReopens == 0 ||
+		float64(result.BacklogPeak) > 1.3*float64(result.AdmissionHigh) || result.ClosedTerminalsPerSecond <= 0) {
+		t.Fatalf("admission gate failed: closures %d reopens %d backlog peak %d (high %d) closed-time terminals %.1f/s",
+			result.AdmissionClosures, result.AdmissionReopens, result.BacklogPeak, result.AdmissionHigh, result.ClosedTerminalsPerSecond)
+	}
 }
 
 // scanResult 是一档的结果（脚本汇总它）。
@@ -628,6 +696,7 @@ type scanResult struct {
 	Seconds           int               `json:"seconds"`
 	Warmup            int               `json:"warmup"`
 	GOMAXPROCS        int               `json:"gomaxprocs"`
+	Partitions        int               `json:"partitions"`
 	Sagas             int               `json:"sagas"`
 	SteadySagas       int               `json:"steady_sagas"`
 	PerSecond         float64           `json:"per_second"`
@@ -644,6 +713,61 @@ type scanResult struct {
 	Snapshots         uint64            `json:"snapshots"`
 	Purges            uint64            `json:"purges"`
 	Replay            *scanReplayResult `json:"replay,omitempty"`
+	// 定位用计数（加压期间的增量）：参与方 Nest short 池 worker 数、WAL 追加记录与 fsync 次数（记录 / fsync 即组提交批量）、
+	// 协调器提交的事件数。
+	NestWorkers       int    `json:"nest_workers,omitempty"`
+	ProjectDelayUs    int64  `json:"project_delay_us,omitempty"`
+	WALAppended       uint64 `json:"wal_appended,omitempty"`
+	WALSyncs          uint64 `json:"wal_syncs,omitempty"`
+	CoordinatorEvents uint64 `json:"coordinator_events,omitempty"`
+	// 分区事件的 fenced 发布次数与条数（条数 / 次数即一轮一次发布带的事件数，设计 §4.4 的批）。
+	CoordinatorPublishes       uint64 `json:"coordinator_publishes,omitempty"`
+	CoordinatorPublishedEvents uint64 `json:"coordinator_published_events,omitempty"`
+	// 准入档：高水位、开→关 / 关→开次数、关闭时间占比、关闭期间每秒到终态的笔数（加压结束后的不计）。
+	AdmissionHigh            uint64  `json:"admission_high_records,omitempty"`
+	AdmissionClosures        int64   `json:"admission_closures,omitempty"`
+	AdmissionReopens         int64   `json:"admission_reopens,omitempty"`
+	AdmissionClosedFraction  float64 `json:"admission_closed_fraction,omitempty"`
+	ClosedTerminalsPerSecond float64 `json:"closed_terminals_per_second,omitempty"`
+}
+
+// scanCountingLog 数分区事件的发布（带事件过滤的 fenced 发布；启动等输入的发布不带过滤，不计）。
+type scanCountingLog struct {
+	fnats.JetStreamLog
+	rounds, roundEvents atomic.Uint64
+}
+
+func (l *scanCountingLog) PublishFenced(ctx context.Context, msgs []fnats.LogMsg, fence fnats.LogFence) (fnats.LogPublishAck, error) {
+	if fence.Filter != "" {
+		l.rounds.Add(1)
+		l.roundEvents.Add(uint64(len(msgs)))
+	}
+	return l.JetStreamLog.PublishFenced(ctx, msgs, fence)
+}
+
+// startScanEngine 同 startRealEngineWith，日志换成 log（计数包装）。
+func startScanEngine(t *testing.T, log fnats.JetStreamLog, conn realJSConn, options Options, definitions ...Definition) *Engine {
+	t.Helper()
+	e, err := NewEngine(log, conn.client, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range definitions {
+		if err := e.Register(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := e.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_ = e.Stop(ctx)
+	})
+	return e
 }
 
 type scanReplayResult struct {
@@ -660,6 +784,17 @@ func writeScanResult(t *testing.T, path string, result scanResult) {
 		t.Fatal(err)
 	}
 	t.Logf("%s c%d: %.1f saga/s p50 %.1fms p99 %.1fms (%d sagas)", result.Scenario, result.Concurrency, result.PerSecond, result.P50Ms, result.P99Ms, result.Sagas)
+	if result.Sagas > 0 && result.WALSyncs > 0 {
+		t.Logf("nest_workers=%d wal_records/fsync=%.2f wal_fsync/saga=%.3f coordinator_events/saga=%.2f events/publish=%.2f publishes/saga=%.2f backlog_peak=%d admission_rejected=%d",
+			result.NestWorkers, float64(result.WALAppended)/float64(result.WALSyncs), float64(result.WALSyncs)/float64(result.Sagas),
+			float64(result.CoordinatorEvents)/float64(result.Sagas), float64(result.CoordinatorPublishedEvents)/float64(max(result.CoordinatorPublishes, 1)),
+			float64(result.CoordinatorPublishes)/float64(result.Sagas), result.BacklogPeak, result.AdmissionRejected)
+	}
+	if result.AdmissionHigh > 0 {
+		t.Logf("admission high=%d closures=%d reopens=%d closed=%.0f%% closed_terminals=%.1f/s backlog_peak=%d (%.2f x high) rejected=%d start_retries=%d",
+			result.AdmissionHigh, result.AdmissionClosures, result.AdmissionReopens, 100*result.AdmissionClosedFraction, result.ClosedTerminalsPerSecond,
+			result.BacklogPeak, float64(result.BacklogPeak)/float64(result.AdmissionHigh), result.AdmissionRejected, result.StartRetries)
+	}
 }
 
 // scanMongoDefinition 是 Mongo 步骤的转账 saga（与 pt 同形，主题 mt.*）。

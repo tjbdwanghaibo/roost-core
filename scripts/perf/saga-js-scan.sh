@@ -21,6 +21,8 @@
 #   ROOST_SCAN_MONGO_URI       给了就不起私有 mongod，用它（例如云 Mongo 一轮，设计 §12 不计入 30 分钟）；不打印、不写盘
 #   ROOST_SCAN_LOAD_MAX / ROOST_SCAN_LOAD_WAIT   负载门（缺省 8 / 60 秒）
 #   ROOST_SCAN_DATA            私有 NATS / mongod 数据目录（缺省 ${TMPDIR:-/tmp}/roost-saga-js-scan-<label>，结束删除）
+#   ROOST_SAGA_SCAN_NEST_WORKERS / ROOST_SAGA_SCAN_PARTITIONS / ROOST_SAGA_SCAN_PROJECT_DELAY_US
+#                              透传给测试（参与方 Nest short 池缺省 64、P 缺省 16、准入档投影每条记录延迟缺省 10ms），见 TestRealSagaJSScanLevel
 #
 # 不碰共享环境：端口与目录私有，开跑前检查端口空闲；结束（含失败）停掉私有实例、删数据目录；结果目录保留。
 set -euo pipefail

@@ -243,11 +243,28 @@ type ptParticipant struct {
 // openPtParticipant 打开参与方：mongo 非空时走 DataEngine 投影（先排空 WAL 尾巴进 Mongo，再从 Mongo 加载账户——现行“先恢复再
 // 服务”），否则投影丢弃、账户全新（单进程用例）。
 func openPtParticipant(walDir string, mongo fmongo.IMongo, database string, accounts int) (*ptParticipant, error) {
-	return openPtParticipantWith(walDir, mongo, database, accounts, nest.DurabilityStrict)
+	return openPtParticipantWith(walDir, mongo, database, accounts, ptParticipantOptions{})
 }
 
-// openPtParticipantWith 同 openPtParticipant，步骤 handler 用给定的持久化策略（压测的 pipelined 档用 DurabilityPipelined）。
-func openPtParticipantWith(walDir string, mongo fmongo.IMongo, database string, accounts int, durability nest.DurabilityPolicy) (*ptParticipant, error) {
+// ptParticipantOptions 是压测档调的参与方参数，零值即 openPtParticipant 的缺省。
+type ptParticipantOptions struct {
+	// Durability 是步骤 handler 的持久化策略（零值 strict；压测的 pipelined 档用 DurabilityPipelined）。
+	Durability nest.DurabilityPolicy
+	// NestWorkers 是 Nest short 池的 worker 数（零值 8）。strict 提交在 worker 上锁内等所在 group commit 的 fsync（NEST_TRANSACTION_WAL.md），
+	// 所以一次 group commit 至多带 NestWorkers 条记录：本机 fsync 约 8ms 时，原生步骤吞吐上限约 NestWorkers / 8ms。
+	NestWorkers int
+	// ProjectDelayPerRecord 让投影每条记录多等这么久（只给准入档制造投影积压；零值不等）。
+	ProjectDelayPerRecord time.Duration
+}
+
+// openPtParticipantWith 同 openPtParticipant，参数见 ptParticipantOptions。
+func openPtParticipantWith(walDir string, mongo fmongo.IMongo, database string, accounts int, options ptParticipantOptions) (*ptParticipant, error) {
+	if options.Durability == 0 {
+		options.Durability = nest.DurabilityStrict
+	}
+	if options.NestWorkers <= 0 {
+		options.NestWorkers = 8
+	}
 	p := &ptParticipant{manager: entity.NewEntityManager()}
 	wal, err := nestwal.Open(nestwal.DefaultOptions(walDir))
 	if err != nil {
@@ -259,7 +276,7 @@ func openPtParticipantWith(walDir string, mongo fmongo.IMongo, database string, 
 	if mongo == nil {
 		p.projector, err = engine.NewProjector(wal, discardProjection{}, engine.ProjectorOptions{CloseWAL: true, ManualReplay: true})
 	} else {
-		p.projector, err = openPtProjection(wal, mongo, database, docs, versions)
+		p.projector, err = openPtProjection(wal, mongo, database, docs, versions, options.ProjectDelayPerRecord)
 	}
 	if err != nil {
 		_ = wal.Close(context.Background())
@@ -280,8 +297,8 @@ func openPtParticipantWith(walDir string, mongo fmongo.IMongo, database string, 
 		}
 	}
 	p.mgr = nest.NewEngine(nest.NestOptionWithGetter(entity.NewManagerAccess(p.manager)), nest.NestOptionWithTransactionCommitter(p.projector),
-		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 4096}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
-	p.mgr.MustRegisterHandlerWithMeta(ptStepHandler, p.step, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: durability})
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: options.NestWorkers, QueueCap: 4096}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	p.mgr.MustRegisterHandlerWithMeta(ptStepHandler, p.step, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: options.Durability})
 	open := nest.NewHandlerName("saga_pt_open")
 	p.mgr.MustRegisterHandlerWithMeta(open, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 		dao := es[0].(*ptAccount).dao
@@ -308,7 +325,24 @@ func openPtParticipantWith(walDir string, mongo fmongo.IMongo, database string, 
 	return p, nil
 }
 
-func openPtProjection(wal *nestwal.WAL, mongo fmongo.IMongo, database string, docs map[int64]ptAccountDoc, versions map[int64]uint64) (*engine.Projector, error) {
+// slowProjectionStore 是准入压测档用的慢投影：每条记录先等 delay 再照常写 Mongo。嵌入 *engine.MongoStore，其余能力
+// （批量、并行、回执等）原样提升，投影器按同样的接口断言走同样的路径。
+type slowProjectionStore struct {
+	*engine.MongoStore
+	delay time.Duration
+}
+
+func (s slowProjectionStore) Project(ctx context.Context, record dataengine.CommitRecord) error {
+	time.Sleep(s.delay)
+	return s.MongoStore.Project(ctx, record)
+}
+
+func (s slowProjectionStore) ProjectBatch(ctx context.Context, records []dataengine.CommitRecord) error {
+	time.Sleep(time.Duration(len(records)) * s.delay)
+	return s.MongoStore.ProjectBatch(ctx, records)
+}
+
+func openPtProjection(wal *nestwal.WAL, mongo fmongo.IMongo, database string, docs map[int64]ptAccountDoc, versions map[int64]uint64, delayPerRecord time.Duration) (*engine.Projector, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	databases, _, err := dataengine.NewDatabaseMap(dataengine.DatabaseMapConfig{Declared: dataengine.DeclaredDatabases()})
@@ -322,7 +356,11 @@ func openPtProjection(wal *nestwal.WAL, mongo fmongo.IMongo, database string, do
 	if err := store.EnsureInfrastructure(ctx); err != nil {
 		return nil, err
 	}
-	projector, err := engine.NewProjector(wal, store, engine.DefaultProjectorOptions())
+	var projected engine.ProjectionStore = store
+	if delayPerRecord > 0 {
+		projected = slowProjectionStore{MongoStore: store, delay: delayPerRecord}
+	}
+	projector, err := engine.NewProjector(wal, projected, engine.DefaultProjectorOptions())
 	if err != nil {
 		return nil, err
 	}
