@@ -20,6 +20,8 @@ import (
 	gojs "github.com/nats-io/nats.go/jetstream"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	ndriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 )
 
 // TestRealJetStreamProbe 隔离总线交付成本：三副本文件流、正式驱动、立即 ACK。
@@ -339,4 +341,28 @@ func TestRealMongoCommitProbe(t *testing.T) {
 	if result.Failed != 0 || count != result.Completed*2 {
 		t.Error("Mongo probe verification failed")
 	}
+}
+
+// probeMongo 是 TestRealMongoCommitProbe 用的隔离库（唯一库名，用后删除）。
+// 历史：realRevn06s5Mongo（cross_process_real_integration_test.go，第 4 批随 Mongo 协调器用例删除）。
+func realRevn06s5Mongo(t *testing.T) (*driver.Client, string) {
+	t.Helper()
+	uri := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
+	if uri == "" {
+		t.Skip("ROOST_DATAENGINE_IT_MONGO_URI is not set; source ~/.roost-it/roost-dataengine-it/env.sh")
+	}
+	client, err := driver.NewClient(fmongo.DefaultConfig(uri), driver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := fmt.Sprintf("roost_sagaprobe_%d_%d", os.Getpid(), time.Now().UnixNano())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		if err := client.Database(database).Drop(ctx); err != nil {
+			t.Errorf("drop %s: %v", database, err)
+		}
+		_ = client.Close(context.Background())
+	})
+	return client, database
 }

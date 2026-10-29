@@ -1,0 +1,1563 @@
+{
+  "TestTransitionRulesAreSharedByBothCoordinators/deadline_aborts_the_forward_direction": [
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 2,
+        "Op": "e6a068d90993972506e4076311b5edea:1:0",
+        "Command": "e6a068d90993972506e4076311b5edea:1:0:1",
+        "LastError": "",
+        "Data": "",
+        "LateData": ""
+      }
+    },
+    {
+      "step": "complete e6a068d90993972506e4076311b5edea:1:0:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "e6a068d90993972506e4076311b5edea:1:1",
+        "Command": "e6a068d90993972506e4076311b5edea:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "e6a068d90993972506e4076311b5edea:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "e6a068d90993972506e4076311b5edea:1:1",
+        "Command": "e6a068d90993972506e4076311b5edea:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "e6a068d90993972506e4076311b5edea:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "compensating",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 0,
+        "Incarnation": 0,
+        "Version": 5,
+        "Op": "",
+        "Command": "",
+        "LastError": "saga deadline exceeded",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "e6a068d90993972506e4076311b5edea:1:0": "with_result",
+        "e6a068d90993972506e4076311b5edea:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 6,
+        "Op": "e6a068d90993972506e4076311b5edea:2:0",
+        "Command": "e6a068d90993972506e4076311b5edea:2:0:1",
+        "LastError": "saga deadline exceeded",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "e6a068d90993972506e4076311b5edea:1:0": "with_result",
+        "e6a068d90993972506e4076311b5edea:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "complete e6a068d90993972506e4076311b5edea:2:0:1",
+      "view": {
+        "Status": "compensated",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 0,
+        "Incarnation": 0,
+        "Version": 7,
+        "Op": "",
+        "Command": "",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "e6a068d90993972506e4076311b5edea:1:0": "with_result",
+        "e6a068d90993972506e4076311b5edea:1:1": "abandoned",
+        "e6a068d90993972506e4076311b5edea:2:0": "with_result"
+      }
+    }
+  ],
+  "TestTransitionRulesAreSharedByBothCoordinators/forward_success": [
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 2,
+        "Op": "ecee05d3f32327f7a60b7fa5b9d9a9d8:1:0",
+        "Command": "ecee05d3f32327f7a60b7fa5b9d9a9d8:1:0:1",
+        "LastError": "",
+        "Data": "in",
+        "LateData": ""
+      }
+    },
+    {
+      "step": "complete ecee05d3f32327f7a60b7fa5b9d9a9d8:1:0:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "ecee05d3f32327f7a60b7fa5b9d9a9d8:1:1",
+        "Command": "ecee05d3f32327f7a60b7fa5b9d9a9d8:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "ecee05d3f32327f7a60b7fa5b9d9a9d8:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "ecee05d3f32327f7a60b7fa5b9d9a9d8:1:1",
+        "Command": "ecee05d3f32327f7a60b7fa5b9d9a9d8:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "ecee05d3f32327f7a60b7fa5b9d9a9d8:1:0": "with_result"
+      }
+    },
+    {
+      "step": "complete ecee05d3f32327f7a60b7fa5b9d9a9d8:1:1:1",
+      "view": {
+        "Status": "completed",
+        "Phase": "forward",
+        "Step": 2,
+        "Completed": 2,
+        "Late": 0,
+        "Attempt": 0,
+        "Incarnation": 0,
+        "Version": 5,
+        "Op": "",
+        "Command": "",
+        "LastError": "",
+        "Data": "step1",
+        "LateData": ""
+      },
+      "tombstones": {
+        "ecee05d3f32327f7a60b7fa5b9d9a9d8:1:0": "with_result",
+        "ecee05d3f32327f7a60b7fa5b9d9a9d8:1:1": "with_result"
+      }
+    }
+  ],
+  "TestTransitionRulesAreSharedByBothCoordinators/late_compensation_success_only_alarms_once_per_incarnation": [
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 2,
+        "Op": "8fd1960a9dbd8217de81811878530cc3:1:0",
+        "Command": "8fd1960a9dbd8217de81811878530cc3:1:0:1",
+        "LastError": "",
+        "Data": "",
+        "LateData": ""
+      }
+    },
+    {
+      "step": "complete 8fd1960a9dbd8217de81811878530cc3:1:0:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "8fd1960a9dbd8217de81811878530cc3:1:1",
+        "Command": "8fd1960a9dbd8217de81811878530cc3:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "8fd1960a9dbd8217de81811878530cc3:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "8fd1960a9dbd8217de81811878530cc3:1:1",
+        "Command": "8fd1960a9dbd8217de81811878530cc3:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "8fd1960a9dbd8217de81811878530cc3:1:0": "with_result"
+      }
+    },
+    {
+      "step": "complete 8fd1960a9dbd8217de81811878530cc3:1:1:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 6,
+        "Op": "8fd1960a9dbd8217de81811878530cc3:2:0",
+        "Command": "8fd1960a9dbd8217de81811878530cc3:2:0:1",
+        "LastError": "refused",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "8fd1960a9dbd8217de81811878530cc3:1:0": "with_result",
+        "8fd1960a9dbd8217de81811878530cc3:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 6,
+        "Op": "8fd1960a9dbd8217de81811878530cc3:2:0",
+        "Command": "8fd1960a9dbd8217de81811878530cc3:2:0:1",
+        "LastError": "refused",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "8fd1960a9dbd8217de81811878530cc3:1:0": "with_result",
+        "8fd1960a9dbd8217de81811878530cc3:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "compensating",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 7,
+        "Op": "",
+        "Command": "",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "8fd1960a9dbd8217de81811878530cc3:1:0": "with_result",
+        "8fd1960a9dbd8217de81811878530cc3:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 2,
+        "Incarnation": 0,
+        "Version": 8,
+        "Op": "8fd1960a9dbd8217de81811878530cc3:2:0",
+        "Command": "8fd1960a9dbd8217de81811878530cc3:2:0:2",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "8fd1960a9dbd8217de81811878530cc3:1:0": "with_result",
+        "8fd1960a9dbd8217de81811878530cc3:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "manual_required",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 2,
+        "Incarnation": 0,
+        "Version": 9,
+        "Op": "",
+        "Command": "",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "8fd1960a9dbd8217de81811878530cc3:1:0": "with_result",
+        "8fd1960a9dbd8217de81811878530cc3:1:1": "abandoned",
+        "8fd1960a9dbd8217de81811878530cc3:2:0": "abandoned"
+      }
+    },
+    {
+      "step": "complete 8fd1960a9dbd8217de81811878530cc3:2:0:1",
+      "view": {
+        "Status": "manual_required",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 2,
+        "Incarnation": 0,
+        "Version": 9,
+        "Op": "",
+        "Command": "",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "8fd1960a9dbd8217de81811878530cc3:1:0": "with_result",
+        "8fd1960a9dbd8217de81811878530cc3:1:1": "abandoned",
+        "8fd1960a9dbd8217de81811878530cc3:2:0": "abandoned"
+      }
+    },
+    {
+      "step": "complete 8fd1960a9dbd8217de81811878530cc3:2:0:1",
+      "view": {
+        "Status": "manual_required",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 2,
+        "Incarnation": 0,
+        "Version": 9,
+        "Op": "",
+        "Command": "",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "8fd1960a9dbd8217de81811878530cc3:1:0": "with_result",
+        "8fd1960a9dbd8217de81811878530cc3:1:1": "abandoned",
+        "8fd1960a9dbd8217de81811878530cc3:2:0": "abandoned"
+      }
+    }
+  ],
+  "TestTransitionRulesAreSharedByBothCoordinators/late_success_after_abandonment_is_compensated_(direction_4)": [
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 2,
+        "Op": "4c30e964f7d07f62bbaeb03601cc632b:1:0",
+        "Command": "4c30e964f7d07f62bbaeb03601cc632b:1:0:1",
+        "LastError": "",
+        "Data": "",
+        "LateData": ""
+      }
+    },
+    {
+      "step": "complete 4c30e964f7d07f62bbaeb03601cc632b:1:0:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "4c30e964f7d07f62bbaeb03601cc632b:1:1",
+        "Command": "4c30e964f7d07f62bbaeb03601cc632b:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "4c30e964f7d07f62bbaeb03601cc632b:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "4c30e964f7d07f62bbaeb03601cc632b:1:1",
+        "Command": "4c30e964f7d07f62bbaeb03601cc632b:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "4c30e964f7d07f62bbaeb03601cc632b:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "pending",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 5,
+        "Op": "",
+        "Command": "",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "4c30e964f7d07f62bbaeb03601cc632b:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 2,
+        "Incarnation": 0,
+        "Version": 6,
+        "Op": "4c30e964f7d07f62bbaeb03601cc632b:1:1",
+        "Command": "4c30e964f7d07f62bbaeb03601cc632b:1:1:2",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "4c30e964f7d07f62bbaeb03601cc632b:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "compensating",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 0,
+        "Incarnation": 0,
+        "Version": 7,
+        "Op": "",
+        "Command": "",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "4c30e964f7d07f62bbaeb03601cc632b:1:0": "with_result",
+        "4c30e964f7d07f62bbaeb03601cc632b:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 8,
+        "Op": "4c30e964f7d07f62bbaeb03601cc632b:2:0",
+        "Command": "4c30e964f7d07f62bbaeb03601cc632b:2:0:1",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "4c30e964f7d07f62bbaeb03601cc632b:1:0": "with_result",
+        "4c30e964f7d07f62bbaeb03601cc632b:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "complete 4c30e964f7d07f62bbaeb03601cc632b:1:1:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 2,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 9,
+        "Op": "4c30e964f7d07f62bbaeb03601cc632b:2:0",
+        "Command": "4c30e964f7d07f62bbaeb03601cc632b:2:0:1",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": "late-1"
+      },
+      "tombstones": {
+        "4c30e964f7d07f62bbaeb03601cc632b:1:0": "with_result",
+        "4c30e964f7d07f62bbaeb03601cc632b:1:1": "with_result"
+      }
+    },
+    {
+      "step": "complete 4c30e964f7d07f62bbaeb03601cc632b:1:1:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 2,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 9,
+        "Op": "4c30e964f7d07f62bbaeb03601cc632b:2:0",
+        "Command": "4c30e964f7d07f62bbaeb03601cc632b:2:0:1",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": "late-1"
+      },
+      "tombstones": {
+        "4c30e964f7d07f62bbaeb03601cc632b:1:0": "with_result",
+        "4c30e964f7d07f62bbaeb03601cc632b:1:1": "with_result"
+      }
+    },
+    {
+      "step": "complete 4c30e964f7d07f62bbaeb03601cc632b:2:0:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 1,
+        "Completed": 0,
+        "Late": 2,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 11,
+        "Op": "4c30e964f7d07f62bbaeb03601cc632b:2:1",
+        "Command": "4c30e964f7d07f62bbaeb03601cc632b:2:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": "late-1"
+      },
+      "tombstones": {
+        "4c30e964f7d07f62bbaeb03601cc632b:1:0": "with_result",
+        "4c30e964f7d07f62bbaeb03601cc632b:1:1": "with_result",
+        "4c30e964f7d07f62bbaeb03601cc632b:2:0": "with_result"
+      }
+    },
+    {
+      "step": "complete 4c30e964f7d07f62bbaeb03601cc632b:2:1:1",
+      "view": {
+        "Status": "compensated",
+        "Phase": "compensate",
+        "Step": 1,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 0,
+        "Incarnation": 0,
+        "Version": 12,
+        "Op": "",
+        "Command": "",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "4c30e964f7d07f62bbaeb03601cc632b:1:0": "with_result",
+        "4c30e964f7d07f62bbaeb03601cc632b:1:1": "with_result",
+        "4c30e964f7d07f62bbaeb03601cc632b:2:0": "with_result",
+        "4c30e964f7d07f62bbaeb03601cc632b:2:1": "with_result"
+      }
+    }
+  ],
+  "TestTransitionRulesAreSharedByBothCoordinators/manual_compensate_in_compensate_phase_and_on_completed": [
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 2,
+        "Op": "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0",
+        "Command": "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0:1",
+        "LastError": "",
+        "Data": "",
+        "LateData": ""
+      }
+    },
+    {
+      "step": "complete b59aa4bcdd7e0b848c7b78d4713c5bab:1:0:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1",
+        "Command": "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1",
+        "Command": "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0": "with_result"
+      }
+    },
+    {
+      "step": "complete b59aa4bcdd7e0b848c7b78d4713c5bab:1:1:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 6,
+        "Op": "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0",
+        "Command": "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0:1",
+        "LastError": "refused",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0": "with_result",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 6,
+        "Op": "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0",
+        "Command": "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0:1",
+        "LastError": "refused",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0": "with_result",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "compensating",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 7,
+        "Op": "",
+        "Command": "",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0": "with_result",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 2,
+        "Incarnation": 0,
+        "Version": 8,
+        "Op": "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0",
+        "Command": "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0:2",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0": "with_result",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "manual_required",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 2,
+        "Incarnation": 0,
+        "Version": 9,
+        "Op": "",
+        "Command": "",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0": "with_result",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1": "abandoned",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0": "abandoned"
+      }
+    },
+    {
+      "step": "compensate verdict",
+      "verdict": ""
+    },
+    {
+      "step": "compensate",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 1,
+        "Version": 11,
+        "Op": "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0",
+        "Command": "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0:r1:1",
+        "LastError": "operator",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0": "with_result",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1": "abandoned",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0": "abandoned"
+      }
+    },
+    {
+      "step": "compensate verdict",
+      "verdict": "saga: cannot force compensation while a step result is in flight"
+    },
+    {
+      "step": "compensate",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 1,
+        "Version": 11,
+        "Op": "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0",
+        "Command": "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0:r1:1",
+        "LastError": "operator",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0": "with_result",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1": "abandoned",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 1,
+        "Version": 11,
+        "Op": "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0",
+        "Command": "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0:r1:1",
+        "LastError": "operator",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0": "with_result",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1": "abandoned",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0": "abandoned"
+      }
+    },
+    {
+      "step": "complete b59aa4bcdd7e0b848c7b78d4713c5bab:2:0:r1:1",
+      "view": {
+        "Status": "compensated",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 0,
+        "Incarnation": 1,
+        "Version": 12,
+        "Op": "",
+        "Command": "",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0": "with_result",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1": "abandoned",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0": "with_result"
+      }
+    },
+    {
+      "step": "compensate verdict",
+      "verdict": ""
+    },
+    {
+      "step": "compensate",
+      "view": {
+        "Status": "compensated",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 0,
+        "Incarnation": 1,
+        "Version": 12,
+        "Op": "",
+        "Command": "",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:0": "with_result",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:1:1": "abandoned",
+        "b59aa4bcdd7e0b848c7b78d4713c5bab:2:0": "with_result"
+      }
+    }
+  ],
+  "TestTransitionRulesAreSharedByBothCoordinators/refusal_compensates_the_completed_prefix": [
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 2,
+        "Op": "78099561197d1e9c1113badebf74f9fb:1:0",
+        "Command": "78099561197d1e9c1113badebf74f9fb:1:0:1",
+        "LastError": "",
+        "Data": "",
+        "LateData": ""
+      }
+    },
+    {
+      "step": "complete 78099561197d1e9c1113badebf74f9fb:1:0:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "78099561197d1e9c1113badebf74f9fb:1:1",
+        "Command": "78099561197d1e9c1113badebf74f9fb:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "78099561197d1e9c1113badebf74f9fb:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "78099561197d1e9c1113badebf74f9fb:1:1",
+        "Command": "78099561197d1e9c1113badebf74f9fb:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "78099561197d1e9c1113badebf74f9fb:1:0": "with_result"
+      }
+    },
+    {
+      "step": "complete 78099561197d1e9c1113badebf74f9fb:1:1:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 6,
+        "Op": "78099561197d1e9c1113badebf74f9fb:2:0",
+        "Command": "78099561197d1e9c1113badebf74f9fb:2:0:1",
+        "LastError": "no funds",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "78099561197d1e9c1113badebf74f9fb:1:0": "with_result",
+        "78099561197d1e9c1113badebf74f9fb:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 6,
+        "Op": "78099561197d1e9c1113badebf74f9fb:2:0",
+        "Command": "78099561197d1e9c1113badebf74f9fb:2:0:1",
+        "LastError": "no funds",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "78099561197d1e9c1113badebf74f9fb:1:0": "with_result",
+        "78099561197d1e9c1113badebf74f9fb:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "complete 78099561197d1e9c1113badebf74f9fb:2:0:1",
+      "view": {
+        "Status": "compensated",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 0,
+        "Incarnation": 0,
+        "Version": 7,
+        "Op": "",
+        "Command": "",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "78099561197d1e9c1113badebf74f9fb:1:0": "with_result",
+        "78099561197d1e9c1113badebf74f9fb:1:1": "abandoned",
+        "78099561197d1e9c1113badebf74f9fb:2:0": "with_result"
+      }
+    }
+  ],
+  "TestTransitionRulesAreSharedByBothCoordinators/resume_opens_a_new_incarnation_and_old_results_are_stale": [
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 2,
+        "Op": "da610582e694117e3f8d2300c3c67ee1:1:0",
+        "Command": "da610582e694117e3f8d2300c3c67ee1:1:0:1",
+        "LastError": "",
+        "Data": "",
+        "LateData": ""
+      }
+    },
+    {
+      "step": "complete da610582e694117e3f8d2300c3c67ee1:1:0:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "da610582e694117e3f8d2300c3c67ee1:1:1",
+        "Command": "da610582e694117e3f8d2300c3c67ee1:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "da610582e694117e3f8d2300c3c67ee1:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "da610582e694117e3f8d2300c3c67ee1:1:1",
+        "Command": "da610582e694117e3f8d2300c3c67ee1:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "da610582e694117e3f8d2300c3c67ee1:1:0": "with_result"
+      }
+    },
+    {
+      "step": "complete da610582e694117e3f8d2300c3c67ee1:1:1:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 6,
+        "Op": "da610582e694117e3f8d2300c3c67ee1:2:0",
+        "Command": "da610582e694117e3f8d2300c3c67ee1:2:0:1",
+        "LastError": "refused",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "da610582e694117e3f8d2300c3c67ee1:1:0": "with_result",
+        "da610582e694117e3f8d2300c3c67ee1:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 6,
+        "Op": "da610582e694117e3f8d2300c3c67ee1:2:0",
+        "Command": "da610582e694117e3f8d2300c3c67ee1:2:0:1",
+        "LastError": "refused",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "da610582e694117e3f8d2300c3c67ee1:1:0": "with_result",
+        "da610582e694117e3f8d2300c3c67ee1:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "compensating",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 7,
+        "Op": "",
+        "Command": "",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "da610582e694117e3f8d2300c3c67ee1:1:0": "with_result",
+        "da610582e694117e3f8d2300c3c67ee1:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 2,
+        "Incarnation": 0,
+        "Version": 8,
+        "Op": "da610582e694117e3f8d2300c3c67ee1:2:0",
+        "Command": "da610582e694117e3f8d2300c3c67ee1:2:0:2",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "da610582e694117e3f8d2300c3c67ee1:1:0": "with_result",
+        "da610582e694117e3f8d2300c3c67ee1:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "manual_required",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 2,
+        "Incarnation": 0,
+        "Version": 9,
+        "Op": "",
+        "Command": "",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "da610582e694117e3f8d2300c3c67ee1:1:0": "with_result",
+        "da610582e694117e3f8d2300c3c67ee1:1:1": "abandoned",
+        "da610582e694117e3f8d2300c3c67ee1:2:0": "abandoned"
+      }
+    },
+    {
+      "step": "resume verdict",
+      "verdict": ""
+    },
+    {
+      "step": "resume",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 1,
+        "Version": 11,
+        "Op": "da610582e694117e3f8d2300c3c67ee1:2:0",
+        "Command": "da610582e694117e3f8d2300c3c67ee1:2:0:r1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "da610582e694117e3f8d2300c3c67ee1:1:0": "with_result",
+        "da610582e694117e3f8d2300c3c67ee1:1:1": "abandoned",
+        "da610582e694117e3f8d2300c3c67ee1:2:0": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 1,
+        "Version": 11,
+        "Op": "da610582e694117e3f8d2300c3c67ee1:2:0",
+        "Command": "da610582e694117e3f8d2300c3c67ee1:2:0:r1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "da610582e694117e3f8d2300c3c67ee1:1:0": "with_result",
+        "da610582e694117e3f8d2300c3c67ee1:1:1": "abandoned",
+        "da610582e694117e3f8d2300c3c67ee1:2:0": "abandoned"
+      }
+    },
+    {
+      "step": "complete da610582e694117e3f8d2300c3c67ee1:2:0:2",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 1,
+        "Version": 11,
+        "Op": "da610582e694117e3f8d2300c3c67ee1:2:0",
+        "Command": "da610582e694117e3f8d2300c3c67ee1:2:0:r1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "da610582e694117e3f8d2300c3c67ee1:1:0": "with_result",
+        "da610582e694117e3f8d2300c3c67ee1:1:1": "abandoned",
+        "da610582e694117e3f8d2300c3c67ee1:2:0": "abandoned"
+      }
+    },
+    {
+      "step": "complete da610582e694117e3f8d2300c3c67ee1:2:0:r1:1",
+      "view": {
+        "Status": "compensated",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 0,
+        "Incarnation": 1,
+        "Version": 12,
+        "Op": "",
+        "Command": "",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "da610582e694117e3f8d2300c3c67ee1:1:0": "with_result",
+        "da610582e694117e3f8d2300c3c67ee1:1:1": "abandoned",
+        "da610582e694117e3f8d2300c3c67ee1:2:0": "with_result"
+      }
+    }
+  ],
+  "TestTransitionRulesAreSharedByBothCoordinators/retryable_failures_exhaust_into_compensation,_stale_attempt_ignored": [
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 2,
+        "Op": "0bd06fad8c1e47f16fe7a33010f871c8:1:0",
+        "Command": "0bd06fad8c1e47f16fe7a33010f871c8:1:0:1",
+        "LastError": "",
+        "Data": "",
+        "LateData": ""
+      }
+    },
+    {
+      "step": "complete 0bd06fad8c1e47f16fe7a33010f871c8:1:0:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "0bd06fad8c1e47f16fe7a33010f871c8:1:1",
+        "Command": "0bd06fad8c1e47f16fe7a33010f871c8:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "0bd06fad8c1e47f16fe7a33010f871c8:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 4,
+        "Op": "0bd06fad8c1e47f16fe7a33010f871c8:1:1",
+        "Command": "0bd06fad8c1e47f16fe7a33010f871c8:1:1:1",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "0bd06fad8c1e47f16fe7a33010f871c8:1:0": "with_result"
+      }
+    },
+    {
+      "step": "complete 0bd06fad8c1e47f16fe7a33010f871c8:1:1:1",
+      "view": {
+        "Status": "pending",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 5,
+        "Op": "",
+        "Command": "",
+        "LastError": "busy",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "0bd06fad8c1e47f16fe7a33010f871c8:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 2,
+        "Incarnation": 0,
+        "Version": 6,
+        "Op": "0bd06fad8c1e47f16fe7a33010f871c8:1:1",
+        "Command": "0bd06fad8c1e47f16fe7a33010f871c8:1:1:2",
+        "LastError": "busy",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "0bd06fad8c1e47f16fe7a33010f871c8:1:0": "with_result"
+      }
+    },
+    {
+      "step": "complete 0bd06fad8c1e47f16fe7a33010f871c8:1:1:1",
+      "view": {
+        "Status": "waiting",
+        "Phase": "forward",
+        "Step": 1,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 2,
+        "Incarnation": 0,
+        "Version": 6,
+        "Op": "0bd06fad8c1e47f16fe7a33010f871c8:1:1",
+        "Command": "0bd06fad8c1e47f16fe7a33010f871c8:1:1:2",
+        "LastError": "busy",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "0bd06fad8c1e47f16fe7a33010f871c8:1:0": "with_result"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "compensating",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 0,
+        "Incarnation": 0,
+        "Version": 7,
+        "Op": "",
+        "Command": "",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "0bd06fad8c1e47f16fe7a33010f871c8:1:0": "with_result",
+        "0bd06fad8c1e47f16fe7a33010f871c8:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "due",
+      "view": {
+        "Status": "waiting",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 1,
+        "Late": 0,
+        "Attempt": 1,
+        "Incarnation": 0,
+        "Version": 8,
+        "Op": "0bd06fad8c1e47f16fe7a33010f871c8:2:0",
+        "Command": "0bd06fad8c1e47f16fe7a33010f871c8:2:0:1",
+        "LastError": "step result timeout",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "0bd06fad8c1e47f16fe7a33010f871c8:1:0": "with_result",
+        "0bd06fad8c1e47f16fe7a33010f871c8:1:1": "abandoned"
+      }
+    },
+    {
+      "step": "complete 0bd06fad8c1e47f16fe7a33010f871c8:2:0:1",
+      "view": {
+        "Status": "compensated",
+        "Phase": "compensate",
+        "Step": 0,
+        "Completed": 0,
+        "Late": 0,
+        "Attempt": 0,
+        "Incarnation": 0,
+        "Version": 9,
+        "Op": "",
+        "Command": "",
+        "LastError": "",
+        "Data": "step0",
+        "LateData": ""
+      },
+      "tombstones": {
+        "0bd06fad8c1e47f16fe7a33010f871c8:1:0": "with_result",
+        "0bd06fad8c1e47f16fe7a33010f871c8:1:1": "abandoned",
+        "0bd06fad8c1e47f16fe7a33010f871c8:2:0": "with_result"
+      }
+    }
+  ]
+}

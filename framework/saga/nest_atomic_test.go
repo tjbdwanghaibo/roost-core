@@ -15,8 +15,9 @@ import (
 const sagaNativeTestKind entity.EntityKind = 242
 
 type sagaNativeDAO struct {
-	id      int64
-	tracker dataengine.Tracker
+	receipts map[string][]byte
+	id       int64
+	tracker  dataengine.Tracker
 }
 
 func (dao *sagaNativeDAO) Id() int64                         { return dao.id }
@@ -56,6 +57,38 @@ func (*sagaNativeEntity) ClearBase()                                     {}
 func (*sagaNativeEntity) IsClear() bool                                  { return false }
 func (value *sagaNativeEntity) RangeDao(visit func(entity.DaoInterface)) { visit(value.dao) }
 
+// SagaStepReceipts 让这个实体成为原生步骤的回执宿主：回执写进 DAO 字段（掩码位 2），与业务字段（位 1）同一份文档、同一次提交。
+func (value *sagaNativeEntity) SagaStepReceipts() saga.StepReceipts {
+	return sagaNativeReceipts{value.dao}
+}
+
+type sagaNativeReceipts struct{ dao *sagaNativeDAO }
+
+func (r sagaNativeReceipts) StepReceipt(operation string) ([]byte, bool) {
+	raw, ok := r.dao.receipts[operation]
+	return raw, ok
+}
+
+func (r sagaNativeReceipts) PutStepReceipt(operation string, encoded []byte) {
+	if r.dao.receipts == nil {
+		r.dao.receipts = map[string][]byte{}
+	}
+	r.dao.receipts[operation] = encoded
+	if err := nest.MarkPersist(r.dao, 2); err != nil {
+		panic(err)
+	}
+}
+
+func (r sagaNativeReceipts) DeleteStepReceipt(operation string) { delete(r.dao.receipts, operation) }
+
+func (r sagaNativeReceipts) RangeStepReceipts(f func(string, []byte) bool) {
+	for operation, raw := range r.dao.receipts {
+		if !f(operation, raw) {
+			return
+		}
+	}
+}
+
 type sagaNativeGetter struct{ value entity.IThreadSafeEntity }
 
 func (getter sagaNativeGetter) Get(context.Context, int64, entity.EntityCategory) (entity.IThreadSafeEntity, error) {
@@ -76,7 +109,10 @@ func (committer *sagaNativeCommitter) Commit(_ context.Context, record dataengin
 	return nil
 }
 
-func TestNativeSagaStepCommitsMutationReceiptAndCompletionEffectAtomically(t *testing.T) {
+// 原生步骤的业务修改与这个操作的回执是同一笔 Nest 事务的同一条 CommitRecord（实体里的回执随实体文档一起持久），没有另外的
+// DataEngine 回执或 completion effect；结论在提交之后交给这次运行（AfterCommit），消费者据此把结果发回协调器。
+// 历史：TestNativeSagaStepCommitsMutationReceiptAndCompletionEffectAtomically（旧路径：业务修改 + DataEngine 回执 + completion effect）。
+func TestNativeSagaStepCommitsMutationAndReceiptAtomically(t *testing.T) {
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: sagaNativeTestKind, Category: 1})
 	id, err := entity.BuildEntityID(81, sagaNativeTestKind)
 	if err != nil {
@@ -87,37 +123,42 @@ func TestNativeSagaStepCommitsMutationReceiptAndCompletionEffectAtomically(t *te
 	committer := &sagaNativeCommitter{}
 	nest.ResetHandlersForTest()
 	now := time.Now().UTC()
-	command := saga.Command{ID: "command-1", IdempotencyKey: "operation-1", SagaID: "saga-1", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-1", StepName: "reserve", Phase: saga.PhaseForward, Attempt: 1, Topic: "rally.reserve", CreatedAt: now, DeadlineAt: now.Add(time.Minute)}
+	command := saga.Command{ID: "operation-1:1", IdempotencyKey: "operation-1", SagaID: "saga-1", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-1", StepName: "reserve", Phase: saga.PhaseForward, Attempt: 1, Topic: "rally.reserve", Payload: []byte("state"), CreatedAt: now, DeadlineAt: now.Add(time.Minute)}
+	var current saga.NativeStep
 	handler := nest.NewHandlerName("test_native_saga_dataengine_atomic")
 	nest.MustRegisterHandlerWithMeta(handler, func([]entity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error) {
-		if err := saga.BindCommand(command, now.Add(time.Hour)); err != nil {
+		if replayed, err := current.Begin(value); replayed || err != nil {
 			return nil, err
 		}
 		if err := nest.MarkPersist(dao, 1); err != nil {
 			return nil, err
 		}
-		completion := saga.Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true, Data: []byte("reserved"), CompletedAt: now}
-		return nil, saga.EmitCompletion(completion)
+		return nil, current.Complete(true, "")
 	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
 	engine := nest.NewEngine(nest.NestOptionWithGetter(sagaNativeGetter{value: value}), nest.NestOptionWithTransactionCommitter(committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	if err := engine.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = engine.Shutdown(context.Background()); nest.ResetHandlersForTest() }()
-	if _, err := engine.Request(context.Background(), handler, id, nil); err != nil {
+	outcome, err := saga.RunNativeStep(context.Background(), command, time.Hour, func(ctx context.Context, step saga.NativeStep) error {
+		current = step
+		_, err := engine.Request(ctx, handler, id, nil)
+		return err
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	record := committer.record
-	if len(record.Mutations) != 1 || len(record.Receipts) != 1 || len(record.Effects) != 1 {
-		t.Fatalf("record=%+v", record)
+	if len(record.Mutations) != 1 || len(record.Receipts) != 0 || len(record.Effects) != 0 {
+		t.Fatalf("record=%+v, want one document mutation carrying both the business field and the receipt, no DataEngine receipt or effect", record)
 	}
-	if record.Receipts[0].Namespace != saga.StepReceiptNamespace || record.Receipts[0].ID != command.ID {
-		t.Fatalf("receipt=%+v", record.Receipts[0])
+	if mask := record.Mutations[0].Mask; mask&1 == 0 || mask&2 == 0 {
+		t.Fatalf("mutation mask %b, want the business bit and the receipt bit in the same mutation", mask)
 	}
-	if record.Effects[0].ID != "saga-completion:"+command.ID {
-		t.Fatalf("effect=%+v", record.Effects[0])
+	if _, ok := dao.receipts[command.IdempotencyKey]; !ok {
+		t.Fatal("the receipt was not written into the entity")
 	}
-	if completion, err := saga.DecodeCompletionEffect(record.Receipts[0].Payload); err != nil || completion.CommandID != command.ID {
-		t.Fatalf("receipt completion=%+v err=%v", completion, err)
+	if outcome.Kind != saga.StepExecuted || !outcome.Completion.Success || outcome.Completion.CommandID != command.ID {
+		t.Fatalf("outcome = %+v, want the executed success handed over after the commit", outcome)
 	}
 }

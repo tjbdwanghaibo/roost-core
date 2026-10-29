@@ -11,16 +11,15 @@ import (
 	"testing"
 	"time"
 
+	gonats "github.com/nats-io/nats.go"
+	gojs "github.com/nats-io/nats.go/jetstream"
 	"github.com/spf13/viper"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	engine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
-	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
-	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	ndriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
@@ -29,12 +28,17 @@ import (
 // 拒绝；outbox 非空且不共用控制库拒绝；非终态 saga 拒绝；同一 _id 内容不同整体停止、什么也不写；处置后迁移，重跑
 // 幂等；B 写入之后回退，文档按 B 的当前版本回到 A，B 里新产生的只计数。
 //
-// 资源：ROOST_DATAENGINE_IT_MONGO_URI 指向的副本集上，库名都以 sidmergeit_<pid>_<纳秒> 开头，用后删除。共享隔离环境
+// 资源：ROOST_DATAENGINE_IT_MONGO_URI 指向的副本集上，库名都以 sidmergeit_<pid>_<纳秒> 开头，用后删除；saga 分区日志在
+// ROOST_NATS_CLUSTER_URL 指向的私有集群（scripts/nats-cluster.sh）上，流与桶以同一唯一前缀命名，用后删除。共享隔离环境
 // 下运行时持 remote-acceptance.lock（wiring/scripts/integration/README.md）。
 func TestSidMergeMigratesAndRevertsOnRealMongo(t *testing.T) {
 	uri := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
 	if uri == "" {
 		t.Skip("ROOST_DATAENGINE_IT_MONGO_URI is not set")
+	}
+	natsURL := os.Getenv("ROOST_NATS_CLUSTER_URL")
+	if natsURL == "" {
+		t.Skip("ROOST_NATS_CLUSTER_URL is not set: the saga check reads the partition log (scripts/nats-cluster.sh start)")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -72,13 +76,17 @@ func TestSidMergeMigratesAndRevertsOnRealMongo(t *testing.T) {
 		return dir
 	}
 	walA, walB := emptyWAL(), emptyWAL()
-	redisAddr := redistest.AOFAddr(t)
-	sagaPrefix := redistest.Prefix(t, redisAddr, "sidmergesaga")
+	layout := coresaga.Layout{Prefix: unique + ".saga", Stream: strings.ToUpper(unique) + "_SAGA", Partitions: 1, Groups: 1}
+	t.Cleanup(func() { deleteSagaLayout(t, natsURL, layout) })
 	config := func(main, zone, control string) *viper.Viper {
 		cfg := viper.New()
 		cfg.Set("mongo.uri", uri)
-		cfg.Set("redis_authority.addr", redisAddr)
-		cfg.Set("saga.redis.key_prefix", sagaPrefix)
+		cfg.Set("nats.url", natsURL)
+		cfg.Set("saga.subject_prefix", layout.Prefix)
+		cfg.Set("saga.stream", layout.Stream)
+		cfg.Set("saga.partitions", 1)
+		cfg.Set("saga.stream_groups", 1)
+		cfg.Set("saga.coordinators", []string{"1000"})
 		cfg.Set("dataengine.databases", map[string]any{"main": main, "zone": zone})
 		cfg.Set("dataengine.database", control)
 		cfg.Set("saga.database", names.saga)
@@ -142,51 +150,47 @@ func TestSidMergeMigratesAndRevertsOnRealMongo(t *testing.T) {
 	if _, err := client.Database(names.controlA).Collection(engine.OutboxCollection).DeleteMany(ctx, bson.D{}); err != nil {
 		t.Fatal(err)
 	}
-	// 3. 非终态 saga：拒绝；全部终态但权威 Redis 上还有没投影进冷副本的日志：同样拒绝。
-	sagaClient, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
+	// 3. 非终态 saga：拒绝；全部终态：通过（离线重放分区日志，协调器已停）。
+	assembly, err := ndriver.Assemble(fnats.DefaultConfig(natsURL), ndriver.ClientOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = sagaClient.Close(context.Background()) }()
-	copy, err := coresaga.NewMongoStore(sagaClient, coresaga.MongoStoreOptions{Database: names.saga})
-	if err != nil {
-		t.Fatal(err)
-	}
-	authority, err := redisdriver.NewClient(fredis.DefaultConfig(redisAddr))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = authority.Close() }()
-	sagas, err := coresaga.NewRedisStore(authority, copy, nil, coresaga.RedisStoreOptions{KeyPrefix: sagaPrefix})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sagas.EnsureInfrastructure(ctx); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC()
-	pending := coresaga.Record{ID: "gift1", Type: "gift_item", DefinitionVersion: 1, BusinessKey: "gift-1", Status: coresaga.StatusPending,
-		Phase: coresaga.PhaseForward, Version: 1, NextRunAt: now, CreatedAt: now, UpdatedAt: now}
-	if err := sagas.Create(ctx, pending); err != nil {
-		t.Fatal(err)
-	}
-	report, err = DryRun(ctx, plan(names.main, names.controlB))
-	expectFail(report, err, "saga:"+names.saga)
-	clearSagas := func() {
+	defer func() { _ = assembly.Close(context.Background()) }()
+	oneStep := coresaga.Definition{Type: "gift_item", Version: 1, Steps: []coresaga.Step{{Name: "deliver", ForwardTopic: "gift_item.deliver", CompensateTopic: "gift_item.deliver.compensate", Timeout: time.Hour, MaxAttempts: 1, BackoffMin: time.Second, BackoffMax: time.Second}}}
+	coordinator := func() *coresaga.Engine {
 		t.Helper()
-		if _, err := redistest.DeleteKeys(ctx, redisAddr, sagaPrefix); err != nil {
+		e, err := coresaga.NewEngine(assembly.Log, assembly.Client, coresaga.Options{Layout: layout, Owned: []int{0}, Replicas: 1, Admission: coresaga.AdmissionOptions{}})
+		if err != nil {
 			t.Fatal(err)
 		}
+		if err := e.Register(oneStep); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		return e
 	}
-	clearSagas()
-	done := coresaga.Record{ID: "gift2", Type: "gift_item", DefinitionVersion: 1, BusinessKey: "gift-2", Status: coresaga.StatusCompleted,
-		Phase: coresaga.PhaseForward, CompletedSteps: 1, Version: 3, CreatedAt: now, UpdatedAt: now}
-	if err := sagas.Create(ctx, done); err != nil {
+	sagas := coordinator()
+	waiting, err := sagas.StartSaga(ctx, coresaga.StartRequest{Type: "gift_item", DefinitionVersion: 1, BusinessKey: "gift-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sagas.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
 	report, err = DryRun(ctx, plan(names.main, names.controlB))
-	expectFail(report, err, "saga:"+names.saga)
-	clearSagas()
+	expectFail(report, err, "saga:"+layout.Stream)
+	sagas = coordinator()
+	if err := sagas.Complete(ctx, coresaga.Completion{CommandID: waiting.CommandID, IdempotencyKey: waiting.OperationKey, SagaID: waiting.ID, Success: true}); err != nil {
+		t.Fatal(err)
+	}
+	if final, err := sagas.WaitTerminal(ctx, waiting.ID); err != nil || final.Status != coresaga.StatusCompleted {
+		t.Fatalf("precondition: the saga did not complete: %+v %v", final, err)
+	}
+	if err := sagas.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
 	// 4. 同一常量 ID、内容不同：整体停止，迁移什么也不写。
 	merge := plan(names.main, names.controlB)
 	_, _, err = Migrate(ctx, merge)
@@ -252,4 +256,27 @@ func TestSidMergeMigratesAndRevertsOnRealMongo(t *testing.T) {
 	if again, err := Revert(ctx, merge, manifest); !errors.Is(err, ErrNotReady) || len(again.Missing) != 3 || again.Reverted != 0 {
 		t.Fatalf("a second revert = %+v, %v", again, err)
 	}
+}
+
+// deleteSagaLayout 删掉用例私有布局的流与桶（私有集群）。
+func deleteSagaLayout(t *testing.T, url string, layout coresaga.Layout) {
+	nc, err := gonats.Connect(url, gonats.Timeout(2*time.Second))
+	if err != nil {
+		t.Logf("cleanup: connect: %v", err)
+		return
+	}
+	defer nc.Close()
+	js, err := gojs.New(nc)
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for _, name := range layout.Streams() {
+		_ = js.DeleteStream(ctx, name)
+	}
+	for _, bucket := range []string{layout.SnapshotBucket(), layout.LoadBucket()} {
+		_ = js.DeleteKeyValue(ctx, bucket)
+	}
+	_ = js.DeleteObjectStore(ctx, layout.ObjectBucket())
 }

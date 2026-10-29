@@ -3,296 +3,36 @@ package saga
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sync"
 	"testing"
 	"time"
-
-	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
-type memoryStore struct {
-	mu       sync.Mutex
-	records  map[string]Record
-	keys     map[string]string
-	outbox   map[string]OutboxRecord
-	receipts map[string]Completion
-	closed   map[string]string
-	// closures 记 tombstone 的关闭方式（U-0280），与 MongoStore 的 operationDoc.Closure 对应。
-	closures map[string]OperationClosure
-	// lateAlarms 记 tombstone 上已告警的（操作，代际）（B1），与 MongoStore 的 operationDoc.LateAlarms 对应。
-	lateAlarms map[string]bool
-}
-
-func newMemoryStore() *memoryStore {
-	return &memoryStore{records: map[string]Record{}, keys: map[string]string{}, outbox: map[string]OutboxRecord{}, receipts: map[string]Completion{}, closed: map[string]string{}, closures: map[string]OperationClosure{}, lateAlarms: map[string]bool{}}
-}
-func (s *memoryStore) MarkLateSuccessAlarm(_ context.Context, completion Completion, incarnation uint32) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed[completion.IdempotencyKey] != completion.SagaID {
-		return false, nil
-	}
-	key := fmt.Sprintf("%s/r%d", completion.IdempotencyKey, incarnation)
-	if s.lateAlarms[key] {
-		return false, nil
-	}
-	s.lateAlarms[key] = true
-	return true, nil
-}
-func (s *memoryStore) Create(_ context.Context, r Record) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key := r.Type + "/" + r.BusinessKey
-	if _, ok := s.keys[key]; ok {
-		return ErrAlreadyExists
-	}
-	s.records[r.ID] = r.Clone()
-	s.keys[key] = r.ID
-	return nil
-}
-func (s *memoryStore) Get(_ context.Context, id string) (Record, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r, ok := s.records[id]
-	if !ok {
-		return Record{}, ErrNotFound
-	}
-	return r.Clone(), nil
-}
-func (s *memoryStore) GetByBusinessKey(_ context.Context, typ, key string) (Record, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	id, ok := s.keys[typ+"/"+key]
-	if !ok {
-		return Record{}, ErrNotFound
-	}
-	return s.records[id].Clone(), nil
-}
-func (s *memoryStore) List(_ context.Context, q Query) ([]Record, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]Record, 0, min(q.Limit, len(s.records)))
-	for _, r := range s.records {
-		if q.Type != "" && r.Type != q.Type {
-			continue
-		}
-		if q.DefinitionVersion != 0 && r.DefinitionVersion != q.DefinitionVersion {
-			continue
-		}
-		if len(q.Statuses) > 0 {
-			matched := false
-			for _, status := range q.Statuses {
-				matched = matched || r.Status == status
-			}
-			if !matched {
-				continue
-			}
-		}
-		if !q.UpdatedBefore.IsZero() && !r.UpdatedAt.Before(q.UpdatedBefore) {
-			continue
-		}
-		out = append(out, r.Clone())
-		if len(out) >= q.Limit {
-			break
-		}
-	}
-	return out, nil
-}
-func (s *memoryStore) CompletionRecorded(ctx context.Context, completion Completion) (bool, error) {
-	history, err := s.CompletionHistory(ctx, completion)
-	return history.Recorded, err
-}
-func (s *memoryStore) CompletionHistory(_ context.Context, completion Completion) (CompletionHistory, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	prior, ok := s.receipts[completion.CommandID]
-	if !ok {
-		if sagaID, closed := s.closed[completion.IdempotencyKey]; closed {
-			if sagaID != completion.SagaID {
-				return CompletionHistory{}, ErrIdentityConflict
-			}
-			return CompletionHistory{Recorded: true, Closure: s.closures[completion.IdempotencyKey]}, nil
-		}
-		return CompletionHistory{}, nil
-	}
-	if prior.Success != completion.Success || prior.Retryable != completion.Retryable || prior.Error != completion.Error || string(prior.Data) != string(completion.Data) {
-		return CompletionHistory{}, ErrIdentityConflict
-	}
-	return CompletionHistory{Recorded: true, Receipt: true}, nil
-}
-func (s *memoryStore) ClaimDue(_ context.Context, q ClaimRequest) ([]Record, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]Record, 0, q.Limit)
-	for id, r := range s.records {
-		if len(out) >= q.Limit {
-			break
-		}
-		if r.Status.Terminal() || r.NextRunAt.After(q.Now) || (!r.Lease.Until.IsZero() && r.Lease.Until.After(q.Now)) {
-			continue
-		}
-		r.Lease = Lease{Owner: q.Owner, Token: r.Lease.Token + 1, Until: q.Now.Add(q.LeaseDuration)}
-		s.records[id] = r
-		out = append(out, r.Clone())
-	}
-	return out, nil
-}
-func (s *memoryStore) Apply(_ context.Context, q ApplyRequest) (ApplyOutcome, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	current, ok := s.records[q.After.ID]
-	if !ok {
-		return 0, ErrNotFound
-	}
-	if current.Version != q.ExpectedVersion {
-		return 0, ErrConflict
-	}
-	if q.ExpectedLease.Owner != "" && (current.Lease.Owner != q.ExpectedLease.Owner || current.Lease.Token != q.ExpectedLease.Token) {
-		return 0, ErrConflict
-	}
-	if q.Receipt != nil {
-		if prior, ok := s.receipts[q.Receipt.CommandID]; ok {
-			if prior.Success != q.Receipt.Success || prior.Retryable != q.Receipt.Retryable || prior.Error != q.Receipt.Error || string(prior.Data) != string(q.Receipt.Data) {
-				return 0, ErrIdentityConflict
-			}
-			return ApplyDuplicate, nil
-		}
-	}
-	s.records[q.After.ID] = q.After.Clone()
-	if q.Outbox != nil {
-		for id, pending := range s.outbox {
-			if pending.Command.IdempotencyKey == q.Outbox.Command.IdempotencyKey {
-				delete(s.outbox, id)
-			}
-		}
-		s.outbox[q.Outbox.Command.ID] = q.Outbox.Clone()
-	}
-	if q.Receipt != nil {
-		s.receipts[q.Receipt.CommandID] = *q.Receipt
-	}
-	if q.CloseOperation != "" {
-		if q.Receipt != nil && q.Receipt.Success {
-			s.closures[q.CloseOperation] = OperationClosedWithResult
-		} else if _, already := s.closed[q.CloseOperation]; !already {
-			s.closures[q.CloseOperation] = OperationAbandoned
-		}
-		s.closed[q.CloseOperation] = q.After.ID
-		for id, item := range s.outbox {
-			if item.Command.IdempotencyKey == q.CloseOperation {
-				delete(s.outbox, id)
-			}
-		}
-	}
-	return ApplyApplied, nil
-}
-func (s *memoryStore) ClaimOutbox(_ context.Context, q ClaimRequest) ([]OutboxRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]OutboxRecord, 0, q.Limit)
-	for id, r := range s.outbox {
-		if len(out) >= q.Limit {
-			break
-		}
-		if r.NextAttemptAt.After(q.Now) || (!r.Lease.Until.IsZero() && r.Lease.Until.After(q.Now)) {
-			continue
-		}
-		r.Lease = Lease{Owner: q.Owner, Token: r.Lease.Token + 1, Until: q.Now.Add(q.LeaseDuration)}
-		s.outbox[id] = r
-		out = append(out, r.Clone())
-	}
-	return out, nil
-}
-
-// AckOutbox / NackOutbox 与正式存储同一口径：命令已被关闭操作或新尝试删掉时返回 nil，租约不符才是 ErrConflict。
-func (s *memoryStore) AckOutbox(_ context.Context, id string, l Lease) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r, ok := s.outbox[id]
-	if !ok {
-		return nil
-	}
-	if r.Lease.Owner != l.Owner || r.Lease.Token != l.Token {
-		return ErrConflict
-	}
-	delete(s.outbox, id)
-	return nil
-}
-func (s *memoryStore) NackOutbox(_ context.Context, id string, l Lease, next time.Time, last string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r, ok := s.outbox[id]
-	if !ok {
-		return nil
-	}
-	if r.Lease.Owner != l.Owner || r.Lease.Token != l.Token {
-		return ErrConflict
-	}
-	r.Attempt++
-	r.NextAttemptAt = next
-	r.Lease = Lease{}
-	s.outbox[id] = r
-	return nil
-}
+// 协调器外观的承诺：正向推进、倒序补偿、启动身份（业务键 + 启动摘要）、定义版本、缺定义 fence、结果去重、可重试失败的新尝试、
+// 协调器时钟、截止后的成功进入补偿、Resume 的截止策略与新一生的 CommandID。驱动是 simEngine（单元分区，见
+// jetstream_coordinator_test.go）：每个操作是一轮判定 + 提交，到期由用例推进时钟触发。
+// 历史：Redis 协调器（内存 Store + 后台循环）上的同名用例，第 4 批换驱动、断言不变（设计 §11.1）。
 
 func testDefinition() Definition {
 	return Definition{Type: "rally", Version: 1, Steps: []Step{{Name: "reserve", ForwardTopic: "reserve", CompensateTopic: "reserve.cancel", Timeout: time.Second, MaxAttempts: 2, BackoffMin: time.Millisecond, BackoffMax: 10 * time.Millisecond}, {Name: "march", ForwardTopic: "march", CompensateTopic: "march.cancel", Timeout: time.Second, MaxAttempts: 2, BackoffMin: time.Millisecond, BackoffMax: 10 * time.Millisecond}}}
 }
 
-func newTestEngine(t *testing.T) (*Engine, *memoryStore, <-chan Command, context.CancelFunc) {
-	t.Helper()
-	store := newMemoryStore()
-	commands := make(chan Command, 16)
-	options := DefaultOptions()
-	options.CoordinatorWorkers = 1
-	options.PublisherWorkers = 1
-	options.PollInterval = time.Millisecond
-	options.LeaseDuration = time.Second
-	options.StoreTimeout = 100 * time.Millisecond
-	options.PublishTimeout = 100 * time.Millisecond
-	engine, err := NewEngine(store, PublishFunc(func(_ context.Context, c Command) error { commands <- c; return nil }), options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := engine.Register(testDefinition()); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { _ = engine.Run(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
-		defer stopCancel()
-		_ = engine.Stop(stopCtx)
-	})
-	return engine, store, commands, cancel
-}
-
-func waitCommand(t *testing.T, commands <-chan Command) Command {
-	t.Helper()
-	select {
-	case command := <-commands:
-		return command
-	case <-time.After(2 * time.Second):
-		t.Fatal("command timeout")
-		return Command{}
-	}
-}
+// backoffPassed 长于 testDefinition 的最大退避（10ms），推进它之后重试的下一次尝试一定已到期。
+const backoffPassed = 20 * time.Millisecond
 
 func TestEngineCompletesForwardSteps(t *testing.T) {
-	engine, _, commands, _ := newTestEngine(t)
+	engine := newSimEngine(t, nil)
 	record, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "r-1", Data: []byte("initial")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := waitCommand(t, commands)
+	first := engine.waitCommand()
 	if first.Step != 0 || first.Phase != PhaseForward {
 		t.Fatalf("unexpected first command: %+v", first)
 	}
 	if _, err = engine.Complete(context.Background(), Completion{CommandID: first.ID, IdempotencyKey: first.IdempotencyKey, SagaID: record.ID, Success: true, Data: []byte("reserved")}); err != nil {
 		t.Fatal(err)
 	}
-	second := waitCommand(t, commands)
+	second := engine.waitCommand()
 	if second.Step != 1 || string(second.Payload) != "reserved" {
 		t.Fatalf("unexpected second command: %+v", second)
 	}
@@ -305,23 +45,45 @@ func TestEngineCompletesForwardSteps(t *testing.T) {
 	}
 }
 
+// 一笔两步正向 saga 在日志里写几条事件（取代 Redis 协调器的“每笔脚本往返数”）：启动 + 派发第 0 步合成一条，接收结果 + 派发第 1 步
+// 一条，接收结果到 Completed 一条——每次推进恰好一条事件，命令就在事件里，没有另外的 outbox 写。
+func TestATwoStepSagaWritesOneEventPerTransition(t *testing.T) {
+	engine := newSimEngine(t, nil)
+	record, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "events"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		command := engine.waitCommand()
+		if _, err := engine.Complete(context.Background(), Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: record.ID, Success: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := engine.e.Stats().Events; got != 3 || len(engine.events) != 3 {
+		t.Fatalf("events = %d (%d decoded), want 3: start+dispatch, result+dispatch, result→completed", got, len(engine.events))
+	}
+	if engine.events[2].Saga.Record.Status != StatusCompleted || engine.events[0].Command == nil || engine.events[1].Command == nil || engine.events[2].Command != nil {
+		t.Fatalf("event shapes = %+v", engine.events)
+	}
+}
+
 func TestEngineCompensatesInReverseOrder(t *testing.T) {
-	engine, _, commands, _ := newTestEngine(t)
+	engine := newSimEngine(t, nil)
 	record, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "r-2"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := waitCommand(t, commands)
+	first := engine.waitCommand()
 	_, err = engine.Complete(context.Background(), Completion{CommandID: first.ID, IdempotencyKey: first.IdempotencyKey, SagaID: record.ID, Success: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second := waitCommand(t, commands)
+	second := engine.waitCommand()
 	_, err = engine.Complete(context.Background(), Completion{CommandID: second.ID, IdempotencyKey: second.IdempotencyKey, SagaID: record.ID, Success: false, Retryable: false, Error: "world rejected"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	compensate := waitCommand(t, commands)
+	compensate := engine.waitCommand()
 	if compensate.Step != 0 || compensate.Phase != PhaseCompensate || compensate.Topic != "reserve.cancel" {
 		t.Fatalf("unexpected compensation: %+v", compensate)
 	}
@@ -335,7 +97,7 @@ func TestEngineCompensatesInReverseOrder(t *testing.T) {
 }
 
 func TestStartSagaIsIdempotentByBusinessKey(t *testing.T) {
-	engine, _, _, _ := newTestEngine(t)
+	engine := newSimEngine(t, nil)
 	one, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "same"})
 	if err != nil {
 		t.Fatal(err)
@@ -350,7 +112,7 @@ func TestStartSagaIsIdempotentByBusinessKey(t *testing.T) {
 }
 
 func TestStartSagaRejectsBusinessKeyWithDifferentIntent(t *testing.T) {
-	engine, _, _, _ := newTestEngine(t)
+	engine := newSimEngine(t, nil)
 	if _, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "identity", Data: []byte("one")}); err != nil {
 		t.Fatal(err)
 	}
@@ -360,18 +122,18 @@ func TestStartSagaRejectsBusinessKeyWithDifferentIntent(t *testing.T) {
 }
 
 func TestDefinitionVersionsRunSideBySideAndArePartOfIdentity(t *testing.T) {
-	engine, _, commands, _ := newTestEngine(t)
+	engine := newSimEngine(t, nil)
 	v2 := testDefinition()
 	v2.Version = 2
 	v2.Steps[0].ForwardTopic = "reserve.v2"
-	if err := engine.Register(v2); err != nil {
+	if err := engine.e.Register(v2); err != nil {
 		t.Fatal(err)
 	}
 	record, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 2, BusinessKey: "versioned"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := waitCommand(t, commands)
+	command := engine.waitCommand()
 	if record.DefinitionVersion != 2 || command.DefinitionVersion != 2 || command.Topic != "reserve.v2" {
 		t.Fatalf("record=%+v command=%+v", record, command)
 	}
@@ -381,26 +143,18 @@ func TestDefinitionVersionsRunSideBySideAndArePartOfIdentity(t *testing.T) {
 }
 
 func TestMissingDefinitionVersionIsFencedForManualRepair(t *testing.T) {
-	engine, store, _, _ := newTestEngine(t)
-	now := time.Now().UTC()
-	record := Record{ID: "missing-version", Type: "rally", DefinitionVersion: 99, BusinessKey: "missing-version", Status: StatusPending, Phase: PhaseForward, Version: 1, NextRunAt: now, CreatedAt: now, UpdatedAt: now}
-	if err := store.Create(context.Background(), record); err != nil {
-		t.Fatal(err)
+	engine := newSimEngine(t, nil)
+	now := engine.clock.Now()
+	id := IDOf("rally", "missing-version")
+	engine.seed(Record{ID: id, Type: "rally", DefinitionVersion: 99, BusinessKey: "missing-version", Status: StatusPending, Phase: PhaseForward, Version: 1, NextRunAt: now, CreatedAt: now, UpdatedAt: now})
+	engine.advance(0)
+	if current, err := engine.Get(context.Background(), id); err != nil || current.Status != StatusManualRequired {
+		t.Fatalf("missing definition was not fenced: %+v %v", current, err)
 	}
-	engine.signal(engine.dueKick)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		current, err := store.Get(context.Background(), record.ID)
-		if err == nil && current.Status == StatusManualRequired {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("missing definition was not fenced")
 }
 
 func TestStartSagaIdentityUsesStorageSafeDeadlinePrecision(t *testing.T) {
-	engine, _, _, _ := newTestEngine(t)
+	engine := newSimEngine(t, nil)
 	deadline := time.Date(2026, 8, 24, 20, 0, 0, 987654321, time.FixedZone("test", 8*60*60))
 	one, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "deadline-precision", DeadlineAt: deadline})
 	if err != nil {
@@ -437,47 +191,18 @@ func TestNestStartEffectHasStableIdentity(t *testing.T) {
 	}
 }
 
-func TestNestCompletionEffectHasStableCommandIdentityAndWireVersion(t *testing.T) {
-	completion := Completion{CommandID: "command-1", IdempotencyKey: "operation-1", SagaID: "saga-1", Success: true, Data: []byte("done")}
-	effect, err := NewCompletionEffect(completion)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if effect.ID != "saga-completion:command-1" || effect.Topic != "saga.result.saga-1" {
-		t.Fatalf("effect=%+v", effect)
-	}
-	decoded, err := DecodeCompletionEffect(effect.Payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decoded.CommandID != completion.CommandID || string(decoded.Data) != "done" {
-		t.Fatalf("decoded=%+v", decoded)
-	}
-}
-
-func TestBindCommandRequiresActiveNestTransactionAndCallerTTL(t *testing.T) {
-	now := time.Now().UTC()
-	command := Command{ID: "command-1", IdempotencyKey: "operation-1", SagaID: "saga-1", SagaType: "rally", DefinitionVersion: 1, BusinessKey: "r-1", StepName: "reserve", Phase: PhaseForward, Attempt: 1, Topic: "rally.reserve", CreatedAt: now, DeadlineAt: now.Add(time.Minute)}
-	if err := BindCommand(command, now.Add(time.Hour)); !errors.Is(err, nest.ErrTransactionClosed) {
-		t.Fatalf("err=%v", err)
-	}
-	if err := BindCommand(command, time.Time{}); !errors.Is(err, nest.ErrTransactionClosed) {
-		t.Fatalf("zero expiry err=%v", err)
-	}
-}
-
 func TestLateDuplicateCompletionIsAcknowledgedAfterNextStep(t *testing.T) {
-	engine, _, commands, _ := newTestEngine(t)
+	engine := newSimEngine(t, nil)
 	record, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "late"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := waitCommand(t, commands)
+	first := engine.waitCommand()
 	completion := Completion{CommandID: first.ID, IdempotencyKey: first.IdempotencyKey, SagaID: record.ID, Success: true, Data: []byte("reserved")}
 	if _, err = engine.Complete(context.Background(), completion); err != nil {
 		t.Fatal(err)
 	}
-	_ = waitCommand(t, commands)
+	_ = engine.waitCommand()
 	if _, err = engine.Complete(context.Background(), completion); err != nil {
 		t.Fatalf("late duplicate was not acknowledged: %v", err)
 	}
@@ -489,16 +214,17 @@ func TestLateDuplicateCompletionIsAcknowledgedAfterNextStep(t *testing.T) {
 }
 
 func TestRetryableCompletionCreatesNewDeliveryForSameOperation(t *testing.T) {
-	engine, _, commands, _ := newTestEngine(t)
+	engine := newSimEngine(t, nil)
 	record, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "retry"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := waitCommand(t, commands)
+	first := engine.waitCommand()
 	if _, err = engine.Complete(context.Background(), Completion{CommandID: first.ID, IdempotencyKey: first.IdempotencyKey, SagaID: record.ID, Success: false, Retryable: true, Error: "busy"}); err != nil {
 		t.Fatal(err)
 	}
-	second := waitCommand(t, commands)
+	engine.advance(backoffPassed)
+	second := engine.waitCommand()
 	if second.ID == first.ID || second.IdempotencyKey != first.IdempotencyKey || second.Attempt != 2 {
 		t.Fatalf("unexpected retry: first=%+v second=%+v", first, second)
 	}
@@ -511,58 +237,78 @@ func TestRetryableCompletionCreatesNewDeliveryForSameOperation(t *testing.T) {
 	}
 }
 
+// 接收可重试失败只把记录放回退避（Pending、同一步、NextRunAt 在未来、没有 CommandID），不在同一轮派发下一次尝试。
+// 历史：Redis 协调器的 TestCompleteDoesNotFoldRetryBackoff（当时断言 outbox 里只有一条命令）。
+func TestCompleteDoesNotFoldRetryBackoff(t *testing.T) {
+	engine := newSimEngine(t, nil)
+	record, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "backoff"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := engine.waitCommand()
+	after, err := engine.Complete(context.Background(), Completion{CommandID: first.ID, IdempotencyKey: first.IdempotencyKey, SagaID: record.ID, Retryable: true, Error: "try again"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != StatusPending || after.Step != 0 || after.Attempt != 1 || !after.NextRunAt.After(after.UpdatedAt) || after.CommandID != "" {
+		t.Fatalf("after a retryable failure: %+v; want Pending on the same step with a future NextRunAt", after)
+	}
+	if len(engine.commands) != 0 {
+		t.Fatalf("%d commands dispatched in the result's round; the backoff must not queue the next attempt", len(engine.commands))
+	}
+}
+
 func TestCompletionCannotInjectRemoteClockIntoState(t *testing.T) {
-	engine, _, commands, _ := newTestEngine(t)
+	engine := newSimEngine(t, nil)
 	record, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "clock"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := waitCommand(t, commands)
+	command := engine.waitCommand()
 	after, err := engine.Complete(context.Background(), Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: record.ID, Success: true, CompletedAt: time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.UpdatedAt.After(time.Now().Add(time.Minute)) {
+	if after.UpdatedAt.After(engine.clock.Now().Add(time.Minute)) {
 		t.Fatalf("remote clock entered coordinator state: %s", after.UpdatedAt)
 	}
 }
 
 func TestLateSuccessfulStepIsIncludedInCompensation(t *testing.T) {
-	engine, _, commands, _ := newTestEngine(t)
-	record, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "deadline", DeadlineAt: time.Now().Add(50 * time.Millisecond)})
+	engine := newSimEngine(t, nil)
+	record, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "deadline", DeadlineAt: engine.clock.Now().Add(50 * time.Millisecond)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := waitCommand(t, commands)
-	time.Sleep(60 * time.Millisecond)
+	first := engine.waitCommand()
+	engine.clock.Advance(60 * time.Millisecond)
 	after, err := engine.Complete(context.Background(), Completion{CommandID: first.ID, IdempotencyKey: first.IdempotencyKey, SagaID: record.ID, Success: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.Status != StatusCompensating || after.CompletedSteps != 1 || after.Step != 0 {
+	if !compensatingStep(after, 0) || after.CompletedSteps != 1 {
 		t.Fatalf("late success escaped compensation: %+v", after)
 	}
-	command := waitCommand(t, commands)
+	command := engine.waitCommand()
 	if command.Phase != PhaseCompensate {
 		t.Fatalf("command=%+v", command)
 	}
 }
 
 func TestResumeRequiresExplicitExpiredDeadlinePolicy(t *testing.T) {
-	engine, store, _, _ := newTestEngine(t)
-	now := time.Now().UTC()
-	record := Record{ID: "expired", Type: "rally", DefinitionVersion: 1, BusinessKey: "expired", Status: StatusFailed, Phase: PhaseForward, Step: 0, Version: 1, DeadlineAt: now.Add(-time.Minute), CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Minute)}
-	if err := store.Create(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := engine.Resume(context.Background(), ResumeRequest{ID: record.ID, Now: now}); !errors.Is(err, ErrDeadlineExpired) {
+	engine := newSimEngine(t, nil)
+	now := engine.clock.Now()
+	id := IDOf("rally", "expired")
+	engine.seed(Record{ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "expired", Status: StatusFailed, Phase: PhaseForward, Step: 0, Version: 1, DeadlineAt: now.Add(-time.Minute), CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Minute)})
+	if _, err := engine.Resume(context.Background(), ResumeRequest{ID: id, Now: now}); !errors.Is(err, ErrDeadlineExpired) {
 		t.Fatalf("err=%v", err)
 	}
-	resumed, err := engine.Resume(context.Background(), ResumeRequest{ID: record.ID, Now: now, ClearDeadline: true})
+	resumed, err := engine.Resume(context.Background(), ResumeRequest{ID: id, Now: now, ClearDeadline: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resumed.Status != StatusPending || !resumed.DeadlineAt.IsZero() {
+	// 分区在 Resume 的同一轮里派发到期的第 0 步，所以判定回复带的记录已经在等它（Redis 协调器回复的是派发前的 Pending）。
+	if resumed.Status != StatusWaiting || resumed.Step != 0 || !resumed.DeadlineAt.IsZero() {
 		t.Fatalf("resumed=%+v", resumed)
 	}
 }
@@ -572,12 +318,12 @@ func TestResumeMintsCommandIDsDisjointFromPreviousLife(t *testing.T) {
 	// the same CommandID as the first attempt of the failed life. A stale
 	// completion receipt under that ID then blocked the resumed operation as
 	// a false duplicate. Incarnation keeps every life's identifiers disjoint.
-	engine, _, commands, _ := newTestEngine(t)
+	engine := newSimEngine(t, nil)
 	record, err := engine.StartSaga(context.Background(), StartRequest{Type: "rally", DefinitionVersion: 1, BusinessKey: "resume-ids"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := waitCommand(t, commands)
+	first := engine.waitCommand()
 	failed, err := engine.Complete(context.Background(), Completion{CommandID: first.ID, IdempotencyKey: first.IdempotencyKey, SagaID: record.ID, Success: false, Error: "boom"})
 	if err != nil {
 		t.Fatal(err)
@@ -593,7 +339,7 @@ func TestResumeMintsCommandIDsDisjointFromPreviousLife(t *testing.T) {
 	if resumed.Incarnation != 1 {
 		t.Fatalf("expected incarnation 1, got %d", resumed.Incarnation)
 	}
-	redispatched := waitCommand(t, commands)
+	redispatched := engine.waitCommand()
 	if redispatched.ID == first.ID {
 		t.Fatalf("resumed dispatch reused CommandID %q from the failed life", first.ID)
 	}
@@ -631,91 +377,3 @@ func TestDefinitionRejectsUnsafeTransportSubject(t *testing.T) {
 		t.Fatal("empty subject token accepted")
 	}
 }
-
-func TestStartSagaRejectsUnsafeExplicitID(t *testing.T) {
-	engine, _, _, _ := newTestEngine(t)
-	if _, err := engine.StartSaga(context.Background(), StartRequest{ID: "bad.>", Type: "rally", DefinitionVersion: 1, BusinessKey: "unsafe-id"}); !errors.Is(err, ErrInvalidRecord) {
-		t.Fatalf("err=%v", err)
-	}
-}
-
-func TestStoreContractClosesOperationAndRemovesStaleOutbox(t *testing.T) {
-	store := newMemoryStore()
-	now := time.Now()
-	record := Record{ID: "s", Type: "t", DefinitionVersion: 1, BusinessKey: "b", Status: StatusWaiting, Phase: PhaseForward, Step: 0, Attempt: 2, Version: 1, OperationKey: "op", CommandID: "op:2", NextRunAt: now, CreatedAt: now, UpdatedAt: now}
-	if err := store.Create(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
-	store.outbox["old"] = OutboxRecord{Command: Command{ID: "old", IdempotencyKey: "op"}}
-	store.outbox["other"] = OutboxRecord{Command: Command{ID: "other", IdempotencyKey: "other"}}
-	after := record
-	after.Version = 2
-	after.Status = StatusCompleted
-	after.OperationKey = ""
-	after.CommandID = ""
-	after.NextRunAt = time.Time{}
-	if _, err := store.Apply(context.Background(), ApplyRequest{ExpectedVersion: 1, After: after, CloseOperation: "op"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := store.outbox["old"]; ok {
-		t.Fatal("stale outbox survived operation close")
-	}
-	if _, ok := store.outbox["other"]; !ok {
-		t.Fatal("unrelated outbox was removed")
-	}
-}
-
-func TestStoreContractNewAttemptSupersedesQueuedAttempt(t *testing.T) {
-	store := newMemoryStore()
-	now := time.Now().UTC()
-	record := Record{ID: "s", Type: "t", DefinitionVersion: 1, BusinessKey: "b", Status: StatusPending, Phase: PhaseForward, Step: 0, Version: 1, NextRunAt: now, CreatedAt: now, UpdatedAt: now}
-	if err := store.Create(context.Background(), record); err != nil {
-		t.Fatal(err)
-	}
-	store.outbox["op:1"] = OutboxRecord{Command: Command{ID: "op:1", IdempotencyKey: "op"}}
-	after := record
-	after.Version++
-	after.Status = StatusWaiting
-	after.Attempt = 2
-	after.OperationKey = "op"
-	after.CommandID = "op:2"
-	_, err := store.Apply(context.Background(), ApplyRequest{ExpectedVersion: record.Version, After: after, Outbox: &OutboxRecord{Command: Command{ID: "op:2", IdempotencyKey: "op"}, NextAttemptAt: now, CreatedAt: now}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, exists := store.outbox["op:1"]; exists {
-		t.Fatal("superseded attempt remains queued")
-	}
-	if _, exists := store.outbox["op:2"]; !exists {
-		t.Fatal("new attempt was not queued")
-	}
-}
-
-func BenchmarkNewID(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		if id := NewID(); len(id) != 32 {
-			b.Fatal(id)
-		}
-	}
-}
-func BenchmarkMemoryStoreApply(b *testing.B) {
-	store := newMemoryStore()
-	now := time.Now()
-	r := Record{ID: "id", Type: "t", DefinitionVersion: 1, BusinessKey: "k", Status: StatusPending, Phase: PhaseForward, Version: 1, CreatedAt: now, UpdatedAt: now, NextRunAt: now}
-	if err := store.Create(context.Background(), r); err != nil {
-		b.Fatal(err)
-	}
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		current, _ := store.Get(context.Background(), "id")
-		after := current
-		after.Version++
-		after.UpdatedAt = now
-		if _, err := store.Apply(context.Background(), ApplyRequest{ExpectedVersion: current.Version, After: after}); err != nil {
-			b.Fatal(fmt.Errorf("apply: %w", err))
-		}
-	}
-}
-
-var _ Store = (*memoryStore)(nil)
-var _ = errors.Is

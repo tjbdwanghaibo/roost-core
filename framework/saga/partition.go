@@ -204,6 +204,9 @@ func (r *round) verdict(reply, attempt, outcome string, configure func(*pendingV
 
 func (r *round) rejectInput(kind, reason string, err error) {
 	r.counts.rejectedInputs++
+	if hook := r.p.e.hooks.rejectedInput; hook != nil {
+		hook(kind, reason, err)
+	}
 	k := r.p.k
 	r.after = append(r.after, func() {
 		metrics.IncCounter("saga.partition.rejected_input_total", metrics.Labels{"kind": kind, "reason": reason}, 1)

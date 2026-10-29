@@ -69,9 +69,11 @@ func (j *stepsJetStream) Subscribe(_ context.Context, cfg fnats.JetStreamConsume
 	return sub, nil
 }
 
+// deliver 把一条分区命令事件（协调器派发的形状：事件带 saga 的记录与这次尝试的命令）交给 durable。
 func (j *stepsJetStream) deliver(t *testing.T, durable string, command coresaga.Command) error {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{"version": coresaga.WireVersion, "command": command})
+	raw, err := json.Marshal(map[string]any{"v": coresaga.WireVersion, "part": int(command.Partition), "writer": "w", "kind": "dispatch",
+		"saga": map[string]any{"record": map[string]any{"ID": command.SagaID}}, "command": command})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,12 +83,17 @@ func (j *stepsJetStream) deliver(t *testing.T, durable string, command coresaga.
 	if handler == nil {
 		t.Fatalf("no consumer %q", durable)
 	}
-	return handler(context.Background(), &fnats.JetStreamMsg{Subject: "roost.saga.command." + command.Topic, Data: raw})
+	return handler(context.Background(), &fnats.JetStreamMsg{Subject: "roost.saga.0.ev.cmd." + command.Topic, Data: raw})
 }
 
+// stepsRegistry 是一个分区、一条流、准入关闭的配置（准入信号要 DataEngine Mod 与 nats.log，见 TestStepsNeedDataEngineForTheAdmissionSignal）。
 func stepsRegistry(t *testing.T, js *stepsJetStream) *app.Registry {
 	t.Helper()
-	registry := app.NewRegistry(sagaTestConfig())
+	cfg := sagaTestConfig()
+	cfg.Set("saga.partitions", 1)
+	cfg.Set("saga.stream_groups", 1)
+	cfg.Set("saga.admission.enabled", false)
+	registry := app.NewRegistry(cfg)
 	if err := registry.Register(mods.ModMongo, mongotest.NewClient()); err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +114,7 @@ func stepCommand(id, topic string) coresaga.Command {
 
 func nativeBody(context.Context, coresaga.NativeStep) error { return nil }
 
-// 每个登记的步骤一个 durable（<group>-<name>），订阅 saga Mod 声明的流与命令前缀；顺序即登记顺序。
+// 每个登记的步骤一个 durable（<group>-<name>），在 saga Mod 声明的每条流上过滤全部分区的这个主题；顺序即登记顺序。
 func TestStepsSubscribeEveryStepOnTheSagaModsStream(t *testing.T) {
 	js := &stepsJetStream{}
 	steps, err := NewSteps(stepsRegistry(t, js), "game-gift")
@@ -121,12 +128,12 @@ func TestStepsSubscribeEveryStepOnTheSagaModsStream(t *testing.T) {
 	if err := steps.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []struct{ durable, subject string }{{"game-gift-debit", "roost.saga.command.gift.debit"}, {"game-gift-deliver", "roost.saga.command.gift.deliver"}}
+	want := []struct{ durable, subject string }{{"game-gift-debit", "roost.saga.*.ev.cmd.gift.debit"}, {"game-gift-deliver", "roost.saga.*.ev.cmd.gift.deliver"}}
 	if len(js.configs) != len(want) {
 		t.Fatalf("subscribed %d consumers, want %d", len(js.configs), len(want))
 	}
 	for i, w := range want {
-		if got := js.configs[i]; got.Durable != w.durable || got.FilterSubject != w.subject || got.Stream != "ROOST_SAGA" || got.AckWait != coresaga.DefaultStepAckWait {
+		if got := js.configs[i]; got.Durable != w.durable || got.FilterSubject != w.subject || got.Stream != "ROOST_SAGA_G0" || got.AckWait != coresaga.DefaultStepAckWait {
 			t.Errorf("consumer %d = %+v, want durable %s on %s", i, got, w.durable, w.subject)
 		}
 	}
@@ -314,5 +321,23 @@ func TestStepsCountRunsAndAdmissionRefusals(t *testing.T) {
 	handler := js.handlers["game-gift-deliver"]
 	if err := handler(context.Background(), &fnats.JetStreamMsg{Data: []byte("not json")}); !fnats.IsPermanent(err) {
 		t.Fatalf("a poison envelope = %v, want a permanent (Term) error", err)
+	}
+}
+
+// 有原生步骤且准入开启时，Steps 发布本进程 DataEngine 投影积压作准入信号：进程里没有 DataEngine Mod 是装配错误，Start 点名它。
+func TestStepsNeedDataEngineForTheAdmissionSignal(t *testing.T) {
+	js := &stepsJetStream{}
+	cfg := sagaTestConfig()
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(mods.ModNatsJetStream, js); err != nil {
+		t.Fatal(err)
+	}
+	steps, _ := NewSteps(registry, "game-gift")
+	steps.Native("debit", "gift.debit", nativeBody)
+	if err := steps.Start(context.Background()); err == nil || !strings.Contains(err.Error(), `"dataengine"`) {
+		t.Fatalf("Start without the DataEngine Mod = %v, want a refusal naming it", err)
+	}
+	if len(js.configs) != 0 {
+		t.Fatalf("subscribed %d consumers before the admission signal was assembled", len(js.configs))
 	}
 }

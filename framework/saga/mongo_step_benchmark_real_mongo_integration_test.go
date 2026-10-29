@@ -13,13 +13,13 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 )
 
-// BenchmarkRealMongoCommandInboxHandle 是 BenchmarkMongoCommandInboxHandle 在真实 Mongo 副本集上的版本：
+// BenchmarkRealMongoStepInboxHandle 是 BenchmarkMongoStepInboxHandle 在真实 Mongo 副本集上的版本：
 //
 //	source ~/.roost-it/roost-dataengine-it/env.sh
-//	GOWORK=off go test -tags integration -run '^$' -bench BenchmarkRealMongoCommandInboxHandle -benchtime 500x -count 5 ./framework/saga/
+//	GOWORK=off go test -tags integration -run '^$' -bench BenchmarkRealMongoStepInboxHandle -benchtime 500x -count 5 ./framework/saga/
 //
 // 资源：库 roost_sagadir_bench_<pid>_<ns>，用后删除。
-func BenchmarkRealMongoCommandInboxHandle(b *testing.B) {
+func BenchmarkRealMongoStepInboxHandle(b *testing.B) {
 	uri := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI")
 	if uri == "" {
 		b.Skip("ROOST_DATAENGINE_IT_MONGO_URI is not set")
@@ -37,5 +37,5 @@ func BenchmarkRealMongoCommandInboxHandle(b *testing.B) {
 		}
 		_ = client.Close(context.Background())
 	})
-	benchmarkMongoCommandInboxHandle(b, client, database)
+	benchmarkMongoStepInboxHandle(b, client, database)
 }

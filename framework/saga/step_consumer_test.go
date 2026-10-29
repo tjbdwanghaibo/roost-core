@@ -62,7 +62,7 @@ func (j *stepJetStream) Subscribe(_ context.Context, config fnats.JetStreamConsu
 func (j *stepJetStream) deliver(t *testing.T, layout Layout, command Command, raw []byte) error {
 	t.Helper()
 	if raw == nil {
-		ev := logEvent{V: LogWireVersion, Part: int(command.Partition), Writer: "w", Kind: "dispatch", Command: &command}
+		ev := logEvent{V: WireVersion, Part: int(command.Partition), Writer: "w", Kind: "dispatch", Command: &command}
 		ev.Saga.Record.ID = command.SagaID
 		var err error
 		if raw, err = json.Marshal(ev); err != nil {
@@ -120,7 +120,7 @@ func TestNativeStepConsumerPublishesToThePartitionThenAcks(t *testing.T) {
 		t.Fatalf("published %d results, business ran %d times; want 2 and 1", len(published), h.business)
 	}
 	for _, p := range published {
-		if p.subject != "roost.saga.3.in.res" || p.msgID != "res."+first.ID || p.input.V != LogWireVersion || p.input.Completion.CommandID != first.ID || !p.input.Completion.Success || !p.input.Completion.CompletedAt.IsZero() {
+		if p.subject != "roost.saga.3.in.res" || p.msgID != "res."+first.ID || p.input.V != WireVersion || p.input.Completion.CommandID != first.ID || !p.input.Completion.Success || !p.input.Completion.CompletedAt.IsZero() {
 			t.Fatalf("result = %+v, want %s on roost.saga.3.in.res", p, first.ID)
 		}
 	}
@@ -139,7 +139,7 @@ func TestNativeStepConsumerPublishesToThePartitionThenAcks(t *testing.T) {
 	}
 	other := first
 	other.Partition = 1
-	raw, _ := json.Marshal(logEvent{V: LogWireVersion, Part: 3, Writer: "w", Kind: "dispatch", Command: &other})
+	raw, _ := json.Marshal(logEvent{V: WireVersion, Part: 3, Writer: "w", Kind: "dispatch", Command: &other})
 	if err := js.deliver(t, layout, other, raw); !fnats.IsPermanent(err) {
 		t.Fatalf("a command for another partition than its event = %v, want Term", err)
 	}
@@ -258,5 +258,57 @@ func TestMongoStepInboxReceiptRules(t *testing.T) {
 	}
 	if _, err := NewMongoStepInbox(client, "game", " ", time.Hour); err == nil || !strings.Contains(err.Error(), "collection") {
 		t.Fatalf("missing collection = %v", err)
+	}
+}
+
+// 业务被取消（ctx 结束）的 Mongo 步骤：事务整体回滚，业务写与回执都不可见；重试执行一次并提交，之后的重投回放、不再执行。
+// 历史：TestMongoCommandInboxCancelledBusinessWriteCanRetryAtomically（MongoCommandInbox → MongoStepInbox）。
+func TestMongoStepInboxCancelledBusinessWriteCanRetryAtomically(t *testing.T) {
+	ctx := context.Background()
+	client := mongotest.NewClient()
+	inbox, err := NewMongoStepInbox(client, "inbox_cancel", "_cancel_step_inbox", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inbox.EnsureInfrastructure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	command := stepCommand(0, 1, time.Minute)
+	business := client.Database("inbox_cancel").Collection("business")
+	cancelCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	handlerCalls := 0
+	handler := func(txCtx context.Context, _ Command) (Completion, error) {
+		handlerCalls++
+		if _, err := business.InsertOne(txCtx, bson.M{"_id": "award", "value": 42}); err != nil {
+			return Completion{}, err
+		}
+		if handlerCalls == 1 {
+			cancel()
+			return Completion{}, txCtx.Err()
+		}
+		return Completion{Success: true}, nil
+	}
+	if _, err := inbox.Handle(cancelCtx, command, handler); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled handler = %v", err)
+	}
+	if count, err := business.CountDocuments(ctx, bson.M{}); err != nil || count != 0 {
+		t.Fatalf("business escaped the transaction: count=%d err=%v", count, err)
+	}
+	for i := 0; i < 2; i++ {
+		outcome, err := inbox.Handle(ctx, command, handler)
+		want := StepExecuted
+		if i == 1 {
+			want = StepReplayed
+		}
+		if err != nil || outcome.Kind != want || !outcome.Completion.Success {
+			t.Fatalf("retry %d = %+v %v, want %v success", i, outcome, err, want)
+		}
+	}
+	if handlerCalls != 2 {
+		t.Fatalf("handler ran %d times, want 2 (the cancelled one and the retry)", handlerCalls)
+	}
+	if count, err := business.CountDocuments(ctx, bson.M{}); err != nil || count != 1 {
+		t.Fatalf("business rows after the retry = %d err=%v, want 1", count, err)
 	}
 }

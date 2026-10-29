@@ -122,7 +122,7 @@ func TestKitModsRefuseOutOfRangeValuesAtLoadAndAtStartup(t *testing.T) {
 		{"outbox_workers_negative", "dataengine:\n  outbox:\n    workers: -1\n", "dataengine.outbox.workers must be positive", func() declaredMod { return kitdataengine.NewMod() }},
 		{"effects_replicas_negative", "dataengine:\n  effects:\n    replicas: -3\n", "dataengine.effects.replicas must be positive", func() declaredMod { return kitdataengine.NewMod() }},
 		{"redis_pool_negative", "redis:\n  pool_size: -1\n", "redis.pool_size must not be negative", func() declaredMod { return kitredis.NewRedisMod() }},
-		{"saga_workers_negative", "saga:\n  coordinator_workers: -4\n", "saga.coordinator_workers must be positive", func() declaredMod { return kitsaga.NewMod() }},
+		{"saga_batch_negative", "saga:\n  coordinators: [\"1000\"]\n  max_batch: -4\n", "saga.max_batch must be positive", func() declaredMod { return kitsaga.NewMod() }},
 		{"syncbus_storage_typo", "syncbus:\n  storage: flie\n", "syncbus.storage must be one of file, memory", func() declaredMod { return kitsyncbus.NewSyncBusMod(1000) }},
 		{"nats_transport_typo", "nats:\n  rpc:\n    transport: jetsream\n", "nats.rpc.transport must be one of", func() declaredMod { return kitnats.NewNatsMod(nil) }},
 		{"tombstone_wait_too_long", "remote_entity:\n  snapshot_l2_tombstone_wait_timeout: 2s\n", "remote_entity.snapshot_l2_tombstone_wait_timeout must be at most 1s", func() declaredMod { return kitremoteentity.NewRemoteEntityMod(1000) }},
@@ -252,7 +252,7 @@ func TestKitModsRefuseConfigValuesOfTheWrongType(t *testing.T) {
 	}{
 		{"remote_lock_ttl_unitless", func() initer { return remoteentity.NewRemoteEntityMod(1000) }, "remote_entity:\n  lock_ttl: 15\n", "remote_entity.lock_ttl"},
 		{"remote_cache_entries_suffix", func() initer { return remoteentity.NewRemoteEntityMod(1000) }, "remote_entity:\n  snapshot_cache_entries: 10k\n", "remote_entity.snapshot_cache_entries"},
-		{"saga_lease_unitless", func() initer { return saga.NewMod() }, "saga:\n  lease_duration: 15\n", "saga.lease_duration"},
+		{"saga_tick_unitless", func() initer { return saga.NewMod() }, "saga:\n  coordinators: [\"1000\"]\n  tick: 15\n", "saga.tick"},
 		{"dataengine_outbox_workers_word", func() initer { return dataengine.NewMod() }, "dataengine:\n  outbox:\n    workers: two\n", "dataengine.outbox.workers"},
 		{"dataengine_pipelined_async_yes", func() initer { return dataengine.NewMod() }, "nest:\n  pipelined:\n    async: yes\n", "nest.pipelined.async"},
 		{"syncbus_ack_wait_unitless", func() initer { return syncbus.NewSyncBusMod(1000) }, "syncbus:\n  transport: jetstream\n  ack_wait: 30\n", "syncbus.ack_wait"},

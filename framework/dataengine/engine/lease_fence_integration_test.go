@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -15,7 +16,6 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
-	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -26,6 +26,128 @@ type capturingCommitter struct{ record coredata.CommitRecord }
 func (committer *capturingCommitter) Commit(_ context.Context, record corenest.CommitRecord) error {
 	committer.record = coredata.CloneCommitRecord(record)
 	return nil
+}
+
+// leaseStep 是 DataEngine lease fence 的真实 Mongo 用例用的“原生步骤”替身。产生 fenced 记录的 saga 原生收件箱
+// （DataEngineStepInbox：操作状态文档 + Reserve 事务 + Bind）在 saga 第 4 批随 Redis 协调器删除，原生步骤改为实体内回执；
+// fence 机制本身在 DataEngine 里留到第 5 批单独删除（DESIGN-2026-10-28-saga-jetstream-authority §13）。在那之前它仍是
+// 投影器的一条分支，所以这里按旧收件箱写进 Mongo 的同一形状重建最小替身：操作状态文档（owner / lease_token / digest /
+// status / lease_until）、带 fence 回执与步骤回执的记录、在 Mongo 事务里接管租约的另一 owner。判定只保留这两个用例
+// 走到的分支（回执已存在 → 重复；租约未过期 → 在途；过期 → token+1 接管），与旧 reserveInTransaction 的对应行一致。
+type leaseStep struct {
+	client   fmongo.IMongo
+	database string
+}
+
+const (
+	leaseStepOperations = "_dataengine_step_operations"
+	leaseStepNamespace  = "saga-step"
+)
+
+type leaseStepCommand struct {
+	ID, OperationKey string
+	Digest           []byte
+}
+
+func newLeaseStepCommand(name string) leaseStepCommand {
+	digest := sha256.Sum256([]byte(name)) // fence 的摘要是 SHA-256 长度（LeaseFence.Validate）
+	return leaseStepCommand{ID: name, OperationKey: name + "-op", Digest: digest[:]}
+}
+
+// claim 写这个操作的第一份状态文档：owner 持有 token 1，租约到 leaseUntil。
+func (f leaseStep) claim(t *testing.T, ctx context.Context, command leaseStepCommand, owner string, leaseUntil time.Time) uint64 {
+	t.Helper()
+	_, err := f.client.Database(f.database).Collection(leaseStepOperations).InsertOne(ctx, bson.M{
+		"_id": command.OperationKey, coredata.LeaseFenceFieldOwner: owner, coredata.LeaseFenceFieldToken: uint64(1),
+		coredata.LeaseFenceFieldDigest: command.Digest, coredata.LeaseFenceFieldStatus: coredata.LeaseFenceStatusPending,
+		coredata.LeaseFenceFieldLeaseUntil: leaseUntil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return 1
+}
+
+// record 是一笔真实 Nest 事务产出的原生步骤记录：fence 回执、带结果的步骤回执、结果 effect，再附上 DAO 修改。
+func (f leaseStep) record(t *testing.T, ctx context.Context, command leaseStepCommand, owner string, token uint64, mutation coredata.Mutation) coredata.CommitRecord {
+	t.Helper()
+	fence, err := coredata.NewLeaseFenceReceipt(coredata.LeaseFence{
+		Database: f.database, Resource: leaseStepOperations, DocumentID: command.OperationKey,
+		Owner: owner, Token: token, Digest: command.Digest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	committer := &capturingCommitter{}
+	if _, err := corenest.RunIsolatedTransaction(ctx, committer, "lease-step-"+command.ID, func() (any, error) {
+		if err := corenest.AddReceipt(fence); err != nil {
+			return nil, err
+		}
+		if err := corenest.AddReceipt(coredata.Receipt{Namespace: leaseStepNamespace, ID: command.ID, Digest: command.Digest, ExpiresAt: time.Now().Add(time.Hour).UnixNano()}); err != nil {
+			return nil, err
+		}
+		if err := corenest.SetReceiptPayload(leaseStepNamespace, command.ID, []byte("success:"+command.ID)); err != nil {
+			return nil, err
+		}
+		return nil, corenest.Emit(corenest.Effect{ID: "saga-completion:" + command.ID, Topic: "saga.result." + command.ID, Key: command.OperationKey, Payload: []byte("success:" + command.ID)})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record := committer.record
+	record.Mutations = append(record.Mutations, mutation)
+	return record
+}
+
+// takeover 是另一 owner 在一个 Mongo 事务里接管这次操作：先读步骤回执（已投影 → 重复投递），再按租约判定；过期则
+// token+1 写回状态文档。返回新 token；duplicate 表示回执已经存在。
+func (f leaseStep) takeover(ctx context.Context, command leaseStepCommand, owner string) (token uint64, duplicate bool, err error) {
+	session, err := f.client.StartSession(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	defer session.EndSession(ctx)
+	err = session.WithTransaction(ctx, func(txCtx context.Context) error {
+		token, duplicate = 0, false
+		var receipt bson.M
+		switch err := f.client.Database(f.database).Collection(ReceiptCollection).FindOne(txCtx, bson.M{"_id": leaseStepNamespace + "/" + command.ID}, &receipt); {
+		case err == nil:
+			duplicate = true
+			return nil
+		case !errors.Is(err, fmongo.ErrNotFound):
+			return err
+		}
+		var state struct {
+			Token      uint64    `bson:"lease_token"`
+			LeaseUntil time.Time `bson:"lease_until"`
+		}
+		operations := f.client.Database(f.database).Collection(leaseStepOperations)
+		if err := operations.FindOne(txCtx, bson.M{"_id": command.OperationKey}, &state); err != nil {
+			return err
+		}
+		if state.LeaseUntil.After(time.Now()) {
+			return errors.New("lease step: the current attempt's lease is still valid")
+		}
+		result, err := operations.UpdateOne(txCtx, bson.M{"_id": command.OperationKey, coredata.LeaseFenceFieldToken: state.Token}, bson.M{"$set": bson.M{
+			coredata.LeaseFenceFieldOwner: owner, coredata.LeaseFenceFieldToken: state.Token + 1, coredata.LeaseFenceFieldLeaseUntil: time.Now().Add(time.Hour),
+		}})
+		if err != nil {
+			return err
+		}
+		if result == nil || result.MatchedCount != 1 {
+			return errors.New("lease step: the state document moved")
+		}
+		token = state.Token + 1
+		return nil
+	})
+	return token, duplicate, err
+}
+
+// settle 结算这次操作（状态离开 pending，fence 从此不再通过）。
+func (f leaseStep) settle(t *testing.T, ctx context.Context, command leaseStepCommand) {
+	t.Helper()
+	if _, err := f.client.Database(f.database).Collection(leaseStepOperations).UpdateOne(ctx, bson.M{"_id": command.OperationKey}, bson.M{"$set": bson.M{coredata.LeaseFenceFieldStatus: "settled"}}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // isolatedRealMongo 连接隔离副本集并使用一次性库名；绝不写共享 game 库，结束时删库。
@@ -53,7 +175,7 @@ func isolatedRealMongo(t *testing.T) (context.Context, fmongo.IMongo, string) {
 // 租约到期附近两者并发时，投影事务的快照读到租约有效，接管事务在到期后提交 token+1；
 // 投影事务没写 claim，不产生写冲突，两边都提交——同一步骤被执行两次。
 // 受控顺序：投影在租约校验通过之后、业务写入之前停在测试缝上，同步执行一次真实的
-// DataEngineStepInbox.Reserve 接管（另一 owner），再让投影继续提交。
+// 接管（另一 owner，leaseStep.takeover；原为 saga.DataEngineStepInbox.Reserve），再让投影继续提交。
 // 承诺：两者至多一个生效——投影落库时接管不能成功拿到新 token。
 func TestRealMongoFencedProjectionSerializesWithLeaseTakeover(t *testing.T) {
 	ctx, client, database := isolatedRealMongo(t)
@@ -64,46 +186,18 @@ func TestRealMongoFencedProjectionSerializesWithLeaseTakeover(t *testing.T) {
 	if err := store.EnsureInfrastructure(ctx); err != nil {
 		t.Fatal(err)
 	}
-	owner, err := saga.NewDataEngineStepInbox(client, database, saga.DataEngineStepInboxOptions{Owner: "worker-1", LeaseDuration: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := owner.EnsureInfrastructure(ctx); err != nil {
-		t.Fatal(err)
-	}
-	successor, err := saga.NewDataEngineStepInbox(client, database, saga.DataEngineStepInboxOptions{Owner: "worker-2", LeaseDuration: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
+	steps := leaseStep{client: client, database: database}
 	now := time.Now().UTC()
-	command := saga.Command{
-		ID: "rr30-skew", IdempotencyKey: "rr30-skew-op", SagaID: "saga-rr30", SagaType: "gift", DefinitionVersion: 1,
-		BusinessKey: "hero-7", StepName: "debit", Phase: saga.PhaseForward, Attempt: 1,
-		Topic: "gift.debit", CreatedAt: now, DeadlineAt: now.Add(time.Hour),
-	}
-	reservation, err := owner.Reserve(ctx, command)
-	if err != nil || reservation.Duplicate || reservation.Token != 1 {
-		t.Fatalf("first reservation=%v err=%v", reservation, err)
-	}
+	command := newLeaseStepCommand("rr30-skew")
+	token := steps.claim(t, ctx, command, "worker-1", now.Add(time.Hour))
 
-	// 正式 Bind + EmitCompletion 组成原生步骤的 fence、step receipt 与 completion effect，
-	// 再附上本地 DAO 的 4 -> 5 修改。
+	// 原生步骤的 fence、step receipt 与 completion effect（一笔真实 Nest 事务），再附上本地 DAO 的 4 -> 5 修改。
 	heroes := client.Database(database).Collection("heroes")
 	if _, err := heroes.InsertOne(ctx, bson.M{"_id": int64(7), "_version": uint64(4), "level": int32(1)}); err != nil {
 		t.Fatal(err)
 	}
-	committer := &capturingCommitter{}
-	if _, err := corenest.RunIsolatedTransaction(ctx, committer, "rr30-debit", func() (any, error) {
-		if err := owner.Bind(command, reservation); err != nil {
-			return nil, err
-		}
-		return nil, saga.EmitCompletion(saga.Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true})
-	}); err != nil {
-		t.Fatal(err)
-	}
-	record := committer.record
 	patch, _ := bson.Marshal(bson.D{{Key: "level", Value: int32(5)}})
-	record.Mutations = append(record.Mutations, coredata.Mutation{
+	record := steps.record(t, ctx, command, "worker-1", token, coredata.Mutation{
 		Key:  coredata.DocumentKey{Database: database, Resource: "heroes", ID: 7},
 		Kind: coredata.MutationPatch, ExpectedVersion: 4, NextVersion: 5, Mask: 1, Schema: 1, Codec: "bson-v2",
 		Patch: coredata.FieldPatch{SetBSON: patch},
@@ -111,20 +205,21 @@ func TestRealMongoFencedProjectionSerializesWithLeaseTakeover(t *testing.T) {
 
 	// 租约边界：接管方（真实时钟）看到租约已过期；投影方的时钟仍在到期之前。
 	// 原生步骤的操作状态文档（saga 收件箱，每个操作一份，_id = IdempotencyKey）。
-	operations := client.Database(database).Collection("_dataengine_step_operations")
-	if _, err := operations.UpdateOne(ctx, bson.M{"_id": command.IdempotencyKey}, bson.M{"$set": bson.M{"lease_until": now.Add(-time.Second)}}); err != nil {
+	operations := client.Database(database).Collection(leaseStepOperations)
+	if _, err := operations.UpdateOne(ctx, bson.M{"_id": command.OperationKey}, bson.M{"$set": bson.M{"lease_until": now.Add(-time.Second)}}); err != nil {
 		t.Fatal(err)
 	}
 	store.now = func() time.Time { return now.Add(-time.Minute) }
 
-	var takeover saga.Reservation
+	var takeover uint64
+	var takeoverDuplicate bool
 	var takeoverErr error
 	var once sync.Once
 	store.afterLeaseFence = func(context.Context) {
 		once.Do(func() {
 			bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
 			defer cancel()
-			takeover, takeoverErr = successor.Reserve(bounded, command)
+			takeover, takeoverDuplicate, takeoverErr = steps.takeover(bounded, command, "worker-2")
 		})
 	}
 	projectErr := store.Project(ctx, record)
@@ -137,19 +232,18 @@ func TestRealMongoFencedProjectionSerializesWithLeaseTakeover(t *testing.T) {
 		t.Fatal(err)
 	}
 	applied := projectErr == nil && hero.Version == 5
-	tookOver := takeoverErr == nil && !takeover.Duplicate && takeover.Token > reservation.Token
-	t.Logf("projection err=%v hero_version=%d; concurrent takeover=%v err=%v", projectErr, hero.Version, takeover, takeoverErr)
+	tookOver := takeoverErr == nil && !takeoverDuplicate && takeover > token
+	t.Logf("projection err=%v hero_version=%d; concurrent takeover token=%d duplicate=%v err=%v", projectErr, hero.Version, takeover, takeoverDuplicate, takeoverErr)
 	if applied && tookOver {
-		t.Fatalf("write skew: the fenced step was applied (version=%d) while a concurrent Reserve took the claim over (token=%d)", hero.Version, takeover.Token)
+		t.Fatalf("write skew: the fenced step was applied (version=%d) while a concurrent takeover took the claim over (token=%d)", hero.Version, takeover)
 	}
 	if !applied && !tookOver {
-		t.Fatalf("neither side won: projection err=%v version=%d, takeover=%v err=%v", projectErr, hero.Version, takeover, takeoverErr)
+		t.Fatalf("neither side won: projection err=%v version=%d, takeover token=%d duplicate=%v err=%v", projectErr, hero.Version, takeover, takeoverDuplicate, takeoverErr)
 	}
 	if applied {
 		// 投影先提交：之后的接管必须看到 receipt，只能得到已完成的重复投递。
-		again, err := successor.Reserve(ctx, command)
-		if err != nil || !again.Duplicate || again.Completion.CommandID != command.ID {
-			t.Fatalf("reserve after the projection committed=%v err=%v, want duplicate with completion", again, err)
+		if _, duplicate, err := steps.takeover(ctx, command, "worker-2"); err != nil || !duplicate {
+			t.Fatalf("takeover after the projection committed: duplicate=%v err=%v, want a duplicate", duplicate, err)
 		}
 	}
 }
@@ -168,13 +262,7 @@ func TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint(t *testing.
 	if err := store.EnsureInfrastructure(ctx); err != nil {
 		t.Fatal(err)
 	}
-	owner, err := saga.NewDataEngineStepInbox(client, database, saga.DataEngineStepInboxOptions{Owner: "worker-1", LeaseDuration: time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := owner.EnsureInfrastructure(ctx); err != nil {
-		t.Fatal(err)
-	}
+	steps := leaseStep{client: client, database: database}
 	heroes := client.Database(database).Collection("heroes")
 	for _, id := range []int64{7, 8} {
 		if _, err := heroes.InsertOne(ctx, bson.M{"_id": id, "_version": uint64(1), "level": int32(1)}); err != nil {
@@ -190,34 +278,16 @@ func TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint(t *testing.
 		}
 	}
 	now := time.Now().UTC()
-	step := func(name string, mutation coredata.Mutation) (saga.Command, coredata.CommitRecord) {
-		command := saga.Command{
-			ID: "ckpt-" + name, IdempotencyKey: "ckpt-" + name + "-op", SagaID: "saga-ckpt-" + name, SagaType: "gift", DefinitionVersion: 1,
-			BusinessKey: "hero", StepName: "debit", Phase: saga.PhaseForward, Attempt: 1,
-			Topic: "gift.debit", CreatedAt: now, DeadlineAt: now.Add(time.Hour),
-		}
-		reservation, err := owner.Reserve(ctx, command)
-		if err != nil || reservation.Duplicate || reservation.Token != 1 {
-			t.Fatalf("%s reservation=%v err=%v", name, reservation, err)
-		}
-		committer := &capturingCommitter{}
-		if _, err := corenest.RunIsolatedTransaction(ctx, committer, "ckpt-"+name, func() (any, error) {
-			if err := owner.Bind(command, reservation); err != nil {
-				return nil, err
-			}
-			return nil, saga.EmitCompletion(saga.Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true})
-		}); err != nil {
-			t.Fatal(err)
-		}
-		record := committer.record
-		record.Mutations = append(record.Mutations, mutation)
-		return command, record
+	step := func(name string, mutation coredata.Mutation) (leaseStepCommand, coredata.CommitRecord) {
+		command := newLeaseStepCommand("ckpt-" + name)
+		token := steps.claim(t, ctx, command, "worker-1", now.Add(time.Hour))
+		return command, steps.record(t, ctx, command, "worker-1", token, mutation)
 	}
 	// S1：步骤 A 改 hero 7（1→2），首投生效。S2：步骤 B 改 hero 8（1→2），首投时租约已过期，整笔跳过。
 	// S3：不带 fence、带 effect 的普通特殊记录，改 hero 7（2→3）——S1 之后的同文档版本。
 	commandA, s1 := step("a", patch(7, 1, 2))
 	_, s2 := step("b", patch(8, 1, 2))
-	operations := client.Database(database).Collection("_dataengine_step_operations")
+	operations := client.Database(database).Collection(leaseStepOperations)
 	if _, err := operations.UpdateOne(ctx, bson.M{"_id": "ckpt-b-op"}, bson.M{"$set": bson.M{"lease_until": now.Add(-time.Second)}}); err != nil {
 		t.Fatal(err)
 	}
@@ -291,9 +361,7 @@ func TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint(t *testing.
 	}
 
 	// 首投之后世界继续前进。
-	if completion, found, err := owner.Replay(ctx, commandA); err != nil || !found || !completion.Success {
-		t.Fatalf("settle step A: completion=%+v found=%v err=%v", completion, found, err)
-	}
+	steps.settle(t, ctx, commandA)
 	if _, err := operations.UpdateOne(ctx, bson.M{"_id": "ckpt-b-op"}, bson.M{"$set": bson.M{"lease_until": now.Add(time.Hour)}}); err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +380,7 @@ func TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint(t *testing.
 		return byID
 	}
 	before := map[string]map[string]bson.M{}
-	for _, collection := range []string{"heroes", "_dataengine_step_operations", ReceiptCollection, TransactionCollection} {
+	for _, collection := range []string{"heroes", leaseStepOperations, ReceiptCollection, TransactionCollection} {
 		before[collection] = snapshot(collection)
 	}
 	if n := len(before[ReceiptCollection]); n != 1 {

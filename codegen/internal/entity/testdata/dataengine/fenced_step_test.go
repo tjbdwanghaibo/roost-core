@@ -2,6 +2,7 @@ package persistflow
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
@@ -12,54 +13,72 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// fencedStep 通过正式 DataEngineStepInbox 取得租约，然后让 trade_fenced 在 Nest 里
-// 修改 Trader 并 Bind 该租约——与生产的原生 saga 步骤同一条链路。
+// fencedStep 是一次原生步骤投递的最小替身：一份操作状态文档（owner / lease_token / digest / pending / lease_until），
+// trade_fenced 在 Nest 里修改 Trader 并把指向它的 lease fence 回执、步骤回执与结果 effect 绑进同一笔事务。
+// 历史：原先经 saga.DataEngineStepInbox 取得租约；saga 第 4 批改为实体内回执、删掉了那个收件箱，DataEngine 的 fence 机制
+// 留到第 5 批单独删除（DESIGN-2026-10-28-saga-jetstream-authority §13）。这里按收件箱写进 Mongo 的同一形状重建，
+// 投影器面对的记录与状态文档不变。
 type fencedStep struct {
-	inbox       *saga.DataEngineStepInbox
-	command     saga.Command
-	reservation saga.Reservation
+	fence     coredata.LeaseFence
+	commandID string
 }
+
+const fencedStepOperations = "_dataengine_step_operations"
 
 func reserveFencedStep(t *testing.T, ctx context.Context, h *tradeFixture, name string) fencedStep {
 	t.Helper()
-	inbox, err := saga.NewDataEngineStepInbox(h.client, h.database, saga.DataEngineStepInboxOptions{Owner: "worker-1", LeaseDuration: time.Hour})
+	commandID := fmt.Sprintf("%s-%d", name, time.Now().UnixNano())
+	digest := sha256.Sum256([]byte(commandID)) // fence 的摘要是 SHA-256 长度（LeaseFence.Validate）
+	step := fencedStep{commandID: commandID, fence: coredata.LeaseFence{
+		Database: h.database, Resource: fencedStepOperations, DocumentID: name,
+		Owner: "worker-1", Token: 1, Digest: digest[:],
+	}}
+	_, err := h.client.Database(h.database).Collection(fencedStepOperations).InsertOne(ctx, bson.M{
+		"_id": name, coredata.LeaseFenceFieldOwner: step.fence.Owner, coredata.LeaseFenceFieldToken: step.fence.Token,
+		coredata.LeaseFenceFieldDigest: step.fence.Digest, coredata.LeaseFenceFieldStatus: coredata.LeaseFenceStatusPending,
+		coredata.LeaseFenceFieldLeaseUntil: time.Now().UTC().Add(time.Hour),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := inbox.EnsureInfrastructure(ctx); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC()
-	command := saga.Command{
-		ID: fmt.Sprintf("%s-%d", name, now.UnixNano()), IdempotencyKey: name, SagaID: "saga-" + name, SagaType: "gift",
-		DefinitionVersion: 1, BusinessKey: name, StepName: "debit", Phase: saga.PhaseForward, Attempt: 1,
-		Topic: "gift.debit", CreatedAt: now, DeadlineAt: now.Add(time.Hour),
-	}
-	reservation, err := inbox.Reserve(ctx, command)
-	if err != nil || reservation.Duplicate {
-		t.Fatalf("reserve=%v err=%v", reservation, err)
-	}
-	return fencedStep{inbox: inbox, command: command, reservation: reservation}
+	return step
 }
 
-// expire 把这个操作状态文档（saga 原生收件箱，每个操作一份，_id = IdempotencyKey）的租约改到过去：
-// 投影时 fence 不再成立，整笔记录被跳过。
+// bind 在 trade_fenced 的 Nest 事务里调用：fence 回执、带结果的步骤回执、结果 effect（与原收件箱 Bind + EmitCompletion
+// 产出的记录同形）。
+func (step fencedStep) bind() error {
+	receipt, err := coredata.NewLeaseFenceReceipt(step.fence)
+	if err != nil {
+		return err
+	}
+	if err := nest.AddReceipt(receipt); err != nil {
+		return err
+	}
+	if err := nest.AddReceipt(coredata.Receipt{Namespace: "saga-step", ID: step.commandID, Digest: step.fence.Digest, ExpiresAt: time.Now().Add(time.Hour).UnixNano()}); err != nil {
+		return err
+	}
+	if err := nest.SetReceiptPayload("saga-step", step.commandID, []byte("success")); err != nil {
+		return err
+	}
+	return nest.Emit(nest.Effect{ID: "saga-completion:" + step.commandID, Topic: "saga.result." + step.commandID, Key: step.fence.DocumentID, Payload: []byte("success")})
+}
+
+// expire 把这个操作状态文档的租约改到过去：投影时 fence 不再成立，整笔记录被跳过。
 func (step fencedStep) expire(t *testing.T, ctx context.Context, h *tradeFixture) {
 	t.Helper()
-	operations := h.client.Database(h.database).Collection("_dataengine_step_operations")
-	if _, err := operations.UpdateOne(ctx, bson.M{"_id": step.command.IdempotencyKey}, bson.M{"$set": bson.M{"lease_until": time.Now().UTC().Add(-time.Second)}}); err != nil {
+	operations := h.client.Database(h.database).Collection(fencedStepOperations)
+	if _, err := operations.UpdateOne(ctx, bson.M{"_id": step.fence.DocumentID}, bson.M{"$set": bson.M{coredata.LeaseFenceFieldLeaseUntil: time.Now().UTC().Add(-time.Second)}}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func (step fencedStep) params() nest.Params {
-	return nest.Params{step.inbox, step.command, step.reservation}
+	return nest.Params{step}
 }
 
 func (h *tradeFixture) mongoState(t *testing.T, id int64) tradeState {

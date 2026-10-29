@@ -2,8 +2,8 @@
 
 package saga
 
-// 参与方新路径（第 3 批，未接线）在真实依赖上的用例：JetStream 协调器（NewJetStreamEngine）+ 新步骤消费者
-// （SubscribeNativeStep / SubscribeJetStreamMongoStep）。原生参与方是真实的 Nest 引擎 + nestwal WAL（strict）+ 手写的账户实体
+// 参与方新路径（第 3 批，未接线）在真实依赖上的用例：JetStream 协调器（NewEngine）+ 新步骤消费者
+// （SubscribeNativeStep / SubscribeMongoStep）。原生参与方是真实的 Nest 引擎 + nestwal WAL（strict）+ 手写的账户实体
 // （DAO 形状与生成 DAO 相同：字段补丁、回执 map 的逆操作按键登记），回执经 StepReceipts 适配放在实体文档的 r.<操作> 里。
 //
 //   - TestRealJetStreamNativeStepsEndToEnd：正向、业务拒绝后的补偿、“Nest 已提交但步骤体报错”的重投回放；另有一个从来没有命令的
@@ -485,13 +485,13 @@ func ptJetStream(t *testing.T, url string) (realJSConn, fnats.IJetStream) {
 	return conn, js
 }
 
-func startPtCoordinator(t *testing.T, conn realJSConn, layout Layout, configure func(*JetStreamOptions)) *JetStreamEngine {
+func startPtCoordinator(t *testing.T, conn realJSConn, layout Layout, configure func(*Options)) *Engine {
 	t.Helper()
 	options := realEngineOptions(layout, allPartitions(layout.Partitions))
 	if configure != nil {
 		configure(&options)
 	}
-	e, err := NewJetStreamEngine(conn.log, conn.client, options)
+	e, err := NewEngine(conn.log, conn.client, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +512,7 @@ func startPtCoordinator(t *testing.T, conn realJSConn, layout Layout, configure 
 }
 
 // ptStartAll 并发发起 n 笔转账（每 5 笔一笔 credit 被拒），返回业务键 → 转账。onStarted 在每笔启动后调用（kill -9 的时机）。
-func ptStartAll(t *testing.T, e *JetStreamEngine, n, workers, accounts int, onStarted func(int)) map[string]ptTransfer {
+func ptStartAll(t *testing.T, e *Engine, n, workers, accounts int, onStarted func(int)) map[string]ptTransfer {
 	t.Helper()
 	transfers := map[string]ptTransfer{}
 	var mu sync.Mutex
@@ -560,7 +560,7 @@ func ptStartAll(t *testing.T, e *JetStreamEngine, n, workers, accounts int, onSt
 }
 
 // ptExpectedBalances 按终态算每个账户的预期余额：Completed = 扣一次、加一次；Compensated = 扣了又退（净零）。其他终态失败。
-func ptExpectedBalances(t *testing.T, e *JetStreamEngine, transfers map[string]ptTransfer, accounts int, budget time.Duration) []int64 {
+func ptExpectedBalances(t *testing.T, e *Engine, transfers map[string]ptTransfer, accounts int, budget time.Duration) []int64 {
 	t.Helper()
 	want := make([]int64, accounts)
 	for i := range want {
@@ -599,7 +599,7 @@ func TestRealJetStreamNativeStepsEndToEnd(t *testing.T) {
 	url := realJSURL(t)
 	layout := realLayout(t, url, 4, 2)
 	conn, js := ptJetStream(t, url)
-	owner := startPtCoordinator(t, conn, layout, func(o *JetStreamOptions) { o.SnapshotEveryEvents = 16 })
+	owner := startPtCoordinator(t, conn, layout, func(o *Options) { o.SnapshotEveryEvents = 16 })
 	const accounts = 8
 	participant, err := openPtParticipant(t.TempDir(), nil, "pt", accounts)
 	if err != nil {
@@ -794,7 +794,7 @@ func TestRealJetStreamParticipantKill9(t *testing.T) {
 	database := ptDatabase(t, mongo)
 	layout := realLayout(t, url, 4, 2)
 	conn, _ := ptJetStream(t, url)
-	owner := startPtCoordinator(t, conn, layout, func(o *JetStreamOptions) { o.SnapshotEveryEvents = 64 })
+	owner := startPtCoordinator(t, conn, layout, func(o *Options) { o.SnapshotEveryEvents = 64 })
 	const accounts = 16
 	walDir := t.TempDir()
 	first := startPtChild(t, layout, walDir, database, accounts)
@@ -922,7 +922,7 @@ func TestRealJetStreamLoadPublisherDrivesAdmission(t *testing.T) {
 	layout := realLayout(t, url, 1, 1)
 	conn := dialRealJS(t, url)
 	admission := AdmissionOptions{Enabled: true, HighRecords: 100, LowRecords: 50, StaleAfter: time.Second, SignalTTL: 10 * time.Second, HintEvery: 200 * time.Millisecond}
-	owner := startRealEngine(t, conn, nil, func() JetStreamOptions {
+	owner := startRealEngine(t, conn, nil, func() Options {
 		o := realEngineOptions(layout, []int{0})
 		o.Admission = admission
 		return o

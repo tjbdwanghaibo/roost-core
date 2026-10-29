@@ -12,6 +12,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
+	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
 	kitsyncbus "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
 )
 
@@ -20,7 +21,7 @@ var testDeclared = []coredata.LogicalDatabase{{Name: "main"}, {Name: "zone", Ser
 
 func serverConfig(values map[string]any) *viper.Viper {
 	cfg := viper.New()
-	cfg.Set("saga.redis.key_prefix", "test:saga") // 必填键；本包的单测不连 Redis
+	cfg.Set("saga.coordinators", []string{"1000"}) // 必填键；本包的单测不连 NATS
 	for key, value := range values {
 		cfg.Set(key, value)
 	}
@@ -54,8 +55,8 @@ func TestEachSideResolvesWithItsOwnMapping(t *testing.T) {
 	if from.walDir != "data/wal/dataengine/1001" || into.walDir != "data/wal/dataengine/1000" {
 		t.Fatalf("WAL directories %q / %q, want the per-sid default", from.walDir, into.walDir)
 	}
-	if from.controlDB != "planet_ctl" || from.saga.Store.Database != "saga" {
-		t.Fatalf("control database %q, saga database %q", from.controlDB, from.saga.Store.Database)
+	if from.controlDB != "planet_ctl" || from.saga.Database != "saga" || from.saga.Layout.Stream != "ROOST_SAGA" || from.natsURL != "nats://localhost:4222" {
+		t.Fatalf("control database %q, saga database %q, saga stream %q, nats %q", from.controlDB, from.saga.Database, from.saga.Layout.Stream, from.natsURL)
 	}
 	if _, _, err := (Plan{From: plan.From, Into: Server{SID: 1001, Config: viper.New()}}).resolve(); err == nil {
 		t.Fatal("merging a sid into itself was accepted")
@@ -127,6 +128,7 @@ func TestToolKeysMatchModDeclarations(t *testing.T) {
 	}{
 		{"mongo.uri", kitmongo.NewMongoMod().ConfigSchema(), app.SchemaOf(mongoKeys{})},
 		{"syncbus.transport", kitsyncbus.NewSyncBusMod(0).ConfigSchema(), app.SchemaOf(syncbusKeys{})},
+		{"nats.url", kitnats.NewNatsMod(nil).ConfigSchema(), app.SchemaOf(natsKeys{})},
 	} {
 		if want, got := declared(pair.mod, pair.key), tool(pair.own, pair.key); want != got {
 			t.Fatalf("%s: the Mod defaults to %q, sidmerge to %q", pair.key, want, got)

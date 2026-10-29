@@ -1,15 +1,16 @@
 package saga
 
-// saga 方向 ②的代价：MongoCommandInbox.Handle 从一个事务（读回执、写回执、handler）变为 Reserve 事务（读回执、读 claim、
-// 守卫 upsert、按操作查询、写 claim）加执行事务（handler、claim 条件写、写回执）。同一个基准在修改前后各跑一次：
+// Mongo 步骤收件箱（M-A）一次 Handle 的代价：一个事务里读回执、handler、条件写回执。同一个基准在修改前后各跑一次：
 //
-//	GOWORK=off go test -run '^$' -bench BenchmarkMongoCommandInboxHandle -benchtime 2000x -count 5 ./framework/saga/
+//	GOWORK=off go test -run '^$' -bench BenchmarkMongoStepInboxHandle -benchtime 2000x -count 5 ./framework/saga/
 //
 // 真实 Mongo 见 mongo_step_benchmark_real_mongo_integration_test.go。mongotest 按集合快照，集合越大越慢，只用于同口径前后对照。
+// 历史：BenchmarkMongoCommandInboxHandle（MongoCommandInbox 删除，形状保留）。
 
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,13 +19,13 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func BenchmarkMongoCommandInboxHandle(b *testing.B) {
-	benchmarkMongoCommandInboxHandle(b, mongotest.NewClient(), "bench_mongo_step")
+func BenchmarkMongoStepInboxHandle(b *testing.B) {
+	benchmarkMongoStepInboxHandle(b, mongotest.NewClient(), "bench_mongo_step")
 }
 
-func benchmarkMongoCommandInboxHandle(b *testing.B, client fmongo.IMongo, database string) {
+func benchmarkMongoStepInboxHandle(b *testing.B, client fmongo.IMongo, database string) {
 	ctx := context.Background()
-	inbox, err := NewMongoCommandInbox(client, database, "steps")
+	inbox, err := NewMongoStepInbox(client, database, "steps", time.Hour)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -43,8 +44,16 @@ func benchmarkMongoCommandInboxHandle(b *testing.B, client fmongo.IMongo, databa
 	b.ResetTimer()
 	for index := 0; index < b.N; index++ {
 		command := mongoStepCommand(fmt.Sprintf("bench-%s-%d:1:0", run, index), 1, time.Now().Add(time.Minute))
-		if _, duplicate, err := inbox.Handle(ctx, command, handler); err != nil || duplicate {
-			b.Fatalf("handle %s: duplicate=%v err=%v", command.ID, duplicate, err)
+		if outcome, err := inbox.Handle(ctx, command, handler); err != nil || outcome.Kind != StepExecuted {
+			b.Fatalf("handle %s: %+v err=%v", command.ID, outcome, err)
 		}
 	}
+}
+
+// mongoStepCommand 是一个操作的一次尝试（操作键 <saga>:<phase>:<step>，CommandID = 操作键:尝试号）。
+func mongoStepCommand(operation string, attempt uint32, deadline time.Time) Command {
+	saga, _, _ := strings.Cut(operation, ":")
+	now := time.Now().UTC()
+	return Command{ID: fmt.Sprintf("%s:%d", operation, attempt), IdempotencyKey: operation, SagaID: saga, SagaType: "bench", DefinitionVersion: 1,
+		BusinessKey: saga, StepName: "step", Phase: PhaseForward, Attempt: attempt, Topic: "bench.step", CreatedAt: now, DeadlineAt: deadline}
 }

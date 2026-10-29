@@ -256,9 +256,11 @@ type Engine struct {
 	failCause     error
 }
 
-// engineHooks 只给本包测试用：发布之前回调（冻结旧写者、注入故障）。生产代码不设置。
+// engineHooks 只给本包测试用：发布之前回调（冻结旧写者、注入故障）；分区跳过一条输入时回调（单元按它还原“结果被拒的原因”）。
+// 生产代码不设置。
 type engineHooks struct {
 	beforePublish func(k int)
+	rejectedInput func(kind, reason string, err error)
 }
 
 // NewEngine 校验选项并构造协调器；Register 定义后调用 Start。log 与 raw 来自同一条 NATS 连接

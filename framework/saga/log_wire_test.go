@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// JetStream 协调器线格式（LogWireVersion 2）：事件、输入、快照清单与正文的编解码与校验；版本不对、分区 / 布局不符、摘要不符都拒绝。
+// JetStream 协调器线格式（WireVersion 2）：事件、输入、快照清单与正文的编解码与校验；版本不对、分区 / 布局不符、摘要不符都拒绝。
 
 func wireLayout() Layout { return Layout{Prefix: "w.saga", Stream: "W_SAGA", Partitions: 4, Groups: 2} }
 
@@ -45,7 +45,7 @@ func TestLogEventRoundTripAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.V != LogWireVersion || got.In != 7 || got.Saga.Record.StartAttempt != "a.1" || got.Command.Partition != 1 || got.Saga.Ops[operationKey(st.Record.ID, PhaseCompensate, 0)].LateAlarms[0] != 0 || got.Saga.Receipts["c1"] == "" {
+	if got.V != WireVersion || got.In != 7 || got.Saga.Record.StartAttempt != "a.1" || got.Command.Partition != 1 || got.Saga.Ops[operationKey(st.Record.ID, PhaseCompensate, 0)].LateAlarms[0] != 0 || got.Saga.Receipts["c1"] == "" {
 		t.Fatalf("round trip lost fields: %+v", got)
 	}
 	mutate := func(name string, fn func(map[string]any)) {
@@ -73,16 +73,15 @@ func TestLogEventRoundTripAndValidation(t *testing.T) {
 
 func TestLogInputsAreValidated(t *testing.T) {
 	digest := strings.Repeat("d", 64)
-	good, _ := json.Marshal(startInput{V: LogWireVersion, Request: StartRequest{Type: "rally", BusinessKey: "bk", DefinitionVersion: 1}, Attempt: "i.1", Digest: digest})
+	good, _ := json.Marshal(startInput{V: WireVersion, Request: StartRequest{Type: "rally", BusinessKey: "bk", DefinitionVersion: 1}, Attempt: "i.1", Digest: digest})
 	if _, err := decodeStartInput(good); err != nil {
 		t.Fatal(err)
 	}
 	for name, in := range map[string]startInput{
 		"version 1":    {V: 1, Request: StartRequest{Type: "rally"}, Attempt: "i.1", Digest: digest},
-		"no attempt":   {V: LogWireVersion, Request: StartRequest{Type: "rally"}, Digest: digest},
-		"caller ID":    {V: LogWireVersion, Request: StartRequest{ID: "x", Type: "rally"}, Attempt: "i.1", Digest: digest},
-		"short digest": {V: LogWireVersion, Request: StartRequest{Type: "rally"}, Attempt: "i.1", Digest: "ab"},
-		"long attempt": {V: LogWireVersion, Request: StartRequest{Type: "rally"}, Attempt: strings.Repeat("a", 257), Digest: digest},
+		"no attempt":   {V: WireVersion, Request: StartRequest{Type: "rally"}, Digest: digest},
+		"short digest": {V: WireVersion, Request: StartRequest{Type: "rally"}, Attempt: "i.1", Digest: "ab"},
+		"long attempt": {V: WireVersion, Request: StartRequest{Type: "rally"}, Attempt: strings.Repeat("a", 257), Digest: digest},
 	} {
 		raw, _ := json.Marshal(in)
 		if _, err := decodeStartInput(raw); !errors.Is(err, ErrInvalidRecord) {
@@ -90,7 +89,7 @@ func TestLogInputsAreValidated(t *testing.T) {
 		}
 	}
 	c := Completion{CommandID: "s:1:0:1", IdempotencyKey: "s:1:0", SagaID: "s", Success: true, Data: []byte("1234")}
-	raw, _ := json.Marshal(resultInput{V: LogWireVersion, Completion: c})
+	raw, _ := json.Marshal(resultInput{V: WireVersion, Completion: c})
 	if _, err := decodeResultInput(raw, 4); err != nil {
 		t.Fatal(err)
 	}
@@ -98,17 +97,17 @@ func TestLogInputsAreValidated(t *testing.T) {
 		t.Errorf("oversized result data: %v", err)
 	}
 	c.Error = "both"
-	raw, _ = json.Marshal(resultInput{V: LogWireVersion, Completion: c})
+	raw, _ = json.Marshal(resultInput{V: WireVersion, Completion: c})
 	if _, err := decodeResultInput(raw, 100); !errors.Is(err, ErrInvalidRecord) {
 		t.Errorf("success with error: %v", err)
 	}
 	now := time.Now()
 	for name, in := range map[string]opInput{
-		"resume without request":    {V: LogWireVersion, Kind: opResume, ID: "s", Now: now, Attempt: "a"},
-		"resume of another id":      {V: LogWireVersion, Kind: opResume, ID: "s", Resume: &ResumeRequest{ID: "t"}, Now: now, Attempt: "a"},
-		"compensate with a request": {V: LogWireVersion, Kind: opCompensate, ID: "s", Resume: &ResumeRequest{ID: "s"}, Now: now, Attempt: "a"},
-		"no time":                   {V: LogWireVersion, Kind: opCompensate, ID: "s", Attempt: "a"},
-		"unknown kind":              {V: LogWireVersion, Kind: "delete", ID: "s", Now: now, Attempt: "a"},
+		"resume without request":    {V: WireVersion, Kind: opResume, ID: "s", Now: now, Attempt: "a"},
+		"resume of another id":      {V: WireVersion, Kind: opResume, ID: "s", Resume: &ResumeRequest{ID: "t"}, Now: now, Attempt: "a"},
+		"compensate with a request": {V: WireVersion, Kind: opCompensate, ID: "s", Resume: &ResumeRequest{ID: "s"}, Now: now, Attempt: "a"},
+		"no time":                   {V: WireVersion, Kind: opCompensate, ID: "s", Attempt: "a"},
+		"unknown kind":              {V: WireVersion, Kind: "delete", ID: "s", Now: now, Attempt: "a"},
 	} {
 		raw, _ := json.Marshal(in)
 		if _, err := decodeOpInput(raw); !errors.Is(err, ErrInvalidRecord) {

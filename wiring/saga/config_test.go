@@ -17,21 +17,21 @@ func TestSagaDeclaredDefaultsMatchCoreDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, want := mod.config.Engine, coresaga.DefaultOptions()
-	if got.CoordinatorWorkers != want.CoordinatorWorkers || got.PublisherWorkers != want.PublisherWorkers ||
-		got.CoordinatorBatch != want.CoordinatorBatch || got.PublisherBatch != want.PublisherBatch ||
-		got.LeaseDuration != want.LeaseDuration || got.StoreTimeout != want.StoreTimeout || got.PollInterval != want.PollInterval ||
-		got.PublishTimeout != want.PublishTimeout || got.PublishBackoffMin != want.PublishBackoffMin ||
-		got.PublishBackoffMax != want.PublishBackoffMax || got.MaxPayloadBytes != want.MaxPayloadBytes {
+	if got.Layout.Prefix != want.Layout.Prefix || got.Layout.Stream != want.Layout.Stream || got.Layout.Partitions != want.Layout.Partitions || got.Layout.Groups != want.Layout.Groups ||
+		got.StreamMaxBytes != want.StreamMaxBytes || got.DuplicateWindow != want.DuplicateWindow || got.MaxBatch != want.MaxBatch || got.Tick != want.Tick ||
+		got.SnapshotEveryEvents != want.SnapshotEveryEvents || got.SnapshotInterval != want.SnapshotInterval || got.TerminalRetention != want.TerminalRetention ||
+		got.ReceiptRetention != want.ReceiptRetention || got.PublishTimeout != want.PublishTimeout || got.PublishUnknownBudget != want.PublishUnknownBudget ||
+		got.QueryTimeout != want.QueryTimeout || got.StartVerdictTimeout != want.StartVerdictTimeout || got.PurgeStallAlarm != want.PurgeStallAlarm ||
+		got.MaxPayloadBytes != want.MaxPayloadBytes || got.Replicas != want.Replicas || got.Admission.Enabled != want.Admission.Enabled {
 		t.Fatalf("declared defaults %+v differ from coresaga.DefaultOptions %+v", got, want)
 	}
-	for name, timeout := range map[string]any{
-		"result":        mod.config.Completions.ProcessTimeout,
-		"start_effect":  mod.config.Starts.ProcessTimeout,
-		"result_effect": mod.config.NestResults.ProcessTimeout,
-	} {
-		if timeout != want.StoreTimeout {
-			t.Errorf("%s process_timeout default = %v, want core StoreTimeout %v", name, timeout, want.StoreTimeout)
-		}
+	admission := want.Admission
+	admission.HighRecords, admission.LowRecords, admission.StaleAfter = 5000, 2500, 2*time.Second
+	if got.Admission.HighRecords != admission.HighRecords || got.Admission.LowRecords != admission.LowRecords || got.Admission.StaleAfter != admission.StaleAfter {
+		t.Fatalf("declared admission %+v differs from the core defaults %+v", got.Admission, admission)
+	}
+	if got.Writer != "" {
+		t.Fatalf("Init wrote a writer identity %q before Provide (it comes from the singleton incarnation)", got.Writer)
 	}
 }
 
@@ -83,16 +83,16 @@ func yamlConfig(t *testing.T, text string) *viper.Viper {
 	if err := cfg.ReadConfig(strings.NewReader(text)); err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.IsSet("saga.redis.key_prefix") {
-		cfg.Set("saga.redis.key_prefix", "test:saga")
+	if !cfg.IsSet("saga.coordinators") {
+		cfg.Set("saga.coordinators", []string{"1"})
 	}
 	return cfg
 }
 
-// sagaTestConfig 是只写了必填键（saga.redis.key_prefix）的配置。
+// sagaTestConfig 是只写了必填键（saga.coordinators）的配置。
 func sagaTestConfig() *viper.Viper {
 	cfg := viper.New()
-	cfg.Set("saga.redis.key_prefix", "test:saga")
+	cfg.Set("saga.coordinators", []string{"1"})
 	return cfg
 }
 

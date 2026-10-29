@@ -11,7 +11,7 @@ import (
 // 协调器侧准入（设计 §6）：初始化 fail-closed、滞回、过期按本机单调时钟（不读参与方写入的时刻）、删除 / 过期清除即下线。
 
 func loadEntry(key string, records uint64) fnats.LogKVEntry {
-	raw, _ := json.Marshal(participantLoad{V: LogWireVersion, Records: records})
+	raw, _ := json.Marshal(participantLoad{V: WireVersion, Records: records})
 	return fnats.LogKVEntry{Key: key, Value: raw}
 }
 
@@ -99,7 +99,7 @@ func TestAdmissionHintsAreOnlyTrustedWhileFresh(t *testing.T) {
 	if closed, _ := h.closed(); closed {
 		t.Fatal("no hint must not block")
 	}
-	raw, _ := json.Marshal(admissionHint{V: LogWireVersion, Open: false, Reason: AdmissionReasonBacklog})
+	raw, _ := json.Marshal(admissionHint{V: WireVersion, Open: false, Reason: AdmissionReasonBacklog})
 	h.observe(fnats.LogKVEntry{Key: admitHintKey, Value: raw})
 	if closed, reason := h.closed(); !closed || reason != AdmissionReasonBacklog {
 		t.Fatalf("fresh closed hint: %v %q", closed, reason)

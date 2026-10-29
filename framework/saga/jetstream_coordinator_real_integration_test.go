@@ -2,7 +2,7 @@
 
 package saga
 
-// JetStream 协调器（第 2 批，未接线）在真实私有三节点集群（R3、文件存储）上的端到端：正向 / 补偿、发布结果未知、旧写者被隔离
+// 协调器在真实私有三节点集群（R3、文件存储）上的端到端：正向 / 补偿、发布结果未知、旧写者被隔离
 // fail-stop、快照 + 清理 + 重放一致与快照不兼容拒绝启动、kill -9 协调器后重放、流满 fail-stop、10176 立即重发、准入信号过期
 // 清除（LimitMarkerTTL）。参与方是用例里的简化实现：按操作记回执（同一操作只执行一次，之后回放结论），把结果经 Complete 发回分区。
 //
@@ -29,6 +29,7 @@ import (
 	gonats "github.com/nats-io/nats.go"
 	gojs "github.com/nats-io/nats.go/jetstream"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	ndriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
 )
@@ -117,8 +118,8 @@ func giftDefinition() Definition {
 }
 
 // realEngineOptions 是端到端的缺省选项（R3，短预算）。
-func realEngineOptions(layout Layout, owned []int) JetStreamOptions {
-	return JetStreamOptions{
+func realEngineOptions(layout Layout, owned []int) Options {
+	return Options{
 		Layout: layout, Owned: owned, Replicas: 3, StreamMaxBytes: 256 << 20, DuplicateWindow: 40 * time.Second,
 		PublishTimeout: 2 * time.Second, PublishUnknownBudget: 15 * time.Second, QueryTimeout: 2 * time.Second, StartVerdictTimeout: 2 * time.Second,
 		SnapshotEveryEvents: 1 << 20, SnapshotInterval: time.Hour, TerminalRetention: time.Hour,
@@ -134,12 +135,12 @@ func allPartitions(n int) []int {
 }
 
 // startRealEngine 建、登记、启动一个协调器，用例结束停掉。log 为空时用 conn 的日志。
-func startRealEngine(t *testing.T, conn realJSConn, log fnats.JetStreamLog, options JetStreamOptions) *JetStreamEngine {
+func startRealEngine(t *testing.T, conn realJSConn, log fnats.JetStreamLog, options Options) *Engine {
 	t.Helper()
 	if log == nil {
 		log = conn.log
 	}
-	e, err := NewJetStreamEngine(log, conn.client, options)
+	e, err := NewEngine(log, conn.client, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +166,7 @@ func startRealEngine(t *testing.T, conn realJSConn, log fnats.JetStreamLog, opti
 // 业务结论由 decide 给出。结果经 Complete 发回分区（失败重试到成功）。executed 计业务真正执行的次数（按操作）。
 type testParticipant struct {
 	t        *testing.T
-	engine   *JetStreamEngine
+	engine   *Engine
 	layout   Layout
 	decide   func(Command) Completion
 	delay    time.Duration
@@ -179,7 +180,7 @@ type testParticipant struct {
 	stop     chan struct{}
 }
 
-func startParticipant(t *testing.T, log fnats.JetStreamLog, engine *JetStreamEngine, layout Layout, decide func(Command) Completion) *testParticipant {
+func startParticipant(t *testing.T, log fnats.JetStreamLog, engine *Engine, layout Layout, decide func(Command) Completion) *testParticipant {
 	t.Helper()
 	p := &testParticipant{t: t, engine: engine, layout: layout, decide: decide, receipts: map[string]Completion{}, executed: map[string]int{}, seen: map[string]bool{}, writers: map[string]map[string]bool{}, stop: make(chan struct{})}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -275,7 +276,7 @@ func giftDecide(command Command) Completion {
 	return Completion{Success: true, Data: []byte(command.StepName)}
 }
 
-func waitTerminal(t *testing.T, e *JetStreamEngine, id string, budget time.Duration) Record {
+func waitTerminal(t *testing.T, e *Engine, id string, budget time.Duration) Record {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
@@ -545,7 +546,7 @@ func TestRealJetStreamCoordinatorFencesAStaleWriter(t *testing.T) {
 	optionsA.Writer, optionsA.Failure = "writer-a", failureA
 	var freeze atomic.Bool
 	frozen, release := make(chan struct{}, 1), make(chan struct{})
-	engineA, err := NewJetStreamEngine(&unknownLog{JetStreamLog: connA.log}, connA.client, optionsA)
+	engineA, err := NewEngine(&unknownLog{JetStreamLog: connA.log}, connA.client, optionsA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,7 +640,7 @@ func TestRealJetStreamCoordinatorSnapshotPurgeAndReplayAgree(t *testing.T) {
 	options.SnapshotEveryEvents = 8
 	options.Writer = "first"
 	ownerCtxConn := dialRealJS(t, url)
-	owner, err := NewJetStreamEngine(ownerCtxConn.log, ownerCtxConn.client, options)
+	owner, err := NewEngine(ownerCtxConn.log, ownerCtxConn.client, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -741,7 +742,7 @@ func TestRealJetStreamCoordinatorSnapshotPurgeAndReplayAgree(t *testing.T) {
 		if _, err := kv.Put(ctx, snapshotKey(0), mustJSON(t, m)); err != nil {
 			t.Fatal(err)
 		}
-		bad, err := NewJetStreamEngine(conn.log, conn.client, options)
+		bad, err := NewEngine(conn.log, conn.client, options)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -834,7 +835,7 @@ func TestRealJetStreamCoordinatorAdmissionForgetsAnExpiredParticipant(t *testing
 		t.Fatalf("admission never became open=%v %q: %+v", want, reason, owner.AdmissionState())
 	}
 	waitAdmission(true, "")
-	if _, err := loads.Put(ctx, "part.game.1", mustJSON(t, participantLoad{V: LogWireVersion, Records: 500})); err != nil {
+	if _, err := loads.Put(ctx, "part.game.1", mustJSON(t, participantLoad{V: WireVersion, Records: 500})); err != nil {
 		t.Fatal(err)
 	}
 	waitAdmission(false, AdmissionReasonBacklog)
@@ -875,7 +876,7 @@ func TestRealJetStreamCoordinatorChild(t *testing.T) {
 	options := realEngineOptions(layout, allPartitions(partitions))
 	options.Writer = "child-" + strconv.Itoa(os.Getpid())
 	options.SnapshotEveryEvents = 16
-	e, err := NewJetStreamEngine(conn.log, conn.client, options)
+	e, err := NewEngine(conn.log, conn.client, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -985,7 +986,13 @@ func TestRealJetStreamCoordinatorKill9Replays(t *testing.T) {
 	}
 	time.Sleep(1500 * time.Millisecond)
 	child.kill() // kill -9：在途的发布、未提交的轮、未写的快照都丢了
-	time.Sleep(500 * time.Millisecond)
+	// 长停机：ROOST_SAGA_JS_RESTART_DELAY=60s 让协调器停 60s 再拉起（与参与方 kill -9 用例同一个开关）；期间发起方的启动意图
+	// 照样进日志、等不到判定，在途步骤的截止全部过去，重启后按到期重试。
+	restartDelay := 500 * time.Millisecond
+	if d, _ := time.ParseDuration(os.Getenv("ROOST_SAGA_JS_RESTART_DELAY")); d > 0 {
+		restartDelay = d
+	}
+	time.Sleep(restartDelay)
 	startCoordinatorChild(t, layout)
 	time.Sleep(1500 * time.Millisecond)
 	close(stopStarting)
@@ -1073,5 +1080,238 @@ func TestRealJetStreamCoordinatorRetriesThroughAParticipantOutage(t *testing.T) 
 		r := stuck[0]
 		t.Fatalf("%d of %d sagas did not complete after the participant came back, e.g. %s %s attempt %d next run %s (%s ago); stats %+v",
 			len(stuck), sagas, r.BusinessKey, r.Status, r.Attempt, r.NextRunAt.Format("15:04:05.000"), time.Since(r.NextRunAt).Round(time.Millisecond), owner.Stats())
+	}
+}
+
+// commandWatch 跟随布局全部流上的命令事件，记下每条命令（用例自己决定答不答）。
+type commandWatch struct {
+	mu       sync.Mutex
+	commands []Command
+	follows  []fnats.LogFollow
+}
+
+func watchCommands(t *testing.T, log fnats.JetStreamLog, layout Layout) *commandWatch {
+	t.Helper()
+	w := &commandWatch{}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for _, stream := range layout.Streams() {
+		follow, err := log.Follow(ctx, stream, []string{layout.Prefix + ".*.ev.cmd.>"}, 0, func(msg fnats.LogMsg) {
+			rest := strings.TrimPrefix(msg.Subject, layout.Prefix+".")
+			k, err := strconv.Atoi(rest[:strings.IndexByte(rest, '.')])
+			if err != nil {
+				return
+			}
+			if ev, err := decodeEvent(msg.Data, layout, k); err == nil && ev.Command != nil {
+				w.mu.Lock()
+				w.commands = append(w.commands, *ev.Command)
+				w.mu.Unlock()
+			}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.follows = append(w.follows, follow)
+	}
+	t.Cleanup(func() {
+		for _, f := range w.follows {
+			_ = f.Stop(context.Background())
+		}
+	})
+	return w
+}
+
+// await 等第一条满足 match 的命令。
+func (w *commandWatch) await(t *testing.T, match func(Command) bool) Command {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		w.mu.Lock()
+		for _, c := range w.commands {
+			if match(c) {
+				w.mu.Unlock()
+				return c
+			}
+		}
+		w.mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("command did not arrive")
+	return Command{}
+}
+
+// 放弃之后才到的正向成功（saga 方向 ④）在真实日志上：Failed 被重开、只补偿那一步，补偿命令带那份成功的 Data；同一成功再送达两次
+// 只告警一次、只重开一次；补偿完回到 Compensated。重放（新协调器从日志恢复）后状态一致。
+// 历史：TestRealMongoLateSuccessReopensACompensatedSagaOnce / TestRealMongoLateSuccessAlarmIsMarkedOnce（Mongo 冷副本上的协调器）。
+func TestRealJetStreamCoordinatorCompensatesALateSuccessOnce(t *testing.T) {
+	url := realJSURL(t)
+	layout := realLayout(t, url, 1, 1)
+	conn := dialRealJS(t, url)
+	options := realEngineOptions(layout, allPartitions(1))
+	engine, err := NewEngine(conn.log, conn.client, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quick := Definition{Type: "late", Version: 1, Steps: []Step{
+		{Name: "debit", ForwardTopic: "late.debit", CompensateTopic: "late.debit.cancel", Timeout: 300 * time.Millisecond, MaxAttempts: 1, BackoffMin: 10 * time.Millisecond, BackoffMax: 20 * time.Millisecond},
+		{Name: "credit", ForwardTopic: "late.credit", CompensateTopic: "late.credit.cancel", Timeout: time.Second, MaxAttempts: 1, BackoffMin: 10 * time.Millisecond, BackoffMax: 20 * time.Millisecond},
+	}}
+	if err := engine.Register(quick); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Stop(context.Background()) })
+	commands := watchCommands(t, conn.log, layout)
+	started, err := engine.StartSaga(ctx, StartRequest{Type: "late", BusinessKey: "late-1", DefinitionVersion: 1, Data: []byte(`{"gift":1}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	debit := commands.await(t, func(c Command) bool { return c.SagaID == started.ID && c.Phase == PhaseForward && c.Step == 0 })
+	failed := waitTerminal(t, engine, started.ID, 10*time.Second) // 唯一一次尝试超时 → Failed
+	if failed.Status != StatusFailed {
+		t.Fatalf("want Failed after the only attempt timed out: %+v", failed)
+	}
+	late := Completion{CommandID: debit.ID, IdempotencyKey: debit.IdempotencyKey, SagaID: started.ID, Success: true, Data: debit.Payload}
+	for range 3 { // 同一成功送达三次
+		if err := engine.Complete(ctx, late); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compensation := commands.await(t, func(c Command) bool { return c.SagaID == started.ID && c.Phase == PhaseCompensate && c.Step == 0 })
+	if string(compensation.Payload) != string(debit.Payload) {
+		t.Fatalf("compensation payload %q, want the late success's data %q", compensation.Payload, debit.Payload)
+	}
+	if err := engine.Complete(ctx, Completion{CommandID: compensation.ID, IdempotencyKey: compensation.IdempotencyKey, SagaID: started.ID, Success: true}); err != nil {
+		t.Fatal(err)
+	}
+	final := waitTerminal(t, engine, started.ID, 10*time.Second)
+	if final.Status != StatusCompensated || final.LateStep != 0 || final.Version <= failed.Version {
+		t.Fatalf("after compensating the late step: %+v", final)
+	}
+	// 三次送达同一个结果：Complete 按 MsgID res.<CommandID> 发布，流在去重窗口内只留一条，分区只见到一次；窗口外的重复由分区按
+	// 回执摘要判重复（单元 TestPartitionResultDuplicateAndIdentityConflict）。这里钉的是“只告警一次、只重开一次”。
+	stats := engine.Stats()
+	if stats.LateAfterAbandon != 1 || stats.Reopened != 1 {
+		t.Fatalf("three deliveries of one late success: LateAfterAbandon=%d Reopened=%d, want 1, 1", stats.LateAfterAbandon, stats.Reopened)
+	}
+	// 新协调器从日志重放：同一份状态。
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer stopCancel()
+	if err := engine.Stop(stopCtx); err != nil {
+		t.Fatal(err)
+	}
+	replayed := startRealEngineWith(t, dialRealJS(t, url), options, quick)
+	got, err := replayed.Get(ctx, started.ID)
+	if err != nil || got.Status != StatusCompensated || got.Version != final.Version {
+		t.Fatalf("after replay: %+v %v, want %+v", got, err, final)
+	}
+}
+
+// startRealEngineWith 与 startRealEngine 相同，登记给定的定义。
+func startRealEngineWith(t *testing.T, conn realJSConn, options Options, definitions ...Definition) *Engine {
+	t.Helper()
+	e, err := NewEngine(conn.log, conn.client, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range definitions {
+		if err := e.Register(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := e.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_ = e.Stop(ctx)
+	})
+	return e
+}
+
+// 装配的生命周期在真实 JetStream 上：Start 先恢复协调器、再订阅启动中继；Nest 启动 effect 经中继变成 saga；Stop 先排空中继再停
+// 协调器；中继订阅失败（效果流不存在）时 Start 返回错误并停掉已启动的协调器（可以再 Assemble 重来）。
+func TestRealAssemblyStartsTheRelayAndStopsInOrder(t *testing.T) {
+	url := realJSURL(t)
+	layout := realLayout(t, url, 2, 1)
+	conn := dialRealJS(t, url)
+	js, err := ndriver.NewJetStreamClient(conn.client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects := layout.Stream + "_EFFECTS"
+	prefix := strings.ToLower(layout.Stream) + ".effect"
+	t.Cleanup(func() {
+		nc, err := gonats.Connect(url)
+		if err != nil {
+			return
+		}
+		defer nc.Close()
+		if gjs, err := gojs.New(nc); err == nil {
+			_ = gjs.DeleteStream(context.Background(), effects)
+		}
+	})
+	config := AssemblyConfig{Engine: realEngineOptions(layout, allPartitions(2)),
+		Starts: NestStartConsumerConfig{Stream: effects, Durable: "starts", EffectPrefix: prefix, AckWait: 10 * time.Second, ProcessTimeout: 5 * time.Second}}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	missing, err := Assemble(conn.log, conn.client, js, config, giftDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := missing.Start(ctx); err == nil {
+		t.Fatal("Start succeeded without the effect stream the relay subscribes to")
+	}
+	if missing.Running() || missing.Engine.ready.Load() {
+		t.Fatal("a failed Start left the coordinator running")
+	}
+
+	if err := js.EnsureStream(ctx, fnats.JetStreamConfig{Name: effects, Subjects: []string{prefix + ".>"}, Storage: fnats.JetStreamStorageFile, Replicas: 1, Duplicates: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	asm, err := Assemble(conn.log, conn.client, js, config, giftDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := asm.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !asm.Running() || asm.ConsumersClosed() {
+		t.Fatal("a started assembly is not running with its relay")
+	}
+	effect, err := NewStartEffect(StartRequest{Type: "gift", DefinitionVersion: 1, BusinessKey: "relayed", Data: []byte("x")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(nestwal.EffectEnvelope{TransactionID: "tx-1", EffectID: effect.ID, Topic: effect.Topic, Key: effect.Key, Payload: effect.Payload})
+	if _, err := js.Publish(ctx, prefix+"."+StartEffectTopic, raw, fnats.JetStreamPublishOptions{MsgID: effect.ID}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if record, err := asm.Engine.GetByBusinessKey(ctx, "gift", "relayed"); err == nil {
+			if record.ID != IDOf("gift", "relayed") {
+				t.Fatalf("relayed saga = %+v", record)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the relay did not turn the start effect into a saga")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := asm.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if asm.Running() || !asm.ConsumersClosed() || asm.Engine.ready.Load() {
+		t.Fatal("Stop did not finish: relay or coordinator still up")
 	}
 }

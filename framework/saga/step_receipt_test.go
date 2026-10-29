@@ -1,6 +1,7 @@
 package saga
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -273,11 +274,37 @@ func TestNativeStepReceiptMisuse(t *testing.T) {
 	}
 }
 
-// 旧路径（收件箱构造的 NativeStep，run 为空）上 Begin 不做任何事：业务照常执行，至多一次由收件箱租约保证。
-func TestNativeStepBeginIsANoOpOnTheInboxPath(t *testing.T) {
-	replayed, err := NativeStep{}.Begin(struct{}{})
-	if replayed || err != nil {
-		t.Fatalf("Begin on the inbox path = %v %v", replayed, err)
+// NativeStep 只由框架构造（RunNativeStep）：零值的 Begin / Complete 返回 ErrNoNativeStep，不执行、不写任何东西。
+// 历史：TestNativeStepCannotCompleteWithoutAReservation（旧收件箱路径时零值 Complete 报 ErrNoNativeStep，Begin 是空操作）。
+func TestNativeStepCannotCompleteWithoutARun(t *testing.T) {
+	if replayed, err := (NativeStep{}).Begin(newReceiptEntity()); replayed || !errors.Is(err, ErrNoNativeStep) {
+		t.Fatalf("Begin on a zero NativeStep = %v %v, want ErrNoNativeStep", replayed, err)
+	}
+	if err := (NativeStep{}).Complete(true, ""); !errors.Is(err, ErrNoNativeStep) {
+		t.Fatalf("Complete on a zero NativeStep = %v, want ErrNoNativeStep", err)
+	}
+}
+
+// 结果未知：Nest 已提交、调用方却拿到错误（回复丢失、超时）。RunNativeStep 返回错误（消费者 nak），同一命令的重投读到回执
+// 回放、不再执行业务。历史：TestNativeStepUnknownOutcomeIsNotRunAgainByARedelivery（旧路径靠保留租约 + 等回执）。
+func TestNativeStepUnknownOutcomeIsNotRunAgainByARedelivery(t *testing.T) {
+	h := newNativeHarness()
+	command := stepCommand(0, 1, time.Minute)
+	lost := errors.New("reply lost after the commit")
+	if _, err := RunNativeStep(context.Background(), command, time.Hour, func(ctx context.Context, step NativeStep) error {
+		if err := h.body(ctx, step); err != nil {
+			return err
+		}
+		return lost
+	}); !errors.Is(err, lost) {
+		t.Fatalf("run whose reply was lost = %v, want the error (outcome unknown, nak)", err)
+	}
+	outcome := h.run(t, command)
+	if outcome.Kind != StepReplayed || !outcome.Completion.Success || outcome.Completion.CommandID != command.ID {
+		t.Fatalf("redelivery after an unknown outcome = %+v, want a replay of the committed success", outcome)
+	}
+	if h.business != 1 {
+		t.Fatalf("business ran %d times, want 1", h.business)
 	}
 }
 
@@ -305,7 +332,7 @@ func TestNativeStepReceiptPrunesExpiredReceiptsBoundedly(t *testing.T) {
 
 func TestStepReceiptEncodingRoundTrips(t *testing.T) {
 	for _, receipt := range []StepReceipt{
-		{CommandID: "a:1:0:1", Success: true, Data: []byte("x"), At: 7},
+		{CommandID: "a:1:0:1", Success: true, At: 7},
 		{CommandID: "a:1:0:r2:1", Incarnation: 2, Error: "no", At: 8},
 	} {
 		got, err := decodeStepReceipt(encodeStepReceipt(receipt))
@@ -317,5 +344,28 @@ func TestStepReceiptEncodingRoundTrips(t *testing.T) {
 		if _, err := decodeStepReceipt([]byte(raw)); !errors.Is(err, ErrInvalidRecord) {
 			t.Fatalf("decode %s = %v, want ErrInvalidRecord", raw, err)
 		}
+	}
+}
+
+// 原生步骤成功的结果带这一步的命令载荷（维护者 2026-10-29 选 A）：执行与回放交出逐字节相同的结果（协调器按 CommandID 的回执摘要
+// 去重，不同就是身份冲突）；拒绝不带 Data。补偿迟到那一步的命令载荷因此是参与方解得开的那份（late_success_test.go 的 ④ 用例）。
+func TestNativeStepSuccessCarriesItsCommandPayload(t *testing.T) {
+	h := newNativeHarness()
+	first := stepCommand(0, 1, time.Minute)
+	first.Payload = []byte(`{"from":7,"item":3}`)
+	executed := h.run(t, first)
+	if !bytes.Equal(executed.Completion.Data, first.Payload) {
+		t.Fatalf("executed success Data = %q, want the command payload %q", executed.Completion.Data, first.Payload)
+	}
+	second := stepCommand(0, 2, time.Minute)
+	second.Payload = first.Payload // 同一操作实例的各次尝试载荷相同
+	replayed := h.run(t, second)
+	if replayed.Kind != StepReplayed || receiptDigest(replayed.Completion) != receiptDigest(executed.Completion) {
+		t.Fatalf("replay = %+v, want the executed result byte for byte (digest %s vs %s)", replayed, receiptDigest(replayed.Completion), receiptDigest(executed.Completion))
+	}
+	refusing := newNativeHarness()
+	refusing.success, refusing.reason = false, "no"
+	if refused := refusing.run(t, first); refused.Completion.Data != nil {
+		t.Fatalf("a refusal carries Data %q, want none", refused.Completion.Data)
 	}
 }

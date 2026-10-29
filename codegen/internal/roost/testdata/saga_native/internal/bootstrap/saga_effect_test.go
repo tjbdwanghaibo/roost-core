@@ -25,15 +25,12 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	"github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
 	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
 	kitnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
-	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
-	kitstoreservice "github.com/tjbdwanghaibo/roost-core/wiring/storeservice"
 )
 
 // 生成器产物在真实依赖上端到端（D12 方向 B）：roost add saga -native 与 roost add effect 的骨架填上最小业务后，
@@ -46,8 +43,9 @@ import (
 // 核对恰好一次：两笔 saga 的终态；Mongo 里三个钱包的余额（A 100→70、B 100→130、C 995 不变）；audit 记录只有
 // 正向那一笔一条；升级通知一条、回执一条（再等一会儿仍是一条）。
 //
-// 资源：权威 Redis 键前缀 sagagen:<ns>、DAO 物理库 sagagen_dao_<…>（逻辑库 main 经 dataengine.databases 映射过去，核对文档不落在名为 main 的库）、库 sagagen_de_<pid>_<ns> / sagagen_saga_<…>、
-// 流 SAGAGEN_SAGA_<…> / SAGAGEN_EFFECTS_<…>，用后删除。由 codegen/internal/roost 的
+// 资源：DAO 物理库 sagagen_dao_<…>（逻辑库 main 经 dataengine.databases 映射过去，核对文档不落在名为 main 的库）、库 sagagen_de_<pid>_<ns> / sagagen_saga_<…>、
+// saga 分区流 SAGAGEN_SAGA_<…>_G<g> 与它的快照 / 准入桶、效果流 SAGAGEN_EFFECTS_<…>，用后删除。本进程 sid 903 是唯一的
+// 协调器（saga.coordinators）。由 codegen/internal/roost 的
 // TestGeneratedSagaNativeStepsAndEffectConsumer 复制进新生成的工程后运行（scripts/test-demo-generated.sh）。
 func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 	mongoURI, natsURL := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI"), os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
@@ -61,9 +59,6 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 	token := strings.ReplaceAll(suffix, "_", "x")
 	sagaDatabase, dataDatabase, playerDatabase := "sagagen_saga_"+suffix, "sagagen_de_"+suffix, "sagagen_dao_"+suffix
 	sagaStream, effectStream := "SAGAGEN_SAGA_"+suffix, "SAGAGEN_EFFECTS_"+suffix
-	// 权威 Redis（saga 协调器的权威存储）：ROOST_SAGA_IT_REDIS_ADDR 指的 AOF always 实例，没设时起一个私有 redis-server。
-	redisAddr := redistest.AOFAddr(t)
-	redisPrefix := redistest.Prefix(t, redisAddr, "sagagen")
 	cfg := viper.New()
 	for key, value := range map[string]any{
 		"sid": int32(903), "server_type": "game", "persistence.engine": "dataengine",
@@ -74,9 +69,10 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 		"dataengine.effects.stream": effectStream, "dataengine.effects.subject_prefix": "sagageneffect" + token,
 		"dataengine.effects.replicas": 3, "dataengine.effects.max_bytes": int64(64 << 20),
 		"dataengine.outbox.poll_interval": 50 * time.Millisecond, "dataengine.outbox.retry_min": 100 * time.Millisecond, "dataengine.outbox.retry_max": time.Second,
-		"redis_authority.addr": redisAddr, "saga.redis.key_prefix": redisPrefix,
+		"dataengine.projection.max_unacked_records": int64(20000),
+		"saga.coordinators":                         []string{"903"}, "saga.partitions": 2, "saga.stream_groups": 1,
 		"saga.database": sagaDatabase, "saga.stream": sagaStream, "saga.subject_prefix": "sagagensaga" + token, "saga.replicas": 3,
-		"saga.stream_max_bytes": int64(64 << 20), "saga.poll_interval": 50 * time.Millisecond,
+		"saga.stream_max_bytes":      int64(64 << 20),
 		"saga.step_defaults.timeout": 10 * time.Second, "saga.step_defaults.max_attempts": 5,
 		"saga.step_defaults.backoff_min": 100 * time.Millisecond, "saga.step_defaults.backoff_max": time.Second,
 	} {
@@ -92,7 +88,7 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 		Start() error
 		StopWithContext(context.Context) error
 	}
-	all := []lifecycle{mongoMod, kitnats.NewNatsMod(nil), kitredis.NewAuthorityMod(), kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess)), kitnest.NewMod(EntityAccess), sagaMod, kitstoreservice.NewMod()}
+	all := []lifecycle{mongoMod, kitnats.NewNatsMod(nil), kitdataengine.NewMod(kitdataengine.WithEntityAccess(EntityAccess)), kitnest.NewMod(EntityAccess), sagaMod}
 	checked := make([]app.Mod, 0, len(all))
 	for _, mod := range all {
 		checked = append(checked, mod)
@@ -117,7 +113,13 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 				t.Errorf("cleanup: stop %s: %v", started[i].Name(), err)
 			}
 		}
-		deleteStreams(t, natsURL, sagaStream, effectStream)
+		participant, err := kitsaga.ParticipantSettings(cfg)
+		if err != nil {
+			t.Errorf("cleanup: saga layout: %v", err)
+			return
+		}
+		deleteStreams(t, natsURL, append(participant.Layout.Streams(), effectStream)...)
+		deleteBuckets(t, natsURL, participant.Layout)
 	})
 	for _, mod := range all {
 		if err := mod.Init(cfg); err != nil {
@@ -197,7 +199,7 @@ func TestSagaNativeStepsAndEffectRealDependencies(t *testing.T) {
 	for key, status := range want {
 		deadline := time.Now().Add(90 * time.Second)
 		for {
-			record, err := sagaMod.Store().GetByBusinessKey(ctx, gift.Type, key)
+			record, err := sagaMod.Engine().GetByBusinessKey(ctx, gift.Type, key)
 			if err == nil && record.Status.Terminal() {
 				if record.Status != status {
 					t.Fatalf("saga %s ended %s (%s), want %s", key, record.Status, record.LastError, status)
@@ -297,5 +299,31 @@ func deleteStreams(t *testing.T, url string, streams ...string) {
 		if err := js.DeleteStream(ctx, stream); err != nil && !errors.Is(err, gojs.ErrStreamNotFound) {
 			t.Errorf("cleanup: delete stream %s: %v", stream, err)
 		}
+	}
+}
+
+// deleteBuckets 删掉本次布局的快照 KV、快照对象存储与准入信号桶。
+func deleteBuckets(t *testing.T, url string, layout coresaga.Layout) {
+	t.Helper()
+	nc, err := gonats.Connect(url, gonats.Timeout(2*time.Second))
+	if err != nil {
+		t.Errorf("cleanup: connect: %v", err)
+		return
+	}
+	defer nc.Close()
+	js, err := gojs.New(nc)
+	if err != nil {
+		t.Errorf("cleanup: JetStream: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, bucket := range []string{layout.SnapshotBucket(), layout.LoadBucket()} {
+		if err := js.DeleteKeyValue(ctx, bucket); err != nil && !errors.Is(err, gojs.ErrBucketNotFound) {
+			t.Errorf("cleanup: delete bucket %s: %v", bucket, err)
+		}
+	}
+	if err := js.DeleteObjectStore(ctx, layout.ObjectBucket()); err != nil && !errors.Is(err, gojs.ErrBucketNotFound) && !errors.Is(err, gojs.ErrStreamNotFound) {
+		t.Errorf("cleanup: delete object store %s: %v", layout.ObjectBucket(), err)
 	}
 }

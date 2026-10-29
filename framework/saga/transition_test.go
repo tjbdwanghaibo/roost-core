@@ -1,187 +1,175 @@
 package saga
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
 
-// 两种协调器共用 transition.go 的判定：同一串事件（启动、到期、结果、Resume、Compensate）分别交给 Redis 引擎（内存 Store、
-// 手动领取）与 JetStream 分区（decide / install），逐步比对记录的状态字段与 tombstone。时间字段不比（Redis 引擎的 Complete 用真实
-// 时钟），版本、代际、CommandID、步骤、迟到步骤、错误文本都要一致。
+// 状态机的转移规则（transition.go）原样抽自已删除的 Redis 协调器（第 2 批）。第 2、3 批的差分用例把同一串事件交给两种协调器
+// 逐步比对；第 4 批删除 Redis 协调器前，用它在同一串事件上逐步记下的记录（状态、方向、步骤、版本、代际、CommandID、迟到步骤、
+// 错误文本、Data）、tombstone 关闭方式与运维判定的错误文本存成 testdata/transition_golden.json（生成方法：在 1fbd5d0e 的差分
+// 用例里把 Redis 一侧的 view 写出），这里让分区走同一串事件并逐步比对。时间字段不比。
+// 历史：TestTransitionRulesAreSharedByBothCoordinators（1fbd5d0e）。
 
-// sagaPair 驱动同一笔 saga 在两种协调器上。
-type sagaPair struct {
+type goldenView struct {
+	Status, Phase          string
+	Step, Completed, Late  int
+	Attempt, Incarnation   uint32
+	Version                uint64
+	Op, Command, LastError string
+	Data, LateData         string
+}
+
+type goldenStep struct {
+	Step       string            `json:"step"`
+	View       *goldenView       `json:"view,omitempty"`
+	Tombstones map[string]string `json:"tombstones,omitempty"`
+	Verdict    *string           `json:"verdict,omitempty"`
+}
+
+func loadTransitionGolden(t *testing.T) map[string][]goldenStep {
+	t.Helper()
+	raw, err := os.ReadFile("testdata/transition_golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var byTest map[string][]goldenStep
+	if err := json.Unmarshal(raw, &byTest); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]goldenStep{}
+	for name, steps := range byTest {
+		_, scenario, _ := strings.Cut(name, "/")
+		out[scenario] = steps
+	}
+	return out
+}
+
+// sagaRun 驱动同一笔 saga 在分区上，并按录下的步骤逐步比对。
+type sagaRun struct {
 	t      *testing.T
-	ctx    context.Context
-	redis  *Engine
-	store  *memoryStore
 	u      *unitPartition
 	id     string
 	at     time.Time
-	redisC []Command // Redis 引擎派发的命令（发布函数收到的）
+	golden []goldenStep
+	next   int
 }
 
-func newSagaPair(t *testing.T, definition Definition) *sagaPair {
+func newSagaRun(t *testing.T, definition Definition, golden []goldenStep) *sagaRun {
 	t.Helper()
-	pair := &sagaPair{t: t, ctx: context.Background(), store: newMemoryStore()}
-	options := DefaultOptions()
-	engine, err := NewEngine(pair.store, PublishFunc(func(_ context.Context, c Command) error { return nil }), options)
-	if err != nil {
+	if len(golden) == 0 {
+		t.Fatal("no recorded steps for this scenario")
+	}
+	run := &sagaRun{t: t, golden: golden}
+	run.u = newUnitPartition(t, func(o *Options) {})
+	run.u.e.mu.Lock()
+	run.u.e.definitions = map[definitionKey]Definition{}
+	run.u.e.mu.Unlock()
+	if err := run.u.e.Register(definition); err != nil {
 		t.Fatal(err)
 	}
-	if err := engine.Register(definition); err != nil {
-		t.Fatal(err)
-	}
-	pair.redis = engine
-	pair.u = newUnitPartition(t, func(o *JetStreamOptions) {})
-	pair.u.e.mu.Lock()
-	pair.u.e.definitions = map[definitionKey]Definition{}
-	pair.u.e.mu.Unlock()
-	if err := pair.u.e.Register(definition); err != nil {
-		t.Fatal(err)
-	}
-	pair.at = time.Now().UTC().Truncate(time.Millisecond)
-	pair.u.clock.Set(pair.at)
-	pair.u.p.wheel = newWheel(pair.u.e.opts.Tick, pair.u.e.opts.WheelSlots, pair.at)
-	return pair
+	run.at = time.Now().UTC().Truncate(time.Millisecond)
+	run.u.clock.Set(run.at)
+	run.u.p.wheel = newWheel(run.u.e.opts.Tick, run.u.e.opts.WheelSlots, run.at)
+	return run
 }
 
-func (s *sagaPair) start(bk string, data []byte) {
+func (s *sagaRun) start(bk string, data []byte) {
 	s.t.Helper()
 	s.id = IDOf("rally", bk)
-	if _, err := s.redis.StartSaga(s.ctx, StartRequest{ID: s.id, Type: "rally", BusinessKey: bk, DefinitionVersion: 1, Data: data, Now: s.at}); err != nil {
-		s.t.Fatal(err)
-	}
 	s.u.round(s.at, s.u.startInput(bk, data, "a1", ""))
-	// 分区在同一轮里派发；Redis 引擎领取一次才派发。
 	s.due(0)
 }
 
-// due 把时钟推进 d 并处理到期：Redis 引擎按 ClaimDue（NextRunAt ≤ now）领取后 processClaimed；分区一轮 decide。
-func (s *sagaPair) due(d time.Duration) {
+// due 把时钟推进 d 并判定一轮（到期）。
+func (s *sagaRun) due(d time.Duration) {
 	s.t.Helper()
-	// Redis 引擎的 Complete 用真实时钟排下一次到期，所以虚拟时钟不能落后于真实时钟。
-	s.at = maxTime(s.at, time.Now().UTC()).Add(d)
-	claimed, err := s.store.ClaimDue(s.ctx, ClaimRequest{Owner: "pair", Now: s.at, LeaseDuration: time.Minute, Limit: 10})
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	for _, record := range claimed {
-		if err := s.redis.processClaimed(s.ctx, record, s.at); err != nil {
-			s.t.Fatal(err)
-		}
-	}
+	s.at = s.at.Add(d)
 	s.u.round(s.at)
 	s.compare("due")
 }
 
-// redisSettle 补上分区在同一轮里做的那次派发：分区处理完输入后立即处理本轮改过、已经到期的记录，而 Redis 引擎要等下一次领取。
-// 转移之后立即到期的只有“新步骤”（Attempt == 0，NextRunAt = 转移时刻）；重试退避中的（Attempt > 0）要等退避，两边都不在本轮派发。
-func (s *sagaPair) redisSettle() {
+func (s *sagaRun) complete(c Completion) {
 	s.t.Helper()
-	record := s.current()
-	if record.Status.Terminal() || record.Status == StatusWaiting || record.Attempt != 0 {
-		return
-	}
-	if err := s.redis.processClaimed(s.ctx, record, s.at); err != nil {
-		s.t.Fatal(err)
-	}
-}
-
-// complete 把同一份结果交给两边。Redis 引擎的 Complete 用真实时钟，分区用 s.at：只比较非时间字段。
-func (s *sagaPair) complete(c Completion) {
-	s.t.Helper()
-	_, err := s.redis.Complete(s.ctx, c)
-	if err != nil && !errors.Is(err, ErrNotWaiting) && !errors.Is(err, ErrIdentityConflict) {
-		s.t.Fatalf("redis complete: %v", err)
-	}
-	s.redisSettle()
 	s.u.round(s.at, s.u.resultInput(c))
 	s.compare("complete " + c.CommandID)
 }
 
-func (s *sagaPair) resume() {
+func (s *sagaRun) resume() {
 	s.t.Helper()
-	_, redisErr := s.redis.Resume(s.ctx, ResumeRequest{ID: s.id, Now: s.at})
-	s.redisSettle()
 	s.u.round(s.at, s.u.opInput(opInput{Kind: opResume, ID: s.id, Resume: &ResumeRequest{ID: s.id, Now: s.at}, Now: s.at}, "reply.resume"))
-	s.compareVerdict("resume", redisErr, "reply.resume")
+	s.compareVerdict("resume", "reply.resume")
 	s.compare("resume")
 }
 
-func (s *sagaPair) compensate() {
+func (s *sagaRun) compensate() {
 	s.t.Helper()
-	_, redisErr := s.redis.Compensate(s.ctx, s.id, "operator", s.at)
-	s.redisSettle()
 	s.u.round(s.at, s.u.opInput(opInput{Kind: opCompensate, ID: s.id, Reason: "operator", Now: s.at}, "reply.compensate"))
-	s.compareVerdict("compensate", redisErr, "reply.compensate")
+	s.compareVerdict("compensate", "reply.compensate")
 	s.compare("compensate")
 }
 
-func (s *sagaPair) compareVerdict(step string, redisErr error, reply string) {
+func (s *sagaRun) expect(step string) goldenStep {
 	s.t.Helper()
+	if s.next >= len(s.golden) {
+		s.t.Fatalf("%s: more steps than recorded (%d)", step, len(s.golden))
+	}
+	g := s.golden[s.next]
+	s.next++
+	if g.Step != step {
+		s.t.Fatalf("step %d is %q, recorded %q", s.next-1, step, g.Step)
+	}
+	return g
+}
+
+func (s *sagaRun) compareVerdict(step, reply string) {
+	s.t.Helper()
+	g := s.expect(step + " verdict")
 	verdicts := s.u.raw.verdicts(reply)
 	_, err := verdictResult(verdicts[len(verdicts)-1])
-	if (redisErr == nil) != (err == nil) || (redisErr != nil && redisErr.Error() != err.Error() && !errors.Is(err, redisErr)) {
-		s.t.Fatalf("%s: redis error %v, partition verdict error %v", step, redisErr, err)
+	want := *g.Verdict
+	if (want == "") != (err == nil) || (err != nil && err.Error() != want && !strings.Contains(err.Error(), want)) {
+		s.t.Fatalf("%s: recorded error %q, partition verdict error %v", step, want, err)
 	}
 }
 
-// current 是 Redis 引擎上的当前记录。
-func (s *sagaPair) current() Record {
+func (s *sagaRun) current() Record {
 	s.t.Helper()
-	record, err := s.store.Get(s.ctx, s.id)
-	if err != nil {
-		s.t.Fatal(err)
-	}
-	return record
+	return s.u.record(s.id)
 }
 
-func (s *sagaPair) compare(step string) {
+func (s *sagaRun) compare(step string) {
 	s.t.Helper()
-	a := s.current()
-	b := s.u.record(s.id)
-	type view struct {
-		Status                 Status
-		Phase                  Phase
-		Step, Completed, Late  int
-		Attempt, Incarnation   uint32
-		Version                uint64
-		Op, Command, LastError string
-		Data, LateData         string
+	g := s.expect(step)
+	r := s.current()
+	got := goldenView{Status: r.Status.String(), Phase: r.Phase.String(), Step: r.Step, Completed: r.CompletedSteps, Late: r.LateStep, Attempt: r.Attempt,
+		Incarnation: r.Incarnation, Version: r.Version, Op: r.OperationKey, Command: r.CommandID, LastError: r.LastError, Data: string(r.Data), LateData: string(r.LateData)}
+	if got != *g.View {
+		s.t.Fatalf("%s: records differ\nrecorded  %+v\npartition %+v", step, *g.View, got)
 	}
-	of := func(r Record) view {
-		return view{r.Status, r.Phase, r.Step, r.CompletedSteps, r.LateStep, r.Attempt, r.Incarnation, r.Version, r.OperationKey, r.CommandID, r.LastError, string(r.Data), string(r.LateData)}
+	ops := s.u.p.sagas[s.id].Ops
+	if len(ops) != len(g.Tombstones) {
+		s.t.Fatalf("%s: tombstones: recorded %v, partition %+v", step, g.Tombstones, ops)
 	}
-	if of(a) != of(b) {
-		s.t.Fatalf("%s: records differ\nredis     %+v\npartition %+v", step, of(a), of(b))
-	}
-	s.store.mu.Lock()
-	defer s.store.mu.Unlock()
-	for op, closure := range s.store.closures {
-		if s.store.closed[op] != s.id {
-			continue
+	for op, closure := range g.Tombstones {
+		if got := closureName(ops[op].Closure); got != closure {
+			s.t.Fatalf("%s: tombstone of %s: recorded %s, partition %s", step, op, closure, got)
 		}
-		if got := s.u.p.sagas[s.id].Ops[op].Closure; got != closure {
-			s.t.Fatalf("%s: tombstone of %s: redis %v, partition %v", step, op, closure, got)
-		}
-	}
-	if len(s.u.p.sagas[s.id].Ops) != countClosed(s.store, s.id) {
-		s.t.Fatalf("%s: tombstones: redis %d, partition %+v", step, countClosed(s.store, s.id), s.u.p.sagas[s.id].Ops)
 	}
 }
 
-func countClosed(store *memoryStore, id string) int {
-	n := 0
-	for _, owner := range store.closed {
-		if owner == id {
-			n++
-		}
+func closureName(c OperationClosure) string {
+	switch c {
+	case OperationClosedWithResult:
+		return "with_result"
+	case OperationAbandoned:
+		return "abandoned"
+	default:
+		return "unknown"
 	}
-	return n
 }
 
 // success 的 Data 为空时用 nil：线上的结果信封是 JSON（data 带 omitempty），空 Data 与 nil 到达协调器时都是 nil。
@@ -197,13 +185,14 @@ func failure(r Record, retryable bool, reason string) Completion {
 	return Completion{CommandID: r.CommandID, IdempotencyKey: r.OperationKey, SagaID: r.ID, Retryable: retryable, Error: reason}
 }
 
-func TestTransitionRulesAreSharedByBothCoordinators(t *testing.T) {
+func TestTransitionRulesMatchTheRecordedRedisCoordinator(t *testing.T) {
+	golden := loadTransitionGolden(t)
 	definition := testDefinition() // 两步，每步 1s 超时、2 次尝试、退避 1ms..10ms
 	timeout := time.Second + time.Millisecond
 	backoffDone := 20 * time.Millisecond
 
-	scenarios := map[string]func(s *sagaPair){
-		"forward success": func(s *sagaPair) {
+	scenarios := map[string]func(s *sagaRun){
+		"forward success": func(s *sagaRun) {
 			s.start("ok", []byte("in"))
 			s.complete(success(s.current(), "step0"))
 			s.due(0)
@@ -212,7 +201,7 @@ func TestTransitionRulesAreSharedByBothCoordinators(t *testing.T) {
 				t.Fatalf("status %v", s.current().Status)
 			}
 		},
-		"refusal compensates the completed prefix": func(s *sagaPair) {
+		"refusal compensates the completed prefix": func(s *sagaRun) {
 			s.start("refuse", nil)
 			s.complete(success(s.current(), "step0"))
 			s.due(0)
@@ -223,7 +212,7 @@ func TestTransitionRulesAreSharedByBothCoordinators(t *testing.T) {
 				t.Fatalf("status %v", s.current().Status)
 			}
 		},
-		"retryable failures exhaust into compensation, stale attempt ignored": func(s *sagaPair) {
+		"retryable failures exhaust into compensation, stale attempt ignored": func(s *sagaRun) {
 			s.start("retry", nil)
 			s.complete(success(s.current(), "step0"))
 			s.due(0)
@@ -235,7 +224,7 @@ func TestTransitionRulesAreSharedByBothCoordinators(t *testing.T) {
 			s.due(0)
 			s.complete(success(s.current(), ""))
 		},
-		"late success after abandonment is compensated (direction 4)": func(s *sagaPair) {
+		"late success after abandonment is compensated (direction 4)": func(s *sagaRun) {
 			s.start("late", nil)
 			s.complete(success(s.current(), "step0"))
 			s.due(0)
@@ -256,7 +245,7 @@ func TestTransitionRulesAreSharedByBothCoordinators(t *testing.T) {
 				t.Fatalf("end %+v", s.current())
 			}
 		},
-		"late compensation success only alarms once per incarnation": func(s *sagaPair) {
+		"late compensation success only alarms once per incarnation": func(s *sagaRun) {
 			s.start("alarm", nil)
 			s.complete(success(s.current(), "step0"))
 			s.due(0)
@@ -275,7 +264,7 @@ func TestTransitionRulesAreSharedByBothCoordinators(t *testing.T) {
 				t.Fatalf("partition alarmed %d times", s.u.e.Stats().LateAfterAbandon)
 			}
 		},
-		"resume opens a new incarnation and old results are stale": func(s *sagaPair) {
+		"resume opens a new incarnation and old results are stale": func(s *sagaRun) {
 			s.start("resume", nil)
 			s.complete(success(s.current(), "step0"))
 			s.due(0)
@@ -293,7 +282,7 @@ func TestTransitionRulesAreSharedByBothCoordinators(t *testing.T) {
 				t.Fatalf("end %+v", s.current())
 			}
 		},
-		"manual compensate in compensate phase and on completed": func(s *sagaPair) {
+		"manual compensate in compensate phase and on completed": func(s *sagaRun) {
 			s.start("manual", nil)
 			s.complete(success(s.current(), "step0"))
 			s.due(0)
@@ -308,16 +297,13 @@ func TestTransitionRulesAreSharedByBothCoordinators(t *testing.T) {
 			s.complete(success(s.current(), ""))
 			s.compensate() // 已补偿：原样返回
 		},
-		"deadline aborts the forward direction": func(s *sagaPair) {
+		"deadline aborts the forward direction": func(s *sagaRun) {
 			s.id = IDOf("rally", "deadline")
 			deadline := s.at.Add(500 * time.Millisecond)
-			if _, err := s.redis.StartSaga(s.ctx, StartRequest{ID: s.id, Type: "rally", BusinessKey: "deadline", DefinitionVersion: 1, DeadlineAt: deadline, Now: s.at}); err != nil {
-				t.Fatal(err)
-			}
 			request, _ := prepareStart(StartRequest{Type: "rally", BusinessKey: "deadline", DefinitionVersion: 1, DeadlineAt: deadline}, 1<<20)
 			digest, _ := startIntentDigest(request)
 			msg := s.u.startInput("deadline", nil, "a1", "")
-			msg.Data = mustJSON(t, startInput{V: LogWireVersion, Request: request, Attempt: "a1", Digest: digest})
+			msg.Data = mustJSON(t, startInput{V: WireVersion, Request: request, Attempt: "a1", Digest: digest})
 			s.u.round(s.at, msg)
 			s.due(0)
 			s.complete(success(s.current(), "step0"))
@@ -329,16 +315,13 @@ func TestTransitionRulesAreSharedByBothCoordinators(t *testing.T) {
 	}
 	for name, scenario := range scenarios {
 		t.Run(name, func(t *testing.T) {
-			scenario(newSagaPair(t, definition))
+			run := newSagaRun(t, definition, golden[strings.ReplaceAll(name, " ", "_")])
+			scenario(run)
+			if run.next != len(run.golden) {
+				t.Fatalf("ran %d of %d recorded steps", run.next, len(run.golden))
+			}
 		})
 	}
-}
-
-func maxTime(a, b time.Time) time.Time {
-	if a.After(b) {
-		return a
-	}
-	return b
 }
 
 func mustJSON(t *testing.T, v any) []byte {

@@ -83,7 +83,7 @@ func (c *testClock) Advance(d time.Duration) time.Time {
 // unitPartition 是一个不发布的分区：decide 之后直接 install（事件当作已持久，序号递增）。
 type unitPartition struct {
 	t     *testing.T
-	e     *JetStreamEngine
+	e     *Engine
 	p     *partition
 	raw   *stubRaw
 	clock *testClock
@@ -92,16 +92,16 @@ type unitPartition struct {
 	events []logEvent
 }
 
-func newUnitPartition(t *testing.T, configure func(*JetStreamOptions)) *unitPartition {
+func newUnitPartition(t *testing.T, configure func(*Options)) *unitPartition {
 	t.Helper()
 	clock := &testClock{now: time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)}
-	options := JetStreamOptions{Layout: Layout{Prefix: "unit.saga", Stream: "UNIT_SAGA", Partitions: 1, Groups: 1}, Owned: []int{0}, Writer: "unit", Clock: clock.Now}
+	options := Options{Layout: Layout{Prefix: "unit.saga", Stream: "UNIT_SAGA", Partitions: 1, Groups: 1}, Owned: []int{0}, Writer: "unit", Clock: clock.Now}
 	options.Admission.Enabled = false
 	if configure != nil {
 		configure(&options)
 	}
 	raw := &stubRaw{}
-	e, err := NewJetStreamEngine(stubLog{}, raw, options)
+	e, err := NewEngine(stubLog{}, raw, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func (u *unitPartition) startInput(bk string, data []byte, attempt, reply string
 	if err != nil {
 		u.t.Fatal(err)
 	}
-	raw, _ := json.Marshal(startInput{V: LogWireVersion, Request: request, Attempt: attempt, Digest: digest})
+	raw, _ := json.Marshal(startInput{V: WireVersion, Request: request, Attempt: attempt, Digest: digest})
 	msg := fnats.LogMsg{Subject: u.e.layout.StartSubject(0), Data: raw, MsgID: "start." + attempt}
 	if reply != "" {
 		msg.Headers = map[string]string{replyHeader: reply}
@@ -161,12 +161,12 @@ func (u *unitPartition) startInput(bk string, data []byte, attempt, reply string
 }
 
 func (u *unitPartition) resultInput(c Completion) fnats.LogMsg {
-	raw, _ := json.Marshal(resultInput{V: LogWireVersion, Completion: c})
+	raw, _ := json.Marshal(resultInput{V: WireVersion, Completion: c})
 	return fnats.LogMsg{Subject: u.e.layout.ResultSubject(0), Data: raw, MsgID: "res." + c.CommandID}
 }
 
 func (u *unitPartition) opInput(in opInput, reply string) fnats.LogMsg {
-	in.V = LogWireVersion
+	in.V = WireVersion
 	if in.Attempt == "" {
 		in.Attempt = fmt.Sprintf("op-%d", u.seq+1)
 	}
@@ -226,7 +226,7 @@ func TestPartitionStartIdentityIsDecidedByTheStartDigest(t *testing.T) {
 
 // 准入关闭（初始化 fail-closed）：拒绝只回复触发它的那次尝试，不写事件、不建记录（选项 R-A），所以同 ID 的等待者不会被它唤醒。
 func TestPartitionAdmissionRejectionAnswersOnlyTheTriggeringAttempt(t *testing.T) {
-	u := newUnitPartition(t, func(o *JetStreamOptions) { o.Admission.Enabled = true })
+	u := newUnitPartition(t, func(o *Options) { o.Admission.Enabled = true })
 	id := IDOf("rally", "bk-1")
 	waiter, cancel := u.e.watch.register(id)
 	defer cancel()
@@ -319,7 +319,7 @@ func TestPartitionSkipsUndecodableInputsAndAdvancesTheWatermark(t *testing.T) {
 }
 
 func TestPartitionPrunesTerminalsAfterRetentionButKeepsManualRequired(t *testing.T) {
-	u := newUnitPartition(t, func(o *JetStreamOptions) { o.TerminalRetention = time.Minute })
+	u := newUnitPartition(t, func(o *Options) { o.TerminalRetention = time.Minute })
 	at := u.clock.Now()
 	u.round(at, u.startInput("done", nil, "a1", ""), u.startInput("stuck", nil, "a2", ""))
 	done, stuck := IDOf("rally", "done"), IDOf("rally", "stuck")
@@ -365,7 +365,7 @@ func TestPartitionPrunesTerminalsAfterRetentionButKeepsManualRequired(t *testing
 }
 
 func TestPartitionResumeIsRefusedWhenReceiptsMayHaveExpired(t *testing.T) {
-	u := newUnitPartition(t, func(o *JetStreamOptions) {
+	u := newUnitPartition(t, func(o *Options) {
 		o.TerminalRetention = time.Hour
 		o.ReceiptRetention = 2 * time.Hour
 	})
@@ -394,39 +394,39 @@ func TestPartitionResumeIsRefusedWhenReceiptsMayHaveExpired(t *testing.T) {
 }
 
 func TestJetStreamOptionsValidation(t *testing.T) {
-	base := func() JetStreamOptions {
-		return JetStreamOptions{Layout: Layout{Prefix: "a.b", Stream: "S", Partitions: 16, Groups: 4}}
+	base := func() Options {
+		return Options{Layout: Layout{Prefix: "a.b", Stream: "S", Partitions: 16, Groups: 4}}
 	}
 	cases := map[string]struct {
-		mutate func(*JetStreamOptions)
+		mutate func(*Options)
 		want   string
 	}{
-		"defaults":                    {func(*JetStreamOptions) {}, ""},
-		"50 partitions on one stream": {func(o *JetStreamOptions) { o.Layout.Partitions, o.Layout.Groups = 50, 1 }, ""},
-		"51 partitions on one stream": {func(o *JetStreamOptions) { o.Layout.Partitions, o.Layout.Groups = 51, 1 }, "at most 50 atomic batches"},
-		"100 over 2 streams":          {func(o *JetStreamOptions) { o.Layout.Partitions, o.Layout.Groups = 100, 2 }, ""},
-		"101 over 2 streams":          {func(o *JetStreamOptions) { o.Layout.Partitions, o.Layout.Groups = 101, 2 }, "ceil(101/2)"},
-		"groups over partitions":      {func(o *JetStreamOptions) { o.Layout.Partitions, o.Layout.Groups = 2, 4 }, "stream groups"},
-		"bad stream name":             {func(o *JetStreamOptions) { o.Layout.Stream = "A.B" }, "stream"},
-		"query prefix collision":      {func(o *JetStreamOptions) { o.Layout.Prefix = "a.q" }, "prefix"},
-		"owned out of range":          {func(o *JetStreamOptions) { o.Owned = []int{16} }, "owned partition"},
-		"owned twice":                 {func(o *JetStreamOptions) { o.Owned = []int{1, 1} }, "owned partition"},
-		"duplicate window too short":  {func(o *JetStreamOptions) { o.DuplicateWindow = 59 * time.Second }, "duplicate window"},
-		"publish timeout over budget": {func(o *JetStreamOptions) { o.PublishTimeout = 30 * time.Second }, "publish timeout"},
-		"publish timeout over batch":  {func(o *JetStreamOptions) { o.PublishTimeout, o.PublishUnknownBudget = 10*time.Second, time.Minute }, "< 10s"},
-		"retention over receipts":     {func(o *JetStreamOptions) { o.TerminalRetention, o.ReceiptRetention = 2*time.Hour, time.Hour }, "terminal retention"},
-		"admission low over high":     {func(o *JetStreamOptions) { o.Admission.HighRecords, o.Admission.LowRecords = 10, 10 }, "low_records"},
-		"admission stale over ttl":    {func(o *JetStreamOptions) { o.Admission.StaleAfter, o.Admission.SignalTTL = time.Minute, time.Minute }, "signal TTL"},
-		"max batch":                   {func(o *JetStreamOptions) { o.MaxBatch = 1001 }, "max batch"},
-		"tick":                        {func(o *JetStreamOptions) { o.Tick = time.Second }, "tick"},
-		"writer must be a token":      {func(o *JetStreamOptions) { o.Writer = "a.b" }, "writer"},
+		"defaults":                    {func(*Options) {}, ""},
+		"50 partitions on one stream": {func(o *Options) { o.Layout.Partitions, o.Layout.Groups = 50, 1 }, ""},
+		"51 partitions on one stream": {func(o *Options) { o.Layout.Partitions, o.Layout.Groups = 51, 1 }, "at most 50 atomic batches"},
+		"100 over 2 streams":          {func(o *Options) { o.Layout.Partitions, o.Layout.Groups = 100, 2 }, ""},
+		"101 over 2 streams":          {func(o *Options) { o.Layout.Partitions, o.Layout.Groups = 101, 2 }, "ceil(101/2)"},
+		"groups over partitions":      {func(o *Options) { o.Layout.Partitions, o.Layout.Groups = 2, 4 }, "stream groups"},
+		"bad stream name":             {func(o *Options) { o.Layout.Stream = "A.B" }, "stream"},
+		"query prefix collision":      {func(o *Options) { o.Layout.Prefix = "a.q" }, "prefix"},
+		"owned out of range":          {func(o *Options) { o.Owned = []int{16} }, "owned partition"},
+		"owned twice":                 {func(o *Options) { o.Owned = []int{1, 1} }, "owned partition"},
+		"duplicate window too short":  {func(o *Options) { o.DuplicateWindow = 59 * time.Second }, "duplicate window"},
+		"publish timeout over budget": {func(o *Options) { o.PublishTimeout = 30 * time.Second }, "publish timeout"},
+		"publish timeout over batch":  {func(o *Options) { o.PublishTimeout, o.PublishUnknownBudget = 10*time.Second, time.Minute }, "< 10s"},
+		"retention over receipts":     {func(o *Options) { o.TerminalRetention, o.ReceiptRetention = 2*time.Hour, time.Hour }, "terminal retention"},
+		"admission low over high":     {func(o *Options) { o.Admission.HighRecords, o.Admission.LowRecords = 10, 10 }, "low_records"},
+		"admission stale over ttl":    {func(o *Options) { o.Admission.StaleAfter, o.Admission.SignalTTL = time.Minute, time.Minute }, "signal TTL"},
+		"max batch":                   {func(o *Options) { o.MaxBatch = 1001 }, "max batch"},
+		"tick":                        {func(o *Options) { o.Tick = time.Second }, "tick"},
+		"writer must be a token":      {func(o *Options) { o.Writer = "a.b" }, "writer"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			options := base()
 			options.Admission.Enabled = true
 			tc.mutate(&options)
-			_, err := NewJetStreamEngine(stubLog{}, &stubRaw{}, options)
+			_, err := NewEngine(stubLog{}, &stubRaw{}, options)
 			switch {
 			case tc.want == "" && err != nil:
 				t.Fatalf("unexpected error %v", err)
@@ -472,7 +472,7 @@ func TestTerminalWatchWakesEveryWaiterOfTheIDWithNewerTerminals(t *testing.T) {
 // 多个等待者都被唤醒。
 func TestWaitTerminalIgnoresTerminalsOlderThanTheKnownVersion(t *testing.T) {
 	raw := &stubRaw{}
-	e, err := NewJetStreamEngine(stubLog{}, raw, JetStreamOptions{Layout: Layout{Prefix: "w.saga", Stream: "W", Partitions: 1, Groups: 1}})
+	e, err := NewEngine(stubLog{}, raw, Options{Layout: Layout{Prefix: "w.saga", Stream: "W", Partitions: 1, Groups: 1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,7 +482,7 @@ func TestWaitTerminalIgnoresTerminalsOlderThanTheKnownVersion(t *testing.T) {
 	e.ready.Store(true) // 单元里没有 Start：终态由用例直接交给观察者
 	current := Record{ID: "s1", Status: StatusCompensating, Version: 9}
 	raw.answer = func(subject string, data []byte) ([]byte, error) {
-		return json.Marshal(queryReply{V: LogWireVersion, Part: 0, Found: true, Record: &current})
+		return json.Marshal(queryReply{V: WireVersion, Part: 0, Found: true, Record: &current})
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -530,7 +530,7 @@ func TestReplyRouterDeliversOnlyToTheMatchingAttempt(t *testing.T) {
 	defer doneA()
 	b, doneB := router.await("b")
 	defer doneB()
-	raw, _ := json.Marshal(verdictReply{V: LogWireVersion, Attempt: "a", Outcome: verdictRejected, Reason: AdmissionReasonBacklog})
+	raw, _ := json.Marshal(verdictReply{V: WireVersion, Attempt: "a", Outcome: verdictRejected, Reason: AdmissionReasonBacklog})
 	router.deliver(raw)
 	router.deliver(raw) // 重复判定：第一条为准，不阻塞
 	select {
@@ -565,4 +565,189 @@ func TestPurgeBoundKeepsTheLastEventTheReplayStartAndUnackedCommands(t *testing.
 			t.Errorf("%s: purgeBound = %d, want %d", tc.name, got, tc.want)
 		}
 	}
+}
+
+// ---- simEngine：把单元分区包成原协调器的同步 API（StartSaga / Complete / Resume / Compensate / Get / 到期），让原来驱动
+// Redis 引擎（内存 Store + 后台循环）的状态机用例原样保留断言、换驱动（设计 §11.1：“保留断言，改写驱动”）。
+
+// simEngine 每个操作就是一轮判定 + 提交（事件当作已持久）；派发的命令进 commands。时间由 clock 决定，不跑后台循环：
+// 到期由用例显式 due / advance 触发（原用例等后台循环领取的地方）。
+type simEngine struct {
+	*unitPartition
+	commands chan Command
+	attempts int
+	// rejected 是本轮分区跳过的结果输入的原因（engineHooks.rejectedInput），Complete 据它还原原协调器的错误返回。
+	rejected error
+}
+
+func newSimEngine(t *testing.T, configure func(*Options)) *simEngine {
+	t.Helper()
+	s := &simEngine{unitPartition: newUnitPartition(t, configure), commands: make(chan Command, 1024)}
+	s.e.hooks.rejectedInput = func(kind, reason string, err error) {
+		if kind == "result" {
+			s.rejected = err
+		}
+	}
+	// 所有者查询（Engine.Get / GetByBusinessKey 走核心 NATS 的请求）由这个分区同步回答。
+	s.raw.answer = func(_ string, data []byte) ([]byte, error) {
+		var request queryRequest
+		if err := json.Unmarshal(data, &request); err != nil {
+			return nil, err
+		}
+		s.p.answer(pendingQuery{request: request, reply: "sim.answer"})
+		s.raw.mu.Lock()
+		defer s.raw.mu.Unlock()
+		replies := s.raw.replies["sim.answer"]
+		return replies[len(replies)-1], nil
+	}
+	return s
+}
+
+// step 判定并提交一轮，把事件里的命令放进 commands。
+func (s *simEngine) step(inputs ...fnats.LogMsg) *round {
+	s.t.Helper()
+	s.rejected = nil
+	r := s.round(s.clock.Now(), inputs...)
+	for _, ev := range r.events {
+		if ev.Command != nil {
+			select {
+			case s.commands <- ev.Command.Clone():
+			default:
+				s.t.Fatal("simEngine: command buffer full")
+			}
+		}
+	}
+	return r
+}
+
+// advance 把时钟推进 d 并处理到期（原用例里后台循环的一次领取）。
+func (s *simEngine) advance(d time.Duration) {
+	s.t.Helper()
+	s.clock.Advance(d)
+	s.step()
+}
+
+func (s *simEngine) nextAttempt(prefix string) string {
+	s.attempts++
+	return fmt.Sprintf("%s-%d", prefix, s.attempts)
+}
+
+// StartSaga 与 Engine.StartSaga 同一判定：定义与请求在发起方先查，意图交给分区，返回判定。
+func (s *simEngine) StartSaga(_ context.Context, request StartRequest) (Record, error) {
+	s.t.Helper()
+	if _, ok := s.e.definition(request.Type, request.DefinitionVersion); !ok {
+		return Record{}, fmt.Errorf("%w: %s/%d", ErrDefinitionMissing, request.Type, request.DefinitionVersion)
+	}
+	if !request.Now.IsZero() {
+		s.clock.Set(request.Now)
+	}
+	prepared, err := prepareStart(request, s.e.opts.MaxPayloadBytes)
+	if err != nil {
+		return Record{}, err
+	}
+	digest, err := startIntentDigest(prepared)
+	if err != nil {
+		return Record{}, err
+	}
+	attempt := s.nextAttempt("start")
+	prepared.Now = time.Time{}
+	raw, _ := json.Marshal(startInput{V: WireVersion, Request: prepared, Attempt: attempt, Digest: digest})
+	k := s.e.layout.PartitionOf(IDOf(prepared.Type, prepared.BusinessKey))
+	reply := "reply." + attempt
+	s.step(fnats.LogMsg{Subject: s.e.layout.StartSubject(k), Data: raw, MsgID: "start." + attempt, Headers: map[string]string{replyHeader: reply}})
+	return s.verdict(reply)
+}
+
+func (s *simEngine) verdict(reply string) (Record, error) {
+	s.t.Helper()
+	verdicts := s.raw.verdicts(reply)
+	if len(verdicts) != 1 {
+		s.t.Fatalf("simEngine: %d verdicts for %s", len(verdicts), reply)
+	}
+	return verdictResult(verdicts[0])
+}
+
+// Complete 把结果交给分区。原协调器的 Complete 同步返回接收后的记录或拒收原因；分区不回复结果输入，这里按跳过原因还原：
+// not_waiting → ErrNotWaiting，identity → ErrIdentityConflict，definition_missing → ErrDefinitionMissing，记录不在 → ErrNotFound；
+// 重复返回当前记录、nil（与原协调器相同）。
+func (s *simEngine) Complete(_ context.Context, completion Completion) (Record, error) {
+	s.t.Helper()
+	if completion.Validate() != nil || len(completion.Data) > s.e.opts.MaxPayloadBytes {
+		return Record{}, ErrInvalidRecord
+	}
+	if s.p.sagas[completion.SagaID] == nil {
+		s.step(s.resultInput(completion))
+		return Record{}, ErrNotFound
+	}
+	s.step(s.resultInput(completion))
+	if s.rejected != nil {
+		return Record{}, s.rejected
+	}
+	return s.record(completion.SagaID), nil
+}
+
+func (s *simEngine) Resume(_ context.Context, request ResumeRequest) (Record, error) {
+	s.t.Helper()
+	request, _, err := prepareResume(request, s.clock.Now())
+	if err != nil {
+		return Record{}, err
+	}
+	attempt := s.nextAttempt("op")
+	reply := "reply." + attempt
+	s.step(s.opInput(opInput{Kind: opResume, ID: request.ID, Resume: &request, Now: request.Now, Attempt: attempt}, reply))
+	return s.verdict(reply)
+}
+
+func (s *simEngine) Compensate(_ context.Context, id, reason string, now time.Time) (Record, error) {
+	s.t.Helper()
+	id = strings.TrimSpace(id)
+	if !validSubjectToken(id, 128) || len(reason) > 4096 {
+		return Record{}, ErrInvalidRecord
+	}
+	if now.IsZero() {
+		now = s.clock.Now()
+	}
+	attempt := s.nextAttempt("op")
+	reply := "reply." + attempt
+	s.step(s.opInput(opInput{Kind: opCompensate, ID: id, Reason: reason, Now: now.UTC(), Attempt: attempt}, reply))
+	return s.verdict(reply)
+}
+
+// Get 读分区内存（所有者的回答）。
+func (s *simEngine) Get(_ context.Context, id string) (Record, error) {
+	st := s.p.sagas[id]
+	if st == nil {
+		return Record{}, ErrNotFound
+	}
+	return st.Record.Clone(), nil
+}
+
+// seed 把一条记录直接放进分区（原用例里 store.Create 种的记录），排上它的到期。
+func (s *simEngine) seed(record Record) {
+	s.t.Helper()
+	if err := record.Validate(); err != nil {
+		s.t.Fatalf("seed %s: %v", record.ID, err)
+	}
+	s.p.sagas[record.ID] = &sagaState{Record: record}
+	if !record.Status.Terminal() {
+		s.p.wheel.schedule(record.ID, record.NextRunAt)
+	}
+}
+
+// waitCommand 取下一条派发的命令（同步派发：没有就是失败，不等）。
+func (s *simEngine) waitCommand() Command {
+	s.t.Helper()
+	select {
+	case command := <-s.commands:
+		return command
+	default:
+		s.t.Fatal("simEngine: no command was dispatched")
+		return Command{}
+	}
+}
+
+// compensatingStep：记录在补偿第 step 步——还没派发（Compensating），或已派发、在等这一步的补偿（Waiting）。分区在同一轮里派发
+// 因输入（结果、运维意图）而到期的步骤，所以原协调器断言 Compensating 的地方，分区上常常已经在等补偿命令的结果。
+func compensatingStep(record Record, step int) bool {
+	return record.Phase == PhaseCompensate && record.Step == step && (record.Status == StatusCompensating || record.Status == StatusWaiting)
 }

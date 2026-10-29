@@ -16,7 +16,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
-	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -199,15 +198,11 @@ func newTradeFixtureFull(t *testing.T, ctx context.Context, client fmongo.IMongo
 		e.inventory.SetItems(e.inventory.GetItems() + 1)
 		return nil, nil
 	}, meta)
-	// 原生 saga 步骤：本地 DAO 修改与 inbox.Bind 的 lease fence 在同一 CommitRecord（RR-20260926-30）。
+	// 原生 saga 步骤的旧形状：本地 DAO 修改与 lease fence 在同一 CommitRecord（RR-20260926-30；fencedStep.bind）。
 	h.scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName("trade_fenced"), func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
 		e := es[0].(*Trader)
-		inbox, command, reservation := params[0].(*saga.DataEngineStepInbox), params[1].(saga.Command), params[2].(saga.Reservation)
 		e.wallet.SetCoins(e.wallet.GetCoins() - 100)
-		if err := inbox.Bind(command, reservation); err != nil {
-			return nil, err
-		}
-		return nil, saga.EmitCompletion(saga.Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID, Success: true})
+		return nil, params[0].(fencedStep).bind()
 	}, meta)
 	for _, name := range names[2:] {
 		h.scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName(name), func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {

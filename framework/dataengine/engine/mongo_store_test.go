@@ -118,9 +118,10 @@ func leaseFenceReceipt(t *testing.T, documentID, owner string, token uint64, dig
 	return receipt
 }
 
-// seedClaim installs a live saga-step claim exactly as saga's
-// DataEngineStepInbox writes it. The field names and the "pending" literal are
-// the contract the projector's fence filter depends on.
+// seedClaim installs a live saga-step claim in the shape saga's former
+// DataEngineStepInbox wrote it (deleted in saga batch 4; the fence itself goes
+// in batch 5). The field names and the "pending" literal are the contract the
+// projector's fence filter depends on.
 func seedClaim(t *testing.T, client *mongotest.Client, documentID, owner string, token uint64, digest []byte, leaseUntil time.Time) {
 	t.Helper()
 	claims := client.Collection(testDatabase, "_dataengine_inbox_claims")

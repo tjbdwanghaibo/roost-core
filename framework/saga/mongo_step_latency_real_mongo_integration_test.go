@@ -70,9 +70,9 @@ func latencyStepCommand(run string, index int) Command {
 	}
 }
 
-func latencyInbox(b *testing.B, client fmongo.IMongo, database string) (*MongoCommandInbox, StepHandler) {
+func latencyInbox(b *testing.B, client fmongo.IMongo, database string) (*MongoStepInbox, StepHandler) {
 	b.Helper()
-	inbox, err := NewMongoCommandInbox(client, database, "steps")
+	inbox, err := NewMongoStepInbox(client, database, "steps", time.Hour)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func BenchmarkRealMongoStepLatencyBreakdown(b *testing.B) {
 	run := fmt.Sprintf("%d", time.Now().UnixNano())
 	// 预热：建集合、建守卫路径，不计入。
 	for index := range 20 {
-		if _, _, err := inbox.Handle(ctx, latencyStepCommand(run+"w", index), handler); err != nil {
+		if _, err := inbox.Handle(ctx, latencyStepCommand(run+"w", index), handler); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -239,8 +239,8 @@ func BenchmarkRealMongoStepLatencyBreakdown(b *testing.B) {
 	b.ResetTimer()
 	for index := 0; index < b.N; index++ {
 		probe.beginOperation()
-		if _, duplicate, err := inbox.Handle(ctx, latencyStepCommand(run, index), handler); err != nil || duplicate {
-			b.Fatalf("handle: duplicate=%v err=%v", duplicate, err)
+		if outcome, err := inbox.Handle(ctx, latencyStepCommand(run, index), handler); err != nil || outcome.Kind != StepExecuted {
+			b.Fatalf("handle: outcome=%+v err=%v", outcome, err)
 		}
 	}
 	b.StopTimer()
@@ -290,7 +290,7 @@ func BenchmarkRealMongoStepThroughput(b *testing.B) {
 			ctx := context.Background()
 			run := fmt.Sprintf("%d", time.Now().UnixNano())
 			for index := range 20 {
-				if _, _, err := inbox.Handle(ctx, latencyStepCommand(run+"w", index), handler); err != nil {
+				if _, err := inbox.Handle(ctx, latencyStepCommand(run+"w", index), handler); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -310,8 +310,8 @@ func BenchmarkRealMongoStepThroughput(b *testing.B) {
 							return
 						}
 						opStart := time.Now()
-						if _, duplicate, err := inbox.Handle(ctx, latencyStepCommand(run, index), handler); err != nil || duplicate {
-							failed.Store(fmt.Sprintf("handle %d: duplicate=%v err=%v", index, duplicate, err))
+						if outcome, err := inbox.Handle(ctx, latencyStepCommand(run, index), handler); err != nil || outcome.Kind != StepExecuted {
+							failed.Store(fmt.Sprintf("handle %d: outcome=%+v err=%v", index, outcome, err))
 							return
 						}
 						latencies[index] = time.Since(opStart)
