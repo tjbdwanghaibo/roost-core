@@ -106,8 +106,18 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 	return nil
 }
 
-// startupDrainLimit 是调用方没给期限时启动排空重试的上限（设计 T-A 第 3 条：120s）。
+// startupDrainLimit 是调用方没给期限时启动排空重试的上限（设计 T-A 第 3 条：120s）。装配经 wiring 启动时期限是
+// dataengine.startup_timeout（缺省 60s，saga 设计第 5 批维护者决定），不用这个上限。
 const startupDrainLimit = 2 * time.Minute
+
+// startupDrainContext 决定启动排空能重试多久：调用方给了期限（wiring 的 dataengine.startup_timeout）就只用它，
+// 不论比上限长还是短；没给期限（直接装配、测试）才套 startupDrainLimit，永久错误不会让启动一直重试。
+func startupDrainContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, startupDrainLimit)
+}
 
 // drainAtStartup 把 WAL 里没投影的记录全部投影进 Mongo，在 ctx（wiring 的 dataengine.startup_timeout）内有界重试。
 //
@@ -119,12 +129,8 @@ const startupDrainLimit = 2 * time.Minute
 // 不重试的：投影器已经 fence（致命冲突，重试只会重复同一结论）、ctx 结束、关闭开始。其余错误（含权限、网络这类重试也
 // 不会好的）同样重试到期限，再带最后一次错误失败：启动期限内多等一会儿，换来遗留事务回收后能起来，不用区分驱动错误的种类。
 func (runtime *Runtime) drainAtStartup(ctx context.Context) error {
-	if _, ok := ctx.Deadline(); !ok {
-		// 调用方没给期限（直接装配、测试）：用设计 T-A 的上限，永久错误不会让启动一直重试。
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, startupDrainLimit)
-		defer cancel()
-	}
+	ctx, cancel := startupDrainContext(ctx)
+	defer cancel()
 	backoff := 100 * time.Millisecond
 	for attempt := 1; ; attempt++ {
 		err := runtime.Projector.Flush(ctx)

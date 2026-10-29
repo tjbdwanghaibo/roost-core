@@ -208,13 +208,13 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 协调器权威是 JetStream 分区事件日志（saga 第 4 批，[SAGA.md](../framework/SAGA.md#协调器jetstream-分区事件日志)，实施记录 [设计 §13.3](DESIGN-2026-10-28-saga-jetstream-authority.md#133-第-4-批实施记录)）。当前边界：
 
 - **分区归属是静态的（P-A）**：`saga.coordinators` 按 sid 分区，没有租约与再平衡；协调器进程停了，它的分区就停（新启动等判定超时 `ErrStartUnconfirmed`，在途 saga 不推进），同 sid 进程重启后从快照 + 日志恢复。改 `coordinators` / `partitions` 要先让全部 saga 终态、停全部协调器、删流与桶。
-- **同一个 sid 只能有一种服务类型装 saga Mod**：`coordinators` 只写 sid，两种服务类型用同一个 sid 且都装 saga Mod 时会认领同样的分区（单实例锁按“服务类型 + sid”，挡不住），期望序号隔离会让其中一个 fail-stop。配置检查目前看不到别的服务类型的配置，靠部署约定（SAGA.md 已写）；要不要在 `coordinators` 里写成 `<server_type>:<sid>` 待维护者决定。
+- **同一个 sid 只能有一种服务类型装 saga Mod（部署规则，没有启动期检查）**：`coordinators` 只写 sid（维护者 2026-10-29“按推荐”保持），两种服务类型用同一个 sid 且都装 saga Mod 时会认领同样的分区（单实例锁按“服务类型 + sid”，挡不住），期望序号隔离会让其中一个 fail-stop（`saga.partition.fail_stop_total{reason="fenced"}`）。配置检查看不到别的服务类型的配置；可靠的跨类型检查要另建跨进程登记（带 TTL 即模块自己的租约，不带则迁移服务类型要人工清理），第 5 批没有加，规则写在 SAGA.md「分区归属」。
 - **没有冷副本**：`Get` / `GetByBusinessKey` / `List` 只看协调器内存里的记录，终态在 `saga.terminal_retention`（缺省 1h）后剪掉，业务键唯一性也只在这段时间内成立；`ManualRequired` 常驻。Mongo 冷副本与历史查询在第 6 批。
 - **性能未按正式实现测**：协调器原型的数字（约 1200 saga/s，三节点 R3，[原型报告](../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)）不代表正式实现；旧 Redis / 旧原生路径的容量结论不再适用。正式验收在第 7 批（≤ 30 分钟一轮）。
 - **原生步骤的多进程分片**：准入与转交由业务写（框架提供 `WithAdmit` 与 `RunHandedOver`，生成的 `RegisterSteps` 注释点名要补），见 [DESIGN-TODO D12](DESIGN-TODO.md#d12-saga-原生实体步骤与事务性-effect-消费者的生成支持)。
 - **发起方查结果**：生成的 `Lookup` / `saga.Engine.GetByBusinessKey` 按 `(Type, BusinessKey)` 查；终态通知没有默认实现，需要时由最后一步 / 补偿步骤自己发 effect，或用 `Engine.WaitTerminal`（SAGA.md）。
 - **清理守卫的 floor**：`DurableAckFloors` 对没有待投递 / 待确认消息的 durable 报“列出之前读到的流末序号”。消费者 leader 在落后的副本上时，可能对流 leader 已有、它还没应用的命令报“没有待投递”，那条命令可能被清掉；后果只是活性（协调器按步骤超时重发），会不会发生**尚未确认**（取决于副本应用与清理在 Raft 日志里的先后）。
-- **遗留 Mongo 事务（设计 T-A，已按推荐实施）**：被 kill -9 的参与方留下的事务持锁到 Mongo `transactionLifetimeLimitSeconds` 才回收，服务端每半个参数扫一次，**最晚 1.5 倍参数**。部署要求 20s（最晚 30s 回收）；参与方启动探针超过缺省步骤预算窗口时告警（`saga.step.mongo_txn_lifetime_exceeds_budget`），DataEngine 启动排空在 `dataengine.startup_timeout` 内重试。边界：20s 参数的最坏回收时刻与 30s 缺省启动期限相同，余量只有“被杀到重启”的时间（私有 mongod 实测排空在遗留事务开始后 27～29s 完成），超过时这次启动失败、由部署重启；要不要把 `dataengine.startup_timeout` 缺省调到 60s（生成的部署启动等待随之变长）待维护者决定。托管 Mongo 是否允许 `getParameter` **尚未确认**（手头没有托管实例，拒绝时探针只记“未探测”）。
+- **遗留 Mongo 事务（设计 T-A，已按推荐实施）**：被 kill -9 的参与方留下的事务持锁到 Mongo `transactionLifetimeLimitSeconds` 才回收，服务端每半个参数扫一次，**最晚 1.5 倍参数**。部署要求 20s（最晚 30s 回收）；参与方启动探针超过缺省步骤预算窗口时告警（`saga.step.mongo_txn_lifetime_exceeds_budget`），DataEngine 启动排空在 `dataengine.startup_timeout` 内重试。`startup_timeout` 缺省已按维护者 2026-10-29 决定调到 60s（比最坏回收时刻多 30s，第 5 批）；参数配得比 20s 大、或期限被调小时，超过期限的那次启动失败、由部署重启。托管 Mongo 是否允许 `getParameter` **尚未确认**（手头没有托管实例，拒绝时探针只记“未探测”）。
 - **原生步骤迟到成功的补偿载荷**：已修复（第 4 批，维护者 2026-10-29 选 A：原生成功的 `Completion.Data = Command.Payload`），见 CHANGELOG。
 - **只在 macOS 上验证**：Linux 未运行（含 `kill -9` 用例）。
 

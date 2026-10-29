@@ -601,6 +601,35 @@ func (m *conflictingSessionsMongo) StartSession(ctx context.Context) (fmongo.ISe
 
 // 设计 T-A 第 3 条：启动排空撞上遗留事务的写冲突时，在启动期限内退避重试；遗留事务回收之后启动成功、记录恰好投影一次。
 // 期限到了仍失败才报错（带最后一次错误）。
+// 启动排空的重试期限跟随调用方（wiring 传 dataengine.startup_timeout，缺省 60s）：给了期限就原样使用，比 2 分钟上限
+// 长也不截短；只有没给期限时才套 2 分钟上限（设计 T-A 第 3 条；saga 设计第 5 批维护者决定）。
+func TestStartupDrainDeadlineFollowsTheCallerAndCapsOnlyWithoutOne(t *testing.T) {
+	for _, given := range []time.Duration{time.Second, 60 * time.Second, 5 * time.Minute} {
+		parent, cancel := context.WithTimeout(context.Background(), given)
+		want, _ := parent.Deadline()
+		ctx, release := startupDrainContext(parent)
+		got, ok := ctx.Deadline()
+		release()
+		cancel()
+		if !ok || !got.Equal(want) {
+			t.Errorf("caller deadline %v: drain deadline = %v (set=%v), want the caller's %v unchanged", given, got, ok, want)
+		}
+	}
+	start := time.Now()
+	ctx, release := startupDrainContext(context.Background())
+	defer release()
+	got, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("no caller deadline: the drain has no limit, a permanent error retries forever")
+	}
+	if limit := got.Sub(start); limit < startupDrainLimit-time.Second || limit > startupDrainLimit+time.Second {
+		t.Fatalf("no caller deadline: drain limit = %v, want %v", limit, startupDrainLimit)
+	}
+	if startupDrainLimit != 2*time.Minute {
+		t.Fatalf("startupDrainLimit = %v, want the 2 minute cap of design T-A", startupDrainLimit)
+	}
+}
+
 func TestAssemblyStartupDrainRetriesALeftoverTransactionWithinTheDeadline(t *testing.T) {
 	mongo := &conflictingSessionsMongo{Client: mongotest.NewClient()}
 	a := lifecycleAssembly(t, mongo, &recordingJetStream{})

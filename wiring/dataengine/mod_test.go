@@ -514,6 +514,30 @@ func TestTransactionReceiptRetentionExceedsWALWindow(t *testing.T) {
 	}
 }
 
+// dataengine.startup_timeout 缺省 60s（维护者 2026-10-29“按推荐”，saga 设计第 5 批）：被 kill -9 的进程留下的 Mongo 事务最晚在
+// 1.5 × transactionLifetimeLimitSeconds 回收，部署要求的 20s 对应最晚 30s；原缺省 30s 没有余量，这次启动会失败、靠部署重启。
+// 写了值就用写的值。Start 用它作启动排空的期限（engine 的 TestStartupDrainDeadlineFollowsTheCallerAndCapsOnlyWithoutOne）。
+func TestDataEngineStartupTimeoutDefaultOutlastsALeftoverTransaction(t *testing.T) {
+	const requiredTransactionLifetime = 20 * time.Second // SAGA.md 的部署要求
+	worstReclaim := requiredTransactionLifetime * 3 / 2
+	cfg := viper.New()
+	cfg.Set("persistence.engine", "dataengine")
+	mod := NewMod()
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := mod.cfg.startupTimeout; got != 60*time.Second || got-worstReclaim < 30*time.Second {
+		t.Fatalf("default dataengine.startup_timeout = %v; want 60s (worst leftover-transaction reclaim %v plus a 30s margin)", got, worstReclaim)
+	}
+	cfg.Set("dataengine.startup_timeout", "90s")
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := mod.cfg.startupTimeout; got != 90*time.Second {
+		t.Fatalf("configured dataengine.startup_timeout = %v, want 90s", got)
+	}
+}
+
 // dataengine.shutdown_timeout 通过 App 的停机预算接口生效：App 的 StopWithContext 路径按声明值给截止时间（总时长足够时）。
 func TestDataEngineModDeclaresShutdownTimeoutAsStopBudget(t *testing.T) {
 	cfg := viper.New()

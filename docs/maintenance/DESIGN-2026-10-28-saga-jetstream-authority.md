@@ -502,7 +502,7 @@ T-B（把缺省步骤预算拉到覆盖 60s）与 T-C（重启时主动终止遗
 | 2 | `framework/saga` 新协调器：`log_layout` / `log_wire` / `transition`（从 engine 抽纯函数，Redis 引擎改为调用它们，行为不变）/ `partition` / `partition_replay` / `wheel` / `admission` / `query` / `terminal_watch`；新 Engine 以 `NewJetStreamEngine` 暂名并存，不接线 | 4～6 笔（先抽纯函数并跑全部现有 saga 测试证明无行为变化，再逐文件加新代码与单元） | `framework/saga` `-race` 全过（现有测试不改）；新单元；真实 JetStream 端到端、结果未知、隔离、快照清理、kill -9（协调器） | Redis 版照跑。**已完成**（2026-10-28，提交见 git log；实现与本文的差异见 §13.1） |
 | 3 | 参与方新路径并存：`StepReceipt*`、`NativeStep.Begin` 与新 `Complete` 分支（`run != nil` 时走新路径）、`SubscribeNativeStep`、`MongoStepInbox`、`publishCompletion`、`LoadPublisher`；codegen：`add saga -native` 生成回执字段与组件、`codegen/internal/nest` 的 Begin 包装（先在 testdata 生成工程里验证，不改 demo） | 3～5 笔 | 受影响包 `-race`；codegen golden（有意改动 `-update` 逐个看 diff）；参与方 kill -9；真实 Mongo 的 Mongo 步骤写冲突 | Redis 版照跑；生成器新输出只在 testdata（Begin 包装对 demo 生成物是空操作，见 §13.2 第 5 条）。**已完成**（2026-10-28，提交见 git log；实现与本文的差异见 §13.2） |
 | 4 | **切换与删除**：`wiring/saga` Mod / Steps / config 换新装配；`StartSaga` 等 API 定稿（删暂名）；启动中继；demo（赠礼 saga、gm、PlayerDao 回执字段、配置、部署清单）；生成器 catalog / render / kitconfig / help / doctor；sidmerge；删除 §3.3 第 4 批全部；文档（SAGA.md、guide/06、impl/06、OBSERVABILITY、PACKAGES、impl/13、CONSISTENCY、KNOWN-LIMITS、CHANGELOG 升级要求）；测试按 §11 迁移；遗留事务红绿 | 多笔，**整批一起推**：先在分支内按“接线 → 删 Redis/Store Service → 生成器与 demo → 文档 → 测试迁移”顺序提交，每笔可编译；全部门禁过后一次推 main | 全量 `go test ./...`；受影响包 `-race`；`-tags integration` 的 vet；真实 NATS + Mongo 集成；kill -9 两类；`go generate ./...` 无漂移；重新生成 game-demo build / vet / test；`scripts/test-demo-generated.sh`、`test-mmorpg-cross-sid.sh`（真实依赖）；`TestEveryDeclaredConfigFieldIsRead` / kitconfig 快照测试 | 切到 JetStream；Redis 版不再存在。**已完成**（2026-10-29，实施记录 §13.3） |
-| 5 | 删 DataEngine lease fence 机制（§3.3 第 5 批）与相关指标、文档 | 1～2 笔 | `framework/dataengine` 与 `framework/nest` `-race`；投影器真实 Mongo 用例；全量 `go test ./...` | 可用 |
+| 5 | 删 DataEngine lease fence 机制（§3.3 第 5 批）与相关指标、文档；维护者 2026-10-29 的两项决定（`dataengine.startup_timeout` 缺省 60s、`saga.coordinators` 保持 sid + 部署规则） | 1～2 笔 | `framework/dataengine` 与 `framework/nest` `-race`；投影器真实 Mongo 用例；全量 `go test ./...` | 可用。**已完成**（2026-10-29，实施记录 §13.4） |
 | 6 | 冷副本（可选能力）：`ColdCopyProjector`、`Get` / `List` 回落、配置、kill -9 后最终一致用例 | 1～2 笔 | 真实 Mongo + JetStream；`-race` | 可用（缺省关） |
 | 7 | 性能验收（§12）、删除原型目录与旧压测脚本、报告与样本 | 1～2 笔 | 压测 ≤ 30 分钟；报告数字与样本一致 | 可用 |
 
@@ -561,7 +561,7 @@ Redis 删除放在第 4 批，与切换同一次推送：维护者要求“同�
 5. `wiring/storeservice` 在接线那一笔就删了（它依赖 saga 的旧类型）；`mongo_store.go`（冷副本）直接删除，第 6 批重写。装配不依赖 Mongo。
 6. 原生回执不存 Data，回放的 Data 取命令载荷（决定 A 的实现方式，不扩回执）。
 7. 测试驱动加了 `engineHooks.rejectedInput`（分区跳过输入时通知测试，`simEngine` 据它还原旧 `Complete` 的错误返回）；只在测试里设置。
-8. T-A 第 3 条的上限：Mod 的启动期限仍是 `dataengine.startup_timeout`（30s），没有改成 120s（改缺省会连带生成器的部署启动等待）；120s 只用于调用方没给期限的情形。实测服务端每半个参数扫一次过期事务（最晚 1.5 倍参数回收），参数 20s 时最坏回收时刻等于 30s，余量是被杀到重启之间的时间——是否把缺省调到 60s 列为待决定（KNOWN-LIMITS）。
+8. T-A 第 3 条的上限：Mod 的启动期限仍是 `dataengine.startup_timeout`（当时 30s；第 5 批调到 60s，§13.4），没有改成 120s（改缺省会连带生成器的部署启动等待）；120s 只用于调用方没给期限的情形。实测服务端每半个参数扫一次过期事务（最晚 1.5 倍参数回收），参数 20s 时最坏回收时刻等于 30s，余量是被杀到重启之间的时间——是否把缺省调到 60s 列为待决定（KNOWN-LIMITS）。
 9. DataEngine lease fence 的两个真实 Mongo 用例与生成工程的 `fenced_step_test.go` 原来靠 `DataEngineStepInbox` 产生 fenced 记录；fence 机制第 5 批才删，这里按旧收件箱写进 Mongo 的同一形状在测试里重建替身（操作状态文档、fence 回执、步骤回执、effect），断言不变。
 
 **测试迁移（维护手册 §7：删除的用例写明覆盖它的保留用例）**
@@ -573,6 +573,32 @@ Redis 删除放在第 4 批，与切换同一次推送：维护者要求“同�
 - 其他包：`wiring/config_schema_test.go` 的 saga 用例换成现有键（越界 `max_batch`、无单位 `tick`）；`wiring/sidmerge` 的真实用例第 3 步换成私有 NATS 分区日志（`ROOST_NATS_CLUSTER_URL`）；生成工程 saga_native 的真实依赖用例去掉权威 Redis / Store Service。
 
 **验证**（本机 macOS；结果与命令见提交说明与交接报告）：受影响包 `-race`、全量 `go test ./...`、`go generate` 无漂移、重新生成 game-demo 的 build / vet / test；私有三节点 NATS 上的协调器与参与方真实用例（含两种 kill -9 与长停机）；T-A 红绿在私有 mongod（单节点副本集）上：参数 60s、期限 30s 时启动排空失败（WriteConflict 到期），参数 20s 时排空在遗留事务开始后 27～29s 完成；单元 `TestAssemblyStartupDrainRetriesALeftoverTransactionWithinTheDeadline` 在去掉重试时为红。变异：`successData` 去掉（三处补偿载荷红）、`checkTimers`（Waiting 不排轮，5 个以上用例红）、探针阈值（`TestStepsProbe…` 红）、排空重试（上面的单元红）、生产配置规则（R=3、协调器要单实例锁各自去掉时 `TestSagaProductionRules` 红）、每流 ≤ 50 分区与结果未知预算下限（`TestSagaConfigRulesNameTheirKeys` 红；预算下限原有一个没人用的常量，删掉，声明的 `min:"21s"` 是唯一强制点）。
+
+### 13.4 第 5 批实施记录
+
+范围：删除 DataEngine lease fence 机制（§3.3 第 5 批，选项 L-A）；落实维护者 2026-10-29“按推荐”的两项决定。2 笔提交（见 git log）：① 删除 fence 与测试迁移；② `startup_timeout` 缺省、`coordinators` 部署规则与本批文档。
+
+**删除**（第 1 笔）：`framework/dataengine/lease_fence.go`（`LeaseFence`、回执编解码、`ErrFencedEntityPending`、`ErrInvalidLeaseFence`）与 `ValidateCommitRecord` 的 fence 解码；`engine/fenced_step.go`（`FenceOutcomeProjectionStore`、原生步骤屏障、被跳过后的驱逐队列）；投影器的 skipped / unknown 结果分支、`ProjectorStats.FencedEntities` / `FencedAdmissionRejected` / `StaleEvictions`、`ErrRemoteLeaseFenceUnsupported` / `ErrRetiredRemoteLeaseFenceRecord`、`MongoStore.ProjectFenced` 与 `leaseFencesMatch`、事务标记的 `skipped` 字段、测试缝 `afterLeaseFence`；指标 `dataengine.fence.skipped.total`、`dataengine.fence.evictions.{started,failed}.total`。保留并移到 `entity_unload.go`：`Projector.BindLocalExecutor` / `localRun`（运维卸载在业务池取实体锁）、`recordEntityIDs`（卸载屏障）。非 saga 的承诺（strict / async / pipelined 持久、投影冲突 fail-stop、Remote）不变：删掉的分支只有带 fence 回执的记录才会走到，第 4 批之后没有生产路径再产生它们；受影响包 `-race` 与全量测试不改断言通过。
+
+**测试迁移（维护手册 §7：删除的用例写明覆盖它的保留用例，或承诺为什么不再存在）**
+
+| 删除 / 改写的用例 | 去向 |
+| --- | --- |
+| `TestTerminalAckWakesWaitersOfAPendingEviction`（`fenced_eviction_once_test.go`） | 承诺“checkpoint 报 WAL terminal 时唤醒其他在途记录的等待方，之后的等待与准入都拿 terminal”与 fence 无关，改写为 `projection_test.go` 的 `TestCheckpointTerminalWakesWaitersOfOtherPendingRecords`（普通在途记录；去掉 `observeAckError` 时为红：等待方 2s 内未被唤醒） |
+| `TestSkippedFencedStepResyncsSubscribersFromMongo` / `TestSkippedFencedStepWithoutAuthorityRetractsSubscribers`（`fenced_step_resync_test.go`） | 卸载后重载的承诺改由运维卸载触发同一条 `ManagerAccess.Unload → unload_resync` 链路：`entity_unload_test.go` 的 `TestEntityUnloadResyncsSubscribersFromMongo` / `TestEntityUnloadWithoutAuthorityRetractsSubscribers`；同一承诺另有 `framework/entity/unload_resync_test.go` 与生成工程 `remoteflow/reject_test.go`（Remote 持久拒绝） |
+| `TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint`（`lease_fence_integration_test.go`） | 文件改名 `projector_replay_integration_test.go`，同名用例改用不带 fence 的“回执 + effect + mutation”记录（真实 Nest 事务产出），断言首投结论重放不变、effect 不重新暂存；fence 替身 `leaseStep` 删除 |
+| `TestRealMongoFencedProjectionSerializesWithLeaseTakeover`；`mongo_store_test.go` 的 `TestMongoStoreLeaseFenceSkipsStaleSagaTransaction`、`TestMongoStoreLeaseFenceRejectsExpiredLease`、`TestMongoStoreLeaseFenceAppliesOnlyMatchingOwnerAndToken`、`TestMongoStoreRefusesARetiredRemoteLeaseFenceRecordWithoutWriting`；`lease_fence_test.go`；`validate_test.go` 的 `TestLeaseFenceValidateRefusesEachIncompleteFence` 与伪造 fence 回执一例 | 承诺随机制消失（fence 谓词、租约接管写偏斜串行、退役混合记录、fence 回执校验）。`validate_test.go` 剩余的 Loader / Tracker 守卫改名 `TestLoaderAndTrackerGuards` |
+| `lease_fence_skip_promises_test.go`（6 条）、`TestSkippedFencedStepIsQueuedForEvictionOnce` | 承诺随机制消失（原生步骤屏障、跳过后驱逐、驱逐只登记一次）。原生步骤的至多一次现在由实体内回执保证（`step_receipt_test.go`、`native_step_operation_test.go` 等，第 4 批） |
+| `TestRemoteLeaseFenceRejectedBeforeWALAdmission`、remoteentity 的 `TestHistoricalLeaseFencedRemoteRecordStopsTheProjectorWithoutWriting` | 承诺随机制消失（“Remote 写 + fence”组合不再特殊）；WAL 级 Remote 不产生 Rejected 仍由 `TestWALRemoteAuthorityConflictNeverProducesRejected` 守 |
+| 生成工程 `TestGeneratedDataEngineFencedStepSkipDoesNotFenceTheEntity`（`fenced_step_test.go`）与 `trade_fenced` handler | 承诺随机制消失；文件里其他用例共用的 `mongoState` / `memoryState` / `noFatal` 移到 `trade_fixture_test.go` |
+| 测试替身的 `ProjectFenced` 包装（`projector_parallel_test.go`、生成工程 `pressure_test.go` / `trade_fixture_test.go` / `remoteflow`） | 改回包 `Project`（单条段现在只走 `Project`） |
+
+**维护者决定（2026-10-29，“按推荐”）**
+
+1. **`dataengine.startup_timeout` 缺省 30s → 60s**（第 2 笔）：遗留 Mongo 事务最晚 1.5 × `transactionLifetimeLimitSeconds` 回收，部署要求 20s 即最晚 30s，30s 期限没有余量。改了声明（`wiring/dataengine`，带说明）、生成器常量 `generatedDataEngineStartupTimeout`（打开单实例锁的服务，install.sh 的 `HEALTH_ATTEMPTS` 与 compose 的 `start_period` 随之加 30s）、`kitconfig_gen.go` 快照（重新生成）、文档。启动排空的有界重试跟随调用方期限（wiring 传 `startup_timeout`），2 分钟上限只用于没给期限的调用方：抽成 `startupDrainContext`，由 `TestStartupDrainDeadlineFollowsTheCallerAndCapsOnlyWithoutOne` 钉住；缺省值由 `TestDataEngineStartupTimeoutDefaultOutlastsALeftoverTransaction` 钉住。变异：缺省改回 30s、给了期限仍套 2 分钟、没给期限不套上限，三处各自变红。
+2. **`saga.coordinators` 保持只写 sid**：部署规则“一个 sid 只能在一种服务类型里装 saga Mod”写进 SAGA.md「分区归属」、guide/06、impl/06、impl/13 与配置声明的说明。**没有加启动期检查**：每个服务类型的配置检查只看得到自己的配置；运行期能看到冲突的信号只有分区期望序号（已经 fail-stop）；可靠的跨类型检查要另建一份跨进程登记（带 TTL 就是模块自己的租约，与“App 级统一保证”相悖；不带 TTL 则迁移服务类型时要人工清理），不算便宜。
+
+**验证**：本机 macOS；私有单节点副本集 mongod（`transactionLifetimeLimitSeconds=20`）。结果与命令见提交说明与交接报告。
 
 ## 14. 需要维护者选择的点
 
@@ -631,6 +657,6 @@ Redis 删除放在第 4 批，与切换同一次推送：维护者要求“同�
   - （4）拒绝的持久性（§13.1 第 9 条）：维护者 2026-10-28 确认 A，代码不改，SAGA.md 措辞在第 4 批（已改）。
   - （5）（第 4 批已做）第 4 批接线时 demo 的 PlayerDao 要加 `SagaReceipts` 与 `saga_receipts.go`（生成工程由 `add saga -native` 自动带上，demo 是参考实现、手写）。
 - **第 4 批发现**：
-  - Mongo 服务端每半个 `transactionLifetimeLimitSeconds` 扫一次过期事务，遗留事务最晚 1.5 倍参数才回收（私有 mongod 实测，参数 20s 时 27～29s）；`dataengine.startup_timeout` 缺省 30s 的余量只有被杀到重启的时间，是否调到 60s 待维护者决定（KNOWN-LIMITS）。
+  - Mongo 服务端每半个 `transactionLifetimeLimitSeconds` 扫一次过期事务，遗留事务最晚 1.5 倍参数才回收（私有 mongod 实测，参数 20s 时 27～29s）；`dataengine.startup_timeout` 缺省 30s 的余量只有被杀到重启的时间——**第 5 批已按维护者 2026-10-29 决定调到 60s**（§13.4）。
   - 驱动的 `WithTransaction` 在一次调用里重跑写冲突到 `mongo.transaction_timeout`（缺省 30s）；`Runtime.Start` 原来只调一次 Flush，`startup_timeout` 大于事务期限时多出来的时间用不上——已改为 `drainAtStartup` 重试。
-  - `saga.coordinators` 只写 sid：两种服务类型用同一个 sid 且都装 saga Mod 时认领同样的分区，单实例锁按“类型 + sid”挡不住，期望序号隔离会让其中一个 fail-stop；SAGA.md 写了部署约定，是否改成 `<server_type>:<sid>` 待维护者决定。
+  - `saga.coordinators` 只写 sid：两种服务类型用同一个 sid 且都装 saga Mod 时认领同样的分区，单实例锁按“类型 + sid”挡不住，期望序号隔离会让其中一个 fail-stop；SAGA.md 写了部署约定，是否改成 `<server_type>:<sid>` 待维护者决定。——**维护者 2026-10-29 决定保持 sid**，部署规则写进 SAGA.md，未加启动期检查（§13.4）。

@@ -55,7 +55,7 @@ type config struct {
 		Stream        string                                 `config:"stream" shared:"saga.stream" default:"ROOST_SAGA" example:"{PROJECT}_SAGA" help:"流名前缀：第 g 条流是 <stream>_G<g>，快照与准入桶由它派生"`
 		Partitions    int                                    `config:"partitions" default:"16" min:"1" max:"1024" example:"16" help:"分区数（全部进程相同，不同时协调器启动报 ErrLayoutMismatch）。改值要先让全部 saga 终态、停全部协调器、删流与桶"`
 		StreamGroups  int                                    `config:"stream_groups" default:"4" min:"1" max:"8" example:"4" help:"流数（≤ partitions，每条流的分区数 ceil(partitions/stream_groups) ≤ 50）；一条流选主时只停它上面的分区"`
-		Coordinators  []string                               `config:"coordinators" required:"true" example:"1000" help:"跑协调器的 sid 列表（全部进程相同）：排序后第 i 个 sid 拥有 k mod len == i 的分区；不在列表里的进程只做发起方"`
+		Coordinators  []string                               `config:"coordinators" required:"true" example:"1000" help:"跑协调器的 sid 列表（全部进程相同）：排序后第 i 个 sid 拥有 k mod len == i 的分区；不在列表里的进程只做发起方。\n部署规则：一个 sid 只能在一种服务类型里装 saga Mod（单实例锁按服务类型 + sid，挡不住两种类型的同号进程，\n它们会认领同一组分区、被期望序号隔离并 fail-stop；配置检查看不到别的服务类型，靠部署约定，见 SAGA.md）"`
 		Replicas      int                                    `config:"replicas" default:"1" min:"1" max:"5" example:"1" help:"流与桶的副本数；生产必须为 3"`
 		// 去重窗口要盖住一次发布结果未知的整个重发判定（publish_unknown_budget）两遍。
 		DuplicateWindow     time.Duration `config:"duplicate_window" default:"2m" min:"1s" example:"2m" help:"MsgID 去重窗口，≥ 2 × publish_unknown_budget"`

@@ -1,5 +1,7 @@
 # 功能设计：DataEngine 投影器按实体分片并行投影（2026-10-27）
 
+> **2026-10-29 更新**：DataEngine lease fence 已在 saga 设计第 5 批删除（[§13.4](DESIGN-2026-10-28-saga-jetstream-authority.md#134-第-5-批实施记录)）。下文的原生步骤屏障（`fencedEntities`）、lease fence 回执冲突键与“Remote + lease fence 退役记录”屏障不再存在；单条投影入口 `ProjectFenced` 现为 `Project`。
+
 **状态：已实施（分支 `feat/projector-entity-parallel`，未合入 main、未发版；实施记录见 §11）。** 维护者 2026-10-27 决定按方案 A：投影器分片并行单独评审并实施。范围是三大块里的 DataEngine 投影器（`framework/dataengine/engine`），
 不改 WAL 格式、不改 Nest 准入、不改 Mongo 文档形状。
 

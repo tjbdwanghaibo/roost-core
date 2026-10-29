@@ -274,7 +274,7 @@ type electionRetry struct {
 }
 
 // startupElectionRetry：10 次、间隔 1s，覆盖一次正常选举（让位到新主通常几秒）；
-// 调用方的启动期限（DataEngine startup_timeout、remote_entity.op_timeout 缺省都是 30s）在它之上。
+// 调用方的启动期限（DataEngine startup_timeout 缺省 60s、remote_entity.op_timeout 缺省 30s）在它之上。
 var startupElectionRetry = electionRetry{attempts: 10, interval: time.Second}
 
 // electionErrorCodes 是副本集换主期间服务端返回的错误码：InterruptedDueToReplStateChange (11602)、

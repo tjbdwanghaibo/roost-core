@@ -125,7 +125,7 @@ type config struct {
 	mods.PersistenceConfig
 	Database              string          `config:"dataengine.database" default:"game" example:"{project_db}" help:"Data Engine 自己的集合（receipts / transactions / outbox）所在的 Mongo 库。生成配置按工程名填写；共用一个 Mongo 的不同工程必须不同"`
 	Databases             DatabasesConfig `config:"dataengine.databases" example:"{main: {project_db}}" help:"DAO 逻辑库（标记里的 db=）→ Mongo 物理库。没写的逻辑库物理名就是逻辑名本身；生成配置把骨架的 main 映射到按工程名派生的库。\n只认代码声明过的逻辑库；物理名不能是系统库，按 sid 分库时加上 _<sid> 不超过 63 字节；两个逻辑库不能映射到同一个物理库。\nWAL 里有未投影记录时改映射会拒绝启动：先停写排空 WAL、迁移数据再改（docs/framework/PLAYER-MIGRATION.md）"`
-	StartupTimeout        time.Duration   `config:"dataengine.startup_timeout" default:"30s" min:"1ns" example:"30s"`
+	StartupTimeout        time.Duration   `config:"dataengine.startup_timeout" default:"60s" min:"1ns" example:"60s" help:"启动排空（把 WAL 里未投影的记录写进 Mongo）的期限，期限内遇到写冲突等错误会退避重试。\n被 kill -9 的进程留下的 Mongo 事务最晚在 1.5 × transactionLifetimeLimitSeconds 才被服务端回收\n（部署要求 20s，即最晚 30s），缺省 60s 在此之上留 30s 余量。生成的部署启动等待按它计算：调大时同步调大"`
 	ShutdownTimeout       time.Duration   `config:"dataengine.shutdown_timeout" default:"30s" min:"1ns" example:"30s" help:"Stop budget declared to the App for draining WAL and projection; granted from\nshutdown.total_timeout after a 3s floor for each other Mod (scaled down with a warning\nonly when the rest cannot cover it). The generated shutdown.total_timeout counts it:\nraise that too when raising this."`
 	TransactionReceiptTTL time.Duration   `config:"dataengine.transaction_receipt_ttl" default:"720h" min:"1ns" example:"720h"`
 	ReceiptTTL            time.Duration   `config:"dataengine.receipt_ttl" default:"720h" min:"1ns" example:"720h"`

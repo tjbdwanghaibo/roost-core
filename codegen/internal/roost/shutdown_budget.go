@@ -44,7 +44,10 @@ const (
 	// generatedDataEngineStartupTimeout is dataengine.startup_timeout as the
 	// generated config writes it (catalog.go): how long the WAL replay may take
 	// before the service is ready. The deployment's start-up allowance counts it.
-	generatedDataEngineStartupTimeout = 30 * time.Second
+	// 60s since saga batch 5 (maintainer 2026-10-29): a killed process's leftover
+	// Mongo transaction is reclaimed at worst at 1.5 × transactionLifetimeLimitSeconds
+	// (20s required → 30s), and 30s left no margin.
+	generatedDataEngineStartupTimeout = 60 * time.Second
 	// generatedPlayerTCPShutdownTimeout is player_access.tcp.shutdown_timeout
 	// as the generated config writes it (player_tcp_config.go): the stop
 	// budget the generated player TCP Mod declares to the App.

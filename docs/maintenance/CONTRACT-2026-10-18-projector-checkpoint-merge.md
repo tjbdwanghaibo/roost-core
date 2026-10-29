@@ -1,5 +1,7 @@
 # 契约变更：投影器对特殊记录合并 checkpoint（2026-10-18）
 
+> **2026-10-29 更新**：DataEngine lease fence 已在 saga 设计第 5 批删除（[§13.4](DESIGN-2026-10-28-saga-jetstream-authority.md#134-第-5-批实施记录)）。下文 I2（重放不重判 fence）、I7（被跳过的原生步骤只驱逐一次）随机制消失；`MongoStore.ProjectFenced` 现为 `MongoStore.Project`，其余不变量照旧成立。真实 Mongo 崩溃注入用例现为 `projector_replay_integration_test.go` 的同名用例（不带 fence 的回执 + effect 记录）。
+
 维护者 2026-10-18 在 [Saga 原生步骤性能优化](../performance/SAGA-OPT-20261018.md) §7 的三个第三档候选里选 **A**：带回执 / effect 的“特殊记录”投影后不再每条立即 checkpoint，改为按 `CheckpointInterval`（及条数阈值 `CheckpointRecords`）与普通批记录一起合并。**B（投影合批）与 C（WAL 与 Mongo 分盘）不做。** 基线 origin/main `e90dd4ad`。
 
 范围只有 `framework/dataengine/engine` 的投影器确认时机。WAL 格式、checkpoint 文件格式、Mongo 文档格式、公开 API 与配置键都不变；`BatchProjectionStore` 的文档契约扩大一句（§5）。属于 DataEngine（三大块之一）的持久契约，先论证后实施。

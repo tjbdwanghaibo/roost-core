@@ -56,8 +56,14 @@ Saga 用于跨越多个独立事务域的业务流程。单个 Nest handler、�
 进程只做发起方（`StartSaga`、查询、`WaitTerminal`）。进程级唯一由 App 单实例锁保证——**协调器进程在生产必须 `singleton.enabled=true`**
 （配置检查强制）；崩溃重启的短暂重叠由期望序号隔离、旧进程 fail-stop。写者身份（进事件的 MsgID）是 `<sid>-<单实例锁本次启动的 token>`。
 没有分区租约、没有自动接管：一个协调器进程挂掉，它的分区停到它重启，在途 saga 的超时在重放后按截止时刻继续。改 `coordinators` 列表 =
-改归属：按运维手册停全部协调器再起（不停也安全，但会有一轮 fail-stop）。**同一个 sid 只能有一种服务类型装 saga Mod**：列表只写 sid，
-两种服务类型的同号进程会认为自己拥有同一组分区，被期望序号隔离并 fail-stop。
+改归属：按运维手册停全部协调器再起（不停也安全，但会有一轮 fail-stop）。
+
+**部署规则：一个 sid 只能在一种服务类型里装 saga Mod**（维护者 2026-10-29“按推荐”：`saga.coordinators` 保持只写 sid）。列表只写 sid，
+App 单实例锁按“服务类型 + sid”取锁，两种服务类型的同号进程（例如 game 1001 与 world 1001 都装了 saga Mod）都会认为自己拥有同一组分区、
+同时写同一条分区日志，其中一方被期望序号隔离（`saga.partition.fail_stop_total{reason="fenced"}`）、整个进程 fail-stop，重启后可能反过来
+隔离另一方。规则是：**装 saga Mod 的服务类型之间 sid 不重叠**；只做发起方的服务类型（sid 不在 `coordinators` 里）不受限。没有启动期检查：
+每个服务类型的配置检查只看得到自己的配置，看不到别的服务类型是否也装了 saga Mod；可靠的跨类型检查需要另一份跨进程登记（与 App 级统一
+保证的规则相悖），所以这条靠部署约定，违反时的表现就是上面的 fenced fail-stop。
 
 **发布结果**：`nil` = 已持久；结果未知（没收到答复）→ 同 MsgID、同期望序号重发，按“Duplicate / 批重复 10201 / 分区过滤上最后一条是自己的
 = 已提交”判定，超过 `saga.publish_unknown_budget`（缺省 30s，**≥ 3 × 7s 选主停顿**）→ `ErrPublishUnknown` fail-stop；批不完整（10176）立即重发；
@@ -266,9 +272,10 @@ transactionLifetimeLimitSeconds: 20})` 或启动参数 `--setParameter transacti
 - 参与方启动时只读探测这个参数（`Steps.Start`，`getParameter`）：长于缺省步骤预算窗口（`saga.step_defaults` 补齐框架缺省后
   MaxAttempts × Timeout 加退避，框架缺省 26.5s）时 WARN 一次并计 `saga.step.mongo_txn_lifetime_exceeds_budget`；托管库不让读时只记 INFO
   “未探测”。探针从不拒绝启动（参数归部署）。
-- DataEngine 启动排空撞上写冲突时在 `dataengine.startup_timeout`（缺省 30s）内重试：驱动在一次事务里重跑到 `mongo.transaction_timeout`，之后
-  Runtime 退避再排空（`dataengine.startup_drain_retry_total`），期限到了才启动失败（进程退出，由部署重启；那时遗留事务多半已回收）。
-  参数 20s 时最坏回收时刻与 30s 期限相同，被杀到重启之间的时间是余量；要更稳就调大 `dataengine.startup_timeout`（同时调大部署侧的启动等待）。
+- DataEngine 启动排空撞上写冲突时在 `dataengine.startup_timeout`（**缺省 60s**，维护者 2026-10-29“按推荐”由 30s 调大）内重试：驱动在一次
+  事务里重跑到 `mongo.transaction_timeout`，之后 Runtime 退避再排空（`dataengine.startup_drain_retry_total`），期限到了才启动失败（进程退出，
+  由部署重启）。参数 20s 时最坏回收时刻 30s，60s 期限在此之上留 30s 余量（原缺省 30s 没有余量）；生成的部署启动等待（install.sh 的
+  `HEALTH_ATTEMPTS`、compose 的 `start_period`）按它计算。调大参数或期限时同步调大部署侧的启动等待。直接装配、没有给期限的调用方上限 2 分钟。
 
 ## 运维观察
 

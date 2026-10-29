@@ -37,6 +37,7 @@
 | C19 | TCP 手册补充核对 | 仓库手册写 RS v1，生成手册把 Lockstep 写成预留；消息号 0 仅用于鉴权 | 当前为 RS v2；PB/Sync/Lockstep 分类型；消息号 0 还用于鉴权后心跳。本次在 main 修正文档，不移动旧标签 | [公共包头](../../client/wire/packet.go)、[TCP 模板](../../codegen/internal/roost/render_player_tcp.go)、[说明与纠正清单](../framework/GATEWAY.md) |
 | C20 | Gate 能力边界 | gateway 包与独立网关服务容易混称 | 已有嵌入式 TCP 接入；独立 Gate 路由、回推和集群会话方案仍待实施 | [现状与待实施设计](../framework/GATEWAY.md)、[服务目录](../../codegen/internal/roost/framework_services.go) |
 | C21 | Saga 协调器权威 | 文档写协调器存储是单主权威 Redis + Store Service 投影 + Mongo 冷副本，原生步骤经租约 + DataEngine 回执 + lease fence | saga 第 4 批：权威是 JetStream 分区事件日志（单写者、期望序号 fail-stop、快照 + 日志重放），参与方回执在实体里（原生）/ Mongo 收件箱（Mongo 步骤）；Redis 权威、Store Service、`saga.redis.*` 已删除，冷副本在第 6 批 | [framework/saga/partition.go](../../framework/saga/partition.go)、[step_receipt.go](../../framework/saga/step_receipt.go)、[SAGA.md](../framework/SAGA.md) |
+| C22 | DataEngine lease fence | 文档与指标清单仍写投影器按 lease fence 跳过原生步骤、实体屏障 `ErrFencedEntityPending`、跳过后驱逐、`dataengine.fence.*` 指标、“Remote 写 + lease fence”准入拒绝与退役记录 fatal | saga 设计第 5 批删除整套机制：投影只有“已应用”一种结论，带回执的记录一律按普通回执暂存；`BindLocalExecutor` 只剩运维卸载在用；`dataengine.startup_timeout` 缺省 60s | [engine/mongo_projection.go](../../framework/dataengine/engine/mongo_projection.go)、[engine/entity_unload.go](../../framework/dataengine/engine/entity_unload.go)、[设计 §13.4](DESIGN-2026-10-28-saga-jetstream-authority.md#134-第-5-批实施记录) |
 
 ## 3. 各模块结论
 
