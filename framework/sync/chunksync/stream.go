@@ -215,8 +215,9 @@ func (c *Cursor) Commit(p *Plan) error {
 	if p == nil || p.previous != c.seq {
 		return ErrSequence
 	}
-	replaced := c.objects
+	replaced, changes := c.objects, c.changes
 	*c = p.next
+	c.changes = changes // 临时变化表属于游标而不是某一代基线，提交时保留。
 	if replaced != nil {
 		clear(replaced)
 		c.spare = replaced
