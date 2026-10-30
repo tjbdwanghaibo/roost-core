@@ -19,6 +19,44 @@ func (svc *Service) RegisterRoutes(reg webroute.Registerer) error {
 	}); err != nil {
 		return err
 	}
+	if err := reg.Register("POST", "/fusion/create", func(w http.ResponseWriter, r *http.Request) {
+		var request FusionRequest
+		if !webroute.DecodeJSON(w, r, &request) {
+			return
+		}
+		response, err := handleFusionCreate(r.Context(), svc, request)
+		webroute.WriteResult(w, 201, response, err)
+	}); err != nil {
+		return err
+	}
+	if err := reg.Register("GET", "/fusion/list", func(w http.ResponseWriter, r *http.Request) {
+		request, ok := webroute.ReadRaw(w, r)
+		if !ok {
+			return
+		}
+		response, err := handleFusionList(r.Context(), svc, request)
+		status := http.StatusOK
+		if err == nil {
+			status = webroute.SuccessStatus(status, response)
+		}
+		webroute.WriteCompressedResultWithMapper(w, r, status, response, err, legacyErrors)
+	}); err != nil {
+		return err
+	}
+	if err := reg.Register("POST", "/fusion/start", func(w http.ResponseWriter, r *http.Request) {
+		var request FusionRequest
+		if !webroute.DecodeJSON(w, r, &request) {
+			return
+		}
+		response, err := handleFusionStart(r.Context(), svc, request)
+		status := http.StatusOK
+		if err == nil {
+			status = webroute.SuccessStatus(status, response)
+		}
+		webroute.WriteResultWithMapper(w, status, response, err, legacyErrors)
+	}); err != nil {
+		return err
+	}
 	if err := reg.Register("POST", "/player/keepalive", func(w http.ResponseWriter, r *http.Request) {
 		var request KeepAliveRequest
 		if !webroute.DecodeJSON(w, r, &request) {

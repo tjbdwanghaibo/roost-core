@@ -55,9 +55,9 @@ var (
 		Renamed: map[string]string{"syncTopic": "syncNamespace"},
 	}
 	Mirror = Spec{Kind: "mirror", Keys: []string{"entityKind", "coll"}}
-	// Web: method / path / body are required; headers / compress are optional
-	// (webroute checks the required ones itself).
-	Web      = Spec{Kind: "web", Keys: []string{"method", "path", "body", "headers", "compress"}}
+	// Web: method / path / body are required; headers / compress / errors /
+	// status are optional (webroute checks the required ones itself).
+	Web      = Spec{Kind: "web", Keys: []string{"method", "path", "body", "headers", "compress", "errors", "status"}}
 	Register = Spec{Kind: "register", Keys: []string{"phase", "order"}}
 )
 

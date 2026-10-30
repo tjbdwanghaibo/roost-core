@@ -151,11 +151,7 @@ func renderRoutes(pkg string, routes []Route) ([]byte, error) {
 			source.WriteString("\t\trequest, ok := webroute.ReadRaw(w, r)\n\t\tif !ok {\n\t\t\treturn\n\t\t}\n")
 		}
 		fmt.Fprintf(&source, "\t\tresponse, err := %s(r.Context(), svc, request)\n", route.Handler)
-		if route.Compress == compressGzip {
-			source.WriteString("\t\twebroute.WriteCompressedResult(w, r, http.StatusOK, response, err)\n")
-		} else {
-			source.WriteString("\t\twebroute.WriteResult(w, http.StatusOK, response, err)\n")
-		}
+		writeResult(&source, route)
 		source.WriteString("\t}); err != nil {\n\t\treturn err\n\t}\n")
 	}
 	source.WriteString("\treturn nil\n}\n")
@@ -166,4 +162,29 @@ func renderRoutes(pkg string, routes []Route) ([]byte, error) {
 		return nil, fmt.Errorf("format generated route source: %w", err)
 	}
 	return formatted, nil
+}
+
+// writeResult 写路由的结果写出。不写 compress= / errors= / status= 时与原来逐字相同：
+// webroute.WriteResult(w, http.StatusOK, response, err)。
+func writeResult(source *bytes.Buffer, route Route) {
+	status := "http.StatusOK"
+	switch route.SuccessStatus {
+	case "":
+	case successStatusResponse:
+		// 只在没有错误时问响应：出错时响应通常是零值，它的 HTTPSuccessStatus 不该被调用。
+		source.WriteString("\t\tstatus := http.StatusOK\n\t\tif err == nil {\n\t\t\tstatus = webroute.SuccessStatus(status, response)\n\t\t}\n")
+		status = "status"
+	default:
+		status = route.SuccessStatus
+	}
+	switch {
+	case route.Compress == compressGzip && route.ErrorMapper != "":
+		fmt.Fprintf(source, "\t\twebroute.WriteCompressedResultWithMapper(w, r, %s, response, err, %s)\n", status, route.ErrorMapper)
+	case route.Compress == compressGzip:
+		fmt.Fprintf(source, "\t\twebroute.WriteCompressedResult(w, r, %s, response, err)\n", status)
+	case route.ErrorMapper != "":
+		fmt.Fprintf(source, "\t\twebroute.WriteResultWithMapper(w, %s, response, err, %s)\n", status, route.ErrorMapper)
+	default:
+		fmt.Fprintf(source, "\t\twebroute.WriteResult(w, %s, response, err)\n", status)
+	}
 }

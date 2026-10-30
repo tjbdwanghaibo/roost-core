@@ -204,12 +204,30 @@ const CompressMinBytes = 1024
 // Accept-Encoding 协商 gzip（不接受 gzip 或少于 CompressMinBytes 时回明文）；错误响应与 WriteResult 相同、不压缩。
 // 两种情况都带 Vary: Accept-Encoding。
 func WriteCompressedResult(w http.ResponseWriter, r *http.Request, successStatus int, response any, err error) {
+	WriteCompressedResultWithMapper(w, r, successStatus, response, err, DefaultErrorMapper)
+}
+
+// WriteCompressedResultWithMapper 同 WriteCompressedResult，错误响应按 mapper 写（nil 时用 DefaultErrorMapper），
+// 即 compress=gzip 与 errors= 同时写时的生成代码。
+func WriteCompressedResultWithMapper(w http.ResponseWriter, r *http.Request, successStatus int, response any, err error, mapper ErrorMapper) {
 	if err != nil {
 		httpserver.AddVary(w.Header(), "Accept-Encoding")
-		WriteResult(w, successStatus, response, err)
+		WriteResultWithMapper(w, successStatus, response, err, mapper)
 		return
 	}
 	httpserver.JSONCompressed(w, r, successStatus, response, CompressMinBytes)
+}
+
+// SuccessStatus 是 //roost:web status=response 的成功状态：response 实现 HTTPSuccessStatus() int 且返回 200～299
+// 时用它（例如排队中回 202），否则用 fallback。生成代码只在 handler 没有返回错误时调用；不写 status=response 的路由
+// 不看这个方法，响应恰好有同名方法也不改变状态。
+func SuccessStatus(fallback int, response any) int {
+	if provider, ok := response.(interface{ HTTPSuccessStatus() int }); ok {
+		if status := provider.HTTPSuccessStatus(); status >= http.StatusOK && status < http.StatusMultipleChoices {
+			return status
+		}
+	}
+	return fallback
 }
 
 // WriteResultWithMapper 写成功响应，或按 mapper 写错误响应（mapper 为 nil 时用 DefaultErrorMapper）。映射成 5xx 的

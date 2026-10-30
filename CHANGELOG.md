@@ -7,11 +7,12 @@
 ### 新增
 
 - **DAO 生成器：字节切片字段生成整体读取 `Get<Field>All()`，返回副本**（给下游 ai-game-blackbox-server 从 cube 迁到 roost：`ResultJSON` / `RequestJSON` 这类整段存 JSON 的 `[]byte` 字段要整段 `json.Unmarshal`，原来只有按下标的 `Get<Field>(idx)` 与 `Range<Field>`）。`[]byte` / `[]uint8` 字段（DAO 与嵌套 struct）多一个 `Get<Field>All() []byte`，与整体写入 `Set<Field>All`（嵌套 struct 里是 `Set<Field>`）对称；返回 `append(nil, x...)` 副本，改返回值不改 DAO、绕不过脏标记与回滚，空值读 nil。已发布的 slice 方法不变；持久文档、提交记录、同步载荷里字段仍是 BSON binary（子类型 0），**存储与 sync 格式不变**，已有数据与 cube 迁移数据照常读。重新生成后已有工程只多出方法，无需改代码。[命令与标记参考 §4](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#生成物与读写约定) · [实现 2F](docs/framework/impl/12-codegen.md#2f-dao-字节切片整体读取与-webroute-选项)
-- **webroute：`//roost:web` 的 `headers=` 请求头绑定与 `compress=gzip`，`RawRequest` 带 `Query`**（同上，对齐下游 cube fork 的三项能力）：
+- **webroute：`//roost:web` 的 `headers=` 请求头绑定、`compress=gzip`、`errors=` 错误映射与 `status=` 成功状态，`RawRequest` 带 `Query`**（同上，对齐下游 cube fork 的能力）：
   - `headers=Header-Name:Field,...`（只用于 `body=json`）：JSON 解码之后生成 `request.Field = r.Header.Get("Header-Name")`；头名生成期规范化、不区分大小写；请求头优先于 JSON 体的同名字段，头缺失为空串，多值取第一个；字段须是 string（可为嵌入提升字段），类型不对在生成文件赋值行编译失败；没有 / 多个冒号、空项、非法头名、字段不是单个标识符、重复头或字段、`body=raw` 在生成期拒绝。
   - `compress=gzip`：生成 `webroute.WriteCompressedResult`。成功响应经新的 `httpserver.JSONCompressed` 按 `Accept-Encoding` 协商（新的 `httpserver.AcceptsGzip`：`gzip` / `x-gzip` 看自身 `q`，未列出看 `*`，`q=0` 拒绝），编码后不少于 `webroute.CompressMinBytes`（1024）才压缩；不接受 gzip 的客户端照常拿明文；错误响应不压缩；全部带 `Vary: Accept-Encoding`。新增 `httpserver.AddVary`。
   - `webroute.RawRequest` 新增 `Query url.Values`（查询参数的独立副本，多值保留）。
-  - 不写新选项的路由生成物与行为不变。用了 `compress=gzip` 的生成物调用新 API，发版时生成物最低 core 要升到本版本。[命令与标记参考 §11](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#11-webroute) · [实现 2F](docs/framework/impl/12-codegen.md#2f-dao-字节切片整体读取与-webroute-选项)
+  - `errors=<mapper>`：错误响应改用路由包里声明的 `webroute.ErrorMapper`（生成 `WriteResultWithMapper`，与 `compress=gzip` 同用时是新的 `WriteCompressedResultWithMapper`）；只认本包标识符，别的包的映射在路由包里 `var x = pkg.Mapper` 一行引用。`status=<2xx>|response`：固定成功状态，或由响应的 `HTTPSuccessStatus() int` 决定（新的 `webroute.SuccessStatus`，只认 200～299，否则 200；只在没有错误时调用）。下游用它保持旧客户端契约（D6：自带 StatusError 映射、排队中回 202）。
+  - 不写新选项的路由生成物逐字不变、行为不变（响应类型即使有 `HTTPSuccessStatus` 方法，不写 `status=response` 也不看）。用了 `compress=gzip` / `status=response` / `compress=gzip` 加 `errors=` 的生成物调用新 API，发版时生成物最低 core 要升到本版本。[命令与标记参考 §11](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#11-webroute) · [实现 2F](docs/framework/impl/12-codegen.md#2f-dao-字节切片整体读取与-webroute-选项)
 
 ## [v1.31.2] - 2026-10-30
 

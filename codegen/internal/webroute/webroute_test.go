@@ -375,3 +375,45 @@ func generateFixtureRoutes(t *testing.T) []byte {
 	}
 	return generated
 }
+
+// errors= 指定本包的 ErrorMapper（生成 WriteResultWithMapper / WriteCompressedResultWithMapper），status= 覆盖成功状态：
+// 2xx 整数是固定状态，response 表示由响应的 HTTPSuccessStatus() 决定。不写时生成物不变（下游迁移保持旧客户端契约，D6）。
+func TestParseReadsErrorMapperAndSuccessStatus(t *testing.T) {
+	source := strings.Replace(headerRouteSource, "compress=gzip", "compress=gzip errors=legacyErrors status=response", 1)
+	routes, _, err := ParseFile("handler.go", []byte(source))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if routes[0].ErrorMapper != "legacyErrors" || routes[0].SuccessStatus != successStatusResponse {
+		t.Fatalf("route = %+v", routes[0])
+	}
+	source = strings.Replace(headerRouteSource, "compress=gzip", "status=202", 1)
+	routes, _, err = ParseFile("handler.go", []byte(source))
+	if err != nil || routes[0].SuccessStatus != "202" || routes[0].ErrorMapper != "" {
+		t.Fatalf("static status: %+v err=%v", routes, err)
+	}
+	plain, _, err := ParseFile("handler.go", []byte(webRouteSource))
+	if err != nil || plain[0].ErrorMapper != "" || plain[0].SuccessStatus != "" {
+		t.Fatalf("a route without the options: %+v err=%v", plain, err)
+	}
+}
+
+func TestParseRefusesEachBadErrorMapperOrSuccessStatus(t *testing.T) {
+	valid := "compress=gzip"
+	cases := []struct{ name, option, want string }{
+		{"qualified mapper", "errors=bbweb.DefaultErrorMapper", `invalid errors "bbweb.DefaultErrorMapper"`},
+		{"mapper not an identifier", "errors=1mapper", `invalid errors "1mapper"`},
+		{"status not a number", "status=accepted", `invalid status "accepted"`},
+		{"status below 2xx", "status=199", `invalid status "199"`},
+		{"status 3xx", "status=302", `invalid status "302"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := strings.Replace(headerRouteSource, valid, tc.option, 1)
+			_, _, err := ParseFile("handler.go", []byte(source))
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "handleKeepAlive") {
+				t.Fatalf("error = %v, want %q naming handleKeepAlive", err, tc.want)
+			}
+		})
+	}
+}

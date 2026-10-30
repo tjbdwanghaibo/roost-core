@@ -845,8 +845,7 @@ curl http://127.0.0.1:8080/shop_price  # web.addr，见 configs/service/config.g
 错误响应：路由返回的错误经 `webroute.WriteResult` 的缺省映射按框架错误码（`errcode.ClientError`）回给客户端——带码的错误
 （`errcode.Define` / `Wrap`，或下游服务经 `errcode.Remote` 带回的码）回 **400** 与 `{"ok":false,"code":<码>,"reason":"<定义里的 message>"}`，
 被包装的原因不进响应体；没有码的错误回 **500** 与 `{"ok":false,"code":1,"reason":"server error"}`，原文只进服务端日志
-（`webroute: route failed with a server error`，带 `request_id`）。业务要别的状态码或响应形状时在路由里调用
-`webroute.WriteResultWithMapper`。传输层错误不经映射：JSON 解码失败 400 `{"ok":false,"error":"decode request"}`、请求体超限 413
+（`webroute: route failed with a server error`，带 `request_id`）。业务要别的错误映射用 `errors=`、要别的成功状态用 `status=`（见上）。传输层错误不经映射：JSON 解码失败 400 `{"ok":false,"error":"decode request"}`、请求体超限 413
 `{"ok":false,"error":"request body too large"}`、handler panic 500 `{"ok":false,"error":"internal server error"}`（日志 `http server panic`
 带 `route` 路由模板与原始 `path`，进程不受影响）。路由级指标 `web.request.total{route,method,class}` 与 `web.request.duration{route,method}`
 按路由模板计（见 [OBSERVABILITY](../../docs/framework/OBSERVABILITY.md#业务-http-路由wiringweb)），5xx 另有一条带路由模板的
@@ -871,7 +870,7 @@ func webhook(ctx context.Context, svc *Service, req webroute.RawRequest) (Ack, e
 标记语法：
 
 ```text
-//roost:web method=GET|POST path=/<chi 模式> body=json|raw [headers=Header-Name:Field,...] [compress=gzip]
+//roost:web method=GET|POST path=/<chi 模式> body=json|raw [headers=Header-Name:Field,...] [compress=gzip] [errors=<mapper>] [status=<2xx>|response]
 ```
 
 | 选项 | 必填 | 含义 |
@@ -881,6 +880,8 @@ func webhook(ctx context.Context, svc *Service, req webroute.RawRequest) (Ack, e
 | `body` | 是 | `json`：解码一个 JSON 文档到请求类型；`raw`：请求参数必须是 `webroute.RawRequest`。`GET` 只能用 `raw` |
 | `headers` | 否 | 只用于 `body=json`：把请求头绑定到请求结构的字段，见下 |
 | `compress` | 否 | 只有 `gzip`：成功响应按客户端 `Accept-Encoding` 协商 gzip，见下 |
+| `errors` | 否 | 路由包里一个 `webroute.ErrorMapper` 的名字：错误响应按它写，见下 |
+| `status` | 否 | 成功状态：`2xx` 整数是固定值，`response` 由响应的 `HTTPSuccessStatus()` 决定，见下 |
 
 **`headers=`**（与下游 cube fork 的写法一致）：逗号分隔的 `头名:字段`，例如
 `headers=X-Game-Sid:GameSID,X-Player-Id:PlayerID,Authorization:Token`。生成代码在 JSON 解码**之后**按声明顺序写
@@ -899,6 +900,31 @@ func webhook(ctx context.Context, svc *Service, req webroute.RawRequest) (Ack, e
 响应（errcode 映射的 400 / 500）不压缩；两种情况都带 `Vary: Accept-Encoding`。“接受 gzip”按 RFC 9110 判定
 （`httpserver.AcceptsGzip`）：`gzip` / `x-gzip` 明确列出时看它的 `q`（`q=0` 表示拒绝），没列出时看通配 `*` 的 `q`，都没有（含没带
 这个头）就回明文；`q` 写错按 0 处理。不写 `compress=` 的路由行为不变，也不加 `Vary`。
+
+**`errors=<mapper>`**：错误响应不用框架缺省映射（errcode → 400 / 500 与 `{"ok","code","reason"}`），改用路由包里声明的
+`webroute.ErrorMapper`（函数或变量），生成 `webroute.WriteResultWithMapper(…, <mapper>)`（与 `compress=gzip` 同用时是
+`WriteCompressedResultWithMapper`，错误仍不压缩、带 `Vary`）。映射成 5xx 的错误原文照样记服务端日志。值只能是本包标识符——生成文件只
+import `net/http` 与 webroute；别的包里的映射在路由包里声明一行 `var routeErrors = otherpkg.DefaultErrorMapper` 再写
+`errors=routeErrors`。带点的名字、非标识符在生成期拒绝；类型不对时生成文件编译失败。用于保持已有客户端错误契约（下游迁移 D6）。
+
+**`status=`**：不写时成功响应是 200（原行为，响应类型有没有 `HTTPSuccessStatus` 方法都不看）。`status=201` 这样的 2xx 整数是固定
+成功状态；`status=response` 在 handler 没返回错误时调用 `webroute.SuccessStatus(200, response)`：响应实现
+`HTTPSuccessStatus() int` 且返回 200～299 时用它（例如排队中回 202），否则 200。非 2xx 整数、其它单词在生成期拒绝。错误响应的状态
+只由错误映射决定。
+
+```go
+var routeErrors = bbweb.DefaultErrorMapper // 下游自带的 StatusError 契约
+
+//roost:web method=POST path=/ai-fusion/pets/combine body=json headers=X-Player-Id:PlayerID errors=routeErrors status=response
+func combine(ctx context.Context, svc *Service, req CombineRequest) (CombineResponse, error) { ... }
+
+func (r CombineResponse) HTTPSuccessStatus() int {
+    if r.Pending {
+        return http.StatusAccepted
+    }
+    return http.StatusOK
+}
+```
 
 **`RawRequest`** 的字段：`Path`、`Method`、`RemoteAddr`、`Header`（副本）、`Query`（`url.Values`，`r.URL.Query()` 解析出的独立副本，
 同名多值按出现顺序保留，格式错误的键值对按标准库规则丢弃；没有查询串时是空 map）、`Body`（副本）。

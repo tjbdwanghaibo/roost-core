@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -158,5 +159,71 @@ func TestAPlainGeneratedRouteIsNotCompressed(t *testing.T) {
 	var out EchoResponse
 	if err := json.Unmarshal(raw, &out); err != nil || len(out.Text) != 4096 {
 		t.Fatalf("echo = %d bytes, err %v", len(out.Text), err)
+	}
+}
+
+func postJSON(t *testing.T, server *httptest.Server, path, body string) (*http.Response, map[string]any) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPost, server.URL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, raw := do(t, request)
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("%s: body %q is not JSON: %v", path, raw, err)
+	}
+	return response, out
+}
+
+// errors=legacyErrors status=response：错误按业务映射（409 + {"ok":false,"error":...}），成功状态由响应的
+// HTTPSuccessStatus() 决定，不是 2xx 时退回 200。
+func TestGeneratedRouteUsesTheDeclaredErrorMapperAndResponseStatus(t *testing.T) {
+	server := serve(t)
+	response, body := postJSON(t, server, "/fusion/start", `{"fail":true}`)
+	if response.StatusCode != http.StatusConflict || body["error"] != "fusion already running" || body["ok"] != false {
+		t.Fatalf("mapped error: status %d body %v, want 409 with the legacy body", response.StatusCode, body)
+	}
+	for _, tc := range []struct{ declared, want int }{{202, 202}, {200, 200}, {0, 200}, {302, 200}, {500, 200}} {
+		response, body = postJSON(t, server, "/fusion/start", `{"status":`+strconv.Itoa(tc.declared)+`}`)
+		if response.StatusCode != tc.want {
+			t.Fatalf("HTTPSuccessStatus %d: status %d (body %v), want %d", tc.declared, response.StatusCode, body, tc.want)
+		}
+	}
+}
+
+// status=201：固定成功状态；没写 errors= 的错误照旧按框架 errcode 映射（没有码的错误 500，原文不出服务端）。
+func TestGeneratedRouteUsesTheDeclaredStaticStatus(t *testing.T) {
+	server := serve(t)
+	// 响应虽实现 HTTPSuccessStatus()（返回 202），status=201 不看它。
+	response, _ := postJSON(t, server, "/fusion/create", `{}`)
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("status %d, want 201", response.StatusCode)
+	}
+	response, body := postJSON(t, server, "/fusion/create", `{"fail":true}`)
+	if response.StatusCode != http.StatusInternalServerError || body["reason"] != "server error" {
+		t.Fatalf("default mapping: status %d body %v", response.StatusCode, body)
+	}
+}
+
+// compress=gzip 与 errors= / status=response 同时用：成功 206 且 gzip；错误按业务映射、不压缩；都带 Vary。
+func TestGeneratedCompressedRouteUsesTheDeclaredErrorMapperAndResponseStatus(t *testing.T) {
+	server := serve(t)
+	get := func(query string) (*http.Response, []byte) {
+		t.Helper()
+		request, err := http.NewRequest(http.MethodGet, server.URL+"/fusion/list"+query, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Accept-Encoding", "gzip")
+		return do(t, request)
+	}
+	response, _ := get("")
+	if response.StatusCode != http.StatusPartialContent || response.Header.Get("Content-Encoding") != "gzip" || response.Header.Get("Vary") != "Accept-Encoding" {
+		t.Fatalf("success: status %d encoding %q vary %q", response.StatusCode, response.Header.Get("Content-Encoding"), response.Header.Get("Vary"))
+	}
+	response, raw := get("?missing=1")
+	if response.StatusCode != http.StatusNotFound || response.Header.Get("Content-Encoding") != "" || response.Header.Get("Vary") != "Accept-Encoding" || !strings.Contains(string(raw), `"no such list"`) {
+		t.Fatalf("error: status %d encoding %q vary %q body %s", response.StatusCode, response.Header.Get("Content-Encoding"), response.Header.Get("Vary"), raw)
 	}
 }

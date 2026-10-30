@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"go/types"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -16,11 +17,13 @@ import (
 const GeneratedFileName = "webroute_gen.go"
 
 const (
-	bodyJSON            = "json"
-	bodyRaw             = "raw"
-	compressGzip        = "gzip"
-	generatedFileName   = GeneratedFileName
-	generatedFileSuffix = "_webroute_gen.go"
+	bodyJSON     = "json"
+	bodyRaw      = "raw"
+	compressGzip = "gzip"
+	// successStatusResponse 是 status=response：成功状态由响应的 HTTPSuccessStatus() 决定。
+	successStatusResponse = "response"
+	generatedFileName     = GeneratedFileName
+	generatedFileSuffix   = "_webroute_gen.go"
 )
 
 // requiredMarkerKeys 是 //roost:web 必须写的选项；headers= / compress= 可选。
@@ -38,6 +41,12 @@ type Route struct {
 	Headers []HeaderBinding
 	// Compress 来自 compress=，目前只有 gzip：成功响应经 webroute.WriteCompressedResult 按 Accept-Encoding 协商压缩。
 	Compress string
+	// ErrorMapper 来自 errors=：路由包里一个 webroute.ErrorMapper 的名字（函数或变量），错误响应按它写
+	// （WriteResultWithMapper / WriteCompressedResultWithMapper）。空串是框架缺省映射。
+	ErrorMapper string
+	// SuccessStatus 来自 status=：空串是 200；2xx 整数（原样写进生成代码）是固定状态；"response" 表示由响应的
+	// HTTPSuccessStatus() 决定（webroute.SuccessStatus，不是 2xx 时用 200）。
+	SuccessStatus string
 }
 
 // HeaderBinding 是一条请求头到请求结构字段的绑定。Name 已按 http.CanonicalHeaderKey 规范化。
@@ -101,7 +110,7 @@ func parseMarker(fset *token.FileSet, group *ast.CommentGroup) (map[string]strin
 		}
 		for _, required := range requiredMarkerKeys {
 			if _, ok := options[required]; !ok {
-				return nil, true, fmt.Errorf("missing marker option %q (want //roost:web method=GET|POST path=/… body=json|raw [headers=Name:Field,…] [compress=gzip])", required)
+				return nil, true, fmt.Errorf("missing marker option %q (want //roost:web method=GET|POST path=/… body=json|raw [headers=Name:Field,…] [compress=gzip] [errors=<mapper>] [status=<2xx>|response])", required)
 			}
 		}
 		return options, true, nil
@@ -137,6 +146,19 @@ func parseRoute(function *ast.FuncDecl, options map[string]string) (Route, error
 	if compress != "" && compress != compressGzip {
 		return Route{}, fmt.Errorf("unsupported compress %q (only compress=gzip)", options["compress"])
 	}
+	// errors= 只认本包标识符：生成文件只 import net/http 与 webroute，别的包的映射在路由包里声明一行
+	// var routeErrors = otherpkg.Mapper 再引用。类型不是 webroute.ErrorMapper 时生成文件编译失败。
+	errorMapper := options["errors"]
+	if errorMapper != "" && !token.IsIdentifier(errorMapper) {
+		return Route{}, fmt.Errorf("invalid errors %q; want the name of a webroute.ErrorMapper declared in this package (for another package's mapper declare var x = pkg.Mapper here)", errorMapper)
+	}
+	successStatus := options["status"]
+	if successStatus != "" && successStatus != successStatusResponse {
+		code, err := strconv.Atoi(successStatus)
+		if err != nil || code < http.StatusOK || code >= http.StatusMultipleChoices {
+			return Route{}, fmt.Errorf("invalid status %q; want a 2xx code or status=%s", successStatus, successStatusResponse)
+		}
+	}
 	if function.Type.Params == nil || len(function.Type.Params.List) != 3 || function.Type.Results == nil || len(function.Type.Results.List) != 2 {
 		return Route{}, fmt.Errorf("invalid signature; want func(context.Context, *Service, Request) (Response, error)")
 	}
@@ -152,14 +174,16 @@ func parseRoute(function *ast.FuncDecl, options map[string]string) (Route, error
 		return Route{}, fmt.Errorf("body=raw request must be webroute.RawRequest, got %s", requestType)
 	}
 	return Route{
-		Handler:      function.Name.Name,
-		Method:       method,
-		Path:         path,
-		BodyMode:     bodyMode,
-		RequestType:  requestType,
-		ResponseType: types.ExprString(function.Type.Results.List[0].Type),
-		Headers:      headers,
-		Compress:     compress,
+		Handler:       function.Name.Name,
+		Method:        method,
+		Path:          path,
+		BodyMode:      bodyMode,
+		RequestType:   requestType,
+		ResponseType:  types.ExprString(function.Type.Results.List[0].Type),
+		Headers:       headers,
+		Compress:      compress,
+		ErrorMapper:   errorMapper,
+		SuccessStatus: successStatus,
 	}, nil
 }
 

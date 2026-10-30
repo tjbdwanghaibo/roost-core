@@ -298,3 +298,53 @@ func TestWriteResultMapsErrcodeAndHidesInternalErrors(t *testing.T) {
 		t.Fatalf("custom mapper = %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+type statusOverride struct{ status int }
+
+func (s statusOverride) HTTPSuccessStatus() int { return s.status }
+
+// SuccessStatus：响应实现 HTTPSuccessStatus() 且返回 2xx 时用它，否则用 fallback（生成代码只在 err == nil 时调用）。
+func TestSuccessStatusTakesOnlyA2xxFromTheResponse(t *testing.T) {
+	for _, tc := range []struct {
+		response any
+		want     int
+	}{
+		{statusOverride{http.StatusAccepted}, http.StatusAccepted},
+		{statusOverride{http.StatusOK}, http.StatusOK},
+		{statusOverride{299}, 299},
+		{statusOverride{http.StatusFound}, http.StatusCreated},
+		{statusOverride{0}, http.StatusCreated},
+		{statusOverride{http.StatusInternalServerError}, http.StatusCreated},
+		{map[string]any{"ok": true}, http.StatusCreated},
+		{nil, http.StatusCreated},
+	} {
+		if got := SuccessStatus(http.StatusCreated, tc.response); got != tc.want {
+			t.Errorf("SuccessStatus(201, %#v) = %d, want %d", tc.response, got, tc.want)
+		}
+	}
+}
+
+// WriteCompressedResultWithMapper 的错误响应走给定的 mapper（不压缩、带 Vary）；mapper 为 nil 时与 WriteCompressedResult 相同。
+func TestWriteCompressedResultWithMapperMapsErrorsThroughTheMapper(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	mapper := func(err error) (int, any) {
+		return http.StatusConflict, map[string]any{"ok": false, "error": err.Error()}
+	}
+	recorder := httptest.NewRecorder()
+	WriteCompressedResultWithMapper(recorder, request, http.StatusOK, nil, errors.New("busy"), mapper)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), `"error":"busy"`) ||
+		recorder.Header().Get("Content-Encoding") != "" || recorder.Header().Get("Vary") != "Accept-Encoding" {
+		t.Fatalf("status %d body %q encoding %q vary %q", recorder.Code, recorder.Body.String(), recorder.Header().Get("Content-Encoding"), recorder.Header().Get("Vary"))
+	}
+	recorder = httptest.NewRecorder()
+	WriteCompressedResultWithMapper(recorder, request, http.StatusOK, nil, errors.New("busy"), nil)
+	if recorder.Code != http.StatusInternalServerError || !strings.Contains(recorder.Body.String(), `"server error"`) {
+		t.Fatalf("nil mapper: status %d body %q, want the default mapping", recorder.Code, recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
+	WriteCompressedResultWithMapper(recorder, request, http.StatusAccepted, map[string]any{"ok": true}, nil, mapper)
+	if recorder.Code != http.StatusAccepted || recorder.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("small success: status %d encoding %q", recorder.Code, recorder.Header().Get("Content-Encoding"))
+	}
+}
