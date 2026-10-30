@@ -18,9 +18,13 @@ const GeneratedFileName = "webroute_gen.go"
 const (
 	bodyJSON            = "json"
 	bodyRaw             = "raw"
+	compressGzip        = "gzip"
 	generatedFileName   = GeneratedFileName
 	generatedFileSuffix = "_webroute_gen.go"
 )
+
+// requiredMarkerKeys 是 //roost:web 必须写的选项；headers= / compress= 可选。
+var requiredMarkerKeys = []string{"method", "path", "body"}
 
 type Route struct {
 	Handler      string
@@ -29,6 +33,17 @@ type Route struct {
 	BodyMode     string
 	RequestType  string
 	ResponseType string
+	// Headers 来自 headers=Name:Field,...（只用于 body=json）：JSON 解码之后，生成代码按声明顺序把
+	// r.Header.Get(Name) 赋给 request.Field。
+	Headers []HeaderBinding
+	// Compress 来自 compress=，目前只有 gzip：成功响应经 webroute.WriteCompressedResult 按 Accept-Encoding 协商压缩。
+	Compress string
+}
+
+// HeaderBinding 是一条请求头到请求结构字段的绑定。Name 已按 http.CanonicalHeaderKey 规范化。
+type HeaderBinding struct {
+	Name  string
+	Field string
 }
 
 // ParseFile extracts and validates all annotated routes in source.
@@ -61,8 +76,8 @@ func ParseFile(path string, source []byte) ([]Route, string, error) {
 	return routes, file.Name.Name, nil
 }
 
-// Every option of marker.Web is required, so its key list drives both the
-// unknown-key and the missing-key checks.
+// marker.Web.Parse refuses unknown keys; requiredMarkerKeys drives the
+// missing-key check.
 func parseMarker(fset *token.FileSet, group *ast.CommentGroup) (map[string]string, bool, error) {
 	if group == nil {
 		return nil, false, nil
@@ -84,9 +99,9 @@ func parseMarker(fset *token.FileSet, group *ast.CommentGroup) (map[string]strin
 				return nil, true, fmt.Errorf("invalid marker option %q", key+"=")
 			}
 		}
-		for _, required := range marker.Web.Keys {
+		for _, required := range requiredMarkerKeys {
 			if _, ok := options[required]; !ok {
-				return nil, true, fmt.Errorf("missing marker option %q (want //roost:web method=GET|POST path=/… body=json|raw)", required)
+				return nil, true, fmt.Errorf("missing marker option %q (want //roost:web method=GET|POST path=/… body=json|raw [headers=Name:Field,…] [compress=gzip])", required)
 			}
 		}
 		return options, true, nil
@@ -114,6 +129,14 @@ func parseRoute(function *ast.FuncDecl, options map[string]string) (Route, error
 	if method == http.MethodGet && bodyMode == bodyJSON {
 		return Route{}, fmt.Errorf("GET routes must use body=%s", bodyRaw)
 	}
+	headers, err := parseHeaderBindings(options["headers"], bodyMode)
+	if err != nil {
+		return Route{}, err
+	}
+	compress := strings.ToLower(options["compress"])
+	if compress != "" && compress != compressGzip {
+		return Route{}, fmt.Errorf("unsupported compress %q (only compress=gzip)", options["compress"])
+	}
 	if function.Type.Params == nil || len(function.Type.Params.List) != 3 || function.Type.Results == nil || len(function.Type.Results.List) != 2 {
 		return Route{}, fmt.Errorf("invalid signature; want func(context.Context, *Service, Request) (Response, error)")
 	}
@@ -135,7 +158,63 @@ func parseRoute(function *ast.FuncDecl, options map[string]string) (Route, error
 		BodyMode:     bodyMode,
 		RequestType:  requestType,
 		ResponseType: types.ExprString(function.Type.Results.List[0].Type),
+		Headers:      headers,
+		Compress:     compress,
 	}, nil
+}
+
+// parseHeaderBindings 解析 headers=Name:Field,Name:Field（与下游 cube fork 的写法一致）。每项恰好一个冒号；Name 是合法
+// HTTP 头名（RFC 9110 token），生成期规范化，大小写不同的同名头算重复；Field 是请求结构上的一个 Go 标识符（直接字段或
+// 嵌入提升的字段），必须是 string——生成器不做类型检查，类型不对时生成文件的赋值行编译失败。只用于 body=json：raw
+// 路由自己读 RawRequest.Header。
+func parseHeaderBindings(value, bodyMode string) ([]HeaderBinding, error) {
+	if value == "" {
+		return nil, nil
+	}
+	if bodyMode != bodyJSON {
+		return nil, fmt.Errorf("headers= needs body=%s (a body=raw handler reads request.Header itself)", bodyJSON)
+	}
+	items := strings.Split(value, ",")
+	bindings := make([]HeaderBinding, 0, len(items))
+	names := make(map[string]bool, len(items))
+	fields := make(map[string]bool, len(items))
+	for _, item := range items {
+		name, field, found := strings.Cut(item, ":")
+		if !found || strings.Contains(field, ":") {
+			return nil, fmt.Errorf("invalid header binding %q; want Header-Name:Field", item)
+		}
+		if !validHeaderName(name) {
+			return nil, fmt.Errorf("invalid header name %q in headers=", name)
+		}
+		if !token.IsIdentifier(field) {
+			return nil, fmt.Errorf("invalid request field %q in headers=; want one Go field name", field)
+		}
+		name = http.CanonicalHeaderKey(name)
+		if names[name] {
+			return nil, fmt.Errorf("duplicate header %q in headers=", name)
+		}
+		if fields[field] {
+			return nil, fmt.Errorf("duplicate request field %q in headers=", field)
+		}
+		names[name], fields[field] = true, true
+		bindings = append(bindings, HeaderBinding{Name: name, Field: field})
+	}
+	return bindings, nil
+}
+
+// validHeaderName 报告 name 是 RFC 9110 的 token（HTTP 头名允许的字符）。
+func validHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("!#$%&'*+-.^_`|~", c) >= 0 {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // validateChiPath 用 chi 自己的解析器校验路由模式，与运行期 webroute.ValidatePath

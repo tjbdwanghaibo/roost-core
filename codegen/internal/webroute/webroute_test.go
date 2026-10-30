@@ -2,11 +2,21 @@ package webroute
 
 import (
 	"bytes"
+	"context"
+	"flag"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/genutil"
 )
+
+var updateGolden = flag.Bool("update", false, "rewrite golden files")
 
 const webRouteSource = `package web
 
@@ -226,4 +236,142 @@ func TestGenerateDirRefusesMixedPackagesInOneDirectory(t *testing.T) {
 	if _, statErr := os.Stat(filepath.Join(dir, generatedFileName)); statErr == nil {
 		t.Fatal("no routes file may be written for a directory with mixed packages")
 	}
+}
+
+// headers= 把请求头绑定到 JSON 请求结构的字段；compress=gzip 让成功响应按 Accept-Encoding 协商压缩（对齐下游 cube fork）。
+const headerRouteSource = `package web
+
+import "context"
+
+type Service struct{}
+type SessionRequest struct {
+    Name   string ` + "`json:\"name\"`" + `
+    SID    string ` + "`json:\"-\"`" + `
+    Token  string ` + "`json:\"-\"`" + `
+}
+type SessionResponse struct{}
+
+//roost:web method=POST path=/player/keepalive body=json headers=x-game-sid:SID,Authorization:Token compress=gzip
+func handleKeepAlive(ctx context.Context, svc *Service, request SessionRequest) (SessionResponse, error) {
+    return SessionResponse{}, nil
+}
+`
+
+func TestParseReadsHeaderBindingsAndCompression(t *testing.T) {
+	routes, _, err := ParseFile("handler.go", []byte(headerRouteSource))
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("routes = %+v", routes)
+	}
+	route := routes[0]
+	// 头名在生成期规范化（http.CanonicalHeaderKey），按声明顺序保留。
+	want := []HeaderBinding{{Name: "X-Game-Sid", Field: "SID"}, {Name: "Authorization", Field: "Token"}}
+	if len(route.Headers) != len(want) || route.Headers[0] != want[0] || route.Headers[1] != want[1] {
+		t.Fatalf("headers = %+v, want %+v", route.Headers, want)
+	}
+	if route.Compress != compressGzip {
+		t.Fatalf("compress = %q, want gzip", route.Compress)
+	}
+	plain, _, err := ParseFile("handler.go", []byte(webRouteSource))
+	if err != nil || len(plain[0].Headers) != 0 || plain[0].Compress != "" {
+		t.Fatalf("a route without the options: %+v err=%v", plain, err)
+	}
+}
+
+func TestParseRefusesEachBadHeaderOrCompressionOption(t *testing.T) {
+	valid := "//roost:web method=POST path=/player/keepalive body=json headers=x-game-sid:SID,Authorization:Token compress=gzip"
+	cases := []struct{ name, marker, want string }{
+		{"raw body", "//roost:web method=POST path=/x body=raw headers=X-A:SID", "headers= needs body=json"},
+		{"no colon", "//roost:web method=POST path=/x body=json headers=X-A", `invalid header binding "X-A"`},
+		{"two colons", "//roost:web method=POST path=/x body=json headers=X-A:SID:Token", `invalid header binding "X-A:SID:Token"`},
+		{"empty item", "//roost:web method=POST path=/x body=json headers=X-A:SID,", `invalid header binding ""`},
+		{"bad header name", "//roost:web method=POST path=/x body=json headers=X(A):SID", `invalid header name "X(A)"`},
+		{"bad field", "//roost:web method=POST path=/x body=json headers=X-A:Session.Token", `invalid request field "Session.Token"`},
+		{"duplicate header", "//roost:web method=POST path=/x body=json headers=x-a:SID,X-A:Token", `duplicate header "X-A"`},
+		{"duplicate field", "//roost:web method=POST path=/x body=json headers=X-A:SID,X-B:SID", `duplicate request field "SID"`},
+		{"unknown compression", "//roost:web method=POST path=/x body=json compress=br", `unsupported compress "br"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := strings.Replace(headerRouteSource, valid, tc.marker, 1)
+			if source == headerRouteSource {
+				t.Fatal("fixture marker not found")
+			}
+			if tc.name == "raw body" {
+				source = strings.Replace(source, "request SessionRequest", "request webroute.RawRequest", 1)
+				source = strings.Replace(source, `import "context"`, "import (\n\t\"context\"\n\t\"github.com/tjbdwanghaibo/roost-core/infra/network/webroute\"\n)", 1)
+			}
+			_, _, err := ParseFile("handler.go", []byte(source))
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "handleKeepAlive") {
+				t.Fatalf("error = %v, want %q naming handleKeepAlive", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestGoldenRoutes 锁住 testdata/routes 生成物的全文（headers= 的赋值、compress=gzip 的写法、普通路由不变）。
+// 有意改模板后用 -update 刷新：
+//
+//	go test ./codegen/internal/webroute -run TestGoldenRoutes -update
+func TestGoldenRoutes(t *testing.T) {
+	generated := generateFixtureRoutes(t)
+	genutil.AssertGolden(t, filepath.Join("testdata", "golden", generatedFileName), generated, *updateGolden)
+}
+
+// TestGeneratedRoutesRunAgainstTheRuntime 把 fixture、生成物与 testdata/runtime 的测试放进一次性模块（roost-core
+// 替换为当前检出），经 Registrar、Engine 与回环 HTTP 验证请求头绑定、gzip 协商与 RawRequest.Query。
+func TestGeneratedRoutesRunAgainstTheRuntime(t *testing.T) {
+	generated := generateFixtureRoutes(t)
+	repo, err := filepath.Abs("../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	files := map[string][]byte{
+		"go.mod":          []byte("module example.com/routes\n\ngo 1.27.0\n\nrequire github.com/tjbdwanghaibo/roost-core v1.31.0\n\nreplace github.com/tjbdwanghaibo/roost-core => " + strconv.Quote(filepath.ToSlash(repo)) + "\n"),
+		generatedFileName: generated,
+	}
+	for _, source := range []string{"testdata/routes/handlers.go", "testdata/runtime/routes_test.go"} {
+		content, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[filepath.Base(source)] = content
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(root, name), content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), "test", "-mod=mod", "-count=1", "./...")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generated routes: %v\n%s", err, out)
+	}
+}
+
+// generateFixtureRoutes 在临时目录里对 testdata/routes 跑生成器，返回生成的注册文件。
+func generateFixtureRoutes(t *testing.T) []byte {
+	t.Helper()
+	source, err := os.ReadFile(filepath.Join("testdata", "routes", "handlers.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "handlers.go"), source, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := GenerateDir(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	generated, err := os.ReadFile(filepath.Join(dir, generatedFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return generated
 }

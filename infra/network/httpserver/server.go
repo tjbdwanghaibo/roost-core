@@ -2,6 +2,8 @@ package httpserver
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,7 +13,9 @@ import (
 	"net"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -228,9 +232,97 @@ func JSON(w http.ResponseWriter, status int, value any) {
 	if err == nil || out.wrote {
 		return
 	}
+	writeEncodeFailure(w, status, err)
+}
+
+// writeEncodeFailure 是 JSON / JSONCompressed 共用的编码失败响应：记日志、回 500 固定错误体。
+func writeEncodeFailure(w http.ResponseWriter, status int, err error) {
 	slog.Error("http server: encode response", "status", status, "err", err)
 	w.WriteHeader(http.StatusInternalServerError)
 	_, _ = io.WriteString(w, "{\"error\":\"encode response\",\"ok\":false}\n")
+}
+
+// JSONCompressed 与 JSON 写同样的 JSON（同一编码器，HTML 转义、结尾换行），另按请求的 Accept-Encoding 协商 gzip：
+// 客户端接受 gzip（见 AcceptsGzip）且编码后的响应体不少于 minBytes 时，回 Content-Encoding: gzip 的压缩体；否则
+// 回明文，与 JSON 相同。无论是否压缩都加 Vary: Accept-Encoding，让中间缓存按请求头区分两种表示。
+//
+// 先完整编码再决定压不压、写不写头：编码失败与 JSON 一样回 500 固定错误体（不压缩）。小响应不压缩，因为 gzip 头尾
+// 与压缩开销对几百字节的响应得不偿失。gzip.Writer 池化复用，它的压缩表每个约数百 KB。
+func JSONCompressed(w http.ResponseWriter, r *http.Request, status int, value any, minBytes int) {
+	header := w.Header()
+	AddVary(header, "Accept-Encoding")
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(value); err != nil {
+		writeEncodeFailure(w, status, err)
+		return
+	}
+	header.Set("Content-Type", "application/json; charset=utf-8")
+	if body.Len() < minBytes || !AcceptsGzip(r) {
+		w.WriteHeader(status)
+		_, _ = w.Write(body.Bytes())
+		return
+	}
+	header.Del("Content-Length")
+	header.Set("Content-Encoding", "gzip")
+	w.WriteHeader(status)
+	compressor := gzipWriters.Get().(*gzip.Writer)
+	compressor.Reset(w)
+	// 头已写出，之后的错误只可能是连接写失败，客户端已不可达，与 JSON 一样忽略。
+	_, _ = compressor.Write(body.Bytes())
+	_ = compressor.Close()
+	compressor.Reset(io.Discard)
+	gzipWriters.Put(compressor)
+}
+
+var gzipWriters = sync.Pool{New: func() any { return gzip.NewWriter(io.Discard) }}
+
+// AcceptsGzip 报告请求的 Accept-Encoding 是否接受 gzip（RFC 9110 §12.5.3）：编码名不区分大小写，x-gzip 视同 gzip；
+// 明确列出 gzip 时看它的 q 值（q=0 表示拒绝），没列出时看通配 * 的 q 值；两者都没有（含没有这个头）视为不接受，回明文。
+// 多个 Accept-Encoding 头合并处理；q 值写错（不是 0～1 的数）按 0 处理，宁可不压缩。
+func AcceptsGzip(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	explicit, wildcard := -1.0, -1.0
+	for _, line := range r.Header.Values("Accept-Encoding") {
+		for _, item := range strings.Split(line, ",") {
+			name, params, _ := strings.Cut(item, ";")
+			quality := 1.0
+			for _, param := range strings.Split(params, ";") {
+				key, value, found := strings.Cut(strings.TrimSpace(param), "=")
+				if !found || !strings.EqualFold(strings.TrimSpace(key), "q") {
+					continue
+				}
+				parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+				if err != nil || parsed < 0 || parsed > 1 {
+					parsed = 0
+				}
+				quality = parsed
+			}
+			switch strings.ToLower(strings.TrimSpace(name)) {
+			case "gzip", "x-gzip":
+				explicit = max(explicit, quality)
+			case "*":
+				wildcard = max(wildcard, quality)
+			}
+		}
+	}
+	if explicit >= 0 {
+		return explicit > 0
+	}
+	return wildcard > 0
+}
+
+// AddVary 在响应头的 Vary 里加一个字段名，已有（不区分大小写）时不重复加。
+func AddVary(header http.Header, field string) {
+	for _, line := range header.Values("Vary") {
+		for _, existing := range strings.Split(line, ",") {
+			if strings.EqualFold(strings.TrimSpace(existing), field) {
+				return
+			}
+		}
+	}
+	header.Add("Vary", field)
 }
 
 // statusOnFirstWrite 把 WriteHeader 推迟到第一次 Write，只给 JSON 使用。

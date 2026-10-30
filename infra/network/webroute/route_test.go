@@ -54,6 +54,31 @@ func TestReadRawCopiesRequestData(t *testing.T) {
 	}
 }
 
+// RawRequest.Query 是查询参数的独立副本：同名多值按出现顺序保留，之后改请求的 URL 不影响它。
+func TestReadRawCarriesTheQueryValues(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/assets?fusion_id=pet-1&part=head&part=tail&empty=", nil)
+	raw, ok := ReadRaw(httptest.NewRecorder(), request)
+	if !ok {
+		t.Fatal("ReadRaw returned false")
+	}
+	if got := raw.Query.Get("fusion_id"); got != "pet-1" {
+		t.Fatalf("query fusion_id = %q, want pet-1", got)
+	}
+	if got := raw.Query["part"]; len(got) != 2 || got[0] != "head" || got[1] != "tail" {
+		t.Fatalf("query part = %q, want [head tail]", got)
+	}
+	if values, present := raw.Query["empty"]; !present || len(values) != 1 || values[0] != "" {
+		t.Fatalf("query empty = %q (present %v), want one empty value", values, present)
+	}
+	request.URL.RawQuery = "fusion_id=changed"
+	if got := raw.Query.Get("fusion_id"); got != "pet-1" {
+		t.Fatalf("the copied query followed the request: %q", got)
+	}
+	if empty, ok := ReadRaw(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/assets", nil)); !ok || empty.Query == nil || len(empty.Query) != 0 {
+		t.Fatalf("no query string: Query = %#v, want an empty non-nil map", empty.Query)
+	}
+}
+
 type testModule struct {
 	calls *int
 	err   error

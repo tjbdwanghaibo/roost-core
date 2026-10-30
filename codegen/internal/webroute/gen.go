@@ -143,11 +143,19 @@ func renderRoutes(pkg string, routes []Route) ([]byte, error) {
 		if route.BodyMode == bodyJSON {
 			fmt.Fprintf(&source, "\t\tvar request %s\n", route.RequestType)
 			source.WriteString("\t\tif !webroute.DecodeJSON(w, r, &request) {\n\t\t\treturn\n\t\t}\n")
+			// 请求头在解码之后赋值：同名字段以请求头为准，头缺失时是空串（客户端不能经 JSON 体填这个字段）。
+			for _, header := range route.Headers {
+				fmt.Fprintf(&source, "\t\trequest.%s = r.Header.Get(%q)\n", header.Field, header.Name)
+			}
 		} else {
 			source.WriteString("\t\trequest, ok := webroute.ReadRaw(w, r)\n\t\tif !ok {\n\t\t\treturn\n\t\t}\n")
 		}
 		fmt.Fprintf(&source, "\t\tresponse, err := %s(r.Context(), svc, request)\n", route.Handler)
-		source.WriteString("\t\twebroute.WriteResult(w, http.StatusOK, response, err)\n")
+		if route.Compress == compressGzip {
+			source.WriteString("\t\twebroute.WriteCompressedResult(w, r, http.StatusOK, response, err)\n")
+		} else {
+			source.WriteString("\t\twebroute.WriteResult(w, http.StatusOK, response, err)\n")
+		}
 		source.WriteString("\t}); err != nil {\n\t\treturn err\n\t}\n")
 	}
 	source.WriteString("\treturn nil\n}\n")

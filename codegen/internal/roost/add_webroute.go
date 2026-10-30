@@ -129,9 +129,11 @@ type %[2]sResponse struct{}
 // this package into webroute_gen.go; the service registers them in its Init with
 // kitweb.RegisterRoutes(registry, &web.Service{}) and the web mod serves them on
 // web.addr. body=raw hands the handler the request as webroute.RawRequest (path,
-// method, headers, body); body=json decodes one JSON document into a request
-// type. The web mod does no authentication: keep web.addr on loopback or behind
-// an authenticated proxy.
+// method, headers, query, body); body=json decodes one JSON document into a
+// request type, and headers=Header-Name:Field,... copies request headers into
+// its string fields. compress=gzip gzips large successful responses for clients
+// that accept it. The web mod does no authentication: keep web.addr on loopback
+// or behind an authenticated proxy.
 //
 //roost:web method=GET path=/%[1]s body=raw
 func %[2]s(ctx context.Context, svc *Service, request webroute.RawRequest) (%[2]sResponse, error) {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -114,11 +115,15 @@ func (r *Registrar) Register(method, path string, handler http.HandlerFunc) (err
 }
 
 // RawRequest is a copy of the HTTP data made available to raw route handlers.
+//
+// Query 是 URL 查询参数（url.Values，同名多值按出现顺序保留），由 r.URL.Query() 解析得到的独立副本；
+// 格式错误的键值对按标准库规则丢弃。没有查询串时是空的非 nil map。
 type RawRequest struct {
 	Path       string
 	Method     string
 	RemoteAddr string
 	Header     http.Header
+	Query      url.Values
 	Body       []byte
 }
 
@@ -135,7 +140,9 @@ func ReadRaw(w http.ResponseWriter, r *http.Request) (RawRequest, bool) {
 		Method:     r.Method,
 		RemoteAddr: r.RemoteAddr,
 		Header:     r.Header.Clone(),
-		Body:       append([]byte(nil), body...),
+		// URL.Query 每次重新解析 RawQuery、返回新 map，本身就是副本。
+		Query: r.URL.Query(),
+		Body:  append([]byte(nil), body...),
 	}, true
 }
 
@@ -188,6 +195,21 @@ func DefaultErrorMapper(err error) (int, any) {
 
 func WriteResult(w http.ResponseWriter, successStatus int, response any, err error) {
 	WriteResultWithMapper(w, successStatus, response, err, DefaultErrorMapper)
+}
+
+// CompressMinBytes 是 compress=gzip 路由压缩成功响应的下限：编码后的 JSON 少于它时照常回明文。
+const CompressMinBytes = 1024
+
+// WriteCompressedResult 是 //roost:web compress=gzip 路由的写法：成功响应经 httpserver.JSONCompressed 按客户端的
+// Accept-Encoding 协商 gzip（不接受 gzip 或少于 CompressMinBytes 时回明文）；错误响应与 WriteResult 相同、不压缩。
+// 两种情况都带 Vary: Accept-Encoding。
+func WriteCompressedResult(w http.ResponseWriter, r *http.Request, successStatus int, response any, err error) {
+	if err != nil {
+		httpserver.AddVary(w.Header(), "Accept-Encoding")
+		WriteResult(w, successStatus, response, err)
+		return
+	}
+	httpserver.JSONCompressed(w, r, successStatus, response, CompressMinBytes)
 }
 
 // WriteResultWithMapper 写成功响应，或按 mapper 写错误响应（mapper 为 nil 时用 DefaultErrorMapper）。映射成 5xx 的

@@ -336,3 +336,52 @@ func TestResponseControllerFlushErrorsPassThroughTheTracker(t *testing.T) {
 		}
 	})
 }
+
+// AcceptsGzip 的判定表：明确列出的 gzip（含 x-gzip）看自己的 q，没列出时看 *，都没有就不压缩。
+func TestAcceptsGzipFollowsTheAcceptEncodingQualities(t *testing.T) {
+	cases := []struct {
+		headers []string
+		want    bool
+	}{
+		{nil, false},
+		{[]string{""}, false},
+		{[]string{"gzip"}, true},
+		{[]string{"x-gzip"}, true},
+		{[]string{"Gzip;Q=0.1"}, true},
+		{[]string{"gzip;q=0"}, false},
+		{[]string{"gzip;q=0.0, *"}, false},
+		{[]string{"*"}, true},
+		{[]string{"*;q=0"}, false},
+		{[]string{"br", "gzip"}, true},
+		{[]string{"identity, deflate"}, false},
+		{[]string{"gzip;q=bogus"}, false},
+		{[]string{"gzip;q=2"}, false},
+	}
+	for _, tc := range cases {
+		request := httptest.NewRequest(http.MethodGet, "/", nil)
+		for _, value := range tc.headers {
+			request.Header.Add("Accept-Encoding", value)
+		}
+		if got := AcceptsGzip(request); got != tc.want {
+			t.Errorf("Accept-Encoding %q: AcceptsGzip = %v, want %v", tc.headers, got, tc.want)
+		}
+	}
+	if AcceptsGzip(nil) {
+		t.Error("a nil request accepts gzip")
+	}
+}
+
+// JSONCompressed 编码失败时与 JSON 一样回 500 固定错误体、不压缩；Vary 不重复追加。
+func TestJSONCompressedReportsAnEncodeFailureUncompressed(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	recorder := httptest.NewRecorder()
+	recorder.Header().Set("Vary", "accept-encoding")
+	JSONCompressed(recorder, request, http.StatusOK, math.NaN(), 0)
+	if recorder.Code != http.StatusInternalServerError || recorder.Header().Get("Content-Encoding") != "" || !strings.Contains(recorder.Body.String(), "encode response") {
+		t.Fatalf("status %d encoding %q body %q", recorder.Code, recorder.Header().Get("Content-Encoding"), recorder.Body.String())
+	}
+	if got := recorder.Header().Values("Vary"); len(got) != 1 {
+		t.Fatalf("Vary = %q, want the existing entry only", got)
+	}
+}

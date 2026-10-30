@@ -54,8 +54,10 @@ var (
 		// of the subject carries, and "topic" suggested a bus that does not exist.
 		Renamed: map[string]string{"syncTopic": "syncNamespace"},
 	}
-	Mirror   = Spec{Kind: "mirror", Keys: []string{"entityKind", "coll"}}
-	Web      = Spec{Kind: "web", Keys: []string{"method", "path", "body"}}
+	Mirror = Spec{Kind: "mirror", Keys: []string{"entityKind", "coll"}}
+	// Web: method / path / body are required; headers / compress are optional
+	// (webroute checks the required ones itself).
+	Web      = Spec{Kind: "web", Keys: []string{"method", "path", "body", "headers", "compress"}}
 	Register = Spec{Kind: "register", Keys: []string{"phase", "order"}}
 )
 
