@@ -2,6 +2,8 @@ package entity
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -329,6 +331,10 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 			param.Dao[dao.CollName()] = dao
 		}
 	}
+	// 必须早于 builder：组件 Init 与 OnInitFinish 里的第一次 setter 就可能是这个实体的第一笔持久登记。
+	if param.IsCreate && !bp.NoPersist {
+		bindNewAggregate(param.Dao)
+	}
 
 	// 构建实体（组件在 Builder 内创建并 InitAll）。
 	e, err := bp.Builder(param)
@@ -364,6 +370,36 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 		return nil, fmt.Errorf("entity OnInitFinish category %d: %w", param.Category, err)
 	}
 	return e, nil
+}
+
+// NewAggregateMember 由持久 DAO 的脏 tracker（DaoInterface.Dirty() 的返回值；生成 DAO 是 *dataengine.Tracker）实现。
+//
+// 冷加载要求聚合的每个持久 DAO 都有文档，部分存在按损坏拒绝（ErrEntityAggregateCorrupt）；事务却只为登记过变化的 DAO
+// 写文档。为此新建实体时 BuildEntity 把同一聚合的全部 DAO 交给每个 DAO 的 tracker，持久事务（Nest）第一次登记这个
+// 实体的某个 DAO、而它还没持久过（版本 0）时，据此把同样版本 0 的其他 DAO 一并以整文档登记：新建实体的第一笔持久
+// 提交写齐每个 DAO，与业务改了哪个 DAO 无关。冷加载出来的实体不绑定。
+type NewAggregateMember interface {
+	BindNewAggregate(daos []DaoInterface)
+}
+
+// bindNewAggregate 把新建实体的全部 DAO（按集合名排序，同一事务里 mutation 的顺序因此确定）交给各自的 tracker；
+// tracker 不实现 NewAggregateMember 的 DAO（手写、自己用 AddMutation 落库的）不参与。
+func bindNewAggregate(daos map[string]DaoInterface) {
+	if len(daos) == 0 {
+		return
+	}
+	members := make([]DaoInterface, 0, len(daos))
+	for _, dao := range daos {
+		if dao != nil {
+			members = append(members, dao)
+		}
+	}
+	slices.SortFunc(members, func(a, b DaoInterface) int { return strings.Compare(a.CollName(), b.CollName()) })
+	for _, dao := range members {
+		if member, ok := dao.Dirty().(NewAggregateMember); ok {
+			member.BindNewAggregate(members)
+		}
+	}
 }
 
 // normalizeBuilderPolicy 按 kind 的实际策略补默认生命周期并校验（调用方持有 registryMu）。builder 省略 RemotePolicy 时，

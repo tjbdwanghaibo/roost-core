@@ -100,7 +100,7 @@ func newTradeFixtureWith(t *testing.T, ctx context.Context, client fmongo.IMongo
 }
 
 // b27HandlerNames 是 B27 第 2 批用例经 register 登记的 handler；先放进 pipelined 允许清单，pipelined 策略下才走正式 pipelined 路径。
-var b27HandlerNames = []string{"trade_nested", "trade_nested_memory", "trade_fence_outer", "trade_create", "trade_cross_0", "trade_cross_1"}
+var b27HandlerNames = []string{"trade_nested", "trade_nested_memory", "trade_fence_outer", "trade_create", "trade_create_wallet", "trade_cross_0", "trade_cross_1"}
 
 // newTradeFixtureRegistering 在 Nest 启动前让用例登记自己的 handler（B27 第 2 批），其余与 newTradeFixture 相同。
 func newTradeFixtureRegistering(t *testing.T, ctx context.Context, client fmongo.IMongo, root, scenario string, policy nest.DurabilityPolicy, ackHook bool, register func(*tradeFixture), configure ...func(*engine.ProjectorOptions)) *tradeFixture {

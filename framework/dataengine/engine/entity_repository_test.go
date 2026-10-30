@@ -1,4 +1,4 @@
-// 实体仓储：完整聚合单飞加载、恢复屏障、墓碑与缺失、Remote 向量与信封、经本地执行器发布、loader panic 不卡住聚合。
+// 实体仓储：完整聚合单飞加载、恢复屏障、墓碑与缺失、Remote 向量与信封、经本地执行器发布、loader panic 不卡住聚合、新建实体首笔提交写齐聚合。
 
 package engine
 
@@ -14,7 +14,9 @@ import (
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -969,4 +971,293 @@ func TestEntityRepositoryReadsRemoteTombstoneForAbsentRemoteAggregate(t *testing
 	if _, err := repository.LoadEntity(context.Background(), local, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateNotFound) {
 		t.Fatalf("local aggregate consulted the remote tombstone: %v", err)
 	}
+}
+
+// ---- 新建实体的第一笔持久提交写齐聚合的每个 DAO ----
+//
+// 冷加载要求聚合的每个持久 DAO 都有文档（部分存在按损坏拒绝），而事务只登记改过的 DAO。多 DAO 实体新建后只改其中
+// 一个就提交，另一个 DAO 永远没有文档，重启后这个实体再也加载不出来。下面经正式 Nest（业务池、锁内 WAL 准入）、
+// 真实文件 WAL、投影与 Mongo 替身走完整链路，再用全新的 EntityManager + EntityRepository 冷加载（等价于重启后的
+// 第一次加载）。三条新建入口各一例：handler 内 Create、handler 外 RunDetachedTransaction 里 Create、事务外 Create 后
+// 由 handler 第一次写；最后确认首笔提交已接受的实体之后只写改过的 DAO。
+
+// newAggregateKind 与同包其他用例的 kind 互不相同（见 entity_unload_test.go 的登记表）：kind 注册表是进程级的。
+const (
+	newAggregateKind     entity.EntityKind = 249
+	newAggregateProfiles                   = "new_aggregate_profiles"
+	newAggregateRanks                      = "new_aggregate_ranks"
+)
+
+// newAggregateDAO 与生成 DAO 同形：tracker 记已接受的持久版本（Dirty 返回它），版本 0 时准备整文档 Put，之后准备
+// 单字段 patch；setter 登记 undo 与持久化变化。
+type newAggregateDAO struct {
+	id         int64
+	collection string
+	tracker    coredata.Tracker
+	value      int64
+}
+
+func (dao *newAggregateDAO) Id() int64                       { return dao.id }
+func (dao *newAggregateDAO) SetId(id int64)                  { dao.id = id }
+func (*newAggregateDAO) DbName() string                      { return testDatabase }
+func (dao *newAggregateDAO) CollName() string                { return dao.collection }
+func (dao *newAggregateDAO) Dirty() entity.IDirty            { return &dao.tracker }
+func (dao *newAggregateDAO) CleanDirty()                     { dao.tracker.SelfClean() }
+func (*newAggregateDAO) SchemaVersion() uint32               { return 1 }
+func (dao *newAggregateDAO) DirtyTracker() *coredata.Tracker { return &dao.tracker }
+
+func (dao *newAggregateDAO) setValue(value int64) error {
+	tx := corenest.CurrentRollbackTx()
+	old := dao.value
+	if err := tx.RecordUndo(dao, 1, func() error { dao.value = old; return nil }); err != nil {
+		return err
+	}
+	dao.value = value
+	return tx.MarkPersist(dao, 1)
+}
+
+func (dao *newAggregateDAO) PrepareMutation(change corenest.PersistChange) (coredata.Mutation, error) {
+	version := dao.tracker.Version()
+	mutation := coredata.Mutation{
+		Key:  coredata.DocumentKey{Database: testDatabase, Resource: dao.collection, ID: dao.id},
+		Kind: coredata.MutationPatch, ExpectedVersion: version, NextVersion: version + 1,
+		Mask: change.Mask, Schema: 1, Codec: "bson-v2",
+	}
+	if version == 0 || change.Mask == coredata.AllFields {
+		data, err := bson.Marshal(bson.M{"_id": dao.id, "value": dao.value})
+		mutation.Kind, mutation.Data = coredata.MutationPut, data
+		return mutation, err
+	}
+	patch, err := bson.Marshal(bson.D{{Key: "value", Value: dao.value}})
+	mutation.Patch.SetBSON = patch
+	return mutation, err
+}
+
+func (dao *newAggregateDAO) AcceptMutation(mutation coredata.Mutation) error {
+	return dao.tracker.AcceptVersion(mutation.ExpectedVersion, mutation.NextVersion)
+}
+
+func (dao *newAggregateDAO) RestorePersisted(raw []byte, _ uint32, version uint64) error {
+	var doc struct {
+		ID    int64 `bson:"_id"`
+		Value int64 `bson:"value"`
+	}
+	if err := bson.Unmarshal(raw, &doc); err != nil {
+		return err
+	}
+	dao.id, dao.value = doc.ID, doc.Value
+	dao.tracker.SetVersion(version)
+	return nil
+}
+
+type newAggregateEntity struct {
+	*entity.EntityBase
+	entity.DaoManager
+	profile *newAggregateDAO
+	rank    *newAggregateDAO
+}
+
+func (value *newAggregateEntity) Base() *entity.EntityBase { return value.EntityBase }
+func (*newAggregateEntity) AutoPersist() bool              { return true }
+
+var registerNewAggregateKind sync.Once
+
+func ensureNewAggregateKind() {
+	registerNewAggregateKind.Do(func() {
+		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+			Category: 1, Kind: newAggregateKind,
+			DaoBuilders: []entity.DaoBuilderFunc{
+				func() entity.DaoInterface { return &newAggregateDAO{collection: newAggregateProfiles} },
+				func() entity.DaoInterface { return &newAggregateDAO{collection: newAggregateRanks} },
+			},
+			Builder: func(param *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+				value := &newAggregateEntity{
+					EntityBase: entity.NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind),
+					DaoManager: entity.NewDaoManager(),
+				}
+				value.profile, _ = param.Dao[newAggregateProfiles].(*newAggregateDAO)
+				value.rank, _ = param.Dao[newAggregateRanks].(*newAggregateDAO)
+				if value.profile == nil || value.rank == nil {
+					return nil, errors.New("new aggregate test entity: missing DAO")
+				}
+				value.DaoManager.Set(newAggregateProfiles, value.profile)
+				value.DaoManager.Set(newAggregateRanks, value.rank)
+				return value, nil
+			},
+		})
+	})
+}
+
+type newAggregateFixture struct {
+	t         *testing.T
+	ctx       context.Context
+	store     *MongoStore
+	client    *mongotest.Client
+	projector *Projector
+	access    *entity.ManagerAccess
+	scheduler *corenest.NestMgr
+	caller    int64
+}
+
+// newNewAggregateFixture：正式 Nest + 文件 WAL + Mongo 替身；caller 是库里已有的 unloadHero，handler 内新建时作为
+// 消息目标。
+func newNewAggregateFixture(t *testing.T) *newAggregateFixture {
+	t.Helper()
+	ensureUnloadKinds()
+	ensureNewAggregateKind()
+	store, client, _ := newMongoStoreTest(t)
+	f := &newAggregateFixture{t: t, ctx: context.Background(), store: store, client: client}
+	caller, err := entity.BuildEntityID(9301, unloadTestKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.caller = caller
+	if err := client.Collection(testDatabase, unloadTestCollection).Seed(bson.M{"_id": caller, "_version": uint64(1), "_schema": uint32(1), "level": int32(1)}); err != nil {
+		t.Fatal(err)
+	}
+	f.projector, _ = manualProjector(t, store)
+	manager := entity.NewEntityManager()
+	f.access = entity.NewManagerAccess(manager)
+	repository, err := NewEntityRepository(manager, store, projectionGate{f.projector})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.access.ConfigureLoader(repository); err != nil {
+		t.Fatal(err)
+	}
+	f.scheduler = corenest.NewEngine(corenest.NestOptionWithTransactionCommitter(f.projector), corenest.NestOptionWithGetter(f.access),
+		corenest.NestOptionWithWorkerPools(corenest.WorkerPoolConfig{Workers: 4, QueueCap: 64}, corenest.WorkerPoolConfig{}, corenest.WorkerPoolConfig{}))
+	meta := corenest.HandlerMeta{Rollback: corenest.RollbackUndo, Durability: corenest.DurabilityStrict}
+	// new_aggregate_create：在 handler 内新建 params[0] 指定的实体，只改 profile。
+	f.scheduler.MustRegisterHandlerWithMeta(corenest.NewHandlerName("new_aggregate_create"), func(_ []entity.IThreadSafeEntity, params []any, _ ...corenest.HandlerOption) (any, error) {
+		created, err := f.access.Create(&entity.EntityCreateParam{IsCreate: true, Kind: newAggregateKind, Id: params[0].(int64)})
+		if err != nil {
+			return nil, err
+		}
+		return nil, created.(*newAggregateEntity).profile.setValue(7)
+	}, meta)
+	// new_aggregate_touch：目标实体的 profile 加一，rank 不动。
+	f.scheduler.MustRegisterHandlerWithMeta(corenest.NewHandlerName("new_aggregate_touch"), func(es []entity.IThreadSafeEntity, _ []any, _ ...corenest.HandlerOption) (any, error) {
+		profile := es[0].(*newAggregateEntity).profile
+		return nil, profile.setValue(profile.value + 1)
+	}, meta)
+	if err := f.scheduler.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.scheduler.Shutdown(context.Background()) })
+	return f
+}
+
+func (f *newAggregateFixture) id(uniqueID int64) int64 {
+	f.t.Helper()
+	id, err := entity.BuildEntityID(uniqueID, newAggregateKind)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return id
+}
+
+func (f *newAggregateFixture) param(id int64) *entity.EntityCreateParam {
+	return &entity.EntityCreateParam{IsCreate: true, Kind: newAggregateKind, Id: id}
+}
+
+// coldLoad 投影完在途记录，再用全新的 EntityManager + EntityRepository 读同一个库：等价于重启后的第一次冷加载。
+func (f *newAggregateFixture) coldLoad(id int64) (*newAggregateEntity, error) {
+	f.t.Helper()
+	if err := f.projector.Flush(f.ctx); err != nil {
+		f.t.Fatal(err)
+	}
+	repository, err := NewEntityRepository(entity.NewEntityManager(), f.store, nil)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	value, err := repository.LoadEntity(f.ctx, id, newAggregateKind)
+	if err != nil {
+		return nil, err
+	}
+	return value.(*newAggregateEntity), nil
+}
+
+// storedVersion 返回 Mongo 替身里该文档的 _version；没有文档时 ok=false。
+func (f *newAggregateFixture) storedVersion(collection string, id int64) (uint64, bool) {
+	doc, ok := f.client.Collection(testDatabase, collection).Lookup(id)
+	if !ok {
+		return 0, false
+	}
+	version, _ := doc["_version"].(int64)
+	return uint64(version), true
+}
+
+func (f *newAggregateFixture) assertReloaded(id int64, profile int64) {
+	f.t.Helper()
+	loaded, err := f.coldLoad(id)
+	if err != nil {
+		f.t.Fatalf("cold load of the new entity after its first commit: %v", err)
+	}
+	if loaded.profile.value != profile || loaded.rank.value != 0 {
+		f.t.Fatalf("reloaded profile=%d rank=%d, want profile=%d and the untouched rank at its initial 0", loaded.profile.value, loaded.rank.value, profile)
+	}
+	for _, dao := range []*newAggregateDAO{loaded.profile, loaded.rank} {
+		if version := dao.tracker.Version(); version != 1 {
+			f.t.Fatalf("reloaded %s version=%d, want 1 (one full document written by the first commit)", dao.collection, version)
+		}
+	}
+}
+
+func TestNewEntityFirstCommitWritesEveryDAOSoTheAggregateColdLoads(t *testing.T) {
+	t.Run("created inside a handler", func(t *testing.T) {
+		f := newNewAggregateFixture(t)
+		id := f.id(9311)
+		if _, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_create"), f.caller, corenest.Params{id}); err != nil {
+			t.Fatal(err)
+		}
+		f.assertReloaded(id, 7)
+	})
+
+	t.Run("created in a detached transaction outside a handler", func(t *testing.T) {
+		f := newNewAggregateFixture(t)
+		id := f.id(9312)
+		if _, err := corenest.RunDetachedTransaction(f.ctx, f.projector, "new_aggregate_detached", func() (any, error) {
+			created, err := f.access.Create(f.param(id))
+			if err != nil {
+				return nil, err
+			}
+			return nil, created.(*newAggregateEntity).profile.setValue(7)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		f.assertReloaded(id, 7)
+	})
+
+	t.Run("created outside any transaction and first written by a handler", func(t *testing.T) {
+		f := newNewAggregateFixture(t)
+		id := f.id(9313)
+		if _, err := f.access.Create(f.param(id)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_touch"), id, nil); err != nil {
+			t.Fatal(err)
+		}
+		f.assertReloaded(id, 1)
+	})
+
+	// 首笔提交被接受后实体不再是“新建”：之后的普通提交只写改过的 DAO，不为其他 DAO 重写整文档。
+	t.Run("after the first commit only the changed DAO is written", func(t *testing.T) {
+		f := newNewAggregateFixture(t)
+		id := f.id(9314)
+		if _, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_create"), f.caller, corenest.Params{id}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_touch"), id, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.projector.Flush(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		profile, profileOK := f.storedVersion(newAggregateProfiles, id)
+		rank, rankOK := f.storedVersion(newAggregateRanks, id)
+		if !profileOK || profile != 2 || !rankOK || rank != 1 {
+			t.Fatalf("stored versions profile=%d(%t) rank=%d(%t), want profile=2 and rank still 1", profile, profileOK, rank, rankOK)
+		}
+	})
 }

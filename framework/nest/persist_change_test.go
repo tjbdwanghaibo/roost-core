@@ -3,6 +3,7 @@ package nest
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -331,5 +332,130 @@ func TestMarkPersistDeleteProducesDeleteMutation(t *testing.T) {
 	}
 	if len(record.Mutations) != 1 || record.Mutations[0].Kind != dataengine.MutationDelete || record.Mutations[0].ExpectedVersion != 3 || record.Mutations[0].NextVersion != 4 {
 		t.Fatalf("delete mutation=%+v", record.Mutations)
+	}
+}
+
+// newAggregateTestDAO 是同一新建实体里的一个 DAO：带 tracker，按集合名区分文档。
+type newAggregateTestDAO struct {
+	coll    string
+	tracker dataengine.Tracker
+}
+
+func (d *newAggregateTestDAO) Id() int64                         { return 7 }
+func (d *newAggregateTestDAO) SetId(int64)                       {}
+func (d *newAggregateTestDAO) DbName() string                    { return "game" }
+func (d *newAggregateTestDAO) CollName() string                  { return d.coll }
+func (d *newAggregateTestDAO) Dirty() entity.IDirty              { return &d.tracker }
+func (d *newAggregateTestDAO) CleanDirty()                       { d.tracker.SelfClean() }
+func (d *newAggregateTestDAO) DirtyTracker() *dataengine.Tracker { return &d.tracker }
+
+func (d *newAggregateTestDAO) PrepareMutation(change PersistChange) (dataengine.Mutation, error) {
+	version := d.tracker.Version()
+	return dataengine.Mutation{
+		Key:  dataengine.DocumentKey{Database: "game", Resource: d.coll, ID: 7},
+		Kind: dataengine.MutationPut, ExpectedVersion: version, NextVersion: version + 1, Mask: change.Mask, Data: []byte{1},
+	}, nil
+}
+
+func (d *newAggregateTestDAO) AcceptMutation(mutation dataengine.Mutation) error {
+	return d.tracker.AcceptVersion(mutation.ExpectedVersion, mutation.NextVersion)
+}
+
+// newAggregateTestDAOs 模拟 entity.BuildEntity 新建实体：三个 DAO 互相绑定为同一个新聚合（按集合名排序）。
+func newAggregateTestDAOs() (bag, profile, rank *newAggregateTestDAO) {
+	bag, profile, rank = &newAggregateTestDAO{coll: "bag"}, &newAggregateTestDAO{coll: "profile"}, &newAggregateTestDAO{coll: "rank"}
+	members := []entity.DaoInterface{bag, profile, rank}
+	for _, dao := range []*newAggregateTestDAO{bag, profile, rank} {
+		dao.tracker.BindNewAggregate(members)
+	}
+	return bag, profile, rank
+}
+
+func strictCommit(t *testing.T, mark func(tx *RollbackTx) error) CommitRecord {
+	t.Helper()
+	tx := NewRollbackTx(RollbackUndo)
+	tx.durability = DurabilityStrict
+	if err := mark(tx); err != nil {
+		t.Fatal(err)
+	}
+	committer := &recordingCommitter{}
+	if err := tx.durableCommit(nil, committer); err != nil {
+		t.Fatal(err)
+	}
+	return committer.record
+}
+
+// 新建实体的第一笔持久提交只改了一个 DAO，也为每个 DAO 写整文档（冷加载要求聚合完整）；首笔提交被接受之后，
+// 普通提交只写改过的 DAO。
+func TestNewEntityFirstPersistentCommitWritesEveryDAO(t *testing.T) {
+	bag, profile, rank := newAggregateTestDAOs()
+	record := strictCommit(t, func(tx *RollbackTx) error { return tx.MarkPersist(rank, 0b1) })
+	got := make([]string, 0, len(record.Mutations))
+	for _, mutation := range record.Mutations {
+		got = append(got, mutation.Key.Resource)
+		wantMask := dataengine.AllFields
+		if mutation.Key.Resource == "rank" {
+			wantMask = 0b1
+		}
+		if mutation.Kind != dataengine.MutationPut || mutation.ExpectedVersion != 0 || mutation.Mask != wantMask {
+			t.Fatalf("first commit mutation %+v, want a full Put from version 0 with mask %#x", mutation, wantMask)
+		}
+	}
+	if strings.Join(got, ",") != "rank,bag,profile" {
+		t.Fatalf("first commit wrote %v, want the changed DAO then every other DAO of the new entity in collection order", got)
+	}
+	for _, dao := range []*newAggregateTestDAO{bag, profile, rank} {
+		if dao.tracker.Version() != 1 {
+			t.Fatalf("%s version=%d after the first commit, want 1", dao.coll, dao.tracker.Version())
+		}
+	}
+
+	record = strictCommit(t, func(tx *RollbackTx) error { return tx.MarkPersist(rank, 0b1) })
+	if len(record.Mutations) != 1 || record.Mutations[0].Key.Resource != "rank" {
+		t.Fatalf("second commit wrote %+v, want only the changed DAO", record.Mutations)
+	}
+}
+
+// 回滚丢弃一并登记的 DAO 并恢复版本 0；下一笔提交仍是这个实体的第一笔，照样写齐。
+func TestNewEntityAggregateRegistrationRollsBackWithTheTransaction(t *testing.T) {
+	bag, profile, rank := newAggregateTestDAOs()
+	tx := NewRollbackTx(RollbackUndo)
+	if err := tx.MarkPersist(profile, 0b1); err != nil {
+		t.Fatal(err)
+	}
+	if len(tx.participantOrder) != 3 {
+		t.Fatalf("registered %d participants, want the whole new aggregate", len(tx.participantOrder))
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	record := strictCommit(t, func(tx *RollbackTx) error { return tx.MarkPersist(bag, 0b1) })
+	if len(record.Mutations) != 3 {
+		t.Fatalf("first commit after a rollback wrote %d DAO(s), want all 3", len(record.Mutations))
+	}
+	if rank.tracker.Version() != 1 {
+		t.Fatalf("rank version=%d, want 1", rank.tracker.Version())
+	}
+}
+
+// Remote 托管实体经同一份登记认领：新建实体首笔提交里没改的 DAO 也交给 Remote 聚合提交（整份 payload），不进普通 mutation。
+func TestNewRemoteEntityFirstCommitClaimsEveryDAO(t *testing.T) {
+	bag, profile, rank := newAggregateTestDAOs()
+	tx := NewRollbackTx(RollbackUndo)
+	if err := tx.MarkPersist(profile, 0b1); err != nil {
+		t.Fatal(err)
+	}
+	for _, dao := range []*newAggregateTestDAO{bag, profile, rank} {
+		change, ok := tx.RemotePersistChangeFor(dao)
+		if !ok || change.Delete || change.Mask == 0 {
+			t.Fatalf("remote claim of %s = %+v ok=%v, want a write", dao.coll, change, ok)
+		}
+	}
+	record, err := tx.prepareCommitRecord()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Mutations) != 0 {
+		t.Fatalf("claimed DAOs leaked into ordinary mutations: %+v", record.Mutations)
 	}
 }

@@ -26,6 +26,8 @@ Nest 接收带目标实体声明的消息，负责队列准入、同 ID 顺序�
 
 handler 内 `Create` 新建会持久化的实体不读存储：ID 必须是 id-gen 发的新 ID（或由 `EntityManager` 的 ID 生成器分配），不要复用删过档或存了但没加载的 ID，否则首个提交在投影时版本冲突、进程 fail-stop（D10 约束）。ID 可能已有记录的场景（登录 / 创角）用生成 lifecycle 的 `GetOrCreate`：删过档时它返回 `entity.ErrAuthorityEntityDeleted`（客户端码 `entity_deleted`），不重建。
 
+新建实体的第一笔持久提交由框架写齐它的每个持久 DAO（本事务没改的 DAO 写零值 / 初值整文档），与经哪个入口新建无关（handler 内 `Create` / `GetOrCreate`、`RunDetachedTransaction` 里新建、事务外新建后第一次被 handler 写）；业务不需要为此手工 `MarkPersist(dao, AllFields)`。原因与边界见 [DataEngine §4](03-dataengine.md#4-冷加载与-schema)。
+
 ## 3. 事务与回滚
 
 事务会修改且失败应恢复的状态放在 DAO。生成 setter 登记事务本地 PersistChange，回滚由 DAO 快照/undo 统一完成；组件不维护独立 undo 体系。rollback=none 不承诺失败恢复。事务外写持久 setter 被拒绝；只读和临时状态应明确声明 nopersist/nocoll。

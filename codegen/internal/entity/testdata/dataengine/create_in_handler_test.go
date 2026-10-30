@@ -284,3 +284,47 @@ func TestGeneratedDataEngineCrossCreateResolvesOnRealWAL(t *testing.T) {
 		})
 	}
 }
+
+// 新建实体的第一笔持久提交写齐聚合的每个 DAO：handler 内新建 Trader 只改 wallet，inventory 一个字段也没动，提交后
+// 两个集合都有版本 1 的文档；“重启”（同一 WAL 目录、新的 Runtime / Nest / EntityManager）后冷加载成功，inventory 为初值。
+// 修复前只有 wallet 有文档，冷加载报 entity aggregate is incomplete or corrupt（live=1 missing=1）。
+func TestGeneratedDataEngineCreatedEntityWritesEveryDAOAndReloads(t *testing.T) {
+	ctx, client := reloadTestClient(t)
+	for _, policy := range []nest.DurabilityPolicy{nest.DurabilityAsync, nest.DurabilityStrict, nest.DurabilityPipelined} {
+		t.Run(policy.String(), func(t *testing.T) {
+			base := 36300 + int(policy)*10
+			clearTraderDocuments(t, ctx, client, base, 2)
+			root := t.TempDir()
+			h := newTradeFixtureRegistering(t, ctx, client, root, "create-every-dao", policy, false, func(h *tradeFixture) {
+				h.scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName("trade_create_wallet"), func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+					created, err := h.access.Create(&entity.EntityCreateParam{IsCreate: true, Kind: EntityKindTrader, Id: params[0].(int64)})
+					if err != nil {
+						return nil, err
+					}
+					created.(*Trader).wallet.SetCoins(createdCoins)
+					return "ok", nil
+				}, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: policy})
+			})
+			caller := h.seed(t, base, 1)[0]
+			created := traderID(t, base+1)
+			if _, err := h.scheduler.Request(ctx, nest.NewHandlerName("trade_create_wallet"), caller, nest.Params{created}); err != nil {
+				t.Fatalf("create inside the handler: %v", err)
+			}
+			h.noFatal(t, h.runtime.Flush(ctx), "after the create")
+			h.close(t, nil)
+
+			restarted := newTradeFixture(t, ctx, client, root, "create-every-dao", policy, false)
+			value, err := restarted.runtime.Repository.LoadEntity(ctx, created, EntityKindTrader)
+			if err != nil {
+				t.Fatalf("cold load of the created entity after a restart: %v", err)
+			}
+			trader := value.(*Trader)
+			if trader.wallet.GetCoins() != createdCoins || trader.inventory.GetItems() != 0 || trader.inventory.DirtyTracker().Version() != 1 {
+				t.Fatalf("reloaded coins=%d items=%d inventory version=%d, want coins=%d and the untouched inventory at its initial value, version 1",
+					trader.wallet.GetCoins(), trader.inventory.GetItems(), trader.inventory.DirtyTracker().Version(), createdCoins)
+			}
+			restarted.assertState(t, created, tradeState{Coins: createdCoins, Version: 1}, true)
+			restarted.close(t, nil)
+		})
+	}
+}

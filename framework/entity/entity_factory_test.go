@@ -290,3 +290,80 @@ func TestNewEntity_UnregisteredType(t *testing.T) {
 		t.Fatal("expected error for unregistered type")
 	}
 }
+
+// newAggregateRecorder 替代 dataengine.Tracker 记下 BuildEntity 绑定的新聚合（entity 包测试不能 import dataengine）。
+type newAggregateRecorder struct{ daos []DaoInterface }
+
+func (r *newAggregateRecorder) Dirty() bool                          { return false }
+func (r *newAggregateRecorder) SelfClean()                           {}
+func (r *newAggregateRecorder) BindNewAggregate(daos []DaoInterface) { r.daos = daos }
+
+type newAggregateFactoryDao struct {
+	factoryTestDao
+	tracker newAggregateRecorder
+}
+
+func (d *newAggregateFactoryDao) Dirty() IDirty { return &d.tracker }
+
+const (
+	newAggregatePersistentKind EntityKind = 221
+	newAggregateNoPersistKind  EntityKind = 222
+)
+
+func init() {
+	for _, kind := range []EntityKind{newAggregatePersistentKind, newAggregateNoPersistKind} {
+		RegisterEntityBuilder(&EntityBuilderParam{
+			Category: testEntityCategory, Kind: kind, NoPersist: kind == newAggregateNoPersistKind,
+			Builder: func(param *EntityCreateParam) (IThreadSafeEntity, error) {
+				e := &factoryTestEntity{EntityBase: NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind), DaoManager: NewDaoManager()}
+				for coll, dao := range param.Dao {
+					e.DaoManager.Set(coll, dao)
+				}
+				return e, nil
+			},
+			DaoBuilders: []DaoBuilderFunc{
+				func() DaoInterface { return &newAggregateFactoryDao{factoryTestDao: factoryTestDao{coll: "rank"}} },
+				func() DaoInterface { return &newAggregateFactoryDao{factoryTestDao: factoryTestDao{coll: "profile"}} },
+			},
+		})
+	}
+}
+
+// 新建的持久实体把全部 DAO（按集合名排序）绑定到每个 DAO 的 tracker，持久事务据此让第一笔持久提交写齐聚合；
+// 冷加载（IsCreate=false）与 noPersist 实体不绑定。
+func TestBuildEntityBindsTheNewAggregateOnlyForPersistentCreates(t *testing.T) {
+	daoOf := func(e IThreadSafeEntity, coll string) *newAggregateFactoryDao {
+		return e.(*factoryTestEntity).DaoManager.Get(coll).(*newAggregateFactoryDao)
+	}
+	created, err := BuildEntity(&EntityCreateParam{IsCreate: true, Kind: newAggregatePersistentKind, Id: mustBuildTestEntityID(t, 51, testEntityCategory, newAggregatePersistentKind)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, rank := daoOf(created, "profile"), daoOf(created, "rank")
+	for _, dao := range []*newAggregateFactoryDao{profile, rank} {
+		if got := dao.tracker.daos; len(got) != 2 || got[0] != DaoInterface(profile) || got[1] != DaoInterface(rank) {
+			t.Fatalf("%s bound %v, want [profile rank] of the same entity", dao.coll, got)
+		}
+	}
+
+	loadedID := mustBuildTestEntityID(t, 52, testEntityCategory, newAggregatePersistentKind)
+	loadedDAOs := map[string]DaoInterface{
+		"profile": &newAggregateFactoryDao{factoryTestDao: factoryTestDao{id: loadedID, coll: "profile"}},
+		"rank":    &newAggregateFactoryDao{factoryTestDao: factoryTestDao{id: loadedID, coll: "rank"}},
+	}
+	loaded, err := BuildEntity(&EntityCreateParam{Kind: newAggregatePersistentKind, Id: loadedID, Dao: loadedDAOs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transient, err := BuildEntity(&EntityCreateParam{IsCreate: true, Kind: newAggregateNoPersistKind, Id: mustBuildTestEntityID(t, 53, testEntityCategory, newAggregateNoPersistKind)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, e := range map[string]IThreadSafeEntity{"loaded": loaded, "noPersist": transient} {
+		for _, coll := range []string{"profile", "rank"} {
+			if got := daoOf(e, coll).tracker.daos; got != nil {
+				t.Fatalf("%s entity bound a new aggregate on %s: %v", name, coll, got)
+			}
+		}
+	}
+}

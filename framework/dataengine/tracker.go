@@ -1,6 +1,10 @@
 package dataengine
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
 
 // Tracker 保存 DAO 已接受的持久版本和两类同步脏掩码：syncDirty 供服务间同步
 // 消费，entitySyncDirty 供客户端 EntitySync 消费，二者由 MarkSync 同时置位、各自取走。
@@ -10,7 +14,12 @@ type Tracker struct {
 	syncDirty       atomic.Uint64
 	entitySyncDirty atomic.Uint64
 	syncVersion     atomic.Uint64
+	// newAggregate 是新建实体时 entity.BuildEntity 绑定的同一聚合全部 DAO（含本 DAO），冷加载出来的 DAO 没有。
+	// 只在版本为 0（还没有任何持久提交被接受）时生效，见 NewAggregate。
+	newAggregate atomic.Pointer[[]entity.DaoInterface]
 }
+
+var _ entity.NewAggregateMember = (*Tracker)(nil)
 
 type TrackerSnapshot struct {
 	Version         uint64
@@ -20,6 +29,21 @@ type TrackerSnapshot struct {
 }
 
 func (t *Tracker) Version() uint64 { return t.version.Load() }
+
+// BindNewAggregate 实现 entity.NewAggregateMember：记下新建实体的全部 DAO。
+func (t *Tracker) BindNewAggregate(daos []entity.DaoInterface) { t.newAggregate.Store(&daos) }
+
+// NewAggregate 返回本 DAO 所属新建实体的全部 DAO，供持久事务让新实体的第一笔持久提交写齐每个 DAO。
+// 不是新建实体，或本 DAO 已有持久提交被接受（版本不为 0）时返回 nil：已存在实体的普通提交不多写。
+func (t *Tracker) NewAggregate() []entity.DaoInterface {
+	if t == nil || t.version.Load() != 0 {
+		return nil
+	}
+	if daos := t.newAggregate.Load(); daos != nil {
+		return *daos
+	}
+	return nil
+}
 
 func (t *Tracker) SetVersion(version uint64) { t.version.Store(version) }
 

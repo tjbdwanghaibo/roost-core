@@ -55,25 +55,61 @@ func (tx *RollbackTx) persistChange(participant MutationParticipant, mask uint64
 	if !reflect.TypeOf(participant).Comparable() {
 		return nil, errors.New("nest: mutation participant is not comparable")
 	}
-	if tx.participantChanges == nil {
-		tx.participantChanges = make(map[MutationParticipant]*PersistChange, 4)
-	}
 	change := tx.participantChanges[participant]
 	if change == nil {
-		if tracked, ok := participant.(dataEngineTrackerDao); ok && tracked.DirtyTracker() != nil {
-			tracker := tracked.DirtyTracker()
-			snapshot := tracker.Snapshot()
-			tx.DeferRollback(func() error {
-				tracker.Restore(snapshot)
-				return nil
-			})
-		}
-		change = &PersistChange{}
-		tx.participantChanges[participant] = change
-		tx.participantOrder = append(tx.participantOrder, participant)
+		change = tx.registerParticipant(participant)
+		tx.includeNewAggregate(participant)
 	}
 	change.Mask |= mask
 	return change, nil
+}
+
+// registerParticipant 为参与方建立本事务的变化记录，并为它的 tracker 登记回滚恢复。调用方保证它尚未登记。
+func (tx *RollbackTx) registerParticipant(participant MutationParticipant) *PersistChange {
+	if tx.participantChanges == nil {
+		tx.participantChanges = make(map[MutationParticipant]*PersistChange, 4)
+	}
+	if tracked, ok := participant.(dataEngineTrackerDao); ok && tracked.DirtyTracker() != nil {
+		tracker := tracked.DirtyTracker()
+		snapshot := tracker.Snapshot()
+		tx.DeferRollback(func() error {
+			tracker.Restore(snapshot)
+			return nil
+		})
+	}
+	change := &PersistChange{}
+	tx.participantChanges[participant] = change
+	tx.participantOrder = append(tx.participantOrder, participant)
+	return change
+}
+
+// includeNewAggregate 保证新建实体的第一笔持久提交写齐它的每个持久 DAO。
+//
+// 冷加载（EntityRepository.readAggregate）要求聚合的每个 DAO 都有文档，部分存在按损坏拒绝；事务却只登记改过的 DAO，
+// 多 DAO 实体新建后只改其中一个就提交，其余 DAO 永远没有文档，重启后这个实体再也加载不出来。所以本事务第一次登记
+// 某个 DAO、而它属于还没持久过（版本 0）的新建实体时，把同一聚合里同样版本 0、尚未登记的 DAO 以全部字段登记进来：
+// 版本 0 的 DAO 准备时生成整文档 Put（Remote 托管实体经同一份登记由 RemotePersistChangeFor 认领，整份 payload）。
+// 聚合由 entity.BuildEntity 在新建时绑定在各 DAO 的 tracker 上，与经哪个入口新建（handler 内、detached 事务、事务外
+// 新建后由之后的 handler 第一次写）无关。冷加载出来的实体没有绑定，首笔提交被接受后版本不为 0，NewAggregate 都是
+// nil：已存在实体的普通提交不多写。
+func (tx *RollbackTx) includeNewAggregate(participant MutationParticipant) {
+	tracked, ok := participant.(dataEngineTrackerDao)
+	if !ok {
+		return
+	}
+	for _, dao := range tracked.DirtyTracker().NewAggregate() {
+		sibling, ok := dao.(MutationParticipant)
+		if !ok || isNilParticipant(sibling) || !reflect.TypeOf(sibling).Comparable() {
+			continue
+		}
+		if _, registered := tx.participantChanges[sibling]; registered {
+			continue
+		}
+		if siblingTracker, ok := sibling.(dataEngineTrackerDao); !ok || siblingTracker.DirtyTracker() == nil || siblingTracker.DirtyTracker().Version() != 0 {
+			continue
+		}
+		tx.registerParticipant(sibling).Mask |= dataengine.AllFields
+	}
 }
 
 // MarkPersist 登记参与方按 mask 指示的字段有持久化变化（整字段覆盖由 DAO 在准备时决定）。
