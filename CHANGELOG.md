@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.33.0] - 2026-10-30
+
 ### 新增
 
 - **发版改为一条命令 `scripts/release.sh vX.Y.Z`，当前版本只看 CHANGELOG，发版文档分级**（维护者 2026-10-30）。脚本做前置检查（main、干净、与 origin 一致、版本更新、tag 不存在、`[Unreleased]` 非空、功能版 NOTES 已写）→ 改 `framework-release.yaml` 与归档 CHANGELOG（功能版自动给 upgrade-compat 追加上一版，`--min-core` 同步生成物最低 core 与 framework-compat）→ 提交 → pretag（失败不推送并打印回退命令）→ 推 main 并独立核对 → 打 tag 并核对 → 用 tag 生成 game-demo build / vet；`--dry-run` 只预检与预览。文档里不再写死“当前版本”（guide / impl 30 篇与入口文档改为指向 CHANGELOG）。补丁版只靠 CHANGELOG，功能版只写一篇 NOTES，“说明 + 实现”双文档只在维护者要求的大轮次收尾写。[维护手册 §5](docs/maintenance/README.md) · [docs/release/README](docs/release/README.md)
