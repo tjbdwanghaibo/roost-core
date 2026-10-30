@@ -454,6 +454,21 @@ dao.DelItems(10001)
 
 标量与嵌套对象用 `Get<Field>()`；slice 用 `Get<Field>(idx)` / `Add<Field>` / `Set<Field>All` / `Range<Field>` / `<Field>Len`；map 用 `Get<Field>(key)` / `Set<Field>(key, val)` / `Del<Field>(key)` / `Range<Field>` / `<Field>Len`。
 
+字节切片（`[]byte` / `[]uint8`，常用来整段存一份序列化好的 JSON）在上面的 slice 方法之外多一个整体读取
+`Get<Field>All() []byte`（嵌套 struct 里同名，与其整体写入 `Set<Field>(v)` 对称），返回**副本**（空值为 nil）：改返回值不改 DAO，
+修改只能经 setter，才会点亮持久 / 同步脏位并随事务回滚。存储与同步仍按普通切片编码（BSON binary 子类型 0），格式不变。
+
+```go
+//roost:dao coll=tasks db=game
+type TaskDao struct {
+    ResultJSON []byte
+}
+
+dao.SetResultJSONAll(raw)                         // 复制入参
+var result Result
+err := json.Unmarshal(dao.GetResultJSONAll(), &result) // 拿到副本
+```
+
 生成器同时产出字段 mask、undo、事务内 `PersistChange`、字段级 Patch、BSON marshal/unmarshal、`MutationParticipant`、`RestorePersisted`（只接受 `schema=` 声明的当前版本，不做迁移；改形状按[schema 变更操作手册](../../docs/framework/SCHEMA-MIGRATION.md)离线转换）和 `DirtyTracker()`。三件要点：
 
 - **dirty**：每个字段一个掩码位。setter 先比较再标记；持久化变化经 `nest.MarkPersist*` 进入当前 Nest 事务，同步变化留在 DAO tracker（`DirtyTracker()` 返回 `*dataengine.Tracker`，只保存已接受的持久化版本和 sync dirty）。
@@ -838,8 +853,8 @@ curl http://127.0.0.1:8080/shop_price  # web.addr，见 configs/service/config.g
 `web: request failed` Warn，与上面的错误日志按 `request_id` 对上。
 
 Start 只 bind（端口被占用时启动失败）；路由只能在 Service.Init 里登记，`service.started` 时冻结路由表并开始 Serve（之后再登记报错），
-`service.stopping` 时 `http.Server.Shutdown`，Service.Shutdown 之后不会再有业务请求。**不做鉴权**：JSON 路由拿不到请求头，raw 路由可以自己读
-`RawRequest.Header`；对外暴露时放在鉴权代理之后。也可以不用 `add webroute`、直接 `roost add mod web -service <svc>`。
+`service.stopping` 时 `http.Server.Shutdown`，Service.Shutdown 之后不会再有业务请求。**不做鉴权**：JSON 路由经 `headers=` 拿到声明的请求头，raw 路由
+可以自己读 `RawRequest.Header`，校验由业务做；对外暴露时放在鉴权代理之后。也可以不用 `add webroute`、直接 `roost add mod web -service <svc>`。
 
 ```go
 //roost:web method=POST path=/gm/player body=json
@@ -853,11 +868,57 @@ func webhook(ctx context.Context, svc *Service, req webroute.RawRequest) (Ack, e
 }
 ```
 
+标记语法：
+
+```text
+//roost:web method=GET|POST path=/<chi 模式> body=json|raw [headers=Header-Name:Field,...] [compress=gzip]
+```
+
+| 选项 | 必填 | 含义 |
+| --- | --- | --- |
+| `method` | 是 | 只支持 `GET` / `POST` |
+| `path` | 是 | 以 `/` 开头，chi 路由语法，生成期按 chi 校验 |
+| `body` | 是 | `json`：解码一个 JSON 文档到请求类型；`raw`：请求参数必须是 `webroute.RawRequest`。`GET` 只能用 `raw` |
+| `headers` | 否 | 只用于 `body=json`：把请求头绑定到请求结构的字段，见下 |
+| `compress` | 否 | 只有 `gzip`：成功响应按客户端 `Accept-Encoding` 协商 gzip，见下 |
+
+**`headers=`**（与下游 cube fork 的写法一致）：逗号分隔的 `头名:字段`，例如
+`headers=X-Game-Sid:GameSID,X-Player-Id:PlayerID,Authorization:Token`。生成代码在 JSON 解码**之后**按声明顺序写
+`request.Field = r.Header.Get("Header-Name")`，所以：
+
+- 头名不区分大小写（生成期按 `http.CanonicalHeaderKey` 规范化，`x-game-sid` 与 `X-Game-Sid` 是同一个头）；
+- 请求头优先：JSON 体里同名字段的值被覆盖；头缺失时字段是空串——客户端不能经 JSON 体填这个字段（给字段写 `json:"-"` 更清楚）；
+- 同名头多值时取第一个（`Header.Get`）；值原样交给业务，不去空白、不解析；
+- 字段是请求结构上的一个 Go 标识符，可以是嵌入结构提升的字段；必须是 `string`——生成器不做类型检查，类型不对时生成的
+  `webroute_gen.go` 在赋值行编译失败；
+- 生成期拒绝：没有冒号或多个冒号、空项、头名不是 RFC 9110 token、字段不是单个标识符（`Session.Token`）、同一个头写两次
+  （含大小写不同）、同一个字段写两次、`body=raw`（raw 路由自己读 `request.Header`）。
+
+**`compress=gzip`**：生成 `webroute.WriteCompressedResult` 代替 `WriteResult`。成功响应先完整编码成 JSON（与普通路由同一编码器），
+客户端接受 gzip 且编码后不少于 `webroute.CompressMinBytes`（1024 字节）时回 `Content-Encoding: gzip` 的压缩体，否则回明文；错误
+响应（errcode 映射的 400 / 500）不压缩；两种情况都带 `Vary: Accept-Encoding`。“接受 gzip”按 RFC 9110 判定
+（`httpserver.AcceptsGzip`）：`gzip` / `x-gzip` 明确列出时看它的 `q`（`q=0` 表示拒绝），没列出时看通配 `*` 的 `q`，都没有（含没带
+这个头）就回明文；`q` 写错按 0 处理。不写 `compress=` 的路由行为不变，也不加 `Vary`。
+
+**`RawRequest`** 的字段：`Path`、`Method`、`RemoteAddr`、`Header`（副本）、`Query`（`url.Values`，`r.URL.Query()` 解析出的独立副本，
+同名多值按出现顺序保留，格式错误的键值对按标准库规则丢弃；没有查询串时是空 map）、`Body`（副本）。
+
+```go
+//roost:web method=POST path=/player/keepalive body=json headers=X-Game-Sid:GameSID,Authorization:Token
+func keepAlive(ctx context.Context, svc *Service, req KeepAliveRequest) (KeepAliveResponse, error) { ... }
+
+//roost:web method=GET path=/rank/info body=raw compress=gzip
+func rankInfo(ctx context.Context, svc *Service, req webroute.RawRequest) (RankInfo, error) {
+    season := req.Query.Get("season")
+    ...
+}
+```
+
 ```bash
 go run .../cmd/webroute@latest -dir ./service/web
 ```
 
-生成 `(*Service).RegisterRoutes` 与包级 `RegisterRoutes(reg, svc)`（`kitweb.RegisterRoutes` 按 `webroute.Module` 调用前者）。JSON 模式只接受一个完整 JSON 文档并统一返回 400 解码错误；raw 模式保留原始 body。是否拒绝未知 JSON 字段由 webroute 运行时包的 `DecodeJSON` 契约决定。重复 method/path、非法 body mode 或 handler 签名直接失败。
+生成 `(*Service).RegisterRoutes` 与包级 `RegisterRoutes(reg, svc)`（`kitweb.RegisterRoutes` 按 `webroute.Module` 调用前者）。JSON 模式只接受一个完整 JSON 文档并统一返回 400 解码错误（之后再绑定 `headers=`）；raw 模式保留原始 body。是否拒绝未知 JSON 字段由 webroute 运行时包的 `DecodeJSON` 契约决定。重复 method/path、非法 body mode 或 handler 签名直接失败。
 
 ## 12. errcode
 

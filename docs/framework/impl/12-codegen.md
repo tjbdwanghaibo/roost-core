@@ -81,6 +81,13 @@ DESIGN-TODO D20～D22 的生成器接入（维护者 2026-10-21 要求）。[add
 
 回归：[add_heartbeat_test.go](../../../codegen/internal/roost/add_heartbeat_test.go)；生成工程端到端 [test-heartbeat-generated.sh](../../../scripts/test-heartbeat-generated.sh)（夹具 `scripts/testdata/heartbeat`）。修前（`53cc3f97`）`roost add heartbeat --entity Monster` 报 `unexpected arguments ["Monster"]`，`roost add mod heartbeat -service game` 报 `unknown wiring mod "heartbeat"`。
 
+## 2F. DAO 字节切片整体读取与 webroute 选项
+
+为下游 ai-game-blackbox-server 从 cube fork 迁到 roost 补的两项生成器能力（未发版，见 CHANGELOG `[Unreleased]`）。
+
+- **DAO `Get<Field>All()`**：[parse.go](../../../codegen/internal/dao/parse.go) 的 `FieldDef.IsBytes`（`KindSlice`、非指针、元素 `byte` / `uint8`）决定是否生成；[template_dao.go](../../../codegen/internal/dao/template_dao.go) 的 Accessors 段与 [template_nested.go](../../../codegen/internal/dao/template_nested.go) 的 slice 段各一处，函数体是 `append(<TypeStr>(nil), x...)`。不变量：返回值与内部底层数组不共享（修改只能经 setter，才登记 undo、点亮脏位）；持久文档 / 提交记录 / 同步载荷里字段类型仍是 `[]byte`（BSON binary 子类型 0，解码时驱动另行复制）；已发布的 `Get<Field>(idx)` / `Add<Field>` / `Set<Field>All` / `Range<Field>` / `<Field>Len` 不变。其它元素类型的切片不生成（指针元素的浅拷贝照样漏出内部状态）。命名不用 `Get<Field>() []byte`，因为 `Get<Field>(idx int)` 已被 slice 占用，改签名会破坏已发布 API。回归：[fields_test.go](../../../codegen/internal/dao/fields_test.go) `TestAByteSliceFieldHasAWholeValueGetterThatReturnsACopy`；golden 的 `VarietyDao.ResultJSON` / `GemInfo.Sig`；生成物行为 [roundtrip_test.go](../../../codegen/internal/dao/testdata/runtime/roundtrip_test.go) `TestAByteSliceFieldReadsAsACopyAndRoundTripsAsBinary`（副本、脏位、提交记录与存储 / 同步往返均为 binary、回滚，经 `codegen/scripts/dao-golden-runtime.sh` 运行）。
+- **webroute `headers=` / `compress=gzip`**：[marker/options.go](../../../codegen/internal/marker/options.go) 的 `Web` 词表加两个可选键，必填由 [parse.go](../../../codegen/internal/webroute/parse.go) 的 `requiredMarkerKeys` 检查；`parseHeaderBindings` 规范化头名并拒绝坏写法，`Route.Headers` / `Route.Compress` 交给 [gen.go](../../../codegen/internal/webroute/gen.go)：`DecodeJSON` 之后逐条 `request.F = r.Header.Get("N")`，`compress=gzip` 写 `webroute.WriteCompressedResult`。生成器只做语法检查（2B），字段不是 string 时在生成文件赋值行编译失败。运行期：[httpserver/server.go](../../../infra/network/httpserver/server.go) 的 `JSONCompressed`（先完整编码，再按 `AcceptsGzip` 与 `minBytes` 决定压缩；编码失败与 `JSON` 共用 `writeEncodeFailure` 回 500；`gzip.Writer` 池化）、`AcceptsGzip`、`AddVary`；[webroute/route.go](../../../infra/network/webroute/route.go) 的 `WriteCompressedResult`（错误响应走 `WriteResult` 不压缩，两路都加 `Vary`）、`CompressMinBytes = 1024`、`RawRequest.Query`（`r.URL.Query()`，每次解析出新 map，即副本）。回归：生成器 `TestParseReadsHeaderBindingsAndCompression`、`TestParseRefusesEachBadHeaderOrCompressionOption`、`TestGoldenRoutes`（[testdata/routes](../../../codegen/internal/webroute/testdata/routes/handlers.go) → [golden](../../../codegen/internal/webroute/testdata/golden/webroute_gen.go)）、`TestGeneratedRoutesRunAgainstTheRuntime`（fixture + 生成物 + [testdata/runtime/routes_test.go](../../../codegen/internal/webroute/testdata/runtime/routes_test.go) 放进替换为当前检出的一次性模块，httptest 端到端）；运行时 `TestACompressedRouteNegotiatesGzipWithTheClient`、`TestReadRawCarriesTheQueryValues`、`TestAcceptsGzipFollowsTheAcceptEncodingQualities`、`TestJSONCompressedReportsAnEncodeFailureUncompressed`。发版时生成物用到 `WriteCompressedResult`，`minimumVersions.Core` 要升到含它的版本。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。
@@ -404,13 +411,13 @@ DESIGN-TODO D20～D22 的生成器接入（维护者 2026-10-21 要求）。[add
 
 ### codegen/internal/webroute
 
-3 个实现文件、2 个测试文件。
+3 个实现文件、2 个测试文件；fixture 在 `testdata/routes`，生成物基线在 `testdata/golden`，端到端测试源在 `testdata/runtime`（见 2F）。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
 | [gen.go](../../../codegen/internal/webroute/gen.go) | 函数/方法或内部实现；见源码 |
 | [main.go](../../../codegen/internal/webroute/main.go) | 函数/方法或内部实现；见源码 |
-| [parse.go](../../../codegen/internal/webroute/parse.go) | `Route` |
+| [parse.go](../../../codegen/internal/webroute/parse.go) | `Route`、`HeaderBinding` |
 
 ### demo
 
@@ -629,7 +636,7 @@ DESIGN-TODO D20～D22 的生成器接入（维护者 2026-10-21 要求）。[add
 ### codegen/internal/webroute
 
 - [retirement_test.go](../../../codegen/internal/webroute/retirement_test.go)：`TestGenerateDirRetiresLastRouteWithoutRemovingManualFile`
-- [webroute_test.go](../../../codegen/internal/webroute/webroute_test.go)：`TestParseJSONRoute`、`TestParseRejectsInvalidHandler`、`TestGenerateRoutes`、`TestGenerateRejectsDuplicateRoute`、`TestGenerateRejectsMalformedPatternsWithoutChangingOutput`；其余 5 项见文件
+- [webroute_test.go](../../../codegen/internal/webroute/webroute_test.go)：`TestParseJSONRoute`、`TestParseRejectsInvalidHandler`、`TestGenerateRoutes`、`TestGenerateRejectsDuplicateRoute`、`TestGenerateRejectsMalformedPatternsWithoutChangingOutput`、`TestParseReadsHeaderBindingsAndCompression`、`TestGoldenRoutes`、`TestGeneratedRoutesRunAgainstTheRuntime`；其余 6 项见文件
 
 ### robot/action
 

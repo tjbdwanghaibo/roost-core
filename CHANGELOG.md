@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **DAO 生成器：字节切片字段生成整体读取 `Get<Field>All()`，返回副本**（给下游 ai-game-blackbox-server 从 cube 迁到 roost：`ResultJSON` / `RequestJSON` 这类整段存 JSON 的 `[]byte` 字段要整段 `json.Unmarshal`，原来只有按下标的 `Get<Field>(idx)` 与 `Range<Field>`）。`[]byte` / `[]uint8` 字段（DAO 与嵌套 struct）多一个 `Get<Field>All() []byte`，与整体写入 `Set<Field>All`（嵌套 struct 里是 `Set<Field>`）对称；返回 `append(nil, x...)` 副本，改返回值不改 DAO、绕不过脏标记与回滚，空值读 nil。已发布的 slice 方法不变；持久文档、提交记录、同步载荷里字段仍是 BSON binary（子类型 0），**存储与 sync 格式不变**，已有数据与 cube 迁移数据照常读。重新生成后已有工程只多出方法，无需改代码。[命令与标记参考 §4](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#生成物与读写约定) · [实现 2F](docs/framework/impl/12-codegen.md#2f-dao-字节切片整体读取与-webroute-选项)
+- **webroute：`//roost:web` 的 `headers=` 请求头绑定与 `compress=gzip`，`RawRequest` 带 `Query`**（同上，对齐下游 cube fork 的三项能力）：
+  - `headers=Header-Name:Field,...`（只用于 `body=json`）：JSON 解码之后生成 `request.Field = r.Header.Get("Header-Name")`；头名生成期规范化、不区分大小写；请求头优先于 JSON 体的同名字段，头缺失为空串，多值取第一个；字段须是 string（可为嵌入提升字段），类型不对在生成文件赋值行编译失败；没有 / 多个冒号、空项、非法头名、字段不是单个标识符、重复头或字段、`body=raw` 在生成期拒绝。
+  - `compress=gzip`：生成 `webroute.WriteCompressedResult`。成功响应经新的 `httpserver.JSONCompressed` 按 `Accept-Encoding` 协商（新的 `httpserver.AcceptsGzip`：`gzip` / `x-gzip` 看自身 `q`，未列出看 `*`，`q=0` 拒绝），编码后不少于 `webroute.CompressMinBytes`（1024）才压缩；不接受 gzip 的客户端照常拿明文；错误响应不压缩；全部带 `Vary: Accept-Encoding`。新增 `httpserver.AddVary`。
+  - `webroute.RawRequest` 新增 `Query url.Values`（查询参数的独立副本，多值保留）。
+  - 不写新选项的路由生成物与行为不变。用了 `compress=gzip` 的生成物调用新 API，发版时生成物最低 core 要升到本版本。[命令与标记参考 §11](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#11-webroute) · [实现 2F](docs/framework/impl/12-codegen.md#2f-dao-字节切片整体读取与-webroute-选项)
+
 ## [v1.31.2] - 2026-10-30
 
 补丁版：DataEngine 单条 Put 投影的 `$replaceWith` 包 `$literal`（以 `$` 开头的业务字符串原来会被当成字段路径 / 变量求值、静默改写，影响 v1.12.2～v1.31.1；**本版的主要原因，所有用 DataEngine 的工程都应升级**，已有数据的检查方法见下）、Mongo 部署只读检查工具 `cmd/mongocheck`、MongoDB 7.0.45 与 8.0.32 对照实测。配置、wire / 存储格式、生成器与模板不变，**无数据迁移，生成物最低 core 仍为 v1.31.0**。发布说明、实现与验收见 docs/release/v1.31.2-NOTES.md / -IMPLEMENTATION.md / -VALIDATION.md。

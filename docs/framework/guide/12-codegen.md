@@ -24,6 +24,10 @@ codegen/cmd/roost 是统一 CLI；内部生成器负责 DAO、Entity、Nest、Pr
 
 DAO setter 把修改登记到当前事务，RestorePersisted 严格校验当前 schema；Entity 生成 subjectPacker/PrepareViews 所需能力及注册；Nest marker 支持明确持久策略；ProtocolRegistry 区分 PB/Sync/Lockstep 并验证端点载荷类别；ServiceRPC 的传输和 Mod 装配分开生成。
 
+生成的读方法不交出可改的内部存储：DAO 的字节切片字段（`[]byte`，常用来整段存序列化好的 JSON）除按下标的 slice 方法外有整体读取 `Get<Field>All()`，返回副本，修改只能经 setter（才进脏标记与回滚）；存储与同步格式不因此变化（BSON binary）。
+
+WebRoute 的 `//roost:web` 除必填的 `method` / `path` / `body` 外有两个可选项：`headers=Header-Name:Field,...`（只用于 `body=json`，解码后把请求头赋给请求结构的 string 字段：头优先、缺失为空串、多值取第一个，坏写法在生成期拒绝）与 `compress=gzip`（成功响应按 `Accept-Encoding` 协商 gzip，不小于 1 KiB 才压缩，错误响应不压缩，均带 `Vary: Accept-Encoding`）；raw 路由的 `webroute.RawRequest` 带 `Query`。语法与逐条语义见[命令与标记参考 §11](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#11-webroute)。
+
 生成器不读取、不迁移旧写法（项目未上线，2026-10-13 起）：标记只认 `//roost:`（`//cube:` 让 generate 失败并点名文件）；roost.yaml 的 `versions.kit/skill/service/codegen`、旧 mod 名 `sync` / `room`、旧 feature 名 `replication-*` 与已删除的 `event` 在加载时点名拒绝；cfggen meta 只有 `globals`；tablegen `_manifest.json` 只读 v2；三仓合一的 import 改写工具已删除。拒绝都要说清原因和手工改法，不静默忽略。旧格式的停机块与 `deploy/k8s/` 顶层旧 base 按应用文件对待，sync 不改写也不删除。
 
 生成标记用于识别产物，不等于授权覆盖任意用户文件。项目生成的全阶段成功后才发布目标；失败保留可诊断错误且不能留下看似成功的半工程。重复生成应无漂移，根模板与 goldens、正式消费者需要同时验证。
