@@ -3,6 +3,7 @@ package roostcore_test
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -182,5 +183,30 @@ func TestGapmapWorkflowGroupsMatchScript(t *testing.T) {
 	}
 	if !hasFallback {
 		t.Error("gapmap_group_of has no `*)` fallback; packages outside the listed prefixes would never be sampled")
+	}
+}
+
+// TestReleaseScriptSelfTest 跑 scripts/release_test.sh：scripts/release.sh 的纯文本部分（版本号校验与比较、
+// CHANGELOG 归档、framework-release / 生成物最低 core / 两个工作流的改写）在 scripts/release-lib.sh 里，
+// 自检对着仓库真实文件改写一遍。版本号文件换了写法（比如 framework-compat 多了一处钉版本）时，
+// 这里先红，而不是等到发版那天 release.sh 半路停下。本机装了 shellcheck 时一并检查三个脚本。
+func TestReleaseScriptSelfTest(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not installed")
+	}
+	if out, err := exec.Command(bash, filepath.Join("scripts", "release_test.sh")).CombinedOutput(); err != nil {
+		t.Fatalf("scripts/release_test.sh: %v\n%s", err, out)
+	}
+	if _, err := exec.LookPath("shellcheck"); err != nil {
+		t.Log("shellcheck not installed; skipped")
+		return
+	}
+	scripts := []string{"release.sh", "release-lib.sh", "release_test.sh"}
+	for i, name := range scripts {
+		scripts[i] = filepath.Join("scripts", name)
+	}
+	if out, err := exec.Command("shellcheck", scripts...).CombinedOutput(); err != nil {
+		t.Errorf("shellcheck: %v\n%s", err, out)
 	}
 }
