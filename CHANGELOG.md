@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 行为收紧
+
+- **DAO 生成器：其余引用形状生成期拒绝（行为收紧：这些形状重新生成时报错）**（维护者 2026-10-30 决定 A）：生成的取值方法只给 `[]byte` 的 `Get<Field>All()` 与 map 的 `[]<基本类型>` 值收发副本，其余引用形状交出的值与 DAO 内部共用内存，调用方改它就绕过 setter（无脏位、不进 WAL 与同步、回滚覆盖不到）。现在 DAO 与嵌套 struct 里的这些形状在解析阶段报错：map 值是 map（`map[K]map[K2]V`）、指向非嵌套类型的指针（`map[K]*int64`、`*int64` 字段、`[]*int64`）、元素仍是引用的切片（`map[K][][]byte`、`map[K][]*T`、`[][]byte`、`[]map[K]V`）。报错点名类型、字段与 Go 类型，提示改用 `[]byte` / 基本类型切片 / 基本类型 / 嵌套类型指针（`*T`、`[]*T`、`map[K]*T`）。允许的形状生成代码不变；仓内全部 DAO 定义与下游迁移工程的定义都不受影响。已有这类定义的工程重新生成时报错，按提示改定义（线上未部署，不做兼容）。`//roost:redisdao` 不查。[命令与标记参考 §4](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#生成物与读写约定) · [实现 2F](docs/framework/impl/12-codegen.md#2f-dao-字节切片整体读取与-webroute-选项)
+
 ### 新增
 
 - **DAO 生成器：字节切片字段生成整体读取 `Get<Field>All()`，返回副本**（给下游 ai-game-blackbox-server 从 cube 迁到 roost：`ResultJSON` / `RequestJSON` 这类整段存 JSON 的 `[]byte` 字段要整段 `json.Unmarshal`，原来只有按下标的 `Get<Field>(idx)` 与 `Range<Field>`）。`[]byte` / `[]uint8` 字段（DAO 与嵌套 struct）多一个 `Get<Field>All() []byte`，与整体写入 `Set<Field>All`（嵌套 struct 里是 `Set<Field>`）对称；返回 `append(nil, x...)` 副本，改返回值不改 DAO、绕不过脏标记与回滚，空值读 nil。已发布的 slice 方法不变；持久文档、提交记录、同步载荷里字段仍是 BSON binary（子类型 0），**存储与 sync 格式不变**，已有数据与 cube 迁移数据照常读。重新生成后已有工程只多出方法，无需改代码。[命令与标记参考 §4](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#生成物与读写约定) · [实现 2F](docs/framework/impl/12-codegen.md#2f-dao-字节切片整体读取与-webroute-选项)
@@ -16,7 +20,7 @@
 
 ### 修复
 
-- **DAO 生成器：map 的切片值（`map[K][]byte` 等）原样交出与存下内部切片，调用方改它就绕过脏标记改了 DAO**：`Get<Field>(key)` 返回的切片、`Range<Field>` 回调拿到的值、`Set<Field>(key, val)` 之后调用方仍持有的入参，都与 DAO 内部共用底层数组；改它们不经 setter，没有脏位、不进 WAL 与同步、事务回滚覆盖不到，内存与已提交 / 已持久的内容从此不一致。`roost add saga -native` 生成的回执字段 `SagaReceipts map[string][]byte` 就是这种形状（框架经 `saga.StepReceipts` 只读，没有写入路径；业务直接调用生成的 `GetSagaReceipts` / `RangeSagaReceipts` 时不受保护）。现在 map 值是元素为基本类型的切片时（DAO 与嵌套 struct），`Get` / `Range` 交副本、`Set`（嵌套 struct 的整体 `Set<Field>(map)`）存副本，与 `Get<Field>All()` 同一规则；nil 与空切片的区别保留。方法签名、存储与 sync 格式不变，重新生成即可，不用改业务代码；代价是每次读 / 遍历一个值多一次分配。其余引用形状（值是 map、非嵌套指针、元素仍是引用的切片，`[][]T` / `*int64` 字段）仍不复制，见 [已知限制](docs/maintenance/KNOWN-LIMITS.md#生成器配置与工具)。[命令与标记参考 §4](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#生成物与读写约定) · [实现 2F](docs/framework/impl/12-codegen.md#2f-dao-字节切片整体读取与-webroute-选项)
+- **DAO 生成器：map 的切片值（`map[K][]byte` 等）原样交出与存下内部切片，调用方改它就绕过脏标记改了 DAO**：`Get<Field>(key)` 返回的切片、`Range<Field>` 回调拿到的值、`Set<Field>(key, val)` 之后调用方仍持有的入参，都与 DAO 内部共用底层数组；改它们不经 setter，没有脏位、不进 WAL 与同步、事务回滚覆盖不到，内存与已提交 / 已持久的内容从此不一致。`roost add saga -native` 生成的回执字段 `SagaReceipts map[string][]byte` 就是这种形状（框架经 `saga.StepReceipts` 只读，没有写入路径；业务直接调用生成的 `GetSagaReceipts` / `RangeSagaReceipts` 时不受保护）。现在 map 值是元素为基本类型的切片时（DAO 与嵌套 struct），`Get` / `Range` 交副本、`Set`（嵌套 struct 的整体 `Set<Field>(map)`）存副本，与 `Get<Field>All()` 同一规则；nil 与空切片的区别保留。方法签名、存储与 sync 格式不变，重新生成即可，不用改业务代码；代价是每次读 / 遍历一个值多一次分配。其余引用形状改为生成期拒绝，见下一条。[命令与标记参考 §4](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#生成物与读写约定) · [实现 2F](docs/framework/impl/12-codegen.md#2f-dao-字节切片整体读取与-webroute-选项)
 
 ## [v1.31.2] - 2026-10-30
 

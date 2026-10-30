@@ -1,6 +1,7 @@
 package dao
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -346,4 +347,103 @@ func mustAbs(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return abs
+}
+
+// 生成的取值方法不复制引用（只有 []byte 的 GetXAll 与 map 的 []<基本类型> 值收发副本），拿到的值与 DAO 内部共用内存，
+// 改它就绕过 setter：没有脏标记、不进 WAL 与同步、回滚覆盖不到。维护者 2026-10-30 决定这些形状在生成期拒绝（方案 A），
+// 报错点名类型、字段与建议写法。走完整的 Run：修前这些定义都能生成成功。
+func TestGenerationRejectsReferenceShapesTheAccessorsWouldShare(t *testing.T) {
+	cases := []struct {
+		name   string
+		field  string // HeroDao 里的一行
+		nested string // Holder 里的一行（非空时 HeroDao 带 Holder *Holder）
+		want   string
+	}{
+		{name: "map of maps", field: "Deep map[int32]map[int32]int64", want: "dao HeroDao field Deep (map[int32]map[int32]int64): the map's values are maps"},
+		{name: "map of basic pointers", field: "Best map[int32]*int64", want: "dao HeroDao field Best (map[int32]*int64): the map's values are pointers to int64, which is not a nested struct"},
+		{name: "map of pointers to a non-struct type", field: "Ranks map[int32]*Rank", want: "dao HeroDao field Ranks (map[int32]*Rank): the map's values are pointers to Rank, which is not a nested struct"},
+		{name: "map of slices of slices", field: "Blobs map[int32][][]byte", want: "dao HeroDao field Blobs (map[int32][][]byte): the map's values are slices whose elements are []byte"},
+		{name: "map of slices of nested pointers", field: "Packs map[int32][]*Holder", want: "dao HeroDao field Packs (map[int32][]*Holder): the map's values are slices whose elements are *Holder"},
+		{name: "slice of slices", field: "Chunks [][]byte", want: "dao HeroDao field Chunks ([][]byte): the slice's elements are []byte"},
+		{name: "slice of maps", field: "Pages []map[int32]int64", want: "dao HeroDao field Pages ([]map[int32]int64): the slice's elements are map[int32]int64"},
+		{name: "slice of basic pointers", field: "Scores []*int64", want: "dao HeroDao field Scores ([]*int64): the slice's elements are pointers to int64, which is not a nested struct"},
+		{name: "basic pointer field", field: "Gold *int64", want: "dao HeroDao field Gold (*int64): a pointer to int64"},
+		{name: "pointer to a non-struct type", field: "Top *Rank", want: "dao HeroDao field Top (*Rank): a pointer to Rank, which is not a nested struct"},
+		{name: "shape inside a nested struct", nested: "Chunks [][]byte", want: "nested struct Holder field Chunks ([][]byte): the slice's elements are []byte"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			daoField, holderField := tc.field, "Level int32"
+			if tc.nested != "" {
+				daoField, holderField = "", tc.nested
+			}
+			source := `package def
+
+type Rank int64
+
+//roost:dao coll=heroes db=game
+type HeroDao struct {
+	Name   string
+	Holder *Holder
+	` + daoField + `
+}
+
+type Holder struct {
+	` + holderField + `
+}
+`
+			defDir := t.TempDir()
+			writeDef(t, defDir, source)
+			err := Run([]string{"-def", defDir, "-out", t.TempDir(), "-pkg", "out"}, io.Discard)
+			if err == nil {
+				t.Fatalf("generation accepted a reference shape whose accessors share the DAO's memory; want an error containing %q", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error does not name the type, field and shape:\n got: %v\nwant: %q", err, tc.want)
+			}
+			if !strings.Contains(err.Error(), "use []byte, a slice of a basic type, a basic type, or a pointer to a nested struct") {
+				t.Fatalf("error does not suggest the supported shapes: %v", err)
+			}
+		})
+	}
+}
+
+// 允许的形状照常生成：基本类型、[]byte、[]<基本类型>、map[K]<基本类型>、map[K][]<基本类型>（收发副本），以及嵌套类型
+// 指针（*T、[]*T、map[K]*T，改动经嵌套类型自己的 setter 标脏），在 DAO 与嵌套类型里都一样。
+func TestGenerationAcceptsTheShapesTheAccessorsCopyOrOwn(t *testing.T) {
+	out := t.TempDir()
+	generateDefs(t, out, `package def
+
+//roost:dao coll=heroes db=game
+type HeroDao struct {
+	Name     string
+	Blob     []byte
+	Ids      []int64
+	Counts   map[int32]int64
+	Receipts map[string][]byte
+	Lists    map[int32][]int64
+	Main     *Gear
+	Bag      []*Gear
+	Slots    map[int32]*Gear
+}
+
+type Gear struct {
+	Level  int32
+	Raw    []byte
+	Tags   []string
+	Marks  map[int32][]byte
+	Socket *Gem
+	Gems   []*Gem
+	ByID   map[int64]*Gem
+}
+
+type Gem struct {
+	Kind int32
+}
+`)
+	for _, name := range []string{"gen_hero_dao.go", "gen_gear_nested.go", "gen_gem_nested.go"} {
+		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
+			t.Fatalf("allowed shapes did not generate %s: %v", name, err)
+		}
+	}
 }

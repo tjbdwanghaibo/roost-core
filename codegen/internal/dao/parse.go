@@ -104,7 +104,7 @@ func (f FieldDef) IsBytes() bool {
 //
 // 只覆盖“一层切片、元素是基本类型”：浅拷贝就是完整副本。值是基本类型（按值传递）或嵌套类型指针（改动经嵌套类型自己
 // 的 setter 标脏）的 map 不需要；其余引用形状（值是 map、指向非嵌套类型的指针、元素仍是引用的切片）浅拷贝不够，
-// 见 docs/maintenance/KNOWN-LIMITS.md。
+// 由 validateReferenceShapes 在生成期拒绝。
 func (f FieldDef) CopiesMapValue() bool {
 	if f.Kind != KindMap || f.IsPtr {
 		return false
@@ -167,7 +167,83 @@ func parseDefDir(dir string) (*Definitions, error) {
 		}
 	}
 
+	// 全部文件解析完再查：“是不是嵌套类型”以最终的嵌套类型集合为准，与生成时 isNestedType 看到的一致。
+	if err := validateReferenceShapes(defs); err != nil {
+		return nil, err
+	}
 	return defs, nil
+}
+
+// referenceShapeAdvice 是被拒形状统一给出的改法：生成的取值方法对这些写法交出的值要么是值本身、要么是副本、要么是
+// 改动经嵌套类型自己 setter 标脏的嵌套类型指针。
+const referenceShapeAdvice = "use []byte, a slice of a basic type, a basic type, or a pointer to a nested struct (*T, []*T, map[K]*T); " +
+	"the generated accessors hand such a value out without copying it, so a caller changing it would change the DAO behind its setters " +
+	"(no dirty mark, no WAL or sync, not undone by a rollback)"
+
+// validateReferenceShapes 在生成期拒绝取值方法会与调用方共用内存的引用形状（维护者 2026-10-30 决定 A）。生成的 Get / Range
+// 原样交出内部的值、Set / Add 原样存下调用方的值，只有 []byte 的 GetXAll 与 map 的 []<基本类型> 值收发副本（一层切片、
+// 元素是基本类型，浅拷贝就是完整副本）；嵌套类型指针的改动经嵌套类型自己的 setter 标脏。其余引用形状里调用方改手里的值就
+// 绕过 setter 改了 DAO，所以一律报错，不生成深拷贝。
+//
+// 只查 Mongo DAO（含 nocoll）与它们引用的嵌套类型：Redis DAO 按整个值读写，没有字段 setter。判定按语法：命名类型的底层
+// 是切片 / map 时认不出（与生成器其余部分一样，只认识写在定义里的形状）。
+func validateReferenceShapes(defs *Definitions) error {
+	for _, dao := range defs.Daos {
+		for _, field := range dao.Fields {
+			if problem := referenceShapeProblem(defs, field); problem != "" {
+				return fmt.Errorf("dao %s field %s (%s): %s; %s", dao.Name, field.Name, field.TypeStr, problem, referenceShapeAdvice)
+			}
+		}
+	}
+	for _, nested := range defs.Nested {
+		for _, field := range nested.Fields {
+			if problem := referenceShapeProblem(defs, field); problem != "" {
+				return fmt.Errorf("nested struct %s field %s (%s): %s; %s", nested.Name, field.Name, field.TypeStr, problem, referenceShapeAdvice)
+			}
+		}
+	}
+	return nil
+}
+
+// referenceShapeProblem 说明字段为什么是不允许的引用形状，允许时返回空串。允许：基本类型；嵌套类型值与嵌套类型指针；
+// 元素是基本类型或嵌套类型（指针）的切片；值是基本类型、嵌套类型（指针）或基本类型切片的 map。
+func referenceShapeProblem(defs *Definitions, f FieldDef) string {
+	switch f.Kind {
+	case KindBasic:
+		if f.IsPtr {
+			return "a pointer to " + stripPtr(f.TypeStr) + " (Get hands out the DAO's own pointer and Set compares pointers, not values); store the value itself"
+		}
+	case KindStruct:
+		if f.IsPtr && !isNestedType(defs, f.TypeStr) {
+			return "a pointer to " + stripPtr(f.TypeStr) + ", which is not a nested struct of these definitions"
+		}
+	case KindSlice:
+		if f.IsPtr && !isNestedType(defs, f.SliceElem) {
+			return "the slice's elements are pointers to " + f.SliceElem + ", which is not a nested struct of these definitions"
+		}
+		if !f.IsPtr && isReferenceTypeExpr(f.SliceElem) {
+			return "the slice's elements are " + f.SliceElem + ", themselves references that Get / Range / Add share with the caller"
+		}
+	case KindMap:
+		if f.IsPtr && !isNestedType(defs, f.MapVal) {
+			return "the map's values are pointers to " + f.MapVal + ", which is not a nested struct of these definitions"
+		}
+		if f.IsPtr {
+			return ""
+		}
+		if strings.HasPrefix(f.MapVal, "map[") {
+			return "the map's values are maps that Get / Range / Set share with the caller"
+		}
+		if elem, ok := strings.CutPrefix(f.MapVal, "[]"); ok && !f.CopiesMapValue() {
+			return "the map's values are slices whose elements are " + elem + ", so a copy of the slice still shares them"
+		}
+	}
+	return ""
+}
+
+// isReferenceTypeExpr 报告 exprString 写出的类型是切片、map 或指针。定长数组按值复制，不算。
+func isReferenceTypeExpr(typeStr string) bool {
+	return strings.HasPrefix(typeStr, "[]") || strings.HasPrefix(typeStr, "map[") || strings.HasPrefix(typeStr, "*")
 }
 
 func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {

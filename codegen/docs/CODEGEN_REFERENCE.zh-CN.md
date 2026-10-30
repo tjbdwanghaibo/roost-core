@@ -473,9 +473,22 @@ map 的值是元素为基本类型的切片（`map[K][]byte`、`map[K][]int64` �
 就是这种）时，同一规则：`Get<Field>(key)` 返回值的副本，`Range<Field>` 交给回调的每个值都是副本，`Set<Field>(key, val)` 存入参的副本
 （嵌套 struct 的 `Set<Field>(map)` 存每个值的副本）。调用方改自己手里的切片不会改到 DAO；副本保留 nil 与空切片的区别（`nil` 读回 `nil`，
 `[]byte{}` 读回非 nil 的空切片）。代价是每次读 / 遍历一个值多一次分配。值是基本类型或嵌套类型指针（`map[K]*Gem`，改动经嵌套类型自己的
-setter 标脏）的 map 不复制。其余引用形状——值是 map、指向非嵌套类型的指针（`map[K]*int64`）、元素仍是引用的切片（`map[K][][]byte`），
-以及 `[][]byte` 这类 slice 字段、`*int64` 这类指针字段——生成器照常生成但**不复制**，取得的值与 DAO 内部共用内存，不要修改，
-见 [已知限制](../../docs/maintenance/KNOWN-LIMITS.md#生成器配置与工具)。
+setter 标脏）的 map 不复制。
+
+**允许的字段形状**（DAO 与嵌套 struct 相同，`//roost:redisdao` 整值读写、不在此列）：基本类型；嵌套 struct 与嵌套类型指针（`*T`、`[]*T`、
+`map[K]*T`，`T` 是定义里能生成嵌套代码的 struct）；元素是基本类型的 slice（`[]byte`、`[]int64`、`[]string`）；值是基本类型或元素为基本类型的
+slice 的 map（`map[K]int64`、`map[K][]byte`）。其余引用形状生成的取值方法会把 DAO 内部的内存交给调用方、调用方改它就绕过 setter，
+**生成期拒绝**（维护者 2026-10-30 决定），报错点名类型、字段与写法，并提示改用 `[]byte` / 基本类型切片 / 基本类型 / 嵌套类型指针：
+
+| 被拒形状 | 例 | 改法举例 |
+| --- | --- | --- |
+| map 的值是 map | `map[K]map[K2]V` | 合成复合键的 `map[K]V`，或值改成嵌套类型指针 `map[K]*T`（`T` 里放内层 map） |
+| map 的值是指向非嵌套类型的指针 | `map[K]*int64`、`map[K]*[]byte` | 存值本身 `map[K]int64` |
+| map 的值是元素仍为引用的 slice | `map[K][][]byte`、`map[K][]*T` | `map[K][]byte`（整段编码）或 `map[K]*T` |
+| slice 字段的元素是引用 | `[][]byte`、`[]map[K]V`、`[]*int64` | `[]byte`、`[]<基本类型>` 或 `[]*T` |
+| 基本类型 / 非嵌套类型的指针字段 | `*int64`、`*Rank`（`type Rank int64`） | `int64` |
+
+判定按定义里写出的语法：底层是 slice / map 的命名类型（`type Tags []string` 再写 `map[K]Tags`）认不出，与生成器其余部分一样不支持。
 
 生成器同时产出字段 mask、undo、事务内 `PersistChange`、字段级 Patch、BSON marshal/unmarshal、`MutationParticipant`、`RestorePersisted`（只接受 `schema=` 声明的当前版本，不做迁移；改形状按[schema 变更操作手册](../../docs/framework/SCHEMA-MIGRATION.md)离线转换）和 `DirtyTracker()`。三件要点：
 
