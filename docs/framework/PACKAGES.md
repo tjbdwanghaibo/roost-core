@@ -5,13 +5,14 @@
 目录已按 [分类方案](PACKAGE-REORGANIZATION.md)迁到 Framework、Infra、Gameplay、Service 与 Wiring。领域实现统一在 service；wiring 负责配置与启动接线，不保留旧 kit 或领域 alias。Gate 的实现进度见 [Gate 方案](GATEWAY-IMPLEMENTATION.md)。
 
 <details>
-<summary>展开178个包目录的职责映射</summary>
+<summary>展开179个包目录的职责映射</summary>
 
 | 包路径 | 主说明 | 实现文件 | 测试文件 |
 | --- | --- | ---: | ---: |
 | [.](../..) | [公共基础设施](impl/14-foundation.md) | 0 | 11 |
 | [client/wire](../../client/wire) | [核心：Sync、Lockstep 与客户端](impl/04-sync.md) | 1 | 2 |
 | [cmd/glsvet](../../cmd/glsvet) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 4 | 6 |
+| [cmd/mongocheck](../../cmd/mongocheck) | [其他包与公共基础设施](impl/14-foundation.md) | 2 | 1 |
 | [cmd/walinspect](../../cmd/walinspect) | [其他包与公共基础设施](impl/14-foundation.md) | 1 | 0 |
 | [codegen/cmd/attribute](../../codegen/cmd/attribute) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 1 | 0 |
 | [codegen/cmd/cfggen](../../codegen/cmd/cfggen) | [次核心：Codegen 与工程工具](impl/12-codegen.md) | 1 | 0 |

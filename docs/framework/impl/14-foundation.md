@@ -266,6 +266,7 @@
 
 这些目录不是生产模块能力承诺；示例展示具体接线，性能脚本提供专用负载。包索引包含它们，避免用目录数量冒充生产模块数量。
 
+- [cmd/mongocheck/main.go](../../../cmd/mongocheck/main.go)、[check.go](../../../cmd/mongocheck/check.go)：Mongo 部署只读检查（判定规则见 [DataEngine 设计篇“最低要求”](../guide/03-dataengine.md#dataengine-对-mongodb-的最低要求)）
 - [cmd/walinspect/main.go](../../../cmd/walinspect/main.go)
 - [examples/configgen/cfg/cfg_gen.go](../../../examples/configgen/cfg/cfg_gen.go)
 - [examples/configgen/main.go](../../../examples/configgen/main.go)

@@ -65,11 +65,38 @@ Redis/Mongo 写出后断线不意味着未执行。驱动只在证明命令未�
 
 ### DataEngine 对 MongoDB 的最低要求
 
-框架不在启动时检查服务端版本与参数；下面三条是部署要求，每条写明代码里依赖它的地方。
+框架启动时只检查拓扑与会话（`ValidateDeployment`，见第二条），不检查服务端版本与参数（维护者 2026-10-30 决定不在启动时强制版本检查，改为提供只读检查工具，见本节末“部署前检查”）；下面三条是部署要求，每条写明代码里依赖它的地方。
 
-- **MongoDB 5.0 及以上**。代码用到的特性最晚到 4.4：Go 驱动 v2.6.0 本身要求 4.2（驱动 `topology.MinSupportedMongoDBVersion`）；Put 单条投影是带 `$replaceWith` 的管道更新（4.2 起）；新建实体的首个提交通常同时 Put 多个 DAO 集合，走事务，在事务里第一次写某个集合时隐式建集合（4.4 起允许）；启动检查发 `hello` 命令（[driver/client.go](../../../infra/storage/mongo/driver/client.go) `ValidateDeployment`，5.0 引入，4.4.2 等补丁版回补）。在此之上部署下限定为 5.0（4.4 已于 2024-02 结束官方支持），仓库的真实依赖验收用 mongod 8.0。只在 MongoDB 上验证过，兼容 MongoDB API 的托管服务（如 AWS DocumentDB）不在验证范围内。
+- **MongoDB 5.0 及以上**。代码用到的特性最晚到 4.4：Go 驱动 v2.6.0 本身要求 4.2（驱动 `topology.MinSupportedMongoDBVersion`）；Put 单条投影是带 `$replaceWith` 的管道更新（4.2 起）；新建实体的首个提交通常同时 Put 多个 DAO 集合，走事务，在事务里第一次写某个集合时隐式建集合（4.4 起允许）；启动检查发 `hello` 命令（[driver/client.go](../../../infra/storage/mongo/driver/client.go) `ValidateDeployment`，5.0 引入，4.4.2 等补丁版回补）。在此之上部署下限定为 5.0（4.4 已于 2024-02 结束官方支持）。仓库的真实依赖验收用 mongod 8.0，7.0 另有一次实测（见下）。只在 MongoDB 上验证过，兼容 MongoDB API 的托管服务（如 AWS DocumentDB）不在验证范围内。
 - **副本集**，单节点副本集即可。多 mutation 记录、批量投影、带回执 / effect / Remote 写的记录都在 Mongo 事务里写（`MongoStore.Project` / `ProjectBatch` → `StartSession` + `WithTransaction`，事务读关注 snapshot、写关注 majority + journal，[driver/client.go](../../../infra/storage/mongo/driver/client.go) `StartSession`），事务只在副本集或分片集群上可用。`mongo.require_replica_set`（缺省 `true`，[wiring/mongo/mongo_mod.go](../../../wiring/mongo/mongo_mod.go)）为 `true` 时 Mongo Mod 启动经 `ValidateDeployment` 拒绝单机（`hello` 没有 `setName` 且不是 mongos）；无论取值都要求服务端支持会话（`logicalSessionTimeoutMinutes`）。装配 DataEngine 的进程保持 `true`：DataEngine 不另外检查这个配置，写成 `false` 又连上单机时，事务投影在运行期失败并一直重试。
 - **`transactionLifetimeLimitSeconds=20`**，写进 mongod.conf（`setParameter:` 下 `transactionLifetimeLimitSeconds: 20`）或启动参数 `--setParameter transactionLifetimeLimitSeconds=20`。被 kill -9 的进程留下的投影事务持锁到这个时限（服务端缺省 60s），服务端最晚在 1.5 倍时回收，其间重启排空写同一文档一直写冲突；`dataengine.startup_timeout` 缺省 60s 就是按 20s（最晚 30s 回收）加 30s 余量算的（[runtime.go](../../../framework/dataengine/engine/runtime.go) `drainAtStartup`）。DataEngine 不探测这个参数；saga 参与方启动时只读探测，超过步骤预算窗口时告警（[wiring/saga/steps.go](../../../wiring/saga/steps.go) `probeTransactionLifetime`），也不拒绝启动。完整说明见 [SAGA.md](../SAGA.md)“进程被强杀时遗留的 Mongo 事务”。
+
+**MongoDB 7.0 实测（2026-10-30，macOS arm64）**：官方 tarball 7.0.45（FCV 7.0）与 brew 8.0.32（FCV 8.0）各起一个私有单节点副本集（`--setParameter transactionLifetimeLimitSeconds=20`，WiredTiger），配私有三节点 NATS、Redis 与 toxiproxy，跑同一组真实依赖用例（`-tags integration -race`）：`framework/dataengine/...`、`infra/storage/mongo/...`、`wiring/mongo`（含 R10 回归 `TestRealMongoPutStoresDollarStringsVerbatim`、遗留事务排空 `TestRealMongoStartupDrainOutlastsALeftoverTransaction`、单机拒绝 `TestRealMongoValidateDeploymentRefusesAStandalone`——7.0 一轮由 7.0 的 mongod 起这个单机——以及经 toxiproxy 的提交超时 / EndSession 用例），`framework/saga`（冷副本、步骤收件箱、参与方 kill -9 等），`wiring/dataengine`、`wiring/sidmerge`、`gameplay/movement`、`framework/remoteentity`，以及 `scripts/test-dataengine-generated.sh`（正式生成工程、三次独立进程）。两个版本结果相同（含子用例 1376 项通过、48 项跳过、0 失败，逐项一致）、R10 回归去掉 `$literal` 后两边同样变红，**没有发现 7.0 不支持的特性**。两边跳过的用例相同：要显式打开的性能探针与大积压恢复、子进程角色、需要 Redis Cluster 或 `mirror-local.sh` 的用例；停共享环境 Mongo 主节点 / NATS 的三个故障用例（`wiring/dataengine/failover_integration_test.go`）没有跑。命令与数字见 v1.31.2 发布验收（docs/release）。5.0、6.0 没有实测，4.4 只按代码与官方文档判断。
+
+**部署前检查（`cmd/mongocheck`）**：只读核对一个部署是否满足上面的要求，给运维在生产 / staging 上跑。连接串只从环境变量读（缺省 `ROOST_MONGO_URI`，`-uri-env NAME` 改名），不接受命令行参数；输出与错误都不含连接串、主机名或账号（驱动错误只输出服务端错误名与错误码，其余按类别描述）。只发 `hello`、`buildInfo`、`getParameter`、`serverStatus` 四个只读命令；后两个需要 `clusterMonitor` 角色，权限不够时对应项是 WARN 并说明要什么权限。不需要 mongosh。
+
+```bash
+# 有 Go 时（本仓库，或任意引用了 roost-core 的工程里）：
+ROOST_MONGO_URI='mongodb://<账号>:<口令>@<主机>:27017/?replicaSet=rs0&authSource=admin' \
+  go run github.com/tjbdwanghaibo/roost-core/cmd/mongocheck
+# 目标机器没有 Go：在本仓库交叉编译后拷过去（静态二进制，零运行期依赖）
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o mongocheck ./cmd/mongocheck
+```
+
+口令放进环境变量时注意 shell 历史（例如从密钥文件 `export ROOST_MONGO_URI="$(cat …)"`）。
+
+| 检查项 | PASS | WARN | FAIL |
+| --- | --- | --- | --- |
+| `server-version`（`buildInfo`） | ≥ 5.0 | 4.4.x（满足代码硬底，已停止官方支持）、版本串无法解析 | < 4.4，或 `buildInfo` 失败 |
+| `feature-compatibility-version`（`getParameter`） | ≥ 5.0 且与服务端主次版本一致 | 4.4、与服务端版本不一致（升级没做完）、读不到（权限不够 / 经 mongos） | < 4.4（事务里不能隐式建集合） |
+| `topology`（`hello`，与 `ValidateDeployment` 同一规则） | 副本集（有 `setName`） | mongos：框架启动检查接受，但仓库没在分片集群上验证过 | 单机（输出改单节点副本集的步骤） |
+| `logical-sessions`（`hello.logicalSessionTimeoutMinutes`） | 有 | — | 没有（`ValidateDeployment` 拒绝启动） |
+| `transaction-lifetime-limit`（`getParameter`，只读到所连成员） | = 20 | < 20（不是验证过的取值）、读不到 | > 20（服务端缺省 60 时遗留事务最晚 90s 回收，超过 `dataengine.startup_timeout` 缺省 60s 所按的 30s） |
+| `storage-engine`（`serverStatus.storageEngine`） | `wiredTiger` | 其他引擎、读不到、mongos 不报告 | `persistent: false`（DataEngine 的写关注带 `j: true`） |
+
+退出码：0 没有 FAIL（可以有 WARN），1 至少一项 FAIL，2 用法错误或连不上（没有完成检查）。写关注 / 读关注的集群缺省值不检查：DataEngine 在客户端显式设定（majority + journal；读 majority、事务内 snapshot，[driver/client.go](../../../infra/storage/mongo/driver/client.go) `NewClient` / `StartSession`），不依赖服务端缺省。判定规则在 [cmd/mongocheck/check.go](../../../cmd/mongocheck/check.go) `Evaluate`，每条注释写明依据。
+
+**单机改单节点副本集要点**（已有数据原地保留）：mongod.conf 加 `replication.replSetName: rs0`（同时按第三条写 `setParameter.transactionLifetimeLimitSeconds: 20`），重启 mongod；用 mongosh 执行一次 `rs.initiate({_id: "rs0", members: [{_id: 0, host: "<应用可达的主机名>:27017"}]})`（`host` 要写应用连得到的名字：驱动按它发现主节点，写 `localhost` 时别的机器连不上）；应用连接串加 `replicaSet=rs0`。开了认证（`security.authorization: enabled`）时副本集还要求成员间认证，单节点也要配 `security.keyFile`。改完再跑一次 `cmd/mongocheck`。
 
 ### 单实体运维命令（D16）
 
