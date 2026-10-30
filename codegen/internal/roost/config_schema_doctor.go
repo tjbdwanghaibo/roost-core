@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/internal/configfile"
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 	"gopkg.in/yaml.v3"
 )
@@ -256,7 +257,7 @@ func checkConfigDeclarations(root string, m Manifest, process serviceSchemaSourc
 		}
 		var failures, warnings, checked []string
 		for _, file := range serviceConfigFiles(service) {
-			raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file.rel)))
+			raw, layers, err := readServiceConfig(filepath.Join(root, filepath.FromSlash(file.rel)), file.secret)
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
@@ -271,7 +272,7 @@ func checkConfigDeclarations(root string, m Manifest, process serviceSchemaSourc
 			}
 			checked = append(checked, file.rel)
 			for _, problem := range bad {
-				failures = append(failures, file.rel+": "+problem)
+				failures = append(failures, file.rel+": "+layers.Describe(problem))
 			}
 			if len(unread) > 0 {
 				warnings = append(warnings, fmt.Sprintf("%s: no mod of %s declares %s (another service's keys; keys this service's own code reads are declared by the service, see app.ModConfigSchema)", file.rel, service, strings.Join(unread, ", ")))
@@ -316,7 +317,7 @@ func checkConfigSections(root string, m Manifest) []CheckItem {
 		item := CheckItem{Name: "config-sections:" + service, Status: StatusOK}
 		sections := serviceConfigSections(m, service)
 		singleton := serviceSingletonEnabled(m, service)
-		var problems []string
+		var problems, layered []string
 		checked := 0
 		for _, file := range serviceConfigFiles(service) {
 			raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(file.rel)))
@@ -326,6 +327,14 @@ func checkConfigSections(root string, m Manifest) []CheckItem {
 			if err != nil {
 				problems = append(problems, file.rel+": "+err.Error())
 				continue
+			}
+			// 入口用 config.includes 叠加时，配置段散在多个文件里，这里按单个文件的文本找缺段、给追加文本的做法不成立：
+			// 不查，在结论里写明（键仍由 config-schema 按叠加结果检查）。
+			if !file.secret {
+				if _, layers, err := configfile.ReadYAML(filepath.Join(root, filepath.FromSlash(file.rel))); err == nil && layers.Layered() {
+					layered = append(layered, file.rel)
+					continue
+				}
 			}
 			body, _ := lfText(raw)
 			where := file.rel
@@ -365,10 +374,13 @@ func checkConfigSections(root string, m Manifest) []CheckItem {
 		switch {
 		case len(problems) > 0:
 			item.Status, item.Detail = StatusWarn, strings.Join(problems, "\n")
-		case checked == 0:
+		case checked == 0 && len(layered) == 0:
 			item.Detail = "no config file"
 		default:
 			item.Detail = fmt.Sprintf("%d file(s) have a block for every mod of %s", checked, service)
+		}
+		if len(layered) > 0 {
+			item.Detail += fmt.Sprintf("; not checked (layered with %s, keys are checked on the layered result by config-schema): %s", configfile.IncludesKey, strings.Join(layered, ", "))
 		}
 		items = append(items, item)
 	}
@@ -381,10 +393,19 @@ func checkConfigSections(root string, m Manifest) []CheckItem {
 // process 失败（工程编译不过等）时照样报出静态发现，并写明业务声明没读到。业务独有段（框架没有的顶层段）里的
 // 拼写只有读到进程声明才查得出，那是 doctor 的范围。
 func checkConfigFileDeclarations(path string, production bool, m Manifest, service string, process serviceSchemaSource) ([]string, error) {
-	raw, err := os.ReadFile(path)
+	// 入口写了 config.includes 时检查叠加结果（与 App 启动时同一条规则），每条问题点名键来自哪个文件。
+	raw, layers, err := configfile.ReadYAML(path)
 	if err != nil {
 		return nil, err
 	}
+	bad, err := checkConfigFileText(raw, production, m, service, process)
+	for i, problem := range bad {
+		bad[i] = layers.Describe(problem)
+	}
+	return bad, err
+}
+
+func checkConfigFileText(raw []byte, production bool, m Manifest, service string, process serviceSchemaSource) ([]string, error) {
 	schema, err := serviceConfigSchema(m, service)
 	if err != nil {
 		return nil, err

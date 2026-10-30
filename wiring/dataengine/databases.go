@@ -51,11 +51,10 @@ func LoadDatabaseMap(cfg *viper.Viper, resolver coredata.DatabaseResolver) (*cor
 }
 
 // LoadDatabaseMapFile 读一个服务配置文件（例如 configs/config.game.yaml）里的映射；sid 不为 0 时覆盖文件里的 sid
-// （与进程 --sid 一致）。
+// （与进程 --sid 一致）。入口写了 config.includes 时按 App 启动时的同一条规则叠加（app.LoadConfigFile）。
 func LoadDatabaseMapFile(path string, sid int32, resolver coredata.DatabaseResolver) (*coredata.DatabaseMap, error) {
-	cfg := viper.New()
-	cfg.SetConfigFile(path)
-	if err := cfg.ReadInConfig(); err != nil {
+	cfg, _, err := app.LoadConfigFile(path)
+	if err != nil {
 		return nil, fmt.Errorf("dataengine databases: read %s: %w", path, err)
 	}
 	if sid != 0 {

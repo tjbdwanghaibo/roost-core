@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/internal/configfile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -946,7 +947,7 @@ func checkPlayerTCPWorkflow(root string, manifest Manifest) ([]CheckItem, error)
 	configOK := false
 	if accessOK {
 		configPath := filepath.Join(root, "configs", "service", "config."+access.Service+".yaml")
-		raw, readErr := os.ReadFile(configPath)
+		raw, _, readErr := readServiceConfig(configPath, false)
 		if readErr != nil && !os.IsNotExist(readErr) {
 			return nil, readErr
 		}
@@ -1052,7 +1053,7 @@ func anyFileContains(root, pattern, needle string) (bool, error) {
 }
 
 func CheckConfig(path string, production bool) error {
-	raw, err := os.ReadFile(path)
+	raw, _, err := readServiceConfig(path, false)
 	if err != nil {
 		return err
 	}
@@ -1073,6 +1074,18 @@ func CheckConfig(path string, production bool) error {
 		}
 	}
 	return nil
+}
+
+// readServiceConfig 读一份服务配置给 doctor / config check 检查：入口写了 config.includes 时返回与 App 启动时相同的
+// 叠加结果（规则只在 internal/configfile 一处），否则原样返回文件内容。k8s Secret 示例（secret 为 true）里内嵌的
+// config.yaml 没有所在目录，原样读，不解析 includes。文件不存在时返回 os.ReadFile 的错误（errors.Is(err, os.ErrNotExist)）。
+// 返回的 Layers 给问题补来源文件（Layers.Describe）。
+func readServiceConfig(path string, secret bool) ([]byte, configfile.Layers, error) {
+	if secret {
+		raw, err := os.ReadFile(path)
+		return raw, configfile.Layers{Entry: path}, err
+	}
+	return configfile.ReadYAML(path)
 }
 
 func findForbiddenProductionScalar(node *yaml.Node) (string, string) {

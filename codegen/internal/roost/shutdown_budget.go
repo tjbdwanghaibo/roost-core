@@ -179,7 +179,7 @@ func configuredShutdownTotal(root, service string) (time.Duration, string, bool)
 	var from string
 	found := false
 	for _, target := range shutdownConfigTargets(service) {
-		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(target.rel)))
+		raw, _, err := readServiceConfig(filepath.Join(root, filepath.FromSlash(target.rel)), target.indent != "")
 		if err != nil {
 			continue
 		}
@@ -463,7 +463,7 @@ func checkShutdownBudgets(root string, m Manifest) []CheckItem {
 			// invalid duration in it is a FAIL. The examples are deployed as
 			// copies, so a problem in one is a WARN naming that file.
 			dev := index == 0
-			raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(target.rel)))
+			raw, _, err := readServiceConfig(filepath.Join(root, filepath.FromSlash(target.rel)), target.indent != "")
 			if err != nil {
 				if dev {
 					break // the config check already reports a missing file

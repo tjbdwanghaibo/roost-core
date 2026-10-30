@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -277,7 +278,7 @@ func layerViolation(layer, name string) string {
 		}
 		return "装配层不得 import " + target + " 层"
 	case "codegen":
-		if target == "demo" || name == sharedConfigRules || name == sharedConfigSchema {
+		if target == "demo" || name == sharedConfigRules || name == sharedConfigSchema || name == sharedConfigFile {
 			return ""
 		}
 		return "生成器保持独立于它生成的运行时，不得 import " + target + " 层"
@@ -297,16 +298,28 @@ const sharedConfigRules = modulePath + "/framework/configdata/rules"
 // and doctor checks project configs with (A4 ①). Leaf for the same reason.
 const sharedConfigSchema = modulePath + "/internal/configschema"
 
+// sharedConfigFile is the third: reading a service config file and layering
+// its config.includes (R5, maintainer 2026-10-30). The App, the tools and
+// roost config check / doctor must read the same layered result, so the rule
+// lives in one package the generator imports too. It parses with viper and
+// yaml.v3 — config libraries, not the runtime — and imports nothing of this
+// module.
+const sharedConfigFile = modulePath + "/internal/configfile"
+
 // TestSharedConfigRulesStayALeaf keeps the codegen exceptions honest: the
-// shared rules and schema packages import the standard library only, so
-// letting the generator import them does not pull the runtime in.
+// shared rules and schema packages import the standard library only, and the
+// config file loader adds only its two parsing libraries, so letting the
+// generator import them does not pull the runtime in.
 func TestSharedConfigRulesStayALeaf(t *testing.T) {
 	for _, leaf := range []string{sharedConfigRules, sharedConfigSchema} {
 		checkStandardLibraryOnly(t, strings.TrimPrefix(leaf, modulePath+"/"))
 	}
+	checkStandardLibraryOnly(t, strings.TrimPrefix(sharedConfigFile, modulePath+"/"), "github.com/spf13/viper", "gopkg.in/yaml.v3")
 }
 
-func checkStandardLibraryOnly(t *testing.T, dir string) {
+// checkStandardLibraryOnly fails when a file in dir imports anything outside
+// the standard library other than the listed third-party packages.
+func checkStandardLibraryOnly(t *testing.T, dir string, alsoAllowed ...string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -323,7 +336,7 @@ func checkStandardLibraryOnly(t *testing.T, dir string) {
 		}
 		for _, spec := range file.Imports {
 			name, _ := strconv.Unquote(spec.Path.Value)
-			if first, _, _ := strings.Cut(name, "/"); strings.Contains(first, ".") {
+			if first, _, _ := strings.Cut(name, "/"); strings.Contains(first, ".") && !slices.Contains(alsoAllowed, name) {
 				t.Errorf("%s imports %s; %s must stay standard-library only (the codegen layer imports it)", path, name, dir)
 			}
 		}
@@ -371,6 +384,7 @@ func TestLayerViolation(t *testing.T) {
 		{"codegen", core + "/demo"},
 		{"codegen", core + "/codegen/internal/roost"},
 		{"codegen", core + "/framework/configdata/rules"},
+		{"codegen", core + "/internal/configfile"},
 		{"codegen", "gopkg.in/yaml.v3"},
 		{"demo", core + "/framework/entity"},
 	}

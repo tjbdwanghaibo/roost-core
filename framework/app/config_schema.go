@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/internal/configfile"
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 )
 
@@ -177,6 +178,17 @@ func AppConfigSchema() ConfigSchema { return SchemaOf(appConfig{}) }
 func (a *App) CheckServiceConfig(serverType ServiceName, cfg *viper.Viper) error {
 	_, err := checkConfig(cfg, a.serviceDeclarations(serverType), a.serviceMods(serverType))
 	return err
+}
+
+// LoadConfigFile 按 App 启动时的同一条规则读一份服务配置（入口文件与它 config.includes 列出的叠加层，规则见
+// internal/configfile），返回新的 viper 与按叠加顺序实际读到的 include 路径。给读服务配置的部署工具、运维命令用，
+// 读出后按声明取值仍经 LoadConfig / CheckServiceConfig。入口文件读不出时返回 viper 的原始错误。
+func LoadConfigFile(path string) (*viper.Viper, []string, error) {
+	cfg, layers, err := configfile.Load(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cfg, layers.Includes, nil
 }
 
 // ServiceConfigSchema 返回 serverType 的全部声明（App 自己的、全部 Mod 的与服务本身的），`--print-config` 用它。

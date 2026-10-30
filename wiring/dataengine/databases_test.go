@@ -162,6 +162,22 @@ func TestToolsReadTheSameDatabaseMapping(t *testing.T) {
 	if client.Collection("planet_tool", "player").Len() != 1 || client.Collection("planet_tool_1000", "player").Len() != 1 {
 		t.Fatal("a global DAO must land in planet_tool and a dbscope=sid DAO in planet_tool_1000")
 	}
+
+	// 入口配置用 config.includes 叠加时，工具读到的映射与进程相同（同一处叠加规则）：后面的 include 覆盖前面的。
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"defaults.yaml":    "sid: 1000\ndataengine:\n  databases: {wiring_main: planet_default}\n",
+		"local.yaml":       "dataengine:\n  databases: {wiring_main: planet_local}\n",
+		"config.game.yaml": "config:\n  includes: [defaults.yaml, local.yaml]\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	databases, err = LoadDatabaseMapFile(filepath.Join(dir, "config.game.yaml"), 0, nil)
+	if err != nil || databases.Physical("wiring_main") != "planet_local" {
+		t.Fatalf("LoadDatabaseMapFile on an entry with includes = %v, %v; want wiring_main -> planet_local", databases, err)
+	}
 }
 
 // 进程里有声明的逻辑库（生成的 gen_databases.go 在 init 里登记）而自建装配没给 DataEngine 映射表：构造 MongoStore

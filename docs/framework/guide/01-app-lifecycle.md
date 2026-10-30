@@ -32,7 +32,7 @@ Service.Shutdown 先于 Mod 的逆序停止；因此业务停机过程中某些 
 
 ## 5. 配置与观测
 
-ConfigSchema 声明键和约束，Validator 负责跨字段条件。--check-config 必须检查真实配置存在及值合法，不能把缺文件当成功。/readyz 的 Degraded 仍可就绪，Fail 才阻断；关闭服务应先撤销就绪。不要用“健康接口 200”替代恢复 gate 或写 fence。
+ConfigSchema 声明键和约束，Validator 负责跨字段条件。--check-config 必须检查真实配置存在及值合法，不能把缺文件当成功；入口文件写了 `config.includes` 时检查的是叠加结果，include 缺失同样是错误（[配置 §1.1](07-config.md#11-多文件叠加configincludes)）。/readyz 的 Degraded 仍可就绪，Fail 才阻断；关闭服务应先撤销就绪。不要用“健康接口 200”替代恢复 gate 或写 fence。
 
 ## 源码与核对范围
 

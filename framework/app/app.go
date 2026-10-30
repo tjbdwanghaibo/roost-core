@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/spf13/viper"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	flog "github.com/tjbdwanghaibo/roost-core/infra/observe/log"
+	"github.com/tjbdwanghaibo/roost-core/internal/configfile"
 )
 
 // App is the top-level application container.
@@ -37,6 +39,8 @@ type App struct {
 	cfg      *viper.Viper
 	// settings 是 App 自己的配置（appConfig），启动检查（checkConfig）读出后供日志、单实例锁、业务时间与停机使用。
 	settings appConfig
+	// configLayers 是配置由哪些文件叠成（入口文件与 config.includes），--check-config 与启动日志写出它。
+	configLayers configfile.Layers
 
 	// signalSource exists to make shutdown sequencing testable on platforms
 	// where a process cannot deliver os.Interrupt to itself (notably Windows).
@@ -101,6 +105,10 @@ func (a *App) RegisterServer(serverType ServiceName, svc Service, mods ...Mod) *
 				if _, err := a.loadServiceConfig(serverType, true); err != nil {
 					return err
 				}
+				if a.configLayers.Layered() {
+					_, err := fmt.Fprintf(cmd.OutOrStdout(), "config ok: %s (includes: %s)\n", a.cfg.ConfigFileUsed(), strings.Join(a.configLayers.Includes, ", "))
+					return err
+				}
 				_, err := fmt.Fprintf(cmd.OutOrStdout(), "config ok: %s\n", a.cfg.ConfigFileUsed())
 				return err
 			}
@@ -138,23 +146,27 @@ func (a *App) loadServiceConfig(serverType ServiceName, requireFile bool) (strin
 	}
 	sid, _ := a.rootCmd.Flags().GetInt("sid")
 
-	a.cfg.SetConfigFile(cfgPath)
 	a.cfg.SetDefault("sid", sid)
 	a.cfg.SetDefault("server_type", serverType)
 
-	if err := a.cfg.ReadInConfig(); err != nil {
+	// 入口文件与它的 config.includes 叠加层（规则只在 internal/configfile 一处，工具与 doctor 共用）。入口文件不存在时
+	// 错误不包装，开发启动照旧退回缺省值；include 缺失或读不出总是错误。
+	layers, err := configfile.Read(a.cfg, cfgPath)
+	if err != nil {
 		if requireFile || explicitConfig || !isMissingConfig(err) {
 			return "", fmt.Errorf("read config %q: %w", cfgPath, err)
 		}
 		slog.Warn("default config file not found, using development defaults", "path", cfgPath, "err", err)
 	}
+	a.configLayers = layers
 	a.cfg.Set("server_type", serverType)
 	if a.rootCmd.Flags().Changed("sid") {
 		a.cfg.Set("sid", sid)
 	}
 	settings, err := checkConfig(a.cfg, a.serviceDeclarations(serverType), a.serviceMods(serverType))
 	if err != nil {
-		return "", err
+		// 叠加时错误补上键来自哪个文件。
+		return "", layers.Annotate(err)
 	}
 	a.settings = settings
 	return cfgPath, nil
@@ -255,6 +267,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 		"type", serverType,
 		"sid", a.settings.Sid,
 		"config", cfgPath,
+		"config_includes", a.configLayers.Includes,
 		"business_timezone", a.settings.Time.calendar.Location().String(),
 		"business_day_start", a.settings.Time.BusinessDayStart,
 	)

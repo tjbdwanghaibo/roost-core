@@ -10,7 +10,7 @@
 
 ## 1. 实现边界
 
-`framework/configdata`、`infra/base/featureflag`、`framework/hotcode`、`internal/configschema`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
+`framework/configdata`、`infra/base/featureflag`、`framework/hotcode`、`internal/configschema`、`internal/configfile`。下面从同一工作树的源码与测试声明提取，排除 testdata；是可复核的定位索引，不把出现一个名字视为行为已经测试通过。
 
 ## 2. 必须保持的契约
 
@@ -18,7 +18,8 @@
 2. 异步准入捕获快照；同步链保持代际。
 3. 热更失败恢复此前真实视图；敏感值不泄露。
 4. 重载结果说明逐成员变化：`Snapshot` 在 finalize 时按成员记下与 `Hash` 同源的内容摘要和表行数，`Compare` 比较两代；`ReloadWithChanges` / `RollbackWithChanges` 与 `ReloadOutcome.Changes` 携带它。内容完全没变的重载**仍发布新版本号**（维护者 2026-10-18 决定 B；监听者依赖每次重载都跑，例如 featureflag 用重载恢复 GM 的进程内覆盖），日志以 Warn 写“no table changed”，configdata Mod 计 `configdata.reload.total{result="unchanged"}`。
-5. 运维命令只有一处注册：wiring/configdata 的 Mod 在 Provide 时调用 `RegisterAdminCommands` 挂到 App 的 admin 注册表（缺 admin 能力时 Provide 失败），业务工程不再手写重载命令。
+5. 配置文件的多文件叠加（`config.includes`，[设计 §1.1](../guide/07-config.md#11-多文件叠加configincludes)）只在 `internal/configfile` 实现：App 的 `loadServiceConfig` 经 `configfile.Read` 把叠加结果放进 App 的 viper 文件层（缺省值与 `server_type` / `--sid` 的 `Set` 不受影响，入口文件缺失时返回 viper 原始错误、开发启动照旧退回缺省值）；`app.LoadConfigFile` / `wiring/dataengine.LoadDatabaseMapFile` 经 `configfile.Load`；codegen 的 `roost config check` 与 doctor 经 `readServiceConfig` → `configfile.ReadYAML`（叠加结果渲染成 YAML，k8s Secret 示例原样读）。入口没写 `config.includes` 时三条路径都与此前逐字节相同（`Read` 直接 `ReadInConfig`，`ReadYAML` 返回文件原文）。叠加经 viper 的 `AllSettings`（与 cube 相同），所以 `~` / `{}` 在叠加里没有效果；`Layers.Origins` 记录每个叶子键最后取值的文件，`Annotate`（App 检查错误）与 `Describe`（doctor / config check 的问题文本）按错误里的 `config: <键>` 补来源。新增读服务配置文件的入口必须经这三者之一，不另写叠加。生成器（codegen 层）因此 import `internal/configfile`：根包依赖边界测试把它列为与 `internal/configschema`、`configdata/rules` 并列的共享例外，`TestSharedConfigRulesStayALeaf` 守住它只依赖标准库与 viper / yaml.v3、不 import 本模块任何包。
+6. 运维命令只有一处注册：wiring/configdata 的 Mod 在 Provide 时调用 `RegisterAdminCommands` 挂到 App 的 admin 注册表（缺 admin 能力时 Provide 失败），业务工程不再手写重载命令。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -85,6 +86,14 @@
 | [schema.go](../../../internal/configschema/schema.go) | `Kind`、`Key`、`Schema`、`Validator` |
 | [yaml.go](../../../internal/configschema/yaml.go) | 函数/方法或内部实现；见源码 |
 
+### internal/configfile
+
+1 个实现文件、1 个测试文件。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [configfile.go](../../../internal/configfile/configfile.go) | `Layers`；`Read`、`Load`、`ReadYAML`、`IncludesKey` |
+
 </details>
 
 ## 5. 回归入口
@@ -125,6 +134,11 @@
 ### internal/configschema
 
 - [schema_test.go](../../../internal/configschema/schema_test.go)：`TestDecodeAppliesDefaultsAndReadsValues`、`TestDecodeReportsEveryBadKeyByName`、`TestDecodeRunsValidateConfigOnlyAfterDeclarationsPass`、`TestProductionSecrets`、`TestDataSchemaChecksLikeTheStruct`；其余 7 项见文件
+
+### internal/configfile
+
+- [configfile_test.go](../../../internal/configfile/configfile_test.go)：`TestIncludesLayerInListedOrderAndTheEntryWins`、`TestIncludePathsResolveAgainstTheEntryDirectory`、`TestMapsMergeDeeplyListsAndScalarsReplace`、`TestNestedIncludesAreRejected`、`TestMissingOrMalformedIncludeNamesTheFileAndTheEntry`、`TestIncludesKeyIsNotInTheResult`；其余 8 项见文件
+- App 侧：[config_contract_test.go](../../../framework/app/config_contract_test.go) 的 `TestCheckConfigLayersTheEntryFilesIncludes`、`TestCheckConfigNamesTheIncludeAWrongValueCameFrom`、`TestConfigIncludesMissingFileFailsAndSidFlagStillWins`；工具侧：`wiring/dataengine` 的 `TestToolsReadTheSameDatabaseMapping`、codegen 的 `TestConfigCheckReadsTheEntryFilesIncludes`
 
 </details>
 

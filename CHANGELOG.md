@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **App 配置支持多文件叠加 `config.includes`**（维护者 2026-10-30 决定 R5 方案 A：由 roost App 原生支持，下游 ai-game-blackbox-server 从 cube 迁来时配置结构与部署不用改）。入口配置写 `config: {includes: [a.yaml, b.yaml]}` 时，App 启动、`--check-config` 与 `CheckServiceConfig` 读到的是叠加结果；规则与 cube 的 `app.LoadConfigFile` 对齐，只在新的 `internal/configfile` 实现一次，全部读服务配置的入口共用：相对路径相对**入口文件所在目录**，按列出顺序叠加、后者覆盖前者，入口自己的键覆盖全部 includes；子表深合并，标量与列表整体替换，`~` / `{}` 不清前一层的值；只支持一层（include 再写非空 includes 报错，因此没有循环）；include 缺失或格式错误时报错并点名该文件与列出它的入口（开发启动的缺省路径也不会因此退回缺省值）；命令行 `--sid` / `server_type` 照旧覆盖叠加结果；`*_env` 一类值是普通字符串照常叠加、不在加载时展开（roost 没有加载期展开，叠加不改变这一点）。与 cube 的差异：`config.includes` 不留在最终配置里（它是加载指令，留着会被 doctor 当成没声明的键）；值必须是路径字符串列表（cube 会把单个字符串按空白拆开，这里拒绝）。配置检查的错误补上键来自哪个文件（`(from <文件>)`）并列出叠加顺序；`--check-config` 输出 `config ok: <入口> (includes: …)`；启动日志带 `config_includes`。新增 `app.LoadConfigFile(path)`（给部署工具，返回叠加后的 viper 与 include 列表），`wiring/dataengine.LoadDatabaseMapFile` 经它读；`roost config check`、doctor 的 `config:` / `config-schema:` / `config-check:` / `config-across-services` / `time:logic_offset` / 停机预算 / player TCP 检查读叠加结果，没声明的键点名来源文件；doctor `config-sections:` 对叠加的入口不查并写明。没写 `config.includes` 的配置读法与此前完全相同。[设计 §1.1](docs/framework/guide/07-config.md#11-多文件叠加configincludes) · [实现 §2](docs/framework/impl/07-config.md#2-必须保持的契约)
+
 ## [v1.32.0] - 2026-10-30
 
 功能版本（给下游 ai-game-blackbox-server 从 cube 迁到 roost-core）：DAO 字节切片字段的整体读取 `Get<Field>All()`，`//roost:web` 的 `headers=` 请求头绑定、`compress=gzip`、`errors=` 错误映射与 `status=` 成功状态，`RawRequest.Query`；修复 DAO map 的切片值与调用方共用内存。**行为收紧**：DAO 定义里取值方法会与调用方共用内存的其余引用形状，重新生成时报错（维护者决定 A）。**生成物最低 core 升到 v1.32.0**（`compress=gzip` / `status=response` 的路由调用本版新增的 webroute API）；存储、同步与 wire 格式不变，无数据迁移。发布说明、实现与验收见 docs/release/v1.32.0-NOTES.md / -IMPLEMENTATION.md / -VALIDATION.md。

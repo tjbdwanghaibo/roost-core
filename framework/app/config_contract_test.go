@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -545,5 +546,111 @@ func TestProductionRefusesANonZeroLogicOffset(t *testing.T) {
 	dev.Set("time.logic_offset", "24h")
 	if err := ValidateServiceConfig(dev); err != nil {
 		t.Fatalf("a dev config with an offset was refused: %v", err)
+	}
+}
+
+// --- 配置叠加：config.includes（规则在 internal/configfile，App 启动、--check-config 与工具共用） ---
+
+// writeConfigFiles 在 root 下按相对路径写配置文件。
+func writeConfigFiles(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for rel, body := range files {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// 入口配置只写 config.includes 时，App 启动与 --check-config 读到的是叠加后的配置：includes 按声明顺序叠加、后者覆盖
+// 前者，入口自己的键覆盖全部 includes；include 的相对路径相对入口文件所在目录（与进程工作目录无关）；
+// config.includes 本身不留在配置里。修前 App 只读入口文件：include 里的键全部读不到、config.includes 留在配置里。
+func TestCheckConfigLayersTheEntryFilesIncludes(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFiles(t, root, map[string]string{
+		"service/defaults.yaml": "sid: 1000\nshop:\n  region: us\n  max_items: 10\nbank:\n  retries: 3\n",
+		"eks/local.yaml":        "shop:\n  max_items: 20\n",
+		"eks/config.game.yaml":  "config:\n  includes:\n    - ../service/defaults.yaml\n    - local.yaml\nshop:\n  region: eu\n",
+	})
+	t.Chdir(root) // 工作目录不是入口文件所在目录
+	a := newTestApp(t, &errService{},
+		declaredMod{name: "shop", schema: SchemaOf(shopConfigForTest{})},
+		declaredMod{name: "bank", schema: SchemaOf(bankConfigForTest{})})
+	var out bytes.Buffer
+	a.RootCmd().SetOut(&out)
+	a.RootCmd().SetArgs([]string{"game", "--check-config", "--config", filepath.Join("eks", "config.game.yaml")})
+	if err := a.Execute(); err != nil {
+		t.Fatalf("--check-config on an entry with includes: %v\n%s", err, out.String())
+	}
+	if got := a.cfg.GetInt("shop.max_items"); got != 20 {
+		t.Errorf("shop.max_items = %d; want 20 from the later include local.yaml", got)
+	}
+	if got := a.cfg.GetString("shop.region"); got != "eu" {
+		t.Errorf("shop.region = %q; want eu from the entry file, which overrides every include", got)
+	}
+	if got := a.cfg.GetInt("bank.retries"); got != 3 {
+		t.Errorf("bank.retries = %d; want 3 from ../service/defaults.yaml, resolved against the entry file's directory", got)
+	}
+	if a.cfg.IsSet("config.includes") {
+		t.Errorf("config.includes stayed in the merged config: %v", a.cfg.Get("config.includes"))
+	}
+	for _, want := range []string{"config ok:", filepath.Join("service", "defaults.yaml"), filepath.Join("eks", "local.yaml")} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("--check-config output %q lacks %q", out.String(), want)
+		}
+	}
+}
+
+// 叠加后的配置走同一份声明检查；值错在某个 include 里时，错误点名那个文件。修前 include 不被读取，错误值被静默忽略。
+func TestCheckConfigNamesTheIncludeAWrongValueCameFrom(t *testing.T) {
+	root := t.TempDir()
+	writeConfigFiles(t, root, map[string]string{
+		"base.yaml":        "sid: 1000\nshop:\n  region: cn\n  max_items: 20000\n",
+		"config.game.yaml": "config:\n  includes: [base.yaml]\n",
+	})
+	a := newTestApp(t, &errService{}, declaredMod{name: "shop", schema: SchemaOf(shopConfigForTest{})})
+	a.RootCmd().SetOut(io.Discard)
+	a.RootCmd().SetArgs([]string{"game", "--check-config", "--config", filepath.Join(root, "config.game.yaml")})
+	err := a.Execute()
+	if err == nil || !strings.Contains(err.Error(), "shop.max_items must be at most 10000") || !strings.Contains(err.Error(), filepath.Join(root, "base.yaml")) {
+		t.Fatalf("--check-config = %v; want the range error on shop.max_items naming base.yaml", err)
+	}
+}
+
+// 缺省路径（没写 --config）的入口存在而 include 缺失时是错误，不能退回开发缺省值；错误点名缺的文件与引用它的入口。
+// 命令行 --sid 仍覆盖叠加结果里的 sid。
+func TestConfigIncludesMissingFileFailsAndSidFlagStillWins(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	entry := filepath.Join("configs", "service", "config.game.yaml")
+	writeConfigFiles(t, root, map[string]string{
+		filepath.ToSlash(entry):         "config:\n  includes: [gone.yaml]\n",
+		"configs/service/with-sid.yaml": "sid: 7\n",
+	})
+	a := newTestApp(t, &errService{})
+	a.RootCmd().SetOut(io.Discard)
+	a.RootCmd().SetArgs([]string{"game", "--check-config"})
+	err := a.Execute()
+	if err == nil || !strings.Contains(err.Error(), filepath.Join("configs", "service", "gone.yaml")) || !strings.Contains(err.Error(), entry) || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing include under the default config path: %v; want an error naming gone.yaml and the entry that lists it", err)
+	}
+
+	writeConfigFiles(t, root, map[string]string{filepath.ToSlash(entry): "config:\n  includes: [with-sid.yaml]\n"})
+	for _, tc := range []struct {
+		args []string
+		want int
+	}{{nil, 7}, {[]string{"--sid", "9"}, 9}} {
+		a := newTestApp(t, &errService{})
+		a.RootCmd().SetOut(io.Discard)
+		a.RootCmd().SetArgs(append([]string{"game", "--check-config"}, tc.args...))
+		if err := a.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if got := a.cfg.GetInt("sid"); got != tc.want {
+			t.Errorf("%v: sid = %d; want %d (the include's sid, overridden by --sid)", tc.args, got, tc.want)
+		}
 	}
 }

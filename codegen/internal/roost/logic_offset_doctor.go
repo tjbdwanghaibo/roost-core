@@ -3,7 +3,6 @@ package roost
 import (
 	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -47,7 +46,7 @@ func checkLogicOffsets(root string, m Manifest) CheckItem {
 		)
 		for _, service := range sortedServiceNames(m) {
 			rel := deployment.file(service)
-			raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+			raw, _, err := readServiceConfig(filepath.Join(root, filepath.FromSlash(rel)), deployment.secret)
 			if err != nil {
 				continue // a service without this file is not part of this deployment
 			}

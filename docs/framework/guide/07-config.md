@@ -14,6 +14,35 @@
 
 进程配置定义地址、连接、容量、超时和开关；业务表描述玩法数据。前者用 Mod/Service 的 ConfigSchema 结构体与 tag 声明，后者用 configdata 的表定义、规则、快照及生成器接入。不要把表热更当成运行中修改网络基础设施配置。
 
+### 1.1 多文件叠加（config.includes）
+
+进程配置可以拆成多个文件：入口文件（`--config` 指定的，缺省 `configs/service/config.<service>.yaml`）写
+
+```yaml
+config:
+  includes:
+    - ../service/config.game.defaults.yaml   # 发布默认
+    - config.game.local.yaml                 # 环境
+    - config.game.instance.yaml              # 实例
+```
+
+App 启动、`--check-config` 与读服务配置的工具（`app.LoadConfigFile`、`LoadDatabaseMapFile`、`roost config check`、doctor）读到的都是叠加结果，规则只在 `internal/configfile` 一处（维护者 2026-10-30 决定 R5 方案 A，与 cube 的 `app.LoadConfigFile` 对齐）：
+
+| 规则 | 说明 |
+| --- | --- |
+| 路径 | 相对路径相对**入口文件所在目录**解析（与进程工作目录无关），绝对路径原样使用 |
+| 顺序 | includes 按列出顺序叠加，后者覆盖前者；入口文件自己的键最后叠加，覆盖全部 includes |
+| 合并 | 子表逐键深合并；标量与列表整体替换（列表不拼接）；标量替换同名子表，子表也替换同名标量。值为 `~` 或 `{}` 的键在这一层没有效果，叠加不能删除前一层的键 |
+| 层数 | 只支持一层：include 自己再写非空 `config.includes` 时报错（列回入口自己也一样），所以不会循环；同一文件列两次照常叠加两次 |
+| 出错 | include 缺失或格式错误时报错，点名该 include 与列出它的入口；不会退回开发缺省值 |
+| 键本身 | `config.includes` 不进入叠加结果（cube 保留它；这里去掉，否则 doctor 会把它当成没声明的键） |
+| 格式 | 每个文件按扩展名由 viper 解析，键不区分大小写；`config.includes` 必须是路径字符串列表（cube 会把单个字符串按空白拆开，这里拒绝） |
+| 之后 | 命令行 `server_type` / `--sid` 仍覆盖叠加结果；`*_env` 之类的值是普通字符串，照常叠加，由读它的 Mod 在 Init 时解析（加载期没有环境变量展开） |
+
+叠加结果走同一份声明检查；错误补上键来自哪个文件（`(from <文件>)`）并列出叠加顺序，`--check-config` 输出 `config ok: <入口> (includes: …)`，启动日志带 `config_includes`。没写 `config.includes` 的入口与此前完全相同（viper 直接读这一个文件）。
+
+生成器与 doctor 的写入类动作（`roost add` 追加配置段、`config-sections:` 给出的追加文本、停机预算刷新）只改入口文件的文本；叠加的入口不做 `config-sections:` 检查（配置段散在多个文件里，结论写在该项的说明中），键仍由 `config-schema:` 按叠加结果检查。
+
 ## 2. 单一声明
 
 键路径、类型、默认值、必填、敏感值及示例声明一次，运行期读取、启动检查、生成默认配置与 doctor 共用。未声明键、非法值、缺失必填不能静默降级成零值。Validator 表达开启功能后的条件必填或跨字段约束。读另一个 Mod 的键、要求两边一致的规则（例如 saga 的效果流必须就是同进程 DataEngine 的那条）由 Mod 实现 `app.ModConfigCrossChecker`：App 在本服务全部声明检查通过之后调用一次，启动前、`--check-config` 与 doctor 的 `config-check:<service>` 走同一处，读别的 Mod 的键仍只经它的声明。

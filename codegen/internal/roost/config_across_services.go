@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"maps"
 	"net"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -112,7 +111,7 @@ func loadConfigSet(root string, m Manifest, set configFileSet) []serviceConfigDo
 		if !ok {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		raw, _, err := readServiceConfig(filepath.Join(root, filepath.FromSlash(rel)), false)
 		if err != nil {
 			continue
 		}
