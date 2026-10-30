@@ -90,6 +90,13 @@ func (f FieldDef) OmitEmpty() bool {
 	return false
 }
 
+// IsBytes 报告字段是字节切片（[]byte / []uint8）。这类字段通常整段存一份不透明数据（如序列化好的 JSON），
+// 生成器在按下标的切片 API 之外再给一个整体读取 GetXAll，返回副本。存储与同步仍按普通切片走（BSON binary），
+// 格式不变。
+func (f FieldDef) IsBytes() bool {
+	return f.Kind == KindSlice && !f.IsPtr && (f.SliceElem == "byte" || f.SliceElem == "uint8")
+}
+
 type FieldKind int
 
 const (

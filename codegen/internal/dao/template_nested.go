@@ -261,6 +261,15 @@ func (s *{{$.Nested.Name}}) Range{{.Name}}(f func(idx int, val {{if .IsPtr}}*{{.
 }
 
 func (s *{{$.Nested.Name}}) {{.Name}}Len() int { return len(s.{{fieldVar .Name}}) }
+{{- if .IsBytes}}
+
+// Get{{.Name}}All returns a copy of the whole byte slice (nil when empty), the
+// read side of Set{{.Name}}. Changing the copy does not change the struct: a
+// change must go through the setter so it is marked dirty and rolls back.
+func (s *{{$.Nested.Name}}) Get{{.Name}}All() {{.TypeStr}} {
+	return append({{.TypeStr}}(nil), s.{{fieldVar .Name}}...)
+}
+{{- end}}
 {{end}}
 {{- if eq .Kind 2}}
 func (s *{{$.Nested.Name}}) Get{{.Name}}(key {{.MapKey}}) ({{mapValType .}}, bool) {

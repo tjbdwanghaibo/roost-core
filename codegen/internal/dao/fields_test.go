@@ -518,3 +518,66 @@ type Piece struct {
 		t.Errorf("nested wire doc ignores the declared name:\n%s", nested)
 	}
 }
+
+// []byte 字段（下游存整段 JSON 的 ResultJSON / RequestJSON）要能整体读出来交给 json.Unmarshal。修前生成器把它当普通切片，
+// 只有按下标的 GetX(idx) 与 RangeX，业务只能逐字节拼。整体读取与已有的整体写入 SetXAll 对称，命名为 GetXAll，返回副本：
+// 调用方改返回值不能改到 DAO 内部的底层数组（那样绕过脏标记与事务回滚）。已发布的 GetX(idx) / RangeX / XLen / AddX /
+// SetXAll 原样保留；持久文档里字段类型仍是 []byte（BSON binary），存储与同步格式不变。
+func TestAByteSliceFieldHasAWholeValueGetterThatReturnsACopy(t *testing.T) {
+	out := generateKeywordDao(t, `package def
+
+//roost:dao coll=tasks db=game
+type TaskDao struct {
+	ResultJSON []byte
+	Raw        []uint8 `+"`dao:\"nopersist,sync\"`"+`
+	Friends    []int64
+	Box        Box
+}
+
+type Box struct {
+	Blob []byte
+}
+`)
+	daoSource, err := os.ReadFile(filepath.Join(out, "gen_task_dao.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(daoSource)
+	for _, want := range []string{
+		"func (d *TaskDao) GetResultJSONAll() []byte",
+		"func (d *TaskDao) GetRawAll() []uint8",
+		// 已发布的切片 API 保持不变。
+		"func (d *TaskDao) GetResultJSON(idx int) (byte, bool)",
+		"func (d *TaskDao) SetResultJSONAll(v []byte)",
+		"func (d *TaskDao) RangeResultJSON(",
+		"func (d *TaskDao) ResultJSONLen() int",
+	} {
+		if !strings.Contains(source, want) {
+			t.Errorf("the generated DAO has no %q", want)
+		}
+	}
+	bodies := generatedFunctions(source)
+	if body := bodies["GetResultJSONAll"]; !strings.Contains(body, "return append([]byte(nil), d.resultJSON...)") {
+		t.Errorf("GetResultJSONAll must return a copy of the stored bytes:\n%s", body)
+	}
+	// 只给字节切片生成：其它切片的元素可能是指针，浅拷贝照样漏出内部状态，不在本次范围。
+	if strings.Contains(source, "GetFriendsAll") {
+		t.Error("a non-byte slice got a whole-value getter")
+	}
+	// 存储格式不变：持久文档里仍是 []byte，由 BSON 编成 binary。
+	if persistDoc := generatedType(source, "taskDaoPersistDoc"); !regexp.MustCompile(`ResultJSON\s+\[\]byte\s+` + "`" + `bson:"result_json"`).MatchString(persistDoc) {
+		t.Errorf("the persisted document changed the []byte field:\n%s", persistDoc)
+	}
+
+	nestedSource, err := os.ReadFile(filepath.Join(out, "gen_box_nested.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested := string(nestedSource)
+	if !strings.Contains(nested, "func (s *Box) GetBlobAll() []byte") {
+		t.Errorf("the generated nested struct has no whole-value getter for its []byte field:\n%s", nested)
+	}
+	if body := generatedFunctions(nested)["GetBlobAll"]; !strings.Contains(body, "return append([]byte(nil), s.blob...)") {
+		t.Errorf("GetBlobAll must return a copy of the stored bytes:\n%s", body)
+	}
+}

@@ -13,6 +13,10 @@ type VarietyDao struct {
 	Pending     map[int32]int64  `dao:"nopersist,nosync,map=fast"`
 	FastItems   map[int64]int32  `dao:"persist,sync,map=fast"`
 	ShardedTags map[int32]string `dao:"persist,sync,map=sharded"`
+	// ResultJSON is an opaque byte payload (a serialized JSON document): the
+	// slice API plus the whole-value copy getter GetResultJSONAll, stored as
+	// BSON binary.
+	ResultJSON []byte
 }
 
 //roost:redisdao mode=raw key=RunID prefix=roost:test:raw

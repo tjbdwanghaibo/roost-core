@@ -21,6 +21,7 @@ type GemInfo struct {
 	dirtyOwner daoDirtyOwner
 	id         int32
 	level      int32
+	sig        []byte
 }
 
 // bindDirty / unbindDirty are how a parent takes and releases this value.
@@ -57,8 +58,9 @@ func (s *GemInfo) unbindDirty(owner daoDirtyOwner) {
 // costs about four allocations per nested value).
 // MarshalBSON / UnmarshalBSON are kept for a GemInfo encoded on its own.
 type gemInfoBSONDoc struct {
-	ID    int32 `bson:"id"`
-	Level int32 `bson:"level"`
+	ID    int32  `bson:"id"`
+	Level int32  `bson:"level"`
+	Sig   []byte `bson:"sig"`
 }
 
 // bsonDoc is the value receiver on purpose: containers hold GemInfo values
@@ -67,6 +69,7 @@ func (s GemInfo) bsonDoc() gemInfoBSONDoc {
 	return gemInfoBSONDoc{
 		ID:    s.id,
 		Level: s.level,
+		Sig:   s.sig,
 	}
 }
 
@@ -75,6 +78,7 @@ func (s GemInfo) bsonDoc() gemInfoBSONDoc {
 func (s *GemInfo) loadBSONDoc(doc gemInfoBSONDoc) {
 	s.id = doc.ID
 	s.level = doc.Level
+	s.sig = doc.Sig
 }
 
 func (s *GemInfo) bindChildren() {
@@ -122,6 +126,34 @@ func (s *GemInfo) GetID() int32 { return s.id }
 
 func (s *GemInfo) GetLevel() int32 { return s.level }
 
+func (s *GemInfo) GetSig(idx int) (byte, bool) {
+	if idx < 0 || idx >= len(s.sig) {
+		var zero byte
+		return zero, false
+	}
+	return s.sig[idx], true
+}
+
+func (s *GemInfo) RangeSig(f func(idx int, val byte) bool) {
+	if f == nil {
+		return
+	}
+	for idx, val := range s.sig {
+		if !f(idx, val) {
+			return
+		}
+	}
+}
+
+func (s *GemInfo) SigLen() int { return len(s.sig) }
+
+// GetSigAll returns a copy of the whole byte slice (nil when empty), the
+// read side of SetSig. Changing the copy does not change the struct: a
+// change must go through the setter so it is marked dirty and rolls back.
+func (s *GemInfo) GetSigAll() []byte {
+	return append([]byte(nil), s.sig...)
+}
+
 func (s *GemInfo) SetID(v int32) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.id
@@ -156,4 +188,20 @@ func (s *GemInfo) SetLevel(v int32) {
 		s.level = v
 		s.Mark()
 	}
+}
+
+func (s *GemInfo) SetSig(v []byte) {
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := s.sig
+		if err := tx.RecordUndo(s, uint64(2), func() error {
+			s.sig = old
+			return nil
+		}); err != nil {
+			// A mutation without undo coverage silently breaks rollback;
+			// failing loudly matches the generated DAO setters.
+			panic(fmt.Errorf("GemInfo: record undo: %w", err))
+		}
+	}
+	s.sig = append([]byte(nil), v...)
+	s.Mark()
 }

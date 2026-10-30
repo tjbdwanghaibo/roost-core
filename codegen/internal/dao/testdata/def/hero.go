@@ -43,4 +43,6 @@ type EquipInfo struct {
 type GemInfo struct {
 	ID    int32
 	Level int32
+	// Sig locks the nested []byte shape (GetSigAll returns a copy).
+	Sig []byte
 }

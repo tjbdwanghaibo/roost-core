@@ -12,11 +12,16 @@ package testdata
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -328,4 +333,106 @@ func topLevelKeys(t *testing.T, raw []byte) []string {
 		keys = append(keys, element.Key())
 	}
 	return keys
+}
+
+// []byte 字段的整体读取 GetXAll（下游把整段 JSON 存在 ResultJSON 里再 json.Unmarshal）：
+//   - 返回副本：改返回值、改传给 SetXAll 的入参，都不改 DAO；
+//   - 改动只能经 setter，setter 点亮持久与同步脏位，提交记录里带上字段，事务失败时回到原值；
+//   - 存储、提交记录与同步载荷里仍是 BSON binary，经 Unmarshal / ApplySync 往返后整段相等。
+func TestAByteSliceFieldReadsAsACopyAndRoundTripsAsBinary(t *testing.T) {
+	const payload = `{"skill":"fireball","power":7}`
+	variety := NewVarietyDao()
+	variety.SetId(21)
+	committer := &ownershipCommitter{}
+	input := []byte(payload)
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "write", func() (any, error) {
+		variety.SetResultJSONAll(input)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input[0] = 'X'
+	got := variety.GetResultJSONAll()
+	if string(got) != payload {
+		t.Fatalf("GetResultJSONAll = %q, want %q (the setter must copy its input)", got, payload)
+	}
+	got[0] = 'X'
+	if again := variety.GetResultJSONAll(); string(again) != payload {
+		t.Fatalf("changing the returned slice changed the DAO: %q", again)
+	}
+	var decoded struct {
+		Skill string `json:"skill"`
+		Power int    `json:"power"`
+	}
+	if err := json.Unmarshal(variety.GetResultJSONAll(), &decoded); err != nil || decoded.Skill != "fireball" || decoded.Power != 7 {
+		t.Fatalf("json.Unmarshal(GetResultJSONAll()) = %+v, %v", decoded, err)
+	}
+
+	// 脏标记：setter 点亮的同步位就是词汇表里 ResultJSON 的位，提交记录里带着 binary。
+	field, ok := dataengine.SyncFieldByName(VarietyDaoSyncFields(), "ResultJSON")
+	if !ok || field.WireName != "result_json" {
+		t.Fatalf("sync vocabulary has no result_json: %+v %v", field, ok)
+	}
+	if mask := variety.DirtyTracker().TakeSyncDirty(); mask&field.Bit == 0 {
+		t.Fatalf("SetResultJSONAll left sync mask %b without bit %b", mask, field.Bit)
+	}
+	if len(committer.records) != 1 || len(committer.records[0].Mutations) != 1 {
+		t.Fatalf("commit records = %+v", committer.records)
+	}
+	mutation := committer.records[0].Mutations[0]
+	committed := mutation.Data
+	if len(committed) == 0 {
+		committed = mutation.Patch.SetBSON
+	}
+	assertBinaryField(t, "commit record", committed, payload)
+
+	// 存储往返：Marshal 是持久文档，Unmarshal 读回；同步往返：MarshalSync / ApplySync。
+	stored := variety.Marshal()
+	assertBinaryField(t, "stored document", stored, payload)
+	restored := NewVarietyDao()
+	if err := restored.Unmarshal(stored); err != nil {
+		t.Fatal(err)
+	}
+	if string(restored.GetResultJSONAll()) != payload {
+		t.Fatalf("storage round trip = %q", restored.GetResultJSONAll())
+	}
+	sync := variety.MarshalSync(field.Bit)
+	assertBinaryField(t, "sync payload", sync, payload)
+	mirror := NewVarietyDao()
+	if err := mirror.ApplySync(sync); err != nil {
+		t.Fatal(err)
+	}
+	if string(mirror.GetResultJSONAll()) != payload {
+		t.Fatalf("sync round trip = %q", mirror.GetResultJSONAll())
+	}
+
+	// 回滚：事务失败时整段回到原值。
+	refused := errors.New("refused")
+	if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "fail", func() (any, error) {
+		variety.SetResultJSONAll([]byte(`{}`))
+		return nil, refused
+	}); !errors.Is(err, refused) {
+		t.Fatalf("err = %v", err)
+	}
+	if string(variety.GetResultJSONAll()) != payload {
+		t.Fatalf("rollback left %q", variety.GetResultJSONAll())
+	}
+
+	// 空值：读到 nil，可以直接判长度。
+	if empty := NewVarietyDao().GetResultJSONAll(); empty != nil {
+		t.Fatalf("an unset []byte field reads %v, want nil", empty)
+	}
+}
+
+// assertBinaryField 断言文档里的 result_json 是 BSON binary（generic 子类型），内容为 want。
+func assertBinaryField(t *testing.T, what string, raw []byte, want string) {
+	t.Helper()
+	value, err := bson.Raw(raw).LookupErr("result_json")
+	if err != nil {
+		t.Fatalf("%s has no result_json: %v (%s)", what, err, bson.Raw(raw))
+	}
+	subtype, data, ok := value.BinaryOK()
+	if !ok || subtype != bson.TypeBinaryGeneric || string(data) != want {
+		t.Fatalf("%s result_json = %s (type %v), want binary %q", what, value, value.Type, want)
+	}
 }

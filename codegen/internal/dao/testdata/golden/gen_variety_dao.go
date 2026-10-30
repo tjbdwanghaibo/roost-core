@@ -21,6 +21,7 @@ type VarietyDao struct {
 	pending     *fmap.FastMap[int32, int64]
 	fastItems   *fmap.FastMap[int64, int32]
 	shardedTags *fmap.ShardedSafeMap[int32, string]
+	resultJSON  []byte
 }
 
 // Ensure interface compliance.
@@ -53,6 +54,7 @@ type varietyDaoPersistDoc struct {
 	PersistOnly   int64            `bson:"persist_only"`
 	FastItems     map[int64]int32  `bson:"fast_items"`
 	ShardedTags   map[int32]string `bson:"sharded_tags"`
+	ResultJSON    []byte           `bson:"result_json"`
 }
 
 // varietyDaoStoredKeys is the key set varietyDaoPersistDoc declares, nested types
@@ -92,6 +94,7 @@ const (
 	varietyDaoFieldPending     uint64 = 1 << iota
 	varietyDaoFieldFastItems   uint64 = 1 << iota
 	varietyDaoFieldShardedTags uint64 = 1 << iota
+	varietyDaoFieldResultJSON  uint64 = 1 << iota
 )
 
 func (d *VarietyDao) markPersistOnlyDirty() {
@@ -122,6 +125,13 @@ func (d *VarietyDao) markShardedTagsDirty() {
 		panic(fmt.Errorf("VarietyDao: mark ShardedTags persistence: %w", err))
 	}
 	d.tracker.MarkSync(varietyDaoFieldShardedTags)
+}
+
+func (d *VarietyDao) markResultJSONDirty() {
+	if err := nest.MarkPersist(d, varietyDaoFieldResultJSON); err != nil {
+		panic(fmt.Errorf("VarietyDao: mark ResultJSON persistence: %w", err))
+	}
+	d.tracker.MarkSync(varietyDaoFieldResultJSON)
 }
 
 func (d *VarietyDao) markPendingKeyDirty(key int32, val int64) {
@@ -193,6 +203,21 @@ func (d *VarietyDao) GetPersistOnly() int64 { return d.persistOnly }
 func (d *VarietyDao) GetSyncOnly() int64 { return d.syncOnly }
 
 func (d *VarietyDao) GetNeither() int64 { return d.neither }
+
+func (d *VarietyDao) GetResultJSON(idx int) (byte, bool) {
+	if idx < 0 || idx >= len(d.resultJSON) {
+		var zero byte
+		return zero, false
+	}
+	return d.resultJSON[idx], true
+}
+
+// GetResultJSONAll returns a copy of the whole byte slice (nil when empty), the
+// read side of SetResultJSONAll. Changing the copy does not change the DAO: a
+// change must go through a setter so it is marked dirty and rolls back.
+func (d *VarietyDao) GetResultJSONAll() []byte {
+	return append([]byte(nil), d.resultJSON...)
+}
 
 // --- Mutators ---
 
@@ -421,6 +446,45 @@ func (d *VarietyDao) ShardedTagsLen() int {
 	return d.shardedTags.Len()
 }
 
+func (d *VarietyDao) AddResultJSON(v byte) {
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := d.resultJSON
+		d.recordUndo(tx, varietyDaoFieldResultJSON, func() error {
+			d.resultJSON = old
+			return nil
+		})
+	}
+	d.resultJSON = append(d.resultJSON, v)
+	d.markResultJSONDirty()
+}
+
+func (d *VarietyDao) SetResultJSONAll(v []byte) {
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := d.resultJSON
+		d.recordUndo(tx, varietyDaoFieldResultJSON, func() error {
+			d.resultJSON = old
+			return nil
+		})
+	}
+	d.resultJSON = append([]byte(nil), v...)
+	d.markResultJSONDirty()
+}
+
+func (d *VarietyDao) RangeResultJSON(f func(idx int, val byte) bool) {
+	if f == nil {
+		return
+	}
+	for i, v := range d.resultJSON {
+		if !f(i, v) {
+			break
+		}
+	}
+}
+
+func (d *VarietyDao) ResultJSONLen() int {
+	return len(d.resultJSON)
+}
+
 func (d *VarietyDao) varietyDaoPendingRawMap() map[int32]int64 {
 	if d.pending == nil {
 		return nil
@@ -527,6 +591,7 @@ func (d *VarietyDao) persistDoc() varietyDaoPersistDoc {
 		PersistOnly:   d.persistOnly,
 		FastItems:     d.varietyDaoFastItemsRawMap(),
 		ShardedTags:   d.varietyDaoShardedTagsRawMap(),
+		ResultJSON:    d.resultJSON,
 	}
 }
 
@@ -535,6 +600,7 @@ func (d *VarietyDao) setPersistDoc(doc varietyDaoPersistDoc) {
 	d.persistOnly = doc.PersistOnly
 	d.setFastItemsRawMap(doc.FastItems)
 	d.setShardedTagsRawMap(doc.ShardedTags)
+	d.resultJSON = doc.ResultJSON
 }
 
 func (d *VarietyDao) marshalCommitState() ([]byte, error) {
@@ -639,6 +705,9 @@ func (d *VarietyDao) marshalPersistPatchBSON(change nest.PersistChange) (dataeng
 			set["sharded_tags"] = d.varietyDaoShardedTagsRawMap()
 		}
 	}
+	if change.Mask&varietyDaoFieldResultJSON != 0 {
+		set["result_json"] = d.resultJSON
+	}
 	for path, value := range change.Set {
 		if !d.persistChangePathCovered(change, path) {
 			set[path] = value
@@ -678,6 +747,9 @@ func (d *VarietyDao) PersistFieldNames(mask uint64) []string {
 	if mask&varietyDaoFieldShardedTags != 0 {
 		names = append(names, "sharded_tags")
 	}
+	if mask&varietyDaoFieldResultJSON != 0 {
+		names = append(names, "result_json")
+	}
 	return names
 }
 
@@ -697,6 +769,7 @@ func VarietyDaoSyncFields() []dataengine.SyncFieldMeta {
 		{Name: "SyncOnly", WireName: "sync_only", Bit: varietyDaoFieldSyncOnly},
 		{Name: "FastItems", WireName: "fast_items", Bit: varietyDaoFieldFastItems},
 		{Name: "ShardedTags", WireName: "sharded_tags", Bit: varietyDaoFieldShardedTags},
+		{Name: "ResultJSON", WireName: "result_json", Bit: varietyDaoFieldResultJSON},
 	}
 }
 
@@ -716,6 +789,9 @@ func (d *VarietyDao) MarshalSync(mask uint64) []byte {
 	}
 	if mask&varietyDaoFieldShardedTags != 0 {
 		doc["sharded_tags"] = d.varietyDaoShardedTagsRawMap()
+	}
+	if mask&varietyDaoFieldResultJSON != 0 {
+		doc["result_json"] = d.resultJSON
 	}
 	if len(doc) == 1 {
 		return nil
@@ -772,6 +848,19 @@ func (d *VarietyDao) ApplySync(raw []byte) error {
 			return err
 		}
 		d.setShardedTagsRawMap(wrap.V)
+	}
+	if v, ok := doc["result_json"]; ok {
+		data, err := bson.Marshal(bson.M{"v": v})
+		if err != nil {
+			return err
+		}
+		var wrap struct {
+			V []byte `bson:"v"`
+		}
+		if err := bson.Unmarshal(data, &wrap); err != nil {
+			return err
+		}
+		d.resultJSON = wrap.V
 	}
 	d.Init()
 	return nil

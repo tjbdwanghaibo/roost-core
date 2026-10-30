@@ -222,6 +222,15 @@ func (d *{{$.Dao.Name}}) Get{{.Name}}(idx int) ({{if .IsPtr}}*{{.SliceElem}}{{el
 	}
 	return d.{{fieldVar .Name}}[idx], true
 }
+{{- if .IsBytes}}
+
+// Get{{.Name}}All returns a copy of the whole byte slice (nil when empty), the
+// read side of Set{{.Name}}All. Changing the copy does not change the DAO: a
+// change must go through a setter so it is marked dirty and rolls back.
+func (d *{{$.Dao.Name}}) Get{{.Name}}All() {{.TypeStr}} {
+	return append({{.TypeStr}}(nil), d.{{fieldVar .Name}}...)
+}
+{{- end}}
 {{end}}
 {{end}}
 
