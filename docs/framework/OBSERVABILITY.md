@@ -269,6 +269,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | 指标 | 类型 | 说明 |
 | --- | --- | --- |
 | `dataengine.load.skipped.total{resource}` | Counter | 非 strict 载入模板无法解码而跳过的行数。**基线应为零**；持续增长意味着字段改名/编解码变更正在让整表静默加载不全（strict 模板会直接失败，非 strict 只跳过，所以这条曲线是它唯一的信号） |
+| `dataengine.aggregate.dao_filled.total{kind,collection}` | Counter | 冷加载时一个实体的部分 DAO 没有文档（没有墓碑），缺的 DAO 按初值补上的次数（维护者 2026-10-30），同时 WARN（kind、实体 ID、集合名）。补上的 DAO 由这个实体的下一笔持久提交写出。给已有 kind 新增 DAO 之后，每个存量实体第一次加载各计一次是正常的、随后归零；**别的时候非零要人核对**：同一集合在没有新增 DAO 时增长，或同一实体反复出现，说明丢写、误删或投影缺口（[guide/03 §4](guide/03-dataengine.md#4-冷加载与-schema)） |
 | `dataengine.dao.unknown_stored_key.total{dao}` | Counter | 生成 DAO 冷加载时，库里文档有、持久文档结构体没有的键每出现一次计一次（标签只有 DAO 类型名；键名只在 WARN 日志里，每进程每 DAO 每键一次）。**基线应为零**；非零说明字段改了名没保留 `bson` 名、删了字段或改成 nopersist：这个键不再读取，下一次整文档写回会删除它；要保留数据，给字段写原 `bson` 名或先按 SCHEMA-MIGRATION 离线迁移（DESIGN-TODO D13） |
 | `dataengine.effect_consumer.handled_total{consumer,result}` | Counter | 业务 effect 消费者（`wiring/dataengine` 的 `SubscribeEffects`，D12）每次投递的结论，consumer 是 durable 名：`ok` 回执已提交、`duplicate` 读到回执跳过、`retry` handler 失败 nak 重投、`poison` 毒消息（`PoisonEffect`、信封解不开、同一 EffectID 内容不同）直接 Term。**poison 非零要人核对**：那个 effect 已丢弃（ERROR 日志点名 durable 与流序号）；retry 持续增长说明下游不可用，耗尽 MaxDeliver 时由 `nats.jetstream.terminal.total{reason="max_deliver"}` 计 |
 | `dataengine.entity_unload.total{result}` | Counter | 运维命令 `entity.unload`（D16）每次执行的结论：`unloaded`、`not_resident`（没有常驻，什么也没做）、`busy`（持有实体的事务在 timeout 内没结束、另一次卸载进行中、Remote 所有权不稳定）、`timeout`（在途投影没在 timeout 内完成）、`failed`（其他错误，例如非持久实体、Runtime 不可用）。只有运维手动触发，基线是零星几次 |
@@ -304,6 +305,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `configdata.reload.total` | Counter | `framework/configdata/configdata.go:IncCounter` |
 | `configdata.rollback.total` | Counter | `framework/configdata/configdata.go:IncCounter` |
 | `configdata.version` | Gauge | `framework/configdata/configdata.go:SetGauge` |
+| `dataengine.aggregate.dao_filled.total` | Counter | `dataengine/engine/entity_repository.go:IncCounter` |
 | `dataengine.dao.unknown_stored_key.total` | Counter | `dataengine/stored_keys.go:IncCounter` |
 | `dataengine.effect_consumer.handled_total` | Counter | `wiring/dataengine/effects.go:IncCounter` |
 | `dataengine.entity_unload.admission_rejected.total` | Counter | `dataengine/engine/entity_unload.go:IncCounter` |

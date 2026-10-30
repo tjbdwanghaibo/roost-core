@@ -912,6 +912,10 @@ func withRollbackTx(tx *RollbackTx, fn func() (any, error)) (any, error) {
 // CaptureCreatedEntity 实现 entity.CreatedEntityCapturer：handler 内 CreateInScope 新建的实体与动态
 // Cast 一样由本事务捕获回滚与持久化参与者。revoke 先于捕获登记，回滚时最后执行
 // （回滚函数逆序），所以即使后续捕获部分失败，回滚 / 拒绝也会撤销这次发布。
+//
+// 新建的持久实体本身就要落库（维护者 2026-10-30）：捕获时把它的每个 DAO 以整文档登记进本事务（includeCreatedEntity），
+// 本事务没改任何持久字段也写齐。durability=memory 的事务照现有规则在提交点拒绝（refuseMemoryPersistentWrite），
+// 整条回滚并撤销这次新建；带 Remote 批次的消息里 Remote 托管实体的 DAO 由批次认领。
 func (tx *RollbackTx) CaptureCreatedEntity(created entity.IThreadSafeEntity, revoke func()) error {
 	if tx == nil || tx.state != rollbackTxOpen {
 		return ErrTransactionClosed
@@ -927,6 +931,7 @@ func (tx *RollbackTx) CaptureCreatedEntity(created entity.IThreadSafeEntity, rev
 		tx.noteCaptureFailed(err)
 		return err
 	}
+	tx.includeCreatedEntity(created)
 	tx.created = append(tx.created, created)
 	return nil
 }
@@ -973,9 +978,20 @@ func createdEntityLockBusy(id int64, rollbackable bool) error {
 // memoryHandlerCreates 在 memory 快路径（RollbackNone + DurabilityMemory、无 Remote 批次）的 handler 期间
 // 绑定到 Guard：handler 内新建的实体沿用本 Guard 持锁到 handler 结束，并进入本次
 // SyncMutation。memory 快路径没有回滚，所以不捕获、不撤销；锁冲突给不能重排的冲突错误。
+//
+// memory 快路径没有提交点，新建的持久实体无处落库（新建实体本身就要落库，维护者 2026-10-30），所以拒绝：
+// CreateInScope 撤销这次发布并把 ErrMemoryTransactionPersistentWrite 交给业务。与这条路径上持久 setter 的处理同一
+// 结论（那里 MarkPersist 以 ErrTransactionClosed panic）；有 RollbackTx 的 memory 事务则在提交点整条拒绝。
 type memoryHandlerCreates struct{}
 
-func (memoryHandlerCreates) CaptureCreatedEntity(entity.IThreadSafeEntity, func()) error { return nil }
+func (memoryHandlerCreates) CaptureCreatedEntity(created entity.IThreadSafeEntity, _ func()) error {
+	if created != nil && firstAggregateDAO(created) != nil {
+		return fmt.Errorf("%w: a memory handler (rollback=none, durability=memory) cannot create persistent entity %d (kind %d): there is no commit to store it; declare a durable policy (strict/async/pipelined)",
+			ErrMemoryTransactionPersistentWrite, created.ID(), created.GetEntityKind())
+	}
+	return nil
+}
+
 func (memoryHandlerCreates) CreatedEntityLockBusy(id int64) error {
 	return createdEntityLockBusy(id, false)
 }

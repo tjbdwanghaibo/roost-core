@@ -310,8 +310,8 @@ func resolveEntityBuilder(param *EntityCreateParam) (*EntityBuilderParam, error)
 }
 
 // BuildEntity 用登记的 builder 构建实体，不加入 Manager、不取实体锁。供需要先完成构建、再决定如何发布到内存的
-// 加载器使用。顺序：规范 ID → 新建时创建 DAO → builder（内部创建组件并 InitAll）→ 策略与指针校验 → 恢复 Remote
-// 版本 → 生命周期与同步 → OnInitFinish。
+// 加载器使用。顺序：规范 ID → 新建时创建 DAO → 持久 kind 绑定 DaoAggregate → builder（内部创建组件并 InitAll）→
+// 策略与指针校验 → 恢复 Remote 版本 → 生命周期与同步 → OnInitFinish。
 func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 	bp, err := resolveEntityBuilder(param)
 	if err != nil {
@@ -332,8 +332,9 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 		}
 	}
 	// 必须早于 builder：组件 Init 与 OnInitFinish 里的第一次 setter 就可能是这个实体的第一笔持久登记。
-	if param.IsCreate && !bp.NoPersist {
-		bindNewAggregate(param.Dao)
+	// 新建与冷加载都绑定：新建实体的每个 DAO、冷加载时补空的 DAO 都还没有持久文档，由同一条规则写出（见 DaoAggregate）。
+	if !bp.NoPersist {
+		bindDaoAggregate(param.Dao)
 	}
 
 	// 构建实体（组件在 Builder 内创建并 InitAll）。
@@ -372,19 +373,58 @@ func BuildEntity(param *EntityCreateParam) (IThreadSafeEntity, error) {
 	return e, nil
 }
 
-// NewAggregateMember 由持久 DAO 的脏 tracker（DaoInterface.Dirty() 的返回值；生成 DAO 是 *dataengine.Tracker）实现。
+// DaoAggregate 是一个持久实体的全部 DAO（按集合名排序），由 BuildEntity 交给每个 DAO 的 tracker（AggregateMember）。
 //
-// 冷加载要求聚合的每个持久 DAO 都有文档，部分存在按损坏拒绝（ErrEntityAggregateCorrupt）；事务却只为登记过变化的 DAO
-// 写文档。为此新建实体时 BuildEntity 把同一聚合的全部 DAO 交给每个 DAO 的 tracker，持久事务（Nest）第一次登记这个
-// 实体的某个 DAO、而它还没持久过（版本 0）时，据此把同样版本 0 的其他 DAO 一并以整文档登记：新建实体的第一笔持久
-// 提交写齐每个 DAO，与业务改了哪个 DAO 无关。冷加载出来的实体不绑定。
-type NewAggregateMember interface {
-	BindNewAggregate(daos []DaoInterface)
+// 冷加载要求聚合的每个 DAO 都能还原，事务却只为登记过变化的 DAO 写文档。持久事务（Nest）第一次登记某个 DAO 时据此把
+// 同一聚合里还没有持久文档（版本 0）的 DAO 以整文档一并登记，一条规则覆盖两种来源（维护者 2026-10-30）：
+//   - 新建实体：每个 DAO 都是版本 0，创建它的事务写齐全部 DAO（Nest 在捕获新实体时登记，不依赖业务改了哪个字段）；
+//   - 冷加载时补空的 DAO（上线后给已有 kind 新增的 DAO，库里没有文档，EntityRepository 按初值补上）：这个实体的下一笔
+//     持久提交把它写出，读路径本身不产生写。
+//
+// 全部 DAO 都有持久文档之后（allPersisted），之后的登记不再逐个检查。版本只在提交被接受时前进、不会退回 0
+// （回滚只恢复登记时的快照，而登记时已不为 0），所以这个标记只置一次。
+type DaoAggregate struct {
+	daos         []DaoInterface
+	allPersisted atomic.Bool
 }
 
-// bindNewAggregate 把新建实体的全部 DAO（按集合名排序，同一事务里 mutation 的顺序因此确定）交给各自的 tracker；
-// tracker 不实现 NewAggregateMember 的 DAO（手写、自己用 AddMutation 落库的）不参与。
-func bindNewAggregate(daos map[string]DaoInterface) {
+// NewDaoAggregate 以给定的 DAO（按集合名排序）组成一个聚合。BuildEntity 用它绑定实体的 DAO；手写实体或测试需要
+// 自己绑定时也用它。
+func NewDaoAggregate(daos ...DaoInterface) *DaoAggregate {
+	members := slices.Clone(daos)
+	slices.SortFunc(members, func(a, b DaoInterface) int { return strings.Compare(a.CollName(), b.CollName()) })
+	return &DaoAggregate{daos: members}
+}
+
+// DAOs 返回聚合的全部 DAO（按集合名排序）。调用方不得修改返回的切片。
+func (aggregate *DaoAggregate) DAOs() []DaoInterface {
+	if aggregate == nil {
+		return nil
+	}
+	return aggregate.daos
+}
+
+// AllPersisted 报告是否已确认每个 DAO 都有持久文档。
+func (aggregate *DaoAggregate) AllPersisted() bool {
+	return aggregate == nil || aggregate.allPersisted.Load()
+}
+
+// MarkAllPersisted 记下每个 DAO 都已有持久文档；调用方须已确认全部 DAO 的已接受版本都不为 0。
+func (aggregate *DaoAggregate) MarkAllPersisted() {
+	if aggregate != nil {
+		aggregate.allPersisted.Store(true)
+	}
+}
+
+// AggregateMember 由持久 DAO 的脏 tracker（DaoInterface.Dirty() 的返回值；生成 DAO 是 *dataengine.Tracker）实现，
+// 接收 BuildEntity 绑定的 DaoAggregate。
+type AggregateMember interface {
+	BindAggregate(aggregate *DaoAggregate)
+}
+
+// bindDaoAggregate 把实体的全部 DAO（按集合名排序，同一事务里 mutation 的顺序因此确定）作为一个 DaoAggregate 交给各自的
+// tracker；tracker 不实现 AggregateMember 的 DAO（手写、自己用 AddMutation 落库的）不参与。
+func bindDaoAggregate(daos map[string]DaoInterface) {
 	if len(daos) == 0 {
 		return
 	}
@@ -394,12 +434,18 @@ func bindNewAggregate(daos map[string]DaoInterface) {
 			members = append(members, dao)
 		}
 	}
-	slices.SortFunc(members, func(a, b DaoInterface) int { return strings.Compare(a.CollName(), b.CollName()) })
-	for _, dao := range members {
-		if member, ok := dao.Dirty().(NewAggregateMember); ok {
-			member.BindNewAggregate(members)
+	aggregate := NewDaoAggregate(members...)
+	for _, dao := range aggregate.daos {
+		if member, ok := dao.Dirty().(AggregateMember); ok {
+			member.BindAggregate(aggregate)
 		}
 	}
+}
+
+// isEntityKindPersistent 报告 kind 的实体是否落库：登记了 builder、不是 noPersist、至少有一个 DAO。
+func isEntityKindPersistent(kind EntityKind) bool {
+	bp := GetEntityBuilderParam(kind)
+	return bp != nil && !bp.NoPersist && len(bp.DaoBuilders) > 0
 }
 
 // normalizeBuilderPolicy 按 kind 的实际策略补默认生命周期并校验（调用方持有 registryMu）。builder 省略 RemotePolicy 时，

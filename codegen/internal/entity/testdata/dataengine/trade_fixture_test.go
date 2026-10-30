@@ -100,7 +100,7 @@ func newTradeFixtureWith(t *testing.T, ctx context.Context, client fmongo.IMongo
 }
 
 // b27HandlerNames 是 B27 第 2 批用例经 register 登记的 handler；先放进 pipelined 允许清单，pipelined 策略下才走正式 pipelined 路径。
-var b27HandlerNames = []string{"trade_nested", "trade_nested_memory", "trade_fence_outer", "trade_create", "trade_create_wallet", "trade_cross_0", "trade_cross_1"}
+var b27HandlerNames = []string{"trade_nested", "trade_nested_memory", "trade_fence_outer", "trade_create", "trade_create_wallet", "trade_create_untouched", "trade_wallet_only", "trade_cross_0", "trade_cross_1"}
 
 // newTradeFixtureRegistering 在 Nest 启动前让用例登记自己的 handler（B27 第 2 批），其余与 newTradeFixture 相同。
 func newTradeFixtureRegistering(t *testing.T, ctx context.Context, client fmongo.IMongo, root, scenario string, policy nest.DurabilityPolicy, ackHook bool, register func(*tradeFixture), configure ...func(*engine.ProjectorOptions)) *tradeFixture {
@@ -223,6 +223,11 @@ func newTradeFixtureFull(t *testing.T, ctx context.Context, client fmongo.IMongo
 	t.Cleanup(func() { _ = h.scheduler.Shutdown(context.Background()) })
 	return h
 }
+
+// seededVersion 是 seed 之后每个 DAO 的持久版本：Nest 之外的 Create 由框架补一笔持久提交（新建实体本身就落库，版本 1），
+// trade_seed 再提交一笔（版本 2）。
+const seededVersion = 2
+
 func (h *tradeFixture) seed(t *testing.T, base, count int) []int64 {
 	t.Helper()
 	ids := make([]int64, count)
@@ -238,9 +243,10 @@ func (h *tradeFixture) seed(t *testing.T, base, count int) []int64 {
 		if _, err = h.scheduler.Request(h.ctx, nest.NewHandlerName("trade_seed"), id, nil); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := h.runtime.Flush(h.ctx); err != nil {
-		t.Fatal(err)
+		// 每个实体两笔提交（新建 + trade_seed）：逐个投影完，背压用例的 MaxUnackedRecords=2 不会被 seed 本身占满。
+		if err := h.runtime.Flush(h.ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return ids
 }

@@ -1,6 +1,7 @@
 package entity
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -9,13 +10,18 @@ import (
 
 // Create 构建并发布实体，在短作用域 Guard 释放之前持有它的锁。之后的修改必须经 Nest 进入。
 //
-// 在 Nest handler 内新建（param.IsCreate 且当前 Guard 作用域绑定了 CreatedEntityCapturer）时，
-// Create 就是 handler 内创建：沿用当前作用域走 CreateInScope，锁随 handler 的 Guard 释放。
-// 事务 handler 与 Cast 一样进入同一提交边界，回滚 / 拒绝时撤销发布（生成 Lifecycle 的 Create / GetOrCreate
-// 都经过这里）；memory 快路径 handler 同样持锁到 handler 结束并进入本次 SyncMutation。取锁按 Cast 的锁序，
-// 冲突时返回可重试错误，见 CreateInScope。
-// 加载已持久的实体（IsCreate=false，Repository 聚合加载）和 Nest 之外的调用保持
-// 短作用域立即发布的原语义。
+// 新建（param.IsCreate）的去向按“谁来提交”决定，新建的持久实体总由一笔持久事务捕获、在它提交时写齐每个 DAO
+// （维护者 2026-10-30：新建实体本身就要落库，与有没有改持久字段无关）：
+//   - 当前 Guard 作用域绑定了 CreatedEntityCapturer（Nest handler 内，含 handler 里的 RunDetachedTransaction /
+//     RunIsolatedTransaction）：就是 handler 内创建，沿用当前作用域走 CreateInScope，锁随 handler 的 Guard 释放。
+//     事务 handler 与 Cast 一样进入同一提交边界，回滚 / 拒绝时撤销发布（生成 Lifecycle 的 Create / GetOrCreate
+//     都经过这里）；memory 快路径 handler 拒绝新建持久实体（没有提交点）。取锁按 Cast 的锁序，冲突时返回可重试错误，
+//     见 CreateInScope。
+//   - 没有捕获者、kind 落库且已注册 CreateAdmitter（DataEngine 已启动）：交给准入门，它起一笔 strict 事务新建并提交，
+//     提交被接受后才返回。会等待 WAL，业务 worker 上调用返回 fctx.ErrBlockingInBusinessWorker。
+//   - 其余（非持久 kind、Remote 托管 kind、没有 DataEngine）：短作用域立即发布，不落库。
+//
+// 加载已持久的实体（IsCreate=false，Repository 聚合加载）保持短作用域立即发布的原语义。
 func (m *EntityManager) Create(param *EntityCreateParam) (IThreadSafeEntity, error) {
 	if m == nil {
 		return nil, ErrEntityNotManaged
@@ -23,6 +29,11 @@ func (m *EntityManager) Create(param *EntityCreateParam) (IThreadSafeEntity, err
 	if param != nil && param.IsCreate {
 		if scope := CurrentGuardScope(); scope != nil && scope.guard != nil && scope.guard.createdCapturer != nil {
 			return m.CreateInScope(scope, param)
+		}
+		if admitter := m.persistentCreateAdmitter(param.Kind); admitter != nil {
+			return admitter(context.Background(), func(scope *GuardScope) (IThreadSafeEntity, error) {
+				return m.CreateInScope(scope, param)
+			})
 		}
 	}
 	var result IThreadSafeEntity
@@ -61,7 +72,9 @@ type CreatedEntityCapturer interface {
 // 提交：先交给事务捕获回滚与持久化参与者，再加入当前 SyncMutation，Sync 在提交确认前不外发；
 // 事务回滚或被拒绝时撤销发布（见 revokeCreated）。取锁遵循与 Cast 相同的锁序（见 lockCreated）：
 // 不能有序等待时只 try-lock，被占用返回 capturer 给出的可重试错误，不发布、不持锁。
-// 其余作用域（Create 自建的短作用域、Nest 之外的 WithGuardScope）保持等待取锁、立即发布的原语义。
+// 其余作用域（Create 自建的短作用域、Nest 之外的 WithGuardScope）保持等待取锁、立即发布的原语义；但注册了
+// CreateAdmitter（DataEngine 已启动）时，这类没有事务捕获的作用域不能新建持久 kind（没有提交点，新实体只会活在
+// 内存里），返回 ErrPersistentCreateOutsideTransaction，改用 Create。
 //
 // 发布失败（TryAdd 报 ErrEntityExists / ErrEntityRemoved）时归还本次取得的锁：同一作用域随后按同 ID
 // 重试（生成 GetOrCreate）会新建实例，若锁仍以旧实例记在 Guard 上，新实例会在未加锁的情况下发布。
@@ -73,6 +86,10 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 	}
 	if scope == nil || scope.guard == nil {
 		return nil, fmt.Errorf("entity guard scope is required")
+	}
+	if param != nil && param.IsCreate && scope.guard.createdCapturer == nil && m.persistentCreateAdmitter(param.Kind) != nil {
+		// 没有事务捕获就没有提交点：新实体只会活在内存里。Create 会改走 CreateAdmitter。
+		return nil, fmt.Errorf("%w: kind %d in guard scope %q", ErrPersistentCreateOutsideTransaction, param.Kind, scope.Name())
 	}
 	value, err := m.build(param)
 	if err != nil {

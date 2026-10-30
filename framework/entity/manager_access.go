@@ -150,6 +150,14 @@ func (access *ManagerAccess) RegisterDeleteAdmitter(admitter DeleteAdmitter) (fu
 	return access.manager.RegisterDeleteAdmitter(admitter)
 }
 
+// RegisterCreateAdmitter 见 EntityManager.RegisterCreateAdmitter。
+func (access *ManagerAccess) RegisterCreateAdmitter(admitter CreateAdmitter) (func(), error) {
+	if access == nil || access.manager == nil {
+		return nil, ErrEntityNotManaged
+	}
+	return access.manager.RegisterCreateAdmitter(admitter)
+}
+
 // ConfigureLoader 安装冷加载器，返回的函数注销它。注销同时取消这次注册下所有在途的共享加载
 // （Cause 为 ErrEntityLoaderStopped）：DataEngine Runtime 停机时先注销 loader，加载不会在停机后
 // 继续等投影或读 store。注销可重复调用；loader 已被新注册替换时只取消自己的在途加载。

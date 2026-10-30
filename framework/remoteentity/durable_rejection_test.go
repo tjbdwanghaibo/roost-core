@@ -453,3 +453,41 @@ func TestWALRemoteAuthorityConflictNeverProducesRejected(t *testing.T) {
 		})
 	}
 }
+
+// 新建实体与冷加载补空的 DAO 以整文档登记，掩码是 dataengine.AllFields（最高位为 1）。BSON 只有有符号 64 位整数，
+// Remote 事务记录照原样存 uint64 掩码会在投影时 “overflows int64”、记录已持久而投影永远失败（R15 之后每个新建 Remote
+// 实体的第一笔写都这样）。记录按位存掩码，读回与写入相同。
+func TestMongoCommitterStoresEveryMutationMaskBitForBit(t *testing.T) {
+	f := newMemoryUnresolvedFixture(t, 1790, func(store *MongoCommitter) StorageBackend { return store })
+	ctx := context.Background()
+	batch, err := f.mgr.PrepareRemoteWriteBatch(ctx, []int64{f.live.GUId()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.live.dirty.set(true)
+	if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(remoteTestTxID(96), "memory", "", true, 0)); err != nil {
+		t.Fatal(err)
+	}
+	commits := batch.Commits()
+	_ = batch.Abort(ctx, errors.New("only the commit content is needed"))
+	_ = batch.Close(ctx)
+	if len(commits) != 1 || len(commits[0].Mutations) == 0 {
+		t.Fatalf("commits=%+v, want one commit with a data mutation", commits)
+	}
+	masks := []uint64{coredata.AllFields, 1 << 63, 0b101}
+	for i := range commits[0].Mutations {
+		commits[0].Mutations[i].Mask = masks[i%len(masks)]
+	}
+	if _, err := f.store.CommitRemoteBatch(ctx, commits); err != nil {
+		t.Fatalf("commit with a whole-document mask: %v", err)
+	}
+	status, err := f.store.CommitStatus(ctx, commits[0].TransactionID)
+	if err != nil || len(status.Commits) != 1 {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	for i, mutation := range status.Commits[0].Mutations {
+		if want := commits[0].Mutations[i].Mask; mutation.Mask != want {
+			t.Fatalf("mutation %d mask read back %#x, want %#x", i, mutation.Mask, want)
+		}
+	}
+}

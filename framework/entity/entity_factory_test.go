@@ -2,6 +2,8 @@ package entity
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 )
@@ -291,12 +293,12 @@ func TestNewEntity_UnregisteredType(t *testing.T) {
 	}
 }
 
-// newAggregateRecorder 替代 dataengine.Tracker 记下 BuildEntity 绑定的新聚合（entity 包测试不能 import dataengine）。
-type newAggregateRecorder struct{ daos []DaoInterface }
+// newAggregateRecorder 替代 dataengine.Tracker 记下 BuildEntity 绑定的聚合（entity 包测试不能 import dataengine）。
+type newAggregateRecorder struct{ aggregate *DaoAggregate }
 
-func (r *newAggregateRecorder) Dirty() bool                          { return false }
-func (r *newAggregateRecorder) SelfClean()                           {}
-func (r *newAggregateRecorder) BindNewAggregate(daos []DaoInterface) { r.daos = daos }
+func (r *newAggregateRecorder) Dirty() bool                           { return false }
+func (r *newAggregateRecorder) SelfClean()                            {}
+func (r *newAggregateRecorder) BindAggregate(aggregate *DaoAggregate) { r.aggregate = aggregate }
 
 type newAggregateFactoryDao struct {
 	factoryTestDao
@@ -329,22 +331,28 @@ func init() {
 	}
 }
 
-// 新建的持久实体把全部 DAO（按集合名排序）绑定到每个 DAO 的 tracker，持久事务据此让第一笔持久提交写齐聚合；
-// 冷加载（IsCreate=false）与 noPersist 实体不绑定。
-func TestBuildEntityBindsTheNewAggregateOnlyForPersistentCreates(t *testing.T) {
+// 持久实体（新建与冷加载）把全部 DAO（按集合名排序）作为同一个 DaoAggregate 绑定到每个 DAO 的 tracker：持久事务据此
+// 让新建实体的创建事务、冷加载补空 DAO 的下一笔提交写齐聚合；noPersist 实体不绑定。
+func TestBuildEntityBindsTheDAOAggregateForPersistentEntities(t *testing.T) {
 	daoOf := func(e IThreadSafeEntity, coll string) *newAggregateFactoryDao {
 		return e.(*factoryTestEntity).DaoManager.Get(coll).(*newAggregateFactoryDao)
+	}
+	assertBound := func(name string, e IThreadSafeEntity) {
+		t.Helper()
+		profile, rank := daoOf(e, "profile"), daoOf(e, "rank")
+		aggregate := profile.tracker.aggregate
+		if rank.tracker.aggregate != aggregate {
+			t.Fatalf("%s: profile and rank bound different aggregates", name)
+		}
+		if got := aggregate.DAOs(); len(got) != 2 || got[0] != DaoInterface(profile) || got[1] != DaoInterface(rank) {
+			t.Fatalf("%s: bound %v, want [profile rank] of the same entity", name, got)
+		}
 	}
 	created, err := BuildEntity(&EntityCreateParam{IsCreate: true, Kind: newAggregatePersistentKind, Id: mustBuildTestEntityID(t, 51, testEntityCategory, newAggregatePersistentKind)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	profile, rank := daoOf(created, "profile"), daoOf(created, "rank")
-	for _, dao := range []*newAggregateFactoryDao{profile, rank} {
-		if got := dao.tracker.daos; len(got) != 2 || got[0] != DaoInterface(profile) || got[1] != DaoInterface(rank) {
-			t.Fatalf("%s bound %v, want [profile rank] of the same entity", dao.coll, got)
-		}
-	}
+	assertBound("created", created)
 
 	loadedID := mustBuildTestEntityID(t, 52, testEntityCategory, newAggregatePersistentKind)
 	loadedDAOs := map[string]DaoInterface{
@@ -355,15 +363,85 @@ func TestBuildEntityBindsTheNewAggregateOnlyForPersistentCreates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	assertBound("loaded", loaded)
+
 	transient, err := BuildEntity(&EntityCreateParam{IsCreate: true, Kind: newAggregateNoPersistKind, Id: mustBuildTestEntityID(t, 53, testEntityCategory, newAggregateNoPersistKind)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, e := range map[string]IThreadSafeEntity{"loaded": loaded, "noPersist": transient} {
-		for _, coll := range []string{"profile", "rank"} {
-			if got := daoOf(e, coll).tracker.daos; got != nil {
-				t.Fatalf("%s entity bound a new aggregate on %s: %v", name, coll, got)
-			}
+	for _, coll := range []string{"profile", "rank"} {
+		if got := daoOf(transient, coll).tracker.aggregate; got != nil {
+			t.Fatalf("noPersist entity bound an aggregate on %s: %v", coll, got.DAOs())
 		}
 	}
+}
+
+// 事务外新建持久实体经 CreateAdmitter（DataEngine 注册）：Create 没有事务捕获者时把 CreateInScope 交给准入门；
+// 准入门给的作用域没有捕获者时 CreateInScope 拒绝，不会悄悄只发布到内存。非持久 kind 与没有准入门时照旧立即发布。
+func TestEntityManagerCreateOutsideATransactionGoesThroughTheCreateAdmitter(t *testing.T) {
+	manager := NewEntityManager()
+	var admitted []EntityKind
+	unregister, err := manager.RegisterCreateAdmitter(func(_ context.Context, create func(*GuardScope) (IThreadSafeEntity, error)) (IThreadSafeEntity, error) {
+		var created IThreadSafeEntity
+		err := WithGuardScope("test_create_admitter", func(scope *GuardScope) error {
+			restore := scope.Guard().SwapCreatedEntityCapturer(acceptingCapturer{})
+			defer scope.Guard().SwapCreatedEntityCapturer(restore)
+			value, err := create(scope)
+			if value != nil {
+				admitted = append(admitted, value.GetEntityKind())
+			}
+			created = value
+			return err
+		})
+		return created, err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.RegisterCreateAdmitter(func(context.Context, func(*GuardScope) (IThreadSafeEntity, error)) (IThreadSafeEntity, error) {
+		return nil, nil
+	}); !errors.Is(err, ErrCreateAdmitterExists) {
+		t.Fatalf("second admitter err=%v", err)
+	}
+
+	persistentID := mustBuildTestEntityID(t, 61, testEntityCategory, newAggregatePersistentKind)
+	if _, err := manager.Create(&EntityCreateParam{IsCreate: true, Kind: newAggregatePersistentKind, Id: persistentID}); err != nil {
+		t.Fatal(err)
+	}
+	if len(admitted) != 1 || admitted[0] != newAggregatePersistentKind || manager.Get(persistentID) == nil {
+		t.Fatalf("persistent create admitted=%v published=%v, want it to go through the admitter", admitted, manager.Get(persistentID) != nil)
+	}
+	transientID := mustBuildTestEntityID(t, 62, testEntityCategory, newAggregateNoPersistKind)
+	if _, err := manager.Create(&EntityCreateParam{IsCreate: true, Kind: newAggregateNoPersistKind, Id: transientID}); err != nil {
+		t.Fatal(err)
+	}
+	if len(admitted) != 1 || manager.Get(transientID) == nil {
+		t.Fatalf("noPersist create admitted=%v, want it published directly", admitted)
+	}
+
+	bareID := mustBuildTestEntityID(t, 63, testEntityCategory, newAggregatePersistentKind)
+	err = WithGuardScope("bare", func(scope *GuardScope) error {
+		_, err := manager.CreateInScope(scope, &EntityCreateParam{IsCreate: true, Kind: newAggregatePersistentKind, Id: bareID})
+		return err
+	})
+	if !errors.Is(err, ErrPersistentCreateOutsideTransaction) || manager.Get(bareID) != nil {
+		t.Fatalf("CreateInScope of a persistent entity on a scope without a transaction: err=%v published=%v", err, manager.Get(bareID) != nil)
+	}
+
+	unregister()
+	afterID := mustBuildTestEntityID(t, 64, testEntityCategory, newAggregatePersistentKind)
+	if _, err := manager.Create(&EntityCreateParam{IsCreate: true, Kind: newAggregatePersistentKind, Id: afterID}); err != nil {
+		t.Fatal(err)
+	}
+	if len(admitted) != 1 || manager.Get(afterID) == nil {
+		t.Fatalf("create without an admitter admitted=%v, want it published directly (no DataEngine, nothing to store to)", admitted)
+	}
+}
+
+// acceptingCapturer 模拟持久事务：接受新实体，不撤销。
+type acceptingCapturer struct{}
+
+func (acceptingCapturer) CaptureCreatedEntity(IThreadSafeEntity, func()) error { return nil }
+func (acceptingCapturer) CreatedEntityLockBusy(id int64) error {
+	return fmt.Errorf("entity %d is busy", id)
 }

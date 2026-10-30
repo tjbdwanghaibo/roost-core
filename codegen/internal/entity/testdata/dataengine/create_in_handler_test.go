@@ -285,46 +285,127 @@ func TestGeneratedDataEngineCrossCreateResolvesOnRealWAL(t *testing.T) {
 	}
 }
 
-// 新建实体的第一笔持久提交写齐聚合的每个 DAO：handler 内新建 Trader 只改 wallet，inventory 一个字段也没动，提交后
-// 两个集合都有版本 1 的文档；“重启”（同一 WAL 目录、新的 Runtime / Nest / EntityManager）后冷加载成功，inventory 为初值。
-// 修复前只有 wallet 有文档，冷加载报 entity aggregate is incomplete or corrupt（live=1 missing=1）。
+// 新建实体本身就落库并写齐聚合的每个 DAO（维护者 2026-10-30）：
+//   - handler 内新建 Trader 只改 wallet，inventory 一个字段也没动；
+//   - handler 内新建、一个字段都不改；
+//   - Nest 之外直接经 ManagerAccess.Create 新建（生成 Lifecycle 的 Create / GetOrCreate 在登录、服务 Init 里走这条），
+//     Runtime 注册的持久新建准入门为它起一笔 strict 事务。
+//
+// 提交后两个集合都有版本 1 的文档；“重启”（同一 WAL 目录、新的 Runtime / Nest / EntityManager）后冷加载成功，没改的 DAO 为初值。
+// R15 修复前只改 wallet 时只有 wallet 有文档（冷加载报 live=1 missing=1）；R15 之后、本次修复前，后两种没有任何文档
+// （冷加载 entity aggregate not found: state=absent）。
 func TestGeneratedDataEngineCreatedEntityWritesEveryDAOAndReloads(t *testing.T) {
 	ctx, client := reloadTestClient(t)
 	for _, policy := range []nest.DurabilityPolicy{nest.DurabilityAsync, nest.DurabilityStrict, nest.DurabilityPipelined} {
 		t.Run(policy.String(), func(t *testing.T) {
 			base := 36300 + int(policy)*10
-			clearTraderDocuments(t, ctx, client, base, 2)
+			clearTraderDocuments(t, ctx, client, base, 4)
 			root := t.TempDir()
 			h := newTradeFixtureRegistering(t, ctx, client, root, "create-every-dao", policy, false, func(h *tradeFixture) {
-				h.scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName("trade_create_wallet"), func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+				create := func(params []any) (*Trader, error) {
 					created, err := h.access.Create(&entity.EntityCreateParam{IsCreate: true, Kind: EntityKindTrader, Id: params[0].(int64)})
 					if err != nil {
 						return nil, err
 					}
-					created.(*Trader).wallet.SetCoins(createdCoins)
+					return created.(*Trader), nil
+				}
+				h.scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName("trade_create_wallet"), func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+					trader, err := create(params)
+					if err != nil {
+						return nil, err
+					}
+					trader.wallet.SetCoins(createdCoins)
 					return "ok", nil
+				}, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: policy})
+				h.scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName("trade_create_untouched"), func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+					_, err := create(params)
+					return "ok", err
 				}, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: policy})
 			})
 			caller := h.seed(t, base, 1)[0]
-			created := traderID(t, base+1)
-			if _, err := h.scheduler.Request(ctx, nest.NewHandlerName("trade_create_wallet"), caller, nest.Params{created}); err != nil {
+			wallet, untouched, outside := traderID(t, base+1), traderID(t, base+2), traderID(t, base+3)
+			if _, err := h.scheduler.Request(ctx, nest.NewHandlerName("trade_create_wallet"), caller, nest.Params{wallet}); err != nil {
 				t.Fatalf("create inside the handler: %v", err)
 			}
-			h.noFatal(t, h.runtime.Flush(ctx), "after the create")
+			if _, err := h.scheduler.Request(ctx, nest.NewHandlerName("trade_create_untouched"), caller, nest.Params{untouched}); err != nil {
+				t.Fatalf("create inside the handler without a change: %v", err)
+			}
+			if _, err := h.access.Create(&entity.EntityCreateParam{IsCreate: true, Kind: EntityKindTrader, Id: outside}); err != nil {
+				t.Fatalf("create outside any transaction: %v", err)
+			}
+			h.noFatal(t, h.runtime.Flush(ctx), "after the creates")
 			h.close(t, nil)
 
 			restarted := newTradeFixture(t, ctx, client, root, "create-every-dao", policy, false)
-			value, err := restarted.runtime.Repository.LoadEntity(ctx, created, EntityKindTrader)
-			if err != nil {
-				t.Fatalf("cold load of the created entity after a restart: %v", err)
+			for _, want := range []struct {
+				id    int64
+				coins int64
+			}{{wallet, createdCoins}, {untouched, 0}, {outside, 0}} {
+				value, err := restarted.runtime.Repository.LoadEntity(ctx, want.id, EntityKindTrader)
+				if err != nil {
+					t.Fatalf("cold load of created entity %d after a restart: %v", want.id, err)
+				}
+				trader := value.(*Trader)
+				if trader.wallet.GetCoins() != want.coins || trader.inventory.GetItems() != 0 || trader.inventory.DirtyTracker().Version() != 1 || trader.wallet.DirtyTracker().Version() != 1 {
+					t.Fatalf("reloaded %d coins=%d items=%d versions wallet=%d inventory=%d, want coins=%d, the untouched inventory at its initial value, both version 1",
+						want.id, trader.wallet.GetCoins(), trader.inventory.GetItems(), trader.wallet.DirtyTracker().Version(), trader.inventory.DirtyTracker().Version(), want.coins)
+				}
+				restarted.assertState(t, want.id, tradeState{Coins: want.coins, Version: 1}, true)
 			}
-			trader := value.(*Trader)
-			if trader.wallet.GetCoins() != createdCoins || trader.inventory.GetItems() != 0 || trader.inventory.DirtyTracker().Version() != 1 {
-				t.Fatalf("reloaded coins=%d items=%d inventory version=%d, want coins=%d and the untouched inventory at its initial value, version 1",
-					trader.wallet.GetCoins(), trader.inventory.GetItems(), trader.inventory.DirtyTracker().Version(), createdCoins)
-			}
-			restarted.assertState(t, created, tradeState{Coins: createdCoins, Version: 1}, true)
 			restarted.close(t, nil)
+		})
+	}
+}
+
+// 上线后给已有 kind 新增 DAO（维护者 2026-10-30）：存量 Trader 只有 wallet 文档（删掉 inventory 文档模拟“写入时 kind
+// 还没有 inventory”）。重启后冷加载按初值补上 inventory，第一笔只改 wallet 的提交把 inventory 以整文档写出（版本 1），
+// 之后冷加载两个 DAO 都从库里还原。本次修复前冷加载报 entity aggregate is incomplete or corrupt（live=1 missing=1）。
+func TestGeneratedDataEngineColdLoadFillsADAOAddedLater(t *testing.T) {
+	ctx, client := reloadTestClient(t)
+	for _, policy := range []nest.DurabilityPolicy{nest.DurabilityAsync, nest.DurabilityStrict, nest.DurabilityPipelined} {
+		t.Run(policy.String(), func(t *testing.T) {
+			base := 36400 + int(policy)*10
+			clearTraderDocuments(t, ctx, client, base, 1)
+			root := t.TempDir()
+			h := newTradeFixture(t, ctx, client, root, "fill-added-dao", policy, false)
+			stored := h.seed(t, base, 1)[0]
+			h.close(t, nil)
+			if _, err := client.Database(h.database).Collection("trade_inventories").DeleteOne(ctx, bson.M{"_id": stored}); err != nil {
+				t.Fatal(err)
+			}
+
+			restarted := newTradeFixtureRegistering(t, ctx, client, root, "fill-added-dao", policy, false, func(h *tradeFixture) {
+				h.scheduler.MustRegisterHandlerWithMeta(nest.NewHandlerName("trade_wallet_only"), func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+					trader := es[0].(*Trader)
+					trader.wallet.SetCoins(trader.wallet.GetCoins() + 1)
+					return "ok", nil
+				}, nest.HandlerMeta{Rollback: nest.RollbackState, Durability: policy})
+			})
+			if _, err := restarted.scheduler.Request(ctx, nest.NewHandlerName("trade_wallet_only"), stored, nil); err != nil {
+				t.Fatalf("first request after the DAO was added: %v", err)
+			}
+			restarted.noFatal(t, restarted.runtime.Flush(ctx), "after the first write")
+			var inventory struct {
+				Items   int64  `bson:"items"`
+				Version uint64 `bson:"_version"`
+			}
+			if err := client.Database(restarted.database).Collection("trade_inventories").FindOne(ctx, bson.M{"_id": stored}, &inventory); err != nil {
+				t.Fatalf("the filled inventory was not written by the next commit: %v", err)
+			}
+			if inventory.Items != 0 || inventory.Version != 1 {
+				t.Fatalf("written inventory=%+v, want the initial value at version 1", inventory)
+			}
+			restarted.close(t, nil)
+
+			again := newTradeFixture(t, ctx, client, root, "fill-added-dao", policy, false)
+			value, err := again.runtime.Repository.LoadEntity(ctx, stored, EntityKindTrader)
+			if err != nil {
+				t.Fatalf("cold load after the filled DAO was written: %v", err)
+			}
+			if trader := value.(*Trader); trader.wallet.GetCoins() != 10001 || trader.inventory.DirtyTracker().Version() != 1 {
+				t.Fatalf("reloaded coins=%d inventory version=%d, want 10001 and 1", trader.wallet.GetCoins(), trader.inventory.DirtyTracker().Version())
+			}
+			again.close(t, nil)
 		})
 	}
 }

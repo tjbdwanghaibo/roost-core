@@ -30,6 +30,7 @@ type Runtime struct {
 	access           *entity.ManagerAccess
 	unregisterLoader func()
 	unregisterDelete func()
+	unregisterCreate func()
 	remoteManager    entity.IRemoteEntityManager
 	onFatal          func(error)
 	ready            atomic.Bool
@@ -102,9 +103,19 @@ func (runtime *Runtime) Start(ctx context.Context) error {
 		return err
 	}
 	runtime.unregisterDelete = unregisterDelete
+	unregisterCreate, err := runtime.access.RegisterCreateAdmitter(entityCreateAdmitter(runtime.Projector, runtime.fail))
+	if err != nil {
+		runtime.unregisterDelete()
+		runtime.unregisterDelete = nil
+		runtime.unregisterLoader()
+		runtime.unregisterLoader = nil
+		runtime.ready.Store(false)
+		return err
+	}
+	runtime.unregisterCreate = unregisterCreate
 	runtime.Outbox.Start(context.Background())
-	// 两个框架入口都安装后才发布就绪：并发的健康检查或提交器查询不能看到
-	// 只有加载器、没有持久删除门的半装配 Runtime。
+	// 三个框架入口（加载器、持久删除门、持久新建门）都安装后才发布就绪：并发的健康检查或提交器查询不能看到
+	// 半装配的 Runtime。
 	runtime.ready.Store(true)
 	return nil
 }
@@ -205,6 +216,10 @@ func (runtime *Runtime) Shutdown(ctx context.Context) error {
 func (runtime *Runtime) stop(ctx context.Context, drain bool) error {
 	runtime.stopping = true
 	runtime.ready.Store(false)
+	if runtime.unregisterCreate != nil {
+		runtime.unregisterCreate()
+		runtime.unregisterCreate = nil
+	}
 	if runtime.unregisterDelete != nil {
 		runtime.unregisterDelete()
 		runtime.unregisterDelete = nil

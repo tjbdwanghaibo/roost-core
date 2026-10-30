@@ -187,6 +187,17 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](DESIGN-TODO.md#d
 2. 按错误给出的事务 ID 与 `<库>/<集合>/<_id>`，在 Mongo 确认该 `_id` 是墓碑（`_deleted: true`），`roost id entity <_id>` 换算玩家 ID，`cmd/walinspect -dir <WAL目录> -snapshot <新目录>` 做一份只读副本留证（不推进 checkpoint、不跳过记录）。
 3. 线上尚未部署（维护者 2026-10-06）：停旧版本、清空该 sid 的 WAL 目录与测试库后起新版本。上线后若遇到，由维护者决定是否接受丢弃该事务（被丢弃的是删档后被错误重建的那条写入，客户端当时收到过成功），并修正复用 ID 的业务代码。见[维护手册 §4](README.md#4-故障处理)。
 
+### 新建实体落库与缺失 DAO 补空（R15，维护者 2026-10-30）
+
+新建的持久实体由创建它的持久事务写齐每个 DAO（没改字段也写）；冷加载时部分 DAO 缺文档（没有墓碑）按初值补上、由这个实体的下一笔持久提交写出（规则与取舍见 [impl 03 §2 第 12 条](../framework/impl/03-dataengine.md#2-必须保持的契约)）。剩余限制：
+
+- **补空会掩盖真实丢写 / 误删**：原先“只缺一部分就拒绝”是丢写、误删、投影缺口的唯一信号，现在改由 WARN 与 `dataengine.aggregate.dao_filled.total{kind,collection}` 承担，框架不区分“新增的 DAO”与“丢掉的文档”。新增 DAO 之外这条计数非零要人核对；没有按 DAO 声明“可后加”的白名单（维护者决定全局补空）。补上的 DAO 没有下一笔持久提交时一直没有文档，每次加载都会再补、再计数。
+- **下游迁移**：从 cube 迁来的实体若只有部分 DAO 文档，框架会自动补空，迁移工具不再需要补齐缺失的 DAO 文档；但迁移出的文档仍要满足当前 schema（`_schema`）与持久键约定（D13），补空不处理 schema 不符。
+- **handler 之外的 `RunDetachedTransaction` 里新建**：外层没有能把新实体锁持到提交的 Guard 作用域，新建由 DataEngine 的新建准入门单独起一笔 strict 事务提交；外层随后回滚不撤销已落库的新实体（handler 内的 detached / isolated 事务不受此限，回滚会撤销）。
+- **Nest 之外新建要等 WAL**：生成 Lifecycle 的 `Create` / `GetOrCreate` 在 Nest 之外为持久实体补一笔 strict 事务，提交被接受后才返回；业务 worker 上调用返回 `fctx.ErrBlockingInBusinessWorker`，I/O worker 上开 Guard 作用域照旧 panic。每次新建是一条独立 WAL 记录，之后的修改是第二笔。没有 DataEngine 的进程（没注册准入门）事务外新建只在内存。
+- **Remote 托管 kind 在 Nest 之外新建不经准入门**：Remote 持久写只能经消息声明的 Remote 批次，准入门的本地 strict 事务写不了；这类实体照旧在第一笔 Remote 批次提交时写齐每个 DAO，新建后没有 Remote 写就不落库。handler 内新建（带 Remote 批次的消息）验证到 nest 层认领（每个 DAO 整文档认领）与 Remote 事务记录掩码按位存取（`scripts/test-remote-generated.sh` 全部通过），没有“新建不改字段”的 Remote 端到端用例。是否给 Remote 托管 kind 的事务外新建补一笔 Remote 写（需要所有权认领）待维护者决定。
+- **手写 DAO**：tracker 不实现 `entity.AggregateMember` 的 DAO（自己用 `AddMutation` 落库）不参与新建写齐与补空后的写出，由写它的代码保证文档齐全。
+
 ### 运行期改档与单实体运维（D16）
 
 框架只提供与业务字段无关的 `entity.kick`（踢下线）与 `entity.unload`（排空投影后卸载），**不提供改档与恢复**（维护者 2026-10-20 决定 C，[DESIGN-TODO D16](DESIGN-TODO.md#d16-单个实体--玩家的运维入口)，用法见 [guide/03 §6](../framework/guide/03-dataengine.md#单实体运维命令d16)）。`entity.unload` 之后任何访问都会立刻重新加载，不能当作改库的窗口。运行期直接改权威集合的结果按设计是确定的：只改字段时下一次投影覆盖改动；改 `_version`（恢复旧备份）时投影 fatal、进程 fence、重启起不来，直到人工处理（[维护手册 §4](README.md#4-故障处理)）。在线改档写成业务 GM handler，整档恢复走停服排空后的离线写回（[guide/03 §3](../framework/guide/03-dataengine.md#3-投影与幂等)）。

@@ -29,6 +29,7 @@ type EntityManager struct {
 	nextHookID     uint64
 	releaseHooks   []entityReleaseHook
 	deleteAdmitter entityDeleteAdmitter
+	createAdmitter entityCreateAdmitter
 }
 
 var (
@@ -40,6 +41,11 @@ var (
 	ErrDeleteAdmitterExists = errors.New("entity manager: delete admitter already registered")
 	ErrDeleteAdmitterNeeded = errors.New("entity manager: delete admitter is required")
 	ErrDeleteIndeterminate  = errors.New("entity manager: delete admission outcome is indeterminate")
+	ErrCreateAdmitterExists = errors.New("entity manager: create admitter already registered")
+	// ErrPersistentCreateOutsideTransaction：装了持久新建准入门（DataEngine 已启动）时，在没有绑定事务捕获者的
+	// Guard 作用域上直接 CreateInScope 一个持久实体。这个作用域没有提交点，新实体会只活在内存里；改用 Create
+	// （它自己起一笔持久事务），或在 Nest handler / 事务里新建。
+	ErrPersistentCreateOutsideTransaction = errors.New("entity manager: a persistent entity can only be created inside a transaction")
 	// ErrEntityNotPointer：实体实现不是指针。Guard 按实例比较接口值，值类型实现若不可比较会在运行期 panic；
 	// 实体进入框架的入口（BuildEntity、TryAdd / Add）拒绝这种实现并点名类型。
 	ErrEntityNotPointer = errors.New("entity: entity implementation must be a pointer")
@@ -178,6 +184,52 @@ func (m *EntityManager) admitDelete(ctx context.Context, e IThreadSafeEntity, re
 		return DeleteAdmissionImmediate, ErrDeleteAdmitterNeeded
 	}
 	return admitter(ctx, e, reason)
+}
+
+// entityCreateAdmitter 是已注册的唯一持久新建准入门。
+type entityCreateAdmitter struct {
+	id uint64
+	fn CreateAdmitter
+}
+
+// CreateAdmitter 在没有事务捕获新实体时（Create 时当前 Guard 作用域没有绑定 CreatedEntityCapturer：Nest 之外、
+// handler 之外的 RunDetachedTransaction 等）为新建的持久实体建立一笔持久事务：开一个 Guard 作用域并在其上绑定
+// 事务捕获者，调用 create(scope)（即 CreateInScope），提交被接受后才返回、才释放新实体的锁。create 返回错误或提交
+// 被拒绝时事务回滚，新实体撤销发布。由 DataEngine Runtime 在启动后注册（维护者 2026-10-30：新建实体本身就要落库）。
+type CreateAdmitter func(ctx context.Context, create func(*GuardScope) (IThreadSafeEntity, error)) (IThreadSafeEntity, error)
+
+// RegisterCreateAdmitter 安装持久新建使用的唯一准入门，返回注销函数；重复注册返回 ErrCreateAdmitterExists。
+// 没有注册（没有 DataEngine 的纯内存进程、单元测试）时没有库可落，事务外新建只发布到内存。
+func (m *EntityManager) RegisterCreateAdmitter(admitter CreateAdmitter) (func(), error) {
+	if m == nil || admitter == nil {
+		return nil, fmt.Errorf("entity manager: create admitter is required")
+	}
+	m.hookMu.Lock()
+	defer m.hookMu.Unlock()
+	if m.createAdmitter.fn != nil {
+		return nil, ErrCreateAdmitterExists
+	}
+	m.nextHookID++
+	id := m.nextHookID
+	m.createAdmitter = entityCreateAdmitter{id: id, fn: admitter}
+	return func() {
+		m.hookMu.Lock()
+		if m.createAdmitter.id == id {
+			m.createAdmitter = entityCreateAdmitter{}
+		}
+		m.hookMu.Unlock()
+	}, nil
+}
+
+// persistentCreateAdmitter 返回新建 kind 这类实体时要经过的准入门：kind 落库、不是 Remote 托管（Remote 托管实体的
+// 持久写只能经消息声明的 Remote 批次，见 RemoteEntity 契约）、且已注册准入门时非 nil。
+func (m *EntityManager) persistentCreateAdmitter(kind EntityKind) CreateAdmitter {
+	if m == nil || !isEntityKindPersistent(kind) || IsEntityKindRemoteManaged(kind) {
+		return nil
+	}
+	m.hookMu.RLock()
+	defer m.hookMu.RUnlock()
+	return m.createAdmitter.fn
 }
 
 // Destroy 在Entity锁内准入持久删除，再移出内存。等锁和准入前可取消；

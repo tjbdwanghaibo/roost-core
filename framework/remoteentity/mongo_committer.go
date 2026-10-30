@@ -101,14 +101,50 @@ type mongoRemoteReceipt struct {
 }
 
 type mongoRemoteTransaction struct {
-	ID        string                `bson:"_id"`
-	State     uint8                 `bson:"state"`
-	Receipts  []mongoRemoteReceipt  `bson:"receipts"`
-	Commits   []entity.RemoteCommit `bson:"commits"`
-	Digest    []byte                `bson:"digest"`
-	Cause     string                `bson:"cause,omitempty"`
-	CreatedAt time.Time             `bson:"created_at"`
-	ExpiresAt *time.Time            `bson:"expires_at,omitempty"`
+	ID       string               `bson:"_id"`
+	State    uint8                `bson:"state"`
+	Receipts []mongoRemoteReceipt `bson:"receipts"`
+	// Commits 里每条 RemoteDataMutation 的 Mask 存为 0，真实掩码按位存在 MutationMasks（见 storeRemoteCommits）。
+	Commits       []entity.RemoteCommit `bson:"commits"`
+	MutationMasks [][]int64             `bson:"mutation_masks,omitempty"`
+	Digest        []byte                `bson:"digest"`
+	Cause         string                `bson:"cause,omitempty"`
+	CreatedAt     time.Time             `bson:"created_at"`
+	ExpiresAt     *time.Time            `bson:"expires_at,omitempty"`
+}
+
+// storeRemoteCommits 给出写进事务记录的提交副本：变更掩码是 uint64 位集，BSON 只有有符号 64 位整数，最高位为 1 的掩码
+// （整文档登记的 dataengine.AllFields、第 64 个字段）照原样存会 “overflows int64”——而此时 WAL 记录已持久，投影会永远
+// 失败。所以掩码按位转成 int64 另存，提交副本里置 0；loadRemoteCommits 还原。摘要按调用方的原始提交计算，不受影响。
+func storeRemoteCommits(commits []entity.RemoteCommit) ([]entity.RemoteCommit, [][]int64) {
+	stored := make([]entity.RemoteCommit, len(commits))
+	masks := make([][]int64, len(commits))
+	for i := range commits {
+		stored[i] = commits[i].Clone()
+		masks[i] = make([]int64, len(stored[i].Mutations))
+		for j := range stored[i].Mutations {
+			masks[i][j] = int64(stored[i].Mutations[j].Mask)
+			stored[i].Mutations[j].Mask = 0
+		}
+	}
+	return stored, masks
+}
+
+// loadRemoteCommits 从事务记录还原提交：MutationMasks 按位还原每条变更的掩码；没有 MutationMasks 的记录原样返回。
+func loadRemoteCommits(doc mongoRemoteTransaction) []entity.RemoteCommit {
+	commits := make([]entity.RemoteCommit, 0, len(doc.Commits))
+	for i := range doc.Commits {
+		commit := doc.Commits[i].Clone()
+		if i < len(doc.MutationMasks) {
+			for j := range commit.Mutations {
+				if j < len(doc.MutationMasks[i]) {
+					commit.Mutations[j].Mask = uint64(doc.MutationMasks[i][j])
+				}
+			}
+		}
+		commits = append(commits, commit)
+	}
+	return commits
 }
 
 func (s *MongoCommitter) CommitRemote(ctx context.Context, commit entity.RemoteCommit) (entity.RemoteCommitReceipt, error) {
@@ -188,9 +224,7 @@ func (s *MongoCommitter) ApplyRemoteCommitsInTransaction(ctx context.Context, co
 		return nil, err
 	}
 	doc := mongoRemoteTransaction{ID: txID.String(), State: uint8(entity.RemoteCommitApplied), Digest: append([]byte(nil), digest...), CreatedAt: time.Now().UTC()}
-	for i := range commits {
-		doc.Commits = append(doc.Commits, commits[i].Clone())
-	}
+	doc.Commits, doc.MutationMasks = storeRemoteCommits(commits)
 	for _, receipt := range receipts {
 		doc.Receipts = append(doc.Receipts, encodeMongoReceipt(receipt))
 	}
@@ -306,8 +340,8 @@ func remoteStatusFromMongoTransaction(id entity.RemoteTransactionID, doc mongoRe
 	for _, receipt := range doc.Receipts {
 		status.Receipts = append(status.Receipts, decodeMongoReceipt(receipt))
 	}
-	for i := range doc.Commits {
-		status.Commits = append(status.Commits, doc.Commits[i].Clone())
+	if len(doc.Commits) > 0 {
+		status.Commits = loadRemoteCommits(doc)
 	}
 	return status
 }

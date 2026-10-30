@@ -14,12 +14,11 @@ type Tracker struct {
 	syncDirty       atomic.Uint64
 	entitySyncDirty atomic.Uint64
 	syncVersion     atomic.Uint64
-	// newAggregate 是新建实体时 entity.BuildEntity 绑定的同一聚合全部 DAO（含本 DAO），冷加载出来的 DAO 没有。
-	// 只在版本为 0（还没有任何持久提交被接受）时生效，见 NewAggregate。
-	newAggregate atomic.Pointer[[]entity.DaoInterface]
+	// aggregate 是 entity.BuildEntity（新建与冷加载）绑定的本实体全部 DAO（含本 DAO），见 entity.DaoAggregate。
+	aggregate atomic.Pointer[entity.DaoAggregate]
 }
 
-var _ entity.NewAggregateMember = (*Tracker)(nil)
+var _ entity.AggregateMember = (*Tracker)(nil)
 
 type TrackerSnapshot struct {
 	Version         uint64
@@ -30,17 +29,17 @@ type TrackerSnapshot struct {
 
 func (t *Tracker) Version() uint64 { return t.version.Load() }
 
-// BindNewAggregate 实现 entity.NewAggregateMember：记下新建实体的全部 DAO。
-func (t *Tracker) BindNewAggregate(daos []entity.DaoInterface) { t.newAggregate.Store(&daos) }
+// BindAggregate 实现 entity.AggregateMember：记下本 DAO 所属实体的全部 DAO。
+func (t *Tracker) BindAggregate(aggregate *entity.DaoAggregate) { t.aggregate.Store(aggregate) }
 
-// NewAggregate 返回本 DAO 所属新建实体的全部 DAO，供持久事务让新实体的第一笔持久提交写齐每个 DAO。
-// 不是新建实体，或本 DAO 已有持久提交被接受（版本不为 0）时返回 nil：已存在实体的普通提交不多写。
-func (t *Tracker) NewAggregate() []entity.DaoInterface {
-	if t == nil || t.version.Load() != 0 {
+// Aggregate 返回本 DAO 所属实体的全部 DAO，供持久事务把其中还没有持久文档（版本 0）的 DAO 一并写出。没有绑定，
+// 或已确认每个 DAO 都有持久文档时返回 nil：已存在实体的普通提交不多做检查。
+func (t *Tracker) Aggregate() *entity.DaoAggregate {
+	if t == nil {
 		return nil
 	}
-	if daos := t.newAggregate.Load(); daos != nil {
-		return *daos
+	if aggregate := t.aggregate.Load(); aggregate != nil && !aggregate.AllPersisted() {
+		return aggregate
 	}
 	return nil
 }

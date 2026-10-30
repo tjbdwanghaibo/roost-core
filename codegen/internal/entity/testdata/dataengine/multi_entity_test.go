@@ -78,7 +78,7 @@ func testTradeProcesses(t *testing.T, ctx context.Context, client fmongo.IMongo,
 	}
 	completedPhases := phase - 1
 	expected := func(index int) tradeState {
-		state := tradeState{Coins: 10000, Items: 1000, Transfers: int64(completedPhases * rounds * 2), Version: uint64(1 + completedPhases*rounds*2)}
+		state := tradeState{Coins: 10000, Items: 1000, Transfers: int64(completedPhases * rounds * 2), Version: uint64(seededVersion + completedPhases*rounds*2)}
 		if index == 0 {
 			state.Coins -= int64(5 * completedPhases)
 			state.Items += int64(completedPhases)
@@ -165,7 +165,7 @@ func testTradeLostAck(t *testing.T, ctx context.Context, client fmongo.IMongo, r
 		if i == 0 {
 			sign = -1
 		}
-		return tradeState{Coins: 10000 + sign*3*int64(transfers), Items: 1000 - sign*int64(transfers), Transfers: int64(transfers), Version: uint64(1 + transfers)}
+		return tradeState{Coins: 10000 + sign*3*int64(transfers), Items: 1000 - sign*int64(transfers), Transfers: int64(transfers), Version: uint64(seededVersion + transfers)}
 	}
 	if phase == 1 {
 		pause := h.gate.pause()
@@ -245,7 +245,7 @@ func testTradeConflict(t *testing.T, ctx context.Context, client fmongo.IMongo, 
 	}
 	record := waitTradeRecord(t, ctx, pause, ids)
 	collection := client.Database(h.database).Collection("trade_wallets")
-	result, err := collection.UpdateOne(ctx, bson.M{"_id": ids[1], "_version": 1}, bson.M{"$set": bson.M{"_version": 999}})
+	result, err := collection.UpdateOne(ctx, bson.M{"_id": ids[1], "_version": seededVersion}, bson.M{"$set": bson.M{"_version": 999}})
 	if err != nil || result.MatchedCount != 1 {
 		t.Fatalf("inject late conflict: result=%+v err=%v", result, err)
 	}
@@ -315,16 +315,16 @@ func testTradeBackpressure(t *testing.T, ctx context.Context, client fmongo.IMon
 	if err := h.runtime.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
-	h.assertState(t, ids[0], tradeState{Coins: 9994, Items: 1002, Transfers: 2, Version: 3}, true)
-	h.assertState(t, ids[1], tradeState{Coins: 10006, Items: 998, Transfers: 2, Version: 3}, true)
+	h.assertState(t, ids[0], tradeState{Coins: 9994, Items: 1002, Transfers: 2, Version: seededVersion + 2}, true)
+	h.assertState(t, ids[1], tradeState{Coins: 10006, Items: 998, Transfers: 2, Version: seededVersion + 2}, true)
 	if err := h.request("trade_transfer", ids...); err != nil {
 		t.Fatalf("capacity not recovered: %v", err)
 	}
 	if err := h.runtime.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
-	h.assertState(t, ids[0], tradeState{Coins: 9991, Items: 1003, Transfers: 3, Version: 4}, true)
-	h.assertState(t, ids[1], tradeState{Coins: 10009, Items: 997, Transfers: 3, Version: 4}, true)
+	h.assertState(t, ids[0], tradeState{Coins: 9991, Items: 1003, Transfers: 3, Version: seededVersion + 3}, true)
+	h.assertState(t, ids[1], tradeState{Coins: 10009, Items: 997, Transfers: 3, Version: seededVersion + 3}, true)
 	if stats := h.runtime.Projector.Stats(); stats.WALUnacked != 0 || stats.BacklogWarning {
 		t.Fatalf("drained stats=%+v", stats)
 	}

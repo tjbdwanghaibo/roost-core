@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 var (
@@ -202,13 +204,18 @@ type remoteTombstoneReader interface {
 	RemoteEntityDeleted(ctx context.Context, id int64) (bool, error)
 }
 
-// loadedDAO 是一致性读取得到的一个 DAO 文档及其已解出的持久化 payload。
+// loadedDAO 是一致性读取得到的一个 DAO 文档及其已解出的持久化 payload。filled 为真时库里没有这个 DAO 的文档，
+// dao 是 builder 给出的初值（版本 0），不校验 schema、不水合，见 readAggregate。
 type loadedDAO struct {
 	dao     entity.DaoInterface
 	doc     coredata.RawDocument
 	payload []byte
 	schema  uint32
+	filled  bool
 }
+
+// metricAggregateDAOFilled 计冷加载时按初值补上的 DAO（标签 kind、collection）。
+const metricAggregateDAOFilled = "dataengine.aggregate.dao_filled.total"
 
 // loadAggregate 冷加载一个聚合：一致性读取全部 DAO → 校验 schema → 水合 → 回到本地执行阶段发布。
 func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID int64, kind entity.EntityKind) (entity.IThreadSafeEntity, error) {
@@ -266,6 +273,8 @@ func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID in
 		}
 		return nil, err
 	}
+	// 只为真正发布出去的补空计数与告警：校验 / 水合失败或输给并发加载时这次补空没有生效。
+	reportFilledDAOs(loaded, kind, fullID)
 	return created, nil
 }
 
@@ -273,6 +282,9 @@ func (repository *EntityRepository) loadAggregate(ctx context.Context, fullID in
 // 任何不匹配都不能水合、发布或触发写回。
 func checkAggregateSchemas(loaded []loadedDAO, fullID int64) error {
 	for _, item := range loaded {
+		if item.filled {
+			continue
+		}
 		descriptor, ok := item.dao.(coredata.Descriptor)
 		if !ok {
 			return fmt.Errorf("%w: resource=%s does not implement Descriptor", ErrEntityAggregateCorrupt, item.dao.CollName())
@@ -288,6 +300,10 @@ func checkAggregateSchemas(loaded []loadedDAO, fullID int64) error {
 func hydrateAggregate(loaded []loadedDAO, fullID int64) (map[string]entity.DaoInterface, error) {
 	daos := make(map[string]entity.DaoInterface, len(loaded))
 	for _, item := range loaded {
+		if item.filled {
+			daos[item.dao.CollName()] = item.dao
+			continue
+		}
 		hydrator, ok := item.dao.(entity.PersistedDaoLoader)
 		if !ok {
 			return nil, fmt.Errorf("%w: resource=%s does not implement PersistedDaoLoader", ErrEntityAggregateCorrupt, item.dao.CollName())
@@ -303,18 +319,28 @@ func hydrateAggregate(loaded []loadedDAO, fullID int64) (map[string]entity.DaoIn
 	return daos, nil
 }
 
-// readAggregate 在一次一致性读里读取聚合的全部 DAO 文档：全部缺失为 ErrEntityAggregateNotFound，全部墓碑为
-// ErrEntityAggregateDeleted，部分存在视为损坏；同时取版本最高的 Remote 版本信封。
+// readAggregate 在一次一致性读里读取聚合的全部 DAO 文档并分类（D10 与维护者 2026-10-30 的补空决定）：
+//   - 全部缺失：从未创建，ErrEntityAggregateNotFound（Remote 托管实体先查 Remote 元数据墓碑，删过档为 Deleted）；
+//   - 没有活文档、有墓碑（其余缺失）：删过档，ErrEntityAggregateDeleted——删档之后给 kind 新增的 DAO 本来就没有墓碑，
+//     不能因此把它当成部分存在、补空复活；
+//   - 活文档与墓碑混在一起：损坏，ErrEntityAggregateCorrupt；
+//   - 至少一个活文档、其余缺失（没有墓碑）：存量实体缺了上线后新增的 DAO，按 builder 给出的初值补上（filled，版本 0，
+//     由这个实体的下一笔持久提交以整文档写出，见 nest includeUnpersistedDAOs）。Remote 托管实体还要查 Remote 元数据
+//     墓碑，删过档的不补、按损坏拒绝。
+//
+// 同时取版本最高的 Remote 版本信封。
 func (repository *EntityRepository) readAggregate(ctx context.Context, builder *entity.EntityBuilderParam, fullID int64) ([]loadedDAO, entity.RemoteVersionVector, error) {
 	var loaded []loadedDAO
 	var remoteVector entity.RemoteVersionVector
+	remoteManaged := entity.GetEntityKindRemotePolicy(builder.Kind).RemoteManaged()
 	err := repository.store.ReadConsistent(ctx, func(readCtx context.Context) error {
 		// ReadConsistent 运行在 ISession.WithTransaction 里，驱动遇到
 		// TransientTransactionError 或提交结果未知时会重调本回调。所有累加量必须在这里
 		// 重置：跨尝试保留 loaded 会让第二次尝试撞上重复资源检查，把健康数据报成损坏聚合。
 		loaded = make([]loadedDAO, 0, len(builder.DaoBuilders))
 		remoteVector = entity.RemoteVersionVector{}
-		missing, tombstones := 0, 0
+		var missing []entity.DaoInterface
+		live, tombstones := 0, 0
 		for index, buildDAO := range builder.DaoBuilders {
 			if buildDAO == nil {
 				return fmt.Errorf("%w: DAO builder %d is nil", ErrEntityAggregateCorrupt, index)
@@ -330,6 +356,11 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 					return fmt.Errorf("%w: duplicate DAO resource %q", ErrEntityAggregateCorrupt, dao.CollName())
 				}
 			}
+			for _, existing := range missing {
+				if existing.CollName() == dao.CollName() {
+					return fmt.Errorf("%w: duplicate DAO resource %q", ErrEntityAggregateCorrupt, dao.CollName())
+				}
+			}
 			scope := coredata.ResolveDatabaseScope(dao)
 			// 墓碑也要读到：全部墓碑是“删过档”而不是“不存在”（D10），活文档与墓碑混在一起是损坏。
 			docs, err := repository.store.Load(readCtx, coredata.LoadSpec{
@@ -340,7 +371,7 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 				return fmt.Errorf("dataengine repository: load %s/%d: %w", dao.CollName(), fullID, err)
 			}
 			if len(docs) == 0 {
-				missing++
+				missing = append(missing, dao)
 				continue
 			}
 			if len(docs) != 1 || docs[0].Key.ID != fullID {
@@ -349,12 +380,15 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 			doc := docs[0]
 			if doc.Deleted {
 				tombstones++
+				// 占位，保证重复资源检查覆盖墓碑；分类结束前一定返回错误，不会被水合。
+				loaded = append(loaded, loadedDAO{dao: dao, doc: doc})
 				continue
 			}
 			payload, schema, err := persistedPayload(doc)
 			if err != nil {
 				return fmt.Errorf("%w: resource=%s entity=%d: %v", ErrEntityAggregateCorrupt, dao.CollName(), fullID, err)
 			}
+			live++
 			loaded = append(loaded, loadedDAO{dao: dao, doc: doc, payload: payload, schema: schema})
 			if doc.Enveloped && doc.Version >= remoteVector.StateVersion {
 				remoteVector = entity.RemoteVersionVector{
@@ -364,32 +398,56 @@ func (repository *EntityRepository) readAggregate(ctx context.Context, builder *
 			}
 		}
 		total := len(builder.DaoBuilders)
-		if missing == total && entity.GetEntityKindRemotePolicy(builder.Kind).RemoteManaged() {
+		remoteDeleted := false
+		if remoteManaged && tombstones == 0 && len(missing) > 0 {
 			// Remote 托管实体删档时数据文档被物理删除，墓碑只在 Remote 元数据里（_remote_entity_meta._deleted）；
-			// 同一次一致性读里查它，删过档与从未创建才能区分（D10）。
+			// 同一次一致性读里查它，删过档与从未创建才能区分（D10），删过档的部分聚合也不能补空复活。
 			if reader, ok := repository.store.(remoteTombstoneReader); ok {
 				deleted, err := reader.RemoteEntityDeleted(readCtx, fullID)
 				if err != nil {
 					return fmt.Errorf("dataengine repository: remote tombstone of %d: %w", fullID, err)
 				}
-				if deleted {
-					return fmt.Errorf("%w: entity=%d state=deleted remote=true", ErrEntityAggregateDeleted, fullID)
-				}
+				remoteDeleted = deleted
 			}
 		}
 		switch {
 		// 从未创建与删过档是两个哨兵（D10 方案 B）：前者可以创建（客户端码 entity_not_found），
 		// 后者这个 ID 不可再用（entity_deleted）。错误文本仍带 state，便于运维直接看出是哪一种。
-		case missing == total:
+		case len(missing) == total && remoteDeleted:
+			return fmt.Errorf("%w: entity=%d state=deleted remote=true", ErrEntityAggregateDeleted, fullID)
+		case len(missing) == total:
 			return fmt.Errorf("%w: entity=%d state=absent", ErrEntityAggregateNotFound, fullID)
-		case tombstones == total:
-			return fmt.Errorf("%w: entity=%d state=deleted", ErrEntityAggregateDeleted, fullID)
-		case len(loaded) != total:
-			return fmt.Errorf("%w: entity=%d live=%d missing=%d tombstones=%d", ErrEntityAggregateCorrupt, fullID, len(loaded), missing, tombstones)
+		case live == 0:
+			return fmt.Errorf("%w: entity=%d state=deleted tombstones=%d missing=%d", ErrEntityAggregateDeleted, fullID, tombstones, len(missing))
+		case tombstones > 0:
+			return fmt.Errorf("%w: entity=%d live=%d missing=%d tombstones=%d", ErrEntityAggregateCorrupt, fullID, live, len(missing), tombstones)
+		case remoteDeleted:
+			return fmt.Errorf("%w: entity=%d live=%d missing=%d but the remote metadata says deleted", ErrEntityAggregateCorrupt, fullID, live, len(missing))
+		}
+		for _, dao := range missing {
+			loaded = append(loaded, loadedDAO{dao: dao, filled: true})
 		}
 		return nil
 	})
 	return loaded, remoteVector, err
+}
+
+// reportFilledDAOs 为冷加载时按初值补上的 DAO 打 WARN 并计数：上线后给 kind 新增 DAO 时每个存量实体第一次加载各一次，
+// 之后由这个实体的下一笔持久提交写出文档、不再出现；新增 DAO 之外的出现（或同一实体反复出现）说明丢写 / 误删 / 投影缺口，
+// 要人核对。日志只带 kind、实体 ID 与集合名，不带业务数据；指标标签是 kind 与集合名（低基数）。
+func reportFilledDAOs(loaded []loadedDAO, kind entity.EntityKind, fullID int64) {
+	var collections []string
+	for _, item := range loaded {
+		if !item.filled {
+			continue
+		}
+		collections = append(collections, item.dao.CollName())
+		metrics.IncCounter(metricAggregateDAOFilled, metrics.Labels{"kind": strconv.Itoa(int(kind)), "collection": item.dao.CollName()}, 1)
+	}
+	if len(collections) > 0 {
+		slog.Warn("dataengine repository: entity aggregate is missing DAO documents; filled them with initial values (expected once per stored entity after a DAO is added to its kind; otherwise check for lost writes or deletes)",
+			"kind", kind, "entity", fullID, "collections", collections)
+	}
 }
 
 var _ entity.AggregateLoader = (*EntityRepository)(nil)

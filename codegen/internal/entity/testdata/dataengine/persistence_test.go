@@ -114,6 +114,8 @@ func TestGeneratedDataEngineProcessLifecycle(t *testing.T) {
 			t.Cleanup(func() { _ = runtime.Shutdown(context.Background()) })
 			ids := make([]int64, entities)
 			wantBefore := int64((phase - 1) * updates)
+			// 持久版本比值多 1：phase 1 在 Nest 之外 Create，框架为新实体补一笔持久提交（新建实体本身就落库）。
+			version := func() uint64 { return uint64(wantBefore) + 1 }
 			for i := range ids {
 				id, err := entity.BuildEntityID(int64(policyIndex*entities+i+1), EntityKindAccount)
 				if err != nil {
@@ -130,8 +132,8 @@ func TestGeneratedDataEngineProcessLifecycle(t *testing.T) {
 					t.Fatal(err)
 				}
 				account := value.(*Account)
-				if account.state.GetValue() != wantBefore || account.state.DirtyTracker().Version() != uint64(wantBefore) {
-					t.Fatalf("phase=%d id=%d loaded value/version=%d/%d want=%d", phase, id, account.state.GetValue(), account.state.DirtyTracker().Version(), wantBefore)
+				if account.state.GetValue() != wantBefore || account.state.DirtyTracker().Version() != version() {
+					t.Fatalf("phase=%d id=%d loaded value/version=%d/%d want=%d/%d", phase, id, account.state.GetValue(), account.state.DirtyTracker().Version(), wantBefore, version())
 				}
 			}
 			options := append(runtime.NestOptions(), nest.NestOptionWithGetter(access), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 256}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
@@ -187,8 +189,8 @@ func TestGeneratedDataEngineProcessLifecycle(t *testing.T) {
 				t.Fatalf("rollback returned %v", err)
 			}
 			rolledBack := access.Manager().Get(ids[0]).(*Account).state
-			if rolledBack.GetValue() != wantBefore || rolledBack.DirtyTracker().Version() != uint64(wantBefore) {
-				t.Fatalf("rollback left value/version=%d/%d, want %d", rolledBack.GetValue(), rolledBack.DirtyTracker().Version(), wantBefore)
+			if rolledBack.GetValue() != wantBefore || rolledBack.DirtyTracker().Version() != version() {
+				t.Fatalf("rollback left value/version=%d/%d, want %d/%d", rolledBack.GetValue(), rolledBack.DirtyTracker().Version(), wantBefore, version())
 			}
 			if err := scheduler.Shutdown(ctx); err != nil {
 				t.Fatal(err)
@@ -204,7 +206,7 @@ func TestGeneratedDataEngineProcessLifecycle(t *testing.T) {
 				if err := client.Database(database).Collection("states").FindOne(ctx, bson.M{"_id": id}, &doc); err != nil {
 					t.Fatal(err)
 				}
-				if doc.Value != wantBefore || doc.Version != uint64(wantBefore) {
+				if doc.Value != wantBefore || doc.Version != version() {
 					t.Fatalf("phase=%d id=%d persisted=%+v want=%d", phase, id, doc, wantBefore)
 				}
 			}

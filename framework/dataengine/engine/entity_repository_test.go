@@ -1,4 +1,4 @@
-// 实体仓储：完整聚合单飞加载、恢复屏障、墓碑与缺失、Remote 向量与信封、经本地执行器发布、loader panic 不卡住聚合、新建实体首笔提交写齐聚合。
+// 实体仓储：完整聚合单飞加载、恢复屏障、墓碑与缺失、部分缺失补空、Remote 向量与信封、经本地执行器发布、loader panic 不卡住聚合、新建实体本身落库并写齐聚合。
 
 package engine
 
@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +18,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -229,7 +232,12 @@ func TestEntityRepositorySingleFlightsCompleteAggregate(t *testing.T) {
 func TestEntityRepositoryRecoveryBarrierAndIncompleteAggregate(t *testing.T) {
 	ensureDataEngineRepositoryEntity()
 	id, _ := entity.BuildEntityID(992, dataEngineRepositoryKind)
-	store := &repositoryStore{docs: map[string][]coredata.RawDocument{"repository_profile": {repositoryRaw(t, "repository_profile", id, 1)}}}
+	// 活文档与墓碑混在一起是损坏（部分缺失则按初值补空，见 TestEntityRepositoryFillsMissingDAOsOfAStoredAggregate）。
+	tombstone := repositoryRaw(t, "repository_inventory", id, 1)
+	tombstone.Deleted = true
+	store := &repositoryStore{docs: map[string][]coredata.RawDocument{
+		"repository_profile": {repositoryRaw(t, "repository_profile", id, 1)}, "repository_inventory": {tombstone},
+	}}
 	manager := entity.NewEntityManager()
 	notReady, _ := NewEntityRepository(manager, store, repositoryGate(false))
 	if _, err := notReady.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, coredata.ErrRecoveryIncomplete) {
@@ -237,10 +245,10 @@ func TestEntityRepositoryRecoveryBarrierAndIncompleteAggregate(t *testing.T) {
 	}
 	repository, _ := NewEntityRepository(manager, store, repositoryGate(true))
 	if _, err := repository.LoadEntity(context.Background(), id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateCorrupt) {
-		t.Fatalf("missing DAO err=%v", err)
+		t.Fatalf("corrupt aggregate err=%v", err)
 	}
 	if manager.Get(id) != nil {
-		t.Fatal("incomplete aggregate was published")
+		t.Fatal("corrupt aggregate was published")
 	}
 }
 
@@ -286,6 +294,179 @@ func TestEntityRepositorySeparatesAbsentFromDeleted(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---- 冷加载补空：部分 DAO 没有文档 ----
+//
+// 上线后给已有 kind 新增 DAO 是常态（维护者 2026-10-30）：存量实体只有旧 DAO 的文档。冷加载时至少一个 DAO 有活文档、
+// 其余缺失（没有墓碑）就把缺的 DAO 按初值补上，不再判损坏；补空打 WARN 并计数，真实丢写 / 误删仍然看得见。
+// 删过档的实体不能因此复活：活文档一个都没有、只有墓碑与缺失时仍是删过档；活文档与墓碑混在一起仍是损坏；
+// Remote 托管实体部分缺失时还要查 Remote 元数据墓碑，删过档的不补。
+
+const dataEngineRemotePairRepositoryKind entity.EntityKind = 250
+
+var registerDataEngineRemotePairRepositoryEntity sync.Once
+
+// ensureDataEngineRemotePairRepositoryEntity：两个 DAO 的 Remote 托管 kind，用来构造 Remote 实体的部分缺失。
+func ensureDataEngineRemotePairRepositoryEntity() {
+	registerDataEngineRemotePairRepositoryEntity.Do(func() {
+		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+			Category: 1, Kind: dataEngineRemotePairRepositoryKind, RemotePolicy: entity.RemotePolicyManaged,
+			Lifetime: entity.EntityLifetimeRemoteManaged,
+			DaoBuilders: []entity.DaoBuilderFunc{
+				func() entity.DaoInterface { return &dataEngineRepositoryDAO{collection: "repository_remote_pair_a"} },
+				func() entity.DaoInterface { return &dataEngineRepositoryDAO{collection: "repository_remote_pair_b"} },
+			},
+			Builder: func(param *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+				return &dataEngineRemoteRepositoryEntity{RemoteEntityBase: entity.NewRemoteEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind)}, nil
+			},
+		})
+	})
+}
+
+// lockedLog 收集 slog 输出；投影器等后台 goroutine 也会写日志，所以加锁。
+type lockedLog struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (log *lockedLog) Write(p []byte) (int, error) {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	return log.buf.Write(p)
+}
+
+func (log *lockedLog) String() string {
+	log.mu.Lock()
+	defer log.mu.Unlock()
+	return log.buf.String()
+}
+
+// captureWarnings 把默认 slog 换成只收 WARN 及以上的文本日志，测试结束时换回。本包测试不并行。
+func captureWarnings(t *testing.T) *lockedLog {
+	t.Helper()
+	logs := &lockedLog{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return logs
+}
+
+// filledDAOCount 读补空计数器的当前值（按 kind / collection 标签）。
+func filledDAOCount(kind entity.EntityKind, collection string) int64 {
+	want := metrics.Labels{"kind": strconv.Itoa(int(kind)), "collection": collection}
+	for _, metric := range metrics.Snapshot() {
+		if metric.Name != "dataengine.aggregate.dao_filled.total" || metric.Kind != metrics.KindCounter || len(metric.Labels) != len(want) {
+			continue
+		}
+		if metric.Labels["kind"] == want["kind"] && metric.Labels["collection"] == want["collection"] {
+			return metric.Value
+		}
+	}
+	return 0
+}
+
+func remoteEnvelopedRaw(t *testing.T, resource string, id int64, version uint64) coredata.RawDocument {
+	t.Helper()
+	inner, err := bson.Marshal(bson.M{"_id": id, "_schema": uint32(1), "name": resource})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer, err := bson.Marshal(bson.M{"_id": id, "_ver": version, "_marker_epoch": uint64(3), "_lock_fence": uint64(8), "_route_epoch": uint64(5), "data": inner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return coredata.RawDocument{
+		Key:     coredata.DocumentKey{Database: "game", Resource: resource, ID: id},
+		Version: version, MarkerEpoch: 3, LockFence: 8, RouteEpoch: 5, Enveloped: true, Data: outer,
+	}
+}
+
+func TestEntityRepositoryFillsMissingDAOsOfAStoredAggregate(t *testing.T) {
+	ensureDataEngineRepositoryEntity()
+	ensureDataEngineRemotePairRepositoryEntity()
+	ctx := context.Background()
+
+	t.Run("live and missing: the missing DAO is filled with its initial value", func(t *testing.T) {
+		logs := captureWarnings(t)
+		id, _ := entity.BuildEntityID(1301, dataEngineRepositoryKind)
+		store := &repositoryStore{docs: map[string][]coredata.RawDocument{"repository_profile": {repositoryRaw(t, "repository_profile", id, 4)}}}
+		before := filledDAOCount(dataEngineRepositoryKind, "repository_inventory")
+		manager := entity.NewEntityManager()
+		repository, _ := NewEntityRepository(manager, store, repositoryGate(true))
+		loaded, err := repository.LoadEntity(ctx, id, dataEngineRepositoryKind)
+		if err != nil {
+			t.Fatalf("load of an aggregate missing one DAO: %v", err)
+		}
+		daos := loaded.(*dataEngineRepositoryEntity).daos
+		if daos["repository_profile"] == nil || daos["repository_profile"].version != 4 {
+			t.Fatalf("stored DAO not restored: %+v", daos["repository_profile"])
+		}
+		filled := daos["repository_inventory"]
+		if filled == nil || filled.id != id || filled.version != 0 {
+			t.Fatalf("missing DAO = %+v, want a fresh DAO bound to %d at version 0 (no document yet)", filled, id)
+		}
+		if manager.Get(id) != loaded {
+			t.Fatal("the filled aggregate was not published")
+		}
+		if got := filledDAOCount(dataEngineRepositoryKind, "repository_inventory") - before; got != 1 {
+			t.Fatalf("filled counter delta = %d, want 1", got)
+		}
+		if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "repository_inventory") || !strings.Contains(out, strconv.FormatInt(id, 10)) {
+			t.Fatalf("no WARN naming the entity and the filled collection: %q", out)
+		}
+	})
+
+	t.Run("tombstones and missing: still deleted, not revived", func(t *testing.T) {
+		id, _ := entity.BuildEntityID(1302, dataEngineRepositoryKind)
+		tombstone := repositoryRaw(t, "repository_profile", id, 3)
+		tombstone.Deleted = true
+		store := &repositoryStore{docs: map[string][]coredata.RawDocument{"repository_profile": {tombstone}}}
+		manager := entity.NewEntityManager()
+		repository, _ := NewEntityRepository(manager, store, repositoryGate(true))
+		_, err := repository.LoadEntity(ctx, id, dataEngineRepositoryKind)
+		if !errors.Is(err, ErrEntityAggregateDeleted) || errors.Is(err, ErrEntityAggregateNotFound) {
+			t.Fatalf("deleted entity with a DAO added after the delete: err=%v, want deleted", err)
+		}
+		if manager.Get(id) != nil {
+			t.Fatal("a deleted entity was published")
+		}
+	})
+
+	t.Run("live and tombstone: still corrupt", func(t *testing.T) {
+		id, _ := entity.BuildEntityID(1303, dataEngineRepositoryKind)
+		tombstone := repositoryRaw(t, "repository_inventory", id, 3)
+		tombstone.Deleted = true
+		store := &repositoryStore{docs: map[string][]coredata.RawDocument{
+			"repository_profile": {repositoryRaw(t, "repository_profile", id, 3)}, "repository_inventory": {tombstone},
+		}}
+		repository, _ := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+		if _, err := repository.LoadEntity(ctx, id, dataEngineRepositoryKind); !errors.Is(err, ErrEntityAggregateCorrupt) {
+			t.Fatalf("live document next to a tombstone: err=%v, want corrupt", err)
+		}
+	})
+
+	t.Run("remote-managed partial aggregate is filled unless the remote metadata says deleted", func(t *testing.T) {
+		live, _ := entity.BuildEntityID(1304, dataEngineRemotePairRepositoryKind)
+		deleted, _ := entity.BuildEntityID(1305, dataEngineRemotePairRepositoryKind)
+		// repositoryStore.Load 不按 _id 过滤：集合里只放正在读的那个实体的文档，两个实体分两次读。
+		store := &remoteTombstoneStore{repositoryStore: &repositoryStore{docs: map[string][]coredata.RawDocument{
+			"repository_remote_pair_a": {remoteEnvelopedRaw(t, "repository_remote_pair_a", live, 6)},
+		}}, deleted: map[int64]bool{deleted: true}}
+		repository, _ := NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+		loaded, err := repository.LoadEntity(ctx, live, dataEngineRemotePairRepositoryKind)
+		if err != nil {
+			t.Fatalf("remote aggregate missing one DAO: %v", err)
+		}
+		if vector := loaded.(*dataEngineRemoteRepositoryEntity).RemoteVersionVector(); vector.StateVersion != 6 {
+			t.Fatalf("remote version vector = %+v, want the stored envelope's version 6", vector)
+		}
+		store.docs["repository_remote_pair_a"] = []coredata.RawDocument{remoteEnvelopedRaw(t, "repository_remote_pair_a", deleted, 6)}
+		repository, _ = NewEntityRepository(entity.NewEntityManager(), store, repositoryGate(true))
+		if _, err := repository.LoadEntity(ctx, deleted, dataEngineRemotePairRepositoryKind); !errors.Is(err, ErrEntityAggregateCorrupt) {
+			t.Fatalf("remote aggregate with live data and a remote tombstone: err=%v, want corrupt (never revived)", err)
+		}
+	})
 }
 
 func TestEntityRepositoryPreservesRemoteVersionVector(t *testing.T) {
@@ -973,13 +1154,12 @@ func TestEntityRepositoryReadsRemoteTombstoneForAbsentRemoteAggregate(t *testing
 	}
 }
 
-// ---- 新建实体的第一笔持久提交写齐聚合的每个 DAO ----
+// ---- 新建实体本身就落库，聚合写齐每个 DAO；冷加载把缺的 DAO 补空 ----
 //
-// 冷加载要求聚合的每个持久 DAO 都有文档（部分存在按损坏拒绝），而事务只登记改过的 DAO。多 DAO 实体新建后只改其中
-// 一个就提交，另一个 DAO 永远没有文档，重启后这个实体再也加载不出来。下面经正式 Nest（业务池、锁内 WAL 准入）、
-// 真实文件 WAL、投影与 Mongo 替身走完整链路，再用全新的 EntityManager + EntityRepository 冷加载（等价于重启后的
-// 第一次加载）。三条新建入口各一例：handler 内 Create、handler 外 RunDetachedTransaction 里 Create、事务外 Create 后
-// 由 handler 第一次写；最后确认首笔提交已接受的实体之后只写改过的 DAO。
+// 维护者 2026-10-30 两条决定：（1）新建持久实体在创建它的持久事务提交时写齐每个 DAO，与本事务改没改字段无关——
+// 没有任何修改的新建实体也要落库；（2）冷加载时部分 DAO 缺文档（上线后给已有 kind 新增 DAO）按初值补上，补上的 DAO
+// 在这个实体的下一笔持久提交里以整文档写出。下面经正式 Nest（业务池、锁内 WAL 准入）、真实文件 WAL、投影与 Mongo
+// 替身走完整链路，再用全新的 EntityManager + EntityRepository 冷加载（等价于重启后的第一次加载）。
 
 // newAggregateKind 与同包其他用例的 kind 互不相同（见 entity_unload_test.go 的登记表）：kind 注册表是进程级的。
 const (
@@ -1062,30 +1242,46 @@ func (*newAggregateEntity) AutoPersist() bool              { return true }
 
 var registerNewAggregateKind sync.Once
 
+// newAggregateDAOBuilders 是 kind 当前版本的 DAO 列表；“上线后新增 DAO”的用例先把它换成只有 profile 的旧版本写数据。
+var newAggregateDAOBuilders = []entity.DaoBuilderFunc{
+	func() entity.DaoInterface { return &newAggregateDAO{collection: newAggregateProfiles} },
+	func() entity.DaoInterface { return &newAggregateDAO{collection: newAggregateRanks} },
+}
+
 func ensureNewAggregateKind() {
 	registerNewAggregateKind.Do(func() {
 		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
 			Category: 1, Kind: newAggregateKind,
-			DaoBuilders: []entity.DaoBuilderFunc{
-				func() entity.DaoInterface { return &newAggregateDAO{collection: newAggregateProfiles} },
-				func() entity.DaoInterface { return &newAggregateDAO{collection: newAggregateRanks} },
-			},
+			DaoBuilders: newAggregateDAOBuilders,
 			Builder: func(param *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
 				value := &newAggregateEntity{
 					EntityBase: entity.NewEntityBaseWithMutex(param.Id, param.Category, false, param.Mutex, param.Kind),
 					DaoManager: entity.NewDaoManager(),
 				}
 				value.profile, _ = param.Dao[newAggregateProfiles].(*newAggregateDAO)
-				value.rank, _ = param.Dao[newAggregateRanks].(*newAggregateDAO)
-				if value.profile == nil || value.rank == nil {
-					return nil, errors.New("new aggregate test entity: missing DAO")
+				if value.profile == nil {
+					return nil, errors.New("new aggregate test entity: missing profile DAO")
 				}
 				value.DaoManager.Set(newAggregateProfiles, value.profile)
-				value.DaoManager.Set(newAggregateRanks, value.rank)
+				// rank 是“后加”的 DAO：旧版本的 kind 没有它。
+				if value.rank, _ = param.Dao[newAggregateRanks].(*newAggregateDAO); value.rank != nil {
+					value.DaoManager.Set(newAggregateRanks, value.rank)
+				}
 				return value, nil
 			},
 		})
 	})
+}
+
+// useOnlyProfileDAO 把 kind 退回只有 profile 一个 DAO 的旧版本，返回的函数恢复当前版本（两个 DAO）。
+// 只在没有在途请求时调用：注册表里的 builder 是进程级的。
+func useOnlyProfileDAO(t *testing.T) func() {
+	t.Helper()
+	builder := entity.GetEntityBuilderParam(newAggregateKind)
+	builder.DaoBuilders = newAggregateDAOBuilders[:1]
+	restore := func() { builder.DaoBuilders = newAggregateDAOBuilders }
+	t.Cleanup(restore)
+	return restore
 }
 
 type newAggregateFixture struct {
@@ -1094,6 +1290,7 @@ type newAggregateFixture struct {
 	store     *MongoStore
 	client    *mongotest.Client
 	projector *Projector
+	manager   *entity.EntityManager
 	access    *entity.ManagerAccess
 	scheduler *corenest.NestMgr
 	caller    int64
@@ -1116,26 +1313,70 @@ func newNewAggregateFixture(t *testing.T) *newAggregateFixture {
 		t.Fatal(err)
 	}
 	f.projector, _ = manualProjector(t, store)
-	manager := entity.NewEntityManager()
-	f.access = entity.NewManagerAccess(manager)
-	repository, err := NewEntityRepository(manager, store, projectionGate{f.projector})
+	f.boot()
+	return f
+}
+
+// boot 起一套新的实体运行时（EntityManager、仓库、Nest），库与 WAL 沿用：第二次调用等价于进程重启。
+func (f *newAggregateFixture) boot() {
+	t := f.t
+	t.Helper()
+	if f.scheduler != nil {
+		if err := f.projector.Flush(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.scheduler.Shutdown(f.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.manager = entity.NewEntityManager()
+	f.access = entity.NewManagerAccess(f.manager)
+	repository, err := NewEntityRepository(f.manager, f.store, projectionGate{f.projector})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.access.ConfigureLoader(repository); err != nil {
 		t.Fatal(err)
 	}
+	// 与 Runtime.Start 相同：事务外新建持久实体经准入门起一笔持久事务。
+	if _, err := f.access.RegisterCreateAdmitter(entityCreateAdmitter(f.projector, func(err error) { t.Errorf("create admission fatal: %v", err) })); err != nil {
+		t.Fatal(err)
+	}
 	f.scheduler = corenest.NewEngine(corenest.NestOptionWithTransactionCommitter(f.projector), corenest.NestOptionWithGetter(f.access),
 		corenest.NestOptionWithWorkerPools(corenest.WorkerPoolConfig{Workers: 4, QueueCap: 64}, corenest.WorkerPoolConfig{}, corenest.WorkerPoolConfig{}))
 	meta := corenest.HandlerMeta{Rollback: corenest.RollbackUndo, Durability: corenest.DurabilityStrict}
-	// new_aggregate_create：在 handler 内新建 params[0] 指定的实体，只改 profile。
-	f.scheduler.MustRegisterHandlerWithMeta(corenest.NewHandlerName("new_aggregate_create"), func(_ []entity.IThreadSafeEntity, params []any, _ ...corenest.HandlerOption) (any, error) {
+	create := func(params []any) (*newAggregateEntity, error) {
 		created, err := f.access.Create(&entity.EntityCreateParam{IsCreate: true, Kind: newAggregateKind, Id: params[0].(int64)})
 		if err != nil {
 			return nil, err
 		}
-		return nil, created.(*newAggregateEntity).profile.setValue(7)
+		return created.(*newAggregateEntity), nil
+	}
+	// new_aggregate_create：在 handler 内新建 params[0] 指定的实体，只改 profile。
+	f.scheduler.MustRegisterHandlerWithMeta(corenest.NewHandlerName("new_aggregate_create"), func(_ []entity.IThreadSafeEntity, params []any, _ ...corenest.HandlerOption) (any, error) {
+		created, err := create(params)
+		if err != nil {
+			return nil, err
+		}
+		return nil, created.profile.setValue(7)
 	}, meta)
+	// new_aggregate_create_untouched：只新建，不改任何持久字段。
+	f.scheduler.MustRegisterHandlerWithMeta(corenest.NewHandlerName("new_aggregate_create_untouched"), func(_ []entity.IThreadSafeEntity, params []any, _ ...corenest.HandlerOption) (any, error) {
+		_, err := create(params)
+		return nil, err
+	}, meta)
+	// new_aggregate_create_then_fail：新建后 handler 失败，事务回滚。
+	f.scheduler.MustRegisterHandlerWithMeta(corenest.NewHandlerName("new_aggregate_create_then_fail"), func(_ []entity.IThreadSafeEntity, params []any, _ ...corenest.HandlerOption) (any, error) {
+		if _, err := create(params); err != nil {
+			return nil, err
+		}
+		return nil, errNewAggregateHandlerFailed
+	}, meta)
+	// new_aggregate_create_memory：memory 快路径（rollback=none、durability=memory）里新建持久实体。
+	f.scheduler.MustRegisterHandlerWithMeta(corenest.NewHandlerName("new_aggregate_create_memory"), func(_ []entity.IThreadSafeEntity, params []any, _ ...corenest.HandlerOption) (any, error) {
+		_, err := create(params)
+		return nil, err
+	}, corenest.HandlerMeta{Rollback: corenest.RollbackNone, Durability: corenest.DurabilityMemory})
 	// new_aggregate_touch：目标实体的 profile 加一，rank 不动。
 	f.scheduler.MustRegisterHandlerWithMeta(corenest.NewHandlerName("new_aggregate_touch"), func(es []entity.IThreadSafeEntity, _ []any, _ ...corenest.HandlerOption) (any, error) {
 		profile := es[0].(*newAggregateEntity).profile
@@ -1144,9 +1385,11 @@ func newNewAggregateFixture(t *testing.T) *newAggregateFixture {
 	if err := f.scheduler.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = f.scheduler.Shutdown(context.Background()) })
-	return f
+	scheduler := f.scheduler
+	t.Cleanup(func() { _ = scheduler.Shutdown(context.Background()) })
 }
+
+var errNewAggregateHandlerFailed = errors.New("new aggregate handler failed after the create")
 
 func (f *newAggregateFixture) id(uniqueID int64) int64 {
 	f.t.Helper()
@@ -1188,23 +1431,49 @@ func (f *newAggregateFixture) storedVersion(collection string, id int64) (uint64
 	return uint64(version), true
 }
 
+// assertStored 断言每个 DAO 都有文档且 _version 为给定值（profile, rank）。
+func (f *newAggregateFixture) assertStored(id int64, profileVersion, rankVersion uint64) {
+	f.t.Helper()
+	if err := f.projector.Flush(f.ctx); err != nil {
+		f.t.Fatal(err)
+	}
+	profile, profileOK := f.storedVersion(newAggregateProfiles, id)
+	rank, rankOK := f.storedVersion(newAggregateRanks, id)
+	if !profileOK || profile != profileVersion || !rankOK || rank != rankVersion {
+		f.t.Fatalf("stored versions profile=%d(%t) rank=%d(%t), want profile=%d rank=%d", profile, profileOK, rank, rankOK, profileVersion, rankVersion)
+	}
+}
+
 func (f *newAggregateFixture) assertReloaded(id int64, profile int64) {
 	f.t.Helper()
 	loaded, err := f.coldLoad(id)
 	if err != nil {
-		f.t.Fatalf("cold load of the new entity after its first commit: %v", err)
+		f.t.Fatalf("cold load of the new entity after its creating commit: %v", err)
 	}
-	if loaded.profile.value != profile || loaded.rank.value != 0 {
-		f.t.Fatalf("reloaded profile=%d rank=%d, want profile=%d and the untouched rank at its initial 0", loaded.profile.value, loaded.rank.value, profile)
+	if loaded.profile.value != profile || loaded.rank == nil || loaded.rank.value != 0 {
+		f.t.Fatalf("reloaded profile=%d rank=%+v, want profile=%d and the untouched rank at its initial 0", loaded.profile.value, loaded.rank, profile)
 	}
 	for _, dao := range []*newAggregateDAO{loaded.profile, loaded.rank} {
 		if version := dao.tracker.Version(); version != 1 {
-			f.t.Fatalf("reloaded %s version=%d, want 1 (one full document written by the first commit)", dao.collection, version)
+			f.t.Fatalf("reloaded %s version=%d, want 1 (one full document written by the creating commit)", dao.collection, version)
 		}
 	}
 }
 
-func TestNewEntityFirstCommitWritesEveryDAOSoTheAggregateColdLoads(t *testing.T) {
+// assertNeverStored 断言实体在库里不存在（冷加载为 not found，两个集合都没有文档）。
+func (f *newAggregateFixture) assertNeverStored(id int64) {
+	f.t.Helper()
+	if _, err := f.coldLoad(id); !errors.Is(err, ErrEntityAggregateNotFound) {
+		f.t.Fatalf("cold load err=%v, want not found", err)
+	}
+	for _, collection := range []string{newAggregateProfiles, newAggregateRanks} {
+		if _, ok := f.storedVersion(collection, id); ok {
+			f.t.Fatalf("%s has a document for %d", collection, id)
+		}
+	}
+}
+
+func TestNewEntityIsStoredWithEveryDAOByItsCreatingTransaction(t *testing.T) {
 	t.Run("created inside a handler", func(t *testing.T) {
 		f := newNewAggregateFixture(t)
 		id := f.id(9311)
@@ -1214,35 +1483,63 @@ func TestNewEntityFirstCommitWritesEveryDAOSoTheAggregateColdLoads(t *testing.T)
 		f.assertReloaded(id, 7)
 	})
 
-	t.Run("created in a detached transaction outside a handler", func(t *testing.T) {
+	t.Run("created inside a handler without any persistent change", func(t *testing.T) {
+		f := newNewAggregateFixture(t)
+		id := f.id(9315)
+		if _, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_create_untouched"), f.caller, corenest.Params{id}); err != nil {
+			t.Fatal(err)
+		}
+		f.assertReloaded(id, 0)
+	})
+
+	t.Run("created in a detached transaction outside a handler without any persistent change", func(t *testing.T) {
 		f := newNewAggregateFixture(t)
 		id := f.id(9312)
 		if _, err := corenest.RunDetachedTransaction(f.ctx, f.projector, "new_aggregate_detached", func() (any, error) {
-			created, err := f.access.Create(f.param(id))
-			if err != nil {
-				return nil, err
-			}
-			return nil, created.(*newAggregateEntity).profile.setValue(7)
+			_, err := f.access.Create(f.param(id))
+			return nil, err
 		}); err != nil {
 			t.Fatal(err)
 		}
-		f.assertReloaded(id, 7)
+		f.assertReloaded(id, 0)
 	})
 
-	t.Run("created outside any transaction and first written by a handler", func(t *testing.T) {
+	t.Run("created outside any transaction", func(t *testing.T) {
 		f := newNewAggregateFixture(t)
 		id := f.id(9313)
 		if _, err := f.access.Create(f.param(id)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_touch"), id, nil); err != nil {
-			t.Fatal(err)
+		f.assertReloaded(id, 0)
+	})
+
+	t.Run("the creating transaction rolls back: nothing is stored and the instance is revoked", func(t *testing.T) {
+		f := newNewAggregateFixture(t)
+		id := f.id(9316)
+		if _, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_create_then_fail"), f.caller, corenest.Params{id}); !errors.Is(err, errNewAggregateHandlerFailed) {
+			t.Fatalf("request err=%v, want the handler failure", err)
 		}
-		f.assertReloaded(id, 1)
+		if f.manager.Get(id) != nil {
+			t.Fatal("the rolled-back creation is still published")
+		}
+		f.assertNeverStored(id)
+	})
+
+	t.Run("a memory handler cannot create a persistent entity", func(t *testing.T) {
+		f := newNewAggregateFixture(t)
+		id := f.id(9317)
+		_, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_create_memory"), f.caller, corenest.Params{id})
+		if !errors.Is(err, corenest.ErrMemoryTransactionPersistentWrite) {
+			t.Fatalf("memory handler creating a persistent entity: err=%v, want ErrMemoryTransactionPersistentWrite", err)
+		}
+		if f.manager.Get(id) != nil {
+			t.Fatal("the refused creation is still published")
+		}
+		f.assertNeverStored(id)
 	})
 
 	// 首笔提交被接受后实体不再是“新建”：之后的普通提交只写改过的 DAO，不为其他 DAO 重写整文档。
-	t.Run("after the first commit only the changed DAO is written", func(t *testing.T) {
+	t.Run("after the creating commit only the changed DAO is written", func(t *testing.T) {
 		f := newNewAggregateFixture(t)
 		id := f.id(9314)
 		if _, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_create"), f.caller, corenest.Params{id}); err != nil {
@@ -1251,13 +1548,57 @@ func TestNewEntityFirstCommitWritesEveryDAOSoTheAggregateColdLoads(t *testing.T)
 		if _, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_touch"), id, nil); err != nil {
 			t.Fatal(err)
 		}
-		if err := f.projector.Flush(f.ctx); err != nil {
-			t.Fatal(err)
-		}
-		profile, profileOK := f.storedVersion(newAggregateProfiles, id)
-		rank, rankOK := f.storedVersion(newAggregateRanks, id)
-		if !profileOK || profile != 2 || !rankOK || rank != 1 {
-			t.Fatalf("stored versions profile=%d(%t) rank=%d(%t), want profile=2 and rank still 1", profile, profileOK, rank, rankOK)
-		}
+		f.assertStored(id, 2, 1)
 	})
+}
+
+// 上线后给已有 kind 新增 DAO：旧版本（只有 profile）经正式链路写下实体，换成新版本（profile + rank）后重启冷加载。
+// rank 按初值补上并打 WARN、计数；这个实体的下一笔持久提交（只改 profile）把 rank 以整文档写出。
+func TestColdLoadFillsADAOAddedAfterTheEntityWasStored(t *testing.T) {
+	f := newNewAggregateFixture(t)
+	id := f.id(9321)
+	restore := useOnlyProfileDAO(t)
+	if _, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_create"), f.caller, corenest.Params{id}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.projector.Flush(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.storedVersion(newAggregateRanks, id); ok {
+		t.Fatal("the old kind wrote a rank document")
+	}
+	restore()
+
+	logs := captureWarnings(t)
+	before := filledDAOCount(newAggregateKind, newAggregateRanks)
+	f.boot() // 新版本上线：重启
+	if _, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_touch"), id, nil); err != nil {
+		t.Fatalf("first request after the upgrade (cold load of an entity stored before rank existed): %v", err)
+	}
+	if got := filledDAOCount(newAggregateKind, newAggregateRanks) - before; got != 1 {
+		t.Fatalf("filled counter delta = %d, want 1", got)
+	}
+	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, newAggregateRanks) {
+		t.Fatalf("no WARN naming the filled collection: %q", out)
+	}
+	f.assertStored(id, 2, 1)
+	loaded, err := f.coldLoad(id)
+	if err != nil {
+		t.Fatalf("cold load after the filled DAO was written: %v", err)
+	}
+	if loaded.profile.value != 8 || loaded.rank == nil || loaded.rank.value != 0 {
+		t.Fatalf("reloaded profile=%d rank=%+v, want 8 and rank at its initial 0", loaded.profile.value, loaded.rank)
+	}
+	if got := filledDAOCount(newAggregateKind, newAggregateRanks) - before; got != 1 {
+		t.Fatalf("filled counter delta after the rank document was written = %d, want still 1", got)
+	}
+
+	// 删过档的旧实体在新版本里只有 profile 墓碑、没有 rank：仍是删过档，补空不让它复活。
+	deleted := f.id(9322)
+	if err := f.client.Collection(testDatabase, newAggregateProfiles).Seed(bson.M{"_id": deleted, "_version": uint64(3), "_schema": uint32(1), "_deleted": true, "value": int64(5)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.coldLoad(deleted); !errors.Is(err, ErrEntityAggregateDeleted) {
+		t.Fatalf("deleted entity after a DAO was added: err=%v, want deleted", err)
+	}
 }

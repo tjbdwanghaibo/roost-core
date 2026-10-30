@@ -58,7 +58,7 @@ func (tx *RollbackTx) persistChange(participant MutationParticipant, mask uint64
 	change := tx.participantChanges[participant]
 	if change == nil {
 		change = tx.registerParticipant(participant)
-		tx.includeNewAggregate(participant)
+		tx.includeUnpersistedDAOs(participant)
 	}
 	change.Mask |= mask
 	return change, nil
@@ -83,33 +83,79 @@ func (tx *RollbackTx) registerParticipant(participant MutationParticipant) *Pers
 	return change
 }
 
-// includeNewAggregate 保证新建实体的第一笔持久提交写齐它的每个持久 DAO。
+// includeUnpersistedDAOs 是“聚合里还没有持久文档的 DAO 随这个实体的下一笔持久提交写出”的唯一实现。
 //
-// 冷加载（EntityRepository.readAggregate）要求聚合的每个 DAO 都有文档，部分存在按损坏拒绝；事务却只登记改过的 DAO，
-// 多 DAO 实体新建后只改其中一个就提交，其余 DAO 永远没有文档，重启后这个实体再也加载不出来。所以本事务第一次登记
-// 某个 DAO、而它属于还没持久过（版本 0）的新建实体时，把同一聚合里同样版本 0、尚未登记的 DAO 以全部字段登记进来：
-// 版本 0 的 DAO 准备时生成整文档 Put（Remote 托管实体经同一份登记由 RemotePersistChangeFor 认领，整份 payload）。
-// 聚合由 entity.BuildEntity 在新建时绑定在各 DAO 的 tracker 上，与经哪个入口新建（handler 内、detached 事务、事务外
-// 新建后由之后的 handler 第一次写）无关。冷加载出来的实体没有绑定，首笔提交被接受后版本不为 0，NewAggregate 都是
-// nil：已存在实体的普通提交不多写。
-func (tx *RollbackTx) includeNewAggregate(participant MutationParticipant) {
+// 冷加载要求聚合的每个 DAO 都能还原，事务却只登记改过的 DAO。所以本事务第一次登记某个 DAO 时，把同一实体里版本 0
+// （还没有持久文档）、尚未登记的 DAO 以全部字段登记进来，版本 0 的 DAO 准备时生成整文档 Put（Remote 托管实体经同一份
+// 登记由 RemotePersistChangeFor 认领，整份 payload）。版本 0 的 DAO 有两种来源（维护者 2026-10-30）：
+//   - 新建实体的每个 DAO：CaptureCreatedEntity 捕获新实体时调用本函数，创建它的事务没改任何字段也写齐全部 DAO；
+//   - 冷加载时补空的 DAO（EntityRepository 对上线后新增、库里没有文档的 DAO 按初值补上）：这个实体的下一笔持久提交
+//     顺带写出，读路径本身不产生写。
+//
+// 聚合由 entity.BuildEntity 绑定在各 DAO 的 tracker 上（entity.DaoAggregate）。确认每个 DAO 都已有持久文档后标记
+// AllPersisted，此后 tracker.Aggregate() 为 nil，已存在实体的普通提交只多一次原子读。
+func (tx *RollbackTx) includeUnpersistedDAOs(participant MutationParticipant) {
 	tracked, ok := participant.(dataEngineTrackerDao)
-	if !ok {
+	if !ok || tracked.DirtyTracker() == nil {
 		return
 	}
-	for _, dao := range tracked.DirtyTracker().NewAggregate() {
+	aggregate := tracked.DirtyTracker().Aggregate()
+	if aggregate == nil {
+		return
+	}
+	allPersisted := true
+	for _, dao := range aggregate.DAOs() {
 		sibling, ok := dao.(MutationParticipant)
 		if !ok || isNilParticipant(sibling) || !reflect.TypeOf(sibling).Comparable() {
 			continue
 		}
-		if _, registered := tx.participantChanges[sibling]; registered {
+		siblingTracker, ok := sibling.(dataEngineTrackerDao)
+		if !ok || siblingTracker.DirtyTracker() == nil || siblingTracker.DirtyTracker().Version() != 0 {
 			continue
 		}
-		if siblingTracker, ok := sibling.(dataEngineTrackerDao); !ok || siblingTracker.DirtyTracker() == nil || siblingTracker.DirtyTracker().Version() != 0 {
+		allPersisted = false
+		if _, registered := tx.participantChanges[sibling]; registered {
 			continue
 		}
 		tx.registerParticipant(sibling).Mask |= dataengine.AllFields
 	}
+	if allPersisted {
+		aggregate.MarkAllPersisted()
+	}
+}
+
+// includeCreatedEntity 让新建的持久实体本身就落库：把它还没有持久文档的 DAO（新建时是全部）登记进创建它的事务，
+// 事务没改任何持久字段也写齐每个 DAO。报告实体是否有这样的 DAO（是持久实体）。
+func (tx *RollbackTx) includeCreatedEntity(created entity.IThreadSafeEntity) bool {
+	participant := firstAggregateDAO(created)
+	if participant == nil {
+		return false
+	}
+	tx.includeUnpersistedDAOs(participant)
+	return true
+}
+
+// firstAggregateDAO 返回实体里一个绑定了 DaoAggregate、仍有 DAO 没持久过的持久 DAO；没有时为 nil（非持久实体、
+// 手写 DAO、或每个 DAO 都已有文档）。
+func firstAggregateDAO(e entity.IThreadSafeEntity) MutationParticipant {
+	guardable, ok := e.(entity.Guardable)
+	if !ok {
+		return nil
+	}
+	var found MutationParticipant
+	guardable.RangeDao(func(dao entity.DaoInterface) {
+		if found != nil || dao == nil {
+			return
+		}
+		participant, ok := dao.(MutationParticipant)
+		if !ok || isNilParticipant(participant) {
+			return
+		}
+		if tracked, ok := participant.(dataEngineTrackerDao); ok && tracked.DirtyTracker() != nil && tracked.DirtyTracker().Aggregate() != nil {
+			found = participant
+		}
+	})
+	return found
 }
 
 // MarkPersist 登记参与方按 mask 指示的字段有持久化变化（整字段覆盖由 DAO 在准备时决定）。
