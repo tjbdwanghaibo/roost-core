@@ -264,10 +264,20 @@ for attempt in 1 2 3 4 5 6; do
 		resolved=1
 		break
 	fi
+	((attempt < 6)) || break
 	info "第 $attempt 次解析 $module_path@$version 失败，30 秒后重试"
 	sleep 30
 done
-((resolved)) || die "tag 已发布，但 3 分钟内解析不到 $module_path@$version（发布后验证未通过，tag 不动，稍后按 docs/maintenance/README.md §5 手工补验）"
+if ((!resolved)); then
+	cat >&2 <<EOF
+release: tag 已发布，但约 3 分钟内解析不到 $module_path@$version（发布后验证未通过，tag 不动）。
+稍后手工补验（仓库根、tag 检出上）：
+  GOWORK=off go run ./codegen/cmd/roost project new relcheck -module example.com/relcheck -out <临时目录>/relcheck -template game-demo -roost-core-version $version -skip-deps
+  cd <临时目录>/relcheck && GOWORK=off GOPROXY=direct GONOSUMDB=$module_path go get $module_path@$version && GOWORK=off GOPROXY=direct GONOSUMDB=$module_path go mod tidy
+  GOWORK=off go build ./... && GOWORK=off go vet ./...
+EOF
+	exit 1
+fi
 (cd "$project" && GOWORK=off go build ./... && GOWORK=off go vet ./...) \
 	|| die "tag 已发布，但 game-demo 对 $version build / vet 失败（发布后验证未通过，tag 不动）"
 info "game-demo @ $version build + vet 通过"
