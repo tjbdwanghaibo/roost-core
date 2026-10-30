@@ -330,7 +330,7 @@ func TestGeneratedRoutesRunAgainstTheRuntime(t *testing.T) {
 	}
 	root := t.TempDir()
 	files := map[string][]byte{
-		"go.mod":          []byte("module example.com/routes\n\ngo 1.27.0\n\nrequire github.com/tjbdwanghaibo/roost-core v1.31.0\n\nreplace github.com/tjbdwanghaibo/roost-core => " + strconv.Quote(filepath.ToSlash(repo)) + "\n"),
+		"go.mod":          []byte("module example.com/routes\n\ngo 1.27.0\n\nrequire github.com/tjbdwanghaibo/roost-core v1.32.0\n\nreplace github.com/tjbdwanghaibo/roost-core => " + strconv.Quote(filepath.ToSlash(repo)) + "\n"),
 		generatedFileName: generated,
 	}
 	for _, source := range []string{"testdata/routes/handlers.go", "testdata/runtime/routes_test.go"} {

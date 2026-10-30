@@ -14,7 +14,7 @@ Codegen根据业务定义生成重复的连接代码，让你少写DAO、消息�
 
 ## 2. 必须保持的契约
 
-1. 生成物依赖最低 core v1.26.0（`minimumVersions.Core`），发布 manifest 与 tag 一致。
+1. 生成物依赖最低 core v1.32.0（`minimumVersions.Core`，理由写在它的注释里），发布 manifest 与 tag 一致；`framework-compat.yml` 的 minimum lane 是它的唯一副本，由 `deploy_compose_test.go` 逐字比对。
 2. 全阶段成功后发布目标，标记不等于覆盖权限。
 3. 重复生成无漂移，真实 tag 消费不使用本地 replace。
 
