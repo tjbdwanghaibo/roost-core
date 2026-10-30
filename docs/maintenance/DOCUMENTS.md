@@ -122,6 +122,9 @@
 
 ## docs/release
 
+- [v1.31.2-NOTES.md](../release/v1.31.2-NOTES.md)：v1.31.2 补丁说明（DataEngine 单条 Put 投影包 `$literal` 的修复与已有数据检查、Mongo 部署检查工具、MongoDB 7.0 实测；升级注意、未验证项）
+- [v1.31.2-IMPLEMENTATION.md](../release/v1.31.2-IMPLEMENTATION.md)：v1.31.2 实现与核对（与说明篇同编号：提交、位置、强制点、红绿、review 检查点；最低 core 不动的依据）
+- [v1.31.2-VALIDATION.md](../release/v1.31.2-VALIDATION.md)：v1.31.2 发布验收（含 7.0 / 8.0 对照）
 - [v1.31.1-NOTES.md](../release/v1.31.1-NOTES.md)：v1.31.1 补丁说明（JetStream 清理守卫修复、物理房间分配削减与长稳、发布后 Remote 验证；维护者决定、升级注意、未验证项）
 - [v1.31.1-IMPLEMENTATION.md](../release/v1.31.1-IMPLEMENTATION.md)：v1.31.1 实现与核对（与说明篇同编号：提交、位置、强制点、红绿、review 检查点；最低 core 不动的依据）
 - [v1.31.1-VALIDATION.md](../release/v1.31.1-VALIDATION.md)：v1.31.1 发布验收

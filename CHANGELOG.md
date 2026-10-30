@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [v1.31.2] - 2026-10-30
+
+补丁版：DataEngine 单条 Put 投影的 `$replaceWith` 包 `$literal`（以 `$` 开头的业务字符串原来会被当成字段路径 / 变量求值、静默改写，影响 v1.12.2～v1.31.1；**本版的主要原因，所有用 DataEngine 的工程都应升级**，已有数据的检查方法见下）、Mongo 部署只读检查工具 `cmd/mongocheck`、MongoDB 7.0.45 与 8.0.32 对照实测。配置、wire / 存储格式、生成器与模板不变，**无数据迁移，生成物最低 core 仍为 v1.31.0**。发布说明、实现与验收见 docs/release/v1.31.2-NOTES.md / -IMPLEMENTATION.md / -VALIDATION.md。
+
 ### 新增
 
 - **`cmd/mongocheck`：Mongo 部署只读检查工具**（维护者 2026-10-30 决定不在框架启动时强制版本检查，改为提供检查工具）：给运维在生产 / staging 上核对 [DataEngine 对 MongoDB 的最低要求](docs/framework/guide/03-dataengine.md#dataengine-对-mongodb-的最低要求)，逐项输出 PASS / WARN / FAIL、原因与修复建议：服务端版本（< 4.4 FAIL、4.4 WARN、≥ 5.0 PASS）、featureCompatibilityVersion、拓扑（单机 FAIL 并给出改单节点副本集的步骤；mongos 框架接受但未验证，WARN）、会话支持、`transactionLifetimeLimitSeconds`（= 20 PASS，> 20 FAIL，< 20 WARN）、存储引擎。只发 `hello` / `buildInfo` / `getParameter` / `serverStatus`，后两个缺 `clusterMonitor` 权限时 WARN 而不是 FAIL。连接串只从环境变量读（缺省 `ROOST_MONGO_URI`，`-uri-env` 改名），输出与错误不含连接串、主机名或账号。退出码 0 无 FAIL、1 有 FAIL、2 用法错误或连不上。Go 程序、零运行期依赖（不需要 mongosh），没有 Go 的机器上用交叉编译的二进制。单测覆盖判定边界、错误脱敏与“连接串不从命令行读”。
