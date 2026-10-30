@@ -26,7 +26,9 @@ import (
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
 	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
 	kitsyncbus "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
@@ -41,7 +43,8 @@ type Server struct {
 	Config *viper.Viper
 	// Resolver 与 game 进程注册的 kitdataengine.WithDatabaseResolver 是同一个回调；进程没有注册就是 nil。
 	Resolver coredata.DatabaseResolver
-	// MongoURI 为空时取配置的 mongo.uri。命令行允许单独给（凭据不写在配置文件里的部署）。
+	// MongoURI 为空时按 Mongo Mod 的规则取配置的 mongo.uri（mongo.uri_env 写了变量名就是变量的值，R11）与账号
+	// （mongo.username / password / auth_source，含 `_env`）。命令行允许单独给，它取代 mongo.uri 与 mongo.uri_env，账号键照旧生效。
 	MongoURI string
 	// WALDir 为空时取 kitdataengine.WALDir（dataengine.wal.dir，不写为 data/wal/dataengine/<sid>，相对工作目录）。
 	WALDir string
@@ -53,12 +56,12 @@ type Server struct {
 // side 是一侧解析之后的事实。
 type side struct {
 	sid        int32
-	mongoURI   string
-	mongo      string // 归一化的 Mongo 地址（主机列表 + 副本集），不含凭据
+	mongoConn  *fmongo.Config // 与 game 进程同一条规则读出的连接串与账号（kitmongo.Connection）
+	mongo      string         // 归一化的 Mongo 地址（主机列表 + 副本集），不含凭据
 	databases  *coredata.DatabaseMap
 	controlDB  string              // dataengine.database：receipts / transactions / outbox
 	saga       kitsaga.Participant // saga.*：分区布局（流、前缀、分区数）与副本数
-	natsURL    string              // nats.url：saga 分区日志所在的 NATS
+	natsURL    string              // 实际连接的 nats.url（kitnats.ServerURL，含 nats.url_env）：saga 分区日志所在的 NATS
 	natsConfig *viper.Viper        // 这一侧的配置，离线读 saga 分区时按它连 NATS
 	walDir     string
 	walChecked bool
@@ -70,18 +73,6 @@ type side struct {
 type syncbusSettings struct {
 	Transport string
 	Stream    string // 实际流名（kitsyncbus.JetStreamStreamFromConfig）
-}
-
-// mongoKeys 是本包自己读的唯一一个不属于上面几个 Mod 声明的键：mongo.uri 的值（缺省与 wiring/mongo 的声明相同，
-// TestToolKeysMatchModDeclarations 钉住）。
-type mongoKeys struct {
-	URI string `config:"mongo.uri" default:"mongodb://localhost:27017"`
-}
-
-// natsKeys 是 nats.url 的值（缺省与 wiring/nats 的声明相同，TestToolKeysMatchModDeclarations 钉住）：判断两侧是不是同一套
-// saga 分区日志。
-type natsKeys struct {
-	URL string `config:"nats.url" default:"nats://localhost:4222"`
 }
 
 type syncbusKeys struct {
@@ -98,15 +89,16 @@ func resolveSide(server Server) (side, error) {
 	cfg := server.Config
 	cfg.Set("sid", server.SID)
 	result := side{sid: server.SID, walChecked: server.WALCheckedElsewhere}
-	var mongo mongoKeys
-	if err := app.LoadConfig(cfg, &mongo); err != nil {
+	if uri := strings.TrimSpace(server.MongoURI); uri != "" {
+		cfg.Set("mongo.uri", uri)
+		cfg.Set("mongo.uri_env", "")
+	}
+	conn, err := kitmongo.Connection(cfg)
+	if err != nil {
 		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
 	}
-	result.mongoURI = strings.TrimSpace(server.MongoURI)
-	if result.mongoURI == "" {
-		result.mongoURI = mongo.URI
-	}
-	location, err := mongoLocation(result.mongoURI)
+	result.mongoConn = conn
+	location, err := mongoLocation(conn.URI)
 	if err != nil {
 		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
 	}
@@ -126,11 +118,10 @@ func resolveSide(server Server) (side, error) {
 	if result.saga, err = kitsaga.ParticipantSettings(cfg); err != nil {
 		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
 	}
-	var natsSettings natsKeys
-	if err := app.LoadConfig(cfg, &natsSettings); err != nil {
+	if result.natsURL, err = kitnats.ServerURL(cfg); err != nil {
 		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
 	}
-	result.natsURL, result.natsConfig = strings.TrimSpace(natsSettings.URL), cfg
+	result.natsConfig = cfg
 	if result.bus, err = kitnats.LoadBusPersistence(cfg); err != nil {
 		return side{}, fmt.Errorf("sidmerge: sid %d: %w", server.SID, err)
 	}

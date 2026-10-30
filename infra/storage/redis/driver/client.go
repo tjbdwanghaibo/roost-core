@@ -54,6 +54,7 @@ func NewRedisClient(cfg *fredis.Config) *Client {
 	if cfg.IsCluster() {
 		rdb = goredis.NewClusterClient(&goredis.ClusterOptions{
 			Addrs:        cfg.ClusterAddrs,
+			Username:     cfg.Username,
 			Password:     cfg.Password,
 			PoolSize:     cfg.PoolSize,
 			MinIdleConns: cfg.MinIdleConns,
@@ -71,6 +72,7 @@ func NewRedisClient(cfg *fredis.Config) *Client {
 	} else {
 		rdb = goredis.NewClient(&goredis.Options{
 			Addr:                  cfg.Addr,
+			Username:              cfg.Username,
 			Password:              cfg.Password,
 			DB:                    cfg.DB,
 			PoolSize:              cfg.PoolSize,

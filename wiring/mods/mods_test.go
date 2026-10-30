@@ -182,3 +182,52 @@ func TestPersistenceConfigRejectsOtherOrDisabledEngines(t *testing.T) {
 		t.Fatalf("dataengine.enabled=false: err=%v", err)
 	}
 }
+
+// R11 的取值规则（EnvValues，四个连接 Mod 共用）：`_env` 为空取配置值；写了变量名时变量的值（去两端空白）取代配置值；
+// 变量没设置、为空或只有空白时报错，点名两个键与变量名、不带值，同一次读取的缺失一次报全；变量名不合法时只点名键、
+// 不回显写进去的内容；只查形状的模式（配置检查）不读环境变量。
+func TestEnvValuesRule(t *testing.T) {
+	t.Setenv("ROOST_TEST_ENV_VALUE", "  from-env  ")
+	t.Setenv("ROOST_TEST_ENV_LIST", " a:1, ,b:2 ")
+	t.Setenv("ROOST_TEST_ENV_BLANK", "   ")
+	env := ReadEnv()
+	if got := env.String("x.addr", "from-config", ""); got != "from-config" {
+		t.Fatalf("empty _env: %q", got)
+	}
+	if got := env.String("x.addr", "from-config", " ROOST_TEST_ENV_VALUE "); got != "from-env" {
+		t.Fatalf("named variable: %q", got)
+	}
+	if got := env.Strings("x.endpoints", []string{"c:3"}, "ROOST_TEST_ENV_LIST"); len(got) != 2 || got[0] != "a:1" || got[1] != "b:2" {
+		t.Fatalf("list variable: %q", got)
+	}
+	if err := env.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	env = ReadEnv()
+	env.String("x.password", "", "ROOST_TEST_ENV_BLANK")
+	env.String("x.username", "", "ROOST_TEST_ENV_UNSET_R11")
+	err := env.Err()
+	for _, want := range []string{
+		"x.password_env names environment variable ROOST_TEST_ENV_BLANK, which is not set or is empty",
+		"x.username_env names environment variable ROOST_TEST_ENV_UNSET_R11, which is not set or is empty",
+	} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("Err = %v; want %q", err, want)
+		}
+	}
+
+	for _, name := range []string{"s3cret pw!", "1ABC", "A-B", "$MONGO_URI"} {
+		for _, env := range []*EnvValues{ReadEnv(), CheckEnvNames()} {
+			env.String("x.password", "", name)
+			err := env.Err()
+			if err == nil || !strings.Contains(err.Error(), "x.password_env must name an environment variable") || strings.Contains(err.Error(), name) {
+				t.Fatalf("name %q: Err = %v", name, err)
+			}
+		}
+	}
+	check := CheckEnvNames()
+	if got := check.String("x.addr", "from-config", "ROOST_TEST_ENV_UNSET_R11"); got != "from-config" || check.Err() != nil {
+		t.Fatalf("shape-only check read the environment: %q, %v", got, check.Err())
+	}
+}

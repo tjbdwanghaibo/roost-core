@@ -90,8 +90,94 @@ func TestProductionRedisNeedsAnAddrOrClusterSeeds(t *testing.T) {
 		"blank entries": "redis:\n  cluster_addrs: [\" \", \"\"]\n",
 	} {
 		err := NewRedisMod().Init(production(body))
-		if err == nil || !strings.Contains(err.Error(), "production requires redis.addr or redis.cluster_addrs") {
+		if err == nil || !strings.Contains(err.Error(), "production requires redis.addr, redis.addr_env or redis.cluster_addrs") {
 			t.Errorf("production redis with %s: Init = %v, want a missing-redis refusal", name, err)
 		}
+	}
+}
+
+// 连接与凭据从环境变量读（R11，规则见 docs/framework/guide/13-wiring.md §2.1）：redis.addr / redis.username / redis.password
+// 各有 `_env` 伴随键；Redis Mod 与单实例锁的 SingletonStore 读同一份声明、走同一条规则。
+func TestRedisAddressAndPasswordComeFromTheNamedEnvironmentVariables(t *testing.T) {
+	t.Setenv("ROOST_TEST_REDIS_ADDR", "env-redis:6379")
+	t.Setenv("ROOST_TEST_REDIS_PASSWORD", "s3cret-pw")
+	cfg := viper.New()
+	cfg.SetConfigType("yaml")
+	if err := cfg.ReadConfig(strings.NewReader("redis:\n  addr: yaml-redis:6379\n  addr_env: ROOST_TEST_REDIS_ADDR\n  password_env: ROOST_TEST_REDIS_PASSWORD\n")); err != nil {
+		t.Fatal(err)
+	}
+	mod := NewRedisMod()
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if mod.cfg.Addr != "env-redis:6379" || mod.cfg.Password != "s3cret-pw" {
+		t.Fatalf("addr = %q, password from the variable = %v; want the values of the named variables", mod.cfg.Addr, mod.cfg.Password == "s3cret-pw")
+	}
+}
+
+func TestRedisRefusesADeclaredButMissingEnvironmentVariable(t *testing.T) {
+	t.Setenv("ROOST_TEST_REDIS_EMPTY", "")
+	for _, key := range []string{"addr_env", "username_env", "password_env"} {
+		cfg := viper.New()
+		cfg.SetConfigType("yaml")
+		if err := cfg.ReadConfig(strings.NewReader("redis:\n  addr: 127.0.0.1:1\n  " + key + ": ROOST_TEST_REDIS_EMPTY\n")); err != nil {
+			t.Fatal(err)
+		}
+		if err := NewRedisMod().Init(cfg); err == nil || !strings.Contains(err.Error(), "redis."+key) || !strings.Contains(err.Error(), "ROOST_TEST_REDIS_EMPTY") {
+			t.Fatalf("redis.%s: Init = %v; want a refusal naming redis.%s and the variable", key, err, key)
+		}
+		if _, err := SingletonStore(cfg); err == nil || !strings.Contains(err.Error(), "redis."+key) || !strings.Contains(err.Error(), "ROOST_TEST_REDIS_EMPTY") {
+			t.Fatalf("redis.%s: SingletonStore = %v; want the same refusal", key, err)
+		}
+	}
+}
+
+// 生产要求有 Redis 地址：只写 redis.addr_env（地址全由部署注入）同样满足，不必再写一个不起作用的 redis.addr。
+func TestProductionRedisAcceptsAnAddressFromTheEnvironment(t *testing.T) {
+	t.Setenv("ROOST_TEST_REDIS_ADDR", "env-redis:6379")
+	cfg := viper.New()
+	cfg.SetConfigType("yaml")
+	if err := cfg.ReadConfig(strings.NewReader("env: production\nredis:\n  addr_env: ROOST_TEST_REDIS_ADDR\n")); err != nil {
+		t.Fatal(err)
+	}
+	mod := NewRedisMod()
+	if err := mod.Init(cfg); err != nil {
+		t.Fatalf("production redis with only addr_env: %v", err)
+	}
+	if mod.cfg.Addr != "env-redis:6379" {
+		t.Fatalf("addr = %q", mod.cfg.Addr)
+	}
+}
+
+// ACL 用户名（下游 redis.username_env）进连接配置；与 cube 相同，写了用户名就要有口令。错误不带值。
+func TestRedisUsernameComesFromTheEnvironmentAndNeedsAPassword(t *testing.T) {
+	t.Setenv("ROOST_TEST_REDIS_USER", "roost")
+	t.Setenv("ROOST_TEST_REDIS_PASSWORD", "s3cret-pw")
+	read := func(body string) (*viper.Viper, *RedisMod, error) {
+		cfg := viper.New()
+		cfg.SetConfigType("yaml")
+		if err := cfg.ReadConfig(strings.NewReader("redis:\n  addr: 127.0.0.1:1\n" + body)); err != nil {
+			t.Fatal(err)
+		}
+		mod := NewRedisMod()
+		return cfg, mod, mod.Init(cfg)
+	}
+	_, mod, err := read("  username_env: ROOST_TEST_REDIS_USER\n  password_env: ROOST_TEST_REDIS_PASSWORD\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mod.cfg.Username != "roost" || mod.cfg.Password != "s3cret-pw" {
+		t.Fatalf("username = %q, password from the variable = %v", mod.cfg.Username, mod.cfg.Password == "s3cret-pw")
+	}
+	cfg, _, err := read("  username_env: ROOST_TEST_REDIS_USER\n")
+	if err == nil || !strings.Contains(err.Error(), "redis.username requires redis.password") {
+		t.Fatalf("username without a password: Init = %v", err)
+	}
+	if _, err := SingletonStore(cfg); err == nil || !strings.Contains(err.Error(), "redis.username requires redis.password") {
+		t.Fatalf("username without a password: SingletonStore = %v", err)
+	}
+	// 只有口令（default 用户）照旧可用。
+	if _, _, err := read("  password_env: ROOST_TEST_REDIS_PASSWORD\n"); err != nil {
+		t.Fatalf("password only: %v", err)
 	}
 }

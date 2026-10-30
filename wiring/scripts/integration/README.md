@@ -136,3 +136,18 @@ ROOST_REVIEW_CLUSTER=127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002,127.0.0.1:7003
 `scripts/test-dataengine-generated.sh`、`scripts/test-remote-generated.sh`、`scripts/test-demo-generated.sh` 运行；
 `TestGeneratedProjectRealDependencyTestsHaveAnEntry` 要求每条这类用例都被某个脚本的 `-run` 选中且脚本挂在这里，
 或在表里写明专门入口（性能脚本、`mirror-local.sh`）。
+
+## 鉴权实例上的凭据套件：`auth-credentials.sh`
+
+连接 Mod 从环境变量读地址与凭据（R11，`<键>_env`，见 [Wiring §2.1](../../../docs/framework/guide/13-wiring.md#21-连接与凭据的环境变量_env)）
+的真实依赖用例在 `wiring/mongo`、`wiring/redis`、`wiring/nats`、`wiring/etcd`，以 `ROOST_IT_AUTH_*` 准入。它们要开了鉴权的实例，
+CI 与本页的隔离环境都不开鉴权，所以脚本自己起一套私有的 mongod（`--auth`）、redis-server（ACL 用户、关掉 default）、
+nats-server（`--user` / `--pass`）、etcd（`auth enable`），口令每次随机、只在脚本进程环境里，跑完停掉并删除根目录：
+
+```bash
+bash wiring/scripts/integration/auth-credentials.sh            # 端口 39717 / 39779 / 39722 / 39731-39732
+ROOST_AUTH_IT_PORT_BASE=41700 bash wiring/scripts/integration/auth-credentials.sh
+```
+
+每个用例先确认不带账号时被拒（实例确实开了鉴权，避免空绿），再确认账号只从变量来时能连上并写入、变量里口令错时失败且错误不带口令。
+包清单由根包 `TestAuthCredentialsScriptNamesEverySuite` 钉住：新增读 `ROOST_IT_AUTH_` 变量的 integration 测试文件，所在包必须加进脚本。

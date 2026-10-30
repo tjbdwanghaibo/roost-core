@@ -51,17 +51,37 @@ func NewEtcdMod(options ...Option) *EtcdMod {
 func (m *EtcdMod) Name() app.ModName { return mods.ModEtcd }
 
 // config 是 etcd.* 的声明（维护者决定）。
+//
+// 地址与凭据可以从环境变量读（R11）：etcd.endpoints / username / password 各有 `_env` 伴随键，规则见 wiring/mods 的 EnvValues
+// （docs/framework/guide/13-wiring.md §2.1）；endpoints 的变量值按逗号分隔。
 type config struct {
 	app.ServiceIdentity
 	Endpoints     []string `config:"etcd.endpoints" default:"localhost:2379" example:"127.0.0.1:2379" help:"etcd 地址（逗号分隔或 YAML 列表）"`
+	EndpointsEnv  string   `config:"etcd.endpoints_env" help:"从这个环境变量读 etcd.endpoints（逗号分隔；变量必须已设置且非空，取代 etcd.endpoints）"`
 	Username      string   `config:"etcd.username" example:""`
+	UsernameEnv   string   `config:"etcd.username_env" help:"从这个环境变量读 etcd.username"`
 	Password      string   `config:"etcd.password" example:""`
+	PasswordEnv   string   `config:"etcd.password_env" help:"从这个环境变量读 etcd.password"`
 	ServicePrefix string   `config:"etcd.service_prefix" shared:"etcd.service_prefix" example:"/{project}/services/" help:"服务注册的键前缀，不写取 etcd 包的缺省"`
 	LeaseTTL      int64    `config:"etcd.lease_ttl" min:"0" example:"10" help:"注册租约秒数，0 取 etcd 包的缺省"`
 	// AdvertiseAddr 是写进服务注册的地址；不写则注册不带地址。
 	AdvertiseAddr    string        `config:"etcd.advertise_addr" unique:"etcd.advertise_addr" example:"127.0.0.1:9000" help:"写进服务注册的地址（其他进程据此连接本服务）"`
 	RegisterRetryMin time.Duration `config:"etcd.register_retry_min_interval" min:"0" help:"注册失败重试的最短间隔，0 取 etcd 包的缺省"`
 	RegisterRetryMax time.Duration `config:"etcd.register_retry_max_interval" min:"0" help:"注册失败重试的最长间隔，0 取 etcd 包的缺省"`
+}
+
+// endpoint 是地址与凭据的取值（R11）：Init 经 mods.ReadEnv 读环境变量，ValidateConfig 经 mods.CheckEnvNames 只查变量名。
+func (c *config) endpoint(env *mods.EnvValues) (endpoints []string, username, password string) {
+	return env.Strings("etcd.endpoints", c.Endpoints, c.EndpointsEnv),
+		env.String("etcd.username", c.Username, c.UsernameEnv),
+		env.String("etcd.password", c.Password, c.PasswordEnv)
+}
+
+// ValidateConfig 只检查 `_env` 的变量名（配置检查不读环境变量）。
+func (c *config) ValidateConfig(bool) error {
+	env := mods.CheckEnvNames()
+	c.endpoint(env)
+	return env.Err()
 }
 
 // ConfigSchema 声明 etcd.*。
@@ -74,9 +94,18 @@ func (m *EtcdMod) Init(cfg *viper.Viper) error {
 	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return fmt.Errorf("etcd mod: %w", err)
 	}
-	m.cfg = fetcd.DefaultConfig(settings.Endpoints)
-	m.cfg.Username = settings.Username
-	m.cfg.Password = settings.Password
+	env := mods.ReadEnv()
+	endpoints, username, password := settings.endpoint(env)
+	if err := env.Err(); err != nil {
+		return fmt.Errorf("etcd mod: %w", err)
+	}
+	// 与 cube 相同：用户名与口令同时写或都不写（etcd 的鉴权要两者）。错误不带值。
+	if (username == "") != (password == "") {
+		return errors.New("etcd mod: config: etcd.username and etcd.password must be set together (directly or through their _env keys)")
+	}
+	m.cfg = fetcd.DefaultConfig(endpoints)
+	m.cfg.Username = username
+	m.cfg.Password = password
 	if settings.ServicePrefix != "" {
 		m.cfg.ServicePrefix = settings.ServicePrefix
 	}

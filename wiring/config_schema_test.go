@@ -225,7 +225,7 @@ func TestProductionDoesNotRequireSwitchesNothingReads(t *testing.T) {
 		}
 	}
 	if err := app.CheckConfig(serviceConfig(t, "game", "env: production\n"), kitredis.NewRedisMod()); err == nil ||
-		!strings.Contains(err.Error(), "production requires redis.addr or redis.cluster_addrs") {
+		!strings.Contains(err.Error(), "production requires redis.addr, redis.addr_env or redis.cluster_addrs") {
 		t.Errorf("production redis without an address: %v", err)
 	}
 }
@@ -268,5 +268,90 @@ func TestKitModsRefuseConfigValuesOfTheWrongType(t *testing.T) {
 				t.Fatalf("Init = %v; want an error naming %s", err, tc.key)
 			}
 		})
+	}
+}
+
+// R11：连接 Mod 的地址与凭据可以写成 `<键>_env: 变量名`（规则见 docs/framework/guide/13-wiring.md §2.1）。下面按下游部署配置的
+// 写法（地址键与 `_env` 同时写、凭据只写 `_env`、无鉴权的依赖用 `username_env: ""` 显式清掉）：四个连接 Mod 都声明了这些键
+// （doctor 的 config-schema 不再当成没声明的键）；配置检查（App 启动前、--check-config）只检查变量名的形状、不要求变量已设置；
+// Init 时点名拒绝没设置的变量，设置之后通过。
+func TestConnectionModsDeclareEnvironmentKeysAndResolveThemAtInit(t *testing.T) {
+	const body = `mongo:
+  uri: mongodb://127.0.0.1:1
+  uri_env: ROOST_R11_MONGO_URI
+  username_env: ROOST_R11_MONGO_USERNAME
+  password_env: ROOST_R11_MONGO_PASSWORD
+  auth_source: admin
+redis:
+  addr: 127.0.0.1:1
+  addr_env: ROOST_R11_REDIS_ADDR
+  username: ""
+  password: ""
+  username_env: ""
+  password_env: ""
+etcd:
+  endpoints: 127.0.0.1:1
+  endpoints_env: ROOST_R11_ETCD_ENDPOINTS
+  username_env: ""
+  password_env: ""
+nats:
+  url: nats://127.0.0.1:1
+  url_env: ROOST_R11_NATS_URL
+  username_env: ""
+  password_env: ""
+`
+	connectionMods := func() []declaredMod {
+		return []declaredMod{kitmongo.NewMongoMod(), kitredis.NewRedisMod(), kitetcd.NewEtcdMod(), kitnats.NewNatsMod(nil)}
+	}
+	cfg := serviceConfig(t, "game", body)
+	var schemas []app.ConfigSchema
+	for _, mod := range connectionMods() {
+		schemas = append(schemas, mod.ConfigSchema())
+	}
+	merged, err := configschema.Merge(schemas...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unknown := merged.Unknown(configschema.NewMapSource(cfg.AllSettings())); len(unknown) != 0 {
+		t.Fatalf("keys the connection Mods do not declare: %v", unknown)
+	}
+
+	variables := map[string]string{
+		"ROOST_R11_MONGO_URI": "mongodb://127.0.0.1:27017/?replicaSet=rs0", "ROOST_R11_MONGO_USERNAME": "roost",
+		"ROOST_R11_MONGO_PASSWORD": "s3cret-pw", "ROOST_R11_REDIS_ADDR": "127.0.0.1:6379",
+		"ROOST_R11_ETCD_ENDPOINTS": "127.0.0.1:2379", "ROOST_R11_NATS_URL": "nats://127.0.0.1:4222",
+	}
+	for name := range variables {
+		t.Setenv(name, "")
+	}
+	// 配置检查不读环境变量：变量都没设置时照样通过（镜像构建、CI 里的 --check-config 没有部署的密钥）。
+	if err := app.CheckConfig(cfg, func() []app.Mod {
+		var out []app.Mod
+		for _, mod := range connectionMods() {
+			out = append(out, mod)
+		}
+		return out
+	}()...); err != nil {
+		t.Fatalf("CheckConfig with the variables unset = %v; the shape is fine", err)
+	}
+	wantMissing := map[app.ModName]string{"mongo": "ROOST_R11_MONGO_URI", "redis": "ROOST_R11_REDIS_ADDR", "etcd": "ROOST_R11_ETCD_ENDPOINTS", "nats": "ROOST_R11_NATS_URL"}
+	for _, mod := range connectionMods() {
+		if err := mod.Init(cfg); err == nil || !strings.Contains(err.Error(), wantMissing[mod.Name()]) {
+			t.Errorf("%s: Init with %s unset = %v; want a refusal naming it", mod.Name(), wantMissing[mod.Name()], err)
+		}
+	}
+	for name, value := range variables {
+		t.Setenv(name, value)
+	}
+	for _, mod := range connectionMods() {
+		if err := mod.Init(cfg); err != nil {
+			t.Errorf("%s: Init with the variables set = %v", mod.Name(), err)
+		}
+	}
+
+	// 变量名写错（例如把口令本身写进了 password_env）在配置检查时点名键拒绝，错误里不回显写进去的值。
+	bad := serviceConfig(t, "game", "mongo:\n  username_env: ROOST_R11_MONGO_USERNAME\n  password_env: \"s3cret pw!\"\n")
+	if err := app.CheckConfig(bad, kitmongo.NewMongoMod()); err == nil || !strings.Contains(err.Error(), "mongo.password_env") || strings.Contains(err.Error(), "s3cret") {
+		t.Fatalf("CheckConfig with a malformed variable name = %v; want a refusal naming mongo.password_env without the value", err)
 	}
 }

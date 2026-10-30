@@ -1,8 +1,11 @@
 package driver
 
 import (
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"log/slog"
+	"net/url"
+	"strings"
+
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 
 	gonats "github.com/nats-io/nats.go"
 )
@@ -31,7 +34,7 @@ func buildNatsOptions(cfg *fnats.Config, state *natsLifecycleState, extra Client
 			handleNatsDisconnect(state, cfg, err)
 		}),
 		gonats.ReconnectHandler(func(c *gonats.Conn) {
-			slog.Info("nats: reconnected", "url", c.ConnectedUrl())
+			slog.Info("nats: reconnected", "url", c.ConnectedUrlRedacted())
 			if cfg.OnReconnect != nil {
 				cfg.OnReconnect()
 			}
@@ -50,6 +53,9 @@ func buildNatsOptions(cfg *fnats.Config, state *natsLifecycleState, extra Client
 			slog.Error("nats: async error", "subject", subject, "err", err)
 		}),
 	}
+	if cfg.Username != "" || cfg.Password != "" {
+		opts = append(opts, gonats.UserInfo(cfg.Username, cfg.Password))
+	}
 	if extra.IgnoreDiscoveredServers {
 		opts = append(opts, gonats.IgnoreDiscoveredServers())
 	}
@@ -60,6 +66,28 @@ func buildNatsOptions(cfg *fnats.Config, state *natsLifecycleState, extra Client
 		opts = append(opts, gonats.ReconnectBufSize(extra.ReconnectBufferBytes))
 	}
 	return opts
+}
+
+// RedactedURLs 把 NATS 地址（可能是逗号分隔的多个）里的 userinfo 整段换成 ***，供日志与错误使用。nats.url 可以由部署从
+// 环境变量注入（R11），可能带 user:password@ 或 token@（token 在用户名的位置，所以用户名也一并盖掉）。
+func RedactedURLs(urls string) string {
+	parts := strings.Split(urls, ",")
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		if parsed, err := url.Parse(part); err == nil && parsed.User != nil {
+			parsed.User = nil
+			bare := parsed.String()
+			if scheme := strings.Index(bare, "://"); scheme >= 0 {
+				part = bare[:scheme+len("://")] + "***@" + bare[scheme+len("://"):]
+			} else {
+				part = "***@" + bare
+			}
+		} else if at := strings.LastIndexByte(part, '@'); err != nil && at >= 0 {
+			part = "***" + part[at:]
+		}
+		parts[i] = part
+	}
+	return strings.Join(parts, ",")
 }
 
 func handleNatsDisconnect(state *natsLifecycleState, cfg *fnats.Config, err error) {

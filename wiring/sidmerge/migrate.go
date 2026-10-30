@@ -15,6 +15,8 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	engine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -180,18 +182,21 @@ func openRun(ctx context.Context, plan Plan) (*run, error) {
 		return nil, err
 	}
 	r := &run{plan: plan, from: from, into: into}
-	if r.fromMongo, err = connect(ctx, from.mongoURI); err != nil {
+	if r.fromMongo, err = connect(ctx, from.mongoConn); err != nil {
 		return nil, fmt.Errorf("sidmerge: mongo of sid %d: %w", from.sid, err)
 	}
-	if r.intoMongo, err = connect(ctx, into.mongoURI); err != nil {
+	if r.intoMongo, err = connect(ctx, into.mongoConn); err != nil {
 		r.close()
 		return nil, fmt.Errorf("sidmerge: mongo of sid %d: %w", into.sid, err)
 	}
 	return r, nil
 }
 
-func connect(ctx context.Context, uri string) (*mongo.Client, error) {
-	client, err := mongo.Connect(options.Client().ApplyURI(uri))
+// connect 按与 game 进程相同的连接串与账号（mongodriver.ApplyCredential）连 Mongo。
+func connect(ctx context.Context, conn *fmongo.Config) (*mongo.Client, error) {
+	opts := options.Client().ApplyURI(conn.URI)
+	mongodriver.ApplyCredential(opts, conn)
+	client, err := mongo.Connect(opts)
 	if err != nil {
 		return nil, err
 	}

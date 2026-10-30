@@ -5,6 +5,7 @@ import "time"
 // Config holds Redis connection configuration.
 type Config struct {
 	Addr         string // "host:port", default: "localhost:6379"
+	Username     string // ACL 用户名；空串用 default 用户（只有 Password 时）
 	Password     string
 	DB           int           // default: 0
 	PoolSize     int           // default: 10

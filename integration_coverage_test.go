@@ -71,6 +71,10 @@ func integrationTestPackages(t *testing.T) (redisOnly, fullEnv, cluster []string
 		// alone belongs to no other runner.
 		kind := "full"
 		switch {
+		// 以 ROOST_IT_AUTH_ 准入的文件（R11 的鉴权实例用例，变量名里含 REDIS_ADDR 等字样）只属于
+		// auth-credentials.sh，见 TestAuthCredentialsScriptNamesEverySuite。
+		case strings.Contains(text, "ROOST_IT_AUTH_"):
+			kind = ""
 		case strings.Contains(text, "ROOST_DATAENGINE_IT"):
 		case strings.Contains(text, "REDIS_ADDR"):
 			kind = "redis"
@@ -289,6 +293,39 @@ func TestRedisClusterScriptNamesEveryClusterKeyedSuite(t *testing.T) {
 		}
 		if dir := strings.TrimPrefix(arg, "./"); !covers(cluster, dir) {
 			t.Errorf("%s names %s, which has no ROOST_REVIEW_CLUSTER test files: that cell reports green for nothing", script, arg)
+		}
+	}
+}
+
+// 连接 Mod 从环境变量读凭据（R11）的真实依赖用例以 ROOST_IT_AUTH_* 准入，要开了鉴权的 Mongo / Redis / NATS / etcd，CI 与
+// 共享隔离环境都不开鉴权，所以它们只有 wiring/scripts/integration/auth-credentials.sh 一个入口（脚本自起私有实例）。
+// 脚本要列出每个含这类文件的包，不能列没有的包（那一格是空绿）。
+func TestAuthCredentialsScriptNamesEverySuite(t *testing.T) {
+	gated := packagesReadingEnv(t, "ROOST_IT_AUTH_", true, true)
+	var suites []string
+	for _, dirs := range gated {
+		suites = mergeSorted(suites, dirs)
+	}
+	if len(suites) == 0 {
+		t.Fatal("no integration test reads a ROOST_IT_AUTH_ variable; the R11 suites moved or the scan changed")
+	}
+	script := filepath.Join("wiring", "scripts", "integration", "auth-credentials.sh")
+	raw, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := goTestPackageArgs(string(raw))
+	if len(args) == 0 {
+		t.Fatalf("%s has no `go test -tags=integration` line", script)
+	}
+	for _, dir := range suites {
+		if !covers(args, dir) {
+			t.Errorf("%s: %s has ROOST_IT_AUTH_-gated tests that no runner names; args: %v", script, dir, args)
+		}
+	}
+	for _, arg := range args {
+		if dir := strings.TrimPrefix(arg, "./"); strings.HasSuffix(arg, "/...") || !covers(suites, dir) {
+			t.Errorf("%s names %s, which has no ROOST_IT_AUTH_ test files (or is a pattern): that cell reports green for nothing", script, arg)
 		}
 	}
 }

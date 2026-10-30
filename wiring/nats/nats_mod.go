@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,9 +41,17 @@ type NatsMod struct {
 }
 
 // config 是 nats.* 的声明（维护者决定）。nats.rpc.* 只在 transport 为 jetstream / js 时生效，写了就检查。
+//
+// 地址与账号可以从环境变量读（R11）：nats.url / username / password 各有 `_env` 伴随键，规则见 wiring/mods 的 EnvValues
+// （docs/framework/guide/13-wiring.md §2.1）。账号也可以写在 nats.url 的 userinfo 里，二选一，见 connection。
 type config struct {
 	app.ServiceIdentity
 	URL                     string `config:"nats.url" default:"nats://localhost:4222" example:"nats://127.0.0.1:4222"`
+	URLEnv                  string `config:"nats.url_env" help:"从这个环境变量读 nats.url（变量必须已设置且非空，取代 nats.url）"`
+	Username                string `config:"nats.username" help:"账号（与 nats.password 同时写），不写在 nats.url 里时用"`
+	UsernameEnv             string `config:"nats.username_env" help:"从这个环境变量读 nats.username"`
+	Password                string `config:"nats.password" help:"口令（与 nats.username 同时写）"`
+	PasswordEnv             string `config:"nats.password_env" help:"从这个环境变量读 nats.password"`
 	Prefix                  string `config:"nats.prefix" shared:"nats.prefix" default:"roost" example:"{project}" help:"bus 主题前缀。生成配置按工程名填写：同一工程的所有服务必须一致，共用一套 NATS 的不同工程必须不同"`
 	WorkerNum               int    `config:"nats.worker_num" default:"8" min:"1" example:"8"`
 	IgnoreDiscoveredServers bool   `config:"nats.ignore_discovered_servers" help:"只连配置的地址，不跟随集群 gossip 发现的节点（代理、NAT、故障注入时用）"`
@@ -68,6 +77,39 @@ type config struct {
 		MaxBytes       int64         `config:"max_bytes" min:"0"`
 		SetupTimeout   time.Duration `config:"setup_timeout" min:"1ns"`
 	} `config:"nats.rpc"`
+}
+
+// endpoint 是地址与账号的取值（R11）：读取经 mods.ReadEnv，配置检查经 mods.CheckEnvNames 只查变量名。
+func (c *config) endpoint(env *mods.EnvValues) (url, username, password string) {
+	return env.String("nats.url", c.URL, c.URLEnv),
+		env.String("nats.username", c.Username, c.UsernameEnv),
+		env.String("nats.password", c.Password, c.PasswordEnv)
+}
+
+// ValidateConfig 只检查 `_env` 的变量名（配置检查不读环境变量）。
+func (c *config) ValidateConfig(bool) error {
+	env := mods.CheckEnvNames()
+	c.endpoint(env)
+	return env.Err()
+}
+
+// connection 读环境变量、合成连接配置（Init、Connect 与 ServerURL 共用）。与 cube 相同，用户名与口令同时写或都不写；
+// 写了用户名时 nats.url 不能再带 userinfo（两处都有账号时不知道用哪个）。错误点名键，不带地址与口令。
+func (c *config) connection() (*fnats.Config, natsdriver.ClientOptions, error) {
+	env := mods.ReadEnv()
+	url, username, password := c.endpoint(env)
+	if err := env.Err(); err != nil {
+		return nil, natsdriver.ClientOptions{}, err
+	}
+	if (username == "") != (password == "") {
+		return nil, natsdriver.ClientOptions{}, errors.New("config: nats.username and nats.password must be set together (directly or through their _env keys)")
+	}
+	if username != "" && strings.Contains(url, "@") {
+		return nil, natsdriver.ClientOptions{}, errors.New("config: nats.url already carries credentials (user:password@ or token@); remove them from the URL or drop nats.username / nats.password")
+	}
+	out := fnats.DefaultConfig(url)
+	out.Username, out.Password = username, password
+	return out, natsdriver.ClientOptions{IgnoreDiscoveredServers: c.IgnoreDiscoveredServers, InboxPrefix: c.InboxPrefix, ReconnectBufferBytes: c.ReconnectBufferBytes}, nil
 }
 
 // jetStreamRPC 返回 JetStream RPC 的配置；transport 不是 jetstream / js 时第二个返回值为 false。
@@ -108,16 +150,32 @@ func LoadBusPersistence(cfg *viper.Viper) (BusPersistence, error) {
 	}, nil
 }
 
-// Connect 按 NATS Mod 的声明（与 Init 同一个结构体：nats.url 与客户端选项）建一条连接，不登记能力、不建总线。
-// 运维工具（cmd/sidmerge 离线读 saga 分区）用；调用方负责 Close。
+// Connect 按 NATS Mod 的声明（与 Init 同一个结构体与同一条规则：nats.url、账号（含 `_env`）与客户端选项）建一条连接，
+// 不登记能力、不建总线。运维工具（cmd/sidmerge 离线读 saga 分区）用；调用方负责 Close。
 func Connect(cfg *viper.Viper) (*natsdriver.Assembly, error) {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {
 		return nil, fmt.Errorf("nats: %w", err)
 	}
-	return natsdriver.Assemble(fnats.DefaultConfig(settings.URL), natsdriver.ClientOptions{
-		IgnoreDiscoveredServers: settings.IgnoreDiscoveredServers, InboxPrefix: settings.InboxPrefix, ReconnectBufferBytes: settings.ReconnectBufferBytes,
-	})
+	conn, extra, err := settings.connection()
+	if err != nil {
+		return nil, fmt.Errorf("nats: %w", err)
+	}
+	return natsdriver.Assemble(conn, extra)
+}
+
+// ServerURL 按 NATS Mod 的同一条规则返回实际连接的 nats.url（nats.url_env 写了变量名就是变量的值）。运维工具（wiring/sidmerge）
+// 用它判断两份配置是不是同一套 NATS；返回值可能带 userinfo，不要写进日志（用 natsdriver.RedactedURLs）。
+func ServerURL(cfg *viper.Viper) (string, error) {
+	var settings config
+	if err := app.LoadConfig(cfg, &settings); err != nil {
+		return "", fmt.Errorf("nats: %w", err)
+	}
+	conn, _, err := settings.connection()
+	if err != nil {
+		return "", fmt.Errorf("nats: %w", err)
+	}
+	return strings.TrimSpace(conn.URL), nil
 }
 
 // NewNatsMod creates a NatsMod with an optional codec.
@@ -140,8 +198,11 @@ func (m *NatsMod) Init(cfg *viper.Viper) error {
 	if err := app.LoadConfig(cfg, &m.settings); err != nil {
 		return fmt.Errorf("nats mod: %w", err)
 	}
-	m.cfg = fnats.DefaultConfig(m.settings.URL)
-	m.extra = natsdriver.ClientOptions{IgnoreDiscoveredServers: m.settings.IgnoreDiscoveredServers, InboxPrefix: m.settings.InboxPrefix, ReconnectBufferBytes: m.settings.ReconnectBufferBytes}
+	conn, extra, err := m.settings.connection()
+	if err != nil {
+		return fmt.Errorf("nats mod: %w", err)
+	}
+	m.cfg, m.extra = conn, extra
 	return nil
 }
 

@@ -11,8 +11,6 @@ import (
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
-	kitmongo "github.com/tjbdwanghaibo/roost-core/wiring/mongo"
-	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
 	kitsyncbus "github.com/tjbdwanghaibo/roost-core/wiring/syncbus"
 )
 
@@ -126,13 +124,44 @@ func TestToolKeysMatchModDeclarations(t *testing.T) {
 		key      string
 		mod, own app.ConfigSchema
 	}{
-		{"mongo.uri", kitmongo.NewMongoMod().ConfigSchema(), app.SchemaOf(mongoKeys{})},
 		{"syncbus.transport", kitsyncbus.NewSyncBusMod(0).ConfigSchema(), app.SchemaOf(syncbusKeys{})},
-		{"nats.url", kitnats.NewNatsMod(nil).ConfigSchema(), app.SchemaOf(natsKeys{})},
 	} {
 		if want, got := declared(pair.mod, pair.key), tool(pair.own, pair.key); want != got {
 			t.Fatalf("%s: the Mod defaults to %q, sidmerge to %q", pair.key, want, got)
 		}
+	}
+}
+
+// Mongo 与 NATS 的连接按 Mongo / NATS Mod 的同一条规则读（kitmongo.Connection、kitnats.ServerURL）：`_env` 写了变量名就用
+// 变量的值（R11），账号键也带上；命令行的 MongoURI 取代 mongo.uri 与 mongo.uri_env，账号键照旧生效。
+func TestSidesConnectLikeTheGameProcess(t *testing.T) {
+	t.Setenv("ROOST_TEST_SIDMERGE_MONGO_URI", "mongodb://h1:27017/?replicaSet=rs0")
+	t.Setenv("ROOST_TEST_SIDMERGE_MONGO_USER", "roost")
+	t.Setenv("ROOST_TEST_SIDMERGE_MONGO_PASSWORD", "pw")
+	t.Setenv("ROOST_TEST_SIDMERGE_NATS_URL", "nats://env-nats:4222")
+	settings := map[string]any{
+		"mongo.uri": "mongodb://yaml-host:27017", "mongo.uri_env": "ROOST_TEST_SIDMERGE_MONGO_URI",
+		"mongo.username_env": "ROOST_TEST_SIDMERGE_MONGO_USER", "mongo.password_env": "ROOST_TEST_SIDMERGE_MONGO_PASSWORD", "mongo.auth_source": "admin",
+		"nats.url": "nats://yaml-nats:4222", "nats.url_env": "ROOST_TEST_SIDMERGE_NATS_URL",
+	}
+	resolved, err := resolveSide(Server{SID: 1001, Config: serverConfig(settings)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.mongoConn.URI != "mongodb://h1:27017/?replicaSet=rs0" || resolved.mongoConn.Username != "roost" || resolved.mongoConn.AuthSource != "admin" ||
+		resolved.mongo != "h1:27017/?replicaSet=rs0" || resolved.natsURL != "nats://env-nats:4222" {
+		t.Fatalf("mongo %q as %q (auth source %q) at %q, nats %q", resolved.mongoConn.URI, resolved.mongoConn.Username, resolved.mongoConn.AuthSource, resolved.mongo, resolved.natsURL)
+	}
+	resolved, err = resolveSide(Server{SID: 1001, Config: serverConfig(settings), MongoURI: "mongodb://h2:27017/?replicaSet=rs0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.mongoConn.URI != "mongodb://h2:27017/?replicaSet=rs0" || resolved.mongoConn.Username != "roost" {
+		t.Fatalf("command-line URI: mongo %q as %q", resolved.mongoConn.URI, resolved.mongoConn.Username)
+	}
+	t.Setenv("ROOST_TEST_SIDMERGE_MONGO_PASSWORD", "")
+	if _, err := resolveSide(Server{SID: 1001, Config: serverConfig(settings)}); err == nil || !strings.Contains(err.Error(), "ROOST_TEST_SIDMERGE_MONGO_PASSWORD") {
+		t.Fatalf("missing variable: resolveSide = %v", err)
 	}
 }
 

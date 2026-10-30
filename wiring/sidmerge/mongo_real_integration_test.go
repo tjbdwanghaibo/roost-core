@@ -20,6 +20,7 @@ import (
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	ndriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
@@ -43,7 +44,7 @@ func TestSidMergeMigratesAndRevertsOnRealMongo(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	unique := fmt.Sprintf("sidmergeit_%d_%d", os.Getpid(), time.Now().UnixNano())
-	client, err := connect(ctx, uri)
+	client, err := connect(ctx, fmongo.DefaultConfig(uri))
 	if err != nil {
 		t.Fatal(err)
 	}

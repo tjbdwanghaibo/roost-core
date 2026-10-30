@@ -16,6 +16,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/readconcern"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
+	"go.mongodb.org/mongo-driver/v2/x/mongo/driver/connstring"
 )
 
 // Client implements fmongo.IMongo by wrapping mongo-driver v2.
@@ -48,6 +49,7 @@ func NewClient(cfg *fmongo.Config, policy IndexMigrationPolicy) (*Client, error)
 		SetReadPreference(readpref.Primary()).
 		SetRetryReads(true).
 		SetRetryWrites(true)
+	ApplyCredential(opts, cfg)
 	if hoptrace.Enabled() {
 		// 性能夹具在建连接之前安装了逐跳计时：按命令名记每次往返（跳名 mongo.<命令>，命令名是固定的十几个）。
 		// 生产不安装，连接上没有监视器。
@@ -66,6 +68,30 @@ func NewClient(cfg *fmongo.Config, policy IndexMigrationPolicy) (*Client, error)
 		return nil, fmt.Errorf("mongo: connect: %w", err)
 	}
 	return &Client{cli: cli, policy: policy, txnTimeout: cfg.TransactionTimeout, requireReplicaSet: cfg.RequireReplicaSet}, nil
+}
+
+// ApplyCredential 把 cfg 里写在 URI 之外的账号（Username 非空时）并进 opts 已从 URI 解析出的认证选项：保留 URI 里的
+// authMechanism / authMechanismProperties，cfg.AuthSource 为空时用 URI 的 authSource。opts 须已 ApplyURI(cfg.URI)。
+// NewClient 与运维工具（wiring/sidmerge 直接用驱动客户端拷贝数据）共用，两处连同一个 Mongo 时用同一个账号。
+func ApplyCredential(opts *options.ClientOptions, cfg *fmongo.Config) {
+	if opts == nil || cfg == nil || cfg.Username == "" {
+		return
+	}
+	var credential options.Credential
+	if opts.Auth != nil {
+		credential = *opts.Auth
+	}
+	credential.Username, credential.Password, credential.PasswordSet = cfg.Username, cfg.Password, true
+	switch {
+	case cfg.AuthSource != "":
+		credential.AuthSource = cfg.AuthSource
+	case credential.AuthSource == "":
+		// URI 只写了 ?authSource=、没有别的认证参数时驱动不建认证选项（opts.Auth 为 nil），这里从 URI 补回来。
+		if parsed, err := connstring.Parse(cfg.URI); err == nil {
+			credential.AuthSource = parsed.AuthSource
+		}
+	}
+	opts.SetAuth(credential)
 }
 
 func (c *Client) Database(name string) fmongo.IDatabase {

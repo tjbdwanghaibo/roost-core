@@ -29,6 +29,43 @@ Wiring 只负责配置、依赖查询与注册、实例构造和生命周期委�
 | configdata | 表加载/快照与监听 | 数据完整校验后发布 |
 | ops/statslog | 探针、管理与周期统计 | 生命周期与有界工作排空 |
 
+### 2.1 连接与凭据的环境变量（`*_env`）
+
+mongo / redis / etcd / nats 四个连接 Mod 的地址与凭据键各有一个伴随键 `<键>_env`，值是**环境变量名**（维护者 2026-10-30 R11，与下游 cube fork 的写法对齐，下游配置不用改）。部署把连接串、账号、口令放进环境变量（Kubernetes Secret 等），配置文件里只写变量名：
+
+```yaml
+mongo:
+  uri: mongodb://127.0.0.1:27017/?replicaSet=rs0   # 本地缺省；部署时被 MONGO_URI 取代
+  uri_env: MONGO_URI
+  username_env: MONGO_USERNAME
+  password_env: MONGO_PASSWORD
+  auth_source: admin
+redis:
+  addr_env: REDIS_ADDR
+  username_env: ""        # 叠加层写空串，清掉下层（例如容器配置）声明的凭据：无鉴权的部署
+  password_env: ""
+```
+
+| Mod | 有 `_env` 的键 | 账号规则（Init 时检查，错误不带值） |
+| --- | --- | --- |
+| mongo | `mongo.uri`、`mongo.username`、`mongo.password`（另有 `mongo.auth_source`，不是密钥、没有 `_env`） | 用户名与口令同时写或都不写；写了 `mongo.username` 时 `mongo.uri` 不能再带 `user:password@`（两处都有账号时驱动会静默用后者，这里拒绝）；`mongo.auth_source` 只跟 `mongo.username` 用，URI 里的账号写 `?authSource=`。单独写的账号并进 URI 的认证选项（保留 URI 的 `authMechanism`；不写 `auth_source` 时用 URI 的 `authSource`） |
+| redis | `redis.addr`、`redis.username`（ACL 用户，新增）、`redis.password` | 写了用户名就要有口令；只有口令时用 default 用户。`redis.cluster_addrs` 没有 `_env`：服务 Mod 按它判断 Cluster 与检查 hash tag，从变量读就要每个服务 Mod 都解析一遍 |
+| etcd | `etcd.endpoints`（变量值逗号分隔）、`etcd.username`、`etcd.password` | 用户名与口令同时写或都不写 |
+| nats | `nats.url`、`nats.username`、`nats.password`（后两个新增，经 nats.go `UserInfo`） | 用户名与口令同时写或都不写；写了用户名时 `nats.url` 不能再带 userinfo。token / nkey / creds 文件不支持（可以写在 URL 的 userinfo 里） |
+
+取值规则只在 `wiring/mods` 的 `EnvValues` 实现一次，四个 Mod 与走同一规则的运维入口（`wiring/nats.Connect` / `ServerURL`、`wiring/mongo.Connection`、单实例锁的 `wiring/redis.SingletonStore`、`wiring/sidmerge`）共用：
+
+| 情况 | 结果 |
+| --- | --- |
+| `<键>_env` 没写或为空串 | 取 `<键>` 本身的值（与没有这条规则时相同） |
+| `<键>_env` 写了变量名，变量有值 | 变量的值（去掉两端空白，与配置里字符串的读法相同）取代 `<键>`。**两者都写时变量优先**：配置里的 `<键>` 留作本地缺省（下游 eks 配置就是这样写的，cube 同样），不报冲突 |
+| 变量没设置、为空或只有空白 | Mod Init 拒绝启动，错误点名 `<键>_env`、变量名与 `<键>`，不带任何值；同一个 Mod 的缺失一次报全 |
+| 变量名不是字母 / 数字 / 下划线（或以数字开头） | 配置检查就拒绝，只点名键、不回显写进去的内容（可能把口令本身写进了 `_env`） |
+
+**配置检查不读环境变量**：App 启动前的声明检查、`--check-config`、doctor 只检查 `_env` 的变量名形状（键都在 Mod 的 ConfigSchema 里声明，doctor 的 `config-schema` 认识它们），不要求变量已设置，所以镜像构建、CI 里没有部署密钥时检查照样通过；变量是否设置在 Mod Init 时判断（App 启动时仍是先于任何连接失败）。生产要求有 Redis 地址的规则把 `redis.addr_env` 算作已写地址。
+
+**不进日志与错误**：Mongo 的 “connected” 日志只记脱敏后的 URI（口令换成 `***`），单独写的口令不进日志；NATS 的连接失败错误、“connected” / “reconnected” 日志里的地址整段盖掉 userinfo（token 在用户名位置，用户名一并盖掉）；Redis / etcd 只记地址。
+
 生成器 catalog 的14个基础设施 Mod 名是特定目录口径，不是全仓 Mod 类型总数；RemoteMirror 与 service 装配不应被错误计入或排除能力范围。
 
 ## 3. 接入顺序

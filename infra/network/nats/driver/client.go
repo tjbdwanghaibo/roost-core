@@ -83,9 +83,9 @@ func NewClient(cfg *fnats.Config, extra ClientOptions) (*Client, error) {
 	opts := buildNatsOptions(cfg, state, extra)
 	conn, err := gonats.Connect(cfg.URL, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("nats: connect %s: %w", cfg.URL, err)
+		return nil, fmt.Errorf("nats: connect %s: %w", RedactedURLs(cfg.URL), err)
 	}
-	slog.Info("nats: connected", "url", cfg.URL)
+	slog.Info("nats: connected", "url", RedactedURLs(cfg.URL))
 	return &Client{conn: conn, cfg: cfg, state: state}, nil
 }
 

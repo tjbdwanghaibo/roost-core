@@ -87,6 +87,8 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o mongocheck ./cmd/mongocheck
 
 口令放进环境变量时注意 shell 历史（例如从密钥文件 `export ROOST_MONGO_URI="$(cat …)"`）。
 
+服务进程的 Mongo Mod 同样可以从环境变量读连接串与账号（`mongo.uri_env` / `username_env` / `password_env`，加 `mongo.auth_source`，见 [Wiring §2.1](13-wiring.md#21-连接与凭据的环境变量_env)）。`mongocheck` 只读一个连接串变量：账号单独放在变量里的部署（例如 `MONGO_USERNAME` / `MONGO_PASSWORD`）跑它时，把账号拼进给它的连接串（`mongodb://<账号>:<口令>@…&authSource=admin`）。
+
 | 检查项 | PASS | WARN | FAIL |
 | --- | --- | --- | --- |
 | `server-version`（`buildInfo`） | ≥ 5.0 | 4.4.x（满足代码硬底，已停止官方支持）、版本串无法解析 | < 4.4，或 `buildInfo` 失败 |

@@ -77,3 +77,60 @@ func TestIgnoreDiscoveredServersIsAnOptInThatReachesTheConnection(t *testing.T) 
 		t.Fatal("nats.ignore_discovered_servers=true did not reach the connection options")
 	}
 }
+
+// nats.url 可以由部署从环境变量注入（R11），连接串可能带 userinfo（nats://user:pass@host、nats://token@host）。
+// 连接失败的错误与 “connected” 日志只带脱敏后的地址：口令与 token 不进错误、不进日志。
+func TestConnectErrorDoesNotCarryURLCredentials(t *testing.T) {
+	for _, url := range []string{
+		"nats://roost:s3cret-pw@127.0.0.1:1",
+		"nats://s3cret-pw@127.0.0.1:1",
+		"nats://127.0.0.1:2, nats://roost:s3cret-pw@127.0.0.1:1",
+	} {
+		_, err := NewClient(fnats.DefaultConfig(url), ClientOptions{})
+		if err == nil {
+			t.Fatalf("%s: connected to a closed port", url)
+		}
+		if strings.Contains(err.Error(), "s3cret-pw") {
+			t.Fatalf("connect error carries the credential: %v", err)
+		}
+		if !strings.Contains(err.Error(), "127.0.0.1:1") {
+			t.Fatalf("connect error no longer says where it tried: %v", err)
+		}
+	}
+}
+
+func TestRedactedURLsHidesTheWholeUserinfo(t *testing.T) {
+	for in, want := range map[string]string{
+		"nats://roost:pw@n1:4222":                 "nats://***@n1:4222",
+		"nats://token@n1:4222":                    "nats://***@n1:4222",
+		"nats://n1:4222, nats://roost:pw@n2:4222": "nats://n1:4222,nats://***@n2:4222",
+		"nats://127.0.0.1:4222":                   "nats://127.0.0.1:4222",
+		"nats://roost:p%zz@n1:4222":               "***@n1:4222", // 解析不了的 URL 只留 '@' 之后
+		"tls://roost:pw@n1:4443,tls://n2:4443":    "tls://***@n1:4443,tls://n2:4443",
+	} {
+		if got := RedactedURLs(in); got != want {
+			t.Errorf("RedactedURLs(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// 写在 URL 之外的账号（nats.username / password，R11）经 nats.go 的 UserInfo 选项交给连接。
+func TestBuildNatsOptionsCarriesTheSeparateAccount(t *testing.T) {
+	apply := func(cfg *fnats.Config) gonats.Options {
+		options := gonats.GetDefaultOptions()
+		for _, option := range buildNatsOptions(cfg, &natsLifecycleState{}, ClientOptions{}) {
+			if err := option(&options); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return options
+	}
+	cfg := fnats.DefaultConfig("nats://n1:4222")
+	cfg.Username, cfg.Password = "roost", "pw"
+	if options := apply(cfg); options.User != "roost" || options.Password != "pw" {
+		t.Fatalf("user / password = %q / %q", options.User, options.Password)
+	}
+	if options := apply(fnats.DefaultConfig("nats://n1:4222")); options.User != "" || options.Password != "" {
+		t.Fatalf("no account configured, got user %q", options.User)
+	}
+}

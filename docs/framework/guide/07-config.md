@@ -37,7 +37,7 @@ App 启动、`--check-config` 与读服务配置的工具（`app.LoadConfigFile`
 | 出错 | include 缺失或格式错误时报错，点名该 include 与列出它的入口；不会退回开发缺省值 |
 | 键本身 | `config.includes` 不进入叠加结果（cube 保留它；这里去掉，否则 doctor 会把它当成没声明的键） |
 | 格式 | 每个文件按扩展名由 viper 解析，键不区分大小写；`config.includes` 必须是路径字符串列表（cube 会把单个字符串按空白拆开，这里拒绝） |
-| 之后 | 命令行 `server_type` / `--sid` 仍覆盖叠加结果；`*_env` 之类的值是普通字符串，照常叠加，由读它的 Mod 在 Init 时解析（加载期没有环境变量展开） |
+| 之后 | 命令行 `server_type` / `--sid` 仍覆盖叠加结果；`*_env` 之类的值是普通字符串，照常叠加，由读它的 Mod 在 Init 时解析（加载期没有环境变量展开；连接 Mod 的规则见 [Wiring §2.1](13-wiring.md#21-连接与凭据的环境变量_env)） |
 
 叠加结果走同一份声明检查；错误补上键来自哪个文件（`(from <文件>)`）并列出叠加顺序，`--check-config` 输出 `config ok: <入口> (includes: …)`，启动日志带 `config_includes`。没写 `config.includes` 的入口与此前完全相同（viper 直接读这一个文件）。
 

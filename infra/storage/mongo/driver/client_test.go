@@ -250,3 +250,41 @@ func TestWithTransactionFailuresBeforeTheCommitAreNotResultUnknown(t *testing.T)
 		})
 	}
 }
+
+// 写在 URI 之外的账号（R11：mongo.username / password / auth_source，可来自环境变量）并进 URI 解析出的认证选项：
+// 保留 URI 里的 authMechanism；auth_source 不写时保留 URI 的 authSource；没有单独的账号时不碰 URI 的认证选项。
+func TestApplyCredentialMergesIntoTheURIAuthOptions(t *testing.T) {
+	mechanism := fmongo.DefaultConfig("mongodb://db1:27017/?authMechanism=MONGODB-AWS")
+	mechanism.Username, mechanism.Password = "AKIA", "pw"
+	opts := options.Client().ApplyURI(mechanism.URI)
+	ApplyCredential(opts, mechanism)
+	if opts.Auth == nil || opts.Auth.Username != "AKIA" || opts.Auth.Password != "pw" || !opts.Auth.PasswordSet || opts.Auth.AuthMechanism != "MONGODB-AWS" {
+		t.Fatalf("auth = %+v; want the separate account merged into the URI's mechanism", opts.Auth)
+	}
+	cfg := fmongo.DefaultConfig("mongodb://db1:27017/?authSource=games")
+	cfg.Username, cfg.Password = "roost", "pw"
+	opts = options.Client().ApplyURI(cfg.URI)
+	ApplyCredential(opts, cfg)
+	if opts.Auth == nil || opts.Auth.Username != "roost" || opts.Auth.AuthSource != "games" {
+		t.Fatalf("auth = %+v; want the URI's authSource kept", opts.Auth)
+	}
+	cfg.AuthSource = "admin"
+	opts = options.Client().ApplyURI(cfg.URI)
+	ApplyCredential(opts, cfg)
+	if opts.Auth.AuthSource != "admin" {
+		t.Fatalf("authSource = %q, want mongo.auth_source to win", opts.Auth.AuthSource)
+	}
+	plain := fmongo.DefaultConfig("mongodb://db1:27017")
+	plain.Username, plain.Password, plain.AuthSource = "roost", "pw", "admin"
+	opts = options.Client().ApplyURI(plain.URI)
+	ApplyCredential(opts, plain)
+	if opts.Auth == nil || opts.Auth.Username != "roost" || opts.Auth.AuthSource != "admin" {
+		t.Fatalf("auth = %+v; want the account on a URI without auth options", opts.Auth)
+	}
+	inURI := fmongo.DefaultConfig("mongodb://other:pw2@db1:27017/?authSource=admin")
+	opts = options.Client().ApplyURI(inURI.URI)
+	ApplyCredential(opts, inURI)
+	if opts.Auth == nil || opts.Auth.Username != "other" || opts.Auth.Password != "pw2" {
+		t.Fatalf("auth = %+v; want the URI's own account untouched", opts.Auth)
+	}
+}

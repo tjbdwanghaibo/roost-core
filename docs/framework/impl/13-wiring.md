@@ -17,6 +17,7 @@ Wiring把数据库、调度器、同步总线等能力接进一个App。你通�
 1. 资源所有权随创建关系唯一，借用者不重复关闭。
 2. 依赖写 Mod 名，Registry 查询 capability 接口。
 3. StopBudget 与 StopWithContext 的真实完成条件一致。
+4. 连接 Mod 的 `*_env`（R11，[设计 §2.1](../guide/13-wiring.md#21-连接与凭据的环境变量_env)）：取值规则只在 [wiring/mods/env.go](../../../wiring/mods/env.go) `EnvValues` 一处。每个连接配置结构体只写一个取值方法（`endpoint(env)`，列出本 Mod 的成对键），`ValidateConfig` 用 `mods.CheckEnvNames()` 调它（只查变量名，配置检查不读环境变量），读取入口用 `mods.ReadEnv()` 调它，两处的键清单因此只写一遍。读这些键的入口全部经各自 Mod 的同一个方法：mongo 的 `Init` 与 `Connection`（sidmerge 用），redis 的 `redisConfig`（Mod 与 `SingletonStore`），etcd 的 `Init`，nats 的 `Init`、`Connect`、`ServerURL`（sidmerge 用）；不要在工具里再声明一份 `mongo.uri` / `nats.url`。DataEngine、Remote、saga 不读 `mongo.*`，用 Mongo Mod 发布的 `IMongo`。错误与日志不带变量值、URI 原文与口令（Mongo 日志经 `redactedURI`，NATS 地址经 `natsdriver.RedactedURLs`）。
 
 ## 2A. Mod实现核对方式
 
@@ -58,5 +59,7 @@ GOWORK=off go test -race ./wiring/selfsync ./wiring/nest ./framework/sync/entity
 `wiring/saga.Steps` 与 `wiring/dataengine.SubscribeEffects`（D12 方向 A）不是 App Mod：步骤体与 effect handler 常要用服务 Init 里才发布的能力（玩家驻留表、mail 客户端），而 Mod 在服务 Init 之前启动；服务在 Init 里 Start / 订阅、在 Shutdown 里 Drain。两者都不增加配置键，只经各自 Mod 的声明读配置。回归：`wiring/saga/steps_test.go`、`wiring/dataengine/effects_test.go`；真实依赖由 `framework/saga` 的 `TestRealJetStreamNativeStepsEndToEnd`、`TestRealJetStreamParticipantKill9` 与生成工程的 `TestGeneratedSagaNativeStepsAndEffectConsumer`（经正式 Mod、生成 DAO 回执、真实 Nest）覆盖，`TestRealSubscribeEffectsDeliversEachEffectOnce`（`wiring/dataengine`）覆盖 effect 消费，`-tags integration`。
 
 `wiring/nest.EntitySyncSetup` 的两个可选钩子：`Attach(manager) (detach, error)` 在 Init 里 Manager 创建之后调用一次（失败则关闭 Manager、Init 失败），detach 在 Mod 停止、Manager 关闭之后调用；`EntityLoaded` 在 DataEngine 发布从权威加载的实体之后、Mod 自己的 Rebind 之后调用（业务池上，不得阻塞）。`wiring/selfsync` 是唯一使用者：Attach 安装 `policy.SelfView`，EntityLoaded 把玩家实体的加载转成 `SelfView.EntityLoaded`。同一个 `SelfSync` 只能装到一个 Mod（第二次 Attach 报错）。回归：`wiring/selfsync/selfsync_test.go`（真实 gateway TCP：全量→增量、重连全量、首个全量排在 ACK 之后、第二条连接与旧连接关闭、Ingress 回调、只能装一次、未接推送能力时整轮重试）与 `example_client_test.go`（Go 客户端解码示例）。
+
+连接 Mod 的 `*_env`（R11）回归：取值规则 `wiring/mods/mods_test.go` `TestEnvValuesRule`；各 Mod `wiring/mongo/config_test.go`、`wiring/redis/config_test.go`、`wiring/etcd/etcd_mod_test.go`、`wiring/nats/nats_mod_test.go`（变量取代配置值、变量没设置 / 为空时 Init 点名拒绝、账号规则、错误不带值）；下游写法的整体对照 `wiring/config_schema_test.go` `TestConnectionModsDeclareEnvironmentKeysAndResolveThemAtInit`（键都已声明、配置检查不要求变量、Init 拒绝 / 通过）；驱动侧 `infra/storage/mongo/driver` `TestApplyCredentialMergesIntoTheURIAuthOptions`、`infra/network/nats/driver` `TestBuildNatsOptionsCarriesTheSeparateAccount` / `TestConnectErrorDoesNotCarryURLCredentials` / `TestRedactedURLsHidesTheWholeUserinfo`；运维工具 `wiring/sidmerge` `TestSidesConnectLikeTheGameProcess`。真实鉴权实例上的端到端用例（`-tags integration`，`wiring/{mongo,redis,nats,etcd}/credentials_integration_test.go`，以 `ROOST_IT_AUTH_*` 准入）只由 [auth-credentials.sh](../../../wiring/scripts/integration/auth-credentials.sh) 运行：脚本自起开了鉴权的私有实例，跑完清理；包清单由根包 `TestAuthCredentialsScriptNamesEverySuite` 钉住。
 
 增加或改变配置声明后执行 `go generate ./...`，再验证生成工程的配置检查和编译。全包列表见 [源码索引](../PACKAGES.md)。Gate 的新增接线及验收见 [实施方案](../GATEWAY-IMPLEMENTATION.md)。
