@@ -277,12 +277,25 @@ func (s *{{$.Nested.Name}}) Get{{.Name}}(key {{.MapKey}}) ({{mapValType .}}, boo
 		var zero {{mapValType .}}
 		return zero, false
 	}
+{{- if .CopiesMapValue}}
+	// A copy: changing it does not change the struct, a change goes through
+	// Set{{.Name}} so it is marked dirty and rolls back. append(val[:0:0], ...)
+	// keeps nil as nil and an empty value as empty.
+	val, ok := s.{{fieldVar .Name}}.Get(key)
+	return append(val[:0:0], val...), ok
+{{- else}}
 	return s.{{fieldVar .Name}}.Get(key)
+{{- end}}
 }
 
 func (s *{{$.Nested.Name}}) Range{{.Name}}(f func(key {{.MapKey}}, val {{mapValType .}}) bool) {
 	if s.{{fieldVar .Name}} == nil || f == nil { return }
+{{- if .CopiesMapValue}}
+	// Each value handed to f is a copy, for the same reason Get{{.Name}} copies.
+	s.{{fieldVar .Name}}.Range(func(key {{.MapKey}}, val {{.MapVal}}) bool { return f(key, append(val[:0:0], val...)) })
+{{- else}}
 	s.{{fieldVar .Name}}.Range(f)
+{{- end}}
 }
 
 func (s *{{$.Nested.Name}}) {{.Name}}Len() int {
@@ -325,7 +338,12 @@ func (s *{{$.Nested.Name}}) Set{{.Name}}(v {{if eq .Kind 2}}{{rawMapType .}}{{el
 {{- end}}
 	s.{{fieldVar .Name}} = {{mapNewExpr . "len(v)"}}
 	for key, val := range v {
+{{- if .CopiesMapValue}}
+		// Store copies: the caller keeps its slices.
+		s.{{fieldVar .Name}}.Set(key, append(val[:0:0], val...))
+{{- else}}
 		s.{{fieldVar .Name}}.Set(key, val)
+{{- end}}
 	}
 {{- if hasHook .}}
 	s.bind{{.Name}}()

@@ -106,9 +106,10 @@ func TestParseDefDir(t *testing.T) {
 		t.Fatalf("Equips map val should be EquipInfo, got %q", equips.MapVal)
 	}
 
-	// Should auto-detect nested structs recursively: Position, EquipInfo, GemInfo
-	if len(defs.Nested) != 3 {
-		t.Fatalf("expected 3 nested, got %d", len(defs.Nested))
+	// Should auto-detect nested structs recursively: Position, EquipInfo,
+	// GemInfo, and Envelope (VarietyDao's map-of-bytes holder).
+	if len(defs.Nested) != 4 {
+		t.Fatalf("expected 4 nested, got %d", len(defs.Nested))
 	}
 
 	nestedNames := make(map[string]bool)
@@ -123,6 +124,9 @@ func TestParseDefDir(t *testing.T) {
 	}
 	if !nestedNames["GemInfo"] {
 		t.Fatal("GemInfo not detected as nested")
+	}
+	if !nestedNames["Envelope"] {
+		t.Fatal("Envelope not detected as nested")
 	}
 
 	redisDao := defs.RedisDaos[0]

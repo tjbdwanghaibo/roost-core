@@ -14,6 +14,10 @@
   - `errors=<mapper>`：错误响应改用路由包里声明的 `webroute.ErrorMapper`（生成 `WriteResultWithMapper`，与 `compress=gzip` 同用时是新的 `WriteCompressedResultWithMapper`）；只认本包标识符，别的包的映射在路由包里 `var x = pkg.Mapper` 一行引用。`status=<2xx>|response`：固定成功状态，或由响应的 `HTTPSuccessStatus() int` 决定（新的 `webroute.SuccessStatus`，只认 200～299，否则 200；只在没有错误时调用）。下游用它保持旧客户端契约（D6：自带 StatusError 映射、排队中回 202）。
   - 不写新选项的路由生成物逐字不变、行为不变（响应类型即使有 `HTTPSuccessStatus` 方法，不写 `status=response` 也不看）。用了 `compress=gzip` / `status=response` / `compress=gzip` 加 `errors=` 的生成物调用新 API，发版时生成物最低 core 要升到本版本。[命令与标记参考 §11](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#11-webroute) · [实现 2F](docs/framework/impl/12-codegen.md#2f-dao-字节切片整体读取与-webroute-选项)
 
+### 修复
+
+- **DAO 生成器：map 的切片值（`map[K][]byte` 等）原样交出与存下内部切片，调用方改它就绕过脏标记改了 DAO**：`Get<Field>(key)` 返回的切片、`Range<Field>` 回调拿到的值、`Set<Field>(key, val)` 之后调用方仍持有的入参，都与 DAO 内部共用底层数组；改它们不经 setter，没有脏位、不进 WAL 与同步、事务回滚覆盖不到，内存与已提交 / 已持久的内容从此不一致。`roost add saga -native` 生成的回执字段 `SagaReceipts map[string][]byte` 就是这种形状（框架经 `saga.StepReceipts` 只读，没有写入路径；业务直接调用生成的 `GetSagaReceipts` / `RangeSagaReceipts` 时不受保护）。现在 map 值是元素为基本类型的切片时（DAO 与嵌套 struct），`Get` / `Range` 交副本、`Set`（嵌套 struct 的整体 `Set<Field>(map)`）存副本，与 `Get<Field>All()` 同一规则；nil 与空切片的区别保留。方法签名、存储与 sync 格式不变，重新生成即可，不用改业务代码；代价是每次读 / 遍历一个值多一次分配。其余引用形状（值是 map、非嵌套指针、元素仍是引用的切片，`[][]T` / `*int64` 字段）仍不复制，见 [已知限制](docs/maintenance/KNOWN-LIMITS.md#生成器配置与工具)。[命令与标记参考 §4](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#生成物与读写约定) · [实现 2F](docs/framework/impl/12-codegen.md#2f-dao-字节切片整体读取与-webroute-选项)
+
 ## [v1.31.2] - 2026-10-30
 
 补丁版：DataEngine 单条 Put 投影的 `$replaceWith` 包 `$literal`（以 `$` 开头的业务字符串原来会被当成字段路径 / 变量求值、静默改写，影响 v1.12.2～v1.31.1；**本版的主要原因，所有用 DataEngine 的工程都应升级**，已有数据的检查方法见下）、Mongo 部署只读检查工具 `cmd/mongocheck`、MongoDB 7.0.45 与 8.0.32 对照实测。配置、wire / 存储格式、生成器与模板不变，**无数据迁移，生成物最低 core 仍为 v1.31.0**。发布说明、实现与验收见 docs/release/v1.31.2-NOTES.md / -IMPLEMENTATION.md / -VALIDATION.md。

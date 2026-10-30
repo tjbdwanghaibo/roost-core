@@ -581,3 +581,49 @@ type Box struct {
 		t.Errorf("GetBlobAll must return a copy of the stored bytes:\n%s", body)
 	}
 }
+
+// map 值是元素为基本类型的切片（[]byte 等，saga 回执 SagaReceipts map[string][]byte 是这个形状）时，DAO 与嵌套类型
+// 交出去、收下的值都是副本：GetX(key) / RangeX 交副本，SetX 存副本（嵌套类型的 SetX(map) 存每个值的副本）。修前三处
+// 都原样传递内部切片，调用方改这块内存就绕过 setter 改了 DAO（无脏标记、不进 WAL 与同步、回滚不覆盖）。副本用
+// append(val[:0:0], val...)：nil 仍是 nil、空切片仍是空切片，不改变存下来的值。值是基本类型或嵌套指针的 map 不受影响。
+func TestAMapOfSlicesHandsOutAndStoresCopies(t *testing.T) {
+	out := generateKeywordDao(t, `package def
+
+//roost:dao coll=ledgers db=game
+type LedgerDao struct {
+	Receipts map[string][]byte
+	Counts   map[int64]int32
+	Lists    map[int32][]int64 `+"`dao:\"persist,sync,map=fast\"`"+`
+	Box      Box
+}
+
+type Box struct {
+	Marks map[int32][]byte
+}
+`)
+	read := func(name string) map[string]string {
+		raw, err := os.ReadFile(filepath.Join(out, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return generatedFunctions(string(raw))
+	}
+	const copyExpr = "append(val[:0:0], val...)"
+	dao := read("gen_ledger_dao.go")
+	for _, name := range []string{"GetReceipts", "SetReceipts", "RangeReceipts", "GetLists", "SetLists", "RangeLists"} {
+		if !strings.Contains(dao[name], copyExpr) {
+			t.Errorf("%s must copy the slice value with %s:\n%s", name, copyExpr, dao[name])
+		}
+	}
+	for _, name := range []string{"GetCounts", "SetCounts", "RangeCounts"} {
+		if strings.Contains(dao[name], copyExpr) {
+			t.Errorf("%s copies a value that is not a slice:\n%s", name, dao[name])
+		}
+	}
+	box := read("gen_box_nested.go")
+	for _, name := range []string{"GetMarks", "SetMarks", "RangeMarks"} {
+		if !strings.Contains(box[name], copyExpr) {
+			t.Errorf("nested %s must copy the slice value with %s:\n%s", name, copyExpr, box[name])
+		}
+	}
+}

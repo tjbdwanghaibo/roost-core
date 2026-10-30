@@ -97,6 +97,22 @@ func (f FieldDef) IsBytes() bool {
 	return f.Kind == KindSlice && !f.IsPtr && (f.SliceElem == "byte" || f.SliceElem == "uint8")
 }
 
+// CopiesMapValue 报告 map 字段的值是元素为基本类型的切片（[]byte、[]int64 等；saga 原生步骤的回执
+// SagaReceipts map[string][]byte 就是这种）。这类值是引用：生成的 GetX(key) / RangeX 交出副本、SetX 存下副本
+// （嵌套类型的 SetX(map) 存每个值的副本），调用方手里的切片与 DAO 内部的切片从不共用底层数组——否则调用方改这块
+// 内存就绕过 setter 改了 DAO：没有脏标记、不进 WAL 与同步、事务回滚也回不去。与字节切片字段的 GetXAll 同一规则。
+//
+// 只覆盖“一层切片、元素是基本类型”：浅拷贝就是完整副本。值是基本类型（按值传递）或嵌套类型指针（改动经嵌套类型自己
+// 的 setter 标脏）的 map 不需要；其余引用形状（值是 map、指向非嵌套类型的指针、元素仍是引用的切片）浅拷贝不够，
+// 见 docs/maintenance/KNOWN-LIMITS.md。
+func (f FieldDef) CopiesMapValue() bool {
+	if f.Kind != KindMap || f.IsPtr {
+		return false
+	}
+	elem, ok := strings.CutPrefix(f.MapVal, "[]")
+	return ok && isBasicType(elem)
+}
+
 type FieldKind int
 
 const (

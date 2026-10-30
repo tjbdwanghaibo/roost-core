@@ -469,6 +469,14 @@ var result Result
 err := json.Unmarshal(dao.GetResultJSONAll(), &result) // 拿到副本
 ```
 
+map 的值是元素为基本类型的切片（`map[K][]byte`、`map[K][]int64` 等；`roost add saga -native` 加的回执字段 `SagaReceipts map[string][]byte`
+就是这种）时，同一规则：`Get<Field>(key)` 返回值的副本，`Range<Field>` 交给回调的每个值都是副本，`Set<Field>(key, val)` 存入参的副本
+（嵌套 struct 的 `Set<Field>(map)` 存每个值的副本）。调用方改自己手里的切片不会改到 DAO；副本保留 nil 与空切片的区别（`nil` 读回 `nil`，
+`[]byte{}` 读回非 nil 的空切片）。代价是每次读 / 遍历一个值多一次分配。值是基本类型或嵌套类型指针（`map[K]*Gem`，改动经嵌套类型自己的
+setter 标脏）的 map 不复制。其余引用形状——值是 map、指向非嵌套类型的指针（`map[K]*int64`）、元素仍是引用的切片（`map[K][][]byte`），
+以及 `[][]byte` 这类 slice 字段、`*int64` 这类指针字段——生成器照常生成但**不复制**，取得的值与 DAO 内部共用内存，不要修改，
+见 [已知限制](../../docs/maintenance/KNOWN-LIMITS.md#生成器配置与工具)。
+
 生成器同时产出字段 mask、undo、事务内 `PersistChange`、字段级 Patch、BSON marshal/unmarshal、`MutationParticipant`、`RestorePersisted`（只接受 `schema=` 声明的当前版本，不做迁移；改形状按[schema 变更操作手册](../../docs/framework/SCHEMA-MIGRATION.md)离线转换）和 `DirtyTracker()`。三件要点：
 
 - **dirty**：每个字段一个掩码位。setter 先比较再标记；持久化变化经 `nest.MarkPersist*` 进入当前 Nest 事务，同步变化留在 DAO tracker（`DirtyTracker()` 返回 `*dataengine.Tracker`，只保存已接受的持久化版本和 sync dirty）。

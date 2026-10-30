@@ -436,3 +436,122 @@ func assertBinaryField(t *testing.T, what string, raw []byte, want string) {
 		t.Fatalf("%s result_json = %s (type %v), want binary %q", what, value, value.Type, want)
 	}
 }
+
+// map 值是字节切片（saga 原生步骤的回执 SagaReceipts map[string][]byte 就是这个形状）：DAO 交出去的、收下的都是副本。
+// 修前 GetX(key) / RangeX 把内部的切片原样交给调用方、SetX(key, val) 原样存下调用方的切片，调用方之后改这块内存就改了
+// DAO：不经 setter，没有脏标记、不进 WAL、不进同步、事务失败也回不去，内存与已提交的记录 / 持久文档从此不一致。
+//   - SetX 存副本：调用方改自己传进来的切片不改 DAO；
+//   - GetX / RangeX 交副本：改返回值、改回调拿到的值都不改 DAO；
+//   - nil 与空切片原样保留（副本不把空值变成 nil，也不把 nil 变成空值）；
+//   - 嵌套类型里的同形字段（Envelope.Marks）同一规则：SetX(map) 存每个值的副本，GetX / RangeX 交副本。
+//
+// 每个子用例用自己的 DAO：一条承诺被打破不连带后面的断言一起变红。
+func TestAMapOfByteSlicesNeverSharesItsBytesWithTheCaller(t *testing.T) {
+	const payload = `{"command_id":"c1","success":true}`
+	// stored 写入一条 op = payload 并提交，返回 DAO、调用方传进去的切片和提交记录里的值。
+	stored := func(t *testing.T) (*VarietyDao, []byte, string) {
+		t.Helper()
+		variety := NewVarietyDao()
+		variety.SetId(22)
+		committer := &ownershipCommitter{}
+		input := []byte(payload)
+		if _, err := nest.RunIsolatedTransaction(context.Background(), committer, "write", func() (any, error) {
+			variety.SetBlobs("op", input)
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if len(committer.records) != 1 || len(committer.records[0].Mutations) != 1 {
+			t.Fatalf("commit records = %+v", committer.records)
+		}
+		mutation := committer.records[0].Mutations[0]
+		committed := mutation.Data
+		if len(committed) == 0 {
+			committed = mutation.Patch.SetBSON
+		}
+		value, err := bson.Raw(committed).LookupErr("blobs.op")
+		if err != nil {
+			value, err = bson.Raw(committed).LookupErr("blobs", "op")
+		}
+		if err != nil {
+			t.Fatalf("commit record has no blobs.op: %v (%s)", err, bson.Raw(committed))
+		}
+		_, data, ok := value.BinaryOK()
+		if !ok {
+			t.Fatalf("commit record blobs.op = %s", value)
+		}
+		return variety, input, string(data)
+	}
+	// unchanged 断言内存仍等于已提交的内容：没有调用任何 setter，就不该有别的值。
+	unchanged := func(t *testing.T, variety *VarietyDao, committed, how string) {
+		t.Helper()
+		got, ok := variety.GetBlobs("op")
+		if !ok || string(got) != committed {
+			t.Errorf("%s changed the DAO without a setter: memory %q, committed %q", how, got, committed)
+		}
+	}
+
+	t.Run("SetBlobs stores a copy", func(t *testing.T) {
+		variety, input, committed := stored(t)
+		input[0] = 'X'
+		unchanged(t, variety, committed, "changing the slice passed to SetBlobs")
+	})
+	t.Run("GetBlobs returns a copy", func(t *testing.T) {
+		variety, _, committed := stored(t)
+		got, _ := variety.GetBlobs("op")
+		got[0] = 'X'
+		unchanged(t, variety, committed, "changing the slice GetBlobs returned")
+	})
+	t.Run("RangeBlobs hands out copies", func(t *testing.T) {
+		variety, _, committed := stored(t)
+		variety.RangeBlobs(func(_ string, val []byte) bool { val[0] = 'X'; return true })
+		unchanged(t, variety, committed, "changing the slice RangeBlobs handed out")
+	})
+	t.Run("nil and empty values stay what they were", func(t *testing.T) {
+		variety := NewVarietyDao()
+		variety.SetId(23)
+		if _, err := nest.RunIsolatedTransaction(context.Background(), &ownershipCommitter{}, "write", func() (any, error) {
+			variety.SetBlobs("empty", []byte{})
+			variety.SetBlobs("nil", nil)
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if empty, ok := variety.GetBlobs("empty"); !ok || empty == nil || len(empty) != 0 {
+			t.Errorf("an empty value reads %#v, %v; want a non-nil empty slice", empty, ok)
+		}
+		if none, ok := variety.GetBlobs("nil"); !ok || none != nil {
+			t.Errorf("a nil value reads %#v, %v; want nil", none, ok)
+		}
+	})
+
+	nested := func(t *testing.T) (*Envelope, map[int32][]byte) {
+		t.Helper()
+		marks := map[int32][]byte{1: []byte(payload)}
+		envelope := &Envelope{}
+		envelope.SetMarks(marks)
+		return envelope, marks
+	}
+	nestedUnchanged := func(t *testing.T, envelope *Envelope, how string) {
+		t.Helper()
+		if got, ok := envelope.GetMarks(1); !ok || string(got) != payload {
+			t.Errorf("%s changed the nested struct without a setter: %q", how, got)
+		}
+	}
+	t.Run("nested SetMarks stores copies", func(t *testing.T) {
+		envelope, marks := nested(t)
+		marks[1][0] = 'X'
+		nestedUnchanged(t, envelope, "changing a value of the map passed to SetMarks")
+	})
+	t.Run("nested GetMarks returns a copy", func(t *testing.T) {
+		envelope, _ := nested(t)
+		got, _ := envelope.GetMarks(1)
+		got[0] = 'X'
+		nestedUnchanged(t, envelope, "changing the slice GetMarks returned")
+	})
+	t.Run("nested RangeMarks hands out copies", func(t *testing.T) {
+		envelope, _ := nested(t)
+		envelope.RangeMarks(func(_ int32, val []byte) bool { val[0] = 'X'; return true })
+		nestedUnchanged(t, envelope, "changing the slice RangeMarks handed out")
+	})
+}

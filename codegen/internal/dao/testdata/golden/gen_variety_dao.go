@@ -22,6 +22,8 @@ type VarietyDao struct {
 	fastItems   *fmap.FastMap[int64, int32]
 	shardedTags *fmap.ShardedSafeMap[int32, string]
 	resultJSON  []byte
+	blobs       *fmap.SmallSafeMap[string, []byte]
+	envelope    Envelope
 }
 
 // Ensure interface compliance.
@@ -49,12 +51,14 @@ const (
 // bson:"<old>" on the renamed field, or migrate the documents offline before
 // raising the schema (docs/framework/SCHEMA-MIGRATION.md).
 type varietyDaoPersistDoc struct {
-	ID            int64            `bson:"_id"`
-	SchemaVersion uint32           `bson:"_schema"`
-	PersistOnly   int64            `bson:"persist_only"`
-	FastItems     map[int64]int32  `bson:"fast_items"`
-	ShardedTags   map[int32]string `bson:"sharded_tags"`
-	ResultJSON    []byte           `bson:"result_json"`
+	ID            int64             `bson:"_id"`
+	SchemaVersion uint32            `bson:"_schema"`
+	PersistOnly   int64             `bson:"persist_only"`
+	FastItems     map[int64]int32   `bson:"fast_items"`
+	ShardedTags   map[int32]string  `bson:"sharded_tags"`
+	ResultJSON    []byte            `bson:"result_json"`
+	Blobs         map[string][]byte `bson:"blobs"`
+	Envelope      envelopeBSONDoc   `bson:"envelope"`
 }
 
 // varietyDaoStoredKeys is the key set varietyDaoPersistDoc declares, nested types
@@ -67,6 +71,7 @@ func NewVarietyDao() *VarietyDao {
 	d.pending = fmap.NewFastMap[int32, int64](0, fmap.HashInteger[int32])
 	d.fastItems = fmap.NewFastMap[int64, int32](0, fmap.HashInteger[int64])
 	d.shardedTags = fmap.NewShardedSafeMap[int32, string](32, fmap.HashInteger[int32])
+	d.blobs = fmap.NewSmallSafeMap[string, []byte](0)
 	// Wire the nested callbacks here, not only on the hydration paths. A
 	// component reaches a nested value directly (dao.GetEquipment().SetX)
 	// and never goes through this DAO's own setter, so an entity that was
@@ -95,6 +100,8 @@ const (
 	varietyDaoFieldFastItems   uint64 = 1 << iota
 	varietyDaoFieldShardedTags uint64 = 1 << iota
 	varietyDaoFieldResultJSON  uint64 = 1 << iota
+	varietyDaoFieldBlobs       uint64 = 1 << iota
+	varietyDaoFieldEnvelope    uint64 = 1 << iota
 )
 
 func (d *VarietyDao) markPersistOnlyDirty() {
@@ -132,6 +139,20 @@ func (d *VarietyDao) markResultJSONDirty() {
 		panic(fmt.Errorf("VarietyDao: mark ResultJSON persistence: %w", err))
 	}
 	d.tracker.MarkSync(varietyDaoFieldResultJSON)
+}
+
+func (d *VarietyDao) markBlobsDirty() {
+	if err := nest.MarkPersist(d, varietyDaoFieldBlobs); err != nil {
+		panic(fmt.Errorf("VarietyDao: mark Blobs persistence: %w", err))
+	}
+	d.tracker.MarkSync(varietyDaoFieldBlobs)
+}
+
+func (d *VarietyDao) markEnvelopeDirty() {
+	if err := nest.MarkPersist(d, varietyDaoFieldEnvelope); err != nil {
+		panic(fmt.Errorf("VarietyDao: mark Envelope persistence: %w", err))
+	}
+	d.tracker.MarkSync(varietyDaoFieldEnvelope)
 }
 
 func (d *VarietyDao) markPendingKeyDirty(key int32, val int64) {
@@ -192,8 +213,35 @@ func (d *VarietyDao) markShardedTagsKeyDeleted(key int32) {
 	d.tracker.MarkSync(varietyDaoFieldShardedTags)
 }
 
+func (d *VarietyDao) markBlobsKeyDirty(key string, val []byte) {
+	if path, ok := dataengine.MapPatchPath("blobs", key); ok {
+		if err := nest.MarkPersistSet(d, varietyDaoFieldBlobs, path, val); err != nil {
+			panic(fmt.Errorf("VarietyDao: mark Blobs key persistence: %w", err))
+		}
+	} else {
+		if err := nest.MarkPersistFull(d, varietyDaoFieldBlobs, "blobs"); err != nil {
+			panic(fmt.Errorf("VarietyDao: mark Blobs persistence: %w", err))
+		}
+	}
+	d.tracker.MarkSync(varietyDaoFieldBlobs)
+}
+
+func (d *VarietyDao) markBlobsKeyDeleted(key string) {
+	if path, ok := dataengine.MapPatchPath("blobs", key); ok {
+		if err := nest.MarkPersistUnset(d, varietyDaoFieldBlobs, path); err != nil {
+			panic(fmt.Errorf("VarietyDao: mark Blobs delete persistence: %w", err))
+		}
+	} else {
+		if err := nest.MarkPersistFull(d, varietyDaoFieldBlobs, "blobs"); err != nil {
+			panic(fmt.Errorf("VarietyDao: mark Blobs persistence: %w", err))
+		}
+	}
+	d.tracker.MarkSync(varietyDaoFieldBlobs)
+}
+
 // Init wires dirty callbacks for nested structs and map values.
 func (d *VarietyDao) Init() {
+	d.envelope.bindDirty(daoDirtyOwner{holder: d, field: varietyDaoFieldEnvelope}, d.markEnvelopeDirty)
 }
 
 // --- Accessors ---
@@ -218,6 +266,8 @@ func (d *VarietyDao) GetResultJSON(idx int) (byte, bool) {
 func (d *VarietyDao) GetResultJSONAll() []byte {
 	return append([]byte(nil), d.resultJSON...)
 }
+
+func (d *VarietyDao) GetEnvelope() *Envelope { return &d.envelope }
 
 // --- Mutators ---
 
@@ -485,6 +535,87 @@ func (d *VarietyDao) ResultJSONLen() int {
 	return len(d.resultJSON)
 }
 
+func (d *VarietyDao) GetBlobs(key string) ([]byte, bool) {
+	if d.blobs == nil {
+		var zero []byte
+		return zero, false
+	}
+	// A copy: changing it does not change the DAO, a change goes through
+	// SetBlobs so it is marked dirty and rolls back. append(val[:0:0], ...)
+	// keeps nil as nil and an empty value as empty.
+	val, ok := d.blobs.Get(key)
+	return append(val[:0:0], val...), ok
+}
+
+func (d *VarietyDao) SetBlobs(key string, val []byte) {
+	// Store a copy: the caller keeps its slice, and changing it later does not
+	// change the DAO behind the dirty marks.
+	val = append(val[:0:0], val...)
+	if d.blobs == nil {
+		d.blobs = fmap.NewSmallSafeMap[string, []byte](0)
+	}
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old, existed := d.blobs.Get(key)
+		d.recordUndoToken(tx, varietyDaoFieldBlobs, key, func() error {
+			if existed {
+				d.blobs.Set(key, old)
+			} else {
+				d.blobs.Delete(key)
+			}
+			return nil
+		})
+	}
+	d.blobs.Set(key, val)
+	d.markBlobsKeyDirty(key, val)
+}
+
+func (d *VarietyDao) DelBlobs(key string) {
+	if d.blobs == nil {
+		return
+	}
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old, existed := d.blobs.Get(key)
+		d.recordUndoToken(tx, varietyDaoFieldBlobs, key, func() error {
+			if existed {
+				d.blobs.Set(key, old)
+			}
+			return nil
+		})
+	}
+	if d.blobs.Delete(key) {
+		d.markBlobsKeyDeleted(key)
+	}
+}
+
+func (d *VarietyDao) RangeBlobs(f func(key string, val []byte) bool) {
+	if d.blobs == nil || f == nil {
+		return
+	}
+	// Each value handed to f is a copy, for the same reason GetBlobs copies.
+	d.blobs.Range(func(key string, val []byte) bool { return f(key, append(val[:0:0], val...)) })
+}
+
+func (d *VarietyDao) BlobsLen() int {
+	if d.blobs == nil {
+		return 0
+	}
+	return d.blobs.Len()
+}
+
+func (d *VarietyDao) SetEnvelope(v Envelope) {
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		old := d.envelope
+		d.recordUndo(tx, varietyDaoFieldEnvelope, func() error {
+			d.envelope = old
+			d.envelope.bindDirty(daoDirtyOwner{holder: d, field: varietyDaoFieldEnvelope}, d.markEnvelopeDirty)
+			return nil
+		})
+	}
+	d.envelope = v
+	d.envelope.bindDirty(daoDirtyOwner{holder: d, field: varietyDaoFieldEnvelope}, d.markEnvelopeDirty)
+	d.markEnvelopeDirty()
+}
+
 func (d *VarietyDao) varietyDaoPendingRawMap() map[int32]int64 {
 	if d.pending == nil {
 		return nil
@@ -542,6 +673,25 @@ func (d *VarietyDao) setShardedTagsRawMap(src map[int32]string) {
 	}
 }
 
+func (d *VarietyDao) varietyDaoBlobsRawMap() map[string][]byte {
+	if d.blobs == nil {
+		return nil
+	}
+	ret := make(map[string][]byte, d.blobs.Len())
+	d.blobs.Range(func(key string, val []byte) bool {
+		ret[key] = val
+		return true
+	})
+	return ret
+}
+
+func (d *VarietyDao) setBlobsRawMap(src map[string][]byte) {
+	d.blobs = fmap.NewSmallSafeMap[string, []byte](len(src))
+	for key, val := range src {
+		d.blobs.Set(key, val)
+	}
+}
+
 // --- Marshal (persist fields) ---
 
 // CaptureRollbackState is side-effect free and includes transient and
@@ -592,6 +742,8 @@ func (d *VarietyDao) persistDoc() varietyDaoPersistDoc {
 		FastItems:     d.varietyDaoFastItemsRawMap(),
 		ShardedTags:   d.varietyDaoShardedTagsRawMap(),
 		ResultJSON:    d.resultJSON,
+		Blobs:         d.varietyDaoBlobsRawMap(),
+		Envelope:      d.envelope.bsonDoc(),
 	}
 }
 
@@ -601,6 +753,8 @@ func (d *VarietyDao) setPersistDoc(doc varietyDaoPersistDoc) {
 	d.setFastItemsRawMap(doc.FastItems)
 	d.setShardedTagsRawMap(doc.ShardedTags)
 	d.resultJSON = doc.ResultJSON
+	d.setBlobsRawMap(doc.Blobs)
+	d.envelope = envelopeFromBSONDoc(doc.Envelope)
 }
 
 func (d *VarietyDao) marshalCommitState() ([]byte, error) {
@@ -708,6 +862,15 @@ func (d *VarietyDao) marshalPersistPatchBSON(change nest.PersistChange) (dataeng
 	if change.Mask&varietyDaoFieldResultJSON != 0 {
 		set["result_json"] = d.resultJSON
 	}
+	if change.Mask&varietyDaoFieldBlobs != 0 {
+		_, full := change.FullFields["blobs"]
+		if full || !d.persistChangeHasPath(change, "blobs") {
+			set["blobs"] = d.varietyDaoBlobsRawMap()
+		}
+	}
+	if change.Mask&varietyDaoFieldEnvelope != 0 {
+		set["envelope"] = d.envelope.bsonDoc()
+	}
 	for path, value := range change.Set {
 		if !d.persistChangePathCovered(change, path) {
 			set[path] = value
@@ -750,6 +913,12 @@ func (d *VarietyDao) PersistFieldNames(mask uint64) []string {
 	if mask&varietyDaoFieldResultJSON != 0 {
 		names = append(names, "result_json")
 	}
+	if mask&varietyDaoFieldBlobs != 0 {
+		names = append(names, "blobs")
+	}
+	if mask&varietyDaoFieldEnvelope != 0 {
+		names = append(names, "envelope")
+	}
 	return names
 }
 
@@ -770,6 +939,8 @@ func VarietyDaoSyncFields() []dataengine.SyncFieldMeta {
 		{Name: "FastItems", WireName: "fast_items", Bit: varietyDaoFieldFastItems},
 		{Name: "ShardedTags", WireName: "sharded_tags", Bit: varietyDaoFieldShardedTags},
 		{Name: "ResultJSON", WireName: "result_json", Bit: varietyDaoFieldResultJSON},
+		{Name: "Blobs", WireName: "blobs", Bit: varietyDaoFieldBlobs},
+		{Name: "Envelope", WireName: "envelope", Bit: varietyDaoFieldEnvelope},
 	}
 }
 
@@ -792,6 +963,12 @@ func (d *VarietyDao) MarshalSync(mask uint64) []byte {
 	}
 	if mask&varietyDaoFieldResultJSON != 0 {
 		doc["result_json"] = d.resultJSON
+	}
+	if mask&varietyDaoFieldBlobs != 0 {
+		doc["blobs"] = d.varietyDaoBlobsRawMap()
+	}
+	if mask&varietyDaoFieldEnvelope != 0 {
+		doc["envelope"] = d.envelope.bsonDoc()
 	}
 	if len(doc) == 1 {
 		return nil
@@ -861,6 +1038,32 @@ func (d *VarietyDao) ApplySync(raw []byte) error {
 			return err
 		}
 		d.resultJSON = wrap.V
+	}
+	if v, ok := doc["blobs"]; ok {
+		data, err := bson.Marshal(bson.M{"v": v})
+		if err != nil {
+			return err
+		}
+		var wrap struct {
+			V map[string][]byte `bson:"v"`
+		}
+		if err := bson.Unmarshal(data, &wrap); err != nil {
+			return err
+		}
+		d.setBlobsRawMap(wrap.V)
+	}
+	if v, ok := doc["envelope"]; ok {
+		data, err := bson.Marshal(bson.M{"v": v})
+		if err != nil {
+			return err
+		}
+		var wrap struct {
+			V envelopeBSONDoc `bson:"v"`
+		}
+		if err := bson.Unmarshal(data, &wrap); err != nil {
+			return err
+		}
+		d.envelope = envelopeFromBSONDoc(wrap.V)
 	}
 	d.Init()
 	return nil

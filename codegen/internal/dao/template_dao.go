@@ -324,7 +324,15 @@ func (d *{{$.Dao.Name}}) Get{{.Name}}(key {{.MapKey}}) ({{if .IsPtr}}*{{.MapVal}
 		var zero {{mapValType .}}
 		return zero, false
 	}
+{{- if .CopiesMapValue}}
+	// A copy: changing it does not change the DAO, a change goes through
+	// Set{{.Name}} so it is marked dirty and rolls back. append(val[:0:0], ...)
+	// keeps nil as nil and an empty value as empty.
+	val, ok := d.{{fieldVar .Name}}.Get(key)
+	return append(val[:0:0], val...), ok
+{{- else}}
 	return d.{{fieldVar .Name}}.Get(key)
+{{- end}}
 }
 
 {{- if and .IsPtr (isNested .MapVal)}}
@@ -355,6 +363,11 @@ func (d *{{$.Dao.Name}}) unbind{{.Name}}Value(key {{.MapKey}}) {
 {{- end}}
 
 func (d *{{$.Dao.Name}}) Set{{.Name}}(key {{.MapKey}}, val {{if .IsPtr}}*{{.MapVal}}{{else}}{{.MapVal}}{{end}}) {
+{{- if .CopiesMapValue}}
+	// Store a copy: the caller keeps its slice, and changing it later does not
+	// change the DAO behind the dirty marks.
+	val = append(val[:0:0], val...)
+{{- end}}
 	if d.{{fieldVar .Name}} == nil {
 		d.{{fieldVar .Name}} = {{mapNewExpr . "0"}}
 	}
@@ -414,7 +427,12 @@ func (d *{{$.Dao.Name}}) Range{{.Name}}(f func(key {{.MapKey}}, val {{if .IsPtr}
 	if d.{{fieldVar .Name}} == nil || f == nil {
 		return
 	}
+{{- if .CopiesMapValue}}
+	// Each value handed to f is a copy, for the same reason Get{{.Name}} copies.
+	d.{{fieldVar .Name}}.Range(func(key {{.MapKey}}, val {{.MapVal}}) bool { return f(key, append(val[:0:0], val...)) })
+{{- else}}
 	d.{{fieldVar .Name}}.Range(f)
+{{- end}}
 }
 
 func (d *{{$.Dao.Name}}) {{.Name}}Len() int {

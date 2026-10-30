@@ -17,6 +17,18 @@ type VarietyDao struct {
 	// slice API plus the whole-value copy getter GetResultJSONAll, stored as
 	// BSON binary.
 	ResultJSON []byte
+	// Blobs is a map whose values are byte slices (the shape of the saga
+	// receipts SagaReceipts): GetBlobs / RangeBlobs hand out copies and
+	// SetBlobs stores a copy, so no caller holds the DAO's own bytes.
+	Blobs map[string][]byte
+	// Envelope carries the same shape inside a nested struct.
+	Envelope Envelope
+}
+
+// Envelope locks the nested map-of-bytes shape: GetMarks / RangeMarks hand
+// out copies and SetMarks stores copies of the values.
+type Envelope struct {
+	Marks map[int32][]byte
 }
 
 //roost:redisdao mode=raw key=RunID prefix=roost:test:raw
