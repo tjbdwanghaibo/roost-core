@@ -122,6 +122,9 @@
 
 ## docs/release
 
+- [v1.32.0-NOTES.md](../release/v1.32.0-NOTES.md)：v1.32.0 发布说明（维护者决定、升级、行为收紧 B1：DAO 引用形状生成期拒绝；DAO `Get<Field>All()`、webroute 五项、map 切片值副本修复；最低 core v1.32.0；未验证项）
+- [v1.32.0-IMPLEMENTATION.md](../release/v1.32.0-IMPLEMENTATION.md)：v1.32.0 实现与核对（与说明篇同编号：提交、位置、强制点、红绿、review 检查点；最低 core 升级的依据）
+- [v1.32.0-VALIDATION.md](../release/v1.32.0-VALIDATION.md)：v1.32.0 发布验收（含仓内与下游 DAO 定义逐个核对）
 - [v1.31.2-NOTES.md](../release/v1.31.2-NOTES.md)：v1.31.2 补丁说明（DataEngine 单条 Put 投影包 `$literal` 的修复与已有数据检查、Mongo 部署检查工具、MongoDB 7.0 实测；升级注意、未验证项）
 - [v1.31.2-IMPLEMENTATION.md](../release/v1.31.2-IMPLEMENTATION.md)：v1.31.2 实现与核对（与说明篇同编号：提交、位置、强制点、红绿、review 检查点；最低 core 不动的依据）
 - [v1.31.2-VALIDATION.md](../release/v1.31.2-VALIDATION.md)：v1.31.2 发布验收（含 7.0 / 8.0 对照）

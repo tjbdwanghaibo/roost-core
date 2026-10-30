@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+## [v1.32.0] - 2026-10-30
+
+功能版本（给下游 ai-game-blackbox-server 从 cube 迁到 roost-core）：DAO 字节切片字段的整体读取 `Get<Field>All()`，`//roost:web` 的 `headers=` 请求头绑定、`compress=gzip`、`errors=` 错误映射与 `status=` 成功状态，`RawRequest.Query`；修复 DAO map 的切片值与调用方共用内存。**行为收紧**：DAO 定义里取值方法会与调用方共用内存的其余引用形状，重新生成时报错（维护者决定 A）。**生成物最低 core 升到 v1.32.0**（`compress=gzip` / `status=response` 的路由调用本版新增的 webroute API）；存储、同步与 wire 格式不变，无数据迁移。发布说明、实现与验收见 docs/release/v1.32.0-NOTES.md / -IMPLEMENTATION.md / -VALIDATION.md。
+
 ### 行为收紧
 
 - **DAO 生成器：其余引用形状生成期拒绝（行为收紧：这些形状重新生成时报错）**（维护者 2026-10-30 决定 A）：生成的取值方法只给 `[]byte` 的 `Get<Field>All()` 与 map 的 `[]<基本类型>` 值收发副本，其余引用形状交出的值与 DAO 内部共用内存，调用方改它就绕过 setter（无脏位、不进 WAL 与同步、回滚覆盖不到）。现在 DAO 与嵌套 struct 里的这些形状在解析阶段报错：map 值是 map（`map[K]map[K2]V`）、指向非嵌套类型的指针（`map[K]*int64`、`*int64` 字段、`[]*int64`）、元素仍是引用的切片（`map[K][][]byte`、`map[K][]*T`、`[][]byte`、`[]map[K]V`）。报错点名类型、字段与 Go 类型，提示改用 `[]byte` / 基本类型切片 / 基本类型 / 嵌套类型指针（`*T`、`[]*T`、`map[K]*T`）。允许的形状生成代码不变；仓内全部 DAO 定义与下游迁移工程的定义都不受影响。已有这类定义的工程重新生成时报错，按提示改定义（线上未部署，不做兼容）。`//roost:redisdao` 不查。[命令与标记参考 §4](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#生成物与读写约定) · [实现 2F](docs/framework/impl/12-codegen.md#2f-dao-字节切片整体读取与-webroute-选项)
