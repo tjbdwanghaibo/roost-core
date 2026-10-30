@@ -1,6 +1,55 @@
 # 新增提交审查
 
-## 2026-10-28：main JetStream Saga 原型审查（待修复）
+## 2026-10-30：上线前 Saga 与验证门禁审查
+
+当前复验基线：[main v1.33.0，030a9f11](https://github.com/tjbdwanghaibo/roost-core/commit/030a9f11)。固定审查分支仅提交报告与探针，不合入 main、不修改运行时；交由另一位 agent 修复。此前原型的三项问题已由正式实现的独立启动尝试身份、多等待者和准入初始化门处理，不再作为当前缺陷。
+
+### RV-20261030-01 / P1：终态清理后重用业务键，旧回执与迟到结果串入新 Saga
+
+**已在当前基线复现，待修复。** `framework/saga/transition.go` 的 `newStartRecord` 重置尝试代际；`operationKey` 只含 Saga ID、方向、步骤，`commandID` 再加尝试序号。Saga ID 来自类型与业务键。文档允许终态保留期结束后同业务键开始新一轮，但新旧两轮的操作身份相同。
+
+触发：旧 Saga 完成，终态被清理，参与方成功回执尚在；同业务键启动新一轮。期望新业务实际执行，实际 `StepReplayed`，业务执行数不变；若旧完成事件迟到，还能把新一轮从 step 0 推至 1，并把 Data 改为 old-result。跨服奖励、交易等会出现漏执行或串轮推进。
+
+建议：每次新建生命周期持久化唯一身份，贯穿操作键、命令、完成事件与回执；Resume 同一生命周期须保留成功操作的去重语义。临时规避是每轮使用永不复用的业务键。验收必须覆盖终态裁剪、旧成功回执、迟到完成事件、重启与 Resume，不能仅增加内存计数。
+
+### RV-20261030-02 / P1：允许重试窗口超过回执保留期，清理后同操作再次生效
+
+**已在当前基线复现，待修复；属于非默认自定义配置。** `wiring/saga/config.go:171` 与 `framework/saga/engine.go` 只检查终态保留期不超过回执保留期；Register 没检查实际步骤预算。`step_receipt.go` 的 `pruneStepReceipts` 会按回执时间清理，常规重试没有相应过期保护。
+
+配置回执与终态保留 60 秒，步骤超时 10 秒、最多 10 次、固定退避 10 秒，最长预算 190 秒，`app.CheckConfig` 接受。第一次业务已提交但完成结果未送达；同实体另一操作在第 61 秒清理旧回执；第 62 秒投递期限内的第四次尝试，实际执行数由 1 变成 2。期望同一操作只生效一次。
+
+复现使用真实 Nest 隔离事务与 NativeStep Begin/Complete、受控时钟；没有模拟真实网络故障或 Mongo TTL。默认回执保留 168 小时，不能将此结果描述为默认配置必然重复扣款。
+
+建议：按实际解析后的每步预算验证保留期，协调参与方与协调器配置，并为超期停机、延迟投递、恢复后回执证据缺失定义拒绝或人工对账策略。只验证理想重试时间仍不足以覆盖无限停机。临时规避是禁止短回执保留配置，按最大恢复与重投时间留余量。
+
+### 复现入口
+
+将本分支以下文本复制到所审查 main 检出中（不要在旧固定分支直接执行）：
+
+- [lifetime_test.go.txt](../../scripts/testdata/saga-review/lifetime_test.go.txt) → `framework/saga/review_lifetime_test.go`
+- [retention_test.go.txt](../../scripts/testdata/saga-review/retention_test.go.txt) → `framework/saga/review_retention_test.go`
+- [config_retention_test.go.txt](../../scripts/testdata/saga-review/config_retention_test.go.txt) → `wiring/saga/review_retention_test.go`
+
+运行 `GOWORK=off go test ./framework/saga ./wiring/saga -run '^TestReview' -count=1 -v`。当前基线四个期望正确行为的断言均失败；修复后应全部通过。文本探针不进入普通测试集，最终回归应合入正式测试。
+
+### 验证结果与上线条件
+
+此前基线 [3b06d98f](https://github.com/tjbdwanghaibo/roost-core/commit/3b06d98f) 在 Linux / Go 1.27.2 下全仓 build、vet 通过，完整 `go test ./...` 失败于 `framework/sync/lockstep` 的 `TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive`。该基线独立复跑两次、最新 v1.33.0 再复跑一次均失败：只准入对照没有溢出，等待写出的恢复路径最终 snapshot=false、provider calls=1。**这是可重复的验收失败，根因尚未确认，不能直接认定框架丢快照。** 应检查 Linux socket 缓冲、写出与客户端收齐的差异、超时和夹具假设，禁止仅删断言使门禁通过。
+
+同一旧基线 Saga/Nest/NATS 定向 race 通过；私有 NATS Server 2.12.3 三节点的正向补偿、发布结果未知、旧写者隔离、快照重放、迟到成功五项集成通过。未做真实 Mongo 或跨机故障验证。最新 v1.33.0 四个 Saga 探针已复验，不能将旧基线全仓结果冒充最新发布验收。
+
+上线前还需完成：
+
+1. 修复以上资产风险并保留修前失败、修后通过证据，解释并修复 TCP 快照测试失败。
+2. 用正式生成消费者在目标 Linux 部署拓扑验证真实 Mongo、三节点 JetStream、进程重启和依赖故障下的资产守恒。现行 Saga 性能报告主要是 macOS 单机，不代表生产容量。
+3. 结合准入限流验证持续负载与投影追平目标。现行 KNOWN-LIMITS 已记录云 Mongo c128 追平 45.9 秒、strict64 39.8 秒超过 30 秒目标；正向容量档不开准入，不能直接当作生产配置结论。
+4. 发布前明确版本支持、数据迁移与回退兼容政策；维护手册目前仍保留“线上尚未部署、可破坏旧格式”的阶段约定。
+
+结论：可以准备有明确边界的候选版试运行；当前证据不足以按已经充分验证的生产级资产保证大规模推广。以上缺口不等同于所有游戏模块不可用。
+
+## 2026-10-28：main JetStream Saga 原型审查（历史问题，正式实现已处理）
+
+2026-10-30 复核：以下保留的是当时报告与失败证据，文内“待修复”是历史状态；当前正式实现已处理这三项，当前风险见上节。
 
 审查基线：[main `4170bcad`](https://github.com/tjbdwanghaibo/roost-core/commit/4170bcad)。以下三项属于 `scripts/perf/saga-jslog-proto` 实验包，不代表生产 `framework/saga` 的同名缺陷。用户安排另一位 agent 修复，本次只提交问题与复现输入，没有修改运行时代码。固定审查分支未为本次文档提交合入最新 main；复现必须在该 main 基线或其后继版本运行。
 

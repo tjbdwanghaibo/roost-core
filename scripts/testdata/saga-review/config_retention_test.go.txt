@@ -1,0 +1,24 @@
+package saga
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"testing"
+	"time"
+)
+
+func TestReviewRejectReceiptRetentionShorterThanRetryWindow(t *testing.T) {
+	cfg := sagaTestConfig()
+	cfg.Set("sid", 1)
+	cfg.Set("server_type", "game")
+	cfg.Set("saga.terminal_retention", time.Minute)
+	cfg.Set("saga.receipt_retention", time.Minute)
+	cfg.Set("saga.step_defaults.timeout", 10*time.Second)
+	cfg.Set("saga.step_defaults.max_attempts", 10)
+	cfg.Set("saga.step_defaults.backoff_min", 10*time.Second)
+	cfg.Set("saga.step_defaults.backoff_max", 10*time.Second)
+	if err := app.CheckConfig(cfg, NewMod(giftDefinition())); err == nil {
+		t.Fatal("unsafe config accepted: receipt expires at 60s, operation retry budget is 190s")
+	} else {
+		t.Logf("rejected because: %v", err)
+	}
+}

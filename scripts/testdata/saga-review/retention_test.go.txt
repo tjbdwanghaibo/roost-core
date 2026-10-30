@@ -1,0 +1,49 @@
+package saga
+
+import (
+	"context"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"testing"
+	"time"
+)
+
+func TestReviewReceiptPrunedWhileRetryBudgetStillOpen(t *testing.T) {
+	now := time.Now().UTC()
+	entity := newReceiptEntity()
+	committer := &receiptCommitter{}
+	targetEffects := 0
+	first := stepCommand(0, 1, 10*time.Second)
+	run := func(cmd Command, at time.Time) StepOutcome {
+		state := newNativeRun(cmd, time.Minute)
+		state.now = func() time.Time { return at }
+		step := NativeStep{command: cmd, run: state}
+		_, err := corenest.RunIsolatedTransaction(context.Background(), committer, "review", func() (any, error) {
+			if replay, err := step.Begin(entity); replay || err != nil {
+				return nil, err
+			}
+			if cmd.IdempotencyKey == first.IdempotencyKey {
+				targetEffects++
+			}
+			return nil, step.Complete(true, "")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state.result()
+	}
+	run(first, now) // 业务生效，但结果尚未送回协调器。
+	unrelated := stepCommand(0, 1, time.Hour)
+	unrelated.SagaID = "other"
+	unrelated.IdempotencyKey = operationKey("other", PhaseForward, 0)
+	unrelated.ID = commandID(unrelated.IdempotencyKey, 0, 1)
+	run(unrelated, now.Add(61*time.Second)) // 同实体另一笔业务按真实 Complete 路径剪掉一分钟前的回执。
+	retry := first
+	retry.Attempt = 4
+	retry.ID = commandID(first.IdempotencyKey, 0, 4)
+	retry.CreatedAt = now.Add(60 * time.Second)
+	retry.DeadlineAt = now.Add(70 * time.Second)
+	result := run(retry, now.Add(62*time.Second)) // 10s 超时 + 10s 退避下，第四次尝试的合法期限。
+	if targetEffects != 1 {
+		t.Fatalf("same operation took effect %d times; retry kind=%d after receipt pruning at 61s, while 190s retry budget remains open", targetEffects, result.Kind)
+	}
+}
