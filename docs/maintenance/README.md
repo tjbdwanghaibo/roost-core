@@ -2,11 +2,11 @@
 
 如果这是第一次维护Roost，先读[入门手册](../GETTING-STARTED.md)。本篇按日常修改、升级、故障、发布、文档、测试与可读性规则组织；先找到你的场景，再执行对应步骤。
 
-当前版本v1.32.0（[发布说明](../release/v1.32.0-NOTES.md)：DAO 字节切片整体读取 `Get<Field>All()` 与引用形状生成期拒绝（行为收紧）、`//roost:web` 的 `headers=` / `compress=gzip` / `errors=` / `status=` 与 `RawRequest.Query`、DAO map 切片值副本修复；无数据迁移，生成物最低 core 升到 v1.32.0）；上一版补丁 v1.31.2（[补丁说明](../release/v1.31.2-NOTES.md)：DataEngine 单条 Put 投影把以 `$` 开头的业务字符串当成聚合表达式的修复（影响 v1.12.2～v1.31.1）、Mongo 部署只读检查工具 `cmd/mongocheck`、MongoDB 7.0 实测；无数据迁移，生成物最低 core 仍为 v1.31.0）；上一个补丁 v1.31.1（[补丁说明](../release/v1.31.1-NOTES.md)：JetStream 日志 `DurableAckFloors` 不再信消费者副本的待投递数、物理房间 Go 分配削减与 macOS 长稳；无数据迁移，生成物最低 core 仍为 v1.31.0）；功能版本 v1.31.0（[发布说明](../release/v1.31.0-NOTES.md)：实体心跳与行为控制、业务时间与场景时间域、视野与 Interest 单写者、Lockstep 快照恢复、合服与单实体运维、Saga 协调器改为 JetStream 分区事件日志（删除 Redis 权威与 Store Service）、DataEngine 投影器按实体并行等，含大量不兼容变化；生成物最低 core 升到 v1.31.0；v1.30.0 没有单独发版）；上一版 v1.29.0（[发布说明](../release/v1.29.0-NOTES.md)：wiring/web P1 四项、`roost config check` 退出码与跨服务一致性、`roost.yaml` 端口块与各服务不同的 `etcd.advertise_addr`、卡牌 RPG 接入、Nest 生成器找不到锁目标时报错；生成物最低 core 升到 v1.29.0）；v1.28.0（[发布说明](../release/v1.28.0-NOTES.md)：Sync 慢消费者与自身视图、嵌入 TCP 出站队列、Saga 原生步骤、按实体定时器、DAO 显式持久键、match 跨分区成局等，含破坏性变化；生成物最低 core 升到 v1.28.0）；v1.27.0（[发布说明](../release/v1.27.0-NOTES.md)：`game/playeraccess` 改名、Remote WAL 级 Rejected 精简）；此前补丁 v1.26.1（[补丁说明](../release/v1.26.1-NOTES.md)：安全 toolchain go1.27.2、go.work 加载修复、game-demo 模板修复；生成物最低 core 仍为 v1.26.0）；功能版本 v1.26.0（[发布说明](../release/v1.26.0-NOTES.md)：三池与 Await、Sync 优化、旧兼容移除与全仓整理）；最终代码上的重档复测见[发布验收](../release/v1.26.0-VALIDATION.md)。之后未发版的变化见 [CHANGELOG `[Unreleased]`](../../CHANGELOG.md)。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
+版本：已发布版本与 main 上未发版的变化只看 [CHANGELOG](../../CHANGELOG.md)（最上面的已归档段是最新发布版本，`[Unreleased]` 是未发版变化与升级要求）；各功能版本的升级要求见 [docs/release](../release/README.md)。支持保证范围为 macOS/Linux。本地 Windows 编译/检查的结果仅作当前验证证据，不扩大支持平台。
 
 ## 1. 版本与兼容
 
-单模块发布，wiring、codegen、demo 随 core 同一 tag。新业务固定 core 与工具版本，重新生成并编译工程。当前生成物最低运行依赖是 core v1.32.0（`//roost:web` 写了 `compress=gzip`（含与 `errors=` 同用）或 `status=response` 的路由调用 v1.32.0 新增的 `webroute.WriteCompressedResult` / `WriteCompressedResultWithMapper` / `SuccessStatus`；v1.31.0 起：当前生成器以 v1.29.0 生成 game-demo 时 tidy 报 `does not contain package`：`gameplay/heartbeat`、`movement`、`state`、`timedomain`、`wiring/sidmerge` 只在 v1.31.0 存在；生成物另用到 `gen_databases.go`、去掉业务时间实参的 Sender、`saga.MustRegisterNativeStepHandler` 与 JetStream 协调器配置；v1.29.0 起的 `port_block` 与更早的 API 要求同样包含在内）。文档补丁不改变最低版本和业务 API。
+单模块发布，wiring、codegen、demo 随 core 同一 tag。新业务固定 core 与工具版本，重新生成并编译工程。生成物的最低运行依赖以 `codegen/internal/roost/manifest.go` 的 `minimumVersions.Core` 为准（生成的 go.mod、`roost.yaml` 版本下限校验、doctor 都读它；每次提高的原因写在它的注释里）。历次提高的原因：v1.32.0 起，`//roost:web` 写了 `compress=gzip`（含与 `errors=` 同用）或 `status=response` 的路由调用 v1.32.0 新增的 `webroute.WriteCompressedResult` / `WriteCompressedResultWithMapper` / `SuccessStatus`；v1.31.0 起，v1.31.0 的生成器以 v1.29.0 生成 game-demo 时 tidy 报 `does not contain package`：`gameplay/heartbeat`、`movement`、`state`、`timedomain`、`wiring/sidmerge` 只在 v1.31.0 存在；生成物另用到 `gen_databases.go`、去掉业务时间实参的 Sender、`saga.MustRegisterNativeStepHandler` 与 JetStream 协调器配置；v1.29.0 起的 `port_block` 与更早的 API 要求同样包含在内。文档补丁不改变最低版本和业务 API。
 
 Nest 执行池命名为 short/long/io，不保留 fast/slow 旧名；配置、API、生成 Sender 和监控查询需一起迁移，迁移表见 [Nest 三池说明](../framework/NEST-AWAIT.md#池命名收敛2026-10-13)。
 
@@ -78,9 +78,30 @@ git diff --exit-code
 
 ## 5. 发版
 
-保持已有tag不可变。更新 release manifest 与两篇发布说明；新增API时才提高生成器最低版本和compat minimum lane。干净worktree执行 scripts/pretag.sh，包含生成、build/vet/tidy/test与tag存在性检查。运行时变化重验相关真实资源矩阵与消费工程；文档补丁清楚记录沿用哪个运行时验收，不能声称重新跑过。
+一条命令（维护者 2026-10-30 决定）：在 main 的干净工作树上运行
 
-提交和推送后创建 annotated tag、推送tag；不等待GitHub CI。随后下载真实tag验证模块解析与消费者，记录实际结果。发布不等于部署，不能顺便改线上资源。性能只能来自同环境同参数实际测量。
+```sh
+scripts/release.sh vX.Y.Z --dry-run   # 先预览：前置检查 + 要改的版本号文件 diff，不改工作树
+scripts/release.sh vX.Y.Z [--min-core]
+```
+
+脚本依次：前置检查（在 main、工作树干净、与 origin/main 一致、版本号合法且比 `codegen/ci/framework-release.yaml` 新、tag 本地与远端都不存在、CHANGELOG `[Unreleased]` 非空、功能版的 NOTES 已在）→ 改 `framework-release.yaml` 的 `release:`、把 `[Unreleased]` 归档为 `[vX.Y.Z] - 今天`、功能版给 upgrade-compat 的 previous-project 矩阵追加上一版 → 提交 `release：vX.Y.Z` → `scripts/pretag.sh`（失败即停、不推送，打印回退命令）→ push main 并独立核对远端包含该提交 → annotated tag、push tag、`ls-remote` 核对 → 在临时目录用本 tag 生成 game-demo、`GOPROXY=direct` 解析刚推的 tag（代理有延迟会重试）、build + vet。不等待 GitHub CI。参数与每一步的细节见脚本头部注释；纯文本部分在 `scripts/release-lib.sh`，自检 `scripts/release_test.sh` 随根包测试运行。
+
+- `--min-core`：本版生成物用到了新 API 时才加，把 `codegen/internal/roost/manifest.go` 的 `minimumVersions.Core` 与 `framework-compat.yml` 的 minimum lane 一起提到本版本。脚本只改值，提高的原因由人写进 `minimumVersions` 的注释（先用上一版 tag 实编生成工程确认确实需要）。
+- `--upgrade-compat` / `--no-upgrade-compat`：覆盖“功能版追加、补丁版不追加”的缺省。
+
+发版文档分级（替换此前“每版说明 + 实现 + 验收三篇”的做法；规则同时写在 [docs/release/README](../release/README.md)）：
+
+1. 补丁版（`vX.Y.Z`，Z > 0，只修 bug / 小改动）：只靠 CHANGELOG 条目，不写 `docs/release` 文档。
+2. 功能版（`vX.Y.0`）：发版前写一篇 `docs/release/vX.Y.0-NOTES.md`（升级要求、行为变化、迁移），不写 IMPLEMENTATION / VALIDATION。
+3. 大轮次收尾（维护者明确要求时）：照旧写“说明 + 实现”两篇，同一套条目编号互链。
+4. 已有的历史发版文档不动。
+
+验证只跑一次：pretag（已在脚本里）就是发版的验收线，不重复功能合并时已做过的验证（运行时专项、故障矩阵、性能样本在改动合入时按影响范围做，结果写进对应 CHANGELOG 条目或 NOTES）。不能把没跑的检查写成通过。
+
+当前版本号只有一个来源：CHANGELOG 最上面的已归档段（与 `framework-release.yaml` 的 `release:` 相同），入口文档不再写死“当前版本 vX.Y.Z”，发版也就不必改它们。
+
+保持已有 tag 不可变。pretag 之后失败（push 被拒、tag 推送失败、发布后验证不过）时，脚本停在那一步并说明已发生到哪里；已推送的 tag 不删、不重打，问题按补丁版处理。发布不等于部署，不能顺便改线上资源。性能只能来自同环境同参数实际测量。
 
 ## 6. 维护文档的规则
 

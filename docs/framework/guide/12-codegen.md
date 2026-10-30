@@ -1,6 +1,6 @@
 # 次核心：Codegen 与工程工具：设计与使用
 
-适用版本：v1.32.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/12-codegen.md) · [模块总目录](../README.md)
+适用版本：当前 main 与最新发布版本（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/12-codegen.md) · [模块总目录](../README.md)
 
 ## 先理解这一块
 
@@ -18,7 +18,7 @@ codegen/cmd/roost 是统一 CLI；内部生成器负责 DAO、Entity、Nest、Pr
 
 用固定版本 roost 创建工程 → 在 roost.yaml 声明模块、版本策略、能力和生成目标 → 添加业务模型/handler → 执行生成 → 编译测试 → doctor/配置检查 → 启动。变更生成器或框架 API 后重新生成业务工程，禁止只手改生成物让当前编译通过。
 
-当前生成物最低 core 是 v1.32.0（`//roost:web` 写了 `compress=gzip`（含与 `errors=` 同用）或 `status=response` 的路由调用 v1.32.0 才有的 webroute API；v1.31.0 起生成物已用到 `gameplay/heartbeat`、`wiring/sidmerge` 等包；见 `codegen/internal/roost/manifest.go` 的 `minimumVersions`）；roost.yaml 只有 `versions.core` 一个版本策略。文档补丁版不引入新运行 API，因此不需要无理由抬高最低版本。release manifest 的 release 必须等于实际发布 tag。工具输出 roost-codegen 名称不代表仍是独立模块。
+生成物最低 core 以 `codegen/internal/roost/manifest.go` 的 `minimumVersions.Core` 为准（v1.32.0 起 `//roost:web` 写了 `compress=gzip`（含与 `errors=` 同用）或 `status=response` 的路由调用 v1.32.0 才有的 webroute API；v1.31.0 起生成物用到 `gameplay/heartbeat`、`wiring/sidmerge` 等包；之后每次提高的原因写在 `minimumVersions` 的注释里，发版时由 `scripts/release.sh --min-core` 与 framework-compat 的 minimum lane 一起改）；roost.yaml 只有 `versions.core` 一个版本策略。文档补丁版不引入新运行 API，因此不需要无理由抬高最低版本。release manifest 的 release 必须等于实际发布 tag。工具输出 roost-codegen 名称不代表仍是独立模块。
 
 ## 3. 生成契约
 

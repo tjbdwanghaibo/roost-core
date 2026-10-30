@@ -1,6 +1,6 @@
 # 次核心：Codegen 与工程工具：实现与维护
 
-适用版本：v1.32.0 及当前主线（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[设计与使用](../guide/12-codegen.md) · 用户文档：[入口](../../../codegen/README.md) · [命令与标记参考](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md) · [项目生成器](../../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)
+适用版本：当前 main 与最新发布版本（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[设计与使用](../guide/12-codegen.md) · 用户文档：[入口](../../../codegen/README.md) · [命令与标记参考](../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md) · [项目生成器](../../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)
 
 ## 如何阅读
 
@@ -14,7 +14,7 @@ Codegen根据业务定义生成重复的连接代码，让你少写DAO、消息�
 
 ## 2. 必须保持的契约
 
-1. 生成物依赖最低 core v1.32.0（`minimumVersions.Core`，理由写在它的注释里），发布 manifest 与 tag 一致；`framework-compat.yml` 的 minimum lane 是它的唯一副本，由 `deploy_compose_test.go` 逐字比对。
+1. 生成物依赖的最低 core 是 `minimumVersions.Core`（值只在这里；每次提高的理由写在它的注释里，发版时 `scripts/release.sh --min-core` 连同 minimum lane 一起改），发布 manifest 与 tag 一致；`framework-compat.yml` 的 minimum lane 是它的唯一副本，由 `deploy_compose_test.go` 逐字比对。
 2. 全阶段成功后发布目标，标记不等于覆盖权限。
 3. 重复生成无漂移，真实 tag 消费不使用本地 replace。
 
@@ -24,7 +24,7 @@ Codegen根据业务定义生成重复的连接代码，让你少写DAO、消息�
 
 DAO/Entity/Nest/Protocol/ServiceRPC各有独立解析和golden测试，模板中出现Go函数文本不表示它是生成器运行时函数。修改生成形状应验证生成输出的行为，而非只断言某段字符串出现。
 
-[pretag.sh](../../../scripts/pretag.sh)先确认版本、远端tag状态、无replace与干净树；go generate后再次检查，再检查release manifest，最后build/vet/tidy/test。远端查询失败不能解释成tag不存在。最低版本与发布版本分别更新，文档补丁不随意抬高minimum。
+[pretag.sh](../../../scripts/pretag.sh)先确认版本、远端tag状态、无replace与干净树；go generate后再次检查，再检查release manifest，最后build/vet/tidy/test。远端查询失败不能解释成tag不存在。发版由 [release.sh](../../../scripts/release.sh) 串起来：它写 release manifest、归档 CHANGELOG、调用 pretag，再 push、打 tag 并做 tag 后消费验证。最低版本与发布版本分别更新（最低版本只在加 `--min-core` 时随发布版本一起提高），文档补丁不随意抬高minimum。
 
 ## 2B. 生成器共同实现
 

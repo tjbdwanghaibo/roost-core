@@ -2,7 +2,7 @@
 
 本文约束两条流水线：roost-core 仓库自身的框架验收与发布（工作流在仓库根 `.github/workflows/`），以及由生成器生成的业务项目流水线。目标是一次提交使用固定依赖图、一次发布只构建一组不可变制品，并能通过 Shell、Docker 和 Kubernetes 三种方式安全交付。
 
-框架是单模块：core、wiring、skill、框架服务与生成器随同一个 tag 发布，不再有多仓发布顺序。本地发版步骤（`scripts/pretag.sh`、真实资源矩阵、tag 后消费验证）见[维护手册 §5](../../docs/maintenance/README.md#5-发版)；维护者约定不等待 GitHub CI，本地验收线见同一手册 §3。
+框架是单模块：core、wiring、skill、框架服务与生成器随同一个 tag 发布，不再有多仓发布顺序。本地发版是一条命令 `scripts/release.sh vX.Y.Z`（前置检查、版本号与 CHANGELOG 归档、`scripts/pretag.sh`、push 与 tag 核对、tag 后 game-demo 消费验证），见[维护手册 §5](../../docs/maintenance/README.md#5-发版)；维护者约定不等待 GitHub CI，本地验收线见同一手册 §3。
 
 ## 职责边界
 
@@ -16,7 +16,7 @@
 | --- | --- |
 | `ci.yml` | Linux 质量检查（vet、关键包 race、模块整洁）、已提交生成代码的重生成比对、Linux 测试、Redis 服务套件、Windows 编译兼容、发布卫生检查 |
 | `framework-compat.yml` | 生成物兼容矩阵：依赖集合 minimum / released / source-head × 场景 minimal / full / demo，每个场景生成两次且第二次零差异，再编译测试；另有需要网络的 codegen 测试 |
-| `upgrade-compat.yml` | 用已发布的上一版生成器生成项目，再用当前生成器 `project upgrade`，验证不覆盖业务文件、失败不留半提交、第二次升级为 no-op、升级后能编译测试；`previous-project` 矩阵为 v1.25.0、v1.27.0（v1.28.0 发版时加入）、v1.28.0（v1.29.0 发版时加入；升级会给 `roost.yaml` 补上 v1.29.0 起必填的 `port_block`）、v1.29.0（v1.31.0 发版时加入；v1.30.0 没有发版）与 v1.31.2（上一版，v1.32.0 发版时加入；生成器与 v1.31.0 相同）；`player-access-project` lane 用 v1.26.1 生成 game-demo，按 v1.27.0 发布说明 B1 手工迁移 `game/player_agent` 后升级，并核对迁移结果（经 v1.27.0 生成器 sync）与 v1.27.0 生成器新生成的 game-demo 逐字节一致（B1 的承诺相对 v1.27.0；之后 demo 模板变化，业务文件不随 upgrade 改写） |
+| `upgrade-compat.yml` | 用已发布的上一版生成器生成项目，再用当前生成器 `project upgrade`，验证不覆盖业务文件、失败不留半提交、第二次升级为 no-op、升级后能编译测试；`previous-project` 矩阵是当前包布局（v1.25.0 起）的若干已发布版本，以工作流里的 `core: [...]` 为准；每次功能版本发版由 `scripts/release.sh` 追加上一版（升级会给 v1.29.0 之前的工程补上 v1.29.0 起必填的 `roost.yaml` `port_block`）；`player-access-project` lane 用 v1.26.1 生成 game-demo，按 v1.27.0 发布说明 B1 手工迁移 `game/player_agent` 后升级，并核对迁移结果（经 v1.27.0 生成器 sync）与 v1.27.0 生成器新生成的 game-demo 逐字节一致（B1 的承诺相对 v1.27.0；之后 demo 模板变化，业务文件不随 upgrade 改写） |
 | `release.yml`（name `framework-release`） | 手动触发的发布列车：`roost framework verify`、按清单的 `consumer_go` 生成真实消费项目、Linux / Windows / macOS CLI smoke，最后在受保护 Environment 中发布 |
 | `nightly.yml`、`nightly-gapmap.yml` | 深度质量与故障矩阵；每日承诺回退采样（不阻塞） |
 | `security.yml` | Dependency Review 与 CodeQL |
@@ -24,7 +24,7 @@
 
 兼容矩阵的依赖集合：
 
-- minimum：生成器声明的最低 core 版本（`codegen/internal/roost/manifest.go` 的 `minimumVersions.Core`，当前 v1.32.0；工作流里 `-roost-core-version` 那一行是它的唯一副本，由测试逐字比对）。
+- minimum：生成器声明的最低 core 版本（`codegen/internal/roost/manifest.go` 的 `minimumVersions.Core`；工作流里 `-roost-core-version` 那一行是它的唯一副本，由测试逐字比对）。
 - released：生成时解析并锁定的最新正式版本。
 - source-head：工作区指向本 checkout，验证当前源码与生成器同代；不以写进 module 的临时 replace 作为研发流程。
 

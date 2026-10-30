@@ -253,7 +253,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 
 ✦ = `roost project new` 不传 `-features` 时的默认六项：`protocol, config, entity, nest, dao, errcode`。
 
-这些 feature 都由 roost-core 提供，版本门槛即 `versions.core` 的兼容下限（当前 v1.32.0，`codegen/internal/roost/manifest.go` 的 `minimumVersions`）；低于下限的明确版本在 manifest 校验阶段被拒绝。
+这些 feature 都由 roost-core 提供，版本门槛即 `versions.core` 的兼容下限（`codegen/internal/roost/manifest.go` 的 `minimumVersions`；`roost help versions` 也会打印）；低于下限的明确版本在 manifest 校验阶段被拒绝。
 
 ## 5. Wiring Mod 自动装配
 
