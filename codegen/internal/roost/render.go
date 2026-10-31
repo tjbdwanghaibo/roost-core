@@ -107,6 +107,12 @@ func renderProject(m Manifest) (map[string]plannedFile, error) {
 			if err := addGo(selfSyncProtocolPath, renderSelfSyncProtocolDef(m), false); err != nil {
 				return nil, err
 			}
+			// 按组同步的声明同样归项目（视图键由业务定）。
+			for _, group := range syncGroups(m) {
+				if err := addGo(syncGroupPath(group), renderSyncGroupDecl(group), false); err != nil {
+					return nil, err
+				}
+			}
 		}
 		if contains(m.Access["player"].Transports, "tcp") {
 			if err := addGo("internal/access/player/tcp/server_gen.go", renderPlayerTCPServer(m), true); err != nil {
@@ -395,6 +401,9 @@ func renderBootstrap(m Manifest) string {
 		imports[selfSyncImport] = "selfsync"
 		imports[m.Project.Module+"/game/entities/"+selfSyncEntity] = selfSyncEntity
 		imports[m.Project.Module+"/protocol/msgid"] = ""
+		for _, group := range syncGroups(m) {
+			imports[m.Project.Module+"/game/entities/"+group] = group
+		}
 	}
 	for _, name := range services {
 		for _, rpc := range m.Services[name].Rpcs {
@@ -441,7 +450,16 @@ func renderBootstrap(m Manifest) string {
 		b.WriteString("\n// " + selfSyncVar + " 是 access.player.self_sync 的接线（wiring/selfsync）：每个在线玩家只收到自己的\n")
 		b.WriteString("// Player（视图 \"self\"），经 PushSyncPlayer 以 msgid.MsgSelfSync 推送。Nest Mod 用它装 Entity Sync，\n")
 		b.WriteString("// player TCP Mod 用它接上连接的激活与关闭。关掉开关后 roost project sync 删除这段接线。\n")
-		fmt.Fprintf(&b, "var %s = selfsync.MustNew(selfsync.Config{Entities: EntityAccess, Kind: %s.EntityKind%s, MessageID: msgid.MsgSelfSync})\n", selfSyncVar, selfSyncEntity, toPascal(selfSyncEntity))
+		groups := ""
+		if names := syncGroups(m); len(names) > 0 {
+			// access.player.sync_groups：这些实体的 SyncGroup 装在同一个 Manager 上，经同一条连接推给组成员。
+			declared := make([]string, 0, len(names))
+			for _, group := range names {
+				declared = append(declared, group+".SyncGroup")
+			}
+			groups = ", Groups: []*selfsync.Groups{" + strings.Join(declared, ", ") + "}"
+		}
+		fmt.Fprintf(&b, "var %s = selfsync.MustNew(selfsync.Config{Entities: EntityAccess, Kind: %s.EntityKind%s, MessageID: msgid.MsgSelfSync%s})\n", selfSyncVar, selfSyncEntity, toPascal(selfSyncEntity), groups)
 	}
 	b.WriteString("\nfunc New() (*app.App, error) {\n")
 	// Static registration first, before app.New: an entity builder registered

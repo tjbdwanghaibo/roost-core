@@ -34,12 +34,48 @@ const (
 	// selfSyncDocumentURL 是给生成工程里的人看的地址：core 文档不在生成工程里，相对路径打不开。
 	selfSyncDocumentURL = "https://github.com/tjbdwanghaibo/roost-core/blob/main/" + selfSyncDocument
 	selfSyncImport      = "github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
+	// syncGroupDocumentURL 是按组同步的说明（生成工程里的人看的地址）。
+	syncGroupDocumentURL = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/framework/ENTITY_SYNC.md#按组同步与-self_sync-共用连接groups"
 )
 
 // selfSyncEnabled 报告 access.player.self_sync 是否打开。
 func selfSyncEnabled(m Manifest) bool {
 	access, enabled := m.Access["player"]
 	return enabled && access.SelfSync
+}
+
+// syncGroups 是 access.player.sync_groups（按名字排序）；self_sync 关闭时为空（Validate 已拒绝那种组合）。
+func syncGroups(m Manifest) []string {
+	if !selfSyncEnabled(m) {
+		return nil
+	}
+	groups := append([]string(nil), m.Access["player"].SyncGroups...)
+	sort.Strings(groups)
+	return groups
+}
+
+// syncGroupPath 是组实体包里的 SyncGroup 声明：业务文件，只在缺失时创建一次。
+func syncGroupPath(group string) string { return "game/entities/" + group + "/sync_group.go" }
+
+// renderSyncGroupDecl 是 access.player.sync_groups 的一个实体的 SyncGroup 声明。视图键缺省取实体包名，
+// 业务把它改成自己 packer 认识的视图（例如只放出记分板的 "room"）。
+func renderSyncGroupDecl(group string) string {
+	return fmt.Sprintf(`package %[1]s
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
+)
+
+// SyncGroup 是 access.player.sync_groups 声明的按组同步（wiring/selfsync.Groups）：组 ID 是 %[2]s 实体的 ID，成员是
+// 玩家 ID（自身视图的会话 ID），成员以 Profile 视图订阅这个实体，经 self_sync 的同一条连接、同一个推送编号收到它；
+// 客户端按每个更新的命名空间（标记的 syncNamespace）与视图键区分它和自身视图。bootstrap 把它交给 PlayerSelfSync。
+//
+// 业务在决定成员关系的 handler 里调用 SyncGroup.Join / Leave / Disband（Nest 事务内自动推迟到提交之后，回滚则不发生）；
+// 断线、重连、顶号、实体重载由框架处理。%[2]s 的标记要写 sync=true，packer 要认识下面的视图键（只放出成员该看的字段）。
+// 这个文件归项目所有，只在缺失时生成一次。说明见 %[3]s
+var SyncGroup = selfsync.MustNewGroups(selfsync.GroupsConfig{Kind: EntityKind%[2]s, Profile: entity.SyncProfile{Key: %[4]q}})
+`, group, toPascal(group), syncGroupDocumentURL, group)
 }
 
 // selfSyncNest 报告 service（"" 表示 shared_mods）的 Nest Mod 是否装自身视图：玩家接入所在的服务，
@@ -156,8 +192,27 @@ func checkSelfSync(root string, m Manifest) (selfSyncStatus, error) {
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(selfSyncProtocolPath))); os.IsNotExist(err) {
 		problems = append(problems, selfSyncProtocolPath+" is missing; run: roost project sync (it creates the push id once)")
 	}
+	for _, group := range syncGroups(m) {
+		problems = append(problems, checkSyncGroup(root, group)...)
+	}
 	if len(problems) == 0 {
 		return status, nil
 	}
 	return selfSyncStatus{}, fmt.Errorf("%w:\n  - %s", errSelfSyncNotReady, strings.Join(problems, "\n  - "))
+}
+
+// checkSyncGroup 是 access.player.sync_groups 一个实体的前置检查：实体存在、标记打开了 sync、声明文件在。
+func checkSyncGroup(root, group string) []string {
+	dir := filepath.Join(root, "game", "entities", group)
+	if _, err := os.Stat(filepath.Join(dir, "entity.go")); os.IsNotExist(err) {
+		return []string{fmt.Sprintf("access.player.sync_groups lists %s but the entity does not exist; run: roost add entity %s", group, toPascal(group))}
+	}
+	var problems []string
+	if err := entity.InspectSyncGroup(dir, toPascal(group)); err != nil {
+		problems = append(problems, fmt.Sprintf("%v\n    (see %s)", err, syncGroupDocumentURL))
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(syncGroupPath(group)))); os.IsNotExist(err) {
+		problems = append(problems, syncGroupPath(group)+" is missing; run: roost project sync (it creates the SyncGroup declaration once)")
+	}
+	return problems
 }

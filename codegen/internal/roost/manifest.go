@@ -167,6 +167,11 @@ type AccessSpec struct {
 	// 生成器写默认 packer（player_sync_packer_gen.go，"self" 视图含 DAO 全部 sync 字段），generate / doctor
 	// 检查就绪情况。默认关。
 	SelfSync bool `yaml:"self_sync,omitempty"`
+	// SyncGroups（只用于 player，需要 self_sync）列出“按组推送”的实体包名（game/entities/<name>，如 party_room）：
+	// 实体的同步视图推给组里的成员（房间里的玩家），与自身视图共用同一个 Manager、同一条玩家连接、同一个推送编号
+	// （wiring/selfsync.Groups）。project sync 在实体包里创建一次业务文件 sync_group.go（SyncGroup 变量，视图键由业务定），
+	// bootstrap 把它交给 PlayerSelfSync；成员关系由业务 handler 调 SyncGroup.Join / Leave / Disband。
+	SyncGroups []string `yaml:"sync_groups,omitempty"`
 }
 
 // TimerSpec 是一个实体的持久定时器组件。project sync 按它重写生成部分（组件、节点类型、Tick handler、
@@ -352,6 +357,26 @@ func (m Manifest) Validate() error {
 		}
 		if !contains(m.Features, "entity") {
 			joined = errors.Join(joined, errors.New("access.player.self_sync needs the entity feature (the player Entity is what the client sees)"))
+		}
+	}
+	for name, access := range m.Access {
+		if len(access.SyncGroups) == 0 {
+			continue
+		}
+		if name != "player" || !access.SelfSync {
+			joined = errors.Join(joined, fmt.Errorf("access.%s.sync_groups needs access.player.self_sync: true (groups ride on the self_sync manager and player connection)", name))
+		}
+		seen := map[string]bool{}
+		for _, group := range access.SyncGroups {
+			switch {
+			case !validName(group):
+				joined = errors.Join(joined, fmt.Errorf("access.%s.sync_groups: %q is not an entity package name (game/entities/<name>, e.g. party_room)", name, group))
+			case group == selfSyncEntity:
+				joined = errors.Join(joined, fmt.Errorf("access.%s.sync_groups: %q is the player entity, which self_sync already sends to its own player", name, group))
+			case seen[group]:
+				joined = errors.Join(joined, fmt.Errorf("access.%s.sync_groups repeats %q", name, group))
+			}
+			seen[group] = true
 		}
 	}
 	if _, enabled := m.Access["player"]; enabled && !contains(m.Features, "protocol") {

@@ -753,3 +753,109 @@ func TestSelfSyncFrameLimitFollowsTheAccessLimit(t *testing.T) {
 	}
 }
 `
+
+// access.player.sync_groups：只在 self_sync 打开时成立，名字是实体包名、不能是 player、不能重复。
+func TestSyncGroupsManifestValidation(t *testing.T) {
+	withGroups := func(selfSync bool, groups ...string) Manifest {
+		m := selfSyncManifest(t, "tcp")
+		access := m.Access["player"]
+		access.SelfSync, access.SyncGroups = selfSync, groups
+		m.Access["player"] = access
+		return m
+	}
+	if err := withGroups(true, "party_room", "squad").Validate(); err != nil {
+		t.Fatalf("valid sync groups refused: %v", err)
+	}
+	for name, tc := range map[string]struct {
+		m    Manifest
+		want string
+	}{
+		"self_sync off": {withGroups(false, "party_room"), "needs access.player.self_sync: true"},
+		"player":        {withGroups(true, "player"), "is the player entity"},
+		"repeated":      {withGroups(true, "party_room", "party_room"), "repeats"},
+		"not a package": {withGroups(true, "PartyRoom"), "is not an entity package name"},
+	} {
+		if err := tc.m.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
+	}
+}
+
+// 接线在生成器所有的 bootstrap 里（PlayerSelfSync 的 Config.Groups），SyncGroup 声明归项目（只创建一次，视图键由业务改）。
+func TestSyncGroupsRenderVisibleWiring(t *testing.T) {
+	m := selfSyncManifest(t, "tcp")
+	access := m.Access["player"]
+	access.SyncGroups = []string{"squad", "party_room"}
+	m.Access["player"] = access
+	files, err := renderProject(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := string(files["internal/bootstrap/generated.go"].Body)
+	for _, want := range []string{
+		`party_room "example.com/planet/game/entities/party_room"`,
+		`squad "example.com/planet/game/entities/squad"`,
+		"MessageID: msgid.MsgSelfSync, Groups: []*selfsync.Groups{party_room.SyncGroup, squad.SyncGroup}})",
+	} {
+		if !strings.Contains(bootstrap, want) {
+			t.Errorf("bootstrap lacks %q:\n%s", want, bootstrap)
+		}
+	}
+	decl, exists := files["game/entities/party_room/sync_group.go"]
+	if !exists || decl.Owned {
+		t.Fatalf("sync_group.go = %+v, want a business-owned declaration", decl)
+	}
+	for _, want := range []string{"package party_room", "var SyncGroup = selfsync.MustNewGroups(selfsync.GroupsConfig{Kind: EntityKindPartyRoom, Profile: entity.SyncProfile{Key: \"party_room\"}})", syncGroupDocumentURL} {
+		if !strings.Contains(string(decl.Body), want) {
+			t.Errorf("sync_group.go lacks %q:\n%s", want, decl.Body)
+		}
+	}
+	// 不写 sync_groups 时 bootstrap 与开关加入前相同。
+	files, err = renderProject(selfSyncManifest(t, "tcp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := string(files["internal/bootstrap/generated.go"].Body); strings.Contains(body, "Groups") {
+		t.Errorf("bootstrap mentions groups without sync_groups:\n%s", body)
+	}
+}
+
+// generate / doctor 的前置检查：列出的实体要存在、标记打开 sync、声明文件在；每条拒绝说出改法。
+func TestSyncGroupsCheckNamesTheFix(t *testing.T) {
+	root := t.TempDir()
+	m := selfSyncManifest(t, "tcp")
+	access := m.Access["player"]
+	access.SyncGroups = []string{"party_room"}
+	m.Access["player"] = access
+	write := func(rel, body string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("go.mod", "module example.com/planet\n\ngo 1.24\n")
+	write("db/player_dao_gen.go", "package db\n\ntype PlayerDao struct{}\n\nfunc PlayerDaoSyncFields() []int { return nil }\n")
+	write("game/entities/player/entity.go", "package player\n\nimport db \"example.com/planet/db\"\n\n//roost:entity id=1 entityKind=EntityKindPlayer category=entity.EntityCategoryOther\ntype Player struct {\n\tdao *db.PlayerDao `dao:\"player\"`\n}\n")
+	write(selfSyncProtocolPath, renderSelfSyncProtocolDef(m))
+	if _, err := checkSelfSync(root, m); err == nil || !strings.Contains(err.Error(), "roost add entity PartyRoom") {
+		t.Fatalf("missing group entity: %v", err)
+	}
+	room := func(marker string) {
+		t.Helper()
+		write("game/entities/party_room/entity.go", "package party_room\n\n"+marker+"\ntype PartyRoom struct{}\n")
+	}
+	room("//roost:entity id=2 entityKind=EntityKindPartyRoom category=entity.EntityCategoryWorld")
+	_, err := checkSelfSync(root, m)
+	if err == nil || !strings.Contains(err.Error(), "sync=true") || !strings.Contains(err.Error(), "sync_group.go is missing") {
+		t.Fatalf("group entity without sync and declaration: %v", err)
+	}
+	room("//roost:entity id=2 entityKind=EntityKindPartyRoom category=entity.EntityCategoryWorld sync=true syncNamespace=party_room subjectPacker=NewBoardPacker")
+	write("game/entities/party_room/sync_group.go", renderSyncGroupDecl("party_room"))
+	if _, err := checkSelfSync(root, m); err != nil {
+		t.Fatalf("ready group refused: %v", err)
+	}
+}
