@@ -1,0 +1,273 @@
+package game
+
+import (
+	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	playerentity "example.com/planet/game/entities/player"
+	worldentity "example.com/planet/game/entities/world"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	dataengine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// realGateFixture 使用正式账号 RPC、Redis 目录和 Mongo 投影。平台身份由本次运行的
+// HMAC 签发器证明，不伪装为 Steam/Apple 等外部平台已经验收；密钥/票据不写日志。
+type realGateFixture struct {
+	store         *dataengine.MongoStore
+	mongo         *mongodriver.Client
+	mongoConfig   *fmongo.Config
+	storeConfig   dataengine.MongoStoreConfig
+	accounts      account.Accounts
+	reopenAccount func() *account.Service
+	playerID      int64
+	ticket        string
+	auth          gateway.Authenticator
+}
+
+func newRealGateFixture(t *testing.T) *realGateFixture {
+	t.Helper()
+	if os.Getenv("ROOST_GATE_REAL") != "1" {
+		return nil
+	}
+	uri, addr, url := os.Getenv("ROOST_DATAENGINE_IT_MONGO_URI"), os.Getenv("ROOST_DATAENGINE_IT_REDIS_ADDR"), os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if uri == "" || addr == "" || url == "" {
+		t.Fatal("real Gate requires isolated Mongo, Redis and NATS")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	prefix := fmt.Sprintf("roost:gate:real:%d", time.Now().UnixNano())
+	redis, err := redisdriver.NewClient(fredis.DefaultConfig(addr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = redis.Close() })
+	stores, err := account.NewRedisStores(redis, prefix, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := make([]byte, 32)
+	if _, err = rand.Read(secret); err != nil {
+		t.Fatal(err)
+	}
+	sign := func(id string) string {
+		mac := hmac.New(sha256.New, secret)
+		_, _ = mac.Write([]byte(id))
+		return hex.EncodeToString(mac.Sum(nil))
+	}
+	accountConfig := account.Config{Accounts: stores.Accounts, Roles: stores.Roles, Servers: stores.Servers, Slots: stores.Slots, Names: stores.Names, SessionSecret: hex.EncodeToString(secret),
+		Verifier: account.VerifierFunc(func(_ context.Context, id account.Identity) (account.Verified, error) {
+			if id.Channel != "gate-it" || !hmac.Equal([]byte(id.Credential), []byte(sign(id.OpenID))) {
+				return account.Verified{}, account.ErrIdentityDenied
+			}
+			return account.Verified{Channel: id.Channel, OpenID: id.OpenID}, nil
+		}), Allocator: account.AllocatorFunc(func(ctx context.Context, _ int32) (int64, error) {
+			id, err := redis.Incr(ctx, prefix+":player_id")
+			return id + 100000, err
+		}), NameRules: account.NameValidatorFunc(func(name string) error {
+			if len(name) < 3 || len(name) > 32 {
+				return account.ErrNameInvalid
+			}
+			return nil
+		})}
+	reopen := func() *account.Service {
+		svc, err := account.New(accountConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return svc
+	}
+	owner := reopen()
+	if _, err = owner.UpsertServer(ctx, account.GameServer{ID: 22, Name: "gate-real", Status: account.ServerOpen}); err != nil {
+		t.Fatal(err)
+	}
+	nc, err := natsdriver.NewClient(fnats.DefaultConfig(url), natsdriver.ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rpc := natsdriver.NewRPCClient(nc, fnats.DefaultRetryPolicy(), 2)
+	transport := bus.New(nc, rpc, bus.MessagePackCodec{}, bus.Config{Sid: 31, SvcType: "account", Prefix: strings.ReplaceAll(prefix, ":", "."), WorkerNum: 2, QueueCap: 32})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = transport.StopWithContext(ctx)
+		_ = rpc.StopWithContext(ctx)
+		nc.Close()
+	})
+	if err = account.RegisterHandlers(transport, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err = transport.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err = nc.FlushContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := account.NewBusClient(transport, "account", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := account.Identity{Channel: "gate-it", OpenID: "owner", Credential: sign("owner")}
+	if _, err = accounts.Login(ctx, account.Identity{Channel: "gate-it", OpenID: "owner", Credential: "invalid"}); !errors.Is(err, account.ErrIdentityDenied) {
+		t.Fatalf("invalid identity not refused: %v", err)
+	}
+	logged, err := accounts.Login(ctx, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := accounts.CreateRole(ctx, logged.ID, 22, "GatePlayer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := accounts.CreateRole(ctx, logged.ID, 22, "GatePlayer")
+	if err != nil || replay.PlayerID != role.PlayerID {
+		t.Fatal("role creation retry changed identity", err)
+	}
+	other, err := accounts.Login(ctx, account.Identity{Channel: "gate-it", OpenID: "outsider", Credential: sign("outsider")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = accounts.SelectRole(ctx, other.ID, role.PlayerID); !errors.Is(err, account.ErrNotPermitted) {
+		t.Fatal("role owner check failed", err)
+	}
+	session, err := accounts.SelectRole(ctx, logged.ID, role.PlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := &realGateFixture{accounts: accounts, reopenAccount: reopen, playerID: role.PlayerID, ticket: fmt.Sprintf("session:%d:%s", role.PlayerID, session.Token)}
+	fixture.auth = gateway.AuthenticatorFunc(func(ctx context.Context, ticket string, _ net.Addr) (gateway.Principal, error) {
+		rest, ok := strings.CutPrefix(ticket, "session:")
+		if !ok {
+			return gateway.Principal{}, gateway.ErrUnauthenticated
+		}
+		id, token, ok := strings.Cut(rest, ":")
+		if !ok {
+			return gateway.Principal{}, gateway.ErrUnauthenticated
+		}
+		playerID, err := strconv.ParseInt(id, 10, 64)
+		if err != nil {
+			return gateway.Principal{}, gateway.ErrUnauthenticated
+		}
+		role, err := accounts.ValidateSession(ctx, playerID, token)
+		if err != nil {
+			return gateway.Principal{}, gateway.ErrUnauthenticated
+		}
+		return gateway.Principal{PlayerID: role.PlayerID, ServerID: role.ServingServerID, SessionID: fmt.Sprintf("real-%d", time.Now().UnixNano())}, nil
+	})
+	database := fmt.Sprintf("roost_gate_real_%d", time.Now().UnixNano())
+	configured := map[string]string{}
+	for _, declared := range coredata.DeclaredDatabases() {
+		configured[declared.Name] = database
+	}
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{Declared: coredata.DeclaredDatabases(), Configured: configured, ServerID: 22})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.mongoConfig = fmongo.DefaultConfig(uri)
+	fixture.mongo, err = mongodriver.NewClient(fixture.mongoConfig, mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = fixture.mongo.Close(ctx)
+	})
+	fixture.storeConfig = dataengine.MongoStoreConfig{DefaultDatabase: database, Databases: databases, ServerID: 22}
+	fixture.store, err = dataengine.NewMongoStore(fixture.mongo, fixture.storeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = fixture.store.EnsureInfrastructure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("real account Login/CreateRole/SelectRole via NATS MessagePack and Redis passed; external identity provider not included")
+	return fixture
+}
+
+func (f *realGateFixture) verifyRecovery(t *testing.T, walDir string, record coredata.CommitRecord, player *playerentity.Player, world *worldentity.World) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	// 重新创建账号服务，从 Redis 目录校验原会话，不能只依赖旧服务对象缓存。
+	_, token, _ := strings.Cut(strings.TrimPrefix(f.ticket, "session:"), ":")
+	if _, err := f.reopenAccount().ValidateSession(ctx, f.playerID, token); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.mongo.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := mongodriver.NewClient(f.mongoConfig, mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close(context.Background())
+	store, err := dataengine.NewMongoStore(fresh, f.storeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wal, err := nestwal.Open(nestwal.DefaultOptions(walDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projector, err := dataengine.NewProjector(wal, store, dataengine.DefaultProjectorOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer projector.Close(context.Background())
+	if err = projector.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// 重投同一事务，不重复经验或等级；两个 DAO 在 Mongo 会话事务中落地。
+	for range 2 {
+		if err = store.Project(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	coldPlayer, coldWorld := newScenePlayer(t, f.playerID), newSceneWorld(t)
+	for _, mutation := range record.Mutations {
+		docs, err := store.Load(ctx, coredata.LoadSpec{Database: mutation.Key.Database, Scope: mutation.Key.Scope, Resource: mutation.Key.Resource, Filter: map[string]any{"_id": mutation.Key.ID}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(docs) != 1 || docs[0].Version != mutation.NextVersion || docs[0].Schema != mutation.Schema {
+			t.Fatalf("persisted identity/version mismatch for %s", mutation.Key.Resource)
+		}
+		doc := docs[0]
+		switch doc.Key.ID {
+		case player.ID():
+			err = coldPlayer.Dao().RestorePersisted(doc.Data, doc.Schema, doc.Version)
+		case world.ID():
+			err = coldWorld.Dao().RestorePersisted(doc.Data, doc.Schema, doc.Version)
+		default:
+			t.Fatal("unexpected persisted entity")
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if coldPlayer.Dao().GetExp() != player.Dao().GetExp() || coldPlayer.Dao().GetLevel() != player.Dao().GetLevel() || coldWorld.Dao().GetExpGranted() != world.Dao().GetExpGranted() || coldWorld.Dao().GetExpGranted() != 250 {
+		t.Fatal("cold DAO differs from acknowledged business result")
+	}
+	t.Log("PASS real Gate: Redis account reload, Mongo two-DAO transaction, WAL reopen, transaction replay and cold generated DAO hydration")
+}

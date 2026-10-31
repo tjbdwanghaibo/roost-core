@@ -53,7 +53,7 @@
 - **（批量方式）冲突转单目标时可能有一次 worker 等锁**：同 ID 冲突的拍转成单目标作业排在冲突消息之后，执行时锁一定空闲；但若实体锁被 Nest 作业顺序之外的持有者占着（别的 handler 的 `Cast` 等），转成的单目标作业与普通 `Dispatch` 一样在 worker 上等这把锁，与 X 相同、不比 X 多。热点实体（同一实体高频业务消息）下的转换率没有测。
 - **卸载窗口**：单目标方式（`dispatch`）下，投递准入之后、执行之前被卸载的实体可能被 Nest 冷加载一次（与发给它的任何消息相同），这一拍在新实例上按过期丢弃；维护者决定 ⑨ 接受。批量方式只读已加载的实体，卸载后没有重载的按 `not_loaded` 丢弃、不冷加载；Remote 托管实体与冲突转成的单目标作业仍走普通 `Dispatch`，同上。
 - **卡住兜底会多压消息**：在途 10s 未执行（同一登记连续卡住时 20s、40s、80s）就重投一次。拍没丢、只是 worker 排队超过阈值时，每个登记多出对数级份消息（同一代至多一份执行回调，其余按 `duplicate` 丢弃）。-race 下 5 万实体 1s 档冒烟（每秒 5 万拍超过 -race 吞吐）实测到这种放大，所以 -race 冒烟降到 2000 实体。
-- **Remote 托管实体每拍一次 Remote 写准入**：消息经 I/O 阶段 `PrepareRemoteWriteBatch`，比普通实体贵；档位宜低。非拥有方（`Unknown` 状态、权威指向别人）的拍被准入拒绝后按卡住兜底重试（10s 起翻倍）。只有独占拥有（`LocalOwned`）才执行。共享模式下的所有权迁移已在真实 `remoteentity.Manager` 下验证没有双推进（进程内权威替身与真实 Redis + Mongo 两套）；独占模式下不经共享的直接迁移只有模拟 Remote 写准入的用例（`heartbeat/remote_test.go`），真实依赖下的故障注入（Redis / Mongo 断开时切换）没有做。维护者 2026-10-21 晚定的方向是 Remote 托管实体不挂心跳 / 移动组件，禁止挂载另行设计（[DESIGN-TODO](DESIGN-TODO.md#待维护者决定不急)第 6 项）。
+- **Remote 托管实体每拍一次 Remote 写准入**：消息经 I/O 阶段 `PrepareRemoteWriteBatch`，比普通实体贵；档位宜低。非拥有方（`Unknown` 状态、权威指向别人）的拍被准入拒绝后按卡住兜底重试（10s 起翻倍）。只有独占拥有（`LocalOwned`）才执行。共享模式下的所有权迁移已在真实 `remoteentity.Manager` 下验证没有双推进（进程内权威替身与真实 Redis + Mongo 两套）；独占模式下不经共享的直接迁移只有模拟 Remote 写准入的用例（`heartbeat/remote_test.go`），真实依赖下的故障注入（Redis / Mongo 断开时切换）没有做。2026-10-31 按现行 owner/shared 实现收敛：保留独占 owner 能力，不增加一律禁止挂载的开关；共享模式限制见下条。
 - **Remote 共享模式不允许挂载心跳**（维护者 2026-10-21）：共享是运行期状态、不是种类声明，登记时只拦得住“当时已在共享”的实例（`Register` / `Start` 返回 `ErrHeartbeatRemoteShared`）；登记后才进入共享的，由下一拍在实体锁内停掉，计 `heartbeat.stopped_total{reason="remote_shared"}` 并打限频 Warn。边界：① 这一拍要走一次共享模式写准入（分布式锁），回调不执行；② 共享窗口短于登记的周期、期间没有到期的拍时，这个登记不会被停掉（期间也没有执行）；全部登记停掉最多要一个最长档位的周期；③ 回到独占（`LeaveRemoteSharedMode`）后不自动恢复，业务需要时自己 `Start`。共享实体的周期逻辑由业务层驱动（例如负责它的服务按周期发 Nest 消息）。
 - **快池准入满时的日志**：心跳本身按跳拍处理并限频 Warn，但 Nest 对每条被拒的异步投递另打一条 `async dispatch failed`（不限频，Nest 现有行为，本期不改 Nest）。
 - **`Strict` 持久级别的心跳每拍都在实体 worker 上等落盘**：`WithDurability(nest.DurabilityStrict)` 的登记，每一拍的提交都按 strict 走，回调改了持久字段的拍要在实体 worker 上、持实体锁等提交持久化完成才返回（与任何 strict handler 相同），快池实体的高频心跳会把 worker 时间花在等 I/O 上；缺省 `Async`。用法见 [guide/10-time §4A](../framework/guide/10-time.md#4a-实体心跳周期推进)。
@@ -69,7 +69,7 @@
 - **runner 不随事务回滚：框架不处理，由业务保证**（维护者 2026-10-21）。`ActionRunner` / `MissionRunner` 是纯内存状态；handler 先做完全部可能失败的校验与修改，最后一步才调用 `Start` / `Enqueue` / `End` 等。违反时，回滚后 runner 里残留这次的变更：例如回滚的 handler 里启动的 MoveTo 仍是移动组的当前动作，而 `Move` 的设定与组的心跳都随回滚恢复——这个动作不被 tick，直到被取代、被结束，或业务调用 `BeatRunner.Sync` 后在下一拍以取消（`Replaced`）结束。心跳那一拍只在提交失败时回滚（拍回调不返回错误），此时动作对组件的修改回滚、runner 按 Tick 的结论的推进保留，同样不处理。
 - **进出场景在提交后、实体锁外调用 `Space`**：`InterestSpace` 的 `Enter` / `Leave` 只在 Interest 登记侧登记一条命令（2026-10-21 单写者重构起不再取 Interest 的应用侧锁、不再 `Apply`，不等 AOI 批次），由政策阶段 / 应用线程按调用顺序执行；失败只经 `MapConfig.OnSpaceError` 报告（缺省 Warn），场景字段已提交。pipelined handler 的提交后回调在完成泵上执行，同实体的下一条消息可能早于 `Space.Enter` 登记，这期间 `QueueMove` 返回 `ErrInterestUnknown`（移动以 `Refused` 结束、`SetPos` 的调用方收到错误）；事务内门控的进出场景（`QueueEnter` / `QueueLeave`）未做（[重构方案 §8 第 6 项](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/REFACTOR-2026-10-21-interest-single-writer.md#8-待拍板均先按推荐实施)）。
 - **`Published` 晚于同一拍里的事件**：快照在提交后、实体锁释放之后才发布；在拍的事务里观察到的事件（动作结束、OnEnded）早于它。要读到这一拍提交后的位置，等该实体的下一条消息（同实体消息要等前驱作业连同提交后回调整个结束）。
-- **Remote 共享模式停心跳后组件不感知**：实体运行中进入共享模式时框架停掉动作组、任务、AI 的心跳与 `"map.save"`，回到独占不自动恢复；动作与任务留在 runner 里不推进、AI 不决策、周期落库停。业务回到独占后恢复：动作组与任务心跳 `Behavior.Beat().Sync()`，AI `SetStrategy(c.Strategy())`；周期落库没有单独入口（`Enter` 在场景里返回 `ErrAlreadyInScene`，只能 `Leave` 再 `Enter`）——维护者 2026-10-21 晚决定 `MapBasic.Sync` 不加，Remote 托管实体不应挂移动 / 心跳组件。共享期间启动需要周期 tick 的动作会以失败结束。
+- **Remote 共享模式停心跳后组件不感知**：实体运行中进入共享模式时框架停掉动作组、任务、AI 的心跳与 `"map.save"`，回到独占不自动恢复；动作与任务留在 runner 里不推进、AI 不决策、周期落库停。业务回到独占后恢复：动作组与任务心跳 `Behavior.Beat().Sync()`，AI `SetStrategy(c.Strategy())`；周期落库没有单独入口（`Enter` 在场景里返回 `ErrAlreadyInScene`，只能 `Leave` 再 `Enter`）；不新增 `MapBasic.Sync`，装配时必须考虑共享往返后这个恢复边界。共享期间启动需要周期 tick 的动作会以失败结束。
 - **不持久“在场景里”与“正在移动”**：实例重新加载后由业务按自己的 DAO 状态重新 `Enter`、重新发起移动动作；只从内存卸载不调用 `Leave`（`MapBasic.OnDestroy` 只发布“已不在”，跟随者以 `TargetLost` 收尾）。
 - **跟随只看本进程、只看提交后的位置**：`LocateIn` 经实体管理器的只读查找，目标不在本进程内存（另一个进程的 Remote 实体、已卸载）即 `TargetLost`；读的是目标最近一次提交的快照，最多落后目标一拍。
 - **一个实体多个组各自一个心跳登记**：参考 ssr，动作组之间不合并投递（决定 ③）；移动之外再有一个需要周期 tick 的组（例如技能），每拍就是两条消息。
@@ -127,8 +127,8 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **`FreezeCancel` 只打断当前动作**：排队项保留，解冻后接着推进；要连排队一起丢弃，业务另调 `ClearQueue` / `EndAction`。
 - **被抢占组的排队项在抢占方结束时推进，照常过跨组冲突**：抢占时不推进，抢占方（那一个动作）结束时推进一次。抢占方被同组的另一个动作取代时，推进排在新动作启动之后，按跨组规则判定：新动作同样挡住它（`BlockIncoming`）时排队项以失败结束、接着试下一个，整队可能这样各收到一次失败；要“等这一类动作全部结束再走”的，由业务在抢占时自己 `ClearQueue` 或在结束回调里重新排队。
 - **`Behavior.OnDestroy` 不在事务里**：卸载时结束在途动作与任务（`ErrOwnerDestroyed`，取消状态），动作的 `Cancel` 与观察者这时改的持久字段不落库；组件要按装配顺序调（AI 的 `Controller.Close` 在前，见 guide §4C）。漏调时在途动作没有结论、`actionflow.actions.running` 不减。直接经 `Runner()` 发起的动作不受 Close 后的拒绝约束，只是挂不上心跳（以 `ErrBeatRunnerClosed` 失败结束）。
-- **冻结计数不随事务回滚**：直接调用的 `Freeze` 与 `Recover` 必须成对，handler 回滚后多出的一次 `Freeze` 要由业务撤销。经 `state.Gate` 的冻结每条规则至多持有一次，回滚后的不一致在下一次状态通知时纠正（见下条）。
-- **状态观察者的副作用不随回滚，回滚也不通知**（`gameplay/state`）：handler 里改了状态、观察者已经做了事（例如门控冻结了组、打断了动作），随后回滚时状态撤销而副作用保留；观察者要到这个 `Set` 下一次任何改动或 `Refresh` 才按差收到纠正。被打断的动作不会恢复。业务约束同 runner：门控状态的改动放在 handler 最后一步，回滚后需要立即一致就调 `Refresh`。
+- **冻结计数不随事务回滚**：直接调用的 `Freeze` 与 `Recover` 必须成对，handler 回滚后多出的一次 `Freeze` 要由业务撤销。经 `state.Gate` 的冻结每条规则至多持有一次，成功回滚后立即按状态对齐（见下条）。
+- **状态观察者在成功回滚后重建内存状态**（`gameplay/state`）：Nest 全部逆操作成功后、实体锁释放前按差发送 `Change.Rollback=true`。该通知不能写 DAO、发奖励或网络消息。门控冻结立即恢复，但已打断的动作不复活，其他外部副作用不会自动补偿；逆操作失败时不发成功恢复通知。
 - **Buff 到期才撤销派生状态**：`BindStates` 的状态随 buff 驱动（D20 P5；心跳驱动 `AttachBeat` 或别的驱动经 `DriveBuffs`）移除到期 buff 而失效，心跳驱动下最多晚一个心跳周期（`BeatConfig.Granularity` 取档，缺省 1 秒）加 tick 取整；没装驱动的实体只在业务自己调 `TickBuffs` 时失效。
 - **派生状态的变化要数据拥有者调 `Changed`**：派生函数查询时现算，`Has` 总是正确，但观察者与同步脏位只在 `Changed`（或任何其他改动 / `Refresh`）时才更新；漏调时门控与客户端看到的是旧值。
 - **持久状态改名等于丢弃旧数据**：持久文档的键是状态名，`RestorePersisted` 跳过不认识的名字（不报警），下一次整文档写回时消失；同步打包还没有接 `state`（game-demo 只用不持久的派生状态，经观察者镜像进 DAO 下发）；生成器只生成 Catalog 声明（`--state`），`Set` / `Gate` 与 `StateDao` 的接线由业务写。
@@ -405,7 +405,7 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 
 ## 游戏接入验收
 
-十份接入手册的“第二部分 验收”是各自验收范围的完整说明（场景清单、证明与不证明、崩溃点、计数核对）。**发版门禁**（2026-10-31 起）：十个脚本的缺省模式（离线、替身提交器）由 `scripts/pretag.sh` 每次发版并行跑一遍（并发数 `ROOST_PRETAG_GENRE_JOBS`，缺省 4；本机 macOS 10 核实测：空闲时 45～60 秒，pretag 全程里、机器另有负载（load 7～8）时 125 秒），缺省模式同时把真实模式的恢复夹具复制进生成工程并 `go vet`（只编译不运行）；根包 `TestGeneratedScriptsAreInPretag` 要求每个 `scripts/test-*-generated.sh` 都在 pretag 里或登记了豁免原因（此前九个脚本不在任何门禁里，v1.33.0 上 card-rpg / mmorpg / merge-casual 三个夹具因 D22-1 改了 Tick 签名编译失败而无人发现）。**不在门禁里的**：真实模式（`ROOST_<玩法>_REAL=1` 需要隔离 Mongo 等，仍在改 `game` 模板、`add dao` / `add entity` / `add timer` / `add attribute`、多实体 Sender、Nest 生成或 Lockstep 时手动跑；入口登记在根包 `integration_coverage_test.go`）；守卫只查 pretag 调用了脚本，场景是否真的执行由各脚本自己的通过数断言负责。夹具里的数值都是业务样例，玩法规则缺少默认实现不算框架缺陷。
+既有十份接入手册的“第二部分 验收”是各自验收范围的完整说明（场景清单、证明与不证明、崩溃点、计数核对）。**发版门禁**（2026-10-31 起）：当前十三类玩法脚本的缺省模式（离线、替身提交器；新增三类见 SESSION-GENRES）由 `scripts/pretag.sh` 每次发版并行跑一遍（并发数 `ROOST_PRETAG_GENRE_JOBS`，缺省 4；本机 macOS 10 核实测：空闲时 45～60 秒，pretag 全程里、机器另有负载（load 7～8）时 125 秒），缺省模式同时把真实模式的恢复夹具复制进生成工程并 `go vet`（只编译不运行）；根包 `TestGeneratedScriptsAreInPretag` 要求每个 `scripts/test-*-generated.sh` 都在 pretag 里或登记了豁免原因（此前九个脚本不在任何门禁里，v1.33.0 上 card-rpg / mmorpg / merge-casual 三个夹具因 D22-1 改了 Tick 签名编译失败而无人发现）。**不在门禁里的**：真实模式（`ROOST_<玩法>_REAL=1` 需要隔离 Mongo 等，仍在改 `game` 模板、`add dao` / `add entity` / `add timer` / `add attribute`、多实体 Sender、Nest 生成或 Lockstep 时手动跑；入口登记在根包 `integration_coverage_test.go`）；守卫只查 pretag 调用了脚本，场景是否真的执行由各脚本自己的通过数断言负责。夹具里的数值都是业务样例，玩法规则缺少默认实现不算框架缺陷。
 
 | 游戏 | 入口脚本 / 真实模式变量 | 证明什么 | 不证明什么 | 手册 |
 | --- | --- | --- | --- | --- |
@@ -418,7 +418,7 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 | 合成休闲 | `scripts/test-merge-casual-generated.sh`，`ROOST_MERGE_CASUAL_REAL=1` | 15 个合成 / 离线批次 / 广告组合；SIGKILL 后恢复，过期挑战只判负一次、下一期限按时投递 | 提交在途崩溃、真实广告平台与登录票分配、多进程与容量 | [第二部分](../framework/MERGE-CASUAL-INTEGRATION.md#第二部分验收) |
 | 放置模拟 | `scripts/test-idle-sim-generated.sh`，`ROOST_IDLE_SIM_REAL=1` | 12 个生产队列 / 离线收益组合；SIGKILL 后恢复，补触发只积分到原窗口、下一秒刷新按时投递 | 提交在途崩溃、真实客户端 / 支付、跨服市场、多进程与容量 | [第二部分](../framework/IDLE-SIM-INTEGRATION.md#第二部分验收) |
 | 自走棋 | `scripts/test-auto-chess-generated.sh`，`ROOST_AUTO_CHESS_REAL=1` | 12 个卡池 / 阶段 / 领奖组合；冻结战斗后 SIGKILL 恢复，循环只补一个阶段并按期推进到终局 | 提交在途崩溃、八个网络客户端、跨 sid 发奖、多进程与容量 | [第二部分](../framework/AUTO-CHESS-INTEGRATION.md#第二部分验收) |
-| 实时派对房间 | `scripts/test-party-room-generated.sh`，`ROOST_PARTY_ROOM_REAL=1` | 13 个成局 / 进房 / 心跳回合 / 组同步 / 去重 / 重连 / 结算组合（心跳跑真实驱动循环，房间同步组与自身视图经正式 Nest Mod 装在同一个 Manager 上，正式 Receiver 按命名空间分流解码）；局内 SIGKILL 后冷加载、心跳按持久阶段重启并结算、发奖一次、删档 | 提交在途崩溃、Entity Sync 经真实接入层与慢消费者、match / session 的 Redis 存储与 RPC、房间跨机接管、房间数与推送带宽容量 | [第二部分](../framework/PARTY-ROOM-INTEGRATION.md#第二部分验收) |
+| 实时派对房间 | `scripts/test-party-room-generated.sh`，`ROOST_PARTY_ROOM_REAL=1` | 18 个成局 / 进房 / 心跳回合 / 组同步 / 去重 / 重连 / 结算组合（心跳跑真实驱动循环，房间同步组与自身视图经正式 Nest Mod 装在同一个 Manager 上，正式 Receiver 按命名空间分流解码）；局内 SIGKILL 后冷加载、心跳按持久阶段重启并结算、发奖一次、删档 | 提交在途崩溃、Entity Sync 经真实接入层与慢消费者、match / session 的 Redis 存储与 RPC、房间跨机接管、房间数与推送带宽容量 | [第二部分](../framework/PARTY-ROOM-INTEGRATION.md#第二部分验收) |
 
 - **房间内同步与 self_sync 同进程：已确认并提供正式入口**（2026-10-31，[方案](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-31-room-sync-groups.md)）。结论：①业务自建 Manager 经 `NestOptionWithEntitySync` 交给带 self_sync 的 Nest Mod 会被静默覆盖——已修，`Provide` 返回 `ErrEntitySyncObserverConflict`；②`policy.Group` 挂到 self_sync 的 Manager 上线格式能共存（同一会话、按命名空间分流），但会话归自身视图，登录前 `Join` 被拒、重连后组订阅静默缺失——由 `policy.GroupView` + `wiring/selfsync.Groups` + `access.player.sync_groups` 取代（[ENTITY_SYNC](../framework/ENTITY_SYNC.md#按组同步与-self_sync-共用连接groups)）。剩余边界：要求 self_sync（会话归自身视图）；成员关系不持久，重启后靠玩家重连的 handler 再 `Join`；离线成员每个政策阶段复查一次，成本与有离线成员的组的人数成正比，没有房间数 / 成员数的容量数据；独立 Gate 下的组同步、慢消费者断开只经自身视图的既有用例间接覆盖，没有组同步自己的用例；派对房间真实依赖模式（`ROOST_PARTY_ROOM_REAL=1`）在改用新入口后未重跑。
 
@@ -444,3 +444,7 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 ## 测试夹具与模板的一致性
 
 Nest 的 `TestLifecycleCreateInHandler*` 仍需保留：它们覆盖 handler 内新建的生命周期契约。测试手写的 `generatedShapeLifecycle` 与模板没有自动同步守卫；不能因生成器另有测试就删掉。原审计证据见[测试审计快照](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/test-audit-2026-10-29/README.md)。
+
+## 新增离散玩法纵切
+
+回合 PvP、合作 Roguelike、异步社交经营分别提供 9、10、9 个场景，进入 pretag，包含公共 Robot 的实际 TCP/PB 接线；合作包含双客户端三关、领奖、重连和授权视图。玩法纵切仍用替身提交器，未逐玩法验证真实持久恢复、跨服或容量；回合超时尚无自动 timer 装配，Roguelike 仅离散闯关。范围与命令见[手册](../framework/SESSION-GENRES.md)。

@@ -1,0 +1,41 @@
+// Command robot verifies a fresh, already allocated room through the real player TCP or Gate endpoint.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"time"
+
+	bots "GENRE_MODULE/loadtest"
+
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+)
+
+func main() {
+	endpoint := flag.String("endpoint", "127.0.0.1:7000", "embedded player TCP or Gate endpoint")
+	room := flag.Int64("room", 0, "existing fresh room assigned to the authenticated player")
+	timeout := flag.Duration("timeout", 15*time.Second, "whole match deadline")
+	flag.Parse()
+	ticket := os.Getenv("ROOST_ROBOT_TICKET")
+	peerTicket := os.Getenv("ROOST_ROBOT_PEER_TICKET")
+	if *room == 0 || ticket == "" || peerTicket == "" {
+		fmt.Fprintln(os.Stderr, "-room, ROOST_ROBOT_TICKET and ROOST_ROBOT_PEER_TICKET are required")
+		os.Exit(2)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	run := bots.Coop(runner.Config{Count: 1, Duration: *timeout, Transport: transport.Config{Endpoint: *endpoint}}, *room, [2]robot.AuthProvider{func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket(ticket), nil }, func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket(peerTicket), nil }})
+	err := run.Run(ctx)
+	stats := run.Stats()
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"scenarios": stats, "requests": run.MessageReport(), "traffic": run.TrafficReport()})
+	if err != nil || stats.Success != 1 || stats.Failure != 0 || stats.Canceled != 0 {
+		fmt.Fprintln(os.Stderr, "smoke failed:", err)
+		os.Exit(1)
+	}
+}

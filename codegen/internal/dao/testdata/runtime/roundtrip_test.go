@@ -338,7 +338,7 @@ func topLevelKeys(t *testing.T, raw []byte) []string {
 // []byte 字段的整体读取 GetXAll（下游把整段 JSON 存在 ResultJSON 里再 json.Unmarshal）：
 //   - 返回副本：改返回值、改传给 SetXAll 的入参，都不改 DAO；
 //   - 改动只能经 setter，setter 点亮持久与同步脏位，提交记录里带上字段，事务失败时回到原值；
-//   - 存储、提交记录与同步载荷里仍是 BSON binary，经 Unmarshal / ApplySync 往返后整段相等。
+//   - 存储与提交记录是 BSON binary、同步是 PB bytes，经 Unmarshal / ApplySync 往返后整段相等。
 func TestAByteSliceFieldReadsAsACopyAndRoundTripsAsBinary(t *testing.T) {
 	const payload = `{"skill":"fireball","power":7}`
 	variety := NewVarietyDao()
@@ -397,7 +397,10 @@ func TestAByteSliceFieldReadsAsACopyAndRoundTripsAsBinary(t *testing.T) {
 		t.Fatalf("storage round trip = %q", restored.GetResultJSONAll())
 	}
 	sync := variety.MarshalSync(field.Bit)
-	assertBinaryField(t, "sync payload", sync, payload)
+	patch, err := UnmarshalSyncVarietyDao(sync)
+	if err != nil || patch.ResultJSON == nil || string(patch.ResultJSON.Value) != payload {
+		t.Fatalf("PB binary patch: %v %v", patch, err)
+	}
 	mirror := NewVarietyDao()
 	if err := mirror.ApplySync(sync); err != nil {
 		t.Fatal(err)

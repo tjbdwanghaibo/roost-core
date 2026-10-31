@@ -88,6 +88,7 @@
 - [Nest 事务与 WAL](NEST_TRANSACTION_WAL.md)
 - [Pipelined 提交](NEST_PIPELINED_COMMIT.md)
 - [Entity Sync](ENTITY_SYNC.md)
+- [DAO 的 PB 增量同步与客户端接入](DAO-SYNC-PROTOBUF.md)
 - [Remote Entity](REMOTE_ENTITY.md)
 - [Saga](SAGA.md)
 - [业务 schema 变更操作手册](SCHEMA-MIGRATION.md)：停写 → 备份 → 转换 → 校验 → 切换版本 → 回退，demo 离线迁移示例与真实 Mongo 演练
@@ -95,3 +96,7 @@
 - [指标与告警清单](OBSERVABILITY.md)
 
 [物理房间 service](PHYSICS-ROOM-SERVICE.md)：固定 owner 的瞬态房间、Nest 提交、Chunk 与 Gate 接线及容量/生命周期边界。
+
+三类新增玩法：[回合 PvP、合作 Roguelike、异步社交经营](SESSION-GENRES.md)，各有正式生成工程和 8 个可运行场景；边界与命令见手册。
+
+Robot 的统一接入、13 类生成验收、负载与报告口径见 [Robot](ROBOT.md)。

@@ -1,0 +1,97 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"net"
+	"testing"
+	"time"
+
+	"GENRE_MODULE/game/scenarionet"
+	bots "GENRE_MODULE/loadtest"
+	generated "GENRE_MODULE/loadtest/protocol"
+	"GENRE_MODULE/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+)
+
+func TestScenarioRobotCompleteCoopAndClientViews(t *testing.T) {
+	f := newScenario(t)
+	RegisterCoopViewHandlersNestHandlers()
+	auth := gateway.AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
+		id := f.outsider.ID()
+		switch token {
+		case "first":
+			id = f.players[0].ID()
+		case "second":
+			id = f.players[1].ID()
+		case "outsider":
+		default:
+			return gateway.Principal{}, gateway.ErrUnauthenticated
+		}
+		return gateway.Principal{PlayerID: id, SessionID: token, ServerID: 1}, nil
+	})
+	cfg := gateway.DefaultTCPConfig()
+	cfg.Addr = "127.0.0.1:0"
+	server, err := gateway.NewTCPServer(cfg, scenarionet.CoopDispatch(f.engine), auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Stop(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	ticket := func(token string) robot.AuthProvider {
+		return func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket(token), nil }
+	}
+	run := bots.Coop(runner.Config{Duration: 10 * time.Second, Transport: transport.Config{Endpoint: server.Addr().String()}}, f.room.ID(), [2]robot.AuthProvider{ticket("first"), ticket("second")})
+	if err = run.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if s := run.Stats(); s.Success != 1 || s.Failure != 0 || s.Canceled != 0 {
+		t.Fatal(s)
+	}
+	var rejected int64
+	for _, m := range run.MessageReport().Messages {
+		rejected += m.Rejected
+		if m.Inflight != 0 || m.Timeout != 0 || m.Errors != 0 {
+			t.Fatal(m)
+		}
+	}
+	if rejected != 2 {
+		t.Fatalf("business refusals not recorded: %d", rejected)
+	}
+	if run.TrafficReport().MeasuredConnections != 4 {
+		t.Fatal(run.TrafficReport())
+	}
+	registry := protocol.NewRegistry(nil)
+	generated.RegisterDefaults(registry)
+	outsider := robot.NewContext(robot.Config{Transport: transport.Config{Type: transport.PlayerTCPType, Endpoint: server.Addr().String()}, Protocols: registry, Auth: ticket("outsider")})
+	defer outsider.Close()
+	actions := action.NewRegistry()
+	outsider.RunAction = actions.Run
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err = outsider.Do(ctx, action.NameConnect, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = bots.CoopView(ctx, outsider, f.room.ID()); !errors.Is(err, session.ErrRejected) {
+		t.Fatalf("outsider saw private view: %v", err)
+	}
+	if _, err = bots.CoopCommand(ctx, outsider, &pb.ScenarioCommandRequest{RoomID: f.room.ID(), Seq: 1, Revision: 8, Kind: "claim"}); !errors.Is(err, session.ErrRejected) {
+		t.Fatalf("non-member claimed reward: %v", err)
+	}
+
+}

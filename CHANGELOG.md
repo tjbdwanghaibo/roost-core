@@ -4,6 +4,33 @@
 
 ## [Unreleased]
 
+- 真实联合验收：正式 account Redis Stores/NATS RPC 签发并校验会话，C# 与 C++ 经 Gate/PB/Nest/双实体 WAL/Mongo/EntitySync 完成 full/delta/remove/reconnect；验证账号对象重建、WAL 重开、事务重复投影与生成 DAO 冷水合。身份签发器仍为测试 HMAC，未覆盖进程崩溃、第三方登录平台、跨机或容量。
+
+- Robot 增加按运行隔离的逐消息请求结果、延迟分位数/最慢样本和 TCP socket 字节；业务可用 CallChecked 将拒绝与协议成功分开，生成 Robot 与控制面报告接入。历史报告深拷贝，调用方不能改写保留证据。
+- 合作 Roguelike 新增双客户端三关/领奖/重连/授权视图整局；MOBA KCP 扩至终态、正式 Nest 幂等结算和客户端 PB 资产核对。13 类生成矩阵当前 181 条；真实账号、Gate、EntitySync、持久化与部署容量边界仍分别记录。
+
+- 九类既有玩法新增独立业务 PB、公共 Robot 两步命令/重试/重连/拒绝路径与最终 DAO 检查；MOBA 的真实 KCP 追帧验收改用公共 LockstepBot，生成可复用 loadtest 接线。玩法 skill 与生成脚本同步，替身鉴权/存储不代表生产容量验收。
+
+- 新生成工程最低 core 提升到 v1.35.0，CLI 与 runtime 配套使用；新增 PB DAO/Robot API 不能配到 v1.34.2 或更早运行库。
+- Robot：arrival-rate 增加 MaxConcurrent（默认 1024）、调度丢拍/容量拒绝/身份分配失败统计与 drop_rate 门禁；启动部分失败先取消已启动机器人，Stop 等调度器和清理全部结束，Runner 明确一次性使用。
+- Robot 报告保留小数毫秒，修复亚毫秒超标被截断通过；加入运行配置、构建环境与本进程 CPU/RSS/采样堆/goroutine。demo 压测入口开放 executor/rate/ramp/seed/report 参数。
+- 业务 PB 同步生成 loadtest/protocol 注册表，直接复用公共 Robot codec；player-tcp 传输收敛到 robot/transport，生成 demo 委托公共实现。超时释放线序列映射，迟到回包不变成推送。
+- 三类新玩法生成业务 PB、TCP→Sender 接线、cmd/robot 与重试/重连 smoke；新增 13 类独立生成工程矩阵。完整业务网络、容量与跨平台验收边界见 docs/framework/ROBOT.md，不代表全框架上线验收完成。
+
+### 新增
+
+- Native C++17 客户端：有界网络工作线程、RS/PB 请求与心跳、EntitySync 版本/代际及 Full/Delta/Remove、官方 PB DAO 原子字段补丁、C ABI、Unity 绑定和 UE 接线。macOS 主机与正式 Gate 联合链验证通过；Windows/Linux/Android/iOS 构建与设备验收尚未完成，Lockstep 状态机未移植。
+- Nest 增加按 owner 去重的 AfterRollback 内存重建通知；State 全部 DAO 成功恢复后按差通知观察者（Change.Rollback），立即对齐状态门控。逆操作失败不通知成功恢复，已取消动作与外部副作用不自动补偿。
+- maintenance TODO 按现行实现收敛为保持现状、需求触发与待测量项；Remote 保留已有独占 owner 移动/心跳能力，共享限制不变，清理过期性能与重复候选。
+
+- 生成 bootstrap 增加 `NewWithOptions`，可用 GameIngress 替换本地 TCP 并保留 self_sync 接线。新增隔离 NATS + 生成 game-demo + C# GameClient 联合验证脚本，覆盖正式生成业务 PB/DAO PB、Nest 双实体 WAL、on_change、Remove 和重连 Full；默认入口使用测试投影器与票据；新增真实依赖入口验证 Redis 账号/NATS RPC 与 Mongo 投影。
+
+- C# EntitySync 增加逐视图 Full / Delta / Remove 回调及独立连接清场通知，携带前后状态；整帧成功后通知，重复帧不重复通知。业务回调异常不再破坏同步基线或误触发断线。
+
+- C# 标准 GameClient：引擎线程 PB 请求/推送回调、心跳、业务可选重连、票据更新、有界完成队列，以及 EntitySync 对象/版本/codec 管理；Unity 新增薄生命周期 Driver，可选 Google.Protobuf 适配库。
+- 默认 DAO 同步改用有类型 PB 字段补丁，生成同步 proto、Go codec 和 C# 字段替换 Apply；持久化及 rollback 仍为 BSON。零值、空集合、nil 容器元素有明确存在性。默认编码号改为 2，服务端/客户端需配套重新生成，不兼容旧 BSON 同步。
+- 生成游戏 skill 增加回合制 PvP、合作 Roguelike、异步社交经营，分别提供正式 DAO / Nest 多实体业务夹具与场景脚本（回合 9、合作 10、经营 9）；支持自定义 module，加入 pretag。三类共用有界重试与版本检查，奖励领取与 Player 金币同事务，明确替身存储及各玩法真实恢复/容量未验证的边界。
+
 ## [v1.34.2] - 2026-10-31
 
 ### 修复

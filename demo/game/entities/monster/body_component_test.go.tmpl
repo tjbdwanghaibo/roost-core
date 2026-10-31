@@ -2,14 +2,14 @@ package monster
 
 import (
 	"context"
-	"go.mongodb.org/mongo-driver/v2/bson"
+
 	"testing"
 
-	db "{{MODULE}}/db"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	db "{{MODULE}}/db"
 )
 
 // A DAO whose every field is `nopersist,sync` must replicate and must never
@@ -81,10 +81,11 @@ func TestMonsterFarViewOmitsHP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var doc bson.M
-	if err := bson.Unmarshal(full.BytesCopy(), &doc); err != nil {
+	patch, err := db.UnmarshalSyncMonsterDao(full.BytesCopy())
+	if err != nil {
 		t.Fatal(err)
 	}
+	doc := patch.Values()
 	if _, exists := doc["hp"]; exists {
 		t.Fatal("far view retained HP")
 	}

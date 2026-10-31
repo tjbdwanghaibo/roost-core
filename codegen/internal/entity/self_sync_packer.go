@@ -244,7 +244,7 @@ import (
 )
 
 // {{.Lower}}SelfSyncCodec 是 "self" 视图载荷的编码号；载荷是 DAO 的 MarshalSync，客户端交给 ApplySync。
-const {{.Lower}}SelfSyncCodec uint16 = 1
+const {{.Lower}}SelfSyncCodec uint16 = 2
 
 var {{.Lower}}SelfSyncViews, {{.Lower}}SelfSyncViewsErr = dataengine.NewSyncViewSet({{.Lower}}SelfSyncFields(),
 	entity.NamedSyncView{Profile: policy.SelfProfile, Fields: []string{"*"}},

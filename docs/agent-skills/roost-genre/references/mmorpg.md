@@ -108,3 +108,15 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPG(Party|Trade|Com
 - `docs/framework/guide/04-sync.md` §2（AOI 选型、上限、已测规模）、`docs/framework/INTEREST-BLOCK-AOI.md`
 - `docs/framework/guide/10-time.md` §4～§4E（定时器、心跳、移动、行为、技能推进）
 - `demo/README.md` 与 `demo/` 模板源码（game-demo 是完整参考）
+
+## v1.35.0 起的公共 Robot 接线
+
+手工生成 mmorpg 时，在最终 `roost generate` 前执行（`genre` 取本篇对应脚本名）：
+
+```sh
+python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" "$genre"
+```
+
+该步骤安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络验收；之后仍须正式 generate。自定义 module 由安装器读取 go.mod。最稳妥的完整顺序直接使用同检出的玩法脚本。新增测试覆盖两个动作、重试、TCP 重连、非法命令和不存在玩家；不是完整业务恢复或真实存储验收。
+
+验收数量与限制统一见 [Robot 手册](../../../framework/ROBOT.md)，不要沿用历史版本的通过数。

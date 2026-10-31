@@ -14,13 +14,14 @@ if [[ "${ROOST_MOBA_ROUTING:-0}" == 1 && "${ROOST_MOBA_REAL:-0}" != 1 ]]; then
   exit 2
 fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-moba.XXXXXX")"
+review_root="${ROOST_GENRE_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/roost-moba.XXXXXX")}"
+mkdir -p "$review_root"
 project_root="$review_root/project"
 echo "MOBA generated consumer and logs: $review_root"
 # 成功后删除临时工程；失败或 ROOST_MOBA_KEEP=1 时保留，便于查看生成日志与工程。
 succeeded=0
 cleanup() {
-  if [[ "$succeeded" == 1 && "${ROOST_MOBA_KEEP:-0}" != 1 ]]; then
+  if [[ -z "${ROOST_GENRE_OUTPUT:-}" && "$succeeded" == 1 && "${ROOST_MOBA_KEEP:-0}" != 1 ]]; then
     rm -rf "$review_root"
   else
     echo "MOBA generated consumer kept: $review_root" >&2
@@ -68,10 +69,12 @@ for name in ('match_result', 'battle_round', 'battle_directory'):
  p=root/'game/entities'/name/'entity.go'
  p.write_text(p.read_text().replace('category=entity.EntityCategoryOther','category=entity.EntityCategoryWorld'))
 DEFS
-mkdir -p game/moba
+mkdir -p game/moba loadtest protocol/def
+cp "$repo_root/scripts/testdata/moba/result_protocol.go.txt" protocol/def/result.go
+cp "$repo_root/scripts/testdata/moba/robot.go.txt" loadtest/battle.go
 cp "$repo_root/scripts/testdata/moba/simulation.go.txt" game/moba/simulation.go
 cp "$repo_root/scripts/testdata/moba/simulation_test.go.txt" game/moba/simulation_test.go
-cp "$repo_root/scripts/testdata/moba/network_test.go.txt" game/moba/network_test.go
+cp "$repo_root/scripts/testdata/moba/network_test.go.txt" game/handler/moba_network_test.go
 cp "$repo_root/scripts/testdata/moba/matchmaking_test.go.txt" game/moba/matchmaking_test.go
 for name in arena round room directory; do cp "$repo_root/scripts/testdata/moba/$name.go.txt" "game/moba/$name.go"; done
 for name in arena_test arena_network_test; do cp "$repo_root/scripts/testdata/moba/$name.go.txt" "game/moba/$name.go"; done
@@ -79,7 +82,7 @@ cp "$repo_root/scripts/testdata/moba/round_handlers.go.txt" game/handler/moba_ro
 cp "$repo_root/scripts/testdata/moba/round_handlers_test.go.txt" game/handler/moba_round_test.go
 cp "$repo_root/scripts/testdata/moba/settlement.go.txt" game/handler/moba_settlement.go
 cp "$repo_root/scripts/testdata/moba/settlement_test.go.txt" game/handler/moba_settlement_test.go
-gofmt -w db/def/*.go game/moba/*.go game/handler/moba_*.go
+gofmt -w loadtest/*.go db/def/*.go game/moba/*.go game/handler/moba_*.go
 go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMOBA' ./game/moba ./game/handler | tee "$review_root/test.log"

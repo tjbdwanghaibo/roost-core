@@ -45,7 +45,7 @@ func runConnect(ctx context.Context, rb *robot.Context, param any) error {
 	if err != nil {
 		return err
 	}
-	rb.SetSession(session.New(conn, rb.Protocols))
+	rb.SetSession(session.New(conn, rb.Protocols, rb.Recorder))
 	if rb.Auth != nil {
 		packet, err := rb.Auth(rb)
 		if err != nil {

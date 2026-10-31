@@ -100,3 +100,9 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBA' ./game/moba ./ga
 - `docs/framework/guide/09-services.md` §4（match 保留期与分区容量）
 - `docs/maintenance/KNOWN-LIMITS.md`“Lockstep”与“游戏接入验收”MOBA 行
 - 参考实现：game-demo 的 battle 房间（嵌入 TCP lockstep，`demo/internal/service/game/battle.go.tmpl`）
+
+## v1.35.0 起的公共 Robot 接线
+
+生成步骤还需复制 `scripts/testdata/moba/robot.go.txt` 到 `loadtest/battle.go`、`result_protocol.go.txt` 到 `protocol/def/result.go`，网络验收放在 `game/handler/moba_network_test.go`，并随自定义 module 替换 import。KCP 网络用例通过 `loadtest.NewBattleBot` 使用公共 LockstepBot，校验丢包追帧、整局终态、可信 Nest 幂等结算与客户端 PB 资产结果；服务端初始化/结算/奖励接口不开放为玩家 PB。固定会话凭据仅供验收。
+
+验收数量与限制统一见 [Robot 手册](../../../framework/ROBOT.md)，不要沿用历史版本的通过数。

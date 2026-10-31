@@ -28,7 +28,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
-	"go.mongodb.org/mongo-driver/v2/bson"
+	"{{MODULE}}/game/clientsync"
 )
 
 // What this asserts is the whole claim of sync=true: a change made on the
@@ -183,9 +183,9 @@ func (recorder *sceneRecorder) take(playerID int64) []*pb.EntitySyncPush {
 
 // decodeSceneFrames turns what one player received into the subject updates
 // it carries: each push is one frame, each object one subject.
-func decodeSceneFrames(t *testing.T, _ int64, pushes []*pb.EntitySyncPush) map[int64]bson.M {
+func decodeSceneFrames(t *testing.T, _ int64, pushes []*pb.EntitySyncPush) map[int64]map[string]any {
 	t.Helper()
-	out := make(map[int64]bson.M)
+	out := make(map[int64]map[string]any)
 	for _, push := range pushes {
 		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
 		if err != nil {
@@ -201,8 +201,8 @@ func decodeSceneFrames(t *testing.T, _ int64, pushes []*pb.EntitySyncPush) map[i
 				if len(payload) == 0 {
 					continue
 				}
-				var document bson.M
-				if err := bson.Unmarshal(payload, &document); err != nil {
+				document,err:=clientsync.DecodeFields(update)
+				if err != nil {
 					t.Fatalf("decode player sync payload: %v", err)
 				}
 				out[update.SubjectID] = document
@@ -1686,9 +1686,9 @@ func (authority *sceneAuthority) LoadEntity(ctx context.Context, id int64, _ ent
 
 // sceneFullUpdates decodes what one player received into the subject updates
 // that were full (a snapshot or a whole-state replacement), by subject.
-func sceneFullUpdates(t *testing.T, pushes []*pb.EntitySyncPush) map[int64]bson.M {
+func sceneFullUpdates(t *testing.T, pushes []*pb.EntitySyncPush) map[int64]map[string]any {
 	t.Helper()
-	out := make(map[int64]bson.M)
+	out := make(map[int64]map[string]any)
 	for _, push := range pushes {
 		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
 		if err != nil {
@@ -1703,8 +1703,8 @@ func sceneFullUpdates(t *testing.T, pushes []*pb.EntitySyncPush) map[int64]bson.
 				if !update.Full {
 					continue
 				}
-				var document bson.M
-				if err := bson.Unmarshal(update.Payload.BytesCopy(), &document); err != nil {
+				document,err:=clientsync.DecodeFields(update)
+				if err != nil {
 					t.Fatalf("decode player sync payload: %v", err)
 				}
 				out[update.SubjectID] = document
@@ -1800,7 +1800,7 @@ func TestAnUnloadedPlayerIsReloadedForTheSceneObservers(t *testing.T) {
 		t.Fatalf("unload: run=%v unload=%v", err, unloadErr)
 	}
 
-	var reloaded bson.M
+	var reloaded map[string]any
 	deadline := time.Now().Add(3 * time.Second)
 	for reloaded == nil {
 		if time.Now().After(deadline) {
@@ -1964,7 +1964,7 @@ func TestAPlayerLoadedAgainAfterAnUnloadNobodyWatchedReachesALaterWatcher(t *tes
 	watcher := newScenePlayer(t, watcherID)
 	entities.Add(watcher)
 	joinReady(t, scene, ctx, watcher, spatial.Point{X: 520, Y: 500})
-	var seen bson.M
+	var seen map[string]any
 	for range 3 {
 		if err := scene.Flush(ctx); err != nil {
 			t.Fatal(err)

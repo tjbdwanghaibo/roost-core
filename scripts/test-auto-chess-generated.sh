@@ -7,13 +7,14 @@
 # 冷加载、由驱动投递循环续完整局、八人领奖，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-auto-chess.XXXXXX")"
+review_root="${ROOST_GENRE_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/roost-auto-chess.XXXXXX")}"
+mkdir -p "$review_root"
 project_root="$review_root/project"
 echo "Auto chess generated consumer and logs: $review_root"
 # 成功后删除临时工程；失败或 ROOST_AUTO_CHESS_KEEP=1 时保留，便于查看生成日志与工程。
 succeeded=0
 cleanup() {
-  if [[ "$succeeded" == 1 && "${ROOST_AUTO_CHESS_KEEP:-0}" != 1 ]]; then
+  if [[ -z "${ROOST_GENRE_OUTPUT:-}" && "$succeeded" == 1 && "${ROOST_AUTO_CHESS_KEEP:-0}" != 1 ]]; then
     rm -rf "$review_root"
   else
     echo "Auto chess generated consumer kept: $review_root" >&2
@@ -64,12 +65,13 @@ cp "$repo_root/scripts/testdata/auto-chess/timer_handlers.go.txt" game/entities/
 cp "$repo_root/scripts/testdata/auto-chess/handlers.go.txt" game/handler/auto_chess.go
 cp "$repo_root/scripts/testdata/auto-chess/gameplay_test.go.txt" game/handler/auto_chess_test.go
 gofmt -w db/def/*.go game/autochess/*.go game/entities/chess_match/*.go game/handler/auto_chess*.go
+python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" auto-chess
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestAutoChess' ./game/autochess ./game/handler | tee "$review_root/test.log"
-# 12 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 13 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestAutoChess' "$review_root/test.log" || true)"
-if [[ "$passed" != 12 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 12 passing TestAutoChess scenarios, got $passed" >&2
+if [[ "$passed" != 13 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 13 passing TestAutoChess scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...

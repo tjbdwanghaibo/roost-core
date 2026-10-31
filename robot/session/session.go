@@ -21,6 +21,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
+// ErrRejected 标识业务响应明确拒绝；检查器应使用 errors.Is 可识别的包装。
+var ErrRejected = errors.New("robot session: business rejected")
+
 var ErrClosed = errors.New("robot session: closed")
 
 type Message struct {
@@ -46,6 +49,7 @@ type waiter struct {
 type Session struct {
 	conn      transport.Conn
 	protocols *protocol.Registry
+	recorder  *Recorder
 
 	seq atomic.Uint32
 
@@ -60,7 +64,7 @@ type Session struct {
 	closed    chan struct{}
 }
 
-func New(conn transport.Conn, protocols *protocol.Registry) *Session {
+func New(conn transport.Conn, protocols *protocol.Registry, recorders ...*Recorder) *Session {
 	s := &Session{
 		conn:      conn,
 		protocols: protocols,
@@ -68,6 +72,9 @@ func New(conn transport.Conn, protocols *protocol.Registry) *Session {
 		waiters:   make(map[uint64]waiter),
 		handlers:  make(map[uint32]map[uint64]PushHandler),
 		closed:    make(chan struct{}),
+	}
+	if len(recorders) > 0 {
+		s.recorder = recorders[0]
 	}
 	go s.readLoop()
 	return s
@@ -103,11 +110,37 @@ func (s *Session) Notify(ctx context.Context, msgID uint32, value any) error {
 // Every call feeds the robot.session.call latency histogram, labeled by the
 // request message id and result.
 func (s *Session) Call(ctx context.Context, reqID uint32, respID uint32, req any) (*Message, error) {
-	msg, err := s.call(ctx, reqID, respID, req)
+	return s.CallChecked(ctx, reqID, respID, req, nil)
+}
+
+// CallChecked 在同一个请求统计中纳入业务回执校验。nil check 仅表示协议成功，
+// 不能由框架猜测各业务 Code 的语义；拒绝请返回 ErrRejected，结果未知不能标为成功。
+func (s *Session) CallChecked(ctx context.Context, reqID, respID uint32, req any, check func(*Message) error) (*Message, error) {
+	if s == nil {
+		return nil, ErrClosed
+	}
+	start := time.Now()
+	series := s.recorder.begin(reqID)
+	msg, err := s.call(ctx, reqID, respID, req, series)
+	if err == nil && check != nil {
+		err = check(msg)
+	}
+	outcome := "ok"
+	switch {
+	case errors.Is(err, ErrRejected):
+		outcome = "rejected"
+	case errors.Is(err, context.DeadlineExceeded):
+		outcome = "timeout"
+	case errors.Is(err, context.Canceled):
+		outcome = "canceled"
+	case err != nil:
+		outcome = "error"
+	}
+	s.recorder.finish(series, reqID, outcome, time.Since(start))
 	return msg, err
 }
 
-func (s *Session) call(ctx context.Context, reqID uint32, respID uint32, req any) (*Message, error) {
+func (s *Session) call(ctx context.Context, reqID uint32, respID uint32, req any, series *callSeries) (*Message, error) {
 	if s == nil || s.conn == nil {
 		return nil, ErrClosed
 	}
@@ -140,8 +173,8 @@ func (s *Session) call(ctx context.Context, reqID uint32, respID uint32, req any
 	s.mu.Unlock()
 
 	// 发送也受 ctx 约束（RR-20261005-NC-261）：服务端不读、TCP 发送缓冲满时写会一直阻塞，旧实现同步写，
-	// Call 越过自己的超时直到会话关闭。与 Notify 同用 sendWithContext；放弃等待的那次写仍在后台完成或随
-	// 会话关闭失败，晚到的应答按 NC-262 丢弃。没有采用写截止时间：net.Conn 写超时会留下半个帧，只能关会话。
+	// Call 越过自己的超时直到会话关闭。与 Notify 同用 sendWithContext；发送阶段取消会关闭连接，
+	// 避免半帧继续复用及后台阻塞写累积。完整写出后的应答超时只清理本次关联，晚到应答丢弃。
 	if err := s.sendWithContext(ctx, &transport.Packet{MsgID: reqID, Seq: seq, Payload: payload}); err != nil {
 		s.removePending(seq)
 		switch {
@@ -154,6 +187,8 @@ func (s *Session) call(ctx context.Context, reqID uint32, respID uint32, req any
 		}
 		return nil, err
 	}
+
+	s.recorder.sent(series)
 
 	select {
 	case <-ctx.Done():
@@ -361,12 +396,18 @@ func (s *Session) sendWithContext(ctx context.Context, packet *transport.Packet)
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	done := make(chan error, 1)
 	go func() {
 		done <- s.SendPacket(packet)
 	}()
 	select {
 	case <-ctx.Done():
+		// 写入可能只完成了半帧，继续复用既不安全，也会不断累积阻塞写 goroutine。
+		// 仅发送阶段取消关闭连接；完整写出后等待应答超时仍允许复用。
+		s.closeWithErr(ctx.Err())
 		return ctx.Err()
 	case err := <-done:
 		return err
@@ -388,6 +429,9 @@ func (s *Session) removePending(seq uint32) {
 	s.mu.Lock()
 	delete(s.pending, seq)
 	s.mu.Unlock()
+	if forgetter, ok := s.conn.(interface{ ForgetRequest(uint32) }); ok {
+		forgetter.ForgetRequest(seq)
+	}
 }
 
 func (s *Session) addWaiter(msgID uint32, filter PushFilter, ch chan result) uint64 {

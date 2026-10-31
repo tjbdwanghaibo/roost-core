@@ -11,13 +11,14 @@
 # 再由第三个进程核对奖励与删档并重试领奖。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-party-room.XXXXXX")"
+review_root="${ROOST_GENRE_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/roost-party-room.XXXXXX")}"
+mkdir -p "$review_root"
 project_root="$review_root/project"
 echo "Party room generated consumer and logs: $review_root"
 # 成功后删除临时工程；失败或 ROOST_PARTY_ROOM_KEEP=1 时保留，便于查看生成日志与工程。
 succeeded=0
 cleanup() {
-  if [[ "$succeeded" == 1 && "${ROOST_PARTY_ROOM_KEEP:-0}" != 1 ]]; then
+  if [[ -z "${ROOST_GENRE_OUTPUT:-}" && "$succeeded" == 1 && "${ROOST_PARTY_ROOM_KEEP:-0}" != 1 ]]; then
     rm -rf "$review_root"
   else
     echo "Party room generated consumer kept: $review_root" >&2
@@ -95,12 +96,13 @@ MANIFEST
 # project sync 创建一次的 SyncGroup 声明是业务文件：换成本例的视图（RoomSyncProfile，只放出记分板）与座位上限。
 cp "$repo_root/scripts/testdata/party-room/sync_group.go.txt" game/entities/party_room/sync_group.go
 gofmt -w game/entities/party_room/sync_group.go
+python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" party-room
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/partyroom ./game/handler | tee "$review_root/test.log"
-# 18 条场景（3 条规则 + 15 条 Nest / 心跳 / 同步 / 补位）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 19 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestPartyGame' "$review_root/test.log" || true)"
-if [[ "$passed" != 18 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 18 passing TestPartyGame scenarios, got $passed" >&2
+if [[ "$passed" != 19 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 19 passing TestPartyGame scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...

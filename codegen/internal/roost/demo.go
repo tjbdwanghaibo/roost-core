@@ -464,6 +464,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/actor/patrol_test.go", why: "the patrol decides only when the move group is idle and not frozen, and a refused start retries the same corner"},
 		{write: "game/entities/player/attribute_component.go", why: "the attribute container wired into an Entity: layers decided, composed, persisted and replicated"},
 		{write: "game/entities/player/attribute_component_test.go", why: "the composition rule as a test: Final = Base + Gear with the derived attribute computed once over the composed inputs"},
+		{write: "game/clientsync/decode.go", why: "typed DAO Protobuf patches for client and robot views"},
 		{write: "game/entities/player/sync_packer.go", why: "the client-facing half of sync=true: who serializes a subject, by profile and by dirty mask"},
 		{add: &AddOptions{Kind: "entity", Name: "Scene"}, why: "the map is an Entity: an id, a lifecycle the framework drives, addressable by GM and by another process later"},
 		{add: &AddOptions{Kind: "lifecycle", Name: "Scene", Service: gameService}, why: "the create/load boundary for scenes"},

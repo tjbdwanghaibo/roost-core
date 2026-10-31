@@ -1,0 +1,100 @@
+package rules
+
+import "errors"
+
+var ErrRule = errors.New("invalid or stale game command")
+
+type Command struct {
+	Seq      uint64
+	Revision uint64
+	Kind     string
+	Choice   int
+}
+type Result struct {
+	Revision uint64
+	Reward   int
+}
+type Receipt struct {
+	Command Command
+	Result  Result
+}
+
+// 状态整体放在生成 DAO，局内缓存不持有另一个可变副本；失败由正式 DAO undo 回滚。
+type State struct {
+	Members  []int64
+	Revision uint64
+	Last     map[int64]Receipt
+	Turn     int
+	HP       [2]int
+	Deadline int64
+	Finished bool
+	Winner   int
+}
+
+func New(members []int64, now int64) (State, error) {
+	if len(members) != 2 || members[0] <= 0 || members[1] <= 0 || members[0] == members[1] || now <= 0 {
+		return State{}, ErrRule
+	}
+	return State{Members: append([]int64(nil), members...), Last: make(map[int64]Receipt), HP: [2]int{3, 3}, Deadline: now + 30000, Winner: -1}, nil
+}
+func (s *State) Apply(actor int64, cmd Command, now int64) (Result, error) {
+	if len(s.Members) != 2 || s.Last == nil {
+		return Result{}, ErrRule
+	}
+	index := -1
+	for i, id := range s.Members {
+		if id == actor {
+			index = i
+		}
+	}
+	if index < 0 || cmd.Seq == 0 {
+		return Result{}, ErrRule
+	}
+	previous := s.Last[actor]
+	if cmd.Seq == previous.Command.Seq {
+		if cmd != previous.Command {
+			return Result{}, ErrRule
+		}
+		return previous.Result, nil
+	}
+	if cmd.Seq != previous.Command.Seq+1 || cmd.Revision != s.Revision {
+		return Result{}, ErrRule
+	}
+	reward, err := s.execute(index, cmd, now)
+	if err != nil {
+		return Result{}, err
+	}
+	s.Revision++
+	result := Result{Revision: s.Revision, Reward: reward}
+	s.Last[actor] = Receipt{Command: cmd, Result: result}
+	return result, nil
+}
+
+// 超时只消费当前回合，迟到动作不能顺带执行下一回合；调用者只能声明预期 revision。
+func (s *State) execute(index int, cmd Command, now int64) (int, error) {
+	if s.Finished {
+		return 0, ErrRule
+	}
+	if cmd.Kind == "timeout" {
+		if now < s.Deadline {
+			return 0, ErrRule
+		}
+		s.HP[s.Turn]--
+	} else {
+		if cmd.Kind != "attack" || index != s.Turn || now >= s.Deadline || cmd.Choice != 0 {
+			return 0, ErrRule
+		}
+		s.HP[1-index]--
+	}
+	if s.HP[0] == 0 || s.HP[1] == 0 {
+		s.Finished = true
+		s.Winner = 0
+		if s.HP[0] == 0 {
+			s.Winner = 1
+		}
+		return 0, nil
+	}
+	s.Turn = 1 - s.Turn
+	s.Deadline = now + 30000
+	return 0, nil
+}

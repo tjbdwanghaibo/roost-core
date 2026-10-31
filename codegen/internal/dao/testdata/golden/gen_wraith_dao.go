@@ -347,93 +347,14 @@ func WraithDaoSyncFields() []dataengine.SyncFieldMeta {
 // DAO, not the package.
 func (d *WraithDao) SyncFields() []dataengine.SyncFieldMeta { return WraithDaoSyncFields() }
 
+// MarshalSync 编码字段级 PB patch：包装存在表示本次覆盖，包含零值与空容器。
+// 持久化、回滚快照仍使用 BSON。
 func (d *WraithDao) MarshalSync(mask uint64) []byte {
-	doc := bson.M{
-		"_id": d.id,
-	}
-	if mask&wraithDaoFieldPosX != 0 {
-		doc["pos_x"] = d.posX
-	}
-	if mask&wraithDaoFieldPosY != 0 {
-		doc["pos_y"] = d.posY
-	}
-	if mask&wraithDaoFieldBuffs != 0 {
-		doc["buffs"] = d.wraithDaoBuffsRawMap()
-	}
-	if mask&wraithDaoFieldTrail != 0 {
-		doc["trail"] = d.trail
-	}
-	if len(doc) == 1 {
-		return nil
-	}
-	data, err := bson.Marshal(doc)
-	if err != nil {
-		// nil already means "nothing to sync"; returning it on failure would
-		// silently drop a sync payload. See marshalPersistData.
-		panic(fmt.Errorf("WraithDao: marshal sync data: %w", err))
-	}
-	return data
+	return d.marshalSyncPB(mask)
 }
 
 func (d *WraithDao) ApplySync(raw []byte) error {
-	var doc bson.M
-	if err := bson.Unmarshal(raw, &doc); err != nil {
-		return err
-	}
-	if v, ok := doc["pos_x"]; ok {
-		data, err := bson.Marshal(bson.M{"v": v})
-		if err != nil {
-			return err
-		}
-		var wrap struct {
-			V int64 `bson:"v"`
-		}
-		if err := bson.Unmarshal(data, &wrap); err != nil {
-			return err
-		}
-		d.posX = wrap.V
-	}
-	if v, ok := doc["pos_y"]; ok {
-		data, err := bson.Marshal(bson.M{"v": v})
-		if err != nil {
-			return err
-		}
-		var wrap struct {
-			V int64 `bson:"v"`
-		}
-		if err := bson.Unmarshal(data, &wrap); err != nil {
-			return err
-		}
-		d.posY = wrap.V
-	}
-	if v, ok := doc["buffs"]; ok {
-		data, err := bson.Marshal(bson.M{"v": v})
-		if err != nil {
-			return err
-		}
-		var wrap struct {
-			V map[int32]int64 `bson:"v"`
-		}
-		if err := bson.Unmarshal(data, &wrap); err != nil {
-			return err
-		}
-		d.setBuffsRawMap(wrap.V)
-	}
-	if v, ok := doc["trail"]; ok {
-		data, err := bson.Marshal(bson.M{"v": v})
-		if err != nil {
-			return err
-		}
-		var wrap struct {
-			V []int64 `bson:"v"`
-		}
-		if err := bson.Unmarshal(data, &wrap); err != nil {
-			return err
-		}
-		d.trail = wrap.V
-	}
-	d.Init()
-	return nil
+	return d.applySyncPB(raw)
 }
 
 // compile-time import guards

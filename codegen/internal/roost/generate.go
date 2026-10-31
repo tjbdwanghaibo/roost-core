@@ -96,7 +96,7 @@ func generatorsFor(m Manifest, force bool) []generator {
 				"-pb", under(root, "protocol/pb"),
 				"-msgid", under(root, "protocol/msgid"),
 				"-manifest", under(root, "protocol/protocol_manifest.json"),
-				"-robot-protocol", "",
+				"-robot-protocol", under(root, "loadtest/protocol/registry_gen.go"),
 			}
 			if _, enabled := m.Access["player"]; enabled {
 				args = append(args,

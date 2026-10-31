@@ -47,6 +47,9 @@ git diff --exit-code
 ./scripts/test-client-dotnet.sh   # 金样 + SDK 自测 + 生成工程真实 TCP；缺 dotnet 打印 SKIP 并以 0 退出（不是通过）
 ~~~
 
+Gate 与标准 GameClient 的联合链路另跑 `bash scripts/test-gate-client.sh`，需要本机 nats-server，脚本使用自己的临时实例；不允许用离线金样代替这条验证。
+真实账号/存储联合验收另跑 `bash scripts/test-gate-real.sh`，先加载隔离集成环境配置；覆盖范围和 C++ 入口见 [Gate 联合验收](../framework/GATEWAY.md#真实账号gate-与存储联合验收)。默认临时 NATS 入口与真实依赖入口不能混记。
+
 它需要 .NET 10 SDK；没有时如实记“C# 未验证”。pretag 只跑金样与自测（生成工程那一条随 `go test ./...` 在 dotnet 可用时运行），CI 的 `client-dotnet` job 装 .NET 10 并以 `ROOST_REQUIRE_DOTNET=1` 跑全部。
 
 根包 `go test -count=1 .` 是一组仓库级门禁，其中 `TestTrackedGoFilesAreGofmtClean` 要求所有跟踪（及未忽略的新增）`.go` 文件 gofmt 无差异，失败时列出文件；提交前对改过的文件跑 `gofmt -w`。

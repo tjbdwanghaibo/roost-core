@@ -150,8 +150,19 @@ func renderMarkdown(run RunSnapshot) string {
 	fmt.Fprintf(&b, "## Outcome\n\n| started | success | failure | canceled | failure rate |\n| --- | --- | --- | --- | --- |\n| %d | %d | %d | %d | %.2f%% |\n\n",
 		run.Stats.Started, run.Stats.Success, run.Stats.Failure, run.Stats.Canceled, run.Stats.FailureRate*100)
 	if len(run.QuantilesMS) > 0 {
-		fmt.Fprintf(&b, "## Scenario latency\n\n| p50 | p90 | p95 | p99 |\n| --- | --- | --- | --- |\n| %dms | %dms | %dms | %dms |\n\n",
+		fmt.Fprintf(&b, "## Scenario latency\n\n| p50 | p90 | p95 | p99 |\n| --- | --- | --- | --- |\n| %.3fms | %.3fms | %.3fms | %.3fms |\n\n",
 			run.QuantilesMS["p50"], run.QuantilesMS["p90"], run.QuantilesMS["p95"], run.QuantilesMS["p99"])
+	}
+	if run.Messages != nil {
+		fmt.Fprintf(&b, "## Requests\n\nSuccessful responses: %.3f/s. Business success requires CallChecked. Quantiles include all completed outcomes.\n\n", run.RequestOKPerSecond)
+		b.WriteString("| message | started | sent | ok | rejected | timeout | canceled | errors | inflight | p99 ms | max ms |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")
+		for _, m := range run.Messages.Messages {
+			fmt.Fprintf(&b, "| %d | %d | %d | %d | %d | %d | %d | %d | %d | %.3f | %.3f |\n", m.MessageID, m.Started, m.Sent, m.OK, m.Rejected, m.Timeout, m.Canceled, m.Errors, m.Inflight, m.P99MS, m.MaxMS)
+		}
+		b.WriteString("\n")
+	}
+	if run.Traffic != nil {
+		fmt.Fprintf(&b, "TCP socket stream: %d measured connections, %d bytes read, %d bytes written. Excludes TCP/IP headers and retransmissions; uninstrumented transports are not measured.\n\n", run.Traffic.MeasuredConnections, run.Traffic.ReadBytes, run.Traffic.WrittenBytes)
 	}
 	if len(run.Thresholds) > 0 {
 		b.WriteString("## Thresholds\n\n| metric | max | actual | verdict |\n| --- | --- | --- | --- |\n")

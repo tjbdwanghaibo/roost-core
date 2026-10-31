@@ -107,6 +107,20 @@ func Run(args []string, stdout io.Writer) error {
 		}
 	}
 
+	// 同步协议与 Go codec 同时生成，单一 DAO 定义决定字段与类型。
+	syncGo, syncProto, err := buildSyncSchema(defs, *pkg)
+	if err != nil {
+		return fmt.Errorf("generate sync schema: %w", err)
+	}
+	if len(syncGo) > 0 {
+		for name, content := range map[string][]byte{"gen_dao_sync.go": syncGo, "dao_sync.proto": syncProto, "dao_sync_apply.cs": buildSyncCSharp(defs)} {
+			expected[name] = true
+			if _, err := writeIfChanged(content, filepath.Join(absOutDir, name), *force); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Generate DAO files
 	for _, dao := range defs.Daos {
 		outFile := filepath.Join(absOutDir, daoFileName(dao.Name))
@@ -212,10 +226,10 @@ func removeOrphanGenerated(dir string, expected map[string]bool) ([]string, erro
 	var removed []string
 	for _, entry := range entries {
 		name := entry.Name()
-		if entry.IsDir() || expected[name] || !strings.HasPrefix(name, "gen_") {
+		if entry.IsDir() || expected[name] || (!strings.HasPrefix(name, "gen_") && name != "dao_sync.proto" && name != "dao_sync_apply.cs") {
 			continue
 		}
-		if !strings.HasSuffix(name, "_dao.go") && !strings.HasSuffix(name, "_nested.go") && name != databasesFileName {
+		if !strings.HasSuffix(name, "_dao.go") && !strings.HasSuffix(name, "_nested.go") && name != databasesFileName && name != "gen_dao_sync.go" && name != "dao_sync.proto" && name != "dao_sync_apply.cs" {
 			continue
 		}
 		path := filepath.Join(dir, name)

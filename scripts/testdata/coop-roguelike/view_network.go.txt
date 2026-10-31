@@ -1,0 +1,41 @@
+package scenarionet
+
+import (
+	"context"
+
+	syncsender "GENRE_MODULE/game/handler/syncsender"
+	"GENRE_MODULE/protocol/msgid"
+	"GENRE_MODULE/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+)
+
+// CoopDispatch 增加有权限检查的权威视图查询，供进入房间、重连与客户端验收使用。
+func CoopDispatch(engine *nest.NestMgr) gateway.TCPDispatch {
+	commands := Dispatch(engine)
+	views := syncsender.NewCoopViewHandlersSender(engine)
+	return func(ctx context.Context, session gateway.Session, id, seq uint32, kind wire.PayloadKind, data []byte) (any, error) {
+		if id != msgid.MsgCoopView {
+			return commands(ctx, session, id, seq, kind, data)
+		}
+		if kind != wire.PayloadProtobuf {
+			return nil, gateway.ErrInvalidRequest
+		}
+		request, err := pb.UnmarshalCoopViewRequest(data)
+		if err != nil {
+			return nil, err
+		}
+		view, err := views.MultiSync_CoopView(ctx, request.RoomID, session.Principal().PlayerID)
+		response := &pb.CoopViewResponse{Revision: view.Revision, NextSeq: view.NextSeq, Stage: int32(view.Stage), Cleared: view.Cleared, Claimed: view.Claimed, Coins: view.Coins}
+		if err != nil {
+			response.Code = 1
+		}
+		payload, err := pb.MarshalCoopViewResponse(response)
+		if err != nil {
+			return nil, err
+		}
+		return &gateway.TCPResponse{MessageID: id, Sequence: seq, Payload: payload}, nil
+	}
+}

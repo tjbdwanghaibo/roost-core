@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/action"
 	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
 	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
@@ -72,6 +74,8 @@ type Config struct {
 	Count int
 	// Rate is robots started per second for arrival-rate (default 1).
 	Rate float64
+	// MaxConcurrent bounds in-flight arrival-rate robots (default 1024). Excess arrivals are counted, never queued.
+	MaxConcurrent int
 	// Stages optionally reshape the looping population over time.
 	Stages []Stage
 	// Scenario is the registered scenario name.
@@ -98,6 +102,9 @@ func (c Config) Normalize() Config {
 	if c.Scenario == "" {
 		c.Scenario = "ping"
 	}
+	if c.MaxConcurrent <= 0 {
+		c.MaxConcurrent = 1024
+	}
 	if c.Seed == 0 {
 		c.Seed = 1
 	}
@@ -115,14 +122,21 @@ func (c Config) Normalize() Config {
 // run drains. Looping robots repeat their scenario: Success and Failure count
 // scenario runs, Started counts robots, so the sum exceeds Started (N12 O9).
 type Stats struct {
-	Started  int64
-	Online   int64
-	Success  int64
-	Failure  int64
-	Canceled int64
+	Scheduled       int64
+	DroppedCapacity int64
+	DroppedSchedule int64
+	LaunchFailed    int64
+	PeakOnline      int64
+	Started         int64
+	Online          int64
+	Success         int64
+	Failure         int64
+	Canceled        int64
 }
 
 type Runner struct {
+	recorder  session.Recorder
+	traffic   transport.Traffic
 	cfg       Config
 	actions   *action.Registry
 	scenarios *scenario.Registry
@@ -134,13 +148,20 @@ type Runner struct {
 
 	cancelMu sync.Mutex
 	cancel   context.CancelFunc
+	done     chan struct{}
+	used     bool
 	wg       sync.WaitGroup
 
-	started  atomic.Int64
-	online   atomic.Int64
-	success  atomic.Int64
-	failure  atomic.Int64
-	canceled atomic.Int64
+	scheduled       atomic.Int64
+	droppedCapacity atomic.Int64
+	droppedSchedule atomic.Int64
+	launchFailed    atomic.Int64
+	peakOnline      atomic.Int64
+	started         atomic.Int64
+	online          atomic.Int64
+	success         atomic.Int64
+	failure         atomic.Int64
+	canceled        atomic.Int64
 }
 
 type Option func(*Runner)
@@ -207,6 +228,7 @@ func New(cfg Config, opts ...Option) *Runner {
 			opt(r)
 		}
 	}
+	r.cfg.Transport.Traffic = &r.traffic
 	return r
 }
 
@@ -227,15 +249,34 @@ func (r *Runner) Run(ctx context.Context) error {
 		runCtx, cancel = context.WithCancel(ctx)
 	}
 	r.cancelMu.Lock()
+	if r.used {
+		r.cancelMu.Unlock()
+		cancel()
+		return fmt.Errorf("robot runner: each runner can only run once")
+	}
+	r.used = true
+	r.done = make(chan struct{})
 	r.cancel = cancel
 	r.cancelMu.Unlock()
 	defer func() {
 		cancel()
 		r.cancelMu.Lock()
 		r.cancel = nil
+		close(r.done)
 		r.cancelMu.Unlock()
 	}()
 
+	if r.cfg.Executor != ExecutorPool && r.cfg.Executor != ExecutorLooping && r.cfg.Executor != ExecutorArrivalRate {
+		return fmt.Errorf("robot runner: unknown executor %q", r.cfg.Executor)
+	}
+	if math.IsNaN(r.cfg.Rate) || math.IsInf(r.cfg.Rate, 0) || r.cfg.Rate > float64(time.Second) || float64(time.Second)/r.cfg.Rate >= float64(1<<63-1) {
+		return fmt.Errorf("robot runner: rate must be finite and yield an interval between 1ns and the maximum duration")
+	}
+	for _, stage := range r.cfg.Stages {
+		if stage.Target < 0 || stage.Duration <= 0 {
+			return fmt.Errorf("robot runner: stage target must be nonnegative and duration positive")
+		}
+	}
 	if r.bootstrap != nil {
 		if err := r.bootstrap(); err != nil {
 			return fmt.Errorf("robot runner: bootstrap: %w", err)
@@ -258,6 +299,10 @@ func (r *Runner) Run(ctx context.Context) error {
 		err = r.runPopulation(runCtx, scn, true)
 	default:
 		err = r.runPopulation(runCtx, scn, false)
+	}
+	// 启动失败时先取消已启动机器人，否则它们等 Run 结束，Run 却等它们结束。
+	if err != nil {
+		cancel()
 	}
 	r.wg.Wait()
 	stats := r.Stats()
@@ -286,6 +331,10 @@ func (r *Runner) runPopulation(ctx context.Context, scn scenario.Scenario, loopi
 				step = remaining
 			}
 			for i := 0; i < step; i++ {
+				if ctx.Err() != nil {
+					return nil
+				}
+				r.scheduled.Add(1)
 				lastOrdinal++
 				index := lastOrdinal
 				stopCh := make(chan struct{})
@@ -344,19 +393,45 @@ func (r *Runner) runPopulation(ctx context.Context, scn scenario.Scenario, loopi
 // the run context ends — open-loop injection.
 func (r *Runner) runArrivalRate(ctx context.Context, scn scenario.Scenario) error {
 	interval := time.Duration(float64(time.Second) / r.cfg.Rate)
-	if interval <= 0 {
-		interval = time.Millisecond
-	}
+	// 以绝对时间计算应投递次数。Ticker 丢拍不等于服务端完成得快，不能隐藏压测端欠载。
+	start := time.Now()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	index := 0
+	var accounted int64
+	defer func() {
+		// 结束前最后一段调度停顿也计入欠载，不能因为先收到取消而漏掉这些时间槽。
+		end := time.Now()
+		if deadline, ok := ctx.Deadline(); ok && deadline.Before(end) {
+			end = deadline
+		}
+		due := int64(end.Sub(start) / interval)
+		if due > accounted {
+			r.scheduled.Add(due - accounted)
+			r.droppedSchedule.Add(due - accounted)
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			index++
-			if err := r.launch(ctx, index, scn, false, nil); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			due := int64(time.Since(start) / interval)
+			if due <= accounted {
+				continue
+			}
+			count := due - accounted
+			accounted = due
+			r.scheduled.Add(count)
+			r.droppedSchedule.Add(count - 1)
+			// 不补发过期的突发流量；只尝试当前这一拍，容量满则明确记录拒绝。
+			if r.online.Load() >= int64(r.cfg.MaxConcurrent) {
+				r.droppedCapacity.Add(1)
+				continue
+			}
+			if err := r.launch(ctx, int(due), scn, false, nil); err != nil {
 				return err
 			}
 		}
@@ -366,14 +441,21 @@ func (r *Runner) runArrivalRate(ctx context.Context, scn scenario.Scenario) erro
 func (r *Runner) launch(ctx context.Context, index int, scn scenario.Scenario, looping bool, stop <-chan struct{}) error {
 	playerID, err := r.identity(index)
 	if err != nil {
+		r.launchFailed.Add(1)
 		return fmt.Errorf("robot runner: identity for robot %d: %w", index, err)
 	}
 	r.wg.Add(1)
 	r.started.Add(1)
+	// 在启动 goroutine 前保留名额，避免调度器连续投递时看不到尚未运行的机器人。
+	online := r.online.Add(1)
+	for peak := r.peakOnline.Load(); online > peak; peak = r.peakOnline.Load() {
+		if r.peakOnline.CompareAndSwap(peak, online) {
+			break
+		}
+	}
 	go func() {
 		defer r.wg.Done()
 		labels := r.metricLabels(metrics.Labels{"scenario": scn.Name()})
-		r.online.Add(1)
 		metrics.AddGauge("robot.runner.online", labels, 1)
 		defer func() {
 			r.online.Add(-1)
@@ -411,6 +493,7 @@ func (r *Runner) runOnce(ctx context.Context, index int, playerID int64, scn sce
 		PlayerID:  playerID,
 		Transport: r.cfg.Transport,
 		Protocols: r.protocols,
+		Recorder:  &r.recorder,
 		Auth:      r.auth,
 		Seed:      r.cfg.Seed*1_000_003 + int64(index),
 	})
@@ -440,26 +523,27 @@ func (r *Runner) runOnce(ctx context.Context, index int, playerID int64, scn sce
 }
 
 func (r *Runner) Stop(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
 	r.cancelMu.Lock()
-	cancel := r.cancel
+	cancel, done := r.cancel, r.done
 	r.cancelMu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	done := make(chan struct{})
-	go func() {
-		r.wg.Wait()
-		close(done)
-	}()
-	if ctx == nil {
-		<-done
+	if done == nil {
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// 等调度器停止新增任务且机器人全部退出；不能在 Add 仍可能发生时直接 Wait。
 	select {
-	case <-ctx.Done():
-		return ctx.Err()
 	case <-done:
 		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -468,11 +552,16 @@ func (r *Runner) Stats() Stats {
 		return Stats{}
 	}
 	return Stats{
-		Started:  r.started.Load(),
-		Online:   r.online.Load(),
-		Success:  r.success.Load(),
-		Failure:  r.failure.Load(),
-		Canceled: r.canceled.Load(),
+		Scheduled:       r.scheduled.Load(),
+		DroppedCapacity: r.droppedCapacity.Load(),
+		DroppedSchedule: r.droppedSchedule.Load(),
+		LaunchFailed:    r.launchFailed.Load(),
+		PeakOnline:      r.peakOnline.Load(),
+		Started:         r.started.Load(),
+		Online:          r.online.Load(),
+		Success:         r.success.Load(),
+		Failure:         r.failure.Load(),
+		Canceled:        r.canceled.Load(),
 	}
 }
 
@@ -515,3 +604,7 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 		return true
 	}
 }
+
+// MessageReport 返回本次运行的请求统计，含重连；不复用其他 Runner 的历史指标。
+func (r *Runner) MessageReport() session.Report          { return r.recorder.Snapshot() }
+func (r *Runner) TrafficReport() transport.TrafficReport { return r.traffic.Snapshot() }

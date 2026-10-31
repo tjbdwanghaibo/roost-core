@@ -1,0 +1,71 @@
+package handler
+
+import (
+	"GENRE_MODULE/game/robotaccess"
+	bots "GENRE_MODULE/loadtest"
+	"GENRE_MODULE/protocol/pb"
+	"context"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"net"
+	"testing"
+	"time"
+)
+
+func TestMMORPGRobotBusiness(t *testing.T) {
+	f := newMMOFixture(t)
+	auth := gateway.AuthenticatorFunc(func(_ context.Context, ticket string, _ net.Addr) (gateway.Principal, error) {
+		switch ticket {
+		case "owner":
+			return gateway.Principal{PlayerID: f.players[0].ID(), SessionID: "owner", ServerID: 1}, nil
+		case "outsider":
+			return gateway.Principal{PlayerID: 999999, SessionID: "outsider", ServerID: 1}, nil
+		default:
+			return gateway.Principal{}, gateway.ErrUnauthenticated
+		}
+	})
+	cfg := gateway.DefaultTCPConfig()
+	cfg.Addr = "127.0.0.1:0"
+	server, err := gateway.NewTCPServer(cfg, robotaccess.Dispatch(f.engine), auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Stop(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	run := func(ticket string, steps []bots.Step) {
+		t.Helper()
+		r := bots.Commands(runner.Config{Count: 1, Duration: 5 * time.Second, Transport: transport.Config{Endpoint: server.Addr().String()}}, func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket(ticket), nil }, steps)
+		if err := r.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if s := r.Stats(); s.Success != 1 || s.Failure != 0 || s.Canceled != 0 {
+			t.Fatalf("robot: %+v", s)
+		}
+	}
+	first := pb.PlayRequest{Seq: 1, Kind: "transfer", PeerID: f.players[1].ID(), Amount: 3}
+	second := first
+	second.Seq++
+	second.Amount = 4
+	invalid := second
+	invalid.Seq++
+	invalid.Kind = "not-a-command"
+	run("owner", []bots.Step{{Request: first}, {Request: first}, {Request: first, Reconnect: true}, {Request: second}, {Request: second}, {Request: invalid, WantCode: 1}})
+	if f.players[0].Dao().GetGold() != 43 || f.players[1].Dao().GetGold() != 57 || f.players[0].Dao().GetTradeSeq() != 2 {
+		t.Fatal("wrong committed business state")
+	}
+	before := f.players[0].Dao().GetGold()
+	run("outsider", []bots.Step{{Request: first, WantCode: 1}})
+	if f.players[0].Dao().GetGold() != before {
+		t.Fatal("unauthorized command changed authoritative state")
+	}
+}

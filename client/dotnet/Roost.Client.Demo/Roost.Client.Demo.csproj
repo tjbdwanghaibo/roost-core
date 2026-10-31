@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Roost.Client.Codecs/Roost.Client.Codecs.csproj" />
+    <PackageReference Include="Grpc.Tools" Version="2.72.0" PrivateAssets="all" />
+    <Protobuf Include="$(DemoRoot)/protocol/proto/protocol.proto" GrpcServices="None" />
+    <Protobuf Include="$(DemoRoot)/db/dao_sync.proto" GrpcServices="None" />
+    <Compile Include="$(DemoRoot)/client/MessageIds.cs" Link="Generated/MessageIds.cs" />
+    <Compile Include="$(DemoRoot)/db/dao_sync_apply.cs" Link="Generated/DaoSyncApply.cs" />
+  </ItemGroup>
+  <Target Name="RequireDemo" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(DemoRoot)/db/dao_sync.proto')" Text="Set DemoRoot to a generated game-demo project." />
+  </Target>
+</Project>

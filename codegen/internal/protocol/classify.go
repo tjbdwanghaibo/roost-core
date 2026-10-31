@@ -56,14 +56,14 @@ func classifyIdent(name string) FieldDef {
 		return FieldDef{Kind: KindScalar, Scalar: ScalarString, GoType: "string", ProtoType: "string", WireType: "bytes"}
 	case "bool":
 		return FieldDef{Kind: KindScalar, Scalar: ScalarBool, GoType: "bool", ProtoType: "bool", WireType: "varint"}
-	case "int32", "int":
+	case "int32", "int", "int8", "int16", "rune":
 		return FieldDef{Kind: KindScalar, Scalar: ScalarInt32, GoType: name, ProtoType: "int32", WireType: "varint"}
 	case "int64":
 		return FieldDef{Kind: KindScalar, Scalar: ScalarInt64, GoType: "int64", ProtoType: "int64", WireType: "varint"}
-	case "uint32", "byte":
+	case "uint32", "byte", "uint8", "uint16":
 		return FieldDef{Kind: KindScalar, Scalar: ScalarUint32, GoType: name, ProtoType: "uint32", WireType: "varint"}
-	case "uint64":
-		return FieldDef{Kind: KindScalar, Scalar: ScalarUint64, GoType: "uint64", ProtoType: "uint64", WireType: "varint"}
+	case "uint64", "uint":
+		return FieldDef{Kind: KindScalar, Scalar: ScalarUint64, GoType: name, ProtoType: "uint64", WireType: "varint"}
 	case "float32":
 		return FieldDef{Kind: KindScalar, Scalar: ScalarFloat32, GoType: "float32", ProtoType: "float", WireType: "fixed32"}
 	case "float64":

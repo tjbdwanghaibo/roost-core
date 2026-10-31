@@ -1,0 +1,71 @@
+package loadtest
+
+import (
+	"hash/fnv"
+
+	"example.com/moba-practice/game/moba"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+)
+
+// BattleSink 将 Robot 输出交给已认证的可靠连接；会话绑定仍由业务接入层负责。
+type BattleSink struct{ Send func(lockstep.Command) error }
+
+func (s BattleSink) SubmitInput(frame lockstep.FrameID, data []byte) error {
+	return s.Send(lockstep.Command{Operation: lockstep.OpInput, Frame: frame, Payload: data})
+}
+func (s BattleSink) RequestCatchup(frame lockstep.FrameID) error {
+	return s.Send(lockstep.Command{Operation: lockstep.OpCatchup, Frame: frame})
+}
+func (s BattleSink) ReportHash(frame lockstep.FrameID, hash uint64) error {
+	return s.Send(lockstep.Command{Operation: lockstep.OpHash, Frame: frame, Hash: hash})
+}
+
+// NewBattleBot 使用正式 Robot 拼帧、追帧与上报 hash。输入由调用方按服务端节拍发送，
+// 不能在追历史帧时补发过期业务输入；所有调用须在同一个驱动 goroutine 中串行执行。
+func NewBattleBot(player lockstep.PlayerID, sink BattleSink) (*robot.LockstepBot, *moba.State, error) {
+	state := moba.NewState()
+	bot, err := robot.NewLockstepBot(robot.LockstepBotConfig{Player: player, Sink: sink, Simulate: state.Apply, MaxBuffer: 128, Hash: func(lockstep.FrameID) uint64 {
+		h := fnv.New64a()
+		_, _ = h.Write([]byte(state.Digest()))
+		return h.Sum64()
+	}})
+	return bot, state, err
+}
+
+// DuelInput 是可复现的双人场景输入，不读取服务端内部状态。
+func DuelInput(frame lockstep.FrameID, seat int) []byte {
+	if frame <= 5 {
+		step := int8(1)
+		if seat == 1 {
+			step = -1
+		}
+		return moba.Encode(moba.Command{Action: moba.Move, Step: step})
+	}
+	action := moba.Attack
+	if frame%4 == 0 {
+		action = moba.Cast
+	}
+	return moba.Encode(moba.Command{Action: action, Target: moba.HeroTarget})
+}
+
+// SiegeInput 只读客户端自己应用的状态；服务端未向 Robot 暴露参考模拟。
+func SiegeInput(state *moba.State, seat int) []byte {
+	if seat != 0 {
+		return moba.Encode(moba.Command{})
+	}
+	hero := state.Heroes[0]
+	command := moba.Command{}
+	switch {
+	case hero.X < 7:
+		command = moba.Command{Action: moba.Move, Step: 1}
+	case state.Towers[1] > 0:
+		command = moba.Command{Action: moba.Attack, Target: moba.TowerTarget}
+	case hero.X < 9:
+		command = moba.Command{Action: moba.Move, Step: 1}
+	default:
+		command = moba.Command{Action: moba.Attack, Target: moba.BaseTarget}
+	}
+	return moba.Encode(command)
+}

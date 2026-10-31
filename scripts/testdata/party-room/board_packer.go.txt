@@ -12,7 +12,7 @@ import (
 // 不标 sync，任何视图都拿不到。
 var RoomSyncProfile = entity.SyncProfile{Key: "room"}
 
-const roomBoardCodec uint16 = 1
+const roomBoardCodec uint16 = 2
 
 var roomViews, roomViewsErr = dataengine.NewSyncViewSet(db.PartyRoomDaoSyncFields(),
 	entity.NamedSyncView{Profile: RoomSyncProfile, Fields: []string{"Board"}},

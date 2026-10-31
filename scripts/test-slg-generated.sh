@@ -12,13 +12,14 @@
 # 真实模式写共享隔离环境，运行前持有 $ROOST_DATAENGINE_IT_ROOT/remote-acceptance.lock。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-slg.XXXXXX")"
+review_root="${ROOST_GENRE_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/roost-slg.XXXXXX")}"
+mkdir -p "$review_root"
 project_root="$review_root/project"
 echo "SLG generated consumer and logs: $review_root"
 # 成功后删除临时工程；失败或 ROOST_SLG_KEEP=1 时保留，便于查看生成日志与工程。
 succeeded=0
 cleanup() {
-  if [[ "$succeeded" == 1 && "${ROOST_SLG_KEEP:-0}" != 1 ]]; then
+  if [[ -z "${ROOST_GENRE_OUTPUT:-}" && "$succeeded" == 1 && "${ROOST_SLG_KEEP:-0}" != 1 ]]; then
     rm -rf "$review_root"
   else
     echo "SLG generated consumer kept: $review_root" >&2
@@ -82,12 +83,13 @@ mkdir -p game/alliance
 cp "$repo_root/scripts/testdata/slg/alliance/alliance.go" game/alliance/alliance.go
 cp "$repo_root/scripts/testdata/slg/alliance/rpc_budget.go" game/alliance/rpc_budget.go
 gofmt -w db/def/*.go game/entities/player/timer_handlers.go game/handler/*.go game/alliance/*.go
+python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" slg
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLG' ./game/handler | tee "$review_root/test.log"
-# 6 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 7 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestSLG' "$review_root/test.log" || true)"
-if [[ "$passed" != 6 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 6 passing TestSLG scenarios, got $passed" >&2
+if [[ "$passed" != 7 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 7 passing TestSLG scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...

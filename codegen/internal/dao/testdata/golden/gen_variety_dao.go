@@ -24,6 +24,8 @@ type VarietyDao struct {
 	resultJSON  []byte
 	blobs       *fmap.SmallSafeMap[string, []byte]
 	envelope    Envelope
+	enabled     bool
+	counter     uint64
 }
 
 // Ensure interface compliance.
@@ -102,6 +104,8 @@ const (
 	varietyDaoFieldResultJSON  uint64 = 1 << iota
 	varietyDaoFieldBlobs       uint64 = 1 << iota
 	varietyDaoFieldEnvelope    uint64 = 1 << iota
+	varietyDaoFieldEnabled     uint64 = 1 << iota
+	varietyDaoFieldCounter     uint64 = 1 << iota
 )
 
 func (d *VarietyDao) markPersistOnlyDirty() {
@@ -153,6 +157,14 @@ func (d *VarietyDao) markEnvelopeDirty() {
 		panic(fmt.Errorf("VarietyDao: mark Envelope persistence: %w", err))
 	}
 	d.tracker.MarkSync(varietyDaoFieldEnvelope)
+}
+
+func (d *VarietyDao) markEnabledDirty() {
+	d.tracker.MarkSync(varietyDaoFieldEnabled)
+}
+
+func (d *VarietyDao) markCounterDirty() {
+	d.tracker.MarkSync(varietyDaoFieldCounter)
 }
 
 func (d *VarietyDao) markPendingKeyDirty(key int32, val int64) {
@@ -268,6 +280,10 @@ func (d *VarietyDao) GetResultJSONAll() []byte {
 }
 
 func (d *VarietyDao) GetEnvelope() *Envelope { return &d.envelope }
+
+func (d *VarietyDao) GetEnabled() bool { return d.enabled }
+
+func (d *VarietyDao) GetCounter() uint64 { return d.counter }
 
 // --- Mutators ---
 
@@ -616,6 +632,28 @@ func (d *VarietyDao) SetEnvelope(v Envelope) {
 	d.markEnvelopeDirty()
 }
 
+func (d *VarietyDao) SetEnabled(v bool) {
+	if d.enabled != v {
+		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+			old := d.enabled
+			d.recordUndo(tx, varietyDaoFieldEnabled, func() error { d.enabled = old; return nil })
+		}
+		d.enabled = v
+		d.markEnabledDirty()
+	}
+}
+
+func (d *VarietyDao) SetCounter(v uint64) {
+	if d.counter != v {
+		if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+			old := d.counter
+			d.recordUndo(tx, varietyDaoFieldCounter, func() error { d.counter = old; return nil })
+		}
+		d.counter = v
+		d.markCounterDirty()
+	}
+}
+
 func (d *VarietyDao) varietyDaoPendingRawMap() map[int32]int64 {
 	if d.pending == nil {
 		return nil
@@ -709,6 +747,8 @@ func (d *VarietyDao) RestoreRollbackState(raw []byte) error {
 	d.syncOnly = doc.SyncOnly
 	d.neither = doc.Neither
 	d.setPendingRawMap(doc.Pending)
+	d.enabled = doc.Enabled
+	d.counter = doc.Counter
 	d.Init()
 	return nil
 }
@@ -721,6 +761,8 @@ type varietyDaoRollbackDoc struct {
 	SyncOnly   int64                `bson:"sync_only"`
 	Neither    int64                `bson:"neither"`
 	Pending    map[int32]int64      `bson:"pending"`
+	Enabled    bool                 `bson:"enabled"`
+	Counter    uint64               `bson:"counter"`
 }
 
 func (d *VarietyDao) rollbackDoc() varietyDaoRollbackDoc {
@@ -729,6 +771,8 @@ func (d *VarietyDao) rollbackDoc() varietyDaoRollbackDoc {
 		SyncOnly:   d.syncOnly,
 		Neither:    d.neither,
 		Pending:    d.varietyDaoPendingRawMap(),
+		Enabled:    d.enabled,
+		Counter:    d.counter,
 	}
 }
 
@@ -941,6 +985,8 @@ func VarietyDaoSyncFields() []dataengine.SyncFieldMeta {
 		{Name: "ResultJSON", WireName: "result_json", Bit: varietyDaoFieldResultJSON},
 		{Name: "Blobs", WireName: "blobs", Bit: varietyDaoFieldBlobs},
 		{Name: "Envelope", WireName: "envelope", Bit: varietyDaoFieldEnvelope},
+		{Name: "Enabled", WireName: "enabled", Bit: varietyDaoFieldEnabled},
+		{Name: "Counter", WireName: "counter", Bit: varietyDaoFieldCounter},
 	}
 }
 
@@ -948,125 +994,14 @@ func VarietyDaoSyncFields() []dataengine.SyncFieldMeta {
 // DAO, not the package.
 func (d *VarietyDao) SyncFields() []dataengine.SyncFieldMeta { return VarietyDaoSyncFields() }
 
+// MarshalSync 编码字段级 PB patch：包装存在表示本次覆盖，包含零值与空容器。
+// 持久化、回滚快照仍使用 BSON。
 func (d *VarietyDao) MarshalSync(mask uint64) []byte {
-	doc := bson.M{
-		"_id": d.id,
-	}
-	if mask&varietyDaoFieldSyncOnly != 0 {
-		doc["sync_only"] = d.syncOnly
-	}
-	if mask&varietyDaoFieldFastItems != 0 {
-		doc["fast_items"] = d.varietyDaoFastItemsRawMap()
-	}
-	if mask&varietyDaoFieldShardedTags != 0 {
-		doc["sharded_tags"] = d.varietyDaoShardedTagsRawMap()
-	}
-	if mask&varietyDaoFieldResultJSON != 0 {
-		doc["result_json"] = d.resultJSON
-	}
-	if mask&varietyDaoFieldBlobs != 0 {
-		doc["blobs"] = d.varietyDaoBlobsRawMap()
-	}
-	if mask&varietyDaoFieldEnvelope != 0 {
-		doc["envelope"] = d.envelope.bsonDoc()
-	}
-	if len(doc) == 1 {
-		return nil
-	}
-	data, err := bson.Marshal(doc)
-	if err != nil {
-		// nil already means "nothing to sync"; returning it on failure would
-		// silently drop a sync payload. See marshalPersistData.
-		panic(fmt.Errorf("VarietyDao: marshal sync data: %w", err))
-	}
-	return data
+	return d.marshalSyncPB(mask)
 }
 
 func (d *VarietyDao) ApplySync(raw []byte) error {
-	var doc bson.M
-	if err := bson.Unmarshal(raw, &doc); err != nil {
-		return err
-	}
-	if v, ok := doc["sync_only"]; ok {
-		data, err := bson.Marshal(bson.M{"v": v})
-		if err != nil {
-			return err
-		}
-		var wrap struct {
-			V int64 `bson:"v"`
-		}
-		if err := bson.Unmarshal(data, &wrap); err != nil {
-			return err
-		}
-		d.syncOnly = wrap.V
-	}
-	if v, ok := doc["fast_items"]; ok {
-		data, err := bson.Marshal(bson.M{"v": v})
-		if err != nil {
-			return err
-		}
-		var wrap struct {
-			V map[int64]int32 `bson:"v"`
-		}
-		if err := bson.Unmarshal(data, &wrap); err != nil {
-			return err
-		}
-		d.setFastItemsRawMap(wrap.V)
-	}
-	if v, ok := doc["sharded_tags"]; ok {
-		data, err := bson.Marshal(bson.M{"v": v})
-		if err != nil {
-			return err
-		}
-		var wrap struct {
-			V map[int32]string `bson:"v"`
-		}
-		if err := bson.Unmarshal(data, &wrap); err != nil {
-			return err
-		}
-		d.setShardedTagsRawMap(wrap.V)
-	}
-	if v, ok := doc["result_json"]; ok {
-		data, err := bson.Marshal(bson.M{"v": v})
-		if err != nil {
-			return err
-		}
-		var wrap struct {
-			V []byte `bson:"v"`
-		}
-		if err := bson.Unmarshal(data, &wrap); err != nil {
-			return err
-		}
-		d.resultJSON = wrap.V
-	}
-	if v, ok := doc["blobs"]; ok {
-		data, err := bson.Marshal(bson.M{"v": v})
-		if err != nil {
-			return err
-		}
-		var wrap struct {
-			V map[string][]byte `bson:"v"`
-		}
-		if err := bson.Unmarshal(data, &wrap); err != nil {
-			return err
-		}
-		d.setBlobsRawMap(wrap.V)
-	}
-	if v, ok := doc["envelope"]; ok {
-		data, err := bson.Marshal(bson.M{"v": v})
-		if err != nil {
-			return err
-		}
-		var wrap struct {
-			V envelopeBSONDoc `bson:"v"`
-		}
-		if err := bson.Unmarshal(data, &wrap); err != nil {
-			return err
-		}
-		d.envelope = envelopeFromBSONDoc(wrap.V)
-	}
-	d.Init()
-	return nil
+	return d.applySyncPB(raw)
 }
 
 // --- Unmarshal ---

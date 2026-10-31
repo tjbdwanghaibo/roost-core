@@ -1,0 +1,111 @@
+package rules
+
+import "errors"
+
+var ErrRule = errors.New("invalid or stale game command")
+
+type Command struct {
+	Seq      uint64
+	Revision uint64
+	Kind     string
+	Choice   int
+}
+type Result struct {
+	Revision uint64
+	Reward   int
+}
+type Receipt struct {
+	Command Command
+	Result  Result
+}
+
+// 状态整体放在生成 DAO，局内缓存不持有另一个可变副本；失败由正式 DAO undo 回滚。
+type State struct {
+	Members  []int64
+	Revision uint64
+	Last     map[int64]Receipt
+	Stage    int
+	Votes    [2]int
+	Cleared  bool
+	Claimed  [2]bool
+	Seed     uint64
+}
+
+func New(members []int64, now int64) (State, error) {
+	if len(members) != 2 || members[0] <= 0 || members[1] <= 0 || members[0] == members[1] || now <= 0 {
+		return State{}, ErrRule
+	}
+	return State{Members: append([]int64(nil), members...), Last: make(map[int64]Receipt), Votes: [2]int{-1, -1}, Seed: 12345}, nil
+}
+func (s *State) Apply(actor int64, cmd Command, now int64) (Result, error) {
+	if len(s.Members) != 2 || s.Last == nil {
+		return Result{}, ErrRule
+	}
+	index := -1
+	for i, id := range s.Members {
+		if id == actor {
+			index = i
+		}
+	}
+	if index < 0 || cmd.Seq == 0 {
+		return Result{}, ErrRule
+	}
+	previous := s.Last[actor]
+	if cmd.Seq == previous.Command.Seq {
+		if cmd != previous.Command {
+			return Result{}, ErrRule
+		}
+		return previous.Result, nil
+	}
+	if cmd.Seq != previous.Command.Seq+1 || cmd.Revision != s.Revision {
+		return Result{}, ErrRule
+	}
+	reward, err := s.execute(index, cmd, now)
+	if err != nil {
+		return Result{}, err
+	}
+	s.Revision++
+	result := Result{Revision: s.Revision, Reward: reward}
+	s.Last[actor] = Receipt{Command: cmd, Result: result}
+	return result, nil
+}
+
+// 本例是离散房间闯关，不是动作模拟。路径随机数只由持久种子与阶段确定，重连不重抽。
+func (s *State) execute(index int, cmd Command, now int64) (int, error) {
+	switch cmd.Kind {
+	case "vote":
+		if s.Cleared || cmd.Choice < 0 || cmd.Choice > 1 || s.Votes[index] != -1 {
+			return 0, ErrRule
+		}
+		s.Votes[index] = cmd.Choice
+		if s.Votes[0] >= 0 && s.Votes[1] >= 0 {
+			choice := s.Votes[0]
+			if s.Votes[0] != s.Votes[1] {
+				choice = int((s.Seed + uint64(s.Stage)) % 2)
+			}
+			s.Seed = s.Seed*6364136223846793005 + uint64(choice) + 1
+			s.Stage++
+			s.Votes = [2]int{-1, -1}
+			s.Cleared = s.Stage == 3
+		}
+		return 0, nil
+	case "claim":
+		if !s.Cleared || s.Claimed[index] {
+			return 0, ErrRule
+		}
+		s.Claimed[index] = true
+		return 10, nil
+	default:
+		return 0, ErrRule
+	}
+}
+
+// View 不返回其他玩家的余额、命令回执或服务端随机种子。
+type View struct {
+	Revision uint64
+	NextSeq  uint64
+	Stage    int
+	Cleared  bool
+	Claimed  bool
+	Coins    int64
+}

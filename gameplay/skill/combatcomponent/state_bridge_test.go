@@ -86,7 +86,7 @@ func TestBuffTagsDriveDerivedStates(t *testing.T) {
 	if len(set.Sources(stateStunned)) != 0 {
 		t.Fatal("the derived state was copied into the state DAO")
 	}
-	// 回滚：buff 撤销，派生状态当场跟着对；观察者此时还没收到“rooted false”，下一次通知补上。
+	// 回滚：buff 和派生状态恢复后立即通知观察者，不等待下一次业务改动。
 	errRefused := errors.New("refused")
 	if err := run(func() error {
 		c.ApplyBuff(combat.BuffSpec{ID: 2, Tags: []combat.Tag{"root"}}, 1, 0)
@@ -96,6 +96,9 @@ func TestBuffTagsDriveDerivedStates(t *testing.T) {
 	}
 	if set.Has(stateRooted) {
 		t.Fatal("a rolled-back root buff still roots")
+	}
+	if fmt.Sprint(seen) != "[1 true 2 true 2 false]" {
+		t.Fatalf("rollback notification delayed: %v", seen)
 	}
 	if err := run(func() error {
 		expired := c.TickBuffs(20)
@@ -115,7 +118,7 @@ func TestBuffTagsDriveDerivedStates(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	want := "[1 true 2 true 1 false 2 false 1 true 1 false]"
+	want := "[1 true 2 true 2 false 1 false 1 true 1 false]"
 	if fmt.Sprint(seen) != want {
 		t.Fatalf("watchers saw %v, want %v", seen, want)
 	}

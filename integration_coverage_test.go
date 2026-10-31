@@ -570,7 +570,7 @@ var generatedRealDependencyElsewhere = []struct {
 	{"TestNestGameLoad", "scripts/perf/nest-game.sh", "^TestNestGameLoad$", "性能入口"},
 	{"TestSpatialComponentNestCommitAndRollback", "scripts/perf/nest-game.sh", "^TestSpatialComponentNestCommitAndRollback$", "nest-game.sh --check-spatial，与负载同一份生成流程"},
 	{"TestHeartbeatDriverTicksGeneratedUnits", "scripts/perf/nest-game.sh", "^TestHeartbeatDriverTicksGeneratedUnits$", "nest-game.sh --check-heartbeat（D20 第 4 期心跳驱动接线短测），与负载同一份生成流程"},
-	{"TestGeneratedGateNestDAOAndWAL", "codegen/internal/roost/demo_test.go", "^TestGeneratedGateNestDAOAndWAL$", "TestGateGeneratedBusinessConsumer 把它写进新生成的 game-demo 后运行"},
+	{"TestGeneratedGateNestDAOAndWAL", "codegen/internal/roost/demo_test.go", "^TestGeneratedGate(NestDAOAndWAL|TransportSelection)$", "TestGateGeneratedBusinessConsumer 把它写进新生成的 game-demo 后运行"},
 	{"TestSagaNativeStepsAndEffectRealDependencies", "codegen/internal/roost/add_saga_test.go", "^TestSagaNativeStepsAndEffectRealDependencies$", "TestGeneratedSagaNativeStepsAndEffectConsumer 把 testdata/saga_native 复制进新生成的工程后运行"},
 }
 

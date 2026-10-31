@@ -195,3 +195,7 @@ async 接受写入后允许锁外投影先于 WAL fsync；这符合“不保证�
 当前 CommitRecord digest 来自 JSON。改结构字段可能改变同一记录的 digest；版本升级前须停止旧进程并排空 WAL / outbox，不能用新二进制盲目重放旧格式未确认记录。当前尚未部署，不提供历史 digest 兼容。2026-10-08 维护者授权 WAL 单路径收敛，取代此前对本组 API 的 C8 保留决定：删除 `nestwal.Committer` / `OpenRuntime`，正式提交与投影统一使用 `engine.Projector` / `Assembly`，不扩展删除其他 C8 API。
 
 WAL 只支持 codec 7，旧 codec 5/6 明确拒绝；移除 `writer_version` 配置与 Mutation 旧字段。升级先停旧进程、完成需保留数据的落库，再使用新 WAL 目录；不自动删除旧文件或推进 checkpoint。
+
+## 回滚后的内存派生状态
+
+`RollbackTx.AfterRollback(owner, fn)` 按 owner 去重登记，只在全部逆操作成功后、实体锁仍持有时执行。事务已经关闭，fn 只能重建内存派生状态，不写 DAO、不做 I/O、不发消息或奖励；回调 panic 转为回滚错误，其他已登记回调仍尝试执行。提交或 abandon 清掉登记，重复 Rollback 不重复执行。State 使用它按差补发 `Change.Rollback=true`，包括 Buff 派生状态和门控冻结；已取消动作不会重新创建。

@@ -345,3 +345,6 @@ func (s *State) Result() (int64, string, error) {
 	}
 	return s.Winner, s.Digest(), nil
 }
+
+// Profile 是结算后给本人的资产视图，不包含其他玩家资产。
+type Profile struct{ Gold, Wins, Losses int64 }

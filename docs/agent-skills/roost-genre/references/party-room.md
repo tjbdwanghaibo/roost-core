@@ -150,3 +150,15 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/part
 - `docs/framework/guide/10-time.md` §1A（业务时间）、§4（实体定时器）、§4A（心跳）
 - `docs/framework/TOWER-DEFENSE-INTEGRATION.md` 第一部分（房间实体、命令序号、多实体领奖讲得最细，PARTY §1 建议先读）
 - `docs/maintenance/KNOWN-LIMITS.md`“匹配的弹性人数成局与补位”、“游戏接入验收”派对房间行与表下房间内同步一条；`docs/maintenance/FEATURE-2026-10-31-match-flexible-grouping.md`（方案 A / B）、`FEATURE-2026-10-31-room-sync-groups.md`
+
+## v1.35.0 起的公共 Robot 接线
+
+手工生成 party-room 时，在最终 `roost generate` 前执行（`genre` 取本篇对应脚本名）：
+
+```sh
+python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" "$genre"
+```
+
+该步骤安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络验收；之后仍须正式 generate。自定义 module 由安装器读取 go.mod。最稳妥的完整顺序直接使用同检出的玩法脚本。新增测试覆盖两个动作、重试、TCP 重连、非法命令和不存在玩家；不是完整业务恢复或真实存储验收。
+
+验收数量与限制统一见 [Robot 手册](../../../framework/ROBOT.md)，不要沿用历史版本的通过数。

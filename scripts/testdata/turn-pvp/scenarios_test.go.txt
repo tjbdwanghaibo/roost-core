@@ -1,0 +1,53 @@
+package handler
+
+import "testing"
+
+func TestScenarioTurnOrder(t *testing.T) {
+	f := newScenario(t)
+	f.refuse(t, 1, f.command(t, 1, "attack"))
+	f.do(t, 0, "attack")
+	f.do(t, 1, "attack")
+	s := f.state(t)
+	if s.Turn != 0 || s.HP != [2]int{2, 2} {
+		t.Fatal(s)
+	}
+}
+func TestScenarioTimeoutConsumesOneTurn(t *testing.T) {
+	f := newScenario(t)
+	f.now.Add(90000)
+	f.refuse(t, 0, f.command(t, 0, "attack"))
+	f.do(t, 1, "timeout")
+	s := f.state(t)
+	if s.Turn != 1 || s.HP[0] != 2 || s.Deadline != f.now.Load()+30000 {
+		t.Fatal(s)
+	}
+	f.refuse(t, 0, f.command(t, 0, "timeout"))
+}
+func TestScenarioTerminalCannotAttack(t *testing.T) {
+	f := newScenario(t)
+	for i := 0; i < 5; i++ {
+		f.do(t, i%2, "attack")
+	}
+	s := f.state(t)
+	if !s.Finished || s.Winner != 0 {
+		t.Fatal(s)
+	}
+	f.refuse(t, 1, f.command(t, 1, "attack"))
+}
+func TestScenarioReconnectReadsAuthoritativeTurn(t *testing.T) {
+	f := newScenario(t)
+	f.do(t, 0, "attack")
+	s := f.state(t)
+	if s.Turn != 1 || s.Revision != 1 {
+		t.Fatal(s)
+	}
+	c := f.command(t, 1, "attack")
+	if _, err := s.Apply(f.players[1].ID(), c, f.now.Load()); err != nil {
+		t.Fatal(err)
+	}
+	f.do(t, 1, "attack")
+	live := f.state(t)
+	if live.HP != s.HP || live.Turn != s.Turn {
+		t.Fatal("decoded state diverged")
+	}
+}

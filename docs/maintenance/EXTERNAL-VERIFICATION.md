@@ -1,8 +1,10 @@
 # 外部验证操作清单
 
+本表主要记录服务端验收；新 native 客户端的 Windows/Android/iOS 等平台状态见 [client/cpp](../../client/cpp/README.md)，不沿用服务端 Windows 排除规则。
+
 这是按需执行的验收表，不要求接入第一天完成全部项目。先按部署计划选择网络、故障切换或容量场景，再准备表中环境；没有相应环境的项应保留未验证。
 
-以 v1.24.0 发布验收为当前状态：本机真实资源故障矩阵21/21、Remote 1h、Nest/Sync/Saga声明负载已完成，详见 [性能报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)。下表保留外部场景的操作方法，不把历史版本的本机验证扩张为跨机或生产保证。E14精确崩溃窗口已验收；E25 Windows不在保证范围。
+历史 v1.24.0 发布验收基线：本机真实资源故障矩阵21/21、Remote 1h、Nest/Sync/Saga声明负载已完成，详见 [性能报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)。下表保留外部场景的操作方法，不把历史版本的本机验证扩张为跨机或生产保证。E14精确崩溃窗口已验收；E25 Windows不在保证范围。
 
 最近一次本机故障矩阵：2026-10-29 v1.31.0 发布后在 main `5c85223c`（Remote 链路与 tag 逐字相同）上补跑两次，均 21/21，生成工程 Remote 功能验收通过（[v1.31.0 验收补记](../release/v1.31.0-VALIDATION.md#v10-addendum)、[逐格结果](../performance/benchmarks/remote-matrix-20261029/README.md)）。仍是共享隔离环境的单机证据，不改变下表跨机 / Linux 项的状态。
 

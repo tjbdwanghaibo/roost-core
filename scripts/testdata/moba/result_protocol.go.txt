@@ -1,0 +1,15 @@
+package protocoldef
+
+//roost:proto package=game.protocol go_package=example.com/moba-practice/protocol/pb;pb
+
+type BattleResult struct {
+	Winner int64  `pb:"1"`
+	Digest string `pb:"2"`
+	Gold   int64  `pb:"3"`
+	Wins   int64  `pb:"4"`
+	Losses int64  `pb:"5"`
+}
+type BattleResults interface {
+	//roost:msg id=15003 tags=push
+	Result(BattleResult)
+}

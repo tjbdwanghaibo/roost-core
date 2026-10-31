@@ -494,7 +494,6 @@ type Piece struct {
 		`persistChangeHasPath\(change, "([^"]+)"`: persisted,
 		`names = append\(names, "([^"]+)"\)`:      persisted,
 		`WireName: "([^"]+)"`:                     tags,
-		`doc\["([^"]+)"\]`:                        tags,
 	} {
 		matches := regexp.MustCompile(name).FindAllStringSubmatch(source, -1)
 		if len(matches) == 0 {

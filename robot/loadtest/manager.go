@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +20,8 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
 const DefaultHistoryLimit = 20
@@ -66,6 +70,7 @@ type RunnerFactory func(runID string, profile string, cfg Profile) Runner
 // consumes instead of grepping JSON.
 type Threshold struct {
 	// Metric selects what to assert:
+	//   drop_rate         dropped or failed launches / scheduled arrivals
 	//   error_rate        Failure / (Success+Failure), 0..1
 	//   p50/p90/p95/p99   quantile of the scenario cost histogram (ok runs)
 	Metric string `json:"metric"`
@@ -174,28 +179,51 @@ const (
 	ThresholdReasonUnknownMetric = "unknown_metric"
 )
 
+// RunConfig omits credentials and transport headers from the published report.
+type RunConfig struct {
+	Executor        runner.Executor `json:"executor"`
+	Rate            float64         `json:"rate"`
+	MaxConcurrent   int             `json:"max_concurrent"`
+	Seed            int64           `json:"seed"`
+	DurationSeconds float64         `json:"duration_seconds"`
+	Ramp            runner.Ramp     `json:"ramp"`
+	Stages          []runner.Stage  `json:"stages,omitempty"`
+	Transport       string          `json:"transport"`
+}
+
 type RunSnapshot struct {
-	RunID       string            `json:"run_id"`
-	Profile     string            `json:"profile"`
-	State       RunState          `json:"state"`
-	StopReason  StopReason        `json:"stop_reason,omitempty"`
-	StartedAtMS int64             `json:"started_at_ms"`
-	EndedAtMS   int64             `json:"ended_at_ms,omitempty"`
-	Count       int               `json:"count"`
-	Scenario    string            `json:"scenario"`
-	Stats       StatsSnapshot     `json:"stats"`
-	Thresholds  []ThresholdResult `json:"thresholds,omitempty"`
-	QuantilesMS map[string]int64  `json:"quantiles_ms,omitempty"`
-	Error       string            `json:"error,omitempty"`
+	Messages           *session.Report          `json:"requests,omitempty"`
+	Traffic            *transport.TrafficReport `json:"traffic,omitempty"`
+	RequestOKPerSecond float64                  `json:"request_ok_per_second"`
+	Config             RunConfig                `json:"config"`
+	Environment        Environment              `json:"environment"`
+	Resources          Resources                `json:"robot_resources"`
+	RunID              string                   `json:"run_id"`
+	Profile            string                   `json:"profile"`
+	State              RunState                 `json:"state"`
+	StopReason         StopReason               `json:"stop_reason,omitempty"`
+	StartedAtMS        int64                    `json:"started_at_ms"`
+	EndedAtMS          int64                    `json:"ended_at_ms,omitempty"`
+	Count              int                      `json:"count"`
+	Scenario           string                   `json:"scenario"`
+	Stats              StatsSnapshot            `json:"stats"`
+	Thresholds         []ThresholdResult        `json:"thresholds,omitempty"`
+	QuantilesMS        map[string]float64       `json:"quantiles_ms,omitempty"`
+	Error              string                   `json:"error,omitempty"`
 }
 
 type StatsSnapshot struct {
-	Started     int64   `json:"started"`
-	Online      int64   `json:"online"`
-	Success     int64   `json:"success"`
-	Failure     int64   `json:"failure"`
-	Canceled    int64   `json:"canceled"`
-	FailureRate float64 `json:"failure_rate"`
+	Scheduled       int64   `json:"scheduled"`
+	DroppedCapacity int64   `json:"dropped_capacity"`
+	DroppedSchedule int64   `json:"dropped_schedule"`
+	LaunchFailed    int64   `json:"launch_failed"`
+	PeakOnline      int64   `json:"peak_online"`
+	Started         int64   `json:"started"`
+	Online          int64   `json:"online"`
+	Success         int64   `json:"success"`
+	Failure         int64   `json:"failure"`
+	Canceled        int64   `json:"canceled"`
+	FailureRate     float64 `json:"failure_rate"`
 }
 
 type Manager struct {
@@ -221,7 +249,9 @@ type runRecord struct {
 	EndedAtMS   int64
 	Error       string
 	Thresholds  []ThresholdResult
-	Quantiles   map[string]int64
+	Quantiles   map[string]float64
+	Environment Environment
+	Resources   Resources
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -452,6 +482,7 @@ func (m *Manager) start(ctx context.Context, req StartRequest) (RunSnapshot, err
 		runID = m.nextRunID(profileName)
 	}
 	rec := &runRecord{
+		Environment: environment(),
 		RunID:       runID,
 		Profile:     profileName,
 		Config:      profile,
@@ -474,12 +505,15 @@ func (m *Manager) start(ctx context.Context, req StartRequest) (RunSnapshot, err
 
 func (m *Manager) execute(rec *runRecord) {
 	start := time.Now()
+	stopResources := monitorResources()
 	err := rec.runner.Run(rec.ctx)
+	resources := stopResources()
 	ended := time.Now()
 
 	quantiles, thresholds := m.evaluate(rec)
 
 	m.mu.Lock()
+	rec.Resources = resources
 	rec.Quantiles = quantiles
 	rec.Thresholds = thresholds
 	violated := false
@@ -534,14 +568,14 @@ func (m *Manager) execute(rec *runRecord) {
 }
 
 // evaluate computes the run's quantiles and threshold verdicts.
-func (m *Manager) evaluate(rec *runRecord) (map[string]int64, []ThresholdResult) {
+func (m *Manager) evaluate(rec *runRecord) (map[string]float64, []ThresholdResult) {
 	scenarioName := rec.Config.Run.Scenario
-	quantiles := map[string]int64{}
+	quantiles := map[string]float64{}
 	for _, q := range []struct {
 		name string
 		v    float64
 	}{{"p50", 0.50}, {"p90", 0.90}, {"p95", 0.95}, {"p99", 0.99}} {
-		quantiles[q.name] = m.quantile(rec.RunID, rec.Profile, scenarioName, q.v).Milliseconds()
+		quantiles[q.name] = m.quantile(rec.RunID, rec.Profile, scenarioName, q.v).Seconds() * 1000
 	}
 	stats := statsSnapshot(rec.runner.Stats())
 	// 没有样本就没有可判定的值，阈值判违反而不是按 0 通过（RR-20261005-NC-161）：
@@ -558,6 +592,11 @@ func (m *Manager) evaluate(rec *runRecord) (map[string]int64, []ThresholdResult)
 		var actual float64
 		var samples int64
 		switch metric {
+		case "drop_rate":
+			samples = stats.Scheduled
+			if samples > 0 {
+				actual = float64(stats.DroppedCapacity+stats.DroppedSchedule+stats.LaunchFailed) / float64(samples)
+			}
 		case "error_rate":
 			actual, samples = stats.FailureRate, completed
 		case "p50", "p90", "p95", "p99":
@@ -607,7 +646,7 @@ func (m *Manager) historyLocked(limit int) []RunSnapshot {
 	}
 	out := make([]RunSnapshot, 0, limit)
 	for i := len(m.history) - 1; i >= 0 && len(out) < limit; i-- {
-		out = append(out, m.history[i])
+		out = append(out, m.history[i].clone())
 	}
 	return out
 }
@@ -673,11 +712,44 @@ func (m *Manager) nextRunID(profile string) string {
 }
 
 func (r *runRecord) snapshot() RunSnapshot {
+	var messages *session.Report
+	var traffic *transport.TrafficReport
+	var throughput float64
+	if provider, ok := r.runner.(interface {
+		MessageReport() session.Report
+		TrafficReport() transport.TrafficReport
+	}); ok {
+		m, t := provider.MessageReport(), provider.TrafficReport()
+		messages, traffic = &m, &t
+		end := r.EndedAtMS
+		if end == 0 {
+			end = time.Now().UnixMilli()
+		}
+		if elapsed := float64(end-r.StartedAtMS) / 1000; elapsed > 0 {
+			for _, item := range m.Messages {
+				throughput += float64(item.OK) / elapsed
+			}
+		}
+	}
+
 	stats := StatsSnapshot{}
 	if r.runner != nil {
 		stats = statsSnapshot(r.runner.Stats())
 	}
 	return RunSnapshot{
+		Messages: messages, Traffic: traffic, RequestOKPerSecond: throughput,
+		Config: RunConfig{
+			Executor:        r.Config.Run.Executor,
+			Rate:            r.Config.Run.Rate,
+			MaxConcurrent:   r.Config.Run.MaxConcurrent,
+			Seed:            r.Config.Run.Seed,
+			DurationSeconds: r.Config.Run.Duration.Seconds(),
+			Ramp:            r.Config.Run.Ramp,
+			Stages:          append([]runner.Stage(nil), r.Config.Run.Stages...),
+			Transport:       r.Config.Run.Transport.Type,
+		},
+		Environment: r.Environment,
+		Resources:   r.Resources,
 		RunID:       r.RunID,
 		Profile:     r.Profile,
 		State:       r.State,
@@ -700,12 +772,17 @@ func statsSnapshot(stats runner.Stats) StatsSnapshot {
 		failureRate = float64(stats.Failure) / float64(done)
 	}
 	return StatsSnapshot{
-		Started:     stats.Started,
-		Online:      stats.Online,
-		Success:     stats.Success,
-		Failure:     stats.Failure,
-		Canceled:    stats.Canceled,
-		FailureRate: failureRate,
+		Scheduled:       stats.Scheduled,
+		DroppedCapacity: stats.DroppedCapacity,
+		DroppedSchedule: stats.DroppedSchedule,
+		LaunchFailed:    stats.LaunchFailed,
+		PeakOnline:      stats.PeakOnline,
+		Started:         stats.Started,
+		Online:          stats.Online,
+		Success:         stats.Success,
+		Failure:         stats.Failure,
+		Canceled:        stats.Canceled,
+		FailureRate:     failureRate,
 	}
 }
 
@@ -727,4 +804,22 @@ func stopReasonFromContext(ctx context.Context) StopReason {
 	default:
 		return StopReasonCompleted
 	}
+}
+
+// 对外报告不能共享历史中的可变容器，否则调用方改表会改写已保留的验收证据。
+func (s RunSnapshot) clone() RunSnapshot {
+	s.Config.Stages = slices.Clone(s.Config.Stages)
+	s.Thresholds = slices.Clone(s.Thresholds)
+	s.QuantilesMS = maps.Clone(s.QuantilesMS)
+	if s.Messages != nil {
+		m := *s.Messages
+		m.Messages = slices.Clone(m.Messages)
+		m.Slowest = slices.Clone(m.Slowest)
+		s.Messages = &m
+	}
+	if s.Traffic != nil {
+		traffic := *s.Traffic
+		s.Traffic = &traffic
+	}
+	return s
 }

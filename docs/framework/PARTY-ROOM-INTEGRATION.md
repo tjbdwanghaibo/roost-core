@@ -323,3 +323,7 @@ ROOST_PARTY_ROOM_REAL=1 bash scripts/test-party-room-generated.sh
 派对玩法、计分、房间码与大厅缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢输入、重复发奖、记分板泄露 State 字段、回滚后仍推出去、心跳或定时器在结算后残留、生成物编译失败，则应在公共实现中修复。本夹具在当前 main 上没有触发框架或生成器缺陷；第 8 节的“房间同步没有生成器入口、与 self_sync 共用 Manager 尚未确认”是能力缺口，登记在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收)。100ms 档位与 30 秒期限是样例，不构成延迟或吞吐承诺。
 
 尚未实施或验收：正式客户端与公网鉴权、接入层到 `Connect` 的票号签发、房间码短码服务、大厅列表、存储原生补位（业务层补位见第 6A 节）、掉线托管与 AI 补位、观战、跨 sid 发奖、房间跨机接管、房间数量与推送带宽的容量（均不因此算框架缺陷）。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要。
+
+## 当前 main 的 Robot 验收补充
+
+同检出的生成脚本已接入公共 Robot：新增真实 TCP/PB → 正式 Sender/Nest → DAO 的两步业务、重试、TCP 重连及拒绝路径断言，并生成 `cmd/robot` 与 `loadtest/README.md`。 当前通过数、生成方式和未验收边界以 [Robot 手册](ROBOT.md) 为准；本篇历史版本的计数不代表本轮数量。替身鉴权/持久化结果不能替代上线验收。

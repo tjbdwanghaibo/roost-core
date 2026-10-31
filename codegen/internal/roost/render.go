@@ -356,9 +356,13 @@ func main() {
 }
 
 func renderBootstrap(m Manifest) string {
+	playerTCP := contains(m.Access["player"].Transports, "tcp")
 	imports := map[string]string{
 		"github.com/tjbdwanghaibo/roost-core/framework/app":           "",
 		"github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo": "",
+	}
+	if playerTCP {
+		imports["github.com/tjbdwanghaibo/roost-core/wiring/gate"] = "gatewiring"
 	}
 	allMods := allProjectMods(m)
 	// Persistence and Remote Entity constructors require instance-scoped
@@ -461,7 +465,17 @@ func renderBootstrap(m Manifest) string {
 		}
 		fmt.Fprintf(&b, "var %s = selfsync.MustNew(selfsync.Config{Entities: EntityAccess, Kind: %s.EntityKind%s, MessageID: msgid.MsgSelfSync%s})\n", selfSyncVar, selfSyncEntity, toPascal(selfSyncEntity), groups)
 	}
-	b.WriteString("\nfunc New() (*app.App, error) {\n")
+	if playerTCP {
+		b.WriteString("\n// Options 只选择玩家接入方式；GameIngress 非空时不再启动本地 TCP。\ntype Options struct { GameIngress *gatewiring.Options }\n\nfunc New() (*app.App, error) { return NewWithOptions(Options{}) }\n\nfunc playerTransport(options Options, local app.Mod) app.Mod {\n if options.GameIngress == nil { return local }\n")
+		if selfSyncEnabled(m) {
+			fmt.Fprintf(&b, " return accessplayertcp.NewIngressMod(*options.GameIngress).WithSelfSync(%s)\n", selfSyncVar)
+		} else {
+			b.WriteString(" return accessplayertcp.NewIngressMod(*options.GameIngress)\n")
+		}
+		b.WriteString("}\n\nfunc NewWithOptions(options Options) (*app.App, error) {\n")
+	} else {
+		b.WriteString("\nfunc New() (*app.App, error) {\n")
+	}
 	// Static registration first, before app.New: an entity builder registered
 	// later than a Mod's Init is already too late for a Mod that resolves
 	// entities in Provide.
@@ -489,6 +503,9 @@ func renderBootstrap(m Manifest) string {
 			fmt.Fprintf(&b, "\ta.RegisterServer(app.ServiceName(%q), service%s.New()", name, safeIdent(name))
 		}
 		for _, constructor := range serviceModConstructors(m, name, allMods) {
+			if playerTCP && strings.HasPrefix(constructor, "accessplayertcp.NewMod()") {
+				constructor = "playerTransport(options, " + constructor + ")"
+			}
 			fmt.Fprintf(&b, ",\n\t\t%s", constructor)
 		}
 		b.WriteString(")\n")

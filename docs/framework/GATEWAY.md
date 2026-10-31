@@ -91,3 +91,48 @@ Game Ingress 的绑定在激活回调（`OnActive`）执行期间已可按玩家
 已验证正式生成 PB/Nest/双实体 DAO/文件 WAL/Sync、实际 NATS 双 Gate 双 Game、Lockstep 输入/追帧/重连、旧事件隔离、ACK 丢失、广播去重、控制容量与预算、真实 ACL、Stop 重试。测试使用本机隔离资源，鉴权权威、存储和进程范围按[功能验收记录](../release/v1.25.0-VALIDATION.md)逐项说明；不声称已完成独立多进程、真实 Mongo、Linux 实机或跨机完整矩阵。
 
 完整配置、协议、阶段验收和未验收项见[设计与实施契约](GATEWAY-IMPLEMENTATION.md)。目录升级没有旧 import alias，旧工程必须重新生成并编译；稳定基线历史性能不能替代新增 Gate 的结果。
+
+## 生成工程与标准 C# 客户端联合链路
+
+自 v1.35.0 起生成 bootstrap 提供启动选项，默认仍是本地 TCP。独立 Gate 模式下，Game 选择内部 Ingress，复用同一业务协议注册与 Nest；不会同时注册本地 TCP Mod：
+
+```go
+options := gatewiring.DefaultOptions()
+// 配置本环境的 namespace、鉴权器与业务就绪条件等，见上文 Gate 契约。
+a, err := bootstrap.NewWithOptions(bootstrap.Options{GameIngress: &options})
+if err == nil {
+    err = a.Execute()
+}
+```
+
+该选项不替代独立 Gate 服务的启动、NATS/单实例身份能力和鉴权配置。启用 `access.player.self_sync` 时，生成器把同一个 SelfSync 接到所选 Ingress；组同步仍共用它。没有该开关的业务继续显式配置自己的 Sync Manager。
+
+联合验证入口：
+
+```bash
+bash scripts/test-gate-client.sh
+```
+
+需要 Go、.NET 10、nats-server。脚本创建只监听 loopback 的临时 NATS，随机端口，退出时仅关闭自己的进程。正式 CLI 生成 game-demo，C# 编译该工程的业务 proto、MessageIds、DAO proto 和 Apply，再经真实 TCP → Gate → NATS → 生成 Game Ingress → PB 注册处理器 → 生成 Nest Sender → 两实体 DAO → strict 本地 WAL → on_change → Gate → C# GameClient。
+
+验证内容：无效票据拒绝、Full、AddExp PB 应答和 Delta、服务端取消订阅后的 Remove、手动重连后 Full 等于已提交状态；同时核对一次事务包含 Player/World 两实体且 WAL 只追加一次。Sync 的兜底间隔为一小时，因此更新不能靠 20Hz 定时扫描通过。默认 TCP 与 Gate 的启动选项分别验证。生成工程内 Go 联合测试启用 race。
+
+C# 入口位于 `client/dotnet/Roost.Client.Demo`，使用 SDK 回调，不另写网络解码器。Remove 的触发是测试宿主收到客户端观察屏障后调用正式 Unsubscribe，不向生产业务协议添加测试控制消息。
+
+边界：这是同机跨语言联合验证。鉴权器使用固定测试票据与 Principal，不代表 account/Redis 登录票生命周期验收；业务处理器绑定正式 AddExp 协议和 Sender，但宿主注入内存实体 getter 和记录投影器。WAL 为真实文件，Mongo 落库、崩溃恢复、跨机网络、Unity Editor/IL2CPP、多人负载均未由此验证。此 C# 入口依赖测试宿主的移除观察屏障，不是可直接连接任意生产地址的通用机器人。
+
+本轮本机 macOS 验证（2026-10-31）：联合脚本最终运行通过，生成工程内两条测试均执行、零 SKIP，Go 侧启用 race；`go test ./codegen/internal/roost`（约 236 秒）、`go test -count=1 .`、C# SDK 自测与格式检查通过。未据此给出吞吐量或延迟性能结论。
+
+同一宿主也可验证 native C++：`ROOST_GATE_CPP=1 ROOST_PROTOBUF_PREFIX=/path/to/protobuf bash scripts/test-gate-client.sh`。C++ 使用正式生成消息类型、通用 DAO 视图库与相同 AddExp 路由（由 Go 生成 msgid 传入），验证内容和存储/鉴权替身边界与上文一致；2026-10-31 本机 macOS 已通过。
+
+### 真实账号、Gate 与存储联合验收
+
+自 v1.35.0 提供 `bash scripts/test-gate-real.sh`。先用隔离集成环境启动 MongoDB 副本集、Redis、NATS，并在当前 shell source 该环境的 `env.sh`；脚本要求 `ROOST_DATAENGINE_IT_MONGO_URI`、`ROOST_DATAENGINE_IT_REDIS_ADDR`、`ROOST_DATAENGINE_IT_NATS_URL`，不会启动或停止共享服务。需要 Go 与 .NET SDK。
+
+该入口沿用上面的生成工程与 C# 客户端，用正式 account Service、Redis Stores、NATS MessagePack RPC 完成 Login/CreateRole/SelectRole/ValidateSession，再把取得的会话票据交给 Gate 和 Game 鉴权。验证错误身份被拒、角色创建幂等、其他账号不能选择该角色；票据通过子进程环境传递，不打印到日志。上游身份签发器是每轮随机密钥的测试 HMAC verifier，不代表接入了 Steam/Apple 等第三方账号平台。
+
+业务仍走正式 AddExp PB、Nest、两个生成 DAO、strict 文件 WAL 与 on_change；投影使用实际 MongoStore（副本集 majority+journal）。随后重建 account Service 验证 Redis 会话，关闭并重开 Mongo 客户端与 WAL/投影器，重复投影同一事务，核对两实体数据、版本及 schema 不变，并用生成的 RestorePersisted 从 Mongo 冷水合新 DAO。在线业务的实体 getter 仍由测试宿主提供，未验证生产 Repository 的进程启动装配。
+
+2026-11-01 在 macOS arm64、MongoDB 8.0.32 隔离环境中，C# 和 C++ 两条链均通过，生成 Go 测试启用 race、零 SKIP，Full/Delta/Remove/重连与存储检查均执行。C++ 复跑方式：在同一环境中设置 `ROOST_GATE_REAL=1 ROOST_GATE_CPP=1 ROOST_PROTOBUF_PREFIX=<本机 protobuf 安装目录>`，运行 `go test -count=1 -v -timeout 10m -run '^TestGateGeneratedBusinessConsumer$' ./codegen/internal/roost`，需要 CMake/C++ 工具链。
+
+这里的恢复是对象/驱动/WAL 重开及 DAO 冷水合，不是进程 SIGKILL、断电或 Redis 重启。未验证 Linux、跨机、Unity Editor/IL2CPP、其他设备、多玩家容量与第三方身份平台；该结果也不替代各玩法自己的真实持久恢复验证。

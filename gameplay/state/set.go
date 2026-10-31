@@ -2,6 +2,7 @@ package state
 
 import (
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"slices"
 )
 
@@ -12,6 +13,8 @@ const maxNotifyRounds = 64
 type Change struct {
 	ID     ID
 	Active bool
+	// Rollback 表示事务恢复后的内存重建通知，不得产生外部副作用。
+	Rollback bool
 }
 
 // Handle 标识一次 Watch，用于 Unwatch。
@@ -33,9 +36,8 @@ type Requirement struct {
 //     值与上次交出的值，不同才通知。所以观察者看到的总是交替的 true / false，不会连收两次同一个值。
 //   - 观察者里改状态立即生效，它引出的通知排到本轮之后（最外层调用返回前做完）；互相触发超过 64 轮截停，经
 //     OnError 报告 ErrNotifyRunaway。
-//   - 回滚不通知：事务回滚时 StateDao 回到事务开始的来源集合，观察者不会被调用（回滚期间不能再改别的组件）。观察者
-//     的副作用（例如经 Gate 冻结了动作组）因此保留，直到下一次任何状态改动或 Refresh——那时按差补发，观察者看到的值
-//     与实际重新一致。业务在 handler 回滚后需要立即一致时调 Refresh。
+//   - 全部 DAO 成功回滚后按差通知（Change.Rollback=true），用来恢复内存派生状态。
+//     回滚通知不能修改状态或 DAO，不能发送消息、奖励或其他外部副作用。
 type Set struct {
 	dao       *StateDao
 	catalog   *Catalog
@@ -48,6 +50,7 @@ type Set struct {
 	seen map[ID]bool //roost:cache
 	// notifying 为真表示正在通知（含观察者里的改动），改动只记下、由正在进行的通知循环补发。
 	notifying bool //roost:cache
+	restoring bool //roost:cache
 }
 
 type watch struct {
@@ -115,6 +118,9 @@ func (s *Set) RemoveSource(src Source) ([]ID, error) {
 }
 
 func (s *Set) change(id ID, src Source, add bool) error {
+	if s.restoring {
+		return nest.ErrTransactionClosed
+	}
 	def, ok := s.catalog.Def(id)
 	if !ok {
 		return fmt.Errorf("%w: %d", ErrUnknownState, id)
@@ -130,6 +136,10 @@ func (s *Set) change(id ID, src Source, add bool) error {
 // Changed 由派生状态的数据拥有者在数据变化后调用：标同步脏（声明了 Sync 的），并按差通知观察者。不确定哪些状态受
 // 影响时可以多传，没有变化的不会通知。
 func (s *Set) Changed(ids ...ID) {
+	if s.restoring {
+		s.report(nest.ErrTransactionClosed)
+		return
+	}
 	for _, id := range ids {
 		if def, ok := s.catalog.Def(id); ok && def.Sync {
 			s.dao.tracker.MarkSync(FieldStates)
@@ -251,6 +261,16 @@ func (w *Watcher) Close() {
 // notify 按差通知：比较每个被观察状态的当前值与上次交出的值，不同就记下新值、依次调用该状态的观察者。观察者里的
 // 改动立即生效，它们引出的差在下一轮补发；正在通知时（观察者里的改动）只返回，由外层循环接着做。
 func (s *Set) notify() {
+	if !s.restoring && len(s.watches) != 0 {
+		if tx := nest.CurrentRollbackTx(); tx != nil {
+			_ = tx.AfterRollback(s, func() error {
+				s.restoring = true
+				defer func() { s.restoring = false }()
+				s.notify()
+				return nil
+			})
+		}
+	}
 	if s.notifying || len(s.watches) == 0 {
 		return
 	}
@@ -286,7 +306,7 @@ func (s *Set) diff() []Change {
 		}
 		if now := s.Has(id); now != last {
 			s.seen[id] = now
-			changes = append(changes, Change{ID: id, Active: now})
+			changes = append(changes, Change{ID: id, Active: now, Rollback: s.restoring})
 		}
 	}
 	return changes

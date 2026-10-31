@@ -7,13 +7,14 @@
 # 冷加载、由驱动投递循环补算一次离线收益并按时投递下一秒的刷新、领取结算，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-idle-sim.XXXXXX")"
+review_root="${ROOST_GENRE_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/roost-idle-sim.XXXXXX")}"
+mkdir -p "$review_root"
 project_root="$review_root/project"
 echo "Idle sim generated consumer and logs: $review_root"
 # 成功后删除临时工程；失败或 ROOST_IDLE_SIM_KEEP=1 时保留，便于查看生成日志与工程。
 succeeded=0
 cleanup() {
-  if [[ "$succeeded" == 1 && "${ROOST_IDLE_SIM_KEEP:-0}" != 1 ]]; then
+  if [[ -z "${ROOST_GENRE_OUTPUT:-}" && "$succeeded" == 1 && "${ROOST_IDLE_SIM_KEEP:-0}" != 1 ]]; then
     rm -rf "$review_root"
   else
     echo "Idle sim generated consumer kept: $review_root" >&2
@@ -55,12 +56,13 @@ cp "$repo_root/scripts/testdata/idle-sim/timer_handlers.go.txt" game/entities/pl
 cp "$repo_root/scripts/testdata/idle-sim/handlers.go.txt" game/handler/idle_sim.go
 cp "$repo_root/scripts/testdata/idle-sim/gameplay_test.go.txt" game/handler/idle_sim_test.go
 gofmt -w db/def/player.go game/idlesim/*.go game/entities/player/timer_handlers.go game/handler/idle_sim*.go
+python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" idle-sim
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestIdleSim' ./game/idlesim ./game/handler | tee "$review_root/test.log"
-# 12 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 13 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestIdleSim' "$review_root/test.log" || true)"
-if [[ "$passed" != 12 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 12 passing TestIdleSim scenarios, got $passed" >&2
+if [[ "$passed" != 13 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 13 passing TestIdleSim scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...

@@ -1,0 +1,20 @@
+package protocoldef
+
+//roost:proto package=game.protocol go_package=GENRE_MODULE/protocol/pb;pb
+
+type ScenarioCommandRequest struct {
+	RoomID   int64  `pb:"1"`
+	Seq      uint64 `pb:"2"`
+	Revision uint64 `pb:"3"`
+	Kind     string `pb:"4"`
+	Choice   int32  `pb:"5"`
+}
+type ScenarioCommandResponse struct {
+	Code     int32  `pb:"1"`
+	Revision uint64 `pb:"2"`
+	Reward   int32  `pb:"3"`
+}
+type ScenarioProtocol interface {
+	//roost:msg id=15001 tags=local
+	ScenarioCommand(ScenarioCommandRequest) ScenarioCommandResponse
+}

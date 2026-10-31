@@ -26,6 +26,8 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
+// v1.35.0：DAO 的 PB 字段补丁编码与生成 Robot 使用新的协议表、PlayerTCPType、CallChecked 和运行报告；
+// 新生成物不能配旧 core，默认 DAO 同步编码号由 BSON 1 改为 PB 2，服务端与客户端必须一起重新生成。
 // v1.34.0：声明了 access.player.sync_groups 的工程，生成的 bootstrap 与实体包 sync_group.go 调用只在 v1.34.0
 // 才有的 selfsync.Groups / selfsync.MustNewGroups / selfsync.Config.Groups；接入更早的 core 时编译失败。
 // v1.32.0：//roost:web 写了 compress=gzip（含与 errors= 同用）或 status=response 的路由，生成物调用只在 v1.32.0

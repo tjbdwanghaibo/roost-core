@@ -18,7 +18,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
 	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type syncClientValue struct {
@@ -265,8 +264,24 @@ func (load *syncGameLoad) apply(index int, raw []byte) error {
 				if update.Full {
 					previous = syncClientObject{}
 				}
-				if err := bson.Unmarshal(update.Payload.BytesCopy(), &previous.value); err != nil {
+				patch, err := UnmarshalSyncStateDao(update.Payload.BytesCopy())
+				if err != nil {
 					return err
+				}
+				if patch.X != nil {
+					previous.value.X = patch.X.Value
+				}
+				if patch.HP != nil {
+					previous.value.HP = patch.HP.Value
+				}
+				if patch.PlannedNS != nil {
+					previous.value.Planned = patch.PlannedNS.Value
+				}
+				if patch.ChangedNS != nil {
+					previous.value.Changed = patch.ChangedNS.Value
+				}
+				if patch.CommittedNS != nil {
+					previous.value.Committed = patch.CommittedNS.Value
 				}
 				previous.version = update.Version
 				client.objects[update.SubjectID] = previous

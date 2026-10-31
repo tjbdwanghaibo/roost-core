@@ -1,0 +1,39 @@
+package scenarionet
+
+import (
+	"context"
+
+	syncsender "GENRE_MODULE/game/handler/syncsender"
+	"GENRE_MODULE/game/rules"
+	"GENRE_MODULE/protocol/msgid"
+	"GENRE_MODULE/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+)
+
+// Dispatch 是正式 PB → Sender 的边界；actor 只取握手身份，成员权限仍由持锁 handler 检查。
+// 房间创建/分配由业务宿主负责；客户端不能借此端点初始化房间或指定其他玩家身份。
+func Dispatch(engine *nest.NestMgr) gateway.TCPDispatch {
+	sender := syncsender.NewScenarioSender(engine)
+	return func(ctx context.Context, session gateway.Session, id, seq uint32, kind wire.PayloadKind, data []byte) (any, error) {
+		if id != msgid.MsgScenarioCommand || kind != wire.PayloadProtobuf {
+			return nil, gateway.ErrInvalidRequest
+		}
+		request, err := pb.UnmarshalScenarioCommandRequest(data)
+		if err != nil {
+			return nil, err
+		}
+		result, err := sender.MultiSync_ScenarioCommand(ctx, request.RoomID, session.Principal().PlayerID, rules.Command{Seq: request.Seq, Revision: request.Revision, Kind: request.Kind, Choice: int(request.Choice)})
+		response := &pb.ScenarioCommandResponse{Revision: result.Revision, Reward: int32(result.Reward)}
+		if err != nil {
+			response.Code = 1
+		}
+		payload, err := pb.MarshalScenarioCommandResponse(response)
+		if err != nil {
+			return nil, err
+		}
+		return &gateway.TCPResponse{MessageID: id, Sequence: seq, Payload: payload}, nil
+	}
+}

@@ -357,42 +357,47 @@ func TestGateFreezesActionGroupsWhileStatesHold(t *testing.T) {
 	}
 }
 
-// 门控与回滚：状态随回滚撤销而冻结计数不回滚（runner 不随事务回滚）；下一次任何状态改动、或 Refresh，按差纠正——
+// 门控与回滚：全部 DAO 恢复后立即纠正冻结计数，不等待下一次业务改动——
 // 每条规则至多持有一次冻结，不会累积。
 func TestGateRealignsAfterARolledBackStateChange(t *testing.T) {
-	f := newFixture(t)
-	h := f.add(3)
-	if err := f.run(runUndo, h, func(h *holder) error {
-		if err := h.set.Add(Rooted, buff1); err != nil {
-			return err
-		}
-		return errBusiness
-	}); !errors.Is(err, errBusiness) {
-		t.Fatal(err)
-	}
-	if rooted, frozen := read2(f, h); rooted || !frozen {
-		t.Fatalf("after the rollback: rooted %v frozen %v (documented: the freeze stays until the next notification)", rooted, frozen)
-	}
-	f.mustRun(runUndo, h, func(h *holder) error { return h.set.Add(Manual, action) })
-	if _, frozen := read2(f, h); frozen {
-		t.Fatal("an unrelated state change did not realign the gate")
-	}
+	for _, run := range []nest.HandlerName{runUndo, runState} {
+		t.Run(run.String(), func(t *testing.T) {
+			f := newFixture(t)
+			h := f.add(3)
+			if err := f.run(run, h, func(h *holder) error {
+				if err := h.set.Add(Rooted, buff1); err != nil {
+					return err
+				}
+				return errBusiness
+			}); !errors.Is(err, errBusiness) {
+				t.Fatal(err)
+			}
+			if rooted, frozen := read2(f, h); rooted || frozen {
+				t.Fatalf("after the rollback: rooted %v frozen %v (rollback must reconcile before returning)", rooted, frozen)
+			}
+			f.mustRun(run, h, func(h *holder) error { return h.set.Add(Manual, action) })
+			if _, frozen := read2(f, h); frozen {
+				t.Fatal("an unrelated state change did not realign the gate")
+			}
 
-	// 同样的回滚，用 Refresh 立即纠正；再加一次 rooted 后计数只有 1。
-	_ = f.run(runUndo, h, func(h *holder) error { _ = h.set.Add(Rooted, buff1); return errBusiness })
-	f.mustRun(runUndo, h, func(h *holder) error { h.set.Refresh(); return nil })
-	if _, frozen := read2(f, h); frozen {
-		t.Fatal("Refresh did not realign the gate")
-	}
-	_ = f.run(runUndo, h, func(h *holder) error { _ = h.set.Add(Rooted, buff1); return errBusiness })
-	f.mustRun(runUndo, h, func(h *holder) error { return h.set.Add(Rooted, buff2) })
-	if count := read(f, h, func(h *holder) int { return h.behavior.Runner().FreezeCount(groupMove) }); count != 1 {
-		t.Fatalf("freeze count %d after a rolled-back and a committed rooting, want 1", count)
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if len(h.errors) != 0 {
-		t.Fatalf("behavior errors %v", h.errors)
+			// 显式 Refresh 仍幂等；再加一次 rooted 后计数只有 1。
+			_ = f.run(run, h, func(h *holder) error { _ = h.set.Add(Rooted, buff1); return errBusiness })
+			f.mustRun(run, h, func(h *holder) error { h.set.Refresh(); return nil })
+			if _, frozen := read2(f, h); frozen {
+				t.Fatal("Refresh did not realign the gate")
+			}
+			_ = f.run(run, h, func(h *holder) error { _ = h.set.Add(Rooted, buff1); return errBusiness })
+			f.mustRun(run, h, func(h *holder) error { return h.set.Add(Rooted, buff2) })
+			if count := read(f, h, func(h *holder) int { return h.behavior.Runner().FreezeCount(groupMove) }); count != 1 {
+				t.Fatalf("freeze count %d after a rolled-back and a committed rooting, want 1", count)
+			}
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if len(h.errors) != 0 {
+				t.Fatalf("behavior errors %v", h.errors)
+			}
+
+		})
 	}
 }
 

@@ -1,0 +1,99 @@
+package rules
+
+import "errors"
+
+var ErrRule = errors.New("invalid or stale game command")
+
+type Command struct {
+	Seq      uint64
+	Revision uint64
+	Kind     string
+	Choice   int
+}
+type Result struct {
+	Revision uint64
+	Reward   int
+}
+type Receipt struct {
+	Command Command
+	Result  Result
+}
+
+// 状态整体放在生成 DAO，局内缓存不持有另一个可变副本；失败由正式 DAO undo 回滚。
+type State struct {
+	Members  []int64
+	Revision uint64
+	Last     map[int64]Receipt
+	Planted  bool
+	ReadyAt  int64
+	Harvests int
+	Helped   bool
+}
+
+func New(members []int64, now int64) (State, error) {
+	if len(members) != 2 || members[0] <= 0 || members[1] <= 0 || members[0] == members[1] || now <= 0 {
+		return State{}, ErrRule
+	}
+	return State{Members: append([]int64(nil), members...), Last: make(map[int64]Receipt), ReadyAt: 0}, nil
+}
+func (s *State) Apply(actor int64, cmd Command, now int64) (Result, error) {
+	if len(s.Members) != 2 || s.Last == nil {
+		return Result{}, ErrRule
+	}
+	index := -1
+	for i, id := range s.Members {
+		if id == actor {
+			index = i
+		}
+	}
+	if index < 0 || cmd.Seq == 0 {
+		return Result{}, ErrRule
+	}
+	previous := s.Last[actor]
+	if cmd.Seq == previous.Command.Seq {
+		if cmd != previous.Command {
+			return Result{}, ErrRule
+		}
+		return previous.Result, nil
+	}
+	if cmd.Seq != previous.Command.Seq+1 || cmd.Revision != s.Revision {
+		return Result{}, ErrRule
+	}
+	reward, err := s.execute(index, cmd, now)
+	if err != nil {
+		return Result{}, err
+	}
+	s.Revision++
+	result := Result{Revision: s.Revision, Reward: reward}
+	s.Last[actor] = Receipt{Command: cmd, Result: result}
+	return result, nil
+}
+
+// owner 为 Members[0]，受邀访客为 Members[1]。收益只在收获时领取；访问不延长生产期。
+func (s *State) execute(index int, cmd Command, now int64) (int, error) {
+	switch cmd.Kind {
+	case "plant":
+		if index != 0 || s.Planted || cmd.Choice != 0 {
+			return 0, ErrRule
+		}
+		s.Planted = true
+		s.ReadyAt = now + 60000
+		s.Helped = false
+	case "help":
+		if index != 1 || !s.Planted || s.Helped || now >= s.ReadyAt {
+			return 0, ErrRule
+		}
+		s.Helped = true
+		s.ReadyAt -= 10000
+	case "harvest":
+		if index != 0 || !s.Planted || now < s.ReadyAt {
+			return 0, ErrRule
+		}
+		s.Planted = false
+		s.Harvests++
+		return 5, nil
+	default:
+		return 0, ErrRule
+	}
+	return 0, nil
+}

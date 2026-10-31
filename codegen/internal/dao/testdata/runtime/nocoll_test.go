@@ -15,7 +15,6 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestANoCollectionDaoReplicatesAndNeverPersists(t *testing.T) {
@@ -41,11 +40,11 @@ func TestANoCollectionDaoReplicatesAndNeverPersists(t *testing.T) {
 		t.Fatal("the move left no sync dirty bits; nothing would be replicated")
 	}
 	payload := wraith.MarshalSync(mask)
-	var doc bson.M
-	if err := bson.Unmarshal(payload, &doc); err != nil {
+	patch, err := UnmarshalSyncWraithDao(payload)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, leaked := doc["scratch"]; leaked {
+	if _, leaked := patch.Values()["scratch"]; leaked {
 		t.Fatal("a nosync field reached the sync payload")
 	}
 	mirror := NewWraithDao()

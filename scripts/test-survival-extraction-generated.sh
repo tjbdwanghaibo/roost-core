@@ -7,13 +7,14 @@
 # 新进程冷加载、由驱动投递循环一次补触发完成到期事件、续局兑付，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-survival-extraction.XXXXXX")"
+review_root="${ROOST_GENRE_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/roost-survival-extraction.XXXXXX")}"
+mkdir -p "$review_root"
 project_root="$review_root/project"
 echo "Survival extraction generated consumer and logs: $review_root"
 # 成功后删除临时工程；失败或 ROOST_SURVIVAL_EXTRACTION_KEEP=1 时保留，便于查看生成日志与工程。
 succeeded=0
 cleanup() {
-  if [[ "$succeeded" == 1 && "${ROOST_SURVIVAL_EXTRACTION_KEEP:-0}" != 1 ]]; then
+  if [[ -z "${ROOST_GENRE_OUTPUT:-}" && "$succeeded" == 1 && "${ROOST_SURVIVAL_EXTRACTION_KEEP:-0}" != 1 ]]; then
     rm -rf "$review_root"
   else
     echo "Survival extraction generated consumer kept: $review_root" >&2
@@ -64,12 +65,13 @@ cp "$repo_root/scripts/testdata/survival-extraction/timer_handlers.go.txt" game/
 cp "$repo_root/scripts/testdata/survival-extraction/handlers.go.txt" game/handler/survival_extraction.go
 cp "$repo_root/scripts/testdata/survival-extraction/gameplay_test.go.txt" game/handler/survival_extraction_test.go
 gofmt -w db/def/*.go game/survival/*.go game/entities/survival_raid/*.go game/handler/survival_extraction*.go
+python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" survival-extraction
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSurvivalExtraction' ./game/survival ./game/handler | tee "$review_root/test.log"
-# 12 条场景（4 条规则 + 8 条 Nest）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 13 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestSurvivalExtraction' "$review_root/test.log" || true)"
-if [[ "$passed" != 12 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 12 passing TestSurvivalExtraction scenarios, got $passed" >&2
+if [[ "$passed" != 13 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 13 passing TestSurvivalExtraction scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...

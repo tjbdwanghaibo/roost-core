@@ -1,0 +1,76 @@
+package loadtest
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	generated "GENRE_MODULE/loadtest/protocol"
+	"GENRE_MODULE/protocol/msgid"
+	"GENRE_MODULE/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+)
+
+// Step 的请求来自业务视图。配置只描述动作，不提供玩家身份、服务器时间或玩法配置。
+type Step struct {
+	Request   pb.PlayRequest
+	WantCode  int32
+	Reconnect bool
+}
+
+// Commands 共用公共 Robot，既可运行验收动作，也可由业务组装持续前进的负载序列。
+// 重连后是否需要获取新业务 Epoch 取决于宿主接线，不能盲重放旧代的新写。
+func Commands(cfg runner.Config, auth robot.AuthProvider, steps []Step) *runner.Runner {
+	protocols := protocol.NewRegistry(nil)
+	generated.RegisterDefaults(protocols)
+	actions := action.NewRegistry()
+	scenarios := scenario.NewRegistry()
+	// 复制配置；多个机器人只读同一组请求，响应不能写回输入。
+	steps = append([]Step(nil), steps...)
+	scenarios.MustRegister(scenario.New("commands", scenario.NodeFunc(func(ctx context.Context, rb *robot.Context) error {
+		if len(steps) == 0 {
+			return fmt.Errorf("robot: at least one business step is required")
+		}
+		if err := rb.Do(ctx, action.NameConnect, nil); err != nil {
+			return err
+		}
+		for i, step := range steps {
+			if step.Reconnect {
+				if err := rb.Do(ctx, action.NameConnect, nil); err != nil {
+					return err
+				}
+			}
+			callCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			message, err := rb.Session().CallChecked(callCtx, msgid.MsgPlay, msgid.MsgPlay, &step.Request, func(m *session.Message) error {
+				response, ok := m.Value.(*pb.PlayResponse)
+				if !ok || response.Seq != step.Request.Seq {
+					return fmt.Errorf("invalid business response")
+				}
+				if response.Code != 0 {
+					return session.ErrRejected
+				}
+				return nil
+			})
+			cancel()
+			if err != nil && !(step.WantCode != 0 && errors.Is(err, session.ErrRejected)) {
+				return fmt.Errorf("step %d: %w", i, err)
+			}
+			response, ok := message.Value.(*pb.PlayResponse)
+			if !ok || response.Code != step.WantCode || response.Seq != step.Request.Seq {
+				return fmt.Errorf("step %d: unexpected response %#v", i, message.Value)
+			}
+		}
+		return nil
+	})))
+	cfg.Scenario = "commands"
+	cfg.Transport.Type = transport.PlayerTCPType
+	return runner.New(cfg, runner.WithAuthProvider(auth), runner.WithProtocolRegistry(protocols), runner.WithActionRegistry(actions), runner.WithScenarioRegistry(scenarios))
+}

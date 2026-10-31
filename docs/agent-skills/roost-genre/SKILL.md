@@ -1,13 +1,13 @@
 ---
 name: roost-genre
-description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正式 CLI 骨架 + 仓库 scripts/testdata 业务夹具 + go test 验收），并说明该玩法在 roost 上框架能做什么、不能做什么、容量/延迟/一致性边界与业务要自己补的部分。首批六类：SLG、MOBA 帧同步、MMORPG、卡牌/回合制 RPG、房间合作 PvE（塔防 / 生存撤离 / 自走棋）、放置 / 合成休闲。触发词：用 roost 生成 SLG/MOBA/MMO/卡牌/塔防/自走棋/放置/合成 demo、roost 做某类游戏、某类玩法在 roost 上的限制、roost 能不能做 FPS/开放世界/RTS、roost-genre、$roost-genre。
+description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正式 CLI 骨架 + 仓库 scripts/testdata 业务夹具 + go test 验收），并说明该玩法在 roost 上框架能做什么、不能做什么、容量/延迟/一致性边界与业务要自己补的部分。支持回合制 PvP、合作 Roguelike、异步社交经营，以及：SLG、MOBA 帧同步、MMORPG、卡牌/回合制 RPG、房间合作 PvE（塔防 / 生存撤离 / 自走棋）、放置 / 合成休闲。触发词：用 roost 生成 SLG/MOBA/MMO/卡牌/塔防/自走棋/放置/合成 demo、roost 做某类游戏、某类玩法在 roost 上的限制、roost 能不能做 FPS/开放世界/RTS、roost-genre、$roost-genre。
 ---
 
 # roost-genre：按玩法生成 demo 与说明边界
 
 ## 0. 先读这几条
 
-- 本 skill 随 roost-core 版本发布，权威源在 `docs/agent-skills/roost-genre/`，提供流程、限制摘要和指针。**权威内容在 roost-core 仓库**：十篇 `docs/framework/<GENRE>-INTEGRATION.md`、`scripts/test-<genre>-generated.sh`、`scripts/testdata/<genre>/`、`docs/maintenance/KNOWN-LIMITS.md`。下文链接都是**相对 roost-core 根目录**的路径；读手册时以本机检出（如 `/Users/whb/roost/roost-core`）或 module cache 里对应版本的 `docs/` 为准，不以本文转述为准。
+- 本 skill 随 roost-core 版本发布，权威源在 `docs/agent-skills/roost-genre/`，提供流程、限制摘要和指针。**权威内容在 roost-core 仓库**：各篇 `docs/framework/<GENRE>-INTEGRATION.md`、`scripts/test-<genre>-generated.sh`、`scripts/testdata/<genre>/`、`docs/maintenance/KNOWN-LIMITS.md`。下文链接都是**相对 roost-core 根目录**的路径；读手册时以本机检出（如 `/Users/whb/roost/roost-core`）或 module cache 里对应版本的 `docs/` 为准，不以本文转述为准。
 - **`game` 模板只出框架骨架，各类型玩法来自夹具或业务代码**。已有 `game-demo` 是内置的完整参考应用；不要虚构 `project new -template slg` 一类不存在的模板。
 - 夹具里的数值（金币、时长、上限）都是样例；玩法规则缺少默认实现不算框架缺陷（KNOWN-LIMITS“游戏接入验收”首段）。
 - 生成 demo 前先确认目标 roost 版本；card-rpg、mmorpg、merge-casual 三个夹具 **v1.33.1 起可用**（2026-10-31 在 v1.33.1 检出实测 16 / 13 / 15 条 PASS），**最低版本 v1.33.1**：v1.33.0 上仍编译失败（见 §7）。实时派对房间（`party-room`）**v1.33.2 起有纵切（12 条）；弹性成局与组同步正式入口 v1.34.0 起（13 条）；业务层补位 v1.34.1 起（18 条，2026-10-31 在对应代码实测通过）**。三档夹具与命令不同，references/party-room.md 的命令序列是 18 条版；v1.33.1 及更早没有这条纵切。
@@ -26,13 +26,15 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 
 | 玩法 | reference | 支撑度 | 纵切场景数（全部 PASS 才算过） |
 | --- | --- | --- | --- |
-| SLG / 大地图策略（建造、行军、抢地、联盟） | [references/slg.md](references/slg.md) | 高 | 6（`TestSLG`）；进阶联盟另 2 条纯内存用例（脚本缺省模式合计 8） |
+| SLG / 大地图策略（建造、行军、抢地、联盟） | [references/slg.md](references/slg.md) | 高 | 7（`TestSLG`，含 Robot）；联盟另 2 条，合计 9 |
 | MOBA / 竞技对战（帧同步） | [references/moba-lockstep.md](references/moba-lockstep.md) | 高 | 28（`TestMOBA`） |
-| MMORPG（组队、交易、战斗、Buff、切图） | [references/mmorpg.md](references/mmorpg.md) | 高；纵切 v1.33.1 起可用（v1.33.0 失败），game-demo 参考形态 v1.33.0 起可用 | 13（`TestMMORPG…`）+ 多地图 TCP 1 |
-| 卡牌 / 回合制 RPG（抽卡、养成、回合 PvE） | [references/card-turn-based.md](references/card-turn-based.md) | 高，v1.33.1 起可用（v1.33.0 失败） | 16（`TestCardRPG`） |
-| 房间合作 PvE：塔防 / 生存撤离 / 自走棋 | [references/room-coop-pve.md](references/room-coop-pve.md) | 高 | 10 / 12 / 12 |
-| 放置模拟 / 合成休闲 | [references/idle-merge-casual.md](references/idle-merge-casual.md) | 放置高；合成 v1.33.1 起可用（v1.33.0 失败） | 12（`TestIdleSim`）/ 15（`TestMergeCasual`） |
-| 实时派对房间（2～8 人短局：抢答、计时、回合、轻反应；第二批） | [references/party-room.md](references/party-room.md) | 中高：弹性成局 / 进房 / 心跳回合 / 组同步（`sync_groups`，与 self_sync 共用连接）/ 重连 / 补位 / 结算都有纵切；PARTY §8 余下的是这类玩法够用的硬边界（心跳 ≤20Hz、只有 TCP）、房间无跨机接管、补位不超员只靠进房 handler（存储原生补位未提供），另缺容量数据、组同步的真实接入层用例与改用组同步后的真实依赖重跑，所以不到“高”。**最低：弹性成局与组同步 v1.34.0，补位 v1.34.1** | 18（`TestPartyGame`：规则 3 + handler 15；v1.34.0 为 13、v1.33.2 为 12） |
+| MMORPG（组队、交易、战斗、Buff、切图） | [references/mmorpg.md](references/mmorpg.md) | 高；纵切 v1.33.1 起可用（v1.33.0 失败），game-demo 参考形态 v1.33.0 起可用 | 14（`TestMMORPG…`）+ 多地图 TCP 1 |
+| 卡牌 / 回合制 RPG（抽卡、养成、回合 PvE） | [references/card-turn-based.md](references/card-turn-based.md) | 高，v1.33.1 起可用（v1.33.0 失败） | 17（`TestCardRPG`） |
+| 房间合作 PvE：塔防 / 生存撤离 / 自走棋 | [references/room-coop-pve.md](references/room-coop-pve.md) | 高 | 11 / 13 / 13 |
+| 放置模拟 / 合成休闲 | [references/idle-merge-casual.md](references/idle-merge-casual.md) | 放置高；合成 v1.33.1 起可用（v1.33.0 失败） | 13（`TestIdleSim`）/ 16（`TestMergeCasual`） |
+| 实时派对房间（2～8 人短局：抢答、计时、回合、轻反应；第二批） | [references/party-room.md](references/party-room.md) | 中高：弹性成局 / 进房 / 心跳回合 / 组同步（`sync_groups`，与 self_sync 共用连接）/ 重连 / 补位 / 结算都有纵切；PARTY §8 余下的是这类玩法够用的硬边界（心跳 ≤20Hz、只有 TCP）、房间无跨机接管、补位不超员只靠进房 handler（存储原生补位未提供），另缺容量数据、组同步的真实接入层用例与改用组同步后的真实依赖重跑，所以不到“高”。**最低：弹性成局与组同步 v1.34.0，补位 v1.34.1** | 19（`TestPartyGame`，含 Robot；v1.34.0 为 13、v1.33.2 为 12） |
+
+新增三类见 [references/session-genres.md](references/session-genres.md)：回合制 PvP 9、合作 Roguelike 10、异步社交经营 9 个正式生成工程场景。自 v1.35.0 提供，v1.34.2 尚无对应脚本；先检查目标版本，不能把旧版运行依赖配上新夹具。
 
 场景数出自各 `scripts/test-<genre>-generated.sh` 的计数断言与 KNOWN-LIMITS“游戏接入验收”表；v1.33.1 起这些脚本的缺省模式由 `scripts/pretag.sh` 每次发版跑一遍，v1.33.2 起是十个玩法纵切 + 三个离线生成器专项（§5 #15）。用户的玩法跨两类时（如 MMO 里的竞技副本），分别按两篇 reference 取模块，不要为“用全所有模块”硬拼（SLG-INTEGRATION §8“聊天、匹配与 session”行）。
 
@@ -109,6 +111,14 @@ cd "$CORE" && ROOST_<GENRE>_KEEP=1 bash scripts/test-<genre>-generated.sh   # �
 
 脚本打印临时目录，工程在其中的 `project/`，module 固定为 `example.com/<genre>-practice`；成功即删，`KEEP=1` 保留。想换 module 名或只要最小子集，用 reference 里的分步命令。
 
+### 3.6 Robot 与独立工程验收
+
+所有玩法批量验收用 `python3 scripts/test-genres-generated.py --out <新目录>`，保留独立工程、原始日志与 JSON 结果；脚本会验证自定义 module，不能只复用仓库内的已生成工程。具体口径见 `docs/framework/ROBOT.md`。
+
+用户要压测时沿用 `robot` 的 transport/session/scenario/runner/loadtest。业务 PB 存在时 `roost generate` 同步生成 `loadtest/protocol/registry_gen.go`。生成新玩法时，自己的 PB、端点、Robot 步骤、数据断言、运行参数与说明必须一起交付；仅编译/直接调用 Nest 不算网络验收。不得自动给所有玩法塞一个 ping 然后声明完成。
+
+当前三类新玩法已有 `cmd/robot` 与真实嵌入 TCP/PB 首动作、重试、重连测试，回合/经营各 9 条，合作 10 条还含整局领奖与客户端视图；九类既有状态玩法已有业务 PB、TCP → Sender、两步业务/重试/重连/拒绝路径和最终 DAO 断言；MOBA 的 KCP 整局、追帧与客户端结算结果通过公共 LockstepBot 和可信 Nest 结算验证。手工生成须按对应 reference 安装 Robot 文件再 generate。完整对局、真实 Gate/存储和业务重登仍需补测；不把 TCP 重连等同于完整业务恢复。功能、容量、长稳、真实存储与客户端平台分别出结论。
+
 ## 4. “可运行”的两档
 
 | 档 | 含义 | 需要什么 | 证明到哪 |
@@ -172,6 +182,10 @@ cd "$CORE" && ROOST_<GENRE>_KEEP=1 bash scripts/test-<genre>-generated.sh   # �
 | 去掉 `timers` 条目后生成部分不自动删除 | 手工删，见 KNOWN-LIMITS“按实体的持久定时器（D11）” |
 
 ## 8. 维护规则
+
+- 多引擎客户端接入可选 [native C++ 网络核心](../../../client/cpp/README.md)：Unity 使用 C ABI 与现有 C# EntityViews，UE 使用 C ABI/C++。先核对平台验收表，不把“提供构建入口”说成 Windows/Android/iOS 或 UE 已实跑；Lockstep 状态机仍以现有 C# 能力为准。
+
+- 自 v1.35.0 起默认 DAO 同步为 PB 字段补丁，持久化仍用 BSON；v1.34.2 尚未包含此变更。生成客户端时一起交付 `dao_sync.proto` 与 `dao_sync_apply.cs`，按字段存在性替换，不能使用普通 PB MergeFrom 合并集合。完整契约见 [DAO 同步](../../framework/DAO-SYNC-PROTOBUF.md)。
 
 - 数字与命令以 roost-core 当前版本为准。发现本文与仓库不符（场景数、脚本步骤、夹具文件名、CLI 参数、限制数字），先读对应 `scripts/test-<genre>-generated.sh`、`docs/framework/<GENRE>-INTEGRATION.md`、KNOWN-LIMITS 与源码核对，再按仓库执行，并告诉主会话本 skill 哪处过时。
 - reference 的命令序列是**仓库脚本的手工版**：脚本改了步骤（新增 add、夹具文件、DAO 字段）时 reference 要跟着改；拿不准时退回 §3.5 一键脚本。

@@ -1,0 +1,56 @@
+package handler
+
+import "testing"
+
+func TestScenarioVisitorPermissions(t *testing.T) {
+	f := newScenario(t)
+	f.refuse(t, 1, f.command(t, 1, "plant"))
+	f.do(t, 0, "plant")
+	f.refuse(t, 1, f.command(t, 1, "harvest"))
+	f.refuse(t, 0, f.command(t, 0, "help"))
+	f.do(t, 1, "help")
+	f.refuse(t, 1, f.command(t, 1, "help"))
+}
+func TestScenarioOfflineHarvestOnce(t *testing.T) {
+	f := newScenario(t)
+	f.do(t, 0, "plant")
+	f.refuse(t, 0, f.command(t, 0, "harvest"))
+	f.now.Add(86400000)
+	c := f.command(t, 0, "harvest")
+	for i := 0; i < 2; i++ {
+		if _, err := f.send(0, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.players[0].Dao().GetCoins() != 5 || f.state(t).Harvests != 1 {
+		t.Fatal("offline reward duplicated")
+	}
+	f.refuse(t, 0, f.command(t, 0, "harvest"))
+}
+func TestScenarioHelpChangesDeadlineOnlyOnce(t *testing.T) {
+	f := newScenario(t)
+	f.do(t, 0, "plant")
+	c := f.command(t, 1, "help")
+	for i := 0; i < 2; i++ {
+		if _, err := f.send(1, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.state(t).ReadyAt != f.now.Load()+50000 {
+		t.Fatal("help duplicated")
+	}
+	f.now.Add(50000)
+	f.do(t, 0, "harvest")
+}
+func TestScenarioHarvestRollback(t *testing.T) {
+	f := newScenario(t)
+	f.do(t, 0, "plant")
+	f.now.Add(60000)
+	f.committer.reject.Store(true)
+	f.refuse(t, 0, f.command(t, 0, "harvest"))
+	f.committer.reject.Store(false)
+	f.do(t, 0, "harvest")
+	if f.players[0].Dao().GetCoins() != 5 {
+		t.Fatal("harvest lost")
+	}
+}

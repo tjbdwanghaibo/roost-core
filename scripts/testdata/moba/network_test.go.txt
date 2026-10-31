@@ -1,19 +1,29 @@
-package moba
+package handler
 
 import (
 	"bytes"
 	"context"
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
 	"testing"
 	"time"
+
+	syncsender "example.com/moba-practice/game/handler/syncsender"
+	"example.com/moba-practice/game/moba"
+	"example.com/moba-practice/loadtest"
+	"example.com/moba-practice/protocol/msgid"
+	"example.com/moba-practice/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
+	"github.com/tjbdwanghaibo/roost-core/robot"
 )
 
 // 真实 loopback KCP：固定测试凭据建立会话，输入经可靠通道，广播经 datagram，追帧经可靠通道。
 // 这是网络 / 模拟验收，不把固定绑定说成真实账号认证，也不据此声明跨机延迟或容量。
-func TestMOBAKCPClientsAndReferenceConvergeAfterCatchup(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func TestMOBAKCPRobotMatchSettlementAndClientResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	f := newMOBAFixture(t)
 	key := bytes.Repeat([]byte{7}, 32)
 	crypt, err := nettransport.NewKCPAESGCM(key)
 	if err != nil {
@@ -124,7 +134,7 @@ func TestMOBAKCPClientsAndReferenceConvergeAfterCatchup(t *testing.T) {
 			t.Fatal(err)
 		}
 		if command.Operation == lockstep.OpInput {
-			err = Submit(m, uint64(id), command.Frame, command.Payload)
+			err = moba.Submit(m, uint64(id), command.Frame, command.Payload)
 		} else {
 			err = m.HandleCommand(id, command)
 		}
@@ -132,13 +142,25 @@ func TestMOBAKCPClientsAndReferenceConvergeAfterCatchup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	reference := NewState()
-	states := []*State{NewState(), NewState()}
-	assemblers := []*lockstep.FrameAssembler{lockstep.NewFrameAssembler(128), lockstep.NewFrameAssembler(128)}
+	reference := moba.NewState()
+	states := make([]*moba.State, 2)
+	bots := make([]*robot.LockstepBot, 2)
 	catchups := 0
-	for id := lockstep.FrameID(1); id <= 60; id++ {
+	for i := range 2 {
+		bots[i], states[i], err = loadtest.NewBattleBot(lockstep.PlayerID(i+1), loadtest.BattleSink{Send: func(c lockstep.Command) error {
+			if c.Operation == lockstep.OpCatchup {
+				catchups++
+			}
+			send(i, c)
+			return nil
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for id := lockstep.FrameID(1); id <= moba.MaxFrames && !reference.Ended; id++ {
 		for i := range 2 {
-			send(i, lockstep.Command{Operation: lockstep.OpInput, Frame: id, Payload: duelInput(id, i)})
+			send(i, lockstep.Command{Operation: lockstep.OpInput, Frame: id, Payload: loadtest.SiegeInput(states[i], i)})
 		}
 		frame, err := m.Tick(ctx)
 		if err != nil {
@@ -162,19 +184,79 @@ func TestMOBAKCPClientsAndReferenceConvergeAfterCatchup(t *testing.T) {
 				latest := frames[len(frames)-1].ID
 				// 刻意在真实网络接收后丢弃超过冗余深度的连续广播，必须靠可靠追帧恢复。
 				if !(i == 0 && latest >= 3 && latest <= 8) {
-					applyPackets(t, states[i], assemblers[i], [][]byte{packet})
+					if err := bots[i].HandleBroadcast(packet); err != nil {
+						t.Fatal(err)
+					}
 				}
 				if latest >= id {
 					break
 				}
 			}
 		}
-		if id == 9 && assemblers[0].Gap() {
-			send(0, lockstep.Command{Operation: lockstep.OpCatchup, Frame: assemblers[0].Next()})
-			catchups++
-		}
 	}
 	if catchups != 1 || states[0].Digest() != reference.Digest() || states[1].Digest() != reference.Digest() {
 		t.Fatalf("KCP / catch-up diverged, requests=%d ticks=%d/%d/%d", catchups, states[0].Tick, states[1].Tick, reference.Tick)
 	}
+	// 终态只能由服务器参考模拟确认，经正式 Nest 结算；客户端不提交 winner/digest。
+	winner, digest, err := reference.Result()
+	if err != nil || winner != 1 {
+		t.Fatalf("no authoritative win: winner=%d err=%v", winner, err)
+	}
+	settlement := syncsender.NewMobaSettlementSender(f.engine)
+	for range 2 {
+		if err := settlement.MultiSync_MOBASettle(ctx, f.result.ID(), f.players[0].ID(), f.players[1].ID(), "robot-kcp-match", digest, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 2 {
+		profile, err := settlement.Sync_MOBAProfile(ctx, f.players[i].ID())
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err := pb.MarshalBattleResult(&pb.BattleResult{Winner: winner, Digest: digest, Gold: profile.Gold, Wins: profile.Wins, Losses: profile.Losses})
+		if err != nil {
+			t.Fatal(err)
+		}
+		packet, err := wire.Encode([]*wire.Packet{{Flags: wire.FlagPush, MsgID: msgid.MsgResult, Payload: payload}}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = server.SendReliable(ctx, nettransport.SessionID(101+i), packet); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			var received []byte
+			select {
+			case received = <-inboxes[i]:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			// 同一可靠通道的结算走 RS/PB，其他残留帧仍交给 Lockstep Robot。
+			if len(received) < 2 || received[0] != 'R' || received[1] != 'S' {
+				if err = bots[i].HandleBroadcast(received); err != nil {
+					t.Fatal(err)
+				}
+				continue
+			}
+			packets, err := wire.Decode(received, 0)
+			if err != nil || len(packets) != 1 {
+				t.Fatalf("result framing: %v", err)
+			}
+			if packets[0].MsgID != msgid.MsgResult || packets[0].Flags != wire.FlagPush {
+				t.Fatal("unexpected result envelope")
+			}
+			result, err := pb.UnmarshalBattleResult(packets[0].Payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Winner != 1 || result.Digest != states[i].Digest() {
+				t.Fatal("client result disagrees with simulation")
+			}
+			if i == 0 && (result.Gold != 10 || result.Wins != 1 || result.Losses != 0) || i == 1 && (result.Gold != 0 || result.Wins != 0 || result.Losses != 1) {
+				t.Fatalf("duplicate or wrong settlement: %+v", result)
+			}
+			break
+		}
+	}
+
 }

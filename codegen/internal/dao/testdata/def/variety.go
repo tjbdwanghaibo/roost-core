@@ -23,6 +23,8 @@ type VarietyDao struct {
 	Blobs map[string][]byte
 	// Envelope carries the same shape inside a nested struct.
 	Envelope Envelope
+	Enabled  bool   `dao:"nopersist,sync"`
+	Counter  uint64 `dao:"nopersist,sync"`
 }
 
 // Envelope locks the nested map-of-bytes shape: GetMarks / RangeMarks hand

@@ -7,13 +7,14 @@
 # 新进程冷加载、由驱动投递循环补触发一步并打完三波、领奖，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-tower-defense.XXXXXX")"
+review_root="${ROOST_GENRE_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/roost-tower-defense.XXXXXX")}"
+mkdir -p "$review_root"
 project_root="$review_root/project"
 echo "Tower defense generated consumer and logs: $review_root"
 # 成功后删除临时工程；失败或 ROOST_TOWER_DEFENSE_KEEP=1 时保留，便于查看生成日志与工程。
 succeeded=0
 cleanup() {
-  if [[ "$succeeded" == 1 && "${ROOST_TOWER_DEFENSE_KEEP:-0}" != 1 ]]; then
+  if [[ -z "${ROOST_GENRE_OUTPUT:-}" && "$succeeded" == 1 && "${ROOST_TOWER_DEFENSE_KEEP:-0}" != 1 ]]; then
     rm -rf "$review_root"
   else
     echo "Tower defense generated consumer kept: $review_root" >&2
@@ -64,12 +65,13 @@ cp "$repo_root/scripts/testdata/tower-defense/timer_handlers.go.txt" game/entiti
 cp "$repo_root/scripts/testdata/tower-defense/handlers.go.txt" game/handler/tower_defense.go
 cp "$repo_root/scripts/testdata/tower-defense/gameplay_test.go.txt" game/handler/tower_defense_test.go
 gofmt -w db/def/*.go game/towerdefense/*.go game/entities/tower_room/*.go game/handler/tower_defense*.go
+python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" tower-defense
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestTowerDefense' ./game/towerdefense ./game/handler | tee "$review_root/test.log"
-# 10 条场景（4 条规则 + 6 条 Nest）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 11 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestTowerDefense' "$review_root/test.log" || true)"
-if [[ "$passed" != 10 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 10 passing TestTowerDefense scenarios, got $passed" >&2
+if [[ "$passed" != 11 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 11 passing TestTowerDefense scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...

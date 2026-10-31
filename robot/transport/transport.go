@@ -48,6 +48,7 @@ type Dialer func(context.Context, Config) (Conn, error)
 type Config struct {
 	// Type selects the registered dialer: "tcp" (default), "ws"/"websocket",
 	// or any custom-registered type.
+	Traffic        *Traffic
 	Type           string
 	Endpoint       string
 	MaxPayloadSize int
@@ -77,9 +78,10 @@ func (c Config) Normalize() Config {
 var (
 	dialersMu sync.RWMutex
 	dialers   = map[string]Dialer{
-		"tcp":       dialTCP,
-		"ws":        dialWebSocket,
-		"websocket": dialWebSocket,
+		"tcp":         dialTCP,
+		PlayerTCPType: DialPlayerTCP,
+		"ws":          dialWebSocket,
+		"websocket":   dialWebSocket,
 	}
 )
 
@@ -132,7 +134,7 @@ func dialTCP(ctx context.Context, cfg Config) (Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("robot transport: dial tcp %s: %w", cfg.Endpoint, err)
 	}
-	return NewTCPConn(conn, cfg.MaxPayloadSize), nil
+	return NewTCPConn(cfg.Traffic.wrap(conn), cfg.MaxPayloadSize), nil
 }
 
 // dialWebSocket 的 DialTimeout 覆盖 TCP 建连加 HTTP 升级握手，并服从调用方 ctx

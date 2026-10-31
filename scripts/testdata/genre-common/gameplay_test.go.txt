@@ -1,0 +1,176 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	roomentity "GENRE_MODULE/game/entities/game_room"
+	playerentity "GENRE_MODULE/game/entities/player"
+	sender "GENRE_MODULE/game/handler/syncsender"
+	rules "GENRE_MODULE/game/rules"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+type scenarioGetter map[int64]entity.IThreadSafeEntity
+
+func (g scenarioGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+func (g scenarioGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+type scenarioCommitter struct{ reject atomic.Bool }
+
+func (c *scenarioCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	return nil
+}
+
+type scenarioFixture struct {
+	engine    *nest.NestMgr
+	room      *roomentity.GameRoom
+	players   [2]*playerentity.Player
+	outsider  *playerentity.Player
+	now       atomic.Int64
+	committer *scenarioCommitter
+}
+
+func newScenario(t *testing.T) *scenarioFixture {
+	t.Helper()
+	roomentity.RegisterEntity()
+	playerentity.RegisterEntity()
+	RegisterScenarioNestHandlers()
+	f := &scenarioFixture{committer: &scenarioCommitter{}}
+	f.now.Store(1800000000000)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	getter := scenarioGetter{}
+	makeEntity := func(unique int64, kind entity.EntityKind) entity.IThreadSafeEntity {
+		id, err := entity.BuildEntityID(unique, kind)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: kind})
+		if err != nil {
+			t.Fatal(err)
+		}
+		getter[id] = e
+		return e
+	}
+	f.room = makeEntity(81001, roomentity.EntityKindGameRoom).(*roomentity.GameRoom)
+	for i := range f.players {
+		f.players[i] = makeEntity(int64(82001+i), playerentity.EntityKindPlayer).(*playerentity.Player)
+	}
+	// 有效但不在房间名单的身份，用于验证业务成员授权而非只验证实体不存在。
+	f.outsider = makeEntity(82003, playerentity.EntityKindPlayer).(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := sender.NewScenarioSender(f.engine).Sync_ScenarioOpen(context.Background(), f.room.ID(), []int64{f.players[0].ID(), f.players[1].ID()}); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+func (f *scenarioFixture) state(t *testing.T) rules.State {
+	t.Helper()
+	var s rules.State
+	if err := json.Unmarshal([]byte(f.room.Dao().GetState()), &s); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+func (f *scenarioFixture) command(t *testing.T, player int, kind string) rules.Command {
+	t.Helper()
+	s := f.state(t)
+	return rules.Command{Seq: s.Last[f.players[player].ID()].Command.Seq + 1, Revision: s.Revision, Kind: kind}
+}
+func (f *scenarioFixture) send(player int, c rules.Command) (rules.Result, error) {
+	return sender.NewScenarioSender(f.engine).MultiSync_ScenarioCommand(context.Background(), f.room.ID(), f.players[player].ID(), c)
+}
+func (f *scenarioFixture) do(t *testing.T, player int, kind string) rules.Result {
+	t.Helper()
+	r, err := f.send(player, f.command(t, player, kind))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func (f *scenarioFixture) refuse(t *testing.T, player int, c rules.Command) {
+	t.Helper()
+	before := f.room.Dao().GetState()
+	coins := f.players[player].Dao().GetCoins()
+	if _, err := f.send(player, c); err == nil {
+		t.Fatal("command accepted")
+	}
+	if before != f.room.Dao().GetState() || coins != f.players[player].Dao().GetCoins() {
+		t.Fatal("refusal mutated DAO")
+	}
+}
+
+func TestScenarioRetryAndConflict(t *testing.T) {
+	f := newScenario(t)
+	c := f.command(t, 0, FIRST_COMMAND)
+	first, err := f.send(0, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := f.room.Dao().GetState()
+	again, err := f.send(0, c)
+	if err != nil || again != first || raw != f.room.Dao().GetState() {
+		t.Fatal("retry changed result", err)
+	}
+	c.Choice++
+	f.refuse(t, 0, c)
+}
+func TestScenarioCommitRejectionRollsBack(t *testing.T) {
+	f := newScenario(t)
+	c := f.command(t, 0, FIRST_COMMAND)
+	f.committer.reject.Store(true)
+	f.refuse(t, 0, c)
+	f.committer.reject.Store(false)
+	if _, err := f.send(0, c); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestScenarioStaleRevision(t *testing.T) {
+	f := newScenario(t)
+	c := f.command(t, 1, FIRST_COMMAND)
+	f.do(t, 0, FIRST_COMMAND)
+	f.refuse(t, 1, c)
+}
+func TestScenarioMembership(t *testing.T) {
+	f := newScenario(t)
+	s := f.state(t)
+	if _, err := s.Apply(999, rules.Command{Seq: 1, Kind: FIRST_COMMAND}, f.now.Load()); err == nil {
+		t.Fatal("outsider admitted")
+	}
+}

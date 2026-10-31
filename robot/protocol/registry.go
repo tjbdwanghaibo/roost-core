@@ -153,15 +153,16 @@ func EnsureEncoder(r *Registry, msgID uint32) error {
 	if r == nil {
 		return errors.New("robot protocol: registry is nil")
 	}
-	if r.codec == nil {
-		return fmt.Errorf("%w (install one via NewRegistry)", ErrCodecRequired)
-	}
 	if msgID == 0 {
 		return errors.New("robot protocol: msg id is required")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.encoders[msgID]; !ok {
+		if r.codec == nil {
+			return fmt.Errorf("%w (install one via NewRegistry)", ErrCodecRequired)
+		}
+
 		codec := r.codec
 		r.encoders[msgID] = func(value any) ([]byte, error) {
 			return codec.Marshal(value)
@@ -176,15 +177,16 @@ func EnsureDecoder[T any](r *Registry, msgID uint32) error {
 	if r == nil {
 		return errors.New("robot protocol: registry is nil")
 	}
-	if r.codec == nil {
-		return fmt.Errorf("%w (install one via NewRegistry)", ErrCodecRequired)
-	}
 	if msgID == 0 {
 		return errors.New("robot protocol: msg id is required")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, ok := r.decoders[msgID]; !ok {
+		if r.codec == nil {
+			return fmt.Errorf("%w (install one via NewRegistry)", ErrCodecRequired)
+		}
+
 		codec := r.codec
 		r.decoders[msgID] = func(payload []byte) (any, error) {
 			value := new(T)

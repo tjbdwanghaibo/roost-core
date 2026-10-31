@@ -1,0 +1,36 @@
+package robotaccess
+
+import (
+	sender "GENRE_MODULE/game/handler/syncsender"
+	domain "GENRE_MODULE/game/partyroom"
+	"GENRE_MODULE/protocol/msgid"
+	"GENRE_MODULE/protocol/pb"
+	"context"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+)
+
+// Dispatch 只转换协议；玩家身份来自已鉴权会话，规则、时间、资源与权限仍由正式 Nest handler 决定。
+func Dispatch(engine *nest.NestMgr) gateway.TCPDispatch {
+	business := sender.NewPartyRoomSender(engine)
+	return func(ctx context.Context, session gateway.Session, id, seq uint32, kind wire.PayloadKind, data []byte) (any, error) {
+		if id != msgid.MsgPlay || kind != wire.PayloadProtobuf {
+			return nil, gateway.ErrInvalidRequest
+		}
+		request, err := pb.UnmarshalPlayRequest(data)
+		if err != nil {
+			return nil, err
+		}
+		_, err = business.Sync_PartyInput(ctx, request.RoomID, session.Principal().PlayerID, domain.Input{Seq: request.Seq, Epoch: request.Epoch, Round: int(request.Round), Kind: request.Kind})
+		response := &pb.PlayResponse{Seq: request.Seq}
+		if err != nil {
+			response.Code = 1
+		}
+		payload, err := pb.MarshalPlayResponse(response)
+		if err != nil {
+			return nil, err
+		}
+		return &gateway.TCPResponse{MessageID: id, Sequence: seq, Payload: payload}, nil
+	}
+}

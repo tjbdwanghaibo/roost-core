@@ -2,6 +2,72 @@
 
 Roost 的自定义协议负责帧、路由编号与请求关联，业务载荷由包头选择 PB / Sync / Lockstep。本批提供公共 Go wire、纯 C# `netstandard2.1` TCP 运行库和 Unity 主线程适配。Lockstep 已接线：输入/Hash/Catchup命令、既有C7广播与C#有序消费、C9 v2恢复失败通知与CA 01快照恢复。
 
+## 标准业务入口
+
+新业务推荐 `GameClient`，已有低层消费者可以继续使用 `TcpSession`。前者复用同一 RS 编解码和 TCP 会话，没有另起网络协议。
+
+- `Connection`：票据鉴权、默认 15 秒心跳、请求预算、断线状态；自动重连默认关闭，由业务通过 `ConnectionOptions.AutoReconnect` 启用。有界指数退避、每次重新取票、每次成功/失败都有 `ReconnectResult`，不会自动重发业务请求。
+- `GameClient`：在创建线程调用 `Subscribe` / `Request` / `Pump`；PB 解析、推送和完成回调都在 Pump 中执行。取消/超时/网络/解析错误走失败回调；业务错误码仍由应答 PB 表示。未消费完成回调也占容量；满时同步拒绝新请求。
+- `EntityViews`：Full 清场、Delta/create/update/remove、对象代际、subject 版本、命名空间和 profile 路由。缺口或解析/应用失败关闭连接，恢复经正常鉴权流程，不跳过错误增量。默认容量 10000 对象，仍需按项目实际负载验证。
+- `RoostClientDriver`：Unity 主线程 Attach 后每帧 Pump，销毁时 Dispose。它与低层 `RoostConnection` 是不同使用层级，同一连接只选一个消费者。
+
+`Roost.Client` 本体无第三方依赖；可选 `Roost.Client.Codecs` 仅依赖 Google.Protobuf 3.31.1，提供生成 PB 类型的便利重载。默认 DAO 同步已在 main 改成 **PB 字段补丁**，持久化仍是 BSON；见 [DAO 同步协议](../docs/framework/DAO-SYNC-PROTOBUF.md)。v1.34.2 的旧同步客户端须重新生成，不能混用。
+
+```csharp
+using Roost.Client;
+using Roost.Client.Codecs;
+using Roost.Dao.Sync; // 由 db/dao_sync.proto 生成
+
+var client = new GameClient(new ConnectionOptions {
+    Host = host, Port = port, AutoReconnect = false
+});
+client.Error += ShowNetworkError;
+client.Reconnected += result => ShowReconnectResult(result);
+client.StateChanged += state => ShowConnectionState(state);
+client.Entities.RegisterDao("player", SyncPlayerDao.Parser,
+    (patch, previous) => patch.Apply(previous));
+client.EntitiesChanged += frame => RefreshVisibleEntities(client.Entities.Current);
+await client.Connection.ConnectAsync(GetFreshTicketAsync);
+// 引擎主线程每帧：client.Pump(); Unity 也可交给 RoostClientDriver.Attach(client)。
+```
+
+业务请求用本项目生成的类型与编号，例如 `client.Request(requestId, responseId, request, Reply.Parser, reply => ..., error => ...)`；推送用 `client.Subscribe(pushId, Push.Parser, push => ...)`，返回的 IDisposable 在页面退出时释放。首次连接失败由 ConnectAsync 的异常交给业务。方法组/泛型的无依赖重载也可直接传 `Reply.Parser.ParseFrom`；不要复制服务端 PB 定义或手写第二份类型。
+
+### EntitySync 变化回调
+
+`EntityChanged` 在 `Pump` 线程逐个通知同步组件视图。整帧解码、版本校验和视图更新全部成功后才通知；此时 `Entities.Current` 已是整帧应用后的状态。重复或过期帧不通知，失败帧不发部分通知。
+
+```csharp
+client.EntityChanged += change => {
+    var identity = change.Identity;
+    switch (change.Kind) {
+        case EntityChangeKind.Full:
+            // 初次出现或重新提供完整视图。Current.Value 是解析后的 PB 状态。
+            ShowOrReplace(identity.Update.SubjectId, change.Current!.Value);
+            break;
+        case EntityChangeKind.Delta:
+            // Previous/Current 是前后完整状态；字段补丁在 Current.Update.Payload。
+            Refresh(identity.Update.SubjectId, change.Previous!.Value, change.Current!.Value);
+            break;
+        case EntityChangeKind.Remove:
+            Hide(identity.Update.SubjectId, identity.ComponentType);
+            break;
+    }
+};
+client.EntitiesReset += () => ClearVisibleEntities();
+```
+
+示例中的 ShowOrReplace / Refresh / Hide / ClearVisibleEntities 是业务 UI 方法。身份还包含 Namespace、Profile、ObjectId、Generation 与 ComponentType，多种视图不得只按 SubjectId 混在一起。
+
+- `Full` / `Delta` 指 **SubjectUpdate** 的载荷类型，不是外层 frame 类型：外层 Delta 中也可能新建对象并携带 Full。
+- `Remove` 的 Current 为 null，Previous 保留旧视图；RemovalReason 为 Server（对象/组件移除）或 SnapshotReplacement（恢复全量不再包含旧视图/代际）。它表示客户端不再可见，不等同于服务器销毁业务实体。
+- `EntitiesReset` 表示连接切换、断线或同步错误清场，仅在有视图被清除时通知；不伪造成服务器 Remove。Dispose 静默清理。
+- `EntitiesChanged` 保留整帧通知，在逐视图通知之后执行；空帧也能收到帧通知。业务按需要选一个粒度，避免重复刷新。
+- 业务通知抛错交给 Error，不破坏已确认的同步基线，也不阻止其他订阅者；Error 自身抛错被隔离。协议/解码错误仍断开流并清场。
+- 回调只读前后视图，不直接修改 PB 对象或在通知期间调用 Entities.Reset/Receive；连接生命周期由 GameClient 管理。
+
+完整可编译用法在 `client/dotnet/Roost.Client.Tests/GameClientTests.cs`，真实 TCP 对端收发官方生成的 `StringValue` PB；DAO 类型与 Apply 方法在跨语言测试中实际编译和执行。Unity 桥接源文件被 .NET 测试编译，但本轮未启动 Unity 编辑器或验证 IL2CPP；没有 WAN、客户端容量或客户端性能结论。
+
 ## 包头：RS v2
 
 固定16字节，整数大端；`payload_length`仅包含载荷，不包含头。
@@ -84,11 +150,11 @@ if (session.TryDequeuePush(out var push))
 
 默认单包1MiB、最多64个在途请求（包括等待发送锁者）、256个待消费推送；按业务容量调小/调大，队列计数乘单包上限仍会占用内存。超时必须为正且不超过`int.MaxValue`毫秒。等待锁时取消不关闭健康连接；写期间取消或失败可能留下半包，会关闭连接；发送成功后的超时仅停止等待，服务器业务可能已执行，不自动重放。晚应答丢弃，未注册的推送留原始字节。NotifyAsync提供PB/Lockstep无应答发送，和Request共用容量/锁/序列；完成只证明字节写出，不能推断服务器业务成功。
 
-推送队列满时关闭连接、失败所有等待者并清空不能继续使用的增量，不能静默丢一个delta后继续应用。`Completion`表示接收循环结束，关闭原因读取`CloseReason`。连接关闭后创建新TcpSession实例；重连票据获取、重新订阅及full baseline恢复由业务驱动，本库不声称已提供完整复制状态机。断线检测基于socket I/O和请求预算，未实现独立心跳/空闲超时。
+推送队列满时关闭连接、失败所有等待者并清空不能继续使用的增量，不能静默丢一个delta后继续应用。`Completion`表示接收循环结束，关闭原因读取`CloseReason`。直接使用 TcpSession 时，关闭后创建新实例。上层 Connection 提供心跳、可选自动重连和重新取票；GameClient/EntityViews 管理连接代际与对象视图。业务订阅恢复仍取决于服务端登录和进房流程。
 
 `SyncFrame.Decode`和`SubjectUpdate.Decode`只解码已有Go格式，校验长度、操作和身份；`SubjectId`用`long`，StreamId/版本/掩码用`ulong`，不要转float/double。
 
-新增`SyncReceiver`（本工作分支待运行验证）按单连接单流核对epoch、tick、baseTick与schema：首帧必须Full，重复/旧代不再应用，缺口或业务回调失败后拒绝增量，成功应用才推进基线。其内存状态固定，不缓存历史帧或业务实体。Go对应`sync/frame.Receiver`。同一连接串行消费，业务组件的generation、版本、解码及状态应用仍由业务维护；这里不提供预测回滚或所有packer的客户端模型。
+底层 `SyncReceiver`按单连接单流核对epoch、tick、baseTick与schema：首帧必须Full，重复/旧代不再应用，缺口或业务回调失败后拒绝增量，成功应用才推进基线。其内存状态固定，不缓存历史帧或业务实体。Go对应`sync/frame.Receiver`。同一连接串行消费，直接使用底层 Receiver 时，组件状态由业务维护；上层 EntityViews 校验 generation 与 subject 版本，按注册的 codec 应用数据，不提供预测回滚或任意 packer 的自动解析。
 
 接入方捕获缺口/应用错误后关闭旧TcpSession，清理业务状态、经正常票据鉴权重连并恢复订阅；新连接重新创建或Reset接收器，不能把旧连接排队的包送给新基线。已有鉴权控制链的业务也可调用服务端HoldSession/ReadySession得到新epoch；本库不新增客户端任意请求全量的公开协议。Full可能只是恢复的第一包，后续连续Delta/create补齐其余对象，不能等“一个Full含全部可见对象”。Unity的`RoostConnection`已接入缺口关闭与Disconnected通知，Attach前必须安装PacketReceived；Sync回调异常不再仅打印后继续增量。真实Unity运行验证仍未执行。
 
@@ -181,3 +247,11 @@ go test ./codegen/internal/roost -run '^TestClientSDKAgainstGeneratedPlayerTCP$'
 `client/spec/packets.json`由Go正式wire、frame、entitysync和lockstep编码器生成，C#消费并验证64位身份、frame/SubjectUpdate、Command/C7、与robot一致的输入链hash、C9 v2各原因、CA 01两块重组（SHA-256与最高位为1的uvarint64状态hash）和重新封包。只有协议有意变化时才执行`go test ./client/wire -run TestClientProtocolGolden -update`并检查差异，普通回归不能自动更新期望。[设计与当前验证边界](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-10-07-CLIENT-PROTOCOL.md)。
 
 TCP发送会检查fctx当前执行位置，业务 worker 在resolver/socket前返回ErrBlockingInBusinessWorker。Match.Tick含同步网络I/O，必须由Entity锁外的比赛单所有者驱动；不能放进Nest快handler等待socket，也不能临时换goroutine绕过标记却并发访问Match。Nest边界只转交命令/调用已配置的比赛单所有者；本轮真实TCP夹具用独立串行owner channel，证明协议/Match消费，未声称具体业务比赛Nest实体及持久化装配已验收。
+
+### Gate + 生成 game-demo 联合验证
+
+运行 `bash scripts/test-gate-client.sh`：自动创建独立本机 NATS，生成并启动验证宿主，编译 `Roost.Client.Demo`，验证业务 PB 请求/应答、真实 DAO PB 全量/增量、删除通知与重连。消息 ID 同样来自生成器，C# 不手写编号。详见 [Gate 联合链路](../docs/framework/GATEWAY.md#生成工程与标准-c-客户端联合链路)。该入口是可运行的接入参考和联合测试，存储投影、账号票据和生产部署的边界见手册。
+
+## Native C++ 共享网络核心
+
+[client/cpp](cpp/README.md) 提供 C++17 核心、C ABI、Unity 托管绑定和 UE 外部库接线。当前以业务 PB + EntitySync 为范围，网络线程独占 socket，消费线程派发回调；macOS 联合验证已完成，其他平台的实现与未验证状态见表，不能视为 C# 全功能替代。

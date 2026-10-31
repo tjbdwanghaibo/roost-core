@@ -7,4 +7,11 @@
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../Roost.Client/Roost.Client.csproj" /></ItemGroup>
   <ItemGroup><Compile Include="../../unity/Runtime/RoostConnection.cs" Link="Unity/RoostConnection.cs" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="../Roost.Client.Codecs/Roost.Client.Codecs.csproj" /></ItemGroup>
+  <ItemGroup><Compile Include="../../unity/Runtime/RoostClientDriver.cs" Link="Unity/RoostClientDriver.cs" /></ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Grpc.Tools" Version="2.72.0" PrivateAssets="all" />
+    <Protobuf Include="../../../codegen/internal/dao/testdata/golden/dao_sync.proto" GrpcServices="None" />
+    <Compile Include="../../../codegen/internal/dao/testdata/golden/dao_sync_apply.cs" Link="Generated/DaoSyncApply.cs" />
+  </ItemGroup>
 </Project>

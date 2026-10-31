@@ -126,6 +126,12 @@ func TestCallReturnsWhenTheWriteBlocksPastItsContext(t *testing.T) {
 	if pending != 0 {
 		t.Fatalf("pending calls after the timeout = %d, want 0", pending)
 	}
+	select {
+	case <-conn.closed:
+	default:
+		t.Fatal("timed-out write left transport open; repeated calls can accumulate blocked writers")
+	}
+
 }
 
 // 超时之后才到的应答（seq 非 0、已无等待者）丢弃，不当成推送：传输层约定只有 seq 0 是推送，

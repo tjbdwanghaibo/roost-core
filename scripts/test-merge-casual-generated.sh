@@ -7,13 +7,14 @@
 # 冷加载、判负过期挑战、续玩领奖，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-merge-casual.XXXXXX")"
+review_root="${ROOST_GENRE_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/roost-merge-casual.XXXXXX")}"
+mkdir -p "$review_root"
 project_root="$review_root/project"
 echo "Merge casual generated consumer and logs: $review_root"
 # 成功后删除临时工程；失败或 ROOST_MERGE_CASUAL_KEEP=1 时保留，便于查看生成日志与工程。
 succeeded=0
 cleanup() {
-  if [[ "$succeeded" == 1 && "${ROOST_MERGE_CASUAL_KEEP:-0}" != 1 ]]; then
+  if [[ -z "${ROOST_GENRE_OUTPUT:-}" && "$succeeded" == 1 && "${ROOST_MERGE_CASUAL_KEEP:-0}" != 1 ]]; then
     rm -rf "$review_root"
   else
     echo "Merge casual generated consumer kept: $review_root" >&2
@@ -55,12 +56,13 @@ cp "$repo_root/scripts/testdata/merge-casual/timer_handlers.go.txt" game/entitie
 cp "$repo_root/scripts/testdata/merge-casual/handlers.go.txt" game/handler/merge_casual.go
 cp "$repo_root/scripts/testdata/merge-casual/gameplay_test.go.txt" game/handler/merge_casual_test.go
 gofmt -w db/def/player.go game/mergecasual/*.go game/entities/player/timer_handlers.go game/handler/merge_casual*.go
+python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" merge-casual
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMergeCasual' ./game/mergecasual ./game/handler | tee "$review_root/test.log"
-# 15 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 16 条场景（含业务 Robot）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestMergeCasual' "$review_root/test.log" || true)"
-if [[ "$passed" != 15 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 15 passing TestMergeCasual scenarios, got $passed" >&2
+if [[ "$passed" != 16 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 16 passing TestMergeCasual scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...

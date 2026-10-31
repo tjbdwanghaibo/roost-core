@@ -1,0 +1,52 @@
+package handler
+
+import (
+	"context"
+	"net"
+	"testing"
+	"time"
+
+	"GENRE_MODULE/game/scenarionet"
+	bots "GENRE_MODULE/loadtest"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+)
+
+func TestScenarioRobotTCPRetryAndReconnect(t *testing.T) {
+	f := newScenario(t)
+	auth := gateway.AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
+		if token != "fixture-owner" {
+			return gateway.Principal{}, gateway.ErrUnauthenticated
+		}
+		return gateway.Principal{PlayerID: f.players[0].ID(), SessionID: "fixture-owner", ServerID: 1}, nil
+	})
+	cfg := gateway.DefaultTCPConfig()
+	cfg.Addr = "127.0.0.1:0"
+	server, err := gateway.NewTCPServer(cfg, scenarionet.Dispatch(f.engine), auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Stop(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	run := bots.Smoke(runner.Config{Count: 1, Duration: 5 * time.Second, Transport: transport.Config{Endpoint: server.Addr().String()}}, f.room.ID(), func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket("fixture-owner"), nil })
+	if err := run.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if stats := run.Stats(); stats.Success != 1 || stats.Failure != 0 || stats.Canceled != 0 {
+		t.Fatalf("robot failed: %+v", stats)
+	}
+	if state := f.state(t); state.Revision != 1 {
+		t.Fatalf("retry committed twice: %+v", state)
+	}
+}

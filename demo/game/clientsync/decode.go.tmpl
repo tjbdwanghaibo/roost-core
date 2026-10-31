@@ -1,0 +1,37 @@
+package clientsync
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"{{MODULE}}/db"
+)
+
+// DecodeFields 将公开的 PB patch 转为机器人按字段名读取的视图。
+// 未出现在 patch 中的字段不更新；集合值整体替换，不递归合并。
+func DecodeFields(update entity.SubjectSyncUpdate) (map[string]any, error) {
+	if update.Payload.Codec() != 2 {
+		return nil, fmt.Errorf("unsupported DAO sync codec %d", update.Payload.Codec())
+	}
+	switch update.Namespace {
+	case "player":
+		patch, err := db.UnmarshalSyncPlayerDao(update.Payload.BytesCopy())
+		if err != nil {
+			return nil, err
+		}
+		return patch.Values(), nil
+	case "monster":
+		patch, err := db.UnmarshalSyncMonsterDao(update.Payload.BytesCopy())
+		if err != nil {
+			return nil, err
+		}
+		return patch.Values(), nil
+	case "scene":
+		patch, err := db.UnmarshalSyncSceneDao(update.Payload.BytesCopy())
+		if err != nil {
+			return nil, err
+		}
+		return patch.Values(), nil
+	default:
+		return nil, fmt.Errorf("unknown sync namespace %q", update.Namespace)
+	}
+}

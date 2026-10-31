@@ -1,0 +1,21 @@
+package handler
+
+import (
+	"encoding/json"
+
+	"GENRE_MODULE/game/rules"
+)
+
+//roost:nest rollback=undo durability=strict
+func handlerCoopView(room IGameRoomEntity, player IScenarioPlayerEntity) (rules.View, error) {
+	var state rules.State
+	if err := json.Unmarshal([]byte(room.Dao().GetState()), &state); err != nil {
+		return rules.View{}, err
+	}
+	for seat, id := range state.Members {
+		if id == player.ID() {
+			return rules.View{Revision: state.Revision, NextSeq: state.Last[id].Command.Seq + 1, Stage: state.Stage, Cleared: state.Cleared, Claimed: state.Claimed[seat], Coins: player.Dao().GetCoins()}, nil
+		}
+	}
+	return rules.View{}, rules.ErrRule
+}

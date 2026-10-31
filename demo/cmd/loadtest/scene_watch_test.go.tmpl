@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	player "{{MODULE}}/game/entities/player"
-	"{{MODULE}}/protocol/msgid"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
@@ -14,14 +12,16 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/session"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
-	"go.mongodb.org/mongo-driver/v2/bson"
+	"{{MODULE}}/db"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/msgid"
 )
 
 // 场景帧在线上的形状由服务端 scene.go 的 PushSyncPlayer 决定：RS v2 Sync 标志、原始帧字节，不包
 // EntitySyncPush PB；robot session 对 Sync 包不做 PB 解码（Message.Value 为 nil）。scene_watch 必须按
 // 这个形状读帧——只认 PB 值时它把每一帧都静默跳过，scene_expect 在 10 秒后以 "0 frames" 失败。
 func TestSceneWatcherReadsSyncFlaggedFrames(t *testing.T) {
-	document, err := bson.Marshal(bson.M{"level": int32(3)})
+	document, err := db.MarshalSyncPlayerDao(&db.SyncPlayerDao{EntityID: 42, Level: &db.SyncPlayerDaoLevelField{Value: 3}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestSceneWatcherReadsSyncFlaggedFrames(t *testing.T) {
 		SubjectID: subjectID,
 		Namespace: "player",
 		Full:      true,
-		Payload:   entity.CopyFrozenSyncPayload(0, document),
+		Payload:   entity.CopyFrozenSyncPayload(2, document),
 	}, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +49,7 @@ func TestSceneWatcherReadsSyncFlaggedFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	watcher := &sceneWatcher{subjects: make(map[int64]bson.M)}
+	watcher := &sceneWatcher{subjects: make(map[int64]map[string]any)}
 	watcher.capture(&session.Message{Packet: &transport.Packet{
 		Flags:   wire.FlagPush | wire.FlagSync,
 		MsgID:   msgid.MsgEntitySync,
@@ -66,7 +66,7 @@ func TestSceneWatcherReadsSyncFlaggedFrames(t *testing.T) {
 	}
 
 	// 同一个消息号却没有 Sync 标志：这个客户端读不了，必须让 watch 失败而不是静默跳过。
-	stray := &sceneWatcher{subjects: make(map[int64]bson.M)}
+	stray := &sceneWatcher{subjects: make(map[int64]map[string]any)}
 	stray.capture(&session.Message{Packet: &transport.Packet{Flags: wire.FlagPush, MsgID: msgid.MsgEntitySync, Payload: payload}})
 	if stray.failure == nil {
 		t.Fatal("没有 Sync 标志的场景帧被静默接受或跳过，scene_expect 只会在超时后报 0 frames")
@@ -74,9 +74,10 @@ func TestSceneWatcherReadsSyncFlaggedFrames(t *testing.T) {
 }
 
 // syncFrame 编出一帧：一个 subject 的完整更新，字段取 document。
-func syncFrame(t *testing.T, subjectID int64, document bson.M) []byte {
+func syncFrame(t *testing.T, subjectID int64, document *db.SyncPlayerDao) []byte {
 	t.Helper()
-	raw, err := bson.Marshal(document)
+	document.EntityID = subjectID
+	raw, err := db.MarshalSyncPlayerDao(document)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +85,7 @@ func syncFrame(t *testing.T, subjectID int64, document bson.M) []byte {
 		SubjectID: subjectID,
 		Namespace: "player",
 		Full:      true,
-		Payload:   entity.CopyFrozenSyncPayload(0, raw),
+		Payload:   entity.CopyFrozenSyncPayload(2, raw),
 	}, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -116,8 +117,8 @@ func TestSceneAliveFailsWhenTheServerStopsReplicating(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, live := range []bool{true, false} {
-		watcher := &sceneWatcher{subjects: make(map[int64]bson.M)}
-		watcher.consume(syncFrame(t, subjectID, bson.M{"exp": int64(10), "level": int64(2)}))
+		watcher := &sceneWatcher{subjects: make(map[int64]map[string]any)}
+		watcher.consume(syncFrame(t, subjectID, &db.SyncPlayerDao{Exp: &db.SyncPlayerDaoExpField{Value: 10}, Level: &db.SyncPlayerDaoLevelField{Value: 2}}))
 		rb := robot.NewContext(robot.Config{PlayerID: playerID})
 		rb.Blackboard.Set("scene_watcher", watcher)
 		rb.Blackboard.Set("player_id", playerID)
@@ -128,7 +129,7 @@ func TestSceneAliveFailsWhenTheServerStopsReplicating(t *testing.T) {
 			}
 			asked++
 			if live {
-				go watcher.consume(syncFrame(t, subjectID, bson.M{"exp": int64(11)}))
+				go watcher.consume(syncFrame(t, subjectID, &db.SyncPlayerDao{Exp: &db.SyncPlayerDaoExpField{Value: 11}}))
 			}
 			return nil
 		}

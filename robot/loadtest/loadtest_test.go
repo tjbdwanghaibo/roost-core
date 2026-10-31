@@ -14,6 +14,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
 	"github.com/tjbdwanghaibo/roost-core/robot/runner"
 	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 )
 
 // fakeRunner completes after a short scripted delay with scripted stats.
@@ -127,7 +129,7 @@ func TestAdminCommandsAndReport(t *testing.T) {
 		t.Fatalf("admin report: %+v %v", report, err)
 	}
 	markdown, _ := report.Data["report"].(map[string]any)["markdown"].(string)
-	for _, want := range []string{"Load-test report", "| p50 | p90 | p95 | p99 |", "| 7ms | 7ms | 7ms | 7ms |"} {
+	for _, want := range []string{"Load-test report", "| p50 | p90 | p95 | p99 |", "| 7.000ms | 7.000ms | 7.000ms | 7.000ms |"} {
 		if !strings.Contains(markdown, want) {
 			t.Fatalf("report missing %q:\n%s", want, markdown)
 		}
@@ -312,4 +314,31 @@ func grepLines(text, needle string) string {
 		}
 	}
 	return strings.Join(out, "\n")
+}
+
+// 自定义 Runner 可选提供运行报告；没有报告的 Runner 不冒充零请求/零流量。
+type reportingRunner struct{ fakeRunner }
+
+func (*reportingRunner) MessageReport() session.Report {
+	return session.Report{Messages: []session.CallReport{{MessageID: 101, CallCounts: session.CallCounts{Started: 3, Sent: 3, Completed: 3, OK: 2, Rejected: 1}}}}
+}
+func (*reportingRunner) TrafficReport() transport.TrafficReport {
+	return transport.TrafficReport{MeasuredConnections: 1, ReadBytes: 90, WrittenBytes: 80}
+}
+func TestManagerIncludesRequestAndTrafficReports(t *testing.T) {
+	fake := &reportingRunner{fakeRunner{delay: 20 * time.Millisecond, stats: runner.Stats{Started: 1, Success: 1}}}
+	manager := loadtest.New(loadtest.Config{Profiles: map[string]loadtest.Profile{"smoke": {Run: runner.Config{Count: 1}}}, RunnerFactory: func(string, string, loadtest.Profile) loadtest.Runner { return fake }})
+	if _, err := manager.Start(context.Background(), loadtest.StartRequest{Profile: "smoke"}); err != nil {
+		t.Fatal(err)
+	}
+	report := waitDone(t, manager)
+	if report.Messages == nil || report.Messages.Messages[0].Rejected != 1 || report.Traffic == nil || report.Traffic.WrittenBytes != 80 || report.RequestOKPerSecond <= 0 {
+		t.Fatalf("report lost business results: %+v", report)
+	}
+	report.Messages.Messages[0].Rejected = 999
+	report.Traffic.WrittenBytes = 999
+	again := manager.History(loadtest.HistoryRequest{Limit: 1}).Runs[0]
+	if again.Messages.Messages[0].Rejected != 1 || again.Traffic.WrittenBytes != 80 {
+		t.Fatal("returned report mutated retained evidence")
+	}
 }

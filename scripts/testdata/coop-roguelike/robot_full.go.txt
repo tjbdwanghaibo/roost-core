@@ -1,0 +1,146 @@
+package loadtest
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	generated "GENRE_MODULE/loadtest/protocol"
+	"GENRE_MODULE/protocol/msgid"
+	"GENRE_MODULE/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+)
+
+// Coop 完成一对客户端的整局；每个 Runner 实例只使用这一对已分配房间的身份。
+// 规模压测应为每对机器人分配不同房间和票据，不能复用本次领奖后的存档刷吞吐。
+func Coop(cfg runner.Config, roomID int64, auth [2]robot.AuthProvider) *runner.Runner {
+	protocols := protocol.NewRegistry(nil)
+	generated.RegisterDefaults(protocols)
+	scenarios := scenario.NewRegistry()
+	scenarios.MustRegister(scenario.New("coop-full", scenario.NodeFunc(func(ctx context.Context, first *robot.Context) error {
+		peerConfig := first.Config
+		peerConfig.Auth = auth[1]
+		peer := robot.NewContext(peerConfig)
+		peer.RunAction = first.RunAction
+		defer peer.Close()
+		clients := [2]*robot.Context{first, peer}
+		var initial [2]int64
+		for i, client := range clients {
+			if err := client.Do(ctx, action.NameConnect, nil); err != nil {
+				return err
+			}
+			view, err := CoopView(ctx, client, roomID)
+			if err != nil {
+				return err
+			}
+			if view.Stage != 0 || view.Cleared || view.Claimed || view.Revision != 0 {
+				return fmt.Errorf("room is not fresh")
+			}
+			initial[i] = view.Coins
+		}
+		for stage := range 3 {
+			for seat, client := range clients {
+				view, err := CoopView(ctx, client, roomID)
+				if err != nil {
+					return err
+				}
+				request := &pb.ScenarioCommandRequest{RoomID: roomID, Seq: view.NextSeq, Revision: view.Revision, Kind: "vote", Choice: int32((stage + seat) % 2)}
+				if _, err = CoopCommand(ctx, client, request); err != nil {
+					return err
+				}
+			}
+		}
+		for seat, client := range clients {
+			view, err := CoopView(ctx, client, roomID)
+			if err != nil {
+				return err
+			}
+			if !view.Cleared || view.Stage != 3 || view.Claimed {
+				return fmt.Errorf("unexpected stage before claim: %+v", view)
+			}
+			request := &pb.ScenarioCommandRequest{RoomID: roomID, Seq: view.NextSeq, Revision: view.Revision, Kind: "claim"}
+			for range 2 {
+				response, err := CoopCommand(ctx, client, request)
+				if err != nil {
+					return err
+				}
+				if response.Reward != 10 {
+					return fmt.Errorf("wrong reward: %d", response.Reward)
+				}
+			}
+			if err = client.Do(ctx, action.NameConnect, nil); err != nil {
+				return err
+			}
+			if _, err = CoopCommand(ctx, client, request); err != nil {
+				return err
+			}
+			view, err = CoopView(ctx, client, roomID)
+			if err != nil {
+				return err
+			}
+			if !view.Claimed || view.Coins != initial[seat]+10 {
+				return fmt.Errorf("client reward view mismatch: %+v", view)
+			}
+			// 新序号再次领奖必须拒绝；回执重试成功与资产重复领取是两种不同语义。
+			request.Seq = view.NextSeq
+			request.Revision = view.Revision
+			if _, err = CoopCommand(ctx, client, request); !errors.Is(err, session.ErrRejected) {
+				return fmt.Errorf("duplicate claim: %w", err)
+			}
+		}
+		for seat, client := range clients {
+			view, err := CoopView(ctx, client, roomID)
+			if err != nil {
+				return err
+			}
+			if view.Revision != 8 || !view.Cleared || !view.Claimed || view.Coins != initial[seat]+10 {
+				return fmt.Errorf("final client view mismatch: %+v", view)
+			}
+		}
+		return nil
+	})))
+	cfg.Count = 1
+	cfg.Executor = runner.ExecutorPool
+	cfg.Scenario = "coop-full"
+	cfg.Transport.Type = transport.PlayerTCPType
+	return runner.New(cfg, runner.WithProtocolRegistry(protocols), runner.WithScenarioRegistry(scenarios), runner.WithAuthProvider(auth[0]))
+}
+func CoopView(ctx context.Context, client *robot.Context, roomID int64) (*pb.CoopViewResponse, error) {
+	msg, err := client.Session().CallChecked(ctx, msgid.MsgCoopView, msgid.MsgCoopView, &pb.CoopViewRequest{RoomID: roomID}, func(m *session.Message) error {
+		response, ok := m.Value.(*pb.CoopViewResponse)
+		if !ok {
+			return fmt.Errorf("invalid view response")
+		}
+		if response.Code != 0 {
+			return session.ErrRejected
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return msg.Value.(*pb.CoopViewResponse), nil
+}
+func CoopCommand(ctx context.Context, client *robot.Context, request *pb.ScenarioCommandRequest) (*pb.ScenarioCommandResponse, error) {
+	msg, err := client.Session().CallChecked(ctx, msgid.MsgScenarioCommand, msgid.MsgScenarioCommand, request, func(m *session.Message) error {
+		response, ok := m.Value.(*pb.ScenarioCommandResponse)
+		if !ok {
+			return fmt.Errorf("invalid command response")
+		}
+		if response.Code != 0 {
+			return session.ErrRejected
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return msg.Value.(*pb.ScenarioCommandResponse), nil
+}

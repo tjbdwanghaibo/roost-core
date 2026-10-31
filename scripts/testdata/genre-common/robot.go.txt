@@ -1,0 +1,57 @@
+package loadtest
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	generated "GENRE_MODULE/loadtest/protocol"
+	"GENRE_MODULE/protocol/msgid"
+	"GENRE_MODULE/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/action"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+)
+
+// Smoke 验证新房间的第一个合法动作、同连接重试、重连后重试都只提交一次。
+// 这是功能验收；重复同一回执不代表正常业务吞吐，不能用其结果声明服务器容量。
+func Smoke(cfg runner.Config, roomID int64, auth robot.AuthProvider) *runner.Runner {
+	protocols := protocol.NewRegistry(nil)
+	generated.RegisterDefaults(protocols)
+	scenarios := scenario.NewRegistry()
+	actions := action.NewRegistry()
+	command := scenario.NodeFunc(func(ctx context.Context, rb *robot.Context) error {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		message, err := rb.Session().CallChecked(ctx, msgid.MsgScenarioCommand, msgid.MsgScenarioCommand, &pb.ScenarioCommandRequest{RoomID: roomID, Seq: 1, Kind: FIRST_COMMAND}, func(m *session.Message) error {
+			response, ok := m.Value.(*pb.ScenarioCommandResponse)
+			if !ok {
+				return fmt.Errorf("invalid command response")
+			}
+			if response.Code != 0 {
+				return session.ErrRejected
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		response, ok := message.Value.(*pb.ScenarioCommandResponse)
+		if !ok || response.Code != 0 || response.Revision != 1 || response.Reward != 0 {
+			return fmt.Errorf("unexpected command result: %#v", message.Value)
+		}
+		return nil
+	})
+	scenarios.MustRegister(scenario.New("smoke", scenario.Sequence(
+		scenario.Action(action.NameConnect, nil), command, command,
+		scenario.Action(action.NameConnect, nil), command,
+	)))
+	cfg.Scenario = "smoke"
+	cfg.Transport.Type = transport.PlayerTCPType
+	return runner.New(cfg, runner.WithProtocolRegistry(protocols), runner.WithScenarioRegistry(scenarios), runner.WithActionRegistry(actions), runner.WithAuthProvider(auth))
+}

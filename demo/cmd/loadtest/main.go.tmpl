@@ -29,17 +29,15 @@ import (
 	"syscall"
 	"time"
 
-	"{{MODULE}}/game/battle"
-	"{{MODULE}}/loadtest/playertcp"
-	"{{MODULE}}/protocol/msgid"
-	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
-	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/action"
 	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
@@ -48,10 +46,12 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/robot/scenario"
 	"github.com/tjbdwanghaibo/roost-core/robot/session"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
-	"go.mongodb.org/mongo-driver/v2/bson"
+	"{{MODULE}}/game/battle"
+	"{{MODULE}}/game/clientsync"
+	"{{MODULE}}/loadtest/playertcp"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
 )
 
 const profileName = "demo"
@@ -59,6 +59,13 @@ const profileName = "demo"
 func main() {
 	endpoint := flag.String("endpoint", "127.0.0.1:7000", "player TCP address")
 	count := flag.Int("count", 10, "robot population")
+ executor := flag.String("executor", "pool", "pool, looping, or arrival-rate; rates count whole scenarios, not messages")
+ rate := flag.Float64("rate", 10, "arrival-rate scenarios started per second")
+ maxConcurrent := flag.Int("max-concurrent", 1024, "arrival-rate in-flight robot limit")
+ seed := flag.Int64("seed", 1, "reproducible scenario RNG seed")
+ rampStep := flag.Int("ramp-step", 1, "robots started per ramp step")
+ rampInterval := flag.Duration("ramp-interval", 0, "delay between population ramp steps")
+ reportPath := flag.String("report", "", "optional JSON report output file")
 	duration := flag.Duration("duration", 0, "bound the run; 0 lets every robot finish its scenario once")
 	scenarioDir := flag.String("scenarios", "loadtest/scenarios", "directory of scenario YAML files")
 	scenarioName := flag.String("scenario", "demo", "scenario to run")
@@ -85,13 +92,18 @@ func main() {
 	}
 	defer login.Close()
 
-	if err := run(*endpoint, *count, *duration, *scenarioDir, *scenarioName, *firstPlayerID, *maxErrorRate, *maxP95, login); err != nil {
+	cfg := runner.Config{Executor: runner.Executor(*executor), Count:*count, Rate:*rate, MaxConcurrent:*maxConcurrent,Seed:*seed,Duration:*duration,Scenario:*scenarioName,Ramp:runner.Ramp{Step:*rampStep,Interval:*rampInterval},Transport:transport.Config{Type:playertcp.TransportType,Endpoint:*endpoint}}
+ if cfg.Executor != runner.ExecutorPool && cfg.Duration <= 0 {
+  fmt.Fprintln(os.Stderr,"loadtest: looping/arrival-rate requires a positive -duration")
+  os.Exit(2)
+ }
+ if err := run(cfg, *scenarioDir, *firstPlayerID, *maxErrorRate, *maxP95, *reportPath, login); err != nil {
 		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(endpoint string, count int, duration time.Duration, scenarioDir, scenarioName string, firstPlayerID int64, maxErrorRate, maxP95 float64, login *accountLogin) error {
+func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRate, maxP95 float64, reportPath string, login *accountLogin) error {
 	playertcp.MustRegister()
 
 	protocols := protocol.NewRegistry(pbCodec{})
@@ -106,18 +118,10 @@ func run(endpoint string, count int, duration time.Duration, scenarioDir, scenar
 	manager := loadtest.New(loadtest.Config{
 		Profiles: map[string]loadtest.Profile{
 			profileName: {
-				Run: runner.Config{
-					Executor: runner.ExecutorPool,
-					Count:    count,
-					Scenario: scenarioName,
-					Duration: duration,
-					Transport: transport.Config{
-						Type:     playertcp.TransportType,
-						Endpoint: endpoint,
-					},
-				},
+				Run: cfg,
 				Thresholds: []loadtest.Threshold{
 					{Metric: "error_rate", Max: maxErrorRate},
+ {Metric:"drop_rate",Max:0},
 					{Metric: "p95", Max: maxP95},
 				},
 			},
@@ -146,7 +150,11 @@ func run(endpoint string, count int, duration time.Duration, scenarioDir, scenar
 	if err != nil {
 		return err
 	}
-	report, _ := json.MarshalIndent(snapshot, "", "  ")
+	report, err := json.MarshalIndent(snapshot, "", "  ")
+ if err != nil { return err }
+ if reportPath != "" {
+  if err := os.WriteFile(reportPath,append(report,'\n'),0o644);err != nil {return fmt.Errorf("write report: %w",err)}
+ }
 	fmt.Println(string(report))
 	if snapshot.State != loadtest.StateFinished {
 		// snapshot.Error names the violated threshold with its actual value
@@ -1009,7 +1017,6 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 	return nil
 }
 
-
 // battleSink is the LockstepBot's outbound half: one BattleInput request
 // carries an input, a keyframe hash report or a catch-up request, so all
 // three of the sink's methods are the same call with different fields set.
@@ -1177,7 +1184,7 @@ func runBattle(ctx context.Context, rb *robot.Context, param any) error {
 // feed into its rendering state.
 type sceneWatcher struct {
 	mu       sync.Mutex
-	subjects map[int64]bson.M
+	subjects map[int64]map[string]any
 	frames   int
 	failure  error
 }
@@ -1204,8 +1211,8 @@ func (watcher *sceneWatcher) consume(payload []byte) {
 			if len(payload) == 0 {
 				continue
 			}
-			var document bson.M
-			if err := bson.Unmarshal(payload, &document); err != nil {
+			document, err := clientsync.DecodeFields(update)
+			if err != nil {
 				watcher.failure = fmt.Errorf("decode player state: %w", err)
 				return
 			}
@@ -1214,7 +1221,7 @@ func (watcher *sceneWatcher) consume(payload []byte) {
 			// like a state with three fields missing.
 			known := watcher.subjects[update.SubjectID]
 			if known == nil {
-				known = bson.M{}
+				known = map[string]any{}
 				watcher.subjects[update.SubjectID] = known
 			}
 			for key, value := range document {
@@ -1226,7 +1233,7 @@ func (watcher *sceneWatcher) consume(payload []byte) {
 
 // watchScene installs the capture. Params: none.
 func watchScene(_ context.Context, rb *robot.Context, _ any) error {
-	watcher := &sceneWatcher{subjects: make(map[int64]bson.M)}
+	watcher := &sceneWatcher{subjects: make(map[int64]map[string]any)}
 	rb.Blackboard.Set("scene_watcher", watcher)
 	if err := rb.EnsurePushCapture("scene", msgid.MsgEntitySync, watcher.capture); err != nil {
 		return fmt.Errorf("scene_watch: capture state frames: %w", err)
@@ -1277,7 +1284,7 @@ func expectArrival(ctx context.Context, rb *robot.Context, param any) error {
 		found := false
 		for subjectID, document := range watcher.subjects {
 			if entity.GetUniqueIDFromEntityID(subjectID) == playerID {
-				x, y, found = bsonInt64(document["pos_x"]), bsonInt64(document["pos_y"]), true
+				x, y, found = syncInt64(document["pos_x"]), syncInt64(document["pos_y"]), true
 				break
 			}
 		}
@@ -1329,7 +1336,7 @@ func expectSceneAlive(ctx context.Context, rb *robot.Context, param any) error {
 		defer watcher.mu.Unlock()
 		for subjectID, document := range watcher.subjects {
 			if entity.GetUniqueIDFromEntityID(subjectID) == playerID {
-				exp, level = bsonInt64(document["exp"]), bsonInt64(document["level"])
+				exp, level = syncInt64(document["exp"]), syncInt64(document["level"])
 				break
 			}
 		}
@@ -1361,7 +1368,7 @@ func expectSceneAlive(ctx context.Context, rb *robot.Context, param any) error {
 	}
 }
 
-func bsonInt64(value any) int64 {
+func syncInt64(value any) int64 {
 	switch typed := value.(type) {
 	case int64:
 		return typed
@@ -1399,7 +1406,7 @@ func expectScene(ctx context.Context, rb *robot.Context, param any) error {
 			// running, somebody else's equipment satisfied a client that
 			// had not equipped anything yet, and the scenario went green
 			// while the thing it tests had not happened.
-			own := bson.M(nil)
+			own := map[string]any(nil)
 			for subjectID, document := range watcher.subjects {
 				if entity.GetUniqueIDFromEntityID(subjectID) == playerID {
 					own = document

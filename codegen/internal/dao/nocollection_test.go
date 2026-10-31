@@ -209,11 +209,14 @@ func TestSwitchingADaoToNoCollectionRetiresItsStoragePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "gen_ghost_dao.go" {
-		names := make([]string, 0, len(entries))
-		for _, entry := range entries {
-			names = append(names, entry.Name())
-		}
-		t.Fatalf("output after the switch = %v, want only gen_ghost_dao.go", names)
+	want := map[string]bool{"gen_ghost_dao.go": true, "gen_dao_sync.go": true, "dao_sync.proto": true, "dao_sync_apply.cs": true}
+	if len(entries) != len(want) {
+		t.Fatalf("nocoll must retain only DAO and sync outputs: %v", entries)
 	}
+	for _, entry := range entries {
+		if !want[entry.Name()] {
+			t.Errorf("unexpected nocoll output %s", entry.Name())
+		}
+	}
+
 }

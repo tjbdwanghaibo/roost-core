@@ -786,57 +786,23 @@ func {{.Dao.Name}}SyncFields() []dataengine.SyncFieldMeta {
 func (d *{{.Dao.Name}}) SyncFields() []dataengine.SyncFieldMeta { return {{.Dao.Name}}SyncFields() }
 {{- end}}
 
+// MarshalSync 编码字段级 PB patch：包装存在表示本次覆盖，包含零值与空容器。
+// 持久化、回滚快照仍使用 BSON。
 func (d *{{.Dao.Name}}) MarshalSync(mask uint64) []byte {
-	doc := bson.M{
-		"_id": d.id,
-	}
-{{- range syncFields .Dao.Fields}}
-	if mask&{{fieldMaskName $.Dao.Name .Name}} != 0 {
-{{- if eq .Kind 2}}
-		doc["{{.Key}}"] = {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}}
+{{- if syncFields .Dao.Fields}}
+ return d.marshalSyncPB(mask)
 {{- else}}
-		doc["{{.Key}}"] = {{toWire . (printf "d.%s" (fieldVar .Name))}}
+ return nil
 {{- end}}
-	}
-{{- end}}
-	if len(doc) == 1 {
-		return nil
-	}
-	data, err := bson.Marshal(doc)
-	if err != nil {
-		// nil already means "nothing to sync"; returning it on failure would
-		// silently drop a sync payload. See marshalPersistData.
-		panic(fmt.Errorf("{{.Dao.Name}}: marshal sync data: %w", err))
-	}
-	return data
 }
 
 func (d *{{.Dao.Name}}) ApplySync(raw []byte) error {
-	var doc bson.M
-	if err := bson.Unmarshal(raw, &doc); err != nil {
-		return err
-	}
-{{- range syncFields .Dao.Fields}}
-	if v, ok := doc["{{.Key}}"]; ok {
-		data, err := bson.Marshal(bson.M{"v": v})
-		if err != nil {
-			return err
-		}
-		var wrap struct {
-			V {{wireType .}} ` + "`" + `bson:"v"` + "`" + `
-		}
-		if err := bson.Unmarshal(data, &wrap); err != nil {
-			return err
-		}
-{{- if eq .Kind 2}}
-		d.set{{.Name}}RawMap({{fromWire . "wrap.V"}})
+{{- if syncFields .Dao.Fields}}
+ return d.applySyncPB(raw)
 {{- else}}
-		d.{{fieldVar .Name}} = {{fromWire . "wrap.V"}}
+ if len(raw)!=0 { return fmt.Errorf("{{.Dao.Name}} has no sync fields") }
+ return nil
 {{- end}}
-	}
-{{- end}}
-	d.Init()
-	return nil
 }
 {{- if not .Dao.NoCollection}}
 

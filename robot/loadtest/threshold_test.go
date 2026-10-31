@@ -147,7 +147,7 @@ func TestQuantileThresholdJudgesTheObservedCostsNotABucketBound(t *testing.T) {
 			run.State, run.StopReason, run.Thresholds, run.QuantilesMS)
 	}
 	if got := run.QuantilesMS["p95"]; got != 9600 {
-		t.Fatalf("p95 of 10 robots = %dms, want the slowest robot 9600ms", got)
+		t.Fatalf("p95 of 10 robots = %gms, want the slowest robot 9600ms", got)
 	}
 }
 
@@ -173,5 +173,32 @@ func TestThresholdFailureNamesTheThresholdAndTheActualValue(t *testing.T) {
 	}
 	if p95 == nil || p95.Samples != 10 {
 		t.Fatalf("p95 verdict %+v; want samples=10", p95)
+	}
+}
+
+func TestSubMillisecondThresholdIsNotRoundedDown(t *testing.T) {
+	fake := &fakeRunner{stats: runner.Stats{Started: 1, Success: 1}}
+	m := newManager(t, fake, []loadtest.Threshold{{Metric: "p99", Max: 0.0005}}, 900*time.Microsecond)
+	if _, err := m.Start(context.Background(), loadtest.StartRequest{Profile: "smoke"}); err != nil {
+		t.Fatal(err)
+	}
+	done := waitDone(t, m)
+	if done.State != loadtest.StateFailed || done.Thresholds[0].Actual != 0.0009 {
+		t.Fatalf("900us exceeded 500us but result was %+v", done)
+	}
+}
+
+func TestDropRateCountsWorkTheLoadGeneratorCouldNotIssue(t *testing.T) {
+	fake := &fakeRunner{stats: runner.Stats{Scheduled: 10, Started: 7, Success: 7, DroppedSchedule: 2, DroppedCapacity: 1}}
+	m := newManager(t, fake, []loadtest.Threshold{{Metric: "drop_rate", Max: 0}}, time.Millisecond)
+	if _, err := m.Start(context.Background(), loadtest.StartRequest{Profile: "smoke"}); err != nil {
+		t.Fatal(err)
+	}
+	done := waitDone(t, m)
+	if done.State != loadtest.StateFailed || done.Thresholds[0].Actual != 0.3 || done.Stats.Scheduled != 10 {
+		t.Fatalf("underload incorrectly passed: %+v", done)
+	}
+	if done.Resources.Samples < 2 || done.Resources.ElapsedSeconds <= 0 || done.Environment.GoVersion == "" {
+		t.Fatalf("missing Robot environment/resources: %+v", done)
 	}
 }

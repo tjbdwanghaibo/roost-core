@@ -57,8 +57,7 @@ func TestSyncFieldTableAgreesWithWhatTheSettersMark(t *testing.T) {
 	if !ok || byWireName.Bit != mask {
 		t.Fatalf("lookup by wire name = %+v (ok=%v), want bit %d", byWireName, ok, mask)
 	}
-	// The wire name is what MarshalSync actually writes, which is the only
-	// reason a consumer can trust it to address the payload.
+	// 位掩码仍须选中 PB patch 字段；WireName 是 Values 动态视图的逻辑键。
 	if payload := hero.MarshalSync(mask); len(payload) == 0 {
 		t.Fatal("the mask the table named produced no sync payload")
 	}

@@ -1,0 +1,20 @@
+package protocoldef
+
+//roost:proto package=game.protocol go_package=GENRE_MODULE/protocol/pb;pb
+
+type PlayRequest struct {
+	Seq     uint64 `pb:"1"`
+	Kind    string `pb:"2"`
+	Station int32  `pb:"3"`
+	Recipe  int32  `pb:"4"`
+	JobID   uint64 `pb:"5"`
+	Count   int64  `pb:"6"`
+}
+type PlayResponse struct {
+	Code int32  `pb:"1"`
+	Seq  uint64 `pb:"2"`
+}
+type PlayProtocol interface {
+	//roost:msg id=15011 tags=local
+	Play(PlayRequest) PlayResponse
+}

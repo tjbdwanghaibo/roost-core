@@ -1,0 +1,66 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/signal"
+	"time"
+
+	bots "GENRE_MODULE/loadtest"
+
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+)
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+func run() error {
+	endpoint := flag.String("endpoint", "127.0.0.1:7000", "embedded TCP or Gate endpoint")
+	path := flag.String("steps", "", "typed request steps from the current authoritative game view")
+	timeout := flag.Duration("timeout", 30*time.Second, "whole scenario deadline")
+	flag.Parse()
+	if *path == "" || *timeout <= 0 {
+		return fmt.Errorf("-steps is required and -timeout must be positive")
+	}
+	ticket := os.Getenv("ROOST_ROBOT_TICKET")
+	if ticket == "" {
+		return fmt.Errorf("ROOST_ROBOT_TICKET is required")
+	}
+	file, err := os.Open(*path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	var steps []bots.Step
+	decoder := json.NewDecoder(file)
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&steps); err != nil {
+		return err
+	}
+	if err = decoder.Decode(new(any)); err != io.EOF {
+		return fmt.Errorf("steps must contain exactly one JSON array")
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	run := bots.Commands(runner.Config{Count: 1, Duration: *timeout, Transport: transport.Config{Endpoint: *endpoint}}, func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket(ticket), nil }, steps)
+	if err = run.Run(ctx); err != nil {
+		return err
+	}
+	stats := run.Stats()
+	if err = json.NewEncoder(os.Stdout).Encode(map[string]any{"scenarios": stats, "requests": run.MessageReport(), "traffic": run.TrafficReport()}); err != nil {
+		return err
+	}
+	if stats.Success != 1 || stats.Failure != 0 || stats.Canceled != 0 {
+		return fmt.Errorf("business scenario failed")
+	}
+	return nil
+}

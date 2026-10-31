@@ -3,7 +3,10 @@ package handler
 import (
 	"encoding/hex"
 	"errors"
+
 	db "example.com/moba-practice/db"
+	"example.com/moba-practice/game/moba"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
@@ -53,4 +56,10 @@ func handlerMOBASettle(result IMobaResultEntity, winner IMobaPlayerEntity, loser
 	d.SetLoserID(loser.ID())
 	d.SetStatus(status)
 	return nil
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerMOBAProfile(player IMobaPlayerEntity) (moba.Profile, error) {
+	dao := player.Dao()
+	return moba.Profile{Gold: dao.GetGold(), Wins: dao.GetWins(), Losses: dao.GetLosses()}, nil
 }

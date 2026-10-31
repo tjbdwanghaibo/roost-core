@@ -6,13 +6,14 @@
 # 由循环补触发离线到期的 Buff / 复活并按时投递下一期限，再由第三个进程冷加载核对并重试。使用本次唯一库，成功后删除。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-review_root="$(mktemp -d "${TMPDIR:-/tmp}/roost-mmorpg.XXXXXX")"
+review_root="${ROOST_GENRE_OUTPUT:-$(mktemp -d "${TMPDIR:-/tmp}/roost-mmorpg.XXXXXX")}"
+mkdir -p "$review_root"
 project_root="$review_root/project"
 echo "MMORPG generated consumer and logs: $review_root"
 # 成功后删除临时工程；失败或 ROOST_MMORPG_KEEP=1 时保留，便于查看生成日志与工程。
 succeeded=0
 cleanup() {
-  if [[ "$succeeded" == 1 && "${ROOST_MMORPG_KEEP:-0}" != 1 ]]; then
+  if [[ -z "${ROOST_GENRE_OUTPUT:-}" && "$succeeded" == 1 && "${ROOST_MMORPG_KEEP:-0}" != 1 ]]; then
     rm -rf "$review_root"
   else
     echo "MMORPG generated consumer kept: $review_root" >&2
@@ -65,12 +66,13 @@ cp "$repo_root/scripts/testdata/mmorpg/gameplay_test.go.txt" game/handler/mmo_ga
 cp "$repo_root/scripts/testdata/mmorpg/timer_handlers.go.txt" game/entities/player/timer_handlers.go
 gofmt -w db/def/*.go game/handler/mmo_*.go game/entities/player/timer_handlers.go
 go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_root"
+python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" mmorpg
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPG(Party|Trade|Combat|Buff|Transfer|Death)' ./game/handler | tee "$review_root/test.log"
-# 13 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPG(Party|Trade|Combat|Buff|Transfer|Death|Robot)' ./game/handler | tee "$review_root/test.log"
+# 14 条场景必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestMMORPG' "$review_root/test.log" || true)"
-if [[ "$passed" != 13 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 13 passing TestMMORPG scenarios, got $passed" >&2
+if [[ "$passed" != 14 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 14 passing TestMMORPG scenarios, got $passed" >&2
   exit 1
 fi
 "$review_root/roost" id check

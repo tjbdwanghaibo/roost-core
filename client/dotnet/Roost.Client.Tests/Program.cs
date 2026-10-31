@@ -95,6 +95,11 @@ internal static partial class Program
         TestLockstep();
         TestLockstepSnapshot();
         TestSyncReceiver();
+        TestEntityViews();
+        TestDaoProtobuf(Path.Combine(Path.GetDirectoryName(path)!, "dao-sync.json"));
+        TestGameClient();
+        TestConnectionReconnect();
+        TestReconnectFailureLimit();
         TestSceneTimeDomain();
         await TestUnitySyncAdapter();
         if (args.Length == 3)

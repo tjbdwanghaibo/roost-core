@@ -1,0 +1,71 @@
+package handler
+
+import "testing"
+
+func clearScenario(t *testing.T, f *scenarioFixture) {
+	t.Helper()
+	for i := 0; i < 3; i++ {
+		f.do(t, 0, "vote")
+		f.do(t, 1, "vote")
+	}
+}
+func TestScenarioTeamBarrier(t *testing.T) {
+	f := newScenario(t)
+	f.do(t, 0, "vote")
+	if f.state(t).Stage != 0 {
+		t.Fatal("advanced without team")
+	}
+	f.refuse(t, 0, f.command(t, 0, "vote"))
+	f.do(t, 1, "vote")
+	if f.state(t).Stage != 1 {
+		t.Fatal("did not advance")
+	}
+}
+func TestScenarioRewardExactlyOnce(t *testing.T) {
+	f := newScenario(t)
+	f.refuse(t, 0, f.command(t, 0, "claim"))
+	clearScenario(t, f)
+	c := f.command(t, 0, "claim")
+	for i := 0; i < 2; i++ {
+		r, err := f.send(0, c)
+		if err != nil || r.Reward != 10 {
+			t.Fatal(r, err)
+		}
+	}
+	if f.players[0].Dao().GetCoins() != 10 {
+		t.Fatal("double paid")
+	}
+	f.refuse(t, 0, f.command(t, 0, "claim"))
+	f.do(t, 1, "claim")
+	if f.players[1].Dao().GetCoins() != 10 {
+		t.Fatal("teammate unpaid")
+	}
+}
+func TestScenarioRewardRollsBackBothEntities(t *testing.T) {
+	f := newScenario(t)
+	clearScenario(t, f)
+	f.committer.reject.Store(true)
+	f.refuse(t, 0, f.command(t, 0, "claim"))
+	f.committer.reject.Store(false)
+	f.do(t, 0, "claim")
+	if f.players[0].Dao().GetCoins() != 10 {
+		t.Fatal("reward lost")
+	}
+}
+func TestScenarioSeedSurvivesReload(t *testing.T) {
+	f := newScenario(t)
+	f.do(t, 0, "vote")
+	s := f.state(t)
+	c := f.command(t, 1, "vote")
+	c.Choice = 1
+	if _, err := s.Apply(f.players[1].ID(), c, f.now.Load()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.send(1, c); err != nil {
+		t.Fatal(err)
+	}
+	live := f.state(t)
+	if live.Seed != s.Seed || live.Stage != s.Stage {
+		t.Fatal("reconnect rerolled route")
+	}
+}

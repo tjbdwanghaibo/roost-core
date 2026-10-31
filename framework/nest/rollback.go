@@ -68,35 +68,37 @@ type RollbackParticipant interface {
 // RollbackTx 保存业务回滚与持久化参与者，执行时序由 execution.go 管理。
 // 准入前归持锁的业务 goroutine；pipelined 转交完成池后，业务侧不再操作该对象。
 type RollbackTx struct {
-	id                  TransactionID
-	policy              RollbackPolicy
-	durability          DurabilityPolicy
-	handler             string
-	state               rollbackTxState
-	rollbacks           []func() error
-	afterAdmission      []func()
-	admissionErr        error
-	stageMetrics        bool
-	admissionObserved   bool
-	syncMutation        *entity.SyncMutation
-	commits             []func()
-	undoKeys            map[undoKey]struct{}
-	participants        []CommitParticipant
-	participantSet      map[CommitParticipant]struct{}
-	participantChanges  map[MutationParticipant]*PersistChange
-	participantOrder    []MutationParticipant
-	remoteParticipants  map[MutationParticipant]struct{}
-	preparedMutations   map[MutationParticipant]dataengine.Mutation
-	persistencePrepared bool
-	accepted            bool
-	mutations           []EntityMutation
-	mutationKeys        map[mutationKey]struct{}
-	effects             []Effect
-	effectIDs           map[string]struct{}
-	receipts            []dataengine.Receipt
-	receiptDigests      map[receiptKey][]byte
-	remoteWrite         bool
-	deleteIntents       map[int64]struct{}
+	id                     TransactionID
+	policy                 RollbackPolicy
+	durability             DurabilityPolicy
+	handler                string
+	state                  rollbackTxState
+	rollbacks              []func() error
+	rollbackObservers      []func() error
+	rollbackObserverOwners map[any]struct{}
+	afterAdmission         []func()
+	admissionErr           error
+	stageMetrics           bool
+	admissionObserved      bool
+	syncMutation           *entity.SyncMutation
+	commits                []func()
+	undoKeys               map[undoKey]struct{}
+	participants           []CommitParticipant
+	participantSet         map[CommitParticipant]struct{}
+	participantChanges     map[MutationParticipant]*PersistChange
+	participantOrder       []MutationParticipant
+	remoteParticipants     map[MutationParticipant]struct{}
+	preparedMutations      map[MutationParticipant]dataengine.Mutation
+	persistencePrepared    bool
+	accepted               bool
+	mutations              []EntityMutation
+	mutationKeys           map[mutationKey]struct{}
+	effects                []Effect
+	effectIDs              map[string]struct{}
+	receipts               []dataengine.Receipt
+	receiptDigests         map[receiptKey][]byte
+	remoteWrite            bool
+	deleteIntents          map[int64]struct{}
 	// created 是 handler 内 CreateInScope 新建的实体，准入前再次加入 SyncMutation。
 	created []entity.IThreadSafeEntity
 	// createLockBusy 是 handler 内新建实体时第一次锁冲突的错误。可回滚的事务据此在
@@ -170,6 +172,34 @@ func (tx *RollbackTx) DeferRollback(fn func() error) {
 	if tx != nil && tx.state == rollbackTxOpen && fn != nil {
 		tx.rollbacks = append(tx.rollbacks, fn)
 	}
+}
+
+// AfterRollback 在全部逆操作成功后、实体锁释放前重建内存派生状态。
+// 同一 owner 只登记一次。回调不得写 DAO、做 I/O 或产生外部副作用；事务此时已关闭。
+func (tx *RollbackTx) AfterRollback(owner any, fn func() error) error {
+	if tx == nil || tx.state != rollbackTxOpen {
+		return ErrTransactionClosed
+	}
+	if owner == nil || fn == nil || !reflect.TypeOf(owner).Comparable() {
+		return errors.New("nest: invalid rollback observer")
+	}
+	if tx.rollbackObserverOwners == nil {
+		tx.rollbackObserverOwners = make(map[any]struct{})
+	}
+	if _, exists := tx.rollbackObserverOwners[owner]; !exists {
+		tx.rollbackObserverOwners[owner] = struct{}{}
+		tx.rollbackObservers = append(tx.rollbackObservers, fn)
+	}
+	return nil
+}
+
+func runRollbackObserver(fn func() error) (err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			err = fmt.Errorf("nest: rollback observer panic: %v", value)
+		}
+	}()
+	return fn()
 }
 
 // RecordUndo 为本事务内的 owner/field 至多登记一次逆操作。owner 必须可比较，生成代码传 DAO 指针。
@@ -400,6 +430,15 @@ func (tx *RollbackTx) Rollback() error {
 			errs = append(errs, err)
 		}
 	}
+	if len(errs) == 0 {
+		for _, fn := range tx.rollbackObservers {
+			if err := runRollbackObserver(fn); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	tx.rollbackObservers = nil
+	tx.rollbackObserverOwners = nil
 	tx.commits = nil
 	tx.afterAdmission = nil
 	tx.admissionErr = nil
@@ -434,6 +473,8 @@ func (tx *RollbackTx) commit(entitiesReleased bool) error {
 	}
 	tx.state = rollbackTxCommitted
 	tx.rollbacks = nil
+	tx.rollbackObservers = nil
+	tx.rollbackObserverOwners = nil
 	tx.undoKeys = nil
 	tx.participants = nil
 	tx.participantSet = nil
@@ -522,6 +563,8 @@ func (tx *RollbackTx) abandon() {
 	}
 	tx.state = rollbackTxCommitted
 	tx.rollbacks = nil
+	tx.rollbackObservers = nil
+	tx.rollbackObserverOwners = nil
 	tx.afterAdmission = nil
 	tx.admissionErr = nil
 	tx.commits = nil

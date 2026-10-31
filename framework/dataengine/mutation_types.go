@@ -175,8 +175,8 @@ func CloneCommitRecord(record CommitRecord) CommitRecord {
 type SyncFieldMeta struct {
 	// Name is the Go field name on the DAO definition.
 	Name string
-	// WireName is the field's name in the document (its bson key), which is
-	// also what MarshalSync writes.
+	// WireName 是逻辑视图键（沿用 BSON 存储键），供白名单与动态 Values 视图查找。
+	// PB 的实际字段编号与属性名由同步 schema 定义，不使用这个字符串寻址。
 	WireName string
 	// Bit is the mask bit the generated setters raise for this field.
 	Bit uint64

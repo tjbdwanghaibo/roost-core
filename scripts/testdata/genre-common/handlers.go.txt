@@ -1,0 +1,63 @@
+package handler
+
+import (
+	"encoding/json"
+	"errors"
+
+	db "GENRE_MODULE/db"
+	rules "GENRE_MODULE/game/rules"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+type IScenarioPlayerEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+
+type IGameRoomEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.GameRoomDao
+}
+
+// 名单来自宿主的鉴权与成局结果，不接受客户端自由指定 actor 或成员。
+//
+//roost:nest rollback=undo durability=strict
+func handlerScenarioOpen(room IGameRoomEntity, members []int64, nowUnixMilli int64) error {
+	if room.Dao().GetState() != "" {
+		return errors.New("room already initialized")
+	}
+	state, err := rules.New(members, nowUnixMilli)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(state)
+	if err == nil {
+		room.Dao().SetState(string(raw))
+	}
+	return err
+}
+
+// actor 由接入层从已鉴权的玩家身份解析。期望版本阻止旧页面覆盖新状态；
+// 同序号同内容返回原结果，改内容的重试拒绝。每位玩家只保留最后一条回执，旧序号不能重放。
+//
+//roost:nest rollback=undo durability=strict
+func handlerScenarioCommand(room IGameRoomEntity, player IScenarioPlayerEntity, cmd rules.Command, nowUnixMilli int64) (rules.Result, error) {
+	var state rules.State
+	if err := json.Unmarshal([]byte(room.Dao().GetState()), &state); err != nil {
+		return rules.Result{}, err
+	}
+	previous := state.Last[player.ID()]
+	result, err := state.Apply(player.ID(), cmd, nowUnixMilli)
+	if err != nil {
+		return rules.Result{}, err
+	}
+	raw, err := json.Marshal(state)
+	if err == nil {
+		room.Dao().SetState(string(raw))
+		if cmd.Seq > previous.Command.Seq {
+			player.Dao().SetCoins(player.Dao().GetCoins() + int64(result.Reward))
+		}
+	}
+	return result, err
+}
