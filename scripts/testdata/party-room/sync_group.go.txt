@@ -1,0 +1,15 @@
+package party_room
+
+import (
+	party "example.com/party-room-practice/game/partyroom"
+	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
+)
+
+// SyncGroup 是房间内同步（access.player.sync_groups: [party_room]）：组 ID 是房间实体 ID，成员是房间里的玩家
+// （玩家 ID，即自身视图的会话 ID），全部成员以 RoomSyncProfile 订阅房间，同一次 Flush 里大家收到同一份记分板。
+// 它装在 self_sync 的同一个 Manager 上（bootstrap 交给 PlayerSelfSync），经同一条玩家连接、同一个推送编号推送；
+// 客户端按更新的命名空间区分：party_room 是房间，player 是玩家自己。
+//
+// 这个文件是 roost project sync 创建一次的业务文件：视图改成本例 packer 认识的 RoomSyncProfile（只放出 Board），
+// 并以座位上限兜底。成员关系由 handler 调 Join / Leave / Disband，事务内的调用在提交后才生效。
+var SyncGroup = selfsync.MustNewGroups(selfsync.GroupsConfig{Kind: EntityKindPartyRoom, Profile: RoomSyncProfile, MaxMembers: party.MaxSeats})

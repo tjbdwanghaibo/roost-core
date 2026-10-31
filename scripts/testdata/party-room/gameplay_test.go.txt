@@ -15,59 +15,84 @@ import (
 	sender "example.com/party-room-practice/game/handler/syncsender"
 	gameheartbeat "example.com/party-room-practice/game/heartbeat"
 	party "example.com/party-room-practice/game/partyroom"
+	"example.com/party-room-practice/protocol/msgid"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
 	"github.com/tjbdwanghaibo/roost-core/service/session"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	wiringnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// 默认模式的派对房间夹具：真实 Nest 引擎 + 生成的 PartyRoom / Player 实体 + 真实心跳驱动循环（100ms 档）+
-// entitytimer 驱动（用例手动 DeliverDue）+ entitysync.Manager / policy.Group + service/match 与 service/session 的
-// 正式领域实现（内存存储）。只替换提交器（不落库）；真实 WAL / Mongo 与 SIGKILL 在 persistence/ 的准入用例里。
+// 默认模式的派对房间夹具：正式 wiring/nest Mod（NewModWithEntitySync + wiring/selfsync，与生成的 bootstrap 同一条装配，
+// Groups 是 access.player.sync_groups 声明的 roomentity.SyncGroup）+ 生成的 PartyRoom / Player 实体 + 真实心跳驱动循环
+// （100ms 档）+ entitytimer 驱动（用例手动 DeliverDue）+ service/match 与 service/session 的正式领域实现（内存存储）。
+// 只替换提交器（不落库）与玩家接入层（partyWire 代替 TCP：连接的激活 / 关闭经 SelfSync.OnActive / OnClosed，推送经
+// PushSyncPlayer）；真实 WAL / Mongo 与 SIGKILL 在 persistence/ 的准入用例里。
 // 业务时间用 clock.SetSource 拨：handler 的 nowUnixMilli、心跳的 Beat.Now、定时器的 Fire.Now 都读它。
 
 type partyCommitter struct{}
 
 func (partyCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
 
+// partyEngine 是 Nest Mod 需要的 DataEngine 能力（mods.ModDataEngine）：只给替身提交器。
+type partyEngine struct{}
+
+func (partyEngine) NestOptions() []nest.NestOption {
+	return []nest.NestOption{nest.NestOptionWithTransactionCommitter(partyCommitter{})}
+}
+
 const partyNow int64 = 1800000000000
 
-// partyClient 是一个会话（一条连接）的客户端：用正式 Receiver 校验帧序与基线，按对象记最新记分板。
+// partyClient 是一条玩家连接上的客户端：用正式 Receiver 校验帧序与基线，按命名空间把对象分到两路——
+// party_room 是房间（记分板），player 是玩家自己（自身视图）。
 type partyClient struct {
 	receiver *frame.Receiver
-	boards   map[frame.ObjectRef]string
+	boards   map[frame.ObjectRef]string // 房间视图：记分板原文
+	selves   map[frame.ObjectRef]bson.M // 自身视图：Player 的同步字段
 	fulls    int
 	err      error
 }
 
-// partyWire 是 Manager 的 Transport：按会话把帧交给各自的客户端。
+// partyWire 是玩家接入层的替身（gateway.PlayerRuntime 中 PushPlayerFrame 用到的三个方法）：按玩家 ID 把推送交给
+// 它当前的连接；没有连接时像 TCP 一样报 ErrSessionNotFound。
 type partyWire struct {
+	gateway.PlayerRuntime
 	mu      sync.Mutex
-	clients map[entitysync.SessionID]*partyClient
+	clients map[int64]*partyClient
 }
 
-func (w *partyWire) Push(_ context.Context, session entitysync.SessionID, raw []byte) error {
+func (w *partyWire) PushSyncPlayer(_ context.Context, player int64, messageID uint32, raw []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	c := w.clients[session]
+	c := w.clients[player]
 	if c == nil {
-		c = &partyClient{receiver: frame.NewReceiver(frame.DefaultLimits()), boards: map[frame.ObjectRef]string{}}
-		w.clients[session] = c
+		return gateway.ErrSessionNotFound
+	}
+	if messageID != msgid.MsgSelfSync {
+		c.err = fmt.Errorf("sync push on message %d, want the self_sync push id %d", messageID, msgid.MsgSelfSync)
+		return nil
 	}
 	if _, err := c.receiver.Receive(raw, func(f frame.Frame) error {
 		if f.Kind == frame.Full {
 			clear(c.boards)
+			clear(c.selves)
 			c.fulls++
 		}
 		for _, object := range f.Objects {
 			if object.Operation == frame.ObjectRemove {
 				delete(c.boards, object.Ref)
+				delete(c.selves, object.Ref)
 				continue
 			}
 			for _, component := range object.Components {
@@ -79,12 +104,30 @@ func (w *partyWire) Push(_ context.Context, session entitysync.SessionID, raw []
 				if err := bson.Unmarshal(update.Payload.BytesCopy(), &doc); err != nil {
 					return err
 				}
-				// 视图白名单：成员只能收到公开记分板（加文档主键），State（种子、星星时刻、回执）一个字段都不能出现。
-				board, ok := doc["board"].(string)
-				if _, id := doc["_id"]; !ok || !id || len(doc) != 2 {
-					return fmt.Errorf("room view leaked or lost fields: %v", doc)
+				// 同一条连接上的两路按命名空间 + 视图键区分，客户端不需要第二个推送编号。
+				switch update.Namespace + "/" + update.Profile.Key {
+				case "party_room/" + roomentity.RoomSyncProfile.Key:
+					// 视图白名单：成员只能收到公开记分板（加文档主键），State（种子、星星时刻、回执）一个字段都不能出现。
+					board, ok := doc["board"].(string)
+					if _, id := doc["_id"]; !ok || !id || len(doc) != 2 {
+						return fmt.Errorf("room view leaked or lost fields: %v", doc)
+					}
+					c.boards[object.Ref] = board
+				case "player/self":
+					if update.SubjectID != entityOf(player) {
+						return fmt.Errorf("player %d received the self view of entity %d", player, update.SubjectID)
+					}
+					merged := c.selves[object.Ref]
+					if merged == nil || update.Full {
+						merged = bson.M{}
+					}
+					for key, value := range doc {
+						merged[key] = value
+					}
+					c.selves[object.Ref] = merged
+				default:
+					return fmt.Errorf("unexpected sync stream %s/%s", update.Namespace, update.Profile.Key)
 				}
-				c.boards[object.Ref] = board
 			}
 		}
 		return nil
@@ -94,19 +137,50 @@ func (w *partyWire) Push(_ context.Context, session entitysync.SessionID, raw []
 	return nil
 }
 
-// reconnect 模拟客户端换了一条新连接：新的 Receiver，从全量开始。
-func (w *partyWire) reconnect(player int64) {
+func (w *partyWire) ActiveSessions(player int64) int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	delete(w.clients, entitysync.SessionID(player))
+	if w.clients[player] != nil {
+		return 1
+	}
+	return 0
 }
 
-// board 返回一名玩家客户端上的记分板原文与收到的全量帧数；帧校验失败直接失败。
-func (w *partyWire) board(t *testing.T, player int64) (string, int) {
+func (w *partyWire) CloseSessions(player int64, _ error) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.clients[player] == nil {
+		return 0
+	}
+	delete(w.clients, player)
+	return 1
+}
+
+// open 是一条新连接：新的 Receiver，从全量开始。
+func (w *partyWire) open(player int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.clients[player] = &partyClient{receiver: frame.NewReceiver(frame.DefaultLimits()), boards: map[frame.ObjectRef]string{}, selves: map[frame.ObjectRef]bson.M{}}
+}
+
+func (w *partyWire) close(player int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.clients, player)
+}
+
+// entityOf 把玩家 ID（连接与同步会话按它）换回玩家实体 ID。
+func entityOf(player int64) int64 {
+	id, _ := entity.BuildEntityID(player, playerentity.EntityKindPlayer)
+	return id
+}
+
+// board 返回一名玩家（实体 ID）客户端上的记分板原文与收到的全量帧数；帧校验失败直接失败。
+func (w *partyWire) board(t *testing.T, playerEntity int64) (string, int) {
 	t.Helper()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	c := w.clients[entitysync.SessionID(player)]
+	c := w.clients[entity.GetUniqueIDFromEntityID(playerEntity)]
 	if c == nil {
 		return "", 0
 	}
@@ -114,7 +188,7 @@ func (w *partyWire) board(t *testing.T, player int64) (string, int) {
 		t.Fatal(c.err)
 	}
 	if len(c.boards) > 1 {
-		t.Fatalf("player %d sees %d room objects", player, len(c.boards))
+		t.Fatalf("player %d sees %d room objects", playerEntity, len(c.boards))
 	}
 	for _, b := range c.boards {
 		return b, c.fulls
@@ -122,12 +196,36 @@ func (w *partyWire) board(t *testing.T, player int64) (string, int) {
 	return "", c.fulls
 }
 
+// self 返回一名玩家客户端上自己 Player 的同步字段（自身视图）；没有时为 nil。
+func (w *partyWire) self(t *testing.T, playerEntity int64) bson.M {
+	t.Helper()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	c := w.clients[entity.GetUniqueIDFromEntityID(playerEntity)]
+	if c == nil {
+		return nil
+	}
+	if c.err != nil {
+		t.Fatal(c.err)
+	}
+	if len(c.selves) > 1 {
+		t.Fatalf("player %d sees %d player objects", playerEntity, len(c.selves))
+	}
+	for _, doc := range c.selves {
+		return doc
+	}
+	return nil
+}
+
 type partyFixture struct {
 	ctx      context.Context
 	engine   *nest.NestMgr
 	access   *entity.ManagerAccess
-	hub      *PartyRoomSync
+	mod      *wiringnest.Mod
+	self     *selfsync.SelfSync
 	wire     *partyWire
+	receiver uint64                           // 连接号（独立 Gate 的 receiver ID 同一用法），每条新连接加一
+	conns    [party.MaxSeats + 1]uint64 // 每个座位当前连接的连接号，0 表示离线
 	sessions *session.Service
 	now      atomic.Int64
 	ids      [party.MaxSeats + 1]int64
@@ -149,19 +247,30 @@ func newPartyFixture(t *testing.T) *partyFixture {
 	f.now.Store(partyNow)
 	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
 	t.Cleanup(func() { clock.SetSource(nil) })
-	f.wire = &partyWire{clients: map[entitysync.SessionID]*partyClient{}}
-	hub, err := NewPartyRoomSync(f.wire)
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.hub = hub
+	f.wire = &partyWire{clients: map[int64]*partyClient{}}
 	f.access = entity.NewManagerAccess(entity.NewEntityManager())
-	f.engine = nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithTransactionCommitter(partyCommitter{}),
-		nest.NestOptionWithEntitySync(hub.Manager()),
-		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 256}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
-	if err := f.engine.Start(); err != nil {
+	// 与生成的 bootstrap 相同：PlayerSelfSync 带上 sync_groups 的 SyncGroup，Nest Mod 用它装 Entity Sync（同一个 Manager）。
+	f.self = selfsync.MustNew(selfsync.Config{Entities: f.access, Kind: playerentity.EntityKindPlayer, MessageID: msgid.MsgSelfSync, Groups: []*selfsync.Groups{roomentity.SyncGroup}})
+	f.self.BindPlayers(f.wire)
+	f.mod = wiringnest.NewModWithEntitySync(f.access, f.self.EntitySyncSetup())
+	cfg := viper.New()
+	cfg.Set("nest.short.workers", 2)
+	cfg.Set("nest.short.queue_capacity", 256)
+	cfg.Set("sync.entity.interval", "1h") // 同步周期由用例显式 Flush 决定
+	if err := f.mod.Init(cfg); err != nil {
 		t.Fatal(err)
 	}
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(mods.ModDataEngine, partyEngine{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	f.engine = f.mod.Engine()
 	lookup := func(id int64) entity.IThreadSafeEntity { return f.access.Manager().Get(id) }
 	if err := roomentity.TimerDriver.Bind(f.engine, lookup); err != nil {
 		t.Fatal(err)
@@ -172,6 +281,7 @@ func newPartyFixture(t *testing.T) *partyFixture {
 	if err := gameheartbeat.Driver.Start(); err != nil {
 		t.Fatal(err)
 	}
+	var err error
 	f.sessions, err = session.New(session.Config{
 		Runs:     versionstore.NewMemoryStore[string, session.Run](),
 		Claims:   versionstore.NewMemoryStore[int64, session.Claim](),
@@ -187,14 +297,19 @@ func newPartyFixture(t *testing.T) *partyFixture {
 		defer cancel()
 		_ = gameheartbeat.Driver.Stop(ctx)
 		_ = roomentity.TimerDriver.Stop(ctx)
-		// 卸载本用例的房间：心跳登记与定时器随实例离开驱动，不留给下一个用例的计数。
+		// 卸载本用例的房间：先解散同步组并跑一个同步周期（成员收到 remove、注销登记），再销毁实体——心跳登记与定时器
+		// 随实例离开驱动，不留给下一个用例的计数；同步组已解散，卸载不会触发“仍有订阅者”的重载。
+		for _, id := range f.rooms() {
+			_ = roomentity.SyncGroup.Disband(id)
+		}
+		_ = f.mod.EntitySync().Flush(ctx)
 		for _, id := range f.rooms() {
 			if v := f.access.Manager().Get(id); v != nil {
 				_ = f.access.Destroy(ctx, v, entity.DestroyReasonMemoryUnload, false)
 			}
 		}
-		_ = f.engine.Shutdown(ctx)
-		_ = f.hub.Close(ctx)
+		// Nest 与 Entity Sync 的三步停机，SyncGroup 随之从 Manager 卸下（下一个用例重新装上）。
+		_ = f.mod.StopWithContext(ctx)
 	})
 	for i := range f.ids {
 		v, err := f.access.Create(&entity.EntityCreateParam{IsCreate: true, UniqueID: int64(5000 + i), Kind: playerentity.EntityKindPlayer, Category: entity.MustEntityCategoryOfKind(playerentity.EntityKindPlayer)})
@@ -255,7 +370,7 @@ func (f *partyFixture) createRoom(t *testing.T, id int64) *roomentity.PartyRoom 
 	return v.(*roomentity.PartyRoom)
 }
 
-// openMatch 用成局名单（f.ids 的下标）开房、建同步组，返回房间 ID。
+// openMatch 用成局名单（f.ids 的下标）开房，返回房间 ID。同步组在第一名成员连上房间时随 Join 建立。
 func (f *partyFixture) openMatch(t *testing.T, match string, seats ...int) int64 {
 	t.Helper()
 	roster := make([]int64, len(seats))
@@ -266,27 +381,55 @@ func (f *partyFixture) openMatch(t *testing.T, match string, seats ...int) int64
 	if err != nil {
 		t.Fatal(err)
 	}
-	room := f.createRoom(t, id)
+	f.createRoom(t, id)
 	if _, err := f.s().Sync_PartyOpenMatch(f.ctx, id, match, roster, party.DemoRules()); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.hub.OpenRoom(room); err != nil {
 		t.Fatal(err)
 	}
 	return id
 }
 
-// connect 是接入层鉴权后的连接事件：Nest 记连接代，提交后加入房间同步组。
+// connect 是一名玩家连上房间：连接激活（自身视图开会话），再发连接事件（Nest 记连接代，handler 在提交后 Join 房间组）。
+// 会话打开的那个同步周期里，这条连接收到自己的 Player 与房间的全量。
 func (f *partyFixture) connect(t *testing.T, room int64, seat int, ticket uint64) uint64 {
 	t.Helper()
+	f.online(seat)
 	epoch, err := f.s().Sync_PartyConnect(f.ctx, room, f.ids[seat], ticket, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.hub.Connect(room, f.ids[seat]); err != nil {
+	return epoch
+}
+
+// binding 是一名玩家在接入层的身份（玩家 ID）。
+func (f *partyFixture) binding(seat int) gateway.Binding {
+	return gateway.Binding{PlayerID: entity.GetUniqueIDFromEntityID(f.ids[seat])}
+}
+
+// online 让玩家有一条新连接（已有连接时不变）：接入层鉴权 ACK 之后的激活回调。
+func (f *partyFixture) online(seat int) {
+	player := entity.GetUniqueIDFromEntityID(f.ids[seat])
+	if f.wire.ActiveSessions(player) != 0 {
+		return
+	}
+	f.wire.open(player)
+	f.receiver++
+	f.conns[seat] = f.receiver
+	_ = f.self.OnActive(f.binding(seat), f.receiver)
+}
+
+// offline 关掉玩家的连接：接入层的关闭回调。成员关系保留，下一个同步周期关会话。
+func (f *partyFixture) offline(seat int) {
+	f.wire.close(entity.GetUniqueIDFromEntityID(f.ids[seat]))
+	f.self.OnClosed(f.binding(seat), f.conns[seat])
+	f.conns[seat] = 0
+}
+
+// flush 跑一个同步周期。
+func (f *partyFixture) flush(t *testing.T) {
+	t.Helper()
+	if err := f.mod.EntitySync().Flush(f.ctx); err != nil {
 		t.Fatal(err)
 	}
-	return epoch
 }
 
 type partySnap struct {
@@ -349,9 +492,7 @@ func (f *partyFixture) waitBoard(t *testing.T, room int64, what string, pred fun
 // synced Flush 一次，并核对每名成员客户端上的记分板与服务端 DAO 里的完全相同。
 func (f *partyFixture) synced(t *testing.T, room int64, seats ...int) party.Board {
 	t.Helper()
-	if err := f.hub.Flush(f.ctx); err != nil {
-		t.Fatal(err)
-	}
+	f.flush(t)
 	want := f.snap(t, room).Board
 	for _, seat := range seats {
 		if got, _ := f.wire.board(t, f.ids[seat]); got != want {
@@ -449,7 +590,7 @@ func TestPartyGameMatchmakingOpensOneRoomPerMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	room := f.createRoom(t, roomID)
+	f.createRoom(t, roomID)
 	boards := make([]party.Board, 3)
 	for i := range boards {
 		wg.Add(1)
@@ -480,9 +621,6 @@ func TestPartyGameMatchmakingOpensOneRoomPerMatch(t *testing.T) {
 		_, err := f.s().Sync_PartyOpenMatch(ctx, roomID, "another-match", roster, party.DemoRules())
 		return err
 	})
-	if err := f.hub.OpenRoom(room); err != nil {
-		t.Fatal(err)
-	}
 	resource := session.Resource{Kind: "party_room", ID: strconv.FormatInt(roomID, 10)}
 	for seat, id := range roster {
 		request := match.ID + ":" + strconv.FormatInt(id, 10)
@@ -770,8 +908,7 @@ func TestPartyGameReconnectWithinGraceReturnsToSameRoom(t *testing.T) {
 	if _, err := f.s().Sync_PartyConnect(f.ctx, room, f.ids[1], 1, false); err != nil {
 		t.Fatal(err)
 	}
-	f.hub.Disconnect(f.ids[1])
-	f.wire.reconnect(f.ids[1])
+	f.offline(1)
 	if b := f.synced(t, room, 0, 2); b.Seats[1].Online {
 		t.Fatal("others still see the dropped player online")
 	}
@@ -816,7 +953,7 @@ func TestPartyGameGraceExpiryAndMidGameLeaveEndEarly(t *testing.T) {
 	if _, err := f.s().Sync_PartyConnect(f.ctx, room, f.ids[3], 1, false); err != nil {
 		t.Fatal(err)
 	}
-	f.hub.Disconnect(f.ids[3])
+	f.offline(3)
 	f.setNow(partyNow + party.DemoRules().GraceMillis)
 	f.waitBoard(t, room, "heartbeat drops the seat after grace", func(b party.Board) bool { return b.Seats[3].Out == party.OutDropped })
 	f.refuse(t, room, party.ErrClosed, func() error {
@@ -826,8 +963,9 @@ func TestPartyGameGraceExpiryAndMidGameLeaveEndEarly(t *testing.T) {
 	if err := f.s().Sync_PartyLeave(f.ctx, room, f.ids[0]); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.hub.Leave(room, f.ids[0]); err != nil {
-		t.Fatal(err)
+	f.flush(t)
+	if b, _ := f.wire.board(t, f.ids[0]); b != "" {
+		t.Fatal("the player who left still sees the room") // handler 在提交后 Leave，成员收到 remove
 	}
 	if s := f.snap(t, room).State; s.Host != f.ids[1] || s.Phase != party.PhasePlaying {
 		t.Fatalf("host after leave %+v", s)
@@ -839,8 +977,12 @@ func TestPartyGameGraceExpiryAndMidGameLeaveEndEarly(t *testing.T) {
 	if end.State.Phase != party.PhaseSettled || end.State.Winner != f.ids[2] || end.State.Host != f.ids[2] || end.Beat || end.Wake != 0 {
 		t.Fatalf("last player standing %+v", end)
 	}
-	if b := f.synced(t, room, 1, 2); b.Winner != f.ids[2] {
+	// seat 1 也离开了房间（handler 在提交后 Leave）：只有留下的 seat 2 还收到房间。
+	if b := f.synced(t, room, 2); b.Winner != f.ids[2] {
 		t.Fatal("members did not see the early result")
+	}
+	if b, _ := f.wire.board(t, f.ids[1]); b != "" {
+		t.Fatal("the second player who left still sees the room")
 	}
 }
 
@@ -942,8 +1084,15 @@ func TestPartyGameSettlementRewardsOnceAndRoomDestroyed(t *testing.T) {
 	if s := f.snap(t, room); s.State.Phase != party.PhaseClosed || s.Beat || s.Wake != 0 {
 		t.Fatalf("closed room %+v", s)
 	}
-	if err := f.hub.CloseRoom(room); err != nil {
-		t.Fatal(err)
+	// 最后一个归还在提交后解散了同步组：下一个同步周期每名成员收到房间的 remove，自身视图不受影响；之后再销毁实体。
+	f.flush(t)
+	for seat := range 4 {
+		if b, _ := f.wire.board(t, f.ids[seat]); b != "" || f.wire.self(t, f.ids[seat]) == nil {
+			t.Fatalf("seat %d after the room closed: board %q, self view %v", seat, b, f.wire.self(t, f.ids[seat]))
+		}
+	}
+	if roomentity.SyncGroup.Members(room) != 0 {
+		t.Fatal("the closed room kept its sync group")
 	}
 	if err := f.access.Destroy(f.ctx, f.access.Manager().Get(room), entity.DestroyReasonMemoryUnload, false); err != nil {
 		t.Fatal(err)
@@ -991,5 +1140,92 @@ func TestPartyGameMatchDeadlineTimerForcesSettlement(t *testing.T) {
 	}
 	if gameheartbeat.Driver.Registered() != 0 {
 		t.Fatal("settled room still registered with the heartbeat ring")
+	}
+}
+
+var partyCoinsOnce sync.Once
+var partyCoinsName = nest.NewHandlerName("party_room_test_set_coins")
+
+// setCoins 经一个 strict handler 改玩家的金币（Player 的 sync 字段，自身视图推给本人）。
+func (f *partyFixture) setCoins(t *testing.T, seat int, coins int64) {
+	t.Helper()
+	partyCoinsOnce.Do(func() {
+		nest.MustRegisterHandlerWithMeta(partyCoinsName, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
+			es[0].(IPartyPlayerEntity).Dao().SetCoins(args[0].(int64))
+			return nil, nil
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	})
+	if _, err := f.engine.Request(f.ctx, partyCoinsName, f.ids[seat], nest.NewParams(coins)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func coinsOf(t *testing.T, doc bson.M) int64 {
+	t.Helper()
+	coins, ok := doc["coins"].(int64)
+	if !ok {
+		t.Fatalf("self view %v has no coins", doc)
+	}
+	return coins
+}
+
+// 11. 自身视图与房间组同步共用一条连接：同一个 Manager、同一个推送编号（msgid.MsgSelfSync），客户端按命名空间分两路
+// （player 是自己、party_room 是房间）。第一帧全量里两路都在；Player 的变化只到本人，房间的变化到全体成员；断线重连后
+// 两路都随新 epoch 的全量回来，不需要业务再 Join；离开房间只撤掉房间，自身视图照常。
+func TestPartyGameSelfViewAndRoomShareOneConnection(t *testing.T) {
+	f := newPartyFixture(t)
+	room := f.openMatch(t, "match-streams", 0, 1)
+	for seat := range 2 {
+		f.connect(t, room, seat, 1)
+	}
+	f.synced(t, room, 0, 1)
+	for seat := range 2 {
+		if _, fulls := f.wire.board(t, f.ids[seat]); fulls != 1 || coinsOf(t, f.wire.self(t, f.ids[seat])) != 0 {
+			t.Fatalf("seat %d: %d full frames, self view %v; want one full carrying both streams", seat, fulls, f.wire.self(t, f.ids[seat]))
+		}
+	}
+
+	f.setCoins(t, 0, 7)
+	f.flush(t)
+	if coinsOf(t, f.wire.self(t, f.ids[0])) != 7 || coinsOf(t, f.wire.self(t, f.ids[1])) != 0 {
+		t.Fatal("a player's own change did not reach exactly that player")
+	}
+	s := f.snap(t, room).State
+	f.setNow(s.StarAt)
+	f.waitBoard(t, room, "heartbeat reveals the star", func(b party.Board) bool { return b.Star })
+	if b := f.synced(t, room, 0, 1); !b.Star {
+		t.Fatal("members did not see the star")
+	}
+	if coinsOf(t, f.wire.self(t, f.ids[0])) != 7 {
+		t.Fatal("the room change disturbed the self view")
+	}
+
+	// 断线重连：连接代换新，两路都从全量开始。
+	if _, err := f.s().Sync_PartyConnect(f.ctx, room, f.ids[0], 1, false); err != nil {
+		t.Fatal(err)
+	}
+	f.offline(0)
+	f.synced(t, room, 1)
+	f.connect(t, room, 0, 2)
+	f.synced(t, room, 0, 1)
+	if _, fulls := f.wire.board(t, f.ids[0]); fulls != 1 || coinsOf(t, f.wire.self(t, f.ids[0])) != 7 {
+		t.Fatalf("reconnected: %d full frames, self view %v; want one full carrying the room and coins=7", fulls, f.wire.self(t, f.ids[0]))
+	}
+
+	// 离开房间：房间撤掉（remove），自身视图照常收增量。
+	if err := f.s().Sync_PartyLeave(f.ctx, room, f.ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	f.synced(t, room, 0)
+	if b, _ := f.wire.board(t, f.ids[1]); b != "" {
+		t.Fatal("the player who left still sees the room")
+	}
+	f.setCoins(t, 1, 3)
+	f.flush(t)
+	if coinsOf(t, f.wire.self(t, f.ids[1])) != 3 {
+		t.Fatal("leaving the room stopped the self view")
+	}
+	if roomentity.SyncGroup.IsMember(room, entity.GetUniqueIDFromEntityID(f.ids[1])) || !roomentity.SyncGroup.IsMember(room, entity.GetUniqueIDFromEntityID(f.ids[0])) {
+		t.Fatal("room membership does not follow the seats")
 	}
 }

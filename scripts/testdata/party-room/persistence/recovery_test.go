@@ -18,6 +18,8 @@ import (
 	sender "example.com/party-room-practice/game/handler/syncsender"
 	gameheartbeat "example.com/party-room-practice/game/heartbeat"
 	party "example.com/party-room-practice/game/partyroom"
+	"example.com/party-room-practice/protocol/msgid"
+	"github.com/spf13/viper"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -26,6 +28,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	wiringnest "github.com/tjbdwanghaibo/roost-core/wiring/nest"
+	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
 )
 
 // 真实依赖准入（ROOST_PARTY_ROOM_REAL=1，scripts/test-party-room-generated.sh）：真实 nestwal + Mongo 投影 + DataEngine
@@ -41,6 +45,7 @@ type partyRuntime struct {
 	runtime   *engine.Runtime
 	projector *engine.Projector
 	scheduler *nest.NestMgr
+	syncMod   *wiringnest.Mod // 只用它建 self_sync 的 Manager 并装上 SyncGroup（不 Provide / Start）
 	access    *entity.ManagerAccess
 	mongo     *mongodriver.Client
 	database  string
@@ -115,7 +120,14 @@ func openPartyRuntime(t *testing.T, manual bool, now int64) *partyRuntime {
 	if err := h.runtime.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	h.scheduler = nest.NewEngine(append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access))...)
+	// 连接 handler 在提交后把玩家加入房间同步组（roomentity.SyncGroup）：与生成的 bootstrap 一样把它装到 self_sync 的
+	// Manager 上。本用例不推送（没有玩家连接、不 Flush），Manager 只用来承接成员关系与 Nest 的提交观察。
+	selfView := selfsync.MustNew(selfsync.Config{Entities: h.access, Kind: playerentity.EntityKindPlayer, MessageID: msgid.MsgSelfSync, Groups: []*selfsync.Groups{roomentity.SyncGroup}})
+	h.syncMod = wiringnest.NewModWithEntitySync(h.access, selfView.EntitySyncSetup())
+	if err := h.syncMod.Init(viper.New()); err != nil {
+		t.Fatal(err)
+	}
+	h.scheduler = nest.NewEngine(append(h.runtime.NestOptions(), nest.NestOptionWithGetter(h.access), nest.NestOptionWithEntitySync(h.syncMod.EntitySync()))...)
 	if err := h.scheduler.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -152,6 +164,9 @@ func (h *partyRuntime) close(t *testing.T) {
 		t.Error(err)
 	}
 	if err := h.runtime.Shutdown(ctx); err != nil {
+		t.Error(err)
+	}
+	if err := h.syncMod.EntitySync().Close(ctx); err != nil {
 		t.Error(err)
 	}
 }

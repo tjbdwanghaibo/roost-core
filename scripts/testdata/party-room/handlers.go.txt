@@ -13,6 +13,13 @@ import (
 
 // 派对房间的 Nest handler。业务时间一律是生成分发包装从 fctx 填的 nowUnixMilli（这条消息冻结的业务时间），
 // 调用方与 Sender 都不传时间。每个改房间的 handler 都先 Advance(now)：判定只看时间戳，与心跳跑没跑无关。
+//
+// 房间内同步的成员关系在这里随座位一起变：连上房间 Join、离开 / 归还座位 Leave、房间关闭 Disband
+// （roomentity.SyncGroup，wiring/selfsync.Groups）。三者在 Nest 事务里调用时推迟到提交之后，事务回滚就不发生；
+// 断线只关连接（自身视图关会话），成员关系保留到宽限期满由业务 Leave，重连的那个同步周期收到房间全量。
+
+// memberOf 把玩家实体 ID 换成同步组的成员 ID（玩家 ID，即自身视图的会话 ID）。
+func memberOf(player int64) int64 { return entity.GetUniqueIDFromEntityID(player) }
 
 type IPartyRoomEntity interface {
 	entity.IThreadSafeEntity
@@ -149,6 +156,9 @@ func handlerPartyLeave(room IPartyRoomEntity, player int64, nowUnixMilli int64) 
 	if _, err := s.Leave(player, nowUnixMilli); err != nil {
 		return err
 	}
+	if err := roomentity.SyncGroup.Leave(room.ID(), memberOf(player)); err != nil {
+		return err
+	}
 	return room.SaveRoom(s, nowUnixMilli)
 }
 
@@ -162,6 +172,12 @@ func handlerPartyConnect(room IPartyRoomEntity, player int64, ticket uint64, con
 	}
 	if err := s.Connect(player, ticket, connected, nowUnixMilli); err != nil {
 		return 0, err
+	}
+	if connected {
+		// 已是成员时是无变化的成功（宽限内重连）；房间满员兜底由 SyncGroup 的上限检查。
+		if err := roomentity.SyncGroup.Join(room.ID(), memberOf(player)); err != nil {
+			return 0, err
+		}
 	}
 	return s.Seats[s.Index(player)].Epoch, room.SaveRoom(s, nowUnixMilli)
 }
@@ -230,6 +246,15 @@ func handlerPartyRelease(room IPartyRoomEntity, player int64, nowUnixMilli int64
 	}
 	if _, err := s.Release(player); err != nil {
 		return false, err
+	}
+	if err := roomentity.SyncGroup.Leave(room.ID(), memberOf(player)); err != nil {
+		return false, err
+	}
+	if s.Phase == party.PhaseClosed {
+		// 最后一个座位归还、房间关闭：解散同步组（成员收到 remove、注销房间登记），之后可以销毁实体。
+		if err := roomentity.SyncGroup.Disband(room.ID()); err != nil {
+			return false, err
+		}
 	}
 	return s.Phase == party.PhaseClosed, room.SaveRoom(s, nowUnixMilli)
 }
