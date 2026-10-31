@@ -1,5 +1,38 @@
 # 新增提交审查
 
+## 2026-10-31：继续审查持久实体创建与 TCP 恢复
+
+基线仍为 [main v1.33.0，030a9f11](https://github.com/tjbdwanghaibo/roost-core/commit/030a9f11)，本轮 fetch 无新增提交。RV-20261030-01、02 两项 Saga 风险仍未修复；本次新增一个独立问题，并缩小上轮 TCP 测试失败的原因范围。只提交问题与证据，不修改运行时。
+
+### RV-20261031-01 / P1：实体构建失败后，其 DAO 仍随外层成功事务提交
+
+**类别：框架事务边界；状态：已复现，待修复。** [entity_factory.go:334–343](https://github.com/tjbdwanghaibo/roost-core/blob/030a9f11/framework/entity/entity_factory.go#L334) 在 builder 前绑定聚合，允许 Init 登记持久修改；builder 失败直接返回。[manager_factory.go 的 CreateInScope](https://github.com/tjbdwanghaibo/roost-core/blob/030a9f11/framework/entity/manager_factory.go#L79) 在 build 失败时直接返回，没有撤销该次初始化登记，也没有令当前事务失败。稍后的 CaptureCreatedEntity 保护只覆盖成功构建、发布后的捕获失败，覆盖不到此路径。
+
+触发：在持久 Nest handler 中 Create；builder 初始化 DAO 并通过 MarkPersist 登记，再因校验失败返回错误；业务处理该错误并返回一个正常业务结果。期望失败创建的 DAO 不出现在提交中（或者框架令整个事务回滚）；实际 handler 成功，Manager.Get(id) 为 nil，但 committer 收到该 ID 的版本 0→1 Put，载荷为 value=99。这样可能持久化未完成初始化的角色、房间或公会，后续加载／重试会面对“之前创建失败却已有数据”的状态。不能将 API 返回创建错误等同于这次创建没有持久副作用。
+
+两条复现：GuardScope + RunIsolatedTransaction，以及真实 Nest Engine 注册的 RollbackState/Strict handler + Request。均出现失败实体的 Put；对照将创建错误向上传播，事务回滚且没有该 Put。复现使用仓库已有带 Tracker 的 DAO 夹具和 recordingCommitter，**证明提交边界收到错误记录，不冒充真实 Mongo/WAL 冷恢复验证**。普通与 race 执行的缺陷断言都失败，没有观察到数据竞争报告。
+
+探针：[create_failure_test.go.txt](../../scripts/testdata/entity-review/create_failure_test.go.txt)。在该 main 的独立检出复制成 `framework/nest/review_create_failure_test.go`，运行：
+
+```bash
+GOWORK=off go test -race ./framework/nest -run '^TestReviewFailed' -count=1 -v
+```
+
+当前结果：isolated 与 handled_error 两个断言失败，propagated_error 对照通过。建议为从初始化开始的创建过程建立可撤销事务边界，或在已登记副作用后构建失败时将外层事务标为失败；不要只清理 Manager 索引，因为此时尚未发布。验收覆盖 builder／组件 Init／OnInitFinish 失败、业务处理错误后继续、重复 ID 发布失败，以及普通成功创建。不能笼统把所有 ErrEntityExists 都变成不可恢复错误而破坏 GetOrCreate 契约。
+
+临时规避：持久 handler 内初始化可能写 DAO 时，Create 的初始化错误必须向上传播并回滚；不要把失败转换为正常结果后提交。独立的补偿／告警应在失败事务结束后执行。
+
+原有测试对照：`GOWORK=off go test -race ./framework/entity ./framework/dataengine/engine ./framework/remoteentity ./framework/nest -skip '^TestReview' -count=1` 四包通过（分别 2.838、4.873、32.061、5.876 秒）；外部依赖门控测试的跳过不算集成验收。本轮没有重跑全仓或生产环境压测。
+
+### TCP 快照门禁：已缩小到测试夹具的平台假设，未确认运行时缺陷
+
+上轮原始测试的两项失败仍是真实失败。本轮保持运行时代码不变，分别做诊断性对照，测试文件随后恢复原样：
+
+- 仅把 written_lane 在服务器追帧结束之后等待客户端收齐的预算从 5 秒改成 60 秒，原 4 MiB 快照、校验字节／哈希／无帧洞／另一连接存活等断言全部通过，耗时 27.97 秒。服务器“已写出”不等于客户端已经读完，原 5 秒预算在当前 Linux 小接收窗口下不足。
+- 仅将 admission-only 对照快照改为 16 MiB 并同步设置 SnapshotConfig.MaxBytes，只运行该子测试，0.41 秒通过溢出断言。原 4 MiB 不保证超过应用出站队列和内核 socket 缓冲的合计容量；仅比较应用队列约 2 MiB 不足以建立这个对照。
+
+这两次对照支持测试夹具依赖平台缓冲与时间假设，不等于完整弱网验收，更不能据此把原失败改写成通过。建议夹具显式控制缓冲／背压，并分别观测服务器写出完成与客户端收齐；保留原有业务断言，不简单删测试或无限延长超时。当前没有足够证据将这项登记为框架丢快照。
+
 ## 2026-10-30：上线前 Saga 与验证门禁审查
 
 当前复验基线：[main v1.33.0，030a9f11](https://github.com/tjbdwanghaibo/roost-core/commit/030a9f11)。固定审查分支仅提交报告与探针，不合入 main、不修改运行时；交由另一位 agent 修复。此前原型的三项问题已由正式实现的独立启动尝试身份、多等待者和准入初始化门处理，不再作为当前缺陷。
