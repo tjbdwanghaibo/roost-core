@@ -32,6 +32,8 @@ handler 内 `Create` 新建会持久化的实体不读存储：ID 必须是 id-g
 
 事务会修改且失败应恢复的状态放在 DAO。生成 setter 登记事务本地 PersistChange，回滚由 DAO 快照/undo 统一完成；组件不维护独立 undo 体系。rollback=none 不承诺失败恢复。事务外写持久 setter 被拒绝；只读和临时状态应明确声明 nopersist/nocoll。
 
+提交后的动作用 `nest.AfterCommit`：返回 true 时回调随当前事务提交后执行、回滚则不执行；返回 false（不在事务内，或当前事务已经结束）时调用方立即执行，惯用写法 `if !nest.AfterCommit(fn) { fn() }`。事务只属于执行 handler 的那个请求上下文：同步 `Request` 的被调 handler、共享加载等别的 goroutine 看不到调用方的事务。
+
 memory 且没有 effect 的事务不写 WAL：带事务的本地持久修改由 refuseMemoryPersistentWrite 拒绝；不能再使用旧文档的“静默忽略持久修改”描述。Emit 与实体删除会提升所需持久级别。Remote 批次有独立参与者归属，不能把远端 mutation 当普通本地漏写误判。
 
 ## 4. 提交与回复

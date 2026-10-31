@@ -114,6 +114,10 @@ type RollbackTx struct {
 	// snapshotted 是本事务以可回滚策略捕获（登记了快照 / tracker 恢复）的实体。嵌套事务提交前据此拒绝写外层会回滚的实体。
 	enclosing   *RollbackTx
 	snapshotted []entity.IThreadSafeEntity
+	// boundCtx 是 withRollbackTx 绑定本事务时的请求上下文。上下文快照（同步 Request、共享加载）会把 KV 原样复制到
+	// 别的 goroutine，事务指针随之被带过去；CurrentRollbackTx 只在绑定它的那个上下文里返回本事务，别处一律视为不在事务内。
+	// 只在绑定前写一次，复制快照的交接发生在其后，读它不与写竞争。
+	boundCtx *fctx.Context
 }
 
 // rollbackTxState 是事务的终态机：open → committed（含 abandon）或 rolledBack，只前进一次。
@@ -229,7 +233,8 @@ func RecordUndoToken(owner any, field uint64, token any, fn func() error) bool {
 	return tx.RecordUndoToken(owner, field, token, fn) == nil
 }
 
-// AfterCommit 登记提交后回调：事务持久且实体锁释放后执行，每个回调独立恢复 panic。
+// AfterCommit 登记提交后回调：事务持久且实体锁释放后执行，每个回调独立恢复 panic。事务已提交、回滚或 abandon 后
+// 登记被忽略（回调不执行）；需要知道是否登记成功时用包级 AfterCommit，它在这种情况下返回 false。
 func (tx *RollbackTx) AfterCommit(fn func()) {
 	if tx != nil && tx.state == rollbackTxOpen && fn != nil {
 		tx.commits = append(tx.commits, fn)
@@ -869,6 +874,11 @@ func (tx *RollbackTx) pipelinedEnqueue(ctx context.Context, committer PipelinedT
 type rollbackContextKey struct{}
 
 // CurrentRollbackTx 返回当前上下文正在执行的事务；不在事务内时为 nil。
+//
+// 事务只属于绑定它的请求上下文（执行 handler 的 goroutine，见 RollbackTx 的所有权说明）。从别的上下文复制来的快照
+// 即使带着事务指针也返回 nil：在 RunDetachedTransaction 里发起的同步 Request，被调 handler 是另一个 goroutine 上的
+// 独立执行，它的 setter、AfterCommit、嵌套事务不能登记到调用方的事务上（调用方回滚或超时后提交都会丢掉它们，并发
+// 修改调用方事务还是数据竞争）。
 func CurrentRollbackTx() *RollbackTx {
 	c := fctx.CurrentContext()
 	if c == nil {
@@ -879,13 +889,18 @@ func CurrentRollbackTx() *RollbackTx {
 		return nil
 	}
 	tx, _ := v.(*RollbackTx)
+	if tx == nil || tx.boundCtx != c {
+		return nil
+	}
 	return tx
 }
 
-// AfterCommit 向当前事务登记提交后回调；不在事务内时返回 false。
+// AfterCommit 向当前事务登记提交后回调。返回 true 表示回调已交给一个尚未结束的事务，提交后执行、回滚则不执行；
+// 不在事务内，或当前事务已经提交 / 回滚（提交回调已经交出，再登记永远不会执行）时返回 false，调用方应立即执行
+// （惯用写法 `if !nest.AfterCommit(fn) { fn() }`）：已结束的事务不再包含调用方此刻做的修改，立即执行与“事务外调用”一致。
 func AfterCommit(fn func()) bool {
 	tx := CurrentRollbackTx()
-	if tx == nil {
+	if tx == nil || tx.state != rollbackTxOpen {
 		return false
 	}
 	tx.AfterCommit(fn)
@@ -899,6 +914,7 @@ func withRollbackTx(tx *RollbackTx, fn func() (any, error)) (any, error) {
 		return fn()
 	}
 	old, hadOld := c.Get(rollbackContextKey{})
+	tx.boundCtx = c
 	c.Set(rollbackContextKey{}, tx)
 	defer func() {
 		if hadOld {

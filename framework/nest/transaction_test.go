@@ -12,6 +12,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 func TestCommitRunsEveryCallbackAndReportsAPanickingOne(t *testing.T) {
@@ -510,5 +511,95 @@ func TestRollbackTxRefusesLateAndUncomparableRegistrations(t *testing.T) {
 	}
 	if err := tx.AddMutation(EntityMutation{}); !errors.Is(err, ErrTransactionClosed) {
 		t.Fatalf("AddMutation after Commit = %v", err)
+	}
+}
+
+// AfterCommit 的返回值是“回调已交给一个还会决定提交的事务”：返回 true 的回调必须在提交后执行，返回 false 时调用方
+// 自己立即执行（selfsync.Groups、timedomain、entitytimer 都是 `if !AfterCommit(fn) { fn() }`）。当前事务已经提交或
+// 回滚时不能再登记——提交回调已经交出，登记的回调永远不会执行，调用方却以为它会执行。
+func TestAfterCommitRefusesAClosedTransaction(t *testing.T) {
+	for _, close := range []struct {
+		name string
+		end  func(*RollbackTx)
+	}{
+		{"committed", func(tx *RollbackTx) { _ = tx.Commit() }},
+		{"rolled back", func(tx *RollbackTx) { _ = tx.Rollback() }},
+	} {
+		t.Run(close.name, func(t *testing.T) {
+			_, release := fctx.NewContext()
+			defer release()
+			tx := NewRollbackTx(RollbackUndo)
+			ran := false
+			var registered bool
+			_, _ = withRollbackTx(tx, func() (any, error) {
+				close.end(tx)
+				registered = AfterCommit(func() { ran = true })
+				return nil, nil
+			})
+			if registered && !ran {
+				t.Fatalf("AfterCommit on a %s transaction returned true, but the callback can never run", close.name)
+			}
+		})
+	}
+}
+
+// 事务只属于绑定它的那个请求上下文（执行 handler 的 goroutine）。在 RunDetachedTransaction 里发起的同步 Request 会把
+// 调用方的上下文快照带给被调 handler，但被调消息是另一个 goroutine 上的独立执行：它的提交后回调不能挂到调用方的事务上——
+// 调用方超时后提交（回调被丢）或回滚（被调消息已经生效，回调却随调用方的回滚消失）都会丢掉被调方的提交后动作。
+func TestSyncRequestDoesNotHandTheCallersTransactionToTheCallee(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest)
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 404, entity.EntityCategory(1), nestLocalKind)
+	getter.Add(&rollbackTestEntity{EntityBase: entity.NewEntityBase(id, entity.EntityCategory(1), false, nestLocalKind), dao: &rollbackTestDao{id: id}})
+	InitNest(NestOptionWithGetter(getter), NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}))
+	defer StopNest()
+	name := NewHandlerName("test_after_commit_callee")
+	proceed := make(chan struct{}, 1)
+	ran := make(chan struct{}, 1)
+	MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, param []any, opts ...HandlerOption) (any, error) {
+		<-proceed
+		after := func() { ran <- struct{}{} }
+		if !AfterCommit(after) {
+			after()
+		}
+		return nil, nil
+	}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})
+	for _, caller := range []struct {
+		name string
+		// wait 为假时调用方不等被调方执行：同步等待超时，调用方随后提交，被调方才登记。
+		wait bool
+		err  error
+	}{
+		{"caller timed out and committed", false, nil},
+		{"caller rolled back after the callee finished", true, errors.New("caller refused")},
+	} {
+		t.Run(caller.name, func(t *testing.T) {
+			current, release := fctx.NewContext()
+			defer release()
+			current.SyncWait = time.Second
+			if !caller.wait {
+				current.SyncWait = 20 * time.Millisecond
+			} else {
+				proceed <- struct{}{}
+			}
+			_, err := RunDetachedTransaction(context.Background(), &recordingCommitter{}, "test_after_commit_caller", func() (any, error) {
+				_, err := Nest.Request(context.Background(), name, id, nil)
+				if caller.wait && err != nil {
+					t.Errorf("callee request = %v", err)
+				}
+				return nil, caller.err
+			})
+			if !errors.Is(err, caller.err) {
+				t.Fatalf("detached transaction = %v, want %v", err, caller.err)
+			}
+			if !caller.wait {
+				proceed <- struct{}{}
+			}
+			select {
+			case <-ran:
+			case <-time.After(2 * time.Second):
+				t.Fatal("the callee completed but its after-commit callback never ran")
+			}
+		})
 	}
 }

@@ -14,6 +14,8 @@
 
 ### 修复
 
+- **`nest.AfterCommit` 不再对已结束的事务返回 true 却丢掉回调；事务不再随上下文快照跨 goroutine 泄漏**。包级 `AfterCommit` 原来只看“有没有当前事务”：当前事务已提交或回滚时仍返回 true，回调永远不执行，`if !nest.AfterCommit(fn) { fn() }` 的调用方（`wiring/selfsync.Groups` 的 Join / Leave / Disband、时间域发布、entitytimer 报告）就丢掉提交后动作；现在已结束的事务返回 false，调用方立即执行。能走到这一步的真实路径是同步 `Request` 的上下文快照：在 `RunDetachedTransaction` 里发起的同步请求把调用方事务带进被调 handler，被调方的提交后回调挂到调用方事务上，调用方超时后提交（回调被丢）或回滚（被调方已生效、回调随回滚消失）。`CurrentRollbackTx` 现在只在绑定事务的那个请求上下文里返回它，别处视为不在事务内。见 [impl/02 §2 第 7 条](docs/framework/impl/02-nest-entity.md#2-必须保持的契约)。
+
 - **带 Entity Sync 的 Nest Mod 不再静默丢掉业务给的第二个观察者**：Nest 只有一个 `EntitySync` 观察者位置，`wiring/nest.NewModWithEntitySync`（例如 self_sync）的 `Provide` 把自己的 Manager 追加在业务选项之后，业务经 `NestOptionWithEntitySync` 给的观察者被覆盖——收不到提交捕获与回滚撤回，periodic 下毫无报错。现在 `Provide` 返回 `ErrEntitySyncObserverConflict`，政策应装到 Mod 的 Manager 上（`EntitySyncSetup.Attach`、`selfsync.Groups`）。修前 `TestEntitySyncModRefusesASecondEntitySyncObserver`：`Provide with a second EntitySync observer = <nil> (business observer bound: false)`。
 
 ## [v1.33.2] - 2026-10-31
