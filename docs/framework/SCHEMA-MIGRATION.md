@@ -1,6 +1,6 @@
 # 业务 schema 变更操作手册
 
-本篇是业务改动持久结构（DAO 字段改形状、拆分合并字段）时的离线迁移流程，维护者 2026-10-15 决定按此执行（[DESIGN-TODO D4](../maintenance/DESIGN-TODO.md#d4-业务-schema-离线迁移的模板--流程)）。完整可运行的示例在 game-demo 模板里：[db/migrations](../../demo/db/migrations/player.go.tmpl)、[离线执行器](../../demo/db/migrations/offline.go.tmpl)、[cmd/schemamigrate](../../demo/cmd/schemamigrate/main.go.tmpl)，测试随生成工程运行。
+本篇是业务改动持久结构（DAO 字段改形状、拆分合并字段）时的离线迁移流程，维护者 2026-10-15 决定按此执行（[DESIGN-TODO D4](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d4-业务-schema-离线迁移的模板--流程)）。完整可运行的示例在 game-demo 模板里：[db/migrations](../../demo/db/migrations/player.go.tmpl)、[离线执行器](../../demo/db/migrations/offline.go.tmpl)、[cmd/schemamigrate](../../demo/cmd/schemamigrate/main.go.tmpl)，测试随生成工程运行。
 
 ## 1. 现行规则：运行时只认当前 schema
 
@@ -9,7 +9,7 @@
 - 通用工具 [`infra/storage/migration`](../../infra/storage/migration/migration.go) 只负责“步骤登记与按版本链执行”（`Registry.Register` / `RunFrom`），不接入加载路径。
 - 墓碑（`_deleted: true`）在冷加载时读作“删过档”（`ErrEntityAggregateDeleted`，D10），不水合、不检查 schema。
 
-- **持久键**（维护者 2026-10-19 决定，[DESIGN-TODO D13](../maintenance/DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）：DAO 定义里字段写了 `bson:"x"` 时 `x` 就是持久键，没写时是 Go 字段名的 snake_case。键要字母开头、只含字母数字下划线，不能以 `_` 开头（留给 `_id`、`_schema`、`_version` 等元数据），同一类型内不能重复；`bson` 选项只认 `omitempty`，`bson:"-"` 报错。违反时 `roost generate` 报错。生成的 `gen_<x>_dao.go` 里有一个持久文档结构体 `<dao>PersistDoc`（嵌套类型是 `<type>BSONDoc`），每个字段的显式 `bson` 标签就是它的存储键；整文档写入、水合、回滚快照、增量补丁都用这些键。
+- **持久键**（维护者 2026-10-19 决定，[DESIGN-TODO D13](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）：DAO 定义里字段写了 `bson:"x"` 时 `x` 就是持久键，没写时是 Go 字段名的 snake_case。键要字母开头、只含字母数字下划线，不能以 `_` 开头（留给 `_id`、`_schema`、`_version` 等元数据），同一类型内不能重复；`bson` 选项只认 `omitempty`，`bson:"-"` 报错。违反时 `roost generate` 报错。生成的 `gen_<x>_dao.go` 里有一个持久文档结构体 `<dao>PersistDoc`（嵌套类型是 `<type>BSONDoc`），每个字段的显式 `bson` 标签就是它的存储键；整文档写入、水合、回滚快照、增量补丁都用这些键。
 - **要改 Go 字段名又保住数据：保留原来的 `bson` 名**（``Coins int64 `bson:"gold"` ``），键没变，不需要迁移，生成期与加载期都不告警。新字段建议一开始就写 `bson` 名（`roost add dao` 骨架的注释就是这样写的）。
 - **改字段会告警，不拒绝**：
   - 生成期：`roost generate` 把工作树里上一次的生成物当基线，持久键消失（改名没留 `bson` 名、删字段、`persist` 改 `nopersist`）、新增、类型变化各打印一条 `WARN: <Dao>: stored key "gold" (Gold int64) is no longer generated ...`，写明后果并提示 `schema=` 是否提高。基线只是工作树里的文件：再生成一次不再告警。

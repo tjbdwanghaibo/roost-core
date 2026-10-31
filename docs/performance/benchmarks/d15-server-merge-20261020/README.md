@@ -1,6 +1,6 @@
 # D15 别名合服：两服真实进程演练（2026-10-20）
 
-功能验收，不是性能测量。对应 [PLAYER-MIGRATION §6](../../../framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b) 与 [设计 §8](../../../maintenance/FEATURE-2026-10-20-server-merge-alias.md#8-测试与验收)。
+功能验收，不是性能测量。对应 [PLAYER-MIGRATION §6](../../../framework/PLAYER-MIGRATION.md#6-合服把服-a-并入服-b) 与 [设计 §8](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-20-server-merge-alias.md#8-测试与验收)。
 
 ## 环境
 

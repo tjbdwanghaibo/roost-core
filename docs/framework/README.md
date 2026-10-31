@@ -33,7 +33,7 @@
 
 [Nest 消息热路径优化设计](NEST-OPTIMIZATION.md)：分组预分配、上下文、临时存储和前驱边六项局部优化已实施；目标视图缓存与指标预绑定延期，包含同机证据及验证边界。
 
-[Chunk 同步与原生 PhysX](CHUNK-PHYSICS.md)：可选原生 CPU 后端、Nest 瞬态物理结果提交、区域基线/增量，以及本地 Unity 双视图验收。当前为本机验证应用，生产 Gate 接线与 Linux 运行尚未验收。
+[Chunk 同步与原生 PhysX](CHUNK-PHYSICS.md)：可选原生 CPU 后端、Nest 瞬态物理结果提交、区域基线/增量，以及本地 Unity 双视图验收。当前正式装配与验证范围见 [物理房间 service](PHYSICS-ROOM-SERVICE.md)；Linux 运行尚未验收。
 
 [通用 LevelComponent](LEVEL-COMPONENT.md)：借鉴 ssr 的多阶段／ECA 与变量作用域，接入 Nest 事务、宿主时钟和外部动作回执；包含 UGC／PvE 配置与正式生成消费者。
 
@@ -45,9 +45,9 @@
 
 [网关现状与独立 Gate 设计](GATEWAY.md)：嵌入与独立 Gate 的正式接入、已实施 API 与验证边界；新增能力随v1.25.0交付。
 
-[Gate 设计评审与实施方案](GATEWAY-IMPLEMENTATION.md)：具体目录、绑定身份、NATS 转发、统一发送、Nest/Sync 接线及验收条件，Gate/Game、MessagePack、广播与Sync/Lockstep已实施；本机功能通过，性能及多进程/跨机完整验收未收口。
+[Gate 实现契约](GATEWAY-IMPLEMENTATION.md)：具体目录、绑定身份、NATS 转发、统一发送、Nest/Sync 接线及验收条件，Gate/Game、MessagePack、广播与Sync/Lockstep已实施；本机功能通过，性能及多进程/跨机完整验收未收口。
 
-[包目录分类、Wiring 与 Service 收敛方案](PACKAGE-REORGANIZATION.md)：Framework/Infra/Gameplay/Service/Wiring 分类、Session 含义、运行实现迁出接线、便捷接入和同轮 Gate；目录与 Service/Wiring 拆分已实施并通过全仓验证；Gate 已随v1.25.0交付。
+[包目录与职责边界](PACKAGE-REORGANIZATION.md)：Framework/Infra/Gameplay/Service/Wiring 分类、Session 含义、运行实现迁出接线、便捷接入和同轮 Gate；目录与 Service/Wiring 拆分已实施并通过全仓验证；Gate 已随v1.25.0交付。
 
 | 模块 | 说明 | 实现 |
 | --- | --- | --- |
@@ -73,7 +73,7 @@
 
 - [维护、升级、故障处理](../maintenance/README.md)
 - [文档清单](../maintenance/DOCUMENTS.md)
-- [文档与代码一致性核对](../maintenance/CONSISTENCY.md)
+- [历史文档一致性核对（v1.24 基线）](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/CONSISTENCY.md)
 - [已知限制与待验证能力](../maintenance/KNOWN-LIMITS.md)
 - [性能报告与复跑](../performance/README.md)
 - [全部 Go 包映射](PACKAGES.md)

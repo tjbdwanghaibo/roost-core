@@ -3,7 +3,7 @@
 Saga 用于跨越多个独立事务域的业务流程。单个 Nest handler、同一 MongoDB
 事务或 `RemoteWriteBatch` 能覆盖的操作不应使用 Saga。
 
-设计与取舍：[DESIGN-2026-10-28-saga-jetstream-authority](../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md)
+设计与取舍：[DESIGN-2026-10-28-saga-jetstream-authority](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md)
 （维护者 2026-10-28 决定：协调器权威只保留 JetStream，Redis 权威、Store Service 与 `saga.redis.*` 在第 4 批删除）。
 实现入口见 [impl/06](impl/06-saga.md)，使用见 [guide/06](guide/06-saga.md)。
 

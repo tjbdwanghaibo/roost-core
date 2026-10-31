@@ -4,7 +4,7 @@
 
 **本页没有性能结论。** 维护者 2026-10-21 要求先暂停压测、把代码收尾；同日宿主上有别的耗资源程序，冒烟也不跑。sync-aoi 与 nest-game 的心跳驱动模式、§7 的微基准都已实现、能编译，`go test` 里的短断言（几百毫秒、几十个实体）通过；正式对比放到 v1.31 发版前的压测，复跑命令见 §4。
 
-设计来源：[DESIGN-TODO D20](../maintenance/DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制) P4 行与 P5 表里 sync-aoi、nest-game 两行；结构与投递方式的前置压测见 [HB-STRUCTURES-20261021](HB-STRUCTURES-20261021.md)。
+设计来源：[DESIGN-TODO D20](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制) P4 行与 P5 表里 sync-aoi、nest-game 两行；结构与投递方式的前置压测见 [HB-STRUCTURES-20261021](HB-STRUCTURES-20261021.md)。
 
 ## 1. 新增开关
 

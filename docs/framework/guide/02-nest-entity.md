@@ -87,6 +87,6 @@ actionflow 的 runner 回调期间产生修改先进入延后队列，在最外�
 
 ## 源码与核对范围
 
-当前设计的关键结论、纠正的旧口径及验证限制见 [文档—代码核对表](../../maintenance/CONSISTENCY.md)。本篇不以测试数量证明全部路径正确；具体默认值与导出 API 以对应源码声明为准。
+当前设计的关键结论、纠正的旧口径及验证限制见 [文档—代码核对表](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/CONSISTENCY.md)。本篇不以测试数量证明全部路径正确；具体默认值与导出 API 以对应源码声明为准。
 
 调度池统一使用 `short / long / io`：short、long 都执行业务并遵守 Guard，io 只处理外部等待；业务 Kind 决定短/长池。配置、API 与监控迁移见 [Nest 三池](../NEST-AWAIT.md#池命名收敛2026-10-13)。

@@ -1,6 +1,6 @@
 # 投影器按实体分片并行投影：本机与云 Mongo 对照（2026-10-27）
 
-对应设计：[FEATURE-2026-10-27-projector-entity-parallel](../maintenance/FEATURE-2026-10-27-projector-entity-parallel.md)。分支 `feat/projector-entity-parallel`
+对应设计：[FEATURE-2026-10-27-projector-entity-parallel](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-27-projector-entity-parallel.md)。分支 `feat/projector-entity-parallel`
 （基线 `8c691215`）。样本在 [benchmarks/projector-entity-parallel-20261027](benchmarks/projector-entity-parallel-20261027/)；完整原始输出（含测试日志）在本机
 `artifacts/perf/projector-entity-parallel-20261027/`（不随仓）。全部是单机、短时、每档 1～2 个样本，只给量级，不是容量保证。
 

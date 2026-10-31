@@ -1,6 +1,6 @@
 # Lockstep 快照恢复限速链路演练（2026-10-20）
 
-快照恢复第 4 期（[设计 §9](../maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#9-测试与验收计划)“限速链路”一行）的一次性**功能演练**，不是性能基线：只核对“快照在慢链路上能不能传完、连接断不断、恢复是否成功”，数字只对本机、本次参数成立。两组：
+快照恢复第 4 期（[设计 §9](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#9-测试与验收计划)“限速链路”一行）的一次性**功能演练**，不是性能基线：只核对“快照在慢链路上能不能传完、连接断不断、恢复是否成功”，数字只对本机、本次参数成立。两组：
 
 1. **嵌入 TCP**（`TCPSender`，可靠通道等写出，`ReliablePacer` = true）：256 KB/s、64 KB/s 两档，1 MiB 与 4 MiB 两种快照。
 2. **独立 Gate**（`gate.Transport`，只准入、写出无回执，快照按 `UnpacedBytesPerTick` 固定节流）：把设计 §6.3 风险 1“慢链路被 Gate 断开、重连后反复重来”落成实测。

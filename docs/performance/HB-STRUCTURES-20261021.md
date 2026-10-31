@@ -1,6 +1,6 @@
 # D20 心跳调度结构与投递方式压测（2026-10-21）
 
-维护者 2026-10-21 批准（[DESIGN-TODO D20](../maintenance/DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制) 决定 ② ⑪，`75006a01`）：投递方式与调度结构由压测决定，维护者经验是 ssr 的方式更好。本轮**只做原型和基准，不实现正式框架、不改框架正式代码**。原型在 [gameplay/heartbeat/internal/bench](../../gameplay/heartbeat/internal/bench/)（`internal`，没有任何生产代码引用）；随仓摘要在 [benchmarks/hb-structures-20261021](benchmarks/hb-structures-20261021/)。
+维护者 2026-10-21 批准（[DESIGN-TODO D20](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d20-移动由实体自己的心跳驱动mapbasic--move-组件--actionflow-控制) 决定 ② ⑪，`75006a01`）：投递方式与调度结构由压测决定，维护者经验是 ssr 的方式更好。本轮**只做原型和基准，不实现正式框架、不改框架正式代码**。原型在 [gameplay/heartbeat/internal/bench](../../gameplay/heartbeat/internal/bench/)（`internal`，没有任何生产代码引用）；随仓摘要在 [benchmarks/hb-structures-20261021](benchmarks/hb-structures-20261021/)。
 
 已定前提（不比较）：固定 10 档（50ms～60s）、同一实体的多个登记不合并、跳拍打 Warn 并计数、每个登记至多一拍在途。
 

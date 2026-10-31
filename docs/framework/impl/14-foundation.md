@@ -128,7 +128,7 @@
 
 ### nats
 
-9 个实现文件、1 个测试文件。`jetstream_log.go` 是把 JetStream 流当权威事件日志的原语接口 `JetStreamLog`（fenced 发布：单条或原子批量、首条带通配期望序号；leader 读最后一条、有序读取与跟随、清理、持久消费者 ack floor、KV、对象存储、散播请求），结果分“已持久 / 结果未知 / 确定没写入”三类，最低 nats-server 2.12.1（Saga 协调器权威改为 JetStream 事件日志，设计见 [DESIGN-2026-10-28](../../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md) §3.2）。
+9 个实现文件、1 个测试文件。`jetstream_log.go` 是把 JetStream 流当权威事件日志的原语接口 `JetStreamLog`（fenced 发布：单条或原子批量、首条带通配期望序号；leader 读最后一条、有序读取与跟随、清理、持久消费者 ack floor、KV、对象存储、散播请求），结果分“已持久 / 结果未知 / 确定没写入”三类，最低 nats-server 2.12.1（Saga 协调器权威改为 JetStream 事件日志，设计见 [DESIGN-2026-10-28](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md) §3.2）。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |

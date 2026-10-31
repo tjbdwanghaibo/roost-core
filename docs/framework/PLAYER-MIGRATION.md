@@ -1,6 +1,6 @@
 # 静态 Player 跨机迁移参考流程
 
-本篇是把一个 game sid（连同绑定在它上面的全部静态 Player）从一台机器搬到另一台的参考流程，维护者 2026-10-15 决定按此执行（[DESIGN-TODO D5](../maintenance/DESIGN-TODO.md#d5-静态-player-跨机迁移的参考流程)）。每一步写明用到的现有能力与检查点；检查工具是 game-demo 模板里的 [cmd/sidmove](../../demo/cmd/sidmove/main.go.tmpl)。框架级的“迁移 Player”命令（ops 管理面的 drain-and-move，自动执行并处理部分完成）是上线后评估的候选，尚未实施。
+本篇是把一个 game sid（连同绑定在它上面的全部静态 Player）从一台机器搬到另一台的参考流程，维护者 2026-10-15 决定按此执行（[DESIGN-TODO D5](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d5-静态-player-跨机迁移的参考流程)）。每一步写明用到的现有能力与检查点；检查工具是 game-demo 模板里的 [cmd/sidmove](../../demo/cmd/sidmove/main.go.tmpl)。框架级的“迁移 Player”命令（ops 管理面的 drain-and-move，自动执行并处理部分完成）是上线后评估的候选，尚未实施。
 
 ## 1. 先说清“迁移”的对象
 
@@ -71,7 +71,7 @@ go run ./cmd/sidmove players -mongo "$URI" -config configs/service/config.game.y
 
 ## 5. 改 DAO 库名映射
 
-DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（或 `kitdataengine.WithDatabaseResolver`）决定（[DESIGN-TODO D9](../maintenance/DESIGN-TODO.md#d9-dao-库名不随配置_id-是编码后的-entityid) 修订版 A，[设计与使用](guide/03-dataengine.md#3-投影与幂等)）。WAL 只记逻辑名、投影时才换算，所以**改映射等于把数据搬到另一个库**，与搬机同一套停写纪律：
+DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（或 `kitdataengine.WithDatabaseResolver`）决定（[DESIGN-TODO D9](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d9-dao-库名不随配置_id-是编码后的-entityid) 修订版 A，[设计与使用](guide/03-dataengine.md#3-投影与幂等)）。WAL 只记逻辑名、投影时才换算，所以**改映射等于把数据搬到另一个库**，与搬机同一套停写纪律：
 
 | 步骤 | 做什么 | 检查点 |
 | --- | --- | --- |
@@ -85,7 +85,7 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 
 ## 6. 合服：把服 A 并入服 B
 
-别名合服（[DESIGN-TODO D15](../maintenance/DESIGN-TODO.md#d15-合服把一个服并入另一个服)，设计与实施记录见 [FEATURE-2026-10-20-server-merge-alias](../maintenance/FEATURE-2026-10-20-server-merge-alias.md)）：A 的角色身份（PlayerID、`Role.ServerID`、slot、名字）一律不变，account 在 A 的服务器记录上写 `MergedInto = B`，此后会话里的承载服（`Role.ServingServerID`、`ServerIDClaim`）是 B，Gate 与嵌入 TCP 都把 A 的角色连到 B 的 game；B 的 game 进程、配置与代码不变，进程仍只认自己的 sid。原服在 `OriginServerIDClaim`，显示规则由业务决定。
+别名合服（[DESIGN-TODO D15](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d15-合服把一个服并入另一个服)，设计与实施记录见 [FEATURE-2026-10-20-server-merge-alias](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-20-server-merge-alias.md)）：A 的角色身份（PlayerID、`Role.ServerID`、slot、名字）一律不变，account 在 A 的服务器记录上写 `MergedInto = B`，此后会话里的承载服（`Role.ServingServerID`、`ServerIDClaim`）是 B，Gate 与嵌入 TCP 都把 A 的角色连到 B 的 game；B 的 game 进程、配置与代码不变，进程仍只认自己的 sid。原服在 `OriginServerIDClaim`，显示规则由业务决定。
 
 合服是停服窗口内的**离线**操作，A、B 都停机。工具：game-demo 的 `cmd/accountctl`（account 记录）与 `cmd/sidmerge`（跟着 sid 走的数据，逻辑在 [wiring/sidmerge](../../wiring/sidmerge/sidmerge.go)）；`roost project doctor` 的 `merge-readiness` 只读打印同一份清单。
 

@@ -330,7 +330,7 @@ Lockstep 推进 108000 次 Tick，10 位玩家每帧提交 8 字节输入，相�
 
 ## Lockstep 自动保留与追帧失败通知（2026-10-15）
 
-基线 `45897a0c`；维护者 2026-10-15 决定 [DESIGN-TODO D1](../maintenance/DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 按推荐方案 C 实施，提交 `a6376934`。
+基线 `45897a0c`；维护者 2026-10-15 决定 [DESIGN-TODO D1](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 按推荐方案 C 实施，提交 `a6376934`。
 
 **做了什么**：`MatchConfig.HistoryRetainFrames` 默认 3600 帧自动保留（`RetainFullHistory` 关闭，正值下限 `MinHistoryRetainFrames` = `ReplayHorizon` = 64）；`Tick` 在发出本次追帧页之后裁历史，hash 报告按 64 帧步长跟随窗口。越界追帧在 `StartCatchup` 时即返回 `*CatchupUnservableError`，下一次 `Tick` 经可靠通道发 C9 v1 追帧失败通知；Go `FrameAssembler` / `robot.LockstepBot` 与 C# `LockstepAssembler` / `LockstepClient` 收到后终止本场，不再请求追帧。使用说明见[使用指南](guide/04-sync.md#越界的处理按恢复方式区分)。2026-10-20 起 C9 v1 已被 v2（带失败原因）取代，越界在 auto / snapshot 模式下改走快照（下一节）。
 
@@ -358,7 +358,7 @@ Lockstep 推进 108000 次 Tick，10 位玩家每帧提交 8 字节输入，相�
 
 ## Lockstep 快照恢复（2026-10-20）
 
-维护者 2026-10-20 决定把 [DESIGN-TODO D1](../maintenance/DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 的方案 B 立项，设计（`fe9453dd`）同日批准、§12 十三个决定点全部按推荐，分五期实施：P1 服务端核心（`f33e1b01`、`a02c3999`）、P2 Go 客户端（`69fa9e79`）、P3 C# SDK（`f03a6602`）、P4 示例与验收（`8781b32a`）、P5 现行文档。设计、各期实施记录与偏差见 [FEATURE-2026-10-20-lockstep-snapshot-recovery](../maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md)；用法见[使用指南](guide/04-sync.md#落后的会话怎样回来追帧快照或自动)，实现契约见 [impl/04-sync §2D](impl/04-sync.md#2d-lockstep-快照恢复的实现契约)。
+维护者 2026-10-20 决定把 [DESIGN-TODO D1](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d1-lockstep-历史的保留与过期策略) 的方案 B 立项，设计（`fe9453dd`）同日批准、§12 十三个决定点全部按推荐，分五期实施：P1 服务端核心（`f33e1b01`、`a02c3999`）、P2 Go 客户端（`69fa9e79`）、P3 C# SDK（`f03a6602`）、P4 示例与验收（`8781b32a`）、P5 现行文档。设计、各期实施记录与偏差见 [FEATURE-2026-10-20-lockstep-snapshot-recovery](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md)；用法见[使用指南](guide/04-sync.md#落后的会话怎样回来追帧快照或自动)，实现契约见 [impl/04-sync §2D](impl/04-sync.md#2d-lockstep-快照恢复的实现契约)。
 
 **做了什么**：`MatchConfig.Recovery`（catchup / snapshot / auto，零值在配了 `Snapshots.Provider` 时为 auto，否则为 catchup）与 `SnapshotConfig`；业务快照来源 `SnapshotProvider` 在 Match 自己的 goroutine 上调用、同一局至多一次在途、多会话共享，`Tick` 只非阻塞收结果；快照以 `CA 01` 分块经可靠通道下发（首块带 SHA-256 摘要与可选状态 hash），每会话一批在途，随链路放慢的通道按 `BytesPerTick`、只准入的通道（独立 Gate）按 `UnpacedBytesPerTick` 节流（`nettransport.ReliablePacer`）；快照之后从快照帧 +1 续发历史页；恢复期间历史钉住，最多多留 `PinFrames` 帧；恢复失败通知 C9 升 v2（带原因）。Go `FrameAssembler.Receive` / `ResumeAfterSnapshot`、`robot.LockstepBot.Restore`，C# `LockstepClient` 的 `restore`。P5 按维护者追加决定，恢复进行中的会话被 Detach 计 `lockstep.snapshot.failed.total{reason="detached"}`（`TestMatchSnapshotRecoveryDetachIsCounted`；修前同一用例报 `... = 0 after detaching a session waiting, want 1`），独立 Gate 下“断开—重连—从头重传”的循环因此在失败指标上可见。
 
@@ -378,6 +378,6 @@ MOBA（去掉 Provider）：player 2 3 from frame 41: lockstep match: catch-up r
 
 **行为变化与升级**：配了 Provider 的 Match 越界不再返回 `*CatchupUnservableError`；C9 v1 删除、新增 CA 01 下行消息，旧客户端 SDK 把它们当坏包终止，升级需同时更新服务端与 Go / C# 客户端（项目未上线，不做兼容）。
 
-**已提交门（2026-10-20）**：“先切帧、后提交、提交后才广播”的宿主（MOBA `Room`）配 `MatchConfig.CommittedFrame`，追帧页与取快照的上界停在已提交帧，空闲的恢复会话落进冗余包覆盖范围即切回实时；nil 时行为不变。没有恢复中会话的 Tick 不经过门，热路径前后对照无差异（[样本](../performance/benchmarks/lockstep-room-gate-20261020/benchstat.txt)：`MatchTickTenPlayers` 1.147µs → 1.079µs，p=0.616，n=10；分配不变）。设计见 [FEATURE §15](../maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#15-room-接入已提交门2026-10-20)。
+**已提交门（2026-10-20）**：“先切帧、后提交、提交后才广播”的宿主（MOBA `Room`）配 `MatchConfig.CommittedFrame`，追帧页与取快照的上界停在已提交帧，空闲的恢复会话落进冗余包覆盖范围即切回实时；nil 时行为不变。没有恢复中会话的 Tick 不经过门，热路径前后对照无差异（[样本](../performance/benchmarks/lockstep-room-gate-20261020/benchstat.txt)：`MatchTickTenPlayers` 1.147µs → 1.079µs，p=0.616，n=10；分配不变）。设计见 [FEATURE §15](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#15-room-接入已提交门2026-10-20)。
 
 **未验证**：真实移动网络 / 跨机下的快照恢复；Unity 编辑器与 IL2CPP 上的 C# SHA-256；独立 Gate 下断开是哪一个写期限先到期；持久对局 `Room` 在替身权威下有 KCP / Nest 回归，真实 strict WAL / Mongo 下有 SIGKILL 冷加载后经已提交检查点快照恢复的演练（下行是记录器、不经 KCP），不含真实 WAL 的提交延迟分布、宿主交接与快照恢复同时发生。剩余边界见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#lockstep)。

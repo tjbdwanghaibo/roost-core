@@ -19,10 +19,10 @@
 
 ## 专题
 
-- [独立 Gate 设计](framework/GATEWAY.md) 与 [Gate 设计评审与实施方案](framework/GATEWAY-IMPLEMENTATION.md)：随 v1.25.0 交付的网关能力、协议契约与验收边界。
-- [包目录分类、Wiring 与 Service 收敛方案](framework/PACKAGE-REORGANIZATION.md)：原 kit 接线已迁为 Wiring，领域与运行实现归所属模块。
+- [独立 Gate 设计](framework/GATEWAY.md) 与 [Gate 实现契约](framework/GATEWAY-IMPLEMENTATION.md)：随 v1.25.0 交付的网关能力、协议契约与验收边界。
+- [包目录与职责边界](framework/PACKAGE-REORGANIZATION.md)：原 kit 接线已迁为 Wiring，领域与运行实现归所属模块。
 - [Nest 三池与 Await](framework/NEST-AWAIT.md)：short / long / io 三池、匿名异步恢复与池命名迁移表（随 v1.26.0 发布）。
-- [玩家接入与 Sync 命名后续事项](maintenance/ACCESS-SYNC-FOLLOWUPS.md)：Session 服务可选化等待定方向。
+- [玩家接入与 Sync 命名后续事项](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/ACCESS-SYNC-FOLLOWUPS.md)：Session 服务可选化等待定方向。
 
 ## 历史
 

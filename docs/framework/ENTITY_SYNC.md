@@ -85,7 +85,7 @@ Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Clo
 
 **线上怎么区分两路。** 同一条玩家连接、同一个推送编号（`msgid.MsgSelfSync`）、同一个会话、同一个 epoch：一帧里可以同时有玩家自己与房间两个对象，客户端按每个更新自带的 `Namespace`（实体标记的 `syncNamespace`）与 `Profile.Key` 分流——自身视图是 Player 的命名空间 + `self`，组视图是组实体的命名空间 + `GroupsConfig.Profile.Key`。只用一个 `frame.Receiver`；重连后的 Full 同时带回两路（`wiring/selfsync` 的 `TestGroupsShareTheSelfSyncConnection` 走真实 TCP）。
 
-取舍与确认过程见 [FEATURE-2026-10-31-room-sync-groups](../maintenance/FEATURE-2026-10-31-room-sync-groups.md)。
+取舍与确认过程见 [FEATURE-2026-10-31-room-sync-groups](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-31-room-sync-groups.md)。
 
 **限制。** 离线成员每个政策阶段被复查一次（一次 `SubscribeStamped` 失败返回），代价与“有离线成员的组”的成员数成正比；成员关系不持久；`Groups` 只能装在 self_sync 的 Manager 上（会话归自身视图），没打开 self_sync 的进程用 `Group` 并自己开关会话。`GroupsConfig.Profile.Key` 必填：组视图的字段权限由 packer 按视图键决定。
 

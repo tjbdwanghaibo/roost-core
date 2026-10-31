@@ -23,7 +23,7 @@ nats-io/nats.go v1.53.1 之上的驱动：核心连接 `Client`、同连接上�
 
 ## 日志原语（`JetStreamLogClient`）
 
-把 JetStream 流当作单写者的权威事件日志（Saga 协调器用，[设计 §3.2](../../../../docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md)）。接口与结果分类写在 `fnats.JetStreamLog` 的注释里，这里只列实现上的约束：
+把 JetStream 流当作单写者的权威事件日志（Saga 协调器用，[设计 §3.2](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md)）。接口与结果分类写在 `fnats.JetStreamLog` 的注释里，这里只列实现上的约束：
 
 - 最低 nats-server 2.12.1（`fnats.MinLogServerVersion`）：2.12.0 拒绝原子批里的 `Nats-Msg-Id`。`EnsureLogStream` 查连接上的服务端版本，并按服务端回报的生效配置核对 AllowAtomicPublish / AllowDirect / Discard=New / MaxAge=0 / 文件存储 / 副本数，不符返回 `fnats.ErrLogUnsupportedServer`（只看到当前连接的那个节点的版本）。
 - `PublishFenced`：1 条用普通发布（`WithRetryAttempts(0)`，重发由调用方做），多条按 ADR-50 手写批头（非末条核心 publish、末条 request），批号每次调用新生成；期望序号只放首条（服务端按批前状态比较）。服务端明确拒绝按错误码归类（10071 / 10164 → `ErrLogWrongLastSequence`，10201 → `ErrLogDuplicateBatch`，10176 → `ErrLogBatchIncomplete`，10199 → `ErrLogBatchTooLarge`，其余 → `ErrLogRejected`），没收到答复一律 `ErrLogOutcomeUnknown`。

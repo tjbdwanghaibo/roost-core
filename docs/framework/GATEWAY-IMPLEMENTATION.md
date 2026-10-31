@@ -1,23 +1,6 @@
-# 独立 Gate：设计评审与实施方案
+# 独立 Gate：实现契约
 
-状态：**目录重构与Gate已随v1.25.0发布**。日期：2026-10-09；起始基准 `ef640e6e`，目录提交 `1b09cfb0`。TCP、MessagePack、Gate/Game 运行实现、广播与 Sync/Lockstep 接线已落码。本机功能回归通过；性能、独立多进程及跨机完整验收尚未收口。分阶段实际结果见 [功能验收](../release/v1.25.0-VALIDATION.md)与[性能报告](../performance/GATE-AOI.md)。本轮先目录后 Gate，具体分类见 [目录方案](PACKAGE-REORGANIZATION.md)。
-
-## 1. 评审结论
-
-原设计方向合理，可以作为开发基础：连接和鉴权放在 Gate；业务协议解码、Nest 调度、Entity、DataEngine 留在 Game；固定 ServerID 路由；沿用 RS v2、Entity Sync 和 Lockstep 格式；断线、取消和写入结果分开处理。暂不建设全局在线目录、动态迁移或 WAL 热迁移，符合当前需求。
-
-原文已经提示以下风险，但还没有固定实现契约。它适合作为架构说明，不能直接当成接口规格开工。建议按本方案补齐后实施，不需要重写核心三大模块。
-
-| 必须细化的地方 | 当前源码事实 | 实施决定 |
-| --- | --- | --- |
-| 转发并发 | Bus RPC 按方法名散列到 worker，handler 在该 worker 内执行 | 玩家数据通道不直接包装成一个阻塞的 Bus `Forward` 方法；使用现有 NATS 连接上的专用、有界字节通道 |
-| 预算传递 | servicerpc 保留调用方 deadline；Bus 接收端 context 来自本进程生命周期，未恢复调用方期限 | 新信封显式携带期限和剩余预算，Game 入队时开始计时，不能出队后重新获得完整预算 |
-| 封装和大小 | Bus 原默认 JSON；本轮已迁为 MessagePack，正文和信封保留分层 | Gate 内部信封与 Bus RPC 统一采用 MessagePack；启动检查实际 NATS 载荷上限，计算完整包大小 |
-| 绑定代次 | Principal 有 PlayerID/SessionID/Claims；进程身份可复用 App SingletonIncarnation | Game 签发随机 BindID，完整匹配 Gate/Game incarnation；不使用客户端递增值获得接管权 |
-| 发送承诺 | Entity Sync 的 Push 成功表示已准入；AsyncTransport 后续发送失败使队列失败 | Game 本地准入、Gate 准入、socket 写出分别计量；后续失败关闭对应绑定与 Sync lifetime，不能继续发增量 |
-| 阶段顺序 | 原 P4 才集中处理资源限制 | P2 就提供最小的条目、字节、在途限额和发送期限；P4 做故障矩阵与调优，不能先上线无界原型 |
-
-这些是新能力的实施约束，不是现有嵌入式 TCP 已存在上述业务缺陷的结论。默认 NATS RPC 重试次数是 1；不能把“驱动支持配置重试”误写为“当前默认会重复执行”。
+当前接入、限制与验证入口见 [Gate 手册](GATEWAY.md)。本文保留绑定、通道、发送、资源与停机的实现边界；已完成的评审与实施分期见[历史记录](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/framework/GATEWAY-IMPLEMENTATION.md)。性能与跨机能力只按对应实测范围认定。
 
 ## 2. 正式链路与目录
 
@@ -212,45 +195,6 @@ P1 固定以下配置的合法范围、默认值和内存计算；P2 实现保�
 停止顺序：标记 ingress 不再接纳 → Gate 停新握手/新业务 → 在共同预算内等待已接纳操作和可发送结果 → 关闭绑定/socket → 退订通道 → 等实际在途任务退出 → 释放 NATS/其他依赖。排空超时不能先销毁仍被事务或发送任务使用的依赖。readiness 与 singleton 活性分别使用，不能因为仍持锁就判断可以接纳新玩家。
 
 指标按阶段区分 Gate 排队/转发、Game 接入/Nest 等待、Game 下行准入、Gate 入队/socket 写出；记录字节水位、最老队列年龄、拒绝/未知/旧代拒绝/续期失败/发送失败/恢复次数。PlayerID、SessionID、BindID 不作为 metrics label，个体关联放受控日志/trace。
-
-## 7. 分阶段实施和验收
-
-| 阶段 | 实施内容 | 必须完成的证据 |
-| --- | --- | --- |
-| P1 契约与 TCP 提取 | 本方案落接口、MessagePack 结构体信封与 Bus RPC Codec、配置和广播受众/准入结果；通用 TCP 提取；明确 ACL/生命周期 | 编解码语义与格式拒绝测试、Core/JetStream RPC 错误及异步消息回归；当前 TCP 生成工程回归；依赖无环；没有两份 TCP runtime |
-| P2 正式 PB 链路 | Gate/Game Mod、鉴权 Bind/Activate、单 Gate/Game 双向 PB、本地 PB 广播、最小有界发送与限额 | 独立进程真实登录、读和持久写；拒绝不写、提交后超时不盲重放；全在线/区服/指定玩家广播正确，慢连接不阻塞另一连接；embedded 回归 |
-| P3 会话与同步 | 两 Gate/两 Game、跨 Gate 广播、续期和身份核对、完整 Sync/Lockstep 接线 | 固定路由、旧响应/Kick/Unbind/异步错误隔离；广播无跨区误送、同 ID 窗口内不重复；重启和通知丢失后收口；全量/追帧恢复；混合类型顺序 |
-| P4 故障与排空 | NATS 缓冲/订阅故障、ACK 丢失、慢 Game/连接、广播部分失败和未知、排空、监控 | 每项上限实际触发且资源释放；不同 Game 隔离；部分写失败不续流；广播与旧绑定/重连竞争正确；事务结果与网络失败分开核验 |
-| P5 性能与跨机 | 正式生成消费工程、macOS/Linux、loopback 与实际跨机分开验证；MessagePack 真实包和 RPC 基准；混合负载叠加广播突发 | 记录编码耗时/分配/字节数与端到端完成率、硬件、RTT/时钟、CPU/内存/带宽、延迟长尾及最终状态；广播不能使正常业务无界积压 |
-
-性能沿用实际业务基线：1000 玩家、10000 Entity、每玩家约 50 个可见实体、每玩家每秒 10 条普通消息；全部 Entity 挂 heartbeat，分别验证 1Hz/10Hz，变化率 1%/5%，on_change + 20Hz 兜底。Saga 代表占比约 0.2%，Remote 80TPS 作为独立已够用负载，不用 Remote/Saga 的 TPS 替代普通消息吞吐。
-
-先做各档短预检，再完成一档具名代表负载 15 分钟稳定性（维护者 2026-10-09 将本轮时长由 1h 调整为 15 分钟，负载与验收指标不变）；同时跑具名故障矩阵和独立吞吐上限测试。比较同环境 embedded 与 Gate 链路的新增成本，不把以前的 80TPS/50ms 结果直接当 Gate 结果。
-
-广播额外验证 1000 连接的全在线突发、跨两个 Gate 的指定区服/玩家、多会话、断线替换、同 ID 重复、ACK 丢失和一部分客户端不读。基准记录受众规模、PB 大小、广播频率、实际 accepted/received 数及广播期间普通消息/Sync P99；具体频率和大小作为具名测试参数，不把一轮全服公告吞吐当成持续广播容量。
-
-Sync 的 P99≤50ms 从业务计划输入/handler 完成等起点分别记录，到客户端实际解码并应用完整更新结束；明确包含 Gate、排队与网络。计划输入指标包含调度积压，不能只统计开始执行后的快速样本。保留最大值和 >50ms 数量，继续跟踪用户已接受的偶发长尾；HB 调度延迟、普通消息完成率、实体修改完成率、持久正确性单独统计。
-
-新增行为按受影响包执行 build/vet/test/race；生成器变更重生成并编译、实际运行消费工程。接入与故障测试使用隔离资源，不向共享业务 Mongo/Redis 做注入。跨机未跑只能标记待验收，不用本机 loopback 代替。
-
-## 8. 本次核查依据与限制
-
-| 依据 | 核实内容 |
-| --- | --- |
-| [gateway.go](../../infra/network/gateway/gateway.go) | 可信 principal 与 transport-neutral Session；Endpoint 后必须接 Sender |
-| [render_access.go](../../codegen/internal/roost/render_access.go) | DispatchPayload 接受 gateway.Session；类型检查先于解码；输出已编码 Response |
-| [TCP](../../infra/network/gateway/tcp.go)、[会话](../../infra/network/gateway/tcp_session.go)、[Runtime](../../infra/network/gateway/tcp_runtime.go)、[生成接线](../../codegen/internal/roost/render_player_tcp.go) | 共用运行实现；读取/dispatch 每连接串行；嵌入模式每连接有界出站队列与唯一写协程，Gate 的 `WritePacket` 同步直写；生成物仅配置、协议和 Mod 接线 |
-| [Bus](../../infra/network/bus/bus.go)、[servicerpc](../../infra/network/servicerpc/client.go) | 方法名散列、同步 handler、接收 context、定向与轻量/JetStream 选择 |
-| [MessagePack Codec](../../infra/network/bus/msgpack_codec.go)、[RPC 信封](../../infra/network/bus/rpc_error.go)、[NATS Mod](../../wiring/nats/nats_mod.go) | 当前默认 MessagePack，RM v1 / RPC v2；拒绝旧 JSON 及未知格式；PubAck 的 JSON 是 NATS 官方控制协议 |
-| [NATS RPC](../../infra/network/nats/driver/rpc.go)、[重试策略](../../infra/network/nats/rpc.go)、[Assembly](../../infra/network/nats/driver/assembly.go) | 默认单次尝试、复用连接、关闭所有权；不是自动提供 Gate 身份校验 |
-| [服务发现](../../infra/network/etcd/discovery.go)、[App singleton](../../framework/app/singleton.go) | Metadata、sid 活性与本进程 incarnation 的能力边界 |
-| [Entity Sync Transport](../../framework/sync/entitysync/transport.go)、[Flush](../../framework/sync/entitysync/flush.go)、[异步发送](../../framework/sync/nettransport/channel.go) | 成功准入推进帧状态、失败恢复、队列和字节上限 |
-| [Lockstep 输入](../../framework/sync/lockstep/command.go)、[Match](../../framework/sync/lockstep/match.go)、[TCP sender](../../framework/sync/lockstep/tcp.go)、[既有端到端测试](../../framework/sync/lockstep/e2e_gate_test.go) | 现有串行 Match、认证 session、嵌入式发送与 KCP 测试；跨 NATS Gate 接线仍待实施 |
-| [当前设计](GATEWAY.md)、[性能基线](../performance/STABLE-v1.24.0.md) | 当前已交付边界与真实业务规模 |
-
-CBM 当前工作树项目为 `roost-core-gate-design-plan`，Tier 2，当前 generation `2026-10-09T08:17:42Z`，已刷新 Gate 新增文件；绑定、TCP、原始 NATS 与 Codec 材料路径 coverage 为 metadata_match，无记录缺口。图谱不是完整性证明，生成模板缺口仍按源码补证。docs 被策略排除，直接阅读。macOS 本机真实 NATS 和生成客户端证据见实施验收，不冒充独立 Gate 集群、Linux 实机或跨机性能验收。
-
-MessagePack 选型依据：[库说明](https://github.com/vmihailenco/msgpack)、[编码选项](https://github.com/vmihailenco/msgpack/blob/v5/encode.go)。支持普通结构体、可选 tag、数组模式及紧凑整数配置；本文未引用第三方性能数字作为 roost 容量承诺。
 
 ## 9. 已实施接口与默认预算
 

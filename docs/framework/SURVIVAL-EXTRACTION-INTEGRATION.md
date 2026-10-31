@@ -101,7 +101,7 @@ func openRaid(ctx context.Context, client nest.Client, catalog *configdata.Store
 	}
 	s := syncsender.NewSurvivalExtractionSender(client)
 	for _, id := range players {
-		// 内存里 Create 实体不等于持久建档；首次建档（送初始金币）要经过一次正式事务，重复调用不再加钱。
+		// Create 的持久化不等于业务初始化；首次送初始金币要经过正式事务，重复调用不再加钱。
 		if err := s.Sync_SurvivalPlayerInit(ctx, id); err != nil {
 			return err
 		}
@@ -212,7 +212,7 @@ sequenceDiagram
 
 存储格式要分两层看：
 
-- **DAO 持久键**：`gold` / `initialized` / `state` / `wake_timer` 这些 `bson` 名就是 Mongo 里的键（[DESIGN-TODO D13](../maintenance/DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）。以后改 Go 字段名要保留原 `bson` 名；改了 `bson` 名或删字段时，库里的旧键不再加载、下一次整文档写回即丢失，`roost generate` 与加载时只打 WARN。要改就先离线迁移（[schema 变更手册 §1](SCHEMA-MIGRATION.md#1-现行规则运行时只认当前-schema)）。
+- **DAO 持久键**：`gold` / `initialized` / `state` / `wake_timer` 这些 `bson` 名就是 Mongo 里的键（[DESIGN-TODO D13](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）。以后改 Go 字段名要保留原 `bson` 名；改了 `bson` 名或删字段时，库里的旧键不再加载、下一次整文档写回即丢失，`roost generate` 与加载时只打 WARN。要改就先离线迁移（[schema 变更手册 §1](SCHEMA-MIGRATION.md#1-现行规则运行时只认当前-schema)）。
 - **业务 JSON**：`State` 里的 `Schema=1` 是业务格式版本，加载时拒绝未知字段、尾随数据、超过 256 KiB 的状态以及违反守恒的物资账。改业务格式同样要离线迁移并配套代码，只改 DAO 字段的 `_schema` 不等于迁移了 JSON 内容。
 
 ### 9. 接入时容易踩的问题
@@ -220,7 +220,7 @@ sequenceDiagram
 - **锁目标没被识别**：Nest 生成器在不写 `target` / `targets` 时，把类型名含 `Entity` 的参数推断为锁目标；本夹具的锁接口叫 `ISurvivalRaidEntity` / `ISurvivalPlayerEntity`。名字不含 `Entity` 又没写 `target(s)` 时，`roost generate` 报 `//roost:nest found no entity parameter` 并点名 handler（[Nest 生成器](../../codegen/docs/NEST_RUNTIME.zh-CN.md)）。
 - **多实体锁档**：入场与兑付同时锁 Player 与 Raid。分类的取值就是锁序等级（`framework/entity/category_order.go`），Raid 是多名玩家争用的场景对象，放在 `EntityCategoryWorld`（3.1 第 3 步），总比 Player 先取锁，锁序固定。
 - **handler 里不发同步 Nest 请求**：已知参与者一次传给多实体 Sender；handler 内的同步请求被框架拒绝（`ErrSyncInHandler`）。
-- **内存里建实体不等于建档**：`Create` 只建内存实例；首次建档、首次入场都要经过一次正式事务，重试只查原事实。
+- **实体创建与业务初始化分开**：启用 DataEngine 后，普通持久实体事务外 `Create` 会补 strict 提交；Nest 内随本事务提交。没有 DataEngine 的离线夹具只建内存。初始金币、首次入场仍需自己的事务与幂等事实；Remote 新建规则见 [DataEngine](guide/03-dataengine.md)。
 
 ### 10. 练习
 

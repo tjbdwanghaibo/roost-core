@@ -1,6 +1,6 @@
 # Saga 正式实现（JetStream 协调器）性能验收（2026-10-29）
 
-设计 [§12](../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md#12-性能验收整轮--30-分钟) 的验收轮。入口 [saga-js-scan.sh](../../scripts/perf/saga-js-scan.sh)，用例 `framework/saga` 的 `TestRealSagaJSScanLevel`（`-tags integration`）。样本在 [benchmarks/saga-jetstream-authority-20261029](benchmarks/saga-jetstream-authority-20261029/)，原始日志与 pprof 留在本机 `artifacts/perf/saga-js/saga-js-20261029*`（不随仓）。
+设计 [§12](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md#12-性能验收整轮--30-分钟) 的验收轮。入口 [saga-js-scan.sh](../../scripts/perf/saga-js-scan.sh)，用例 `framework/saga` 的 `TestRealSagaJSScanLevel`（`-tags integration`）。样本在 [benchmarks/saga-jetstream-authority-20261029](benchmarks/saga-jetstream-authority-20261029/)，原始日志与 pprof 留在本机 `artifacts/perf/saga-js/saga-js-20261029*`（不随仓）。
 
 ## 0. 结论
 

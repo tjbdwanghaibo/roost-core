@@ -1,6 +1,6 @@
 # D20 选项 C：Nest 批量心跳作业（2026-10-21）
 
-设计见 [FEATURE-2026-10-21-nest-batch-heartbeat](../maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md)。随仓样本在 [benchmarks/nest-batch-heartbeat-20261021](benchmarks/nest-batch-heartbeat-20261021/)。方案 D（批量入队、逐个执行）的前置实验压缩在本篇 [§7](#7-前置实验方案-d批量入队逐个执行不合入)（含随选项 C 合入的“worker 同锁取下一项”的微基准证据）。
+设计见 [FEATURE-2026-10-21-nest-batch-heartbeat](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-21-nest-batch-heartbeat.md)。随仓样本在 [benchmarks/nest-batch-heartbeat-20261021](benchmarks/nest-batch-heartbeat-20261021/)。方案 D（批量入队、逐个执行）的前置实验压缩在本篇 [§7](#7-前置实验方案-d批量入队逐个执行不合入)（含随选项 C 合入的“worker 同锁取下一项”的微基准证据）。
 
 ## 结论
 

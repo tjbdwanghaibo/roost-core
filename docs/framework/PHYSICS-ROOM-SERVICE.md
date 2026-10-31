@@ -1,6 +1,6 @@
 # 物理房间 service
 
-2026-10-25，当前未发版。复用 [PhysX 与 Chunk](CHUNK-PHYSICS.md)，目标是单个 owner 进程承载多个独立物理房间。领域包 `service/physicsroom`，装配包 `wiring/physicsroom`。原验收宿主 `cmd/physics-viewer` 已于 2026-10-26 删除：与服务重合的场景由正式装配承担，本机入口是 `wiring/physicsroom/cmd/physicsroom-local`（见[本机三进程](#本机三进程正式装配2026-10-26)），原生与 Unity 的数值对照移到 `scripts/physics/comparison-host`。
+本文描述当前物理房间服务。复用 [PhysX 与 Chunk](CHUNK-PHYSICS.md)，目标是单个 owner 进程承载多个独立物理房间。领域包 `service/physicsroom`，装配包 `wiring/physicsroom`。原验收宿主 `cmd/physics-viewer` 已于 2026-10-26 删除：与服务重合的场景由正式装配承担，本机入口是 `wiring/physicsroom/cmd/physicsroom-local`（见[本机三进程](#本机三进程正式装配2026-10-26)），原生与 Unity 的数值对照移到 `scripts/physics/comparison-host`。
 
 ## 已实施的调用链
 

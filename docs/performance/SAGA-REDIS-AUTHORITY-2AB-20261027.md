@@ -1,6 +1,6 @@
 # Saga 协调器存储迁到 Redis 权威：第 2 步 2a / 2b 同机对照（2026-10-27）
 
-[设计 v2](../maintenance/DESIGN-2026-10-26-redis-authority-v2.md) §8 要求的压测：第 2 步 2a（协调器存储换成单主权威 Redis）与 2b（Store Service 把 Redis 日志投影进 Mongo 冷副本）完成后，与当前 main 在同一台机器上交替对照，按 §6 的门槛逐项判定。维护者 2026-10-26 指示：“直接从 V2 开始吧，之后跑一次 saga 的压测”。
+[设计 v2](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-2026-10-26-redis-authority-v2.md) §8 要求的压测：第 2 步 2a（协调器存储换成单主权威 Redis）与 2b（Store Service 把 Redis 日志投影进 Mongo 冷副本）完成后，与当前 main 在同一台机器上交替对照，按 §6 的门槛逐项判定。维护者 2026-10-26 指示：“直接从 V2 开始吧，之后跑一次 saga 的压测”。
 
 样本、逐跳时间线、fsync 微基准与 Redis 延迟采样放在 [benchmarks/saga-redis-authority-2ab-20261027](benchmarks/saga-redis-authority-2ab-20261027/)；完整原始结果在本机 `artifacts/perf/saga-redis-2ab-20261027/`（不随仓）。
 

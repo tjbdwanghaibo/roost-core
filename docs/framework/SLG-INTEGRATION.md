@@ -382,7 +382,7 @@ bash scripts/test-remote-generated.sh
 - 第二套经正式 DAO / Entity / Nest 与文件 WAL / Mongo 跑三个进程阶段。
 - 第三套覆盖 Remote 的正式提交和 Mirror 接法。
 
-D12 的框架胶水：原生步骤加 Mongo 步骤经正式 Mod（`wiring/saga` 的 `Steps`）由上面第一套的生成工程用例 `TestGeneratedSagaNativeStepsAndEffectConsumer` 覆盖（`wiring/saga` 原来的 `TestRealSteps*` 已在 saga JetStream 切换第 4 批删除，见[设计 §13.3](../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md#133-第-4-批实施记录)）；框架层另有 integration 标签测试 `framework/saga` 的 `TestRealJetStreamNativeStepsEndToEnd`（真实 Nest + WAL 参与方的正向、补偿与重投回放）、`TestRealJetStreamParticipantKill9`（参与方 kill -9 后 Mongo 余额恰好一次），`wiring/dataengine` 的 `TestRealSubscribeEffectsDeliversEachEffectOnce`，需要真实 Mongo 与三节点 NATS JetStream。每条脚本和测试都要检查退出状态、实际执行与 skip，不把编译通过或未设置门变量时的跳过算作功能通过。
+D12 的框架胶水：原生步骤加 Mongo 步骤经正式 Mod（`wiring/saga` 的 `Steps`）由上面第一套的生成工程用例 `TestGeneratedSagaNativeStepsAndEffectConsumer` 覆盖（`wiring/saga` 原来的 `TestRealSteps*` 已在 saga JetStream 切换第 4 批删除，见[设计 §13.3](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md#133-第-4-批实施记录)）；框架层另有 integration 标签测试 `framework/saga` 的 `TestRealJetStreamNativeStepsEndToEnd`（真实 Nest + WAL 参与方的正向、补偿与重投回放）、`TestRealJetStreamParticipantKill9`（参与方 kill -9 后 Mongo 余额恰好一次），`wiring/dataengine` 的 `TestRealSubscribeEffectsDeliversEachEffectOnce`，需要真实 Mongo 与三节点 NATS JetStream。每条脚本和测试都要检查退出状态、实际执行与 skip，不把编译通过或未设置门变量时的跳过算作功能通过。
 
 ### 13. 完整 demo 场景
 

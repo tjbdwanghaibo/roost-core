@@ -12,7 +12,7 @@
 
 ## 1. 子系统分工
 
-当前主线将同步流、对局和空间区域分别命名为 `StreamID`、`lockstep.Match`、`AreaID`。这是随 v1.26.0 发布的源码 API 调整（不留旧别名），升级映射与验证见[维护记录](../../maintenance/ACCESS-SYNC-FOLLOWUPS.md)。流标识只在连接/同步上下文内有意义，Entity Sync 当前填入 1；不要把它当地图或副本 ID。
+当前主线将同步流、对局和空间区域分别命名为 `StreamID`、`lockstep.Match`、`AreaID`。这是随 v1.26.0 发布的源码 API 调整（不留旧别名），升级映射与验证见[维护记录](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/ACCESS-SYNC-FOLLOWUPS.md)。流标识只在连接/同步上下文内有意义，Entity Sync 当前填入 1；不要把它当地图或副本 ID。
 
 entitysync 维护 subject、session、subscription、profile 与每会话帧；policy 提供 Direct/Group/Interest/AOI 的可见关系。frame 定义帧格式，nettransport 负责发送能力与背压。syncbus/mirror 是服务间复制，syncstream 是带基线/增量与 journal 的流。lockstep 传输输入、帧与校验，不替业务保证跨引擎确定性。
 
@@ -81,7 +81,7 @@ var playerViews, _ = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 
 **视野操作不进 Nest、不排队**（维护者 2026-10-20 决定）：定义、修改、成员变更、挂接都是直接调用，参数当场校验并写进登记表，不等待空间计算，可以在业务线程里调用。它们不走提交门：事务里决定的视野变化（入盟、放眼、组队）由业务在**提交之后**调用。位置不同：它是 DAO 驱动的事实，`QueueMove(e, at)` / `QueueSpatial(e, at, blocks)` 仍走提交门，提交确认后移动目标并带上跟随它的视野，回滚不移动。
 
-**调用只登记、按调用顺序生效**（单写者，2026-10-21，[重构方案](../../maintenance/REFACTOR-2026-10-21-interest-single-writer.md)）：Interest 的全部写入口——`Enter` / `Watch` / `Leave` / `Unwatch` / `Show` / `Hide` / `Move` / `MoveView` / `SetObserverView` / `Resubscribe`、视野操作、`QueueMove` / `QueueSpatial` / `QueueObservedBlocks`——只取一把登记侧短锁：校验参数、改登记事实、追加一条有序日志，错误当场返回，**不做 AOI 计算，不等 AOI 批次**，可以在 Nest 快池的 handler 与提交后回调里直接调用。日志由唯一的应用方按调用顺序执行（同步模式在 Manager Flush 的政策阶段，异步模式在 Interest 的应用线程），所以先调用的先生效对全部入口成立：一条已提交、还没应用的移动之后的 `Leave` → `Enter`、`Hide` → `Show` 或再次 `Enter`，结果与“先应用移动、再做之后的操作”相同。还没确认的移动被同一目标之后的撤除 / 再次放置越过时，它确认后作废（目标的代际号已换），不会把目标或跟随视野拖回去。效果在下一次结算可见（同步模式：下一次 Flush；异步模式：应用线程走到之后的 Flush）。政策阶段里被拒的订阅交给 `InterestConfig.OnRefusal`（在政策阶段调用，只能记日志）。`Apply()` 是“在调用方线程排空并结算”，给测试、工具和离线驱动用，会等正在进行的一步，**不在快池上调用**；`Visible` / `Seen` / `ViewVisible` / `ObservedBlocks` 是诊断读，同样取应用侧锁、先执行已登记的条目。`Leave` 之后同一次结算里又被持有的 pair（断线重连、顶号：业务在中间关闭 / 重开了会话或注销 / 重新登记了目标）重新说给 Manager，客户端收到一次全量。
+**调用只登记、按调用顺序生效**（单写者，2026-10-21，[重构方案](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/REFACTOR-2026-10-21-interest-single-writer.md)）：Interest 的全部写入口——`Enter` / `Watch` / `Leave` / `Unwatch` / `Show` / `Hide` / `Move` / `MoveView` / `SetObserverView` / `Resubscribe`、视野操作、`QueueMove` / `QueueSpatial` / `QueueObservedBlocks`——只取一把登记侧短锁：校验参数、改登记事实、追加一条有序日志，错误当场返回，**不做 AOI 计算，不等 AOI 批次**，可以在 Nest 快池的 handler 与提交后回调里直接调用。日志由唯一的应用方按调用顺序执行（同步模式在 Manager Flush 的政策阶段，异步模式在 Interest 的应用线程），所以先调用的先生效对全部入口成立：一条已提交、还没应用的移动之后的 `Leave` → `Enter`、`Hide` → `Show` 或再次 `Enter`，结果与“先应用移动、再做之后的操作”相同。还没确认的移动被同一目标之后的撤除 / 再次放置越过时，它确认后作废（目标的代际号已换），不会把目标或跟随视野拖回去。效果在下一次结算可见（同步模式：下一次 Flush；异步模式：应用线程走到之后的 Flush）。政策阶段里被拒的订阅交给 `InterestConfig.OnRefusal`（在政策阶段调用，只能记日志）。`Apply()` 是“在调用方线程排空并结算”，给测试、工具和离线驱动用，会等正在进行的一步，**不在快池上调用**；`Visible` / `Seen` / `ViewVisible` / `ObservedBlocks` 是诊断读，同样取应用侧锁、先执行已登记的条目。`Leave` 之后同一次结算里又被持有的 pair（断线重连、顶号：业务在中间关闭 / 重开了会话或注销 / 重新登记了目标）重新说给 Manager，客户端收到一次全量。
 
 **上限**：`MaxVisible` 与 `MaxObserverBlocks` 按每个空间视野计；`MaxViewsPerPlayer`（含主视野与关系视野；缺省 ApplySync 9、ApplyAsync 64，ApplySync 下显式超过 9 拒绝构造，见下“两种应用模式”）与 `MaxPlayersPerView`（缺省 4096）超出时 `AttachView` / `Enter` / `Watch` 返回 `ErrViewLimit`，计 `entitysync_interest_view_limit_rejected_total{reason="views_per_player"|"players_per_view"}`；`MaxSpatialViews`（缺省 8192，维护者 2026-10-22）限制一个 Interest 经 `DefineSpatialView` 定义的空间视野总数：挂没挂接都算、不含主视野，因为每个空间视野都是 AOI 观察者，定义了没挂接的（忘了 `RemoveView` 的眼位、单位视野）也照样参与每次移动的计算，而 `MaxViewsPerPlayer` 只数挂接。超出时 `DefineSpatialView` 返回 `ErrSpatialViewLimit`、计 `reason="spatial_views"`，`RemoveView` 归还名额；缺省取自 D19 实测（1000 玩家各 8 个空间视野时 ApplySync 的 Flush 约半个同步周期），视野更多的玩法（RTS，ApplyAsync）按自己的密度压测后调大；启动期按 `worstObserverBlocks × MaxViewsPerPlayer` 核算一个玩家的块预算，超过 `MaxPlayerBlocks`（缺省 `1024 × 64`）拒绝构造（`ErrInterestBudget`）。一个会话持有的目标还受 Manager 的 `Limits.MaxObjects`（缺省 100）约束：超出时 Manager 在下一次 Flush 编码失败（`frame.ErrObjectLimit`）并**关闭这个会话**（`SessionLost`，原因 `object_limit`），不是只拒超出的那几个；会话 ID 就是玩家 ID 时框架随即断开该玩家（`selfsync.DisconnectLostPlayer`，维护者 2026-10-22 决定 A），客户端重连、从全量开始，原因还在就会反复断开；所以空间视野要设 `MaxVisible`，并让“各空间视野的 `MaxVisible` 之和 + 关系视野与自身可能带来的目标数”小于 `MaxObjects`，一个玩家挂很多视野时一并调大 `MaxObjects`。game-demo 主视野取 64（自身、场景实体、队友另占 3，见 `sceneMaxVisible`）。
 
@@ -115,7 +115,7 @@ var playerViews, _ = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 
 MOBA 一行 2026-10-22 改正（原写 ApplySync，见学习分支 `learn/main-review-20261021` KNOWN-LIMITS 第 11 条）：阵营共享视野的写法（`TestCampViewsShareEveryUnitsSightWithTheWholeCamp`）是每个单位一个空间视野、挂给全阵营，一个玩家的挂接数 = 阵营单位数，远超 ApplySync 的 9；同一 Interest 的空间视野总数还受 `MaxSpatialViews`（缺省 8192）约束。确定性玩法（帧同步、回放逐帧一致）本来就不该用心跳移动 + 状态同步，见 [guide/10-time §4B“逐拍移动适合谁”](10-time.md#4b-移动与动作心跳驱动)。
 
-选择指引：先数一个玩家同时挂接的视野——主视野、队伍 / 公会 / 联盟等关系视野、召唤物 / 眼位 / 单位的空间视野。加起来不超过 9 用缺省 ApplySync（提交后的下一次 Flush 必定可见、没有额外线程）；可能超过 9 用 ApplyAsync，并按自己的密度压测。两种模式的语义逐项相同：只有提交后的事实生效（回滚 / 拒绝的永远不被看见），全部入口按调用顺序生效，内容与它带来的进出视野在同一帧（发布屏障在结算之后才释放），`Drain` 等到在途条目全部应用并结算，`Interest.Close` 释放全部屏障（ApplyAsync 先停应用线程）。直接调用（`Enter` / `Move` / `SetObserverView`……，不经提交门）与排队事实进同一条日志，由所选模式的应用方执行，视野上限同样按模式检查。积压与延迟看 `entitysync_interest_fact_backlog` / `entitysync_interest_apply_duration` / `entitysync_interest_settle_delay`，ApplySync 的预算看 `entitysync.interest.policy_duration` / `settle_duration` / `log_backlog` / `budget_stop.total`（`log_backlog` 持续不为 0、`budget_stop` 与 Flush 次数同阶 = 每个周期都排不完，可见性在滞后，考虑减少视野或改用 ApplyAsync；规则见 [单写者方案 §12](../../maintenance/REFACTOR-2026-10-21-interest-single-writer.md#12-applysync-预算把结算也算进去2026-10-22维护者决定-a)），队列满（`MaxQueuedFacts`，计入已应用未结算的事实）时 `Queue*` 返回 `ErrInterestQueueFull`。设计与实测见 [DESIGN-TODO D19“两种应用模式”](../../maintenance/DESIGN-TODO.md#两种应用模式2026-10-21维护者决定)。
+选择指引：先数一个玩家同时挂接的视野——主视野、队伍 / 公会 / 联盟等关系视野、召唤物 / 眼位 / 单位的空间视野。加起来不超过 9 用缺省 ApplySync（提交后的下一次 Flush 必定可见、没有额外线程）；可能超过 9 用 ApplyAsync，并按自己的密度压测。两种模式的语义逐项相同：只有提交后的事实生效（回滚 / 拒绝的永远不被看见），全部入口按调用顺序生效，内容与它带来的进出视野在同一帧（发布屏障在结算之后才释放），`Drain` 等到在途条目全部应用并结算，`Interest.Close` 释放全部屏障（ApplyAsync 先停应用线程）。直接调用（`Enter` / `Move` / `SetObserverView`……，不经提交门）与排队事实进同一条日志，由所选模式的应用方执行，视野上限同样按模式检查。积压与延迟看 `entitysync_interest_fact_backlog` / `entitysync_interest_apply_duration` / `entitysync_interest_settle_delay`，ApplySync 的预算看 `entitysync.interest.policy_duration` / `settle_duration` / `log_backlog` / `budget_stop.total`（`log_backlog` 持续不为 0、`budget_stop` 与 Flush 次数同阶 = 每个周期都排不完，可见性在滞后，考虑减少视野或改用 ApplyAsync；规则见 [单写者方案 §12](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/REFACTOR-2026-10-21-interest-single-writer.md#12-applysync-预算把结算也算进去2026-10-22维护者决定-a)），队列满（`MaxQueuedFacts`，计入已应用未结算的事实）时 `Queue*` 返回 `ErrInterestQueueFull`。设计与实测见 [DESIGN-TODO D19“两种应用模式”](../../maintenance/DESIGN-TODO.md#两种应用模式2026-10-21维护者决定)。
 
 **视野参数**（D14 B1）。每个空间视野有自己的 `ObserverView{LOD, Radius}`，零值是缺省视野：
 
@@ -200,7 +200,7 @@ r.applied[msg.Key] = msg.Version
 
 消息本身携带整体状态（而不是增量）时，缺口不会算错，只需“版本更大才覆盖”加第 3 步的周期对账。对账周期、摘要的分页与限流、权威方的快照负载都由业务按数据量决定。
 
-框架级对账（订阅端检测到缺口或投递耗尽时自动向发布端请求快照，复用 Remote 快照 / Entity Sync 全量机制，并提供指标与告警）是**下一阶段候选**，尚未实施；需要先确认哪些业务在 SyncBus 上承载需要最终一致的状态，再定义快照请求协议、限流与发布端负载上限（[DESIGN-TODO D2](../../maintenance/DESIGN-TODO.md#d2-syncbus-有限投递的兜底)）。
+框架级对账（订阅端检测到缺口或投递耗尽时自动向发布端请求快照，复用 Remote 快照 / Entity Sync 全量机制，并提供指标与告警）是**下一阶段候选**，尚未实施；需要先确认哪些业务在 SyncBus 上承载需要最终一致的状态，再定义快照请求协议、限流与发布端负载上限（[DESIGN-TODO D2](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d2-syncbus-有限投递的兜底)）。
 
 syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。FileJournal 直接并发 Append 可合批，但单一 History.Record 的写锁串行化不能据此承诺每业务记录减少 fsync。订阅停止、回调排空、journal 生命周期须一起关闭。
 
@@ -222,7 +222,7 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 
 ### 落后的会话怎样回来：追帧、快照或自动
 
-客户端发现缺帧（冗余补不上）后只发一种请求 `OpCatchup(from)`；走追帧还是走全量快照由服务端按 `MatchConfig.Recovery` 判定，客户端从收到的第一条下行消息知道结果（C7 历史页、CA 快照分块或 C9 失败通知）。快照恢复是 2026-10-20 实施的 DESIGN-TODO D1 方案 B，设计、各期偏差与证据见[功能设计](../../maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md)。
+客户端发现缺帧（冗余补不上）后只发一种请求 `OpCatchup(from)`；走追帧还是走全量快照由服务端按 `MatchConfig.Recovery` 判定，客户端从收到的第一条下行消息知道结果（C7 历史页、CA 快照分块或 C9 失败通知）。快照恢复是 2026-10-20 实施的 DESIGN-TODO D1 方案 B，设计、各期偏差与证据见[功能设计](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md)。
 
 | `Recovery` | 行为 |
 | --- | --- |
@@ -265,7 +265,7 @@ syncstream 碎片 TTL 在新多片输入时清扫，不是独立定时器。File
 - 调用线程：Match 在自己起的 goroutine 上调用，不是调用 `Tick` 的协程，也不是 Nest worker；`Tick` 只非阻塞地收结果、从不等 Provider。实现可以阻塞，但必须响应 ctx（`FetchTimeout`）；不响应时 Match 到期按超时计失败、不再等它，下一 Tick 可能再发起一次（“同一局至多一次在途”只对遵守 ctx 的实现成立）。实现必须并发安全，不得直接读房间 owner 独占的模拟状态；panic 被 recover、按取快照失败处理并记 ERROR 日志。
 - 检查点写法（推荐）：房间 owner 每切一帧照常推进服务器参考模拟，每 K 帧把参考状态编码成不可变的 `Snapshot`、经 `atomic.Pointer` 发布；Provider 只读最新发布的一份，不在请求范围内就返回 `ErrSnapshotUnavailable`。完整可运行的样例是 [example_snapshot_test.go](../../../framework/sync/lockstep/example_snapshot_test.go) 的 `Example_snapshotRecovery`（随 `go test ./...` 运行并核对输出）；检查点缓存是样例里的业务代码，框架不导出。另一种合法写法是 Provider 把请求投进 owner 的邮箱、在 ctx 内等回复（owner 的 `Tick` 从不等 Provider，不会互等）。业务形态的样例见 MOBA 夹具的 `ArenaCheckpoints`（[MOBA 手册 §5.7](../MOBA-INTEGRATION.md#57-重连宿主代际与交接)）。
 - 窗口下限：配了快照后，窗口不再决定“断线多久还能回来”，但仍须覆盖 `max(AutoCatchupMaxFrames, K + 取快照延迟对应的帧数 + 余量)`；窗口短于检查点间隔时，最新检查点可能已早于 `MinFrame`，取快照一直是 `ErrSnapshotUnavailable`。`NewMatch` 不检查这一项（K 是业务的）。缺省窗口仍是 3600 帧，没有随快照缩短。
-- 已提交门（`MatchConfig.CommittedFrame func() FrameID`，2026-10-20）：给“先切帧、后提交、提交后才广播”的宿主用——实时广播由宿主暂存、权威提交成功才发，而追帧页与快照分块由 Match 的后台 goroutine 直接经可靠通道发出，`Tick` 刚切出的帧在提交前就已在历史里，没有这道门就会被发出去。配置后追帧页只覆盖 `<= min(最新帧, CommittedFrame())` 的帧，游标已越过它的会话本 Tick 不发页、保留恢复状态；取快照的 `MaxFrame` 取同一个值；空闲的恢复会话一旦落进本 Tick 冗余包的覆盖范围就切回实时（之后收的是宿主提交后才发的广播）。nil（缺省）表示切出即提交，行为不变。回调在调用 `Tick` 的协程上调用、只在有恢复中的会话时调用，不得阻塞。宿主的提交落后切帧超过 `RedundancyDepth - 1` 帧时，恢复中的会话会一直经可靠通道逐页跟随、不切回实时。检查点也只能在提交成功后发布。样例是 MOBA 夹具的 `RecoverRoomWithSnapshots`（[MOBA 手册 §5.7](../MOBA-INTEGRATION.md#57-重连宿主代际与交接)，设计见 [FEATURE §15](../../maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#15-room-接入已提交门2026-10-20)）。
+- 已提交门（`MatchConfig.CommittedFrame func() FrameID`，2026-10-20）：给“先切帧、后提交、提交后才广播”的宿主用——实时广播由宿主暂存、权威提交成功才发，而追帧页与快照分块由 Match 的后台 goroutine 直接经可靠通道发出，`Tick` 刚切出的帧在提交前就已在历史里，没有这道门就会被发出去。配置后追帧页只覆盖 `<= min(最新帧, CommittedFrame())` 的帧，游标已越过它的会话本 Tick 不发页、保留恢复状态；取快照的 `MaxFrame` 取同一个值；空闲的恢复会话一旦落进本 Tick 冗余包的覆盖范围就切回实时（之后收的是宿主提交后才发的广播）。nil（缺省）表示切出即提交，行为不变。回调在调用 `Tick` 的协程上调用、只在有恢复中的会话时调用，不得阻塞。宿主的提交落后切帧超过 `RedundancyDepth - 1` 帧时，恢复中的会话会一直经可靠通道逐页跟随、不切回实时。检查点也只能在提交成功后发布。样例是 MOBA 夹具的 `RecoverRoomWithSnapshots`（[MOBA 手册 §5.7](../MOBA-INTEGRATION.md#57-重连宿主代际与交接)，设计见 [FEATURE §15](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#15-room-接入已提交门2026-10-20)）。
 
 **下发、续帧与钉住**：
 
@@ -348,4 +348,4 @@ C# 客户端提供 TCP、Sync receiver、Lockstep codec/assembler，Unity 提供
 
 ## 源码与核对范围
 
-当前设计的关键结论、纠正的旧口径及验证限制见 [文档—代码核对表](../../maintenance/CONSISTENCY.md)。本篇不以测试数量证明全部路径正确；具体默认值与导出 API 以对应源码声明为准。
+当前设计的关键结论、纠正的旧口径及验证限制见 [文档—代码核对表](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/CONSISTENCY.md)。本篇不以测试数量证明全部路径正确；具体默认值与导出 API 以对应源码声明为准。

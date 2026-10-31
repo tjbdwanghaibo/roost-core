@@ -1,6 +1,6 @@
 # Saga 协调器以 JetStream 为权威日志：原型压测（2026-10-27）
 
-设计与语义实测见 [PROPOSAL-2026-10-27-saga-jetstream-log](../maintenance/PROPOSAL-2026-10-27-saga-jetstream-log.md)。原型目录 `scripts/perf/saga-jslog-proto/` 已在 saga 第 6 批删除（正式实现与压测入口 `scripts/perf/saga-js-scan.sh` 取代它）；下文的命令与路径是历史记录，取回用 `git checkout c565c81b -- scripts/perf/saga-jslog-proto`。
+设计与语义实测见 [PROPOSAL-2026-10-27-saga-jetstream-log](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/PROPOSAL-2026-10-27-saga-jetstream-log.md)。原型目录 `scripts/perf/saga-jslog-proto/` 已在 saga 第 6 批删除（正式实现与压测入口 `scripts/perf/saga-js-scan.sh` 取代它）；下文的命令与路径是历史记录，取回用 `git checkout c565c81b -- scripts/perf/saga-jslog-proto`。
 样本（每档一行 JSON、运行日志、语义与变异原始输出、2c 同机样本摘要）在
 [benchmarks/saga-jetstream-log-proto-20261027](benchmarks/saga-jetstream-log-proto-20261027/)；完整原始结果在本机
 `artifacts/perf/saga-jslog-proto-20261027/`（不随仓）。

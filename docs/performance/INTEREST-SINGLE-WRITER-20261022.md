@@ -1,6 +1,6 @@
 # Interest 单写者重构前后对比（2026-10-22）
 
-方案与验证计划见 [REFACTOR-2026-10-21-interest-single-writer §6](../maintenance/REFACTOR-2026-10-21-interest-single-writer.md#6-性能预期与验证压测之后由维护者统一安排)。随仓样本在 [benchmarks/interest-single-writer-20261022](benchmarks/interest-single-writer-20261022/)。
+方案与验证计划见 [REFACTOR-2026-10-21-interest-single-writer §6](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/REFACTOR-2026-10-21-interest-single-writer.md#6-性能预期与验证压测之后由维护者统一安排)。随仓样本在 [benchmarks/interest-single-writer-20261022](benchmarks/interest-single-writer-20261022/)。
 
 ## 结论
 
@@ -138,7 +138,7 @@ D19“两种应用模式”的历史表（2026-10-21，`b6ef5573`，同一夹具
 
 ## 7. ApplySync 预算计入结算（待补测：今晚）
 
-§4 发现 16 视野 ApplySync 的政策阶段 P95 38ms：预算只在两步之间检查，检查后还有一整步与结算。维护者 2026-10-22 决定 A（预算把结算也算进去，按单位估计下一步，预计超出就停），实现与规则见 [REFACTOR §12](../maintenance/REFACTOR-2026-10-21-interest-single-writer.md#12-applysync-预算把结算也算进去2026-10-22维护者决定-a)，代码提交 `be49684b`（改前 `bb7a734f`）。维护者同日要求先处理代码、压测放到今晚；**2026-10-22 晚已补测，结果见 §7.1**（标题保留以免外部链接失效）。
+§4 发现 16 视野 ApplySync 的政策阶段 P95 38ms：预算只在两步之间检查，检查后还有一整步与结算。维护者 2026-10-22 决定 A（预算把结算也算进去，按单位估计下一步，预计超出就停），实现与规则见 [REFACTOR §12](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/REFACTOR-2026-10-21-interest-single-writer.md#12-applysync-预算把结算也算进去2026-10-22维护者决定-a)，代码提交 `be49684b`（改前 `bb7a734f`）。维护者同日要求先处理代码、压测放到今晚；**2026-10-22 晚已补测，结果见 §7.1**（标题保留以免外部链接失效）。
 
 **预期**（不符合时如实记录，不改结论）：16 视野 ApplySync 政策阶段 P95 与 Flush 均值落到预算（25ms）附近、帧数与 Flush 次数接近满额；`entitysync.interest.log_backlog` 与 `budget_stop` 不为 0（AOI 可见性滞后一两个周期，改值→客户端 P99 可能不降反升）；0 / 8 视野不退化（预算内本来就做得完，`budget_stop` 应为 0 或零星）。
 

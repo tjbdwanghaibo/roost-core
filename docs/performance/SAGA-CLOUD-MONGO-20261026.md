@@ -2,7 +2,7 @@
 
 Saga 性能改造的第 0 步，只做测量，不改产品代码。维护者要求用云 Mongo 重测，并且统计并发吞吐，不能只看单线程（原话：“云 db 可能有延时，最好统计并发的吞吐量，单线程不准确”）。本轮在同一台机器上，用同一套闭环并发扫描分别压本机 Mongo 和云 Mongo，回答三个问题：换成独立的 Mongo 后饱和 TPS 是多少；饱和时时间花在哪个阶段；Redis 权威方案能消掉哪几段、收益上限是多少。
 
-样本放在 [benchmarks/saga-cloud-mongo-20261026](benchmarks/saga-cloud-mongo-20261026/)。往返次数的源码审计见 [Redis 权威方案审查 §6](../maintenance/PROPOSAL-2026-10-26-redis-authority-review.md#6-往返次数审计)（`5b6b846d`）；本报告逐项核对了那张表。
+样本放在 [benchmarks/saga-cloud-mongo-20261026](benchmarks/saga-cloud-mongo-20261026/)。往返次数的源码审计见 [Redis 权威方案审查 §6](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/PROPOSAL-2026-10-26-redis-authority-review.md#6-往返次数审计)（`5b6b846d`）；本报告逐项核对了那张表。
 
 ## 0. 结论
 

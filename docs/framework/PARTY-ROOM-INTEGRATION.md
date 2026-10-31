@@ -209,7 +209,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 
 ### 6A. 补位（业务层写法）
 
-匹配房间开局后有人主动离开、仍在可补位阶段时，后来的玩家优先补进这个房间，而不是另开一局。core 没有补位 API；维护者 2026-10-31 选定业务层写法（[FEATURE-2026-10-31 第 3 节](../maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)方案 B，零框架改动），只用 `service/match` 的弹性成局与它的两条契约（同一 requestID 排队幂等、同一票集合只成一局）。代码：规则 [backfill.go.txt](../../scripts/testdata/party-room/backfill.go.txt)（`game/partyroom`）、handler `PartyBackfillOffer` / `PartyBackfill`（[handlers.go.txt](../../scripts/testdata/party-room/handlers.go.txt)）、宿主与匹配循环 [backfill_match.go.txt](../../scripts/testdata/party-room/backfill_match.go.txt)（`game/partymatch`）。
+匹配房间开局后有人主动离开、仍在可补位阶段时，后来的玩家优先补进这个房间，而不是另开一局。core 没有补位 API；维护者 2026-10-31 选定业务层写法（[FEATURE-2026-10-31 第 3 节](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)方案 B，零框架改动），只用 `service/match` 的弹性成局与它的两条契约（同一 requestID 排队幂等、同一票集合只成一局）。代码：规则 [backfill.go.txt](../../scripts/testdata/party-room/backfill.go.txt)（`game/partyroom`）、handler `PartyBackfillOffer` / `PartyBackfill`（[handlers.go.txt](../../scripts/testdata/party-room/handlers.go.txt)）、宿主与匹配循环 [backfill_match.go.txt](../../scripts/testdata/party-room/backfill_match.go.txt)（`game/partymatch`）。
 
 **流程**：
 
@@ -265,7 +265,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 | 房间跨机接管 / HA | 房间是普通本地实体，属于开房的进程；进程崩溃后只能由同一份 WAL / Mongo 冷加载恢复（第 13 节），没有自动迁到别的机器继续跑。Player 静态绑定 sid、不做动态迁移（[guide/09 §4](guide/09-services.md#4-关键业务边界)） | 短局可接受“崩溃 → 冷加载 → 硬期限结算”；需要跨机接管要另做 Remote 托管或宿主交接（MOBA 的宿主交接是写法参考） |
 | ~~房间内同步的生成器 / 装配~~（2026-10-31 已提供） | `access.player.sync_groups` + `wiring/selfsync.Groups`（第 5 节）；限制：要求 self_sync（会话归自身视图），成员关系不持久，没有独立 Gate 下的组同步用例 | 不开 self_sync、自己开关会话的进程仍可用 `policy.Group` |
 | 跨服务广播的可靠送达 | SyncBus 定位为可丢广播：普通 NATS 至多一次，JetStream 有限重投（[guide/04 §5](guide/04-sync.md#syncbus-的定位与丢失兜底)） | 房间内同步不走 SyncBus；跨服务的房间事件（大厅列表、好友在玩）要业务对账 |
-| 存储原生补位 | 弹性人数成局**已提供**（`Queue.MinSize` / `FillAfterSeconds`，“够 M 人、最早一张票等满 T 就开”，[guide/09 §4](guide/09-services.md#4-关键业务边界)）；补位按业务层写法（第 6A 节，维护者 2026-10-31 选方案 B）；由存储扣空位、保证不超员的原生补位（[FEATURE-2026-10-31 第 3 节](../maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)方案 A）未提供 | 房间票 + 玩家票在补位队列里弹性成局，进房 handler 按座位拒绝超员（第 6A 节）；多个玩法都要框架保证不超员时再做方案 A |
+| 存储原生补位 | 弹性人数成局**已提供**（`Queue.MinSize` / `FillAfterSeconds`，“够 M 人、最早一张票等满 T 就开”，[guide/09 §4](guide/09-services.md#4-关键业务边界)）；补位按业务层写法（第 6A 节，维护者 2026-10-31 选方案 B）；由存储扣空位、保证不超员的原生补位（[FEATURE-2026-10-31 第 3 节](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)方案 A）未提供 | 房间票 + 玩家票在补位队列里弹性成局，进房 handler 按座位拒绝超员（第 6A 节）；多个玩法都要框架保证不超员时再做方案 A |
 | 房间码、大厅列表 | 没有房间码服务与房间列表 | directory 做短码；大厅列表自己维护（可丢、可重建） |
 | 掉线托管、AI 补位、观战 | 没有 | 业务规则；观战者可以只加入 Group 的成员、不占座位 |
 

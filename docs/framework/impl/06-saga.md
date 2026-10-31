@@ -1,6 +1,6 @@
 # Saga 长事务：实现与维护
 
-适用版本：当前 main 与最新发布版本（JetStream 协调器，saga 第 4 批起；之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）；源码目录随改动维护，链接由根包文档门禁保证存在，缺漏以源码为准。[设计与使用](../guide/06-saga.md) · 对外契约 [SAGA.md](../SAGA.md) · 实施设计 [DESIGN-2026-10-28](../../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md)
+适用版本：当前 main 与最新发布版本（JetStream 协调器，saga 第 4 批起；之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）；源码目录随改动维护，链接由根包文档门禁保证存在，缺漏以源码为准。[设计与使用](../guide/06-saga.md) · 对外契约 [SAGA.md](../SAGA.md) · 实施设计 [DESIGN-2026-10-28](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md)
 
 ## 如何阅读
 
@@ -77,7 +77,7 @@
 
 ## 5. 回归入口
 
-下列名字由当前测试源码提取，仅证明存在对应回归入口。执行时以 go test 的实际 PASS/FAIL/SKIP 为准；未启用的真实资源测试不能算通过。第 4 批的迁移映射（每个删除的用例由哪个保留用例覆盖）见 [设计 §13.3](../../maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md#133-第-4-批实施记录)。
+下列名字由当前测试源码提取，仅证明存在对应回归入口。执行时以 go test 的实际 PASS/FAIL/SKIP 为准；未启用的真实资源测试不能算通过。第 4 批的迁移映射（每个删除的用例由哪个保留用例覆盖）见 [设计 §13.3](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-2026-10-28-saga-jetstream-authority.md#133-第-4-批实施记录)。
 
 <details>
 <summary>准备验证改动时，展开测试目录</summary>

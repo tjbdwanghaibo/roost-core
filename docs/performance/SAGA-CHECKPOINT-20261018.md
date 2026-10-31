@@ -1,6 +1,6 @@
 # 投影器合并 checkpoint 前后对照（2026-10-18）
 
-维护者 2026-10-18 选第三档 A：带回执 / effect 的特殊记录投影后不再逐条 checkpoint，按 `CheckpointInterval`（缺省 20 ms）/ `CheckpointRecords`（缺省 256）与普通记录合并。方案与不变量论证：[CONTRACT-2026-10-18-projector-checkpoint-merge](../maintenance/CONTRACT-2026-10-18-projector-checkpoint-merge.md)。夹具、口径同 [Saga 原生步骤性能优化](SAGA-OPT-20261018.md) §2（夹具 B，`ROOST_STEPS_PERF_HOPS=1`，GOMAXPROCS=4）。样本与脚本：[benchmarks/saga-checkpoint-20261018](benchmarks/saga-checkpoint-20261018/)。
+维护者 2026-10-18 选第三档 A：带回执 / effect 的特殊记录投影后不再逐条 checkpoint，按 `CheckpointInterval`（缺省 20 ms）/ `CheckpointRecords`（缺省 256）与普通记录合并。方案与不变量论证：[CONTRACT-2026-10-18-projector-checkpoint-merge](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/CONTRACT-2026-10-18-projector-checkpoint-merge.md)。夹具、口径同 [Saga 原生步骤性能优化](SAGA-OPT-20261018.md) §2（夹具 B，`ROOST_STEPS_PERF_HOPS=1`，GOMAXPROCS=4）。样本与脚本：[benchmarks/saga-checkpoint-20261018](benchmarks/saga-checkpoint-20261018/)。
 
 ## 1. 结论
 
