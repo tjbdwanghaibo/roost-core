@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.33.2] - 2026-10-31
+
 ### 新增
 
 - **第十个玩法纵切：实时派对房间**（`roost-genre` 第二批的基础，维护者 2026-10-31 批准）。新增手册 [PARTY-ROOM-INTEGRATION](docs/framework/PARTY-ROOM-INTEGRATION.md)（学习 / 验收；第 8 节列出框架没有的部分：心跳最短 50ms、可变步长、玩家接入只有 TCP、房间无跨机接管、SyncBus 可丢、房间同步无生成器入口、匹配人数固定）、脚本 `scripts/test-party-room-generated.sh` 与业务夹具 `scripts/testdata/party-room/`：正式 CLI 生成 Player / PartyRoom DAO、PartyRoom 实体心跳（100ms）与持久定时器，业务只改 DAO 字段（房间 `Board` 是 `nopersist,sync`）与实体注解（World 锁档、`sync=true` + 业务 packer）；12 条 `-race` 场景覆盖 service/match 成局与开房幂等、房间码人满与开局后拒进、房主转移、心跳按业务时间推进回合与可变步长等价、`policy.Group` 把同一份记分板推给全体成员（正式 `frame.Receiver` 解码、视图只有 `board`）、并发抢星与输入去重、犯规淘汰与 undo、宽限内经 service/session 重连回原房间、宽限到期掉线与局内离开提前结算、多实体领奖一次与座位归还 / 关房 / 销毁、心跳停摆时持久期限强制结算。`ROOST_PARTY_ROOM_REAL=1`（隔离 Mongo）追加局内 SIGKILL → 冷加载、心跳按持久阶段重启并结算、发奖、DataEngine 删档 → 第三进程核对。缺省模式加入 `scripts/pretag.sh` 玩法段，真实模式登记根包 `integration_coverage_test.go`。业务时间按 D22-1 由 handler 的 `nowUnixMilli` 取 fctx，测试用 `clock.SetSource` 拨。只新增脚本、夹具与文档，框架运行时与生成器不变。[KNOWN-LIMITS 游戏接入验收](docs/maintenance/KNOWN-LIMITS.md#游戏接入验收)
