@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.34.1] - 2026-10-31
+
 ### 新增
 
 - **派对房间：中途补位的业务层写法（手册与夹具，零框架改动）**（维护者 2026-10-31 选 [FEATURE-2026-10-31 第 3 节](docs/maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)方案 B）。[派对手册新增 §6A](docs/framework/PARTY-ROOM-INTEGRATION.md#6a-补位业务层写法)：开局后有人主动离开、仍在可补位阶段（本例第 1 回合）时，房间把空座挂成单独补位队列（`party-backfill`，弹性 2～8、不等待）里的一张房间票（排队身份 = 房间 ID + 补位轮次，下一轮只在本轮被消耗或撤回后才开）；匹配循环取一张房间票 + 若干玩家票弹性 `Commit`，成局经 Nest handler `PartyBackfill` 交给房间，按座位逐个接受，多出的人被拒并按 `requeue:<Match>:<玩家>` 重新排队，同一 Match 重投返回原结果；截止后匹配循环不再给过期房间票配人，宿主撤票，已被消耗的在途补位局进房时全部拒绝；补位的人进 session、连上房间时 `SyncGroup.Join` 并收到全量。局限写明：不超员靠进房 handler 拒绝而非存储保证、补位与普通成局的优先级由业务匹配循环决定、跨分区不支持；存储原生补位（方案 A）未提供。夹具新增 `scripts/testdata/party-room/backfill.go.txt`（纯规则）与 `backfill_match.go.txt`（宿主与匹配循环，生成工程的 `game/partymatch`），房间状态加 `Roster` / `Backfill`（开房重放改按 `Roster` 核对名单）；`scripts/test-party-room-generated.sh` 场景 13 → 18（新增规则 1 条与补位 4 条：离开后补位成功、并发两个补位成局只进一人、截止后撤票不再补、补位玩家收到全量），原 13 条不变通过。[KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md) 与 [guide/09 §4](docs/framework/guide/09-services.md#4-关键业务边界) 同步。
