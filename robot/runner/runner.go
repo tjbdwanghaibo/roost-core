@@ -136,6 +136,7 @@ type Stats struct {
 
 type Runner struct {
 	recorder  session.Recorder
+	syncProbe *robot.SyncProbe
 	traffic   transport.Traffic
 	cfg       Config
 	actions   *action.Registry
@@ -494,6 +495,7 @@ func (r *Runner) runOnce(ctx context.Context, index int, playerID int64, scn sce
 		Transport: r.cfg.Transport,
 		Protocols: r.protocols,
 		Recorder:  &r.recorder,
+		SyncProbe: r.syncProbe,
 		Auth:      r.auth,
 		Seed:      r.cfg.Seed*1_000_003 + int64(index),
 	})
@@ -608,3 +610,13 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // MessageReport 返回本次运行的请求统计，含重连；不复用其他 Runner 的历史指标。
 func (r *Runner) MessageReport() session.Report          { return r.recorder.Snapshot() }
 func (r *Runner) TrafficReport() transport.TrafficReport { return r.traffic.Snapshot() }
+
+// WithSyncProbe 将场景观测器绑定到本次运行；不要跨 Runner 复用，场景为每个连接分配唯一代际。
+func WithSyncProbe(probe *robot.SyncProbe) Option { return func(r *Runner) { r.syncProbe = probe } }
+func (r *Runner) SyncReport() *robot.SyncReport {
+	if r.syncProbe == nil {
+		return nil
+	}
+	report := r.syncProbe.Snapshot(time.Now())
+	return &report
+}

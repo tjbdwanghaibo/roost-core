@@ -3,9 +3,10 @@ package protocoldef
 //roost:proto package=game.protocol go_package=GENRE_MODULE/protocol/pb;pb
 
 type PlayRequest struct {
-	Seq   uint64 `pb:"1"`
-	Kind  string `pb:"2"`
-	Count int32  `pb:"3"`
+	Seq    uint64 `pb:"1"`
+	Kind   string `pb:"2"`
+	Count  int32  `pb:"3"`
+	RoomID int64  `pb:"4"`
 }
 type PlayResponse struct {
 	Code int32  `pb:"1"`

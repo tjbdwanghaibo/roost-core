@@ -600,7 +600,7 @@ func discoverGeneratedRealDependencyTests(t *testing.T, envSuites []string) []ge
 		slashed := filepath.ToSlash(path)
 		inTestdata := strings.Contains("/"+slashed, "/testdata/")
 		template := strings.HasSuffix(slashed, "_test.go.tmpl")
-		if !strings.HasSuffix(slashed, "_test.go") && !template {
+		if !strings.HasSuffix(slashed, "_test.go") && !strings.HasSuffix(slashed, "_test.go.txt") && !template {
 			return nil
 		}
 		raw, err := os.ReadFile(path)
@@ -636,6 +636,12 @@ func discoverGeneratedRealDependencyTests(t *testing.T, envSuites []string) []ge
 		if err != nil {
 			t.Fatal(err)
 		}
+		// embed 夹具与直接复制的 Go 测试都必须登记真实依赖入口。
+		embedded, err := filepath.Glob(filepath.Join(filepath.FromSlash(dir), "*_test.go.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, embedded...)
 		for _, file := range files {
 			raw, err := os.ReadFile(file)
 			if err != nil {

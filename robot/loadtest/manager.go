@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/runner"
 	"github.com/tjbdwanghaibo/roost-core/robot/session"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
@@ -192,6 +193,7 @@ type RunConfig struct {
 }
 
 type RunSnapshot struct {
+	Sync               *robot.SyncReport        `json:"sync,omitempty"`
 	Messages           *session.Report          `json:"requests,omitempty"`
 	Traffic            *transport.TrafficReport `json:"traffic,omitempty"`
 	RequestOKPerSecond float64                  `json:"request_ok_per_second"`
@@ -712,6 +714,10 @@ func (m *Manager) nextRunID(profile string) string {
 }
 
 func (r *runRecord) snapshot() RunSnapshot {
+	var syncReport *robot.SyncReport
+	if provider, ok := r.runner.(interface{ SyncReport() *robot.SyncReport }); ok {
+		syncReport = provider.SyncReport()
+	}
 	var messages *session.Report
 	var traffic *transport.TrafficReport
 	var throughput float64
@@ -737,7 +743,7 @@ func (r *runRecord) snapshot() RunSnapshot {
 		stats = statsSnapshot(r.runner.Stats())
 	}
 	return RunSnapshot{
-		Messages: messages, Traffic: traffic, RequestOKPerSecond: throughput,
+		Sync: syncReport, Messages: messages, Traffic: traffic, RequestOKPerSecond: throughput,
 		Config: RunConfig{
 			Executor:        r.Config.Run.Executor,
 			Rate:            r.Config.Run.Rate,
@@ -811,6 +817,12 @@ func (s RunSnapshot) clone() RunSnapshot {
 	s.Config.Stages = slices.Clone(s.Config.Stages)
 	s.Thresholds = slices.Clone(s.Thresholds)
 	s.QuantilesMS = maps.Clone(s.QuantilesMS)
+	if s.Sync != nil {
+		v := *s.Sync
+		v.Events = slices.Clone(v.Events)
+		v.Slowest = slices.Clone(v.Slowest)
+		s.Sync = &v
+	}
 	if s.Messages != nil {
 		m := *s.Messages
 		m.Messages = slices.Clone(m.Messages)

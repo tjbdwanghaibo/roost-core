@@ -14,8 +14,8 @@ readonly scratch="$(mktemp -d "${TMPDIR:-/tmp}/roost-sync-business.XXXXXX")"
 # Retain the generated project for pprof/reproduction, including on a failed gate.
 printf '%s\n' "$scratch" > "$output_dir/workspace.txt"
 export GOWORK=off
-export GOMAXPROCS="${ROOST_PERF_CPU:-4}"
-[[ "$GOMAXPROCS" =~ ^[1-9][0-9]*$ ]] || { echo 'ROOST_PERF_CPU must be positive' >&2; exit 2; }
+export GOMAXPROCS="${ROOST_PERF_CPU:-0}"
+[[ "$GOMAXPROCS" =~ ^(0|[1-9][0-9]*)$ ]] || { echo 'ROOST_PERF_CPU must be non-negative' >&2; exit 2; }
 {
  go version
  go env GOOS GOARCH GOWORK

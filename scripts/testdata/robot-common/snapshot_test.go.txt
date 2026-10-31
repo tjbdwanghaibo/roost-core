@@ -1,0 +1,33 @@
+package handler
+
+import (
+	"context"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"testing"
+)
+
+// robotRead 在业务 worker 持实体锁读取快照。TCP 回包不能替代本进程的同步屏障。
+func robotRead[T any](t *testing.T, engine *nest.NestMgr, target entity.IThreadSafeEntity, read func() T) T {
+	t.Helper()
+	var value T
+	if err := engine.RunLocal(context.Background(), func() {
+		target.GetMutex().Lock()
+		defer target.GetMutex().Unlock()
+		value = read()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+// robotDecode 只在实体锁内复制编码字符串；解析和 Fatal 留在测试 goroutine。
+func robotDecode[T any](t *testing.T, engine *nest.NestMgr, target entity.IThreadSafeEntity, read func() string, decode func(string) (T, error)) T {
+	t.Helper()
+	raw := robotRead(t, engine, target, read)
+	value, err := decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}

@@ -5,17 +5,23 @@ import (
 	bots "GENRE_MODULE/loadtest"
 	"GENRE_MODULE/protocol/pb"
 	"context"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/runner"
 	"github.com/tjbdwanghaibo/roost-core/robot/transport"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func TestMMORPGRobotBusiness(t *testing.T) {
 	f := newMMOFixture(t)
+	// 网络回调与测试线程共享业务时钟，推进时不能并发读写 time.Time。
+	var now atomic.Int64
+	now.Store(f.now.UnixMilli())
+	clock.SetSource(func() time.Time { return time.UnixMilli(now.Load()) })
 	auth := gateway.AuthenticatorFunc(func(_ context.Context, ticket string, _ net.Addr) (gateway.Principal, error) {
 		switch ticket {
 		case "owner":
@@ -60,12 +66,25 @@ func TestMMORPGRobotBusiness(t *testing.T) {
 	invalid.Seq++
 	invalid.Kind = "not-a-command"
 	run("owner", []bots.Step{{Request: first}, {Request: first}, {Request: first, Reconnect: true}, {Request: second}, {Request: second}, {Request: invalid, WantCode: 1}})
-	if f.players[0].Dao().GetGold() != 43 || f.players[1].Dao().GetGold() != 57 || f.players[0].Dao().GetTradeSeq() != 2 {
+	if robotRead(t, f.engine, f.players[0], func() int64 { return f.players[0].Dao().GetGold() }) != 43 || robotRead(t, f.engine, f.players[1], func() int64 { return f.players[1].Dao().GetGold() }) != 57 || robotRead(t, f.engine, f.players[0], func() int64 { return f.players[0].Dao().GetTradeSeq() }) != 2 {
 		t.Fatal("wrong committed business state")
 	}
-	before := f.players[0].Dao().GetGold()
+	before := robotRead(t, f.engine, f.players[0], func() int64 { return f.players[0].Dao().GetGold() })
 	run("outsider", []bots.Step{{Request: first, WantCode: 1}})
-	if f.players[0].Dao().GetGold() != before {
+	if robotRead(t, f.engine, f.players[0], func() int64 { return f.players[0].Dao().GetGold() }) != before {
 		t.Fatal("unauthorized command changed authoritative state")
 	}
+
+	strike := pb.PlayRequest{Seq: 1, Kind: "strike", PeerID: f.monster.ID()}
+	run("owner", []bots.Step{{Request: strike}, {Request: strike}})
+	now.Add(1000)
+	strike.Seq = 2
+	run("owner", []bots.Step{{Request: strike, Reconnect: true}})
+	loot := pb.PlayRequest{Kind: "loot", PeerID: f.monster.ID()}
+	quest := pb.PlayRequest{Kind: "quest"}
+	run("owner", []bots.Step{{Request: loot}, {Request: loot, Reconnect: true}, {Request: quest}, {Request: quest}})
+	if robotRead(t, f.engine, f.monster, func() int64 { return f.monster.Dao().GetHP() }) != 0 || robotRead(t, f.engine, f.players[0], func() int64 { return f.players[0].Dao().GetQuestKills() }) != 1 || robotRead(t, f.engine, f.players[0], func() int64 { return f.players[0].Dao().GetItems() }) != 4 || robotRead(t, f.engine, f.players[0], func() int64 { return f.players[0].Dao().GetGold() }) != 48 {
+		t.Fatal("combat/loot/quest reward did not close exactly once")
+	}
+
 }

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	robotdomain "GENRE_MODULE/game/idlesim"
 	"GENRE_MODULE/game/robotaccess"
 	bots "GENRE_MODULE/loadtest"
 	"GENRE_MODULE/protocol/pb"
@@ -62,13 +63,25 @@ func TestIdleSimRobotBusiness(t *testing.T) {
 	invalid.Seq++
 	invalid.Kind = "not-a-command"
 	run("owner", []bots.Step{{Request: first}, {Request: first}, {Request: first, Reconnect: true}, {Request: second}, {Request: second}, {Request: invalid, WantCode: 1}})
-	state := f.state(t)
+	state := robotDecode(t, f.engine, f.player, f.player.Dao().GetState, robotdomain.Decode)
 	if len(state.Receipts) != 2 || len(state.Stations[0].Queue) != 1 || len(state.Stations[1].Queue) != 1 {
 		t.Fatalf("wrong committed business state: %+v", state)
 	}
-	before := f.player.Dao().GetState()
+	before := robotRead(t, f.engine, f.player, func() string { return f.player.Dao().GetState() })
 	run("outsider", []bots.Step{{Request: first, WantCode: 1}})
-	if f.player.Dao().GetState() != before {
+	if robotRead(t, f.engine, f.player, func() string { return f.player.Dao().GetState() }) != before {
 		t.Fatal("unauthorized command changed authoritative state")
 	}
+
+	f.clock.Add(20000)
+	collect := pb.PlayRequest{Seq: 3, Kind: "collect", Station: 0}
+	collectOther := collect
+	collectOther.Seq = 4
+	collectOther.Station = 1
+	order := pb.PlayRequest{Seq: 5, Kind: "order"}
+	run("owner", []bots.Step{{Request: collect}, {Request: collectOther}, {Request: order}, {Request: order, Reconnect: true}})
+	if s := robotDecode(t, f.engine, f.player, f.player.Dao().GetState, robotdomain.Decode); s.Orders != 1 || s.Inventory != [3]int64{} || len(s.Stations[0].Queue) != 0 || len(s.Stations[1].Queue) != 0 {
+		t.Fatal("production/collection/order cycle not settled once")
+	}
+
 }

@@ -18,10 +18,18 @@ import (
 func TestScenarioRobotTCPRetryAndReconnect(t *testing.T) {
 	f := newScenario(t)
 	auth := gateway.AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (gateway.Principal, error) {
-		if token != "fixture-owner" {
+		id := int64(0)
+		switch token {
+		case "fixture-owner":
+			id = f.players[0].ID()
+		case "fixture-peer":
+			id = f.players[1].ID()
+		case "fixture-outsider":
+			id = f.outsider.ID()
+		default:
 			return gateway.Principal{}, gateway.ErrUnauthenticated
 		}
-		return gateway.Principal{PlayerID: f.players[0].ID(), SessionID: "fixture-owner", ServerID: 1}, nil
+		return gateway.Principal{PlayerID: id, SessionID: token, ServerID: 1}, nil
 	})
 	cfg := gateway.DefaultTCPConfig()
 	cfg.Addr = "127.0.0.1:0"

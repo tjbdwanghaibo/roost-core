@@ -58,7 +58,11 @@ func environment() Environment {
 	return result
 }
 
-func monitorResources() func() Resources {
+func monitorResources() func() Resources { return MonitorProcessResources() }
+
+// MonitorProcessResources 采样调用者所在进程；服务端宿主可复用，报告必须标明进程边界。
+// 返回的停止函数只能调用一次，它等待最后一份资源快照。
+func MonitorProcessResources() func() Resources {
 	start := time.Now()
 	initialCPU, _, available := processUsage()
 	stop := make(chan struct{})

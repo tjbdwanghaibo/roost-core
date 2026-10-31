@@ -1,0 +1,399 @@
+package game
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strconv"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"example.com/planet/game/clientsync"
+	playerentity "example.com/planet/game/entities/player"
+	worldentity "example.com/planet/game/entities/world"
+	generated "example.com/planet/loadtest/protocol"
+	"example.com/planet/protocol/msgid"
+	"example.com/planet/protocol/pb"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	dataengine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/loadtest"
+	"github.com/tjbdwanghaibo/roost-core/robot/protocol"
+	"github.com/tjbdwanghaibo/roost-core/robot/session"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+)
+
+type gateLoadObservation struct {
+	key     robot.SyncKey
+	applied time.Time
+	kind    robot.SyncKind
+	exp     int64
+	level   int32
+	err     error
+}
+
+// runGateLoad 是一个真实账号的热点诊断，不冒充 1000 人 MMO 容量。
+// 普通 PB 请求与正式 heartbeat 竞争同一 World，on_change 不靠周期扫描推进。
+func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player, world *worldentity.World, business *nest.NestMgr, manager *entitysync.Manager, active *atomic.Uint64, projector *dataengine.Projector, wal *nestwal.WAL, store *gateProjection, real *realGateFixture, walDir string) {
+	t.Helper()
+	seconds, err := strconv.Atoi(os.Getenv("ROOST_GATE_LOAD_SECONDS"))
+	if err != nil || seconds < 3 || seconds > 120 {
+		t.Fatal("load seconds must be 3..120")
+	}
+	rate := 100
+	if raw := os.Getenv("ROOST_GATE_LOAD_RATE"); raw != "" {
+		rate, err = strconv.Atoi(raw)
+		if err != nil || rate < 1 || rate > 10000 {
+			t.Fatal("load rate must be 1..10000")
+		}
+	}
+	reportPath := os.Getenv("ROOST_GATE_LOAD_REPORT")
+	if reportPath == "" {
+		t.Fatal("load report path required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(seconds)*time.Second+30*time.Second)
+	defer cancel()
+	stopResources := loadtest.MonitorProcessResources()
+	var resources loadtest.Resources
+	defer func() {
+		if stopResources != nil {
+			_ = stopResources()
+		}
+	}()
+	probe, err := robot.NewSyncProbe(8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requests session.Recorder
+	var traffic transport.Traffic
+	registry := protocol.NewRegistry(nil)
+	generated.RegisterDefaults(registry)
+	var client *session.Session
+	var connection uint64
+	var sequence uint64
+	var expected robot.SyncKey
+	// expected is only accessed through this channel: one outstanding Sync observation per connection.
+	var observations chan gateLoadObservation
+	var pending chan robot.SyncKey
+	connect := func() {
+		t.Helper()
+		connection++
+		observations = make(chan gateLoadObservation, 4)
+		pending = make(chan robot.SyncKey, 4)
+		expected = robot.SyncKey{Connection: connection, Sequence: 1, Kind: robot.SyncFull}
+		if err := probe.Expect(expected, time.Now(), 5*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		pending <- expected
+		conn, e := transport.DialPlayerTCP(ctx, transport.Config{Endpoint: addr, Traffic: &traffic})
+		if e != nil {
+			t.Fatal(e)
+		}
+		client = session.New(conn, registry, &requests)
+		receiver := frame.NewReceiver(frame.DefaultLimits())
+		fields := map[string]any{}
+		stream, expectations := observations, pending
+		client.RegisterPushHandler(501, func(message *session.Message) {
+			observation := gateLoadObservation{}
+			applied, e := receiver.Receive(message.Packet.Payload, func(f frame.Frame) error {
+				for _, obj := range f.Objects {
+					if obj.Operation == frame.ObjectRemove {
+						observation.kind = robot.SyncRemove
+						clear(fields)
+						continue
+					}
+					for _, component := range obj.Components {
+						update, e := entitysync.DecodeSubjectUpdate(component.Data, 0)
+						if e != nil {
+							return e
+						}
+						if update.SubjectID != player.ID() {
+							return fmt.Errorf("unexpected subject")
+						}
+						patch, e := clientsync.DecodeFields(update)
+						if e != nil {
+							return e
+						}
+						observation.kind = robot.SyncDelta
+						if update.Full {
+							observation.kind = robot.SyncFull
+							clear(fields)
+						}
+						for key, value := range patch {
+							fields[key] = value
+						}
+					}
+				}
+				if observation.kind != robot.SyncRemove {
+					var ok bool
+					observation.exp, ok = fields["exp"].(int64)
+					if !ok {
+						return fmt.Errorf("missing typed exp")
+					}
+					observation.level, ok = fields["level"].(int32)
+					if !ok {
+						return fmt.Errorf("missing typed level")
+					}
+				}
+				return nil
+			})
+			observation.err = e
+			if e == nil && !applied {
+				return
+			}
+			select {
+			case key := <-expectations:
+				if e == nil && observation.kind == key.Kind {
+					observation.key = key
+					observation.applied = time.Now()
+				} else if e == nil {
+					observation.err = fmt.Errorf("wrong sync kind")
+				}
+			default:
+				observation.err = fmt.Errorf("unexpected sync without a pending action")
+			}
+			select {
+			case stream <- observation:
+			case <-ctx.Done():
+			}
+		})
+		if err := client.SendPacket(transport.AuthPacket(ticket)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wait := func(kind robot.SyncKind) gateLoadObservation {
+		t.Helper()
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		select {
+		case v := <-observations:
+			if v.err != nil || v.kind != kind {
+				t.Fatalf("sync kind=%s error=%v", v.kind, v.err)
+			}
+			return v
+		case <-timer.C:
+			t.Fatalf("sync wait timeout kind=%s sequence=%d requests=%+v sync=%+v manager=%+v", kind, sequence, requests.Snapshot(), probe.Snapshot(time.Now()), manager.Stats())
+			return gateLoadObservation{}
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+			return gateLoadObservation{}
+		}
+	}
+	confirm := func(v gateLoadObservation) {
+		t.Helper()
+		if !probe.Observe(v.key, v.applied) {
+			t.Fatal("unmatched observation")
+		}
+	}
+	connect()
+	defer func() {
+		if client != nil {
+			_ = client.Close()
+		}
+	}()
+	initial := wait(robot.SyncFull)
+	confirm(initial)
+	base := initial.exp + int64(initial.level)*playerentity.ExpPerLevel
+	var completed int64
+	send := func() {
+		t.Helper()
+		sequence++
+		key := robot.SyncKey{Connection: connection, Sequence: sequence + 1, Kind: robot.SyncDelta}
+		if err := probe.Expect(key, time.Now(), 5*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		pending <- key
+		requestCtx, cancelRequest := context.WithTimeout(ctx, 5*time.Second)
+		defer cancelRequest()
+		_, err := client.CallChecked(requestCtx, msgid.MsgAddExp, msgid.MsgAddExp, &pb.AddExpRequest{Amount: 1}, func(m *session.Message) error {
+			response, ok := m.Value.(*pb.AddExpResponse)
+			if !ok {
+				return fmt.Errorf("bad PB response")
+			}
+			if response.Code != 0 {
+				return session.ErrRejected
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("AddExp sequence=%d failed: %v; nest=%+v projector=%+v", sequence, err, business.Stats(), projector.Stats())
+		}
+		v := wait(robot.SyncDelta)
+		completed++
+		if v.exp+int64(v.level)*playerentity.ExpPerLevel != base+completed {
+			t.Fatal("client state differs from acknowledged changes")
+		}
+		confirm(v)
+	}
+	beat := heartbeat.NewDriver(heartbeat.Config{Name: "gate-load"})
+	if err = beat.Bind(business, func(id int64) entity.IThreadSafeEntity {
+		if id == world.ID() {
+			return world
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var beats, beatChanges atomic.Int64
+	host := beat.NewHost(world)
+	reg, err := host.Register("business", 100*time.Millisecond, func(heartbeat.Beat) error {
+		n := beats.Add(1)
+		if n%20 == 0 {
+			world.Dao().SetExpGranted(world.Dao().GetExpGranted() + 1)
+			beatChanges.Add(1)
+		}
+		return nil
+	}, heartbeat.WithDurability(nest.DurabilityStrict))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = reg.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err = beat.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer beat.Stop(context.Background())
+	start := time.Now()
+	end := start.Add(time.Duration(seconds) * time.Second)
+	interval := time.Second / time.Duration(rate)
+	next := start
+	var scheduled, dropped int64
+	for time.Now().Before(end) {
+		now := time.Now()
+		if now.Before(next) {
+			timer := time.NewTimer(next.Sub(now))
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				t.Fatal(ctx.Err())
+			}
+		}
+		now = time.Now()
+		if !now.Before(end) {
+			break
+		}
+		if lag := now.Sub(next); lag >= interval {
+			missed := int64(lag / interval)
+			dropped += missed
+			scheduled += missed
+			next = next.Add(time.Duration(missed) * interval)
+		}
+		scheduled++
+		next = next.Add(interval)
+		send()
+	}
+	elapsed := time.Since(start)
+	t.Logf("load complete: requests=%d dropped=%d projector=%+v", completed, dropped, projector.Stats())
+	// 即使后续排空失败也保留已完成负载的数据，不把它写成成功验收。
+	phase, marshalErr := json.MarshalIndent(map[string]any{"verified": false, "phase": "before_drain", "target_rate": rate, "completed": completed, "dropped": dropped, "seconds": elapsed.Seconds(), "sync": probe.Snapshot(time.Now()), "requests": requests.Snapshot(), "traffic": traffic.Snapshot(), "projector": projector.Stats(), "nest": business.Stats()}, "", "  ")
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if err = os.WriteFile(reportPath+".load-phase.json", phase, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = beat.Stop(ctx); err != nil {
+		t.Fatalf("stop heartbeat: %v", err)
+	}
+	// 最后一笔双实体事务在心跳停止后提交，提供两个 DAO 的最新持久版本用于重放核对。
+	send()
+	if beats.Load() == 0 || beatChanges.Load() == 0 {
+		t.Fatal("heartbeat branch did not execute")
+	}
+	key := robot.SyncKey{Connection: connection, Sequence: sequence + 2, Kind: robot.SyncRemove}
+	if err = probe.Expect(key, time.Now(), 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	pending <- key
+	if err = manager.Unsubscribe(entitysync.SessionID(active.Load()), player.ID()); err != nil {
+		t.Fatal(err)
+	}
+	confirm(wait(robot.SyncRemove))
+	if err = client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	probe.CancelConnection(connection)
+	connect()
+	recovered := wait(robot.SyncFull)
+	if recovered.exp+int64(recovered.level)*playerentity.ExpPerLevel != base+completed {
+		t.Fatal("reconnect did not recover authoritative state")
+	}
+	confirm(recovered)
+	if err = client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	probe.CancelConnection(connection)
+	t.Logf("begin projection drain: %+v", projector.Stats())
+	if err = projector.Flush(ctx); err != nil {
+		t.Fatalf("drain projector: %v; stats=%+v", err, projector.Stats())
+	}
+	if err = business.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown Nest: %v; stats=%+v", err, business.Stats())
+	}
+	if world.Dao().GetExpGranted() != completed+beatChanges.Load() {
+		t.Fatal("ordinary and heartbeat mutations do not balance")
+	}
+	stats := projector.Stats()
+	if stats.WALUnacked != 0 || stats.ProjectionFailures != 0 || stats.FatalProjectionConflicts != 0 {
+		t.Fatalf("projection not clean: %+v", stats)
+	}
+	store.mu.Lock()
+	var last coredata.CommitRecord
+	var version uint64
+	for _, record := range store.records {
+		for _, mutation := range record.Mutations {
+			if mutation.Key.ID == player.ID() && mutation.NextVersion > version {
+				last = record
+				version = mutation.NextVersion
+			}
+		}
+	}
+	count := len(store.records)
+	store.mu.Unlock()
+	if int64(count) != completed+beatChanges.Load() {
+		t.Fatal("unique committed transaction count mismatch")
+	}
+	walStats := wal.Stats()
+	if err = projector.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	real.verifyRecovery(t, walDir, last, player, world)
+	resources = stopResources()
+	stopResources = nil
+	report := struct {
+		Verified                                                            bool   `json:"verified"`
+		Scope                                                               string `json:"scope"`
+		Scheduled, Dropped, Completed, HeartbeatCallbacks, HeartbeatChanges int64
+		Seconds, CompletedPerSecond                                         float64
+		Sync                                                                robot.SyncReport
+		Requests                                                            session.Report
+		Traffic                                                             transport.TrafficReport
+		ServerAndClientProcess                                              loadtest.Resources
+		Nest                                                                nest.DispatcherStats
+		Projector                                                           dataengine.ProjectorStats
+		WAL                                                                 nestwal.Stats
+	}{true, fmt.Sprintf("one real account; one Player + shared World hotspot; %d ordinary requests/s target; 10Hz heartbeat, 5%% mutation; same-process Go Robot; no Remote/Saga capacity claim", rate), scheduled, dropped, completed, beats.Load(), beatChanges.Load(), elapsed.Seconds(), float64(completed-1) / elapsed.Seconds(), probe.Snapshot(time.Now()), requests.Snapshot(), traffic.Snapshot(), resources, business.Stats(), stats, walStats}
+	for _, event := range report.Sync.Events {
+		if event.Received == 0 || event.Pending != 0 || event.TimedOut != 0 || event.Canceled != 0 {
+			t.Fatalf("incomplete sync evidence: %+v", event)
+		}
+	}
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(reportPath, append(data, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("PASS Gate mixed load: %d ordinary, %d heartbeat, report=%s", completed, beats.Load(), reportPath)
+}

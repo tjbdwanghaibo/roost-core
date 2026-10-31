@@ -112,6 +112,6 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMergeCasual' ./game/me
 python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" "$genre"
 ```
 
-该步骤安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络验收；之后仍须正式 generate。自定义 module 由安装器读取 go.mod。最稳妥的完整顺序直接使用同检出的玩法脚本。新增测试覆盖两个动作、重试、TCP 重连、非法命令和不存在玩家；不是完整业务恢复或真实存储验收。
+该步骤安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络验收；之后仍须正式 generate。自定义 module 由安装器读取 go.mod。最稳妥的完整顺序直接使用同检出的玩法脚本。网络用例现已覆盖该玩法的对局或经营闭环、结算重试与 TCP 重连；可信时间/敌方推进仍在服务器侧。准确步骤见 Robot 手册，不代表完整业务重登或真实存储恢复。
 
 验收数量与限制统一见 [Robot 手册](../../../framework/ROBOT.md)，不要沿用历史版本的通过数。

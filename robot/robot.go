@@ -43,6 +43,7 @@ type Config struct {
 	Transport transport.Config
 	Protocols *protocol.Registry
 	Recorder  *session.Recorder
+	SyncProbe *SyncProbe
 	// Auth optionally builds the post-connect gateway handshake packet.
 	Auth AuthProvider
 	// Seed is the per-robot deterministic random seed (runner derives it

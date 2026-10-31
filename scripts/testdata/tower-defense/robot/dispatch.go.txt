@@ -22,8 +22,12 @@ func Dispatch(engine *nest.NestMgr) gateway.TCPDispatch {
 		if err != nil {
 			return nil, err
 		}
-		command := domain.Command{Seq: request.Seq, Epoch: request.Epoch, Round: int(request.Round), Kind: request.Kind, A: int(request.A), B: int(request.B)}
-		_, err = business.Sync_TowerCommand(ctx, request.RoomID, session.Principal().PlayerID, command)
+		if request.Kind == "claim" {
+			_, err = business.MultiSync_TowerClaim(ctx, session.Principal().PlayerID, request.RoomID)
+		} else {
+			command := domain.Command{Seq: request.Seq, Epoch: request.Epoch, Round: int(request.Round), Kind: request.Kind, A: int(request.A), B: int(request.B)}
+			_, err = business.Sync_TowerCommand(ctx, request.RoomID, session.Principal().PlayerID, command)
+		}
 		response := &pb.PlayResponse{Seq: request.Seq}
 		if err != nil {
 			response.Code = 1

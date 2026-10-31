@@ -2,6 +2,7 @@ package loadtest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -54,4 +55,58 @@ func Smoke(cfg runner.Config, roomID int64, auth robot.AuthProvider) *runner.Run
 	cfg.Scenario = "smoke"
 	cfg.Transport.Type = transport.PlayerTCPType
 	return runner.New(cfg, runner.WithProtocolRegistry(protocols), runner.WithScenarioRegistry(scenarios), runner.WithActionRegistry(actions), runner.WithAuthProvider(auth))
+}
+
+// Step 描述一个业务动作及其预期结果；身份只由鉴权提供。
+type Step struct {
+	Request   pb.ScenarioCommandRequest
+	WantCode  int32
+	Revision  uint64
+	Reward    int32
+	Reconnect bool
+}
+
+func Commands(cfg runner.Config, auth robot.AuthProvider, steps []Step) *runner.Runner {
+	protocols := protocol.NewRegistry(nil)
+	generated.RegisterDefaults(protocols)
+	scenarios := scenario.NewRegistry()
+	steps = append([]Step(nil), steps...)
+	scenarios.MustRegister(scenario.New("commands", scenario.NodeFunc(func(ctx context.Context, rb *robot.Context) error {
+		if len(steps) == 0 {
+			return fmt.Errorf("empty business scenario")
+		}
+		if err := rb.Do(ctx, action.NameConnect, nil); err != nil {
+			return err
+		}
+		for i, step := range steps {
+			if step.Reconnect {
+				if err := rb.Do(ctx, action.NameConnect, nil); err != nil {
+					return err
+				}
+			}
+			callCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			m, err := rb.Session().CallChecked(callCtx, msgid.MsgScenarioCommand, msgid.MsgScenarioCommand, &step.Request, func(m *session.Message) error {
+				v, ok := m.Value.(*pb.ScenarioCommandResponse)
+				if !ok {
+					return fmt.Errorf("invalid response")
+				}
+				if v.Code != 0 {
+					return session.ErrRejected
+				}
+				return nil
+			})
+			cancel()
+			if err != nil && !(step.WantCode != 0 && errors.Is(err, session.ErrRejected)) {
+				return err
+			}
+			v, ok := m.Value.(*pb.ScenarioCommandResponse)
+			if !ok || v.Code != step.WantCode || (v.Code == 0 && (v.Revision != step.Revision || v.Reward != step.Reward)) {
+				return fmt.Errorf("step %d: unexpected result", i)
+			}
+		}
+		return nil
+	})))
+	cfg.Scenario = "commands"
+	cfg.Transport.Type = transport.PlayerTCPType
+	return runner.New(cfg, runner.WithAuthProvider(auth), runner.WithProtocolRegistry(protocols), runner.WithScenarioRegistry(scenarios), runner.WithActionRegistry(action.NewRegistry()))
 }

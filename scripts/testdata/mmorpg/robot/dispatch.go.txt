@@ -21,10 +21,22 @@ func Dispatch(engine *nest.NestMgr) gateway.TCPDispatch {
 		if err != nil {
 			return nil, err
 		}
-		if request.Kind != "transfer" || request.Seq > 1<<63-1 {
+		combat := sender.NewMmoGameplaySender(engine)
+		if request.Seq > 1<<63-1 {
 			err = gateway.ErrInvalidRequest
 		} else {
-			err = business.MultiSync_MMORPGTrade(ctx, session.Principal().PlayerID, request.PeerID, int64(request.Seq), request.Amount, false)
+			switch request.Kind {
+			case "transfer":
+				err = business.MultiSync_MMORPGTrade(ctx, session.Principal().PlayerID, request.PeerID, int64(request.Seq), request.Amount, false)
+			case "strike":
+				err = combat.MultiSync_MMORPGStrike(ctx, session.Principal().PlayerID, request.PeerID, int64(request.Seq))
+			case "loot":
+				err = combat.MultiSync_MMORPGLoot(ctx, session.Principal().PlayerID, request.PeerID)
+			case "quest":
+				err = combat.Sync_MMORPGQuest(ctx, session.Principal().PlayerID)
+			default:
+				err = gateway.ErrInvalidRequest
+			}
 		}
 		response := &pb.PlayResponse{Seq: request.Seq}
 		if err != nil {

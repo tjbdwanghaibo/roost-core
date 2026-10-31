@@ -22,10 +22,17 @@ func Dispatch(engine *nest.NestMgr, rules domain.Rules) gateway.TCPDispatch {
 		if err != nil {
 			return nil, err
 		}
-		if request.Kind != "draw" {
-			err = gateway.ErrInvalidRequest
-		} else {
+		switch request.Kind {
+		case "draw":
 			_, err = business.Sync_CardDraw(ctx, session.Principal().PlayerID, request.Seq, int(request.Count), rules)
+		case "start":
+			_, err = business.MultiSync_CardStart(ctx, session.Principal().PlayerID, request.RoomID, request.Seq, int(request.Count), rules)
+		case "auto":
+			_, err = business.Sync_CardTurn(ctx, request.RoomID, session.Principal().PlayerID, domain.TurnCommand{Seq: request.Seq, ActorID: session.Principal().PlayerID, Kind: "auto"})
+		case "claim":
+			_, err = business.MultiSync_CardClaim(ctx, session.Principal().PlayerID, request.RoomID)
+		default:
+			err = gateway.ErrInvalidRequest
 		}
 		response := &pb.PlayResponse{Seq: request.Seq}
 		if err != nil {

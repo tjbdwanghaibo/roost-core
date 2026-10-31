@@ -153,6 +153,15 @@ func renderMarkdown(run RunSnapshot) string {
 		fmt.Fprintf(&b, "## Scenario latency\n\n| p50 | p90 | p95 | p99 |\n| --- | --- | --- | --- |\n| %.3fms | %.3fms | %.3fms | %.3fms |\n\n",
 			run.QuantilesMS["p50"], run.QuantilesMS["p90"], run.QuantilesMS["p95"], run.QuantilesMS["p99"])
 	}
+	if run.Sync != nil {
+		b.WriteString("Sync application latency (scenario-correlated, not request RT):\n\n")
+		fmt.Fprintln(&b, "Kind | Expected | Received | Pending | Timeout | Canceled | P99 ms | Max ms")
+		fmt.Fprintln(&b, "--- | ---: | ---: | ---: | ---: | ---: | ---: | ---:")
+		for _, v := range run.Sync.Events {
+			fmt.Fprintf(&b, "%s | %d | %d | %d | %d | %d | %.3f | %.3f\n", v.Kind, v.Expected, v.Received, v.Pending, v.TimedOut, v.Canceled, v.P99MS, v.MaxMS)
+		}
+		fmt.Fprintf(&b, "Unmatched: %d; capacity rejected: %d\n\n", run.Sync.Unmatched, run.Sync.CapacityRejected)
+	}
 	if run.Messages != nil {
 		fmt.Fprintf(&b, "## Requests\n\nSuccessful responses: %.3f/s. Business success requires CallChecked. Quantiles include all completed outcomes.\n\n", run.RequestOKPerSecond)
 		b.WriteString("| message | started | sent | ok | rejected | timeout | canceled | errors | inflight | p99 ms | max ms |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n")

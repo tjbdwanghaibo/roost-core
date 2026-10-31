@@ -22,7 +22,11 @@ func Dispatch(engine *nest.NestMgr) gateway.TCPDispatch {
 		if err != nil {
 			return nil, err
 		}
-		_, err = business.Sync_PartyInput(ctx, request.RoomID, session.Principal().PlayerID, domain.Input{Seq: request.Seq, Epoch: request.Epoch, Round: int(request.Round), Kind: request.Kind})
+		if request.Kind == "claim" {
+			_, err = business.MultiSync_PartyClaim(ctx, session.Principal().PlayerID, request.RoomID)
+		} else {
+			_, err = business.Sync_PartyInput(ctx, request.RoomID, session.Principal().PlayerID, domain.Input{Seq: request.Seq, Epoch: request.Epoch, Round: int(request.Round), Kind: request.Kind})
+		}
 		response := &pb.PlayResponse{Seq: request.Seq}
 		if err != nil {
 			response.Code = 1

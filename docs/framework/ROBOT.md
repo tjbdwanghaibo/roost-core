@@ -51,7 +51,7 @@ go run ./cmd/loadtest -executor arrival-rate -rate 10 -max-concurrent 100 -durat
 - `traffic.socket_read_bytes/socket_written_bytes` 在 TCP socket 实际读写返回时累计，包含 RS 包头、握手、迟到应答和部分写入；不含 TCP/IP 头及重传。`measured_connections` 表示接入计数的连接数。默认 TCP 和 player-tcp 已测量，WS、直接使用 KCP 或自定义传输未接此计数，不能把 0 当成没有流量。
 - 返回的历史报告深拷贝可变字段；调用方整理表格不会改写保留证据。拒绝、取消和超时不混入成功吞吐。
 
-服务端 CPU/内存/磁盘/网络需由部署侧监控单独采集；目前内置资源采样仍只覆盖 Robot 进程。Sync Full/Delta/Remove 的端到端延迟与尾样本、服务端队列延迟、消息计划调度欠载仍需业务压测接线，不由请求 RT 替代。
+服务端 CPU/内存/磁盘/网络需由部署侧监控单独采集；目前内置资源采样仍只覆盖 Robot 进程。`SyncProbe` 提供 Full/Delta/Remove 的端到端统计与最慢 32 个样本；服务端队列仍须由场景读取 Nest Stats，不由请求 RT 替代。
 
 ## 13 类玩法验收
 
@@ -61,19 +61,23 @@ python3 scripts/test-genres-generated.py --out /tmp/roost-genres-acceptance
 
 输出目录必须新建。逐类生成独立工程，执行现有离线玩法断言，再换自定义 module、重新生成、build/vet/ID/漂移检查，并重新执行原先通过的场景（race，零意外 skip）。工程、原始日志、JSON 汇总保留；失败继续下一类，最终退出非零。不隐式打开 REAL，不打印服务凭据。
 
-回合 PvP、合作 Roguelike、异步社交经营额外生成 `cmd/robot`、业务 PB、`loadtest.Smoke` 和正式 TCP → Sender 接线，每类第 9 个用例验证首个动作/同连接重试/重连重试。鉴权器与存储仍为测试替身；Gate、EntitySync、完整对局、实际容量未由该用例证明，见 [三类玩法](SESSION-GENRES.md)。九类既有状态玩法新增 `protocol/def/robot.go`、`game/robotaccess.Dispatch`、`loadtest.Commands`、`cmd/robot` 和使用说明。每类新用例验证两个有效动作、同连接重试、TCP 重连重试、非法命令与不存在玩家拒绝，并检查最终 DAO：
+回合 PvP、合作 Roguelike、异步社交经营生成 `cmd/robot`、业务 PB 和正式 TCP → Sender 接线。当前 Robot 已从首动作扩到对局/经营闭环；九类既有状态玩法使用 `loadtest.Commands`。鉴权和提交器仍是测试替身；客户端动作经 TCP，可信定时推进和敌方行动由服务器测试驱动，不提供客户端直接结算接口。
 
 | 玩法 | 实际业务步骤 |
 | --- | --- |
-| SLG | 建造与研究；余额与持久定时器 |
-| MMORPG | 两笔转账；双方余额与操作序号 |
-| 卡牌 RPG | 十连抽再单抽；宝石与抽卡回执 |
-| 塔防 | 建造再升级；归属与等级 |
-| 生存撤离 | 移动再采集；位置与背包 |
-| 合成 | 移动再合成；格子与等级 |
-| 放置 | 两个工坊入队；任务与回执 |
-| 自走棋 | 购买再出售；商店与单位 |
-| 派对房间 | 同轮两次抢星；第二次不重复得分 |
+| SLG | 建造、研究、服务器完成建造/行军、重试不重复扣费 |
+| MMORPG | 双方转账、战斗击杀、拾取和任务奖励只结算一次 |
+| 卡牌 RPG | 抽卡、开战、服务器敌方回合、胜利领奖及重连重试 |
+| 塔防 | 四人建塔/准备、服务器推进三波、全员领奖及重试 |
+| 生存撤离 | 移动采集、返回撤离、服务器封存清单、兑付及重试 |
+| 合成 | 移动、合成、出售及重试；这是经济循环，不是整局胜负 |
+| 放置 | 双工坊生产、服务器推进时间、收取、订单结算及重试 |
+| 自走棋 | 买卖、服务器推进终局、八席按排名领奖及重试 |
+| 派对房间 | 抢星、期限结算、双方领奖及重试 |
+| 回合 PvP | 双人交替攻击至终态、终态/非成员拒绝、重连重试 |
+| 异步社交经营 | 种植、好友帮助、提前/越权收获拒绝、到期收获及重试 |
+
+网络回包不替代实体锁：测试读取 DAO 也通过 Nest 本地执行并取锁；业务时钟用原子值推进。测试数量保持不变，扩展已有场景的断言。
 
 玩家身份仅取鉴权 Session，不接受客户端指定操作者；业务时间、卡池规则和奖励不由请求控制。响应 Code=0/1 只区分业务成功/拒绝，不代表详细错误分类或未知结果重试策略已经完整。TCP 重连测试沿用既有业务 epoch；真实登录引发 epoch 变化时，需要先恢复视图再构造命令。拒绝用例使用不存在玩家，不等于已穷尽所有成员越权组合。
 
@@ -101,7 +105,7 @@ MOBA 的完整链由 `TestMOBAKCPRobotMatchSettlementAndClientResult` 验证；�
 
 ## 上线补齐顺序
 
-1. 将其余业务 smoke 按合作 Roguelike 与 MOBA 样板扩到完整对局和结算；补 Sync、真实账号重登与权限组合。统一使用当前 Robot，不新增第二套工具。
+1. 13 类玩法的网络业务闭环已补齐；各玩法的独立真实账号重登、Sync 与持久存储组合仍要分别验收，不能从通用 game-demo 推导。
 2. Robot 会话统计按运行聚合：请求/字节/超时/拒绝、排队与端到端耗时、慢样本；明确 reconnect 与未知结果，容量和长稳都断言最终状态。
 3. 用真实账号、Gate、Nest、WAL/Mongo、Remote/Saga 的生成工程执行恢复与混合负载，分别记录 Sync 全量/增量/删除与 Lockstep。少量 Saga 的业务占比不改变普通消息/heartbeat 的验证权重。
 4. 在目标 Linux/部署规模验证磁盘耗尽、依赖断连/主从切换、停机排空、权限隔离、备份恢复，以及原生客户端各平台与引擎集成。当前本机功能结果不能作为这些项的放行证据。
@@ -120,7 +124,7 @@ MOBA 的完整链由 `TestMOBAKCPRobotMatchSettlementAndClientResult` 验证；�
 
 验证命令：`go test -race ./robot/...`、`go vet ./robot/...`、`go test ./...`、`go test ./codegen/internal/roost -run '^TestDemoTemplateGeneratesABuildableWritePath$'`，以及上面的 13 类生成矩阵。原始日志留在执行时指定的输出目录；仓内记录具体通过范围，不将编译、替身和网络验收混为一项。
 
-## 当前验证结果（2026-10-31）
+## 当前验证结果（2026-11-01）
 
 macOS arm64、Go 1.27.3，基线 `ffdc7b2d` 加本轮未提交工作树：13 类独立工程生成、build/vet、ID/漂移检查通过；改成 `example.com/acceptance/<genre>` 后实际执行下表全部场景，零测试用例 SKIP。
 
@@ -142,12 +146,24 @@ macOS arm64、Go 1.27.3，基线 `ffdc7b2d` 加本轮未提交工作树：13 类
 
 SLG 的 9 条含原 6 条、两条联盟断言与新增 Robot。合计 181 条自定义 module 场景；九类新增 TCP Robot，MOBA 原 KCP 用例扩到公共 LockstepBot 整局及客户端结算结果，回合 PvP/社交经营各 9 条，合作 10 条包含整局 TCP Robot。全部为上述明确范围，不代表完整生产端到端认证。
 
-前一轮全仓 `go test ./...` 通过，之后新增发送超时关闭与调度尾段计数经过 `go test -race ./robot/...`；生成 demo 专项、根包门禁、Robot vet 通过。Linux amd64 `go build ./robot/...` 通过，仅为交叉编译，未在 Linux 运行。
+最终代码通过 `go test ./...`、`go vet ./...`、`go test -race ./robot/...` 及文档/真实依赖入口门禁。13 类完整生成矩阵 `/tmp/roost-closed-loop-delivery-20261101` 全部通过：181 条自定义 module 场景、零测试 SKIP，生成漂移/ID/build/vet/race 检查通过。使用本文命令可重新生成，不依赖临时目录作长期证明。Linux 仅有前序交叉编译证据，本轮没有 Linux 实跑。
 
-证据目录为 `/tmp/roost-genres-acceptance-20261031` 与派对房间补跑 `/tmp/roost-genres-party-confirm-20261031`。前者保留派对房间脚本在执行期间被编辑而导致的 shell 命令截断失败（业务 18 条通过，随后 `/...: No such file or directory`）；固定脚本后单独完整补跑通过，未删除失败记录。更早矩阵自身曾误把无测试文件包的 JSON `skip` 当成测试 SKIP，已改为只检查带 `Test` 的事件，同时仍校验全部预期用例实际 PASS；没有放宽业务断言。原始日志失效时按上方命令重跑，不依赖这台机器的临时目录作长期证明。
-
-本轮后续验证原始目录：`/tmp/roost-robot-final-20261101`。早期失败仍留在 `/tmp/roost-robot-five-20261101`（塔防升级请求漏传期望等级，修正测试 B=1）和 `/tmp/roost-robot-four-20261101`（MMORPG 的 -run 漏选 Robot，补全过滤）。两者均未修改业务规则或放宽通过数，修正后单独复测目录为 `/tmp/roost-robot-recheck-20261101`。后续复跑不依赖临时路径，用本篇生成矩阵命令即可。
-
-完整样板与请求报告这轮：`go test -race ./robot/...`、`go vet ./robot/...`、`go test -count=1 .` 以及 13 类矩阵通过，完整生成证据在 `/tmp/roost-robot-lifecycle-final-20261101`。新增运行隔离/重连/socket 字节、拒绝/取消/超时和报告深拷贝回归。报告别名回归修前出现 `returned report mutated retained evidence`，修后通过；日志 `/tmp/roost-report-alias-before.log` / `after.log`。早期生成失败（handler 包内结果类型导致 Sender 循环依赖、缺少生成包显式 import 别名）保留在 `/tmp/roost-coop-full-20261101`、`/tmp/roost-full-recheck-20261101`，已将 View 放进业务规则包并修正引用。未放宽门禁或修改玩法规则。
+本轮初始失败保留在 `/tmp/roost-closed-loop-20261101` 与 `/tmp/roost-closed-loop-final-20261101`：网络回包后测试直接读 DAO 没有锁，MMORPG 测试同时读写 time.Time。现在由公共快照 helper 在 Nest 本地取锁复制，解析与断言留在测试 goroutine；网络时钟原子推进。修后完整矩阵通过，没有改变业务规则或减少场景。此前版本的验证过程见 Git 历史与 [v1.35.0 说明](../release/v1.35.0-NOTES.md)，本文只保留当前结果。
 
 2026-11-01 补充：生成 game-demo 的 C# / C++ 客户端已完成真实 account RPC/Redis → Gate/NATS → PB/Nest → WAL/Mongo → EntitySync 联合验收，并核对会话重建、事务重放与 DAO 冷水合。入口与限制见 [Gate](GATEWAY.md#真实账号gate-与存储联合验收)。这是通用生成链路的功能证据，不把其结论扩张到上述 13 类玩法的独立真实存储或 Robot 容量。
+
+## Sync 观测和真实 Gate 混合负载
+
+本节 SyncProbe、gate-mixed 及上文新增闭环是 main 未发版改动；v1.35.0 尚无 SyncProbe，必须使用同一检出的工具、夹具和运行库。
+
+每次运行创建独立 `robot.NewSyncProbe(maxPending)`，用 `runner.WithSyncProbe(probe)` 装配。业务从 `robot.Context.Config.SyncProbe` 获取同一实例（具体字段见代码）；直接驱动 Session 的夹具也可以独立使用。请求发起前 `Expect(SyncKey, time.Now(), timeout)`，成功应用并核对业务状态后 `Observe(key, appliedAt)`；断连时 `CancelConnection`。关联号由场景分配，Connection 在整个运行内唯一且重连换代，不能用每个机器人自己的 1、2 与别人碰撞。多个 setter 或 handler 可以合并成一帧，不能把版本差当作丢包。
+
+起终点必须在同一时钟域。报告按 full/delta/remove 给出 expected、received、timed_out、canceled、pending、P50/P95/P99/max；分位数为固定直方图桶上界（约 9% 粒度，最高不超过实测 max），不是保留全部样本的精确排序。空样本不是通过。控制面 JSON/Markdown 保存独立副本；待确认容量有上限，超过计 capacity_rejected，重复/迟到计 unmatched。
+
+`scripts/perf/gate-mixed.sh` 使用调用方已经启动的隔离 Mongo 副本集、Redis、NATS，默认 30 秒，最长 120 秒；不启动或停止共享服务。按 `ROOST_DATAENGINE_IT_*` 注入地址，`ROOST_PERF_CPU=0` 不限定 GOMAXPROCS。真实 account/Redis/NATS → TCP Gate → PB/Nest → strict WAL/Mongo → PB EntitySync，叠加正式 10Hz heartbeat、5% 心跳修改。当前只有一个账号和一个共享 World，`ROOST_GATE_LOAD_RATE` 默认每秒 100 次请求，可显式选择对照档，是持久化热点诊断，不代表 MMO 容量。记录丢拍而不隐去欠载；最终额外一笔排空事务不计测量 TPS。
+
+报告保存 Sync 三类延迟、请求/字节、Nest 排队累计/最大值、WAL/投影排空与进程资源。客户端与服务端在同一进程，CPU/RSS 不能拆成独立服务器值；不包含 Mongo/NATS/Redis 的进程资源。关闭后重复投影及 DAO 冷水合仍不是进程 SIGKILL 恢复。`verified` 只表示数据一致性断言通过，不替代负载与 P99 门禁。
+
+旧 `sync-business.sh` 基准修前在编译阶段失败：`businessTCP` 缺少 `CloseSessions`、调用已删除 `Scene.Moved`；同一源码还保留 BSON 解码，不能消费当前 PB DAO。修复为现行 pusher 契约、Nest Guard 内 `QueueMove` 和生成 `clientsync.DecodeFields`。2 tick solo 冒烟已通过（`artifacts/perf/sync/pb-decoder-fixed-20261101`），修前证据在 `pb-decoder-before-20261101`；短测只证明入口恢复可运行，不构成容量结论。
+
+2026-11-01 真实恢复补测：`ROOST_MMORPG_REAL=1 ROOST_MMORPG_KEEP=1 bash scripts/test-mmorpg-generated.sh` 通过正式生成消费工程及三个进程的持久化/恢复；SIGKILL 时存在 16 条未投影 strict WAL，交易托管、战斗奖励、Buff/复活定时器冷加载后恢复，第三进程重试无重复奖励/退款。日志 `/tmp/roost-mmorpg-real-final-20261101.log`，生成工程保留在测试输出路径。它验证 MMORPG 的持久状态与驱动，不冒充 Gate/账号/游戏三服务联合崩溃恢复。

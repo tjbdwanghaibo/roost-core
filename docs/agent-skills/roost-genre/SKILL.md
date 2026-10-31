@@ -117,7 +117,7 @@ cd "$CORE" && ROOST_<GENRE>_KEEP=1 bash scripts/test-<genre>-generated.sh   # �
 
 用户要压测时沿用 `robot` 的 transport/session/scenario/runner/loadtest。业务 PB 存在时 `roost generate` 同步生成 `loadtest/protocol/registry_gen.go`。生成新玩法时，自己的 PB、端点、Robot 步骤、数据断言、运行参数与说明必须一起交付；仅编译/直接调用 Nest 不算网络验收。不得自动给所有玩法塞一个 ping 然后声明完成。
 
-当前三类新玩法已有 `cmd/robot` 与真实嵌入 TCP/PB 首动作、重试、重连测试，回合/经营各 9 条，合作 10 条还含整局领奖与客户端视图；九类既有状态玩法已有业务 PB、TCP → Sender、两步业务/重试/重连/拒绝路径和最终 DAO 断言；MOBA 的 KCP 整局、追帧与客户端结算结果通过公共 LockstepBot 和可信 Nest 结算验证。手工生成须按对应 reference 安装 Robot 文件再 generate。完整对局、真实 Gate/存储和业务重登仍需补测；不把 TCP 重连等同于完整业务恢复。功能、容量、长稳、真实存储与客户端平台分别出结论。
+当前 main（本轮扩展尚未发版）13 类网络验收已覆盖既有玩法的对局或经营闭环：回合 PvP 至终态、社交种植/帮助/收获、合作三关领奖；九类状态玩法覆盖对应服务器推进与结算重试；MOBA 通过公共 LockstepBot 完成 KCP 整局和可信结算。准确步骤见 `docs/framework/ROBOT.md`。手工生成须安装同检出的 Robot 文件再 generate；公共快照测试 helper 也由安装器复制，不能漏掉。读取 DAO 要在 Nest 本地执行并持实体锁，拨业务钟用原子值。真实 Gate/账号/存储的通用链路已有独立验证，不自动覆盖每种玩法；TCP 重连不等同于完整业务重登或进程崩溃恢复。功能、容量、长稳、存储和客户端平台分别出结论。
 
 ## 4. “可运行”的两档
 

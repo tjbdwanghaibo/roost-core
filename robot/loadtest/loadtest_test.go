@@ -322,6 +322,9 @@ type reportingRunner struct{ fakeRunner }
 func (*reportingRunner) MessageReport() session.Report {
 	return session.Report{Messages: []session.CallReport{{MessageID: 101, CallCounts: session.CallCounts{Started: 3, Sent: 3, Completed: 3, OK: 2, Rejected: 1}}}}
 }
+func (*reportingRunner) SyncReport() *robot.SyncReport {
+	return &robot.SyncReport{Events: []robot.SyncLatency{{Kind: robot.SyncDelta, Expected: 1, Received: 1, P99MS: 0.9}}, Slowest: []robot.SyncSlowSample{{Kind: robot.SyncDelta, DurationMS: 0.9}}}
+}
 func (*reportingRunner) TrafficReport() transport.TrafficReport {
 	return transport.TrafficReport{MeasuredConnections: 1, ReadBytes: 90, WrittenBytes: 80}
 }
@@ -335,9 +338,17 @@ func TestManagerIncludesRequestAndTrafficReports(t *testing.T) {
 	if report.Messages == nil || report.Messages.Messages[0].Rejected != 1 || report.Traffic == nil || report.Traffic.WrittenBytes != 80 || report.RequestOKPerSecond <= 0 {
 		t.Fatalf("report lost business results: %+v", report)
 	}
+	if report.Sync == nil || report.Sync.Events[0].P99MS != 0.9 {
+		t.Fatal("sync report missing")
+	}
+	report.Sync.Events[0].P99MS = 999
+	report.Sync.Slowest[0].DurationMS = 999
 	report.Messages.Messages[0].Rejected = 999
 	report.Traffic.WrittenBytes = 999
 	again := manager.History(loadtest.HistoryRequest{Limit: 1}).Runs[0]
+	if again.Sync.Events[0].P99MS != 0.9 || again.Sync.Slowest[0].DurationMS != 0.9 {
+		t.Fatal("sync report aliases retained evidence")
+	}
 	if again.Messages.Messages[0].Rejected != 1 || again.Traffic.WrittenBytes != 80 {
 		t.Fatal("returned report mutated retained evidence")
 	}

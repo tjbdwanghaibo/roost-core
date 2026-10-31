@@ -2,6 +2,7 @@ package handler
 
 import (
 	"GENRE_MODULE/game/robotaccess"
+	robotdomain "GENRE_MODULE/game/survival"
 	bots "GENRE_MODULE/loadtest"
 	"GENRE_MODULE/protocol/pb"
 	"context"
@@ -62,13 +63,35 @@ func TestSurvivalExtractionRobotBusiness(t *testing.T) {
 	invalid.Seq++
 	invalid.Kind = "not-a-command"
 	run("owner", []bots.Step{{Request: first}, {Request: first}, {Request: first, Reconnect: true}, {Request: second}, {Request: second}, {Request: invalid, WantCode: 1}})
-	state := f.state(t)
+	state := robotDecode(t, f.engine, f.match, f.match.Dao().GetState, robotdomain.Decode)
 	if len(state.Seats[0].Receipts) != 2 || state.Seats[0].Pos != 1 || state.Seats[0].Inventory[0] <= 0 {
 		t.Fatalf("wrong committed business state: %+v", state)
 	}
-	before := f.match.Dao().GetState()
+	before := robotRead(t, f.engine, f.match, func() string { return f.match.Dao().GetState() })
 	run("outsider", []bots.Step{{Request: first, WantCode: 1}})
-	if f.match.Dao().GetState() != before {
+	if robotRead(t, f.engine, f.match, func() string { return f.match.Dao().GetState() }) != before {
 		t.Fatal("unauthorized command changed authoritative state")
 	}
+
+	f.clock.Add(100)
+	move := first
+	move.Seq = 3
+	move.A = 0
+	extract := move
+	extract.Seq = 4
+	extract.Kind = "extract"
+	run("owner", []bots.Step{{Request: move}, {Request: extract}})
+	f.step(t)
+	state = robotDecode(t, f.engine, f.match, f.match.Dao().GetState, robotdomain.Decode)
+	if state.Seats[0].Status != "extracted" {
+		t.Fatal("extraction not finished")
+	}
+	want := int64(95) + state.Reward(0)
+	claim := pb.PlayRequest{Kind: "claim", RoomID: f.match.ID()}
+	run("owner", []bots.Step{{Request: claim}, {Request: claim, Reconnect: true}})
+	run("outsider", []bots.Step{{Request: claim, WantCode: 1}})
+	if robotRead(t, f.engine, f.players[0], func() int64 { return f.players[0].Dao().GetGold() }) != want || !robotDecode(t, f.engine, f.match, f.match.Dao().GetState, robotdomain.Decode).Seats[0].Claimed {
+		t.Fatal("extraction payout duplicated or missing")
+	}
+
 }

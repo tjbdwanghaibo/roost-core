@@ -1,10 +1,12 @@
 package handler
 
 import (
+	domain "GENRE_MODULE/game/partyroom"
 	"GENRE_MODULE/game/robotaccess"
 	bots "GENRE_MODULE/loadtest"
 	"GENRE_MODULE/protocol/pb"
 	"context"
+	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	"github.com/tjbdwanghaibo/roost-core/robot"
 	"github.com/tjbdwanghaibo/roost-core/robot/runner"
@@ -27,6 +29,11 @@ func TestPartyGameRobotBusiness(t *testing.T) {
 		case "outsider":
 			return gateway.Principal{PlayerID: 999999, SessionID: "outsider", ServerID: 1}, nil
 		default:
+			for i, id := range f.ids {
+				if ticket == fmt.Sprintf("seat-%d", i) {
+					return gateway.Principal{PlayerID: id, SessionID: ticket, ServerID: 1}, nil
+				}
+			}
 			return gateway.Principal{}, gateway.ErrUnauthenticated
 		}
 	})
@@ -71,4 +78,16 @@ func TestPartyGameRobotBusiness(t *testing.T) {
 	if f.snap(t, room).Raw != before {
 		t.Fatal("unauthorized command changed authoritative state")
 	}
+
+	f.setNow(f.snap(t, room).State.Deadline - 1)
+	f.waitBoard(t, room, "robot match settles", func(b domain.Board) bool { return b.Phase == domain.PhaseSettled })
+	claim := pb.PlayRequest{Kind: "claim", RoomID: room}
+	for i := range 2 {
+		run(fmt.Sprintf("seat-%d", i), []bots.Step{{Request: claim}, {Request: claim, Reconnect: true}})
+	}
+	run("outsider", []bots.Step{{Request: claim, WantCode: 1}})
+	if !f.snap(t, room).State.Seats[0].Claimed || !f.snap(t, room).State.Seats[1].Claimed {
+		t.Fatal("party reward not claimed")
+	}
+
 }

@@ -44,14 +44,17 @@ ROOST_GENRE_KEEP=1 ROOST_GENRE_MODULE=example.com/myfarm bash scripts/test-socia
 
 回合超时由宿主通过受控命令触发，本纵切没有挂自动定时驱动；实际游戏可参考 card-rpg 的持久定时器，但必须保持预期 Revision，旧定时事件不能消耗下一回合。Roguelike 是离散房间流程，不含实时动作战斗、技能或物理；种子常量用于可复现样例，生产由服务器创建时注入并持久保存。社交经营只演示本进程两实体事务，不包含跨服访问者授权、Remote 或 Saga。
 
-每类另有第 9 条 `TestScenarioRobotTCPRetryAndReconnect`：真实 loopback TCP → 生成 PB → 正式 Nest/DAO，执行首个动作、同连接重复、重连重复，最终 Revision 只能为 1。生成工程可使用真实票据运行：
+每类另有第 9 条 `TestScenarioRobotTCPRetryAndReconnect`：真实 loopback TCP → 生成 PB → 正式 Nest/DAO，先验证首个动作、同连接重复、重连重复时 Revision=1；回合 PvP 继续至终态（Revision=5），社交经营继续至帮助/收获（Revision=3），重试不重复奖励。合作的完整三关另由第 10 条覆盖。生成工程可使用真实票据运行：
 
 ```sh
 # ROOST_ROBOT_TICKET 由自己的登录流程注入；不要提交票据。
+# 回合 PvP / 社交经营：每个身份使用自己的步骤文件，Request 含 RoomID/Seq/Revision/Kind。
+go run ./cmd/robot -endpoint 127.0.0.1:7000 -steps steps.json
+# 合作 Roguelike：完整双客户端流程，还需 ROOST_ROBOT_PEER_TICKET。
 go run ./cmd/robot -endpoint 127.0.0.1:7000 -room <已分配的新房间ID>
 ```
 
-`loadtest.Smoke` 接受自己的 AuthProvider；嵌入 TCP 和 Gate 使用同一个 `player-tcp` transport。当前自动用例实跑嵌入 TCP，Gate 路由另验；固定重试是幂等功能验证，不能用它报告正常写入 TPS。压力场景必须推进新的 Seq/Revision，并按玩法完成结算与数据断言。
+`loadtest.Commands` 的 Step 包含 Request、WantCode、Revision、Reward 和 Reconnect；从当前业务视图构造步骤，不重复压同一回执。`loadtest.Smoke` 仍用于首动作功能验证，两者接受自己的 AuthProvider；嵌入 TCP 和 Gate 使用同一个 `player-tcp` transport。当前自动用例实跑嵌入 TCP，Gate 路由另验；固定重试是幂等功能验证，不能用它报告正常写入 TPS。压力场景必须推进新的 Seq/Revision，并按玩法完成结算与数据断言。
 
 ## 验证边界
 

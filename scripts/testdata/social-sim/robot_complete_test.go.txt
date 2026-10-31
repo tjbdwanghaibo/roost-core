@@ -1,0 +1,38 @@
+package handler
+
+import (
+	bots "GENRE_MODULE/loadtest"
+	"GENRE_MODULE/protocol/pb"
+	"context"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"testing"
+	"time"
+)
+
+func completeScenarioRobot(t *testing.T, f *scenarioFixture, addr string) {
+	t.Helper()
+	run := func(token string, steps ...bots.Step) {
+		t.Helper()
+		r := bots.Commands(runner.Config{Count: 1, Duration: 5 * time.Second, Transport: transport.Config{Endpoint: addr}}, func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket(token), nil }, steps)
+		if err := r.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if s := r.Stats(); s.Success != 1 || s.Failure != 0 || s.Canceled != 0 {
+			t.Fatalf("robot: %+v", s)
+		}
+	}
+
+	help := pb.ScenarioCommandRequest{RoomID: f.room.ID(), Seq: 1, Revision: 1, Kind: "help"}
+	run("fixture-peer", bots.Step{Request: help, Revision: 2}, bots.Step{Request: help, Revision: 2, Reconnect: true})
+	harvest := pb.ScenarioCommandRequest{RoomID: f.room.ID(), Seq: 2, Revision: 2, Kind: "harvest"}
+	run("fixture-peer", bots.Step{Request: harvest, WantCode: 1})
+	run("fixture-outsider", bots.Step{Request: harvest, WantCode: 1})
+	run("fixture-owner", bots.Step{Request: harvest, WantCode: 1})
+	f.now.Store(f.state(t).ReadyAt)
+	run("fixture-owner", bots.Step{Request: harvest, Revision: 3, Reward: 5}, bots.Step{Request: harvest, Revision: 3, Reward: 5, Reconnect: true})
+	if s := f.state(t); s.Planted || s.Harvests != 1 || s.Revision != 3 || robotRead(t, f.engine, f.players[0], func() int64 { return f.players[0].Dao().GetCoins() }) != 5 || robotRead(t, f.engine, f.players[1], func() int64 { return f.players[1].Dao().GetCoins() }) != 0 {
+		t.Fatal("production/help/harvest ownership or reward mismatch")
+	}
+}

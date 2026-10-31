@@ -1,6 +1,8 @@
 package handler
 
 import (
+	domain "GENRE_MODULE/game/cardrpg"
+	sender "GENRE_MODULE/game/handler/syncsender"
 	"GENRE_MODULE/game/robotaccess"
 	bots "GENRE_MODULE/loadtest"
 	"GENRE_MODULE/protocol/pb"
@@ -60,12 +62,41 @@ func TestCardRPGRobotBusiness(t *testing.T) {
 	invalid.Seq++
 	invalid.Kind = "not-a-command"
 	run("owner", []bots.Step{{Request: first}, {Request: first}, {Request: first, Reconnect: true}, {Request: second}, {Request: second}, {Request: invalid, WantCode: 1}})
-	if len(f.profile(t).Draws) != 2 || f.profile(t).Gems != 78 {
+	if len(robotDecode(t, f.engine, f.players[0], f.players[0].Dao().GetState, domain.DecodeProfile).Draws) != 2 || robotDecode(t, f.engine, f.players[0], f.players[0].Dao().GetState, domain.DecodeProfile).Gems != 78 {
 		t.Fatal("wrong committed business state")
 	}
-	before := f.players[0].Dao().GetState()
+	before := robotRead(t, f.engine, f.players[0], func() string { return f.players[0].Dao().GetState() })
 	run("outsider", []bots.Step{{Request: first, WantCode: 1}})
-	if f.players[0].Dao().GetState() != before {
+	if robotRead(t, f.engine, f.players[0], func() string { return f.players[0].Dao().GetState() }) != before {
 		t.Fatal("unauthorized command changed authoritative state")
 	}
+
+	start := pb.PlayRequest{Seq: 1, Kind: "start", RoomID: f.runs[0].ID(), Count: 1}
+	run("owner", []bots.Step{{Request: start}, {Request: start, Reconnect: true}})
+	for range domain.MaxActions + 1 {
+		view, e := sender.NewCardRpgSender(f.engine).Sync_CardBattle(context.Background(), f.runs[0].ID(), f.players[0].ID())
+		if e != nil {
+			t.Fatal(e)
+		}
+		if view.Status != "running" {
+			break
+		}
+		f.clock.Add(1)
+		if view.Actor < 3 {
+			action := pb.PlayRequest{Seq: view.NextSeq, Kind: "auto", RoomID: f.runs[0].ID()}
+			run("owner", []bots.Step{{Request: action}, {Request: action}})
+		} else if _, e = sender.NewCardRpgSender(f.engine).Sync_CardEnemy(context.Background(), f.runs[0].ID(), view.NextSeq); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if robotDecode(t, f.engine, f.runs[0], f.runs[0].Dao().GetState, domain.DecodeBattle).State.Status != "won" {
+		t.Fatal("battle not won")
+	}
+	claim := pb.PlayRequest{Kind: "claim", RoomID: f.runs[0].ID()}
+	run("outsider", []bots.Step{{Request: claim, WantCode: 1}})
+	run("owner", []bots.Step{{Request: claim}, {Request: claim, Reconnect: true}})
+	if p := robotDecode(t, f.engine, f.players[0], f.players[0].Dao().GetState, domain.DecodeProfile); p.Wins != 1 || p.ActiveRun != 0 || p.Gold != 108 {
+		t.Fatal("battle reward duplicated or missing")
+	}
+
 }

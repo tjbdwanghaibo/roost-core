@@ -19,14 +19,15 @@ import (
 	"testing"
 	"time"
 
+	"example.com/syncperf/game/clientsync"
 	player "example.com/syncperf/game/entities/player"
 	syncsender "example.com/syncperf/game/handler/syncsender"
 	gamescene "example.com/syncperf/game/scene"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
-	"go.mongodb.org/mongo-driver/v2/bson"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
 // The TCP envelope belongs only to this measurement harness. The inner Sync
@@ -52,7 +53,7 @@ type businessTCP struct {
 	//	          ─server.flush_to_receive─▶ received ─harness.client_decode─▶ 解码校验完整帧
 	//
 	// server.completion = requests + flush_to_receive，是这一帧里框架实际处理的时间。requests 是发生器串行
-	// 发出的本 tick 业务请求（AddExp + Moved，每条等回复再发下一条），flush_to_receive 是 Sync flush、
+	// 发出的本 tick 业务请求（AddExp + QueueMove，每条等回复再发下一条），flush_to_receive 是 Sync flush、
 	// 推送与回环 TCP 到读协程读完负载。capture 是夹具记下期望值的耗时。
 	// timing 按 tick 下标预分配，单独用原子指针：写在 flushStart 之后、不取 lane.mu，不改变 flush_ms 的口径。
 	timing []atomic.Pointer[businessTickTiming]
@@ -76,6 +77,7 @@ func (lane *businessTCP) tickTiming(tick int) *businessTickTiming {
 	}
 	return lane.timing[tick].Load()
 }
+
 type businessState struct {
 	Exp   int64
 	Level int32
@@ -121,6 +123,16 @@ func (lane *businessTCP) ActiveSessions(id int64) int {
 	}
 	return 0
 }
+func (lane *businessTCP) CloseSessions(id int64, reason error) int {
+	conn := lane.conns[id]
+	if conn == nil {
+		return 0
+	}
+	lane.fail(reason)
+	_ = conn.Close()
+	return 1
+}
+
 // PushSyncPlayer 是 game-demo 场景需要的 scenePusher：payload 就是 entitysync 帧。
 func (lane *businessTCP) PushSyncPlayer(ctx context.Context, id int64, _ uint32, payload []byte) error {
 	conn := lane.conns[id]
@@ -203,8 +215,8 @@ func (lane *businessTCP) consume(conn net.Conn) {
 					return
 				}
 				versions[update.SubjectID] = update.Version
-				var document bson.M
-				if err := bson.Unmarshal(update.Payload.BytesCopy(), &document); err != nil {
+				document, err := clientsync.DecodeFields(update)
+				if err != nil {
 					lane.fail(err)
 					return
 				}
@@ -375,6 +387,11 @@ func TestSyncBusinessLoad(t *testing.T) {
 				joinReady(t, scene, ctx, p, at)
 			}
 			client := newSceneNest(t, entities)
+			// AOI 移动事实与正式业务一样在 Nest Guard 内登记，经提交门生效。
+			moveName := nest.NewHandlerName("sync_perf_move")
+			client.(*nest.NestMgr).MustRegisterHandlerWithMeta(moveName, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
+				return nil, scene.MoveSpace().QueueMove(es[0], args[0].(spatial.Point))
+			}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
 			sender := syncsender.NewAddExpSender(client)
 			capture := func(tick int) {
 				states := make(map[int64]businessState, len(players))
@@ -395,7 +412,7 @@ func TestSyncBusinessLoad(t *testing.T) {
 				t.Fatalf("session loss before measurement: %d/%d", got, c.Players)
 			}
 			dirty := max(1, (c.Players*c.Dirty+99)/100)
-			// Warm the transactional path, BSON packer and TCP clients before measuring.
+			// Warm the transactional path, PB packer and TCP clients before measuring.
 			for w := 0; w < 10; w++ {
 				for j := 0; j < dirty; j++ {
 					if _, err := sender.MultiSync_AddExp(ctx, players[(w*dirty+j)%c.Players].ID(), world.ID(), 1); err != nil {
@@ -435,7 +452,9 @@ func TestSyncBusinessLoad(t *testing.T) {
 					// cross AOI edges; clustered cases keep the same dense audience.
 					at := positions[i]
 					at.X += int64(tick%5) * 3
-					scene.Moved(ctx, players[i].ID(), at)
+					if _, err := client.Request(ctx, moveName, players[i].ID(), nest.Params{at}); err != nil {
+						t.Fatal(err)
+					}
 				}
 				captureStart := time.Now()
 				capture(tick)

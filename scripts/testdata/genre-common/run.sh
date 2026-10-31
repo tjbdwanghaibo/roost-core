@@ -38,9 +38,17 @@ for filename, typename, fields in [('player','Player','Coins int64 `bson:"coins"
 p=Path('game/entities/game_room/entity.go');text=p.read_text();assert 'category=entity.EntityCategoryOther' in text
 p.write_text(text.replace('category=entity.EntityCategoryOther','category=entity.EntityCategoryWorld'))
 fixtures=Path(repo)/'scripts/testdata'
-for source,target in [(fixtures/'genre-common/robot_main.go.txt','cmd/robot/main.go'),(fixtures/'genre-common/protocol.go.txt','protocol/def/scenario.go'),(fixtures/'genre-common/network.go.txt','game/scenarionet/dispatch.go'),(fixtures/'genre-common/robot.go.txt','loadtest/scenario.go'),(fixtures/'genre-common/network_test.go.txt','game/handler/network_test.go'),(fixtures/genre/'rules.go.txt','game/rules/rules.go'),(fixtures/'genre-common/handlers.go.txt','game/handler/scenario.go'),(fixtures/'genre-common/gameplay_test.go.txt','game/handler/scenario_test.go'),(fixtures/genre/'scenarios_test.go.txt','game/handler/genre_test.go')]:
+for source,target in [(fixtures/'robot-common/snapshot_test.go.txt','game/handler/robot_snapshot_test.go'),(fixtures/'genre-common/robot_main.go.txt','cmd/robot/main.go'),(fixtures/'genre-common/protocol.go.txt','protocol/def/scenario.go'),(fixtures/'genre-common/network.go.txt','game/scenarionet/dispatch.go'),(fixtures/'genre-common/robot.go.txt','loadtest/scenario.go'),(fixtures/'genre-common/network_test.go.txt','game/handler/network_test.go'),(fixtures/genre/'rules.go.txt','game/rules/rules.go'),(fixtures/'genre-common/handlers.go.txt','game/handler/scenario.go'),(fixtures/'genre-common/gameplay_test.go.txt','game/handler/scenario_test.go'),(fixtures/genre/'scenarios_test.go.txt','game/handler/genre_test.go')]:
     p=Path(target);p.parent.mkdir(parents=True,exist_ok=True)
     p.write_text(source.read_text().replace('GENRE_MODULE',module).replace('FIRST_COMMAND','"'+first+'"'))
+if genre in ('turn-pvp','social-sim'):
+    Path('cmd/robot/main.go').write_text((fixtures/'robot-common/main.go.txt').read_text().replace('GENRE_MODULE',module))
+    Path('loadtest/README.md').write_text((fixtures/'genre-common/robot_README.md').read_text())
+    p=Path('game/handler/robot_complete_test.go')
+    p.write_text((fixtures/genre/'robot_complete_test.go.txt').read_text().replace('GENRE_MODULE',module))
+    p=Path('game/handler/network_test.go')
+    text=p.read_text().rstrip()
+    p.write_text(text[:-1]+'\ncompleteScenarioRobot(t,f,server.Addr().String())\n}\n')
 if genre == 'coop-roguelike':
     for source,target in [('robot_main.go.txt','cmd/robot/main.go'),('view_handlers.go.txt','game/handler/coop_view_handlers.go'),('view_protocol.go.txt','protocol/def/coop_view.go'),('view_network.go.txt','game/scenarionet/coop_view.go'),('robot_full.go.txt','loadtest/coop.go'),('robot_full_test.go.txt','game/handler/coop_robot_test.go')]:
         p=Path(target);p.parent.mkdir(parents=True,exist_ok=True)

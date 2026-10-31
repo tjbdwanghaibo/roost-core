@@ -103,7 +103,7 @@ func newScenario(t *testing.T) *scenarioFixture {
 func (f *scenarioFixture) state(t *testing.T) rules.State {
 	t.Helper()
 	var s rules.State
-	if err := json.Unmarshal([]byte(f.room.Dao().GetState()), &s); err != nil {
+	if err := json.Unmarshal([]byte(robotRead(t, f.engine, f.room, func() string { return f.room.Dao().GetState() })), &s); err != nil {
 		t.Fatal(err)
 	}
 	return s

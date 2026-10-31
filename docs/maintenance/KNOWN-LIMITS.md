@@ -4,6 +4,12 @@
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
+## Robot 推广验收（2026-11-01）
+
+13 类网络玩法已扩至现有规则的对局/经营闭环；公共 Robot 增加有界 Full/Delta/Remove 应用延迟观测，见 [Robot](../framework/ROBOT.md)。这些默认玩法仍使用替身鉴权/提交器。通用 game-demo 的真实账号/Gate/PB/strict WAL/Mongo 热点诊断与每个玩法的生产组合不是同一项验收。
+
+本机单 Player + 共享 World、100 请求/s 的 30 秒真实负载出现 Mongo 投影积压：2981 次请求，结束时 1906 条未投影，再排空 30 秒仍剩 314 条；不能写成容量通过或 Gate/Sync 超时。保持同步级别和原失败样本，20/s 对照、1000 玩家/10000 Entity 与少量 Saga 同机混合短测已通过，具体口径见 [当前性能报告](../performance/ROBOT-GATE-20261101.md)。Linux、跨机、客户端设备/引擎、完整进程故障组合仍未验收。
+
 ## 通用 LevelComponent 首版边界
 
 `gameplay/level` 已验证通用阶段／规则、事务回滚、DAO 编解码与正式生成消费者；[Level 手册](../framework/LEVEL-COMPONENT.md)记录接线和准确语义。checkpoint／spawn_wave／settle 示例是能力替身，不提供物理重生、完整多人闯关或永久奖励；Registry 只是宿主能力类型表。该组件尚未验证真实 Mongo/WAL 多进程崩溃恢复，不恢复原生物理世界。状态复制与整状态 mutation 有预算但没有容量承诺，动作账本满额拒绝，长期归档另设计。私有参与者状态、网络增量与 Unity UI 由宿主接入。

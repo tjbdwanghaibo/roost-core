@@ -1,0 +1,49 @@
+package handler
+
+import (
+	bots "GENRE_MODULE/loadtest"
+	"GENRE_MODULE/protocol/pb"
+	"context"
+	"github.com/tjbdwanghaibo/roost-core/robot"
+	"github.com/tjbdwanghaibo/roost-core/robot/runner"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	"testing"
+	"time"
+)
+
+func completeScenarioRobot(t *testing.T, f *scenarioFixture, addr string) {
+	t.Helper()
+	run := func(token string, steps ...bots.Step) {
+		t.Helper()
+		r := bots.Commands(runner.Config{Count: 1, Duration: 5 * time.Second, Transport: transport.Config{Endpoint: addr}}, func(*robot.Context) (*transport.Packet, error) { return transport.AuthPacket(token), nil }, steps)
+		if err := r.Run(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if s := r.Stats(); s.Success != 1 || s.Failure != 0 || s.Canceled != 0 {
+			t.Fatalf("robot: %+v", s)
+		}
+	}
+
+	// Smoke 已完成第一拍，后续双方交替直到胜负；重连重投仍是同一业务命令。
+	for turn := 1; turn < 5; turn++ {
+		actor := turn % 2
+		token := "fixture-owner"
+		if actor == 1 {
+			token = "fixture-peer"
+		}
+		c := f.command(t, actor, "attack")
+		request := pb.ScenarioCommandRequest{RoomID: f.room.ID(), Seq: c.Seq, Revision: c.Revision, Kind: c.Kind}
+		run(token, bots.Step{Request: request, Revision: c.Revision + 1}, bots.Step{Request: request, Revision: c.Revision + 1, Reconnect: true})
+	}
+	s := f.state(t)
+	if !s.Finished || s.Winner != 0 || s.Revision != 5 {
+		t.Fatal("match did not finish with one winner")
+	}
+	c := f.command(t, 0, "attack")
+	request := pb.ScenarioCommandRequest{RoomID: f.room.ID(), Seq: c.Seq, Revision: c.Revision, Kind: c.Kind}
+	run("fixture-owner", bots.Step{Request: request, WantCode: 1})
+	run("fixture-outsider", bots.Step{Request: request, WantCode: 1})
+	if f.state(t).Revision != 5 {
+		t.Fatal("terminal changed")
+	}
+}

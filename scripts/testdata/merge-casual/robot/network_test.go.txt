@@ -1,6 +1,7 @@
 package handler
 
 import (
+	robotdomain "GENRE_MODULE/game/mergecasual"
 	"GENRE_MODULE/game/robotaccess"
 	bots "GENRE_MODULE/loadtest"
 	"GENRE_MODULE/protocol/pb"
@@ -64,13 +65,26 @@ func TestMergeCasualRobotBusiness(t *testing.T) {
 	invalid.Seq++
 	invalid.Kind = "not-a-command"
 	run("owner", []bots.Step{{Request: first}, {Request: first}, {Request: first, Reconnect: true}, {Request: second}, {Request: second}, {Request: invalid, WantCode: 1}})
-	state := f.state(t)
+	state := robotDecode(t, f.engine, f.player, f.player.Dao().GetState, robotdomain.Decode)
 	if len(state.Receipts) != 2 || state.Board[10].Item.Family != 0 || state.Board[1].Item.Level != 2 {
 		t.Fatalf("wrong committed business state: %+v", state)
 	}
-	before := f.player.Dao().GetState()
+	before := robotRead(t, f.engine, f.player, func() string { return f.player.Dao().GetState() })
 	run("outsider", []bots.Step{{Request: first, WantCode: 1}})
-	if f.player.Dao().GetState() != before {
+	if robotRead(t, f.engine, f.player, func() string { return f.player.Dao().GetState() }) != before {
 		t.Fatal("unauthorized command changed authoritative state")
 	}
+
+	// 经营没有全局终局：以一次移动/合成/出售到账作为完整经济周期。
+	sale := second
+	sale.Seq = 3
+	sale.Base = state.Revision
+	sale.Kind = "sell"
+	sale.A = 1
+	gold := state.Gold
+	run("owner", []bots.Step{{Request: sale}, {Request: sale, Reconnect: true}})
+	if s := robotDecode(t, f.engine, f.player, f.player.Dao().GetState, robotdomain.Decode); s.Gold != gold+2 || s.Board[1].Item.Level != 0 {
+		t.Fatal("merge/sale cycle did not settle once")
+	}
+
 }

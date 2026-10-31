@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- Robot 增加有界 SyncProbe，按 Full/Delta/Remove 记录应用延迟、超时、取消、容量拒绝与最慢样本，接入 Runner 和控制面报告。
+- 13 类玩法 Robot 补齐既有业务的对局/经营闭环与结算重试；测试 DAO 快照遵守实体锁，MMORPG 网络测试时钟改为原子推进。
+- 新增真实账号/Gate/PB/心跳/strict WAL/Mongo 热点诊断脚本，保留欠载和一致性证据；不等同于生产容量或进程崩溃恢复。
+- 修复旧 Sync 业务基准已删除的 Moved/缺失 CloseSessions 调用，并改用正式 PB 字段解码；移动事实经 Nest Guard 提交。默认 GOMAXPROCS 改为 0。
+
 ## [v1.35.0] - 2026-11-01
 
 - 真实联合验收：正式 account Redis Stores/NATS RPC 签发并校验会话，C# 与 C++ 经 Gate/PB/Nest/双实体 WAL/Mongo/EntitySync 完成 full/delta/remove/reconnect；验证账号对象重建、WAL 重开、事务重复投影与生成 DAO 冷水合。身份签发器仍为测试 HMAC，未覆盖进程崩溃、第三方登录平台、跨机或容量。

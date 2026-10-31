@@ -1,0 +1,384 @@
+package game
+
+import (
+	"bufio"
+	"context"
+	"example.com/planet/game/handler"
+	syncsender "example.com/planet/game/handler/syncsender"
+	"example.com/planet/game/playeraccess"
+	accessplayer "example.com/planet/internal/access/player"
+	playertcp "example.com/planet/internal/access/player/tcp"
+	"example.com/planet/protocol/msgid"
+	"example.com/planet/protocol/pb"
+	"fmt"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	dataengine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	gatewiring "github.com/tjbdwanghaibo/roost-core/wiring/gate"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"net"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type gateChecker struct {
+	matches func(context.Context, string, gateway.ProcessIdentity) (bool, error)
+}
+
+func (checker gateChecker) Matches(ctx context.Context, role string, sid int32, incarnation string) (bool, error) {
+	return checker.matches(ctx, role, gateway.ProcessIdentity{ServerID: sid, Incarnation: incarnation})
+}
+
+type gateProjection struct {
+	mu      sync.Mutex
+	records map[coredata.TransactionID]coredata.CommitRecord
+	target  dataengine.ProjectionStore
+}
+
+func (store *gateProjection) Project(ctx context.Context, record coredata.CommitRecord) error {
+	if store.target != nil {
+		if err := store.target.Project(ctx, record); err != nil {
+			return err
+		}
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.records[record.ID] = coredata.CloneCommitRecord(record)
+	return nil
+}
+func TestGeneratedGateNestDAOAndWAL(t *testing.T) {
+	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if url == "" {
+		t.Skip("private NATS URL not configured")
+	}
+	real := newRealGateFixture(t)
+	identityID := int64(7001)
+	ticket := "ticket"
+	if real != nil {
+		identityID = real.playerID
+		ticket = real.ticket
+	}
+	player, world := newScenePlayer(t, identityID), newSceneWorld(t)
+	handler.RegisterAddExpNestHandlers()
+	t.Cleanup(nest.ResetHandlersForTest)
+	walDir := t.TempDir()
+	wal, err := nestwal.Open(nestwal.DefaultOptions(walDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &gateProjection{records: make(map[coredata.TransactionID]coredata.CommitRecord)}
+	if real != nil {
+		store.target = real.store
+	}
+	projector, err := dataengine.NewProjector(wal, store, dataengine.DefaultProjectorOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := projector.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	syncTransport := &gatewiring.Transport{SyncMessageID: 501, LockstepMessageID: 502}
+	syncManager, err := entitysync.NewManager(entitysync.ManagerConfig{Mode: entitysync.ModeOnChange, Interval: time.Hour, Transport: syncTransport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = syncManager.Register(player.Sync()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = syncManager.Close(context.Background()) })
+	business := nest.NewEngine(nest.NestOptionWithEntitySync(syncManager), nest.NestOptionWithGetter(sceneGetter{player.ID(): player, world.ID(): world}), nest.NestOptionWithTransactionCommitter(projector), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 8, QueueCap: 65536}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := business.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = business.Shutdown(context.Background()) })
+	registry := playeraccess.NewProtocolRegistry()
+	if err := playeraccess.RegisterProtocol[*pb.AddExpRequest, *pb.AddExpResponse](registry, msgid.MsgAddExp, msgid.MsgAddExp, pb.UnmarshalAddExpRequest, pb.MarshalAddExpResponse, func(ctx *playeraccess.Context, request *pb.AddExpRequest) (*pb.AddExpResponse, error) {
+		if ctx.PlayerID != identityID {
+			return nil, gateway.ErrUnauthenticated
+		}
+		gained, err := syncsender.NewAddExpSender(business).MultiSync_AddExp(ctx.Context(), player.ID(), world.ID(), request.Amount)
+		return &pb.AddExpResponse{LevelsGained: gained}, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	config := gateway.DefaultConfig()
+	config.Namespace = fmt.Sprintf("roost.generated.gate.n%d", time.Now().UnixNano())
+	gateID, gameID := gateway.ProcessIdentity{ServerID: 11, Incarnation: "gate000000000001"}, gateway.ProcessIdentity{ServerID: 22, Incarnation: "game000000000001"}
+	raw := func(role string, identity gateway.ProcessIdentity) fnats.RawClient {
+		client, err := driver.NewClient(fnats.DefaultConfig(url), driver.ClientOptions{ReconnectBufferBytes: -1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(client.Close)
+		prefix, _ := gateway.InboxPrefix(config.Namespace, role, identity)
+		scoped, err := client.ForInbox(prefix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return scoped
+	}
+	gameRaw, gateRaw := raw("game", gameID), raw("gate", gateID)
+	var activeSession atomic.Uint64
+	var auth gateway.Authenticator = gateway.AuthenticatorFunc(func(_ context.Context, ticket string, _ net.Addr) (gateway.Principal, error) {
+		if ticket != "ticket" {
+			return gateway.Principal{}, gateway.ErrUnauthenticated
+		}
+		return gateway.Principal{PlayerID: 7001, ServerID: 22, SessionID: "generated"}, nil
+	})
+	if real != nil {
+		auth = real.auth
+	}
+	matches := func(_ context.Context, role string, id gateway.ProcessIdentity) (bool, error) {
+		return (role == "game" && id == gameID) || (role == "gate" && id == gateID), nil
+	}
+	cfg := viper.New()
+	cfg.Set("player.tcp.enabled", false)
+	capabilities := app.NewRegistry(cfg)
+	for _, capability := range []app.Capability{{Name: app.ModSingletonIncarnation, Value: app.SingletonIncarnation{Sid: gameID.ServerID, Token: gameID.Incarnation}}, {Name: app.ModSingletonIdentityChecker, Value: gateChecker{matches}}, {Name: mods.ModNatsRaw, Value: gameRaw}, {Name: accessplayer.Name, Value: &accessplayer.Runtime{Protocols: registry}}} {
+		if err := capabilities.Register(capability.Name, capability.Value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	options := gatewiring.DefaultOptions()
+	options.Config = config
+	options.Authenticator = auth
+	options.Ready = func() bool { return true }
+	options.OnActive = func(binding gateway.Binding, id uint64) error {
+		activeSession.Store(id)
+		if err := syncManager.OpenSession(entitysync.SessionID(id)); err != nil {
+			return err
+		}
+		return syncManager.Subscribe(entitysync.SessionID(id), player.ID(), entity.SyncProfile{})
+	}
+	options.OnClosed = func(_ gateway.Binding, id uint64) { syncManager.CloseSession(entitysync.SessionID(id)) }
+	ingressMod := playertcp.NewIngressMod(options)
+	if err := ingressMod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := ingressMod.Provide(capabilities); err != nil {
+		t.Fatal(err)
+	}
+	ingress, ok := app.Lookup[*gateway.GameIngress](capabilities, gatewiring.GameIngressName)
+	if !ok {
+		t.Fatal("generated Game ingress not provided")
+	}
+	if _, ok := app.Lookup[*playertcp.Runtime](capabilities, playertcp.Name); !ok {
+		t.Fatal("generated business runtime missing")
+	}
+
+	syncTransport.Game = ingress
+	if err = syncManager.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err = ingressMod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	gate, err := gateway.NewGate(config, gateID, gateway.GateDependencies{Client: gateRaw, QueueFactory: gatewiring.AsyncQueueFactory, Ready: func() bool { return true }, Matches: matches, ResolveGame: func(context.Context, int32) (gateway.ProcessIdentity, error) { return gameID, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = gate.Start(); err != nil {
+		t.Fatal(err)
+	}
+	tcp := gateway.DefaultTCPConfig()
+	tcp.Addr = "127.0.0.1:0"
+	tcp.MaxPayloadBytes = uint32(config.MaxPayloadBytes)
+	server, err := gateway.NewTCPServer(tcp, gate.Forward, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = server.ConnectHandshake(gate); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, client := range []fnats.RawClient{gameRaw, gateRaw} {
+		if err := client.FlushContext(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := gate.Stop(ctx); err != nil {
+			t.Error(err)
+		}
+		if err := server.Stop(ctx); err != nil {
+			t.Error(err)
+		}
+		if err := ingressMod.StopWithContext(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	if os.Getenv("ROOST_GATE_LOAD_SECONDS") != "" {
+		if real == nil {
+			t.Fatal("load requires real account and storage")
+		}
+		runGateLoad(t, server.Addr().String(), ticket, player, world, business, syncManager, &activeSession, projector, wal, store, real, walDir)
+		return
+	}
+	if executable := os.Getenv("ROOST_GATE_DOTNET_DLL"); executable != "" || os.Getenv("ROOST_GATE_NATIVE_EXE") != "" {
+		childCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		defer stop()
+		command := exec.CommandContext(childCtx, "dotnet", executable, fmt.Sprint(server.Addr().(*net.TCPAddr).Port))
+		if native := os.Getenv("ROOST_GATE_NATIVE_EXE"); native != "" {
+			command = exec.CommandContext(childCtx, native, fmt.Sprint(server.Addr().(*net.TCPAddr).Port), fmt.Sprint(msgid.MsgAddExp))
+		}
+		command.Env = append(os.Environ(), "ROOST_GATE_TICKET="+ticket)
+		stdout, err := command.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stderr strings.Builder
+		command.Stderr = &stderr
+		if err = command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		scanner := bufio.NewScanner(stdout)
+		var removalErr error
+		passed := false
+		for scanner.Scan() {
+			line := scanner.Text()
+			t.Log(line)
+			if line == "READY_REMOVE" {
+				removalErr = syncManager.Unsubscribe(entitysync.SessionID(activeSession.Load()), player.ID())
+			}
+			if strings.HasPrefix(line, "PASS C# Gate/") || strings.HasPrefix(line, "PASS C++ Gate/") {
+				passed = true
+			}
+		}
+		waitErr := command.Wait()
+		if scanner.Err() != nil || waitErr != nil || removalErr != nil || !passed {
+			t.Fatalf("C# chain: scan=%v process=%v remove=%v passed=%v stderr=%s", scanner.Err(), waitErr, removalErr, passed, stderr.String())
+		}
+	} else {
+		conn, err := net.DialTimeout("tcp", server.Addr().String(), time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		if err = wire.Write(conn, []*wire.Packet{{Seq: 1, Payload: []byte(ticket)}}, 8192); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = wire.Read(conn, 8192); err != nil {
+			t.Fatal(err)
+		}
+		// Interval 为一小时，下面的增量必须由 handler 完成后的 on_change 唤醒。
+		snapshot, err := wire.Read(conn, config.MaxPayloadBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (wire.Header{Flags: snapshot.Flags}).Kind() != wire.PayloadSync || snapshot.MsgID != 501 {
+			t.Fatalf("initial Sync packet=%+v", snapshot)
+		}
+		full, err := entitysync.DecodeFrame(snapshot.Payload, frame.DefaultLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(full.Objects) != 1 || len(full.Objects[0].Components) != 1 {
+			t.Fatalf("snapshot=%+v", full)
+		}
+		initial, err := entitysync.DecodeSubjectUpdate(full.Objects[0].Components[0].Data, 0)
+		if err != nil || !initial.Full || initial.SubjectID != player.ID() {
+			t.Fatalf("initial update=%+v error=%v", initial, err)
+		}
+		data, err := pb.MarshalAddExpRequest(&pb.AddExpRequest{Amount: 250})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = wire.Write(conn, []*wire.Packet{{MsgID: msgid.MsgAddExp, Seq: 2, Payload: data}}, config.MaxPayloadBytes); err != nil {
+			t.Fatal(err)
+		}
+		var gotResponse, gotDelta bool
+		for range 2 {
+			response, err := wire.Read(conn, config.MaxPayloadBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (wire.Header{Flags: response.Flags}).Kind() == wire.PayloadSync {
+				delta, err := entitysync.DecodeFrame(response.Payload, frame.DefaultLimits())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if delta.Epoch != full.Epoch || delta.Tick <= full.Tick || len(delta.Objects) != 1 || len(delta.Objects[0].Components) != 1 {
+					t.Fatalf("delta frame=%+v", delta)
+				}
+				update, err := entitysync.DecodeSubjectUpdate(delta.Objects[0].Components[0].Data, 0)
+				if err != nil || update.Full || update.SubjectID != player.ID() || update.BaseVersion != initial.Version || update.Version <= initial.Version || update.Payload.Len() == 0 {
+					t.Fatalf("delta=%+v err=%v", update, err)
+				}
+				gotDelta = true
+			} else {
+				decoded, err := pb.UnmarshalAddExpResponse(response.Payload)
+				if err != nil || decoded.Code != 0 || decoded.LevelsGained == 0 || response.MsgID != msgid.MsgAddExp || response.Seq != 2 {
+					t.Fatalf("response=%+v packet=%+v err=%v", decoded, response, err)
+				}
+				gotResponse = true
+			}
+		}
+		if !gotResponse || !gotDelta {
+			t.Fatalf("response=%v delta=%v", gotResponse, gotDelta)
+		}
+	}
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer flushCancel()
+	if err = projector.Flush(flushCtx); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	records := make([]coredata.CommitRecord, 0, len(store.records))
+	for _, record := range store.records {
+		records = append(records, record)
+	}
+	store.mu.Unlock()
+	if len(records) != 1 {
+		t.Fatalf("unique transactions=%d", len(records))
+	}
+	for _, record := range records {
+		ids := make(map[int64]bool)
+		for _, mutation := range record.Mutations {
+			ids[mutation.Key.ID] = true
+		}
+		if len(ids) != 2 {
+			t.Fatalf("two-entity transaction=%+v", record)
+		}
+	}
+	if stats := wal.Stats(); stats.Appended != 1 {
+		t.Fatalf("WAL=%+v", stats)
+	}
+	if real != nil {
+		if err := business.Shutdown(flushCtx); err != nil {
+			t.Fatal(err)
+		}
+		if err := projector.Close(flushCtx); err != nil {
+			t.Fatal(err)
+		}
+		real.verifyRecovery(t, walDir, records[0], player, world)
+	}
+}
