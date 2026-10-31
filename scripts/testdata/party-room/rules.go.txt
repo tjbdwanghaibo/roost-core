@@ -1,0 +1,133 @@
+// Package partyroom 是“抢星”派对房间的教学业务：2～8 人短局，回合里服务端在随机时刻放出一颗星，
+// 第一个在星星出现后抢到的人得分，抢跑记犯规、犯规满额淘汰；回合数打完分数领先者胜，平分进入加时，
+// 开局后到硬期限仍未分出胜负强制结算。玩法规则、数值与房间码都不属于 core。
+//
+// 本包只有纯规则（不 import 框架）：房间状态是一个按值读写的 State，所有推进都以“业务时间戳”为输入，
+// 所以心跳是否掉拍、隔多久跑一次都不影响结果（Advance 按事件时间顺序结算，见 state.go）。
+package partyroom
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
+)
+
+// 座位上下限：派对房间 2～8 人。上限同时是同步 Group 的成员上限（handler 的 PartyRoomSync）。
+const (
+	MinSeats = 2
+	MaxSeats = 8
+)
+
+var (
+	// ErrRule 是身份、阶段、序号或数值不合法；被拒的命令不改任何状态（handler 回滚）。
+	ErrRule = errors.New("party room: invalid identity, phase, sequence or value")
+	// ErrRoomFull 是房间码房间人满。
+	ErrRoomFull = errors.New("party room: room is full")
+	// ErrNotHost 是只有房主能做的操作（开始）被别人发起。
+	ErrNotHost = errors.New("party room: only the host may do this")
+	// ErrStaleInput 是比最后一条已处理输入更旧的序号：既不重放也不重做。
+	ErrStaleInput = errors.New("party room: input sequence already superseded")
+	// ErrStaleConnection 是旧连接（旧票号 / 旧连接代）发来的事件，不能影响新连接。
+	ErrStaleConnection = errors.New("party room: connection is not current")
+	// ErrClosed 是房间阶段或座位状态不再接受这个操作（已开局不能进、已离开不能重连、已结算不能输入）。
+	ErrClosed = errors.New("party room: room or seat no longer accepts this")
+)
+
+// Rules 是一局的规则快照：开房时按值冻结进房间状态，之后的配置热更不影响进行中的局。
+type Rules struct {
+	// Capacity 是房间码房间的人数上限；匹配房间的人数由成局名单决定（同样不超过 MaxSeats）。
+	Capacity int `json:"capacity"`
+	// MinPlayers 是房主开局所需的最少人数。
+	MinPlayers int `json:"min_players"`
+	// Rounds 是常规回合数；打完仍平分进入加时，每个加时回合同样长。
+	Rounds      int   `json:"rounds"`
+	RoundMillis int64 `json:"round_millis"`
+	// StarMinMillis..StarMaxMillis 是星星在回合开始后出现的时间窗，具体时刻由服务端种子决定、不下发给客户端。
+	StarMinMillis int64 `json:"star_min_millis"`
+	StarMaxMillis int64 `json:"star_max_millis"`
+	// GraceMillis 是开局后断线（含成局后迟迟不进房）的宽限：宽限内重连回到原座位，超过按掉线出局。
+	GraceMillis int64 `json:"grace_millis"`
+	// MatchMillis 是开局到强制结算的硬期限，由持久定时器兜底（心跳不跑时也会结算）。
+	MatchMillis int64 `json:"match_millis"`
+	// FoulLimit 是犯规淘汰线。
+	FoulLimit int `json:"foul_limit"`
+	// WinReward / PlayReward 是胜者与其他完赛者的金币奖励；中途离开、掉线出局没有奖励。
+	WinReward  int64 `json:"win_reward"`
+	PlayReward int64 `json:"play_reward"`
+}
+
+// DemoRules 是夹具使用的规则：8 人房、三回合各 3 秒、宽限 5 秒、硬期限 30 秒。
+func DemoRules() Rules {
+	return Rules{
+		Capacity: MaxSeats, MinPlayers: 2, Rounds: 3, RoundMillis: 3000,
+		StarMinMillis: 500, StarMaxMillis: 1500, GraceMillis: 5000, MatchMillis: 30000,
+		FoulLimit: 2, WinReward: 50, PlayReward: 10,
+	}
+}
+
+// Validate 在开房时执行一次；不合法的规则不进房间状态。
+func (r Rules) Validate() error {
+	switch {
+	case r.Capacity < MinSeats || r.Capacity > MaxSeats:
+		return fmt.Errorf("%w: capacity %d outside %d..%d", ErrRule, r.Capacity, MinSeats, MaxSeats)
+	case r.MinPlayers < MinSeats || r.MinPlayers > r.Capacity:
+		return fmt.Errorf("%w: min players %d outside %d..%d", ErrRule, r.MinPlayers, MinSeats, r.Capacity)
+	case r.Rounds < 1 || r.Rounds > 20:
+		return fmt.Errorf("%w: rounds %d outside 1..20", ErrRule, r.Rounds)
+	case r.RoundMillis < 1000 || r.RoundMillis > 60000:
+		return fmt.Errorf("%w: round %dms outside 1s..60s", ErrRule, r.RoundMillis)
+	case r.StarMinMillis < 0 || r.StarMaxMillis < r.StarMinMillis || r.StarMaxMillis >= r.RoundMillis:
+		return fmt.Errorf("%w: star window %d..%dms must sit inside the round", ErrRule, r.StarMinMillis, r.StarMaxMillis)
+	case r.GraceMillis < 1000 || r.GraceMillis > 120000:
+		return fmt.Errorf("%w: grace %dms outside 1s..120s", ErrRule, r.GraceMillis)
+	case r.MatchMillis < int64(r.Rounds)*r.RoundMillis || r.MatchMillis > 30*60000:
+		return fmt.Errorf("%w: match deadline %dms shorter than the regular rounds or longer than 30m", ErrRule, r.MatchMillis)
+	case r.FoulLimit < 1 || r.WinReward < 0 || r.PlayReward < 0 || r.WinReward > 1000 || r.PlayReward > r.WinReward:
+		return fmt.Errorf("%w: foul limit or rewards out of range", ErrRule)
+	}
+	return nil
+}
+
+// EncodeCode 把房间实体的唯一号写成房间码（36 进制大写）。教学用：码就是 ID，可被枚举；
+// 正式工程用 directory 之类的短码登记（码 → 房间 ID，带过期），不要把实体 ID 直接给玩家。
+func EncodeCode(unique int64) string { return strings.ToUpper(strconv.FormatInt(unique, 36)) }
+
+// DecodeCode 是 EncodeCode 的逆；非法码返回 ErrRule。
+func DecodeCode(code string) (int64, error) {
+	if code == "" || len(code) > 12 {
+		return 0, ErrRule
+	}
+	unique, err := strconv.ParseInt(strings.ToLower(code), 36, 64)
+	if err != nil || unique <= 0 {
+		return 0, ErrRule
+	}
+	return unique, nil
+}
+
+func encode(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}
+
+// strictJSON 拒绝未知字段与尾随内容：房间状态的编码只有本包写，读到别的就是损坏。
+func strictJSON(s string, v any) error {
+	if s == "" || len(s) > 64*1024 {
+		return ErrRule
+	}
+	d := json.NewDecoder(bytes.NewBufferString(s))
+	d.DisallowUnknownFields()
+	if err := d.Decode(v); err != nil {
+		return err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return ErrRule
+	}
+	return nil
+}

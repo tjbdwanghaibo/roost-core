@@ -1,0 +1,235 @@
+package handler
+
+import (
+	"crypto/rand"
+	"encoding/binary"
+	"hash/fnv"
+
+	db "example.com/party-room-practice/db"
+	roomentity "example.com/party-room-practice/game/entities/party_room"
+	party "example.com/party-room-practice/game/partyroom"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// 派对房间的 Nest handler。业务时间一律是生成分发包装从 fctx 填的 nowUnixMilli（这条消息冻结的业务时间），
+// 调用方与 Sender 都不传时间。每个改房间的 handler 都先 Advance(now)：判定只看时间戳，与心跳跑没跑无关。
+
+type IPartyRoomEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PartyRoomDao
+	SaveRoom(party.State, int64) error
+	BeatActive() bool
+}
+
+type IPartyPlayerEntity interface {
+	entity.IThreadSafeEntity
+	Dao() *db.PlayerDao
+}
+
+// 金币上限：奖励写入前检查，超出拒绝整笔领奖（不截断）。
+const partyCoinCap int64 = 1_000_000
+
+// PartyRoomIDForMatch 把成局 ID 映射成房间实体 ID：同一 Match 重放得到同一房间，开房 handler 用房间里记下的
+// Match 识别重放、拒绝碰撞。教学用的确定性映射；正式工程用目录实体或 directory 登记 Match → 房间（见 MOBA 的
+// BattleDirectory），不靠散列。
+func PartyRoomIDForMatch(match string) (int64, error) {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(match))
+	unique := int64(h.Sum64() & entity.UniqueIDMask)
+	if unique == 0 {
+		unique = 1
+	}
+	return entity.BuildEntityID(unique, roomentity.EntityKindPartyRoom)
+}
+
+// newSeed 是服务端私有随机种子（决定星星出现时刻），只进持久 State，不进 Board。
+func newSeed() uint64 {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return binary.LittleEndian.Uint64(b[:])
+}
+
+func loadRoom(room IPartyRoomEntity, now int64) (party.State, error) {
+	s, err := party.Decode(room.Dao().GetState())
+	if err != nil {
+		return party.State{}, err
+	}
+	s.Advance(now)
+	return s, nil
+}
+
+// 玩家建档必须经过一次正式事务；创建内存实体不代表已持久化。
+//
+//roost:nest rollback=undo durability=strict
+func handlerPartyPlayerInit(p IPartyPlayerEntity) error {
+	p.Dao().SetInitialized(true)
+	return nil
+}
+
+// 成局开房：名单与成局 ID 来自匹配服务的 Match，规则来自服务端配置快照。同一 Match 重放返回原房间、不重置；
+// 同一房间 ID 上出现别的 Match（散列碰撞或伪造）拒绝，不合并名单。
+//
+//roost:nest rollback=undo durability=strict
+func handlerPartyOpenMatch(room IPartyRoomEntity, match string, players []int64, rules party.Rules, nowUnixMilli int64) (party.Board, error) {
+	if room.Dao().GetState() != "" {
+		s, err := loadRoom(room, nowUnixMilli)
+		if err != nil {
+			return party.Board{}, err
+		}
+		if s.Match != match || len(s.Seats) != len(players) {
+			return party.Board{}, party.ErrRule
+		}
+		for i, id := range players {
+			if s.Seats[i].PlayerID != id {
+				return party.Board{}, party.ErrRule
+			}
+		}
+		return s.BoardAt(nowUnixMilli), nil
+	}
+	s, err := party.NewMatchRoom(match, players, rules, newSeed(), nowUnixMilli)
+	if err != nil {
+		return party.Board{}, err
+	}
+	return s.BoardAt(nowUnixMilli), room.SaveRoom(s, nowUnixMilli)
+}
+
+// 开房间码房间：房间 ID 由服务端分配给开房者，码就是房间唯一号的编码（教学用，见 partyroom.EncodeCode）。
+// 重放返回同一个码、不重置房间。
+//
+//roost:nest rollback=undo durability=strict
+func handlerPartyOpenCode(room IPartyRoomEntity, host int64, rules party.Rules, nowUnixMilli int64) (string, error) {
+	code := party.EncodeCode(entity.GetUniqueIDFromEntityID(room.ID()))
+	if room.Dao().GetState() != "" {
+		s, err := loadRoom(room, nowUnixMilli)
+		if err != nil {
+			return "", err
+		}
+		if s.Code != code {
+			return "", party.ErrRule
+		}
+		return code, nil
+	}
+	s, err := party.NewCodeRoom(code, host, rules, newSeed())
+	if err != nil {
+		return "", err
+	}
+	return code, room.SaveRoom(s, nowUnixMilli)
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerPartyJoin(room IPartyRoomEntity, player int64, nowUnixMilli int64) error {
+	s, err := loadRoom(room, nowUnixMilli)
+	if err != nil {
+		return err
+	}
+	if _, err := s.Join(player); err != nil {
+		return err
+	}
+	return room.SaveRoom(s, nowUnixMilli)
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerPartyStart(room IPartyRoomEntity, player int64, nowUnixMilli int64) error {
+	s, err := loadRoom(room, nowUnixMilli)
+	if err != nil {
+		return err
+	}
+	if err := s.Start(player, nowUnixMilli); err != nil {
+		return err
+	}
+	return room.SaveRoom(s, nowUnixMilli)
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerPartyLeave(room IPartyRoomEntity, player int64, nowUnixMilli int64) error {
+	s, err := loadRoom(room, nowUnixMilli)
+	if err != nil {
+		return err
+	}
+	if _, err := s.Leave(player, nowUnixMilli); err != nil {
+		return err
+	}
+	return room.SaveRoom(s, nowUnixMilli)
+}
+
+// 连接事件由接入层在鉴权后发来（ticket 是接入层单调分配的票号）；返回新的连接代，客户端输入要带上它。
+//
+//roost:nest rollback=undo durability=strict
+func handlerPartyConnect(room IPartyRoomEntity, player int64, ticket uint64, connected bool, nowUnixMilli int64) (uint64, error) {
+	s, err := loadRoom(room, nowUnixMilli)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.Connect(player, ticket, connected, nowUnixMilli); err != nil {
+		return 0, err
+	}
+	return s.Seats[s.Index(player)].Epoch, room.SaveRoom(s, nowUnixMilli)
+}
+
+// 玩家输入：strict，回执随房间状态一起落盘，重投返回同一回执。
+//
+//roost:nest rollback=undo durability=strict
+func handlerPartyInput(room IPartyRoomEntity, player int64, in party.Input, nowUnixMilli int64) (party.Receipt, error) {
+	s, err := loadRoom(room, nowUnixMilli)
+	if err != nil {
+		return party.Receipt{}, err
+	}
+	receipt, _, err := s.Apply(player, in, nowUnixMilli)
+	if err != nil {
+		return party.Receipt{}, err
+	}
+	return receipt, room.SaveRoom(s, nowUnixMilli)
+}
+
+// 只读视图：在副本上推进到 now，不写 DAO（memory 级，只读）。只有房间里的人能看。
+//
+//roost:nest rollback=undo durability=memory
+func handlerPartyView(room IPartyRoomEntity, player int64, nowUnixMilli int64) (party.Board, error) {
+	s, err := loadRoom(room, nowUnixMilli)
+	if err != nil {
+		return party.Board{}, err
+	}
+	if s.Index(player) < 0 {
+		return party.Board{}, party.ErrRule
+	}
+	return s.BoardAt(nowUnixMilli), nil
+}
+
+// 结算领奖：Player 金币与房间 Claimed 在同一个 strict 事务里；奖励只由服务端终局推导，重复领返回同一数额。
+// Player 静态归属；本地同库示例用 MultiSync，跨 sid 发奖另接 Saga / effect，不伪装成本地事务。
+//
+//roost:nest rollback=undo durability=strict
+func handlerPartyClaim(p IPartyPlayerEntity, room IPartyRoomEntity, nowUnixMilli int64) (int64, error) {
+	s, err := loadRoom(room, nowUnixMilli)
+	if err != nil {
+		return 0, err
+	}
+	if !p.Dao().GetInitialized() {
+		return 0, party.ErrRule
+	}
+	reward, changed, err := s.Claim(p.ID())
+	if err != nil || !changed {
+		return reward, err
+	}
+	if p.Dao().GetCoins() > partyCoinCap-reward {
+		return 0, party.ErrRule
+	}
+	p.Dao().SetCoins(p.Dao().GetCoins() + reward)
+	p.Dao().SetMatches(p.Dao().GetMatches() + 1)
+	return reward, room.SaveRoom(s, nowUnixMilli)
+}
+
+// 会话资源归还（session.Releaser 至少一次调用）：返回房间是否已关闭（全部座位释放）。奖励没写进 Player 之前拒绝，
+// Releaser 失败由 session 重试，房间不会在发奖前关闭。
+//
+//roost:nest rollback=undo durability=strict
+func handlerPartyRelease(room IPartyRoomEntity, player int64, nowUnixMilli int64) (bool, error) {
+	s, err := loadRoom(room, nowUnixMilli)
+	if err != nil {
+		return false, err
+	}
+	if _, err := s.Release(player); err != nil {
+		return false, err
+	}
+	return s.Phase == party.PhaseClosed, room.SaveRoom(s, nowUnixMilli)
+}

@@ -396,7 +396,7 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 
 ## 游戏接入验收
 
-九份接入手册的“第二部分 验收”是各自验收范围的完整说明（场景清单、证明与不证明、崩溃点、计数核对）。**发版门禁**（2026-10-31 起）：九个脚本的缺省模式（离线、替身提交器）由 `scripts/pretag.sh` 每次发版并行跑一遍（并发数 `ROOST_PRETAG_GENRE_JOBS`，缺省 4；本机 macOS 10 核实测：空闲时 45～60 秒，pretag 全程里、机器另有负载（load 7～8）时 125 秒），缺省模式同时把真实模式的恢复夹具复制进生成工程并 `go vet`（只编译不运行）；根包 `TestGeneratedScriptsAreInPretag` 要求每个 `scripts/test-*-generated.sh` 都在 pretag 里或登记了豁免原因（此前九个脚本不在任何门禁里，v1.33.0 上 card-rpg / mmorpg / merge-casual 三个夹具因 D22-1 改了 Tick 签名编译失败而无人发现）。**不在门禁里的**：真实模式（`ROOST_<玩法>_REAL=1` 需要隔离 Mongo 等，仍在改 `game` 模板、`add dao` / `add entity` / `add timer` / `add attribute`、多实体 Sender、Nest 生成或 Lockstep 时手动跑；入口登记在根包 `integration_coverage_test.go`）；守卫只查 pretag 调用了脚本，场景是否真的执行由各脚本自己的通过数断言负责。夹具里的数值都是业务样例，玩法规则缺少默认实现不算框架缺陷。
+十份接入手册的“第二部分 验收”是各自验收范围的完整说明（场景清单、证明与不证明、崩溃点、计数核对）。**发版门禁**（2026-10-31 起）：十个脚本的缺省模式（离线、替身提交器）由 `scripts/pretag.sh` 每次发版并行跑一遍（并发数 `ROOST_PRETAG_GENRE_JOBS`，缺省 4；本机 macOS 10 核实测：空闲时 45～60 秒，pretag 全程里、机器另有负载（load 7～8）时 125 秒），缺省模式同时把真实模式的恢复夹具复制进生成工程并 `go vet`（只编译不运行）；根包 `TestGeneratedScriptsAreInPretag` 要求每个 `scripts/test-*-generated.sh` 都在 pretag 里或登记了豁免原因（此前九个脚本不在任何门禁里，v1.33.0 上 card-rpg / mmorpg / merge-casual 三个夹具因 D22-1 改了 Tick 签名编译失败而无人发现）。**不在门禁里的**：真实模式（`ROOST_<玩法>_REAL=1` 需要隔离 Mongo 等，仍在改 `game` 模板、`add dao` / `add entity` / `add timer` / `add attribute`、多实体 Sender、Nest 生成或 Lockstep 时手动跑；入口登记在根包 `integration_coverage_test.go`）；守卫只查 pretag 调用了脚本，场景是否真的执行由各脚本自己的通过数断言负责。夹具里的数值都是业务样例，玩法规则缺少默认实现不算框架缺陷。
 
 | 游戏 | 入口脚本 / 真实模式变量 | 证明什么 | 不证明什么 | 手册 |
 | --- | --- | --- | --- | --- |
@@ -409,6 +409,9 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 | 合成休闲 | `scripts/test-merge-casual-generated.sh`，`ROOST_MERGE_CASUAL_REAL=1` | 15 个合成 / 离线批次 / 广告组合；SIGKILL 后恢复，过期挑战只判负一次、下一期限按时投递 | 提交在途崩溃、真实广告平台与登录票分配、多进程与容量 | [第二部分](../framework/MERGE-CASUAL-INTEGRATION.md#第二部分验收) |
 | 放置模拟 | `scripts/test-idle-sim-generated.sh`，`ROOST_IDLE_SIM_REAL=1` | 12 个生产队列 / 离线收益组合；SIGKILL 后恢复，补触发只积分到原窗口、下一秒刷新按时投递 | 提交在途崩溃、真实客户端 / 支付、跨服市场、多进程与容量 | [第二部分](../framework/IDLE-SIM-INTEGRATION.md#第二部分验收) |
 | 自走棋 | `scripts/test-auto-chess-generated.sh`，`ROOST_AUTO_CHESS_REAL=1` | 12 个卡池 / 阶段 / 领奖组合；冻结战斗后 SIGKILL 恢复，循环只补一个阶段并按期推进到终局 | 提交在途崩溃、八个网络客户端、跨 sid 发奖、多进程与容量 | [第二部分](../framework/AUTO-CHESS-INTEGRATION.md#第二部分验收) |
+| 实时派对房间 | `scripts/test-party-room-generated.sh`，`ROOST_PARTY_ROOM_REAL=1` | 12 个成局 / 进房 / 心跳回合 / 组同步 / 去重 / 重连 / 结算组合（心跳跑真实驱动循环，Group 同步经正式 Receiver 解码）；局内 SIGKILL 后冷加载、心跳按持久阶段重启并结算、发奖一次、删档 | 提交在途崩溃、Entity Sync 经真实接入层与慢消费者、match / session 的 Redis 存储与 RPC、房间跨机接管、房间数与推送带宽容量 | [第二部分](../framework/PARTY-ROOM-INTEGRATION.md#第二部分验收) |
+
+- **房间内同步（`policy.Group`）没有生成器 / 装配入口，与 self_sync 同用一个 Manager 尚未确认**（2026-10-31，派对房间纵切发现）：`policy.Group` 目前只有包内测试与 `scripts/testdata/party-room` 在用，`roost add` 与 `wiring` 都没有房间同步的入口，派对房间纵切自建 `entitysync.Manager` 并作为 Nest 的 `EntitySync` 观察者。Nest 只接受一个观察者（`NestOptionWithEntitySync`），生成工程打开 `access.player.self_sync` 时这个位置与 `EntitySyncSetup.Attach` 都已被 `wiring/selfsync` 占用；房间 Group 能否挂到同一个 Manager、两路同步在同一条连接上怎样区分（消息号、epoch）**尚未确认**，没有用例。现状与写法见 [PARTY-ROOM §8](../framework/PARTY-ROOM-INTEGRATION.md#8-框架没有什么)。
 
 ## 待补测（v1.31 发版前）
 

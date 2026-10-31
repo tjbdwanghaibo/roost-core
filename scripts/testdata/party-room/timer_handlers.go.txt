@@ -1,0 +1,38 @@
+package party_room
+
+import (
+	"time"
+
+	party "example.com/party-room-practice/game/partyroom"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
+)
+
+// 这个文件归业务：roost add timer 只在缺失时创建，project sync 不改写。类型号随节点存进 DAO，发布后不要改号。
+const TimerMatchDeadline int32 = 1
+
+func (component *TimerComponent) registerTimerHandlers(handlers *entitytimer.Handlers) {
+	handlers.Register(TimerMatchDeadline, component.onMatchDeadline)
+}
+
+// onMatchDeadline 是硬期限：到点时按 fire.Now 推进（Advance 会在期限时刻按 timeout 结算），之后停心跳、不再登记。
+// 不是本房间当前登记的节点（被换掉的旧节点）直接结束。回调不能返回错误，状态损坏时 panic 让本次事务回滚。
+func (component *TimerComponent) onMatchDeadline(fire entitytimer.Fire) time.Duration {
+	dao := component.owner.Dao()
+	if dao.GetWakeTimer() != fire.ID {
+		return 0
+	}
+	s, err := party.Decode(dao.GetState())
+	if err != nil {
+		panic(err)
+	}
+	if s.Deadline != fire.Param1 || s.Deadline != fire.Deadline.UnixMilli() {
+		panic(party.ErrRule)
+	}
+	dao.SetWakeTimer(0) // 本节点随回调返回 0 结束；先清登记，SaveRoom 不再去删它
+	now := fire.Now.UnixMilli()
+	s.Advance(now)
+	if err := component.owner.SaveRoom(s, now); err != nil {
+		panic(err)
+	}
+	return 0
+}

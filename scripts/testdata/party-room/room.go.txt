@@ -1,0 +1,64 @@
+package party_room
+
+import (
+	"errors"
+	"time"
+
+	party "example.com/party-room-practice/game/partyroom"
+)
+
+// 房间的两个驱动：
+//   - 回合心跳（BeatRound，100ms 档）：在线推进回合、放出星星、判掉线，把公开记分板写进 Board（nopersist,sync），
+//     由 Group 同步推给房间全体成员。心跳不持久：加载后按持久阶段重新启动（heartbeat_beats.go）。
+//   - 硬期限定时器（TimerMatchDeadline，持久）：开局时登记在 State.Deadline；心跳不在跑（实体刚冷加载、心跳驱动
+//     停摆、进程卡住）时也会到点加载实体并强制结算。两条路径都调用同一个 State.Advance，谁先到谁结算，结果相同。
+const (
+	BeatRound = "round"
+	// RoundBeatPeriod 是房间逻辑帧的档位：派对小游戏的判定只看时间戳，100ms 只决定“星星出现、回合结束”被推送的
+	// 及时程度。框架心跳最短 50ms（20Hz），更高频的服务端权威模拟不适合用心跳做。
+	RoundBeatPeriod = 100 * time.Millisecond
+)
+
+var errRoomDrivers = errors.New("party room: heartbeat or timer could not be armed")
+
+// SaveRoom 是房间状态唯一的写入口（Nest handler、心跳回调、定时器回调共用），必须在实体锁与事务内调用：
+// 写回持久 State 与公开 Board，并让两个驱动与阶段一致——playing 时心跳在跳、硬期限定时器在登记，其余阶段都停。
+// 事务回滚时 DAO、心跳启停与定时器增删一起作废。
+func (room *PartyRoom) SaveRoom(s party.State, now int64) error {
+	dao := room.Dao()
+	if encoded := s.Encode(); dao.GetState() != encoded {
+		dao.SetState(encoded)
+	}
+	if board := s.BoardAt(now).Encode(); dao.GetBoard() != board {
+		dao.SetBoard(board)
+	}
+	playing := s.Phase == party.PhasePlaying
+	if id := dao.GetWakeTimer(); id != 0 && !playing {
+		room.TimerComp().RemoveTimer(id)
+		dao.SetWakeTimer(0)
+	}
+	if playing && dao.GetWakeTimer() == 0 {
+		id := room.TimerComp().NewTimerAt(time.UnixMilli(s.Deadline), TimerMatchDeadline, s.Deadline, 0, nil)
+		if id == 0 {
+			return errRoomDrivers
+		}
+		dao.SetWakeTimer(id)
+	}
+	beat := room.HeartbeatComp().Beat(BeatRound)
+	if beat == nil {
+		return errRoomDrivers
+	}
+	switch {
+	case playing && !beat.Active():
+		return beat.Start()
+	case !playing && beat.Active():
+		beat.Stop()
+	}
+	return nil
+}
+
+// BeatActive 报告回合心跳在业务视角是否在跳（只读，实体锁内调用）。
+func (room *PartyRoom) BeatActive() bool {
+	beat := room.HeartbeatComp().Beat(BeatRound)
+	return beat != nil && beat.Active()
+}

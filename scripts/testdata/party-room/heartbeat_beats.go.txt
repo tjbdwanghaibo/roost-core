@@ -1,0 +1,42 @@
+package party_room
+
+import (
+	"errors"
+
+	party "example.com/party-room-practice/game/partyroom"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+)
+
+// 这个文件归业务：roost add heartbeat 只在缺失时创建，project sync 不改写。
+
+// onHeartbeatInit 在实例新建 / 冷加载、发布之前调用：登记回合心跳；冷加载时按持久阶段决定是否启动（心跳不持久，
+// 进程重启后靠这里接上，回调按业务时间推进，离线期间错过的回合在第一拍里按时间顺序一次结算）。
+func (component *HeartbeatComponent) onHeartbeatInit(isCreate bool) error {
+	reg, err := component.Register(BeatRound, RoundBeatPeriod, component.onRoundBeat)
+	if errors.Is(err, heartbeat.ErrHeartbeatRemoteShared) {
+		return nil
+	}
+	if err != nil || isCreate {
+		return err
+	}
+	s, err := party.Decode(component.owner.Dao().GetState())
+	if err != nil {
+		return nil // 还没开房的空房间：没有可推进的东西
+	}
+	if s.Phase == party.PhasePlaying {
+		return reg.Start()
+	}
+	return nil
+}
+
+// onRoundBeat 是房间的逻辑帧：实体锁与事务内（缺省 async 持久级别：常规推进丢最后几拍可由下一次推进按时间重算，
+// 奖励走 strict 的领奖事务）。按 beat.Now 推进，不按“第几拍”算；只有局面或记分板变化时才写 DAO。
+func (component *HeartbeatComponent) onRoundBeat(beat heartbeat.Beat) error {
+	s, err := party.Decode(component.owner.Dao().GetState())
+	if err != nil {
+		return err
+	}
+	now := beat.Now.UnixMilli()
+	s.Advance(now)
+	return component.owner.SaveRoom(s, now)
+}

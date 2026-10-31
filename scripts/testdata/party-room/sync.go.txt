@@ -1,0 +1,114 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	roomentity "example.com/party-room-practice/game/entities/party_room"
+	party "example.com/party-room-practice/game/partyroom"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+)
+
+// PartyRoomSync 是房间内同步的业务接法：一个 entitysync.Manager（会话 ID 就是玩家实体 ID），每个房间一个
+// policy.Group——房间实体是组里唯一的 subject，成员是房间里的玩家，所有成员订阅同一个视图（RoomSyncProfile），
+// 所以同一次 Flush 里大家收到同一份记分板。
+//
+// 内容发布走 Nest 提交门：Manager 作为 Nest 的 EntitySync 观察者（NestOptionWithEntitySync），房间 Board 的变化
+// 在事务确认后才进入下一次 Flush，回滚的修改不会推出去。成员关系（Join / Leave）不进 Nest，在业务事务提交之后调用。
+// 本夹具由调用方显式 Flush；正式服务用 Manager.Start / Stop 按同步周期驱动。慢消费者、帧上限与断线策略沿用
+// Manager 与接入层的契约（guide/04-sync），这里不另做。
+type PartyRoomSync struct {
+	mu      sync.Mutex
+	manager *entitysync.Manager
+	groups  map[int64]*policy.Group
+}
+
+func NewPartyRoomSync(transport entitysync.Transport) (*PartyRoomSync, error) {
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: transport})
+	if err != nil {
+		return nil, err
+	}
+	return &PartyRoomSync{manager: manager, groups: map[int64]*policy.Group{}}, nil
+}
+
+// Manager 交给 Nest 做提交观察者，也供 Flush / 诊断使用。
+func (h *PartyRoomSync) Manager() *entitysync.Manager { return h.manager }
+
+// OpenRoom 在开房事务提交后调用：为房间建组，把房间实体登记为组里的 subject。重复调用是无变化的成功。
+func (h *PartyRoomSync) OpenRoom(room interface {
+	ID() int64
+	Sync() *entity.SubjectSyncState
+}) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.groups[room.ID()] != nil {
+		return nil
+	}
+	group, err := policy.NewGroup(policy.GroupConfig{Manager: h.manager, Profile: roomentity.RoomSyncProfile, MaxSubjects: 1, MaxMembers: party.MaxSeats})
+	if err != nil {
+		return err
+	}
+	if err := group.AddSubject(room.Sync()); err != nil {
+		_ = group.Close()
+		return err
+	}
+	h.groups[room.ID()] = group
+	return nil
+}
+
+// Connect 在连接事件提交后调用：为这名玩家开会话并加入房间组。断线重连时会话是新开的，
+// 下一次 Flush 从全量开始（客户端丢掉旧对象表）。
+func (h *PartyRoomSync) Connect(roomID, player int64) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	group := h.groups[roomID]
+	if group == nil {
+		return policy.ErrGroupNotPresent
+	}
+	if err := h.manager.OpenSession(entitysync.SessionID(player)); err != nil { // 已开的会话返回 nil
+		return err
+	}
+	return group.Join(player)
+}
+
+// Disconnect 只关会话（成员关系保留，宽限内重连再 Join 即可）；Leave 是离开房间：退出组并关会话。
+func (h *PartyRoomSync) Disconnect(player int64) {
+	h.manager.CloseSession(entitysync.SessionID(player))
+}
+
+func (h *PartyRoomSync) Leave(roomID, player int64) error {
+	h.mu.Lock()
+	group := h.groups[roomID]
+	h.mu.Unlock()
+	h.manager.CloseSession(entitysync.SessionID(player))
+	if group == nil {
+		return nil
+	}
+	if err := group.Leave(player); err != nil && !errors.Is(err, policy.ErrGroupNotPresent) {
+		return err
+	}
+	return nil
+}
+
+// CloseRoom 在房间关闭（全部座位释放）后、销毁实体之前调用：释放组与订阅，注销 subject。
+func (h *PartyRoomSync) CloseRoom(roomID int64) error {
+	h.mu.Lock()
+	group := h.groups[roomID]
+	delete(h.groups, roomID)
+	h.mu.Unlock()
+	if group == nil {
+		return nil
+	}
+	err := group.Close()
+	if unregister := h.manager.Unregister(roomID); unregister != nil && !errors.Is(unregister, entitysync.ErrSubjectNotRegistered) {
+		err = errors.Join(err, unregister)
+	}
+	return err
+}
+
+func (h *PartyRoomSync) Flush(ctx context.Context) error { return h.manager.Flush(ctx) }
+
+func (h *PartyRoomSync) Close(ctx context.Context) error { return h.manager.Close(ctx) }

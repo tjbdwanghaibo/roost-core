@@ -1,0 +1,529 @@
+package partyroom
+
+// 房间阶段：房间码房间从 lobby 开始，匹配房间开房即 playing；settled 之后只接受领奖与释放，全部座位释放后 closed。
+const (
+	PhaseLobby   = "lobby"
+	PhasePlaying = "playing"
+	PhaseSettled = "settled"
+	PhaseClosed  = "closed"
+)
+
+// 出局原因（Seat.Out）。空串是仍在局内。
+const (
+	OutFouled  = "fouled"  // 犯规满额淘汰：留在房间、能看、不能再抢，完赛照常有参与奖
+	OutLeft    = "left"    // 主动离开：没有奖励
+	OutDropped = "dropped" // 断线超过宽限：没有奖励
+)
+
+// 结算结果（State.Result）。
+const (
+	ResultWon       = "won"       // 常规或加时回合结束时唯一领先
+	ResultTimeout   = "timeout"   // 到硬期限仍未分出胜负：没有胜者，完赛者拿参与奖
+	ResultAbandoned = "abandoned" // 局内一个人都不剩
+)
+
+// 输入结果（Receipt.Outcome）。
+const (
+	OutcomeScore = "score" // 星星出现后第一个抢到
+	OutcomeFoul  = "foul"  // 星星出现前抢跑
+	OutcomeOut   = "out"   // 抢跑且犯规满额，本条输入导致淘汰
+	OutcomeLate  = "late"  // 星星已被抢走，或输入属于已经结束的回合
+)
+
+// Input 是客户端的一条输入。Epoch 是连接代（每次重连加一），Seq 是这名玩家在本房间的输入序号，从 1 连续递增。
+type Input struct {
+	Epoch uint64 `json:"epoch"`
+	Seq   uint64 `json:"seq"`
+	Round int    `json:"round"`
+	Kind  string `json:"kind"` // 目前只有 "grab"
+}
+
+// Receipt 是一条已处理输入的回执；同一条输入重投返回同一份回执。
+type Receipt struct {
+	Input   Input  `json:"input"`
+	Outcome string `json:"outcome"`
+	Score   int    `json:"score"` // 处理后这名玩家的分数
+}
+
+// Seat 是一个座位的服务端事实。
+type Seat struct {
+	PlayerID int64  `json:"player_id"`
+	Score    int    `json:"score"`
+	Fouls    int    `json:"fouls"`
+	Out      string `json:"out,omitempty"`
+	// Ticket 是最近一次连接事件的接入票号（网关单调分配）：旧连接的断开事件票号更小，不能踢掉新连接。
+	Ticket    uint64 `json:"ticket"`
+	Epoch     uint64 `json:"epoch"`
+	Connected bool   `json:"connected"`
+	// DownAt 是断线（或成局后尚未进房）的时刻；0 表示在线。宽限从这里起算。
+	DownAt int64 `json:"down_at,omitempty"`
+	// LastSeq / Last 只保留最后一条输入：重投它返回同一回执，比它旧的一律拒绝（派对输入频率低，够用）。
+	LastSeq uint64  `json:"last_seq"`
+	Last    Receipt `json:"last"`
+	// Claimed / Reward 是领奖事实，与 Player 金币在同一个 strict 事务里写；Released 是会话资源已归还。
+	Claimed  bool  `json:"claimed,omitempty"`
+	Reward   int64 `json:"reward,omitempty"`
+	Released bool  `json:"released,omitempty"`
+}
+
+// State 是房间的全部持久事实（PartyRoom DAO 的 State 字段）。种子与星星出现时刻在这里，不进下发的 Board。
+type State struct {
+	Match     string `json:"match,omitempty"` // 成局 ID：同一成局重放开房只认这一个
+	Code      string `json:"code,omitempty"`  // 房间码房间的码
+	Rules     Rules  `json:"rules"`
+	Phase     string `json:"phase"`
+	Host      int64  `json:"host"`
+	Seats     []Seat `json:"seats"`
+	Seed      uint64 `json:"seed"`
+	Round     int    `json:"round,omitempty"`
+	RoundEnd  int64  `json:"round_end,omitempty"`
+	StarAt    int64  `json:"star_at,omitempty"`
+	StarTaken bool   `json:"star_taken,omitempty"`
+	Deadline  int64  `json:"deadline,omitempty"`
+	Result    string `json:"result,omitempty"`
+	Winner    int64  `json:"winner,omitempty"`
+	SettledAt int64  `json:"settled_at,omitempty"`
+}
+
+// NewMatchRoom 用匹配服务的成局名单开房，直接开局。名单里的人此刻都算“未进房”，各有一个宽限窗口连进来。
+func NewMatchRoom(match string, players []int64, r Rules, seed uint64, now int64) (State, error) {
+	if err := r.Validate(); err != nil {
+		return State{}, err
+	}
+	if match == "" || len(players) < max(MinSeats, r.MinPlayers) || len(players) > MaxSeats {
+		return State{}, ErrRule
+	}
+	s := State{Match: match, Rules: r, Phase: PhasePlaying, Host: players[0], Seed: seed}
+	for _, id := range players {
+		if id == 0 || s.Index(id) >= 0 {
+			return State{}, ErrRule
+		}
+		s.Seats = append(s.Seats, Seat{PlayerID: id, DownAt: now})
+	}
+	s.begin(now)
+	return s, nil
+}
+
+// NewCodeRoom 开一个房间码房间，开房者就是房主，停在 lobby 等人。
+func NewCodeRoom(code string, host int64, r Rules, seed uint64) (State, error) {
+	if err := r.Validate(); err != nil {
+		return State{}, err
+	}
+	if code == "" || host == 0 {
+		return State{}, ErrRule
+	}
+	return State{Code: code, Rules: r, Phase: PhaseLobby, Host: host, Seed: seed, Seats: []Seat{{PlayerID: host}}}, nil
+}
+
+// Decode 读 DAO 里的房间状态；空串（还没开房）与损坏都是 ErrRule。
+func Decode(raw string) (State, error) {
+	var s State
+	if err := strictJSON(raw, &s); err != nil {
+		return State{}, ErrRule
+	}
+	return s, nil
+}
+
+// Encode 是 Decode 的逆；同一状态编码结果稳定（用来判断是否需要写 DAO）。
+func (s State) Encode() string { return encode(s) }
+
+// Index 返回玩家的座位下标，不在房间里为 -1。
+func (s State) Index(id int64) int {
+	for i, seat := range s.Seats {
+		if seat.PlayerID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// Join 进房间码房间：只在 lobby；重复进是无变化的成功；满员拒绝。
+func (s *State) Join(id int64) (changed bool, err error) {
+	if s.Phase != PhaseLobby {
+		return false, ErrClosed
+	}
+	if id == 0 {
+		return false, ErrRule
+	}
+	if s.Index(id) >= 0 {
+		return false, nil
+	}
+	if len(s.Seats) >= s.Rules.Capacity {
+		return false, ErrRoomFull
+	}
+	s.Seats = append(s.Seats, Seat{PlayerID: id})
+	return true, nil
+}
+
+// Start 由房主开局：人数达到 MinPlayers；此刻不在线的人从现在起算宽限。
+func (s *State) Start(id int64, now int64) error {
+	if s.Phase != PhaseLobby {
+		return ErrClosed
+	}
+	if id != s.Host {
+		return ErrNotHost
+	}
+	if len(s.Seats) < s.Rules.MinPlayers {
+		return ErrRule
+	}
+	s.Phase = PhasePlaying
+	for i := range s.Seats {
+		if !s.Seats[i].Connected {
+			s.Seats[i].DownAt = now
+		}
+	}
+	s.begin(now)
+	return nil
+}
+
+// Leave 主动离开。lobby 里直接让出座位（房主走了转给下一个座位，走空了房间关闭）；
+// 局内保留座位记为离开（分数冻结、没有奖励），房主转给下一个仍在局内的人，局内只剩一人时提前结算。
+func (s *State) Leave(id int64, now int64) (changed bool, err error) {
+	i := s.Index(id)
+	if i < 0 {
+		return false, ErrRule
+	}
+	switch s.Phase {
+	case PhaseLobby:
+		s.Seats = append(s.Seats[:i], s.Seats[i+1:]...)
+		if len(s.Seats) == 0 {
+			s.Phase, s.Host = PhaseClosed, 0
+		} else if s.Host == id {
+			s.Host = s.Seats[0].PlayerID
+		}
+		return true, nil
+	case PhasePlaying:
+		if s.Seats[i].Out == OutLeft {
+			return false, nil
+		}
+		if s.Seats[i].Out != "" {
+			return false, ErrClosed // 已经出局（犯规 / 掉线）的人走不走不改变局面，按出局原因结算
+		}
+		s.Seats[i].Out, s.Seats[i].Connected = OutLeft, false
+		s.seatChanged(now)
+		return true, nil
+	default:
+		return false, ErrClosed
+	}
+}
+
+// Connect 记录连接事件。connected=true 是新连接（票号必须比上一次大），连接代加一、清掉断线时刻；
+// connected=false 只接受当前票号（旧连接的断开晚到时不能踢掉新连接）。出局的座位不再接受连接。
+func (s *State) Connect(id int64, ticket uint64, connected bool, now int64) error {
+	i := s.Index(id)
+	if i < 0 || ticket == 0 {
+		return ErrRule
+	}
+	if s.Phase != PhaseLobby && s.Phase != PhasePlaying {
+		return ErrClosed
+	}
+	seat := &s.Seats[i]
+	if seat.Out == OutLeft || seat.Out == OutDropped {
+		return ErrClosed
+	}
+	if connected {
+		if ticket <= seat.Ticket {
+			return ErrStaleConnection
+		}
+		seat.Ticket, seat.Connected, seat.DownAt = ticket, true, 0
+		seat.Epoch++
+		return nil
+	}
+	if ticket != seat.Ticket || !seat.Connected {
+		return ErrStaleConnection
+	}
+	seat.Connected = false
+	if s.Phase == PhasePlaying {
+		seat.DownAt = now
+	}
+	return nil
+}
+
+// Apply 处理一条输入。调用方先 Advance(now)，所以“星星是否已出现、回合是否已结束”只看时间戳。
+// 重投最后一条输入返回同一回执、不改状态（changed=false）；更旧的序号、跳号、旧连接代都拒绝。
+func (s *State) Apply(id int64, in Input, now int64) (Receipt, bool, error) {
+	i := s.Index(id)
+	if i < 0 {
+		return Receipt{}, false, ErrRule
+	}
+	seat := &s.Seats[i]
+	// 去重先于阶段检查：结算后、重连后重投最后一条输入仍拿到原回执。
+	if in.Seq != 0 && in.Seq == seat.LastSeq {
+		if in != seat.Last.Input {
+			return Receipt{}, false, ErrRule // 同一序号换了内容：不是重投
+		}
+		return seat.Last, false, nil
+	}
+	if in.Seq < seat.LastSeq {
+		return Receipt{}, false, ErrStaleInput
+	}
+	if s.Phase != PhasePlaying || seat.Out != "" {
+		return Receipt{}, false, ErrClosed
+	}
+	if !seat.Connected || in.Epoch != seat.Epoch {
+		return Receipt{}, false, ErrStaleConnection
+	}
+	if in.Seq != seat.LastSeq+1 || in.Kind != "grab" || in.Round < 1 || in.Round > s.Round {
+		return Receipt{}, false, ErrRule
+	}
+	outcome := OutcomeLate
+	switch {
+	case in.Round != s.Round || s.StarTaken:
+	case now < s.StarAt:
+		seat.Fouls++
+		outcome = OutcomeFoul
+		if seat.Fouls >= s.Rules.FoulLimit {
+			seat.Out = OutFouled
+			outcome = OutcomeOut
+		}
+	default:
+		seat.Score++
+		s.StarTaken = true
+		outcome = OutcomeScore
+	}
+	seat.LastSeq = in.Seq
+	seat.Last = Receipt{Input: in, Outcome: outcome, Score: seat.Score}
+	receipt := seat.Last
+	s.seatChanged(now)
+	return receipt, true, nil
+}
+
+// Advance 把局面推进到 now：按时间顺序处理宽限到期、回合结束与硬期限，直到下一个事件晚于 now。
+// 结果只取决于事件时间戳，与调用次数无关：心跳每 100ms 调一次、掉了几拍、或隔了很久才调一次，
+// 推进到同一时刻得到同一状态（rules_test 的步长等价用例）。返回是否有变化。
+func (s *State) Advance(now int64) bool {
+	changed := false
+	for s.Phase == PhasePlaying {
+		at, kind, seat := s.nextEvent()
+		if at > now {
+			break
+		}
+		switch kind {
+		case eventDrop:
+			s.Seats[seat].Out = OutDropped
+			s.seatChanged(at)
+		case eventRoundEnd:
+			s.endRound()
+		case eventDeadline:
+			s.settle(ResultTimeout, 0, at)
+		}
+		changed = true
+	}
+	return changed
+}
+
+type eventKind int
+
+// 同一时刻的事件按这个顺序处理：先判掉线，再结束回合，最后才是硬期限（恰好在期限打完的回合算数）。
+const (
+	eventDrop eventKind = iota
+	eventRoundEnd
+	eventDeadline
+)
+
+func (s *State) nextEvent() (at int64, kind eventKind, seat int) {
+	at, kind, seat = s.Deadline, eventDeadline, -1
+	if s.RoundEnd < at || (s.RoundEnd == at && eventRoundEnd < kind) {
+		at, kind = s.RoundEnd, eventRoundEnd
+	}
+	for i, st := range s.Seats {
+		if st.Out != "" || st.Connected || st.DownAt == 0 {
+			continue
+		}
+		if due := st.DownAt + s.Rules.GraceMillis; due <= at {
+			at, kind, seat = due, eventDrop, i
+			break // 座位顺序决定同一时刻的先后，结果确定即可
+		}
+	}
+	return at, kind, seat
+}
+
+// endRound 结束当前回合：常规回合未打完开下一回合；打完后唯一领先者胜，否则进入加时（直到硬期限）。
+func (s *State) endRound() {
+	at := s.RoundEnd
+	if s.Round >= s.Rules.Rounds {
+		if leader, unique := s.leader(); unique {
+			s.settle(ResultWon, leader, at)
+			return
+		}
+	}
+	s.startRound(s.Round+1, at)
+}
+
+// leader 返回仍在局内（含犯规淘汰者，他们的分数仍算）中分数最高的人，以及是否唯一。
+func (s State) leader() (int64, bool) {
+	best, id, unique := -1, int64(0), false
+	for _, seat := range s.Seats {
+		if seat.Out == OutLeft || seat.Out == OutDropped {
+			continue
+		}
+		switch {
+		case seat.Score > best:
+			best, id, unique = seat.Score, seat.PlayerID, true
+		case seat.Score == best:
+			unique = false
+		}
+	}
+	return id, unique
+}
+
+// seatChanged 在座位出局后执行：房主出局则转给第一个仍在局内的人；局内不足两人时提前结算。
+func (s *State) seatChanged(now int64) {
+	if s.Phase != PhasePlaying {
+		return
+	}
+	alive := []int64{}
+	for _, seat := range s.Seats {
+		if seat.Out == "" {
+			alive = append(alive, seat.PlayerID)
+		}
+	}
+	if i := s.Index(s.Host); i >= 0 && s.Seats[i].Out != "" && len(alive) > 0 {
+		s.Host = alive[0]
+	}
+	switch len(alive) {
+	case 0:
+		s.settle(ResultAbandoned, 0, now)
+	case 1:
+		s.settle(ResultWon, alive[0], now)
+	}
+}
+
+func (s *State) begin(now int64) {
+	s.Deadline = now + s.Rules.MatchMillis
+	s.startRound(1, now)
+}
+
+// startRound 从 at 开始第 n 回合；星星出现时刻由种子与回合号决定（服务端事实，不下发）。
+func (s *State) startRound(n int, at int64) {
+	s.Round, s.RoundEnd, s.StarTaken = n, at+s.Rules.RoundMillis, false
+	window := uint64(s.Rules.StarMaxMillis - s.Rules.StarMinMillis + 1)
+	s.StarAt = at + s.Rules.StarMinMillis + int64(mix(s.Seed+uint64(n))%window)
+}
+
+func (s *State) settle(result string, winner int64, at int64) {
+	s.Phase, s.Result, s.Winner, s.SettledAt = PhaseSettled, result, winner, at
+}
+
+// Claim 结算领奖：只在 settled；胜者 WinReward，其他完赛者（含犯规淘汰）PlayReward，离开与掉线 0。
+// 重复领返回同一数额、不改状态。
+func (s *State) Claim(id int64) (reward int64, changed bool, err error) {
+	if s.Phase != PhaseSettled {
+		return 0, false, ErrClosed
+	}
+	i := s.Index(id)
+	if i < 0 {
+		return 0, false, ErrRule
+	}
+	seat := &s.Seats[i]
+	if seat.Claimed {
+		return seat.Reward, false, nil
+	}
+	if !seat.entitled() {
+		return 0, false, nil
+	}
+	reward = s.Rules.PlayReward
+	if s.Result == ResultWon && s.Winner == id {
+		reward = s.Rules.WinReward
+	}
+	seat.Claimed, seat.Reward = true, reward
+	return reward, true, nil
+}
+
+func (seat Seat) entitled() bool { return seat.Out == "" || seat.Out == OutFouled }
+
+// Release 是会话资源归还（session 的 Releaser 调用，至少一次）：局内只接受已离开 / 掉线的座位；
+// 结算后有奖励资格的座位必须先领奖，奖励没写进 Player 之前房间不能关。全部座位释放后房间 closed。
+// lobby 里不在房间（已经让出座位）的人释放是无变化的成功。
+func (s *State) Release(id int64) (changed bool, err error) {
+	i := s.Index(id)
+	switch {
+	case s.Phase == PhaseClosed:
+		return false, nil
+	case i < 0 && s.Phase == PhaseLobby:
+		return false, nil
+	case i < 0:
+		return false, ErrRule
+	}
+	seat := &s.Seats[i]
+	if seat.Released {
+		return false, nil
+	}
+	switch s.Phase {
+	case PhasePlaying:
+		if seat.Out != OutLeft && seat.Out != OutDropped {
+			return false, ErrRule
+		}
+	case PhaseSettled:
+		if seat.entitled() && !seat.Claimed {
+			return false, ErrRule
+		}
+	default:
+		return false, ErrRule
+	}
+	seat.Released = true
+	if s.Phase == PhaseSettled {
+		all := true
+		for _, st := range s.Seats {
+			all = all && st.Released
+		}
+		if all {
+			s.Phase = PhaseClosed
+		}
+	}
+	return true, nil
+}
+
+// BoardSeat / Board 是下发给房间全体成员的公开记分板（PartyRoom DAO 的 Board 字段，Group 同步）。
+// 不含种子、星星出现时刻、票号与回执。
+type BoardSeat struct {
+	Player int64  `json:"player"`
+	Score  int    `json:"score"`
+	Fouls  int    `json:"fouls"`
+	Out    string `json:"out,omitempty"`
+	Online bool   `json:"online"`
+}
+
+type Board struct {
+	Phase  string      `json:"phase"`
+	Host   int64       `json:"host"`
+	Round  int         `json:"round"`
+	Star   bool        `json:"star"`
+	Remain int64       `json:"remain"` // 本回合剩余毫秒（按服务端业务时间）
+	Seats  []BoardSeat `json:"seats"`
+	Result string      `json:"result,omitempty"`
+	Winner int64       `json:"winner,omitempty"`
+}
+
+// BoardAt 是 now 时刻的公开记分板。调用方先 Advance(now)。
+func (s State) BoardAt(now int64) Board {
+	b := Board{Phase: s.Phase, Host: s.Host, Round: s.Round, Result: s.Result, Winner: s.Winner}
+	if s.Phase == PhasePlaying {
+		b.Star = now >= s.StarAt && !s.StarTaken
+		b.Remain = max(s.RoundEnd-now, 0)
+	}
+	for _, seat := range s.Seats {
+		b.Seats = append(b.Seats, BoardSeat{Player: seat.PlayerID, Score: seat.Score, Fouls: seat.Fouls, Out: seat.Out, Online: seat.Connected})
+	}
+	return b
+}
+
+// Encode 是记分板的线上编码（JSON）。
+func (b Board) Encode() string { return encode(b) }
+
+// DecodeBoard 是客户端侧的解码。
+func DecodeBoard(raw string) (Board, error) {
+	var b Board
+	if err := strictJSON(raw, &b); err != nil {
+		return Board{}, ErrRule
+	}
+	return b, nil
+}
+
+// mix 是 splitmix64：由种子与回合号确定星星时刻，同一状态重放结果相同。
+func mix(x uint64) uint64 {
+	x += 0x9e3779b97f4a7c15
+	x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
+	x = (x ^ (x >> 27)) * 0x94d049bb133111eb
+	return x ^ (x >> 31)
+}

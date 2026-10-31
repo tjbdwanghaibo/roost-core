@@ -1,0 +1,985 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	roomentity "example.com/party-room-practice/game/entities/party_room"
+	playerentity "example.com/party-room-practice/game/entities/player"
+	sender "example.com/party-room-practice/game/handler/syncsender"
+	gameheartbeat "example.com/party-room-practice/game/heartbeat"
+	party "example.com/party-room-practice/game/partyroom"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+	"github.com/tjbdwanghaibo/roost-core/service/session"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// 默认模式的派对房间夹具：真实 Nest 引擎 + 生成的 PartyRoom / Player 实体 + 真实心跳驱动循环（100ms 档）+
+// entitytimer 驱动（用例手动 DeliverDue）+ entitysync.Manager / policy.Group + service/match 与 service/session 的
+// 正式领域实现（内存存储）。只替换提交器（不落库）；真实 WAL / Mongo 与 SIGKILL 在 persistence/ 的准入用例里。
+// 业务时间用 clock.SetSource 拨：handler 的 nowUnixMilli、心跳的 Beat.Now、定时器的 Fire.Now 都读它。
+
+type partyCommitter struct{}
+
+func (partyCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+const partyNow int64 = 1800000000000
+
+// partyClient 是一个会话（一条连接）的客户端：用正式 Receiver 校验帧序与基线，按对象记最新记分板。
+type partyClient struct {
+	receiver *frame.Receiver
+	boards   map[frame.ObjectRef]string
+	fulls    int
+	err      error
+}
+
+// partyWire 是 Manager 的 Transport：按会话把帧交给各自的客户端。
+type partyWire struct {
+	mu      sync.Mutex
+	clients map[entitysync.SessionID]*partyClient
+}
+
+func (w *partyWire) Push(_ context.Context, session entitysync.SessionID, raw []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	c := w.clients[session]
+	if c == nil {
+		c = &partyClient{receiver: frame.NewReceiver(frame.DefaultLimits()), boards: map[frame.ObjectRef]string{}}
+		w.clients[session] = c
+	}
+	if _, err := c.receiver.Receive(raw, func(f frame.Frame) error {
+		if f.Kind == frame.Full {
+			clear(c.boards)
+			c.fulls++
+		}
+		for _, object := range f.Objects {
+			if object.Operation == frame.ObjectRemove {
+				delete(c.boards, object.Ref)
+				continue
+			}
+			for _, component := range object.Components {
+				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
+				if err != nil {
+					return err
+				}
+				var doc bson.M
+				if err := bson.Unmarshal(update.Payload.BytesCopy(), &doc); err != nil {
+					return err
+				}
+				// 视图白名单：成员只能收到公开记分板（加文档主键），State（种子、星星时刻、回执）一个字段都不能出现。
+				board, ok := doc["board"].(string)
+				if _, id := doc["_id"]; !ok || !id || len(doc) != 2 {
+					return fmt.Errorf("room view leaked or lost fields: %v", doc)
+				}
+				c.boards[object.Ref] = board
+			}
+		}
+		return nil
+	}); err != nil {
+		c.err = err
+	}
+	return nil
+}
+
+// reconnect 模拟客户端换了一条新连接：新的 Receiver，从全量开始。
+func (w *partyWire) reconnect(player int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.clients, entitysync.SessionID(player))
+}
+
+// board 返回一名玩家客户端上的记分板原文与收到的全量帧数；帧校验失败直接失败。
+func (w *partyWire) board(t *testing.T, player int64) (string, int) {
+	t.Helper()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	c := w.clients[entitysync.SessionID(player)]
+	if c == nil {
+		return "", 0
+	}
+	if c.err != nil {
+		t.Fatal(c.err)
+	}
+	if len(c.boards) > 1 {
+		t.Fatalf("player %d sees %d room objects", player, len(c.boards))
+	}
+	for _, b := range c.boards {
+		return b, c.fulls
+	}
+	return "", c.fulls
+}
+
+type partyFixture struct {
+	ctx      context.Context
+	engine   *nest.NestMgr
+	access   *entity.ManagerAccess
+	hub      *PartyRoomSync
+	wire     *partyWire
+	sessions *session.Service
+	now      atomic.Int64
+	ids      [party.MaxSeats + 1]int64
+	players  [party.MaxSeats + 1]*playerentity.Player
+	// releases 是 session.Releaser 收到的归还（至少一次），closed 是因最后一次归还而关闭的房间。
+	mu       sync.Mutex
+	created  map[int64]bool
+	releases map[string]int
+	closed   map[int64]bool
+}
+
+func newPartyFixture(t *testing.T) *partyFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	roomentity.RegisterEntity()
+	RegisterPartyRoomNestHandlers()
+	RegisterTickPartyRoomTimerGenNestHandlers()
+	f := &partyFixture{ctx: context.Background(), created: map[int64]bool{}, releases: map[string]int{}, closed: map[int64]bool{}}
+	f.now.Store(partyNow)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	f.wire = &partyWire{clients: map[entitysync.SessionID]*partyClient{}}
+	hub, err := NewPartyRoomSync(f.wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.hub = hub
+	f.access = entity.NewManagerAccess(entity.NewEntityManager())
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithTransactionCommitter(partyCommitter{}),
+		nest.NestOptionWithEntitySync(hub.Manager()),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 256}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	lookup := func(id int64) entity.IThreadSafeEntity { return f.access.Manager().Get(id) }
+	if err := roomentity.TimerDriver.Bind(f.engine, lookup); err != nil {
+		t.Fatal(err)
+	}
+	if err := gameheartbeat.Driver.Bind(f.engine, lookup); err != nil {
+		t.Fatal(err)
+	}
+	if err := gameheartbeat.Driver.Start(); err != nil {
+		t.Fatal(err)
+	}
+	f.sessions, err = session.New(session.Config{
+		Runs:     versionstore.NewMemoryStore[string, session.Run](),
+		Claims:   versionstore.NewMemoryStore[int64, session.Claim](),
+		Requests: versionstore.NewMemoryStore[string, session.LedgerEntry](),
+		Release:  session.ReleaserFunc(f.release),
+		TTL:      10 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = gameheartbeat.Driver.Stop(ctx)
+		_ = roomentity.TimerDriver.Stop(ctx)
+		// 卸载本用例的房间：心跳登记与定时器随实例离开驱动，不留给下一个用例的计数。
+		for _, id := range f.rooms() {
+			if v := f.access.Manager().Get(id); v != nil {
+				_ = f.access.Destroy(ctx, v, entity.DestroyReasonMemoryUnload, false)
+			}
+		}
+		_ = f.engine.Shutdown(ctx)
+		_ = f.hub.Close(ctx)
+	})
+	for i := range f.ids {
+		v, err := f.access.Create(&entity.EntityCreateParam{IsCreate: true, UniqueID: int64(5000 + i), Kind: playerentity.EntityKindPlayer, Category: entity.MustEntityCategoryOfKind(playerentity.EntityKindPlayer)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.players[i], f.ids[i] = v.(*playerentity.Player), v.ID()
+		if err := f.s().Sync_PartyPlayerInit(f.ctx, f.ids[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f
+}
+
+func (f *partyFixture) s() *sender.PartyRoomSender { return sender.NewPartyRoomSender(f.engine) }
+
+// rooms 返回本用例建过的房间实体 ID。
+func (f *partyFixture) rooms() []int64 {
+	var out []int64
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for id := range f.created {
+		out = append(out, id)
+	}
+	return out
+}
+
+// release 是 session 的 Releaser：把房间座位归还交给 Nest（至少一次，handler 幂等）。
+func (f *partyFixture) release(ctx context.Context, run session.Run, resource session.Resource) error {
+	if resource.Kind != "party_room" {
+		return nil
+	}
+	roomID, err := strconv.ParseInt(resource.ID, 10, 64)
+	if err != nil {
+		return err
+	}
+	closed, err := f.s().Sync_PartyRelease(ctx, roomID, run.OwnerID)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err == nil {
+		f.releases[fmt.Sprint(roomID, run.OwnerID)]++
+		if closed {
+			f.closed[roomID] = true
+		}
+	}
+	return err
+}
+
+func (f *partyFixture) createRoom(t *testing.T, id int64) *roomentity.PartyRoom {
+	t.Helper()
+	v, err := f.access.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: roomentity.EntityKindPartyRoom, Category: entity.MustEntityCategoryOfKind(roomentity.EntityKindPartyRoom)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.created[v.ID()] = true
+	f.mu.Unlock()
+	return v.(*roomentity.PartyRoom)
+}
+
+// openMatch 用成局名单（f.ids 的下标）开房、建同步组，返回房间 ID。
+func (f *partyFixture) openMatch(t *testing.T, match string, seats ...int) int64 {
+	t.Helper()
+	roster := make([]int64, len(seats))
+	for i, seat := range seats {
+		roster[i] = f.ids[seat]
+	}
+	id, err := PartyRoomIDForMatch(match)
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := f.createRoom(t, id)
+	if _, err := f.s().Sync_PartyOpenMatch(f.ctx, id, match, roster, party.DemoRules()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.hub.OpenRoom(room); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// connect 是接入层鉴权后的连接事件：Nest 记连接代，提交后加入房间同步组。
+func (f *partyFixture) connect(t *testing.T, room int64, seat int, ticket uint64) uint64 {
+	t.Helper()
+	epoch, err := f.s().Sync_PartyConnect(f.ctx, room, f.ids[seat], ticket, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.hub.Connect(room, f.ids[seat]); err != nil {
+		t.Fatal(err)
+	}
+	return epoch
+}
+
+type partySnap struct {
+	State      party.State
+	Raw, Board string
+	Beat       bool
+	Wake       int64
+}
+
+var partySnapOnce sync.Once
+var partySnapName = nest.NewHandlerName("party_room_test_snapshot")
+
+// partySnapshot 经 Nest 读房间（心跳在并发写 DAO，不能在测试 goroutine 里直接读）；真实依赖用例共用。
+func partySnapshot(t *testing.T, engine *nest.NestMgr, room int64) partySnap {
+	t.Helper()
+	partySnapOnce.Do(func() {
+		nest.MustRegisterHandlerWithMeta(partySnapName, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+			r := es[0].(IPartyRoomEntity)
+			s, err := party.Decode(r.Dao().GetState())
+			return partySnap{State: s, Raw: r.Dao().GetState(), Board: r.Dao().GetBoard(), Beat: r.BeatActive(), Wake: r.Dao().GetWakeTimer()}, err
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
+	})
+	v, err := engine.Request(context.Background(), partySnapName, room, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v.(partySnap)
+}
+
+func (f *partyFixture) snap(t *testing.T, room int64) partySnap {
+	t.Helper()
+	return partySnapshot(t, f.engine, room)
+}
+
+func waitParty(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	until := time.Now().Add(8 * time.Second)
+	for !ok() {
+		if time.Now().After(until) {
+			t.Fatalf("bounded wait expired: %s", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// waitBoard 等心跳把记分板推进到满足 pred（只看 DAO 里的 Board，不经只读视图的“副本推进”）。
+func (f *partyFixture) waitBoard(t *testing.T, room int64, what string, pred func(party.Board) bool) party.Board {
+	t.Helper()
+	var b party.Board
+	waitParty(t, what, func() bool {
+		var err error
+		if b, err = party.DecodeBoard(f.snap(t, room).Board); err != nil {
+			t.Fatal(err)
+		}
+		return pred(b)
+	})
+	return b
+}
+
+// synced Flush 一次，并核对每名成员客户端上的记分板与服务端 DAO 里的完全相同。
+func (f *partyFixture) synced(t *testing.T, room int64, seats ...int) party.Board {
+	t.Helper()
+	if err := f.hub.Flush(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := f.snap(t, room).Board
+	for _, seat := range seats {
+		if got, _ := f.wire.board(t, f.ids[seat]); got != want {
+			t.Fatalf("seat %d sees %s, server %s", seat, got, want)
+		}
+	}
+	b, err := party.DecodeBoard(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func (f *partyFixture) input(room int64, seat int, in party.Input) (party.Receipt, error) {
+	return f.s().Sync_PartyInput(f.ctx, room, f.ids[seat], in)
+}
+
+// refuse 断言命令被拒且房间状态、记分板、定时器都没变（handler 回滚）。
+func (f *partyFixture) refuse(t *testing.T, room int64, target error, call func() error) {
+	t.Helper()
+	before := f.snap(t, room)
+	err := call()
+	if err == nil || target != nil && !errors.Is(err, target) {
+		t.Fatalf("got %v, want %v", err, target)
+	}
+	after := f.snap(t, room)
+	if before.Raw != after.Raw || before.Board != after.Board || before.Wake != after.Wake || before.Beat != after.Beat {
+		t.Fatal("rejected command changed the room")
+	}
+}
+
+func (f *partyFixture) setNow(ms int64) { f.now.Store(ms) }
+
+// 1. 匹配：service/match 排队成局（同一请求重放不重复排队、同一票集合并发 Commit 只成一局），成局开房幂等，
+// 同一房间 ID 换名单拒绝；service/session 给每名成员一个 run 并挂上房间，重连靠它找回房间。
+func TestPartyGameMatchmakingOpensOneRoomPerMatch(t *testing.T) {
+	f := newPartyFixture(t)
+	ctx := f.ctx
+	store, err := svcmatch.NewMemoryStore(svcmatch.Config{Now: clock.Now, TicketTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := svcmatch.Queue{Mode: "party-stargrab", GroupSize: 4, Partition: "local"}
+	subject := func(seat int) svcmatch.Subject { return svcmatch.Subject{Kind: "player", ID: f.ids[seat]} }
+	first, err := store.Enqueue(ctx, queue, subject(0), "join-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := store.Enqueue(ctx, queue, subject(0), "join-0"); err != nil || again.ID != first.ID {
+		t.Fatal("replayed join duplicated the ticket", err)
+	}
+	if _, err := store.Enqueue(ctx, queue, subject(0), "join-0-again"); !errors.Is(err, svcmatch.ErrAlreadyQueued) {
+		t.Fatalf("second live ticket: %v", err)
+	}
+	for seat := 1; seat < 4; seat++ {
+		if _, err := store.Enqueue(ctx, queue, subject(seat), fmt.Sprint("join-", seat)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	candidates, err := store.Candidates(ctx, queue, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, formed, err := (svcmatch.FirstComeGrouping{}).Group(queue, candidates)
+	if err != nil || !formed || len(group) != 4 {
+		t.Fatal("four players did not form a match", err)
+	}
+	tickets := []string{group[0].ID, group[1].ID, group[2].ID, group[3].ID}
+	matches := make([]svcmatch.Match, 2)
+	var wg sync.WaitGroup
+	for i := range matches {
+		wg.Add(1)
+		go func() { defer wg.Done(); matches[i], _ = store.Commit(ctx, queue, tickets) }()
+	}
+	wg.Wait()
+	if matches[0].ID == "" || matches[0].ID != matches[1].ID || len(matches[0].Members) != 4 {
+		t.Fatal("same ticket set formed different matches")
+	}
+	match := matches[0]
+	roster := make([]int64, len(match.Members))
+	for i, m := range match.Members {
+		roster[i] = m.ID
+	}
+	roomID, err := PartyRoomIDForMatch(match.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	room := f.createRoom(t, roomID)
+	boards := make([]party.Board, 3)
+	for i := range boards {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var err error
+			if boards[i], err = f.s().Sync_PartyOpenMatch(ctx, roomID, match.ID, roster, party.DemoRules()); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	opened := f.snap(t, roomID)
+	if opened.State.Phase != party.PhasePlaying || len(opened.State.Seats) != 4 || !opened.Beat || opened.Wake == 0 {
+		t.Fatalf("matched room not playing with drivers armed: %+v", opened)
+	}
+	for _, b := range boards {
+		if b.Encode() != boards[0].Encode() || len(b.Seats) != 4 {
+			t.Fatal("replayed open saw a different room")
+		}
+	}
+	reversed := []int64{roster[3], roster[2], roster[1], roster[0]}
+	f.refuse(t, roomID, party.ErrRule, func() error {
+		_, err := f.s().Sync_PartyOpenMatch(ctx, roomID, match.ID, reversed, party.DemoRules())
+		return err
+	})
+	f.refuse(t, roomID, party.ErrRule, func() error {
+		_, err := f.s().Sync_PartyOpenMatch(ctx, roomID, "another-match", roster, party.DemoRules())
+		return err
+	})
+	if err := f.hub.OpenRoom(room); err != nil {
+		t.Fatal(err)
+	}
+	resource := session.Resource{Kind: "party_room", ID: strconv.FormatInt(roomID, 10)}
+	for seat, id := range roster {
+		request := match.ID + ":" + strconv.FormatInt(id, 10)
+		run, err := f.sessions.Enter(ctx, id, session.EnterRequest{Kind: "party-room", RequestID: request})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.sessions.Attach(ctx, id, run.ID, resource); err != nil {
+			t.Fatal(err)
+		}
+		if again, err := f.sessions.Enter(ctx, id, session.EnterRequest{Kind: "party-room", RequestID: request}); err != nil || again.ID != run.ID {
+			t.Fatal("replayed enter opened another run", err)
+		}
+		if _, err := f.sessions.Enter(ctx, id, session.EnterRequest{Kind: "party-room", RequestID: request + "-b"}); !errors.Is(err, session.ErrAlreadyRunning) {
+			t.Fatalf("second live run: %v", err)
+		}
+		current, ok, err := f.sessions.Current(ctx, id)
+		if attached, has := current.Attached("party_room"); err != nil || !ok || !has || attached.ID != resource.ID {
+			t.Fatal("session does not lead back to the room", err)
+		}
+		f.connect(t, roomID, seat, 1)
+	}
+	b := f.synced(t, roomID, 0, 1, 2, 3)
+	if b.Phase != party.PhasePlaying || b.Round != 1 || b.Star || len(b.Seats) != 4 {
+		t.Fatalf("members saw %+v", b)
+	}
+}
+
+// 2. 房间码房间：人满拒绝（第 9 人）、重复进是无变化成功、开局后不能再进；房间码解析回同一房间。
+func TestPartyGameCodeRoomFullAndLateJoinRejected(t *testing.T) {
+	f := newPartyFixture(t)
+	id, err := entity.BuildEntityID(7001, roomentity.EntityKindPartyRoom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.createRoom(t, id)
+	code, err := f.s().Sync_PartyOpenCode(f.ctx, id, f.ids[0], party.DemoRules())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := f.s().Sync_PartyOpenCode(f.ctx, id, f.ids[0], party.DemoRules()); err != nil || again != code {
+		t.Fatal("replayed open changed the code", err)
+	}
+	unique, err := party.DecodeCode(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byCode, _ := entity.BuildEntityID(unique, roomentity.EntityKindPartyRoom); byCode != id {
+		t.Fatal("room code does not lead to the room")
+	}
+	for seat := 1; seat < party.MaxSeats; seat++ {
+		if err := f.s().Sync_PartyJoin(f.ctx, id, f.ids[seat]); err != nil {
+			t.Fatal(seat, err)
+		}
+	}
+	if err := f.s().Sync_PartyJoin(f.ctx, id, f.ids[3]); err != nil {
+		t.Fatal("repeated join failed", err)
+	}
+	f.refuse(t, id, party.ErrRoomFull, func() error { return f.s().Sync_PartyJoin(f.ctx, id, f.ids[party.MaxSeats]) })
+	s := f.snap(t, id)
+	if len(s.State.Seats) != party.MaxSeats || s.State.Phase != party.PhaseLobby || s.Beat || s.Wake != 0 {
+		t.Fatalf("lobby %+v", s)
+	}
+	if err := f.s().Sync_PartyStart(f.ctx, id, f.ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s().Sync_PartyLeave(f.ctx, id, f.ids[7]); err != nil {
+		t.Fatal(err)
+	}
+	f.refuse(t, id, party.ErrClosed, func() error { return f.s().Sync_PartyJoin(f.ctx, id, f.ids[party.MaxSeats]) })
+	if s := f.snap(t, id); s.State.Phase != party.PhasePlaying || !s.Beat || s.Wake == 0 || s.State.Seats[7].Out != party.OutLeft {
+		t.Fatalf("started room %+v", s)
+	}
+}
+
+// 3. 房主离开：lobby 里让出座位、房主转给下一个座位，非房主不能开局；局内房主离开同样转移，座位记为离开。
+func TestPartyGameHostLeaveTransfersHost(t *testing.T) {
+	f := newPartyFixture(t)
+	id, _ := entity.BuildEntityID(7002, roomentity.EntityKindPartyRoom)
+	f.createRoom(t, id)
+	if _, err := f.s().Sync_PartyOpenCode(f.ctx, id, f.ids[0], party.DemoRules()); err != nil {
+		t.Fatal(err)
+	}
+	for _, seat := range []int{1, 2} {
+		if err := f.s().Sync_PartyJoin(f.ctx, id, f.ids[seat]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.refuse(t, id, party.ErrNotHost, func() error { return f.s().Sync_PartyStart(f.ctx, id, f.ids[1]) })
+	if err := f.s().Sync_PartyLeave(f.ctx, id, f.ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	s := f.snap(t, id).State
+	if s.Host != f.ids[1] || len(s.Seats) != 2 || s.Index(f.ids[0]) >= 0 {
+		t.Fatalf("lobby host not transferred: %+v", s)
+	}
+	if err := f.s().Sync_PartyJoin(f.ctx, id, f.ids[0]); err != nil { // 原房主回来只是普通成员
+		t.Fatal(err)
+	}
+	f.refuse(t, id, party.ErrNotHost, func() error { return f.s().Sync_PartyStart(f.ctx, id, f.ids[0]) })
+	if err := f.s().Sync_PartyStart(f.ctx, id, f.ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.s().Sync_PartyLeave(f.ctx, id, f.ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	s = f.snap(t, id).State
+	if s.Phase != party.PhasePlaying || s.Host != f.ids[2] || s.Seats[s.Index(f.ids[1])].Out != party.OutLeft {
+		t.Fatalf("in-game host not transferred: %+v", s)
+	}
+	if err := f.s().Sync_PartyLeave(f.ctx, id, f.ids[1]); err != nil {
+		t.Fatal("repeated leave failed", err)
+	}
+}
+
+// 4. 心跳驱动回合 + 组同步：没有任何输入时，100ms 心跳按业务时间放出星星、结束回合，变化经 Group 推给全部成员，
+// 每次 Flush 后四个客户端与服务端记分板逐字节相同；业务时钟一次跳过两个回合时一拍按时间顺序结算（可变步长）。
+func TestPartyGameHeartbeatDrivesRoundsAndGroupSync(t *testing.T) {
+	f := newPartyFixture(t)
+	room := f.openMatch(t, "match-beat", 0, 1, 2, 3)
+	epochs := make([]uint64, 4)
+	for seat := range 4 {
+		epochs[seat] = f.connect(t, room, seat, 1)
+	}
+	b := f.synced(t, room, 0, 1, 2, 3)
+	if b.Star || b.Round != 1 {
+		t.Fatalf("initial board %+v", b)
+	}
+	executed := gameheartbeat.Driver.Stats().Executed
+	s := f.snap(t, room).State
+	f.setNow(s.StarAt)
+	f.waitBoard(t, room, "heartbeat reveals the star", func(b party.Board) bool { return b.Star })
+	if b := f.synced(t, room, 0, 1, 2, 3); !b.Star || b.Remain != s.RoundEnd-s.StarAt {
+		t.Fatalf("members did not see the star: %+v", b)
+	}
+	r, err := f.input(room, 2, party.Input{Epoch: epochs[2], Seq: 1, Round: 1, Kind: "grab"})
+	if err != nil || r.Outcome != party.OutcomeScore {
+		t.Fatal("grab after the star did not score", r, err)
+	}
+	f.setNow(s.RoundEnd)
+	f.waitBoard(t, room, "heartbeat ends round 1", func(b party.Board) bool { return b.Round == 2 })
+	if b := f.synced(t, room, 0, 1, 2, 3); b.Seats[2].Score != 1 || b.Star {
+		t.Fatalf("round 2 board %+v", b)
+	}
+	// 业务时钟一次跳到第三回合结束之后：一拍里依次结束第二、三回合，唯一领先者 seat 2 胜，结算时刻是回合结束时刻。
+	f.setNow(s.RoundEnd + 2*party.DemoRules().RoundMillis + 700)
+	f.waitBoard(t, room, "heartbeat settles the match", func(b party.Board) bool { return b.Phase == party.PhaseSettled })
+	end := f.snap(t, room)
+	if end.State.Result != party.ResultWon || end.State.Winner != f.ids[2] || end.State.SettledAt != s.RoundEnd+2*party.DemoRules().RoundMillis {
+		t.Fatalf("settlement %+v", end.State)
+	}
+	if end.Beat || end.Wake != 0 {
+		t.Fatal("settled room kept its heartbeat or deadline timer")
+	}
+	if _, due := roomentity.TimerDriver.DueOf(f.access.Manager().Get(room)); due {
+		t.Fatal("deadline still indexed after settlement")
+	}
+	if b := f.synced(t, room, 0, 1, 2, 3); b.Phase != party.PhaseSettled || b.Winner != f.ids[2] {
+		t.Fatalf("members did not see the result: %+v", b)
+	}
+	if gameheartbeat.Driver.Stats().Executed-executed < 3 {
+		t.Fatal("rounds were not driven by heartbeat beats")
+	}
+	waitParty(t, "heartbeat registration leaves the ring", func() bool { return gameheartbeat.Driver.Registered() == 0 })
+}
+
+// 5. 抢星：四人并发抢，只有一人得分；同一输入重投返回同一回执、不重复加分；旧序号、跳号、旧连接代都拒绝且不改状态。
+func TestPartyGameFirstGrabWinsAndDuplicateInputDedup(t *testing.T) {
+	f := newPartyFixture(t)
+	room := f.openMatch(t, "match-grab", 0, 1, 2, 3)
+	epochs := make([]uint64, 4)
+	for seat := range 4 {
+		epochs[seat] = f.connect(t, room, seat, 1)
+	}
+	f.setNow(f.snap(t, room).State.StarAt)
+	receipts := make([]party.Receipt, 4)
+	var wg sync.WaitGroup
+	for seat := range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var err error
+			if receipts[seat], err = f.input(room, seat, party.Input{Epoch: epochs[seat], Seq: 1, Round: 1, Kind: "grab"}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	winner, late := -1, 0
+	for seat, r := range receipts {
+		switch r.Outcome {
+		case party.OutcomeScore:
+			if winner >= 0 {
+				t.Fatal("two players took the same star")
+			}
+			winner = seat
+		case party.OutcomeLate:
+			late++
+		}
+	}
+	if winner < 0 || late != 3 {
+		t.Fatalf("receipts %+v", receipts)
+	}
+	for range 3 {
+		if got, err := f.input(room, winner, receipts[winner].Input); err != nil || got != receipts[winner] {
+			t.Fatal("retry changed the receipt", got, err)
+		}
+	}
+	if s := f.snap(t, room).State; s.Seats[winner].Score != 1 || s.Seats[winner].LastSeq != 1 {
+		t.Fatal("retry scored twice")
+	}
+	next := party.Input{Epoch: epochs[winner], Seq: 2, Round: 1, Kind: "grab"}
+	if _, err := f.input(room, winner, next); err != nil {
+		t.Fatal(err)
+	}
+	f.refuse(t, room, party.ErrStaleInput, func() error { _, err := f.input(room, winner, receipts[winner].Input); return err })
+	f.refuse(t, room, party.ErrRule, func() error {
+		_, err := f.input(room, winner, party.Input{Epoch: epochs[winner], Seq: 4, Round: 1, Kind: "grab"})
+		return err
+	})
+	f.refuse(t, room, party.ErrRule, func() error {
+		_, err := f.input(room, winner, party.Input{Epoch: epochs[winner], Seq: 2, Round: 1, Kind: "dash"})
+		return err
+	})
+	f.refuse(t, room, party.ErrStaleConnection, func() error {
+		_, err := f.input(room, winner, party.Input{Epoch: epochs[winner] + 1, Seq: 3, Round: 1, Kind: "grab"})
+		return err
+	})
+}
+
+// 6. 抢跑犯规满额淘汰（淘汰者之后的输入被拒），以及 undo：输入改完房间后 handler 失败，状态、记分板、心跳与定时器全部回滚。
+func TestPartyGameFoulEliminationAndUndoRollback(t *testing.T) {
+	f := newPartyFixture(t)
+	room := f.openMatch(t, "match-foul", 0, 1, 2)
+	epochs := make([]uint64, 3)
+	for seat := range 3 {
+		epochs[seat] = f.connect(t, room, seat, 1)
+	}
+	for seq, want := range []string{party.OutcomeFoul, party.OutcomeOut} {
+		r, err := f.input(room, 0, party.Input{Epoch: epochs[0], Seq: uint64(seq + 1), Round: 1, Kind: "grab"})
+		if err != nil || r.Outcome != want {
+			t.Fatal("early grab", r, err)
+		}
+	}
+	if b := f.synced(t, room, 0, 1, 2); b.Seats[0].Out != party.OutFouled || b.Seats[0].Fouls != 2 || b.Phase != party.PhasePlaying {
+		t.Fatalf("foul board %+v", b)
+	}
+	f.refuse(t, room, party.ErrClosed, func() error {
+		_, err := f.input(room, 0, party.Input{Epoch: epochs[0], Seq: 3, Round: 1, Kind: "grab"})
+		return err
+	})
+	f.setNow(f.snap(t, room).State.StarAt)
+	in := party.Input{Epoch: epochs[1], Seq: 1, Round: 1, Kind: "grab"}
+	refused := errors.New("after the grab was applied")
+	name := nest.NewHandlerName("party_room_undo_input")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		if _, err := handlerPartyInput(es[0].(IPartyRoomEntity), f.ids[1], in, f.now.Load()); err != nil {
+			return nil, err
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	f.refuse(t, room, refused, func() error { _, err := f.engine.Request(f.ctx, name, room, nil); return err })
+	if r, err := f.input(room, 1, in); err != nil || r.Outcome != party.OutcomeScore {
+		t.Fatal("grab after rollback", r, err)
+	}
+}
+
+// 7. 断线重连：宽限内经 session 找回同一房间，新连接代生效、旧连接代输入被拒、旧连接的断开晚到不踢新连接；
+// 新连接从全量开始收同步，之后与其他成员一致。
+func TestPartyGameReconnectWithinGraceReturnsToSameRoom(t *testing.T) {
+	f := newPartyFixture(t)
+	room := f.openMatch(t, "match-reconnect", 0, 1, 2)
+	resource := session.Resource{Kind: "party_room", ID: strconv.FormatInt(room, 10)}
+	for seat := range 3 {
+		run, err := f.sessions.Enter(f.ctx, f.ids[seat], session.EnterRequest{Kind: "party-room", RequestID: fmt.Sprint("match-reconnect:", seat)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.sessions.Attach(f.ctx, f.ids[seat], run.ID, resource); err != nil {
+			t.Fatal(err)
+		}
+		f.connect(t, room, seat, 1)
+	}
+	f.synced(t, room, 0, 1, 2)
+	if _, err := f.s().Sync_PartyConnect(f.ctx, room, f.ids[1], 1, false); err != nil {
+		t.Fatal(err)
+	}
+	f.hub.Disconnect(f.ids[1])
+	f.wire.reconnect(f.ids[1])
+	if b := f.synced(t, room, 0, 2); b.Seats[1].Online {
+		t.Fatal("others still see the dropped player online")
+	}
+	f.setNow(partyNow + party.DemoRules().GraceMillis - 1)
+	current, ok, err := f.sessions.Current(f.ctx, f.ids[1])
+	attached, has := current.Attached("party_room")
+	if err != nil || !ok || !has {
+		t.Fatal("session lost the room", err)
+	}
+	back, _ := strconv.ParseInt(attached.ID, 10, 64)
+	epoch := f.connect(t, back, 1, 2)
+	if back != room || epoch != 2 {
+		t.Fatal("reconnected elsewhere", back, epoch)
+	}
+	f.refuse(t, room, party.ErrStaleConnection, func() error {
+		_, err := f.s().Sync_PartyConnect(f.ctx, room, f.ids[1], 1, false)
+		return err
+	})
+	f.refuse(t, room, party.ErrStaleConnection, func() error {
+		_, err := f.input(room, 1, party.Input{Epoch: 1, Seq: 1, Round: 1, Kind: "grab"})
+		return err
+	})
+	if _, err := f.input(room, 1, party.Input{Epoch: epoch, Seq: 1, Round: 1, Kind: "grab"}); err != nil {
+		t.Fatal(err)
+	}
+	b := f.synced(t, room, 0, 1, 2)
+	if !b.Seats[1].Online || b.Seats[1].Out != "" {
+		t.Fatalf("reconnected seat %+v", b.Seats[1])
+	}
+	if _, fulls := f.wire.board(t, f.ids[1]); fulls != 1 {
+		t.Fatalf("new connection received %d full frames", fulls)
+	}
+}
+
+// 8. 宽限到期由心跳判掉线（不能再重连），局内离开逐个出局并转移房主，只剩一人时提前结算、心跳与期限定时器停下。
+func TestPartyGameGraceExpiryAndMidGameLeaveEndEarly(t *testing.T) {
+	f := newPartyFixture(t)
+	room := f.openMatch(t, "match-leave", 0, 1, 2, 3)
+	for seat := range 4 {
+		f.connect(t, room, seat, 1)
+	}
+	if _, err := f.s().Sync_PartyConnect(f.ctx, room, f.ids[3], 1, false); err != nil {
+		t.Fatal(err)
+	}
+	f.hub.Disconnect(f.ids[3])
+	f.setNow(partyNow + party.DemoRules().GraceMillis)
+	f.waitBoard(t, room, "heartbeat drops the seat after grace", func(b party.Board) bool { return b.Seats[3].Out == party.OutDropped })
+	f.refuse(t, room, party.ErrClosed, func() error {
+		_, err := f.s().Sync_PartyConnect(f.ctx, room, f.ids[3], 2, true)
+		return err
+	})
+	if err := f.s().Sync_PartyLeave(f.ctx, room, f.ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.hub.Leave(room, f.ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.snap(t, room).State; s.Host != f.ids[1] || s.Phase != party.PhasePlaying {
+		t.Fatalf("host after leave %+v", s)
+	}
+	if err := f.s().Sync_PartyLeave(f.ctx, room, f.ids[1]); err != nil {
+		t.Fatal(err)
+	}
+	end := f.snap(t, room)
+	if end.State.Phase != party.PhaseSettled || end.State.Winner != f.ids[2] || end.State.Host != f.ids[2] || end.Beat || end.Wake != 0 {
+		t.Fatalf("last player standing %+v", end)
+	}
+	if b := f.synced(t, room, 1, 2); b.Winner != f.ids[2] {
+		t.Fatal("members did not see the early result")
+	}
+}
+
+// 9. 结算：服务端对每个座位发奖，Player 金币与房间 Claimed 同一 strict 事务；并发重投只发一次，undo 无半笔；
+// 未领奖不能归还座位；session.Finish 触发 Releaser 归还，最后一个归还关闭房间，随后注销同步、销毁实体。
+func TestPartyGameSettlementRewardsOnceAndRoomDestroyed(t *testing.T) {
+	f := newPartyFixture(t)
+	room := f.openMatch(t, "match-settle", 0, 1, 2, 3)
+	resource := session.Resource{Kind: "party_room", ID: strconv.FormatInt(room, 10)}
+	runs := make([]session.Run, 4)
+	epochs := make([]uint64, 4)
+	for seat := range 4 {
+		var err error
+		if runs[seat], err = f.sessions.Enter(f.ctx, f.ids[seat], session.EnterRequest{Kind: "party-room", RequestID: fmt.Sprint("match-settle:", seat)}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.sessions.Attach(f.ctx, f.ids[seat], runs[seat].ID, resource); err != nil {
+			t.Fatal(err)
+		}
+		epochs[seat] = f.connect(t, room, seat, 1)
+	}
+	s := f.snap(t, room).State
+	f.setNow(s.StarAt)
+	if r, err := f.input(room, 1, party.Input{Epoch: epochs[1], Seq: 1, Round: 1, Kind: "grab"}); err != nil || r.Outcome != party.OutcomeScore {
+		t.Fatal(r, err)
+	}
+	// seat 3 中途离开：会话以 abandoned 结束，Releaser 立刻归还它的座位（局内只接受离开 / 掉线的座位）。
+	if err := f.s().Sync_PartyLeave(f.ctx, room, f.ids[3]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.sessions.Leave(f.ctx, f.ids[3], runs[3].ID, "left mid-game"); err != nil {
+		t.Fatal(err)
+	}
+	f.refuse(t, room, party.ErrRule, func() error { _, err := f.s().Sync_PartyRelease(f.ctx, room, f.ids[0]); return err })
+	f.setNow(s.Deadline - 1)
+	f.waitBoard(t, room, "match settles", func(b party.Board) bool { return b.Phase == party.PhaseSettled })
+	f.refuse(t, room, party.ErrRule, func() error { _, err := f.s().Sync_PartyRelease(f.ctx, room, f.ids[0]); return err })
+	before := f.snap(t, room).Raw
+	refused := errors.New("after the reward was written")
+	name := nest.NewHandlerName("party_room_undo_claim")
+	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		if _, err := handlerPartyClaim(es[0].(IPartyPlayerEntity), es[1].(IPartyRoomEntity), f.now.Load()); err != nil {
+			return nil, err
+		}
+		return nil, refused
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if _, err := f.engine.RequestMulti(f.ctx, name, []int64{f.ids[1], room}, nil); !errors.Is(err, refused) {
+		t.Fatal(err)
+	}
+	if f.snap(t, room).Raw != before {
+		t.Fatal("partial reward rollback")
+	}
+	want := []int64{10, 50, 10, 0}
+	var wg sync.WaitGroup
+	for seat := range 4 {
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if got, err := f.s().MultiSync_PartyClaim(f.ctx, f.ids[seat], room); err != nil || got != want[seat] {
+					t.Error("reward", seat, got, err)
+				}
+			}()
+		}
+	}
+	wg.Wait()
+	read := nest.NewHandlerName("party_room_test_coins")
+	nest.MustRegisterHandlerWithMeta(read, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		d := es[0].(IPartyPlayerEntity).Dao()
+		return [2]int64{d.GetCoins(), d.GetMatches()}, nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
+	for seat := range 4 {
+		v, err := f.engine.Request(f.ctx, read, f.ids[seat], nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		matches := int64(1)
+		if want[seat] == 0 {
+			matches = 0
+		}
+		if got := v.([2]int64); got != [2]int64{want[seat], matches} {
+			t.Fatalf("seat %d coins/matches %v, want %d/%d", seat, got, want[seat], matches)
+		}
+	}
+	for seat := range 3 {
+		if _, err := f.sessions.Finish(f.ctx, f.ids[seat], runs[seat].ID, session.StateSucceeded, "settled"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.sessions.Finish(f.ctx, f.ids[seat], runs[seat].ID, session.StateSucceeded, "settled"); err != nil {
+			t.Fatalf("replayed finish: %v", err) // 幂等：已归还的资源不再交给 Releaser
+		}
+	}
+	f.mu.Lock()
+	closed, released := f.closed[room], len(f.releases)
+	f.mu.Unlock()
+	if !closed || released != 4 {
+		t.Fatalf("room closed=%v after %d seat releases", closed, released)
+	}
+	if s := f.snap(t, room); s.State.Phase != party.PhaseClosed || s.Beat || s.Wake != 0 {
+		t.Fatalf("closed room %+v", s)
+	}
+	if err := f.hub.CloseRoom(room); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.access.Destroy(f.ctx, f.access.Manager().Get(room), entity.DestroyReasonMemoryUnload, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s().Sync_PartyView(f.ctx, room, f.ids[0]); err == nil {
+		t.Fatal("destroyed room still answered")
+	}
+	if gameheartbeat.Driver.Registered() != 0 {
+		t.Fatal("destroyed room left a heartbeat registration")
+	}
+}
+
+// 10. 硬期限：平分进入加时（心跳照常推进加时回合），之后心跳停摆（例如实体刚冷加载、驱动未启动），持久定时器到期
+// 照样把局按 timeout 强制结算——没有胜者、完赛者拿参与奖，心跳登记与定时器都清掉。
+func TestPartyGameMatchDeadlineTimerForcesSettlement(t *testing.T) {
+	f := newPartyFixture(t)
+	room := f.openMatch(t, "match-deadline", 0, 1)
+	for seat := range 2 {
+		f.connect(t, room, seat, 1)
+	}
+	s := f.snap(t, room).State
+	f.setNow(partyNow + int64(party.DemoRules().Rounds)*party.DemoRules().RoundMillis)
+	f.waitBoard(t, room, "tie goes to sudden death", func(b party.Board) bool { return b.Round == party.DemoRules().Rounds+1 })
+	if err := gameheartbeat.Driver.Stop(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.setNow(s.Deadline)
+	live := f.access.Manager().Get(room)
+	waitParty(t, "deadline indexed", func() bool { due, ok := roomentity.TimerDriver.DueOf(live); return ok && due.UnixMilli() == s.Deadline })
+	if n := roomentity.TimerDriver.DeliverDue(f.ctx); n != 1 {
+		t.Fatalf("delivered %d deadlines", n)
+	}
+	waitParty(t, "deadline settles", func() bool { return f.snap(t, room).State.Phase == party.PhaseSettled })
+	end := f.snap(t, room)
+	if end.State.Result != party.ResultTimeout || end.State.Winner != 0 || end.State.SettledAt != s.Deadline || end.Beat || end.Wake != 0 {
+		t.Fatalf("forced settlement %+v", end)
+	}
+	if _, due := roomentity.TimerDriver.DueOf(live); due {
+		t.Fatal("deadline still indexed")
+	}
+	for seat := range 2 {
+		if got, err := f.s().MultiSync_PartyClaim(f.ctx, f.ids[seat], room); err != nil || got != party.DemoRules().PlayReward {
+			t.Fatal("timeout reward", got, err)
+		}
+	}
+	if gameheartbeat.Driver.Registered() != 0 {
+		t.Fatal("settled room still registered with the heartbeat ring")
+	}
+}

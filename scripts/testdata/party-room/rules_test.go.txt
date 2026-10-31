@@ -1,0 +1,119 @@
+package partyroom
+
+import (
+	"errors"
+	"testing"
+)
+
+const t0 int64 = 1800000000000
+
+func TestPartyGameRulesValidateAndRoomCode(t *testing.T) {
+	if err := DemoRules().Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*Rules){
+		"nine seats":         func(r *Rules) { r.Capacity = MaxSeats + 1 },
+		"one seat":           func(r *Rules) { r.Capacity, r.MinPlayers = 1, 1 },
+		"star after round":   func(r *Rules) { r.StarMaxMillis = r.RoundMillis },
+		"deadline too short": func(r *Rules) { r.MatchMillis = int64(r.Rounds)*r.RoundMillis - 1 },
+		"loser paid more":    func(r *Rules) { r.PlayReward = r.WinReward + 1 },
+	} {
+		r := DemoRules()
+		mutate(&r)
+		if !errors.Is(r.Validate(), ErrRule) {
+			t.Fatalf("%s: invalid rules accepted", name)
+		}
+		if _, err := NewMatchRoom("m", []int64{1, 2}, r, 1, t0); err == nil {
+			t.Fatalf("%s: room opened with invalid rules", name)
+		}
+	}
+	for _, unique := range []int64{1, 35, 36, 1 << 40} {
+		code := EncodeCode(unique)
+		if got, err := DecodeCode(code); err != nil || got != unique {
+			t.Fatalf("code %q decoded to %d, %v", code, got, err)
+		}
+	}
+	for _, bad := range []string{"", "0", "-1", "ZZZZZZZZZZZZZ", "A B"} {
+		if _, err := DecodeCode(bad); err == nil {
+			t.Fatalf("bad code %q accepted", bad)
+		}
+	}
+	if _, err := NewMatchRoom("m", []int64{1, 1}, DemoRules(), 1, t0); err == nil {
+		t.Fatal("duplicate roster accepted")
+	}
+	if _, err := Decode(""); err == nil {
+		t.Fatal("empty state decoded")
+	}
+}
+
+// 心跳是可变步长：一拍可能隔 100ms，也可能掉拍后隔几秒，或者进程卡顿后一次推进到很久以后。
+// 同一组输入，按不同步长推进到同一时刻，状态必须逐字节相同；事件按时间顺序结算（宽限到期 → 回合结束 → 硬期限）。
+func TestPartyGameRulesVariableStepEquivalence(t *testing.T) {
+	play := func(steps []int64, end int64) State {
+		t.Helper()
+		s, err := NewMatchRoom("m-1", []int64{11, 12, 13}, DemoRules(), 42, t0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, id := range []int64{11, 12, 13} {
+			if err := s.Connect(id, uint64(i+1), true, t0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// 13 第一回合就断线、不再回来：宽限到期的时刻固定在 t0+100+Grace。
+		if err := s.Connect(13, 3, false, t0+100); err != nil {
+			t.Fatal(err)
+		}
+		now := t0
+		advanceTo := func(target int64) {
+			for _, step := range steps {
+				if now+step > target {
+					break
+				}
+				now += step
+				s.Advance(now)
+			}
+			now = target
+			s.Advance(now)
+		}
+		advanceTo(s.StarAt)
+		if _, _, err := s.Apply(11, Input{Epoch: 1, Seq: 1, Round: 1, Kind: "grab"}, now); err != nil {
+			t.Fatal(err)
+		}
+		advanceTo(end)
+		return s
+	}
+	end := t0 + 3*DemoRules().RoundMillis + 1
+	want := play(nil, end) // 一步到位
+	if want.Phase != PhaseSettled || want.Result != ResultWon || want.Winner != 11 || want.SettledAt != t0+3*DemoRules().RoundMillis {
+		t.Fatalf("one-step outcome %+v", want)
+	}
+	if want.Seats[2].Out != OutDropped {
+		t.Fatal("grace expiry not applied")
+	}
+	for _, steps := range [][]int64{{100}, {50}, {100, 100, 2300, 100, 900}, {7000}} {
+		if got := play(steps, end); got.Encode() != want.Encode() {
+			t.Fatalf("steps %v diverged:\n got %s\nwant %s", steps, got.Encode(), want.Encode())
+		}
+	}
+	// 进程卡顿后第一次推进已经越过硬期限：仍按时间顺序先结束第三回合（唯一领先者胜），不能被期限抢先判成 timeout。
+	if late := play(nil, t0+10*DemoRules().MatchMillis); late.Encode() != want.Encode() {
+		t.Fatalf("advance past the deadline reordered events:\n got %s\nwant %s", late.Encode(), want.Encode())
+	}
+	// 平分：常规回合打完进入加时，一直到硬期限按 timeout 结算，结算时刻是期限本身而不是“发现”的时刻。
+	tie, _ := NewMatchRoom("m-2", []int64{21, 22}, DemoRules(), 7, t0)
+	for i, id := range []int64{21, 22} {
+		_ = tie.Connect(id, uint64(i+1), true, t0)
+	}
+	tie.Advance(t0 + 3*DemoRules().RoundMillis)
+	if tie.Phase != PhasePlaying || tie.Round != 4 {
+		t.Fatalf("tie did not go to sudden death: %+v", tie)
+	}
+	tie.Advance(t0 + 10*DemoRules().MatchMillis)
+	if tie.Result != ResultTimeout || tie.SettledAt != t0+DemoRules().MatchMillis || tie.Winner != 0 {
+		t.Fatalf("deadline settlement %+v", tie)
+	}
+	if tie.Advance(t0 + 20*DemoRules().MatchMillis) {
+		t.Fatal("settled room kept advancing")
+	}
+}
