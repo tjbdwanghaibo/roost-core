@@ -844,15 +844,13 @@ func TestPhysicsServiceRunnerCoversNativeIntegration(t *testing.T) {
 
 // 生成器签名变了而玩法纵切夹具没人跑：v1.33.0 上 card-rpg / mmorpg / merge-casual 三个夹具因 D22-1 改掉 Tick 的
 // 业务时间参数编译失败，九个 scripts/test-<玩法>-generated.sh 当时不在任何门禁里，没人发现。现在它们由 pretag
-// 每次发版在缺省模式（离线、替身提交器）跑一遍。pretagExemptGeneratedScripts 是不进 pretag 的生成工程脚本，
+// 每次发版在缺省模式（离线、替身提交器）跑一遍；三个离线生成器专项（heartbeat / level / sync-modes）同批跑
+// （维护者 2026-10-31 决定纳入）。pretagExemptGeneratedScripts 是不进 pretag 的生成工程脚本（目前都要外部依赖），
 // 每条写明由谁跑；新增的 scripts/test-*-generated.sh 要么在 pretag 里，要么在这里登记原因。
 var pretagExemptGeneratedScripts = map[string]string{
 	"scripts/test-dataengine-generated.sh": "需要隔离 Mongo；由 wiring/scripts/integration/dataengine-env.sh test 跑（见 generatedRealDependencyEntries）",
 	"scripts/test-remote-generated.sh":     "需要隔离 Mongo / Redis / NATS；由 dataengine-env.sh test 与 mirror-local.sh 跑",
 	"scripts/test-demo-generated.sh":       "需要隔离 Mongo / Redis / NATS；由 dataengine-env.sh test 与 mirror-local.sh 跑；game-demo 的离线 build / vet / test 在 go test ./... 与 release.sh 里",
-	"scripts/test-heartbeat-generated.sh":  "离线生成器专项（心跳 / 行为 / 时间域），不是玩法纵切；2026-10-31 只把九个玩法脚本纳入 pretag，是否纳入待维护者决定",
-	"scripts/test-level-generated.sh":      "离线生成器专项（Level 组件），不是玩法纵切；同上，是否纳入待维护者决定",
-	"scripts/test-sync-modes-generated.sh": "离线生成器专项（双模式 Sync），不是玩法纵切；同上，是否纳入待维护者决定",
 }
 
 // TestGeneratedScriptsAreInPretag：每个 scripts/test-*-generated.sh 都在 scripts/pretag.sh 的非注释行里出现，或登记在

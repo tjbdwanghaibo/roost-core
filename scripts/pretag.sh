@@ -120,9 +120,10 @@ rm -f "$test_log"
 #     scripts/testdata/<玩法> 的业务夹具，跑缺省模式（离线、替身提交器）的场景用例，并编译真实依赖用例。
 #     go test ./... 看不到这些夹具：v1.33.0 上 D22-1 改了生成的 Tick 签名，card-rpg / mmorpg / merge-casual
 #     三个夹具编译失败而无人发现。脚本并行跑（共享同一个 go build cache），ROOST_PRETAG_GENRE_JOBS 调并发数；
-#     失败时保留该脚本的日志与生成工程。新增的 scripts/test-*-generated.sh 必须加进这张表或在根包
-#     TestGeneratedScriptsAreInPretag 的豁免表里写明由谁跑。
-echo "pretag: genre vertical slices (generated projects, offline default mode)"
+#     失败时保留该脚本的日志与生成工程。同一批并行跑三个离线生成器专项（心跳 / 行为 / 时间域、Level 组件、
+#     双模式 Sync；维护者 2026-10-31 决定纳入）：它们也只用本检出生成工程、不连外部依赖。新增的
+#     scripts/test-*-generated.sh 必须加进这张表或在根包 TestGeneratedScriptsAreInPretag 的豁免表里写明由谁跑。
+echo "pretag: genre vertical slices and offline generator scripts (generated projects, offline default mode)"
 genre_scripts=(
   scripts/test-slg-generated.sh
   scripts/test-mmorpg-generated.sh
@@ -133,6 +134,9 @@ genre_scripts=(
   scripts/test-merge-casual-generated.sh
   scripts/test-idle-sim-generated.sh
   scripts/test-auto-chess-generated.sh
+  scripts/test-heartbeat-generated.sh
+  scripts/test-level-generated.sh
+  scripts/test-sync-modes-generated.sh
 )
 genre_logs="$(mktemp -d "${TMPDIR:-/tmp}/roost-pretag-genres.XXXXXX")"
 genre_start=$SECONDS

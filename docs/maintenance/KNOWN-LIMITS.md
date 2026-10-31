@@ -164,7 +164,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **成员挂场景时间域由业务写**：生成的 `timeDomain()` 返回 nil；域在构造时定下、运行中不能换（D22 边界），实体换场景要 `Close` 旧的行为组件后重建（`Behavior.Close` / `Controller.Close`，见上文“域要在构造时给”），生成器没有生成重建入口；生成的 `BehaviorComponent.OnDestroy` 已调 `Controller.Close` 与 `Behavior.OnDestroy`。
 - **时间域字段缺省 `nopersist,sync`**：随进程结束的副本场景；要持久的场景手工改成 `persist`（DAO 定义归业务）。三个字段名固定，已有同名字段只有一部分或类型不同时 add 拒绝。
 - **去掉 `heartbeats` / `time_domains` 条目后生成部分不自动删除**：与 `timers` 相同，需要手工删 `*_component_gen.go` 与实体里的组件字段；服务 `mods` 里的 `heartbeat` 也不自动去掉。
-- **端到端用的是内存权威**：`scripts/test-heartbeat-generated.sh` 以不落库 committer 代替 DataEngine，只覆盖新建实体（不覆盖卸载重载后重新登记、Remote 托管实体、真实 WAL / Mongo）；脚本不在 pretag 与 `go test ./...` 里，要手工运行。
+- **端到端用的是内存权威**：`scripts/test-heartbeat-generated.sh` 以不落库 committer 代替 DataEngine，只覆盖新建实体（不覆盖卸载重载后重新登记、Remote 托管实体、真实 WAL / Mongo）；脚本不在 `go test ./...` 里；2026-10-31 起由 `scripts/pretag.sh` 每次发版跑（维护者决定纳入），平时改心跳 / 行为 / 时间域生成器时手工运行。
 - **`heartbeat.*` 配置段跟着 Mod 的声明走**：生成配置写 `heartbeat.delivery: batch`（选项 C 的开关，维护者 2026-10-22 起缺省批量作业；`dispatch` 是单目标可选项）；配置段、doctor 与 `--check-config` 用 `kitconfig_gen.go` 里的快照（`wiring/internal/configschemagen` 的 `heartbeat` 组），Mod 加新键后要重新 `go generate ./codegen/internal/roost`（`TestKitConfigSchemasMatchKitDeclarations` 守）。已有配置里改过的 `heartbeat:` 段不被改写。
 
 ### Skill Runtime
