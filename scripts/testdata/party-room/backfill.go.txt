@@ -1,0 +1,146 @@
+package partyroom
+
+import "slices"
+
+// 局内补位（业务层写法，框架不提供补位 API）：匹配房间开局后有人主动离开，且仍在可补位阶段时，房间把空出的座位挂成
+// 补位队列里的一张“房间票”；匹配器取一张房间票 + 若干玩家票弹性成局，成局交给房间，由房间按自己的座位裁决谁能进。
+//
+// 本文件只有纯规则：房间什么时候挂票、挂几个空位、什么时候撤票，以及一个补位成局进房时谁被接受、谁被拒。
+// 排队、成局与撤票的 I/O 由房间宿主在事务外做（game/partymatch），房间状态只记业务事实：
+//   - 轮次 Round：每挂出一张新的房间票加一。房间票的排队请求 ID 是“房间 ID + 轮次”，所以同一轮重放排队只得到同一张票，
+//     匹配服务“同一票集合只成一局”保证同一张房间票只被一个补位成局消耗——同一时刻一个房间最多一批补位在途。
+//   - 座位是权威：房间票的空位数只是给匹配器的提示，存储不校验人数；补位成局进房时按房间此刻的空位逐个接受，多出的人被拒。
+//   - 已处理的补位成局按 Match ID 记下结果，同一成局重投（匹配器重试、并发投递）返回同一结果、不重复占座。
+
+// MaxSeatRecords 是座位记录的上限：主动离开的人保留座位记录（结算、归还要用），补位追加新记录；上限防止反复离开、补位让
+// 房间状态无限增长。局内人数仍不超过 Roster（≤ MaxSeats）。
+const MaxSeatRecords = 2 * MaxSeats
+
+// Backfill 是房间的补位事实（State.Backfill）。
+type Backfill struct {
+	// Round 是最近一次挂出的补位轮次；0 是从未挂过票。
+	Round int `json:"round,omitempty"`
+	// Open 表示第 Round 轮的房间票应在补位队列里等待：已挂出，未被补位成局消耗，也未撤回。
+	Open bool `json:"open,omitempty"`
+	// Seats 是第 Round 轮挂出时的空位数（房间票的 Score）。
+	Seats int `json:"seats,omitempty"`
+	// Applied 是已处理的补位成局（按 Match ID 重放）。每轮至多一条，轮次受座位记录上限约束。
+	Applied []BackfillResult `json:"applied,omitempty"`
+}
+
+// BackfillOffer 是房间告诉宿主的补位动作，宿主按它排队或撤票（都幂等，可重复执行）：
+//   - List：第 Round 轮的房间票应在队列里，按“房间 ID + 轮次”排队（重放返回同一张票）；Seats 是空位数，Until 是补位截止；
+//   - Withdraw：补位已截止，第 Round 轮的房间票若还在等待就撤回（已被补位成局消耗时由进房拒绝兜底）；
+//   - 两者都为假：没有要做的事（满员，或从未挂过票）。
+type BackfillOffer struct {
+	Round    int   `json:"round,omitempty"`
+	Seats    int   `json:"seats,omitempty"`
+	Until    int64 `json:"until,omitempty"`
+	List     bool  `json:"list,omitempty"`
+	Withdraw bool  `json:"withdraw,omitempty"`
+}
+
+// BackfillResult 是一个补位成局进房的结果：Accepted 按成局里的顺序占了座位，Rejected 没有座位（超员、轮次已过、补位已截止、
+// 本来就在房间里），由宿主让他们重新排队。
+type BackfillResult struct {
+	Match    string  `json:"match"`
+	Round    int     `json:"round"`
+	Accepted []int64 `json:"accepted,omitempty"`
+	Rejected []int64 `json:"rejected,omitempty"`
+}
+
+// BackfillWindow 报告房间此刻是否还在可补位阶段：匹配房间、局内、第 1 回合（截止 = 第 1 回合结束，见 BackfillUntil）。
+// 阶段推进（回合结束、提前结算）就截止。调用方先 Advance(now)，所以“第 1 回合”已按时间戳判定。
+func (s State) BackfillWindow() bool {
+	return s.Roster > 0 && s.Phase == PhasePlaying && s.Round == 1
+}
+
+// BackfillUntil 是补位截止的业务时间（毫秒）：第 1 回合结束时刻。只在 BackfillWindow 为真时有意义。
+func (s State) BackfillUntil() int64 { return s.RoundEnd }
+
+// FreeSeats 是可补的空位：Roster 减去仍占座的人。只有主动离开（OutLeft）让出座位；掉线出局的人仍是房间同步组成员
+// （宽限期满不自动退组），他的座位不补。
+func (s State) FreeSeats() int {
+	taken := 0
+	for _, seat := range s.Seats {
+		if seat.Out != OutLeft {
+			taken++
+		}
+	}
+	return max(s.Roster-taken, 0)
+}
+
+// OfferBackfill 决定宿主此刻要做的补位动作，并在需要时开下一轮（Round 加一、Open）。幂等：本轮已挂出时返回同一轮，
+// 不开新轮；截止后每次都返回撤回第 Round 轮。changed 表示房间状态有变化（开了新轮或关掉了本轮）。
+func (s *State) OfferBackfill() (offer BackfillOffer, changed bool) {
+	b := &s.Backfill
+	if !s.BackfillWindow() {
+		if b.Round == 0 {
+			return BackfillOffer{}, false
+		}
+		changed = b.Open
+		b.Open = false
+		return BackfillOffer{Round: b.Round, Withdraw: true}, changed
+	}
+	if !b.Open {
+		free := s.FreeSeats()
+		if free == 0 || len(s.Seats) >= MaxSeatRecords {
+			return BackfillOffer{}, false
+		}
+		b.Round, b.Open, b.Seats, changed = b.Round+1, true, free, true
+	}
+	return BackfillOffer{Round: b.Round, Seats: b.Seats, Until: s.BackfillUntil(), List: true}, changed
+}
+
+// ApplyBackfill 让一个补位成局进房：match 是匹配服务的 Match ID，round 是成局里房间票的轮次，players 是成局里的玩家（按票序）。
+//
+//   - 同一 Match 重投返回原结果、不改状态；同一 Match 换了轮次或名单是 ErrRule（不是重投）。
+//   - 轮次不是本轮、本轮已被消耗或撤回、补位已截止：全部拒绝，状态不变。轮次只增不减、截止后不再开放，所以这个结论不会变，
+//     不必记录也能重放出同一结果。
+//   - 否则按名单顺序逐个占空位（已在房间里的人、名单里重复的人被拒），没座位的人被拒；本轮随之关闭（房间票已被这个成局消耗），
+//     结果记进 Applied。新进的人此刻“未进房”，与开房名单一样有一个宽限窗口连进来。
+func (s *State) ApplyBackfill(match string, round int, players []int64, now int64) (BackfillResult, bool, error) {
+	if match == "" || round < 1 || len(players) == 0 || len(players) > MaxSeats {
+		return BackfillResult{}, false, ErrRule
+	}
+	for _, applied := range s.Backfill.Applied {
+		if applied.Match != match {
+			continue
+		}
+		if applied.Round != round || !sameMembers(players, applied) {
+			return BackfillResult{}, false, ErrRule
+		}
+		return applied, false, nil
+	}
+	result := BackfillResult{Match: match, Round: round}
+	b := &s.Backfill
+	if !s.BackfillWindow() || round != b.Round || !b.Open {
+		result.Rejected = slices.Clone(players)
+		return result, false, nil
+	}
+	free := s.FreeSeats()
+	for _, id := range players {
+		if id == 0 || s.Index(id) >= 0 || free == 0 || len(s.Seats) >= MaxSeatRecords {
+			result.Rejected = append(result.Rejected, id)
+			continue
+		}
+		s.Seats = append(s.Seats, Seat{PlayerID: id, DownAt: now})
+		result.Accepted = append(result.Accepted, id)
+		free--
+	}
+	b.Open = false
+	b.Applied = append(b.Applied, result)
+	return result, true, nil
+}
+
+// sameMembers 报告 players 与一次已记录结果的成员是否是同一组人（顺序可不同：接受与拒绝分开记录后原顺序不再可还原）。
+func sameMembers(players []int64, applied BackfillResult) bool {
+	recorded := append(slices.Clone(applied.Accepted), applied.Rejected...)
+	if len(recorded) != len(players) {
+		return false
+	}
+	a, b := slices.Clone(players), recorded
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
+}

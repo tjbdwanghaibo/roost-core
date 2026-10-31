@@ -83,6 +83,11 @@ type State struct {
 	Result    string `json:"result,omitempty"`
 	Winner    int64  `json:"winner,omitempty"`
 	SettledAt int64  `json:"settled_at,omitempty"`
+	// Roster 是匹配房间开房时的名单人数：补位把局内人数补回到它（backfill.go），开房重放也按它核对名单。
+	// 房间码房间为 0，不补位。
+	Roster int `json:"roster,omitempty"`
+	// Backfill 是局内补位的业务事实（轮次、本轮房间票是否挂出、已处理的补位成局），见 backfill.go。
+	Backfill Backfill `json:"backfill,omitzero"`
 }
 
 // NewMatchRoom 用匹配服务的成局名单开房，直接开局。名单里的人此刻都算“未进房”，各有一个宽限窗口连进来。
@@ -93,7 +98,7 @@ func NewMatchRoom(match string, players []int64, r Rules, seed uint64, now int64
 	if match == "" || len(players) < max(MinSeats, r.MinPlayers) || len(players) > MaxSeats {
 		return State{}, ErrRule
 	}
-	s := State{Match: match, Rules: r, Phase: PhasePlaying, Host: players[0], Seed: seed}
+	s := State{Match: match, Rules: r, Phase: PhasePlaying, Host: players[0], Seed: seed, Roster: len(players)}
 	for _, id := range players {
 		if id == 0 || s.Index(id) >= 0 {
 			return State{}, ErrRule

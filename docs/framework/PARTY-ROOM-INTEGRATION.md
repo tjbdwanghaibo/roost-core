@@ -14,13 +14,14 @@
 
 | 业务状态 | 拥有者 | 框架接法 | 业务边界 |
 | --- | --- | --- | --- |
-| 排队与成局 | `service/match` 的 Store | `Enqueue`（同一 requestID 重放返回同一张票、一人一张有效票）→ `Candidates` → `Grouping` → `Commit`（同一票集合并发提交只成一局）；本例是弹性人数队列 `Queue{GroupSize: 8, MinSize: 2, FillAfterSeconds: 20}`：凑满 8 人立即开，不满时最早一张票等满 20 秒（业务时钟）后 2～7 人也开，存储按同一规则拒绝过早的不满员局（`ErrGroupNotReady`） | 已开局房间的中途补位没有（第 8 节） |
+| 排队与成局 | `service/match` 的 Store | `Enqueue`（同一 requestID 重放返回同一张票、一人一张有效票）→ `Candidates` → `Grouping` → `Commit`（同一票集合并发提交只成一局）；本例是弹性人数队列 `Queue{GroupSize: 8, MinSize: 2, FillAfterSeconds: 20}`：凑满 8 人立即开，不满时最早一张票等满 20 秒（业务时钟）后 2～7 人也开，存储按同一规则拒绝过早的不满员局（`ErrGroupNotReady`） | 已开局房间的中途补位是业务层写法（第 6A 节），框架没有补位 API |
 | 玩家在哪个房间 | `service/session` 的 Run | 每名成员一个 Run（`Enter`，请求 ID 必填且全局唯一）+ `Attach` 房间资源；重连用 `Current` 找回房间；`Finish` / `Leave` 触发业务 `Releaser` 归还座位 | 一名玩家同时只有一个有效 Run；Run 的期限按秒，`TTL` 要长于一局 |
 | 房间：名单、规则快照、阶段、房主、座位（分数、犯规、出局、连接代、最后一条输入回执、领奖 / 归还标记）、回合时刻、种子 | PartyRoom 实体 DAO 的 `State`（persist） | `roost add entity PartyRoom` + `add dao`；锁档 World，领奖时与 Player 同一事务 | 整段业务 JSON，严格解码；种子与星星出现时刻只在这里 |
 | 公开记分板 | PartyRoom DAO 的 `Board`（`nopersist,sync`） | 每次写 `State` 时由 `SaveRoom` 一起算出；业务 packer 只开放 `Board` 一个视图 | 不落库，冷加载后由下一拍重算 |
 | 回合推进、星星出现、断线宽限 | PartyRoom 的实体心跳 | `roost add heartbeat --entity PartyRoom`，100ms 档，回调在实体锁与事务内按 `Beat.Now` 推进 | 心跳不持久；判定只看时间戳，不按“第几拍” |
 | 开局硬期限 | PartyRoom 的持久实体定时器 | `roost add timer --entity PartyRoom`；开局登记、结算即删 | 心跳没在跑（冷加载、驱动停摆）时由它兜底结算 |
 | 永久金币、完赛次数 | Player DAO | 多实体 `MultiSync_PartyClaim(player, room)`，strict | 局内分数与永久金币只在领奖事务里跨过去 |
+| 补位 | 房间状态的 `Backfill`（轮次、本轮房间票是否挂出、已处理的补位成局）+ 补位队列里的房间票 | handler `PartyBackfillOffer` / `PartyBackfill` 在实体锁内裁决，宿主与匹配循环 `game/partymatch` 在事务外排队 / 撤票 / 成局 | 座位是权威，超员由进房 handler 拒绝，不是存储保证（第 6A 节） |
 | 房间内同步 | `roomentity.SyncGroup`（`wiring/selfsync.Groups`，装在 self_sync 的 Manager 上） | `access.player.self_sync: true` + `sync_groups: [party_room]`；handler 在连接 / 离开 / 归还时 `Join` / `Leave` / `Disband`，事务内的调用提交后才生效 | 成员规则归业务；生成器只出声明文件 `sync_group.go` 与 bootstrap 接线（第 5 节） |
 
 ```mermaid
@@ -35,6 +36,8 @@ flowchart LR
     B --> W
     W --> F[提交后下一次 Flush → 全体成员同一份 Board（与自身视图同一条连接）]
     W --> R[结算 → 多实体领奖 → session.Finish → Releaser 归还 → 关房 → 销毁]
+    W --> Q[有人离开：宿主挂房间票 → 补位队列 Commit 房间票 + 玩家票]
+    Q --> P[Nest 锁 PartyRoom: PartyBackfill 按座位接受 / 拒绝 → 接受的人 session + Connect]
 ```
 
 ### 3. 如何使用
@@ -51,7 +54,7 @@ ROOST_PARTY_ROOM_KEEP=1 bash scripts/test-party-room-generated.sh   # 保留生�
 
 1. `roost project new party-room-practice -module example.com/party-room-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add entity PartyRoom`、`roost add dao PartyRoom --entity PartyRoom`、`roost add heartbeat --entity PartyRoom`、`roost add timer --entity PartyRoom`；
-3. 业务只改这几处：`db/def/player.go` 加 `Coins`（`persist,sync`，自身视图推给本人）/ `Matches` / `Initialized`（persist）；`db/def/party_room.go` 加 ``State string `bson:"state" dao:"persist"` ``、``WakeTimer int64 `bson:"wake_timer" dao:"persist"` `` 与 ``Board string `bson:"board" dao:"nopersist,sync"` ``；把 `game/entities/party_room/entity.go` 注解的 `category=entity.EntityCategoryOther` 换成 `category=entity.EntityCategoryWorld sync=true syncNamespace=party_room subjectPacker=NewPartyRoomBoardPacker`；放入业务包 `game/partyroom/`、实体包里的 `room.go` / `heartbeat_beats.go` / `timer_handlers.go` / `board_packer.go`（后两个心跳、定时器文件是 `roost add` 只在缺失时创建的业务文件），handler `game/handler/party_room.go`；
+3. 业务只改这几处：`db/def/player.go` 加 `Coins`（`persist,sync`，自身视图推给本人）/ `Matches` / `Initialized`（persist）；`db/def/party_room.go` 加 ``State string `bson:"state" dao:"persist"` ``、``WakeTimer int64 `bson:"wake_timer" dao:"persist"` `` 与 ``Board string `bson:"board" dao:"nopersist,sync"` ``；把 `game/entities/party_room/entity.go` 注解的 `category=entity.EntityCategoryOther` 换成 `category=entity.EntityCategoryWorld sync=true syncNamespace=party_room subjectPacker=NewPartyRoomBoardPacker`；放入业务包 `game/partyroom/`（含补位规则 `backfill.go`）、补位宿主与匹配循环 `game/partymatch/backfill.go`、实体包里的 `room.go` / `heartbeat_beats.go` / `timer_handlers.go` / `board_packer.go`（后两个心跳、定时器文件是 `roost add` 只在缺失时创建的业务文件），handler `game/handler/party_room.go`；
 4. 房间内同步走正式入口：`roost add access player --service game`、`roost add transport tcp`，在 roost.yaml 的 `access.player` 下写 `self_sync: true` 与 `sync_groups: [party_room]`，`roost project sync`；它创建一次的 `game/entities/party_room/sync_group.go` 是业务文件，换成本例的视图 `RoomSyncProfile` 与座位上限（[sync_group.go.txt](../../scripts/testdata/party-room/sync_group.go.txt)）；
 5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。
 
@@ -68,8 +71,9 @@ ROOST_PARTY_ROOM_KEEP=1 bash scripts/test-party-room-generated.sh   # 保留生�
 | 5 | `board_packer.go`（[board_packer.go.txt](../../scripts/testdata/party-room/board_packer.go.txt)） | 同步视图怎样只放出 `Board` 一个字段？ |
 | 6 | `game/handler/party_room.go`（[handlers.go.txt](../../scripts/testdata/party-room/handlers.go.txt)） | 每个 handler 怎样先 `Advance(now)` 再裁决？领奖怎样与 Player 原子提交？ |
 | 7 | `game/entities/party_room/sync_group.go`（[sync_group.go.txt](../../scripts/testdata/party-room/sync_group.go.txt)） | 房间同步组声明了什么、成员关系在哪几个 handler 里变 |
-| 8 | [gameplay_test.go.txt](../../scripts/testdata/party-room/gameplay_test.go.txt)、[rules_test.go.txt](../../scripts/testdata/party-room/rules_test.go.txt) | 十三个场景怎样实际验证 |
-| 9 | [persistence/recovery_test.go](../../scripts/testdata/party-room/persistence/recovery_test.go) | 局内 SIGKILL 后怎样冷加载、重启心跳、结算并删档 |
+| 8 | `game/partyroom/backfill.go`（[backfill.go.txt](../../scripts/testdata/party-room/backfill.go.txt)）、`game/partymatch/backfill.go`（[backfill_match.go.txt](../../scripts/testdata/party-room/backfill_match.go.txt)） | 补位什么时候挂票、撤票？房间票的幂等身份是什么？超员的人在哪里被拒、怎样回到排队？（第 6A 节） |
+| 9 | [gameplay_test.go.txt](../../scripts/testdata/party-room/gameplay_test.go.txt)、[rules_test.go.txt](../../scripts/testdata/party-room/rules_test.go.txt) | 十八个场景怎样实际验证 |
+| 10 | [persistence/recovery_test.go](../../scripts/testdata/party-room/persistence/recovery_test.go) | 局内 SIGKILL 后怎样冷加载、重启心跳、结算并删档 |
 
 身份要分开理解：Player / PartyRoom 用框架完整 EntityID；匹配的票 ID 与 Match ID 是匹配服务的身份；session 的 Run ID 是一次“在房间里”的身份；Entity Sync 的会话 ID 是玩家 ID（自身视图按它开会话，同步组的成员也是它；玩家实体 ID 用 `entity.GetUniqueIDFromEntityID` 换）；每个座位的输入序号与连接代（Epoch）是房间内的序号域；接入层票号（ticket）单调递增，用来区分新旧连接。
 
@@ -147,7 +151,7 @@ func grab(ctx context.Context, client nest.Client, roomID, playerID int64, epoch
 
 handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数：生成的分发包装在执行时从 `fctx` 填（这条消息冻结的业务时间），Sender 签名里没有它，调用方不传时间（[时间 §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）。
 
-#### 3.4 十三个场景各学什么
+#### 3.4 十八个场景各学什么
 
 | 场景（测试名前缀 `TestPartyGame`） | 业务选择 | 学到的框架契约 |
 | --- | --- | --- |
@@ -164,6 +168,11 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 | `SettlementRewardsOnceAndRoomDestroyed` | 中途离开者 `session.Leave` 后立即归还座位；结算前、领奖前归还被拒；领奖写入后失败回滚；四人各四次并发领奖每人只得一份（胜者 50、完赛 10、离开 0）；`session.Finish`（重放幂等）经 Releaser 归还，最后一个归还关闭房间；最后一个归还在提交后解散同步组，下一个同步周期四名成员收到房间的 remove（自身视图还在），之后卸载实体，房间不再应答、心跳环为空 | 多实体领奖：Player 金币与房间 Claimed 一起提交；Releaser 至少一次、handler 幂等 |
 | `SelfViewAndRoomShareOneConnection` | 两人连上房间：同一条连接的第一个全量里有自己的 Player（金币）与房间；改一人金币只推给本人；房间变化推给两人且不扰动自身视图；断线重连后一个全量带回两路；离开房间只撤掉房间，自身视图照常 | self_sync 与房间组同一个 Manager、同一个推送编号，客户端按命名空间（`player` / `party_room`）分流 |
 | `MatchDeadlineTimerForcesSettlement` | 平分进入加时（心跳照常推进），然后心跳驱动停摆；持久期限到期按 timeout 结算，没有胜者，完赛者拿参与奖，心跳登记与期限都清掉 | 持久定时器不依赖心跳；两条路径调用同一个 `Advance`，结果相同 |
+| `RulesBackfillSeats` | 房间码房间、满员房间不挂票；离开后挂第 1 轮（1 个空位、截止 = 第 1 回合结束），再问是同一轮；别的轮次的成局全部拒绝；进房时已在房间的人与超员的人被拒；同一成局换顺序重投结果不变，换轮次 / 换名单是 ErrRule；补满后不挂票，再有人离开开第 2 轮；回合结束后撤回第 2 轮、迟到的成局全部拒绝；补位事实经严格 JSON 往返不变 | 补位的纯规则：轮次、空位、截止只看房间状态与时间戳 |
+| `BackfillAfterMidGameLeave` | 四人房一人离开，宿主挂出房间票（重复 SyncRoom 是同一张票、队列里只有 1 张）；一张玩家票与它成局、投递进房，重投不改房间；补满后队列为空、再跑匹配不成局；开房重放仍认原名单；补位的人有 session Run，连上后能抢星得分 | 弹性 `Commit` 成补位局；房间票的排队身份 = 房间 + 轮次；房间按 Match ID 识别重投 |
+| `BackfillConcurrentMatchesAdmitOne` | 一个空位，两个匹配器实例各取两名玩家、用同一张房间票并发 `Commit`：一个成功、另一个 `ErrConflict` 且两张玩家票仍在等待；赢的一局三次并发投到房间 + 两次完整重投都是“一人进、一人拒”，房间只多一人；被拒的人按 `requeue:<Match>:<玩家>` 回到补位队列，连房间被拒 | 同一张房间票只成一局；不超员靠进房 handler 按座位拒绝，存储不校验人数 |
+| `BackfillDeadlineWithdrawsTicket` | 第 1 回合结束后匹配循环不给过了截止的房间票配人，宿主撤回仍在等待的房间票、之后不再补；另一个房间的房间票已被补位成局消耗时提前结算，撤票得到“已匹配”（不是错误），这个迟到的成局进房全部被拒、房间不变，玩家重新排队 | 截止由房间状态判定，撤票与进房拒绝两道兜底 |
+| `BackfillPlayerJoinsGroupWithFullSync` | 补位被接受后、连上之前，其他成员看到他的离线座位，他还不是同步组成员；连上后 `PartyConnect` 在提交后 Join，新连接收到一个全量（房间 + 自己的 Player），与服务端逐字节相同；他抢星得分后全体成员同步看到，之后都是增量；离开的人不再收到房间 | 补位进房的人走与开房名单相同的连接与同步路径 |
 
 上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 12 节。
 
@@ -198,6 +207,46 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 
 重连：鉴权后的新连接用更大的票号调 `Connect`，房间里这一座位的连接代加一；客户端输入必须带当前连接代，旧连接（旧代、旧票号的断开事件）一律拒绝。重投最后一条输入（同一序号、同一内容）总能拿回原回执，包括重连之后和结算之后。
 
+### 6A. 补位（业务层写法）
+
+匹配房间开局后有人主动离开、仍在可补位阶段时，后来的玩家优先补进这个房间，而不是另开一局。core 没有补位 API；维护者 2026-10-31 选定业务层写法（[FEATURE-2026-10-31 第 3 节](../maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)方案 B，零框架改动），只用 `service/match` 的弹性成局与它的两条契约（同一 requestID 排队幂等、同一票集合只成一局）。代码：规则 [backfill.go.txt](../../scripts/testdata/party-room/backfill.go.txt)（`game/partyroom`）、handler `PartyBackfillOffer` / `PartyBackfill`（[handlers.go.txt](../../scripts/testdata/party-room/handlers.go.txt)）、宿主与匹配循环 [backfill_match.go.txt](../../scripts/testdata/party-room/backfill_match.go.txt)（`game/partymatch`）。
+
+**流程**：
+
+1. **挂房间票**。有人 `PartyLeave` 之后，宿主调 `Backfill.SyncRoom(room)`：handler `PartyBackfillOffer` 在实体锁内决定动作——仍可补位（匹配房间、局内第 1 回合）、有空位（开房名单人数 `Roster` 减去仍占座的人；只有主动离开让出座位）且没有挂着的票时开下一轮（`Backfill.Round` 加一）并返回 List。宿主在事务外按 `backfill:<房间 ID>:<轮次>` 把房间票排进补位队列：主体 Kind `party_room`、ID 是房间实体 ID、Score 是空位数、Payload 是轮次与截止。补位队列是 `Queue{Mode: "party-backfill", GroupSize: 8, MinSize: 2}`（不等待：一张房间票 + 一张玩家票就能成局），与普通成局队列分开。
+2. **玩家排队**。选“快速加入”的玩家排进同一个补位队列（Kind `player`）。
+3. **成局**。匹配循环 `Pass` 按票序取候选，每张未过截止的房间票配最多 Score 张玩家票，弹性 `Commit`。
+4. **进房**。`Deliver` 经 Nest handler `PartyBackfill(room, matchID, round, players)` 交给房间：房间按此刻的空位逐个接受，多出的人被拒，本轮随之关闭。接受的人各进一个 session Run（请求 ID = Match ID + 玩家号，与开房名单同一写法）并挂上房间；被拒的人按 `requeue:<Match ID>:<玩家>` 重新排进补位队列；最后再 `SyncRoom`（还有空位就挂下一轮）。
+5. **连上房间**。被接受的人与开房名单一样此刻“未进房”，有一个宽限窗口；连上时 `PartyConnect` 在提交后 `SyncGroup.Join`，那个同步周期新连接收到房间（含他的新座位）与他自己 Player 的全量。
+
+**为什么不超员**：
+
+- 房间票一次只被一个 `Commit` 消耗（同一票集合只成一局；不同票集合争同一张房间票时只有一个成功，其余 `ErrConflict`，它们的玩家票原样留在队列里）。下一轮只在本轮被消耗或撤回之后才开，再加上“一个主体在一个队列里只有一张有效票”，同一时刻一个房间至多一张房间票在等待、至多一批补位在途。
+- 存储不认识房间票，也不校验人数：策略按 Score 取人，取多了（策略缺陷、按过时的空位数取）由进房 handler 按座位拒绝。座位是权威，房间状态在实体锁内裁决，同一 Match 重投按 `Backfill.Applied` 返回原结果。
+
+**幂等身份**：
+
+| 动作 | 身份 | 重放 |
+| --- | --- | --- |
+| 挂房间票 | `backfill:<房间 ID>:<轮次>`（排队 requestID） | 同一轮重放得到同一张票；宿主在排队前崩溃，周期性 `SyncRoom` 补做 |
+| 补位进房 | Match ID（房间 `Backfill.Applied`） | 返回原结果、不重复占座；同一 Match 换轮次或名单是 `ErrRule` |
+| 进 session | Match ID + 玩家号 | 同一个 Run |
+| 被拒重排 | `requeue:<Match ID>:<玩家>` | 不重复排队 |
+
+**截止与撤票**：本例的可补位阶段是第 1 回合，截止 = 第 1 回合结束（也写在房间票 Payload 里）。阶段推进（回合结束、提前结算）之后：
+
+- 匹配循环不再给过了截止的房间票配人——截止常由心跳推进，心跳回调不做 I/O，所以不依赖宿主及时撤票；
+- 宿主 `SyncRoom` 得到 Withdraw，按同一排队请求取回那张票再 `Cancel`。票已被补位成局消耗（`ErrTicketMatched`）不是错误：那个成局在途，进房时房间按“本轮已截止”全部拒绝，玩家重新排队；
+- 宿主在离开、补位进房之后调 `SyncRoom`，并周期性对账：心跳推进的截止没有回调通知宿主，对账之前过期的房间票留在队列里（不会被配人），直到撤回或票期限到。
+
+**局限**：
+
+- 不超员靠进房 handler 拒绝，不是存储保证：匹配服务里超员的补位局照常成功，被拒的人要多排一次队。需要由框架保证不超员时做方案 A（存储原生补位，未提供）。
+- 补位与普通成局的优先级由业务匹配循环决定：本例玩家选“快速加入”才进补位队列，一名玩家同时只排一个队列（两个队列各有一张有效票会被两边各成一局，存储不跨队列检查）。
+- 跨分区不支持：房间票与玩家票要在同一分区，`CommitAcross` 不用于补位。
+- 本例只补主动离开的座位：掉线出局的人仍是房间同步组成员（宽限期满不自动退组），他的座位不补；房间码房间不补；离开者保留座位记录（结算、归还要用），记录数上限 `MaxSeatRecords`（16）。
+- 场景只用内存存储与单进程匹配循环；Redis 存储上的补位、多个匹配器进程没有跑（两个匹配器实例的并发 `Commit` 在同一进程里用 goroutine 模拟）。
+
 ### 7. 结算、归还与销毁
 
 结算由服务端发起：局面变成 `settled` 后，对每个座位调用 `MultiSync_PartyClaim(player, room)`。它同时锁 Player 与房间，按终局推导奖励（胜者 50、其他完赛者含犯规淘汰 10、中途离开与掉线 0），Player 金币与座位 `Claimed` 一起提交，重复调用返回同一数额。这是同一原服内的多实体原子提交；Player 在别的 sid 时走 Saga / effect 原服协作（[Saga](guide/06-saga.md)），本地 MultiSync 不升级成分布式事务。
@@ -216,7 +265,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 | 房间跨机接管 / HA | 房间是普通本地实体，属于开房的进程；进程崩溃后只能由同一份 WAL / Mongo 冷加载恢复（第 13 节），没有自动迁到别的机器继续跑。Player 静态绑定 sid、不做动态迁移（[guide/09 §4](guide/09-services.md#4-关键业务边界)） | 短局可接受“崩溃 → 冷加载 → 硬期限结算”；需要跨机接管要另做 Remote 托管或宿主交接（MOBA 的宿主交接是写法参考） |
 | ~~房间内同步的生成器 / 装配~~（2026-10-31 已提供） | `access.player.sync_groups` + `wiring/selfsync.Groups`（第 5 节）；限制：要求 self_sync（会话归自身视图），成员关系不持久，没有独立 Gate 下的组同步用例 | 不开 self_sync、自己开关会话的进程仍可用 `policy.Group` |
 | 跨服务广播的可靠送达 | SyncBus 定位为可丢广播：普通 NATS 至多一次，JetStream 有限重投（[guide/04 §5](guide/04-sync.md#syncbus-的定位与丢失兜底)） | 房间内同步不走 SyncBus；跨服务的房间事件（大厅列表、好友在玩）要业务对账 |
-| 已开局房间的中途补位 | 弹性人数成局**已提供**（`Queue.MinSize` / `FillAfterSeconds`，“够 M 人、最早一张票等满 T 就开”，[guide/09 §4](guide/09-services.md#4-关键业务边界)）；已开局房间声明空位、后来的票优先补进去的补位没有（方案与待选项见 [FEATURE-2026-10-31 第 3 节](../maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)） | 房间宿主把空座当成一张“房间票”排进单独的补位队列，匹配器取一张房间票 + 若干玩家票弹性成局，进房 handler 拒绝超员（方案 B）；或等框架补位 |
+| 存储原生补位 | 弹性人数成局**已提供**（`Queue.MinSize` / `FillAfterSeconds`，“够 M 人、最早一张票等满 T 就开”，[guide/09 §4](guide/09-services.md#4-关键业务边界)）；补位按业务层写法（第 6A 节，维护者 2026-10-31 选方案 B）；由存储扣空位、保证不超员的原生补位（[FEATURE-2026-10-31 第 3 节](../maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)方案 A）未提供 | 房间票 + 玩家票在补位队列里弹性成局，进房 handler 按座位拒绝超员（第 6A 节）；多个玩法都要框架保证不超员时再做方案 A |
 | 房间码、大厅列表 | 没有房间码服务与房间列表 | directory 做短码；大厅列表自己维护（可丢、可重建） |
 | 掉线托管、AI 补位、观战 | 没有 | 业务规则；观战者可以只加入 Group 的成员、不占座位 |
 
@@ -242,12 +291,12 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 bash scripts/test-party-room-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 13 条顶层 race 场景（3.4：2 条规则 + 11 条 Nest / 心跳 / 同步）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`，再把真实依赖用例复制进工程只编译（`go vet`）；成功删除临时工程，失败或 `ROOST_PARTY_ROOM_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉）。2026-10-31 本机 macOS 实测：缺省模式约 18 秒（12 个场景合计约 2 秒，主要是心跳等待）；加入同步组入口（access player + TCP + self_sync）后 13 个场景合计约 2 秒。
+脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 18 条顶层 race 场景（3.4：3 条规则 + 15 条 Nest / 心跳 / 同步 / 补位）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`，再把真实依赖用例复制进工程只编译（`go vet`）；成功删除临时工程，失败或 `ROOST_PARTY_ROOM_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉）。2026-10-31 本机 macOS 实测：缺省模式约 18 秒（12 个场景合计约 2 秒，主要是心跳等待）；加入同步组入口（access player + TCP + self_sync）后 13 个场景合计约 2 秒；加入补位后 18 个场景的 `go test` 报告为 handler 包约 2.4 秒、规则包约 1.5 秒（`-race`）。
 
 ### 12. 业务纵切证明什么
 
-- **证明**：公共 CLI 生成的 Player / PartyRoom DAO、实体心跳（真实驱动循环、批量投递）、持久实体定时器、`nopersist,sync` 字段与业务 packer、多实体 Sender 与 Nest 在 13 个组合下的事务、undo 回滚（含心跳启停与定时器）、锁顺序、业务幂等与时间判定；正式 `wiring/nest` Mod + `wiring/selfsync`（自身视图 + 房间同步组，同一个 Manager）经 Nest 提交门把同一份记分板推给全体成员、把 Player 推给本人（正式 `frame.Receiver` 解码、按命名空间分流、视图白名单）；`service/match` 与 `service/session` 的正式领域实现（内存存储）在成局、进房、重连、归还里的语义。
-- **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；房间销毁只做内存卸载；match / session 用内存存储，不含 Redis 与 RPC；玩家接入层是替身（连接激活 / 关闭直接调 `OnActive` / `OnClosed`，推送进内存客户端），没有经嵌入 TCP / 独立 Gate、慢消费者断开、真实客户端（同一入口的真实 TCP 用例在 `wiring/selfsync` 的 `TestGroupsShareTheSelfSyncConnection`）；单进程；心跳在 `-race` 下的少量房间运行，没有房间数量、心跳负载与推送带宽的容量数据；夹具里的数值是样例。
+- **证明**：公共 CLI 生成的 Player / PartyRoom DAO、实体心跳（真实驱动循环、批量投递）、持久实体定时器、`nopersist,sync` 字段与业务 packer、多实体 Sender 与 Nest 在 18 个组合下的事务、undo 回滚（含心跳启停与定时器）、锁顺序、业务幂等与时间判定；正式 `wiring/nest` Mod + `wiring/selfsync`（自身视图 + 房间同步组，同一个 Manager）经 Nest 提交门把同一份记分板推给全体成员、把 Player 推给本人（正式 `frame.Receiver` 解码、按命名空间分流、视图白名单）；`service/match` 与 `service/session` 的正式领域实现（内存存储）在成局、进房、重连、归还里的语义；业务层补位（第 6A 节）在离开后挂票、并发成局只消耗一次房间票、进房 handler 按座位拒绝超员、截止撤票与迟到成局全部拒绝、补位的人进 session 并收到全量里的行为。
+- **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；房间销毁只做内存卸载；match / session 用内存存储，不含 Redis 与 RPC；玩家接入层是替身（连接激活 / 关闭直接调 `OnActive` / `OnClosed`，推送进内存客户端），没有经嵌入 TCP / 独立 Gate、慢消费者断开、真实客户端（同一入口的真实 TCP 用例在 `wiring/selfsync` 的 `TestGroupsShareTheSelfSyncConnection`）；单进程；补位的“两个匹配器实例”是同一进程里的两个 goroutine，没有多进程匹配器、Redis 存储上的补位与补位吞吐；心跳在 `-race` 下的少量房间运行，没有房间数量、心跳负载与推送带宽的容量数据；夹具里的数值是样例。
 
 ### 13. 真实 WAL / Mongo 崩溃恢复
 
@@ -273,4 +322,4 @@ ROOST_PARTY_ROOM_REAL=1 bash scripts/test-party-room-generated.sh
 
 派对玩法、计分、房间码与大厅缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢输入、重复发奖、记分板泄露 State 字段、回滚后仍推出去、心跳或定时器在结算后残留、生成物编译失败，则应在公共实现中修复。本夹具在当前 main 上没有触发框架或生成器缺陷；第 8 节的“房间同步没有生成器入口、与 self_sync 共用 Manager 尚未确认”是能力缺口，登记在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收)。100ms 档位与 30 秒期限是样例，不构成延迟或吞吐承诺。
 
-尚未实施或验收：正式客户端与公网鉴权、接入层到 `Connect` 的票号签发、房间码短码服务、大厅列表、中途补位、掉线托管与 AI 补位、观战、跨 sid 发奖、房间跨机接管、房间数量与推送带宽的容量（均不因此算框架缺陷）。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要。
+尚未实施或验收：正式客户端与公网鉴权、接入层到 `Connect` 的票号签发、房间码短码服务、大厅列表、存储原生补位（业务层补位见第 6A 节）、掉线托管与 AI 补位、观战、跨 sid 发奖、房间跨机接管、房间数量与推送带宽的容量（均不因此算框架缺陷）。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要。

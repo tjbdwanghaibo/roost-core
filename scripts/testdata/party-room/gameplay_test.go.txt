@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 	playerentity "example.com/party-room-practice/game/entities/player"
 	sender "example.com/party-room-practice/game/handler/syncsender"
 	gameheartbeat "example.com/party-room-practice/game/heartbeat"
+	partymatch "example.com/party-room-practice/game/partymatch"
 	party "example.com/party-room-practice/game/partyroom"
 	"example.com/party-room-practice/protocol/msgid"
 	"github.com/spf13/viper"
@@ -1227,5 +1229,328 @@ func TestPartyGameSelfViewAndRoomShareOneConnection(t *testing.T) {
 	}
 	if roomentity.SyncGroup.IsMember(room, entity.GetUniqueIDFromEntityID(f.ids[1])) || !roomentity.SyncGroup.IsMember(room, entity.GetUniqueIDFromEntityID(f.ids[0])) {
 		t.Fatal("room membership does not follow the seats")
+	}
+}
+
+// newBackfill 是补位的宿主与匹配循环（game/partymatch）：补位队列用 service/match 的正式内存存储，房间经 Nest，进房的人进 session。
+func (f *partyFixture) newBackfill(t *testing.T) (*partymatch.Backfill, svcmatch.Store) {
+	t.Helper()
+	store, err := svcmatch.NewMemoryStore(svcmatch.Config{Now: clock.Now, TicketTTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &partymatch.Backfill{Match: store, Queue: partymatch.BackfillQueue("local"), Rooms: f.engine, Sessions: f.sessions}, store
+}
+
+// quickJoin 是玩家选择“快速加入”：排进补位队列（一名玩家同时只排一个队列）。
+func (f *partyFixture) quickJoin(t *testing.T, bf *partymatch.Backfill, seat int) svcmatch.Ticket {
+	t.Helper()
+	ticket, err := bf.Match.Enqueue(f.ctx, bf.Queue, svcmatch.Subject{Kind: partymatch.KindPlayer, ID: f.ids[seat]}, partymatch.PlayerRequestID(f.ids[seat], "1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ticket
+}
+
+// ticketState 读一张票此刻的状态（主体必须是票的主人）。
+func ticketState(t *testing.T, store svcmatch.Store, queue svcmatch.Queue, ticket svcmatch.Ticket) svcmatch.TicketState {
+	t.Helper()
+	got, ok, err := store.Ticket(context.Background(), queue, ticket.ID, ticket.Subject)
+	if err != nil || !ok {
+		t.Fatal("ticket vanished", ticket.ID, err)
+	}
+	return got.State
+}
+
+// waitingOf 在补位队列的候选里找一名玩家的等待票：只读，不像重放排队那样在票不存在时顺手新建一张。
+func waitingOf(t *testing.T, store svcmatch.Store, queue svcmatch.Queue, player int64) (svcmatch.Ticket, bool) {
+	t.Helper()
+	candidates, err := store.Candidates(context.Background(), queue, svcmatch.MaxPageSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ticket := range candidates {
+		if ticket.Subject.Kind == partymatch.KindPlayer && ticket.Subject.ID == player {
+			return ticket, true
+		}
+	}
+	return svcmatch.Ticket{}, false
+}
+
+// 12. 补位：开局后有人离开，房间在第 1 回合内把空座挂成补位队列里的一张房间票（请求 ID = 房间 + 轮次，重放是同一张票）；
+// 匹配循环用一张房间票 + 一张玩家票弹性成局，房间经 Nest handler 接受补位的人（重投同一成局结果不变），他进 session、
+// 连上房间后照常输入；房间补满后不再挂票，开房重放仍认原名单。
+func TestPartyGameBackfillAfterMidGameLeave(t *testing.T) {
+	f := newPartyFixture(t)
+	bf, store := f.newBackfill(t)
+	room := f.openMatch(t, "match-backfill", 0, 1, 2, 3)
+	for seat := range 4 {
+		f.connect(t, room, seat, 1)
+	}
+	if _, offer, err := bf.SyncRoom(f.ctx, room); err != nil || offer != (party.BackfillOffer{}) {
+		t.Fatal("full room asked for backfill", offer, err)
+	}
+	if err := f.s().Sync_PartyLeave(f.ctx, room, f.ids[3]); err != nil {
+		t.Fatal(err)
+	}
+	listed, offer, err := bf.SyncRoom(f.ctx, room)
+	if err != nil || !offer.List || offer.Round != 1 || offer.Seats != 1 || offer.Until != f.snap(t, room).State.RoundEnd {
+		t.Fatal("leave did not list a room ticket", offer, err)
+	}
+	if listed.Subject.Kind != partymatch.KindRoom || listed.Subject.ID != room || listed.State != svcmatch.TicketWaiting {
+		t.Fatalf("room ticket %+v", listed)
+	}
+	if again, _, err := bf.SyncRoom(f.ctx, room); err != nil || again.ID != listed.ID {
+		t.Fatal("re-syncing the room listed a second ticket", again.ID, err)
+	}
+	if n, _ := store.QueueLength(f.ctx, bf.Queue); n != 1 {
+		t.Fatalf("backfill queue holds %d tickets", n)
+	}
+	f.quickJoin(t, bf, 4)
+	formed, err := bf.Pass(f.ctx, f.now.Load())
+	if err != nil || len(formed) != 1 || len(formed[0].Members) != 2 {
+		t.Fatal("room ticket + player ticket did not form a backfill", formed, err)
+	}
+	result, err := bf.Deliver(f.ctx, formed[0])
+	if err != nil || !slices.Equal(result.Accepted, []int64{f.ids[4]}) || len(result.Rejected) != 0 || result.Round != 1 {
+		t.Fatal("backfill not admitted", result, err)
+	}
+	before := f.snap(t, room).Raw
+	if replay, err := bf.Deliver(f.ctx, formed[0]); err != nil || !slices.Equal(replay.Accepted, result.Accepted) || f.snap(t, room).Raw != before {
+		t.Fatal("redelivered backfill changed the room", replay, err)
+	}
+	s := f.snap(t, room).State
+	if len(s.Seats) != 5 || s.FreeSeats() != 0 || s.Backfill.Open || s.Backfill.Round != 1 || s.Seats[4].PlayerID != f.ids[4] {
+		t.Fatalf("room after backfill %+v", s)
+	}
+	if n, _ := store.QueueLength(f.ctx, bf.Queue); n != 0 {
+		t.Fatalf("full room left %d tickets in the backfill queue", n)
+	}
+	if again, err := bf.Pass(f.ctx, f.now.Load()); err != nil || len(again) != 0 {
+		t.Fatal("a full room was backfilled again", again, err)
+	}
+	if _, err := f.s().Sync_PartyOpenMatch(f.ctx, room, "match-backfill", []int64{f.ids[0], f.ids[1], f.ids[2], f.ids[3]}, party.DemoRules()); err != nil {
+		t.Fatal("open replay rejected after backfill", err)
+	}
+	current, ok, err := f.sessions.Current(f.ctx, f.ids[4])
+	if attached, has := current.Attached("party_room"); err != nil || !ok || !has || attached.ID != strconv.FormatInt(room, 10) {
+		t.Fatal("backfilled player has no run in the room", err)
+	}
+	epoch := f.connect(t, room, 4, 1)
+	f.setNow(s.StarAt)
+	if r, err := f.input(room, 4, party.Input{Epoch: epoch, Seq: 1, Round: 1, Kind: "grab"}); err != nil || r.Outcome != party.OutcomeScore {
+		t.Fatal("backfilled player cannot play", r, err)
+	}
+}
+
+// 13. 并发补位只进一人：一个空位，两个匹配器实例各按错误的空位数取两名玩家、用同一张房间票并发 Commit——同一张房间票只成一局，
+// 输的一方报 ErrConflict、它的两张票留在队列里；赢的一方多出的人由房间的进房 handler 拒绝（座位是权威，存储不校验人数），
+// 被拒的人按“成局 + 玩家”重新排队。三个并发投递与两次重投返回同一结果，房间只多一人。
+func TestPartyGameBackfillConcurrentMatchesAdmitOne(t *testing.T) {
+	f := newPartyFixture(t)
+	bf, store := f.newBackfill(t)
+	room := f.openMatch(t, "match-backfill-race", 0, 1, 2, 3)
+	if err := f.s().Sync_PartyLeave(f.ctx, room, f.ids[3]); err != nil {
+		t.Fatal(err)
+	}
+	listed, offer, err := bf.SyncRoom(f.ctx, room)
+	if err != nil || offer.Seats != 1 {
+		t.Fatal(offer, err)
+	}
+	players := make([]svcmatch.Ticket, 4)
+	for i := range players {
+		players[i] = f.quickJoin(t, bf, 4+i)
+	}
+	groups := [2][]string{{listed.ID, players[0].ID, players[1].ID}, {listed.ID, players[2].ID, players[3].ID}}
+	var (
+		wg      sync.WaitGroup
+		matches [2]svcmatch.Match
+		errs    [2]error
+	)
+	for i := range groups {
+		wg.Add(1)
+		go func() { defer wg.Done(); matches[i], errs[i] = store.Commit(f.ctx, bf.Queue, groups[i]) }()
+	}
+	wg.Wait()
+	won := 0
+	if errs[0] != nil {
+		won = 1
+	}
+	if errs[won] != nil || !errors.Is(errs[1-won], svcmatch.ErrConflict) {
+		t.Fatalf("one room ticket, two commits: %v / %v", errs[0], errs[1])
+	}
+	winners, losers := players[2*won:2*won+2], players[2-2*won:4-2*won]
+	admitted, rejected := winners[0].Subject.ID, winners[1].Subject.ID
+	// 同一成局并发投到房间三次（匹配器超时重试与原请求同时到达）：房间按 Match ID 只处理一次；之后宿主顺序重投完整的 Deliver。
+	results := make([]party.BackfillResult, 3)
+	for i := range results {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var err error
+			if results[i], err = f.s().Sync_PartyBackfill(f.ctx, room, matches[won].ID, offer.Round, []int64{admitted, rejected}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	for range 2 {
+		r, err := bf.Deliver(f.ctx, matches[won])
+		if err != nil {
+			t.Fatal(err)
+		}
+		results = append(results, r)
+	}
+	for _, r := range results {
+		if !slices.Equal(r.Accepted, []int64{admitted}) || !slices.Equal(r.Rejected, []int64{rejected}) {
+			t.Fatalf("delivery %+v, want %d in and %d out", r, admitted, rejected)
+		}
+	}
+	s := f.snap(t, room).State
+	if len(s.Seats) != 5 || s.FreeSeats() != 0 || s.Index(admitted) != 4 || s.Index(rejected) >= 0 {
+		t.Fatalf("room after the race %+v", s)
+	}
+	f.refuse(t, room, party.ErrRule, func() error {
+		_, err := f.s().Sync_PartyConnect(f.ctx, room, rejected, 1, true)
+		return err
+	})
+	if requeued, ok := waitingOf(t, store, bf.Queue, rejected); !ok || requeued.RequestID != partymatch.RequeueRequestID(matches[won].ID, rejected) {
+		t.Fatal("rejected player is not queued again", requeued)
+	}
+	for _, loser := range losers {
+		if state := ticketState(t, store, bf.Queue, loser); state != svcmatch.TicketWaiting {
+			t.Fatalf("losing commit consumed ticket %s: %s", loser.ID, state)
+		}
+	}
+	if state := ticketState(t, store, bf.Queue, listed); state != svcmatch.TicketMatched {
+		t.Fatalf("room ticket %s", state)
+	}
+	if n, _ := store.QueueLength(f.ctx, bf.Queue); n != 3 {
+		t.Fatalf("backfill queue holds %d tickets, want the requeued player and the two losers", n)
+	}
+	if again, err := bf.Pass(f.ctx, f.now.Load()); err != nil || len(again) != 0 {
+		t.Fatal("a full room was backfilled again", again, err)
+	}
+}
+
+// 14. 补位截止：第 1 回合结束（阶段推进）后匹配循环不再给过了截止的房间票配人，宿主撤回仍在等待的房间票；房间提前结算时，
+// 已被补位成局消耗、还在途的房间票撤不回（ErrTicketMatched 不是错误），这个迟到的成局进房时被全部拒绝、玩家重新排队。
+func TestPartyGameBackfillDeadlineWithdrawsTicket(t *testing.T) {
+	f := newPartyFixture(t)
+	bf, store := f.newBackfill(t)
+	a := f.openMatch(t, "match-backfill-deadline-a", 0, 1, 2)
+	if err := f.s().Sync_PartyLeave(f.ctx, a, f.ids[2]); err != nil {
+		t.Fatal(err)
+	}
+	ticketA, _, err := bf.SyncRoom(f.ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := f.quickJoin(t, bf, 7)
+	f.setNow(f.snap(t, a).State.RoundEnd)
+	f.waitBoard(t, a, "heartbeat ends round 1", func(b party.Board) bool { return b.Round == 2 })
+	if formed, err := bf.Pass(f.ctx, f.now.Load()); err != nil || len(formed) != 0 {
+		t.Fatal("a room ticket past its deadline was matched", formed, err)
+	}
+	withdrawn, offer, err := bf.SyncRoom(f.ctx, a)
+	if err != nil || offer != (party.BackfillOffer{Round: 1, Withdraw: true}) || withdrawn.ID != ticketA.ID || withdrawn.State != svcmatch.TicketCancelled {
+		t.Fatal("deadline did not withdraw the room ticket", withdrawn, offer, err)
+	}
+	if s := f.snap(t, a).State; s.Backfill.Open || s.Backfill.Round != 1 {
+		t.Fatalf("room still offers backfill %+v", s.Backfill)
+	}
+	if formed, err := bf.Pass(f.ctx, f.now.Load()); err != nil || len(formed) != 0 || ticketState(t, store, bf.Queue, waiting) != svcmatch.TicketWaiting {
+		t.Fatal("a withdrawn room was backfilled", formed, err)
+	}
+
+	// 第二个房间：房间票已被一个补位成局消耗（还没投递），房间就因只剩一人提前结算。
+	b := f.openMatch(t, "match-backfill-deadline-b", 3, 4, 5, 6)
+	if err := f.s().Sync_PartyLeave(f.ctx, b, f.ids[6]); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := bf.SyncRoom(f.ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	formed, err := bf.Pass(f.ctx, f.now.Load())
+	if err != nil || len(formed) != 1 {
+		t.Fatal("room b was not matched", formed, err)
+	}
+	for _, seat := range []int{5, 4} {
+		if err := f.s().Sync_PartyLeave(f.ctx, b, f.ids[seat]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s := f.snap(t, b).State; s.Phase != party.PhaseSettled || s.Winner != f.ids[3] {
+		t.Fatalf("room b did not settle early %+v", s)
+	}
+	inFlight, offer, err := bf.SyncRoom(f.ctx, b)
+	if err != nil || !offer.Withdraw || inFlight.State != svcmatch.TicketMatched {
+		t.Fatal("withdrawing a consumed room ticket", inFlight, offer, err)
+	}
+	before := f.snap(t, b).Raw
+	result, err := bf.Deliver(f.ctx, formed[0])
+	if err != nil || len(result.Accepted) != 0 || !slices.Equal(result.Rejected, []int64{f.ids[7]}) || f.snap(t, b).Raw != before {
+		t.Fatal("a backfill after the deadline took a seat", result, err)
+	}
+	if requeued, ok := waitingOf(t, store, bf.Queue, f.ids[7]); !ok || requeued.RequestID != partymatch.RequeueRequestID(formed[0].ID, f.ids[7]) {
+		t.Fatal("rejected player is not queued again", requeued)
+	}
+	if again, err := bf.Pass(f.ctx, f.now.Load()); err != nil || len(again) != 0 {
+		t.Fatal("no room is open, yet a backfill formed", again, err)
+	}
+}
+
+// 15. 补位的人收到房间全量：被接受后、连上之前，其他成员已经看到他的座位（离线）；他连上房间时 PartyConnect 在提交后
+// Join 同步组，下一个同步周期这条新连接收到一个全量——房间记分板与他自己的 Player 都在，与服务端逐字节相同；之后的房间变化
+// 与其他成员同步推送，离开的人不再收到房间。
+func TestPartyGameBackfillPlayerJoinsGroupWithFullSync(t *testing.T) {
+	f := newPartyFixture(t)
+	bf, _ := f.newBackfill(t)
+	room := f.openMatch(t, "match-backfill-sync", 0, 1, 2, 3)
+	for seat := range 4 {
+		f.connect(t, room, seat, 1)
+	}
+	f.synced(t, room, 0, 1, 2, 3)
+	if err := f.s().Sync_PartyLeave(f.ctx, room, f.ids[3]); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := bf.SyncRoom(f.ctx, room); err != nil {
+		t.Fatal(err)
+	}
+	f.quickJoin(t, bf, 4)
+	formed, err := bf.Pass(f.ctx, f.now.Load())
+	if err != nil || len(formed) != 1 {
+		t.Fatal(formed, err)
+	}
+	if r, err := bf.Deliver(f.ctx, formed[0]); err != nil || len(r.Accepted) != 1 {
+		t.Fatal(r, err)
+	}
+	if b := f.synced(t, room, 0, 1, 2); len(b.Seats) != 5 || b.Seats[4].Player != f.ids[4] || b.Seats[4].Online {
+		t.Fatalf("members did not see the backfilled seat %+v", b)
+	}
+	if got, _ := f.wire.board(t, f.ids[3]); got != "" {
+		t.Fatal("the player who left still sees the room")
+	}
+	if roomentity.SyncGroup.IsMember(room, entity.GetUniqueIDFromEntityID(f.ids[4])) {
+		t.Fatal("backfilled player joined the group before connecting")
+	}
+	epoch := f.connect(t, room, 4, 1)
+	b := f.synced(t, room, 0, 1, 2, 4)
+	if !b.Seats[4].Online {
+		t.Fatalf("backfilled player not online %+v", b.Seats[4])
+	}
+	if _, fulls := f.wire.board(t, f.ids[4]); fulls != 1 || coinsOf(t, f.wire.self(t, f.ids[4])) != 0 {
+		t.Fatalf("backfilled connection: %d full frames, self view %v; want one full carrying the room and the player", fulls, f.wire.self(t, f.ids[4]))
+	}
+	s := f.snap(t, room).State
+	f.setNow(s.StarAt)
+	if r, err := f.input(room, 4, party.Input{Epoch: epoch, Seq: 1, Round: 1, Kind: "grab"}); err != nil || r.Outcome != party.OutcomeScore {
+		t.Fatal(r, err)
+	}
+	if b := f.synced(t, room, 0, 1, 2, 4); b.Seats[4].Score != 1 {
+		t.Fatalf("members did not see the backfilled player score %+v", b)
+	}
+	if _, fulls := f.wire.board(t, f.ids[4]); fulls != 1 {
+		t.Fatal("later room changes arrived as full frames", fulls)
 	}
 }

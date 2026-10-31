@@ -2,7 +2,8 @@
 # 实时派对房间业务接入纵切：正式生成器、Player / PartyRoom DAO、PartyRoom 实体心跳（100ms 档）与持久定时器、
 # 多实体 Sender 与 Nest，加房间内同步（access.player.self_sync + sync_groups: [party_room]，wiring/selfsync.Groups：
 # 房间组与玩家自身视图共用同一个 Manager 与玩家连接）、service/match 成局与 service/session 进房。
-# 业务规则（“抢星”小游戏、回合 / 加时 / 硬期限、房间码、人满、房主转移、断线宽限、输入去重、结算发奖与座位归还）
+# 业务规则（“抢星”小游戏、回合 / 加时 / 硬期限、房间码、人满、房主转移、断线宽限、输入去重、结算发奖与座位归还、
+# 业务层补位：房间票 + 玩家票弹性成局、进房 handler 拒绝超员）
 # 只在 scripts/testdata/party-room，不是框架默认玩法，生成器也不生成这些文件。
 # 缺省不连接外部存储：提交器是替身，心跳驱动跑真实循环、业务时间用 clock.SetSource 拨。
 # ROOST_PARTY_ROOM_REAL=1（并提供隔离 Mongo 副本集 ROOST_DATAENGINE_IT_MONGO_URI）时追加：子进程在局内（strict 输入
@@ -68,13 +69,16 @@ p.write_text(text.replace('category=entity.EntityCategoryOther',
     'category=entity.EntityCategoryWorld sync=true syncNamespace=party_room subjectPacker=NewPartyRoomBoardPacker'))
 DEFS
 mkdir -p game/partyroom
-for name in rules state; do cp "$repo_root/scripts/testdata/party-room/$name.go.txt" "game/partyroom/$name.go"; done
+for name in rules state backfill; do cp "$repo_root/scripts/testdata/party-room/$name.go.txt" "game/partyroom/$name.go"; done
 cp "$repo_root/scripts/testdata/party-room/rules_test.go.txt" game/partyroom/rules_test.go
 # 心跳登记与定时器回调是 roost add 只在缺失时创建的业务文件，用夹具覆盖。
 for name in room heartbeat_beats timer_handlers board_packer; do cp "$repo_root/scripts/testdata/party-room/$name.go.txt" "game/entities/party_room/$name.go"; done
 cp "$repo_root/scripts/testdata/party-room/handlers.go.txt" game/handler/party_room.go
 cp "$repo_root/scripts/testdata/party-room/gameplay_test.go.txt" game/handler/party_room_test.go
-gofmt -w db/def/*.go game/partyroom/*.go game/entities/party_room/*.go game/handler/party_room*.go
+# 补位的宿主与匹配循环（业务层写法）：用生成的 Sender，经 service/match 与 service/session 接房间。
+mkdir -p game/partymatch
+cp "$repo_root/scripts/testdata/party-room/backfill_match.go.txt" game/partymatch/backfill.go
+gofmt -w db/def/*.go game/partyroom/*.go game/partymatch/*.go game/entities/party_room/*.go game/handler/party_room*.go
 # 房间内同步走正式入口（在标记与 packer 就位之后打开，project sync 的就绪检查才过）：玩家接入（TCP）+ self_sync（玩家看自己）+ sync_groups（房间推给成员），同一条连接、同一个推送编号。
 "$review_root/roost" add access player --service game >> "$review_root/generate.log" 2>&1
 "$review_root/roost" add transport tcp >> "$review_root/generate.log" 2>&1
@@ -93,10 +97,10 @@ cp "$repo_root/scripts/testdata/party-room/sync_group.go.txt" game/entities/part
 gofmt -w game/entities/party_room/sync_group.go
 "$review_root/roost" generate >> "$review_root/generate.log" 2>&1
 go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/partyroom ./game/handler | tee "$review_root/test.log"
-# 13 条场景（2 条规则 + 11 条 Nest / 心跳 / 同步）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
+# 18 条场景（3 条规则 + 15 条 Nest / 心跳 / 同步 / 补位）必须都实际执行并通过：-run 写错或用例被跳过时 go test 仍会 ok。
 passed="$(grep -c '^--- PASS: TestPartyGame' "$review_root/test.log" || true)"
-if [[ "$passed" != 13 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
-  echo "expected 13 passing TestPartyGame scenarios, got $passed" >&2
+if [[ "$passed" != 18 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
+  echo "expected 18 passing TestPartyGame scenarios, got $passed" >&2
   exit 1
 fi
 go build -mod=mod -p 2 ./...

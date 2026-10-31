@@ -2,6 +2,7 @@ package partyroom
 
 import (
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -115,5 +116,78 @@ func TestPartyGameRulesVariableStepEquivalence(t *testing.T) {
 	}
 	if tie.Advance(t0 + 20*DemoRules().MatchMillis) {
 		t.Fatal("settled room kept advancing")
+	}
+}
+
+// 补位的纯规则（backfill.go）：只有匹配房间、局内第 1 回合可补；本轮挂出后重复询问是同一轮；进房按座位逐个接受，
+// 已在房间里的人与超员的人被拒；同一成局重投返回原结果，换轮次 / 换名单不是重投；截止后撤回本轮、迟到的成局全部拒绝。
+func TestPartyGameRulesBackfillSeats(t *testing.T) {
+	code, _ := NewCodeRoom("C", 1, DemoRules(), 1)
+	if offer, changed := code.OfferBackfill(); offer != (BackfillOffer{}) || changed {
+		t.Fatalf("code room offered backfill %+v", offer)
+	}
+	s, err := NewMatchRoom("m-b", []int64{31, 32, 33, 34}, DemoRules(), 3, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if offer, changed := s.OfferBackfill(); offer != (BackfillOffer{}) || changed {
+		t.Fatalf("full room offered backfill %+v", offer)
+	}
+	if _, err := s.Leave(34, t0+10); err != nil {
+		t.Fatal(err)
+	}
+	offer, changed := s.OfferBackfill()
+	want := BackfillOffer{Round: 1, Seats: 1, Until: t0 + DemoRules().RoundMillis, List: true}
+	if offer != want || !changed {
+		t.Fatalf("offer after a leave %+v, want %+v", offer, want)
+	}
+	if again, changed := s.OfferBackfill(); again != want || changed {
+		t.Fatal("asking again opened another round", again)
+	}
+	before := s.Encode()
+	if r, changed, err := s.ApplyBackfill("m-x", 2, []int64{40}, t0+20); err != nil || changed || len(r.Accepted) != 0 || s.Encode() != before {
+		t.Fatal("a match for another round took a seat", r, err)
+	}
+	r, changed, err := s.ApplyBackfill("m-1", 1, []int64{31, 41, 42}, t0+20)
+	if err != nil || !changed || !slices.Equal(r.Accepted, []int64{41}) || !slices.Equal(r.Rejected, []int64{31, 42}) {
+		t.Fatalf("admission %+v %v", r, err)
+	}
+	if s.FreeSeats() != 0 || s.Backfill.Open || s.Seats[len(s.Seats)-1] != (Seat{PlayerID: 41, DownAt: t0 + 20}) {
+		t.Fatalf("after admission %+v", s)
+	}
+	after := s.Encode()
+	if replay, changed, err := s.ApplyBackfill("m-1", 1, []int64{42, 41, 31}, t0+30); err != nil || changed || replay.Match != r.Match || !slices.Equal(replay.Accepted, r.Accepted) || s.Encode() != after {
+		t.Fatal("replayed match changed the room", replay, err)
+	}
+	for name, call := range map[string]func() error{
+		"other round":   func() error { _, _, err := s.ApplyBackfill("m-1", 2, []int64{31, 41, 42}, t0+30); return err },
+		"other members": func() error { _, _, err := s.ApplyBackfill("m-1", 1, []int64{41, 43}, t0+30); return err },
+	} {
+		if err := call(); !errors.Is(err, ErrRule) || s.Encode() != after {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if decoded, err := Decode(after); err != nil || decoded.Encode() != after {
+		t.Fatal("backfill facts did not survive the strict round trip", err)
+	}
+	if offer, _ := s.OfferBackfill(); offer != (BackfillOffer{}) {
+		t.Fatalf("refilled room offered %+v", offer)
+	}
+	if _, err := s.Leave(41, t0+40); err != nil {
+		t.Fatal(err)
+	}
+	if offer, _ := s.OfferBackfill(); offer.Round != 2 || !offer.List || offer.Seats != 1 {
+		t.Fatalf("second round %+v", offer)
+	}
+	s.Advance(t0 + DemoRules().RoundMillis)
+	if offer, changed := s.OfferBackfill(); offer != (BackfillOffer{Round: 2, Withdraw: true}) || !changed || s.Backfill.Open {
+		t.Fatalf("deadline did not withdraw: %+v", offer)
+	}
+	if offer, changed := s.OfferBackfill(); !offer.Withdraw || changed {
+		t.Fatal("repeated withdraw changed the room")
+	}
+	late, changed, err := s.ApplyBackfill("m-2", 2, []int64{44}, t0+DemoRules().RoundMillis)
+	if err != nil || changed || len(late.Accepted) != 0 || !slices.Equal(late.Rejected, []int64{44}) {
+		t.Fatal("a match after the deadline took a seat", late, err)
 	}
 }

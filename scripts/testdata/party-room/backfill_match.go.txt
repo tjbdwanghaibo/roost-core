@@ -1,0 +1,200 @@
+// Package partymatch 是派对房间的补位宿主与补位匹配循环（业务层写法，零框架改动）：把房间的空座挂成补位队列里的
+// 房间票，把一张房间票 + 若干玩家票弹性成局，再把成局交给房间裁决。框架只提供 service/match 的弹性成局与它的两条契约
+// （同一 requestID 排队幂等、同一票集合只成一局），补位的不超员由房间的进房 handler 保证，不是存储保证。
+package partymatch
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+
+	syncsender "example.com/party-room-practice/game/handler/syncsender"
+	party "example.com/party-room-practice/game/partyroom"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
+	"github.com/tjbdwanghaibo/roost-core/service/session"
+)
+
+// 补位队列里的两种主体：房间票（ID 是房间实体 ID，Score 是空位数，Payload 是轮次与截止）与玩家票（ID 是玩家实体 ID）。
+const (
+	KindRoom   svcmatch.SubjectKind = "party_room"
+	KindPlayer svcmatch.SubjectKind = "player"
+)
+
+// QueueMode 是补位队列的玩法名，与普通成局队列分开：两种票只在这里相遇。
+const QueueMode = "party-backfill"
+
+// BackfillQueue 是补位队列：弹性 2～MaxSeats 张、不等待（FillAfterSeconds 0）——一张房间票 + 至少一张玩家票就能成局。
+// 存储不认识“房间票”，一局里恰好一张房间票、玩家数不超过空位由本包的匹配循环保证，最终由房间的进房 handler 裁决。
+// 跨分区补位不支持：房间票与玩家票必须在同一分区（CommitAcross 不用于补位）。
+func BackfillQueue(partition string) svcmatch.Queue {
+	return svcmatch.Queue{Mode: QueueMode, GroupSize: party.MaxSeats, MinSize: 2, Partition: partition}
+}
+
+// RoomRequestID 是房间票的排队幂等身份：房间 ID + 补位轮次。同一轮重放排队得到同一张票，一个房间同一轮不会挂出两张票；
+// 下一轮只在本轮被消耗或撤回之后才开（partyroom.OfferBackfill），所以同一时刻一个房间最多一张房间票在等待。
+func RoomRequestID(room int64, round int) string { return fmt.Sprintf("backfill:%d:%d", room, round) }
+
+// PlayerRequestID 是玩家进补位队列的排队身份；被房间拒绝后重新排队用 RequeueRequestID。
+func PlayerRequestID(player int64, attempt string) string {
+	return fmt.Sprintf("join:%d:%s", player, attempt)
+}
+
+// RequeueRequestID 是被房间拒绝的玩家重新排队的身份：同一补位成局重投不会把同一个人排两次。
+func RequeueRequestID(match string, player int64) string {
+	return "requeue:" + match + ":" + strconv.FormatInt(player, 10)
+}
+
+// roomPayload 是房间票的 Payload：轮次（进房时房间按它判断这张票是不是本轮）与补位截止（业务毫秒，匹配器跳过已截止的票）。
+type roomPayload struct {
+	Round int   `json:"round"`
+	Until int64 `json:"until"`
+}
+
+// RoomSubject 是第 offer.Round 轮的房间票主体。
+func RoomSubject(room int64, offer party.BackfillOffer) svcmatch.Subject {
+	payload, _ := json.Marshal(roomPayload{Round: offer.Round, Until: offer.Until})
+	return svcmatch.Subject{Kind: KindRoom, ID: room, Score: int64(offer.Seats), Payload: payload}
+}
+
+// Matchmaker 是补位用到的匹配能力；service/match 的 Store 与 RPC 客户端都满足。
+type Matchmaker interface {
+	Enqueue(ctx context.Context, queue svcmatch.Queue, subject svcmatch.Subject, requestID string) (svcmatch.Ticket, error)
+	Cancel(ctx context.Context, queue svcmatch.Queue, ticketID string, subject svcmatch.Subject) (svcmatch.Ticket, error)
+	Candidates(ctx context.Context, queue svcmatch.Queue, limit int) ([]svcmatch.Ticket, error)
+	Commit(ctx context.Context, queue svcmatch.Queue, ticketIDs []string) (svcmatch.Match, error)
+}
+
+// Backfill 把房间、补位队列与 session 接在一起。房间宿主用 SyncRoom，匹配循环用 Pass 与 Deliver。
+type Backfill struct {
+	Match    Matchmaker
+	Queue    svcmatch.Queue
+	Rooms    nest.Client
+	Sessions *session.Service
+}
+
+func (b *Backfill) rooms() *syncsender.PartyRoomSender { return syncsender.NewPartyRoomSender(b.Rooms) }
+
+// SyncRoom 让补位队列与房间的补位事实一致：房间说 List 就按“房间 ID + 轮次”排队（重放得到同一张票），说 Withdraw 就撤回
+// 那一轮的票。房间状态可能改变补位的时候调用——有人离开之后、补位进房之后、阶段推进之后，或周期性对账（宿主重启后补做）。
+// 返回房间票（List 时）与房间的动作。
+//
+// 撤票按同一排队请求先取回票再 Cancel：票已被补位成局消耗（ErrTicketMatched）时不是错误——那个成局在途，进房时房间按
+// “本轮已截止”全部拒绝，被拒的人重新排队；票从未排进去（宿主在排队前崩溃）时取回会新建一张、随即撤回，结果相同。
+func (b *Backfill) SyncRoom(ctx context.Context, room int64) (svcmatch.Ticket, party.BackfillOffer, error) {
+	offer, err := b.rooms().Sync_PartyBackfillOffer(ctx, room)
+	if err != nil || !offer.List && !offer.Withdraw {
+		return svcmatch.Ticket{}, offer, err
+	}
+	subject := RoomSubject(room, offer)
+	ticket, err := b.Match.Enqueue(ctx, b.Queue, subject, RoomRequestID(room, offer.Round))
+	if err != nil || offer.List {
+		return ticket, offer, err
+	}
+	withdrawn, err := b.Match.Cancel(ctx, b.Queue, ticket.ID, subject)
+	if errors.Is(err, svcmatch.ErrTicketMatched) {
+		return ticket, offer, nil
+	}
+	return withdrawn, offer, err
+}
+
+// Pass 是一轮补位匹配：从补位队列按票序取候选，房间票按到达顺序各配最多 Score（空位数）张玩家票，用弹性 Commit 成局。
+//   - 已截止（Payload.Until 不晚于 nowMilli）的房间票跳过：撤票是房间宿主的事（SyncRoom），这里只是不再往它身上配人；
+//   - Commit 报 ErrConflict / ErrTicketMissing 是别的匹配器实例先拿走了其中某张票（同一张房间票只成一局），本轮跳过，
+//     没被消耗的票留在队列里下一轮再配。
+//
+// 补位与普通成局的先后由调用方决定（本例：玩家选择“快速加入”才进补位队列，一名玩家同时只排一个队列）。
+// 返回本轮成的补位局，调用方逐个 Deliver。
+func (b *Backfill) Pass(ctx context.Context, nowMilli int64) ([]svcmatch.Match, error) {
+	candidates, err := b.Match.Candidates(ctx, b.Queue, svcmatch.MaxPageSize)
+	if err != nil {
+		return nil, err
+	}
+	var rooms, players []svcmatch.Ticket
+	for _, ticket := range candidates {
+		switch ticket.Subject.Kind {
+		case KindRoom:
+			var p roomPayload
+			if json.Unmarshal(ticket.Subject.Payload, &p) == nil && p.Until > nowMilli && ticket.Subject.Score > 0 {
+				rooms = append(rooms, ticket)
+			}
+		case KindPlayer:
+			players = append(players, ticket)
+		}
+	}
+	var formed []svcmatch.Match
+	for _, room := range rooms {
+		n := min(int(room.Subject.Score), len(players), b.Queue.GroupSize-1)
+		if n == 0 {
+			break
+		}
+		ids := []string{room.ID}
+		for _, player := range players[:n] {
+			ids = append(ids, player.ID)
+		}
+		players = players[n:]
+		match, err := b.Match.Commit(ctx, b.Queue, ids)
+		if errors.Is(err, svcmatch.ErrConflict) || errors.Is(err, svcmatch.ErrTicketMissing) {
+			continue
+		}
+		if err != nil {
+			return formed, err
+		}
+		formed = append(formed, match)
+	}
+	return formed, nil
+}
+
+// Deliver 把一个补位成局交给房间（经 Nest handler，房间座位是权威），然后：
+//   - 被接受的玩家各进一个 session Run 并挂上房间（请求 ID = Match ID + 玩家号，与开房名单同一写法，重放幂等），之后照常
+//     连上房间（PartyConnect 让他加入房间同步组、收到全量）；
+//   - 被拒的玩家用 RequeueRequestID 重新排进补位队列（同一成局重投不重复排队；他已有别的有效票时不再排）；
+//   - 最后 SyncRoom：还有空位就挂下一轮房间票，已截止就撤票。
+//
+// 同一成局可以重投：房间按 Match ID 返回同一结果（并发投到房间也只处理一次），session 与重新排队都按请求 ID 幂等。
+// 重投由同一个匹配器顺序做：session 对同一请求 ID 的并发 Enter 可能在准入未完成时报冲突，重试即可。
+func (b *Backfill) Deliver(ctx context.Context, match svcmatch.Match) (party.BackfillResult, error) {
+	var (
+		room    int64
+		payload roomPayload
+		players []int64
+	)
+	for _, member := range match.Members {
+		switch member.Kind {
+		case KindRoom:
+			if room != 0 || json.Unmarshal(member.Payload, &payload) != nil {
+				return party.BackfillResult{}, fmt.Errorf("%w: backfill match %s does not carry exactly one valid room ticket", party.ErrRule, match.ID)
+			}
+			room = member.ID
+		case KindPlayer:
+			players = append(players, member.ID)
+		}
+	}
+	if room == 0 || len(players) == 0 {
+		return party.BackfillResult{}, fmt.Errorf("%w: backfill match %s has no room ticket or no player", party.ErrRule, match.ID)
+	}
+	result, err := b.rooms().Sync_PartyBackfill(ctx, room, match.ID, payload.Round, players)
+	if err != nil {
+		return party.BackfillResult{}, err
+	}
+	resource := session.Resource{Kind: "party_room", ID: strconv.FormatInt(room, 10)}
+	for _, id := range result.Accepted {
+		run, err := b.Sessions.Enter(ctx, id, session.EnterRequest{Kind: "party-room", RequestID: match.ID + ":" + strconv.FormatInt(id, 10)})
+		if err != nil {
+			return result, err
+		}
+		if _, err := b.Sessions.Attach(ctx, id, run.ID, resource); err != nil {
+			return result, err
+		}
+	}
+	for _, id := range result.Rejected {
+		_, err := b.Match.Enqueue(ctx, b.Queue, svcmatch.Subject{Kind: KindPlayer, ID: id}, RequeueRequestID(match.ID, id))
+		if err != nil && !errors.Is(err, svcmatch.ErrAlreadyQueued) {
+			return result, err
+		}
+	}
+	_, _, err = b.SyncRoom(ctx, room)
+	return result, err
+}

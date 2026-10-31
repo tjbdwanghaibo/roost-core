@@ -74,7 +74,8 @@ func handlerPartyPlayerInit(p IPartyPlayerEntity) error {
 }
 
 // 成局开房：名单与成局 ID 来自匹配服务的 Match，规则来自服务端配置快照。同一 Match 重放返回原房间、不重置；
-// 同一房间 ID 上出现别的 Match（散列碰撞或伪造）拒绝，不合并名单。
+// 同一房间 ID 上出现别的 Match（散列碰撞或伪造）拒绝，不合并名单。补位会在名单之后追加座位，所以重放按开房名单人数
+// （State.Roster）核对前面的座位。
 //
 //roost:nest rollback=undo durability=strict
 func handlerPartyOpenMatch(room IPartyRoomEntity, match string, players []int64, rules party.Rules, nowUnixMilli int64) (party.Board, error) {
@@ -83,7 +84,7 @@ func handlerPartyOpenMatch(room IPartyRoomEntity, match string, players []int64,
 		if err != nil {
 			return party.Board{}, err
 		}
-		if s.Match != match || len(s.Seats) != len(players) {
+		if s.Match != match || s.Roster != len(players) || len(s.Seats) < len(players) {
 			return party.Board{}, party.ErrRule
 		}
 		for i, id := range players {
@@ -257,4 +258,35 @@ func handlerPartyRelease(room IPartyRoomEntity, player int64, nowUnixMilli int64
 		}
 	}
 	return s.Phase == party.PhaseClosed, room.SaveRoom(s, nowUnixMilli)
+}
+
+// 补位（业务层写法）：房间告诉宿主此刻的补位动作——挂出本轮房间票（List）、撤回已截止的房间票（Withdraw），或什么都不做。
+// 宿主在离开、补位进房之后以及周期性对账时调用，按返回值在事务外排队 / 撤票（game/partymatch）；它幂等，本轮已挂出时
+// 返回同一轮，所以重复调用只会重放同一个排队请求。排队与撤票不在实体锁内做：handler 不做 I/O。
+//
+//roost:nest rollback=undo durability=strict
+func handlerPartyBackfillOffer(room IPartyRoomEntity, nowUnixMilli int64) (party.BackfillOffer, error) {
+	s, err := loadRoom(room, nowUnixMilli)
+	if err != nil {
+		return party.BackfillOffer{}, err
+	}
+	offer, _ := s.OfferBackfill()
+	return offer, room.SaveRoom(s, nowUnixMilli)
+}
+
+// 补位成局进房：房间座位是权威。匹配器按房间票的空位数取人，但存储不校验人数，多出的人在这里被拒，由宿主让他们重新排队；
+// 同一 Match 重投（匹配器重试、并发投递）返回同一结果、不重复占座。被接受的人与开房名单一样此刻“未进房”，连上房间时
+// PartyConnect 让他加入房间同步组、收到全量。
+//
+//roost:nest rollback=undo durability=strict
+func handlerPartyBackfill(room IPartyRoomEntity, match string, round int, players []int64, nowUnixMilli int64) (party.BackfillResult, error) {
+	s, err := loadRoom(room, nowUnixMilli)
+	if err != nil {
+		return party.BackfillResult{}, err
+	}
+	result, _, err := s.ApplyBackfill(match, round, players, nowUnixMilli)
+	if err != nil {
+		return party.BackfillResult{}, err
+	}
+	return result, room.SaveRoom(s, nowUnixMilli)
 }
