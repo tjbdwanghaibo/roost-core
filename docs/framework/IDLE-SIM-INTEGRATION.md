@@ -78,7 +78,7 @@ ROOST_IDLE_SIM_KEEP=1 bash scripts/test-idle-sim-generated.sh   # 保留生成�
 
 #### 3.3 用 Sender 调用
 
-下面的文件放进保留的生成工程（例如 `internal/idleflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `idlesim.OpenCatalog` 打开的配置，`now` 是服务器业务时钟（毫秒），Player ID 是完整 EntityID：
+下面的文件放进保留的生成工程（例如 `internal/idleflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `idlesim.OpenCatalog` 打开的配置；调用方不传业务时间：handler 的 `nowUnixMilli` 参数由生成的分发包装从本条消息冻结的业务时间（`fctx.NowMilli()`，见 [guide/10-time §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）填，Sender 签名里没有它；Player ID 是完整 EntityID：
 
 ```go
 package idleflow
@@ -95,22 +95,22 @@ import (
 // initAndQueue 是已鉴权入口的调用顺序：首次初始化（已有存档时原样返回）、在 1 号工坊排一个 1 号配方。
 // Rules 由服务器捕获，不来自请求；已有存档会忽略它，沿用初始化那一代。
 func initAndQueue(ctx context.Context, client nest.Client, catalog *configdata.Store,
-	playerEntityID int64, now func() int64) (idlesim.Receipt, error) {
+	playerEntityID int64) (idlesim.Receipt, error) {
 	rules, err := idlesim.CaptureRules(catalog.Current())
 	if err != nil {
 		return idlesim.Receipt{}, err
 	}
 	s := syncsender.NewIdleSimSender(client)
-	view, err := s.Sync_IdleInit(ctx, playerEntityID, now(), rules)
+	view, err := s.Sync_IdleInit(ctx, playerEntityID, rules)
 	if err != nil {
 		return idlesim.Receipt{}, err
 	}
 	queue := idlesim.Command{Seq: view.NextSeq, Kind: "queue", Station: 1, Recipe: 1}
-	return s.Sync_IdleCommand(ctx, playerEntityID, queue, now())
+	return s.Sync_IdleCommand(ctx, playerEntityID, queue)
 }
 
 // collectAndClaim 收取 0 号工坊的产物、再领取收益箱；每条命令用视图里的下一个序号。
-func collectAndClaim(ctx context.Context, client nest.Client, playerEntityID int64, now func() int64) (idlesim.View, error) {
+func collectAndClaim(ctx context.Context, client nest.Client, playerEntityID int64) (idlesim.View, error) {
 	s := syncsender.NewIdleSimSender(client)
 	view, err := s.Sync_IdleView(ctx, playerEntityID)
 	if err != nil {
@@ -118,7 +118,7 @@ func collectAndClaim(ctx context.Context, client nest.Client, playerEntityID int
 	}
 	for _, kind := range []string{"collect", "claim"} {
 		command := idlesim.Command{Seq: view.NextSeq, Kind: kind, Station: 0}
-		if _, err := s.Sync_IdleCommand(ctx, playerEntityID, command, now()); err != nil {
+		if _, err := s.Sync_IdleCommand(ctx, playerEntityID, command); err != nil {
 			return idlesim.View{}, err
 		}
 		if view, err = s.Sync_IdleView(ctx, playerEntityID); err != nil {
@@ -130,7 +130,7 @@ func collectAndClaim(ctx context.Context, client nest.Client, playerEntityID int
 
 // resolveUnknown 在一次提交结果未知后按原序号判断它是否已执行：已执行就拿原回执，没执行就原样重发。
 func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int64,
-	sent idlesim.Command, now func() int64) (idlesim.Receipt, error) {
+	sent idlesim.Command) (idlesim.Receipt, error) {
 	s := syncsender.NewIdleSimSender(client)
 	view, err := s.Sync_IdleView(ctx, playerEntityID)
 	if err != nil {
@@ -139,7 +139,7 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 	if sent.Seq < view.NextSeq {
 		return s.Sync_IdleReceipt(ctx, playerEntityID, sent.Seq)
 	}
-	return s.Sync_IdleCommand(ctx, playerEntityID, sent, now())
+	return s.Sync_IdleCommand(ctx, playerEntityID, sent)
 }
 ```
 
@@ -233,7 +233,7 @@ ROOST_IDLE_SIM_REAL=1 bash scripts/test-idle-sim-generated.sh
 
 它在第 10 节之后追加 `TestIdleSimRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交初始化、两个工坊各排一个任务、买倍率卡、5 秒后结算；后台投影关闭，断言 WAL 恰有 5 条已确认未投影的记录（此时一个任务已完成待领、一个做了一半）后，父进程 SIGKILL 自己启动的子进程。
+1. 子进程经 strict 文件 WAL 提交初始化、两个工坊各排一个任务、买倍率卡、5 秒后结算；后台投影关闭，断言 WAL 恰有 6 条已确认未投影的记录（Player 新建 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 5 条业务命令；此时一个任务已完成待领、一个做了一半）后，父进程 SIGKILL 自己启动的子进程。
 2. 父进程用同一 WAL 与 Mongo 冷加载（业务时间推进一小时），核对完整存档摘要、视图与定时器 ID，重放全部命令得到原回执；核对冷加载已把存量唤醒期限报告给驱动索引（`DueOf`）。
 3. 启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`、不手发 Tick）：循环投递一次加载后的补触发，积分截到原窗口，窗口不延长、不再排唤醒；两个任务都完成，收益箱 4、余数 5000，原料与钻石不变；`entitytimer.delivered_total` 增量恰为 1。
 4. 收取第一个工坊：玩家命令把窗口重新推到 now + 30 秒，下一秒的刷新期限进入索引（循环没有再投递）；业务时间直接推进到这个期限，循环（至多 `MaxWait` 后重读业务时钟）按时投递一次，恰好积分一秒（余数 5000 → 6000，收益箱仍是 4，窗口不变），再排下一秒，投递计数到 2。业务时钟在两次推进之间冻结，期限之前条目不会到期。

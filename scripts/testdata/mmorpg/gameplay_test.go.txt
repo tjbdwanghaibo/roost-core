@@ -51,36 +51,35 @@ func TestMMORPGTradeBothConfirmAndReplay(t *testing.T) {
 	s := sender.NewMmoGameplaySender(f.engine)
 	ctx := context.Background()
 	a, b, id := f.players[0].ID(), f.players[1].ID(), f.trade.ID()
-	now := f.now.UnixMilli()
 	for range 2 {
-		if err := s.MultiSync_MMORPGOffer(ctx, id, a, b, 10, 1, now); err != nil {
+		if err := s.MultiSync_MMORPGOffer(ctx, id, a, b, 10, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if f.players[0].Dao().GetItems() != 2 || f.players[1].Dao().GetGold() != 40 {
 		t.Fatal("escrow not reserved once")
 	}
-	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, 999, 1, now); err == nil {
+	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, 999, 1); err == nil {
 		t.Fatal("outsider confirmed trade")
 	}
-	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1, now); err != nil {
+	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1); err != nil {
 		t.Fatal(err)
 	}
 	if f.trade.Dao().GetStatus() != 1 || f.players[0].Dao().GetGold() != 50 {
 		t.Fatal("one confirmation settled trade")
 	}
 	for range 2 {
-		if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, b, 1, now); err != nil {
+		if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, b, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if f.trade.Dao().GetStatus() != 2 || f.players[0].Dao().GetGold() != 60 || f.players[1].Dao().GetItems() != 4 {
 		t.Fatal("trade settlement duplicated or missing")
 	}
-	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 2, now); err == nil {
+	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 2); err == nil {
 		t.Fatal("settled trade refunded")
 	}
-	if err := s.MultiSync_MMORPGOffer(ctx, id, a, b, 11, 1, now); err == nil {
+	if err := s.MultiSync_MMORPGOffer(ctx, id, a, b, 11, 1); err == nil {
 		t.Fatal("trade identity changed")
 	}
 }
@@ -91,27 +90,27 @@ func TestMMORPGTradeCancelAndExpiryRefundEscrow(t *testing.T) {
 			s := sender.NewMmoGameplaySender(f.engine)
 			ctx := context.Background()
 			a, b, id := f.players[0].ID(), f.players[1].ID(), f.trade.ID()
-			now := f.now.UnixMilli()
-			if err := s.MultiSync_MMORPGOffer(ctx, id, a, b, 10, 1, now); err != nil {
+			if err := s.MultiSync_MMORPGOffer(ctx, id, a, b, 10, 1); err != nil {
 				t.Fatal(err)
 			}
-			if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1, now); err != nil {
+			if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1); err != nil {
 				t.Fatal(err)
 			}
 			actor := b
 			if action == 3 {
 				actor = 0
-				now += 5000
+				// 拨业务时钟到交易期限（Offer 时刻 + 5 秒）；handler 从本条消息冻结的业务时间判到期。
+				f.now = f.now.Add(5 * time.Second)
 			}
 			for range 2 {
-				if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, actor, action, now); err != nil {
+				if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, actor, action); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if f.trade.Dao().GetStatus() != 3 || f.players[0].Dao().GetItems() != 3 || f.players[1].Dao().GetGold() != 50 {
 				t.Fatal("escrow refund duplicated or lost")
 			}
-			if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1, now); err == nil {
+			if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1); err == nil {
 				t.Fatal("cancelled trade reopened")
 			}
 		})
@@ -122,17 +121,16 @@ func TestMMORPGTradeConfirmRacesWithCancel(t *testing.T) {
 	s := sender.NewMmoGameplaySender(f.engine)
 	ctx := context.Background()
 	a, b, id := f.players[0].ID(), f.players[1].ID(), f.trade.ID()
-	now := f.now.UnixMilli()
-	if err := s.MultiSync_MMORPGOffer(ctx, id, a, b, 10, 1, now); err != nil {
+	if err := s.MultiSync_MMORPGOffer(ctx, id, a, b, 10, 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1, now); err != nil {
+	if err := s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, a, 1); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
 	for _, action := range []int64{1, 2} {
 		wg.Add(1)
-		go func(action int64) { defer wg.Done(); _ = s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, b, action, now) }(action)
+		go func(action int64) { defer wg.Done(); _ = s.MultiSync_MMORPGResolveTrade(ctx, id, a, b, b, action) }(action)
 	}
 	wg.Wait()
 	if status := f.trade.Dao().GetStatus(); status != 2 && status != 3 {
@@ -153,22 +151,24 @@ func TestMMORPGCombatCooldownReplayLootAndQuest(t *testing.T) {
 	s := sender.NewMmoGameplaySender(f.engine)
 	ctx := context.Background()
 	a, b, id := f.players[0].ID(), f.players[1].ID(), f.monster.ID()
-	now := f.now.UnixMilli()
 	if err := s.Sync_MMORPGQuest(ctx, a); err == nil {
 		t.Fatal("unearned quest reward")
 	}
 	for range 2 {
-		if err := s.MultiSync_MMORPGStrike(ctx, a, id, 1, now); err != nil {
+		if err := s.MultiSync_MMORPGStrike(ctx, a, id, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if f.monster.Dao().GetHP() != 10 {
 		t.Fatal("replayed input damaged twice")
 	}
-	if err := s.MultiSync_MMORPGStrike(ctx, a, id, 2, now+999); err == nil {
+	// 拨业务时钟：冷却（1 秒）差 1 毫秒时拒绝，恰好到期时放行。
+	f.now = f.now.Add(999 * time.Millisecond)
+	if err := s.MultiSync_MMORPGStrike(ctx, a, id, 2); err == nil {
 		t.Fatal("cooldown bypassed")
 	}
-	if err := s.MultiSync_MMORPGStrike(ctx, a, id, 2, now+1000); err != nil {
+	f.now = f.now.Add(time.Millisecond)
+	if err := s.MultiSync_MMORPGStrike(ctx, a, id, 2); err != nil {
 		t.Fatal(err)
 	}
 	if f.monster.Dao().GetHP() != 0 || f.players[0].Dao().GetQuestKills() != 1 {
@@ -206,7 +206,7 @@ func TestMMORPGCombatRefusesOtherScenesAndLivingBossCompletion(t *testing.T) {
 	if err := sender.NewMmoTasksSender(f.engine).MultiSync_MMORPGTransfer(ctx, a, f.scenes[0].ID(), f.scenes[1].ID(), 1, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MultiSync_MMORPGStrike(ctx, a, id, 1, f.now.UnixMilli()); err == nil {
+	if err := s.MultiSync_MMORPGStrike(ctx, a, id, 1); err == nil {
 		t.Fatal("cross scene strike accepted")
 	}
 	if f.monster.Dao().GetHP() != 20 || f.players[0].Dao().GetAttackSeq() != 0 {
@@ -301,7 +301,7 @@ func TestMMORPGDeathAndDelayedRevive(t *testing.T) {
 	if f.players[0].Dao().GetHP() != 0 {
 		t.Fatal("player did not die")
 	}
-	if err := s.MultiSync_MMORPGStrike(ctx, a, mob, 1, f.now.UnixMilli()); err == nil {
+	if err := s.MultiSync_MMORPGStrike(ctx, a, mob, 1); err == nil {
 		t.Fatal("dead player attacked")
 	}
 	for range 2 {
@@ -320,7 +320,7 @@ func TestMMORPGDeathAndDelayedRevive(t *testing.T) {
 	if f.players[0].Dao().GetHP() != 100 || f.players[0].Dao().GetReviveTimer() != 0 {
 		t.Fatal("resurrection did not settle")
 	}
-	if err := s.MultiSync_MMORPGStrike(ctx, a, mob, 1, f.now.UnixMilli()); err != nil {
+	if err := s.MultiSync_MMORPGStrike(ctx, a, mob, 1); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -78,7 +78,7 @@ ROOST_SURVIVAL_EXTRACTION_KEEP=1 bash scripts/test-survival-extraction-generated
 
 #### 3.3 用 Sender 调用
 
-下面的文件放进保留的生成工程（例如 `internal/raidflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `survival.OpenCatalog` 打开的配置，`now` 是服务器业务时钟（毫秒），EntityID 都是完整 ID：
+下面的文件放进保留的生成工程（例如 `internal/raidflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `survival.OpenCatalog` 打开的配置；调用方不传业务时间：handler 的 `nowUnixMilli` 参数由生成的分发包装从本条消息冻结的业务时间（`fctx.NowMilli()`，见 [guide/10-time §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）填，Sender 签名里没有它；EntityID 都是完整 ID：
 
 ```go
 package raidflow
@@ -94,7 +94,7 @@ import (
 
 // openRaid 由成局服务在名单确定后调用：配置、名单与时间来自服务器。同一 Raid ID 重试返回原探险，名单不同则拒绝。
 func openRaid(ctx context.Context, client nest.Client, catalog *configdata.Store,
-	raidID int64, players [survival.Seats]int64, now int64) error {
+	raidID int64, players [survival.Seats]int64) error {
 	rules, err := survival.CaptureRules(catalog.Current()) // 一次探险只捕获一份快照
 	if err != nil {
 		return err
@@ -106,15 +106,15 @@ func openRaid(ctx context.Context, client nest.Client, catalog *configdata.Store
 			return err
 		}
 	}
-	_, err = s.Sync_SurvivalInit(ctx, raidID, players, rules, now)
+	_, err = s.Sync_SurvivalInit(ctx, raidID, players, rules)
 	return err
 }
 
 // enterAndGather 是已鉴权入口：付费入场（重试只查原事实、不重复扣费），再走到木材区采集一件。
 // playerID 来自鉴权会话；超时重试时原样重发同一条命令，不分配新序号。
-func enterAndGather(ctx context.Context, client nest.Client, raidID, playerID int64, now func() int64) (survival.Receipt, error) {
+func enterAndGather(ctx context.Context, client nest.Client, raidID, playerID int64) (survival.Receipt, error) {
 	s := syncsender.NewSurvivalExtractionSender(client)
-	if err := s.MultiSync_SurvivalEnter(ctx, playerID, raidID, now()); err != nil {
+	if err := s.MultiSync_SurvivalEnter(ctx, playerID, raidID); err != nil {
 		return survival.Receipt{}, err
 	}
 	v, err := s.Sync_SurvivalView(ctx, raidID, playerID)
@@ -122,11 +122,11 @@ func enterAndGather(ctx context.Context, client nest.Client, raidID, playerID in
 		return survival.Receipt{}, err
 	}
 	move := survival.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Kind: "move", A: 1}
-	if _, err := s.Sync_SurvivalCommand(ctx, raidID, playerID, move, now()); err != nil {
+	if _, err := s.Sync_SurvivalCommand(ctx, raidID, playerID, move); err != nil {
 		return survival.Receipt{}, err
 	}
 	gather := survival.Command{Seq: move.Seq + 1, Epoch: move.Epoch, Kind: "gather", A: 0} // A 是资源索引：0 木材
-	return s.Sync_SurvivalCommand(ctx, raidID, playerID, gather, now())
+	return s.Sync_SurvivalCommand(ctx, raidID, playerID, gather)
 }
 
 // claim 在本人撤离完成（或死亡）后调用；金额只按服务器封存的清单与冻结单价计算，重试返回同一金额。
@@ -249,7 +249,7 @@ ROOST_SURVIVAL_EXTRACTION_REAL=1 bash scripts/test-survival-extraction-generated
 
 它在第 11 节之后追加 `TestSurvivalExtractionRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交四名玩家建档、开局、四人入场，以及 6 条命令：玩家 0 开始制作；玩家 1 去木材区采集一件、回安全区开始撤离读条；玩家 2 走进野外。后台投影关闭，断言 WAL 有 15 条已确认未投影的记录（4 建档 + 1 开局 + 4 入场 + 6 命令）、制作与撤离都在途且有待执行定时器后，父进程 SIGKILL 自己启动的子进程。
+1. 子进程经 strict 文件 WAL 提交四名玩家建档、开局、四人入场，以及 6 条命令：玩家 0 开始制作；玩家 1 去木材区采集一件、回安全区开始撤离读条；玩家 2 走进野外。后台投影关闭，断言 WAL 有 20 条已确认未投影的记录（5 个实体新建 + 4 建档 + 1 开局 + 4 入场 + 6 命令；Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务）、制作与撤离都在途且有待执行定时器后，父进程 SIGKILL 自己启动的子进程。
 2. 父进程用同一 WAL 与 Mongo 冷加载，业务时间比开局晚 10 秒（撤离读条、制作与第一个环境期限都已过；若一直在线，按 5 秒间隔玩家 2 会扣两次血）：整份探险状态与定时器 ID 和崩溃前逐字节一致；6 条命令按原样重放，回执不变。
 3. 断言冷加载已把存量最早期限报告给驱动索引（`DueOf`），然后启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`）：循环投递一次加载后的补触发，投递计数恰为 1——这一次里玩家 0 得到药剂、玩家 1 的清单封存为 3 木材 + 1 食物、玩家 2 只扣 1 血，结束时刻不变。重复入场不再扣费；玩家 1 先兑付得 4。另外三人在安全区开始撤离（玩家 2 先走回安全区），业务时间推进到读条完成时刻，循环按时投递第 2 次，三人同时撤离、本局结束，全程无重投。
 4. 停驱动后四人各兑付三次，最终永久金币为 100 / 99 / 98 / 98（初始 100、入场费 5，加各自清单 5 / 4 / 3 / 3）；正常关闭后再起第三个进程冷加载：核对探险状态与四人金币和关闭前一致，再重试入场、重放所有命令并重试兑付，结果不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。

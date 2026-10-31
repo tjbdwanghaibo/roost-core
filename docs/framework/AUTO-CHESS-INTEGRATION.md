@@ -76,7 +76,7 @@ ROOST_AUTO_CHESS_KEEP=1 bash scripts/test-auto-chess-generated.sh   # 保留生�
 
 #### 3.3 用 Sender 调用
 
-下面的文件放进保留的生成工程（例如 `internal/chessflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `autochess.OpenCatalog` 打开的配置，`now` 是服务器业务时钟（毫秒），EntityID 都是完整 ID：
+下面的文件放进保留的生成工程（例如 `internal/chessflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `autochess.OpenCatalog` 打开的配置；调用方不传业务时间：handler 的 `nowUnixMilli` 参数由生成的分发包装从本条消息冻结的业务时间（`fctx.NowMilli()`，见 [guide/10-time §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）填，Sender 签名里没有它；EntityID 都是完整 ID：
 
 ```go
 package chessflow
@@ -95,7 +95,7 @@ import (
 // startMatch 是匹配服务成局后的调用：名单、种子、配置与时间都来自服务器。
 // 同一 matchID 重试返回原对局（不重掷种子）；改名单被拒。Player 要先经 Sync_ChessPlayerInit 建档才能领奖。
 func startMatch(ctx context.Context, client nest.Client, catalog *configdata.Store,
-	matchID int64, seats [autochess.Seats]int64, now func() int64) error {
+	matchID int64, seats [autochess.Seats]int64) error {
 	rules, err := autochess.CaptureRules(catalog.Current())
 	if err != nil {
 		return err
@@ -104,13 +104,13 @@ func startMatch(ctx context.Context, client nest.Client, catalog *configdata.Sto
 	if _, err := rand.Read(raw); err != nil {
 		return err
 	}
-	_, err = syncsender.NewAutoChessSender(client).Sync_ChessInit(ctx, matchID, seats, rules, hex.EncodeToString(raw), now())
+	_, err = syncsender.NewAutoChessSender(client).Sync_ChessInit(ctx, matchID, seats, rules, hex.EncodeToString(raw))
 	return err
 }
 
 // buyAndReady 是已鉴权入口的调用顺序：读本人视图、买商店第一格、宣布准备。
 // 每条命令带视图里的 Epoch / 下一个 Seq / 当前回合；Player ID 取自会话。
-func buyAndReady(ctx context.Context, client nest.Client, matchID, playerEntityID int64, now func() int64) error {
+func buyAndReady(ctx context.Context, client nest.Client, matchID, playerEntityID int64) error {
 	s := syncsender.NewAutoChessSender(client)
 	for _, kind := range []string{"buy", "ready"} {
 		v, err := s.Sync_ChessView(ctx, matchID, playerEntityID)
@@ -118,7 +118,7 @@ func buyAndReady(ctx context.Context, client nest.Client, matchID, playerEntityI
 			return err
 		}
 		command := autochess.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Round: v.Round, Kind: kind}
-		if _, err := s.Sync_ChessCommand(ctx, matchID, playerEntityID, command, now()); err != nil {
+		if _, err := s.Sync_ChessCommand(ctx, matchID, playerEntityID, command); err != nil {
 			return err
 		}
 	}
@@ -232,7 +232,7 @@ ROOST_AUTO_CHESS_REAL=1 bash scripts/test-auto-chess-generated.sh
 
 它在第 10 节之后追加 `TestAutoChessRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交八名玩家建档、成局，以及每人买卡、上阵、准备（第八人准备时冻结四场战斗）；后台投影关闭，断言 WAL 恰有 33 条已确认未投影的记录后，父进程 SIGKILL 自己启动的子进程。
+1. 子进程经 strict 文件 WAL 提交八名玩家建档、成局，以及每人买卡、上阵、准备（第八人准备时冻结四场战斗）；后台投影关闭，断言 WAL 恰有 42 条已确认未投影的记录（9 个实体新建：Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务；其余 33 条是建档、成局与命令）后，父进程 SIGKILL 自己启动的子进程。
 2. 父进程用同一 WAL 与 Mongo 冷加载（业务时间推进一小时），核对整局状态（卡池、冻结的战斗、回执）与定时器 ID，重放全部 24 条玩家命令得到原回执；核对冷加载已把存量期限报告给驱动索引（`DueOf`）。
 3. 启动驱动自己的投递循环（`Driver.Start`，用例不调用 `DeliverDue`、不手发 Tick）：循环对离线一小时的战斗阶段只补一次，进入第 2 回合准备、期限从当前业务时间起算（entitytimer `delivered_total` 增量 1）；之后用例每次把业务时间推到新期限，循环按时投递一次、推进一个阶段（计数逐次加 1），直到终局、不再挂定时器。终局时核对总数 = 1 + 2×(终局回合 − 1)（样例打满 8 回合，计数 15；第 1 回合的准备→战斗由写进程里第八人准备触发，不经定时器），全程 `redelivered_total` 增量 0。计数只有一个来源：ChessMatch 驱动只投递阶段节点，重放的玩家命令命中原回执、不重排定时器。停循环后八人各领奖三次，金币按名次各一份。
 4. 正常关闭后再起第三个进程冷加载：核对整局状态与八人金币，再重放全部命令与领奖，结果不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。

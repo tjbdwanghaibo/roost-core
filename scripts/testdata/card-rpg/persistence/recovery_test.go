@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
@@ -70,7 +71,11 @@ func openCardRuntime(t *testing.T, manual bool, now int64) *cardRuntime {
 	RegisterTickCardRunTimerGenNestHandlers()
 	h := &cardRuntime{database: database}
 	h.clock.Store(now)
+	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
+	// 两处读同一个 h.clock，测试拨 h.clock 就是拨业务时间。
 	runentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
@@ -241,19 +246,20 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if _, err := s.Sync_CardInit(ctx, h.playerID, strings.Repeat("ab", 32), baseNow); err != nil {
+		if _, err := s.Sync_CardInit(ctx, h.playerID, strings.Repeat("ab", 32)); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.Sync_CardDraw(ctx, h.playerID, 1, 10, rules); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Sync_CardManage(ctx, h.playerID, cardrpg.Manage{Seq: 1, Kind: "level", CardID: 1, Target: 2}, rules, baseNow); err != nil {
+		if _, err := s.Sync_CardManage(ctx, h.playerID, cardrpg.Manage{Seq: 1, Kind: "level", CardID: 1, Target: 2}, rules); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.MultiSync_CardStart(ctx, h.playerID, h.runID, 1, 1, rules, baseNow); err != nil {
+		if _, err := s.MultiSync_CardStart(ctx, h.playerID, h.runID, 1, 1, rules); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Sync_CardTurn(ctx, h.runID, h.playerID, cardrpg.TurnCommand{Seq: 1, ActorID: h.playerID, Kind: "guard"}, h.clock.Add(1)); err != nil {
+		h.clock.Add(1)
+		if _, err := s.Sync_CardTurn(ctx, h.runID, h.playerID, cardrpg.TurnCommand{Seq: 1, ActorID: h.playerID, Kind: "guard"}); err != nil {
 			t.Fatal(err)
 		}
 		player, err := h.access.Get(ctx, h.playerID, entity.EntityCategoryOther)
@@ -376,7 +382,7 @@ func TestCardRPGRealCrashRecovery(t *testing.T) {
 	if receipt, err := s.Sync_CardDraw(ctx, h.playerID, 1, 10, patched); err != nil || receipt.Version != "cards-v1" {
 		t.Fatal("recovered draw rerolled / repriced", err)
 	}
-	if _, err := s.Sync_CardManage(ctx, h.playerID, cardrpg.Manage{Seq: 1, Kind: "level", CardID: 1, Target: 2}, patched, h.clock.Load()); err != nil {
+	if _, err := s.Sync_CardManage(ctx, h.playerID, cardrpg.Manage{Seq: 1, Kind: "level", CardID: 1, Target: 2}, patched); err != nil {
 		t.Fatal(err)
 	}
 	// 冷加载时 Host 把存量最早期限报告给驱动索引。到这里投递循环还没启动，上面直接读 DAO 不会与 Tick 并发。

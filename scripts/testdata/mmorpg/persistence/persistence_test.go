@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,7 +36,7 @@ func (mmoNoEffects) Publish(context.Context, engine.OutboxItem) error {
 	return errors.New("unexpected effect in local MMO workflow")
 }
 
-// 两个真实依赖用例共用的业务时间起点（UnixMilli）；Buff 2 秒、复活 3 秒的期限都从这里起算。
+// 两个真实依赖用例共用的业务时间起点（UnixMilli）；复活 3 秒从这里起算，Buff 2 秒从第二击（T0 + 1 秒）起算。
 const mmoRealT0 int64 = 1800000000000
 
 var (
@@ -135,7 +136,11 @@ func openMMORealRuntime(t *testing.T, walRoot string, manual bool, now int64) *m
 	registerMMORealHandlers()
 	h := &mmoRealRuntime{database: database}
 	h.clock.Store(now)
+	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
+	// 两处读同一个 h.clock，测试拨 h.clock 就是拨业务时间。
 	player.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
@@ -262,8 +267,10 @@ func awaitMMOLoop(t *testing.T, step string, deliveredBefore, delivered int64, c
 	}
 }
 
-// 两次独立 go test 进程：第一阶段停在已持久化的单方确认后正常停机，第二阶段冷加载后完成交易、重放战斗领奖，
-// 再启动 Player 驱动的投递循环，由循环投递离线期间到期的 Buff。恢复来源是正常停机时已投影到 Mongo 的文档
+// 两次独立 go test 进程：第一阶段停在已持久化的单方确认后正常停机，第二阶段紧接着冷加载（业务时间仍在交易期限内）
+// 完成交易、重放战斗领奖；然后业务时间推进一小时，再启动 Player 驱动的投递循环，由循环补投冷加载时已存在、
+// 现已过期的 Buff。业务时间一律由用例拨 h.clock（handler 的 nowUnixMilli 从 fctx 取），调用方不传时间。
+// 恢复来源是正常停机时已投影到 Mongo 的文档
 // （崩溃后从未投影 WAL 恢复见 TestMMORPGRealCrashRecovery）。
 // 真实依赖准入由脚本显式设置，普通纵切不复制本文件，避免把 skip 或零测试记作恢复通过。
 func TestMMORPGRealPersistenceAcrossProcesses(t *testing.T) {
@@ -273,8 +280,8 @@ func TestMMORPGRealPersistenceAcrossProcesses(t *testing.T) {
 	}
 	now := mmoRealT0
 	if phase == "recover" {
-		// 两次运行之间“离线”一小时：Buff（T0 + 2 秒）早已过期。
-		now += time.Hour.Milliseconds()
+		// 第二阶段在第一阶段最后一条命令（T0 + 1 秒）的时刻起来：交易期限（挂单 + 5 秒）还没到。
+		now += 1000
 	}
 	h := openMMORealRuntime(t, os.Getenv("ROOST_MMORPG_WAL"), false, now)
 	ctx := context.Background()
@@ -304,10 +311,12 @@ func TestMMORPGRealPersistenceAcrossProcesses(t *testing.T) {
 		h.seed(t, a, 50, 3, 100, area)
 		h.seed(t, b, 50, 3, 100, area)
 		h.seed(t, mob, 0, 0, 20, area)
-		if err := s.MultiSync_MMORPGStrike(ctx, a, mob, 1, mmoRealT0); err != nil {
+		if err := s.MultiSync_MMORPGStrike(ctx, a, mob, 1); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.MultiSync_MMORPGStrike(ctx, a, mob, 2, mmoRealT0+1000); err != nil {
+		// 冷却 1 秒后第二击；之后的 Buff（期限 T0 + 1 秒 + 2 秒）、挂单（期限 T0 + 1 秒 + 5 秒）都从这一刻算。
+		h.clock.Store(mmoRealT0 + 1000)
+		if err := s.MultiSync_MMORPGStrike(ctx, a, mob, 2); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.MultiSync_MMORPGLoot(ctx, a, mob); err != nil {
@@ -319,10 +328,10 @@ func TestMMORPGRealPersistenceAcrossProcesses(t *testing.T) {
 		if err := s.Sync_MMORPGBuff(ctx, a, 7); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.MultiSync_MMORPGOffer(ctx, tr, a, b, 10, 1, mmoRealT0); err != nil {
+		if err := s.MultiSync_MMORPGOffer(ctx, tr, a, b, 10, 1); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.MultiSync_MMORPGResolveTrade(ctx, tr, a, b, a, 1, mmoRealT0); err != nil {
+		if err := s.MultiSync_MMORPGResolveTrade(ctx, tr, a, b, a, 1); err != nil {
 			t.Fatal(err)
 		}
 	} else {
@@ -334,11 +343,11 @@ func TestMMORPGRealPersistenceAcrossProcesses(t *testing.T) {
 			t.Fatal("partial confirmation was not recovered")
 		}
 		for range 2 {
-			if err := s.MultiSync_MMORPGResolveTrade(ctx, tr, a, b, b, 1, mmoRealT0+1000); err != nil {
+			if err := s.MultiSync_MMORPGResolveTrade(ctx, tr, a, b, b, 1); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if err := s.MultiSync_MMORPGStrike(ctx, a, mob, 2, mmoRealT0+1000); err != nil {
+		if err := s.MultiSync_MMORPGStrike(ctx, a, mob, 2); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.MultiSync_MMORPGLoot(ctx, a, mob); err != nil {
@@ -355,9 +364,11 @@ func TestMMORPGRealPersistenceAcrossProcesses(t *testing.T) {
 		if seller.(*player.Player).Dao().GetBuffValue() != 7 {
 			t.Fatal("Buff was not recovered before its deadline was delivered")
 		}
-		if due, ok := player.TimerDriver.DueOf(seller); !ok || due.UnixMilli() != mmoRealT0+2000 {
+		if due, ok := player.TimerDriver.DueOf(seller); !ok || due.UnixMilli() != mmoRealT0+3000 {
 			t.Fatalf("cold load did not report the stored Buff deadline to the driver: due=%v ok=%v", due, ok)
 		}
+		// 玩家离线一小时：把业务时间推过 Buff 期限，再启动投递循环。
+		h.clock.Store(mmoRealT0 + time.Hour.Milliseconds())
 		// 启动驱动自己的投递循环（与进程装配同一个入口）；用例不手发 Tick、不调用 DeliverDue。离线一小时的 Buff
 		// 只补触发这一次；之后 Player 上没有节点，索引不再有它的期限，循环不会再投递。
 		deliveredBefore, redeliveredBefore := mmoTimerCounter(entitytimer.DeliveredMetric), mmoTimerCounter(entitytimer.RedeliveredMetric)

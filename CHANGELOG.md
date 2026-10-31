@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **七个玩法夹具的业务时间改为从 fctx 取，调用方不再传时间**（D22-1 收尾，只改 `scripts/testdata` 与接入手册，框架与生成器不变）：auto-chess、card-rpg、idle-sim、merge-casual、mmorpg、survival-extraction、tower-defense 的 20 个 Nest handler 原来收调用方传入的 `now int64`，改成约定名参数 `nowUnixMilli`（生成的分发包装执行时填本条消息冻结的业务时间 `fctx.NowMilli()`，Sender 签名里没有它），与 SLG 夹具一致；手写分发里直接调 handler 的地方传 `fctx.NowMilli()`。测试与 REAL 恢复夹具一律用 `clock.SetSource` 把进程业务时钟与驱动 `SetClock` 接到同一个原子时钟，`t.Cleanup` 恢复；“冷却差 1 毫秒”“交易到期”“30 秒后重放”这类用例改成拨时钟，断言与场景数不变（九个脚本缺省模式：slg 6、mmorpg 13、moba 28、card-rpg 16、tower-defense 10、survival-extraction 12、merge-casual 15、idle-sim 12、auto-chess 12，全部通过）。mmorpg 两个 REAL 用例原来靠传旧时间让第二阶段在“离线一小时”后仍能完成 5 秒期限的交易，现在第二阶段在交易期限内起来、重放后再把业务时间推进一小时，Buff 期限随之是 T0 + 3 秒（第二击之后施加）。七个 REAL 恢复夹具的未投影记录数跟上 R15“新建实体本身就落库”（Nest 之外每个 `Create` 多一条 strict 隔离事务；v1.33.1 上六个 REAL 用例在屏障处失败，如 mmorpg `unacked=16 want 0 / 12`），七个 REAL 与 MOBA 的三条 Mongo 用例在共享隔离 Mongo 上实跑通过。七份接入手册的 Sender 示例去掉时间参数（在生成工程里 `go vet` 通过），MMORPG 手册“端点注入的业务时间”改为本条消息冻结的业务时间。[guide/10-time §1A](docs/framework/guide/10-time.md#1a-业务时间一律取自-ctxd22-1)
+
 ## [v1.33.1] - 2026-10-31
 
 ### 修复

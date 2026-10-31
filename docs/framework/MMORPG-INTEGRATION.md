@@ -34,7 +34,7 @@ Player 当前**静态绑定 game sid**：跨服玩法由 Remote / Saga 协作，
 | 同屏观察与隐私 | Interest `BandLayer` + Player 同步 Profile | 自己看完整视图，空间来源用 `near`；[TCP 客户端场景](../../scripts/testdata/mmorpg/scene_runtime_test.go.txt)核对金币 / 经验 / 背包不外泄 | 队伍、敌我、隐身、观战等权限及对应字段集合 |
 | 组队、退出与解散 | 多 Player Sender；demo Scene `SetTeam` 关系来源 | `MMORPGParty`（[tasks](../../scripts/testdata/mmorpg/tasks.go.txt)）、`MMORPGDisband`（[gameplay](../../scripts/testdata/mmorpg/gameplay.go.txt)） | 邀请、队长、人数、跨地图信息权限；样例是两人队伍，解散带预期队伍 ID |
 | 面对面交易 | 独立 Trade DAO + 三实体 Nest | `MMORPGOffer` 托管双方资产，`MMORPGResolveTrade` 处理确认 / 取消 / 到期；交易实体 ID 是幂等身份 | 物品唯一性、容量、报价、确认规则、掉线政策；样例掉线选择取消 |
-| 权威战斗与冷却 | 多实体 Nest、端点注入的业务时间、单调输入序号 | `MMORPGStrike` 校验存活、同地图、顺序、冷却，再改怪物血量与击杀归属 | 战斗公式、命中、距离和预测；样例不是完整即时战斗系统 |
+| 权威战斗与冷却 | 多实体 Nest、本条消息冻结的业务时间（handler 的 `nowUnixMilli` 从 fctx 填）、单调输入序号 | `MMORPGStrike` 校验存活、同地图、顺序、冷却，再改怪物血量与击杀归属 | 战斗公式、命中、距离和预测；样例不是完整即时战斗系统 |
 | Buff、死亡与复活 | 持久实体定时器（`roost add timer`，`entitytimer.Host` / `Driver`） | `MMORPGBuff` / `MMORPGRevive` 与[到期回调](../../scripts/testdata/mmorpg/timer_handlers.go.txt)；回调只改自己已锁的实体 | 叠加、驱散、刷新、死亡损失、复活点；离线到期在加载后补触发一次 |
 | 掉落、任务与副本结算 | Player / Monster / Scene 同事务的业务事实 | `MMORPGLoot` / `MMORPGQuest` / `MMORPGCompleteInstance`：领奖与领取事实一起写，Boss 死亡才完成副本 | 掉落分配、任务条件、进度锁定、重置和奖励政策 |
 | 背包、装备与属性 | Player 组件、嵌套 DAO、Nest rollback | [EquipItem](../../demo/game/handler/equip_item.go.tmpl)：背包扣新装备、换装、归还旧装备、刷新属性同事务 | 格数、绑定、强化与数值；派生属性不能成为另一份权威 |
@@ -88,16 +88,17 @@ import (
 )
 
 // openTrade 托管卖方 1 件物品与买方 10 金币。交易实体 ID 是幂等身份：同一参数重复开单不重复托管。
-func openTrade(ctx context.Context, client nest.Client, tradeID, sellerID, buyerID, serverNowMillis int64) error {
+// 报价期限从本条消息冻结的业务时间算：handler 的 nowUnixMilli 由生成的分发包装从 fctx 填，调用方不传时间。
+func openTrade(ctx context.Context, client nest.Client, tradeID, sellerID, buyerID int64) error {
 	s := syncsender.NewMmoGameplaySender(client)
-	return s.MultiSync_MMORPGOffer(ctx, tradeID, sellerID, buyerID, 10, 1, serverNowMillis)
+	return s.MultiSync_MMORPGOffer(ctx, tradeID, sellerID, buyerID, 10, 1)
 }
 
 // confirmTrade 记 actorID 一方确认一次（action 1）；卖家、买家各调用一次才成交。
 // actorID 由已鉴权会话转换，不信任客户端自报；handler 持实体锁时不等待另一方，也不做远端 I/O。
-func confirmTrade(ctx context.Context, client nest.Client, tradeID, sellerID, buyerID, actorID, serverNowMillis int64) error {
+func confirmTrade(ctx context.Context, client nest.Client, tradeID, sellerID, buyerID, actorID int64) error {
 	s := syncsender.NewMmoGameplaySender(client)
-	return s.MultiSync_MMORPGResolveTrade(ctx, tradeID, sellerID, buyerID, actorID, 1, serverNowMillis)
+	return s.MultiSync_MMORPGResolveTrade(ctx, tradeID, sellerID, buyerID, actorID, 1)
 }
 ```
 
@@ -221,12 +222,12 @@ ROOST_MMORPG_REAL=1 bash scripts/test-mmorpg-generated.sh
 
 追加的两个[恢复夹具](../../scripts/testdata/mmorpg/persistence/)共用本次唯一 DAO 库，各用自己的文件 WAL 根；定时器到期都由 Player 驱动自己的投递循环投递（`Driver.Start`，与进程装配同一入口），用例不手发 `Sync_TickPlayerTimer`、不调用 `DeliverDue`。业务时钟在两次推进之间冻结，循环按 MaxWait 重读时钟，所以投递次数是确定的，用例读 `entitytimer.delivered_total` / `redelivered_total` 的增量核对。关 Nest 前先停循环（`t.Cleanup` 里也会停）。
 
-**正常停机两进程**（`TestMMORPGRealPersistenceAcrossProcesses`，[persistence_test.go](../../scripts/testdata/mmorpg/persistence/persistence_test.go)）：先后运行两个独立 `go test` 进程。第一个完成战斗、领奖、登记 Buff，停在交易单方确认后正常停机；第二个（业务时间 +1 小时）冷加载后核对单方确认已恢复，完成交易、重放击杀 / 掉落 / 任务领奖（不重复发放），核对冷加载已把 Buff 期限报告进驱动索引（`DueOf`），启动投递循环，由循环补触发一次离线到期的 Buff：Buff 清除，投递计数增量 1、重投 0，之后索引里不再有这个玩家。恢复来源是正常停机时已投影到 Mongo 的文档。
+**正常停机两进程**（`TestMMORPGRealPersistenceAcrossProcesses`，[persistence_test.go](../../scripts/testdata/mmorpg/persistence/persistence_test.go)）：先后运行两个独立 `go test` 进程。第一个完成战斗、领奖、登记 Buff，停在交易单方确认后正常停机；第二个紧接着在第一个最后一条命令的业务时刻（T0 + 1 秒，交易期限内）冷加载，核对单方确认已恢复，完成交易、重放击杀 / 掉落 / 任务领奖（不重复发放），核对冷加载已把 Buff 期限（T0 + 3 秒：第二击之后上的 Buff）报告进驱动索引（`DueOf`）；然后业务时间推进一小时（玩家离线），启动投递循环，由循环补触发一次已过期的 Buff：Buff 清除，投递计数增量 1、重投 0，之后索引里不再有这个玩家。恢复来源是正常停机时已投影到 Mongo 的文档。
 
 **SIGKILL 崩溃恢复**（`TestMMORPGRealCrashRecovery`，[recovery_test.go](../../scripts/testdata/mmorpg/persistence/recovery_test.go)）：崩溃点选野外战斗进行中——买家在交易窗口开着时被怪物击倒、复活在计时；卖家击杀怪物、拾取并领了任务奖、刚上 Buff（计时中）；双方的托管交易已挂单、卖家已确认（卖家 1 件物品、买家 10 金币托管在 Trade 实体里）。选它是因为这是 MMORPG 最典型的在途组合：两种 Player 定时器节点同时在计时，托管资产不在任何一方背包里，战斗奖励已发。
 
-1. 子进程 strict 提交、关掉后台投影，断言恰有 12 条未投影记录（3 条种子 + 9 条业务命令）后写出屏障（四个实体的 DAO 持久字节与两个定时器节点 ID），被父进程 SIGKILL。
-2. 父进程用同一 WAL 与本次唯一库冷加载（业务时间 +1 小时）：四个实体逐字节一致，Buff（T0 + 2 秒）与复活（T0 + 3 秒）两个期限都在驱动索引里；用原参数重试战斗、拾取、领奖、挂单、卖家确认与复活，状态不变。
+1. 子进程 strict 提交、关掉后台投影，断言恰有 16 条未投影记录（4 个实体新建 + 3 条种子 + 9 条业务命令；Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务）后写出屏障（四个实体的 DAO 持久字节与两个定时器节点 ID），被父进程 SIGKILL。
+2. 父进程用同一 WAL 与本次唯一库在崩溃时刻（T0 + 1 秒，交易期限内）冷加载：四个实体逐字节一致，Buff 与复活两个期限（都是 T0 + 3 秒：复活在 T0 登记，Buff 在第二击之后的 T0 + 1 秒上）都在驱动索引里；用原参数重试战斗、拾取、领奖、挂单、卖家确认与复活，状态不变。然后业务时间推进一小时（玩家离线）。
 3. 启动投递循环：两个过期玩家各补触发一次（Buff 清除、买家复活满血），计数增量 2。
 4. 交易已过 5 秒期限：服务内部按到期清理（actorID 0）退还托管资产，重试两次不重复退，买家迟到的确认被拒。
 5. 卖家重新上 Buff，新期限（当前业务时间 + 2 秒）入索引，期限之前不投递；业务时间推进到期限，循环按时投递一次（计数 3、重投 0）。

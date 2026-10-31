@@ -43,12 +43,12 @@ func handlerMMORPGDisband(target IMMOEntity, peer IMMOEntity, expected int64) er
 }
 
 // 交易记录是独立实体，完整 ID 是幂等身份；只为本示例预留双方资产，不调用远端服务。
-// 截止用端点注入的服务器业务时间，不从客户端接受；正式游戏需配置有效期与库存容量。
+// 截止从本条消息冻结的业务时间算（nowUnixMilli 由生成的分发包装从 fctx 填本条消息冻结的业务时间，调用方不传），不从客户端接受；正式游戏需配置有效期与库存容量。
 //
 //roost:nest rollback=undo durability=strict
-func handlerMMORPGOffer(trade IMMOTradeEntity, seller IMMOEntity, buyer IMMOEntity, price int64, count int64, now int64) error {
+func handlerMMORPGOffer(trade IMMOTradeEntity, seller IMMOEntity, buyer IMMOEntity, price int64, count int64, nowUnixMilli int64) error {
 	d, s, b := trade.Dao(), seller.Dao(), buyer.Dao()
-	if seller.ID() == buyer.ID() || price <= 0 || price > mmoGoldLimit || count <= 0 || count > mmoItemLimit || now <= 0 || now > math.MaxInt64-5000 {
+	if seller.ID() == buyer.ID() || price <= 0 || price > mmoGoldLimit || count <= 0 || count > mmoItemLimit || nowUnixMilli <= 0 || nowUnixMilli > math.MaxInt64-5000 {
 		return errMMORule
 	}
 	if d.GetStatus() != 0 {
@@ -66,7 +66,7 @@ func handlerMMORPGOffer(trade IMMOTradeEntity, seller IMMOEntity, buyer IMMOEnti
 	d.SetBuyerID(buyer.ID())
 	d.SetPrice(price)
 	d.SetCount(count)
-	d.SetDeadline(now + 5000)
+	d.SetDeadline(nowUnixMilli + 5000)
 	d.SetStatus(1)
 	return nil
 }
@@ -75,13 +75,13 @@ func handlerMMORPGOffer(trade IMMOTradeEntity, seller IMMOEntity, buyer IMMOEnti
 // 任一取消 / 掉线（本例选择取消）或到期退还托管资产；双方确认才交换，终态保留作重放凭据。
 //
 //roost:nest rollback=undo durability=strict
-func handlerMMORPGResolveTrade(trade IMMOTradeEntity, seller IMMOEntity, buyer IMMOEntity, actorID int64, action int64, now int64) error {
+func handlerMMORPGResolveTrade(trade IMMOTradeEntity, seller IMMOEntity, buyer IMMOEntity, actorID int64, action int64, nowUnixMilli int64) error {
 	d, s, b := trade.Dao(), seller.Dao(), buyer.Dao()
 	if d.GetStatus() == 0 || d.GetSellerID() != seller.ID() || d.GetBuyerID() != buyer.ID() {
 		return errMMORule
 	}
 	if action == 3 {
-		if actorID != 0 || now < d.GetDeadline() {
+		if actorID != 0 || nowUnixMilli < d.GetDeadline() {
 			return errMMORule
 		}
 	} else if (action != 1 && action != 2) || (actorID != seller.ID() && actorID != buyer.ID()) {
@@ -99,7 +99,7 @@ func handlerMMORPGResolveTrade(trade IMMOTradeEntity, seller IMMOEntity, buyer I
 		}
 		return errMMORule
 	}
-	if action == 1 && now < d.GetDeadline() {
+	if action == 1 && nowUnixMilli < d.GetDeadline() {
 		if actorID == seller.ID() {
 			d.SetSellerConfirmed(1)
 		} else {
@@ -149,9 +149,9 @@ func handlerMMORPGBuff(target IMMOCombatEntity, value int64) error {
 // 本例未模拟空间距离或客户端预测；正式游戏必须再按权威位置验证射程和技能配置。
 //
 //roost:nest rollback=undo durability=strict
-func handlerMMORPGStrike(target IMMOEntity, mob IMMONpcEntity, seq int64, now int64) error {
+func handlerMMORPGStrike(target IMMOEntity, mob IMMONpcEntity, seq int64, nowUnixMilli int64) error {
 	d, m := target.Dao(), mob.Dao()
-	if seq <= 0 || now <= 0 || now > math.MaxInt64-1000 {
+	if seq <= 0 || nowUnixMilli <= 0 || nowUnixMilli > math.MaxInt64-1000 {
 		return errMMORule
 	}
 	if seq == d.GetAttackSeq() {
@@ -160,7 +160,7 @@ func handlerMMORPGStrike(target IMMOEntity, mob IMMONpcEntity, seq int64, now in
 		}
 		return errMMORule
 	}
-	if seq-1 != d.GetAttackSeq() || d.GetHP() <= 0 || d.GetSceneID() != m.GetSceneID() || m.GetHP() <= 0 || now < d.GetCooldownUntil() || d.GetQuestKills() >= 1000000 {
+	if seq-1 != d.GetAttackSeq() || d.GetHP() <= 0 || d.GetSceneID() != m.GetSceneID() || m.GetHP() <= 0 || nowUnixMilli < d.GetCooldownUntil() || d.GetQuestKills() >= 1000000 {
 		return errMMORule
 	}
 	damage := int64(10) + d.GetBuffValue()
@@ -171,7 +171,7 @@ func handlerMMORPGStrike(target IMMOEntity, mob IMMONpcEntity, seq int64, now in
 	m.SetHP(hp)
 	d.SetAttackSeq(seq)
 	d.SetLastAttackTarget(mob.ID())
-	d.SetCooldownUntil(now + 1000)
+	d.SetCooldownUntil(nowUnixMilli + 1000)
 	if hp == 0 {
 		m.SetLootOwner(target.ID())
 		d.SetQuestKills(d.GetQuestKills() + 1)

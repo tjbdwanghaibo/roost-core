@@ -11,6 +11,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -82,7 +84,11 @@ func newIdleFixture(t *testing.T, custom ...idle.Rules) *idleFixture {
 	}
 	f := &idleFixture{rules: loadIdleRules(t, rules)}
 	f.clock.Store(idleNow)
+	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
+	// 两处读同一个 f.clock，测试拨 f.clock 就是拨业务时间。
 	playerentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	id, err := entity.BuildEntityID(91001, playerentity.EntityKindPlayer)
 	if err != nil {
 		t.Fatal(err)
@@ -104,7 +110,7 @@ func newIdleFixture(t *testing.T, custom ...idle.Rules) *idleFixture {
 		_ = f.engine.Shutdown(context.Background())
 		f.player.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
 	})
-	if _, err := sender.NewIdleSimSender(f.engine).Sync_IdleInit(context.Background(), id, idleNow, f.rules); err != nil {
+	if _, err := sender.NewIdleSimSender(f.engine).Sync_IdleInit(context.Background(), id, f.rules); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -125,7 +131,7 @@ func (f *idleFixture) command(t *testing.T, kind string, station, recipe int, co
 	return idle.Command{Seq: uint64(len(s.Receipts)) + 1, Kind: kind, Station: station, Recipe: recipe, Count: count, JobID: job}
 }
 func (f *idleFixture) send(c idle.Command) (idle.Receipt, error) {
-	return sender.NewIdleSimSender(f.engine).Sync_IdleCommand(context.Background(), f.player.ID(), c, f.clock.Load())
+	return sender.NewIdleSimSender(f.engine).Sync_IdleCommand(context.Background(), f.player.ID(), c)
 }
 func (f *idleFixture) do(t *testing.T, kind string, station, recipe int, count int64, job uint64) idle.Receipt {
 	t.Helper()
@@ -244,7 +250,7 @@ func TestIdleSimUpgradeAndBoostSettleOldRatesBeforeChangingThem(t *testing.T) {
 	patched.Version = "idle-v2"
 	patched.Recipes[0].Raw = 9
 	before := f.player.Dao().GetState()
-	if _, err := sender.NewIdleSimSender(f.engine).Sync_IdleInit(context.Background(), f.player.ID(), f.clock.Load(), patched); err != nil || f.player.Dao().GetState() != before {
+	if _, err := sender.NewIdleSimSender(f.engine).Sync_IdleInit(context.Background(), f.player.ID(), patched); err != nil || f.player.Dao().GetState() != before {
 		t.Fatal("existing state changed on bootstrap retry")
 	}
 }
@@ -360,7 +366,8 @@ func TestIdleSimUndoRestoresQueueEconomyAndWakeDeadline(t *testing.T) {
 		timer := f.player.Dao().GetWakeTimer()
 		name := nest.NewHandlerName("idle_undo_" + kind)
 		nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
-			_, err := handlerIdleCommand(es[0].(IIdlePlayerEntity), c, f.clock.Load())
+			// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
+			_, err := handlerIdleCommand(es[0].(IIdlePlayerEntity), c, fctx.NowMilli())
 			if err != nil {
 				return nil, err
 			}

@@ -15,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
@@ -69,7 +70,11 @@ func openTowerRuntime(t *testing.T, manual bool, now int64) *towerRuntime {
 	RegisterTickTowerRoomTimerGenNestHandlers()
 	h := &towerRuntime{database: database}
 	h.clock.Store(now)
+	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
+	// 两处读同一个 h.clock，测试拨 h.clock 就是拨业务时间。
 	runentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
@@ -241,7 +246,7 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if _, e = s.Sync_TowerInit(ctx, h.runID, h.ids, rules, towerNow); e != nil {
+		if _, e = s.Sync_TowerInit(ctx, h.runID, h.ids, rules); e != nil {
 			t.Fatal(e)
 		}
 		for i, id := range h.ids {
@@ -250,7 +255,7 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 				if kind == "build" {
 					a = []int{1, 6, 11, 16}[i]
 				}
-				if _, e = s.Sync_TowerCommand(ctx, h.runID, id, tower.Command{Seq: uint64(j + 1), Epoch: 1, Round: 1, Kind: kind, A: a, B: b}, towerNow); e != nil {
+				if _, e = s.Sync_TowerCommand(ctx, h.runID, id, tower.Command{Seq: uint64(j + 1), Epoch: 1, Round: 1, Kind: kind, A: a, B: b}); e != nil {
 					t.Fatal(i, kind, e)
 				}
 			}
@@ -264,7 +269,7 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 		waitTower(t, func() bool { v, e := s.Sync_TowerView(ctx, h.runID, h.ids[0]); return e == nil && v.Tick == 1 })
 		m, state = towerRuntimeState(t, h)
 		stats := h.projector.Stats()
-		if stats.Projected != 0 || stats.WALUnacked != 14 || state.Phase != "battle" || state.Tick != 1 || m.Dao().GetWakeTimer() == 0 {
+		if stats.Projected != 0 || stats.WALUnacked != 19 || state.Phase != "battle" || state.Tick != 1 || m.Dao().GetWakeTimer() == 0 {
 			t.Fatal("not at unprojected active wave boundary")
 		}
 		b := towerBarrier{State: state.Encode(), Timer: m.Dao().GetWakeTimer(), Unprojected: stats.WALUnacked}
@@ -288,7 +293,7 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 		_, state := towerRuntimeState(t, h)
 		for i, id := range h.ids {
 			for _, r := range state.Seats[i].Receipts {
-				got, e := s.Sync_TowerCommand(ctx, h.runID, id, r.Command, h.clock.Load())
+				got, e := s.Sync_TowerCommand(ctx, h.runID, id, r.Command)
 				if e != nil || got != r {
 					t.Fatal("command replay changed", e)
 				}
@@ -372,7 +377,7 @@ func TestTowerDefenseRealCrashRecovery(t *testing.T) {
 	s := sender.NewTowerDefenseSender(h.scheduler)
 	for i, id := range h.ids {
 		for _, r := range state.Seats[i].Receipts {
-			got, e := s.Sync_TowerCommand(ctx, h.runID, id, r.Command, h.clock.Load())
+			got, e := s.Sync_TowerCommand(ctx, h.runID, id, r.Command)
 			if e != nil || got != r {
 				t.Fatal("retry changed purchase or phase", e)
 			}

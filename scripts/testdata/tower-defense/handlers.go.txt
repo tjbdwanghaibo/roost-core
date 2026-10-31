@@ -23,10 +23,10 @@ type ITowerPlayerEntity interface {
 //roost:nest rollback=undo durability=strict
 func handlerTowerPlayerInit(p ITowerPlayerEntity) error { p.Dao().SetInitialized(true); return nil }
 
-// 成局名单、配置、时间来自服务端。相同 Room ID 不允许改名单或重置波次。
+// 成局名单、配置来自服务端，开局时刻是本条消息冻结的业务时间（nowUnixMilli 由生成的分发包装从 fctx 填本条消息冻结的业务时间，调用方不传）。相同 Room ID 不允许改名单或重置波次。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTowerInit(m ITowerRoomEntity, ids [tower.Seats]int64, r tower.Rules, now int64) (tower.View, error) {
+func handlerTowerInit(m ITowerRoomEntity, ids [tower.Seats]int64, r tower.Rules, nowUnixMilli int64) (tower.View, error) {
 	if m.Dao().GetState() != "" {
 		s, e := tower.Decode(m.Dao().GetState())
 		if e != nil {
@@ -39,7 +39,7 @@ func handlerTowerInit(m ITowerRoomEntity, ids [tower.Seats]int64, r tower.Rules,
 		}
 		return s.View(ids[0])
 	}
-	s, e := tower.New(ids, r, now)
+	s, e := tower.New(ids, r, nowUnixMilli)
 	if e != nil {
 		return tower.View{}, e
 	}
@@ -50,12 +50,12 @@ func handlerTowerInit(m ITowerRoomEntity, ids [tower.Seats]int64, r tower.Rules,
 }
 
 //roost:nest rollback=undo durability=strict
-func handlerTowerCommand(m ITowerRoomEntity, playerID int64, c tower.Command, now int64) (tower.Receipt, error) {
+func handlerTowerCommand(m ITowerRoomEntity, playerID int64, c tower.Command, nowUnixMilli int64) (tower.Receipt, error) {
 	s, e := tower.Decode(m.Dao().GetState())
 	if e != nil {
 		return tower.Receipt{}, e
 	}
-	r, changed, e := s.Apply(playerID, c, now)
+	r, changed, e := s.Apply(playerID, c, nowUnixMilli)
 	if e != nil {
 		return r, e
 	}

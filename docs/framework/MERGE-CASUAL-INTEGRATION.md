@@ -79,7 +79,7 @@ ROOST_MERGE_CASUAL_KEEP=1 bash scripts/test-merge-casual-generated.sh   # 保留
 
 #### 3.3 用 Sender 调用
 
-下面的文件放进保留的生成工程（例如 `internal/mergeflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `mergecasual.OpenCatalog` 打开的配置，`now` 是服务器业务时钟（毫秒），Player ID 是完整 EntityID：
+下面的文件放进保留的生成工程（例如 `internal/mergeflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `mergecasual.OpenCatalog` 打开的配置；调用方不传业务时间：handler 的 `nowUnixMilli` 参数由生成的分发包装从本条消息冻结的业务时间（`fctx.NowMilli()`，见 [guide/10-time §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）填，Sender 签名里没有它；Player ID 是完整 EntityID：
 
 ```go
 package mergeflow
@@ -97,24 +97,24 @@ import (
 // key 是首登时服务器用 crypto/rand 生成的 32 字节十六进制密钥；ticket 是入口持久分配的登录票。
 // Rules 由服务器捕获，不来自请求；已有存档会忽略它，沿用首登那一代。
 func loginAndMerge(ctx context.Context, client nest.Client, catalog *configdata.Store,
-	playerEntityID int64, key string, ticket uint64, now func() int64) ([]mergecasual.Receipt, error) {
+	playerEntityID int64, key string, ticket uint64) ([]mergecasual.Receipt, error) {
 	rules, err := mergecasual.CaptureRules(catalog.Current())
 	if err != nil {
 		return nil, err
 	}
 	s := syncsender.NewMergeCasualSender(client)
-	view, err := s.Sync_MergeLogin(ctx, playerEntityID, key, ticket, now(), rules)
+	view, err := s.Sync_MergeLogin(ctx, playerEntityID, key, ticket, rules)
 	if err != nil {
 		return nil, err
 	}
 	command := mergecasual.Command{Epoch: view.Epoch, Seq: view.NextSeq, Base: view.Revision, Kind: "merge", A: 0, B: 1}
-	return s.Sync_MergeBatch(ctx, playerEntityID, []mergecasual.Command{command}, now())
+	return s.Sync_MergeBatch(ctx, playerEntityID, []mergecasual.Command{command})
 }
 
 // resolveUnknown 在一次提交结果未知（超时、断线）后按原身份判断它是否已执行：
 // 已执行就拿原回执；没执行就用同一条命令原样重发，不换 Seq。
 func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int64,
-	sent mergecasual.Command, now func() int64) (mergecasual.Receipt, error) {
+	sent mergecasual.Command) (mergecasual.Receipt, error) {
 	s := syncsender.NewMergeCasualSender(client)
 	view, err := s.Sync_MergeView(ctx, playerEntityID)
 	if err != nil {
@@ -125,7 +125,7 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 		// 回执里的命令与 sent 不同，说明这个序号已被别的设备用掉，要先取新视图再决定。
 		return s.Sync_MergeReceipt(ctx, playerEntityID, view.Epoch, sent.Seq)
 	}
-	receipts, err := s.Sync_MergeBatch(ctx, playerEntityID, []mergecasual.Command{sent}, now())
+	receipts, err := s.Sync_MergeBatch(ctx, playerEntityID, []mergecasual.Command{sent})
 	if err != nil {
 		return mergecasual.Receipt{}, err
 	}
@@ -258,7 +258,7 @@ ROOST_MERGE_CASUAL_REAL=1 bash scripts/test-merge-casual-generated.sh
 
 它在第 11 节之后追加 `TestMergeCasualRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交首登、两次生产、一次广告到账和开挑战；后台投影关闭，断言 WAL 有 5 条已确认未投影的记录后，父进程 SIGKILL 自己启动的子进程。
+1. 子进程经 strict 文件 WAL 提交首登、两次生产、一次广告到账和开挑战；后台投影关闭，断言 WAL 有 6 条已确认未投影的记录（Player 新建 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 5 条业务命令）后，父进程 SIGKILL 自己启动的子进程。
 2. 父进程用同一 WAL 与 Mongo 冷加载（业务时间推进一小时），核对完整存档摘要、公开视图与定时器 ID，并核对冷加载已把存量挑战期限报告给驱动索引（`DueOf`）；再重放第一次生产（同一掉落）与已过期的原广告证明（不再到账）。
 3. 启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不手发 Tick、不调用 `DeliverDue`）：循环投递一次加载后的补触发，过期一小时的挑战只判负一次，体力与次数恢复到上限，挑战结束后不再挂期限；`entitytimer.delivered_total` 增量恰为 1。
 4. 领取判负的挑战、重新开局，新期限进入索引（循环没有再投递）；业务时间直接推进到这个期限，循环（至多 `MaxWait` 后重读业务时钟）按时投递一次，挑战在期限时刻判负（`LastAt` 等于期限、修订号只加 1），投递计数到 2。业务时钟在两次推进之间冻结，期限之前条目不会到期。

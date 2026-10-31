@@ -12,6 +12,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"os"
 	"path/filepath"
 	"sync"
@@ -81,7 +83,11 @@ func newTowerFixture(t *testing.T) *towerFixture {
 	RegisterTickTowerRoomTimerGenNestHandlers()
 	f := &towerFixture{rules: loadTowerRules(t, tower.DemoRules())}
 	f.clock.Store(towerNow)
+	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
+	// 两处读同一个 f.clock，测试拨 f.clock 就是拨业务时间。
 	matchentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	g := towerGetter{}
 	build := func(unique int64, kind entity.EntityKind) entity.IThreadSafeEntity {
 		id, e := entity.BuildEntityID(unique, kind)
@@ -112,7 +118,7 @@ func newTowerFixture(t *testing.T) *towerFixture {
 		_ = f.engine.Shutdown(context.Background())
 		f.match.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
 	})
-	if _, e := sender.NewTowerDefenseSender(f.engine).Sync_TowerInit(context.Background(), f.match.ID(), f.ids, f.rules, towerNow); e != nil {
+	if _, e := sender.NewTowerDefenseSender(f.engine).Sync_TowerInit(context.Background(), f.match.ID(), f.ids, f.rules); e != nil {
 		t.Fatal(e)
 	}
 	for _, id := range f.ids {
@@ -143,7 +149,7 @@ func (f *towerFixture) command(t *testing.T, i int, kind string, a, b int) tower
 	return tower.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Round: v.Round, Kind: kind, A: a, B: b}
 }
 func (f *towerFixture) send(i int, c tower.Command) (tower.Receipt, error) {
-	return sender.NewTowerDefenseSender(f.engine).Sync_TowerCommand(context.Background(), f.match.ID(), f.ids[i], c, f.clock.Load())
+	return sender.NewTowerDefenseSender(f.engine).Sync_TowerCommand(context.Background(), f.match.ID(), f.ids[i], c)
 }
 func (f *towerFixture) do(t *testing.T, i int, kind string, a, b int) tower.Receipt {
 	t.Helper()
@@ -290,7 +296,8 @@ func TestTowerDefenseUndoRestoresSharedGoldRouteAndTimer(t *testing.T) {
 	refused := errors.New("after tower construction")
 	name := nest.NewHandlerName("tower_undo_build")
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
-		_, e := handlerTowerCommand(es[0].(ITowerRoomEntity), f.ids[0], c, f.clock.Load())
+		// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
+		_, e := handlerTowerCommand(es[0].(ITowerRoomEntity), f.ids[0], c, fctx.NowMilli())
 		if e != nil {
 			return nil, e
 		}

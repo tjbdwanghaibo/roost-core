@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
@@ -70,7 +71,10 @@ func openChessRuntime(t *testing.T, manual bool, now int64) *chessRuntime {
 	RegisterTickChessMatchTimerGenNestHandlers()
 	h := &chessRuntime{database: database}
 	h.clock.Store(now)
+	// handler 的 nowUnixMilli 与 Tick 取进程业务时钟（fctx），驱动到期查询用 SetClock：两处读同一个 h.clock。
 	runentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
@@ -246,7 +250,7 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if _, e = s.Sync_ChessInit(ctx, h.runID, h.ids, rules, fmt.Sprintf("%064x", 17), chessNow); e != nil {
+		if _, e = s.Sync_ChessInit(ctx, h.runID, h.ids, rules, fmt.Sprintf("%064x", 17)); e != nil {
 			t.Fatal(e)
 		}
 		for i, id := range h.ids {
@@ -255,14 +259,14 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 				if kind == "move" {
 					a = 3
 				}
-				if _, e = s.Sync_ChessCommand(ctx, h.runID, id, chess.Command{Seq: uint64(j + 1), Epoch: 1, Round: 1, Kind: kind, A: a, B: b}, chessNow); e != nil {
+				if _, e = s.Sync_ChessCommand(ctx, h.runID, id, chess.Command{Seq: uint64(j + 1), Epoch: 1, Round: 1, Kind: kind, A: a, B: b}); e != nil {
 					t.Fatal(i, kind, e)
 				}
 			}
 		}
 		m, state := chessRuntimeState(t, h)
 		stats := h.projector.Stats()
-		if stats.Projected != 0 || stats.WALUnacked != 33 || state.Phase != "battle" || len(state.Fights) != 4 || m.Dao().GetWakeTimer() == 0 {
+		if stats.Projected != 0 || stats.WALUnacked != 42 || state.Phase != "battle" || len(state.Fights) != 4 || m.Dao().GetWakeTimer() == 0 {
 			t.Fatal("not at frozen unprojected battle boundary")
 		}
 		b := chessBarrier{State: state.Encode(), Timer: m.Dao().GetWakeTimer(), Unprojected: stats.WALUnacked}
@@ -286,7 +290,7 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 		_, state := chessRuntimeState(t, h)
 		for i, id := range h.ids {
 			for _, r := range state.Seats[i].Receipts {
-				got, e := s.Sync_ChessCommand(ctx, h.runID, id, r.Command, h.clock.Load())
+				got, e := s.Sync_ChessCommand(ctx, h.runID, id, r.Command)
 				if e != nil || got != r {
 					t.Fatal("command replay changed", e)
 				}
@@ -370,7 +374,7 @@ func TestAutoChessRealCrashRecovery(t *testing.T) {
 	s := sender.NewAutoChessSender(h.scheduler)
 	for i, id := range h.ids {
 		for _, r := range state.Seats[i].Receipts {
-			got, e := s.Sync_ChessCommand(ctx, h.runID, id, r.Command, h.clock.Load())
+			got, e := s.Sync_ChessCommand(ctx, h.runID, id, r.Command)
 			if e != nil || got != r {
 				t.Fatal("retry changed purchase or phase", e)
 			}

@@ -74,7 +74,7 @@ ROOST_TOWER_DEFENSE_KEEP=1 bash scripts/test-tower-defense-generated.sh   # 保�
 
 #### 3.3 用 Sender 调用
 
-下面的文件放进保留的生成工程（例如 `internal/towerflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `towerdefense.OpenCatalog` 打开的配置，`now` 是服务器业务时钟（毫秒），EntityID 都是完整 ID：
+下面的文件放进保留的生成工程（例如 `internal/towerflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `towerdefense.OpenCatalog` 打开的配置；调用方不传业务时间：handler 的 `nowUnixMilli` 参数由生成的分发包装从本条消息冻结的业务时间（`fctx.NowMilli()`，见 [guide/10-time §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）填，Sender 签名里没有它；EntityID 都是完整 ID：
 
 ```go
 package towerflow
@@ -91,7 +91,7 @@ import (
 // openRoom 由成局服务在名单确定后调用：配置由服务器捕获，名单与时间来自服务器，不来自客户端。
 // 同一 Room ID 重试返回原房间，不重新开局；名单不同则拒绝。
 func openRoom(ctx context.Context, client nest.Client, catalog *configdata.Store,
-	roomID int64, players [tower.Seats]int64, now int64) (tower.View, error) {
+	roomID int64, players [tower.Seats]int64) (tower.View, error) {
 	rules, err := tower.CaptureRules(catalog.Current()) // 一个房间只捕获一份快照
 	if err != nil {
 		return tower.View{}, err
@@ -103,23 +103,23 @@ func openRoom(ctx context.Context, client nest.Client, catalog *configdata.Store
 			return tower.View{}, err
 		}
 	}
-	return s.Sync_TowerInit(ctx, roomID, players, rules, now)
+	return s.Sync_TowerInit(ctx, roomID, players, rules)
 }
 
 // buildAndReady 是已鉴权入口：先读视图取本席的 Epoch、下一序号和当前波次，再建塔、准备。
 // playerID 来自鉴权会话；公网请求只带地格。超时重试时原样重发同一条命令，不分配新序号。
-func buildAndReady(ctx context.Context, client nest.Client, roomID, playerID int64, cell int, now func() int64) (tower.Receipt, error) {
+func buildAndReady(ctx context.Context, client nest.Client, roomID, playerID int64, cell int) (tower.Receipt, error) {
 	s := syncsender.NewTowerDefenseSender(client)
 	v, err := s.Sync_TowerView(ctx, roomID, playerID)
 	if err != nil {
 		return tower.Receipt{}, err
 	}
 	build := tower.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Round: v.Round, Kind: "build", A: cell}
-	if _, err := s.Sync_TowerCommand(ctx, roomID, playerID, build, now()); err != nil {
+	if _, err := s.Sync_TowerCommand(ctx, roomID, playerID, build); err != nil {
 		return tower.Receipt{}, err
 	}
 	ready := tower.Command{Seq: build.Seq + 1, Epoch: v.Self.Epoch, Round: v.Round, Kind: "ready"}
-	return s.Sync_TowerCommand(ctx, roomID, playerID, ready, now())
+	return s.Sync_TowerCommand(ctx, roomID, playerID, ready)
 }
 
 // claim 在房间终态后由每名玩家各自调用；奖励由服务器按团队终态推导，重试只返回同一金额。
@@ -232,7 +232,7 @@ ROOST_TOWER_DEFENSE_REAL=1 bash scripts/test-tower-defense-generated.sh
 
 它在第 10 节之后追加 `TestTowerDefenseRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交四名玩家建档、开房、四人各建一座塔并准备（第四个准备立即开第一波），再把业务时间推到第一步期限、用 `DeliverDue` 投递一次，打完第一波的第一步；后台投影关闭，断言 WAL 有 14 条已确认未投影的记录（4 建档 + 1 开房 + 8 命令 + 1 Tick）、房间处于战斗阶段第 1 步且有待执行定时器后，父进程 SIGKILL 自己启动的子进程。崩溃点在**波次进行中**：三只怪物已各前进一格、部分掉血。
+1. 子进程经 strict 文件 WAL 提交四名玩家建档、开房、四人各建一座塔并准备（第四个准备立即开第一波），再把业务时间推到第一步期限、用 `DeliverDue` 投递一次，打完第一波的第一步；后台投影关闭，断言 WAL 有 19 条已确认未投影的记录（5 个实体新建 + 4 建档 + 1 开房 + 8 命令 + 1 Tick；Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务）、房间处于战斗阶段第 1 步且有待执行定时器后，父进程 SIGKILL 自己启动的子进程。崩溃点在**波次进行中**：三只怪物已各前进一格、部分掉血。
 2. 父进程用同一 WAL 与 Mongo 冷加载，业务时间比崩溃时晚一小时：整份房间状态（塔、路径、每只怪物的血量与位置、基地、共享金币、各席回执、期限）与定时器 ID 和崩溃前逐字节一致；四人的 8 条命令按原样重放，回执不变。
 3. 断言冷加载已把存量期限报告给驱动索引（`DueOf`），然后启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`）：循环投递一次加载后的补触发，只算第 2 步，下一期限从实际触发时间起算，投递计数恰为 1。之后用例把业务时间逐个推到期限本身，循环按时投递，每个期限计数加 1，打完三波获胜（击杀 9、逃逸 0），全程无重投。
 4. 停驱动后四人各领奖三次，每人 70；正常关闭后再起第三个进程冷加载：核对房间状态与四人金币和关闭前一致，再重放所有命令并重试领奖，结果不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。

@@ -12,6 +12,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -82,7 +83,8 @@ func newMergeFixture(t *testing.T) *mergeFixture {
 	RegisterTickPlayerTimerGenNestHandlers()
 	f := &mergeFixture{rules: loadMergeRules(t, casual.DemoRules())}
 	f.clock.Store(mergeNow)
-	// 定时器 Tick 按本条消息冻结的业务时间触发（fctx 取自进程业务时钟），驱动的到期查询用 SetClock：两处读同一个 f.clock。
+	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
+	// 两处读同一个 f.clock，测试拨 f.clock 就是拨业务时间。
 	playerentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
 	clock.SetSource(func() time.Time { return time.UnixMilli(f.clock.Load()) })
 	t.Cleanup(func() { clock.SetSource(nil) })
@@ -107,7 +109,7 @@ func newMergeFixture(t *testing.T) *mergeFixture {
 		_ = f.engine.Shutdown(context.Background())
 		f.player.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
 	})
-	if _, err := sender.NewMergeCasualSender(f.engine).Sync_MergeLogin(context.Background(), id, mergeKey, 1, mergeNow, f.rules); err != nil {
+	if _, err := sender.NewMergeCasualSender(f.engine).Sync_MergeLogin(context.Background(), id, mergeKey, 1, f.rules); err != nil {
 		t.Fatal(err)
 	}
 	return f
@@ -128,7 +130,7 @@ func (f *mergeFixture) command(t *testing.T, kind string, a, b int, value int64)
 	return casual.Command{Epoch: s.Epoch, Seq: uint64(len(s.Receipts)) + 1, Base: s.Revision, Kind: kind, A: a, B: b, Value: value}
 }
 func (f *mergeFixture) batch(commands []casual.Command) ([]casual.Receipt, error) {
-	return sender.NewMergeCasualSender(f.engine).Sync_MergeBatch(context.Background(), f.player.ID(), commands, f.clock.Load())
+	return sender.NewMergeCasualSender(f.engine).Sync_MergeBatch(context.Background(), f.player.ID(), commands)
 }
 func (f *mergeFixture) do(t *testing.T, kind string, a, b int, value int64) casual.Receipt {
 	t.Helper()
@@ -149,7 +151,7 @@ func (f *mergeFixture) refuse(t *testing.T, c casual.Command) {
 		t.Fatal("refused operation changed state or timer")
 	}
 }
-func mergeWin(t *testing.T, engine *nest.NestMgr, id int64, now int64) {
+func mergeWin(t *testing.T, engine *nest.NestMgr, id int64) {
 	t.Helper()
 	s := sender.NewMergeCasualSender(engine)
 	for _, pair := range [][2]int{{0, 1}, {2, 3}, {1, 3}, {4, 5}, {6, 7}, {5, 7}, {3, 7}} {
@@ -158,7 +160,7 @@ func mergeWin(t *testing.T, engine *nest.NestMgr, id int64, now int64) {
 			t.Fatal(err)
 		}
 		c := casual.Command{Epoch: view.Epoch, Seq: view.NextSeq, Base: view.Revision, Kind: "merge", A: pair[0], B: pair[1]}
-		if _, err := s.Sync_MergeBatch(context.Background(), id, []casual.Command{c}, now); err != nil {
+		if _, err := s.Sync_MergeBatch(context.Background(), id, []casual.Command{c}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -304,11 +306,11 @@ func TestMergeCasualDeviceTakeoverFencesOldWritesAndFreezesRules(t *testing.T) {
 	patched.UnlockGold = 99
 	s := sender.NewMergeCasualSender(f.engine)
 	ctx := context.Background()
-	view, err := s.Sync_MergeLogin(ctx, f.player.ID(), mergeKey, 2, f.clock.Load(), patched)
+	view, err := s.Sync_MergeLogin(ctx, f.player.ID(), mergeKey, 2, patched)
 	if err != nil || view.Epoch != 2 || view.ConfigHash != f.rules.Hash() {
 		t.Fatal("takeover changed frozen board rules", err)
 	}
-	same, err := s.Sync_MergeLogin(ctx, f.player.ID(), mergeKey, 2, f.clock.Load(), patched)
+	same, err := s.Sync_MergeLogin(ctx, f.player.ID(), mergeKey, 2, patched)
 	if err != nil || same != view {
 		t.Fatal("login retry advanced epoch", err)
 	}
@@ -316,7 +318,7 @@ func TestMergeCasualDeviceTakeoverFencesOldWritesAndFreezesRules(t *testing.T) {
 	if r, err := s.Sync_MergeReceipt(ctx, f.player.ID(), 2, done.Command.Seq); err != nil || r != done {
 		t.Fatal("new device cannot resolve old outcome", err)
 	}
-	if _, err := s.Sync_MergeLogin(ctx, f.player.ID(), mergeKey, 1, f.clock.Load(), f.rules); err == nil {
+	if _, err := s.Sync_MergeLogin(ctx, f.player.ID(), mergeKey, 1, f.rules); err == nil {
 		t.Fatal("old login ticket accepted")
 	}
 	f.do(t, "unlock", 12, 0, 0)
@@ -328,7 +330,7 @@ func TestMergeCasualChallengeServerWinAndConcurrentClaim(t *testing.T) {
 	f := newMergeFixture(t)
 	start := f.do(t, "start", 0, 0, 0)
 	f.refuse(t, f.command(t, "claim", 0, 0, int64(start.Command.Seq)))
-	mergeWin(t, f.engine, f.player.ID(), f.clock.Load())
+	mergeWin(t, f.engine, f.player.ID())
 	if f.state(t).Challenge.Status != "won" || f.player.Dao().GetWakeTimer() != 0 {
 		t.Fatal("server goal / timer not settled")
 	}
@@ -382,7 +384,7 @@ func TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge(t *testi
 	}
 	// 请求先于到期 tick 到达，也必须按服务器期限判负；不能靠延迟调度获得超时奖励。
 	f.clock.Store(f.state(t).Challenge.Deadline)
-	mergeWin(t, f.engine, f.player.ID(), f.clock.Load())
+	mergeWin(t, f.engine, f.player.ID())
 	f.do(t, "claim", 0, 0, int64(f.state(t).Challenge.ID))
 	if f.state(t).Challenge.Status != "lost" || f.state(t).Gold != 30 || f.player.Dao().GetWakeTimer() != 0 {
 		t.Fatal("late commands bypassed server deadline")
@@ -399,7 +401,8 @@ func TestMergeCasualUndoRestoresStateRandomResultAndTimer(t *testing.T) {
 		timer := f.player.Dao().GetWakeTimer()
 		name := nest.NewHandlerName("merge_undo_" + kind)
 		nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
-			if _, err := handlerMergeBatch(es[0].(IMergePlayerEntity), []casual.Command{c}, f.clock.Load()); err != nil {
+			// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
+			if _, err := handlerMergeBatch(es[0].(IMergePlayerEntity), []casual.Command{c}, fctx.NowMilli()); err != nil {
 				return nil, err
 			}
 			return nil, refused
@@ -455,7 +458,7 @@ func TestMergeCasualAdProofAuthorityBindingReplayAndDailyQuota(t *testing.T) {
 	ctx := context.Background()
 	proof := casual.SignReward(casual.SignedReward{ID: "ad-1", PlayerID: f.player.ID(), ExpiresAt: mergeNow + 1000, Kind: "energy"}, adKey)
 	grant := func(p casual.SignedReward) (casual.View, error) {
-		return s.Sync_MergeAd(ctx, f.player.ID(), p, adKey, 1, f.clock.Load())
+		return s.Sync_MergeAd(ctx, f.player.ID(), p, adKey, 1)
 	}
 	before := f.player.Dao().GetState()
 	for _, p := range []casual.SignedReward{{ID: "fake", PlayerID: f.player.ID(), ExpiresAt: mergeNow + 1000, Kind: "energy"}, casual.SignReward(casual.SignedReward{ID: "wrong-owner", PlayerID: f.player.ID() + 1, ExpiresAt: mergeNow + 1000, Kind: "energy"}, adKey), casual.SignReward(casual.SignedReward{ID: "expired", PlayerID: f.player.ID(), ExpiresAt: mergeNow, Kind: "energy"}, adKey)} {

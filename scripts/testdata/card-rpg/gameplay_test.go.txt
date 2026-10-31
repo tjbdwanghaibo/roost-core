@@ -13,6 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -81,7 +82,8 @@ func newCardFixture(t *testing.T) *cardFixture {
 	RegisterTickCardRunTimerGenNestHandlers()
 	f := &cardFixture{rules: loadCardRules(t, cardrpg.DemoRules())}
 	f.clock.Store(1800000000000)
-	// 定时器 Tick 按本条消息冻结的业务时间触发（fctx 取自进程业务时钟），驱动的到期查询用 SetClock：两处读同一个 f.clock。
+	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
+	// 两处读同一个 f.clock，测试拨 f.clock 就是拨业务时间。
 	runentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
 	clock.SetSource(func() time.Time { return time.UnixMilli(f.clock.Load()) })
 	t.Cleanup(func() { clock.SetSource(nil) })
@@ -119,7 +121,7 @@ func newCardFixture(t *testing.T) *cardFixture {
 		}
 	})
 	for i, p := range f.players {
-		if _, err := sender.NewCardRpgSender(f.engine).Sync_CardInit(context.Background(), p.ID(), fmt.Sprintf("%064x", i+7), f.clock.Load()); err != nil {
+		if _, err := sender.NewCardRpgSender(f.engine).Sync_CardInit(context.Background(), p.ID(), fmt.Sprintf("%064x", i+7)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -143,7 +145,7 @@ func (f *cardFixture) battle(t *testing.T, index int) cardrpg.Battle {
 }
 func (f *cardFixture) start(t *testing.T, index int, seq uint64) cardrpg.Battle {
 	t.Helper()
-	id, err := sender.NewCardRpgSender(f.engine).MultiSync_CardStart(context.Background(), f.players[0].ID(), f.runs[index].ID(), seq, 1, f.rules, f.clock.Load())
+	id, err := sender.NewCardRpgSender(f.engine).MultiSync_CardStart(context.Background(), f.players[0].ID(), f.runs[index].ID(), seq, 1, f.rules)
 	if err != nil || id != f.runs[index].ID() {
 		t.Fatal("start", err)
 	}
@@ -165,11 +167,12 @@ func finishCardBattle(t *testing.T, engine *nest.NestMgr, runID, ownerID int64, 
 		if view.Status != "running" {
 			return view
 		}
-		now := clock.Add(1)
+		// 每一步把业务时间拨前 1 毫秒；handler 从本条消息冻结的业务时间取 nowUnixMilli。
+		clock.Add(1)
 		if view.Actor < 3 {
-			_, err = s.Sync_CardTurn(ctx, runID, ownerID, cardrpg.TurnCommand{Seq: view.NextSeq, ActorID: ownerID, Kind: "auto"}, now)
+			_, err = s.Sync_CardTurn(ctx, runID, ownerID, cardrpg.TurnCommand{Seq: view.NextSeq, ActorID: ownerID, Kind: "auto"})
 		} else {
-			_, err = s.Sync_CardEnemy(ctx, runID, view.NextSeq, now)
+			_, err = s.Sync_CardEnemy(ctx, runID, view.NextSeq)
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -273,7 +276,7 @@ func TestCardRPGGrowthFormationAndBattleLoadoutAreSeparateSnapshots(t *testing.T
 		t.Helper()
 		c.Seq = seq
 		seq++
-		if _, err := s.Sync_CardManage(ctx, p, c, f.rules, f.clock.Load()); err != nil {
+		if _, err := s.Sync_CardManage(ctx, p, c, f.rules); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -309,17 +312,17 @@ func TestCardRPGGrowthRejectsMissingCardsOldRequestsAndInvalidTeams(t *testing.T
 	id := f.players[0].ID()
 	before := f.players[0].Dao().GetState()
 	for _, c := range []cardrpg.Manage{{Seq: 2, Kind: "level", CardID: 1, Target: 2}, {Seq: 1, Kind: "level", CardID: 99, Target: 2}, {Seq: 1, Kind: "star", CardID: 1, Target: 2}, {Seq: 1, Kind: "team", Team: [3]int64{1, 1, 2}}} {
-		if _, err := s.Sync_CardManage(ctx, id, c, f.rules, f.clock.Load()); err == nil || f.players[0].Dao().GetState() != before {
+		if _, err := s.Sync_CardManage(ctx, id, c, f.rules); err == nil || f.players[0].Dao().GetState() != before {
 			t.Fatal("invalid growth changed assets")
 		}
 	}
 	command := cardrpg.Manage{Seq: 1, Kind: "level", CardID: 1, Target: 2}
-	if _, err := s.Sync_CardManage(ctx, id, command, f.rules, f.clock.Load()); err != nil {
+	if _, err := s.Sync_CardManage(ctx, id, command, f.rules); err != nil {
 		t.Fatal(err)
 	}
 	gold := f.profile(t).Gold
 	for range 2 {
-		if _, err := s.Sync_CardManage(ctx, id, command, f.rules, f.clock.Load()); err != nil {
+		if _, err := s.Sync_CardManage(ctx, id, command, f.rules); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -327,7 +330,7 @@ func TestCardRPGGrowthRejectsMissingCardsOldRequestsAndInvalidTeams(t *testing.T
 		t.Fatal("upgrade charged twice")
 	}
 	command.Target = 3
-	if _, err := s.Sync_CardManage(ctx, id, command, f.rules, f.clock.Load()); err == nil {
+	if _, err := s.Sync_CardManage(ctx, id, command, f.rules); err == nil {
 		t.Fatal("old operation replaced newer intent")
 	}
 }
@@ -341,7 +344,7 @@ func TestCardRPGConcurrentAdmissionHasOneRunAndOneEnergyCharge(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, errs[i] = s.MultiSync_CardStart(ctx, f.players[0].ID(), f.runs[0].ID(), 1, 1, f.rules, f.clock.Load())
+			_, errs[i] = s.MultiSync_CardStart(ctx, f.players[0].ID(), f.runs[0].ID(), 1, 1, f.rules)
 		}(i)
 	}
 	wg.Wait()
@@ -354,14 +357,14 @@ func TestCardRPGConcurrentAdmissionHasOneRunAndOneEnergyCharge(t *testing.T) {
 	if p.Energy != 8 || len(p.Runs) != 1 || p.ActiveRun != f.runs[0].ID() {
 		t.Fatal("admission paid more than once")
 	}
-	original, err := s.MultiSync_CardStart(ctx, f.players[0].ID(), f.runs[1].ID(), 1, 1, f.rules, f.clock.Load())
+	original, err := s.MultiSync_CardStart(ctx, f.players[0].ID(), f.runs[1].ID(), 1, 1, f.rules)
 	if err != nil || original != f.runs[0].ID() || f.runs[1].Dao().GetState() != "" {
 		t.Fatal("new candidate duplicated round", err)
 	}
-	if _, err := s.MultiSync_CardStart(ctx, f.players[0].ID(), f.runs[1].ID(), 2, 1, f.rules, f.clock.Load()); err == nil {
+	if _, err := s.MultiSync_CardStart(ctx, f.players[0].ID(), f.runs[1].ID(), 2, 1, f.rules); err == nil {
 		t.Fatal("parallel active admission")
 	}
-	if _, err := s.MultiSync_CardStart(ctx, f.players[1].ID(), f.runs[1].ID(), 1, 2, f.rules, f.clock.Load()); err == nil {
+	if _, err := s.MultiSync_CardStart(ctx, f.players[1].ID(), f.runs[1].ID(), 1, 2, f.rules); err == nil {
 		t.Fatal("locked stage admitted")
 	}
 }
@@ -375,26 +378,32 @@ func TestCardRPGTurnAuthoritySequenceAndReplayDoNotRearmDeadline(t *testing.T) {
 	bad := []cardrpg.TurnCommand{{Seq: 1, ActorID: f.players[1].ID(), Kind: "guard"}, {Seq: 1, Kind: "timeout"}, {Seq: 2, ActorID: owner, Kind: "guard"}, {Seq: 1, ActorID: owner, Kind: "attack", Target: 0}}
 	before := f.runs[0].Dao().GetState()
 	for _, c := range bad {
-		if _, err := s.Sync_CardTurn(ctx, id, c.ActorID, c, f.clock.Load()); err == nil || f.runs[0].Dao().GetState() != before {
+		if _, err := s.Sync_CardTurn(ctx, id, c.ActorID, c); err == nil || f.runs[0].Dao().GetState() != before {
 			t.Fatal("bad turn modified battle")
 		}
 	}
 	command := cardrpg.TurnCommand{Seq: 1, ActorID: owner, Kind: "guard", Target: b.CurrentActor()}
-	if _, err := s.Sync_CardTurn(ctx, id, owner, command, f.clock.Add(1)); err != nil {
+	f.clock.Add(1)
+	if _, err := s.Sync_CardTurn(ctx, id, owner, command); err != nil {
 		t.Fatal(err)
 	}
 	timer := f.runs[0].Dao().GetTurnTimer()
 	saved := f.runs[0].Dao().GetState()
-	if _, err := s.Sync_CardTurn(ctx, id, owner, command, f.clock.Load()+30000); err != nil || f.runs[0].Dao().GetState() != saved || f.runs[0].Dao().GetTurnTimer() != timer {
+	// 30 秒后重放同一命令：把业务时间拨到 +30s 发出，再拨回，后面的命令仍在原时刻。
+	f.clock.Add(30000)
+	_, err := s.Sync_CardTurn(ctx, id, owner, command)
+	f.clock.Add(-30000)
+	if err != nil || f.runs[0].Dao().GetState() != saved || f.runs[0].Dao().GetTurnTimer() != timer {
 		t.Fatal("replay changed state / deadline", err)
 	}
 	command.Kind = "auto"
-	if _, err := s.Sync_CardTurn(ctx, id, owner, command, f.clock.Load()); err == nil {
+	if _, err := s.Sync_CardTurn(ctx, id, owner, command); err == nil {
 		t.Fatal("changed old action accepted")
 	}
 	for range 2 {
 		b = f.battle(t, 0)
-		if _, err := s.Sync_CardTurn(ctx, id, owner, cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: owner, Kind: "auto"}, f.clock.Add(1)); err != nil {
+		f.clock.Add(1)
+		if _, err := s.Sync_CardTurn(ctx, id, owner, cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: owner, Kind: "auto"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -402,10 +411,11 @@ func TestCardRPGTurnAuthoritySequenceAndReplayDoNotRearmDeadline(t *testing.T) {
 	if b.CurrentActor() < 3 {
 		t.Fatal("enemy turn not reached")
 	}
-	if _, err := s.Sync_CardTurn(ctx, id, owner, cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: owner, Kind: "auto"}, f.clock.Load()); err == nil {
+	if _, err := s.Sync_CardTurn(ctx, id, owner, cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: owner, Kind: "auto"}); err == nil {
 		t.Fatal("player controlled enemy")
 	}
-	if _, err := s.Sync_CardEnemy(ctx, id, b.NextSeq(), f.clock.Add(1)); err != nil {
+	f.clock.Add(1)
+	if _, err := s.Sync_CardEnemy(ctx, id, b.NextSeq()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -493,7 +503,7 @@ func TestCardRPGWinClaimSweepQuestAndConcurrentRewardReplay(t *testing.T) {
 		t.Fatal("reward / first-clear repeated or missing")
 	}
 	for _, c := range []cardrpg.Manage{{Seq: 1, Kind: "quest", CardID: 1}, {Seq: 2, Kind: "sweep", CardID: 1, Target: 2}, {Seq: 3, Kind: "quest", CardID: 1}} {
-		if _, err := s.Sync_CardManage(ctx, f.players[0].ID(), c, f.rules, f.clock.Load()); err != nil {
+		if _, err := s.Sync_CardManage(ctx, f.players[0].ID(), c, f.rules); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -508,7 +518,8 @@ func TestCardRPGRetreatHasNoRewardAndFirstClearOnlyPaysOnce(t *testing.T) {
 	ctx := context.Background()
 	owner := f.players[0].ID()
 	b := f.start(t, 0, 1)
-	if _, err := s.Sync_CardTurn(ctx, f.runs[0].ID(), owner, cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: owner, Kind: "retreat"}, f.clock.Add(1)); err != nil {
+	f.clock.Add(1)
+	if _, err := s.Sync_CardTurn(ctx, f.runs[0].ID(), owner, cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: owner, Kind: "retreat"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.MultiSync_CardClaim(ctx, f.players[1].ID(), f.runs[0].ID()); err == nil {
@@ -541,7 +552,8 @@ func TestCardRPGTurnTimersIgnoreOldDeadlineAndOnlyCatchUpOnce(t *testing.T) {
 	id := f.runs[0].ID()
 	oldDeadline := b.State.Deadline
 	oldTimer := f.runs[0].Dao().GetTurnTimer()
-	if _, err := s.Sync_CardTurn(ctx, id, b.OwnerID, cardrpg.TurnCommand{Seq: 1, ActorID: b.OwnerID, Kind: "guard"}, f.clock.Add(1)); err != nil {
+	f.clock.Add(1)
+	if _, err := s.Sync_CardTurn(ctx, id, b.OwnerID, cardrpg.TurnCommand{Seq: 1, ActorID: b.OwnerID, Kind: "guard"}); err != nil {
 		t.Fatal(err)
 	}
 	if f.runs[0].Dao().GetTurnTimer() == oldTimer {
@@ -575,7 +587,8 @@ func TestCardRPGUndoRestoresAdmissionTurnAndTimerAsOneFact(t *testing.T) {
 	name := nest.NewHandlerName("card_start_undo")
 	ctx := context.Background()
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
-		_, err := handlerCardStart(es[0].(ICardPlayerEntity), es[1].(ICardRunEntity), 1, 1, f.rules, f.clock.Load())
+		// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
+		_, err := handlerCardStart(es[0].(ICardPlayerEntity), es[1].(ICardRunEntity), 1, 1, f.rules, fctx.NowMilli())
 		if err != nil {
 			return nil, err
 		}
@@ -597,7 +610,8 @@ func TestCardRPGUndoRestoresAdmissionTurnAndTimerAsOneFact(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		_, err = handlerCardTurn(r, b.OwnerID, cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: b.OwnerID, Kind: "auto"}, f.clock.Load())
+		// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
+		_, err = handlerCardTurn(r, b.OwnerID, cardrpg.TurnCommand{Seq: b.NextSeq(), ActorID: b.OwnerID, Kind: "auto"}, fctx.NowMilli())
 		if err != nil {
 			return nil, err
 		}
@@ -630,11 +644,11 @@ func TestCardRPGLedgerBoundsAndOfflineEnergyKeepReplayEvidence(t *testing.T) {
 		t.Fatal("old draw lost after full ledger", err)
 	}
 	for i := uint64(1); i <= cardrpg.LedgerLimit; i++ {
-		if _, err := s.Sync_CardManage(ctx, id, cardrpg.Manage{Seq: i, Kind: "team", Team: [3]int64{1, 2, 3}}, f.rules, f.clock.Load()); err != nil {
+		if _, err := s.Sync_CardManage(ctx, id, cardrpg.Manage{Seq: i, Kind: "team", Team: [3]int64{1, 2, 3}}, f.rules); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.Sync_CardManage(ctx, id, cardrpg.Manage{Seq: 65, Kind: "level", CardID: 1, Target: 2}, f.rules, f.clock.Load()); err == nil {
+	if _, err := s.Sync_CardManage(ctx, id, cardrpg.Manage{Seq: 65, Kind: "level", CardID: 1, Target: 2}, f.rules); err == nil {
 		t.Fatal("full operation ledger silently evicted")
 	}
 	f.start(t, 0, 1)

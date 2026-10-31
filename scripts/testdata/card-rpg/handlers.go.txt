@@ -21,7 +21,7 @@ type ICardRunEntity interface {
 // Bootstrap 是受信任的首登入口；密钥来自服务端 crypto/rand，不能让客户端指定或投影给客户端。
 //
 //roost:nest rollback=undo durability=strict
-func handlerCardInit(player ICardPlayerEntity, key string, now int64) (cardrpg.ProfileView, error) {
+func handlerCardInit(player ICardPlayerEntity, key string, nowUnixMilli int64) (cardrpg.ProfileView, error) {
 	if player.Dao().GetState() != "" {
 		p, err := cardrpg.DecodeProfile(player.Dao().GetState())
 		if err != nil {
@@ -32,7 +32,7 @@ func handlerCardInit(player ICardPlayerEntity, key string, now int64) (cardrpg.P
 		}
 		return p.View(), nil
 	}
-	p, err := cardrpg.NewProfile(key, now)
+	p, err := cardrpg.NewProfile(key, nowUnixMilli)
 	if err != nil {
 		return cardrpg.ProfileView{}, err
 	}
@@ -57,12 +57,12 @@ func handlerCardDraw(player ICardPlayerEntity, seq uint64, count int, rules card
 }
 
 //roost:nest rollback=undo durability=strict
-func handlerCardManage(player ICardPlayerEntity, command cardrpg.Manage, rules cardrpg.Rules, now int64) (cardrpg.ProfileView, error) {
+func handlerCardManage(player ICardPlayerEntity, command cardrpg.Manage, rules cardrpg.Rules, nowUnixMilli int64) (cardrpg.ProfileView, error) {
 	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
 	if err != nil {
 		return cardrpg.ProfileView{}, err
 	}
-	if err := p.Manage(command, rules, now); err != nil {
+	if err := p.Manage(command, rules, nowUnixMilli); err != nil {
 		return cardrpg.ProfileView{}, err
 	}
 	player.Dao().SetState(p.Encode())
@@ -72,8 +72,8 @@ func handlerCardManage(player ICardPlayerEntity, command cardrpg.Manage, rules c
 // 体力、开局顺序身份、冻结的编队和 Run 一起提交。Player 保持静态 sid，Run 由同一原服承载。
 //
 //roost:nest rollback=undo durability=strict
-func handlerCardStart(player ICardPlayerEntity, run ICardRunEntity, seq uint64, stage int, rules cardrpg.Rules, now int64) (int64, error) {
-	if !entity.MatchEntityID(run.ID(), runentity.EntityKindCardRun) || !cardrpg.ValidTime(now) {
+func handlerCardStart(player ICardPlayerEntity, run ICardRunEntity, seq uint64, stage int, rules cardrpg.Rules, nowUnixMilli int64) (int64, error) {
+	if !entity.MatchEntityID(run.ID(), runentity.EntityKindCardRun) || !cardrpg.ValidTime(nowUnixMilli) {
 		return 0, cardrpg.ErrRule
 	}
 	p, err := cardrpg.DecodeProfile(player.Dao().GetState())
@@ -90,7 +90,7 @@ func handlerCardStart(player ICardPlayerEntity, run ICardRunEntity, seq uint64, 
 	if seq == 0 || seq != uint64(len(p.Runs))+1 || len(p.Runs) >= cardrpg.LedgerLimit || p.ActiveRun != 0 || stage < 1 || stage > 3 || stage > 1 && p.Clears[stage-2] == 0 || rules.Validate() != nil || run.Dao().GetState() != "" {
 		return 0, cardrpg.ErrRule
 	}
-	if err := p.Regenerate(now); err != nil {
+	if err := p.Regenerate(nowUnixMilli); err != nil {
 		return 0, err
 	}
 	if p.Energy < rules.Stages[stage-1].Energy {
@@ -100,7 +100,7 @@ func handlerCardStart(player ICardPlayerEntity, run ICardRunEntity, seq uint64, 
 	if err != nil {
 		return 0, err
 	}
-	b, err := cardrpg.NewBattle(player.ID(), run.ID(), seq, stage, rules, units, p.BattleSeed(seq), now)
+	b, err := cardrpg.NewBattle(player.ID(), run.ID(), seq, stage, rules, units, p.BattleSeed(seq), nowUnixMilli)
 	if err != nil {
 		return 0, err
 	}
@@ -131,7 +131,7 @@ func saveCardBattle(run ICardRunEntity, b cardrpg.Battle) error {
 // 公网玩家入口只传已鉴权 PlayerID；不接收 ActorID=0 的 server-only 超时或敌方控制命令。
 //
 //roost:nest rollback=undo durability=strict
-func handlerCardTurn(run ICardRunEntity, actorID int64, command cardrpg.TurnCommand, now int64) (cardrpg.BattleView, error) {
+func handlerCardTurn(run ICardRunEntity, actorID int64, command cardrpg.TurnCommand, nowUnixMilli int64) (cardrpg.BattleView, error) {
 	b, err := cardrpg.DecodeBattle(run.Dao().GetState())
 	if err != nil {
 		return cardrpg.BattleView{}, err
@@ -140,7 +140,7 @@ func handlerCardTurn(run ICardRunEntity, actorID int64, command cardrpg.TurnComm
 		return cardrpg.BattleView{}, cardrpg.ErrRule
 	}
 	before := len(b.Log)
-	if err := b.Apply(command, now); err != nil {
+	if err := b.Apply(command, nowUnixMilli); err != nil {
 		return cardrpg.BattleView{}, err
 	}
 	if len(b.Log) != before {
@@ -154,13 +154,13 @@ func handlerCardTurn(run ICardRunEntity, actorID int64, command cardrpg.TurnComm
 // 服务器敌方 AI 入口不暴露为客户端 endpoint；超时由持久 TimerComponent 驱动。
 //
 //roost:nest rollback=undo durability=strict
-func handlerCardEnemy(run ICardRunEntity, expected uint64, now int64) (cardrpg.BattleView, error) {
+func handlerCardEnemy(run ICardRunEntity, expected uint64, nowUnixMilli int64) (cardrpg.BattleView, error) {
 	b, err := cardrpg.DecodeBattle(run.Dao().GetState())
 	if err != nil {
 		return cardrpg.BattleView{}, err
 	}
 	before := len(b.Log)
-	if err := b.Apply(cardrpg.TurnCommand{Seq: expected, Kind: "enemy"}, now); err != nil {
+	if err := b.Apply(cardrpg.TurnCommand{Seq: expected, Kind: "enemy"}, nowUnixMilli); err != nil {
 		return cardrpg.BattleView{}, err
 	}
 	if len(b.Log) != before {

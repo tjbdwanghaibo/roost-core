@@ -152,7 +152,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **域要在构造时给，换场景靠重建**：`actionflow.BeatConfig.TimeDomain`、`ai.BeatConfig.TimeDomain` 在构造 `BeatRunner` / `Behavior` / `Controller` 时定下，运行中不能换域。成员换场景时先 `Controller.Close`、`Behavior.Close`（在途动作与任务以给定原因结束、心跳登记撤销、名字释放），再在同一心跳宿主上按新域重建（[guide/10-time §4D](../framework/guide/10-time.md#4d-场景时间域变速)）；不提供 `SetTimeDomain`：旧域里记下的时刻（上一拍的 `Elapsed` 基线、计划步骤时限的起点、`FreezeFor` 的期限）不能拿到新域里比较，而换场景本来就要结束场景里的动作。显式配了 `BehaviorConfig.Now` / `ControllerHooks.Now` 的以业务的为准，不取域时间。
 - **技能 / Buff 的时间域在构造时给**：心跳驱动的 `combatcomponent.BeatConfig.TimeDomain`、`RuntimeBeatConfig.TimeDomain` 在 `AttachBeat` / `NewRuntimeBeat` 时定下，运行中不能换域，换场景靠 `CloseBuffDriver` / `RuntimeBeat.Close` 后按新域重建（不走心跳的驱动经 `StepperConfig.Now` / `Rate` 自己传域时间）。buff 的 `DueTick` 是按域时间算的绝对 tick：实体换到另一个域（或离开变速场景）时，已有 buff 的剩余时长按新域的 tick 算，框架不换算。
 - **客户端外推只有 C# 的计算类**：game-demo 的场景已挂时间域（D20 P3，单场景、`nopersist,sync`、经场景视野下发给每个成员）；生成器的 `roost add timedomain` 只生成场景侧的字段与组件，成员怎样拿到所在场景的域由业务写；C# 客户端有 `Roost.Client.SceneTimeDomain`（同一公式、单调托底）；SDK 不解码业务载荷，三个字段由游戏自己的解码器读出交给它；“估计的服务端业务时间”由游戏提供（SDK 没有对时）；Unity 适配层没有接。
-- **生成工程消费夹具未在真实依赖上实跑**：`scripts/testdata/*` 的持久化恢复用例（需要真实 Mongo）用 `TimerDriver.SetClock` 控制时间，D22-1 后 Tick 消息不带参数、Tick 用驱动时钟，按设计仍应成立，没有在真实依赖上跑。
+- **SLG 真实依赖夹具与 MOBA 路由档在 D22-1 之后没有实跑**：`ROOST_SLG_REAL=1`（要隔离 Mongo / Redis / NATS，先持有 `remote-acceptance.lock`）与 `ROOST_MOBA_ROUTING=1`（再要 NATS）用 `TimerDriver.SetClock` / `clock.SetSource` 控制时间，按设计仍应成立，没有在真实依赖上跑。其余真实模式 2026-10-31 在共享隔离 Mongo 上实跑通过：七个玩法（auto-chess、card-rpg、idle-sim、merge-casual、mmorpg、survival-extraction、tower-defense，业务时间改为从 fctx 取之后，未投影记录数同时跟上 R15“新建实体本身就落库”）与 MOBA 的三条 Mongo 用例。
 
 ### 生成器接入心跳、行为与时间域
 

@@ -29,10 +29,10 @@ func handlerSurvivalPlayerInit(p ISurvivalPlayerEntity) error {
 	return nil
 }
 
-// 成局名单、配置、时间来自服务端。相同 Room ID 不允许改名单或重置探险。
+// 成局名单、配置来自服务端，开局时刻是本条消息冻结的业务时间（nowUnixMilli 由生成的分发包装从 fctx 填本条消息冻结的业务时间，调用方不传）。相同 Room ID 不允许改名单或重置探险。
 //
 //roost:nest rollback=undo durability=strict
-func handlerSurvivalInit(m ISurvivalRaidEntity, ids [survival.Seats]int64, r survival.Rules, now int64) (survival.View, error) {
+func handlerSurvivalInit(m ISurvivalRaidEntity, ids [survival.Seats]int64, r survival.Rules, nowUnixMilli int64) (survival.View, error) {
 	if m.Dao().GetState() != "" {
 		s, e := survival.Decode(m.Dao().GetState())
 		if e != nil {
@@ -45,7 +45,7 @@ func handlerSurvivalInit(m ISurvivalRaidEntity, ids [survival.Seats]int64, r sur
 		}
 		return s.View(ids[0])
 	}
-	s, e := survival.New(ids, r, now)
+	s, e := survival.New(ids, r, nowUnixMilli)
 	if e != nil {
 		return survival.View{}, e
 	}
@@ -56,12 +56,12 @@ func handlerSurvivalInit(m ISurvivalRaidEntity, ids [survival.Seats]int64, r sur
 }
 
 //roost:nest rollback=undo durability=strict
-func handlerSurvivalCommand(m ISurvivalRaidEntity, playerID int64, c survival.Command, now int64) (survival.Receipt, error) {
+func handlerSurvivalCommand(m ISurvivalRaidEntity, playerID int64, c survival.Command, nowUnixMilli int64) (survival.Receipt, error) {
 	s, e := survival.Decode(m.Dao().GetState())
 	if e != nil {
 		return survival.Receipt{}, e
 	}
-	r, changed, e := s.Apply(playerID, c, now)
+	r, changed, e := s.Apply(playerID, c, nowUnixMilli)
 	if e != nil {
 		return r, e
 	}
@@ -111,7 +111,7 @@ func handlerSurvivalReceipt(m ISurvivalRaidEntity, playerID int64, epoch, seq ui
 // 入场费与局内身份原子提交；Joined 为固定 RaidID / PlayerID 的永久准入事实。
 //
 //roost:nest rollback=undo durability=strict
-func handlerSurvivalEnter(p ISurvivalPlayerEntity, m ISurvivalRaidEntity, now int64) error {
+func handlerSurvivalEnter(p ISurvivalPlayerEntity, m ISurvivalRaidEntity, nowUnixMilli int64) error {
 	s, e := survival.Decode(m.Dao().GetState())
 	if e != nil {
 		return e
@@ -119,7 +119,7 @@ func handlerSurvivalEnter(p ISurvivalPlayerEntity, m ISurvivalRaidEntity, now in
 	if !p.Dao().GetInitialized() {
 		return survival.ErrRule
 	}
-	changed, e := s.Enter(p.ID(), now)
+	changed, e := s.Enter(p.ID(), nowUnixMilli)
 	if e != nil {
 		return e
 	}

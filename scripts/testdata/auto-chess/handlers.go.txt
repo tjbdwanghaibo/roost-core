@@ -23,10 +23,11 @@ type IChessPlayerEntity interface {
 //roost:nest rollback=undo durability=strict
 func handlerChessPlayerInit(p IChessPlayerEntity) error { p.Dao().SetInitialized(true); return nil }
 
-// 成局名单、随机种子、配置、时间来自服务端。相同 Match ID 不允许改名单或重新掷种子。
+// 成局名单、随机种子、配置来自服务端；开局时刻是本条消息冻结的业务时间（nowUnixMilli 由生成的分发包装从 fctx 填，
+// 调用方不传）。相同 Match ID 不允许改名单或重新掷种子。
 //
 //roost:nest rollback=undo durability=strict
-func handlerChessInit(m IChessMatchEntity, ids [chess.Seats]int64, r chess.Rules, seed string, now int64) (chess.View, error) {
+func handlerChessInit(m IChessMatchEntity, ids [chess.Seats]int64, r chess.Rules, seed string, nowUnixMilli int64) (chess.View, error) {
 	if m.Dao().GetState() != "" {
 		s, e := chess.Decode(m.Dao().GetState())
 		if e != nil {
@@ -39,7 +40,7 @@ func handlerChessInit(m IChessMatchEntity, ids [chess.Seats]int64, r chess.Rules
 		}
 		return s.View(ids[0])
 	}
-	s, e := chess.New(ids, r, seed, now)
+	s, e := chess.New(ids, r, seed, nowUnixMilli)
 	if e != nil {
 		return chess.View{}, e
 	}
@@ -49,13 +50,15 @@ func handlerChessInit(m IChessMatchEntity, ids [chess.Seats]int64, r chess.Rules
 	return s.View(ids[0])
 }
 
+// 命令按本条消息冻结的业务时间判期限（nowUnixMilli 同上，客户端不能用自报时间绕过截止）。
+//
 //roost:nest rollback=undo durability=strict
-func handlerChessCommand(m IChessMatchEntity, playerID int64, c chess.Command, now int64) (chess.Receipt, error) {
+func handlerChessCommand(m IChessMatchEntity, playerID int64, c chess.Command, nowUnixMilli int64) (chess.Receipt, error) {
 	s, e := chess.Decode(m.Dao().GetState())
 	if e != nil {
 		return chess.Receipt{}, e
 	}
-	r, changed, e := s.Apply(playerID, c, now)
+	r, changed, e := s.Apply(playerID, c, nowUnixMilli)
 	if e != nil {
 		return r, e
 	}

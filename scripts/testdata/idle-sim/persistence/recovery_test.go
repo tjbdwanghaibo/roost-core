@@ -14,6 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
@@ -67,7 +68,11 @@ func openIdleRuntime(t *testing.T, manual bool, now int64) *idleRuntime {
 	RegisterTickPlayerTimerGenNestHandlers()
 	h := &idleRuntime{database: database}
 	h.clock.Store(now)
+	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
+	// 两处读同一个 h.clock，测试拨 h.clock 就是拨业务时间。
 	playerentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
@@ -177,7 +182,7 @@ func idleRuntimeCommand(t *testing.T, h *idleRuntime, kind string, station, reci
 	t.Helper()
 	_, state := idleRuntimeState(t, h)
 	c := idle.Command{Seq: uint64(len(state.Receipts)) + 1, Kind: kind, Station: station, Recipe: recipe}
-	r, err := sender.NewIdleSimSender(h.scheduler).Sync_IdleCommand(context.Background(), h.playerID, c, h.clock.Load())
+	r, err := sender.NewIdleSimSender(h.scheduler).Sync_IdleCommand(context.Background(), h.playerID, c)
 	if err != nil {
 		t.Fatal(kind, err)
 	}
@@ -212,7 +217,7 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Sync_IdleInit(ctx, h.playerID, idleNow, rules); err != nil {
+		if _, err := s.Sync_IdleInit(ctx, h.playerID, rules); err != nil {
 			t.Fatal(err)
 		}
 		idleRuntimeCommand(t, h, "queue", 0, 0)
@@ -222,7 +227,7 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 		idleRuntimeCommand(t, h, "settle", 0, 0)
 		p, state := idleRuntimeState(t, h)
 		stats := h.projector.Stats()
-		if stats.Projected != 0 || stats.WALUnacked != 5 || p.Dao().GetWakeTimer() == 0 || len(state.Stations[0].Ready) != 1 || state.Stations[1].Queue[0].Progress != 10000 {
+		if stats.Projected != 0 || stats.WALUnacked != 6 || p.Dao().GetWakeTimer() == 0 || len(state.Stations[0].Ready) != 1 || state.Stations[1].Queue[0].Progress != 10000 {
 			t.Fatal("missing strict crash boundary")
 		}
 		raw, _ = json.Marshal(idleBarrier{state.Digest(), state.View(), p.Dao().GetWakeTimer(), stats.WALUnacked})
@@ -247,7 +252,7 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 		}
 		s := sender.NewIdleSimSender(h.scheduler)
 		for _, r := range state.Receipts {
-			got, err := s.Sync_IdleCommand(ctx, h.playerID, r.Command, h.clock.Load())
+			got, err := s.Sync_IdleCommand(ctx, h.playerID, r.Command)
 			if err != nil || got != r {
 				t.Fatal("recovered identity changed", err)
 			}
@@ -327,7 +332,7 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 	}
 	s := sender.NewIdleSimSender(h.scheduler)
 	for _, r := range state.Receipts {
-		got, err := s.Sync_IdleCommand(ctx, h.playerID, r.Command, h.clock.Load())
+		got, err := s.Sync_IdleCommand(ctx, h.playerID, r.Command)
 		if err != nil || got != r {
 			t.Fatal("retry changed progress or payment", err)
 		}
@@ -405,7 +410,7 @@ func TestIdleSimRealCrashRecovery(t *testing.T) {
 	order := idleRuntimeCommand(t, h, "order", 0, 0)
 	for _, r := range []idle.Receipt{claim, order} {
 		for range 3 {
-			got, err := s.Sync_IdleCommand(ctx, h.playerID, r.Command, h.clock.Load())
+			got, err := s.Sync_IdleCommand(ctx, h.playerID, r.Command)
 			if err != nil || got != r {
 				t.Fatal("claim / order replay changed", err)
 			}

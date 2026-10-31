@@ -15,6 +15,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
@@ -69,7 +70,11 @@ func openSurvivalRuntime(t *testing.T, manual bool, now int64) *survivalRuntime 
 	RegisterTickSurvivalRaidTimerGenNestHandlers()
 	h := &survivalRuntime{database: database}
 	h.clock.Store(now)
+	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
+	// 两处读同一个 h.clock，测试拨 h.clock 就是拨业务时间。
 	runentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
@@ -241,11 +246,11 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if _, e = s.Sync_SurvivalInit(ctx, h.runID, h.ids, rules, survivalNow); e != nil {
+		if _, e = s.Sync_SurvivalInit(ctx, h.runID, h.ids, rules); e != nil {
 			t.Fatal(e)
 		}
 		for _, id := range h.ids {
-			if e := s.MultiSync_SurvivalEnter(ctx, id, h.runID, h.clock.Load()); e != nil {
+			if e := s.MultiSync_SurvivalEnter(ctx, id, h.runID); e != nil {
 				t.Fatal(e)
 			}
 		}
@@ -256,7 +261,7 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if _, e = s.Sync_SurvivalCommand(ctx, h.runID, h.ids[i], survival.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Kind: kind, A: a}, h.clock.Load()); e != nil {
+			if _, e = s.Sync_SurvivalCommand(ctx, h.runID, h.ids[i], survival.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Kind: kind, A: a}); e != nil {
 				t.Fatal(e)
 			}
 		}
@@ -268,7 +273,7 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 		command(2, "move", 1)
 		m, state := survivalRuntimeState(t, h)
 		stats := h.projector.Stats()
-		if stats.Projected != 0 || stats.WALUnacked != 15 || state.Seats[0].CraftAt == 0 || state.Seats[1].ExtractAt == 0 || m.Dao().GetWakeTimer() == 0 {
+		if stats.Projected != 0 || stats.WALUnacked != 20 || state.Seats[0].CraftAt == 0 || state.Seats[1].ExtractAt == 0 || m.Dao().GetWakeTimer() == 0 {
 			t.Fatal("not at unprojected crafting / extraction boundary")
 		}
 		b := survivalBarrier{State: state.Encode(), Timer: m.Dao().GetWakeTimer(), Unprojected: stats.WALUnacked}
@@ -291,11 +296,11 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 		s := sender.NewSurvivalExtractionSender(h.scheduler)
 		_, state := survivalRuntimeState(t, h)
 		for i, id := range h.ids {
-			if e := s.MultiSync_SurvivalEnter(ctx, id, h.runID, h.clock.Load()); e != nil {
+			if e := s.MultiSync_SurvivalEnter(ctx, id, h.runID); e != nil {
 				t.Fatal(e)
 			}
 			for _, r := range state.Seats[i].Receipts {
-				got, e := s.Sync_SurvivalCommand(ctx, h.runID, id, r.Command, h.clock.Load())
+				got, e := s.Sync_SurvivalCommand(ctx, h.runID, id, r.Command)
 				if e != nil || got != r {
 					t.Fatal("command replay changed", e)
 				}
@@ -379,7 +384,7 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 	s := sender.NewSurvivalExtractionSender(h.scheduler)
 	for i, id := range h.ids {
 		for _, r := range state.Seats[i].Receipts {
-			got, e := s.Sync_SurvivalCommand(ctx, h.runID, id, r.Command, h.clock.Load())
+			got, e := s.Sync_SurvivalCommand(ctx, h.runID, id, r.Command)
 			if e != nil || got != r {
 				t.Fatal("retry changed material or extraction facts", e)
 			}
@@ -425,7 +430,7 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 	}
 	awaitDelivered(1, caught.Deadline)
 	for _, id := range h.ids {
-		if e := s.MultiSync_SurvivalEnter(ctx, id, h.runID, h.clock.Load()); e != nil {
+		if e := s.MultiSync_SurvivalEnter(ctx, id, h.runID); e != nil {
 			t.Fatal(e)
 		}
 	}
@@ -438,7 +443,7 @@ func TestSurvivalExtractionRealCrashRecovery(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if _, e = s.Sync_SurvivalCommand(ctx, h.runID, h.ids[i], survival.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Kind: kind, A: a}, h.clock.Load()); e != nil {
+		if _, e = s.Sync_SurvivalCommand(ctx, h.runID, h.ids[i], survival.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Kind: kind, A: a}); e != nil {
 			t.Fatal(e)
 		}
 	}

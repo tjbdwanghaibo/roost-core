@@ -12,6 +12,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,7 +84,11 @@ func newSurvivalFixture(t *testing.T, enter ...bool) *survivalFixture {
 	RegisterTickSurvivalRaidTimerGenNestHandlers()
 	f := &survivalFixture{rules: loadSurvivalRules(t, survival.DemoRules())}
 	f.clock.Store(survivalNow)
+	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
+	// 两处读同一个 f.clock，测试拨 f.clock 就是拨业务时间。
 	matchentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	g := survivalGetter{}
 	build := func(unique int64, kind entity.EntityKind) entity.IThreadSafeEntity {
 		id, e := entity.BuildEntityID(unique, kind)
@@ -113,7 +119,7 @@ func newSurvivalFixture(t *testing.T, enter ...bool) *survivalFixture {
 		_ = f.engine.Shutdown(context.Background())
 		f.match.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
 	})
-	if _, e := sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalInit(context.Background(), f.match.ID(), f.ids, f.rules, survivalNow); e != nil {
+	if _, e := sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalInit(context.Background(), f.match.ID(), f.ids, f.rules); e != nil {
 		t.Fatal(e)
 	}
 	for _, id := range f.ids {
@@ -123,7 +129,7 @@ func newSurvivalFixture(t *testing.T, enter ...bool) *survivalFixture {
 	}
 	if len(enter) == 0 || enter[0] {
 		for _, id := range f.ids {
-			if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), id, f.match.ID(), f.clock.Load()); e != nil {
+			if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), id, f.match.ID()); e != nil {
 				t.Fatal(e)
 			}
 		}
@@ -151,7 +157,7 @@ func (f *survivalFixture) command(t *testing.T, i int, kind string, a, b int) su
 	return survival.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Kind: kind, A: a, B: b}
 }
 func (f *survivalFixture) send(i int, c survival.Command) (survival.Receipt, error) {
-	return sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalCommand(context.Background(), f.match.ID(), f.ids[i], c, f.clock.Load())
+	return sender.NewSurvivalExtractionSender(f.engine).Sync_SurvivalCommand(context.Background(), f.match.ID(), f.ids[i], c)
 }
 func (f *survivalFixture) do(t *testing.T, i int, kind string, a, b int) survival.Receipt {
 	t.Helper()
@@ -208,7 +214,8 @@ func TestSurvivalExtractionAdmissionAtomicAndIdempotent(t *testing.T) {
 	refused := errors.New("after entry fee")
 	name := nest.NewHandlerName("survival_undo_entry")
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
-		if e := handlerSurvivalEnter(es[0].(ISurvivalPlayerEntity), es[1].(ISurvivalRaidEntity), f.clock.Load()); e != nil {
+		// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
+		if e := handlerSurvivalEnter(es[0].(ISurvivalPlayerEntity), es[1].(ISurvivalRaidEntity), fctx.NowMilli()); e != nil {
 			return nil, e
 		}
 		return nil, refused
@@ -225,7 +232,7 @@ func TestSurvivalExtractionAdmissionAtomicAndIdempotent(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), id, f.match.ID(), f.clock.Load()); e != nil {
+				if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), id, f.match.ID()); e != nil {
 					t.Error(e)
 				}
 			}()
@@ -446,7 +453,7 @@ func TestSurvivalExtractionExpiryCannotReopenOrReenter(t *testing.T) {
 		t.Fatal("expiry overwrote confirmed channel or left player alive")
 	}
 	for _, id := range f.ids {
-		if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), id, f.match.ID(), f.clock.Load()); e != nil {
+		if e := sender.NewSurvivalExtractionSender(f.engine).MultiSync_SurvivalEnter(context.Background(), id, f.match.ID()); e != nil {
 			t.Fatal("admission retry should preserve fact", e)
 		}
 	}
@@ -468,7 +475,8 @@ func TestSurvivalExtractionUndoRestoresMaterialsJobAndTimer(t *testing.T) {
 	refused := errors.New("after craft mutation")
 	name := nest.NewHandlerName("survival_undo_craft")
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
-		_, e := handlerSurvivalCommand(es[0].(ISurvivalRaidEntity), f.ids[0], c, f.clock.Load())
+		// 手写分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
+		_, e := handlerSurvivalCommand(es[0].(ISurvivalRaidEntity), f.ids[0], c, fctx.NowMilli())
 		if e != nil {
 			return nil, e
 		}

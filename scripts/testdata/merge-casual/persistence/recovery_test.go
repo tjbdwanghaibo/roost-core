@@ -14,6 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
@@ -67,7 +68,11 @@ func openMergeRuntime(t *testing.T, manual bool, now int64) *mergeRuntime {
 	RegisterTickPlayerTimerGenNestHandlers()
 	h := &mergeRuntime{database: database}
 	h.clock.Store(now)
+	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
+	// 两处读同一个 h.clock，测试拨 h.clock 就是拨业务时间。
 	playerentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(h.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
@@ -180,7 +185,7 @@ func mergeRuntimeCommand(t *testing.T, h *mergeRuntime, kind string, a, b int, v
 	t.Helper()
 	_, state := mergeRuntimeState(t, h)
 	c := casual.Command{Epoch: state.Epoch, Seq: uint64(len(state.Receipts)) + 1, Base: state.Revision, Kind: kind, A: a, B: b, Value: value}
-	r, err := sender.NewMergeCasualSender(h.scheduler).Sync_MergeBatch(context.Background(), h.playerID, []casual.Command{c}, h.clock.Load())
+	r, err := sender.NewMergeCasualSender(h.scheduler).Sync_MergeBatch(context.Background(), h.playerID, []casual.Command{c})
 	if err != nil {
 		t.Fatal(kind, err)
 	}
@@ -216,19 +221,19 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Sync_MergeLogin(ctx, h.playerID, mergeKey, 1, mergeNow, rules); err != nil {
+		if _, err := s.Sync_MergeLogin(ctx, h.playerID, mergeKey, 1, rules); err != nil {
 			t.Fatal(err)
 		}
 		mergeRuntimeCommand(t, h, "produce", 10, 0, 0)
 		mergeRuntimeCommand(t, h, "produce", 11, 0, 0)
-		if _, err := s.Sync_MergeAd(ctx, h.playerID, mergeProof(h.playerID), adKey, 1, mergeNow); err != nil {
+		if _, err := s.Sync_MergeAd(ctx, h.playerID, mergeProof(h.playerID), adKey, 1); err != nil {
 			t.Fatal(err)
 		}
 		mergeRuntimeCommand(t, h, "start", 0, 0, 0)
 		p, state := mergeRuntimeState(t, h)
 		stats := h.projector.Stats()
-		// 首登、两次生产、广告到账、开挑战各一条 strict 记录；后台投影关闭，五条都未投影。
-		if stats.Projected != 0 || stats.WALUnacked != 5 || p.Dao().GetWakeTimer() == 0 {
+		// 新建 Player（Nest 之外 Create 的 strict 隔离事务）、首登、两次生产、广告到账、开挑战各一条 strict 记录；后台投影关闭，六条都未投影。
+		if stats.Projected != 0 || stats.WALUnacked != 6 || p.Dao().GetWakeTimer() == 0 {
 			t.Fatal("missing unprojected strict records / timer")
 		}
 		raw, _ := json.Marshal(mergeBarrier{state.Digest(), state.View(), p.Dao().GetWakeTimer(), stats.WALUnacked})
@@ -253,11 +258,11 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 		}
 		sender := sender.NewMergeCasualSender(h.scheduler)
 		for _, c := range []casual.Command{state.Receipts[0].Command, state.Receipts[len(state.Receipts)-1].Command} {
-			if _, err := sender.Sync_MergeBatch(ctx, h.playerID, []casual.Command{c}, h.clock.Load()); err != nil {
+			if _, err := sender.Sync_MergeBatch(ctx, h.playerID, []casual.Command{c}); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if _, err := sender.Sync_MergeAd(ctx, h.playerID, mergeProof(h.playerID), adKey, 1, h.clock.Load()); err != nil {
+		if _, err := sender.Sync_MergeAd(ctx, h.playerID, mergeProof(h.playerID), adKey, 1); err != nil {
 			t.Fatal(err)
 		}
 		_, again := mergeRuntimeState(t, h)
@@ -339,10 +344,10 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 	}
 	sender := sender.NewMergeCasualSender(h.scheduler)
 	first := state.Receipts[0]
-	if result, err := sender.Sync_MergeBatch(ctx, h.playerID, []casual.Command{first.Command}, h.clock.Load()); err != nil || !reflect.DeepEqual(result, []casual.Receipt{first}) {
+	if result, err := sender.Sync_MergeBatch(ctx, h.playerID, []casual.Command{first.Command}); err != nil || !reflect.DeepEqual(result, []casual.Receipt{first}) {
 		t.Fatal("recovered producer rerolled", err)
 	}
-	if _, err := sender.Sync_MergeAd(ctx, h.playerID, mergeProof(h.playerID), adKey, 1, h.clock.Load()); err != nil {
+	if _, err := sender.Sync_MergeAd(ctx, h.playerID, mergeProof(h.playerID), adKey, 1); err != nil {
 		t.Fatal("expired original proof lost receipt", err)
 	}
 	// 启动驱动自己的投递循环（与进程装配同一个入口），用例不手发 Tick、不调用 DeliverDue：循环发现离线期间
@@ -405,14 +410,14 @@ func TestMergeCasualRealCrashRecovery(t *testing.T) {
 	}
 	mergeRuntimeCommand(t, h, "claim", 0, 0, int64(timedOut.Challenge.ID))
 	mergeRuntimeCommand(t, h, "start", 0, 0, 0)
-	mergeWin(t, h.scheduler, h.playerID, h.clock.Load())
+	mergeWin(t, h.scheduler, h.playerID)
 	_, won := mergeRuntimeState(t, h)
 	if won.Challenge.Status != "won" {
 		t.Fatal("server merge goal absent")
 	}
 	claim := mergeRuntimeCommand(t, h, "claim", 0, 0, int64(won.Challenge.ID))
 	for range 3 {
-		if _, err := sender.Sync_MergeBatch(ctx, h.playerID, []casual.Command{claim.Command}, h.clock.Load()); err != nil {
+		if _, err := sender.Sync_MergeBatch(ctx, h.playerID, []casual.Command{claim.Command}); err != nil {
 			t.Fatal(err)
 		}
 	}

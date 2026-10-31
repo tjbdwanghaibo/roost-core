@@ -18,7 +18,7 @@ type IMergePlayerEntity interface {
 // 同票重试不提高 Epoch；更新票接管后旧设备不能再写，操作序号不重置。
 //
 //roost:nest rollback=undo durability=strict
-func handlerMergeLogin(player IMergePlayerEntity, key string, ticket uint64, now int64, rules casual.Rules) (casual.View, error) {
+func handlerMergeLogin(player IMergePlayerEntity, key string, ticket uint64, nowUnixMilli int64, rules casual.Rules) (casual.View, error) {
 	if ticket == 0 {
 		return casual.View{}, casual.ErrRule
 	}
@@ -26,7 +26,7 @@ func handlerMergeLogin(player IMergePlayerEntity, key string, ticket uint64, now
 		if ticket != 1 {
 			return casual.View{}, casual.ErrRule
 		}
-		s, err := casual.NewState(key, now, rules)
+		s, err := casual.NewState(key, nowUnixMilli, rules)
 		if err != nil {
 			return casual.View{}, err
 		}
@@ -46,7 +46,7 @@ func handlerMergeLogin(player IMergePlayerEntity, key string, ticket uint64, now
 	if ticket > uint64(casual.ValueLimit) || s.Revision >= uint64(casual.ValueLimit) {
 		return casual.View{}, casual.ErrRule
 	}
-	if err := s.Recover(now); err != nil {
+	if err := s.Recover(nowUnixMilli); err != nil {
 		return casual.View{}, err
 	}
 	s.Epoch = ticket
@@ -58,10 +58,10 @@ func handlerMergeLogin(player IMergePlayerEntity, key string, ticket uint64, now
 	return s.View(), nil
 }
 
-// 一个离线批次最多 16 步，全部成功才 SetState。公网只接收 Command，不接收 State / Rules / serverNow。
+// 一个离线批次最多 16 步，全部成功才 SetState。公网只接收 Command，不接收 State / Rules / 时间；nowUnixMilli 由生成的分发包装从 fctx 填本条消息冻结的业务时间。
 //
 //roost:nest rollback=undo durability=strict
-func handlerMergeBatch(player IMergePlayerEntity, commands []casual.Command, now int64) ([]casual.Receipt, error) {
+func handlerMergeBatch(player IMergePlayerEntity, commands []casual.Command, nowUnixMilli int64) ([]casual.Receipt, error) {
 	if len(commands) == 0 || len(commands) > 16 {
 		return nil, casual.ErrRule
 	}
@@ -72,7 +72,7 @@ func handlerMergeBatch(player IMergePlayerEntity, commands []casual.Command, now
 	before := s.Revision
 	receipts := make([]casual.Receipt, 0, len(commands))
 	for _, c := range commands {
-		r, err := s.Apply(c, now)
+		r, err := s.Apply(c, nowUnixMilli)
 		if err != nil {
 			return nil, err
 		}
@@ -89,13 +89,13 @@ func handlerMergeBatch(player IMergePlayerEntity, commands []casual.Command, now
 // 广告回调的签名密钥来自服务端依赖装配；该 Sender 不是允许客户端传 key 的公开 endpoint。
 //
 //roost:nest rollback=undo durability=strict
-func handlerMergeAd(player IMergePlayerEntity, proof casual.SignedReward, verificationKey string, epoch uint64, now int64) (casual.View, error) {
+func handlerMergeAd(player IMergePlayerEntity, proof casual.SignedReward, verificationKey string, epoch uint64, nowUnixMilli int64) (casual.View, error) {
 	s, err := casual.Decode(player.Dao().GetState())
 	if err != nil {
 		return casual.View{}, err
 	}
 	before := s.Revision
-	if err := s.GrantAd(proof, verificationKey, player.ID(), epoch, now); err != nil {
+	if err := s.GrantAd(proof, verificationKey, player.ID(), epoch, nowUnixMilli); err != nil {
 		return casual.View{}, err
 	}
 	if s.Revision != before {

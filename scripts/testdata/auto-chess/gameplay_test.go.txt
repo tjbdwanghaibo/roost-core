@@ -12,6 +12,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"os"
 	"path/filepath"
 	"sync"
@@ -81,7 +83,11 @@ func newChessFixture(t *testing.T) *chessFixture {
 	RegisterTickChessMatchTimerGenNestHandlers()
 	f := &chessFixture{rules: loadChessRules(t, chess.DemoRules())}
 	f.clock.Store(chessNow)
+	// handler 的 nowUnixMilli 与定时器 Tick 都取本条消息冻结的业务时间（fctx 读进程业务时钟），驱动的到期查询用 SetClock：
+	// 两处读同一个 f.clock，测试拨 f.clock 就是拨业务时间。
 	matchentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	g := chessGetter{}
 	build := func(unique int64, kind entity.EntityKind) entity.IThreadSafeEntity {
 		id, e := entity.BuildEntityID(unique, kind)
@@ -112,7 +118,7 @@ func newChessFixture(t *testing.T) *chessFixture {
 		_ = f.engine.Shutdown(context.Background())
 		f.match.TimerComp().OnDestroy(entity.DestroyReasonMemoryUnload)
 	})
-	if _, e := sender.NewAutoChessSender(f.engine).Sync_ChessInit(context.Background(), f.match.ID(), f.ids, f.rules, fmt.Sprintf("%064x", 17), chessNow); e != nil {
+	if _, e := sender.NewAutoChessSender(f.engine).Sync_ChessInit(context.Background(), f.match.ID(), f.ids, f.rules, fmt.Sprintf("%064x", 17)); e != nil {
 		t.Fatal(e)
 	}
 	for _, id := range f.ids {
@@ -143,7 +149,7 @@ func (f *chessFixture) command(t *testing.T, i int, kind string, a, b int) chess
 	return chess.Command{Seq: v.Self.NextSeq, Epoch: v.Self.Epoch, Round: v.Round, Kind: kind, A: a, B: b}
 }
 func (f *chessFixture) send(i int, c chess.Command) (chess.Receipt, error) {
-	return sender.NewAutoChessSender(f.engine).Sync_ChessCommand(context.Background(), f.match.ID(), f.ids[i], c, f.clock.Load())
+	return sender.NewAutoChessSender(f.engine).Sync_ChessCommand(context.Background(), f.match.ID(), f.ids[i], c)
 }
 func (f *chessFixture) do(t *testing.T, i int, kind string, a, b int) chess.Receipt {
 	t.Helper()
@@ -323,7 +329,7 @@ func TestAutoChessFormationLevelShopLockAndConfigFrozen(t *testing.T) {
 	patched := f.rules
 	patched.Version = "v2"
 	patched.Units[0].Cost = 9
-	if _, e := sender.NewAutoChessSender(f.engine).Sync_ChessInit(context.Background(), f.match.ID(), f.ids, patched, fmt.Sprintf("%064x", 999), f.clock.Load()); e != nil {
+	if _, e := sender.NewAutoChessSender(f.engine).Sync_ChessInit(context.Background(), f.match.ID(), f.ids, patched, fmt.Sprintf("%064x", 999)); e != nil {
 		t.Fatal(e)
 	}
 	if f.state(t).Rules != f.rules {
@@ -338,7 +344,8 @@ func TestAutoChessUndoRestoresPoolRandomReceiptAndTimer(t *testing.T) {
 	refused := errors.New("injected after mutation")
 	name := nest.NewHandlerName("chess_undo_refresh")
 	nest.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
-		_, e := handlerChessCommand(es[0].(IChessMatchEntity), f.ids[0], c, f.clock.Load())
+		// 手写的分发与生成的包装一样，从本条消息冻结的业务时间取 nowUnixMilli。
+		_, e := handlerChessCommand(es[0].(IChessMatchEntity), f.ids[0], c, fctx.NowMilli())
 		if e != nil {
 			return nil, e
 		}

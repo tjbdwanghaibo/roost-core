@@ -21,7 +21,7 @@ import (
 
 // 崩溃点前子进程提交的 strict 记录数：种子 3（卖家、买家、怪物）+ 挂单、卖家确认、买家受伤、复活登记、
 // 两次攻击、拾取、任务领奖、Buff 共 9 条业务命令。关掉后台投影后这些记录全部停在 WAL、一条也没有投影。
-const mmoCrashUnprojected = 12
+const mmoCrashUnprojected = 16
 
 // mmoCrashFacts 是崩溃屏障 / 第三进程核对用的事实：四个实体的 DAO 完整持久字节与两个定时器节点 ID。
 type mmoCrashFacts struct {
@@ -82,11 +82,11 @@ func (f mmoCrashFacts) sameState(other mmoCrashFacts) bool {
 }
 
 // mmoCrashReplayCombat 用原参数重放崩溃前已确认的战斗与领奖命令：同一输入序号 / 已拾取 / 已领奖都按幂等返回，
-// 怪物已死后的受伤请求被拒；任何一条都不能改状态。
+// 怪物已死后的受伤请求被拒；任何一条都不能改状态。时间不是参数：handler 取本条消息冻结的业务时间。
 func mmoCrashReplayCombat(t *testing.T, s *sender.MmoGameplaySender, ids mmoCrashIDs) {
 	t.Helper()
 	ctx := context.Background()
-	if err := s.MultiSync_MMORPGStrike(ctx, ids.seller, ids.mob, 2, mmoRealT0+1000); err != nil {
+	if err := s.MultiSync_MMORPGStrike(ctx, ids.seller, ids.mob, 2); err != nil {
 		t.Fatal("strike replay", err)
 	}
 	if err := s.MultiSync_MMORPGLoot(ctx, ids.seller, ids.mob); err != nil {
@@ -98,7 +98,7 @@ func mmoCrashReplayCombat(t *testing.T, s *sender.MmoGameplaySender, ids mmoCras
 	if err := s.MultiSync_MMORPGHurt(ctx, ids.buyer, ids.mob); err == nil {
 		t.Fatal("a dead monster hurt the buyer again")
 	}
-	if err := s.MultiSync_MMORPGOffer(ctx, ids.trade, ids.seller, ids.buyer, 10, 1, mmoRealT0); err != nil {
+	if err := s.MultiSync_MMORPGOffer(ctx, ids.trade, ids.seller, ids.buyer, 10, 1); err != nil {
 		t.Fatal("offer replay", err)
 	}
 }
@@ -106,10 +106,12 @@ func mmoCrashReplayCombat(t *testing.T, s *sender.MmoGameplaySender, ids mmoCras
 // 崩溃点选“野外战斗进行中”：买家在交易窗口开着时被怪物击倒、复活在计时；卖家击杀怪物、拾取并领了任务奖，
 // 刚上了 Buff（计时中）；双方的托管交易已挂单、卖家已确认（卖家 1 件物品、买家 10 金币托管在 Trade 实体里）。
 // 这是 MMORPG 最典型的在途状态组合：两种 Player 定时器节点（Buff、复活）同时在计时，托管资产不在任何一方
-// 背包里，战斗奖励已发。全部 12 条 strict 记录已确认、未投影时 SIGKILL 子进程；新进程从未投影 WAL 恢复。
+// 背包里，战斗奖励已发。全部 16 条 strict 记录（4 个实体新建各一条 + 12 条业务命令）已确认、未投影时 SIGKILL 子进程；新进程从未投影 WAL 恢复。
 //
-// 恢复后的业务：离线一小时，Buff 与复活都已过期，投递循环各补触发一次；交易超过期限，由服务内部按到期清理
-// 退还托管资产，买家迟到的确认被拒。只终止自己启动的写入子进程；不模拟磁盘断电或 strict 回复未知。
+// 新进程在崩溃时刻（T0 + 1 秒，交易期限内）起来，客户端立即重试已确认的命令；之后业务时间推进一小时
+// （玩家离线），Buff 与复活都已过期，投递循环各补触发一次；交易超过期限，由服务内部按到期清理
+// 退还托管资产，买家迟到的确认被拒。业务时间一律由用例拨 h.clock，调用方不传时间。
+// 只终止自己启动的写入子进程；不模拟磁盘断电或 strict 回复未知。
 func TestMMORPGRealCrashRecovery(t *testing.T) {
 	role := os.Getenv("ROOST_MMORPG_CHILD")
 	root := os.Getenv("ROOST_MMORPG_WAL")
@@ -130,10 +132,10 @@ func TestMMORPGRealCrashRecovery(t *testing.T) {
 		h.seed(t, ids.seller, 50, 3, 100, ids.area)
 		h.seed(t, ids.buyer, 50, 0, 25, ids.area)
 		h.seed(t, ids.mob, 0, 0, 20, ids.area)
-		if err := s.MultiSync_MMORPGOffer(ctx, ids.trade, ids.seller, ids.buyer, 10, 1, mmoRealT0); err != nil {
+		if err := s.MultiSync_MMORPGOffer(ctx, ids.trade, ids.seller, ids.buyer, 10, 1); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.MultiSync_MMORPGResolveTrade(ctx, ids.trade, ids.seller, ids.buyer, ids.seller, 1, mmoRealT0); err != nil {
+		if err := s.MultiSync_MMORPGResolveTrade(ctx, ids.trade, ids.seller, ids.buyer, ids.seller, 1); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.MultiSync_MMORPGHurt(ctx, ids.buyer, ids.mob); err != nil {
@@ -142,10 +144,12 @@ func TestMMORPGRealCrashRecovery(t *testing.T) {
 		if err := s.Sync_MMORPGRevive(ctx, ids.buyer); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.MultiSync_MMORPGStrike(ctx, ids.seller, ids.mob, 1, mmoRealT0); err != nil {
+		if err := s.MultiSync_MMORPGStrike(ctx, ids.seller, ids.mob, 1); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.MultiSync_MMORPGStrike(ctx, ids.seller, ids.mob, 2, mmoRealT0+1000); err != nil {
+		// 冷却 1 秒后第二击；之后的 Buff 期限从这一刻算（T0 + 1 秒 + 2 秒）。
+		h.clock.Store(mmoRealT0 + 1000)
+		if err := s.MultiSync_MMORPGStrike(ctx, ids.seller, ids.mob, 2); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.MultiSync_MMORPGLoot(ctx, ids.seller, ids.mob); err != nil {
@@ -195,10 +199,10 @@ func TestMMORPGRealCrashRecovery(t *testing.T) {
 		}
 		s := sender.NewMmoGameplaySender(h.scheduler)
 		mmoCrashReplayCombat(t, s, ids)
-		if err := s.MultiSync_MMORPGResolveTrade(ctx, ids.trade, ids.seller, ids.buyer, 0, 3, h.clock.Load()); err != nil {
+		if err := s.MultiSync_MMORPGResolveTrade(ctx, ids.trade, ids.seller, ids.buyer, 0, 3); err != nil {
 			t.Fatal("expiry replay", err)
 		}
-		if err := s.MultiSync_MMORPGResolveTrade(ctx, ids.trade, ids.seller, ids.buyer, ids.seller, 1, mmoRealT0); err == nil {
+		if err := s.MultiSync_MMORPGResolveTrade(ctx, ids.trade, ids.seller, ids.buyer, ids.seller, 1); err == nil {
 			t.Fatal("the original seller confirmation reopened a refunded trade")
 		}
 		if err := s.Sync_MMORPGRevive(ctx, ids.buyer); err == nil {
@@ -272,15 +276,15 @@ func TestMMORPGRealCrashRecovery(t *testing.T) {
 		t.Fatal("child did not crash")
 	}
 
-	// 新进程：同一 WAL、同一库，业务时间推进一小时（Buff 与复活都已过期，交易超过 5 秒期限）。
-	h := openMMORealRuntime(t, root, false, mmoRealT0+time.Hour.Milliseconds())
+	// 新进程：同一 WAL、同一库，在崩溃时刻（T0 + 1 秒）起来：交易期限（T0 + 5 秒）还没到，客户端重试已确认的命令。
+	h := openMMORealRuntime(t, root, false, mmoRealT0+1000)
 	s := sender.NewMmoGameplaySender(h.scheduler)
 	seller, buyer, facts := mmoCrashLoad(t, h, ids)
 	if !facts.sameState(barrier) {
 		t.Fatal("WAL recovery lost or changed escrow / combat rewards / Buff / revive timer")
 	}
 	// 冷加载时 Host 把两个玩家的存量最早期限报告给驱动索引。到这里投递循环还没启动，上面直接读 DAO 不会与 Tick 并发。
-	if due, ok := player.TimerDriver.DueOf(seller); !ok || due.UnixMilli() != mmoRealT0+2000 {
+	if due, ok := player.TimerDriver.DueOf(seller); !ok || due.UnixMilli() != mmoRealT0+3000 {
 		t.Fatalf("cold load did not report the stored Buff deadline: due=%v ok=%v", due, ok)
 	}
 	if due, ok := player.TimerDriver.DueOf(buyer); !ok || due.UnixMilli() != mmoRealT0+3000 {
@@ -289,7 +293,7 @@ func TestMMORPGRealCrashRecovery(t *testing.T) {
 	// 客户端重试崩溃前已确认的命令（原参数）：战斗、拾取、领奖、挂单、卖家确认都按原结果返回，重复复活复用
 	// 原期限；状态逐字节不变，不重复发奖、不重复托管。
 	mmoCrashReplayCombat(t, s, ids)
-	if err := s.MultiSync_MMORPGResolveTrade(ctx, ids.trade, ids.seller, ids.buyer, ids.seller, 1, mmoRealT0); err != nil {
+	if err := s.MultiSync_MMORPGResolveTrade(ctx, ids.trade, ids.seller, ids.buyer, ids.seller, 1); err != nil {
 		t.Fatal("seller confirmation replay", err)
 	}
 	if err := s.Sync_MMORPGRevive(ctx, ids.buyer); err != nil {
@@ -298,6 +302,8 @@ func TestMMORPGRealCrashRecovery(t *testing.T) {
 	if _, _, again := mmoCrashLoad(t, h, ids); !again.sameState(barrier) {
 		t.Fatal("retrying confirmed commands changed recovered state")
 	}
+	// 玩家离线一小时：业务时间推过 Buff、复活与交易的期限，再启动投递循环。
+	h.clock.Store(mmoRealT0 + time.Hour.Milliseconds())
 
 	// 启动驱动自己的投递循环（与进程装配同一个入口），用例不手发 Tick、不调用 DeliverDue。循环发现两个已过期的
 	// 玩家，各投递一次加载后的补触发：Buff 清除、买家复活。离线一小时只补这一次，不追帧。业务时钟在两次推进之间
@@ -319,11 +325,11 @@ func TestMMORPGRealCrashRecovery(t *testing.T) {
 
 	// 交易已过 5 秒期限：服务内部按到期清理（actorID 0）退还托管资产，重试不重复退；买家迟到的确认被拒。
 	for range 3 {
-		if err := s.MultiSync_MMORPGResolveTrade(ctx, ids.trade, ids.seller, ids.buyer, 0, 3, h.clock.Load()); err != nil {
+		if err := s.MultiSync_MMORPGResolveTrade(ctx, ids.trade, ids.seller, ids.buyer, 0, 3); err != nil {
 			t.Fatal("trade expiry", err)
 		}
 	}
-	if err := s.MultiSync_MMORPGResolveTrade(ctx, ids.trade, ids.seller, ids.buyer, ids.buyer, 1, h.clock.Load()); err == nil {
+	if err := s.MultiSync_MMORPGResolveTrade(ctx, ids.trade, ids.seller, ids.buyer, ids.buyer, 1); err == nil {
 		t.Fatal("late buyer confirmation completed a refunded trade")
 	}
 	if v := h.view(t, ids.trade); v.TradeStatus != 3 {

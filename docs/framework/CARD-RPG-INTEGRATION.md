@@ -76,7 +76,7 @@ ROOST_CARD_RPG_KEEP=1 bash scripts/test-card-rpg-generated.sh   # 保留生成�
 
 #### 3.3 用 Sender 调用
 
-下面的文件放进保留的生成工程（例如 `internal/cardflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `cardrpg.OpenCatalog` 打开的配置，`now` 是服务器业务时钟（毫秒），EntityID 都是完整 ID：
+下面的文件放进保留的生成工程（例如 `internal/cardflow/flow.go`）可直接编译。`client` 是当前服务的 Nest 客户端，`catalog` 是进程启动时 `cardrpg.OpenCatalog` 打开的配置；调用方不传业务时间：handler 的 `nowUnixMilli` 参数由生成的分发包装从本条消息冻结的业务时间（`fctx.NowMilli()`，见 [guide/10-time §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）填，Sender 签名里没有它；EntityID 都是完整 ID：
 
 ```go
 package cardflow
@@ -93,7 +93,7 @@ import (
 // drawTrainAndStart 是已鉴权入口的调用顺序：十连、升级一张卡、开第一关。
 // 序号由客户端按自己的业务域递增并在重试时原样重发；Rules 由服务器捕获，不来自请求。
 func drawTrainAndStart(ctx context.Context, client nest.Client, catalog *configdata.Store,
-	playerEntityID, candidateRunID int64, drawSeq, manageSeq, runSeq uint64, now func() int64) (int64, error) {
+	playerEntityID, candidateRunID int64, drawSeq, manageSeq, runSeq uint64) (int64, error) {
 	rules, err := cardrpg.CaptureRules(catalog.Current()) // 一次操作只捕获一份快照
 	if err != nil {
 		return 0, err
@@ -103,24 +103,24 @@ func drawTrainAndStart(ctx context.Context, client nest.Client, catalog *configd
 		return 0, err
 	}
 	level := cardrpg.Manage{Seq: manageSeq, Kind: "level", CardID: 1, Target: 2}
-	if _, err := s.Sync_CardManage(ctx, playerEntityID, level, rules, now()); err != nil {
+	if _, err := s.Sync_CardManage(ctx, playerEntityID, level, rules); err != nil {
 		return 0, err
 	}
 	// 首次与重放都返回原 Run ID；此后查看、出手、领奖一律用返回值。
-	return s.MultiSync_CardStart(ctx, playerEntityID, candidateRunID, runSeq, 1, rules, now())
+	return s.MultiSync_CardStart(ctx, playerEntityID, candidateRunID, runSeq, 1, rules)
 }
 
 // playAndClaim 让本方每回合自动出手、敌方回合走服务器内部入口，直到终态后领奖。
 // 公网入口只接收本方的 Seq / Kind / Target；ActorID 由入口填已鉴权的 Player，敌方入口不暴露给客户端。
-func playAndClaim(ctx context.Context, client nest.Client, playerEntityID, runID int64, now func() int64) (cardrpg.ProfileView, error) {
+func playAndClaim(ctx context.Context, client nest.Client, playerEntityID, runID int64) (cardrpg.ProfileView, error) {
 	s := syncsender.NewCardRpgSender(client)
 	view, err := s.Sync_CardBattle(ctx, runID, playerEntityID)
 	for err == nil && view.Status == "running" {
 		if view.Actor < 3 {
 			command := cardrpg.TurnCommand{Seq: view.NextSeq, ActorID: playerEntityID, Kind: "auto"}
-			view, err = s.Sync_CardTurn(ctx, runID, playerEntityID, command, now())
+			view, err = s.Sync_CardTurn(ctx, runID, playerEntityID, command)
 		} else {
-			view, err = s.Sync_CardEnemy(ctx, runID, view.NextSeq, now())
+			view, err = s.Sync_CardEnemy(ctx, runID, view.NextSeq)
 		}
 	}
 	if err != nil {
@@ -252,7 +252,7 @@ ROOST_CARD_RPG_REAL=1 bash scripts/test-card-rpg-generated.sh
 
 它在第 11 节之后追加 `TestCardRPGRealCrashRecovery`（已登记根包 `integration_coverage_test.go`），用本次唯一的 DAO 库与 WAL 目录：
 
-1. 子进程经 strict 文件 WAL 提交首登、十连、升级、开局和第一回合；后台投影关闭，断言 WAL 有 5 条已确认未投影的记录后，父进程 SIGKILL 自己启动的子进程。
+1. 子进程经 strict 文件 WAL 提交首登、十连、升级、开局和第一回合；后台投影关闭，断言 WAL 有未投影的记录（实测 7 条：Player 与 Run 新建各 1 条——Nest 之外 `Create` 新建持久实体时各补一条 strict 隔离事务——加 5 条业务命令；用例只断言非零）后，父进程 SIGKILL 自己启动的子进程。
 2. 父进程用同一 WAL 与 Mongo 冷加载 Player / Run，核对资产、战斗摘要与定时器 ID；再用新价格的配置重放旧抽卡与升级，结果与扣费不变。
 3. 业务时间推进一小时。断言冷加载已把存量回合期限报告给驱动索引（`DueOf`），然后启动驱动自己的投递循环（`Driver.Start`，与进程装配同一入口；用例不调用 `DeliverDue`、不手发 Tick）：循环投递一次补触发，托管一回合后下一回合从实际触发时间起算、新期限再次进入索引，投递计数恰为 1、没有重投。再把业务时间推进到这个新期限，循环按时投递下一回合（从期限时刻起算，计数到 2）。继续用开局那一代配置打完、获胜，领奖三次只得一份。
 4. 正常关闭后再起第三个进程冷加载：核对领奖终态、资产与无待执行定时器，再重试领奖与抽卡，结果不变。成功后删除本次库；失败保留生成工程、WAL 与库名供诊断。
