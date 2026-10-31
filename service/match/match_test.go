@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -1451,5 +1452,290 @@ func TestCommitAcrossRacesSinglePartitionOperations(t *testing.T) {
 	}
 	if len(matched) == 0 {
 		t.Fatal("no match formed; the race proved nothing")
+	}
+}
+
+// --- 弹性人数成局（Queue.MinSize / FillAfterSeconds） ---
+
+// party 是 2～4 人、最早一张票等满 30 秒才开不满员局的弹性队列。
+func party(partition string) Queue {
+	return Queue{Mode: "party", GroupSize: 4, MinSize: 2, FillAfterSeconds: 30, Partition: partition}
+}
+
+func enqueueN(t *testing.T, store Store, queue Queue, firstID int64, n int) []Ticket {
+	t.Helper()
+	tickets := make([]Ticket, n)
+	for i := range tickets {
+		id := firstID + int64(i)
+		tickets[i] = enqueue(t, store, queue, player(id, 100), fmt.Sprintf("req-%d", id))
+	}
+	return tickets
+}
+
+func idsOf(tickets ...Ticket) []string {
+	ids := make([]string, len(tickets))
+	for i, ticket := range tickets {
+		ids[i] = ticket.ID
+	}
+	return ids
+}
+
+// 未到等待阈值时不满员的局被拒（ErrGroupNotReady），状态一个字节不变；最早一张票等满 FillAfterSeconds 后，
+// MinSize..GroupSize-1 张票可以成局；少于 MinSize、多于 GroupSize 的票集合任何时候都拒绝。
+func TestFlexibleQueueFormsASmallGroupOnlyAfterTheFillWait(t *testing.T) {
+	store, clock, state := newStoreWithState(t)
+	ctx := context.Background()
+	queue := party("eu")
+	tickets := enqueueN(t, store, queue, 1, 3)
+	clock.advance(29 * time.Second)
+
+	before := stateVersion(t, state, queue)
+	if _, err := store.Commit(ctx, queue, idsOf(tickets[:2]...)); !errors.Is(err, ErrGroupNotReady) {
+		t.Fatalf("a two-player group 29s after the oldest ticket = %v, want ErrGroupNotReady", err)
+	}
+	if after := stateVersion(t, state, queue); after != before {
+		t.Fatalf("a refused small group changed the queue state: version %d -> %d", before, after)
+	}
+	if _, err := store.Commit(ctx, queue, idsOf(tickets[0])); !errors.Is(err, ErrTicketInvalid) {
+		t.Fatalf("a one-player group = %v, want ErrTicketInvalid (below MinSize)", err)
+	}
+
+	clock.advance(time.Second)
+	match, err := store.Commit(ctx, queue, idsOf(tickets...))
+	if err != nil {
+		t.Fatalf("a three-player group 30s after the oldest ticket: %v", err)
+	}
+	if len(match.Members) != 3 || match.Queue != queue {
+		t.Fatalf("match = %+v, want three members of %s", match, queue.Key())
+	}
+	if length, _ := store.QueueLength(ctx, queue); length != 0 {
+		t.Fatalf("queue holds %d tickets after the commit", length)
+	}
+
+	five := enqueueN(t, store, queue, 10, 5)
+	if _, err := store.Commit(ctx, queue, idsOf(five...)); !errors.Is(err, ErrTicketInvalid) {
+		t.Fatalf("a five-player group in a queue of at most four = %v, want ErrTicketInvalid", err)
+	}
+}
+
+// 凑满 GroupSize 时不用等：弹性队列的满员局与固定队列一样立即成局。
+func TestFlexibleQueueFormsAFullGroupImmediately(t *testing.T) {
+	store, _ := newStore(t)
+	queue := party("eu")
+	tickets := enqueueN(t, store, queue, 1, 4)
+	match, err := store.Commit(context.Background(), queue, idsOf(tickets...))
+	if err != nil || len(match.Members) != 4 {
+		t.Fatalf("a full group at once = (%+v, %v)", match, err)
+	}
+}
+
+// 等待时间读存储的业务时钟（Config.Now）：前拨让小局提前可开；回拨到票创建之前时等待按 0 计，不会因此提前开局。
+func TestFlexibleQueueWaitFollowsTheBusinessClock(t *testing.T) {
+	store, clock := newStore(t)
+	ctx := context.Background()
+	queue := party("eu")
+	tickets := enqueueN(t, store, queue, 1, 2)
+
+	clock.advance(-time.Hour)
+	if _, err := store.Commit(ctx, queue, idsOf(tickets...)); !errors.Is(err, ErrGroupNotReady) {
+		t.Fatalf("after the clock went back an hour = %v, want ErrGroupNotReady", err)
+	}
+	clock.advance(time.Hour + 30*time.Second)
+	if _, err := store.Commit(ctx, queue, idsOf(tickets...)); err != nil {
+		t.Fatalf("after the clock moved 30s past the oldest ticket: %v", err)
+	}
+}
+
+// 同一票集合（顺序可不同）的重放返回原局，包括时钟回拨到阈值之前之后：重放判定在等待检查之前。
+func TestFlexibleCommitReplayReturnsTheOriginalMatch(t *testing.T) {
+	store, clock := newStore(t)
+	ctx := context.Background()
+	queue := party("eu")
+	tickets := enqueueN(t, store, queue, 1, 3)
+	clock.advance(30 * time.Second)
+	first, err := store.Commit(ctx, queue, idsOf(tickets...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock.advance(-20 * time.Second)
+	again, err := store.Commit(ctx, queue, idsOf(tickets[2], tickets[0], tickets[1]))
+	if err != nil || again.ID != first.ID {
+		t.Fatalf("replay after the clock moved back = (%s, %v), want the original match %s", again.ID, err, first.ID)
+	}
+	if _, err := store.Commit(ctx, queue, idsOf(tickets[:2]...)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a subset of a committed group = %v, want ErrConflict", err)
+	}
+}
+
+// 并发：多个匹配器用大小不同、两两重叠的票集合（三张票的全部 2 张与 3 张子集）抢同一批票，只成一局；
+// 没有一张票进两局，成功的回复都指向同一局，其余报 ErrConflict。
+func TestConcurrentFlexibleCommitsProduceExactlyOneMatch(t *testing.T) {
+	store, clock := newStore(t)
+	ctx := context.Background()
+	queue := party("eu")
+	tickets := enqueueN(t, store, queue, 1, 3)
+	clock.advance(30 * time.Second)
+	sets := [][]string{
+		idsOf(tickets[0], tickets[1]),
+		idsOf(tickets[1], tickets[2]),
+		idsOf(tickets[2], tickets[0]),
+		idsOf(tickets...),
+		idsOf(tickets[2], tickets[1], tickets[0]),
+	}
+
+	var wait sync.WaitGroup
+	var mu sync.Mutex
+	matches := map[string]Match{}
+	for round := 0; round < 4; round++ {
+		for _, set := range sets {
+			wait.Add(1)
+			go func(set []string) {
+				defer wait.Done()
+				match, err := store.Commit(ctx, queue, set)
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil:
+					matches[match.ID] = match
+				case errors.Is(err, ErrConflict):
+				default:
+					t.Errorf("unexpected error %v", err)
+				}
+			}(set)
+		}
+	}
+	wait.Wait()
+
+	if len(matches) != 1 {
+		t.Fatalf("%d distinct matches from overlapping sets, want exactly 1", len(matches))
+	}
+	owner := map[string]string{}
+	for _, match := range matches {
+		for _, id := range match.TicketIDs {
+			if previous, taken := owner[id]; taken {
+				t.Fatalf("ticket %s is in matches %s and %s", id, previous, match.ID)
+			}
+			owner[id] = match.ID
+		}
+	}
+}
+
+// 策略与存储用同一条规则：不满员且未到阈值时策略不出组；到阈值后取全部可用票；可用票够 GroupSize 时立即取满员组；
+// 策略给出的组存储一定接受。弹性队列的策略必须有时钟。
+func TestGroupingFollowsTheFlexibleQueueRule(t *testing.T) {
+	store, clock := newStore(t)
+	ctx := context.Background()
+	queue := party("eu")
+	nowUnix := func() int64 { return clock.Now().Unix() }
+	policies := map[string]Grouping{
+		"first-come":   FirstComeGrouping{NowUnix: nowUnix},
+		"score-window": ScoreWindowGrouping{InitialWindow: 1000, NowUnix: nowUnix},
+	}
+	for name, policy := range policies {
+		t.Run(name, func(t *testing.T) {
+			partition := party(name)
+			enqueueN(t, store, partition, 1, 3)
+			candidates, err := store.Candidates(ctx, partition, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, formed, err := policy.Group(partition, candidates); err != nil || formed {
+				t.Fatalf("before the fill wait: formed=%v err=%v, want no group", formed, err)
+			}
+			clock.advance(30 * time.Second)
+			group, formed, err := policy.Group(partition, candidates)
+			if err != nil || !formed || len(group) != 3 {
+				t.Fatalf("after the fill wait: %d tickets formed=%v err=%v, want all 3", len(group), formed, err)
+			}
+			if _, err := store.Commit(ctx, partition, idsOf(group...)); err != nil {
+				t.Fatalf("the store refused the policy's group: %v", err)
+			}
+			full := enqueueN(t, store, partition, 10, 5)
+			group, formed, err = policy.Group(partition, full)
+			if err != nil || !formed || len(group) != 4 {
+				t.Fatalf("five fresh candidates: %d tickets formed=%v err=%v, want a full group of 4 at once", len(group), formed, err)
+			}
+		})
+	}
+	if _, _, err := (FirstComeGrouping{}).Group(queue, nil); !errors.Is(err, ErrQueueInvalid) {
+		t.Fatalf("first-come on a flexible queue without a clock = %v, want ErrQueueInvalid", err)
+	}
+}
+
+// 跨分区成局用同一条规则：不满员的跨分区组在阈值前被拒且两个分区都不写，阈值后成局；
+// 弹性规则不同的分区不是同一逻辑队列。
+func TestCommitAcrossFollowsTheFlexibleQueueRule(t *testing.T) {
+	store, clock, state := newStoreWithState(t)
+	ctx := context.Background()
+	east, west := party("east"), party("west")
+	a := enqueue(t, store, east, player(1, 0), "a")
+	b := enqueue(t, store, west, player(2, 0), "b")
+	beforeEast, beforeWest := stateVersion(t, state, east), stateVersion(t, state, west)
+	if _, err := store.CommitAcross(ctx, refsOf(a, b)); !errors.Is(err, ErrGroupNotReady) {
+		t.Fatalf("a small cross-partition group before the fill wait = %v, want ErrGroupNotReady", err)
+	}
+	if stateVersion(t, state, east) != beforeEast || stateVersion(t, state, west) != beforeWest {
+		t.Fatal("a refused cross-partition group changed a partition")
+	}
+	clock.advance(30 * time.Second)
+	match, err := store.CommitAcross(ctx, refsOf(a, b))
+	if err != nil || len(match.Members) != 2 {
+		t.Fatalf("a small cross-partition group after the fill wait = (%+v, %v)", match, err)
+	}
+
+	other := party("north")
+	other.FillAfterSeconds = 10
+	c := enqueue(t, store, east, player(3, 0), "c")
+	d := enqueue(t, store, other, player(4, 0), "d")
+	if _, err := store.CommitAcross(ctx, refsOf(c, d)); !errors.Is(err, ErrQueueInvalid) {
+		t.Fatalf("partitions with different fill waits = %v, want ErrQueueInvalid", err)
+	}
+}
+
+// 弹性队列的声明在入口校验：MinSize 在 [2, GroupSize) 内、FillAfterSeconds 非负、固定队列不写 FillAfterSeconds；
+// FillAfterSeconds 不短于票期限的队列在 Enqueue 与 NewStore（sweep 队列）拒绝——小局永远等不到（期限非整秒时按向上取整比较）。
+// 弹性规则是队列身份：不同的 MinSize / FillAfterSeconds 是不同的键，固定队列的键与以前相同。
+func TestFlexibleQueueDeclarationIsValidated(t *testing.T) {
+	store, _ := newStore(t, func(cfg *Config) { cfg.TicketTTL = time.Minute })
+	ctx := context.Background()
+	for _, testCase := range []struct {
+		label string
+		queue Queue
+	}{
+		{"min size one", Queue{Mode: "party", GroupSize: 4, MinSize: 1}},
+		{"min size equals group size", Queue{Mode: "party", GroupSize: 4, MinSize: 4}},
+		{"min size above group size", Queue{Mode: "party", GroupSize: 4, MinSize: 5}},
+		{"negative min size", Queue{Mode: "party", GroupSize: 4, MinSize: -1}},
+		{"fill wait on a fixed queue", Queue{Mode: "party", GroupSize: 4, FillAfterSeconds: 1}},
+		{"negative fill wait", Queue{Mode: "party", GroupSize: 4, MinSize: 2, FillAfterSeconds: -1}},
+		{"fill wait not shorter than the ticket ttl", Queue{Mode: "party", GroupSize: 4, MinSize: 2, FillAfterSeconds: 60}},
+		{"fill wait that would overflow a duration", Queue{Mode: "party", GroupSize: 4, MinSize: 2, FillAfterSeconds: math.MaxInt64}},
+	} {
+		if _, err := store.Enqueue(ctx, testCase.queue, player(1, 0), ""); !errors.Is(err, ErrQueueInvalid) {
+			t.Fatalf("%s: %v, want ErrQueueInvalid", testCase.label, err)
+		}
+	}
+	if _, err := NewMemoryStore(Config{TicketTTL: time.Minute, SweepQueues: []Queue{{Mode: "party", GroupSize: 4, MinSize: 2, FillAfterSeconds: 120}}}); err == nil {
+		t.Fatal("NewMemoryStore accepted a sweep queue whose fill wait outlives its tickets")
+	}
+
+	if key := (Queue{Mode: "ranked", GroupSize: 2, Partition: "eu"}).Key(); key != "{ranked:2}:eu" {
+		t.Fatalf("a fixed queue's key changed to %q", key)
+	}
+	seen := map[string]Queue{}
+	for _, queue := range []Queue{
+		{Mode: "party", GroupSize: 4, Partition: "eu"},
+		{Mode: "party", GroupSize: 4, MinSize: 2, Partition: "eu"},
+		{Mode: "party", GroupSize: 4, MinSize: 3, Partition: "eu"},
+		{Mode: "party", GroupSize: 4, MinSize: 2, FillAfterSeconds: 30, Partition: "eu"},
+		{Mode: "party", GroupSize: 4, MinSize: 2, FillAfterSeconds: 31, Partition: "eu"},
+	} {
+		if previous, taken := seen[queue.Key()]; taken {
+			t.Fatalf("%+v and %+v share the key %q", previous, queue, queue.Key())
+		}
+		seen[queue.Key()] = queue
+	}
+	if a, b := party("east"), party("west"); !a.SameLogicalQueue(b) || a.SameLogicalQueue(Queue{Mode: "party", GroupSize: 4, Partition: "east"}) {
+		t.Fatal("SameLogicalQueue ignores the flexible rule")
 	}
 }

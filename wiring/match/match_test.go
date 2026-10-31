@@ -72,3 +72,30 @@ func TestRetentionConfigurationReachesTheStore(t *testing.T) {
 		t.Fatal("Init accepted a sub-second match.retention")
 	}
 }
+
+// match.sweep_queues 的人数段与 Queue.LogicalKey 同一种写法：固定队列 "8"，弹性队列 "<MinSize>-<GroupSize>@<秒数>s"；
+// 解析后与代码里声明的弹性队列相等（同一个键），格式错误或违反弹性规则在 Init 拒绝。
+func TestSweepQueuesAcceptFlexibleQueues(t *testing.T) {
+	queues, err := parseSweepQueues([]string{"party:2-8@20s:eu", "party:3-4@0s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := domain.Queue{Mode: "party", GroupSize: 8, MinSize: 2, FillAfterSeconds: 20, Partition: "eu"}
+	if len(queues) != 2 || queues[0] != want || queues[0].Key() != want.Key() {
+		t.Fatalf("parsed %+v, want %+v first", queues, want)
+	}
+	if queues[1] != (domain.Queue{Mode: "party", GroupSize: 4, MinSize: 3}) {
+		t.Fatalf("parsed %+v", queues[1])
+	}
+	if got := want.LogicalKey() + ":" + want.Partition; got != "party:2-8@20s:eu" {
+		t.Fatalf("the sweep entry and the logical key disagree: %q", got)
+	}
+	for _, bad := range []string{
+		"party:2-8", "party:2-8@", "party:x-8@20s", "party:2-y@20s", "party:2-8@soon",
+		"party:8-8@20s", "party:1-8@20s", "party:2-8@1500ms", "party:2-8@-1s", "party:-8@20s",
+	} {
+		if _, err := parseSweepQueues([]string{bad}); err == nil {
+			t.Errorf("entry %q was accepted", bad)
+		}
+	}
+}

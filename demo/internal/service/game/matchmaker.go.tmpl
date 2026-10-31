@@ -137,7 +137,7 @@ func formMatches(ctx context.Context, matcher svcmatch.Matchmaker, queue svcmatc
 		return fmt.Errorf("candidates: %w", err)
 	}
 	candidates = ownedCandidates(owners, candidates)
-	for len(candidates) >= queue.GroupSize {
+	for len(candidates) >= queue.MinGroupSize() {
 		group, formed, err := grouping.Group(queue, candidates)
 		if err != nil {
 			return fmt.Errorf("grouping: %w", err)

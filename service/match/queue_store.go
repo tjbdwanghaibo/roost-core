@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"time"
 
 	businessclock "github.com/tjbdwanghaibo/roost-core/infra/base/clock"
@@ -173,7 +174,7 @@ func NewStore(state versionstore.Store[string, queueState], cfg Config) (Store, 
 		return nil, fmt.Errorf("match: retention must be at least 1s: resolution times use Unix seconds")
 	}
 	for _, queue := range cfg.SweepQueues {
-		if err := queue.Validate(); err != nil {
+		if err := validateQueueFor(queue, cfg.TicketTTL); err != nil {
 			return nil, fmt.Errorf("match: sweep queue %s: %w", queue.Key(), err)
 		}
 	}
@@ -198,7 +199,10 @@ func randomID() (string, error) {
 }
 
 func (s *queueStore) Enqueue(ctx context.Context, queue Queue, subject Subject, requestID string) (Ticket, error) {
-	if err := validateEnqueue(queue, subject); err != nil {
+	if err := validateQueueFor(queue, s.cfg.TicketTTL); err != nil {
+		return Ticket{}, err
+	}
+	if err := subject.Validate(); err != nil {
 		return Ticket{}, err
 	}
 	now := s.cfg.Now()
@@ -400,7 +404,7 @@ func (s *queueStore) Commit(ctx context.Context, queue Queue, ticketIDs []string
 	if err := queue.Validate(); err != nil {
 		return Match{}, err
 	}
-	seen, err := checkTicketSet(ticketIDs, queue.GroupSize)
+	seen, err := checkTicketSet(ticketIDs, queue)
 	if err != nil {
 		return Match{}, err
 	}
@@ -447,6 +451,7 @@ func (s *queueStore) Commit(ctx context.Context, queue Queue, ticketIDs []string
 		// replaces could not offer.
 		members := make([]Subject, 0, len(ticketIDs))
 		subjects := make(map[string]bool, len(ticketIDs))
+		oldest := int64(math.MaxInt64)
 		for _, id := range ticketIDs {
 			ticket, ok := current.Tickets[id]
 			if !ok {
@@ -467,6 +472,11 @@ func (s *queueStore) Commit(ctx context.Context, queue Queue, ticketIDs []string
 			}
 			subjects[ticket.Subject.Key()] = true
 			members = append(members, ticket.Subject.clone())
+			oldest = min(oldest, ticket.CreatedAtUnix)
+		}
+		if err := checkGroupReady(queue, len(ticketIDs), oldest, now); err != nil {
+			s.report.Refused("commit", "group_not_ready")
+			return current, false, err
 		}
 
 		match := Match{
@@ -677,10 +687,15 @@ func removeWaiting(state *queueState, ticketID string) {
 	}
 }
 
-// checkTicketSet 校验一次成局的票 ID 集合：张数等于 groupSize，没有空 ID 与重复 ID。返回 ID 集合供重放判定用。
-func checkTicketSet(ticketIDs []string, groupSize int) (map[string]bool, error) {
-	if len(ticketIDs) != groupSize {
-		return nil, fmt.Errorf("%w: %d tickets for a group of %d", ErrTicketInvalid, len(ticketIDs), groupSize)
+// checkTicketSet 校验一次成局的票 ID 集合：张数在 [queue.MinGroupSize(), queue.GroupSize] 内（固定人数队列即恰好
+// GroupSize 张），没有空 ID 与重复 ID。返回 ID 集合供重放判定用。不满员的局是否已等够，要读票的创建时间，
+// 在比较并设置里由 checkGroupReady 判定。
+func checkTicketSet(ticketIDs []string, queue Queue) (map[string]bool, error) {
+	if len(ticketIDs) < queue.MinGroupSize() || len(ticketIDs) > queue.GroupSize {
+		if queue.Flexible() {
+			return nil, fmt.Errorf("%w: %d tickets for a group of %d to %d", ErrTicketInvalid, len(ticketIDs), queue.MinSize, queue.GroupSize)
+		}
+		return nil, fmt.Errorf("%w: %d tickets for a group of %d", ErrTicketInvalid, len(ticketIDs), queue.GroupSize)
 	}
 	seen := make(map[string]bool, len(ticketIDs))
 	for _, id := range ticketIDs {
@@ -693,6 +708,31 @@ func checkTicketSet(ticketIDs []string, groupSize int) (map[string]bool, error) 
 		seen[id] = true
 	}
 	return seen, nil
+}
+
+// checkGroupReady 是 Commit / CommitAcross 对弹性人数规则的强制：n 张票、其中最早一张创建于 oldestCreatedUnix，
+// 按存储时钟 now 必须满足 queue.FormableSize(n, 等待) == n，否则报 ErrGroupNotReady。满员局（n == GroupSize）
+// 总是满足；n 已由 checkTicketSet 限在 [MinGroupSize, GroupSize]。它在比较并设置里、重放判定之后运行：
+// 已经成的局在时钟回拨后重放照样返回原局，拒绝不改任何状态。
+func checkGroupReady(queue Queue, n int, oldestCreatedUnix int64, now time.Time) error {
+	waited := waitedSeconds(oldestCreatedUnix, now.Unix())
+	if queue.FormableSize(n, waited) == n {
+		return nil
+	}
+	return fmt.Errorf("%w: %d of %d tickets, oldest waited %ds of %ds", ErrGroupNotReady, n, queue.GroupSize, waited, queue.FillAfterSeconds)
+}
+
+// validateQueueFor 是 Enqueue 与 sweep 队列配置的入口校验：Queue.Validate 之外，弹性队列的 FillAfterSeconds 必须短于
+// 票期限——票在 CreatedAt + TicketTTL 过期，等待阈值不短于它时不满员的局永远等不到，这种声明在入口拒绝而不是静默不开局。
+// 比较按“票期限向上取整到秒”做，不把秒数乘回 Duration，任意大的 FillAfterSeconds 也不会溢出。
+func validateQueueFor(queue Queue, ticketTTL time.Duration) error {
+	if err := queue.Validate(); err != nil {
+		return err
+	}
+	if ttlSeconds := int64((ticketTTL + time.Second - 1) / time.Second); queue.Flexible() && queue.FillAfterSeconds >= ttlSeconds {
+		return fmt.Errorf("%w: fill wait %ds is not shorter than the ticket ttl %v, so a short group could never form", ErrQueueInvalid, queue.FillAfterSeconds, ticketTTL)
+	}
+	return nil
 }
 
 // CommitAcross 见 Store.CommitAcross。
@@ -727,7 +767,7 @@ func (s *queueStore) CommitAcross(ctx context.Context, tickets TicketRefs) (Matc
 		}
 		partitionOf[i] = at
 	}
-	if _, err := checkTicketSet(ticketIDs, logical.GroupSize); err != nil {
+	if _, err := checkTicketSet(ticketIDs, logical); err != nil {
 		return Match{}, err
 	}
 	if len(partitions) == 1 {
@@ -801,6 +841,7 @@ func (s *queueStore) CommitAcross(ctx context.Context, tickets TicketRefs) (Matc
 		// 全部校验在任何修改之前；任何一张不通过，整次多键写不发生。
 		members := make([]Subject, 0, len(ticketIDs))
 		subjects := make(map[string]bool, len(ticketIDs))
+		oldest := int64(math.MaxInt64)
 		for i, id := range ticketIDs {
 			ticket, ok := ticketAt(i)
 			if !ok {
@@ -818,6 +859,11 @@ func (s *queueStore) CommitAcross(ctx context.Context, tickets TicketRefs) (Matc
 			}
 			subjects[ticket.Subject.Key()] = true
 			members = append(members, ticket.Subject.clone())
+			oldest = min(oldest, ticket.CreatedAtUnix)
+		}
+		if err := checkGroupReady(logical, len(ticketIDs), oldest, now); err != nil {
+			s.report.Refused("commit_across", "group_not_ready")
+			return states, false, err
 		}
 
 		match := Match{

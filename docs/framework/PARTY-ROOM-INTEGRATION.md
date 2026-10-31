@@ -14,7 +14,7 @@
 
 | 业务状态 | 拥有者 | 框架接法 | 业务边界 |
 | --- | --- | --- | --- |
-| 排队与成局 | `service/match` 的 Store | `Enqueue`（同一 requestID 重放返回同一张票、一人一张有效票）→ `Candidates` → `Grouping` → `Commit`（同一票集合并发提交只成一局） | 队列的 `GroupSize` 固定：4 人队列只出 4 人局；“2～8 人、等够 T 秒就开”这类弹性成局框架没有（第 8 节） |
+| 排队与成局 | `service/match` 的 Store | `Enqueue`（同一 requestID 重放返回同一张票、一人一张有效票）→ `Candidates` → `Grouping` → `Commit`（同一票集合并发提交只成一局）；本例是弹性人数队列 `Queue{GroupSize: 8, MinSize: 2, FillAfterSeconds: 20}`：凑满 8 人立即开，不满时最早一张票等满 20 秒（业务时钟）后 2～7 人也开，存储按同一规则拒绝过早的不满员局（`ErrGroupNotReady`） | 已开局房间的中途补位没有（第 8 节） |
 | 玩家在哪个房间 | `service/session` 的 Run | 每名成员一个 Run（`Enter`，请求 ID 必填且全局唯一）+ `Attach` 房间资源；重连用 `Current` 找回房间；`Finish` / `Leave` 触发业务 `Releaser` 归还座位 | 一名玩家同时只有一个有效 Run；Run 的期限按秒，`TTL` 要长于一局 |
 | 房间：名单、规则快照、阶段、房主、座位（分数、犯规、出局、连接代、最后一条输入回执、领奖 / 归还标记）、回合时刻、种子 | PartyRoom 实体 DAO 的 `State`（persist） | `roost add entity PartyRoom` + `add dao`；锁档 World，领奖时与 Player 同一事务 | 整段业务 JSON，严格解码；种子与星星出现时刻只在这里 |
 | 公开记分板 | PartyRoom DAO 的 `Board`（`nopersist,sync`） | 每次写 `State` 时由 `SaveRoom` 一起算出；业务 packer 只开放 `Board` 一个视图 | 不落库，冷加载后由下一拍重算 |
@@ -154,7 +154,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 | --- | --- | --- |
 | `RulesValidateAndRoomCode` | 9 座、1 座、星星时刻超出回合、期限短于常规回合、输家奖励高于胜者都被拒；房间码往返 | 规则只在开房时校验一次，按值冻结 |
 | `RulesVariableStepEquivalence` | 同一组输入按一步、100ms、50ms、不规则、7 秒步长推进到同一时刻，状态逐字节相同；第一次推进就越过硬期限时仍先结束第三回合判胜；平分进入加时直到期限按 timeout 结算，结算时刻是期限本身 | 心跳是可变步长（掉拍、卡顿后一拍算一次）；业务按事件时间顺序结算就与步长无关 |
-| `MatchmakingOpensOneRoomPerMatch` | 同一请求重放不重复排队、第二张有效票被拒；四人成局、同一票集合并发两次 Commit 是同一局；同一 Match 并发开房三次是同一房间；换名单 / 换 Match 被拒且房间不变；每人一个 Run、重放 Enter 同一个 Run、第二个 Run 被拒；`Current` 带回房间 | service/match 与 service/session 的正式领域语义（内存存储）；开房 handler 以房间里记下的 Match 识别重放 |
+| `MatchmakingOpensOneRoomPerMatch` | 同一请求重放不重复排队、第二张有效票被拒；2～8 人弹性队列里四人等待不满 20 秒时策略不出组、提交报 `ErrGroupNotReady`，业务时间推进 20 秒后四人成局、同一票集合并发两次 Commit 是同一局；同一 Match 并发开房三次是同一房间；换名单 / 换 Match 被拒且房间不变；每人一个 Run、重放 Enter 同一个 Run、第二个 Run 被拒；`Current` 带回房间 | service/match 与 service/session 的正式领域语义（内存存储）；开房 handler 以房间里记下的 Match 识别重放 |
 | `CodeRoomFullAndLateJoinRejected` | 房主开房间码房间，7 人加入到 8 人满，第 9 人被拒且状态不变；重复加入无变化；开局后加入被拒 | 被拒的命令回滚：State、Board、心跳与期限都不变 |
 | `HostLeaveTransfersHost` | lobby 里房主离开，房主转给下一个座位、座位让出；非房主开局被拒；局内房主离开同样转移，座位记为离开 | 房主是业务事实，存在房间状态里 |
 | `HeartbeatDrivesRoundsAndGroupSync` | 没有输入时，心跳按业务时间放出星星、结束回合；每次 Flush 后四个客户端（正式 `frame.Receiver` 解码）与服务端 Board 逐字节相同，客户端文档里只有 `board`；业务时钟一次跳过两回合，一拍结算，结算后心跳与期限都停 | 心跳回调在实体锁与事务内；Board 的变化经 Nest 提交门进入下一次 Flush；Group 让全体成员订阅同一视图 |
@@ -215,7 +215,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 | 房间跨机接管 / HA | 房间是普通本地实体，属于开房的进程；进程崩溃后只能由同一份 WAL / Mongo 冷加载恢复（第 13 节），没有自动迁到别的机器继续跑。Player 静态绑定 sid、不做动态迁移（[guide/09 §4](guide/09-services.md#4-关键业务边界)） | 短局可接受“崩溃 → 冷加载 → 硬期限结算”；需要跨机接管要另做 Remote 托管或宿主交接（MOBA 的宿主交接是写法参考） |
 | 房间内同步的生成器 / 装配 | `policy.Group` 只有包内测试与本夹具在用，生成器与 `wiring` 没有房间同步的入口；`access.player.self_sync` 打开后 Nest 只接受一个 `EntitySync` 观察者（`NestOptionWithEntitySync`），`EntitySyncSetup.Attach` 已被 `wiring/selfsync` 占用 | 本例自建 Manager；与 self_sync 同时用时怎样把 Group 挂到同一个 Manager 尚未确认（[KNOWN-LIMITS 游戏接入验收](../maintenance/KNOWN-LIMITS.md#游戏接入验收)） |
 | 跨服务广播的可靠送达 | SyncBus 定位为可丢广播：普通 NATS 至多一次，JetStream 有限重投（[guide/04 §5](guide/04-sync.md#syncbus-的定位与丢失兜底)） | 房间内同步不走 SyncBus；跨服务的房间事件（大厅列表、好友在玩）要业务对账 |
-| 弹性人数成局 | 匹配队列的 `GroupSize` 固定，同一队列只出固定人数的局；没有“够 M 人等 T 秒就开”“中途补位”的 Grouping（`service/match/grouping.go`） | 按人数开多个队列，或自己实现 `Grouping` |
+| 已开局房间的中途补位 | 弹性人数成局**已提供**（`Queue.MinSize` / `FillAfterSeconds`，“够 M 人、最早一张票等满 T 就开”，[guide/09 §4](guide/09-services.md#4-关键业务边界)）；已开局房间声明空位、后来的票优先补进去的补位没有（方案与待选项见 [FEATURE-2026-10-31 第 3 节](../maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)） | 房间宿主把空座当成一张“房间票”排进单独的补位队列，匹配器取一张房间票 + 若干玩家票弹性成局，进房 handler 拒绝超员（方案 B）；或等框架补位 |
 | 房间码、大厅列表 | 没有房间码服务与房间列表 | directory 做短码；大厅列表自己维护（可丢、可重建） |
 | 掉线托管、AI 补位、观战 | 没有 | 业务规则；观战者可以只加入 Group 的成员、不占座位 |
 
@@ -272,4 +272,4 @@ ROOST_PARTY_ROOM_REAL=1 bash scripts/test-party-room-generated.sh
 
 派对玩法、计分、房间码与大厅缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢输入、重复发奖、记分板泄露 State 字段、回滚后仍推出去、心跳或定时器在结算后残留、生成物编译失败，则应在公共实现中修复。本夹具在当前 main 上没有触发框架或生成器缺陷；第 8 节的“房间同步没有生成器入口、与 self_sync 共用 Manager 尚未确认”是能力缺口，登记在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收)。100ms 档位与 30 秒期限是样例，不构成延迟或吞吐承诺。
 
-尚未实施或验收：正式客户端与公网鉴权、接入层到 `Connect` 的票号签发、房间码短码服务、大厅列表、弹性人数成局与中途补位、掉线托管与 AI 补位、观战、跨 sid 发奖、房间跨机接管、房间数量与推送带宽的容量（均不因此算框架缺陷）。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要。
+尚未实施或验收：正式客户端与公网鉴权、接入层到 `Connect` 的票号签发、房间码短码服务、大厅列表、中途补位、掉线托管与 AI 补位、观战、跨 sid 发奖、房间跨机接管、房间数量与推送带宽的容量（均不因此算框架缺陷）。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要。

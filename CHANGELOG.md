@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **匹配：弹性人数成局**（派对房间纵切发现的缺口，维护者 2026-10-31“继续框架改进”）。`service/match` 的 `Queue` 新增 `MinSize` 与 `FillAfterSeconds`：`MinSize` 为 0 是固定人数队列（行为、键名、线格式与存储格式字节都不变）；非 0 时（`2 ≤ MinSize < GroupSize`，`GroupSize` 即上限）凑满 `GroupSize` 立即成局，凑不满时组里最早一张票按业务时钟等满 `FillAfterSeconds`（整秒，0 表示够 `MinSize` 就开）后 `MinSize..GroupSize-1` 人也可以成局。规则只在 `Queue.FormableSize` 实现一次：`FirstComeGrouping`（新增可选 `NowUnix`，弹性队列必须给）与 `ScoreWindowGrouping` 用它决定取几张，`Commit` / `CommitAcross` 在同一次比较并设置里按存储时钟校验，过早的不满员局报新错误码 `ErrGroupNotReady`（550110）且状态不变；重放判定在它之前（时钟回拨后重放仍返回原局），时钟回拨时等待按 0 计。同一票集合并发只成一局、同 requestID 幂等、分区容量建议不变。`MinSize` / `FillAfterSeconds` 是队列身份（进 `Queue.Key()`，逻辑队列人数段写 `2-8@20s`），`match.sweep_queues` 条目同一种写法（`party:2-8@20s:eu`）；`FillAfterSeconds` 不短于 `match.ticket_ttl` 时 Enqueue 与启动拒绝。新增 `Queue.Flexible` / `MinGroupSize` / `FormableSize`；game-demo 模板的匹配循环预判改用 `queue.MinGroupSize()`（固定队列行为不变）。弹性字段只有新版本服务端认识（旧服务端忽略它们、按固定队列处理），**先升级匹配服务再用弹性队列**。先红后绿：修前 `TestFlexibleQueueFormsASmallGroupOnlyAfterTheFillWait` 等 7 条红（如 `a two-player group 29s after the oldest ticket = match: ticket is invalid: 2 tickets for a group of 4, want ErrGroupNotReady`）；真实 Redis（私有实例）上 `TestMatchFlexibleGroupingOnRedis` 通过，把存储里的等待检查改成恒真时它与内存用例一起变红。派对房间夹具改用 2～8 人、20 秒开局的弹性队列，`scripts/test-party-room-generated.sh` 12 条场景通过。已开局房间的中途补位（backfill）未实施，方案 A / B 待维护者选择。[guide/09 §4](docs/framework/guide/09-services.md#4-关键业务边界) · [方案](docs/maintenance/FEATURE-2026-10-31-match-flexible-grouping.md) · [PARTY §8](docs/framework/PARTY-ROOM-INTEGRATION.md#8-框架没有什么)
+
 ## [v1.33.2] - 2026-10-31
 
 ### 新增

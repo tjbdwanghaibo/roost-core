@@ -20,6 +20,8 @@ type Store interface {
 	// a live ticket (ErrAlreadyQueued), and is idempotent per requestID: a
 	// repeat returns the existing ticket rather than queueing twice.
 	//
+	// 弹性人数队列的 FillAfterSeconds 不短于 Config.TicketTTL 时以 ErrQueueInvalid 拒绝（不满员的局永远等不到）。
+	//
 	// 请求记录与它的票同寿：票结束满 Config.Retention 被移除后，同一 requestID 的重试是一次新的排队。
 	Enqueue(ctx context.Context, queue Queue, subject Subject, requestID string) (Ticket, error)
 
@@ -37,6 +39,9 @@ type Store interface {
 	Candidates(ctx context.Context, queue Queue, limit int) ([]Ticket, error)
 
 	// Commit 原子地把票集合变成一场比赛：检查与写入是同一次比较并设置，失败不留副作用。
+	// 票数：固定人数队列恰好 GroupSize 张；弹性人数队列（Queue.MinSize 非 0）MinSize..GroupSize 张，不满 GroupSize 时
+	// 按存储时钟（Config.Now）要求组里最早一张票已等满 Queue.FillAfterSeconds，否则报 ErrGroupNotReady、状态不变
+	// （规则即 Queue.FormableSize；重放判定在它之前，所以已成的局在时钟回拨后重放仍返回原局）。
 	// 票集合就是提交身份：完整的同一票集合已匹配到同一局时幂等返回原 Match（票序可不同），
 	// 不创建第二局；与已匹配票只部分重叠，或含已取消 / 过期 / 不存在的票时拒绝（ErrConflict /
 	// ErrTicketMissing）。并发调用可以都成功回复，但只指向同一场比赛，不能按成功回复次数计开局数。
@@ -49,8 +54,8 @@ type Store interface {
 	// TestConcurrentCommitsProduceExactlyOneMatch、TestFailedCommitLeavesTheQueueUntouched。
 	Commit(ctx context.Context, queue Queue, ticketIDs []string) (Match, error)
 
-	// CommitAcross 是跨分区的 Commit：tickets 来自同一逻辑队列（Mode + GroupSize 相同、只差 Partition）的
-	// 若干分区，张数等于 GroupSize。它在一次多键比较并设置里读全部涉及的分区，校验每张票仍在自己的分区里等待、
+	// CommitAcross 是跨分区的 Commit：tickets 来自同一逻辑队列（Mode、GroupSize 与弹性规则相同、只差 Partition）的
+	// 若干分区，张数与 Commit 相同（固定队列等于 GroupSize；弹性队列 MinSize..GroupSize，不满员时按组里最早一张票的等待判定）。它在一次多键比较并设置里读全部涉及的分区，校验每张票仍在自己的分区里等待、
 	// 主体不重复，然后在每个涉及的分区写入同一场比赛、把票标为已匹配——要么所有分区同时生效，要么一个分区也
 	// 不改（某张票已被取消 / 过期 / 被别的 Commit 拿走时报 ErrConflict 或 ErrTicketMissing）。
 	//
@@ -80,13 +85,6 @@ type Store interface {
 
 	// QueueLength reports how many waiting tickets a queue holds.
 	QueueLength(ctx context.Context, queue Queue) (int, error)
-}
-
-func validateEnqueue(queue Queue, subject Subject) error {
-	if err := queue.Validate(); err != nil {
-		return err
-	}
-	return subject.Validate()
 }
 
 func validateOwnership(ticket Ticket, subject Subject) error {

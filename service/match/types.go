@@ -45,6 +45,7 @@ package match
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,6 +74,8 @@ const (
 	// all until one was added, so no client can have matched on it. Contrast
 	// global's 570111, which WAS observable and is therefore left vacant.
 	CodeRequestInvalid int32 = 550109
+	// CodeGroupNotReady：弹性人数队列的不满员局提交得太早（ErrGroupNotReady）。
+	CodeGroupNotReady int32 = 550110
 )
 
 var (
@@ -97,6 +100,9 @@ var (
 	// answering with a code that means something else would mislead a client
 	// that switches on it.
 	ErrRequestInvalid = errcode.Define(CodeRequestInvalid, "match: request is invalid", "")
+	// ErrGroupNotReady 报告弹性人数队列的一组票不满 GroupSize，而组里最早的票还没等满 Queue.FillAfterSeconds
+	// （按存储的业务时钟）。状态不变；匹配器下一轮再试即可。
+	ErrGroupNotReady = errcode.Define(CodeGroupNotReady, "match: group is below the queue's full size and has not waited long enough", "")
 )
 
 // Limits bound what a queue may hold. Every one of these is a bound the
@@ -166,9 +172,19 @@ func (s Subject) Key() string { return fmt.Sprintf("%s:%d", s.Kind, s.ID) }
 type Queue struct {
 	// Mode is the gameplay mode, opaque here.
 	Mode string `json:"mode"`
-	// GroupSize is how many subjects a match holds. A queue is defined by it:
-	// a 2-player and a 5-player pool of the same mode are different queues.
+	// GroupSize 是一局人数的上限（即 MaxSize）：固定人数队列（MinSize 为 0）每局正好这么多人，弹性人数队列
+	// 凑满它就立即成局。A queue is defined by it: a 2-player and a 5-player pool of
+	// the same mode are different queues.
 	GroupSize int `json:"group_size"`
+	// MinSize 非 0 时这是弹性人数队列（2 ≤ MinSize < GroupSize）：凑不满 GroupSize 时，一组里最早的票等满
+	// FillAfterSeconds 后，MinSize..GroupSize-1 人也可以成局。0 是固定人数队列，行为、键名与线格式都与没有这个字段时相同。
+	// 规则只有一处实现（FormableSize），Grouping 用它决定取几张，Commit / CommitAcross 用它校验。
+	MinSize int `json:"min_size,omitempty"`
+	// FillAfterSeconds 是弹性队列开不满员局之前，组里最早一张票至少要等待的秒数（按业务时钟、Unix 秒计，与票期限
+	// 同一精度）；0 表示够 MinSize 就可以开。不能为负，固定人数队列必须为 0（一个队列只有一种写法），并且要短于
+	// 存储的票期限（Config.TicketTTL，否则小局永远等不到，Enqueue 拒绝）。单位写在名字里、是整数秒：Queue 走总线，
+	// time.Duration 在线上是纳秒整数，非 Go 调用方写不出、抓包读不懂（servicerpc 生成器拒绝它）。
+	FillAfterSeconds int64 `json:"fill_after_seconds,omitempty"`
 	// Partition scopes a queue, e.g. a region, a rank band or a server group.
 	// It is part of the routing and storage key, so operations on one queue
 	// land on one instance and one stored value — the part the implementation
@@ -176,8 +192,8 @@ type Queue struct {
 	//
 	// 分区是大队列的推荐拆法：一个队列的全部状态是一个整体读写的值，按段位档 / 地区 / sid 组拆成多个分区后，
 	// 每个分区各自一个键，Enqueue / Cancel / Commit / Sweep 只读写自己的分区。Commit 只从一个分区取票；
-	// 需要“放宽匹配”、一局票来自同一逻辑队列（Mode + GroupSize 相同）的几个分区时用 Store.CommitAcross，
-	// 它原子地改这几个分区。不同 Mode / GroupSize 的票永不进同一局。
+	// 需要“放宽匹配”、一局票来自同一逻辑队列（Mode、GroupSize 与弹性规则相同）的几个分区时用 Store.CommitAcross，
+	// 它原子地改这几个分区。不同 Mode / GroupSize / 弹性规则的票永不进同一局。
 	Partition string `json:"partition"`
 }
 
@@ -191,17 +207,69 @@ func (q Queue) Validate() error {
 	if q.GroupSize > MaxGroupSize {
 		return fmt.Errorf("%w: group size %d exceeds %d", ErrQueueInvalid, q.GroupSize, MaxGroupSize)
 	}
+	if q.MinSize == 0 {
+		if q.FillAfterSeconds != 0 {
+			return fmt.Errorf("%w: fill wait %ds is set on a fixed-size queue (min size 0)", ErrQueueInvalid, q.FillAfterSeconds)
+		}
+		return nil
+	}
+	if q.MinSize < 2 || q.MinSize >= q.GroupSize {
+		return fmt.Errorf("%w: min size must be in [2, %d) for a group of at most %d, got %d", ErrQueueInvalid, q.GroupSize, q.GroupSize, q.MinSize)
+	}
+	if q.FillAfterSeconds < 0 {
+		return fmt.Errorf("%w: fill wait must not be negative, got %ds", ErrQueueInvalid, q.FillAfterSeconds)
+	}
 	return nil
 }
 
-// Key renders the queue identity: "{<Mode>:<GroupSize>}:<Partition>". It is
+// Flexible 报告这是不是弹性人数队列（MinSize 非 0）。
+func (q Queue) Flexible() bool { return q.MinSize != 0 }
+
+// MinGroupSize 是一局人数的下限：弹性队列是 MinSize，固定队列是 GroupSize。匹配器“候选够不够组一局”的预判用它。
+func (q Queue) MinGroupSize() int {
+	if q.Flexible() {
+		return q.MinSize
+	}
+	return q.GroupSize
+}
+
+// FormableSize 是成局规则的唯一实现：有 available 张可用票、其中最早一张已等待 waitedSeconds 秒（业务时钟）时，这一局取几张；
+// 0 表示还不能成局。
+//
+//   - available ≥ GroupSize：取 GroupSize，立即成满员局（固定与弹性队列相同）；
+//   - 弹性队列、MinSize ≤ available < GroupSize、waitedSeconds ≥ FillAfterSeconds：取全部 available；
+//   - 其余：0。
+//
+// Grouping 用它决定取几张；Commit / CommitAcross 对 n 张票的集合要求 FormableSize(n, 集合里最早一张的等待) == n，
+// 所以策略与存储不会各说各的。等待由 waitedSeconds 算出，时钟回拨（现在早于创建）按 0 计。
+func (q Queue) FormableSize(available int, waitedSeconds int64) int {
+	if available >= q.GroupSize {
+		return q.GroupSize
+	}
+	if !q.Flexible() || available < q.MinSize || waitedSeconds < q.FillAfterSeconds {
+		return 0
+	}
+	return available
+}
+
+// waitedSeconds 是从 createdAtUnix 到 nowUnix 等待的秒数；时钟回拨（now 早于创建）按 0 计，
+// 回拨不会让任何人“等得更久”。
+func waitedSeconds(createdAtUnix, nowUnix int64) int64 {
+	if nowUnix <= createdAtUnix {
+		return 0
+	}
+	return nowUnix - createdAtUnix
+}
+
+// Key renders the queue identity: "{<LogicalKey>}:<Partition>", i.e.
+// "{<Mode>:<GroupSize>}:<Partition>" for a fixed-size queue. It is
 // the queue's storage key (the Redis store prefixes it with "<prefix>:queue:")
 // and also the affinity key: passing it to servicerpc.WithAffinityKey routes
 // every operation on one queue to one instance, so the compare-and-set below
 // contends with itself rather than with a different replica reading the same
 // head.
 //
-// 花括号里是 LogicalKey（Mode + GroupSize，不含 Partition），它是 Redis Cluster 的 hash tag：同一个逻辑队列的
+// 花括号里是 LogicalKey（Mode + 人数段，不含 Partition），它是 Redis Cluster 的 hash tag：同一个逻辑队列的
 // 所有分区落在同一个 slot，跨分区成局（Store.CommitAcross）才能用一个多键脚本原子地改几个分区的状态；
 // 不同逻辑队列仍分散到不同 slot。单分区的 Enqueue / Cancel / Commit / Sweep 仍只碰自己这一个键。
 // 键名加 hash tag 是维护者 2026-10-19 批准的改动，旧键不迁移（尚未上线，CHANGELOG 写明）。
@@ -218,15 +286,27 @@ func (q Queue) Key() string {
 	return "{" + q.LogicalKey() + "}:" + escapeKeyField(q.Partition)
 }
 
-// LogicalKey 是逻辑队列的身份 "<Mode>:<GroupSize>"：同一个 Mode 与 GroupSize、只差 Partition 的队列属于同一个
+// LogicalKey 是逻辑队列的身份 "<Mode>:<人数段>"：Mode、GroupSize 与弹性规则相同、只差 Partition 的队列属于同一个
 // 逻辑队列。它是 Key 的 hash tag，也是跨分区成局（CommitAcross）的路由键。
+//
+// 人数段：固定人数队列是 "<GroupSize>"（与没有弹性规则时的键相同）；弹性队列是 "<MinSize>-<GroupSize>@<FillAfterSeconds>s"，
+// 例如 "party:2-8@20s"。match.sweep_queues 条目用同一种写法。Mode 已转义、不含 ':'，两种人数段的形状不同，渲染仍是单射。
 func (q Queue) LogicalKey() string {
-	return fmt.Sprintf("%s:%d", escapeKeyField(q.Mode), q.GroupSize)
+	return escapeKeyField(q.Mode) + ":" + q.sizeSpec()
 }
 
-// SameLogicalQueue 报告两个队列是否同属一个逻辑队列（Mode 与 GroupSize 相同，Partition 可以不同）。
+// sizeSpec 渲染人数段，见 LogicalKey。
+func (q Queue) sizeSpec() string {
+	if !q.Flexible() {
+		return strconv.Itoa(q.GroupSize)
+	}
+	return fmt.Sprintf("%d-%d@%ds", q.MinSize, q.GroupSize, q.FillAfterSeconds)
+}
+
+// SameLogicalQueue 报告两个队列是否同属一个逻辑队列（Mode、GroupSize、MinSize、FillAfterSeconds 相同，Partition 可以不同）。
 func (q Queue) SameLogicalQueue(other Queue) bool {
-	return q.Mode == other.Mode && q.GroupSize == other.GroupSize
+	q.Partition, other.Partition = "", ""
+	return q == other
 }
 
 // escapeKeyField makes a free-form field safe to join with ':' and to sit

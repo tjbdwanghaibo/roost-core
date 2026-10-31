@@ -385,8 +385,9 @@ func (f *partyFixture) refuse(t *testing.T, room int64, target error, call func(
 
 func (f *partyFixture) setNow(ms int64) { f.now.Store(ms) }
 
-// 1. 匹配：service/match 排队成局（同一请求重放不重复排队、同一票集合并发 Commit 只成一局），成局开房幂等，
-// 同一房间 ID 换名单拒绝；service/session 给每名成员一个 run 并挂上房间，重连靠它找回房间。
+// 1. 匹配：service/match 的弹性人数队列（2～8 人，最早一张票等满 20 秒开不满员局）排队成局——同一请求重放不重复排队；
+// 四人时策略不出组、提交被 ErrGroupNotReady 拒绝，业务时间推进 20 秒后四人成局；同一票集合并发 Commit 只成一局。
+// 成局开房幂等，同一房间 ID 换名单拒绝；service/session 给每名成员一个 run 并挂上房间，重连靠它找回房间。
 func TestPartyGameMatchmakingOpensOneRoomPerMatch(t *testing.T) {
 	f := newPartyFixture(t)
 	ctx := f.ctx
@@ -394,7 +395,8 @@ func TestPartyGameMatchmakingOpensOneRoomPerMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	queue := svcmatch.Queue{Mode: "party-stargrab", GroupSize: 4, Partition: "local"}
+	queue := svcmatch.Queue{Mode: "party-stargrab", GroupSize: party.MaxSeats, MinSize: party.MinSeats, FillAfterSeconds: 20, Partition: "local"}
+	grouping := svcmatch.FirstComeGrouping{NowUnix: func() int64 { return clock.Now().Unix() }}
 	subject := func(seat int) svcmatch.Subject { return svcmatch.Subject{Kind: "player", ID: f.ids[seat]} }
 	first, err := store.Enqueue(ctx, queue, subject(0), "join-0")
 	if err != nil {
@@ -415,9 +417,17 @@ func TestPartyGameMatchmakingOpensOneRoomPerMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	group, formed, err := (svcmatch.FirstComeGrouping{}).Group(queue, candidates)
+	if _, formed, err := grouping.Group(queue, candidates); err != nil || formed {
+		t.Fatal("four of eight formed a match before the fill wait", formed, err)
+	}
+	early := []string{candidates[0].ID, candidates[1].ID, candidates[2].ID, candidates[3].ID}
+	if _, err := store.Commit(ctx, queue, early); !errors.Is(err, svcmatch.ErrGroupNotReady) {
+		t.Fatalf("short group before the fill wait: %v", err)
+	}
+	f.setNow(partyNow + 20_000)
+	group, formed, err := grouping.Group(queue, candidates)
 	if err != nil || !formed || len(group) != 4 {
-		t.Fatal("four players did not form a match", err)
+		t.Fatal("four players did not form a match after the fill wait", err)
 	}
 	tickets := []string{group[0].ID, group[1].ID, group[2].ID, group[3].ID}
 	matches := make([]svcmatch.Match, 2)

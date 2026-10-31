@@ -603,6 +603,104 @@ func TestMatchCommitAcrossPartitionsOnRedis(t *testing.T) {
 	}
 }
 
+// 弹性人数成局在真实 Redis 上的语义与内存存储相同（规则在 versionstore 比较并设置的 mutate 里，两种存储跑同一段代码）：
+// 未等满 FillAfterSeconds 的不满员局被拒、键的字节不变；等满后大小不同、两两重叠的票集合并发提交只成一局，其余 ErrConflict；
+// 同一票集合重放返回原局；跨分区的不满员局同样按最早一张票判定。
+func TestMatchFlexibleGroupingOnRedis(t *testing.T) {
+	redisClient := client(t)
+	keyPrefix := prefix(t, "match")
+	var mu sync.Mutex
+	now := time.Unix(1_700_000_000, 0)
+	clockNow := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); defer mu.Unlock(); now = now.Add(d) }
+	store, err := match.NewRedisStore(redisClient, keyPrefix, match.Config{Now: clockNow, TicketTTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	queue := match.Queue{Mode: "party", GroupSize: 4, MinSize: 2, FillAfterSeconds: 30, Partition: "eu"}
+	tickets := make([]match.Ticket, 3)
+	for i := range tickets {
+		if tickets[i], err = store.Enqueue(ctx, queue, match.Subject{Kind: "player", ID: int64(i + 1)}, fmt.Sprintf("r%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := func(indexes ...int) []string {
+		out := make([]string, len(indexes))
+		for i, index := range indexes {
+			out[i] = tickets[index].ID
+		}
+		return out
+	}
+
+	advance(29 * time.Second)
+	before, err := redisClient.Get(ctx, match.RedisKey(keyPrefix, queue))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Commit(ctx, queue, ids(0, 1)); !errors.Is(err, match.ErrGroupNotReady) {
+		t.Fatalf("a small group 29s after the oldest ticket on Redis = %v, want ErrGroupNotReady", err)
+	}
+	if after, _ := redisClient.Get(ctx, match.RedisKey(keyPrefix, queue)); string(after) != string(before) {
+		t.Fatal("a refused small group changed the queue key on Redis")
+	}
+
+	advance(time.Second)
+	sets := [][]string{ids(0, 1), ids(1, 2), ids(2, 0), ids(0, 1, 2), ids(2, 1, 0)}
+	var wg sync.WaitGroup
+	var resultMu sync.Mutex
+	formed := map[string]match.Match{}
+	for round := 0; round < 3; round++ {
+		for _, set := range sets {
+			wg.Add(1)
+			go func(set []string) {
+				defer wg.Done()
+				m, err := store.Commit(ctx, queue, set)
+				resultMu.Lock()
+				defer resultMu.Unlock()
+				switch {
+				case err == nil:
+					formed[m.ID] = m
+				case errors.Is(err, match.ErrConflict):
+				default:
+					t.Errorf("concurrent flexible commit on Redis: %v", err)
+				}
+			}(set)
+		}
+	}
+	wg.Wait()
+	if len(formed) != 1 {
+		t.Fatalf("%d distinct matches from overlapping sets on Redis, want exactly 1", len(formed))
+	}
+	var only match.Match
+	for _, m := range formed {
+		only = m
+	}
+	replay, err := store.Commit(ctx, queue, only.TicketIDs)
+	if err != nil || replay.ID != only.ID {
+		t.Fatalf("replaying the winning set on Redis = (%s, %v), want %s", replay.ID, err, only.ID)
+	}
+
+	east, west := queue, queue
+	east.Partition, west.Partition = "east", "west"
+	a, err := store.Enqueue(ctx, east, match.Subject{Kind: "player", ID: 11}, "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := store.Enqueue(ctx, west, match.Subject{Kind: "player", ID: 12}, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := match.TicketRefs{{Queue: east, TicketID: a.ID}, {Queue: west, TicketID: b.ID}}
+	if _, err := store.CommitAcross(ctx, refs); !errors.Is(err, match.ErrGroupNotReady) {
+		t.Fatalf("a small cross-partition group before the fill wait on Redis = %v, want ErrGroupNotReady", err)
+	}
+	advance(30 * time.Second)
+	if across, err := store.CommitAcross(ctx, refs); err != nil || len(across.Members) != 2 {
+		t.Fatalf("a small cross-partition group after the fill wait on Redis = (%+v, %v)", across, err)
+	}
+}
+
 // --- rank ---
 
 func TestRankRunsOnRedis(t *testing.T) {

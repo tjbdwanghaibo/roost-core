@@ -34,22 +34,25 @@ type Mod struct {
 	store     domain.Store
 }
 
-// parseSweepQueues reads `match.sweep_queues`, a list of "mode:group_size" or
-// "mode:group_size:partition" entries. Each is validated the way a queue is
+// parseSweepQueues reads `match.sweep_queues`, a list of "mode:size" or
+// "mode:size:partition" entries. Each is validated the way a queue is
 // validated everywhere else, so a typo stops the process at Init instead of
 // being swept as a queue that does not exist.
+//
+// size 与 Queue.LogicalKey 的人数段同一种写法：固定人数队列写 GroupSize（"ranked:2:eu"）；弹性人数队列写
+// "<MinSize>-<GroupSize>@<等待>"（"party:2-8@20s:eu"，等待是整秒的 Go 时长写法），所以条目可以照 Redis 键的 hash tag 抄。
+// FillAfterSeconds 不短于 match.ticket_ttl 的弹性队列由 Provide 里的 NewStore 拒绝。
 func parseSweepQueues(entries []string) ([]domain.Queue, error) {
 	queues := make([]domain.Queue, 0, len(entries))
 	for _, entry := range entries {
 		parts := strings.Split(strings.TrimSpace(entry), ":")
 		if len(parts) < 2 || len(parts) > 3 {
-			return nil, fmt.Errorf("match mod: match.sweep_queues entry %q must be mode:group_size[:partition]", entry)
+			return nil, fmt.Errorf("match mod: match.sweep_queues entry %q must be mode:size[:partition]", entry)
 		}
-		size, err := strconv.Atoi(parts[1])
-		if err != nil {
-			return nil, fmt.Errorf("match mod: match.sweep_queues entry %q has a non-numeric group size", entry)
+		queue := domain.Queue{Mode: parts[0]}
+		if err := parseQueueSize(parts[1], &queue); err != nil {
+			return nil, fmt.Errorf("match mod: match.sweep_queues entry %q: %w", entry, err)
 		}
-		queue := domain.Queue{Mode: parts[0], GroupSize: size}
 		if len(parts) == 3 {
 			queue.Partition = parts[2]
 		}
@@ -59,6 +62,35 @@ func parseSweepQueues(entries []string) ([]domain.Queue, error) {
 		queues = append(queues, queue)
 	}
 	return queues, nil
+}
+
+// parseQueueSize 解析人数段："8" 是固定人数队列；"2-8@20s" 是 MinSize 2、GroupSize 8、FillAfterSeconds 20 的弹性队列。
+// 等待必须是整秒（Queue 按秒记）；取值范围（MinSize、非负）由随后的 Queue.Validate 判定，这里只管形状。
+func parseQueueSize(spec string, queue *domain.Queue) error {
+	sizes, wait, flexible := strings.Cut(spec, "@")
+	if !flexible {
+		size, err := strconv.Atoi(spec)
+		if err != nil {
+			return fmt.Errorf("size %q is neither a group size nor min-max@wait", spec)
+		}
+		queue.GroupSize = size
+		return nil
+	}
+	low, high, ranged := strings.Cut(sizes, "-")
+	minSize, minErr := strconv.Atoi(low)
+	maxSize, maxErr := strconv.Atoi(high)
+	if !ranged || minErr != nil || maxErr != nil {
+		return fmt.Errorf("flexible size %q must be min-max@wait, e.g. 2-8@20s", spec)
+	}
+	fillAfter, err := time.ParseDuration(wait)
+	if err != nil {
+		return fmt.Errorf("flexible size %q has an unreadable wait: %w", spec, err)
+	}
+	if fillAfter%time.Second != 0 {
+		return fmt.Errorf("flexible size %q: the wait must be a whole number of seconds", spec)
+	}
+	queue.MinSize, queue.GroupSize, queue.FillAfterSeconds = minSize, maxSize, int64(fillAfter/time.Second)
+	return nil
 }
 
 // NewMod returns a match Mod. Matchmaking policy is not a parameter: drive
@@ -82,7 +114,7 @@ type config struct {
 		KeyPrefix   string        `config:"key_prefix" required:"true" example:"roost:{project}:match" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
 		TicketTTL   time.Duration `config:"ticket_ttl" default:"5m" min:"1s" example:"60s"`
 		Retention   time.Duration `config:"retention" default:"10m" min:"1s" example:"10m" help:"已结束的票、比赛与排队请求记录的保留期；超期后读到不存在，同一票集合的 Commit 重放报 ErrTicketMissing"`
-		SweepQueues []string      `config:"sweep_queues" example:"[]"`
+		SweepQueues []string      `config:"sweep_queues" example:"[]" help:"本进程后台过期扫描的队列，每条 mode:size[:partition]；size 是固定人数（ranked:2:eu）或弹性人数 min-max@wait（party:2-8@20s:eu），写法同 Queue.LogicalKey"`
 	} `config:"match"`
 }
 

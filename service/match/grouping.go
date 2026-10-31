@@ -12,9 +12,13 @@ import (
 // commits the tickets it is given — so a policy lives where it can be retried,
 // observed and cancelled outside the storage CAS.
 type Grouping interface {
-	// Group selects exactly queue.GroupSize tickets from candidates, or
-	// reports that no group can be formed yet. candidates are waiting,
-	// unexpired tickets in queue order, oldest first.
+	// Group selects a group from candidates, or reports that no group can be
+	// formed yet. candidates are waiting, unexpired tickets in queue order,
+	// oldest first.
+	//
+	// 组的张数由 queue.FormableSize 决定：固定人数队列恰好 GroupSize 张；弹性人数队列凑得满就取 GroupSize 张，
+	// 凑不满时只在最早一张候选票等满 FillAfterSeconds 后取 MinSize..GroupSize-1 张。Commit 按同一条规则校验，
+	// 策略自己另算一套张数的组会被存储拒绝（ErrTicketInvalid / ErrGroupNotReady）。
 	//
 	// It must not return a ticket that is not in candidates, and must not
 	// return the same ticket twice; the store validates both, but a policy
@@ -25,16 +29,37 @@ type Grouping interface {
 // FirstComeGrouping takes the oldest candidates. It is the default because it
 // is the only policy that needs no game knowledge, and because a queue that
 // matches strictly in arrival order has a bounded worst-case wait.
-type FirstComeGrouping struct{}
+//
+// 弹性人数队列上它取最早的 queue.FormableSize 张：凑得满取 GroupSize 张，凑不满时最早一张等满 FillAfterSeconds 后取全部候选。
+type FirstComeGrouping struct {
+	// NowUnix 是票所用时钟（存储的 Config.Now，match Mod 注入业务时钟）的当前 Unix 秒。弹性人数队列必须给：
+	// 不满员的局要看最早一张票等了多久；固定人数队列不读它，零值 FirstComeGrouping{} 照旧可用。
+	NowUnix func() int64
+}
 
-func (FirstComeGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, bool, error) {
+func (g FirstComeGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, bool, error) {
 	if err := queue.Validate(); err != nil {
 		return nil, false, err
 	}
-	if len(candidates) < queue.GroupSize {
+	if !queue.Flexible() {
+		if len(candidates) < queue.GroupSize {
+			return nil, false, nil
+		}
+		return candidates[:queue.GroupSize], true, nil
+	}
+	if g.NowUnix == nil {
+		return nil, false, fmt.Errorf("%w: first-come grouping on flexible queue %s needs a clock", ErrQueueInvalid, queue.Key())
+	}
+	if len(candidates) == 0 {
 		return nil, false, nil
 	}
-	return candidates[:queue.GroupSize], true, nil
+	// 候选按队列顺序，第一张是最早的，它一定在取出的组里；存储按组里最早一张判定，所以这里能成的组存储一定接受
+	// （两边时钟一致时）。
+	size := queue.FormableSize(len(candidates), waitedSeconds(candidates[0].CreatedAtUnix, g.NowUnix()))
+	if size == 0 {
+		return nil, false, nil
+	}
+	return candidates[:size], true, nil
 }
 
 // ScoreWindowGrouping matches the oldest candidate with the closest scores,
@@ -69,17 +94,15 @@ func (g ScoreWindowGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, 
 		return nil, false, fmt.Errorf("%w: score window, widening and cap must not be negative (got %d, %d, %d)",
 			ErrQueueInvalid, g.InitialWindow, g.WidenPerSecond, g.MaxWindow)
 	}
-	if len(candidates) < queue.GroupSize {
+	if len(candidates) < queue.MinGroupSize() {
 		return nil, false, nil
 	}
 	// Anchor on the oldest candidate: that is whose wait the window is for,
 	// and anchoring anywhere else lets a newcomer jump a starving player.
+	// A clock that went backwards has not made anyone wait longer
+	// (waitedSeconds counts it as zero).
 	anchor := candidates[0]
-	waited := g.NowUnix() - anchor.CreatedAtUnix
-	if waited < 0 {
-		// A clock that went backwards has not made anyone wait longer.
-		waited = 0
-	}
+	waited := waitedSeconds(anchor.CreatedAtUnix, g.NowUnix())
 	window := g.window(uint64(waited))
 
 	within := make([]Ticket, 0, len(candidates))
@@ -88,7 +111,10 @@ func (g ScoreWindowGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, 
 			within = append(within, candidate)
 		}
 	}
-	if len(within) < queue.GroupSize {
+	// 张数按队列规则：窗口内的票够 GroupSize 取满员组；弹性队列凑不满时，锚点（最早的票，一定在窗口内）等满
+	// FillAfterSeconds 后取窗口内全部。
+	size := queue.FormableSize(len(within), waited)
+	if size == 0 {
 		return nil, false, nil
 	}
 	// Closest scores to the anchor first, ties by arrival order so the result
@@ -102,7 +128,7 @@ func (g ScoreWindowGrouping) Group(queue Queue, candidates []Ticket) ([]Ticket, 
 		}
 		return within[i].CreatedAtUnix < within[j].CreatedAtUnix
 	})
-	return within[:queue.GroupSize], true, nil
+	return within[:size], true, nil
 }
 
 // window is InitialWindow + WidenPerSecond*waited, saturating, then capped.
