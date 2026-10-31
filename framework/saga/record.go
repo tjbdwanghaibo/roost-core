@@ -77,6 +77,36 @@ type Step struct {
 	BackoffMax      time.Duration
 }
 
+// RetryWindow 是这一步一个操作从第一次派发到最后一次尝试截止的最长计划时间：MaxAttempts 次超时，加其间 MaxAttempts−1 次
+// 退避（按上限 BackoffMax 计）。同一操作在这段时间里都可能有尝试被参与方执行，参与方的回执必须比它活得久。
+// 它是按计划算的：协调器停机、分区积压、命令在流里滞留都会把实际的最后一次尝试推得更晚（见 CheckReceiptRetention）。
+func (s Step) RetryWindow() time.Duration {
+	attempts := time.Duration(max(s.MaxAttempts, 1))
+	return s.Timeout*attempts + s.BackoffMax*(attempts-1)
+}
+
+// ReceiptRetentionFactor 是回执保留期相对步骤重试窗口的最小倍数：保留期至少是最长窗口的这么多倍。多出的那一份窗口是余量，
+// 吸收协调器调度滞后、短暂停机或换主、参与方积压与时钟偏差；更长的停顿超出 saga.receipt_retention − 窗口时，至多一次不再
+// 由回执保证（KNOWN-LIMITS“Saga”）。
+const ReceiptRetentionFactor = 2
+
+// CheckReceiptRetention 检查一个已补齐预算的定义（Engine.Register 之前 StepBudgets.Resolve 过）的每一步：参与方回执保留期
+// retention 不短于 ReceiptRetentionFactor × 这一步的 RetryWindow。参与方 Complete 时会剪掉早于 now − retention 的回执
+// （Mongo 步骤由 TTL 删除），回执被剪之后同一操作的下一次尝试会再执行一次业务（RV-20261030-02）；配置在 Register 与
+// 配置检查时就拒绝，不在运行期间才暴露。
+func CheckReceiptRetention(definition Definition, retention time.Duration) error {
+	for _, step := range definition.Steps {
+		if window := step.RetryWindow(); retention < ReceiptRetentionFactor*window {
+			return fmt.Errorf("%w: saga %s/%d step %q: receipt retention %v must be at least %d × the step's retry window %v "+
+				"(timeout %v × %d attempts + backoff max %v × %d): participants prune receipts older than the retention, "+
+				"and a retry of the same operation after that takes effect again",
+				ErrInvalidDefinition, definition.Type, definition.Version, step.Name, retention, ReceiptRetentionFactor, window,
+				step.Timeout, max(step.MaxAttempts, 1), step.BackoffMax, max(step.MaxAttempts, 1)-1)
+		}
+	}
+	return nil
+}
+
 // StepBudget 是一个步骤的超时与重试预算；零值字段表示“未指定”。
 type StepBudget struct {
 	Timeout     time.Duration
@@ -234,6 +264,11 @@ type Record struct {
 	UpdatedAt    time.Time
 	// StartAttempt 是开启这一轮的启动尝试标识（设计 §7.3）：之后的版本原样带着。
 	StartAttempt string
+	// Lifecycle 是这一笔 saga 的生命周期标识：协调器新建记录时随机生成（newLifecycle），之后的版本、Resume、人工补偿、
+	// 重启重放都原样带着，并编进每个操作键（operationKey）。saga ID 由类型与业务键派生，终态过了保留期被剪掉后同一业务键
+	// 可以再开一笔；没有它，新一笔的操作键与 CommandID 与上一笔相同，参与方会按上一笔的成功回执回放、不执行业务，
+	// 迟到的上一笔结果也会被当成新一笔的结论（RV-20261030-01）。同一笔之内它不变，所以 Resume 之后的去重语义不受影响。
+	Lifecycle string
 }
 
 func (r Record) Clone() Record {
@@ -246,7 +281,7 @@ func (r Record) Clone() Record {
 
 func (r Record) Validate() error {
 	waitingFields := r.OperationKey != "" && len(r.OperationKey) <= 192 && r.CommandID != "" && len(r.CommandID) <= 192 && r.Attempt > 0
-	if !validSubjectToken(r.ID, 128) || strings.TrimSpace(r.Type) != r.Type || r.Type == "" || len(r.Type) > 128 || r.DefinitionVersion == 0 || strings.TrimSpace(r.BusinessKey) != r.BusinessKey || r.BusinessKey == "" || len(r.BusinessKey) > 512 || len(r.Data) > 4<<20 || len(r.LastError) > 4096 || r.Status < StatusPending || r.Status > StatusManualRequired || r.Phase < PhaseForward || r.Phase > PhaseCompensate || r.Version == 0 || r.Step < 0 || r.CompletedSteps < 0 || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || (!r.Status.Terminal() && r.NextRunAt.IsZero()) || (r.Status == StatusWaiting) != waitingFields || (r.Status != StatusWaiting && (r.OperationKey != "" || r.CommandID != "")) || (r.Status == StatusCompensating && (r.Phase != PhaseCompensate || (r.CompletedSteps == 0 && r.LateStep == 0))) || (r.Status == StatusCompensated && r.CompletedSteps != 0) || !r.lateStepValid() {
+	if !validSubjectToken(r.ID, 128) || !validLifecycle(r.Lifecycle) || strings.TrimSpace(r.Type) != r.Type || r.Type == "" || len(r.Type) > 128 || r.DefinitionVersion == 0 || strings.TrimSpace(r.BusinessKey) != r.BusinessKey || r.BusinessKey == "" || len(r.BusinessKey) > 512 || len(r.Data) > 4<<20 || len(r.LastError) > 4096 || r.Status < StatusPending || r.Status > StatusManualRequired || r.Phase < PhaseForward || r.Phase > PhaseCompensate || r.Version == 0 || r.Step < 0 || r.CompletedSteps < 0 || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || (!r.Status.Terminal() && r.NextRunAt.IsZero()) || (r.Status == StatusWaiting) != waitingFields || (r.Status != StatusWaiting && (r.OperationKey != "" || r.CommandID != "")) || (r.Status == StatusCompensating && (r.Phase != PhaseCompensate || (r.CompletedSteps == 0 && r.LateStep == 0))) || (r.Status == StatusCompensated && r.CompletedSteps != 0) || !r.lateStepValid() {
 		return ErrInvalidRecord
 	}
 	return nil
@@ -326,6 +361,11 @@ func validSubject(subject string) bool {
 		}
 	}
 	return true
+}
+
+// validLifecycle 校验生命周期标识：非空、至多 64 字节、能放进 subject token，且不含操作键的分隔符 ':'。
+func validLifecycle(lifecycle string) bool {
+	return validSubjectToken(lifecycle, 64) && !strings.Contains(lifecycle, ":")
 }
 
 func validSubjectToken(token string, maxLength int) bool {

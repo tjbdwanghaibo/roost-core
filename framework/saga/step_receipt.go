@@ -98,7 +98,8 @@ type StepOutcome struct {
 // maxReceiptPrunePerCommit 是一次 Complete 顺手剪掉的过期回执上限：剪枝跟着业务事务走，不能让一次步骤的 WAL 记录无界变大。
 const maxReceiptPrunePerCommit = 16
 
-// DefaultStepReceiptRetention 是回执保留期缺省值（saga.receipt_retention，选项 RR-A）：必须长于步骤命令可能重投的最长时间。
+// DefaultStepReceiptRetention 是回执保留期缺省值（saga.receipt_retention，选项 RR-A）：必须长于步骤命令可能重投的最长时间，
+// Register 与配置检查要求它至少是每步重试窗口的 ReceiptRetentionFactor 倍（CheckReceiptRetention）。
 const DefaultStepReceiptRetention = 168 * time.Hour
 
 // nativeRun 是一次原生步骤运行（一次投递或一次转交）的状态：Begin / Complete 在 Nest 事务里（业务池 goroutine）写它，

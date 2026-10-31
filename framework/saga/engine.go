@@ -300,10 +300,14 @@ func NewEngine(log fnats.JetStreamLog, raw fnats.RawClient, options Options) (*E
 }
 
 // Register 与 Engine.Register 相同：按 StepBudgets 补齐步骤预算再校验，同一类型同一版本只能登记一次。所有者处理启动意图与
-// 到期时用这里的定义；发起方本地先查一次（没有定义直接 ErrDefinitionMissing，不写意图）。
+// 到期时用这里的定义；发起方本地先查一次（没有定义直接 ErrDefinitionMissing，不写意图）。补齐之后每一步的重试窗口都要
+// 放得进回执保留期（CheckReceiptRetention），否则拒绝登记。
 func (e *Engine) Register(definition Definition) error {
 	definition = e.opts.StepBudgets.Resolve(definition)
 	if err := definition.Validate(); err != nil {
+		return err
+	}
+	if err := CheckReceiptRetention(definition, e.opts.ReceiptRetention); err != nil {
 		return err
 	}
 	e.mu.Lock()
@@ -350,8 +354,7 @@ func (e *Engine) AdmissionState() AdmissionState {
 func (e *Engine) receiptsExpired(record Record, definition Definition, now time.Time) bool {
 	var window time.Duration
 	for _, step := range definition.Steps {
-		attempts := time.Duration(max(step.MaxAttempts, 1))
-		window = max(window, step.Timeout*attempts+step.BackoffMax*(attempts-1))
+		window = max(window, step.RetryWindow())
 	}
 	return record.UpdatedAt.Before(now.Add(-e.opts.ReceiptRetention + window))
 }

@@ -278,7 +278,7 @@ func (r *round) start(msg fnats.LogMsg) {
 		return
 	}
 	id := IDOf(request.Type, request.BusinessKey)
-	record, err := newStartRecord(request, id, r.now)
+	record, err := newStartRecord(request, id, newLifecycle(), r.now)
 	if err == nil && record.StartDigest != in.Digest {
 		err = fmt.Errorf("%w: start digest differs from the initiator's", ErrInvalidRecord)
 	}
@@ -318,19 +318,21 @@ func (r *round) result(msg fnats.LogMsg) {
 		return
 	}
 	c.CompletedAt = r.now
+	if !strings.HasPrefix(c.IdempotencyKey, c.SagaID+":") {
+		r.rejectInput("result", "identity", fmt.Errorf("operation %q is not of saga %s", c.IdempotencyKey, c.SagaID))
+		return
+	}
 	st := r.get(c.SagaID)
-	if st == nil {
-		// 记录已过终态保留期被剪掉（或从没在这个分区存在过）：迟到成功也找不到归宿，只计数并记 ERROR（设计 §2.3）。
+	if st == nil || !strings.HasPrefix(c.IdempotencyKey, c.SagaID+":"+st.Record.Lifecycle+":") {
+		// 记录已过终态保留期被剪掉（或从没在这个分区存在过），或者操作属于同一业务键之前的另一笔（那一笔被剪掉后又开了新的
+		// 一笔，生命周期不同）：迟到成功也找不到归宿，只计数并记 ERROR（设计 §2.3）。不能交给当前这一笔判定——上一笔的
+		// 结论不是新一笔任何操作的结果（RV-20261030-01）。
 		r.counts.unknownSaga++
 		r.after = append(r.after, func() {
 			metrics.IncCounter("saga.completion.unknown_saga_total", nil, 1)
-			slog.Error("saga: result for a saga this partition does not hold (past terminal retention or never started)",
+			slog.Error("saga: result for a saga this partition does not hold (past terminal retention, an earlier saga of the same business key, or never started)",
 				"saga_id", c.SagaID, "command_id", c.CommandID, "operation", c.IdempotencyKey, "success", c.Success)
 		})
-		return
-	}
-	if !strings.HasPrefix(c.IdempotencyKey, c.SagaID+":") {
-		r.rejectInput("result", "identity", fmt.Errorf("operation %q is not of saga %s", c.IdempotencyKey, c.SagaID))
 		return
 	}
 	record := st.Record

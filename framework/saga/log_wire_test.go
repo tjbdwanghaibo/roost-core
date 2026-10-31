@@ -23,10 +23,10 @@ func wireSaga(t *testing.T, layout Layout, k int) sagaState {
 			continue
 		}
 		now := time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
-		op := operationKey(id, PhaseForward, 0)
+		op := operationKey(id, testLifecycle, PhaseForward, 0)
 		return sagaState{
-			Record:   Record{ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "bk", Status: StatusWaiting, Phase: PhaseForward, Version: 2, Attempt: 1, OperationKey: op, CommandID: commandID(op, 0, 1), NextRunAt: now, CreatedAt: now, UpdatedAt: now, StartAttempt: "a.1"},
-			Ops:      map[string]opTombstone{operationKey(id, PhaseCompensate, 0): {Closure: OperationAbandoned, LateAlarms: []uint32{0}}},
+			Record:   Record{Lifecycle: testLifecycle, ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "bk", Status: StatusWaiting, Phase: PhaseForward, Version: 2, Attempt: 1, OperationKey: op, CommandID: commandID(op, 0, 1), NextRunAt: now, CreatedAt: now, UpdatedAt: now, StartAttempt: "a.1"},
+			Ops:      map[string]opTombstone{operationKey(id, testLifecycle, PhaseCompensate, 0): {Closure: OperationAbandoned, LateAlarms: []uint32{0}}},
 			Receipts: map[string]string{"c1": strings.Repeat("a", 64)},
 		}
 	}
@@ -45,7 +45,7 @@ func TestLogEventRoundTripAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.V != WireVersion || got.In != 7 || got.Saga.Record.StartAttempt != "a.1" || got.Command.Partition != 1 || got.Saga.Ops[operationKey(st.Record.ID, PhaseCompensate, 0)].LateAlarms[0] != 0 || got.Saga.Receipts["c1"] == "" {
+	if got.V != WireVersion || got.In != 7 || got.Saga.Record.StartAttempt != "a.1" || got.Command.Partition != 1 || got.Saga.Ops[operationKey(st.Record.ID, testLifecycle, PhaseCompensate, 0)].LateAlarms[0] != 0 || got.Saga.Receipts["c1"] == "" {
 		t.Fatalf("round trip lost fields: %+v", got)
 	}
 	mutate := func(name string, fn func(map[string]any)) {

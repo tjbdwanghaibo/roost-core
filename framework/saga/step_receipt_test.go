@@ -92,7 +92,7 @@ func (c *receiptCommitter) Commit(context.Context, corenest.CommitRecord) error 
 // stepCommand 是一次步骤尝试：saga-1 第 0 步的正向操作，incarnation / attempt 决定 CommandID（与协调器同一格式）。
 func stepCommand(incarnation, attempt uint32, deadline time.Duration) Command {
 	now := time.Now().UTC()
-	op := operationKey("saga-1", PhaseForward, 0)
+	op := operationKey("saga-1", testLifecycle, PhaseForward, 0)
 	return Command{
 		ID: commandID(op, incarnation, attempt), IdempotencyKey: op, SagaID: "saga-1", SagaType: "rally", DefinitionVersion: 1,
 		BusinessKey: "r-1", StepName: "reserve", Phase: PhaseForward, Attempt: attempt, Topic: "rally.reserve", Partition: 3,
@@ -330,6 +330,70 @@ func TestNativeStepReceiptPrunesExpiredReceiptsBoundedly(t *testing.T) {
 	}
 	if _, ok := h.entity.receipts["fresh"]; !ok {
 		t.Fatal("a receipt inside the retention was pruned")
+	}
+}
+
+// 回执保留期满足 Register 的要求（≥ ReceiptRetentionFactor × 步骤重试窗口，CheckReceiptRetention）时，同一操作在窗口内的
+// 每一次尝试都读得到第一次生效留下的回执、只回放（RV-20261030-02 的契约面）：同一实体上别的操作 Complete 时会剪掉过了保留期
+// 的回执，窗口之内剪不到它；过了保留期才剪（剪枝本身照常工作）。保留期不够的配置由 Register 与配置检查拒绝
+// （TestRegisterRefusesStepsWhoseRetryWindowOutlivesTheReceipts）。评审的复现：保留期 60s、窗口 190s，第 61s 别的操作剪掉
+// 回执，第 62s 的第四次尝试再执行一次业务。
+func TestNativeStepReceiptOutlivesEveryAttemptOfTheRetryWindow(t *testing.T) {
+	step := Step{Name: "reserve", ForwardTopic: "rally.reserve", Timeout: 10 * time.Second, MaxAttempts: 10, BackoffMin: 10 * time.Second, BackoffMax: 10 * time.Second}
+	retention := ReceiptRetentionFactor * step.RetryWindow()
+	if err := CheckReceiptRetention(Definition{Type: "rally", Version: 1, Steps: []Step{step}}, retention); err != nil {
+		t.Fatal(err)
+	}
+	t0 := time.Now().UTC()
+	entity, committer := newReceiptEntity(), &receiptCommitter{}
+	effects := 0
+	run := func(command Command, at time.Time) StepOutcome {
+		t.Helper()
+		state := newNativeRun(command, retention)
+		state.now = func() time.Time { return at }
+		native := NativeStep{command: command, run: state}
+		if _, err := corenest.RunIsolatedTransaction(context.Background(), committer, "rally-reserve", func() (any, error) {
+			if replay, err := native.Begin(entity); replay || err != nil {
+				return nil, err
+			}
+			if command.SagaID == "saga-1" {
+				effects++
+			}
+			return nil, native.Complete(true, "")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return state.result()
+	}
+	attempt := func(n uint32) Command {
+		command := stepCommand(0, n, step.Timeout)
+		command.CreatedAt = t0.Add(time.Duration(n-1) * (step.Timeout + step.BackoffMax)) // 计划的派发时刻
+		command.DeadlineAt = command.CreatedAt.Add(step.Timeout)
+		return command
+	}
+	other := func(n int) Command {
+		command := stepCommand(0, 1, time.Hour)
+		command.SagaID = "other-" + strconv.Itoa(n)
+		command.IdempotencyKey = operationKey(command.SagaID, testLifecycle, PhaseForward, 0)
+		command.ID = commandID(command.IdempotencyKey, 0, 1)
+		return command
+	}
+	first := attempt(1)
+	run(first, first.CreatedAt) // 生效，结果没送回协调器
+	for n := uint32(2); n <= step.MaxAttempts; n++ {
+		retry := attempt(n)
+		last := retry.DeadlineAt.Add(-time.Millisecond) // 这次尝试最晚还能执行的时刻
+		run(other(int(n)), last)                        // 同一实体上别的操作在此刻 Complete，顺手剪过期回执
+		if outcome := run(retry, last); outcome.Kind != StepReplayed || outcome.Completion.CommandID != first.ID {
+			t.Fatalf("attempt %d at +%v = %+v, want a replay of %s", n, last.Sub(t0), outcome, first.ID)
+		}
+	}
+	if effects != 1 {
+		t.Fatalf("one operation took effect %d times inside its retry window, want 1", effects)
+	}
+	run(other(0), t0.Add(retention+time.Second))
+	if _, kept := entity.receipts[first.IdempotencyKey]; kept {
+		t.Fatal("a receipt past the retention was not pruned: the test would not notice an early prune")
 	}
 }
 

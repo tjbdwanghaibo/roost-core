@@ -107,7 +107,7 @@ func (s *settlements) wait(t *testing.T, n int) map[int][]error {
 }
 
 func coldRecord(id string, version uint64, created time.Time, status Status) Record {
-	r := Record{ID: IDOf("rally", id), Type: "rally", DefinitionVersion: 1, BusinessKey: id, Status: status, Phase: PhaseForward,
+	r := Record{Lifecycle: testLifecycle, ID: IDOf("rally", id), Type: "rally", DefinitionVersion: 1, BusinessKey: id, Status: status, Phase: PhaseForward,
 		Version: version, CreatedAt: created, UpdatedAt: created.Add(time.Duration(version) * time.Second)}
 	if !status.Terminal() {
 		r.NextRunAt = r.UpdatedAt

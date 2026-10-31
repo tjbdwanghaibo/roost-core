@@ -1,7 +1,9 @@
 package saga
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -195,9 +197,9 @@ func TestCoordinatorMarksALateSuccessAlarmOncePerLife(t *testing.T) {
 		now := engine.clock.Now()
 		id := IDOf("rally", "gift-1")
 		record := Record{
-			ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "gift-1",
+			Lifecycle: testLifecycle, ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "gift-1",
 			Status: StatusWaiting, Phase: PhaseForward, Step: 1, CompletedSteps: 1, Attempt: 2, Version: 3,
-			OperationKey: operationKey(id, PhaseForward, 1), CommandID: commandID(operationKey(id, PhaseForward, 1), 0, 2),
+			OperationKey: operationKey(id, testLifecycle, PhaseForward, 1), CommandID: commandID(operationKey(id, testLifecycle, PhaseForward, 1), 0, 2),
 			NextRunAt: now.Add(time.Second), CreatedAt: now, UpdatedAt: now,
 		}
 		engine.seed(record)
@@ -286,4 +288,127 @@ func TestCommandIDIncarnationInvertsCommandID(t *testing.T) {
 			t.Fatalf("commandIDIncarnation(%q) = %d, want 0 for a non-coordinator id", id, got)
 		}
 	}
+}
+
+// 生命周期标识（RV-20261030-01）：saga ID 由类型与业务键派生，终态过了保留期被剪掉后同一业务键可以再开一笔。新的一笔是新的
+// 操作身份——操作键带这一笔的生命周期，参与方实体里还留着的上一笔的成功回执对不上它，上一笔迟到的结果也不是它的结论；
+// 同一笔之内（重启重放、Resume 开新代际）生命周期不变，成功回执照样让之后的尝试只回放。跑在 nativeWorld 上（simEngine +
+// 回执在实体里的参与方，真实 Nest 事务），两笔共用同一个参与方实体：
+//
+//   - L1：上一笔已完成、回执还在实体里；剪掉之后同业务键的新一笔照常执行业务，而不是回放上一笔的回执、什么都不做；
+//   - L2：上一笔生效了却没送达的成功，在新一笔等待同一步时才到：不改新一笔的任何字段（只计 UnknownSaga），新一笔自己的
+//     尝试照常执行；
+//   - L3：同一笔之内协调器重启（状态只从事件重放）再 Resume：生命周期不变，Resume 后的尝试回放重启前已生效的那次，业务只
+//     执行一次。
+func TestASagaReopenedUnderTheSameBusinessKeyIsANewOperation(t *testing.T) {
+	// reopen 把已到终态的这一笔剪掉（过了终态保留期），再用同一业务键开新的一笔，返回新一笔派发的第一条命令。
+	reopen := func(t *testing.T, w *nativeWorld, previous Record, at time.Duration) Command {
+		t.Helper()
+		w.sim.p.prune(w.at(at))
+		if _, err := w.sim.Get(w.ctx, w.sagaID); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("the %s saga was not pruned past its terminal retention: %v", previous.Status, err)
+		}
+		if _, err := w.sim.StartSaga(w.ctx, StartRequest{Type: "gift", DefinitionVersion: 1, BusinessKey: previous.BusinessKey, Data: previous.Data, Now: w.at(at)}); err != nil {
+			t.Fatal(err)
+		}
+		w.drain()
+		next := w.pendingCommand()
+		if next.SagaID != previous.ID || next.Step != 0 || next.Phase != PhaseForward {
+			t.Fatalf("the reopened saga dispatched %+v, want step 0 of saga %s", next, previous.ID)
+		}
+		return next
+	}
+
+	t.Run("L1: the previous saga's success receipt does not stand in for the new saga", func(t *testing.T) {
+		w := newNativeWorld(t, 1, time.Now().UTC())
+		w.tick(0)
+		first := w.pendingCommand()
+		w.deliverCommand(first)
+		w.deliverCommand(w.pendingCommand()) // deliver 步骤 → Completed
+		previous := w.record()
+		if previous.Status != StatusCompleted {
+			t.Fatalf("setup: %+v", previous)
+		}
+		next := reopen(t, w, previous, 2*time.Hour)
+		if _, kept := w.entity.receipts[first.IdempotencyKey]; !kept {
+			t.Fatal("setup: the previous saga's success receipt must still be in the entity (receipt retention outlives terminal retention)")
+		}
+		if next.IdempotencyKey == first.IdempotencyKey || next.ID == first.ID {
+			t.Fatalf("the reopened saga reuses the previous saga's operation identity: operation %s command %s", next.IdempotencyKey, next.ID)
+		}
+		outcome := w.runAttempt(next)
+		if outcome.Kind != StepExecuted || w.executions(next.IdempotencyKey) != 1 {
+			t.Fatalf("the reopened saga's step 0 did not run its business (outcome kind %d, executions %d): the participant answered it with the previous saga's receipt",
+				outcome.Kind, w.executions(next.IdempotencyKey))
+		}
+		w.deliver(outcome.Completion)
+		if record := w.record(); record.Step != 1 || record.CompletedSteps != 1 {
+			t.Fatalf("the reopened saga did not advance on its own success: %+v", record)
+		}
+		w.assertEffective(first.IdempotencyKey, 1)
+		w.assertEffective(next.IdempotencyKey, 1)
+	})
+
+	t.Run("L2: a late result of the previous saga does not touch the new saga", func(t *testing.T) {
+		w := newNativeWorld(t, 1, time.Now().UTC())
+		w.tick(0)
+		first := w.pendingCommand()
+		lateResult := w.commitAttempt(first) // 生效了，结果没送达
+		w.tick(5 * time.Second)              // 唯一一次尝试超时 → Failed
+		previous := w.record()
+		if previous.Status != StatusFailed {
+			t.Fatalf("setup: %+v", previous)
+		}
+		next := reopen(t, w, previous, 2*time.Hour)
+		before := w.record()
+		unknownBefore := w.sim.e.Stats().UnknownSaga
+		w.deliver(lateResult)
+		after := w.record()
+		if after.Version != before.Version || after.Step != before.Step || after.Status != before.Status || after.CommandID != before.CommandID || !bytes.Equal(after.Data, before.Data) {
+			t.Fatalf("the previous saga's late result %s changed the new saga: before %+v after %+v", lateResult.CommandID, before, after)
+		}
+		if grown := w.sim.e.Stats().UnknownSaga - unknownBefore; grown != 1 {
+			t.Fatalf("the previous saga's late result grew UnknownSaga by %d, want 1", grown)
+		}
+		w.deliverCommand(next)
+		if w.executions(next.IdempotencyKey) != 1 {
+			t.Fatalf("the new saga's own attempt ran its business %d times, want 1", w.executions(next.IdempotencyKey))
+		}
+		if record := w.record(); record.Step != 1 || record.CompletedSteps != 1 {
+			t.Fatalf("the new saga did not advance on its own success: %+v", record)
+		}
+	})
+
+	t.Run("L3: within one saga, restart and Resume keep the operation identity", func(t *testing.T) {
+		w := newNativeWorld(t, 1, time.Now().UTC())
+		w.tick(0)
+		first := w.pendingCommand()
+		w.commitAttempt(first) // 生效了，协调器重启前结果没送达
+		lifecycle := w.record().Lifecycle
+		w.sim.restart()
+		if got := w.record().Lifecycle; got != lifecycle || got == "" {
+			t.Fatalf("restart changed the lifecycle %q -> %q", lifecycle, got)
+		}
+		w.tick(5 * time.Second) // 超时 → Failed
+		if _, err := w.resume(w.ctx, ResumeRequest{ID: w.sagaID, Now: w.at(6 * time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+		w.tick(6 * time.Second)
+		resumed := w.pendingCommand()
+		if resumed.IdempotencyKey != first.IdempotencyKey || resumed.ID == first.ID {
+			t.Fatalf("Resume after restart dispatched operation %s (command %s), want the same operation %s under a new command id", resumed.IdempotencyKey, resumed.ID, first.IdempotencyKey)
+		}
+		if outcome := w.runAttempt(resumed); outcome.Kind != StepReplayed || outcome.Completion.CommandID != first.ID {
+			t.Fatalf("the resumed attempt = %+v, want a replay of %s", outcome, first.ID)
+		} else {
+			w.deliver(outcome.Completion)
+		}
+		if record := w.record(); record.Step != 1 || record.CompletedSteps != 1 {
+			t.Fatalf("the replayed success did not advance the saga: %+v", record)
+		}
+		w.assertEffective(first.IdempotencyKey, 1)
+		if w.executions(first.IdempotencyKey) != 1 {
+			t.Fatalf("business ran %d times for one operation across restart and Resume, want 1", w.executions(first.IdempotencyKey))
+		}
+	})
 }

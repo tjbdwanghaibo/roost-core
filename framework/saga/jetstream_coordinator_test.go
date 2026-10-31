@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -210,6 +211,34 @@ func (u *unitPartition) record(id string) Record {
 	return st.Record
 }
 
+// restart 模拟协调器进程重启：换一个新分区，状态只从已提交的事件（u.events，编码后再解码的那份）按序覆盖出来，定时器与
+// 剪枝队列按 replayPartition 的规则重排。重启前内存里的任何东西都不带过去。
+func (u *unitPartition) restart() {
+	u.t.Helper()
+	e := u.e
+	p := &partition{e: e, k: 0, stream: e.layout.StreamOf(0), writer: e.writer, sagas: map[string]*sagaState{},
+		wheel: newWheel(e.opts.Tick, e.opts.WheelSlots, u.clock.Now()), snapshotSlot: make(chan struct{}, 1), purgeStalls: map[string]purgeStall{}}
+	for _, ev := range u.events {
+		st := ev.Saga.clone()
+		p.sagas[st.Record.ID] = st
+		p.inHi = max(p.inHi, ev.In)
+	}
+	p.lastEv = u.seq
+	for id, st := range p.sagas {
+		switch {
+		case !st.Record.Status.Terminal():
+			p.wheel.schedule(id, st.Record.NextRunAt)
+		case prunable(st.Record.Status):
+			p.terminals = append(p.terminals, pruneEntry{id: id, updatedAt: st.Record.UpdatedAt})
+		}
+	}
+	slices.SortFunc(p.terminals, func(a, b pruneEntry) int { return a.updatedAt.Compare(b.updatedAt) })
+	u.p = p
+	if err := p.checkTimers(); err != nil {
+		u.t.Fatalf("after restart: %v", err)
+	}
+}
+
 func TestPartitionStartIsDispatchedInTheSameRoundAsOneEvent(t *testing.T) {
 	u := newUnitPartition(t, nil)
 	at := u.clock.Now()
@@ -219,7 +248,7 @@ func TestPartitionStartIsDispatchedInTheSameRoundAsOneEvent(t *testing.T) {
 		t.Fatalf("events = %+v, want one dispatch event carrying the command (start collapsed into it)", r.events)
 	}
 	cmd := r.events[0].Command
-	if cmd.SagaID != id || cmd.Partition != 0 || cmd.Topic != "reserve" || cmd.Attempt != 1 || cmd.ID != commandID(operationKey(id, PhaseForward, 0), 0, 1) {
+	if cmd.SagaID != id || cmd.Partition != 0 || cmd.Topic != "reserve" || cmd.Attempt != 1 || cmd.ID != commandID(operationKey(id, u.record(id).Lifecycle, PhaseForward, 0), 0, 1) {
 		t.Fatalf("command = %+v", cmd)
 	}
 	got := u.record(id)
@@ -334,7 +363,7 @@ func TestPartitionSkipsUndecodableInputsAndAdvancesTheWatermark(t *testing.T) {
 	bad := []fnats.LogMsg{
 		{Subject: u.e.layout.StartSubject(0), Data: []byte("{"), Headers: map[string]string{replyHeader: "reply.bad"}},
 		{Subject: u.e.layout.ResultSubject(0), Data: []byte(`{"v":1,"completion":{}}`)},
-		{Subject: u.e.layout.OpSubject(0), Data: []byte(`{"v":2,"kind":"resume"}`)},
+		{Subject: u.e.layout.OpSubject(0), Data: []byte(`{"v":3,"kind":"resume"}`)},
 	}
 	r := u.round(at, bad...)
 	if len(r.events) != 0 || u.p.inHi != u.seq || u.e.Stats().RejectedInputs != 3 {
@@ -358,7 +387,7 @@ func TestPartitionPrunesTerminalsAfterRetentionButKeepsManualRequired(t *testing
 	}
 	w := u.record(stuck)
 	u.round(at.Add(5*time.Millisecond), u.resultInput(Completion{CommandID: w.CommandID, IdempotencyKey: w.OperationKey, SagaID: stuck, Error: "no"}))
-	manual := &sagaState{Record: Record{ID: IDOf("rally", "manual"), Type: "rally", DefinitionVersion: 9, BusinessKey: "manual", Status: StatusPending, Phase: PhaseForward, Version: 1, NextRunAt: at, CreatedAt: at, UpdatedAt: at}}
+	manual := &sagaState{Record: Record{Lifecycle: testLifecycle, ID: IDOf("rally", "manual"), Type: "rally", DefinitionVersion: 9, BusinessKey: "manual", Status: StatusPending, Phase: PhaseForward, Version: 1, NextRunAt: at, CreatedAt: at, UpdatedAt: at}}
 	u.p.sagas[manual.Record.ID] = manual
 	u.p.wheel.schedule(manual.Record.ID, at)
 	u.round(at.Add(6 * time.Millisecond))
@@ -420,6 +449,32 @@ func TestPartitionResumeIsRefusedWhenReceiptsMayHaveExpired(t *testing.T) {
 	}
 }
 
+// 回执保留期必须盖住每一步的重试窗口（RV-20261030-02）：参与方 Complete 时剪掉早于 now − 保留期的回执，回执被剪之后同一操作
+// 的下一次尝试会再执行一次业务。Register 按补齐后的预算（定义里写的、Options.StepBudgets 的缺省与覆盖）检查，保留期至少是
+// 窗口（超时 × 次数 + 退避上限 × (次数 − 1)）的 ReceiptRetentionFactor 倍，不够就拒绝登记。
+func TestRegisterRefusesStepsWhoseRetryWindowOutlivesTheReceipts(t *testing.T) {
+	u := newUnitPartition(t, func(o *Options) {
+		o.TerminalRetention, o.ReceiptRetention = time.Minute, time.Minute
+		o.StepBudgets.Defaults = StepBudget{Timeout: 10 * time.Second, MaxAttempts: 10, BackoffMin: 10 * time.Second, BackoffMax: 10 * time.Second}
+	})
+	step := func(timeout time.Duration, attempts uint32, backoff time.Duration) Definition {
+		return Definition{Type: "window", Version: uint32(attempts), Steps: []Step{{Name: "debit", ForwardTopic: "window.debit", Timeout: timeout, MaxAttempts: attempts, BackoffMin: backoff, BackoffMax: backoff}}}
+	}
+	// 评审给的配置：10s × 10 次 + 10s × 9 次退避 = 190s，回执只留 60s。预算来自 StepBudgets 的缺省（定义里没写）。
+	fromDefaults := Definition{Type: "window", Version: 100, Steps: []Step{{Name: "debit", ForwardTopic: "window.debit"}}}
+	if err := u.e.Register(fromDefaults); !errors.Is(err, ErrInvalidDefinition) || !strings.Contains(err.Error(), `step "debit"`) || !strings.Contains(err.Error(), "3m10s") {
+		t.Fatalf("Register accepted a step whose resolved retry window (190s) outlives the 60s receipt retention: err = %v", err)
+	}
+	// 定义里写死的预算同样检查：窗口 31s，2 倍 62s > 60s。
+	if err := u.e.Register(step(10*time.Second, 2, 11*time.Second)); !errors.Is(err, ErrInvalidDefinition) {
+		t.Fatalf("Register accepted a 31s window under a 60s receipt retention (needs 62s): err = %v", err)
+	}
+	// 恰好 2 倍（窗口 30s）可以登记。
+	if err := u.e.Register(step(10*time.Second, 2, 10*time.Second)); err != nil {
+		t.Fatalf("a 30s window under a 60s receipt retention was refused: %v", err)
+	}
+}
+
 func TestJetStreamOptionsValidation(t *testing.T) {
 	base := func() Options {
 		return Options{Layout: Layout{Prefix: "a.b", Stream: "S", Partitions: 16, Groups: 4}}
@@ -472,9 +527,9 @@ func TestTerminalWatchWakesEveryWaiterOfTheIDWithNewerTerminals(t *testing.T) {
 	defer cancelSecond()
 	other, cancelOther := w.register("s2")
 	defer cancelOther()
-	w.observe(Record{ID: "s1", Status: StatusWaiting, Version: 5}) // 非终态不交付
-	w.observe(Record{ID: "s1", Status: StatusFailed, Version: 3})
-	w.observe(Record{ID: "s1", Status: StatusCompensated, Version: 7})
+	w.observe(Record{Lifecycle: testLifecycle, ID: "s1", Status: StatusWaiting, Version: 5}) // 非终态不交付
+	w.observe(Record{Lifecycle: testLifecycle, ID: "s1", Status: StatusFailed, Version: 3})
+	w.observe(Record{Lifecycle: testLifecycle, ID: "s1", Status: StatusCompensated, Version: 7})
 	for name, waiter := range map[string]*terminalWaiter{"first": first, "second": second} {
 		if got := waiter.newerThan(4); got == nil || got.Version != 7 || got.Status != StatusCompensated {
 			t.Fatalf("%s waiter got %+v", name, got)
@@ -507,7 +562,7 @@ func TestWaitTerminalIgnoresTerminalsOlderThanTheKnownVersion(t *testing.T) {
 		t.Fatalf("WaitTerminal before Start: %v", err)
 	}
 	e.ready.Store(true) // 单元里没有 Start：终态由用例直接交给观察者
-	current := Record{ID: "s1", Status: StatusCompensating, Version: 9}
+	current := Record{Lifecycle: testLifecycle, ID: "s1", Status: StatusCompensating, Version: 9}
 	raw.answer = func(subject string, data []byte) ([]byte, error) {
 		return json.Marshal(queryReply{V: WireVersion, Part: 0, Found: true, Record: &current})
 	}
@@ -533,19 +588,19 @@ func TestWaitTerminalIgnoresTerminalsOlderThanTheKnownVersion(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	time.Sleep(20 * time.Millisecond) // 两个等待者都已 Get 完（已知版本 9）
-	e.watch.observe(Record{ID: "s1", Status: StatusFailed, Version: 8})
+	e.watch.observe(Record{Lifecycle: testLifecycle, ID: "s1", Status: StatusFailed, Version: 8})
 	select {
 	case r := <-results:
 		t.Fatalf("an older terminal (v8, before the reopen at v9) woke a waiter: %+v", r)
 	case <-time.After(50 * time.Millisecond):
 	}
-	e.watch.observe(Record{ID: "s1", Status: StatusCompensated, Version: 11})
+	e.watch.observe(Record{Lifecycle: testLifecycle, ID: "s1", Status: StatusCompensated, Version: 11})
 	for range 2 {
 		if r := <-results; r.Version != 11 {
 			t.Fatalf("woke with %+v", r)
 		}
 	}
-	current = Record{ID: "s2", Status: StatusCompleted, Version: 4}
+	current = Record{Lifecycle: testLifecycle, ID: "s2", Status: StatusCompleted, Version: 4}
 	if r, err := e.WaitTerminal(ctx, "s2"); err != nil || r.Version != 4 {
 		t.Fatalf("already terminal: %+v %v", r, err)
 	}

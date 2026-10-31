@@ -360,7 +360,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "saga.snapshot_every_events", Kind: "int", Default: "2000", Min: "1", Starter: true, Example: "2000"},
 		{Name: "saga.snapshot_interval", Kind: "duration", Default: "30s", Min: "1s", Starter: true, Example: "30s"},
 		{Name: "saga.terminal_retention", Kind: "duration", Default: "1h", Min: "1m", Help: "终态在内存与快照里留多久：期间 Get / Lookup 可读、同业务键去重、迟到成功可补偿；≤ receipt_retention", Starter: true, Example: "1h"},
-		{Name: "saga.receipt_retention", Kind: "duration", Default: "168h", Min: "1m", Help: "参与方回执保留期：必须长于步骤命令可能重投的最长时间；更早更新的记录拒绝 Resume", Starter: true, Example: "168h"},
+		{Name: "saga.receipt_retention", Kind: "duration", Default: "168h", Min: "1m", Help: "参与方回执保留期：至少是每个步骤重试窗口（超时 × 次数 + 退避上限 × (次数 − 1)）的 2 倍，配置检查按定义强制；更早更新的记录拒绝 Resume", Starter: true, Example: "168h"},
 		{Name: "saga.publish_timeout", Kind: "duration", Default: "3s", Min: "1ns", Max: "9s", Help: "一次分区事件发布等 PubAck 的时长，< publish_unknown_budget", Starter: true, Example: "3s"},
 		{Name: "saga.publish_unknown_budget", Kind: "duration", Default: "30s", Min: "21s", Help: "分区事件发布结果未知时重发判定的总时长（≥ 3 × 7s 选主停顿），超过 fail-stop", Starter: true, Example: "30s"},
 		{Name: "saga.query_timeout", Kind: "duration", Default: "2s", Min: "1ns", Starter: true, Example: "2s"},

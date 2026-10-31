@@ -223,6 +223,42 @@ func TestStepTimeoutMustBeShorterThanTheStepConsumersAckWait(t *testing.T) {
 	}
 }
 
+// saga.receipt_retention 必须盖住每个步骤解析后的重试窗口（RV-20261030-02）：参与方剪掉过了保留期的回执后，同一操作的重试会再
+// 执行一次业务。规则用到定义（预算可写在定义里、step_defaults 或 saga.steps 覆盖），配置检查（--check-config / doctor）与
+// Init 都按 coresaga.CheckReceiptRetention 拒绝，不在运行期间才暴露。
+func TestReceiptRetentionMustCoverEveryStepsRetryWindow(t *testing.T) {
+	const identity = "server_type: game\nsid: 1\n"
+	for name, tc := range map[string]struct {
+		yaml string
+		want string
+	}{
+		// 评审的复现：保留 60s，10s × 10 次 + 10s × 9 次退避 = 190s。
+		"step_defaults": {yaml: "saga:\n  terminal_retention: 1m\n  receipt_retention: 1m\n  step_defaults:\n    timeout: 10s\n    max_attempts: 10\n    backoff_min: 10s\n    backoff_max: 10s\n",
+			want: `step "debit": receipt retention 1m0s must be at least 2 × the step's retry window 3m10s`},
+		// 只有一个步骤的覆盖超出：deliver 改为 20 次，窗口 5s × 20 + 5s × 19 = 195s，留 2m 不够；debit 用缺省预算（窗口 45s，2 倍 90s）够。
+		"per-step override": {yaml: "saga:\n  terminal_retention: 1m\n  receipt_retention: 2m\n  steps:\n    gift_item:\n      deliver:\n        max_attempts: 20\n",
+			want: `step "deliver": receipt retention 2m0s must be at least 2 × the step's retry window`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := app.CheckConfig(yamlConfig(t, identity+tc.yaml), NewMod(giftDefinition())); err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "saga.receipt_retention") {
+				t.Fatalf("CheckConfig = %v, want the receipt retention refused naming %s", err, tc.want)
+			}
+			if err := NewMod(giftDefinition()).Init(yamlConfig(t, tc.yaml)); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Init = %v, want the same refusal as the config check", err)
+			}
+		})
+	}
+	// 缺省（168h，缺省预算窗口 45s）与恰好 2 倍（窗口 45s，留 90s）都照常通过。
+	for _, text := range []string{"saga: {}\n", "saga:\n  terminal_retention: 1m\n  receipt_retention: 90s\n"} {
+		if err := app.CheckConfig(yamlConfig(t, identity+text), NewMod(giftDefinition())); err != nil {
+			t.Fatalf("CheckConfig(%q) = %v", text, err)
+		}
+		if err := NewMod(giftDefinition()).Init(yamlConfig(t, text)); err != nil {
+			t.Fatalf("Init(%q) = %v", text, err)
+		}
+	}
+}
+
 func TestPerStepOverrideAppliesToMixedCaseNamesWithoutDefinitions(t *testing.T) {
 	cfg := yamlConfig(t, "saga:\n  steps:\n    GiftItem:\n      Debit:\n        max_attempts: 15\n")
 	definition := coresaga.Definition{Type: "GiftItem", Version: 1, Steps: []coresaga.Step{{Name: "Debit", ForwardTopic: "gift.debit"}}}

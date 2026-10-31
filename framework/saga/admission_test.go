@@ -65,7 +65,7 @@ func TestAdmissionHysteresisAndDeletion(t *testing.T) {
 		t.Fatalf("below the low mark: %+v", s)
 	}
 	// admit 提示与坏值不是信号。
-	a.observe(fnats.LogKVEntry{Key: admitHintKey, Value: []byte(`{"v":2,"open":false}`)})
+	a.observe(fnats.LogKVEntry{Key: admitHintKey, Value: []byte(`{"v":3,"open":false}`)})
 	a.observe(fnats.LogKVEntry{Key: "part.game.3", Value: []byte("garbage")})
 	if s := a.evaluate(); !s.Open {
 		t.Fatalf("hint or garbage counted: %+v", s)

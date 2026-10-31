@@ -107,7 +107,7 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 		m.coldCopy = &coresaga.ColdCopySettings{Database: c.Database, Collection: cold.Collection, TerminalOnly: cold.TerminalOnly,
 			BatchSize: cold.BatchSize, MaxWait: cold.MaxWait}
 	}
-	return checkStepTimeouts(budgets, m.definitions)
+	return checkStepBudgets(budgets, m.definitions, c.ReceiptRetention)
 }
 
 // CheckConfigAcrossMods 是 saga 读别的 Mod 配置键的规则（App 在配置检查时调用：启动前任何 Mod Init 之前、
@@ -119,6 +119,9 @@ func (m *Mod) Init(cfg *viper.Viper) error {
 //   - 同一进程注册了 DataEngine 且准入开启时，dataengine.projection.max_unacked_records 必须 > 0 且 ≥ 4 × saga.admission.high_records：
 //     准入只拦新启动，在途推进照常产生投影积压，硬上限是最后一道闸（到上限 DataEngine 在 WAL 准入前拒绝，命令 nak 重试）。
 //   - saga.cold_copy.enabled 时本进程必须注册 Mongo Mod（冷副本的读写都在 saga.database）。
+//
+// 另外按本 Mod 注册的定义解析步骤预算并查 checkStepBudgets（步骤超时、回执保留期 ≥ 重试窗口的倍数）：这两条要用到定义，
+// 声明的 ValidateConfig 看不到定义，放在这里让配置检查与 Init 报同样的错。
 func (m *Mod) CheckConfigAcrossMods(cfg *viper.Viper, registered func(app.ModName) bool) error {
 	var settings config
 	if err := app.LoadConfig(cfg, &settings); err != nil {
@@ -128,14 +131,19 @@ func (m *Mod) CheckConfigAcrossMods(cfg *viper.Viper, registered func(app.ModNam
 		return fmt.Errorf("saga.cold_copy.enabled needs the mongo Mod in this process: the cold copy is written to and read from %s.%s",
 			settings.Saga.Database, settings.Saga.ColdCopy.Collection)
 	}
+	var errs []error
+	if budgets, err := stepBudgets(settings.Saga.StepDefaults, settings.Saga.Steps, m.definitions); err != nil {
+		errs = append(errs, err)
+	} else if err := checkStepBudgets(budgets, m.definitions, settings.Saga.ReceiptRetention); err != nil {
+		errs = append(errs, err)
+	}
 	if !registered(mods.ModDataEngine) {
-		return nil
+		return errors.Join(errs...)
 	}
 	effects, err := kitdataengine.LoadEffectsConfig(cfg)
 	if err != nil {
-		return err
+		return errors.Join(append(errs, err)...)
 	}
-	var errs []error
 	if stream := strings.TrimSpace(settings.Saga.StartEffectStream); stream != "" && stream != effects.Stream {
 		errs = append(errs, effectKeyMismatch("saga.start_effect_stream", stream, "dataengine.effects.stream", effects.Stream))
 	}

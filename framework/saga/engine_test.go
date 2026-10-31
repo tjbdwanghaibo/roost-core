@@ -121,7 +121,7 @@ func TestMissingDefinitionVersionIsFencedForManualRepair(t *testing.T) {
 	engine := newSimEngine(t, nil)
 	now := engine.clock.Now()
 	id := IDOf("rally", "missing-version")
-	engine.seed(Record{ID: id, Type: "rally", DefinitionVersion: 99, BusinessKey: "missing-version", Status: StatusPending, Phase: PhaseForward, Version: 1, NextRunAt: now, CreatedAt: now, UpdatedAt: now})
+	engine.seed(Record{Lifecycle: testLifecycle, ID: id, Type: "rally", DefinitionVersion: 99, BusinessKey: "missing-version", Status: StatusPending, Phase: PhaseForward, Version: 1, NextRunAt: now, CreatedAt: now, UpdatedAt: now})
 	engine.advance(0)
 	if current, err := engine.Get(context.Background(), id); err != nil || current.Status != StatusManualRequired {
 		t.Fatalf("missing definition was not fenced: %+v %v", current, err)
@@ -274,7 +274,7 @@ func TestResumeRequiresExplicitExpiredDeadlinePolicy(t *testing.T) {
 	engine := newSimEngine(t, nil)
 	now := engine.clock.Now()
 	id := IDOf("rally", "expired")
-	engine.seed(Record{ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "expired", Status: StatusFailed, Phase: PhaseForward, Step: 0, Version: 1, DeadlineAt: now.Add(-time.Minute), CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Minute)})
+	engine.seed(Record{Lifecycle: testLifecycle, ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "expired", Status: StatusFailed, Phase: PhaseForward, Step: 0, Version: 1, DeadlineAt: now.Add(-time.Minute), CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Minute)})
 	if _, err := engine.Resume(context.Background(), ResumeRequest{ID: id, Now: now}); !errors.Is(err, ErrDeadlineExpired) {
 		t.Fatalf("err=%v", err)
 	}

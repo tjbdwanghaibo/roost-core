@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// testLifecycle 是单元用例手写记录的生命周期标识（协调器新建的记录用 newLifecycle 随机生成）。
+const testLifecycle = "TESTLIFE"
+
 // 状态机的转移规则（transition.go）原样抽自已删除的 Redis 协调器（第 2 批）。第 2、3 批的差分用例把同一串事件交给两种协调器
 // 逐步比对；第 4 批删除 Redis 协调器前，用它在同一串事件上逐步记下的记录（状态、方向、步骤、版本、代际、CommandID、迟到步骤、
 // 错误文本、Data）、tombstone 关闭方式与运维判定的错误文本存成 testdata/transition_golden.json（生成方法：在 1fbd5d0e 的差分
@@ -95,7 +98,17 @@ func (s *sagaRun) due(d time.Duration) {
 func (s *sagaRun) complete(c Completion) {
 	s.t.Helper()
 	s.u.round(s.at, s.u.resultInput(c))
-	s.compare("complete " + c.CommandID)
+	s.compare("complete " + s.recordedKey(c.CommandID))
+}
+
+// recordedKey 把操作键 / CommandID 换成 golden 记录时的写法。golden 早于生命周期标识，那时操作键是 "<ID>:<方向>:<步骤>"；
+// 生命周期只是一笔 saga 之内恒定的命名段，不影响转移规则，比对前去掉它（tombstone 的键在 compare 里反过来补上）。
+func (s *sagaRun) recordedKey(key string) string {
+	r := s.current()
+	if rest, ok := strings.CutPrefix(key, r.ID+":"+r.Lifecycle+":"); ok {
+		return r.ID + ":" + rest
+	}
+	return key
 }
 
 func (s *sagaRun) resume() {
@@ -146,7 +159,7 @@ func (s *sagaRun) compare(step string) {
 	g := s.expect(step)
 	r := s.current()
 	got := goldenView{Status: r.Status.String(), Phase: r.Phase.String(), Step: r.Step, Completed: r.CompletedSteps, Late: r.LateStep, Attempt: r.Attempt,
-		Incarnation: r.Incarnation, Version: r.Version, Op: r.OperationKey, Command: r.CommandID, LastError: r.LastError, Data: string(r.Data), LateData: string(r.LateData)}
+		Incarnation: r.Incarnation, Version: r.Version, Op: s.recordedKey(r.OperationKey), Command: s.recordedKey(r.CommandID), LastError: r.LastError, Data: string(r.Data), LateData: string(r.LateData)}
 	if got != *g.View {
 		s.t.Fatalf("%s: records differ\nrecorded  %+v\npartition %+v", step, *g.View, got)
 	}
@@ -155,7 +168,7 @@ func (s *sagaRun) compare(step string) {
 		s.t.Fatalf("%s: tombstones: recorded %v, partition %+v", step, g.Tombstones, ops)
 	}
 	for op, closure := range g.Tombstones {
-		if got := closureName(ops[op].Closure); got != closure {
+		if got := closureName(ops[r.ID+":"+r.Lifecycle+":"+strings.TrimPrefix(op, r.ID+":")].Closure); got != closure {
 			s.t.Fatalf("%s: tombstone of %s: recorded %s, partition %s", step, op, closure, got)
 		}
 	}

@@ -1,6 +1,7 @@
 package saga
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -87,7 +88,7 @@ func openOperation(record Record) string {
 		return record.OperationKey
 	case StatusPending, StatusCompensating:
 		if record.Attempt > 0 {
-			return operationKey(record.ID, record.Phase, record.Step)
+			return currentOperation(record)
 		}
 	}
 	return ""
@@ -107,9 +108,9 @@ func prepareStart(request StartRequest, maxPayload int) (StartRequest, error) {
 }
 
 // newStartRecord 是一笔新 saga 的第一版记录：Pending、正向第 0 步、版本 1，立即到期；启动摘要独立保存原始意图。
-// request 已经过 prepareStart。
-func newStartRecord(request StartRequest, id string, now time.Time) (Record, error) {
-	record := Record{ID: id, Type: request.Type, DefinitionVersion: request.DefinitionVersion, BusinessKey: request.BusinessKey, Status: StatusPending, Phase: PhaseForward, Step: 0, Version: 1, Data: append([]byte(nil), request.Data...), NextRunAt: now, DeadlineAt: request.DeadlineAt, CreatedAt: now, UpdatedAt: now}
+// request 已经过 prepareStart；lifecycle 是这一笔的生命周期标识（newLifecycle），每次新建都不同。
+func newStartRecord(request StartRequest, id, lifecycle string, now time.Time) (Record, error) {
+	record := Record{ID: id, Lifecycle: lifecycle, Type: request.Type, DefinitionVersion: request.DefinitionVersion, BusinessKey: request.BusinessKey, Status: StatusPending, Phase: PhaseForward, Step: 0, Version: 1, Data: append([]byte(nil), request.Data...), NextRunAt: now, DeadlineAt: request.DeadlineAt, CreatedAt: now, UpdatedAt: now}
 	// Data / DeadlineAt 是运行状态，原始启动身份必须独立持久保存。
 	intentDigest, err := startIntentDigest(request)
 	if err != nil {
@@ -187,7 +188,7 @@ func planDue(record Record, definition Definition, defined bool, now time.Time) 
 	after.Version++
 	after.UpdatedAt = now
 	after.NextRunAt = now.Add(step.Timeout)
-	after.OperationKey = operationKey(record.ID, record.Phase, record.Step)
+	after.OperationKey = currentOperation(record)
 	after.CommandID = commandID(after.OperationKey, after.Incarnation, after.Attempt)
 	topic := step.ForwardTopic
 	if record.Phase == PhaseCompensate {
@@ -340,7 +341,7 @@ func positionedAt(record Record, operation string) bool {
 	case StatusWaiting:
 		return record.OperationKey == operation
 	case StatusPending, StatusCompensating:
-		return operationKey(record.ID, record.Phase, record.Step) == operation
+		return currentOperation(record) == operation
 	default:
 		return false
 	}
@@ -391,7 +392,7 @@ func judgeHistory(record Record, completion Completion, history completionHistor
 // 且记录已离开正向（补偿方向、Failed，或等运维的 ManualRequired）。下面几种按 4.3 的论证不会发生，出现时退回只告警：
 // 记录还在正向非终态、已记着另一个迟到步骤、或这一步在已完成前缀之内。
 func lateForwardStep(record Record, operation string) (int, bool) {
-	phase, step, ok := parseOperationKey(record.ID, operation)
+	phase, step, ok := parseOperationKey(record, operation)
 	if !ok || phase != PhaseForward || step < record.CompletedSteps || (record.LateStep != 0 && record.LateStep != step+1) {
 		return 0, false
 	}
@@ -570,13 +571,28 @@ func stepFor(record Record, definition Definition) (Step, bool) {
 	return definition.Steps[record.Step], true
 }
 
-func operationKey(id string, phase Phase, step int) string {
-	return fmt.Sprintf("%s:%d:%d", id, phase, step)
+// operationKey 命名一个操作实例（某一笔 saga 的某个方向的某一步）："<saga ID>:<生命周期>:<方向>:<步骤>"。它是参与方回执、
+// 协调器 tombstone 与结果去重的键：同一笔之内（含 Resume 之后的各代际）各次尝试共用它，所以成功回执跨尝试、跨代际都能回放；
+// 生命周期不同（终态剪掉后同业务键新开的一笔）就是不同的操作，上一笔的回执与迟到结果都对不上新一笔。
+func operationKey(id, lifecycle string, phase Phase, step int) string {
+	return fmt.Sprintf("%s:%s:%d:%d", id, lifecycle, phase, step)
 }
 
-// parseOperationKey 是 operationKey 的逆：取出这个 saga 的操作的方向与步骤号；不是这个 saga 的操作返回 false。
-func parseOperationKey(id, operation string) (Phase, int, bool) {
-	rest, ok := strings.CutPrefix(operation, id+":")
+// currentOperation 是记录当前位置（方向、步骤）的操作键。
+func currentOperation(record Record) string {
+	return operationKey(record.ID, record.Lifecycle, record.Phase, record.Step)
+}
+
+// newLifecycle 生成一笔新 saga 的生命周期标识：128 位随机数的 base32 文本（26 字节，不含 ':'、'.'）。它随记录写进分区事件，
+// 重放、快照与冷副本都原样恢复，不需要可重算。
+func newLifecycle() string {
+	return rand.Text()
+}
+
+// parseOperationKey 是 operationKey 的逆：取出这一笔 saga（ID 与生命周期都相同）的操作的方向与步骤号；不是这一笔的操作
+// （别的 saga，或同一业务键之前 / 之后的另一笔）返回 false。
+func parseOperationKey(record Record, operation string) (Phase, int, bool) {
+	rest, ok := strings.CutPrefix(operation, record.ID+":"+record.Lifecycle+":")
 	if !ok {
 		return 0, 0, false
 	}

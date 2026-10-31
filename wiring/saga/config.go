@@ -65,7 +65,7 @@ type config struct {
 		SnapshotEveryEvents int           `config:"snapshot_every_events" default:"2000" min:"1" example:"2000"`
 		SnapshotInterval    time.Duration `config:"snapshot_interval" default:"30s" min:"1s" example:"30s"`
 		TerminalRetention   time.Duration `config:"terminal_retention" default:"1h" min:"1m" example:"1h" help:"终态在内存与快照里留多久：期间 Get / Lookup 可读、同业务键去重、迟到成功可补偿；≤ receipt_retention"`
-		ReceiptRetention    time.Duration `config:"receipt_retention" default:"168h" min:"1m" example:"168h" help:"参与方回执保留期：必须长于步骤命令可能重投的最长时间；更早更新的记录拒绝 Resume"`
+		ReceiptRetention    time.Duration `config:"receipt_retention" default:"168h" min:"1m" example:"168h" help:"参与方回执保留期：至少是每个步骤重试窗口（超时 × 次数 + 退避上限 × (次数 − 1)）的 2 倍，配置检查按定义强制；更早更新的记录拒绝 Resume"`
 		PublishTimeout      time.Duration `config:"publish_timeout" default:"3s" min:"1ns" max:"9s" example:"3s" help:"一次分区事件发布等 PubAck 的时长，< publish_unknown_budget"`
 		// 下限 21s：一条流选主停顿实测 5～7s，结果未知的重发判定要撑过 3 次（声明的 min 是唯一的强制点）。
 		PublishUnknownBudget time.Duration `config:"publish_unknown_budget" default:"30s" min:"21s" example:"30s" help:"分区事件发布结果未知时重发判定的总时长（≥ 3 × 7s 选主停顿），超过 fail-stop"`
@@ -148,7 +148,8 @@ func (c *config) isCoordinator() bool {
 //
 //   - 布局：Layout.Validate（前缀、流名、P / G 范围、每条流 ≤ 50 个分区）；saga.coordinators 是不重复的正整数 sid；
 //   - 发布：publish_timeout < publish_unknown_budget（声明已要求预算 ≥ 3 × 7s、超时 < 10s），duplicate_window ≥ 2 × 预算；
-//   - 保留：terminal_retention ≤ receipt_retention；
+//   - 保留：terminal_retention ≤ receipt_retention；receipt_retention 与每个步骤重试窗口的关系要用到定义，在
+//     checkStepBudgets 里查；
 //   - 准入：low_records < high_records，stale_after ≥ 5 × signal_interval；
 //   - 启动中继的并发不超过 max_ack_pending；配置里写的步骤超时必须短于步骤消费者的 AckWait（理由见 stepTimeoutError）；
 //   - 生产：replicas 必须为 3；本进程在 saga.coordinators 里时必须启用单实例锁（singleton.enabled，App 级“一个 sid 一个
@@ -215,14 +216,24 @@ func (c *config) admission() coresaga.AdmissionOptions {
 	return coresaga.AdmissionOptions{Enabled: a.Enabled, HighRecords: uint64(a.HighRecords), LowRecords: uint64(a.LowRecords), StaleAfter: a.StaleAfter}
 }
 
-// checkStepTimeouts 查解析完预算之后每个定义的每个步骤（包括定义里写死的 Timeout），规则同 ValidateConfig。
-func checkStepTimeouts(budgets coresaga.StepBudgets, definitions []coresaga.Definition) error {
+// checkStepBudgets 查解析完预算之后每个定义的每个步骤（包括定义里写死的预算）：
+//
+//   - 超时短于步骤消费者的 AckWait（规则同 ValidateConfig 对配置键的检查）；
+//   - saga.receipt_retention 至少是这一步重试窗口的 coresaga.ReceiptRetentionFactor 倍（coresaga.CheckReceiptRetention，
+//     Engine.Register 用同一个函数）：参与方剪掉过了保留期的回执后，同一操作的重试会再执行一次业务。
+//
+// Init 与配置检查（CheckConfigAcrossMods，--check-config / doctor）都调它，规则只声明这一次。
+func checkStepBudgets(budgets coresaga.StepBudgets, definitions []coresaga.Definition, receiptRetention time.Duration) error {
 	var errs []error
 	for _, definition := range definitions {
-		for _, step := range budgets.Resolve(definition).Steps {
+		resolved := budgets.Resolve(definition)
+		for _, step := range resolved.Steps {
 			if step.Timeout >= coresaga.DefaultStepAckWait {
 				errs = append(errs, stepTimeoutError(fmt.Sprintf("saga %q step %q timeout", definition.Type, step.Name), step.Timeout))
 			}
+		}
+		if err := coresaga.CheckReceiptRetention(resolved, receiptRetention); err != nil {
+			errs = append(errs, fmt.Errorf("saga.receipt_retention: %w", err))
 		}
 	}
 	return errors.Join(errs...)

@@ -226,6 +226,7 @@ type coldRecordDoc struct {
 	BusinessKey       string    `bson:"business_key"`
 	StartDigest       string    `bson:"start_digest,omitempty"`
 	StartAttempt      string    `bson:"start_attempt,omitempty"`
+	Lifecycle         string    `bson:"lifecycle"`
 	Status            Status    `bson:"status"`
 	Phase             Phase     `bson:"phase"`
 	Step              int       `bson:"step"`
@@ -253,7 +254,7 @@ func toColdRecordDoc(r Record) coldRecordDoc {
 		return t.UTC().Truncate(time.Millisecond)
 	}
 	return coldRecordDoc{ID: r.ID, Type: r.Type, DefinitionVersion: r.DefinitionVersion, BusinessKey: r.BusinessKey, StartDigest: r.StartDigest,
-		StartAttempt: r.StartAttempt, Status: r.Status, Phase: r.Phase, Step: r.Step, CompletedSteps: r.CompletedSteps, Attempt: r.Attempt,
+		StartAttempt: r.StartAttempt, Lifecycle: r.Lifecycle, Status: r.Status, Phase: r.Phase, Step: r.Step, CompletedSteps: r.CompletedSteps, Attempt: r.Attempt,
 		Incarnation: r.Incarnation, LateStep: r.LateStep, LateData: append([]byte(nil), r.LateData...), Version: int64(r.Version),
 		Data: append([]byte(nil), r.Data...), LastError: r.LastError, OperationKey: r.OperationKey, CommandID: r.CommandID,
 		NextRunAt: ms(r.NextRunAt), DeadlineAt: ms(r.DeadlineAt), CreatedAt: ms(r.CreatedAt), UpdatedAt: ms(r.UpdatedAt)}
@@ -265,7 +266,7 @@ func (d coldRecordDoc) validated() (Record, error) {
 		lateData = append([]byte(nil), d.LateData...)
 	}
 	record := Record{ID: d.ID, Type: d.Type, DefinitionVersion: d.DefinitionVersion, BusinessKey: d.BusinessKey, StartDigest: d.StartDigest,
-		StartAttempt: d.StartAttempt, Status: d.Status, Phase: d.Phase, Step: d.Step, CompletedSteps: d.CompletedSteps, Attempt: d.Attempt,
+		StartAttempt: d.StartAttempt, Lifecycle: d.Lifecycle, Status: d.Status, Phase: d.Phase, Step: d.Step, CompletedSteps: d.CompletedSteps, Attempt: d.Attempt,
 		Incarnation: d.Incarnation, LateStep: d.LateStep, LateData: lateData, Version: uint64(max(d.Version, 0)),
 		Data: append([]byte(nil), d.Data...), LastError: d.LastError, OperationKey: d.OperationKey, CommandID: d.CommandID,
 		NextRunAt: d.NextRunAt, DeadlineAt: d.DeadlineAt, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt}

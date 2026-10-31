@@ -18,7 +18,7 @@ func idleEngine(t *testing.T) (*simEngine, *simEngine) {
 func seedRecord(t *testing.T, store *simEngine, id string, status Status, completed int) Record {
 	t.Helper()
 	now := store.clock.Now()
-	record := Record{ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "key-" + id, Status: status, Phase: PhaseForward, Step: completed, CompletedSteps: completed, Version: 3, NextRunAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}
+	record := Record{Lifecycle: testLifecycle, ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "key-" + id, Status: status, Phase: PhaseForward, Step: completed, CompletedSteps: completed, Version: 3, NextRunAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now}
 	if status.Terminal() {
 		record.NextRunAt = time.Time{}
 	}
@@ -163,9 +163,9 @@ func TestStepRefusalMovesSagaIntoCompensation(t *testing.T) {
 	now := engine.clock.Now()
 	id := IDOf("rally", "gift-1")
 	record := Record{
-		ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "gift-1",
+		Lifecycle: testLifecycle, ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "gift-1",
 		Status: StatusWaiting, Phase: PhaseForward, Step: 1, CompletedSteps: 1, Attempt: 1, Version: 3,
-		OperationKey: operationKey(id, PhaseForward, 1), CommandID: commandID(operationKey(id, PhaseForward, 1), 0, 1),
+		OperationKey: operationKey(id, testLifecycle, PhaseForward, 1), CommandID: commandID(operationKey(id, testLifecycle, PhaseForward, 1), 0, 1),
 		NextRunAt: now.Add(time.Minute), CreatedAt: now, UpdatedAt: now,
 	}
 	engine.seed(record)
@@ -189,7 +189,7 @@ func TestStepRefusalMovesSagaIntoCompensation(t *testing.T) {
 func TestRetryOrCompensateAdvancesVersionByOne(t *testing.T) {
 	now := time.Now().UTC()
 	definition := testDefinition()
-	base := Record{ID: "s-2", Type: "rally", DefinitionVersion: 1, BusinessKey: "k", Status: StatusWaiting, Phase: PhaseForward, Step: 1, CompletedSteps: 1, Version: 7, OperationKey: "s-2:1:1", CommandID: "s-2:1:1:1", NextRunAt: now, CreatedAt: now, UpdatedAt: now}
+	base := Record{Lifecycle: testLifecycle, ID: "s-2", Type: "rally", DefinitionVersion: 1, BusinessKey: "k", Status: StatusWaiting, Phase: PhaseForward, Step: 1, CompletedSteps: 1, Version: 7, OperationKey: operationKey("s-2", testLifecycle, PhaseForward, 1), CommandID: commandID(operationKey("s-2", testLifecycle, PhaseForward, 1), 0, 1), NextRunAt: now, CreatedAt: now, UpdatedAt: now}
 	retry := base
 	retry.Attempt = 1 // below MaxAttempts 2: schedules another attempt
 	exhausted := base
@@ -206,7 +206,7 @@ func TestRetryOrCompensateAdvancesVersionByOne(t *testing.T) {
 func TestApplyCompletionAdvancesVersionByOne(t *testing.T) {
 	now := time.Now().UTC()
 	definition := testDefinition()
-	record := Record{ID: "s-1", Type: "rally", DefinitionVersion: 1, BusinessKey: "k", Status: StatusWaiting, Phase: PhaseForward, Step: 1, CompletedSteps: 1, Attempt: 1, Version: 7, OperationKey: "s-1:1:1", CommandID: "s-1:1:1:1", NextRunAt: now, CreatedAt: now, UpdatedAt: now}
+	record := Record{Lifecycle: testLifecycle, ID: "s-1", Type: "rally", DefinitionVersion: 1, BusinessKey: "k", Status: StatusWaiting, Phase: PhaseForward, Step: 1, CompletedSteps: 1, Attempt: 1, Version: 7, OperationKey: operationKey("s-1", testLifecycle, PhaseForward, 1), CommandID: commandID(operationKey("s-1", testLifecycle, PhaseForward, 1), 0, 1), NextRunAt: now, CreatedAt: now, UpdatedAt: now}
 	for name, completion := range map[string]Completion{
 		"success":         {Success: true, CompletedAt: now},
 		"refusal":         {Success: false, Retryable: false, Error: "no", CompletedAt: now},

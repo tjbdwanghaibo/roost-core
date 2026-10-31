@@ -10,13 +10,14 @@ import (
 	"time"
 )
 
-// log_wire.go 是 JetStream 协调器的线格式（WireVersion 2，设计 §4.2）：分区事件、三类输入、判定回复与查询、快照清单与正文。
-// 一律 JSON；解码按版本精确匹配，不兼容 WireVersion 1（线上未部署，升级需清空，见 CHANGELOG）。坏输入（解码失败、版本不对、
+// log_wire.go 是 JetStream 协调器的线格式（WireVersion 3，设计 §4.2）：分区事件、三类输入、判定回复与查询、快照清单与正文。
+// 一律 JSON；解码按版本精确匹配，不兼容更早的版本（线上未部署，升级需清空，见 CHANGELOG）。3 相对 2：记录多了必填的
+// Lifecycle，操作键改为 "<ID>:<生命周期>:<方向>:<步骤>"（RV-20261030-01）。坏输入（解码失败、版本不对、
 // 内容校验不过）由分区计数并跳过，输入水位照常前进（日志里的输入不能 Term）；坏事件与坏快照说明权威日志本身不可信，分区不启动。
 
 // WireVersion 是 saga 全部线上消息的格式版本：分区事件、输入、快照清单、准入信号与 Nest 启动 effect。不兼容旧版本（1 是已删除
-// 的 Redis 协调器与它的信封），解码按版本精确匹配。
-const WireVersion uint16 = 2
+// 的 Redis 协调器与它的信封，2 是没有生命周期标识的记录与操作键），解码按版本精确匹配。
+const WireVersion uint16 = 3
 
 // replyHeader 是启动 / 运维意图上的业务头：所有者把判定经核心 NATS 发到这个 subject（只给这一次尝试，选项 R-A）。
 const replyHeader = "Roost-Saga-Reply"
@@ -62,7 +63,7 @@ func (s *sagaState) validate() error {
 		return err
 	}
 	for op, tomb := range s.Ops {
-		if _, _, ok := parseOperationKey(s.Record.ID, op); !ok || (tomb.Closure != OperationClosedWithResult && tomb.Closure != OperationAbandoned) {
+		if _, _, ok := parseOperationKey(s.Record, op); !ok || (tomb.Closure != OperationClosedWithResult && tomb.Closure != OperationAbandoned) {
 			return fmt.Errorf("%w: saga %s tombstone %q", ErrInvalidRecord, s.Record.ID, op)
 		}
 	}

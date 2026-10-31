@@ -10,14 +10,14 @@ import (
 // 完成判定与代际变更按实际结果验证，不约束内部函数必须如何组织。
 func TestJudgeCompletionIsTheUnifiedRule(t *testing.T) {
 	const current uint32 = 2
-	operation := operationKey("g", PhaseForward, 1)
-	other := operationKey("g", PhaseForward, 0)
+	operation := operationKey("g", testLifecycle, PhaseForward, 1)
+	other := operationKey("g", testLifecycle, PhaseForward, 0)
 	waitingFor := commandID(operation, current, 3)
 	positions := map[string]Record{
-		"waiting":     {ID: "g", Phase: PhaseForward, Step: 1, Status: StatusWaiting, OperationKey: operation, CommandID: waitingFor, Attempt: 3},
-		"backoff":     {ID: "g", Phase: PhaseForward, Step: 1, Status: StatusPending, Attempt: 3},
-		"to dispatch": {ID: "g", Phase: PhaseForward, Step: 1, Status: StatusPending},
-		"elsewhere":   {ID: "g", Phase: PhaseForward, Step: 0, Status: StatusWaiting, OperationKey: other, CommandID: commandID(other, current, 1), Attempt: 1},
+		"waiting":     {Lifecycle: testLifecycle, ID: "g", Phase: PhaseForward, Step: 1, Status: StatusWaiting, OperationKey: operation, CommandID: waitingFor, Attempt: 3},
+		"backoff":     {Lifecycle: testLifecycle, ID: "g", Phase: PhaseForward, Step: 1, Status: StatusPending, Attempt: 3},
+		"to dispatch": {Lifecycle: testLifecycle, ID: "g", Phase: PhaseForward, Step: 1, Status: StatusPending},
+		"elsewhere":   {Lifecycle: testLifecycle, ID: "g", Phase: PhaseForward, Step: 0, Status: StatusWaiting, OperationKey: other, CommandID: commandID(other, current, 1), Attempt: 1},
 	}
 	incarnations := map[string]uint32{"older": current - 1, "same": current, "newer": current + 1}
 	kinds := []string{"success", "refusal", "retryable of the waited attempt", "retryable of an earlier attempt"}
@@ -91,7 +91,7 @@ func TestStepTransitionAloneDecidesTheIncarnation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// 分区写记录都经 round.apply → planTransition；调用方在 after 上写的代际不起作用，提交进分区的就是返回的那个。
 			u := newUnitPartition(t, nil)
-			before := Record{ID: IDOf("gift", "inc-1"), Type: "gift", DefinitionVersion: 1, BusinessKey: "inc-1", Status: StatusPending, Phase: tc.phase, Version: 1, Incarnation: 3, Data: []byte("{}"), CreatedAt: now, UpdatedAt: now, NextRunAt: now}
+			before := Record{Lifecycle: testLifecycle, ID: IDOf("gift", "inc-1"), Type: "gift", DefinitionVersion: 1, BusinessKey: "inc-1", Status: StatusPending, Phase: tc.phase, Version: 1, Incarnation: 3, Data: []byte("{}"), CreatedAt: now, UpdatedAt: now, NextRunAt: now}
 			u.p.sagas[before.ID] = &sagaState{Record: before}
 			after := before.Clone()
 			after.Version++
@@ -126,7 +126,7 @@ func TestCoordinatorSkipsTheSameTerminalResults(t *testing.T) {
 	engine.waitCommand()
 	conflicting := accepted
 	conflicting.Data = []byte("another result under the same command id")
-	neverOpened := operationKey(record.ID, PhaseCompensate, 0) // 补偿第 0 步从没开过
+	neverOpened := operationKey(record.ID, record.Lifecycle, PhaseCompensate, 0) // 补偿第 0 步从没开过
 	cases := []struct {
 		name       string
 		completion Completion
@@ -222,7 +222,7 @@ func TestDefinitionFenceDuringBackoffAbandonsTheOperation(t *testing.T) {
 			engine := newSimEngine(t, nil)
 			now := engine.clock.Now()
 			id := IDOf("rally", "nc250-"+phase.String())
-			record := Record{ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "nc250-" + phase.String(),
+			record := Record{Lifecycle: testLifecycle, ID: id, Type: "rally", DefinitionVersion: 1, BusinessKey: "nc250-" + phase.String(),
 				Status: StatusPending, Phase: PhaseForward, Step: 1, CompletedSteps: 1, Version: 1, NextRunAt: now, CreatedAt: now, UpdatedAt: now}
 			if phase == PhaseCompensate {
 				record.Status, record.Phase, record.Step = StatusCompensating, PhaseCompensate, 0

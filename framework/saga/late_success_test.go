@@ -83,7 +83,7 @@ func TestNativeStepLateSuccessReopensAFailedSagaToCompensateTheStep(t *testing.T
 	}
 	w.tick(5 * time.Second)
 	compensation := w.pendingCommand()
-	if compensation.Phase != PhaseCompensate || compensation.Step != 0 || compensation.IdempotencyKey != w.sagaID+":2:0" || len(k.Payload) == 0 || !bytes.Equal(compensation.Payload, k.Payload) || !json.Valid(compensation.Payload) {
+	if compensation.Phase != PhaseCompensate || compensation.Step != 0 || compensation.IdempotencyKey != operationKey(w.sagaID, w.record().Lifecycle, PhaseCompensate, 0) || len(k.Payload) == 0 || !bytes.Equal(compensation.Payload, k.Payload) || !json.Valid(compensation.Payload) {
 		t.Fatalf("compensation command payload = %q (command %+v), want step 0 compensate with the late success's data — the forward command's own payload %q — as payload", compensation.Payload, compensation, k.Payload)
 	}
 	if err := w.complete(Completion{CommandID: compensation.ID, IdempotencyKey: compensation.IdempotencyKey, SagaID: w.sagaID, Success: true}); err != nil {
@@ -151,7 +151,7 @@ func TestNativeStepLateSuccessAfterCompensatedCompensatesOnlyThatStep(t *testing
 	}
 	w.tick(7 * time.Second)
 	compensateSecond := w.pendingCommand()
-	if compensateSecond.IdempotencyKey != w.sagaID+":2:1" || len(second.Payload) == 0 || !bytes.Equal(compensateSecond.Payload, second.Payload) {
+	if compensateSecond.IdempotencyKey != operationKey(w.sagaID, w.record().Lifecycle, PhaseCompensate, 1) || len(second.Payload) == 0 || !bytes.Equal(compensateSecond.Payload, second.Payload) {
 		t.Fatalf("want only step 1 compensated with its own data (the forward command's payload %q), got %+v", second.Payload, compensateSecond)
 	}
 	w.completeCompensation(compensateSecond, "")
@@ -324,7 +324,7 @@ func TestCoordinatorLateStepCompensationRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	compensation := engine.waitCommand()
-	if compensation.IdempotencyKey != operationKey(record.ID, PhaseCompensate, 1) || string(compensation.Payload) != "march-data" {
+	if compensation.IdempotencyKey != operationKey(record.ID, record.Lifecycle, PhaseCompensate, 1) || string(compensation.Payload) != "march-data" {
 		t.Fatalf("compensation command = %+v", compensation)
 	}
 	after, err := engine.Complete(ctx, Completion{CommandID: compensation.ID, IdempotencyKey: compensation.IdempotencyKey, SagaID: record.ID, Success: true})

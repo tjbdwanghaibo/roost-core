@@ -134,7 +134,7 @@ func TestNativeStepConsumerPublishesToThePartitionThenAcks(t *testing.T) {
 		t.Fatalf("an expired command published %+v", got)
 	}
 
-	if err := js.deliver(t, layout, first, []byte(`{"v":2,"part":3}`)); !fnats.IsPermanent(err) {
+	if err := js.deliver(t, layout, first, []byte(`{"v":3,"part":3}`)); !fnats.IsPermanent(err) {
 		t.Fatalf("an event without a command = %v, want a permanent (Term) error", err)
 	}
 	other := first

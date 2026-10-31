@@ -25,7 +25,7 @@ Saga 用于跨越多个独立事务域的业务流程。单个 Nest handler、�
 - 重复、迟到的 command/result 不会重复推进状态；协调器放弃一个**正向**步骤之后才到达的成功说明它已生效，协调器把 saga 带回补偿、
   只补偿这一步（`Failed` / `Compensated` 会被重开，saga 方向 ④）；补偿方向的只告警（计数 `saga.completion.late_after_abandon_total`、ERROR 日志）。
 
-全部线上消息（分区事件、输入、快照清单、准入信号、Nest 启动 effect）使用严格的 `WireVersion=2`，不兼容 1（已删除的 Redis 协调器），
+全部线上消息（分区事件、输入、快照清单、准入信号、Nest 启动 effect）使用严格的 `WireVersion=3`，不兼容 1（已删除的 Redis 协调器）与 2（记录没有生命周期标识、操作键不带生命周期），
 不通过猜测字段做隐式兼容。坏输入（解码失败、版本不对、内容校验不过）在分区里计 `saga.partition.rejected_input_total{kind,reason}` 并跳过
 （日志里的输入不能 Term，输入水位照常前进）；步骤消费者与启动中继对坏信封 Term，计 `saga.consumer.rejected_total{consumer}` 并记 ERROR。
 启动中继对 `StartSaga` 的确定性拒绝（`ErrInvalidRecord`、`ErrIdentityConflict`）同样 Term，计 `saga.start.rejected_total{saga_type,reason}`；
@@ -160,7 +160,10 @@ fence 到 `ManualRequired`，恢复定义后 `Resume`。
 
 **业务键与查询**（选项 ID-A、W-A）：saga ID 由 `(Type, BusinessKey)` 派生，业务键查询就是按 ID 查，唯一性与推进由同一个单写者判定。
 **唯一性窗口 = 运行期间 + 终态保留期**：同一业务键在 saga 运行时与结束后 `saga.terminal_retention` 内只能有一笔（同一意图返回已有记录，不同意图
-`ErrIdentityConflict`），之后同一业务键可以再开一笔。`GetByBusinessKey` 还没启动或过了保留期返回 `ErrNotFound`。生成的
+`ErrIdentityConflict`），之后同一业务键可以再开一笔。再开的一笔与上一笔 saga ID 相同，但协调器新建记录时给它一个新的**生命周期标识**
+（`Record.Lifecycle`，随机生成、随事件持久，重放 / 快照 / 冷副本原样恢复），它编进每个操作键：参与方还留着的上一笔成功回执对不上新一笔，新一笔照常
+执行；上一笔迟到的结果按“分区里没有这笔”只计 `saga.completion.unknown_saga_total`，不改新一笔（RV-20261030-01，修前新一笔被回放成“已执行”、
+迟到结果还能推进新一笔）。`GetByBusinessKey` 还没启动或过了保留期返回 `ErrNotFound`。生成的
 `saga/<name>/definition.go` 带 `Lookup(ctx, engine, businessKey)`。业务键应取发起方能交还给客户端的值（例如请求号）。终态通知没有默认实现。
 
 `Completion.Data` 会成为下一步的 `Command.Payload`，用于传递流程状态。不要放入大对象（事件携带完整状态，Data 大时日志膨胀）；业务实体仍应存放在其权威服务中。
@@ -181,8 +184,9 @@ func debit(ctx context.Context, step saga.NativeStep) error {
 return left, step.Complete(true, "")
 ```
 
-1. **最多生效一次的单位是操作实例**：saga + 步骤 + 方向（`Command.IdempotencyKey`，即 `<saga>:<phase>:<step>`）。一次操作可以有多次尝试
-   （`MaxAttempts`），每次尝试有自己的 `CommandID`；同一操作实例的所有尝试里**至多一次**让业务写与回执落盘。
+1. **最多生效一次的单位是操作实例**：这一笔 saga + 步骤 + 方向（`Command.IdempotencyKey`，即 `<saga>:<生命周期>:<phase>:<step>`）。一次操作可以
+   有多次尝试（`MaxAttempts`），每次尝试有自己的 `CommandID`；同一操作实例的所有尝试里**至多一次**让业务写与回执落盘。生命周期在同一笔之内不变
+   （重启重放、`Resume`、人工 `Compensate` 都不换），所以这些情况下成功回执照样去重；同业务键在终态剪掉后再开的一笔是新的操作实例（见上文“业务键与查询”）。
 2. **回执在被改的实体里**：`roost add saga -native -entity X` 给 X 的 DAO 加 `SagaReceipts map[string][]byte`（持久、不同步）与
    `game/entities/<x>/saga_receipts.go`（实现 `saga.StepReceiptHost`）。回执的读写经 DAO 生成的 mutator，随事务提交 / 回滚；同一实体的事务由实体锁
    串行，回执与业务修改是同一条 WAL 记录。`Begin`（在事务里、实体锁内）：有**成功**回执（任何代际）或**本代际的拒绝** → 回放，不执行业务；
@@ -195,7 +199,11 @@ return left, step.Complete(true, "")
    `pipelined`，见下面「原生步骤的提交方式」。截止检查在事务开始时，WAL 落盘可能晚于截止——只能由迟到成功补偿处理（第 5 条）。
 4. **步骤体返回错误 = 结果未知**（Nest 提交可能已经发生）：消费者 nak 退避重投，重投时 `Begin` 读到回执就回放。没有租约、操作状态文档或
    投影里的 fence。业务拒绝同样 `Complete(false, reason)`：只提交拒绝回执，协调器随即补偿（补偿被拒则 `ManualRequired`）。回执保留
-   `saga.receipt_retention`（缺省 168h），`Complete` 在同一事务里顺手剪掉至多 16 条过期回执。
+   `saga.receipt_retention`（缺省 168h），`Complete` 在同一事务里顺手剪掉至多 16 条过期回执（Mongo 步骤由 TTL 删）。保留期必须盖住同一操作
+   所有尝试：`Engine.Register` 与配置检查（Init、`--check-config`、doctor）按补齐后的每步预算要求 `receipt_retention ≥ 2 × 重试窗口`
+   （窗口 = 超时 × 次数 + 退避上限 ×（次数 − 1），`saga.CheckReceiptRetention`），否则拒绝（RV-20261030-02：修前保留 60s、窗口 190s 的配置被接受，
+   回执被同实体另一操作剪掉后第四次尝试再扣一次）。这是按计划时间算的：协调器停机、分区或参与方积压超过 `保留期 − 窗口` 之后才到的同一操作的
+   尝试不再受回执保护（见 KNOWN-LIMITS“Saga”）；参与方进程按自己的 `saga.receipt_retention` 剪回执，各进程要配同一个值。
 5. **协调器接收结果的统一规则**（v1.23.1 起，维护者 2026-10-07 选 A）：**成功是操作的结论，只要这个操作开过、还没有带结果关闭，就接收**——
    记录还停在这个操作上就接收为它的结果，记录已离开（放弃关闭）就补偿这一步（下一条），已带结果关闭是重复；**拒绝是本代际这个操作的结论、
    可重试失败是一次尝试的结论**，只在协调器正等着时接收。判定只在 `judgeCompletion` 一处（行为回归见 `framework/saga/completion_test.go`）：
@@ -416,3 +424,6 @@ Nest handler 不应持有 Entity 锁等待整笔 Saga 完成。
 - **升级需清空**（格式与存储不兼容，线上未部署）：旧版本 saga 数据（Redis 权威、Mongo 冷副本 `_sagas` / `_saga_completions` / `_saga_operations`、
   `_dataengine_step_operations`、Mongo 步骤的 `_operations` 与按 CommandID 的回执）不迁移。先在旧版本让全部 saga 到终态（`List` 非终态为 0），
   停旧协调器与步骤进程、排空参与方 WAL，删除旧 saga 流 / Redis 键前缀 / 上述集合，再起新版本（新流、新桶）。WireVersion 1 的信封一律拒绝。
+  WireVersion 2 → 3（记录加 `Lifecycle`、操作键改为 `<saga>:<生命周期>:<phase>:<step>`，RV-20261030-01）同样不迁移：旧事件与快照解不开、分区
+  不启动，旧格式的启动 effect 被中继拒收；先让全部 saga 到终态、停旧进程、删 saga 流与快照 / 准入桶后再起新版本。参与方实体与 Mongo 收件箱里
+  旧键形状的回执不会再被读到，按保留期剪掉即可。
