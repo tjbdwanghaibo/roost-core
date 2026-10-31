@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- Native 客户端补齐 Lockstep 输入/哈希/追帧/分块快照恢复与场景时间域；提供无异常 C ABI，Unity 绑定 native 状态机，消费线程执行模拟。
+- Native 增加 PB/Lockstep 通知、取消和结构化请求结果、单请求期限、独立心跳超时、typed PB 路由及可选有界退避重连；新票据由业务提供，不重放请求。网络 ABI 升至 2，库/头文件/托管绑定必须一起更新。
+- 新增可选 Protobuf 视图 C ABI 与 CMake 安装包；UE 等宿主可取得原子应用增量后的完整 PB。平台设备验证仍按 native 手册分别记录。
+
 - Robot 增加有界 SyncProbe，按 Full/Delta/Remove 记录应用延迟、超时、取消、容量拒绝与最慢样本，接入 Runner 和控制面报告。
 - 13 类玩法 Robot 补齐既有业务的对局/经营闭环与结算重试；测试 DAO 快照遵守实体锁，MMORPG 网络测试时钟改为原子推进。
 - 新增真实账号/Gate/PB/心跳/strict WAL/Mongo 热点诊断脚本，保留欠载和一致性证据；不等同于生产容量或进程崩溃恢复。

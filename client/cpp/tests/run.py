@@ -18,6 +18,7 @@ with tempfile.NamedTemporaryFile() as sample:
 
 errors = []
 heartbeats = []
+routes = set()
 listener = socket.socket()
 listener.bind(('127.0.0.1', 0)); listener.listen()
 
@@ -41,8 +42,9 @@ def serve():
             authenticated = False
             while True:
                 magic,version,flags,mid,seq,size=struct.unpack('!2sBBIII',exact(conn,16))
-                assert magic==b'RS' and version==2 and flags==0 and size<1024
+                assert magic==b'RS' and version==2 and flags in (0,4) and size<1024
                 body=exact(conn,size)
+                if mid: routes.add(mid)
                 if mid==0:
                     if not authenticated: assert body==b'ticket'; authenticated=True
                     else: heartbeats.append(seq)
@@ -50,8 +52,13 @@ def serve():
                     if seq==1: send(conn,9,0,b'\x08\x03',1)
                 elif mid==42:
                     assert body==b'\x08\x01'; send(conn,43,seq,b'\x08\x02')
+                elif mid==46: send(conn,10,0,b'',1)
+                elif mid==50001: assert flags==4 and body==bytes.fromhex('c8010301')
                 elif mid!=44: raise AssertionError('unexpected route')
-    except EOFError: pass
+    # Explicit client disconnect may be FIN or RST while a heartbeat reply is
+    # in flight. The subprocess must still exit successfully and every expected
+    # route must have been observed; premature closure cannot pass the test.
+    except (EOFError, ConnectionResetError, BrokenPipeError): pass
     except Exception as e: errors.append(e)
 
 thread=threading.Thread(target=serve);thread.start()
@@ -61,3 +68,5 @@ finally:
     listener.close();thread.join(timeout=6)
 assert not thread.is_alive() and not errors, errors
 assert heartbeats, 'heartbeat not exercised'
+
+assert routes == {42, 44, 46, 50001}, routes

@@ -4,6 +4,10 @@
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
+## Native 客户端（2026-11-01）
+
+当前 Core TCP 协议的 PB、EntitySync、Lockstep 与时间域已提供 native 实现；通知/取消/重连与引擎接入见 [native 手册](../../client/cpp/README.md)。网络 ABI 2 不兼容旧插件，重新编译库和绑定。macOS 主机验证不替代 Windows/Linux/Android/iOS、Unity IL2CPP 或 UE 的实机验收；大可见集、移动前后台/弱网和设备容量仍未测。TLS/WS/UDP/KCP 适配未实现，DNS 和账号取票由平台/业务异步准备，不在网络线程阻塞解析。
+
 ## Robot 推广验收（2026-11-01）
 
 13 类网络玩法已扩至现有规则的对局/经营闭环；公共 Robot 增加有界 Full/Delta/Remove 应用延迟观测，见 [Robot](../framework/ROBOT.md)。这些默认玩法仍使用替身鉴权/提交器。通用 game-demo 的真实账号/Gate/PB/strict WAL/Mongo 热点诊断与每个玩法的生产组合不是同一项验收。

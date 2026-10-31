@@ -68,17 +68,22 @@ int main(int argc, char **argv) {
       return 0;
     }
     auto options = roost_default_options();
-    options.request_timeout_ms = 100;
+    options.request_timeout_ms = 1000;
     options.heartbeat_ms = 20;
     options.max_requests = 2;
     roost::client client(options);
     bool ready = false, response = false, timeout = false, push = false;
+    bool notified = false, canceled = false, second_phase = false;
+    uint32_t cancel_sequence = 0;
     uint32_t seq = 0;
     client.on_event = [&](const roost::client_event &e) {
       if (e.type == ROOST_READY)
         ready = true;
-      if (e.type == ROOST_PUSH)
+      if (e.type == ROOST_PUSH) {
         push = true;
+        if (e.id == 10 && !client.cancel(cancel_sequence))
+          throw std::runtime_error("cancel admission failed");
+      }
       if (e.type == ROOST_CLOSED)
         throw std::runtime_error("unexpected close");
     };
@@ -95,16 +100,32 @@ int main(int argc, char **argv) {
           response =
               e.type == ROOST_RESPONSE && e.payload == roost::bytes({8, 2});
         });
-        client.request(44, 45, {}, [&](const roost::client_event &e) {
-          timeout = e.type == ROOST_REQUEST_FAILED;
-        });
+        client.request(
+            44, 45, {},
+            [&](const roost::client_event &e) {
+              timeout = e.type == ROOST_REQUEST_FAILED &&
+                        e.status == ROOST_TIMEOUT_UNKNOWN;
+            },
+            100);
         try {
           client.request(44, 45, {}, {});
           throw std::logic_error("unbounded requests");
         } catch (const std::runtime_error &) {
         }
       }
-      if (response && timeout && push) {
+      if (response && timeout && push && !second_phase) {
+        second_phase = true;
+        client.notify(50001, 2, {0xc8, 1, 3, 1},
+                      [&](const roost::client_event &e) {
+                        notified = e.type == ROOST_SENT && e.kind == 2;
+                      });
+        cancel_sequence =
+            client.request(46, 47, {}, [&](const roost::client_event &e) {
+              canceled = e.type == ROOST_REQUEST_FAILED &&
+                         e.status == ROOST_CANCELED_UNKNOWN;
+            });
+      }
+      if (notified && canceled) {
         client.disconnect();
         client.pump();
         std::cout << "PASS native TCP/auth/PB/push/heartbeat/timeout/bounded "

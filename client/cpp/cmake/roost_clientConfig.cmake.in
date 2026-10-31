@@ -1,0 +1,9 @@
+@PACKAGE_INIT@
+include(CMakeFindDependencyMacro)
+if(NOT WIN32)
+  find_dependency(Threads)
+endif()
+if(@ROOST_WITH_PROTOBUF@)
+  find_dependency(Protobuf CONFIG)
+endif()
+include("${CMAKE_CURRENT_LIST_DIR}/roost_clientTargets.cmake")

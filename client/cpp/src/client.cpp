@@ -6,6 +6,7 @@
 #include <deque>
 #include <map>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -47,11 +48,13 @@ static void put32(Bytes &b, size_t at, uint32_t v) {
     v >>= 8;
   }
 }
-static Bytes packet(uint32_t id, uint32_t seq, const Bytes &body) {
+static Bytes packet(uint32_t id, uint32_t seq, const Bytes &body,
+                    uint32_t kind = 0) {
   Bytes out(16 + body.size());
   out[0] = 'R';
   out[1] = 'S';
   out[2] = 2;
+  out[3] = uint8_t(kind << 1);
   put32(out, 4, id);
   put32(out, 8, seq);
   put32(out, 12, uint32_t(body.size()));
@@ -62,9 +65,10 @@ struct Event {
   uint32_t type = 0, id = 0, seq = 0, kind = 0;
   uint64_t generation = 0;
   Bytes body;
+  uint32_t status = ROOST_OK;
 };
 struct Request {
-  uint32_t id, reply, seq;
+  uint32_t id, reply, seq, kind;
   Bytes body;
   Clock::time_point deadline;
 };
@@ -76,7 +80,8 @@ struct roost_client {
   Event current;
   std::thread worker;
   std::atomic<bool> stop{false}, ready{false};
-  std::atomic<uint32_t> sequence{1}, outstanding{0};
+  std::atomic<uint32_t> sequence{1};
+  std::set<uint32_t> active, canceled;
   uint64_t generation = 0;
   explicit roost_client(roost_options o) : options(o) {}
   // 网络线程独占 socket，包括关闭；主线程只投递命令和取事件，不能同时 close。
@@ -97,9 +102,14 @@ struct roost_client {
     // Sync baseline.
     commands.clear();
     events.clear();
-    outstanding = 0;
+    active.clear();
+    canceled.clear();
     events.push_back(Event{ROOST_CLOSED, 0, 0, 0, generation,
                            Bytes(reason.begin(), reason.end())});
+  }
+  bool take_cancellation(uint32_t seq) {
+    std::lock_guard<std::mutex> lock(mutex);
+    return canceled.erase(seq) != 0;
   }
   void run(std::string address, uint16_t port, Bytes ticket) {
     Socket socket = invalid_socket;
@@ -156,6 +166,7 @@ struct roost_client {
       Bytes incoming, outgoing = packet(0, 1, ticket);
       auto outgoing_deadline = connect_deadline;
       size_t sent = 0;
+      uint32_t notify_seq = 0, notify_id = 0, notify_kind = 0;
       std::map<uint32_t, Request> pending;
       auto heartbeat_at = Clock::now();
       uint32_t heartbeat_seq = 0;
@@ -169,13 +180,18 @@ struct roost_client {
         if (heartbeat_seq && now >= heartbeat_deadline)
           throw std::runtime_error("heartbeat timeout");
         for (auto it = pending.begin(); it != pending.end();) {
-          if (now < it->second.deadline) {
+          bool canceled = take_cancellation(it->first);
+          if (!canceled && now < it->second.deadline) {
             ++it;
             continue;
           }
-          std::string reason = "request timeout: result unknown";
+          std::string reason =
+              canceled ? "request canceled after send: result unknown"
+                       : "request timeout: result unknown";
           if (!emit(Event{ROOST_REQUEST_FAILED, it->second.id, it->first, 0, 0,
-                          Bytes(reason.begin(), reason.end())}))
+                          Bytes(reason.begin(), reason.end()),
+                          canceled ? ROOST_CANCELED_UNKNOWN
+                                   : ROOST_TIMEOUT_UNKNOWN}))
             throw std::runtime_error("event queue overflow");
           it = pending.erase(it);
         }
@@ -191,16 +207,28 @@ struct roost_client {
             }
           }
           if (found) {
-            if (now >= request.deadline) {
-              const std::string reason = "request expired before send";
+            bool canceled = take_cancellation(request.seq);
+            if (canceled || now >= request.deadline) {
+              const std::string reason = canceled
+                                             ? "request canceled before send"
+                                             : "request expired before send";
               if (!emit(Event{ROOST_REQUEST_FAILED, request.id, request.seq, 0,
-                              0, Bytes(reason.begin(), reason.end())}))
+                              0, Bytes(reason.begin(), reason.end()),
+                              canceled ? ROOST_CANCELED_UNSENT
+                                       : ROOST_TIMEOUT_UNSENT}))
                 throw std::runtime_error("event queue overflow");
             } else {
-              outgoing = packet(request.id, request.seq, request.body);
+              outgoing =
+                  packet(request.id, request.seq, request.body, request.kind);
               outgoing_deadline = request.deadline;
               sent = 0;
-              pending.emplace(request.seq, std::move(request));
+              if (request.reply)
+                pending.emplace(request.seq, std::move(request));
+              else {
+                notify_seq = request.seq;
+                notify_id = request.id;
+                notify_kind = request.kind;
+              }
             }
           } else if (options.heartbeat_ms && !heartbeat_seq &&
                      now >= heartbeat_at) {
@@ -209,8 +237,10 @@ struct roost_client {
               throw std::runtime_error("sequence exhausted");
             outgoing = packet(0, heartbeat_seq, {});
             sent = 0;
-            heartbeat_deadline =
-                now + std::chrono::milliseconds(options.request_timeout_ms);
+            heartbeat_deadline = now + std::chrono::milliseconds(
+                                           options.heartbeat_timeout_ms
+                                               ? options.heartbeat_timeout_ms
+                                               : options.request_timeout_ms);
             outgoing_deadline = heartbeat_deadline;
           }
         }
@@ -255,6 +285,12 @@ struct roost_client {
             if (sent == outgoing.size()) {
               outgoing.clear();
               sent = 0;
+              if (notify_seq) {
+                if (!emit(Event{
+                        ROOST_SENT, notify_id, notify_seq, notify_kind, 0, {}}))
+                  throw std::runtime_error("event queue overflow");
+                notify_seq = 0;
+              }
             }
           }
         }
@@ -329,8 +365,9 @@ struct roost_client {
   }
 };
 extern "C" {
+uint32_t roost_abi_version() { return 2; }
 roost_options roost_default_options() {
-  return {1u << 20, 256, 128, 5000, 5000, 15000};
+  return {1u << 20, 256, 128, 5000, 5000, 15000, 5000};
 }
 roost_client *roost_create(roost_options o) {
   try {
@@ -367,7 +404,8 @@ int roost_connect(roost_client *c, const char *address, uint16_t port,
       std::lock_guard<std::mutex> lock(c->mutex);
       c->events.clear();
       c->commands.clear();
-      c->outstanding = 0;
+      c->active.clear();
+      c->canceled.clear();
     }
     c->stop = false;
     c->sequence = 1;
@@ -384,13 +422,15 @@ int roost_connect(roost_client *c, const char *address, uint16_t port,
     return 0;
   }
 }
-uint32_t roost_request(roost_client *c, uint32_t id, uint32_t reply,
-                       const uint8_t *data, size_t size) {
-  if (!c || !id || !reply || (!data && size) || size > c->options.max_payload)
+static uint32_t admit(roost_client *c, uint32_t id, uint32_t reply,
+                      uint32_t kind, const uint8_t *data, size_t size,
+                      uint32_t timeout_ms = 0) {
+  if (!c || !id || (kind != 0 && kind != 2) || (!data && size) ||
+      size > c->options.max_payload)
     return 0;
   try {
     std::lock_guard<std::mutex> lock(c->mutex);
-    if (!c->ready || c->stop || c->outstanding >= c->options.max_requests)
+    if (!c->ready || c->stop || c->active.size() >= c->options.max_requests)
       return 0;
     uint32_t seq = c->sequence.fetch_add(1) + 1;
     if (!seq) {
@@ -400,12 +440,44 @@ uint32_t roost_request(roost_client *c, uint32_t id, uint32_t reply,
     Bytes body;
     if (size)
       body.assign(data, data + size);
-    c->commands.push_back(
-        Request{id, reply, seq, std::move(body),
-                Clock::now() +
-                    std::chrono::milliseconds(c->options.request_timeout_ms)});
-    ++c->outstanding;
+    c->active.insert(seq);
+    try {
+      c->commands.push_back(Request{
+          id, reply, seq, kind, std::move(body),
+          Clock::now() +
+              std::chrono::milliseconds(
+                  timeout_ms ? timeout_ms : c->options.request_timeout_ms)});
+    } catch (...) {
+      c->active.erase(seq);
+      throw;
+    }
     return seq;
+  } catch (...) {
+    return 0;
+  }
+}
+uint32_t roost_request(roost_client *c, uint32_t id, uint32_t reply,
+                       const uint8_t *data, size_t size) {
+  return reply ? admit(c, id, reply, 0, data, size) : 0;
+}
+uint32_t roost_request_with_timeout(roost_client *c, uint32_t id,
+                                    uint32_t reply, const uint8_t *data,
+                                    size_t size, uint32_t timeout_ms) {
+  return reply ? admit(c, id, reply, 0, data, size, timeout_ms) : 0;
+}
+uint32_t roost_notify(roost_client *c, uint32_t id, uint32_t kind,
+                      const uint8_t *data, size_t size) {
+  return admit(c, id, 0, kind, data, size);
+}
+int roost_cancel(roost_client *c, uint32_t seq) {
+  if (!c || !seq)
+    return 0;
+  try {
+    std::lock_guard<std::mutex> lock(c->mutex);
+    if (!c->active.count(seq))
+      return 0;
+    c->canceled.insert(seq);
+    return 1;
   } catch (...) {
     return 0;
   }
@@ -420,10 +492,13 @@ int roost_poll(roost_client *c, roost_event *out) {
     c->current = std::move(c->events.front());
     c->events.pop_front();
     auto &e = c->current;
-    if (e.type == ROOST_RESPONSE || e.type == ROOST_REQUEST_FAILED)
-      --c->outstanding;
-    *out = {e.type,       e.id,          e.seq,        e.kind,
-            e.generation, e.body.data(), e.body.size()};
+    if (e.type == ROOST_RESPONSE || e.type == ROOST_REQUEST_FAILED ||
+        e.type == ROOST_SENT) {
+      c->active.erase(e.seq);
+      c->canceled.erase(e.seq);
+    }
+    *out = {e.type,       e.id,          e.seq,         e.kind,
+            e.generation, e.body.data(), e.body.size(), e.status};
     return 1;
   } catch (...) {
     return 0;

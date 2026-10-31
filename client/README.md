@@ -254,4 +254,4 @@ TCP发送会检查fctx当前执行位置，业务 worker 在resolver/socket前�
 
 ## Native C++ 共享网络核心
 
-[client/cpp](cpp/README.md) 提供 C++17 核心、C ABI、Unity 托管绑定和 UE 外部库接线。当前以业务 PB + EntitySync 为范围，网络线程独占 socket，消费线程派发回调；macOS 联合验证已完成，其他平台的实现与未验证状态见表，不能视为 C# 全功能替代。
+[client/cpp](cpp/README.md) 提供 C++17 核心、C ABI、Unity 托管绑定和 UE 外部库接线。当前已补业务 PB、EntitySync Full/Delta/Remove、Lockstep 追帧/快照恢复、场景时间域、通知/取消与可选重连。网络线程独占 socket，消费线程派发业务回调。网络 ABI 2 需要库和绑定一起更新；具体能力、可选 Protobuf 依赖及各平台未验证状态见 native 手册。

@@ -29,9 +29,18 @@ public:
   template <class Message>
   void register_dao(std::string name, std::string profile = "self",
                     uint32_t schema = 0) {
+    register_codec(std::move(name), std::move(profile), schema, [] {
+      return std::unique_ptr<google::protobuf::Message>(new Message);
+    });
+  }
+  void register_codec(
+      std::string name, std::string profile, uint32_t schema,
+      std::function<std::unique_ptr<google::protobuf::Message>()> factory) {
+    if (!factory || name.empty() || profile.empty())
+      throw std::invalid_argument("DAO codec requires name/profile/factory");
     auto inserted = codecs_.emplace(
         codec_key{std::move(name), std::move(profile), 2, schema},
-        [] { return std::unique_ptr<google::protobuf::Message>(new Message); });
+        std::move(factory));
     if (!inserted.second)
       throw std::invalid_argument("DAO codec already registered");
   }
@@ -70,10 +79,14 @@ public:
           value = previous;
         else {
           auto parsed = factory->second();
+          if (!parsed)
+            throw std::runtime_error("DAO factory returned null");
           if (!parsed->ParseFromArray(update.payload.data(),
                                       int(update.payload.size())))
             throw std::invalid_argument("invalid DAO protobuf payload");
           auto state = factory->second();
+          if (!state)
+            throw std::runtime_error("DAO factory returned null");
           if (patch.kind == change_kind::delta) {
             if (!previous)
               throw std::invalid_argument("DAO baseline missing");
