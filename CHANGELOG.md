@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 修复
+
+- 发布脚本修正变量紧邻中文标点的展开：macOS Bash 3.2 在 UTF-8 locale 下会将 `$version` 后的括号误作变量名，导致本地 release 提交后、pretag 前退出。变量边界改为显式花括号，实际执行 pretag 提示的回归覆盖 C / UTF-8 locale。修前失败 `version�: unbound variable`，修后通过；不改变版本流程或绕过 pretag。
+
 ### 文档
 
 - 收敛已完成或废弃的设计、review 和测试审计过程稿，历史证据固定到提交；现行规则统一指向 framework 的 guide / impl，保留未实施候选、性能样本和发布记录。目录与 Gate 文档改为当前职责和实现契约，修正物理房间发布状态及实体创建持久化说明。

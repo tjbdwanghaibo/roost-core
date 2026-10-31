@@ -149,6 +149,19 @@ grep -qx '        core: \[v0.1.0\]' "$scratch/empty-matrix.got" || fail "改到�
 # 真实文件里 player-access-project 的固定矩阵不动
 grep -qx '        core: \[v1.26.1\]' "$scratch/upgrade.yml" || fail "改到了 player-access-project 的矩阵"
 
+# 执行真实发布脚本的 pretag 提示：macOS Bash 3.2 在 UTF-8 locale 下
+# 会把紧挨未加花括号变量的中文标点误作变量名；不能只检查 bash -n。
+pretag_message="$(sed -n '/^say "scripts\/pretag.sh /p' "$repo_root/scripts/release.sh")"
+[[ -n "$pretag_message" ]] || fail "缺少 pretag 提示"
+for message_locale in C en_US.UTF-8; do
+ if ! LC_ALL="$message_locale" "$BASH" -uc 'version=v1.2.3; say() { printf "%s\n" "$1"; }; eval "$1"' _ "$pretag_message" >"$scratch/message.log" 2>&1; then
+  cat "$scratch/message.log" >&2
+  fail "pretag 提示在 $message_locale 下展开失败"
+ elif ! grep -q '^scripts/pretag.sh v1.2.3' "$scratch/message.log"; then
+  fail "pretag 提示缺少目标版本"
+ fi
+done
+
 if ((failures)); then
 	echo "release_test: $failures 项失败" >&2
 	exit 1

@@ -86,7 +86,7 @@ rel_valid_version "$version" || die "$version 不是 vMAJOR.MINOR.PATCH"
 command -v go >/dev/null || die "找不到 go"
 
 branch="$(git symbolic-ref --quiet --short HEAD || echo '(detached)')"
-if [[ "$branch" == main ]]; then info "分支 main"; else check_failed "当前分支是 $branch，发版只在 main 上做"; fi
+if [[ "$branch" == main ]]; then info "分支 main"; else check_failed "当前分支是 ${branch}，发版只在 main 上做"; fi
 
 if [[ -z "$(git status --porcelain)" ]]; then
 	info "工作树干净"
@@ -124,7 +124,7 @@ git ls-remote --exit-code --tags origin "refs/tags/$version" >/dev/null 2>&1 || 
 case "$remote_code" in
 0) check_failed "tag $version 远端已存在" ;;
 2) info "远端没有 tag $version" ;;
-*) die "查不了远端 tag（git ls-remote 退出码 $remote_code），修好网络或权限再跑" ;;
+*) die "查不了远端 tag（git ls-remote 退出码 ${remote_code}），修好网络或权限再跑" ;;
 esac
 
 if rel_changelog_has_unreleased "$changelog"; then
@@ -136,7 +136,7 @@ fi
 # 发版文档分级（docs/maintenance/README.md §5）：功能版本（vX.Y.0）必须先有一篇发布说明；补丁版只靠 CHANGELOG。
 notes="docs/release/$version-NOTES.md"
 if rel_is_feature "$version"; then
-	if [[ -f "$notes" ]]; then info "功能版本，发布说明 $notes 已在"; else check_failed "功能版本要先写 $notes（升级要求、行为变化、迁移）并合进 main"; fi
+	if [[ -f "$notes" ]]; then info "功能版本，发布说明 $notes 已在"; else check_failed "功能版本要先写 ${notes}（升级要求、行为变化、迁移）并合进 main"; fi
 else
 	info "补丁版本：不需要 docs/release 文档，只靠 CHANGELOG"
 fi
@@ -145,7 +145,7 @@ if [[ "$upgrade_compat" == auto ]]; then
 	if rel_is_feature "$version"; then upgrade_compat=yes; else upgrade_compat=no; fi
 fi
 old_min="$(rel_min_core "$gen_manifest")"
-if ((min_core)); then info "生成物最低 core $old_min → $version（--min-core）"; else info "生成物最低 core 保持 $old_min"; fi
+if ((min_core)); then info "生成物最低 core $old_min → ${version}（--min-core）"; else info "生成物最低 core 保持 $old_min"; fi
 if [[ "$upgrade_compat" == yes ]]; then info "upgrade-compat 矩阵追加上一版 $previous"; else info "upgrade-compat 矩阵不变"; fi
 
 # ---- 2. 生成改动 -------------------------------------------------------------------------------
@@ -185,7 +185,7 @@ if ((dry_run)); then
 	if ((min_core)); then
 		info "提醒：--min-core 只改值；提高原因写进 $gen_manifest 的 minimumVersions 注释（与本版说明同一句话）"
 	fi
-	say "dry-run 结束：之后会提交 release：$version，跑 scripts/pretag.sh $version，push main，打 tag 并 push，最后生成 game-demo 验证"
+	say "dry-run 结束：之后会提交 release：${version}，跑 scripts/pretag.sh ${version}，push main，打 tag 并 push，最后生成 game-demo 验证"
 	if ((failures)); then
 		printf 'release: dry-run 有 %d 项预检失败，正式发版会在第一项停下\n' "$failures" >&2
 		exit 1
@@ -217,14 +217,14 @@ release_sha="$(git rev-parse HEAD)"
 info "提交 ${release_sha:0:8}"
 
 # ---- 4. pretag ---------------------------------------------------------------------------------
-say "scripts/pretag.sh $version（整仓 build / vet / tidy / test 与生成漂移检查，约十几分钟）"
+say "scripts/pretag.sh ${version}（整仓 build / vet / tidy / test 与生成漂移检查，约十几分钟）"
 if ! ./scripts/pretag.sh "$version"; then
 	cat >&2 <<EOF
 
 release: pretag 失败，什么都没推送。release 提交 ${release_sha:0:8} 只在本地。
   看现场：git status && git show --stat HEAD
   全部回退（丢弃 release 提交和 pretag 留下的改动）：git reset --hard $head_sha
-修好之后在 main 上重新跑 scripts/release.sh $version。
+修好之后在 main 上重新跑 scripts/release.sh ${version}。
 EOF
 	exit 1
 fi
@@ -235,7 +235,7 @@ push_code=0
 git push origin HEAD:main || push_code=$?
 git fetch --quiet origin main || die "push 后 fetch 失败，无法确认远端；手工核对 git merge-base --is-ancestor $release_sha origin/main"
 if ((push_code != 0)) || ! git merge-base --is-ancestor "$release_sha" origin/main; then
-	die "push main 没有生效（退出码 $push_code，origin/main 不含 ${release_sha:0:8}）；没有打 tag。先处理被拒原因（远端前进了就 pull --rebase 后重跑）"
+	die "push main 没有生效（退出码 ${push_code}，origin/main 不含 ${release_sha:0:8}）；没有打 tag。先处理被拒原因（远端前进了就 pull --rebase 后重跑）"
 fi
 info "origin/main 已包含 ${release_sha:0:8}"
 
@@ -270,7 +270,7 @@ for attempt in 1 2 3 4 5 6; do
 done
 if ((!resolved)); then
 	cat >&2 <<EOF
-release: tag 已发布，但约 3 分钟内解析不到 $module_path@$version（发布后验证未通过，tag 不动）。
+release: tag 已发布，但约 3 分钟内解析不到 $module_path@${version}（发布后验证未通过，tag 不动）。
 稍后手工补验（仓库根、tag 检出上）：
   GOWORK=off go run ./codegen/cmd/roost project new relcheck -module example.com/relcheck -out <临时目录>/relcheck -template game-demo -roost-core-version $version -skip-deps
   cd <临时目录>/relcheck && GOWORK=off GOPROXY=direct GONOSUMDB=$module_path go get $module_path@$version && GOWORK=off GOPROXY=direct GONOSUMDB=$module_path go mod tidy
