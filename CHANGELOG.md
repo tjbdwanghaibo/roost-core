@@ -7,6 +7,7 @@
 ### 修复
 
 - **失败的新建不再留下持久写：构建失败的实体，它的 DAO 不会随外层成功事务提交**（RV-20261031-01，P1）。v1.33.0 起 builder 之前就绑定 DAO 聚合，组件 Init / `OnInitFinish` 里的 setter 已在当前事务登记修改；随后构建失败（或构建成功、发布撞上同 ID）时 `Create` 返回错误、实体没有发布，但业务处理掉这个错误、handler 正常返回时，失败实体的 DAO 仍以 0→1 整文档写进提交——库里出现一个“创建失败却已有数据”的实体（冷加载得到半初始化状态，重试撞上已有文档）。现在 `CreateInScope` 在构建前向事务取撤销入口（`entity.CreatedEntityCapturer.BeginCreatedEntityBuild`，接口新增方法，自己实现捕获者的代码要补上，返回 nil 即“没有可撤销的登记”），交给事务捕获之前的每个失败出口（构建、取锁、发布）都撤销构建期间以这些 DAO 登记的修改并丢弃构建期间登记的提交后回调；业务可以照常处理创建错误继续执行，事务提交其余修改。构建失败前还写了自身 DAO 以外的持久内容（别的实体、`Emit`、`AddReceipt`、删除意图、构建中新建的其他实体）时不能逐项撤销，`Create` 的错误同时带新哨兵 `nest.ErrFailedCreateLeftEffects`，事务在 handler 结束时整条回滚，业务吞掉错误也一样。有 RollbackTx 的 memory 事务里处理掉的失败新建也不再让整笔被 `ErrMemoryTransactionPersistentWrite` 拒绝。事务外经 DataEngine 准入门的新建本来就上抛错误、整条回滚，行为不变。存储格式、wire 与生成代码不变。[设计 §新建](docs/framework/guide/02-nest-entity.md) · [实现 §2 第 12 条](docs/framework/impl/03-dataengine.md#2-必须保持的契约) · [已知限制](docs/maintenance/KNOWN-LIMITS.md#新建实体落库与缺失-dao-补空r15维护者-2026-10-30)
+- **Lockstep TCP 快照用例不再依赖平台 socket 缓冲**（测试夹具，运行时代码不变）：`TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive` 在 Linux 稳定失败（只准入对照不溢出、等写出的恢复最终 snapshot=false）。原因在夹具：Linux 回环发送缓冲一开始就有 MiB 级，4 MiB 对照快照被内核吞下；服务器“已写出”领先客户端“已收齐”几 MiB，16 KiB 接收缓冲又让交付退化到每秒百 KiB 级，5 秒收齐预算不够。现在快照大小按链路能吞下的上界推出（Linux 读 `tcp_wmem`），停读结束时直接断言追帧未完成，服务器写完与客户端收齐分开观察、按客户端是否仍在推进等待，并新增一条测试中转的“深缓冲链路”在 macOS 上复现了 Linux 的两项失败。没有发现框架丢快照；Linux 实机尚未复跑。[已知限制](docs/maintenance/KNOWN-LIMITS.md#lockstep)
 
 ## [v1.33.0] - 2026-10-30
 
