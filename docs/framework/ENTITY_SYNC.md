@@ -8,7 +8,7 @@ Entity Sync 只有一套实现，四层（ARCH-10 / M-13 / M-14，2026-09-22）�
 | --- | --- | --- |
 | 内容 | `framework/entity` | `SubjectSyncState`：版本、脏位、packer、CommitLSN、Namespace；`PrepareViews` 一次锁内捕获 |
 | 机制 | `framework/sync/entitysync` | `Manager`：全部 subject 与会话，subject 自己持有订阅者表，每 tick 给每个会话一到多帧，门槛，held/ready，两种失败 |
-| 组织 | `framework/sync/entitysync/policy` | 谁订谁：`Interest`（视野：空间视野按距离、关系视野按成员）、`Group`（成员全互见）、`Direct`（显式绑定）；各实例通过独立 `SubscriptionSource` 持有订阅 |
+| 组织 | `framework/sync/entitysync/policy` | 谁订谁：`Interest`（视野：空间视野按距离、关系视野按成员）、`Group`（成员全互见）、`Direct`（显式绑定）；生命周期实现 `SelfView`（玩家看自己）与 `GroupView`（成员看组实体，与自身视图共用会话）；各实例通过独立 `SubscriptionSource` 持有订阅 |
 | 应用 | 业务启动与接入层 | `Transport` 适配、会话生命周期（进场 held → ready → 离场）、地图尺寸 / 半径 / 关系这类只有游戏知道的事 |
 
 每层只知道下一层：entity 不知道 session，Manager 不知道为什么有人订阅，policy 不碰帧与传输，应用不写聚合规则。
@@ -65,6 +65,29 @@ Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Clo
 - `Group`：subject 集合 × 成员集合全互见，各自上限。AddSubject 失败会回滚本组订阅、允许重试；Manager 注册保留。RemoveSubject/Close 只释放本组来源，不再退役实体；实体销毁由应用调用 Manager.Unregister，成员会话也由应用开关。同 ID 会话重开后再次 Join 会重新提交已有订阅，不增加成员数量。不叫 Room：`lockstep.Match` 是对局执行对象，而这里只是一个集合。
 - `Interest.Close` 释放本实例持有的订阅，不影响其他政策。
 - `Direct`：`Bind / Unbind` 一对；每个 Direct 实例是独立来源，重复 Bind 不累加。
+- `SelfView` / `GroupView`：建在上面这些机制上的生命周期实现，见下一节。会话由调用方自己开关时用 `Group`；会话归自身视图（`access.player.self_sync`）时用 `GroupView`。
+
+## 按组同步与 self_sync 共用连接（Groups）
+
+2026-10-31 起（派对房间纵切发现的缺口）。“某类实体（房间、队伍、副本）的同步视图推给组里的成员”的正式入口是 `wiring/selfsync.Groups`（生命周期在 `policy.GroupView`），生成工程在 roost.yaml 写 `access.player.sync_groups: [party_room]`。
+
+**为什么不直接用 `Group` 或自建 Manager。** 同一进程打开 self_sync 后：
+
+1. Nest 只有一个 EntitySync 观察者位置。业务再经 `NestOptionWithEntitySync` 塞一个自建 Manager 会被 Nest Mod 自己的选项**静默覆盖**（收不到提交捕获与回滚撤回，periodic 下毫无报错）。现在 `wiring/nest.Mod.Provide` 拒绝这种装配（`ErrEntitySyncObserverConflict`）。两个 Manager 推同一条连接还要两个推送编号、两套 epoch，客户端要分别维护两个 `frame.Receiver`。
+2. 把 `Group` 挂到 self_sync 的 Manager 上（`Mod.EntitySync()`）在 Manager 与线格式层面可以共存：同一会话、同一帧里两个对象，客户端按每个更新的命名空间 + 视图键分流。但会话归 `SelfView`：登录后第一个政策阶段之前 `Join` 被拒（`session is not open`）；断线重连时会话关闭、组订阅随之删除，`Group` 仍记着成员，重连后房间**静默断供**（实测：重连后第一帧只有 `player/self`，下一周期无推送）。业务拿不到“会话何时重开”的时机，没法补 `Join`。
+
+**做法。** `GroupView` 与 `SelfView` 同一写法、装在同一个 Manager 上、政策阶段排在 `SelfView` 之后：
+
+- 成员关系是事实。`Join / Leave / Disband / EntityLoaded` 只在锁下记事实、不调用 Manager、不等待，可在快池调用；政策阶段按净事实一次做完：组实体在内存就 `Register`（重复是空操作，重新加载的新状态接上并强制全量），会话已开的成员 `SubscribeStamped`，没开的（离线、断线宽限内、会话还没打开）留在 waiting、每个政策阶段复查。
+- 框架丢掉订阅时经 `SubscriptionSourceHooks.Released` 删簿记（戳比较，同 `Direct`），成员仍在组里就在会话重开的那个阶段重新订阅；卸载撤销后重新登记经 `Resubmit` 交还。所以断线重连、顶号（Hold/Ready）、组实体卸载重载都不需要业务再调用。
+- `GroupView` 拥有组实体的登记：`Disband` 退订全部成员并 `Unregister`，同 ID 再成组走 remove-before-create。
+- `wiring/selfsync.Groups` 只做装配与提交边界：`Config.Groups` 交给 `selfsync.New`，Nest Mod Init 时随自身视图装上；组实体加载按 kind 转交 `EntityLoaded`；`Join / Leave / Disband` 在 Nest 事务里调用时推迟到提交之后（`nest.AfterCommit`），事务回滚就不发生，事务外调用立即记下。组 ID 是组实体 ID，成员是玩家 ID（自身视图的会话 ID，玩家实体 ID 用 `entity.GetUniqueIDFromEntityID` 换）。
+
+**线上怎么区分两路。** 同一条玩家连接、同一个推送编号（`msgid.MsgSelfSync`）、同一个会话、同一个 epoch：一帧里可以同时有玩家自己与房间两个对象，客户端按每个更新自带的 `Namespace`（实体标记的 `syncNamespace`）与 `Profile.Key` 分流——自身视图是 Player 的命名空间 + `self`，组视图是组实体的命名空间 + `GroupsConfig.Profile.Key`。只用一个 `frame.Receiver`；重连后的 Full 同时带回两路（`wiring/selfsync` 的 `TestGroupsShareTheSelfSyncConnection` 走真实 TCP）。
+
+取舍与确认过程见 [FEATURE-2026-10-31-room-sync-groups](../maintenance/FEATURE-2026-10-31-room-sync-groups.md)。
+
+**限制。** 离线成员每个政策阶段被复查一次（一次 `SubscribeStamped` 失败返回），代价与“有离线成员的组”的成员数成正比；成员关系不持久；`Groups` 只能装在 self_sync 的 Manager 上（会话归自身视图），没打开 self_sync 的进程用 `Group` 并自己开关会话。`GroupsConfig.Profile.Key` 必填：组视图的字段权限由 packer 按视图键决定。
 
 ## 线格式（v2）
 

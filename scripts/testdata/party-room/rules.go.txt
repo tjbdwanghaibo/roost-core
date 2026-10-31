@@ -16,7 +16,7 @@ import (
 	"strings"
 )
 
-// 座位上下限：派对房间 2～8 人。上限同时是同步 Group 的成员上限（handler 的 PartyRoomSync）。
+// 座位上下限：派对房间 2～8 人。上限同时是房间同步组的成员上限（party_room 实体包的 SyncGroup）。
 const (
 	MinSeats = 2
 	MaxSeats = 8

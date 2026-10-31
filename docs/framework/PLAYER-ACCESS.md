@@ -228,4 +228,6 @@ func (p playerSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.
 
 客户端：包头载荷类型是 Sync、消息编号是 `msgid.MsgSelfSync` 的推送交给每连接一个的 `frame.Receiver`，组件数据用 `entitysync.DecodeSubjectUpdate` 取出，载荷交给 DAO 的 `ApplySync`。连接上第一份全量之前的增量被拒（`frame.ErrBaselineMismatch`），跳过等全量即可。Go 写法见 `wiring/selfsync/example_client_test.go`（随测试运行）。C# 本轮没有自身视图的解码样例：`Roost.Client.SyncReceiver` 能收帧，subject 载荷的解码需业务自写。
 
+房间、队伍这类按组推送的实体用 `access.player.sync_groups` 装到同一个 Manager 上，经同一条连接、同一个推送编号推送，客户端按更新的命名空间区分（[ENTITY_SYNC 按组同步](ENTITY_SYNC.md#按组同步与-self_sync-共用连接groups)）。
+
 一个 Player 一个 Manager：同一个 Player 的同步状态（`SubjectSyncState`）只能登记在一个 Manager——脏通知器、冻结内容与在途捕获在状态上各只有一份。2026-10-20 起第二个 Manager 登记它时被拒绝（`entitysync.ErrSubjectRegisteredElsewhere`，信息点名实体、命名空间与已登记它的 Manager，按 `ManagerConfig.Name`：自身视图是 `self_sync`、Nest Mod 缺省 `nest`、game-demo 场景 `scene`），以前是静默抢走对方的变化通知。那个 Manager 注销、退役完成（remove 已交付或订阅者会话已关闭）之后可以登记到别的 Manager；同一个 Manager 重复登记仍是空操作。所以工程里另有自建 Manager 也登记 Player（game-demo 的场景）时不支持打开 self_sync：game-demo 打开后启动在 `service game init` 失败（场景接卸载后重载时报 `unload resync is already configured for entity sync manager "self_sync"`）；不经那条接线的自建 Manager 在登记 Player 时被拒（自身视图被拒时记 Warn 并计入 `entitysync.self_view.stranded_players`）。

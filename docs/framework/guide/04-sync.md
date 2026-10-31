@@ -32,7 +32,13 @@ PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确�
 
 慢消费者：**跟不上就断开**。一帧被活着的连接拒收时，传输（`wiring/selfsync.PushPlayerFrame`）关闭这名玩家的全部连接、Manager 关会话，客户端重连从全量开始；SelfView 不在原连接上重开。整个进程的出站驻留预算耗尽是例外：不是谁慢，整轮重试、保留脏状态，连接与会话都不动。自建 Manager、会话 ID 就是玩家 ID 的场景（如 game-demo 的场景）用同一个函数做 Transport。规则与理由见 [impl/04-sync §2C](../impl/04-sync.md#2c-自身视图selfview的生命周期)、[GATEWAY §4](../GATEWAY.md#慢消费者跟不上就断开)。
 
-两条由框架强制、业务不用对齐的规则：一帧的上限取接入层上限（嵌入 TCP 的 `player_access.tcp.max_payload_bytes`、独立 Gate 下 Game Ingress 的载荷上限），在 Manager 创建前定下，所以超过接入层上限的帧不会推出去；一个 `SubjectSyncState` 只能登记在一个 Manager，第二个 Manager 登记时得到 `entitysync.ErrSubjectRegisteredElsewhere`（点名已登记它的 Manager），所以工程里另有自建 Manager 登记 Player 时不能同时打开 self_sync。
+两条由框架强制、业务不用对齐的规则：一帧的上限取接入层上限（嵌入 TCP 的 `player_access.tcp.max_payload_bytes`、独立 Gate 下 Game Ingress 的载荷上限），在 Manager 创建前定下，所以超过接入层上限的帧不会推出去；一个 `SubjectSyncState` 只能登记在一个 Manager，第二个 Manager 登记时得到 `entitysync.ErrSubjectRegisteredElsewhere`（点名已登记它的 Manager），所以工程里另有自建 Manager 登记 Player 时不能同时打开 self_sync；房间这类按组推送的实体用下一节的 `sync_groups` 装到同一个 Manager 上。
+
+### 房间、队伍：按组同步（与自身视图同一条连接）
+
+“房间状态推给房间里的人”在 `access.player.sync_groups` 列出实体包名（如 `party_room`，需要 `self_sync`）：`roost project sync` 在实体包里创建一次业务文件 `sync_group.go`（`SyncGroup`，把视图键改成你的 packer 认识的那个），bootstrap 把它交给 `PlayerSelfSync`。业务在决定成员关系的 handler 里调用 `SyncGroup.Join(房间实体 ID, 玩家 ID)` / `Leave` / `Disband`：在 Nest 事务里调用时推迟到提交之后，回滚就不发生。框架负责：成员断线后保留成员关系、重连的那个同步周期收到房间全量；顶号随新 epoch 重发；房间实体卸载重载后重新登记；`Disband` 后成员收到 remove。业务负责：谁是成员、宽限期满或离开时 `Leave`、房间关闭时 `Disband`（之后再销毁实体）；成员关系不持久，进程重启后在玩家重连的 handler 里再 `Join`。
+
+两路同步在同一条连接、同一个推送编号、同一个会话里：一帧可能同时带玩家自己与房间两个对象，客户端按每个更新的命名空间（标记的 `syncNamespace`）与视图键分流，只用一个 `frame.Receiver`。不要为房间再建一个 Manager 交给 Nest：Nest 只有一个 EntitySync 观察者，Nest Mod 在启动时报 `ErrEntitySyncObserverConflict`。没开 self_sync、自己开关会话的进程用 `policy.Group`。契约与取舍见 [ENTITY_SYNC](../ENTITY_SYNC.md#按组同步与-self_sync-共用连接groups)，完整用法见[派对房间手册 §5](../PARTY-ROOM-INTEGRATION.md#5-房间内同步syncgroup)。
 
 ### 谁看见谁：视野（View，D19）
 

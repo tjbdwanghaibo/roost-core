@@ -239,6 +239,13 @@ PlayerSelfSync.EntitySyncSetup())`、`accessplayertcp.NewMod().WithSelfSync(Play
 再换业务 packer 跑一遍、切回默认）与 `codegen/internal/entity/sync_contract_test.go`
 （`TestSelfSyncDefaultPackerFollowsTheMarker`）。
 
+**按组推送的实体（`access.player.sync_groups: [party_room]`，需要 self_sync）**：房间、队伍这类实体的同步视图推给组里的成员，
+与自身视图共用同一个 Manager、同一条连接与推送编号。`roost project sync` 在 `game/entities/<名>/sync_group.go` 创建一次业务文件
+（`SyncGroup = selfsync.MustNewGroups(...)`，视图键缺省是实体包名，改成 packer 认识的那个），bootstrap 把它交给
+`PlayerSelfSync` 的 `Config.Groups`。实体标记要 `sync=true`；generate / doctor 检查实体存在、标记、声明文件。成员关系由业务 handler
+调 `SyncGroup.Join / Leave / Disband`（事务内提交后生效），生成器不出成员规则。回归 `TestSyncGroups*`（self_sync_test.go）；
+运行时契约见 [ENTITY_SYNC 按组同步](../../docs/framework/ENTITY_SYNC.md#按组同步与-self_sync-共用连接groups)。
+
 ### roost add timer（按实体的持久定时器）
 
 DESIGN-TODO D11，维护者 2026-10-17 决定方案 B。`roost add timer --entity <Entity> [--component Timer] [--service <service>] [--id <component-id>]`

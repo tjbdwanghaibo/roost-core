@@ -8,7 +8,7 @@
 
 适合准备用 core 做派对、聚会、抢答、躲避类短局房间玩法的后端工程师。先读[入门](../GETTING-STARTED.md)、[Nest / Entity](guide/02-nest-entity.md)、[Sync](guide/04-sync.md) 与[时间与定时器](guide/10-time.md)；第一次学建议先读[合作塔防手册](TOWER-DEFENSE-INTEGRATION.md)的第一部分（房间实体、命令序号、多实体领奖讲得最细），再读本篇。
 
-本类型选择**服务器权威房间 + 实体心跳**：一个房间实体拥有座位、阶段、回合与计分，玩家输入都在这个实体的 Nest 锁内裁决；回合推进由房间自己的心跳（100ms 档）按业务时间完成，结果经 Entity Sync 的 `policy.Group` 推给房间全体成员。与塔防的区别是：塔防每一步都是持久定时器触发，本例在线推进靠心跳、持久定时器只做硬期限兜底。需要逐帧确定性、客户端预测或 >20Hz 权威模拟的玩法不适合这条路，看 [MOBA](MOBA-INTEGRATION.md) 的 Lockstep 或第 8 节。
+本类型选择**服务器权威房间 + 实体心跳**：一个房间实体拥有座位、阶段、回合与计分，玩家输入都在这个实体的 Nest 锁内裁决；回合推进由房间自己的心跳（100ms 档）按业务时间完成，结果经房间同步组（`access.player.sync_groups`，与玩家自身视图共用同一条连接）推给房间全体成员。与塔防的区别是：塔防每一步都是持久定时器触发，本例在线推进靠心跳、持久定时器只做硬期限兜底。需要逐帧确定性、客户端预测或 >20Hz 权威模拟的玩法不适合这条路，看 [MOBA](MOBA-INTEGRATION.md) 的 Lockstep 或第 8 节。
 
 ### 2. 模块分工：派对房间里的状态归谁
 
@@ -21,19 +21,19 @@
 | 回合推进、星星出现、断线宽限 | PartyRoom 的实体心跳 | `roost add heartbeat --entity PartyRoom`，100ms 档，回调在实体锁与事务内按 `Beat.Now` 推进 | 心跳不持久；判定只看时间戳，不按“第几拍” |
 | 开局硬期限 | PartyRoom 的持久实体定时器 | `roost add timer --entity PartyRoom`；开局登记、结算即删 | 心跳没在跑（冷加载、驱动停摆）时由它兜底结算 |
 | 永久金币、完赛次数 | Player DAO | 多实体 `MultiSync_PartyClaim(player, room)`，strict | 局内分数与永久金币只在领奖事务里跨过去 |
-| 房间内同步 | 业务的 `PartyRoomSync`：一个 `entitysync.Manager` + 每房间一个 `policy.Group` | Manager 作为 Nest 的 `EntitySync` 观察者（提交后才发布）；成员 `Join` / `Leave` 在事务提交后调用 | 生成器不生成这一层（第 8 节） |
+| 房间内同步 | `roomentity.SyncGroup`（`wiring/selfsync.Groups`，装在 self_sync 的 Manager 上） | `access.player.self_sync: true` + `sync_groups: [party_room]`；handler 在连接 / 离开 / 归还时 `Join` / `Leave` / `Disband`，事务内的调用提交后才生效 | 成员规则归业务；生成器只出声明文件 `sync_group.go` 与 bootstrap 接线（第 5 节） |
 
 ```mermaid
 flowchart LR
     M[match: Enqueue → Commit] --> O[Nest 锁 PartyRoom: 开房]
     O --> S[session: Enter + Attach 房间]
-    C[已鉴权连接] --> K[Nest: Connect 记连接代] --> J[Group.Join]
+    C[已鉴权连接] --> K[Nest: Connect 记连接代 + SyncGroup.Join 提交后生效]
     I[玩家输入] --> N[Nest 锁 PartyRoom: Advance(now) → Apply]
     H[心跳 100ms] --> B[Nest 锁 PartyRoom: Advance(now)]
     T[硬期限定时器] --> B
     N --> W[SaveRoom: State / Board / 心跳启停 / 期限]
     B --> W
-    W --> F[提交后 Manager.Flush → 全体成员同一份 Board]
+    W --> F[提交后下一次 Flush → 全体成员同一份 Board（与自身视图同一条连接）]
     W --> R[结算 → 多实体领奖 → session.Finish → Releaser 归还 → 关房 → 销毁]
 ```
 
@@ -51,8 +51,9 @@ ROOST_PARTY_ROOM_KEEP=1 bash scripts/test-party-room-generated.sh   # 保留生�
 
 1. `roost project new party-room-practice -module example.com/party-room-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add entity PartyRoom`、`roost add dao PartyRoom --entity PartyRoom`、`roost add heartbeat --entity PartyRoom`、`roost add timer --entity PartyRoom`；
-3. 业务只改这几处：`db/def/player.go` 加 `Coins` / `Matches` / `Initialized`（persist）；`db/def/party_room.go` 加 ``State string `bson:"state" dao:"persist"` ``、``WakeTimer int64 `bson:"wake_timer" dao:"persist"` `` 与 ``Board string `bson:"board" dao:"nopersist,sync"` ``；把 `game/entities/party_room/entity.go` 注解的 `category=entity.EntityCategoryOther` 换成 `category=entity.EntityCategoryWorld sync=true syncNamespace=party_room subjectPacker=NewPartyRoomBoardPacker`；放入业务包 `game/partyroom/`、实体包里的 `room.go` / `heartbeat_beats.go` / `timer_handlers.go` / `board_packer.go`（后两个心跳、定时器文件是 `roost add` 只在缺失时创建的业务文件），handler `game/handler/party_room.go` 与同步接法 `game/handler/party_room_sync.go`；
-4. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。
+3. 业务只改这几处：`db/def/player.go` 加 `Coins`（`persist,sync`，自身视图推给本人）/ `Matches` / `Initialized`（persist）；`db/def/party_room.go` 加 ``State string `bson:"state" dao:"persist"` ``、``WakeTimer int64 `bson:"wake_timer" dao:"persist"` `` 与 ``Board string `bson:"board" dao:"nopersist,sync"` ``；把 `game/entities/party_room/entity.go` 注解的 `category=entity.EntityCategoryOther` 换成 `category=entity.EntityCategoryWorld sync=true syncNamespace=party_room subjectPacker=NewPartyRoomBoardPacker`；放入业务包 `game/partyroom/`、实体包里的 `room.go` / `heartbeat_beats.go` / `timer_handlers.go` / `board_packer.go`（后两个心跳、定时器文件是 `roost add` 只在缺失时创建的业务文件），handler `game/handler/party_room.go`；
+4. 房间内同步走正式入口：`roost add access player --service game`、`roost add transport tcp`，在 roost.yaml 的 `access.player` 下写 `self_sync: true` 与 `sync_groups: [party_room]`，`roost project sync`；它创建一次的 `game/entities/party_room/sync_group.go` 是业务文件，换成本例的视图 `RoomSyncProfile` 与座位上限（[sync_group.go.txt](../../scripts/testdata/party-room/sync_group.go.txt)）；
+5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。
 
 生成的 `internal/bootstrap/generated.go` 已用 `wiring/heartbeat` 与 `wiring/entitytimer` 装配两个驱动（Nest 可用后启动、停机时先停），业务时间都是 `fctx.Now`。夹具的测试不起整个 App，所以在用例里手动 `Bind` / `Start`，业务时间用 `clock.SetSource` 拨（handler 的 `nowUnixMilli`、心跳的 `Beat.Now`、定时器的 `Fire.Now` 都读它，[时间 §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）。
 
@@ -66,11 +67,11 @@ ROOST_PARTY_ROOM_KEEP=1 bash scripts/test-party-room-generated.sh   # 保留生�
 | 4 | `heartbeat_beats.go` / `timer_handlers.go`（[heartbeat](../../scripts/testdata/party-room/heartbeat_beats.go.txt)、[timer](../../scripts/testdata/party-room/timer_handlers.go.txt)） | 冷加载后心跳怎样重新启动？期限回调怎样核对节点身份？ |
 | 5 | `board_packer.go`（[board_packer.go.txt](../../scripts/testdata/party-room/board_packer.go.txt)） | 同步视图怎样只放出 `Board` 一个字段？ |
 | 6 | `game/handler/party_room.go`（[handlers.go.txt](../../scripts/testdata/party-room/handlers.go.txt)） | 每个 handler 怎样先 `Advance(now)` 再裁决？领奖怎样与 Player 原子提交？ |
-| 7 | `game/handler/party_room_sync.go`（[sync.go.txt](../../scripts/testdata/party-room/sync.go.txt)） | Manager、Group、会话三者的开关顺序 |
-| 8 | [gameplay_test.go.txt](../../scripts/testdata/party-room/gameplay_test.go.txt)、[rules_test.go.txt](../../scripts/testdata/party-room/rules_test.go.txt) | 十二个场景怎样实际验证 |
+| 7 | `game/entities/party_room/sync_group.go`（[sync_group.go.txt](../../scripts/testdata/party-room/sync_group.go.txt)） | 房间同步组声明了什么、成员关系在哪几个 handler 里变 |
+| 8 | [gameplay_test.go.txt](../../scripts/testdata/party-room/gameplay_test.go.txt)、[rules_test.go.txt](../../scripts/testdata/party-room/rules_test.go.txt) | 十三个场景怎样实际验证 |
 | 9 | [persistence/recovery_test.go](../../scripts/testdata/party-room/persistence/recovery_test.go) | 局内 SIGKILL 后怎样冷加载、重启心跳、结算并删档 |
 
-身份要分开理解：Player / PartyRoom 用框架完整 EntityID；匹配的票 ID 与 Match ID 是匹配服务的身份；session 的 Run ID 是一次“在房间里”的身份；Entity Sync 的会话 ID 在本例取玩家实体 ID；每个座位的输入序号与连接代（Epoch）是房间内的序号域；接入层票号（ticket）单调递增，用来区分新旧连接。
+身份要分开理解：Player / PartyRoom 用框架完整 EntityID；匹配的票 ID 与 Match ID 是匹配服务的身份；session 的 Run ID 是一次“在房间里”的身份；Entity Sync 的会话 ID 是玩家 ID（自身视图按它开会话，同步组的成员也是它；玩家实体 ID 用 `entity.GetUniqueIDFromEntityID` 换）；每个座位的输入序号与连接代（Epoch）是房间内的序号域；接入层票号（ticket）单调递增，用来区分新旧连接。
 
 #### 3.3 用 Sender 调用
 
@@ -119,8 +120,9 @@ func openMatchRoom(ctx context.Context, client nest.Client, sessions *session.Se
 	return roomID, nil
 }
 
-// reconnect 是鉴权后的新连接：经 session 找回房间，Nest 记新连接代，提交后再加入同步组（从全量开始）。
-func reconnect(ctx context.Context, client nest.Client, sessions *session.Service, hub *handler.PartyRoomSync, playerID int64, ticket uint64) (int64, uint64, error) {
+// reconnect 是鉴权后的新连接：经 session 找回房间，Nest 记新连接代；连接 handler 在提交后 Join 同步组（宽限内重连是无变化的成功），
+// 自身视图在会话打开的那个同步周期把玩家自己与房间一起全量推给新连接。
+func reconnect(ctx context.Context, client nest.Client, sessions *session.Service, playerID int64, ticket uint64) (int64, uint64, error) {
 	run, ok, err := sessions.Current(ctx, playerID)
 	if err != nil || !ok {
 		return 0, 0, err
@@ -134,10 +136,7 @@ func reconnect(ctx context.Context, client nest.Client, sessions *session.Servic
 		return 0, 0, err
 	}
 	epoch, err := syncsender.NewPartyRoomSender(client).Sync_PartyConnect(ctx, roomID, playerID, ticket, true)
-	if err != nil {
-		return 0, 0, err
-	}
-	return roomID, epoch, hub.Connect(roomID, playerID)
+	return roomID, epoch, err
 }
 
 // grab 是一条玩家输入：超时重试时原样重发同一条（同一 Seq），不要分配新序号。
@@ -148,7 +147,7 @@ func grab(ctx context.Context, client nest.Client, roomID, playerID int64, epoch
 
 handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数：生成的分发包装在执行时从 `fctx` 填（这条消息冻结的业务时间），Sender 签名里没有它，调用方不传时间（[时间 §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）。
 
-#### 3.4 十二个场景各学什么
+#### 3.4 十三个场景各学什么
 
 | 场景（测试名前缀 `TestPartyGame`） | 业务选择 | 学到的框架契约 |
 | --- | --- | --- |
@@ -157,12 +156,13 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 | `MatchmakingOpensOneRoomPerMatch` | 同一请求重放不重复排队、第二张有效票被拒；2～8 人弹性队列里四人等待不满 20 秒时策略不出组、提交报 `ErrGroupNotReady`，业务时间推进 20 秒后四人成局、同一票集合并发两次 Commit 是同一局；同一 Match 并发开房三次是同一房间；换名单 / 换 Match 被拒且房间不变；每人一个 Run、重放 Enter 同一个 Run、第二个 Run 被拒；`Current` 带回房间 | service/match 与 service/session 的正式领域语义（内存存储）；开房 handler 以房间里记下的 Match 识别重放 |
 | `CodeRoomFullAndLateJoinRejected` | 房主开房间码房间，7 人加入到 8 人满，第 9 人被拒且状态不变；重复加入无变化；开局后加入被拒 | 被拒的命令回滚：State、Board、心跳与期限都不变 |
 | `HostLeaveTransfersHost` | lobby 里房主离开，房主转给下一个座位、座位让出；非房主开局被拒；局内房主离开同样转移，座位记为离开 | 房主是业务事实，存在房间状态里 |
-| `HeartbeatDrivesRoundsAndGroupSync` | 没有输入时，心跳按业务时间放出星星、结束回合；每次 Flush 后四个客户端（正式 `frame.Receiver` 解码）与服务端 Board 逐字节相同，客户端文档里只有 `board`；业务时钟一次跳过两回合，一拍结算，结算后心跳与期限都停 | 心跳回调在实体锁与事务内；Board 的变化经 Nest 提交门进入下一次 Flush；Group 让全体成员订阅同一视图 |
+| `HeartbeatDrivesRoundsAndGroupSync` | 没有输入时，心跳按业务时间放出星星、结束回合；每次 Flush 后四个客户端（正式 `frame.Receiver` 解码）与服务端 Board 逐字节相同，客户端文档里只有 `board`；业务时钟一次跳过两回合，一拍结算，结算后心跳与期限都停 | 心跳回调在实体锁与事务内；Board 的变化经 Nest 提交门进入下一次 Flush；同步组让全体成员订阅同一视图 |
 | `FirstGrabWinsAndDuplicateInputDedup` | 四人并发抢同一颗星，只有一人得分、三人 late；重投三次回执不变、分数不变；旧序号、跳号、错类型、旧连接代都拒绝且不改状态 | 单实体 Nest 串行 + 业务序号去重 |
 | `FoulEliminationAndUndoRollback` | 抢跑两次淘汰，之后输入被拒；输入写入后 handler 失败，State、Board、心跳、期限全部回滚，重试成功 | undo 覆盖 DAO、心跳启停与定时器增删 |
-| `ReconnectWithinGraceReturnsToSameRoom` | 断线后其他成员看到离线；宽限内经 `session.Current` 找回同一房间，连接代加一；旧连接的断开晚到不踢新连接，旧连接代输入被拒；新连接从全量开始 | 连接代与票号由业务存在房间里；Entity Sync 会话重开后 `Group.Join` 重新提交订阅 |
-| `GraceExpiryAndMidGameLeaveEndEarly` | 断线超过宽限由心跳判掉线，之后不能再连；房主与另一人先后离开，房主转移，局内只剩一人时提前结算 | 宽限到期也是按时间顺序处理的事件 |
-| `SettlementRewardsOnceAndRoomDestroyed` | 中途离开者 `session.Leave` 后立即归还座位；结算前、领奖前归还被拒；领奖写入后失败回滚；四人各四次并发领奖每人只得一份（胜者 50、完赛 10、离开 0）；`session.Finish`（重放幂等）经 Releaser 归还，最后一个归还关闭房间；注销同步、卸载实体后房间不再应答、心跳环为空 | 多实体领奖：Player 金币与房间 Claimed 一起提交；Releaser 至少一次、handler 幂等 |
+| `ReconnectWithinGraceReturnsToSameRoom` | 断线后其他成员看到离线；宽限内经 `session.Current` 找回同一房间，连接代加一；旧连接的断开晚到不踢新连接，旧连接代输入被拒；新连接从全量开始 | 连接代与票号由业务存在房间里；断线后成员关系保留，会话重开的那个同步周期同步组重新订阅（框架做，业务不再调用） |
+| `GraceExpiryAndMidGameLeaveEndEarly` | 断线超过宽限由心跳判掉线，之后不能再连；房主与另一人先后离开，房主转移，局内只剩一人时提前结算 | 宽限到期也是按时间顺序处理的事件；离开的玩家在提交后退出同步组、收到房间的 remove |
+| `SettlementRewardsOnceAndRoomDestroyed` | 中途离开者 `session.Leave` 后立即归还座位；结算前、领奖前归还被拒；领奖写入后失败回滚；四人各四次并发领奖每人只得一份（胜者 50、完赛 10、离开 0）；`session.Finish`（重放幂等）经 Releaser 归还，最后一个归还关闭房间；最后一个归还在提交后解散同步组，下一个同步周期四名成员收到房间的 remove（自身视图还在），之后卸载实体，房间不再应答、心跳环为空 | 多实体领奖：Player 金币与房间 Claimed 一起提交；Releaser 至少一次、handler 幂等 |
+| `SelfViewAndRoomShareOneConnection` | 两人连上房间：同一条连接的第一个全量里有自己的 Player（金币）与房间；改一人金币只推给本人；房间变化推给两人且不扰动自身视图；断线重连后一个全量带回两路；离开房间只撤掉房间，自身视图照常 | self_sync 与房间组同一个 Manager、同一个推送编号，客户端按命名空间（`player` / `party_room`）分流 |
 | `MatchDeadlineTimerForcesSettlement` | 平分进入加时（心跳照常推进），然后心跳驱动停摆；持久期限到期按 timeout 结算，没有胜者，完赛者拿参与奖，心跳登记与期限都清掉 | 持久定时器不依赖心跳；两条路径调用同一个 `Advance`，结果相同 |
 
 上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 12 节。
@@ -177,12 +177,13 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 
 `SaveRoom` 是房间唯一的写入口：写回 `State` 与 `Board`，并让心跳与期限跟阶段一致（`playing` 时心跳在跳、期限在登记，其余都停）。三个调用方（handler、心跳、定时器）不各自管理驱动，回滚时 DAO、心跳启停与定时器增删一起作废（[KNOWN-LIMITS 实体心跳](../maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期) 里 `Reg.Close` 不随事务回滚，本例只用 `Start` / `Stop`）。
 
-### 5. 房间内同步：Group
+### 5. 房间内同步：SyncGroup
 
-`policy.Group` 是“成员 × 实体全互见”（[ENTITY_SYNC](ENTITY_SYNC.md)）：本例每个房间一个 Group，房间实体是唯一的 subject，房间里的玩家是成员，全部订阅同一个视图 `RoomSyncProfile`。所以同一次 Flush 里，每名成员收到的记分板是同一份。
+房间同步组（[ENTITY_SYNC“按组同步”](ENTITY_SYNC.md#按组同步与-self_sync-共用连接groups)）是“组实体推给组成员”：组 ID 是房间实体 ID，成员是房间里的玩家，全部订阅同一个视图 `RoomSyncProfile`，所以同一次 Flush 里每名成员收到的记分板是同一份。它与玩家自身视图（self_sync）装在同一个 Manager 上，经同一条连接、同一个推送编号推送；客户端按每个更新的命名空间分流（`party_room` 是房间，`player` 是自己）。
 
-- **内容走提交门**：Manager 作为 Nest 的 `EntitySync` 观察者（`nest.NestOptionWithEntitySync`），Board 的修改在事务确认后才进入下一次 Flush；回滚的修改不会推出去（`FoulEliminationAndUndoRollback` 的 `refuse` 断言 Board 不变）。
-- **成员关系不进 Nest**：`OpenRoom` / `Connect` / `Leave` / `CloseRoom` 在对应的业务事务**提交之后**调用。连接事件提交后 `OpenSession` + `Join`；断线只关会话、保留成员关系，宽限内重连时再 `Join`，新连接从全量开始；离开房间退出组；关房先 `Group.Close` 再 `Manager.Unregister`，然后销毁实体。
+- **接法**：roost.yaml 的 `access.player` 写 `self_sync: true` 与 `sync_groups: [party_room]`，`roost project sync` 在实体包里创建一次 `sync_group.go`（`SyncGroup` 变量，业务把视图改成 `RoomSyncProfile`），bootstrap 把它交给 `PlayerSelfSync`。不要再自建 Manager 交给 Nest：Nest 只有一个 `EntitySync` 观察者，Nest Mod 启动时报 `ErrEntitySyncObserverConflict`。
+- **内容走提交门**：Manager 是 Nest 的 `EntitySync` 观察者，Board 的修改在事务确认后才进入下一次 Flush；回滚的修改不会推出去（`FoulEliminationAndUndoRollback` 的 `refuse` 断言 Board 不变）。
+- **成员关系跟着座位在 handler 里变**：`PartyConnect`（connected）里 `SyncGroup.Join`，`PartyLeave` 与 `PartyRelease` 里 `Leave`，最后一个归还关闭房间时 `Disband`。三者在 Nest 事务里调用时推迟到提交之后，回滚就不发生。会话由自身视图按连接开关：断线只关连接，成员关系保留，宽限内重连的那个同步周期新连接收到自己与房间的全量，业务不再调用任何东西；`Disband` 后的下一个同步周期成员收到 remove、房间注销，然后再销毁实体。成员关系不持久：进程重启后由玩家重连时的 `PartyConnect` 再 `Join`。
 - **视图白名单**：packer 只放出 `Board`；`State`（种子、星星出现时刻、票号、回执）不标 sync，任何视图都拿不到。夹具的客户端核对收到的文档只有 `_id` 与 `board` 两个键。
 - **慢消费者、帧上限**：沿用 Manager 与接入层的契约——一帧被活着的连接拒收时关会话（[guide/04 §2](guide/04-sync.md#玩家只看自己自身视图)）；一个会话持有的对象受 `Limits.MaxObjects`（缺省 100）约束（[guide/04 视野上限](guide/04-sync.md#谁看见谁视野viewd19)）。派对房间每个会话只有一个对象，不会碰到。
 - **推送频率**：`Board` 带“本回合剩余毫秒”，心跳每拍都会改它，所以 `playing` 时每 100ms 每房间一个增量。要省带宽就去掉剩余时间、让客户端按回合结束时刻自己倒计时，Board 只在事件发生时变化。
@@ -201,7 +202,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 
 结算由服务端发起：局面变成 `settled` 后，对每个座位调用 `MultiSync_PartyClaim(player, room)`。它同时锁 Player 与房间，按终局推导奖励（胜者 50、其他完赛者含犯规淘汰 10、中途离开与掉线 0），Player 金币与座位 `Claimed` 一起提交，重复调用返回同一数额。这是同一原服内的多实体原子提交；Player 在别的 sid 时走 Saga / effect 原服协作（[Saga](guide/06-saga.md)），本地 MultiSync 不升级成分布式事务。
 
-归还：中途离开的人 `session.Leave` 后立即归还座位；完赛者领奖后 `session.Finish` 归还。最后一个座位归还时房间变成 `closed`，心跳与期限已在结算时停下。之后业务调用 `PartyRoomSync.CloseRoom`，再销毁实体：真实进程用 `EntityAccess.Destroy(ctx, room, reason, true)` 删档（DataEngine 删除准入，删档后同一 ID 不可再用，[guide/03 §4](guide/03-dataengine.md#4-冷加载与-schema)），默认夹具没有 DataEngine，只做内存卸载；真实依赖用例走删档。
+归还：中途离开的人 `session.Leave` 后立即归还座位；完赛者领奖后 `session.Finish` 归还。最后一个座位归还时房间变成 `closed`，心跳与期限已在结算时停下。归还 handler 在提交后解散房间同步组（`SyncGroup.Disband`），下一个同步周期成员收到 remove，再销毁实体：真实进程用 `EntityAccess.Destroy(ctx, room, reason, true)` 删档（DataEngine 删除准入，删档后同一 ID 不可再用，[guide/03 §4](guide/03-dataengine.md#4-冷加载与-schema)），默认夹具没有 DataEngine，只做内存卸载；真实依赖用例走删档。
 
 ### 8. 框架没有什么
 
@@ -213,7 +214,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 | 固定步长、追帧 | 心跳是可变步长：上一拍没跑完就跳拍、不补发、不追帧，`Elapsed` 夹在 `[0, max(1s, 档位)]`（[时间 §4A](guide/10-time.md#4a-实体心跳周期推进)、[KNOWN-LIMITS 实体心跳](../maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期)） | 规则按时间戳与事件顺序写（本例 `Advance`），不要按“第几拍”累加 |
 | UDP / KCP 玩家接入 | 玩家接入层（嵌入 TCP、独立 Gate）只提供 TCP；`-features nettransport-kcp` 等只生成装配函数，监听、握手鉴权与 Session 绑定由宿主自己写（[MOBA §2](MOBA-INTEGRATION.md#2-模块分工对局里的状态归谁)、[GATEWAY](GATEWAY.md)） | 派对房间的输入频率低，TCP 足够；要 UDP 自己写接入 |
 | 房间跨机接管 / HA | 房间是普通本地实体，属于开房的进程；进程崩溃后只能由同一份 WAL / Mongo 冷加载恢复（第 13 节），没有自动迁到别的机器继续跑。Player 静态绑定 sid、不做动态迁移（[guide/09 §4](guide/09-services.md#4-关键业务边界)） | 短局可接受“崩溃 → 冷加载 → 硬期限结算”；需要跨机接管要另做 Remote 托管或宿主交接（MOBA 的宿主交接是写法参考） |
-| 房间内同步的生成器 / 装配 | `policy.Group` 只有包内测试与本夹具在用，生成器与 `wiring` 没有房间同步的入口；`access.player.self_sync` 打开后 Nest 只接受一个 `EntitySync` 观察者（`NestOptionWithEntitySync`），`EntitySyncSetup.Attach` 已被 `wiring/selfsync` 占用 | 本例自建 Manager；与 self_sync 同时用时怎样把 Group 挂到同一个 Manager 尚未确认（[KNOWN-LIMITS 游戏接入验收](../maintenance/KNOWN-LIMITS.md#游戏接入验收)） |
+| ~~房间内同步的生成器 / 装配~~（2026-10-31 已提供） | `access.player.sync_groups` + `wiring/selfsync.Groups`（第 5 节）；限制：要求 self_sync（会话归自身视图），成员关系不持久，没有独立 Gate 下的组同步用例 | 不开 self_sync、自己开关会话的进程仍可用 `policy.Group` |
 | 跨服务广播的可靠送达 | SyncBus 定位为可丢广播：普通 NATS 至多一次，JetStream 有限重投（[guide/04 §5](guide/04-sync.md#syncbus-的定位与丢失兜底)） | 房间内同步不走 SyncBus；跨服务的房间事件（大厅列表、好友在玩）要业务对账 |
 | 已开局房间的中途补位 | 弹性人数成局**已提供**（`Queue.MinSize` / `FillAfterSeconds`，“够 M 人、最早一张票等满 T 就开”，[guide/09 §4](guide/09-services.md#4-关键业务边界)）；已开局房间声明空位、后来的票优先补进去的补位没有（方案与待选项见 [FEATURE-2026-10-31 第 3 节](../maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)） | 房间宿主把空座当成一张“房间票”排进单独的补位队列，匹配器取一张房间票 + 若干玩家票弹性成局，进房 handler 拒绝超员（方案 B）；或等框架补位 |
 | 房间码、大厅列表 | 没有房间码服务与房间列表 | directory 做短码；大厅列表自己维护（可丢、可重建） |
@@ -241,12 +242,12 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 bash scripts/test-party-room-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 12 条顶层 race 场景（3.4：2 条规则 + 10 条 Nest / 心跳 / 同步）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`，再把真实依赖用例复制进工程只编译（`go vet`）；成功删除临时工程，失败或 `ROOST_PARTY_ROOM_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉）。2026-10-31 本机 macOS 实测：缺省模式约 18 秒（12 个场景合计约 2 秒，主要是心跳等待）。
+脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 13 条顶层 race 场景（3.4：2 条规则 + 11 条 Nest / 心跳 / 同步）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`，再把真实依赖用例复制进工程只编译（`go vet`）；成功删除临时工程，失败或 `ROOST_PARTY_ROOM_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉）。2026-10-31 本机 macOS 实测：缺省模式约 18 秒（12 个场景合计约 2 秒，主要是心跳等待）；加入同步组入口（access player + TCP + self_sync）后 13 个场景合计约 2 秒。
 
 ### 12. 业务纵切证明什么
 
-- **证明**：公共 CLI 生成的 Player / PartyRoom DAO、实体心跳（真实驱动循环、批量投递）、持久实体定时器、`nopersist,sync` 字段与业务 packer、多实体 Sender 与 Nest 在 12 个组合下的事务、undo 回滚（含心跳启停与定时器）、锁顺序、业务幂等与时间判定；`entitysync.Manager` + `policy.Group` 经 Nest 提交门把同一份记分板推给全体成员（正式 `frame.Receiver` 解码、视图白名单）；`service/match` 与 `service/session` 的正式领域实现（内存存储）在成局、进房、重连、归还里的语义。
-- **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；房间销毁只做内存卸载；match / session 用内存存储，不含 Redis 与 RPC；Entity Sync 的传输是内存捕获，没有经嵌入 TCP / 独立 Gate、慢消费者断开、真实客户端；单进程；心跳在 `-race` 下的少量房间运行，没有房间数量、心跳负载与推送带宽的容量数据；夹具里的数值是样例。
+- **证明**：公共 CLI 生成的 Player / PartyRoom DAO、实体心跳（真实驱动循环、批量投递）、持久实体定时器、`nopersist,sync` 字段与业务 packer、多实体 Sender 与 Nest 在 13 个组合下的事务、undo 回滚（含心跳启停与定时器）、锁顺序、业务幂等与时间判定；正式 `wiring/nest` Mod + `wiring/selfsync`（自身视图 + 房间同步组，同一个 Manager）经 Nest 提交门把同一份记分板推给全体成员、把 Player 推给本人（正式 `frame.Receiver` 解码、按命名空间分流、视图白名单）；`service/match` 与 `service/session` 的正式领域实现（内存存储）在成局、进房、重连、归还里的语义。
+- **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；房间销毁只做内存卸载；match / session 用内存存储，不含 Redis 与 RPC；玩家接入层是替身（连接激活 / 关闭直接调 `OnActive` / `OnClosed`，推送进内存客户端），没有经嵌入 TCP / 独立 Gate、慢消费者断开、真实客户端（同一入口的真实 TCP 用例在 `wiring/selfsync` 的 `TestGroupsShareTheSelfSyncConnection`）；单进程；心跳在 `-race` 下的少量房间运行，没有房间数量、心跳负载与推送带宽的容量数据；夹具里的数值是样例。
 
 ### 13. 真实 WAL / Mongo 崩溃恢复
 
@@ -266,7 +267,7 @@ ROOST_PARTY_ROOM_REAL=1 bash scripts/test-party-room-generated.sh
 2026-10-31 本机实测（私有单节点 Mongo 副本集）：通过，崩溃时 12 条未投影记录，脚本全程约 19 秒。对照：把 `onHeartbeatInit` 里按阶段启动心跳的一行去掉后跑一次，用例在冷加载核对处失败（`cold load lost the room: beat=false`），所以“冷加载后心跳重新启动”确实由业务的 `onHeartbeatInit` 完成。
 
 - **证明**：strict 已确认的输入与房间状态在 SIGKILL 后可从未投影 WAL 恢复；心跳不持久，冷加载后按持久阶段重新启动、离线期间错过的回合在第一拍里一次结算；跨进程重试不重复发奖；删档后房间不再加载。
-- **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏；期限定时器的冷加载补触发（由塔防等纵切与 entitytimer 包测试覆盖）；Entity Sync 在恢复后的重新登记；多进程 / 跨机、Redis / NATS；三个逻辑玩家不是三台客户端，容量与长稳未测。
+- **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏；期限定时器的冷加载补触发（由塔防等纵切与 entitytimer 包测试覆盖）；Entity Sync 在恢复后的重新登记（本用例把同步组装到 self_sync 的 Manager 上只为承接连接 handler 的 `Join`，不推送；2026-10-31 改动后真实依赖模式未重跑）；多进程 / 跨机、Redis / NATS；三个逻辑玩家不是三台客户端，容量与长稳未测。
 
 ### 14. 结论怎样给
 
