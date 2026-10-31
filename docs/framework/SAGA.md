@@ -163,7 +163,8 @@ fence 到 `ManualRequired`，恢复定义后 `Resume`。
 `ErrIdentityConflict`），之后同一业务键可以再开一笔。再开的一笔与上一笔 saga ID 相同，但协调器新建记录时给它一个新的**生命周期标识**
 （`Record.Lifecycle`，随机生成、随事件持久，重放 / 快照 / 冷副本原样恢复），它编进每个操作键：参与方还留着的上一笔成功回执对不上新一笔，新一笔照常
 执行；上一笔迟到的结果按“分区里没有这笔”只计 `saga.completion.unknown_saga_total`，不改新一笔（RV-20261030-01，修前新一笔被回放成“已执行”、
-迟到结果还能推进新一笔）。`GetByBusinessKey` 还没启动或过了保留期返回 `ErrNotFound`。生成的
+迟到结果还能推进新一笔）。**复用是定案**（维护者 2026-10-31 决定 A：业务键在终态保留期后可复用，前后两轮靠协调器生成的生命周期身份区分；不采用 B（禁止复用，需冷副本成为权威、Mongo 进判定路径））：
+业务需要“同一业务键永远只有一笔”时，在业务自己的数据里记下已用过的键，不依赖协调器。`GetByBusinessKey` 还没启动或过了保留期返回 `ErrNotFound`。生成的
 `saga/<name>/definition.go` 带 `Lookup(ctx, engine, businessKey)`。业务键应取发起方能交还给客户端的值（例如请求号）。终态通知没有默认实现。
 
 `Completion.Data` 会成为下一步的 `Command.Payload`，用于传递流程状态。不要放入大对象（事件携带完整状态，Data 大时日志膨胀）；业务实体仍应存放在其权威服务中。
