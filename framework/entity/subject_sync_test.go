@@ -3,6 +3,7 @@ package entity
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -428,5 +429,49 @@ func TestSyncLayerUnionResolvesFieldsAndPriority(t *testing.T) {
 	payload, err := packer.PackSubjectSnapshot(UnionSyncProfiles(far, alliance))
 	if err != nil || payload.BytesCopy()[0] != 0b1011 {
 		t.Fatalf("union packed %v, %v", payload.BytesCopy(), err)
+	}
+}
+
+// commitGateObserver 是只计数唤醒的提交观察者：用例只关心提交门，不冻结内容。
+type commitGateObserver struct{}
+
+func (commitGateObserver) BindSyncProducer()                   {}
+func (commitGateObserver) CaptureSync(*SubjectSyncState) error { return nil }
+func (commitGateObserver) WakeSync()                           {}
+
+// 提交条件（锁外的兴趣事实队列据此决定应用还是丢弃）对一笔从未确认、随后被拒绝的提交只能给出“未就绪”或“丢弃”，
+// 不能给出“就绪”：被拒绝的门不再阻塞后续提交（passed），但本提交自己的事实必须丢弃。条件读两次拒绝标记时，
+// 与 Reject 并发的读者可能先读到“未拒绝”、再在 ready 里读到“已拒绝 = 已放行”，把被拒绝的移动当作已提交应用。
+// 并发读者在另一个 goroutine 上紧密轮询，所以每一轮都覆盖 Reject 写入的那一刻。
+func TestCommitConditionNeverReportsARejectedCommitReady(t *testing.T) {
+	const rounds = 100000
+	var observer commitGateObserver
+	for round := 0; round < rounds; round++ {
+		e := &testEntity{EntityBase: NewEntityBase(7, EntityCategory(4), true)}
+		state := NewSubjectSyncState(SubjectSyncCreateParam{Enabled: true, SubjectID: 7})
+		e.SetSyncState(state)
+		mutation := BeginSyncMutation([]IThreadSafeEntity{e}, observer)
+		condition := state.SyncCommitCondition()
+		mutation.Admit()
+		mutation.Release()
+		var stop atomic.Bool
+		ready := make(chan bool, 1)
+		go func() {
+			sawReady := false
+			for !stop.Load() {
+				if r, _ := condition(); r {
+					sawReady = true
+				}
+			}
+			ready <- sawReady
+		}()
+		mutation.Reject()
+		stop.Store(true)
+		if <-ready {
+			t.Fatalf("round %d: a rejected, never confirmed commit was reported ready", round)
+		}
+		if r, discarded := condition(); r || !discarded {
+			t.Fatalf("round %d: after Reject ready=%v discarded=%v, want discarded", round, r, discarded)
+		}
 	}
 }

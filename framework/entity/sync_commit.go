@@ -316,13 +316,17 @@ func (s *SubjectSyncState) SyncCommitCondition() func() (ready, discarded bool) 
 	gate := s.commitGate
 	s.mu.Unlock()
 	return func() (bool, bool) {
+		// 先判就绪、后判丢弃。被拒绝的门在 ready 里算“已放行”（不再阻塞后续提交），而本提交自己被拒绝要丢弃事实：
+		// 两次读拒绝标记之间 Reject 可能落下，先判丢弃会读到“未拒绝”、再在 ready 里读到“已放行”，把被拒绝的提交
+		// 报成就绪。拒绝与回滚标记只会由假变真，所以后读的丢弃判断为假时，先读的 ready 不可能来自本提交的拒绝。
+		ready := gate.ready()
 		for current := gate; current != nil; current = current.previous {
 			// 只有本提交自己被拒绝的门才丢弃事实；前序被拒绝的门只是不再阻塞（ready 跳过）。
 			if current.batch.discarded.Load() || (current == gate && current.rejected.Load()) {
 				return false, true
 			}
 		}
-		return gate.ready(), false
+		return ready, false
 	}
 }
 
