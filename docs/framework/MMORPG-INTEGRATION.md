@@ -199,7 +199,7 @@ SLG 手册的[通用接入原则](SLG-INTEGRATION.md#9-通用接入原则)（定
 | `scripts/test-mmorpg-scenes.sh` 与 demo 场景回归 | 无外部依赖 | §12 |
 | `scripts/test-mmorpg-cross-sid.sh` | 已启动的双 sid game-demo 与隔离 Mongo / NATS / Redis / etcd | §13 |
 
-这些脚本都不挂在 `dataengine-env.sh test`、不在根包门禁里，改相关生成器或 demo 场景接入时手动跑；本部分是 MMORPG 验收范围的完整说明，[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要。
+`scripts/test-mmorpg-generated.sh` 的缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`）；它的真实依赖模式与其余两个脚本不挂在 `dataengine-env.sh test`、不在门禁里，改相关生成器或 demo 场景接入时手动跑；本部分是 MMORPG 验收范围的完整说明，[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要。
 
 ### 10. 业务纵切
 

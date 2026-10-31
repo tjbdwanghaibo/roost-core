@@ -390,9 +390,9 @@ transactionLifetimeLimitSeconds: 20})` 或启动参数 `--setParameter transacti
 收到已接纳的交易号后显示“处理中”，通过业务状态查询 / 结果通知确认结果；不能把启动成功、请求超时或客户端断线直接解释为交易成功或失败。
 Nest handler 不应持有 Entity 锁等待整笔 Saga 完成。
 
-容量：协调器原型（本机三节点 R3、参与方投影 8 通道、准入开）实测长期约 1200 笔/秒（云 Mongo 约 700 笔/秒），见
-[原型报告](../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)。正式实现（生成 DAO、实体内回执、`Steps` 运行时）的数字在性能验收批次另测，
-**原型数字不是正式实现的容量结论**。Redis 权威与旧原生路径的历史测量（`SAGA-CHECKPOINT-20261018`、`NIGHT-20261020` 等）不再适用。
+容量：正式实现在 macOS 单机（三节点 JetStream R3、原生步骤 pipelined + Nest 异步完成、short 池 4）原生正向 128 并发约 1050 笔/秒，
+见[验收报告](../performance/SAGA-JETSTREAM-AUTHORITY-20261029.md)；参与方是框架层正式路径、账户 DAO 为同形手写，`wiring/saga` 的 `Steps` 胶水不在压测路径上；Linux、跨机未测（KNOWN-LIMITS）。协调器原型的数字（[原型报告](../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)，
+本机约 1200 笔/秒）**不是正式实现的容量结论**。Redis 权威与旧原生路径的历史测量（`SAGA-CHECKPOINT-20261018`、`NIGHT-20261020` 等）不再适用。
 
 - **持久的交易身份**：同一笔交易使用稳定 BusinessKey 与一致的启动意图；`ErrBackpressure` / `ErrStartUnconfirmed` / 超时后重查或用同一请求重试，
   不换新键再扣一次款。

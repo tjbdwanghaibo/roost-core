@@ -344,7 +344,7 @@ func casAlliance(ctx context.Context, client nest.Client, allianceEntityID int64
 bash scripts/test-slg-generated.sh
 ```
 
-脚本按 §3.1 的步骤生成工程（含联盟活动的 Remote 实体与业务文件），replace 指回当前仓库，必须实际通过 6 条顶层 race 场景（§3.4）且无 skip，随后对整个工程 build / vet，执行 `roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_SLG_KEEP=1` 时保留。脚本不挂在 `dataengine-env.sh test`、不在根包门禁里，改 DAO / 组件 / Sender / Nest / 实体定时器 / Remote 实体生成时手动跑。
+脚本按 §3.1 的步骤生成工程（含联盟活动的 Remote 实体与业务文件），replace 指回当前仓库，必须实际通过 6 条顶层 race 场景（§3.4）且无 skip，随后对整个工程 build / vet，执行 `roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_SLG_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉；联盟包的真实依赖用例本来就在缺省模式复制并 vet）；真实依赖模式不挂在 `dataengine-env.sh test`，改 DAO / 组件 / Sender / Nest / 实体定时器 / Remote 实体生成时手动跑。
 
 - **证明**：公共 CLI 生成的 DAO、组件、Sender、Nest 与实体定时器 Host 在 6 个业务组合下的事务、回滚、锁顺序和期限行为；回调登记的下一阶段进入驱动索引（用例核对驱动的 `DueOf`）；联盟活动的业务包、Player 到账 handler 与 Remote 托管实体的生成物能编译并通过 vet；联盟的补报截止跟随协调器的 `ReservationTTL`（纯内存用例 `TestAllianceReportWindowFollowsTheCoordinatorReservationTTL`）、普通 Bus RPC 接收端预算拒绝迟到成功（纯内存用例 `TestAllianceReceiverBudgetRejectsLateSuccess`，以不带期限的基础 context 模拟 dispatchRpc），这两条缺省模式就跑；其余联盟用例缺省模式只编译与 vet。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；离线恢复用真实 DAO 的序列化 / 水合接口重建实体，再由用例手动投递 Tick，不是真实重载，也不是驱动在加载后自动投递；单进程，无 Redis / NATS。[业务文件与测试](../../scripts/testdata/slg/)中的数值是样例。

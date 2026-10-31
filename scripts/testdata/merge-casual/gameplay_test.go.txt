@@ -11,6 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -81,7 +82,10 @@ func newMergeFixture(t *testing.T) *mergeFixture {
 	RegisterTickPlayerTimerGenNestHandlers()
 	f := &mergeFixture{rules: loadMergeRules(t, casual.DemoRules())}
 	f.clock.Store(mergeNow)
+	// 定时器 Tick 按本条消息冻结的业务时间触发（fctx 取自进程业务时钟），驱动的到期查询用 SetClock：两处读同一个 f.clock。
 	playerentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	id, err := entity.BuildEntityID(91001, playerentity.EntityKindPlayer)
 	if err != nil {
 		t.Fatal(err)
@@ -357,7 +361,7 @@ func TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge(t *testi
 	}
 	f.clock.Store(deadline + 3600000)
 	tick := sender.NewTickPlayerTimerGenSender(f.engine)
-	if _, err := tick.Sync_TickPlayerTimer(context.Background(), f.player.ID(), f.clock.Load()); err != nil {
+	if _, err := tick.Sync_TickPlayerTimer(context.Background(), f.player.ID()); err != nil {
 		t.Fatal(err)
 	}
 	s := f.state(t)
@@ -365,12 +369,12 @@ func TestMergeCasualPersistentDeadlineExpiresOnceAndCancelsOldChallenge(t *testi
 		t.Fatal("overdue challenge did not settle")
 	}
 	before := s.Digest()
-	if _, err := tick.Sync_TickPlayerTimer(context.Background(), f.player.ID(), f.clock.Load()); err != nil || f.state(t).Digest() != before {
+	if _, err := tick.Sync_TickPlayerTimer(context.Background(), f.player.ID()); err != nil || f.state(t).Digest() != before {
 		t.Fatal("deadline fired twice")
 	}
 	f.do(t, "claim", 0, 0, int64(first.Command.Seq))
 	f.do(t, "start", 0, 0, 0)
-	if _, err := tick.Sync_TickPlayerTimer(context.Background(), f.player.ID(), f.clock.Load()); err != nil {
+	if _, err := tick.Sync_TickPlayerTimer(context.Background(), f.player.ID()); err != nil {
 		t.Fatal(err)
 	}
 	if s := f.state(t); s.Challenge.Status != "active" || s.Gold != 30 {

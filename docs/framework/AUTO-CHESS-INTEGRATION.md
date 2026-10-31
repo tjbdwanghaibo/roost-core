@@ -217,7 +217,7 @@ sequenceDiagram
 bash scripts/test-auto-chess-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 12 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_AUTO_CHESS_KEEP=1` 时保留。脚本不挂在 `dataengine-env.sh test`、不在根包门禁里，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
+脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 12 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_AUTO_CHESS_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
 
 - **证明**：公共 CLI 生成的 Player / ChessMatch DAO、实体定时器、多实体 Sender 与 Nest 在 12 个业务组合下的事务、undo 回滚、锁顺序、业务幂等和期限核对；配置原子发布与对局冻结；视图按观察者裁剪。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；定时器由用例调用驱动的 `DeliverDue`，实体一直在内存，没有经过投递循环与加载后补触发；八个“玩家”是同进程里的并发调用，不是八个网络客户端；单进程，无 Redis / NATS；鉴权与接管票是合成的。夹具里的数值是样例。

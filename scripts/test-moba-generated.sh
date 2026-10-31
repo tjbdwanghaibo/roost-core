@@ -93,16 +93,18 @@ go build -mod=mod -p 2 ./...
 go vet -mod=mod -p 2 ./...
 "$review_root/roost" id check
 "$review_root/roost" generate --check
+# 真实依赖用例缺省模式也复制进工程并 vet（只编译不运行）：生成器签名变了，发版门禁里就能看到这些夹具编译失败。
+cp "$repo_root/scripts/testdata/moba/persistence/persistence_test.go" game/handler/moba_persistence_test.go
+gofmt -w game/handler/moba_persistence_test.go
+for path in "$repo_root"/scripts/testdata/moba/active/*_test.go; do cp "$path" "game/handler/moba_$(basename "$path")"; done
+go vet -mod=mod -p 2 ./game/handler
 if [[ "${ROOST_MOBA_REAL:-0}" == 1 ]]; then
   : "${ROOST_DATAENGINE_IT_MONGO_URI:?isolated Mongo replica-set URI required}"
-  cp "$repo_root/scripts/testdata/moba/persistence/persistence_test.go" game/handler/moba_persistence_test.go
-  gofmt -w game/handler/moba_persistence_test.go
   export ROOST_MOBA_WAL="$review_root/persistence"
   for phase in write recover; do
     ROOST_MOBA_PHASE="$phase" go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMOBARealSettlementAcrossProcesses$' ./game/handler | tee "$review_root/persistence-$phase.log"
     if [[ "$(grep -c '^--- PASS: TestMOBARealSettlementAcrossProcesses' "$review_root/persistence-$phase.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/persistence-$phase.log"; then exit 1; fi
   done
-  for path in "$repo_root"/scripts/testdata/moba/active/*_test.go; do cp "$path" "game/handler/moba_$(basename "$path")"; done
   go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBARealActiveRoundCrashRecovery$' ./game/handler | tee "$review_root/active-crash.log"
   if [[ "$(grep -c '^--- PASS: TestMOBARealActiveRoundCrashRecovery' "$review_root/active-crash.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/active-crash.log"; then exit 1; fi
   go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMOBARealActiveRoundSnapshotRecoveryAfterSIGKILL$' ./game/handler | tee "$review_root/active-snapshot.log"

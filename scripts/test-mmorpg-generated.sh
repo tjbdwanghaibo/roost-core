@@ -75,10 +75,12 @@ if [[ "$passed" != 13 ]] || grep -q '^--- SKIP' "$review_root/test.log"; then
 fi
 "$review_root/roost" id check
 "$review_root/roost" generate --check
+# 真实依赖用例缺省模式也复制进工程并 vet（只编译不运行）：生成器签名变了，发版门禁里就能看到这些夹具编译失败。
+for path in "$repo_root"/scripts/testdata/mmorpg/persistence/*_test.go; do cp "$path" "game/handler/mmo_$(basename "$path")"; done
+gofmt -w game/handler/mmo_persistence_test.go game/handler/mmo_recovery_test.go
+go vet -mod=mod -p 2 ./game/handler
 if [[ "${ROOST_MMORPG_REAL:-0}" == 1 ]]; then
   : "${ROOST_DATAENGINE_IT_MONGO_URI:?isolated Mongo replica-set URI required}"
-  for path in "$repo_root"/scripts/testdata/mmorpg/persistence/*_test.go; do cp "$path" "game/handler/mmo_$(basename "$path")"; done
-  gofmt -w game/handler/mmo_persistence_test.go game/handler/mmo_recovery_test.go
   # 两个用例各用自己的 WAL 根（共用本次唯一库；正常停机用例成功时先删库，崩溃用例再从空库开始）。
   for phase in write recover; do
     ROOST_MMORPG_WAL="$review_root/persistence" ROOST_MMORPG_PHASE="$phase" go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPGRealPersistenceAcrossProcesses$' ./game/handler | tee "$review_root/persistence-$phase.log"

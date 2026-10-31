@@ -395,7 +395,7 @@ UGC 数据是有限基础几何与轨迹描述，不含网格烘焙、脚本、�
 
 ## 游戏接入验收
 
-九份接入手册的“第二部分 验收”是各自验收范围的完整说明（场景清单、证明与不证明、崩溃点、计数核对）。脚本都不挂在 `dataengine-env.sh test`、不在根包门禁里，改 `game` 模板、`add dao` / `add entity` / `add timer` / `add attribute`、多实体 Sender、Nest 生成或 Lockstep 时手动跑；真实模式入口登记在根包 `integration_coverage_test.go`。夹具里的数值都是业务样例，玩法规则缺少默认实现不算框架缺陷。
+九份接入手册的“第二部分 验收”是各自验收范围的完整说明（场景清单、证明与不证明、崩溃点、计数核对）。**发版门禁**（2026-10-31 起）：九个脚本的缺省模式（离线、替身提交器）由 `scripts/pretag.sh` 每次发版并行跑一遍（并发数 `ROOST_PRETAG_GENRE_JOBS`，缺省 4；本机 macOS 10 核实测：空闲时 45～60 秒，pretag 全程里、机器另有负载（load 7～8）时 125 秒），缺省模式同时把真实模式的恢复夹具复制进生成工程并 `go vet`（只编译不运行）；根包 `TestGeneratedScriptsAreInPretag` 要求每个 `scripts/test-*-generated.sh` 都在 pretag 里或登记了豁免原因（此前九个脚本不在任何门禁里，v1.33.0 上 card-rpg / mmorpg / merge-casual 三个夹具因 D22-1 改了 Tick 签名编译失败而无人发现）。**不在门禁里的**：真实模式（`ROOST_<玩法>_REAL=1` 需要隔离 Mongo 等，仍在改 `game` 模板、`add dao` / `add entity` / `add timer` / `add attribute`、多实体 Sender、Nest 生成或 Lockstep 时手动跑；入口登记在根包 `integration_coverage_test.go`）；守卫只查 pretag 调用了脚本，场景是否真的执行由各脚本自己的通过数断言负责。夹具里的数值都是业务样例，玩法规则缺少默认实现不算框架缺陷。
 
 | 游戏 | 入口脚本 / 真实模式变量 | 证明什么 | 不证明什么 | 手册 |
 | --- | --- | --- | --- | --- |

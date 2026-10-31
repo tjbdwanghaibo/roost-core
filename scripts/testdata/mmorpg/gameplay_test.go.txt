@@ -16,7 +16,7 @@ import (
 func (f *mmoFixture) tick(t *testing.T, after time.Duration) {
 	t.Helper()
 	f.now = f.now.Add(after)
-	if _, err := sender.NewTickPlayerTimerGenSender(f.engine).Sync_TickPlayerTimer(context.Background(), f.players[0].ID(), f.now.UnixMilli()); err != nil {
+	if _, err := sender.NewTickPlayerTimerGenSender(f.engine).Sync_TickPlayerTimer(context.Background(), f.players[0].ID()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -280,7 +280,7 @@ func TestMMORPGBuffFailureRollsBackAndOfflineExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer engine.Shutdown(ctx)
-	if _, err := sender.NewTickPlayerTimerGenSender(engine).Sync_TickPlayerTimer(ctx, loaded.ID(), f.now.UnixMilli()); err != nil {
+	if _, err := sender.NewTickPlayerTimerGenSender(engine).Sync_TickPlayerTimer(ctx, loaded.ID()); err != nil {
 		t.Fatal(err)
 	}
 	if loaded.Dao().GetBuffValue() != 0 || loaded.Dao().TimersLen() != 0 {

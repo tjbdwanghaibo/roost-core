@@ -13,8 +13,8 @@ import (
 // Saga 步骤运行时与性能报告的链接：生成的骨架注释与 roost help 引用同一份。
 const (
 	sagaGuideURL        = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/framework/guide/06-saga.md"
-	sagaCapacityDocURL  = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md"
-	sagaCapacitySummary = "a native step's result goes back to the coordinator as soon as its Nest transaction is durable (native steps are generated durability=pipelined: the lock is released before the WAL fsync and Nest's async completion frees the short-pool worker, so keep the WAL on a fast disk); new sagas are refused with saga.ErrBackpressure (a start effect is retried) while a participant's projection backlog is above saga.admission.high_records; the coordinator prototype carried about 1200 sagas/s on one machine (three-node JetStream R3), and the formal implementation is measured in its own performance round"
+	sagaCapacityDocURL  = "https://github.com/tjbdwanghaibo/roost-core/blob/main/docs/performance/SAGA-JETSTREAM-AUTHORITY-20261029.md"
+	sagaCapacitySummary = "a native step's result goes back to the coordinator as soon as its Nest transaction is durable (native steps are generated durability=pipelined: the lock is released before the WAL fsync and Nest's async completion frees the short-pool worker, so keep the WAL on a fast disk); new sagas are refused with saga.ErrBackpressure (a start effect is retried) while a participant's projection backlog is above saga.admission.high_records; the formal implementation measured about 1050 sagas/s (native forward steps, 128 concurrent) on one macOS machine (three-node JetStream R3, this recommended configuration); Linux and cross-machine runs are not measured"
 )
 
 // sagaStep 是 -steps 里的一步：名字、是否原生步骤（-native），以及原生步骤的两个 Nest handler 名。
@@ -423,9 +423,10 @@ import (
 // (saga.ErrBackpressure; a start effect is retried) and running ones carry on.
 // More load needs more processes: shard by sid (each process owns its sids'
 // entities) and add an admission check on the native steps (kitsaga.WithAdmit,
-// below) so a command runs on the process that owns its entity. The coordinator
-// prototype's measurements (the formal implementation is measured in its own
-// performance round):
+// below) so a command runs on the process that owns its entity. The formal
+// implementation measured about 1050 sagas/s (native forward steps, 128
+// concurrent, three-node JetStream R3) on one macOS machine; Linux and
+// cross-machine runs are not measured:
 // %[5]s
 // Guide: %[6]s §2.1
 

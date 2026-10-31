@@ -12,6 +12,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -80,7 +81,10 @@ func newCardFixture(t *testing.T) *cardFixture {
 	RegisterTickCardRunTimerGenNestHandlers()
 	f := &cardFixture{rules: loadCardRules(t, cardrpg.DemoRules())}
 	f.clock.Store(1800000000000)
+	// 定时器 Tick 按本条消息冻结的业务时间触发（fctx 取自进程业务时钟），驱动的到期查询用 SetClock：两处读同一个 f.clock。
 	runentity.TimerDriver.SetClock(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.clock.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	g := cardGetter{}
 	build := func(unique int64, kind entity.EntityKind) entity.IThreadSafeEntity {
 		t.Helper()
@@ -544,21 +548,21 @@ func TestCardRPGTurnTimersIgnoreOldDeadlineAndOnlyCatchUpOnce(t *testing.T) {
 		t.Fatal("new turn reused timer")
 	}
 	f.clock.Store(oldDeadline)
-	if _, err := sender.NewTickCardRunTimerGenSender(f.engine).Sync_TickCardRunTimer(ctx, id, f.clock.Load()); err != nil {
+	if _, err := sender.NewTickCardRunTimerGenSender(f.engine).Sync_TickCardRunTimer(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 	if f.battle(t, 0).NextSeq() != 2 {
 		t.Fatal("old deadline advanced new turn")
 	}
 	f.clock.Add(100000)
-	if _, err := sender.NewTickCardRunTimerGenSender(f.engine).Sync_TickCardRunTimer(ctx, id, f.clock.Load()); err != nil {
+	if _, err := sender.NewTickCardRunTimerGenSender(f.engine).Sync_TickCardRunTimer(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 	b = f.battle(t, 0)
 	if b.NextSeq() != 3 || b.Log[1].Command.Kind != "timeout" || b.State.Deadline != f.clock.Load()+cardrpg.TurnMillis {
 		t.Fatal("overdue timer chased turns / lost next deadline")
 	}
-	if _, err := sender.NewTickCardRunTimerGenSender(f.engine).Sync_TickCardRunTimer(ctx, id, f.clock.Load()); err != nil {
+	if _, err := sender.NewTickCardRunTimerGenSender(f.engine).Sync_TickCardRunTimer(ctx, id); err != nil {
 		t.Fatal(err)
 	}
 	if f.battle(t, 0).NextSeq() != 3 {

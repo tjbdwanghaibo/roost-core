@@ -116,6 +116,44 @@ if ! GOWORK=off go test ./... >"$test_log" 2>&1; then
 fi
 rm -f "$test_log"
 
+# 5b. 九个玩法纵切（docs/framework/<玩法>-INTEGRATION.md）：每个脚本用本检出的 roost 新生成一个工程、拷入
+#     scripts/testdata/<玩法> 的业务夹具，跑缺省模式（离线、替身提交器）的场景用例，并编译真实依赖用例。
+#     go test ./... 看不到这些夹具：v1.33.0 上 D22-1 改了生成的 Tick 签名，card-rpg / mmorpg / merge-casual
+#     三个夹具编译失败而无人发现。脚本并行跑（共享同一个 go build cache），ROOST_PRETAG_GENRE_JOBS 调并发数；
+#     失败时保留该脚本的日志与生成工程。新增的 scripts/test-*-generated.sh 必须加进这张表或在根包
+#     TestGeneratedScriptsAreInPretag 的豁免表里写明由谁跑。
+echo "pretag: genre vertical slices (generated projects, offline default mode)"
+genre_scripts=(
+  scripts/test-slg-generated.sh
+  scripts/test-mmorpg-generated.sh
+  scripts/test-moba-generated.sh
+  scripts/test-card-rpg-generated.sh
+  scripts/test-tower-defense-generated.sh
+  scripts/test-survival-extraction-generated.sh
+  scripts/test-merge-casual-generated.sh
+  scripts/test-idle-sim-generated.sh
+  scripts/test-auto-chess-generated.sh
+)
+genre_logs="$(mktemp -d "${TMPDIR:-/tmp}/roost-pretag-genres.XXXXXX")"
+genre_start=$SECONDS
+# 真实依赖开关一律清掉：发版门禁只跑缺省模式，不因调用者 shell 里留着的 ROOST_*_REAL 去连共享环境。
+if ! printf '%s\n' "${genre_scripts[@]}" | env -u ROOST_SLG_REAL -u ROOST_MMORPG_REAL -u ROOST_MOBA_REAL -u ROOST_MOBA_ROUTING \
+    -u ROOST_CARD_RPG_REAL -u ROOST_TOWER_DEFENSE_REAL -u ROOST_SURVIVAL_EXTRACTION_REAL -u ROOST_MERGE_CASUAL_REAL \
+    -u ROOST_IDLE_SIM_REAL -u ROOST_AUTO_CHESS_REAL \
+    xargs -P "${ROOST_PRETAG_GENRE_JOBS:-4}" -I{} bash -c '
+      name="$(basename "$1" .sh)"; start=$SECONDS
+      if "./$1" >"$2/$name.log" 2>&1; then
+        echo "pretag:   ok   $name ($((SECONDS - start))s)"
+      else
+        echo "pretag:   FAIL $name ($((SECONDS - start))s, log: $2/$name.log)" >&2
+        exit 1
+      fi' _ {} "$genre_logs"; then
+  fail "a genre vertical slice failed (logs: $genre_logs)"
+fi
+echo "pretag: genre vertical slices passed in $((SECONDS - genre_start))s"
+rm -rf "$genre_logs"
+[[ -z "$(git status --porcelain)" ]] || { git status --short >&2; fail "a genre script left files in the checkout"; }
+
 # 6. C# 客户端 SDK：go test ./... 只在 dotnet 可用时跑生成工程那一条，金样与 SDK 自测不在 Go 测试里。
 #    缺 dotnet 时脚本打印 SKIP（不是通过），发版说明里要如实记。
 echo "pretag: C# client SDK golden and self tests"

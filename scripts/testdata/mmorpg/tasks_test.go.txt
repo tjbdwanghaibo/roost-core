@@ -11,6 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 	"sync"
 	"testing"
 	"time"
@@ -58,7 +59,10 @@ func newMMOFixture(t *testing.T) *mmoFixture {
 	RegisterMmoGameplayNestHandlers()
 	RegisterTickPlayerTimerGenNestHandlers()
 	f := &mmoFixture{now: time.Unix(1800000000, 0)}
+	// 定时器 Tick 按本条消息冻结的业务时间触发（fctx 取自进程业务时钟），驱动的到期查询用 SetClock：两处停在同一时刻。
 	player.TimerDriver.SetClock(func() time.Time { return f.now })
+	clock.SetSource(func() time.Time { return f.now })
+	t.Cleanup(func() { clock.SetSource(nil) })
 	g := mmoGetter{}
 	for i := range 2 {
 		pid, _ := entity.BuildEntityID(int64(800+i), player.EntityKindPlayer)

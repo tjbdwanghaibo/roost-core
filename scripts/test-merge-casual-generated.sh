@@ -67,10 +67,12 @@ go build -mod=mod -p 2 ./...
 go vet -mod=mod -p 2 ./...
 "$review_root/roost" id check
 "$review_root/roost" generate --check
+# 真实依赖用例缺省模式也复制进工程并 vet（只编译不运行）：生成器签名变了，发版门禁里就能看到这些夹具编译失败。
+for path in "$repo_root"/scripts/testdata/merge-casual/persistence/*_test.go; do cp "$path" "game/handler/merge_casual_$(basename "$path")"; done
+gofmt -w game/handler/merge_casual_*_test.go
+go vet -mod=mod -p 2 ./game/handler
 if [[ "${ROOST_MERGE_CASUAL_REAL:-0}" == 1 ]]; then
   : "${ROOST_DATAENGINE_IT_MONGO_URI:?isolated Mongo replica-set URI required}"
-  for path in "$repo_root"/scripts/testdata/merge-casual/persistence/*_test.go; do cp "$path" "game/handler/merge_casual_$(basename "$path")"; done
-  gofmt -w game/handler/merge_casual_*_test.go
   export ROOST_MERGE_CASUAL_WAL="$review_root/persistence"
   go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestMergeCasualRealCrashRecovery$' ./game/handler | tee "$review_root/recovery.log"
   if [[ "$(grep -c '^--- PASS: TestMergeCasualRealCrashRecovery' "$review_root/recovery.log" || true)" != 1 ]] || grep -q '^--- SKIP' "$review_root/recovery.log"; then exit 1; fi
