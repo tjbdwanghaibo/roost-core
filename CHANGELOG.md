@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **`nest.AfterCommit` 不再对已结束的事务返回 true 却丢掉回调；事务不再随上下文快照跨 goroutine 泄漏**。包级 `AfterCommit` 原来只看“有没有当前事务”：当前事务已提交或回滚时仍返回 true，回调永远不执行，`if !nest.AfterCommit(fn) { fn() }` 的调用方（`wiring/selfsync.Groups` 的 Join / Leave / Disband、时间域发布、entitytimer 报告）就丢掉提交后动作；现在已结束的事务返回 false，调用方立即执行。能走到这一步的真实路径是同步 `Request` 的上下文快照：在 `RunDetachedTransaction` 里发起的同步请求把调用方事务带进被调 handler，被调方的提交后回调挂到调用方事务上，调用方超时后提交（回调被丢）或回滚（被调方已生效、回调随回滚消失）。`CurrentRollbackTx` 现在只在绑定事务的那个请求上下文里返回它，别处视为不在事务内。见 [impl/02 §2 第 7 条](docs/framework/impl/02-nest-entity.md#2-必须保持的契约)。
+
+- **被拒绝的 Remote 提交不再偶发被兴趣管理当作已提交应用**：`SubjectSyncState.SyncCommitCondition` 先判“本提交被拒绝 → 丢弃”、再判就绪，而被拒绝的门在就绪判断里算已放行；两次读拒绝标记之间 `Reject` 落下时，条件报“就绪、未丢弃”，Interest 把被拒绝的移动应用进 AOI（`TestPureRemoteRejectDiscardsItsInterestFacts/async` 整包 `-race` 约每 90 次失败 1 次的原因）。改为先判就绪、后判丢弃（标记单调，结论一致）。见 [impl/02 §2 第 8 条](docs/framework/impl/02-nest-entity.md#2-必须保持的契约)。
+
 ## [v1.34.0] - 2026-10-31
 
 ### 新增
@@ -13,10 +19,6 @@
 - **房间 / 组同步的正式入口，与 self_sync 共用 Manager 与玩家连接**（派对房间纵切发现的缺口，维护者 2026-10-31“继续框架改进”）。新增 `policy.GroupView`（成员看组实体的生命周期，与 `SelfView` 同一写法：成员关系是事实，政策阶段登记组实体、给会话已开的成员订阅，会话关闭 / 重开经 `Released` 回调在重开的那个周期全量重发，`Disband` 退订并注销）与 `wiring/selfsync.Groups`（`selfsync.Config.Groups` 装到自身视图的同一个 Manager；`Join / Leave / Disband` 在 Nest 事务里推迟到提交之后，回滚不发生）。生成器新增 `access.player.sync_groups: [<实体包名>]`（需要 self_sync）：`project sync` 在实体包里创建一次业务文件 `sync_group.go`（`SyncGroup`，视图键由业务定），bootstrap 交给 `PlayerSelfSync`；generate / doctor 检查实体存在、标记 `sync=true`、声明文件在。两路同步在同一条连接、同一个推送编号、同一个会话里，客户端按每个更新的命名空间 + 视图键分流（`wiring/selfsync` 真实 TCP 用例 `TestGroupsShareTheSelfSyncConnection`）。确认过程：`policy.Group` 直接挂在 self_sync 的 Manager 上时登录前 `Join` 被拒、重连后房间静默断供（探针：重连后第一帧只有 `player/self`）。派对房间夹具删掉自建 Manager，改用新入口（handler 里 `Join / Leave / Disband`，夹具走正式 `wiring/nest` Mod），新增场景 `SelfViewAndRoomShareOneConnection`，`scripts/test-party-room-generated.sh` 13 条场景通过；真实依赖模式改动后未重跑。限制：要求 self_sync；成员关系不持久；离线成员每政策阶段复查一次。[ENTITY_SYNC 按组同步](docs/framework/ENTITY_SYNC.md#按组同步与-self_sync-共用连接groups) · [guide/04](docs/framework/guide/04-sync.md#房间队伍按组同步与自身视图同一条连接) · [方案](docs/maintenance/FEATURE-2026-10-31-room-sync-groups.md)
 
 ### 修复
-
-- **`nest.AfterCommit` 不再对已结束的事务返回 true 却丢掉回调；事务不再随上下文快照跨 goroutine 泄漏**。包级 `AfterCommit` 原来只看“有没有当前事务”：当前事务已提交或回滚时仍返回 true，回调永远不执行，`if !nest.AfterCommit(fn) { fn() }` 的调用方（`wiring/selfsync.Groups` 的 Join / Leave / Disband、时间域发布、entitytimer 报告）就丢掉提交后动作；现在已结束的事务返回 false，调用方立即执行。能走到这一步的真实路径是同步 `Request` 的上下文快照：在 `RunDetachedTransaction` 里发起的同步请求把调用方事务带进被调 handler，被调方的提交后回调挂到调用方事务上，调用方超时后提交（回调被丢）或回滚（被调方已生效、回调随回滚消失）。`CurrentRollbackTx` 现在只在绑定事务的那个请求上下文里返回它，别处视为不在事务内。见 [impl/02 §2 第 7 条](docs/framework/impl/02-nest-entity.md#2-必须保持的契约)。
-
-- **被拒绝的 Remote 提交不再偶发被兴趣管理当作已提交应用**：`SubjectSyncState.SyncCommitCondition` 先判“本提交被拒绝 → 丢弃”、再判就绪，而被拒绝的门在就绪判断里算已放行；两次读拒绝标记之间 `Reject` 落下时，条件报“就绪、未丢弃”，Interest 把被拒绝的移动应用进 AOI（`TestPureRemoteRejectDiscardsItsInterestFacts/async` 整包 `-race` 约每 90 次失败 1 次的原因）。改为先判就绪、后判丢弃（标记单调，结论一致）。见 [impl/02 §2 第 8 条](docs/framework/impl/02-nest-entity.md#2-必须保持的契约)。
 
 - **带 Entity Sync 的 Nest Mod 不再静默丢掉业务给的第二个观察者**：Nest 只有一个 `EntitySync` 观察者位置，`wiring/nest.NewModWithEntitySync`（例如 self_sync）的 `Provide` 把自己的 Manager 追加在业务选项之后，业务经 `NestOptionWithEntitySync` 给的观察者被覆盖——收不到提交捕获与回滚撤回，periodic 下毫无报错。现在 `Provide` 返回 `ErrEntitySyncObserverConflict`，政策应装到 Mod 的 Manager 上（`EntitySyncSetup.Attach`、`selfsync.Groups`）。修前 `TestEntitySyncModRefusesASecondEntitySyncObserver`：`Provide with a second EntitySync observer = <nil> (business observer bound: false)`。
 
