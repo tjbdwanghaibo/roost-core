@@ -153,8 +153,13 @@ grep -qx '        core: \[v1.26.1\]' "$scratch/upgrade.yml" || fail "改到了 p
 # 会把紧挨未加花括号变量的中文标点误作变量名；不能只检查 bash -n。
 pretag_message="$(sed -n '/^say "scripts\/pretag.sh /p' "$repo_root/scripts/release.sh")"
 [[ -n "$pretag_message" ]] || fail "缺少 pretag 提示"
+cat >"$scratch/message.sh" <<'MESSAGE'
+version=v1.2.3
+say() { printf '%s\n' "$1"; }
+MESSAGE
+printf '%s\n' "$pretag_message" >>"$scratch/message.sh"
 for message_locale in C en_US.UTF-8; do
- if ! LC_ALL="$message_locale" "$BASH" -uc 'version=v1.2.3; say() { printf "%s\n" "$1"; }; eval "$1"' _ "$pretag_message" >"$scratch/message.log" 2>&1; then
+ if ! LC_ALL="$message_locale" "$BASH" -u "$scratch/message.sh" >"$scratch/message.log" 2>&1; then
   cat "$scratch/message.log" >&2
   fail "pretag 提示在 $message_locale 下展开失败"
  elif ! grep -q '^scripts/pretag.sh v1.2.3' "$scratch/message.log"; then
