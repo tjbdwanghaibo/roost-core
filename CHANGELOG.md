@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.35.0] - 2026-11-01
+
 - 真实联合验收：正式 account Redis Stores/NATS RPC 签发并校验会话，C# 与 C++ 经 Gate/PB/Nest/双实体 WAL/Mongo/EntitySync 完成 full/delta/remove/reconnect；验证账号对象重建、WAL 重开、事务重复投影与生成 DAO 冷水合。身份签发器仍为测试 HMAC，未覆盖进程崩溃、第三方登录平台、跨机或容量。
 
 - Robot 增加按运行隔离的逐消息请求结果、延迟分位数/最慢样本和 TCP socket 字节；业务可用 CallChecked 将拒绝与协议成功分开，生成 Robot 与控制面报告接入。历史报告深拷贝，调用方不能改写保留证据。
