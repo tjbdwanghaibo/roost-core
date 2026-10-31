@@ -1242,6 +1242,11 @@ func (*newAggregateEntity) AutoPersist() bool              { return true }
 
 var registerNewAggregateKind sync.Once
 
+// newAggregateRejectedBuilds 里的 ID 新建时先写 profile 再失败（errNewAggregateBuildRejected）；冷加载不受影响。
+var newAggregateRejectedBuilds sync.Map
+
+var errNewAggregateBuildRejected = errors.New("new aggregate test entity: initialization rejected")
+
 // newAggregateDAOBuilders 是 kind 当前版本的 DAO 列表；“上线后新增 DAO”的用例先把它换成只有 profile 的旧版本写数据。
 var newAggregateDAOBuilders = []entity.DaoBuilderFunc{
 	func() entity.DaoInterface { return &newAggregateDAO{collection: newAggregateProfiles} },
@@ -1261,6 +1266,13 @@ func ensureNewAggregateKind() {
 				value.profile, _ = param.Dao[newAggregateProfiles].(*newAggregateDAO)
 				if value.profile == nil {
 					return nil, errors.New("new aggregate test entity: missing profile DAO")
+				}
+				if _, reject := newAggregateRejectedBuilds.Load(param.Id); reject && param.IsCreate {
+					// 初始化先写了 profile，随后校验失败：失败的新建不能留下这笔写。
+					if err := value.profile.setValue(99); err != nil {
+						return nil, err
+					}
+					return nil, errNewAggregateBuildRejected
 				}
 				value.DaoManager.Set(newAggregateProfiles, value.profile)
 				// rank 是“后加”的 DAO：旧版本的 kind 没有它。
@@ -1371,6 +1383,13 @@ func (f *newAggregateFixture) boot() {
 			return nil, err
 		}
 		return nil, errNewAggregateHandlerFailed
+	}, meta)
+	// new_aggregate_create_handles_failure：新建失败时业务处理掉错误、正常返回，事务照常提交。
+	f.scheduler.MustRegisterHandlerWithMeta(corenest.NewHandlerName("new_aggregate_create_handles_failure"), func(_ []entity.IThreadSafeEntity, params []any, _ ...corenest.HandlerOption) (any, error) {
+		if _, err := create(params); !errors.Is(err, errNewAggregateBuildRejected) {
+			return nil, fmt.Errorf("fixture: create err=%v, want the initialization failure", err)
+		}
+		return "handled", nil
 	}, meta)
 	// new_aggregate_create_memory：memory 快路径（rollback=none、durability=memory）里新建持久实体。
 	f.scheduler.MustRegisterHandlerWithMeta(corenest.NewHandlerName("new_aggregate_create_memory"), func(_ []entity.IThreadSafeEntity, params []any, _ ...corenest.HandlerOption) (any, error) {
@@ -1534,6 +1553,35 @@ func TestNewEntityIsStoredWithEveryDAOByItsCreatingTransaction(t *testing.T) {
 		}
 		if f.manager.Get(id) != nil {
 			t.Fatal("the refused creation is still published")
+		}
+		f.assertNeverStored(id)
+	})
+
+	// 初始化写了 DAO 之后失败的新建：业务吞掉错误、handler 成功提交，或事务外经准入门新建失败，库里都没有这个实体。
+	t.Run("a failed creation whose error the handler handled stores nothing", func(t *testing.T) {
+		f := newNewAggregateFixture(t)
+		id := f.id(9318)
+		newAggregateRejectedBuilds.Store(id, struct{}{})
+		t.Cleanup(func() { newAggregateRejectedBuilds.Delete(id) })
+		if _, err := f.scheduler.Request(f.ctx, corenest.NewHandlerName("new_aggregate_create_handles_failure"), f.caller, corenest.Params{id}); err != nil {
+			t.Fatalf("request err=%v, want the handler's own success", err)
+		}
+		if f.manager.Get(id) != nil {
+			t.Fatal("the failed creation is published")
+		}
+		f.assertNeverStored(id)
+	})
+
+	t.Run("a failed creation outside any transaction stores nothing", func(t *testing.T) {
+		f := newNewAggregateFixture(t)
+		id := f.id(9319)
+		newAggregateRejectedBuilds.Store(id, struct{}{})
+		t.Cleanup(func() { newAggregateRejectedBuilds.Delete(id) })
+		if _, err := f.access.Create(f.param(id)); !errors.Is(err, errNewAggregateBuildRejected) {
+			t.Fatalf("create err=%v, want the initialization failure", err)
+		}
+		if f.manager.Get(id) != nil {
+			t.Fatal("the failed creation is published")
 		}
 		f.assertNeverStored(id)
 	})

@@ -102,7 +102,8 @@ type RollbackTx struct {
 	// createLockBusy 是 handler 内新建实体时第一次锁冲突的错误。可回滚的事务据此在
 	// handler 结束时整条回滚并以锁超时重新准入，即使业务吞掉了 Create 返回的错误。
 	createLockBusy error
-	// captureFailed 是 handler 内动态纳入事务的实体（CreateInScope 新建或 Cast 取得）第一次事务捕获失败的错误。
+	// captureFailed 是 handler 内动态纳入事务的实体（CreateInScope 新建或 Cast 取得）第一次事务捕获失败的错误，
+	// 或一次失败的新建留下了不能逐项撤销的持久登记（ErrFailedCreateLeftEffects，见 abandonCreatedEntityBuild）。
 	// 与 createLockBusy 同一种处理：handler 结束时即使业务吞掉了返回的错误也整条回滚——捕获失败前可能已登记了
 	// 提交参与者，照常提交会让它们准备记录，本事务的其他修改带着一个未进入回滚 / 持久化参与的实体持久化。
 	captureFailed error
@@ -936,6 +937,95 @@ func (tx *RollbackTx) CaptureCreatedEntity(created entity.IThreadSafeEntity, rev
 	return nil
 }
 
+// BeginCreatedEntityBuild 实现 entity.CreatedEntityCapturer：记下新建开始构建时事务各项登记的位置，返回构建失败时
+// 的撤销入口（abandonCreatedEntityBuild）。事务已结束或已开始准备持久化时，构建里的 MarkPersist 本身就会失败，
+// 没有可撤销的登记，返回 nil。
+func (tx *RollbackTx) BeginCreatedEntityBuild() func(map[string]entity.DaoInterface, error) error {
+	if tx == nil || tx.state != rollbackTxOpen || tx.persistencePrepared {
+		return nil
+	}
+	mark := tx.createdBuildMark()
+	return func(daos map[string]entity.DaoInterface, cause error) error {
+		return tx.abandonCreatedEntityBuild(mark, daos, cause)
+	}
+}
+
+// createdBuildMark 是一次新建开始构建时事务各项登记的长度。登记只追加（构建期间不会有提交或回滚），所以构建留下的
+// 登记就是各项在这个位置之后的部分。
+type createdBuildMark struct {
+	persistParticipants int
+	commitParticipants  int
+	mutations           int
+	effects             int
+	receipts            int
+	deleteIntents       int
+	created             int
+	commits             int
+	afterAdmission      int
+}
+
+func (tx *RollbackTx) createdBuildMark() createdBuildMark {
+	return createdBuildMark{
+		persistParticipants: len(tx.participantOrder),
+		commitParticipants:  len(tx.participants),
+		mutations:           len(tx.mutations),
+		effects:             len(tx.effects),
+		receipts:            len(tx.receipts),
+		deleteIntents:       len(tx.deleteIntents),
+		created:             len(tx.created),
+		commits:             len(tx.commits),
+		afterAdmission:      len(tx.afterAdmission),
+	}
+}
+
+// abandonCreatedEntityBuild 撤销一次失败的新建在事务里的登记。失败的新建不能留下持久写：实体没有发布，它的 DAO
+// 若随外层事务提交，库里会出现一个“创建失败却已有数据”的实体（冷加载得到半初始化的状态，重试撞上已有文档）。
+//
+//   - 构建期间以这次构建的 DAO 登记的持久修改（组件 Init / OnInitFinish 里的 setter，以及随之以整文档登记的同聚合
+//     其他 DAO）逐项撤销：这些 DAO 对象只属于这个没有发布的实体，构建之外没有人引用，撤销是精确的。它们的 tracker
+//     恢复与逆操作照旧留在回滚列表里，只作用于这些被丢弃的对象。构建开始前已登记的参与方不动。
+//   - 构建期间登记的提交后 / 准入后回调丢弃：它们属于一次没有发生的新建。
+//   - 构建期间还留下了这些 DAO 以外的持久登记（别的实体的修改、AddMutation、Emit、AddReceipt、删除意图、提交参与者、
+//     构建中新建并已捕获的其他实体）时不能逐项撤销——它们可能与构建之外的状态交织。这时记下
+//     ErrFailedCreateLeftEffects 并返回，事务结束时整条回滚，业务吞掉错误也一样。
+//
+// 不选“构建失败一律令事务失败”：只做校验、什么都没登记，或只写了自己 DAO 的构建失败，是业务可以处理的普通错误
+// （例如 GetOrCreate 撞上已有实例后改为读取）。
+func (tx *RollbackTx) abandonCreatedEntityBuild(mark createdBuildMark, daos map[string]entity.DaoInterface, cause error) error {
+	if tx.state != rollbackTxOpen || tx.persistencePrepared {
+		return nil
+	}
+	own := make(map[MutationParticipant]struct{}, len(daos))
+	for _, dao := range daos {
+		if participant, ok := dao.(MutationParticipant); ok && !isNilParticipant(participant) && reflect.TypeOf(participant).Comparable() {
+			own[participant] = struct{}{}
+		}
+	}
+	kept := tx.participantOrder[:mark.persistParticipants]
+	for _, participant := range tx.participantOrder[mark.persistParticipants:] {
+		if _, built := own[participant]; built {
+			delete(tx.participantChanges, participant)
+			continue
+		}
+		kept = append(kept, participant)
+	}
+	clear(tx.participantOrder[len(kept):])
+	tx.participantOrder = kept
+	clear(tx.commits[mark.commits:])
+	tx.commits = tx.commits[:mark.commits]
+	clear(tx.afterAdmission[mark.afterAdmission:])
+	tx.afterAdmission = tx.afterAdmission[:mark.afterAdmission]
+
+	if len(tx.participantOrder) == mark.persistParticipants && len(tx.participants) == mark.commitParticipants &&
+		len(tx.mutations) == mark.mutations && len(tx.effects) == mark.effects && len(tx.receipts) == mark.receipts &&
+		len(tx.deleteIntents) == mark.deleteIntents && len(tx.created) == mark.created {
+		return nil
+	}
+	err := fmt.Errorf("%w: %w", ErrFailedCreateLeftEffects, cause)
+	tx.noteCaptureFailed(err)
+	return err
+}
+
 // noteCaptureFailed 记下 handler 内动态纳入实体时第一次捕获失败的错误，handler 结束时由 runTransaction 并入
 // 结果、整条回滚。
 func (tx *RollbackTx) noteCaptureFailed(err error) {
@@ -994,6 +1084,11 @@ func (memoryHandlerCreates) CaptureCreatedEntity(created entity.IThreadSafeEntit
 
 func (memoryHandlerCreates) CreatedEntityLockBusy(id int64) error {
 	return createdEntityLockBusy(id, false)
+}
+
+// BeginCreatedEntityBuild：memory 快路径没有 RollbackTx，构建里的持久登记本身就失败，没有可撤销的内容。
+func (memoryHandlerCreates) BeginCreatedEntityBuild() func(map[string]entity.DaoInterface, error) error {
+	return nil
 }
 
 // CaptureEntities 把实体纳入本事务（按 GUId 去重）：登记提交参与者，按回滚策略为实体与它的 DAO 登记快照或

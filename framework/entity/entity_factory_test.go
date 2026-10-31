@@ -445,3 +445,6 @@ func (acceptingCapturer) CaptureCreatedEntity(IThreadSafeEntity, func()) error {
 func (acceptingCapturer) CreatedEntityLockBusy(id int64) error {
 	return fmt.Errorf("entity %d is busy", id)
 }
+func (acceptingCapturer) BeginCreatedEntityBuild() func(map[string]DaoInterface, error) error {
+	return nil
+}

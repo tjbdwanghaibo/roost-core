@@ -105,6 +105,12 @@ var (
 	//   - 能否重试：带 ErrLockTimeout 且不带任何“可能已提交”哨兵时可重试；不带 ErrLockTimeout 时框架未重排、修改未回滚，
 	//     业务确认 handler 幂等后才可重试。
 	ErrCreatedEntityLockConflict = errors.New("nest: created entity is locked by another holder")
+	// ErrFailedCreateLeftEffects 表示 handler 内一次新建在交给事务之前失败（builder / 组件 Init / OnInitFinish 返回错误、
+	// 取锁冲突、发布失败），而失败前的构建在事务里留下了新实体自身 DAO 以外的持久登记（别的 DAO 的修改、AddMutation、
+	// Emit、AddReceipt、删除意图、提交参与者、在构建中新建并已捕获的其他实体）。新实体自身 DAO 的登记总能逐项撤销；
+	// 这些不能，所以交给业务的创建错误同时带本哨兵，事务在 handler 结束时整条回滚，即使业务吞掉了错误。
+	//   - 是否可能已提交：否。能否重试：不能原样重试，构建失败的原因仍在；修正 builder（失败前不写其他实体）或失败原因。
+	ErrFailedCreateLeftEffects = errors.New("nest: failed entity creation left persistent effects outside its own DAOs")
 	// ErrNestedTransactionCommitted 表示这条消息自己的事务没有提交（回滚或失败），但 handler 内嵌套的独立事务
 	// （RunIsolatedTransaction 等）已经持久提交或结果未知；消息自己的事务结束后、收尾阶段（Guard post-release、
 	// 解锁后回调）调用的独立事务也不认领消息，同样由本哨兵说明，不会被当成消息自己的提交。消息按已越过提交点处理，

@@ -61,9 +61,17 @@ func (m *EntityManager) Create(param *EntityCreateParam) (IThreadSafeEntity, err
 // 那是确定失败，CreateInScope 直接返回 ErrEntityRemoved）。返回交给业务的错误：可回滚的 Nest 事务给可重试的锁超时类
 // 错误，并据此在 handler 结束时整条回滚并重新准入；不能回滚的 handler（memory 快路径）给不可自动重排的冲突错误，
 // 消息不重排。
+//
+// BeginCreatedEntityBuild：CreateInScope 在构建之前调用，取得这次新建的撤销入口 abandon（没有可撤销的事务时为 nil）。
+// 新建在交给 CaptureCreatedEntity 之前失败（builder / 组件 Init / OnInitFinish 返回错误、取锁冲突、TryAdd 发布失败）时，
+// CreateInScope 以这次构建的 DAO（EntityCreateParam.Dao）和失败原因调用它。构建已经开始，组件 Init、OnInitFinish
+// 可能已用这些 DAO 登记了持久修改；实体没有发布，这些登记不能随外层事务提交——失败的新建不能留下持久写，即使业务
+// 吞掉错误继续执行。abandon 从事务撤销它们；构建期间还留下了这些 DAO 以外、不能逐项撤销的持久登记时返回错误（须仍
+// 满足 errors.Is(cause)），CreateInScope 把它交给业务，事务同时记下失败并在结束时整条回滚。
 type CreatedEntityCapturer interface {
 	CaptureCreatedEntity(created IThreadSafeEntity, revoke func()) error
 	CreatedEntityLockBusy(id int64) error
+	BeginCreatedEntityBuild() (abandon func(daos map[string]DaoInterface, cause error) error)
 }
 
 // CreateInScope 构建实体，在已有的 Guard 作用域内取得它的锁，然后才发布。这个顺序保证新实体可见之前创建者已持有锁。
@@ -75,6 +83,9 @@ type CreatedEntityCapturer interface {
 // 其余作用域（Create 自建的短作用域、Nest 之外的 WithGuardScope）保持等待取锁、立即发布的原语义；但注册了
 // CreateAdmitter（DataEngine 已启动）时，这类没有事务捕获的作用域不能新建持久 kind（没有提交点，新实体只会活在
 // 内存里），返回 ErrPersistentCreateOutsideTransaction，改用 Create。
+//
+// 交给事务捕获之前的每个失败出口（构建、取锁、发布）都经 abandonCreated：撤销构建期间以新实体 DAO 登记的持久修改，
+// 见 CreatedEntityCapturer.BeginCreatedEntityBuild。
 //
 // 发布失败（TryAdd 报 ErrEntityExists / ErrEntityRemoved）时归还本次取得的锁：同一作用域随后按同 ID
 // 重试（生成 GetOrCreate）会新建实例，若锁仍以旧实例记在 Guard 上，新实例会在未加锁的情况下发布。
@@ -91,15 +102,19 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 		// 没有事务捕获就没有提交点：新实体只会活在内存里。Create 会改走 CreateAdmitter。
 		return nil, fmt.Errorf("%w: kind %d in guard scope %q", ErrPersistentCreateOutsideTransaction, param.Kind, scope.Name())
 	}
-	value, err := m.build(param)
-	if err != nil {
-		return nil, err
-	}
 	guard := scope.guard
 	capturer := guard.createdCapturer
+	var abandon func(map[string]DaoInterface, error) error
+	if capturer != nil {
+		abandon = capturer.BeginCreatedEntityBuild()
+	}
+	value, err := m.build(param)
+	if err != nil {
+		return nil, abandonCreated(abandon, param, err)
+	}
 	lockedNow := !guard.GuardedEntity(value)
 	if err := guard.lockCreated(value, capturer); err != nil {
-		return nil, err
+		return nil, abandonCreated(abandon, param, err)
 	}
 	if err := m.TryAdd(value); err != nil {
 		if lockedNow {
@@ -110,7 +125,7 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 			// RunIsolatedTransaction 新建后回滚），收尾挂在本 Guard 的 post-release 上，要等整个 handler 释放才执行。
 			// 在这个 handler 里它不会结束，是确定失败：原样保留 ErrEntityRemoved，不给冲突 / 锁超时哨兵，否则可回滚事务
 			// 每次重排都重现同一冲突，空转到重排上限。
-			return nil, fmt.Errorf("%w; entity %d was created and then revoked earlier in this handler, and its revoke finishes only when the handler releases its locks, so the same id cannot be created again in this handler", err, value.ID())
+			return nil, abandonCreated(abandon, param, fmt.Errorf("%w; entity %d was created and then revoked earlier in this handler, and its revoke finishes only when the handler releases its locks, so the same id cannot be created again in this handler", err, value.ID()))
 		}
 		if capturer != nil && errors.Is(err, ErrEntityRemoved) {
 			// 同 ID 的上一个实例正在撤销（revokeCreated）或销毁收尾——锁已释放、removing 标记要等持有者的 post-release
@@ -118,9 +133,9 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 			// （可回滚事务整条回滚后重新准入；不能回滚的 handler 不重排）。ErrEntityRemoved 不属于可重排类别，原样返回会让
 			// 交叉创建的冲突方把它当最终错误回复。不在业务 worker 上等待收尾；Nest 之外（capturer 为 nil）仍返回
 			// ErrEntityRemoved，生成 GetOrCreate 自行有界重试。
-			return nil, fmt.Errorf("%w; previous instance of entity %d is still being removed", capturer.CreatedEntityLockBusy(value.ID()), value.ID())
+			return nil, abandonCreated(abandon, param, fmt.Errorf("%w; previous instance of entity %d is still being removed", capturer.CreatedEntityLockBusy(value.ID()), value.ID()))
 		}
-		return nil, err
+		return nil, abandonCreated(abandon, param, err)
 	}
 	if capturer != nil {
 		revoke := m.createdRevoker(guard, value)
@@ -138,6 +153,18 @@ func (m *EntityManager) CreateInScope(scope *GuardScope, param *EntityCreatePara
 	}
 	flog.Debug("entity: created", "id", value.ID(), "category", value.GetEntityCategory(), "kind", value.GetEntityKind(), "lifetime", lifetime)
 	return value, nil
+}
+
+// abandonCreated 在新建交给事务捕获之前失败时撤销它在事务里的登记（见 CreatedEntityCapturer.BeginCreatedEntityBuild），
+// 返回交给业务的错误：撤销不完全时是 abandon 给出的错误（仍满足 errors.Is(cause)），否则是 cause。
+func abandonCreated(abandon func(map[string]DaoInterface, error) error, param *EntityCreateParam, cause error) error {
+	if abandon == nil || param == nil {
+		return cause
+	}
+	if err := abandon(param.Dao, cause); err != nil {
+		return err
+	}
+	return cause
 }
 
 // createdRevoker 返回幂等的撤销函数。它只在持有该 Guard 的业务 goroutine 上调用

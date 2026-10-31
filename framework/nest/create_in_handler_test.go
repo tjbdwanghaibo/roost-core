@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -743,5 +744,346 @@ func TestLifecycleGetOrCreateRetriesWhileRevokeFinishes(t *testing.T) {
 	}
 	if !tryLockElsewhere(b.value) {
 		t.Fatal("the entity created outside Nest is still locked")
+	}
+}
+
+// 失败的新建不能留下持久写：builder、组件 Init、OnInitFinish 已用新实体的 DAO 登记了持久修改，随后构建失败（或构建
+// 成功、发布撞上同 ID），实体没有发布；业务吞掉创建错误继续执行时，外层事务照常提交别的修改，但不得带上失败实体
+// 的 DAO——否则库里会有一个“创建失败却已有数据”的实体。构建还动了自身 DAO 以外的持久状态时不能逐项撤销，整条回滚。
+
+const failedCreateKind entity.EntityKind = 197
+
+const failedCreateComponentType entity.ComponentType = 9701
+
+var errFailedCreateRejected = errors.New("fixture: entity initialization rejected")
+
+// failedCreateStage 是新建在哪一步失败；每一步都先写新实体的 DAO 再判断。
+type failedCreateStage int
+
+const (
+	failedCreateInBuilder failedCreateStage = iota
+	failedCreateInComponentInit
+	failedCreateInOnInitFinish
+	failedCreateNever
+)
+
+func (stage failedCreateStage) String() string {
+	return [...]string{"builder", "component Init", "OnInitFinish", "none"}[stage]
+}
+
+// failedCreatePlan 按实体 ID 决定构建在哪一步失败；sideEffect 在 builder 里、失败之前运行（写别的实体等）。
+type failedCreatePlan struct {
+	stage      failedCreateStage
+	sideEffect func() error
+}
+
+var failedCreatePlans sync.Map // int64 -> failedCreatePlan
+
+func planFailedCreate(t *testing.T, id int64, plan failedCreatePlan) {
+	t.Helper()
+	failedCreatePlans.Store(id, plan)
+	t.Cleanup(func() { failedCreatePlans.Delete(id) })
+}
+
+// writeFailedCreateDAO 是组件 / 实体初始化里的一次持久 setter。
+func writeFailedCreateDAO(dao *rollbackTestDao, value int) error {
+	dao.Value = value
+	return MarkPersist(dao, 1)
+}
+
+type failedCreateEntity struct {
+	*entity.EntityBase
+	dao   *rollbackTestDao
+	comps entity.ComponentManager
+	stage failedCreateStage
+}
+
+func (e *failedCreateEntity) Base() *entity.EntityBase { return e.EntityBase }
+
+func (e *failedCreateEntity) RangeDao(f func(entity.DaoInterface)) { f(e.dao) }
+
+func (e *failedCreateEntity) OnInitFinish(*entity.EntityCreateParam) error {
+	if err := writeFailedCreateDAO(e.dao, 97); err != nil {
+		return err
+	}
+	if e.stage == failedCreateInOnInitFinish {
+		return errFailedCreateRejected
+	}
+	return nil
+}
+
+type failedCreateComponent struct{ owner *failedCreateEntity }
+
+func (*failedCreateComponent) Name() string                         { return "failed_create" }
+func (*failedCreateComponent) OnDestroy(entity.EntityDestroyReason) {}
+func (c *failedCreateComponent) OnInitFinish(*entity.EntityCreateParam, bool) error {
+	if err := writeFailedCreateDAO(c.owner.dao, 98); err != nil {
+		return err
+	}
+	if c.owner.stage == failedCreateInComponentInit {
+		return errFailedCreateRejected
+	}
+	return nil
+}
+
+func init() {
+	entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+		Category: 1, Kind: failedCreateKind,
+		DaoBuilders: []entity.DaoBuilderFunc{func() entity.DaoInterface { return &rollbackTestDao{} }},
+		Builder: func(p *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+			plan := failedCreatePlan{stage: failedCreateNever}
+			if stored, ok := failedCreatePlans.Load(p.Id); ok {
+				plan = stored.(failedCreatePlan)
+			}
+			e := &failedCreateEntity{
+				EntityBase: entity.NewEntityBaseWithMutex(p.Id, p.Category, false, p.Mutex, p.Kind),
+				dao:        p.Dao["rollback_test"].(*rollbackTestDao),
+				comps:      entity.NewComponentManager(),
+				stage:      plan.stage,
+			}
+			e.comps.Set(failedCreateComponentType, &failedCreateComponent{owner: e})
+			if err := writeFailedCreateDAO(e.dao, 99); err != nil {
+				return nil, err
+			}
+			if plan.sideEffect != nil {
+				if err := plan.sideEffect(); err != nil {
+					return nil, err
+				}
+			}
+			if plan.stage == failedCreateInBuilder {
+				return nil, errFailedCreateRejected
+			}
+			if err := e.comps.InitAll(p, p.IsCreate); err != nil {
+				return nil, err
+			}
+			return e, nil
+		},
+	})
+}
+
+func failedCreateParam(id int64) *entity.EntityCreateParam {
+	return &entity.EntityCreateParam{IsCreate: true, Id: id, Category: 1, Kind: failedCreateKind}
+}
+
+// assertNoMutationFor 断言提交记录里没有该实体的文档。
+func assertNoMutationFor(t *testing.T, committer *recordingCommitter, id int64) {
+	t.Helper()
+	for _, mutation := range committer.record.Mutations {
+		if mutation.Key.ID == id {
+			t.Fatalf("the failed creation of %d reached the commit: key=%+v version %d->%d payload=%s",
+				id, mutation.Key, mutation.ExpectedVersion, mutation.NextVersion, mutation.Data)
+		}
+	}
+}
+
+// failedCreateEngine 起一个 Nest，注册 handler：在 pilot 上新建 created；业务吞掉创建错误时把 pilot 的值改成 5 并
+// 正常返回，propagate 时原样返回创建错误。
+func failedCreateEngine(t *testing.T, manager *entity.EntityManager, committer *recordingCommitter, meta HandlerMeta, created int64, propagate bool) (*NestMgr, HandlerName, *error) {
+	t.Helper()
+	mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(manager)), NestOptionWithTransactionCommitter(committer))
+	name := NewHandlerName(fmt.Sprintf("failed_create_%d_%t", created, propagate))
+	var createErr error
+	mgr.MustRegisterHandlerWithMeta(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		_, createErr = manager.Create(failedCreateParam(created))
+		if createErr == nil {
+			return nil, errors.New("fixture: the creation was expected to fail")
+		}
+		if propagate {
+			return nil, createErr
+		}
+		pilot := es[0].(*rollbackTestEntity)
+		return "handled", writeFailedCreateDAO(pilot.dao, 5)
+	}, meta)
+	if err := mgr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mgr.Shutdown(context.Background()) })
+	return mgr, name, &createErr
+}
+
+func TestAFailedCreateLeavesNoPersistentWrite(t *testing.T) {
+	strict := HandlerMeta{Rollback: RollbackState, Durability: DurabilityStrict}
+	for i, stage := range []failedCreateStage{failedCreateInBuilder, failedCreateInComponentInit, failedCreateInOnInitFinish} {
+		base := int64(39300 + 20*i)
+		t.Run(stage.String(), func(t *testing.T) {
+			t.Run("isolated transaction, the error is handled", func(t *testing.T) {
+				manager := entity.NewEntityManager()
+				id := mustBuildCastID(t, base, 1, failedCreateKind)
+				planFailedCreate(t, id, failedCreatePlan{stage: stage})
+				committer := &recordingCommitter{}
+				err := entity.WithGuardScope("failed_create_isolated", func(*entity.GuardScope) error {
+					_, err := RunIsolatedTransaction(context.Background(), committer, "failed_create_isolated", func() (any, error) {
+						if _, err := manager.Create(failedCreateParam(id)); !errors.Is(err, errFailedCreateRejected) {
+							t.Errorf("create err=%v, want the initialization failure", err)
+						}
+						return nil, nil
+					})
+					return err
+				})
+				if err != nil {
+					t.Fatalf("transaction err=%v", err)
+				}
+				if manager.Get(id) != nil {
+					t.Fatal("the failed entity was published")
+				}
+				assertNoMutationFor(t, committer, id)
+			})
+
+			t.Run("nest handler handles the error and goes on", func(t *testing.T) {
+				manager := entity.NewEntityManager()
+				pilot := addPilots(t, manager, base+1, 1)[0]
+				id := mustBuildCastID(t, base+2, 1, failedCreateKind)
+				planFailedCreate(t, id, failedCreatePlan{stage: stage})
+				committer := &recordingCommitter{}
+				mgr, name, createErr := failedCreateEngine(t, manager, committer, strict, id, false)
+				if _, err := mgr.Request(context.Background(), name, pilot, nil); err != nil {
+					t.Fatalf("request err=%v, want the handler's own result (it handled the failed creation)", err)
+				}
+				if !errors.Is(*createErr, errFailedCreateRejected) {
+					t.Fatalf("create err=%v", *createErr)
+				}
+				if manager.Get(id) != nil {
+					t.Fatal("the failed entity was published")
+				}
+				assertNoMutationFor(t, committer, id)
+				if len(committer.record.Mutations) != 1 || committer.record.Mutations[0].Key.ID != pilot {
+					t.Fatalf("committed %+v, want only the pilot's change made after the failed creation", committer.record.Mutations)
+				}
+			})
+
+			t.Run("nest handler propagates the error", func(t *testing.T) {
+				manager := entity.NewEntityManager()
+				pilot := addPilots(t, manager, base+3, 1)[0]
+				id := mustBuildCastID(t, base+4, 1, failedCreateKind)
+				planFailedCreate(t, id, failedCreatePlan{stage: stage})
+				committer := &recordingCommitter{}
+				mgr, name, _ := failedCreateEngine(t, manager, committer, strict, id, true)
+				if _, err := mgr.Request(context.Background(), name, pilot, nil); !errors.Is(err, errFailedCreateRejected) {
+					t.Fatalf("request err=%v, want the initialization failure", err)
+				}
+				if len(committer.record.Mutations) != 0 {
+					t.Fatalf("a rolled-back handler reached the committer: %+v", committer.record.Mutations)
+				}
+			})
+		})
+	}
+
+	// memory 事务（有 RollbackTx、durability=memory）在提交点拒绝任何持久登记；失败新建的登记撤销后，只改非持久状态的
+	// handler 照常成功，不因一个没有发布的实体被拒。
+	t.Run("memory transaction handles the error", func(t *testing.T) {
+		manager := entity.NewEntityManager()
+		pilot := addPilots(t, manager, 39380, 1)[0]
+		id := mustBuildCastID(t, 39381, 1, failedCreateKind)
+		planFailedCreate(t, id, failedCreatePlan{stage: failedCreateInBuilder})
+		committer := &recordingCommitter{}
+		mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(manager)), NestOptionWithTransactionCommitter(committer))
+		name := NewHandlerName("failed_create_memory")
+		mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+			if _, err := manager.Create(failedCreateParam(id)); !errors.Is(err, errFailedCreateRejected) {
+				return nil, fmt.Errorf("fixture: create err=%v", err)
+			}
+			return "handled", nil
+		}, HandlerMeta{Rollback: RollbackState, Durability: DurabilityMemory})
+		if err := mgr.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer mgr.Shutdown(context.Background())
+		if _, err := mgr.Request(context.Background(), name, pilot, nil); err != nil {
+			t.Fatalf("request err=%v, want success: the failed entity's DAO is not this handler's persistent write", err)
+		}
+		assertNoMutationFor(t, committer, id)
+	})
+
+	// 对照：同一 kind 构建成功时，新实体照 R15 由创建它的事务写齐（0→1 整文档）。
+	t.Run("a successful create is still stored by its transaction", func(t *testing.T) {
+		manager := entity.NewEntityManager()
+		pilot := addPilots(t, manager, 39390, 1)[0]
+		id := mustBuildCastID(t, 39391, 1, failedCreateKind)
+		committer := &recordingCommitter{}
+		mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(manager)), NestOptionWithTransactionCommitter(committer))
+		name := NewHandlerName("failed_create_control_success")
+		mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+			_, err := manager.Create(failedCreateParam(id))
+			return nil, err
+		}, strict)
+		if err := mgr.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer mgr.Shutdown(context.Background())
+		if _, err := mgr.Request(context.Background(), name, pilot, nil); err != nil {
+			t.Fatal(err)
+		}
+		if manager.Get(id) == nil {
+			t.Fatal("the created entity is not published")
+		}
+		var stored bool
+		for _, mutation := range committer.record.Mutations {
+			stored = stored || (mutation.Key.ID == id && mutation.ExpectedVersion == 0 && mutation.NextVersion == 1)
+		}
+		if !stored {
+			t.Fatalf("the created entity is not in its creating commit: %+v", committer.record.Mutations)
+		}
+	})
+}
+
+// 构建成功、发布撞上同 ID 的已有实例（ErrEntityExists，生成 GetOrCreate 据此改为读取）：这次构建登记的 DAO 修改同样
+// 撤销，已有实例不受影响，handler 的其他修改照常提交。
+func TestACreateThatLosesToAnExistingIDLeavesNoPersistentWrite(t *testing.T) {
+	manager := entity.NewEntityManager()
+	pilot := addPilots(t, manager, 39400, 1)[0]
+	id := mustBuildCastID(t, 39401, 1, failedCreateKind)
+	existing := &rollbackTestEntity{EntityBase: entity.NewEntityBase(id, 1, false, failedCreateKind), dao: &rollbackTestDao{id: id, Value: 1}}
+	if err := manager.TryAdd(existing); err != nil {
+		t.Fatal(err)
+	}
+	committer := &recordingCommitter{}
+	mgr, name, createErr := failedCreateEngine(t, manager, committer, HandlerMeta{Rollback: RollbackState, Durability: DurabilityStrict}, id, false)
+	if _, err := mgr.Request(context.Background(), name, pilot, nil); err != nil {
+		t.Fatalf("request err=%v", err)
+	}
+	if !errors.Is(*createErr, entity.ErrEntityExists) {
+		t.Fatalf("create err=%v, want ErrEntityExists", *createErr)
+	}
+	if manager.Get(id) != entity.IThreadSafeEntity(existing) || existing.dao.Value != 1 {
+		t.Fatal("the existing instance was replaced or changed")
+	}
+	assertNoMutationFor(t, committer, id)
+	if len(committer.record.Mutations) != 1 || committer.record.Mutations[0].Key.ID != pilot {
+		t.Fatalf("committed %+v, want only the pilot's change", committer.record.Mutations)
+	}
+}
+
+// 构建在失败之前还写了别的持久状态（另一个实体的 DAO、outbox 效果）：这些不能逐项撤销，业务吞掉创建错误也整条回滚，
+// 回复带 ErrFailedCreateLeftEffects 与原始失败，提交记录不产生。
+func TestAFailedCreateThatTouchedOtherStateRollsBackTheTransaction(t *testing.T) {
+	for i, tc := range []struct {
+		name   string
+		effect func(other *rollbackTestEntity) error
+	}{
+		{"another entity's DAO", func(other *rollbackTestEntity) error { return writeFailedCreateDAO(other.dao, 77) }},
+		{"an outbox effect", func(*rollbackTestEntity) error { return Emit(Effect{Topic: "failed_create.welcome"}) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager := entity.NewEntityManager()
+			pilot := addPilots(t, manager, int64(39410+10*i), 1)[0]
+			pilotEntity := manager.Get(pilot).(*rollbackTestEntity)
+			id := mustBuildCastID(t, int64(39411+10*i), 1, failedCreateKind)
+			planFailedCreate(t, id, failedCreatePlan{stage: failedCreateInBuilder, sideEffect: func() error { return tc.effect(pilotEntity) }})
+			committer := &recordingCommitter{}
+			mgr, name, createErr := failedCreateEngine(t, manager, committer, HandlerMeta{Rollback: RollbackState, Durability: DurabilityStrict}, id, false)
+			_, err := mgr.Request(context.Background(), name, pilot, nil)
+			if !errors.Is(err, ErrFailedCreateLeftEffects) || !errors.Is(err, errFailedCreateRejected) {
+				t.Fatalf("request err=%v, want ErrFailedCreateLeftEffects with the initialization failure", err)
+			}
+			if !errors.Is(*createErr, ErrFailedCreateLeftEffects) || !errors.Is(*createErr, errFailedCreateRejected) {
+				t.Fatalf("create err=%v, want both sentinels so the business sees why", *createErr)
+			}
+			if len(committer.record.Mutations) != 0 || len(committer.record.Effects) != 0 {
+				t.Fatalf("a transaction with an unrevocable failed creation reached the committer: %+v", committer.record)
+			}
+			if pilotEntity.dao.Value != 1 {
+				t.Fatalf("pilot value=%d, want the rollback to restore 1", pilotEntity.dao.Value)
+			}
+		})
 	}
 }
