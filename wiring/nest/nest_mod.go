@@ -207,6 +207,12 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	}
 	opts = append(opts, m.opts...)
 	if m.entitySync != nil {
+		// Nest 只有一个 EntitySync 观察者位置（选项后写者覆盖前者）。业务选项里另给一个观察者时，那个观察者会被这里
+		// 静默覆盖：收不到提交捕获与回滚撤回，periodic 下毫无报错。拒绝启动；政策应装到本 Mod 的 Manager 上
+		// （EntitySyncSetup.Attach、wiring/selfsync 的 Groups）。
+		if businessObserver(m.opts) != nil {
+			return fmt.Errorf("%w: pass policies to the Mod's manager (EntitySyncSetup / wiring/selfsync Groups) instead of NestOptionWithEntitySync", ErrEntitySyncObserverConflict)
+		}
 		opts = append(opts, corenest.NestOptionWithEntitySync(m.entitySync))
 	}
 	m.engine = corenest.NewEngine(opts...)

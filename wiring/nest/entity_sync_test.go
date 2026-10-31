@@ -362,3 +362,47 @@ func TestEntitySyncModResyncsSubscribersAfterUnload(t *testing.T) {
 	}
 	_ = stop(context.Background())
 }
+
+// boundObserver 是业务自建的 EntitySync 观察者替身：只记下 Nest 是否把它绑成提交生产者。
+type boundObserver struct{ bound atomic.Bool }
+
+func (o *boundObserver) BindSyncProducer()                          { o.bound.Store(true) }
+func (o *boundObserver) CaptureSync(*entity.SubjectSyncState) error { return nil }
+func (o *boundObserver) WakeSync()                                  {}
+
+// Nest 只有一个 EntitySync 观察者位置。Mod 自己装了 Manager（NewModWithEntitySync，例如 self_sync）时，业务再经 Nest
+// 选项塞进第二个观察者不能被静默覆盖——那个观察者既收不到提交捕获，也收不到回滚撤回，on_change 下 Start 才报错、
+// periodic 下完全无声。Provide 必须拒绝并点名冲突，正确做法是把政策装到 Mod 的 Manager 上。
+func TestEntitySyncModRefusesASecondEntitySyncObserver(t *testing.T) {
+	business := &boundObserver{}
+	transport := entitysync.TransportFunc(func(context.Context, entitysync.SessionID, []byte) error { return nil })
+	mod := NewModWithEntitySync(emptyGetter{}, EntitySyncSetup{Config: entitysync.ManagerConfig{Transport: transport}}, corenest.NestOptionWithEntitySync(business))
+	cfg := viper.New()
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mod.EntitySync().Close(context.Background()) })
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(mods.ModDataEngine, dataEngineNestProvider{committer: noOpCommitter{}}); err != nil {
+		t.Fatal(err)
+	}
+	err := mod.Provide(registry)
+	if err == nil || !errors.Is(err, ErrEntitySyncObserverConflict) {
+		t.Fatalf("Provide with a second EntitySync observer = %v (business observer bound: %v), want ErrEntitySyncObserverConflict", err, business.bound.Load())
+	}
+	// 没有 Mod 自己的 Manager 时，业务观察者是唯一的一个，照常装上。
+	plain := NewMod(emptyGetter{}, corenest.NestOptionWithEntitySync(business))
+	if err := plain.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	plainRegistry := app.NewRegistry(cfg)
+	if err := plainRegistry.Register(mods.ModDataEngine, dataEngineNestProvider{committer: noOpCommitter{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := plain.Provide(plainRegistry); err != nil {
+		t.Fatal(err)
+	}
+	if !business.bound.Load() {
+		t.Fatal("the only EntitySync observer was not bound")
+	}
+}

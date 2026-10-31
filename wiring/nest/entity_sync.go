@@ -2,6 +2,7 @@ package nest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 
@@ -30,6 +31,20 @@ type EntitySyncSetup struct {
 	// EntityLoaded 可选：DataEngine 发布一个从权威加载的实体之后调用，与 Mod 自己的 Rebind 同一回调、在它之后
 	// （Nest 业务池上，不得阻塞、不得做 I/O）。
 	EntityLoaded func(entity.IThreadSafeEntity)
+}
+
+// ErrEntitySyncObserverConflict：Nest 只有一个 EntitySync 观察者位置，Mod 自己装了 Manager 时业务又经 Nest 选项给了一个。
+var ErrEntitySyncObserverConflict = errors.New("nest mod: the Nest engine takes one EntitySync observer and this Mod already owns one")
+
+// businessObserver 报告业务的 Nest 选项是否设了 EntitySync 观察者：在一份临时 NestOpts 上执行它们（选项只写字段）。
+func businessObserver(opts []corenest.NestOption) entity.SyncCommitObserver {
+	probe := &corenest.NestOpts{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(probe)
+		}
+	}
+	return probe.EntitySync
 }
 
 func NewModWithEntitySync(getter entity.Getter, setup EntitySyncSetup, opts ...corenest.NestOption) *Mod {
