@@ -168,7 +168,7 @@ Go 1.27.0，Windows/amd64，Ryzen 7 5800H，GOMAXPROCS=4；每组 4 个 ID，前
 
 单组中位数约慢 5.4%，短样本约慢 7.9%；新增总长度遍历存在成本，样本也有明显波动，不能宣称所有场景变快。保留此实现的依据是多组分配次数稳定减少，分配总字节不变。首轮 32 组短样本也有耗时上升，全部保留，不以该微基准推断调度或整服吞吐。
 
-原始样本：[短测前](../performance/benchmarks/nest-message-targets-20261013/before.txt)、[短测后](../performance/benchmarks/nest-message-targets-20261013/after.txt)、[长测前](../performance/benchmarks/nest-message-targets-20261013/before-repeat.txt)、[长测后](../performance/benchmarks/nest-message-targets-20261013/after-repeat.txt)。复跑：`go test ./framework/nest -run '^$' -bench '^BenchmarkClientGroupTargets$' -benchmem -benchtime=1s -count=3`，旧版对照只带回相同测试文件。
+原始样本：[短测前](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/nest-message-targets-20261013/before.txt)、[短测后](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/nest-message-targets-20261013/after.txt)、[长测前](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/nest-message-targets-20261013/before-repeat.txt)、[长测后](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/nest-message-targets-20261013/after-repeat.txt)。复跑：`go test ./framework/nest -run '^$' -bench '^BenchmarkClientGroupTargets$' -benchmem -benchtime=1s -count=3`，旧版对照只带回相同测试文件。
 
 新增所有权回归覆盖顺序、重复 ID、空组、调用方修改隔离、组 append 隔离，以及错误中的组号/成员位置。图谱代际 2026-10-10T16:08:17Z 已过期，本次用当前源码核对写入、读取、回收及调用链，未把旧索引当完整证明。
 

@@ -400,7 +400,7 @@ transactionLifetimeLimitSeconds: 20})` 或启动参数 `--setParameter transacti
 Nest handler 不应持有 Entity 锁等待整笔 Saga 完成。
 
 容量：正式实现在 macOS 单机（三节点 JetStream R3、原生步骤 pipelined + Nest 异步完成、short 池 4）原生正向 128 并发约 1050 笔/秒，
-见[验收报告](../performance/SAGA-JETSTREAM-AUTHORITY-20261029.md)；参与方是框架层正式路径、账户 DAO 为同形手写，`wiring/saga` 的 `Steps` 胶水不在压测路径上；Linux、跨机未测（KNOWN-LIMITS）。协调器原型的数字（[原型报告](../performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)，
+见[验收报告](../performance/SAGA-JETSTREAM-AUTHORITY-20261029.md)；参与方是框架层正式路径、账户 DAO 为同形手写，`wiring/saga` 的 `Steps` 胶水不在压测路径上；Linux、跨机未测（KNOWN-LIMITS）。协调器原型的数字（[原型报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)，
 本机约 1200 笔/秒）**不是正式实现的容量结论**。Redis 权威与旧原生路径的历史测量（`SAGA-CHECKPOINT-20261018`、`NIGHT-20261020` 等）不再适用。
 
 - **持久的交易身份**：同一笔交易使用稳定 BusinessKey 与一致的启动意图；`ErrBackpressure` / `ErrStartUnconfirmed` / 超时后重查或用同一请求重试，

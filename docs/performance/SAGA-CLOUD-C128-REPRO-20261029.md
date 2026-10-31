@@ -1,6 +1,6 @@
 # Saga 正式实现：云 Mongo c128 复现原型的两处“尚未确认”（2026-10-29）
 
-对象是[原型压测报告](SAGA-JETSTREAM-LOG-PROTO-20261027.md)第三轮 T0 第 5 条：云 Mongo、c128 第一次运行的两处异常。
+对象是[原型压测报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-JETSTREAM-LOG-PROTO-20261027.md)第三轮 T0 第 5 条：云 Mongo、c128 第一次运行的两处异常。
 （a）余额核对报 false，但冷 Mongo 账户与内存逐账户一致、复读一致、非期望终态 0。当时用 5s 读超时，没有区分“读超时”和“不符”。
 （b）停止加压时的积压是 41414 条，低于负载期采样到的峰值 111302 条；而投影速率只有约 560 条/s。
 
@@ -59,7 +59,7 @@
 - worker 在 `<-ch` 与 `<-runCtx.Done()` 之间等终态；等到超时就 `t.Errorf("saga %s not terminal")` 并退出，这笔不进 `samples`。
 - `wg.Wait()` 之后才停积压采样，再读 `PartBacklogAtStop`；`ProjRateDuringLoad = ProjectedDuringLoad / loadElapsed`。
 
-样本（[round3-cloud/cloud-part-forward-p4g4.jsonl](benchmarks/saga-jetstream-log-proto-20261027/round3-cloud/cloud-part-forward-p4g4.jsonl)）里，`projected_during_load / projection_rate_during_load` 就是 `loadElapsed`：
+样本（[round3-cloud/cloud-part-forward-p4g4.jsonl](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/saga-jetstream-log-proto-20261027/round3-cloud/cloud-part-forward-p4g4.jsonl)）里，`projected_during_load / projection_rate_during_load` 就是 `loadElapsed`：
 
 | 档 | 负载期投影 条 | 负载期速率 条/s | 推出的 loadElapsed |
 | --- | ---: | ---: | ---: |
@@ -69,7 +69,7 @@
 | **c128 第一次** | **84210** | **561.39** | **150.0s** |
 | c128 重跑 | 18684 | 621.78 | 30.0s |
 
-墙钟也独立印证了这一点（[runs.log](benchmarks/saga-jetstream-log-proto-20261027/round3-cloud/runs.log)）：
+墙钟也独立印证了这一点（[runs.log](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/saga-jetstream-log-proto-20261027/round3-cloud/runs.log)）：
 
 - c128 第一次 19:33:50～19:37:48，共 238s ≈ 150s 加压 + 83.6s 追平 + 约 4.5s 其余开销。
 - 重跑 19:38:52～19:44:18，共 326s ≈ 30 + 290.5 + 5.5。

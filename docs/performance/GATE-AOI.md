@@ -1,6 +1,6 @@
 # Gate、Nest 与 Block AOI 性能验证
 
-最新复验（2026-10-12）：快8、慢8、GOMAXPROCS=0（本机实际10）重档先后在约6分钟、12分25秒失败；诊断确认Nest自动抓全栈的330ms STW放大Gate超时。移除自动抓栈后，同参数完整15分钟通过，Sync提交→客户端P99为18.66ms，零消息/HB拒绝、零outbound失败；长尾仍保留。详见[本轮报告](REVIEW-20261012.md)。历史失败不被新通过样本覆盖，初始延迟尚未唯一归因。功能验证见[发布验收范围](../release/v1.25.0-VALIDATION.md)。
+最新复验（2026-10-12）：快8、慢8、GOMAXPROCS=0（本机实际10）重档先后在约6分钟、12分25秒失败；诊断确认Nest自动抓全栈的330ms STW放大Gate超时。移除自动抓栈后，同参数完整15分钟通过，Sync提交→客户端P99为18.66ms，零消息/HB拒绝、零outbound失败；长尾仍保留。详见[本轮报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/REVIEW-20261012.md)。历史失败不被新通过样本覆盖，初始延迟尚未唯一归因。功能验证见[发布验收范围](../release/v1.25.0-VALIDATION.md)。
 
 ## 2026-10-09：Block AOI 改前样本
 
@@ -96,7 +96,7 @@ Stop 收尾修复（已实施）：原有 WaitGroup 的准入/完成责任不变
 发布状态（2026-10-09）：维护者接受重档失败，v1.25.0已发布，tag提交487052dd；pretag与远端真实tag的game-demo消费工程build/vet/test全部通过。main已包含本轮实现。按维护者最新要求，本轮不继续分析重档原因。发布验收见[记录](../release/v1.25.0-IMPLEMENTATION.md)；上文未提交/未发布为当时历史状态。
 
 
-2026-10-15 复测：v1.27 代码按上面 4 并行度重档配置（快 worker 改名为 short worker，`ROOST_NEST_GAME_SHORT_WORKERS=4`）把时长改为 30 分钟，跑满 1800 秒通过，业务 P99 18.64ms、>50ms 0.236%、拒绝 0。期间多项改动叠加，又只有单次样本，不能据此说明上述首错的根因，见 [2026-10-15 性能四项 §4](PERF-ROUND-20261015.md#4-aoi-4-并行度重档复测)。
+2026-10-15 复测：v1.27 代码按上面 4 并行度重档配置（快 worker 改名为 short worker，`ROOST_NEST_GAME_SHORT_WORKERS=4`）把时长改为 30 分钟，跑满 1800 秒通过，业务 P99 18.64ms、>50ms 0.236%、拒绝 0。期间多项改动叠加，又只有单次样本，不能据此说明上述首错的根因，见 [2026-10-15 性能四项 §4](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/PERF-ROUND-20261015.md#4-aoi-4-并行度重档复测)。
 
 ### 2026-10-10：快8 / 慢8 / 默认CPU并行度重档
 
@@ -121,6 +121,6 @@ Sync已有订阅delta延迟样本40233643条，提交→客户端>50ms占约0.10
 
 源码基线f25527db，加本轮未提交的job紧凑布局/单调偏移调整；夹具增加ROOST_NEST_GAME_SLOW_WORKERS配置并写入结果（默认32保留旧测试默认值）。相比旧失败样本，同时改变快worker、CPU并行度及对象布局，因此只能确认此配置本轮通过，不能把收益单独归于worker或宣称此前Gate首错根因已关闭。Gate/Game/客户端仍同进程，broker独立，未覆盖跨机、额外observedBlocks高扇出或Remote/Saga混合。
 
-原始产物：artifacts/perf/nest/heavy-fast8-slow8-auto-15m-20261010/（完整sample-1.json、日志、env.txt、源码差异source.patch、二进制与5秒NATS采样）。[随仓摘要](benchmarks/nest-heavy-fast8-slow8-auto-20261010.json)保留全部最终指标与内存峰值，省略每秒Samples数组。上一轮fast18/slow8/GOMAXPROCS4在维护者纠正参数后中断，目录heavy-fast18-slow8-15m-20261010内有INTERRUPTED.txt；不是完整样本，不混入通过/失败统计。
+原始产物：artifacts/perf/nest/heavy-fast8-slow8-auto-15m-20261010/（完整sample-1.json、日志、env.txt、源码差异source.patch、二进制与5秒NATS采样）。[随仓摘要](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/nest-heavy-fast8-slow8-auto-20261010.json)保留全部最终指标与内存峰值，省略每秒Samples数组。上一轮fast18/slow8/GOMAXPROCS4在维护者纠正参数后中断，目录heavy-fast18-slow8-15m-20261010内有INTERRUPTED.txt；不是完整样本，不混入通过/失败统计。
 
 复跑设置ROOST_PERF_CPU=0、ROOST_NEST_GAME_WORKERS=8、ROOST_NEST_GAME_SLOW_WORKERS=8，其余沿用重档脚本参数并使用新标签。压测与自建NATS/采集器已全部退出，没有停止共享服务。此次不提交、不发布，不追加根因分析。

@@ -99,7 +99,7 @@ Input 新增 Jump，Acceleration 只允许 X/Z（Y 必须为零）。同序号�
 
 Unity `Room.unity` 经下文本机三进程的 Gate 连接这套 Host / Service，测试移动跳跃与 Chunk 显示；业务登录与开房 UI 留给使用方。具体操作与协议见 [客户端说明](../../client/physics-viewer/README.md)。
 
-本轮 Room Entity / Unity 功能验证结果见 [验证记录](../performance/benchmarks/physics-room-input-20261025/README.md)。
+本轮 Room Entity / Unity 功能验证结果见 [验证记录](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/physics-room-input-20261025/README.md)。
 
 
 ## 本机三进程（正式装配，2026-10-26）

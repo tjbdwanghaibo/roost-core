@@ -133,7 +133,7 @@ sync-aoi 的 Nest 模式之前每 tick 调一次 `interest.Apply()`，Interest �
 
 ## 4A. 2026-10-22 晚正式测量（v1.31.0 发版前压测第 6 项）
 
-**被测**：发版候选 main `3d727c2f`；sync-aoi 用同一个预编二进制（附带只读的 `interest_metrics` 导出，见 [INTEREST-SINGLE-WRITER §7.1](INTEREST-SINGLE-WRITER-20261022.md#71-结果2026-10-22-晚v1310-发版前压测第-2-项)），16 视野 ApplySync 用诊断构建（`SyncApplyMaxExtraViews` 16，不入库）；GOMAXPROCS 4 / 进程，门控同 run-list（每次前等 10 秒无外来进程，运行中采到就作废重跑，作废 2 次：一次 Claude 进程 CPU>20%）。nest-game 两档背靠背、各 15 分钟，`nest-game.sh` 自己编译（编译时不测）。微基准与开环投递用 §1 第 1 项编好的 `gameplay/heartbeat/internal/bench` 测试二进制（缺省组 4 / 200µs）。样本：[benchmarks/v1310-prerelease-20261022/hb-load](benchmarks/v1310-prerelease-20261022/hb-load/)（`sync-aoi-summary.md`、`sync-aoi-runs.jsonl`、运行记录含 loadavg；nest-game 两份 JSON 与 env；`driver.txt` / `driver-benchstat.txt`；`openloop.jsonl`；`host-load.txt` 每 15 秒的 loadavg 与 CPU 前 6）。
+**被测**：发版候选 main `3d727c2f`；sync-aoi 用同一个预编二进制（附带只读的 `interest_metrics` 导出，见 [INTEREST-SINGLE-WRITER §7.1](INTEREST-SINGLE-WRITER-20261022.md#71-结果2026-10-22-晚v1310-发版前压测第-2-项)），16 视野 ApplySync 用诊断构建（`SyncApplyMaxExtraViews` 16，不入库）；GOMAXPROCS 4 / 进程，门控同 run-list（每次前等 10 秒无外来进程，运行中采到就作废重跑，作废 2 次：一次 Claude 进程 CPU>20%）。nest-game 两档背靠背、各 15 分钟，`nest-game.sh` 自己编译（编译时不测）。微基准与开环投递用 §1 第 1 项编好的 `gameplay/heartbeat/internal/bench` 测试二进制（缺省组 4 / 200µs）。样本：[benchmarks/v1310-prerelease-20261022/hb-load](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/v1310-prerelease-20261022/hb-load/)（`sync-aoi-summary.md`、`sync-aoi-runs.jsonl`、运行记录含 loadavg；nest-game 两份 JSON 与 env；`driver.txt` / `driver-benchstat.txt`；`openloop.jsonl`；`host-load.txt` 每 15 秒的 loadavg 与 CPU 前 6）。
 
 ### 1. sync-aoi 原场景：全局循环 vs 心跳驱动（各 3 轮轮转，21:00～21:04）
 
@@ -192,7 +192,7 @@ sync-aoi 的 Nest 模式之前每 tick 调一次 `interest.Apply()`，Interest �
 
 ### 4. 驱动微基准与开环投递
 
-`BenchmarkDriverDispatch -benchtime 2000000x -count 10`（21:59～22:15，开始 loadavg 4.65，结束 3.24；inline 客户端，不经 Nest，只量驱动本身；[driver-benchstat.txt](benchmarks/v1310-prerelease-20261022/hb-load/driver-benchstat.txt)）：
+`BenchmarkDriverDispatch -benchtime 2000000x -count 10`（21:59～22:15，开始 loadavg 4.65，结束 3.24；inline 客户端，不经 Nest，只量驱动本身；[driver-benchstat.txt](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/v1310-prerelease-20261022/hb-load/driver-benchstat.txt)）：
 
 | 档位 | dispatch cpu-ns/拍 / 驱动核 | batch cpu-ns/拍 / 驱动核 | batch vs dispatch |
 | --- | --- | --- | --- |

@@ -1,5 +1,0 @@
---- FAIL: TestConsumerWorkersBoundExecutionAndDeferSettlement (0.00s)
-    consumer_test.go:756: before release: entered=2 returned=0 settled=0 want 2/2/0
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/framework/saga	0.689s
-FAIL

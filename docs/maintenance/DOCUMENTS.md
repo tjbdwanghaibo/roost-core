@@ -5,14 +5,14 @@
 | 位置 | 权威内容 |
 | --- | --- |
 | [framework](../framework/README.md) | 当前架构、模块契约；guide 面向使用，impl 面向维护；十种玩法手册包含接入与验收边界 |
-| [performance](../performance/README.md) | 固定环境下的性能报告与原始样本；历史数字不改写为当前承诺 |
+| [performance](../performance/README.md) | 每类负载最新有效基线与必要样本；被替代的报告固定到 Git 历史 |
 | [maintenance](README.md) | 维护、发布、升级与故障处置 |
 | [KNOWN-LIMITS](KNOWN-LIMITS.md) | 当前能力限制、未验证范围与尚未确认问题 |
 | [DESIGN-TODO](DESIGN-TODO.md) | 尚待选择或排期的优化候选 |
 | [EXTERNAL-VERIFICATION](EXTERNAL-VERIFICATION.md) | 外部依赖与跨环境验证入口 |
 | [release](../release/README.md) | 固定版本的升级说明与验收；history 是合仓前只读变更记录 |
 | [skill](../skill/README.md) | 游戏内技能系统文档，不是 agent skill |
-| [AGENTS](../../AGENTS.md#游戏接入-skill) | Agent 维护入口与仓外 roost-genre 的使用规则 |
+| [AGENTS](../../AGENTS.md#游戏接入-skill) | Agent 维护入口与[生成游戏 skill](../agent-skills/roost-genre/SKILL.md) |
 | 代码附近 | 包 README、codegen 手册、demo 和脚本说明 |
 
 ## 收敛规则

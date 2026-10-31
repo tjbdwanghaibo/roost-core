@@ -1,5 +1,7 @@
 # Roost 文档入口
 
+生成游戏的 agent skill：[roost-genre](agent-skills/roost-genre/SKILL.md)；游戏内技能系统：[Skill 手册](skill/README.md)。两者用途不同。
+
 版本：已发布版本与未发版的变化见 [CHANGELOG](../CHANGELOG.md)（最上面的已归档段是最新发布版本，`[Unreleased]` 是未发版变化）；功能版本的发布说明与升级清单在 [docs/release](release/README.md)。
 
 第一次接触先读 [第一次认识和使用 Roost](GETTING-STARTED.md)：用一次购买道具解释三大核心，并运行一个不需要数据库的示例。

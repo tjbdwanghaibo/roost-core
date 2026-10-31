@@ -1,2 +1,0 @@
-ok  	github.com/tjbdwanghaibo/roost-core/framework/app	14.258s
-ok  	github.com/tjbdwanghaibo/roost-core/wiring/nest	2.362s

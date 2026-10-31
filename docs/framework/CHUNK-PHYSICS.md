@@ -96,7 +96,7 @@ scripts/physics/verify-viewer.sh /绝对路径/Unity工程 50
 - `go vet -tags physx`（上述包）：通过。
 - `go build ./...`：通过（普通无原生依赖构建）。
 - `go test -count=1 .`：通过；首次沙箱下 robotdemo 因监听 EPERM 失败，放开本地测试所需权限后实际运行通过，未改测试绕过。
-- Unity 6000.3.12f1：实际创建场景、编译、Play Mode 下接收 TCP、独立物理和渲染导图通过；20/50Hz 记录见[功能对比证据](../performance/benchmarks/chunk-physx-20261024/README.md)。仅编译或通信成功不代表数值一致。
+- Unity 6000.3.12f1：实际创建场景、编译、Play Mode 下接收 TCP、独立物理和渲染导图通过；20/50Hz 记录见[功能对比证据](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/chunk-physx-20261024/README.md)。仅编译或通信成功不代表数值一致。
 - Linux 原生编译/运行、生产 Gate、多观察者、大数据 Chunk、长稳及容量上限未验证。
 - CBM 最终刷新仍被共享后台协调状态阻止：`a pre-coordination or unverified CBM generation is active`。没有停止其他项目的服务，未宣称新代码已入索引。
 
@@ -112,7 +112,7 @@ scripts/physics/verify-viewer.sh /绝对路径/Unity工程 50
 
 修后并不承诺跨宿主逐位确定性。当前同 tick 对照前 88 拍误差不超过 0.01mm，约 tick 89 多刚体接触开始放大差异；接触生成、求解与编译浮点路径的具体剩余差异尚未逐项隔离。服务器权威状态同步仍是正式方向，客户端纯本地模拟用于展示对照，不可据此改成只同步输入。
 
-问题记录、修前失败/修后通过、Unity CSV 与服务器 CPU/流量实测统一保存在[本轮证据](../performance/benchmarks/chunk-physx-20261025/README.md)。没有创建重复历史 bug 目录。
+问题记录、修前失败/修后通过、Unity CSV 与服务器 CPU/流量实测统一保存在[本轮证据](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/chunk-physx-20261025/README.md)。没有创建重复历史 bug 目录。
 
 ### 50 客户端控制场景（2026-10-25）
 
@@ -136,7 +136,7 @@ python3 scripts/physics/measure-crowd.py --seconds 60 --hz 20 --output artifacts
 python3 scripts/physics/measure-crowd.py --seconds 60 --hz 50 --output artifacts/crowd-50
 ```
 
-视觉验收：`scripts/physics/verify-crowd.sh /absolute/unity/project`。该轮同时运行 Unity，其资源数值不能混入上面的性能样本。数据与边界见 [50 客户端报告](../performance/benchmarks/chunk-physx-crowd-20261025/README.md)。
+视觉验收：`scripts/physics/verify-crowd.sh /absolute/unity/project`。该轮同时运行 Unity，其资源数值不能混入上面的性能样本。数据与边界见 [50 客户端报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/chunk-physx-crowd-20261025/README.md)。
 
 ### Crowd AOI（2026-10-25，当前默认）
 
@@ -150,7 +150,7 @@ python3 scripts/physics/measure-crowd.py --seconds 60 --hz 50 --output artifacts
 
 `measure-crowd.py` 默认跟随以上配置，每包检查自己存在、ID 合法、对象距离不超过退出半径，并统计平均/最大可见数量和进出/重入。确定性回归把 Block 查询与全量距离扫描逐对象对照，另覆盖负坐标、观察者移动、跨 Chunk、滞留与重入后的 Replica 结果。没有放宽序号和对象状态校验来适配 AOI。
 
-实测与复跑命令见 [AOI 报告](../performance/benchmarks/chunk-physx-aoi-20261025/README.md)。此前 101 对象全可见报告为历史基准；当前 71 对象全场对照可用 `--aoi-radius 0`，不等同于复现历史人数。
+实测与复跑命令见 [AOI 报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/chunk-physx-aoi-20261025/README.md)。此前 101 对象全可见报告为历史基准；当前 71 对象全场对照可用 `--aoi-radius 0`，不等同于复现历史人数。
 
 
 ### 当前场景：20 人 / 20Hz / 立体地形（2026-10-25）
@@ -189,7 +189,7 @@ AOI 继续用 XZ Block 作为候选粗筛，精筛改为 XYZ 欧氏距离；楼�
 - service 对房间数、原生 worker 总数、每房人数/刚体/输入/出站预算设上限；不能无限地为每个房间增加线程。容量上限要用后续实际多房间服务负载另测。
 - 生产 Gate 装配、Raycast、碰撞业务事件和运行期增删尚未实现，不能作为“已验证”交付。Linux 实跑按维护者要求暂缓。
 
-补验发现并修复了并发开关房间时 PxPhysics 单例引用计数竞争。此前单房间验收没有覆盖此问题；这次以 8 个并发房间反复创建、模拟、销毁，重复使用 body ID 并校验不同房间轨迹，另验证房间提交失败隔离、取消退出，以及 Chunk 任意截断位置不产生半帧状态。证据见 [多房间补验](../performance/benchmarks/physics-rooms-20261025/README.md)。这属于底层多世界能力验证，并不意味着房间 service 已经实现。
+补验发现并修复了并发开关房间时 PxPhysics 单例引用计数竞争。此前单房间验收没有覆盖此问题；这次以 8 个并发房间反复创建、模拟、销毁，重复使用 body ID 并校验不同房间轨迹，另验证房间提交失败隔离、取消退出，以及 Chunk 任意截断位置不产生半帧状态。证据见 [多房间补验](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/physics-rooms-20261025/README.md)。这属于底层多世界能力验证，并不意味着房间 service 已经实现。
 
 ### 物理房间服务已实施（2026-10-25）
 

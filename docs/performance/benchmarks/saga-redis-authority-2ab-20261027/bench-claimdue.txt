@@ -1,4 +1,0 @@
-BenchmarkRedisClaimDue/1000-10         	    2000	   4100289 ns/op
-BenchmarkRedisClaimDue/10000-10        	    2000	   4080512 ns/op
-BenchmarkRedisClaimDue/100000-10       	    2000	   4106868 ns/op
-ok  	github.com/tjbdwanghaibo/roost-core/framework/saga	43.853s

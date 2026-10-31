@@ -7,12 +7,13 @@ Roost 是通用游戏服务器框架。业务采用 ECS：Entity 组合组件与
 ## 阅读入口
 
 - [文档首页](docs/README.md)：现行文档目录与版本入口。
+- [生成游戏的 agent skill](docs/agent-skills/roost-genre/SKILL.md)：十种玩法的生成、验证与边界；不同于游戏内技能系统。
 - [入门与术语](docs/GETTING-STARTED.md)：生成、配置和运行业务工程。
 - [生成器](codegen/README.md)与 [game-demo 模板](demo/README.md)：建工程、生成代码、本地实跑。
 - [模块设计与实现](docs/framework/README.md)：Nest、Entity、DataEngine、Sync、Remote 与周边能力。
 - [全包源码索引](docs/framework/PACKAGES.md)：当前目录与职责。
 - [维护手册](docs/maintenance/README.md)：修改、验证、升级、故障与发布。
-- [已知限制](docs/maintenance/KNOWN-LIMITS.md)与 [性能证据](docs/performance/STABLE-v1.24.0.md)：区分已验证行为和待验收项。
+- [已知限制](docs/maintenance/KNOWN-LIMITS.md)与 [性能证据](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)：区分已验证行为和待验收项。
 
 ## 目录
 

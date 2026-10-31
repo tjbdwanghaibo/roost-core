@@ -6,12 +6,14 @@
 
 ### 修复
 
+- 发布相关 shell（release、release-lib、自检、pretag）的注释、提示、错误与提交信息统一为英文，保留完整发布检查和失败出口。
 - 发布脚本修正变量紧邻中文标点的展开：macOS Bash 3.2 在 UTF-8 locale 下会将 `$version` 后的括号误作变量名，导致本地 release 提交后、pretag 前退出。变量边界改为显式花括号，实际执行 pretag 提示的回归覆盖 C / UTF-8 locale。修前失败 `version�: unbound variable`，修后通过；不改变版本流程或绕过 pretag。
 
 ### 文档
 
+- 性能文档按负载收敛为最新有效基线，旧版本压测、废弃路线、原型诊断与被替代样本转为固定提交追溯；maintenance 只保留现行规则与开放事项。生成游戏的 `roost-genre`（含七份玩法 reference）纳入仓库，随 tag 发布，本机安装仅保留跳转入口。
 - 收敛已完成或废弃的设计、review 和测试审计过程稿，历史证据固定到提交；现行规则统一指向 framework 的 guide / impl，保留未实施候选、性能样本和发布记录。目录与 Gate 文档改为当前职责和实现契约，修正物理房间发布状态及实体创建持久化说明。
-- AGENTS 增加 roost-genre 游戏接入 skill 的位置、十种玩法入口、版本匹配和验收边界；skill 仍在仓外维护。此次不改变运行时、协议、存储格式或生成物最低版本。
+- AGENTS 增加 roost-genre 游戏接入 skill 的位置、十种玩法入口、版本匹配和验收边界；生成游戏 skill 已纳入 `docs/agent-skills/roost-genre/`，本机仅保留入口。此次不改变运行时、协议、存储格式或生成物最低版本。
 
 ## [v1.34.1] - 2026-10-31
 
@@ -212,7 +214,7 @@
   - **生成器**：catalog 加 `redis_authority`、`store_service`（saga 依赖两者，与协调器同进程注册）；开发 compose 的 Redis 在项目有权威 Redis 时按 AOF always + noeviction 起；`roost.yaml` 文档的 Mod 表同步。game 服务多两个 Mod，生成的停机总预算相应加 6s。
   - **合服**：`wiring/sidmerge` 的“全部 saga 终态”改读权威 Redis，并要求所有投影分区积压为 0（合服前先停协调器与 Store Service）。
   - **升级**：项目未上线，不做兼容。升级前用旧版本把所有 saga 跑到终态（新版本的启动守卫拒绝“Mongo 有非终态、Redis 是空的”）；部署权威 Redis；配置 `redis_authority.*`、`saga.redis.key_prefix`；先停旧再起新。Mongo 里旧的终态 saga 文档留作冷副本、可以冷读；旧 `_saga_outbox` 集合废弃，确认为空后可删。
-  - **性能（本机 macOS，未达 2a 门槛）**：协调器每笔 Mongo 操作降到 0（只剩启动的业务键守卫读），Mongo 步骤两步每笔前台 Mongo 命令 50 → 19；但权威 Redis 与 Mongo 同盘时，每次写的 `F_FULLFSYNC` 让 Saga 吞吐低于旧实现（Mongo 步骤饱和约 0.4～0.5 倍、原生约 0.8 倍）。生产上权威 Redis 应独占一块盘，Linux 上未测。见 [压测报告](docs/performance/SAGA-REDIS-AUTHORITY-2AB-20261027.md)。
+  - **性能（本机 macOS，未达 2a 门槛）**：协调器每笔 Mongo 操作降到 0（只剩启动的业务键守卫读），Mongo 步骤两步每笔前台 Mongo 命令 50 → 19；但权威 Redis 与 Mongo 同盘时，每次写的 `F_FULLFSYNC` 让 Saga 吞吐低于旧实现（Mongo 步骤饱和约 0.4～0.5 倍、原生约 0.8 倍）。生产上权威 Redis 应独占一块盘，Linux 上未测。见 [压测报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-REDIS-AUTHORITY-2AB-20261027.md)。
   - **测试与脚本**：`scripts/it-redis-aof.sh`（私有 AOF always Redis）；`scripts/mirror-local.sh` 起权威 Redis 并导出 `ROOST_SAGA_IT_REDIS_ADDR`；`saga-scan.sh` 加 `ROOST_SCAN_STORE=redis`、每笔 Mongo 往返与 Redis 脚本计数、终态复读与冷热核对；单元用例经 `redistest.AOFAddr` 用私有 `redis-server`（本机没有时跳过）。
 
 - **物理验收宿主收敛为正式服务**（维护者 2026-10-26：viewer 应是一个 service，逻辑重合就不需要）：删除 `cmd/physics-viewer`，它的 room / physics-service / gate-room / crowd 场景与物理房间服务重合，且让根包 `TestCoreDependencyBoundary`、`TestCoreContractsDoNotLinkDrivers` 变红（core 层的 `cmd/` 引入 wiring 与 NATS driver，提交 ce49b3c3）。新增 `wiring/physicsroom.NewEntityHostMod`（按 `physicsroom.*` 配置建 EntityHost 与房间 Service 的 owner Mod）与 `PlayerIngress`（Game 侧首输入 Join、唯一 Relay、Submit、随连接释放，作为 Mod 接 `wiring/gate.NewGameIngressMod`）；`Relay` 的出站参数放宽为 `Pusher` 接口（`*gateway.GameIngress` 照常传入）。本机运行入口改为 `wiring/physicsroom/cmd/physicsroom-local` 的 physicsroom / game / gate 三个 App 服务，GoLand 用 Physics Service / Game / Gate / Stack；**本机调试除 NATS 外还需要 Redis（单实例锁）与 etcd（Gate 发现 Game）**，直连 TCP 的 room 场景（PR01 协议、`.run/Physics Room`）删除。原生与 Unity 数值对照保留为 `scripts/physics/comparison-host`，`run-viewer-server.sh` / `verify-viewer.sh` 改为构建 `artifacts/physics-comparison-host`；crowd 宿主及 `measure-crowd.py`、`verify-crowd.sh` 删除，Crowd.unity 不再有服务端。修复 `physicsroom.NewClientMod` 依赖写成能力名 `bus`、经 App 装配启动即报 unknown mod dependency（改为 NATS Mod）。见 [物理房间 service §本机三进程](docs/framework/PHYSICS-ROOM-SERVICE.md#本机三进程正式装配2026-10-26)。
@@ -268,31 +270,31 @@
 
 - **物理房间 service**：新增 `service/physicsroom` 与 `wiring/physicsroom`，支持独立 owner 下的建房/成员/输入/Chunk 取帧确认/销毁、进程及房间代际、容量限制和停机排空；生成 Core NATS RPC、Nest 结果提交适配与 Gate 绑定转发。新增固定 SID 的 RPC 选项，禁止房间调用随机漂移；Nest 增加 `RequestSettled`，供资源执行器等待已准入 handler 真实完成，普通 Request 行为不变。macOS 定向、真实 NATS/Gate/TCP 验证通过；Linux 和多房间容量压测未执行。见 [使用与边界](docs/framework/PHYSICS-ROOM-SERVICE.md)。
 
-- **物理多房间生命周期修复**：将共享 PxPhysics 的创建和释放纳入同一临界区，修复并发开关世界后 SDK 引用计数竞争导致后续世界创建失败；独立 Scene 模拟保持并发。增加多世界隔离、取消/失败隔离和 Chunk 截断原子性验证，见 [补验记录](docs/performance/benchmarks/physics-rooms-20261025/README.md)。
+- **物理多房间生命周期修复**：将共享 PxPhysics 的创建和释放纳入同一临界区，修复并发开关世界后 SDK 引用计数竞争导致后续世界创建失败；独立 Scene 模拟保持并发。增加多世界隔离、取消/失败隔离和 Chunk 截断原子性验证，见 [补验记录](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/physics-rooms-20261025/README.md)。
 
 - **20 人立体物理场景**：Crowd 改为 20 个玩家球＋50 个胶囊＋1 个大球，20Hz 同步；增加共享 JSON 定义的平台、坡道、阶梯、桥梁和障碍，原生刚体支持旋转姿态，AOI 精筛改为 XYZ 距离。需同时重建原生动态库与 Go 宿主并同步 Unity 资源；旧 Crowd 人数/桥接 ABI 不兼容。见 [验证报告](docs/performance/benchmarks/chunk-physx-3d-20261025/README.md)。
 
-- **物理 Crowd AOI**：控制客户端默认按自己小球的权威位置使用 12m 进入/14m 离开视野；每个已提交帧共享只读 10m Block 索引，保留 Chunk 基线、删除、重入与成功发送后结算。`-aoi-radius 0` 可复跑全场，Unity 旁观仍显示全场。见 [AOI 实测](docs/performance/benchmarks/chunk-physx-aoi-20261025/README.md)。
+- **物理 Crowd AOI**：控制客户端默认按自己小球的权威位置使用 12m 进入/14m 离开视野；每个已提交帧共享只读 10m Block 索引，保留 Chunk 基线、删除、重入与成功发送后结算。`-aoi-radius 0` 可复跑全场，Unity 旁观仍显示全场。见 [AOI 实测](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/chunk-physx-aoi-20261025/README.md)。
 
-- **Crowd 历史负载验证**：曾以 50 条独立控制连接、50 个胶囊和 1 个大球进行验证（当前配置已收敛为上文的 20 人）；验证输入槽位所有权、过期和断线释放，Unity 增加权威状态旁观场景。两档 60 秒 CPU/带宽与逐客户端结果见 [报告](docs/performance/benchmarks/chunk-physx-crowd-20261025/README.md)。
+- **Crowd 历史负载验证**：曾以 50 条独立控制连接、50 个胶囊和 1 个大球进行验证（当前配置已收敛为上文的 20 人）；验证输入槽位所有权、过期和断线释放，Unity 增加权威状态旁观场景。两档 60 秒 CPU/带宽与逐客户端结果见 [报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/chunk-physx-crowd-20261025/README.md)。
 
-- **原生物理对照修正**：禁转胶囊以无限转动惯量参与接触求解，修复接地摩擦偏弱；补全 CCD 接触对检测，防止高速刚体穿薄墙。固定输入重复验收、Unity 同 Tick 偏差及服务器 CPU/流量测量见 [本轮证据](docs/performance/benchmarks/chunk-physx-20261025/README.md)。
+- **原生物理对照修正**：禁转胶囊以无限转动惯量参与接触求解，修复接地摩擦偏弱；补全 CCD 接触对检测，防止高速刚体穿薄墙。固定输入重复验收、Unity 同 Tick 偏差及服务器 CPU/流量测量见 [本轮证据](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/chunk-physx-20261025/README.md)。
 
 - **Chunk 与原生物理接入**：新增可选 `-tags physx` CPU 后端、RC v1 区域对象基线/增量、可回滚的瞬态物理结果 DAO，以及本地 Unity 双视图工程创建入口。50Hz 固定物理步长，20/50Hz 发送选项；macOS arm64 已运行，Linux 未运行；独立模拟存在偏差，生产 Gate/UGC 持久化不在本轮实现范围。见 [设计与验收](docs/framework/CHUNK-PHYSICS.md)。
 
-- **Saga性能诊断**：补充协调batch对照、JetStream解析器/交付拆分、独立吞吐与Mongo混合负载、macOS资源及journal/pwrite采样的复跑入口和结果；拒绝睡眠造成的时间线缺口，保留无效样本。维护者决定保留Mongo事务和majority+j:true，生产默认不变；[结论与未完成边界](docs/performance/PRERELEASE-DIAGNOSTICS-20261023.md#本轮收口与维护者决定2026-10-23)。
+- **Saga性能诊断**：补充协调batch对照、JetStream解析器/交付拆分、独立吞吐与Mongo混合负载、macOS资源及journal/pwrite采样的复跑入口和结果；拒绝睡眠造成的时间线缺口，保留无效样本。维护者决定保留Mongo事务和majority+j:true，生产默认不变；[结论与未完成边界](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/PRERELEASE-DIAGNOSTICS-20261023.md#本轮收口与维护者决定2026-10-23)。
 
-- **Saga Mongo 认领与消费容量**：到期 Saga / outbox 改为带排序的原子 `FindOneAndUpdate` 认领，避免并发 worker 扫到同一候选而空领；Mongo collection 增加 `FindOneAndUpdateOption.Sort`。Mongo 步骤与完成结果可分别配置 `MongoWorkers` / `Workers`，默认仍串行，通过现有延迟结算保证在途有界、Drain 等到真实完成。本机两消费 worker、30/s × 10 分钟 18,000 笔全部成功，业务核验通过，P99 576ms；不改变超时 / 重试次数。见 [诊断与证据](docs/performance/PRERELEASE-DIAGNOSTICS-20261023.md)。
-- **Redis Cluster 重定向预算耗尽后安全重试**：MOVED / ASK 纳入既有有界的“确定未执行”重试；执行后丢响应仍不重放，WAIT 不变。永久重定向仍有总预算，历史八次实际路由未恢复，见 [回归证据](docs/performance/benchmarks/redis-redirect-20261023/README.md)。
+- **Saga Mongo 认领与消费容量**：到期 Saga / outbox 改为带排序的原子 `FindOneAndUpdate` 认领，避免并发 worker 扫到同一候选而空领；Mongo collection 增加 `FindOneAndUpdateOption.Sort`。Mongo 步骤与完成结果可分别配置 `MongoWorkers` / `Workers`，默认仍串行，通过现有延迟结算保证在途有界、Drain 等到真实完成。本机两消费 worker、30/s × 10 分钟 18,000 笔全部成功，业务核验通过，P99 576ms；不改变超时 / 重试次数。见 [诊断与证据](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/PRERELEASE-DIAGNOSTICS-20261023.md)。
+- **Redis Cluster 重定向预算耗尽后安全重试**：MOVED / ASK 纳入既有有界的“确定未执行”重试；执行后丢响应仍不重放，WAIT 不变。永久重定向仍有总预算，历史八次实际路由未恢复，见 [回归证据](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/redis-redirect-20261023/README.md)。
 
 
-维护者决定与逐项说明见 [v1.31.0 说明](docs/release/v1.31.0-NOTES.md)，提交、强制点与回归用例见 [实现篇](docs/release/v1.31.0-IMPLEMENTATION.md)，发布验收见 [VALIDATION](docs/release/v1.31.0-VALIDATION.md)，剩余边界见 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)，发版前压测见 [V1310-PRERELEASE-20261022](docs/performance/V1310-PRERELEASE-20261022.md) 与 [SAGA-JETSTREAM-AUTHORITY-20261029](docs/performance/SAGA-JETSTREAM-AUTHORITY-20261029.md)。线上尚未部署：存储、协议与 API 变化一律不做兼容。
+维护者决定与逐项说明见 [v1.31.0 说明](docs/release/v1.31.0-NOTES.md)，提交、强制点与回归用例见 [实现篇](docs/release/v1.31.0-IMPLEMENTATION.md)，发布验收见 [VALIDATION](docs/release/v1.31.0-VALIDATION.md)，剩余边界见 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)，发版前压测见 [V1310-PRERELEASE-20261022](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/V1310-PRERELEASE-20261022.md) 与 [SAGA-JETSTREAM-AUTHORITY-20261029](docs/performance/SAGA-JETSTREAM-AUTHORITY-20261029.md)。线上尚未部署：存储、协议与 API 变化一律不做兼容。
 
 - **内部整理**：`infra/base/fctx` 上下文快照的 map 复制改用 `maps.Clone`（泛型 `cloneMap`，`0faa25b1`），行为不变。
 
 ### 验收诊断修正
 
-- **WAL 刷盘观测**：`nestwal.fsync.duration` 改在物理段刷盘入口计时，补齐 async 后台刷盘和 Ack 路径；持久化与加锁语义不变。Saga 压测在清理数据库前导出终态、操作与业务证据，另报预期终态 TPS，避免把失败终态当作成功吞吐。复测结果及尚未确认项见 [10-23 诊断](docs/performance/PRERELEASE-DIAGNOSTICS-20261023.md)。
+- **WAL 刷盘观测**：`nestwal.fsync.duration` 改在物理段刷盘入口计时，补齐 async 后台刷盘和 Ack 路径；持久化与加锁语义不变。Saga 压测在清理数据库前导出终态、操作与业务证据，另报预期终态 TPS，避免把失败终态当作成功吞吐。复测结果及尚未确认项见 [10-23 诊断](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/PRERELEASE-DIAGNOSTICS-20261023.md)。
 
 ### 不兼容变更（升级必读）
 
@@ -351,7 +353,7 @@
 
 ### Lockstep
 
-- **快照恢复（D1 方案 B）**：`MatchConfig.Recovery`（`RecoveryCatchup` / `RecoverySnapshot` / `RecoveryAuto`；零值在配了 `Snapshots.Provider` 时为 auto，否则 catchup——现有工程行为不变）与 `SnapshotConfig`（`AutoCatchupMaxFrames`、`MaxBytes` 4 MiB / 硬上限 64 MiB、`ChunkBytes` 16 KiB、`BytesPerTick` / `UnpacedBytesPerTick`、`FetchTimeout` 2s、`PinFrames`）；业务快照来源 `SnapshotProvider`（Match 自己的 goroutine 调用、`Tick` 不等、每局至多一次在途）；`Match.StartSnapshot` / `SpectatorSnapshot`；CA 01 分块（SHA-256 摘要 + 可选状态 hash）经可靠通道下发、之后续发历史页；恢复期间钉住历史；C9 v2 失败原因（history_trimmed / snapshot_unavailable / snapshot_too_large / recovery_expired）。`MatchConfig.CommittedFrame` 让“提交后才广播”的宿主不发未提交帧（MOBA 夹具 `RecoverRoomWithSnapshots`）。`nettransport.ReliablePacer` / `ReliablePayloadLimiter`。Go：`FrameAssembler.Receive` / `ResumeAfterSnapshot` / `NewFrameAssemblerLimits`、`robot.LockstepBotConfig.Restore`；C#：`LockstepAssembler.Receive`、`LockstepClient(..., restore, maxSnapshotBytes)`。校验失败一律终止、不自动重试。指标 `lockstep.snapshot.total{reason}` / `bytes.total` / `failed.total{reason}`（含恢复中被 Detach 的 `detached`）。独立 Gate 只准入、慢链路上大快照被断开循环（[演练](docs/performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)）。
+- **快照恢复（D1 方案 B）**：`MatchConfig.Recovery`（`RecoveryCatchup` / `RecoverySnapshot` / `RecoveryAuto`；零值在配了 `Snapshots.Provider` 时为 auto，否则 catchup——现有工程行为不变）与 `SnapshotConfig`（`AutoCatchupMaxFrames`、`MaxBytes` 4 MiB / 硬上限 64 MiB、`ChunkBytes` 16 KiB、`BytesPerTick` / `UnpacedBytesPerTick`、`FetchTimeout` 2s、`PinFrames`）；业务快照来源 `SnapshotProvider`（Match 自己的 goroutine 调用、`Tick` 不等、每局至多一次在途）；`Match.StartSnapshot` / `SpectatorSnapshot`；CA 01 分块（SHA-256 摘要 + 可选状态 hash）经可靠通道下发、之后续发历史页；恢复期间钉住历史；C9 v2 失败原因（history_trimmed / snapshot_unavailable / snapshot_too_large / recovery_expired）。`MatchConfig.CommittedFrame` 让“提交后才广播”的宿主不发未提交帧（MOBA 夹具 `RecoverRoomWithSnapshots`）。`nettransport.ReliablePacer` / `ReliablePayloadLimiter`。Go：`FrameAssembler.Receive` / `ResumeAfterSnapshot` / `NewFrameAssemblerLimits`、`robot.LockstepBotConfig.Restore`；C#：`LockstepAssembler.Receive`、`LockstepClient(..., restore, maxSnapshotBytes)`。校验失败一律终止、不自动重试。指标 `lockstep.snapshot.total{reason}` / `bytes.total` / `failed.total{reason}`（含恢复中被 Detach 的 `detached`）。独立 Gate 只准入、慢链路上大快照被断开循环（[演练](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)）。
 
 ### Nest
 
@@ -400,7 +402,7 @@
 - **Sync / 接入**：会话 Hold 后撤到一个订阅都不剩时接收端不再留着旧对象；第二个 Manager 登记同一实体不再静默抢走脏通知；自身视图帧上限大于接入层上限时不再反复断线重连；嵌入 TCP 关闭事件不再早于驻留预算归还（Lockstep 预算用例偶发失败的根因）。
 - **Nest**：慢派发 trace 不再与 handler 并发读写参数（`-race` 报告）。
 - **Nest 批量作业 / 广播（RV-20261022-01，P1，心跳缺省路径）**：一组里前一个目标 fence 了引擎（handler 主动 `Fence`，或提交结果未知）之后，同组还没开始的目标不再执行业务，交回 `ErrNestFenced`；修前只在准备一组时读一次 fence，同组后续 handler 照常执行。广播同样逐目标停止（修前只在作业开始时查一次）。新增统一的开始检查 `NestMgr.checkHandlerStart`（fence + 取消），普通派发、广播、批量作业每个目标开始前共用；同组先取锁失败、收尾时才转单目标的目标在 fence 后也直接交回 `ErrNestFenced`。见 [v1.31.0 说明 H2](docs/release/v1.31.0-NOTES.md#h2)。
-- **heartbeat：卡住兜底的旧重投、旧交回不再被当成下一拍（RV-20261022-02）**。修前每拍的消息参数都是同一个 `*Reg`、执行侧只看一个在途布尔值：原拍执行后驱动投出下一拍，队列里晚到的旧重投会多执行一次回调并清掉下一拍的在途（下一拍随后被当成 `duplicate`，停止后重启时还冒充重启后的第一拍）；批量方式下旧重投的异步交回会清掉下一拍或正在执行这一拍的在途，让驱动多投一拍。现在每次投递分配一个代际、凭据随消息交给 Nest，重投沿用原代际，执行、准入被拒与交回都只结算自己那一代，其余按 `dropped{reason="duplicate"}` 丢弃（不新增指标标签，`duplicate` 的含义扩为“这一代已结算或正在执行”）。同包按职责分出 `delivery.go`、`observe.go`。每拍多一次 32 字节分配（投递凭据），微基准 `BenchmarkDriverDispatch`（驱动侧，假客户端在驱动 goroutine 上直接执行 handler）同机交替 10 轮：`allocs/op` 2 → 3、`B/op` 64 → 96；进程 CPU / 拍 dispatch 方式中位数 +26%～+45%（p<0.05），batch（缺省）方式无显著差异；机器有后台负载，单轮波动 ±30% 以上，各组最小值多出约 30～50ns / 拍。按 H2 的实测单目标 Nest 消息每拍约 6～8µs CPU，这几十纳秒约占 1% 以内（估算，没有在真实 Nest 下对照），原始数据在 [benchmarks/heartbeat-delivery-generation-20261022](docs/performance/benchmarks/heartbeat-delivery-generation-20261022/benchstat.txt)。详见 [v1.31.0 说明 R2](docs/release/v1.31.0-NOTES.md#r2)。
+- **heartbeat：卡住兜底的旧重投、旧交回不再被当成下一拍（RV-20261022-02）**。修前每拍的消息参数都是同一个 `*Reg`、执行侧只看一个在途布尔值：原拍执行后驱动投出下一拍，队列里晚到的旧重投会多执行一次回调并清掉下一拍的在途（下一拍随后被当成 `duplicate`，停止后重启时还冒充重启后的第一拍）；批量方式下旧重投的异步交回会清掉下一拍或正在执行这一拍的在途，让驱动多投一拍。现在每次投递分配一个代际、凭据随消息交给 Nest，重投沿用原代际，执行、准入被拒与交回都只结算自己那一代，其余按 `dropped{reason="duplicate"}` 丢弃（不新增指标标签，`duplicate` 的含义扩为“这一代已结算或正在执行”）。同包按职责分出 `delivery.go`、`observe.go`。每拍多一次 32 字节分配（投递凭据），微基准 `BenchmarkDriverDispatch`（驱动侧，假客户端在驱动 goroutine 上直接执行 handler）同机交替 10 轮：`allocs/op` 2 → 3、`B/op` 64 → 96；进程 CPU / 拍 dispatch 方式中位数 +26%～+45%（p<0.05），batch（缺省）方式无显著差异；机器有后台负载，单轮波动 ±30% 以上，各组最小值多出约 30～50ns / 拍。按 H2 的实测单目标 Nest 消息每拍约 6～8µs CPU，这几十纳秒约占 1% 以内（估算，没有在真实 Nest 下对照），原始数据在 [benchmarks/heartbeat-delivery-generation-20261022](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/heartbeat-delivery-generation-20261022/benchstat.txt)。详见 [v1.31.0 说明 R2](docs/release/v1.31.0-NOTES.md#r2)。
 - **movement：只改朝向后 `Save` 不调保存回调**（提交审查可读性与设计建议 5，维护者 2026-10-22 决定朝向作为 DAO 数据）。修前 `MapBasic` 的 dirty 只覆盖场景与位置，原地转向不触发 `Save` / `SaveOnLeave` / 周期落库。现在 `SetFacing` 与 `SetPos` 同一机制：`guard` 登记回滚、标 dirty、写 DAO 字段（逆操作回滚朝向值）、提交后发布；回滚的转向不留下新值也不留下“变过”。回归 `TestFacingIsSavedAndRolledBackLikeThePosition`；game-demo 新增持久 `saved_facing`。详见 [v1.31.0 说明 R5](docs/release/v1.31.0-NOTES.md#r5)。
 - **生成器**：`collectUsedImports` 保留被指针 / 切片 / map 包装的外部类型 import（`TestCollectUsedImportsHandlesWrappedPackageTypes`）；开发配置的 WAL 目录按 sid 分开。
 - **夹具与用例**：SLG 任务夹具按 D22-1 的签名不再传时间；`TestBusyShortPoolSkipsBeatsAndResumes`、`TestAStalledOldConnectionDoesNotResetTheLiveClient`、`TestDriverOpenLoop` 由按墙钟窗口改为按事件推进（用例口径问题，不是产品缺陷）；sync-aoi 的新订阅全量只按本 tick 改的值计时、Nest 模式压测线程不再调 `Apply`。
@@ -409,9 +411,9 @@
 ### 性能与压测工具
 
 - **压测工具**：nest-game `ROOST_NEST_GAME_EMBEDDED=1`（嵌入 TCPRuntime，`SYNC=1` 场景 Sync / `SELF_SYNC=1` 自身视图，输出 `Embedded`、`Minutes`）、`ROOST_NEST_GAME_HEARTBEAT_DRIVER=ticker|heartbeat`、`--check-heartbeat`；sync-aoi `-move-driver=loop|heartbeat`（`-move-period` / `-move-speed` / `-movers`）、`-apply-mode`、`-views-per-player`、`-alliance-size`、`-world` / `-block` / `-enter-radius` / `-leave-radius` / `-move-amplitude`；心跳投递对比夹具 `HB_MODE=x|y|z|c`、`BenchmarkDriverDispatch`、`TestDriverOpenLoop`（`HB_OPENLOOP=1`）。工具缺省仍是全局循环 / 帧回调（发版前对比后再定）。
-- **已有的数字**：心跳调度结构与投递方式（[HB-STRUCTURES-20261021](docs/performance/HB-STRUCTURES-20261021.md)）、选项 C 与方案 D（[NEST-BATCH-HEARTBEAT-20261021](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md)）、Interest 单写者前后（[INTEREST-SINGLE-WRITER-20261022](docs/performance/INTEREST-SINGLE-WRITER-20261022.md)）、2026-10-20 夜间补测（[NIGHT-20261020](docs/performance/NIGHT-20261020.md)）、Lockstep 快照演练、生成工程 strict 吞吐（[GENERATED-TCP-STRICT-20261020](docs/performance/GENERATED-TCP-STRICT-20261020.md)）。Flush 空 Full 改动前后 `BenchmarkManagerFlush` / `BenchmarkSessionRecovery` 无差异；Lockstep 已提交门没有恢复中会话时热路径无差异。
+- **已有的数字**：心跳调度结构与投递方式（[HB-STRUCTURES-20261021](docs/performance/HB-STRUCTURES-20261021.md)）、选项 C 与方案 D（[NEST-BATCH-HEARTBEAT-20261021](docs/performance/NEST-BATCH-HEARTBEAT-20261021.md)）、Interest 单写者前后（[INTEREST-SINGLE-WRITER-20261022](docs/performance/INTEREST-SINGLE-WRITER-20261022.md)）、2026-10-20 夜间补测（[NIGHT-20261020](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NIGHT-20261020.md)）、Lockstep 快照演练、生成工程 strict 吞吐（[GENERATED-TCP-STRICT-20261020](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/GENERATED-TCP-STRICT-20261020.md)）。Flush 空 Full 改动前后 `BenchmarkManagerFlush` / `BenchmarkSessionRecovery` 无差异；Lockstep 已提交门没有恢复中会话时热路径无差异。
 - **sync-aoi `-move-period` 缺省 200ms**（跟 `movement.DefaultMovePeriod`，2026-10-22）：[HB-DRIVEN-LOAD §4](docs/performance/HB-DRIVEN-LOAD-20261021.md#4-待补测2026-10-21-因宿主资源占用推迟) 的心跳驱动复跑命令显式加 `-move-period=100ms`，与之前的结果同口径；`MaxSpatialViews` 按 `玩家数 × -views-per-player` 放宽。
-- **没有测量的**：心跳、移动、行为、技能 / Buff 的正式负载；ApplySync 预算与纯前缀切开之后的对比；选项 C 的组合参数；Linux。今晚清单见 [V1310-PRERELEASE-20261022](docs/performance/V1310-PRERELEASE-20261022.md)。
+- **没有测量的**：心跳、移动、行为、技能 / Buff 的正式负载；ApplySync 预算与纯前缀切开之后的对比；选项 C 的组合参数；Linux。今晚清单见 [V1310-PRERELEASE-20261022](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/V1310-PRERELEASE-20261022.md)。
 
 ## [v1.29.0] - 2026-10-19
 
@@ -516,7 +518,7 @@
 ### 投影 checkpoint 缺省间隔保持 20 ms；原生步骤容量数字在生成器与文档里更新（2026-10-19）
 
 - **决定**：维护者 2026-10-19 按推荐选 A——`dataengine.projection.checkpoint_interval` 缺省保持 20 ms。20 ms 下特殊记录（投影事务约 16 ms）积压时合并系数约 2；需要更高吞吐的部署可调大，代价是崩溃后重放窗口与未确认额度变长（重放仍幂等）。代码与配置缺省都不变。
-- **生成器文案**（只改注释与提示字符串，不改行为）：生成的 `saga/<name>/steps.go` 容量注释、`roost add saga` 的 capacity 提示与 `roost help saga` 改为合并 checkpoint 后的实测——投影器约 20 条/s；单进程两步原生步骤 saga 正向约 8/s、全补偿约 5/s 以内 P50 在 1 秒内（P99 0.8 / 1.2 s），正向 10/s 0 笔终态不对但积压、P50 2.2 s，正向 12/s、全补偿 7/s 起崩溃（上限档各单样本）；保留“量大时按 sid 分片多进程、原生步骤加 `WithAdmit`”。报告链接由 SAGA-OPT 换成 [SAGA-CHECKPOINT](docs/performance/SAGA-CHECKPOINT-20261018.md)。
+- **生成器文案**（只改注释与提示字符串，不改行为）：生成的 `saga/<name>/steps.go` 容量注释、`roost add saga` 的 capacity 提示与 `roost help saga` 改为合并 checkpoint 后的实测——投影器约 20 条/s；单进程两步原生步骤 saga 正向约 8/s、全补偿约 5/s 以内 P50 在 1 秒内（P99 0.8 / 1.2 s），正向 10/s 0 笔终态不对但积压、P50 2.2 s，正向 12/s、全补偿 7/s 起崩溃（上限档各单样本）；保留“量大时按 sid 分片多进程、原生步骤加 `WithAdmit`”。报告链接由 SAGA-OPT 换成 [SAGA-CHECKPOINT](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-CHECKPOINT-20261018.md)。
 - **升级**：已生成工程里的 `steps.go` 是业务文件，不改写；只有新 add 的 saga 带新注释。
 - 文档：CONTRACT-2026-10-18-projector-checkpoint-merge、SAGA-CHECKPOINT §5、guide / impl 03-dataengine、guide/06 §5、MMORPG-INTEGRATION、KNOWN-LIMITS“Saga 原生步骤容量（单进程）”（缺省间隔已决定、生成器数字已更新）、codegen 的 CODEGEN_REFERENCE / PROJECT_GENERATOR / BEGINNER_WORKBOOK。
 
@@ -525,7 +527,7 @@
 - **决定**：维护者 2026-10-18 在 saga 原生步骤性能的第三档里选 A——特殊记录投影后不再每条立即 checkpoint，按 `CheckpointInterval` / `CheckpointRecords` 与普通记录合并；B（合批带回执 / effect 的记录）与 C（WAL 与 Mongo 分盘）不做。
 - **改动**（`framework/dataengine/engine`）：`ReplayPass` 删掉特殊记录投影前的确认，投影后不再因“特殊”强制确认；仍逐单元立即确认的只有单 mutation 快路记录（不写事务标记、只靠 `_last_tx`）与只实现 `ProjectionStore` 的 Store。快路判定收成 `projectsOnFastPath`，投影器与 `MongoStore.ProjectFenced` 共用。`BatchProjectionStore` 文档契约补上“带 effect / 回执 / Remote 写的记录在后续版本写入后仍能重放”（仓内唯一实现 `MongoStore` 本已满足）。并行 Remote 窗口不变。
 - **为什么安全**（[方案](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/CONTRACT-2026-10-18-projector-checkpoint-merge.md)）：checkpoint 只决定崩溃后从哪里重放，没有读者依赖它；特殊记录的投影事务先查事务标记再判 lease fence，标记与业务写、回执、outbox、Remote 提交同事务，重放返回首投结论，不重判 fence、不重复暂存。逐条确认是 `646ce63f` 引入合并时对特殊记录的保守沿用，没有专属理由。崩溃后多重放的已投影记录 ≤ `CheckpointRecords` 条，只来自约一个间隔加一个单元的窗口。
-- **性能**（[报告](docs/performance/SAGA-CHECKPOINT-20261018.md)，夹具 B 同机前后对照）：积压时每条特殊记录 0.56～0.75 次确认（修前 1 次），投影器约 15 → 20 条/s；正向 8/s 由崩溃变为 P50 517 ms / P99 793 ms，正向 10/s 由崩溃变为全部正确（积压、P50 2.2 s），全补偿 5/s P50 3.9 s → 688 ms；正向 12/s、全补偿 7/s 起仍崩溃（上限档各单样本）；持续档（正向 5/s、全补偿 3/s）没有积压，不变。真实 WAL 微基准 256 条全特殊记录 256 → 1 次 checkpoint、2.27 s → 10.2 ms。合并系数受缺省 20 ms 间隔限制，缺省值未改。
+- **性能**（[报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-CHECKPOINT-20261018.md)，夹具 B 同机前后对照）：积压时每条特殊记录 0.56～0.75 次确认（修前 1 次），投影器约 15 → 20 条/s；正向 8/s 由崩溃变为 P50 517 ms / P99 793 ms，正向 10/s 由崩溃变为全部正确（积压、P50 2.2 s），全补偿 5/s P50 3.9 s → 688 ms；正向 12/s、全补偿 7/s 起仍崩溃（上限档各单样本）；持续档（正向 5/s、全补偿 3/s）没有积压，不变。真实 WAL 微基准 256 条全特殊记录 256 → 1 次 checkpoint、2.27 s → 10.2 ms。合并系数受缺省 20 ms 间隔限制，缺省值未改。
 - **测试（先红后绿）**：`TestSpecialRecordsShareCheckpointThresholds`、`TestFastPathRecordStillConfirmsPrecedingSpecialRecords`、`TestSpecialRecordCheckpointLossReplaysTheWholeUnconfirmedPrefix`（修前 acks=8 want=1 等）；真实 Mongo 崩溃注入 `TestRealMongoSpecialRecordsReplayExactlyOnceAfterLostCheckpoint`（修前失败于 n=1；“重放时先判 fence”的变异会被它抓到）与 saga 级重启 `TestRealStepsRestartReplaysUnconfirmedProjectionsExactlyOnce`（守卫）。`TestMultiBatchCapabilityAndSpecialBoundaries` 期望改为合并后的序列，`TestProjectorStopsAfterSegmentAckFailure` 改用条数阈值触发确认失败。
 - **升级**：WAL、checkpoint、Mongo 格式与配置键都不变，新旧进程可互换数据；只想保留逐单元确认可设 `dataengine.projection.checkpoint_records: 1`。
 - 文档：方案（docs/maintenance）、impl/03 §2 第 7 条、guide/03 §3、guide/06 §5、KNOWN-LIMITS“Saga 原生步骤容量”与新拆出的“投影 checkpoint 与 outbox 唤醒同盘”、性能报告与 README。生成器骨架里的容量数字仍是合并前的保守值，未改。
@@ -548,7 +550,7 @@
 - **saga：`MongoStore.Apply` 关闭操作只读一次 tombstone**（同一事务里原来读两次）。`Engine.Complete` 事务外的 `store.Get` 是乐观并发的唯一读，保留并补注释。
 - **nats：`JetStreamMsg.DeferSettle`**（显式选项，不调用时行为不变）：handler 推迟结算后返回 nil，回调立即处理下一条；`settle(nil)` ack、`settle(err)` 与返回 err 同规则 nak / term，幂等；推迟后 handler 仍返回错误或 panic 时按错误立即结算；订阅 `Closed` 在推迟的结算全部完成后才关闭（Drain 等后台 ack，Stop 取消 handler ctx）。
 - **saga：原生步骤消费者把“等回执可见 → 结算状态文档 → ack”移出 durable 的串行回调**。回调只做 Reserve + 步骤体，等待在后台，同时等待数受新增的 `StepConsumerConfig.ReceiptWaiters`（缺省 min(32, MaxAckPending)，不得超过 MaxAckPending）约束、满了回压。恰好一次、租约 / fence、截止过期分支、毒消息、Drain 语义不变；投影停顿不再挡住同 durable 后续命令。**行为变化**：同 durable 上同一实体的前后命令、前一条还没投影时，后一条撞实体屏障（`ErrFencedEntityPending`，交还租约、退避 nak 重投），不再在 durable 上排队。
-- **性能**（[报告](docs/performance/SAGA-OPT-20261018.md)，同机四阶段交替）：持续档 Server P50 正向 440 / 399 → 278 / 314 ms、全补偿 597 / 610 → 352 / 424 ms；吞吐上限未到正向 10/s（四阶段在正向 10/s、全补偿 10/s 都崩溃），正向 7～8/s、全补偿 5/s 从有终态不对变为全部正确、延迟秒级；新的第一瓶颈是投影器逐条处理带回执 / effect 的记录（checkpoint 负载下 50～55 ms）。生成器骨架（`steps.go` 注释、`roost help saga`、`add saga` next 提示、effect 消费者注释）与 codegen 文档的容量数字按新实测更新。
+- **性能**（[报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-OPT-20261018.md)，同机四阶段交替）：持续档 Server P50 正向 440 / 399 → 278 / 314 ms、全补偿 597 / 610 → 352 / 424 ms；吞吐上限未到正向 10/s（四阶段在正向 10/s、全补偿 10/s 都崩溃），正向 7～8/s、全补偿 5/s 从有终态不对变为全部正确、延迟秒级；新的第一瓶颈是投影器逐条处理带回执 / effect 的记录（checkpoint 负载下 50～55 ms）。生成器骨架（`steps.go` 注释、`roost help saga`、`add saga` next 提示、effect 消费者注释）与 codegen 文档的容量数字按新实测更新。
 - **测试（先红后绿）**：`TestProjectedEffectWakesTheOutboxWithoutWaitingForThePoll`、`TestOutboxKickWakesALoopCoalescesAndStopsCleanly`、`TestMongoApplyClosingAnOperationReadsItsTombstoneOnce`、`TestRealNatsNativeStepWaitsForItsReceiptOffTheDurableCallback`、`TestNativeStepReceiptWaitersAreBounded`、driver 推迟结算三项与 `TestRealJetStreamDeferredSettleKeepsTheDurableFlowingAndAcksAfterDrain`、`TestUninstalledTracePointsDoNotAllocate`；`TestRealStepsRunNativeStepsUnderTheRealNestScheduler` 改按“未被实体屏障挡回的执行”计次数。
 - **升级**：不改存储格式与线格式；`StepConsumerConfig` / `JetStreamMsg` / `ProjectorOptions` 只增字段，自定义 `IJetStream` 实现不设 `DeferSettle` 时原生步骤消费者退回在回调里等。先停旧再起新即可。
 - 文档：性能报告、KNOWN-LIMITS“Saga 原生步骤容量”、guide / impl 06-saga、guide / impl 03-dataengine、guide / impl 14-foundation、performance/README、DESIGN-TODO D12 注记、codegen 文档。
@@ -560,7 +562,7 @@
 - **去掉 `definition.go` 的 `Subscribe<Step>` / `Subscribe<Step>Compensation`**：有了 `Steps` 之后是第二套写法。**不兼容**：线上尚未部署，不做兼容；已有工程里旧生成的辅助函数是业务文件、不会被改写，继续能编译，新 add 的 saga 不再有。
 - **`roost add effect <topic> -consumer <svc>`**：`game/effects/<topic>.go`（载荷、`Topic<Topic>`、`Emit<Topic>(key, event)`，在 Nest 事务内发出 effect 的正式写法）与 `internal/service/<svc>/<topic>_consumer.go`（`start<Topic>EffectConsumer`：`kitdataengine.SubscribeEffects`，解不开 `PoisonEffect`，durable `<svc>-<topic>`；骨架默认返回错误，重投不丢）。主题点分、`saga.*` 保留；消费服务要有 dataengine Mod；effect 文件已存在时只建新消费服务的消费者。
 - **归属**：服务 Init / Shutdown 归业务、不改写；next 提示与 `roost help saga` / 新的 `roost help effect` 给出要加的两行。**doctor**（只读 WARN）：`saga-steps:<name>`（steps.go 有 `StartSteps` / `RegisterSteps`，却没有服务导入并调用，或调用了但所在包没有 `Steps.Drain(ctx)`）、`effect-consumer:<service>/<func>`（消费者没有被调用）；文本判据、注释不算调用。
-- **容量**：`steps.go` 注释、next 提示、`roost help saga` 与 guide/06 写明单进程每个 durable 约 14～18 条/s、原生步骤 saga 正向约 10/s、全补偿约 5/s 开始饱和、超过后重试放大、量大按 sid 分片并加 `WithAdmit`，链接 [Saga D12 前后对照](docs/performance/SAGA-D12-20261018.md)；KNOWN-LIMITS“Saga 原生步骤容量（单进程）”改为已决定。
+- **容量**：`steps.go` 注释、next 提示、`roost help saga` 与 guide/06 写明单进程每个 durable 约 14～18 条/s、原生步骤 saga 正向约 10/s、全补偿约 5/s 开始饱和、超过后重试放大、量大按 sid 分片并加 `WithAdmit`，链接 [Saga D12 前后对照](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-D12-20261018.md)；KNOWN-LIMITS“Saga 原生步骤容量（单进程）”改为已决定。
 - **game-demo**：赠礼 saga 保留手写接线（按 sid 准入与转交），生成的 `saga/gift_item/steps.go` 由 demo 模板换成指向 `gift_saga.go` 的说明；升级邮件已是 `SubscribeEffects` 写法，未改。
 - **测试**：修前（`5afd19fc`）红：`add saga -native` 报 `flag provided but not defined: -native`，`add effect` 报 `flag provided but not defined: -consumer`，`definition.go` 仍有 `Subscribe*`，`roost help effect` 报 unknown capability。新增 `codegen/internal/roost/add_saga_test.go`（生成物与登记顺序、错误输入不改工程、重复 add、服务无 nest、无 `-native` 的 Mongo 登记、doctor 两项、生成工程 build / vet / doctor）、`add_effect_test.go`（生成物、第二消费者、错误输入），真实依赖 `TestGeneratedSagaNativeStepsAndEffectConsumer`（新手工程 add saga -native + add effect → 填最小业务〔`testdata/saga_native`〕→ 真实 Mongo / NATS / DataEngine / Nest 上一笔正向、一笔补偿、一条 effect 消费恰好一次；挂在 `scripts/test-demo-generated.sh`）。
 - **升级**：生成器行为变化，不改存储格式与协议。已有工程的 saga 不受影响；想用新骨架时对新 saga 运行 `roost add saga … -native`。
@@ -576,7 +578,7 @@
 
 - 修复 `framework/nest/entitytimer.Host` 在 Tick 回调内每次从中间 DAO 重建另一份 Scheduler 的问题：回调登记的下一阶段节点已写入 DAO，最外层 Tick 却按旧堆报告期限（并以更大的序号覆盖内层报告），驱动索引丢掉它；回调取消 / 改期同轮已到期的另一节点返回成功，该节点仍按旧期限执行；回调显式改期自己返回 false。SLG 建造完成接行军、抵达后取消超时等合法组合受影响。
 - Host 只在 Tick 调用栈内复用这次的调度器（`Host.active`），回调内操作按 `timer.Scheduler` 的 Tick 内规则生效、不报告中间索引，最外层落定后统一报告一次；正常返回、panic 和事务回滚都不跨事务保留调度器。回调内的 `Timer` / `Timers` 读同一视图（见上一条）。
-- 测试：`TestHostCallbackOperationsShareTheCurrentTick`（登记下一阶段、取消同轮另一阶段、显式改期自己、改期同轮另一阶段、panic 清理、回滚后重试）；修前红：`next-stage timer persisted=1 but driver due=0001-01-01 00:00:00 +0000 UTC present=false`、`canceled stage still fired 1 times`、`current stage was not found`、`rescheduled stage fired 1 times at its old deadline`。[同机交替 10 轮基准](docs/performance/benchmarks/entitytimer-callback-view/)未观察到显著时间差异，分配不变；不推导生产容量。文档：guide/10-time §4、impl/10-time §2A。
+- 测试：`TestHostCallbackOperationsShareTheCurrentTick`（登记下一阶段、取消同轮另一阶段、显式改期自己、改期同轮另一阶段、panic 清理、回滚后重试）；修前红：`next-stage timer persisted=1 but driver due=0001-01-01 00:00:00 +0000 UTC present=false`、`canceled stage still fired 1 times`、`current stage was not found`、`rescheduled stage fired 1 times at its old deadline`。[同机交替 10 轮基准](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/entitytimer-callback-view)未观察到显著时间差异，分配不变；不推导生产容量。文档：guide/10-time §4、impl/10-time §2A。
 
 ### Nest 生成器：Sender 的局部名称避让业务参数
 
@@ -623,7 +625,7 @@
 - **修复：转交的原生步骤与消费者互相 `ErrIdentityConflict`，消息 nak 到 MaxDeliver**。两个 game 进程的跨 sid 赠礼演练里，命令经 demo 的 bus（MessagePack）转交回来，时间字段是同一时刻、换成本地时区；命令身份摘要是 `sha256(json.Marshal(command))`，协调器写的是 UTC，JSON 文本不同。转交方先认领时，持有原消息的消费者读不到自己的回执，过截止后仍冲突，nak 到 MaxDeliver（缺省 25000，约 8.7 天），占住共享 durable 的 MaxAckPending：第一轮结束 5 分钟后 `game-gift-debit` 11 条、`debit-undo` 2 条仍在重投。业务值正确（重复执行被挡住），坏在投递收不了尾；只在主机时区不是 UTC 时出现。现在 `commandDigest` 摘要前把 `DeadlineAt` / `CreatedAt` 换成 UTC，`BindCommand` 写回执改用同一摘要（原先自己 `json.Marshal` 一份）。协调器产生的命令本来就是 UTC，已有摘要不变。修前红：`TestRunHandedOverSharesTheClaimWithTheConsumer/a_handoff_whose_times_came_back_in_another_zone` 报 `the consumer's delivery after a handoff that crossed the bus: saga: idempotency identity conflict`；修后演练三个阶段结束时四个步骤 durable 的 ack_pending 全为 0。
 - **修复：建立 / 更新 JetStream 持久消费者失败时报错点名流与 durable，不可变字段冲突给处置命令**。nats-server 2.14.5 实测：`Subscribe`（`CreateOrUpdateConsumer`）对已存在 durable 原地更新 MaxDeliver、MaxAckPending、AckWait、FilterSubject，投递进度保留（D12 改的 `game-level-up-mail` 参数升级即生效，不会静默沿用旧值）；DeliverPolicy 等不可变字段不同则服务器拒绝（10012 `deliver policy can not be updated`），原报错不说是哪个流、哪个 durable。现在报 `nats jetstream: consumer "<durable>" on stream "<流>" already exists with a setting that cannot be changed in place; stop every process that uses it, delete it (nats consumer rm <流> <durable>) and start again — ... the old delivery position is lost`。修前红：`TestRealJetStreamSubscribeUpdatesAnExistingDurableInPlace` 报 `immutable conflict error "nats: API error: code=500 err_code=10012 description=deliver policy can not be updated" does not name "D12V_CONSUMER_…"`。
 - **验证（无行为变化）**：`TestRealStepsRunNativeStepsUnderTheRealNestScheduler`——正式 Mongo / NATS / DataEngine / Nest / saga Mod 下原生步骤的正向、业务拒绝补偿、执行中与完成后的重复投递、结果未知、调用前失败、实体屏障交还租约、投影停到截止后跳过与驱逐，余额恰好一次；生成 game-demo 两个 game 进程的跨 sid 赠礼（转交、SIGTERM 时 `Drain` 约 2.1s、kill -9 重启）恰好一次。记录见 DESIGN-TODO D12“验证结果”。
-- **性能**：`TestRealNativeStepsPerformance`（原生步骤经真实 Nest + DataEngine；glue 变体是 D12 之前的手写组装）与 framework/saga 旧路径对照，`79d15114` 对 `63b63fa8` 同机交替：旧路径代码相同、两版本都通过；原生步骤手写与 `Steps` 同档位无可测差异；**原生步骤单进程正向 10/s、全补偿 5/s 起饱和**（不是 D12 引入），登记 KNOWN-LIMITS 待维护者决定。报告 [Saga D12 前后对照](docs/performance/SAGA-D12-20261018.md)。
+- **性能**：`TestRealNativeStepsPerformance`（原生步骤经真实 Nest + DataEngine；glue 变体是 D12 之前的手写组装）与 framework/saga 旧路径对照，`79d15114` 对 `63b63fa8` 同机交替：旧路径代码相同、两版本都通过；原生步骤手写与 `Steps` 同档位无可测差异；**原生步骤单进程正向 10/s、全补偿 5/s 起饱和**（不是 D12 引入），登记 KNOWN-LIMITS 待维护者决定。报告 [Saga D12 前后对照](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-D12-20261018.md)。
 - **B（生成器）评估**：A 的 API 不需要改形状；建议等原生步骤容量的决定后再做（DESIGN-TODO D12“B 评估”）。
 - **升级**：线上尚未部署；两处修复不改存储格式，先停旧再起新即可。
 
@@ -692,7 +694,7 @@
 
 - **缺陷**（`300d728a` 起，即 Scheduler 重构后）：最外层收尾先把等待节点全部入堆再依次 upsert。前一个 upsert 的钩子重入 Tick 时，排在后面、还没收到 upsert 的节点可能到期：Tick 内新建的一次性节点只收到删除，按 upsert 推进 ID 种子的宿主漏存它的 ID，重建后复用；触发中显式改期自己的节点收到一次钩子不持有的删除。另外，在到期出堆的删除通知里取消（`RemoveTimer` 返回 true）或改期该节点，回调仍会执行一次。生成工程的 World 钩子只写 DAO、不调用调度器，不受影响；钩子里调用调度器的宿主受影响。
 - **修复**：取消与到期出堆共用同一规则——从未通知过的 ID 先补一次 upsert，钩子持有的才发删除；出堆通知里被取消或改期的节点本次不执行回调。公开接口与存储格式不变。最初由 `09846b5f` 报告并只修了第一种情况，本轮复核扩展为统一规则。
-- **测试**：新增组合表 `TestHookOperationsOnEveryNodeStateItCanSee`（持久化钩子这一调用位置 × 钩子可见的过渡状态 × 改期 / 取消 / 重入 Tick / 不操作，28 组），修前 10 组红；原有 82 组组合表加上“每个分配过的 ID 都经过 upsert”检查。修前原文与基准见[证据](docs/performance/benchmarks/timer-announce-reentrant-hook/)，分析见[重构方案 §9](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/REFACTOR-2026-10-17-timer-scheduler.md#9-实施后发现)。
+- **测试**：新增组合表 `TestHookOperationsOnEveryNodeStateItCanSee`（持久化钩子这一调用位置 × 钩子可见的过渡状态 × 改期 / 取消 / 重入 Tick / 不操作，28 组），修前 10 组红；原有 82 组组合表加上“每个分配过的 ID 都经过 upsert”检查。修前原文与基准见[证据](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/timer-announce-reentrant-hook)，分析见[重构方案 §9](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/REFACTOR-2026-10-17-timer-scheduler.md#9-实施后发现)。
 
 ### 生成器：`roost add endpoint` 从服务器业务钟填业务时间参数（新用户试用第四轮登记项 2）
 
@@ -750,7 +752,7 @@
 - **结构**：`byID` 持有全部活节点；节点带显式状态 `stateHeap` / `stateFiring` / `stateQueued` / `stateDetached`（取消即 detach）。`NewTimer*` / `ChangeTimer` / `RemoveTimer` / 回调返回值在调用当下改节点状态与期限（当时取 now、复制 payload）；最外层 Tick 收尾只把 `stateQueued` 节点入堆，再按入队顺序各发一次 upsert。删除 `deferred []func()`、`firing` 栈、`firingChanges` / `firingChange`、`addNode`。`scheduler.go` 非注释代码 424 → 417 行。
 - **修复**：收尾时 `onChange` 钩子 panic，旧实现的推迟闭包与控制表不清空，同一 Scheduler 再 Tick 会重放——新建的子定时器被第二次压入堆、显式改期被重放一次 upsert、残留控制表让节点在显式期限触发后不按返回值重排。现在先落定状态（入堆、清 `running`、取走队列）再回调，钩子 panic 后没有可重放的残留；剩余变化不再回调，宿主应把这次 Tick 当失败（World 每次重建 Scheduler，不受影响；长期复用同一个 Scheduler 的宿主受影响）。修前红（基线 `1d55586f`，`TestOnChangePanicDuringSettlementDoesNotReplay` 三个子用例）：`an idle Tick replayed the failed settlement: events=[1:2@1h0m0s] nodes 1 -> 2`、`events=[1:1@1m0s] nodes 1 -> 1`、`after firing at the explicit deadline fired=2 next=1m0s nodes=1, want fired 2 and one node due 1m1s`。
 - **语义不变**：公开 API、`Node` 持久字段、钩子最终状态、Tick 内操作返回值都不变。新增 `TestOperationsOnEveryNodeStateDuringTick`（改期 / 取消 / 不操作 × 在堆中 / 本轮到期 / 触发中 / 触发中已改期 / 新建待入堆 / 改期移出 / 已取消 / 本轮已结束 / 已按返回值重排 / 未知 ID × 返回 0 / 负 / 正 × 直接 / 经重入 Tick，82 组）在重构前的基线上同样全部通过。只有钩子的**中间序列**变化：同一 Tick 内多次改期只在收尾发一次 upsert；收尾按节点首次入队顺序回调；取消等待放回的节点时在取消调用里立即发删除（基线在收尾时先 upsert 再删除）；Tick 内新建即取消仍先 upsert 再删除（宿主据此推进持久 seed）。逐项对照见[方案](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/REFACTOR-2026-10-17-timer-scheduler.md)。
-- **性能**（同机交替 10 轮，1 万常驻定时器、每 Tick 触发 100 个，[样本](docs/performance/benchmarks/timer-scheduler-refactor-20261017/)）：按返回值重排 −14.5%；回调显式改期自己 −20%、改期其他节点 −18%（分配 500 / 400 → 300 次/Tick）；回调内新建持平（分配 600 → 500）；World 式重建 + Tick 持平；Tick 外登记 + 取消一对 +3.1%（约 3ns，状态记账）。`Node` 大小不变（私有 `index` 改为 int32 与状态字段共占 8 字节）。
+- **性能**（同机交替 10 轮，1 万常驻定时器、每 Tick 触发 100 个，[样本](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/timer-scheduler-refactor-20261017)）：按返回值重排 −14.5%；回调显式改期自己 −20%、改期其他节点 −18%（分配 500 / 400 → 300 次/Tick）；回调内新建持平（分配 600 → 500）；World 式重建 + Tick 持平；Tick 外登记 + 取消一对 +3.1%（约 3ns，状态记账）。`Node` 大小不变（私有 `index` 改为 int32 与状态字段共占 8 字节）。
 - 文档：[impl/10-time §2](docs/framework/impl/10-time.md#2-必须保持的契约)、[guide/10-time §3](docs/framework/guide/10-time.md#3-scheduler)。
 
 ### Scheduler：回调内显式改期不会被返回值丢掉或被重入 Tick 提前触发
@@ -769,7 +771,7 @@
 
 - 基线 `00d35150` 下，区域 AOI 不限容量，目标在同一距离档内移动没有事件；Cluster 只随区域事件重算 `MaxVisible`，因此更近的目标仍被抑制、远离的旧目标继续占位，观察者移动也有同样问题。SLG 行军视图设置可见上限时会漏掉已靠近的部队。`TestClusterMaxVisibleReselectsOnSameBandMovement` 修前 10 个业务子用例失败（实际仍为 `[2]`，应换为 `[3]`），单区域和边界镜像均可复现。
 - 现在目标移动通过旧、新位置的块反向索引标记观察者，观察者移动标记自身；先归并区域事件，再统一重排，保留跨区净变化与同距 ID 规则。覆盖重复 Add 的移动语义；不限容量时不增加距离重排。未改正式 Interest 的政策批次路径。
-- **复核修正（2026-10-17）**：原修法对旧、新位置块上每个观察者都完整排序重排，容量生效的密集负载（新增 `BenchmarkClusterFlushRandomWalkCapped`：1000 目标、100 观察者、上限 16）每步 5.8ms → 62ms、分配 ×7.8。现在没收到区域事件的观察者先做 O(候选数) 的容量边界检查（`crossesCapacityLocked`），只在移动的目标跨过第 N 名时才重排，观察者 ID 直接从块索引追加到复用的暂存切片：同一基准 10.7ms、分配 13.1k → 14.5k；不设容量的基准无差异（修前低是因为同档移动不重选）。新增 `TestClusterCapacityStaysNearestAmongCandidates`（越过进入 / 离开半径、跨接缝的随机行走，对照候选内最近 N），逐一去掉边界检查的两个分支都会变红。容量层没有滞回，同负载 Enter 数 +15.6%，见 KNOWN-LIMITS“AOICluster 容量抖动”。[样本](docs/performance/benchmarks/aoi-cluster-reselect-20261017/)
+- **复核修正（2026-10-17）**：原修法对旧、新位置块上每个观察者都完整排序重排，容量生效的密集负载（新增 `BenchmarkClusterFlushRandomWalkCapped`：1000 目标、100 观察者、上限 16）每步 5.8ms → 62ms、分配 ×7.8。现在没收到区域事件的观察者先做 O(候选数) 的容量边界检查（`crossesCapacityLocked`），只在移动的目标跨过第 N 名时才重排，观察者 ID 直接从块索引追加到复用的暂存切片：同一基准 10.7ms、分配 13.1k → 14.5k；不设容量的基准无差异（修前低是因为同档移动不重选）。新增 `TestClusterCapacityStaysNearestAmongCandidates`（越过进入 / 离开半径、跨接缝的随机行走，对照候选内最近 N），逐一去掉边界检查的两个分支都会变红。容量层没有滞回，同负载 Enter 数 +15.6%，见 KNOWN-LIMITS“AOICluster 容量抖动”。[样本](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/aoi-cluster-reselect-20261017)
 - 回归：`go test ./framework/sync/entitysync/policy -run '^TestCluster' -count=1`；连续移动对照独立最近 N 排序，同时核对增量事件还原的可见集。接口与存储格式不变，临时规避是不用 Cluster 容量限制、在业务层自行选取目标；具体规则见 [Block AOI](docs/framework/INTEREST-BLOCK-AOI.md#4-block-与-observer)。
 
 ### Entity Sync / 自身视图：连接还在时重开的会话不再被客户端静默丢弃，on_change 下丢会话不再紧循环耗尽重开次数
@@ -860,7 +862,7 @@
 - upgrade-compat 新增 `player-access-project` lane：用 v1.26.1 生成器生成 game-demo（启用玩家接入），在接入目录里放一个业务文件，严格按 v1.27.0 发布说明 B1 的三步迁移后 `project sync` / `upgrade`、build / vet / test / glsvet、第二次升级 no-op，并核对与当前生成器新生成的 game-demo 除 go.mod / go.sum 外逐字节一致。本地实跑时发现 B1 第二步缺项：v1.26.x game-demo 的 import 带别名 `player_agent "…/game/player_agent"`，只改路径和 `player_agent.` 标识符编译报 `undefined: playeraccess`（目录内业务文件的 `package player_agent` 子句同理）；CHANGELOG `[v1.27.0]`、v1.27.0-NOTES B1 与 ACCESS-SYNC-FOLLOWUPS 改为“`.go` 文件里整词 `player_agent` 一律改为 `playeraccess`”并给出命令。
 ### 性能
 
-- 2026-10-15 追加复测（[性能四项 §5](docs/performance/PERF-ROUND-20261015.md)）：长尾方案 B（`GOMAXPROCS=8`，其余同 v1.27.0 30 分钟重档）无效——P99 不变、各路径 >50ms 条数为基线 3～10 倍，不改默认与部署建议，剩余方向是独占机器 / Linux 复测。Saga 容量夹具按计划启动分钟输出分段分位，全补偿 10/s × 10m 复测 P99 0.64s、十段无增长趋势，首测 1.47s 未复现。
+- 2026-10-15 追加复测（[性能四项 §5](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/PERF-ROUND-20261015.md)）：长尾方案 B（`GOMAXPROCS=8`，其余同 v1.27.0 30 分钟重档）无效——P99 不变、各路径 >50ms 条数为基线 3～10 倍，不改默认与部署建议，剩余方向是独占机器 / Linux 复测。Saga 容量夹具按计划启动分钟输出分段分位，全补偿 10/s × 10m 复测 P99 0.64s、十段无增长趋势，首测 1.47s 未复现。
 - `framework/nestwal` 记录编码去反射：`encodeRecord` 及其写 mutation / effect / receipt / Remote 提交的各段由 `binary.Write`（每个定长字段一次反射加接口装箱）改为 `binary.BigEndian.AppendUintXX` 追加到一次预分配的切片。落盘格式 codec7 不变、逐字节一致：新增 `codec_reference_test.go` 保留改造前的 `binary.Write` 实现作参照，2004 条随机与样例记录（Put / Patch / Delete、Remote 更新与删除、负数有符号字段、空与非空字段）逐字节对照并解码往返，超限字段的拒绝与错误文本也逐项对照；人为改错字节序、宽度或取值的四种变体都会让对照变红。编码在 `Enqueue` 同步完成，调用方此时持有实体锁。同机交替 10 轮 benchstat：编码矩阵 24 组全部显著变快（−8.8%～−63.0%），分配次数 −15%～−98%；WAL 追加与 Nest→WAL 端到端由 fsync 主导，耗时无显著变化、无退化（docs/performance/PERF-ROUND-20261015.md §2）。解码侧未改。
 
 ### 测试与工具
@@ -1040,7 +1042,7 @@
 
 ## [v1.24.0] - 2026-10-08
 
-稳定版验收：Remote 80 TPS连续1h、Nest普通业务与heartbeat四组负载、on_change P99≤50ms均满足本轮业务指标；pretag与真实资源故障矩阵21/21通过。Sync偶发长尾及Saga全补偿20/s饱和如实保留，范围见[性能报告](docs/performance/STABLE-v1.24.0.md)。
+稳定版验收：Remote 80 TPS连续1h、Nest普通业务与heartbeat四组负载、on_change P99≤50ms均满足本轮业务指标；pretag与真实资源故障矩阵21/21通过。Sync偶发长尾及Saga全补偿20/s饱和如实保留，范围见[性能报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)。
 
 ### 撤销 DAO 自动迁移与旧兴趣发布端兼容（2026-10-08）
 
@@ -1072,7 +1074,7 @@
 
 - **macOS/Linux验收收口（RR-20261008-40/41）**：KCP E2E先排空机器人再取消网络；Remote用可控时间分别验证合法缓存命中与过期回源，保留原收敛和业务错误断言。生产语义不变。平台支持范围按维护者要求限定macOS/Linux。见[记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/review/FOLLOWUP-MAC-LINUX-2026-10-08.md)。
 
-- 新增正式生成 Nest 消息/Entity/heartbeat 性能入口及真实 Mongo/JetStream Saga 正向/补偿性能入口；稳定版完整性能与发布验收见 [记录](docs/performance/STABLE-v1.24.0.md)。
+- 新增正式生成 Nest 消息/Entity/heartbeat 性能入口及真实 Mongo/JetStream Saga 正向/补偿性能入口；稳定版完整性能与发布验收见 [记录](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)。
 
 ## [v1.23.1] - 2026-10-08
 

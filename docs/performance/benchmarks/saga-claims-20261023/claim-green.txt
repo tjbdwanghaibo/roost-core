@@ -1,3 +1,0 @@
-ok  	github.com/tjbdwanghaibo/roost-core/framework/saga	7.065s
-ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest	1.111s
-ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver	2.211s

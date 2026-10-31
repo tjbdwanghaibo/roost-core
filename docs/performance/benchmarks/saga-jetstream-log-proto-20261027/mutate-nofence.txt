@@ -1,9 +1,0 @@
-=== RUN   TestFenceRejectsStaleWriter
-    e2e_test.go:213: event chain forked (A err=<nil>):
-        command s2:f:0:1 dispatched 2 times
-        command s2:f:1:1 dispatched 2 times
-        saga s2 versions [1 2 3 1 2 3]
---- FAIL: TestFenceRejectsStaleWriter (11.73s)
-FAIL
-FAIL	github.com/tjbdwanghaibo/roost-core/scripts/perf/saga-jslog-proto	12.028s
-FAIL

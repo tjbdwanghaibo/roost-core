@@ -1,3 +1,0 @@
-mongo-forward-c32	load_before=3.82	load_after=6.22	seconds=63
-mongo-forward-c64	load_before=5.72	load_after=5.31	seconds=63
-mongo-forward-c128	load_before=5.31	load_after=5.64	seconds=65

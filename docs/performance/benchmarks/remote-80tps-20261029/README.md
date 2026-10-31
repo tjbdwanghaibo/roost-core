@@ -1,6 +1,6 @@
 # Remote 负载回归：80TPS × 15 分钟（2026-10-29，v1.31.0 发布后）
 
-main `7838ffe5`（Remote 链路与 v1.31.0 相同），共享隔离环境，`scripts/perf/remote.sh`，参数与 [NIGHT-20261022 §8](../../NIGHT-20261022.md#8-第-9-项remote-80tps--15-分钟) 相同：`ROOST_REMOTE_CPU=4 RATE=80 POLICY=strict SESSIONS=1000 ENTITIES=10000 WORKERS=8 FAST_QUEUE=4096 IO_WORKERS=1024 SLOW_QUEUE=16 WRITE_LIMIT=256 WAL_LIMIT=512 PROJECTION_WORKERS=8 STAGE_METRICS=1 DURATION=15m TIMEOUT=1h`，`GOFLAGS=-p=1`，干净 worktree，单样本。整轮 20:52～21:08（约 16 分钟）。
+main `7838ffe5`（Remote 链路与 v1.31.0 相同），共享隔离环境，`scripts/perf/remote.sh`，参数与 [NIGHT-20261022 §8](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NIGHT-20261022.md#8-第-9-项remote-80tps--15-分钟) 相同：`ROOST_REMOTE_CPU=4 RATE=80 POLICY=strict SESSIONS=1000 ENTITIES=10000 WORKERS=8 FAST_QUEUE=4096 IO_WORKERS=1024 SLOW_QUEUE=16 WRITE_LIMIT=256 WAL_LIMIT=512 PROJECTION_WORKERS=8 STAGE_METRICS=1 DURATION=15m TIMEOUT=1h`，`GOFLAGS=-p=1`，干净 worktree，单样本。整轮 20:52～21:08（约 16 分钟）。
 
 目的：补上故障矩阵没压到的部分——v1.31.0 的投影器按实体并行（D5）、删除 lease fence（D6）、Nest 按 handler 异步完成与同实体提交序（N1 / N2）在 1 万实体负载下的表现。
 

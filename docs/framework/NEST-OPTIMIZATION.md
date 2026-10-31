@@ -1,6 +1,6 @@
 # Nest 消息热路径优化设计
 
-本文说明 Nest 如何减少每条消息的框架开销。**状态：本轮六项局部优化已实施；目标视图缓存与指标预绑定明确延期，未引入相应缓存。最终选择与证据见第 8 节及 [性能报告](../performance/NEST-HOT-PATH-20261013.md)。**
+本文说明 Nest 如何减少每条消息的框架开销。**状态：本轮六项局部优化已实施；目标视图缓存与指标预绑定明确延期，未引入相应缓存。最终选择与证据见第 8 节及 [性能报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NEST-HOT-PATH-20261013.md)。**
 
 评估日期：2026-10-13。源码基线：`fd13e178`。此前 `58d27e7a` 已完成 Msg 字段整理与客户端目标存储优化，不属于本次待实施内容，详情见 [Nest 三池与 Await](NEST-AWAIT.md)。
 
@@ -144,17 +144,17 @@ go tool pprof -top -alloc_space artifacts/nest-review-20261013/nest.test.exe art
 
 远端 `58d27e7a`、`fd13e178`、`cc635481` 与本地 `533d819a` 已合并到 `f1fd7fb8`。核对了客户端目标所有权、Msg 字段重排、队列 lane 状态与 worker option 的复用；在这些新增改动中未发现确定缺陷。图谱代际为 `2026-10-10T03:58:22Z`，变更文件按当前源码补证，不能视作全仓无缺陷结论。
 
-第一批保留分组容量预分配，不改变校验阶段或 Handler 的顺序、重复项、组边界。新增正式 Client 链路基准以及业务顺序回归；输入隔离与跨组 append 隔离沿用现有测试。完整样本见 [基线](../performance/benchmarks/nest-hot-path-20261013/before.txt) 和 [分组预分配](../performance/benchmarks/nest-hot-path-20261013/group-prealloc.txt)。环境为 Apple M5、macOS/arm64、Go 1.27.0、GOMAXPROCS=0（实际 10）；基准是内存 Getter，不代表游戏网络或持久容量。
+第一批保留分组容量预分配，不改变校验阶段或 Handler 的顺序、重复项、组边界。新增正式 Client 链路基准以及业务顺序回归；输入隔离与跨组 append 隔离沿用现有测试。完整样本见 [基线](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/nest-hot-path-20261013/before.txt) 和 [分组预分配](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/nest-hot-path-20261013/group-prealloc.txt)。环境为 Apple M5、macOS/arm64、Go 1.27.0、GOMAXPROCS=0（实际 10）；基准是内存 Getter，不代表游戏网络或持久容量。
 
-第二批保留两项局部改动：`ensureNestContext` 直接传 Snapshot option，避免临时可增长切片导致闭包逃逸；`pushCurrentNestDispatchMsg` 遇到同 goroutine 的同消息只省登记，不省 fctx、Guard 或事务作用域。新增同消息/不同消息嵌套与 panic 恢复回归，既有 Context、Await、Remote 和阻塞约束用例通过 5 轮。见 [分配采样](../performance/benchmarks/nest-hot-path-20261013/alloc-profile.txt) 与 [上下文样本](../performance/benchmarks/nest-hot-path-20261013/context.txt)。
+第二批保留两项局部改动：`ensureNestContext` 直接传 Snapshot option，避免临时可增长切片导致闭包逃逸；`pushCurrentNestDispatchMsg` 遇到同 goroutine 的同消息只省登记，不省 fctx、Guard 或事务作用域。新增同消息/不同消息嵌套与 panic 恢复回归，既有 Context、Await、Remote 和阻塞约束用例通过 5 轮。见 [分配采样](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/nest-hot-path-20261013/alloc-profile.txt) 与 [上下文样本](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/nest-hot-path-20261013/context.txt)。
 
 指标预绑定明确延期：新采样仍显示指标编码分配，但公共 Registry 目前无绑定句柄接口，Reset、series 限额及动态标签需要一并设计。不能为本轮 Nest 优化另建全局句柄缓存。目标视图缓存（包括慢准备、Cast 复用）也暂不引入：现有直接 Msg、Clone、重排、广播和续行的校验阶段不同，`normalizeFullIDs` 本次只占约 1.42% 分配字节；先保留显式校验，不用跳过校验换取收益。这两项是候选延期，不能表述为已完成缓存复用。
 
-第三批临时存储保留两项：锁列表与 Touch 列表一次分配、切成容量不重叠的区间；分组快照在取锁调用栈内用 4 项数组，大集合按需扩容，重试重新采集，不进入 release 闭包、不引入对象池。Group/Multi/Touch/Release/Cast 回归重复 5 轮通过。四实体异步热点样本在上下文批次基础上减少 192 B/op、2 allocs/op，见 [临时存储样本](../performance/benchmarks/nest-hot-path-20261013/storage.txt)。
+第三批临时存储保留两项：锁列表与 Touch 列表一次分配、切成容量不重叠的区间；分组快照在取锁调用栈内用 4 项数组，大集合按需扩容，重试重新采集，不进入 release 闭包、不引入对象池。Group/Multi/Touch/Release/Cast 回归重复 5 轮通过。四实体异步热点样本在上下文批次基础上减少 192 B/op、2 allocs/op，见 [临时存储样本](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/nest-hot-path-20261013/storage.txt)。
 
-第三批前驱边保留去重：共享队列锁内，同一前驱在本次准入追加的最后后继必为当前 job，因此不需要 map 或额外前驱数组；准入容量先判断是否存在前驱，接受后一起登记边和计数。新增交错 ID 的双前驱合流及后继分流回归，跨业务池、io 池及 Remote 排空既有用例通过 5 轮。8 worker、32 组热点异步样本由 25374 B/op、53 allocs/op 降到 22901 B/op、45 allocs/op；中位时间 28013→25705 ns/op。独立实体异步 32 组时间约有 2.2% 波动、分配基本不变，不能宣称所有场景提速。见 [去重前](../performance/benchmarks/nest-hot-path-20261013/edges-before.txt) / [去重后](../performance/benchmarks/nest-hot-path-20261013/edges-after.txt)。
+第三批前驱边保留去重：共享队列锁内，同一前驱在本次准入追加的最后后继必为当前 job，因此不需要 map 或额外前驱数组；准入容量先判断是否存在前驱，接受后一起登记边和计数。新增交错 ID 的双前驱合流及后继分流回归，跨业务池、io 池及 Remote 排空既有用例通过 5 轮。8 worker、32 组热点异步样本由 25374 B/op、53 allocs/op 降到 22901 B/op、45 allocs/op；中位时间 28013→25705 ns/op。独立实体异步 32 组时间约有 2.2% 波动、分配基本不变，不能宣称所有场景提速。见 [去重前](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/nest-hot-path-20261013/edges-before.txt) / [去重后](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/nest-hot-path-20261013/edges-after.txt)。
 
-最终 build、vet、全仓默认测试、相关 race 和根包文档检查通过。全仓回归同时发现并修复了已有 Nest 配置绕过声明入口的问题，未豁免守卫。96 组矩阵各保留 5 个样本；首次单 worker 双实体慢样本保留，交替二进制复核未复现稳定退化。详见 [最终报告](../performance/NEST-HOT-PATH-20261013.md)。本轮未复跑 15 分钟游戏混合负载，未关闭此前网络长尾及跨机验证限制。
+最终 build、vet、全仓默认测试、相关 race 和根包文档检查通过。全仓回归同时发现并修复了已有 Nest 配置绕过声明入口的问题，未豁免守卫。96 组矩阵各保留 5 个样本；首次单 worker 双实体慢样本保留，交替二进制复核未复现稳定退化。详见 [最终报告](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NEST-HOT-PATH-20261013.md)。本轮未复跑 15 分钟游戏混合负载，未关闭此前网络长尾及跨机验证限制。
 
 ## 9. Nest 优化提交的独立复核
 

@@ -59,13 +59,13 @@
 
 本组是 2026-10-22 的历史负载观察，不是当前版本容量结论。Saga 此后切换 JetStream，lease fence 已删除；不能再把下述围栏现象列为当前故障。后续增强按当前正式链路重新定位。
 
-**现象与数据**（[压测清单 §3 结果](../performance/V1310-PRERELEASE-20261022.md#3-game-demo-loadtest-100--200-人)，发版候选 `3d727c2f`，单机私有环境，100 / 200 个机器人**同一秒起跑**，单 IP 上限 512）：connect 全部成功、`object limit exceeded` 0，但成功只有 24 / 100、30 / 200。三个热点：
+**现象与数据**（[压测清单 §3 结果](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/V1310-PRERELEASE-20261022.md#3-game-demo-loadtest-100--200-人)，发版候选 `3d727c2f`，单机私有环境，100 / 200 个机器人**同一秒起跑**，单 IP 上限 512）：connect 全部成功、`object limit exceeded` 0，但成功只有 24 / 100、30 / 200。三个热点：
 
-- **`enter_game` 写全服 World 实体、上单场景实体**：200 人时同一批登录里 `Sync_RecordEnter`（全服一个 World 实体）106 次、`MultiSync_EnterScene`（一个场景实体）110 次在请求期限内没轮到（`nest: sync canceled`），复制会话因此没打开，110 个 `scene_ready` 失败；`player_tcp_dispatch_timeout_total` 122。同一实体在 strict 持久化下约 108 TPS（[GENERATED-TCP-STRICT](../performance/GENERATED-TCP-STRICT-20261020.md)），一秒内两百次登录必然排队。
+- **`enter_game` 写全服 World 实体、上单场景实体**：200 人时同一批登录里 `Sync_RecordEnter`（全服一个 World 实体）106 次、`MultiSync_EnterScene`（一个场景实体）110 次在请求期限内没轮到（`nest: sync canceled`），复制会话因此没打开，110 个 `scene_ready` 失败；`player_tcp_dispatch_timeout_total` 122。同一实体在 strict 持久化下约 108 TPS（[GENERATED-TCP-STRICT](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/GENERATED-TCP-STRICT-20261020.md)），一秒内两百次登录必然排队。
 - **gift saga 步骤排队**：100 人时 41 次 `saga: step command expired before it ran`（步骤超时 5s，命令排队到期才轮到），机器人 10 秒轮询窗口内 69 个 saga 未到终态；运行结束后 132 个 saga 全部到终态。gift 原生步骤围栏期间同一玩家的心跳提交被拒 9 次（`lease-fenced step awaiting projection`，下一拍照常）。
 - **`found_guild` 慢派发**：Multi 同时持公会目录实体与玩家，100 人时慢派发 27 次（最长 2.96s）、失败 3 次，200 人时慢派发 36 次、失败 6 次。
 
-**按秒爬坡结果（2026-10-23 凌晨，[清单 §3](../performance/V1310-PRERELEASE-20261022.md#3-game-demo-loadtest-100--200-人)）**：每秒起跑 2 个机器人时 100 / 200 人全部通过（场景 p95 9.2 / 11.2s）；每秒 4 个时 56 / 100、16 / 200；每秒 10～20 个时 0～20%。瓶颈依次是 gift saga（每个机器人两次原生步骤 saga，每秒 4 个机器人 ≈ 每秒 8 个 saga，正是原生步骤单进程容量）、等奖励邮件的 effect 链、`found_guild` 的公会目录实体（每秒 2 个时已慢派发上百次）；同秒起跑才出现的 World / 场景实体超时在爬坡下没有再出现。没有跨轮的状态复用（每轮新账号）。按现有证据没有框架缺陷。
+**按秒爬坡结果（2026-10-23 凌晨，[清单 §3](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/V1310-PRERELEASE-20261022.md#3-game-demo-loadtest-100--200-人)）**：每秒起跑 2 个机器人时 100 / 200 人全部通过（场景 p95 9.2 / 11.2s）；每秒 4 个时 56 / 100、16 / 200；每秒 10～20 个时 0～20%。瓶颈依次是 gift saga（每个机器人两次原生步骤 saga，每秒 4 个机器人 ≈ 每秒 8 个 saga，正是原生步骤单进程容量）、等奖励邮件的 effect 链、`found_guild` 的公会目录实体（每秒 2 个时已慢派发上百次）；同秒起跑才出现的 World / 场景实体超时在爬坡下没有再出现。没有跨轮的状态复用（每轮新账号）。按现有证据没有框架缺陷。
 
 **下一步（优化方向）**：gift saga 的吞吐（原生步骤每进程约 8/s；demo 场景可以少发或合并 saga、或拉长机器人的轮询窗口）；奖励邮件 effect 链在 saga 高峰下的延迟；World 计数改成异步 / 合批、登录上地图与计数拆出关键路径；公会目录分片。机器人阈值按冒烟规模定，压测规模另给阈值。
 
@@ -75,7 +75,7 @@
 
 **数据**（[HB-DRIVEN-LOAD §4A.3](../performance/HB-DRIVEN-LOAD-20261021.md#4a-2026-10-22-晚正式测量v1310-发版前压测第-6-项)，nest-game V1290 重档参数、嵌入 TCP + 场景 Sync、各 15 分钟、单样本）：帧回调（ticker）→ 心跳驱动（缺省批量投递，组 4 / 200µs）时，普通业务消息**服务端** P50 / P95 / P99 0.08 / 0.39 / 0.87 → 0.51 / 1.58 / 2.13ms；同时进程 CPU 约 2.6 → 2.1 核、short 等待峰值 2614 → 139、Sync 提交→客户端 P99 9.42 → 6.07ms；业务端到端（混合口径）P99 11.25 → 11.44ms 基本不变。同方向的微基准：[NEST-BATCH-HEARTBEAT §3G](../performance/NEST-BATCH-HEARTBEAT-20261021.md#3g-2026-10-22-晚参数补测结果v1310-发版前压测第-1-项) 业务 p99 单目标 0.095 → 批量 0.149ms（回调是几十纳秒的内存计算）；nest-game 的心跳回调带事务、更重，差距更大。
 
-**要查**：批量作业一次占 worker 的时长分布（组大小 × 回调耗时，时间片在每组结束后才检查）；改为组 4 / 100µs（维护者 2026-10-22 晚已定，已实施 `ee01221e`）之后在 nest-game 上复测；业务消息与批量作业的公平性（是否需要按池分开或让业务优先）；单目标 `heartbeat.delivery: dispatch` 在同参数下的对照。另一个数据点（[清单 §7 结果](../performance/V1310-PRERELEASE-20261022.md#7-可选移动-200ms5hz口径缺省已改历史口径显式-100ms)，投递对比夹具 3 轮）：登记档位从 100ms 换成 200ms（拍数减半）时，批量投递的业务 p99 反而 0.152 → 0.312ms，单目标 0.092 → 0.077ms，原因未查。
+**要查**：批量作业一次占 worker 的时长分布（组大小 × 回调耗时，时间片在每组结束后才检查）；改为组 4 / 100µs（维护者 2026-10-22 晚已定，已实施 `ee01221e`）之后在 nest-game 上复测；业务消息与批量作业的公平性（是否需要按池分开或让业务优先）；单目标 `heartbeat.delivery: dispatch` 在同参数下的对照。另一个数据点（[清单 §7 结果](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/V1310-PRERELEASE-20261022.md#7-可选移动-200ms5hz口径缺省已改历史口径显式-100ms)，投递对比夹具 3 轮）：登记档位从 100ms 换成 200ms（拍数减半）时，批量投递的业务 p99 反而 0.152 → 0.312ms，单目标 0.092 → 0.077ms，原因未查。
 
 ## 后续候选（未排期）
 

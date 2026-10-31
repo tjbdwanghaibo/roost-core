@@ -1,17 +1,13 @@
 # shellcheck shell=bash
-# scripts/release.sh 的纯文本部分：版本号校验与比较、CHANGELOG 归档、版本号所在文件的改写。
-#
-# 只做“读文件 → 把改好的全文写到 stdout”，不碰 git、不碰网络，scripts/release_test.sh 直接
-# source 本文件用临时文件测。出错时把原因写到 stderr 并返回非 0，调用方决定是否停下。
-# macOS 自带 bash 3.2：不用关联数组、mapfile、${var,,}。
+# Pure release-file transformations. Callers stage output before replacing source files.
+# Compatible with macOS Bash 3.2. No Git/network mutations; errors go to stderr.
 
-# rel_valid_version V：只接受 vMAJOR.MINOR.PATCH（与 codegen manifest 的 releaseVersionPattern 一致；
-# 发布 tag 不带预发布后缀，数字不带前导 0）。
+# Accept release tags only: vMAJOR.MINOR.PATCH, without leading zeros or suffixes.
 rel_valid_version() {
 	[[ "${1:-}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
 }
 
-# rel_version_gt A B：A 严格大于 B 时返回 0。两边都须先过 rel_valid_version。
+# Return success when validated version A is numerically newer than B.
 rel_version_gt() {
 	local a1 a2 a3 b1 b2 b3
 	IFS=. read -r a1 a2 a3 <<<"${1#v}"
@@ -27,28 +23,28 @@ rel_version_gt() {
 	((a3 > b3))
 }
 
-# rel_is_feature V：补丁号为 0（vX.Y.0）即功能版本。upgrade-compat 矩阵只在功能版本发版时追加上一版。
+# A zero patch number denotes a feature release.
 rel_is_feature() {
 	[[ "${1##*.}" == 0 ]]
 }
 
-# rel_manifest_release FILE：读 codegen/ci/framework-release.yaml 的 release: 值。
+# Read the release version from the repository release manifest.
 rel_manifest_release() {
 	awk '/^release:/{print $2; exit}' "$1"
 }
 
-# rel_render_manifest_release FILE VERSION：把唯一一行 release: 改成 VERSION。
+# Replace exactly one release entry, preserving unrelated lines.
 rel_render_manifest_release() {
 	local file="$1" version="$2" count
 	count=$(grep -c '^release:' "$file" || true)
 	if [[ "$count" != 1 ]]; then
-		echo "release-lib: $file 应当恰好有一行 release:，实际 $count 行" >&2
+		echo "release-lib: expected exactly one release: entry in $file, got $count" >&2
 		return 1
 	fi
 	awk -v v="$version" '/^release:/{print "release: " v; next} {print}' "$file"
 }
 
-# rel_changelog_has_unreleased FILE：## [Unreleased] 段存在且有非空白内容时返回 0。
+# Require nonblank content in the Unreleased section.
 rel_changelog_has_unreleased() {
 	awk '
 		/^## \[Unreleased\]/ { inside = 1; found = 1; next }
@@ -58,26 +54,21 @@ rel_changelog_has_unreleased() {
 	' "$1"
 }
 
-# rel_render_changelog FILE VERSION DATE：把 [Unreleased] 的内容原样归到新的 ## [VERSION] - DATE 下，
-# 上面留一个空的 ## [Unreleased]。格式与历次归档一致：
-#
 #   ## [Unreleased]
-#
 #   ## [v1.32.0] - 2026-10-30
-#
-#   <原 Unreleased 内容>
+# Archive Unreleased under VERSION and DATE, leaving a new empty Unreleased section.
 rel_render_changelog() {
 	local file="$1" version="$2" date="$3"
 	if ! grep -q '^## \[Unreleased\]' "$file"; then
-		echo "release-lib: $file 没有 ## [Unreleased] 段" >&2
+		echo "release-lib: missing [Unreleased] section in $file" >&2
 		return 1
 	fi
 	if grep -qF "## [$version]" "$file"; then
-		echo "release-lib: $file 已经有 ## [$version] 段" >&2
+		echo "release-lib: [$version] already exists in $file" >&2
 		return 1
 	fi
 	if ! rel_changelog_has_unreleased "$file"; then
-		echo "release-lib: $file 的 [Unreleased] 是空的，没有可归档的变化" >&2
+		echo "release-lib: [Unreleased] in $file has no changes to archive" >&2
 		return 1
 	fi
 	awk -v head="## [$version] - $date" '
@@ -88,7 +79,7 @@ rel_render_changelog() {
 	' "$file"
 }
 
-# rel_min_core FILE：读 codegen/internal/roost/manifest.go 里 minimumVersions 的 Core（与 codegen/scripts/core-pin.sh 同一读法）。
+# Read the generated consumer minimum version from manifest.go.
 rel_min_core() {
 	awk '
 		/^var minimumVersions = VersionSpec[{]/ { inside = 1; next }
@@ -97,12 +88,12 @@ rel_min_core() {
 	' "$1"
 }
 
-# rel_render_min_core FILE VERSION：只改 minimumVersions 块里的 Core 值，注释（每次提高的原因）由人写。
+# Update only the generated consumer minimum version.
 rel_render_min_core() {
 	local file="$1" version="$2" old
 	old=$(rel_min_core "$file")
 	if ! rel_valid_version "$old"; then
-		echo "release-lib: 读不出 $file 的 minimumVersions.Core（得到 '$old'）" >&2
+		echo "release-lib: invalid minimumVersions.Core in $file: $old" >&2
 		return 1
 	fi
 	awk -v v="$version" '
@@ -113,36 +104,33 @@ rel_render_min_core() {
 	' "$file"
 }
 
-# rel_render_compat_minimum FILE OLD NEW：framework-compat.yml 的 minimum lane 里钉最低 core 的三处
-# （-roost-core-version、Makefile 生成器检查的 grep 与报错文本）一起从 OLD 改成 NEW；
-# 改完 OLD 不得残留，且两处被 TestFrameworkCompatMinimumSetMatchesTheGeneratorFloor 比对的写法都在。
+# Update both known minimum-lane pins; fail if an unknown old pin remains.
 rel_render_compat_minimum() {
 	local file="$1" old="$2" new="$3" re out
 	re="${old//./\\.}"
 	if ! grep -q -- "-roost-core-version $re)" "$file"; then
-		echo "release-lib: $file 里没有 '-roost-core-version $old)'，minimum lane 与生成器下限已不一致" >&2
+		echo "release-lib: minimum lane in $file does not match $old" >&2
 		return 1
 	fi
 	out=$(sed -e "s/-roost-core-version $re)/-roost-core-version $new)/" \
 		-e "s/cmd\/roost@$re /cmd\/roost@$new /g" \
 		-e "s/pinned core $re\"/pinned core $new\"/" "$file")
 	if grep -q -- "$re" <<<"$out"; then
-		echo "release-lib: $file 改完仍有 $old，有新的钉版本写法，先更新 rel_render_compat_minimum" >&2
+		echo "release-lib: $old remains in $file; update rel_render_compat_minimum for new pin formats" >&2
 		return 1
 	fi
 	if ! grep -q -- "-roost-core-version $new)" <<<"$out" || ! grep -qF "grep -v 'cmd/roost@$new '" <<<"$out"; then
-		echo "release-lib: $file 改完缺少 minimum lane 的两处钉版本写法" >&2
+		echo "release-lib: missing minimum lane version pins after rendering $file" >&2
 		return 1
 	fi
 	printf '%s\n' "$out"
 }
 
-# rel_render_upgrade_compat FILE VERSION：upgrade-compat.yml 里 previous-project 任务的矩阵 core: [...] 末尾追加 VERSION；
-# 已在矩阵里则原样输出。只认 previous-project 任务下的第一行 core:（同文件的 player-access-project 有自己的固定矩阵）。
+# Append to previous-project only; leave unrelated matrices unchanged.
 rel_render_upgrade_compat() {
 	local file="$1" version="$2"
 	if ! grep -q '^  previous-project:' "$file"; then
-		echo "release-lib: $file 里没有 previous-project 任务" >&2
+		echo "release-lib: missing previous-project job in $file" >&2
 		return 1
 	fi
 	awk -v v="$version" '
@@ -158,6 +146,6 @@ rel_render_upgrade_compat() {
 			next
 		}
 		{ print }
-		END { if (!done) { print "release-lib: previous-project 任务下没有 core: [...] 矩阵" > "/dev/stderr"; exit 1 } }
+		END { if (!done) { print "release-lib: previous-project has no core: [...] matrix" > "/dev/stderr"; exit 1 } }
 	' "$file"
 }

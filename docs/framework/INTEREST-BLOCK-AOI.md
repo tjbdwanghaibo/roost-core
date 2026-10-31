@@ -68,7 +68,7 @@ observer 的编号与视野（D14 A1 + B1，D19 扩成多视野）：observer �
 
 每个observer独占可见集和事件缓冲。`Workers` 零值取GOMAXPROCS，批次内最多启动该数量的短计算任务；数量还受dirty observer数限制，不为每个块建立goroutine，也不把AOI计算放到Nest io 池。任务完成后才开始下一批写入。
 
-读阶段对每个 dirty observer 的结果都等于“完整重评”（`evaluateObserver`：重评全部可见成员，再从订阅块里按距离从近到远补入候选），但只在必要时真的做完整遍历（2026-10-21，D19 多视野 Nest 失守的修复，[夜间补测 §14'.2](../performance/NIGHT-20261020.md#142-sync-aoi服务端--客户端两个进程)）：
+读阶段对每个 dirty observer 的结果都等于“完整重评”（`evaluateObserver`：重评全部可见成员，再从订阅块里按距离从近到远补入候选），但只在必要时真的做完整遍历（2026-10-21，D19 多视野 Nest 失守的修复，[夜间补测 §14'.2](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/NIGHT-20261020.md#142-sync-aoi服务端--客户端两个进程)）：
 
 - observer 自己移动、改视野、换 `self`、新登记（`dirtySpatial`）：完整遍历。
 - 只有订阅块里的目标动了（`dirtyMoved`，写阶段把目标 ID 记到 `interestObserver.moved`，不建临时集合）：`evaluateMoved` 只评估这些目标，前提是能证明与完整重评逐项相同——上次评估后没有被串行逐对评估改过（`settled`），并且本批之后可见集仍满、最远成员不比“未入选下界”`refusedMin`（被容量拒绝或淘汰的、进入半径内目标的距离平方下界）远；没有未入选目标时总成立。成员离开腾出位置、成员移远超过下界、或之前走过串行路径时，回到完整遍历补位。对照用例 `TestAOIMovedOnlyEvaluationMatchesFullRecompute`（容量饱和、同距并列、批间串行操作）与原有的 `TestAOISelectiveRecomputeMatchesFullRecompute` 都以强制完整重评为参照。
@@ -86,7 +86,7 @@ AOICluster 的 `MaxVisible` 在所有区域候选中统一选择最近 N 个，�
 - 观察者移动：到所有目标的距离都变了，只完整重排它自己。
 - `AddSubject` / `AddObserver` 对已存在 ID 的移动同样遵守此规则；未设容量时不做这项工作。
 
-代价（2026-10-17，`BenchmarkClusterFlushRandomWalkCapped`：1000 目标、100 观察者、每观察者约 45 个候选、上限 16、每步全部目标移动）：每步 5.8ms → 10.7ms，分配 13.1k → 14.5k；对每个看得见目标的观察者都完整重排的做法为 62ms；不设容量的 `BenchmarkClusterFlushRandomWalk` 无差异（[样本](../performance/benchmarks/aoi-cluster-reselect-20261017/)）。修前的数字低，是因为同档移动根本不重选。容量层没有滞回：两个目标在第 N 名附近来回交换时每次移动都会产生 Leave/Enter，同一负载 97 步的 Enter 数 25012 → 28918（+15.6%）；维护者 2026-10-17 决定不加滞回（[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)）：抖动与重排代价只在候选数超过 N 时出现，不设 `MaxVisible` 或把 N 设在常规候选数之上时两者都没有；容量用作人群聚集时的带宽保护阀，N 按“正常场景达不到、聚集时限住带宽”来取。这是 Cluster 的容量规则，单区域 AOI 的 `MaxVisible` 只在未入选目标进入或移动时淘汰严格更远的成员（`evictFarther`，同距保留在位者），入选目标远离不会让其他目标补位，二者不能互相推断。
+代价（2026-10-17，`BenchmarkClusterFlushRandomWalkCapped`：1000 目标、100 观察者、每观察者约 45 个候选、上限 16、每步全部目标移动）：每步 5.8ms → 10.7ms，分配 13.1k → 14.5k；对每个看得见目标的观察者都完整重排的做法为 62ms；不设容量的 `BenchmarkClusterFlushRandomWalk` 无差异（[样本](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/aoi-cluster-reselect-20261017)）。修前的数字低，是因为同档移动根本不重选。容量层没有滞回：两个目标在第 N 名附近来回交换时每次移动都会产生 Leave/Enter，同一负载 97 步的 Enter 数 25012 → 28918（+15.6%）；维护者 2026-10-17 决定不加滞回（[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)）：抖动与重排代价只在候选数超过 N 时出现，不设 `MaxVisible` 或把 N 设在常规候选数之上时两者都没有；容量用作人群聚集时的带宽保护阀，N 按“正常场景达不到、聚集时限住带宽”来取。这是 Cluster 的容量规则，单区域 AOI 的 `MaxVisible` 只在未入选目标进入或移动时淘汰严格更远的成员（`evictFarther`，同距保留在位者），入选目标远离不会让其他目标补位，二者不能互相推断。
 
 ## 5. BeObservedEntity：唯一位置，多块可见
 

@@ -86,7 +86,7 @@ Controller 已按用户确认接入 player access 的协议生成流程：骨架
 
 ## 同机基准结果
 
-2026-10-11，Windows/amd64、Go 1.27.0、AMD Ryzen 7 5800H、GOMAXPROCS=4。基线 a0ecc74f 加入相同 benchmark 后先跑 before，再运行本次实现；两次计时期间均未并发执行本任务的 build/test/race。每组 `200ms × 3`，下表为耗时中位数，分配取该样本值。原始三次样本完整保留：[before](../performance/benchmarks/sync-local-20261011/before.txt)、[after](../performance/benchmarks/sync-local-20261011/after.txt)、[汇总](../performance/benchmarks/sync-local-20261011/medians.csv)、[工具链](../performance/benchmarks/sync-local-20261011/environment.txt)。
+2026-10-11，Windows/amd64、Go 1.27.0、AMD Ryzen 7 5800H、GOMAXPROCS=4。基线 a0ecc74f 加入相同 benchmark 后先跑 before，再运行本次实现；两次计时期间均未并发执行本任务的 build/test/race。每组 `200ms × 3`，下表为耗时中位数，分配取该样本值。原始三次样本完整保留：[before](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-local-20261011/before.txt)、[after](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-local-20261011/after.txt)、[汇总](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-local-20261011/medians.csv)、[工具链](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-local-20261011/environment.txt)。
 
 | 场景 | 优化前 ns/op | 优化后 ns/op | B/op 前 → 后 | allocs/op 前 → 后 |
 | --- | ---: | ---: | ---: | ---: |
@@ -165,9 +165,9 @@ go test ./framework/sync/entitysync ./framework/sync/entitysync/policy ./framewo
 
 Flush 每个会话稳定减少两次临时切片分配，256 会话档每轮节省约 590 KB。帧数、打包次数、wire-B/op 前后一致。首轮 64 会话/4 profiles 的耗时中位数反而上升 7.9%，原始样本完整保留，不能将分配收益表述为所有场景吞吐都提高。
 
-针对该档另做 1s × 5 的串行前后对照，中位数从 1,632.88µs 到 1,597.64µs（约 -2.2%），样本区间明显重叠；861 → 733 次分配、约 147 KB/轮的节省保持一致。因此保留这项优化的依据是稳定减少临时分配，不声称该档已有稳定耗时提升。复测原文：[before](../performance/benchmarks/sync-batch-20261011/flush-repeat-before.txt)、[after](../performance/benchmarks/sync-batch-20261011/flush-repeat-after.txt)。
+针对该档另做 1s × 5 的串行前后对照，中位数从 1,632.88µs 到 1,597.64µs（约 -2.2%），样本区间明显重叠；861 → 733 次分配、约 147 KB/轮的节省保持一致。因此保留这项优化的依据是稳定减少临时分配，不声称该档已有稳定耗时提升。复测原文：[before](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batch-20261011/flush-repeat-before.txt)、[after](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batch-20261011/flush-repeat-after.txt)。
 
-原始证据：[AOI before](../performance/benchmarks/sync-batch-20261011/before.txt)、[AOI after](../performance/benchmarks/sync-batch-20261011/after.txt)、[AOI 汇总](../performance/benchmarks/sync-batch-20261011/medians.csv)、[Flush before](../performance/benchmarks/sync-batch-20261011/flush-before.txt)、[Flush after](../performance/benchmarks/sync-batch-20261011/flush-after.txt)、[Flush 汇总](../performance/benchmarks/sync-batch-20261011/flush-medians.csv)、[分配字节 profile](../performance/benchmarks/sync-batch-20261011/flush-alloc-space.txt)、[分配数量 profile](../performance/benchmarks/sync-batch-20261011/flush-alloc-objects.txt)。profile 是采样估计，包含测试初始化；样本只去除行尾空格和机器本地 Build ID，不删除性能样本。
+原始证据：[AOI before](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batch-20261011/before.txt)、[AOI after](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batch-20261011/after.txt)、[AOI 汇总](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batch-20261011/medians.csv)、[Flush before](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batch-20261011/flush-before.txt)、[Flush after](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batch-20261011/flush-after.txt)、[Flush 汇总](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batch-20261011/flush-medians.csv)、[分配字节 profile](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batch-20261011/flush-alloc-space.txt)、[分配数量 profile](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batch-20261011/flush-alloc-objects.txt)。profile 是采样估计，包含测试初始化；样本只去除行尾空格和机器本地 Build ID，不删除性能样本。
 
 复跑 AOI：使用上一节相同环境变量，运行 `go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkAOIBatchRecompute$' -benchmem -benchtime=200ms -count=3`。Flush 使用已有 BenchmarkManagerFlush。做基线对照时将本批新 benchmark 文件带回 57a1eada；不要把生产优化文件一并复制回基线。
 
@@ -190,7 +190,7 @@ Flush 每个会话稳定减少两次临时切片分配，256 会话档每轮节�
 
 距离过滤继续使用防溢出的 `WithinDistance`，排序和淘汰沿用 `DistanceSquared` 的饱和值语义，没有通过普通乘法简化极大坐标判断。空间事实、覆盖订阅、批次屏障、并行所有权及默认 worker 配置均不变。
 
-同时修复满额淘汰的负数 ID 缺陷：公开 AddSubject 接受任何非零 int64，但旧代码用 `farthest < 0` 判断未找到成员。如果最远成员 ID 为 -2，即使新实体更近也无法替换。现在用独立的 found 标志。修前回归实际得到 `[-2]`，预期 `[3]`，见[失败原文](../performance/benchmarks/sync-candidates-20261011/negative-id-before.txt)。正数 ID 行为不变；负数 ID 恢复应有的淘汰规则。
+同时修复满额淘汰的负数 ID 缺陷：公开 AddSubject 接受任何非零 int64，但旧代码用 `farthest < 0` 判断未找到成员。如果最远成员 ID 为 -2，即使新实体更近也无法替换。现在用独立的 found 标志。修前回归实际得到 `[-2]`，预期 `[3]`，见[失败原文](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-candidates-20261011/negative-id-before.txt)。正数 ID 行为不变；负数 ID 恢复应有的淘汰规则。
 
 ### 同机测量
 
@@ -209,7 +209,7 @@ Windows/amd64，Go 1.27.0，Ryzen 7 5800H，GOWORK=off，GOMAXPROCS=4。使用�
 
 集中物理移动耗时分别减少约 82.1% 和 79.1%。覆盖切换没有执行本批修改的空间路径，其差异视为测量波动。分配不是本批优化目标：集中物理移动单 worker 从约 313 KB/批到 323 KB/批，4 worker 从约 369 KB 到 365 KB；没有宣称所有指标同时改善。
 
-[完整 before](../performance/benchmarks/sync-candidates-20261011/before.txt)、[完整 after](../performance/benchmarks/sync-candidates-20261011/after.txt)、[包含分配的汇总](../performance/benchmarks/sync-candidates-20261011/medians.csv)。复跑命令：`go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkAOIBatchRecompute$' -benchmem -benchtime=300ms -count=3`，分别在本批基线和修后版本运行。
+[完整 before](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-candidates-20261011/before.txt)、[完整 after](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-candidates-20261011/after.txt)、[包含分配的汇总](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-candidates-20261011/medians.csv)。复跑命令：`go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkAOIBatchRecompute$' -benchmem -benchtime=300ms -count=3`，分别在本批基线和修后版本运行。
 
 ### 验证方式与上线前事项
 
@@ -250,7 +250,7 @@ Windows/amd64，Go 1.27.0，Ryzen 7 5800H，GOWORK=off，GOMAXPROCS=4。使用�
 
 退出重加首轮约慢 7%/3.1%，因此对 10 观察者档单独做 1s × 5，修前中位数 622.5ns，修后 653.0ns，仍约慢 4.9%（约 31ns/次），分配保持 480 B/6 次。这是分支和所有权处理增加后的明确代价；保留本优化的依据是重复 Set 明显减少分配和耗时，而非所有操作都变快。高频退出重建业务不能套用重复 Set 的收益，需要按自己的变化率测量。
 
-完整证据：[原始基线](../performance/benchmarks/sync-relation-20261012/before.txt)、[修后及额外500ms样本](../performance/benchmarks/sync-relation-20261012/after.txt)、[规模基线](../performance/benchmarks/sync-relation-20261012/size-before.txt)、[同口径规模结果](../performance/benchmarks/sync-relation-20261012/size-after.txt)、[汇总](../performance/benchmarks/sync-relation-20261012/medians.csv)、[退出重加长测前](../performance/benchmarks/sync-relation-20261012/repeat-before.txt)、[长测后](../performance/benchmarks/sync-relation-20261012/repeat-after.txt)。另有一次长测启动时构建进程尚未确认退出，该[重叠样本](../performance/benchmarks/sync-relation-20261012/repeat-before-overlap-excluded.txt)完整保留并排除，不参与任何前后结论；正式长测在构建结束后串行重跑。
+完整证据：[原始基线](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-relation-20261012/before.txt)、[修后及额外500ms样本](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-relation-20261012/after.txt)、[规模基线](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-relation-20261012/size-before.txt)、[同口径规模结果](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-relation-20261012/size-after.txt)、[汇总](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-relation-20261012/medians.csv)、[退出重加长测前](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-relation-20261012/repeat-before.txt)、[长测后](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-relation-20261012/repeat-after.txt)。另有一次长测启动时构建进程尚未确认退出，该[重叠样本](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-relation-20261012/repeat-before-overlap-excluded.txt)完整保留并排除，不参与任何前后结论；正式长测在构建结束后串行重跑。
 
 复跑（历史命令）：`go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkRelationUpdates$' -benchmem -benchtime=500ms -count=3`；规模组替换为 `-bench '^BenchmarkRelationSetSize$' -benchtime=300ms`。旧版本对照只复制新增 benchmark，不复制实现。**这两个 benchmark 已随 D19 删除 `RelationSource`（`d2c2cdce`）删除**，命令只能在该提交之前的版本上运行；现行关系视野的基准是 `BenchmarkRelationViewMemberChange` / `BenchmarkRelationViewAttach`（[impl/04-sync](impl/04-sync.md)）。
 
@@ -277,7 +277,7 @@ Windows/amd64、Go 1.27.0、Ryzen 7 5800H，GOWORK=off、GOMAXPROCS=4，500ms ×
 
 增量避免随存量大小扫描、构建全表，处理成本主要随变化量增长。该测量仅含关系源及其事件收集，不含 Queue 的切片复制、政策聚合、订阅调整、DAO、网络和业务 handler；不能把表中比例当整服 TPS 提升。新 API 是显式接入，不会自动优化仍调用全量 QueueRelation 的业务。此次没有改变上一批 Set 的行为或退出重加代价。
 
-[全部原始样本](../performance/benchmarks/sync-delta-20261012/benchmark.txt)、[中位数汇总](../performance/benchmarks/sync-delta-20261012/medians.csv)。复跑（历史命令，`BenchmarkRelationMemberChange` 已随 D19 删除 `RelationSource`（`d2c2cdce`）删除，只能在该提交之前的版本上运行；现行对应基准是 `BenchmarkRelationViewMemberChange`）：`go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkRelationMemberChange$' -benchmem -benchtime=500ms -count=3`。
+[全部原始样本](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-delta-20261012/benchmark.txt)、[中位数汇总](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-delta-20261012/medians.csv)。复跑（历史命令，`BenchmarkRelationMemberChange` 已随 D19 删除 `RelationSource`（`d2c2cdce`）删除，只能在该提交之前的版本上运行；现行对应基准是 `BenchmarkRelationViewMemberChange`）：`go test ./framework/sync/entitysync/policy -run '^$' -bench '^BenchmarkRelationMemberChange$' -benchmem -benchtime=500ms -count=3`。
 
 ### 正式链路与验证边界
 
@@ -312,7 +312,7 @@ History 不再每裁掉一帧就复制剩余历史。通常只清除丢弃部分
 | 300 帧 | 7086 | 40.37 | 28159 | 67 |
 | 18000 帧 | 346829 | 74.49 | 1309985 | 152 |
 
-最终输出的 0 allocs/op 是摊销后取整，仍存在偶发扩容/缩容分配。保留[原始基准](../performance/benchmarks/sync-batching-20261012/history-before.txt)、[最终基准](../performance/benchmarks/sync-batching-20261012/history-after.txt)以及[容量修正前样本](../performance/benchmarks/sync-batching-20261012/history-after-initial.txt)，不把该微基准改善倍数当成整服吞吐提升。
+最终输出的 0 allocs/op 是摊销后取整，仍存在偶发扩容/缩容分配。保留[原始基准](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batching-20261012/history-before.txt)、[最终基准](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batching-20261012/history-after.txt)以及[容量修正前样本](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batching-20261012/history-after-initial.txt)，不把该微基准改善倍数当成整服吞吐提升。
 
 OnChange 使用确定性虚拟时间：每 1ms 提交一次，共 20 次，零/5ms/10ms 窗口分别发送 20/4/2 个更新帧；检查版本、增量基线衔接、最终值为 20、冻结内存排空。覆盖固定截止时间、周期提前处理、显式 Flush、Stop、取消后重启、零值及装配覆盖规则。这是行为测试，不是端到端延迟测量。
 
@@ -320,9 +320,9 @@ Lockstep 推进 108000 次 Tick，10 位玩家每帧提交 8 字节输入，相�
 
 ### 边界缺陷及修复证据
 
-同一轮复现并修复两处 History 边界问题：ReadRange 从第二帧读取且 limit=math.MaxInt 时，旧 offset+limit 溢出导致 panic；现在先按剩余长度限制 limit。TrimBefore 在历史接近 uint32 最大帧号时，旧 first+len 溢出导致错误裁空；现在按差值限制裁剪数量。分别保存[修前读取失败](../performance/benchmarks/sync-batching-20261012/history-boundary-before.txt)与[修前裁剪失败](../performance/benchmarks/sync-batching-20261012/history-trim-before.txt)，最终整包回归包含这两个边界用例。该修复不代表 Match 支持帧号回绕。
+同一轮复现并修复两处 History 边界问题：ReadRange 从第二帧读取且 limit=math.MaxInt 时，旧 offset+limit 溢出导致 panic；现在先按剩余长度限制 limit。TrimBefore 在历史接近 uint32 最大帧号时，旧 first+len 溢出导致错误裁空；现在按差值限制裁剪数量。分别保存[修前读取失败](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batching-20261012/history-boundary-before.txt)与[修前裁剪失败](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batching-20261012/history-trim-before.txt)，最终整包回归包含这两个边界用例。该修复不代表 Match 支持帧号回绕。
 
-最终实际通过：Sync 全部子包与 wiring/nest 测试；entitysync、lockstep、wiring/nest 的 race 两次；长局/渐进缩容定向测试；go build ./...；Sync 与 wiring/nest 的 go vet。正式生成工程的 TestClientSDKAgainstGeneratedPlayerTCP 也通过，包含 Go/C# TCP 消费链路。日志见[普通回归](../performance/benchmarks/sync-batching-20261012/tests-final.txt)、[race](../performance/benchmarks/sync-batching-20261012/race-final.txt)、[长局](../performance/benchmarks/sync-batching-20261012/long-final.txt)、[合批场景](../performance/benchmarks/sync-batching-20261012/final-scenarios.txt)与[生成消费者](../performance/benchmarks/sync-batching-20261012/generated-client.txt)。
+最终实际通过：Sync 全部子包与 wiring/nest 测试；entitysync、lockstep、wiring/nest 的 race 两次；长局/渐进缩容定向测试；go build ./...；Sync 与 wiring/nest 的 go vet。正式生成工程的 TestClientSDKAgainstGeneratedPlayerTCP 也通过，包含 Go/C# TCP 消费链路。日志见[普通回归](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batching-20261012/tests-final.txt)、[race](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batching-20261012/race-final.txt)、[长局](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batching-20261012/long-final.txt)、[合批场景](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batching-20261012/final-scenarios.txt)与[生成消费者](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/sync-batching-20261012/generated-client.txt)。
 
 复跑入口：`go test ./framework/sync/... ./wiring/nest -count=1`；`go test -race ./framework/sync/entitysync ./framework/sync/lockstep ./wiring/nest -count=2`；`go test ./framework/sync/lockstep -run '^$' -bench '^BenchmarkHistoryRollingWindow$' -benchmem -benchtime=300ms -count=3`。基准对照需要把当前 history_long_test.go 放回基线 worktree，仅运行 benchmark，不能用不同测试负载比较。
 
@@ -364,7 +364,7 @@ Lockstep 推进 108000 次 Tick，10 位玩家每帧提交 8 字节输入，相�
 
 **为什么不改缺省窗口**：快照让窗口不再决定“断线多久还能回来”，但 3600 帧在 10 席下只有约 1.5MB / 局，缩短窗口省下的内存少，却会把更多短断线推到更贵的快照，并依赖业务的检查点间隔（设计 §10，§12 第 9 条）。缺省仍是 3600 帧，等有游戏按真实断线分布与快照大小测过再定。
 
-**热路径**：没有恢复中会话时 `Tick` 只多一次空 map 判断；P1 前后 `BenchmarkHistoryRollingWindow` 与 Match Tick 的 benchstat 无差异（[样本](../performance/benchmarks/lockstep-snapshot-p1-20261020/benchstat.txt)）。
+**热路径**：没有恢复中会话时 `Tick` 只多一次空 map 判断；P1 前后 `BenchmarkHistoryRollingWindow` 与 Match Tick 的 benchstat 无差异（[样本](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/lockstep-snapshot-p1-20261020/benchstat.txt)）。
 
 **修前现行行为**（新功能没有修前缺陷，取同一场景在旧代码或去掉快照来源时的表现，原文）：
 
@@ -374,10 +374,10 @@ Example_snapshotRecovery（去掉 Provider）：panic: lockstep match: catch-up 
 MOBA（去掉 Provider）：player 2 3 from frame 41: lockstep match: catch-up range trimmed from history: from 41, history starts at 232
 ```
 
-**验收**：包内判定表、Provider 线程、错误语义、分块节奏与重发、钉住、长局与两个 fuzz（`snapshot_test.go`）；真实回环 TCP 4 MiB 快照与 bot 断线 4 个窗口后恢复（`tcp_test.go`）；`Example_snapshotRecovery`；MOBA 十个 KCP 客户端中两人断线超过 4 个窗口后经 Arena 检查点恢复、局末同摘要（直接驱动 Match 一条，经持久对局 `Room` 与已提交门一条）；Room 下一帧提交卡住 / 结果未知时可靠通道只发到已提交帧（`TestMOBARoomCatchupNeverSendsUncommittedFrames`）；生成工程 C# 客户端经真实 TCP 断线 200 帧后重新登录、经快照恢复；toxiproxy 限速演练（[LOCKSTEP-SNAPSHOT-DRILL-20261020](../performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)）：嵌入 TCP 在 256 KB/s、64 KB/s 下 1 MiB 与 4 MiB 都恢复、连接不断，传输耗时与“大小 / 速率”之比 1.00～1.04；独立 Gate 在 64 KB/s（1 MiB）与 256 KB/s（4 MiB）下被 Gate 写 socket 超时断开、重连从头再传，未恢复。
+**验收**：包内判定表、Provider 线程、错误语义、分块节奏与重发、钉住、长局与两个 fuzz（`snapshot_test.go`）；真实回环 TCP 4 MiB 快照与 bot 断线 4 个窗口后恢复（`tcp_test.go`）；`Example_snapshotRecovery`；MOBA 十个 KCP 客户端中两人断线超过 4 个窗口后经 Arena 检查点恢复、局末同摘要（直接驱动 Match 一条，经持久对局 `Room` 与已提交门一条）；Room 下一帧提交卡住 / 结果未知时可靠通道只发到已提交帧（`TestMOBARoomCatchupNeverSendsUncommittedFrames`）；生成工程 C# 客户端经真实 TCP 断线 200 帧后重新登录、经快照恢复；toxiproxy 限速演练（[LOCKSTEP-SNAPSHOT-DRILL-20261020](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/LOCKSTEP-SNAPSHOT-DRILL-20261020.md)）：嵌入 TCP 在 256 KB/s、64 KB/s 下 1 MiB 与 4 MiB 都恢复、连接不断，传输耗时与“大小 / 速率”之比 1.00～1.04；独立 Gate 在 64 KB/s（1 MiB）与 256 KB/s（4 MiB）下被 Gate 写 socket 超时断开、重连从头再传，未恢复。
 
 **行为变化与升级**：配了 Provider 的 Match 越界不再返回 `*CatchupUnservableError`；C9 v1 删除、新增 CA 01 下行消息，旧客户端 SDK 把它们当坏包终止，升级需同时更新服务端与 Go / C# 客户端（项目未上线，不做兼容）。
 
-**已提交门（2026-10-20）**：“先切帧、后提交、提交后才广播”的宿主（MOBA `Room`）配 `MatchConfig.CommittedFrame`，追帧页与取快照的上界停在已提交帧，空闲的恢复会话落进冗余包覆盖范围即切回实时；nil 时行为不变。没有恢复中会话的 Tick 不经过门，热路径前后对照无差异（[样本](../performance/benchmarks/lockstep-room-gate-20261020/benchstat.txt)：`MatchTickTenPlayers` 1.147µs → 1.079µs，p=0.616，n=10；分配不变）。设计见 [FEATURE §15](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#15-room-接入已提交门2026-10-20)。
+**已提交门（2026-10-20）**：“先切帧、后提交、提交后才广播”的宿主（MOBA `Room`）配 `MatchConfig.CommittedFrame`，追帧页与取快照的上界停在已提交帧，空闲的恢复会话落进冗余包覆盖范围即切回实时；nil 时行为不变。没有恢复中会话的 Tick 不经过门，热路径前后对照无差异（[样本](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/lockstep-room-gate-20261020/benchstat.txt)：`MatchTickTenPlayers` 1.147µs → 1.079µs，p=0.616，n=10；分配不变）。设计见 [FEATURE §15](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-20-lockstep-snapshot-recovery.md#15-room-接入已提交门2026-10-20)。
 
 **未验证**：真实移动网络 / 跨机下的快照恢复；Unity 编辑器与 IL2CPP 上的 C# SHA-256；独立 Gate 下断开是哪一个写期限先到期；持久对局 `Room` 在替身权威下有 KCP / Nest 回归，真实 strict WAL / Mongo 下有 SIGKILL 冷加载后经已提交检查点快照恢复的演练（下行是记录器、不经 KCP），不含真实 WAL 的提交延迟分布、宿主交接与快照恢复同时发生。剩余边界见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#lockstep)。

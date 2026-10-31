@@ -85,7 +85,7 @@ scripts/release.sh vX.Y.Z --dry-run   # 先预览：前置检查 + 要改的版�
 scripts/release.sh vX.Y.Z [--min-core]
 ```
 
-脚本依次：前置检查（在 main、工作树干净、与 origin/main 一致、版本号合法且比 `codegen/ci/framework-release.yaml` 新、tag 本地与远端都不存在、CHANGELOG `[Unreleased]` 非空、功能版的 NOTES 已在）→ 改 `framework-release.yaml` 的 `release:`、把 `[Unreleased]` 归档为 `[vX.Y.Z] - 今天`、功能版给 upgrade-compat 的 previous-project 矩阵追加上一版 → 提交 `release：vX.Y.Z` → `scripts/pretag.sh`（失败即停、不推送，打印回退命令）→ push main 并独立核对远端包含该提交 → annotated tag、push tag、`ls-remote` 核对 → 在临时目录用本 tag 生成 game-demo、`GOPROXY=direct` 解析刚推的 tag（代理有延迟会重试）、build + vet。不等待 GitHub CI。参数与每一步的细节见脚本头部注释；纯文本部分在 `scripts/release-lib.sh`，自检 `scripts/release_test.sh` 随根包测试运行。
+脚本依次：前置检查（在 main、工作树干净、与 origin/main 一致、版本号合法且比 `codegen/ci/framework-release.yaml` 新、tag 本地与远端都不存在、CHANGELOG `[Unreleased]` 非空、功能版的 NOTES 已在）→ 改 `framework-release.yaml` 的 `release:`、把 `[Unreleased]` 归档为 `[vX.Y.Z] - 今天`、功能版给 upgrade-compat 的 previous-project 矩阵追加上一版 → 提交 `release: vX.Y.Z` → `scripts/pretag.sh`（失败即停、不推送，打印回退命令）→ push main 并独立核对远端包含该提交 → annotated tag、push tag、`ls-remote` 核对 → 在临时目录用本 tag 生成 game-demo、`GOPROXY=direct` 解析刚推的 tag（代理有延迟会重试）、build + vet。不等待 GitHub CI。参数与每一步的细节见脚本头部注释；纯文本部分在 `scripts/release-lib.sh`，自检 `scripts/release_test.sh` 随根包测试运行。
 
 - `--min-core`：本版生成物用到了新 API 时才加，把 `codegen/internal/roost/manifest.go` 的 `minimumVersions.Core` 与 `framework-compat.yml` 的 minimum lane 一起提到本版本。脚本只改值，提高的原因由人写进 `minimumVersions` 的注释（先用上一版 tag 实编生成工程确认确实需要）。
 - `--upgrade-compat` / `--no-upgrade-compat`：覆盖“功能版追加、补丁版不追加”的缺省。
@@ -109,7 +109,7 @@ pretag 除 build / vet / tidy / `go test ./...` / 生成物漂移 / C# SDK 外�
 
 接口/配置/格式改变时，同时更新设计篇、实现篇、源码定位、升级要求与已知限制。当前文档不保留相互矛盾的“旧段落+末尾更正”；过程讨论进Git历史，未解决问题与当前验证边界留在KNOWN-LIMITS：它只写当前仍有效的限制，已修复问题的经过归CHANGELOG、docs/release与Git历史，不留在KNOWN-LIMITS。历史证据链接固定commit，当前规范用仓内相对链接。
 
-根目录只保留 README、CHANGELOG、AGENTS 和许可证等仓库入口。详细契约归 `docs/framework/`，性能报告与随仓样本归 `docs/performance/`，发布过程与功能验收归 `docs/release/`；本目录保留维护规则、已知限制、外部验收与文档清单。各包 README 和工具手册保留在对应代码附近。
+根目录只保留 README、CHANGELOG、AGENTS 和许可证等仓库入口。详细契约归 `docs/framework/`，各类负载最新有效基线与必要样本归 `docs/performance/`（被替代的历史报告/样本固定到 Git，不继续累积），发布过程与功能验收归 `docs/release/`；本目录只保留现行维护规则、已知限制、外部验收入口、文档目录和未完成设计候选，不保存全部过程记录。生成游戏 skill 随仓维护在 `docs/agent-skills/roost-genre/`，不是 `docs/skill/` 游戏内技能系统。各包 README 和工具手册保留在对应代码附近。
 
 WAL目录使用单写持久卷，不同实例不得共享同一写目录。Mongo原子提交要求事务能力及相同database scope；receipt保留窗口必须覆盖对应的重放窗口。详细契约见[Nest/WAL](../framework/NEST_TRANSACTION_WAL.md)与[DataEngine](../framework/guide/03-dataengine.md)。
 
