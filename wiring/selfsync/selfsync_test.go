@@ -82,6 +82,9 @@ func (w *wallet) setGold(gold int64) {
 	w.Sync().MarkDirty(1)
 }
 
+// harnessGroups 非空时 newHarness 把它们交给 Config.Groups（newGroupHarness 设置，用例结束清空；本包测试不并行）。
+var harnessGroups []*Groups
+
 type harness struct {
 	access  *entity.ManagerAccess
 	self    *SelfSync
@@ -112,7 +115,7 @@ func newHarnessWithTCP(t testing.TB, payloadLimit uint32, afterACK func(*harness
 	t.Helper()
 	playerKind(t)
 	h := &harness{access: entity.NewManagerAccess(entity.NewEntityManager())}
-	self, err := New(Config{Entities: h.access, Kind: testKind, MessageID: testMessageID})
+	self, err := New(Config{Entities: h.access, Kind: testKind, MessageID: testMessageID, Groups: harnessGroups})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,11 @@
 //     wiring/nest.NewModWithEntitySync，Manager 的启停仍归 Nest Mod。SessionLost 里按 DisconnectLostPlayer 的规则
 //     断开编码失败丢掉会话的玩家。
 //
-// 生成工程在 roost.yaml 的 access.player 上写 self_sync: true 时，生成器在 *_gen.go 里产出全部调用。
+// 按组同步（Groups，groups.go）装在同一个 Manager 上：某类实体（房间、队伍）的视图推给组里的成员，与自身视图
+// 共用玩家连接与推送编号，客户端按每个更新的命名空间与视图键区分两路。
+//
+// 生成工程在 roost.yaml 的 access.player 上写 self_sync: true 时，生成器在 *_gen.go 里产出全部调用；
+// access.player.sync_groups 列出的实体由生成器把它们的 SyncGroup 交给 Config.Groups。
 package selfsync
 
 import (
@@ -50,6 +54,9 @@ type Config struct {
 	// （生成的 IngressMod.WithSelfSync 交给 LimitFrameBytes）。超过接入层上限的帧会被接入层拒收、连接被关，
 	// 客户端重连后的全量同样超限，反复断线重连，所以帧上限永远不大于接入层上限。
 	MaxFrameBytes int
+	// Groups 可选：在自身视图之上按组推送的实体（NewGroups，例如派对房间推给房间成员）。装在同一个 Manager 上、
+	// 政策阶段排在自身视图之后，经同一条玩家连接、同一个 MessageID 推送；kind 不能重复，也不能是玩家的 Kind。
+	Groups []*Groups
 }
 
 // accessConfig 是自身视图读的接入层配置：嵌入 TCP 一帧载荷的上限。键属于生成的 player TCP Mod（tcpConfig），
@@ -91,6 +98,16 @@ func New(config Config) (*SelfSync, error) {
 	}
 	if config.MaxFrameBytes < 0 {
 		return nil, fmt.Errorf("selfsync: max frame bytes %d is negative", config.MaxFrameBytes)
+	}
+	kinds := map[entity.EntityKind]bool{config.Kind: true}
+	for _, groups := range config.Groups {
+		if groups == nil {
+			return nil, errors.New("selfsync: groups entry is nil")
+		}
+		if kinds[groups.config.Kind] {
+			return nil, fmt.Errorf("selfsync: entity kind %d is the player kind or appears in two group entries", groups.config.Kind)
+		}
+		kinds[groups.config.Kind] = true
 	}
 	return &SelfSync{config: config}, nil
 }
@@ -184,6 +201,17 @@ func (s *SelfSync) attach(manager *entitysync.Manager) (func(), error) {
 		view.Close()
 		return nil, errors.New("selfsync: already attached to an entity sync manager")
 	}
+	// 组视图登记在 SelfView 之后：SelfView 打开会话的同一个政策阶段里成员就能订阅组实体。
+	for i, groups := range s.config.Groups {
+		if err := groups.attach(manager, s.lookup); err != nil {
+			for _, attached := range s.config.Groups[:i] {
+				attached.detach()
+			}
+			view.Close()
+			s.view.CompareAndSwap(view, nil)
+			return nil, err
+		}
+	}
 	// 登记在 SelfView 之后：同一个政策阶段里先由 SelfView 算出滞留人数，再写指标。
 	unhookGauge := manager.RegisterPolicy(entitysync.PolicyHooks{Apply: func() error {
 		metrics.SetGauge(StrandedPlayersMetric, nil, int64(view.Stranded()))
@@ -191,6 +219,9 @@ func (s *SelfSync) attach(manager *entitysync.Manager) (func(), error) {
 	}})
 	return func() {
 		unhookGauge()
+		for _, groups := range s.config.Groups {
+			groups.detach()
+		}
 		view.Close()
 		metrics.SetGauge(StrandedPlayersMetric, nil, 0)
 		s.view.CompareAndSwap(view, nil)
@@ -211,11 +242,21 @@ func (s *SelfSync) lookup(subjectID int64) *entity.SubjectSyncState {
 }
 
 func (s *SelfSync) entityLoaded(loaded entity.IThreadSafeEntity) {
-	// kind 编码在实体 ID 里；只关心玩家实体。
-	if loaded == nil || entity.GetEntityKindFromID(loaded.ID()) != s.config.Kind {
+	// kind 编码在实体 ID 里；只关心玩家实体与组实体。
+	if loaded == nil {
 		return
 	}
-	s.view.Load().EntityLoaded(loaded.ID())
+	kind := entity.GetEntityKindFromID(loaded.ID())
+	if kind == s.config.Kind {
+		s.view.Load().EntityLoaded(loaded.ID())
+		return
+	}
+	for _, groups := range s.config.Groups {
+		if groups.config.Kind == kind {
+			groups.view.Load().EntityLoaded(loaded.ID())
+			return
+		}
+	}
 }
 
 // BindPlayers 接上玩家推送能力（player TCP Mod 或 Game Ingress 在 Provide 时调用）。之前的推送整轮重试。
