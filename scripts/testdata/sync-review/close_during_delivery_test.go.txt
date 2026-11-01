@@ -1,0 +1,54 @@
+package entitysync
+
+import (
+	"context"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"testing"
+)
+
+type reviewClosingTransport struct {
+	*recordingTransport
+	after func()
+}
+
+func (r *reviewClosingTransport) Push(ctx context.Context, sid SessionID, data []byte) error {
+	err := r.recordingTransport.Push(ctx, sid, data)
+	if r.after != nil {
+		f := r.after
+		r.after = nil
+		f()
+	}
+	return err
+}
+func TestReviewCloseDuringDeliveryKeepsOtherSubjectBaseline(t *testing.T) {
+	tr := &reviewClosingTransport{recordingTransport: newRecordingTransport()}
+	m := newTestManager(t, tr, ManagerConfig{})
+	packs := 0
+	live := testSubject(t, 7101, &packs)
+	closing := testSubject(t, 7102, &packs)
+	for _, s := range []*entity.SubjectSyncState{live, closing} {
+		if err := m.Register(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	open(t, m, 1)
+	mustSubscribe(t, m, 1, 7101, entity.SyncProfile{})
+	mustSubscribe(t, m, 1, 7102, entity.SyncProfile{})
+	mustFlush(t, m)
+	tr.take(1)
+	live.MarkDirty(1)
+	closing.MarkDirty(1)
+	tr.after = closing.Close
+	err := m.Flush(context.Background())
+	if !errors.Is(err, entity.ErrSubjectSyncStalePrepare) {
+		t.Fatalf("want stale batch, got %v", err)
+	}
+	delivered := oneFrame(t, tr.recordingTransport, 1).updates[7101]
+	live.MarkDirty(2)
+	mustFlush(t, m)
+	retry := oneFrame(t, tr.recordingTransport, 1).updates[7101]
+	if !retry.Full && retry.BaseVersion != delivered.Version {
+		t.Fatalf("healthy subject received invalid delta: client=%d retry base=%d version=%d full=%v", delivered.Version, retry.BaseVersion, retry.Version, retry.Full)
+	}
+}
