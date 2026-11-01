@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.38.0] - 2026-11-02
+
 - 默认生成 self_sync 改为 setter 记录变化路径：支持嵌套 struct/map/list 的类型化 PB 递归补丁，以及 list 按索引赋值；不再完整快照解码比较。变化随事务回滚、内容成功结算按版本确认，超出 4096 节点预算回退整体替换。Go/C#/native 配套原子 Apply。DAO `sync_format=3`，服务端/proto/客户端须重生成并重连，不兼容旧载荷；`.Values()` 返回 map 与 error。持久 BSON/WAL 不变。见[同步协议](docs/framework/DAO-SYNC-PROTOBUF.md)与[微基准](docs/performance/DAO-COLLECTION-SYNC.md)。
 
 - 标准 Nest endpoint 分离为手写 Controller 入口与 `*_endpoint_gen.go` 自动转交；`//roost:endpoint nest=<Handler>` 是对应关系的唯一声明，generate / --changed / --check 均接入。保留手写校验与授权，拒绝覆盖无生成头的同名文件，只清理已撤销声明的生成文件；领域结果映射和 lifecycle 仍由业务维护。生成工程真实 TCP + Sync、手写授权、重生成无漂移与冲突/退役回归通过，存储为替身。
