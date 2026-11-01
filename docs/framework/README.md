@@ -21,6 +21,8 @@
 
 ## 核心三大模块
 
+[网络体验：时间、调度、预测与诊断](NETWORK-EXPERIENCE.md)：Gate 校时、C# / native 有界插值与预测、连接状态发送预算、Sync / socket / 客户端阶段关联及验证边界。
+
 | 模块 | 说明 | 实现 |
 | --- | --- | --- |
 | 核心：Nest 调度与实体（含[回复错误判别表](guide/02-nest-entity.md#6-回复错误判别是否可能已提交能否重试)） | [设计与使用](guide/02-nest-entity.md) | [实现与源码](impl/02-nest-entity.md) |

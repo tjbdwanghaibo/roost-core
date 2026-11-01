@@ -36,6 +36,7 @@ internal static class Program
             _ => new NativeReconnect.Ticket { Address = "127.0.0.1", Port = port, Value = "ticket" }, 2, 0.001, 0.002);
         int ready = 0, responses = 0, pushes = 0, frames = 0, recovered = 0, restored = 0;
         bool acknowledged = false;
+        int clocks = 0;
         NativeLockstep match = null;
         retry.Reconnected += () => recovered++;
         retry.Error += e => throw e;
@@ -49,6 +50,11 @@ internal static class Program
         game.Ready += () =>
         {
             ready++;
+            game.ProbeClock(sample =>
+            {
+                if (!new Roost.Client.NetworkClock().Observe(sample)) throw new Exception("clock sample");
+                clocks++;
+            }, error => throw error);
             match?.Dispose();
             match = new NativeLockstep(game, 50001, 50002,
                                        (frame, inputs) =>
@@ -90,7 +96,7 @@ internal static class Program
                                 _ =>
                                 {});
                 }
-                if (ready == 2 && recovered == 1 && responses == 2 && pushes == 2 && frames == 4 && restored == 2)
+                if (ready == 2 && recovered == 1 && responses == 2 && pushes == 2 && frames == 4 && restored == 2 && clocks == 2)
                 {
                     retry.Stop();
                     game.Disconnect();

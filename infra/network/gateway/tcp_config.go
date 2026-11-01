@@ -10,6 +10,8 @@ import (
 )
 
 type TCPConfig struct {
+	// WriteTrace 诊断实际 socket 写出；nil 时不取时间、不记录。
+	WriteTrace          *TCPWriteTrace
 	HeartbeatEnabled    bool
 	RequestRate         float64
 	RequestBurst        int

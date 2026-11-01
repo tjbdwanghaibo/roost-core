@@ -61,6 +61,62 @@ func TestTCPDefaultRequestBudgetsAreAppliedAtConstruction(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedClockProbe(t *testing.T) {
+	server := dispatchServer(t, "1s", func(*tcpTestContext, string) (string, error) {
+		t.Error("clock probe entered business handler")
+		return "", nil
+	})
+	conn := dialAuthenticated(t, server, "clock")
+	client := &tcpSession{connection: conn, writeTimeout: time.Second}
+	before := time.Now().UnixNano()
+	if err := client.writeFrame(context.Background(), 0, 0, 2, []byte("RCN1")); err != nil {
+		t.Fatal(err)
+	}
+	ack, release, err := server.readFrame(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if ack.messageID != 0 || ack.sequence != 2 || len(ack.payload) != 20 || string(ack.payload[:4]) != "RCN1" {
+		t.Fatalf("clock reply: %+v", ack)
+	}
+	received, sent := int64(binary.BigEndian.Uint64(ack.payload[4:12])), int64(binary.BigEndian.Uint64(ack.payload[12:20]))
+	if received < before || sent < received || sent > time.Now().UnixNano() {
+		t.Fatalf("clock order: %d %d", received, sent)
+	}
+}
+
+func TestTCPWriteTraceRecordsActualBytesAndSyncClock(t *testing.T) {
+	trace, err := NewTCPWriteTrace(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, reader := net.Pipe()
+	defer writer.Close()
+	defer reader.Close()
+	session := &tcpSession{connection: writer, nonce: "test", writeTimeout: time.Second, writeTrace: trace}
+	payload := make([]byte, 32)
+	binary.BigEndian.PutUint32(payload[:4], 0x43525031)
+	binary.BigEndian.PutUint32(payload[16:20], 7)
+	for tick := uint32(1); tick <= 3; tick++ {
+		binary.BigEndian.PutUint32(payload[20:24], tick)
+		done := make(chan error, 1)
+		go func() {
+			done <- session.writeFrame(context.Background(), flagServerPush|byte(wire.PayloadSync)<<1, 100, 0, payload)
+		}()
+		if _, err := io.ReadFull(reader, make([]byte, 48)); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, overwritten := trace.Drain()
+	if overwritten != 1 || len(events) != 2 || events[0].Tick != 2 || events[1].Epoch != 7 || events[1].Bytes != 48 || events[1].Failed {
+		t.Fatalf("write trace: %+v overwritten=%d", events, overwritten)
+	}
+}
+
 func TestHeartbeatKeepsAuthenticatedPushConnectionAlive(t *testing.T) {
 	server := dispatchServer(t, "1s", func(*tcpTestContext, string) (string, error) {
 		t.Error("heartbeat entered business handler")

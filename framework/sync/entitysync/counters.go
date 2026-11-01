@@ -5,6 +5,8 @@ import "time"
 // ManagerCounters 用于周期观测，只读取原子计数，不遍历实体和订阅。
 // 需要实体/订阅数量时使用 Stats；各字段不是同一瞬间的事务快照。
 type ManagerCounters struct {
+	// SendDeferred 是被连接预算延后次数，同一订阅重试会重复计数。
+	SendDeferred                                                      uint64
 	FrozenPeakBytes                                                   int64
 	FrozenBytes                                                       int64
 	FrozenDeferred                                                    uint64
@@ -24,7 +26,8 @@ func (m *Manager) Counters() ManagerCounters {
 		return ManagerCounters{}
 	}
 	return ManagerCounters{
-		FrozenBytes: m.frozenBytes.Load(), FrozenPeakBytes: m.frozenPeakBytes.Load(), FrozenDeferred: m.frozenDeferred.Load(),
+		SendDeferred: m.sendDeferred.Load(),
+		FrozenBytes:  m.frozenBytes.Load(), FrozenPeakBytes: m.frozenPeakBytes.Load(), FrozenDeferred: m.frozenDeferred.Load(),
 		FlushCalls: m.flushCalls.Load(), EmptyFlushes: m.emptyFlushes.Load(), FlushFailures: m.flushFailures.Load(),
 		DirtyCaptured: m.dirtyCaptured.Load(), SnapshotsCaptured: m.snapshotsCaptured.Load(), SnapshotsDeferred: m.snapshotsDeferred.Load(),
 		FramesAdmitted: m.framesAdmitted.Load(), CreatesAdmitted: m.createsAdmitted.Load(), UpdatesAdmitted: m.updatesAdmitted.Load(), RemovesAdmitted: m.removesAdmitted.Load(),

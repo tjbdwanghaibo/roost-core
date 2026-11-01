@@ -22,6 +22,7 @@ int main(int argc, char **argv) {
     int ready = 0, reconnected = 0, requests = 0, pushes = 0, frames = 0,
         attempts = 0, restored = 0;
     bool failed = false, acknowledged = false;
+    int clocks = 0;
     std::unique_ptr<roost::lockstep_client> lockstep;
     game.on_error = [&](std::exception_ptr e) {
       failed = true;
@@ -47,6 +48,14 @@ int main(int argc, char **argv) {
       ++pushes;
     });
     game.on_ready = [&] {
+      game.probe_clock(
+          [&](roost::clock_sample sample) {
+            roost::network_clock clock;
+            if (!clock.observe(sample))
+              throw std::runtime_error("clock sample");
+            ++clocks;
+          },
+          [&](const roost::client_event &) { failed = true; });
       ++ready;
       lockstep = std::make_unique<roost::lockstep_client>(
           [&](const roost::bytes &b) {
@@ -88,7 +97,7 @@ int main(int argc, char **argv) {
         game.transport().notify(99, 0, {});
       }
       if (ready == 2 && reconnected == 1 && requests == 2 && pushes == 2 &&
-          frames == 4 && attempts == 1 && restored == 2) {
+          frames == 4 && attempts == 1 && restored == 2 && clocks == 2) {
         game.disconnect();
         std::cout << "PASS game PB routes, native Lockstep, reconnect without "
                      "replay\n";

@@ -11,25 +11,31 @@ namespace Roost.PhysicsViewer
     }
     public sealed class SparsePosePlayback
     {
-        DisplayPose start, target;
-        double received, duration;
+        readonly Roost.Client.SnapshotBuffer<DisplayPose> snapshots = new Roost.Client.SnapshotBuffer<DisplayPose>(32, .02, .2);
+        double received, serverTime;
         ulong tick;
         bool initialized;
         public void Sample(DisplayPose pose, ulong sampleTick, double now)
         {
-            if (initialized && sampleTick == tick) return;
-            start = initialized ? Read(now) : pose;
-            duration = initialized && sampleTick > tick ? Math.Clamp((sampleTick - tick) * .02, .02, .2) : .02;
-            target = pose;
+            if (initialized && sampleTick <= tick) return;
+            // 这里是物理模拟 tick（20ms 步长），不是 EntitySync 的每连接发送序号。
+            double timestamp = sampleTick * .02;
+            if (!snapshots.Add(timestamp, now, pose)) return;
+            serverTime = timestamp;
             tick = sampleTick;
             received = now;
             initialized = true;
         }
         public DisplayPose Read(double now)
         {
-            float alpha = (float)Math.Clamp((now - received) / duration, 0, 1);
-            return new DisplayPose { Position = Vector3.Lerp(start.Position, target.Position, alpha), Rotation = Quaternion.Slerp(start.Rotation, target.Rotation, alpha) };
+            // 包中没有 UTC 锚点，只能从最近物理样本估计表现时间；不冒充 Gate 校时。
+            snapshots.TrySample(serverTime + Math.Max(0, now - received), Interpolate, out var pose);
+            return pose;
         }
+        static DisplayPose Interpolate(DisplayPose a, DisplayPose b, double alpha) => new DisplayPose {
+            Position = Vector3.Lerp(a.Position, b.Position, (float)alpha),
+            Rotation = Quaternion.Slerp(a.Rotation, b.Rotation, (float)alpha)
+        };
     }
     public struct MotionDescription
     {

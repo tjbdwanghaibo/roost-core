@@ -1,4 +1,5 @@
 #include "roost/client.hpp"
+#include "roost/network_time.hpp"
 #include "roost/sync.hpp"
 #include <chrono>
 #include <fstream>
@@ -76,6 +77,7 @@ int main(int argc, char **argv) {
     bool notified = false, canceled = false, second_phase = false;
     uint32_t cancel_sequence = 0;
     uint32_t seq = 0;
+    bool clock_requested = false, clock_received = false;
     client.on_event = [&](const roost::client_event &e) {
       if (e.type == ROOST_READY)
         ready = true;
@@ -125,7 +127,19 @@ int main(int argc, char **argv) {
                          e.status == ROOST_CANCELED_UNKNOWN;
             });
       }
-      if (notified && canceled) {
+      if (notified && canceled && !clock_requested) {
+        clock_requested = true;
+        double sent = roost::local_seconds();
+        client.clock_probe([&, sent](const roost::client_event &e) {
+          if (e.type != ROOST_RESPONSE)
+            throw std::runtime_error("clock failed");
+          auto sample = roost::clock_sample::decode(
+              sent, roost::local_seconds(), e.payload.data(), e.payload.size());
+          roost::network_clock clock;
+          clock_received = clock.observe(sample);
+        });
+      }
+      if (clock_received) {
         client.disconnect();
         client.pump();
         std::cout << "PASS native TCP/auth/PB/push/heartbeat/timeout/bounded "

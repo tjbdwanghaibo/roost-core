@@ -47,7 +47,8 @@ var (
 
 // Wire format (network byte order): magic[2], version[1], flags[1],
 // message_id[4], sequence[4], payload_length[4], payload. Message ID 0 is the
-// authentication handshake before authentication, and an empty heartbeat after it.
+// authentication handshake before authentication; afterwards it carries an empty
+// heartbeat or the RCN1 Gate clock probe (see NETWORK-EXPERIENCE.md).
 // Heartbeats receive an empty ACK with the same sequence; all business messages require a non-zero ID.
 // flags bit0 is push; bits1..2 select PB=0, Sync=1, Lockstep=2.
 // The shared wire codec rejects unsupported kinds before payload allocation.

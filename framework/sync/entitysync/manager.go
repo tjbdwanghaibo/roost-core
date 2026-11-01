@@ -39,6 +39,8 @@ type ManagerConfig struct {
 	ProfilePriorities map[entity.SyncProfile]int
 	// SnapshotBudget 只限制客户端尚未持有对象的创建；现有对象全量刷新不占额度，零值不限制。
 	SnapshotBudget SnapshotBudget
+	// SendBudget 是每个连接的状态软预算；零值关闭，删除不受限。
+	SendBudget SendBudget
 	// Limits bound a frame. Zero fields take frame.DefaultLimits.
 	// MaxObjects is also how many subjects one session may hold.
 	Limits frame.Limits
@@ -81,6 +83,7 @@ const (
 )
 
 func (c ManagerConfig) normalized() ManagerConfig {
+	c.SendBudget = c.SendBudget.normalized()
 	if c.Interval <= 0 {
 		c.Interval = DefaultInterval
 	}
@@ -200,6 +203,7 @@ type Manager struct {
 	windowByteBlocked bool            // 本窗口已遇到放不下的冷对象，留到下一窗口首位竞争
 	snapshotNextClass snapshotClass   // 小额度跨窗口仍轮流服务两类
 	snapshotsDeferred atomic.Uint64
+	sendDeferred      atomic.Uint64
 
 	// resubmitMu 保护框架撤销的订阅记录（见 policy_queue.go）；叶子锁。
 	resubmitMu      sync.Mutex

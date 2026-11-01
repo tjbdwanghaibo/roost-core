@@ -51,6 +51,10 @@ typedef struct roost_event {
  * bindings together.
  */
 ROOST_API uint32_t roost_abi_version(void);
+/* Authenticated Gate UTC probe; normal RESPONSE/REQUEST_FAILED lifecycle.
+ * Response: RCN1 + receive/send Unix nanoseconds (two big endian int64).
+ * Empty ID-0 heartbeat remains unchanged. No automatic probes are sent. */
+ROOST_API uint32_t roost_clock_probe(roost_client *client, uint32_t timeout_ms);
 ROOST_API roost_options roost_default_options(void);
 ROOST_API roost_client *roost_create(roost_options options);
 /* Numeric IPv4/IPv6 endpoint. Resolve DNS via the engine/platform before

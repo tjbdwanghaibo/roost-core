@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
@@ -36,6 +37,8 @@ type subscription struct {
 	// snapshotClass 只决定冷对象创建的调度；有效 Profile 和线协议语义不变。
 	snapshotClass snapshotClass
 	baseVersion   uint64
+	// sendWaiting 只在成功结算后清除，新脏数据不能刷新等待年龄。
+	sendWaiting time.Time
 }
 
 // subject is an entity's sync state plus its subscribers. The subscribers

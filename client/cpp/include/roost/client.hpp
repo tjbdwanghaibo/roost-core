@@ -110,6 +110,17 @@ public:
     pending_.emplace(sequence, std::move(callback));
     return sequence;
   }
+  uint32_t clock_probe(std::function<void(const client_event &)> callback,
+                       uint32_t timeout_ms = 0) {
+    check();
+    if (connecting_)
+      throw std::logic_error("connect in progress");
+    auto sequence = roost_clock_probe(native_, timeout_ms);
+    if (!sequence)
+      throw std::runtime_error("clock probe not admitted");
+    pending_.emplace(sequence, std::move(callback));
+    return sequence;
+  }
   template <class Message>
   uint32_t request_pb(uint32_t id, uint32_t reply, const Message &message,
                       std::function<void(const client_event &)> callback,

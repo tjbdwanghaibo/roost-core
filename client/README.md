@@ -4,6 +4,16 @@ Roost 的自定义协议负责帧、路由编号与请求关联，业务载荷�
 
 ## 标准业务入口
 
+校时、表现插值、输入预测与阶段诊断见[网络体验接入](../docs/framework/NETWORK-EXPERIENCE.md)。这些能力按业务显式启用，EntitySync 仍立即应用权威增量。
+
+```csharp
+var clock = new NetworkClock();
+// client 是已连接的 GameClient；在创建它的线程调用，并持续 Pump。
+client.ProbeClock(sample => clock.Observe(sample), error => Console.WriteLine(error));
+// 换服/重连先 clock.Reset()。只在 clock.Ready 后使用 clock.Now(ClockSample.LocalNow)。
+client.Entities.Trace = new ClientTrace(1024);
+```
+
 新业务推荐 `GameClient`，已有低层消费者可以继续使用 `TcpSession`。前者复用同一 RS 编解码和 TCP 会话，没有另起网络协议。
 
 - `Connection`：票据鉴权、默认 15 秒心跳、请求预算、断线状态；自动重连默认关闭，由业务通过 `ConnectionOptions.AutoReconnect` 启用。有界指数退避、每次重新取票、每次成功/失败都有 `ReconnectResult`，不会自动重发业务请求。

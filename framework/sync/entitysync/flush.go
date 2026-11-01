@@ -283,6 +283,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 		sessionIDs = append(sessionIDs, sid)
 	}
 	slices.Sort(sessionIDs)
+	m.scheduleSends(work, time.Now())
 	m.scheduleSnapshots(work, plan)
 	sessionIDs = plan.admissionOrder(sessionIDs)
 	defer m.commitSnapshotAttempts(work, plan)
@@ -430,6 +431,10 @@ func (m *Manager) pushSessionFrames(ctx context.Context, sid SessionID, batch *f
 		}
 		admissionStarted := time.Now()
 		batch.snapshotAttempted = true
+		if m.config.SendBudget.MaxBytes > 0 {
+			// 按实际尝试的完整帧计费；未尝试、编码失败、旧连接不预扣。
+			sess.lifetime.sendBytes += len(encoded.payload)
+		}
 		pushErr = m.config.Transport.Push(ctx, sid, encoded.payload)
 		if m.config.Trace != nil {
 			stage := "admitted"
@@ -533,6 +538,7 @@ func (m *Manager) settleSubscriptions(sid SessionID, settlements []settlement) {
 					settle.subj.profilesValid = false
 				}
 				sub.baseVersion = settle.version
+				sub.sendWaiting = time.Time{}
 				m.changeSubscriptionKindLocked(settle.subj, sid, sub, kindLive)
 				sub.snapshotClass = snapshotArrival
 			}

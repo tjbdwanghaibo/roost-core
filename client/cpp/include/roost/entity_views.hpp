@@ -1,4 +1,5 @@
 #pragma once
+#include "client_trace.hpp"
 #include "protobuf.hpp"
 #include "sync.hpp"
 #include <functional>
@@ -26,6 +27,8 @@ class entity_views {
       codecs_;
 
 public:
+  // 生命周期由调用方保证；仅在消费线程设置/读取。
+  client_trace *trace = nullptr;
   template <class Message>
   void register_dao(std::string name, std::string profile = "self",
                     uint32_t schema = 0) {
@@ -52,6 +55,7 @@ public:
   bool receive(const uint8_t *raw, size_t size,
                std::vector<protobuf_change> &changes) {
     changes.clear();
+    double started = trace ? local_seconds() : 0;
     std::vector<change> patches;
     if (!receiver_.receive(raw, size, patches))
       return false;
@@ -103,6 +107,11 @@ public:
       }
       views_ = std::move(next);
       changes = std::move(result);
+      if (trace) {
+        double now = local_seconds();
+        trace->record({client_stage::apply, receiver_.epoch(), receiver_.tick(),
+                       now, now - started});
+      }
       return true;
     } catch (...) {
       // 协议元数据已推进；解码失败后废弃基线，业务必须断开并重新取 Full。

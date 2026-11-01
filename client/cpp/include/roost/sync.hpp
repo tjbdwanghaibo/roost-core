@@ -91,6 +91,8 @@ class sync_receiver {
   }
 
 public:
+  uint32_t epoch() const { return epoch_; }
+  uint32_t tick() const { return tick_; }
   void reset() {
     objects_.clear();
     subjects_.clear();

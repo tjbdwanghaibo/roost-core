@@ -18,6 +18,7 @@ import (
 )
 
 type tcpSession struct {
+	writeTrace      *TCPWriteTrace
 	connection      net.Conn
 	principal       Principal
 	nonce           string
@@ -151,6 +152,7 @@ func outboundQueueBytes(maxPayloadBytes uint32) int64 {
 // budget 是服务器的全进程出站驻留预算（nil 表示不设）。
 func newTCPSession(connectionCtx context.Context, cancel context.CancelCauseFunc, connection net.Conn, principal Principal, config TCPConfig, budget *outboundBudget) *tcpSession {
 	session := &tcpSession{
+		writeTrace: config.WriteTrace,
 		connection: connection, principal: clonePrincipal(principal), nonce: newBindingToken(),
 		writeTimeout: config.WriteTimeout, maxPayloadBytes: config.MaxPayloadBytes, cancel: cancel,
 		wake: make(chan struct{}, 1), maxQueuedBytes: outboundQueueBytes(config.MaxPayloadBytes), budget: budget,
@@ -444,7 +446,16 @@ func (session *tcpSession) finishWriting() {
 	}
 }
 
-func (session *tcpSession) writeFrame(ctx context.Context, flags byte, messageID, sequence uint32, payload []byte) error {
+func (session *tcpSession) writeFrame(ctx context.Context, flags byte, messageID, sequence uint32, payload []byte) (result error) {
+	var written int64
+	if session.writeTrace != nil {
+		started := time.Now()
+		defer func() {
+			session.writeTrace.record(TCPWriteEvent{At: time.Now().UnixNano(), Connection: session.nonce,
+				PlayerID: session.principal.PlayerID, MessageID: messageID, Sequence: sequence,
+				Kind: wire.PayloadKind((flags >> 1) & 3), Bytes: written, Duration: time.Since(started), Failed: result != nil}, payload)
+		}()
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -489,7 +500,7 @@ func (session *tcpSession) writeFrame(ctx context.Context, flags byte, messageID
 		return fmt.Errorf("%w: %w", errInvalidFrame, err)
 	}
 	buffers := net.Buffers{header[:], payload}
-	written, err := buffers.WriteTo(session.connection)
+	written, err = buffers.WriteTo(session.connection)
 	if err == nil {
 		return nil
 	}

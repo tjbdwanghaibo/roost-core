@@ -52,22 +52,36 @@ namespace Roost.Client
         public void Request<T>(uint messageId, uint responseId, ReadOnlyMemory<byte> payload,
             Func<byte[], T> parse, Action<T> received, Action<Exception> failed, CancellationToken cancellation = default)
         {
+            if (parse == null) throw new ArgumentNullException(nameof(parse));
+            byte[] owned = payload.ToArray();
+            BeginRequest(() => Connection.RequestAsync(messageId, responseId, owned, cancellation),
+                packet => parse(packet.Payload.ToArray()), received, failed);
+        }
+
+        public void ProbeClock(Action<ClockSample> received, Action<Exception> failed, CancellationToken cancellation = default)
+        {
+            BeginRequest(() => Connection.ProbeClockAsync(cancellation), sample => sample, received, failed);
+        }
+
+        private void BeginRequest<TPacket, T>(Func<Task<TPacket>> request, Func<TPacket, T> parse,
+            Action<T> received, Action<Exception> failed)
+        {
             CheckThread();
-            if (parse == null || received == null || failed == null) throw new ArgumentNullException(nameof(parse));
+            if (received == null || failed == null) throw new ArgumentNullException(nameof(received));
             lock (completionGate)
             {
                 if (pending >= capacity) throw new InvalidOperationException("Business completion capacity exhausted.");
                 pending++;
             }
-            _ = CompleteRequest(messageId, responseId, payload.ToArray(), parse, received, failed, Connection.ConnectionVersion, cancellation);
+            _ = CompleteRequest(request, parse, received, failed, Connection.ConnectionVersion);
         }
 
-        private async Task CompleteRequest<T>(uint messageId, uint responseId, byte[] payload,
-            Func<byte[], T> parse, Action<T> received, Action<Exception> failed, long requestVersion, CancellationToken cancellation)
+        private async Task CompleteRequest<TPacket, T>(Func<Task<TPacket>> request,
+            Func<TPacket, T> parse, Action<T> received, Action<Exception> failed, long requestVersion)
         {
-            Packet? response = null;
+            TPacket response = default!;
             Exception? failure = null;
-            try { response = await Connection.RequestAsync(messageId, responseId, payload, cancellation).ConfigureAwait(false); }
+            try { response = await request().ConfigureAwait(false); }
             catch (Exception error) { failure = error; }
             lock (completionGate)
             {
@@ -77,7 +91,7 @@ namespace Roost.Client
                     if (failure != null) { failed(failure); return; }
                     if (Connection.ConnectionVersion != requestVersion) { failed(new IOException("Response belongs to a previous connection.")); return; }
                     T value;
-                    try { value = parse(response!.Payload.ToArray()); }
+                    try { value = parse(response); }
                     catch (Exception error) { failed(error); return; }
                     received(value);
                 });

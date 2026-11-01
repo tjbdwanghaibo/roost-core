@@ -70,6 +70,8 @@ public sealed class NativeClient : IDisposable
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern int roost_poll(IntPtr client, out NativeEvent value);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
+    private static extern uint roost_clock_probe(IntPtr client, uint timeout);
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern void roost_disconnect(IntPtr client);
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl)]
     private static extern void roost_destroy(IntPtr client);
@@ -115,6 +117,13 @@ public sealed class NativeClient : IDisposable
             roost_request_with_timeout(handle, id, reply, payload, (UIntPtr)payload.Length, timeoutMilliseconds);
         if (sequence == 0)
             throw new InvalidOperationException("Request not admitted");
+        return sequence;
+    }
+    public uint ProbeClock(uint timeoutMilliseconds = 0)
+    {
+        Check();
+        uint sequence = roost_clock_probe(handle, timeoutMilliseconds);
+        if (sequence == 0) throw new InvalidOperationException("Clock probe not admitted");
         return sequence;
     }
     public uint Notify(uint id, uint kind, byte[] payload)

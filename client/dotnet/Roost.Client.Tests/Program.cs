@@ -101,6 +101,7 @@ internal static partial class Program
         TestConnectionReconnect();
         TestReconnectFailureLimit();
         TestSceneTimeDomain();
+        TestNetworkExperience();
         await TestUnitySyncAdapter();
         if (args.Length == 3)
             await GeneratedServer(args[1], int.Parse(args[2]));
@@ -119,6 +120,10 @@ internal static partial class Program
     private static async Task GeneratedServer(string host, int port)
     {
         using var session = await TcpSession.ConnectAsync(host, port, "ticket", TimeSpan.FromSeconds(10));
+        double sent = ClockSample.LocalNow;
+        var clockReply = await session.RequestAsync(0, 0, new byte[] {82,67,78,49}, TimeSpan.FromSeconds(5));
+        var clockSample = ClockSample.Decode(sent, ClockSample.LocalNow, clockReply.Payload.Span);
+        Check(new NetworkClock().Observe(clockSample), "generated Gate clock control");
         var calls = new List<Task<Packet>>();
         for (int i = 0; i < 32; i++)
         {

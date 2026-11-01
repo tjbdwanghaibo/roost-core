@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 binary = sys.argv[1]
 repo = pathlib.Path(__file__).resolve().parents[3]
@@ -46,6 +47,10 @@ def serve():
                 body=exact(conn,size)
                 if mid: routes.add(mid)
                 if mid==0:
+                    if authenticated and body == b'RCN1':
+                        stamp = time.time_ns()
+                        send(conn,0,seq,b'RCN1'+struct.pack('!qq',stamp,stamp))
+                        continue
                     if not authenticated: assert body==b'ticket'; authenticated=True
                     else: heartbeats.append(seq)
                     send(conn,0,seq)

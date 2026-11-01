@@ -153,6 +153,18 @@ namespace Roost.Client
             }
         }
 
+        // 返回样本，由消费线程显式交给 NetworkClock；不在网络线程修改游戏时钟。
+        public async Task<ClockSample> ProbeClockAsync(CancellationToken cancellation = default)
+        {
+            TcpSession connected = GetSession();
+            double sent = ClockSample.LocalNow;
+            Packet response = await connected.RequestAsync(0, 0, new byte[] { 82, 67, 78, 49 },
+                options.RequestTimeout, cancellation).ConfigureAwait(false);
+            lock (gate)
+                if (session != connected) throw new IOException("Clock sample belongs to a replaced connection.");
+            return ClockSample.Decode(sent, ClockSample.LocalNow, response.Payload.Span);
+        }
+
         public Task NotifyAsync(uint messageId, ReadOnlyMemory<byte> payload, CancellationToken cancellation = default)
         {
             return GetSession().NotifyAsync(messageId, PayloadKind.Protobuf, payload, options.RequestTimeout, cancellation);

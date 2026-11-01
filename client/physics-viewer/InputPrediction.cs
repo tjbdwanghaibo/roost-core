@@ -1,10 +1,12 @@
 using System;
-using System.Collections.Generic;
 using System.Numerics;
 
 namespace Roost.PhysicsViewer
 {
-    public struct PredictedState { public Vector3 Position, Velocity; }
+    public struct PredictedState
+    {
+        public Vector3 Position, Velocity;
+    }
     public struct PredictedInput
     {
         public ulong Sequence;
@@ -17,70 +19,81 @@ namespace Roost.PhysicsViewer
     public sealed class InputPrediction
     {
         readonly object mutex = new object();
-        readonly List<PredictedInput> history = new List<PredictedInput>();
+        readonly Roost.Client.PredictionHistory<PredictedInput> history =
+            new Roost.Client.PredictionHistory<PredictedInput>(32);
         PredictedInput acknowledged;
         PredictedState authority;
-        ulong sent, ack, overflowUntil;
         double receivedAt;
-        bool ready, active, overflow;
+        bool ready, active;
         public const double Horizon = .25;
-        public bool Held { get { lock (mutex) return overflow; } }
+        public bool Held
+        {
+            get {
+                lock (mutex) return history.Held;
+            }
+        }
         public void Record(PredictedInput input)
         {
             lock (mutex)
             {
-                if(input.Sequence<=sent || double.IsNaN(input.At) || double.IsInfinity(input.At))
+                if (double.IsNaN(input.At) || double.IsInfinity(input.At))
                     throw new ArgumentException("Prediction input order");
-                if(history.Count!=0 && input.At<history[history.Count-1].At)
+                if (history.Count != 0 && input.At < history[history.Count - 1].At)
                     throw new ArgumentException("Prediction clock order");
-                sent=input.Sequence;
-                if(history.Count==32) { overflow=true; overflowUntil=history[0].Sequence; history.RemoveAt(0); }
-                history.Add(input);
+                history.Record(input.Sequence, input);
             }
         }
         public void Reconcile(ulong sequence, bool inputActive, PredictedState state, double now)
         {
-            lock(mutex)
+            lock (mutex)
             {
-                if(sequence<ack || sequence>sent) throw new ArgumentException("Prediction acknowledgement order");
-                foreach(var input in history) if(input.Sequence<=sequence) acknowledged=input;
-                history.RemoveAll(input=>input.Sequence<=sequence);
-                ack=sequence; authority=state; receivedAt=now; ready=true; active=inputActive;
-                if(sequence>=overflowUntil) overflow=false;
+                if (history.Acknowledge(sequence, out var input))
+                    acknowledged = input;
+                authority = state;
+                receivedAt = now;
+                ready = true;
+                active = inputActive;
             }
         }
-        public PredictedState Predict(double now, Func<PredictedState,PredictedInput,float,PredictedState> step)
+        public PredictedState Predict(double now, Func<PredictedState, PredictedInput, float, PredictedState> step)
         {
-            lock(mutex)
+            lock (mutex)
             {
-                if(!ready || overflow || now<receivedAt || now-receivedAt>Horizon) return authority;
-                var state=authority;
-                double budget=Horizon;
+                if (!ready || history.Held || now < receivedAt || now - receivedAt > Horizon)
+                    return authority;
+                var state = authority;
+                double budget = Horizon;
                 // 邮箱输入会被合并；这里只重放尚未被确认的本地时间片，最新输入最多外推至 Horizon。
-                for(int i=0;i<history.Count && budget>0;i++)
+                for (int i = 0; i < history.Count && budget > 0; i++)
                 {
-                    var input=history[i];
-                    if(now-input.At>Horizon) continue;
-                    double end=i+1<history.Count?history[i+1].At:now;
-                    double span=Math.Min(budget,Math.Max(0,Math.Min(.05,end-input.At)));
-                    Integrate(ref state,input,span,step); budget-=span;
+                    var input = history[i];
+                    if (now - input.At > Horizon)
+                        continue;
+                    double end = i + 1 < history.Count ? history[i + 1].At : now;
+                    double span = Math.Min(budget, Math.Max(0, Math.Min(.05, end - input.At)));
+                    Integrate(ref state, input, span, step);
+                    budget -= span;
                 }
-                if(history.Count==0)
+                if (history.Count == 0)
                 {
-                    var input=acknowledged;input.Jump=false;
-                    if(!active) input.Acceleration=Vector3.Zero;
-                    Integrate(ref state,input,Math.Min(budget,now-receivedAt),step);
+                    var input = acknowledged;
+                    input.Jump = false;
+                    if (!active)
+                        input.Acceleration = Vector3.Zero;
+                    Integrate(ref state, input, Math.Min(budget, now - receivedAt), step);
                 }
                 return state;
             }
         }
         static void Integrate(ref PredictedState state, PredictedInput input, double duration,
-                              Func<PredictedState,PredictedInput,float,PredictedState> step)
+                              Func<PredictedState, PredictedInput, float, PredictedState> step)
         {
-            while(duration>1e-6)
+            while (duration > 1e-6)
             {
-                float dt=(float)Math.Min(.02,duration);
-                state=step(state,input,dt); input.Jump=false; duration-=dt;
+                float dt = (float)Math.Min(.02, duration);
+                state = step(state, input, dt);
+                input.Jump = false;
+                duration -= dt;
             }
         }
     }

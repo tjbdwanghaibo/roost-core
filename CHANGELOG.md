@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+- 修复 RV-20261101-01：失败创建检测已有 DAO 再次登记，外部持久副作用使整个 Nest 事务回滚；新增红绿回归，记录见 Nest 实现篇。
+- 修复 RV-20261101-02：Saga 终态等待绑定 Lifecycle，并补查登记间隙；换轮返回 ErrLifecycleChanged，不把旧高版本成功当作本轮结果。
+- 修复 RV-20261101-03：Native 心跳选包与取号跟请求准入同锁，防止序号倒序被 Gate 断开；新增并发准入回环验证。
+- FPS 表现链路：物理 viewer 接入正式自适应插值；C# / C++ 插值播放头限制在实际已显示样本范围，长暂停恢复后仍可插值，不被虚假的未来播放时间卡住。
+
+- Gate 增加鉴权后的 RCN1 校时探针与可选有界 socket 写出诊断；C# / native / Unity 复用正式请求生命周期，默认不自动探测。
+- 客户端增加单调网络时钟估计、可配置有界表现插值、输入预测历史与 Apply/Present 诊断；物理 viewer 接入正式预测历史，保留最新输入邮箱语义。
+- EntitySync 增加默认关闭的逐连接状态发送软预算、独立发送优先级与等待公平性；完整 subject 发送，删除放行，被挡增量恢复当前 Full，不改变 handler 级 on_change 或持久化契约。接入及验证见 [网络体验](docs/framework/NETWORK-EXPERIENCE.md)。
+
 ## [v1.36.0] - 2026-11-01
 
 - Unity 增加可构建 UPM 包、平台插件导入、主线程 Driver 与完整 PB/EntitySync/Lockstep 示例；实际验证 macOS ARM64 Editor、Mono 与 IL2CPP Player，提供客户端容量和 TCP 故障复跑入口。移动设备及其他引擎另行验收。

@@ -3,6 +3,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -493,15 +494,27 @@ func (server *TCPServer) readRequests(connectionCtx context.Context, connection 
 	}
 }
 
-// answerHeartbeat 校验心跳帧并原序号回一个空帧。返回 false 时调用方结束连接。
+// answerHeartbeat 处理已认证控制帧，不进入 Nest。校时返回 Gate 的 UTC 时间，
+// 不是任意 Game/场景的业务时钟；跨主机使用前必须确认时钟域一致。
 func (server *TCPServer) answerHeartbeat(connectionCtx context.Context, session *tcpSession, request frame, releasePayload func()) bool {
-	valid := request.flags == 0 && server.config.HeartbeatEnabled && len(request.payload) == 0
+	received := time.Now().UnixNano()
+	valid := request.flags == 0 && server.config.HeartbeatEnabled
+	var reply []byte
+	if len(request.payload) != 0 {
+		valid = valid && string(request.payload) == "RCN1"
+		if valid {
+			reply = make([]byte, 20)
+			copy(reply, "RCN1")
+			binary.BigEndian.PutUint64(reply[4:12], uint64(received))
+			binary.BigEndian.PutUint64(reply[12:20], uint64(time.Now().UnixNano()))
+		}
+	}
 	releasePayload()
 	if !valid {
 		metrics.IncCounter("player_tcp_frame_error_total", nil, 1)
 		return false
 	}
-	return session.writeQueued(connectionCtx, 0, 0, request.sequence, nil) == nil
+	return session.writeQueued(connectionCtx, 0, 0, request.sequence, reply) == nil
 }
 
 // dispatchRequest 在分发预算内处理一个请求并写回应答。返回 false 时调用方结束连接。

@@ -1,5 +1,7 @@
 # Roost native 客户端
 
+发送顺序修复 RV-20261101-03：网络线程在与请求准入相同的 mutex 内选择下一包并为心跳取号，实际编码与 socket 操作仍在锁外；保留请求 handle、取消和响应关联，不关闭 Gate 的递增序号校验。[原审查](https://github.com/tjbdwanghaibo/roost-core/blob/30f9261bea91016c365f8c1f4d35d42752f2d48d/docs/maintenance/COMMIT-REVIEW.md)在 main `c31e65cc` 受控插桩复现 `(0,1) → (0,3) → (42,2)`；这不是自然触发频率测量。新增 `native_sequence` CTest 以独立应用线程提交 500 个请求、1ms 心跳，对端逐包验证严格递增，并保留全部响应/错误断言；本机 macOS ARM64 七组 CTest 通过。
+
 C++17 客户端覆盖当前 Core 的 TCP/RS v2、业务 PB、EntitySync、Lockstep 和场景时间域。Unity、UE 与其他宿主复用网络核心，业务状态只在消费线程应用。功能实现与平台验收分开：原 C# 客户端保留，平台状态见末表。
 
 本轮 native 网络 **ABI 2**：事件增加结构化请求状态，Options 增加独立心跳超时。库、头文件和托管绑定一起更新；不兼容旧二进制。C/C++ 宿主先检查 `roost_abi_version()==2`，托管绑定已自动检查。
@@ -12,6 +14,7 @@ C++17 客户端覆盖当前 Core 的 TCP/RS v2、业务 PB、EntitySync、Lockst
 - `game_client.hpp`：可选完整 Protobuf runtime 的业务入口，typed request/push 路由、DAO 变化/重置通知、Lockstep 路由及可选有界指数退避重连。
 - `lockstep.hpp` / `lockstep.h`：输入/哈希/追帧、乱序组装、C9 v2 恢复失败、CA01 分块快照与 SHA-256/业务状态哈希校验；C ABI 无 STL/异常。
 - `time_domain.hpp`：场景暂停/倍率/单调时间外推，使用估计的服务端业务时间。
+- `network_time.hpp`、`prediction.hpp`、`client_trace.hpp`：显式 Gate 时钟探测、有界表现插值、输入 ACK/重放及客户端应用/展示诊断。[接入与边界](../../docs/framework/NETWORK-EXPERIENCE.md)。新 `roost_clock_probe` 导出需要同步更新 native 库和 Unity 绑定。
 - `views.h`：可选 Protobuf 视图 C ABI，加载 protoc descriptor set，输出 Full/Delta/Remove 与应用增量后的完整 PB；供禁用异常的 UE 等宿主使用。
 - `sync.hpp`：EntitySync 流/epoch/tick、对象代际与 Subject 版本校验，输出 Full/Delta/Remove。重复帧不通知；失败后等待 Full。
 - `protobuf.hpp` / `entity_views.hpp`：可选 Google Protobuf 完整 runtime。按 namespace/profile/encoding/schema 注册 DAO 类型；先解码和应用整批，再替换视图，回调获得只读前后快照。字段包装存在才替换，集合不做 MergeFrom 追加。空 Delta 仅推进版本。

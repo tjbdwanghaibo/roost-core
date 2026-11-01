@@ -192,6 +192,34 @@ public:
       throw std::invalid_argument("Lockstep ID/receiver required");
     locksteps_[broadcast_id] = std::move(receive);
   }
+  uint32_t probe_clock(std::function<void(clock_sample)> completed,
+                       std::function<void(const client_event &)> failed,
+                       uint32_t timeout_ms = 0) {
+    check();
+    if (!completed || !failed)
+      throw std::invalid_argument("clock callbacks required");
+    double sent = local_seconds();
+    return connection_.clock_probe(
+        [sent, completed, failed](const client_event &e) {
+          if (e.type != ROOST_RESPONSE) {
+            failed(e);
+            return;
+          }
+          clock_sample sample;
+          try {
+            sample = clock_sample::decode(sent, local_seconds(),
+                                          e.payload.data(), e.payload.size());
+          } catch (...) {
+            auto invalid = e;
+            invalid.type = ROOST_REQUEST_FAILED;
+            invalid.status = ROOST_INVALID_PAYLOAD;
+            failed(invalid);
+            return;
+          }
+          completed(sample);
+        },
+        timeout_ms);
+  }
   template <class Response, class Request>
   uint32_t request(uint32_t id, uint32_t reply, const Request &request,
                    std::function<void(const Response &)> completed,

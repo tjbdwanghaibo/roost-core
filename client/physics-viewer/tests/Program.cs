@@ -46,6 +46,26 @@ static class Program
   playback.Sample(next,11,.3);
   Check(Math.Abs(playback.Read(.35).Position.X-7.5f)<.0001,"unchanged global frame reset interpolation");
   Check(playback.Read(10).Position.X==10,"stall must freeze at authority");
+  // 固定的 20Hz 到达轨迹、60Hz 展示；抖动下向前运动不能倒放，也不能超过最新权威位置。
+  var jittered = new SparsePosePlayback();
+  double[] jitter = {0, .02, .005, .015};
+  int sampleIndex = 0;
+  float displayed = 0, latest = 0;
+  for(int render=0; render<600; render++) {
+   double now=render/60.0;
+   while(sampleIndex<200) {
+    ulong sampleTick=(ulong)(sampleIndex*5/2);
+    double arrival=sampleIndex*.05+.06+jitter[sampleIndex%jitter.Length];
+    if(arrival>now) break;
+    latest=(float)(sampleTick*.02*3);
+    jittered.Sample(new DisplayPose{Position=Vector3.UnitX*latest,Rotation=Quaternion.Identity},sampleTick,arrival);
+    sampleIndex++;
+   }
+   float position=jittered.Read(now).Position.X;
+   Check(position>=displayed-.0001f && position<=latest+.0001f,"20Hz jitter bounded monotonic presentation");
+   displayed=position;
+  }
+  Check(sampleIndex>190 && displayed>28,"20Hz playback makes progress");
   var motion=new MotionDescription{Translation=Vector3.UnitY*2,PeriodSeconds=4,Axis=Vector3.UnitY,AngularSpeed=1};
   var origin=new DisplayPose{Position=new Vector3(2,1,-3),Rotation=Quaternion.Identity};
   using var doc=JsonDocument.Parse(File.ReadAllText("client/physics-viewer/tests/motion.json"));

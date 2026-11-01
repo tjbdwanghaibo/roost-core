@@ -90,6 +90,25 @@ public sealed class NativeGameClient : IDisposable
         return sequence;
     }
 
+    public uint ProbeClock(Action<Roost.Client.ClockSample> completed, Action<Exception> failed,
+                           uint timeoutMilliseconds = 0)
+    {
+        Check();
+        if (connecting) throw new InvalidOperationException("Connect in progress");
+        if (completed == null || failed == null) throw new ArgumentNullException(nameof(completed));
+        double sent = Roost.Client.ClockSample.LocalNow;
+        uint sequence = connection.ProbeClock(timeoutMilliseconds);
+        pending.Add(sequence, e =>
+        {
+            if (e.Type != NativeClient.EventType.Response) { failed(new NativeRequestException(e)); return; }
+            Roost.Client.ClockSample sample;
+            try { sample = Roost.Client.ClockSample.Decode(sent, Roost.Client.ClockSample.LocalNow, e.Payload); }
+            catch (Exception error) { failed(error); return; }
+            completed(sample);
+        });
+        return sequence;
+    }
+
     public bool Cancel(uint sequence)
     {
         Check();

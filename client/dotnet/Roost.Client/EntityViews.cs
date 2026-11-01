@@ -45,6 +45,7 @@ namespace Roost.Client
         private readonly int maxObjects;
         private bool applying;
         private long resetVersion;
+        public ClientTrace? Trace { get; set; }
         public IReadOnlyDictionary<(ushort ObjectId, ushort ComponentType), EntityView> Current =>
             new ReadOnlyDictionary<(ushort, ushort), EntityView>(views);
 
@@ -74,6 +75,7 @@ namespace Roost.Client
         {
             if (applying) throw new InvalidOperationException("Recursive EntitySync receive.");
             applying = true;
+            double started = Trace == null ? 0 : ClockSample.LocalNow;
             try
             {
                 SyncFrame? committed = null;
@@ -84,7 +86,15 @@ namespace Roost.Client
                     committed = frame;
                 });
                 // 业务通知发生在 receiver 确认基线之后。回调异常不能使已提交帧变成缺口。
-                if (accepted) { changed?.Invoke(changes!); applied?.Invoke(committed!); }
+                if (accepted)
+                {
+                    if (Trace != null)
+                    {
+                        double now = ClockSample.LocalNow;
+                        Trace.Record(new ClientTraceEvent(ClientStage.Apply, committed!.Epoch, committed.Tick, now, now - started));
+                    }
+                    changed?.Invoke(changes!); applied?.Invoke(committed!);
+                }
                 return accepted;
             }
             finally { applying = false; }

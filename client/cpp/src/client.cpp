@@ -198,12 +198,20 @@ struct roost_client {
         if (ready && outgoing.empty()) {
           Request request{};
           bool found = false;
+          bool heartbeat = false;
           {
             std::lock_guard<std::mutex> lock(mutex);
             if (!commands.empty()) {
               request = std::move(commands.front());
               commands.pop_front();
               found = true;
+            } else if (options.heartbeat_ms && !heartbeat_seq &&
+                       now >= heartbeat_at) {
+              // 选包与心跳取号必须和 admit 同锁，确保线上的序号沿发送顺序递增。
+              heartbeat_seq = sequence.fetch_add(1) + 1;
+              if (heartbeat_seq == 0)
+                throw std::runtime_error("sequence exhausted");
+              heartbeat = true;
             }
           }
           if (found) {
@@ -222,7 +230,7 @@ struct roost_client {
                   packet(request.id, request.seq, request.body, request.kind);
               outgoing_deadline = request.deadline;
               sent = 0;
-              if (request.reply)
+              if (request.reply || request.id == 0)
                 pending.emplace(request.seq, std::move(request));
               else {
                 notify_seq = request.seq;
@@ -230,11 +238,7 @@ struct roost_client {
                 notify_kind = request.kind;
               }
             }
-          } else if (options.heartbeat_ms && !heartbeat_seq &&
-                     now >= heartbeat_at) {
-            heartbeat_seq = sequence.fetch_add(1) + 1;
-            if (heartbeat_seq == 0)
-              throw std::runtime_error("sequence exhausted");
+          } else if (heartbeat) {
             outgoing = packet(0, heartbeat_seq, {});
             sent = 0;
             heartbeat_deadline = now + std::chrono::milliseconds(
@@ -424,8 +428,8 @@ int roost_connect(roost_client *c, const char *address, uint16_t port,
 }
 static uint32_t admit(roost_client *c, uint32_t id, uint32_t reply,
                       uint32_t kind, const uint8_t *data, size_t size,
-                      uint32_t timeout_ms = 0) {
-  if (!c || !id || (kind != 0 && kind != 2) || (!data && size) ||
+                      uint32_t timeout_ms = 0, bool control = false) {
+  if (!c || (!id && !control) || (kind != 0 && kind != 2) || (!data && size) ||
       size > c->options.max_payload)
     return 0;
   try {
@@ -468,6 +472,10 @@ uint32_t roost_request_with_timeout(roost_client *c, uint32_t id,
 uint32_t roost_notify(roost_client *c, uint32_t id, uint32_t kind,
                       const uint8_t *data, size_t size) {
   return admit(c, id, 0, kind, data, size);
+}
+uint32_t roost_clock_probe(roost_client *c, uint32_t timeout_ms) {
+  const uint8_t payload[] = {'R', 'C', 'N', '1'};
+  return admit(c, 0, 0, 0, payload, sizeof(payload), timeout_ms, true);
 }
 int roost_cancel(roost_client *c, uint32_t seq) {
   if (!c || !seq)

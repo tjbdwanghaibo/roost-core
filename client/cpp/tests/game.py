@@ -56,6 +56,10 @@ def serve():
                     assert magic == b"RS" and version == 2 and n < 1024
                     if mid == 0:
                         assert flags == 0
+                        if seq != 1 and body == b"RCN1":
+                            stamp = time.time_ns()
+                            send(c, 0, seq, b"RCN1" + struct.pack("!qq", stamp, stamp))
+                            continue
                         if seq == 1:
                             assert body == b"ticket"
                         send(c, 0, seq)

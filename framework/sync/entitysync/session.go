@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 )
@@ -46,6 +47,9 @@ type wireConfig struct {
 // 关闭后重开是新的 lifetime。
 type sessionLifetime struct {
 	traceID uint64
+	// 发送窗口仅由持有 flushGate 的调用方访问；编码副本共享，新连接重新开始。
+	sendWindow time.Time
+	sendBytes  int
 	// subjects 是订阅意图的反向索引，包含待快照与待删除项。
 	// 仅 Manager.mu 保护；编码副本共享生命周期，但不能读写此表。
 	subjects map[int64]*subject
