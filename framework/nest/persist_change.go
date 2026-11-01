@@ -19,6 +19,8 @@ var ErrReceiptConflict = errors.New("nest: transaction receipt conflict")
 // PersistChange 是一个 DAO 在本事务内累积的持久化变化：字段位掩码、删除标记、按路径的 $set / $unset，以及整字段
 // 重写。回滚时丢弃，不把持久化脏掩码写回 DAO。
 type PersistChange struct {
+	// revision 记录登记次数，包括已有参与方以相同 mask 再写。失败创建据此检测外部副作用。
+	revision   uint64
 	Mask       uint64
 	Delete     bool
 	Set        map[string]any
@@ -29,6 +31,7 @@ type PersistChange struct {
 // Clone 返回独立的副本（Set 的值浅拷贝）。
 func (change PersistChange) Clone() PersistChange {
 	return PersistChange{
+		revision:   change.revision,
 		Mask:       change.Mask,
 		Delete:     change.Delete,
 		Set:        maps.Clone(change.Set),
@@ -61,6 +64,7 @@ func (tx *RollbackTx) persistChange(participant MutationParticipant, mask uint64
 		tx.includeUnpersistedDAOs(participant)
 	}
 	change.Mask |= mask
+	change.revision++
 	return change, nil
 }
 

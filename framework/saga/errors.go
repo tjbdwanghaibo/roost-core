@@ -4,6 +4,8 @@ import "errors"
 
 // saga 的错误值。
 var (
+	// ErrLifecycleChanged 表示终态等待登记期间同业务键已换轮，不能沿用旧等待结果。
+	ErrLifecycleChanged  = errors.New("saga: lifecycle changed while binding terminal wait")
 	ErrInvalidDefinition = errors.New("saga: invalid definition")
 	ErrInvalidRecord     = errors.New("saga: invalid record")
 	ErrDefinitionMissing = errors.New("saga: definition not registered")

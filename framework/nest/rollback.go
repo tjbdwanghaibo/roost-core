@@ -1009,9 +1009,10 @@ func (tx *RollbackTx) BeginCreatedEntityBuild() func(map[string]entity.DaoInterf
 	}
 }
 
-// createdBuildMark 是一次新建开始构建时事务各项登记的长度。登记只追加（构建期间不会有提交或回滚），所以构建留下的
-// 登记就是各项在这个位置之后的部分。
+// createdBuildMark 保存追加列表的边界及既有 DAO 的登记代次。
+// DAO 修改会原位合并，不能只用参与者数量判断构建是否留下了外部副作用。
 type createdBuildMark struct {
+	persistRevisions    map[MutationParticipant]uint64
 	persistParticipants int
 	commitParticipants  int
 	mutations           int
@@ -1024,7 +1025,12 @@ type createdBuildMark struct {
 }
 
 func (tx *RollbackTx) createdBuildMark() createdBuildMark {
+	revisions := make(map[MutationParticipant]uint64, len(tx.participantOrder))
+	for _, participant := range tx.participantOrder {
+		revisions[participant] = tx.participantChanges[participant].revision
+	}
 	return createdBuildMark{
+		persistRevisions:    revisions,
 		persistParticipants: len(tx.participantOrder),
 		commitParticipants:  len(tx.participants),
 		mutations:           len(tx.mutations),
@@ -1074,8 +1080,15 @@ func (tx *RollbackTx) abandonCreatedEntityBuild(mark createdBuildMark, daos map[
 	tx.commits = tx.commits[:mark.commits]
 	clear(tx.afterAdmission[mark.afterAdmission:])
 	tx.afterAdmission = tx.afterAdmission[:mark.afterAdmission]
+	existingChanged := false
+	for participant, revision := range mark.persistRevisions {
+		if _, built := own[participant]; !built && tx.participantChanges[participant].revision != revision {
+			existingChanged = true
+			break
+		}
+	}
 
-	if len(tx.participantOrder) == mark.persistParticipants && len(tx.participants) == mark.commitParticipants &&
+	if !existingChanged && len(tx.participantOrder) == mark.persistParticipants && len(tx.participants) == mark.commitParticipants &&
 		len(tx.mutations) == mark.mutations && len(tx.effects) == mark.effects && len(tx.receipts) == mark.receipts &&
 		len(tx.deleteIntents) == mark.deleteIntents && len(tx.created) == mark.created {
 		return nil

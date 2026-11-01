@@ -112,7 +112,7 @@ durable `<stream>_G<g>-cold-copy`（消费者状态 R1、只放内存），缺�
 | `List(Query)` | 向全部分区所有者散播并合并；覆盖非终态、保留期内的终态与全部 `ManualRequired`；冷副本开启时再补上**内存里没有的 ID**（更早的终态）：冷副本的一页 ID 随散播发给所有者，所有者回答哪些在内存里，那些 ID 以内存为准；结果是按（更新时间，ID）排序的精确前缀，冷副本一页被内存持有的 ID 占掉时最多再翻 3 页，之后可能少于 `Limit` 条（按 `UpdatedBefore` 缩小范围再查）。有分区没回答 → `ErrPartitionUnavailable`（点名），不返回残缺结果 |
 | `Resume` / `Compensate` | 追加运维意图到 `in.op` 并等判定（规则见「失败语义」）；记录最后一次更新早于“回执保留期 − 最长步骤窗口” → `ErrReceiptsExpired`（选项 RR-A） |
 | `Complete(ctx, Completion) error` | 把结果追加到所属分区 `in.res`（MsgID `res.<CommandID>`），只承诺“已持久进入输入”；框架自带的步骤消费者直接发布，它留给自定义参与方 |
-| `WaitTerminal(ctx, id)` | 等这个 ID 下一个终态；同一 ID 的多个等待者全部唤醒 |
+| `WaitTerminal(ctx, id)` | 等权威查询首次发现的 Lifecycle 的终态；同一轮多个等待者全部唤醒，不跨轮比较 Version |
 | `AdmissionState()` | 本进程看到的准入状态（健康检查与测试用） |
 
 **`ErrBackpressure` 的含义是“这次启动现在没有建立，用同一请求重试”**（维护者 2026-10-28 决定 R-A 的持久性选项 A）：准入拒绝只回复触发它的那次尝试、

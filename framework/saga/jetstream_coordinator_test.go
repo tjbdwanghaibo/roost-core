@@ -284,7 +284,7 @@ func TestPartitionStartIdentityIsDecidedByTheStartDigest(t *testing.T) {
 func TestPartitionAdmissionRejectionAnswersOnlyTheTriggeringAttempt(t *testing.T) {
 	u := newUnitPartition(t, func(o *Options) { o.Admission.Enabled = true })
 	id := IDOf("rally", "bk-1")
-	waiter, cancel := u.e.watch.register(id)
+	waiter, cancel := u.e.watch.register(id, testLifecycle)
 	defer cancel()
 	at := u.clock.Now()
 	r := u.round(at, u.startInput("bk-1", nil, "a1", "reply.a1"))
@@ -521,11 +521,11 @@ func TestJetStreamOptionsValidation(t *testing.T) {
 
 func TestTerminalWatchWakesEveryWaiterOfTheIDWithNewerTerminals(t *testing.T) {
 	w := newTerminalWatch()
-	first, cancelFirst := w.register("s1")
+	first, cancelFirst := w.register("s1", testLifecycle)
 	defer cancelFirst()
-	second, cancelSecond := w.register("s1")
+	second, cancelSecond := w.register("s1", testLifecycle)
 	defer cancelSecond()
-	other, cancelOther := w.register("s2")
+	other, cancelOther := w.register("s2", testLifecycle)
 	defer cancelOther()
 	w.observe(Record{Lifecycle: testLifecycle, ID: "s1", Status: StatusWaiting, Version: 5}) // 非终态不交付
 	w.observe(Record{Lifecycle: testLifecycle, ID: "s1", Status: StatusFailed, Version: 3})

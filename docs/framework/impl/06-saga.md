@@ -4,6 +4,12 @@
 
 ## 如何阅读
 
+### 终态等待的生命周期边界
+
+`WaitTerminal` 首次权威查询取得 Lifecycle 后登记只接受该轮事件的等待者，再补查一次，覆盖查询与登记之间的终态。初次未找到记录或所有者暂不可用时按 200ms 间隔重查；尚未绑定时不采纳旧 follower 的终态。补查发现换轮返回 `ErrLifecycleChanged`，已绑定记录消失返回 `ErrNotFound`；不自动换轮。同轮 Resume 仍按已知 Version 过滤旧终态，取消始终注销等待者。不使用冷副本推断当前轮，也不新增按生命周期无限增长的终态缓存。
+
+RV-20261101-02 的修前证据（main `c31e65cc`）：等待 NEWLIFE v2 却返回 OLDLIFE v10 Completed。[原审查](https://github.com/tjbdwanghaibo/roost-core/blob/30f9261bea91016c365f8c1f4d35d42752f2d48d/docs/maintenance/COMMIT-REVIEW.md)与 [terminal_lifecycle_test.go](../../../framework/saga/terminal_lifecycle_test.go) 保留复现。修后探针及 Saga / wiring/saga 的 race 通过，另覆盖旧轮先到/后到、登记间隙完成、换轮、初次不存在、查询暂不可用和取消；这是受控查询与观察者验证，不等同于真实 JetStream 长时间积压测试。
+
 有些操作需要多个服务分几步完成，例如先扣道具，再创建跨服活动记录。Saga记录这些步骤，并在失败时按业务定义执行补偿。
 
 第一次接入先读本页顶部的“设计与使用”。准备修改代码时，先看下面的约束与流程，再展开源码目录；测试清单用于找到已有用例，不要求从头读完。

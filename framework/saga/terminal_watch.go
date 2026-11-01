@@ -16,8 +16,8 @@ import (
 //   - 每条流一个只要新消息（from = 0）的有序消费者，读本流各分区的 ev.done 事件；只读已落库的事件（被期望序号拒掉的发布
 //     不会出现在流里），不从流头回放历史，所以没有原型 Client 的 latest 表无界增长问题。本进程自己提交的终态事件另由分区
 //     在提交后直接交给观察者（更快；与消费者送来的同一条按版本去重）。
-//   - 同一 ID 的每次 WaitTerminal 都登记自己的等待者（不覆盖），被观察到的终态按版本择优交给该 ID 的全部等待者；等待者登记后
-//     先 Get 一次：已是终态直接返回，否则只接受版本大于此时已知版本的终态（重开之前的旧终态不会提前唤醒）。
+//   - 先查询当前 Lifecycle，再登记该轮的等待者，并补查一次覆盖登记间隙。
+//     只在同一 Lifecycle 内比较版本；不跨轮合并终态，也不缓存未绑定身份的历史结果。
 //   - 拒绝（选项 R-A）不是终态、不进日志，只经判定回复给触发它的那次尝试，所以拒绝不会唤醒同 ID 的别的调用。
 
 // terminalWatch 管理等待者；observe 由消费者 goroutine 与分区循环调用，register / 等待由调用方 goroutine 调用。
@@ -26,11 +26,12 @@ type terminalWatch struct {
 	waiters map[string][]*terminalWaiter
 }
 
-// terminalWaiter 是一次 WaitTerminal 的登记：best 是观察到的版本最大的终态。
+// terminalWaiter 是一轮 Lifecycle 的等待：best 只保留这一轮版本最大的终态。
 type terminalWaiter struct {
-	mu     sync.Mutex
-	best   *Record
-	signal chan struct{}
+	lifecycle string
+	mu        sync.Mutex
+	best      *Record
+	signal    chan struct{}
 }
 
 func newTerminalWatch() *terminalWatch {
@@ -38,8 +39,8 @@ func newTerminalWatch() *terminalWatch {
 }
 
 // register 为 id 登记一个等待者，返回它与撤销函数（WaitTerminal 返回前调用）。
-func (w *terminalWatch) register(id string) (*terminalWaiter, func()) {
-	waiter := &terminalWaiter{signal: make(chan struct{}, 1)}
+func (w *terminalWatch) register(id, lifecycle string) (*terminalWaiter, func()) {
+	waiter := &terminalWaiter{lifecycle: lifecycle, signal: make(chan struct{}, 1)}
 	w.mu.Lock()
 	w.waiters[id] = append(w.waiters[id], waiter)
 	w.mu.Unlock()
@@ -82,6 +83,9 @@ func (w *terminalWatch) observeCommitted(events []logEvent) {
 }
 
 func (waiter *terminalWaiter) offer(record Record) {
+	if record.Lifecycle != waiter.lifecycle {
+		return
+	}
 	waiter.mu.Lock()
 	if waiter.best == nil || record.Version > waiter.best.Version {
 		clone := record.Clone()
@@ -105,8 +109,10 @@ func (waiter *terminalWaiter) newerThan(known uint64) *Record {
 	return nil
 }
 
-// WaitTerminal 等 id 的下一个终态（Completed / Compensated / Failed / ManualRequired）：已是终态立即返回当前记录；否则返回之后
-// 被观察到的、版本大于调用时已知版本的终态。同一 ID 的多个等待者都会被唤醒。ctx 结束返回 ctx 错误；不改变 saga 本身。
+// WaitTerminal 等权威查询首次发现的 Lifecycle 的终态；已是终态立即返回。
+// ID 尚不存在时按 200ms 间隔等待首次可见记录，不使用冷副本或滞后的终态绑定身份。
+// 登记后的补查若发现换轮，返回 ErrLifecycleChanged；同轮只接受比补查版本新的终态。
+// ctx 结束返回 ctx 错误，不改变 Saga 本身，也不会自动转去等待另一轮。
 func (e *Engine) WaitTerminal(ctx context.Context, id string) (Record, error) {
 	if !validSubjectToken(id, 128) {
 		return Record{}, ErrInvalidRecord
@@ -114,20 +120,28 @@ func (e *Engine) WaitTerminal(ctx context.Context, id string) (Record, error) {
 	if !e.ready.Load() {
 		return Record{}, ErrClosed // 终态观察者随 Start 建立
 	}
-	waiter, cancel := e.watch.register(id)
-	defer cancel()
+	var waiter *terminalWaiter
 	var known uint64
 	for {
 		record, err := e.getOwned(ctx, id) // 只看内存：冷副本里的旧终态不是“下一个终态”
 		if err == nil {
+			if waiter != nil && record.Lifecycle != waiter.lifecycle {
+				return Record{}, ErrLifecycleChanged
+			}
 			if record.Status.Terminal() {
 				return record, nil
 			}
 			known = record.Version
+			if waiter == nil {
+				var unregister func()
+				waiter, unregister = e.watch.register(id, record.Lifecycle)
+				defer unregister()
+				continue // 补查覆盖首次查询到登记之间发生的终态。
+			}
 			break
 		}
-		if errors.Is(err, ErrNotFound) {
-			break
+		if waiter != nil && errors.Is(err, ErrNotFound) {
+			return Record{}, err // 已绑定的权威记录消失，不把旧 follower 结果作为当前成功。
 		}
 		if ctx.Err() != nil {
 			return Record{}, ctx.Err()
