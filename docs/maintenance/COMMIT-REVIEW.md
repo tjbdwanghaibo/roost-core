@@ -1,5 +1,33 @@
 # 新增提交审查
 
+## 2026-11-01：心跳与回执修复关闭复验
+
+基线：[main 5fe16dab](https://github.com/tjbdwanghaibo/roost-core/commit/5fe16dab)，为 v1.37.0 之后的修复提交，不将已发布 v1.37.0 描述为包含这两项修复。本节覆盖下方历史状态。
+
+**结论：RV-20261101-04／05 已修复，修法合理；连同此前 01／02／03，五项原复现均已关闭。本轮继续审查没有确认新的缺陷。** 这不是全仓零缺陷或上线验收结论。
+
+| 问题 | 代码核对 | 独立复验 |
+| --- | --- | --- |
+| 04：C# 心跳受业务容量挤占 | HeartbeatAsync 只供连接监控器使用，独立单槽；业务／Notify／显式校时仍共用原容量。心跳继续共用发送锁和序号，finally 释放各自槽位。 | 原 heartbeat_capacity.py 三组真实 TCP 对照全部成功，退出 0。另执行 main 的 HeartbeatCapacityTests：业务在途期间心跳成功、额外业务拒绝、容量释放后请求成功、后续心跳真正无应答会断线。 |
+| 05：失败创建改写既有回执 | SetReceiptPayload 每次写入递增 receiptRevision，包括同值写；createdBuildMark 保存并在失败创建时比较，触发整条事务失败。AddReceipt 同键同摘要仍是无操作，新增项由数量检查覆盖。 | 原 receipt_payload_test.go.txt 的吞错／传播对照均通过；main 的六场景测试随 nest 包通过，覆盖同值、嵌套、成功创建和重复 AddReceipt。 |
+
+### 继续检查的范围与结果
+
+- 发送与连接：检查了心跳和业务的槽位释放、发送锁与序号共享、写期间取消、等待应答取消及监控器关闭路径。额外运行现有 LocalSession、Capacity、TestConnectionReconnect、TestReconnectFailureLimit：请求关联、Notify 取消、晚应答丢弃、非法预算不占槽、请求／Notify 容量、推送溢出断线、重连换票／代际和有界重试回调全部通过。
+- 事务：复核回执新建与原位更新、失败嵌套创建以及成功创建的差别。receiptRevision 只提供失败构建的副作用检测，不伪装成可局部撤销的保存点；当前整条失败策略与既有 DAO 处理一致。
+- Saga 与 Sync：继续核对 WaitTerminal 的查询／注册／补查与同生命周期终态过滤，以及发送预算和冷快照预算的组合、延后项 Full 回退、实际 Push 计费、Remove 放行。未确认新的错误；MaxWait 是老化优先级而非交付期限，不能将文档明确的软预算视作硬带宽保证。
+
+### 本轮运行证据与限制
+
+```bash
+go test -race ./framework/nest ./framework/saga ./wiring/saga ./framework/sync/entitysync ./infra/network/gateway -count=1
+python3 scripts/testdata/client-review/heartbeat_capacity.py /path/to/reviewed-main /path/to/dotnet-root
+```
+
+五个 Go 包全部通过（含原回执探针）；C# 原心跳探针全部通过。托管扩展测试使用 Linux / .NET SDK 10.0.402、runtime 10.0.13，直接 Roslyn 编译 main 的 Roost.Client 源码与上述测试方法，通过最小入口调用；NetworkExperienceTests 的时钟／插值／预测／trace 同样通过。测试方法来自 main，连接用回环 TCP；未跑完整托管项目的 NuGet／TreatWarningsAsErrors 门禁。编译仍有 TcpSession.cs 的 CS8600 提示，不能将此次选定测试通过当作项目零警告。
+
+未重新运行本提交未改动的 native 客户端；其并发序号结果沿用上一节并明确基线。未运行 Unity/IL2CPP、WAN、真实 WAL/Mongo 崩溃恢复或生产长稳。回执验证仍使用记录型 committer，不扩大为持久层恢复证明。图谱索引工具不可用，继续以精确源码、差异和 rg 补证。本固定分支只更新审查材料。
+
 ## 2026-11-01：v1.37.0 修复复验与新增逻辑审核
 
 基线：[main / v1.37.0 6bf23d6a](https://github.com/tjbdwanghaibo/roost-core/commit/6bf23d6a)。本节为最新状态；下方各节保留当时基线和失败证据，不能将历史“待修复”直接用于当前版本。
