@@ -233,7 +233,7 @@ func TestGenerateDao(t *testing.T) {
 		"Items: d.heroDaoItemsRawMap(),",
 		"func (d *HeroDao) AddFriends(v int64)",
 		"func (d *HeroDao) SetPos(v Position)",
-		"d.pos.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldPos}, d.markPosDirty)",
+		"d.pos.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldPos}, d.markPosChange)",
 		"func (d *HeroDao) SetEquips(key int64, val *EquipInfo)",
 		"*fmap.SmallSafeMap[int64, *EquipInfo]",
 		"val.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldEquips, key: key},",
@@ -342,7 +342,7 @@ func TestGenerateNested(t *testing.T) {
 		"func (s *Position) GetY() int32",
 		"func (s *Position) SetX(v int32)",
 		"func (s *Position) SetY(v int32)",
-		"s.Mark()",
+		"s.MarkPath(dataengine.SyncField(",
 	}
 	for _, check := range checks {
 		if !strings.Contains(squeezeSpaces(s), squeezeSpaces(check)) {

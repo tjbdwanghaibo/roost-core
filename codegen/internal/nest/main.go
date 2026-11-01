@@ -75,6 +75,19 @@ func run(args []string, stdout io.Writer) error {
 			return nil
 		}
 
+		// 请求类型独立生成：即使所在包没有 handler，Sender 也能共享它的预取声明和访问器。
+		remoteFile, changed, err := generateRemoteRequests(path, *force)
+		if err != nil {
+			return fmt.Errorf("generate remote requests %s: %w", path, err)
+		}
+		if remoteFile != "" {
+			expected[remoteFile] = true
+		}
+		if changed {
+			fmt.Fprintf(stdout, "generated: %s\n", remoteFile)
+			totalGenerated++
+		}
+
 		funcs, pkg, err := parseFile(path)
 		if err != nil {
 			return fmt.Errorf("parse %s: %w", path, err)
@@ -100,7 +113,7 @@ func run(args []string, stdout io.Writer) error {
 				RegisterFunc: registerFunc,
 			})
 		}
-		changed, err := generate(funcs, pkg, outFile, *force, false, registerFunc)
+		changed, err = generate(funcs, pkg, outFile, *force, false, registerFunc)
 		if err != nil {
 			return fmt.Errorf("generate %s: %w", outFile, err)
 		}
@@ -121,7 +134,7 @@ func run(args []string, stdout io.Writer) error {
 			senderFile := filepath.Join(senderDir, baseName+"_nest_gen.go")
 			expected[senderFile] = true
 			expected[guardTestFileFor(senderFile)] = true
-			changed, err := generate(funcs, pkg+"_sender", senderFile, *force, true, "")
+			changed, err = generate(funcs, pkg+"_sender", senderFile, *force, true, "")
 			if err != nil {
 				return fmt.Errorf("generate sender %s: %w", senderFile, err)
 			}

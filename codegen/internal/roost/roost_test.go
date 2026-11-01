@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"github.com/tjbdwanghaibo/roost-core/internal/configschema"
 	"go/ast"
 	"go/parser"
@@ -632,13 +633,13 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 		t.Fatalf("generate source-head first business workflow: %v", err)
 	}
 	checks := map[string][]string{
-		"roost.yaml":                               {"access:", "player:", "service: game", "- nest"},
-		"game/playeraccess/runtime_gen.go":         {"type ProtocolRegistry struct", "func (registry *ProtocolRegistry) Dispatch", "gateway.ErrUnauthenticated"},
-		"internal/access/player/mod_gen.go":        {"protocolbootstrap.RegisterPlayerProtocols", "registry.Register(Name, mod.runtime)"},
-		"game/protocol_bootstrap/protocol_gen.go":  {"RegisterPlayerPlayerProtocols"},
-		"game/controllers/player/controller.go":    {"app.Lookup[corenest.Client]", "NestClient() corenest.Client", "Registry() *app.Registry"},
-		"game/controllers/player/enter_game.go":    {"lifecycle.PlayerFromRegistry(controller.Registry())", ".GetOrCreate(context.Context(), context.PlayerID)", "errcode.ClientError(err)", "&pb.EnterGameResponse{Code: code, Reason: reason}, nil"},
-		"game/controllers/player/rename_player.go": {"Sync_RenamePlayer", "NewRenamePlayerSender", "entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)", "Sync_RenamePlayer(context.Context(), entityID, request.Name)"},
+		"roost.yaml":                                            {"access:", "player:", "service: game", "- nest"},
+		"game/playeraccess/runtime_gen.go":                      {"type ProtocolRegistry struct", "func (registry *ProtocolRegistry) Dispatch", "gateway.ErrUnauthenticated"},
+		"internal/access/player/mod_gen.go":                     {"protocolbootstrap.RegisterPlayerProtocols", "registry.Register(Name, mod.runtime)"},
+		"game/protocol_bootstrap/protocol_gen.go":               {"RegisterPlayerPlayerProtocols"},
+		"game/controllers/player/controller.go":                 {"app.Lookup[corenest.Client]", "NestClient() corenest.Client", "Registry() *app.Registry"},
+		"game/controllers/player/enter_game.go":                 {"lifecycle.PlayerFromRegistry(controller.Registry())", ".GetOrCreate(context.Context(), context.PlayerID)", "errcode.ClientError(err)", "&pb.EnterGameResponse{Code: code, Reason: reason}, nil"},
+		"game/controllers/player/rename_player_endpoint_gen.go": {"Sync_RenamePlayer", "NewRenamePlayerSender", "entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)", "Sync_RenamePlayer(context.Context(), entityID, request.Name)"},
 		"game/lifecycle/player.go": {"GetOrCreate", "FromRegistry", "mods.ModEntityRuntime", "engine.ErrEntityAggregateNotFound", "entity.BuildEntityID", "EntityKindPlayer", "errors.Is(err, entity.ErrEntityRemoved) && attempt < 3",
 			// D10 方案 B（只守 GetOrCreate）：删过档的 ID 不再创建，Get 给稳定码 entity_deleted。
 			"func deletedPlayerError(err error) error", "errcode.Wrap(errcode.ErrEntityDeleted, err)", "return nil, deletedPlayerError(err)"},
@@ -704,7 +705,7 @@ func TestAddEndpointTakesOverTheUntouchedProtocolPlaceholder(t *testing.T) {
 		t.Fatalf("add endpoint over the untouched protocol placeholder: %v", err)
 	}
 	raw, err = os.ReadFile(placeholder)
-	if err != nil || !strings.Contains(string(raw), "Sync_RenamePlayer") || strings.Contains(string(raw), "not implemented") {
+	if err != nil || !strings.Contains(string(raw), "dispatchRenamePlayer") || strings.Contains(string(raw), "not implemented") {
 		t.Fatalf("add endpoint did not replace the placeholder (err %v):\n%s", err, raw)
 	}
 
@@ -860,7 +861,7 @@ func TestEndpointLeavesBusinessTimeToTheDispatch(t *testing.T) {
 	if _, err := Add(root, AddOptions{Kind: "endpoint", Name: "UseDoubleCard", Handler: "player"}); err != nil {
 		t.Fatalf("add endpoint with a business-time parameter: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(root, "game", "controllers", "player", "use_double_card.go"))
+	raw, err := os.ReadFile(filepath.Join(root, "game", "controllers", "player", "use_double_card_endpoint_gen.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1593,7 +1594,7 @@ func TestEndpointArgumentsMapNamedRequestFields(t *testing.T) {
 	if err := os.WriteFile(handlerPath, []byte("package handler\n\nimport player \"example.com/planet/game/entities/player\"\n\nfunc handlerRenamePlayer(target player.IPlayerEntity, name, locale string) error { return nil }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	signature, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer")
+	signature, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer", "example.com/planet/protocol/pb")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1612,7 +1613,7 @@ func TestEndpointArgumentsMapNamedRequestFields(t *testing.T) {
 	if err := os.WriteFile(handlerPath, []byte("package handler\nfunc handlerRenamePlayer(target IPlayerEntity, name, locale string) error { return nil }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer"); err == nil || !strings.Contains(err.Error(), "<package>.I<Component>Entity") {
+	if _, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer", "example.com/planet/protocol/pb"); err == nil || !strings.Contains(err.Error(), "<package>.I<Component>Entity") {
 		t.Fatalf("unqualified Entity target accepted: %v", err)
 	}
 }
@@ -2407,5 +2408,40 @@ func TestTransactionalGenerateDoesNotCommitEarlierGeneratorOnLaterFailure(t *tes
 	}
 	if !bytes.Equal(generatedBefore, generatedAfter) {
 		t.Fatal("failed transactional generation committed an earlier DAO output")
+	}
+}
+
+// PB 透传只认当前协议的实际 import 路径与指针类型，不把同名 DTO 或 PB 值误认成网络消息。
+func TestEndpointPBTypes(t *testing.T) {
+	for _, tc := range []struct {
+		name, imported, request, response string
+		accepted                          bool
+	}{
+		{"alias", "example.com/planet/protocol/pb", "*messages.RenamePlayerRequest", "*messages.RenamePlayerResponse", true},
+		{"foreign", "example.com/foreign/pb", "*messages.RenamePlayerRequest", "*messages.RenamePlayerResponse", false},
+		{"value", "example.com/planet/protocol/pb", "messages.RenamePlayerRequest", "*messages.RenamePlayerResponse", false},
+		{"other_protocol", "example.com/planet/protocol/pb", "*messages.OtherRequest", "*messages.RenamePlayerResponse", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			protocolPath := writeProjectFile(t, root, "protocol.go", "package def\ntype RenamePlayerRequest struct { Name string }\n")
+			handlerPath := writeProjectFile(t, root, "handler.go", fmt.Sprintf(`package handler
+import (
+ player "example.com/planet/game/entities/player"
+ messages %q
+)
+func handlerRenamePlayer(target player.IPlayerEntity, request %s, nowUnixMilli int64) (%s, error) { return nil, nil }
+`, tc.imported, tc.request, tc.response))
+			got, err := endpointArguments(protocolPath, "RenamePlayer", handlerPath, "RenamePlayer", "example.com/planet/protocol/pb")
+			if !tc.accepted {
+				if err == nil {
+					t.Fatal("unsupported request accepted")
+				}
+				return
+			}
+			if err != nil || strings.Join(got.arguments, ",") != "request" || !got.response {
+				t.Fatalf("signature=%+v err=%v", got, err)
+			}
+		})
 	}
 }

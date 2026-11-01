@@ -36,6 +36,7 @@ func registerGuildEntity() {
 			RemotePolicy: entity.RemotePolicyManaged,
 			Lifetime:     entity.EntityLifetimeRemoteManaged,
 		})
+		entity.RegisterRemoteDAOViews(NewGuildDAO(), EntityKindGuild)
 		entity.MustRegisterRemoteSnapshotDecoder(
 			entity.RemoteSnapshotSchema(EntityKindGuild, entity.RemoteSnapshotScope(GuildDAOCollection)),
 			func(data []byte) (any, error) {
@@ -134,6 +135,7 @@ func (e *Guild) BuildRemoteCommitLocked(lease entity.RemoteWriteLease, outcome e
 				Collection: e.dao.CollName(), ID: e.dao.Id(),
 			})
 		}
+		commit.Invalidations = append(commit.Invalidations, entity.RemoteDAOViewKeys(NewGuildDAO(), e.GUId(), e.GetEntityKind())...)
 		commit.Invalidations = append(commit.Invalidations, entity.RemoteSnapshotKey{
 			EntityID: e.GUId(), Kind: e.GetEntityKind(), Scope: entity.RemoteSnapshotScope(GuildDAOCollection),
 		})
@@ -162,6 +164,11 @@ func (e *Guild) BuildRemoteCommitLocked(lease entity.RemoteWriteLease, outcome e
 				Data:          data,
 			}
 			commit.Mutations = append(commit.Mutations, mutation)
+			views, err := entity.BuildRemoteDAOViews(e.dao, e.GUId(), e.GetEntityKind(), mask)
+			if err != nil {
+				return entity.RemoteCommit{}, fmt.Errorf("Guild: build remote views for guilds: %w", err)
+			}
+			commit.Snapshots = append(commit.Snapshots, views...)
 			scope := entity.RemoteSnapshotScope(e.dao.CollName())
 			commit.Snapshots = append(commit.Snapshots, entity.RemoteSnapshotRecord{
 				Key:      entity.RemoteSnapshotKey{EntityID: e.GUId(), Kind: e.GetEntityKind(), Scope: scope},

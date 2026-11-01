@@ -7,7 +7,7 @@ import (
 )
 
 // DecodeFields 将公开的 PB patch 转为机器人按字段名读取的视图。
-// 未出现在 patch 中的字段不更新；集合值整体替换，不递归合并。
+// 未出现在 patch 中的字段不更新；该动态入口只接受字段替换；集合差分接入应使用生成的 ApplySyncX 后读取 Values。
 func DecodeFields(update entity.SubjectSyncUpdate) (map[string]any, error) {
 	if update.Payload.Codec() != 2 {
 		return nil, fmt.Errorf("unsupported DAO sync codec %d", update.Payload.Codec())
@@ -18,19 +18,19 @@ func DecodeFields(update entity.SubjectSyncUpdate) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return patch.Values(), nil
+		return patch.Values()
 	case "monster":
 		patch, err := db.UnmarshalSyncMonsterDao(update.Payload.BytesCopy())
 		if err != nil {
 			return nil, err
 		}
-		return patch.Values(), nil
+		return patch.Values()
 	case "scene":
 		patch, err := db.UnmarshalSyncSceneDao(update.Payload.BytesCopy())
 		if err != nil {
 			return nil, err
 		}
-		return patch.Values(), nil
+		return patch.Values()
 	default:
 		return nil, fmt.Errorf("unknown sync namespace %q", update.Namespace)
 	}

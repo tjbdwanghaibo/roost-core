@@ -60,6 +60,8 @@ connection.on_event = [&](const roost::client_event& event) {
 
 完整可运行消费者见 `tests/gate.cpp`。DAO schema 与服务端一起生成，不手写通用字段字典。需要完整 Protobuf runtime 的 reflection；不是 protobuf-lite。原业务 PB 从 `protocol/proto/protocol.proto` 生成，DAO 从 `db/dao_sync.proto` 生成；所有目标平台使用匹配版本的 protoc 与 runtime。
 
+DAO 同步要求 `sync_format=3`，map 支持 key 更新/删除，list 支持索引更新/追加，嵌套 struct/map/list 支持递归子字段补丁；全量、密集变化和清空可使用字段替换。服务端、生成 proto 与客户端库必须同时更新，旧格式明确拒绝。语义与回退规则见 [DAO PB 同步](../../docs/framework/DAO-SYNC-PROTOBUF.md)。
+
 Sync 元数据解码与 PB 应用都在消费线程，网络帧解析和 I/O 在网络线程；不以多线程名义同时改引擎状态。视图采用整帧 staging map；大可见集容量仍需按目标设备测量，不能从服务器容量推导客户端容量。
 
 ## Lockstep 与引擎接入

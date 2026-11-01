@@ -53,3 +53,8 @@ GOWORK=off go vet ./...
 # stored_keys_mongo_test.go runs on the isolated replica set when
 # ROOST_DATAENGINE_IT_MONGO_URI is set and skips otherwise.
 ROOST_DAO_SYNC_GOLDEN="$here/../client/spec/dao-sync.json" GOWORK=off go test -count=1 -run '^Test' ./...
+
+# Optional, reproducible codec benchmark after correctness checks.
+if [ -n "${ROOST_DAO_BENCH:-}" ]; then
+ GOWORK=off go test -run '^$' -bench "$ROOST_DAO_BENCH" -benchmem -count=3 ./gen
+fi

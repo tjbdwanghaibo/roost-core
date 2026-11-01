@@ -192,23 +192,10 @@ func TestGenerate(t *testing.T) {
 	checks := []string{
 		"func invokePlayerLogin(",
 		"func RegisterHandlerNestHandlers()",
-		`"github.com/tjbdwanghaibo/cube/game/view"`,
 		"nest.NewParamTypeMismatchError",
 		`nest.MustRegisterHandlerWithMeta(handlerNamePlayerLogin`,
 		`nest.MustRegisterHandlerWithMeta(handlerNameTransferItem`,
 		`nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict}`,
-		`func (req RemoteViewRequest) RemoteAccess() []nest.RemoteAccess`,
-		`nest.RemoteKey[view.PlayerViewMapSnapshot]{Alias: "target_player"}`,
-		`func (req RemoteViewRequest) TargetPlayer() (view.PlayerViewMapSnapshot, bool)`,
-		`func (req RemoteViewRequest) MustTargetPlayer() view.PlayerViewMapSnapshot`,
-		`nest.RemoteKey[view.PlayerViewMapSnapshot]{Alias: "live_player"}`,
-		`func (req RemoteViewRequest) LivePlayer() (view.PlayerViewMapSnapshot, bool)`,
-		`entity.RemoteReadMonotonic`,
-		`entity.RemoteReadLinearizable`,
-		`req.TargetPlayerViewRef`,
-		`req.LivePlayerViewRef`,
-		`nest.RemoteScopeOf[view.PlayerViewMapSnapshot]()`,
-		`CacheTTLMillis: 0`,
 	}
 	for _, check := range checks {
 		if !strings.Contains(src, check) {
@@ -516,12 +503,7 @@ type Req struct { TargetPlayerViewRef entity.RemoteViewRef `+"`remote:\"unknownp
 //roost:nest
 func handlerRemoteView(p IPlayerEntity, req Req) {}
 `)
-	funcs, pkg, err := parseFile(path)
-	if err != nil {
-		t.Fatalf("parseFile: %v", err)
-	}
-	outFile := filepath.Join(t.TempDir(), "handler_nest_gen.go")
-	_, err = generate(funcs, pkg, outFile, true, false, "RegisterHandlerNestHandlers")
+	_, _, err := generateRemoteRequests(path, true)
 	if err == nil {
 		t.Fatal("generate succeeded, want unknown package alias error")
 	}

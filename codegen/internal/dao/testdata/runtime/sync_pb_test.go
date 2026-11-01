@@ -30,7 +30,11 @@ func TestSyncPBZeroEmptyAndNullableFields(t *testing.T) {
 	if patch.EntityID != 9007199254740993 || patch.Exp.Value != 1<<60 {
 		t.Fatal("64 bit identity/value lost")
 	}
-	if _, ok := patch.Values()["login_at"]; ok {
+	values, err := patch.Values()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := values["login_at"]; ok {
 		t.Fatal("persist-only field leaked")
 	}
 	mirror := NewHeroDao()

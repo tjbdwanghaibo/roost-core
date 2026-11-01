@@ -10,6 +10,7 @@ roost-core 的项目脚手架与代码生成工具链（模块路径 `github.com
 | --- | --- |
 | 本 README | 入口与快速上手：装 CLI、建工程、跑第一次生成 |
 | [小白逐步操作手册](docs/BEGINNER_WORKBOOK.zh-CN.md) | 完全第一次使用，配合 `roost project next` 一步一步走 |
+| [标记与字段 tag 手册](docs/TAGS.zh-CN.md) | 按声明位置查 tag：作用、默认值、组合限制、Remote Snapshot 与请求示例 |
 | [命令与标记参考](docs/CODEGEN_REFERENCE.zh-CN.md) | 每个命令、生成器的标记 / tag / 参数、产物与拒绝规则 |
 | [项目生成器](docs/PROJECT_GENERATOR.zh-CN.md) | 工程生成、`roost.yaml`、Mod 装配、ID、升级与部署生成物 |
 | [Nest 业务执行模型](docs/NEST_RUNTIME.zh-CN.md) | 生成的 Sender 与 handler 在 Nest 里怎样执行 |
@@ -26,7 +27,7 @@ roost-core 的项目脚手架与代码生成工具链（模块路径 `github.com
 | `dao` | `//roost:dao`、`//roost:redisdao` + 字段 `dao:"..."` tag | `gen_<name>_dao.go`、`gen_<name>_nested.go`、`gen_<name>_redis_dao.go` | 持久化 / 同步字段的 dirty 追踪、字段级 patch、事务回滚，全部经生成的 mutator 收口 |
 | `protocol` | `protocol/def` 下的 `//roost:proto` `//roost:protocol` `//roost:msg` 标记 | `.proto`、pb Go 代码、msgid、player_bind、协议 handler、robot 注册表、协议 manifest | 用 Go struct 单一来源维护协议，也支持从 `.proto` 反向生成 |
 | `entity` | `//roost:entity entityKind=...` | `<entity>_gen_wire.go` | Entity 工厂、组件 / DAO 装配、hook 接线 |
-| `nest` | `//roost:nest [target=...] [sync] [rollback=state\|undo] [durability=memory\|async\|strict]` | `<source>_nest_gen.go`、`sender/`、`syncsender/`、`game/bootstrap/nest.go` | handler 的 invoke 包装、显式注册与可注入的类型化 Sender |
+| `nest` | `//roost:nest [target=...] [sync] [rollback=state\|undo] [durability=memory\|async\|strict\|pipelined]` | `<source>_nest_gen.go`、`sender/`、`syncsender/`、`game/bootstrap/nest.go` | handler 的 invoke 包装、显式注册与可注入的类型化 Sender |
 | `tablegen` | `configs/schema` 下 `//roost:table`、`//roost:object` | Go 访问代码、CSV 模板、CSV→JSON 数据 | 配置表 schema、策划填表模板与运行时数据的一致性 |
 | `cfggen` | 一个 YAML schema 文件（tables / globals / beans） | 单文件 Go 绑定与类型化访问器 | 配置定义零手写 Go |
 | `attribute` | `//roost:attribute` | `gen_<profile>_attribute.go` | 属性 profile 的计算 / 聚合代码 |

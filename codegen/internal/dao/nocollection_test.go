@@ -67,7 +67,7 @@ func TestANoCollectionDaoKeepsSyncAndDropsEveryStoragePath(t *testing.T) {
 		"func GhostDaoSyncFields() []dataengine.SyncFieldMeta",
 		"func (d *GhostDao) CaptureRollbackState() ([]byte, error)",
 		"func (d *GhostDao) RestoreRollbackState(raw []byte) error",
-		"d.tracker.MarkSync(ghostDaoFieldPosX)",
+		"d.tracker.MarkSyncPath(ghostDaoFieldPosX,",
 	} {
 		if !strings.Contains(flat, want) {
 			t.Errorf("nocoll DAO output is missing %q", want)

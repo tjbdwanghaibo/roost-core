@@ -57,7 +57,7 @@ func (owner daoDirtyOwner) held() bool { return owner.holder != nil }
 // daoBindDirty is what every generated bind site calls. It refuses rather than
 // overwriting, and it refuses BEFORE anything is written, so a caller that
 // recovers is left with the state it started from.
-func daoBindDirty(hook *dataengine.DirtyHook, current *daoDirtyOwner, owner daoDirtyOwner, typeName string, notify func()) {
+func daoBindDirty(hook *dataengine.DirtyHook, current *daoDirtyOwner, owner daoDirtyOwner, typeName string, notify func(dataengine.SyncPath)) {
 	if hook == nil || current == nil {
 		return
 	}
@@ -69,7 +69,7 @@ func daoBindDirty(hook *dataengine.DirtyHook, current *daoDirtyOwner, owner daoD
 			typeName, current.field, current.key, current.holder))
 	}
 	*current = owner
-	hook.SetNotify(notify)
+	hook.SetChangeNotify(notify)
 }
 
 // daoUnbindDirty releases a binding, and only its own: a stale unbind from a

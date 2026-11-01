@@ -108,76 +108,87 @@ const (
 	heroDaoFieldMount   uint64 = 1 << iota
 )
 
-func (d *HeroDao) markNameDirty() {
+func (d *HeroDao) markNameDirty() { d.markNameChange(nil) }
+func (d *HeroDao) markNameChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, heroDaoFieldName); err != nil {
 		panic(fmt.Errorf("HeroDao: mark Name persistence: %w", err))
 	}
-	d.tracker.MarkSync(heroDaoFieldName)
+	d.tracker.MarkSyncPath(heroDaoFieldName, dataengine.SyncField(2, path))
 }
 
-func (d *HeroDao) markLevelDirty() {
+func (d *HeroDao) markLevelDirty() { d.markLevelChange(nil) }
+func (d *HeroDao) markLevelChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, heroDaoFieldLevel); err != nil {
 		panic(fmt.Errorf("HeroDao: mark Level persistence: %w", err))
 	}
-	d.tracker.MarkSync(heroDaoFieldLevel)
+	d.tracker.MarkSyncPath(heroDaoFieldLevel, dataengine.SyncField(3, path))
 }
 
-func (d *HeroDao) markExpDirty() {
+func (d *HeroDao) markExpDirty() { d.markExpChange(nil) }
+func (d *HeroDao) markExpChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, heroDaoFieldExp); err != nil {
 		panic(fmt.Errorf("HeroDao: mark Exp persistence: %w", err))
 	}
-	d.tracker.MarkSync(heroDaoFieldExp)
+	d.tracker.MarkSyncPath(heroDaoFieldExp, dataengine.SyncField(4, path))
 }
 
-func (d *HeroDao) markLoginAtDirty() {
+func (d *HeroDao) markLoginAtDirty() { d.markLoginAtChange(nil) }
+func (d *HeroDao) markLoginAtChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, heroDaoFieldLoginAt); err != nil {
 		panic(fmt.Errorf("HeroDao: mark LoginAt persistence: %w", err))
 	}
 }
 
-func (d *HeroDao) markItemsDirty() {
+func (d *HeroDao) markItemsDirty() { d.markItemsChange(nil) }
+func (d *HeroDao) markItemsChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, heroDaoFieldItems); err != nil {
 		panic(fmt.Errorf("HeroDao: mark Items persistence: %w", err))
 	}
-	d.tracker.MarkSync(heroDaoFieldItems)
+	d.tracker.MarkSyncPath(heroDaoFieldItems, dataengine.SyncField(6, path))
 }
 
-func (d *HeroDao) markFriendsDirty() {
+func (d *HeroDao) markFriendsDirty() { d.markFriendsChange(nil) }
+func (d *HeroDao) markFriendsChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, heroDaoFieldFriends); err != nil {
 		panic(fmt.Errorf("HeroDao: mark Friends persistence: %w", err))
 	}
-	d.tracker.MarkSync(heroDaoFieldFriends)
+	d.tracker.MarkSyncPath(heroDaoFieldFriends, dataengine.SyncField(7, path))
 }
 
-func (d *HeroDao) markPosDirty() {
+func (d *HeroDao) markPosDirty() { d.markPosChange(nil) }
+func (d *HeroDao) markPosChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, heroDaoFieldPos); err != nil {
 		panic(fmt.Errorf("HeroDao: mark Pos persistence: %w", err))
 	}
-	d.tracker.MarkSync(heroDaoFieldPos)
+	d.tracker.MarkSyncPath(heroDaoFieldPos, dataengine.SyncField(8, path))
 }
 
-func (d *HeroDao) markEquipsDirty() {
+func (d *HeroDao) markEquipsDirty() { d.markEquipsChange(nil) }
+func (d *HeroDao) markEquipsChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, heroDaoFieldEquips); err != nil {
 		panic(fmt.Errorf("HeroDao: mark Equips persistence: %w", err))
 	}
-	d.tracker.MarkSync(heroDaoFieldEquips)
+	d.tracker.MarkSyncPath(heroDaoFieldEquips, dataengine.SyncField(9, path))
 }
 
-func (d *HeroDao) markSquadDirty() {
+func (d *HeroDao) markSquadDirty() { d.markSquadChange(nil) }
+func (d *HeroDao) markSquadChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, heroDaoFieldSquad); err != nil {
 		panic(fmt.Errorf("HeroDao: mark Squad persistence: %w", err))
 	}
-	d.tracker.MarkSync(heroDaoFieldSquad)
+	d.tracker.MarkSyncPath(heroDaoFieldSquad, dataengine.SyncField(10, path))
 }
 
-func (d *HeroDao) markMountDirty() {
+func (d *HeroDao) markMountDirty() { d.markMountChange(nil) }
+func (d *HeroDao) markMountChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, heroDaoFieldMount); err != nil {
 		panic(fmt.Errorf("HeroDao: mark Mount persistence: %w", err))
 	}
-	d.tracker.MarkSync(heroDaoFieldMount)
+	d.tracker.MarkSyncPath(heroDaoFieldMount, dataengine.SyncField(11, path))
 }
 
-func (d *HeroDao) markItemsKeyDirty(key int64, val int32) {
+func (d *HeroDao) markItemsKeyDirty(key int64, val int32) { d.markItemsKeyChange(key, val, nil) }
+func (d *HeroDao) markItemsKeyChange(key int64, val int32, path dataengine.SyncPath) {
 	if path, ok := dataengine.MapPatchPath("items", key); ok {
 		if err := nest.MarkPersistSet(d, heroDaoFieldItems, path, val); err != nil {
 			panic(fmt.Errorf("HeroDao: mark Items key persistence: %w", err))
@@ -187,7 +198,7 @@ func (d *HeroDao) markItemsKeyDirty(key int64, val int32) {
 			panic(fmt.Errorf("HeroDao: mark Items persistence: %w", err))
 		}
 	}
-	d.tracker.MarkSync(heroDaoFieldItems)
+	d.tracker.MarkSyncPath(heroDaoFieldItems, dataengine.SyncField(6, dataengine.SyncElement(key, path)))
 }
 
 func (d *HeroDao) markItemsKeyDeleted(key int64) {
@@ -200,10 +211,11 @@ func (d *HeroDao) markItemsKeyDeleted(key int64) {
 			panic(fmt.Errorf("HeroDao: mark Items persistence: %w", err))
 		}
 	}
-	d.tracker.MarkSync(heroDaoFieldItems)
+	d.tracker.MarkSyncPath(heroDaoFieldItems, dataengine.SyncField(6, dataengine.SyncElement(key, nil)))
 }
 
-func (d *HeroDao) markEquipsKeyDirty(key int64, val *EquipInfo) {
+func (d *HeroDao) markEquipsKeyDirty(key int64, val *EquipInfo) { d.markEquipsKeyChange(key, val, nil) }
+func (d *HeroDao) markEquipsKeyChange(key int64, val *EquipInfo, path dataengine.SyncPath) {
 	if path, ok := dataengine.MapPatchPath("equips", key); ok {
 		if err := nest.MarkPersistSet(d, heroDaoFieldEquips, path, val); err != nil {
 			panic(fmt.Errorf("HeroDao: mark Equips key persistence: %w", err))
@@ -213,7 +225,7 @@ func (d *HeroDao) markEquipsKeyDirty(key int64, val *EquipInfo) {
 			panic(fmt.Errorf("HeroDao: mark Equips persistence: %w", err))
 		}
 	}
-	d.tracker.MarkSync(heroDaoFieldEquips)
+	d.tracker.MarkSyncPath(heroDaoFieldEquips, dataengine.SyncField(9, dataengine.SyncElement(key, path)))
 }
 
 func (d *HeroDao) markEquipsKeyDeleted(key int64) {
@@ -226,12 +238,12 @@ func (d *HeroDao) markEquipsKeyDeleted(key int64) {
 			panic(fmt.Errorf("HeroDao: mark Equips persistence: %w", err))
 		}
 	}
-	d.tracker.MarkSync(heroDaoFieldEquips)
+	d.tracker.MarkSyncPath(heroDaoFieldEquips, dataengine.SyncField(9, dataengine.SyncElement(key, nil)))
 }
 
 // Init wires dirty callbacks for nested structs and map values.
 func (d *HeroDao) Init() {
-	d.pos.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldPos}, d.markPosDirty)
+	d.pos.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldPos}, d.markPosChange)
 	if d.equips != nil {
 		d.equips.Range(func(key int64, v *EquipInfo) bool {
 			d.bindEquipsValue(key, v)
@@ -401,7 +413,26 @@ func (d *HeroDao) AddFriends(v int64) {
 		})
 	}
 	d.friends = append(d.friends, v)
-	d.markFriendsDirty()
+	d.markFriendsChange(dataengine.SyncElement(len(d.friends)-1, nil))
+}
+
+// SetFriendsAt 更新一个现有索引；不移动其他元素，变化可安全合并与重试。
+func (d *HeroDao) SetFriendsAt(index int, v int64) bool {
+	if index < 0 || index >= len(d.friends) {
+		return false
+	}
+	items := d.friends
+	old := items[index]
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		d.recordUndoToken(tx, heroDaoFieldFriends, &items[index], func() error {
+			// 保存具体的 backing array；后续 SetAll/缩短不能改变逆操作目标。
+			items[index] = old
+			return nil
+		})
+	}
+	d.friends[index] = v
+	d.markFriendsChange(dataengine.SyncElement(index, nil))
+	return true
 }
 
 func (d *HeroDao) SetFriendsAll(v []int64) {
@@ -436,12 +467,12 @@ func (d *HeroDao) SetPos(v Position) {
 		old := d.pos
 		d.recordUndo(tx, heroDaoFieldPos, func() error {
 			d.pos = old
-			d.pos.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldPos}, d.markPosDirty)
+			d.pos.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldPos}, d.markPosChange)
 			return nil
 		})
 	}
 	d.pos = v
-	d.pos.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldPos}, d.markPosDirty)
+	d.pos.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldPos}, d.markPosChange)
 	d.markPosDirty()
 }
 
@@ -465,7 +496,7 @@ func (d *HeroDao) GetEquips(key int64) (*EquipInfo, bool) {
 func (d *HeroDao) bindEquipsValue(key int64, val *EquipInfo) {
 	if val != nil {
 		val.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldEquips, key: key},
-			func() { d.markEquipsKeyDirty(key, val) })
+			func(path dataengine.SyncPath) { d.markEquipsKeyChange(key, val, path) })
 	}
 }
 
@@ -546,7 +577,7 @@ func (d *HeroDao) EquipsLen() int {
 func (d *HeroDao) bindSquadItems() {
 	for index, item := range d.squad {
 		if item != nil {
-			item.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldSquad, key: index}, d.markSquadDirty)
+			item.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldSquad, key: index}, func(path dataengine.SyncPath) { d.markSquadChange(dataengine.SyncElement(index, path)) })
 		}
 	}
 }
@@ -571,7 +602,34 @@ func (d *HeroDao) AddSquad(v *EquipInfo) {
 	}
 	d.squad = append(d.squad, v)
 	d.bindSquadItems()
-	d.markSquadDirty()
+	d.markSquadChange(dataengine.SyncElement(len(d.squad)-1, nil))
+}
+
+// SetSquadAt 更新一个现有索引；不移动其他元素，变化可安全合并与重试。
+func (d *HeroDao) SetSquadAt(index int, v *EquipInfo) bool {
+	if index < 0 || index >= len(d.squad) {
+		return false
+	}
+	items := d.squad
+	old := items[index]
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		d.recordUndoToken(tx, heroDaoFieldSquad, &items[index], func() error {
+			// 保存具体的 backing array；后续 SetAll/缩短不能改变逆操作目标。
+			d.unbindSquadItems()
+			items[index] = old
+			d.bindSquadItems()
+			return nil
+		})
+	}
+	if old != nil {
+		old.unbindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldSquad, key: index})
+	}
+	d.squad[index] = v
+	if v != nil {
+		v.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldSquad, key: index}, func(path dataengine.SyncPath) { d.markSquadChange(dataengine.SyncElement(index, path)) })
+	}
+	d.markSquadChange(dataengine.SyncElement(index, nil))
+	return true
 }
 
 func (d *HeroDao) SetSquadAll(v []*EquipInfo) {
@@ -615,7 +673,7 @@ func (d *HeroDao) SquadLen() int {
 // invariant nested containers and top-level maps and slices keep.
 func (d *HeroDao) bindMount() {
 	if d.mount != nil {
-		d.mount.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldMount}, d.markMountDirty)
+		d.mount.bindDirty(daoDirtyOwner{holder: d, field: heroDaoFieldMount}, d.markMountChange)
 	}
 }
 

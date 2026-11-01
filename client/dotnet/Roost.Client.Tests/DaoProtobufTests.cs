@@ -19,6 +19,21 @@ internal static partial class Program
         Check(merged.Name.Value == "" && merged.Level.Value == 0 && merged.Items.Value.Count == 0 && merged.Friends.Value.Count == 0, "replace clears fields");
         Check(merged.Exp.Value == 1L << 60 && merged.Equips.Value.ContainsKey(4), "delta retains untouched state");
         Check(full.Name.Value == "hello" && full.Items.Value.Count == 1, "patch does not mutate old snapshot");
+        foreach (var row in JsonDocument.Parse(File.ReadAllText(Path.Combine(Path.GetDirectoryName(path)!, "dao-collections.json"))).RootElement.EnumerateArray())
+        {
+            var baseline = SyncHeroDao.Parser.ParseFrom(Convert.FromHexString(row.GetProperty("full").GetString()!));
+            var before = baseline.Clone();
+            var delta = SyncHeroDao.Parser.ParseFrom(Convert.FromHexString(row.GetProperty("patch").GetString()!));
+            var expected = SyncHeroDao.Parser.ParseFrom(Convert.FromHexString(row.GetProperty("want").GetString()!));
+            Check(delta.Apply(baseline).Equals(expected), "Go/C# collection " + row.GetProperty("name").GetString());
+            Check(baseline.Equals(before), "collection baseline unchanged");
+        }
+        var invalid = new SyncHeroDao { EntityId = full.EntityId, SyncFormat = 3,
+            Name = new SyncHeroDaoNameField { Value = "must-not-apply" },
+            Friends = new SyncHeroDaoFriendsField { Delta = true, Length = 100 } };
+        bool rejected = false;
+        try { invalid.Apply(full); } catch (InvalidDataException) { rejected = true; }
+        Check(rejected && full.Name.Value == "hello", "invalid splice rejected atomically");
         Console.WriteLine("PASS generated DAO PB Go/C# full/delta/zero/empty/nil/precision");
     }
 }

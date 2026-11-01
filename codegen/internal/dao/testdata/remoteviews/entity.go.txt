@@ -1,0 +1,15 @@
+package alliance
+
+import (
+	"example.com/remoteviews/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+const Kind entity.EntityKind = 237
+
+//roost:entity entityKind=Kind category=entity.EntityCategoryRemote remote=managed
+type Alliance struct {
+	*entity.RemoteEntityBase
+	entity.DaoManager
+	dao *db.AllianceDao `dao:"alliances"`
+}

@@ -3,6 +3,7 @@ package testdata
 
 import (
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"math"
 	"sort"
 
@@ -49,6 +50,89 @@ type SyncOptionalEnvelope struct {
 	Value *SyncEnvelope `json:"value,omitempty"`
 }
 
+type SyncPatchPositionXField struct {
+	Value int32 `json:"value,omitempty"`
+}
+
+type SyncPatchPositionYField struct {
+	Value int32 `json:"value,omitempty"`
+}
+
+type SyncPatchPosition struct {
+	X *SyncPatchPositionXField `json:"x,omitempty"`
+	Y *SyncPatchPositionYField `json:"y,omitempty"`
+}
+
+type SyncPatchEquipInfoLevelField struct {
+	Value int32 `json:"value,omitempty"`
+}
+
+type SyncPatchEquipInfoStarField struct {
+	Value int32 `json:"value,omitempty"`
+}
+
+type SyncPatchEquipInfoGemsField struct {
+	Value   map[int32]SyncOptionalGemInfo `json:"value,omitempty"`
+	Delta   bool                          `json:"delta,omitempty"`
+	Removed []int32                       `json:"removed,omitempty"`
+	Patches map[int32]SyncPatchGemInfo    `json:"patches,omitempty"`
+}
+
+type SyncPatchEquipInfoRunesField struct {
+	Value   []SyncOptionalGemInfo          `json:"value,omitempty"`
+	Delta   bool                           `json:"delta,omitempty"`
+	Updates map[uint64]SyncOptionalGemInfo `json:"updates,omitempty"`
+	Length  uint64                         `json:"length,omitempty"`
+	Patches map[uint64]SyncPatchGemInfo    `json:"patches,omitempty"`
+}
+
+type SyncPatchEquipInfoCoreField struct {
+	Value SyncOptionalGemInfo `json:"value,omitempty"`
+	Patch *SyncPatchGemInfo   `json:"patch,omitempty"`
+}
+
+type SyncPatchEquipInfoShapeField struct {
+	Value SyncPosition       `json:"value,omitempty"`
+	Patch *SyncPatchPosition `json:"patch,omitempty"`
+}
+
+type SyncPatchEquipInfo struct {
+	Level *SyncPatchEquipInfoLevelField `json:"level,omitempty"`
+	Star  *SyncPatchEquipInfoStarField  `json:"star,omitempty"`
+	Gems  *SyncPatchEquipInfoGemsField  `json:"gems,omitempty"`
+	Runes *SyncPatchEquipInfoRunesField `json:"runes,omitempty"`
+	Core  *SyncPatchEquipInfoCoreField  `json:"core,omitempty"`
+	Shape *SyncPatchEquipInfoShapeField `json:"shape,omitempty"`
+}
+
+type SyncPatchGemInfoIDField struct {
+	Value int32 `json:"value,omitempty"`
+}
+
+type SyncPatchGemInfoLevelField struct {
+	Value int32 `json:"value,omitempty"`
+}
+
+type SyncPatchGemInfoSigField struct {
+	Value []byte `json:"value,omitempty"`
+}
+
+type SyncPatchGemInfo struct {
+	ID    *SyncPatchGemInfoIDField    `json:"id,omitempty"`
+	Level *SyncPatchGemInfoLevelField `json:"level,omitempty"`
+	Sig   *SyncPatchGemInfoSigField   `json:"sig,omitempty"`
+}
+
+type SyncPatchEnvelopeMarksField struct {
+	Value   map[int32][]byte `json:"value,omitempty"`
+	Delta   bool             `json:"delta,omitempty"`
+	Removed []int32          `json:"removed,omitempty"`
+}
+
+type SyncPatchEnvelope struct {
+	Marks *SyncPatchEnvelopeMarksField `json:"marks,omitempty"`
+}
+
 type SyncHeroDaoNameField struct {
 	Value string `json:"value,omitempty"`
 }
@@ -62,40 +146,55 @@ type SyncHeroDaoExpField struct {
 }
 
 type SyncHeroDaoItemsField struct {
-	Value map[int64]int32 `json:"value,omitempty"`
+	Value   map[int64]int32 `json:"value,omitempty"`
+	Delta   bool            `json:"delta,omitempty"`
+	Removed []int64         `json:"removed,omitempty"`
 }
 
 type SyncHeroDaoFriendsField struct {
-	Value []int64 `json:"value,omitempty"`
+	Value   []int64          `json:"value,omitempty"`
+	Delta   bool             `json:"delta,omitempty"`
+	Updates map[uint64]int64 `json:"updates,omitempty"`
+	Length  uint64           `json:"length,omitempty"`
 }
 
 type SyncHeroDaoPosField struct {
-	Value SyncPosition `json:"value,omitempty"`
+	Value SyncPosition       `json:"value,omitempty"`
+	Patch *SyncPatchPosition `json:"patch,omitempty"`
 }
 
 type SyncHeroDaoEquipsField struct {
-	Value map[int64]SyncOptionalEquipInfo `json:"value,omitempty"`
+	Value   map[int64]SyncOptionalEquipInfo `json:"value,omitempty"`
+	Delta   bool                            `json:"delta,omitempty"`
+	Removed []int64                         `json:"removed,omitempty"`
+	Patches map[int64]SyncPatchEquipInfo    `json:"patches,omitempty"`
 }
 
 type SyncHeroDaoSquadField struct {
-	Value []SyncOptionalEquipInfo `json:"value,omitempty"`
+	Value   []SyncOptionalEquipInfo          `json:"value,omitempty"`
+	Delta   bool                             `json:"delta,omitempty"`
+	Updates map[uint64]SyncOptionalEquipInfo `json:"updates,omitempty"`
+	Length  uint64                           `json:"length,omitempty"`
+	Patches map[uint64]SyncPatchEquipInfo    `json:"patches,omitempty"`
 }
 
 type SyncHeroDaoMountField struct {
 	Value SyncOptionalEquipInfo `json:"value,omitempty"`
+	Patch *SyncPatchEquipInfo   `json:"patch,omitempty"`
 }
 
 type SyncHeroDao struct {
-	EntityID int64                    `json:"entity_id,omitempty"`
-	Name     *SyncHeroDaoNameField    `json:"name,omitempty"`
-	Level    *SyncHeroDaoLevelField   `json:"level,omitempty"`
-	Exp      *SyncHeroDaoExpField     `json:"exp,omitempty"`
-	Items    *SyncHeroDaoItemsField   `json:"items,omitempty"`
-	Friends  *SyncHeroDaoFriendsField `json:"friends,omitempty"`
-	Pos      *SyncHeroDaoPosField     `json:"pos,omitempty"`
-	Equips   *SyncHeroDaoEquipsField  `json:"equips,omitempty"`
-	Squad    *SyncHeroDaoSquadField   `json:"squad,omitempty"`
-	Mount    *SyncHeroDaoMountField   `json:"mount,omitempty"`
+	EntityID   int64                    `json:"entity_id,omitempty"`
+	SyncFormat uint32                   `json:"sync_format,omitempty"`
+	Name       *SyncHeroDaoNameField    `json:"name,omitempty"`
+	Level      *SyncHeroDaoLevelField   `json:"level,omitempty"`
+	Exp        *SyncHeroDaoExpField     `json:"exp,omitempty"`
+	Items      *SyncHeroDaoItemsField   `json:"items,omitempty"`
+	Friends    *SyncHeroDaoFriendsField `json:"friends,omitempty"`
+	Pos        *SyncHeroDaoPosField     `json:"pos,omitempty"`
+	Equips     *SyncHeroDaoEquipsField  `json:"equips,omitempty"`
+	Squad      *SyncHeroDaoSquadField   `json:"squad,omitempty"`
+	Mount      *SyncHeroDaoMountField   `json:"mount,omitempty"`
 }
 
 type SyncVarietyDaoSyncOnlyField struct {
@@ -103,11 +202,15 @@ type SyncVarietyDaoSyncOnlyField struct {
 }
 
 type SyncVarietyDaoFastItemsField struct {
-	Value map[int64]int32 `json:"value,omitempty"`
+	Value   map[int64]int32 `json:"value,omitempty"`
+	Delta   bool            `json:"delta,omitempty"`
+	Removed []int64         `json:"removed,omitempty"`
 }
 
 type SyncVarietyDaoShardedTagsField struct {
-	Value map[int32]string `json:"value,omitempty"`
+	Value   map[int32]string `json:"value,omitempty"`
+	Delta   bool             `json:"delta,omitempty"`
+	Removed []int32          `json:"removed,omitempty"`
 }
 
 type SyncVarietyDaoResultJSONField struct {
@@ -115,11 +218,14 @@ type SyncVarietyDaoResultJSONField struct {
 }
 
 type SyncVarietyDaoBlobsField struct {
-	Value map[string][]byte `json:"value,omitempty"`
+	Value   map[string][]byte `json:"value,omitempty"`
+	Delta   bool              `json:"delta,omitempty"`
+	Removed []string          `json:"removed,omitempty"`
 }
 
 type SyncVarietyDaoEnvelopeField struct {
-	Value SyncEnvelope `json:"value,omitempty"`
+	Value SyncEnvelope       `json:"value,omitempty"`
+	Patch *SyncPatchEnvelope `json:"patch,omitempty"`
 }
 
 type SyncVarietyDaoEnabledField struct {
@@ -132,6 +238,7 @@ type SyncVarietyDaoCounterField struct {
 
 type SyncVarietyDao struct {
 	EntityID    int64                           `json:"entity_id,omitempty"`
+	SyncFormat  uint32                          `json:"sync_format,omitempty"`
 	SyncOnly    *SyncVarietyDaoSyncOnlyField    `json:"sync_only,omitempty"`
 	FastItems   *SyncVarietyDaoFastItemsField   `json:"fast_items,omitempty"`
 	ShardedTags *SyncVarietyDaoShardedTagsField `json:"sharded_tags,omitempty"`
@@ -151,19 +258,25 @@ type SyncWraithDaoPosYField struct {
 }
 
 type SyncWraithDaoBuffsField struct {
-	Value map[int32]int64 `json:"value,omitempty"`
+	Value   map[int32]int64 `json:"value,omitempty"`
+	Delta   bool            `json:"delta,omitempty"`
+	Removed []int32         `json:"removed,omitempty"`
 }
 
 type SyncWraithDaoTrailField struct {
-	Value []int64 `json:"value,omitempty"`
+	Value   []int64          `json:"value,omitempty"`
+	Delta   bool             `json:"delta,omitempty"`
+	Updates map[uint64]int64 `json:"updates,omitempty"`
+	Length  uint64           `json:"length,omitempty"`
 }
 
 type SyncWraithDao struct {
-	EntityID int64                    `json:"entity_id,omitempty"`
-	PosX     *SyncWraithDaoPosXField  `json:"pos_x,omitempty"`
-	PosY     *SyncWraithDaoPosYField  `json:"pos_y,omitempty"`
-	Buffs    *SyncWraithDaoBuffsField `json:"buffs,omitempty"`
-	Trail    *SyncWraithDaoTrailField `json:"trail,omitempty"`
+	EntityID   int64                    `json:"entity_id,omitempty"`
+	SyncFormat uint32                   `json:"sync_format,omitempty"`
+	PosX       *SyncWraithDaoPosXField  `json:"pos_x,omitempty"`
+	PosY       *SyncWraithDaoPosYField  `json:"pos_y,omitempty"`
+	Buffs      *SyncWraithDaoBuffsField `json:"buffs,omitempty"`
+	Trail      *SyncWraithDaoTrailField `json:"trail,omitempty"`
 }
 
 func MarshalSyncPosition(m *SyncPosition) ([]byte, error) {
@@ -808,6 +921,1493 @@ func UnmarshalSyncOptionalEnvelope(data []byte) (*SyncOptionalEnvelope, error) {
 	return m, nil
 }
 
+func MarshalSyncPatchPositionXField(m *SyncPatchPositionXField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchPositionXField(data []byte) (*SyncPatchPositionXField, error) {
+	m := &SyncPatchPositionXField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int32(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchPositionYField(m *SyncPatchPositionYField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchPositionYField(data []byte) (*SyncPatchPositionYField, error) {
+	m := &SyncPatchPositionYField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int32(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchPosition(m *SyncPatchPosition) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.X != nil {
+		{
+			payload, err := MarshalSyncPatchPositionXField(m.X)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Y != nil {
+		{
+			payload, err := MarshalSyncPatchPositionYField(m.Y)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchPosition(data []byte) (*SyncPatchPosition, error) {
+	m := &SyncPatchPosition{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchPositionXField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.X = msg
+			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchPositionYField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Y = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchEquipInfoLevelField(m *SyncPatchEquipInfoLevelField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchEquipInfoLevelField(data []byte) (*SyncPatchEquipInfoLevelField, error) {
+	m := &SyncPatchEquipInfoLevelField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int32(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchEquipInfoStarField(m *SyncPatchEquipInfoStarField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchEquipInfoStarField(data []byte) (*SyncPatchEquipInfoStarField, error) {
+	m := &SyncPatchEquipInfoStarField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int32(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchEquipInfoGemsField(m *SyncPatchEquipInfoGemsField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if len(m.Value) > 0 {
+		keys := make([]int32, 0, len(m.Value))
+		for key := range m.Value {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Value[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncOptionalGemInfo(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Removed) > 0 {
+		var packed []byte
+		for _, item := range m.Removed {
+			packed = protowire.AppendVarint(packed, uint64(item))
+		}
+		b = protowire.AppendTag(b, 3, protowire.BytesType)
+		b = protowire.AppendBytes(b, packed)
+	}
+	if len(m.Patches) > 0 {
+		keys := make([]int32, 0, len(m.Patches))
+		for key := range m.Patches {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Patches[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncPatchGemInfo(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 4, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchEquipInfoGemsField(data []byte) (*SyncPatchEquipInfoGemsField, error) {
+	m := &SyncPatchEquipInfoGemsField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Value: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key int32
+			var val SyncOptionalGemInfo
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = int32(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncOptionalGemInfo(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Value == nil {
+				m.Value = make(map[int32]SyncOptionalGemInfo)
+			}
+			m.Value[key] = val
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ == protowire.BytesType {
+				packed, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				data = data[n:]
+				for len(packed) > 0 {
+					var item int32
+					v, n := protowire.ConsumeVarint(packed)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					item = int32(v)
+					packed = packed[n:]
+					m.Removed = append(m.Removed, item)
+				}
+			} else {
+				var item int32
+				if typ != protowire.VarintType {
+					return nil, fmt.Errorf("expected varint")
+				}
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				item = int32(v)
+				data = data[n:]
+				m.Removed = append(m.Removed, item)
+			}
+		case 4:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Patches: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key int32
+			var val SyncPatchGemInfo
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = int32(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncPatchGemInfo(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Patches == nil {
+				m.Patches = make(map[int32]SyncPatchGemInfo)
+			}
+			m.Patches[key] = val
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchEquipInfoRunesField(m *SyncPatchEquipInfoRunesField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if len(m.Value) > 0 {
+		for _, item := range m.Value {
+			{
+				payload, err := MarshalSyncOptionalGemInfo(&item)
+				if err != nil {
+					return nil, err
+				}
+				b = protowire.AppendTag(b, 1, protowire.BytesType)
+				b = protowire.AppendBytes(b, payload)
+			}
+		}
+	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Updates) > 0 {
+		keys := make([]uint64, 0, len(m.Updates))
+		for key := range m.Updates {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Updates[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncOptionalGemInfo(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 3, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	if m.Length != 0 {
+		b = protowire.AppendTag(b, 4, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Length))
+	}
+	if len(m.Patches) > 0 {
+		keys := make([]uint64, 0, len(m.Patches))
+		for key := range m.Patches {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Patches[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncPatchGemInfo(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 5, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchEquipInfoRunesField(data []byte) (*SyncPatchEquipInfoRunesField, error) {
+	m := &SyncPatchEquipInfoRunesField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			var item SyncOptionalGemInfo
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncOptionalGemInfo(v)
+			if err != nil {
+				return nil, err
+			}
+			if msg != nil {
+				item = *msg
+			}
+			data = data[n:]
+			m.Value = append(m.Value, item)
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Updates: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key uint64
+			var val SyncOptionalGemInfo
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = uint64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncOptionalGemInfo(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Updates == nil {
+				m.Updates = make(map[uint64]SyncOptionalGemInfo)
+			}
+			m.Updates[key] = val
+		case 4:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Length = uint64(v)
+			data = data[n:]
+		case 5:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Patches: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key uint64
+			var val SyncPatchGemInfo
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = uint64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncPatchGemInfo(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Patches == nil {
+				m.Patches = make(map[uint64]SyncPatchGemInfo)
+			}
+			m.Patches[key] = val
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchEquipInfoCoreField(m *SyncPatchEquipInfoCoreField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	{
+		payload, err := MarshalSyncOptionalGemInfo(&m.Value)
+		if err != nil {
+			return nil, err
+		}
+		b = protowire.AppendTag(b, 1, protowire.BytesType)
+		b = protowire.AppendBytes(b, payload)
+	}
+	if m.Patch != nil {
+		{
+			payload, err := MarshalSyncPatchGemInfo(m.Patch)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchEquipInfoCoreField(data []byte) (*SyncPatchEquipInfoCoreField, error) {
+	m := &SyncPatchEquipInfoCoreField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncOptionalGemInfo(v)
+			if err != nil {
+				return nil, err
+			}
+			if msg != nil {
+				m.Value = *msg
+			}
+			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchGemInfo(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Patch = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchEquipInfoShapeField(m *SyncPatchEquipInfoShapeField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	{
+		payload, err := MarshalSyncPosition(&m.Value)
+		if err != nil {
+			return nil, err
+		}
+		b = protowire.AppendTag(b, 1, protowire.BytesType)
+		b = protowire.AppendBytes(b, payload)
+	}
+	if m.Patch != nil {
+		{
+			payload, err := MarshalSyncPatchPosition(m.Patch)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchEquipInfoShapeField(data []byte) (*SyncPatchEquipInfoShapeField, error) {
+	m := &SyncPatchEquipInfoShapeField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPosition(v)
+			if err != nil {
+				return nil, err
+			}
+			if msg != nil {
+				m.Value = *msg
+			}
+			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchPosition(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Patch = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchEquipInfo(m *SyncPatchEquipInfo) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Level != nil {
+		{
+			payload, err := MarshalSyncPatchEquipInfoLevelField(m.Level)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Star != nil {
+		{
+			payload, err := MarshalSyncPatchEquipInfoStarField(m.Star)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Gems != nil {
+		{
+			payload, err := MarshalSyncPatchEquipInfoGemsField(m.Gems)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 3, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Runes != nil {
+		{
+			payload, err := MarshalSyncPatchEquipInfoRunesField(m.Runes)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 4, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Core != nil {
+		{
+			payload, err := MarshalSyncPatchEquipInfoCoreField(m.Core)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 5, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Shape != nil {
+		{
+			payload, err := MarshalSyncPatchEquipInfoShapeField(m.Shape)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 6, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchEquipInfo(data []byte) (*SyncPatchEquipInfo, error) {
+	m := &SyncPatchEquipInfo{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchEquipInfoLevelField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Level = msg
+			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchEquipInfoStarField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Star = msg
+			data = data[n:]
+		case 3:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchEquipInfoGemsField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Gems = msg
+			data = data[n:]
+		case 4:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchEquipInfoRunesField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Runes = msg
+			data = data[n:]
+		case 5:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchEquipInfoCoreField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Core = msg
+			data = data[n:]
+		case 6:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchEquipInfoShapeField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Shape = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchGemInfoIDField(m *SyncPatchGemInfoIDField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchGemInfoIDField(data []byte) (*SyncPatchGemInfoIDField, error) {
+	m := &SyncPatchGemInfoIDField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int32(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchGemInfoLevelField(m *SyncPatchGemInfoLevelField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchGemInfoLevelField(data []byte) (*SyncPatchGemInfoLevelField, error) {
+	m := &SyncPatchGemInfoLevelField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int32(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchGemInfoSigField(m *SyncPatchGemInfoSigField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if len(m.Value) > 0 {
+		b = protowire.AppendTag(b, 1, protowire.BytesType)
+		b = protowire.AppendBytes(b, m.Value)
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchGemInfoSigField(data []byte) (*SyncPatchGemInfoSigField, error) {
+	m := &SyncPatchGemInfoSigField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = append(m.Value[:0], v...)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchGemInfo(m *SyncPatchGemInfo) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.ID != nil {
+		{
+			payload, err := MarshalSyncPatchGemInfoIDField(m.ID)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Level != nil {
+		{
+			payload, err := MarshalSyncPatchGemInfoLevelField(m.Level)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Sig != nil {
+		{
+			payload, err := MarshalSyncPatchGemInfoSigField(m.Sig)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 3, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchGemInfo(data []byte) (*SyncPatchGemInfo, error) {
+	m := &SyncPatchGemInfo{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchGemInfoIDField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.ID = msg
+			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchGemInfoLevelField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Level = msg
+			data = data[n:]
+		case 3:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchGemInfoSigField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Sig = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchEnvelopeMarksField(m *SyncPatchEnvelopeMarksField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if len(m.Value) > 0 {
+		keys := make([]int32, 0, len(m.Value))
+		for key := range m.Value {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Value[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+			entry = protowire.AppendBytes(entry, val)
+			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Removed) > 0 {
+		var packed []byte
+		for _, item := range m.Removed {
+			packed = protowire.AppendVarint(packed, uint64(item))
+		}
+		b = protowire.AppendTag(b, 3, protowire.BytesType)
+		b = protowire.AppendBytes(b, packed)
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchEnvelopeMarksField(data []byte) (*SyncPatchEnvelopeMarksField, error) {
+	m := &SyncPatchEnvelopeMarksField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Value: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key int32
+			var val []byte
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = int32(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					val = append(val[:0], v...)
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Value == nil {
+				m.Value = make(map[int32][]byte)
+			}
+			m.Value[key] = val
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ == protowire.BytesType {
+				packed, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				data = data[n:]
+				for len(packed) > 0 {
+					var item int32
+					v, n := protowire.ConsumeVarint(packed)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					item = int32(v)
+					packed = packed[n:]
+					m.Removed = append(m.Removed, item)
+				}
+			} else {
+				var item int32
+				if typ != protowire.VarintType {
+					return nil, fmt.Errorf("expected varint")
+				}
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				item = int32(v)
+				data = data[n:]
+				m.Removed = append(m.Removed, item)
+			}
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchEnvelope(m *SyncPatchEnvelope) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Marks != nil {
+		{
+			payload, err := MarshalSyncPatchEnvelopeMarksField(m.Marks)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchEnvelope(data []byte) (*SyncPatchEnvelope, error) {
+	m := &SyncPatchEnvelope{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchEnvelopeMarksField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Marks = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
 func MarshalSyncHeroDaoNameField(m *SyncHeroDaoNameField) ([]byte, error) {
 	if m == nil {
 		return nil, nil
@@ -956,6 +2556,22 @@ func MarshalSyncHeroDaoItemsField(m *SyncHeroDaoItemsField) ([]byte, error) {
 			b = protowire.AppendBytes(b, entry)
 		}
 	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Removed) > 0 {
+		var packed []byte
+		for _, item := range m.Removed {
+			packed = protowire.AppendVarint(packed, uint64(item))
+		}
+		b = protowire.AppendTag(b, 3, protowire.BytesType)
+		b = protowire.AppendBytes(b, packed)
+	}
 	return b, nil
 }
 
@@ -1018,6 +2634,46 @@ func UnmarshalSyncHeroDaoItemsField(data []byte) (*SyncHeroDaoItemsField, error)
 				m.Value = make(map[int64]int32)
 			}
 			m.Value[key] = val
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ == protowire.BytesType {
+				packed, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				data = data[n:]
+				for len(packed) > 0 {
+					var item int64
+					v, n := protowire.ConsumeVarint(packed)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					item = int64(v)
+					packed = packed[n:]
+					m.Removed = append(m.Removed, item)
+				}
+			} else {
+				var item int64
+				if typ != protowire.VarintType {
+					return nil, fmt.Errorf("expected varint")
+				}
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				item = int64(v)
+				data = data[n:]
+				m.Removed = append(m.Removed, item)
+			}
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
 			if n < 0 {
@@ -1041,6 +2697,35 @@ func MarshalSyncHeroDaoFriendsField(m *SyncHeroDaoFriendsField) ([]byte, error) 
 		}
 		b = protowire.AppendTag(b, 1, protowire.BytesType)
 		b = protowire.AppendBytes(b, packed)
+	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Updates) > 0 {
+		keys := make([]uint64, 0, len(m.Updates))
+		for key := range m.Updates {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Updates[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			entry = protowire.AppendTag(entry, 2, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(val))
+			b = protowire.AppendTag(b, 3, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	if m.Length != 0 {
+		b = protowire.AppendTag(b, 4, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Length))
 	}
 	return b, nil
 }
@@ -1084,6 +2769,76 @@ func UnmarshalSyncHeroDaoFriendsField(data []byte) (*SyncHeroDaoFriendsField, er
 				data = data[n:]
 				m.Value = append(m.Value, item)
 			}
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Updates: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key uint64
+			var val int64
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = uint64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					val = int64(v)
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Updates == nil {
+				m.Updates = make(map[uint64]int64)
+			}
+			m.Updates[key] = val
+		case 4:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Length = uint64(v)
+			data = data[n:]
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
 			if n < 0 {
@@ -1107,6 +2862,16 @@ func MarshalSyncHeroDaoPosField(m *SyncHeroDaoPosField) ([]byte, error) {
 		}
 		b = protowire.AppendTag(b, 1, protowire.BytesType)
 		b = protowire.AppendBytes(b, payload)
+	}
+	if m.Patch != nil {
+		{
+			payload, err := MarshalSyncPatchPosition(m.Patch)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
 	}
 	return b, nil
 }
@@ -1135,6 +2900,20 @@ func UnmarshalSyncHeroDaoPosField(data []byte) (*SyncHeroDaoPosField, error) {
 			if msg != nil {
 				m.Value = *msg
 			}
+			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchPosition(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Patch = msg
 			data = data[n:]
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
@@ -1172,6 +2951,45 @@ func MarshalSyncHeroDaoEquipsField(m *SyncHeroDaoEquipsField) ([]byte, error) {
 				entry = protowire.AppendBytes(entry, payload)
 			}
 			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Removed) > 0 {
+		var packed []byte
+		for _, item := range m.Removed {
+			packed = protowire.AppendVarint(packed, uint64(item))
+		}
+		b = protowire.AppendTag(b, 3, protowire.BytesType)
+		b = protowire.AppendBytes(b, packed)
+	}
+	if len(m.Patches) > 0 {
+		keys := make([]int64, 0, len(m.Patches))
+		for key := range m.Patches {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Patches[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncPatchEquipInfo(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 4, protowire.BytesType)
 			b = protowire.AppendBytes(b, entry)
 		}
 	}
@@ -1243,6 +3061,102 @@ func UnmarshalSyncHeroDaoEquipsField(data []byte) (*SyncHeroDaoEquipsField, erro
 				m.Value = make(map[int64]SyncOptionalEquipInfo)
 			}
 			m.Value[key] = val
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ == protowire.BytesType {
+				packed, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				data = data[n:]
+				for len(packed) > 0 {
+					var item int64
+					v, n := protowire.ConsumeVarint(packed)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					item = int64(v)
+					packed = packed[n:]
+					m.Removed = append(m.Removed, item)
+				}
+			} else {
+				var item int64
+				if typ != protowire.VarintType {
+					return nil, fmt.Errorf("expected varint")
+				}
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				item = int64(v)
+				data = data[n:]
+				m.Removed = append(m.Removed, item)
+			}
+		case 4:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Patches: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key int64
+			var val SyncPatchEquipInfo
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = int64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncPatchEquipInfo(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Patches == nil {
+				m.Patches = make(map[int64]SyncPatchEquipInfo)
+			}
+			m.Patches[key] = val
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
 			if n < 0 {
@@ -1269,6 +3183,64 @@ func MarshalSyncHeroDaoSquadField(m *SyncHeroDaoSquadField) ([]byte, error) {
 				b = protowire.AppendTag(b, 1, protowire.BytesType)
 				b = protowire.AppendBytes(b, payload)
 			}
+		}
+	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Updates) > 0 {
+		keys := make([]uint64, 0, len(m.Updates))
+		for key := range m.Updates {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Updates[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncOptionalEquipInfo(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 3, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	if m.Length != 0 {
+		b = protowire.AppendTag(b, 4, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Length))
+	}
+	if len(m.Patches) > 0 {
+		keys := make([]uint64, 0, len(m.Patches))
+		for key := range m.Patches {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Patches[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncPatchEquipInfo(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 5, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
 		}
 	}
 	return b, nil
@@ -1301,6 +3273,138 @@ func UnmarshalSyncHeroDaoSquadField(data []byte) (*SyncHeroDaoSquadField, error)
 			}
 			data = data[n:]
 			m.Value = append(m.Value, item)
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Updates: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key uint64
+			var val SyncOptionalEquipInfo
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = uint64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncOptionalEquipInfo(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Updates == nil {
+				m.Updates = make(map[uint64]SyncOptionalEquipInfo)
+			}
+			m.Updates[key] = val
+		case 4:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Length = uint64(v)
+			data = data[n:]
+		case 5:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Patches: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key uint64
+			var val SyncPatchEquipInfo
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = uint64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncPatchEquipInfo(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Patches == nil {
+				m.Patches = make(map[uint64]SyncPatchEquipInfo)
+			}
+			m.Patches[key] = val
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
 			if n < 0 {
@@ -1324,6 +3428,16 @@ func MarshalSyncHeroDaoMountField(m *SyncHeroDaoMountField) ([]byte, error) {
 		}
 		b = protowire.AppendTag(b, 1, protowire.BytesType)
 		b = protowire.AppendBytes(b, payload)
+	}
+	if m.Patch != nil {
+		{
+			payload, err := MarshalSyncPatchEquipInfo(m.Patch)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
 	}
 	return b, nil
 }
@@ -1353,6 +3467,20 @@ func UnmarshalSyncHeroDaoMountField(data []byte) (*SyncHeroDaoMountField, error)
 				m.Value = *msg
 			}
 			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchEquipInfo(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Patch = msg
+			data = data[n:]
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
 			if n < 0 {
@@ -1372,6 +3500,10 @@ func MarshalSyncHeroDao(m *SyncHeroDao) ([]byte, error) {
 	if m.EntityID != 0 {
 		b = protowire.AppendTag(b, 1, protowire.VarintType)
 		b = protowire.AppendVarint(b, uint64(m.EntityID))
+	}
+	if m.SyncFormat != 0 {
+		b = protowire.AppendTag(b, 2047, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.SyncFormat))
 	}
 	if m.Name != nil {
 		{
@@ -1484,6 +3616,16 @@ func UnmarshalSyncHeroDao(data []byte) (*SyncHeroDao, error) {
 				return nil, protowire.ParseError(n)
 			}
 			m.EntityID = int64(v)
+			data = data[n:]
+		case 2047:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.SyncFormat = uint32(v)
 			data = data[n:]
 		case 2:
 			if typ != protowire.BytesType {
@@ -1686,6 +3828,22 @@ func MarshalSyncVarietyDaoFastItemsField(m *SyncVarietyDaoFastItemsField) ([]byt
 			b = protowire.AppendBytes(b, entry)
 		}
 	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Removed) > 0 {
+		var packed []byte
+		for _, item := range m.Removed {
+			packed = protowire.AppendVarint(packed, uint64(item))
+		}
+		b = protowire.AppendTag(b, 3, protowire.BytesType)
+		b = protowire.AppendBytes(b, packed)
+	}
 	return b, nil
 }
 
@@ -1748,6 +3906,46 @@ func UnmarshalSyncVarietyDaoFastItemsField(data []byte) (*SyncVarietyDaoFastItem
 				m.Value = make(map[int64]int32)
 			}
 			m.Value[key] = val
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ == protowire.BytesType {
+				packed, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				data = data[n:]
+				for len(packed) > 0 {
+					var item int64
+					v, n := protowire.ConsumeVarint(packed)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					item = int64(v)
+					packed = packed[n:]
+					m.Removed = append(m.Removed, item)
+				}
+			} else {
+				var item int64
+				if typ != protowire.VarintType {
+					return nil, fmt.Errorf("expected varint")
+				}
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				item = int64(v)
+				data = data[n:]
+				m.Removed = append(m.Removed, item)
+			}
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
 			if n < 0 {
@@ -1780,6 +3978,22 @@ func MarshalSyncVarietyDaoShardedTagsField(m *SyncVarietyDaoShardedTagsField) ([
 			b = protowire.AppendTag(b, 1, protowire.BytesType)
 			b = protowire.AppendBytes(b, entry)
 		}
+	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Removed) > 0 {
+		var packed []byte
+		for _, item := range m.Removed {
+			packed = protowire.AppendVarint(packed, uint64(item))
+		}
+		b = protowire.AppendTag(b, 3, protowire.BytesType)
+		b = protowire.AppendBytes(b, packed)
 	}
 	return b, nil
 }
@@ -1843,6 +4057,46 @@ func UnmarshalSyncVarietyDaoShardedTagsField(data []byte) (*SyncVarietyDaoSharde
 				m.Value = make(map[int32]string)
 			}
 			m.Value[key] = val
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ == protowire.BytesType {
+				packed, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				data = data[n:]
+				for len(packed) > 0 {
+					var item int32
+					v, n := protowire.ConsumeVarint(packed)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					item = int32(v)
+					packed = packed[n:]
+					m.Removed = append(m.Removed, item)
+				}
+			} else {
+				var item int32
+				if typ != protowire.VarintType {
+					return nil, fmt.Errorf("expected varint")
+				}
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				item = int32(v)
+				data = data[n:]
+				m.Removed = append(m.Removed, item)
+			}
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
 			if n < 0 {
@@ -1918,6 +4172,20 @@ func MarshalSyncVarietyDaoBlobsField(m *SyncVarietyDaoBlobsField) ([]byte, error
 			b = protowire.AppendBytes(b, entry)
 		}
 	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Removed) > 0 {
+		for _, item := range m.Removed {
+			b = protowire.AppendTag(b, 3, protowire.BytesType)
+			b = protowire.AppendString(b, item)
+		}
+	}
 	return b, nil
 }
 
@@ -1980,6 +4248,28 @@ func UnmarshalSyncVarietyDaoBlobsField(data []byte) (*SyncVarietyDaoBlobsField, 
 				m.Value = make(map[string][]byte)
 			}
 			m.Value[key] = val
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			var item string
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected string")
+			}
+			v, n := protowire.ConsumeString(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			item = v
+			data = data[n:]
+			m.Removed = append(m.Removed, item)
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
 			if n < 0 {
@@ -2003,6 +4293,16 @@ func MarshalSyncVarietyDaoEnvelopeField(m *SyncVarietyDaoEnvelopeField) ([]byte,
 		}
 		b = protowire.AppendTag(b, 1, protowire.BytesType)
 		b = protowire.AppendBytes(b, payload)
+	}
+	if m.Patch != nil {
+		{
+			payload, err := MarshalSyncPatchEnvelope(m.Patch)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
 	}
 	return b, nil
 }
@@ -2031,6 +4331,20 @@ func UnmarshalSyncVarietyDaoEnvelopeField(data []byte) (*SyncVarietyDaoEnvelopeF
 			if msg != nil {
 				m.Value = *msg
 			}
+			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchEnvelope(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Patch = msg
 			data = data[n:]
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
@@ -2140,6 +4454,10 @@ func MarshalSyncVarietyDao(m *SyncVarietyDao) ([]byte, error) {
 		b = protowire.AppendTag(b, 1, protowire.VarintType)
 		b = protowire.AppendVarint(b, uint64(m.EntityID))
 	}
+	if m.SyncFormat != 0 {
+		b = protowire.AppendTag(b, 2047, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.SyncFormat))
+	}
 	if m.SyncOnly != nil {
 		{
 			payload, err := MarshalSyncVarietyDaoSyncOnlyField(m.SyncOnly)
@@ -2241,6 +4559,16 @@ func UnmarshalSyncVarietyDao(data []byte) (*SyncVarietyDao, error) {
 				return nil, protowire.ParseError(n)
 			}
 			m.EntityID = int64(v)
+			data = data[n:]
+		case 2047:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.SyncFormat = uint32(v)
 			data = data[n:]
 		case 3:
 			if typ != protowire.BytesType {
@@ -2471,6 +4799,22 @@ func MarshalSyncWraithDaoBuffsField(m *SyncWraithDaoBuffsField) ([]byte, error) 
 			b = protowire.AppendBytes(b, entry)
 		}
 	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Removed) > 0 {
+		var packed []byte
+		for _, item := range m.Removed {
+			packed = protowire.AppendVarint(packed, uint64(item))
+		}
+		b = protowire.AppendTag(b, 3, protowire.BytesType)
+		b = protowire.AppendBytes(b, packed)
+	}
 	return b, nil
 }
 
@@ -2533,6 +4877,46 @@ func UnmarshalSyncWraithDaoBuffsField(data []byte) (*SyncWraithDaoBuffsField, er
 				m.Value = make(map[int32]int64)
 			}
 			m.Value[key] = val
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ == protowire.BytesType {
+				packed, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				data = data[n:]
+				for len(packed) > 0 {
+					var item int32
+					v, n := protowire.ConsumeVarint(packed)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					item = int32(v)
+					packed = packed[n:]
+					m.Removed = append(m.Removed, item)
+				}
+			} else {
+				var item int32
+				if typ != protowire.VarintType {
+					return nil, fmt.Errorf("expected varint")
+				}
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				item = int32(v)
+				data = data[n:]
+				m.Removed = append(m.Removed, item)
+			}
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
 			if n < 0 {
@@ -2556,6 +4940,35 @@ func MarshalSyncWraithDaoTrailField(m *SyncWraithDaoTrailField) ([]byte, error) 
 		}
 		b = protowire.AppendTag(b, 1, protowire.BytesType)
 		b = protowire.AppendBytes(b, packed)
+	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Updates) > 0 {
+		keys := make([]uint64, 0, len(m.Updates))
+		for key := range m.Updates {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Updates[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			entry = protowire.AppendTag(entry, 2, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(val))
+			b = protowire.AppendTag(b, 3, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	if m.Length != 0 {
+		b = protowire.AppendTag(b, 4, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Length))
 	}
 	return b, nil
 }
@@ -2599,6 +5012,76 @@ func UnmarshalSyncWraithDaoTrailField(data []byte) (*SyncWraithDaoTrailField, er
 				data = data[n:]
 				m.Value = append(m.Value, item)
 			}
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Updates: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key uint64
+			var val int64
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = uint64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					val = int64(v)
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Updates == nil {
+				m.Updates = make(map[uint64]int64)
+			}
+			m.Updates[key] = val
+		case 4:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Length = uint64(v)
+			data = data[n:]
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
 			if n < 0 {
@@ -2618,6 +5101,10 @@ func MarshalSyncWraithDao(m *SyncWraithDao) ([]byte, error) {
 	if m.EntityID != 0 {
 		b = protowire.AppendTag(b, 1, protowire.VarintType)
 		b = protowire.AppendVarint(b, uint64(m.EntityID))
+	}
+	if m.SyncFormat != 0 {
+		b = protowire.AppendTag(b, 2047, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.SyncFormat))
 	}
 	if m.PosX != nil {
 		{
@@ -2680,6 +5167,16 @@ func UnmarshalSyncWraithDao(data []byte) (*SyncWraithDao, error) {
 				return nil, protowire.ParseError(n)
 			}
 			m.EntityID = int64(v)
+			data = data[n:]
+		case 2047:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.SyncFormat = uint32(v)
 			data = data[n:]
 		case 2:
 			if typ != protowire.BytesType {
@@ -2866,9 +5363,477 @@ func syncOptionalEnvelopeFromPB(value SyncOptionalEnvelope) *envelopeBSONDoc {
 	converted := syncEnvelopeFromPB(*value.Value)
 	return &converted
 }
+func captureSyncPatchPositionXField(value *Position, change *dataengine.SyncChange) *SyncPatchPositionXField {
+	full := func() *SyncPatchPositionXField { return &SyncPatchPositionXField{Value: value.x} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncPatchPositionXField(patch *SyncPatchPositionXField, previous int32, exists bool) (int32, error) {
+	return patch.Value, nil
+}
+func captureSyncPatchPositionYField(value *Position, change *dataengine.SyncChange) *SyncPatchPositionYField {
+	full := func() *SyncPatchPositionYField { return &SyncPatchPositionYField{Value: value.y} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncPatchPositionYField(patch *SyncPatchPositionYField, previous int32, exists bool) (int32, error) {
+	return patch.Value, nil
+}
+func (value *Position) captureSyncPatch(change *dataengine.SyncChange) *SyncPatchPosition {
+	patch := &SyncPatchPosition{}
+	if child := change.Child(dataengine.SyncStep{Field: 1}); child != nil {
+		patch.X = captureSyncPatchPositionXField(value, child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 2}); child != nil {
+		patch.Y = captureSyncPatchPositionYField(value, child)
+	}
+	return patch
+}
+func applySyncPatchPosition(patch *SyncPatchPosition, previous SyncPosition) (SyncPosition, error) {
+	next := previous
+	if patch.X != nil {
+		value, err := applySyncPatchPositionXField(patch.X, previous.X, true)
+		if err != nil {
+			return previous, err
+		}
+		next.X = value
+	}
+	if patch.Y != nil {
+		value, err := applySyncPatchPositionYField(patch.Y, previous.Y, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Y = value
+	}
+	return next, nil
+}
+func captureSyncPatchEquipInfoLevelField(value *EquipInfo, change *dataengine.SyncChange) *SyncPatchEquipInfoLevelField {
+	full := func() *SyncPatchEquipInfoLevelField { return &SyncPatchEquipInfoLevelField{Value: value.level} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncPatchEquipInfoLevelField(patch *SyncPatchEquipInfoLevelField, previous int32, exists bool) (int32, error) {
+	return patch.Value, nil
+}
+func captureSyncPatchEquipInfoStarField(value *EquipInfo, change *dataengine.SyncChange) *SyncPatchEquipInfoStarField {
+	full := func() *SyncPatchEquipInfoStarField { return &SyncPatchEquipInfoStarField{Value: value.star} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncPatchEquipInfoStarField(patch *SyncPatchEquipInfoStarField, previous int32, exists bool) (int32, error) {
+	return patch.Value, nil
+}
+func captureSyncPatchEquipInfoGemsField(value *EquipInfo, change *dataengine.SyncChange) *SyncPatchEquipInfoGemsField {
+	full := func() *SyncPatchEquipInfoGemsField {
+		return &SyncPatchEquipInfoGemsField{Value: syncMapValues(daoMapDocs(value.gemsRawMap(), gemInfoPtrBSONDoc), func(key int32, value *gemInfoBSONDoc) (int32, SyncOptionalGemInfo) {
+			return key, syncOptionalGemInfoToPB(value)
+		})}
+	}
+	if change.Full() {
+		return full()
+	}
+	if value.gems == nil || len(change.Children) >= value.gems.Len() {
+		return full()
+	}
+	patch := &SyncPatchEquipInfoGemsField{Delta: true, Value: make(map[int32]SyncOptionalGemInfo)}
+	patch.Patches = make(map[int32]SyncPatchGemInfo)
+	for step, child := range change.Children {
+		key := step.Key.(int32)
+		item, exists := value.gems.Get(key)
+		if !exists {
+			patch.Removed = append(patch.Removed, key)
+			continue
+		}
+		if !child.Full() && item != nil {
+			patch.Patches[key] = *item.captureSyncPatch(child)
+			continue
+		}
+		single := map[int32]*GemInfo{key: item}
+		for k, v := range syncMapValues(daoMapDocs(single, gemInfoPtrBSONDoc), func(key int32, value *gemInfoBSONDoc) (int32, SyncOptionalGemInfo) {
+			return key, syncOptionalGemInfoToPB(value)
+		}) {
+			patch.Value[k] = v
+		}
+	}
+	if len(patch.Removed) > 1 {
+		sort.Slice(patch.Removed, func(i, j int) bool { return patch.Removed[i] < patch.Removed[j] })
+	}
+	return patch
+}
+func applySyncPatchEquipInfoGemsField(patch *SyncPatchEquipInfoGemsField, previous map[int32]SyncOptionalGemInfo, exists bool) (map[int32]SyncOptionalGemInfo, error) {
+	if !patch.Delta {
+		if len(patch.Removed) != 0 || len(patch.Patches) != 0 {
+			return nil, fmt.Errorf("operations on map replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists {
+		return nil, fmt.Errorf("missing map baseline")
+	}
+	next := make(map[int32]SyncOptionalGemInfo, len(previous)+len(patch.Value))
+	for k, v := range previous {
+		next[k] = v
+	}
+	for _, k := range patch.Removed {
+		delete(next, k)
+	}
+	for k, v := range patch.Value {
+		next[k] = v
+	}
+	for key, child := range patch.Patches {
+		old, ok := next[key]
+		if !ok {
+			return nil, fmt.Errorf("missing map element baseline")
+		}
+		if old.Value == nil {
+			return nil, fmt.Errorf("nil nested baseline")
+		}
+		updated, err := applySyncPatchGemInfo(&child, *old.Value)
+		if err != nil {
+			return nil, err
+		}
+		old.Value = &updated
+		next[key] = old
+	}
+	return next, nil
+}
+func captureSyncPatchEquipInfoRunesField(value *EquipInfo, change *dataengine.SyncChange) *SyncPatchEquipInfoRunesField {
+	full := func() *SyncPatchEquipInfoRunesField {
+		return &SyncPatchEquipInfoRunesField{Value: syncSliceValues(daoSliceDocs(value.runes, gemInfoPtrBSONDoc), func(value *gemInfoBSONDoc) SyncOptionalGemInfo { return syncOptionalGemInfoToPB(value) })}
+	}
+	if change.Full() {
+		return full()
+	}
+	if len(change.Children) >= len(value.runes) {
+		return full()
+	}
+	patch := &SyncPatchEquipInfoRunesField{Delta: true, Length: uint64(len(value.runes)), Updates: make(map[uint64]SyncOptionalGemInfo)}
+	patch.Patches = make(map[uint64]SyncPatchGemInfo)
+	for step, child := range change.Children {
+		index := step.Key.(int)
+		item := value.runes[index]
+		if !child.Full() && item != nil {
+			patch.Patches[uint64(index)] = *item.captureSyncPatch(child)
+			continue
+		}
+		single := []*GemInfo{item}
+		patch.Updates[uint64(index)] = (syncSliceValues(daoSliceDocs(single, gemInfoPtrBSONDoc), func(value *gemInfoBSONDoc) SyncOptionalGemInfo { return syncOptionalGemInfoToPB(value) }))[0]
+	}
+	return patch
+}
+func applySyncPatchEquipInfoRunesField(patch *SyncPatchEquipInfoRunesField, previous []SyncOptionalGemInfo, exists bool) ([]SyncOptionalGemInfo, error) {
+	if !patch.Delta {
+		if len(patch.Updates) != 0 || patch.Length != 0 || len(patch.Patches) != 0 {
+			return nil, fmt.Errorf("operations on list replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists || patch.Length > uint64(len(previous))+uint64(len(patch.Updates)) {
+		return nil, fmt.Errorf("invalid list length or missing baseline")
+	}
+	for index := range patch.Updates {
+		if index >= patch.Length {
+			return nil, fmt.Errorf("list index out of bounds")
+		}
+	}
+	for index := range patch.Patches {
+		if index >= patch.Length || index >= uint64(len(previous)) {
+			return nil, fmt.Errorf("missing list element baseline")
+		}
+		if _, overlap := patch.Updates[index]; overlap {
+			return nil, fmt.Errorf("conflicting list operations")
+		}
+	}
+	for i := uint64(len(previous)); i < patch.Length; i++ {
+		if _, ok := patch.Updates[i]; !ok {
+			return nil, fmt.Errorf("list append has a hole")
+		}
+	}
+	next := make([]SyncOptionalGemInfo, int(patch.Length))
+	copy(next, previous)
+	for index, value := range patch.Updates {
+		next[index] = value
+	}
+	for index, child := range patch.Patches {
+		old := next[index]
+		if old.Value == nil {
+			return nil, fmt.Errorf("nil nested baseline")
+		}
+		updated, err := applySyncPatchGemInfo(&child, *old.Value)
+		if err != nil {
+			return nil, err
+		}
+		old.Value = &updated
+		next[index] = old
+	}
+	return next, nil
+}
+func captureSyncPatchEquipInfoCoreField(value *EquipInfo, change *dataengine.SyncChange) *SyncPatchEquipInfoCoreField {
+	full := func() *SyncPatchEquipInfoCoreField {
+		return &SyncPatchEquipInfoCoreField{Value: syncOptionalGemInfoToPB(gemInfoPtrBSONDoc(value.core))}
+	}
+	if change.Full() {
+		return full()
+	}
+	if value.core == nil {
+		return full()
+	}
+	return &SyncPatchEquipInfoCoreField{Patch: value.core.captureSyncPatch(change)}
+}
+func applySyncPatchEquipInfoCoreField(patch *SyncPatchEquipInfoCoreField, previous SyncOptionalGemInfo, exists bool) (SyncOptionalGemInfo, error) {
+	if patch.Patch == nil {
+		return patch.Value, nil
+	}
+	if !exists {
+		return previous, fmt.Errorf("missing nested baseline")
+	}
+	if previous.Value == nil {
+		return previous, fmt.Errorf("nil nested baseline")
+	}
+	next, err := applySyncPatchGemInfo(patch.Patch, *previous.Value)
+	if err != nil {
+		return previous, err
+	}
+	previous.Value = &next
+	return previous, nil
+}
+func captureSyncPatchEquipInfoShapeField(value *EquipInfo, change *dataengine.SyncChange) *SyncPatchEquipInfoShapeField {
+	full := func() *SyncPatchEquipInfoShapeField {
+		return &SyncPatchEquipInfoShapeField{Value: syncPositionToPB(value.shape.bsonDoc())}
+	}
+	if change.Full() {
+		return full()
+	}
+	return &SyncPatchEquipInfoShapeField{Patch: value.shape.captureSyncPatch(change)}
+}
+func applySyncPatchEquipInfoShapeField(patch *SyncPatchEquipInfoShapeField, previous SyncPosition, exists bool) (SyncPosition, error) {
+	if patch.Patch == nil {
+		return patch.Value, nil
+	}
+	if !exists {
+		return previous, fmt.Errorf("missing nested baseline")
+	}
+	return applySyncPatchPosition(patch.Patch, previous)
+}
+func (value *EquipInfo) captureSyncPatch(change *dataengine.SyncChange) *SyncPatchEquipInfo {
+	patch := &SyncPatchEquipInfo{}
+	if child := change.Child(dataengine.SyncStep{Field: 1}); child != nil {
+		patch.Level = captureSyncPatchEquipInfoLevelField(value, child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 2}); child != nil {
+		patch.Star = captureSyncPatchEquipInfoStarField(value, child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 3}); child != nil {
+		patch.Gems = captureSyncPatchEquipInfoGemsField(value, child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 4}); child != nil {
+		patch.Runes = captureSyncPatchEquipInfoRunesField(value, child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 5}); child != nil {
+		patch.Core = captureSyncPatchEquipInfoCoreField(value, child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 6}); child != nil {
+		patch.Shape = captureSyncPatchEquipInfoShapeField(value, child)
+	}
+	return patch
+}
+func applySyncPatchEquipInfo(patch *SyncPatchEquipInfo, previous SyncEquipInfo) (SyncEquipInfo, error) {
+	next := previous
+	if patch.Level != nil {
+		value, err := applySyncPatchEquipInfoLevelField(patch.Level, previous.Level, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Level = value
+	}
+	if patch.Star != nil {
+		value, err := applySyncPatchEquipInfoStarField(patch.Star, previous.Star, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Star = value
+	}
+	if patch.Gems != nil {
+		value, err := applySyncPatchEquipInfoGemsField(patch.Gems, previous.Gems, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Gems = value
+	}
+	if patch.Runes != nil {
+		value, err := applySyncPatchEquipInfoRunesField(patch.Runes, previous.Runes, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Runes = value
+	}
+	if patch.Core != nil {
+		value, err := applySyncPatchEquipInfoCoreField(patch.Core, previous.Core, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Core = value
+	}
+	if patch.Shape != nil {
+		value, err := applySyncPatchEquipInfoShapeField(patch.Shape, previous.Shape, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Shape = value
+	}
+	return next, nil
+}
+func captureSyncPatchGemInfoIDField(value *GemInfo, change *dataengine.SyncChange) *SyncPatchGemInfoIDField {
+	full := func() *SyncPatchGemInfoIDField { return &SyncPatchGemInfoIDField{Value: value.id} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncPatchGemInfoIDField(patch *SyncPatchGemInfoIDField, previous int32, exists bool) (int32, error) {
+	return patch.Value, nil
+}
+func captureSyncPatchGemInfoLevelField(value *GemInfo, change *dataengine.SyncChange) *SyncPatchGemInfoLevelField {
+	full := func() *SyncPatchGemInfoLevelField { return &SyncPatchGemInfoLevelField{Value: value.level} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncPatchGemInfoLevelField(patch *SyncPatchGemInfoLevelField, previous int32, exists bool) (int32, error) {
+	return patch.Value, nil
+}
+func captureSyncPatchGemInfoSigField(value *GemInfo, change *dataengine.SyncChange) *SyncPatchGemInfoSigField {
+	full := func() *SyncPatchGemInfoSigField { return &SyncPatchGemInfoSigField{Value: value.sig} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncPatchGemInfoSigField(patch *SyncPatchGemInfoSigField, previous []byte, exists bool) ([]byte, error) {
+	return patch.Value, nil
+}
+func (value *GemInfo) captureSyncPatch(change *dataengine.SyncChange) *SyncPatchGemInfo {
+	patch := &SyncPatchGemInfo{}
+	if child := change.Child(dataengine.SyncStep{Field: 1}); child != nil {
+		patch.ID = captureSyncPatchGemInfoIDField(value, child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 2}); child != nil {
+		patch.Level = captureSyncPatchGemInfoLevelField(value, child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 3}); child != nil {
+		patch.Sig = captureSyncPatchGemInfoSigField(value, child)
+	}
+	return patch
+}
+func applySyncPatchGemInfo(patch *SyncPatchGemInfo, previous SyncGemInfo) (SyncGemInfo, error) {
+	next := previous
+	if patch.ID != nil {
+		value, err := applySyncPatchGemInfoIDField(patch.ID, previous.ID, true)
+		if err != nil {
+			return previous, err
+		}
+		next.ID = value
+	}
+	if patch.Level != nil {
+		value, err := applySyncPatchGemInfoLevelField(patch.Level, previous.Level, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Level = value
+	}
+	if patch.Sig != nil {
+		value, err := applySyncPatchGemInfoSigField(patch.Sig, previous.Sig, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Sig = value
+	}
+	return next, nil
+}
+func captureSyncPatchEnvelopeMarksField(value *Envelope, change *dataengine.SyncChange) *SyncPatchEnvelopeMarksField {
+	full := func() *SyncPatchEnvelopeMarksField {
+		return &SyncPatchEnvelopeMarksField{Value: syncMapValues(value.marksRawMap(), func(key int32, value []byte) (int32, []byte) { return key, value })}
+	}
+	if change.Full() {
+		return full()
+	}
+	if value.marks == nil || len(change.Children) >= value.marks.Len() {
+		return full()
+	}
+	patch := &SyncPatchEnvelopeMarksField{Delta: true, Value: make(map[int32][]byte)}
+	for step, child := range change.Children {
+		key := step.Key.(int32)
+		item, exists := value.marks.Get(key)
+		if !exists {
+			patch.Removed = append(patch.Removed, key)
+			continue
+		}
+		_ = child
+		single := map[int32][]byte{key: item}
+		for k, v := range syncMapValues(single, func(key int32, value []byte) (int32, []byte) { return key, value }) {
+			patch.Value[k] = v
+		}
+	}
+	if len(patch.Removed) > 1 {
+		sort.Slice(patch.Removed, func(i, j int) bool { return patch.Removed[i] < patch.Removed[j] })
+	}
+	return patch
+}
+func applySyncPatchEnvelopeMarksField(patch *SyncPatchEnvelopeMarksField, previous map[int32][]byte, exists bool) (map[int32][]byte, error) {
+	if !patch.Delta {
+		if len(patch.Removed) != 0 {
+			return nil, fmt.Errorf("operations on map replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists {
+		return nil, fmt.Errorf("missing map baseline")
+	}
+	next := make(map[int32][]byte, len(previous)+len(patch.Value))
+	for k, v := range previous {
+		next[k] = v
+	}
+	for _, k := range patch.Removed {
+		delete(next, k)
+	}
+	for k, v := range patch.Value {
+		next[k] = v
+	}
+	return next, nil
+}
+func (value *Envelope) captureSyncPatch(change *dataengine.SyncChange) *SyncPatchEnvelope {
+	patch := &SyncPatchEnvelope{}
+	if child := change.Child(dataengine.SyncStep{Field: 1}); child != nil {
+		patch.Marks = captureSyncPatchEnvelopeMarksField(value, child)
+	}
+	return patch
+}
+func applySyncPatchEnvelope(patch *SyncPatchEnvelope, previous SyncEnvelope) (SyncEnvelope, error) {
+	next := previous
+	if patch.Marks != nil {
+		value, err := applySyncPatchEnvelopeMarksField(patch.Marks, previous.Marks, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Marks = value
+	}
+	return next, nil
+}
 
-// Values 返回本次 patch 中存在的字段，供通用 Go 客户端/机器人按名称路由；不合并集合。
-func (patch *SyncHeroDao) Values() map[string]any {
+// Values 读取字段替换或已应用快照；集合补丁必须先通过 Apply 合并，避免丢失删除与列表操作。
+func (patch *SyncHeroDao) Values() (map[string]any, error) {
+	if patch == nil || patch.SyncFormat != 3 {
+		return nil, fmt.Errorf("unsupported DAO sync format")
+	}
 	out := map[string]any{"_id": patch.EntityID}
 	if patch.Name != nil {
 		out["name"] = patch.Name.Value
@@ -2879,28 +5844,46 @@ func (patch *SyncHeroDao) Values() map[string]any {
 	if patch.Exp != nil {
 		out["exp"] = patch.Exp.Value
 	}
+	if patch.Items != nil && patch.Items.Delta {
+		return nil, fmt.Errorf("Items: apply collection delta before Values")
+	}
 	if patch.Items != nil {
 		out["items"] = patch.Items.Value
+	}
+	if patch.Friends != nil && patch.Friends.Delta {
+		return nil, fmt.Errorf("Friends: apply collection delta before Values")
 	}
 	if patch.Friends != nil {
 		out["friends"] = patch.Friends.Value
 	}
+	if patch.Pos != nil && patch.Pos.Patch != nil {
+		return nil, fmt.Errorf("apply nested patch before Values")
+	}
 	if patch.Pos != nil {
 		out["pos"] = patch.Pos.Value
+	}
+	if patch.Equips != nil && patch.Equips.Delta {
+		return nil, fmt.Errorf("Equips: apply collection delta before Values")
 	}
 	if patch.Equips != nil {
 		out["equips"] = patch.Equips.Value
 	}
+	if patch.Squad != nil && patch.Squad.Delta {
+		return nil, fmt.Errorf("Squad: apply collection delta before Values")
+	}
 	if patch.Squad != nil {
 		out["squad"] = patch.Squad.Value
+	}
+	if patch.Mount != nil && patch.Mount.Patch != nil {
+		return nil, fmt.Errorf("apply nested patch before Values")
 	}
 	if patch.Mount != nil {
 		out["mount"] = patch.Mount.Value
 	}
-	return out
+	return out, nil
 }
 func (d *HeroDao) marshalSyncPB(mask uint64) []byte {
-	patch := &SyncHeroDao{EntityID: d.id}
+	patch := &SyncHeroDao{EntityID: d.id, SyncFormat: 3}
 	changed := false
 	if mask&heroDaoFieldName != 0 {
 		patch.Name = &SyncHeroDaoNameField{Value: d.name}
@@ -2954,47 +5937,565 @@ func (d *HeroDao) applySyncPB(raw []byte) error {
 	if err != nil {
 		return err
 	}
+	if d.id != 0 && d.id != patch.EntityID {
+		return fmt.Errorf("DAO identity changed")
+	}
+	previous, err := UnmarshalSyncHeroDao(d.marshalSyncPB(^uint64(0)))
+	if err != nil {
+		return err
+	}
+	previous.EntityID = patch.EntityID
+	merged, err := ApplySyncHeroDao(patch, previous)
+	if err != nil {
+		return err
+	}
 	if patch.Name != nil {
-		d.name = patch.Name.Value
+		d.name = merged.Name.Value
 	}
 	if patch.Level != nil {
-		d.level = patch.Level.Value
+		d.level = merged.Level.Value
 	}
 	if patch.Exp != nil {
-		d.exp = patch.Exp.Value
+		d.exp = merged.Exp.Value
 	}
 	if patch.Items != nil {
-		d.setItemsRawMap(syncMapValues(patch.Items.Value, func(key int64, value int32) (int64, int32) { return key, value }))
+		d.setItemsRawMap(syncMapValues(merged.Items.Value, func(key int64, value int32) (int64, int32) { return key, value }))
 	}
 	if patch.Friends != nil {
-		d.friends = syncSliceValues(patch.Friends.Value, func(value int64) int64 { return value })
+		d.friends = syncSliceValues(merged.Friends.Value, func(value int64) int64 { return value })
 	}
 	if patch.Pos != nil {
-		d.pos = positionFromBSONDoc(syncPositionFromPB(patch.Pos.Value))
+		d.pos = positionFromBSONDoc(syncPositionFromPB(merged.Pos.Value))
 	}
 	if patch.Equips != nil {
-		d.setEquipsRawMap(daoMapDocs(syncMapValues(patch.Equips.Value, func(key int64, value SyncOptionalEquipInfo) (int64, *equipInfoBSONDoc) {
+		d.setEquipsRawMap(daoMapDocs(syncMapValues(merged.Equips.Value, func(key int64, value SyncOptionalEquipInfo) (int64, *equipInfoBSONDoc) {
 			return key, syncOptionalEquipInfoFromPB(value)
 		}), equipInfoPtrFromBSONDoc))
 	}
 	if patch.Squad != nil {
-		d.squad = daoSliceDocs(syncSliceValues(patch.Squad.Value, func(value SyncOptionalEquipInfo) *equipInfoBSONDoc { return syncOptionalEquipInfoFromPB(value) }), equipInfoPtrFromBSONDoc)
+		d.squad = daoSliceDocs(syncSliceValues(merged.Squad.Value, func(value SyncOptionalEquipInfo) *equipInfoBSONDoc { return syncOptionalEquipInfoFromPB(value) }), equipInfoPtrFromBSONDoc)
 	}
 	if patch.Mount != nil {
-		d.mount = equipInfoPtrFromBSONDoc(syncOptionalEquipInfoFromPB(patch.Mount.Value))
+		d.mount = equipInfoPtrFromBSONDoc(syncOptionalEquipInfoFromPB(merged.Mount.Value))
 	}
+	d.id = patch.EntityID
 	d.Init()
 	return nil
 }
+func captureSyncHeroDaoNameField(value *HeroDao, change *dataengine.SyncChange) *SyncHeroDaoNameField {
+	full := func() *SyncHeroDaoNameField { return &SyncHeroDaoNameField{Value: value.name} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncHeroDaoNameField(patch *SyncHeroDaoNameField, previous string, exists bool) (string, error) {
+	return patch.Value, nil
+}
+func captureSyncHeroDaoLevelField(value *HeroDao, change *dataengine.SyncChange) *SyncHeroDaoLevelField {
+	full := func() *SyncHeroDaoLevelField { return &SyncHeroDaoLevelField{Value: value.level} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncHeroDaoLevelField(patch *SyncHeroDaoLevelField, previous int32, exists bool) (int32, error) {
+	return patch.Value, nil
+}
+func captureSyncHeroDaoExpField(value *HeroDao, change *dataengine.SyncChange) *SyncHeroDaoExpField {
+	full := func() *SyncHeroDaoExpField { return &SyncHeroDaoExpField{Value: value.exp} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncHeroDaoExpField(patch *SyncHeroDaoExpField, previous int64, exists bool) (int64, error) {
+	return patch.Value, nil
+}
+func captureSyncHeroDaoItemsField(value *HeroDao, change *dataengine.SyncChange) *SyncHeroDaoItemsField {
+	full := func() *SyncHeroDaoItemsField {
+		return &SyncHeroDaoItemsField{Value: syncMapValues(value.heroDaoItemsRawMap(), func(key int64, value int32) (int64, int32) { return key, value })}
+	}
+	if change.Full() {
+		return full()
+	}
+	if value.items == nil || len(change.Children) >= value.items.Len() {
+		return full()
+	}
+	patch := &SyncHeroDaoItemsField{Delta: true, Value: make(map[int64]int32)}
+	for step, child := range change.Children {
+		key := step.Key.(int64)
+		item, exists := value.items.Get(key)
+		if !exists {
+			patch.Removed = append(patch.Removed, key)
+			continue
+		}
+		_ = child
+		single := map[int64]int32{key: item}
+		for k, v := range syncMapValues(single, func(key int64, value int32) (int64, int32) { return key, value }) {
+			patch.Value[k] = v
+		}
+	}
+	if len(patch.Removed) > 1 {
+		sort.Slice(patch.Removed, func(i, j int) bool { return patch.Removed[i] < patch.Removed[j] })
+	}
+	return patch
+}
+func applySyncHeroDaoItemsField(patch *SyncHeroDaoItemsField, previous map[int64]int32, exists bool) (map[int64]int32, error) {
+	if !patch.Delta {
+		if len(patch.Removed) != 0 {
+			return nil, fmt.Errorf("operations on map replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists {
+		return nil, fmt.Errorf("missing map baseline")
+	}
+	next := make(map[int64]int32, len(previous)+len(patch.Value))
+	for k, v := range previous {
+		next[k] = v
+	}
+	for _, k := range patch.Removed {
+		delete(next, k)
+	}
+	for k, v := range patch.Value {
+		next[k] = v
+	}
+	return next, nil
+}
+func captureSyncHeroDaoFriendsField(value *HeroDao, change *dataengine.SyncChange) *SyncHeroDaoFriendsField {
+	full := func() *SyncHeroDaoFriendsField {
+		return &SyncHeroDaoFriendsField{Value: syncSliceValues(value.friends, func(value int64) int64 { return value })}
+	}
+	if change.Full() {
+		return full()
+	}
+	if len(change.Children) >= len(value.friends) {
+		return full()
+	}
+	patch := &SyncHeroDaoFriendsField{Delta: true, Length: uint64(len(value.friends)), Updates: make(map[uint64]int64)}
+	for step, child := range change.Children {
+		index := step.Key.(int)
+		item := value.friends[index]
+		_ = child
+		single := []int64{item}
+		patch.Updates[uint64(index)] = (syncSliceValues(single, func(value int64) int64 { return value }))[0]
+	}
+	return patch
+}
+func applySyncHeroDaoFriendsField(patch *SyncHeroDaoFriendsField, previous []int64, exists bool) ([]int64, error) {
+	if !patch.Delta {
+		if len(patch.Updates) != 0 || patch.Length != 0 {
+			return nil, fmt.Errorf("operations on list replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists || patch.Length > uint64(len(previous))+uint64(len(patch.Updates)) {
+		return nil, fmt.Errorf("invalid list length or missing baseline")
+	}
+	for index := range patch.Updates {
+		if index >= patch.Length {
+			return nil, fmt.Errorf("list index out of bounds")
+		}
+	}
+	for i := uint64(len(previous)); i < patch.Length; i++ {
+		if _, ok := patch.Updates[i]; !ok {
+			return nil, fmt.Errorf("list append has a hole")
+		}
+	}
+	next := make([]int64, int(patch.Length))
+	copy(next, previous)
+	for index, value := range patch.Updates {
+		next[index] = value
+	}
+	return next, nil
+}
+func captureSyncHeroDaoPosField(value *HeroDao, change *dataengine.SyncChange) *SyncHeroDaoPosField {
+	full := func() *SyncHeroDaoPosField { return &SyncHeroDaoPosField{Value: syncPositionToPB(value.pos.bsonDoc())} }
+	if change.Full() {
+		return full()
+	}
+	return &SyncHeroDaoPosField{Patch: value.pos.captureSyncPatch(change)}
+}
+func applySyncHeroDaoPosField(patch *SyncHeroDaoPosField, previous SyncPosition, exists bool) (SyncPosition, error) {
+	if patch.Patch == nil {
+		return patch.Value, nil
+	}
+	if !exists {
+		return previous, fmt.Errorf("missing nested baseline")
+	}
+	return applySyncPatchPosition(patch.Patch, previous)
+}
+func captureSyncHeroDaoEquipsField(value *HeroDao, change *dataengine.SyncChange) *SyncHeroDaoEquipsField {
+	full := func() *SyncHeroDaoEquipsField {
+		return &SyncHeroDaoEquipsField{Value: syncMapValues(daoMapDocs(value.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc), func(key int64, value *equipInfoBSONDoc) (int64, SyncOptionalEquipInfo) {
+			return key, syncOptionalEquipInfoToPB(value)
+		})}
+	}
+	if change.Full() {
+		return full()
+	}
+	if value.equips == nil || len(change.Children) >= value.equips.Len() {
+		return full()
+	}
+	patch := &SyncHeroDaoEquipsField{Delta: true, Value: make(map[int64]SyncOptionalEquipInfo)}
+	patch.Patches = make(map[int64]SyncPatchEquipInfo)
+	for step, child := range change.Children {
+		key := step.Key.(int64)
+		item, exists := value.equips.Get(key)
+		if !exists {
+			patch.Removed = append(patch.Removed, key)
+			continue
+		}
+		if !child.Full() && item != nil {
+			patch.Patches[key] = *item.captureSyncPatch(child)
+			continue
+		}
+		single := map[int64]*EquipInfo{key: item}
+		for k, v := range syncMapValues(daoMapDocs(single, equipInfoPtrBSONDoc), func(key int64, value *equipInfoBSONDoc) (int64, SyncOptionalEquipInfo) {
+			return key, syncOptionalEquipInfoToPB(value)
+		}) {
+			patch.Value[k] = v
+		}
+	}
+	if len(patch.Removed) > 1 {
+		sort.Slice(patch.Removed, func(i, j int) bool { return patch.Removed[i] < patch.Removed[j] })
+	}
+	return patch
+}
+func applySyncHeroDaoEquipsField(patch *SyncHeroDaoEquipsField, previous map[int64]SyncOptionalEquipInfo, exists bool) (map[int64]SyncOptionalEquipInfo, error) {
+	if !patch.Delta {
+		if len(patch.Removed) != 0 || len(patch.Patches) != 0 {
+			return nil, fmt.Errorf("operations on map replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists {
+		return nil, fmt.Errorf("missing map baseline")
+	}
+	next := make(map[int64]SyncOptionalEquipInfo, len(previous)+len(patch.Value))
+	for k, v := range previous {
+		next[k] = v
+	}
+	for _, k := range patch.Removed {
+		delete(next, k)
+	}
+	for k, v := range patch.Value {
+		next[k] = v
+	}
+	for key, child := range patch.Patches {
+		old, ok := next[key]
+		if !ok {
+			return nil, fmt.Errorf("missing map element baseline")
+		}
+		if old.Value == nil {
+			return nil, fmt.Errorf("nil nested baseline")
+		}
+		updated, err := applySyncPatchEquipInfo(&child, *old.Value)
+		if err != nil {
+			return nil, err
+		}
+		old.Value = &updated
+		next[key] = old
+	}
+	return next, nil
+}
+func captureSyncHeroDaoSquadField(value *HeroDao, change *dataengine.SyncChange) *SyncHeroDaoSquadField {
+	full := func() *SyncHeroDaoSquadField {
+		return &SyncHeroDaoSquadField{Value: syncSliceValues(daoSliceDocs(value.squad, equipInfoPtrBSONDoc), func(value *equipInfoBSONDoc) SyncOptionalEquipInfo { return syncOptionalEquipInfoToPB(value) })}
+	}
+	if change.Full() {
+		return full()
+	}
+	if len(change.Children) >= len(value.squad) {
+		return full()
+	}
+	patch := &SyncHeroDaoSquadField{Delta: true, Length: uint64(len(value.squad)), Updates: make(map[uint64]SyncOptionalEquipInfo)}
+	patch.Patches = make(map[uint64]SyncPatchEquipInfo)
+	for step, child := range change.Children {
+		index := step.Key.(int)
+		item := value.squad[index]
+		if !child.Full() && item != nil {
+			patch.Patches[uint64(index)] = *item.captureSyncPatch(child)
+			continue
+		}
+		single := []*EquipInfo{item}
+		patch.Updates[uint64(index)] = (syncSliceValues(daoSliceDocs(single, equipInfoPtrBSONDoc), func(value *equipInfoBSONDoc) SyncOptionalEquipInfo { return syncOptionalEquipInfoToPB(value) }))[0]
+	}
+	return patch
+}
+func applySyncHeroDaoSquadField(patch *SyncHeroDaoSquadField, previous []SyncOptionalEquipInfo, exists bool) ([]SyncOptionalEquipInfo, error) {
+	if !patch.Delta {
+		if len(patch.Updates) != 0 || patch.Length != 0 || len(patch.Patches) != 0 {
+			return nil, fmt.Errorf("operations on list replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists || patch.Length > uint64(len(previous))+uint64(len(patch.Updates)) {
+		return nil, fmt.Errorf("invalid list length or missing baseline")
+	}
+	for index := range patch.Updates {
+		if index >= patch.Length {
+			return nil, fmt.Errorf("list index out of bounds")
+		}
+	}
+	for index := range patch.Patches {
+		if index >= patch.Length || index >= uint64(len(previous)) {
+			return nil, fmt.Errorf("missing list element baseline")
+		}
+		if _, overlap := patch.Updates[index]; overlap {
+			return nil, fmt.Errorf("conflicting list operations")
+		}
+	}
+	for i := uint64(len(previous)); i < patch.Length; i++ {
+		if _, ok := patch.Updates[i]; !ok {
+			return nil, fmt.Errorf("list append has a hole")
+		}
+	}
+	next := make([]SyncOptionalEquipInfo, int(patch.Length))
+	copy(next, previous)
+	for index, value := range patch.Updates {
+		next[index] = value
+	}
+	for index, child := range patch.Patches {
+		old := next[index]
+		if old.Value == nil {
+			return nil, fmt.Errorf("nil nested baseline")
+		}
+		updated, err := applySyncPatchEquipInfo(&child, *old.Value)
+		if err != nil {
+			return nil, err
+		}
+		old.Value = &updated
+		next[index] = old
+	}
+	return next, nil
+}
+func captureSyncHeroDaoMountField(value *HeroDao, change *dataengine.SyncChange) *SyncHeroDaoMountField {
+	full := func() *SyncHeroDaoMountField {
+		return &SyncHeroDaoMountField{Value: syncOptionalEquipInfoToPB(equipInfoPtrBSONDoc(value.mount))}
+	}
+	if change.Full() {
+		return full()
+	}
+	if value.mount == nil {
+		return full()
+	}
+	return &SyncHeroDaoMountField{Patch: value.mount.captureSyncPatch(change)}
+}
+func applySyncHeroDaoMountField(patch *SyncHeroDaoMountField, previous SyncOptionalEquipInfo, exists bool) (SyncOptionalEquipInfo, error) {
+	if patch.Patch == nil {
+		return patch.Value, nil
+	}
+	if !exists {
+		return previous, fmt.Errorf("missing nested baseline")
+	}
+	if previous.Value == nil {
+		return previous, fmt.Errorf("nil nested baseline")
+	}
+	next, err := applySyncPatchEquipInfo(patch.Patch, *previous.Value)
+	if err != nil {
+		return previous, err
+	}
+	previous.Value = &next
+	return previous, nil
+}
 
-// Values 返回本次 patch 中存在的字段，供通用 Go 客户端/机器人按名称路由；不合并集合。
-func (patch *SyncVarietyDao) Values() map[string]any {
+// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。
+func (d *HeroDao) MarshalSyncChanges(mask uint64) []byte {
+	return d.tracker.ReadSyncChanges(func(change *dataengine.SyncChange) []byte {
+		if change.Full() {
+			return d.marshalSyncPB(mask)
+		}
+		patch := &SyncHeroDao{EntityID: d.id, SyncFormat: 3}
+		changed := false
+		if mask&heroDaoFieldName != 0 {
+			patch.Name = captureSyncHeroDaoNameField(d, change.Child(dataengine.SyncStep{Field: 2}))
+			changed = true
+		}
+		if mask&heroDaoFieldLevel != 0 {
+			patch.Level = captureSyncHeroDaoLevelField(d, change.Child(dataengine.SyncStep{Field: 3}))
+			changed = true
+		}
+		if mask&heroDaoFieldExp != 0 {
+			patch.Exp = captureSyncHeroDaoExpField(d, change.Child(dataengine.SyncStep{Field: 4}))
+			changed = true
+		}
+		if mask&heroDaoFieldItems != 0 {
+			patch.Items = captureSyncHeroDaoItemsField(d, change.Child(dataengine.SyncStep{Field: 6}))
+			changed = true
+		}
+		if mask&heroDaoFieldFriends != 0 {
+			patch.Friends = captureSyncHeroDaoFriendsField(d, change.Child(dataengine.SyncStep{Field: 7}))
+			changed = true
+		}
+		if mask&heroDaoFieldPos != 0 {
+			patch.Pos = captureSyncHeroDaoPosField(d, change.Child(dataengine.SyncStep{Field: 8}))
+			changed = true
+		}
+		if mask&heroDaoFieldEquips != 0 {
+			patch.Equips = captureSyncHeroDaoEquipsField(d, change.Child(dataengine.SyncStep{Field: 9}))
+			changed = true
+		}
+		if mask&heroDaoFieldSquad != 0 {
+			patch.Squad = captureSyncHeroDaoSquadField(d, change.Child(dataengine.SyncStep{Field: 10}))
+			changed = true
+		}
+		if mask&heroDaoFieldMount != 0 {
+			patch.Mount = captureSyncHeroDaoMountField(d, change.Child(dataengine.SyncStep{Field: 11}))
+			changed = true
+		}
+		if !changed {
+			return nil
+		}
+		raw, err := MarshalSyncHeroDao(patch)
+		if err != nil {
+			panic(err)
+		}
+		return raw
+	})
+}
+
+// ApplySyncHeroDao 验证整个补丁后发布新快照，previous 与 patch 均按只读使用。
+func ApplySyncHeroDao(patch, previous *SyncHeroDao) (*SyncHeroDao, error) {
+	if patch == nil || patch.SyncFormat != 3 {
+		return nil, fmt.Errorf("unsupported DAO sync format")
+	}
+	if previous != nil && (previous.SyncFormat != 3 || previous.EntityID != patch.EntityID) {
+		return nil, fmt.Errorf("sync baseline identity or format mismatch")
+	}
+	next := &SyncHeroDao{EntityID: patch.EntityID, SyncFormat: 3}
+	if previous != nil {
+		*next = *previous
+	}
+	if patch.Name != nil {
+		var old string
+		exists := previous != nil && previous.Name != nil
+		if exists {
+			old = previous.Name.Value
+		}
+		value, err := applySyncHeroDaoNameField(patch.Name, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Name = &SyncHeroDaoNameField{Value: value}
+	}
+	if patch.Level != nil {
+		var old int32
+		exists := previous != nil && previous.Level != nil
+		if exists {
+			old = previous.Level.Value
+		}
+		value, err := applySyncHeroDaoLevelField(patch.Level, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Level = &SyncHeroDaoLevelField{Value: value}
+	}
+	if patch.Exp != nil {
+		var old int64
+		exists := previous != nil && previous.Exp != nil
+		if exists {
+			old = previous.Exp.Value
+		}
+		value, err := applySyncHeroDaoExpField(patch.Exp, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Exp = &SyncHeroDaoExpField{Value: value}
+	}
+	if patch.Items != nil {
+		var old map[int64]int32
+		exists := previous != nil && previous.Items != nil
+		if exists {
+			old = previous.Items.Value
+		}
+		value, err := applySyncHeroDaoItemsField(patch.Items, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Items = &SyncHeroDaoItemsField{Value: value}
+	}
+	if patch.Friends != nil {
+		var old []int64
+		exists := previous != nil && previous.Friends != nil
+		if exists {
+			old = previous.Friends.Value
+		}
+		value, err := applySyncHeroDaoFriendsField(patch.Friends, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Friends = &SyncHeroDaoFriendsField{Value: value}
+	}
+	if patch.Pos != nil {
+		var old SyncPosition
+		exists := previous != nil && previous.Pos != nil
+		if exists {
+			old = previous.Pos.Value
+		}
+		value, err := applySyncHeroDaoPosField(patch.Pos, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Pos = &SyncHeroDaoPosField{Value: value}
+	}
+	if patch.Equips != nil {
+		var old map[int64]SyncOptionalEquipInfo
+		exists := previous != nil && previous.Equips != nil
+		if exists {
+			old = previous.Equips.Value
+		}
+		value, err := applySyncHeroDaoEquipsField(patch.Equips, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Equips = &SyncHeroDaoEquipsField{Value: value}
+	}
+	if patch.Squad != nil {
+		var old []SyncOptionalEquipInfo
+		exists := previous != nil && previous.Squad != nil
+		if exists {
+			old = previous.Squad.Value
+		}
+		value, err := applySyncHeroDaoSquadField(patch.Squad, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Squad = &SyncHeroDaoSquadField{Value: value}
+	}
+	if patch.Mount != nil {
+		var old SyncOptionalEquipInfo
+		exists := previous != nil && previous.Mount != nil
+		if exists {
+			old = previous.Mount.Value
+		}
+		value, err := applySyncHeroDaoMountField(patch.Mount, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Mount = &SyncHeroDaoMountField{Value: value}
+	}
+	return next, nil
+}
+
+// Values 读取字段替换或已应用快照；集合补丁必须先通过 Apply 合并，避免丢失删除与列表操作。
+func (patch *SyncVarietyDao) Values() (map[string]any, error) {
+	if patch == nil || patch.SyncFormat != 3 {
+		return nil, fmt.Errorf("unsupported DAO sync format")
+	}
 	out := map[string]any{"_id": patch.EntityID}
 	if patch.SyncOnly != nil {
 		out["sync_only"] = patch.SyncOnly.Value
 	}
+	if patch.FastItems != nil && patch.FastItems.Delta {
+		return nil, fmt.Errorf("FastItems: apply collection delta before Values")
+	}
 	if patch.FastItems != nil {
 		out["fast_items"] = patch.FastItems.Value
+	}
+	if patch.ShardedTags != nil && patch.ShardedTags.Delta {
+		return nil, fmt.Errorf("ShardedTags: apply collection delta before Values")
 	}
 	if patch.ShardedTags != nil {
 		out["sharded_tags"] = patch.ShardedTags.Value
@@ -3002,8 +6503,14 @@ func (patch *SyncVarietyDao) Values() map[string]any {
 	if patch.ResultJSON != nil {
 		out["result_json"] = patch.ResultJSON.Value
 	}
+	if patch.Blobs != nil && patch.Blobs.Delta {
+		return nil, fmt.Errorf("Blobs: apply collection delta before Values")
+	}
 	if patch.Blobs != nil {
 		out["blobs"] = patch.Blobs.Value
+	}
+	if patch.Envelope != nil && patch.Envelope.Patch != nil {
+		return nil, fmt.Errorf("apply nested patch before Values")
 	}
 	if patch.Envelope != nil {
 		out["envelope"] = patch.Envelope.Value
@@ -3014,10 +6521,10 @@ func (patch *SyncVarietyDao) Values() map[string]any {
 	if patch.Counter != nil {
 		out["counter"] = patch.Counter.Value
 	}
-	return out
+	return out, nil
 }
 func (d *VarietyDao) marshalSyncPB(mask uint64) []byte {
-	patch := &SyncVarietyDao{EntityID: d.id}
+	patch := &SyncVarietyDao{EntityID: d.id, SyncFormat: 3}
 	changed := false
 	if mask&varietyDaoFieldSyncOnly != 0 {
 		patch.SyncOnly = &SyncVarietyDaoSyncOnlyField{Value: d.syncOnly}
@@ -3065,36 +6572,425 @@ func (d *VarietyDao) applySyncPB(raw []byte) error {
 	if err != nil {
 		return err
 	}
+	if d.id != 0 && d.id != patch.EntityID {
+		return fmt.Errorf("DAO identity changed")
+	}
+	previous, err := UnmarshalSyncVarietyDao(d.marshalSyncPB(^uint64(0)))
+	if err != nil {
+		return err
+	}
+	previous.EntityID = patch.EntityID
+	merged, err := ApplySyncVarietyDao(patch, previous)
+	if err != nil {
+		return err
+	}
 	if patch.SyncOnly != nil {
-		d.syncOnly = patch.SyncOnly.Value
+		d.syncOnly = merged.SyncOnly.Value
 	}
 	if patch.FastItems != nil {
-		d.setFastItemsRawMap(syncMapValues(patch.FastItems.Value, func(key int64, value int32) (int64, int32) { return key, value }))
+		d.setFastItemsRawMap(syncMapValues(merged.FastItems.Value, func(key int64, value int32) (int64, int32) { return key, value }))
 	}
 	if patch.ShardedTags != nil {
-		d.setShardedTagsRawMap(syncMapValues(patch.ShardedTags.Value, func(key int32, value string) (int32, string) { return key, value }))
+		d.setShardedTagsRawMap(syncMapValues(merged.ShardedTags.Value, func(key int32, value string) (int32, string) { return key, value }))
 	}
 	if patch.ResultJSON != nil {
-		d.resultJSON = patch.ResultJSON.Value
+		d.resultJSON = merged.ResultJSON.Value
 	}
 	if patch.Blobs != nil {
-		d.setBlobsRawMap(syncMapValues(patch.Blobs.Value, func(key string, value []byte) (string, []byte) { return key, value }))
+		d.setBlobsRawMap(syncMapValues(merged.Blobs.Value, func(key string, value []byte) (string, []byte) { return key, value }))
 	}
 	if patch.Envelope != nil {
-		d.envelope = envelopeFromBSONDoc(syncEnvelopeFromPB(patch.Envelope.Value))
+		d.envelope = envelopeFromBSONDoc(syncEnvelopeFromPB(merged.Envelope.Value))
 	}
 	if patch.Enabled != nil {
-		d.enabled = patch.Enabled.Value
+		d.enabled = merged.Enabled.Value
 	}
 	if patch.Counter != nil {
-		d.counter = patch.Counter.Value
+		d.counter = merged.Counter.Value
 	}
+	d.id = patch.EntityID
 	d.Init()
 	return nil
 }
+func captureSyncVarietyDaoSyncOnlyField(value *VarietyDao, change *dataengine.SyncChange) *SyncVarietyDaoSyncOnlyField {
+	full := func() *SyncVarietyDaoSyncOnlyField { return &SyncVarietyDaoSyncOnlyField{Value: value.syncOnly} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncVarietyDaoSyncOnlyField(patch *SyncVarietyDaoSyncOnlyField, previous int64, exists bool) (int64, error) {
+	return patch.Value, nil
+}
+func captureSyncVarietyDaoFastItemsField(value *VarietyDao, change *dataengine.SyncChange) *SyncVarietyDaoFastItemsField {
+	full := func() *SyncVarietyDaoFastItemsField {
+		return &SyncVarietyDaoFastItemsField{Value: syncMapValues(value.varietyDaoFastItemsRawMap(), func(key int64, value int32) (int64, int32) { return key, value })}
+	}
+	if change.Full() {
+		return full()
+	}
+	if value.fastItems == nil || len(change.Children) >= value.fastItems.Len() {
+		return full()
+	}
+	patch := &SyncVarietyDaoFastItemsField{Delta: true, Value: make(map[int64]int32)}
+	for step, child := range change.Children {
+		key := step.Key.(int64)
+		item, exists := value.fastItems.Get(key)
+		if !exists {
+			patch.Removed = append(patch.Removed, key)
+			continue
+		}
+		_ = child
+		single := map[int64]int32{key: item}
+		for k, v := range syncMapValues(single, func(key int64, value int32) (int64, int32) { return key, value }) {
+			patch.Value[k] = v
+		}
+	}
+	if len(patch.Removed) > 1 {
+		sort.Slice(patch.Removed, func(i, j int) bool { return patch.Removed[i] < patch.Removed[j] })
+	}
+	return patch
+}
+func applySyncVarietyDaoFastItemsField(patch *SyncVarietyDaoFastItemsField, previous map[int64]int32, exists bool) (map[int64]int32, error) {
+	if !patch.Delta {
+		if len(patch.Removed) != 0 {
+			return nil, fmt.Errorf("operations on map replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists {
+		return nil, fmt.Errorf("missing map baseline")
+	}
+	next := make(map[int64]int32, len(previous)+len(patch.Value))
+	for k, v := range previous {
+		next[k] = v
+	}
+	for _, k := range patch.Removed {
+		delete(next, k)
+	}
+	for k, v := range patch.Value {
+		next[k] = v
+	}
+	return next, nil
+}
+func captureSyncVarietyDaoShardedTagsField(value *VarietyDao, change *dataengine.SyncChange) *SyncVarietyDaoShardedTagsField {
+	full := func() *SyncVarietyDaoShardedTagsField {
+		return &SyncVarietyDaoShardedTagsField{Value: syncMapValues(value.varietyDaoShardedTagsRawMap(), func(key int32, value string) (int32, string) { return key, value })}
+	}
+	if change.Full() {
+		return full()
+	}
+	if value.shardedTags == nil || len(change.Children) >= value.shardedTags.Len() {
+		return full()
+	}
+	patch := &SyncVarietyDaoShardedTagsField{Delta: true, Value: make(map[int32]string)}
+	for step, child := range change.Children {
+		key := step.Key.(int32)
+		item, exists := value.shardedTags.Get(key)
+		if !exists {
+			patch.Removed = append(patch.Removed, key)
+			continue
+		}
+		_ = child
+		single := map[int32]string{key: item}
+		for k, v := range syncMapValues(single, func(key int32, value string) (int32, string) { return key, value }) {
+			patch.Value[k] = v
+		}
+	}
+	if len(patch.Removed) > 1 {
+		sort.Slice(patch.Removed, func(i, j int) bool { return patch.Removed[i] < patch.Removed[j] })
+	}
+	return patch
+}
+func applySyncVarietyDaoShardedTagsField(patch *SyncVarietyDaoShardedTagsField, previous map[int32]string, exists bool) (map[int32]string, error) {
+	if !patch.Delta {
+		if len(patch.Removed) != 0 {
+			return nil, fmt.Errorf("operations on map replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists {
+		return nil, fmt.Errorf("missing map baseline")
+	}
+	next := make(map[int32]string, len(previous)+len(patch.Value))
+	for k, v := range previous {
+		next[k] = v
+	}
+	for _, k := range patch.Removed {
+		delete(next, k)
+	}
+	for k, v := range patch.Value {
+		next[k] = v
+	}
+	return next, nil
+}
+func captureSyncVarietyDaoResultJSONField(value *VarietyDao, change *dataengine.SyncChange) *SyncVarietyDaoResultJSONField {
+	full := func() *SyncVarietyDaoResultJSONField { return &SyncVarietyDaoResultJSONField{Value: value.resultJSON} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncVarietyDaoResultJSONField(patch *SyncVarietyDaoResultJSONField, previous []byte, exists bool) ([]byte, error) {
+	return patch.Value, nil
+}
+func captureSyncVarietyDaoBlobsField(value *VarietyDao, change *dataengine.SyncChange) *SyncVarietyDaoBlobsField {
+	full := func() *SyncVarietyDaoBlobsField {
+		return &SyncVarietyDaoBlobsField{Value: syncMapValues(value.varietyDaoBlobsRawMap(), func(key string, value []byte) (string, []byte) { return key, value })}
+	}
+	if change.Full() {
+		return full()
+	}
+	if value.blobs == nil || len(change.Children) >= value.blobs.Len() {
+		return full()
+	}
+	patch := &SyncVarietyDaoBlobsField{Delta: true, Value: make(map[string][]byte)}
+	for step, child := range change.Children {
+		key := step.Key.(string)
+		item, exists := value.blobs.Get(key)
+		if !exists {
+			patch.Removed = append(patch.Removed, key)
+			continue
+		}
+		_ = child
+		single := map[string][]byte{key: item}
+		for k, v := range syncMapValues(single, func(key string, value []byte) (string, []byte) { return key, value }) {
+			patch.Value[k] = v
+		}
+	}
+	if len(patch.Removed) > 1 {
+		sort.Slice(patch.Removed, func(i, j int) bool { return patch.Removed[i] < patch.Removed[j] })
+	}
+	return patch
+}
+func applySyncVarietyDaoBlobsField(patch *SyncVarietyDaoBlobsField, previous map[string][]byte, exists bool) (map[string][]byte, error) {
+	if !patch.Delta {
+		if len(patch.Removed) != 0 {
+			return nil, fmt.Errorf("operations on map replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists {
+		return nil, fmt.Errorf("missing map baseline")
+	}
+	next := make(map[string][]byte, len(previous)+len(patch.Value))
+	for k, v := range previous {
+		next[k] = v
+	}
+	for _, k := range patch.Removed {
+		delete(next, k)
+	}
+	for k, v := range patch.Value {
+		next[k] = v
+	}
+	return next, nil
+}
+func captureSyncVarietyDaoEnvelopeField(value *VarietyDao, change *dataengine.SyncChange) *SyncVarietyDaoEnvelopeField {
+	full := func() *SyncVarietyDaoEnvelopeField {
+		return &SyncVarietyDaoEnvelopeField{Value: syncEnvelopeToPB(value.envelope.bsonDoc())}
+	}
+	if change.Full() {
+		return full()
+	}
+	return &SyncVarietyDaoEnvelopeField{Patch: value.envelope.captureSyncPatch(change)}
+}
+func applySyncVarietyDaoEnvelopeField(patch *SyncVarietyDaoEnvelopeField, previous SyncEnvelope, exists bool) (SyncEnvelope, error) {
+	if patch.Patch == nil {
+		return patch.Value, nil
+	}
+	if !exists {
+		return previous, fmt.Errorf("missing nested baseline")
+	}
+	return applySyncPatchEnvelope(patch.Patch, previous)
+}
+func captureSyncVarietyDaoEnabledField(value *VarietyDao, change *dataengine.SyncChange) *SyncVarietyDaoEnabledField {
+	full := func() *SyncVarietyDaoEnabledField { return &SyncVarietyDaoEnabledField{Value: value.enabled} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncVarietyDaoEnabledField(patch *SyncVarietyDaoEnabledField, previous bool, exists bool) (bool, error) {
+	return patch.Value, nil
+}
+func captureSyncVarietyDaoCounterField(value *VarietyDao, change *dataengine.SyncChange) *SyncVarietyDaoCounterField {
+	full := func() *SyncVarietyDaoCounterField { return &SyncVarietyDaoCounterField{Value: value.counter} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncVarietyDaoCounterField(patch *SyncVarietyDaoCounterField, previous uint64, exists bool) (uint64, error) {
+	return patch.Value, nil
+}
 
-// Values 返回本次 patch 中存在的字段，供通用 Go 客户端/机器人按名称路由；不合并集合。
-func (patch *SyncWraithDao) Values() map[string]any {
+// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。
+func (d *VarietyDao) MarshalSyncChanges(mask uint64) []byte {
+	return d.tracker.ReadSyncChanges(func(change *dataengine.SyncChange) []byte {
+		if change.Full() {
+			return d.marshalSyncPB(mask)
+		}
+		patch := &SyncVarietyDao{EntityID: d.id, SyncFormat: 3}
+		changed := false
+		if mask&varietyDaoFieldSyncOnly != 0 {
+			patch.SyncOnly = captureSyncVarietyDaoSyncOnlyField(d, change.Child(dataengine.SyncStep{Field: 3}))
+			changed = true
+		}
+		if mask&varietyDaoFieldFastItems != 0 {
+			patch.FastItems = captureSyncVarietyDaoFastItemsField(d, change.Child(dataengine.SyncStep{Field: 6}))
+			changed = true
+		}
+		if mask&varietyDaoFieldShardedTags != 0 {
+			patch.ShardedTags = captureSyncVarietyDaoShardedTagsField(d, change.Child(dataengine.SyncStep{Field: 7}))
+			changed = true
+		}
+		if mask&varietyDaoFieldResultJSON != 0 {
+			patch.ResultJSON = captureSyncVarietyDaoResultJSONField(d, change.Child(dataengine.SyncStep{Field: 8}))
+			changed = true
+		}
+		if mask&varietyDaoFieldBlobs != 0 {
+			patch.Blobs = captureSyncVarietyDaoBlobsField(d, change.Child(dataengine.SyncStep{Field: 9}))
+			changed = true
+		}
+		if mask&varietyDaoFieldEnvelope != 0 {
+			patch.Envelope = captureSyncVarietyDaoEnvelopeField(d, change.Child(dataengine.SyncStep{Field: 10}))
+			changed = true
+		}
+		if mask&varietyDaoFieldEnabled != 0 {
+			patch.Enabled = captureSyncVarietyDaoEnabledField(d, change.Child(dataengine.SyncStep{Field: 11}))
+			changed = true
+		}
+		if mask&varietyDaoFieldCounter != 0 {
+			patch.Counter = captureSyncVarietyDaoCounterField(d, change.Child(dataengine.SyncStep{Field: 12}))
+			changed = true
+		}
+		if !changed {
+			return nil
+		}
+		raw, err := MarshalSyncVarietyDao(patch)
+		if err != nil {
+			panic(err)
+		}
+		return raw
+	})
+}
+
+// ApplySyncVarietyDao 验证整个补丁后发布新快照，previous 与 patch 均按只读使用。
+func ApplySyncVarietyDao(patch, previous *SyncVarietyDao) (*SyncVarietyDao, error) {
+	if patch == nil || patch.SyncFormat != 3 {
+		return nil, fmt.Errorf("unsupported DAO sync format")
+	}
+	if previous != nil && (previous.SyncFormat != 3 || previous.EntityID != patch.EntityID) {
+		return nil, fmt.Errorf("sync baseline identity or format mismatch")
+	}
+	next := &SyncVarietyDao{EntityID: patch.EntityID, SyncFormat: 3}
+	if previous != nil {
+		*next = *previous
+	}
+	if patch.SyncOnly != nil {
+		var old int64
+		exists := previous != nil && previous.SyncOnly != nil
+		if exists {
+			old = previous.SyncOnly.Value
+		}
+		value, err := applySyncVarietyDaoSyncOnlyField(patch.SyncOnly, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.SyncOnly = &SyncVarietyDaoSyncOnlyField{Value: value}
+	}
+	if patch.FastItems != nil {
+		var old map[int64]int32
+		exists := previous != nil && previous.FastItems != nil
+		if exists {
+			old = previous.FastItems.Value
+		}
+		value, err := applySyncVarietyDaoFastItemsField(patch.FastItems, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.FastItems = &SyncVarietyDaoFastItemsField{Value: value}
+	}
+	if patch.ShardedTags != nil {
+		var old map[int32]string
+		exists := previous != nil && previous.ShardedTags != nil
+		if exists {
+			old = previous.ShardedTags.Value
+		}
+		value, err := applySyncVarietyDaoShardedTagsField(patch.ShardedTags, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.ShardedTags = &SyncVarietyDaoShardedTagsField{Value: value}
+	}
+	if patch.ResultJSON != nil {
+		var old []byte
+		exists := previous != nil && previous.ResultJSON != nil
+		if exists {
+			old = previous.ResultJSON.Value
+		}
+		value, err := applySyncVarietyDaoResultJSONField(patch.ResultJSON, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.ResultJSON = &SyncVarietyDaoResultJSONField{Value: value}
+	}
+	if patch.Blobs != nil {
+		var old map[string][]byte
+		exists := previous != nil && previous.Blobs != nil
+		if exists {
+			old = previous.Blobs.Value
+		}
+		value, err := applySyncVarietyDaoBlobsField(patch.Blobs, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Blobs = &SyncVarietyDaoBlobsField{Value: value}
+	}
+	if patch.Envelope != nil {
+		var old SyncEnvelope
+		exists := previous != nil && previous.Envelope != nil
+		if exists {
+			old = previous.Envelope.Value
+		}
+		value, err := applySyncVarietyDaoEnvelopeField(patch.Envelope, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Envelope = &SyncVarietyDaoEnvelopeField{Value: value}
+	}
+	if patch.Enabled != nil {
+		var old bool
+		exists := previous != nil && previous.Enabled != nil
+		if exists {
+			old = previous.Enabled.Value
+		}
+		value, err := applySyncVarietyDaoEnabledField(patch.Enabled, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Enabled = &SyncVarietyDaoEnabledField{Value: value}
+	}
+	if patch.Counter != nil {
+		var old uint64
+		exists := previous != nil && previous.Counter != nil
+		if exists {
+			old = previous.Counter.Value
+		}
+		value, err := applySyncVarietyDaoCounterField(patch.Counter, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Counter = &SyncVarietyDaoCounterField{Value: value}
+	}
+	return next, nil
+}
+
+// Values 读取字段替换或已应用快照；集合补丁必须先通过 Apply 合并，避免丢失删除与列表操作。
+func (patch *SyncWraithDao) Values() (map[string]any, error) {
+	if patch == nil || patch.SyncFormat != 3 {
+		return nil, fmt.Errorf("unsupported DAO sync format")
+	}
 	out := map[string]any{"_id": patch.EntityID}
 	if patch.PosX != nil {
 		out["pos_x"] = patch.PosX.Value
@@ -3102,16 +6998,22 @@ func (patch *SyncWraithDao) Values() map[string]any {
 	if patch.PosY != nil {
 		out["pos_y"] = patch.PosY.Value
 	}
+	if patch.Buffs != nil && patch.Buffs.Delta {
+		return nil, fmt.Errorf("Buffs: apply collection delta before Values")
+	}
 	if patch.Buffs != nil {
 		out["buffs"] = patch.Buffs.Value
+	}
+	if patch.Trail != nil && patch.Trail.Delta {
+		return nil, fmt.Errorf("Trail: apply collection delta before Values")
 	}
 	if patch.Trail != nil {
 		out["trail"] = patch.Trail.Value
 	}
-	return out
+	return out, nil
 }
 func (d *WraithDao) marshalSyncPB(mask uint64) []byte {
-	patch := &SyncWraithDao{EntityID: d.id}
+	patch := &SyncWraithDao{EntityID: d.id, SyncFormat: 3}
 	changed := false
 	if mask&wraithDaoFieldPosX != 0 {
 		patch.PosX = &SyncWraithDaoPosXField{Value: d.posX}
@@ -3143,20 +7045,249 @@ func (d *WraithDao) applySyncPB(raw []byte) error {
 	if err != nil {
 		return err
 	}
+	if d.id != 0 && d.id != patch.EntityID {
+		return fmt.Errorf("DAO identity changed")
+	}
+	previous, err := UnmarshalSyncWraithDao(d.marshalSyncPB(^uint64(0)))
+	if err != nil {
+		return err
+	}
+	previous.EntityID = patch.EntityID
+	merged, err := ApplySyncWraithDao(patch, previous)
+	if err != nil {
+		return err
+	}
 	if patch.PosX != nil {
-		d.posX = patch.PosX.Value
+		d.posX = merged.PosX.Value
 	}
 	if patch.PosY != nil {
-		d.posY = patch.PosY.Value
+		d.posY = merged.PosY.Value
 	}
 	if patch.Buffs != nil {
-		d.setBuffsRawMap(syncMapValues(patch.Buffs.Value, func(key int32, value int64) (int32, int64) { return key, value }))
+		d.setBuffsRawMap(syncMapValues(merged.Buffs.Value, func(key int32, value int64) (int32, int64) { return key, value }))
 	}
 	if patch.Trail != nil {
-		d.trail = syncSliceValues(patch.Trail.Value, func(value int64) int64 { return value })
+		d.trail = syncSliceValues(merged.Trail.Value, func(value int64) int64 { return value })
 	}
+	d.id = patch.EntityID
 	d.Init()
 	return nil
+}
+func captureSyncWraithDaoPosXField(value *WraithDao, change *dataengine.SyncChange) *SyncWraithDaoPosXField {
+	full := func() *SyncWraithDaoPosXField { return &SyncWraithDaoPosXField{Value: value.posX} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncWraithDaoPosXField(patch *SyncWraithDaoPosXField, previous int64, exists bool) (int64, error) {
+	return patch.Value, nil
+}
+func captureSyncWraithDaoPosYField(value *WraithDao, change *dataengine.SyncChange) *SyncWraithDaoPosYField {
+	full := func() *SyncWraithDaoPosYField { return &SyncWraithDaoPosYField{Value: value.posY} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncWraithDaoPosYField(patch *SyncWraithDaoPosYField, previous int64, exists bool) (int64, error) {
+	return patch.Value, nil
+}
+func captureSyncWraithDaoBuffsField(value *WraithDao, change *dataengine.SyncChange) *SyncWraithDaoBuffsField {
+	full := func() *SyncWraithDaoBuffsField {
+		return &SyncWraithDaoBuffsField{Value: syncMapValues(value.wraithDaoBuffsRawMap(), func(key int32, value int64) (int32, int64) { return key, value })}
+	}
+	if change.Full() {
+		return full()
+	}
+	if value.buffs == nil || len(change.Children) >= value.buffs.Len() {
+		return full()
+	}
+	patch := &SyncWraithDaoBuffsField{Delta: true, Value: make(map[int32]int64)}
+	for step, child := range change.Children {
+		key := step.Key.(int32)
+		item, exists := value.buffs.Get(key)
+		if !exists {
+			patch.Removed = append(patch.Removed, key)
+			continue
+		}
+		_ = child
+		single := map[int32]int64{key: item}
+		for k, v := range syncMapValues(single, func(key int32, value int64) (int32, int64) { return key, value }) {
+			patch.Value[k] = v
+		}
+	}
+	if len(patch.Removed) > 1 {
+		sort.Slice(patch.Removed, func(i, j int) bool { return patch.Removed[i] < patch.Removed[j] })
+	}
+	return patch
+}
+func applySyncWraithDaoBuffsField(patch *SyncWraithDaoBuffsField, previous map[int32]int64, exists bool) (map[int32]int64, error) {
+	if !patch.Delta {
+		if len(patch.Removed) != 0 {
+			return nil, fmt.Errorf("operations on map replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists {
+		return nil, fmt.Errorf("missing map baseline")
+	}
+	next := make(map[int32]int64, len(previous)+len(patch.Value))
+	for k, v := range previous {
+		next[k] = v
+	}
+	for _, k := range patch.Removed {
+		delete(next, k)
+	}
+	for k, v := range patch.Value {
+		next[k] = v
+	}
+	return next, nil
+}
+func captureSyncWraithDaoTrailField(value *WraithDao, change *dataengine.SyncChange) *SyncWraithDaoTrailField {
+	full := func() *SyncWraithDaoTrailField {
+		return &SyncWraithDaoTrailField{Value: syncSliceValues(value.trail, func(value int64) int64 { return value })}
+	}
+	if change.Full() {
+		return full()
+	}
+	if len(change.Children) >= len(value.trail) {
+		return full()
+	}
+	patch := &SyncWraithDaoTrailField{Delta: true, Length: uint64(len(value.trail)), Updates: make(map[uint64]int64)}
+	for step, child := range change.Children {
+		index := step.Key.(int)
+		item := value.trail[index]
+		_ = child
+		single := []int64{item}
+		patch.Updates[uint64(index)] = (syncSliceValues(single, func(value int64) int64 { return value }))[0]
+	}
+	return patch
+}
+func applySyncWraithDaoTrailField(patch *SyncWraithDaoTrailField, previous []int64, exists bool) ([]int64, error) {
+	if !patch.Delta {
+		if len(patch.Updates) != 0 || patch.Length != 0 {
+			return nil, fmt.Errorf("operations on list replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists || patch.Length > uint64(len(previous))+uint64(len(patch.Updates)) {
+		return nil, fmt.Errorf("invalid list length or missing baseline")
+	}
+	for index := range patch.Updates {
+		if index >= patch.Length {
+			return nil, fmt.Errorf("list index out of bounds")
+		}
+	}
+	for i := uint64(len(previous)); i < patch.Length; i++ {
+		if _, ok := patch.Updates[i]; !ok {
+			return nil, fmt.Errorf("list append has a hole")
+		}
+	}
+	next := make([]int64, int(patch.Length))
+	copy(next, previous)
+	for index, value := range patch.Updates {
+		next[index] = value
+	}
+	return next, nil
+}
+
+// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。
+func (d *WraithDao) MarshalSyncChanges(mask uint64) []byte {
+	return d.tracker.ReadSyncChanges(func(change *dataengine.SyncChange) []byte {
+		if change.Full() {
+			return d.marshalSyncPB(mask)
+		}
+		patch := &SyncWraithDao{EntityID: d.id, SyncFormat: 3}
+		changed := false
+		if mask&wraithDaoFieldPosX != 0 {
+			patch.PosX = captureSyncWraithDaoPosXField(d, change.Child(dataengine.SyncStep{Field: 2}))
+			changed = true
+		}
+		if mask&wraithDaoFieldPosY != 0 {
+			patch.PosY = captureSyncWraithDaoPosYField(d, change.Child(dataengine.SyncStep{Field: 3}))
+			changed = true
+		}
+		if mask&wraithDaoFieldBuffs != 0 {
+			patch.Buffs = captureSyncWraithDaoBuffsField(d, change.Child(dataengine.SyncStep{Field: 4}))
+			changed = true
+		}
+		if mask&wraithDaoFieldTrail != 0 {
+			patch.Trail = captureSyncWraithDaoTrailField(d, change.Child(dataengine.SyncStep{Field: 5}))
+			changed = true
+		}
+		if !changed {
+			return nil
+		}
+		raw, err := MarshalSyncWraithDao(patch)
+		if err != nil {
+			panic(err)
+		}
+		return raw
+	})
+}
+
+// ApplySyncWraithDao 验证整个补丁后发布新快照，previous 与 patch 均按只读使用。
+func ApplySyncWraithDao(patch, previous *SyncWraithDao) (*SyncWraithDao, error) {
+	if patch == nil || patch.SyncFormat != 3 {
+		return nil, fmt.Errorf("unsupported DAO sync format")
+	}
+	if previous != nil && (previous.SyncFormat != 3 || previous.EntityID != patch.EntityID) {
+		return nil, fmt.Errorf("sync baseline identity or format mismatch")
+	}
+	next := &SyncWraithDao{EntityID: patch.EntityID, SyncFormat: 3}
+	if previous != nil {
+		*next = *previous
+	}
+	if patch.PosX != nil {
+		var old int64
+		exists := previous != nil && previous.PosX != nil
+		if exists {
+			old = previous.PosX.Value
+		}
+		value, err := applySyncWraithDaoPosXField(patch.PosX, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.PosX = &SyncWraithDaoPosXField{Value: value}
+	}
+	if patch.PosY != nil {
+		var old int64
+		exists := previous != nil && previous.PosY != nil
+		if exists {
+			old = previous.PosY.Value
+		}
+		value, err := applySyncWraithDaoPosYField(patch.PosY, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.PosY = &SyncWraithDaoPosYField{Value: value}
+	}
+	if patch.Buffs != nil {
+		var old map[int32]int64
+		exists := previous != nil && previous.Buffs != nil
+		if exists {
+			old = previous.Buffs.Value
+		}
+		value, err := applySyncWraithDaoBuffsField(patch.Buffs, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Buffs = &SyncWraithDaoBuffsField{Value: value}
+	}
+	if patch.Trail != nil {
+		var old []int64
+		exists := previous != nil && previous.Trail != nil
+		if exists {
+			old = previous.Trail.Value
+		}
+		value, err := applySyncWraithDaoTrailField(patch.Trail, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Trail = &SyncWraithDaoTrailField{Value: value}
+	}
+	return next, nil
 }
 
 func syncSliceValues[A, B any](values []A, convert func(A) B) []B {

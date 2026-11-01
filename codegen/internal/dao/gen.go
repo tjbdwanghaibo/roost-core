@@ -293,6 +293,14 @@ func writeIfChanged(content []byte, outFile string, force bool) (bool, error) {
 
 func funcMap(defs *Definitions) template.FuncMap {
 	return template.FuncMap{
+		"syncFieldNumber": func(d DaoDef, name string) int {
+			for i, f := range d.Fields {
+				if f.Name == name {
+					return i + 2
+				}
+			}
+			panic("unknown DAO field")
+		},
 		"snakeCase":          toSnake,
 		"lower1":             lower1,
 		"daoDBConst":         daoDBConstName,

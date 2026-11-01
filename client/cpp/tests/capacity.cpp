@@ -30,6 +30,7 @@ static bytes packet(uint32_t tick, bool full, bool create,
     uint64_t previous = versions[id]++;
     roost::dao::sync::SyncHeroDao dao;
     dao.set_entity_id(id);
+    dao.set_sync_format(3);
     dao.mutable_level()->set_value(int(versions[id]));
     auto payload = dao.SerializeAsString();
     bytes body;

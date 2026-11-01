@@ -85,7 +85,8 @@ func TestMonsterFarViewOmitsHP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc := patch.Values()
+	doc, err := patch.Values()
+ if err != nil { t.Fatal(err) }
 	if _, exists := doc["hp"]; exists {
 		t.Fatal("far view retained HP")
 	}

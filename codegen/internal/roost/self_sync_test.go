@@ -272,23 +272,54 @@ func TestSelfSyncGeneratedProjectOverRealTCP(t *testing.T) {
 		roost(append(args, "--root", root)...)
 	}
 	// 业务字段与方法（新手手册的编辑点）。
-	write("db/def/player.go", "package dbdef\n\n//roost:dao coll=player db=main\ntype PlayerDao struct {\n\tGold int64 `bson:\"gold\" dao:\"persist,sync\"`\n}\n")
+	write("db/def/player.go", "package dbdef\n\n//roost:dao coll=player db=main\ntype PlayerDao struct {\n\tGold int64 `bson:\"gold\" dao:\"persist,sync\"`\n Items map[int64]int32\n Friends []int64\n}\n")
 	// 组件只经生成的 setter 改 DAO，不手动标脏：客户端收到增量靠 Nest 提交时自动收集，本用例钉住这一点。
 	edit("game/entities/player/wallet_component.go", "// Add business methods below.", `// AddGold 加金币；同步变化由 Nest 在提交时收集，不用手动标脏。
 func (component *WalletComponent) AddGold(amount int64) error {
+ if amount == -4 {
+  dao := component.owner.Dao()
+  dao.DelItems(50)
+  dao.AddFriends(99999)
+  return fmt.Errorf("reject after collection mutation")
+ }
 	if amount <= 0 {
 		return fmt.Errorf("wallet: amount %d must be positive", amount)
 	}
 	dao := component.owner.Dao()
 	dao.SetGold(dao.GetGold() + amount)
-	return nil
+ if dao.FriendsLen()==0 {
+  for i:=int64(0);i<128;i++ {dao.SetItems(i,int32(i));dao.AddFriends(i)}
+ } else {
+  dao.SetItems(50,999)
+  dao.AddFriends(888)
+ }
+ return nil
 }
 
 // Add business methods below.`)
-	write("game/handler/add_gold.go", "package handler\n\nimport player \"example.com/planet/game/entities/player\"\n\n//roost:nest rollback=undo durability=strict\nfunc handlerAddGold(target player.IWalletEntity, amount int64) error {\n\treturn target.WalletComp().AddGold(amount)\n}\n")
-	edit("protocol/def/add_gold.go", "type AddGoldRequest struct{}", "type AddGoldRequest struct {\n\tAmount int64 `pb:\"1\"`\n}")
+	write("game/handler/add_gold.go", `package handler
+
+import (
+ player "example.com/planet/game/entities/player"
+ messages "example.com/planet/protocol/pb"
+)
+
+//roost:nest rollback=undo durability=strict
+func handlerAddGold(target player.IWalletEntity, request *messages.AddGoldRequest, nowUnixMilli int64) (*messages.AddGoldResponse, error) {
+ if request.Amount == -2 { return nil, nil } // 验证无响应不会被边界伪装成成功。
+ if err := target.WalletComp().AddGold(request.Amount); err != nil { return nil, err }
+ return &messages.AddGoldResponse{Gold: target.WalletComp().Gold()}, nil
+}
+`)
+	edit("game/entities/player/wallet_component.go", "// Add business methods below.", "func (component *WalletComponent) Gold() int64 { return component.owner.Dao().GetGold() }\n\n// Add business methods below.")
+	edit("protocol/def/add_gold.go", "type AddGoldRequest struct{}", "type AddGoldRequest struct {\n\tAmount int64 `pb:\"1\"`\n\tPlayerID int64 `pb:\"2\"`\n}")
+	edit("protocol/def/add_gold.go", "type AddGoldResponse struct {", "type AddGoldResponse struct {\n\tGold int64 `pb:\"3\"`")
 	// 协议生成先放了“未实现”的 controller 占位；add endpoint 接管它，换成 endpoint 生成的 Sender 映射。
 	roost("add", "endpoint", "AddGold", "--handler", "player", "--root", root)
+	// 手写授权扩展必须跨 project sync / generate 原样保留，并在真实 TCP 请求中执行。
+	edit("game/controllers/player/add_gold.go", "return controller.dispatchAddGold(ctx, req)", "if req.Amount == -3 { return &pb.AddGoldResponse{Code: 100001, Reason: \"denied\"}, nil }\n return controller.dispatchAddGold(ctx, req)")
+	applicationEndpoint := readProjectFile(t, root, "game/controllers/player/add_gold.go")
+
 	// Controller 归业务：登录 endpoint 要从 Registry 取 lifecycle，这里给它留一份 Registry。
 	write("game/controllers/player/controller.go", `package player
 
@@ -349,6 +380,10 @@ func (controller *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.E
 	}
 	roost("project", "sync", "--skip-deps", "--root", root)
 	roost("generate", "--root", root)
+	if readProjectFile(t, root, "game/controllers/player/add_gold.go") != applicationEndpoint {
+		t.Fatal("generation overwrote application endpoint")
+	}
+	roost("generate", "--check", "--root", root)
 	generatedPacker := filepath.Join(root, "game", "entities", "player", "player_sync_packer_gen.go")
 	exists := func(path string) bool {
 		_, err := os.Stat(path)
@@ -368,6 +403,11 @@ func (controller *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.E
 	write("internal/bootstrap/self_sync_e2e_test.go", selfSyncGeneratedE2E)
 	runGenerated := func(label string) {
 		t.Helper()
+		source := selfSyncGeneratedE2E
+		if label == "custom packer" {
+			source = strings.Replace(source, "const useCollectionDelta = true", "const useCollectionDelta = false", 1)
+		}
+		write("internal/bootstrap/self_sync_e2e_test.go", source)
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 		defer cancel()
 		for _, args := range [][]string{{"build", "./..."}, {"vet", "./..."}, {"test", "-race", "-count=1", "-run", "^(TestSelfSyncEndToEnd|TestSelfSyncFrameLimitFollowsTheAccessLimit)$", "-v", "./internal/bootstrap"}} {
@@ -539,6 +579,8 @@ func (absentAuthority) LoadEntity(context.Context, int64, entity.EntityKind) (en
 	return nil, engine.ErrEntityAggregateNotFound
 }
 
+const useCollectionDelta = true
+
 type selfClient struct {
 	conn     net.Conn
 	receiver *frame.Receiver
@@ -590,7 +632,12 @@ func (c *selfClient) next(t *testing.T) *wire.Packet {
 				if update.Profile.Key != "self" {
 					return fmt.Errorf("profile %q, want self", update.Profile.Key)
 				}
-				if err := c.state.ApplySync(update.Payload.BytesCopy()); err != nil {
+				patch, err := db.UnmarshalSyncPlayerDao(update.Payload.BytesCopy())
+                if err != nil { return err }
+                if patch.Gold != nil && patch.Gold.Value==7 && !update.Full && useCollectionDelta {
+                    if patch.Items==nil || !patch.Items.Delta || patch.Friends==nil || !patch.Friends.Delta { return fmt.Errorf("expected collection patches") }
+                }
+                if err := c.state.ApplySync(update.Payload.BytesCopy()); err != nil {
 					return err
 				}
 			}
@@ -609,7 +656,7 @@ func (c *selfClient) next(t *testing.T) *wire.Packet {
 	return packet
 }
 
-func (c *selfClient) request(t *testing.T, id uint32, payload []byte) {
+func (c *selfClient) request(t *testing.T, id uint32, payload []byte) []byte {
 	t.Helper()
 	c.seq++
 	if err := wire.Write(c.conn, []*wire.Packet{{MsgID: id, Seq: c.seq, Payload: payload}}, wire.DefaultMaxPayload); err != nil {
@@ -617,7 +664,7 @@ func (c *selfClient) request(t *testing.T, id uint32, payload []byte) {
 	}
 	for {
 		if packet := c.next(t); packet.Flags == 0 && packet.MsgID == id && packet.Seq == c.seq {
-			return
+			return packet.Payload
 		}
 	}
 }
@@ -692,8 +739,16 @@ func TestSelfSyncEndToEnd(t *testing.T) {
 	enter, _ := pb.MarshalEnterGameRequest(&pb.EnterGameRequest{})
 	first.request(t, msgid.MsgEnterGame, enter)
 	first.expect(t, "full gold=0")
-	add, _ := pb.MarshalAddGoldRequest(&pb.AddGoldRequest{Amount: 5})
-	first.request(t, msgid.MsgAddGold, add)
+	// 客户端伪造 PlayerID 也只能修改认证玩家；响应与 Sync 应看到同一笔写入。
+	add, _ := pb.MarshalAddGoldRequest(&pb.AddGoldRequest{Amount: 5, PlayerID: 999})
+	body := first.request(t, msgid.MsgAddGold, add)
+	response, err := pb.UnmarshalAddGoldResponse(body)
+	if err != nil || response.Code != 0 || response.Gold != 5 { t.Fatalf("PB response: %+v %v", response, err) }
+	for _, amount := range []int64{-1, -2, -3, -4} {
+		bad, _ := pb.MarshalAddGoldRequest(&pb.AddGoldRequest{Amount: amount})
+		response, err := pb.UnmarshalAddGoldResponse(first.request(t, msgid.MsgAddGold, bad))
+		if err != nil || response.Code == 0 { t.Fatalf("failed request: %+v %v", response, err) }
+	}
 	first.expect(t, "delta gold=5")
 	t.Logf("first connection: %v", first.log)
 
@@ -703,6 +758,8 @@ func TestSelfSyncEndToEnd(t *testing.T) {
 	add, _ = pb.MarshalAddGoldRequest(&pb.AddGoldRequest{Amount: 2})
 	again.request(t, msgid.MsgAddGold, add)
 	again.expect(t, "delta gold=7")
+ if value,ok:=again.state.GetItems(50);!ok||value!=999{t.Fatal("map patch lost")}
+ if again.state.FriendsLen()!=129{t.Fatal("list append patch lost")}
 	t.Logf("reconnected: %v", again.log)
 }
 

@@ -64,31 +64,37 @@ const (
 	wraithDaoFieldScratch uint64 = 1 << iota
 )
 
-func (d *WraithDao) markPosXDirty() {
-	d.tracker.MarkSync(wraithDaoFieldPosX)
+func (d *WraithDao) markPosXDirty() { d.markPosXChange(nil) }
+func (d *WraithDao) markPosXChange(path dataengine.SyncPath) {
+	d.tracker.MarkSyncPath(wraithDaoFieldPosX, dataengine.SyncField(2, path))
 }
 
-func (d *WraithDao) markPosYDirty() {
-	d.tracker.MarkSync(wraithDaoFieldPosY)
+func (d *WraithDao) markPosYDirty() { d.markPosYChange(nil) }
+func (d *WraithDao) markPosYChange(path dataengine.SyncPath) {
+	d.tracker.MarkSyncPath(wraithDaoFieldPosY, dataengine.SyncField(3, path))
 }
 
-func (d *WraithDao) markBuffsDirty() {
-	d.tracker.MarkSync(wraithDaoFieldBuffs)
+func (d *WraithDao) markBuffsDirty() { d.markBuffsChange(nil) }
+func (d *WraithDao) markBuffsChange(path dataengine.SyncPath) {
+	d.tracker.MarkSyncPath(wraithDaoFieldBuffs, dataengine.SyncField(4, path))
 }
 
-func (d *WraithDao) markTrailDirty() {
-	d.tracker.MarkSync(wraithDaoFieldTrail)
+func (d *WraithDao) markTrailDirty() { d.markTrailChange(nil) }
+func (d *WraithDao) markTrailChange(path dataengine.SyncPath) {
+	d.tracker.MarkSyncPath(wraithDaoFieldTrail, dataengine.SyncField(5, path))
 }
 
-func (d *WraithDao) markScratchDirty() {
+func (d *WraithDao) markScratchDirty() { d.markScratchChange(nil) }
+func (d *WraithDao) markScratchChange(path dataengine.SyncPath) {
 }
 
-func (d *WraithDao) markBuffsKeyDirty(key int32, val int64) {
-	d.tracker.MarkSync(wraithDaoFieldBuffs)
+func (d *WraithDao) markBuffsKeyDirty(key int32, val int64) { d.markBuffsKeyChange(key, val, nil) }
+func (d *WraithDao) markBuffsKeyChange(key int32, val int64, path dataengine.SyncPath) {
+	d.tracker.MarkSyncPath(wraithDaoFieldBuffs, dataengine.SyncField(4, dataengine.SyncElement(key, path)))
 }
 
 func (d *WraithDao) markBuffsKeyDeleted(key int32) {
-	d.tracker.MarkSync(wraithDaoFieldBuffs)
+	d.tracker.MarkSyncPath(wraithDaoFieldBuffs, dataengine.SyncField(4, dataengine.SyncElement(key, nil)))
 }
 
 // Init wires dirty callbacks for nested structs and map values.
@@ -218,7 +224,26 @@ func (d *WraithDao) AddTrail(v int64) {
 		})
 	}
 	d.trail = append(d.trail, v)
-	d.markTrailDirty()
+	d.markTrailChange(dataengine.SyncElement(len(d.trail)-1, nil))
+}
+
+// SetTrailAt 更新一个现有索引；不移动其他元素，变化可安全合并与重试。
+func (d *WraithDao) SetTrailAt(index int, v int64) bool {
+	if index < 0 || index >= len(d.trail) {
+		return false
+	}
+	items := d.trail
+	old := items[index]
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		d.recordUndoToken(tx, wraithDaoFieldTrail, &items[index], func() error {
+			// 保存具体的 backing array；后续 SetAll/缩短不能改变逆操作目标。
+			items[index] = old
+			return nil
+		})
+	}
+	d.trail[index] = v
+	d.markTrailChange(dataengine.SyncElement(index, nil))
+	return true
 }
 
 func (d *WraithDao) SetTrailAll(v []int64) {

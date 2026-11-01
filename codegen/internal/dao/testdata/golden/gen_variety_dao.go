@@ -108,72 +108,87 @@ const (
 	varietyDaoFieldCounter     uint64 = 1 << iota
 )
 
-func (d *VarietyDao) markPersistOnlyDirty() {
+func (d *VarietyDao) markPersistOnlyDirty() { d.markPersistOnlyChange(nil) }
+func (d *VarietyDao) markPersistOnlyChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, varietyDaoFieldPersistOnly); err != nil {
 		panic(fmt.Errorf("VarietyDao: mark PersistOnly persistence: %w", err))
 	}
 }
 
-func (d *VarietyDao) markSyncOnlyDirty() {
-	d.tracker.MarkSync(varietyDaoFieldSyncOnly)
+func (d *VarietyDao) markSyncOnlyDirty() { d.markSyncOnlyChange(nil) }
+func (d *VarietyDao) markSyncOnlyChange(path dataengine.SyncPath) {
+	d.tracker.MarkSyncPath(varietyDaoFieldSyncOnly, dataengine.SyncField(3, path))
 }
 
-func (d *VarietyDao) markNeitherDirty() {
+func (d *VarietyDao) markNeitherDirty() { d.markNeitherChange(nil) }
+func (d *VarietyDao) markNeitherChange(path dataengine.SyncPath) {
 }
 
-func (d *VarietyDao) markPendingDirty() {
+func (d *VarietyDao) markPendingDirty() { d.markPendingChange(nil) }
+func (d *VarietyDao) markPendingChange(path dataengine.SyncPath) {
 }
 
-func (d *VarietyDao) markFastItemsDirty() {
+func (d *VarietyDao) markFastItemsDirty() { d.markFastItemsChange(nil) }
+func (d *VarietyDao) markFastItemsChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, varietyDaoFieldFastItems); err != nil {
 		panic(fmt.Errorf("VarietyDao: mark FastItems persistence: %w", err))
 	}
-	d.tracker.MarkSync(varietyDaoFieldFastItems)
+	d.tracker.MarkSyncPath(varietyDaoFieldFastItems, dataengine.SyncField(6, path))
 }
 
-func (d *VarietyDao) markShardedTagsDirty() {
+func (d *VarietyDao) markShardedTagsDirty() { d.markShardedTagsChange(nil) }
+func (d *VarietyDao) markShardedTagsChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, varietyDaoFieldShardedTags); err != nil {
 		panic(fmt.Errorf("VarietyDao: mark ShardedTags persistence: %w", err))
 	}
-	d.tracker.MarkSync(varietyDaoFieldShardedTags)
+	d.tracker.MarkSyncPath(varietyDaoFieldShardedTags, dataengine.SyncField(7, path))
 }
 
-func (d *VarietyDao) markResultJSONDirty() {
+func (d *VarietyDao) markResultJSONDirty() { d.markResultJSONChange(nil) }
+func (d *VarietyDao) markResultJSONChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, varietyDaoFieldResultJSON); err != nil {
 		panic(fmt.Errorf("VarietyDao: mark ResultJSON persistence: %w", err))
 	}
-	d.tracker.MarkSync(varietyDaoFieldResultJSON)
+	d.tracker.MarkSyncPath(varietyDaoFieldResultJSON, dataengine.SyncField(8, path))
 }
 
-func (d *VarietyDao) markBlobsDirty() {
+func (d *VarietyDao) markBlobsDirty() { d.markBlobsChange(nil) }
+func (d *VarietyDao) markBlobsChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, varietyDaoFieldBlobs); err != nil {
 		panic(fmt.Errorf("VarietyDao: mark Blobs persistence: %w", err))
 	}
-	d.tracker.MarkSync(varietyDaoFieldBlobs)
+	d.tracker.MarkSyncPath(varietyDaoFieldBlobs, dataengine.SyncField(9, path))
 }
 
-func (d *VarietyDao) markEnvelopeDirty() {
+func (d *VarietyDao) markEnvelopeDirty() { d.markEnvelopeChange(nil) }
+func (d *VarietyDao) markEnvelopeChange(path dataengine.SyncPath) {
 	if err := nest.MarkPersist(d, varietyDaoFieldEnvelope); err != nil {
 		panic(fmt.Errorf("VarietyDao: mark Envelope persistence: %w", err))
 	}
-	d.tracker.MarkSync(varietyDaoFieldEnvelope)
+	d.tracker.MarkSyncPath(varietyDaoFieldEnvelope, dataengine.SyncField(10, path))
 }
 
-func (d *VarietyDao) markEnabledDirty() {
-	d.tracker.MarkSync(varietyDaoFieldEnabled)
+func (d *VarietyDao) markEnabledDirty() { d.markEnabledChange(nil) }
+func (d *VarietyDao) markEnabledChange(path dataengine.SyncPath) {
+	d.tracker.MarkSyncPath(varietyDaoFieldEnabled, dataengine.SyncField(11, path))
 }
 
-func (d *VarietyDao) markCounterDirty() {
-	d.tracker.MarkSync(varietyDaoFieldCounter)
+func (d *VarietyDao) markCounterDirty() { d.markCounterChange(nil) }
+func (d *VarietyDao) markCounterChange(path dataengine.SyncPath) {
+	d.tracker.MarkSyncPath(varietyDaoFieldCounter, dataengine.SyncField(12, path))
 }
 
-func (d *VarietyDao) markPendingKeyDirty(key int32, val int64) {
+func (d *VarietyDao) markPendingKeyDirty(key int32, val int64) { d.markPendingKeyChange(key, val, nil) }
+func (d *VarietyDao) markPendingKeyChange(key int32, val int64, path dataengine.SyncPath) {
 }
 
 func (d *VarietyDao) markPendingKeyDeleted(key int32) {
 }
 
 func (d *VarietyDao) markFastItemsKeyDirty(key int64, val int32) {
+	d.markFastItemsKeyChange(key, val, nil)
+}
+func (d *VarietyDao) markFastItemsKeyChange(key int64, val int32, path dataengine.SyncPath) {
 	if path, ok := dataengine.MapPatchPath("fast_items", key); ok {
 		if err := nest.MarkPersistSet(d, varietyDaoFieldFastItems, path, val); err != nil {
 			panic(fmt.Errorf("VarietyDao: mark FastItems key persistence: %w", err))
@@ -183,7 +198,7 @@ func (d *VarietyDao) markFastItemsKeyDirty(key int64, val int32) {
 			panic(fmt.Errorf("VarietyDao: mark FastItems persistence: %w", err))
 		}
 	}
-	d.tracker.MarkSync(varietyDaoFieldFastItems)
+	d.tracker.MarkSyncPath(varietyDaoFieldFastItems, dataengine.SyncField(6, dataengine.SyncElement(key, path)))
 }
 
 func (d *VarietyDao) markFastItemsKeyDeleted(key int64) {
@@ -196,10 +211,13 @@ func (d *VarietyDao) markFastItemsKeyDeleted(key int64) {
 			panic(fmt.Errorf("VarietyDao: mark FastItems persistence: %w", err))
 		}
 	}
-	d.tracker.MarkSync(varietyDaoFieldFastItems)
+	d.tracker.MarkSyncPath(varietyDaoFieldFastItems, dataengine.SyncField(6, dataengine.SyncElement(key, nil)))
 }
 
 func (d *VarietyDao) markShardedTagsKeyDirty(key int32, val string) {
+	d.markShardedTagsKeyChange(key, val, nil)
+}
+func (d *VarietyDao) markShardedTagsKeyChange(key int32, val string, path dataengine.SyncPath) {
 	if path, ok := dataengine.MapPatchPath("sharded_tags", key); ok {
 		if err := nest.MarkPersistSet(d, varietyDaoFieldShardedTags, path, val); err != nil {
 			panic(fmt.Errorf("VarietyDao: mark ShardedTags key persistence: %w", err))
@@ -209,7 +227,7 @@ func (d *VarietyDao) markShardedTagsKeyDirty(key int32, val string) {
 			panic(fmt.Errorf("VarietyDao: mark ShardedTags persistence: %w", err))
 		}
 	}
-	d.tracker.MarkSync(varietyDaoFieldShardedTags)
+	d.tracker.MarkSyncPath(varietyDaoFieldShardedTags, dataengine.SyncField(7, dataengine.SyncElement(key, path)))
 }
 
 func (d *VarietyDao) markShardedTagsKeyDeleted(key int32) {
@@ -222,10 +240,11 @@ func (d *VarietyDao) markShardedTagsKeyDeleted(key int32) {
 			panic(fmt.Errorf("VarietyDao: mark ShardedTags persistence: %w", err))
 		}
 	}
-	d.tracker.MarkSync(varietyDaoFieldShardedTags)
+	d.tracker.MarkSyncPath(varietyDaoFieldShardedTags, dataengine.SyncField(7, dataengine.SyncElement(key, nil)))
 }
 
-func (d *VarietyDao) markBlobsKeyDirty(key string, val []byte) {
+func (d *VarietyDao) markBlobsKeyDirty(key string, val []byte) { d.markBlobsKeyChange(key, val, nil) }
+func (d *VarietyDao) markBlobsKeyChange(key string, val []byte, path dataengine.SyncPath) {
 	if path, ok := dataengine.MapPatchPath("blobs", key); ok {
 		if err := nest.MarkPersistSet(d, varietyDaoFieldBlobs, path, val); err != nil {
 			panic(fmt.Errorf("VarietyDao: mark Blobs key persistence: %w", err))
@@ -235,7 +254,7 @@ func (d *VarietyDao) markBlobsKeyDirty(key string, val []byte) {
 			panic(fmt.Errorf("VarietyDao: mark Blobs persistence: %w", err))
 		}
 	}
-	d.tracker.MarkSync(varietyDaoFieldBlobs)
+	d.tracker.MarkSyncPath(varietyDaoFieldBlobs, dataengine.SyncField(9, dataengine.SyncElement(key, path)))
 }
 
 func (d *VarietyDao) markBlobsKeyDeleted(key string) {
@@ -248,12 +267,12 @@ func (d *VarietyDao) markBlobsKeyDeleted(key string) {
 			panic(fmt.Errorf("VarietyDao: mark Blobs persistence: %w", err))
 		}
 	}
-	d.tracker.MarkSync(varietyDaoFieldBlobs)
+	d.tracker.MarkSyncPath(varietyDaoFieldBlobs, dataengine.SyncField(9, dataengine.SyncElement(key, nil)))
 }
 
 // Init wires dirty callbacks for nested structs and map values.
 func (d *VarietyDao) Init() {
-	d.envelope.bindDirty(daoDirtyOwner{holder: d, field: varietyDaoFieldEnvelope}, d.markEnvelopeDirty)
+	d.envelope.bindDirty(daoDirtyOwner{holder: d, field: varietyDaoFieldEnvelope}, d.markEnvelopeChange)
 }
 
 // --- Accessors ---
@@ -521,7 +540,26 @@ func (d *VarietyDao) AddResultJSON(v byte) {
 		})
 	}
 	d.resultJSON = append(d.resultJSON, v)
-	d.markResultJSONDirty()
+	d.markResultJSONChange(dataengine.SyncElement(len(d.resultJSON)-1, nil))
+}
+
+// SetResultJSONAt 更新一个现有索引；不移动其他元素，变化可安全合并与重试。
+func (d *VarietyDao) SetResultJSONAt(index int, v byte) bool {
+	if index < 0 || index >= len(d.resultJSON) {
+		return false
+	}
+	items := d.resultJSON
+	old := items[index]
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		d.recordUndoToken(tx, varietyDaoFieldResultJSON, &items[index], func() error {
+			// 保存具体的 backing array；后续 SetAll/缩短不能改变逆操作目标。
+			items[index] = old
+			return nil
+		})
+	}
+	d.resultJSON[index] = v
+	d.markResultJSONChange(dataengine.SyncElement(index, nil))
+	return true
 }
 
 func (d *VarietyDao) SetResultJSONAll(v []byte) {
@@ -623,12 +661,12 @@ func (d *VarietyDao) SetEnvelope(v Envelope) {
 		old := d.envelope
 		d.recordUndo(tx, varietyDaoFieldEnvelope, func() error {
 			d.envelope = old
-			d.envelope.bindDirty(daoDirtyOwner{holder: d, field: varietyDaoFieldEnvelope}, d.markEnvelopeDirty)
+			d.envelope.bindDirty(daoDirtyOwner{holder: d, field: varietyDaoFieldEnvelope}, d.markEnvelopeChange)
 			return nil
 		})
 	}
 	d.envelope = v
-	d.envelope.bindDirty(daoDirtyOwner{holder: d, field: varietyDaoFieldEnvelope}, d.markEnvelopeDirty)
+	d.envelope.bindDirty(daoDirtyOwner{holder: d, field: varietyDaoFieldEnvelope}, d.markEnvelopeChange)
 	d.markEnvelopeDirty()
 }
 

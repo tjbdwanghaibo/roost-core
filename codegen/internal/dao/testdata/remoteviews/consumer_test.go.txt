@@ -1,0 +1,237 @@
+package alliance_test
+
+import (
+	"context"
+	"errors"
+	"example.com/remoteviews/db"
+	"example.com/remoteviews/game/alliance"
+	"example.com/remoteviews/game/handler"
+	sender "example.com/remoteviews/game/handler/syncsender"
+	"example.com/remoteviews/game/requests"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"reflect"
+	"sync"
+	"testing"
+)
+
+type changes struct {
+	dao  any
+	mask uint64
+}
+
+func (c changes) RemotePersistChangeFor(d any) (entity.RemotePersistChange, bool) {
+	return entity.RemotePersistChange{Mask: c.mask}, d == c.dao
+}
+
+type deletion struct{}
+
+func (deletion) RemoteDeleteRequested(int64) bool { return true }
+
+var once sync.Once
+
+func setup(t *testing.T) *alliance.Alliance {
+	once.Do(func() {
+		alliance.RegisterEntity()
+		handler.RegisterHandlerNestHandlers()
+		entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 238, Category: entity.EntityCategoryOther})
+	})
+	e, err := alliance.NewAlliance(&entity.EntityCreateParam{UniqueID: 101, Kind: alliance.Kind, IsCreate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := e.Dao()
+	_, err = nest.RunDetachedTransaction(context.Background(), acceptCommitter{}, "setup", func() (any, error) {
+		d.SetName("alliance")
+		d.SetLevel(3)
+		d.SetBonus(8)
+		d.SetTreasury(999)
+		d.AddTags("open")
+		m := &db.Member{}
+		m.SetName("member")
+		m.SetScores([]int64{7})
+		m.SetBuffs(map[string]int64{"power": 2})
+		m.SetTransient("private")
+		d.SetMembers(1, m)
+		d.SetMembers(2, nil)
+		d.SetProfile(&db.Member{})
+		d.SetBlobs("x", []byte{1, 2})
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+func build(t *testing.T, e *alliance.Alliance, mask uint64) entity.RemoteCommit {
+	t.Helper()
+	c, err := e.BuildRemoteCommitLocked(entity.RemoteWriteLease{BaseVersion: 1, MarkerEpoch: 1, RouteEpoch: 1, LockFence: 1}, entity.RemoteTransactionOutcome{TransactionID: entity.RemoteTransactionID{1}, PersistChanges: changes{e.Dao(), mask}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 正式 Remote batch 在冻结后统一填各快照的版本和代际。
+	for i := range c.Snapshots {
+		s := &c.Snapshots[i]
+		s.BaseVersion = c.BaseVersion
+		s.StateVersion = c.NextVersion
+		s.MarkerEpoch = c.MarkerEpoch
+		s.RouteEpoch = c.RouteEpoch
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+func viewRecord(t *testing.T, c entity.RemoteCommit, scope uint64) entity.RemoteSnapshotRecord {
+	t.Helper()
+	for _, s := range c.Snapshots {
+		if uint64(s.Key.Scope) == scope {
+			return s
+		}
+	}
+	t.Fatalf("missing scope %d", scope)
+	return entity.RemoteSnapshotRecord{}
+}
+
+type acceptCommitter struct{}
+
+func (acceptCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
+
+type rejectCommitter struct{}
+
+func (rejectCommitter) Commit(context.Context, nest.CommitRecord) error {
+	panic("failed handler must not commit")
+}
+
+func TestGeneratedFieldViews(t *testing.T) {
+	e := setup(t)
+	d := e.Dao()
+	public := d.PublicSnapshot()
+	member := d.MemberSnapshot()
+	if public.Name != "alliance" || member.Bonus != 8 {
+		t.Fatal(public, member)
+	}
+	if _, ok := reflect.TypeOf(public).FieldByName("Treasury"); ok {
+		t.Fatal("private field exposed")
+	}
+	if _, ok := reflect.TypeOf(member.Members[1]).Elem().FieldByName("Transient"); ok {
+		t.Fatal("nonpersistent nested state exposed")
+	}
+	// 视图改动与 DAO 双向隔离，包括 map、切片、嵌套指针和 map 中的 []byte。
+	public.Tags[0] = "changed"
+	member.Members[1].Scores[0] = 99
+	member.Members[1].Buffs["power"] = 99
+	member.Profile.Name = "changed"
+	member.Blobs["x"][0] = 9
+	if got := d.MemberSnapshot(); got.Members[1].Scores[0] != 7 || got.Members[1].Buffs["power"] != 2 || got.Profile.Name != "" || got.Blobs["x"][0] != 1 || d.PublicSnapshot().Tags[0] != "open" {
+		t.Fatal("view aliases DAO")
+	}
+	c := build(t, e, ^uint64(0))
+	if len(c.Snapshots) != 3 {
+		t.Fatalf("snapshots=%d", len(c.Snapshots))
+	}
+	record := viewRecord(t, c, (db.AllianceMemberSnapshot{}).RemoteScope())
+	var doc bson.M
+	if err := bson.Unmarshal(record.Data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := doc["treasury"]; ok {
+		t.Fatal("private field on wire")
+	}
+	decoded, err := entity.DecodeRemoteSnapshot(entity.RemoteSnapshotEnvelope{Schema: record.Schema, Payload: entity.CopyFrozenRemoteSnapshotPayload(record.Data)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := decoded.(db.AllianceMemberSnapshot); !ok || got.Bonus != 8 || got.Members[2] != nil {
+		t.Fatalf("decoded=%#v", decoded)
+	}
+	if _, err := nest.RunDetachedTransaction(context.Background(), acceptCommitter{}, "change", func() (any, error) { d.SetBonus(10); return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := db.DecodeAllianceMemberSnapshot(record.Data); err != nil || got.Bonus != 8 {
+		t.Fatal("frozen payload changed", err)
+	}
+	// Treasury 是第 4 个字段；全局 dirty 仍有其他字段，但只用本事务 mask。
+	unrelated := build(t, e, 1<<3)
+	if len(unrelated.Snapshots) != 1 {
+		t.Fatal("unrelated field republished view")
+	}
+	bonus := build(t, e, 1<<2)
+	if len(bonus.Snapshots) != 2 {
+		t.Fatal("bonus must update member only")
+	}
+	_ = viewRecord(t, bonus, (db.AllianceMemberSnapshot{}).RemoteScope())
+	for _, s := range bonus.Snapshots {
+		if uint64(s.Key.Scope) == (db.AlliancePublicSnapshot{}).RemoteScope() {
+			t.Fatal("public view republished")
+		}
+	}
+	// 回滚后的投影读取恢复值，之前冻结的载荷不受失败 handler 污染。
+	ran := false
+	_, err = nest.RunDetachedTransaction(context.Background(), rejectCommitter{}, "rejected", func() (any, error) {
+		ran = true
+		d.SetBonus(77)
+		return nil, errors.New("reject")
+	})
+	if !ran || err == nil || d.MemberSnapshot().Bonus != 10 {
+		t.Fatalf("rollback: %v %+v", err, d.MemberSnapshot())
+	}
+	deleted, err := e.BuildRemoteCommitLocked(entity.RemoteWriteLease{}, entity.RemoteTransactionOutcome{DeleteIntents: deletion{}})
+	if err != nil || len(deleted.Snapshots) != 0 || len(deleted.Invalidations) != 3 {
+		t.Fatalf("delete=%+v %v", deleted, err)
+	}
+	for _, s := range c.Snapshots {
+		found := false
+		for _, k := range deleted.Invalidations {
+			if k == s.Key {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("view not invalidated: %+v", s.Key)
+		}
+	}
+}
+
+type local struct{ *entity.EntityBase }
+
+func (e *local) Base() *entity.EntityBase { return e.EntityBase }
+
+type getter struct{ e *local }
+
+func (g getter) Get(context.Context, int64, entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	return g.e, nil
+}
+func (g getter) GetMany(context.Context, []int64, []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	return []entity.IThreadSafeEntity{g.e}, nil
+}
+
+type resolver struct{ record entity.RemoteSnapshotRecord }
+
+func (r resolver) ResolveRemoteSnapshot(a nest.RemoteAccess) (entity.RemoteSnapshot, error) {
+	if !fctx.InIOWorker() {
+		return entity.RemoteSnapshot{}, errors.New("not IO worker")
+	}
+	data, err := entity.DecodeRemoteSnapshot(entity.RemoteSnapshotEnvelope{Schema: r.record.Schema, Payload: entity.CopyFrozenRemoteSnapshotPayload(r.record.Data)})
+	return entity.RemoteSnapshot{EntityID: r.record.Key.EntityID, Kind: r.record.Key.Kind, Scope: uint64(r.record.Key.Scope), Version: r.record.StateVersion, RouteEpoch: r.record.RouteEpoch, Data: data}, err
+}
+func TestGeneratedViewThroughNest(t *testing.T) {
+	e := setup(t)
+	c := build(t, e, ^uint64(0))
+	record := viewRecord(t, c, (db.AllianceMemberSnapshot{}).RemoteScope())
+	id, err := entity.BuildEntityID(202, 238)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := nest.NewEngine(nest.NestOptionWithGetter(getter{&local{entity.NewEntityBase(id, entity.EntityCategoryOther, true)}}), nest.NestOptionWithRemoteSnapshotResolver(resolver{record}))
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Shutdown(context.Background())
+	ret, err := sender.NewNestSender(engine).Sync_ReadAlliance(context.Background(), id, requests.AllianceRead{AllianceViewRef: entity.RemoteViewRef{EntityID: e.ID(), Kind: alliance.Kind, Version: record.StateVersion, RouteEpoch: record.RouteEpoch}})
+	if err != nil || ret != 8 {
+		t.Fatalf("result=%d err=%v", ret, err)
+	}
+}

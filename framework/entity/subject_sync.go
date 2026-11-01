@@ -560,10 +560,11 @@ func (s *SubjectSyncState) prepareLocked(deltaProfiles, snapshotProfiles []SyncP
 		})
 	}
 
-	return &PreparedSubjectSync{
+	item := &PreparedSubjectSync{
 		state: s, token: token, generation: generation, baseVersion: baseVersion,
 		version: version, commitLSN: commitLSN, updates: deltas, snapshots: snapshots,
-	}, nil
+	}
+	return s.captureChangeVersion(item, packer), nil
 }
 
 func (s *SubjectSyncState) SetLastCommitLSN(lsn uint64) {
@@ -630,15 +631,17 @@ func (s *SubjectSyncState) Close() {
 }
 
 type PreparedSubjectSync struct {
-	commitLSN   uint64
-	state       *SubjectSyncState
-	token       uint64
-	generation  uint64
-	baseVersion uint64
-	version     uint64
-	updates     []SubjectSyncUpdate // deltas (or full-dirty snapshots) for the subscribers who are up to date
-	snapshots   []SubjectSyncUpdate // full snapshots for the subscribers who have nothing yet
-	finished    atomic.Uint32
+	commitLSN     uint64
+	state         *SubjectSyncState
+	token         uint64
+	generation    uint64
+	baseVersion   uint64
+	version       uint64
+	updates       []SubjectSyncUpdate // deltas (or full-dirty snapshots) for the subscribers who are up to date
+	snapshots     []SubjectSyncUpdate // full snapshots for the subscribers who have nothing yet
+	finished      atomic.Uint32
+	changeVersion uint64
+	changePacker  SubjectSyncChangePacker
 }
 
 // CommitLSN 对应本次内容捕获，包括没有接收者、没有 payload 的捕获。
@@ -779,6 +782,9 @@ func (b *PreparedSubjectSyncBatch) Commit() error {
 	for _, item := range b.items {
 		state := item.state
 		state.version = item.version
+		if item.changePacker != nil {
+			item.changePacker.AcknowledgeSubjectSyncChanges(item.changeVersion)
+		}
 		if state.dirtyGeneration == item.generation {
 			state.dirtyMask = 0
 			state.fullDirty = false

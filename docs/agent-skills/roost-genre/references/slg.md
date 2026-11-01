@@ -19,6 +19,17 @@
 | 联盟活动 | `service/activity` 协调器；demo `ActivityRunner` 是接线参考 | SLG §7.1 |
 | 跨服奖励 / 交易 | Saga 原生步骤 / effect、邮件 | SLG §8；guide/06-saga.md |
 
+### 普通 Player + Remote 联盟 View
+
+生成玩家读取联盟加成、资料等允许快照语义的功能时，使用 [Remote 指南 §6](../../../framework/guide/05-remote-mirror.md#6-普通-entity-写入--remote-view-读取) 的正式链路：请求 DTO 放在 `game/requests` 等共用包，`entity.RemoteViewRef` 字段声明 `remote:"view.XxxSnapshot,consistency=monotonic,required"`，运行 `roost generate`。访问器在请求包生成，handler 与 Sender 共用同一类型；不要把 Remote View 当成第二个可写 Entity，也不要在 handler 里直接调用 Mirror 回源。
+
+- 优先从 Mongo DAO 顶层字段声明 `remoteview:"public,member"` 生成视图，如 `db.AllianceMemberSnapshot`；请求 tag 引用生成类型，不手工复制 DTO 或另写字段映射。Snapshot 与 DAO 同包，`RegisterEntity()` 自动登记解码，提交/outbox 自动发布，删除自动失效。未标字段不进入投影；嵌套字段一旦选中，包含其全部持久字段，不能把嵌套私密信息误暴露。
+- `remoteview` 名称不授予权限；版本下限来自该视图的已知版本（首读可为 0），不使用无关字段提交后的实体全局版本。变更/删除视图定义不自动迁移或删除历史存储快照，按指南的升级边界处理。
+- 入口提供可信引用及版本，底层 I/O 池预取、业务池锁住 Player 后读取 `req.MustXxx()` 并修改 Player DAO。普通消息不必显式设置 I/O option。
+- 预取不是自动跟随 `Player.联盟ID`，handler 要校验当前归属与引用一致。视图是预取时的快照，不能授权扣联盟资源、审批成员或处理严格撤权；这些走 Remote 权威写入/拥有者命令。
+- `required` 失败不执行业务；可选视图用 `(view, ok)` 明确降级。同一消息别名唯一，异步投递后请求不可变，不把视图跨 handler 保存。缓存一致性不能描述成跨实体原子事务。
+- 新接入先跑指南的生成消费工程回归，再验证自身联盟投影/解码器和真实存储装配；本轮消费工程使用 resolver 替身，不能宣称该玩法真实跨服链路已经验收。旧 tag 工具不支持独立请求生成，必须与包含此变更的检出保持一致。
+
 ## 3. 生成最小 demo
 
 接在 SKILL.md §3.2 公共前置命令之后（已 `cd "$DIR"`）。对应 `scripts/test-slg-generated.sh` 的建造 / 行军 / 抢地部分。

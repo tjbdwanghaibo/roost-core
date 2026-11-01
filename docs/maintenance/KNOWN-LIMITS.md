@@ -231,7 +231,6 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](https://github.c
 ### Remote
 
 - **Remote WAL级Rejected处理**（`38b710a2`）：Durability 1/2/3 的正式链路不产生 Remote Rejected，strict / pipelined 的 `Commit` 失败一律带 `ErrRemotePersistenceIndeterminate`；tracker 的 Rejected 收尾只剩 Durability 0 来源。守卫 `TestWALRemoteAuthorityConflictNeverProducesRejected` 只覆盖正式 MongoStore / MongoCommitter 投影链路；自定义投影存储若产生 Rejected，strict / pipelined 仍按结果未知回复、由 finalizer 按 tracker 结论收尾（`TestRemoteWALCommitFailureNeverRepliesRemotePartRejected`）。
-- **Remote 请求 struct 与 Sender**：handler 参数用带 `remote:"..."` 字段的请求 struct 时，struct 必须留在 handler 包（访问器生成在这里），sender / syncsender 子包又看不见它，所以这种 handler 生成失败（生成器给专门报错、不建议移走类型）。维护者 2026-10-16 决定先写清限制、不改生成结构；需要时再设计让 sender 携带这种 struct，或允许单个 handler 不生成 sender。
 
 ### Saga
 

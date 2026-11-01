@@ -1,0 +1,29 @@
+package handler
+
+import (
+	"example.com/remote-test/game/requests"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+//roost:nest durability=memory
+func handlerQuery(p entity.IThreadSafeEntity, req requests.Query) (int64, error) {
+	if !fctx.InShortWorker() {
+		return 0, fmt.Errorf("handler outside short worker")
+	}
+	v := req.MustAlliance()
+	if req.Done != nil {
+		req.Done <- v.Bonus
+	}
+	return v.Bonus, nil
+}
+
+//roost:nest durability=memory
+func handlerOptional(p entity.IThreadSafeEntity, req *requests.Optional) (bool, error) {
+	_, ok := req.Alliance()
+	return ok, nil
+}
+
+//roost:nest durability=memory
+func handlerPing(p entity.IThreadSafeEntity) (int64, error) { return p.ID(), nil }

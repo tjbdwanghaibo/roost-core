@@ -232,17 +232,39 @@ func lifecycleService(manifest Manifest, requested string) string {
 
 func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]string, error) {
 	if _, enabled := manifest.Access["player"]; !enabled {
+		return nil, fmt.Errorf("endpoint requires player access")
+	}
+	if !validName(toSnake(options.Handler)) {
+		return nil, fmt.Errorf("endpoint requires --handler <protocol-controller-domain>")
+	}
+	if strings.TrimSpace(options.Lifecycle) != "" {
+		if options.NestHandler != "" {
+			return nil, fmt.Errorf("endpoint --lifecycle cannot use --nest-handler")
+		}
+		return addLifecycleEndpoint(root, manifest, options, toSnake(options.Handler))
+	}
+	changes, err := planProtocolEndpoint(root, manifest, options, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := commitSyncChanges(changes); err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(changes))
+	for _, change := range changes {
+		paths = append(paths, change.rel)
+	}
+	return paths, nil
+}
+
+// planProtocolEndpoint 只规划文件；add 与 generate 共用模板，写入沿用已有事务提交边界。
+func planProtocolEndpoint(root string, manifest Manifest, options AddOptions, refresh bool) ([]syncChange, error) {
+	if _, enabled := manifest.Access["player"]; !enabled {
 		return nil, fmt.Errorf("endpoint requires player access; run: roost add access player --service %s", lifecycleService(manifest, options.Service))
 	}
 	domain := toSnake(options.Handler)
 	if !validName(domain) {
 		return nil, fmt.Errorf("endpoint requires --handler <protocol-controller-domain>")
-	}
-	if strings.TrimSpace(options.Lifecycle) != "" {
-		if strings.TrimSpace(options.NestHandler) != "" {
-			return nil, fmt.Errorf("endpoint --lifecycle calls the Entity lifecycle, not a Nest handler; drop --nest-handler")
-		}
-		return addLifecycleEndpoint(root, manifest, options, domain)
 	}
 	protocolName := firstNonEmpty(options.Protocol, options.Name)
 	nestHandler := firstNonEmpty(options.NestHandler, options.Name)
@@ -272,16 +294,19 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 	if responseFields["code"] != "Code" || responseFields["reason"] != "Reason" {
 		return nil, fmt.Errorf("protocol %sResponse needs Code int32 and Reason string fields to answer business errors (roost add protocol creates them)", protocolType)
 	}
-	signature, err := endpointArguments(protocolPath, protocolType, handlerPath, nestType)
+	signature, err := endpointArguments(protocolPath, protocolType, handlerPath, nestType, manifest.Project.Module+protocol.PBImportSuffix)
 	if err != nil {
 		return nil, err
 	}
 	arguments, target := signature.arguments, signature.entity
 	controllerDir := filepath.Join(root, "game", "controllers", domain)
 	endpointPath := filepath.Join(controllerDir, protocolSnake+".go")
-	placeholder, err := endpointPlaceholder(root, endpointPath, "Handle"+protocolType)
-	if err != nil {
-		return nil, err
+	var placeholder []byte
+	if !refresh {
+		placeholder, err = endpointPlaceholder(root, endpointPath, "Handle"+protocolType)
+		if err != nil {
+			return nil, err
+		}
 	}
 	controllerPath := filepath.Join(controllerDir, "controller.go")
 	var controllerChange *syncChange
@@ -318,6 +343,17 @@ func addProtocolEndpoint(root string, manifest Manifest, options AddOptions) ([]
 		call = fmt.Sprintf("%s, err := sender.Sync_%s(context.Context(), %s)", strings.Join(results, ", "), nestType, callArgs)
 		useResults = fmt.Sprintf("\t// Copy what the client needs from the handler result into the response.\n\t%s = %s\n",
 			strings.TrimSuffix(strings.Repeat("_, ", len(results)), ", "), strings.Join(results, ", "))
+	}
+	returnResponse := fmt.Sprintf("return &pb.%sResponse{}, nil", protocolType)
+	if signature.response {
+		// nil,nil 不是成功响应；保留连接并返回统一内部错误，避免编码 nil 或伪造成功。
+		useResults = ""
+		returnResponse = fmt.Sprintf(`if result == nil {
+		slog.Error("%s returned a nil response", "player_id", context.PlayerID)
+		code, reason := errcode.ClientError(fmt.Errorf("nil handler response"))
+		return &pb.%sResponse{Code: code, Reason: reason}, nil
+	}
+	return result, nil`, protocolSnake, protocolType)
 	}
 	body := fmt.Sprintf(`package %s
 
@@ -360,7 +396,7 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 		}
 		return &pb.%sResponse{Code: code, Reason: reason}, nil
 	}
-%s	return &pb.%sResponse{}, nil
+%s	%s
 }
 `, domain,
 		target.alias, target.importPath,
@@ -371,24 +407,57 @@ func (controller *Controller) Handle%s(context *playeraccess.Context, request *p
 		target.alias, target.kind, protocolSnake,
 		nestSnake, nestType, call,
 		protocolSnake, protocolType,
-		useResults, protocolType)
+		useResults, returnResponse)
 	formatted, err := format.Source([]byte(body))
 	if err != nil {
 		return nil, fmt.Errorf("format endpoint scaffold: %w\n%s", err, body)
 	}
-	changes := make([]syncChange, 0, 2)
+	changes := make([]syncChange, 0, 3)
 	if controllerChange != nil {
 		changes = append(changes, *controllerChange)
 	}
-	changes = append(changes, syncChange{rel: relativeSlash(root, endpointPath), path: endpointPath, body: formatted, before: placeholder, existed: placeholder != nil})
-	if err := commitSyncChanges(changes); err != nil {
-		return nil, err
+	if signature.results == 0 || signature.response {
+		// 可机械转交的部分持续生成；业务入口只创建一次，生成器从不改它的函数体。
+		helper := strings.Replace(string(formatted), "// Handle"+protocolType, "// dispatch"+protocolType, 1)
+		helper = strings.Replace(helper, "func (controller *Controller) Handle"+protocolType+"(", "func (controller *Controller) dispatch"+protocolType+"(", 1)
+		generatedPath := filepath.Join(controllerDir, protocolSnake+"_endpoint_gen.go")
+		body := []byte(endpointGeneratedHeader + "\n" + helper)
+		before, readErr := os.ReadFile(generatedPath)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return nil, readErr
+		}
+		if readErr == nil && !bytes.HasPrefix(before, []byte(endpointGeneratedHeader+"\n")) {
+			return nil, fmt.Errorf("endpoint refuses to overwrite application file %s", generatedPath)
+		}
+		if !bytes.Equal(before, body) {
+			changes = append(changes, syncChange{rel: relativeSlash(root, generatedPath), path: generatedPath, body: body, before: before, existed: readErr == nil})
+		}
+		if !refresh {
+			wrapper, err := format.Source([]byte(fmt.Sprintf(`package %s
+import (
+ playeraccess %q
+ %q
+)
+// Handle%s 是手写接入层：可在调用前做校验和授权，不要在此持有 Entity 锁。
+// 业务拒绝应构造带错误码的响应；直接返回 error 会由接入层按分发失败处理。
+//roost:endpoint nest=%s
+func (controller *Controller) Handle%s(ctx *playeraccess.Context, req *pb.%sRequest) (*pb.%sResponse, error) {
+ return controller.dispatch%s(ctx, req)
+}
+`, domain, manifest.Project.Module+protocol.PlayerAccessImportSuffix, manifest.Project.Module+protocol.PBImportSuffix,
+				protocolType, nestType, protocolType, protocolType, protocolType, protocolType)))
+			if err != nil {
+				return nil, err
+			}
+			changes = append(changes, syncChange{rel: relativeSlash(root, endpointPath), path: endpointPath, body: wrapper, before: placeholder, existed: placeholder != nil})
+		}
+	} else {
+		if refresh {
+			return nil, fmt.Errorf("endpoint %s: handler must return no business result or *pb.%sResponse; custom result mapping belongs in an application-owned endpoint", protocolType, protocolType)
+		}
+		changes = append(changes, syncChange{rel: relativeSlash(root, endpointPath), path: endpointPath, body: formatted, before: placeholder, existed: placeholder != nil})
 	}
-	paths := []string{relativeSlash(root, endpointPath)}
-	if controllerChange != nil {
-		paths = append(paths, relativeSlash(root, controllerPath))
-	}
-	return paths, nil
+	return changes, nil
 }
 
 // addLifecycleEndpoint 生成登录边界：endpoint 经 <Entity>FromRegistry 取得实例级 lifecycle，对
@@ -577,6 +646,7 @@ type endpointEntity struct {
 type endpointSignature struct {
 	arguments []string
 	results   int
+	response  bool // 唯一业务结果是当前协议的 PB 响应指针，直接返回。
 	entity    endpointEntity
 }
 
@@ -585,7 +655,7 @@ type endpointSignature struct {
 // handler 执行时从 fctx 填这条消息冻结的业务时间，Sync_ 的签名里没有它们，骨架跳过。
 var serverBusinessTimeArguments = map[string]bool{"nowUnix": true, "nowUnixMilli": true}
 
-func endpointArguments(protocolPath, protocolType, handlerPath, handlerType string) (endpointSignature, error) {
+func endpointArguments(protocolPath, protocolType, handlerPath, handlerType, pbImport string) (endpointSignature, error) {
 	var signature endpointSignature
 	requestFields, err := protocolFieldNames(protocolPath, protocolType+"Request")
 	if err != nil {
@@ -626,6 +696,11 @@ func endpointArguments(protocolPath, protocolType, handlerPath, handlerType stri
 					}
 					continue
 				}
+				// 只接受本工程当前协议的 PB 指针；按实际 import 路径匹配，不能仅凭包别名猜测。
+				if endpointPBPointer(file, field.Type, pbImport, protocolType+"Request") {
+					signature.arguments = append(signature.arguments, "request")
+					continue
+				}
 				requestField, exists := requestFields[toSnake(parameter)]
 				if !exists {
 					return signature, fmt.Errorf("protocol %sRequest has no field matching Nest parameter %q. Add the field to the request only if the client decides this value. "+
@@ -645,9 +720,40 @@ func endpointArguments(protocolPath, protocolType, handlerPath, handlerType stri
 				signature.results--
 			}
 		}
+		if signature.results == 1 && function.Type.Results != nil {
+			signature.response = endpointPBPointer(file, function.Type.Results.List[0].Type, pbImport, protocolType+"Response")
+		}
 		return signature, nil
 	}
 	return signature, fmt.Errorf("Nest handler function handler%s not found in %s", handlerType, handlerPath)
+}
+
+// endpointPBPointer 将协议归属绑定到 import 路径，而不是 pb 别名。PB 含内部状态，不能按值复制。
+func endpointPBPointer(file *ast.File, expression ast.Expr, importPath, typeName string) bool {
+	pointer, ok := expression.(*ast.StarExpr)
+	if !ok {
+		return false
+	}
+	selector, ok := pointer.X.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != typeName {
+		return false
+	}
+	alias, ok := selector.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	for _, spec := range file.Imports {
+		imported, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || imported != importPath {
+			continue
+		}
+		name := path.Base(imported)
+		if spec.Name != nil {
+			name = spec.Name.Name
+		}
+		return name == alias.Name
+	}
+	return false
 }
 
 // endpointEntityOf resolves the handler's first parameter type, written as

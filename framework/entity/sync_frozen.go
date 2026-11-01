@@ -101,7 +101,7 @@ func (f *frozenSubjectSync) prepare(s *SubjectSyncState, token, generation, base
 		}
 	}
 	return &PreparedSubjectSync{state: s, token: token, generation: generation, baseVersion: base,
-		version: version, commitLSN: p.commitLSN, updates: updates, snapshots: snapshots}
+		version: version, commitLSN: p.commitLSN, updates: updates, snapshots: snapshots, changeVersion: p.changeVersion, changePacker: p.changePacker}
 }
 
 // DiscardFrozenSync 释放调度器停止管理的保留内容；已有交付 token 不受影响。

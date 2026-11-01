@@ -34,6 +34,7 @@ type Spec struct {
 // against these; TestEveryMarkerRefusesAMisspeltKey feeds each one a typo
 // through the generator that owns it.
 var (
+	Endpoint  = Spec{Kind: "endpoint", Keys: []string{"nest"}}
 	Nest      = Spec{Kind: "nest", Keys: []string{"rollback", "durability", "sync", "target", "targets"}, Flags: []string{"sync"}}
 	Dao       = Spec{Kind: "dao", Keys: []string{"coll", "db", "dbscope", "schema"}, Flags: []string{"nocoll"}}
 	RedisDao  = Spec{Kind: "redisdao", Keys: []string{"mode", "key", "key_type", "prefix", "version", "ttl", "name"}}
@@ -62,7 +63,7 @@ var (
 )
 
 // Specs is every marker kind that takes options.
-var Specs = []Spec{Nest, Dao, RedisDao, Attribute, Proto, Protocol, Msg, View, Table, Object, RPC, Entity, Mirror, Web, Register}
+var Specs = []Spec{Endpoint, Nest, Dao, RedisDao, Attribute, Proto, Protocol, Msg, View, Table, Object, RPC, Entity, Mirror, Web, Register}
 
 // known lists the vocabulary for error messages: keys as "key=", flags bare.
 func (s Spec) known() string {

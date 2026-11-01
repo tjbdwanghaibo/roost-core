@@ -1,0 +1,36 @@
+go: creating new go.mod: module daogoldenruntime
+go: to add module requirements and sums:
+	go mod tidy
+dao golden runtime: roost-core local /Users/whb/roost/roost-core
+ok  	daogoldenruntime/gen	0.704s
+?   	daogoldenruntime/rangecontract	[no test files]
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkSyncCollections/n=100/dense=false/replace-10         	  122604	      8228 ns/op	       816.0 wire-B/op	   13640 B/op	     134 allocs/op
+BenchmarkSyncCollections/n=100/dense=false/replace-10         	  148840	      8112 ns/op	       816.0 wire-B/op	   13640 B/op	     134 allocs/op
+BenchmarkSyncCollections/n=100/dense=false/replace-10         	  146284	      8240 ns/op	       816.0 wire-B/op	   13640 B/op	     134 allocs/op
+BenchmarkSyncCollections/n=100/dense=false/diff-10            	   42122	     28323 ns/op	        29.00 wire-B/op	   38480 B/op	     500 allocs/op
+BenchmarkSyncCollections/n=100/dense=false/diff-10            	   42475	     28305 ns/op	        29.00 wire-B/op	   38480 B/op	     500 allocs/op
+BenchmarkSyncCollections/n=100/dense=false/diff-10            	   40017	     29360 ns/op	        29.00 wire-B/op	   38480 B/op	     500 allocs/op
+BenchmarkSyncCollections/n=100/dense=true/replace-10          	  134336	      8615 ns/op	      1014 wire-B/op	   14520 B/op	     135 allocs/op
+BenchmarkSyncCollections/n=100/dense=true/replace-10          	  140605	      8545 ns/op	      1014 wire-B/op	   14520 B/op	     135 allocs/op
+BenchmarkSyncCollections/n=100/dense=true/replace-10          	  142446	      8393 ns/op	      1014 wire-B/op	   14520 B/op	     135 allocs/op
+BenchmarkSyncCollections/n=100/dense=true/diff-10             	   38800	     30974 ns/op	      1014 wire-B/op	   46008 B/op	     493 allocs/op
+BenchmarkSyncCollections/n=100/dense=true/diff-10             	   38826	     30975 ns/op	      1014 wire-B/op	   46008 B/op	     493 allocs/op
+BenchmarkSyncCollections/n=100/dense=true/diff-10             	   38809	     31526 ns/op	      1014 wire-B/op	   46008 B/op	     493 allocs/op
+BenchmarkSyncCollections/n=1000/dense=false/replace-10        	   12102	     98976 ns/op	      9761 wire-B/op	  175721 B/op	    1049 allocs/op
+BenchmarkSyncCollections/n=1000/dense=false/replace-10        	   12277	     97777 ns/op	      9761 wire-B/op	  175721 B/op	    1049 allocs/op
+BenchmarkSyncCollections/n=1000/dense=false/replace-10        	   12182	     98459 ns/op	      9761 wire-B/op	  175721 B/op	    1049 allocs/op
+BenchmarkSyncCollections/n=1000/dense=false/diff-10           	    4219	    287403 ns/op	        30.00 wire-B/op	  440100 B/op	    2356 allocs/op
+BenchmarkSyncCollections/n=1000/dense=false/diff-10           	    4176	    289181 ns/op	        30.00 wire-B/op	  440100 B/op	    2356 allocs/op
+BenchmarkSyncCollections/n=1000/dense=false/diff-10           	    4105	    286816 ns/op	        30.00 wire-B/op	  440099 B/op	    2356 allocs/op
+BenchmarkSyncCollections/n=1000/dense=true/replace-10         	   10000	    100376 ns/op	     10886 wire-B/op	  182505 B/op	    1050 allocs/op
+BenchmarkSyncCollections/n=1000/dense=true/replace-10         	   10000	    101269 ns/op	     10886 wire-B/op	  182505 B/op	    1050 allocs/op
+BenchmarkSyncCollections/n=1000/dense=true/replace-10         	   10000	    100481 ns/op	     10886 wire-B/op	  182505 B/op	    1050 allocs/op
+BenchmarkSyncCollections/n=1000/dense=true/diff-10            	    3664	    326343 ns/op	     10886 wire-B/op	  546653 B/op	    2360 allocs/op
+BenchmarkSyncCollections/n=1000/dense=true/diff-10            	    3704	    324074 ns/op	     10886 wire-B/op	  546653 B/op	    2360 allocs/op
+BenchmarkSyncCollections/n=1000/dense=true/diff-10            	    3706	    326681 ns/op	     10886 wire-B/op	  546653 B/op	    2360 allocs/op
+PASS
+ok  	daogoldenruntime/gen	28.341s

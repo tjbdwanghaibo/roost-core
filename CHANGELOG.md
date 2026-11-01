@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+- 默认生成 self_sync 改为 setter 记录变化路径：支持嵌套 struct/map/list 的类型化 PB 递归补丁，以及 list 按索引赋值；不再完整快照解码比较。变化随事务回滚、内容成功结算按版本确认，超出 4096 节点预算回退整体替换。Go/C#/native 配套原子 Apply。DAO `sync_format=3`，服务端/proto/客户端须重生成并重连，不兼容旧载荷；`.Values()` 返回 map 与 error。持久 BSON/WAL 不变。见[同步协议](docs/framework/DAO-SYNC-PROTOBUF.md)与[微基准](docs/performance/DAO-COLLECTION-SYNC.md)。
+
+- 标准 Nest endpoint 分离为手写 Controller 入口与 `*_endpoint_gen.go` 自动转交；`//roost:endpoint nest=<Handler>` 是对应关系的唯一声明，generate / --changed / --check 均接入。保留手写校验与授权，拒绝覆盖无生成头的同名文件，只清理已撤销声明的生成文件；领域结果映射和 lifecycle 仍由业务维护。生成工程真实 TCP + Sync、手写授权、重生成无漂移与冲突/退役回归通过，存储为替身。
+
+- `roost add endpoint` 支持按本工程协议类型转交 PB 请求指针、直接返回唯一 PB 响应指针，无需新增 tag 或手写逐字段转换。认证玩家目标、Nest 业务时间与统一错误映射保持不变；空响应返回内部错误，不代表事务回滚。既有手写 endpoint 不自动覆盖。用法与验收入口见 [命令参考](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#pb-请求与响应直接接入-nest)。
+
+- 新增 [Roost 标记与字段 tag 手册](codegen/docs/TAGS.zh-CN.md)，集中说明各生成器的声明位置、默认值与组合边界，区分 DAO / Entity 同名 tag、Remote 发布视图与请求预取、PB 与 RPC；补齐文档中的 Nest pipelined 选项。仅文档调整。
+
+- DAO 字段支持 `remoteview:"public,member"`：同包生成只读 Snapshot、递归深拷贝投影、独立 scope/字段形状 schema 和 BSON codec；Remote Entity 自动注册解码器、按事务 mask 将相关投影纳入既有 commit/outbox，实体删除时失效全部视图。只支持持久 Mongo DAO 顶层字段，不自动授权或兼容旧快照。需使用本次 core 与生成器重新生成 DAO 和 Entity；客户端 EntitySync 的 PB 不变。声明、升级边界和验证入口见 [Remote 指南 §6](docs/framework/guide/05-remote-mirror.md#6-普通-entity-写入--remote-view-读取)，SLG/MMORPG skill 同步更新。 已通过生成消费工程、旧 schema 拒绝、相关六包 race、全仓编译及两类玩法缺省生成验收；本轮没有真实存储/跨机验收。
+
+- Nest Remote View 请求按 DTO 声明独立生成预取声明和访问器，可放在 `game/requests` 共用包，由 handler、异步 Sender、同步 Sender 共用；修复请求类型必须留在 handler 包而 Sender 无法引用的接线缺口。重生成会移除旧 handler 文件中的访问器，统一落在 `<source>_remote_nest_gen.go`；tag 表达式引用请求字段统一使用 `req`。运行时仍由 I/O 池预取、业务池读快照，不改变 Remote 写权限或持久语义。SLG / MMORPG 游戏 skill 与 [Remote 指南](docs/framework/guide/05-remote-mirror.md#6-普通-entity-写入--remote-view-读取) 同步更新。 已通过生成器/Nest race、跨包生成消费工程实跑（race、count=2）和 SLG/MMORPG 缺省生成验收；Remote 快照使用 resolver 替身，未新增真实存储或性能验收。
+
+
 ## [v1.37.1] - 2026-11-01
 
 - 修复 RV-20261101-09：DataEngine 获得回放执行权后复查 fatal，拒绝已经排队的 Flush 和直接 ReplayPass 在致命冲突后再次调用存储；当轮成功前缀确认与临时错误重试语义不变。

@@ -44,7 +44,11 @@ func TestANoCollectionDaoReplicatesAndNeverPersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, leaked := patch.Values()["scratch"]; leaked {
+	values, err := patch.Values()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, leaked := values["scratch"]; leaked {
 		t.Fatal("a nosync field reached the sync payload")
 	}
 	mirror := NewWraithDao()

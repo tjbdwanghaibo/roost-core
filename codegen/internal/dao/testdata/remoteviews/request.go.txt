@@ -1,0 +1,12 @@
+package requests
+
+import (
+	"example.com/remoteviews/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+var _ db.AllianceMemberSnapshot
+
+type AllianceRead struct {
+	AllianceViewRef entity.RemoteViewRef `remote:"db.AllianceMemberSnapshot,required"`
+}

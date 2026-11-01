@@ -31,7 +31,7 @@ type Envelope struct {
 // stale on disk while memory shows both equal. unbindDirty
 // releases only its own binding, so a stale release from a place this value
 // has already left cannot silence the place it is in now.
-func (s *Envelope) bindDirty(owner daoDirtyOwner, notify func()) {
+func (s *Envelope) bindDirty(owner daoDirtyOwner, notify func(dataengine.SyncPath)) {
 	if s == nil {
 		return
 	}
@@ -165,6 +165,38 @@ func (s *Envelope) MarksLen() int {
 	return s.marks.Len()
 }
 
+func (s *Envelope) SetMarksKey(key int32, value []byte) { s.changeMarksKey(key, value, false) }
+func (s *Envelope) DelMarksKey(key int32)               { var zero []byte; s.changeMarksKey(key, zero, true) }
+func (s *Envelope) changeMarksKey(key int32, value []byte, remove bool) {
+	if s.marks == nil {
+		if !remove {
+			s.SetMarks(map[int32][]byte{key: value})
+		}
+		return
+	}
+	items := s.marks
+	old, existed := s.marks.Get(key)
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		if err := tx.RecordUndoToken(items, 1-1, key, func() error {
+			if existed {
+				items.Set(key, old)
+			} else {
+				items.Delete(key)
+			}
+			return nil
+		}); err != nil {
+			panic(err)
+		}
+	}
+	value = append(value[:0:0], value...)
+	if remove {
+		s.marks.Delete(key)
+	} else {
+		s.marks.Set(key, value)
+	}
+	s.MarkPath(dataengine.SyncField(1, dataengine.SyncElement(key, nil)))
+}
+
 func (s *Envelope) SetMarks(v map[int32][]byte) {
 	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
 		old := s.marks
@@ -182,5 +214,5 @@ func (s *Envelope) SetMarks(v map[int32][]byte) {
 		// Store copies: the caller keeps its slices.
 		s.marks.Set(key, append(val[:0:0], val...))
 	}
-	s.Mark()
+	s.MarkPath(dataengine.SyncField(1, nil))
 }

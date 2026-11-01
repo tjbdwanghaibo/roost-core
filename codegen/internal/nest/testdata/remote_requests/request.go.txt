@@ -1,0 +1,17 @@
+package requests
+
+import (
+	"example.com/remote-test/game/view"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+var _ view.Alliance
+
+// Query 由入口填入可信引用；两个 handler 共用同一个 DTO。
+type Query struct {
+	AllianceViewRef entity.RemoteViewRef `remote:"view.Alliance,consistency=monotonic,required"`
+	Done            chan int64
+}
+type Optional struct {
+	AllianceViewRef entity.RemoteViewRef `remote:"view.Alliance,consistency=cached"`
+}

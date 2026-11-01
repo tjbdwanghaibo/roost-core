@@ -1,0 +1,36 @@
+go: creating new go.mod: module daogoldenruntime
+go: to add module requirements and sums:
+	go mod tidy
+dao golden runtime: roost-core local /Users/whb/roost/roost-core
+ok  	daogoldenruntime/gen	0.732s
+?   	daogoldenruntime/rangecontract	[no test files]
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkTrackedSyncCollections/n100/densefalse/trackedfalse-10         	  128010	      8480 ns/op	       815.0 wire-B/op	   13624 B/op	     134 allocs/op
+BenchmarkTrackedSyncCollections/n100/densefalse/trackedfalse-10         	  138691	      8698 ns/op	       815.0 wire-B/op	   13624 B/op	     134 allocs/op
+BenchmarkTrackedSyncCollections/n100/densefalse/trackedfalse-10         	  139138	      8719 ns/op	       815.0 wire-B/op	   13624 B/op	     134 allocs/op
+BenchmarkTrackedSyncCollections/n100/densefalse/trackedtrue-10          	 1451258	       825.9 ns/op	        29.00 wire-B/op	    1752 B/op	      30 allocs/op
+BenchmarkTrackedSyncCollections/n100/densefalse/trackedtrue-10          	 1448810	       828.0 ns/op	        29.00 wire-B/op	    1752 B/op	      30 allocs/op
+BenchmarkTrackedSyncCollections/n100/densefalse/trackedtrue-10          	 1450165	       826.6 ns/op	        29.00 wire-B/op	    1752 B/op	      30 allocs/op
+BenchmarkTrackedSyncCollections/n100/densetrue/trackedfalse-10          	  137269	      8749 ns/op	       914.0 wire-B/op	   13880 B/op	     134 allocs/op
+BenchmarkTrackedSyncCollections/n100/densetrue/trackedfalse-10          	  137352	      8808 ns/op	       914.0 wire-B/op	   13880 B/op	     134 allocs/op
+BenchmarkTrackedSyncCollections/n100/densetrue/trackedfalse-10          	  136923	      8874 ns/op	       914.0 wire-B/op	   13880 B/op	     134 allocs/op
+BenchmarkTrackedSyncCollections/n100/densetrue/trackedtrue-10           	   75183	     15951 ns/op	       914.0 wire-B/op	   27368 B/op	     347 allocs/op
+BenchmarkTrackedSyncCollections/n100/densetrue/trackedtrue-10           	   75405	     15781 ns/op	       914.0 wire-B/op	   27368 B/op	     347 allocs/op
+BenchmarkTrackedSyncCollections/n100/densetrue/trackedtrue-10           	   76399	     15796 ns/op	       914.0 wire-B/op	   27368 B/op	     347 allocs/op
+BenchmarkTrackedSyncCollections/n1000/densefalse/trackedfalse-10        	   10000	    106461 ns/op	      9760 wire-B/op	  175705 B/op	    1049 allocs/op
+BenchmarkTrackedSyncCollections/n1000/densefalse/trackedfalse-10        	   10000	    106052 ns/op	      9760 wire-B/op	  175705 B/op	    1049 allocs/op
+BenchmarkTrackedSyncCollections/n1000/densefalse/trackedfalse-10        	   10000	    106636 ns/op	      9760 wire-B/op	  175705 B/op	    1049 allocs/op
+BenchmarkTrackedSyncCollections/n1000/densefalse/trackedtrue-10         	 1000000	      1015 ns/op	        30.00 wire-B/op	    1752 B/op	      30 allocs/op
+BenchmarkTrackedSyncCollections/n1000/densefalse/trackedtrue-10         	 1000000	      1022 ns/op	        30.00 wire-B/op	    1752 B/op	      30 allocs/op
+BenchmarkTrackedSyncCollections/n1000/densefalse/trackedtrue-10         	 1000000	      1030 ns/op	        30.00 wire-B/op	    1752 B/op	      30 allocs/op
+BenchmarkTrackedSyncCollections/n1000/densetrue/trackedfalse-10         	   10000	    108291 ns/op	      9886 wire-B/op	  175705 B/op	    1049 allocs/op
+BenchmarkTrackedSyncCollections/n1000/densetrue/trackedfalse-10         	   10000	    108487 ns/op	      9886 wire-B/op	  175705 B/op	    1049 allocs/op
+BenchmarkTrackedSyncCollections/n1000/densetrue/trackedfalse-10         	   10000	    107256 ns/op	      9886 wire-B/op	  175705 B/op	    1049 allocs/op
+BenchmarkTrackedSyncCollections/n1000/densetrue/trackedtrue-10          	    6318	    190970 ns/op	      9886 wire-B/op	  372186 B/op	    3066 allocs/op
+BenchmarkTrackedSyncCollections/n1000/densetrue/trackedtrue-10          	    6336	    193183 ns/op	      9886 wire-B/op	  372185 B/op	    3066 allocs/op
+BenchmarkTrackedSyncCollections/n1000/densetrue/trackedtrue-10          	    6380	    191970 ns/op	      9886 wire-B/op	  372185 B/op	    3066 allocs/op
+PASS
+ok  	daogoldenruntime/gen	27.809s

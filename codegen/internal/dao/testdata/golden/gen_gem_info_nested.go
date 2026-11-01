@@ -32,7 +32,7 @@ type GemInfo struct {
 // stale on disk while memory shows both equal. unbindDirty
 // releases only its own binding, so a stale release from a place this value
 // has already left cannot silence the place it is in now.
-func (s *GemInfo) bindDirty(owner daoDirtyOwner, notify func()) {
+func (s *GemInfo) bindDirty(owner daoDirtyOwner, notify func(dataengine.SyncPath)) {
 	if s == nil {
 		return
 	}
@@ -147,6 +147,25 @@ func (s *GemInfo) RangeSig(f func(idx int, val byte) bool) {
 
 func (s *GemInfo) SigLen() int { return len(s.sig) }
 
+func (s *GemInfo) SetSigAt(index int, v byte) bool {
+	if index < 0 || index >= len(s.sig) {
+		return false
+	}
+	items := s.sig
+	old := items[index]
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		if err := tx.RecordUndoToken(s, 3-1, &items[index], func() error {
+			items[index] = old
+			return nil
+		}); err != nil {
+			panic(err)
+		}
+	}
+	s.sig[index] = v
+	s.MarkPath(dataengine.SyncField(3, dataengine.SyncElement(index, nil)))
+	return true
+}
+
 // GetSigAll returns a copy of the whole byte slice (nil when empty), the
 // read side of SetSig. Changing the copy does not change the struct: a
 // change must go through the setter so it is marked dirty and rolls back.
@@ -168,7 +187,7 @@ func (s *GemInfo) SetID(v int32) {
 	}
 	if s.id != v {
 		s.id = v
-		s.Mark()
+		s.MarkPath(dataengine.SyncField(1, nil))
 	}
 }
 
@@ -186,7 +205,7 @@ func (s *GemInfo) SetLevel(v int32) {
 	}
 	if s.level != v {
 		s.level = v
-		s.Mark()
+		s.MarkPath(dataengine.SyncField(2, nil))
 	}
 }
 
@@ -203,5 +222,5 @@ func (s *GemInfo) SetSig(v []byte) {
 		}
 	}
 	s.sig = append([]byte(nil), v...)
-	s.Mark()
+	s.MarkPath(dataengine.SyncField(3, nil))
 }

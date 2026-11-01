@@ -36,7 +36,7 @@ type EquipInfo struct {
 // stale on disk while memory shows both equal. unbindDirty
 // releases only its own binding, so a stale release from a place this value
 // has already left cannot silence the place it is in now.
-func (s *EquipInfo) bindDirty(owner daoDirtyOwner, notify func()) {
+func (s *EquipInfo) bindDirty(owner daoDirtyOwner, notify func(dataengine.SyncPath)) {
 	if s == nil {
 		return
 	}
@@ -179,7 +179,7 @@ func (s *EquipInfo) bindGems() {
 	}
 	s.gems.Range(func(key int32, val *GemInfo) bool {
 		if val != nil {
-			val.bindDirty(daoDirtyOwner{holder: s, field: 3, key: key}, s.Mark)
+			val.bindDirty(daoDirtyOwner{holder: s, field: 3, key: key}, func(path dataengine.SyncPath) { s.MarkPath(dataengine.SyncField(3, dataengine.SyncElement(key, path))) })
 		}
 		return true
 	})
@@ -208,7 +208,9 @@ func (s *EquipInfo) unbindGems() {
 func (s *EquipInfo) bindRunes() {
 	for index, val := range s.runes {
 		if val != nil {
-			val.bindDirty(daoDirtyOwner{holder: s, field: 4, key: index}, s.Mark)
+			val.bindDirty(daoDirtyOwner{holder: s, field: 4, key: index}, func(path dataengine.SyncPath) {
+				s.MarkPath(dataengine.SyncField(4, dataengine.SyncElement(index, path)))
+			})
 		}
 	}
 }
@@ -231,7 +233,7 @@ func (s *EquipInfo) unbindRunes() {
 // "which children the field holds".
 func (s *EquipInfo) bindCore() {
 	if s.core != nil {
-		s.core.bindDirty(daoDirtyOwner{holder: s, field: 5}, s.Mark)
+		s.core.bindDirty(daoDirtyOwner{holder: s, field: 5}, func(path dataengine.SyncPath) { s.MarkPath(dataengine.SyncField(5, path)) })
 	}
 }
 
@@ -250,7 +252,7 @@ func (s *EquipInfo) unbindCore() {
 // what it ends up with, so "which children notify this struct" always equals
 // "which children the field holds".
 func (s *EquipInfo) bindShape() {
-	s.shape.bindDirty(daoDirtyOwner{holder: s, field: 6}, s.Mark)
+	s.shape.bindDirty(daoDirtyOwner{holder: s, field: 6}, func(path dataengine.SyncPath) { s.MarkPath(dataengine.SyncField(6, path)) })
 }
 
 func (s *EquipInfo) GetLevel() int32 { return s.level }
@@ -279,6 +281,45 @@ func (s *EquipInfo) GemsLen() int {
 	return s.gems.Len()
 }
 
+func (s *EquipInfo) SetGemsKey(key int32, value *GemInfo) { s.changeGemsKey(key, value, false) }
+func (s *EquipInfo) DelGemsKey(key int32)                 { var zero *GemInfo; s.changeGemsKey(key, zero, true) }
+func (s *EquipInfo) changeGemsKey(key int32, value *GemInfo, remove bool) {
+	if s.gems == nil {
+		if !remove {
+			s.SetGems(map[int32]*GemInfo{key: value})
+		}
+		return
+	}
+	items := s.gems
+	old, existed := s.gems.Get(key)
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		if err := tx.RecordUndoToken(items, 3-1, key, func() error {
+			s.unbindGems()
+			if existed {
+				items.Set(key, old)
+			} else {
+				items.Delete(key)
+			}
+			s.bindGems()
+			return nil
+		}); err != nil {
+			panic(err)
+		}
+	}
+	if old != nil {
+		old.unbindDirty(daoDirtyOwner{holder: s, field: 3, key: key})
+	}
+	if remove {
+		s.gems.Delete(key)
+	} else {
+		s.gems.Set(key, value)
+	}
+	if !remove && value != nil {
+		value.bindDirty(daoDirtyOwner{holder: s, field: 3, key: key}, func(path dataengine.SyncPath) { s.MarkPath(dataengine.SyncField(3, dataengine.SyncElement(key, path))) })
+	}
+	s.MarkPath(dataengine.SyncField(3, dataengine.SyncElement(key, nil)))
+}
+
 func (s *EquipInfo) GetRunes(idx int) (*GemInfo, bool) {
 	if idx < 0 || idx >= len(s.runes) {
 		var zero *GemInfo
@@ -300,6 +341,35 @@ func (s *EquipInfo) RangeRunes(f func(idx int, val *GemInfo) bool) {
 
 func (s *EquipInfo) RunesLen() int { return len(s.runes) }
 
+func (s *EquipInfo) SetRunesAt(index int, v *GemInfo) bool {
+	if index < 0 || index >= len(s.runes) {
+		return false
+	}
+	items := s.runes
+	old := items[index]
+	if tx := nest.CurrentRollbackTx(); tx != nil && tx.Policy() == nest.RollbackUndo {
+		if err := tx.RecordUndoToken(s, 4-1, &items[index], func() error {
+			s.unbindRunes()
+			items[index] = old
+			s.bindRunes()
+			return nil
+		}); err != nil {
+			panic(err)
+		}
+	}
+	if old != nil {
+		old.unbindDirty(daoDirtyOwner{holder: s, field: 4, key: index})
+	}
+	s.runes[index] = v
+	if v != nil {
+		v.bindDirty(daoDirtyOwner{holder: s, field: 4, key: index}, func(path dataengine.SyncPath) {
+			s.MarkPath(dataengine.SyncField(4, dataengine.SyncElement(index, path)))
+		})
+	}
+	s.MarkPath(dataengine.SyncField(4, dataengine.SyncElement(index, nil)))
+	return true
+}
+
 func (s *EquipInfo) GetCore() *GemInfo { return s.core }
 
 func (s *EquipInfo) GetShape() *Position { return &s.shape }
@@ -318,7 +388,7 @@ func (s *EquipInfo) SetLevel(v int32) {
 	}
 	if s.level != v {
 		s.level = v
-		s.Mark()
+		s.MarkPath(dataengine.SyncField(1, nil))
 	}
 }
 
@@ -336,7 +406,7 @@ func (s *EquipInfo) SetStar(v int32) {
 	}
 	if s.star != v {
 		s.star = v
-		s.Mark()
+		s.MarkPath(dataengine.SyncField(2, nil))
 	}
 }
 
@@ -364,7 +434,7 @@ func (s *EquipInfo) SetGems(v map[int32]*GemInfo) {
 		s.gems.Set(key, val)
 	}
 	s.bindGems()
-	s.Mark()
+	s.MarkPath(dataengine.SyncField(3, nil))
 }
 
 func (s *EquipInfo) SetRunes(v []*GemInfo) {
@@ -386,7 +456,7 @@ func (s *EquipInfo) SetRunes(v []*GemInfo) {
 	s.unbindRunes()
 	s.runes = append([]*GemInfo(nil), v...)
 	s.bindRunes()
-	s.Mark()
+	s.MarkPath(dataengine.SyncField(4, nil))
 }
 
 func (s *EquipInfo) SetCore(v *GemInfo) {
@@ -408,7 +478,7 @@ func (s *EquipInfo) SetCore(v *GemInfo) {
 	s.unbindCore()
 	s.core = v
 	s.bindCore()
-	s.Mark()
+	s.MarkPath(dataengine.SyncField(5, nil))
 }
 
 func (s *EquipInfo) SetShape(v Position) {
@@ -426,5 +496,5 @@ func (s *EquipInfo) SetShape(v Position) {
 	}
 	s.shape = v
 	s.bindShape()
-	s.Mark()
+	s.MarkPath(dataengine.SyncField(6, nil))
 }

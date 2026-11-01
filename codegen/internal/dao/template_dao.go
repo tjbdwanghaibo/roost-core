@@ -118,21 +118,23 @@ const (
 )
 
 {{range .Dao.Fields}}
-func (d *{{$.Dao.Name}}) mark{{.Name}}Dirty() {
+func (d *{{$.Dao.Name}}) mark{{.Name}}Dirty() {d.mark{{.Name}}Change(nil)}
+func (d *{{$.Dao.Name}}) mark{{.Name}}Change(path dataengine.SyncPath) {
 	{{- if .Tag.Persist}}
 	if err := nest.MarkPersist(d, {{fieldMaskName $.Dao.Name .Name}}); err != nil {
 		panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} persistence: %w", err))
 	}
 	{{- end}}
 	{{- if .Tag.Sync}}
-	d.tracker.MarkSync({{fieldMaskName $.Dao.Name .Name}})
+	d.tracker.MarkSyncPath({{fieldMaskName $.Dao.Name .Name}},dataengine.SyncField({{syncFieldNumber $.Dao .Name}},path))
 	{{- end}}
 }
 {{end}}
 
 {{range .Dao.Fields}}
 {{- if eq .Kind 2}}
-func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDirty(key {{.MapKey}}, val {{mapValType .}}) {
+func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDirty(key {{.MapKey}}, val {{mapValType .}}) {d.mark{{.Name}}KeyChange(key,val,nil)}
+func (d *{{$.Dao.Name}}) mark{{.Name}}KeyChange(key {{.MapKey}}, val {{mapValType .}}, path dataengine.SyncPath) {
 	{{- if .Tag.Persist}}
 	if path, ok := dataengine.MapPatchPath("{{.Key}}", key); ok {
 		if err := nest.MarkPersistSet(d, {{fieldMaskName $.Dao.Name .Name}}, path, val); err != nil {
@@ -145,7 +147,7 @@ func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDirty(key {{.MapKey}}, val {{mapValType
 	}
 	{{- end}}
 	{{- if .Tag.Sync}}
-	d.tracker.MarkSync({{fieldMaskName $.Dao.Name .Name}})
+	d.tracker.MarkSyncPath({{fieldMaskName $.Dao.Name .Name}},dataengine.SyncField({{syncFieldNumber $.Dao .Name}},dataengine.SyncElement(key,path)))
 	{{- end}}
 }
 
@@ -162,7 +164,7 @@ func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDeleted(key {{.MapKey}}) {
 	}
 	{{- end}}
 	{{- if .Tag.Sync}}
-	d.tracker.MarkSync({{fieldMaskName $.Dao.Name .Name}})
+	d.tracker.MarkSyncPath({{fieldMaskName $.Dao.Name .Name}},dataengine.SyncField({{syncFieldNumber $.Dao .Name}},dataengine.SyncElement(key,nil)))
 	{{- end}}
 }
 {{end}}
@@ -176,7 +178,7 @@ func (d *{{.Dao.Name}}) Init() {
 	{{- if .IsPtr}}
 	d.bind{{.Name}}()
 	{{- else}}
-	d.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}}, d.mark{{.Name}}Dirty)
+	d.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}}, d.mark{{.Name}}Change)
 	{{- end}}
 {{- end}}
 {{- end}}
@@ -275,7 +277,7 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 // invariant nested containers and top-level maps and slices keep.
 func (d *{{$.Dao.Name}}) bind{{.Name}}() {
 	if d.{{fieldVar .Name}} != nil {
-		d.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}}, d.mark{{.Name}}Dirty)
+		d.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}}, d.mark{{.Name}}Change)
 	}
 }
 
@@ -299,7 +301,7 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 {{- else}}
 			d.{{fieldVar .Name}} = old
 {{- if isNested .TypeStr}}
-			d.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}}, d.mark{{.Name}}Dirty)
+			d.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}}, d.mark{{.Name}}Change)
 {{- end}}
 {{- end}}
 			return nil
@@ -312,7 +314,7 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(v {{.TypeStr}}) {
 {{- else}}
 	d.{{fieldVar .Name}} = v
 {{- if isNested .TypeStr}}
-	d.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}}, d.mark{{.Name}}Dirty)
+	d.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}}, d.mark{{.Name}}Change)
 {{- end}}
 {{- end}}
 	d.mark{{.Name}}Dirty()
@@ -348,7 +350,7 @@ func (d *{{$.Dao.Name}}) Get{{.Name}}(key {{.MapKey}}) ({{if .IsPtr}}*{{.MapVal}
 func (d *{{$.Dao.Name}}) bind{{.Name}}Value(key {{.MapKey}}, val {{mapValType .}}) {
 	if val != nil {
 		val.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}, key: key},
-			func() { d.mark{{.Name}}KeyDirty(key, val) })
+			func(path dataengine.SyncPath) { d.mark{{.Name}}KeyChange(key, val,path) })
 	}
 }
 
@@ -450,7 +452,7 @@ func (d *{{$.Dao.Name}}) {{.Name}}Len() int {
 func (d *{{$.Dao.Name}}) bind{{.Name}}Items() {
 	for index, item := range d.{{fieldVar .Name}} {
 		if item != nil {
-			item.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}, key: index}, d.mark{{.Name}}Dirty)
+			item.bindDirty(daoDirtyOwner{holder: d, field: {{fieldMaskName $.Dao.Name .Name}}, key: index}, func(path dataengine.SyncPath){d.mark{{.Name}}Change(dataengine.SyncElement(index,path))})
 		}
 	}
 }
@@ -482,7 +484,35 @@ func (d *{{$.Dao.Name}}) Add{{.Name}}(v {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.S
 {{- if and .IsPtr (isNested .SliceElem)}}
 	d.bind{{.Name}}Items()
 {{- end}}
-	d.mark{{.Name}}Dirty()
+	d.mark{{.Name}}Change(dataengine.SyncElement(len(d.{{fieldVar .Name}})-1,nil))
+}
+
+// Set{{.Name}}At 更新一个现有索引；不移动其他元素，变化可安全合并与重试。
+func (d *{{$.Dao.Name}}) Set{{.Name}}At(index int,v {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.SliceElem}}{{end}})bool {
+ if index<0||index>=len(d.{{fieldVar .Name}}){return false}
+ items:=d.{{fieldVar .Name}}
+ old:=items[index]
+ if tx:=nest.CurrentRollbackTx();tx!=nil&&tx.Policy()==nest.RollbackUndo {
+  d.recordUndoToken(tx,{{fieldMaskName $.Dao.Name .Name}},&items[index],func()error{
+   // 保存具体的 backing array；后续 SetAll/缩短不能改变逆操作目标。
+{{- if and .IsPtr (isNested .SliceElem)}}
+   d.unbind{{.Name}}Items()
+{{- end}}
+   items[index]=old
+{{- if and .IsPtr (isNested .SliceElem)}}
+   d.bind{{.Name}}Items()
+{{- end}}
+   return nil
+  })
+ }
+{{- if and .IsPtr (isNested .SliceElem)}}
+ if old!=nil{old.unbindDirty(daoDirtyOwner{holder:d,field:{{fieldMaskName $.Dao.Name .Name}},key:index})}
+{{- end}}
+ d.{{fieldVar .Name}}[index]=v
+{{- if and .IsPtr (isNested .SliceElem)}}
+ if v!=nil{v.bindDirty(daoDirtyOwner{holder:d,field:{{fieldMaskName $.Dao.Name .Name}},key:index},func(path dataengine.SyncPath){d.mark{{.Name}}Change(dataengine.SyncElement(index,path))})}
+{{- end}}
+ d.mark{{.Name}}Change(dataengine.SyncElement(index,nil));return true
 }
 
 func (d *{{$.Dao.Name}}) Set{{.Name}}All(v {{.TypeStr}}) {

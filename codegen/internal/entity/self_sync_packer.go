@@ -274,11 +274,24 @@ func (packer {{.Lower}}SelfSyncPacker) PackSubjectSnapshot(profile entity.SyncPr
 }
 
 func (packer {{.Lower}}SelfSyncPacker) PackSubjectDelta(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
-	return packer.pack(profile, mask)
+ return packer.packChanges(profile,mask)
+}
+func (packer {{.Lower}}SelfSyncPacker) SubjectSyncChangeVersion() uint64 {
+ if packer.owner == nil { return 0 }
+ if dao := packer.owner.{{.DaoGetter}}(); dao != nil { return dao.DirtyTracker().SyncChangeVersion() }
+ return 0
+}
+func (packer {{.Lower}}SelfSyncPacker) AcknowledgeSubjectSyncChanges(version uint64) {
+ if packer.owner == nil { return }
+ if dao := packer.owner.{{.DaoGetter}}(); dao != nil { dao.DirtyTracker().AcknowledgeSyncChanges(version) }
+}
+func (packer {{.Lower}}SelfSyncPacker) packChanges(profile entity.SyncProfile,mask uint64)(entity.FrozenSyncPayload,error){
+ return packer.packPayload(profile,mask,true)
 }
 
 // pack 只交出视图允许的字段；未知视图返回 entity.ErrSyncViewUnknown，不扩大字段权限。
-func (packer {{.Lower}}SelfSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+func (packer {{.Lower}}SelfSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {return packer.packPayload(profile,mask,false)}
+func (packer {{.Lower}}SelfSyncPacker) packPayload(profile entity.SyncProfile,mask uint64,changes bool)(entity.FrozenSyncPayload,error){
 	if {{.Lower}}SelfSyncViewsErr != nil {
 		return entity.FrozenSyncPayload{}, fmt.Errorf("{{.Lower}} self_sync packer: %w", {{.Lower}}SelfSyncViewsErr)
 	}
@@ -296,7 +309,8 @@ func (packer {{.Lower}}SelfSyncPacker) pack(profile entity.SyncProfile, mask uin
 	if dao == nil {
 		return entity.FrozenSyncPayload{}, nil
 	}
-	raw := dao.MarshalSync(mask)
+	var raw []byte
+ if tracked,ok:=any(dao).(interface{MarshalSyncChanges(uint64)[]byte});changes&&ok{raw=tracked.MarshalSyncChanges(mask)}else{raw=dao.MarshalSync(mask)}
 	if len(raw) == 0 {
 		return entity.FrozenSyncPayload{}, nil
 	}

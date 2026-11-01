@@ -1,0 +1,18 @@
+go: creating new go.mod: module daogoldenruntime
+go: to add module requirements and sums:
+	go mod tidy
+dao golden runtime: roost-core local /Users/whb/roost/roost-core
+ok  	daogoldenruntime/gen	0.563s
+?   	daogoldenruntime/rangecontract	[no test files]
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkTrackedSyncMutation/n1000/trackedfalse-10         	    7284	    145322 ns/op	      9760 wire-B/op	  257975 B/op	    1127 allocs/op
+BenchmarkTrackedSyncMutation/n1000/trackedfalse-10         	    8148	    145290 ns/op	      9760 wire-B/op	  257745 B/op	    1127 allocs/op
+BenchmarkTrackedSyncMutation/n1000/trackedfalse-10         	    8150	    143857 ns/op	      9760 wire-B/op	  257908 B/op	    1127 allocs/op
+BenchmarkTrackedSyncMutation/n1000/trackedtrue-10          	   35443	     33935 ns/op	        32.00 wire-B/op	   75712 B/op	      94 allocs/op
+BenchmarkTrackedSyncMutation/n1000/trackedtrue-10          	   35217	     34095 ns/op	        32.00 wire-B/op	   75708 B/op	      94 allocs/op
+BenchmarkTrackedSyncMutation/n1000/trackedtrue-10          	   34588	     34549 ns/op	        32.00 wire-B/op	   75714 B/op	      94 allocs/op
+PASS
+ok  	daogoldenruntime/gen	7.348s

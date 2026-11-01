@@ -1,0 +1,135 @@
+package handler_test
+
+import (
+	"context"
+	"errors"
+	"example.com/remote-test/game/handler"
+	sender "example.com/remote-test/game/handler/sender"
+	syncsender "example.com/remote-test/game/handler/syncsender"
+	"example.com/remote-test/game/requests"
+	"example.com/remote-test/game/view"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"sync"
+	"testing"
+	"time"
+)
+
+type localEntity struct{ *entity.EntityBase }
+
+func (e *localEntity) Base() *entity.EntityBase { return e.EntityBase }
+
+type getter map[int64]entity.IThreadSafeEntity
+
+func (g getter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	return g[id], nil
+}
+func (g getter) GetMany(_ context.Context, ids []int64, _ []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	es := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		es[i] = g[id]
+	}
+	return es, nil
+}
+
+var unavailable = errors.New("view unavailable")
+
+type resolver struct {
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (r *resolver) ResolveRemoteSnapshot(a nest.RemoteAccess) (entity.RemoteSnapshot, error) {
+	if !fctx.InIOWorker() {
+		return entity.RemoteSnapshot{}, errors.New("resolver outside IO worker")
+	}
+	if a.Ref.Version == 99 {
+		return entity.RemoteSnapshot{}, unavailable
+	}
+	if a.Ref.Version == 1 {
+		r.once.Do(func() { close(r.entered) })
+		<-r.release
+	}
+	return entity.RemoteSnapshot{EntityID: a.Ref.EntityID, Kind: a.Ref.Kind, Scope: a.Scope, RouteEpoch: a.Ref.RouteEpoch, Version: a.Ref.Version, Data: view.Alliance{Bonus: 42}}, nil
+}
+func TestGeneratedRemoteView(t *testing.T) {
+	// 独立消费工程只在此用例注册 kind；多次运行复用注册和 handler。
+	register.Do(func() {
+		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{Category: entity.EntityCategoryOther, Kind: 240, NoPersist: true, Builder: func(*entity.EntityCreateParam) (entity.IThreadSafeEntity, error) { return nil, nil }})
+		entity.RegisterEntityBuilder(&entity.EntityBuilderParam{Category: entity.EntityCategoryRemote, Kind: 241, RemotePolicy: entity.RemotePolicyManaged, Lifetime: entity.EntityLifetimeRemoteManaged, NoPersist: true, Builder: func(*entity.EntityCreateParam) (entity.IThreadSafeEntity, error) { return nil, nil }})
+		handler.RegisterHandlerNestHandlers()
+		handler.RegisterSecondNestHandlers()
+	})
+	id, err := entity.BuildEntityID(100, 240)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id2, err := entity.BuildEntityID(101, 240)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := getter{id: &localEntity{entity.NewEntityBase(id, entity.EntityCategoryOther, true)}, id2: &localEntity{entity.NewEntityBase(id2, entity.EntityCategoryOther, true)}}
+	r := &resolver{entered: make(chan struct{}), release: make(chan struct{})}
+	var unblock sync.Once
+	defer unblock.Do(func() { close(r.release) })
+	engine := nest.NewEngine(nest.NestOptionWithGetter(g), nest.NestOptionWithRemoteSnapshotResolver(r), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 32}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 32}))
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Shutdown(context.Background())
+	// 失败退出也先解除 resolver，防止 StopNest 等待它。
+	defer unblock.Do(func() { close(r.release) })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	syncClient := syncsender.NewNestSender(engine)
+	asyncClient := sender.NewNestSender(engine)
+	remoteID, err := entity.BuildEntityID(102, 241)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := entity.RemoteViewRef{EntityID: remoteID, Kind: 241, Version: 1}
+	done := make(chan int64, 1)
+	if err := asyncClient.Send_Query(ctx, id, requests.Query{AllianceViewRef: ref, Done: done}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-r.entered:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	// 唯一 I/O worker 正在等；唯一业务 worker 仍可处理另一 ID。
+	if got, err := syncClient.Sync_Ping(ctx, id2); err != nil || got != id2 {
+		t.Fatalf("local ping: %d %v", got, err)
+	}
+	unblock.Do(func() { close(r.release) })
+	select {
+	case got := <-done:
+		if got != 42 {
+			t.Fatal(got)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	ref.Version = 2
+	if got, err := syncClient.Sync_Query(ctx, id, requests.Query{AllianceViewRef: ref}); err != nil || got != 42 {
+		t.Fatalf("query: %d %v", got, err)
+	}
+	if got, err := syncsender.NewSecondSender(engine).Sync_Second(ctx, id, &requests.Query{AllianceViewRef: ref}); err != nil || got != 42 {
+		t.Fatalf("shared request: %d %v", got, err)
+	}
+	ref.Version = 99
+	if _, err := syncClient.Sync_Query(ctx, id, requests.Query{AllianceViewRef: ref, Done: done}); !errors.Is(err, unavailable) {
+		t.Fatalf("required: %v", err)
+	}
+	select {
+	case <-done:
+		t.Fatal("required failure ran handler")
+	default:
+	}
+	if ok, err := syncClient.Sync_Optional(ctx, id, &requests.Optional{AllianceViewRef: ref}); err != nil || ok {
+		t.Fatalf("optional: %v %v", ok, err)
+	}
+}
+
+var register sync.Once

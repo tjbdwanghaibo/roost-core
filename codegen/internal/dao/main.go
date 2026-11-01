@@ -107,6 +107,18 @@ func Run(args []string, stdout io.Writer) error {
 		}
 	}
 
+	// 字段视图与 DAO 同包，读侧无需依赖权威实体包；一次生成全部投影和深拷贝函数。
+	viewCode, err := buildRemoteViews(defs, *pkg)
+	if err != nil {
+		return fmt.Errorf("generate remote views: %w", err)
+	}
+	if len(viewCode) > 0 {
+		expected[remoteViewsFileName] = true
+		if _, err := writeIfChanged(viewCode, filepath.Join(absOutDir, remoteViewsFileName), *force); err != nil {
+			return err
+		}
+	}
+
 	// 同步协议与 Go codec 同时生成，单一 DAO 定义决定字段与类型。
 	syncGo, syncProto, err := buildSyncSchema(defs, *pkg)
 	if err != nil {
@@ -229,7 +241,7 @@ func removeOrphanGenerated(dir string, expected map[string]bool) ([]string, erro
 		if entry.IsDir() || expected[name] || (!strings.HasPrefix(name, "gen_") && name != "dao_sync.proto" && name != "dao_sync_apply.cs") {
 			continue
 		}
-		if !strings.HasSuffix(name, "_dao.go") && !strings.HasSuffix(name, "_nested.go") && name != databasesFileName && name != "gen_dao_sync.go" && name != "dao_sync.proto" && name != "dao_sync_apply.cs" {
+		if !strings.HasSuffix(name, "_dao.go") && !strings.HasSuffix(name, "_nested.go") && name != remoteViewsFileName && name != databasesFileName && name != "gen_dao_sync.go" && name != "dao_sync.proto" && name != "dao_sync_apply.cs" {
 			continue
 		}
 		path := filepath.Join(dir, name)

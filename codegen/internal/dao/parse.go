@@ -78,6 +78,7 @@ type FieldDef struct {
 	KeyDeclared bool
 	BSONOptions []string
 	BSONSkip    bool
+	RemoteViews []string // 顶层字段所属的 Remote 只读投影，未声明不发布。
 }
 
 // OmitEmpty 报告字段的 bson 标签带 omitempty：生成的文档结构体照样带上，整文档写入时零值不写出。
@@ -518,6 +519,13 @@ func extractFieldDefs(st *ast.StructType) ([]FieldDef, error) {
 	var fields []FieldDef
 
 	for _, field := range st.Fields.List {
+		views, err := parseRemoteViewTag(field.Tag)
+		if err != nil {
+			return nil, err
+		}
+		if len(views) > 0 && (len(field.Names) != 1 || !ast.IsExported(field.Names[0].Name)) {
+			return nil, fmt.Errorf("remoteview requires one exported named field")
+		}
 		if len(field.Names) == 0 {
 			continue // embedded (e.g. dataengine.DirtyHook), skip
 		}
@@ -535,13 +543,17 @@ func extractFieldDefs(st *ast.StructType) ([]FieldDef, error) {
 		}
 
 		if tag.Skip {
+			if len(views) > 0 {
+				return nil, fmt.Errorf("field %s: remoteview cannot be combined with dao:\"-\"", name)
+			}
 			continue
 		}
 
 		fd := FieldDef{
-			Name:    name,
-			TypeStr: typeStr,
-			Tag:     tag,
+			Name:        name,
+			TypeStr:     typeStr,
+			Tag:         tag,
+			RemoteViews: views,
 		}
 		applyBSONTag(&fd, field.Tag)
 

@@ -2,6 +2,8 @@
 
 本文是 `roost` 命令、全部生成器的标记 / tag / 参数与用例的参考。业务项目默认由 Makefile/CI 调用 `@latest` 的 `roost`，独立命令主要用于调试或只采用部分框架能力的仓库。
 
+只查标记写法时先读 [标记与字段 tag 手册](TAGS.zh-CN.md)，按声明位置区分 DAO / Entity / Nest / PB 等同名 tag。
+
 同组文档的分工：[README](../README.md) 是入口与快速上手；[项目生成器](PROJECT_GENERATOR.zh-CN.md) 讲工程生成、`roost.yaml`、Mod 装配、升级与部署生成物；[实现与维护](../../docs/framework/impl/12-codegen.md) 讲生成器的实现与必须保持的不变量。本文只写"怎么写、怎么调用、会被怎样拒绝"。
 
 ```bash
@@ -245,6 +247,73 @@ PlayerSelfSync.EntitySyncSetup())`、`accessplayertcp.NewMod().WithSelfSync(Play
 `PlayerSelfSync` 的 `Config.Groups`。实体标记要 `sync=true`；generate / doctor 检查实体存在、标记、声明文件。成员关系由业务 handler
 调 `SyncGroup.Join / Leave / Disband`（事务内提交后生效），生成器不出成员规则。回归 `TestSyncGroups*`（self_sync_test.go）；
 运行时契约见 [ENTITY_SYNC 按组同步](../../docs/framework/ENTITY_SYNC.md#按组同步与-self_sync-共用连接groups)。
+
+### PB 请求与响应直接接入 Nest
+
+单玩家协议可以直接把 PB 指针作为 handler 的业务参数 / 返回值，不必逐字段拆请求或在 Controller 再复制响应。PB 转交按类型识别；`roost add endpoint` 按本工程 PB import 路径和当前协议类型识别，import 别名不受限制。
+
+```go
+// game/handler/add_gold.go（player、pb 分别导入本工程的实体和协议包）
+//roost:nest rollback=undo durability=strict
+func handlerAddGold(target player.IWalletEntity, request *pb.AddGoldRequest) (*pb.AddGoldResponse, error) {
+    if err := target.WalletComp().AddGold(request.Amount); err != nil {
+        return nil, err
+    }
+    return &pb.AddGoldResponse{Gold: target.WalletComp().Gold()}, nil
+}
+```
+
+先通过 `roost add protocol AddGold --group game --handler player` 建协议，在 Request 声明 Amount，在 Response 保留 Code / Reason 并添加 Gold；用 `roost add handler AddGold --entity Player --component Wallet` 建 handler 后改成上述签名，再运行：
+
+```sh
+roost add endpoint AddGold --handler player
+roost generate
+```
+
+组件的 AddGold / Gold 是业务方法，仍由业务实现；DAO setter、提交和 EntitySync 收集方式不变。生成 endpoint 负责：从认证 `context.PlayerID` 构造目标 ID → 调用同步 Sender → 映射错误 → 返回 handler 的 PB 响应。无需自己写转换代码，新增 PB 业务字段也不需要再改这层转交。
+
+边界：
+
+- 仅匹配本工程当前协议的 `*pb.<Protocol>Request` / `*pb.<Protocol>Response`，不按同名类型猜测、不按值复制。直接返回响应要求它是唯一的非 error 结果；其他结果仍由业务显式映射。
+- 原有普通参数按请求字段名映射仍可使用。`nowUnix` / `nowUnixMilli` 仍由 Nest 注入，endpoint 不读取客户端时间。多实体目标、非认证玩家目标及自定义授权仍手写边界。
+- PB 数据全部是不可信输入；传入整个请求不表示请求中的 PlayerID 是认证身份，不得据此绕过权限校验或替换锁目标。
+- handler 返回 error 时沿用统一错误响应，即使同时返回了 PB 结果也不发送该结果。返回 `nil, nil` 会记录并回答内部错误，不关闭连接；它发生在 Nest 完成之后，**不表示提交被撤销**，调用方不能盲重试。
+- 请求仅在本次处理期间读取，不保存进 Entity、不交给后台任务；响应新建并由回复链路持有，不暴露 DAO 的可变 map / slice。希望领域层不依赖 PB 时保留普通参数 / 领域 DTO 写法。
+- 对无业务返回值或唯一 PB 响应的 handler，endpoint 分为手写入口与持续生成的转交文件，见下节。自定义领域返回值仍创建一次业务骨架，由业务补映射，不生成受管转交。已有手写 endpoint 不自动改写；只有未编辑的协议占位可由 `add endpoint` 接管。
+
+验证入口：`go test ./codegen/internal/roost -run 'TestEndpoint|TestAddEndpoint|TestSelfSyncGeneratedProjectOverRealTCP' -count=1`。真实 TCP 夹具覆盖请求 / 响应、错误与空响应、认证目标、DAO 写入、Sync 增量及重连全量；持久提交器是替身，不代表真实数据库验收。 2026-11-01 在 macOS 实跑通过（默认 / 自定义 packer 两轮均含生成工程 build、vet、race；另通过 endpoint 定向测试 count=2、全仓编译和根包检查）。
+
+### Controller 手写入口与自动转交分离
+
+新建的标准 Nest endpoint 保持同一个包，不加 manager / interface 层：
+
+```text
+game/controllers/player/
+├── controller.go              # 业务所有：依赖注入
+├── add_gold.go                # 业务所有：接入校验、授权、调用转交
+└── add_gold_endpoint_gen.go   # 生成器所有：Nest Sender、响应和错误映射
+```
+
+`roost add endpoint AddGold --handler player` 创建的手写入口：
+
+```go
+//roost:endpoint nest=AddGold
+func (controller *Controller) HandleAddGold(ctx *playeraccess.Context, req *pb.AddGoldRequest) (*pb.AddGoldResponse, error) {
+    // 可以在这里添加会话级校验和授权；业务拒绝返回带 Code/Reason 的响应。
+    return controller.dispatchAddGold(ctx, req)
+}
+```
+
+协议名从 `HandleAddGold` 推导，目录表示 Controller 领域，`nest=AddGold` 是唯一的 handler 对应声明；指定 `--nest-handler` 时写入指定名字。`roost generate`（包括 `--changed`）扫描手写标记，按当前 handler 签名更新 `dispatchAddGold`。手写入口可以改文件名、合并进同包文件，生成器不修改其方法体。
+
+自动部分负责认证 PlayerID 构造、参数转交、Nest 调用、错误码映射和空响应检查；手写层可在其前后处理业务，但提交后的响应处理失败不代表回滚。Entity 当前状态校验仍须在 Nest handler 锁内完成。不要从这里直接取 Entity local 锁或绕过 Nest 改 DAO。
+
+- `controller.go` 和 `add_gold.go` 永不自动覆盖；无生成头的同名 `*_endpoint_gen.go` 会明确报冲突。
+- 撤销标记只删除本生成器所有的转交文件，手写入口要自行改成新的实现；仍调用已删除的 dispatch 会编译失败，不静默变成成功。
+- 受管转交仅支持无业务结果或唯一 `*pb.<Protocol>Response`；改成领域结果时生成明确拒绝，需要手写转换并撤销标记。`--lifecycle` 登录入口仍是独立的业务骨架，不走 Nest 转交。
+- 已有业务 endpoint 不自动拆分。需要接入时在同包 `Handle<Protocol>` 方法上添加标记，将转交代码替换为 `dispatch<Protocol>` 调用，并保留自己的授权逻辑，再运行 generate。
+
+验证：`TestEndpointRegenerationPreservesApplication` 覆盖重生成、文件移动、冲突与退役；`TestSelfSyncGeneratedProjectOverRealTCP` 覆盖手写拒绝实际生效、自动转交、PB 响应、Sync 与重连，并执行 `generate --check`。2026-11-01 macOS 实跑通过，存储仍为替身。
 
 ### roost add timer（按实体的持久定时器）
 
@@ -632,24 +701,26 @@ func handlerQuery(player IPlayerEntity) (PlayerView, error) { return PlayerView{
 | --- | --- | --- |
 | `target` / `targets` | 实体名 / 逗号分隔的实体名 | 锁目标，按个数取开头的参数；不写时把类型名含 `Entity` 的参数（及其切片）推断为锁目标 |
 | `rollback` | `state`、`undo` | 全状态快照或生成 setter 的逆操作；热路径推荐 `undo` |
-| `durability` | `memory`、`async`、`strict` | 内存、WAL admission、严格提交 |
+| `durability` | `memory`、`async`、`strict`、`pipelined` | 内存、WAL admission、严格提交、流水线持久确认（受运行时准入约束） |
 | `sync` | flag | 生成同步 Sender |
 
 未声明时默认 `rollback=state durability=async`，业务修改先进入 Nest WAL；需要请求返回前确认 durable admission 时声明 `durability=strict`，只有明确不持久化的 handler 才显式写 `durability=memory`。
 
 第一个或多个 Entity 接口参数是锁目标；`[]IEntity` 表示实体组。既没写 `target(s)`、参数类型名也不含 `Entity` 时找不到锁目标，`roost generate` 报 `//roost:nest found no entity parameter` 并点名 handler（以前静默跳过该函数、成功退出，还把此前生成的 Sender 当孤儿删除）。进入 handler 前目标已按全局顺序加锁，业务层不要重复加锁。生成 `<source>_nest_gen.go`、sender/syncsender 和 bootstrap 注册代码。生成的 `sender` / `syncsender` 包是可注入的 `*Sender` 类型：接入层用 `NewXxxSender(nestClient)` 构造，方法带 `context.Context`、可返回入队错误；不生成包级 Send/Sync，也不读取全局 Nest。sender / syncsender 是 handler 包的子包，签名里的参数与结果类型原样搬进去，所以这些类型不能声明在 handler 包本身（子包看不见它，又不能反向导入 handler 包——handler 会调用 sender，导入成环）：生成器遇到这种类型直接报错 `type X is declared in package handler ... move X to a package the handler imports`，把它移到实体包或其他 handler 已导入的包即可（demo 的结果类型都在实体包里）。执行池（short / long / io）、`businessPool` 与 `SendOptionIO` 见 [Nest 业务执行模型](NEST_RUNTIME.zh-CN.md) 与 [Nest 三池](../../docs/framework/NEST-AWAIT.md)。
 
-Remote read 可放在请求 struct：
+DAO 顶层字段可声明 `remoteview:"public,member"`，由 DAO 生成器在 `db/gen_remote_views.go` 生成独立值类型（如 `AlliancePublicSnapshot`、`AllianceMemberSnapshot`）、深拷贝投影、scope/schema 与 BSON 解码器。Remote Entity 生成器把这些视图纳入同一提交/outbox，相关字段变化才更新，实体删除时全部失效；不会替代默认权威 DAO 快照。只允许持久字段，未标字段不进入视图，嵌套投影包含其中的持久字段。完整类型范围、升级和版本水位边界见 [Remote 指南 §6](../../docs/framework/guide/05-remote-mirror.md#6-普通-entity-写入--remote-view-读取)。
+
+Remote read 放在 `game/requests` 等共用包的请求 struct，handler 与 Sender 都引用它：
 
 ```go
 type QueryRequest struct {
-    Target entity.RemoteViewRef `remote:"view.PlayerViewMapSnapshot,consistency=monotonic,required"`
+    TargetPlayerViewRef entity.RemoteViewRef `remote:"view.PlayerViewMapSnapshot,consistency=monotonic,required"`
 }
 ```
 
-生成 `TargetPlayer()`/`MustTargetPlayer()` 访问器。可选一致性、scope、tenant、policy、allow-stale、min-version 和 cache TTL 均在生成期校验。
+在请求源文件导入 `entity` 和 `view`；由于 tag 不计入 Go 的 import 使用，再声明 `var _ view.PlayerViewMapSnapshot`。生成器按请求声明文件生成 `<source>_remote_nest_gen.go`，不依赖同包有 handler 标记；生成 `RemoteAccess()`、`TargetPlayer()` / `MustTargetPlayer()`，多个 handler 共用同一类型不重复生成。请求放在扫描范围内（正式工程为 `game`），不要放在 handler 包导致 Sender 循环依赖。
 
-**当前限制**：请求 struct 必须声明在 handler 包里（remote tag 只扫描 handler 包，访问器也生成在这里），而 sender / syncsender 子包看不见 handler 包的类型；`roost generate` 总会生成 sender，所以带 Remote 请求 struct 的 handler 目前生成会失败，生成器给出专门报错（不建议移走类型，移走后访问器就生成不出来）。见 [KNOWN-LIMITS](../../docs/maintenance/KNOWN-LIMITS.md)。
+支持 `consistency=cached|monotonic|strong`、`tenant`、`policy`、`allow_stale`、`min_version`、`ttl_ms`；scope 来自视图的 `RemoteScope()`，未指定最低版本时使用引用中的 Version。表达式里的请求接收者统一是 `req`。Nest 自动在 I/O 池预取，在业务池的访问器只读取已准备快照；业务不直接调用 Mirror 回源。使用示例、装配和一致性边界见 [Remote 指南 §6](../../docs/framework/guide/05-remote-mirror.md#6-普通-entity-写入--remote-view-读取)。
 
 ## 7. Protocol 生成器
 

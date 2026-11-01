@@ -183,6 +183,12 @@ cd "$CORE" && ROOST_<GENRE>_KEEP=1 bash scripts/test-<genre>-generated.sh   # �
 
 ## 8. 维护规则
 
+- 单玩家 PB → Nest 的薄边界优先复用 `roost add endpoint`：handler 可直接接收本工程当前协议的 PB 请求指针、返回唯一 PB 响应指针（当前 main 新增，发布状态看 CHANGELOG），避免手写字段搬运。普通领域参数仍可用；不能把多实体、身份来源、授权和领域 DTO 转换自动猜出来。目标取认证会话，PB 内容仍需校验；请求不能缓存到 Entity，响应不能引用 DAO 的可变容器。已有手写 endpoint 不覆盖；新建标准 endpoint 分为手写 `Handle<Protocol>`（`//roost:endpoint nest=<Handler>`）和持续生成的 `*_endpoint_gen.go`。授权写在手写入口，依赖 Entity 状态的校验写在 Nest 锁内；禁止编辑生成文件。命令与验证见 `codegen/docs/CODEGEN_REFERENCE.zh-CN.md`“PB 请求与响应直接接入 Nest”；真实 TCP + Sync 夹具为 `TestSelfSyncGeneratedProjectOverRealTCP`，存储为替身。
+
+
+- SLG / MMORPG 的玩家读取联盟、公会快照，按各 reference 的“普通 Player + Remote View”段及 [Remote 指南 §6](../../framework/guide/05-remote-mirror.md#6-普通-entity-写入--remote-view-读取) 生成共用请求 DTO；I/O 池预取，handler 仅取已准备视图。权威写入与快照读取分开，不能依据陈旧视图授予写权限。
+
+
 - 多引擎客户端接入可选 [native C++ 网络核心](../../../client/cpp/README.md)：Unity 使用 C ABI 与现有 C# EntityViews，UE 使用 C ABI/C++。先核对平台验收表，不把“提供构建入口”说成 Windows/Android/iOS 或 UE 已实跑；Lockstep 状态机仍以现有 C# 能力为准。
 
 - 自 v1.35.0 起默认 DAO 同步为 PB 字段补丁，持久化仍用 BSON；v1.34.2 尚未包含此变更。生成客户端时一起交付 `dao_sync.proto` 与 `dao_sync_apply.cs`，按字段存在性替换，不能使用普通 PB MergeFrom 合并集合。完整契约见 [DAO 同步](../../framework/DAO-SYNC-PROTOBUF.md)。

@@ -52,6 +52,105 @@ message SyncOptionalEnvelope {
 }
 
 // roost:source=go_def
+message SyncPatchPositionXField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncPatchPositionYField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncPatchPosition {
+  SyncPatchPositionXField x = 1;
+  SyncPatchPositionYField y = 2;
+}
+
+// roost:source=go_def
+message SyncPatchEquipInfoLevelField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncPatchEquipInfoStarField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncPatchEquipInfoGemsField {
+  map<int32, SyncOptionalGemInfo> value = 1;
+  bool delta = 2;
+  repeated int32 removed = 3;
+  map<int32, SyncPatchGemInfo> patches = 4;
+}
+
+// roost:source=go_def
+message SyncPatchEquipInfoRunesField {
+  repeated SyncOptionalGemInfo value = 1;
+  bool delta = 2;
+  map<uint64, SyncOptionalGemInfo> updates = 3;
+  uint64 length = 4;
+  map<uint64, SyncPatchGemInfo> patches = 5;
+}
+
+// roost:source=go_def
+message SyncPatchEquipInfoCoreField {
+  SyncOptionalGemInfo value = 1;
+  SyncPatchGemInfo patch = 2;
+}
+
+// roost:source=go_def
+message SyncPatchEquipInfoShapeField {
+  SyncPosition value = 1;
+  SyncPatchPosition patch = 2;
+}
+
+// roost:source=go_def
+message SyncPatchEquipInfo {
+  SyncPatchEquipInfoLevelField level = 1;
+  SyncPatchEquipInfoStarField star = 2;
+  SyncPatchEquipInfoGemsField gems = 3;
+  SyncPatchEquipInfoRunesField runes = 4;
+  SyncPatchEquipInfoCoreField core = 5;
+  SyncPatchEquipInfoShapeField shape = 6;
+}
+
+// roost:source=go_def
+message SyncPatchGemInfoIDField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncPatchGemInfoLevelField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncPatchGemInfoSigField {
+  bytes value = 1;
+}
+
+// roost:source=go_def
+message SyncPatchGemInfo {
+  SyncPatchGemInfoIDField id = 1;
+  SyncPatchGemInfoLevelField level = 2;
+  SyncPatchGemInfoSigField sig = 3;
+}
+
+// roost:source=go_def
+message SyncPatchEnvelopeMarksField {
+  map<int32, bytes> value = 1;
+  bool delta = 2;
+  repeated int32 removed = 3;
+}
+
+// roost:source=go_def
+message SyncPatchEnvelope {
+  SyncPatchEnvelopeMarksField marks = 1;
+}
+
+// roost:source=go_def
 message SyncHeroDaoNameField {
   string value = 1;
 }
@@ -69,36 +168,51 @@ message SyncHeroDaoExpField {
 // roost:source=go_def
 message SyncHeroDaoItemsField {
   map<int64, int32> value = 1;
+  bool delta = 2;
+  repeated int64 removed = 3;
 }
 
 // roost:source=go_def
 message SyncHeroDaoFriendsField {
   repeated int64 value = 1;
+  bool delta = 2;
+  map<uint64, int64> updates = 3;
+  uint64 length = 4;
 }
 
 // roost:source=go_def
 message SyncHeroDaoPosField {
   SyncPosition value = 1;
+  SyncPatchPosition patch = 2;
 }
 
 // roost:source=go_def
 message SyncHeroDaoEquipsField {
   map<int64, SyncOptionalEquipInfo> value = 1;
+  bool delta = 2;
+  repeated int64 removed = 3;
+  map<int64, SyncPatchEquipInfo> patches = 4;
 }
 
 // roost:source=go_def
 message SyncHeroDaoSquadField {
   repeated SyncOptionalEquipInfo value = 1;
+  bool delta = 2;
+  map<uint64, SyncOptionalEquipInfo> updates = 3;
+  uint64 length = 4;
+  map<uint64, SyncPatchEquipInfo> patches = 5;
 }
 
 // roost:source=go_def
 message SyncHeroDaoMountField {
   SyncOptionalEquipInfo value = 1;
+  SyncPatchEquipInfo patch = 2;
 }
 
 // roost:source=go_def
 message SyncHeroDao {
   int64 entity_id = 1;
+  uint32 sync_format = 2047;
   SyncHeroDaoNameField name = 2;
   SyncHeroDaoLevelField level = 3;
   SyncHeroDaoExpField exp = 4;
@@ -118,11 +232,15 @@ message SyncVarietyDaoSyncOnlyField {
 // roost:source=go_def
 message SyncVarietyDaoFastItemsField {
   map<int64, int32> value = 1;
+  bool delta = 2;
+  repeated int64 removed = 3;
 }
 
 // roost:source=go_def
 message SyncVarietyDaoShardedTagsField {
   map<int32, string> value = 1;
+  bool delta = 2;
+  repeated int32 removed = 3;
 }
 
 // roost:source=go_def
@@ -133,11 +251,14 @@ message SyncVarietyDaoResultJSONField {
 // roost:source=go_def
 message SyncVarietyDaoBlobsField {
   map<string, bytes> value = 1;
+  bool delta = 2;
+  repeated string removed = 3;
 }
 
 // roost:source=go_def
 message SyncVarietyDaoEnvelopeField {
   SyncEnvelope value = 1;
+  SyncPatchEnvelope patch = 2;
 }
 
 // roost:source=go_def
@@ -153,6 +274,7 @@ message SyncVarietyDaoCounterField {
 // roost:source=go_def
 message SyncVarietyDao {
   int64 entity_id = 1;
+  uint32 sync_format = 2047;
   SyncVarietyDaoSyncOnlyField sync_only = 3;
   SyncVarietyDaoFastItemsField fast_items = 6;
   SyncVarietyDaoShardedTagsField sharded_tags = 7;
@@ -176,16 +298,22 @@ message SyncWraithDaoPosYField {
 // roost:source=go_def
 message SyncWraithDaoBuffsField {
   map<int32, int64> value = 1;
+  bool delta = 2;
+  repeated int32 removed = 3;
 }
 
 // roost:source=go_def
 message SyncWraithDaoTrailField {
   repeated int64 value = 1;
+  bool delta = 2;
+  map<uint64, int64> updates = 3;
+  uint64 length = 4;
 }
 
 // roost:source=go_def
 message SyncWraithDao {
   int64 entity_id = 1;
+  uint32 sync_format = 2047;
   SyncWraithDaoPosXField pos_x = 2;
   SyncWraithDaoPosYField pos_y = 3;
   SyncWraithDaoBuffsField buffs = 4;

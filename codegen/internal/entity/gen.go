@@ -406,6 +406,7 @@ func register{{.Entity.Name}}Entity() {
 		})
 {{- if .RemoteV2}}
 {{- range .Entity.Daos}}
+		entity.RegisterRemoteDAOViews({{ctor .TypeName}}(), {{$.Entity.EntityKind}})
 		entity.MustRegisterRemoteSnapshotDecoder(
 			entity.RemoteSnapshotSchema({{$.Entity.EntityKind}}, entity.RemoteSnapshotScope({{daoCollectionConst .TypeName}})),
 			func(data []byte) (any, error) {
@@ -589,6 +590,7 @@ func (e *{{.Entity.Name}}) BuildRemoteCommitLocked(lease entity.RemoteWriteLease
 				Collection: e.{{.FieldName}}.CollName(), ID: e.{{.FieldName}}.Id(),
 			})
 		}
+		commit.Invalidations = append(commit.Invalidations, entity.RemoteDAOViewKeys({{ctor .TypeName}}(), e.GUId(), e.GetEntityKind())...)
 		commit.Invalidations = append(commit.Invalidations, entity.RemoteSnapshotKey{
 			EntityID: e.GUId(), Kind: e.GetEntityKind(), Scope: entity.RemoteSnapshotScope({{daoCollectionConst .TypeName}}),
 		})
@@ -619,6 +621,9 @@ func (e *{{.Entity.Name}}) BuildRemoteCommitLocked(lease entity.RemoteWriteLease
 				Data:          data,
 			}
 			commit.Mutations = append(commit.Mutations, mutation)
+			views, err := entity.BuildRemoteDAOViews(e.{{.FieldName}}, e.GUId(), e.GetEntityKind(), mask)
+			if err != nil { return entity.RemoteCommit{}, fmt.Errorf("{{$.Entity.Name}}: build remote views for {{.CollName}}: %w", err) }
+			commit.Snapshots = append(commit.Snapshots, views...)
 			scope := entity.RemoteSnapshotScope(e.{{.FieldName}}.CollName())
 			commit.Snapshots = append(commit.Snapshots, entity.RemoteSnapshotRecord{
 				Key: entity.RemoteSnapshotKey{EntityID: e.GUId(), Kind: e.GetEntityKind(), Scope: scope},

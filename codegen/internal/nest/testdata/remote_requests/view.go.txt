@@ -1,0 +1,5 @@
+package view
+
+type Alliance struct{ Bonus int64 }
+
+func (Alliance) RemoteScope() uint64 { return 7 }

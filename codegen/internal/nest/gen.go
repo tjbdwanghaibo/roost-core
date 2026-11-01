@@ -43,24 +43,19 @@ func generateWithMode(funcs []*FuncInfo, pkg string, outFile string, force bool,
 	}
 
 	tmpl, err := template.New("nest_gen").Funcs(template.FuncMap{
-		"sub":                   func(a, b int) int { return a - b },
-		"firstToUpper":          strFirstToUpper,
-		"firstToLower":          strFirstToLower,
-		"trimHandler":           trimHandlerPrefix,
-		"hasGroup":              hasGroup,
-		"gt":                    func(a, b int) bool { return a > b },
-		"joinEntityIds":         joinEntityIds,
-		"extraImports":          extraImports,
-		"quote":                 func(s string) string { return fmt.Sprintf("%q", s) },
-		"rollbackMeta":          rollbackMeta,
-		"registerCall":          registerCall,
-		"remoteParamAccessors":  remoteParamAccessors,
-		"remoteKeyName":         remoteKeyName,
-		"remoteConsistencyExpr": remoteConsistencyExpr,
-		"remoteScopeExpr":       remoteScopeExpr,
-		"remoteTTLExpr":         remoteTTLExpr,
-		"wireParams":            wireParams,
-		"usesBusinessTime":      usesBusinessTime,
+		"sub":              func(a, b int) int { return a - b },
+		"firstToUpper":     strFirstToUpper,
+		"firstToLower":     strFirstToLower,
+		"trimHandler":      trimHandlerPrefix,
+		"hasGroup":         hasGroup,
+		"gt":               func(a, b int) bool { return a > b },
+		"joinEntityIds":    joinEntityIds,
+		"extraImports":     extraImports,
+		"quote":            func(s string) string { return fmt.Sprintf("%q", s) },
+		"rollbackMeta":     rollbackMeta,
+		"registerCall":     registerCall,
+		"wireParams":       wireParams,
+		"usesBusinessTime": usesBusinessTime,
 	}).Parse(nestTemplate)
 	if err != nil {
 		return false, fmt.Errorf("template parse: %w", err)
@@ -531,12 +526,6 @@ func generatedTypeRefs(funcs []*FuncInfo, senderOnly bool, syncSenderOnly bool) 
 				track(ret.Type)
 			}
 		}
-		if !senderOnly {
-			for _, access := range f.RemoteAccess {
-				track(access.Scope)
-				track(access.Type)
-			}
-		}
 	}
 	return typeRefs
 }
@@ -903,45 +892,6 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 {{end}}
 
 {{if not .SenderOnly}}
-{{range remoteParamAccessors .Funcs}}
-{{- $paramType := .ParamType}}
-{{- $paramName := .ParamName}}
-{{- range .Accesses}}
-var {{remoteKeyName $paramType .Accessor}} = nest.RemoteKey[{{.Type}}]{Alias: {{quote .Alias}}}
-{{- end}}
-
-func ({{.ParamName}} {{.ParamType}}) RemoteAccess() []nest.RemoteAccess {
-	return []nest.RemoteAccess{
-{{- range .Accesses}}
-		{
-			Alias: {{quote .Alias}},
-			Ref: {{.RefExpr}},
-			Consistency: {{remoteConsistencyExpr .Consistency}},
-			Scope: {{remoteScopeExpr .}},
-			Tenant: {{if .Tenant}}{{.Tenant}}{{else}}0{{end}},
-			Policy: {{if .Policy}}{{.Policy}}{{else}}0{{end}},
-			MinVersion: {{if .MinVersion}}{{.MinVersion}}{{else}}0{{end}},
-			{{- if .AllowStale}}
-			AllowStale: true,
-			{{- end}}
-			CacheTTLMillis: {{remoteTTLExpr .}},
-			{{- if .Required}}
-			Required: true,
-			{{- end}}
-		},
-{{- end}}
-	}
-}
-{{range .Accesses}}
-func ({{$paramName}} {{$paramType}}) {{.Accessor}}() ({{.Type}}, bool) {
-	return nest.Remote({{remoteKeyName $paramType .Accessor}})
-}
-
-func ({{$paramName}} {{$paramType}}) Must{{.Accessor}}() {{.Type}} {
-	return nest.MustRemote({{remoteKeyName $paramType .Accessor}})
-}
-{{end}}
-{{end}}
 
 func {{.RegisterFunc}}({{if .ReceiverType}}receiver {{.ReceiverType}}{{end}}) {
 	{{if .ReceiverType}}if receiver == nil { panic("nest: nil handler receiver for {{.RegisterFunc}}") }{{end}}

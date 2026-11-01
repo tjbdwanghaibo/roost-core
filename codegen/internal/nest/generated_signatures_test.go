@@ -152,9 +152,8 @@ func handlerBuyItem` + tt.signature + ` {
 	}
 }
 
-// Remote 请求 struct 必须声明在 handler 包里（访问器生成在这里），与 sender 子包看不见本包类型冲突。
-// 报错不能再建议“移走类型”——照做访问器就生成不出来；要直接说明这个组合还不支持。
-func TestSenderRefusesARemoteRequestStructWithoutSuggestingAMove(t *testing.T) {
+// 本包请求仍会使 Sender 形成循环引用；现在可以移到共用包并在那里生成访问器。
+func TestSenderDirectsLocalRemoteRequestToSharedPackage(t *testing.T) {
 	dir := t.TempDir()
 	source := `package handler
 
@@ -182,14 +181,12 @@ func handlerQuery(target player.IShopEntity, req QueryRequest) error {
 	if err == nil {
 		t.Fatal("generation accepted a Remote request struct with senders; the sender packages cannot see it")
 	}
-	for _, want := range []string{"handlerQuery", "QueryRequest", "remote", "KNOWN-LIMITS"} {
+	for _, want := range []string{"handlerQuery", "QueryRequest", "move"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error does not name %q: %v", want, err)
 		}
 	}
-	if strings.Contains(err.Error(), "move QueryRequest") {
-		t.Errorf("error suggests moving the Remote request struct, which would drop its accessors: %v", err)
-	}
+
 }
 
 func unusedImports(t *testing.T, path string) []string {

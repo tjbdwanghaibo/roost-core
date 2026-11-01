@@ -37,7 +37,7 @@ type {{.Nested.Name}} struct {
 // stale on disk while memory shows both equal. unbindDirty
 // releases only its own binding, so a stale release from a place this value
 // has already left cannot silence the place it is in now.
-func (s *{{.Nested.Name}}) bindDirty(owner daoDirtyOwner, notify func()) {
+func (s *{{.Nested.Name}}) bindDirty(owner daoDirtyOwner, notify func(dataengine.SyncPath)) {
 	if s == nil {
 		return
 	}
@@ -187,22 +187,22 @@ func (s *{{$.Nested.Name}}) bind{{.Name}}() {
 	}
 	s.{{fieldVar .Name}}.Range(func(key {{.MapKey}}, val {{mapValType .}}) bool {
 		if val != nil {
-			val.bindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}, key: key}, s.Mark)
+			val.bindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}, key: key}, func(path dataengine.SyncPath){s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},dataengine.SyncElement(key,path)))})
 		}
 		return true
 	})
 {{- else if eq .Kind 1}}
 	for index, val := range s.{{fieldVar .Name}} {
 		if val != nil {
-			val.bindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}, key: index}, s.Mark)
+			val.bindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}, key: index}, func(path dataengine.SyncPath){s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},dataengine.SyncElement(index,path)))})
 		}
 	}
 {{- else if .IsPtr}}
 	if s.{{fieldVar .Name}} != nil {
-		s.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}}, s.Mark)
+		s.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}}, func(path dataengine.SyncPath){s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},path))})
 	}
 {{- else}}
-	s.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}}, s.Mark)
+	s.{{fieldVar .Name}}.bindDirty(daoDirtyOwner{holder: s, field: {{nestedFieldOrdinal $.Nested .Name}}}, func(path dataengine.SyncPath){s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},path))})
 {{- end}}
 }
 {{- if hasDetach .}}
@@ -261,6 +261,33 @@ func (s *{{$.Nested.Name}}) Range{{.Name}}(f func(idx int, val {{if .IsPtr}}*{{.
 }
 
 func (s *{{$.Nested.Name}}) {{.Name}}Len() int { return len(s.{{fieldVar .Name}}) }
+
+func (s *{{$.Nested.Name}}) Set{{.Name}}At(index int,v {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.SliceElem}}{{end}})bool {
+ if index<0||index>=len(s.{{fieldVar .Name}}){return false}
+ items:=s.{{fieldVar .Name}}
+ old:=items[index]
+ if tx:=nest.CurrentRollbackTx();tx!=nil&&tx.Policy()==nest.RollbackUndo {
+  if err:=tx.RecordUndoToken(s,{{nestedFieldOrdinal $.Nested .Name}}-1,&items[index],func()error{
+{{- if hasDetach .}}
+   s.unbind{{.Name}}()
+{{- end}}
+   items[index]=old
+{{- if hasHook .}}
+   s.bind{{.Name}}()
+{{- end}}
+   return nil
+  });err!=nil{panic(err)}
+ }
+{{- if hasDetach .}}
+ if old!=nil{old.unbindDirty(daoDirtyOwner{holder:s,field:{{nestedFieldOrdinal $.Nested .Name}},key:index})}
+{{- end}}
+ s.{{fieldVar .Name}}[index]=v
+{{- if hasHook .}}
+ if v!=nil{v.bindDirty(daoDirtyOwner{holder:s,field:{{nestedFieldOrdinal $.Nested .Name}},key:index},func(path dataengine.SyncPath){s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},dataengine.SyncElement(index,path)))})}
+{{- end}}
+ s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},dataengine.SyncElement(index,nil)));return true
+}
+
 {{- if .IsBytes}}
 
 // Get{{.Name}}All returns a copy of the whole byte slice (nil when empty), the
@@ -302,6 +329,38 @@ func (s *{{$.Nested.Name}}) {{.Name}}Len() int {
 	if s.{{fieldVar .Name}} == nil { return 0 }
 	return s.{{fieldVar .Name}}.Len()
 }
+
+func(s *{{$.Nested.Name}}) Set{{.Name}}Key(key {{.MapKey}},value {{mapValType .}}){s.change{{.Name}}Key(key,value,false)}
+func(s *{{$.Nested.Name}}) Del{{.Name}}Key(key {{.MapKey}}){var zero {{mapValType .}};s.change{{.Name}}Key(key,zero,true)}
+func(s *{{$.Nested.Name}}) change{{.Name}}Key(key {{.MapKey}},value {{mapValType .}},remove bool){
+ if s.{{fieldVar .Name}}==nil {if !remove{s.Set{{.Name}}({{rawMapType .}}{key:value})};return}
+ items:=s.{{fieldVar .Name}}
+ old,existed:=s.{{fieldVar .Name}}.Get(key)
+ if tx:=nest.CurrentRollbackTx();tx!=nil&&tx.Policy()==nest.RollbackUndo {
+  if err:=tx.RecordUndoToken(items,{{nestedFieldOrdinal $.Nested .Name}}-1,key,func()error{
+{{- if hasDetach .}}
+   s.unbind{{.Name}}()
+{{- end}}
+   if existed{items.Set(key,old)}else{items.Delete(key)}
+{{- if hasHook .}}
+   s.bind{{.Name}}()
+{{- end}}
+   return nil
+  });err!=nil{panic(err)}
+ }
+{{- if hasDetach .}}
+ if old!=nil{old.unbindDirty(daoDirtyOwner{holder:s,field:{{nestedFieldOrdinal $.Nested .Name}},key:key})}
+{{- end}}
+{{- if .CopiesMapValue}}
+ value=append(value[:0:0],value...)
+{{- end}}
+ if remove{s.{{fieldVar .Name}}.Delete(key)}else{s.{{fieldVar .Name}}.Set(key,value)}
+{{- if hasHook .}}
+ if !remove&&value!=nil{value.bindDirty(daoDirtyOwner{holder:s,field:{{nestedFieldOrdinal $.Nested .Name}},key:key},func(path dataengine.SyncPath){s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},dataengine.SyncElement(key,path)))})}
+{{- end}}
+ s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},dataengine.SyncElement(key,nil)))
+}
+
 {{end}}
 {{end}}
 {{range $idx, $field := .Nested.Fields}}
@@ -328,7 +387,7 @@ func (s *{{$.Nested.Name}}) Set{{.Name}}(v {{if eq .Kind 2}}{{rawMapType .}}{{el
 {{- if eq .Kind 0}}
 	if s.{{fieldVar .Name}} != v {
 		s.{{fieldVar .Name}} = v
-		s.Mark()
+		s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},nil))
 	}
 {{- else if eq .Kind 2}}
 {{- if hasDetach .}}
@@ -348,7 +407,7 @@ func (s *{{$.Nested.Name}}) Set{{.Name}}(v {{if eq .Kind 2}}{{rawMapType .}}{{el
 {{- if hasHook .}}
 	s.bind{{.Name}}()
 {{- end}}
-	s.Mark()
+	s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},nil))
 {{- else if eq .Kind 1}}
 {{- if hasDetach .}}
 	s.unbind{{.Name}}()
@@ -357,7 +416,7 @@ func (s *{{$.Nested.Name}}) Set{{.Name}}(v {{if eq .Kind 2}}{{rawMapType .}}{{el
 {{- if hasHook .}}
 	s.bind{{.Name}}()
 {{- end}}
-	s.Mark()
+	s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},nil))
 {{- else}}
 {{- if hasDetach .}}
 	s.unbind{{.Name}}()
@@ -366,7 +425,7 @@ func (s *{{$.Nested.Name}}) Set{{.Name}}(v {{if eq .Kind 2}}{{rawMapType .}}{{el
 {{- if hasHook .}}
 	s.bind{{.Name}}()
 {{- end}}
-	s.Mark()
+	s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},nil))
 {{- end}}
 }
 {{end}}`

@@ -18,17 +18,28 @@ type syncSchema struct {
 	defs     *Definitions
 	messages []protocol.StructDef
 	helpers  strings.Builder
+	shapes   map[string]syncShape
 }
 
 func syncField(name, typ string, number int) protocol.FieldDef {
 	return protocol.FieldDef{Name: name, ProtoName: toSnake(name), TypeStr: typ, Number: number}
 }
 func (s *syncSchema) shape(typeName string) (syncShape, error) {
+	if shape, ok := s.shapes[typeName]; ok {
+		return shape, nil
+	}
 	expr, err := parser.ParseExpr(typeName)
 	if err != nil {
 		return syncShape{}, err
 	}
-	return s.expression(expr)
+	shape, err := s.expression(expr)
+	if err == nil {
+		if s.shapes == nil {
+			s.shapes = make(map[string]syncShape)
+		}
+		s.shapes[typeName] = shape
+	}
+	return shape, err
 }
 func identityShape(typ string) syncShape { return syncShape{typ, typ, "%s", "%s"} }
 func (s *syncSchema) expression(expr ast.Expr) (syncShape, error) {
@@ -130,17 +141,27 @@ func buildSyncSchema(defs *Definitions, pkg string) ([]byte, []byte, error) {
 		fmt.Fprintf(&s.helpers, "func syncOptional%sToPB(value *%s) SyncOptional%s { if value==nil{return SyncOptional%s{}}; converted:=sync%sToPB(*value);return SyncOptional%s{Value:&converted} }\n", nested.Name, wireDocName(nested.Name), nested.Name, nested.Name, nested.Name, nested.Name)
 		fmt.Fprintf(&s.helpers, "func syncOptional%sFromPB(value SyncOptional%s) *%s { if value.Value==nil{return nil};converted:=sync%sFromPB(*value.Value);return &converted }\n", nested.Name, nested.Name, wireDocName(nested.Name), nested.Name)
 	}
+	if err := s.buildNestedPatches(); err != nil {
+		return nil, nil, err
+	}
 	for _, dao := range defs.Daos {
 		fields := filterSync(dao.Fields)
 		if len(fields) == 0 {
 			continue
 		}
-		message := protocol.StructDef{Name: "Sync" + dao.Name, Fields: []protocol.FieldDef{syncField("EntityID", "int64", 1)}}
+		message := protocol.StructDef{Name: "Sync" + dao.Name, Fields: []protocol.FieldDef{syncField("EntityID", "int64", 1), syncField("SyncFormat", "uint32", 2047)}}
 		var marshal, apply strings.Builder
+		shapes := make(map[string]syncShape)
 		var values strings.Builder
-		fmt.Fprintf(&values, "// Values 返回本次 patch 中存在的字段，供通用 Go 客户端/机器人按名称路由；不合并集合。\nfunc(patch *Sync%s) Values() map[string]any { out:=map[string]any{\"_id\":patch.EntityID}\n", dao.Name)
-		fmt.Fprintf(&marshal, "func(d *%s) marshalSyncPB(mask uint64) []byte { patch:=&Sync%s{EntityID:d.id}; changed:=false\n", dao.Name, dao.Name)
-		fmt.Fprintf(&apply, "func(d *%s) applySyncPB(raw []byte) error { patch,err:=UnmarshalSync%s(raw);if err!=nil{return err}\n", dao.Name, dao.Name)
+		fmt.Fprintf(&values, "// Values 读取字段替换或已应用快照；集合补丁必须先通过 Apply 合并，避免丢失删除与列表操作。\nfunc(patch *Sync%s) Values() (map[string]any,error) { if patch==nil || patch.SyncFormat!=3{return nil,fmt.Errorf(\"unsupported DAO sync format\")};out:=map[string]any{\"_id\":patch.EntityID}\n", dao.Name)
+		fmt.Fprintf(&marshal, "func(d *%s) marshalSyncPB(mask uint64) []byte { patch:=&Sync%s{EntityID:d.id,SyncFormat:3}; changed:=false\n", dao.Name, dao.Name)
+		fmt.Fprintf(&apply, `func(d *%[1]s) applySyncPB(raw []byte) error {
+ patch,err:=UnmarshalSync%[1]s(raw);if err!=nil{return err}
+ if d.id!=0 && d.id!=patch.EntityID{return fmt.Errorf("DAO identity changed")}
+ previous,err:=UnmarshalSync%[1]s(d.marshalSyncPB(^uint64(0)));if err!=nil{return err}
+ previous.EntityID=patch.EntityID
+ merged,err:=ApplySync%[1]s(patch,previous);if err!=nil{return err}
+`, dao.Name)
 		for i, field := range dao.Fields {
 			if !field.Tag.Sync || field.Tag.Skip {
 				continue
@@ -149,9 +170,19 @@ func buildSyncSchema(defs *Definitions, pkg string) ([]byte, []byte, error) {
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s.%s: %w", dao.Name, field.Name, err)
 			}
+			if field.Name == "EntityID" || field.Name == "SyncFormat" {
+				return nil, nil, fmt.Errorf("%s.%s: reserved DAO sync metadata field", dao.Name, field.Name)
+			}
 			wrapper := "Sync" + dao.Name + field.Name + "Field"
-			s.messages = append(s.messages, protocol.StructDef{Name: wrapper, Fields: []protocol.FieldDef{syncField("Value", shape.protobuf, 1)}})
+			s.trackedWrapper(wrapper, field, shape)
+			shapes[field.Name] = shape
 			message.Fields = append(message.Fields, syncField(field.Name, "*"+wrapper, i+2))
+			if strings.HasPrefix(shape.protobuf, "map[") || (strings.HasPrefix(shape.protobuf, "[]") && shape.protobuf != "[]byte") {
+				fmt.Fprintf(&values, "if patch.%[1]s!=nil && patch.%[1]s.Delta{return nil,fmt.Errorf(\"%[1]s: apply collection delta before Values\")}\n", field.Name)
+			}
+			if syncNestedName(defs, field) != "" && field.Kind != KindMap && !syncIsList(shape) {
+				fmt.Fprintf(&values, "if patch.%[1]s!=nil&&patch.%[1]s.Patch!=nil{return nil,fmt.Errorf(\"apply nested patch before Values\")}\n", field.Name)
+			}
 			fmt.Fprintf(&values, "if patch.%s!=nil {out[%q]=patch.%s.Value}\n", field.Name, field.Key, field.Name)
 			source := "d." + safeFieldVarName(field.Name)
 			if field.Kind == KindMap {
@@ -159,7 +190,7 @@ func buildSyncSchema(defs *Definitions, pkg string) ([]byte, []byte, error) {
 			}
 			encoded := fmt.Sprintf(shape.encode, toWire(defs, field, source))
 			fmt.Fprintf(&marshal, "if mask&%s!=0 { patch.%s=&%s{Value:%s};changed=true }\n", fieldMaskName(dao.Name, field.Name), field.Name, wrapper, encoded)
-			decoded := fromWire(defs, field, fmt.Sprintf(shape.decode, "patch."+field.Name+".Value"))
+			decoded := fromWire(defs, field, fmt.Sprintf(shape.decode, "merged."+field.Name+".Value"))
 			fmt.Fprintf(&apply, "if patch.%s!=nil {\n", field.Name)
 			if field.Kind == KindMap {
 				fmt.Fprintf(&apply, "d.set%sRawMap(%s)\n", field.Name, decoded)
@@ -169,12 +200,13 @@ func buildSyncSchema(defs *Definitions, pkg string) ([]byte, []byte, error) {
 			apply.WriteString("}\n")
 		}
 		marshal.WriteString("if !changed{return nil};raw,err:=MarshalSync" + dao.Name + "(patch);if err!=nil{panic(err)};return raw }\n")
-		apply.WriteString("d.Init();return nil }\n")
-		values.WriteString("return out }\n")
+		apply.WriteString("d.id=patch.EntityID;d.Init();return nil }\n")
+		values.WriteString("return out,nil }\n")
 		s.helpers.WriteString(values.String())
 		s.helpers.WriteString(marshal.String())
 		s.helpers.WriteString(apply.String())
 		s.messages = append(s.messages, message)
+		s.emitDAOTracked(dao, shapes)
 	}
 	if len(s.messages) == 0 {
 		return nil, nil, nil
@@ -185,48 +217,21 @@ func buildSyncSchema(defs *Definitions, pkg string) ([]byte, []byte, error) {
 	}
 	goSource = bytes.Replace(goSource, []byte("Code generated by tool/protocol."), []byte("Code generated by tool/dao."), 1)
 	goSource = append(goSource, []byte(s.helpers.String())...)
+	goSource = bytes.Replace(goSource, []byte("import ("), []byte("import (\n\"github.com/tjbdwanghaibo/roost-core/framework/dataengine\""), 1)
 	goSource = append(goSource, []byte(`
 func syncSliceValues[A,B any](values []A, convert func(A)B) []B { if values==nil{return nil};out:=make([]B,len(values));for i,value:=range values{out[i]=convert(value)};return out }
 func syncMapValues[K comparable,V any,L comparable,W any](values map[K]V,convert func(K,V)(L,W)) map[L]W {if values==nil{return nil};out:=make(map[L]W,len(values));for key,value:=range values{k,v:=convert(key,value);out[k]=v};return out}
 `)...)
+	if bytes.Contains(goSource, []byte("reflect.")) {
+		goSource = bytes.Replace(goSource, []byte("import ("), []byte("import (\n\"reflect\""), 1)
+	}
 	protoSource = append([]byte(generatedHeader+"\n"), protoSource...)
 	goSource, err = format.Source(goSource)
 	return goSource, protoSource, err
 }
 
 // C# 的 PB 消息用于解码 patch，Apply 替换存在的字段，绝不使用 MergeFrom 追加 map/list。
-func buildSyncCSharp(defs *Definitions) []byte {
-	var b strings.Builder
-	fmt.Fprintln(&b, generatedHeader)
-	b.WriteString(`
-#nullable disable
-namespace Roost.Dao.Sync
-{
-    // 字段包装存在才替换；空集合和零值也是有效更新，不能使用 MergeFrom。
-    public static class DaoSyncApply
-    {
-`)
-	for _, dao := range defs.Daos {
-		if len(filterSync(dao.Fields)) == 0 {
-			continue
-		}
-		fmt.Fprintf(&b, `        public static Sync%[1]s Apply(this Sync%[1]s patch, Sync%[1]s previous)
-        {
-            if (patch == null) throw new System.ArgumentNullException(nameof(patch));
-            if (previous != null && previous.EntityId != patch.EntityId)
-                throw new System.IO.InvalidDataException("DAO identity changed.");
-            var next = previous == null ? new Sync%[1]s() : previous.Clone();
-            next.EntityId = patch.EntityId;
-`, dao.Name)
-		for _, field := range filterSync(dao.Fields) {
-			name := syncCSharpProperty(toSnake(field.Name), "Sync"+dao.Name)
-			fmt.Fprintf(&b, "            if (patch.%s != null) next.%s = patch.%s.Clone();\n", name, name, name)
-		}
-		b.WriteString("            return next;\n        }\n\n")
-	}
-	b.WriteString("    }\n}\n")
-	return []byte(b.String())
-}
+func buildSyncCSharp(defs *Definitions) []byte { return buildTrackedSyncCSharp(defs) }
 
 // 与 protoc C# 的字段属性命名一致：分隔符和数字开启下一个词，生成成员名加下划线。
 func syncCSharpProperty(protoName, messageName string) string {

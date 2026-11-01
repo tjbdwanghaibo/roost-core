@@ -1,0 +1,11 @@
+package handler
+
+import (
+	"example.com/remote-test/game/requests"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:nest durability=memory
+func handlerSecond(p entity.IThreadSafeEntity, req *requests.Query) (int64, error) {
+	return req.MustAlliance().Bonus, nil
+}

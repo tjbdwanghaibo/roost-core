@@ -175,6 +175,9 @@ func generatorsFor(m Manifest, force bool) []generator {
 			}
 			return nil
 		}},
+		{Name: "endpoint", Always: true, Run: func(root string, w io.Writer) error {
+			return generateEndpoints(root, m, w)
+		}},
 		// Last, and unconditional: the aggregate collects //roost:register
 		// markers, including the ones the generators above just wrote.
 		{Name: "registry", Always: true, Run: func(root string, w io.Writer) error {

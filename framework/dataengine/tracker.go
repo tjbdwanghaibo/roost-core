@@ -10,6 +10,7 @@ import (
 // 消费，entitySyncDirty 供客户端 EntitySync 消费，二者由 MarkSync 同时置位、各自取走。
 // 持久化的脏状态属于事务本地，不在这里记录。
 type Tracker struct {
+	changes         syncChanges
 	version         atomic.Uint64
 	syncDirty       atomic.Uint64
 	entitySyncDirty atomic.Uint64
@@ -21,6 +22,7 @@ type Tracker struct {
 var _ entity.AggregateMember = (*Tracker)(nil)
 
 type TrackerSnapshot struct {
+	Changes         SyncChangeSnapshot
 	Version         uint64
 	SyncDirty       uint64
 	EntitySyncDirty uint64
@@ -107,6 +109,7 @@ func (t *Tracker) Snapshot() TrackerSnapshot {
 		return TrackerSnapshot{}
 	}
 	return TrackerSnapshot{
+		Changes:         t.changes.snapshot(),
 		Version:         t.version.Load(),
 		SyncDirty:       t.syncDirty.Load(),
 		EntitySyncDirty: t.entitySyncDirty.Load(),
@@ -118,6 +121,7 @@ func (t *Tracker) Restore(snapshot TrackerSnapshot) {
 	if t == nil {
 		return
 	}
+	t.changes.restore(snapshot.Changes)
 	t.version.Store(snapshot.Version)
 	t.syncDirty.Store(snapshot.SyncDirty)
 	t.entitySyncDirty.Store(snapshot.EntitySyncDirty)

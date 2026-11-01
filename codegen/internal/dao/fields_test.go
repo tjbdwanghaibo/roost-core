@@ -199,7 +199,7 @@ func TestTransientFieldsHaveMutatorsAndStayOutOfStorageAndSync(t *testing.T) {
 	if persistDoc := generatedType(source, "varietyDaoPersistDoc"); strings.Contains(persistDoc, "pending") || strings.Contains(persistDoc, "neither") || !strings.Contains(persistDoc, `bson:"persist_only"`) {
 		t.Errorf("the persisted document is not exactly the persist fields:\n%s", persistDoc)
 	}
-	for _, name := range []string{"persistDoc", "setPersistDoc", "marshalCommitState", "marshalPersistData", "marshalPersistPatchBSON", "Unmarshal", "MarshalSync", "ApplySync", "markPendingKeyDirty", "markNeitherDirty"} {
+	for _, name := range []string{"persistDoc", "setPersistDoc", "marshalCommitState", "marshalPersistData", "marshalPersistPatchBSON", "Unmarshal", "MarshalSync", "ApplySync", "markPendingKeyChange", "markNeitherChange"} {
 		body, ok := bodies[name]
 		if !ok {
 			t.Fatalf("generated DAO has no %s", name)

@@ -31,7 +31,7 @@ type Position struct {
 // stale on disk while memory shows both equal. unbindDirty
 // releases only its own binding, so a stale release from a place this value
 // has already left cannot silence the place it is in now.
-func (s *Position) bindDirty(owner daoDirtyOwner, notify func()) {
+func (s *Position) bindDirty(owner daoDirtyOwner, notify func(dataengine.SyncPath)) {
 	if s == nil {
 		return
 	}
@@ -136,7 +136,7 @@ func (s *Position) SetX(v int32) {
 	}
 	if s.x != v {
 		s.x = v
-		s.Mark()
+		s.MarkPath(dataengine.SyncField(1, nil))
 	}
 }
 
@@ -154,6 +154,6 @@ func (s *Position) SetY(v int32) {
 	}
 	if s.y != v {
 		s.y = v
-		s.Mark()
+		s.MarkPath(dataengine.SyncField(2, nil))
 	}
 }

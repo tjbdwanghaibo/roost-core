@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/nest"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/registry"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/roost"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/servicerpc"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/tablegen"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/webroute"
@@ -76,6 +77,24 @@ type Mail interface {
 `
 
 var typoCases = []typoCase{
+	{kind: "endpoint", file: "route.go", line: 3, typo: "nesst", source: "package player\n\n//roost:endpoint nesst=Grant\nfunc (c *Controller) HandleGrant() {}\n", run: func(t *testing.T, root string) error {
+		raw, err := os.ReadFile(filepath.Join(root, "route.go"))
+		if err != nil {
+			return err
+		}
+		project := filepath.Join(t.TempDir(), "planet")
+		if _, _, err := roost.NewProject(roost.NewOptions{Name: "planet", Module: "example.com/planet", Out: project, Mods: []string{"configdata"}}); err != nil {
+			return err
+		}
+		dir := filepath.Join(project, "game/controllers/player")
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "route.go"), raw, 0644); err != nil {
+			return err
+		}
+		return roost.Generate(project, roost.GenerateOptions{Stdout: io.Discard})
+	}},
 	{kind: "nest", file: "grant.go", line: 3, typo: "durabilty", run: runNest,
 		source: "package handler\n\n//roost:nest rollback=undo durabilty=strict\nfunc handlerGrant(p IPlayerEntity, orderID string) (bool, error) {\n\treturn true, nil\n}\n"},
 	{kind: "dao", file: "player.go", line: 3, typo: "dbscop", run: runDao,
