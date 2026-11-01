@@ -82,3 +82,11 @@ GOWORK=off go test -race ./framework/nest ./framework/entity ./framework/dataeng
 之前主要围绕已知复现做局部修复，验证了单一出口，未完整枚举同一契约的其他状态来源。失败创建从 DAO 原位修改漏到回执原位修改，客户端从实体事件的逐订阅者检查漏到直接多播事件；本轮 Sync 又是同一个“交付后失败”契约只在传输错误分支实现，在内容预留失败分支遗漏。更多普通测试或重复跑 race 不能补上缺失的场景。
 
 方向判断：优先收敛同一契约的多个实现入口，而不是每发现一个出口就增加独立状态。审查必须先列事实与所有权（已执行、已准入、已持久、已交付），再逐个审查失败、取消、卸载、重建、回调重入组合。P0/P1 的修复必须有修前失败证据、相邻分支对照和修后状态检查；图谱负责发现调用关系，不能替代这些语义验证。报告中必须写范围，停止使用“整个模块已收尾”代替有限证据。
+
+## RV-20261101-08：Native 托管客户端的销毁通知边界遗漏
+
+**状态：已复现，待修复。等级：P2。** `NativeGameClient.Report` 只在开始时检查 disposed，遍历 Error 观察者期间没有复核。第一个观察者 Dispose 后，剩余观察者仍执行，可能访问已经销毁的引擎对象。Request、ProbeClock、Notify、Subscribe 结果通知也直接调用委托，与普通事件的 NotifyAll 契约不一致。
+
+修前在当前 native 动态库上执行 `DYLD_LIBRARY_PATH=/tmp/roost-native-full-shared dotnet run --project client/cpp/tests/managed/NativeInterop.csproj`，新增 DisposalTests 使用真实 native 无效地址关闭事件，结果：`native Error callbacks after disposal: calls=3, expected=1`。不是仅用反射模拟回调。
+
+修复应复用逐观察者通知，错误观察者保持异常隔离；解析器或重置通知销毁客户端后停止后续处理。需覆盖首位/中间观察者销毁、正常多观察者、请求结果和 PB 解析器，以及既有 TCP/PB/Lockstep/重连链路。此问题属于 RV-06 在 native 托管实现中的遗漏，不能只以纯 C# 客户端通过推断两套客户端均通过。
