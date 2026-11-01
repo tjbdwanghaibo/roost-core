@@ -17,6 +17,11 @@ client.Entities.Trace = new ClientTrace(1024);
 新业务推荐 `GameClient`，已有低层消费者可以继续使用 `TcpSession`。前者复用同一 RS 编解码和 TCP 会话，没有另起网络协议。
 
 - `Connection`：票据鉴权、默认 15 秒心跳、请求预算、断线状态；自动重连默认关闭，由业务通过 `ConnectionOptions.AutoReconnect` 启用。有界指数退避、每次重新取票、每次成功/失败都有 `ReconnectResult`，不会自动重发业务请求。
+- C# `MaxPendingRequests` 限制普通请求、通知及显式校时探测；监控心跳另有最多一个内部槽位，业务不能借用。心跳仍共享发送锁与线上序列，发送阻塞或真正无应答受 `HeartbeatTimeout` 限制。
+
+RV-20261101-04：v1.37.0 在业务占满容量时，心跳会报 `Pending request capacity exhausted`，监控器关闭健康连接，使业务收到 `ObjectDisposedException`。`HeartbeatCapacityTests.cs` 以真实回环 TCP 保持业务在途，等待并应答心跳才返回业务结果；检查额外业务仍被拒绝、容量释放后能再次请求、后续心跳无应答会断线。修前在 `await first` 复现 `ObjectDisposedException`，修后通过。此验证不代表 Unity Player 或 WAN 压测。
+
+2026-11-01 修后验证：`dotnet run --no-restore --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json` 全部通过；`GOWORK=off go test -count=1 -timeout 10m -run '^TestClientSDKAgainstGeneratedPlayerTCP$' ./codegen/internal/roost` 的真实生成工程 TCP 链路也通过。
 - `GameClient`：在创建线程调用 `Subscribe` / `Request` / `Pump`；PB 解析、推送和完成回调都在 Pump 中执行。取消/超时/网络/解析错误走失败回调；业务错误码仍由应答 PB 表示。未消费完成回调也占容量；满时同步拒绝新请求。
 - `EntityViews`：Full 清场、Delta/create/update/remove、对象代际、subject 版本、命名空间和 profile 路由。缺口或解析/应用失败关闭连接，恢复经正常鉴权流程，不跳过错误增量。默认容量 10000 对象，仍需按项目实际负载验证。
 - `RoostClientDriver`：Unity 主线程 Attach 后每帧 Pump，销毁时 Dispose。它与低层 `RoostConnection` 是不同使用层级，同一连接只选一个消费者。

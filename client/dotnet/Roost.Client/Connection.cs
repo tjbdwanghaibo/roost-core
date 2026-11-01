@@ -261,8 +261,7 @@ namespace Roost.Client
                         cancellation.ThrowIfCancellationRequested();
                         if (done == connected.Completion) break;
                     }
-                    Packet ack = await connected.RequestAsync(0, 0, ReadOnlyMemory<byte>.Empty,
-                        options.HeartbeatTimeout, cancellation).ConfigureAwait(false);
+                    Packet ack = await connected.HeartbeatAsync(options.HeartbeatTimeout, cancellation).ConfigureAwait(false);
                     if (ack.Payload.Length != 0) throw new InvalidDataException("Heartbeat acknowledgement must be empty.");
                 }
                 return connected.CloseReason;

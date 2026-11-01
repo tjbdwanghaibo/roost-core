@@ -102,6 +102,7 @@ internal static partial class Program
         TestReconnectFailureLimit();
         TestSceneTimeDomain();
         TestNetworkExperience();
+        await TestHeartbeatCapacity();
         await TestUnitySyncAdapter();
         if (args.Length == 3)
             await GeneratedServer(args[1], int.Parse(args[2]));

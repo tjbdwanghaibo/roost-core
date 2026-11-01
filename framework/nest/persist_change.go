@@ -344,6 +344,8 @@ func (tx *RollbackTx) SetReceiptPayload(namespace, id string, payload []byte) er
 	for index := range tx.receipts {
 		if tx.receipts[index].Namespace == namespace && tx.receipts[index].ID == id {
 			tx.receipts[index].Payload = slices.Clone(payload)
+			// 与 DAO 登记一致：包括同值写入，避免失败构建的持久结果被外层吞错提交。
+			tx.receiptRevision++
 			return nil
 		}
 	}

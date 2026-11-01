@@ -33,7 +33,11 @@
 
 ## 3. 并发、失败与恢复的修改检查
 
-失败创建的 `createdBuildMark` 除了列表长度，还保存已有 DAO 的持久登记 revision；所有 MarkPersist 变体经 `persistChange` 增加 revision，重复写相同 mask 也能被检测。构建失败时发现其他已有 DAO 被再写，就记录 `ErrFailedCreateLeftEffects` 并整条回滚，不尝试局部猜测逆操作。仅创建时复制既有参与者代次，普通 setter 不新增 map 或历史列表。`AddReceipt` 同键同摘要直接返回、不替换旧 payload，新增回执仍由长度检测覆盖。
+失败创建的 `createdBuildMark` 除了列表长度，还保存已有 DAO 的持久登记 revision；所有 MarkPersist 变体经 `persistChange` 增加 revision，重复写相同 mask 也能被检测。构建失败时发现其他已有 DAO 被再写，就记录 `ErrFailedCreateLeftEffects` 并整条回滚，不尝试局部猜测逆操作。仅创建时复制既有参与者代次，普通 setter 不新增 map 或历史列表。`AddReceipt` 同键同摘要直接返回、不替换旧 payload，新增回执由长度检测覆盖；`SetReceiptPayload` 增加事务内回执修改代次，包括同值替换，失败创建比对该代次，不增加保存点或局部恢复分支。
+
+RV-20261101-05 补齐回执原位修改：v1.37.0 的正式 Nest 探针中，builder 改写既有回执后拒绝创建，外层吞错仍返回 `err=nil`，committer 收到 `failed-build`。修复后的 `TestFailedBuildReceiptPayload` 覆盖吞错、同值、传播、嵌套、成功创建及同摘要 AddReceipt 无操作六种场景；失败路径不提交回执或 mutation、不发布实体，成功路径保留新 payload。此问题与 RV-20261101-01 同源：追加集合检查边界，可原位修改的登记检查代次；以后新增持久登记更新 API 必须核对失败创建边界，不能只检查集合长度。验证使用记录型 committer，不代替真实 WAL/Mongo 恢复实验。
+
+2026-11-01 本机验证：`GOWORK=off go test -race ./framework/nest ./framework/saga ./wiring/saga -count=1`、根包 `go test -count=1 .`、全仓 `go build ./...`、上述三包 `go vet` 均通过。原报告见 [review 5f65332f](https://github.com/tjbdwanghaibo/roost-core/blob/5f65332f/docs/maintenance/COMMIT-REVIEW.md)，不把报告分支的历史待修复状态混入当前限制。
 
 RV-20261101-01 的修前证据（main `c31e65cc`）：handler 把自身 DAO 从 1 写到 5，失败 builder 再改为 77，业务吞掉错误后请求 err=nil、内存和提交记录均为 77。[原审查](https://github.com/tjbdwanghaibo/roost-core/blob/30f9261bea91016c365f8c1f4d35d42752f2d48d/docs/maintenance/COMMIT-REVIEW.md)。修后 [failed_create_review_test.go](../../../framework/nest/failed_create_review_test.go) 返回预期错误、恢复为 1、没有提交 mutation 或发布新实体；Nest 原有创建成功/自身失败/外部副作用回归与 race 通过。记录型 committer 验证的是提交边界，未扩大为真实 Mongo 崩溃恢复证明。
 

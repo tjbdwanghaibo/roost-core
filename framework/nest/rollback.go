@@ -97,6 +97,7 @@ type RollbackTx struct {
 	effectIDs              map[string]struct{}
 	receipts               []dataengine.Receipt
 	receiptDigests         map[receiptKey][]byte
+	receiptRevision        uint64 // 回执原位写入的代次；失败创建不能仅比较回执数量。
 	remoteWrite            bool
 	deleteIntents          map[int64]struct{}
 	// created 是 handler 内 CreateInScope 新建的实体，准入前再次加入 SyncMutation。
@@ -1009,9 +1010,10 @@ func (tx *RollbackTx) BeginCreatedEntityBuild() func(map[string]entity.DaoInterf
 	}
 }
 
-// createdBuildMark 保存追加列表的边界及既有 DAO 的登记代次。
-// DAO 修改会原位合并，不能只用参与者数量判断构建是否留下了外部副作用。
+// createdBuildMark 保存追加列表的边界、既有 DAO 及回执内容的修改代次。
+// 原位修改不会增加集合长度，不能只用数量判断构建是否留下了外部副作用。
 type createdBuildMark struct {
+	receiptRevision     uint64
 	persistRevisions    map[MutationParticipant]uint64
 	persistParticipants int
 	commitParticipants  int
@@ -1030,6 +1032,7 @@ func (tx *RollbackTx) createdBuildMark() createdBuildMark {
 		revisions[participant] = tx.participantChanges[participant].revision
 	}
 	return createdBuildMark{
+		receiptRevision:     tx.receiptRevision,
 		persistRevisions:    revisions,
 		persistParticipants: len(tx.participantOrder),
 		commitParticipants:  len(tx.participants),
@@ -1088,7 +1091,7 @@ func (tx *RollbackTx) abandonCreatedEntityBuild(mark createdBuildMark, daos map[
 		}
 	}
 
-	if !existingChanged && len(tx.participantOrder) == mark.persistParticipants && len(tx.participants) == mark.commitParticipants &&
+	if !existingChanged && tx.receiptRevision == mark.receiptRevision && len(tx.participantOrder) == mark.persistParticipants && len(tx.participants) == mark.commitParticipants &&
 		len(tx.mutations) == mark.mutations && len(tx.effects) == mark.effects && len(tx.receipts) == mark.receipts &&
 		len(tx.deleteIntents) == mark.deleteIntents && len(tx.created) == mark.created {
 		return nil

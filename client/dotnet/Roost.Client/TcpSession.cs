@@ -25,6 +25,7 @@ namespace Roost.Client
         private readonly int maxPayload, maxPending, maxPushes;
         private uint nextSequence;
         private int inFlight;
+        private bool heartbeatInFlight;
         private Exception? closed;
         public Task Completion { get; }
         public Exception? CloseReason { get { lock (gate) return closed; } }
@@ -76,6 +77,13 @@ namespace Roost.Client
             return (await SendAsync(messageId, PayloadKind.Protobuf, payload, timeout, cancellation, new Pending(responseId)).ConfigureAwait(false))!;
         }
 
+        // 仅连接监控器使用一个独立槽位，业务及校时探测不能借用；序列与写锁仍统一。
+        internal async Task<Packet> HeartbeatAsync(TimeSpan timeout, CancellationToken cancellation)
+        {
+            return (await SendAsync(0, PayloadKind.Protobuf, ReadOnlyMemory<byte>.Empty,
+                timeout, cancellation, new Pending(0), heartbeat: true).ConfigureAwait(false))!;
+        }
+
         // Notify完成只表示写出；与Request共享序列、发送锁和容量，禁止自动重试输入。
         public async Task NotifyAsync(uint messageId, PayloadKind kind, ReadOnlyMemory<byte> payload,
             TimeSpan timeout, CancellationToken cancellation = default)
@@ -86,15 +94,23 @@ namespace Roost.Client
         }
 
         private async Task<Packet?> SendAsync(uint messageId, PayloadKind kind, ReadOnlyMemory<byte> payload,
-            TimeSpan timeout, CancellationToken cancellation, Pending? item)
+            TimeSpan timeout, CancellationToken cancellation, Pending? item, bool heartbeat = false)
         {
             ValidateTimeout(timeout);
             uint sequence = 0;
             lock (gate)
             {
                 if (closed != null) throw new IOException("Session closed.", closed);
-                if (inFlight >= maxPending) throw new InvalidOperationException("Pending request capacity exhausted.");
-                inFlight++; // 包括等发送锁的请求，不能无限积累发送等待者。
+                if (heartbeat)
+                {
+                    if (heartbeatInFlight) throw new InvalidOperationException("Heartbeat already pending.");
+                    heartbeatInFlight = true;
+                }
+                else
+                {
+                    if (inFlight >= maxPending) throw new InvalidOperationException("Pending request capacity exhausted.");
+                    inFlight++; // 包括等发送锁的请求，不能无限积累发送等待者。
+                }
             }
             using (var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
             {
@@ -129,7 +145,12 @@ namespace Roost.Client
                 }
                 finally
                 {
-                    lock (gate) { if (sequence != 0) pending.Remove(sequence); inFlight--; }
+                    lock (gate)
+                    {
+                        if (sequence != 0) pending.Remove(sequence);
+                        if (heartbeat) heartbeatInFlight = false;
+                        else inFlight--;
+                    }
                     // 发送失败已经抛给调用者；关闭同时失败的TCS也要观察，避免遗留未观察任务异常。
                     if (item != null && item.Result.Task.IsFaulted) _ = item.Result.Task.Exception;
                 }
