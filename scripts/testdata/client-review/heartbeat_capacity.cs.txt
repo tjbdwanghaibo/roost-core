@@ -1,0 +1,36 @@
+using System;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading.Tasks;
+using Roost.Client;
+
+class Program {
+ static async Task<int> Main(){
+  bool all=true;
+  foreach(var setup in new[]{(Heartbeat:false, Capacity:1),(Heartbeat:true, Capacity:2),(Heartbeat:true, Capacity:1)}){
+   bool heartbeat=setup.Heartbeat;
+   var listener=new TcpListener(IPAddress.Loopback,0);listener.Start();
+   int port=((IPEndPoint)listener.LocalEndpoint).Port;
+   int business=0;
+   var server=Task.Run(async()=>{
+    using var peer=await listener.AcceptTcpClientAsync();
+    var stream=peer.GetStream();
+    var auth=await PacketCodec.ReadAsync(stream, PacketCodec.DefaultMaxPayload);
+    var ack=PacketCodec.Encode(new Packet(0,auth.Sequence,Array.Empty<byte>()));
+    await stream.WriteAsync(ack);
+    var request=await PacketCodec.ReadAsync(stream, PacketCodec.DefaultMaxPayload);business++;
+    await Task.Delay(400);
+    try{await stream.WriteAsync(PacketCodec.Encode(new Packet(43,request.Sequence,Array.Empty<byte>())));}catch(IOException){}
+    await Task.Delay(100);
+   });
+   using var connection=new Connection(new ConnectionOptions{Host="127.0.0.1",Port=port,MaxPendingRequests=setup.Capacity,HeartbeatInterval=heartbeat?TimeSpan.FromMilliseconds(100):TimeSpan.Zero,HeartbeatTimeout=TimeSpan.FromSeconds(1),RequestTimeout=TimeSpan.FromSeconds(2)});
+   await connection.ConnectAsync("ticket");
+   try{await connection.RequestAsync(42,43,ReadOnlyMemory<byte>.Empty);Console.WriteLine($"heartbeat={heartbeat}, capacity={setup.Capacity}: request completed");}
+   catch(Exception e){all=false;Console.WriteLine($"heartbeat={heartbeat}, capacity={setup.Capacity}: healthy request failed: {e.GetType().Name}; state={connection.State}; close={connection.LastError}");}
+   await server;listener.Stop();
+   if(business!=1)throw new Exception("fixture: request did not reach server");
+  }
+  return all?0:1;
+ }
+}

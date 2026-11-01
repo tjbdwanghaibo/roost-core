@@ -1,5 +1,39 @@
 # 新增提交审查
 
+## 2026-11-01：续审 C# 客户端心跳与容量
+
+基线：[main / v1.36.0 c31e65cc](https://github.com/tjbdwanghaibo/roost-core/commit/c31e65cc)。相对上一轮只新增验收入口与发版修改，RV-20261101-01～03 对应实现未变化，仍待修复。本轮新增一项独立问题；没有修改运行时代码。
+
+### RV-20261101-04 / P2：C# 心跳因本地在途容量满而断开健康连接
+
+**已通过真实回环 TCP 连续三轮复现，待修复。** [TcpSession.cs:96](https://github.com/tjbdwanghaibo/roost-core/blob/c31e65cc/client/dotnet/Roost.Client/TcpSession.cs#L96) 对心跳与业务请求共用 inFlight/maxPending，没有心跳保留容量；[Connection.cs:252](https://github.com/tjbdwanghaibo/roost-core/blob/c31e65cc/client/dotnet/Roost.Client/Connection.cs#L252) 的 WatchConnectionAsync 用普通 RequestAsync 发心跳，本地容量不足异常与网络故障同样返回给 MonitorAsync，后者在第 190 行 Dispose 连接。
+
+触发：合法配置 MaxPendingRequests=1，业务请求超时 2 秒，心跳间隔 100 毫秒、心跳超时 1 秒。服务端已收到业务请求，在 400 毫秒后正常应答。期望本地饱和不使健康连接断开、已准入业务请求仍可正常完成；实际心跳在本地被拒，连接转为 Disconnected，LastError 为 Pending request capacity exhausted，业务请求报 ObjectDisposedException。心跳尚未发到服务端，不能将此情形归为服务端心跳无响应。
+
+三轮对照均一致：
+
+| 心跳 | 请求容量 | 400 毫秒业务应答 |
+| --- | --- | --- |
+| 关闭 | 1 | 正常完成 |
+| 100 毫秒 | 2 | 正常完成 |
+| 100 毫秒 | 1 | 本地容量满 → 连接断开 → 在途请求失败 |
+
+业务影响：并发请求短暂占满容量时，开启心跳的 C# 接入会放大为整条连接失败，原本可以完成的交易／奖励请求变成结果未知，启用自动重连时还可能造成重连抖动。默认容量为 64，本轮用容量 1 缩小条件，不声称默认配置必然触发；缺陷条件是“心跳到期时业务占满容量”。也不将它套到 native C++ 心跳路径。
+
+建议为控制消息保留有界容量，或者将本地准入失败与已发送后的心跳超时区分，并在明确期限内重新调度；业务请求仍须受原有容量保护。验收覆盖业务满载、心跳准入等待、服务端真正不响应、恢复后新请求正常，以及自动重连不会由本地正常背压触发。临时规避是额外限制业务并发，为心跳留槽位；仅调大总容量不能保证永不占满，不建议在未评估服务端空闲期限时直接禁用心跳。
+
+复现文件：[heartbeat_capacity.py](../../scripts/testdata/client-review/heartbeat_capacity.py)、[heartbeat_capacity.cs.txt](../../scripts/testdata/client-review/heartbeat_capacity.cs.txt)。需 .NET 10 SDK；运行：
+
+```bash
+python3 /path/to/heartbeat_capacity.py /path/to/reviewed-main /path/to/dotnet-root
+```
+
+脚本在临时目录用 SDK 自带编译器编译被审查 main 的未修改 Roost.Client 源码和探针，无 NuGet 包依赖、不启动 SDK 首次迁移。运行成功对照两项、缺陷场景一项，当前退出 1；修复后应全部成功、退出 0。环境为 Linux、.NET SDK 10.0.402 / runtime 10.0.13；不是 Unity 或真实 Gate 验收。SDK CLI 本轮首次运行因尝试在只读 home 创建 NuGet 迁移锁而失败，直接调用编译器后完成验证，环境启动问题不登记为框架问题。
+
+### 本轮其他路径与边界
+
+检查了 NativeReconnect、NativeGameClient、C# GameClient/Connection、Lockstep 消费回调与按组同步提交回调。一个“同房间先 Join 后 Leave 的提交回调可能乱序”的猜测在双 worker 的正式 Nest 单实体路径未复现：后一个请求被前一个的调度顺序阻挡，不能据此登记新缺陷；这不代表已验证所有多实体或异步完成组合。未重跑全仓、Unity、IL2CPP 或长稳压力测试。上轮问题仍沿原编号跟踪。
+
 ## 2026-11-01：昨天新增代码与修复复核
 
 基线：[main e2cda3c4](https://github.com/tjbdwanghaibo/roost-core/commit/e2cda3c4)，包含 v1.36.0 客户端与验收边界文档。相对上次基线有 1522 个文件变化（含大量历史文档整理），本轮重点审查 Saga 生命周期、创建失败事务边界、按组同步、弹性成局和客户端发送顺序，不声称逐个审完所有文件。
