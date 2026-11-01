@@ -4,10 +4,6 @@
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
-## 当前确认待修复：RV-20261101-09 / P2
-
-DataEngine 的 Flush 在等待 replayGate 前检查 fatal，ReplayPass 取得执行权后没有复查；排队期间另一回放报告致命冲突，排队者仍再次调用 Store.Project。正式文件 WAL + 可控 Store 的确定性 race 探针已复现（calls=2，期望 1），未修复。未证明数据损坏；触发顺序、源码、复跑与修复约束见 [核心执行边界审查](CORE-REVIEW.md#rv-20261101-09排队回放在获得执行权后未复查-fatal)。
-
 ## Native 客户端（2026-11-01）
 
 当前 Core TCP 协议的 PB、EntitySync、Lockstep 与时间域已提供 native 实现；通知/取消/重连与引擎接入见 [native 手册](../../client/cpp/README.md)。网络 ABI 2 不兼容旧插件，重新编译库和绑定。macOS ARM64 的 Editor、Mono/IL2CPP Player、50～10000 可见集解码和 TCP 延迟/分片/故障已实跑，见 [客户端报告](../performance/CLIENT-20261101.md)；不替代 Windows/Linux/Android/iOS 或 UE 验收，移动前后台/真实 WAN 和设备容量仍未测。TLS/WS/UDP/KCP 适配未实现，DNS 和账号取票由平台/业务异步准备，不在网络线程阻塞解析。

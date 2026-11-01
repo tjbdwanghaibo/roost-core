@@ -1,16 +1,16 @@
 # 核心执行边界审查
 
-日期：2026-11-01。最近一轮审查基线：`0400e8d4255179d056e306af7a0d0f397d9a03bd`（main，已与远端对齐）。本轮审核 Nest / DataEngine / Sync，不修改运行时代码。此前 RV-07/08 的修前基线为 `0a4e775469fe92d1a53d8e6f9f745126694b6cec`，红绿证据保留在下文。
+日期：2026-11-01。最近一轮审查基线：`0400e8d4255179d056e306af7a0d0f397d9a03bd`（main，已与远端对齐）。本轮审核 Nest / DataEngine / Sync，随后按授权修复 RV-09。此前 RV-07/08 的修前基线为 `0a4e775469fe92d1a53d8e6f9f745126694b6cec`，红绿证据保留在下文。
 
 ## 当前结论
 
-- **待修复 P2：RV-20261101-09**，DataEngine 排队中的 Flush 可以在另一轮回放报告 fatal 后重新调用 Store.Project，已用确定性 race 探针复现。
-- RV-07/08 已修复并推送 main，未发版；发布状态以 CHANGELOG 为准。
+- **已修复 P2：RV-20261101-09**，回放取得执行权后复查 fatal，排队 Flush 和直接 ReplayPass 均返回原错误，不再调用存储。
+- RV-07/08/09 已修复；发布状态以 CHANGELOG 为准。
 - Nest 与 Sync 在本轮列明的路径中未确认新增缺陷；未确认新增 P0/P1。这不是全仓无缺陷的证明。
 
 ## RV-20261101-09：排队回放在获得执行权后未复查 fatal
 
-**状态：已确定性复现，未修复。等级：P2。**
+**状态：已修复并验证。等级：P2。发布状态见 CHANGELOG。**
 
 触发顺序：
 
@@ -41,6 +41,11 @@ FAIL github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine
 
 修复约束：在取得回放执行权的共同入口检查粘滞终态，返回原始 fatal 原因，不再读取/投影后续记录；不要只给 Flush 再加一处等待前检查。验收补齐直接 ReplayPass、排队 Flush、正常临时错误重试，以及 fatal 当轮已经成功的前缀仍能确认。还应核对 WAL terminal 与 Close 的边界，不能把普通取消和可重试错误变成永久 fatal。
 
+
+修复验收：`ReplayPass` 取得 replayGate 后检查粘滞 fatal，保留原始原因；不修改执行中的投影、成功前缀确认、WAL 格式或普通临时错误重试。永久回归并入 `projector_test.go`：`TestQueuedFlushAndDirectReplayStopAfterFatal` 覆盖排队 Flush、直接 ReplayPass、存储只调用一次与失败记录仍留在 WAL。修前同一探针再次失败（calls=2），修后通过。
+
+实际执行：`GOWORK=off go test -race ./framework/dataengine/engine ./framework/nestwal -count=1`、目标包 vet、根包测试全部通过；包内既有并行 fatal、成功前缀、临时错误恢复、OnFatal 关闭及 checkpoint terminal 回归一并通过。此次没有增加额外的终态状态或把取消转为 fatal；真实存储故障矩阵仍未复跑。
+
 ## 最近一轮三核心审核范围与验证
 
 | 模块 | 本轮重点 | 结论 |
@@ -59,13 +64,13 @@ GOWORK=off go vet ./framework/nest/... ./framework/entity ./framework/dataengine
 GOWORK=off go test -count=1 .
 ```
 
-既有回归 16 包通过，vet 与根包检查通过；新探针单独运行并失败，已移出默认测试目录，只保存可复跑夹具。没有把“既有测试通过”当作 RV-09 已通过。没有运行 integration 标签的真实 Mongo/Redis/NATS 故障、Linux、性能、长稳或游戏生成矩阵；AOI/Lockstep 等子包参与回归，但未逐函数人工审计。
+既有回归 16 包通过，vet 与根包检查通过；审查时新探针单独运行并失败；后续修复已将其并入永久回归，红绿证据见上文。没有运行 integration 标签的真实 Mongo/Redis/NATS 故障、Linux、性能、长稳或游戏生成矩阵；AOI/Lockstep 等子包参与回归，但未逐函数人工审计。
 
 方向判断：目前证据指向失败边界的检查位置，不要求重写三大模块。应将状态复核放在实际取得执行权的共同入口，并验证排队期间状态变化；不要在各调用方继续复制判断。和 RV-07 一样，审查必须覆盖等待/交付前后两个阶段，单次成功路径与 race 无报告都不能证明这个契约。
 
 ## RV-20261101-07：交付后的批量结算失败缺少全量恢复
 
-**状态：已修复并验证，未发版。等级：P2。**
+**状态：已修复并验证。等级：P2。发布状态见 CHANGELOG。**
 
 触发顺序：
 
@@ -142,7 +147,7 @@ GOWORK=off go test -race ./framework/nest ./framework/entity ./framework/dataeng
 
 ## RV-20261101-08：Native 托管客户端的销毁通知边界遗漏
 
-**状态：已修复并验证，未发版。等级：P2。** `NativeGameClient.Report` 只在开始时检查 disposed，遍历 Error 观察者期间没有复核。第一个观察者 Dispose 后，剩余观察者仍执行，可能访问已经销毁的引擎对象。Request、ProbeClock、Notify、Subscribe 结果通知也直接调用委托，与普通事件的 NotifyAll 契约不一致。
+**状态：已修复并验证。等级：P2。发布状态见 CHANGELOG。** `NativeGameClient.Report` 只在开始时检查 disposed，遍历 Error 观察者期间没有复核。第一个观察者 Dispose 后，剩余观察者仍执行，可能访问已经销毁的引擎对象。Request、ProbeClock、Notify、Subscribe 结果通知也直接调用委托，与普通事件的 NotifyAll 契约不一致。
 
 修前在当前 native 动态库上执行 `DYLD_LIBRARY_PATH=/tmp/roost-native-full-shared dotnet run --project client/cpp/tests/managed/NativeInterop.csproj`，新增 DisposalTests 使用真实 native 无效地址关闭事件，结果：`native Error callbacks after disposal: calls=3, expected=1`。不是仅用反射模拟回调。
 

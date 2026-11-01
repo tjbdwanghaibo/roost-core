@@ -27,6 +27,11 @@ func (projector *Projector) ReplayPass(ctx context.Context) (processed int, resu
 		return 0, err
 	}
 	defer projector.replayGate.release()
+	// 等待回放所有权期间，前一轮可能已报告致命冲突。所有入口在这里复核，
+	// 防止已排队的 Flush 或直接 ReplayPass 在 fail-stop 后继续投影。
+	if fatal := projector.fatal(); fatal != nil {
+		return 0, fatal
+	}
 	records, fences, replayErr := projector.readReplayBatch(ctx)
 	if len(records) == 0 {
 		return 0, replayErr

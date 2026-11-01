@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -999,4 +1001,54 @@ func TestReplayBudgetCountsConsumedRecordsAcrossSegments(t *testing.T) {
 			assertWALReplayCount(t, w, 0)
 		})
 	}
+}
+
+// 排队者取得回放所有权后必须复核 fatal，不能重新调用已经停止的投影链路。
+type blockedFatalStore struct {
+	calls            atomic.Int32
+	entered, release chan struct{}
+}
+
+func (s *blockedFatalStore) Project(context.Context, coredata.CommitRecord) error {
+	if s.calls.Add(1) == 1 {
+		close(s.entered)
+		<-s.release
+	}
+	return ErrProjectionConflict
+}
+func TestQueuedFlushAndDirectReplayStopAfterFatal(t *testing.T) {
+	s := &blockedFatalStore{}
+	p, _ := manualProjector(t, s)
+	record := projectorRecord(81, false)
+	if err := p.Commit(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	p.TransactionReleased(record.ID)
+	synctest.Test(t, func(t *testing.T) {
+		s.entered = make(chan struct{})
+		s.release = make(chan struct{})
+		first := make(chan error, 1)
+		go func() { _, err := p.ReplayPass(context.Background()); first <- err }()
+		<-s.entered
+		second := make(chan error, 1)
+		go func() { second <- p.Flush(context.Background()) }()
+		synctest.Wait()
+		close(s.release)
+		if err := <-first; !errors.Is(err, ErrProjectionConflict) {
+			t.Fatal(err)
+		}
+		if err := <-second; !errors.Is(err, ErrProjectionConflict) {
+			t.Fatal(err)
+		}
+		if n := s.calls.Load(); n != 1 {
+			t.Fatalf("queued Flush called Store.Project after fatal: calls=%d, want 1", n)
+		}
+		if n, err := p.ReplayPass(context.Background()); n != 0 || !errors.Is(err, ErrProjectionConflict) {
+			t.Fatalf("direct replay after fatal: processed=%d err=%v", n, err)
+		}
+		if n := s.calls.Load(); n != 1 {
+			t.Fatalf("direct replay called store after fatal: %d", n)
+		}
+		assertWALReplayCount(t, p.wal, 1)
+	})
 }
