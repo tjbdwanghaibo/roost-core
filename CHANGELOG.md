@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.36.0] - 2026-11-01
+
 - Unity 增加可构建 UPM 包、平台插件导入、主线程 Driver 与完整 PB/EntitySync/Lockstep 示例；实际验证 macOS ARM64 Editor、Mono 与 IL2CPP Player，提供客户端容量和 TCP 故障复跑入口。移动设备及其他引擎另行验收。
 - 修复真实 Gate 验收记录器隐藏 MongoStore 批量投影能力造成的积压，保留能力回归与修前失败证据；同配置 100/s 两轮短测排空通过，未降低 WAL/Mongo 持久等级。
 
