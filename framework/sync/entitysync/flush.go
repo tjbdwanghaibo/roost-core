@@ -289,6 +289,18 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 	defer m.commitSnapshotAttempts(work, plan)
 
 	var admittedSessions []SessionID
+	// 线上帧已交付就不能回退。传输或内容结算失败都走同一恢复边界：
+	// 保留帧时钟，放弃内容捕获，并让已交付的存活订阅重建全量基线。
+	retryCaptured := func(cause error) {
+		abortAll(prepared, cause)
+		m.requireSnapshotsAfterRetry(admittedSessions, work)
+		for _, id := range ids {
+			m.markPending(id)
+		}
+		for sid := range emptyFulls {
+			m.markReset(sid) // 已交付的会话复核时不再欠，自然丢掉。
+		}
+	}
 	for _, sid := range sessionIDs {
 		batch := work[sid]
 		if batch.session == nil || m.session(sid) != batch.session {
@@ -299,16 +311,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 			admittedSessions = append(admittedSessions, sid)
 		}
 		if retryErr != nil {
-			// 内容捕获作废并保留脏位，但已交付会话可能已应用未提交版本的增量。
-			// 它们下次必须收全量，不能再把旧 baseVersion 的增量当成连续历史。
-			abortAll(prepared, retryErr)
-			m.requireSnapshotsAfterRetry(admittedSessions, work)
-			for _, id := range ids {
-				m.markPending(id)
-			}
-			for sid := range emptyFulls {
-				m.markReset(sid) // 已交付的会话下次复核时不再欠，自然丢掉
-			}
+			retryCaptured(retryErr)
 			return fmt.Errorf("sync admission session %d: %w", sid, retryErr)
 		}
 	}
@@ -317,10 +320,11 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 	if len(prepared) > 0 {
 		batch, err := entity.ReservePreparedSubjectSyncBatch(prepared)
 		if err != nil {
-			abortAll(prepared, err)
-			failures = append(failures, fmt.Errorf("sync reserve: %w", err))
+			retryCaptured(err)
+			return errors.Join(append(failures, fmt.Errorf("sync reserve: %w", err))...)
 		} else if err := batch.Commit(); err != nil {
-			failures = append(failures, fmt.Errorf("sync commit: %w", err))
+			retryCaptured(err)
+			return errors.Join(append(failures, fmt.Errorf("sync commit: %w", err))...)
 		}
 	}
 	for _, id := range ids {
