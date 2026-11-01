@@ -109,7 +109,10 @@ func (w *partyWire) PushSyncPlayer(_ context.Context, player int64, messageID ui
 					if err != nil {
 						return err
 					}
-					doc := patch.Values()
+					doc, err := patch.Values()
+					if err != nil {
+						return err
+					}
 					// 视图白名单：成员只能收到公开记分板（加文档主键），State（种子、星星时刻、回执）一个字段都不能出现。
 					board, ok := doc["board"].(string)
 					if _, id := doc["_id"]; !ok || !id || len(doc) != 2 {
@@ -121,7 +124,10 @@ func (w *partyWire) PushSyncPlayer(_ context.Context, player int64, messageID ui
 					if err != nil {
 						return err
 					}
-					doc := patch.Values()
+					doc, err := patch.Values()
+					if err != nil {
+						return err
+					}
 					if update.SubjectID != entityOf(player) {
 						return fmt.Errorf("player %d received the self view of entity %d", player, update.SubjectID)
 					}
