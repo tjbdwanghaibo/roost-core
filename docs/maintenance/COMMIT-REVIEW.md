@@ -1,5 +1,45 @@
 # 新增提交审查
 
+## 2026-11-01：昨天新增代码与修复复核
+
+基线：[main e2cda3c4](https://github.com/tjbdwanghaibo/roost-core/commit/e2cda3c4)，包含 v1.36.0 客户端与验收边界文档。相对上次基线有 1522 个文件变化（含大量历史文档整理），本轮重点审查 Saga 生命周期、创建失败事务边界、按组同步、弹性成局和客户端发送顺序，不声称逐个审完所有文件。
+
+**旧问题复核**：操作键加入持久 Lifecycle 后，新一轮与旧回执／完成命令隔离；Register 与 wiring 配置入口验证回执保留期至少为每步重试窗口的两倍，原短保留配置被拒；失败创建会撤销自身 DAO 登记。原问题的对应回归通过，修复方向合理。超长停机超过回执窗口仍是文档明确的边界。创建失败对“其他已登记对象”的处理、终态等待对新 Lifecycle 的处理仍有以下遗漏。TCP 快照夹具修复后的包测试也已通过。
+
+### RV-20261101-01 / P1：失败创建修改已登记 DAO 时，副作用检查漏报
+
+**已复现，待修复；RV-20261031-01 修复的边界遗漏。** [rollback.go:1012](https://github.com/tjbdwanghaibo/roost-core/blob/e2cda3c4/framework/nest/rollback.go#L1012) 的 createdBuildMark 只记录各列表长度；abandonCreatedEntityBuild 通过新增参与者数量判断是否动了其他实体。MarkPersist 对已登记参与者更新原来的 PersistChange，不增加列表长度，因此检测不到。
+
+复现：真实 Nest RollbackState/Strict handler 先把自己的 DAO 写为 5 并登记；随后 Create 的 builder 把该 DAO 改为 77，再返回初始化失败；handler 处理错误后成功返回。期望按当前契约返回 ErrFailedCreateLeftEffects、整条回滚到初始值 1；实际请求 err=nil，内存和提交记录都是 77。新实体自身 DAO 已被移除，遗漏的是其他实体的修改。房间／公会创建失败时，由初始化修改的玩家状态可能仍被提交。
+
+建议不能只比较集合长度：为构建期间每次持久登记记录触及对象／修改代次，或建立能覆盖既有参与者的保存点；其他实体有修改但不能准确撤销时令整个事务失败。验收补“进入创建之前已经登记的 DAO 再写”，并检查同类原位更新入口（例如已有回执 payload），后者本轮未单独复现。临时规避仍是把可能产生外部副作用的创建错误向上传播，不正常提交外层事务。
+
+探针：[existing_participant_test.go.txt](../../scripts/testdata/entity-review/existing_participant_test.go.txt) → 最新 main 的 `framework/nest/review_existing_participant_test.go`。`go test -race ./framework/nest -run '^TestReviewFailedBuildModifiesAlreadyRegisteredDAO$' -count=1 -v` 失败。使用正式 Nest 请求路径与记录型 committer，未把提交记录验证扩大为真实 Mongo 冷恢复。
+
+### RV-20261101-02 / P1：WaitTerminal 可返回上一生命周期的终态
+
+**已复现，待修复；生命周期隔离在终态等待路径遗漏。** [terminal_watch.go](https://github.com/tjbdwanghaibo/roost-core/blob/e2cda3c4/framework/saga/terminal_watch.go#L83) 的 offer/newerThan 只比较 Version，WaitTerminal 从 getOwned 取得记录后也只保存 Version，没有绑定 Lifecycle。
+
+同业务键重开后版本从头开始；等待者已登记，查询得到 NEWLIFE 的 Waiting v2，此时落后的终态 follower 交来 OLDLIFE Completed v10。即使又收到 NEWLIFE Completed v4，best 仍保留 v10，WaitTerminal 返回 OLDLIFE 的成功。业务等待本轮跨服转账／结算时可能提前把上一轮成功当成这轮结果；这不表示协调器本轮状态已经被旧完成命令推进（那条修复已生效）。
+
+探针：[terminal_lifecycle_test.go.txt](../../scripts/testdata/saga-review/terminal_lifecycle_test.go.txt) → 最新 main 的 `framework/saga/review_terminal_lifecycle_test.go`。`go test -race ./framework/saga -run '^TestReviewWaitTerminalRejectsPreviousLifecycle$' -count=1 -v` 失败。使用 stub query 与直接终态观察，确定性模拟查询回包期间 follower 追上旧事件；未做真实 JetStream 积压时长测量。
+
+建议等待者与已查询的 Lifecycle 绑定，只在同一生命周期比较版本，并明确尚未查到记录时等待哪一轮；不能跨轮用最大 Version 合并。验收包含旧高版本先到／后到、新低版本终态、同轮 Resume、查询暂不可用和取消。临时规避是对 WaitTerminal 结果核对 StartSaga 返回的 Lifecycle；不匹配不能视为本轮完成，使用权威查询核实。
+
+### RV-20261101-03 / P2：Native 心跳与并发请求可能倒序发送序列号
+
+**受控交错下已复现，待修复。** [client.cpp:200](https://github.com/tjbdwanghaibo/roost-core/blob/e2cda3c4/client/cpp/src/client.cpp#L200) 在 mutex 内发现 commands 为空，解锁后才为心跳分配 sequence；admit 在另一线程可以先取得较小序列并入队。网络线程仍发送较大心跳，再取出较小业务请求。服务端 [tcp.go:469](https://github.com/tjbdwanghaibo/roost-core/blob/e2cda3c4/infra/network/gateway/tcp.go#L469) 要求包括心跳在内的请求序列递增，会关闭连接。
+
+真实回环 TCP 捕获为 `(message_id, seq) = (0,1), (0,3), (42,2)`。诊断探针只在临时源文件的“空队列检查解锁后、心跳取号前”插入调度钩子，让独立应用线程调用正式 roost_request 并完成入队；不改分配、排队和发送算法。**这是受控调度复现，不是未插桩压力测试，也未测自然触发频率。** Python 对端只记录并应答帧，服务端断开结论来自已核对的正式序列校验，不冒充真实 Gate 联测。
+
+探针：[native_sequence.py](../../scripts/testdata/client-review/native_sequence.py)。需 g++ / Python 3，运行 `python3 /path/to/native_sequence.py /path/to/reviewed-main`，当前输出上述倒序并断言失败。修改只在临时目录，结束自动清理。
+
+建议把“选择下一条发送内容”和“心跳分配序列”放进与请求准入同一临界区，或由网络线程按最终发送顺序统一编号（须保留公开请求 handle 的取消／关联契约）；不能仅依赖 atomic 保证线上顺序。不建议关闭服务端防重放检查。该问题影响使用 native 网络路径的 Unity/C++ 接入，不能推广为纯 C# TcpSession 的同一缺陷。
+
+### 验证与交付范围
+
+`go test -race` 的 Saga、wiring/saga、Nest、Entity、GroupView policy、wiring/selfsync、Lockstep 七包原有测试通过；另运行 service/match、wiring/match、wiring/nest 三包 race 测试也通过。新增两个 Go 缺陷断言失败，未出现 race 报告。Linux g++ 直接构建未修改的 native 源码并运行仓库 smoke、lockstep、weak 三套 Python 回环驱动通过，覆盖既有同步金样、请求／心跳、快照与弱网场景；没有 Protobuf 可选 C ABI、Unity、IL2CPP 或真实 Gate 的本轮验证。只提交审查证据，不修改运行时、不发 PR/issue。
+
 ## 2026-10-31：继续审查持久实体创建与 TCP 恢复
 
 基线仍为 [main v1.33.0，030a9f11](https://github.com/tjbdwanghaibo/roost-core/commit/030a9f11)，本轮 fetch 无新增提交。RV-20261030-01、02 两项 Saga 风险仍未修复；本次新增一个独立问题，并缩小上轮 TCP 测试失败的原因范围。只提交问题与证据，不修改运行时。
