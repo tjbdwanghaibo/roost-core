@@ -295,7 +295,7 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 	elapsed := time.Since(start)
 	t.Logf("load complete: requests=%d dropped=%d projector=%+v", completed, dropped, projector.Stats())
 	// 即使后续排空失败也保留已完成负载的数据，不把它写成成功验收。
-	phase, marshalErr := json.MarshalIndent(map[string]any{"verified": false, "phase": "before_drain", "target_rate": rate, "completed": completed, "dropped": dropped, "seconds": elapsed.Seconds(), "sync": probe.Snapshot(time.Now()), "requests": requests.Snapshot(), "traffic": traffic.Snapshot(), "projector": projector.Stats(), "nest": business.Stats()}, "", "  ")
+	phase, marshalErr := json.MarshalIndent(map[string]any{"verified": false, "phase": "before_drain", "target_rate": rate, "completed": completed, "dropped": dropped, "seconds": elapsed.Seconds(), "sync": probe.Snapshot(time.Now()), "requests": requests.Snapshot(), "traffic": traffic.Snapshot(), "projector": projector.Stats(), "projection_diagnostics": store.diagnostics(), "nest": business.Stats()}, "", "  ")
 	if marshalErr != nil {
 		t.Fatal(marshalErr)
 	}
@@ -382,7 +382,8 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 		Nest                                                                nest.DispatcherStats
 		Projector                                                           dataengine.ProjectorStats
 		WAL                                                                 nestwal.Stats
-	}{true, fmt.Sprintf("one real account; one Player + shared World hotspot; %d ordinary requests/s target; 10Hz heartbeat, 5%% mutation; same-process Go Robot; no Remote/Saga capacity claim", rate), scheduled, dropped, completed, beats.Load(), beatChanges.Load(), elapsed.Seconds(), float64(completed-1) / elapsed.Seconds(), probe.Snapshot(time.Now()), requests.Snapshot(), traffic.Snapshot(), resources, business.Stats(), stats, walStats}
+		ProjectionDiagnostics                                               map[string]any
+	}{true, fmt.Sprintf("one real account; one Player + shared World hotspot; %d ordinary requests/s target; 10Hz heartbeat, 5%% mutation; same-process Go Robot; no Remote/Saga capacity claim", rate), scheduled, dropped, completed, beats.Load(), beatChanges.Load(), elapsed.Seconds(), float64(completed-1) / elapsed.Seconds(), probe.Snapshot(time.Now()), requests.Snapshot(), traffic.Snapshot(), resources, business.Stats(), stats, walStats, store.diagnostics()}
 	for _, event := range report.Sync.Events {
 		if event.Received == 0 || event.Pending != 0 || event.TimedOut != 0 || event.Canceled != 0 {
 			t.Fatalf("incomplete sync evidence: %+v", event)

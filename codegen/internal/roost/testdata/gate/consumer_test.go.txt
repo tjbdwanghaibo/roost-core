@@ -45,14 +45,26 @@ func (checker gateChecker) Matches(ctx context.Context, role string, sid int32, 
 }
 
 type gateProjection struct {
-	mu      sync.Mutex
-	records map[coredata.TransactionID]coredata.CommitRecord
-	target  dataengine.ProjectionStore
+	mu           sync.Mutex
+	records      map[coredata.TransactionID]coredata.CommitRecord
+	target       dataengine.ProjectionStore
+	calls        atomic.Uint64
+	projectNS    atomic.Uint64
+	maxProjectNS atomic.Uint64
+	batchCalls   atomic.Uint64
+	batchRecords atomic.Uint64
 }
 
 func (store *gateProjection) Project(ctx context.Context, record coredata.CommitRecord) error {
 	if store.target != nil {
-		if err := store.target.Project(ctx, record); err != nil {
+		started := time.Now()
+		err := store.target.Project(ctx, record)
+		ns := uint64(time.Since(started))
+		store.calls.Add(1)
+		store.projectNS.Add(ns)
+		for old := store.maxProjectNS.Load(); ns > old && !store.maxProjectNS.CompareAndSwap(old, ns); old = store.maxProjectNS.Load() {
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -60,6 +72,84 @@ func (store *gateProjection) Project(ctx context.Context, record coredata.Commit
 	defer store.mu.Unlock()
 	store.records[record.ID] = coredata.CloneCommitRecord(record)
 	return nil
+}
+
+// 记录器只在目标明确承诺批量幂等时暴露该能力，不能让测试包装改变正式投影路径。
+type gateBatchProjection struct {
+	*gateProjection
+	batch dataengine.BatchProjectionStore
+}
+
+func (store *gateBatchProjection) ProjectBatch(ctx context.Context, records []coredata.CommitRecord) error {
+	started := time.Now()
+	err := store.batch.ProjectBatch(ctx, records)
+	ns := uint64(time.Since(started))
+	store.batchCalls.Add(1)
+	store.batchRecords.Add(uint64(len(records)))
+	store.projectNS.Add(ns)
+	for old := store.maxProjectNS.Load(); ns > old && !store.maxProjectNS.CompareAndSwap(old, ns); old = store.maxProjectNS.Load() {
+	}
+	if err != nil {
+		return err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for _, record := range records {
+		store.records[record.ID] = coredata.CloneCommitRecord(record)
+	}
+	return nil
+}
+func (store *gateBatchProjection) SupportsParallelProjection() bool {
+	target, ok := store.batch.(dataengine.ParallelProjectionStore)
+	return ok && target.SupportsParallelProjection()
+}
+func (store *gateBatchProjection) SupportsRemoteParallelProjection() bool {
+	target, ok := store.batch.(dataengine.RemoteParallelProjectionStore)
+	return ok && target.SupportsRemoteParallelProjection()
+}
+func (store *gateProjection) projectionStore() dataengine.ProjectionStore {
+	if batch, ok := store.target.(dataengine.BatchProjectionStore); ok {
+		return &gateBatchProjection{gateProjection: store, batch: batch}
+	}
+	return store
+}
+
+type gateBatchProbe struct {
+	fail    bool
+	batches int
+}
+
+func (probe *gateBatchProbe) Project(context.Context, coredata.CommitRecord) error { return nil }
+func (probe *gateBatchProbe) ProjectBatch(context.Context, []coredata.CommitRecord) error {
+	probe.batches++
+	if probe.fail {
+		return fmt.Errorf("injected batch failure")
+	}
+	return nil
+}
+func (probe *gateBatchProbe) SupportsParallelProjection() bool { return true }
+func TestGeneratedGateProjectionCapabilities(t *testing.T) {
+	store := &gateProjection{records: make(map[coredata.TransactionID]coredata.CommitRecord)}
+	if _, ok := store.projectionStore().(dataengine.BatchProjectionStore); ok {
+		t.Fatal("invented batch capability")
+	}
+	probe := &gateBatchProbe{fail: true}
+	store.target = probe
+	wrapped, ok := store.projectionStore().(dataengine.ParallelProjectionStore)
+	if !ok || !wrapped.SupportsParallelProjection() {
+		t.Fatal("lost batch/parallel capability")
+	}
+	records := []coredata.CommitRecord{{ID: coredata.TransactionID{1}}, {ID: coredata.TransactionID{2}}}
+	if err := wrapped.ProjectBatch(context.Background(), records); err == nil || len(store.records) != 0 {
+		t.Fatal("failed batch recorded as success")
+	}
+	probe.fail = false
+	if err := wrapped.ProjectBatch(context.Background(), records); err != nil || len(store.records) != 2 || probe.batches != 2 {
+		t.Fatal("batch not forwarded or recorded")
+	}
+}
+func (store *gateProjection) diagnostics() map[string]any {
+	return map[string]any{"single_calls": store.calls.Load(), "batch_calls": store.batchCalls.Load(), "batch_records": store.batchRecords.Load(), "store_total_ms": float64(store.projectNS.Load()) / 1e6, "store_max_ms": float64(store.maxProjectNS.Load()) / 1e6}
 }
 func TestGeneratedGateNestDAOAndWAL(t *testing.T) {
 	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
@@ -82,10 +172,13 @@ func TestGeneratedGateNestDAOAndWAL(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := &gateProjection{records: make(map[coredata.TransactionID]coredata.CommitRecord)}
+	t.Cleanup(func() {
+		t.Logf("projection diagnostic: %+v", store.diagnostics())
+	})
 	if real != nil {
 		store.target = real.store
 	}
-	projector, err := dataengine.NewProjector(wal, store, dataengine.DefaultProjectorOptions())
+	projector, err := dataengine.NewProjector(wal, store.projectionStore(), dataengine.DefaultProjectorOptions())
 	if err != nil {
 		t.Fatal(err)
 	}

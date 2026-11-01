@@ -66,7 +66,7 @@ client.EntitiesReset += () => ClearVisibleEntities();
 - 业务通知抛错交给 Error，不破坏已确认的同步基线，也不阻止其他订阅者；Error 自身抛错被隔离。协议/解码错误仍断开流并清场。
 - 回调只读前后视图，不直接修改 PB 对象或在通知期间调用 Entities.Reset/Receive；连接生命周期由 GameClient 管理。
 
-完整可编译用法在 `client/dotnet/Roost.Client.Tests/GameClientTests.cs`，真实 TCP 对端收发官方生成的 `StringValue` PB；DAO 类型与 Apply 方法在跨语言测试中实际编译和执行。Unity 桥接源文件被 .NET 测试编译，但本轮未启动 Unity 编辑器或验证 IL2CPP；没有 WAN、客户端容量或客户端性能结论。
+完整可编译用法在 `client/dotnet/Roost.Client.Tests/GameClientTests.cs`，真实 TCP 对端收发官方生成的 `StringValue` PB；DAO 类型与 Apply 方法在跨语言测试中实际编译和执行。纯 C# 网络适配的桥接源文件由 .NET 测试编译。另有 native 网络路径已实际验证 Unity Editor、Mono/IL2CPP Player 与解码容量，见 [Unity 接入](unity/README.md)；两条网络路径不共用容量结论。
 
 ## 包头：RS v2
 
@@ -224,7 +224,7 @@ Go客户端（`framework/sync/lockstep`与`robot`）对应接口：`FrameAssembl
 
 ## Unity接入与其他引擎
 
-先构建Release版`Roost.Client.dll`并放到Unity工程`Assets/Plugins`，再把`client/unity`作为本地UPM包加入（`package.json`）。包不附带已编译DLL，须先提供运行库；Unity项目选择支持.NET Standard 2.1的兼容级别。C#业务PB类型及Google.Protobuf依赖由游戏工程管理。
+按 [Unity 构建入口](unity/README.md) 生成完整 UPM 包，再从输出目录导入 `package.json`；不要直接导入未构建的 `client/unity`，也不要重复放置 `Roost.Client.dll`。Unity 项目选择支持 .NET Standard 2.1 的兼容级别。C# 业务 PB 类型及 Google.Protobuf 依赖由游戏工程管理。包内保留纯 C# 适配，同时提供复用 native 网络线程的 `RoostNativeDriver`；同一连接选择一种路径。
 
 `Roost.Unity.RoostConnection`在Unity主线程Attach会话，`Update`每帧最多拉取配置数量的推送，然后触发`PacketReceived` / `Disconnected`；网络线程不访问Unity对象。Detach/销毁关闭自己的会话，替换时清掉旧连接队列。PB/Sync/Lockstep解码及游戏对象修改由主线程事件处理者实施；Lockstep异步消费必须串行await，不能直接挂并发async void事件。该正式适配源码已在.NET测试中直接链接，并通过真实TCP的缺口/业务异常关闭回归；测试只替代Unity宿主类型，尚未在Unity编辑器/IL2CPP平台实测。
 

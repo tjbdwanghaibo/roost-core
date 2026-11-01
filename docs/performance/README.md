@@ -6,7 +6,8 @@
 
 | 要了解什么 | 基线与适用范围 |
 | --- | --- |
-| Robot / 真实账号 Gate 持久热点 | [当前短测](ROBOT-GATE-20261101.md)：20/s 通过、100/s 投影积压失败，包含 Sync 三类延迟与复跑入口 |
+| Robot / 真实账号 Gate 持久热点 | [当前短测](ROBOT-GATE-20261101.md)：20/s 通过；100/s 夹具批量能力修复后两轮排空通过，保留修前失败，包含 Sync 三类延迟与复跑入口 |
+| 客户端解码 / Unity / 弱网 | [当前验证](CLIENT-20261101.md)：native 与 Mono/IL2CPP 的可见集容量、TCP 故障，非 WAN/设备容量 |
 | Nest 调度开销 | [dispatch](NEST-DISPATCH-BENCHMARK.md)（handler 10–500µs 对照）；[最新完成顺序基准](benchmarks/nest-completion-order-all-20261029/README.md) |
 | 心跳、普通消息与 Entity 混合负载 | [心跳驱动](HB-DRIVEN-LOAD-20261021.md)、[批量投递](NEST-BATCH-HEARTBEAT-20261021.md)；[调度结构取舍](HB-STRUCTURES-20261021.md)保留为现行参数依据 |
 | Gate + AOI 同步延迟 | [完整链路](GATE-AOI.md)、[Interest 单写应用](INTEREST-SINGLE-WRITER-20261022.md)；periodic、on_change、ApplySync、ApplyAsync 分开比较 |

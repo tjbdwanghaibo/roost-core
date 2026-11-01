@@ -1048,7 +1048,7 @@ func TestGeneratedGateTransportSelection(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	args := []string{"test", "-mod=mod", "-count=1", "-v", "-run", "^TestGeneratedGate(NestDAOAndWAL|TransportSelection)$", "./internal/service/game", "./internal/bootstrap"}
+	args := []string{"test", "-mod=mod", "-count=1", "-v", "-run", "^TestGeneratedGate(NestDAOAndWAL|TransportSelection|ProjectionCapabilities)$", "./internal/service/game", "./internal/bootstrap"}
 	if os.Getenv("ROOST_GATE_LOAD_SECONDS") == "" {
 		args = append(args, "-race")
 	}

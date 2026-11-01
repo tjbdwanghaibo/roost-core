@@ -6,13 +6,13 @@
 
 ## Native 客户端（2026-11-01）
 
-当前 Core TCP 协议的 PB、EntitySync、Lockstep 与时间域已提供 native 实现；通知/取消/重连与引擎接入见 [native 手册](../../client/cpp/README.md)。网络 ABI 2 不兼容旧插件，重新编译库和绑定。macOS 主机验证不替代 Windows/Linux/Android/iOS、Unity IL2CPP 或 UE 的实机验收；大可见集、移动前后台/弱网和设备容量仍未测。TLS/WS/UDP/KCP 适配未实现，DNS 和账号取票由平台/业务异步准备，不在网络线程阻塞解析。
+当前 Core TCP 协议的 PB、EntitySync、Lockstep 与时间域已提供 native 实现；通知/取消/重连与引擎接入见 [native 手册](../../client/cpp/README.md)。网络 ABI 2 不兼容旧插件，重新编译库和绑定。macOS ARM64 的 Editor、Mono/IL2CPP Player、50～10000 可见集解码和 TCP 延迟/分片/故障已实跑，见 [客户端报告](../performance/CLIENT-20261101.md)；不替代 Windows/Linux/Android/iOS 或 UE 验收，移动前后台/真实 WAN 和设备容量仍未测。TLS/WS/UDP/KCP 适配未实现，DNS 和账号取票由平台/业务异步准备，不在网络线程阻塞解析。
 
 ## Robot 推广验收（2026-11-01）
 
 13 类网络玩法已扩至现有规则的对局/经营闭环；公共 Robot 增加有界 Full/Delta/Remove 应用延迟观测，见 [Robot](../framework/ROBOT.md)。这些默认玩法仍使用替身鉴权/提交器。通用 game-demo 的真实账号/Gate/PB/strict WAL/Mongo 热点诊断与每个玩法的生产组合不是同一项验收。
 
-本机单 Player + 共享 World、100 请求/s 的 30 秒真实负载出现 Mongo 投影积压：2981 次请求，结束时 1906 条未投影，再排空 30 秒仍剩 314 条；不能写成容量通过或 Gate/Sync 超时。保持同步级别和原失败样本，20/s 对照、1000 玩家/10000 Entity 与少量 Saga 同机混合短测已通过，具体口径见 [当前性能报告](../performance/ROBOT-GATE-20261101.md)。Linux、跨机、客户端设备/引擎、完整进程故障组合仍未验收。
+本机单 Player + 共享 World 的 100/s 投影积压已定位为验收记录器隐藏 MongoStore 批量接口，导致逐笔投影/checkpoint；修复后同配置两轮 30s 的负载末 WALUnacked 为 6/4，排空后均 0，一致性通过。仍有 19/15 个输入丢拍，短测不代表无丢拍持续容量；strict WAL 与 Mongo 持久级别不变，原失败证据保留。20/s 对照、1000 玩家/10000 Entity 与少量 Saga 混合短测见 [当前性能报告](../performance/ROBOT-GATE-20261101.md)。Linux、跨机、完整进程故障组合和移动设备仍未验收。
 
 ## 通用 LevelComponent 首版边界
 

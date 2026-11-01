@@ -11,7 +11,7 @@
 | 100 请求/s | 30s | 2981 | 19 | 1906 | 排空再等 30s 仍剩 314，失败 |
 | 20 请求/s | 30.0004s | 600 | 0 | 0 | 一致性及排空通过 |
 
-100/s 失败位于 Mongo 投影排空：测量结束 committed=2996、projected=1090、无冲突/投影错误；排空超时后 projected=2684、WALUnacked=314，记录一次 context deadline。它说明本机此共享实体持久热点跟不上持续输入，不证明框架独立实体容量只有 20/s，也不是 Gate/Sync 超时。没有改 Mongo 持久级别、放宽排空期限或删掉失败样本；20/s 是显式另一档，不替代原档结论。
+100/s 失败位于 Mongo 投影排空：测量结束 committed=2996、projected=1090、无冲突/投影错误；排空超时后 projected=2684、WALUnacked=314，记录一次 context deadline。后续定位确认，验收记录器隐藏 MongoStore 的批量接口，导致这条夹具降级到逐笔投影与 checkpoint（修复复测见下节）。这不是正式 MongoStore 的 20/s 容量上限，也不是 Gate/Sync 超时。没有改 Mongo 持久级别、放宽排空期限或删掉失败样本；20/s 是显式另一档，不替代原档结论。
 
 20/s 全程包含 300 次心跳、15 次心跳修改，最后增加 1 次双实体排空事务（请求总数 601，TPS 只计测量的 600 次）。RPC 成功 601、失败/超时/拒绝 0，最终 WAL=0、投影冲突=0，重复投影和 DAO 冷水合一致。
 
@@ -35,6 +35,26 @@ ROOST_PERF_CPU=0 ROOST_GATE_LOAD_SECONDS=30 ROOST_GATE_LOAD_RATE=20 \
 ROOST_PERF_CPU=0 ROOST_GATE_LOAD_SECONDS=30 ROOST_GATE_LOAD_RATE=100 \
   ROOST_PERF_LABEL=gate-hotspot-new bash scripts/perf/gate-mixed.sh
 ```
+
+## 投影积压根因与修复复测（2026-11-01）
+
+修前证据：`projection-serial-diagnostic-20261101`，相同 100/s × 30s、strict WAL、私有 Mongo/Redis/NATS。普通请求完成 2956、丢拍 44；负载结束 WALUnacked=1921，排空 30s 超时后仍剩 496，projected=2477，记录一次 context deadline。单笔 Store 调用 2478 次，累计 26566.27ms（均值约 10.72ms），最长 81.94ms。这些计时只包含 Store 调用，不包含 WAL checkpoint，不将剩余耗时全部归因到 fsync。
+
+代码级根因在 `codegen/internal/roost/testdata/gate/consumer_test.go.txt`：`gateProjection` 记录器只实现 Project，隐藏了目标 MongoStore 的 BatchProjectionStore。`framework/dataengine/engine/projector_replay.go` 对非批量 Store 逐单元投影并立即 checkpoint，因为目标未承诺批量重放安全。共享 Player/World 本身属于同一冲突链，增加并行 worker 不能消除这次降级。生产 MongoStore 原本就实现批量接口，本次修复的是验收夹具，未修改框架持久策略。
+
+修复：仅当目标明确实现 BatchProjectionStore 时使用批量记录包装，同时转发目标的普通/Remote 并行能力；失败批次不记为成功。新增生成工程回归验证能力保留、失败批次和成功批次记录；真实账号/Gate/C# 链路及该回归均在 race 模式通过。后续装饰 Store 时必须保留其能力契约，不能仅转发最低接口后将降级结果当作生产容量。
+
+| 同配置 100/s × 30s | 普通完成 / 丢拍 | 负载末 WALUnacked | 排空后 WALUnacked | 批量调用 / 记录 | 单笔调用 | Store 累计时间 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 修前诊断 | 2956 / 44 | 1921 | 496（排空失败） | 0 / 0 | 2478 | 26566.27ms |
+| 修后第 1 轮 | 2981 / 19 | 6 | 0 | 947 / 2954 | 43 | 11027.90ms |
+| 修后第 2 轮 | 2985 / 15 | 4 | 0 | 947 / 2959 | 42 | 11107.94ms |
+
+修后两轮最终 committed/projected 分别为 2997/2997、3001/3001，投影失败/冲突均 0，DAO 一致性和 WAL 重开检查通过。最终报告还计入 1 次双实体排空请求，因此 Completed 比表中普通请求多 1；heartbeat 修改另计。统计快照字段并非原子采集，不用某一瞬间 committed−projected 代替 WALUnacked。第一轮 WALSyncs=2997，未减少 strict 事务 fsync；checkpoint 按已有重放安全契约合并。
+
+Sync delta P99 两轮均为 18.477ms，最大 25.764/33.881ms。近 100/s 的这两次短测可以收敛本次积压问题，但仍有 19/15 个输入丢拍，不宣称无限持续容量或无丢拍 100/s；没有降低 Mongo 持久等级、放宽排空时限或删除原失败数据。
+
+原始证据：`artifacts/perf/gate/projection-{serial-diagnostic,batch-diagnostic,batch-repeat}-20261101`。修后 JSON 的 ProjectionDiagnostics 与负载末 phase 文件保留单笔/批量次数、记录数和 Store 累计/最大耗时；负载时间与排空阶段分开看。复跑仍用上面的 `gate-mixed.sh`，100/s、新 label，先等待所有编译和其他压测结束。
 
 ## 1000 玩家 / 10000 Entity
 

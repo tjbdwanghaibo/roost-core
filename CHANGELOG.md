@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- Unity 增加可构建 UPM 包、平台插件导入、主线程 Driver 与完整 PB/EntitySync/Lockstep 示例；实际验证 macOS ARM64 Editor、Mono 与 IL2CPP Player，提供客户端容量和 TCP 故障复跑入口。移动设备及其他引擎另行验收。
+- 修复真实 Gate 验收记录器隐藏 MongoStore 批量投影能力造成的积压，保留能力回归与修前失败证据；同配置 100/s 两轮短测排空通过，未降低 WAL/Mongo 持久等级。
+
 - Native 客户端补齐 Lockstep 输入/哈希/追帧/分块快照恢复与场景时间域；提供无异常 C ABI，Unity 绑定 native 状态机，消费线程执行模拟。
 - Native 增加 PB/Lockstep 通知、取消和结构化请求结果、单请求期限、独立心跳超时、typed PB 路由及可选有界退避重连；新票据由业务提供，不重放请求。网络 ABI 升至 2，库/头文件/托管绑定必须一起更新。
 - 新增可选 Protobuf 视图 C ABI 与 CMake 安装包；UE 等宿主可取得原子应用增量后的完整 PB。平台设备验证仍按 native 手册分别记录。

@@ -1,0 +1,10 @@
+{
+  "name": "Roost.Unity.Editor",
+  "references": [
+    "Roost.Unity"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "autoReferenced": true
+}

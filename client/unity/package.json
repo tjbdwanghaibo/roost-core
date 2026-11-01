@@ -1,7 +1,14 @@
 {
   "name": "com.roost.client",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "Roost Client",
-  "description": "RS v2 PB/Sync client main-thread adapter. Import the Roost.Client runtime source or assembly separately.",
-  "unity": "2021.3"
+  "description": "Roost managed and native TCP clients. Build the complete package with scripts/client/build-unity.py.",
+  "unity": "2021.3",
+  "samples": [
+    {
+      "displayName": "Native Session",
+      "description": "Native TCP, PB, EntitySync and Lockstep lifecycle sample.",
+      "path": "Samples~/NativeSession"
+    }
+  ]
 }

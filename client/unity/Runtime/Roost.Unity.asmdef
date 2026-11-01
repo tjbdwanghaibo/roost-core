@@ -1,0 +1,8 @@
+{
+  "name": "Roost.Unity",
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "Roost.Client.dll"
+  ],
+  "autoReferenced": true
+}

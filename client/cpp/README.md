@@ -150,11 +150,11 @@ DYLD_LIBRARY_PATH=/tmp/roost-client-build dotnet run --project client/cpp/tests/
 
 | 目标 | 已提供 | 本轮实际验证 |
 | --- | --- | --- |
-| macOS arm64 | BSD sockets、静态/动态库、C/C++ 与托管绑定 | 上述主机功能通过；Unity Editor 未运行 |
+| macOS arm64 | BSD sockets、静态/动态库、C/C++ 与托管绑定 | 主机功能、Unity Editor、Mono/IL2CPP Player 与容量/延迟分片通过（见下） |
 | Linux | BSD sockets 与 CMake | 未编译/实跑 |
 | Windows x64 | Winsock 生命周期、DLL 导出、MSVC CMake | 缺 Windows 工具链，未编译/实跑 |
 | Android arm64 | NDK CMake 与 Unity 绑定 | 缺 NDK/设备，未编译/实跑 |
 | iOS arm64 | CMake 静态库与 __Internal 绑定 | 缺完整 Xcode/设备，未编译/实跑 |
 | UE | C ABI 与 External Module 接线 | 未运行 UE 工程 |
 
-不能据此声称“全平台已验收”、网络吞吐优于 C#、低内存设备容量通过。当前实现的是 Core TCP 客户端协议；TLS、WebSocket、UDP/KCP 传输适配未实现，DNS 使用平台异步解析。Unity/UE 完整工程展示、移动前后台/弱网和各设备容量仍需实机验收，不据主机 PInvoke 通过宣称 IL2CPP 已通过。
+不能据此声称“全平台已验收”、网络吞吐优于 C#、低内存设备容量通过。当前实现的是 Core TCP 客户端协议；TLS、WebSocket、UDP/KCP 传输适配未实现，DNS 使用平台异步解析。Unity 正式打包、Driver 和示例见 [Unity 接入](../unity/README.md)；macOS Editor、Mono/IL2CPP Player、可见集容量与 TCP 故障实跑见 [当前报告](../../docs/performance/CLIENT-20261101.md)。UE、移动前后台/真实弱网和设备容量仍需实机验收。
