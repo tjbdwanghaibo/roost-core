@@ -35,6 +35,8 @@ C ABI 请求返回 sequence=0 表示未准入（C++/C# 便利层准入失败抛�
 
 ## 同步与回调
 
+`NativeGameClient` 支持在消费线程的回调内 Dispose；Error、请求成功/失败、Notify、PB 推送、校时和实体事件均逐观察者检查销毁状态。解析器或前一观察者销毁客户端后，不再调用后续业务回调；错误观察者自身抛错不会递归报告。此保证属于 C# 托管层，不改变上文 C++ 对象不能在自身 Pump 中销毁的限制。可复跑验证在 `tests/managed/DisposalTests.cs`，由 NativeInterop 入口执行。
+
 ```cpp
 roost::client connection;
 roost::entity_views entities;

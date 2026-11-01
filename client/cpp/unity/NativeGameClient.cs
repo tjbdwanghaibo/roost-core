@@ -69,9 +69,9 @@ public sealed class NativeGameClient : IDisposable
             if (e.Type != NativeClient.EventType.Response)
             {
                 if (e.Type == NativeClient.EventType.RequestFailed)
-                    failed(new NativeRequestException(e));
+                    NotifyAll(failed, new NativeRequestException(e));
                 else
-                    failed(new IOException("Connection closed; result may be unknown"));
+                    NotifyAll(failed, new IOException("Connection closed; result may be unknown"));
                 return;
             }
             T value;
@@ -81,10 +81,10 @@ public sealed class NativeGameClient : IDisposable
             }
             catch (Exception error)
             {
-                failed(error);
+                NotifyAll(failed, error);
                 return;
             }
-            completed(value);
+            NotifyAll(completed, value);
         }
         pending.Add(sequence, Complete);
         return sequence;
@@ -100,11 +100,11 @@ public sealed class NativeGameClient : IDisposable
         uint sequence = connection.ProbeClock(timeoutMilliseconds);
         pending.Add(sequence, e =>
         {
-            if (e.Type != NativeClient.EventType.Response) { failed(new NativeRequestException(e)); return; }
+            if (e.Type != NativeClient.EventType.Response) { NotifyAll(failed, new NativeRequestException(e)); return; }
             Roost.Client.ClockSample sample;
             try { sample = Roost.Client.ClockSample.Decode(sent, Roost.Client.ClockSample.LocalNow, e.Payload); }
-            catch (Exception error) { failed(error); return; }
-            completed(sample);
+            catch (Exception error) { NotifyAll(failed, error); return; }
+            NotifyAll(completed, sample);
         });
         return sequence;
     }
@@ -124,7 +124,7 @@ public sealed class NativeGameClient : IDisposable
         if (completed == null)
             throw new ArgumentNullException(nameof(completed));
         uint sequence = connection.Notify(id, kind, payload);
-        pending.Add(sequence, completed);
+        pending.Add(sequence, e => NotifyAll(completed, e));
         return sequence;
     }
 
@@ -133,7 +133,7 @@ public sealed class NativeGameClient : IDisposable
         Check();
         if (id == 0 || parse == null || received == null)
             throw new ArgumentException("PB route requires ID/parser/callback");
-        Action<NativeClient.Event> route = e => received(parse(e.Payload));
+        Action<NativeClient.Event> route = e => NotifyAll(received, parse(e.Payload));
         routes[id] = route;
         void Release()
         {
@@ -172,6 +172,8 @@ public sealed class NativeGameClient : IDisposable
                 {
                     generation = e.Generation;
                     Reset();
+                    if (disposed)
+                        break;
                 }
                 if (e.Type == NativeClient.EventType.Ready)
                 {
@@ -284,6 +286,8 @@ public sealed class NativeGameClient : IDisposable
 
     private void Notify(Action action)
     {
+        if (disposed)
+            return;
         try
         {
             action();
@@ -324,6 +328,9 @@ public sealed class NativeGameClient : IDisposable
             return;
         foreach (Action<Exception> callback in Error.GetInvocationList())
         {
+            // 错误回调也可以销毁客户端；下一观察者不能再访问已释放的引擎对象。
+            if (disposed)
+                break;
             try
             {
                 callback(error);

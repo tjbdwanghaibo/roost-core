@@ -1,16 +1,16 @@
 # 核心执行边界审查
 
-日期：2026-11-01。基线：`0a4e775469fe92d1a53d8e6f9f745126694b6cec`（main）。本轮只审查，不修改运行时代码。
+日期：2026-11-01。基线：`0a4e775469fe92d1a53d8e6f9f745126694b6cec`（main）。初次审查基线如上；本轮已修复并继续审查交付失败与客户端回调边界。
 
 ## 结论
 
-确认一项 P2：RV-20261101-07，Sync 在交付成功后批量结算失效，未恢复其他健康实体的内容基线。本轮检查范围内未确认新的 P0/P1；这不是全仓无 P0/P1 的证明，也不能替代生产验证。
+确认并修复两项 P2：RV-20261101-07（Sync 交付后批量结算失败未恢复健康实体基线）与 RV-20261101-08（Native 托管客户端销毁后仍通知回调）。本轮检查范围内未确认新的 P0/P1；这不是全仓无 P0/P1 的证明，也不能替代生产验证。
 
 此前 01～06 的修复仍在 main；04～06 尚未发布。本次没有重新把历史修复登记成缺陷。
 
 ## RV-20261101-07：交付后的批量结算失败缺少全量恢复
 
-**状态：已确定性复现，未修复。等级：P2。**
+**状态：已修复并验证，未发版。等级：P2。**
 
 触发顺序：
 
@@ -33,7 +33,7 @@
 ```sh
 cp scripts/testdata/sync-review/close_during_delivery_test.go.txt framework/sync/entitysync/zz_probe_reserve_test.go
 GOWORK=off go test -race ./framework/sync/entitysync -run '^TestReviewCloseDuringDeliveryKeepsOtherSubjectBaseline$' -count=1
-# Preserve the output, then remove this intentionally failing probe.
+# Fails on the review baseline; passes after the fix. Remove the temporary copy.
 rm framework/sync/entitysync/zz_probe_reserve_test.go
 ```
 
@@ -46,7 +46,9 @@ FAIL github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
 
 影响是无关健康实体的同步恢复失败；标准客户端会拒绝错误基线，可能导致连接恢复。没有证据说明 Mongo/WAL 数据损坏，因此不定 P1。探针证明服务端线协议版本错误，未实跑 Unity 断线表现。
 
-修复方向：把“已有帧交付但内容批次不能提交”作为统一失败边界，保留交付前缀的线上时钟，要求相关存活订阅恢复当前全量并重排待发送项；不能回滚已发送帧、无限重发旧 delta 或把一个关闭 Subject 的错误扩散成所有健康会话永久丢失。验收需覆盖关闭发生在预留前/后、多个会话、同 ID 重开、预算延期、取消及移除与重试组合；本轮未实施这些修复。
+修复：传输失败、内容批量预留失败与提交失败统一走 `retryCaptured`。保留已交付的帧时钟，放弃内容捕获，要求相应存活订阅恢复当前全量并重排待发送项；失败后立即返回，不进入成功清理。不能回滚已发送帧或放宽客户端版本校验。
+
+新增永久回归 `settlement_recovery_test.go`：原始失败场景转绿；两会话分别验证无下一次 setter、Subject 重绑、同 ID 会话重开、Subject 移除；恢复为 Full 后必须重新连续发送 Delta，脏状态最终结算且健康会话不丢失。预留后关闭与预算延期等沿用包内既有测试；未逐一穷举它们与本次失败的所有组合。
 
 ## 审查方法与范围
 
@@ -62,7 +64,7 @@ FAIL github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
 | --- | --- | --- |
 | Nest → WAL | `runTransaction`、`commitDurable`、`commitPipelined`、`durableCommit`、`pipelinedEnqueue`、`acceptPersistence` | 检查准入前拒绝、准入后未知、不重排及不回滚、释放与完成顺序；未确认新缺陷，未穷尽第三方 Committer 行为 |
 | 失败创建 | `createdBuildMark`、`AddMutation`、`SetReceiptPayload`、DAO 登记、嵌套回滚冲突 | 现有 DAO/回执代次与新增项边界生效；不把任意业务组件副作用视为自动可回滚 |
-| Entity → Sync | `SyncMutation.Admit/Finish`、冻结、内容预留与交付结算、Subject.Close/Unload | 确认 RV-20261101-07；持久水位与提交门存在，不据此宣称所有时序已覆盖 |
+| Entity → Sync | `SyncMutation.Admit/Finish`、冻结、内容预留与交付结算、Subject.Close/Unload | RV-20261101-07 已修复；持久水位与提交门存在，不据此宣称所有时序已覆盖 |
 | WAL → DataEngine | `Enqueue`、`ReplayPass`、`readReplayBatch`、`projectParallelWindow/projectLane`、冲突键与 checkpoint | 已成功连续前缀才 ack，失败停止补位并等待已启动工作；本轮未确认新缺陷 |
 | Nest → Remote | `finishRemoteWriteBatch`、`FinalizeLocked`、`Commit/Abort/Close` | 已提交、明确拒绝、结果未知分开收尾；本轮未确认新缺陷，未注入真实 Mongo/NATS 故障 |
 | Saga | `WaitTerminal`、Lifecycle 绑定与登记后补查 | 已有终态复用缺陷修复仍在；保留回执超期停机等已知限制，不把它误报为本轮新增缺陷 |
@@ -85,8 +87,19 @@ GOWORK=off go test -race ./framework/nest ./framework/entity ./framework/dataeng
 
 ## RV-20261101-08：Native 托管客户端的销毁通知边界遗漏
 
-**状态：已复现，待修复。等级：P2。** `NativeGameClient.Report` 只在开始时检查 disposed，遍历 Error 观察者期间没有复核。第一个观察者 Dispose 后，剩余观察者仍执行，可能访问已经销毁的引擎对象。Request、ProbeClock、Notify、Subscribe 结果通知也直接调用委托，与普通事件的 NotifyAll 契约不一致。
+**状态：已修复并验证，未发版。等级：P2。** `NativeGameClient.Report` 只在开始时检查 disposed，遍历 Error 观察者期间没有复核。第一个观察者 Dispose 后，剩余观察者仍执行，可能访问已经销毁的引擎对象。Request、ProbeClock、Notify、Subscribe 结果通知也直接调用委托，与普通事件的 NotifyAll 契约不一致。
 
 修前在当前 native 动态库上执行 `DYLD_LIBRARY_PATH=/tmp/roost-native-full-shared dotnet run --project client/cpp/tests/managed/NativeInterop.csproj`，新增 DisposalTests 使用真实 native 无效地址关闭事件，结果：`native Error callbacks after disposal: calls=3, expected=1`。不是仅用反射模拟回调。
 
 修复应复用逐观察者通知，错误观察者保持异常隔离；解析器或重置通知销毁客户端后停止后续处理。需覆盖首位/中间观察者销毁、正常多观察者、请求结果和 PB 解析器，以及既有 TCP/PB/Lockstep/重连链路。此问题属于 RV-06 在 native 托管实现中的遗漏，不能只以纯 C# 客户端通过推断两套客户端均通过。
+
+
+## 修复验收与继续审查边界
+
+- RV-07：`GOWORK=off go test -race ./framework/sync/entitysync ./framework/entity ./framework/nest -count=1` 全部通过；`GOWORK=off go test -count=1 .` 与 `GOWORK=off go vet ./framework/sync/entitysync` 通过。
+- RV-08：请求成功/失败、校时、Notify、PB Subscribe 使用既有 `NotifyAll`；Error 保持独立异常隔离并逐观察者检查销毁。解析器销毁后不再交付结果；generation 重置通知销毁后停止当前事件。没有增加新生命周期状态或修改协议。
+- 新增 `client/cpp/tests/managed/DisposalTests.cs`：真实 native 错误事件覆盖不销毁、首位销毁、中间销毁；真实 TCP 覆盖请求成功/断线失败、解析器销毁、Notify、PB 推送及校时结果。全部通过。测试初版的主动 Disconnect 可能先于服务端读到请求，导致测试端 EOF；现由服务端读到请求后主动关闭，确定性验证断线失败回调。
+- 纯 C# `dotnet run --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json` 全部通过，包含共享 EntityViews、PB、心跳、销毁和重连回归。
+- 既有 `game.py` + `NativeInterop.csproj` 的真实 TCP/PB/Lockstep 反向 PInvoke/重连通过；当前 native 动态库重新构建后 CTest 5/5 通过。
+- 继续审查使用 CBM MCP 的结构查询、双向 trace、源码与 coverage；检查 Sync 恢复、订阅重绑/退订、预算调度，以及 NativeGameClient 的回调出口。修改后的文件曾显示 metadata_changed，均读当前源码补证并在完成时刷新索引（generation `2026-11-01T08:28:30Z`，42,525 节点、392,380 关系，0 skipped）。未把全仓 19 个 partial 文件视为已审计，也未把没有记录缺口当完整性证明。
+- 本轮没有新增 P0/P1 证据。未重新进行全仓测试、Unity Editor/IL2CPP、Linux、真实存储集群故障、性能或长稳验证。本轮是上述边界的修复与复核，不是全仓无缺陷认证。

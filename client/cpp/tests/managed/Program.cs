@@ -5,6 +5,7 @@ internal static class Program
 {
     private static void Main(string[] args)
     {
+        DisposalTests.Run();
         if (args.Length != 0)
         {
             Game(ushort.Parse(args[0]));
