@@ -1,12 +1,67 @@
 # 核心执行边界审查
 
-日期：2026-11-01。基线：`0a4e775469fe92d1a53d8e6f9f745126694b6cec`（main）。初次审查基线如上；本轮已修复并继续审查交付失败与客户端回调边界。
+日期：2026-11-01。最近一轮审查基线：`0400e8d4255179d056e306af7a0d0f397d9a03bd`（main，已与远端对齐）。本轮审核 Nest / DataEngine / Sync，不修改运行时代码。此前 RV-07/08 的修前基线为 `0a4e775469fe92d1a53d8e6f9f745126694b6cec`，红绿证据保留在下文。
 
-## 结论
+## 当前结论
 
-确认并修复两项 P2：RV-20261101-07（Sync 交付后批量结算失败未恢复健康实体基线）与 RV-20261101-08（Native 托管客户端销毁后仍通知回调）。本轮检查范围内未确认新的 P0/P1；这不是全仓无 P0/P1 的证明，也不能替代生产验证。
+- **待修复 P2：RV-20261101-09**，DataEngine 排队中的 Flush 可以在另一轮回放报告 fatal 后重新调用 Store.Project，已用确定性 race 探针复现。
+- RV-07/08 已修复并推送 main，未发版；发布状态以 CHANGELOG 为准。
+- Nest 与 Sync 在本轮列明的路径中未确认新增缺陷；未确认新增 P0/P1。这不是全仓无缺陷的证明。
 
-此前 01～06 的修复仍在 main；04～06 尚未发布。本次没有重新把历史修复登记成缺陷。
+## RV-20261101-09：排队回放在获得执行权后未复查 fatal
+
+**状态：已确定性复现，未修复。等级：P2。**
+
+触发顺序：
+
+1. 回放 A 持有 `replayGate`，进入 Store.Project，尚未返回。
+2. 并发 Flush B 通过 `projector.go:380` 的 fatal 检查和 WAL.Sync，等待相同的 replayGate。
+3. A 返回 ErrProjectionConflict，记录 fatal 并唤醒等待方，然后释放 replayGate。
+4. B 得到执行权后直接读取 WAL 并再次调用 Store.Project，没有在这个共同入口检查 fatal。
+
+根因：`framework/dataengine/engine/projector_replay.go:26-30` 获得 replayGate 后直接 readReplayBatch；`framework/dataengine/engine/projector.go:380-387` 的检查早于等待，无法覆盖等待期间的状态变化。直接调用 ReplayPass 同样绕过检查。正常后台循环遇 fatal 会退出，但已经进入 Flush 的请求不随该循环退出；Runtime.stop 的 Flush 与后台回放也可能处于这个交错中。
+
+影响：fail-stop 后仍会发起新的投影调用。原冲突仍存在时会重复调用并失败；本探针只证明再次调用，不证明真实 Mongo 数据损坏、冲突被跳过或错误 checkpoint，因此定为 P2。已启动的并行通道仍应等待完成并确认成功前缀，不能用提前返回破坏这项既有承诺。
+
+复现使用正式文件 WAL、Projector 和可控 ProjectionStore；`testing/synctest.Wait` 固定第二个调用已阻塞的顺序，再放行首个存储错误。没有 sleep 赌竞态、手工设置 fatal 或改运行时代码。夹具：[queued_flush_after_fatal_test.go.txt](../../scripts/testdata/dataengine-review/queued_flush_after_fatal_test.go.txt)。
+
+```sh
+cp scripts/testdata/dataengine-review/queued_flush_after_fatal_test.go.txt framework/dataengine/engine/zz_probe_fatal_test.go
+GOWORK=off go test -race ./framework/dataengine/engine -run '^TestReviewQueuedFlushStopsAfterFatal$' -count=1 -timeout=15s
+rm framework/dataengine/engine/zz_probe_fatal_test.go
+```
+
+实际失败：
+
+```text
+--- FAIL: TestReviewQueuedFlushStopsAfterFatal (0.02s)
+    zz_probe_fatal_test.go:34: queued Flush called Store.Project after fatal: calls=2, want 1
+FAIL github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine
+```
+
+修复约束：在取得回放执行权的共同入口检查粘滞终态，返回原始 fatal 原因，不再读取/投影后续记录；不要只给 Flush 再加一处等待前检查。验收补齐直接 ReplayPass、排队 Flush、正常临时错误重试，以及 fatal 当轮已经成功的前缀仍能确认。还应核对 WAL terminal 与 Close 的边界，不能把普通取消和可重试错误变成永久 fatal。
+
+## 最近一轮三核心审核范围与验证
+
+| 模块 | 本轮重点 | 结论 |
+| --- | --- | --- |
+| Nest | 全声明 ID 的 tail 准入、I/O 原位迁移和业务续行、Await 的段间移交、事务拒绝/未知结果、pipelined 完成顺序与回调 | 未确认新增缺陷。曾检查嵌套事务重复占完成链的可能性；RunIsolatedTransaction / RunDetachedTransaction 传空 completionRoute，排除该候选。异步完成只按主实体排序、Cast 不提供声明 ID 顺序，是已写明的边界，未重新登记为 bug |
+| DataEngine | WAL 准入与释放、投影预算、冲突键分道、逐条退回与快路幂等、连续成功前缀 checkpoint、fatal 与 Shutdown 交错 | 确认 RV-09。reserve 在 heldMu 下复查 fatal、WAL terminal；并行窗口等待已启动通道后计算连续前缀，这两项本轮未发现新违例 |
+| Sync | 提交门与 Guard 解锁、失败交付恢复、帧前缀采纳、订阅 revision/lifetime、Hold/Ready、发送与冷快照预算组合 | 未确认新增缺陷。复核 RV-07 的统一恢复入口，既有多会话/重绑/重连/移除回归通过；不回退已交付时钟，不以放宽客户端版本比较恢复 |
+
+CBM：项目 `Users-whb-roost-roost-core`，审查 generation `2026-11-01T08:28:30Z`。使用 search_graph、get_code_snippet、双向 trace 及 check_index_coverage；关键 trace 已读完整页，范围 coverage 未记录缺口。图谱对 `errors.Is`、`sync.Once.Do` 等同名调用存在错误归属，对接口调用也有漏连，因此关键关系均以当前源码核实，不用零入边证明没有调用者。`settlement_recovery_test.go` 的 metadata_changed 是上轮注释更新，已直接读取源码补证。全仓 19 个 partial 文件不在本轮关键执行路径中，未据此声称完整索引或完整审计。
+
+实际验证（macOS）：
+
+```sh
+GOWORK=off go test -race ./framework/nest/... ./framework/entity ./framework/dataengine/... ./framework/nestwal ./framework/sync/... -count=1
+GOWORK=off go vet ./framework/nest/... ./framework/entity ./framework/dataengine/... ./framework/nestwal ./framework/sync/...
+GOWORK=off go test -count=1 .
+```
+
+既有回归 16 包通过，vet 与根包检查通过；新探针单独运行并失败，已移出默认测试目录，只保存可复跑夹具。没有把“既有测试通过”当作 RV-09 已通过。没有运行 integration 标签的真实 Mongo/Redis/NATS 故障、Linux、性能、长稳或游戏生成矩阵；AOI/Lockstep 等子包参与回归，但未逐函数人工审计。
+
+方向判断：目前证据指向失败边界的检查位置，不要求重写三大模块。应将状态复核放在实际取得执行权的共同入口，并验证排队期间状态变化；不要在各调用方继续复制判断。和 RV-07 一样，审查必须覆盖等待/交付前后两个阶段，单次成功路径与 race 无报告都不能证明这个契约。
 
 ## RV-20261101-07：交付后的批量结算失败缺少全量恢复
 
