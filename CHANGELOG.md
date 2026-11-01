@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 修复 RV-20261101-06：GameClient 状态、重连、未处理推送及请求结果统一逐订阅者检查销毁状态；实体重置或解析回调中 Dispose 后不再继续业务通知，见 [客户端生命周期约束](client/README.md#gameclient-回调与销毁边界)。
+
 - 修复 RV-20261101-04：C# 心跳使用独立单槽位，避免业务容量满导致健康连接断开；业务容量与真正心跳超时语义不变，见 [客户端说明](client/README.md)。
 - 修复 RV-20261101-05：失败创建检查既有回执 payload 修改代次，包含同值和嵌套写入；外层吞错仍使事务回滚，见 [Nest 实现契约](docs/framework/impl/02-nest-entity.md)。
 

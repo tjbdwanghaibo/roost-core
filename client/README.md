@@ -167,6 +167,16 @@ if (session.TryDequeuePush(out var push))
 
 推送队列满时关闭连接、失败所有等待者并清空不能继续使用的增量，不能静默丢一个delta后继续应用。`Completion`表示接收循环结束，关闭原因读取`CloseReason`。直接使用 TcpSession 时，关闭后创建新实例。上层 Connection 提供心跳、可选自动重连和重新取票；GameClient/EntityViews 管理连接代际与对象视图。业务订阅恢复仍取决于服务端登录和进房流程。
 
+### GameClient 回调与销毁边界
+
+构造、订阅、Request、Pump 和 Dispose 在同一消费线程调用。回调可以 Dispose 客户端：已经进入的回调正常返回，但当前事件剩余订阅者以及本次 Pump 后续业务通知立即停止；已排队完成项被清空，在途结果不再投递。Dispose 不撤销服务端已经执行的业务。业务解析器返回或抛错后也重新检查销毁状态，不再通知成功、失败或 Error 观察者。
+
+所有业务多播通知统一逐订阅者派发，每次调用前检查生命周期；单个观察者抛错交给 Error，不阻止其他观察者，除非客户端已销毁。新增事件应复用 Notify，禁止一次 Invoke 整个多播委托。ResetEntities、业务解析器等可调用外部代码的位置也属于生命周期边界，返回后不能继续处理已销毁客户端。这是维护规则，不是新增线程安全承诺。
+
+RV-20261101-06 的原报告见 [review 1bf08673](https://github.com/tjbdwanghaibo/roost-core/blob/1bf08673/docs/maintenance/COMMIT-REVIEW.md)。修前在 Connecting 状态的首个订阅者 Dispose 后，后续订阅者仍执行；另一个确定性探针在 EntitiesReset 中销毁后仍收到 StateChanged。`DisposalTests.cs` 保留修前失败断言 `state subscriber disposal boundary` / `reset disposal must stop later reset and state callbacks`，修后覆盖普通多订阅者、首个与中间订阅者销毁、实体重置、TCP 推送与请求解析中销毁；重连测试同样覆盖首个与中间订阅者销毁。C# SDK 完整自测通过；未验证 Unity Player/IL2CPP 或生产 WAN，不以普通 C# 回归替代这些验收。
+
+2026-11-01 验证命令均通过：`dotnet run --no-restore --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json`（含成功及失败结果的多播销毁）、`GOWORK=off go test -count=1 .`、`GOWORK=off go test -count=1 -timeout 10m -run '^TestClientSDKAgainstGeneratedPlayerTCP$' ./codegen/internal/roost`。本次只改 C# 消费线程通知，没有重跑 Go race 或容量压测。
+
 `SyncFrame.Decode`和`SubjectUpdate.Decode`只解码已有Go格式，校验长度、操作和身份；`SubjectId`用`long`，StreamId/版本/掩码用`ulong`，不要转float/double。
 
 底层 `SyncReceiver`按单连接单流核对epoch、tick、baseTick与schema：首帧必须Full，重复/旧代不再应用，缺口或业务回调失败后拒绝增量，成功应用才推进基线。其内存状态固定，不缓存历史帧或业务实体。Go对应`sync/frame.Receiver`。同一连接串行消费，直接使用底层 Receiver 时，组件状态由业务维护；上层 EntityViews 校验 generation 与 subject 版本，按注册的 codec 应用数据，不提供预测回滚或任意 packer 的自动解析。

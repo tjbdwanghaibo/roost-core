@@ -42,7 +42,11 @@ namespace Roost.Client
         {
             CheckThread();
             if (messageId == 0 || parse == null || receive == null) throw new ArgumentException("Business route and callbacks are required.");
-            Action<Packet> handler = packet => receive(parse(packet.Payload.ToArray()));
+            Action<Packet> handler = packet =>
+            {
+                T value = parse(packet.Payload.ToArray());
+                Notify(receive, value);
+            };
             handlers.Add(messageId, handler);
             return new Subscription(() => { if (disposed) return; CheckThread(); if (handlers.TryGetValue(messageId, out var current) && current == handler) handlers.Remove(messageId); });
         }
@@ -88,12 +92,12 @@ namespace Roost.Client
                 if (disposed) { pending--; return; }
                 completions.Enqueue(() =>
                 {
-                    if (failure != null) { failed(failure); return; }
-                    if (Connection.ConnectionVersion != requestVersion) { failed(new IOException("Response belongs to a previous connection.")); return; }
+                    if (failure != null) { Notify(failed, failure); return; }
+                    if (Connection.ConnectionVersion != requestVersion) { Notify(failed, new IOException("Response belongs to a previous connection.")); return; }
                     T value;
                     try { value = parse(response); }
-                    catch (Exception error) { failed(error); return; }
-                    received(value);
+                    catch (Exception error) { Notify(failed, error); return; }
+                    Notify(received, value);
                 });
             }
         }
@@ -108,17 +112,18 @@ namespace Roost.Client
             {
                 long currentVersion = Connection.ConnectionVersion;
                 if (version != currentVersion) { ResetEntities(); version = currentVersion; }
+                if (disposed) return;
                 var currentState = Connection.State;
                 if (currentState != state)
                 {
                     state = currentState;
                     if (state != ConnectionState.Ready) ResetEntities();
-                    Invoke(() => StateChanged?.Invoke(state));
+                    Notify(StateChanged, state);
                 }
                 for (int i = 0; i < budget && !disposed; i++)
                 {
                     if (!Connection.TryDequeueReconnectResult(out var result)) break;
-                    Invoke(() => Reconnected?.Invoke(result!));
+                    Notify(Reconnected, result!);
                 }
                 for (int i = 0; i < budget && !disposed && completions.TryDequeue(out var completion); i++)
                 {
@@ -129,6 +134,7 @@ namespace Roost.Client
                 {
                     if (!Connection.TryDequeuePush(out var packet, out var packetVersion)) break;
                     if (version != packetVersion) { ResetEntities(); version = packetVersion; }
+                    if (disposed) break;
                     try
                     {
                         if (packet!.Kind == PayloadKind.Sync)
@@ -145,7 +151,7 @@ namespace Roost.Client
                                 });
                         }
                         else if (packet.Kind == PayloadKind.Protobuf && handlers.TryGetValue(packet.MessageId, out var handler)) handler(packet);
-                        else UnhandledPush?.Invoke(packet);
+                        else Notify(UnhandledPush, packet);
                     }
                     catch (Exception error)
                     {
@@ -169,6 +175,8 @@ namespace Roost.Client
 
         private void Notify<T>(Action<T>? handlers, T value)
         {
+            // 回调可重入 Dispose：必须逐个订阅者检查，不能一次 Invoke 整个多播委托。
+            // parse/ResetEntities 也可能销毁客户端，因此通知入口同样执行此检查。
             if (handlers == null) return;
             foreach (Action<T> callback in handlers.GetInvocationList())
             { if (disposed) break; Invoke(() => callback(value)); }

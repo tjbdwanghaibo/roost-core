@@ -98,7 +98,11 @@ internal static partial class Program
         TestEntityViews();
         TestDaoProtobuf(Path.Combine(Path.GetDirectoryName(path)!, "dao-sync.json"));
         TestGameClient();
+        TestGameClientDisposal();
         TestConnectionReconnect();
+        TestConnectionReconnect(0);
+        TestConnectionReconnect(1);
+        TestGameClientNetworkDisposal();
         TestReconnectFailureLimit();
         TestSceneTimeDomain();
         TestNetworkExperience();

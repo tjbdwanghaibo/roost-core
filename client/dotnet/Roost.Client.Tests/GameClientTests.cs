@@ -101,7 +101,7 @@ internal static partial class Program
         Console.WriteLine("PASS GameClient real PB callbacks/timeout/heartbeat/bounded admission");
     }
 
-    private static void TestConnectionReconnect()
+    private static void TestConnectionReconnect(int disposeAt = -1)
     {
         var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();
         var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -128,11 +128,21 @@ internal static partial class Program
                 ReconnectInitialDelay = TimeSpan.FromMilliseconds(5), ReconnectMaxDelay = TimeSpan.FromMilliseconds(5)
             });
             int tickets = 0; ReconnectResult? result = null;
-            client.Reconnected += value => result = value;
+            int callbacks = 0;
+            for (int i = 0; i < 3; i++)
+            {
+                int subscriber = i;
+                client.Reconnected += value =>
+                {
+                    result = value; callbacks++;
+                    if (subscriber == disposeAt) client.Dispose();
+                };
+            }
             client.Connection.ConnectAsync(_ => Task.FromResult("ticket" + Interlocked.Increment(ref tickets))).GetAwaiter().GetResult();
             release.SetResult(true);
             PumpUntil(client, () => result != null);
             Check(result!.Succeeded && result.ConnectionVersion == 2 && tickets == 2, "reconnect result");
+            Check(callbacks == (disposeAt < 0 ? 3 : disposeAt + 1), "reconnect callbacks after disposal");
             client.Dispose(); client.Dispose();
             peer.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
         }
