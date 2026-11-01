@@ -1,0 +1,36 @@
+using System;
+using System.Threading.Tasks;
+using Roost.Client;
+
+class Program
+{
+    static int Main()
+    {
+        bool control = Run(false);
+        bool disposal = Run(true);
+        return control && disposal ? 0 : 1;
+    }
+
+    static bool Run(bool disposeInFirst)
+    {
+        using var client = new GameClient(new ConnectionOptions { Host = "127.0.0.1", Port = 12345 });
+        // 保持取票未完成，只驱动正式 Connecting/Pump 路径，不打开网络连接。
+        var ticket = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var opening = client.Connection.ConnectAsync(_ => ticket.Task);
+        int secondCalls = 0;
+        bool afterDispose = false;
+        client.StateChanged += _ => { if (disposeInFirst) client.Dispose(); };
+        client.StateChanged += _ =>
+        {
+            secondCalls++;
+            afterDispose = client.Connection.State == ConnectionState.Disposed;
+        };
+        client.Pump();
+        client.Dispose();
+        try { opening.GetAwaiter().GetResult(); }
+        catch (OperationCanceledException) { }
+        int expected = disposeInFirst ? 0 : 1;
+        Console.WriteLine($"disposeInFirst={disposeInFirst}: secondCalls={secondCalls}, afterDispose={afterDispose}, expected={expected}");
+        return secondCalls == expected && !afterDispose;
+    }
+}

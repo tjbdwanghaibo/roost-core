@@ -1,5 +1,9 @@
 # 当前已知限制与验证边界
 
+## 客户端回调生命周期续审（2026-11-01）
+
+基线 [5fe16dab](https://github.com/tjbdwanghaibo/roost-core/commit/5fe16dab)：新增 RV-20261101-06 / P2，StateChanged 首个订阅者 Dispose 客户端后，后续订阅者仍被调用，违反销毁后停止通知的契约。确定性探针和临时源码对照见 [提交审查](COMMIT-REVIEW.md)。这是普通 C# 回调路径验证，不代表 Unity Player 验收；01～05 已修复的结论保持。
+
 ## 最新 main 复验（2026-11-01，v1.37.0 后修复）
 
 本次基线为 [5fe16dab](https://github.com/tjbdwanghaibo/roost-core/commit/5fe16dab)。RV-20261101-04（C# 心跳容量）与 05（失败创建原位改写回执）均已修复，原复现与扩展边界检查通过；此前 01／02／03 的已修复结论保持。上述五项没有仍待修复的原问题，本轮未确认新的缺陷。

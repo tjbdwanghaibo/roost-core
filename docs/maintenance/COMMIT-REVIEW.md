@@ -1,5 +1,40 @@
 # 新增提交审查
 
+## 2026-11-01：续审客户端销毁回调与恢复边界
+
+基线仍为 [main 5fe16dab](https://github.com/tjbdwanghaibo/roost-core/commit/5fe16dab)，fetch 后没有新提交。RV-20261101-01～05 的关闭结论保持；本轮确认以下独立问题，未修改运行时代码。
+
+### RV-20261101-06 / P2：StateChanged 回调中销毁客户端后，后续订阅者仍会执行
+
+**确定性复现。** [GameClient.cs:116](https://github.com/tjbdwanghaibo/roost-core/blob/5fe16dab/client/dotnet/Roost.Client/GameClient.cs#L116) 通过一次 `Invoke(() => StateChanged?.Invoke(state))` 执行整个多播委托。第一个订阅者调用 GameClient.Dispose 后，C# 多播委托继续调用快照中的后续订阅者，没有再次检查 disposed。这违反同文件类注释“Dispose 后不再通知业务”的约束，也与 EntityChanged 等事件现有 Notify 的逐订阅者检查不同。
+
+触发不依赖竞态：正式 GameClient.Connection.ConnectAsync 的异步取票保持未完成，连接进入 Connecting；注册两个 StateChanged 订阅者，第一个 Dispose，第二个记录调用；在创建线程 Pump。实际第二个被调用一次，并观察到 Connection.State=Disposed，期望零次。对照不在第一个订阅者 Dispose 时，第二个正常调用一次。
+
+影响：连接状态回调切换场景／销毁客户端后，后续 UI 或玩法订阅者仍可能操作已销毁对象、重新更新已清空界面或执行不应继续的副作用。本探针是普通 C# 的生命周期复现，没有宣称实跑 Unity MissingReferenceException。
+
+建议复用现有逐订阅者 Notify，每次通知前检查 disposed，并核对 ResetEntities 回调销毁之后的通知边界。同文件 Reconnected 与 UnhandledPush 也使用直接多播调用，建议一并检查；本轮的独立失败探针只覆盖 StateChanged，不把其他事件写成已实跑。验收应覆盖首个／中间订阅者销毁、普通多订阅者通知、实体重置回调销毁，以及销毁后不再继续业务通知。业务暂可在回调入口检查自有销毁标记并提前返回。
+
+探针：[dispose_callbacks.py](../../scripts/testdata/client-review/dispose_callbacks.py)、[dispose_callbacks.cs.txt](../../scripts/testdata/client-review/dispose_callbacks.cs.txt)。运行：
+
+```bash
+python3 scripts/testdata/client-review/dispose_callbacks.py /path/to/reviewed-main /path/to/dotnet-root
+```
+
+main 原源码结果：
+
+```text
+disposeInFirst=False: secondCalls=1, afterDispose=False, expected=1
+disposeInFirst=True: secondCalls=1, afterDispose=True, expected=0
+```
+
+退出 1。仅在 /tmp 源码副本把 StateChanged 调用换为 `Notify(StateChanged, state)` 后，两组通过，退出 0；该对照用于定位原因，不是已交付修复。取票任务不会完成，Dispose 取消连接开启过程；探针不打开 TCP、不依赖服务端或 sleep 调度。直接用 .NET 10 Roslyn 编译目标源码，原有 CS8600 提示仍存在，不将结果当作完整项目编译门禁。
+
+### 其他续审范围与证据边界
+
+继续读了 GameClient 完成回调的连接代际过滤、EntityViews 提交与 Reset、Saga 人工 Resume／Compensate 的回执期限检查和超时更新路径。Saga 自动重试在超长停机／积压后可能超出回执保留期，main 已在 KNOWN-LIMITS 明确记录，本轮没有把该既有边界另报新问题；也没有验证出新的重复执行案例。
+
+main 未变化，不重复宣称运行上一轮的全部测试；上一节的 Go race、心跳容量、晚应答及重连测试结果继续对应同一基线。本轮新增运行的是上述回调探针和临时修法对照。未验证 Unity、全仓或生产长稳。图谱工具不可用，以源码与 rg 继续；本轮未穷尽事务／Saga 的所有故障组合。
+
 ## 2026-11-01：心跳与回执修复关闭复验
 
 基线：[main 5fe16dab](https://github.com/tjbdwanghaibo/roost-core/commit/5fe16dab)，为 v1.37.0 之后的修复提交，不将已发布 v1.37.0 描述为包含这两项修复。本节覆盖下方历史状态。
