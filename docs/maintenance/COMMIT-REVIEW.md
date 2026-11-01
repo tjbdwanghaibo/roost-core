@@ -1,5 +1,52 @@
 # 新增提交审查
 
+## 2026-11-01：v1.37.0 修复复验与新增逻辑审核
+
+基线：[main / v1.37.0 6bf23d6a](https://github.com/tjbdwanghaibo/roost-core/commit/6bf23d6a)。本节为最新状态；下方各节保留当时基线和失败证据，不能将历史“待修复”直接用于当前版本。
+
+### 前三项修复结论
+
+| 编号 | 当前结论 | 修复与复验依据 |
+| --- | --- | --- |
+| RV-20261101-01 | 原 DAO 路径已修复 | [dd2e8335](https://github.com/tjbdwanghaibo/roost-core/commit/dd2e8335) 为持久登记增加 revision，失败创建比对原有参与者代次；正式 Nest 回归通过，既有 DAO 再写不再随外层提交。下面另列回执 payload 遗漏。 |
+| RV-20261101-02 | 已修复 | 同提交使 WaitTerminal 绑定首次权威查询的 Lifecycle，并在注册后重读补齐终态窗口；生命周期变化显式报错。原旧高版本终态探针以及新增生命周期边界测试通过。 |
+| RV-20261101-03 | 已修复 | [572fd93d](https://github.com/tjbdwanghaibo/roost-core/commit/572fd93d) 将空队列检查与心跳序号分配移入同一互斥区，与业务准入串行；500 个并发业务请求、1ms 心跳的真实 TCP 用例通过，线上帧序号严格递增。旧调度插桩位置现已在锁内，不能照搬旧脚本并在此等待另一个准入线程。 |
+
+这三项修复方向合理。修复已包含在 main，本分支只交付复验与问题材料。
+
+### RV-20261101-04 / P2：C# 心跳容量问题仍未修复
+
+在本次基线重新运行上节 heartbeat_capacity.py：关闭心跳且容量 1、开启心跳且容量 2 都完成 400ms 业务请求；开启 100ms 心跳且容量 1 仍发生 ObjectDisposedException，连接 Disconnected，LastError 为 Pending request capacity exhausted。业务超时 2 秒、心跳超时 1 秒，因此这不是服务端应答超时。
+
+现行位置：[TcpSession.cs:96](https://github.com/tjbdwanghaibo/roost-core/blob/6bf23d6a/client/dotnet/Roost.Client/TcpSession.cs#L96)、[Connection.cs:264](https://github.com/tjbdwanghaibo/roost-core/blob/6bf23d6a/client/dotnet/Roost.Client/Connection.cs#L264)。新增时钟探测没有改变心跳共享容量的故障路径，建议及原探针继续适用。
+
+### RV-20261101-05 / P2：失败创建修改既有回执 payload 仍可随事务提交
+
+**新增确定复现；与已修复的 DAO 原位修改分别跟踪。** [createdBuildMark / abandonCreatedEntityBuild](https://github.com/tjbdwanghaibo/roost-core/blob/6bf23d6a/framework/nest/rollback.go#L1014) 对回执仍只记录数量；[SetReceiptPayload](https://github.com/tjbdwanghaibo/roost-core/blob/6bf23d6a/framework/nest/persist_change.go#L336) 原位替换 Payload，没有增加数量，也没有参与 DAO revision。
+
+正式 Nest RollbackState / Strict handler 先 AddReceipt，payload 为 before；随后创建的 builder 调用 SetReceiptPayload 将同一回执改为 failed-build，再拒绝创建。handler 处理创建错误后正常返回。实际请求 err=nil，committer 收到 payload=failed-build，新实体没有发布。按照“失败创建留下自身 DAO 以外的持久副作用应令事务失败”的契约，应该 ErrFailedCreateLeftEffects 并禁止该提交，或者精确恢复原回执。当前两者都未发生。
+
+影响限定：初始化代码会改动外层已绑定回执、且外层吞掉创建错误的组合，可能持久化来自失败初始化的幂等结果，后续重试读取错误结果。未声称所有 Saga 路径必然触发。传播创建错误的对照通过，提交记录中没有回执；临时规避是传播这类创建错误。
+
+建议把 SetReceiptPayload 纳入失败创建的修改代次检查，或者为既有回执建立可恢复保存点；补齐同值替换、嵌套创建、成功创建和错误传播的边界。不要只对 AddReceipt 新增项计数。
+
+探针：[receipt_payload_test.go.txt](../../scripts/testdata/entity-review/receipt_payload_test.go.txt)，复制到目标检出的 framework/nest/review_receipt_payload_test.go 后运行：
+
+```bash
+go test -race ./framework/nest -run '^TestReviewFailedBuild(ModifiesAlreadyBoundReceipt|ReceiptPropagatedError)$' -count=1 -v
+```
+
+当前吞错场景失败、传播错误场景通过；修复后两者应通过。使用正式请求与记录型 committer，验证的是提交内容，不代替真实 WAL/Mongo 恢复实验。探针以 .txt 交付，不向默认包测试加入已知失败测试。
+
+### 新增逻辑与验证范围
+
+审读了发送预算的优先级／等待老化／Full 回退／Remove 保留，以及客户端时钟、快照插值、预测历史容量和 trace；本轮没有在这些新增路径确认其他缺陷，不代表穷尽审核。
+
+- `go test -race ./framework/nest ./framework/saga ./wiring/saga ./framework/sync/entitysync ./infra/network/gateway -count=1`：五包全部通过，包含 main 新增回归。此命令在另加回执失败探针前运行。
+- Linux g++ 构建并运行 native sequence、network_experience、smoke 与 weak：全部通过，包括 500 请求序号检查、时钟／插值／预测、协议金样，以及心跳超时、截断、队列溢出和发送停滞。
+- .NET 10 直接编译 main 未修改的 Roost.Client 源码和 NetworkExperienceTests.cs，用最小入口调用该测试：时钟／插值／预测／trace 通过。原源码有 CS8600 警告，本次不是项目 TreatWarningsAsErrors 门禁，也未跑完整托管测试工程。心跳容量独立探针仍按上述条件失败。
+- 图谱索引工具不可用，依据精确源码与 rg 补证；未重跑全仓、Unity/IL2CPP、真实 WAN 或生产持续负载，不能据此宣布上线风险清零。
+
 ## 2026-11-01：续审 C# 客户端心跳与容量
 
 基线：[main / v1.36.0 c31e65cc](https://github.com/tjbdwanghaibo/roost-core/commit/c31e65cc)。相对上一轮只新增验收入口与发版修改，RV-20261101-01～03 对应实现未变化，仍待修复。本轮新增一项独立问题；没有修改运行时代码。
