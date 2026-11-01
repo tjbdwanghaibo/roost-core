@@ -1,5 +1,43 @@
 # 新增提交审查
 
+## 2026-11-01：v1.37.1 最新提交复核与 Linux 续审
+
+基线：[main / v1.37.1 773ca443](https://github.com/tjbdwanghaibo/roost-core/commit/773ca443)。相对上一轮新增 8 个提交、21 个文件变更。已读取新运行时改动及 main 的 [CORE-REVIEW](https://github.com/tjbdwanghaibo/roost-core/blob/773ca443/docs/maintenance/CORE-REVIEW.md)，不把其他审查者的 macOS 结果冒充本机执行结果。
+
+**结论：RV-20261101-06 的原问题已修复；main 新增登记并修复的 07／08／09 也通过本轮对应回归，修复方向合理。继续检查未确认新的缺陷。** 此前 01～05 的关闭结论保持；下方旧章节中的“待修复”仅描述当时基线。
+
+| 项目 | 代码复核与本轮证据 |
+| --- | --- |
+| 06：纯 C# 销毁后回调 | 使用已有 Notify 逐订阅者检查 disposed，覆盖 StateChanged、Reconnected、UnhandledPush、请求成功／失败、PB 解析后通知，以及 ResetEntities 触发销毁后的返回。原 dispose_callbacks.py 两组通过；main 新增 DisposalTests 的状态／重置／失败和真实 TCP 推送／请求场景通过。 |
+| 07：Sync 交付后内容结算失败 | Reserve 与 Commit 失败共用 retryCaptured，保留已交付帧时钟，撤销捕获并把存活订阅改为欠 Full，失败立即返回，不走成功清理。entitysync 包含新增 settlement_recovery 回归，race 通过；继续核对订阅替换／移除与恢复时的身份判断，没有确认新违例。 |
+| 08：Native 托管销毁通知 | 成功／失败／校时／Notify／PB 订阅使用 NotifyAll，Error 逐观察者检查，generation 重置后复核 disposed。本轮用当前 C++ 源码编译 Linux 动态库，main 的托管 DisposalTests 在真实 native 事件及回环 TCP 上通过。 |
+| 09：排队回放越过 fatal | ReplayPass 在取得 replayGate 后复查 fatal，覆盖等待中被前一轮置为 fatal 和直接调用入口。原 queued Flush／direct Replay 永久回归随 engine 包通过；失败记录未被再次投影、仍留在 WAL。 |
+
+### 继续检查的相邻路径
+
+阅读了 PreparedSubjectSyncBatch 的预留／提交／撤销、Sync 已交付前缀与 requireSnapshotsAfterRetry、投影串行及并行窗口停止补位／连续成功前缀 checkpoint、fatal 通知与等待项释放，以及托管客户端请求解析／错误／重置／重连回调。没有将标准软预算、已经发出的并行工作、结果未知或已有回执期限限制直接登记为新缺陷。该范围不是逐函数覆盖全部核心，也不是新的全仓无问题声明。
+
+### 本轮实际验证（Linux）
+
+```bash
+go test -race ./framework/dataengine/... ./framework/nestwal ./framework/entity ./framework/sync/... ./framework/nest -count=1
+python3 scripts/testdata/client-review/dispose_callbacks.py /path/to/reviewed-main /path/to/dotnet-root
+```
+
+15 个 Go 包全部通过，包含 Sync 新恢复用例和 DataEngine 排队 fatal 用例。原回调探针退出 0，不重复添加相同探针。纯 C# 另外执行 main 的 TestGameClientDisposal、TestGameClientNetworkDisposal，覆盖新增首位／中间观察者销毁、重置时销毁、失败多播、真实 TCP 推送和请求解析／回调销毁。
+
+Native 动态库由当前 client.cpp、lockstep.cpp、snapshot_digest.cpp、lockstep_c.cpp 以 C++17／pthread／shared／PIC 和 ROOST_SHARED、ROOST_BUILD 编译。托管层编译当前 Roost.Client、client/cpp/unity 与 client/cpp/tests/managed 源码，执行结果：
+
+```text
+PASS managed/native error, request, parser, notification, push and clock disposal boundaries
+PASS managed/native PInvoke layout, worker error and disposal
+PASS managed/native PB callbacks, Lockstep reverse PInvoke, reconnect
+```
+
+最后一项经 main 的 game.py 启动真实两代 TCP 连接，验证 PB、Lockstep 反向 P/Invoke 和重连；不是 Unity Editor/Player 运行。未启用可选 Protobuf native DAO views 后端。托管测试使用 .NET SDK 10.0.402 / runtime 10.0.13 的直接 Roslyn 入口，避开 SDK 首次迁移；不是完整项目 NuGet／TreatWarningsAsErrors 门禁。合并编译时 nullable 设置产生提示，不能作为零警告证明；没有据此登记运行时问题。
+
+本轮图谱工具不可用，按当前差异、精确源码与 rg 核实；没有沿用其他机器的 CBM generation。未运行真实 Mongo/Redis/NATS 故障、Unity/IL2CPP、生产 WAN、长稳、性能或全部游戏生成矩阵。固定分支只更新审查材料，不修改 main 运行时。
+
 ## 2026-11-01：续审客户端销毁回调与恢复边界
 
 基线仍为 [main 5fe16dab](https://github.com/tjbdwanghaibo/roost-core/commit/5fe16dab)，fetch 后没有新提交。RV-20261101-01～05 的关闭结论保持；本轮确认以下独立问题，未修改运行时代码。

@@ -1,8 +1,10 @@
 # 当前已知限制与验证边界
 
-## 客户端回调生命周期续审（2026-11-01）
+## 最新发布复验（2026-11-01，v1.37.1）
 
-基线 [5fe16dab](https://github.com/tjbdwanghaibo/roost-core/commit/5fe16dab)：新增 RV-20261101-06 / P2，StateChanged 首个订阅者 Dispose 客户端后，后续订阅者仍被调用，违反销毁后停止通知的契约。确定性探针和临时源码对照见 [提交审查](COMMIT-REVIEW.md)。这是普通 C# 回调路径验证，不代表 Unity Player 验收；01～05 已修复的结论保持。
+基线 [773ca443](https://github.com/tjbdwanghaibo/roost-core/commit/773ca443)：RV-20261101-06（纯 C# 销毁后回调）已修复；main 另登记的 07（Sync 交付后结算失败恢复）、08（Native 托管通知）、09（排队回放 fatal 复查）修复也通过本轮对应回归。01～05 的关闭结论保持，本轮未确认新增缺陷。
+
+Linux 上 15 个相关 Go 包 race、纯 C# 销毁回归、真实 native 动态库的托管销毁／TCP／PB／Lockstep／重连验证通过。范围及限制见 [提交审查](COMMIT-REVIEW.md)，不代替全仓、Unity、真实集群故障和生产容量验收。以下章节均是历史基线结论。
 
 ## 最新 main 复验（2026-11-01，v1.37.0 后修复）
 
