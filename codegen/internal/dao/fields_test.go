@@ -487,13 +487,12 @@ type Piece struct {
 		persisted[m[1]] = true
 	}
 	for name, want := range map[string]map[string]bool{
-		`MapPatchPath\("([^"]+)"`:                 persisted,
-		`MarkPersistFull\(d, \w+, "([^"]+)"\)`:    persisted,
-		`set\["([^"]+)"\]`:                        persisted,
-		`FullFields\["([^"]+)"\]`:                 persisted,
-		`persistChangeHasPath\(change, "([^"]+)"`: persisted,
-		`names = append\(names, "([^"]+)"\)`:      persisted,
-		`WireName: "([^"]+)"`:                     tags,
+		`append\w+Persist\(set, &unset, "([^"]+)"`: persisted,
+		`set\["([^"]+)"\]`:                         persisted,
+		`FullFields\["([^"]+)"\]`:                  persisted,
+		`persistChangeHasPath\(change, "([^"]+)"`:  persisted,
+		`names = append\(names, "([^"]+)"\)`:       persisted,
+		`WireName: "([^"]+)"`:                      tags,
 	} {
 		matches := regexp.MustCompile(name).FindAllStringSubmatch(source, -1)
 		if len(matches) == 0 {

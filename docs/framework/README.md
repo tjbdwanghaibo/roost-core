@@ -1,5 +1,7 @@
 # Roost 框架模块目录
 
+DataEngine 更新粒度与验证：[递归增量持久化](DATAENGINE-INCREMENTAL-PERSISTENCE.md)。
+
 本目录描述当前 main；最新发布版本与之后未发版的变化见 [CHANGELOG](../../CHANGELOG.md)，各功能版本的升级要求见 [docs/release](../release/README.md)。设计篇写职责、使用、状态与限制；实现篇给出契约、逐包源码和回归入口。
 
 第一次接触框架，请先读 [入门手册](../GETTING-STARTED.md)。下面每组先读“设计与使用”；只有需要定位或修改代码时才打开实现篇的源码/测试目录。

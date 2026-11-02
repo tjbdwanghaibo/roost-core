@@ -157,3 +157,28 @@ func (s *Position) SetY(v int32) {
 		s.MarkPath(dataengine.SyncField(2, nil))
 	}
 }
+
+func (value *Position) appendPersistPaths(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if child := change.Child(dataengine.SyncStep{Field: 1}); child != nil {
+		value.appendXPersist(set, unset, path+".x", child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 2}); child != nil {
+		value.appendYPersist(set, unset, path+".y", child)
+	}
+}
+func (value *Position) appendXPersist(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if change.Full() {
+		set[path] = value.x
+		return
+	}
+	set[path] = value.x
+	return
+}
+func (value *Position) appendYPersist(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if change.Full() {
+		set[path] = value.y
+		return
+	}
+	set[path] = value.y
+	return
+}

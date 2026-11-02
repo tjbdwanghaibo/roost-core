@@ -165,6 +165,7 @@ func (d *WraithDao) GetBuffs(key int32) (int64, bool) {
 }
 
 func (d *WraithDao) SetBuffs(key int32, val int64) {
+	wasEmpty := d.buffs == nil || d.buffs.Len() == 0
 	if d.buffs == nil {
 		d.buffs = fmap.NewSmallSafeMap[int32, int64](0)
 	}
@@ -180,7 +181,11 @@ func (d *WraithDao) SetBuffs(key int32, val int64) {
 		})
 	}
 	d.buffs.Set(key, val)
-	d.markBuffsKeyDirty(key, val)
+	if wasEmpty {
+		d.markBuffsDirty()
+	} else {
+		d.markBuffsKeyDirty(key, val)
+	}
 }
 
 func (d *WraithDao) DelBuffs(key int32) {
@@ -224,7 +229,11 @@ func (d *WraithDao) AddTrail(v int64) {
 		})
 	}
 	d.trail = append(d.trail, v)
-	d.markTrailChange(dataengine.SyncElement(len(d.trail)-1, nil))
+	if len(d.trail) == 1 {
+		d.markTrailDirty()
+	} else {
+		d.markTrailChange(dataengine.SyncElement(len(d.trail)-1, nil))
+	}
 }
 
 // SetTrailAt 更新一个现有索引；不移动其他元素，变化可安全合并与重试。

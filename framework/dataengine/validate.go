@@ -83,25 +83,46 @@ func ValidateCommitRecord(record CommitRecord) error {
 }
 
 func validatePatchPaths(patch FieldPatch) error {
-	for _, path := range patch.Unset {
+	paths := make(map[string]struct{}, len(patch.Unset))
+	add := func(path string) error {
 		if !validPatchPath(path) {
 			return fmt.Errorf("%w: %q", ErrInvalidPatchPath, path)
 		}
-	}
-	if len(patch.SetBSON) == 0 {
+		if _, exists := paths[path]; exists {
+			return fmt.Errorf("%w: duplicate path %q", ErrInvalidPatchPath, path)
+		}
+		paths[path] = struct{}{}
 		return nil
 	}
-	raw := bson.Raw(patch.SetBSON)
-	if err := raw.Validate(); err != nil {
-		return fmt.Errorf("%w: invalid set BSON: %v", ErrInvalidPatch, err)
+	for _, path := range patch.Unset {
+		if err := add(path); err != nil {
+			return err
+		}
 	}
-	elements, err := raw.Elements()
-	if err != nil {
-		return fmt.Errorf("%w: invalid set BSON: %v", ErrInvalidPatch, err)
+	if len(patch.SetBSON) != 0 {
+		raw := bson.Raw(patch.SetBSON)
+		if err := raw.Validate(); err != nil {
+			return fmt.Errorf("%w: invalid set BSON: %v", ErrInvalidPatch, err)
+		}
+		elements, err := raw.Elements()
+		if err != nil {
+			return fmt.Errorf("%w: invalid set BSON: %v", ErrInvalidPatch, err)
+		}
+		for _, element := range elements {
+			if err := add(element.Key()); err != nil {
+				return err
+			}
+		}
 	}
-	for _, element := range elements {
-		if path := element.Key(); !validPatchPath(path) {
-			return fmt.Errorf("%w: %q", ErrInvalidPatchPath, path)
+	// Mongo 不接受同一次更新里的父子路径重叠。必须在 WAL 准入前拒绝，
+	// 不能把确定无效的记录留给投影器无限重试或触发 fatal。
+	for path := range paths {
+		for i := range len(path) {
+			if path[i] == '.' {
+				if _, exists := paths[path[:i]]; exists {
+					return fmt.Errorf("%w: overlapping paths %q and %q", ErrInvalidPatchPath, path[:i], path)
+				}
+			}
 		}
 	}
 	return nil

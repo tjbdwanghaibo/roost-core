@@ -121,7 +121,7 @@ const (
 func (d *{{$.Dao.Name}}) mark{{.Name}}Dirty() {d.mark{{.Name}}Change(nil)}
 func (d *{{$.Dao.Name}}) mark{{.Name}}Change(path dataengine.SyncPath) {
 	{{- if .Tag.Persist}}
-	if err := nest.MarkPersist(d, {{fieldMaskName $.Dao.Name .Name}}); err != nil {
+	if err := nest.MarkPersistPath(d, {{fieldMaskName $.Dao.Name .Name}}, dataengine.SyncField({{syncFieldNumber $.Dao .Name}},path)); err != nil {
 		panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} persistence: %w", err))
 	}
 	{{- end}}
@@ -136,16 +136,8 @@ func (d *{{$.Dao.Name}}) mark{{.Name}}Change(path dataengine.SyncPath) {
 func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDirty(key {{.MapKey}}, val {{mapValType .}}) {d.mark{{.Name}}KeyChange(key,val,nil)}
 func (d *{{$.Dao.Name}}) mark{{.Name}}KeyChange(key {{.MapKey}}, val {{mapValType .}}, path dataengine.SyncPath) {
 	{{- if .Tag.Persist}}
-	if path, ok := dataengine.MapPatchPath("{{.Key}}", key); ok {
-		if err := nest.MarkPersistSet(d, {{fieldMaskName $.Dao.Name .Name}}, path, val); err != nil {
-			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} key persistence: %w", err))
-		}
-	} else {
-		if err := nest.MarkPersistFull(d, {{fieldMaskName $.Dao.Name .Name}}, "{{.Key}}"); err != nil {
-			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} persistence: %w", err))
-		}
-	}
-	{{- end}}
+ if err:=nest.MarkPersistPath(d,{{fieldMaskName $.Dao.Name .Name}},dataengine.SyncField({{syncFieldNumber $.Dao .Name}},dataengine.SyncElement(key,path)));err!=nil{panic(err)}
+ {{- end}}
 	{{- if .Tag.Sync}}
 	d.tracker.MarkSyncPath({{fieldMaskName $.Dao.Name .Name}},dataengine.SyncField({{syncFieldNumber $.Dao .Name}},dataengine.SyncElement(key,path)))
 	{{- end}}
@@ -153,16 +145,8 @@ func (d *{{$.Dao.Name}}) mark{{.Name}}KeyChange(key {{.MapKey}}, val {{mapValTyp
 
 func (d *{{$.Dao.Name}}) mark{{.Name}}KeyDeleted(key {{.MapKey}}) {
 	{{- if .Tag.Persist}}
-	if path, ok := dataengine.MapPatchPath("{{.Key}}", key); ok {
-		if err := nest.MarkPersistUnset(d, {{fieldMaskName $.Dao.Name .Name}}, path); err != nil {
-			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} delete persistence: %w", err))
-		}
-	} else {
-		if err := nest.MarkPersistFull(d, {{fieldMaskName $.Dao.Name .Name}}, "{{.Key}}"); err != nil {
-			panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} persistence: %w", err))
-		}
-	}
-	{{- end}}
+ if err:=nest.MarkPersistPath(d,{{fieldMaskName $.Dao.Name .Name}},dataengine.SyncField({{syncFieldNumber $.Dao .Name}},dataengine.SyncElement(key,nil)));err!=nil{panic(err)}
+ {{- end}}
 	{{- if .Tag.Sync}}
 	d.tracker.MarkSyncPath({{fieldMaskName $.Dao.Name .Name}},dataengine.SyncField({{syncFieldNumber $.Dao .Name}},dataengine.SyncElement(key,nil)))
 	{{- end}}
@@ -365,6 +349,7 @@ func (d *{{$.Dao.Name}}) unbind{{.Name}}Value(key {{.MapKey}}) {
 {{- end}}
 
 func (d *{{$.Dao.Name}}) Set{{.Name}}(key {{.MapKey}}, val {{if .IsPtr}}*{{.MapVal}}{{else}}{{.MapVal}}{{end}}) {
+ wasEmpty:=d.{{fieldVar .Name}}==nil||d.{{fieldVar .Name}}.Len()==0
 {{- if .CopiesMapValue}}
 	// Store a copy: the caller keeps its slice, and changing it later does not
 	// change the DAO behind the dirty marks.
@@ -395,7 +380,7 @@ func (d *{{$.Dao.Name}}) Set{{.Name}}(key {{.MapKey}}, val {{if .IsPtr}}*{{.MapV
 {{- if and .IsPtr (isNested .MapVal)}}
 	d.bind{{.Name}}Value(key, val)
 {{- end}}
-	d.mark{{.Name}}KeyDirty(key, val)
+	if wasEmpty { d.mark{{.Name}}Dirty() } else { d.mark{{.Name}}KeyDirty(key, val) }
 }
 
 func (d *{{$.Dao.Name}}) Del{{.Name}}(key {{.MapKey}}) {
@@ -484,7 +469,7 @@ func (d *{{$.Dao.Name}}) Add{{.Name}}(v {{if .IsPtr}}*{{.SliceElem}}{{else}}{{.S
 {{- if and .IsPtr (isNested .SliceElem)}}
 	d.bind{{.Name}}Items()
 {{- end}}
-	d.mark{{.Name}}Change(dataengine.SyncElement(len(d.{{fieldVar .Name}})-1,nil))
+	if len(d.{{fieldVar .Name}})==1 { d.mark{{.Name}}Dirty() } else { d.mark{{.Name}}Change(dataengine.SyncElement(len(d.{{fieldVar .Name}})-1,nil)) }
 }
 
 // Set{{.Name}}At 更新一个现有索引；不移动其他元素，变化可安全合并与重试。
@@ -749,8 +734,15 @@ func (d *{{.Dao.Name}}) persistChangePathCovered(change nest.PersistChange, path
 
 func (d *{{.Dao.Name}}) marshalPersistPatchBSON(change nest.PersistChange) (dataengine.FieldPatch, error) {
 	set := make(map[string]any, len(change.Set)+len(change.FullFields))
+ unset:=append([]string(nil),change.Unset...)
+ root:=change.Paths.Root()
 {{- range persistFields .Dao.Fields}}
 	if change.Mask&{{fieldMaskName $.Dao.Name .Name}} != 0 {
+ node:=root.Child(dataengine.SyncStep{Field:{{syncFieldNumber $.Dao .Name}}})
+ _,full:=change.FullFields["{{.Key}}"]
+ if !root.Full() && node!=nil && !full {
+  d.append{{.Name}}Persist(set,&unset,"{{.Key}}",node)
+ } else {
 {{- if eq .Kind 2}}
 		_, full := change.FullFields["{{.Key}}"]
 		if full || !d.persistChangeHasPath(change, "{{.Key}}") {
@@ -759,6 +751,7 @@ func (d *{{.Dao.Name}}) marshalPersistPatchBSON(change nest.PersistChange) (data
 {{- else}}
 		set["{{.Key}}"] = {{toWire . (printf "d.%s" (fieldVar .Name))}}
 {{- end}}
+ }
 	}
 {{- end}}
 	for path, value := range change.Set {
@@ -775,8 +768,10 @@ func (d *{{.Dao.Name}}) marshalPersistPatchBSON(change nest.PersistChange) (data
 		raw, err = bson.Marshal(doc)
 		if err != nil { return dataengine.FieldPatch{}, err }
 	}
-	return dataengine.FieldPatch{SetBSON: raw, Unset: append([]string(nil), change.Unset...)}, nil
+	return dataengine.FieldPatch{SetBSON: raw, Unset: unset}, nil
 }
+
+{{persistMethods .Dao}}
 
 // PersistFieldNames implements nest.PersistFieldNamer: the stored names of the
 // persistent fields in mask. A durability=memory transaction that changes one

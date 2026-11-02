@@ -423,15 +423,15 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 			t.Fatalf("final load: %v", loadErr)
 		}
 		e := value.(*Trader)
-		if e.wallet.GetCoins() != 10000+updates || e.wallet.GetTransfers() != updates || e.wallet.DirtyTracker().Version() != uint64(1+updates) {
-			t.Fatalf("wallet memory mismatch: %d", id)
+		if e.wallet.GetCoins() != 10000+updates || e.wallet.GetTransfers() != updates || e.wallet.DirtyTracker().Version() != uint64(seededVersion+updates) {
+			t.Fatalf("wallet memory mismatch: id=%d coins=%d transfers=%d version=%d; want coins=%d transfers=%d version=%d", id, e.wallet.GetCoins(), e.wallet.GetTransfers(), e.wallet.DirtyTracker().Version(), 10000+updates, updates, seededVersion+updates)
 		}
 		inventoryUpdates := updates
 		if daos == 1 {
 			inventoryUpdates = 0
 		}
-		if e.inventory.GetItems() != 1000+inventoryUpdates || e.inventory.GetTransfers() != inventoryUpdates || e.inventory.DirtyTracker().Version() != uint64(1+inventoryUpdates) {
-			t.Fatalf("inventory memory mismatch: %d", id)
+		if e.inventory.GetItems() != 1000+inventoryUpdates || e.inventory.GetTransfers() != inventoryUpdates || e.inventory.DirtyTracker().Version() != uint64(seededVersion+inventoryUpdates) {
+			t.Fatalf("inventory memory mismatch: id=%d items=%d transfers=%d version=%d; want items=%d transfers=%d version=%d", id, e.inventory.GetItems(), e.inventory.GetTransfers(), e.inventory.DirtyTracker().Version(), 1000+inventoryUpdates, inventoryUpdates, seededVersion+inventoryUpdates)
 		}
 		for _, resource := range []string{"trade_wallets", "trade_inventories"} {
 			var doc struct {
@@ -455,7 +455,7 @@ func TestGeneratedDataEnginePressure(t *testing.T) {
 			if doc.Payload != expectedPayload {
 				t.Fatalf("payload mismatch: %s/%d size=%d want=%d", resource, id, len(doc.Payload), len(expectedPayload))
 			}
-			if doc.Transfers != want || doc.Version != uint64(1+want) || value != base+want {
+			if doc.Transfers != want || doc.Version != uint64(seededVersion+want) || value != base+want {
 				t.Fatalf("Mongo mismatch: %s/%d=%+v want=%d", resource, id, doc, want)
 			}
 		}

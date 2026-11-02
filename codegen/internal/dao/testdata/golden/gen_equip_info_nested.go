@@ -284,7 +284,7 @@ func (s *EquipInfo) GemsLen() int {
 func (s *EquipInfo) SetGemsKey(key int32, value *GemInfo) { s.changeGemsKey(key, value, false) }
 func (s *EquipInfo) DelGemsKey(key int32)                 { var zero *GemInfo; s.changeGemsKey(key, zero, true) }
 func (s *EquipInfo) changeGemsKey(key int32, value *GemInfo, remove bool) {
-	if s.gems == nil {
+	if s.gems == nil || s.gems.Len() == 0 {
 		if !remove {
 			s.SetGems(map[int32]*GemInfo{key: value})
 		}
@@ -497,4 +497,116 @@ func (s *EquipInfo) SetShape(v Position) {
 	s.shape = v
 	s.bindShape()
 	s.MarkPath(dataengine.SyncField(6, nil))
+}
+
+func (value *EquipInfo) appendPersistPaths(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if child := change.Child(dataengine.SyncStep{Field: 1}); child != nil {
+		value.appendLevelPersist(set, unset, path+".level", child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 2}); child != nil {
+		value.appendStarPersist(set, unset, path+".star", child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 3}); child != nil {
+		value.appendGemsPersist(set, unset, path+".gems", child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 4}); child != nil {
+		value.appendRunesPersist(set, unset, path+".runes", child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 5}); child != nil {
+		value.appendCorePersist(set, unset, path+".core", child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 6}); child != nil {
+		value.appendShapePersist(set, unset, path+".shape", child)
+	}
+}
+func (value *EquipInfo) appendLevelPersist(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if change.Full() {
+		set[path] = value.level
+		return
+	}
+	set[path] = value.level
+	return
+}
+func (value *EquipInfo) appendStarPersist(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if change.Full() {
+		set[path] = value.star
+		return
+	}
+	set[path] = value.star
+	return
+}
+func (value *EquipInfo) appendGemsPersist(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if change.Full() {
+		set[path] = daoMapDocs(value.gemsRawMap(), gemInfoPtrBSONDoc)
+		return
+	}
+	if value.gems == nil || change.ReplacementCount() >= value.gems.Len() {
+		set[path] = daoMapDocs(value.gemsRawMap(), gemInfoPtrBSONDoc)
+		return
+	}
+	for step := range change.Children {
+		if _, ok := dataengine.MapPatchPath(path, step.Key); !ok {
+			set[path] = daoMapDocs(value.gemsRawMap(), gemInfoPtrBSONDoc)
+			return
+		}
+	}
+	for step, child := range change.Children {
+		key := step.Key.(int32)
+		target, _ := dataengine.MapPatchPath(path, key)
+		item, exists := value.gems.Get(key)
+		if !exists {
+			*unset = append(*unset, target)
+			continue
+		}
+		if !child.Full() && item != nil {
+			item.appendPersistPaths(set, unset, target, child)
+		} else {
+			set[target] = gemInfoPtrBSONDoc(item)
+		}
+	}
+}
+func (value *EquipInfo) appendRunesPersist(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if change.Full() {
+		set[path] = daoSliceDocs(value.runes, gemInfoPtrBSONDoc)
+		return
+	}
+	if change.ReplacementCount() >= len(value.runes) {
+		set[path] = daoSliceDocs(value.runes, gemInfoPtrBSONDoc)
+		return
+	}
+	for step := range change.Children {
+		index := step.Key.(int)
+		if index < 0 || index >= len(value.runes) {
+			set[path] = daoSliceDocs(value.runes, gemInfoPtrBSONDoc)
+			return
+		}
+	}
+	for step, child := range change.Children {
+		index := step.Key.(int)
+		target, _ := dataengine.MapPatchPath(path, index)
+		item := value.runes[index]
+		if !child.Full() && item != nil {
+			item.appendPersistPaths(set, unset, target, child)
+		} else {
+			set[target] = gemInfoPtrBSONDoc(item)
+		}
+	}
+}
+func (value *EquipInfo) appendCorePersist(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if change.Full() {
+		set[path] = gemInfoPtrBSONDoc(value.core)
+		return
+	}
+	if value.core == nil {
+		set[path] = gemInfoPtrBSONDoc(value.core)
+		return
+	}
+	value.core.appendPersistPaths(set, unset, path, change)
+}
+func (value *EquipInfo) appendShapePersist(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if change.Full() {
+		set[path] = value.shape.bsonDoc()
+		return
+	}
+	value.shape.appendPersistPaths(set, unset, path, change)
 }

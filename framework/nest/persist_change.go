@@ -21,6 +21,7 @@ var ErrReceiptConflict = errors.New("nest: transaction receipt conflict")
 type PersistChange struct {
 	// revision 记录登记次数，包括已有参与方以相同 mask 再写。失败创建据此检测外部副作用。
 	revision   uint64
+	Paths      dataengine.PersistPaths
 	Mask       uint64
 	Delete     bool
 	Set        map[string]any
@@ -32,6 +33,7 @@ type PersistChange struct {
 func (change PersistChange) Clone() PersistChange {
 	return PersistChange{
 		revision:   change.revision,
+		Paths:      change.Paths.Clone(),
 		Mask:       change.Mask,
 		Delete:     change.Delete,
 		Set:        maps.Clone(change.Set),
@@ -164,8 +166,22 @@ func firstAggregateDAO(e entity.IThreadSafeEntity) MutationParticipant {
 
 // MarkPersist 登记参与方按 mask 指示的字段有持久化变化（整字段覆盖由 DAO 在准备时决定）。
 func (tx *RollbackTx) MarkPersist(participant MutationParticipant, mask uint64) error {
-	_, err := tx.persistChange(participant, mask)
+	change, err := tx.persistChange(participant, mask)
+	if err == nil {
+		change.Paths.Record(nil)
+	}
 	return err
+}
+
+// MarkPersistPath 登记生成 setter 的相对变化路径，在提交准备时读取最终值。
+// 与同步路径独立消费；失败创建的副作用检测仍通过 persistChange 的 revision 计数。
+func MarkPersistPath(participant MutationParticipant, mask uint64, path dataengine.SyncPath) error {
+	change, err := CurrentRollbackTx().persistChange(participant, mask)
+	if err != nil {
+		return err
+	}
+	change.Paths.Record(path)
+	return nil
 }
 
 // MarkPersist 在当前事务上登记持久化变化；不在事务内时返回 ErrTransactionClosed。

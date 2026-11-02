@@ -1,0 +1,5 @@
+=== RUN   TestGeneratedDataEnginePressure
+    pressure_test.go:427: wallet memory mismatch: id=30720772 coins=11000 transfers=1000 version=1002; want coins=11000 transfers=1000 version=1001
+--- FAIL: TestGeneratedDataEnginePressure (4.10s)
+FAIL
+PASS

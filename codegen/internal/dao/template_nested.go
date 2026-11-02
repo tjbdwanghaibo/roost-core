@@ -333,7 +333,7 @@ func (s *{{$.Nested.Name}}) {{.Name}}Len() int {
 func(s *{{$.Nested.Name}}) Set{{.Name}}Key(key {{.MapKey}},value {{mapValType .}}){s.change{{.Name}}Key(key,value,false)}
 func(s *{{$.Nested.Name}}) Del{{.Name}}Key(key {{.MapKey}}){var zero {{mapValType .}};s.change{{.Name}}Key(key,zero,true)}
 func(s *{{$.Nested.Name}}) change{{.Name}}Key(key {{.MapKey}},value {{mapValType .}},remove bool){
- if s.{{fieldVar .Name}}==nil {if !remove{s.Set{{.Name}}({{rawMapType .}}{key:value})};return}
+ if s.{{fieldVar .Name}}==nil || s.{{fieldVar .Name}}.Len()==0 {if !remove{s.Set{{.Name}}({{rawMapType .}}{key:value})};return}
  items:=s.{{fieldVar .Name}}
  old,existed:=s.{{fieldVar .Name}}.Get(key)
  if tx:=nest.CurrentRollbackTx();tx!=nil&&tx.Policy()==nest.RollbackUndo {
@@ -428,4 +428,6 @@ func (s *{{$.Nested.Name}}) Set{{.Name}}(v {{if eq .Kind 2}}{{rawMapType .}}{{el
 	s.MarkPath(dataengine.SyncField({{nestedFieldOrdinal $.Nested .Name}},nil))
 {{- end}}
 }
-{{end}}`
+{{end}}
+{{persistMethods .Nested}}
+`

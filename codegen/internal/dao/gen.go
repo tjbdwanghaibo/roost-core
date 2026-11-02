@@ -91,6 +91,7 @@ func nestedFuncMap(defs *Definitions) template.FuncMap {
 		"hasHook":            func(f FieldDef) bool { return fieldCarriesChildHook(defs, f) },
 		"hasDetach":          func(f FieldDef) bool { return fieldDetachesOldChildren(defs, f) },
 		"nestedFieldOrdinal": nestedFieldOrdinal,
+		"persistMethods":     func(n NestedDef) string { return persistPathMethods(defs, n.Name, n.Fields, false) },
 		"wireType":           func(f FieldDef) string { return wireType(defs, f) },
 		"toWire":             func(f FieldDef, expr string) string { return toWire(defs, f, expr) },
 		"fromWire":           func(f FieldDef, expr string) string { return fromWire(defs, f, expr) },
@@ -293,6 +294,7 @@ func writeIfChanged(content []byte, outFile string, force bool) (bool, error) {
 
 func funcMap(defs *Definitions) template.FuncMap {
 	return template.FuncMap{
+		"persistMethods": func(d DaoDef) string { return persistPathMethods(defs, d.Name, d.Fields, true) },
 		"syncFieldNumber": func(d DaoDef, name string) int {
 			for i, f := range d.Fields {
 				if f.Name == name {

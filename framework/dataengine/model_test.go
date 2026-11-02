@@ -5,6 +5,7 @@ package dataengine
 import (
 	"context"
 	"errors"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"reflect"
 	"testing"
 
@@ -116,5 +117,28 @@ func TestNamedSyncViewsSelectFieldsAndRejectUnknownViews(t *testing.T) {
 	view, _ := views.Lookup(public)
 	if view.Priority != 5 {
 		t.Fatal("caller changed immutable view")
+	}
+}
+
+func TestPatchRejectsConflictingPathsBeforeWAL(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		set   bson.D
+		unset []string
+	}{
+		{"parent_child", bson.D{{Key: "equips.2", Value: bson.M{}}, {Key: "equips.2.level", Value: 9}}, nil},
+		{"set_unset", bson.D{{Key: "equips.2.level", Value: 9}}, []string{"equips.2"}},
+		{"same_path", bson.D{{Key: "pos.x", Value: 9}}, []string{"pos.x"}},
+		{"duplicate_set", bson.D{{Key: "pos.x", Value: 9}, {Key: "pos.x", Value: 10}}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := bson.Marshal(tc.set)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validatePatchPaths(FieldPatch{SetBSON: raw, Unset: tc.unset}); !errors.Is(err, ErrInvalidPatchPath) {
+				t.Fatalf("conflicting paths admitted: %v", err)
+			}
+		})
 	}
 }

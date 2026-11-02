@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- 修正 RV-20261102-02：DataEngine 正式压测的初始版本期望统一使用创建＋初始化两笔提交的 `seededVersion`，补齐失败实际值；v1.38.0 与本轮源码均已复现旧断言失败，不涉及生产数据修复。
+
+- 普通 Mongo DAO 持久化使用 setter 记录递归路径，支持嵌套 struct/map/list 的 BSON `$set`/`$unset`，事务内合并并冻结最终值；空容器、结构替换、密集修改及 4096 节点预算回退完整字段。已通过真实 Mongo 集合前后对照、三种持久策略各 10 万次多实体请求（约 1000 TPS、零拒绝/失败、最终排空与数据核对）。需配套 core 与生成器重生成；Remote 信封、WAL codec、Sync PB 不变。见[实现与验证](docs/framework/DATAENGINE-INCREMENTAL-PERSISTENCE.md)、[微基准](docs/performance/DATAENGINE-PERSIST-PATHS.md)。
+- 修复 RV-20261102-01：Patch 在 WAL 准入前拒绝重复或父子重叠的 Set/Unset 路径，避免把 Mongo 无法应用的更新持久化。
+
 ## [v1.38.0] - 2026-11-02
 
 - 默认生成 self_sync 改为 setter 记录变化路径：支持嵌套 struct/map/list 的类型化 PB 递归补丁，以及 list 按索引赋值；不再完整快照解码比较。变化随事务回滚、内容成功结算按版本确认，超出 4096 节点预算回退整体替换。Go/C#/native 配套原子 Apply。DAO `sync_format=3`，服务端/proto/客户端须重生成并重连，不兼容旧载荷；`.Values()` 返回 map 与 error。持久 BSON/WAL 不变。见[同步协议](docs/framework/DAO-SYNC-PROTOBUF.md)与[微基准](docs/performance/DAO-COLLECTION-SYNC.md)。

@@ -48,3 +48,25 @@ func TestSyncChangeBudgetAndFrozenIsolation(t *testing.T) {
 		t.Fatal("settlement retained metadata")
 	}
 }
+
+func TestPersistPathsCollapseAndClone(t *testing.T) {
+	var changes PersistPaths
+	leaf := SyncField(2, SyncElement(3, SyncField(1, nil)))
+	changes.Record(leaf)
+	snapshot := changes.Clone()
+	changes.Record(SyncField(2, nil))
+	changes.Record(leaf)
+	if !changes.Root().Child(SyncStep{Field: 2}).Full() || len(changes.Root().Child(SyncStep{Field: 2}).Children) != 0 {
+		t.Fatal("parent replacement did not dominate")
+	}
+	if snapshot.Root().Child(SyncStep{Field: 2}).Full() {
+		t.Fatal("snapshot mutated")
+	}
+	var bounded PersistPaths
+	for i := range maxSyncChangeNodes + 20 {
+		bounded.Record(SyncField(2, SyncElement(i, nil)))
+	}
+	if !bounded.Root().Full() || bounded.nodes != 1 {
+		t.Fatal("unbounded persistence metadata")
+	}
+}

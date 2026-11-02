@@ -168,7 +168,7 @@ func (s *Envelope) MarksLen() int {
 func (s *Envelope) SetMarksKey(key int32, value []byte) { s.changeMarksKey(key, value, false) }
 func (s *Envelope) DelMarksKey(key int32)               { var zero []byte; s.changeMarksKey(key, zero, true) }
 func (s *Envelope) changeMarksKey(key int32, value []byte, remove bool) {
-	if s.marks == nil {
+	if s.marks == nil || s.marks.Len() == 0 {
 		if !remove {
 			s.SetMarks(map[int32][]byte{key: value})
 		}
@@ -215,4 +215,37 @@ func (s *Envelope) SetMarks(v map[int32][]byte) {
 		s.marks.Set(key, append(val[:0:0], val...))
 	}
 	s.MarkPath(dataengine.SyncField(1, nil))
+}
+
+func (value *Envelope) appendPersistPaths(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if child := change.Child(dataengine.SyncStep{Field: 1}); child != nil {
+		value.appendMarksPersist(set, unset, path+".marks", child)
+	}
+}
+func (value *Envelope) appendMarksPersist(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if change.Full() {
+		set[path] = value.marksRawMap()
+		return
+	}
+	if value.marks == nil || change.ReplacementCount() >= value.marks.Len() {
+		set[path] = value.marksRawMap()
+		return
+	}
+	for step := range change.Children {
+		if _, ok := dataengine.MapPatchPath(path, step.Key); !ok {
+			set[path] = value.marksRawMap()
+			return
+		}
+	}
+	for step, child := range change.Children {
+		key := step.Key.(int32)
+		target, _ := dataengine.MapPatchPath(path, key)
+		item, exists := value.marks.Get(key)
+		if !exists {
+			*unset = append(*unset, target)
+			continue
+		}
+		_ = child
+		set[target] = item
+	}
 }

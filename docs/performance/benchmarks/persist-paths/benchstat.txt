@@ -1,0 +1,43 @@
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+                             │ docs/performance/benchmarks/persist-paths/before.txt │ docs/performance/benchmarks/persist-paths/after.txt │
+                             │                        sec/op                        │           sec/op             vs base                │
+PersistPaths/n100/sparse-10                                             5.917µ ± 3%                   4.253µ ± 3%  -28.12% (p=0.000 n=10)
+PersistPaths/n100/nested-10                                            40.153µ ± 1%                   6.381µ ± 1%  -84.11% (p=0.000 n=10)
+PersistPaths/n100/dense-10                                             111.19µ ± 5%                   98.16µ ± 2%  -11.72% (p=0.000 n=10)
+PersistPaths/n1000/sparse-10                                           33.132µ ± 1%                   4.774µ ± 8%  -85.59% (p=0.000 n=10)
+PersistPaths/n1000/nested-10                                          385.555µ ± 2%                   6.598µ ± 4%  -98.29% (p=0.000 n=10)
+PersistPaths/n1000/dense-10                                             1.617m ± 0%                   1.463m ± 3%   -9.52% (p=0.000 n=10)
+geomean                                                                 90.40µ                        22.29µ       -75.34%
+
+                             │ docs/performance/benchmarks/persist-paths/before.txt │ docs/performance/benchmarks/persist-paths/after.txt │
+                             │                      bson-B/op                       │          bson-B/op           vs base                │
+PersistPaths/n100/sparse-10                                            1222.00 ± 0%                    38.00 ± 0%  -96.89% (p=0.000 n=10)
+PersistPaths/n100/nested-10                                            7689.00 ± 0%                    51.00 ± 0%  -99.34% (p=0.000 n=10)
+PersistPaths/n100/dense-10                                             2.538Ki ± 0%                  1.964Ki ± 0%  -22.62% (p=0.000 n=10)
+PersistPaths/n1000/sparse-10                                          12922.00 ± 0%                    38.00 ± 0%  -99.71% (p=0.000 n=10)
+PersistPaths/n1000/nested-10                                          76089.00 ± 0%                    51.00 ± 0%  -99.93% (p=0.000 n=10)
+PersistPaths/n1000/dense-10                                            27.15Ki ± 0%                  21.30Ki ± 0%  -21.54% (p=0.000 n=10)
+geomean                                                                9.129Ki                         234.1       -97.50%
+
+                             │ docs/performance/benchmarks/persist-paths/before.txt │ docs/performance/benchmarks/persist-paths/after.txt │
+                             │                         B/op                         │            B/op              vs base                │
+PersistPaths/n100/sparse-10                                           12.101Ki ± 0%                  7.707Ki ± 0%  -36.32% (p=0.000 n=10)
+PersistPaths/n100/nested-10                                            60.56Ki ± 0%                  12.92Ki ± 0%  -78.67% (p=0.000 n=10)
+PersistPaths/n100/dense-10                                             172.0Ki ± 0%                  137.1Ki ± 0%  -20.25% (p=0.000 n=10)
+PersistPaths/n1000/sparse-10                                          73.093Ki ± 0%                  7.709Ki ± 0%  -89.45% (p=0.000 n=10)
+PersistPaths/n1000/nested-10                                          699.10Ki ± 1%                  12.92Ki ± 0%  -98.15% (p=0.000 n=10)
+PersistPaths/n1000/dense-10                                            2.189Mi ± 0%                  1.969Mi ± 0%  -10.05% (p=0.000 n=10)
+geomean                                                                156.0Ki                       37.41Ki       -76.02%
+
+                             │ docs/performance/benchmarks/persist-paths/before.txt │ docs/performance/benchmarks/persist-paths/after.txt │
+                             │                      allocs/op                       │          allocs/op           vs base                │
+PersistPaths/n100/sparse-10                                              80.00 ± 0%                   101.00 ± 0%  +26.25% (p=0.000 n=10)
+PersistPaths/n100/nested-10                                              215.0 ± 0%                    150.0 ± 0%  -30.23% (p=0.000 n=10)
+PersistPaths/n100/dense-10                                              1.838k ± 0%                   1.549k ± 0%  -15.72% (p=0.000 n=10)
+PersistPaths/n1000/sparse-10                                             80.00 ± 0%                   101.00 ± 0%  +26.25% (p=0.000 n=10)
+PersistPaths/n1000/nested-10                                            1132.0 ± 0%                    150.0 ± 0%  -86.75% (p=0.000 n=10)
+PersistPaths/n1000/dense-10                                             20.37k ± 0%                   18.12k ± 0%  -11.02% (p=0.000 n=10)
+geomean                                                                  622.7                         431.4       -30.73%

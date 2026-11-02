@@ -224,3 +224,39 @@ func (s *GemInfo) SetSig(v []byte) {
 	s.sig = append([]byte(nil), v...)
 	s.MarkPath(dataengine.SyncField(3, nil))
 }
+
+func (value *GemInfo) appendPersistPaths(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if child := change.Child(dataengine.SyncStep{Field: 1}); child != nil {
+		value.appendIDPersist(set, unset, path+".id", child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 2}); child != nil {
+		value.appendLevelPersist(set, unset, path+".level", child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 3}); child != nil {
+		value.appendSigPersist(set, unset, path+".sig", child)
+	}
+}
+func (value *GemInfo) appendIDPersist(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if change.Full() {
+		set[path] = value.id
+		return
+	}
+	set[path] = value.id
+	return
+}
+func (value *GemInfo) appendLevelPersist(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if change.Full() {
+		set[path] = value.level
+		return
+	}
+	set[path] = value.level
+	return
+}
+func (value *GemInfo) appendSigPersist(set map[string]any, unset *[]string, path string, change *dataengine.SyncChange) {
+	if change.Full() {
+		set[path] = value.sig
+		return
+	}
+	set[path] = value.sig
+	return
+}

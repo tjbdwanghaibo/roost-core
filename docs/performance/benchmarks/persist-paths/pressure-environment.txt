@@ -1,0 +1,10 @@
+go version go1.27.3 darwin/arm64
+c8e650713a8c43893c36060eae6861cdd29d8a01
+832655d27f627be383a290c4b287b211b6a78cf68efea561c8b85aff4657ee7c  framework/dataengine/persist_paths.go
+66d07e7361c2d01a2b0b597976c4a391c251494d917b22406ef140b3bdce7142  framework/nest/persist_change.go
+56453e0acc4e71c9bc5f2d21e9291acecd528c392ebf78611da27108d7cae100  codegen/internal/dao/persist_paths.go
+985d46e0c5a3e340beb2604641d7d8d6b1de37296f1f0522945981e589b7b560  codegen/internal/dao/testdata/runtime/persist_pressure_test.go
+Now drawing from 'AC Power'
+Apple M5
+10
+db version v8.0.32

@@ -4,9 +4,29 @@
 
 ## 当前结论
 
+- **2026-11-02 修复 RV-20261102-02**：压测初始版本断言过时；旧版与本轮均复现。生产版本语义未变，实跑结果见性能报告。
+
+- **2026-11-02 新增并修复 RV-20261102-01（P2）**：Patch 准入缺少重复及祖先路径检查。见下节，本项不代表重新完成全仓审计。
+
 - **已修复 P2：RV-20261101-09**，回放取得执行权后复查 fatal，排队 Flush 和直接 ReplayPass 均返回原错误，不再调用存储。
 - RV-07/08/09 已修复；发布状态以 CHANGELOG 为准。
 - Nest 与 Sync 在本轮列明的路径中未确认新增缺陷；未确认新增 P0/P1。这不是全仓无缺陷的证明。
+
+## RV-20261102-02：正式 DataEngine 压测使用过时的初始版本
+
+状态：已修复，测试夹具问题，不是业务数据丢失。`tradeFixture.seed` 在创建时提交版本 1、业务初始化再提交版本 2，已有 `seededVersion=2`；`pressure_test.go` 的 wallet、inventory 与 Mongo 最终断言仍写死 `1+updates`，导致正常更新也无法通过验收。
+
+修前 v1.38.0 与本轮源码使用相同诊断，各以 2 个实体、1000 次 pair/async 请求复现：`coins=11000 transfers=1000 version=1002; want coins=11000 transfers=1000 version=1001`。第一轮 1000 Entity / 10 万请求也在同一断言失败，不能把那轮记作验收通过。
+
+修复三处期望统一使用 seed 的共享常量，补齐错误信息中的实际值与期望值。金额、次数、Mongo 内容、版本、WAL 排空与投影失败检查全部保留；未改任何运行时代码或放宽一致性标准。正式复跑结果见[持久化性能报告](../performance/DATAENGINE-PERSIST-PATHS.md)。
+
+## RV-20261102-01：冲突 Patch 路径可进入 WAL
+
+状态：已修复；基线 v1.38.0 `c8e65071`。`validatePatchPaths` 原先只验证单条路径语法，没有拒绝重复键、父子重叠或跨 Set/Unset 的冲突。手写 DAO 可生成 Mongo 无法应用的 Patch，并通过持久准入验证；这会留下不能正常投影的记录。本轮测试只证明错误准入，没有制造生产积压或数据损坏。
+
+修前回归 `TestPatchRejectsConflictingPathsBeforeWAL` 的 parent_child、set_unset、same_path、duplicate_set 四例均失败：`conflicting paths admitted: <nil>`。修复统一检查两组路径及所有点分隔祖先，返回 ErrInvalidPatchPath；生成器的路径树在生成阶段合并父子写，正常嵌套补丁仍能通过。
+
+红绿入口：`go test ./framework/dataengine -run TestPatchRejectsConflictingPathsBeforeWAL -count=1`。修后定向 race、全仓 build/vet/test、生成 game-demo build/vet/test 与无漂移检查，以及 DAO 真实 Mongo/WAL 重开回归通过；不更改 Mongo 版本条件、WAL codec 或 checkpoint。CBM 已刷新到 generation `2026-11-02T00:35:21Z`，本项关键文件 coverage 无记录缺口；全仓仍有 19 个其他 partial 文件，未声称完整索引。
 
 ## RV-20261101-09：排队回放在获得执行权后未复查 fatal
 

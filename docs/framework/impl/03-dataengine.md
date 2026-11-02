@@ -1,5 +1,7 @@
 # 核心：DataEngine 持久化：实现与维护
 
+当前 main 普通 DAO 支持 setter 路径驱动的嵌套 struct/map/list 增量持久化，使用 BSON `$set`/`$unset`；完整替换边界、事务独立性与验证见[递归增量持久化](../DATAENGINE-INCREMENTAL-PERSISTENCE.md)。Remote 权威信封不在此轮范围内。
+
 适用版本：当前 main 与最新发布版本（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）；源码目录最初按 v1.24.0 提取、之后随改动维护，链接由根包文档门禁保证存在，缺漏以源码为准。[设计与使用](../guide/03-dataengine.md)
 
 
