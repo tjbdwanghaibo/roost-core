@@ -1,0 +1,25 @@
+package testdata
+import("testing";"math/rand";"bytes")
+func TestReviewTrackedSequences(t *testing.T){
+ for seed:=int64(0);seed<30;seed++ {
+  r:=rand.New(rand.NewSource(seed)); d:=collectionHero(8)
+  baseline,_:=UnmarshalSyncHeroDao(d.MarshalSync(^uint64(0)))
+  for batch:=0;batch<20;batch++ {
+   if err:=syncMutation(t,func()error{
+    for step:=0;step<5;step++ { switch r.Intn(8) {
+    case 0:d.SetItems(int64(r.Intn(12)),r.Int31())
+    case 1:d.DelItems(int64(r.Intn(12)))
+    case 2:d.AddFriends(r.Int63())
+    case 3:d.SetFriendsAt(r.Intn(d.FriendsLen()+1),r.Int63())
+    case 4:d.SetFriendsAll([]int64{1,2,3})
+    case 5:d.SetSquadAt(r.Intn(8),&EquipInfo{level:r.Int31()})
+    case 6:e,_:=d.GetSquad(r.Intn(8));if e!=nil{e.SetStar(r.Int31())}
+    case 7:d.GetPos().SetX(r.Int31())
+    }};return nil});err!=nil{t.Fatal(err)}
+   raw:=d.MarshalSyncChanges(d.tracker.SyncDirtyMask());patch,err:=UnmarshalSyncHeroDao(raw);if err!=nil{t.Fatal(err)}
+   next,err:=ApplySyncHeroDao(patch,baseline);if err!=nil{t.Fatalf("seed=%d batch=%d: %v",seed,batch,err)}
+   got,_:=MarshalSyncHeroDao(next);want:=d.MarshalSync(^uint64(0));if !bytes.Equal(got,want){t.Fatalf("seed=%d batch=%d: delta differs from full",seed,batch)}
+   baseline=next;d.tracker.AcknowledgeSyncChanges(d.tracker.SyncChangeVersion());d.CleanDirty()
+  }
+ }
+}

@@ -1,0 +1,40 @@
+package nest
+
+import (
+	"context"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"testing"
+)
+
+func TestReviewFailedBuildModifiesAlreadyRegisteredDAO(t *testing.T) {
+	manager := entity.NewEntityManager()
+	pilot := addPilots(t, manager, 39500, 1)[0]
+	existing := manager.Get(pilot).(*rollbackTestEntity)
+	id := mustBuildCastID(t, 39501, 1, failedCreateKind)
+	planFailedCreate(t, id, failedCreatePlan{stage: failedCreateInBuilder, sideEffect: func() error { return writeFailedCreateDAO(existing.dao, 77) }})
+	committer := &recordingCommitter{}
+	mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(manager)), NestOptionWithTransactionCommitter(committer))
+	name := NewHandlerName("review_existing_dao_during_failed_create")
+	mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+		if err := writeFailedCreateDAO(existing.dao, 5); err != nil {
+			return nil, err
+		}
+		_, err := manager.Create(failedCreateParam(id))
+		if !errors.Is(err, errFailedCreateRejected) {
+			return nil, errors.New("fixture: expected initialization rejection")
+		}
+		return "handled", nil
+	}, HandlerMeta{Rollback: RollbackState, Durability: DurabilityStrict})
+	if err := mgr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Shutdown(context.Background())
+	_, err := mgr.Request(context.Background(), name, pilot, nil)
+	if !errors.Is(err, ErrFailedCreateLeftEffects) {
+		t.Fatalf("failed build's external write escaped guard: err=%v value=%d mutations=%+v", err, existing.dao.Value, committer.record.Mutations)
+	}
+	if existing.dao.Value != 1 {
+		t.Fatalf("rollback value=%d", existing.dao.Value)
+	}
+}

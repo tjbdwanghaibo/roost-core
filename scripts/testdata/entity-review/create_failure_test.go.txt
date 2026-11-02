@@ -1,0 +1,93 @@
+package nest
+
+import (
+	"context"
+	"errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"testing"
+)
+
+const reviewFailedBuildKind entity.EntityKind = 197
+
+var reviewBuildRejected = errors.New("review: component initialization rejected")
+
+func init() {
+	entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+		Category: 1, Kind: reviewFailedBuildKind,
+		DaoBuilders: []entity.DaoBuilderFunc{func() entity.DaoInterface { return &rollbackTestDao{} }},
+		Builder: func(p *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+			dao := p.Dao["rollback_test"].(*rollbackTestDao)
+			dao.Value = 99
+			if err := MarkPersist(dao, 1); err != nil {
+				return nil, err
+			}
+			return nil, reviewBuildRejected
+		},
+	})
+}
+func TestReviewFailedEntityBuildMustNotPersistItsDAO(t *testing.T) {
+	manager := entity.NewEntityManager()
+	id := mustBuildCastID(t, 39101, 1, reviewFailedBuildKind)
+	committer := &recordingCommitter{}
+	err := entity.WithGuardScope("review_failed_create", func(scope *entity.GuardScope) error {
+		_, err := RunIsolatedTransaction(context.Background(), committer, "review_failed_create", func() (any, error) {
+			_, err := manager.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Category: 1, Kind: reviewFailedBuildKind})
+			if !errors.Is(err, reviewBuildRejected) {
+				t.Fatalf("unexpected creation error: %v", err)
+			}
+			return nil, nil // 业务处理了创建失败，继续完成其他工作。
+		})
+		return err
+	})
+	if manager.Get(id) != nil {
+		t.Fatal("failed entity was published")
+	}
+	for _, mutation := range committer.record.Mutations {
+		if mutation.Key.ID == id {
+			t.Fatalf("failed Create persisted an unpublished entity: transaction err=%v, mutation=%+v", err, mutation)
+		}
+	}
+}
+
+func TestReviewFailedBuildInNestHandler(t *testing.T) {
+	for _, propagate := range []bool{false, true} {
+		name := "handled_error"
+		if propagate {
+			name = "propagated_error"
+		}
+		t.Run(name, func(t *testing.T) {
+			manager := entity.NewEntityManager()
+			pilots := addPilots(t, manager, 39200, 1)
+			id := mustBuildCastID(t, 39201, 1, reviewFailedBuildKind)
+			committer := &recordingCommitter{}
+			mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(manager)), NestOptionWithTransactionCommitter(committer))
+			handler := NewHandlerName("review_failed_builder_" + name)
+			mgr.MustRegisterHandlerWithMeta(handler, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+				_, err := manager.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Category: 1, Kind: reviewFailedBuildKind})
+				if !errors.Is(err, reviewBuildRejected) {
+					return nil, errors.New("fixture: unexpected creation result")
+				}
+				if propagate {
+					return nil, err
+				}
+				return "creation rejected", nil
+			}, HandlerMeta{Rollback: RollbackState, Durability: DurabilityStrict})
+			if err := mgr.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer mgr.Shutdown(context.Background())
+			_, err := mgr.Request(context.Background(), handler, pilots[0], nil)
+			if propagate && !errors.Is(err, reviewBuildRejected) {
+				t.Fatalf("propagated error=%v", err)
+			}
+			if manager.Get(id) != nil {
+				t.Fatal("failed entity was published")
+			}
+			for _, m := range committer.record.Mutations {
+				if m.Key.ID == id {
+					t.Fatalf("failed entity DAO committed by real Nest handler: err=%v key=%+v payload=%s", err, m.Key, m.Data)
+				}
+			}
+		})
+	}
+}

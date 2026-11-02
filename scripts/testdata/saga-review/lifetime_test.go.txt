@@ -1,0 +1,53 @@
+package saga
+
+import (
+	"testing"
+	"time"
+)
+
+func TestReviewNewSagaLifetimeMustNotReplayPreviousReceipt(t *testing.T) {
+	u := newUnitPartition(t, func(o *Options) { o.TerminalRetention = time.Minute })
+	now := time.Now().UTC()
+	u.clock.Set(now)
+	h := newNativeHarness()
+	r := u.round(now, u.startInput("reuse", []byte("old"), "first", ""))
+	first := *r.events[0].Command
+	out := h.run(t, first)
+	r = u.round(now.Add(time.Millisecond), u.resultInput(out.Completion))
+	out = h.run(t, *r.events[len(r.events)-1].Command)
+	u.round(now.Add(2*time.Millisecond), u.resultInput(out.Completion))
+	if u.record(first.SagaID).Status != StatusCompleted {
+		t.Fatal("first not done")
+	}
+	next := now.Add(2 * time.Minute)
+	u.p.prune(next)
+	if u.p.sagas[first.SagaID] != nil {
+		t.Fatal("not pruned")
+	}
+	r = u.round(next, u.startInput("reuse", []byte("new"), "second", ""))
+	second := *r.events[0].Command
+	before := h.business
+	out = h.run(t, second)
+	if h.business != before+1 || out.Kind != StepExecuted {
+		t.Fatalf("new lifetime skipped: old=%s new=%s oldOp=%s newOp=%s kind=%d business=%d->%d completionData=%q", first.ID, second.ID, first.IdempotencyKey, second.IdempotencyKey, out.Kind, before, h.business, out.Completion.Data)
+	}
+}
+func TestReviewPreviousLifetimeCompletionMustNotAdvanceNewSaga(t *testing.T) {
+	u := newUnitPartition(t, func(o *Options) { o.TerminalRetention = time.Minute })
+	now := u.clock.Now()
+	r := u.round(now, u.startInput("reuse-result", []byte("old"), "first", ""))
+	old := *r.events[0].Command
+	oldResult := Completion{CommandID: old.ID, IdempotencyKey: old.IdempotencyKey, SagaID: old.SagaID, Success: true, Data: []byte("old-result")}
+	r = u.round(now.Add(time.Millisecond), u.resultInput(oldResult))
+	second := r.events[len(r.events)-1].Command
+	u.round(now.Add(2*time.Millisecond), u.resultInput(Completion{CommandID: second.ID, IdempotencyKey: second.IdempotencyKey, SagaID: second.SagaID, Success: true}))
+	next := now.Add(2 * time.Minute)
+	u.p.prune(next)
+	u.round(next, u.startInput("reuse-result", []byte("new"), "second", ""))
+	before := u.record(old.SagaID)
+	u.round(next.Add(time.Millisecond), u.resultInput(oldResult))
+	after := u.record(old.SagaID)
+	if after.Step != before.Step || after.Version != before.Version {
+		t.Fatalf("old lifetime result advanced new saga: step %d->%d version %d->%d data=%q", before.Step, after.Step, before.Version, after.Version, after.Data)
+	}
+}

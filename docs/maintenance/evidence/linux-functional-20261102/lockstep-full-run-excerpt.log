@@ -1,0 +1,20 @@
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/admission-only_control_overflows
+2026/11/01 14:36:27 INFO player tcp listener started addr=127.0.0.1:39359 max_connections=10000
+--- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/admission-only_control_overflows (0.73s)
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/written_lane_follows_the_link
+2026/11/01 14:36:28 INFO player tcp listener started addr=127.0.0.1:45469 max_connections=10000
+--- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/written_lane_follows_the_link (2.13s)
+--- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket (2.86s)
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/admission-only_control_overflows
+2026/11/01 14:36:30 INFO player tcp listener started addr=127.0.0.1:45635 max_connections=10000
+--- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/admission-only_control_overflows (0.55s)
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link
+2026/11/01 14:36:31 INFO player tcp listener started addr=127.0.0.1:33061 max_connections=10000
+    tcp_test.go:892: live Tick after the snapshot: receiver 1 session 1: player tcp: session not found: slow
+        receiver 2 session 2: player tcp: session not found: fast
+--- FAIL: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link (90.01s)
+--- FAIL: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link (90.57s)
+--- FAIL: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive (93.43s)

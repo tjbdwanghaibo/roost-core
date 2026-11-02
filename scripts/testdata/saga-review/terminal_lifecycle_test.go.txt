@@ -1,0 +1,33 @@
+package saga
+
+import (
+	"context"
+	"encoding/json"
+	"testing"
+	"time"
+)
+
+func TestReviewWaitTerminalRejectsPreviousLifecycle(t *testing.T) {
+	raw := &stubRaw{}
+	e, err := NewEngine(stubLog{}, raw, Options{Layout: Layout{Prefix: "review.wait", Stream: "REVIEW", Partitions: 1, Groups: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.ready.Store(true)
+	current := Record{Lifecycle: "NEWLIFE", ID: "s1", Status: StatusWaiting, Version: 2}
+	raw.answer = func(string, []byte) ([]byte, error) {
+		// Waiter has registered; emulate a lagging terminal follower delivering the previous lifetime.
+		e.watch.observe(Record{Lifecycle: "OLDLIFE", ID: "s1", Status: StatusCompleted, Version: 10})
+		e.watch.observe(Record{Lifecycle: "NEWLIFE", ID: "s1", Status: StatusCompleted, Version: 4})
+		return json.Marshal(queryReply{V: WireVersion, Part: 0, Found: true, Record: &current})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	got, err := e.WaitTerminal(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Lifecycle != current.Lifecycle {
+		t.Fatalf("waiting for NEWLIFE v2 returned previous lifetime: lifecycle=%s version=%d status=%v", got.Lifecycle, got.Version, got.Status)
+	}
+}

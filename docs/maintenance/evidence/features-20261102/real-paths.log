@@ -1,0 +1,38 @@
+=== RUN   TestPersistPathsRealMongo
+=== RUN   TestPersistPathsRealMongo/scalar_and_nested
+=== RUN   TestPersistPathsRealMongo/nested_and_scalar
+=== RUN   TestPersistPathsRealMongo/struct
+=== RUN   TestPersistPathsRealMongo/nested_map
+=== RUN   TestPersistPathsRealMongo/list_index
+=== RUN   TestPersistPathsRealMongo/list_nested
+=== RUN   TestPersistPathsRealMongo/append
+=== RUN   TestPersistPathsRealMongo/map_remove
+=== RUN   TestPersistPathsRealMongo/nested_remove
+=== RUN   TestPersistPathsRealMongo/replace_then_child
+=== RUN   TestPersistPathsRealMongo/child_then_replace
+=== RUN   TestPersistPathsRealMongo/delete_reinsert
+=== RUN   TestPersistPathsRealMongo/replace_list_then_child
+=== RUN   TestPersistPathsRealMongo/nil_list_append
+=== RUN   TestPersistPathsRealMongo/dense
+--- PASS: TestPersistPathsRealMongo (0.90s)
+    --- PASS: TestPersistPathsRealMongo/scalar_and_nested (0.07s)
+    --- PASS: TestPersistPathsRealMongo/nested_and_scalar (0.05s)
+    --- PASS: TestPersistPathsRealMongo/struct (0.05s)
+    --- PASS: TestPersistPathsRealMongo/nested_map (0.05s)
+    --- PASS: TestPersistPathsRealMongo/list_index (0.06s)
+    --- PASS: TestPersistPathsRealMongo/list_nested (0.05s)
+    --- PASS: TestPersistPathsRealMongo/append (0.05s)
+    --- PASS: TestPersistPathsRealMongo/map_remove (0.05s)
+    --- PASS: TestPersistPathsRealMongo/nested_remove (0.05s)
+    --- PASS: TestPersistPathsRealMongo/replace_then_child (0.05s)
+    --- PASS: TestPersistPathsRealMongo/child_then_replace (0.05s)
+    --- PASS: TestPersistPathsRealMongo/delete_reinsert (0.05s)
+    --- PASS: TestPersistPathsRealMongo/replace_list_then_child (0.03s)
+    --- PASS: TestPersistPathsRealMongo/nil_list_append (0.05s)
+    --- PASS: TestPersistPathsRealMongo/dense (0.06s)
+=== RUN   TestPersistPathsNullContainersRealMongo
+--- PASS: TestPersistPathsNullContainersRealMongo (0.14s)
+=== RUN   TestNumericStorageKeysRealMongo
+--- PASS: TestNumericStorageKeysRealMongo (0.14s)
+PASS
+ok  	daogoldenruntime/gen	2.195s

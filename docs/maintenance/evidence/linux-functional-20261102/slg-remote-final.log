@@ -1,0 +1,33 @@
+=== RUN   TestSLGAllianceRemoteDelivery
+2026/11/02 07:07:15 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/02 07:07:15 INFO bus: subscribed subject=slg_alliance_210273_1793603235161882213.srv.1000
+2026/11/02 07:07:15 INFO bus: subscribed subject=slg_alliance_210273_1793603235161882213.svc.game.1000
+2026/11/02 07:07:15 INFO bus: subscribed subject=slg_alliance_210273_1793603235161882213.svc.game.all
+2026/11/02 07:07:15 INFO bus: subscribed subject=slg_alliance_210273_1793603235161882213.srv.all
+2026/11/02 07:07:15 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/02 07:07:15 INFO bus: subscribed subject=slg_alliance_210273_1793603235161882213.srv.1001
+2026/11/02 07:07:15 INFO bus: subscribed subject=slg_alliance_210273_1793603235161882213.svc.game.1001
+2026/11/02 07:07:15 INFO bus: subscribed subject=slg_alliance_210273_1793603235161882213.svc.game.all
+2026/11/02 07:07:15 INFO bus: subscribed subject=slg_alliance_210273_1793603235161882213.srv.all
+2026/11/02 07:07:15 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/02 07:07:15 WARN remote_entity: snapshot push disabled: the sync bus cannot confirm subscriptions (JetStream required); Cached and Monotonic reads re-confirm through the shared L2 / authority after cached_max_staleness consumer_sid=2000 cached_max_staleness=0s snapshot_cache_ttl=30s
+    alliance_test.go:141: encoded view: alliance/scout removal, failed authority refresh holds publication, reconnect rebuilds Full, revoked member absent, old epoch refused
+    remote_handoff_test.go:45: old owner rejected after transfer: remote entity: writer fenced: entity=4611686018528889873 state=fenced
+2026/11/02 07:07:16 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/02 07:07:16 WARN remote_entity: snapshot push disabled: the sync bus cannot confirm subscriptions (JetStream required); Cached and Monotonic reads re-confirm through the shared L2 / authority after cached_max_staleness consumer_sid=2001 cached_max_staleness=0s snapshot_cache_ttl=30s
+    player_delivery_test.go:255: home 1000 write: writer exited before kill: exit status 1
+        --- FAIL: TestSLGAlliancePlayerDelivery (0.07s)
+            player_delivery_test.go:117: want two unprojected strict records: {Committed:3 Projected:0 WALUnacked:3 ProjectionFailures:0 FatalProjectionConflicts:0 LastError: AdmissionRejected:0 BacklogWarning:false UnloadingEntities:0 UnloadAdmissionRejected:0 ParallelWindows:0 ParallelLanes:0}
+        FAIL
+2026/11/02 07:07:19 INFO nats: disconnected err=<nil>
+2026/11/02 07:07:19 INFO nats: connection closed
+2026/11/02 07:07:19 INFO nats: disconnected err=<nil>
+2026/11/02 07:07:19 INFO nats: connection closed
+2026/11/02 07:07:19 INFO nats: disconnected err=<nil>
+2026/11/02 07:07:19 INFO nats: connection closed
+2026/11/02 07:07:19 INFO nats: disconnected err=<nil>
+2026/11/02 07:07:19 INFO nats: connection closed
+--- FAIL: TestSLGAllianceRemoteDelivery (4.06s)
+FAIL
+FAIL	example.com/slg-practice/game/alliance	4.083s
+FAIL
