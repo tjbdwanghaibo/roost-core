@@ -31,7 +31,7 @@ jobs:
         # --upgrade-compat also does it for a patch). The hand edits below
         # target v1.25.0 projects and find nothing to change in later ones;
         # upgrade assigns the port_block that v1.29.0 made a required roost.yaml field.
-        core: [v1.25.0, v1.27.0, v1.28.0, v1.29.0, v1.31.2, v1.32.0, v1.33.2, v1.34.2, v1.35.0, v1.36.0, v1.37.1]
+        core: [v1.25.0, v1.27.0, v1.28.0, v1.29.0, v1.31.2, v1.32.0, v1.33.2, v1.34.2, v1.35.0, v1.36.0, v1.37.1, v1.38.0]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
