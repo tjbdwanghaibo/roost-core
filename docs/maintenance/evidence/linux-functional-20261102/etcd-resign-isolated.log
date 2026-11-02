@@ -1,0 +1,22 @@
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+{"level":"warn","ts":"2026-11-02T00:39:44.245706Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc0001a4000/127.0.0.1:39027","peer":"Peer{Addr: '127.0.0.1:39027', LocalAddr: '127.0.0.1:53186', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Txn","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:343: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (0.96s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+{"level":"warn","ts":"2026-11-02T00:39:45.493679Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc00052ce00/127.0.0.1:35403","peer":"Peer{Addr: '127.0.0.1:35403', LocalAddr: '127.0.0.1:60410', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Txn","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:343: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (1.25s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+{"level":"warn","ts":"2026-11-02T00:39:46.642789Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc000154000/127.0.0.1:38275","peer":"Peer{Addr: '127.0.0.1:38275', LocalAddr: '127.0.0.1:49898', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Txn","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:343: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (1.15s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+{"level":"warn","ts":"2026-11-02T00:39:47.497518Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc0001a4600/127.0.0.1:46183","peer":"Peer{Addr: '127.0.0.1:46183', LocalAddr: '127.0.0.1:57110', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Txn","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:343: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (0.85s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+{"level":"warn","ts":"2026-11-02T00:39:48.943626Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc00052c200/127.0.0.1:39303","peer":"Peer{Addr: '127.0.0.1:39303', LocalAddr: '127.0.0.1:60390', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Txn","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:343: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (1.46s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/etcd/driver	6.686s

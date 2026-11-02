@@ -1,0 +1,51 @@
+=== RUN   TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose
+2026/11/02 07:07:20 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/02 07:07:21 INFO nats: disconnected err=<nil>
+2026/11/02 07:07:21 INFO nats: connection closed
+    closed_state_test.go:414: JetStreamLogClient.DurableAckFloors after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.EnsureLogStream after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.Follow after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.KeyValue after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.LastMsg after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.Objects after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.PublishFenced after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.Purge after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.ReadRange after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.RequestMany after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    real_nats_integration_test.go:350: non-closing methods answered in 23ms while nats.go still reports IsConnected = true
+--- FAIL: TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose (0.24s)
+=== RUN   TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose
+2026/11/02 07:07:21 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/02 07:07:21 INFO nats: disconnected err=<nil>
+2026/11/02 07:07:21 INFO nats: connection closed
+    closed_state_test.go:414: JetStreamLogClient.DurableAckFloors after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.EnsureLogStream after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.Follow after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.KeyValue after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.LastMsg after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.Objects after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.PublishFenced after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.Purge after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.ReadRange after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.RequestMany after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    real_nats_integration_test.go:350: non-closing methods answered in 23ms while nats.go still reports IsConnected = true
+--- FAIL: TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose (0.23s)
+=== RUN   TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose
+2026/11/02 07:07:21 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/02 07:07:21 INFO nats: disconnected err=<nil>
+2026/11/02 07:07:21 INFO nats: connection closed
+    closed_state_test.go:414: JetStreamLogClient.DurableAckFloors after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.EnsureLogStream after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.Follow after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.KeyValue after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.LastMsg after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.Objects after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.PublishFenced after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.Purge after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.ReadRange after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    closed_state_test.go:414: JetStreamLogClient.RequestMany after an undrained Assembly.Close = nats log: not initialized, want an error that errors.Is fnats.ErrClosed
+    real_nats_integration_test.go:350: non-closing methods answered in 19ms while nats.go still reports IsConnected = true
+--- FAIL: TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose (0.23s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver	0.712s
+FAIL

@@ -1,0 +1,823 @@
+{
+  "baseline": "773ca443dfb21e97cedc1aac59067de6f980e2a8",
+  "scope": "Linux functional validation; no capacity/soak certification",
+  "suites": {
+    "broker-network-final.log": {
+      "bytes": 2887,
+      "sha256": "ff99d456a65c876533886a00b49ac0b18a7cdcecc662425c0b4194591d89fb60",
+      "exit": 0,
+      "events": {
+        "test_pass": 3
+      }
+    },
+    "cli-signals.json": {
+      "bytes": 38490,
+      "sha256": "87eb3303f12d81943a374d3aa34d827fcef9af4fc5759bf16be3a6ae64f7d27e",
+      "events": {
+        "test_pass": 36,
+        "package_pass": 1
+      }
+    },
+    "cli-signals.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "codegen-network.json": {
+      "bytes": 4426,
+      "sha256": "a036d16def3c142a09848968cc4cc361885c941a486b4148a00410e141f6d0c1",
+      "events": {
+        "test_fail": 2,
+        "package_fail": 1
+      },
+      "failures": [
+        "TestDoctorPlayerTCPPassesAfterAuthAndConfig",
+        "TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint",
+        "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost"
+      ]
+    },
+    "codegen-network.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "dao-golden.log": {
+      "bytes": 15554,
+      "sha256": "be85f84c4fcbcceb82abcf570203b9105aead02536beeedb389d115beef4f6d7",
+      "exit": 0,
+      "events": {
+        "test_pass": 99,
+        "test_skip": 3
+      },
+      "skips": [
+        "TestGeneratedRangeXContract/map_default_(SmallSafeMap)/clear_inside_the_callback",
+        "TestGeneratedRangeXContract/map=fast_(FastMap)/clear_inside_the_callback",
+        "TestGeneratedRangeXContract/map=sharded_(ShardedSafeMap)/clear_inside_the_callback"
+      ]
+    },
+    "default-skips.json": {
+      "bytes": 13234,
+      "sha256": "b7d44552a2ee44d5f87669624c5ef77a861addb041cf437cb700fa0ce34e3c3f"
+    },
+    "default.json": {
+      "bytes": 10779110,
+      "sha256": "c458e5486ff7f30ea7e2e43a899853b5be6fb2e3a9a895e87621c32ef55ce198",
+      "events": {
+        "test_pass": 9069,
+        "package_pass": 161,
+        "package_skip": 22,
+        "test_skip": 95,
+        "test_fail": 3,
+        "package_fail": 1
+      },
+      "skips": [
+        "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost:TestGeneratedSagaNativeStepsAndEffectConsumer",
+        "github.com/tjbdwanghaibo/roost-core/framework/cache:TestLayeredExpiredLocalCopyDoesNotVetoAuthorityRealRedis",
+        "github.com/tjbdwanghaibo/roost-core/framework/cache:TestRefHMapPatchKeepsTheWholeRecordAliveRealRedis",
+        "github.com/tjbdwanghaibo/roost-core/framework/cache:TestRefHMapRegistryGuardAcceptsSameLayoutConcurrencyRealRedis",
+        "github.com/tjbdwanghaibo/roost-core/framework/cache:TestRefHMapSchemaRegistryPromises",
+        "github.com/tjbdwanghaibo/roost-core/framework/cache:TestRefHMapContractsRealRedis",
+        "github.com/tjbdwanghaibo/roost-core/framework/cache:TestRefHMapBoundaryContractsRealRedis",
+        "github.com/tjbdwanghaibo/roost-core/framework/cache:TestRefHMapUnknownWrite",
+        "github.com/tjbdwanghaibo/roost-core/framework/entity:TestEntityRangeContract/EntityManager.RangeByCategory/clear_inside_the_callback",
+        "github.com/tjbdwanghaibo/roost-core/framework/entity:TestEntityRangeContract/EntityManager.RangeGroupEntities/clear_inside_the_callback",
+        "github.com/tjbdwanghaibo/roost-core/framework/entity:TestEntityRangeContract/ManagerAccess.Range/clear_inside_the_callback",
+        "github.com/tjbdwanghaibo/roost-core/framework/entity:TestEntityRangeContract/EntityManager.Range/clear_inside_the_callback",
+        "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine:TestRealMongoStartupDrainOutlastsALeftoverTransaction",
+        "github.com/tjbdwanghaibo/roost-core/framework/nestwal:TestNestWALCrashChildProcess",
+        "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost:TestGeneratedMainEmbedsTheTimeZoneDatabase",
+        "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost:TestGateGeneratedBusinessConsumer",
+        "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost:TestClientSDKAgainstGeneratedPlayerTCP",
+        "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost:TestDoctorPlayerTCPPassesAfterAuthAndConfig",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench:TestDeliveryRun",
+        "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost:TestDoctorChecksCrossModConfigRulesThroughTheProcess",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis:TestCompareAndDeleteOnlyRemovesTheValueItWasShownIntegration",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis:TestIndexIsMaintainedInTheSameWriteIntegration",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis:TestIndexScorePrecisionSurvivesLuaIntegration",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis:TestCompareAndSetAllIsAllOrNothingIntegration",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver:TestMGetReturnsOneElementPerKeyIncludingMisses",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver:TestMGetWithNoKeysMakesNoRoundTrip",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver:TestMGetPreservesBinaryValues",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest:TestDeleteKeysRemovesOnlyKeysContainingThePrefix",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest:TestDeleteKeysRemovesOnlyKeysContainingThePrefixOnCluster",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore:TestConditionalIndexRetirementIntegration/cluster_false",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore:TestConditionalIndexRetirementIntegration/cluster_true",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore:TestConditionalDeleteProtectsRecreatedIdentity/redis",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore:TestUpdateAllRetriesAsAWholeOnRedisIntegration",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore:TestIndexDeferMovesAnExistingEntryAndCreatesNothingIntegration",
+        "github.com/tjbdwanghaibo/roost-core/service/activity:TestActivityClusterRecoversPartialCompletion",
+        "github.com/tjbdwanghaibo/roost-core/service/directory:TestDirectoryDeleteCannotRemoveRecreatedOwner/redis/cancel/owner-b",
+        "github.com/tjbdwanghaibo/roost-core/service/directory:TestDirectoryDeleteCannotRemoveRecreatedOwner/redis/cancel/owner-a",
+        "github.com/tjbdwanghaibo/roost-core/service/directory:TestDirectoryDeleteCannotRemoveRecreatedOwner/redis/release/owner-b",
+        "github.com/tjbdwanghaibo/roost-core/service/directory:TestDirectoryDeleteCannotRemoveRecreatedOwner/redis/release/owner-a",
+        "github.com/tjbdwanghaibo/roost-core/service/match:TestCrossPartitionCommitRunsOnRedisCluster",
+        "github.com/tjbdwanghaibo/roost-core/service/platform:TestRetirementCannotHideLatePaidOrder/reconstruct_false",
+        "github.com/tjbdwanghaibo/roost-core/service/platform:TestRetirementCannotHideLatePaidOrder/reconstruct_true",
+        "github.com/tjbdwanghaibo/roost-core/service/platform:TestPendingMaintenanceControls/ghost_only",
+        "github.com/tjbdwanghaibo/roost-core/service/platform:TestPendingMaintenanceControls/existing_paid_order",
+        "github.com/tjbdwanghaibo/roost-core/service/platform:TestPendingMaintenanceControls/defer_does_not_resurrect_terminal",
+        "github.com/tjbdwanghaibo/roost-core/service/platform:TestAStoredOrderIsImmediatelyEnumerableIntegration",
+        "github.com/tjbdwanghaibo/roost-core/service/platform:TestATerminalOrderLeavesTheIndexIntegration",
+        "github.com/tjbdwanghaibo/roost-core/service/platform:TestBackoffMovesAnOrderInTheIndexIntegration",
+        "github.com/tjbdwanghaibo/roost-core/service/platform:TestAnIndexEntryWithNoOrderIsRetiredIntegration",
+        "github.com/tjbdwanghaibo/roost-core/wiring/activity:TestActivityTaggedClusterLifecycle",
+        "github.com/tjbdwanghaibo/roost-core/wiring/platform:TestPlatformTaggedClusterControl",
+        "github.com/tjbdwanghaibo/roost-core/wiring/rank:TestRankTaggedClusterLifecycle",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$caster.position/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$caster.position/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$caster.position/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$ability.self/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$ability.self/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$ability.self/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.mode/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.mode/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.mode/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.mode/spawn_step",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.elapsed_ticks/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.elapsed_ticks/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.elapsed_ticks/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.charge_bp/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.charge_bp/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.charge_bp/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.release_reason/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.release_reason/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.release_reason/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.pulse_index/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.pulse_index/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.pulse_index/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.stock/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.stock/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.stock/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.max_stock/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.max_stock/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.max_stock/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$owner.position/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$owner.position/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$owner.position/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$spawn/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$spawn/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$spawn/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.tick/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.tick/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.tick/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.membership_ticks/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.membership_ticks/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.membership_ticks/spawn_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.enter_count/cast_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.enter_count/phase_start",
+        "github.com/tjbdwanghaibo/roost-core/gameplay/skill:TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.enter_count/spawn_start"
+      ],
+      "failures": [
+        "TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link",
+        "TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link",
+        "TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive",
+        "github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
+      ]
+    },
+    "default.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "deps-down.log": {
+      "bytes": 282,
+      "sha256": "0d44642e17a5aa37318453a0832616809b6aef6181b1317ef141e547bd7c68e5"
+    },
+    "deps-final-down.log": {
+      "bytes": 282,
+      "sha256": "217c0ab7f2bc30b5b0af5038a9e93f80e672a0ee6e715670441659c600c1e16b"
+    },
+    "deps-final-up.log": {
+      "bytes": 850,
+      "sha256": "26aea578bccb5dbef7aa778128b3ce4e0243a1cd291a37752f2118d03d9f5148"
+    },
+    "deps-up.log": {
+      "bytes": 901,
+      "sha256": "9085e4ea8fde52fc207418ca1ef1f973525266f902fc68029c257a82ce648329"
+    },
+    "distroless-build.log": {
+      "bytes": 3445,
+      "sha256": "6a2f4bd8717c84dd04a6b6c1a7c16a1c486073e7bebc3f7b325bd9c18613b3bf",
+      "exit": 1
+    },
+    "distroless-offline.log": {
+      "bytes": 1356,
+      "sha256": "f5f1575a9fd1b9e4123380ca818d78ea44dc6abe33e86ecba9bcfe159d6dc753",
+      "exit": 130
+    },
+    "docker-distroless.log": {
+      "bytes": 1934,
+      "sha256": "b2bc7f77f75415bd2874675658c66cf100025a3797b9751995c445f977e3614f"
+    },
+    "docker-golang.log": {
+      "bytes": 876,
+      "sha256": "fb724aa95950407fad8d1704e3c272a690df4f1d2e9721d1f76b19b93e468031"
+    },
+    "dotnet-build.log": {
+      "bytes": 1084,
+      "sha256": "f7da23a7b8b1301be6f0414c702b875b640ae7991f682672b4b3fac298d5252a",
+      "exit": 1
+    },
+    "etcd-resign-isolated.log": {
+      "bytes": 3464,
+      "sha256": "718cd183b2a129d20f137b3f323701acae9b0272e261d00fcf3a6e1c2a2f9258",
+      "exit": 0,
+      "events": {
+        "test_pass": 5
+      }
+    },
+    "fault-matrix-final.log": {
+      "bytes": 704,
+      "sha256": "45d0d3f0191a7285abc468e9a6ccc101282abfc84dd62ee006f5e9119b77afcd",
+      "exit": 0
+    },
+    "fault-matrix.log": {
+      "bytes": 719,
+      "sha256": "c4edb78a72d7735a70015dea94abc9794095835defcb84436cb803111a6a8b79",
+      "exit": 1
+    },
+    "generated-dataengine.log": {
+      "bytes": 32339,
+      "sha256": "a59f46d91eb00882f50d9321fc7f0a922d5a428c69f789968de6eb6e3662f3c5",
+      "exit": 0,
+      "events": {
+        "test_pass": 108,
+        "test_skip": 33
+      },
+      "skips": [
+        "TestGeneratedDataEnginePressure",
+        "TestGeneratedDataEngineReleaseHookPanicAfterCommitCarriesSentinel",
+        "TestGeneratedDataEngineRolledBackReleaseHookPanicKeepsBusinessError",
+        "TestGeneratedDataEngineColdRequestWaitsForPendingProjection",
+        "TestGeneratedDataEngineCreateInHandlerIsTransactional",
+        "TestGeneratedDataEngineCreatedEntityRecoversAfterLostAckRestart",
+        "TestGeneratedDataEngineCrossCreateResolvesOnRealWAL",
+        "TestGeneratedDataEngineCreatedEntityWritesEveryDAOAndReloads",
+        "TestGeneratedDataEngineColdLoadFillsADAOAddedLater",
+        "TestGeneratedDataEngineNestedIsolatedWriteToOuterSnapshotIsRefused",
+        "TestGeneratedDataEngineNestedIsolatedWriteUnderMemoryOuterCommits",
+        "TestGeneratedDataEngineOuterCommitAfterFenceIsRefusedBeforeWAL",
+        "TestGeneratedDataEnginePressure",
+        "TestGeneratedDataEngineReloadWaitsForProjection",
+        "TestGeneratedDataEngineAdminUnload",
+        "TestGeneratedDataEngineReloadDoesNotResurrectPendingTombstone",
+        "TestGeneratedDataEngineRecreateAfterDeleteSameID",
+        "TestGeneratedDataEngineReleaseHookPanicAfterCommitCarriesSentinel",
+        "TestGeneratedDataEngineRolledBackReleaseHookPanicKeepsBusinessError",
+        "TestGeneratedDataEngineColdRequestWaitsForPendingProjection",
+        "TestGeneratedDataEngineCreateInHandlerIsTransactional",
+        "TestGeneratedDataEngineCreatedEntityRecoversAfterLostAckRestart",
+        "TestGeneratedDataEngineCrossCreateResolvesOnRealWAL",
+        "TestGeneratedDataEngineCreatedEntityWritesEveryDAOAndReloads",
+        "TestGeneratedDataEngineColdLoadFillsADAOAddedLater",
+        "TestGeneratedDataEngineNestedIsolatedWriteToOuterSnapshotIsRefused",
+        "TestGeneratedDataEngineNestedIsolatedWriteUnderMemoryOuterCommits",
+        "TestGeneratedDataEngineOuterCommitAfterFenceIsRefusedBeforeWAL",
+        "TestGeneratedDataEnginePressure",
+        "TestGeneratedDataEngineReloadWaitsForProjection",
+        "TestGeneratedDataEngineAdminUnload",
+        "TestGeneratedDataEngineReloadDoesNotResurrectPendingTombstone",
+        "TestGeneratedDataEngineRecreateAfterDeleteSameID"
+      ]
+    },
+    "generated-demo.log": {
+      "bytes": 32491,
+      "sha256": "55f517128dac5846eab26ab8592281d5bcbd7d2fd3b10360dda6588855a5b28e",
+      "exit": 0,
+      "events": {
+        "test_pass": 28,
+        "test_skip": 1
+      },
+      "skips": [
+        "TestPurchaseDeliveryDurableWinner/cluster"
+      ]
+    },
+    "generated-heartbeat.log": {
+      "bytes": 2197,
+      "sha256": "a1100b387b189faa5bb9eb97cde3d9aaa029d32ce3462b4e61ead182fdb4227f",
+      "exit": 0,
+      "events": {
+        "test_pass": 2
+      }
+    },
+    "generated-level.log": {
+      "bytes": 1161,
+      "sha256": "660abe0fc09aa5388b36c90f7549b80af633bda437e9ce50ee479982080329d8",
+      "exit": 0
+    },
+    "generated-remote.log": {
+      "bytes": 21654,
+      "sha256": "79df6d9d6ee135334cb4cc485313ded06e0e76c22eb22013067b10ee246ee794",
+      "exit": 0,
+      "events": {
+        "test_pass": 24,
+        "test_skip": 3
+      },
+      "skips": [
+        "TestGeneratedRemoteMirrorLocal",
+        "TestGeneratedRemoteMirrorLocalProcess",
+        "TestGeneratedRemoteMirrorReaderProcess"
+      ]
+    },
+    "generated-saga.log": {
+      "bytes": 2341,
+      "sha256": "b6c909876b448f11c11b9e3da7c05617e9a8da566687f0ed3895e316f904b854",
+      "exit": 0,
+      "events": {
+        "test_pass": 2
+      }
+    },
+    "generated-sync-modes.log": {
+      "bytes": 264,
+      "sha256": "164d317af8a1d1f565859db8028aa4230add3b17160dd3522f092e4805f6dd9f",
+      "exit": 0
+    },
+    "genres-verified.log": {
+      "bytes": 1207,
+      "sha256": "540e6e2497316d2af5bd8cad653fc5dcc98ce9fd1c10081b28526dfa9414453f"
+    },
+    "genres.log": {
+      "bytes": 189,
+      "sha256": "a5139f0b27cf448dbe95a8be5d52a809a8298ee1723906cd20220afb28f8b54f"
+    },
+    "hotcode.json": {
+      "bytes": 13437,
+      "sha256": "72d21ffa31b12ab9adaee3d63f680fd36e02d2c855f7a048a1a40c56c42ff082",
+      "events": {
+        "test_pass": 12,
+        "package_pass": 2
+      }
+    },
+    "hotcode.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "integration-entry.log": {
+      "bytes": 72366,
+      "sha256": "5c2e7dc0a4ca48eef4b4bb0500759ad295004c6b13f0141f91ef4118e22f02ee",
+      "events": {
+        "test_fail": 4
+      },
+      "failures": [
+        "TestRealMongoPrimaryFailoverContinuesProjection",
+        "TestRealNATSOutageDoesNotBlockProjectionAndRecoversOutbox",
+        "TestRealJetStreamLeaderFailoverPreservesDedupAndOrder",
+        "TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose"
+      ]
+    },
+    "integration-final.log": {
+      "bytes": 558460,
+      "sha256": "92ae794008ffe853a0a10871a25db4e2877219a22f35232321e1c04a4b3a23af",
+      "exit": 1,
+      "events": {
+        "test_pass": 1937,
+        "test_skip": 71,
+        "test_fail": 2
+      },
+      "skips": [
+        "TestRealMongoProjectorParallelThroughput",
+        "TestRealDataEngineLargeBacklogRecovery",
+        "TestRealMongoModReadsCredentialsFromTheEnvironment",
+        "TestRealNatsModReadsCredentialsFromTheEnvironment",
+        "TestSidMergeMigratesAndRevertsOnRealMongo",
+        "TestRealLogEnsureStreamFixesTheAuthoritativeSettings",
+        "TestRealLogWildcardFenceSerializesOneWriter",
+        "TestRealLogConcurrentWritersExactlyOneWins",
+        "TestRealLogAtomicBatchSemantics",
+        "TestRealLogAtomicBatchLimits",
+        "TestRealLogLostAckIsResolvedByResending",
+        "TestRealLogReadFollowPurgeAndAckFloors",
+        "TestRealLogAckFloorsOfIdleAndLaggingFilteredDurables",
+        "TestRealLogAckFloorsDoNotTrustALaggingConsumerReplica",
+        "TestRealLogKeyValueAndObjects",
+        "TestRealLogRequestManyGathersEveryReply",
+        "TestRealLogLeaderKillKeepsAckedWritesAndResolvesUnknowns",
+        "TestRealRemoteRedisClusterFailover",
+        "TestRealRemoteRedisClusterUnreplicatedFence",
+        "TestMirrorLocalClusterSlotMigrationSnapshotReadWriteAndTombstone",
+        "TestMirrorLocalSameSidRestartTakesOverTheOldIncarnationsLock",
+        "TestRemoteOutboxCrashHelper",
+        "TestMirrorLocalOwnerStorageInitSurvivesAMongoElection",
+        "TestRemoteLeaseProcessHelper",
+        "TestRealSnapshotL2KeyPrefixOnRedisCluster",
+        "TestMirrorLocalTombstoneSurvivesAFailoverOnlyWithWait",
+        "TestMirrorLocalTombstoneWaitOnClusterGoesToTheKeysPrimary",
+        "TestRealB2WatermarkMatrixCluster",
+        "TestRealJetStreamColdCopyCoordinatorChild",
+        "TestRealJetStreamColdCopyKill9Converges",
+        "TestRealJetStreamColdCopyKeepsUpWithoutBlockingThePurge",
+        "TestRealJetStreamCoordinatorForwardAndCompensation",
+        "TestRealJetStreamCoordinatorResolvesUnknownOutcomesAndRepublishesIncompleteBatches",
+        "TestRealJetStreamCoordinatorFencesAStaleWriter",
+        "TestRealJetStreamCoordinatorSnapshotPurgeAndReplayAgree",
+        "TestRealJetStreamCoordinatorFailsStopWhenTheStreamIsFull",
+        "TestRealJetStreamCoordinatorAdmissionForgetsAnExpiredParticipant",
+        "TestRealJetStreamCoordinatorChild",
+        "TestRealJetStreamCoordinatorKill9Replays",
+        "TestRealJetStreamCoordinatorRetriesThroughAParticipantOutage",
+        "TestRealJetStreamCoordinatorCompensatesALateSuccessOnce",
+        "TestRealAssemblyStartsTheRelayAndStopsInOrder",
+        "TestRealJetStreamProbe",
+        "TestRealMongoCommitProbe",
+        "TestRealSagaJSScanLevel",
+        "TestRealJetStreamNativeStepsEndToEnd",
+        "TestRealJetStreamParticipantChild",
+        "TestRealJetStreamParticipantKill9",
+        "TestRealJetStreamParticipantKill9Strict",
+        "TestRealJetStreamLoadPublisherDrivesAdmission",
+        "TestCompareAndDeleteOnlyRemovesTheValueItWasShownIntegration",
+        "TestIndexIsMaintainedInTheSameWriteIntegration",
+        "TestIndexScorePrecisionSurvivesLuaIntegration",
+        "TestCompareAndSetAllIsAllOrNothingIntegration",
+        "TestMGetReturnsOneElementPerKeyIncludingMisses",
+        "TestMGetWithNoKeysMakesNoRoundTrip",
+        "TestMGetPreservesBinaryValues",
+        "TestIntegrationPipelineDoesNotHideWriteErrors/cluster_false",
+        "TestIntegrationPipelineDoesNotHideWriteErrors/cluster_true",
+        "TestIntegrationPipelineFuturesAndLifecycle/cluster_false",
+        "TestIntegrationPipelineFuturesAndLifecycle/cluster_true",
+        "TestIntegrationPipelinePreservesPostWriteUnknownError/cluster_false",
+        "TestIntegrationPipelinePreservesPostWriteUnknownError/cluster_true",
+        "TestDeleteKeysRemovesOnlyKeysContainingThePrefix",
+        "TestDeleteKeysRemovesOnlyKeysContainingThePrefixOnCluster",
+        "TestConditionalIndexRetirementIntegration/cluster_false",
+        "TestConditionalIndexRetirementIntegration/cluster_true",
+        "TestConditionalDeleteProtectsRecreatedIdentity/redis",
+        "TestUpdateAllRetriesAsAWholeOnRedisIntegration",
+        "TestIndexDeferMovesAnExistingEntryAndCreatesNothingIntegration",
+        "TestRealRedisClusterAWriteWhoseReplyIsLostIsRecognisedByItsToken"
+      ],
+      "failures": [
+        "TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose",
+        "TestRealEtcdResignHonoursTheCallerBudget"
+      ]
+    },
+    "integration-reaped.log": {
+      "bytes": 444,
+      "sha256": "b43beac745c79ae004c8a8317844ae09f71f87733a15d702817ae5db685d8ae7",
+      "exit": 1
+    },
+    "lockstep-isolated.log": {
+      "bytes": 2111,
+      "sha256": "76d6bc06fa284751ab59cb2aa8a0f193a9a4a31259111775be36ae5ee8cc26d5",
+      "exit": 0,
+      "events": {
+        "test_pass": 7
+      }
+    },
+    "nats-close-isolated.log": {
+      "bytes": 6687,
+      "sha256": "2c399ccb27b7e1e4725a654584cac6c1211d0948f90d649bfa0887ab2f56c758",
+      "exit": 1,
+      "events": {
+        "test_fail": 3
+      },
+      "failures": [
+        "TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose",
+        "TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose",
+        "TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose"
+      ]
+    },
+    "netcat-install.log": {
+      "bytes": 227,
+      "sha256": "d4667aab45781e6684459bef4ef99223631fb9db58bbbb3d0916626414c76bc4"
+    },
+    "physics-build.log": {
+      "bytes": 4673207,
+      "sha256": "57ff8ca8e33074ed00013dd54ccef29921d209a835d11d941e957e53e3306e0d",
+      "exit": 0
+    },
+    "physics-nats.log": {
+      "bytes": 754,
+      "sha256": "8c31bff4800e58731c33f54949ba085434967721e8834a62f344683ea8d480aa"
+    },
+    "physics-service.log": {
+      "bytes": 601,
+      "sha256": "5e9f3372ffc427990f163642214f8e4b967c553c357205a090fe3877f3bc5469",
+      "exit": 0
+    },
+    "published-module.json": {
+      "bytes": 558,
+      "sha256": "fba1674b2c98ea0eb47be5dbe4765757cea09ab96bbca0ea6e1fae88ed3cb5ee"
+    },
+    "real-auto-chess.log": {
+      "bytes": 9015,
+      "sha256": "e403809a16ee46a553837e964ec44af08ab76a16ac9b7c1679f15a1c257e7f71",
+      "exit": 0,
+      "events": {
+        "test_pass": 14
+      }
+    },
+    "real-card-rpg.log": {
+      "bytes": 10395,
+      "sha256": "c6019bad995289d48acbfb622e5bf18c60f581b9b38f403db3d36bc66061c872",
+      "exit": 0,
+      "events": {
+        "test_pass": 18
+      }
+    },
+    "real-idle-sim.log": {
+      "bytes": 7401,
+      "sha256": "246e1b73ec367a04af15f4b8e666472239b8a5a68fa1949c85e9a9a2dc7c57b0",
+      "exit": 0,
+      "events": {
+        "test_pass": 14
+      }
+    },
+    "real-merge-casual.log": {
+      "bytes": 8642,
+      "sha256": "5ee3b81c95caa00c7a185abb40199467fa50f762f3430fb6ec098f417d026463",
+      "exit": 0,
+      "events": {
+        "test_pass": 17
+      }
+    },
+    "real-mmorpg.log": {
+      "bytes": 5674,
+      "sha256": "aba858b0577a3058a2881e9bd5f697b28a2bf534857625a85c2881bb874ed7ab",
+      "exit": 0,
+      "events": {
+        "test_pass": 19
+      }
+    },
+    "real-moba.log": {
+      "bytes": 7052,
+      "sha256": "c114bd156dfb24991bd61d815a230b658403f1912d8916b38870fa63eb956629",
+      "exit": 0,
+      "events": {
+        "test_pass": 32
+      }
+    },
+    "real-party-room.log": {
+      "bytes": 8299,
+      "sha256": "82316e21892c750683c014b7645c2755bc72cbb52e51512ae221eae7e0115923",
+      "exit": 0,
+      "events": {
+        "test_pass": 20
+      }
+    },
+    "real-slg.log": {
+      "bytes": 9328,
+      "sha256": "19f9e2fa76db941d95c319bf3ac2c6af88726ad375693fc7d35cf3d843eadbf5",
+      "exit": 1,
+      "events": {
+        "test_pass": 18,
+        "test_fail": 2
+      },
+      "failures": [
+        "TestSLGAlliancePlayerDelivery",
+        "TestSLGAlliancePlayerDelivery"
+      ]
+    },
+    "real-survival-extraction.log": {
+      "bytes": 8422,
+      "sha256": "30cacc4fa7e05cb0ea122293fffe30f65d0eaabc9c994f9858d944237a6d073c",
+      "exit": 0,
+      "events": {
+        "test_pass": 14
+      }
+    },
+    "real-tower-defense.log": {
+      "bytes": 9313,
+      "sha256": "24f831eabe05294094ad8086e6154cdae3567291e331a73b1cbb934e208125a1",
+      "exit": 0,
+      "events": {
+        "test_pass": 12
+      }
+    },
+    "redis-cluster-init.log": {
+      "bytes": 2227,
+      "sha256": "990ec74c9ed0baa9deae7419cbd6887eeb362f9afb24c827a0053f4a38b80290"
+    },
+    "redis-cluster.log": {
+      "bytes": 193152,
+      "sha256": "bd2e32710b3c97405c00025d89bd44fc73963abf795f63cad78ce6a0a751614a",
+      "exit": 0,
+      "events": {
+        "test_pass": 1177,
+        "test_skip": 76
+      },
+      "skips": [
+        "TestDeleteKeysRemovesOnlyKeysContainingThePrefix",
+        "TestBusinessTimeHighWaterMarkOnRealRedis",
+        "TestRealRedisModReadsCredentialsFromTheEnvironment",
+        "TestSingletonStoreAcquireRenewRelease",
+        "TestSingletonStoreRenewAfterTheKeyExpiredIsNotHeld",
+        "TestSingletonStoreDoesNotTouchAnotherHoldersKey",
+        "TestSingletonStoreGetReadsEveryKeyInOrder",
+        "TestSingletonStoreRenewalDoesNotWaitBehindStalledLiveQueries",
+        "TestMGetReturnsOneElementPerKeyIncludingMisses",
+        "TestMGetWithNoKeysMakesNoRoundTrip",
+        "TestMGetPreservesBinaryValues",
+        "TestIntegrationPipelineDoesNotHideWriteErrors/cluster_false",
+        "TestIntegrationPipelineFuturesAndLifecycle/cluster_false",
+        "TestIntegrationPipelinePreservesPostWriteUnknownError/cluster_false",
+        "TestRealRedisAWriteWhoseReplyIsLostRunsOnce/incr",
+        "TestRealRedisAWriteWhoseReplyIsLostRunsOnce/rpush",
+        "TestRealRedisAWriteWhoseReplyIsLostRunsOnce/pipeline",
+        "TestRealRedisAWriteWhoseReplyIsLostRunsOnce/setnx",
+        "TestRealRemoteRedisClusterFailover",
+        "TestRealRemoteRedisClusterUnreplicatedFence",
+        "TestMirrorLocalClusterSlotMigrationSnapshotReadWriteAndTombstone",
+        "TestRealJetStreamInterestHandlerErrorIsAcknowledged",
+        "TestMirrorLocalSameSidRestartTakesOverTheOldIncarnationsLock",
+        "TestRealRedisMarkerKeyPrefixIsolatesDeployments",
+        "TestRealJetStreamLiveDurableNameShape",
+        "TestRealJetStreamLiveSubscriptionConfirmsAndResumes",
+        "TestRealJetStreamLiveSnapshotPushReachesTheReader",
+        "TestRemoteOutboxCrashHelper",
+        "TestRealRemoteOutboxRecoversAfterCommitBeforePublicationCrash",
+        "TestMirrorLocalOwnerStorageInitSurvivesAMongoElection",
+        "TestRealRemoteOwnershipClaimAndTransfer",
+        "TestRemoteLeaseProcessHelper",
+        "TestRealRemoteProcessKillRecoversLease",
+        "TestRealRemoteProcessPartitionFencesOldOwner",
+        "TestRealRemoteColdAdmissionDeadlineUnderLatency",
+        "TestRealRemoteDurableAuthorityProcessPartition",
+        "TestRealVersionedLockReacquiresAfterAcquireReplyLost",
+        "TestRealVersionedLockReacquiresAcrossUnknownChain",
+        "TestRealVersionedLockLateAcquireScript",
+        "TestRealVersionedLockExactCounters",
+        "TestRealVersionedLockCounterFailureDoesNotLeaveOwner",
+        "TestRealVersionedLockRenewExpiryAndHandoff",
+        "TestRealVersionedLockNextWriterLocksWhileOldRenewalReplyIsLate",
+        "TestRealVersionedLockRenewalGoroutineObservesExpiryThenNextWriterLocks",
+        "TestRealVersionedLockReacquiresAfterUnlockOutage",
+        "TestRealVersionedLockUnknownReleaseDefersToOtherHolder",
+        "TestRealSnapshotL2KeyPrefixOnRedis",
+        "TestRealSnapshotL2StaleWriteIsReportedAndNotPinnedInL1",
+        "TestRealSnapshotL2TombstoneFencesEveryWriter",
+        "TestMirrorLocalTombstoneSurvivesAFailoverOnlyWithWait",
+        "TestMirrorLocalTombstoneWaitOnClusterGoesToTheKeysPrimary",
+        "TestRealB2WatermarkMatrixStandalone",
+        "TestRealB2WatermarkMatrixCluster",
+        "TestRealJetStreamReplayAfterL2ExpiryDoesNotResurrect",
+        "TestRealMongoRejectionWaitsForInFlightCommitThenReportsApplied",
+        "TestRealMongoRejectionWinsAfterInFlightCommitAborts",
+        "TestRealMongoRejectionFirstAbortsTheInFlightCommit",
+        "TestIntegrationEnvelopeBatchAcrossSlots/cluster_false",
+        "TestIntegrationBatchReadReturnsOneValuePerKey",
+        "TestIntegrationAnEmptyBatchIsNotSentToRedis",
+        "TestIntegrationConcurrentCreatesOfOneIDProduceOneEnvelope",
+        "TestIntegrationAnEnvelopeExpiresOnItsOwnDeadline",
+        "TestIntegrationTheServiceRunsEndToEndOnRedis",
+        "TestIntegrationLazyBroadcastOverRedis",
+        "TestIntegrationSendRecoveryOnRealEnvelopes/broadcast/landed_reply_lost",
+        "TestIntegrationSendRecoveryOnRealEnvelopes/broadcast/write_never_landed",
+        "TestIntegrationSendRecoveryOnRealEnvelopes/direct/write_never_landed",
+        "TestIntegrationSendRecoveryOnRealEnvelopes/direct/landed_reply_lost",
+        "TestConditionalIndexRetirementIntegration/cluster_false",
+        "TestConditionalDeleteProtectsRecreatedIdentity/redis",
+        "TestUpdateAllRetriesAsAWholeOnRedisIntegration",
+        "TestIndexDeferMovesAnExistingEntryAndCreatesNothingIntegration",
+        "TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice",
+        "TestRealRedisAWriteWhoseReplyIsLostIsRecognisedByItsToken",
+        "TestRealRedisClusterAWriteWhoseReplyIsLostIsRecognisedByItsToken",
+        "TestRealRedisAnIndexedWriteWithANaNScoreChangesNothing"
+      ]
+    },
+    "redis-race.json": {
+      "bytes": 278134,
+      "sha256": "cbbe2c357356b1a19d1de73c68940feb10296d2daeefd6247c14b756b5a255ff",
+      "exit": 0,
+      "events": {
+        "test_skip": 3,
+        "test_pass": 287,
+        "package_pass": 4
+      },
+      "skips": [
+        "github.com/tjbdwanghaibo/roost-core/wiring/mail:TestIntegrationMailModClusterPagination",
+        "github.com/tjbdwanghaibo/roost-core/wiring/rank:TestRankTaggedClusterLifecycle",
+        "github.com/tjbdwanghaibo/roost-core/service/mail:TestIntegrationEnvelopeBatchAcrossSlots/cluster_true"
+      ]
+    },
+    "redis-race.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exit": 0
+    },
+    "service-redis.json": {
+      "bytes": 2131932,
+      "sha256": "3755a7107a38eb1460baea8ea65d05822df1e010fbd50a054f908756ca7f888d",
+      "exit": 0,
+      "events": {
+        "test_pass": 1897,
+        "package_pass": 52,
+        "test_skip": 72,
+        "package_skip": 1
+      },
+      "skips": [
+        "github.com/tjbdwanghaibo/roost-core/wiring/activity:TestActivityTaggedClusterLifecycle",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealDataEngineLargeBacklogRecovery",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealSubscribeEffectsDeliversEachEffectOnce",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealMongoPrimaryFailoverContinuesProjection",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealNATSOutageDoesNotBlockProjectionAndRecoversOutbox",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealJetStreamLeaderFailoverPreservesDedupAndOrder",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealMultiDocumentReceiptAndOutboxAreAtomic",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealMultiDocumentFailureRollsBackEarlierMutation",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealPatchConflictFencesWithoutFullFallback",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealLoadRestoresTrackerVersion",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealIntegrationDeadlineIsBounded",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealMixedProjectionSegmentsPreserveOrder",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealProjectionOnlyMongoAckFailureRestartPreservesSameEntityOrder",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealMongoMixedRatioWALReplayAckThroughput",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealReceiptTransactionThroughputOnOneDocument",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealProjectionIdentityVerdictsAcrossTransactions",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealLocalMultiBatchOrderIdentityAndLostCheckpoint",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealLocalMultiBatchLateConflictRollsBackThenAcknowledgesPrefix",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealDataEngineRemotePublicationAndWALRecovery/published",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestRealDataEngineRemotePublicationAndWALRecovery/stop-interrupts-publication",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestToxicNATSLatencyKeepsTheCommitOnTheDurablePath",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestToxicNATSConnectionResetDeliversTheEffectExactlyOnce",
+        "github.com/tjbdwanghaibo/roost-core/wiring/dataengine:TestToxicNATSHalfOpenAckLossIsBoundedAndDeliversExactlyOnce",
+        "github.com/tjbdwanghaibo/roost-core/wiring/etcd:TestRealEtcdModReadsCredentialsFromTheEnvironment",
+        "github.com/tjbdwanghaibo/roost-core/wiring/gate:TestRealTwoGatesTwoGamesRouteBroadcastAndFence",
+        "github.com/tjbdwanghaibo/roost-core/wiring/gate:TestRealControlQueueBoundedAndQueuedBudgetExpires",
+        "github.com/tjbdwanghaibo/roost-core/wiring/gate:TestRealGateLostOutboundACKClosesLifetimeWithoutReplay",
+        "github.com/tjbdwanghaibo/roost-core/wiring/gate:TestRealGateOldUnbindAndCloseCannotAffectReplacement",
+        "github.com/tjbdwanghaibo/roost-core/wiring/gate:TestRealBroadcastACKLossUnknownAndSameIDQuery",
+        "github.com/tjbdwanghaibo/roost-core/wiring/gate:TestRealStartupSubscriptionFailureCannotBeOverwritten",
+        "github.com/tjbdwanghaibo/roost-core/wiring/gate:TestRealGateTCPForwardAndUnifiedPush",
+        "github.com/tjbdwanghaibo/roost-core/wiring/gate:TestRealGateAdminKickClosesTheClientConnection",
+        "github.com/tjbdwanghaibo/roost-core/wiring/gate:TestRealGateUnknownNeverReplaysAndDrainWaitsActualDispatch",
+        "github.com/tjbdwanghaibo/roost-core/wiring/gate:TestRealGateBroadcastDedupeAndSequenceGap",
+        "github.com/tjbdwanghaibo/roost-core/wiring/gate:TestRealGateLockstepInputFramesCatchupAndOldDisconnect",
+        "github.com/tjbdwanghaibo/roost-core/wiring/mail:TestIntegrationMailModClusterPagination",
+        "github.com/tjbdwanghaibo/roost-core/wiring/mongo:TestRealMongoModCloseContract",
+        "github.com/tjbdwanghaibo/roost-core/wiring/mongo:TestRealMongoModReadsCredentialsFromTheEnvironment",
+        "github.com/tjbdwanghaibo/roost-core/wiring/nats:TestRealNatsModReadsCredentialsFromTheEnvironment",
+        "github.com/tjbdwanghaibo/roost-core/wiring/nats:TestToxicJetStreamRPCCallHonoursItsDeadlineWhileHalfOpen",
+        "github.com/tjbdwanghaibo/roost-core/wiring/nats:TestRealGeneratedClientModCallsAJetStreamDeployment",
+        "github.com/tjbdwanghaibo/roost-core/wiring/nats:TestRealNatsModCloseContract",
+        "github.com/tjbdwanghaibo/roost-core/wiring/nats:TestRealNatsModUndrainedCloseIsReportedOnce",
+        "github.com/tjbdwanghaibo/roost-core/wiring/nats:TestRealLightweightCallIntoJetStreamDeploymentIsRefused",
+        "github.com/tjbdwanghaibo/roost-core/wiring/nats:TestRealJetStreamRPCLongerThanAckWaitRunsOnce",
+        "github.com/tjbdwanghaibo/roost-core/wiring/nats:TestRealJetStreamStopWaitsForInFlightHandler",
+        "github.com/tjbdwanghaibo/roost-core/wiring/nats:TestRealNatsModStopAfterConnectionDrainBudgetConverges",
+        "github.com/tjbdwanghaibo/roost-core/wiring/nats:TestRealNatsModProvideRefusesBareRegistriesAndReliableWithoutRedis",
+        "github.com/tjbdwanghaibo/roost-core/wiring/platform:TestPlatformTaggedClusterControl",
+        "github.com/tjbdwanghaibo/roost-core/wiring/rank:TestRankTaggedClusterLifecycle",
+        "github.com/tjbdwanghaibo/roost-core/wiring/redis:TestRealRedisModReadsCredentialsFromTheEnvironment",
+        "github.com/tjbdwanghaibo/roost-core/wiring/redis:TestSingletonStoreGetAcrossClusterSlots",
+        "github.com/tjbdwanghaibo/roost-core/wiring/selfsync:TestSelfSyncOverGateRecoversAfterEveryRefusedPush",
+        "github.com/tjbdwanghaibo/roost-core/wiring/selfsync:TestSelfSyncOverGateRetriesTheTickWhenTheResidentBudgetIsExhausted",
+        "github.com/tjbdwanghaibo/roost-core/wiring/selfsync:TestSelfSyncOverGateDeliversTheFirstFullWhenSyncRunsInsideActivation",
+        "github.com/tjbdwanghaibo/roost-core/wiring/sidmerge:TestSidMergeMigratesAndRevertsOnRealMongo",
+        "github.com/tjbdwanghaibo/roost-core/service/activity:TestActivityClusterRecoversPartialCompletion",
+        "github.com/tjbdwanghaibo/roost-core/service/mail:TestIntegrationEnvelopeBatchAcrossSlots/cluster_true",
+        "github.com/tjbdwanghaibo/roost-core/service/match:TestCrossPartitionCommitRunsOnRedisCluster",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver:TestIntegrationPipelineDoesNotHideWriteErrors/cluster_true",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver:TestIntegrationPipelineFuturesAndLifecycle/cluster_true",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver:TestIntegrationPipelinePreservesPostWriteUnknownError/cluster_true",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver:TestRealRedisAWriteWhoseReplyIsLostRunsOnce/incr",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver:TestRealRedisAWriteWhoseReplyIsLostRunsOnce/rpush",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver:TestRealRedisAWriteWhoseReplyIsLostRunsOnce/pipeline",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver:TestRealRedisAWriteWhoseReplyIsLostRunsOnce/setnx",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest:TestDeleteKeysRemovesOnlyKeysContainingThePrefixOnCluster",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore:TestConditionalIndexRetirementIntegration/cluster_true",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore:TestRealRedisUpdateWhoseReplyIsLostNeverWritesTwice",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore:TestRealRedisAWriteWhoseReplyIsLostIsRecognisedByItsToken",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore:TestRealRedisClusterAWriteWhoseReplyIsLostIsRecognisedByItsToken",
+        "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore:TestRealRedisAnIndexedWriteWithANaNScoreChangesNothing"
+      ]
+    },
+    "service-redis.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exit": 0
+    },
+    "slg-budget-remaining.log": {
+      "bytes": 1576,
+      "sha256": "08ed230bef42028d777619782bdd1d48ebf99fbfe44fce58191f00d174002875",
+      "exit": 0,
+      "events": {
+        "test_pass": 1
+      }
+    },
+    "slg-remote-final.log": {
+      "bytes": 3168,
+      "sha256": "833f1330460708c66a0495107cf8f5183a6022d9bd578dbb2a84c1c8b2aec088",
+      "exit": 1,
+      "events": {
+        "test_fail": 2
+      },
+      "failures": [
+        "TestSLGAlliancePlayerDelivery",
+        "TestSLGAllianceRemoteDelivery"
+      ]
+    },
+    "slg-remote-remaining.log": {
+      "bytes": 1489,
+      "sha256": "31955fd5f464845b8ed55b37b9fa9af4b7acb7af0f6bd417fa2f1710da323014",
+      "exit": 1,
+      "events": {
+        "test_fail": 1
+      },
+      "failures": [
+        "TestSLGAllianceRemoteDelivery"
+      ]
+    },
+    "vendor.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exit": 0
+    }
+  }
+}

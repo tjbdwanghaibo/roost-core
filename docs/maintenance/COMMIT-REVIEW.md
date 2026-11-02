@@ -1,5 +1,9 @@
 # 新增提交审查
 
+## 2026-11-02：Linux 非压测补验
+
+继续补跑全仓、真实依赖、游戏生成消费者、Redis、hotcode 与 PhysX。原失败、跳过与环境阻塞均保留，最终范围见 [Linux 验收续报](LINUX-FUNCTIONAL-20261102.md)。本轮不改运行时、不启动压测，以下为历史审查结果。
+
 ## 2026-11-01：v1.37.1 最新提交复核与 Linux 续审
 
 基线：[main / v1.37.1 773ca443](https://github.com/tjbdwanghaibo/roost-core/commit/773ca443)。相对上一轮新增 8 个提交、21 个文件变更。已读取新运行时改动及 main 的 [CORE-REVIEW](https://github.com/tjbdwanghaibo/roost-core/blob/773ca443/docs/maintenance/CORE-REVIEW.md)，不把其他审查者的 macOS 结果冒充本机执行结果。
