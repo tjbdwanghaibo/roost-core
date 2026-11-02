@@ -1,5 +1,9 @@
 # 新增提交审查
 
+## 2026-11-02：v1.38～v1.40 新功能复核
+
+基线 [v1.40.0](https://github.com/tjbdwanghaibo/roost-core/commit/2be1f1e5)，本轮选定范围未确认新增缺陷。递归 DAO 同步、BSON 持久路径、稳定 store 键及生成接线的复核、Linux 回归、独立连续事务探针和升级边界见 [新功能报告](FEATURE-REVIEW-20261102.md)。不据此关闭上一轮 Linux 验收失败，也不声明生产全量验收完成。
+
 ## 2026-11-02：Linux 非压测补验
 
 继续补跑全仓、真实依赖、游戏生成消费者、Redis、hotcode 与 PhysX。原失败、跳过与环境阻塞均保留，最终范围见 [Linux 验收续报](LINUX-FUNCTIONAL-20261102.md)。本轮不改运行时、不启动压测，以下为历史审查结果。

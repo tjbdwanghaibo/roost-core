@@ -1,0 +1,8 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine	1.060s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	5.879s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/entity	6.062s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	6.296s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/dao	14.339s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/entity	1.500s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/nest	13.001s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/marker	3.361s

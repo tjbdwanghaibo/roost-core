@@ -1,0 +1,6 @@
+go: creating new go.mod: module daogoldenruntime
+go: to add module requirements and sums:
+	go mod tidy
+dao golden runtime: roost-core local /workspace/core-review-current
+ok  	daogoldenruntime/gen	1.012s
+?   	daogoldenruntime/rangecontract	[no test files]
