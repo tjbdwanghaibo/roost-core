@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-02T13:45:58.316225",
+  "baseline": "v1.39.0 195359560a1394590f304ae7ab17f3fab8b71d01",
+  "current": "same HEAD plus uncommitted store/lightweight changes",
+  "go": "go version go1.27.3 darwin/arm64",
+  "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=22610019)\t91%; AC attached; not charging present: true\n",
+  "GOMAXPROCS": "unset, runtime default",
+  "rounds": 10,
+  "benchtime": "300ms",
+  "mongo": "stopped; memory committer, no WAL/Mongo I/O",
+  "hashes": {
+    "framework/nest/persist_change.go": "8fe473e58e183d42dacaf1ebdcc96fa32b7ec47461562f71786b456120cb6538",
+    "codegen/internal/dao/template_dao.go": "fd01ee41e7977864810458bb4ff2078b12a2649a86cdc93055834278966e056d",
+    "codegen/internal/dao/testdata/golden/gen_hero_dao.go": "d09b0394762c81614f91a0557fcd3f646b6f1896cad63b436b4ceb8c65820d45",
+    "go.mod": "61c6825d26363558710fee2724cde40fe5624d54a096ba5d1c3b1d87feedf3a6"
+  },
+  "benchmark_sha256": "fd1d891f67936b0af5446f0f544ba20520df1c03dd2f21d3a1debf7b331763d5"
+}

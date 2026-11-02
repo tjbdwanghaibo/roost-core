@@ -70,20 +70,21 @@ type FieldDef struct {
 	SliceElem string    // for slice types: element type
 	IsPtr     bool      // whether the value type is pointer (map val or slice elem)
 	// Key 是字段在文档里的键：持久字段的持久键、同步字段的 WireName、回滚快照里的键，三者是同一个。DAO 定义里
-	// 写了 bson:"x" 时是 x，否则是 Go 字段名的 snake_case（DESIGN-TODO D13）。生成的持久文档结构体把它写成显式
+	// 写了 store:"x" 时是 x，DAO / 嵌套生成要求显式声明（DESIGN-TODO D13）。生成的持久文档结构体把它写成显式
 	// bson 标签，模板里所有用到键的地方都取这个值，不再另行推导。
 	Key string
-	// KeyDeclared 表示 Key 来自 bson 标签；BSONOptions 是标签逗号后的选项（只允许 omitempty），BSONSkip 是
-	// bson:"-"。后两者由 validateFieldKeys 检查，生成期报错而不是悄悄忽略。
-	KeyDeclared bool
-	BSONOptions []string
-	BSONSkip    bool
-	RemoteViews []string // 顶层字段所属的 Remote 只读投影，未声明不发布。
+	// KeyDeclared 表示 Key 来自 store 标签；StoreOptions 是标签逗号后的选项（只允许 omitempty），StoreSkip 是
+	// store:"-"。后两者由 validateFieldKeys 检查，生成期报错而不是悄悄忽略。
+	KeyDeclared  bool
+	LegacyBSON   bool
+	StoreOptions []string
+	StoreSkip    bool
+	RemoteViews  []string // 顶层字段所属的 Remote 只读投影，未声明不发布。
 }
 
-// OmitEmpty 报告字段的 bson 标签带 omitempty：生成的文档结构体照样带上，整文档写入时零值不写出。
+// OmitEmpty 报告字段的 store 标签带 omitempty：生成的文档结构体照样带上，整文档写入时零值不写出。
 func (f FieldDef) OmitEmpty() bool {
-	for _, option := range f.BSONOptions {
+	for _, option := range f.StoreOptions {
 		if option == "omitempty" {
 			return true
 		}
@@ -549,13 +550,17 @@ func extractFieldDefs(st *ast.StructType) ([]FieldDef, error) {
 			continue
 		}
 
+		if len(field.Names) != 1 {
+			return nil, fmt.Errorf("field %s: use one named field per declaration, with an independent store key", name)
+		}
+
 		fd := FieldDef{
 			Name:        name,
 			TypeStr:     typeStr,
 			Tag:         tag,
 			RemoteViews: views,
 		}
-		applyBSONTag(&fd, field.Tag)
+		applyStoreTag(&fd, field.Tag)
 
 		if err := classifyField(&fd, field.Type); err != nil {
 			return nil, fmt.Errorf("field %s: %w", name, err)
@@ -834,9 +839,9 @@ func parseSchemaParam(value string) (uint32, error) {
 	return uint32(parsed), nil
 }
 
-// applyBSONTag 读字段 tag 里的 bson:"name,opts"，定下字段的文档键（DESIGN-TODO D13）：写了名字用它，否则是 Go 字段名的
-// snake_case。选项与 "-" 只记录下来，由 validateFieldKeys 在生成 Mongo DAO / 嵌套类型时检查。
-func applyBSONTag(fd *FieldDef, tag *ast.BasicLit) {
+// applyStoreTag 读取 store:"name,opts"，由 validateFieldKeys 拒绝缺失、非法选项和旧 bson 声明。
+// 默认 Key 仅供 Redis 包装器沿用；Mongo / 内存 DAO 和嵌套类型必须有 KeyDeclared。
+func applyStoreTag(fd *FieldDef, tag *ast.BasicLit) {
 	fd.Key = toSnake(fd.Name)
 	if tag == nil {
 		return
@@ -845,12 +850,13 @@ func applyBSONTag(fd *FieldDef, tag *ast.BasicLit) {
 	if err != nil {
 		return
 	}
-	value, ok := reflect.StructTag(raw).Lookup("bson")
+	_, fd.LegacyBSON = reflect.StructTag(raw).Lookup("bson")
+	value, ok := reflect.StructTag(raw).Lookup("store")
 	if !ok {
 		return
 	}
 	if value == "-" {
-		fd.BSONSkip = true
+		fd.StoreSkip = true
 		return
 	}
 	name, options, hasOptions := strings.Cut(value, ",")
@@ -858,36 +864,42 @@ func applyBSONTag(fd *FieldDef, tag *ast.BasicLit) {
 		fd.Key, fd.KeyDeclared = name, true
 	}
 	if hasOptions {
-		fd.BSONOptions = strings.Split(options, ",")
+		fd.StoreOptions = strings.Split(options, ",")
 	}
 }
 
-// storedKeyPattern 是显式持久名允许的形状：能直接当 Mongo 字段路径的一段（不含 . 和 $），字母开头。以 _ 开头的键
+// storedKeyPattern 是显式持久名允许的形状：能直接当 Mongo 字段路径的一段（不含 . 和 $），字母开头或无前导零的正十进制数字。以 _ 开头的键
 // 留给框架元数据（_id、_schema、_version、_last_tx、_deleted、_deleted_at 等），加载期的未知键检查也据此跳过它们。
-var storedKeyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
+var storedKeyPattern = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_]*|[1-9][0-9]*)$`)
 
-// validateFieldKeys 在生成期强制显式持久名的规则，违反即报错：bson:"-" 与 omitempty 以外的选项没有含义（不能悄悄
+// validateFieldKeys 在生成期强制显式持久名的规则，违反即报错：store:"-" 与 omitempty 以外的选项没有含义（不能悄悄
 // 忽略）；显式名必须合法、不能占用框架元数据的 _ 前缀；同一类型里所有字段的键不能重复——持久字段、只同步字段和只
 // 在事务里的字段共用一个回滚快照与同步文档，所以一起检查。
 func validateFieldKeys(owner string, fields []FieldDef) error {
 	owners := make(map[string]string, len(fields))
 	for _, field := range fields {
-		if field.BSONSkip {
-			return fmt.Errorf("%s.%s: bson:\"-\" has no meaning on a DAO field; keep it out of storage with dao:\"nopersist,sync\" (or nopersist,nosync), or drop it from generation with dao:\"-\"", owner, field.Name)
+		if field.LegacyBSON {
+			return fmt.Errorf("%s.%s: use store:\"...\" on DAO definitions; bson tags belong to generated storage structs", owner, field.Name)
 		}
-		for _, option := range field.BSONOptions {
+		if !field.KeyDeclared && !field.StoreSkip {
+			return fmt.Errorf("%s.%s: missing required store tag; declare a stable key such as store:\"1\"", owner, field.Name)
+		}
+		if field.StoreSkip {
+			return fmt.Errorf("%s.%s: store:\"-\" has no meaning on a DAO field; keep it out of storage with dao:\"nopersist,sync\" (or nopersist,nosync), or drop it from generation with dao:\"-\"", owner, field.Name)
+		}
+		for _, option := range field.StoreOptions {
 			if option != "omitempty" {
-				return fmt.Errorf("%s.%s: bson tag option %q is not supported on a DAO field (the tag only names the stored key; omitempty is the one option kept)", owner, field.Name, option)
+				return fmt.Errorf("%s.%s: store tag option %q is not supported on a DAO field (the tag only names the stored key; omitempty is the one option kept)", owner, field.Name, option)
 			}
 		}
 		if strings.HasPrefix(field.Key, "_") {
 			return fmt.Errorf("%s.%s: stored key %q is reserved: keys starting with _ belong to framework metadata (_id, _schema, _version, _last_tx, _deleted, ...)", owner, field.Name, field.Key)
 		}
 		if field.KeyDeclared && !storedKeyPattern.MatchString(field.Key) {
-			return fmt.Errorf("%s.%s: bson:%q is not a valid stored key (start with a letter; letters, digits and _ only, no . or $)", owner, field.Name, field.Key)
+			return fmt.Errorf("%s.%s: store:%q is not a valid stored key (use a letter-led identifier or a positive decimal number without leading zeros; no . or $)", owner, field.Name, field.Key)
 		}
 		if other, exists := owners[field.Key]; exists {
-			return fmt.Errorf("%s: fields %s and %s both store as %q; give one of them another bson:\"...\" name", owner, other, field.Name, field.Key)
+			return fmt.Errorf("%s: fields %s and %s both store as %q; give one of them another store:\"...\" name", owner, other, field.Name, field.Key)
 		}
 		owners[field.Key] = field.Name
 	}

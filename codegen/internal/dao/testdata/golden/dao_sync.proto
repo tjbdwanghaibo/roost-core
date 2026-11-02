@@ -42,6 +42,28 @@ message SyncOptionalGemInfo {
 }
 
 // roost:source=go_def
+message SyncShortItem {
+  int32 strength = 1;
+  int32 quantity = 2;
+}
+
+// roost:source=go_def
+message SyncOptionalShortItem {
+  SyncShortItem value = 1;
+}
+
+// roost:source=go_def
+message SyncLongItem {
+  int32 strength = 1;
+  int32 quantity = 2;
+}
+
+// roost:source=go_def
+message SyncOptionalLongItem {
+  SyncLongItem value = 1;
+}
+
+// roost:source=go_def
 message SyncEnvelope {
   map<int32, bytes> marks = 1;
 }
@@ -139,6 +161,38 @@ message SyncPatchGemInfo {
 }
 
 // roost:source=go_def
+message SyncPatchShortItemStrengthField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncPatchShortItemQuantityField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncPatchShortItem {
+  SyncPatchShortItemStrengthField strength = 1;
+  SyncPatchShortItemQuantityField quantity = 2;
+}
+
+// roost:source=go_def
+message SyncPatchLongItemStrengthField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncPatchLongItemQuantityField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncPatchLongItem {
+  SyncPatchLongItemStrengthField strength = 1;
+  SyncPatchLongItemQuantityField quantity = 2;
+}
+
+// roost:source=go_def
 message SyncPatchEnvelopeMarksField {
   map<int32, bytes> value = 1;
   bool delta = 2;
@@ -222,6 +276,68 @@ message SyncHeroDao {
   SyncHeroDaoEquipsField equips = 9;
   SyncHeroDaoSquadField squad = 10;
   SyncHeroDaoMountField mount = 11;
+}
+
+// roost:source=go_def
+message SyncShortKeysDaoExperienceField {
+  int64 value = 1;
+}
+
+// roost:source=go_def
+message SyncShortKeysDaoEquipmentField {
+  map<int64, SyncOptionalShortItem> value = 1;
+  bool delta = 2;
+  repeated int64 removed = 3;
+  map<int64, SyncPatchShortItem> patches = 4;
+}
+
+// roost:source=go_def
+message SyncShortKeysDaoFollowersField {
+  repeated SyncOptionalShortItem value = 1;
+  bool delta = 2;
+  map<uint64, SyncOptionalShortItem> updates = 3;
+  uint64 length = 4;
+  map<uint64, SyncPatchShortItem> patches = 5;
+}
+
+// roost:source=go_def
+message SyncShortKeysDao {
+  int64 entity_id = 1;
+  uint32 sync_format = 2047;
+  SyncShortKeysDaoExperienceField experience = 2;
+  SyncShortKeysDaoEquipmentField equipment = 3;
+  SyncShortKeysDaoFollowersField followers = 4;
+}
+
+// roost:source=go_def
+message SyncLongKeysDaoExperienceField {
+  int64 value = 1;
+}
+
+// roost:source=go_def
+message SyncLongKeysDaoEquipmentField {
+  map<int64, SyncOptionalLongItem> value = 1;
+  bool delta = 2;
+  repeated int64 removed = 3;
+  map<int64, SyncPatchLongItem> patches = 4;
+}
+
+// roost:source=go_def
+message SyncLongKeysDaoFollowersField {
+  repeated SyncOptionalLongItem value = 1;
+  bool delta = 2;
+  map<uint64, SyncOptionalLongItem> updates = 3;
+  uint64 length = 4;
+  map<uint64, SyncPatchLongItem> patches = 5;
+}
+
+// roost:source=go_def
+message SyncLongKeysDao {
+  int64 entity_id = 1;
+  uint32 sync_format = 2047;
+  SyncLongKeysDaoExperienceField experience = 2;
+  SyncLongKeysDaoEquipmentField equipment = 3;
+  SyncLongKeysDaoFollowersField followers = 4;
 }
 
 // roost:source=go_def

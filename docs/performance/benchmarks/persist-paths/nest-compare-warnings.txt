@@ -1,0 +1,5 @@
+after-async.log: 2026/11/02 11:06:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=113.461916ms threshold=100ms
+after-async.log: 2026/11/02 11:06:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=113.991083ms threshold=100ms
+after-async.log: 2026/11/02 11:06:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=112.989916ms threshold=100ms
+after-async.log: 2026/11/02 11:06:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=111.8875ms threshold=100ms
+after-async.log: 2026/11/02 11:06:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=110.913792ms threshold=100ms

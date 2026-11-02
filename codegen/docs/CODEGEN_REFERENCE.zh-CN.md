@@ -428,19 +428,19 @@ package dbdef
 
 //roost:dao coll=players db=main dbscope=sid
 type PlayerDao struct {
-    Name      string                              // 无 tag：persist + sync 全开
-    Level     int32
-    LastLogin int64             `dao:"persist"`        // 只持久化，不同步给客户端
-    Session   string            `dao:"nopersist,sync"` // 只同步，不落库
+    Name      string `store:"name"`                              // 无 tag：persist + sync 全开
+    Level     int32 `store:"level"`
+    LastLogin int64             `dao:"persist" store:"last_login"`        // 只持久化，不同步给客户端
+    Session   string            `dao:"nopersist,sync" store:"session"` // 只同步，不落库
     Runtime   int64             `dao:"-"`              // 完全排除
-    Items     map[int64]int32   `dao:"persist,sync,map=fast"`
-    Tags      map[string]string `dao:"persist,map=sharded"`
-    Equips    map[int64]*EquipInfo                // 嵌套 struct 自动递归生成
+    Items     map[int64]int32   `dao:"persist,sync,map=fast" store:"items"`
+    Tags      map[string]string `dao:"persist,map=sharded" store:"tags"`
+    Equips    map[int64]*EquipInfo `store:"equips"`                // 嵌套 struct 自动递归生成
 }
 
 type EquipInfo struct {
-    Level int32
-    Star  int32
+    Level int32 `store:"level"`
+    Star  int32 `store:"star"`
 }
 ```
 
@@ -496,9 +496,9 @@ category Other(5) 的玩家 9001 存成 `9001<<10 | 1<<2 | 5&3 = 9217029`。用 
 
 **tag 一旦出现就必须表明 persist/sync 意图**：`map=...` 是辅助选项，必须与 persist/sync 意图同写。支持的字段类型：基础类型、slice、map、嵌套 struct（值或指针）；固定长度数组、`chan`、`*map[...]...`、指向非本地命名类型的指针在生成期被拒绝（提示用 `dao:"-"` 排除）。map 容器来自 `github.com/tjbdwanghaibo/roost-core/infra/base/safemap`（生成代码里别名 `fmap`）。
 
-### 持久键：`bson:"..."` 与持久文档结构体
+### 稳定字段键：必填 `store:"..."` 与持久文档结构体
 
-字段写了 `bson:"x"` 时 `x` 就是它在文档里的键（持久键、同步 WireName、回滚快照里的键是同一个），没写时是 Go 字段名的 snake_case（DESIGN-TODO D13，维护者 2026-10-19 决定）。生成期强制：显式名字母开头、只含字母数字下划线；任何键不能以 `_` 开头（`_id`、`_schema`、`_version`、`_last_tx`、`_deleted` 等是框架元数据）；同一 DAO / 嵌套类型内所有字段的键不能重复；`bson` 选项只认 `omitempty`（照抄进生成的标签），其余选项与 `bson:"-"` 报错（不存就用 `dao:"nopersist,..."` 或 `dao:"-"`）。DAO 字段不能叫 `SchemaVersion`、`PersistDoc`（生成的文档结构体自己用）。
+DAO 及其生成嵌套类型的每个生成字段必须声明 `store:"x"`，包括 nocoll / nopersist；`dao:"-"` 排除字段例外。`x` 同时作为持久键、Sync WireName 和回滚快照键。推荐数字短键，也允许字母开头的标识符；拒绝前导零数字、`.` / `$`、保留 `_` 前缀、同类型重复键、缺失/空 tag 和业务定义中的 `bson`。选项只支持 `omitempty`。没有自动编号或 snake_case 回退。DAO 字段不能叫 `SchemaVersion`、`PersistDoc`。
 
 每个 Mongo DAO 的 `gen_<x>_dao.go` 里有：
 
@@ -508,11 +508,11 @@ category Other(5) 的玩家 9001 存成 `9001<<10 | 1<<2 | 5&3 = 9217029`。用 
 
 嵌套类型的 wire 文档 `<type>BSONDoc` 同样带显式标签。
 
-**改 Go 字段名又要保住数据：保留原来的 `bson` 名**（``Coins int64 `bson:"gold"` ``）——键没变，不需要迁移，也不告警。`roost add dao` 骨架的注释建议每个持久字段写 `bson` 名。改了键（改名没留 `bson` 名、删字段、`persist` 改 `nopersist`、改类型）时：
+**改 Go 字段名又要保住数据：保留原来的 `store` 键**（``Coins int64 `store:"gold"` ``）——键没变，不需要迁移，也不告警。`roost add dao` 骨架要求每个生成字段写 `store` 键。改了键（改名没留 `store` 键、删字段、`persist` 改 `nopersist`、改类型）时：
 
-- `roost generate` 以工作树里上一次的生成物为基线打印 `WARN: <Dao>: stored key "gold" (Gold int64) is no longer generated ...` / `new stored key ...` / `stored key "level" changes type int32 -> string ...`，提示 `schema=` 是否提高；不阻断生成，再生成一次不再告警。
+- `roost generate` 先检查 `store tag changed "旧值" -> "新值"`（含交换键、omitempty、嵌套及非持久字段），再检查新增/删除/类型变化；以工作树里上一次的生成物为基线打印 `WARN: <Dao>: stored key "gold" (Gold int64) is no longer generated ...` / `new stored key ...` / `stored key "level" changes type int32 -> string ...`，提示 `schema=` 是否提高；不阻断生成，再生成一次不再告警。
 - 生成的 `RestorePersisted` 发现库里有、结构体没有的键时打印 `dataengine: stored document has a key the DAO does not declare`（`dao`、`key`、`first_id`，每进程每 DAO 每键一次），计 `dataengine.dao.unknown_stored_key.total{dao}`，照常加载，但**不读入**这个键的值。
-- 这些旧键**不再加载，下一次整文档写回就删掉**（维护者 2026-10-19：“旧字段就不 load 了，给一个业务层的约束或者通知就可以了”）；单字段补丁不碰它们，但它们也不再被读取。**业务约束**：改名 / 删字段之前，要么保留原 `bson` 名，要么先离线迁移再提升 `schema=`，否则旧数据不再加载、写回即丢失（[schema 变更操作手册](../../docs/framework/SCHEMA-MIGRATION.md) §1）。
+- 这些旧键**不再加载，下一次整文档写回就删掉**（维护者 2026-10-19：“旧字段就不 load 了，给一个业务层的约束或者通知就可以了”）；单字段补丁不碰它们，但它们也不再被读取。**业务约束**：改名 / 删字段之前，要么保留原 `store` 键，要么先离线迁移再提升 `schema=`，否则旧数据不再加载、写回即丢失（[schema 变更操作手册](../../docs/framework/SCHEMA-MIGRATION.md) §1）。
 
 ### 生成物与读写约定
 
@@ -601,9 +601,9 @@ slice 的 map（`map[K]int64`、`map[K][]byte`）。其余引用形状生成的�
 ```go
 //roost:dao nocoll
 type MonsterDao struct {
-    PosX int64 `bson:"pos_x" dao:"nopersist,sync"`
-    PosY int64 `bson:"pos_y" dao:"nopersist,sync"`
-    HP   int64 `bson:"hp" dao:"nopersist,sync"`
+    PosX int64 `store:"pos_x" dao:"nopersist,sync"`
+    PosY int64 `store:"pos_y" dao:"nopersist,sync"`
+    HP   int64 `store:"hp" dao:"nopersist,sync"`
 }
 ```
 

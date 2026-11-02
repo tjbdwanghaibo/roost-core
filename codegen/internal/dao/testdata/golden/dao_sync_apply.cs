@@ -158,6 +158,54 @@ private static SyncPatchGemInfoSigField ApplyField(SyncPatchGemInfoSigField patc
 var update=patch.Clone();
 return update;
 }
+private static SyncShortItem ApplyPatch(SyncPatchShortItem patch,SyncShortItem previous){
+if(previous==null)throw new System.IO.InvalidDataException("Missing nested baseline.");
+var next=previous.Clone();
+if(patch.Strength!=null){
+var baseline=new SyncPatchShortItemStrengthField();
+baseline.Value=previous.Strength;
+var applied=ApplyField(patch.Strength,baseline);
+next.Strength=applied.Value;
+}
+if(patch.Quantity!=null){
+var baseline=new SyncPatchShortItemQuantityField();
+baseline.Value=previous.Quantity;
+var applied=ApplyField(patch.Quantity,baseline);
+next.Quantity=applied.Value;
+}
+return next;}
+private static SyncPatchShortItemStrengthField ApplyField(SyncPatchShortItemStrengthField patch,SyncPatchShortItemStrengthField previous){
+var update=patch.Clone();
+return update;
+}
+private static SyncPatchShortItemQuantityField ApplyField(SyncPatchShortItemQuantityField patch,SyncPatchShortItemQuantityField previous){
+var update=patch.Clone();
+return update;
+}
+private static SyncLongItem ApplyPatch(SyncPatchLongItem patch,SyncLongItem previous){
+if(previous==null)throw new System.IO.InvalidDataException("Missing nested baseline.");
+var next=previous.Clone();
+if(patch.Strength!=null){
+var baseline=new SyncPatchLongItemStrengthField();
+baseline.Value=previous.Strength;
+var applied=ApplyField(patch.Strength,baseline);
+next.Strength=applied.Value;
+}
+if(patch.Quantity!=null){
+var baseline=new SyncPatchLongItemQuantityField();
+baseline.Value=previous.Quantity;
+var applied=ApplyField(patch.Quantity,baseline);
+next.Quantity=applied.Value;
+}
+return next;}
+private static SyncPatchLongItemStrengthField ApplyField(SyncPatchLongItemStrengthField patch,SyncPatchLongItemStrengthField previous){
+var update=patch.Clone();
+return update;
+}
+private static SyncPatchLongItemQuantityField ApplyField(SyncPatchLongItemQuantityField patch,SyncPatchLongItemQuantityField previous){
+var update=patch.Clone();
+return update;
+}
 private static SyncEnvelope ApplyPatch(SyncPatchEnvelope patch,SyncEnvelope previous){
 if(previous==null)throw new System.IO.InvalidDataException("Missing nested baseline.");
 var next=previous.Clone();
@@ -274,6 +322,98 @@ var next=previous.Clone();
 if(next.Value.Value==null)throw new System.IO.InvalidDataException("Nil nested baseline.");
 next.Value.Value=ApplyPatch(update.Patch,next.Value.Value);
 next.Patch=null;return next;
+}
+// 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
+public static SyncShortKeysDao Apply(this SyncShortKeysDao patch,SyncShortKeysDao previous){
+ if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
+ if(previous!=null&&(previous.SyncFormat!=3||previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
+ var next=previous==null?new SyncShortKeysDao():previous.Clone();next.EntityId=patch.EntityId;next.SyncFormat=3;
+if(patch.Experience!=null)next.Experience=ApplyField(patch.Experience,previous==null?null:previous.Experience);
+if(patch.Equipment!=null)next.Equipment=ApplyField(patch.Equipment,previous==null?null:previous.Equipment);
+if(patch.Followers!=null)next.Followers=ApplyField(patch.Followers,previous==null?null:previous.Followers);
+return next;}
+private static SyncShortKeysDaoExperienceField ApplyField(SyncShortKeysDaoExperienceField patch,SyncShortKeysDaoExperienceField previous){
+var update=patch.Clone();
+return update;
+}
+private static SyncShortKeysDaoEquipmentField ApplyField(SyncShortKeysDaoEquipmentField patch,SyncShortKeysDaoEquipmentField previous){
+var update=patch.Clone();
+if(!update.Delta){if(update.Removed.Count!=0||update.Patches.Count!=0)throw new System.IO.InvalidDataException("Operations on replacement.");return update;}
+if(previous==null)throw new System.IO.InvalidDataException("Missing map baseline.");
+var next=previous.Clone();
+foreach(var key in update.Removed)next.Value.Remove(key);
+foreach(var pair in update.Value)next.Value[pair.Key]=pair.Value;
+foreach(var pair in update.Patches){
+if(!next.Value.TryGetValue(pair.Key,out var old))throw new System.IO.InvalidDataException("Missing map element.");
+if(old.Value==null)throw new System.IO.InvalidDataException("Nil nested baseline.");
+old.Value=ApplyPatch(pair.Value,old.Value);
+}
+next.Patches.Clear();
+next.Delta=false;next.Removed.Clear();return next;
+}
+private static SyncShortKeysDaoFollowersField ApplyField(SyncShortKeysDaoFollowersField patch,SyncShortKeysDaoFollowersField previous){
+var update=patch.Clone();
+if(!update.Delta){if(update.Length!=0||update.Updates.Count!=0||update.Patches.Count!=0)throw new System.IO.InvalidDataException("Operations on replacement.");return update;}
+if(previous==null||update.Length>(ulong)previous.Value.Count+(ulong)update.Updates.Count||update.Length>int.MaxValue)throw new System.IO.InvalidDataException("Invalid list length or missing baseline.");
+foreach(var pair in update.Updates)if(pair.Key>=update.Length)throw new System.IO.InvalidDataException("List index out of bounds.");
+foreach(var pair in update.Patches)if(pair.Key>=update.Length||pair.Key>=(ulong)previous.Value.Count||update.Updates.ContainsKey(pair.Key))throw new System.IO.InvalidDataException("Invalid nested list operation.");
+var baseline=previous.Clone();var next=new SyncShortKeysDaoFollowersField();
+for(ulong index=0;index<update.Length;index++){
+if(update.Updates.TryGetValue(index,out var value))next.Value.Add(value);
+else if(index<(ulong)baseline.Value.Count)next.Value.Add(baseline.Value[(int)index]);
+else throw new System.IO.InvalidDataException("List append has a hole.");}
+foreach(var pair in update.Patches){
+var old=next.Value[(int)pair.Key];
+if(old.Value==null)throw new System.IO.InvalidDataException("Nil nested baseline.");
+old.Value=ApplyPatch(pair.Value,old.Value);
+}
+return next;
+}
+// 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
+public static SyncLongKeysDao Apply(this SyncLongKeysDao patch,SyncLongKeysDao previous){
+ if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
+ if(previous!=null&&(previous.SyncFormat!=3||previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
+ var next=previous==null?new SyncLongKeysDao():previous.Clone();next.EntityId=patch.EntityId;next.SyncFormat=3;
+if(patch.Experience!=null)next.Experience=ApplyField(patch.Experience,previous==null?null:previous.Experience);
+if(patch.Equipment!=null)next.Equipment=ApplyField(patch.Equipment,previous==null?null:previous.Equipment);
+if(patch.Followers!=null)next.Followers=ApplyField(patch.Followers,previous==null?null:previous.Followers);
+return next;}
+private static SyncLongKeysDaoExperienceField ApplyField(SyncLongKeysDaoExperienceField patch,SyncLongKeysDaoExperienceField previous){
+var update=patch.Clone();
+return update;
+}
+private static SyncLongKeysDaoEquipmentField ApplyField(SyncLongKeysDaoEquipmentField patch,SyncLongKeysDaoEquipmentField previous){
+var update=patch.Clone();
+if(!update.Delta){if(update.Removed.Count!=0||update.Patches.Count!=0)throw new System.IO.InvalidDataException("Operations on replacement.");return update;}
+if(previous==null)throw new System.IO.InvalidDataException("Missing map baseline.");
+var next=previous.Clone();
+foreach(var key in update.Removed)next.Value.Remove(key);
+foreach(var pair in update.Value)next.Value[pair.Key]=pair.Value;
+foreach(var pair in update.Patches){
+if(!next.Value.TryGetValue(pair.Key,out var old))throw new System.IO.InvalidDataException("Missing map element.");
+if(old.Value==null)throw new System.IO.InvalidDataException("Nil nested baseline.");
+old.Value=ApplyPatch(pair.Value,old.Value);
+}
+next.Patches.Clear();
+next.Delta=false;next.Removed.Clear();return next;
+}
+private static SyncLongKeysDaoFollowersField ApplyField(SyncLongKeysDaoFollowersField patch,SyncLongKeysDaoFollowersField previous){
+var update=patch.Clone();
+if(!update.Delta){if(update.Length!=0||update.Updates.Count!=0||update.Patches.Count!=0)throw new System.IO.InvalidDataException("Operations on replacement.");return update;}
+if(previous==null||update.Length>(ulong)previous.Value.Count+(ulong)update.Updates.Count||update.Length>int.MaxValue)throw new System.IO.InvalidDataException("Invalid list length or missing baseline.");
+foreach(var pair in update.Updates)if(pair.Key>=update.Length)throw new System.IO.InvalidDataException("List index out of bounds.");
+foreach(var pair in update.Patches)if(pair.Key>=update.Length||pair.Key>=(ulong)previous.Value.Count||update.Updates.ContainsKey(pair.Key))throw new System.IO.InvalidDataException("Invalid nested list operation.");
+var baseline=previous.Clone();var next=new SyncLongKeysDaoFollowersField();
+for(ulong index=0;index<update.Length;index++){
+if(update.Updates.TryGetValue(index,out var value))next.Value.Add(value);
+else if(index<(ulong)baseline.Value.Count)next.Value.Add(baseline.Value[(int)index]);
+else throw new System.IO.InvalidDataException("List append has a hole.");}
+foreach(var pair in update.Patches){
+var old=next.Value[(int)pair.Key];
+if(old.Value==null)throw new System.IO.InvalidDataException("Nil nested baseline.");
+old.Value=ApplyPatch(pair.Value,old.Value);
+}
+return next;
 }
 // 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
 public static SyncVarietyDao Apply(this SyncVarietyDao patch,SyncVarietyDao previous){

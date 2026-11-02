@@ -7,6 +7,9 @@ import (
 	"fmt"
 {{- if not .Dao.NoCollection}}
 	"sort"
+{{- if persistFields .Dao.Fields}}
+ "strings"
+{{- end}}
 {{- end}}
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -53,15 +56,14 @@ const (
 
 // {{persistDocName .Dao.Name}} is {{.Dao.Name}}'s document in collection "{{.Dao.Coll}}", and the only
 // place a stored key is spelled: each tag below is the key the field is stored
-// under (the definition's bson:"..." name, or the snake_case of the Go field
-// name when it has none). Full writes, hydration, the rollback snapshot and
+// under (the definition's required store:"..." key). Full writes, hydration, the rollback snapshot and
 // the incremental patch paths all use these keys (DESIGN-TODO D13).
 //
 // Renaming a key here — a renamed or removed field, persist changed to
 // nopersist — leaves documents already stored with a key nothing reads:
 // RestorePersisted warns once per key and does not load the value, and the
 // next full write of the document drops it. Keep the old key with
-// bson:"<old>" on the renamed field, or migrate the documents offline before
+// store:"<old>" on the renamed field, or migrate the documents offline before
 // raising the schema (docs/framework/SCHEMA-MIGRATION.md).
 type {{persistDocName .Dao.Name}} struct {
 	ID            int64  ` + "`" + `bson:"_id"` + "`" + `
@@ -121,7 +123,13 @@ const (
 func (d *{{$.Dao.Name}}) mark{{.Name}}Dirty() {d.mark{{.Name}}Change(nil)}
 func (d *{{$.Dao.Name}}) mark{{.Name}}Change(path dataengine.SyncPath) {
 	{{- if .Tag.Persist}}
-	if err := nest.MarkPersistPath(d, {{fieldMaskName $.Dao.Name .Name}}, dataengine.SyncField({{syncFieldNumber $.Dao .Name}},path)); err != nil {
+	var err error
+	if len(path) == 0 {
+		err = nest.MarkPersistField(d, {{fieldMaskName $.Dao.Name .Name}})
+	} else {
+		err = nest.MarkPersistPath(d, {{fieldMaskName $.Dao.Name .Name}}, dataengine.SyncField({{syncFieldNumber $.Dao .Name}}, path))
+	}
+	if err != nil {
 		panic(fmt.Errorf("{{$.Dao.Name}}: mark {{.Name}} persistence: %w", err))
 	}
 	{{- end}}
@@ -725,6 +733,9 @@ func (d *{{.Dao.Name}}) persistChangeHasPath(change nest.PersistChange, field st
 }
 
 func (d *{{.Dao.Name}}) persistChangePathCovered(change nest.PersistChange, path string) bool {
+{{- range persistFields .Dao.Fields}}
+	if change.FullMask&{{fieldMaskName $.Dao.Name .Name}} != 0 && (path == "{{.Key}}" || strings.HasPrefix(path, "{{.Key}}.")) { return true }
+{{- end}}
 	for field := range change.FullFields {
 		prefix := field + "."
 		if path == field || len(path) > len(prefix) && path[:len(prefix)] == prefix { return true }
@@ -734,17 +745,20 @@ func (d *{{.Dao.Name}}) persistChangePathCovered(change nest.PersistChange, path
 
 func (d *{{.Dao.Name}}) marshalPersistPatchBSON(change nest.PersistChange) (dataengine.FieldPatch, error) {
 	set := make(map[string]any, len(change.Set)+len(change.FullFields))
- unset:=append([]string(nil),change.Unset...)
+ var unset []string
+ for _, path := range change.Unset {
+  if !d.persistChangePathCovered(change,path) { unset=append(unset,path) }
+ }
  {{if persistFields .Dao.Fields}}root:=change.Paths.Root(){{end}}
 {{- range persistFields .Dao.Fields}}
 	if change.Mask&{{fieldMaskName $.Dao.Name .Name}} != 0 {
  node:=root.Child(dataengine.SyncStep{Field:{{syncFieldNumber $.Dao .Name}}})
  _,full:=change.FullFields["{{.Key}}"]
+ full = full || change.FullMask&{{fieldMaskName $.Dao.Name .Name}} != 0
  if !root.Full() && node!=nil && !full {
   d.append{{.Name}}Persist(set,&unset,"{{.Key}}",node)
  } else {
 {{- if eq .Kind 2}}
-		_, full := change.FullFields["{{.Key}}"]
 		if full || !d.persistChangeHasPath(change, "{{.Key}}") {
 			set["{{.Key}}"] = {{toWire . (printf "d.%s()" (mapHelperName $.Dao.Name .Name))}}
 		}

@@ -64,7 +64,7 @@ ROOST="$WORK/roost"; DIR="$WORK/$NAME"
 # dao_add <实体类型名> <文件> "字段 类型 bson键 [dao标签]" ...：在 `type <X>Dao struct {` 后插入字段，标签缺省 persist
 dao_add() {
   local t=$1 f=$2 ins="" n ty k tag s; shift 2
-  for s in "$@"; do read -r n ty k tag <<<"$s"; ins+=$'\t'"$n $ty \`bson:\"$k\" dao:\"${tag:-persist}\"\`"$'\n'; done
+  for s in "$@"; do read -r n ty k tag <<<"$s"; ins+=$'\t'"$n $ty \`store:\"$k\" dao:\"${tag:-persist}\"\`"$'\n'; done
   T="$t" INS="$ins" perl -0pi -e 's/(type $ENV{T}Dao struct \{\n)/$1$ENV{INS}/ or die "no $ENV{T}Dao in $ARGV\n"' "$f"
 }
 # world <entity.go...>：多人争用的对象放进 World 锁档（锁序低于 Player）

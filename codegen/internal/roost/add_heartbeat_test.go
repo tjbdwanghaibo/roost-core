@@ -195,9 +195,9 @@ func TestAddHeartbeatThenBehaviorAndTimeDomain(t *testing.T) {
 	}
 	dao := readProjectFile(t, root, "db/def/scene.go")
 	for _, field := range []string{
-		"TimeAnchorBusiness int64   `bson:\"time_anchor_business\" dao:\"nopersist,sync\"`",
-		"TimeAnchorDomain   int64   `bson:\"time_anchor_domain\" dao:\"nopersist,sync\"`",
-		"TimeRate           float64 `bson:\"time_rate\" dao:\"nopersist,sync\"`",
+		"TimeAnchorBusiness int64   `store:\"time_anchor_business\" dao:\"nopersist,sync\"`",
+		"TimeAnchorDomain   int64   `store:\"time_anchor_domain\" dao:\"nopersist,sync\"`",
+		"TimeRate           float64 `store:\"time_rate\" dao:\"nopersist,sync\"`",
 	} {
 		if !strings.Contains(dao, field) {
 			t.Fatalf("DAO definition misses %q:\n%s", field, dao)
@@ -238,7 +238,7 @@ func TestAddHeartbeatRefusesWhatItCannotDo(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "game", "handler", "boss.go"), []byte("package handler\n\nfunc handlerStartExampleBossAction() {}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	editProjectFile(t, root, "db/def/arena.go", "type ArenaDao struct {", "type ArenaDao struct {\n\tTimeRate float64 `bson:\"time_rate\" dao:\"nopersist,sync\"`")
+	editProjectFile(t, root, "db/def/arena.go", "type ArenaDao struct {", "type ArenaDao struct {\n\tTimeRate float64 `store:\"time_rate\" dao:\"nopersist,sync\"`")
 	snapshot, err := snapshotGenerated(root)
 	if err != nil {
 		t.Fatal(err)

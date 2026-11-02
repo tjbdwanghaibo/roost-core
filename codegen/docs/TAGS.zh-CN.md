@@ -7,7 +7,7 @@
 | 形式 | 写在哪里 | 谁读取 | 示例 |
 | --- | --- | --- | --- |
 | 注释标记 | 对应类型、函数或接口方法的声明上方 | 生成器；部分由 ID 检查器读取 | `//roost:nest rollback=undo durability=strict` |
-| Go struct tag | 字段类型后的反引号内 | 对应生成器或运行时编码器 | `dao:"persist" bson:"coins"` |
+| Go struct tag | 字段类型后的反引号内 | 对应生成器或运行时编码器 | `dao:"persist" store:"coins"` |
 | 项目配置 | `roost.yaml`、服务 YAML | 生成流水线、装配与运行时 | feature、扫描目录、Mod、同步模式 |
 
 注释参数用空格分隔，字段 tag 的内部选项用逗号分隔。标记放在目标声明的文档注释中，最稳妥的是紧贴声明；不要隔一个其他声明，也不要给整个 `type (...)` 共用一个类型标记。只改手写输入，再运行 `roost generate`；不能手改 `*_gen.go`。
@@ -51,11 +51,11 @@
 ```go
 //roost:dao coll=alliances db=main schema=1
 type AllianceDao struct {
-    Name     string `bson:"name" remoteview:"public,member"`
-    Bonus    int64  `bson:"bonus" dao:"persist" remoteview:"member"`
-    Treasury int64  `bson:"treasury" dao:"persist"`
-    Online   int32  `dao:"nopersist,sync"`
-    Scratch  int64  `dao:"nopersist,nosync"`
+    Name     string `store:"name" remoteview:"public,member"`
+    Bonus    int64  `store:"bonus" dao:"persist" remoteview:"member"`
+    Treasury int64  `store:"treasury" dao:"persist"`
+    Online   int32  `dao:"nopersist,sync" store:"online"`
+    Scratch  int64  `dao:"nopersist,nosync" store:"scratch"`
 }
 ```
 
@@ -77,17 +77,17 @@ type AllianceDao struct {
 
 | 写法 | 持久 | 客户端 Sync | 说明 |
 | --- | --- | --- | --- |
-| 没有 `dao` tag | 是 | 是 | `bson` 等其他 tag 不改变此缺省 |
+| 没有 `dao` tag | 是 | 是 | 必填的 `store` 不改变此缺省 |
 | `dao:"persist,sync"` | 是 | 是 | 明确两项都开 |
 | `dao:"persist"` | 是 | 否 | 只持久 |
 | `dao:"sync"` / `dao:"nopersist,sync"` | 否 | 是 | 只同步 |
 | `dao:"nopersist,nosync"` | 否 | 否 | 仍生成事务化 mutator、参与回滚 |
 | `dao:"-"` | 否 | 否 | 完全排除，不是“只参与回滚” |
 | `dao:"persist,sync,map=fast"` | 是 | 是 | map 实现选项；`small` 默认，另有 `fast`、`sharded` |
-| `bson:"coins,omitempty"` | — | — | 显式持久 / wire 字段名；选项只支持 `omitempty` |
+| `store:"coins,omitempty"` | — | — | 显式持久 / wire 字段名；选项只支持 `omitempty` |
 | `remoteview:"public,member"` | 必须是 | 独立 | 将该字段加入两个服务端只读 Snapshot |
 
-出现 `dao` 就只启用列出的能力；单写 `map=fast` 不合法，`persist,nopersist` 等矛盾组合也拒绝。`bson:"-"` 不用于排除 DAO 字段；名字不能以 `_` 开头、不能重复，省略时用字段名的 snake_case。
+出现 `dao` 就只启用列出的能力；单写 `map=fast` 不合法，`persist,nopersist` 等矛盾组合也拒绝。`store:"-"` 不用于排除 DAO 字段；名字不能以 `_` 开头、不能重复。每个生成字段必须显式声明 `store`，没有 snake_case 回退；DAO 输入不再接受 `bson`。
 
 ### Remote Snapshot 的生成边界
 
@@ -100,6 +100,35 @@ type AllianceDao struct {
 - 视图名称不是权限系统；不生成跨 DAO 聚合或派生计算。改字段形状会改变视图 schema，不兼容旧快照，也不自动重建已有缓存。
 
 完整类型范围、注册、版本水位和升级边界见 [Remote 指南](../../docs/framework/guide/05-remote-mirror.md)。
+
+### 必填的 store 键与变更告警（main，尚未发版）
+
+`//roost:dao`（Mongo 或内存 DAO）及其嵌套类型使用必填的专用 `store` tag 声明稳定键，推荐数字短键；业务代码仍用可读的 Go 名称：
+
+```go
+//roost:dao coll=players db=game schema=2
+type PlayerDao struct {
+    Experience int64                 `store:"1"`
+    Equipment  map[int64]*Equipment   `store:"2"`
+}
+
+type Equipment struct {
+    Strength int32 `store:"1"`
+    Quantity int32 `store:"2"`
+}
+```
+
+- 存入 Mongo 的键是字符串 `"1"`、`"2"`，不是 PB varint 编号；嵌套更新如 `2.7.1`，含义是 Equipment[7].Strength。
+- 显式键允许原有字母开头标识符，或无前导零的正十进制数字；拒绝 `0`、`01`、`1name`、`.`、`$`、框架保留 `_` 前缀和同一类型内重复键。嵌套类型可以独立从 1 编号。
+- `store` 对每个生成 DAO / 嵌套字段必填，包括 nocoll、nopersist；`dao:"-"` 排除的字段例外。缺失、空值或重复键立即报错。生成物内部仍输出 Mongo 驱动需要的 `bson`，业务定义不得直接写 `bson`。
+- 由业务维护稳定编号，不按字段顺序自动分配；也允许显式字母键。仓内已有定义保留原物理键，不在换 tag 时隐式重编号。删字段后不要把它的键复用于另一种含义；改 Go 名可以保留原键。
+- 已有 DAO 改键必须手工提升 `schema=` 并离线迁移所需数据，或使用新库；生成器不自动提升 schema，不兼容读旧键。只把 `bson:"原键"` 改写为 `store:"原键"` 不改变数据格式。
+- PB 字段名/编号仍由同步定义生成，`store:"1"` 不等于 PB field 1，也不会进一步缩小 PB。通用 `SyncFields().WireName` / `Values()` 的字典键沿用 BSON 名，按字符串选字段的 Profile 或业务消费者要一同更新。
+- 节省的是重复字段名、更新路径和未压缩 BSON 字节；不能据此承诺 Mongo CPU、磁盘或端到端 TPS 等比例改善。详见[对照报告](../../docs/performance/DATAENGINE-PERSIST-PATHS.md)。
+
+重新生成时，键或 `omitempty` 变化会打印 `WARN: <类型>.<字段>: store tag changed "旧值" -> "新值"`，包含 schema/消费端检查提示。同类型字段交换键、嵌套字段及非持久字段也会报警；改 Go 字段名但保留相同键不报警。仅报警，不自动改数据或提升 schema；声明校验失败不会覆盖上一次产物。
+
+告警比较输出目录中上一次生成的持久/回滚结构体和嵌套文档，须把生成物纳入版本控制。首次生成、删除基线或换到无基线目录无法判断历史变化；同一定义第二次生成不再重复报警。它不是运行期监控服务，也不维护跨所有 Git 历史的编号账本。此规则不改 `//roost:redisdao` 包装器或手写 Mongo 编解码结构体。
 
 ## 4. Entity：装配与执行策略
 

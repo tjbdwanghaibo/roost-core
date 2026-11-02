@@ -9,6 +9,7 @@ import (
 	fmap "github.com/tjbdwanghaibo/roost-core/infra/base/safemap"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"sort"
+	"strings"
 )
 
 // HeroDao is the DAO for collection "heroes".
@@ -41,15 +42,14 @@ const (
 
 // heroDaoPersistDoc is HeroDao's document in collection "heroes", and the only
 // place a stored key is spelled: each tag below is the key the field is stored
-// under (the definition's bson:"..." name, or the snake_case of the Go field
-// name when it has none). Full writes, hydration, the rollback snapshot and
+// under (the definition's required store:"..." key). Full writes, hydration, the rollback snapshot and
 // the incremental patch paths all use these keys (DESIGN-TODO D13).
 //
 // Renaming a key here — a renamed or removed field, persist changed to
 // nopersist — leaves documents already stored with a key nothing reads:
 // RestorePersisted warns once per key and does not load the value, and the
 // next full write of the document drops it. Keep the old key with
-// bson:"<old>" on the renamed field, or migrate the documents offline before
+// store:"<old>" on the renamed field, or migrate the documents offline before
 // raising the schema (docs/framework/SCHEMA-MIGRATION.md).
 type heroDaoPersistDoc struct {
 	ID            int64                       `bson:"_id"`
@@ -110,7 +110,13 @@ const (
 
 func (d *HeroDao) markNameDirty() { d.markNameChange(nil) }
 func (d *HeroDao) markNameChange(path dataengine.SyncPath) {
-	if err := nest.MarkPersistPath(d, heroDaoFieldName, dataengine.SyncField(2, path)); err != nil {
+	var err error
+	if len(path) == 0 {
+		err = nest.MarkPersistField(d, heroDaoFieldName)
+	} else {
+		err = nest.MarkPersistPath(d, heroDaoFieldName, dataengine.SyncField(2, path))
+	}
+	if err != nil {
 		panic(fmt.Errorf("HeroDao: mark Name persistence: %w", err))
 	}
 	d.tracker.MarkSyncPath(heroDaoFieldName, dataengine.SyncField(2, path))
@@ -118,7 +124,13 @@ func (d *HeroDao) markNameChange(path dataengine.SyncPath) {
 
 func (d *HeroDao) markLevelDirty() { d.markLevelChange(nil) }
 func (d *HeroDao) markLevelChange(path dataengine.SyncPath) {
-	if err := nest.MarkPersistPath(d, heroDaoFieldLevel, dataengine.SyncField(3, path)); err != nil {
+	var err error
+	if len(path) == 0 {
+		err = nest.MarkPersistField(d, heroDaoFieldLevel)
+	} else {
+		err = nest.MarkPersistPath(d, heroDaoFieldLevel, dataengine.SyncField(3, path))
+	}
+	if err != nil {
 		panic(fmt.Errorf("HeroDao: mark Level persistence: %w", err))
 	}
 	d.tracker.MarkSyncPath(heroDaoFieldLevel, dataengine.SyncField(3, path))
@@ -126,7 +138,13 @@ func (d *HeroDao) markLevelChange(path dataengine.SyncPath) {
 
 func (d *HeroDao) markExpDirty() { d.markExpChange(nil) }
 func (d *HeroDao) markExpChange(path dataengine.SyncPath) {
-	if err := nest.MarkPersistPath(d, heroDaoFieldExp, dataengine.SyncField(4, path)); err != nil {
+	var err error
+	if len(path) == 0 {
+		err = nest.MarkPersistField(d, heroDaoFieldExp)
+	} else {
+		err = nest.MarkPersistPath(d, heroDaoFieldExp, dataengine.SyncField(4, path))
+	}
+	if err != nil {
 		panic(fmt.Errorf("HeroDao: mark Exp persistence: %w", err))
 	}
 	d.tracker.MarkSyncPath(heroDaoFieldExp, dataengine.SyncField(4, path))
@@ -134,14 +152,26 @@ func (d *HeroDao) markExpChange(path dataengine.SyncPath) {
 
 func (d *HeroDao) markLoginAtDirty() { d.markLoginAtChange(nil) }
 func (d *HeroDao) markLoginAtChange(path dataengine.SyncPath) {
-	if err := nest.MarkPersistPath(d, heroDaoFieldLoginAt, dataengine.SyncField(5, path)); err != nil {
+	var err error
+	if len(path) == 0 {
+		err = nest.MarkPersistField(d, heroDaoFieldLoginAt)
+	} else {
+		err = nest.MarkPersistPath(d, heroDaoFieldLoginAt, dataengine.SyncField(5, path))
+	}
+	if err != nil {
 		panic(fmt.Errorf("HeroDao: mark LoginAt persistence: %w", err))
 	}
 }
 
 func (d *HeroDao) markItemsDirty() { d.markItemsChange(nil) }
 func (d *HeroDao) markItemsChange(path dataengine.SyncPath) {
-	if err := nest.MarkPersistPath(d, heroDaoFieldItems, dataengine.SyncField(6, path)); err != nil {
+	var err error
+	if len(path) == 0 {
+		err = nest.MarkPersistField(d, heroDaoFieldItems)
+	} else {
+		err = nest.MarkPersistPath(d, heroDaoFieldItems, dataengine.SyncField(6, path))
+	}
+	if err != nil {
 		panic(fmt.Errorf("HeroDao: mark Items persistence: %w", err))
 	}
 	d.tracker.MarkSyncPath(heroDaoFieldItems, dataengine.SyncField(6, path))
@@ -149,7 +179,13 @@ func (d *HeroDao) markItemsChange(path dataengine.SyncPath) {
 
 func (d *HeroDao) markFriendsDirty() { d.markFriendsChange(nil) }
 func (d *HeroDao) markFriendsChange(path dataengine.SyncPath) {
-	if err := nest.MarkPersistPath(d, heroDaoFieldFriends, dataengine.SyncField(7, path)); err != nil {
+	var err error
+	if len(path) == 0 {
+		err = nest.MarkPersistField(d, heroDaoFieldFriends)
+	} else {
+		err = nest.MarkPersistPath(d, heroDaoFieldFriends, dataengine.SyncField(7, path))
+	}
+	if err != nil {
 		panic(fmt.Errorf("HeroDao: mark Friends persistence: %w", err))
 	}
 	d.tracker.MarkSyncPath(heroDaoFieldFriends, dataengine.SyncField(7, path))
@@ -157,7 +193,13 @@ func (d *HeroDao) markFriendsChange(path dataengine.SyncPath) {
 
 func (d *HeroDao) markPosDirty() { d.markPosChange(nil) }
 func (d *HeroDao) markPosChange(path dataengine.SyncPath) {
-	if err := nest.MarkPersistPath(d, heroDaoFieldPos, dataengine.SyncField(8, path)); err != nil {
+	var err error
+	if len(path) == 0 {
+		err = nest.MarkPersistField(d, heroDaoFieldPos)
+	} else {
+		err = nest.MarkPersistPath(d, heroDaoFieldPos, dataengine.SyncField(8, path))
+	}
+	if err != nil {
 		panic(fmt.Errorf("HeroDao: mark Pos persistence: %w", err))
 	}
 	d.tracker.MarkSyncPath(heroDaoFieldPos, dataengine.SyncField(8, path))
@@ -165,7 +207,13 @@ func (d *HeroDao) markPosChange(path dataengine.SyncPath) {
 
 func (d *HeroDao) markEquipsDirty() { d.markEquipsChange(nil) }
 func (d *HeroDao) markEquipsChange(path dataengine.SyncPath) {
-	if err := nest.MarkPersistPath(d, heroDaoFieldEquips, dataengine.SyncField(9, path)); err != nil {
+	var err error
+	if len(path) == 0 {
+		err = nest.MarkPersistField(d, heroDaoFieldEquips)
+	} else {
+		err = nest.MarkPersistPath(d, heroDaoFieldEquips, dataengine.SyncField(9, path))
+	}
+	if err != nil {
 		panic(fmt.Errorf("HeroDao: mark Equips persistence: %w", err))
 	}
 	d.tracker.MarkSyncPath(heroDaoFieldEquips, dataengine.SyncField(9, path))
@@ -173,7 +221,13 @@ func (d *HeroDao) markEquipsChange(path dataengine.SyncPath) {
 
 func (d *HeroDao) markSquadDirty() { d.markSquadChange(nil) }
 func (d *HeroDao) markSquadChange(path dataengine.SyncPath) {
-	if err := nest.MarkPersistPath(d, heroDaoFieldSquad, dataengine.SyncField(10, path)); err != nil {
+	var err error
+	if len(path) == 0 {
+		err = nest.MarkPersistField(d, heroDaoFieldSquad)
+	} else {
+		err = nest.MarkPersistPath(d, heroDaoFieldSquad, dataengine.SyncField(10, path))
+	}
+	if err != nil {
 		panic(fmt.Errorf("HeroDao: mark Squad persistence: %w", err))
 	}
 	d.tracker.MarkSyncPath(heroDaoFieldSquad, dataengine.SyncField(10, path))
@@ -181,7 +235,13 @@ func (d *HeroDao) markSquadChange(path dataengine.SyncPath) {
 
 func (d *HeroDao) markMountDirty() { d.markMountChange(nil) }
 func (d *HeroDao) markMountChange(path dataengine.SyncPath) {
-	if err := nest.MarkPersistPath(d, heroDaoFieldMount, dataengine.SyncField(11, path)); err != nil {
+	var err error
+	if len(path) == 0 {
+		err = nest.MarkPersistField(d, heroDaoFieldMount)
+	} else {
+		err = nest.MarkPersistPath(d, heroDaoFieldMount, dataengine.SyncField(11, path))
+	}
+	if err != nil {
 		panic(fmt.Errorf("HeroDao: mark Mount persistence: %w", err))
 	}
 	d.tracker.MarkSyncPath(heroDaoFieldMount, dataengine.SyncField(11, path))
@@ -874,6 +934,36 @@ func (d *HeroDao) persistChangeHasPath(change nest.PersistChange, field string) 
 }
 
 func (d *HeroDao) persistChangePathCovered(change nest.PersistChange, path string) bool {
+	if change.FullMask&heroDaoFieldName != 0 && (path == "name" || strings.HasPrefix(path, "name.")) {
+		return true
+	}
+	if change.FullMask&heroDaoFieldLevel != 0 && (path == "level" || strings.HasPrefix(path, "level.")) {
+		return true
+	}
+	if change.FullMask&heroDaoFieldExp != 0 && (path == "exp" || strings.HasPrefix(path, "exp.")) {
+		return true
+	}
+	if change.FullMask&heroDaoFieldLoginAt != 0 && (path == "login_at" || strings.HasPrefix(path, "login_at.")) {
+		return true
+	}
+	if change.FullMask&heroDaoFieldItems != 0 && (path == "items" || strings.HasPrefix(path, "items.")) {
+		return true
+	}
+	if change.FullMask&heroDaoFieldFriends != 0 && (path == "friends" || strings.HasPrefix(path, "friends.")) {
+		return true
+	}
+	if change.FullMask&heroDaoFieldPos != 0 && (path == "pos" || strings.HasPrefix(path, "pos.")) {
+		return true
+	}
+	if change.FullMask&heroDaoFieldEquips != 0 && (path == "equips" || strings.HasPrefix(path, "equips.")) {
+		return true
+	}
+	if change.FullMask&heroDaoFieldSquad != 0 && (path == "squad" || strings.HasPrefix(path, "squad.")) {
+		return true
+	}
+	if change.FullMask&heroDaoFieldMount != 0 && (path == "mount" || strings.HasPrefix(path, "mount.")) {
+		return true
+	}
 	for field := range change.FullFields {
 		prefix := field + "."
 		if path == field || len(path) > len(prefix) && path[:len(prefix)] == prefix {
@@ -885,11 +975,17 @@ func (d *HeroDao) persistChangePathCovered(change nest.PersistChange, path strin
 
 func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine.FieldPatch, error) {
 	set := make(map[string]any, len(change.Set)+len(change.FullFields))
-	unset := append([]string(nil), change.Unset...)
+	var unset []string
+	for _, path := range change.Unset {
+		if !d.persistChangePathCovered(change, path) {
+			unset = append(unset, path)
+		}
+	}
 	root := change.Paths.Root()
 	if change.Mask&heroDaoFieldName != 0 {
 		node := root.Child(dataengine.SyncStep{Field: 2})
 		_, full := change.FullFields["name"]
+		full = full || change.FullMask&heroDaoFieldName != 0
 		if !root.Full() && node != nil && !full {
 			d.appendNamePersist(set, &unset, "name", node)
 		} else {
@@ -899,6 +995,7 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 	if change.Mask&heroDaoFieldLevel != 0 {
 		node := root.Child(dataengine.SyncStep{Field: 3})
 		_, full := change.FullFields["level"]
+		full = full || change.FullMask&heroDaoFieldLevel != 0
 		if !root.Full() && node != nil && !full {
 			d.appendLevelPersist(set, &unset, "level", node)
 		} else {
@@ -908,6 +1005,7 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 	if change.Mask&heroDaoFieldExp != 0 {
 		node := root.Child(dataengine.SyncStep{Field: 4})
 		_, full := change.FullFields["exp"]
+		full = full || change.FullMask&heroDaoFieldExp != 0
 		if !root.Full() && node != nil && !full {
 			d.appendExpPersist(set, &unset, "exp", node)
 		} else {
@@ -917,6 +1015,7 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 	if change.Mask&heroDaoFieldLoginAt != 0 {
 		node := root.Child(dataengine.SyncStep{Field: 5})
 		_, full := change.FullFields["login_at"]
+		full = full || change.FullMask&heroDaoFieldLoginAt != 0
 		if !root.Full() && node != nil && !full {
 			d.appendLoginAtPersist(set, &unset, "login_at", node)
 		} else {
@@ -926,10 +1025,10 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 	if change.Mask&heroDaoFieldItems != 0 {
 		node := root.Child(dataengine.SyncStep{Field: 6})
 		_, full := change.FullFields["items"]
+		full = full || change.FullMask&heroDaoFieldItems != 0
 		if !root.Full() && node != nil && !full {
 			d.appendItemsPersist(set, &unset, "items", node)
 		} else {
-			_, full := change.FullFields["items"]
 			if full || !d.persistChangeHasPath(change, "items") {
 				set["items"] = d.heroDaoItemsRawMap()
 			}
@@ -938,6 +1037,7 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 	if change.Mask&heroDaoFieldFriends != 0 {
 		node := root.Child(dataengine.SyncStep{Field: 7})
 		_, full := change.FullFields["friends"]
+		full = full || change.FullMask&heroDaoFieldFriends != 0
 		if !root.Full() && node != nil && !full {
 			d.appendFriendsPersist(set, &unset, "friends", node)
 		} else {
@@ -947,6 +1047,7 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 	if change.Mask&heroDaoFieldPos != 0 {
 		node := root.Child(dataengine.SyncStep{Field: 8})
 		_, full := change.FullFields["pos"]
+		full = full || change.FullMask&heroDaoFieldPos != 0
 		if !root.Full() && node != nil && !full {
 			d.appendPosPersist(set, &unset, "pos", node)
 		} else {
@@ -956,10 +1057,10 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 	if change.Mask&heroDaoFieldEquips != 0 {
 		node := root.Child(dataengine.SyncStep{Field: 9})
 		_, full := change.FullFields["equips"]
+		full = full || change.FullMask&heroDaoFieldEquips != 0
 		if !root.Full() && node != nil && !full {
 			d.appendEquipsPersist(set, &unset, "equips", node)
 		} else {
-			_, full := change.FullFields["equips"]
 			if full || !d.persistChangeHasPath(change, "equips") {
 				set["equips"] = daoMapDocs(d.heroDaoEquipsRawMap(), equipInfoPtrBSONDoc)
 			}
@@ -968,6 +1069,7 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 	if change.Mask&heroDaoFieldSquad != 0 {
 		node := root.Child(dataengine.SyncStep{Field: 10})
 		_, full := change.FullFields["squad"]
+		full = full || change.FullMask&heroDaoFieldSquad != 0
 		if !root.Full() && node != nil && !full {
 			d.appendSquadPersist(set, &unset, "squad", node)
 		} else {
@@ -977,6 +1079,7 @@ func (d *HeroDao) marshalPersistPatchBSON(change nest.PersistChange) (dataengine
 	if change.Mask&heroDaoFieldMount != 0 {
 		node := root.Child(dataengine.SyncStep{Field: 11})
 		_, full := change.FullFields["mount"]
+		full = full || change.FullMask&heroDaoFieldMount != 0
 		if !root.Full() && node != nil && !full {
 			d.appendMountPersist(set, &unset, "mount", node)
 		} else {

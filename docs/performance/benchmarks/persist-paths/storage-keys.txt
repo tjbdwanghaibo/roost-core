@@ -1,0 +1,25 @@
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkStorageKeyEncoding/long-10         	  310521	      1131 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/long-10         	  321493	      1121 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/long-10         	  322298	      1125 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/long-10         	  325978	      1123 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/long-10         	  323066	      1125 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/long-10         	  322912	      1124 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/long-10         	  322220	      1123 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/long-10         	  321916	      1120 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/long-10         	  321138	      1136 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/long-10         	  315489	      1134 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  323098	      1131 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  325501	      1118 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  328944	      1113 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  328759	      1173 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  325539	      1221 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  310024	      1205 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  311324	      1145 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  326301	      1126 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  323764	      1120 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  327092	      1120 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+PASS

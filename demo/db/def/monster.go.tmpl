@@ -23,18 +23,18 @@ package dbdef
 type MonsterDao struct {
 	// Template is which row of the spawn table this monster came from; a
 	// client needs it to know what to draw.
-	Template int32 `bson:"template" dao:"nopersist,sync"`
-	PosX     int64 `bson:"pos_x" dao:"nopersist,sync"`
-	PosY     int64 `bson:"pos_y" dao:"nopersist,sync"`
-	HP       int64 `bson:"hp" dao:"nopersist,sync"`
+	Template int32 `dao:"nopersist,sync" store:"template"`
+	PosX     int64 `dao:"nopersist,sync" store:"pos_x"`
+	PosY     int64 `dao:"nopersist,sync" store:"pos_y"`
+	HP       int64 `dao:"nopersist,sync" store:"hp"`
 	// Facing is the direction of the last step (movement.Facing), drawn by
 	// the client like the player's.
-	Facing int32 `bson:"facing" dao:"nopersist,sync"`
+	Facing int32 `dao:"nopersist,sync" store:"facing"`
 	// SceneID is which scene the monster is in (movement.Fields).
-	SceneID int64 `bson:"scene_id" dao:"nopersist,sync"`
+	SceneID int64 `dao:"nopersist,sync" store:"scene_id"`
 	// Rooted mirrors the actor.Rooted state bit (a root buff is on), so a
 	// client can draw it: the state set itself is not packed, the DAO is.
 	// Written by the state watcher in the same transaction as the buff, so
 	// it rolls back with it.
-	Rooted bool `bson:"rooted" dao:"nopersist,sync"`
+	Rooted bool `dao:"nopersist,sync" store:"rooted"`
 }

@@ -459,9 +459,9 @@ func addTimerDaoFields(root string, names timerNames) (string, []byte, []byte, e
 		fields := fmt.Sprintf(`
 	// %[1]s 是 %[2]sComponent 的定时器节点（roost add timer 加入）：节点 ID -> 节点。这份 map 就是全部期限，
 	// 增删改都在触发它的 Nest 事务里经组件写回，随事务提交 / 回滚；没有别的存储。
-	%[1]s map[int64]*%[3]s `+"`bson:\"%[4]s\" dao:\"persist,map=fast\"`"+`
+	%[1]s map[int64]*%[3]s `+"`store:\"%[4]s\" dao:\"persist,map=fast\"`"+`
 	// %[5]s 是分配过的最大节点 ID，持久化：重启后不会把已经交出去的 ID 再分配一次。
-	%[5]s int64 `+"`bson:\"%[6]s\" dao:\"persist\"`"+`
+	%[5]s int64 `+"`store:\"%[6]s\" dao:\"persist\"`"+`
 `, names.MapField, names.CompType, names.Node, names.MapKey, names.SeedField, names.SeedKey)
 		edited := append(append(append([]byte(nil), raw[:closing]...), []byte(fields)...), raw[closing:]...)
 		formatted, err := format.Source(edited)
@@ -539,14 +539,14 @@ package dbdef
 // infra/base/timer.Node 去掉只在内存里的部分（堆下标、回调）。回调不能存，类型号就是重启后找回回调的依据。
 // 期限按毫秒存：组件按毫秒取业务时间，重建前后的触发顺序一致。
 type %[2]s struct {
-	Type int32 `+"`bson:\"type\"`"+`
+	Type int32 `+"`store:\"type\"`"+`
 	// Priority 只在期限相同时起作用：小的先触发，相同时按登记顺序（节点 ID）。
-	Priority     int32  `+"`bson:\"priority\"`"+`
-	Param1       int64  `+"`bson:\"param1\"`"+`
-	Param2       int64  `+"`bson:\"param2\"`"+`
-	Payload      string `+"`bson:\"payload,omitempty\"`"+`
-	EndUnixMilli int64  `+"`bson:\"end_unix_milli\"`"+`
-	DelayMillis  int64  `+"`bson:\"delay_millis\"`"+`
+	Priority     int32  `+"`store:\"priority\"`"+`
+	Param1       int64  `+"`store:\"param1\"`"+`
+	Param2       int64  `+"`store:\"param2\"`"+`
+	Payload      string `+"`store:\"payload,omitempty\"`"+`
+	EndUnixMilli int64  `+"`store:\"end_unix_milli\"`"+`
+	DelayMillis  int64  `+"`store:\"delay_millis\"`"+`
 }
 `, generatedHeader, n.Node, n.EntityType, n.CompType)
 }

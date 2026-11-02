@@ -14,7 +14,7 @@ func TestDaoSchemaVersionComesFromTheMarker(t *testing.T) {
 
 //roost:dao coll=players db=game schema=3
 type PlayerDao struct {
-	Name string
+	Name string ` + "`" + `store:"name"` + "`" + `
 }
 `
 	if err := os.WriteFile(filepath.Join(dir, "player.go"), []byte(source), 0o644); err != nil {
@@ -41,7 +41,7 @@ func TestDaoSchemaVersionDefaultsToOne(t *testing.T) {
 
 //roost:dao coll=players db=game
 type PlayerDao struct {
-	Name string
+	Name string ` + "`" + `store:"name"` + "`" + `
 }
 `
 	if err := os.WriteFile(filepath.Join(dir, "player.go"), []byte(source), 0o644); err != nil {

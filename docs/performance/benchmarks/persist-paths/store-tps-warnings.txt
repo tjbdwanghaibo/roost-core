@@ -1,0 +1,43 @@
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=138.249125ms threshold=100ms
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=138.227417ms threshold=100ms
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=138.008625ms threshold=100ms
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=137.955833ms threshold=100ms
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=138.161833ms threshold=100ms
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=138.171375ms threshold=100ms
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN slow dispatch title=nest handler=pressure_update type=Multi key=31128324 tid=0 tids=2 groups=0 cost_ms=273 cost=273.211875ms result=ok cost_pool=false remote=false
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN slow dispatch title=nest handler=pressure_update type=Multi key=31130372 tid=0 tids=2 groups=0 cost_ms=273 cost=273.292792ms result=ok cost_pool=false remote=false
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=137.931208ms threshold=100ms
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN slow dispatch trace title=nest handler=pressure_update type=Multi key=31134468 cost_ms=200 cost=200.41875ms result=running msg_info="map[context_valid:true cost_pool:false groups:[] groups_count:0 handler:pressure_update has_ret_chan:true key:31134468 msg:Msg{Name:pressure_update,Type:Multi,Tids:[31134468,31135492]} param_samples:[] param_types:[] params_count:0 ref_count:1 remote:false tid:0 tids:[31134468 31135492] tids_count:2 trace_enabled:false trace_id: trace_reason: trace_tags:map[] type:Multi]" suppressed_since_last_trace=0
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN slow dispatch title=nest handler=pressure_update type=Multi key=31126276 tid=0 tids=2 groups=0 cost_ms=230 cost=230.928459ms result=ok cost_pool=false remote=false
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN slow dispatch title=nest handler=pressure_update type=Multi key=31138564 tid=0 tids=2 groups=0 cost_ms=272 cost=272.895166ms result=ok cost_pool=false remote=false
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=138.003833ms threshold=100ms
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN slow dispatch title=nest handler=pressure_update type=Multi key=31140612 tid=0 tids=2 groups=0 cost_ms=405 cost=405.250667ms result=ok cost_pool=false remote=false
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN slow dispatch title=nest handler=pressure_update type=Multi key=31136516 tid=0 tids=2 groups=0 cost_ms=471 cost=471.303917ms result=ok cost_pool=false remote=false
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=181.477333ms threshold=100ms
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=181.046ms threshold=100ms
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN slow dispatch title=nest handler=pressure_update type=Multi key=31134468 tid=0 tids=2 groups=0 cost_ms=231 cost=231.068334ms result=ok cost_pool=false remote=false
+run1/short-strict-6000: 2026/11/02 14:17:46 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=157.2375ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=132.318458ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=134.319292ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=134.29075ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=134.420459ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=134.280083ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=134.296084ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=133.859542ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=134.177ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=136.520167ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=176.1125ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=177.21375ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=177.24525ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=177.0165ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=176.051333ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=176.222916ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:42 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=136.70525ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=104.661541ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=104.318166ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=104.637709ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=104.514625ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=104.738792ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=104.787042ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=104.297666ms threshold=100ms
+steady-strict/after-strict-1000: 2026/11/02 14:30:43 WARN nest handler held entity locks beyond threshold handler=pressure_update hold=125.876834ms threshold=100ms

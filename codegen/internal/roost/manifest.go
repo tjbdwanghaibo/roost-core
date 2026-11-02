@@ -26,6 +26,7 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
+// v1.40.0：轻量整字段登记使用 nest.MarkPersistField 与 PersistChange.FullMask。
 // v1.39.0：递归 BSON 持久化生成物使用 nest.MarkPersistPath、PersistChange.Paths 与
 // SyncChange.ReplacementCount；新生成物配 v1.38.0 实编因缺少这些 API 失败。
 // v1.38.0：递归 PB 增量生成物依赖 dataengine.SyncPath / SyncChange / Tracker.ReadSyncChanges，
@@ -44,7 +45,7 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // wiring/selfsync、entitytimer）同样包含在内，不能接入更早的 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 var minimumVersions = VersionSpec{
-	Core: "v1.39.0",
+	Core: "v1.40.0",
 }
 
 type Manifest struct {

@@ -44,8 +44,8 @@ func TestParseRejectsMarkerBindingMultipleStructs(t *testing.T) {
 
 //roost:dao coll=heroes db=game
 type (
-	AlphaDao struct{ Name string }
-	BetaDao  struct{ Name string }
+	AlphaDao struct{ Name string `+"`"+`store:"name"`+"`"+` }
+	BetaDao  struct{ Name string `+"`"+`store:"name"`+"`"+` }
 )
 `)
 	if err == nil || !strings.Contains(err.Error(), "binds to multiple structs") {
@@ -63,7 +63,7 @@ func TestRunSweepsOrphansWhenAllDefinitionsRemoved(t *testing.T) {
 
 //roost:dao coll=heroes db=game
 type HeroDao struct {
-	Name string
+	Name string `+"`"+`store:"name"`+"`"+`
 }
 `), 0o644); err != nil {
 		t.Fatal(err)
@@ -92,7 +92,7 @@ func TestParseAcceptsMarkerAboveDocComment(t *testing.T) {
 // It spans several doc lines to prove the distance rule
 // no longer breaks on documentation.
 type HeroDao struct {
-	Name string
+	Name string `+"`"+`store:"name"`+"`"+`
 }
 `)
 	if err != nil {
@@ -108,7 +108,7 @@ func TestParseRejectsMarkerWithoutParameters(t *testing.T) {
 
 //roost:dao
 type HeroDao struct {
-	Name string
+	Name string `+"`"+`store:"name"`+"`"+`
 }
 `)
 	if err == nil || !strings.Contains(err.Error(), "missing parameters") {
@@ -121,7 +121,7 @@ func TestParseRejectsMarkerWithoutRequiredParams(t *testing.T) {
 
 //roost:dao coll=heroes
 type HeroDao struct {
-	Name string
+	Name string `+"`"+`store:"name"`+"`"+`
 }
 `)
 	if err == nil || !strings.Contains(err.Error(), "requires coll= and db=") {
@@ -161,10 +161,10 @@ func TestParseAcceptsExplicitTagIntents(t *testing.T) {
 
 //roost:dao coll=heroes db=game
 type HeroDao struct {
-	A int64            `+"`dao:\"persist\"`"+`
-	B int64            `+"`dao:\"nopersist,sync\"`"+`
-	C map[int64]int32  `+"`dao:\"persist,sync,map=fast\"`"+`
-	D int64            `+"`dao:\"-\"`"+`
+	A int64            `+"`"+`dao:"persist" store:"a"`+"`"+`
+	B int64            `+"`"+`dao:"nopersist,sync" store:"b"`+"`"+`
+	C map[int64]int32  `+"`"+`dao:"persist,sync,map=fast" store:"c"`+"`"+`
+	D int64            `+"`"+`dao:"-"`+"`"+`
 }
 `)
 	if err != nil {
@@ -198,7 +198,7 @@ func TestRunRemovesOrphansAndCollapsesDaoSuffix(t *testing.T) {
 
 //roost:dao coll=heroes db=game
 type HeroDao struct {
-	Name string
+	Name string `+"`"+`store:"name"`+"`"+`
 }
 `)
 	// A stale generated file from a renamed definition, and a hand-written
@@ -227,7 +227,7 @@ type HeroDao struct {
 
 //roost:dao coll=heroes db=game
 type ChampionDao struct {
-	Name string
+	Name string `+"`"+`store:"name"`+"`"+`
 }
 `)
 	if err := Run([]string{"-def", defDir, "-out", outDir, "-pkg", "out"}, os.Stdout); err != nil {
@@ -273,7 +273,13 @@ func TestParseRefusesEachMalformedRedisMarkerAndConflictingDaoTag(t *testing.T) 
 		{"redisdao missing key and prefix", "package def\n\n//roost:redisdao mode=ref-hmap\ntype HeroCache struct {\n\tName string\n}\n", "requires key= and prefix="},
 		{"redisdao binding a group", "package def\n\n//roost:redisdao mode=ref-hmap key=id prefix=hero\ntype (\n\tAlphaCache struct{ Name string }\n\tBetaCache  struct{ Name string }\n)\n", "binds to multiple structs"},
 		{"orphan redisdao", "package def\n\n//roost:redisdao mode=ref-hmap key=id prefix=hero\n\nvar unrelated = 1\n\ntype HeroCache struct {\n\tName string\n}\n", "not attached to a struct"},
-		{"dao tag sync and nosync", "package def\n\n//roost:dao coll=heroes db=game\ntype HeroDao struct {\n\tName string `dao:\"sync,nosync\"`\n}\n", "states both sync and nosync"},
+		{"dao tag sync and nosync", `package def
+
+//roost:dao coll=heroes db=game
+type HeroDao struct {
+	Name string ` + "`" + `dao:"sync,nosync" store:"name"` + "`" + `
+}
+`, "states both sync and nosync"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -416,29 +422,29 @@ func TestGenerationAcceptsTheShapesTheAccessorsCopyOrOwn(t *testing.T) {
 
 //roost:dao coll=heroes db=game
 type HeroDao struct {
-	Name     string
-	Blob     []byte
-	Ids      []int64
-	Counts   map[int32]int64
-	Receipts map[string][]byte
-	Lists    map[int32][]int64
-	Main     *Gear
-	Bag      []*Gear
-	Slots    map[int32]*Gear
+	Name     string `+"`"+`store:"name"`+"`"+`
+	Blob     []byte `+"`"+`store:"blob"`+"`"+`
+	Ids      []int64 `+"`"+`store:"ids"`+"`"+`
+	Counts   map[int32]int64 `+"`"+`store:"counts"`+"`"+`
+	Receipts map[string][]byte `+"`"+`store:"receipts"`+"`"+`
+	Lists    map[int32][]int64 `+"`"+`store:"lists"`+"`"+`
+	Main     *Gear `+"`"+`store:"main"`+"`"+`
+	Bag      []*Gear `+"`"+`store:"bag"`+"`"+`
+	Slots    map[int32]*Gear `+"`"+`store:"slots"`+"`"+`
 }
 
 type Gear struct {
-	Level  int32
-	Raw    []byte
-	Tags   []string
-	Marks  map[int32][]byte
-	Socket *Gem
-	Gems   []*Gem
-	ByID   map[int64]*Gem
+	Level  int32 `+"`"+`store:"level"`+"`"+`
+	Raw    []byte `+"`"+`store:"raw"`+"`"+`
+	Tags   []string `+"`"+`store:"tags"`+"`"+`
+	Marks  map[int32][]byte `+"`"+`store:"marks"`+"`"+`
+	Socket *Gem `+"`"+`store:"socket"`+"`"+`
+	Gems   []*Gem `+"`"+`store:"gems"`+"`"+`
+	ByID   map[int64]*Gem `+"`"+`store:"by_id"`+"`"+`
 }
 
 type Gem struct {
-	Kind int32
+	Kind int32 `+"`"+`store:"kind"`+"`"+`
 }
 `)
 	for _, name := range []string{"gen_hero_dao.go", "gen_gear_nested.go", "gen_gem_nested.go"} {

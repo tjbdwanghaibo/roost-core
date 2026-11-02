@@ -98,7 +98,13 @@ var typoCases = []typoCase{
 	{kind: "nest", file: "grant.go", line: 3, typo: "durabilty", run: runNest,
 		source: "package handler\n\n//roost:nest rollback=undo durabilty=strict\nfunc handlerGrant(p IPlayerEntity, orderID string) (bool, error) {\n\treturn true, nil\n}\n"},
 	{kind: "dao", file: "player.go", line: 3, typo: "dbscop", run: runDao,
-		source: "package def\n\n//roost:dao coll=players db=game dbscop=sid\ntype PlayerDao struct {\n\tName string `dao:\"persist\"`\n}\n"},
+		source: `package def
+
+//roost:dao coll=players db=game dbscop=sid
+type PlayerDao struct {
+	Name string ` + "`" + `dao:"persist" store:"name"` + "`" + `
+}
+`},
 	{kind: "redisdao", file: "hero.go", line: 3, typo: "tll", run: runDao,
 		source: "package def\n\n//roost:redisdao mode=ref-hmap key=Name prefix=hero tll=1h\ntype HeroCache struct {\n\tName string\n}\n"},
 	{kind: "attribute", file: "profile.go", line: 3, typo: "mx", run: runAttribute,

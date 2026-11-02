@@ -2,18 +2,18 @@ package def
 
 //roost:dao coll=alliances db=game dbscope=global
 type AllianceDao struct {
-	Name     string            `bson:"name" remoteview:"public,member"`
-	Level    int32             `bson:"level" remoteview:"public,member"`
-	Bonus    int64             `bson:"bonus" remoteview:"member"`
-	Treasury int64             `bson:"treasury"`
-	Tags     []string          `bson:"tags" remoteview:"public"`
-	Members  map[int64]*Member `bson:"members" remoteview:"member"`
-	Profile  *Member           `bson:"profile" remoteview:"member"`
-	Blobs    map[string][]byte `bson:"blobs" remoteview:"member"`
+	Name     string            `remoteview:"public,member" store:"name"`
+	Level    int32             `remoteview:"public,member" store:"level"`
+	Bonus    int64             `remoteview:"member" store:"bonus"`
+	Treasury int64             `store:"treasury"`
+	Tags     []string          `remoteview:"public" store:"tags"`
+	Members  map[int64]*Member `remoteview:"member" store:"members"`
+	Profile  *Member           `remoteview:"member" store:"profile"`
+	Blobs    map[string][]byte `remoteview:"member" store:"blobs"`
 }
 type Member struct {
-	Name      string           `bson:"name"`
-	Scores    []int64          `bson:"scores"`
-	Buffs     map[string]int64 `bson:"buffs"`
-	Transient string           `bson:"transient" dao:"nopersist,nosync"`
+	Name      string           `store:"name"`
+	Scores    []int64          `store:"scores"`
+	Buffs     map[string]int64 `store:"buffs"`
+	Transient string           `dao:"nopersist,nosync" store:"transient"`
 }

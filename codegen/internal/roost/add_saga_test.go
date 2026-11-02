@@ -179,7 +179,7 @@ func TestAddSagaNativeKeepsStepReceiptsOnTheEntity(t *testing.T) {
 		t.Fatalf("add saga -native: %v\n%s", err, out.String())
 	}
 	dao := readProjectFile(t, root, "db/def/player.go")
-	if !strings.Contains(dao, "SagaReceipts map[string][]byte `bson:\"saga_receipts\" dao:\"persist\"`") {
+	if !strings.Contains(dao, "SagaReceipts map[string][]byte `store:\"saga_receipts\" dao:\"persist\"`") {
 		t.Fatalf("the Player DAO has no receipts field:\n%s", dao)
 	}
 	receipts := readProjectFile(t, root, "game/entities/player/saga_receipts.go")

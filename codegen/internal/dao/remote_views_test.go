@@ -84,7 +84,7 @@ func TestRemoteViewGeneratedConsumer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	definition = bytes.Replace(definition, []byte("type AllianceDao struct {"), []byte("type AllianceDao struct {\n Added int64 `remoteview:\"public\"`"), 1)
+	definition = bytes.Replace(definition, []byte("type AllianceDao struct {"), []byte("type AllianceDao struct {\n Added int64 `store:\"added\" remoteview:\"public\"`"), 1)
 	if err := os.WriteFile(defPath, definition, 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -136,15 +136,15 @@ func TestOldViewSchemaRejected(t *testing.T){
 
 func TestRemoteViewDeclarationsFailClosed(t *testing.T) {
 	cases := []struct{ name, source, want string }{
-		{"empty", "//roost:dao coll=a db=game\ntype A struct{ X int `remoteview:\"\"` }", "invalid remoteview"},
-		{"duplicate", "//roost:dao coll=a db=game\ntype A struct{ X int `remoteview:\"public,public\"` }", "duplicate remoteview"},
-		{"skipped", "//roost:dao coll=a db=game\ntype A struct{ X int `remoteview:\"public\" dao:\"-\"` }", "cannot be combined"},
-		{"nonpersistent", "//roost:dao coll=a db=game\ntype A struct{ X int `remoteview:\"public\" dao:\"nopersist,sync\"` }", "persisted field"},
-		{"unexported", "//roost:dao coll=a db=game\ntype A struct{ x int `remoteview:\"public\"` }", "exported named field"},
-		{"multiple names", "//roost:dao coll=a db=game\ntype A struct{ X,Y int `remoteview:\"public\"` }", "one exported"},
-		{"recursive", "//roost:dao coll=a db=game\ntype A struct{ X *Node `remoteview:\"public\"` }\n\ntype Node struct{ Next *Node }", "recursive nested"},
-		{"nested tag", "//roost:dao coll=a db=game\ntype A struct{ X *Node `remoteview:\"public\"` }\n\ntype Node struct{ X int `remoteview:\"public\"` }", "top-level"},
-		{"unknown type", "//roost:dao coll=a db=game\ntype A struct{ X external.Value `remoteview:\"public\" dao:\"persist,nosync\"` }", "unsupported remoteview"},
+		{"empty", "//roost:dao coll=a db=game\ntype A struct{ X int `store:\"x\" remoteview:\"\"` }", "invalid remoteview"},
+		{"duplicate", "//roost:dao coll=a db=game\ntype A struct{ X int `store:\"x\" remoteview:\"public,public\"` }", "duplicate remoteview"},
+		{"skipped", "//roost:dao coll=a db=game\ntype A struct{ X int `store:\"x\" remoteview:\"public\" dao:\"-\"` }", "cannot be combined"},
+		{"nonpersistent", "//roost:dao coll=a db=game\ntype A struct{ X int `store:\"x\" remoteview:\"public\" dao:\"nopersist,sync\"` }", "persisted field"},
+		{"unexported", "//roost:dao coll=a db=game\ntype A struct{ x int `store:\"x\" remoteview:\"public\"` }", "exported named field"},
+		{"multiple names", "//roost:dao coll=a db=game\ntype A struct{ X,Y int `store:\"x\" remoteview:\"public\"` }", "one exported"},
+		{"recursive", "//roost:dao coll=a db=game\ntype A struct{ X *Node `store:\"x\" remoteview:\"public\"` }\n\ntype Node struct{ Next *Node `store:\"next\"` }", "recursive nested"},
+		{"nested tag", "//roost:dao coll=a db=game\ntype A struct{ X *Node `store:\"x\" remoteview:\"public\"` }\n\ntype Node struct{ X int `store:\"x\" remoteview:\"public\"` }", "top-level"},
+		{"unknown type", "//roost:dao coll=a db=game\ntype A struct{ X external.Value `store:\"x\" remoteview:\"public\" dao:\"persist,nosync\"` }", "unsupported remoteview"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

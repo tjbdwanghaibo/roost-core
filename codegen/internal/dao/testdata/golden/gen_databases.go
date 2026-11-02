@@ -8,7 +8,7 @@ import "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 // 冻结的映射表，投影、冷加载、Remote 存储与运维工具都经它换算。业务代码要直接打开 DAO 所在的库时，从
 // mods.ModDataEngineDatabases 取 *dataengine.DatabaseMap 再 Physical(逻辑名)，不要把这些常量直接当库名。
 const (
-	// DatabaseGame 是 HeroDao、VarietyDao 的逻辑库（含按 sid 分库的 DAO，物理名再加 _<sid>）。
+	// DatabaseGame 是 HeroDao、LongKeysDao、ShortKeysDao、VarietyDao 的逻辑库（含按 sid 分库的 DAO，物理名再加 _<sid>）。
 	DatabaseGame = "game"
 )
 

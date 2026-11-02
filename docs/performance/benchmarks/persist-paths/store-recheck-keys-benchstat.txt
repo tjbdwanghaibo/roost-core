@@ -1,0 +1,27 @@
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+                            │ /Users/whb/roost/roost-core/docs/performance/benchmarks/persist-paths/store-recheck-keys.txt │
+                            │                                            sec/op                                            │
+StorageKeyEncoding/long-10                                                                                     1.135µ ± 2%
+StorageKeyEncoding/short-10                                                                                    1.115µ ± 1%
+geomean                                                                                                        1.125µ
+
+                            │ /Users/whb/roost/roost-core/docs/performance/benchmarks/persist-paths/store-recheck-keys.txt │
+                            │                                          bson-B/op                                           │
+StorageKeyEncoding/long-10                                                                                      267.0 ± 0%
+StorageKeyEncoding/short-10                                                                                     172.0 ± 0%
+geomean                                                                                                         214.3
+
+                            │ /Users/whb/roost/roost-core/docs/performance/benchmarks/persist-paths/store-recheck-keys.txt │
+                            │                                             B/op                                             │
+StorageKeyEncoding/long-10                                                                                      945.0 ± 0%
+StorageKeyEncoding/short-10                                                                                     833.0 ± 0%
+geomean                                                                                                         887.2
+
+                            │ /Users/whb/roost/roost-core/docs/performance/benchmarks/persist-paths/store-recheck-keys.txt │
+                            │                                          allocs/op                                           │
+StorageKeyEncoding/long-10                                                                                      17.00 ± 0%
+StorageKeyEncoding/short-10                                                                                     17.00 ± 0%
+geomean                                                                                                         17.00

@@ -1,0 +1,70 @@
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkStorageKeyEncoding/long-10         	  320515	      1104 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  327936	      1101 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkStorageKeyEncoding/long-10         	  309483	      1118 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  333901	      1100 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkStorageKeyEncoding/long-10         	  309458	      1130 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  329107	      1114 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkStorageKeyEncoding/long-10         	  309492	      1129 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  324915	      1116 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkStorageKeyEncoding/long-10         	  308557	      1142 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  319320	      1121 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkStorageKeyEncoding/long-10         	  309499	      1135 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  327308	      1117 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkStorageKeyEncoding/long-10         	  304968	      1136 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  322674	      1112 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkStorageKeyEncoding/long-10         	  306631	      1139 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  326842	      1107 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkStorageKeyEncoding/long-10         	  307219	      1138 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  316646	      1119 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkStorageKeyEncoding/long-10         	  306949	      1139 ns/op	       267.0 bson-B/op	     945 B/op	      17 allocs/op
+BenchmarkStorageKeyEncoding/short-10        	  319303	      1120 ns/op	       172.0 bson-B/op	     833 B/op	      17 allocs/op
+PASS

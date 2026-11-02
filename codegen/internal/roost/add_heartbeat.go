@@ -611,7 +611,7 @@ func addTimeDomainDaoFields(root, daoType string) (string, []byte, []byte, error
 		text.WriteString("\n\t// 场景时间域（roost add timedomain 加入，gameplay/timedomain.State）：域时间 = AnchorDomain + (业务时间 − AnchorBusiness)\n")
 		text.WriteString("\t// × Rate。随同步下发给客户端外推域时间；nopersist：随进程结束的副本不落库，要持久的场景改成 persist。\n")
 		for _, field := range timeDomainFields {
-			fmt.Fprintf(&text, "\t%s %s `bson:\"%s\" dao:\"nopersist,sync\"`\n", field.name, field.typ, field.key)
+			fmt.Fprintf(&text, "\t%s %s `store:\"%s\" dao:\"nopersist,sync\"`\n", field.name, field.typ, field.key)
 		}
 		closing := fset.Position(structure.Fields.Closing).Offset
 		edited := append(append(append([]byte(nil), raw[:closing]...), []byte(text.String())...), raw[closing:]...)

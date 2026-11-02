@@ -19,7 +19,7 @@ package dbdef
 //
 //roost:dao nocoll
 type SceneDao struct {
-	TimeAnchorBusiness int64   `bson:"time_anchor_business" dao:"nopersist,sync"`
-	TimeAnchorDomain   int64   `bson:"time_anchor_domain" dao:"nopersist,sync"`
-	TimeRate           float64 `bson:"time_rate" dao:"nopersist,sync"`
+	TimeAnchorBusiness int64   `dao:"nopersist,sync" store:"time_anchor_business"`
+	TimeAnchorDomain   int64   `dao:"nopersist,sync" store:"time_anchor_domain"`
+	TimeRate           float64 `dao:"nopersist,sync" store:"time_rate"`
 }

@@ -19,11 +19,11 @@ const ghostDaoSource = `package def
 //
 //roost:dao nocoll
 type GhostDao struct {
-	PosX  int64            ` + "`bson:\"pos_x\" dao:\"nopersist,sync\"`" + `
-	PosY  int64            ` + "`bson:\"pos_y\" dao:\"nopersist,sync\"`" + `
-	Buffs map[int32]int64  ` + "`bson:\"buffs\" dao:\"nopersist,sync\"`" + `
-	Scratch int64          ` + "`dao:\"nopersist,nosync\"`" + `
-	Ignored int64          ` + "`dao:\"-\"`" + `
+	PosX  int64            ` + "`" + `dao:"nopersist,sync" store:"pos_x"` + "`" + `
+	PosY  int64            ` + "`" + `dao:"nopersist,sync" store:"pos_y"` + "`" + `
+	Buffs map[int32]int64  ` + "`" + `dao:"nopersist,sync" store:"buffs"` + "`" + `
+	Scratch int64          ` + "`" + `dao:"nopersist,nosync" store:"scratch"` + "`" + `
+	Ignored int64          ` + "`" + `dao:"-"` + "`" + `
 }
 `
 
@@ -106,10 +106,10 @@ func TestANoCollectionDaoWithPersistentFieldsIsRefusedByName(t *testing.T) {
 
 //roost:dao nocoll
 type GhostDao struct {
-	PosX  int64 `+"`dao:\"nopersist,sync\"`"+`
-	HP    int64
-	Level int32 `+"`dao:\"persist\"`"+`
-	Skip  int64 `+"`dao:\"-\"`"+`
+	PosX  int64 `+"`"+`dao:"nopersist,sync" store:"pos_x"`+"`"+`
+	HP    int64 `+"`"+`store:"hp"`+"`"+`
+	Level int32 `+"`"+`dao:"persist" store:"level"`+"`"+`
+	Skip  int64 `+"`"+`dao:"-"`+"`"+`
 }
 `)
 	if err == nil {
@@ -158,7 +158,7 @@ func TestTheNoCollectionMarkerRefusesContradictions(t *testing.T) {
 
 // 旧写法逐字不变：没有 nocoll 的定义解析出 NoCollection=false，仍有集合与库名。
 func TestACollectionDaoIsUnchangedByTheNoCollectionFlag(t *testing.T) {
-	defs, err := parseSource(t, "package def\n\n//roost:dao coll=heroes db=game\ntype HeroDao struct {\n\tName string\n}\n")
+	defs, err := parseSource(t, "package def\n\n//roost:dao coll=heroes db=game\ntype HeroDao struct {\n\tName string `store:\"name\"`\n}\n")
 	if err != nil {
 		t.Fatal(err)
 	}

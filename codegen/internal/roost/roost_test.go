@@ -560,7 +560,7 @@ func TestExplicitFirstBusinessWorkflowGeneratesAccessLifecycleAndEndpoint(t *tes
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
-			raw = bytes.Replace(raw, []byte("\t// Add domain fields here. Example:\n"), []byte("\tName string `bson:\"name\" dao:\"persist,sync\"`\n\t// Add domain fields here. Example:\n"), 1)
+			raw = bytes.Replace(raw, []byte("\t// Add domain fields here. Example:\n"), []byte("\tName string `store:\"name\" dao:\"persist,sync\"`\n\t// Add domain fields here. Example:\n"), 1)
 			if writeErr := os.WriteFile(path, raw, 0o644); writeErr != nil {
 				t.Fatal(writeErr)
 			}
@@ -1033,7 +1033,7 @@ func TestProjectNextRejectsEmptyDAOAndComponentSkeleton(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw = bytes.Replace(raw, []byte("\t// Add domain fields here. Example:\n"), []byte("\tName string `bson:\"name\" dao:\"persist,sync\"`\n\t// Add domain fields here. Example:\n"), 1)
+	raw = bytes.Replace(raw, []byte("\t// Add domain fields here. Example:\n"), []byte("\tName string `store:\"name\" dao:\"persist,sync\"`\n\t// Add domain fields here. Example:\n"), 1)
 	if err := os.WriteFile(daoPath, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}

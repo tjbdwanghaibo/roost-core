@@ -1,0 +1,90 @@
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistPaths/n1000/sparse-10         	   43939	      4557 ns/op	        38.00 bson-B/op	    7893 B/op	     101 allocs/op
+BenchmarkPersistPaths/n1000/nested-10         	   38925	      6136 ns/op	        51.00 bson-B/op	   13229 B/op	     150 allocs/op
+BenchmarkPersistPaths/n1000/dense-10          	     159	   1439447 ns/op	     21811 bson-B/op	 2066507 B/op	   18124 allocs/op
+BenchmarkPersistScalarDAOs-10                 	   26424	      9065 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistPaths/n1000/sparse-10         	   50545	      4695 ns/op	        38.00 bson-B/op	    7893 B/op	     101 allocs/op
+BenchmarkPersistPaths/n1000/nested-10         	   38462	      6180 ns/op	        51.00 bson-B/op	   13229 B/op	     150 allocs/op
+BenchmarkPersistPaths/n1000/dense-10          	     174	   1367310 ns/op	     21811 bson-B/op	 2063138 B/op	   18124 allocs/op
+BenchmarkPersistScalarDAOs-10                 	   26380	      9146 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistPaths/n1000/sparse-10         	   57909	      4089 ns/op	        38.00 bson-B/op	    7894 B/op	     101 allocs/op
+BenchmarkPersistPaths/n1000/nested-10         	   38210	      6240 ns/op	        51.00 bson-B/op	   13229 B/op	     150 allocs/op
+BenchmarkPersistPaths/n1000/dense-10          	     172	   1376398 ns/op	     21811 bson-B/op	 2066882 B/op	   18124 allocs/op
+BenchmarkPersistScalarDAOs-10                 	   26138	      9119 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistPaths/n1000/sparse-10         	   50847	      4649 ns/op	        38.00 bson-B/op	    7894 B/op	     101 allocs/op
+BenchmarkPersistPaths/n1000/nested-10         	   39202	      6172 ns/op	        51.00 bson-B/op	   13229 B/op	     150 allocs/op
+BenchmarkPersistPaths/n1000/dense-10          	     174	   1371076 ns/op	     21811 bson-B/op	 2068611 B/op	   18124 allocs/op
+BenchmarkPersistScalarDAOs-10                 	   26240	      9115 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistPaths/n1000/sparse-10         	   50821	      4652 ns/op	        38.00 bson-B/op	    7894 B/op	     101 allocs/op
+BenchmarkPersistPaths/n1000/nested-10         	   38818	      6194 ns/op	        51.00 bson-B/op	   13229 B/op	     150 allocs/op
+BenchmarkPersistPaths/n1000/dense-10          	     177	   1347996 ns/op	     21811 bson-B/op	 2065736 B/op	   18124 allocs/op
+BenchmarkPersistScalarDAOs-10                 	   25604	      9380 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistPaths/n1000/sparse-10         	   49015	      4787 ns/op	        38.00 bson-B/op	    7894 B/op	     101 allocs/op
+BenchmarkPersistPaths/n1000/nested-10         	   38648	      6174 ns/op	        51.00 bson-B/op	   13229 B/op	     150 allocs/op
+BenchmarkPersistPaths/n1000/dense-10          	     178	   1337588 ns/op	     21811 bson-B/op	 2065845 B/op	   18124 allocs/op
+BenchmarkPersistScalarDAOs-10                 	   26619	      9017 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistPaths/n1000/sparse-10         	   55659	      4177 ns/op	        38.00 bson-B/op	    7894 B/op	     101 allocs/op
+BenchmarkPersistPaths/n1000/nested-10         	   38836	      6200 ns/op	        51.00 bson-B/op	   13229 B/op	     150 allocs/op
+BenchmarkPersistPaths/n1000/dense-10          	     174	   1360236 ns/op	     21811 bson-B/op	 2062303 B/op	   18123 allocs/op
+BenchmarkPersistScalarDAOs-10                 	   26390	      9087 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistPaths/n1000/sparse-10         	   50985	      4608 ns/op	        38.00 bson-B/op	    7894 B/op	     101 allocs/op
+BenchmarkPersistPaths/n1000/nested-10         	   38246	      6832 ns/op	        51.00 bson-B/op	   13230 B/op	     150 allocs/op
+BenchmarkPersistPaths/n1000/dense-10          	     174	   1371755 ns/op	     21811 bson-B/op	 2059939 B/op	   18123 allocs/op
+BenchmarkPersistScalarDAOs-10                 	   26295	      9123 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistPaths/n1000/sparse-10         	   48684	      4779 ns/op	        38.00 bson-B/op	    7894 B/op	     101 allocs/op
+BenchmarkPersistPaths/n1000/nested-10         	   39008	      6137 ns/op	        51.00 bson-B/op	   13229 B/op	     150 allocs/op
+BenchmarkPersistPaths/n1000/dense-10          	     178	   1338800 ns/op	     21811 bson-B/op	 2061997 B/op	   18123 allocs/op
+BenchmarkPersistScalarDAOs-10                 	   26551	      9066 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistPaths/n1000/sparse-10         	   48661	      4854 ns/op	        38.00 bson-B/op	    7894 B/op	     101 allocs/op
+BenchmarkPersistPaths/n1000/nested-10         	   38204	      6236 ns/op	        51.00 bson-B/op	   13230 B/op	     150 allocs/op
+BenchmarkPersistPaths/n1000/dense-10          	     172	   1371555 ns/op	     21811 bson-B/op	 2058887 B/op	   18123 allocs/op
+BenchmarkPersistScalarDAOs-10                 	   26214	      9177 ns/op	       116.0 bson-B/op	   15037 B/op	     261 allocs/op
+PASS

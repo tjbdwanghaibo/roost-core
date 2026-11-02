@@ -86,6 +86,21 @@ func Run(args []string, stdout io.Writer) error {
 		return nil
 	}
 
+	// 声明约束先于任何写出检查，失败不覆盖上次生成物（它也是变更告警基线）。
+	for _, dao := range defs.Daos {
+		if err := validateNoCollectionFields(dao); err != nil {
+			return err
+		}
+		if err := validateFieldKeys(dao.Name, dao.Fields); err != nil {
+			return err
+		}
+	}
+	for _, nested := range defs.Nested {
+		if err := validateFieldKeys(nested.Name, nested.Fields); err != nil {
+			return err
+		}
+	}
+
 	expected := make(map[string]bool, len(defs.Daos)+len(defs.RedisDaos)+len(defs.Nested))
 
 	// 逻辑库常量与登记先于各 DAO 生成：DAO 的 <Dao>DBName 引用这里的常量。没有持久 DAO 时不生成（旧文件按孤儿删除）。

@@ -42,6 +42,24 @@ type SyncOptionalGemInfo struct {
 	Value *SyncGemInfo `json:"value,omitempty"`
 }
 
+type SyncShortItem struct {
+	Strength int32 `json:"strength,omitempty"`
+	Quantity int32 `json:"quantity,omitempty"`
+}
+
+type SyncOptionalShortItem struct {
+	Value *SyncShortItem `json:"value,omitempty"`
+}
+
+type SyncLongItem struct {
+	Strength int32 `json:"strength,omitempty"`
+	Quantity int32 `json:"quantity,omitempty"`
+}
+
+type SyncOptionalLongItem struct {
+	Value *SyncLongItem `json:"value,omitempty"`
+}
+
 type SyncEnvelope struct {
 	Marks map[int32][]byte `json:"marks,omitempty"`
 }
@@ -123,6 +141,32 @@ type SyncPatchGemInfo struct {
 	Sig   *SyncPatchGemInfoSigField   `json:"sig,omitempty"`
 }
 
+type SyncPatchShortItemStrengthField struct {
+	Value int32 `json:"value,omitempty"`
+}
+
+type SyncPatchShortItemQuantityField struct {
+	Value int32 `json:"value,omitempty"`
+}
+
+type SyncPatchShortItem struct {
+	Strength *SyncPatchShortItemStrengthField `json:"strength,omitempty"`
+	Quantity *SyncPatchShortItemQuantityField `json:"quantity,omitempty"`
+}
+
+type SyncPatchLongItemStrengthField struct {
+	Value int32 `json:"value,omitempty"`
+}
+
+type SyncPatchLongItemQuantityField struct {
+	Value int32 `json:"value,omitempty"`
+}
+
+type SyncPatchLongItem struct {
+	Strength *SyncPatchLongItemStrengthField `json:"strength,omitempty"`
+	Quantity *SyncPatchLongItemQuantityField `json:"quantity,omitempty"`
+}
+
 type SyncPatchEnvelopeMarksField struct {
 	Value   map[int32][]byte `json:"value,omitempty"`
 	Delta   bool             `json:"delta,omitempty"`
@@ -195,6 +239,60 @@ type SyncHeroDao struct {
 	Equips     *SyncHeroDaoEquipsField  `json:"equips,omitempty"`
 	Squad      *SyncHeroDaoSquadField   `json:"squad,omitempty"`
 	Mount      *SyncHeroDaoMountField   `json:"mount,omitempty"`
+}
+
+type SyncShortKeysDaoExperienceField struct {
+	Value int64 `json:"value,omitempty"`
+}
+
+type SyncShortKeysDaoEquipmentField struct {
+	Value   map[int64]SyncOptionalShortItem `json:"value,omitempty"`
+	Delta   bool                            `json:"delta,omitempty"`
+	Removed []int64                         `json:"removed,omitempty"`
+	Patches map[int64]SyncPatchShortItem    `json:"patches,omitempty"`
+}
+
+type SyncShortKeysDaoFollowersField struct {
+	Value   []SyncOptionalShortItem          `json:"value,omitempty"`
+	Delta   bool                             `json:"delta,omitempty"`
+	Updates map[uint64]SyncOptionalShortItem `json:"updates,omitempty"`
+	Length  uint64                           `json:"length,omitempty"`
+	Patches map[uint64]SyncPatchShortItem    `json:"patches,omitempty"`
+}
+
+type SyncShortKeysDao struct {
+	EntityID   int64                            `json:"entity_id,omitempty"`
+	SyncFormat uint32                           `json:"sync_format,omitempty"`
+	Experience *SyncShortKeysDaoExperienceField `json:"experience,omitempty"`
+	Equipment  *SyncShortKeysDaoEquipmentField  `json:"equipment,omitempty"`
+	Followers  *SyncShortKeysDaoFollowersField  `json:"followers,omitempty"`
+}
+
+type SyncLongKeysDaoExperienceField struct {
+	Value int64 `json:"value,omitempty"`
+}
+
+type SyncLongKeysDaoEquipmentField struct {
+	Value   map[int64]SyncOptionalLongItem `json:"value,omitempty"`
+	Delta   bool                           `json:"delta,omitempty"`
+	Removed []int64                        `json:"removed,omitempty"`
+	Patches map[int64]SyncPatchLongItem    `json:"patches,omitempty"`
+}
+
+type SyncLongKeysDaoFollowersField struct {
+	Value   []SyncOptionalLongItem          `json:"value,omitempty"`
+	Delta   bool                            `json:"delta,omitempty"`
+	Updates map[uint64]SyncOptionalLongItem `json:"updates,omitempty"`
+	Length  uint64                          `json:"length,omitempty"`
+	Patches map[uint64]SyncPatchLongItem    `json:"patches,omitempty"`
+}
+
+type SyncLongKeysDao struct {
+	EntityID   int64                           `json:"entity_id,omitempty"`
+	SyncFormat uint32                          `json:"sync_format,omitempty"`
+	Experience *SyncLongKeysDaoExperienceField `json:"experience,omitempty"`
+	Equipment  *SyncLongKeysDaoEquipmentField  `json:"equipment,omitempty"`
+	Followers  *SyncLongKeysDaoFollowersField  `json:"followers,omitempty"`
 }
 
 type SyncVarietyDaoSyncOnlyField struct {
@@ -758,6 +856,222 @@ func UnmarshalSyncOptionalGemInfo(data []byte) (*SyncOptionalGemInfo, error) {
 				return nil, protowire.ParseError(n)
 			}
 			msg, err := UnmarshalSyncGemInfo(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Value = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncShortItem(m *SyncShortItem) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Strength != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Strength))
+	}
+	if m.Quantity != 0 {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Quantity))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncShortItem(data []byte) (*SyncShortItem, error) {
+	m := &SyncShortItem{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Strength = int32(v)
+			data = data[n:]
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Quantity = int32(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncOptionalShortItem(m *SyncOptionalShortItem) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != nil {
+		{
+			payload, err := MarshalSyncShortItem(m.Value)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncOptionalShortItem(data []byte) (*SyncOptionalShortItem, error) {
+	m := &SyncOptionalShortItem{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncShortItem(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Value = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncLongItem(m *SyncLongItem) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Strength != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Strength))
+	}
+	if m.Quantity != 0 {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Quantity))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncLongItem(data []byte) (*SyncLongItem, error) {
+	m := &SyncLongItem{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Strength = int32(v)
+			data = data[n:]
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Quantity = int32(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncOptionalLongItem(m *SyncOptionalLongItem) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != nil {
+		{
+			payload, err := MarshalSyncLongItem(m.Value)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncOptionalLongItem(data []byte) (*SyncOptionalLongItem, error) {
+	m := &SyncOptionalLongItem{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncLongItem(v)
 			if err != nil {
 				return nil, err
 			}
@@ -2193,6 +2507,326 @@ func UnmarshalSyncPatchGemInfo(data []byte) (*SyncPatchGemInfo, error) {
 				return nil, err
 			}
 			m.Sig = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchShortItemStrengthField(m *SyncPatchShortItemStrengthField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchShortItemStrengthField(data []byte) (*SyncPatchShortItemStrengthField, error) {
+	m := &SyncPatchShortItemStrengthField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int32(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchShortItemQuantityField(m *SyncPatchShortItemQuantityField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchShortItemQuantityField(data []byte) (*SyncPatchShortItemQuantityField, error) {
+	m := &SyncPatchShortItemQuantityField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int32(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchShortItem(m *SyncPatchShortItem) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Strength != nil {
+		{
+			payload, err := MarshalSyncPatchShortItemStrengthField(m.Strength)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Quantity != nil {
+		{
+			payload, err := MarshalSyncPatchShortItemQuantityField(m.Quantity)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchShortItem(data []byte) (*SyncPatchShortItem, error) {
+	m := &SyncPatchShortItem{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchShortItemStrengthField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Strength = msg
+			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchShortItemQuantityField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Quantity = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchLongItemStrengthField(m *SyncPatchLongItemStrengthField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchLongItemStrengthField(data []byte) (*SyncPatchLongItemStrengthField, error) {
+	m := &SyncPatchLongItemStrengthField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int32(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchLongItemQuantityField(m *SyncPatchLongItemQuantityField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchLongItemQuantityField(data []byte) (*SyncPatchLongItemQuantityField, error) {
+	m := &SyncPatchLongItemQuantityField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int32(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncPatchLongItem(m *SyncPatchLongItem) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Strength != nil {
+		{
+			payload, err := MarshalSyncPatchLongItemStrengthField(m.Strength)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Quantity != nil {
+		{
+			payload, err := MarshalSyncPatchLongItemQuantityField(m.Quantity)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncPatchLongItem(data []byte) (*SyncPatchLongItem, error) {
+	m := &SyncPatchLongItem{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchLongItemStrengthField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Strength = msg
+			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncPatchLongItemQuantityField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Quantity = msg
 			data = data[n:]
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
@@ -3752,6 +4386,1326 @@ func UnmarshalSyncHeroDao(data []byte) (*SyncHeroDao, error) {
 				return nil, err
 			}
 			m.Mount = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncShortKeysDaoExperienceField(m *SyncShortKeysDaoExperienceField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncShortKeysDaoExperienceField(data []byte) (*SyncShortKeysDaoExperienceField, error) {
+	m := &SyncShortKeysDaoExperienceField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int64(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncShortKeysDaoEquipmentField(m *SyncShortKeysDaoEquipmentField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if len(m.Value) > 0 {
+		keys := make([]int64, 0, len(m.Value))
+		for key := range m.Value {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Value[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncOptionalShortItem(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Removed) > 0 {
+		var packed []byte
+		for _, item := range m.Removed {
+			packed = protowire.AppendVarint(packed, uint64(item))
+		}
+		b = protowire.AppendTag(b, 3, protowire.BytesType)
+		b = protowire.AppendBytes(b, packed)
+	}
+	if len(m.Patches) > 0 {
+		keys := make([]int64, 0, len(m.Patches))
+		for key := range m.Patches {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Patches[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncPatchShortItem(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 4, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncShortKeysDaoEquipmentField(data []byte) (*SyncShortKeysDaoEquipmentField, error) {
+	m := &SyncShortKeysDaoEquipmentField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Value: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key int64
+			var val SyncOptionalShortItem
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = int64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncOptionalShortItem(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Value == nil {
+				m.Value = make(map[int64]SyncOptionalShortItem)
+			}
+			m.Value[key] = val
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ == protowire.BytesType {
+				packed, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				data = data[n:]
+				for len(packed) > 0 {
+					var item int64
+					v, n := protowire.ConsumeVarint(packed)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					item = int64(v)
+					packed = packed[n:]
+					m.Removed = append(m.Removed, item)
+				}
+			} else {
+				var item int64
+				if typ != protowire.VarintType {
+					return nil, fmt.Errorf("expected varint")
+				}
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				item = int64(v)
+				data = data[n:]
+				m.Removed = append(m.Removed, item)
+			}
+		case 4:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Patches: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key int64
+			var val SyncPatchShortItem
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = int64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncPatchShortItem(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Patches == nil {
+				m.Patches = make(map[int64]SyncPatchShortItem)
+			}
+			m.Patches[key] = val
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncShortKeysDaoFollowersField(m *SyncShortKeysDaoFollowersField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if len(m.Value) > 0 {
+		for _, item := range m.Value {
+			{
+				payload, err := MarshalSyncOptionalShortItem(&item)
+				if err != nil {
+					return nil, err
+				}
+				b = protowire.AppendTag(b, 1, protowire.BytesType)
+				b = protowire.AppendBytes(b, payload)
+			}
+		}
+	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Updates) > 0 {
+		keys := make([]uint64, 0, len(m.Updates))
+		for key := range m.Updates {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Updates[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncOptionalShortItem(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 3, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	if m.Length != 0 {
+		b = protowire.AppendTag(b, 4, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Length))
+	}
+	if len(m.Patches) > 0 {
+		keys := make([]uint64, 0, len(m.Patches))
+		for key := range m.Patches {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Patches[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncPatchShortItem(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 5, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncShortKeysDaoFollowersField(data []byte) (*SyncShortKeysDaoFollowersField, error) {
+	m := &SyncShortKeysDaoFollowersField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			var item SyncOptionalShortItem
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncOptionalShortItem(v)
+			if err != nil {
+				return nil, err
+			}
+			if msg != nil {
+				item = *msg
+			}
+			data = data[n:]
+			m.Value = append(m.Value, item)
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Updates: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key uint64
+			var val SyncOptionalShortItem
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = uint64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncOptionalShortItem(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Updates == nil {
+				m.Updates = make(map[uint64]SyncOptionalShortItem)
+			}
+			m.Updates[key] = val
+		case 4:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Length = uint64(v)
+			data = data[n:]
+		case 5:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Patches: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key uint64
+			var val SyncPatchShortItem
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = uint64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncPatchShortItem(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Patches == nil {
+				m.Patches = make(map[uint64]SyncPatchShortItem)
+			}
+			m.Patches[key] = val
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncShortKeysDao(m *SyncShortKeysDao) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.EntityID != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.EntityID))
+	}
+	if m.SyncFormat != 0 {
+		b = protowire.AppendTag(b, 2047, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.SyncFormat))
+	}
+	if m.Experience != nil {
+		{
+			payload, err := MarshalSyncShortKeysDaoExperienceField(m.Experience)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Equipment != nil {
+		{
+			payload, err := MarshalSyncShortKeysDaoEquipmentField(m.Equipment)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 3, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Followers != nil {
+		{
+			payload, err := MarshalSyncShortKeysDaoFollowersField(m.Followers)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 4, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncShortKeysDao(data []byte) (*SyncShortKeysDao, error) {
+	m := &SyncShortKeysDao{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.EntityID = int64(v)
+			data = data[n:]
+		case 2047:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.SyncFormat = uint32(v)
+			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncShortKeysDaoExperienceField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Experience = msg
+			data = data[n:]
+		case 3:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncShortKeysDaoEquipmentField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Equipment = msg
+			data = data[n:]
+		case 4:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncShortKeysDaoFollowersField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Followers = msg
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncLongKeysDaoExperienceField(m *SyncLongKeysDaoExperienceField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.Value != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Value))
+	}
+	return b, nil
+}
+
+func UnmarshalSyncLongKeysDaoExperienceField(data []byte) (*SyncLongKeysDaoExperienceField, error) {
+	m := &SyncLongKeysDaoExperienceField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Value = int64(v)
+			data = data[n:]
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncLongKeysDaoEquipmentField(m *SyncLongKeysDaoEquipmentField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if len(m.Value) > 0 {
+		keys := make([]int64, 0, len(m.Value))
+		for key := range m.Value {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Value[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncOptionalLongItem(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 1, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Removed) > 0 {
+		var packed []byte
+		for _, item := range m.Removed {
+			packed = protowire.AppendVarint(packed, uint64(item))
+		}
+		b = protowire.AppendTag(b, 3, protowire.BytesType)
+		b = protowire.AppendBytes(b, packed)
+	}
+	if len(m.Patches) > 0 {
+		keys := make([]int64, 0, len(m.Patches))
+		for key := range m.Patches {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Patches[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncPatchLongItem(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 4, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncLongKeysDaoEquipmentField(data []byte) (*SyncLongKeysDaoEquipmentField, error) {
+	m := &SyncLongKeysDaoEquipmentField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Value: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key int64
+			var val SyncOptionalLongItem
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = int64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncOptionalLongItem(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Value == nil {
+				m.Value = make(map[int64]SyncOptionalLongItem)
+			}
+			m.Value[key] = val
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ == protowire.BytesType {
+				packed, n := protowire.ConsumeBytes(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				data = data[n:]
+				for len(packed) > 0 {
+					var item int64
+					v, n := protowire.ConsumeVarint(packed)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					item = int64(v)
+					packed = packed[n:]
+					m.Removed = append(m.Removed, item)
+				}
+			} else {
+				var item int64
+				if typ != protowire.VarintType {
+					return nil, fmt.Errorf("expected varint")
+				}
+				v, n := protowire.ConsumeVarint(data)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				item = int64(v)
+				data = data[n:]
+				m.Removed = append(m.Removed, item)
+			}
+		case 4:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Patches: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key int64
+			var val SyncPatchLongItem
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = int64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncPatchLongItem(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Patches == nil {
+				m.Patches = make(map[int64]SyncPatchLongItem)
+			}
+			m.Patches[key] = val
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncLongKeysDaoFollowersField(m *SyncLongKeysDaoFollowersField) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if len(m.Value) > 0 {
+		for _, item := range m.Value {
+			{
+				payload, err := MarshalSyncOptionalLongItem(&item)
+				if err != nil {
+					return nil, err
+				}
+				b = protowire.AppendTag(b, 1, protowire.BytesType)
+				b = protowire.AppendBytes(b, payload)
+			}
+		}
+	}
+	if m.Delta {
+		b = protowire.AppendTag(b, 2, protowire.VarintType)
+		if m.Delta {
+			b = protowire.AppendVarint(b, 1)
+		} else {
+			b = protowire.AppendVarint(b, 0)
+		}
+	}
+	if len(m.Updates) > 0 {
+		keys := make([]uint64, 0, len(m.Updates))
+		for key := range m.Updates {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Updates[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncOptionalLongItem(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 3, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	if m.Length != 0 {
+		b = protowire.AppendTag(b, 4, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.Length))
+	}
+	if len(m.Patches) > 0 {
+		keys := make([]uint64, 0, len(m.Patches))
+		for key := range m.Patches {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+		for _, key := range keys {
+			val := m.Patches[key]
+			var entry []byte
+			entry = protowire.AppendTag(entry, 1, protowire.VarintType)
+			entry = protowire.AppendVarint(entry, uint64(key))
+			{
+				payload, err := MarshalSyncPatchLongItem(&val)
+				if err != nil {
+					return nil, err
+				}
+				entry = protowire.AppendTag(entry, 2, protowire.BytesType)
+				entry = protowire.AppendBytes(entry, payload)
+			}
+			b = protowire.AppendTag(b, 5, protowire.BytesType)
+			b = protowire.AppendBytes(b, entry)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncLongKeysDaoFollowersField(data []byte) (*SyncLongKeysDaoFollowersField, error) {
+	m := &SyncLongKeysDaoFollowersField{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			var item SyncOptionalLongItem
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncOptionalLongItem(v)
+			if err != nil {
+				return nil, err
+			}
+			if msg != nil {
+				item = *msg
+			}
+			data = data[n:]
+			m.Value = append(m.Value, item)
+		case 2:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected bool")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Delta = v != 0
+			data = data[n:]
+		case 3:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Updates: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key uint64
+			var val SyncOptionalLongItem
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = uint64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncOptionalLongItem(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Updates == nil {
+				m.Updates = make(map[uint64]SyncOptionalLongItem)
+			}
+			m.Updates[key] = val
+		case 4:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.Length = uint64(v)
+			data = data[n:]
+		case 5:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("field Patches: expected bytes")
+			}
+			entry, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+			var key uint64
+			var val SyncPatchLongItem
+			for len(entry) > 0 {
+				num, typ, n := protowire.ConsumeTag(entry)
+				if n < 0 {
+					return nil, protowire.ParseError(n)
+				}
+				entry = entry[n:]
+				switch num {
+				case 1:
+					if typ != protowire.VarintType {
+						return nil, fmt.Errorf("expected varint")
+					}
+					v, n := protowire.ConsumeVarint(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					key = uint64(v)
+					entry = entry[n:]
+				case 2:
+					if typ != protowire.BytesType {
+						return nil, fmt.Errorf("expected message bytes")
+					}
+					v, n := protowire.ConsumeBytes(entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					msg, err := UnmarshalSyncPatchLongItem(v)
+					if err != nil {
+						return nil, err
+					}
+					if msg != nil {
+						val = *msg
+					}
+					entry = entry[n:]
+				default:
+					n = protowire.ConsumeFieldValue(num, typ, entry)
+					if n < 0 {
+						return nil, protowire.ParseError(n)
+					}
+					entry = entry[n:]
+				}
+			}
+			if m.Patches == nil {
+				m.Patches = make(map[uint64]SyncPatchLongItem)
+			}
+			m.Patches[key] = val
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			data = data[n:]
+		}
+	}
+	return m, nil
+}
+
+func MarshalSyncLongKeysDao(m *SyncLongKeysDao) ([]byte, error) {
+	if m == nil {
+		return nil, nil
+	}
+	var b []byte
+	if m.EntityID != 0 {
+		b = protowire.AppendTag(b, 1, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.EntityID))
+	}
+	if m.SyncFormat != 0 {
+		b = protowire.AppendTag(b, 2047, protowire.VarintType)
+		b = protowire.AppendVarint(b, uint64(m.SyncFormat))
+	}
+	if m.Experience != nil {
+		{
+			payload, err := MarshalSyncLongKeysDaoExperienceField(m.Experience)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 2, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Equipment != nil {
+		{
+			payload, err := MarshalSyncLongKeysDaoEquipmentField(m.Equipment)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 3, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	if m.Followers != nil {
+		{
+			payload, err := MarshalSyncLongKeysDaoFollowersField(m.Followers)
+			if err != nil {
+				return nil, err
+			}
+			b = protowire.AppendTag(b, 4, protowire.BytesType)
+			b = protowire.AppendBytes(b, payload)
+		}
+	}
+	return b, nil
+}
+
+func UnmarshalSyncLongKeysDao(data []byte) (*SyncLongKeysDao, error) {
+	m := &SyncLongKeysDao{}
+	for len(data) > 0 {
+		num, typ, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch num {
+		case 1:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.EntityID = int64(v)
+			data = data[n:]
+		case 2047:
+			if typ != protowire.VarintType {
+				return nil, fmt.Errorf("expected varint")
+			}
+			v, n := protowire.ConsumeVarint(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			m.SyncFormat = uint32(v)
+			data = data[n:]
+		case 2:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncLongKeysDaoExperienceField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Experience = msg
+			data = data[n:]
+		case 3:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncLongKeysDaoEquipmentField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Equipment = msg
+			data = data[n:]
+		case 4:
+			if typ != protowire.BytesType {
+				return nil, fmt.Errorf("expected message bytes")
+			}
+			v, n := protowire.ConsumeBytes(data)
+			if n < 0 {
+				return nil, protowire.ParseError(n)
+			}
+			msg, err := UnmarshalSyncLongKeysDaoFollowersField(v)
+			if err != nil {
+				return nil, err
+			}
+			m.Followers = msg
 			data = data[n:]
 		default:
 			n = protowire.ConsumeFieldValue(num, typ, data)
@@ -5339,6 +7293,58 @@ func syncOptionalGemInfoFromPB(value SyncOptionalGemInfo) *gemInfoBSONDoc {
 	converted := syncGemInfoFromPB(*value.Value)
 	return &converted
 }
+func syncShortItemToPB(value shortItemBSONDoc) SyncShortItem {
+	return SyncShortItem{
+		Strength: value.Strength,
+		Quantity: value.Quantity,
+	}
+}
+func syncShortItemFromPB(value SyncShortItem) shortItemBSONDoc {
+	return shortItemBSONDoc{
+		Strength: value.Strength,
+		Quantity: value.Quantity,
+	}
+}
+func syncOptionalShortItemToPB(value *shortItemBSONDoc) SyncOptionalShortItem {
+	if value == nil {
+		return SyncOptionalShortItem{}
+	}
+	converted := syncShortItemToPB(*value)
+	return SyncOptionalShortItem{Value: &converted}
+}
+func syncOptionalShortItemFromPB(value SyncOptionalShortItem) *shortItemBSONDoc {
+	if value.Value == nil {
+		return nil
+	}
+	converted := syncShortItemFromPB(*value.Value)
+	return &converted
+}
+func syncLongItemToPB(value longItemBSONDoc) SyncLongItem {
+	return SyncLongItem{
+		Strength: value.Strength,
+		Quantity: value.Quantity,
+	}
+}
+func syncLongItemFromPB(value SyncLongItem) longItemBSONDoc {
+	return longItemBSONDoc{
+		Strength: value.Strength,
+		Quantity: value.Quantity,
+	}
+}
+func syncOptionalLongItemToPB(value *longItemBSONDoc) SyncOptionalLongItem {
+	if value == nil {
+		return SyncOptionalLongItem{}
+	}
+	converted := syncLongItemToPB(*value)
+	return SyncOptionalLongItem{Value: &converted}
+}
+func syncOptionalLongItemFromPB(value SyncOptionalLongItem) *longItemBSONDoc {
+	if value.Value == nil {
+		return nil
+	}
+	converted := syncLongItemFromPB(*value.Value)
+	return &converted
+}
 func syncEnvelopeToPB(value envelopeBSONDoc) SyncEnvelope {
 	return SyncEnvelope{
 		Marks: syncMapValues(value.Marks, func(key int32, value []byte) (int32, []byte) { return key, value }),
@@ -5756,6 +7762,106 @@ func applySyncPatchGemInfo(patch *SyncPatchGemInfo, previous SyncGemInfo) (SyncG
 			return previous, err
 		}
 		next.Sig = value
+	}
+	return next, nil
+}
+func captureSyncPatchShortItemStrengthField(value *ShortItem, change *dataengine.SyncChange) *SyncPatchShortItemStrengthField {
+	full := func() *SyncPatchShortItemStrengthField {
+		return &SyncPatchShortItemStrengthField{Value: value.strength}
+	}
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncPatchShortItemStrengthField(patch *SyncPatchShortItemStrengthField, previous int32, exists bool) (int32, error) {
+	return patch.Value, nil
+}
+func captureSyncPatchShortItemQuantityField(value *ShortItem, change *dataengine.SyncChange) *SyncPatchShortItemQuantityField {
+	full := func() *SyncPatchShortItemQuantityField {
+		return &SyncPatchShortItemQuantityField{Value: value.quantity}
+	}
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncPatchShortItemQuantityField(patch *SyncPatchShortItemQuantityField, previous int32, exists bool) (int32, error) {
+	return patch.Value, nil
+}
+func (value *ShortItem) captureSyncPatch(change *dataengine.SyncChange) *SyncPatchShortItem {
+	patch := &SyncPatchShortItem{}
+	if child := change.Child(dataengine.SyncStep{Field: 1}); child != nil {
+		patch.Strength = captureSyncPatchShortItemStrengthField(value, child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 2}); child != nil {
+		patch.Quantity = captureSyncPatchShortItemQuantityField(value, child)
+	}
+	return patch
+}
+func applySyncPatchShortItem(patch *SyncPatchShortItem, previous SyncShortItem) (SyncShortItem, error) {
+	next := previous
+	if patch.Strength != nil {
+		value, err := applySyncPatchShortItemStrengthField(patch.Strength, previous.Strength, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Strength = value
+	}
+	if patch.Quantity != nil {
+		value, err := applySyncPatchShortItemQuantityField(patch.Quantity, previous.Quantity, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Quantity = value
+	}
+	return next, nil
+}
+func captureSyncPatchLongItemStrengthField(value *LongItem, change *dataengine.SyncChange) *SyncPatchLongItemStrengthField {
+	full := func() *SyncPatchLongItemStrengthField { return &SyncPatchLongItemStrengthField{Value: value.strength} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncPatchLongItemStrengthField(patch *SyncPatchLongItemStrengthField, previous int32, exists bool) (int32, error) {
+	return patch.Value, nil
+}
+func captureSyncPatchLongItemQuantityField(value *LongItem, change *dataengine.SyncChange) *SyncPatchLongItemQuantityField {
+	full := func() *SyncPatchLongItemQuantityField { return &SyncPatchLongItemQuantityField{Value: value.quantity} }
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncPatchLongItemQuantityField(patch *SyncPatchLongItemQuantityField, previous int32, exists bool) (int32, error) {
+	return patch.Value, nil
+}
+func (value *LongItem) captureSyncPatch(change *dataengine.SyncChange) *SyncPatchLongItem {
+	patch := &SyncPatchLongItem{}
+	if child := change.Child(dataengine.SyncStep{Field: 1}); child != nil {
+		patch.Strength = captureSyncPatchLongItemStrengthField(value, child)
+	}
+	if child := change.Child(dataengine.SyncStep{Field: 2}); child != nil {
+		patch.Quantity = captureSyncPatchLongItemQuantityField(value, child)
+	}
+	return patch
+}
+func applySyncPatchLongItem(patch *SyncPatchLongItem, previous SyncLongItem) (SyncLongItem, error) {
+	next := previous
+	if patch.Strength != nil {
+		value, err := applySyncPatchLongItemStrengthField(patch.Strength, previous.Strength, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Strength = value
+	}
+	if patch.Quantity != nil {
+		value, err := applySyncPatchLongItemQuantityField(patch.Quantity, previous.Quantity, true)
+		if err != nil {
+			return previous, err
+		}
+		next.Quantity = value
 	}
 	return next, nil
 }
@@ -6475,6 +8581,648 @@ func ApplySyncHeroDao(patch, previous *SyncHeroDao) (*SyncHeroDao, error) {
 			return nil, err
 		}
 		next.Mount = &SyncHeroDaoMountField{Value: value}
+	}
+	return next, nil
+}
+
+// Values 读取字段替换或已应用快照；集合补丁必须先通过 Apply 合并，避免丢失删除与列表操作。
+func (patch *SyncShortKeysDao) Values() (map[string]any, error) {
+	if patch == nil || patch.SyncFormat != 3 {
+		return nil, fmt.Errorf("unsupported DAO sync format")
+	}
+	out := map[string]any{"_id": patch.EntityID}
+	if patch.Experience != nil {
+		out["1"] = patch.Experience.Value
+	}
+	if patch.Equipment != nil && patch.Equipment.Delta {
+		return nil, fmt.Errorf("Equipment: apply collection delta before Values")
+	}
+	if patch.Equipment != nil {
+		out["2"] = patch.Equipment.Value
+	}
+	if patch.Followers != nil && patch.Followers.Delta {
+		return nil, fmt.Errorf("Followers: apply collection delta before Values")
+	}
+	if patch.Followers != nil {
+		out["3"] = patch.Followers.Value
+	}
+	return out, nil
+}
+func (d *ShortKeysDao) marshalSyncPB(mask uint64) []byte {
+	patch := &SyncShortKeysDao{EntityID: d.id, SyncFormat: 3}
+	changed := false
+	if mask&shortKeysDaoFieldExperience != 0 {
+		patch.Experience = &SyncShortKeysDaoExperienceField{Value: d.experience}
+		changed = true
+	}
+	if mask&shortKeysDaoFieldEquipment != 0 {
+		patch.Equipment = &SyncShortKeysDaoEquipmentField{Value: syncMapValues(daoMapDocs(d.shortKeysDaoEquipmentRawMap(), shortItemPtrBSONDoc), func(key int64, value *shortItemBSONDoc) (int64, SyncOptionalShortItem) {
+			return key, syncOptionalShortItemToPB(value)
+		})}
+		changed = true
+	}
+	if mask&shortKeysDaoFieldFollowers != 0 {
+		patch.Followers = &SyncShortKeysDaoFollowersField{Value: syncSliceValues(daoSliceDocs(d.followers, shortItemPtrBSONDoc), func(value *shortItemBSONDoc) SyncOptionalShortItem { return syncOptionalShortItemToPB(value) })}
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	raw, err := MarshalSyncShortKeysDao(patch)
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+func (d *ShortKeysDao) applySyncPB(raw []byte) error {
+	patch, err := UnmarshalSyncShortKeysDao(raw)
+	if err != nil {
+		return err
+	}
+	if d.id != 0 && d.id != patch.EntityID {
+		return fmt.Errorf("DAO identity changed")
+	}
+	previous, err := UnmarshalSyncShortKeysDao(d.marshalSyncPB(^uint64(0)))
+	if err != nil {
+		return err
+	}
+	previous.EntityID = patch.EntityID
+	merged, err := ApplySyncShortKeysDao(patch, previous)
+	if err != nil {
+		return err
+	}
+	if patch.Experience != nil {
+		d.experience = merged.Experience.Value
+	}
+	if patch.Equipment != nil {
+		d.setEquipmentRawMap(daoMapDocs(syncMapValues(merged.Equipment.Value, func(key int64, value SyncOptionalShortItem) (int64, *shortItemBSONDoc) {
+			return key, syncOptionalShortItemFromPB(value)
+		}), shortItemPtrFromBSONDoc))
+	}
+	if patch.Followers != nil {
+		d.followers = daoSliceDocs(syncSliceValues(merged.Followers.Value, func(value SyncOptionalShortItem) *shortItemBSONDoc { return syncOptionalShortItemFromPB(value) }), shortItemPtrFromBSONDoc)
+	}
+	d.id = patch.EntityID
+	d.Init()
+	return nil
+}
+func captureSyncShortKeysDaoExperienceField(value *ShortKeysDao, change *dataengine.SyncChange) *SyncShortKeysDaoExperienceField {
+	full := func() *SyncShortKeysDaoExperienceField {
+		return &SyncShortKeysDaoExperienceField{Value: value.experience}
+	}
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncShortKeysDaoExperienceField(patch *SyncShortKeysDaoExperienceField, previous int64, exists bool) (int64, error) {
+	return patch.Value, nil
+}
+func captureSyncShortKeysDaoEquipmentField(value *ShortKeysDao, change *dataengine.SyncChange) *SyncShortKeysDaoEquipmentField {
+	full := func() *SyncShortKeysDaoEquipmentField {
+		return &SyncShortKeysDaoEquipmentField{Value: syncMapValues(daoMapDocs(value.shortKeysDaoEquipmentRawMap(), shortItemPtrBSONDoc), func(key int64, value *shortItemBSONDoc) (int64, SyncOptionalShortItem) {
+			return key, syncOptionalShortItemToPB(value)
+		})}
+	}
+	if change.Full() {
+		return full()
+	}
+	if value.equipment == nil || len(change.Children) >= value.equipment.Len() {
+		return full()
+	}
+	patch := &SyncShortKeysDaoEquipmentField{Delta: true, Value: make(map[int64]SyncOptionalShortItem)}
+	patch.Patches = make(map[int64]SyncPatchShortItem)
+	for step, child := range change.Children {
+		key := step.Key.(int64)
+		item, exists := value.equipment.Get(key)
+		if !exists {
+			patch.Removed = append(patch.Removed, key)
+			continue
+		}
+		if !child.Full() && item != nil {
+			patch.Patches[key] = *item.captureSyncPatch(child)
+			continue
+		}
+		single := map[int64]*ShortItem{key: item}
+		for k, v := range syncMapValues(daoMapDocs(single, shortItemPtrBSONDoc), func(key int64, value *shortItemBSONDoc) (int64, SyncOptionalShortItem) {
+			return key, syncOptionalShortItemToPB(value)
+		}) {
+			patch.Value[k] = v
+		}
+	}
+	if len(patch.Removed) > 1 {
+		sort.Slice(patch.Removed, func(i, j int) bool { return patch.Removed[i] < patch.Removed[j] })
+	}
+	return patch
+}
+func applySyncShortKeysDaoEquipmentField(patch *SyncShortKeysDaoEquipmentField, previous map[int64]SyncOptionalShortItem, exists bool) (map[int64]SyncOptionalShortItem, error) {
+	if !patch.Delta {
+		if len(patch.Removed) != 0 || len(patch.Patches) != 0 {
+			return nil, fmt.Errorf("operations on map replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists {
+		return nil, fmt.Errorf("missing map baseline")
+	}
+	next := make(map[int64]SyncOptionalShortItem, len(previous)+len(patch.Value))
+	for k, v := range previous {
+		next[k] = v
+	}
+	for _, k := range patch.Removed {
+		delete(next, k)
+	}
+	for k, v := range patch.Value {
+		next[k] = v
+	}
+	for key, child := range patch.Patches {
+		old, ok := next[key]
+		if !ok {
+			return nil, fmt.Errorf("missing map element baseline")
+		}
+		if old.Value == nil {
+			return nil, fmt.Errorf("nil nested baseline")
+		}
+		updated, err := applySyncPatchShortItem(&child, *old.Value)
+		if err != nil {
+			return nil, err
+		}
+		old.Value = &updated
+		next[key] = old
+	}
+	return next, nil
+}
+func captureSyncShortKeysDaoFollowersField(value *ShortKeysDao, change *dataengine.SyncChange) *SyncShortKeysDaoFollowersField {
+	full := func() *SyncShortKeysDaoFollowersField {
+		return &SyncShortKeysDaoFollowersField{Value: syncSliceValues(daoSliceDocs(value.followers, shortItemPtrBSONDoc), func(value *shortItemBSONDoc) SyncOptionalShortItem { return syncOptionalShortItemToPB(value) })}
+	}
+	if change.Full() {
+		return full()
+	}
+	if len(change.Children) >= len(value.followers) {
+		return full()
+	}
+	patch := &SyncShortKeysDaoFollowersField{Delta: true, Length: uint64(len(value.followers)), Updates: make(map[uint64]SyncOptionalShortItem)}
+	patch.Patches = make(map[uint64]SyncPatchShortItem)
+	for step, child := range change.Children {
+		index := step.Key.(int)
+		item := value.followers[index]
+		if !child.Full() && item != nil {
+			patch.Patches[uint64(index)] = *item.captureSyncPatch(child)
+			continue
+		}
+		single := []*ShortItem{item}
+		patch.Updates[uint64(index)] = (syncSliceValues(daoSliceDocs(single, shortItemPtrBSONDoc), func(value *shortItemBSONDoc) SyncOptionalShortItem { return syncOptionalShortItemToPB(value) }))[0]
+	}
+	return patch
+}
+func applySyncShortKeysDaoFollowersField(patch *SyncShortKeysDaoFollowersField, previous []SyncOptionalShortItem, exists bool) ([]SyncOptionalShortItem, error) {
+	if !patch.Delta {
+		if len(patch.Updates) != 0 || patch.Length != 0 || len(patch.Patches) != 0 {
+			return nil, fmt.Errorf("operations on list replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists || patch.Length > uint64(len(previous))+uint64(len(patch.Updates)) {
+		return nil, fmt.Errorf("invalid list length or missing baseline")
+	}
+	for index := range patch.Updates {
+		if index >= patch.Length {
+			return nil, fmt.Errorf("list index out of bounds")
+		}
+	}
+	for index := range patch.Patches {
+		if index >= patch.Length || index >= uint64(len(previous)) {
+			return nil, fmt.Errorf("missing list element baseline")
+		}
+		if _, overlap := patch.Updates[index]; overlap {
+			return nil, fmt.Errorf("conflicting list operations")
+		}
+	}
+	for i := uint64(len(previous)); i < patch.Length; i++ {
+		if _, ok := patch.Updates[i]; !ok {
+			return nil, fmt.Errorf("list append has a hole")
+		}
+	}
+	next := make([]SyncOptionalShortItem, int(patch.Length))
+	copy(next, previous)
+	for index, value := range patch.Updates {
+		next[index] = value
+	}
+	for index, child := range patch.Patches {
+		old := next[index]
+		if old.Value == nil {
+			return nil, fmt.Errorf("nil nested baseline")
+		}
+		updated, err := applySyncPatchShortItem(&child, *old.Value)
+		if err != nil {
+			return nil, err
+		}
+		old.Value = &updated
+		next[index] = old
+	}
+	return next, nil
+}
+
+// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。
+func (d *ShortKeysDao) MarshalSyncChanges(mask uint64) []byte {
+	return d.tracker.ReadSyncChanges(func(change *dataengine.SyncChange) []byte {
+		if change.Full() {
+			return d.marshalSyncPB(mask)
+		}
+		patch := &SyncShortKeysDao{EntityID: d.id, SyncFormat: 3}
+		changed := false
+		if mask&shortKeysDaoFieldExperience != 0 {
+			patch.Experience = captureSyncShortKeysDaoExperienceField(d, change.Child(dataengine.SyncStep{Field: 2}))
+			changed = true
+		}
+		if mask&shortKeysDaoFieldEquipment != 0 {
+			patch.Equipment = captureSyncShortKeysDaoEquipmentField(d, change.Child(dataengine.SyncStep{Field: 3}))
+			changed = true
+		}
+		if mask&shortKeysDaoFieldFollowers != 0 {
+			patch.Followers = captureSyncShortKeysDaoFollowersField(d, change.Child(dataengine.SyncStep{Field: 4}))
+			changed = true
+		}
+		if !changed {
+			return nil
+		}
+		raw, err := MarshalSyncShortKeysDao(patch)
+		if err != nil {
+			panic(err)
+		}
+		return raw
+	})
+}
+
+// ApplySyncShortKeysDao 验证整个补丁后发布新快照，previous 与 patch 均按只读使用。
+func ApplySyncShortKeysDao(patch, previous *SyncShortKeysDao) (*SyncShortKeysDao, error) {
+	if patch == nil || patch.SyncFormat != 3 {
+		return nil, fmt.Errorf("unsupported DAO sync format")
+	}
+	if previous != nil && (previous.SyncFormat != 3 || previous.EntityID != patch.EntityID) {
+		return nil, fmt.Errorf("sync baseline identity or format mismatch")
+	}
+	next := &SyncShortKeysDao{EntityID: patch.EntityID, SyncFormat: 3}
+	if previous != nil {
+		*next = *previous
+	}
+	if patch.Experience != nil {
+		var old int64
+		exists := previous != nil && previous.Experience != nil
+		if exists {
+			old = previous.Experience.Value
+		}
+		value, err := applySyncShortKeysDaoExperienceField(patch.Experience, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Experience = &SyncShortKeysDaoExperienceField{Value: value}
+	}
+	if patch.Equipment != nil {
+		var old map[int64]SyncOptionalShortItem
+		exists := previous != nil && previous.Equipment != nil
+		if exists {
+			old = previous.Equipment.Value
+		}
+		value, err := applySyncShortKeysDaoEquipmentField(patch.Equipment, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Equipment = &SyncShortKeysDaoEquipmentField{Value: value}
+	}
+	if patch.Followers != nil {
+		var old []SyncOptionalShortItem
+		exists := previous != nil && previous.Followers != nil
+		if exists {
+			old = previous.Followers.Value
+		}
+		value, err := applySyncShortKeysDaoFollowersField(patch.Followers, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Followers = &SyncShortKeysDaoFollowersField{Value: value}
+	}
+	return next, nil
+}
+
+// Values 读取字段替换或已应用快照；集合补丁必须先通过 Apply 合并，避免丢失删除与列表操作。
+func (patch *SyncLongKeysDao) Values() (map[string]any, error) {
+	if patch == nil || patch.SyncFormat != 3 {
+		return nil, fmt.Errorf("unsupported DAO sync format")
+	}
+	out := map[string]any{"_id": patch.EntityID}
+	if patch.Experience != nil {
+		out["experience"] = patch.Experience.Value
+	}
+	if patch.Equipment != nil && patch.Equipment.Delta {
+		return nil, fmt.Errorf("Equipment: apply collection delta before Values")
+	}
+	if patch.Equipment != nil {
+		out["equipment"] = patch.Equipment.Value
+	}
+	if patch.Followers != nil && patch.Followers.Delta {
+		return nil, fmt.Errorf("Followers: apply collection delta before Values")
+	}
+	if patch.Followers != nil {
+		out["followers"] = patch.Followers.Value
+	}
+	return out, nil
+}
+func (d *LongKeysDao) marshalSyncPB(mask uint64) []byte {
+	patch := &SyncLongKeysDao{EntityID: d.id, SyncFormat: 3}
+	changed := false
+	if mask&longKeysDaoFieldExperience != 0 {
+		patch.Experience = &SyncLongKeysDaoExperienceField{Value: d.experience}
+		changed = true
+	}
+	if mask&longKeysDaoFieldEquipment != 0 {
+		patch.Equipment = &SyncLongKeysDaoEquipmentField{Value: syncMapValues(daoMapDocs(d.longKeysDaoEquipmentRawMap(), longItemPtrBSONDoc), func(key int64, value *longItemBSONDoc) (int64, SyncOptionalLongItem) {
+			return key, syncOptionalLongItemToPB(value)
+		})}
+		changed = true
+	}
+	if mask&longKeysDaoFieldFollowers != 0 {
+		patch.Followers = &SyncLongKeysDaoFollowersField{Value: syncSliceValues(daoSliceDocs(d.followers, longItemPtrBSONDoc), func(value *longItemBSONDoc) SyncOptionalLongItem { return syncOptionalLongItemToPB(value) })}
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	raw, err := MarshalSyncLongKeysDao(patch)
+	if err != nil {
+		panic(err)
+	}
+	return raw
+}
+func (d *LongKeysDao) applySyncPB(raw []byte) error {
+	patch, err := UnmarshalSyncLongKeysDao(raw)
+	if err != nil {
+		return err
+	}
+	if d.id != 0 && d.id != patch.EntityID {
+		return fmt.Errorf("DAO identity changed")
+	}
+	previous, err := UnmarshalSyncLongKeysDao(d.marshalSyncPB(^uint64(0)))
+	if err != nil {
+		return err
+	}
+	previous.EntityID = patch.EntityID
+	merged, err := ApplySyncLongKeysDao(patch, previous)
+	if err != nil {
+		return err
+	}
+	if patch.Experience != nil {
+		d.experience = merged.Experience.Value
+	}
+	if patch.Equipment != nil {
+		d.setEquipmentRawMap(daoMapDocs(syncMapValues(merged.Equipment.Value, func(key int64, value SyncOptionalLongItem) (int64, *longItemBSONDoc) {
+			return key, syncOptionalLongItemFromPB(value)
+		}), longItemPtrFromBSONDoc))
+	}
+	if patch.Followers != nil {
+		d.followers = daoSliceDocs(syncSliceValues(merged.Followers.Value, func(value SyncOptionalLongItem) *longItemBSONDoc { return syncOptionalLongItemFromPB(value) }), longItemPtrFromBSONDoc)
+	}
+	d.id = patch.EntityID
+	d.Init()
+	return nil
+}
+func captureSyncLongKeysDaoExperienceField(value *LongKeysDao, change *dataengine.SyncChange) *SyncLongKeysDaoExperienceField {
+	full := func() *SyncLongKeysDaoExperienceField {
+		return &SyncLongKeysDaoExperienceField{Value: value.experience}
+	}
+	if change.Full() {
+		return full()
+	}
+	return full()
+}
+func applySyncLongKeysDaoExperienceField(patch *SyncLongKeysDaoExperienceField, previous int64, exists bool) (int64, error) {
+	return patch.Value, nil
+}
+func captureSyncLongKeysDaoEquipmentField(value *LongKeysDao, change *dataengine.SyncChange) *SyncLongKeysDaoEquipmentField {
+	full := func() *SyncLongKeysDaoEquipmentField {
+		return &SyncLongKeysDaoEquipmentField{Value: syncMapValues(daoMapDocs(value.longKeysDaoEquipmentRawMap(), longItemPtrBSONDoc), func(key int64, value *longItemBSONDoc) (int64, SyncOptionalLongItem) {
+			return key, syncOptionalLongItemToPB(value)
+		})}
+	}
+	if change.Full() {
+		return full()
+	}
+	if value.equipment == nil || len(change.Children) >= value.equipment.Len() {
+		return full()
+	}
+	patch := &SyncLongKeysDaoEquipmentField{Delta: true, Value: make(map[int64]SyncOptionalLongItem)}
+	patch.Patches = make(map[int64]SyncPatchLongItem)
+	for step, child := range change.Children {
+		key := step.Key.(int64)
+		item, exists := value.equipment.Get(key)
+		if !exists {
+			patch.Removed = append(patch.Removed, key)
+			continue
+		}
+		if !child.Full() && item != nil {
+			patch.Patches[key] = *item.captureSyncPatch(child)
+			continue
+		}
+		single := map[int64]*LongItem{key: item}
+		for k, v := range syncMapValues(daoMapDocs(single, longItemPtrBSONDoc), func(key int64, value *longItemBSONDoc) (int64, SyncOptionalLongItem) {
+			return key, syncOptionalLongItemToPB(value)
+		}) {
+			patch.Value[k] = v
+		}
+	}
+	if len(patch.Removed) > 1 {
+		sort.Slice(patch.Removed, func(i, j int) bool { return patch.Removed[i] < patch.Removed[j] })
+	}
+	return patch
+}
+func applySyncLongKeysDaoEquipmentField(patch *SyncLongKeysDaoEquipmentField, previous map[int64]SyncOptionalLongItem, exists bool) (map[int64]SyncOptionalLongItem, error) {
+	if !patch.Delta {
+		if len(patch.Removed) != 0 || len(patch.Patches) != 0 {
+			return nil, fmt.Errorf("operations on map replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists {
+		return nil, fmt.Errorf("missing map baseline")
+	}
+	next := make(map[int64]SyncOptionalLongItem, len(previous)+len(patch.Value))
+	for k, v := range previous {
+		next[k] = v
+	}
+	for _, k := range patch.Removed {
+		delete(next, k)
+	}
+	for k, v := range patch.Value {
+		next[k] = v
+	}
+	for key, child := range patch.Patches {
+		old, ok := next[key]
+		if !ok {
+			return nil, fmt.Errorf("missing map element baseline")
+		}
+		if old.Value == nil {
+			return nil, fmt.Errorf("nil nested baseline")
+		}
+		updated, err := applySyncPatchLongItem(&child, *old.Value)
+		if err != nil {
+			return nil, err
+		}
+		old.Value = &updated
+		next[key] = old
+	}
+	return next, nil
+}
+func captureSyncLongKeysDaoFollowersField(value *LongKeysDao, change *dataengine.SyncChange) *SyncLongKeysDaoFollowersField {
+	full := func() *SyncLongKeysDaoFollowersField {
+		return &SyncLongKeysDaoFollowersField{Value: syncSliceValues(daoSliceDocs(value.followers, longItemPtrBSONDoc), func(value *longItemBSONDoc) SyncOptionalLongItem { return syncOptionalLongItemToPB(value) })}
+	}
+	if change.Full() {
+		return full()
+	}
+	if len(change.Children) >= len(value.followers) {
+		return full()
+	}
+	patch := &SyncLongKeysDaoFollowersField{Delta: true, Length: uint64(len(value.followers)), Updates: make(map[uint64]SyncOptionalLongItem)}
+	patch.Patches = make(map[uint64]SyncPatchLongItem)
+	for step, child := range change.Children {
+		index := step.Key.(int)
+		item := value.followers[index]
+		if !child.Full() && item != nil {
+			patch.Patches[uint64(index)] = *item.captureSyncPatch(child)
+			continue
+		}
+		single := []*LongItem{item}
+		patch.Updates[uint64(index)] = (syncSliceValues(daoSliceDocs(single, longItemPtrBSONDoc), func(value *longItemBSONDoc) SyncOptionalLongItem { return syncOptionalLongItemToPB(value) }))[0]
+	}
+	return patch
+}
+func applySyncLongKeysDaoFollowersField(patch *SyncLongKeysDaoFollowersField, previous []SyncOptionalLongItem, exists bool) ([]SyncOptionalLongItem, error) {
+	if !patch.Delta {
+		if len(patch.Updates) != 0 || patch.Length != 0 || len(patch.Patches) != 0 {
+			return nil, fmt.Errorf("operations on list replacement")
+		}
+		return patch.Value, nil
+	}
+	if !exists || patch.Length > uint64(len(previous))+uint64(len(patch.Updates)) {
+		return nil, fmt.Errorf("invalid list length or missing baseline")
+	}
+	for index := range patch.Updates {
+		if index >= patch.Length {
+			return nil, fmt.Errorf("list index out of bounds")
+		}
+	}
+	for index := range patch.Patches {
+		if index >= patch.Length || index >= uint64(len(previous)) {
+			return nil, fmt.Errorf("missing list element baseline")
+		}
+		if _, overlap := patch.Updates[index]; overlap {
+			return nil, fmt.Errorf("conflicting list operations")
+		}
+	}
+	for i := uint64(len(previous)); i < patch.Length; i++ {
+		if _, ok := patch.Updates[i]; !ok {
+			return nil, fmt.Errorf("list append has a hole")
+		}
+	}
+	next := make([]SyncOptionalLongItem, int(patch.Length))
+	copy(next, previous)
+	for index, value := range patch.Updates {
+		next[index] = value
+	}
+	for index, child := range patch.Patches {
+		old := next[index]
+		if old.Value == nil {
+			return nil, fmt.Errorf("nil nested baseline")
+		}
+		updated, err := applySyncPatchLongItem(&child, *old.Value)
+		if err != nil {
+			return nil, err
+		}
+		old.Value = &updated
+		next[index] = old
+	}
+	return next, nil
+}
+
+// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。
+func (d *LongKeysDao) MarshalSyncChanges(mask uint64) []byte {
+	return d.tracker.ReadSyncChanges(func(change *dataengine.SyncChange) []byte {
+		if change.Full() {
+			return d.marshalSyncPB(mask)
+		}
+		patch := &SyncLongKeysDao{EntityID: d.id, SyncFormat: 3}
+		changed := false
+		if mask&longKeysDaoFieldExperience != 0 {
+			patch.Experience = captureSyncLongKeysDaoExperienceField(d, change.Child(dataengine.SyncStep{Field: 2}))
+			changed = true
+		}
+		if mask&longKeysDaoFieldEquipment != 0 {
+			patch.Equipment = captureSyncLongKeysDaoEquipmentField(d, change.Child(dataengine.SyncStep{Field: 3}))
+			changed = true
+		}
+		if mask&longKeysDaoFieldFollowers != 0 {
+			patch.Followers = captureSyncLongKeysDaoFollowersField(d, change.Child(dataengine.SyncStep{Field: 4}))
+			changed = true
+		}
+		if !changed {
+			return nil
+		}
+		raw, err := MarshalSyncLongKeysDao(patch)
+		if err != nil {
+			panic(err)
+		}
+		return raw
+	})
+}
+
+// ApplySyncLongKeysDao 验证整个补丁后发布新快照，previous 与 patch 均按只读使用。
+func ApplySyncLongKeysDao(patch, previous *SyncLongKeysDao) (*SyncLongKeysDao, error) {
+	if patch == nil || patch.SyncFormat != 3 {
+		return nil, fmt.Errorf("unsupported DAO sync format")
+	}
+	if previous != nil && (previous.SyncFormat != 3 || previous.EntityID != patch.EntityID) {
+		return nil, fmt.Errorf("sync baseline identity or format mismatch")
+	}
+	next := &SyncLongKeysDao{EntityID: patch.EntityID, SyncFormat: 3}
+	if previous != nil {
+		*next = *previous
+	}
+	if patch.Experience != nil {
+		var old int64
+		exists := previous != nil && previous.Experience != nil
+		if exists {
+			old = previous.Experience.Value
+		}
+		value, err := applySyncLongKeysDaoExperienceField(patch.Experience, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Experience = &SyncLongKeysDaoExperienceField{Value: value}
+	}
+	if patch.Equipment != nil {
+		var old map[int64]SyncOptionalLongItem
+		exists := previous != nil && previous.Equipment != nil
+		if exists {
+			old = previous.Equipment.Value
+		}
+		value, err := applySyncLongKeysDaoEquipmentField(patch.Equipment, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Equipment = &SyncLongKeysDaoEquipmentField{Value: value}
+	}
+	if patch.Followers != nil {
+		var old []SyncOptionalLongItem
+		exists := previous != nil && previous.Followers != nil
+		if exists {
+			old = previous.Followers.Value
+		}
+		value, err := applySyncLongKeysDaoFollowersField(patch.Followers, old, exists)
+		if err != nil {
+			return nil, err
+		}
+		next.Followers = &SyncLongKeysDaoFollowersField{Value: value}
 	}
 	return next, nil
 }

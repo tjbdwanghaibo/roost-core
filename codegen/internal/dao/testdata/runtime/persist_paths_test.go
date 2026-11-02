@@ -24,6 +24,8 @@ type persistPathCase struct {
 
 func persistPathCases() []persistPathCase {
 	return []persistPathCase{
+		{"scalar_and_nested", func(d *HeroDao) { d.SetLevel(17); d.GetPos().SetX(91) }, []string{"level", "pos.x"}, nil},
+		{"nested_and_scalar", func(d *HeroDao) { d.GetPos().SetX(91); d.SetLevel(17) }, []string{"level", "pos.x"}, nil},
 		{"struct", func(d *HeroDao) { d.GetPos().SetX(91) }, []string{"pos.x"}, nil},
 		{"nested_map", func(d *HeroDao) { e, _ := d.GetEquips(2); g, _ := e.GetGems(3); g.SetLevel(99) }, []string{"equips.2.gems.3.level"}, nil},
 		{"list_index", func(d *HeroDao) { d.SetFriendsAt(50, 99) }, []string{"friends.50"}, nil},
@@ -105,7 +107,7 @@ func TestPersistPathsRollbackAndSyncIndependence(t *testing.T) {
 	before := d.Marshal()
 	c := &ownershipCommitter{}
 	refused := errors.New("refused")
-	_, err := nest.RunIsolatedTransaction(context.Background(), c, "refuse", func() (any, error) { d.GetPos().SetX(99); d.SetFriendsAt(2, 100); return nil, refused })
+	_, err := nest.RunIsolatedTransaction(context.Background(), c, "refuse", func() (any, error) { d.SetLevel(19); d.GetPos().SetX(99); d.SetFriendsAt(2, 100); return nil, refused })
 	if !errors.Is(err, refused) || len(c.records) != 0 || !samePersistBSON(t, before, d.Marshal()) {
 		t.Fatal("rollback leaked data or persistence")
 	}

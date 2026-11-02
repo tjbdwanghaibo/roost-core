@@ -89,7 +89,7 @@ func buildRemoteViews(defs *Definitions, pkg string) ([]byte, error) {
 	for _, d := range defs.Daos {
 		groups := map[string][]FieldDef{}
 		for _, f := range d.Fields {
-			if len(f.RemoteViews) > 0 && (d.NoCollection || !f.Tag.Persist || f.BSONSkip) {
+			if len(f.RemoteViews) > 0 && (d.NoCollection || !f.Tag.Persist || f.StoreSkip) {
 				return nil, fmt.Errorf("DAO %s.%s: remoteview requires a persisted field", d.Name, f.Name)
 			}
 			for _, name := range f.RemoteViews {

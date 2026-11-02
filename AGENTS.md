@@ -2,6 +2,8 @@
 
 版本只看 [CHANGELOG](CHANGELOG.md)：最上面的已归档段是最新发布版本，`[Unreleased]` 是 main 上未发版的变化；各功能版本的升级要求见 [docs/release](docs/release/README.md)，发版用 `scripts/release.sh`（[维护手册 §5](docs/maintenance/README.md#5-发版)）。生成物最低 core 见 `codegen/internal/roost/manifest.go` 的 `minimumVersions`。修改前阅读 [维护手册](docs/maintenance/README.md)、[模块目录](docs/framework/README.md) 和 [已知限制](docs/maintenance/KNOWN-LIMITS.md)。设计与实现的现行说明在docs/framework；历史维护过程资料已迁入 Git 历史；`docs/agent-skills/roost-genre` 只维护当前生成游戏的 skill，不恢复旧维护流水账。
 
+DAO / 嵌套类型的每个生成字段必须显式声明稳定 `store` 键（推荐数字短键）；`dao:"-"` 排除字段例外，nocoll / nopersist 仍需声明。定义不写 `bson`，它仅由生成物用于编码。变更 store 必须检查生成期 WARN，并按 [tag 手册](codegen/docs/TAGS.zh-CN.md) 处理 schema / 数据 / 字符串字段消费者；不得为绕过告警删除生成基线或隐式重编号。
+
 业务代码修改应补必要中文契约注释、按影响范围测试、更新对应现行文档。文档补丁不得混入行为重构。不等待GitHub CI，不能把未运行检查记成通过。
 
 ## 游戏接入 skill

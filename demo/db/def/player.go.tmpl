@@ -2,11 +2,11 @@ package dbdef
 
 //roost:dao coll=player db=main schema=2
 type PlayerDao struct {
-	Name  string          `bson:"name" dao:"persist,sync"`
-	Level int32           `bson:"level" dao:"persist,sync"`
-	Exp   int64           `bson:"exp" dao:"persist,sync"`
-	Gold  int64           `bson:"gold" dao:"persist,sync"`
-	Items map[int64]int32 `bson:"items" dao:"persist,sync,map=fast"`
+	Name  string          `dao:"persist,sync" store:"name"`
+	Level int32           `dao:"persist,sync" store:"level"`
+	Exp   int64           `dao:"persist,sync" store:"exp"`
+	Gold  int64           `dao:"persist,sync" store:"gold"`
+	Items map[int64]int32 `dao:"persist,sync,map=fast" store:"items"`
 	// DungeonClaims is the exactly-once ledger for dungeon clear rewards:
 	// run id -> the run's resolution time. The claim transaction records the
 	// run here and pays only when it is the one that recorded it. Entries
@@ -26,12 +26,12 @@ type PlayerDao struct {
 	// by the same pipeline as everything else, no separate movement
 	// broadcast. Being DAO fields is also what rolls them back: a step whose
 	// transaction failed puts the player back where it was.
-	PosX int64 `bson:"pos_x" dao:"nopersist,sync"`
-	PosY int64 `bson:"pos_y" dao:"nopersist,sync"`
+	PosX int64 `dao:"nopersist,sync" store:"pos_x"`
+	PosY int64 `dao:"nopersist,sync" store:"pos_y"`
 	// SceneID is which scene the player is in, 0 for nowhere.
-	SceneID int64 `bson:"scene_id" dao:"nopersist,sync"`
+	SceneID int64 `dao:"nopersist,sync" store:"scene_id"`
 	// Facing is the direction of the last step, 1/100 degree (movement.Facing).
-	Facing int32 `bson:"facing" dao:"nopersist,sync"`
+	Facing int32 `dao:"nopersist,sync" store:"facing"`
 	// SavedSceneID / SavedPosX / SavedPosY / SavedFacing are the stored copy
 	// of the above: written when the player leaves the scene and every
 	// actor.SavePeriod while it is on it (movement.MapConfig Save /
@@ -40,30 +40,30 @@ type PlayerDao struct {
 	// on the map again (the position as the preferred point, the facing as
 	// is). Facing follows the position's rule: it is MapBasic data like the
 	// position. Persisted and not synced: nobody draws them.
-	SavedSceneID int64 `bson:"saved_scene_id" dao:"persist"`
-	SavedPosX    int64 `bson:"saved_pos_x" dao:"persist"`
-	SavedPosY    int64 `bson:"saved_pos_y" dao:"persist"`
-	SavedFacing  int32 `bson:"saved_facing" dao:"persist"`
+	SavedSceneID int64 `dao:"persist" store:"saved_scene_id"`
+	SavedPosX    int64 `dao:"persist" store:"saved_pos_x"`
+	SavedPosY    int64 `dao:"persist" store:"saved_pos_y"`
+	SavedFacing  int32 `dao:"persist" store:"saved_facing"`
 	// Equipment is what the player is wearing. It is the demo's one NESTED
 	// struct — a struct inside the DAO, holding a map of pointers to another
 	// struct — and it is here on purpose: real defects
 	// have lived in exactly that path and only the dao runtime gate could see
 	// them, because nothing the demo generated had a nested field. Now the
 	// live run covers it too.
-	Equipment Equipment `bson:"equipment" dao:"persist,sync"`
+	Equipment Equipment `dao:"persist,sync" store:"equipment"`
 	// AttrBase is the player's own attribute values: what they are with
 	// nothing applied. AttrID -> value, the bulk form the framework's
 	// Profile exports and loads (game/entities/player/attribute_component.go).
 	// Persisted AND replicated: it is state the server owns and the client
 	// renders.
-	AttrBase map[int32]int64 `bson:"attr_base" dao:"persist,sync,map=fast"`
+	AttrBase map[int32]int64 `dao:"persist,sync,map=fast" store:"attr_base"`
 	// AttrFinal is the composed view — base plus every layer — and it is
 	// deliberately `nopersist,sync`: storing a value that is derivable from
 	// what is already stored buys nothing and creates a second truth that can
 	// disagree with the first. It is recomputed when the entity loads, and
 	// replicated because it is what a client draws. Being a DAO field is
 	// also what rolls it back: the transaction that moved it restores it.
-	AttrFinal map[int32]int64 `bson:"attr_final" dao:"nopersist,sync,map=fast"`
+	AttrFinal map[int32]int64 `dao:"nopersist,sync,map=fast" store:"attr_final"`
 	// AttrGear is the gear layer: what the worn pieces add, priced by the
 	// item table. Derived like AttrFinal, but nothing draws it, so it is
 	// `nopersist,nosync` — kept only so that it is IN the transaction: a
@@ -71,8 +71,8 @@ type PlayerDao struct {
 	// was computed from, by the DAO's own rollback. The attribute component
 	// holds no layer of its own (state a transaction changes lives in
 	// the DAO; see game/entities/player/attribute_component.go).
-	AttrGear map[int32]int64 `bson:"attr_gear" dao:"nopersist,nosync,map=fast"`
-	DungeonClaims map[string]int64 `bson:"dungeon_claims" dao:"persist,map=fast"`
+	AttrGear map[int32]int64 `dao:"nopersist,nosync,map=fast" store:"attr_gear"`
+	DungeonClaims map[string]int64 `dao:"persist,map=fast" store:"dungeon_claims"`
 	// DungeonClears counts paid dungeon clears per leaderboard season:
 	// season -> clears. It moves in the same claim transaction that records
 	// the run in DungeonClaims, only when that transaction pays, so "paid"
@@ -81,12 +81,12 @@ type PlayerDao struct {
 	// replay of any run resubmits the current count instead of adding one —
 	// see game/ranking for why the rank service's request ring cannot be the
 	// ledger for this.
-	DungeonClears map[int64]int64 `bson:"dungeon_clears" dao:"persist,map=fast"`
+	DungeonClears map[int64]int64 `dao:"persist,map=fast" store:"dungeon_clears"`
 	// MailClaims is the same ledger for mail attachments: mail id → the
 	// MAIL's expiry, as the mail service reported it with the reservation. It closes the window the three-step claim leaves open —
 	// reserve and grant succeed, the commit is lost, and the retry would
 	// grant a second stack (see game/controllers/player/claim_mail.go).
-	MailClaims map[string]int64 `bson:"mail_claims" dao:"persist,map=fast"`
+	MailClaims map[string]int64 `dao:"persist,map=fast" store:"mail_claims"`
 	// PurchaseClaims is the same ledger for paid orders: order id -> the
 	// moment after which that grant can no longer be claimed (payment time
 	// plus game/purchase.ClaimRetentionSeconds). The platform service runs in
@@ -95,7 +95,7 @@ type PlayerDao struct {
 	// WAL record as the items.
 	//
 	// 当前 schema 为 2；框架只加载同版本文档，不自动转换历史数据。
-	PurchaseClaims map[string]int64 `bson:"purchase_claims" dao:"persist,map=fast"`
+	PurchaseClaims map[string]int64 `dao:"persist,map=fast" store:"purchase_claims"`
 	// GuildID is the guild this player belongs to, or 0.
 	//
 	// The roster lives on the guild — which is a remote-managed entity owned
@@ -106,7 +106,7 @@ type PlayerDao struct {
 	// The rule that keeps them from drifting: both are written in the SAME
 	// transaction (game/handler/join_guild.go), which is possible precisely
 	// because Nest can lock a remote entity and a local one together.
-	GuildID int64 `bson:"guild_id" dao:"persist,sync"`
+	GuildID int64 `dao:"persist,sync" store:"guild_id"`
 	// SagaReceipts is where the gift saga's native steps (debit and its
 	// refund) keep their receipts: operation (saga.Command.IdempotencyKey) ->
 	// the framework's encoding of saga.StepReceipt. The step writes it in the
@@ -116,7 +116,7 @@ type PlayerDao struct {
 	// roost-core SAGA.md 原生步骤执行契约). Persisted, never synced: the client
 	// has no use for it. Old receipts are pruned by the step itself after
 	// saga.receipt_retention.
-	SagaReceipts map[string][]byte `bson:"saga_receipts" dao:"persist"`
+	SagaReceipts map[string][]byte `dao:"persist" store:"saga_receipts"`
 }
 
 // Equipment is a nested struct: the generator gives it its own dirty
@@ -125,11 +125,11 @@ type PlayerDao struct {
 type Equipment struct {
 	// Slots is slot id -> the piece worn there. Nested inside a nested
 	// struct, the shape whose ownership transfer the generated DAO must get right.
-	Slots map[int32]*GearPiece
+	Slots map[int32]*GearPiece `store:"slots"`
 }
 
 // GearPiece is one worn item.
 type GearPiece struct {
-	ItemID int64
-	Level  int32
+	ItemID int64 `store:"item_id"`
+	Level  int32 `store:"level"`
 }

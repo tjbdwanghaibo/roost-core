@@ -22,11 +22,11 @@ func TestParseDefDir(t *testing.T) {
 		t.Fatalf("parseDefDir: %v", err)
 	}
 
-	// HeroDao, VarietyDao and the nocoll WraithDao.
-	if len(defs.Daos) != 3 {
-		t.Fatalf("expected 3 daos, got %d", len(defs.Daos))
+	// HeroDao、两种存储键夹具、VarietyDao 与 nocoll WraithDao。
+	if len(defs.Daos) != 5 {
+		t.Fatalf("expected 5 daos, got %d", len(defs.Daos))
 	}
-	if wraith := defs.Daos[2]; wraith.Name != "WraithDao" || !wraith.NoCollection || wraith.Coll != "" || wraith.Db != "" {
+	if wraith := defs.Daos[len(defs.Daos)-1]; wraith.Name != "WraithDao" || !wraith.NoCollection || wraith.Coll != "" || wraith.Db != "" {
 		t.Fatalf("expected the nocoll WraithDao last, got %+v", wraith)
 	}
 	if len(defs.RedisDaos) != 2 {
@@ -108,8 +108,8 @@ func TestParseDefDir(t *testing.T) {
 
 	// Should auto-detect nested structs recursively: Position, EquipInfo,
 	// GemInfo, and Envelope (VarietyDao's map-of-bytes holder).
-	if len(defs.Nested) != 4 {
-		t.Fatalf("expected 4 nested, got %d", len(defs.Nested))
+	if len(defs.Nested) != 6 {
+		t.Fatalf("expected 6 nested, got %d", len(defs.Nested))
 	}
 
 	nestedNames := make(map[string]bool)
@@ -354,7 +354,7 @@ func TestGenerateNested(t *testing.T) {
 
 func TestGenerateNestedPointerGetterDoesNotAddPointerLevel(t *testing.T) {
 	outFile := filepath.Join(t.TempDir(), "gen_pointer_holder_nested.go")
-	nested := NestedDef{Name: "PointerHolder", Fields: []FieldDef{{Name: "Child", TypeStr: "*Position", Kind: KindStruct, IsPtr: true}}}
+	nested := NestedDef{Name: "PointerHolder", Fields: []FieldDef{{Name: "Child", Key: "child", KeyDeclared: true, TypeStr: "*Position", Kind: KindStruct, IsPtr: true}}}
 	if _, err := generateNested(nested, &Definitions{}, "testdata", outFile, true); err != nil {
 		t.Fatal(err)
 	}

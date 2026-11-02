@@ -6,9 +6,9 @@ package def
 //
 //roost:dao nocoll
 type WraithDao struct {
-	PosX    int64           `bson:"pos_x" dao:"nopersist,sync"`
-	PosY    int64           `bson:"pos_y" dao:"nopersist,sync"`
-	Buffs   map[int32]int64 `bson:"buffs" dao:"nopersist,sync"`
-	Trail   []int64         `bson:"trail" dao:"nopersist,sync"`
-	Scratch int64           `dao:"nopersist,nosync"`
+	PosX    int64           `dao:"nopersist,sync" store:"pos_x"`
+	PosY    int64           `dao:"nopersist,sync" store:"pos_y"`
+	Buffs   map[int32]int64 `dao:"nopersist,sync" store:"buffs"`
+	Trail   []int64         `dao:"nopersist,sync" store:"trail"`
+	Scratch int64           `dao:"nopersist,nosync" store:"scratch"`
 }

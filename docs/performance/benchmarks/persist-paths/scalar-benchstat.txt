@@ -1,0 +1,20 @@
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+                     │ scalar-before.txt │ scalar-after.txt │
+                     │                                       sec/op                                       │                          sec/op                            vs base                │
+PersistScalarDAOs-10                                                                          7.049µ ± 9%                                                 9.213µ ± 4%  +30.72% (p=0.000 n=10)
+
+                     │ scalar-before.txt │ scalar-after.txt │
+                     │                                     bson-B/op                                      │                           bson-B/op                            vs base            │
+PersistScalarDAOs-10                                                                           116.0 ± 0%                                                      116.0 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+                     │ scalar-before.txt │ scalar-after.txt │
+                     │                                        B/op                                        │                           B/op                             vs base                │
+PersistScalarDAOs-10                                                                         11.61Ki ± 0%                                                14.68Ki ± 0%  +26.44% (p=0.000 n=10)
+
+                     │ scalar-before.txt │ scalar-after.txt │
+                     │                                     allocs/op                                      │                         allocs/op                          vs base                │
+PersistScalarDAOs-10                                                                           221.0 ± 0%                                                  261.0 ± 0%  +18.10% (p=0.000 n=10)

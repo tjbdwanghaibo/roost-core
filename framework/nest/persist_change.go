@@ -20,9 +20,11 @@ var ErrReceiptConflict = errors.New("nest: transaction receipt conflict")
 // 重写。回滚时丢弃，不把持久化脏掩码写回 DAO。
 type PersistChange struct {
 	// revision 记录登记次数，包括已有参与方以相同 mask 再写。失败创建据此检测外部副作用。
-	revision   uint64
-	Paths      dataengine.PersistPaths
-	Mask       uint64
+	revision uint64
+	Paths    dataengine.PersistPaths
+	Mask     uint64
+	// FullMask 标记整字段替换；不为标量或完整容器分配路径节点。
+	FullMask   uint64
 	Delete     bool
 	Set        map[string]any
 	Unset      []string
@@ -35,6 +37,7 @@ func (change PersistChange) Clone() PersistChange {
 		revision:   change.revision,
 		Paths:      change.Paths.Clone(),
 		Mask:       change.Mask,
+		FullMask:   change.FullMask,
 		Delete:     change.Delete,
 		Set:        maps.Clone(change.Set),
 		Unset:      slices.Clone(change.Unset),
@@ -173,6 +176,16 @@ func (tx *RollbackTx) MarkPersist(participant MutationParticipant, mask uint64) 
 	return err
 }
 
+// MarkPersistField 登记顶层字段的完整替换，提交时读取最终值。
+// 同一字段已有的子路径由 FullMask 覆盖；每次登记仍递增 revision。
+func MarkPersistField(participant MutationParticipant, mask uint64) error {
+	change, err := CurrentRollbackTx().persistChange(participant, mask)
+	if err == nil {
+		change.FullMask |= mask
+	}
+	return err
+}
+
 // MarkPersistPath 登记生成 setter 的相对变化路径，在提交准备时读取最终值。
 // 与同步路径独立消费；失败创建的副作用检测仍通过 persistChange 的 revision 计数。
 func MarkPersistPath(participant MutationParticipant, mask uint64, path dataengine.SyncPath) error {
@@ -180,7 +193,9 @@ func MarkPersistPath(participant MutationParticipant, mask uint64, path dataengi
 	if err != nil {
 		return err
 	}
-	change.Paths.Record(path)
+	if change.FullMask&mask != mask {
+		change.Paths.Record(path)
+	}
 	return nil
 }
 

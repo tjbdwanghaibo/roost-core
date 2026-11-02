@@ -54,10 +54,10 @@ Mongo 是数据权威，L1 是进程缓存，Redis L2 是共享快照缓存及�
 // db/def/alliance.go
 //roost:dao coll=alliances db=game dbscope=global
 type AllianceDao struct {
-    Name          string `bson:"name"           remoteview:"public,member"`
-    Level         int32  `bson:"level"          remoteview:"public,member"`
-    ResearchBonus int64  `bson:"research_bonus" remoteview:"member"`
-    Treasury      int64  `bson:"treasury"`
+    Name          string `remoteview:"public,member" store:"name"`
+    Level         int32  `remoteview:"public,member" store:"level"`
+    ResearchBonus int64  `remoteview:"member" store:"research_bonus"`
+    Treasury      int64  `store:"treasury"`
 }
 ```
 

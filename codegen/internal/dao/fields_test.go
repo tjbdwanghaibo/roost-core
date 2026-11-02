@@ -32,10 +32,10 @@ func TestAFieldWhoseLowercaseNameIsAKeywordGenerates(t *testing.T) {
 
 //roost:dao coll=things db=game
 type ThingDao struct {
-	Type  int32  `+"`bson:\"type\"`"+`
-	Range int64  `+"`bson:\"range\"`"+`
-	Map   string `+"`bson:\"map\"`"+`
-	Name  string `+"`bson:\"name\"`"+`
+	Type  int32  `+"`"+`store:"type"`+"`"+`
+	Range int64  `+"`"+`store:"range"`+"`"+`
+	Map   string `+"`"+`store:"map"`+"`"+`
+	Name  string `+"`"+`store:"name"`+"`"+`
 }
 `)
 	generated, err := os.ReadFile(filepath.Join(out, "gen_thing_dao.go"))
@@ -59,12 +59,12 @@ func TestANestedFieldWhoseLowercaseNameIsAKeywordGenerates(t *testing.T) {
 
 //roost:dao coll=things db=game
 type ThingDao struct {
-	Node Node `+"`bson:\"node\"`"+`
+	Node Node `+"`"+`store:"node"`+"`"+`
 }
 
 type Node struct {
-	Type   int32  `+"`bson:\"type\"`"+`
-	Select string `+"`bson:\"select\"`"+`
+	Type   int32  `+"`"+`store:"type"`+"`"+`
+	Select string `+"`"+`store:"select"`+"`"+`
 }
 `)
 	generated, err := os.ReadFile(filepath.Join(out, "gen_node_nested.go"))
@@ -249,19 +249,19 @@ func generatedFunctions(source string) map[string]string {
 // Go 字段名的 snake_case；生成的持久文档结构体（<dao>PersistDoc / 嵌套类型的 <type>BSONDoc）把每个字段存成的键写成
 // 显式 bson 标签，读写、回滚、补丁都用它。新用户第七轮：把 Gold 改名 Coins、保留 bson:"gold" 想保住库里的键，修前
 // 生成物仍按 coins 存取，金币读成 0。
-func TestTheDeclaredBSONNameIsTheStoredKey(t *testing.T) {
+func TestTheDeclaredStoreTagIsTheStoredKey(t *testing.T) {
 	out := generateDefs(t, t.TempDir(), `package def
 
 //roost:dao coll=wallets db=game
 type WalletDao struct {
-	Coins int64  `+"`bson:\"gold\" dao:\"persist,sync\"`"+`
-	Name  string `+"`dao:\"persist,sync\"`"+`
-	Note  string `+"`bson:\"memo,omitempty\" dao:\"persist\"`"+`
-	Bag   *Bag   `+"`bson:\"bag\" dao:\"persist,sync\"`"+`
+	Coins int64  `+"`"+`dao:"persist,sync" store:"gold"`+"`"+`
+	Name  string `+"`"+`dao:"persist,sync" store:"name"`+"`"+`
+	Note  string `+"`"+`dao:"persist" store:"memo,omitempty"`+"`"+`
+	Bag   *Bag   `+"`"+`dao:"persist,sync" store:"bag"`+"`"+`
 }
 
 type Bag struct {
-	Slots int32 `+"`bson:\"slot_count\"`"+`
+	Slots int32 `+"`"+`store:"slot_count"`+"`"+`
 }
 `)
 	dao := readGenerated(t, out, "gen_wallet_dao.go")
@@ -293,12 +293,16 @@ func TestInvalidDeclaredStoredKeysFailGeneration(t *testing.T) {
 	for _, tc := range []struct {
 		name, fields, want string
 	}{
-		{"reserved", "A int64 `bson:\"_schema\"`", `reserved`},
-		{"path", "A int64 `bson:\"a.b\"`", `not a valid stored key`},
-		{"dash", "A int64 `bson:\"-\"`", `dao:"nopersist`},
-		{"option", "A int64 `bson:\"a,inline\"`", `option "inline"`},
-		{"duplicate", "A int64 `bson:\"gold\"`\n\tGold int64", `both store as "gold"`},
-		{"duplicate-transient", "A int64 `bson:\"x\" dao:\"nopersist,sync\"`\n\tX int64 `dao:\"persist\"`", `both store as "x"`},
+		{"zero", "A int64 `store:\"0\"`", `not a valid stored key`},
+		{"leading-zero", "A int64 `store:\"01\"`", `not a valid stored key`},
+		{"numeric-prefix", "A int64 `store:\"1name\"`", `not a valid stored key`},
+		{"duplicate-number", "A int64 `store:\"1\"`\n B int64 `store:\"1\"`", `both store as "1"`},
+		{"reserved", "A int64 `store:\"_schema\"`", `reserved`},
+		{"path", "A int64 `store:\"a.b\"`", `not a valid stored key`},
+		{"dash", "A int64 `store:\"-\"`", `dao:"nopersist`},
+		{"option", "A int64 `store:\"a,inline\"`", `option "inline"`},
+		{"duplicate", "A int64 `store:\"gold\"`\n\tGold int64 `store:\"gold\"`", `both store as "gold"`},
+		{"duplicate-transient", "A int64 `store:\"x\" dao:\"nopersist,sync\"`\n\tX int64 `store:\"x\" dao:\"persist\"`", `both store as "x"`},
 		{"reserved-go-name", "SchemaVersion int64", `SchemaVersion`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -321,13 +325,13 @@ func TestGenerateWarnsWhenAStoredKeyChangesAgainstThePreviousOutput(t *testing.T
 
 //roost:dao coll=wallets db=game
 type WalletDao struct {
-	Gold  int64
-	Level int32
-	Bag   Bag
+	Gold  int64 `+"`"+`store:"gold"`+"`"+`
+	Level int32 `+"`"+`store:"level"`+"`"+`
+	Bag   Bag `+"`"+`store:"bag"`+"`"+`
 }
 
 type Bag struct {
-	Slots int32
+	Slots int32 `+"`"+`store:"slots"`+"`"+`
 }
 `)
 	var output bytes.Buffer
@@ -335,13 +339,13 @@ type Bag struct {
 
 //roost:dao coll=wallets db=game
 type WalletDao struct {
-	Coins int64
-	Level string
-	Bag   Bag
+	Coins int64 `+"`"+`store:"coins"`+"`"+`
+	Level string `+"`"+`store:"level"`+"`"+`
+	Bag   Bag `+"`"+`store:"bag"`+"`"+`
 }
 
 type Bag struct {
-	Capacity int32
+	Capacity int32 `+"`"+`store:"capacity"`+"`"+`
 }
 `)
 	text := output.String()
@@ -351,7 +355,7 @@ type Bag struct {
 		`the next full write of each document deletes it`,
 		`if this is a rename the new field starts at the zero value`,
 		"migrate the stored value offline before raising schema=",
-		`bson:"gold"`,
+		`store:"gold"`,
 		"docs/framework/SCHEMA-MIGRATION.md",
 		`WARN: WalletDao: new stored key "coins" (Coins int64)`,
 		`WARN: WalletDao: stored key "level" changes type int32 -> string`,
@@ -369,13 +373,13 @@ type Bag struct {
 
 //roost:dao coll=wallets db=game
 type WalletDao struct {
-	Coins int64
-	Level string
-	Bag   Bag
+	Coins int64 `+"`"+`store:"coins"`+"`"+`
+	Level string `+"`"+`store:"level"`+"`"+`
+	Bag   Bag `+"`"+`store:"bag"`+"`"+`
 }
 
 type Bag struct {
-	Capacity int32
+	Capacity int32 `+"`"+`store:"capacity"`+"`"+`
 }
 `)
 	if strings.Contains(output.String(), "WARN") {
@@ -387,13 +391,13 @@ type Bag struct {
 
 //roost:dao coll=wallets db=game schema=2
 type WalletDao struct {
-	Money int64 `+"`bson:\"coins\"`"+`
-	Level string
-	Bag   Bag
+	Money int64 `+"`"+`store:"coins"`+"`"+`
+	Level string `+"`"+`store:"level"`+"`"+`
+	Bag   Bag `+"`"+`store:"bag"`+"`"+`
 }
 
 type Bag struct {
-	Capacity int32
+	Capacity int32 `+"`"+`store:"capacity"`+"`"+`
 }
 `)
 	if strings.Contains(output.String(), "WARN") {
@@ -405,12 +409,12 @@ type Bag struct {
 
 //roost:dao coll=wallets db=game schema=3
 type WalletDao struct {
-	Level string
-	Bag   Bag
+	Level string `+"`"+`store:"level"`+"`"+`
+	Bag   Bag `+"`"+`store:"bag"`+"`"+`
 }
 
 type Bag struct {
-	Capacity int32
+	Capacity int32 `+"`"+`store:"capacity"`+"`"+`
 }
 `)
 	if text := output.String(); !strings.Contains(text, `stored key "coins" (Money int64) is no longer generated`) || !strings.Contains(text, "schema= was raised from 2 to 3") {
@@ -463,15 +467,15 @@ func TestEveryKeyTheGeneratedDaoSpellsIsATagOfItsDocumentStructs(t *testing.T) {
 
 //roost:dao coll=wallets db=game
 type WalletDao struct {
-	Coins   int64            `+"`bson:\"gold\" dao:\"persist,sync\"`"+`
-	Items   map[int64]int32  `+"`bson:\"bag_items\" dao:\"persist,sync,map=fast\"`"+`
-	Gear    map[int32]*Piece `+"`bson:\"gear\"`"+`
-	Shown   int64            `+"`bson:\"shown_value\" dao:\"nopersist,sync\"`"+`
-	Pending map[int32]int64  `+"`bson:\"pending_set\" dao:\"nopersist,nosync,map=fast\"`"+`
+	Coins   int64            `+"`"+`dao:"persist,sync" store:"gold"`+"`"+`
+	Items   map[int64]int32  `+"`"+`dao:"persist,sync,map=fast" store:"bag_items"`+"`"+`
+	Gear    map[int32]*Piece `+"`"+`store:"gear"`+"`"+`
+	Shown   int64            `+"`"+`dao:"nopersist,sync" store:"shown_value"`+"`"+`
+	Pending map[int32]int64  `+"`"+`dao:"nopersist,nosync,map=fast" store:"pending_set"`+"`"+`
 }
 
 type Piece struct {
-	Level int32 `+"`bson:\"lv\"`"+`
+	Level int32 `+"`"+`store:"lv"`+"`"+`
 }
 `)
 	source := readGenerated(t, out, "gen_wallet_dao.go")
@@ -526,14 +530,14 @@ func TestAByteSliceFieldHasAWholeValueGetterThatReturnsACopy(t *testing.T) {
 
 //roost:dao coll=tasks db=game
 type TaskDao struct {
-	ResultJSON []byte
-	Raw        []uint8 `+"`dao:\"nopersist,sync\"`"+`
-	Friends    []int64
-	Box        Box
+	ResultJSON []byte `+"`"+`store:"result_json"`+"`"+`
+	Raw        []uint8 `+"`"+`dao:"nopersist,sync" store:"raw"`+"`"+`
+	Friends    []int64 `+"`"+`store:"friends"`+"`"+`
+	Box        Box `+"`"+`store:"box"`+"`"+`
 }
 
 type Box struct {
-	Blob []byte
+	Blob []byte `+"`"+`store:"blob"`+"`"+`
 }
 `)
 	daoSource, err := os.ReadFile(filepath.Join(out, "gen_task_dao.go"))
@@ -589,14 +593,14 @@ func TestAMapOfSlicesHandsOutAndStoresCopies(t *testing.T) {
 
 //roost:dao coll=ledgers db=game
 type LedgerDao struct {
-	Receipts map[string][]byte
-	Counts   map[int64]int32
-	Lists    map[int32][]int64 `+"`dao:\"persist,sync,map=fast\"`"+`
-	Box      Box
+	Receipts map[string][]byte `+"`"+`store:"receipts"`+"`"+`
+	Counts   map[int64]int32 `+"`"+`store:"counts"`+"`"+`
+	Lists    map[int32][]int64 `+"`"+`dao:"persist,sync,map=fast" store:"lists"`+"`"+`
+	Box      Box `+"`"+`store:"box"`+"`"+`
 }
 
 type Box struct {
-	Marks map[int32][]byte
+	Marks map[int32][]byte `+"`"+`store:"marks"`+"`"+`
 }
 `)
 	read := func(name string) map[string]string {

@@ -65,3 +65,43 @@ func (c *persistBenchmarkCommitter) Commit(_ context.Context, record nest.Commit
 	c.record = record
 	return nil
 }
+
+// BenchmarkPersistScalarDAOs 隔离小字段业务的准备成本：四份 DAO 各改两个标量。
+// 不包含 WAL/Mongo I/O，用于区分变化路径记账开销与集合持久化的收益。
+func BenchmarkPersistScalarDAOs(b *testing.B) {
+	daos := make([]*HeroDao, 4)
+	for i := range daos {
+		d := NewHeroDao()
+		d.SetId(int64(i + 1))
+		d.DirtyTracker().SetVersion(1)
+		daos[i] = d
+	}
+	c := &persistBenchmarkCommitter{}
+	var seq int64
+	b.ReportAllocs()
+	for b.Loop() {
+		seq++
+		c.record = nest.CommitRecord{}
+		_, err := nest.RunIsolatedTransaction(context.Background(), c, "persist_scalar_bench", func() (any, error) {
+			for _, d := range daos {
+				d.SetLevel(int32(seq))
+				d.SetExp(seq)
+			}
+			return nil, nil
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		for _, d := range daos {
+			d.DirtyTracker().AcknowledgeSyncChanges(d.DirtyTracker().SyncChangeVersion())
+		}
+	}
+	if len(c.record.Mutations) != len(daos) {
+		b.Fatalf("mutations=%d want=%d", len(c.record.Mutations), len(daos))
+	}
+	bytes := 0
+	for _, m := range c.record.Mutations {
+		bytes += len(m.Patch.SetBSON)
+	}
+	b.ReportMetric(float64(bytes), "bson-B/op")
+}

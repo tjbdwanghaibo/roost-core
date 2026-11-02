@@ -1,0 +1,60 @@
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistScalarDAOs-10    	   33534	      9352 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistScalarDAOs-10    	   40460	      8938 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistScalarDAOs-10    	   40150	      8915 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistScalarDAOs-10    	   40106	      9210 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistScalarDAOs-10    	   38283	      9319 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistScalarDAOs-10    	   39986	      9062 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistScalarDAOs-10    	   39793	      8957 ns/op	       116.0 bson-B/op	   15035 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistScalarDAOs-10    	   39178	      9217 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistScalarDAOs-10    	   36249	     10061 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: daogoldenruntime/gen
+cpu: Apple M5
+BenchmarkPersistScalarDAOs-10    	   37342	      9616 ns/op	       116.0 bson-B/op	   15036 B/op	     261 allocs/op
+PASS

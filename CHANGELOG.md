@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- 生成 DAO 的标量/顶层完整替换使用事务 `FullMask`，仅嵌套子项维护持久路径树；保留父字段覆盖、revision、回滚与冻结语义。需配套本次 core（新增 `nest.MarkPersistField`）和生成器重新生成；WAL codec、Mongo 持久级别和 Sync PB 不变。
+- DAO 与嵌套生成字段统一必填 `store` tag（如 `store:"1"`），定义不再接受 `bson`；支持数字短键与稳定字母键，不自动改已有物理键或 PB 字段号。生成前拒绝缺失/重复/非法键，重新生成按字段身份报告 tag 变化，包含同类型字段交换键、omitempty、嵌套与非持久字段。显式改已有键须提升业务 `schema=` 并离线处理数据；字符串字段选择/Values 字典键跟随存储名。见 [tag 手册](codegen/docs/TAGS.zh-CN.md)与[持久化对照](docs/performance/DATAENGINE-PERSIST-PATHS.md)。
+
+- 补齐 39 组正式 Nest/WAL/Mongo 性能对照（216 万次业务事务），保留 strict 长尾与 pipelined 高压波动；尚未证明稳定的端到端 TPS 提升。新增可复跑脚本，升级步骤和验证边界见 [v1.40.0 发布说明](docs/release/v1.40.0-NOTES.md)。
+
 ## [v1.39.0] - 2026-11-02
 
 - 修复 RV-20261102-03：全 nopersist DAO 按字段形状生成持久路径局部变量，避免空分支生成物编译失败；正式心跳和 Sync 双模式生成验收通过，有持久字段的生成输出不变。

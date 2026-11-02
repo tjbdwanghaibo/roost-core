@@ -67,7 +67,7 @@ access 只负责已认证请求进入协议层；Entity 是锁和生命周期边
 
 编辑 db/def/player.go，在 PlayerDao 中加入：
 
-    Name string ` + "`bson:\"name\" dao:\"persist,sync\"`" + `
+    Name string ` + "`store:\"name\" dao:\"persist,sync\"`" + `
 
 然后运行：
 
@@ -295,7 +295,7 @@ access player 是传输无关的已认证玩家接入层；它生成并发安全
 
 在 db/def/player.go 添加需要持久化的字段：
 
-    Name string ` + "`bson:\"name\" dao:\"persist,sync\"`" + `
+    Name string ` + "`store:\"name\" dao:\"persist,sync\"`" + `
 
 运行一次 roost generate，然后在 game/entities/player/profile_component.go 添加：
 

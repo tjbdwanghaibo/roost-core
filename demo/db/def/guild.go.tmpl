@@ -13,14 +13,14 @@ package dbdef
 //
 //roost:dao coll=guild db=main
 type GuildDao struct {
-	Name string `bson:"name" dao:"persist"`
+	Name string `dao:"persist" store:"name"`
 	// Members is player unique id -> when they joined. A map rather than a
 	// count because the roster is what the game asks about, and a count that
 	// can disagree with the roster is a count nobody trusts.
-	Members map[int64]int64 `bson:"members" dao:"persist,map=fast"`
+	Members map[int64]int64 `dao:"persist,map=fast" store:"members"`
 	// CreatedAtUnix and FounderID are for the operator answering "whose guild
 	// is this and since when", which is the first question about any shared
 	// object with a dispute attached.
-	CreatedAtUnix int64 `bson:"created_at_unix" dao:"persist"`
-	FounderID     int64 `bson:"founder_id" dao:"persist"`
+	CreatedAtUnix int64 `dao:"persist" store:"created_at_unix"`
+	FounderID     int64 `dao:"persist" store:"founder_id"`
 }

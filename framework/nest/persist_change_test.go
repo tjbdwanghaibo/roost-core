@@ -8,6 +8,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
 type fakeMutationParticipant struct {
@@ -531,5 +532,30 @@ func TestNewRemoteEntityFirstCommitClaimsEveryDAO(t *testing.T) {
 	}
 	if len(record.Mutations) != 0 {
 		t.Fatalf("claimed DAOs leaked into ordinary mutations: %+v", record.Mutations)
+	}
+}
+
+func TestPersistFieldAvoidsPathsAndPreservesRevision(t *testing.T) {
+	_, release := fctx.NewContext()
+	defer release()
+	if err := MarkPersistField(&fakeMutationParticipant{}, 1); !errors.Is(err, ErrTransactionClosed) {
+		t.Fatal(err)
+	}
+	tx := NewRollbackTx(RollbackUndo)
+	p := &fakeMutationParticipant{}
+	_, err := withRollbackTx(tx, func() (any, error) {
+		for range 2 {
+			if err := MarkPersistField(p, 1); err != nil {
+				return nil, err
+			}
+		}
+		return nil, MarkPersistPath(p, 1, dataengine.SyncField(1, dataengine.SyncField(1, nil)))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	change := tx.participantChanges[p].Clone()
+	if change.Mask != 1 || change.FullMask != 1 || change.Paths.Root() != nil || change.revision != 3 {
+		t.Fatalf("full field must dominate paths without losing revision: %+v", change)
 	}
 }

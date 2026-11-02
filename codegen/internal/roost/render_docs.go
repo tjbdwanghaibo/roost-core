@@ -177,8 +177,8 @@ Component 方法和 Nest handler。
 先在 db/def/player.go 定义字段并运行 make generate：
 
     type Player struct {
-        Name  string ` + "`bson:\"name\" dao:\"persist,sync\"`" + `
-        Level int32  ` + "`bson:\"level\" dao:\"persist,sync\"`" + `
+        Name  string ` + "`store:\"name\" dao:\"persist,sync\"`" + `
+        Level int32  ` + "`store:\"level\" dao:\"persist,sync\"`" + `
     }
 
 然后在 profile_component.go 末尾写业务方法：

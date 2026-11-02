@@ -7,11 +7,11 @@ package dbdef
 //
 //roost:dao coll=world db=main
 type WorldDao struct {
-	PlayersEntered int64 `bson:"players_entered" dao:"persist,sync"`
-	MatchesFormed  int64 `bson:"matches_formed" dao:"persist,sync"`
+	PlayersEntered int64 `dao:"persist,sync" store:"players_entered"`
+	MatchesFormed  int64 `dao:"persist,sync" store:"matches_formed"`
 	// ExpGranted moves in the same Nest transaction as a Player's Exp: one
 	// WAL record, two entities, two lock ranks.
-	ExpGranted int64 `bson:"exp_granted" dao:"persist,sync"`
+	ExpGranted int64 `dao:"persist,sync" store:"exp_granted"`
 	// Timers is the World's pending deadlines, persisted: node id -> node.
 	// This map IS the schedule — there is no heap kept beside it. The World's
 	// hand-written TimerComponent (game/entities/world/timer_component.go)
@@ -22,16 +22,16 @@ type WorldDao struct {
 	// nothing about it lives anywhere else. The earliest deadline is not
 	// stored: the framework's timer driver (framework/nest/entitytimer, wired
 	// by hand in the game service) keeps it in memory, per loaded World.
-	Timers map[int64]*TimerNode `bson:"timers" dao:"persist,map=fast"`
+	Timers map[int64]*TimerNode `dao:"persist,map=fast" store:"timers"`
 	// TimerSeed is the highest node id ever minted. Persisted so a restart
 	// does not hand out an id a stored node already has.
-	TimerSeed int64 `bson:"timer_seed" dao:"persist"`
+	TimerSeed int64 `dao:"persist" store:"timer_seed"`
 	// SettledActivities is activity id -> when this server acked its result
 	// dispatch. It is what makes settlement once-per-activity across
 	// restarts, and it is on the World rather than in the coordinator because
 	// the coordinator says "the phase is collected" — what settlement PAYS is
 	// the game's.
-	SettledActivities map[string]int64 `bson:"settled_activities" dao:"persist,map=fast"`
+	SettledActivities map[string]int64 `dao:"persist,map=fast" store:"settled_activities"`
 }
 
 // TimerNode is one stored timer. It is infra/base/timer's Node minus the
@@ -46,13 +46,13 @@ type WorldDao struct {
 // (2026-10-06): a node stored before it has no "priority" key and decodes as
 // 0, the default, so no migration and no schema bump.
 type TimerNode struct {
-	Type int32 `bson:"type"`
+	Type int32 `store:"type"`
 	// Priority orders nodes due at the same moment: lower fires first, equal
 	// priorities fire in the order they were armed (node id).
-	Priority     int32  `bson:"priority"`
-	Param1       int64  `bson:"param1"`
-	Param2       int64  `bson:"param2"`
-	Payload      string `bson:"payload,omitempty"`
-	EndUnixMilli int64  `bson:"end_unix_milli"`
-	DelayMillis  int64  `bson:"delay_millis"`
+	Priority     int32  `store:"priority"`
+	Param1       int64  `store:"param1"`
+	Param2       int64  `store:"param2"`
+	Payload      string `store:"payload,omitempty"`
+	EndUnixMilli int64  `store:"end_unix_milli"`
+	DelayMillis  int64  `store:"delay_millis"`
 }

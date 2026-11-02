@@ -78,7 +78,7 @@ func TestAddTimerGeneratesOwnedPartsAndBusinessCallbacks(t *testing.T) {
 		t.Fatalf("tick handler:\n%s", tick)
 	}
 	dao := readProjectFile(t, root, "db/def/player.go")
-	if !strings.Contains(dao, "Timers map[int64]*PlayerTimerNode `bson:\"timers\" dao:\"persist,map=fast\"`") || !strings.Contains(dao, "TimerSeed int64 `bson:\"timer_seed\" dao:\"persist\"`") {
+	if !strings.Contains(dao, "Timers map[int64]*PlayerTimerNode `store:\"timers\" dao:\"persist,map=fast\"`") || !strings.Contains(dao, "TimerSeed int64 `store:\"timer_seed\" dao:\"persist\"`") {
 		t.Fatalf("DAO definition:\n%s", dao)
 	}
 	if entityGo := readProjectFile(t, root, "game/entities/player/entity.go"); !strings.Contains(entityGo, "timer *TimerComponent `comp:\"CompTypeTimer\"`") {
@@ -136,7 +136,7 @@ func TestAddTimerComponentNameAndExplicitID(t *testing.T) {
 			t.Fatalf("component misses %q", fragment)
 		}
 	}
-	if dao := readProjectFile(t, root, "db/def/player.go"); !strings.Contains(dao, "BuffClocks map[int64]*PlayerBuffClockNode `bson:\"buff_clocks\"") || !strings.Contains(dao, "BuffClockSeed int64 `bson:\"buff_clock_seed\"") {
+	if dao := readProjectFile(t, root, "db/def/player.go"); !strings.Contains(dao, "BuffClocks map[int64]*PlayerBuffClockNode `store:\"buff_clocks\"") || !strings.Contains(dao, "BuffClockSeed int64 `store:\"buff_clock_seed\"") {
 		t.Fatalf("DAO definition:\n%s", dao)
 	}
 	if _, err := os.Stat(filepath.Join(root, "game", "handler", "tick_player_buff_clock_gen.go")); err != nil {
@@ -312,14 +312,14 @@ func TestEntityTimerGeneratedProjectEndToEnd(t *testing.T) {
 
 // 业务字段：Buff 状态与周期收益，以及最近一次周期回调收到的 Fire（给用例核对离线补触发的参数）。
 const timerE2EDaoFields = `
-	BuffActive   bool  ` + "`bson:\"buff_active\" dao:\"persist\"`" + `
-	BuffExpired  int64 ` + "`bson:\"buff_expired\" dao:\"persist\"`" + `
-	IncomeFires  int64 ` + "`bson:\"income_fires\" dao:\"persist\"`" + `
-	Gold         int64 ` + "`bson:\"gold\" dao:\"persist\"`" + `
-	LastOverdue  bool  ` + "`bson:\"last_overdue\" dao:\"persist\"`" + `
-	LastDeadline int64 ` + "`bson:\"last_deadline\" dao:\"persist\"`" + `
-	LastNow      int64 ` + "`bson:\"last_now\" dao:\"persist\"`" + `
-	LastInterval int64 ` + "`bson:\"last_interval\" dao:\"persist\"`"
+	BuffActive   bool  ` + "`store:\"buff_active\" dao:\"persist\"`" + `
+	BuffExpired  int64 ` + "`store:\"buff_expired\" dao:\"persist\"`" + `
+	IncomeFires  int64 ` + "`store:\"income_fires\" dao:\"persist\"`" + `
+	Gold         int64 ` + "`store:\"gold\" dao:\"persist\"`" + `
+	LastOverdue  bool  ` + "`store:\"last_overdue\" dao:\"persist\"`" + `
+	LastDeadline int64 ` + "`store:\"last_deadline\" dao:\"persist\"`" + `
+	LastNow      int64 ` + "`store:\"last_now\" dao:\"persist\"`" + `
+	LastInterval int64 ` + "`store:\"last_interval\" dao:\"persist\"`"
 
 const timerE2EHandlers = `package player
 

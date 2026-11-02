@@ -25,7 +25,7 @@ import (
 
 // storedField 是持久文档里的一个键。
 type storedField struct {
-	Key, Field, Type string
+	Key, Field, Type, Tag string
 }
 
 type storedShape struct {
@@ -85,11 +85,12 @@ func readStoredShape(path, docType, legacyDocType, schemaConst string) (storedSh
 		if err != nil {
 			continue
 		}
-		key, _, _ := strings.Cut(reflect.StructTag(raw).Get("bson"), ",")
+		tag := reflect.StructTag(raw).Get("bson")
+		key, _, _ := strings.Cut(tag, ",")
 		if key == "" || strings.HasPrefix(key, "_") {
 			continue
 		}
-		shape.fields = append(shape.fields, storedField{Key: key, Field: field.Names[0].Name, Type: nodeString(fset, field.Type)})
+		shape.fields = append(shape.fields, storedField{Key: key, Tag: tag, Field: field.Names[0].Name, Type: nodeString(fset, field.Type)})
 	}
 	return shape, true
 }
@@ -98,7 +99,7 @@ func readStoredShape(path, docType, legacyDocType, schemaConst string) (storedSh
 func currentStoredFields(defs *Definitions, fields []FieldDef) []storedField {
 	out := make([]storedField, 0, len(fields))
 	for _, field := range fields {
-		out = append(out, storedField{Key: field.Key, Field: field.Name, Type: canonicalType(wireType(defs, field))})
+		out = append(out, storedField{Key: field.Key, Tag: bsonTag(field), Field: field.Name, Type: canonicalType(wireType(defs, field))})
 	}
 	return out
 }
@@ -114,13 +115,13 @@ func storedKeyChanges(owner, previousFile string, before storedShape, after []st
 	for _, field := range before.fields {
 		was[field.Key] = field
 	}
-	var warnings []string
+	warnings := storeTagChanges(owner, before, after, schemaNote)
 	for _, old := range before.fields {
 		current, kept := now[old.Key]
 		if !kept {
 			warnings = append(warnings, fmt.Sprintf("WARN: %s: stored key %q (%s %s) is no longer generated (it was in the previous %s). "+
 				"Documents already stored keep %q but it will not be read, and the next full write of each document deletes it; if this is a rename the new field starts at the zero value. "+
-				"To rename the Go field and keep using the data, give it bson:%q; otherwise migrate the stored value offline before raising schema= (docs/framework/SCHEMA-MIGRATION.md). %s",
+				"To rename the Go field and keep using the data, give it store:%q; otherwise migrate the stored value offline before raising schema= (docs/framework/SCHEMA-MIGRATION.md). %s",
 				owner, old.Key, old.Field, old.Type, previousFile, old.Key, old.Key, schemaNote))
 			continue
 		}
@@ -140,11 +141,31 @@ func storedKeyChanges(owner, previousFile string, before storedShape, after []st
 	return warnings
 }
 
+// storeTagChanges 按 Go 字段身份比较完整 tag，包括 omitempty。
+// 仅改 Go 名且保留键不报警；两个字段交换键则分别点名，避免数据被静默串读。
+func storeTagChanges(owner string, before storedShape, after []storedField, schemaNote string) []string {
+	var warnings []string
+	byField := make(map[string]storedField, len(after))
+	for _, field := range after {
+		byField[field.Field] = field
+	}
+	for _, old := range before.fields {
+		if current, ok := byField[old.Field]; ok && current.Tag != old.Tag {
+			warnings = append(warnings, fmt.Sprintf("WARN: %s.%s: store tag changed %q -> %q; field encoding identity changed. Check existing data and field-name consumers. %s", owner, old.Field, old.Tag, current.Tag, schemaNote))
+		}
+	}
+	return warnings
+}
+
 // daoStoredKeyWarnings 比较一个 Mongo DAO 与 outFile 里上一次的生成物。
 func daoStoredKeyWarnings(dao DaoDef, defs *Definitions, outFile string) []string {
+	var warnings []string
+	if rollback, ok := readStoredShape(outFile, rollbackDocName(dao.Name), "", ""); ok {
+		warnings = append(warnings, storeTagChanges(dao.Name, rollback, currentStoredFields(defs, rollbackOnlyFields(dao)), "This field is not persisted; review Sync field-name consumers and rollback schema.")...)
+	}
 	before, ok := readStoredShape(outFile, persistDocName(dao.Name), "rawDoc", dao.Name+"SchemaVersion")
 	if !ok {
-		return nil
+		return warnings
 	}
 	var after []storedField
 	if !dao.NoCollection {
@@ -162,7 +183,8 @@ func daoStoredKeyWarnings(dao DaoDef, defs *Definitions, outFile string) []strin
 			note = fmt.Sprintf("schema= was raised from %d to %d.", before.schema, schema)
 		}
 	}
-	return storedKeyChanges(dao.Name, filepath.Base(outFile), before, after, note)
+	note += " Review offline migration before changing stored data (docs/framework/SCHEMA-MIGRATION.md)."
+	return append(warnings, storedKeyChanges(dao.Name, filepath.Base(outFile), before, after, note)...)
 }
 
 // nestedStoredKeyWarnings 比较一个嵌套类型的 wire 文档与上一次的生成物。

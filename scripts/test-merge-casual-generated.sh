@@ -45,7 +45,7 @@ root = Path(sys.argv[1])
 p = root / 'db/def/player.go'
 fields = [('State', 'string', 'state'), ('WakeTimer', 'int64', 'wake_timer')]
 marker = 'type PlayerDao struct {'
-text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `bson:"{key}" dao:"persist"`\n' for field, typ, key in fields))
+text = p.read_text().replace(marker, marker + '\n' + ''.join(f'{field} {typ} `store:"{key}" dao:"persist"`\n' for field, typ, key in fields))
 assert 'db=main' in text, p  # 骨架写逻辑库 main；本次运行的唯一物理库由测试夹具的映射给出
 p.write_text(text)
 DEFS

@@ -1,0 +1,12 @@
+baseline: v1.39.0 / 19535956
+current: uncommitted working tree based on 19535956
+platform: darwin arm64 / Apple M5 / Go 1.27.3 / default GOMAXPROCS=10
+paired order: before, after; 10 rounds; 200ms per case
+storage keys: current long/short fixture, 10 rounds, 300ms per case
+Mongo stopped; no test/build/index job during timed benchmark
+Host background activity is not controlled. Spotlight activity was observed during verification; do not extrapolate absolute capacity.
+8fe473e58e183d42dacaf1ebdcc96fa32b7ec47461562f71786b456120cb6538  framework/nest/persist_change.go
+3cfb0e4dd3a8a46227b6b6e8cf38facc3a614f18540ebeb53d1c2efaec8f529f  codegen/internal/dao/template_dao.go
+228c48e5afde293c90bd3f7e3db5a0f408c05d9e68c8bb76b0269e1bbdfc6f36  codegen/internal/dao/parse.go
+fd1d891f67936b0af5446f0f544ba20520df1c03dd2f21d3a1debf7b331763d5  codegen/internal/dao/testdata/runtime/persist_paths_bench_test.go
+ae732bda2d0cc6f58f51c0f537ba8c35b98fce92b1d6b1e109349458659fc301  codegen/internal/dao/testdata/runtime/storage_keys_test.go
