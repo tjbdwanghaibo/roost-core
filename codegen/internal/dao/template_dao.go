@@ -735,7 +735,7 @@ func (d *{{.Dao.Name}}) persistChangePathCovered(change nest.PersistChange, path
 func (d *{{.Dao.Name}}) marshalPersistPatchBSON(change nest.PersistChange) (dataengine.FieldPatch, error) {
 	set := make(map[string]any, len(change.Set)+len(change.FullFields))
  unset:=append([]string(nil),change.Unset...)
- root:=change.Paths.Root()
+ {{if persistFields .Dao.Fields}}root:=change.Paths.Root(){{end}}
 {{- range persistFields .Dao.Fields}}
 	if change.Mask&{{fieldMaskName $.Dao.Name .Name}} != 0 {
  node:=root.Child(dataengine.SyncStep{Field:{{syncFieldNumber $.Dao .Name}}})

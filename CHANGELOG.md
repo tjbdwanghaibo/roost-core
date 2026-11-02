@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 修复 RV-20261102-03：全 nopersist DAO 按字段形状生成持久路径局部变量，避免空分支生成物编译失败；正式心跳和 Sync 双模式生成验收通过，有持久字段的生成输出不变。
+
 - 修正 RV-20261102-02：DataEngine 正式压测的初始版本期望统一使用创建＋初始化两笔提交的 `seededVersion`，补齐失败实际值；v1.38.0 与本轮源码均已复现旧断言失败，不涉及生产数据修复。
 
 - 普通 Mongo DAO 持久化使用 setter 记录递归路径，支持嵌套 struct/map/list 的 BSON `$set`/`$unset`，事务内合并并冻结最终值；空容器、结构替换、密集修改及 4096 节点预算回退完整字段。已通过真实 Mongo 集合前后对照、三种持久策略各 10 万次多实体请求（约 1000 TPS、零拒绝/失败、最终排空与数据核对）。需配套 core 与生成器重生成；Remote 信封、WAL codec、Sync PB 不变。见[实现与验证](docs/framework/DATAENGINE-INCREMENTAL-PERSISTENCE.md)、[微基准](docs/performance/DATAENGINE-PERSIST-PATHS.md)。

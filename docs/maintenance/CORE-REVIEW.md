@@ -12,6 +12,14 @@
 - RV-07/08/09 已修复；发布状态以 CHANGELOG 为准。
 - Nest 与 Sync 在本轮列明的路径中未确认新增缺陷；未确认新增 P0/P1。这不是全仓无缺陷的证明。
 
+## RV-20261102-03：无持久字段 DAO 生成未使用局部变量
+
+状态：已修复，发布前门禁发现。基线 `56d165f5` 的模板在每个 DAO 的补丁编码方法中无条件声明 `root`，但只有持久字段分支会使用它；全 nopersist DAO 生成后编译报 `declared and not used: root`。这类 DAO 在心跳场景实体与双模式 Sync 夹具中出现，普通持久 DAO 的 golden 和压力场景未覆盖该形状。
+
+修前 `scripts/test-heartbeat-generated.sh` 的 Monster/Scene DAO、`scripts/test-sync-modes-generated.sh` 的 State DAO 均编译失败，pretag 阻止 tag 发布。修复按 `persistFields` 是否非空生成声明，不添加无效读或放宽编译检查。有持久字段的 golden 输出完全不变，故已有持久化压力对照仍对应最终生成代码。
+
+修后 DAO golden 校验通过；两个正式生成脚本分别完成构建、race 和运行验收，心跳 dispatch/batch 均通过，生成物检查无漂移。这两个脚本已是 pretag 的永久验收入口，不以额外的文本断言代替消费工程编译。
+
 ## RV-20261102-02：正式 DataEngine 压测使用过时的初始版本
 
 状态：已修复，测试夹具问题，不是业务数据丢失。`tradeFixture.seed` 在创建时提交版本 1、业务初始化再提交版本 2，已有 `seededVersion=2`；`pressure_test.go` 的 wallet、inventory 与 Mongo 最终断言仍写死 `1+updates`，导致正常更新也无法通过验收。
