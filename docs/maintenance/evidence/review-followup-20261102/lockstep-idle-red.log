@@ -1,0 +1,11 @@
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link
+2026/11/02 16:57:26 INFO player tcp listener started addr=127.0.0.1:50319 max_connections=10000
+    tcp_test.go:883: snapshot over a slow TCP link closed the connection (closed=true) or failed (0 Tick errors, first: <nil>)
+--- FAIL: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive (0.50s)
+    --- FAIL: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link (0.50s)
+        --- FAIL: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link (0.50s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	1.090s
+FAIL

@@ -67,8 +67,10 @@ func rewardChild(t *testing.T, mode string) {
 	if mode == "write" {
 		_, e = n.access.Create(&entity.EntityCreateParam{IsCreate: true, Id: n.id, Kind: player.EntityKindPlayer})
 		check(t, e)
+		check(t, unprojectedRewardCommits(n, 1)) // 创建实体本身是一笔独立 strict 提交。
 		_, e = s.Sync_AllianceHomeInit(ctx, n.id, sid)
 		check(t, e)
+		check(t, unprojectedRewardCommits(n, 2)) // 原服归属初始化是第二笔。
 		before, found, e := h.store.Get(ctx, "rewards")
 		check(t, e)
 		if !found {
@@ -96,13 +98,16 @@ func rewardChild(t *testing.T, mode string) {
 			if gold != 10 {
 				return fmt.Errorf("first credit %d", gold)
 			}
+			if e := unprojectedRewardCommits(n, 3); e != nil {
+				return e
+			}
 			raw, e := s.Sync_AllianceWallet(ctx, n.id)
 			if e != nil {
 				return e
 			}
-			stats := n.projector.Stats()
-			if stats.Projected != 0 || stats.WALUnacked != 2 {
-				return fmt.Errorf("want two unprojected strict records: %+v", stats)
+			// 钱包查询只读，不应生成第四笔提交。
+			if e := unprojectedRewardCommits(n, 3); e != nil {
+				return e
 			}
 			// 先写临时文件再改名：父进程一看到 ready.json 就 SIGKILL，直接 WriteFile 可能被杀在“已创建、未写完”之间，
 			// 恢复子进程读到空的期望值。
@@ -220,7 +225,7 @@ func TestSLGAlliancePlayerDelivery(t *testing.T) {
 	check(t, e)
 	defer mongo.Close(context.Background())
 	check(t, mongo.Database(os.Getenv("ROOST_SLG_DB")).Drop(context.Background()))
-	t.Log("same activity workflow: both static homes credit generated Player DAO; two unprojected strict WAL records per home survive SIGKILL; cold wallet checked before replay; third process confirms one permanent receipt and 10 gold each; wrong home and changed amount refused")
+	t.Log("same activity workflow: both static homes credit generated Player DAO; three unprojected strict WAL records (create, initialize, reward) per home survive SIGKILL; cold wallet checked before replay; third process confirms one permanent receipt and 10 gold each; wrong home and changed amount refused")
 }
 func deliverPlayers(t *testing.T, prefix string, key activity.Key) {
 	for _, sid := range []int32{1000, 1001} {
@@ -285,4 +290,13 @@ func runRewardProcess(t *testing.T, mode string, sid int32, prefix, root string)
 			fail(fmt.Errorf("recovery timed out"))
 		}
 	}
+}
+
+// unprojectedRewardCommits 逐阶段核对提交来源，不以“至少几条”掩盖额外提交。
+func unprojectedRewardCommits(n *rewardRuntime, want uint64) error {
+	stats := n.projector.Stats()
+	if stats.Committed != want || stats.Projected != 0 || stats.WALUnacked != want {
+		return fmt.Errorf("want %d committed and unprojected reward records: %+v", want, stats)
+	}
+	return nil
 }

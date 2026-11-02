@@ -294,6 +294,11 @@ func TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClo
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 关闭表也覆盖日志方法；必须在关闭前创建真实客户端，避免测到 nil receiver。
+	logClient, err := NewJetStreamLog(js)
+	if err != nil {
+		t.Fatal(err)
+	}
 	prefix := fmt.Sprintf("natsstate.%d", time.Now().UnixNano())
 	sub, err := a.Client.Subscribe(prefix+".idle", closedStateHandler)
 	if err != nil {
@@ -341,7 +346,7 @@ func TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClo
 	ctx, cancelCalls := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelCalls()
 	started := time.Now()
-	env := &closedStateEnv{ctx: ctx, cancel: cancelCalls, asm: a, js: js, sub: sub.(*subscription)}
+	env := &closedStateEnv{ctx: ctx, cancel: cancelCalls, asm: a, js: js, log: logClient, sub: sub.(*subscription)}
 	checkEveryMethodAfterClose(t, env, "an undrained Assembly.Close", func() {
 		// 非关闭类方法全部答完时 nats.go 仍在翻回的状态里，才说明它们是在这段窗口里按驱动状态回答的。
 		if !a.Client.conn.IsConnected() {

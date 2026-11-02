@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 修复真实验收夹具（RV-20261102-04～07）：NATS 关闭方法表补齐日志客户端；SLG 分阶段核对创建、初始化、奖励三笔 WAL；慢快照客户端发送真实心跳，空闲期限收紧为 2 秒；etcd 冻结先等待内核停止事件再执行超时验证。生产语义未改，修后 macOS 真实链路和 race 通过，Linux 原样本与未闭环边界保留，见[复核记录](docs/maintenance/CORE-REVIEW.md#2026-11-02linux-审查材料合入与夹具修复)。
+
 ## [v1.40.0] - 2026-11-02
 
 - 生成 DAO 的标量/顶层完整替换使用事务 `FullMask`，仅嵌套子项维护持久路径树；保留父字段覆盖、revision、回滚与冻结语义。需配套本次 core（新增 `nest.MarkPersistField`）和生成器重新生成；WAL codec、Mongo 持久级别和 Sync PB 不变。

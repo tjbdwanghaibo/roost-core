@@ -1,5 +1,7 @@
 # Linux 非压测验收续报（2026-11-02）
 
+> 后续处理：NATS / SLG 夹具、Lockstep 入站活性与 etcd 停止屏障的修复及 macOS 验证见 [核心执行边界审查](CORE-REVIEW.md#2026-11-02linux-审查材料合入与夹具修复)。下文保留原 Linux 基线失败；本轮修后尚未在 Linux 实跑，etcd 原始 3ms 返回的精确原因仍未闭环。
+
 ## 范围与结论
 
 本轮遵照“保留压测，补齐其他 Linux 测试并提交报告”，验证基线为 [main / v1.37.1](https://github.com/tjbdwanghaibo/roost-core/commit/773ca443dfb21e97cedc1aac59067de6f980e2a8)。固定分支只交付验证记录，不改运行时、不提交 PR/issue。未启动容量、backlog throughput、长稳或物理性能测试，也未删除原有压测材料。

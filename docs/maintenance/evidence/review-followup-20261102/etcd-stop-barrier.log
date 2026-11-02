@@ -1,0 +1,42 @@
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+    real_etcd_integration_test.go:370: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (1.03s)
+=== RUN   TestRealEtcdResignRevokesItsLease
+--- PASS: TestRealEtcdResignRevokesItsLease (0.54s)
+=== RUN   TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget
+    real_etcd_integration_test.go:439: budgeted Close against a frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=501ms client_open=true
+--- PASS: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (1.62s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+    real_etcd_integration_test.go:370: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (1.04s)
+=== RUN   TestRealEtcdResignRevokesItsLease
+--- PASS: TestRealEtcdResignRevokesItsLease (0.45s)
+=== RUN   TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget
+    real_etcd_integration_test.go:439: budgeted Close against a frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=500ms client_open=true
+--- PASS: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (0.92s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+    real_etcd_integration_test.go:370: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (1.05s)
+=== RUN   TestRealEtcdResignRevokesItsLease
+--- PASS: TestRealEtcdResignRevokesItsLease (1.04s)
+=== RUN   TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget
+    real_etcd_integration_test.go:439: budgeted Close against a frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=501ms client_open=true
+--- PASS: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (1.23s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+    real_etcd_integration_test.go:370: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (1.25s)
+=== RUN   TestRealEtcdResignRevokesItsLease
+--- PASS: TestRealEtcdResignRevokesItsLease (0.84s)
+=== RUN   TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget
+    real_etcd_integration_test.go:439: budgeted Close against a frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=501ms client_open=true
+--- PASS: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (0.73s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+    real_etcd_integration_test.go:370: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (1.65s)
+=== RUN   TestRealEtcdResignRevokesItsLease
+--- PASS: TestRealEtcdResignRevokesItsLease (0.56s)
+=== RUN   TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget
+    real_etcd_integration_test.go:439: budgeted Close against a frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=501ms client_open=true
+--- PASS: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (0.74s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/etcd/driver	16.354s

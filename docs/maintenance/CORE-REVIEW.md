@@ -4,6 +4,8 @@
 
 ## 当前结论
 
+- **2026-11-02 Linux 审查续报复核**：已合入固定 review 分支的报告与探针，旧维护流水账保留历史链接；移除不再需要的提交豁免。NATS / SLG 夹具问题已复现并修复；Lockstep 缺少心跳已用缩短空闲期限及禁用心跳对照确认；etcd 补齐内核停止屏障，但 Linux 历史 3ms 成功样本的精确原因仍需原环境复测。详见下节。
+
 - **2026-11-02 修复 RV-20261102-02**：压测初始版本断言过时；旧版与本轮均复现。生产版本语义未变，实跑结果见性能报告。
 
 - **2026-11-02 新增并修复 RV-20261102-01（P2）**：Patch 准入缺少重复及祖先路径检查。见下节，本项不代表重新完成全仓审计。
@@ -11,6 +13,45 @@
 - **已修复 P2：RV-20261101-09**，回放取得执行权后复查 fatal，排队 Flush 和直接 ReplayPass 均返回原错误，不再调用存储。
 - RV-07/08/09 已修复；发布状态以 CHANGELOG 为准。
 - Nest 与 Sync 在本轮列明的路径中未确认新增缺陷；未确认新增 P0/P1。这不是全仓无缺陷的证明。
+
+## 2026-11-02：Linux 审查材料合入与夹具修复
+
+审查分支基线为 [ed3b3647](https://github.com/tjbdwanghaibo/roost-core/commit/ed3b36473ff116e8010d590ae98fb8b77798e012)，修复基线为 v1.40.0 `2be1f1e5`；报告已合入本地 main。本轮只修改测试夹具与文档，未修改生产 Gate、Lockstep、etcd、NATS 或持久化语义；提交/发布状态以 Git 和 CHANGELOG 为准。
+
+### RV-20261102-04 / P2：NATS 关闭表缺少日志客户端
+
+`real_nats_integration_test.go` 的 undrained-close 用例构造 `closedStateEnv` 时未填 `log`，而共享表已经覆盖 10 个 JetStreamLogClient 方法。修前独立真实 NATS + race 稳定返回 `nats log: not initialized`，不是预期的 `ErrClosed`。这证明测试未覆盖真实关闭对象，不能判定生产关闭逻辑错误。
+
+在关闭前调用 `NewJetStreamLog(js)` 并传入 env，保留全部关闭状态断言。修后原用例连续三轮 race 通过。证据：[修前](evidence/review-followup-20261102/nats-red.log)、[修后](evidence/review-followup-20261102/nats-green.log)。
+
+### RV-20261102-05 / P2：SLG 恢复夹具遗漏创建提交
+
+`player_delivery_test.go` 要求 WALUnacked=2，当前事务外 `Create` 已独立提交实体本身，随后原服初始化和奖励各一笔，所以修前实际为 `Committed:3 Projected:0 WALUnacked:3`。钱包查询只读，不应新增记录。旧断言在 SIGKILL 之前退出，挡住了 Player 与 Remote 的完整恢复验收，不代表真实奖励丢失。
+
+修复逐阶段严格核对 1（创建）→2（初始化）→3（奖励），查询钱包后仍为 3；同时检查 Committed、Projected、WALUnacked，未放宽成“至少三条”。正式 `ROOST_SLG_REAL=1 bash scripts/test-slg-generated.sh` 全部通过，覆盖两个原服各自 write→SIGKILL→recover→verify、冷钱包与永久回执、Remote owner 交接/旧 owner 拒绝、RPC 预算。证据：[修前](evidence/review-followup-20261102/slg-red.log)、[修后](evidence/review-followup-20261102/slg-green.log)。
+
+### RV-20261102-06 / P2：快照夹具没有维持入站活性
+
+Linux 原样本在 deep-buffered written 子场景运行 **90.01s** 后，slow/fast 同时 `session not found`。夹具握手后只收下行数据；`gateway.DefaultTCPConfig` 的 IdleTimeout=90s，`readRequests` 只在收到上行包后刷新读期限，下行快照不会刷新入站活性。这不是丢失快照的直接证据。
+
+本机仅把夹具 IdleTimeout 缩到 500ms，原实现即在 0.50s 关闭；修复后将正式夹具收紧为 2s，并让两个测试客户端每 100ms 经原连接发送合法递增序号心跳，原读协程跳过 ACK。没有放大生产超时，也没有削弱快照内容、帧连续性、另一会话实时性和 admission-only 溢出负对照。
+
+完整快照用例连续三轮 race 通过，深缓冲正例约 5s，确实跨过 2s 空闲期限。仅禁用新增心跳的 overlay 对照在 **2.00s** 再次失败，确认修复落在缺少上行活性上。证据：[原逻辑缩短期限](evidence/review-followup-20261102/lockstep-idle-red.log)、[修后](evidence/review-followup-20261102/lockstep-green.log)、[禁用心跳](evidence/review-followup-20261102/lockstep-heartbeat-disabled.log)。Linux 全仓为什么把该场景拖到 90s，尚无资源/进度时序证据；本轮没有把原因武断归为宿主 CPU，也没有完成修后 Linux 实跑。
+
+### RV-20261102-07 / P2：etcd 冻结用例缺少停止屏障
+
+旧夹具发送 SIGSTOP 后立即调用 Resign / Assembly.Close；发送成功不等于内核已确认进程停止。历史失败为 Resign 在 3ms 返回 nil 且已非 leader，不能据此认定生产 deadline 被违反：健康 etcd 完成撤销本就应返回 nil。
+
+两处冻结现在共用 `stopEtcdProcess`：对自己创建的子进程发送 SIGSTOP，再用 `wait4(WUNTRACED|WNOHANG)` 确认停止事件，5s 仍未停止则明确报夹具前置条件失败；之后才开始 500ms RPC 预算。macOS 的 Go BSD WaitStatus 方法把 SIGSTOP 状态归为 Continued，首轮屏障因此误判 raw status=4479（0x117f）；保留该实施失败，以 wait(2) 的停止状态编码核对信号，未请求 WCONTINUED，不改变 RPC 断言。[首轮屏障日志](evidence/review-followup-20261102/etcd-initial-barrier-macos.log)。
+
+修后 Resign 预算、健康撤销、冻结 Close 后重试撤销三个用例连续五轮 race 通过；Resign 为约 500–501ms、DeadlineExceeded、is_leader=false，恢复后可重新竞选。[修后摘录](evidence/review-followup-20261102/etcd-stop-barrier.log)。已确认并修复的是“冻结前置条件未被证明”；历史 Linux 样本没有当时进程状态记录，本轮不能证明那次 3ms 成功一定由这个窗口引起，仍需 Linux 原场景复验。
+
+### 合并、验收与后续边界
+
+- review 分支的 `documentedCommitExemptions["4170bcad"]` 在当前 main 已多余，overlay 复现文档门禁失败；合并时保持 main 的空豁免表。没有恢复已删除的 COMMIT-REVIEW 维护流水账，原分支证据通过固定 SHA 链接保留。
+- 本机 macOS / Go 1.27.3，NATS、Redis、Mongo 均为本轮私有实例；etcd 用例每次自建子进程。没有对共享服务注入故障，也未跑新一轮性能压测。
+- 三个受影响包完整 `go test -race ... -count=1` 与 `go vet` 通过；真实 NATS 三轮、etcd 三用例五轮、完整快照三轮、SLG 正式真实模式通过。Linux 交叉编译不代替 Linux 运行验收。
+- 方向判断：NATS 的共享方法表增加后漏接夹具字段、SLG 的生命周期新增提交后固定计数过时、Lockstep 的出站进度与入站活性混淆、etcd 的发信号与停止事实混淆，均为验收模型没有跟随契约变化。后续优先校验阶段事实和前置条件，不扩大等待预算或放宽计数门禁。
 
 ## RV-20261102-03：无持久字段 DAO 生成未使用局部变量
 

@@ -1,0 +1,96 @@
+SLG generated consumer and logs: /tmp/roost-review-fix-services/slg-red
+=== RUN   TestSLGRobotBusiness
+2026/11/02 16:58:27 INFO player tcp listener started addr=127.0.0.1:50339 max_connections=10000
+2026/11/02 16:58:27 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:50339
+2026/11/02 16:58:27 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/02 16:58:27 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:50339
+2026/11/02 16:58:27 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+2026/11/02 16:58:27 INFO robot runner: start executor=pool count=1 rate=1 scenario=commands transport=player-tcp endpoint=127.0.0.1:50339
+2026/11/02 16:58:27 INFO robot runner: stop started=1 success=1 failure=0 canceled=0
+--- PASS: TestSLGRobotBusiness (0.01s)
+=== RUN   TestSLGConstructionMarchAndReplay
+--- PASS: TestSLGConstructionMarchAndReplay (0.00s)
+=== RUN   TestSLGCancelRefundAndRefusal
+--- PASS: TestSLGCancelRefundAndRefusal (0.00s)
+=== RUN   TestSLGFailureRollsBackResourcesAndDeadline
+--- PASS: TestSLGFailureRollsBackResourcesAndDeadline (0.00s)
+=== RUN   TestSLGOfflineIncomeIsBusinessBounded
+--- PASS: TestSLGOfflineIncomeIsBusinessBounded (0.00s)
+=== RUN   TestSLGTwoPlayersCompeteForOneTile
+--- PASS: TestSLGTwoPlayersCompeteForOneTile (0.00s)
+=== RUN   TestSLGResearchAndConstructionUseIndependentQueues
+--- PASS: TestSLGResearchAndConstructionUseIndependentQueues (0.00s)
+PASS
+ok  	example.com/slg-practice/game/handler	1.612s
+IDs are valid
+generated files are up to date
+=== RUN   TestAllianceReportWindowFollowsTheCoordinatorReservationTTL
+=== RUN   TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/default_expired
+=== RUN   TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/default_within
+=== RUN   TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/configured_within
+=== RUN   TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/configured_expired
+--- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL (0.00s)
+    --- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/default_expired (0.00s)
+    --- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/default_within (0.00s)
+    --- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/configured_within (0.00s)
+    --- PASS: TestAllianceReportWindowFollowsTheCoordinatorReservationTTL/configured_expired (0.00s)
+PASS
+ok  	example.com/slg-practice/game/alliance	1.709s
+=== RUN   TestAllianceReceiverBudgetRejectsLateSuccess
+=== RUN   TestAllianceReceiverBudgetRejectsLateSuccess/blocked_until_budget
+=== RUN   TestAllianceReceiverBudgetRejectsLateSuccess/late_success
+=== RUN   TestAllianceReceiverBudgetRejectsLateSuccess/handler_error
+=== RUN   TestAllianceReceiverBudgetRejectsLateSuccess/in_time
+--- PASS: TestAllianceReceiverBudgetRejectsLateSuccess (0.04s)
+    --- PASS: TestAllianceReceiverBudgetRejectsLateSuccess/blocked_until_budget (0.02s)
+    --- PASS: TestAllianceReceiverBudgetRejectsLateSuccess/late_success (0.02s)
+    --- PASS: TestAllianceReceiverBudgetRejectsLateSuccess/handler_error (0.00s)
+    --- PASS: TestAllianceReceiverBudgetRejectsLateSuccess/in_time (0.00s)
+PASS
+ok  	example.com/slg-practice/game/alliance	1.510s
+=== RUN   TestSLGAllianceActivity
+2026/11/02 16:58:45 INFO nats: connected url=nats://127.0.0.1:50331
+2026/11/02 16:58:45 INFO bus: subscribed subject=slg_alliance_735_1793609925075013000.srv.1000
+2026/11/02 16:58:45 INFO bus: subscribed subject=slg_alliance_735_1793609925075013000.svc.game.1000
+2026/11/02 16:58:45 INFO bus: subscribed subject=slg_alliance_735_1793609925075013000.svc.game.all
+2026/11/02 16:58:45 INFO bus: subscribed subject=slg_alliance_735_1793609925075013000.srv.all
+2026/11/02 16:58:45 INFO nats: connected url=nats://127.0.0.1:50331
+2026/11/02 16:58:45 INFO bus: subscribed subject=slg_alliance_735_1793609925075013000.srv.1001
+2026/11/02 16:58:45 INFO bus: subscribed subject=slg_alliance_735_1793609925075013000.svc.game.1001
+2026/11/02 16:58:45 INFO bus: subscribed subject=slg_alliance_735_1793609925075013000.svc.game.all
+2026/11/02 16:58:45 INFO bus: subscribed subject=slg_alliance_735_1793609925075013000.srv.all
+    alliance_test.go:141: encoded view: alliance/scout removal, failed authority refresh holds publication, reconnect rebuilds Full, revoked member absent, old epoch refused
+    alliance_test.go:263: real NATS + Redis: restarted coordinator; two static-home clients; alliance/scout source revocation; durable contribution replay once; frozen-window barrier; original-home obligations survive missing ACK and replay without rewrite (base workflow establishes obligations; optional generated consumer verifies Player delivery)
+2026/11/02 16:58:48 INFO nats: disconnected err=<nil>
+2026/11/02 16:58:48 INFO nats: connection closed
+2026/11/02 16:58:48 INFO nats: disconnected err=<nil>
+2026/11/02 16:58:48 INFO nats: connection closed
+--- PASS: TestSLGAllianceActivity (3.16s)
+PASS
+ok  	example.com/slg-practice/game/alliance	4.632s
+=== RUN   TestSLGAlliancePlayerDelivery
+2026/11/02 16:58:50 INFO nats: connected url=nats://127.0.0.1:50331
+2026/11/02 16:58:50 INFO bus: subscribed subject=slg_alliance_766_1793609930919763000.srv.1000
+2026/11/02 16:58:50 INFO bus: subscribed subject=slg_alliance_766_1793609930919763000.svc.game.1000
+2026/11/02 16:58:50 INFO bus: subscribed subject=slg_alliance_766_1793609930919763000.svc.game.all
+2026/11/02 16:58:50 INFO bus: subscribed subject=slg_alliance_766_1793609930919763000.srv.all
+2026/11/02 16:58:50 INFO nats: connected url=nats://127.0.0.1:50331
+2026/11/02 16:58:50 INFO bus: subscribed subject=slg_alliance_766_1793609930919763000.srv.1001
+2026/11/02 16:58:50 INFO bus: subscribed subject=slg_alliance_766_1793609930919763000.svc.game.1001
+2026/11/02 16:58:50 INFO bus: subscribed subject=slg_alliance_766_1793609930919763000.svc.game.all
+2026/11/02 16:58:50 INFO bus: subscribed subject=slg_alliance_766_1793609930919763000.srv.all
+    alliance_test.go:141: encoded view: alliance/scout removal, failed authority refresh holds publication, reconnect rebuilds Full, revoked member absent, old epoch refused
+    player_delivery_test.go:255: home 1000 write: writer exited before kill: exit status 1
+        --- FAIL: TestSLGAlliancePlayerDelivery (0.19s)
+            player_delivery_test.go:117: want two unprojected strict records: {Committed:3 Projected:0 WALUnacked:3 ProjectionFailures:0 FatalProjectionConflicts:0 LastError: AdmissionRejected:0 BacklogWarning:false UnloadingEntities:0 UnloadAdmissionRejected:0 ParallelWindows:0 ParallelLanes:0}
+        FAIL
+2026/11/02 16:58:54 INFO nats: disconnected err=<nil>
+2026/11/02 16:58:54 INFO nats: connection closed
+2026/11/02 16:58:54 INFO nats: disconnected err=<nil>
+2026/11/02 16:58:54 INFO nats: connection closed
+--- FAIL: TestSLGAlliancePlayerDelivery (3.37s)
+FAIL
+FAIL	example.com/slg-practice/game/alliance	3.824s
+FAIL
+SLG generated consumer kept: /tmp/roost-review-fix-services/slg-red
+SLG real-dependency databases left for inspection: roost_slg_it_135_145_player roost_slg_it_135_145_remote

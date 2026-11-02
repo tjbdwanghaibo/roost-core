@@ -315,6 +315,35 @@ func startStoppableEtcd(t *testing.T) (string, *exec.Cmd) {
 	return "", nil
 }
 
+// stopEtcdProcess 等待内核确认子进程已停止，再允许发送需要超时的 RPC。
+// Signal 返回只表示信号已发送，不能作为 SIGSTOP 已生效的跨进程屏障。
+func stopEtcdProcess(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	if err := cmd.Process.Signal(syscall.SIGSTOP); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var status syscall.WaitStatus
+		pid, err := syscall.Wait4(cmd.Process.Pid, &status, syscall.WUNTRACED|syscall.WNOHANG, nil)
+		if err != nil && err != syscall.EINTR {
+			t.Fatalf("wait for stopped etcd: %v", err)
+		}
+		if pid == cmd.Process.Pid {
+			// 本次只请求 WUNTRACED，未请求 WCONTINUED。按 wait(2) 的停止状态编码
+			// 判断，避开 Go BSD WaitStatus 将 SIGSTOP 状态误归为 Continued 的行为。
+			if uint32(status)&0xff == 0x7f && syscall.Signal((uint32(status)>>8)&0xff) == syscall.SIGSTOP {
+				return
+			}
+			t.Fatalf("etcd ended before stop barrier: status=%v", status)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("etcd did not enter stopped state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestRealEtcdResignHonoursTheCallerBudget(t *testing.T) {
 	endpoint, cmd := startStoppableEtcd(t)
 	cli := realElectionClient(t, endpoint)
@@ -323,9 +352,7 @@ func TestRealEtcdResignHonoursTheCallerBudget(t *testing.T) {
 	if err := e.Campaign(context.Background(), "a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := cmd.Process.Signal(syscall.SIGSTOP); err != nil {
-		t.Fatal(err)
-	}
+	stopEtcdProcess(t, cmd)
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	result := make(chan error, 1)
@@ -394,9 +421,7 @@ func TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget(t *testing.T) {
 		t.Fatalf("registered keys = %d, want 1", keys)
 	}
 
-	if err := cmd.Process.Signal(syscall.SIGSTOP); err != nil {
-		t.Fatal(err)
-	}
+	stopEtcdProcess(t, cmd)
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	started := time.Now()

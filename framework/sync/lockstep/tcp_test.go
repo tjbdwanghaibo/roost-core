@@ -777,11 +777,49 @@ func TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive(t *test
 	}
 }
 
+// keepSnapshotClientAlive 让只收推送的测试客户端遵守 Gate 的入站活性契约。
+// 下行快照不会刷新入站超时；读协程会跳过心跳 ACK，心跳仍走同一条真实连接。
+// 这里只在握手后没有其他上行写者的快照夹具使用，避免序号与并发写冲突。
+func keepSnapshotClientAlive(t *testing.T, connection net.Conn) {
+	t.Helper()
+	stop, done := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		close(stop)
+		_ = connection.Close() // 解除慢链路上可能阻塞的心跳写入。
+		<-done
+	})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		sequence := uint32(1) // 握手已经使用序号 1。
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				sequence++
+				if err := connection.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+					return
+				}
+				if err := wire.Write(connection, []*wire.Packet{{Seq: sequence}}, 0); err != nil {
+					return // 负对照允许连接关闭；正例仍由会话与完整快照断言检查。
+				}
+			}
+		}
+	}()
+}
+
 // snapshotOverEmbeddedTCP 跑一次场景。written=false 时可靠通道只准入，只返回慢连接是否溢出（被关闭或拒收），不做其他断言。
 func snapshotOverEmbeddedTCP(t *testing.T, link snapshotLink, written bool) bool {
-	tcp := newTCPLockstepServer(t, 10*time.Second, map[string]int64{"slow": 1, "fast": 2})
+	// 夹具主动发送心跳；刻意缩短空闲期限，避免慢快照再次依赖默认 90 秒内结束。
+	tcp := newTCPLockstepServerWith(t, 10*time.Second, map[string]int64{"slow": 1, "fast": 2}, func(config *gateway.TCPConfig) {
+		config.IdleTimeout = 2 * time.Second
+	})
 	slow, linkBytes := link.dial(t, tcp, "slow", 1)
 	fast := tcp.dial(t, "fast", 2, 1<<20)
+	keepSnapshotClientAlive(t, slow)
+	keepSnapshotClientAlive(t, fast)
 	snapshotBytes := max(4<<20, 2*linkBytes)
 	if !written {
 		snapshotBytes = max(4<<20, 2*(linkBytes+embeddedTCPOutboundQueueBytes))

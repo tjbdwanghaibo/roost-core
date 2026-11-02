@@ -1,0 +1,23 @@
+    real_etcd_integration_test.go:353: etcd ended before stop barrier: status=4479
+--- FAIL: TestRealEtcdResignHonoursTheCallerBudget (0.83s)
+    real_etcd_integration_test.go:422: etcd ended before stop barrier: status=4479
+--- FAIL: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (1.14s)
+    real_etcd_integration_test.go:353: etcd ended before stop barrier: status=4479
+--- FAIL: TestRealEtcdResignHonoursTheCallerBudget (1.08s)
+    real_etcd_integration_test.go:422: etcd ended before stop barrier: status=4479
+--- FAIL: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (0.80s)
+    real_etcd_integration_test.go:353: etcd ended before stop barrier: status=4479
+--- FAIL: TestRealEtcdResignHonoursTheCallerBudget (0.60s)
+    real_etcd_integration_test.go:422: etcd ended before stop barrier: status=4479
+--- FAIL: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (0.90s)
+    real_etcd_integration_test.go:353: etcd ended before stop barrier: status=4479
+--- FAIL: TestRealEtcdResignHonoursTheCallerBudget (0.82s)
+    real_etcd_integration_test.go:422: etcd ended before stop barrier: status=4479
+--- FAIL: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (0.90s)
+    real_etcd_integration_test.go:353: etcd ended before stop barrier: status=4479
+--- FAIL: TestRealEtcdResignHonoursTheCallerBudget (1.02s)
+    real_etcd_integration_test.go:422: etcd ended before stop barrier: status=4479
+--- FAIL: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (0.60s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/infra/network/etcd/driver	12.794s
+FAIL
