@@ -51,7 +51,8 @@ ROOST_TOWER_DEFENSE_KEEP=1 bash scripts/test-tower-defense-generated.sh   # 保�
 1. `roost project new tower-defense-practice -module example.com/tower-defense-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add entity TowerRoom`、`roost add dao TowerRoom --entity TowerRoom`、`roost add timer --entity TowerRoom`；
 3. 业务只改这几处：在 `db/def/player.go` 加 ``Gold int64 `store:"gold" dao:"persist"` `` 与 ``Initialized bool `store:"initialized" dao:"persist"` ``，在 `db/def/tower_room.go` 加 ``State string `store:"state" dao:"persist"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"persist"` ``；把 `game/entities/tower_room/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（领奖时 Room 与 Player 一起锁，Room 放在更低的锁档，锁序固定）；放入业务包 `game/towerdefense/`、定时回调 `game/entities/tower_room/timer_handlers.go` 与 handler `game/handler/tower_defense.go`；
-4. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 DAO 持久键变化的 WARN（加字段不需要迁移，老文档读成零值），见第 7 节。
+4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> tower-defense`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
+5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 DAO 持久键变化的 WARN（加字段不需要迁移，老文档读成零值），见第 7 节。
 
 生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 TowerRoom 的定时器驱动（绑定 Nest、Nest 可用后启动投递循环、停机时先停驱动；业务时间是驱动缺省的 `fctx.Now`），`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。夹具的测试不起整个 App，所以在用例里手动 `TimerDriver.SetClock` / `Bind` / `Start`，顺序与 Mod 相同。
 
@@ -132,7 +133,7 @@ func claim(ctx context.Context, client nest.Client, playerID, roomID int64) (int
 
 命令字段：`build` 的 A 是地格、B 必须为 0；`upgrade` / `sell` 的 A 是地格、B 是期望的当前塔等级；`ready` 的 A、B 都是 0。客户端不提供费用、伤害、怪物坐标、基地血量、时间、胜负和奖励。
 
-#### 3.4 十个场景各学什么
+#### 3.4 十一个场景各学什么
 
 | 场景（测试名前缀 `TestTowerDefense`） | 业务选择 | 学到的框架契约 |
 | --- | --- | --- |
@@ -146,6 +147,7 @@ func claim(ctx context.Context, client nest.Client, playerID, roomID int64) (int
 | `UndoRestoresSharedGoldRouteAndTimer` | 建塔写入后 handler 失败 | undo 回滚后塔、共享金币、路径和定时器节点一起恢复，重试同一命令成功 |
 | `CooperativeVictoryAndAtomicRewards` | 四人建塔、全员准备、三波九只怪全部击杀、基地满血；领奖写入后失败回滚；四人各四次并发领奖 | 驱动 `DeliverDue` 按期推进；多实体领奖事务：Player 金币与 Room 的 Claimed 一起提交或一起回滚，每人只得一份（70） |
 | `DefeatNoRewardAndViewCopy` | 不建塔，六只怪逃逸、基地归零失败；失败领奖为 0；局外人查看被拒；改视图里的路径不影响权威状态 | 终态由服务器判定；视图是副本，不引用权威切片 |
+| `RobotBusiness` | 公共 Robot 经 loopback TCP / PB 发本玩法的业务命令：业务闭环、结算重试、TCP 重连与拒绝路径 | 网络接入、正式 Sender / Nest 与 DAO 是同一条链路；鉴权与提交器是替身（[Robot](ROBOT.md)） |
 
 上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 11 节。
 
@@ -215,7 +217,9 @@ sequenceDiagram
 bash scripts/test-tower-defense-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 10 条顶层 race 场景（3.4：4 条规则 + 6 条 Nest）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_TOWER_DEFENSE_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
+脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 11 条顶层 race 场景（3.4：4 条规则 + 6 条 Nest + 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_TOWER_DEFENSE_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
+
+业务 Robot 用例 `TestTowerDefenseRobotBusiness` 由 `scripts/testdata/robot-common/install.py` 安装（3.1 的 Robot 一步）：真实 TCP / PB → 正式 Sender / Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，同时生成 `cmd/robot` 与 `loadtest/README.md`。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 
 ### 11. 业务纵切证明什么
 
@@ -247,7 +251,3 @@ ROOST_TOWER_DEFENSE_REAL=1 bash scripts/test-tower-defense-generated.sh
 地图、塔、怪物、经济和波次缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢期限、重复扣费 / 发奖、状态越权或生成物编译失败，则应在公共实现中修复。本夹具在当前 main 上没有触发框架或生成器缺陷。当前存储是教学规模：每席账本 128 条、单个状态至多 256 KiB 整体提交、加载时整段校验；500ms 步长不构成延迟或吞吐承诺。
 
 尚未实施或验收：正式客户端与公网鉴权、匹配与中途补位、会话票签发服务、共享资金防恶意消耗、投票拆塔、完整 Skill Host 与状态效果、多路导航与动态改道、Boss 内容、战斗广播、自动派奖、房间归档、跨 sid 奖励与权威 HA（均不因此算框架缺陷）。本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要，不为每一轮另建报告。
-
-## 当前 main 的 Robot 验收补充
-
-同检出的生成脚本已接入公共 Robot：新增真实 TCP/PB → 正式 Sender/Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，并生成 `cmd/robot` 与 `loadtest/README.md`。 当前通过数、生成方式和未验收边界以 [Robot 手册](ROBOT.md) 为准；本篇历史版本的计数不代表本轮数量。替身鉴权/持久化结果不能替代上线验收。

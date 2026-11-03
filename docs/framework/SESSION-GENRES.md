@@ -12,7 +12,7 @@ ROOST_GENRE_KEEP=1 ROOST_GENRE_MODULE=example.com/mycoop bash scripts/test-coop-
 ROOST_GENRE_KEEP=1 ROOST_GENRE_MODULE=example.com/myfarm bash scripts/test-social-sim-generated.sh
 ```
 
-每条脚本打印临时目录，生成物位于其 `project/`。不指定 `KEEP` 时成功后删除；失败保留工程和日志。`ROOST_GENRE_MODULE` 可替换模块名，无需手工替换导入。脚本执行正式 CLI 创建工程、Player 与 GameRoom DAO、实体与 Nest sender 生成，然后运行 **9 个场景、零 SKIP**，最后 build、vet、ID 与生成漂移检查。三个脚本均加入 pretag。
+每条脚本打印临时目录，生成物位于其 `project/`。不指定 `KEEP` 时成功后删除；失败保留工程和日志。`ROOST_GENRE_MODULE` 可替换模块名，无需手工替换导入。脚本执行正式 CLI 创建工程、Player 与 GameRoom DAO、实体与 Nest sender 生成，然后运行场景（回合 PvP、社交经营各 **9 个**，合作 Roguelike **10 个**，零 SKIP；`scripts/testdata/genre-common/run.sh` 的计数断言），最后 build、vet、ID 与生成漂移检查。三个脚本均加入 pretag。
 
 公共生成机械步骤在 `scripts/testdata/genre-common/run.sh`，业务规则与专属断言在各玩法目录。生成工程主要文件：
 
@@ -36,7 +36,7 @@ ROOST_GENRE_KEEP=1 ROOST_GENRE_MODULE=example.com/myfarm bash scripts/test-socia
 
 ## 各玩法范围与场景
 
-| 玩法 | 规则 | 8 个场景 |
+| 玩法 | 规则 | 基础 8 个场景（Robot 场景见表后） |
 | --- | --- | --- |
 | `turn-pvp` | 双人轮流攻击；每回合 30 秒；超时只消耗当前回合、扣当前行动方生命，再开启新回合，不追跑所有错过的回合 | 行动顺序、超时单拍、终局拒绝行动、重连状态继续；共同的相同重试/冲突、提交拒绝回滚、过期版本、非成员拒绝 |
 | `coop-roguelike` | 双人投票选路线，双方齐备推进；分歧由固定种子决策；三阶段后分别领奖 | 队伍阶段屏障、奖励只到账一次、Room 与 Player 一起回滚、重载不重抽；四个共同场景 |

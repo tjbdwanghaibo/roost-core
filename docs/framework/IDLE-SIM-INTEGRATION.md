@@ -55,7 +55,8 @@ ROOST_IDLE_SIM_KEEP=1 bash scripts/test-idle-sim-generated.sh   # 保留生成�
 1. `roost project new idle-sim-practice -module example.com/idle-sim-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add timer --entity Player`；
 3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `store:"state" dao:"persist"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"persist"` ``；放入业务包 `game/idlesim/`、定时回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/idle_sim.go`；
-4. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
+4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> idle-sim`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
+5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
 
 生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 Player 的定时器驱动（绑定 Nest、启动与停止投递循环；业务时间是驱动缺省的 `fctx.Now`），`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。测试里看到的 `TimerDriver.SetClock` / `Bind` / `DeliverDue` / `Start` / `Stop` 是用例自己搭 Nest、控制投递时机的替身接线，不是生产装配要抄的步骤。
 
@@ -147,7 +148,7 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 
 `playerEntityID` 来自已鉴权会话，不来自请求体；公网入口只接收命令本身，Player ID、服务器时间、Rules 由服务器填，客户端不能指定工时、产出、余额或离线时长。每次调用的错误都要按业务逐次处理，示例只演示调用方式；接网络协议时把 `idlesim.ErrRule` 映射成业务错误码，存储 / 内部故障按[回复错误判别](guide/02-nest-entity.md#6-回复错误判别是否可能已提交能否重试)处理。
 
-#### 3.4 十二个场景各学什么
+#### 3.4 十三个场景各学什么
 
 | 场景（测试名前缀 `TestIdleSim`） | 业务选择 | 学到的框架契约 |
 | --- | --- | --- |
@@ -163,6 +164,7 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 | `DailyBoundaryAndMissedDaysDoNotMultiplyRewards` | UTC 午夜前后、缺席十天 | 午夜前后是两天，缺席只领当天一份，原序号跨日重放仍是原回执；时钟回退被拒 |
 | `UndoRestoresQueueEconomyAndWakeDeadline` | 入队 / 买倍率后 handler 失败 | 原料、队列、钻石与唤醒定时器节点一起回滚，重试照常生效 |
 | `FullBufferPausesAndLedgerNeverEvicts` | 待领格满、命令账本填满 128 条 | 待领格满时后续任务暂停、那段时间不补；收取后继续；账本满了拒绝新命令、旧回执可重放 |
+| `RobotBusiness` | 公共 Robot 经 loopback TCP / PB 发本玩法的业务命令：业务闭环、结算重试、TCP 重连与拒绝路径 | 网络接入、正式 Sender / Nest 与 DAO 是同一条链路；鉴权与提交器是替身（[Robot](ROBOT.md)） |
 
 上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 10 节。
 
@@ -218,7 +220,9 @@ func resolveUnknown(ctx context.Context, client nest.Client, playerEntityID int6
 bash scripts/test-idle-sim-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 12 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_IDLE_SIM_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add timer` 或 Nest 生成时手动跑。
+脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 13 条顶层 race 场景（3.4，含 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_IDLE_SIM_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add timer` 或 Nest 生成时手动跑。
+
+业务 Robot 用例 `TestIdleSimRobotBusiness` 由 `scripts/testdata/robot-common/install.py` 安装（3.1 的 Robot 一步）：真实 TCP / PB → 正式 Sender / Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，同时生成 `cmd/robot` 与 `loadtest/README.md`。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 
 - **证明**：公共 CLI 生成的 Player DAO、实体定时器、Sender 与 Nest 在 12 个业务组合下的事务、undo 回滚、业务幂等与时间积分；配置原子发布与存档冻结；视图深拷贝。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；定时器由用例调用驱动的 `DeliverDue`，实体一直在内存，没有经过驱动投递循环与加载后补触发；单进程，无 Redis / NATS；鉴权是合成身份。代码里有上限但测试没有填满的：原料 100 上限、工坊与收入等级 5 级上限。夹具里的数值是样例。
@@ -252,7 +256,3 @@ ROOST_IDLE_SIM_REAL=1 bash scripts/test-idle-sim-generated.sh
 尚未实施或验收：工序依赖 / 运输 / 雇员、自动循环生产、经营活动日历、配置迁移、真实客户端 / 鉴权 / 支付 / 广告、跨服市场、容量与长稳（均不因此算框架缺陷）。
 
 本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要，不为每一轮另建报告。
-
-## 当前 main 的 Robot 验收补充
-
-同检出的生成脚本已接入公共 Robot：新增真实 TCP/PB → 正式 Sender/Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，并生成 `cmd/robot` 与 `loadtest/README.md`。 当前通过数、生成方式和未验收边界以 [Robot 手册](ROBOT.md) 为准；本篇历史版本的计数不代表本轮数量。替身鉴权/持久化结果不能替代上线验收。

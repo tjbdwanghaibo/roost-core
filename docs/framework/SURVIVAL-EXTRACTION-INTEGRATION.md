@@ -55,7 +55,8 @@ ROOST_SURVIVAL_EXTRACTION_KEEP=1 bash scripts/test-survival-extraction-generated
 1. `roost project new survival-extraction-practice -module example.com/survival-extraction-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add entity SurvivalRaid`、`roost add dao SurvivalRaid --entity SurvivalRaid`、`roost add timer --entity SurvivalRaid`；
 3. 业务只改这几处：在 `db/def/player.go` 加 ``Gold int64 `store:"gold" dao:"persist"` `` 与 ``Initialized bool `store:"initialized" dao:"persist"` ``，在 `db/def/survival_raid.go` 加 ``State string `store:"state" dao:"persist"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"persist"` ``；把 `game/entities/survival_raid/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（入场 / 兑付时 Raid 与 Player 一起锁，Raid 放在更低的锁档，锁序固定）；放入业务包 `game/survival/`、定时回调 `game/entities/survival_raid/timer_handlers.go` 与 handler `game/handler/survival_extraction.go`；
-4. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 DAO 持久键变化的 WARN（加字段不需要迁移，老文档读成零值），见第 8 节。
+4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> survival-extraction`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
+5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 DAO 持久键变化的 WARN（加字段不需要迁移，老文档读成零值），见第 8 节。
 
 生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 SurvivalRaid 的定时器驱动（绑定 Nest、Nest 可用后启动投递循环、停机时先停驱动；业务时间是驱动缺省的 `fctx.Now`），`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。夹具的测试不起整个 App，所以在用例里手动 `TimerDriver.SetClock` / `Bind` / `Start`，顺序与 Mod 相同。
 
@@ -139,7 +140,7 @@ func claim(ctx context.Context, client nest.Client, playerID, raidID int64) (int
 
 命令字段：`move` 的 A 是目标区域（只能到相邻区域，两次移动至少隔 100ms）；`gather` 的 A 是资源索引 0～2，玩家必须站在区域 A+1；`loot` 的 A 是死亡玩家的席位 0～3、B 是物资索引 0～3（木材、矿石、食物、药剂）；`craft`、`cancel_craft`、`heal`、`extract`、`cancel_extract` 的 A、B 都是 0。客户端不提供坐标、背包、伤害、时间和兑付金额。
 
-#### 3.4 十二个场景各学什么
+#### 3.4 十三个场景各学什么
 
 | 场景（测试名前缀 `TestSurvivalExtraction`） | 业务选择 | 学到的框架契约 |
 | --- | --- | --- |
@@ -155,6 +156,7 @@ func claim(ctx context.Context, client nest.Client, playerID, raidID int64) (int
 | `ReconnectPrivateInventoryAndDeadline` | 断线后不能操作；新会话票提升 Epoch，旧票断开与旧 Epoch 命令被拒，新会话按序号查旧回执；局外人查看被拒，队友视图不含他人背包；期限到达后的新命令被拒，定时器完成制作 | 会话代际由业务存在探险里；准入以期限为界 |
 | `ExpiryCannotReopenOrReenter` | 业务时钟越过结束时刻一小时后投递一次（实体一直在内存，不是进程重启）：已开始且在结束前完成的撤离保留，其他人死亡；之后重复入场不复活、不再扣费 | 终态由服务器判定；一次触发处理到结束为止的全部到期事件 |
 | `UndoRestoresMaterialsJobAndTimer` | 制作写入后 handler 失败 | undo 回滚后背包、制作任务和定时器节点一起恢复，重试同一命令成功 |
+| `RobotBusiness` | 公共 Robot 经 loopback TCP / PB 发本玩法的业务命令：业务闭环、结算重试、TCP 重连与拒绝路径 | 网络接入、正式 Sender / Nest 与 DAO 是同一条链路；鉴权与提交器是替身（[Robot](ROBOT.md)） |
 
 上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 11 节。
 
@@ -234,7 +236,9 @@ sequenceDiagram
 bash scripts/test-survival-extraction-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 12 条顶层 race 场景（3.4：4 条规则 + 8 条 Nest）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_SURVIVAL_EXTRACTION_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
+脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 13 条顶层 race 场景（3.4：4 条规则 + 8 条 Nest + 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_SURVIVAL_EXTRACTION_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
+
+业务 Robot 用例 `TestSurvivalExtractionRobotBusiness` 由 `scripts/testdata/robot-common/install.py` 安装（3.1 的 Robot 一步）：真实 TCP / PB → 正式 Sender / Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，同时生成 `cmd/robot` 与 `loadtest/README.md`。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 
 - **证明**：公共 CLI 生成的 Player / SurvivalRaid DAO、SurvivalRaid 实体定时器、多实体 Sender 与 Nest 在 12 个业务组合下的事务、undo 回滚、锁顺序、业务幂等和期限核对；配置原子发布与按值冻结；物资守恒校验；视图字段与归属校验。Nest 用例里的期限经驱动的 `DeliverDue` 投递（实体一直在内存）。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；没有经过加载后补触发与驱动投递循环的计时（`ExpiryCannotReopenOrReenter` 是业务时钟跳过结束时刻，不是重启）；单进程，无 Redis / NATS；鉴权与会话票是合成身份；账本上限在纯状态测试里直接填满，没有经 Nest 跑满 128 条命令。夹具里的数值是样例。
@@ -264,7 +268,3 @@ ROOST_SURVIVAL_EXTRACTION_REAL=1 bash scripts/test-survival-extraction-generated
 地图、物资、配方、伤害和价格缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢期限、重复扣费 / 到账、物资凭空增减、状态越权或生成物编译失败，则应在公共实现中修复。本夹具在当前 main 上没有触发框架或生成器缺陷。当前存储是教学规模：每席账本 128 条、单个状态至多 256 KiB 整体提交、加载时整段校验，没有生产吞吐或延迟承诺。
 
 尚未实施或验收：真实客户端与公网鉴权、会话票签发、匹配与队友补位、开放世界地图与 AOI / 视野、命中 / 物理移动 / 反作弊、PvP 与队友伤害、完整 Skill Host、局外逐件仓库与装备携入携出、自动结算、长期归档、跨 sid 兑付与权威 HA（均不因此算框架缺陷）。本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要，不为每一轮另建报告。
-
-## 当前 main 的 Robot 验收补充
-
-同检出的生成脚本已接入公共 Robot：新增真实 TCP/PB → 正式 Sender/Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，并生成 `cmd/robot` 与 `loadtest/README.md`。 当前通过数、生成方式和未验收边界以 [Robot 手册](ROBOT.md) 为准；本篇历史版本的计数不代表本轮数量。替身鉴权/持久化结果不能替代上线验收。

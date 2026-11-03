@@ -53,7 +53,8 @@ ROOST_AUTO_CHESS_KEEP=1 bash scripts/test-auto-chess-generated.sh   # 保留生�
 1. `roost project new auto-chess-practice -module example.com/auto-chess-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add entity ChessMatch`、`roost add dao ChessMatch --entity ChessMatch`、`roost add timer --entity ChessMatch`；
 3. 业务只改这几处：在 `db/def/player.go` 加 ``Gold int64 `store:"gold" dao:"persist"` `` 与 ``Initialized bool `store:"initialized" dao:"persist"` ``，在 `db/def/chess_match.go` 加 ``State string `store:"state" dao:"persist"` `` 与 ``WakeTimer int64 `store:"wake_timer" dao:"persist"` ``；把 `game/entities/chess_match/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（Match 与 Player 一起锁，放在更低的锁档，锁序固定）；放入业务包 `game/autochess/`、定时回调 `game/entities/chess_match/timer_handlers.go` 与 handler `game/handler/auto_chess.go`；
-4. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
+4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> auto-chess`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
+5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
 
 生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 ChessMatch 的定时器驱动（绑定 Nest、启动与停止投递循环；业务时间是驱动缺省的 `fctx.Now`），`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。测试里看到的 `TimerDriver.SetClock` / `Bind` / `DeliverDue` / `Start` 是用例自己搭 Nest、控制投递时机的替身接线，不是生产装配要抄的步骤。
 
@@ -135,7 +136,7 @@ func claim(ctx context.Context, client nest.Client, matchID, playerEntityID int6
 
 `matchID` 要用 id-gen 发的新号并先创建实体：直接 `Create` 不读存储，不能复用删过档或存了没加载的 ID（[删档后该 ID 不可再用，D10](guide/03-dataengine.md#4-冷加载与-schema)）。对局归档要与领奖防重一起设计，不能删掉 Match 再用同一 ID 重建；夹具在测试里直接建实体，没有演示 id-gen 接线。
 
-#### 3.4 十二个场景各学什么
+#### 3.4 十三个场景各学什么
 
 | 场景（测试名前缀 `TestAutoChess`） | 业务选择 | 学到的框架契约 |
 | --- | --- | --- |
@@ -151,6 +152,7 @@ func claim(ctx context.Context, client nest.Client, matchID, playerEntityID int6
 | `UndoRestoresPoolRandomReceiptAndTimer` | 刷新商店后 handler 失败 | 卡池、费用、抽卡序号、回执与定时器节点一起回滚，重试照常生效 |
 | `TerminalRanksAndConcurrentRewards` | 打到终局、同分按席序、领奖中途失败、八人各四个并发领奖 | 多实体领奖事务：失败时两份 DAO 一起回滚；每人只得一份按排名的奖励；终局后不再挂定时器 |
 | `LedgerFullKeepsOriginalReceipt` | 一席账本填满 128 条 | 满了拒绝新命令而不淘汰旧回执，旧命令重放仍得原回执 |
+| `RobotBusiness` | 公共 Robot 经 loopback TCP / PB 发本玩法的业务命令：业务闭环、结算重试、TCP 重连与拒绝路径 | 网络接入、正式 Sender / Nest 与 DAO 是同一条链路；鉴权与提交器是替身（[Robot](ROBOT.md)） |
 
 基础用例由用例调用驱动的 `DeliverDue` 推进阶段（实体一直在内存，不启动投递循环）。上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 10 节。
 
@@ -217,7 +219,9 @@ sequenceDiagram
 bash scripts/test-auto-chess-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 12 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_AUTO_CHESS_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
+脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 13 条顶层 race 场景（3.4，含 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_AUTO_CHESS_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer`、多实体 Sender 或 Nest 生成时手动跑。
+
+业务 Robot 用例 `TestAutoChessRobotBusiness` 由 `scripts/testdata/robot-common/install.py` 安装（3.1 的 Robot 一步）：真实 TCP / PB → 正式 Sender / Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，同时生成 `cmd/robot` 与 `loadtest/README.md`。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 
 - **证明**：公共 CLI 生成的 Player / ChessMatch DAO、实体定时器、多实体 Sender 与 Nest 在 12 个业务组合下的事务、undo 回滚、锁顺序、业务幂等和期限核对；配置原子发布与对局冻结；视图按观察者裁剪。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；定时器由用例调用驱动的 `DeliverDue`，实体一直在内存，没有经过投递循环与加载后补触发；八个“玩家”是同进程里的并发调用，不是八个网络客户端；单进程，无 Redis / NATS；鉴权与接管票是合成的。夹具里的数值是样例。
@@ -249,7 +253,3 @@ ROOST_AUTO_CHESS_REAL=1 bash scripts/test-auto-chess-generated.sh
 尚未实施或验收：真实匹配 / 取消 / 候补、入场扣费、接管票签发、公网客户端与观战协议、装备 / 羁绊 / 选秀、自动奖励投递、赛季 MMR、长期归档、跨 sid 奖励（应经 Remote / Saga 回原服）、权威宿主 HA、容量与长稳（均不因此算框架缺陷）。
 
 本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要，不为每一轮另建报告。
-
-## 当前 main 的 Robot 验收补充
-
-同检出的生成脚本已接入公共 Robot：新增真实 TCP/PB → 正式 Sender/Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，并生成 `cmd/robot` 与 `loadtest/README.md`。 当前通过数、生成方式和未验收边界以 [Robot 手册](ROBOT.md) 为准；本篇历史版本的计数不代表本轮数量。替身鉴权/持久化结果不能替代上线验收。

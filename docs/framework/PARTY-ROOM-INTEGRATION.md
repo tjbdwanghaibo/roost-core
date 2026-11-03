@@ -54,9 +54,10 @@ ROOST_PARTY_ROOM_KEEP=1 bash scripts/test-party-room-generated.sh   # 保留生�
 
 1. `roost project new party-room-practice -module example.com/party-room-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add entity PartyRoom`、`roost add dao PartyRoom --entity PartyRoom`、`roost add heartbeat --entity PartyRoom`、`roost add timer --entity PartyRoom`；
-3. 业务只改这几处：`db/def/player.go` 加 `Coins`（`persist,sync`，自身视图推给本人）/ `Matches` / `Initialized`（persist）；`db/def/party_room.go` 加 ``State string `store:"state" dao:"persist"` ``、``WakeTimer int64 `store:"wake_timer" dao:"persist"` `` 与 ``Board string `store:"board" dao:"nopersist,sync"` ``；把 `game/entities/party_room/entity.go` 注解的 `category=entity.EntityCategoryOther` 换成 `category=entity.EntityCategoryWorld sync=true syncNamespace=party_room subjectPacker=NewPartyRoomBoardPacker`；放入业务包 `game/partyroom/`（含补位规则 `backfill.go`）、补位宿主与匹配循环 `game/partymatch/backfill.go`、实体包里的 `room.go` / `heartbeat_beats.go` / `timer_handlers.go` / `board_packer.go`（后两个心跳、定时器文件是 `roost add` 只在缺失时创建的业务文件），handler `game/handler/party_room.go`；
+3. 业务只改这几处：`db/def/player.go` 加 `Coins`（`persist,sync`，自身视图推给本人）/ `Matches` / `Initialized`（persist）；`db/def/party_room.go` 加 ``State string `store:"state" dao:"persist"` ``、``WakeTimer int64 `store:"wake_timer" dao:"persist"` `` 与 ``Board string `store:"board" dao:"nopersist,sync"` ``；把 `game/entities/party_room/entity.go` 注解的 `category=entity.EntityCategoryOther` 换成 `category=entity.EntityCategoryWorld sync=true syncNamespace=party_room subjectPacker=NewPartyRoomBoardPacker`；放入业务包 `game/partyroom/`（含补位规则 `backfill.go`）、补位宿主与匹配循环 `game/partymatch/backfill.go`、实体包里的 `room.go` / `heartbeat_beats.go` / `timer_handlers.go` / `board_packer.go`（后两个心跳、定时器文件是 `roost add` 只在缺失时创建的业务文件），handler `game/handler/party_room.go`；场景测试 `game/partyroom/rules_test.go`（[rules_test.go.txt](../../scripts/testdata/party-room/rules_test.go.txt)，3 条规则）与 `game/handler/party_room_test.go`（[gameplay_test.go.txt](../../scripts/testdata/party-room/gameplay_test.go.txt)，15 条 Nest / 心跳 / 同步 / 补位）；
 4. 房间内同步走正式入口：`roost add access player --service game`、`roost add transport tcp`，在 roost.yaml 的 `access.player` 下写 `self_sync: true` 与 `sync_groups: [party_room]`，`roost project sync`；它创建一次的 `game/entities/party_room/sync_group.go` 是业务文件，换成本例的视图 `RoomSyncProfile` 与座位上限（[sync_group.go.txt](../../scripts/testdata/party-room/sync_group.go.txt)）；
-5. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。
+5. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> party-room`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
+6. `roost generate` 生成组件、访问器和 Sender，不手改生成文件。
 
 生成的 `internal/bootstrap/generated.go` 已用 `wiring/heartbeat` 与 `wiring/entitytimer` 装配两个驱动（Nest 可用后启动、停机时先停），业务时间都是 `fctx.Now`。夹具的测试不起整个 App，所以在用例里手动 `Bind` / `Start`，业务时间用 `clock.SetSource` 拨（handler 的 `nowUnixMilli`、心跳的 `Beat.Now`、定时器的 `Fire.Now` 都读它，[时间 §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）。
 
@@ -151,7 +152,7 @@ func grab(ctx context.Context, client nest.Client, roomID, playerID int64, epoch
 
 handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数：生成的分发包装在执行时从 `fctx` 填（这条消息冻结的业务时间），Sender 签名里没有它，调用方不传时间（[时间 §1A](guide/10-time.md#1a-业务时间一律取自-ctxd22-1)）。
 
-#### 3.4 十八个场景各学什么
+#### 3.4 十九个场景各学什么
 
 | 场景（测试名前缀 `TestPartyGame`） | 业务选择 | 学到的框架契约 |
 | --- | --- | --- |
@@ -173,6 +174,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 | `BackfillConcurrentMatchesAdmitOne` | 一个空位，两个匹配器实例各取两名玩家、用同一张房间票并发 `Commit`：一个成功、另一个 `ErrConflict` 且两张玩家票仍在等待；赢的一局三次并发投到房间 + 两次完整重投都是“一人进、一人拒”，房间只多一人；被拒的人按 `requeue:<Match>:<玩家>` 回到补位队列，连房间被拒 | 同一张房间票只成一局；不超员靠进房 handler 按座位拒绝，存储不校验人数 |
 | `BackfillDeadlineWithdrawsTicket` | 第 1 回合结束后匹配循环不给过了截止的房间票配人，宿主撤回仍在等待的房间票、之后不再补；另一个房间的房间票已被补位成局消耗时提前结算，撤票得到“已匹配”（不是错误），这个迟到的成局进房全部被拒、房间不变，玩家重新排队 | 截止由房间状态判定，撤票与进房拒绝两道兜底 |
 | `BackfillPlayerJoinsGroupWithFullSync` | 补位被接受后、连上之前，其他成员看到他的离线座位，他还不是同步组成员；连上后 `PartyConnect` 在提交后 Join，新连接收到一个全量（房间 + 自己的 Player），与服务端逐字节相同；他抢星得分后全体成员同步看到，之后都是增量；离开的人不再收到房间 | 补位进房的人走与开房名单相同的连接与同步路径 |
+| `RobotBusiness` | 公共 Robot 经 loopback TCP / PB 发本玩法的业务命令：业务闭环、结算重试、TCP 重连与拒绝路径 | 网络接入、正式 Sender / Nest 与 DAO 是同一条链路；鉴权与提交器是替身（[Robot](ROBOT.md)） |
 
 上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 12 节。
 
@@ -193,6 +195,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 - **接法**：roost.yaml 的 `access.player` 写 `self_sync: true` 与 `sync_groups: [party_room]`，`roost project sync` 在实体包里创建一次 `sync_group.go`（`SyncGroup` 变量，业务把视图改成 `RoomSyncProfile`），bootstrap 把它交给 `PlayerSelfSync`。不要再自建 Manager 交给 Nest：Nest 只有一个 `EntitySync` 观察者，Nest Mod 启动时报 `ErrEntitySyncObserverConflict`。
 - **内容走提交门**：Manager 是 Nest 的 `EntitySync` 观察者，Board 的修改在事务确认后才进入下一次 Flush；回滚的修改不会推出去（`FoulEliminationAndUndoRollback` 的 `refuse` 断言 Board 不变）。
 - **成员关系跟着座位在 handler 里变**：`PartyConnect`（connected）里 `SyncGroup.Join`，`PartyLeave` 与 `PartyRelease` 里 `Leave`，最后一个归还关闭房间时 `Disband`。三者在 Nest 事务里调用时推迟到提交之后，回滚就不发生。会话由自身视图按连接开关：断线只关连接，成员关系保留，宽限内重连的那个同步周期新连接收到自己与房间的全量，业务不再调用任何东西；`Disband` 后的下一个同步周期成员收到 remove、房间注销，然后再销毁实体。成员关系不持久：进程重启后由玩家重连时的 `PartyConnect` 再 `Join`。
+- **边界**：组同步要求 self_sync（会话归自身视图）；不开 self_sync、自己开关会话的进程仍可用 `policy.Group`。独立 Gate 下没有组同步自己的用例（[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 表下房间内同步一条）。
 - **视图白名单**：packer 只放出 `Board`；`State`（种子、星星出现时刻、票号、回执）不标 sync，任何视图都拿不到。夹具的客户端核对收到的文档只有 `_id` 与 `board` 两个键。
 - **慢消费者、帧上限**：沿用 Manager 与接入层的契约——一帧被活着的连接拒收时关会话（[guide/04 §2](guide/04-sync.md#玩家只看自己自身视图)）；一个会话持有的对象受 `Limits.MaxObjects`（缺省 100）约束（[guide/04 视野上限](guide/04-sync.md#谁看见谁视野viewd19)）。派对房间每个会话只有一个对象，不会碰到。
 - **推送频率**：`Board` 带“本回合剩余毫秒”，心跳每拍都会改它，所以 `playing` 时每 100ms 每房间一个增量。要省带宽就去掉剩余时间、让客户端按回合结束时刻自己倒计时，Board 只在事件发生时变化。
@@ -263,7 +266,6 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 | 固定步长、追帧 | 心跳是可变步长：上一拍没跑完就跳拍、不补发、不追帧，`Elapsed` 夹在 `[0, max(1s, 档位)]`（[时间 §4A](guide/10-time.md#4a-实体心跳周期推进)、[KNOWN-LIMITS 实体心跳](../maintenance/KNOWN-LIMITS.md#实体心跳d20-第-1-期)） | 规则按时间戳与事件顺序写（本例 `Advance`），不要按“第几拍”累加 |
 | UDP / KCP 玩家接入 | 玩家接入层（嵌入 TCP、独立 Gate）只提供 TCP；`-features nettransport-kcp` 等只生成装配函数，监听、握手鉴权与 Session 绑定由宿主自己写（[MOBA §2](MOBA-INTEGRATION.md#2-模块分工对局里的状态归谁)、[GATEWAY](GATEWAY.md)） | 派对房间的输入频率低，TCP 足够；要 UDP 自己写接入 |
 | 房间跨机接管 / HA | 房间是普通本地实体，属于开房的进程；进程崩溃后只能由同一份 WAL / Mongo 冷加载恢复（第 13 节），没有自动迁到别的机器继续跑。Player 静态绑定 sid、不做动态迁移（[guide/09 §4](guide/09-services.md#4-关键业务边界)） | 短局可接受“崩溃 → 冷加载 → 硬期限结算”；需要跨机接管要另做 Remote 托管或宿主交接（MOBA 的宿主交接是写法参考） |
-| ~~房间内同步的生成器 / 装配~~（2026-10-31 已提供） | `access.player.sync_groups` + `wiring/selfsync.Groups`（第 5 节）；限制：要求 self_sync（会话归自身视图），成员关系不持久，没有独立 Gate 下的组同步用例 | 不开 self_sync、自己开关会话的进程仍可用 `policy.Group` |
 | 跨服务广播的可靠送达 | SyncBus 定位为可丢广播：普通 NATS 至多一次，JetStream 有限重投（[guide/04 §5](guide/04-sync.md#syncbus-的定位与丢失兜底)） | 房间内同步不走 SyncBus；跨服务的房间事件（大厅列表、好友在玩）要业务对账 |
 | 存储原生补位 | 弹性人数成局**已提供**（`Queue.MinSize` / `FillAfterSeconds`，“够 M 人、最早一张票等满 T 就开”，[guide/09 §4](guide/09-services.md#4-关键业务边界)）；补位按业务层写法（第 6A 节，维护者 2026-10-31 选方案 B）；由存储扣空位、保证不超员的原生补位（[FEATURE-2026-10-31 第 3 节](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-31-match-flexible-grouping.md#3-第二阶段中途补位backfill待维护者选择)方案 A）未提供 | 房间票 + 玩家票在补位队列里弹性成局，进房 handler 按座位拒绝超员（第 6A 节）；多个玩法都要框架保证不超员时再做方案 A |
 | 房间码、大厅列表 | 没有房间码服务与房间列表 | directory 做短码；大厅列表自己维护（可丢、可重建） |
@@ -291,7 +293,9 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 bash scripts/test-party-room-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 18 条顶层 race 场景（3.4：3 条规则 + 15 条 Nest / 心跳 / 同步 / 补位）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`，再把真实依赖用例复制进工程只编译（`go vet`）；成功删除临时工程，失败或 `ROOST_PARTY_ROOM_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉）。2026-10-31 本机 macOS 实测：缺省模式约 18 秒（12 个场景合计约 2 秒，主要是心跳等待）；加入同步组入口（access player + TCP + self_sync）后 13 个场景合计约 2 秒；加入补位后 18 个场景的 `go test` 报告为 handler 包约 2.4 秒、规则包约 1.5 秒（`-race`）。
+脚本按 3.1 的步骤生成工程，`replace` 指回当前检出（在 `generate` 之前），必须实际通过 19 条顶层 race 场景（3.4：3 条规则 + 15 条 Nest / 心跳 / 同步 / 补位 + 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`，再把真实依赖用例复制进工程只编译（`go vet`）；成功删除临时工程，失败或 `ROOST_PARTY_ROOM_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉）。2026-10-31 本机 macOS 实测：缺省模式约 18 秒（12 个场景合计约 2 秒，主要是心跳等待）；加入同步组入口（access player + TCP + self_sync）后 13 个场景合计约 2 秒；加入补位后 18 个场景的 `go test` 报告为 handler 包约 2.4 秒、规则包约 1.5 秒（`-race`）。
+
+业务 Robot 用例 `TestPartyGameRobotBusiness` 由 `scripts/testdata/robot-common/install.py` 安装（3.1 的 Robot 一步）：真实 TCP / PB → 正式 Sender / Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，同时生成 `cmd/robot` 与 `loadtest/README.md`。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 
 ### 12. 业务纵切证明什么
 
@@ -316,14 +320,10 @@ ROOST_PARTY_ROOM_REAL=1 bash scripts/test-party-room-generated.sh
 2026-10-31 本机实测（私有单节点 Mongo 副本集）：通过，崩溃时 12 条未投影记录，脚本全程约 19 秒。对照：把 `onHeartbeatInit` 里按阶段启动心跳的一行去掉后跑一次，用例在冷加载核对处失败（`cold load lost the room: beat=false`），所以“冷加载后心跳重新启动”确实由业务的 `onHeartbeatInit` 完成。
 
 - **证明**：strict 已确认的输入与房间状态在 SIGKILL 后可从未投影 WAL 恢复；心跳不持久，冷加载后按持久阶段重新启动、离线期间错过的回合在第一拍里一次结算；跨进程重试不重复发奖；删档后房间不再加载。
-- **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏；期限定时器的冷加载补触发（由塔防等纵切与 entitytimer 包测试覆盖）；Entity Sync 在恢复后的重新登记（本用例把同步组装到 self_sync 的 Manager 上只为承接连接 handler 的 `Join`，不推送；2026-10-31 改动后真实依赖模式未重跑）；多进程 / 跨机、Redis / NATS；三个逻辑玩家不是三台客户端，容量与长稳未测。
+- **不证明**：提交在途 / 结果未知时的崩溃、磁盘断电、WAL 损坏；期限定时器的冷加载补触发（由塔防等纵切与 entitytimer 包测试覆盖）；Entity Sync 在恢复后的重新登记（本用例把同步组装到 self_sync 的 Manager 上只为承接连接 handler 的 `Join`，不推送；改用同步组入口后的真实依赖模式 2026-11-02 在 Linux（v1.37.1）上通过，见 [Linux 验收续报](../maintenance/LINUX-FUNCTIONAL-20261102.md)）；多进程 / 跨机、Redis / NATS；三个逻辑玩家不是三台客户端，容量与长稳未测。
 
 ### 14. 结论怎样给
 
-派对玩法、计分、房间码与大厅缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢输入、重复发奖、记分板泄露 State 字段、回滚后仍推出去、心跳或定时器在结算后残留、生成物编译失败，则应在公共实现中修复。本夹具在当前 main 上没有触发框架或生成器缺陷；第 8 节的“房间同步没有生成器入口、与 self_sync 共用 Manager 尚未确认”是能力缺口，登记在 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收)。100ms 档位与 30 秒期限是样例，不构成延迟或吞吐承诺。
+派对玩法、计分、房间码与大厅缺少默认实现，不自动构成框架缺陷；合法接口调用下出现丢输入、重复发奖、记分板泄露 State 字段、回滚后仍推出去、心跳或定时器在结算后残留、生成物编译失败，则应在公共实现中修复。本夹具没有触发框架或生成器缺陷；第 8 节列的是框架没有的能力，房间内同步的剩余边界见第 5 节与 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 表下房间内同步一条。100ms 档位与 30 秒期限是样例，不构成延迟或吞吐承诺。
 
 尚未实施或验收：正式客户端与公网鉴权、接入层到 `Connect` 的票号签发、房间码短码服务、大厅列表、存储原生补位（业务层补位见第 6A 节）、掉线托管与 AI 补位、观战、跨 sid 发奖、房间跨机接管、房间数量与推送带宽的容量（均不因此算框架缺陷）。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要。
-
-## 当前 main 的 Robot 验收补充
-
-同检出的生成脚本已接入公共 Robot：新增真实 TCP/PB → 正式 Sender/Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，并生成 `cmd/robot` 与 `loadtest/README.md`。 当前通过数、生成方式和未验收边界以 [Robot 手册](ROBOT.md) 为准；本篇历史版本的计数不代表本轮数量。替身鉴权/持久化结果不能替代上线验收。

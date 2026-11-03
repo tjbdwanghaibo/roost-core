@@ -59,8 +59,9 @@ ROOST_MMORPG_KEEP=1 bash scripts/test-mmorpg-generated.sh   # 保留生成工程
 
 1. `roost project new mmorpg-practice -module example.com/mmorpg-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add timer --entity Player`，对 Scene / Trade / Monster 各执行 `roost add entity <名>` 与 `roost add dao <名> --entity <名>`；
-3. 业务只改这几处：在 `db/def/*.go` 填 DAO 字段，并把 DAO 库名改成本次唯一的名字（真实依赖模式要用）；把 `game/entities/scene|trade|monster/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `category=entity.EntityCategoryWorld`（这些是被多名玩家争用的世界对象，锁序要低于 Player）；写到期回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/mmo_*.go`；
-4. `roost generate` 生成组件、访问器和 Sender。
+3. 业务只改这几处：在 `db/def/*.go` 填 DAO 字段，骨架的逻辑库 `db=main` 不改（真实依赖模式的唯一物理库由测试夹具的库映射给出）；把 `game/entities/scene|trade|monster/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `category=entity.EntityCategoryWorld`（这些是被多名玩家争用的世界对象，锁序要低于 Player）；写到期回调 `game/entities/player/timer_handlers.go` 与 handler `game/handler/mmo_*.go`；
+4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> mmorpg`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
+5. `roost generate` 生成组件、访问器和 Sender。
 
 #### 4.2 阅读顺序
 
@@ -104,7 +105,7 @@ func confirmTrade(ctx context.Context, client nest.Client, tradeID, sellerID, bu
 
 金币 / 道具上限、5 秒报价期限和转账的单调序号只是本例的业务选择，不要直接拿来代替正式经济协议。
 
-#### 4.4 十三个场景各学什么
+#### 4.4 十四个场景各学什么
 
 | 场景 | 业务建模 | 学到的框架契约 |
 | --- | --- | --- |
@@ -115,6 +116,7 @@ func confirmTrade(ctx context.Context, client nest.Client, tradeID, sellerID, bu
 | Buff | DAO 记录当前 Buff 节点 ID | 刷新撤销旧节点、旧期限不清新 Buff；事务拒绝时 Buff 与期限一起回滚；DAO 序列化重建后按 Tick 到期 |
 | 死亡与复活 | 复活期限是一个定时器节点 | 重复复活请求不登记第二个节点，期限前不复活，到期后才能再战斗 |
 | 切图、返回与旧请求 | Player 归属 / 版本与两个 Scene 人数同事务；示例容量 100 | 失败无半次切图，成功重放不重复计人数，返回后拒绝旧版本切图 |
+| 公共 Robot 网络闭环（`TestMMORPGRobotBusiness`） | 经 loopback TCP / PB 发本玩法的业务命令：业务闭环、结算重试、TCP 重连与拒绝路径 | 网络接入、正式 Sender / Nest 与 DAO 是同一条链路；鉴权与提交器是替身（[Robot](ROBOT.md)） |
 
 表中 7 行展开为 13 条顶层测试；实际证明到哪一步见 §10。
 
@@ -209,7 +211,9 @@ SLG 手册的[通用接入原则](SLG-INTEGRATION.md#9-通用接入原则)（定
 bash scripts/test-mmorpg-generated.sh
 ```
 
-按 §4.1 的步骤生成工程，replace 指回当前仓库；必须实际通过 13 条顶层 race 场景（§4.4）且无 skip，随后执行 `roost id check` 与 `roost generate --check`。成功删除临时工程；失败或 `ROOST_MMORPG_KEEP=1` 时保留。
+按 §4.1 的步骤生成工程，replace 指回当前仓库；必须实际通过 14 条顶层 race 场景（§4.4，含 1 条业务 Robot）且无 skip，随后执行 `roost id check` 与 `roost generate --check`。成功删除临时工程；失败或 `ROOST_MMORPG_KEEP=1` 时保留。
+
+业务 Robot 用例 `TestMMORPGRobotBusiness` 由 `scripts/testdata/robot-common/install.py` 安装（4.1 的 Robot 一步）：真实 TCP / PB → 正式 Sender / Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，同时生成 `cmd/robot` 与 `loadtest/README.md`。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 
 - **证明**：生成代码、多实体取锁、DAO undo、定时器期限与业务幂等在 13 个业务组合下的交错行为。
 - **不证明**：提交器是替身，不含文件 WAL 与 Mongo；Buff 的“离线到期”用 DAO 序列化 / 水合重建实体后手动投递 Tick，不是真实重载，也不是驱动在加载后自动投递（真实重载与驱动投递见 §11）；单进程。
@@ -298,7 +302,3 @@ bash scripts/test-mmorpg-cross-sid.sh
 ### 14. 验收范围小结
 
 已提供：业务纵切（13 条，缺省替身提交器）、真实 WAL / Mongo 的两进程停机恢复与 SIGKILL 崩溃恢复（定时器经驱动投递循环）、多地图 TCP 纵切、对已启动双 sid demo 的跨服赠礼脚本；装备、聊天、邮件、支付、匹配、排行和 Lockstep 从 game-demo 学习。真实客户端引擎、目标密度长稳、跨机器故障仍需各自的实际证据；按静态归属路线，动态 Player 跨 sid 迁移不在本接入方案内。不能用 DAO 人数守恒代替 AOI 客户端视图验收。队伍邀请 / 队长、交易物品实例、掉落分配、战斗射程 / 预测、持久技能 Host 等没有默认实现（不因此算框架缺陷）；夹具里的队伍规模、交易期限与上限、伤害、冷却、奖励都是业务样例，不是框架规则。不以本文清单的长度代替验收。
-
-## 当前 main 的 Robot 验收补充
-
-同检出的生成脚本已接入公共 Robot：新增真实 TCP/PB → 正式 Sender/Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，并生成 `cmd/robot` 与 `loadtest/README.md`。 当前通过数、生成方式和未验收边界以 [Robot 手册](ROBOT.md) 为准；本篇历史版本的计数不代表本轮数量。替身鉴权/持久化结果不能替代上线验收。

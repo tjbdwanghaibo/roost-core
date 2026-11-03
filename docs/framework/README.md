@@ -103,6 +103,6 @@ DataEngine 更新粒度与验证：[递归增量持久化](DATAENGINE-INCREMENTA
 
 [物理房间 service](PHYSICS-ROOM-SERVICE.md)：固定 owner 的瞬态房间、Nest 提交、Chunk 与 Gate 接线及容量/生命周期边界。
 
-三类新增玩法：[回合 PvP、合作 Roguelike、异步社交经营](SESSION-GENRES.md)，各有正式生成工程和 8 个可运行场景；边界与命令见手册。
+三类新增玩法：[回合 PvP、合作 Roguelike、异步社交经营](SESSION-GENRES.md)，各有正式生成工程，可运行场景分别为 9、10、9 个（含公共 Robot 网络用例）；边界与命令见手册。
 
 Robot 的统一接入、13 类生成验收、负载与报告口径见 [Robot](ROBOT.md)。

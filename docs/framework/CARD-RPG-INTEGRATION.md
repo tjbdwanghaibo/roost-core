@@ -52,7 +52,8 @@ ROOST_CARD_RPG_KEEP=1 bash scripts/test-card-rpg-generated.sh   # 保留生成�
 1. `roost project new card-rpg-practice -module example.com/card-rpg-practice -template game`；
 2. `roost add dao Player --entity Player`、`roost add entity CardRun`、`roost add dao CardRun --entity CardRun`、`roost add timer --entity CardRun`、`roost add attribute HeroStats`；
 3. 业务只改这几处：在 `db/def/player.go` 加 ``State string `store:"state" dao:"persist"` ``，在 `db/def/card_run.go` 加 `State` 与 ``TurnTimer int64 `store:"turn_timer" dao:"persist"` ``；把 `game/entities/card_run/entity.go` 注解里的 `category=entity.EntityCategoryOther` 改为 `EntityCategoryWorld`（Run 与 Player 一起锁，放在更低的锁档，锁序固定）；放入业务包 `game/cardrpg/`、属性声明 `game/gameplay/attribute/hero_stats.go`、定时回调 `game/entities/card_run/timer_handlers.go` 与 handler `game/handler/card_rpg.go`；
-4. `roost generate` 生成组件、访问器、属性代码和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
+4. 接入公共 Robot：在最终 `roost generate` 之前运行 `python3 scripts/testdata/robot-common/install.py <仓库根> <工程根> card-rpg`，安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络用例 `game/handler/robot_network_test.go`（自定义 module 由安装器读 go.mod）；
+5. `roost generate` 生成组件、访问器、属性代码和 Sender，不手改生成文件。加字段时 generate 会打印 `WARN: … new stored key "state" …`：这是 DAO 持久键变化的提示（加字段不需要迁移，老文档读成零值），见第 7 节。
 
 生成的 `internal/bootstrap/generated.go` 已用 `wiring/entitytimer` 的 Mod 装配 CardRun 的定时器驱动，`internal/registry/nest_gen.go` 已登记 handler；业务不手写这两处接线。
 
@@ -132,7 +133,7 @@ func playAndClaim(ctx context.Context, client nest.Client, playerEntityID, runID
 
 `candidateRunID` 要用 id-gen 发的新号并先创建实体：直接 `Create` 不读存储，不能复用删过档或存了没加载的 ID（[删档后该 ID 不可再用，D10](guide/03-dataengine.md#4-冷加载与-schema)）。夹具在测试里直接建实体，没有演示 id-gen 接线。未用上的候选号（重放时返回了原 Run）丢弃，不复用。每次调用的错误都要按业务逐次处理，示例只演示调用方式。
 
-#### 3.4 十六个场景各学什么
+#### 3.4 十七个场景各学什么
 
 | 场景（测试名前缀 `TestCardRPG`） | 业务选择 | 学到的框架契约 |
 | --- | --- | --- |
@@ -152,6 +153,7 @@ func playAndClaim(ctx context.Context, client nest.Client, playerEntityID, runID
 | `TurnTimersIgnoreOldDeadlineAndOnlyCatchUpOnce` | 旧期限的 Tick、迟到很久的 Tick | 定时器 ID + 下一序号 + 原期限三重核对，旧事件不推进新回合；迟到很久的一次 Tick 只推进一回合（实体一直在内存，不是离线重载，离线重载见第二部分） |
 | `UndoRestoresAdmissionTurnAndTimerAsOneFact` | 开局 / 出手后 handler 失败 | 体力、准入账本、战斗状态、定时器节点一起回滚 |
 | `LedgerBoundsAndOfflineEnergyKeepReplayEvidence` | 抽卡、管理账本各满 64 条；体力按时间补 | 满了拒绝新写，旧回执仍能重放；体力保留余数、封顶、拒绝时钟回退（开局账本上限在代码里同样强制，没有单独测满） |
+| `RobotBusiness` | 公共 Robot 经 loopback TCP / PB 发本玩法的业务命令：业务闭环、结算重试、TCP 重连与拒绝路径 | 网络接入、正式 Sender / Nest 与 DAO 是同一条链路；鉴权与提交器是替身（[Robot](ROBOT.md)） |
 
 上述数值是样例，不是公共框架规则。这些场景实际证明到哪一步见第 11 节。
 
@@ -237,7 +239,9 @@ sequenceDiagram
 bash scripts/test-card-rpg-generated.sh
 ```
 
-脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 16 条顶层 race 场景（3.4）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_CARD_RPG_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer` / `add attribute`、多实体 Sender 或 Nest 生成时手动跑。
+脚本按 3.1 的步骤生成工程，replace 指回当前仓库，必须实际通过 17 条顶层 race 场景（3.4，含 1 条业务 Robot）且无 skip，随后执行消费者 build / vet、`roost id check` 与 `roost generate --check`；成功删除临时工程，失败或 `ROOST_CARD_RPG_KEEP=1` 时保留。缺省模式由 `scripts/pretag.sh` 每次发版跑（根包 `TestGeneratedScriptsAreInPretag` 防止漏掉），并把真实依赖用例复制进工程只编译（`go vet`），生成器签名变化在发版前就会暴露；真实依赖模式不挂在 `dataengine-env.sh test`，改 `game` 模板、`add dao` / `add entity` / `add timer` / `add attribute`、多实体 Sender 或 Nest 生成时手动跑。
+
+业务 Robot 用例 `TestCardRPGRobotBusiness` 由 `scripts/testdata/robot-common/install.py` 安装（3.1 的 Robot 一步）：真实 TCP / PB → 正式 Sender / Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，同时生成 `cmd/robot` 与 `loadtest/README.md`。鉴权与持久化是替身，不能替代上线验收；十三类玩法的通过数与网络验收边界见 [Robot](ROBOT.md#当前验证结果2026-11-01)。
 
 - **证明**：公共 CLI 生成的 Player / CardRun DAO、实体定时器、属性代码、多实体 Sender 与 Nest 在 16 个业务组合下的事务、undo 回滚、锁顺序、业务幂等和期限核对；配置原子发布与按值冻结；视图字段裁剪。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；定时器由用例手动投递生成的 Tick Sender，实体一直在内存，没有经过加载后补触发；单进程，无 Redis / NATS；鉴权是合成身份；开局账本满 64 条由代码强制，测试没有填满。夹具里的数值是样例。
@@ -269,7 +273,3 @@ ROOST_CARD_RPG_REAL=1 bash scripts/test-card-rpg-generated.sh
 尚未实施或验收：一模板一张卡之外的正式卡牌实例、卡池 / 概率发布、经济、英雄与技能内容、完整 Skill Host（本例只用纯 `combat.ResolveDamage`，Skill Runtime 不在 DAO 回滚域）、充值 / 邮件 / 活动 / 排行的卡牌接线、PvP / 跨服、客户端协议与公网认证、容量与长稳（均不因此算框架缺陷）。
 
 本机功能、跨机故障和长稳分别给结论；缺少实际证据的继续保留为未验收项。本部分是本游戏验收范围的完整说明；[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#游戏接入验收) 的游戏接入验收表只列一行摘要，不为每一轮另建报告。
-
-## 当前 main 的 Robot 验收补充
-
-同检出的生成脚本已接入公共 Robot：新增真实 TCP/PB → 正式 Sender/Nest → DAO 的业务闭环、结算重试、TCP 重连及拒绝路径断言，并生成 `cmd/robot` 与 `loadtest/README.md`。 当前通过数、生成方式和未验收边界以 [Robot 手册](ROBOT.md) 为准；本篇历史版本的计数不代表本轮数量。替身鉴权/持久化结果不能替代上线验收。
