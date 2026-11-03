@@ -102,7 +102,7 @@ scripts/release.sh vX.Y.Z [--min-core]
 3. 大轮次收尾（维护者明确要求时）：照旧写“说明 + 实现”两篇，同一套条目编号互链。
 4. 已有的历史发版文档不动。
 
-pretag 除 build / vet / tidy / `go test ./...` / 生成物漂移 / C# SDK 外，还并行跑十个玩法纵切脚本的缺省模式（`scripts/test-<玩法>-generated.sh`，离线）与三个离线生成器专项（`test-heartbeat-generated.sh`、`test-level-generated.sh`、`test-sync-modes-generated.sh`，维护者 2026-10-31 决定纳入）；并发数 `ROOST_PRETAG_GENRE_JOBS`，缺省 4，本机 45～125 秒，视机器负载（2026-10-31 同机负载 4～6 时九个 50 秒、十二个 63 秒，三个专项单跑约 25 / 4 / 4 秒），失败时打印该脚本日志路径并保留生成工程。新增 `scripts/test-*-generated.sh` 要加进 pretag 的列表，或在根包 `TestGeneratedScriptsAreInPretag` 的豁免表里写明由谁跑。
+pretag 除 build / vet / tidy / `go test ./...` / 生成物漂移 / C# SDK 外，还并行跑十个玩法纵切脚本的缺省模式（`scripts/test-<玩法>-generated.sh`，离线）、MMORPG 多地图 TCP `scripts/test-mmorpg-scenes.sh`（离线，单跑约 25 秒）与三个离线生成器专项（`test-heartbeat-generated.sh`、`test-level-generated.sh`、`test-sync-modes-generated.sh`，维护者 2026-10-31 决定纳入）；并发数 `ROOST_PRETAG_GENRE_JOBS`，缺省 4，本机 45～125 秒，视机器负载（2026-10-31 同机负载 4～6 时九个 50 秒、十二个 63 秒，三个专项单跑约 25 / 4 / 4 秒），失败时打印该脚本日志路径并保留生成工程。新增 `scripts/test-*-generated.sh`，或玩法接入手册（`docs/framework/*-INTEGRATION.md`）点名的其他 `scripts/test-*.sh`，要加进 pretag 的列表，或在根包 `TestGeneratedScriptsAreInPretag` 的豁免表里写明由谁跑。
 
 验证只跑一次：pretag（已在脚本里）就是发版的验收线，不重复功能合并时已做过的验证（运行时专项、故障矩阵、性能样本在改动合入时按影响范围做，结果写进对应 CHANGELOG 条目或 NOTES）。不能把没跑的检查写成通过。
 

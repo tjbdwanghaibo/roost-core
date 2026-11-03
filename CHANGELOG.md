@@ -9,6 +9,8 @@
 
 - 文档一致性整理（只改文档）：修复指向已删除 DESIGN-TODO 小节的断链；十份玩法手册、KNOWN-LIMITS 游戏接入表与 roost-genre skill 的场景数按脚本计数断言收进公共 Robot（例如派对房间 19 条 = 18 条业务 + 1 条 Robot），skill 命令序列补上 Robot 安装一步并修正 MOBA 的夹具位置；DAO 持久键说法跟上 v1.40.0 的必填 `store` 键；KNOWN-LIMITS 收敛已由维护者决定、已修复或已在 2026-11-02 Linux 续报复跑的条目；已发布功能去掉“未发版”标注。
 
+- 修复：**MMORPG 多地图 TCP 验收 `scripts/test-mmorpg-scenes.sh` 自 v1.35.0 起一直失败，现已恢复并纳入 pretag。** v1.35.0（`cfe682bb`）把 DAO 同步载荷从 BSON 换成有类型 PB 补丁，夹具客户端仍用 `bson.Unmarshal` 解，首个全量帧即报 `invalid document length`；现改为按对象保留快照，用生成的 `UnmarshalSyncPlayerDao` / `ApplySyncPlayerDao` 合并后读 `Values()`，并校验命名空间与编码号，切图、held 重试、旧 epoch、重连与字段隐私断言不变（把 near 视图换成完整视图时隐私断言照常变红）。没被发现是因为它不叫 `*-generated.sh`，既不在 pretag 列表里，也不在根包 `TestGeneratedScriptsAreInPretag` 的检查范围内；现在该检查同时覆盖玩法接入手册点名的 `scripts/test-*.sh`，需外部依赖的 `test-mmorpg-cross-sid.sh` 登记豁免。2026-11-04 复跑手册验收入口时发现；生产代码与协议未改。
+
 ## [v1.40.1] - 2026-11-02
 
 - 修复真实验收夹具（RV-20261102-04～07）：NATS 关闭方法表补齐日志客户端；SLG 分阶段核对创建、初始化、奖励三笔 WAL；慢快照客户端发送真实心跳，空闲期限收紧为 2 秒；etcd 冻结先等待内核停止事件再执行超时验证。生产语义未改，修后 macOS 真实链路和 race 通过，Linux 原样本与未闭环边界保留，见[复核记录](docs/maintenance/CORE-REVIEW.md#2026-11-02linux-审查材料合入与夹具修复)。

@@ -1,6 +1,7 @@
 package game
 
 import (
+	db "MMO_MODULE/db"
 	player "MMO_MODULE/game/entities/player"
 	sceneentity "MMO_MODULE/game/entities/scene"
 	"MMO_MODULE/game/handler"
@@ -14,7 +15,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
-	"go.mongodb.org/mongo-driver/v2/bson"
 	"net"
 	"sort"
 	"sync"
@@ -24,12 +24,15 @@ import (
 
 // 真 TCP 客户端使用正式 Receiver 检查基线，并按 ObjectRef 应用 create/update/remove。
 // 不能仅统计有几包：旧地图对象必须消失，新地图对象必须出现。
+// 载荷按现行协议解码：生成的 DAO 同步 PB 补丁（sync_format=3），每个对象保留一份已应用快照，
+// 用生成的 ApplySyncPlayerDao 原子合并后再读字段；不用 BSON，也不手写兼容层。
 type mmoWireClient struct {
 	mu         sync.Mutex
 	connection net.Conn
 	receiver   *frame.Receiver
 	objects    map[frame.ObjectRef]int64
-	documents  map[int64]bson.M
+	states     map[frame.ObjectRef]*db.SyncPlayerDao
+	documents  map[int64]map[string]any
 	lastRaw    []byte
 	epoch      uint32
 	err        error
@@ -50,7 +53,7 @@ func dialMMOWireClient(t *testing.T, addr string, id int64) *mmoWireClient {
 		t.Fatal(err)
 	}
 	_ = connection.SetDeadline(time.Time{})
-	client := &mmoWireClient{connection: connection, receiver: frame.NewReceiver(frame.DefaultLimits()), objects: map[frame.ObjectRef]int64{}, documents: map[int64]bson.M{}}
+	client := &mmoWireClient{connection: connection, receiver: frame.NewReceiver(frame.DefaultLimits()), objects: map[frame.ObjectRef]int64{}, states: map[frame.ObjectRef]*db.SyncPlayerDao{}, documents: map[int64]map[string]any{}}
 	go func() {
 		for {
 			msg, raw, err := readSceneFrame(connection)
@@ -64,12 +67,14 @@ func dialMMOWireClient(t *testing.T, addr string, id int64) *mmoWireClient {
 			_, err = client.receiver.Receive(raw, func(f frame.Frame) error {
 				if f.Kind == frame.Full {
 					clear(client.objects)
+					clear(client.states)
 					clear(client.documents)
 				}
 				for _, object := range f.Objects {
 					if object.Operation == frame.ObjectRemove {
 						delete(client.documents, client.objects[object.Ref])
 						delete(client.objects, object.Ref)
+						delete(client.states, object.Ref)
 						continue
 					}
 					for _, component := range object.Components {
@@ -77,11 +82,28 @@ func dialMMOWireClient(t *testing.T, addr string, id int64) *mmoWireClient {
 						if decodeErr != nil {
 							return decodeErr
 						}
-						client.objects[object.Ref] = update.SubjectID
-						var document bson.M
-						if err := bson.Unmarshal(update.Payload.BytesCopy(), &document); err != nil {
-							return err
+						if update.Namespace != player.SyncNamespacePlayer || update.Payload.Codec() != player.PlayerSyncCodec {
+							return fmt.Errorf("unexpected sync payload %q codec %d", update.Namespace, update.Payload.Codec())
 						}
+						patch, decodeErr := db.UnmarshalSyncPlayerDao(update.Payload.BytesCopy())
+						if decodeErr != nil {
+							return decodeErr
+						}
+						// 全量载荷不带旧基线；增量叠在同一对象的上一份快照上，身份或格式不符由生成代码拒绝。
+						previous := client.states[object.Ref]
+						if update.Full {
+							previous = nil
+						}
+						state, decodeErr := db.ApplySyncPlayerDao(patch, previous)
+						if decodeErr != nil {
+							return decodeErr
+						}
+						document, decodeErr := state.Values()
+						if decodeErr != nil {
+							return decodeErr
+						}
+						client.objects[object.Ref] = update.SubjectID
+						client.states[object.Ref] = state
 						client.documents[update.SubjectID] = document
 					}
 				}

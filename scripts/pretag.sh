@@ -111,6 +111,7 @@ echo "pretag: genre vertical slices and offline generator scripts (generated pro
 genre_scripts=(
   scripts/test-slg-generated.sh
   scripts/test-mmorpg-generated.sh
+  scripts/test-mmorpg-scenes.sh
   scripts/test-moba-generated.sh
   scripts/test-card-rpg-generated.sh
   scripts/test-tower-defense-generated.sh
