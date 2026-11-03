@@ -1,6 +1,6 @@
-# cellworld：分区 Scene 原型（v2）
+# cellworld：分区 Scene 原型（v2.1）
 
-**原型，不是现行能力。** 只在分支 `feat/seamless-world-prototype` 上；设计、取舍与实测见 [无缝大世界方案 §7 / §8](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#7-v2-设计分区-scene2026-11-03分支-featseamless-world-prototype)（v1 见 §5 / §6）。
+**原型，不是现行能力。** 只在分支 `feat/seamless-world-prototype` 上；设计、取舍与实测见 [无缝大世界方案 §7 / §8](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#7-v2-设计分区-scene2026-11-03分支-featseamless-world-prototype)（v1 见 §5 / §6，v2.1 的 NPC 降档见 §9）。
 
 沿 BigWorld 的 Cell + Ghost 流派，作为 **Scene 的一种模式**：声明了分区的 Scene 每个格由一个进程托管。Player 不迁移（Player 所在进程充当 BaseApp），角色在格里的部分是不持久的 Nest 实体 SceneActor，跟着交接走。
 
@@ -14,6 +14,20 @@
 | 客户端看到的格内对象 | Base 进程 entitysync Manager 里的 **Sync mirror**（`policy.Mirrors[EntityState]`） | witness 到达时在 Player handler 里 Apply |
 
 `Node` 是每进程一个的端点：传输回调只解码并把消息投成 Nest 请求（Scene、[Scene, 角色]、[Scene, 攻击者, 目标]、Player）；事务提交后的发送、给区域的报告、实体销毁、跟进投递排进一个有界出站队列，由一个 goroutine 执行（Nest 不允许提交后回调里再 Dispatch）。Node 自己没有锁、不持有格内状态。
+
+## NPC 心跳分档（D1）
+
+维护者 2026-11-03 决定 D1 = B：附近没有玩家的 NPC 心跳降到 `NodeConfig.IdlePeriod`（heartbeat 档位，如 200ms / 1s；零值不降档），有玩家靠近立即回到 `Period`。只降格内移动心跳的档位，不暂停 AI（与 `docs/maintenance/FEATURE-2026-10-22-ai-idle-without-observers.md` 是两件事，那份设计稿不在本轮）。代码在 `tier.go`，设计与实测见 [FEATURE §9](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#9-v21d1-降档与-demo-接入2026-11-03)。
+
+| 项 | 规则 |
+| --- | --- |
+| 观察者 | 本格玩家 Real / Frozen + 邻格玩家 Ghost（`WakeRadius + H ≤ G` 保证 W 内的邻格玩家一定在本格有 Ghost） |
+| 升档 | 某个观察者离 NPC 报告位置 ≤ W + drift（drift = (\|VX\| + \|VY\|) × 当前档位周期，补慢档报告的陈旧）→ 立即请求升档 |
+| 降档 | 快档 NPC 连续 `IdleAfter`（缺省 2s）附近没人 → 请求降档；时间滞后，玩家在 W 边上来回只升一次 |
+| 执行 | 区域心跳决定，请求经出站队列投给 NPC 自己的 `cellworld_tier` handler（只锁 NPC，幂等），换档 `Actor.SetCellPeriod` 在同一事务里、提交后生效 |
+| 慢档越界 | 一拍按 `Period` 分步积分、每步判交接，越界即在那一步冻结：冻结点离本格至多 H + 一步，与快档相同 |
+| 交接 | 冻结中一律快档（重传、放弃计时不变）；`EntityState.Idle` 随 Offer 带走，新格以慢档装入；被拒恢复回到慢档 |
+| Ghost | 慢档 NPC 的 Ghost 过期放宽为 `GhostTTL + IdlePeriod`（接收方自己的配置） |
 
 ## 交接以事务为边界
 
@@ -36,7 +50,8 @@ node, _ := cellworld.NewNode(cellworld.NodeConfig{
 node.RegisterHandlers(nestMgr) // 引擎 Start 之前
 go node.Run(ctx)
 
-// 实体侧：Scene 的心跳调 node.RegionBeat(scene, time.Now())；SceneActor / Monster 的心跳调 node.ActorBeat(actor, time.Now())；
+// 实体侧：Scene 的心跳调 node.RegionBeat(scene, time.Now())；SceneActor / Monster 的心跳调 node.ActorBeat(actor, time.Now())
+// （登记时用 Config().Period，SetCellPeriod 转给 heartbeat.Reg.SetPeriod：D1 降档由 Node 在事务里调用）；
 // Player 的 Base 心跳调 node.BaseBeat(player, time.Now())。
 _ = node.Spawn(ctx, cellworld.EntityState{ID: monsterID, X: 100, Y: 100, HP: 100}) // 本格生成 NPC（一笔 Scene + NPC 事务）
 _ = node.Enter(ctx, playerEntityID, sceneActorID, spatial.Point{X: 48000, Y: 1000}, 100)
@@ -60,9 +75,10 @@ Cell 进程是普通 roost App：`app.New(...).Singleton(kitredis.SingletonStore
 | `grid_test.go` | 分区映射、边界带、迟滞、版本序 |
 | `world_test.go` | 进程内多“进程”（各自的 EntityManager、Nest 引擎、心跳驱动、Node）：直线、抖动、斜穿四格、跨界攻击、慢交接、丢包；witness 连续与客户端（Base 的 Manager 推出的帧）连续 |
 | `handoff_test.go`、`combat_test.go` | v1 细粒度用例按新模型改写：丢失 / 重复 / 隐式确认 / 超时只删不恢复 / 被拒恢复 / 回复扣住时来回 / 交接链 / Enter 幂等与拒绝 / 墓碑；伤害只结算一次、距离与可见性、去重随交接、结果未知、去重表满 |
+| `tier_test.go` | D1：无人时降档、邻格玩家（Ghost）靠近升档、W 边上来回不抖动、慢档 Ghost 不过期、慢档一拍冲过边界仍在边界带内交接并以慢档装入、慢档 NPC 被跨界攻击只结算一次、`advance` 分步积分单元 |
 | `lifecycle_test.go` | Cell 崩溃后按 Player 快照重建、Base 消失后租约离场、回写按版本幂等、交接事务回滚不移交 |
 | `nats_test.go` | 同一组场景跑在真实 nats-server 上（测试自起私有端口） |
 | `process_test.go` | 每个 Cell 是一个带单实例锁的 App 子进程（私有 redis-server）：跨进程至多一个 Real 与伤害只结算一次、kill -9 后按快照恢复、同 sid 第二个进程被拒、Base 进程消失后 SceneActor 清理 |
-| `measure_test.go` | 原型测量：`ROOST_CELLWORLD_PERF=1 GOWORK=off go test -run TestCellWorldMeasure -v ./gameplay/cellworld/`（档位 `ROOST_CELLWORLD_PERF_NPCS=1000,5000`，窗口 `ROOST_CELLWORLD_PERF_SECONDS=20`） |
+| `measure_test.go` | 原型测量：`ROOST_CELLWORLD_PERF=1 GOWORK=off go test -run TestCellWorldMeasure -v ./gameplay/cellworld/`（档位 `ROOST_CELLWORLD_PERF_NPCS=1000,5000`，窗口 `ROOST_CELLWORLD_PERF_SECONDS=20`；D1：`ROOST_CELLWORLD_PERF_IDLE_MS=1000`，玩家分布 `ROOST_CELLWORLD_PERF_PLAYERS=spread|cell`） |
 
 Sync mirror 的单测在 `framework/sync/entitysync/policy/mirror_test.go`。
