@@ -60,11 +60,11 @@ type AttackResult struct {
 
 // BaseStats 是 Base 的累计计数。
 type BaseStats struct {
-	ViewsAccepted, ViewsStale, OwnerChanges, Reenters, InputsResent, EnterRefusals, Lost, DecodeErrors uint64
+	ViewsAccepted, ViewsStale, OwnerChanges, Reenters, InputsResent, EnterRefusals, Lost, DecodeErrors, PublishErrors uint64
 }
 
 type baseCounters struct {
-	viewsAccepted, viewsStale, ownerChanges, reenters, inputsResent, enterRefusals, lost, decodeErrors atomic.Uint64
+	viewsAccepted, viewsStale, ownerChanges, reenters, inputsResent, enterRefusals, lost, decodeErrors, publishErrors atomic.Uint64
 }
 
 // player 是 Base 对一个玩家的记录：当前 owner（sid + epoch，只前进）、最新移动意图、最后看到的位置与 HP。
@@ -159,10 +159,13 @@ func (b *Base) publish(out []outgoing) {
 	for _, o := range out {
 		o.msg.From = b.cfg.SID
 		data, err := encodeMsg(o.msg)
-		if err != nil {
-			continue
+		if err == nil {
+			err = b.cfg.Transport.Publish(Subject(b.cfg.World, o.sid), data)
 		}
-		_ = b.cfg.Transport.Publish(Subject(b.cfg.World, o.sid), data) // 丢失由看门狗与重发处理
+		if err != nil {
+			// 发布失败与传输丢失同样处理：Enter 由看门狗重发，输入由视野里的 LastInput 落后触发重发，攻击报不到结论。
+			b.stats.publishErrors.Add(1)
+		}
 	}
 }
 
@@ -278,7 +281,7 @@ func (b *Base) Stats() BaseStats {
 	return BaseStats{
 		ViewsAccepted: s.viewsAccepted.Load(), ViewsStale: s.viewsStale.Load(), OwnerChanges: s.ownerChanges.Load(),
 		Reenters: s.reenters.Load(), InputsResent: s.inputsResent.Load(), EnterRefusals: s.enterRefusals.Load(),
-		Lost: s.lost.Load(), DecodeErrors: s.decodeErrors.Load(),
+		Lost: s.lost.Load(), DecodeErrors: s.decodeErrors.Load(), PublishErrors: s.publishErrors.Load(),
 	}
 }
 
