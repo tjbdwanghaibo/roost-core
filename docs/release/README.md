@@ -20,4 +20,4 @@
 
 ## 本目录已有文件
 
-v1.32.0 及以前每版的 NOTES / IMPLEMENTATION / VALIDATION 按当时规则写成，保持原样，不再改动；逐篇说明见[文档清单](../maintenance/DOCUMENTS.md#docsrelease)。`history/` 是合仓前各仓的只读变更记录。
+v1.32.0 及以前每版的 NOTES / IMPLEMENTATION / VALIDATION 按当时规则写成，保持原样，不再改动（逐篇说明见[整理前的文档清单](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DOCUMENTS.md#docsrelease)）；v1.33.0 起只有功能版的 `vX.Y.0-NOTES.md`，按文件名查找。`history/` 是合仓前各仓的只读变更记录。

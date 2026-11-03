@@ -15,7 +15,7 @@ Nest handler（持 Entity Guard）
   → 释放事实的内容发布屏障 → 同一 Flush 捕获、编码发送
 ```
 
-两种应用模式（`InterestConfig.ApplyMode`，维护者 2026-10-21 决定由业务按游戏类型选）见 [DESIGN-TODO D19“两种应用模式”](../maintenance/DESIGN-TODO.md#两种应用模式2026-10-21维护者决定)：ApplySync 在 Flush 的政策阶段于 `mu` 内取一批（≤ `BatchSize`）做写阶段与并行重评、随即结算，每玩家视野数不超过主视野 + 8；ApplyAsync 每个 Interest 一个应用线程（第一条排队事实时启动）分批应用，Flush 的政策阶段只结算，Flush 撞上正在算的一批时最多等这一批（分工、一致点、唤醒与背压见 [“排队事实异步应用”](../maintenance/DESIGN-TODO.md#排队事实异步应用2026-10-21维护者-2026-10-21-给出方向)）。两种模式都在结算之后才释放已应用事实的发布屏障，所以内容与它带来的进出视野在同一帧。
+两种应用模式（`InterestConfig.ApplyMode`，维护者 2026-10-21 决定由业务按游戏类型选）见 [guide/04-sync“谁看见谁”](guide/04-sync.md#谁看见谁视野viewd19)：ApplySync 在 Flush 的政策阶段于 `mu` 内取一批（≤ `BatchSize`）做写阶段与并行重评、随即结算，每玩家视野数不超过主视野 + 8；ApplyAsync 每个 Interest 一个应用线程（第一条排队事实时启动）分批应用，Flush 的政策阶段只结算，Flush 撞上正在算的一批时最多等这一批（分工、一致点、唤醒与背压见 [impl/04-sync §2E](impl/04-sync.md#2e-interest-的视野d19在-d14-上扩展)）。两种模式都在结算之后才释放已应用事实的发布屏障，所以内容与它带来的进出视野在同一帧。
 
 setter仍只标脏。组件在业务线程中执行位置写入，handler必须传播错误。先做事实准入，队列满/越界不会先调用位置writer。writer应只写可回滚DAO，不能I/O、派发消息或在异步线程修改实体。DAO回滚沿用Nest，空间事实由 `SyncConditionFor` 的提交/拒绝结论控制。
 
