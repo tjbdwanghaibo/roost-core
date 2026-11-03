@@ -173,3 +173,144 @@
 - 交接协议本身（先冻结后 Offer、epoch 唯一目标、幂等回复、隐式确认、只删不恢复）在丢失 / 重复 / 乱序 / 来回 / 链式交接下守住了“至多一个 Real”，协议规模小（`handoff.go` 约 160 行），可以作为正式实现的起点。
 - 真正的工作量不在交接，而在 6.3 的 1～6：Cell 的执行模型与事务、战斗状态的持久归属、NPC 重建、Cell 单实例与故障接管。它们都牵涉 Nest / DataEngine / App，建议下一步先由维护者定 1（Cell 是否上 Nest）与 3（战斗字段归属），再决定是否进入正式方案。
 - 如果产品需求是 §2 的“区域内无缝 + 区域间过渡 + 热点分层”，现有 core 已能做，不需要这条线；只有大地图连续且跨区实时互动是硬需求时才值得继续。
+
+## 7. v2 设计：分区 Scene（2026-11-03，分支 `feat/seamless-world-prototype`）
+
+维护者 2026-11-03 的决定：BigWorld 的 Cell 是 **Scene 的一种模式**（不另造“世界”）；角色在分区 Scene 里的部分是不持久的 Nest 实体 **SceneActor**，心跳驱动；战斗字段（位置、HP、Buff、冷却）放在 SceneActor 上随交接走，Player 留在原 sid、固定时机回写；Cell 崩溃按 Player 最近快照重建，Monster 按刷怪配置重建；不用 Remote 托管 + `TransferRemoteOwnership`（交接延迟太高）。补充（同日）：分区模式新增的状态尽量放进 Nest 实体（Scene、SceneActor、Monster），用心跳与事务驱动，**不新增带锁的进程级管理器**；现有管理器保持原样，普通 Scene 行为不变。
+
+本节先写形状与取舍，代码按 §7.9 的阶段落地，实测与剩余缺口见 §8。
+
+### 7.1 两种 Scene，一套成员接口
+
+| | 普通 Scene（缺省，行为不变） | 分区 Scene（声明了分区配置） |
+| --- | --- | --- |
+| 进程 | 一个进程 | 每格一个进程（Cell 进程），格 → sid 静态映射（v1 的 `Grid`） |
+| 角色在场景里的代表 | Player 实体本身是成员（Interest subject，AOI 跟随它） | Player 所在格的 **SceneActor**（不持久 Nest 实体，ID = `BuildEntityID(玩家 uniqueID, KindSceneActor)`，跨格交接 ID 不变）；Player 只留在 Base 进程 |
+| NPC | Monster（ephemeral） | Monster 是所在格的 Real，跨格交接 |
+| 客户端看到什么 | 本进程 Manager 里的 Player / Monster subject | Base 进程 Manager 里的 **mirror subject**（§7.3），内容来自玩家当前所在格的 witness |
+| 成员接口（业务调） | Join / Ready / Leave / Move / SetView / 攻击 | 同名接口；分区模式下由服务层桥把调用转成发往当前 owner 格的消息（§7.6） |
+
+“Base 进程”就是 Player 绑定的 game 进程（静态 sid，DataEngine、连接都在这里，v1 的 BaseApp）。Cell 进程也是普通 game 进程（同一个二进制，配置里声明它托管哪个格）：它可以同时是一些玩家的 Base。
+
+### 7.2 Sync 补的能力：远端只读对象作为 subject（mirror）
+
+**问题**：分区模式下客户端连接在 Base 进程，视野内容的权威在 Cell 进程（本格 Real + 邻格 Ghost）。Base 要把这些“不是本进程 Nest 实体”的对象，和本进程的 Player 实体一起，经同一个 Manager、同一条连接推给客户端：全量 / 增量 / 删除，按 (epoch, seq) 丢旧（玩家交接时旧格和新格的 witness 会交错到达），收不到更新就过期删除。
+
+**现有抽象**（读源码确认，codebase-memory 本次连不上）：Manager 的 subject 是 `*entity.SubjectSyncState`——“不含观察者的内容状态机”，`entity.NewSubjectSyncState` 是公开构造，不绑实体时 `withEntityLock` 直接执行 packer、`commitGate` 为空即就绪、`MarkDirty` 直接标脏并唤醒；`Manager.Register / Unregister / RegisterAfterRetirement` 只看状态和 ID；Interest 的 `Show / Move / Hide` 只认 subject ID 与坐标。也就是说 **Manager 与 Interest 本来就不要求 subject 是 Nest 实体**，缺的只是“谁来维护这份远端内容”的那一层：版本序、墓碑、过期、按版本决定全量还是增量、登记 / 显示 / 移动 / 退役的固定顺序。
+
+**最小改动点**：在 `framework/sync/entitysync/policy` 新增一个文件 `mirror.go`（类型 `Mirrors[T]`）组合现有公开 API，**不改 Manager、Interest、SubjectSyncState 的任何现有代码**：
+
+```go
+type MirrorVersion struct{ Epoch, Seq uint64 } // 字典序；epoch 是迁移代际，seq 跨 epoch 单调
+
+type MirrorConfig[T any] struct {
+	Manager  *entitysync.Manager
+	Interest *Interest                    // 空间可见性：mirror 是 Show 进 AOI 的目标
+	Position func(T) spatial.Point
+	Snapshot func(T, entity.SyncProfile) (entity.FrozenSyncPayload, error)
+	Delta    func(T, entity.SyncProfile, uint64) (entity.FrozenSyncPayload, error) // 可空：只发全量
+	TTL      time.Duration                // 超过它没有 Apply 就删除（发 remove）
+}
+
+type MirrorItem[T any] struct {
+	ID        int64; Namespace string; Kind uint32
+	Version   MirrorVersion
+	Content   T
+	Mask      uint64 // 相对上一个已接受版本改了哪些字段；0 = 全量
+}
+
+func NewMirrors[T any](MirrorConfig[T]) (*Mirrors[T], error)
+func (m *Mirrors[T]) Apply(item MirrorItem[T], now time.Time) MirrorOutcome // Created / Updated / Stale / Tombstoned
+func (m *Mirrors[T]) Remove(id int64, ver MirrorVersion, now time.Time) bool  // 显式删除，留墓碑
+func (m *Mirrors[T]) Expire(now time.Time) int                                 // 过期清理，返回删除数
+func (m *Mirrors[T]) Get(id int64) (T, MirrorVersion, bool)
+func (m *Mirrors[T]) Close()
+```
+
+语义：
+
+- 新对象：建一个不绑实体的 `SubjectSyncState`（packer 读 mirror 当前内容），`Register`（同 ID 还在退役就 `RegisterAfterRetirement`，remove-before-create 不变）→ `Interest.Show`。顺序与 demo `ShowSubject` 相同（先登记再显示）。
+- 更新：版本不新于已接受的丢弃（计数），新的替换内容；`Mask == 0` 或配置没给 `Delta` → `MarkFullDirty`，否则 `MarkDirty(mask)`；位置变了 `Interest.Move`（直接移动，不走提交门：mirror 没有事务）。增量的正确性前提是 mask 相对 **上一个被接受的版本**；跳过了中间版本（丢消息）时调用方要给全量——cellworld 的 witness 每拍是全量，不靠增量链（§7.5）。
+- 删除 / 过期：`Interest.Hide` → `Manager.Unregister`（订阅者下一帧收到 ObjectRemove）；墓碑保留 2×TTL，不新于墓碑版本的迟到更新不会让对象复活。
+- 锁：一把短锁保护 mirror 表（与 Interest 登记侧同类），调用 Manager / Interest 都在锁外按 ID 串行（同 ID 的 Apply / Remove 不交错）；可以在 Nest 快池上调用（不等待、不做 I/O）。
+
+**为什么不另开第二个 Manager**：(1) 客户端一条连接一个 Sync 流（`frame.Receiver` 一份基线），两个 Manager 就是两条流、两套基线，客户端要合并；(2) 同一个对象可能先是 mirror、后来又是本进程实体（或反过来），同一 Manager 里是同一个 subject ID，跨 Manager 只能 remove + create，视野不连续；(3) 每会话每拍一帧、冷创建预算、慢会话规则都按 Manager 计，拆成两个就各算各的；(4) `ClaimSyncOwner` 已经规定一个内容状态只喂一个 Manager，mirror 与 Player 放在同一个 Manager 里不需要例外。
+
+**不做的**：不在 Cell 进程上给 Ghost 建 subject（Cell 进程没有这些客户端）；不改 entitysync 的帧格式、Profile、预算。
+
+### 7.3 Cell 侧：状态全在 Nest 实体上
+
+| 状态 | 放在哪 | 驱动 |
+| --- | --- | --- |
+| 本格区域表：邻格 Ghost（只读镜像，不是实体）、交接 `seen` 记录、墓碑、跨格伤害待决表、本格 Real 的位置索引 | **Scene 实体**持有的 `cellworld.Region`（手写 DAO：事务内的修改登记逆操作，回滚即还原；与 `skill/combatcomponent.CombatDao` 同形） | Scene 的 `scene.cell` 心跳（50ms）+ Scene 上的 Nest handler |
+| 角色 / NPC 的格内状态：位置、速度、HP、Buff、冷却、角色（Real / Frozen）、epoch / seq、已应用输入序号、伤害去重表、交接中的目标与 Offer | **SceneActor / Monster 实体**的 DAO（nopersist） | 实体自己的 `cell.actor` 心跳 + 实体上的 Nest handler |
+
+框架包 `gameplay/cellworld` 不定义实体（实体由生成器与 game 定义），只提供：
+
+```go
+// 实体实现它：读 / 写自己的格内状态（写经 DAO setter，登记 undo 与同步脏标）。
+type Actor interface {
+	entity.IThreadSafeEntity
+	CellState() ActorState
+	SetCellState(ActorState)
+}
+// Region 由 Scene 实体持有；只在 Scene 的锁内调用。
+func NewRegion(RegionConfig) (*Region, error)
+// 心跳回调与 handler 体（game 在自己的 Nest handler 里调用这些函数）：
+func (r *Region) Beat(now time.Time)                       // 刷新索引、发 Ghost 批、过期、伤害重试、算 witness
+func (r *Region) Receive(m *Message, now time.Time) Effects // Ghost / Offer / 回复 / 伤害 / 进入
+func ActorBeat(a Actor, g *Grid, now time.Time) ActorEffects // 积分、判交接、冻结、重传、到期放弃、租约到期
+```
+
+**执行模型**：
+
+1. 传输回调只解码，按目标投 Nest：发给角色的（Input、OfferReply、Damage、Lease）→ `DispatchMulti(handler, [sceneID, actorID])`；发给区域的（Ghost 批、Offer、Enter、DamageReply）→ `Dispatch(handler, sceneID)`。全部 handler 都先锁 Scene（World 档 2）再锁角色（Other 档 5），锁序固定。
+2. 角色心跳只锁角色本身：积分位置、判交接、冻结（epoch+1）——它不能反过来锁 Scene（违反锁序），所以“我在哪、我冻结了”这类给区域的报告在 **AfterCommit** 里投进区域的有界收件队列（无锁的 channel，满了丢弃计数；下一拍重报），由 Scene 心跳 / 下一次 Scene handler 在 Scene 锁内取出应用。Ghost 批在 Scene 心跳里组好、AfterCommit 发出。
+3. 外发（Publish）一律在 AfterCommit：回滚的事务不外发。
+
+**代价（§8 实测）**：每个角色每拍一笔 Nest 事务（v1 是一个 goroutine 里的循环），Ghost 与 witness 晚到至多一个 Scene 心跳（≤ 50ms）；交接 Offer 在目标格是一次 Scene handler，不再排在 tick 后面（v1 缺口 12 反而变好）。
+
+### 7.4 交接以 Nest 事务为边界
+
+- 旧格 O：角色心跳发现越界（迟滞 H）→ 同一笔事务里 `role = Frozen, epoch+1`，Offer 编码进 DAO；**提交后**才发 Offer（AfterCommit）。事务回滚 = 没冻结 = 没交接。冻结期间心跳按 OfferRetry 重传、到 HandoffAbort 放弃（销毁角色，给 Base 发 Lost）。
+- 新格 N：Offer → Scene handler：查 `seen`、本格是否已有该 ID 的实体、容量；接受则在**同一笔事务里**经 `EntityManager.Create`（handler 内新建走 `CreateInScope`，由事务捕获：回滚 / 拒绝即撤销发布）建出 SceneActor / Monster 并写入状态（Real，epoch = E），`seen[E] = 接受` 也在这笔事务里（Region 手写 DAO，回滚还原）。**提交后**才回“已接受”、通知 Base。事务失败 → 记 `seen[E] = 拒绝`（另一笔事务）并回拒绝，旧格恢复 Real。所以“交接提交成功才算移交；回滚不移交”。
+- O 收到“已接受 E”（或隐式确认：N 发来 epoch ≥ E 的 Ghost）→ 角色 handler 事务里确认冻结的 epoch 仍是 E，标记已移交；提交后销毁实体（`EntityManager.Destroy`，不在业务 worker 上等：交给 Region 的销毁队列，在 Scene 心跳之外的一个 goroutine 上执行，与 demo spawner 同样的“决定在事务里、建 / 毁在 worker 外”），区域在 Ghost 表里留一份最后状态（仍在边界带内时）。
+- v1 的协议不变量（先冻结后 Offer、一个 epoch 一个目标、幂等回复、隐式确认、超时只删不恢复）原样保留；变化只是每一步落在哪笔事务里。
+
+### 7.5 视野：witness → Base 的 mirror
+
+Cell 的 Scene 心跳给本格每个玩家 Real 算 witness（半径 R_feed 内的本格 Real + Ghost，含自己），发给该玩家的 Base。Base 收到后在 Player 的 Nest handler 里：只接受 epoch 不回退的 witness，把每个对象 `Mirrors.Apply`（版本 = 对象在 Cell 上的 (epoch, seq)，内容 = 位置 / HP / 种类等客户端可见字段，全量）。客户端的可见集合由 Base 的 Interest AOI 按 mirror 位置决定（玩家主视野跟随自己的 SceneActor mirror），要求 R_feed ≥ Base 的离开半径，对象离开视野之前位置一直在更新；不在任何 witness 里的 mirror 按 TTL 过期删除。交接时旧格、新格的 witness 交错到达，按对象版本取新的，视野里的对象不会 remove 再 create。
+
+### 7.6 Base 侧：租约、回写、重建
+
+- 玩家的格内路由状态（当前 owner sid、epoch、输入序号、攻击序号、最近快照版本）放在 **Player 实体的 nopersist 字段**，Base 的看门狗是 Player 的心跳（不再是 v1 `Base` 里带锁的玩家表）。
+- **租约**：Player 心跳每 LeasePeriod 给 owner 格发 Lease（顺带重发落后的输入）；SceneActor 心跳发现 `now > leaseUntil`（LeaseTimeout，缺省 3s）就自行离场销毁。Base 进程消失后 SceneActor 在 LeaseTimeout 内被清理（v1 缺口 6）。
+- **回写**：SceneActor 在脱战、离开场景、交接放弃、战斗中每 N 秒（缺省 5s）把战斗字段快照（HP 等）+ 版本 (epoch, seq) 发给 Base；Base 在 Player 的 Nest handler 里只接受比已存版本新的快照，写 Player 的持久字段（正常 DataEngine 落库）。幂等：同一版本重复到达不再写。
+- **重建**：Enter 带 Player 的最近快照；Cell 崩溃后 Base 静默看门狗重进时新格按快照建 SceneActor（最多丢一个回写周期的战斗状态）。Monster 由新起的 Cell 进程按刷怪配置重建。
+
+### 7.7 App 级保证
+
+Cell 进程是普通 roost App：`App.Singleton(kitredis 的 SingletonStore)`，`singleton.enabled=true`。同 sid 起第二个 Cell 进程在 startup_wait 内拿不到锁即 `ErrSingletonHeld` 启动失败；失锁 fail-stop。cellworld 不再自己做租约 / 单实例判断（v1 缺口 5）。
+
+### 7.8 game-demo 进程内管理器在分区模式下的处理
+
+| 管理器 | 文件 | 管什么 | 锁 | 与 Nest 事务的关系 | 分区模式 |
+| --- | --- | --- | --- | --- | --- |
+| Scene 桥 `Scene` | `internal/service/game/scene.go.tmpl` | entitysync Manager + Interest；成员表 `members`（Join 代际、ready、opening）；队伍视图 `teams` | `transitions`（Join / Ready / Leave / settle 串行）、`teamMu`（队伍视图）、`mu`（成员表） | 不在 Nest 锁内持有；`MoveSpace` 把移动作为提交门事实排进 Interest | 一分为二：**(b)** 客户端可见性、成员表、队伍视图属于玩家——留在 **Base** 进程，照旧是这一个桥（Manager 里加 mirror，§7.2）；**(a)** Cell 进程不需要这个桥（Cell 上没有客户端会话），格内可见性由 Region 的索引负责 |
+| 队伍视图 | 同上 `SetTeam` / `teams` | 匹配成功的两人互相可见 | `teamMu` | 无 | **(b)** 留在 Base；队友若在别的 Base 进程、或不在本玩家 witness 里，跨格 / 跨进程的队伍可见用 v1.34 的 `GroupView` / `selfsync.Groups` 从 Base 推（本轮原型不接，§8 缺口） |
+| `PlayerOwners` | `playerowner.go.tmpl` | 本进程为哪些玩家服务（驻留表）、写准入、闲置卸载 | `mu` | Admit 在 Nest 业务池上做一次加锁读写 | **(b)** 留在 Base 不动；Cell 进程不托管 Player，不需要它 |
+| spawner | `spawner.go.tmpl` | 把 Scene 刷怪节拍的决定变成 Monster 实体 | `mu`（monsters 表）、`busy` | 决定在 Scene 心跳事务里，AfterCommit 交给它；建实体在 worker 外 | **(a)** 每个 Cell 进程一份，只刷本格（刷怪表按格过滤：刷怪点在本格矩形内才刷）。跨格游走的 Monster **(c)** 走交接，交接后在新格的 Monster 由新格的 Region 管，spawner 只记本格生出来的；被交接走的从 spawner 表里移除（经 Region 的通知，不加跨进程锁），在别的格死亡时由那个格的 Refresh 记账——**原型简化**：跨格死亡不回原格补刷，§8 缺口 |
+| Refresh（刷怪表计数） | `game/scene/runtime/refresh.go.tmpl` | 每组该有几只、已有几只 | `mu` | Scene 心跳读 Due，spawner 报 Spawned / Died | **(a)** 每格一份 |
+| Terrain / PathFind | `game/scene/runtime/terrain.go.tmpl`、`pathfind.go.tmpl` | 地图格子与占位、寻路 | `RWMutex` | 心跳内读 | **(a)** 每格一份（同一张地图，每个进程整张加载；占位只对本格 Real 有意义）。跨格寻路只算到本格边界，原型不处理跨格占位 |
+| `actor` 包级变量 | `game/actor/actor.go.tmpl` | 心跳驱动、Lookup、WorldTime、Ground | 原子指针 | — | **(a)** 每进程一份，不变 |
+| 战斗（lockstep 对战房间） | `battle.go.tmpl`（及 matchmaker） | 匹配成功后的帧同步对战房间 | `mu`、房间 goroutine | 不在 Nest 内 | **不属于三类**：它不是场景内战斗，是独立房间，和分区无关，保持原样（在匹配它的进程里开房） |
+| 场景内战斗（攻击 / 伤害） | v1 `cellworld` combat | 攻击者格做前置检查，目标 Real 结算，HitID 去重 | — | — | **(c)** 不加跨进程锁，统一“转发给目标 Real 结算”，去重表与 HP 落在 SceneActor / Monster 的 DAO 上 |
+
+分类后没有发现必须在分区模式下重写的管理器：Scene 桥在 Base 侧原样使用（只多一类 subject），Cell 侧不实例化它；成员进出串行化（`transitions`）只管 Base 上的会话与订阅，交接事务在 Cell 上，两者不交叉。**新增的分区状态全部在 Scene / SceneActor / Monster / Player 实体上**，进程级只增加：Region 的收件 channel 与销毁队列（无锁的单消费者队列，不是带锁的管理器）、Sync 的 `Mirrors`（Sync 框架组件，锁的性质同 Interest 登记侧）。
+
+### 7.9 实施阶段与验收
+
+1. **A. Sync mirror**（`policy/mirror.go`）：单测先对空桩跑红、实现后转绿；全部 `framework/sync/...` 测试 + `-race`。
+2. **B. cellworld v2**（框架）：`Region` / `Actor` / `ActorBeat`；v1 的确定性用例按新执行模型改写（断言含义不变）；新增真实 Nest 引擎 + EntityManager + 心跳驱动的进程内多格用例与两 OS 进程用例（NATS 私有端口、Redis 私有端口给单实例锁）；Base 侧 mirror 推给测试客户端（`frame.Receiver` 解帧）检查视野连续。
+3. **C. game-demo 分区配置**：Scene 支持分区、Monster 交接、Player 经 SceneActor；缺省不分区，`scripts/test-demo-generated.sh` 等全部通过。
+4. 每阶段测试通过即提交并推分支；某一步发现方向问题先停下来写进汇报。
