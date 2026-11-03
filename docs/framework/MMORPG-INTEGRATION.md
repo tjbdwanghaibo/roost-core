@@ -180,6 +180,7 @@ SLG 的[跨服联盟活动链路](SLG-INTEGRATION.md#7-跨服联盟活动权限�
 | strict 成功等于 Mongo 已落库 | strict 的边界是 WAL fsync；需要 Mongo 可见时用 DataEngine 的 Flush / 投影等待契约 |
 | 连接关闭或 ctx 超时就等于请求撤销 | 已准入的事务可能仍完成；先识别结果未知，再按业务身份查询或恢复 |
 | Skill Runtime 放进组件就自动回滚 | Host 副作用与 Runtime 状态需要业务设计一致的持久边界；本例 DAO 战斗没有接持久技能 Host |
+| 多个 map server 分区就能做无缝大世界 | 当前没有跨进程迁移、边界 Ghost 与跨区实时交互；用大区单进程 + 切图、伪无缝或分线，思路与业界方案见[无缝大世界方案](../maintenance/FEATURE-2026-11-03-seamless-world.md) |
 | 框架有 Lockstep，所以 MMO 必须帧同步 | 开放世界可做服务器权威状态同步；竞技副本可单独选 Lockstep |
 | 真实 TCP 场景通过就说明容量合格 | 功能与容量分开；玩家密度、带宽、分位时延、跨机故障和长稳需要目标负载证据 |
 

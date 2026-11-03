@@ -36,4 +36,4 @@
 | 接入与运行服务职责 | [Player 接入](../framework/PLAYER-ACCESS.md)、[Service](../framework/guide/09-services.md) |
 | 已关闭 review 与测试审计 | [CHANGELOG](../../CHANGELOG.md)、对应 impl 的回归入口；剩余边界见 KNOWN-LIMITS |
 
-删除的原文、早期文档清理索引和精确红绿记录均可从[整理前完整快照](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/)追溯；原有引用已固定到该快照。无观察者暂停 AI 尚未实施，其[设计稿](FEATURE-2026-10-22-ai-idle-without-observers.md)保留，不能当作当前能力。
+删除的原文、早期文档清理索引和精确红绿记录均可从[整理前完整快照](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/)追溯；原有引用已固定到该快照。无观察者暂停 AI 尚未实施，其[设计稿](FEATURE-2026-10-22-ai-idle-without-observers.md)保留，不能当作当前能力。多进程无缝大世界同样只有[思路稿](FEATURE-2026-11-03-seamless-world.md)，没有实现。
