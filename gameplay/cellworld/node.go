@@ -65,6 +65,14 @@ type NodeConfig struct {
 	LeaseTimeout time.Duration
 	// WritebackEvery：玩家 SceneActor 定时回写 Player 的间隔（战斗中每 N 秒）；零值 5s。
 	WritebackEvery time.Duration
+	// IdlePeriod：附近没有玩家的 NPC 的心跳档位（D1，见 tier.go）；必须是长于 Period 的 heartbeat 档位。零值不降档
+	// （NPC 恒为 Period）。
+	IdlePeriod time.Duration
+	// WakeRadius：NPC 半径 W 内有玩家（本格玩家 Real 或邻格玩家 Ghost）就算“有人在附近”；零值等于 ViewRadius。
+	// 必须 ViewRadius ≤ W 且 W + Hysteresis ≤ GhostBand：W 内的邻格玩家一定是本格的 Ghost，本格才看得见他。
+	WakeRadius int64
+	// IdleAfter：NPC 连续这么久附近没有玩家才降档（滞后，玩家在 W 边上来回时不抖动）；零值 2s。升档不等待。
+	IdleAfter time.Duration
 
 	// ---- Base 侧（PlayerEntity 为 nil 时本进程不托管玩家）----
 
@@ -152,6 +160,10 @@ func (cfg NodeConfig) withDefaults() NodeConfig {
 	setInt(&cfg.MaxAppliedHits, 128)
 	setDur(&cfg.LeaseTimeout, 3*time.Second)
 	setDur(&cfg.WritebackEvery, 5*time.Second)
+	if cfg.WakeRadius == 0 {
+		cfg.WakeRadius = cfg.ViewRadius
+	}
+	setDur(&cfg.IdleAfter, 2*time.Second)
 	setDur(&cfg.WatchPeriod, 100*time.Millisecond)
 	setDur(&cfg.SilenceTimeout, time.Second)
 	setDur(&cfg.LostGrace, 500*time.Millisecond)
@@ -203,6 +215,13 @@ func (cfg NodeConfig) validate() error {
 			return bad("ghost ttl %v must exceed period %v", cfg.GhostTTL, cfg.Period)
 		case cfg.LeaseTimeout <= cfg.LeasePeriod:
 			return bad("lease timeout %v must exceed lease period %v", cfg.LeaseTimeout, cfg.LeasePeriod)
+		case cfg.IdlePeriod != 0 && (!slices.Contains(heartbeat.Periods[:], cfg.IdlePeriod) || cfg.IdlePeriod <= cfg.Period || cfg.IdlePeriod%cfg.Period != 0):
+			// 慢档按 Period 分步积分（advance），所以必须是 Period 的整数倍。
+			return bad("idle period %v must be a heartbeat period that is a multiple of period %v", cfg.IdlePeriod, cfg.Period)
+		case cfg.WakeRadius < cfg.ViewRadius || cfg.WakeRadius+cfg.Grid.Hysteresis() > cfg.Grid.GhostBand():
+			return bad("wake radius %d must be in [view radius %d, ghost band %d - hysteresis %d]", cfg.WakeRadius, cfg.ViewRadius, cfg.Grid.GhostBand(), cfg.Grid.Hysteresis())
+		case cfg.IdleAfter <= 0:
+			return bad("idle after %v must be positive", cfg.IdleAfter)
 		}
 	}
 	if cfg.PlayerEntity != nil {
@@ -556,6 +575,7 @@ func (n *Node) RegisterHandlers(engine HandlerRegistrar) {
 		engine.MustRegisterHandlerWithMeta(hImplied, n.handleImplied, meta)
 		engine.MustRegisterHandlerWithMeta(hSpawn, n.handleSpawn, meta)
 		engine.MustRegisterHandlerWithMeta(hInspect, n.handleInspect, meta)
+		engine.MustRegisterHandlerWithMeta(hTier, n.handleTier, meta)
 	}
 	if n.cfg.PlayerEntity != nil {
 		engine.MustRegisterHandlerWithMeta(hBase, n.handleBase, meta)
@@ -759,15 +779,17 @@ func (n *Node) onOffer(r *Region, a Actor, from int32, o *handoffOffer, now time
 	return nil
 }
 
-// install 把 a 写成本格的 Real（epoch = st.Ver.Epoch），登记 seen 与区域索引；玩家的话通知 Base（提交后）。
+// install 把 a 写成本格的 Real（epoch = st.Ver.Epoch），登记 seen 与区域索引；玩家的话通知 Base（提交后）。档位按
+// st.Idle（交接带来的；新建的实体还没启动心跳时 SetCellPeriod 只记下档位，StartCell 按它启动）。
 func (n *Node) install(r *Region, a Actor, st ActorState, now time.Time, fx *txEffects) {
 	nowNano := now.UnixNano()
 	st.Role, st.Handoff, st.RetryAfter = RoleReal, nil, 0
 	if st.Kind == KindPlayer {
 		st.LeaseUntil = nowNano + int64(n.cfg.LeaseTimeout)
 		st.WritebackAt = nowNano + int64(n.cfg.WritebackEvery)
+		st.Idle = false
 	}
-	a.SetCellState(st)
+	n.setState(a, a.CellState(), st)
 	r.seen.set(st.ID, seenEpoch{Epoch: st.Ver.Epoch, Accepted: true, At: nowNano})
 	r.locals.set(st.ID, localRec{St: st.EntityState, Role: RoleReal, GhostedTo: n.cfg.Grid.Neighbors(n.cell)})
 	r.ghosts.del(st.ID)
@@ -799,17 +821,19 @@ func (n *Node) onOfferReply(r *Region, a Actor, from int32, rep *handoffReply, n
 	if rep.Accepted {
 		n.handoffConcluded(cs, true, now, fx)
 		p := cs.Handoff
+		prev := cs
 		cs.Role, cs.Handoff = RoleGone, nil
-		a.SetCellState(cs)
+		n.setState(a, prev, cs)
 		fx.destroys = append(fx.destroys, a)
 		n.applyReports(r, []ActorReport{{State: cs.EntityState, Role: RoleGone, Removed: true, Handoff: p}}, now, &fx.sends)
 		return
 	}
 	// 被拒：目标承诺以后不接受这个 epoch（seen 记录），本格以该 epoch 恢复为 Real，退避后用下一个 epoch 再试。
 	n.handoffConcluded(cs, false, now, fx)
+	prev := cs
 	cs.Role, cs.Handoff = RoleReal, nil
 	cs.RetryAfter = now.Add(n.cfg.RejectBackoff).UnixNano()
-	a.SetCellState(cs)
+	n.setState(a, prev, cs) // 慢档的 NPC 回到慢档
 	n.stats.handoffsRejected.Add(1)
 	n.realChanged(cs.ID, cs.Ver.Epoch, true, fx)
 	n.applyReports(r, []ActorReport{{State: cs.EntityState, Role: RoleReal}}, now, &fx.sends)
@@ -921,7 +945,7 @@ func (n *Node) handleSpawn(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 	if err != nil {
 		return nil, err
 	}
-	st.Kind, st.Base = KindNPC, 0
+	st.Kind, st.Base, st.Idle = KindNPC, 0, false // 新生成的 NPC 先快档，区域按附近有没有玩家再降
 	st.Ver = Version{Epoch: r.nextEpoch(st.ID, 0), Seq: 1}
 	fx := &txEffects{}
 	now := time.Now()
@@ -937,13 +961,15 @@ func (n *Node) handleSpawn(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 
 // ActorBeat 是角色 / NPC 的格内心跳回调：只锁角色本身，结果在提交后报给区域、发出 Offer / 回写 / Lost、销毁实体。
 func (n *Node) ActorBeat(a Actor, now time.Time) error {
+	n.stats.actorBeats.Add(1)
 	st := a.CellState()
 	if st.Role == RoleNone || st.Role == RoleGone {
 		return nil
 	}
 	before := st.Role
+	prev := st
 	afx := n.stepActor(&st, now)
-	a.SetCellState(st)
+	n.setState(a, prev, st)
 	fx := &txEffects{sends: afx.sends}
 	if afx.report != nil {
 		fx.reports = append(fx.reports, *afx.report)
@@ -966,7 +992,7 @@ func (r Role) epochOf(st ActorState) uint64 {
 	return st.Ver.Epoch
 }
 
-// RegionBeat 是 Scene 的 scene.cell 心跳回调：过期、伤害重试、witness，结果在提交后发出。
+// RegionBeat 是 Scene 的 scene.cell 心跳回调：过期、伤害重试、NPC 档位、witness，结果在提交后发出。
 func (n *Node) RegionBeat(host RegionHost, now time.Time) error {
 	start := time.Now()
 	r := host.CellRegion()
@@ -974,7 +1000,7 @@ func (n *Node) RegionBeat(host RegionHost, now time.Time) error {
 		return nil
 	}
 	fx := &txEffects{}
-	n.regionBeat(r, now, &fx.sends)
+	n.regionBeat(r, now, fx)
 	n.stats.ticks.Add(1)
 	if hook := n.cfg.Hooks.TickDone; hook != nil {
 		elapsed := time.Since(start)

@@ -63,6 +63,8 @@ type childSpec struct {
 	// Writeback / Lease 覆盖 SceneActor 的回写间隔与租约（毫秒；0 取缺省）。
 	WritebackMS int `json:"wb"`
 	LeaseMS     int `json:"lease"`
+	// IdleMS > 0 时 NPC 无人在附近降到这个档位（D1，NodeConfig.IdlePeriod）。
+	IdleMS int `json:"idle"`
 	// BasePlayer 非零时子进程不是 Cell，而是 Base：让这个玩家在 BaseAt 进入并保持，收到第一份 witness 输出 "witness"。
 	BasePlayer int64         `json:"bp"`
 	BaseAt     spatial.Point `json:"bat"`
@@ -291,6 +293,9 @@ func (s *cellService) Serve(ctx context.Context) error {
 		if spec.LeaseMS > 0 {
 			cfg.LeaseTimeout = time.Duration(spec.LeaseMS) * time.Millisecond
 		}
+		if spec.IdleMS > 0 {
+			cfg.IdlePeriod = time.Duration(spec.IdleMS) * time.Millisecond
+		}
 		cfg.Hooks = Hooks{
 			TickDone:     func(_ CellID, d time.Duration, _, _ int) { ticks.add(ms(d)) },
 			GhostApplied: func(_ CellID, d time.Duration, _ int) { ghosts.add(ms(d)) },
@@ -400,7 +405,8 @@ func diffStats(a, b NodeStats) NodeStats {
 		HandoffsStarted: a.HandoffsStarted - b.HandoffsStarted, HandoffsAccepted: a.HandoffsAccepted - b.HandoffsAccepted,
 		HandoffsRejected: a.HandoffsRejected - b.HandoffsRejected, HandoffsAborted: a.HandoffsAborted - b.HandoffsAborted,
 		OfferRetransmits: a.OfferRetransmits - b.OfferRetransmits, LeaseExpired: a.LeaseExpired - b.LeaseExpired,
-		Reals: a.Reals, Ghosts: a.Ghosts,
+		ActorBeats: a.ActorBeats - b.ActorBeats, TierIdle: a.TierIdle - b.TierIdle, TierFast: a.TierFast - b.TierFast,
+		Reals: a.Reals, Ghosts: a.Ghosts, IdleNPCs: a.IdleNPCs,
 	}
 }
 

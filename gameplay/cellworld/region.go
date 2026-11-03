@@ -55,6 +55,8 @@ type localRec struct {
 	Role      Role
 	Handoff   *HandoffState
 	GhostedTo []CellID
+	// QuietSince：NPC 从什么时候起附近没有玩家（0 = 有人在附近或还没判断）；TierAsked：上次向它请求换档的时间。见 tier.go。
+	QuietSince, TierAsked int64
 }
 
 type ghostRec struct {
@@ -180,7 +182,7 @@ func (n *Node) applyReports(r *Region, reports []ActorReport, now time.Time, out
 			}
 			continue
 		}
-		rec := localRec{St: rep.State, Role: rep.Role, Handoff: rep.Handoff, GhostedTo: prev.GhostedTo}
+		rec := localRec{St: rep.State, Role: rep.Role, Handoff: rep.Handoff, GhostedTo: prev.GhostedTo, QuietSince: prev.QuietSince, TierAsked: prev.TierAsked}
 		if !known {
 			// 新装的 Real：第一次发 Ghost 时对全部邻格里不再需要的发删除，清掉旧 owner 留在它们那里的镜像。
 			rec.GhostedTo = n.cfg.Grid.Neighbors(n.cell)
@@ -304,12 +306,17 @@ type implicitDone struct {
 
 // ---- 心跳：过期、伤害重试、witness ----
 
-// regionBeat 是 scene.cell 心跳：过期清理 → 跨格伤害重试 / 到期 → 给本格每个玩家 Real 算 witness。
-func (n *Node) regionBeat(r *Region, now time.Time, out *[]outgoing) {
+// regionBeat 是 scene.cell 心跳：过期清理 → 跨格伤害重试 / 到期 → NPC 档位（tier.go）→ 给本格每个玩家 Real 算 witness。
+func (n *Node) regionBeat(r *Region, now time.Time, fx *txEffects) {
+	out := &fx.sends
 	r.tick++
 	nowNano := now.UnixNano()
 	for id, g := range r.ghosts.m {
-		if nowNano-g.HeardAt > int64(n.cfg.GhostTTL) {
+		ttl := int64(n.cfg.GhostTTL)
+		if g.St.Idle {
+			ttl += int64(n.cfg.IdlePeriod) // 慢档 NPC 一个慢拍才更新一次 Ghost
+		}
+		if nowNano-g.HeardAt > ttl {
 			r.ghosts.del(id)
 		}
 	}
@@ -338,6 +345,7 @@ func (n *Node) regionBeat(r *Region, now time.Time, out *[]outgoing) {
 			*out = append(*out, n.damageTo(p))
 		}
 	}
+	n.retier(r, now, fx)
 	n.witnesses(r, out)
 	var reals, ghosts uint64
 	for _, l := range r.locals.m {

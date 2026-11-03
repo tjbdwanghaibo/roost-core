@@ -61,11 +61,14 @@ type ActorState struct {
 //   - CellState / SetCellState：读写 ActorState。SetCellState 必须经 DAO setter 写（登记逆操作与同步脏标），
 //     这样心跳或 handler 的事务回滚时状态一起还原（A1：事务内会改的状态放在 DAO）。
 //   - StartCell：启动实体的格内心跳（Node.ActorBeat 作回调）。在事务里调用时按心跳的规则在提交后生效。
+//   - SetCellPeriod：给格内心跳换档（heartbeat.Reg.SetPeriod）。Node 在角色的档位（beatPeriod）变化的那笔事务里调用：
+//     提交后生效、回滚作废；未启动时只记下档位，StartCell 用它。
 type Actor interface {
 	fentity.IThreadSafeEntity
 	CellState() ActorState
 	SetCellState(ActorState)
 	StartCell() error
+	SetCellPeriod(time.Duration) error
 }
 
 // actorEffects 是一拍 / 一个 handler 对一个角色产生的、要在提交之后做的事。
@@ -87,7 +90,7 @@ type ActorReport struct {
 	Tomb    bool `msgpack:"tb,omitempty"`
 }
 
-// stepActor 推进一个角色一拍：积分 → 判交接（冻结）→ 冻结中的重传 / 放弃 → 租约到期离场 → 定时回写。
+// stepActor 推进一个角色一拍：积分（慢档按 Period 分步，见 advance）→ 判交接（冻结）→ 冻结中的重传 / 放弃 → 租约到期离场 → 定时回写。
 // 纯函数：只改 st、返回提交后要做的事，不碰网络与实体管理器（单元测试直接调用）。
 func (n *Node) stepActor(st *ActorState, now time.Time) actorEffects {
 	var fx actorEffects
@@ -100,9 +103,7 @@ func (n *Node) stepActor(st *ActorState, now time.Time) actorEffects {
 			n.stats.leaseExpired.Add(1)
 			return fx
 		}
-		n.integrate(st)
-		if target, ok := n.cfg.Grid.ShouldHandoff(n.cell, st.Pos()); ok && nowNano >= st.RetryAfter {
-			n.freeze(st, target, nowNano, &fx)
+		if n.advance(st, nowNano, &fx) {
 			return fx
 		}
 		st.Ver.Seq++
@@ -142,8 +143,8 @@ func (n *Node) stepActor(st *ActorState, now time.Time) actorEffects {
 	return fx
 }
 
-// freeze 冻结 Real 并准备 Offer：epoch 在这里 +1，交接后的状态、去重表与输入序号整份带走。提交之后才发 Offer
-// （事务回滚 = 没冻结 = 没交接）。
+// freeze 冻结 Real 并准备 Offer：epoch 在这里 +1，交接后的状态、去重表与输入序号整份带走（含档位 Idle：冻结中按快档
+// 跳，新格按它装入）。提交之后才发 Offer（事务回滚 = 没冻结 = 没交接）。
 func (n *Node) freeze(st *ActorState, target CellID, nowNano int64, fx *actorEffects) {
 	st.Ver = Version{Epoch: st.Ver.Epoch + 1, Seq: st.Ver.Seq + 1}
 	st.Role = RoleFrozen

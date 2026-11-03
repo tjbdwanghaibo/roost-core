@@ -1,0 +1,26 @@
+# D1 变异检查（2026-11-03，macOS Apple M5）：实现后逐一放回一个错误，确认对应用例变红；每项之后还原。
+# 命令：GOWORK=off go test -count=1 -run <用例> ./gameplay/cellworld/
+
+M1 Ghost 过期不按慢档放宽（region.go regionBeat 去掉 ttl += IdlePeriod），GhostTTL 400ms < 慢档 1s
+--- FAIL: TestIdleTierGhostSurvivesSlowBeats (3.43s)
+    tier_test.go:145: ghost of the idle npc missing from B in 54 samples over 3s
+（注：GhostTTL 等于慢档 1s 时这个变异没有被抓到——更新恰好在过期前几毫秒到达，区域心跳很少落在那个窗口里；
+所以用例把 GhostTTL 设成 400ms。放宽本身是必要的：慢档长于 GhostTTL 时不放宽就一定闪断。）
+
+M2 慢档整周期积分后只判一次交接（advance 先走完 20 步再判）
+--- FAIL: TestIdleTierFastCrossingHandsOffInsideBand (3.42s)
+    tier_test.go:176: old cell kept ghost at x=0 after the idle handoff, want a ghost at x <= 10175 (boundary + H + one 50ms step)
+--- FAIL: TestIdleBeatIntegratesWholePeriodAndFreezesInsideBand (0.00s)
+    tier_test.go:295: froze at x=11000, want in [10100, 10175]
+
+M3 冻结时丢掉慢档标记（freeze 里 st.Idle = false）
+--- FAIL: TestIdleTierFastCrossingHandsOffInsideBand (3.42s)
+    tier_test.go:179: npc handed over while idle was installed fast; the tier should travel with the handoff
+
+M4 去掉降档滞后（没人在附近就立即降档）
+--- FAIL: TestIdleTierNoFlappingAtWakeEdge (4.37s)
+    tier_test.go:112: while the player hovered at the wake edge: 6 promotions, 6 demotions; want 1 and 0
+
+M5 观察者不算邻格玩家的 Ghost
+--- FAIL: TestIdleTierWithoutPlayersAndWakeOnApproach (5.23s)
+    tier_test.go:76: timed out waiting for npc tier

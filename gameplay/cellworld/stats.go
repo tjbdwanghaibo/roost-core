@@ -16,7 +16,10 @@ type NodeStats struct {
 	ViewsAccepted, ViewsStale, OwnerChanges         uint64
 	Reenters, InputsResent, EnterRefusals, Lost     uint64
 	Writebacks, MirrorErrors                        uint64
-	Reals, Ghosts                                   uint64
+	// ActorBeats：执行过的角色 / NPC 格内心跳数。TierIdle / TierFast：NPC 降档 / 升档（已提交）次数。PeriodErrors：换档失败
+	// （心跳登记已撤销，实体正在销毁）。IdleNPCs 是最近一次区域心跳时本格慢档的 NPC Real 数。
+	ActorBeats, TierIdle, TierFast, PeriodErrors uint64
+	Reals, Ghosts, IdleNPCs                      uint64
 }
 
 type nodeCounters struct {
@@ -32,7 +35,8 @@ type nodeCounters struct {
 	viewsAccepted, viewsStale, ownerChanges         atomic.Uint64
 	reenters, inputsResent, enterRefusals, lost     atomic.Uint64
 	writebacks, mirrorErrors                        atomic.Uint64
-	reals, ghosts                                   atomic.Uint64
+	actorBeats, tierIdle, tierFast, periodErrors    atomic.Uint64
+	reals, ghosts, idleNPCs                         atomic.Uint64
 }
 
 // Stats 返回计数快照，任何 goroutine 可调用。
@@ -51,6 +55,7 @@ func (n *Node) Stats() NodeStats {
 		ViewsAccepted: s.viewsAccepted.Load(), ViewsStale: s.viewsStale.Load(), OwnerChanges: s.ownerChanges.Load(),
 		Reenters: s.reenters.Load(), InputsResent: s.inputsResent.Load(), EnterRefusals: s.enterRefusals.Load(), Lost: s.lost.Load(),
 		Writebacks: s.writebacks.Load(), MirrorErrors: s.mirrorErrors.Load(),
-		Reals: s.reals.Load(), Ghosts: s.ghosts.Load(),
+		ActorBeats: s.actorBeats.Load(), TierIdle: s.tierIdle.Load(), TierFast: s.tierFast.Load(), PeriodErrors: s.periodErrors.Load(),
+		Reals: s.reals.Load(), Ghosts: s.ghosts.Load(), IdleNPCs: s.idleNPCs.Load(),
 	}
 }

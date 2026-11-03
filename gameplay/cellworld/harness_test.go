@@ -90,6 +90,7 @@ func (a *testActor) Base() *fentity.EntityBase             { return a.EntityBase
 func (a *testActor) CellState() ActorState                 { return a.dao.v }
 func (a *testActor) SetCellState(st ActorState)            { a.dao.set(st) }
 func (a *testActor) StartCell() error                      { return a.reg.Start() }
+func (a *testActor) SetCellPeriod(d time.Duration) error   { return a.reg.SetPeriod(d) }
 func (a *testActor) OnDestroy(fentity.EntityDestroyReason) { a.host.OnDestroy() }
 
 // buildTestActor 是 SceneActor / NPC 的构造函数（EntityManager.Create 调用；handler 内即 CreateInScope）。Param 是它所在的“进程”。

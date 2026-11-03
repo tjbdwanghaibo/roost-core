@@ -13,8 +13,8 @@ import (
 // 线上格式：每个进程（Cell 或 Base）一个收件主题，消息是 msgpack 编码的 wireMsg，Kind 决定哪个字段有值。
 // wireMsg.V 是格式版本（WireVersion）：不是当前版本的消息按坏消息丢弃（未上线，不做跨版本兼容）。字段用短键控制体积。
 
-// WireVersion 是当前线上格式版本。v2：加版本号、witness 带每个对象的版本、写回消息。
-const WireVersion uint8 = 2
+// WireVersion 是当前线上格式版本。v2：加版本号、witness 带每个对象的版本、写回消息。v3：EntityState 带心跳档位（Idle，D1）。
+const WireVersion uint8 = 3
 
 // EntityKind 区分玩家（有 BaseApp，接收视野）与 NPC（只在 Cell 里模拟）。
 type EntityKind uint8
@@ -37,6 +37,9 @@ type EntityState struct {
 	VY  int64   `msgpack:"vy,omitempty"`
 	HP  int32   `msgpack:"hp"`
 	Ver Version `msgpack:"v"`
+	// Idle：NPC 在慢档（附近没有玩家，心跳降到 NodeConfig.IdlePeriod，D1）。随 Ghost 与交接传出：邻格按它放宽 Ghost 的
+	// 过期时间（慢档的 Ghost 每个慢拍才更新一次），新格按它以慢档装入。玩家恒为 false。
+	Idle bool `msgpack:"il,omitempty"`
 }
 
 // Pos 返回位置。
