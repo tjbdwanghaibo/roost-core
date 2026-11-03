@@ -781,3 +781,35 @@ v2-6（分区模式下 `SetTeam` 的成员是 Player 实体）：E4 之后 Playe
 ### 11.11 方向判断
 
 - §10.6 判断“接入暴露的缺陷集中在框架原型 ↔ 正式 Nest / DataEngine / Interest 的接缝上”，本轮把这三处接缝在框架里定成契约，cellworld 侧对应的三处绕法（Loaded 过滤、mirror 代号 + Resubscribe、包级注册表 + 兜底）全部删掉，cellworld 的测试改成走正式形状（装了加载器的 ManagerAccess、先注册后建 Node）。这是 cellworld 第四轮改动；本轮没有新的协议缺陷，新增的问题（§11.6）是产品 / 架构选择而不是实现错误：战斗字段在“养成数据推出的面板”与“场景内的战斗状态”之间怎么切、Base 之间要不要有数据通道。二者都决定无缝大世界能不能从“原型”走向“正式能力”，建议在合入 main 之前先定。
+
+## 12. v2.4：第 3 项 = A、第 4 项 = A、E4 确认（2026-11-04，进行中）
+
+维护者 2026-11-04 的决定（都按 §11.6 的推荐）：**第 3 项 = A**（养成输入留 Base；面板——最大 HP、攻击、power、将来的 buff——与当前 HP 的权威在 Cell 的 Real，Base 升级 / 换装时向目标 Real 发“面板变化”命令，与攻击同一套转发、去重、结果未知语义，结果随快照回写）；**第 4 项 = A（原型）**（Base 之间经 cellworld 的 NATS 传输每 1s 互发队员快照，收到的放进 mirror、用 GroupView 推给本进程队员；成员沿用 demo 的 `SetTeam`，成员所在 Base 按 Player 的静态 sid 归属推出，快照超过 3 个周期未更新从面板移除）；**E4 的做法确认**为场景桥 Manager 上的 `self` 绑定（`policy.Direct`），不打开 `access.player.self_sync`。
+
+### 12.1 第 4 项：停下——`SetTeam` 的成员关系拿不到另一个 Base 上的另一半
+
+维护者给的停止条件（“若发现成员关系拿不到对端 Base 上的另一半，先停下汇报”）成立，第 4 项没有写代码。依据（当前源码，`rg` 核对）：
+
+- demo 的队伍只有一个来源：`matchmaker.go` 的 `formMatches` 在**组成队伍的那个进程**上调 `scene.SetTeam(members)`；
+- 而 `formMatches` 先经 `ownedCandidates(owners, candidates)` 只留**本进程驻留**（`PlayerOwners.Resident`）的票：别的 sid 的票“stay in the queue for that sid's own pass”。注释写明这是有意的取舍——“What this gives up is a match across two processes. That needs a battle host the losing side's inputs are routed to, which the demo does not have”（锁步战斗房间开在组队的进程里）。
+
+所以 demo 里**根本不会形成跨 Base 的队伍**：队员一定都在同一个 Base 上，而同一 Base 上的队员 E4 之后已经经 `SetTeam` 的关系视野互相可见（§11.4）。“Base 之间互发队员快照”在现有成员来源下没有可发的对象，端到端里“两个不同 Base 上的队友”也构造不出来。要做第 4 项，先要定“跨 Base 的队伍从哪来”：
+
+- **A**：分区场景另设一种不开战斗房间的组队关系（例如“组队”协议：邀请 / 接受，成员表放在一个 Remote 托管的 Team 实体或队长的 Player 上），各 Base 从它得到成员与对端 sid；队伍面板走 §11.6 ④ A 的快照通道。改动：新协议、成员表的权威、离队 / 解散。
+- **B**：放开 matchmaker 的“只配本进程的票”：匹配可以跨 Base，各成员的 Base 都要登记同一支队伍（`MatchFound` 推到各自进程时由收到的一方 `SetTeam`）；锁步战斗在跨进程时不开（或另找战斗宿主）。改动：matchmaker 与战斗的跨进程语义，影响普通场景。
+- **C**：用公会代替队伍做“视野外成员面板”的原型（公会是 Remote 托管实体，成员天然跨进程）。改动最小，但语义不是“队伍”。
+
+推荐 A（不动普通场景与匹配 / 战斗）；需要维护者决定。
+
+### 12.2 第 3 项：设计定稿，实施留给下一轮
+
+本轮没有开始改第 3 项的代码（上一轮的 E1～E4 与追加两项已占满本次会话的上下文，避免留下半截改动）。按维护者的 A，下一轮的实施入口与顺序：
+
+1. **cellworld 状态**：`EntityState` / `ActorState` 增加面板 `Panel{MaxHP, Attack, Power, Ver}`（Ver 是 Base 侧面板序号，接收端只接受更新的版本，与攻击序号同一种去重）；Offer / Ghost / witness / 回写都带它；`onDamage` 的伤害改为攻击者面板的 `Attack`（`scene.partition.attack_damage` 留作面板缺省），扣血后按 `MaxHP` 夹当前 HP；交接带走面板。
+2. **命令消息**：`kindPanel`（Base → 当前 owner 的 Real），走 `Node.Attack` 同一条路径：Player 上的一次 Nest 事务里把“想要的面板 + 序号”写进 `BaseState`（`PanelSeq` / `Panel`），提交后发给 owner；owner 变化、超时未确认由 Base 心跳重发；Real 上按序号幂等应用（同序号再到算 duplicate），结论（applied / duplicate / unknown）回给 Base，随下一次回写进快照（`CellPanel*` 持久字段）。上限变小时当前 HP 夹到新上限；升级是否回血按维护者 A 的字面“面板变化”只改上限，不回血（实施时在 §12 记下，若需回血再定）。
+3. **demo**：分区模式下 `AttributeComponent.LevelUp` / `RefreshGear` 之后，在同一笔 Player 事务里经 `partition` 把新面板（Final 层的 hp / attack / power）写进 BaseState 的待发面板；不能在 handler 里同步请求 Node（快池不阻塞），由提交后回调 / Base 心跳发送。分区模式下 Player 的 `AttrFinal` 不再进自身视图（面板从 SceneActor 的 mirror 来：mirror 编码加 `cell_max_hp` / `cell_attack`）；普通场景不变。
+4. **测试**：cellworld 用例（面板命令丢失 / 重复 / 交接中 / 结果未知、伤害按攻击者面板、上限夹血）先红后绿；demo 单测（映射、待发面板随事务回滚）；端到端：p1 `AddExp` 升级后打怪一次的伤害从 10 变成新攻击值、自己 SceneActor 的 `cell_max_hp` 变大且 Player 自身视图里不再有另一份 HP。
+
+### 12.3 E4
+
+做法确认，§11.4 不变。
