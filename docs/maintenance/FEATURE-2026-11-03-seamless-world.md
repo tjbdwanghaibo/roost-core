@@ -614,6 +614,8 @@ codebase-memory-mcp 本轮连不上，结构结论都按当前源码与 `rg` 得
 
 ### 10.5 需要维护者决定
 
+（维护者 2026-11-03 已决定：E1 = B、E2 = B、E3 = B、E4 = A，E5 待产品规则；落实见 [§11](#11-v23框架契约-e1e3自己的状态e4与追加四项2026-11-04)。）
+
 - **E1 不持久实体“不存在”的答复**（10.1 第 1 处）。A（本轮，推荐原型阶段）：cellworld 自己按 `Loaded` 过滤加锁集合，框架不动。B：框架统一——`ManagerAccess.Get` 对不持久的种类（没有持久 DAO）在内存未命中时返回 (nil, nil)、不问加载器；所有 handler 都会在目标不存在时收到 nil 而不是错误（行为变化，生成的 sender 与现有 handler 要逐个确认）。并入 main 时推荐 B。
 - **E2 Interest 的“自己”在 Hide / Show 之后不恢复**（10.1 第 2 处）。A（本轮）：cellworld 侧按 mirror 代号 `Resubscribe`；B：Interest 修正——观察者自己的目标被 Hide 时撤掉 self 订阅、重新 Show 时恢复（改 Interest 现有代码）。并入 main 时推荐 B（这是 Interest 的契约问题，不只 mirror 会碰到）。
 - **E3 服务在 Nest 启动后注册 handler**（v2.2-4）。A（本轮）：包级注册表 + 派发时兜底解析；B：App / Nest Mod 给服务一个“引擎启动前注册实例 handler”的钩子。推荐 B（并入 main 时）。
@@ -625,3 +627,157 @@ codebase-memory-mcp 本轮连不上，结构结论都按当前源码与 `rg` 得
 
 - D5～D8 的 A 让 demo 接入没有碰到协议层面的方向问题：交接、伤害、重进全部沿用 v2 / v2.1 的 cellworld，demo 只补了实体、DAO 映射、配置与桥。接入暴露的两处缺陷（10.1）都不在交接协议里，而在 **cellworld 与正式运行时的接缝**：v2 的框架用例用的是测试替身 getter 与只测 BaseState 的崩溃用例，替身对“不存在”的答复和真实 DataEngine 不同、用例没检查客户端的自己——这是测试替身与正式链路的差距，不是设计前提的问题；两处都已用更接近正式链路的替身补了用例（strict getter、客户端断言）。
 - 这一系列是 cellworld 原型第三轮改动（v2 → v2.1 → v2.2），新出现的缺陷集中在“框架原型 ↔ 正式 Nest / DataEngine / Interest”的接缝上。若要并入 main，建议先定 E1～E3：它们本质上是三条框架契约（不持久实体不存在时的答复、Interest 自己的订阅、服务注册 handler 的时机），在框架里定一次比让每个接入方各自绕开更稳。
+
+## 11. v2.3：框架契约 E1～E3、自己的状态（E4）与追加四项（2026-11-04）
+
+维护者 2026-11-03 对 §10.5 的决定：**E1 = B**、**E2 = B**、**E3 = B**、**E4 = A**；E5（分区场景的刷怪账本）是产品规则，本轮不做，登记为“待产品规则”（§11.8）。同日追加四项（排在 E1～E4 之后）：① Base 重启后回到保存的位置；② 攻击结论推给攻击方客户端；③ 战斗字段全部放 Cell；④ 视野外 / 别的 Base 上的队友的队伍面板。E1～E3 是 Nest / Sync / 服务生命周期的框架契约变化；分支不发版，CHANGELOG 不改，合入 main 前的事项见 §11.9。
+
+codebase-memory-mcp 本轮连不上，结构结论（调用方清单、影响面）都按当前源码与 `rg` 得出。修前输出在 [cellworld-v23-20261104](../performance/benchmarks/cellworld-v23-20261104/)。
+
+### 11.1 E1：不持久种类内存未命中答 nil
+
+| 项 | 内容 |
+| --- | --- |
+| 契约变化 | `entity.ManagerAccess` 对**不持久的种类**（登记了 builder，且 `NoPersist` 或一个 DAO 都没有：`kindHasNoAuthority`，判定与 DataEngine Repository 拒绝加载的条件逐字相同）在内存未命中时：`Get` 答 (nil, nil)、`GetMany` 留 nil 占位、`IsLoaded` 答 true（Nest 准入不再为它转 I/O 阶段），业务阶段（`LoadedEntitiesOnly`）同样答 nil 而不是 `ErrColdLoadInLogic`；不问加载器。持久种类、未登记 builder 的 kind 不变（照旧交给加载器）。原先 Repository 对它答 `ErrEntityAggregateNotFound`（“has no persistent DAO”），整个请求失败、handler 不运行 |
+| Nest 侧 | 派发对 nil 目标的处理不变，只换了回复的错误值：单目标与多目标的首个目标回复 `nest.EntityNotFoundError()`——满足 `ErrEntityNotFound`，并带 `errcode.ErrEntityNotFound`（客户端码 `entity_not_found` = 2），与加载器报告“权威里不存在”时客户端拿到的码相同，所以对不持久目标客户端看到的码没有变；多目标其余位置把 nil 交给 handler |
+| 生成器 | 生成的分发包装原先把 nil 目标当成类型不符（`ErrEntityTypeMismatch`，客户端看成内部错误）；改为回复同一个 `EntityNotFoundError()`。重新生成 `codegen/internal/entity/testdata/awaitflow`（`codegen/scripts/awaitflow-runtime.sh` 一致性 + race 通过） |
+| 删掉的绕法 | cellworld `NodeConfig.Loaded` / `dispatchLocked` 的加锁集合过滤；demo `partition.go` 的 `Loaded:`；harness 的 strict getter 替身改为“装了 DataEngine 形状加载器的真实 ManagerAccess”，断言加载器一次都没被问到 |
+| 红绿 | `TestManagerAccessAnswersAbsentNonPersistentKindsWithoutTheLoader`（entity，修前 6 条断言全红：IsLoaded false、Get/GetMany 带加载器错误、业务阶段冷缺失、加载器被问 2 次）；`TestAbsentNonPersistentTargetIsAnsweredWithoutTheLoader`（nest：修前单目标拿到加载器的“不存在”、多目标 handler 不运行、加载器被问 2 次）；`TestWorldOnALoaderBackedGetter`（cellworld：去掉 Loaded 后在旧 ManagerAccess 上 straight / attack 两个子用例都红，`kind 213 has no persistent DAO`、玩家等不到第一份视野）；awaitflow `TestGeneratedDispatchAnswersANilTargetAsNotFound`（修前 `nest: entity type mismatch`） |
+
+**受影响调用方清单与结论**（按源码与 `rg` 逐个核对；“nil 目标”只对不持久种类、且只在内存里没有时出现）：
+
+| 调用方 | 原答复 | 现答复 | 结论 |
+| --- | --- | --- | --- |
+| Nest `singleDispatch` / `dispatchMany` 首目标 | 加载器错误 → `targetLoadError` → `entity_not_found` 码 | `EntityNotFoundError()`（同码，满足 `ErrEntityNotFound`） | 客户端码不变；错误链上不再有 `ErrAuthorityEntityNotFound`（仓内无调用方对不持久目标判它） |
+| Nest `dispatchMany` 非首目标 | 整个请求失败 | handler 收到 nil | 手写 handler：cellworld（按 ID 取、nil 安全，正是 E1 的目的）、`wiring/physicsroom`（自带 getter，不受影响）、genre 夹具与 demo 测试里的手写 handler（都只取首目标或自建 getter）；生成的 handler 由包装回 `EntityNotFoundError()`，业务函数见不到 nil |
+| demo 生成 handler 的不持久目标 | `EnterScene` / `MovePlayer` / `MoveTarget`（[Player, Scene]）、`RootMonster`（Monster）、`SpawnMonster`（[Monster, Scene]）、`SetSceneTimeRate`（Scene） | 目标不在时同样回 `entity_not_found` | 行为一致（Scene 启动即建；Monster 死亡 / 刷掉后 GM 拿到同一个码） |
+| Nest 广播 | 每个缺失目标记一条 ERROR 后继续 | 静默跳过 | 只少了噪声 |
+| `TryBatch`（心跳投递） | `ErrEntityNotFound` 包着冷缺失 | `ErrEntityNotFound` | 同一哨兵；心跳驱动按 `dropped{not_loaded}` 计（原先对不持久目标按“rejected”跳拍并告警） |
+| `Cast`（handler 内取锁） | `ErrColdLoadInLogic` | `ErrEntityNotFound`（index / id） | 仓内无调用方对 Cast 判 `ErrColdLoadInLogic` |
+| 组迁移（`group_transition`） | 错误 → `ErrEntityNotFound` | nil → `ErrEntityNotFound` | 不变 |
+| 卸载后重载（`unload_resync`） | `ErrAuthorityEntityNotFound` → 退回 remove | nil → 退回 remove | 不变（不持久实体本来就不会被仅内存卸载） |
+| `LoadRemoteEntity` | 加载器错误 | nil | Remote 托管的种类都有持久 DAO（Repository 只加载这类），不受影响 |
+| 生成 lifecycle（`GetOrCreate`） | `ErrEntityAggregateNotFound` → 新建 | nil → `Err…NotFound` → 新建 | 同一结果 |
+| kit / wiring（heartbeat、entitytimer、selfsync 的 Lookup） | 只读 `Manager().Get` | 不变 | 不经 `ManagerAccess.Get` |
+| genre 夹具 | 不持久种类：level 的 `Room`、awaitflow 的 `Player`、remoteflow 的 `Clerk` 等 | — | 全套 `test-genres-generated.py` 通过（§11.7） |
+
+测试侧唯一的波及：`TestUnloadResyncStormIsBounded` 用的原始 ID（6000+i）的 kind 位恰好解出同包登记成不持久种类的 kind 222，改用同包未登记的 kind 110～119（测试数据问题，不是契约问题）。
+
+兼容影响：项目未上线，不做旧进程 / 旧数据兼容；没有存储或协议格式变化。
+
+### 11.2 E2：Interest 的 self 跟着自身实体的 Hide / Show 走
+
+| 项 | 内容 |
+| --- | --- |
+| 契约变化 | 以某实体为 self 的玩家（`Enter` 时的自身实体），在该实体被 `Hide`（退出空间索引）期间看不见自己；它再次 `Show` / `Move` 进空间索引时 self 自动恢复（客户端收到一次全量）。同一次结算里 Hide → Show 照旧经 `departedSubjects` 先退订再订阅。原先 self 不是空间订阅、Hide 不撤它：自身实体被 Hide 并注销、重新登记再 Show 之后，Interest 以为还持有、Manager 已经忘了，玩家从此看不到自己 |
+| 实现 | `Interest.selfBy`（`selfOf` 的反查）；`removeSubjectLocked` 收回、`placeSubjectLocked` 在目标重新进入空间索引时恢复 self 贡献（`contributeSelfLocked`），`setSelfLocked` 统一维护两个方向 |
+| 删掉的绕法 | `policy.Mirrors.Generation`、cellworld `BaseState.ShownGen` 与 `feedMirrors` 里的 `Interest.Resubscribe`、demo 的 `CellShownGen`（nopersist,nosync 字段，不涉及存储格式） |
+| 红绿 | entitysync 层 `TestSelfFollowsItsEntityThroughHideAndShow`（不依赖 cellworld；修前 `shown again, the player does not see itself`）；cellworld `TestCellCrashPlayerReentersFromSnapshot` 的客户端断言保留，去掉绕法后在旧 Interest 上 3/3 红（`the client does not hold its own scene actor again`），新 Interest 上 -count=6 与 -count=20 全绿 |
+| 波及 | `Hide` 的调用方：`policy.Mirrors`（本项的目标）、`movement.InterestSpace.Leave`（只对非玩家实体 Hide，玩家走 Leave）、demo `HideSubject`（怪、掉落）。玩家自己的实体只在 mirror 这条路径上被 Hide |
+
+### 11.3 E3：服务在 Nest 引擎启动前注册实例 handler
+
+| 项 | 内容 |
+| --- | --- |
+| 契约变化 | App 在任何 Mod Init 之前把本次运行的 Service 登记为 `app.ModService`（阶段顺序不变：Mod Init → Provide → Start，然后 Service.Init）。wiring/nest 的可选钩子 `NestHandlerInstaller.InstallNestHandlers(nest.HandlerRegistrar)`：Nest Mod 在引擎 Start 之前调用一次，服务把只属于本引擎实例的 handler 注册上去；失败则 Nest Mod 启动失败。Nest 在 shared_mods 还是服务专属 Mod 里都一样生效（服务在 Mod 之前就登记了） |
+| cellworld | `cellworld.Handlers`：handler 名单先于 Node 注册（Cell 侧与 Base 侧全部注册），`NewNode` 经 `NodeConfig.Handlers` 接上、只接一个 Node（原子指针，跟着服务实例走，不是进程级注册表）；`Node.RegisterHandlers` 改为返回错误、同一份名单。harness 改为正式进程的顺序（先注册、引擎 Start、再 NewNode），全部 cellworld 用例都走这条路径 |
+| demo | game Service 持有 `cellworld.NewHandlers()`，`InstallNestHandlers` 注册，`startPartition` 接上；删 `packageHandlers`（包级注册表 + 派发时兜底解析） |
+| 红绿 | `TestModsSeeTheRunningServiceBeforeTheyStart`（app，修前 `ModService at Provide = <nil>`）、`TestServiceInstallsInstanceHandlersBeforeTheEngineStarts`（wiring/nest，修前 `InstallNestHandlers called 0 time(s)`；同用例钉住 handler 不进包级表、钩子失败时引擎不启动）；`TestHandlersBindToExactlyOneNode` |
+| 没动的 | Nest 自身的“派发时按包级表兜底解析”（`getHandlerEntry`）仍在：框架测试与引擎构造后注册的包级 handler 依赖它，删它是另一件事。demo `game/partition` 的 `Install` / `Node()`（实体心跳找本进程 Node 的原子指针）不是 handler 注册表，本轮没动：Player 由 DataEngine 装载、没有创建参数可以带 Node，换掉它要给实体加注入入口 |
+
+### 11.4 E4：分区场景里自己的 Player 字段
+
+E4 = A 的本意是“自己的 exp、背包等经自身视图走同一条连接，SceneActor 的 mirror 不带这些字段”。实现上**没有翻 `access.player.self_sync` 这个生成器开关**，原因：这个开关把 `policy.SelfView` 装在 Nest Mod 自己的 Manager 上、对所有场景生效，而一个 Player 的同步状态只能接一个 Manager——普通场景里 demo 的场景桥已经把 Player 登记在自己的 Manager 上，开关一开普通场景就会被拒（`Name: "scene"` 的注释写的就是这个冲突）。所以分区模式下在**场景桥自己的 Manager** 上做同一件事（不改普通场景）：
+
+| 项 | 内容 |
+| --- | --- |
+| 绑定 | `joinPartition` 在会话打开后把玩家的 Player 登记为场景 Manager 的 subject，`policy.Direct` 把玩家自己的会话以 `self` 视图绑上（重试打开的会话在 `openLocked` 成功时绑；排在上一次离场的退役之后的登记在被接受时绑）；离场时解绑、注销，再关会话 |
+| 视图 | Player packer 新增 `self`：Name、Level、Exp、Gold、Items、Equipment、GuildID。不含位置与 HP（SceneActor 的 mirror 带，分区场景的位置与 HP 在 Cell）、不含属性表（战斗字段归属待定，§11.6） |
+| mirror | SceneActor 的 mirror 编码本来就只带 PosX / PosY / CellHP（`partitionPlayerMirrorMask`），不带 exp 等；端到端断言钉住 |
+| 端到端 | `own_state`：p1 `AddExp 7` 后客户端手里自己的 Player 的 exp 加 7，SceneActor 的 mirror 里没有 exp |
+| 副作用 | 同一 Base 上的队友经 `SetTeam` 的关系视野现在能看到彼此的 Player（缺省视图）——与普通场景队伍的行为一致；别的 Base 上的队友仍看不到（§11.6 ④） |
+
+需要维护者确认：若坚持用生成器开关，代价是普通场景改为“Player 只由 SelfView 登记、场景桥不再登记 Player、别人看他改走另一类 subject”，等于重写普通场景的同步；推荐保持本节做法。
+
+### 11.5 追加第 1、2 项
+
+| 项 | 改动 | 红绿 |
+| --- | --- | --- |
+| ① Base 重启后回到保存的位置 | `partition.ReadBase(dao, sceneID)`：Player 不在世界里、实时位置（`PosX / PosY`，不持久）为零时，快照位置取持久的 `SavedPosX / SavedPosY`，只认 `SavedSceneID` 等于本进程分区场景 ID 的（否则留零，Enter 取 spawn）。`SavedPos*` 随被接受的回写写入（v2.2），所以保存的是最近一次回写的位置 | 单测 `TestReloadedPlayerEntersAtItsSavedPosition`（修前 `X:0 Y:0`）；端到端 `base_restart`：只做 Base 的 sid 1004 上的 p5 走到 (1200, 1500)、等回写，kill -9 sid 1004、重启、重新登录，进场在 (1175, 1500)（最近一次回写的位置），修前在 spawn (2900, 1500) |
+| ② 攻击结论推给攻击方 | 新协议 `AttackResultPush`（10104，game-demo 的 `protocol/def/attack_result.go`）：`Seq`、`Target`、`Outcome`（applied / duplicate / rejected / unknown）、`Reason`（not_owner / not_visible / out_of_range / dead / busy）、`Damage`（只有 applied 非零）、`TargetHP`（unknown 时为 0：不声称）。Base 的 `Hooks.AttackResult`（提交后、Node 出站 goroutine）经 player TCP `PushPlayer` 推给攻击方，推送只准入出站队列；玩家离线就丢（计数照旧在 `gm.scene.partition`） | 单测 `TestAttackResultPushNamesTheVerdict`；端到端两轮跨界打怪各 10 次，客户端各收到 10 条 applied、伤害 10、推送里最低的目标 HP 等于同步里看到的 0；修前 `0 of 10 pushes` |
+
+端到端（`scripts/test-seamless-demo.sh`，私有依赖：`scripts/mirror-local.sh` 偏移 30000，etcd 58379）新增了 sid 1004 与三类断言（`own_state`、每次攻击的结论推送、`base_restart`）。追加的断言失败时不中断后续步骤，演练结束一并报告，所以修前一次就能看到每一项的红：修前（E1～E3 之后、E4 之前的代码，加上新协议的定义）**4 项全红、原有 9 步全绿**；修后全部通过（[修前](../performance/benchmarks/cellworld-v23-20261104/e2e-red-before.txt)、[修后](../performance/benchmarks/cellworld-v23-20261104/e2e-green.txt)、[evidence.json](../performance/benchmarks/cellworld-v23-20261104/e2e-green-evidence.json)）。
+
+| 步骤 | 修后结果 |
+| --- | --- |
+| own_state（E4） | AddExp 7 后客户端自己的 Player：exp 0 → 7；SceneActor 的 mirror 里没有 exp |
+| 直线 / 抖动 / 斜穿 | owner 变化 2 / 8 / —，近处 remove 0，自己最大间隔 50 / 52 / 50ms |
+| 跨界打怪 ×2 | applied 10、duplicate 0、HP 100 → 0、跨格转发 10、重试 0；推送 10 / 10 |
+| Monster 跨界 | walker 从 sid 1002 交给 1001 |
+| Cell 崩溃 | kill 到重启就绪 6.2s；epoch 2 → 3、HP 80；重刷 3 只怪 |
+| base_restart（①） | 在 (1175, 1500) 进场（spawn 是 (2900, 1500)） |
+| 普通场景 | Move 照旧、MoveIntent 得 scene_not_partitioned；demo 机器人在 sid 1003 跑一轮 |
+
+### 11.6 追加第 3、4 项：停下来，需要维护者决定
+
+**第 3 项（战斗字段全部放 Cell）**：先按要求列清 demo 里的战斗字段与写入点。
+
+| 字段 | 存在哪 | 谁写 | 性质 |
+| --- | --- | --- | --- |
+| 属性 `hp`、`attack`（`game/gameplay/attribute/combat.go` 的 `Combat`）的 **Base 层** | PlayerDao `AttrBase`（persist,sync） | `AttributeComponent.LevelUp`（`ProfileComponent` 升级时调：`AddExp`、副本结算、邮件 / 购买发经验等经 `handlerAddExp` / `handlerClaimDungeon` 的升级路径）；装载时按等级重建 | **由等级推出**：等级、经验是养成数据 |
+| 属性的 **Gear 层** | PlayerDao `AttrGear`（nopersist,nosync） | `AttributeComponent.RefreshGear`（`handlerEquipItem` 换装、配置重载） | **由装备推出**：装备在背包里，是养成数据 |
+| 属性的 **Final 层**、派生的 `power` | PlayerDao `AttrFinal`（nopersist,sync） | `derive`（Base + Gear 之后 `Update`） | 派生值 |
+| 分区场景的**当前 HP** | SceneActor DAO `HP`（Real，Cell 进程）；Base 的快照 `CellHP`（persist,sync）与 `CellSnap*` | Cell：伤害结算（`onDamage`）、回写；Base：接受回写；进场 / 重建时取快照或 `scene.partition.player_hp` | 已经只有 Cell 权威 + Base 快照（v2） |
+| 分区场景的**伤害** | 配置 `scene.partition.attack_damage`（D7 = A 的固定伤害） | — | 与属性 `attack` 无关 |
+| Monster 的 HP、buff | 普通场景：MonsterDao + CombatDao（root buff、1Hz 心跳）；分区场景：MonsterDao 的格内 `HP`，不启动 buff（D5 = A） | — | 分区场景里已经只在 Cell |
+| 玩家 buff | demo 没有 | — | — |
+
+结论：demo 里“Player 一份 HP、SceneActor 一份 HP”的两份，其实是两个不同的量——属性 `hp` 是**由等级和装备推出的上限 / 面板值**（养成的结果），SceneActor 的 `HP` 是**分区场景里的当前血量**（战斗状态）；属性 `attack` 同样由等级和装备推出，分区场景的伤害现在不读它。把“一切战斗字段的权威放 Cell”落到这组字段上，正好碰到维护者事先点名的情形“某字段既影响战斗又是养成数据”：`hp` / `attack` / `power` 的输入（等级、经验、装备）是持久的养成数据、住在 Base 的 Player 上，输出是战斗面板。需要产品决定的问题与选项：
+
+- **A（推荐）**：养成输入（等级、经验、装备、`AttrBase`）留在 Base（持久、照旧）；战斗面板（最大 HP、攻击、派生的 power、将来的 buff 层）与当前 HP 的权威在 Cell 的 SceneActor。Base 上改了养成输入（升级、换装）就发一条“面板变化”命令给目标 Real（与攻击同一套转发、去重、结果未知语义），Cell 在 SceneActor 上重算 Final、按新上限夹当前 HP，随回写进快照；分区模式下 Player 的 `AttrFinal` 不再同步给客户端（面板从 SceneActor 的 mirror 来）。要定：升级是否回血、上限变小时当前 HP 怎么夹、命令丢了 / 结果未知时面板以谁为准。代价：cellworld `ActorState` 加面板字段与一种命令消息，SceneActor / Monster DAO 加字段，demo 的属性组件分两种模式。
+- **B**：只把**当前 HP**（以及将来的 buff）算战斗状态、放 Cell（v2 已经如此）；最大 HP / 攻击仍由 Base 从养成数据推出，作为只读参数随 Enter / 交接 / 一条参数更新消息带给 Cell（Base 权威）。改动最小，但“攻击力在 Base”不满足“一切战斗字段在 Cell”的字面要求。
+- **C**：分区模式下属性完全不用（伤害、HP 都按 `scene.partition` 的配置），demo 保持现状，只在文档里写明。
+
+本轮没有改这部分代码（普通场景行为不变）。
+
+**第 4 项（视野外 / 别的 Base 上的队友的队伍面板）**：视野内的队友经 Ghost / mirror 本来可见；E4 之后同一 Base 上的队友也经 `SetTeam` 的关系视野看到彼此的 Player（含 Base 所知的位置 `PosX / PosY` 与快照 `cell_hp`）。缺的是**别的 Base 进程上**、彼此不在视野里的队友：p1 的 Base（sid 1000）手里没有 p5（Base sid 1004）的任何状态，现有的消息只有 Cell → Base 的 witness（维护者要求不给 Cell 加订阅），没有 Base 与 Base 之间的通道，`selfsync.Groups` / `policy.GroupView` 只能把**本进程 Manager 上登记的**实体推给成员。所以这一项要先定一条 Base 之间的数据路径，这是架构选择，不是实现细节：
+
+- **A（推荐，原型）**：Base 之间经 cellworld Node 已有的 NATS 传输发“队员快照”：每个 Base 按回写周期（缺省 1s）把本进程队员的快照（位置、HP、在线）发给其他队员所在 Base 的 sid；收到的一方把它们放进一份 mirror（`policy.Mirrors`，命名空间 `team_member`，TTL 过期即删），用 `policy.GroupView` 推给本进程的队员（队伍面板视图），不进空间索引。要定：队伍成员与“成员在哪个 Base”从哪来（demo 的队伍由 match 服务组成、`MatchFound` 推给各成员所在进程；“成员 → Base sid”可用账号绑定的 sid / `PlayerOwners`）、刷新频率、面板字段。
+- **B**：队伍做成 Remote 托管实体，DAO 里存各成员快照，各 Base 定期写自己成员的那一项，读侧 GroupView。持久且一致，但每个成员每秒一次 Remote 事务，代价大。
+- **C**：队伍面板只显示同 Base 与视野内的队友（现状 + E4），跨 Base 的面板等真正需要时再做。
+
+v2-6（分区模式下 `SetTeam` 的成员是 Player 实体）：E4 之后 Player 在本 Base 的场景 Manager 上有 subject，同一 Base 内的关系视野因此恢复；跨 Base 的部分随上面的选择一起做。本轮没有为第 4 项写代码，端到端里“两个不同 Base 上、彼此不在视野内的队友互相看到位置 / HP”的断言也没有加（没有可验证的实现）。
+
+### 11.7 不回归
+
+全部在同一工作树、同机（macOS，Apple M5）跑完，`GOWORK=off`、从模块根：`go build ./... && go vet ./...`；glsvet（`./framework/nest/... ./framework/entity/... ./framework/dataengine/engine/... ./framework/sync/entitysync/... ./gameplay/cellworld/...`）无违例；`python3 scripts/check-doc-anchors.py` 0 broken；根包 `go test -count=1 .`；`go test -race -count=1 ./gameplay/cellworld/ ./framework/nest/... ./framework/entity/... ./framework/sync/... ./framework/app/... ./wiring/nest/...`；`TestCellCrashPlayerReentersFromSnapshot -count=20`；全量 `go test -count=1 ./...`（含 codegen）；`codegen/scripts/awaitflow-runtime.sh`（生成器一致 + race）；`scripts/test-demo-generated.sh`（私有依赖，8 个真实依赖用例 PASS）、`test-mmorpg-generated.sh`、`test-sync-modes-generated.sh`；因为 E1 改了全部 handler 对不持久目标的答复，**genre 全套** `scripts/test-genres-generated.py` 13 类全部 passed；新生成的 game-demo `go build / vet / test ./...`、`roost id check`、`roost generate --check`、`go generate ./...` 后 porcelain 干净；本仓 `go generate ./...` 后 porcelain 干净；端到端 `scripts/test-seamless-demo.sh` 全部步骤通过（§11.5）。
+
+### 11.8 E5：分区场景的刷怪账本（待产品规则）
+
+不做。现状照 §10.4 v1-4：重启的 Cell 按 `scene.partition.spawns` 重刷本格的点；死亡（HP 0）的怪留在原地不补刷，走到别的格的怪不回原格补。要产品定的规则：死亡后在哪个格、隔多久补刷；走到别格的怪算出生格的名额还是所在格的；Cell 崩溃时在途交接中的怪算谁的。定了之后账本放在出生格的 Scene 实体（区域表旁）还是单独的持久实体，再按规则做。
+
+### 11.9 合入 main 前还要做的
+
+- E1～E3 是框架契约：合入时 CHANGELOG `[Unreleased]` 写清三条（不持久种类的 nil 答复与 `EntityNotFoundError`、Interest self 跟着 Hide / Show、`app.ModService` + `NestHandlerInstaller`），框架文档已改（impl/02 第 6a 条、guide/04 Interest 一节、impl/01 第 4 条）；codegen 的分发包装形状变了，按发版流程决定是否需要 `--min-core`（生成物用了新 API `nest.EntityNotFoundError`，需要）。
+- E3：Nest 的“派发时按包级表兜底解析”是否收敛（框架测试与引擎构造后注册的包级 handler 依赖它），以及 demo `game/partition.Install` 这一类“实体找本进程 Node”的原子指针是否要换成实体注入，单独定。
+- E4：确认 §11.4 的做法（场景桥 Manager 上的 self 绑定）替代翻 `access.player.self_sync` 开关。
+- 第 3、4 项按 §11.6 的决定实施；第 4 项实施时补端到端“两个 Base 上彼此不在视野内的队友互相看到位置 / HP”。
+- D4（`policy.Mirrors` 是否写进 impl/04）照旧；本轮 `Mirrors` 删掉了 `Generation`。
+
+### 11.10 缺口更新
+
+§8.4 / §9.6 / §10.4 的表照旧有效，变化与新增如下：
+
+| # | 缺口 | v2.3 状态 | 性质 |
+| --- | --- | --- | --- |
+| v2.2-1 | 分区场景里自己的 exp、背包等字段不经场景同步 | **已解决（demo）**：self 视图（E4，§11.4） | — |
+| v2.2-2 | Base 重启后进场用 spawn | **已解决（demo）**：读回 `SavedPos*`（§11.5） | — |
+| v2.2-3 | 攻击结论只进日志与计数 | **已解决（demo）**：`AttackResultPush`（§11.5） | — |
+| v2.2-4 | Node handler 装进包级注册表、派发时兜底 | **已解决**：`NestHandlerInstaller` + `cellworld.Handlers`（E3） | — |
+| v2-6 | 跨格 / 跨进程的队伍可见 | **部分**：同一 Base 上的队友经 `SetTeam` 的关系视野恢复（E4 之后 Player 在场景 Manager 上）；别的 Base 上的队友见 §11.6 ④ | 需要维护者决定 |
+| v2.3-1 | 只锁角色的单实体请求（输入、换档）发给已不在本进程的角色时，由 Nest 以 not found 丢弃并记一条 WARN（`async handler failed … entity not found`），不再计入 `InputsDropped`（原先 Loaded 过滤先数一次再丢）。cellworld 全套用例里共 2 条 | 新 | 原型简化（交接后 Base 的输入发往旧 owner 的短窗口） |
+| v2.3-2 | 战斗字段的归属（属性 hp / attack / power 由养成数据推出） | 新 | 需要维护者决定（§11.6 ③） |
+
+### 11.11 方向判断
+
+- §10.6 判断“接入暴露的缺陷集中在框架原型 ↔ 正式 Nest / DataEngine / Interest 的接缝上”，本轮把这三处接缝在框架里定成契约，cellworld 侧对应的三处绕法（Loaded 过滤、mirror 代号 + Resubscribe、包级注册表 + 兜底）全部删掉，cellworld 的测试改成走正式形状（装了加载器的 ManagerAccess、先注册后建 Node）。这是 cellworld 第四轮改动；本轮没有新的协议缺陷，新增的问题（§11.6）是产品 / 架构选择而不是实现错误：战斗字段在“养成数据推出的面板”与“场景内的战斗状态”之间怎么切、Base 之间要不要有数据通道。二者都决定无缝大世界能不能从“原型”走向“正式能力”，建议在合入 main 之前先定。

@@ -1,4 +1,4 @@
-# cellworld：分区 Scene 原型（v2.2）
+# cellworld：分区 Scene 原型（v2.3）
 
 **原型，不是现行能力。** 只在分支 `feat/seamless-world-prototype` 上；设计、取舍与实测见 [无缝大世界方案 §7 / §8](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#7-v2-设计分区-scene2026-11-03分支-featseamless-world-prototype)（v1 见 §5 / §6，v2.1 的 NPC 降档见 §9，v2.2 的 game-demo 接入与多进程端到端见 §10）。
 
@@ -29,16 +29,17 @@
 | 交接 | 冻结中一律快档（重传、放弃计时不变）；`EntityState.Idle` 随 Offer 带走，新格以慢档装入；被拒恢复回到慢档 |
 | Ghost | 慢档 NPC 的 Ghost 过期放宽为 `GhostTTL + IdlePeriod`（接收方自己的配置） |
 
-## 接入正式运行时（v2.2，game-demo）
+## 接入正式运行时（v2.2 / v2.3，game-demo）
 
 game-demo 的分区配置（`scene.partition`）接的就是这个包：SceneActor / Monster 是生成实体，格内状态在生成 DAO（D8），
 Player 的 `BaseState` 在 PlayerDao；接法与端到端结果见 [FEATURE §10](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#10-v22demo-接入分区-scene2026-11-03)。
-接入时补的两条契约：
+接入时发现的三处接缝，v2.3 都改成了框架契约（[FEATURE §11](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#11-v23框架契约-e1e3自己的状态e4与追加四项2026-11-04)），cellworld 侧的绕法已删：
 
 | 项 | 规则 |
 | --- | --- |
 | 不在内存的角色 | 不持久的种类（SceneActor / Monster）内存未命中时 getter 答 nil、不问 DataEngine 加载器（框架契约，`docs/framework/impl/02-nest-entity.md` 第 6a 条，E1）。Node 把名单原样交给 Nest：多实体请求里 handler 拿到 nil、按实体 ID 取角色；只锁角色的单实体请求（输入、换档）由 Nest 以 not found 丢弃 |
 | 自己的 mirror 重新出现 | owner 格崩溃、mirror 过期删除（Hide + 注销）后又回来时，Interest 自己恢复“玩家看自己”（self 跟着自身实体的 Hide / Show 走，框架契约，`docs/framework/guide/04-sync.md`，E2），Node 不再记 mirror 代号、不调 `Resubscribe` |
+| handler 注册时机 | Node 在服务 Init 里才建（引擎已启动）：服务经 wiring/nest 的 `NestHandlerInstaller` 钩子在引擎启动前 `Register` 一份 `cellworld.NewHandlers()`，`NodeConfig.Handlers` 交给它，`NewNode` 接上（E3）；不再用包级注册表 + 派发时兜底 |
 
 ## 交接以事务为边界
 
