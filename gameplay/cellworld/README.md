@@ -1,6 +1,6 @@
-# cellworld：分区 Scene 原型（v2.1）
+# cellworld：分区 Scene 原型（v2.2）
 
-**原型，不是现行能力。** 只在分支 `feat/seamless-world-prototype` 上；设计、取舍与实测见 [无缝大世界方案 §7 / §8](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#7-v2-设计分区-scene2026-11-03分支-featseamless-world-prototype)（v1 见 §5 / §6，v2.1 的 NPC 降档见 §9）。
+**原型，不是现行能力。** 只在分支 `feat/seamless-world-prototype` 上；设计、取舍与实测见 [无缝大世界方案 §7 / §8](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#7-v2-设计分区-scene2026-11-03分支-featseamless-world-prototype)（v1 见 §5 / §6，v2.1 的 NPC 降档见 §9，v2.2 的 game-demo 接入与多进程端到端见 §10）。
 
 沿 BigWorld 的 Cell + Ghost 流派，作为 **Scene 的一种模式**：声明了分区的 Scene 每个格由一个进程托管。Player 不迁移（Player 所在进程充当 BaseApp），角色在格里的部分是不持久的 Nest 实体 SceneActor，跟着交接走。
 
@@ -28,6 +28,17 @@
 | 慢档越界 | 一拍按 `Period` 分步积分、每步判交接，越界即在那一步冻结：冻结点离本格至多 H + 一步，与快档相同 |
 | 交接 | 冻结中一律快档（重传、放弃计时不变）；`EntityState.Idle` 随 Offer 带走，新格以慢档装入；被拒恢复回到慢档 |
 | Ghost | 慢档 NPC 的 Ghost 过期放宽为 `GhostTTL + IdlePeriod`（接收方自己的配置） |
+
+## 接入正式运行时（v2.2，game-demo）
+
+game-demo 的分区配置（`scene.partition`）接的就是这个包：SceneActor / Monster 是生成实体，格内状态在生成 DAO（D8），
+Player 的 `BaseState` 在 PlayerDao；接法与端到端结果见 [FEATURE §10](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#10-v22demo-接入分区-scene2026-11-03)。
+接入时补的两条契约：
+
+| 项 | 规则 |
+| --- | --- |
+| `NodeConfig.Loaded` | 只有在本进程内存里的角色 / NPC 进 Nest 请求的加锁集合；handler 按实体 ID 取角色。DataEngine 装好加载器的 getter 对不在内存的不持久实体返回“聚合不存在”的错误而不是 nil，正式进程必须配它（`EntityManager.Get(id) != nil`）；nil 时名单原样交给 Nest（测试替身） |
+| 自己的 mirror 重新出现 | `policy.Mirrors.Generation` 是 mirror 每次新建的代号，`BaseState.ShownGen` 记玩家进入 Interest 时自己的代号；代号变了（owner 格崩溃、mirror 过期后又回来）就 `Interest.Resubscribe`，否则客户端看不到自己 |
 
 ## 交接以事务为边界
 
@@ -73,12 +84,14 @@ Cell 进程是普通 roost App：`app.New(...).Singleton(kitredis.SingletonStore
 | 文件 | 内容 |
 | --- | --- |
 | `grid_test.go` | 分区映射、边界带、迟滞、版本序 |
-| `world_test.go` | 进程内多“进程”（各自的 EntityManager、Nest 引擎、心跳驱动、Node）：直线、抖动、斜穿四格、跨界攻击、慢交接、丢包；witness 连续与客户端（Base 的 Manager 推出的帧）连续 |
+| `world_test.go` | 进程内多“进程”（另有 strict getter 版：不在内存的实体答错误，同 DataEngine）（各自的 EntityManager、Nest 引擎、心跳驱动、Node）：直线、抖动、斜穿四格、跨界攻击、慢交接、丢包；witness 连续与客户端（Base 的 Manager 推出的帧）连续 |
 | `handoff_test.go`、`combat_test.go` | v1 细粒度用例按新模型改写：丢失 / 重复 / 隐式确认 / 超时只删不恢复 / 被拒恢复 / 回复扣住时来回 / 交接链 / Enter 幂等与拒绝 / 墓碑；伤害只结算一次、距离与可见性、去重随交接、结果未知、去重表满 |
 | `tier_test.go` | D1：无人时降档、邻格玩家（Ghost）靠近升档、W 边上来回不抖动、慢档 Ghost 不过期、慢档一拍冲过边界仍在边界带内交接并以慢档装入、慢档 NPC 被跨界攻击只结算一次、`advance` 分步积分单元 |
-| `lifecycle_test.go` | Cell 崩溃后按 Player 快照重建、Base 消失后租约离场、回写按版本幂等、交接事务回滚不移交 |
+| `lifecycle_test.go` | Cell 崩溃后按 Player 快照重建（含客户端重新持有自己）、Base 消失后租约离场、回写按版本幂等、交接事务回滚不移交 |
 | `nats_test.go` | 同一组场景跑在真实 nats-server 上（测试自起私有端口） |
 | `process_test.go` | 每个 Cell 是一个带单实例锁的 App 子进程（私有 redis-server）：跨进程至多一个 Real 与伤害只结算一次、kill -9 后按快照恢复、同 sid 第二个进程被拒、Base 进程消失后 SceneActor 清理 |
 | `measure_test.go` | 原型测量：`ROOST_CELLWORLD_PERF=1 GOWORK=off go test -run TestCellWorldMeasure -v ./gameplay/cellworld/`（档位 `ROOST_CELLWORLD_PERF_NPCS=1000,5000`，窗口 `ROOST_CELLWORLD_PERF_SECONDS=20`；D1：`ROOST_CELLWORLD_PERF_IDLE_MS=1000`，玩家分布 `ROOST_CELLWORLD_PERF_PLAYERS=spread|cell`） |
 
 Sync mirror 的单测在 `framework/sync/entitysync/policy/mirror_test.go`。
+
+game-demo 上的多进程端到端（两个 Cell 进程、独立的 Base 进程、kill -9 后重建、普通场景照常）：`scripts/test-seamless-demo.sh`（需要私有依赖，见脚本头）。

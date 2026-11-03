@@ -1,0 +1,2 @@
+2026/11/03 23:32:21 INFO robot runner: stop started=2 success=2 failure=0 canceled=0
+2026/11/03 23:32:21 INFO robot loadtest: run done run_id=robot-demo-20261103-233215-001 profile=demo state=finished stop_reason=completed started=2 success=2 failure=0 canceled=0 elapsed=6.554605209s err=<nil>

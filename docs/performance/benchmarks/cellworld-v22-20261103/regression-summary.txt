@@ -1,0 +1,11 @@
+PASS build-vet 8s
+PASS glsvet 0s
+PASS doc-anchors 0s
+PASS root-package 9s
+PASS race-cellworld-sync 126s
+PASS full-go-test 315s
+PASS demo-generated 71s
+PASS mmorpg-generated 9s
+PASS sync-modes-generated 3s
+PASS seamless-e2e 115s
+DONE

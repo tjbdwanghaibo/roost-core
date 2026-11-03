@@ -1,6 +1,6 @@
 # 功能设计：多进程无缝大世界（2026-11-03）
 
-**状态：思路稿（维护者 2026-11-03：“可以先不做”“把这个方案思路先记到文档里”）；同日维护者要求“可以开一个分支先实现一版，并测试一下”，第一版原型只在分支 `feat/seamless-world-prototype` 上（§5 设计、§6 实测）；同日维护者定下 v2 方向（Cell 是 Scene 的模式、Cell 部分是 Nest 实体），v2 也只在该分支（§7 设计、§8 实测与剩余缺口）；同日维护者定下 D1～D4，v2.1 的 NPC 降档与 demo 接入的方向问题见 §9。未合入 main，不是现行能力。现行能力以 [MMORPG 接入手册](../framework/MMORPG-INTEGRATION.md) 为准。**
+**状态：思路稿（维护者 2026-11-03：“可以先不做”“把这个方案思路先记到文档里”）；同日维护者要求“可以开一个分支先实现一版，并测试一下”，第一版原型只在分支 `feat/seamless-world-prototype` 上（§5 设计、§6 实测）；同日维护者定下 v2 方向（Cell 是 Scene 的模式、Cell 部分是 Nest 实体），v2 也只在该分支（§7 设计、§8 实测与剩余缺口）；同日维护者定下 D1～D4，v2.1 的 NPC 降档与 demo 接入的方向问题见 §9；同日维护者定下 D5～D8，v2.2 的 game-demo 接入与多进程端到端见 §10。未合入 main，不是现行能力。现行能力以 [MMORPG 接入手册](../framework/MMORPG-INTEGRATION.md) 为准。**
 
 登记在 [DESIGN-TODO“按需求触发的功能”](DESIGN-TODO.md#按需求触发的功能)。
 
@@ -533,3 +533,95 @@ macOS（Apple M5）本机。`GOWORK=off go test -race -count=1 ./gameplay/cellwo
 
 - D1 没有改交接协议：慢档只改心跳频率，“分步积分 + 冻结中快档 + 档位随交接走 + Ghost 过期放宽”四条把慢档对交接、Ghost、伤害的影响收在 `tier.go` 一个文件里，变异检查逐条证明它们各自是必要的。按测量，D1 把 v2 的主要代价（每实体 20Hz 事务）降到与“被看着的 NPC 数”成正比，这是 BigWorld 一类方案通常的做法；剩下的成本在被看着的 NPC 上，若真实负载里大部分 NPC 都在玩家附近（例如攻城），D1 帮不上，届时要回到 §8.6 的 C（Scene 心跳批量积分）。
 - demo 接入停下来的原因不是 cellworld 的协议，而是“交接带走什么”：v2 的交接只带 `ActorState`，demo 的 Monster 把 AI、动作、Buff 放在各自的组件与 DAO 里，玩家移动与技能也是本进程同步语义。这是把无缝大世界做成正式能力之前必须回答的设计问题（D5 的 B 就是它的完整答案，量级接近再做一轮框架）；原型阶段推荐 D5～D7 的 A，用格内行者 + 速度意图 + 固定伤害先把 demo 端到端跑通。
+
+## 10. v2.2：demo 接入分区 Scene（2026-11-03）
+
+维护者 2026-11-03 对 §9.7 的决定（均为推荐项）：**D5 = A**（分区场景里的 Monster 只做格内心跳的行者：位置、速度、HP、Idle 档位，不启动 AI / actionflow / movement.Move / state / Buff；依赖这些组件的 GM 命令返回“不支持”）；**D6 = A**（新增 `MoveIntent(vx, vy)`，只传速度、`(0,0)` 停下，不加目标点模式；分区场景里 `Move` / `MoveTarget` 返回“不支持”）；**D7 = A**（新增 `AttackTarget(target)`，固定伤害，结论异步，HP 变化从同步看）；**D8 = A**（SceneActor、Monster 的格内状态与 Player 的 BaseState 都用生成 DAO 承载）；D1 在 demo 分区配置里缺省 1s；D2 = A、D3 = A 维持，D4 推迟。普通场景（缺省）行为不变。
+
+codebase-memory-mcp 本轮连不上，结构结论都按当前源码与 `rg` 得出。
+
+### 10.1 改动
+
+| 层 | 内容 | 位置（生成后的路径；模板在 `demo/` 下，同名加 `.tmpl`） |
+| --- | --- | --- |
+| 生成器 | SceneActor 实体：`roost add entity SceneActor` + `add dao`（demo 步骤），`noPersist=true lifetime=ephemeral`、Other 档（在 Scene 之后加锁），只由分区场景的 Node 在 handler 里新建（`EntityCreateParam.Param = partition.CellMode{}`），自己的 `cell.actor` 心跳 | `game/entities/scene_actor/entity.go`、`db/def/scene_actor.go` |
+| 生成器 | D8：`SceneActorDao`（nocoll，全部 `nopersist,nosync`）与 `MonsterDao` 用同名字段承载 `cellworld.ActorState`——`PosX / PosY / HP` + `Cell*` 标量，去重表 `[]CellHit`、交接进度 `*CellHandoff` 是带 store 键的嵌套类型（定义在 monster.go：demo 步骤里 Monster 的定义先写进工程）；`game/partition.ReadActor / WriteActor` 一份映射，生成 setter 自带逆操作。Player 的 `BaseState` 在 `PlayerDao` 的 `Cell*` 字段：路由状态不持久，快照 HP 与快照版本（`CellHP` / `CellSnapEpoch` / `CellSnapSeq`）持久，快照位置随**被接受的回写**写进 `SavedPosX / SavedPosY / SavedSceneID`（witness 只写不持久的 `PosX / PosY`） | `db/def/{monster,player}.go`、`game/partition/partition.go` |
+| 生成器 | D6 / D7 协议：`MoveIntent`（msg 10027：`VX / VY` → 已受理）、`AttackTarget`（10028：`Target` → 攻击序号 `Seq`）；错误码 `scene_partitioned`（100024）、`scene_not_partitioned`（100025）、`partition_not_entered`（100026） | `protocol/def/{move_intent,attack_target}.go`、`internal/errors/scene_partition.go`、`game/controllers/player/{move_intent,attack_target,partition}.go` |
+| 配置 | `scene.partition` 按 A4① 声明一次（`game/settings`，game 服务的 `ConfigSchema`），加载时校验一次：网格与 owner（行优先 sid 列表）、`R + H ≤ G`、`R ≥ Base 的最大离开半径 300`（与场景桥常量有编译期断言）、`W ∈ [R, G − H]`、慢档必须是长于 50ms 的心跳档位（缺省 1s）、刷怪点在世界内且速度不超过 `max_speed`。`enabled` 缺省 false：其余键不读、不校验 | `game/settings/partition.go` |
+| 运行时 | 每个 game 进程读同一份分区配置：sid 是 owner 的进程是那个格的 **Cell**（Scene 实体持有 Region 与 `scene.cell` 心跳、启动时刷满本格的刷怪点），每个进程都是自己玩家的 **Base**。`startPartition` 建 `cellworld.Node`（NATS core pub/sub），witness 经 `policy.Mirrors` 喂场景桥自己的 Manager / Interest（SceneActor 打成 `player` 命名空间、Monster 打成 `monster`，载荷是生成的同步补丁 `db.SyncPlayerDao` / `db.SyncMonsterDao`，客户端解码器不变） | `internal/service/game/partition.go` |
+| 运行时 | 场景桥：分区模式的 Join 照旧开会话（held → `scene_ready`），不登记 Player subject，改由 `Node.Enter` 进入（位置取 Player 的快照，没有就取 spawn）；Leave 走 `Node.Leave`；Interest 用分区世界的边界。EnterGame 在分区模式不做本地落点（`EnterScene`） | `internal/service/game/scene.go`、`game/controllers/player/enter_game.go` |
+| 运行时 | 端点：分区场景里 `Move` / `MoveTarget` / `gm.scene.root` 返回 `scene_partitioned`；普通场景里 `MoveIntent` / `AttackTarget` 返回 `scene_not_partitioned`。新 GM `gm.scene.partition`：Node 计数、Base 侧攻击结论、mirror 计数、Cell 的区域表；带 `player_id` 时是该玩家的路由状态 | `game/controllers/player/{move,move_target}.go`、`internal/service/game/gm.go` |
+| 运行时 | Monster ID：分区模式用 `runtimeid.NewStartingAt`，序号从启动时刻（2026-01-01 起每秒 64 个）起算——走到邻格的怪比铸它的进程活得长，重启后的进程不能再发出它的 ID | `game/runtimeid/runtimeid.go` |
+
+**§7.8 的管理器分类落地情况**：没有重写、也没有新增带锁的进程级管理器。场景桥在 Base 侧原样使用（多一类 subject：mirror）；spawner 在分区模式不启动（刷怪由 `Node.Spawn` 在 Scene + Monster 事务里做）；`PlayerOwners` 不动；`partitionRuntime` 只是进程接线（Node、Mirrors 的句柄与诊断用的原子计数），不持有格内状态。
+
+**接入中发现、在 cellworld 里修掉的两处**（各有先红后绿，[修前输出](../performance/benchmarks/cellworld-v22-20261103/)）：
+
+1. **不在内存的角色不能进 Nest 的加锁集合**。v2 的框架用例里 getter 是不带加载器的 `ManagerAccess`，不存在的实体返回 nil；demo 的 getter 装了 DataEngine 加载器，对不持久的种类（SceneActor / Monster）返回“聚合不存在”的**错误**，整个请求失败——第一轮端到端里 Cell 进程启动刷怪即失败（`entity kind 4 has no persistent DAO`）。修法：`NodeConfig.Loaded`（`EntityManager.Get(id) != nil`），Node 只把在内存里的角色放进加锁集合，handler 按实体 ID 取角色；新建一律锁 Scene，“检查时不在、handler 里已被另一个 Scene handler 建出”时新建失败回滚、由对方重传。用例 `TestWorldWithAGetterThatRefusesAbsentEntities`（strict getter 替身）。
+2. **自己的 mirror 删过又回来时，客户端看不到自己**。owner 格崩溃后 witness 停了超过 TTL，Base 的 mirror 过期（Hide + Unregister）；重进后再出现时 Mirrors 只把它 Show 回空间索引，Interest 却还当“玩家看自己”的订阅持有（self 不是空间订阅，Hide 不撤），Manager 随 Unregister 已经丢了它。修法：`policy.Mirrors.Generation`（每次新建一个代号）、`BaseState.ShownGen`（进入时的代号），代号变了就 `Interest.Resubscribe`（Manager 对已有订阅幂等，只补上丢了的）。`TestCellCrashPlayerReentersFromSnapshot` 加客户端断言（修前 6 次全红，修后 6 次全绿）。
+
+另有一处 demo 侧问题当场改掉：mirror 打包最初用一份临时 `PlayerDao` 的 setter 填值，`CellHP` 是持久字段，setter 要求当前上下文有打开的事务，Manager 的打包路径上没有 → panic（第二轮端到端）。改为直接填生成的同步补丁再编码，格式号从一份空 DAO 的编码里读出。
+
+### 10.2 多进程端到端
+
+脚本 `scripts/test-seamless-demo.sh`（分支），客户端 `scripts/testdata/seamless/drill.go.txt`（经真实 account 登录、玩家 TCP、demo 的同步帧解码 `game/clientsync`）。依赖是 `scripts/mirror-local.sh` 的私有实例（偏移 30000：Mongo 副本集 57117–57119、NATS JetStream 44222–44224、Redis 46379），etcd 由脚本在 58379 自起；没有碰共享环境与 4222 / 6379 / 17379 / 27017 / 2379。
+
+| 进程 | 角色 |
+| --- | --- |
+| 九个托管服务 + sid 1000 的 game（`deploy/dev/run.sh start`） | sid 1000：分区场景的 **Base**（不托管格）；p1、p2 的连接在这里 |
+| sid 1001 的 game | 格 (0,0)（x ∈ [0, 3000)）的 **Cell**，同时是 p3 的 Base |
+| sid 1002 的 game | 格 (1,0)（x ∈ [3000, 6000)）的 **Cell**；演练中被 kill -9 再重启 |
+| sid 1003 的 game | 没有 `scene.partition`：**普通场景**（p4，以及 demo 自己的机器人） |
+
+分区配置：2 × 1 个 3000 的格，G 500、H 50、R = W 400、慢档 1s、回写 1s、租约 3s、伤害 10；刷怪点：分界线两侧各三只静止的怪（2960 / 2975 / 2990 与 3010 / 3025 / 3040）、一只沿 X 以 150 单位 / 秒往返的 walker。单实例锁缩到 ttl 6s（kill -9 后的重启只等 ttl）。Base 的 Interest 进入 / 离开半径 120 / 150。
+
+结果（macOS，Apple M5，同机；最终一轮的客户端输出与计数在 [证据目录](../performance/benchmarks/cellworld-v22-20261103/README.md)，各进程日志在 `artifacts/perf/cellworld-v22/e2e/`，未提交）。同一套断言前后完整跑通两轮，数字取最终一轮：
+
+| 步骤 | 做法 | 断言 | 结果 |
+| --- | --- | --- | --- |
+| 进场 | p1、p2（Base 1000）、p3（Base 1001）EnterGame → scene_ready | 各自在客户端看到自己的 SceneActor（`player` 命名空间、`cell_hp` 100）与附近的怪；p1 发 `Move` 得 `scene_partitioned` | 通过 |
+| 直线跨界 | p1 以 100 单位 / 秒从 2900 走到 3150 再回 2850 | 两次 owner 变化；离自己 ≤ 130 的对象一次都没被 remove；在格 (1,0) 时手里有 p2、回到格 (0,0) 时手里有 p3；自己的同步最大间隔 | 通过：owner 变化 2，近处 remove 0，自己最大间隔 50ms |
+| 抖动 | 300 单位 / 秒、每 0.67s 换向 8 段（每段越过对面的迟滞线） | owner 变化 ≥ 4；离自己 ≤ 100 的对象不被 remove（快速移动时客户端的自己比服务端晚约 100ms，半径相应收小） | 通过：owner 变化 8，自己最大间隔 50ms |
+| 斜穿 | 沿对角线 (2880,1380) ↔ (3120,1620)，120 单位 / 秒 | 同直线 | 通过：最大间隔 50～61ms。2 × 1 网格没有四格交点，四格交点只在框架的进程内用例里（`TestWorldDiagonalThroughFourCellCorner`） |
+| 跨界打怪 ×2 | p1 在格 (0,0)（从未越过 3050）打格 (1,0) 的怪 10 次；走进格 (1,0) 后打格 (0,0) 的怪 10 次 | Base 收到 10 个结论且都是 applied、无 unknown；客户端看到的目标 HP = 100 − 10 × 10 | 通过：两次都是 applied 10、duplicate 0、HP 100 → 0；两个 Cell 的 `DamageForwarded` 合计各 +10（确实跨格转发）、重试 0 |
+| Monster 跨界 | p2 站到 walker 过线的位置旁边，等它从一个格交给另一个格 | 新格 Real、旧格不再 Real；p2 在它离自己 ≤ 115 时没 remove 它 | 通过：walker 从 sid 1002 交给 1001；期间格 (0,0) 接受交接 8 次、格 (1,0) 7 次（含玩家） |
+| Cell 崩溃 | p1 打 p2 两下（100 → 80），等回写进 Base 的 Player；kill -9 sid 1002，重启（等锁 ttl） | Base 静默看门狗重进，新进程按快照建 SceneActor：epoch 前进、客户端里 p2 自己的 HP 是 80 | 通过：kill 到重启就绪 5.2s（上一轮 6.3s）；epoch 2 → 3、owner 1002、HP 80；新进程按配置重刷本格的 3 只怪 |
+| 普通场景 | p4 登进 sid 1003 | `Move` 照旧返回落定的位置并在同步里看到；`MoveIntent` 得 `scene_not_partitioned`；demo 自己的机器人（`cmd/loadtest -count 2`，完整链路）在 sid 1003 上跑一轮 | 通过 |
+
+### 10.3 不回归
+
+全部在同一工作树、同机跑完：`GOWORK=off go build ./... && go vet ./...`、glsvet（nest、entity、dataengine/engine、sync/entitysync 含 policy、gameplay/cellworld）无输出、`python3 scripts/check-doc-anchors.py`、根包 `go test -count=1 .`、`go test -race -count=1 ./gameplay/cellworld/ ./framework/sync/...`、全量 `GOWORK=off go test ./...`（含 codegen：doctor 用例钉住的业务键数随 `scene.partition` 的声明从 4 变 32）、`scripts/test-demo-generated.sh`（私有依赖）、`test-mmorpg-generated.sh`、`test-sync-modes-generated.sh`；生成工程 `go build / vet / test`、`roost id check`、`roost generate --check`、`go generate ./...` 后 porcelain 干净。逐项结果与耗时见 [regression-summary.txt](../performance/benchmarks/cellworld-v22-20261103/regression-summary.txt)：全部通过（`test-demo-generated.sh` 的 8 个真实依赖用例逐个 PASS、`test-mmorpg-generated.sh` 14 个场景 PASS、全量 `go test ./...` 无失败）。genre 全套（`test-genres-generated.py`）没有跑：本轮只动 `-template game-demo` 的模板、cellworld 与 `policy.Mirrors`。
+
+### 10.4 缺口更新
+
+§8.4 / §9.6 的表照旧有效，变化与新增如下：
+
+| # | 缺口 | v2.2 状态 | 性质 |
+| --- | --- | --- | --- |
+| v1-2 | 视野只到 Base、没到客户端 | **已解决（demo）**：真实客户端经 demo 的同步帧看到 mirror | — |
+| v1-4 | NPC 崩溃丢失、无重建来源 | **部分解决**：重启的 Cell 按 `scene.partition.spawns` 重刷本格的点（端到端验证 3 只）；死亡（HP 0）的怪留在原地不补刷，走到别的格的怪不回原格补 | 上线前必须解决（刷怪账本跨格的规则由产品定） |
+| v1-15 | 配置不经 `app.LoadConfig` | **已解决（demo）**：`scene.partition` 按 A4① 声明；框架层仍是 `NodeConfig` 结构体 | — |
+| v2-4 | R_feed ≥ Base 离开半径 | **已在配置校验里强制**（R ≥ 300，与场景桥常量有编译期断言） | — |
+| v2-6 | 跨格 / 跨进程的队伍可见 | 未变：分区模式下 `SetTeam` 的成员是 Player 实体，而 Player 不是本 Manager 的 subject | 上线前必须解决 |
+| v2-7 | 一个进程既是 Cell 又是 Base | **已覆盖**：sid 1001 同时是格 (0,0) 的 Cell 与 p3 的 Base，p1（Base 1000）与 p3 互相可见 | — |
+| v2.2-1 | 分区场景里客户端看到的“自己”是 SceneActor 的 mirror（位置、`cell_hp`），不是自己的 Player subject：exp、背包等自己的字段不经场景同步（demo 机器人的 `scene_alive` 靠 exp 判断，在分区场景里不适用） | 新 | 上线前必须解决（自己的字段走 `access.player.self_sync` 或给 SceneActor 编码加字段，见 10.5 E4） |
+| v2.2-2 | Base 重启后 Player 重新装载，`PosX / PosY` 是 0，进入用 spawn 点；持久的快照位置（`SavedPos*`）写了但没读回 | 新 | 原型简化（Enter 前读 `SavedPos*` 即可） |
+| v2.2-3 | 攻击结论只进 Base 的日志与计数（`gm.scene.partition`），没有推给客户端 | 新 | 原型简化（D7 = A 允许“推送或日志”） |
+| v2.2-4 | Node 的 handler 在 Nest 引擎启动之后装进**包级**注册表（game 服务的 Init 晚于 Nest Mod 的 Start；派发时按包级表兜底解析） | 新 | 需要维护者确认（10.5 E3） |
+| v2.2-5 | Monster ID 的“重启不重号”靠启动时刻起算的序号（每秒 64 个；两次启动至少隔一个单实例锁 ttl） | 新 | 原型简化（正式做法是持久发号或 ID 带启动代际） |
+| v2.2-6 | kill -9 后整格停摆直到新进程拿到单实例锁（缺省 ttl 15s；演练缩到 6s）：期间该格的玩家看不到这个格的东西，Base 每秒重发一次 Enter | 新 | 定案前提（与 App 单实例锁的 ttl 是同一个数） |
+| v2.2-7 | 分区进程上仍有本地的普通 Scene 实体（地形、刷怪心跳都在，spawner 不装），只是没人用 | 新 | 原型简化 |
+
+### 10.5 需要维护者决定
+
+- **E1 不持久实体“不存在”的答复**（10.1 第 1 处）。A（本轮，推荐原型阶段）：cellworld 自己按 `Loaded` 过滤加锁集合，框架不动。B：框架统一——`ManagerAccess.Get` 对不持久的种类（没有持久 DAO）在内存未命中时返回 (nil, nil)、不问加载器；所有 handler 都会在目标不存在时收到 nil 而不是错误（行为变化，生成的 sender 与现有 handler 要逐个确认）。并入 main 时推荐 B。
+- **E2 Interest 的“自己”在 Hide / Show 之后不恢复**（10.1 第 2 处）。A（本轮）：cellworld 侧按 mirror 代号 `Resubscribe`；B：Interest 修正——观察者自己的目标被 Hide 时撤掉 self 订阅、重新 Show 时恢复（改 Interest 现有代码）。并入 main 时推荐 B（这是 Interest 的契约问题，不只 mirror 会碰到）。
+- **E3 服务在 Nest 启动后注册 handler**（v2.2-4）。A（本轮）：包级注册表 + 派发时兜底解析；B：App / Nest Mod 给服务一个“引擎启动前注册实例 handler”的钩子。推荐 B（并入 main 时）。
+- **E4 分区场景里自己的 Player 字段**（v2.2-1）。A（推荐）：分区模式打开 `access.player.self_sync`，自己的 Player 走自同步，场景里只有 SceneActor；B：SceneActor 的 mirror 编码带上需要的 Player 字段（每份 witness 都要带，体积大）。
+- **E5 分区场景的刷怪账本**（v1-4）：死亡后在哪个格补刷、走到别格的怪算谁的；原型现在不补刷。需要产品规则。
+- D4（`policy.Mirrors` 是否写进 impl/04）照旧等并入 main；本轮 Mirrors 多了 `Generation`。
+
+### 10.6 方向判断
+
+- D5～D8 的 A 让 demo 接入没有碰到协议层面的方向问题：交接、伤害、重进全部沿用 v2 / v2.1 的 cellworld，demo 只补了实体、DAO 映射、配置与桥。接入暴露的两处缺陷（10.1）都不在交接协议里，而在 **cellworld 与正式运行时的接缝**：v2 的框架用例用的是测试替身 getter 与只测 BaseState 的崩溃用例，替身对“不存在”的答复和真实 DataEngine 不同、用例没检查客户端的自己——这是测试替身与正式链路的差距，不是设计前提的问题；两处都已用更接近正式链路的替身补了用例（strict getter、客户端断言）。
+- 这一系列是 cellworld 原型第三轮改动（v2 → v2.1 → v2.2），新出现的缺陷集中在“框架原型 ↔ 正式 Nest / DataEngine / Interest”的接缝上。若要并入 main，建议先定 E1～E3：它们本质上是三条框架契约（不持久实体不存在时的答复、Interest 自己的订阅、服务注册 handler 的时机），在框架里定一次比让每个接入方各自绕开更稳。
