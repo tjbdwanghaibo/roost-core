@@ -28,7 +28,7 @@ GOWORK=off go test -count=1 -race ./gameplay/heartbeat/...
 GOWORK=off go test -c -o bench.test ./gameplay/heartbeat/internal/bench
 ./bench.test -test.run '^$' -test.bench 'BenchmarkSched|BenchmarkSSRMapHint' \
   -test.benchtime=500ms -test.count=1 -test.benchmem        # × 10 遍
-/Users/whb/go/bin/benchstat pass-*.txt
+"$(go env GOPATH)/bin/benchstat" pass-*.txt
 # 相位分布表
 HB_DIST_OUT=dist.md GOWORK=off go test -count=1 -run TestPhaseDistribution ./gameplay/heartbeat/internal/bench
 # 对比二：投递方式（每组一个进程；16 组 × 3 轮，轮内轮转顺序）

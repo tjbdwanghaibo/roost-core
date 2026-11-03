@@ -7,7 +7,7 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 
 ## 0. 先读这几条
 
-- 本 skill 随 roost-core 版本发布，权威源在 `docs/agent-skills/roost-genre/`，提供流程、限制摘要和指针。**权威内容在 roost-core 仓库**：各篇 `docs/framework/<GENRE>-INTEGRATION.md`、`scripts/test-<genre>-generated.sh`、`scripts/testdata/<genre>/`、`docs/maintenance/KNOWN-LIMITS.md`。下文链接都是**相对 roost-core 根目录**的路径；读手册时以本机检出（如 `/Users/whb/roost/roost-core`）或 module cache 里对应版本的 `docs/` 为准，不以本文转述为准。
+- 本 skill 随 roost-core 版本发布，权威源在 `docs/agent-skills/roost-genre/`，提供流程、限制摘要和指针。**权威内容在 roost-core 仓库**：各篇 `docs/framework/<GENRE>-INTEGRATION.md`、`scripts/test-<genre>-generated.sh`、`scripts/testdata/<genre>/`、`docs/maintenance/KNOWN-LIMITS.md`。下文链接都是**相对 roost-core 根目录**的路径；读手册时以本机检出或 module cache 里对应版本的 `docs/` 为准，不以本文转述为准。
 - **`game` 模板只出框架骨架，各类型玩法来自夹具或业务代码**。已有 `game-demo` 是内置的完整参考应用；不要虚构 `project new -template slg` 一类不存在的模板。
 - 夹具里的数值（金币、时长、上限）都是样例；玩法规则缺少默认实现不算框架缺陷（KNOWN-LIMITS“游戏接入验收”首段）。
 - 生成 demo 前先确认目标 roost 版本。本 skill 随 tag 发布，命令按同一检出的脚本写：**v1.40.0 起** `dao_add` 写必填的 `store` 键（更早的 tag 写 `bson`）；**v1.35.0 起**每篇在最终 `roost generate` 前多一步公共 Robot 安装（`scripts/testdata/robot-common/install.py`），九类状态玩法的场景数因此各 +1（MOBA 改为扩展 KCP 用例，仍 28 条）。目标是更早的 tag 时，读该 tag 检出里的本 skill 与脚本，不把这里的命令套上去。各篇最早可用版本：card-rpg、mmorpg、merge-casual 三个夹具 **v1.33.1 起可用**（2026-10-31 在 v1.33.1 检出实测 16 / 13 / 15 条 PASS），**最低版本 v1.33.1**：v1.33.0 上仍编译失败（见 §7）。实时派对房间（`party-room`）**v1.33.2 起有纵切（12 条）；弹性成局与组同步正式入口 v1.34.0 起（13 条）；业务层补位 v1.34.1 起（18 条，2026-10-31 在对应代码实测通过）**。三档夹具与命令不同，references/party-room.md 的命令序列是当前检出的 19 条版（18 条业务 + 1 条 Robot）；v1.33.1 及更早没有这条纵切。
@@ -44,7 +44,7 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 
 - Go 版本按 roost-core `go.mod`（`go` / `toolchain` 两行）；全程 `GOWORK=off`。生成物声明的最低 core 看目标检出 `codegen/internal/roost/manifest.go` 的 `minimumVersions.Core`（随功能版提高），联网方式 `project new` 解析不到比它更早的版本。
 - `CORE` = roost-core 源码目录，二选一：
-  - **A. 本机检出**（推荐，已实测）：`CORE=/Users/whb/roost/roost-core`，切到目标版本的 tag / main。
+  - **A. 本机检出**（推荐，已实测）：`CORE=<roost-core 检出路径>`，切到目标版本的 tag / main。
   - **B. module cache**：`CORE=$(go env GOMODCACHE)/github.com/tjbdwanghaibo/roost-core@vX.Y.Z`。夹具随模块发布（`scripts/testdata/` 在模块包里）。仓库是私有模块，首次下载需要本机 git 凭据与 `GOPRIVATE=github.com/tjbdwanghaibo/*`（本机未设，B 的下载步骤未实测；从已有缓存目录构建 CLI 已实测可行，replace 指向缓存目录未实测）。
 - 依赖两种写法：
   - **离线 / 跟检出**：`project new ... --skip-deps`，然后 `go mod edit -replace github.com/tjbdwanghaibo/roost-core=$CORE`（与仓库脚本相同；下面的命令都用这种）。
@@ -55,7 +55,7 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 ```bash
 set -euo pipefail
 export GOWORK=off
-CORE=/Users/whb/roost/roost-core          # 或 module cache 目录，见 3.1
+CORE=/path/to/roost-core                  # roost-core 检出，或 module cache 目录，见 3.1
 WORK=/path/to/work                        # 放 CLI 与工程的目录
 NAME=mygame; MOD=example.com/mygame       # 工程名与自定 Go module
 mkdir -p "$WORK"

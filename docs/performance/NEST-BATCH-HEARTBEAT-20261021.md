@@ -233,7 +233,7 @@ mkdir -p $S/formal && nohup caffeinate -i $S/chain.sh $S > $S/chain.out 2>&1 &  
 nohup caffeinate -i $S/run-formal.sh $S $S/formal 3 > $S/formal/nohup.out 2>&1 &
 # 汇总
 python3 $S/agg.py $S/formal/delivery.jsonl
-/Users/whb/go/bin/benchstat $S/micro/base.txt $S/micro/final.txt
+"$(go env GOPATH)/bin/benchstat" $S/micro/base.txt $S/micro/final.txt
 go tool pprof -top -cum $S/bin-final.test $S/prof/C.cpu
 ```
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""核对 Markdown 相对链接与锚点（默认范围 docs/framework/**）。
+"""核对 Markdown 相对链接与锚点（默认范围：git 跟踪的全部 .md）。
 
 根包门禁 doc_links_gate_test.go 只查相对链接的目标文件存在，不查 #锚点。
 本脚本补上锚点：每个相对链接的目标文件必须存在；带 #锚点 且目标是 .md 时，
 锚点必须等于目标文件某个标题按 GitHub 规则生成的 slug（含重名的 -1、-2 后缀）。
 
 用法：
-  python3 scripts/check-doc-anchors.py                 # 查 docs/framework
+  python3 scripts/check-doc-anchors.py                 # 查 git 跟踪的全部 .md（无 git 时退回 docs/）
   python3 scripts/check-doc-anchors.py docs/USER_GUIDE.md docs/framework
 退出码：0 = 零断链；1 = 有断链（逐条列出 文件:行: 链接 —— 原因）。
 
@@ -14,6 +14,7 @@
 """
 import os
 import re
+import subprocess
 import sys
 import urllib.parse
 
@@ -109,9 +110,17 @@ def collect(args):
     return sorted(files)
 
 
+def tracked_markdown():
+    # 缺省查全仓：只查 docs/framework 时，CHANGELOG、KNOWN-LIMITS、performance 等处的断链长期没人发现（2026-11-03）。
+    try:
+        out = subprocess.run(['git', '-C', ROOT, 'ls-files', '*.md'], capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return collect(['docs'])
+    return sorted(os.path.join(ROOT, f) for f in out.split('\n') if f)
+
+
 def main():
-    args = sys.argv[1:] or ['docs/framework']
-    files = collect(args)
+    files = collect(sys.argv[1:]) if sys.argv[1:] else tracked_markdown()
     broken = []
     for f in files:
         broken += check_file(f)

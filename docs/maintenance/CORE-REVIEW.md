@@ -123,7 +123,7 @@ FAIL github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine
 | DataEngine | WAL 准入与释放、投影预算、冲突键分道、逐条退回与快路幂等、连续成功前缀 checkpoint、fatal 与 Shutdown 交错 | 确认 RV-09。reserve 在 heldMu 下复查 fatal、WAL terminal；并行窗口等待已启动通道后计算连续前缀，这两项本轮未发现新违例 |
 | Sync | 提交门与 Guard 解锁、失败交付恢复、帧前缀采纳、订阅 revision/lifetime、Hold/Ready、发送与冷快照预算组合 | 未确认新增缺陷。复核 RV-07 的统一恢复入口，既有多会话/重绑/重连/移除回归通过；不回退已交付时钟，不以放宽客户端版本比较恢复 |
 
-CBM：项目 `Users-whb-roost-roost-core`，审查 generation `2026-11-01T08:28:30Z`。使用 search_graph、get_code_snippet、双向 trace 及 check_index_coverage；关键 trace 已读完整页，范围 coverage 未记录缺口。图谱对 `errors.Is`、`sync.Once.Do` 等同名调用存在错误归属，对接口调用也有漏连，因此关键关系均以当前源码核实，不用零入边证明没有调用者。`settlement_recovery_test.go` 的 metadata_changed 是上轮注释更新，已直接读取源码补证。全仓 19 个 partial 文件不在本轮关键执行路径中，未据此声称完整索引或完整审计。
+CBM：本机 roost-core 检出对应的项目，审查 generation `2026-11-01T08:28:30Z`。使用 search_graph、get_code_snippet、双向 trace 及 check_index_coverage；关键 trace 已读完整页，范围 coverage 未记录缺口。图谱对 `errors.Is`、`sync.Once.Do` 等同名调用存在错误归属，对接口调用也有漏连，因此关键关系均以当前源码核实，不用零入边证明没有调用者。`settlement_recovery_test.go` 的 metadata_changed 是上轮注释更新，已直接读取源码补证。全仓 19 个 partial 文件不在本轮关键执行路径中，未据此声称完整索引或完整审计。
 
 实际验证（macOS）：
 
@@ -183,7 +183,7 @@ FAIL github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
 
 使用真实 Codebase Memory 官方 CLI 执行 `index_repository`、`index_status`、`search_graph`、`trace_path`、`get_code_snippet`、`check_index_coverage`，没有用纯 rg 代替图谱。
 
-- 项目：`Users-whb-roost-roost-core`；根路径 `/Users/whb/roost/roost-core`。
+- 项目：本机 roost-core 检出对应的 Codebase Memory 项目；根路径为该检出。
 - 审查索引 generation：`2026-11-01T08:07:31Z`，full、ready，42,503 节点、392,769 关系；对应上述基线。后续文档提交刷新会产生新代际。
 - 所引用核心源码均检查 coverage，得到 `metadata_match / no_recorded_issue`。全仓 19 个 partial 文件主要为 C++ 宏、模板及配置，不在本轮确认缺陷的执行路径中；无缺口记录仍不等于图谱完整。
 - Sync Flush 的双向 trace 存在分页，已读完。图谱对 Go 接口分派及同名方法会漏连/误连，例如 Remote FinalizeLocked 的入边不完整，不能据此认定没有调用者；相应关系以 `msg.go`、`execution.go` 等当前源码补证。

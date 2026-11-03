@@ -51,11 +51,11 @@ scripts/physics/build-native.sh
 scripts/physics/run-viewer-server.sh -send-hz 20
 ```
 
-本机隔离工具与依赖复用方式（不改系统 Python）：
+本机隔离工具与依赖复用方式（不改系统 Python；`DEPS` 是放隔离依赖的目录，例如 `<工作区>/.physics-deps`）：
 
 ```sh
-PATH="/Users/whb/roost/.physics-deps/build-tools/bin:$PATH" \
-ROOST_PHYSICS_DEPS=/Users/whb/roost/.physics-deps \
+PATH="$DEPS/build-tools/bin:$PATH" \
+ROOST_PHYSICS_DEPS="$DEPS" \
 scripts/physics/build-native.sh
 ```
 
@@ -79,7 +79,7 @@ RC v1 基线清空对象表，增量包含删除和按 Chunk 聚合的绝对对�
 
 ### Unity 项目与复跑
 
-本机项目 `/Users/whb/roost/roost-physics-viewer`，场景 `Assets/Scenes/PhysicsComparison.unity`，打开后 Play。创建新副本与自动验证：
+本机项目 `<工作区>/roost-physics-viewer`，场景 `Assets/Scenes/PhysicsComparison.unity`，打开后 Play。创建新副本与自动验证：
 
 ```sh
 scripts/physics/create-viewer.sh /绝对路径/新Unity工程
