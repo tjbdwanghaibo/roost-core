@@ -75,7 +75,7 @@ var playerViews, _ = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 | `Watch(playerID, at, view)` 观战 / GM | 主视野不跟随实体、没有 self | 否 | `MoveView(playerID, to)` | `Unwatch(playerID)` |
 | `Show(entityID, at)` 怪物、掉落 | 否 | 是 | `Move(entityID, to)` | `Hide(entityID)` |
 
-已用 `Enter` 登记的玩家不能直接改成 `Watch`（`ErrInterestConfig`，先 `Leave`）；同一玩家再次 `Enter`（重连）按这次的位置与视野重新登记，要保留原视野就传 `ObserverView(playerID)` 的结果（demo 就这样做）。`Leave` 解除玩家的全部挂接、撤掉主视野与 self，并把实体从所有关系视野的成员里去掉；业务视野本身保留，玩家重新进场后由业务重新挂接。`Hide` 也把实体从关系视野成员里去掉。
+已用 `Enter` 登记的玩家不能直接改成 `Watch`（`ErrInterestConfig`，先 `Leave`）；同一玩家再次 `Enter`（重连）按这次的位置与视野重新登记，要保留原视野就传 `ObserverView(playerID)` 的结果（demo 就这样做）。`Leave` 解除玩家的全部挂接、撤掉主视野与 self，并把实体从所有关系视野的成员里去掉；业务视野本身保留，玩家重新进场后由业务重新挂接。`Hide` 也把实体从关系视野成员里去掉；以它为 self 的玩家（`Enter` 时的自身实体）在 Hide 期间看不见自己，它再次 `Show` / `Move` 进空间索引时 self 自动恢复（客户端收到一次全量）。所以“自身实体被 Hide 并注销、之后重新登记再 Show”（例如 Base 上自己的 mirror 过期后又回来）不需要业务另调 `Resubscribe`（维护者 2026-11-03 决定 E2 = B，回归 `TestSelfFollowsItsEntityThroughHideAndShow`）。
 
 **跟随**：空间视野跟随一个实体时视点取实体位置、随实体移动（`Move`、事务内的 `QueueMove` / `QueueSpatial`），并且看不见它自己跟随的实体；`SetViewFollow(id, 0)` 不再跟随，视点停在当前位置；换成跟随另一个实体时跳到那个实体的位置。实体 ID 数值恰好等于某个玩家 ID 的单位照常可见。
 

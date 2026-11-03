@@ -1,0 +1,7 @@
+--- FAIL: TestCellCrashPlayerReentersFromSnapshot (5.34s)
+    lifecycle_test.go:57: the client does not hold its own scene actor again: held {0 0 0 0 0 0 0 0 {0 0} false} (present false), removes [{1873 {14029451449465170456 4653331376 0x105e3b340}}], creates 1, mirror stats {Created:3 Updated:129 Stale:130 Tombstoned:0 Removed:0 Expired:1}
+--- FAIL: TestCellCrashPlayerReentersFromSnapshot (5.34s)
+    lifecycle_test.go:57: the client does not hold its own scene actor again: held {0 0 0 0 0 0 0 0 {0 0} false} (present false), removes [{1873 {14029451455150280576 9969617626 0x105e3b340}}], creates 1, mirror stats {Created:3 Updated:129 Stale:130 Tombstoned:0 Removed:0 Expired:1}
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	13.648s
+FAIL

@@ -44,10 +44,9 @@ type BaseState struct {
 	EnterHint   int32  `msgpack:"eh"`
 	LostEpoch   uint64 `msgpack:"lo"`
 	LostAt      int64  `msgpack:"la"`
-	// Shown：玩家已经以自己的 SceneActor mirror 进入 Base 的 Interest（第一份 witness 之后）；ShownGen 是那时自己的
-	// mirror 的代号（policy.Mirrors.Generation），代号变了说明 mirror 删过又回来，要重新进入。
-	Shown    bool   `msgpack:"sh"`
-	ShownGen uint64 `msgpack:"sg,omitempty"`
+	// Shown：玩家已经以自己的 SceneActor mirror 进入 Base 的 Interest（第一份 witness 之后）。自己的 mirror 过期删除
+	// （Hide + 注销）后再出现时，Interest 自己恢复“玩家看自己”（self 跟着目标的 Hide / Show 走，E2），这里不用再管。
+	Shown bool `msgpack:"sh"`
 }
 
 // Pos 返回快照位置。
@@ -350,21 +349,12 @@ func (n *Node) feedMirrors(st *BaseState, w *witnessMsg, now time.Time) {
 			apply(s)
 		}
 	}
-	if gen := n.cfg.Mirrors.Generation(w.Self.ID); st.Shown && gen != st.ShownGen {
-		// 自己的 mirror 被删过（owner 格崩溃、witness 停了超过 TTL）又回来了（可能是别的玩家的 witness 先把它建回来）：
-		// Mirrors 删除时 Hide + Unregister，Manager 丢了“玩家看自己”这份订阅，Interest 却还当它持有（self 不是空间
-		// 订阅，Hide 不撤它），Show 回来也不会重说。让 Interest 把这个玩家持有的订阅重说一遍（Manager 对已有的订阅
-		// 幂等，只补上丢了的），否则客户端从此看不到自己（2026-11-03 demo 端到端发现，
-		// TestCellCrashPlayerReentersFromSnapshot 钉住）。
-		n.cfg.Interest.Resubscribe(n.cfg.Session(st.Actor))
-		st.ShownGen = gen
-	}
 	if !st.Shown {
 		if err := n.cfg.Interest.Enter(n.cfg.Session(st.Actor), st.Actor, w.Self.Pos(), n.cfg.View); err != nil {
 			slog.Debug("cellworld: player not entered into interest", "actor", st.Actor, "err", err)
 			return
 		}
-		st.Shown, st.ShownGen = true, n.cfg.Mirrors.Generation(w.Self.ID)
+		st.Shown = true
 	}
 	// 过期清理按 Base 心跳节奏（同一进程里多个玩家共用一份 mirror，按时间戳限频，只有一个玩家真正去扫）。
 	if last := n.lastExpire.Load(); now.UnixNano()-last >= int64(n.cfg.WatchPeriod) && n.lastExpire.CompareAndSwap(last, now.UnixNano()) {

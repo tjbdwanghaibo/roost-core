@@ -141,7 +141,6 @@ type PlayerDao struct {
 	CellLostEpoch uint64 `dao:"nopersist,nosync" store:"cell_lost_epoch"`
 	CellLostAt    int64  `dao:"nopersist,nosync" store:"cell_lost_at"`
 	CellShown     bool   `dao:"nopersist,nosync" store:"cell_shown"`
-	CellShownGen  uint64 `dao:"nopersist,nosync" store:"cell_shown_gen"`
 	// CellHP / CellSnapEpoch / CellSnapSeq are the player's snapshot from the
 	// partitioned scene: the HP its SceneActor last wrote back and that
 	// write-back's version. Persisted — they are what a crashed Cell rebuilds

@@ -188,7 +188,7 @@ func ReadBase(d *db.PlayerDao) cellworld.BaseState {
 		AttackSeq:  d.GetCellAttackSeq(),
 		LastViewAt: d.GetCellViewAt(), LastEnterAt: d.GetCellEnterAt(), LastLeaseAt: d.GetCellLeaseAt(),
 		EnterHint: d.GetCellHint(), LostEpoch: d.GetCellLostEpoch(), LostAt: d.GetCellLostAt(),
-		Shown: d.GetCellShown(), ShownGen: d.GetCellShownGen(),
+		Shown: d.GetCellShown(),
 	}
 }
 
@@ -217,7 +217,6 @@ func WriteBase(d *db.PlayerDao, st cellworld.BaseState, sceneID int64) {
 	d.SetCellLostEpoch(st.LostEpoch)
 	d.SetCellLostAt(st.LostAt)
 	d.SetCellShown(st.Shown)
-	d.SetCellShownGen(st.ShownGen)
 	if snapshot {
 		d.SetSavedSceneID(sceneID)
 		d.SetSavedPosX(st.X)

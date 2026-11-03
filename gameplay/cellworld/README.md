@@ -38,7 +38,7 @@ Player 的 `BaseState` 在 PlayerDao；接法与端到端结果见 [FEATURE §10
 | 项 | 规则 |
 | --- | --- |
 | 不在内存的角色 | 不持久的种类（SceneActor / Monster）内存未命中时 getter 答 nil、不问 DataEngine 加载器（框架契约，`docs/framework/impl/02-nest-entity.md` 第 6a 条，E1）。Node 把名单原样交给 Nest：多实体请求里 handler 拿到 nil、按实体 ID 取角色；只锁角色的单实体请求（输入、换档）由 Nest 以 not found 丢弃 |
-| 自己的 mirror 重新出现 | `policy.Mirrors.Generation` 是 mirror 每次新建的代号，`BaseState.ShownGen` 记玩家进入 Interest 时自己的代号；代号变了（owner 格崩溃、mirror 过期后又回来）就 `Interest.Resubscribe`，否则客户端看不到自己 |
+| 自己的 mirror 重新出现 | owner 格崩溃、mirror 过期删除（Hide + 注销）后又回来时，Interest 自己恢复“玩家看自己”（self 跟着自身实体的 Hide / Show 走，框架契约，`docs/framework/guide/04-sync.md`，E2），Node 不再记 mirror 代号、不调 `Resubscribe` |
 
 ## 交接以事务为边界
 

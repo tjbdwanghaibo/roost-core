@@ -690,7 +690,7 @@ func (in *Interest) runOpLocked(op *viewOp) {
 			if old, ok := in.selfOf[op.player]; ok && old != op.subject {
 				in.contribute(pair{observer: op.player, subject: old}, contribution{}, entity.SyncProfile{}, false)
 			}
-			in.selfOf[op.player] = op.subject
+			in.setSelfLocked(op.player, op.subject)
 			in.contribute(pair{observer: op.player, subject: op.subject}, contribution{}, in.selfLayer, true)
 		}
 	case opWatch:
