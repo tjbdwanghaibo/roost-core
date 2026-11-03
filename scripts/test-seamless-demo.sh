@@ -183,4 +183,11 @@ fi
 for name in enter straight jitter diagonal attack_across_0 attack_across_1 monster_cross cell_crash ordinary_scene; do
 	grep -q "^STEP $name ok" "$out/drill.log" || { echo "seamless: step $name did not pass" >&2; exit 1; }
 done
+# 普通场景不回归：demo 自己的机器人（cmd/loadtest，完整链路）在没有分区配置的 sid 1003 上跑一轮。
+if ! go run -mod=mod ./cmd/loadtest -endpoint 127.0.0.1:7003 -server-id 1003 -count 2 -account-nats "$nats_url" -nats-prefix cwdemo \
+	-report "$out/loadtest-1003.json" >"$out/loadtest-1003.log" 2>&1; then
+	echo "seamless: the demo robots failed on the ordinary scene (sid 1003); see $out/loadtest-1003.log" >&2
+	tail -20 "$out/loadtest-1003.log" >&2
+	exit 1
+fi
 echo "seamless: all steps passed; evidence in $out"
