@@ -45,6 +45,20 @@ func TestCellCrashPlayerReentersFromSnapshot(t *testing.T) {
 		t.Fatalf("base stats = %+v, want re-enters", s)
 	}
 	w.assertSingleReal(actorID(1), b)
+	// 客户端：崩溃期间自己的 mirror 过期删除（witness 停了），重进后它以新版本回来，客户端又持有自己（HP 是快照的 90）。
+	// 2026-11-03 接 demo 端到端时发现：mirror 重新出现只 Show 进空间索引，玩家对自己的订阅（Enter 时建立）不会恢复。
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		self, ok := w.base.client.held(1)[actorID(1)]
+		if ok && self.HP == 90 && self.Ver.Epoch > before {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the client does not hold its own scene actor again: held %v (present %v), removes %v, creates %d, mirror stats %+v",
+				self, ok, w.base.client.removed(1), w.base.client.createCount(1, actorID(1)), w.base.mirrors.Stats())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // Base 进程消失：SceneActor 收不到输入 / 续租，LeaseTimeout 后自行离场，邻格的 Ghost 随删除消息消失。

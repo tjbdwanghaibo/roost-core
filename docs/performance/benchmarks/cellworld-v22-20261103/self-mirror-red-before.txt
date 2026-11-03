@@ -1,0 +1,7 @@
+# 2026-11-03 先红：TestCellCrashPlayerReentersFromSnapshot 新增“客户端重新持有自己”的断言，修复前（cellworld/base.go feedMirrors 不重说订阅）
+# 命令：GOWORK=off go test -count=1 -run TestCellCrashPlayerReentersFromSnapshot ./gameplay/cellworld/
+--- FAIL: TestCellCrashPlayerReentersFromSnapshot (5.44s)
+    lifecycle_test.go:50: timed out waiting for the client holds its own scene actor again
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	6.162s
+FAIL

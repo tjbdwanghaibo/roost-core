@@ -2,6 +2,7 @@ package cellworld
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -164,18 +165,51 @@ type procSpec struct {
 	grid      *Grid
 	transport Transport
 	mod       func(*NodeConfig)
+	// strict：Nest 的 getter 对不在内存的实体返回错误而不是 nil（DataEngine 装好加载器时对不持久种类就是这样）。
+	strict bool
+}
+
+// strictGetter 是 DataEngine 加载器的替身：不在内存的实体是“聚合不存在”的错误。
+type strictGetter struct{ access *fentity.ManagerAccess }
+
+var errNoAggregate = errors.New("test getter: entity aggregate not found")
+
+func (g strictGetter) Get(ctx context.Context, id int64, category fentity.EntityCategory) (fentity.IThreadSafeEntity, error) {
+	e, err := g.access.Get(ctx, id, category)
+	if err == nil && e == nil {
+		return nil, fmt.Errorf("%w: %d", errNoAggregate, id)
+	}
+	return e, err
+}
+
+func (g strictGetter) GetMany(ctx context.Context, ids []int64, categories []fentity.EntityCategory) ([]fentity.IThreadSafeEntity, error) {
+	out, err := g.access.GetMany(ctx, ids, categories)
+	if err != nil {
+		return nil, err
+	}
+	for i, e := range out {
+		if e == nil {
+			return nil, fmt.Errorf("%w: %d", errNoAggregate, ids[i])
+		}
+	}
+	return out, nil
 }
 
 func startProc(t testing.TB, spec procSpec) *testProc {
 	t.Helper()
 	p := &testProc{t: t, sid: spec.sid, manager: fentity.NewEntityManager()}
 	p.access = fentity.NewManagerAccess(p.manager)
-	p.engine = nest.NewEngine(nest.NestOptionWithGetter(p.access), nest.NestOptionWithTransactionCommitter(nullCommitter{}))
+	var getter fentity.Getter = p.access
+	if spec.strict {
+		getter = strictGetter{access: p.access}
+	}
+	p.engine = nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithTransactionCommitter(nullCommitter{}))
 	cfg := NodeConfig{
 		World: "w", SID: spec.sid, Grid: spec.grid, Transport: spec.transport, Nest: p.engine,
 		Destroy: func(ctx context.Context, e fentity.IThreadSafeEntity) error {
 			return p.manager.Destroy(ctx, e, fentity.DestroyReasonCommon, false)
 		},
+		Loaded:     func(id int64) bool { return p.manager.Get(id) != nil },
 		ViewRadius: worldViewRadius,
 	}
 	if spec.cell != nil {

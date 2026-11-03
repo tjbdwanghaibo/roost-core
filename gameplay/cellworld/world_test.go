@@ -43,6 +43,7 @@ type worldSpec struct {
 	grid      *Grid
 	transport func(t testing.TB, name string) Transport
 	cellMod   func(*NodeConfig)
+	strict    bool
 }
 
 type world struct {
@@ -68,7 +69,7 @@ func startWorld(t *testing.T, spec worldSpec) *world {
 	for _, id := range w.grid.Cells() {
 		w.startCell(id)
 	}
-	w.base = startProc(t, procSpec{sid: worldBaseSID, base: true, grid: w.grid, transport: spec.transport(t, "base"), mod: func(cfg *NodeConfig) {
+	w.base = startProc(t, procSpec{sid: worldBaseSID, base: true, grid: w.grid, transport: spec.transport(t, "base"), strict: spec.strict, mod: func(cfg *NodeConfig) {
 		cfg.Hooks.Witness = func(v View) {
 			w.mu.Lock()
 			w.views[v.Player] = append(w.views[v.Player], v)
@@ -95,7 +96,7 @@ func startWorld(t *testing.T, spec worldSpec) *world {
 }
 
 func (w *world) startCell(id CellID) {
-	w.cells[id] = startProc(w.t, procSpec{sid: w.grid.SID(id), cell: &id, grid: w.grid, transport: w.spec.transport(w.t, "cell"+id.String()), mod: func(cfg *NodeConfig) {
+	w.cells[id] = startProc(w.t, procSpec{sid: w.grid.SID(id), cell: &id, grid: w.grid, transport: w.spec.transport(w.t, "cell"+id.String()), strict: w.spec.strict, mod: func(cfg *NodeConfig) {
 		cfg.Hooks.RealChanged = w.real.hook
 		cfg.Hooks.DamageApplied = func(_ CellID, _ int64, hit HitID, _ int32) {
 			w.mu.Lock()
@@ -526,6 +527,22 @@ const (
 func TestWorldStraightCrossing(t *testing.T) {
 	spec, _ := loopbackSpec(t, 2, 1)
 	scenarioStraightCrossing(t, startWorld(t, spec), contMaxMiss, contMaxGap)
+}
+
+// 接 demo 时发现（2026-11-03）：DataEngine 装好加载器的 getter 对不在内存的不持久实体（SceneActor / Monster）返回错误，
+// 不是 nil。Node 把还不存在的角色放进加锁集合（交接装入、进入、生成、伤害打到不在本格的目标）时整个请求失败。
+// strict getter 下照样走直线跨界、跨界攻击：Node 只锁在内存里的角色（NodeConfig.Loaded）。
+func TestWorldWithAGetterThatRefusesAbsentEntities(t *testing.T) {
+	t.Run("straight", func(t *testing.T) {
+		spec, _ := loopbackSpec(t, 2, 1)
+		spec.strict = true
+		scenarioStraightCrossing(t, startWorld(t, spec), contMaxMiss, contMaxGap)
+	})
+	t.Run("attack", func(t *testing.T) {
+		spec, _ := loopbackSpec(t, 2, 1)
+		spec.strict = true
+		scenarioAttackAcrossAndDuringMigration(t, startWorld(t, spec), false)
+	})
 }
 
 func TestWorldJitterAtBoundary(t *testing.T) {

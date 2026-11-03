@@ -21,11 +21,8 @@ func (n *Node) handleAttack(es []fentity.IThreadSafeEntity, params []any, _ ...n
 		return nil, err
 	}
 	m := params[0].(*wireMsg)
-	attacker := actorAt(es, 1)
-	target := attacker
-	if m.Attack.Target != m.Attack.Hit.Attacker {
-		target = actorAt(es, 2)
-	}
+	attacker := actorOf(es, m.Attack.Hit.Attacker)
+	target := actorOf(es, m.Attack.Target)
 	fx := &txEffects{}
 	n.onAttack(r, attacker, target, m.From, m.Attack, time.Now(), fx)
 	n.registerCommit(fx)

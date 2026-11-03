@@ -109,6 +109,8 @@ type MirrorStats struct {
 
 // mirrorEntry 是一个已登记的 mirror。content 是原子指针：packer 在 Manager 的捕获路径上读它，不取 Mirrors 的锁。
 type mirrorEntry[T any] struct {
+	// gen 是这个对象这一次出现的代号（每次新建取 Mirrors 的下一个序号）：删除后同 ID 再出现时不同。
+	gen     uint64
 	version MirrorVersion
 	content atomic.Pointer[T]
 	state   *entity.SubjectSyncState
@@ -134,6 +136,7 @@ type Mirrors[T any] struct {
 	tombs   map[int64]mirrorTomb
 	closed  bool
 	stats   MirrorStats
+	lastGen uint64
 }
 
 // NewMirrors 校验配置并构造 Mirrors。
@@ -172,7 +175,8 @@ func (m *Mirrors[T]) Apply(item MirrorItem[T], now time.Time) (MirrorOutcome, er
 }
 
 func (m *Mirrors[T]) createLocked(item MirrorItem[T], at spatial.Point, now time.Time) (MirrorOutcome, error) {
-	e := &mirrorEntry[T]{version: item.Version, at: at, heardAt: now}
+	m.lastGen++
+	e := &mirrorEntry[T]{gen: m.lastGen, version: item.Version, at: at, heardAt: now}
 	content := item.Content
 	e.content.Store(&content)
 	e.state = entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{
@@ -299,6 +303,17 @@ func (m *Mirrors[T]) Get(id int64) (T, MirrorVersion, bool) {
 	}
 	var zero T
 	return zero, MirrorVersion{}, false
+}
+
+// Generation 返回 id 这一次出现的代号（0 = 当前不在）。同一个对象删除（显式或过期）后再出现时代号变化：调用方据此
+// 知道“它被删过又回来了”——Interest 里以它为自己的观察者，自己的那一份订阅随删除没了，要重新 Enter。
+func (m *Mirrors[T]) Generation(id int64) uint64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e := m.entries[id]; e != nil {
+		return e.gen
+	}
+	return 0
 }
 
 // Len 返回当前 mirror 数。

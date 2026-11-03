@@ -32,6 +32,13 @@ type NodeConfig struct {
 	Nest nest.Client
 	// Destroy 销毁一个实体（正式路径：EntityManager.Destroy），在 Node 的出站 goroutine 上调用，不在业务 worker 上。
 	Destroy func(context.Context, fentity.IThreadSafeEntity) error
+	// Loaded 报告本进程内存里有没有这个实体（正式路径：EntityManager.Get(id) != nil）。Node 只把在内存里的角色 / NPC
+	// 放进 Nest 请求的加锁集合：SceneActor / Monster 是不持久的实体，不在内存就是不存在，可 DataEngine 装好加载器的
+	// getter 对不持久的种类返回“聚合不存在”的错误而不是 nil，名单里有它整个请求就失败（2026-11-03 接 demo 时发现）。
+	// 被略去的实体在 handler 里按 nil 处理（与没有加载器的 getter 相同）；新建实体的请求都锁 Scene，所以“检查时不在、
+	// handler 里已被另一个 Scene handler 建出”时新建失败、事务回滚，由对方重传。nil 时名单原样交给 Nest（测试替身的 getter
+	// 对不存在的实体本来就返回 nil）。
+	Loaded func(id int64) bool
 
 	// ---- Cell 侧（Cell 为 nil 时本进程不托管格）----
 
@@ -361,13 +368,10 @@ func (n *Node) pump(ctx context.Context) {
 					flush()
 				}
 			case jobDispatch:
-				var err error
-				if len(j.ids) == 1 {
-					err = n.cfg.Nest.Dispatch(ctx, j.handler, j.ids[0], j.params)
-				} else {
-					err = n.cfg.Nest.DispatchMulti(ctx, j.handler, j.ids, j.params)
+				if len(j.ids) == 1 && !n.loaded(j.ids[0]) {
+					break // 只锁角色的跟进（换档）：角色已不在本进程，丢弃
 				}
-				if err != nil {
+				if err := n.dispatchLocked(ctx, j.handler, j.ids, j.params); err != nil {
 					n.stats.dispatchErrors.Add(1)
 				}
 			case jobDestroy:
@@ -461,13 +465,7 @@ func (n *Node) receive(data []byte) {
 	ctx := context.Background()
 	params := nest.Params{m}
 	dispatch := func(handler nest.HandlerName, ids ...int64) {
-		var err error
-		if len(ids) == 1 {
-			err = n.cfg.Nest.Dispatch(ctx, handler, ids[0], params)
-		} else {
-			err = n.cfg.Nest.DispatchMulti(ctx, handler, ids, params)
-		}
-		if err != nil {
+		if err := n.dispatchLocked(ctx, handler, ids, params); err != nil {
 			n.stats.dispatchErrors.Add(1)
 		}
 	}
@@ -484,12 +482,16 @@ func (n *Node) receive(data []byte) {
 		}
 	case kindOffer, kindOfferReply, kindDamage, kindEnter, kindLeave:
 		if cellOnly() {
-			if id := actorOf(m); id != 0 {
+			if id := messageActor(m); id != 0 {
 				dispatch(hActor, n.cfg.Scene, id)
 			}
 		}
 	case kindInput:
 		if cellOnly() && m.Input.ID != 0 {
+			if !n.loaded(m.Input.ID) {
+				n.stats.inputsDropped.Add(1) // 本进程没有这个角色：Base 从新 owner 的 witness 里看到序号落后会重发
+				return
+			}
 			dispatch(hInput, m.Input.ID)
 		}
 	case kindAttack:
@@ -505,7 +507,7 @@ func (n *Node) receive(data []byte) {
 			n.stats.decodeErrors.Add(1)
 			return
 		}
-		if player := n.cfg.PlayerEntity(actorOf(m)); player != 0 {
+		if player := n.cfg.PlayerEntity(messageActor(m)); player != 0 {
 			dispatch(hBase, player)
 		}
 	default:
@@ -513,8 +515,8 @@ func (n *Node) receive(data []byte) {
 	}
 }
 
-// actorOf 是消息所针对的角色 / NPC 的实体 ID。
-func actorOf(m *wireMsg) int64 {
+// messageActor 是消息所针对的角色 / NPC 的实体 ID。
+func messageActor(m *wireMsg) int64 {
 	switch m.Kind {
 	case kindOffer:
 		return m.Offer.State.ID
@@ -594,12 +596,41 @@ func regionOf(es []fentity.IThreadSafeEntity) (*Region, error) {
 	return host.CellRegion(), nil
 }
 
-func actorAt(es []fentity.IThreadSafeEntity, i int) Actor {
-	if len(es) <= i || es[i] == nil {
+// loaded 报告 id 是否在本进程内存里（NodeConfig.Loaded；没配时一律当作在）。
+func (n *Node) loaded(id int64) bool {
+	return n.cfg.Loaded == nil || n.cfg.Loaded(id)
+}
+
+// dispatchLocked 把消息投给 handler：ids[0] 是 Scene（多实体请求）或唯一的角色，其余角色不在内存的从加锁集合里略去
+// （见 NodeConfig.Loaded），handler 按实体 ID 取角色，不按位置。
+func (n *Node) dispatchLocked(ctx context.Context, handler nest.HandlerName, ids []int64, params nest.Params) error {
+	if len(ids) > 1 {
+		kept := ids[:1:1]
+		for _, id := range ids[1:] {
+			if n.loaded(id) {
+				kept = append(kept, id)
+			}
+		}
+		ids = kept
+	}
+	if len(ids) == 1 {
+		return n.cfg.Nest.Dispatch(ctx, handler, ids[0], params)
+	}
+	return n.cfg.Nest.DispatchMulti(ctx, handler, ids, params)
+}
+
+// actorOf 在 handler 拿到的实体里找 ID 为 id 的角色；不在加锁集合里（不存在、被略去）时为 nil。
+func actorOf(es []fentity.IThreadSafeEntity, id int64) Actor {
+	if id == 0 {
 		return nil
 	}
-	a, _ := es[i].(Actor)
-	return a
+	for _, e := range es {
+		if e != nil && e.ID() == id {
+			a, _ := e.(Actor)
+			return a
+		}
+	}
+	return nil
 }
 
 func (n *Node) handleReports(es []fentity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
@@ -646,7 +677,7 @@ func (n *Node) handleActor(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 		return nil, err
 	}
 	m := params[0].(*wireMsg)
-	a := actorAt(es, 1)
+	a := actorOf(es, messageActor(m))
 	now := time.Now()
 	fx := &txEffects{}
 	switch m.Kind {
@@ -676,15 +707,15 @@ func (n *Node) handleImplied(es []fentity.IThreadSafeEntity, params []any, _ ...
 	}
 	m := params[0].(*wireMsg)
 	fx := &txEffects{}
-	n.onOfferReply(r, actorAt(es, 1), m.From, m.OfferReply, time.Now(), fx)
+	n.onOfferReply(r, actorOf(es, m.OfferReply.ID), m.From, m.OfferReply, time.Now(), fx)
 	n.registerCommit(fx)
 	return nil, nil
 }
 
 // handleInput 只锁角色：移动意图与租约续期。
 func (n *Node) handleInput(es []fentity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-	a := actorAt(es, 0)
 	m := params[0].(*wireMsg)
+	a := actorOf(es, m.Input.ID)
 	if a == nil {
 		n.stats.inputsDropped.Add(1)
 		return nil, nil
@@ -928,7 +959,11 @@ func (n *Node) Spawn(ctx context.Context, st EntityState) error {
 	if st.ID == 0 || !n.rect.Contains(st.Pos()) {
 		return fmt.Errorf("cellworld: spawn %d at %v outside cell %v", st.ID, st.Pos(), n.cell)
 	}
-	_, err := n.cfg.Nest.RequestMulti(ctx, hSpawn, []int64{n.cfg.Scene, st.ID}, nest.Params{st})
+	ids := []int64{n.cfg.Scene}
+	if n.loaded(st.ID) {
+		ids = append(ids, st.ID) // 已在本进程：handler 看到它并拒绝
+	}
+	_, err := n.cfg.Nest.RequestMulti(ctx, hSpawn, ids, nest.Params{st})
 	return err
 }
 
@@ -937,10 +972,10 @@ func (n *Node) handleSpawn(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 	if err != nil {
 		return nil, err
 	}
-	if actorAt(es, 1) != nil {
+	st := params[0].(EntityState)
+	if actorOf(es, st.ID) != nil {
 		return nil, errors.New("cellworld: spawn: already exists")
 	}
-	st := params[0].(EntityState)
 	a, err := n.cfg.CreateActor(st.ID, KindNPC)
 	if err != nil {
 		return nil, err

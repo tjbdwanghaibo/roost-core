@@ -174,7 +174,10 @@ func (n *Node) periodOf(st EntityState) time.Duration {
 // handleTier 是区域的换档请求（只锁 NPC）：NPC 仍是本格 Real 且档位不同才换，版本前进，提交后报告区域。冻结中、已交出、
 // 已不在本进程的请求丢弃（区域按下一份报告重新判断）。
 func (n *Node) handleTier(es []fentity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
-	a := actorAt(es, 0)
+	var a Actor
+	if len(es) > 0 && es[0] != nil {
+		a, _ = es[0].(Actor)
+	}
 	idle, _ := params[0].(bool)
 	if a == nil {
 		return nil, nil
