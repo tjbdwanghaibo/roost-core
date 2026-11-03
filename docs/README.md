@@ -17,14 +17,13 @@
 | 处理回复错误（能否重试） | [回复错误判别](framework/guide/02-nest-entity.md#6-回复错误判别是否可能已提交能否重试) |
 | 修改代码、升级、排障、发版 | [维护手册](maintenance/README.md) · [已知限制](maintenance/KNOWN-LIMITS.md) · [外部验证清单](maintenance/EXTERNAL-VERIFICATION.md) |
 | 性能结论与复跑 | [性能报告与复跑](performance/README.md) |
-| 某个文件是干什么的 | [文档清单](maintenance/DOCUMENTS.md)：每个现存文档一行职责，及已删除资料的固定提交追溯 |
+| 某类文档放在哪、怎么维护 | [文档目录与维护规则](maintenance/DOCUMENTS.md)：各目录的权威内容、收敛规则，及已删除资料的固定提交追溯 |
 
 ## 专题
 
 - [独立 Gate 设计](framework/GATEWAY.md) 与 [Gate 实现契约](framework/GATEWAY-IMPLEMENTATION.md)：随 v1.25.0 交付的网关能力、协议契约与验收边界。
 - [包目录与职责边界](framework/PACKAGE-REORGANIZATION.md)：原 kit 接线已迁为 Wiring，领域与运行实现归所属模块。
 - [Nest 三池与 Await](framework/NEST-AWAIT.md)：short / long / io 三池、匿名异步恢复与池命名迁移表（随 v1.26.0 发布）。
-- [玩家接入与 Sync 命名后续事项](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/ACCESS-SYNC-FOLLOWUPS.md)：Session 服务可选化等待定方向。
 
 ## 历史
 

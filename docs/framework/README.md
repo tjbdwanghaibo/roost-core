@@ -78,7 +78,7 @@ DataEngine 更新粒度与验证：[递归增量持久化](DATAENGINE-INCREMENTA
 ## 维护入口
 
 - [维护、升级、故障处理](../maintenance/README.md)
-- [文档清单](../maintenance/DOCUMENTS.md)
+- [文档目录与维护规则](../maintenance/DOCUMENTS.md)
 - [历史文档一致性核对（v1.24 基线）](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/CONSISTENCY.md)
 - [已知限制与待验证能力](../maintenance/KNOWN-LIMITS.md)
 - [性能报告与复跑](../performance/README.md)

@@ -10,6 +10,7 @@
 | [KNOWN-LIMITS](KNOWN-LIMITS.md) | 当前能力限制、未验证范围与尚未确认问题 |
 | [DESIGN-TODO](DESIGN-TODO.md) | 尚待选择或排期的优化候选 |
 | [EXTERNAL-VERIFICATION](EXTERNAL-VERIFICATION.md) | 外部依赖与跨环境验证入口 |
+| [CORE-REVIEW](CORE-REVIEW.md)、[Linux 验收续报](LINUX-FUNCTIONAL-20261102.md)、[v1.38～v1.40 功能复核](FEATURE-REVIEW-20261102.md)、[evidence](evidence/) | 2026-11 起的核心审查与 Linux / 功能复核报告及其精简证据；仍有效的限制以 KNOWN-LIMITS 为准 |
 | [release](../release/README.md) | 固定版本的升级说明与验收；history 是合仓前只读变更记录 |
 | [skill](../skill/README.md) | 游戏内技能系统文档，不是 agent skill |
 | [AGENTS](../../AGENTS.md#游戏接入-skill) | Agent 维护入口与[生成游戏 skill](../agent-skills/roost-genre/SKILL.md) |
