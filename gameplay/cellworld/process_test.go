@@ -449,6 +449,7 @@ func launchChild(t *testing.T, spec childSpec) *cellProcess {
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestCellProcessChild$", "-test.count=1", "-test.timeout=10m")
 	cmd.Env = append(os.Environ(), childEnv+"="+string(raw))
+	cmd.Dir = t.TempDir() // App 子进程把日志写在工作目录下（log/），不留在包目录里
 	p := &cellProcess{cmd: cmd, ready: make(chan struct{}), done: make(chan struct{})}
 	cmd.Stderr = &lockedWriter{w: &p.stderr, mu: &p.mu}
 	if p.stdin, err = cmd.StdinPipe(); err != nil {
