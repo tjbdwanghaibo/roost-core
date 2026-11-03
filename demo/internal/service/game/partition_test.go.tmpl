@@ -18,7 +18,8 @@ func TestPartitionMirrorsDecodeAsPlayersAndMonsters(t *testing.T) {
 		state cellworld.EntityState
 		want  map[string]int64
 	}{
-		{"player", cellworld.EntityState{ID: 1, Kind: cellworld.KindPlayer, X: 2990, Y: 1500, HP: 80}, map[string]int64{"pos_x": 2990, "pos_y": 1500, "cell_hp": 80}},
+		{"player", cellworld.EntityState{ID: 1, Kind: cellworld.KindPlayer, X: 2990, Y: 1500, HP: 80, Panel: cellworld.Panel{MaxHP: 120, Attack: 14, Power: 40, Ver: 2}},
+			map[string]int64{"pos_x": 2990, "pos_y": 1500, "cell_hp": 80, "cell_max_hp": 120, "cell_attack": 14, "cell_power": 40}},
 		{"monster", cellworld.EntityState{ID: 2, Kind: cellworld.KindNPC, X: 3010, Y: 1500, HP: 70}, map[string]int64{"pos_x": 3010, "pos_y": 1500, "hp": 70, "template": 9001}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -62,8 +63,8 @@ func TestPartitionIsOffByDefault(t *testing.T) {
 	}
 }
 
-// The verdict the attacker's client gets (AttackResultPush, maintainer 2026-11-03 item 2): applied with the damage
-// and the target's HP after it, a retry the target's cell had already applied as a duplicate (no damage this
+// The verdict the attacker's client gets (AttackResultPush, maintainer 2026-11-03 item 2): applied with the damage the
+// target's cell actually dealt (the attacker's panel attack, item 3 = A) and the target's HP after it, a retry the target's cell had already applied as a duplicate (no damage this
 // time), a refusal with its reason, and "unknown" — the target's cell did not answer, so no HP is claimed.
 func TestAttackResultPushNamesTheVerdict(t *testing.T) {
 	hit := cellworld.HitID{Attacker: 1, Seq: 9}
@@ -74,12 +75,12 @@ func TestAttackResultPushNamesTheVerdict(t *testing.T) {
 		hp   int32
 		why  string
 	}{
-		{cellworld.AttackResult{Hit: hit, Target: 5, Outcome: cellworld.OutcomeApplied, HP: 60}, "applied", 10, 60, ""},
+		{cellworld.AttackResult{Hit: hit, Target: 5, Outcome: cellworld.OutcomeApplied, HP: 60, Damage: 14}, "applied", 14, 60, ""},
 		{cellworld.AttackResult{Hit: hit, Target: 5, Outcome: cellworld.OutcomeApplied, Duplicate: true, HP: 60}, "duplicate", 0, 60, ""},
 		{cellworld.AttackResult{Hit: hit, Target: 5, Outcome: cellworld.OutcomeRejected, Reason: cellworld.ReasonOutOfRange, HP: 70}, "rejected", 0, 70, "out_of_range"},
 		{cellworld.AttackResult{Hit: hit, Target: 5, Outcome: cellworld.OutcomeUnknown, HP: 70}, "unknown", 0, 0, ""},
 	} {
-		got := attackResultPush(tc.in, 10)
+		got := attackResultPush(tc.in)
 		if got.Seq != 9 || got.Target != 5 || got.Outcome != tc.want || got.Damage != tc.dmg || got.TargetHP != tc.hp || got.Reason != tc.why {
 			t.Errorf("%+v → %+v, want outcome %s damage %d hp %d reason %q", tc.in, got, tc.want, tc.dmg, tc.hp, tc.why)
 		}

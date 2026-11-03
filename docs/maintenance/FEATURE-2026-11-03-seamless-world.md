@@ -761,7 +761,7 @@ v2-6（分区模式下 `SetTeam` 的成员是 Player 实体）：E4 之后 Playe
 - E1～E3 是框架契约：合入时 CHANGELOG `[Unreleased]` 写清三条（不持久种类的 nil 答复与 `EntityNotFoundError`、Interest self 跟着 Hide / Show、`app.ModService` + `NestHandlerInstaller`），框架文档已改（impl/02 第 6a 条、guide/04 Interest 一节、impl/01 第 4 条）；codegen 的分发包装形状变了，按发版流程决定是否需要 `--min-core`（生成物用了新 API `nest.EntityNotFoundError`，需要）。
 - E3：Nest 的“派发时按包级表兜底解析”是否收敛（框架测试与引擎构造后注册的包级 handler 依赖它），以及 demo `game/partition.Install` 这一类“实体找本进程 Node”的原子指针是否要换成实体注入，单独定。
 - E4：确认 §11.4 的做法（场景桥 Manager 上的 self 绑定）替代翻 `access.player.self_sync` 开关。
-- 第 3、4 项按 §11.6 的决定实施；第 4 项实施时补端到端“两个 Base 上彼此不在视野内的队友互相看到位置 / HP”。
+- 第 3、4 项按 §11.6 的决定实施（第 3 项已实施，§12.2；合入时 CHANGELOG 写 cellworld 线上格式 v4 与 game-demo Player 新增的持久字段，升级须先停旧进程）；第 4 项实施时补端到端“两个 Base 上彼此不在视野内的队友互相看到位置 / HP”。
 - D4（`policy.Mirrors` 是否写进 impl/04）照旧；本轮 `Mirrors` 删掉了 `Generation`。
 
 ### 11.10 缺口更新
@@ -784,6 +784,8 @@ v2-6（分区模式下 `SetTeam` 的成员是 Player 实体）：E4 之后 Playe
 
 ## 12. v2.4：第 3 项 = A、第 4 项 = A、E4 确认（2026-11-04，进行中）
 
+> 第 3 项已实施（§12.2）；第 4 项等维护者定队伍来源（§12.1），本轮不做。
+
 维护者 2026-11-04 的决定（都按 §11.6 的推荐）：**第 3 项 = A**（养成输入留 Base；面板——最大 HP、攻击、power、将来的 buff——与当前 HP 的权威在 Cell 的 Real，Base 升级 / 换装时向目标 Real 发“面板变化”命令，与攻击同一套转发、去重、结果未知语义，结果随快照回写）；**第 4 项 = A（原型）**（Base 之间经 cellworld 的 NATS 传输每 1s 互发队员快照，收到的放进 mirror、用 GroupView 推给本进程队员；成员沿用 demo 的 `SetTeam`，成员所在 Base 按 Player 的静态 sid 归属推出，快照超过 3 个周期未更新从面板移除）；**E4 的做法确认**为场景桥 Manager 上的 `self` 绑定（`policy.Direct`），不打开 `access.player.self_sync`。
 
 ### 12.1 第 4 项：停下——`SetTeam` 的成员关系拿不到另一个 Base 上的另一半
@@ -801,9 +803,60 @@ v2-6（分区模式下 `SetTeam` 的成员是 Player 实体）：E4 之后 Playe
 
 推荐 A（不动普通场景与匹配 / 战斗）；需要维护者决定。
 
-### 12.2 第 3 项：设计定稿，实施留给下一轮
+### 12.2 第 3 项：实施结果
 
-本轮没有开始改第 3 项的代码（上一轮的 E1～E4 与追加两项已占满本次会话的上下文，避免留下半截改动）。按维护者的 A，下一轮的实施入口与顺序：
+维护者 2026-11-04 定方案 A，按本节原先定稿的设计实施（[定稿原文](#1221-定稿的设计)保留在下面）。codebase-memory-mcp 本轮连不上，结构结论（调用方、实现方清单）按当前源码与 `rg` 得出。修前输出在 [cellworld-v24-20261104](../performance/benchmarks/cellworld-v24-20261104/)。
+
+**改动**
+
+| 层 | 内容 | 位置 |
+| --- | --- | --- |
+| cellworld 状态 | `Panel{MaxHP, Attack, Power, Ver}` 进 `EntityState`（`ActorState` 随之带上）：Ghost、Offer（交接带走）、witness、回写、Enter 都带；零值字段 = 没有给出（NPC 目前没有面板）。`WireVersion` 3 → 4（未上线，不兼容：升级须先停旧进程） | `wire.go` |
+| 伤害 | 攻击者所在格（攻击者是那里的 Real）按攻击者面板的 `Attack` 定伤害值，没有面板时取 `Node.Attack(…, amount)` 的缺省值（demo 是 `scene.partition.attack_damage`）；转发给目标格的是定好的数值；`damageReply` / `attackResultMsg` / `AttackResult` 带实际伤害 `Damage`。扣血后按目标面板的 `MaxHP` 夹 | `combat.go` `onAttack` / `applyDamage` |
+| 上限 | 当前 HP 不超过 `MaxHP`（0 = 无上限）：`install` 时（Enter 的快照 HP 可能高于上限）、应用面板时、扣血后夹；**面板变化只改上限、不回血**（暂定，可改） | `EntityState.capHP` |
+| 面板命令 | `kindPanel`（Base → 当前 owner，锁 Scene + 角色，与 `kindDamage` 同一条 `hActor` 路径）：Real 只接受 `Ver` 更大的（同序号、更旧的答重复，`PanelsDuplicate`）；收到的格不是 Real 答“重试”与所知 owner（`PanelRetries`），Base 不按提示改投（没有 epoch 证据）。结论 `kindPanelResult` 带 Real 上现在的序号、HP、上限。幂等重进（Base 重启、看门狗误判，Real 还在）时 Enter 带来的更新面板同样按序号应用 | `combat.go` `onPanel` / `applyPanel`、`node.go` `onEnter` |
+| Base 侧 | `BasePlayer.CellPanel()`：玩家养成输入现在推出的面板数值。`Node.UpdatePanel(p)` 在调用方的 Player 事务里（升级、换装的 handler）读它，数值变了才编下一个序号，写进 `BaseState.Panel`（经 `SetBaseState`：回滚即撤销），提交后发给当前 owner；`Node.RefreshPanel(ctx, player)` 是不在 Player 事务里时的同一件事（一次 Player 请求）。Enter 带当前面板建 SceneActor。确认：面板结论、owner 通知（新增 `PanelVer`）、witness 里的自己、回写都带回 Real 上的序号（`PanelAcked`，只前进）。未确认时 owner 变化立即补发，否则 Base 心跳每 `LeasePeriod` 重发；`PanelDeadline`（新配置，缺省 2s，须长于 `LeasePeriod`）内没确认就经 `Hooks.PanelResult` 报一次 Unknown（`PanelUnknown`：可能已应用，Base 照旧以同一序号重发，直到确认）。handler 里没有同步请求 | `base.go` |
+| demo DAO | SceneActor / Monster：`CellMaxHP / CellAttack / CellPower / CellPanelVer`（nopersist,nosync，同名，一份映射）。Player：`CellMaxHP / CellAttack / CellPower`（persist,sync：SceneActor 的 mirror 用 PlayerDao 的同步编码，带 Real 上的面板）、`CellPanelVer / CellPanelAcked`（persist：序号跨 Base 重启单调；Real 已确认的序号随回写回来）、`CellPanelSentAt / CellPanelSince / CellPanelUnknown`（nopersist,nosync）。存储形状变化，未上线，不做旧数据兼容 | `db/def/{player,scene_actor,monster}.go`、`game/partition` |
+| demo 运行时 | `Player.CellPanel()` = 属性 Final 层的 hp / attack / power；`AttributeComponent.LevelUp` / `RefreshGear` 之后在同一笔事务里调 `partition.Node().UpdatePanel`（不是分区进程时什么都不做）。mirror 编码加 `cell_max_hp / cell_attack / cell_power`；`AttackResultPush.Damage` 改为目标格真正结算的值；`gm.scene.partition` 的实体表与玩家状态带面板，计数加 `panels`（applied / duplicate / unknown）。Player 的 `self` 视图本来就不含属性表与 `cell_hp`（§11.4），本轮新增的面板字段也不进它：客户端的面板与当前 HP 只从自己 SceneActor 的 mirror 来 | `game/entities/player/{cell_base,attribute_component}.go`、`internal/service/game/partition.go` |
+
+普通（非分区）场景：`partition.Node()` 为 nil，`cellPanelChanged` 不做任何事，新增的 Player 字段在普通场景里从不写（零值、不产生同步）；行为不变（§12.2 验证里的普通场景步与 demo 机器人）。没有新增带锁的进程级管理器。
+
+**先红后绿**（cellworld 用例在 `combat_test.go`，崩溃重建在 `lifecycle_test.go`）。为了让每条承诺各自红一次，修前分两段跑：只有类型与 API 骨架时（[unit-red-before.txt](../performance/benchmarks/cellworld-v24-20261104/unit-red-before.txt)），以及只做了“Enter 带面板”之后（[unit-red-stage2.txt](../performance/benchmarks/cellworld-v24-20261104/unit-red-stage2.txt)）：
+
+| 用例 | 钉住的承诺 | 修前（原文摘录） |
+| --- | --- | --- |
+| `TestDamageUsesTheAttackersPanel` | 本格与跨格转发的伤害都取攻击者面板的攻击（17），没有面板的攻击者取缺省值（3）；结论带实际伤害 | `attacker 1873 on 73557: damage 0, want 17`，HP 按缺省值 2 扣（98） |
+| `TestPanelCapsCurrentHPWithoutHealing` | 进入时快照 HP 100 夹到上限 60；上限 60 → 40 夹到 40；40 → 200 不回血；挨打照常扣；结果随回写进快照（HP 31、已确认序号 3），客户端里自己的 mirror 带新面板 | 骨架：`entered with … panel {MaxHP:0 …} hp 100, want panel ver 1`；只有 Enter 时：`lower max hp: … panel {MaxHP:60 … Ver:1} hp 60, want panel ver 2` |
+| `TestPanelCommandLostIsResent` | 面板命令全丢时 Real 停在旧版本、Base 未确认；恢复后重发、恰好应用一次 | 只有 Enter 时：`base panel {… Ver:1} acked 0, want ver 2 pending with ver 1 acked` |
+| `TestPanelCommandDuplicatedOrReorderedAppliesOnce` | 命令全部重复、ver 2 晚到 300ms：每版至多应用一次、晚到的旧版不覆盖 ver 3、答重复 | 只有 Enter 时：`latest panel: … {MaxHP:100 Attack:3 … Ver:1}, want panel ver 3` |
+| `TestPanelChangeDuringHandoff` | Offer 延迟 300ms、在旧格冻结时改面板：旧格答重试，Base 看到新 owner 后补发，新格应用；之后一次攻击的伤害是新攻击 13；交接后唯一 Real | `panel after the handoff: … Ver:1}, want panel ver 2` |
+| `TestPanelUnknownWhenUnconfirmed` | 只丢结论：witness 里的自己带回序号，确认、不报未知；命令与结论都丢：超过 `PanelDeadline` 报 Unknown 恰好一次，Real 仍是旧版本；恢复后应用、确认，Unknown 不再报 | 只有 Enter 时：`timed out waiting for base acknowledges ver 2 from the witness` |
+| `TestCellCrashPlayerReentersFromSnapshot`（加断言） | Cell 崩溃后按快照重建的 SceneActor 带 Base 的面板 | 骨架：`after restart: panel {MaxHP:0 …}, want {MaxHP:150 Attack:4 Power:23 Ver:1}` |
+
+demo 单测（[demo-unit-red-before.txt](../performance/benchmarks/cellworld-v24-20261104/demo-unit-red-before.txt)：DAO 字段已加、映射与打包未改时）：`TestCellStateRoundTripsThroughBothDAOs` / `TestCellStateRollsBackWithTheTransaction` / `TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack`（映射带面板与确认序号）、新增 `TestPendingPanelRollsBackWithTheTransaction`（升级那笔事务失败时待发面板随之回滚，修前 `pending panel not rolled back: {MaxHP:0 …} … want {MaxHP:110 Attack:12 Power:35 Ver:1}`）、`TestPartitionMirrorsDecodeAsPlayersAndMonsters`（修前 `cell_max_hp = <nil>, want 120`）、`TestAttackResultPushNamesTheVerdict`（修前推送伤害是配置的 10、want 14）、新增 `TestCellPanelIsTheFinalLayer`（修前 `built: panel {MaxHP:0 …}, final hp 100 attack 10 power 30`）。修后全部通过；cellworld 全包 `-race` 通过。
+
+**端到端**（`scripts/test-seamless-demo.sh`，私有依赖：`scripts/mirror-local.sh` 偏移 34000，etcd 58379；同机 macOS，Apple M5）。新增一步 `panel_level_up`（追加检查，失败不中断后续步骤）：p1 在格 (1,0) 里 `AddExp 100`（升一级）→ 客户端从自己 SceneActor 的 mirror 看到 `cell_max_hp` / `cell_attack` 变大、`cell_hp` 不变（不回血）；自己 Player 的 self 视图里没有 `cell_hp / cell_max_hp / cell_attack / cell_power / attr_final / attr_base`；Base 的 `gm.scene.partition` 里 `panel_acked == panel_ver`；之后打一只附近的怪一次，推送的伤害与客户端看到的 HP 下降都是新攻击值。原有的攻击步改为按 p1 自己 mirror 上的 `cell_attack` 计算期望伤害（没有这个字段时取 `attack_damage`）。
+
+| 轮 | 代码 | 结果 |
+| --- | --- | --- |
+| 修前（[e2e-red-before.txt](../performance/benchmarks/cellworld-v24-20261104/e2e-red-before.txt)） | 分支 HEAD `a46cd71e` + 新的演练客户端与脚本 | 只有 `panel_level_up` 红：`before the level-up: cell_max_hp 0 cell_attack 10, want a panel with the level-0 attack 10`（mirror 里没有面板）；其余 11 步全绿（伤害是固定的 10，p2 崩溃前 HP 100 → 80） |
+| 修后（[e2e-green.txt](../performance/benchmarks/cellworld-v24-20261104/e2e-green.txt)、[evidence.json](../performance/benchmarks/cellworld-v24-20261104/e2e-green-evidence.json)） | 本轮 | 12 步全部通过。`panel_level_up`：`cell_max_hp` 100 → 110、`cell_attack` 10 → 12、`cell_hp` 保持 100；Base 侧面板 ver 2 已确认（attack 12、max_hp 110、power 35）；升级后一击伤害 12、目标 HP 100 → 88。跨界打怪两轮仍是 applied 10 / duplicate 0、伤害 10（0 级的攻击恰好等于 `attack_damage`）；`cell_crash` 里 p1（已升级）打 p2 两下 100 → 76，按快照重建后 HP 76；`base_restart`、普通场景（`Move` 照旧、`MoveIntent` 得 `scene_not_partitioned`、demo 机器人在 sid 1003 跑一轮）通过 |
+
+**不回归**（同一工作树、同机，`GOWORK=off`、从模块根）：gofmt 无输出；`go build ./... && go vet ./...`；glsvet（`./framework/nest/... ./framework/entity/... ./framework/dataengine/engine/... ./framework/sync/entitysync/... ./gameplay/cellworld/...`）无违例；`python3 scripts/check-doc-anchors.py` 0 broken；根包 `go test -count=1 .`；`go test -race -count=1 ./gameplay/cellworld/`（含 nats / process 子进程用例）；全量 `go test -count=1 ./...`（含 codegen）；`scripts/test-demo-generated.sh`（私有依赖，真实依赖用例全部 PASS、`roost id check` / `roost generate --check` 通过）、`test-mmorpg-generated.sh`、`test-sync-modes-generated.sh`、`test-genres-generated.py` 13 类全部 passed；新生成的 game-demo `go generate ./...` 后 porcelain 干净；本仓 `go generate ./...` 后 porcelain 干净；端到端见上。本轮没有改 nest / entity / sync 的代码（只动 cellworld 与 game-demo 模板），所以这几个包的 `-race` 没有重跑，它们的普通测试在全量里通过。
+
+**剩余缺口**
+
+| # | 缺口 | 性质 |
+| --- | --- | --- |
+| v2.4-1 | 面板变化不回血（上限变大时当前 HP 不变）、上限变小直接夹：暂定，产品可改（例如升级回满、按比例缩放） | 需要产品确认 |
+| v2.4-2 | NPC 没有面板（`attack_damage` 缺省伤害对怪物之间不适用：怪不攻击）；Monster DAO 字段已备好，怪的面板来源（刷怪表 / 模板）没接 | 原型简化 |
+| v2.4-3 | buff 层：面板里只有 Base 推出的 Final 层；Cell 上自己的加成（buff、场景效果）还没有，将来在 Real 上把 Base 的面板当输入、在 Cell 上重算 Final | 后续 |
+| v2.4-4 | “结果未知”之后 Base 无限期以同一序号重发（面板是状态，最新一份覆盖即可，不像攻击那样放弃）：owner 长期不可达时每 `LeasePeriod` 一条消息，直到看门狗重进（Enter 带最新面板）或玩家离开 | 原型简化 |
+| v2.4-5 | 普通场景的 Player 也多了 8 个 `Cell*` 面板字段（5 个持久，普通场景里从不写） | 原型简化（与 v2.2 的 `CellHP` 同理） |
+
+#### 12.2.1 定稿的设计
+
+（2026-11-04 写定、本轮照此实施；与实施的差别：上限的夹法写成“只降不升”的一个函数，Base 侧的确认多了 owner 通知与 witness 两条来源，结果未知后继续重发。）
 
 1. **cellworld 状态**：`EntityState` / `ActorState` 增加面板 `Panel{MaxHP, Attack, Power, Ver}`（Ver 是 Base 侧面板序号，接收端只接受更新的版本，与攻击序号同一种去重）；Offer / Ghost / witness / 回写都带它；`onDamage` 的伤害改为攻击者面板的 `Attack`（`scene.partition.attack_damage` 留作面板缺省），扣血后按 `MaxHP` 夹当前 HP；交接带走面板。
 2. **命令消息**：`kindPanel`（Base → 当前 owner 的 Real），走 `Node.Attack` 同一条路径：Player 上的一次 Nest 事务里把“想要的面板 + 序号”写进 `BaseState`（`PanelSeq` / `Panel`），提交后发给 owner；owner 变化、超时未确认由 Base 心跳重发；Real 上按序号幂等应用（同序号再到算 duplicate），结论（applied / duplicate / unknown）回给 Base，随下一次回写进快照（`CellPanel*` 持久字段）。上限变小时当前 HP 夹到新上限；升级是否回血按维护者 A 的字面“面板变化”只改上限，不回血（实施时在 §12 记下，若需回血再定）。

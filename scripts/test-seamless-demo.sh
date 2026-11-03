@@ -193,7 +193,7 @@ if [[ "$status" != 0 ]]; then
 	echo "seamless: drill failed (status $status); logs in $out" >&2
 	exit "$status"
 fi
-for name in enter own_state straight jitter diagonal attack_across_0 attack_across_1 monster_cross cell_crash base_restart ordinary_scene; do
+for name in enter own_state straight jitter diagonal attack_across_0 attack_across_1 panel_level_up monster_cross cell_crash base_restart ordinary_scene; do
 	grep -q "^STEP $name ok" "$out/drill.log" || { echo "seamless: step $name did not pass" >&2; exit 1; }
 done
 # 普通场景不回归：demo 自己的机器人（cmd/loadtest，完整链路）在没有分区配置的 sid 1003 上跑一轮。

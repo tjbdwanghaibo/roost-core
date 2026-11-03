@@ -20,6 +20,10 @@ type NodeStats struct {
 	// （心跳登记已撤销，实体正在销毁）。IdleNPCs 是最近一次区域心跳时本格慢档的 NPC Real 数。
 	ActorBeats, TierIdle, TierFast, PeriodErrors uint64
 	Reals, Ghosts, IdleNPCs                      uint64
+	// 面板（第 3 项）：Cell 侧 PanelsApplied（真正应用）/ PanelsDuplicate（重复或过期）/ PanelRetries（收到时不是 Real）；
+	// Base 侧 PanelsSent（含重发）/ PanelUnknown（超过 PanelDeadline 未确认）。
+	PanelsApplied, PanelsDuplicate, PanelRetries uint64
+	PanelsSent, PanelUnknown                     uint64
 }
 
 type nodeCounters struct {
@@ -37,6 +41,8 @@ type nodeCounters struct {
 	writebacks, mirrorErrors                        atomic.Uint64
 	actorBeats, tierIdle, tierFast, periodErrors    atomic.Uint64
 	reals, ghosts, idleNPCs                         atomic.Uint64
+	panelsApplied, panelsDuplicate, panelRetries    atomic.Uint64
+	panelsSent, panelUnknown                        atomic.Uint64
 }
 
 // Stats 返回计数快照，任何 goroutine 可调用。
@@ -57,5 +63,7 @@ func (n *Node) Stats() NodeStats {
 		Writebacks: s.writebacks.Load(), MirrorErrors: s.mirrorErrors.Load(),
 		ActorBeats: s.actorBeats.Load(), TierIdle: s.tierIdle.Load(), TierFast: s.tierFast.Load(), PeriodErrors: s.periodErrors.Load(),
 		Reals: s.reals.Load(), Ghosts: s.ghosts.Load(), IdleNPCs: s.idleNPCs.Load(),
+		PanelsApplied: s.panelsApplied.Load(), PanelsDuplicate: s.panelsDuplicate.Load(), PanelRetries: s.panelRetries.Load(),
+		PanelsSent: s.panelsSent.Load(), PanelUnknown: s.panelUnknown.Load(),
 	}
 }

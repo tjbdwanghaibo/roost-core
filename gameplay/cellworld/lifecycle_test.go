@@ -27,6 +27,8 @@ func TestCellCrashPlayerReentersFromSnapshot(t *testing.T) {
 	spec.cellMod = func(cfg *NodeConfig) { cfg.WritebackEvery = 200 * time.Millisecond }
 	w := startWorld(t, spec)
 	b := CellID{1, 0}
+	panel := Panel{MaxHP: 150, Attack: 4, Power: 23, Ver: 1}
+	w.base.player(1).setCellPanel(panel)
 	w.enter(1, spatial.Point{X: 12000, Y: 5000})
 	w.enter(2, spatial.Point{X: 12200, Y: 5000})
 	time.Sleep(3 * worldPeriod)
@@ -43,6 +45,10 @@ func TestCellCrashPlayerReentersFromSnapshot(t *testing.T) {
 	v := w.waitView(1, 5*time.Second, "view after restart", func(v View) bool { return v.Epoch > before })
 	if v.Cell != w.grid.SID(b) || v.Self.X != 12000 || v.Self.HP != 90 {
 		t.Fatalf("after restart: view from %d at (%d,%d) hp %d, want B at (12000,5000) hp 90", v.Cell, v.Self.X, v.Self.Y, v.Self.HP)
+	}
+	// 面板随 Base 的 Enter 回到重建的 SceneActor（第 3 项：面板的来源是 Base 的养成输入，崩溃的 Cell 不带走它）。
+	if v.Self.Panel != panel {
+		t.Fatalf("after restart: panel %+v, want %+v", v.Self.Panel, panel)
 	}
 	if s := w.base.node.Stats(); s.Reenters == 0 {
 		t.Fatalf("base stats = %+v, want re-enters", s)

@@ -27,7 +27,8 @@ func (nullCommitter) Commit(context.Context, nest.CommitRecord) error { return n
 func sampleState(id int64, kind cellworld.EntityKind, seq uint64) cellworld.ActorState {
 	return cellworld.ActorState{
 		EntityState: cellworld.EntityState{ID: id, Kind: kind, Base: 1000, X: 2990, Y: 1500, VX: 120, VY: -30, HP: 70,
-			Ver: cellworld.Version{Epoch: 3, Seq: seq}, Idle: kind == cellworld.KindNPC},
+			Ver: cellworld.Version{Epoch: 3, Seq: seq}, Idle: kind == cellworld.KindNPC,
+			Panel: cellworld.Panel{MaxHP: 120, Attack: 14, Power: 40, Ver: seq}},
 		Role: cellworld.RoleFrozen, LastInput: 9,
 		Applied:    []cellworld.AppliedHit{{Hit: cellworld.HitID{Attacker: 77, Seq: 1}, At: 100}, {Hit: cellworld.HitID{Attacker: 78, Seq: 4}, At: 200}},
 		Handoff:    &cellworld.HandoffState{Target: cellworld.CellID{Col: 1}, Epoch: 3, StartedAt: 300, LastSent: 400},
@@ -114,7 +115,8 @@ func TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	st := cellworld.BaseState{Actor: 7, InWorld: true, Cell: 1001, Epoch: 2, X: 2900, Y: 1500, HP: 100, IntentSeq: 3, VX: 100, AttackSeq: 4, Shown: true}
+	st := cellworld.BaseState{Actor: 7, InWorld: true, Cell: 1001, Epoch: 2, X: 2900, Y: 1500, HP: 100, IntentSeq: 3, VX: 100, AttackSeq: 4, Shown: true,
+		Panel: cellworld.Panel{MaxHP: 110, Attack: 12, Power: 35, Ver: 2}, PanelAcked: 1, PanelSentAt: 50, PanelSince: 40, PanelUnknown: true}
 	write(st)
 	if got := partition.ReadBase(dao, sceneID); !reflect.DeepEqual(got, st) {
 		t.Fatalf("read back\n got %+v\nwant %+v", got, st)
@@ -164,5 +166,43 @@ func TestReloadedPlayerEntersAtItsSavedPosition(t *testing.T) {
 	}
 	if got := partition.ReadBase(reloaded(999), sceneID); got.X != 0 || got.Y != 0 {
 		t.Fatalf("a position saved under another scene was used: %+v", got)
+	}
+}
+
+// 第 3 项 = A：升级 / 换装的那笔 Player 事务把新面板与序号写进路由状态（持久字段，序号跨 Base 重启单调）；事务失败时
+// 面板随等级一起回滚，Node 在提交后才发它，所以回滚的面板从没发出去过。
+func TestPendingPanelRollsBackWithTheTransaction(t *testing.T) {
+	dao := db.NewPlayerDao()
+	player.RegisterEntity()
+	id, err := entity.BuildEntityID(9, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dao.SetId(id)
+	const sceneID = 12345
+	before := cellworld.BaseState{Actor: 9, InWorld: true, Cell: 1001, Epoch: 1, HP: 100,
+		Panel: cellworld.Panel{MaxHP: 110, Attack: 12, Power: 35, Ver: 1}, PanelAcked: 1}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "enter", func() (any, error) {
+		partition.WriteBase(dao, before, sceneID)
+		return nil, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("a later step of the level-up failed")
+	_, err = nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "level_up", func() (any, error) {
+		next := partition.ReadBase(dao, sceneID)
+		next.Panel = cellworld.Panel{MaxHP: 120, Attack: 14, Power: 40, Ver: 2}
+		next.PanelSince = 77
+		partition.WriteBase(dao, next, sceneID)
+		return nil, failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("transaction: %v", err)
+	}
+	if got := partition.ReadBase(dao, sceneID); got.Panel != before.Panel || got.PanelAcked != 1 || got.PanelSince != 0 {
+		t.Fatalf("pending panel not rolled back: %+v acked %d since %d, want %+v", got.Panel, got.PanelAcked, got.PanelSince, before.Panel)
+	}
+	if dao.GetCellPanelVer() != 1 || dao.GetCellMaxHP() != 110 {
+		t.Fatalf("stored panel ver %d max hp %d, want 1 and 110", dao.GetCellPanelVer(), dao.GetCellMaxHP())
 	}
 }

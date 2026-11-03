@@ -30,19 +30,25 @@ func (n *Node) handleAttack(es []fentity.IThreadSafeEntity, params []any, _ ...n
 }
 
 func (n *Node) onAttack(r *Region, attacker, target Actor, from int32, req *attackReq, now time.Time, fx *txEffects) {
-	result := func(outcome DamageOutcome, reason RejectReason, duplicate bool, hp int32) {
+	result := func(v verdict) {
 		fx.send(from, &wireMsg{Kind: kindAttackResult, AttackResult: &attackResultMsg{
-			Hit: req.Hit, Target: req.Target, Outcome: outcome, Reason: reason, Duplicate: duplicate, HP: hp,
+			Hit: req.Hit, Target: req.Target, Outcome: v.Outcome, Reason: v.Reason, Duplicate: v.Duplicate, HP: v.HP, Damage: v.Damage,
 		}})
 	}
 	if _, pending := r.attacks.get(req.Hit); pending {
 		return // 同一攻击已在途，结论到了会报
 	}
 	if attacker == nil || attacker.CellState().Role != RoleReal {
-		result(OutcomeRejected, ReasonNotOwner, false, 0)
+		result(verdict{Outcome: OutcomeRejected, Reason: ReasonNotOwner})
 		return
 	}
-	from0 := attacker.CellState().Pos()
+	as := attacker.CellState()
+	from0 := as.Pos()
+	// 伤害值在攻击者所在格定下：攻击者是这里的 Real，面板（攻击）的权威就在这里；转发给目标格的是定好的数值。
+	amount := req.Amount
+	if as.Panel.Attack > 0 {
+		amount = as.Panel.Attack
+	}
 	var targetState EntityState
 	var targetRole Role
 	var owner CellID
@@ -59,20 +65,19 @@ func (n *Node) onAttack(r *Region, attacker, target Actor, from int32, req *atta
 		targetState, targetRole, owner, known = r.lookup(req.Target, n.cell)
 	}
 	if !known {
-		result(OutcomeRejected, ReasonNotVisible, false, 0)
+		result(verdict{Outcome: OutcomeRejected, Reason: ReasonNotVisible})
 		return
 	}
 	if !spatial.WithinDistance(from0, targetState.Pos(), n.cfg.AttackRange) {
-		result(OutcomeRejected, ReasonOutOfRange, false, targetState.HP)
+		result(verdict{Outcome: OutcomeRejected, Reason: ReasonOutOfRange, HP: targetState.HP})
 		return
 	}
 	if target != nil && targetRole == RoleReal {
-		outcome, reason, duplicate, hp := n.applyDamage(target, req.Hit, req.Amount, now, fx)
-		result(outcome, reason, duplicate, hp)
+		result(n.applyDamage(target, req.Hit, amount, now, fx))
 		return
 	}
 	p := pendingAttack{
-		Base: from, Hit: req.Hit, Target: req.Target, Amount: req.Amount,
+		Base: from, Hit: req.Hit, Target: req.Target, Amount: amount,
 		TargetCell: owner, Deadline: now.Add(n.cfg.AttackDeadline).UnixNano(), NextSend: now.Add(n.cfg.AttackRetry).UnixNano(),
 	}
 	r.attacks.set(req.Hit, p)
@@ -91,7 +96,8 @@ func (n *Node) onDamage(r *Region, target Actor, from int32, req *damageReq, now
 	reply := &damageReply{Hit: req.Hit, Target: req.Target}
 	switch {
 	case target != nil && target.CellState().Role == RoleReal:
-		reply.Outcome, reply.Reason, reply.Duplicate, reply.HP = n.applyDamage(target, req.Hit, req.Amount, now, fx)
+		v := n.applyDamage(target, req.Hit, req.Amount, now, fx)
+		reply.Outcome, reply.Reason, reply.Duplicate, reply.HP, reply.Damage = v.Outcome, v.Reason, v.Duplicate, v.HP, v.Damage
 	default:
 		reply.Outcome = OutcomeRetry
 		if target != nil {
@@ -119,7 +125,7 @@ func (n *Node) onDamageReply(r *Region, rep *damageReply, now time.Time, fx *txE
 	case OutcomeApplied, OutcomeRejected:
 		r.attacks.del(rep.Hit)
 		fx.send(p.Base, &wireMsg{Kind: kindAttackResult, AttackResult: &attackResultMsg{
-			Hit: p.Hit, Target: p.Target, Outcome: rep.Outcome, Reason: rep.Reason, Duplicate: rep.Duplicate, HP: rep.HP,
+			Hit: p.Hit, Target: p.Target, Outcome: rep.Outcome, Reason: rep.Reason, Duplicate: rep.Duplicate, HP: rep.HP, Damage: rep.Damage,
 		}})
 	case OutcomeRetry:
 		n.stats.damageRetries.Add(1)
@@ -130,27 +136,86 @@ func (n *Node) onDamageReply(r *Region, rep *damageReply, now time.Time, fx *txE
 	}
 }
 
+// verdict 是一次伤害结算的结论；Damage 只在真正结算（Applied 且不是重复）时非零。
+type verdict struct {
+	Outcome   DamageOutcome
+	Reason    RejectReason
+	Duplicate bool
+	HP        int32
+	Damage    int32
+}
+
 // applyDamage 在目标 Real 上结算一次伤害（目标的锁内，改它的 DAO）。命中去重表返回重复；去重窗口内已满时拒绝
-// （不淘汰旧记录，否则迟到的重试会被再结算一次）。
-func (n *Node) applyDamage(target Actor, hit HitID, amount int32, now time.Time, fx *txEffects) (DamageOutcome, RejectReason, bool, int32) {
+// （不淘汰旧记录，否则迟到的重试会被再结算一次）。扣血之后按目标面板的上限夹（上限只在面板变化时动，这里是守住
+// “当前 HP 不超过上限”这条不变量）。
+func (n *Node) applyDamage(target Actor, hit HitID, amount int32, now time.Time, fx *txEffects) verdict {
 	st := target.CellState()
 	nowNano := now.UnixNano()
 	applied := pruneApplied(st.Applied, nowNano, n.cfg.DedupWindow)
 	if slices.ContainsFunc(applied, func(a AppliedHit) bool { return a.Hit == hit }) {
-		return OutcomeApplied, ReasonNone, true, st.HP
+		return verdict{Outcome: OutcomeApplied, Duplicate: true, HP: st.HP}
 	}
 	if st.HP <= 0 {
-		return OutcomeRejected, ReasonDead, false, st.HP
+		return verdict{Outcome: OutcomeRejected, Reason: ReasonDead, HP: st.HP}
 	}
 	if len(applied) >= n.cfg.MaxAppliedHits {
-		return OutcomeRejected, ReasonBusy, false, st.HP
+		return verdict{Outcome: OutcomeRejected, Reason: ReasonBusy, HP: st.HP}
 	}
-	st.HP = max(0, st.HP-max(0, amount))
+	amount = max(0, amount)
+	st.HP = max(0, st.HP-amount)
+	st.capHP()
 	st.Applied = append(applied, AppliedHit{Hit: hit, At: nowNano})
 	target.SetCellState(st)
 	if hook := n.cfg.Hooks.DamageApplied; hook != nil {
 		cell, id, hp := n.cell, st.ID, st.HP
 		fx.hooks = append(fx.hooks, func() { hook(cell, id, hit, hp) })
 	}
-	return OutcomeApplied, ReasonNone, false, st.HP
+	return verdict{Outcome: OutcomeApplied, HP: st.HP, Damage: amount}
+}
+
+// onPanel：Base 发来的面板变化（锁 Scene 与该角色）。本格是 Real 就按序号应用（同序号或更旧的答重复），否则答“重试”
+// 与所知 owner——Base 不按提示改投（没有 epoch 证据），等 owner 通知或重发间隔。
+func (n *Node) onPanel(r *Region, a Actor, from int32, req *panelReq, now time.Time, fx *txEffects) {
+	reply := &panelResult{ID: req.ID, Ver: req.Panel.Ver}
+	switch {
+	case a != nil && a.CellState().Role == RoleReal:
+		st := a.CellState()
+		if n.applyPanel(&st, req.Panel, now, fx) {
+			a.SetCellState(st)
+			n.stats.panelsApplied.Add(1)
+		} else {
+			reply.Duplicate = true
+			n.stats.panelsDuplicate.Add(1)
+		}
+		reply.Outcome, reply.Ver, reply.HP, reply.MaxHP = OutcomeApplied, st.Panel.Ver, st.HP, st.Panel.MaxHP
+	default:
+		reply.Outcome = OutcomeRetry
+		n.stats.panelRetries.Add(1)
+		if a != nil {
+			if cs := a.CellState(); cs.Role == RoleFrozen && cs.Handoff != nil {
+				reply.Hint = n.cfg.Grid.SID(cs.Handoff.Target)
+			}
+		}
+		if reply.Hint == 0 {
+			if _, _, owner, ok := r.lookup(req.ID, n.cell); ok && owner != n.cell {
+				reply.Hint = n.cfg.Grid.SID(owner)
+			}
+		}
+	}
+	fx.send(from, &wireMsg{Kind: kindPanelResult, PanelResult: reply})
+}
+
+// applyPanel 在 Real 上应用一版面板（目标的锁内，改 st，由调用方写回 DAO）：只接受序号更大的，按新上限夹当前 HP
+// （只降不升：面板变化不回血）。返回是否应用了。
+func (n *Node) applyPanel(st *ActorState, p Panel, now time.Time, fx *txEffects) bool {
+	if p.Ver <= st.Panel.Ver {
+		return false
+	}
+	st.Panel = p
+	st.capHP()
+	if hook := n.cfg.Hooks.PanelApplied; hook != nil {
+		cell, id, hp := n.cell, st.ID, st.HP
+		fx.hooks = append(fx.hooks, func() { hook(cell, id, p, hp) })
+	}
+	return true
 }

@@ -50,6 +50,30 @@ func (player *Player) SetBaseState(st cellworld.BaseState) {
 	partition.WriteBase(player.dao, st, partition.SceneID())
 }
 
+// CellPanel is the battle panel the player's growth gives now — the Final
+// attribute layer's hp, attack and power (maintainer decision 2026-11-04,
+// item 3 = A: the growth inputs stay on the Base, the panel's authority is
+// the cell's Real). The Node numbers it and sends it when it changed.
+func (player *Player) CellPanel() cellworld.Panel {
+	final, ok := player.AttributeComp().Final()
+	if !ok {
+		return cellworld.Panel{}
+	}
+	return cellworld.Panel{MaxHP: int32(final.HP), Attack: int32(final.Attack), Power: int32(final.Power)}
+}
+
+// cellPanelChanged hands a changed panel to the partitioned scene, inside the
+// transaction that changed the growth (level-up, equipment): the new panel
+// and its sequence are written into the Player's routing state with it, and
+// the Node sends it to the owner cell after the commit — a rollback takes it
+// back with the level. No request is made from here (the handler must not
+// wait). A process without a partitioned scene does nothing.
+func (player *Player) cellPanelChanged() {
+	if node := partition.Node(); node != nil {
+		_ = node.UpdatePanel(player)
+	}
+}
+
 func (player *Player) StartBase() error {
 	if player.mapComp.cellBase == nil {
 		return errors.New("player: this process runs no partitioned scene")

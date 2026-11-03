@@ -43,6 +43,7 @@ type worldSpec struct {
 	grid      *Grid
 	transport func(t testing.TB, name string) Transport
 	cellMod   func(*NodeConfig)
+	baseMod   func(*NodeConfig)
 	strict    bool
 }
 
@@ -61,11 +62,13 @@ type world struct {
 	handoffLat []time.Duration
 	ghostLat   []time.Duration
 	writebacks map[int64][]EntityState
+	panels     map[int64][]Panel // Real 上真正应用过的面板（PanelApplied），按角色
+	panelRes   []PanelResult
 }
 
 func startWorld(t *testing.T, spec worldSpec) *world {
 	w := &world{t: t, spec: spec, grid: spec.grid, real: newRealChecker(t), cells: map[CellID]*testProc{},
-		views: map[int64][]View{}, hits: map[HitID]int{}, writebacks: map[int64][]EntityState{}}
+		views: map[int64][]View{}, hits: map[HitID]int{}, writebacks: map[int64][]EntityState{}, panels: map[int64][]Panel{}}
 	for _, id := range w.grid.Cells() {
 		w.startCell(id)
 	}
@@ -84,6 +87,14 @@ func startWorld(t *testing.T, spec worldSpec) *world {
 			w.mu.Lock()
 			w.writebacks[id] = append(w.writebacks[id], s)
 			w.mu.Unlock()
+		}
+		cfg.Hooks.PanelResult = func(r PanelResult) {
+			w.mu.Lock()
+			w.panelRes = append(w.panelRes, r)
+			w.mu.Unlock()
+		}
+		if spec.baseMod != nil {
+			spec.baseMod(cfg)
 		}
 	}})
 	t.Cleanup(func() {
@@ -109,6 +120,11 @@ func (w *world) startCell(id CellID) {
 				w.handoffLat = append(w.handoffLat, d)
 				w.mu.Unlock()
 			}
+		}
+		cfg.Hooks.PanelApplied = func(_ CellID, id int64, p Panel, _ int32) {
+			w.mu.Lock()
+			w.panels[id] = append(w.panels[id], p)
+			w.mu.Unlock()
 		}
 		cfg.Hooks.GhostApplied = func(_ CellID, d time.Duration, _ int) {
 			w.mu.Lock()

@@ -1,0 +1,214 @@
+--- FAIL: TestCellStateRoundTripsThroughBothDAOs (0.00s)
+    --- FAIL: TestCellStateRoundTripsThroughBothDAOs/scene_actor (0.00s)
+        partition_test.go:53: read back
+             got {EntityState:{ID:42 Kind:1 Base:1000 X:2990 Y:1500 VX:120 VY:-30 HP:70 Ver:{Epoch:3 Seq:10} Idle:false Panel:{MaxHP:0 Attack:0 Power:0 Ver:0}} Role:frozen LastInput:9 Applied:[{Hit:{Attacker:77 Seq:1} At:100} {Hit:{Attacker:78 Seq:4} At:200}] Handoff:0x2a1ffd1b0c0 RetryAfter:5 LeaseUntil:6 WritebackAt:7}
+            want {EntityState:{ID:42 Kind:1 Base:1000 X:2990 Y:1500 VX:120 VY:-30 HP:70 Ver:{Epoch:3 Seq:10} Idle:false Panel:{MaxHP:120 Attack:14 Power:40 Ver:10}} Role:frozen LastInput:9 Applied:[{Hit:{Attacker:77 Seq:1} At:100} {Hit:{Attacker:78 Seq:4} At:200}] Handoff:0x2a1ffd1b0a0 RetryAfter:5 LeaseUntil:6 WritebackAt:7}
+    --- FAIL: TestCellStateRoundTripsThroughBothDAOs/monster (0.00s)
+        partition_test.go:53: read back
+             got {EntityState:{ID:42 Kind:2 Base:1000 X:2990 Y:1500 VX:120 VY:-30 HP:70 Ver:{Epoch:3 Seq:10} Idle:true Panel:{MaxHP:0 Attack:0 Power:0 Ver:0}} Role:frozen LastInput:9 Applied:[{Hit:{Attacker:77 Seq:1} At:100} {Hit:{Attacker:78 Seq:4} At:200}] Handoff:0x2a1ffd1b100 RetryAfter:5 LeaseUntil:6 WritebackAt:7}
+            want {EntityState:{ID:42 Kind:2 Base:1000 X:2990 Y:1500 VX:120 VY:-30 HP:70 Ver:{Epoch:3 Seq:10} Idle:true Panel:{MaxHP:120 Attack:14 Power:40 Ver:10}} Role:frozen LastInput:9 Applied:[{Hit:{Attacker:77 Seq:1} At:100} {Hit:{Attacker:78 Seq:4} At:200}] Handoff:0x2a1ffd1b0e0 RetryAfter:5 LeaseUntil:6 WritebackAt:7}
+--- FAIL: TestCellStateRollsBackWithTheTransaction (0.00s)
+    partition_test.go:91: not restored
+         got {EntityState:{ID:42 Kind:1 Base:1000 X:2990 Y:1500 VX:120 VY:-30 HP:70 Ver:{Epoch:3 Seq:10} Idle:false Panel:{MaxHP:0 Attack:0 Power:0 Ver:0}} Role:frozen LastInput:9 Applied:[{Hit:{Attacker:77 Seq:1} At:100} {Hit:{Attacker:78 Seq:4} At:200}] Handoff:0x2a1ffd1b160 RetryAfter:5 LeaseUntil:6 WritebackAt:7}
+        want {EntityState:{ID:42 Kind:1 Base:1000 X:2990 Y:1500 VX:120 VY:-30 HP:70 Ver:{Epoch:3 Seq:10} Idle:false Panel:{MaxHP:120 Attack:14 Power:40 Ver:10}} Role:frozen LastInput:9 Applied:[{Hit:{Attacker:77 Seq:1} At:100} {Hit:{Attacker:78 Seq:4} At:200}] Handoff:0x2a1ffd1b120 RetryAfter:5 LeaseUntil:6 WritebackAt:7}
+--- FAIL: TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack (0.00s)
+    partition_test.go:122: read back
+         got {Actor:7 InWorld:true Cell:1001 Epoch:2 X:2900 Y:1500 HP:100 SnapVer:{Epoch:0 Seq:0} IntentSeq:3 VX:100 VY:0 AttackSeq:4 LastViewAt:0 LastEnterAt:0 LastLeaseAt:0 EnterHint:0 LostEpoch:0 LostAt:0 Shown:true Panel:{MaxHP:0 Attack:0 Power:0 Ver:0} PanelAcked:0 PanelSentAt:0 PanelSince:0 PanelUnknown:false}
+        want {Actor:7 InWorld:true Cell:1001 Epoch:2 X:2900 Y:1500 HP:100 SnapVer:{Epoch:0 Seq:0} IntentSeq:3 VX:100 VY:0 AttackSeq:4 LastViewAt:0 LastEnterAt:0 LastLeaseAt:0 EnterHint:0 LostEpoch:0 LostAt:0 Shown:true Panel:{MaxHP:110 Attack:12 Power:35 Ver:2} PanelAcked:1 PanelSentAt:50 PanelSince:40 PanelUnknown:true}
+--- FAIL: TestPendingPanelRollsBackWithTheTransaction (0.00s)
+    partition_test.go:202: pending panel not rolled back: {MaxHP:0 Attack:0 Power:0 Ver:0} acked 0 since 0, want {MaxHP:110 Attack:12 Power:35 Ver:1}
+FAIL
+FAIL	example.com/cwdemo/game/partition	0.547s
+2026/11/04 01:12:39 WARN activity: window not opened activity_id=race-1793725800 group="" err="live games unavailable: redis: i/o timeout"
+2026/11/04 01:12:39 WARN activity: close deadline not armed activity_id=race-1793812200 err="recording nest: not served"
+2026/11/04 01:12:39 INFO battle: room open battle_id=grace-1 seats=2 frames=45
+2026/11/04 01:12:41 INFO battle: starting without a first input battle_id=grace-1 grace=2s
+2026/11/04 01:12:41 INFO battle: room stopped battle_id=grace-1 frames_cut=2
+2026/11/04 01:12:41 INFO battle: room open battle_id=lifetime-1 seats=2 frames=45
+2026/11/04 01:12:43 INFO battle: starting without a first input battle_id=lifetime-1 grace=2s
+2026/11/04 01:12:47 INFO battle: room finished battle_id=lifetime-1 frames_cut=45
+2026/11/04 01:12:47 INFO player tcp listener started addr=127.0.0.1:60829 max_connections=10000
+2026/11/04 01:12:47 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=1.292833ms changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:47 INFO feature flags published count=3 off=[] version=9
+2026/11/04 01:12:47 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=295.625µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:47 INFO feature flags published count=3 off=[] version=12
+2026/11/04 01:12:47 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=274.541µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:47 INFO feature flags published count=3 off=[] version=14
+2026/11/04 01:12:47 INFO feature flags published count=3 off=[] version=16
+2026/11/04 01:12:47 WARN config reload reverted: the generation was published and taken back; requests admitted in between read it op=reload reason=test version=2 live=1 elapsed=200.458µs stage=apply error="configdata: reload after apply later refusal: refused"
+2026/11/04 01:12:47 INFO gift saga: step left to the sender's sid player_id=42 owner_sid=1000 command=cmd-1
+2026/11/04 01:12:47 INFO gift saga: step left to the sender's sid player_id=42 owner_sid=1000 command=cmd-1
+2026/11/04 01:12:47 INFO gift saga: step left to the sender's sid player_id=43 owner_sid=1002 command=cmd-1
+2026/11/04 01:12:47 INFO gift saga: step left to the sender's sid player_id=42 owner_sid=1000 command=cmd-1
+2026/11/04 01:12:47 ERROR gift saga: refusing a step whose payload names no sender sid player_id=42 command=cmd-1 saga_id=saga-1
+2026/11/04 01:12:47 ERROR gift saga: refusing a step whose payload names no sender sid player_id=77 command=cmd-1 saga_id=saga-1
+--- FAIL: TestPartitionMirrorsDecodeAsPlayersAndMonsters (0.00s)
+    --- FAIL: TestPartitionMirrorsDecodeAsPlayersAndMonsters/player (0.00s)
+        partition_test.go:47: cell_max_hp = <nil>, want 120 (fields map[_id:1 cell_hp:80 pos_x:2990 pos_y:1500])
+--- FAIL: TestAttackResultPushNamesTheVerdict (0.00s)
+    partition_test.go:85: {Hit:{Attacker:1 Seq:9} Target:5 Outcome:applied Reason:0 Duplicate:false HP:60 Damage:14} → &{Seq:9 Target:5 Outcome:applied Reason: Damage:10 TargetHP:60}, want outcome applied damage 14 hp 60 reason ""
+2026/11/04 01:12:47 WARN player owners: unloading an idle player is taking longer than the wait; it continues in the background player_id=42 wait=50ms
+2026/11/04 01:12:47 INFO player owners: idle player unloaded player_id=77
+2026/11/04 01:12:47 INFO player owners: idle player unloaded player_id=77
+2026/11/04 01:12:47 WARN player owners: idle player kept in service because its copy could not be dropped player_id=77 err="the entity is busy"
+2026/11/04 01:12:47 INFO player owners: idle player unloaded player_id=77
+2026/11/04 01:12:47 WARN player owners: unloading an idle player is taking longer than the wait; it continues in the background player_id=77 wait=50ms
+2026/11/04 01:12:47 WARN player owners: unloading an idle player is taking longer than the wait; it continues in the background player_id=77 wait=50ms
+2026/11/04 01:12:47 WARN player owners: unloading an idle player is taking longer than the wait; it continues in the background player_id=42 wait=50ms
+2026/11/04 01:12:47 INFO player owners: idle player unloaded player_id=77
+2026/11/04 01:12:47 WARN player owners: unloading an idle player is taking longer than the wait; it continues in the background player_id=77 wait=50ms
+2026/11/04 01:12:47 INFO player tcp listener started addr=127.0.0.1:60833 max_connections=10000
+2026/11/04 01:12:48 INFO scene: replication session was closed by the manager player_id=9851 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 9851"
+2026/11/04 01:12:48 INFO player tcp listener started addr=127.0.0.1:60838 max_connections=10000
+2026/11/04 01:12:49 INFO scene: replication session was closed by the manager player_id=9861 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 9861"
+2026/11/04 01:12:49 INFO player tcp listener started addr=127.0.0.1:60842 max_connections=10000
+2026/11/04 01:12:49 INFO scene: replication session was closed by the manager player_id=9871 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 9871"
+2026/11/04 01:12:49 INFO scene: replication session was closed by the manager player_id=9872 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 9872"
+2026/11/04 01:12:49 INFO player tcp listener started addr=127.0.0.1:60846 max_connections=10000
+2026/11/04 01:12:49 INFO scene: rejoin waits for the previous leave's removes to go out subject_id=10119172
+2026/11/04 01:12:49 INFO scene: rejoin waits for the previous leave's removes to go out subject_id=10119172
+2026/11/04 01:12:49 INFO scene: rejoin waits for the previous leave's removes to go out subject_id=10119172
+2026/11/04 01:12:49 INFO scene: rejoin waits for the previous leave's removes to go out subject_id=10119172
+2026/11/04 01:12:49 INFO scene: rejoin waits for the previous leave's removes to go out subject_id=10119172
+2026/11/04 01:12:49 INFO scene: rejoin waits for the previous leave's removes to go out subject_id=10119172
+2026/11/04 01:12:49 INFO scene: rejoin waits for the previous leave's removes to go out subject_id=10119172
+2026/11/04 01:12:50 INFO scene: rejoin waits for the previous leave's removes to go out subject_id=10119172
+2026/11/04 01:12:50 INFO scene: rejoin waits for the previous leave's removes to go out subject_id=10119172
+2026/11/04 01:12:50 INFO scene: rejoin waits for the previous leave's removes to go out subject_id=10119172
+2026/11/04 01:12:50 INFO scene: replication session was closed by the manager player_id=9881 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 9881"
+2026/11/04 01:12:50 INFO scene: replication session was closed by the manager player_id=9882 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 9882"
+2026/11/04 01:12:51 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=657.625µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:55 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=379.709µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21000 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 WARN selfsync: a player's sync session was lost without a refused push; disconnected the player so the client reconnects with a full snapshot player_id=21000 reason=object_limit connections=1 suppressed_since_last_warn=0 err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21001 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21002 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21003 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21004 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21005 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21006 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21007 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21008 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21009 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21010 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21011 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21012 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21013 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21014 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21015 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21016 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21017 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21018 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21019 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21020 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21021 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21022 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21023 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21024 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21025 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21026 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21027 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21028 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21029 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21030 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21031 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21032 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21033 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21034 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21035 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21036 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21037 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21038 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21039 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21040 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21041 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21042 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21043 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21044 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21045 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21046 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21047 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21048 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21049 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21050 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21051 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21052 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21053 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21054 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21055 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21056 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21057 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21058 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21059 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21060 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21061 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21062 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21063 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21064 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21065 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21066 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21067 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21068 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21069 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21070 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21071 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21072 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21073 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21074 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21075 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21076 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21077 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21078 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21079 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21080 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21081 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21082 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21083 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21084 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21085 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21086 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21087 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21088 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21089 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21090 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21091 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21092 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21093 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21094 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21095 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21096 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21097 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21098 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21099 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=21100 reason=object_limit err="entitysync: session lost (object_limit): frame: object limit exceeded"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=9402 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 9402"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=9702 reason=push_refused err="entitysync: session lost (push_refused): session old: outbound queue full"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=9702 reason=push_refused err="entitysync: session lost (push_refused): session old: player tcp: session not found"
+2026/11/04 01:12:59 INFO scene: replication session was closed by the manager player_id=9802 reason=push_refused err="entitysync: session lost (push_refused): old socket: write timeout"
+2026/11/04 01:12:59 INFO scene: rejoin waits for the previous leave's removes to go out subject_id=10006532
+2026/11/04 01:12:59 INFO scene: replication session opened after a retry subject_id=10016772 attempts=3
+2026/11/04 01:12:59 WARN scene: replication session not opened subject_id=10016772 attempts=8 reason=exhausted err="previous lifetime still sending: entitysync: previous session with this id is still closing; retry OpenSession later"
+2026/11/04 01:12:59 WARN scene: replication session not opened subject_id=10016772 attempts=2 reason=refused err="session limit reached"
+2026/11/04 01:12:59 INFO scene: replication session opened after a retry subject_id=10016772 attempts=2
+2026/11/04 01:12:59 WARN scene: replication session not opened subject_id=10098692 attempts=2 reason=refused err="session limit reached"
+2026/11/04 01:12:59 WARN scene: subscribe observer=9862 subject=10098692 err="entitysync: session is not open"
+2026/11/04 01:12:59 WARN scene: subscribe observer=9862 subject=10097668 err="entitysync: session is not open"
+2026/11/04 01:12:59 INFO game: disconnected the players this process served sessions_closed=2
+FAIL
+FAIL	example.com/cwdemo/internal/service/game	20.559s
+2026/11/04 01:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=1.158959ms changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=168.833µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=134.542µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=218.042µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=134.875µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=141.375µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=126.667µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=288.375µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=86µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=75.125µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+2026/11/04 01:12:40 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=228.667µs changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+--- FAIL: TestCellPanelIsTheFinalLayer (0.00s)
+    attribute_component_test.go:642: built: panel {MaxHP:0 Attack:0 Power:0 Ver:0}, final hp 100 attack 10 power 30
+FAIL
+FAIL	example.com/cwdemo/game/entities/player	1.207s
+FAIL

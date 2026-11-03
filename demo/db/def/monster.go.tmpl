@@ -59,6 +59,12 @@ type MonsterDao struct {
 	CellWritebackAt int64        `dao:"nopersist,nosync" store:"cell_writeback_at"`
 	CellApplied     []CellHit    `dao:"nopersist,nosync" store:"cell_applied"`
 	CellHandoff     *CellHandoff `dao:"nopersist,nosync" store:"cell_handoff"`
+	// The battle panel (cellworld.Panel, item 3 = A), same names as
+	// SceneActorDao's; a monster has none today (zero = no panel).
+	CellMaxHP    int64  `dao:"nopersist,nosync" store:"cell_max_hp"`
+	CellAttack   int64  `dao:"nopersist,nosync" store:"cell_attack"`
+	CellPower    int64  `dao:"nopersist,nosync" store:"cell_power"`
+	CellPanelVer uint64 `dao:"nopersist,nosync" store:"cell_panel_ver"`
 }
 
 // CellHit 是一条已结算伤害的去重记录（cellworld.AppliedHit）。

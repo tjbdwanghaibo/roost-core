@@ -1,0 +1,20 @@
+--- FAIL: TestDamageUsesTheAttackersPanel (2.27s)
+    combat_test.go:245: attacker 1873 on 73557: damage 0, want 17 (results [{Hit:{Attacker:1873 Seq:1} Target:73557 Outcome:applied Reason:0 Duplicate:false HP:98 Damage:0} {Hit:{Attacker:1873 Seq:2} Target:74581 Outcome:applied Reason:0 Duplicate:false HP:98 Damage:0} {Hit:{Attacker:2897 Seq:1} Target:74581 Outcome:applied Reason:0 Duplicate:false HP:95 Damage:0}])
+    combat_test.go:245: attacker 1873 on 74581: damage 0, want 17 (results [{Hit:{Attacker:1873 Seq:1} Target:73557 Outcome:applied Reason:0 Duplicate:false HP:98 Damage:0} {Hit:{Attacker:1873 Seq:2} Target:74581 Outcome:applied Reason:0 Duplicate:false HP:98 Damage:0} {Hit:{Attacker:2897 Seq:1} Target:74581 Outcome:applied Reason:0 Duplicate:false HP:95 Damage:0}])
+    combat_test.go:245: attacker 2897 on 74581: damage 0, want 3 (results [{Hit:{Attacker:1873 Seq:1} Target:73557 Outcome:applied Reason:0 Duplicate:false HP:98 Damage:0} {Hit:{Attacker:1873 Seq:2} Target:74581 Outcome:applied Reason:0 Duplicate:false HP:98 Damage:0} {Hit:{Attacker:2897 Seq:1} Target:74581 Outcome:applied Reason:0 Duplicate:false HP:95 Damage:0}])
+    combat_test.go:248: timed out waiting for hp settles
+--- FAIL: TestPanelCapsCurrentHPWithoutHealing (4.03s)
+    combat_test.go:268: lower max hp: real 1873 in (1,0) has panel {MaxHP:60 Attack:5 Power:0 Ver:1} hp 60, want panel ver 2
+--- FAIL: TestPanelCommandLostIsResent (1.23s)
+    combat_test.go:316: base panel {MaxHP:150 Attack:4 Power:0 Ver:1} acked 0, want ver 2 pending with ver 1 acked
+--- FAIL: TestPanelCommandDuplicatedOrReorderedAppliesOnce (4.07s)
+    combat_test.go:351: latest panel: real 1873 in (1,0) has panel {MaxHP:100 Attack:3 Power:0 Ver:1} hp 100, want panel ver 3
+--- FAIL: TestPanelChangeDuringHandoff (4.46s)
+    combat_test.go:397: panel after the handoff: real 1873 in (1,0) has panel {MaxHP:100 Attack:4 Power:0 Ver:1} hp 100, want panel ver 2
+--- FAIL: TestPanelUnknownWhenUnconfirmed (2.03s)
+    combat_test.go:444: timed out waiting for base acknowledges ver 2 from the witness
+2026/11/04 01:07:26 WARN async handler failed title=nest handler=cellworld_input type=Single key=1873 tid=1873 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+2026/11/04 01:07:26 WARN async handler failed title=nest handler=cellworld_input type=Single key=2897 tid=2897 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	21.080s
+FAIL

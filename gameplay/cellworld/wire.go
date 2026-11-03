@@ -14,7 +14,9 @@ import (
 // wireMsg.V 是格式版本（WireVersion）：不是当前版本的消息按坏消息丢弃（未上线，不做跨版本兼容）。字段用短键控制体积。
 
 // WireVersion 是当前线上格式版本。v2：加版本号、witness 带每个对象的版本、写回消息。v3：EntityState 带心跳档位（Idle，D1）。
-const WireVersion uint8 = 3
+// v4：EntityState 带战斗面板（Panel）；面板命令与结论（kindPanel / kindPanelResult）；伤害结论带实际伤害值；owner 通知带
+// Real 上的面板序号。未上线，旧版本的消息按坏消息丢弃（升级须先停旧进程）。
+const WireVersion uint8 = 4
 
 // EntityKind 区分玩家（有 BaseApp，接收视野）与 NPC（只在 Cell 里模拟）。
 type EntityKind uint8
@@ -40,6 +42,35 @@ type EntityState struct {
 	// Idle：NPC 在慢档（附近没有玩家，心跳降到 NodeConfig.IdlePeriod，D1）。随 Ghost 与交接传出：邻格按它放宽 Ghost 的
 	// 过期时间（慢档的 Ghost 每个慢拍才更新一次），新格按它以慢档装入。玩家恒为 false。
 	Idle bool `msgpack:"il,omitempty"`
+	// Panel 是战斗面板（最大 HP、攻击、战力）。权威在 Real：随 Ghost、交接、witness、回写传出，交接时整份带走。
+	Panel Panel `msgpack:"pn,omitempty"`
+}
+
+// Panel 是角色的战斗面板（维护者 2026-11-04 第 3 项 = A）：最大 HP、攻击、战力，将来的 buff 层也归它。权威在角色所在格的
+// Real；养成输入（等级、经验、装备）留在 Base 的 Player 上，Base 从养成输入推出面板、带单调序号 Ver 发给 Real
+// （kindPanel，与攻击同一套转发、去重、结果未知语义），Real 只接受序号更大的（幂等：重复、迟到、乱序都只应用一次），
+// 结果随 witness 与回写回到 Base。
+//
+// 零值字段表示“面板没有给出”：Attack 为 0 时伤害取请求里的缺省值（NodeConfig 之外由调用方给的固定伤害），MaxHP 为 0
+// 时当前 HP 不设上限（NPC、没有面板来源的玩家）。面板变化只改上限、不回血：上限变小时当前 HP 夹到新上限，变大时当前 HP
+// 不变（FEATURE §12.2 的暂定，可改）。
+type Panel struct {
+	MaxHP  int32  `msgpack:"mh,omitempty"`
+	Attack int32  `msgpack:"at,omitempty"`
+	Power  int32  `msgpack:"pw,omitempty"`
+	Ver    uint64 `msgpack:"v,omitempty"`
+}
+
+// sameValues 比较面板的数值（不比较序号）。
+func (p Panel) sameValues(q Panel) bool {
+	return p.MaxHP == q.MaxHP && p.Attack == q.Attack && p.Power == q.Power
+}
+
+// capHP 把当前 HP 夹到面板上限（MaxHP 为 0 表示没有上限）。只降不升：面板变化不回血。
+func (s *EntityState) capHP() {
+	if s.Panel.MaxHP > 0 && s.HP > s.Panel.MaxHP {
+		s.HP = s.Panel.MaxHP
+	}
 }
 
 // Pos 返回位置。
@@ -115,6 +146,8 @@ const (
 	kindLost
 	kindEnterRefused
 	kindWriteback
+	kindPanel
+	kindPanelResult
 )
 
 // ghostBatch：Real 的 owner 每拍发给一个邻格的 Ghost 更新（完整状态）与删除。
@@ -157,6 +190,8 @@ type damageReply struct {
 	Duplicate bool          `msgpack:"d,omitempty"`
 	HP        int32         `msgpack:"hp"`
 	Hint      int32         `msgpack:"hint,omitempty"` // OutcomeRetry 时所知 owner 的 sid，0 表示不知道
+	// Damage 是这次真正结算的伤害值（攻击者面板的攻击，没有面板时取请求的缺省值）；重复、拒绝、重试时为 0。
+	Damage int32 `msgpack:"dmg,omitempty"`
 }
 
 // enterReq：Base 让玩家进入（首次、Cell 崩溃后重进、交接放弃后补回）。State 是 Player 的最近快照（位置、HP），
@@ -190,6 +225,8 @@ type ownerNotice struct {
 	ID        int64  `msgpack:"i"`
 	Epoch     uint64 `msgpack:"e"`
 	LastInput uint64 `msgpack:"in,omitempty"`
+	// PanelVer 是 Real 上面板的序号：Base 据此判断待发的面板是否已经到了（与 LastInput 同一种用法）。
+	PanelVer uint64 `msgpack:"pv,omitempty"`
 }
 
 // witnessMsg 是 Cell 给玩家 Base 的视野：半径 R 内的本格 Real / Frozen 与邻格 Ghost（含自己）。每个对象带它在 Cell
@@ -204,7 +241,7 @@ type witnessMsg struct {
 	Truncated bool          `msgpack:"tr,omitempty"`
 }
 
-// writebackMsg 是 SceneActor 回写 Player 的战斗字段快照（原型只有 HP 与位置）。Ver 是 SceneActor 当时的版本，
+// writebackMsg 是 SceneActor 回写 Player 的快照（HP、位置与面板）。Ver 是 SceneActor 当时的版本，
 // 跨交接、跨重建单调；Base 只接受比 Player 上已存版本新的快照（幂等）。
 type writebackMsg struct {
 	State EntityState `msgpack:"s"`
@@ -217,6 +254,25 @@ type attackResultMsg struct {
 	Reason    RejectReason  `msgpack:"r,omitempty"`
 	Duplicate bool          `msgpack:"d,omitempty"`
 	HP        int32         `msgpack:"hp"`
+	Damage    int32         `msgpack:"dmg,omitempty"`
+}
+
+// panelReq 是 Base 发给玩家当前 owner 格的面板变化（只带最新的一份：面板是状态，不是事件，Real 按 Ver 取新的）。
+type panelReq struct {
+	ID    int64 `msgpack:"i"`
+	Panel Panel `msgpack:"p"`
+}
+
+// panelResult 是 Real 对面板命令的结论：Applied（Duplicate 表示这个序号或更新的已经应用过）带 Real 上现在的序号、HP 与
+// 上限；收到的格不是 Real 时是 Retry（Hint 是所知 owner 的 sid），Base 等 owner 变化或重发间隔到了再发。
+type panelResult struct {
+	ID        int64         `msgpack:"i"`
+	Ver       uint64        `msgpack:"v"`
+	Outcome   DamageOutcome `msgpack:"o"`
+	Duplicate bool          `msgpack:"d,omitempty"`
+	HP        int32         `msgpack:"hp"`
+	MaxHP     int32         `msgpack:"mh,omitempty"`
+	Hint      int32         `msgpack:"hint,omitempty"`
 }
 
 type lostNotice struct {
@@ -250,6 +306,8 @@ type wireMsg struct {
 	Lost         *lostNotice      `msgpack:"ls,omitempty"`
 	EnterRefused *enterRefused    `msgpack:"rf,omitempty"`
 	Writeback    *writebackMsg    `msgpack:"wb,omitempty"`
+	Panel        *panelReq        `msgpack:"pn,omitempty"`
+	PanelResult  *panelResult     `msgpack:"pr,omitempty"`
 }
 
 var errBadMessage = errors.New("cellworld: malformed message")
@@ -300,6 +358,10 @@ func decodeMsg(data []byte) (*wireMsg, error) {
 		present = m.EnterRefused != nil
 	case kindWriteback:
 		present = m.Writeback != nil
+	case kindPanel:
+		present = m.Panel != nil
+	case kindPanelResult:
+		present = m.PanelResult != nil
 	}
 	if !present {
 		return nil, fmt.Errorf("%w: kind %d without body", errBadMessage, m.Kind)

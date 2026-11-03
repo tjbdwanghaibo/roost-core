@@ -128,6 +128,22 @@ type testPlayer struct {
 	dao  *undoCell[BaseState]
 	host *heartbeat.Host
 	reg  *heartbeat.Reg
+	// panel 是“养成输入推出的面板”的替身（game 里是属性的 Final 层）：测试 goroutine 写、Player 的 handler 里读。
+	panelMu sync.Mutex
+	panel   Panel
+}
+
+// setCellPanel 改替身的面板来源（不发任何东西：之后 Enter 带它，或 RefreshPanel 让 Base 读它）。
+func (p *testPlayer) setCellPanel(panel Panel) {
+	p.panelMu.Lock()
+	p.panel = panel
+	p.panelMu.Unlock()
+}
+
+func (p *testPlayer) CellPanel() Panel {
+	p.panelMu.Lock()
+	defer p.panelMu.Unlock()
+	return p.panel
 }
 
 func (p *testPlayer) Base() *fentity.EntityBase             { return p.EntityBase }

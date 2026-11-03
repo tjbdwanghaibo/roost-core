@@ -77,6 +77,14 @@ type CellDao interface {
 	SetCellAppliedAll([]db.CellHit)
 	GetCellHandoff() *db.CellHandoff
 	SetCellHandoff(*db.CellHandoff)
+	GetCellMaxHP() int64
+	SetCellMaxHP(int64)
+	GetCellAttack() int64
+	SetCellAttack(int64)
+	GetCellPower() int64
+	SetCellPower(int64)
+	GetCellPanelVer() uint64
+	SetCellPanelVer(uint64)
 }
 
 // ReadActor 从 DAO 读出一份 ActorState（新建的切片与指针：调用方改它不影响 DAO，cellworld 的值语义要求如此）。
@@ -89,6 +97,9 @@ func ReadActor(d CellDao, id int64, kind cellworld.EntityKind) cellworld.ActorSt
 			HP:   int32(d.GetHP()),
 			Ver:  cellworld.Version{Epoch: d.GetCellEpoch(), Seq: d.GetCellSeq()},
 			Idle: d.GetCellIdle(),
+			Panel: cellworld.Panel{
+				MaxHP: int32(d.GetCellMaxHP()), Attack: int32(d.GetCellAttack()), Power: int32(d.GetCellPower()), Ver: d.GetCellPanelVer(),
+			},
 		},
 		Role:        cellworld.Role(d.GetCellRole()),
 		LastInput:   d.GetCellLastInput(),
@@ -130,6 +141,10 @@ func WriteActor(d CellDao, st cellworld.ActorState) {
 	d.SetCellRetryAfter(st.RetryAfter)
 	d.SetCellLeaseUntil(st.LeaseUntil)
 	d.SetCellWritebackAt(st.WritebackAt)
+	d.SetCellMaxHP(int64(st.Panel.MaxHP))
+	d.SetCellAttack(int64(st.Panel.Attack))
+	d.SetCellPower(int64(st.Panel.Power))
+	d.SetCellPanelVer(st.Panel.Ver)
 	if !sameApplied(d, st.Applied) {
 		hits := make([]db.CellHit, len(st.Applied))
 		for i, a := range st.Applied {
@@ -177,7 +192,8 @@ func sameHandoff(h *db.CellHandoff, p *cellworld.HandoffState) bool {
 }
 
 // ReadBase 从 PlayerDao 读出 Player 的分区路由状态。快照位置取 PosX / PosY（实时，随 witness 更新）；HP 与快照版本
-// 取持久的 CellHP / CellSnapEpoch / CellSnapSeq：Base 重启后 Enter 以它们为准重建 SceneActor。Base 重启后重新装载的
+// 取持久的 CellHP / CellSnapEpoch / CellSnapSeq：Base 重启后 Enter 以它们为准重建 SceneActor。面板（CellMaxHP /
+// CellAttack / CellPower / CellPanelVer）与 Real 已确认的序号（CellPanelAcked）也持久：序号跨 Base 重启单调。Base 重启后重新装载的
 // Player 不在世界里、实时位置是零（PosX / PosY 不持久）：这时快照位置取持久的 SavedPosX / SavedPosY——条件是它记在
 // 这个分区场景之下（SavedSceneID == sceneID，sceneID 是本进程的分区场景 Scene ID），否则留零，Enter 取 spawn。
 func ReadBase(d *db.PlayerDao, sceneID int64) cellworld.BaseState {
@@ -195,6 +211,11 @@ func ReadBase(d *db.PlayerDao, sceneID int64) cellworld.BaseState {
 		LastViewAt: d.GetCellViewAt(), LastEnterAt: d.GetCellEnterAt(), LastLeaseAt: d.GetCellLeaseAt(),
 		EnterHint: d.GetCellHint(), LostEpoch: d.GetCellLostEpoch(), LostAt: d.GetCellLostAt(),
 		Shown: d.GetCellShown(),
+		Panel: cellworld.Panel{
+			MaxHP: int32(d.GetCellMaxHP()), Attack: int32(d.GetCellAttack()), Power: int32(d.GetCellPower()), Ver: d.GetCellPanelVer(),
+		},
+		PanelAcked: d.GetCellPanelAcked(), PanelSentAt: d.GetCellPanelSentAt(), PanelSince: d.GetCellPanelSince(),
+		PanelUnknown: d.GetCellPanelUnknown(),
 	}
 }
 
@@ -223,6 +244,14 @@ func WriteBase(d *db.PlayerDao, st cellworld.BaseState, sceneID int64) {
 	d.SetCellLostEpoch(st.LostEpoch)
 	d.SetCellLostAt(st.LostAt)
 	d.SetCellShown(st.Shown)
+	d.SetCellMaxHP(int64(st.Panel.MaxHP))
+	d.SetCellAttack(int64(st.Panel.Attack))
+	d.SetCellPower(int64(st.Panel.Power))
+	d.SetCellPanelVer(st.Panel.Ver)
+	d.SetCellPanelAcked(st.PanelAcked)
+	d.SetCellPanelSentAt(st.PanelSentAt)
+	d.SetCellPanelSince(st.PanelSince)
+	d.SetCellPanelUnknown(st.PanelUnknown)
 	if snapshot {
 		d.SetSavedSceneID(sceneID)
 		d.SetSavedPosX(st.X)

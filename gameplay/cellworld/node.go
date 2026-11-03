@@ -85,8 +85,10 @@ type NodeConfig struct {
 	WatchPeriod time.Duration
 	// SilenceTimeout：玩家多久没收到 witness 就按最后位置重新进入；零值 1s。LostGrace：收到交接放弃后等多久再重进；零值 500ms。
 	SilenceTimeout, LostGrace time.Duration
-	// LeasePeriod：Base 向 owner 格续租（重发最新输入）的间隔；零值 500ms。
+	// LeasePeriod：Base 向 owner 格续租（重发最新输入）的间隔，也是待确认面板的重发间隔；零值 500ms。
 	LeasePeriod time.Duration
+	// PanelDeadline：面板变化多久没有确认就报一次“结果未知”（Hooks.PanelResult），必须长于 LeasePeriod；零值 2s。
+	PanelDeadline time.Duration
 	// Mirrors / Interest / Session / MirrorKind：把 witness 喂给客户端（Sync mirror）。Mirrors 为 nil 时只记 owner，
 	// 不推客户端（测试与不需要客户端的进程）。Session 把角色 ID 换成 Interest 的玩家（会话）ID；MirrorKind 给出对象
 	// 在帧上的 namespace 与 kind。
@@ -126,6 +128,10 @@ type Hooks struct {
 	Writeback func(actorID int64, state EntityState)
 	// OwnerChanged：Base 看到玩家换了 owner 格。
 	OwnerChanged func(actorID int64, sid int32, epoch uint64)
+	// PanelApplied：Real 上真正应用了一版更新的面板（不含重复与过期的命令）；hp 是按新上限夹过之后的当前 HP。
+	PanelApplied func(cell CellID, id int64, panel Panel, hp int32)
+	// PanelResult：Base 得到面板结论（Applied 或 Unknown）。
+	PanelResult func(PanelResult)
 }
 
 func (cfg NodeConfig) withDefaults() NodeConfig {
@@ -171,6 +177,7 @@ func (cfg NodeConfig) withDefaults() NodeConfig {
 	setDur(&cfg.SilenceTimeout, time.Second)
 	setDur(&cfg.LostGrace, 500*time.Millisecond)
 	setDur(&cfg.LeasePeriod, 500*time.Millisecond)
+	setDur(&cfg.PanelDeadline, 2*time.Second)
 	setInt(&cfg.OutboxSize, 65536)
 	setInt(&cfg.ReportBatch, 512)
 	return cfg
@@ -236,6 +243,8 @@ func (cfg NodeConfig) validate() error {
 			return bad("watch period %v is not a heartbeat period", cfg.WatchPeriod)
 		case cfg.SilenceTimeout <= cfg.WatchPeriod || cfg.LostGrace <= 0 || cfg.LeasePeriod <= 0:
 			return bad("silence timeout must exceed watch period")
+		case cfg.PanelDeadline <= cfg.LeasePeriod:
+			return bad("panel deadline %v must exceed lease period %v", cfg.PanelDeadline, cfg.LeasePeriod)
 		case cfg.Mirrors != nil && (cfg.Interest == nil || cfg.Session == nil || cfg.MirrorKind == nil):
 			return bad("mirrors need interest, session and mirror kind")
 		}
@@ -480,7 +489,7 @@ func (n *Node) receive(data []byte) {
 		if cellOnly() {
 			dispatch(hRegion, n.cfg.Scene)
 		}
-	case kindOffer, kindOfferReply, kindDamage, kindEnter, kindLeave:
+	case kindOffer, kindOfferReply, kindDamage, kindEnter, kindLeave, kindPanel:
 		if cellOnly() {
 			if id := messageActor(m); id != 0 {
 				dispatch(hActor, n.cfg.Scene, id)
@@ -498,7 +507,7 @@ func (n *Node) receive(data []byte) {
 				dispatch(hAttack, n.cfg.Scene, m.Attack.Hit.Attacker, m.Attack.Target)
 			}
 		}
-	case kindOwner, kindWitness, kindAttackResult, kindLost, kindEnterRefused, kindWriteback:
+	case kindOwner, kindWitness, kindAttackResult, kindLost, kindEnterRefused, kindWriteback, kindPanelResult:
 		if n.cfg.PlayerEntity == nil {
 			n.stats.decodeErrors.Add(1)
 			return
@@ -536,6 +545,10 @@ func messageActor(m *wireMsg) int64 {
 		return m.EnterRefused.ID
 	case kindWriteback:
 		return m.Writeback.State.ID
+	case kindPanel:
+		return m.Panel.ID
+	case kindPanelResult:
+		return m.PanelResult.ID
 	}
 	return 0
 }
@@ -707,6 +720,8 @@ func (n *Node) handleActor(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 		err = n.onEnter(r, a, m.From, m.Enter, now, fx)
 	case kindLeave:
 		n.onLeave(r, a, now, fx)
+	case kindPanel:
+		n.onPanel(r, a, m.From, m.Panel, now, fx)
 	}
 	if err != nil {
 		return nil, err // 回滚：区域表、新建的实体一起撤销，不回复（对方重传）
@@ -831,6 +846,7 @@ func (n *Node) onOffer(r *Region, a Actor, from int32, o *handoffOffer, now time
 func (n *Node) install(r *Region, a Actor, st ActorState, now time.Time, fx *txEffects) {
 	nowNano := now.UnixNano()
 	st.Role, st.Handoff, st.RetryAfter = RoleReal, nil, 0
+	st.capHP() // Enter 的快照 HP 可能高于面板上限（交接带来的状态本来就夹过）
 	if st.Kind == KindPlayer {
 		st.LeaseUntil = nowNano + int64(n.cfg.LeaseTimeout)
 		st.WritebackAt = nowNano + int64(n.cfg.WritebackEvery)
@@ -843,7 +859,7 @@ func (n *Node) install(r *Region, a Actor, st ActorState, now time.Time, fx *txE
 	r.tombs.del(st.ID)
 	n.realChanged(st.ID, st.Ver.Epoch, true, fx)
 	if st.Kind == KindPlayer && st.Base != 0 {
-		fx.send(st.Base, &wireMsg{Kind: kindOwner, Owner: &ownerNotice{ID: st.ID, Epoch: st.Ver.Epoch, LastInput: st.LastInput}})
+		fx.send(st.Base, &wireMsg{Kind: kindOwner, Owner: &ownerNotice{ID: st.ID, Epoch: st.Ver.Epoch, LastInput: st.LastInput, PanelVer: st.Panel.Ver}})
 	}
 }
 
@@ -912,10 +928,12 @@ func (n *Node) onEnter(r *Region, a Actor, from int32, req *enterReq, now time.T
 		cs := a.CellState()
 		switch cs.Role {
 		case RoleReal:
+			// 幂等重进（Base 重启、看门狗误判）：Real 留着，Base 带来的面板更新就应用（与面板命令同一条规则）。
 			cs.Base = from
 			cs.LeaseUntil = now.Add(n.cfg.LeaseTimeout).UnixNano()
+			n.applyPanel(&cs, st.Panel, now, fx)
 			a.SetCellState(cs)
-			fx.send(from, &wireMsg{Kind: kindOwner, Owner: &ownerNotice{ID: st.ID, Epoch: cs.Ver.Epoch, LastInput: cs.LastInput}})
+			fx.send(from, &wireMsg{Kind: kindOwner, Owner: &ownerNotice{ID: st.ID, Epoch: cs.Ver.Epoch, LastInput: cs.LastInput, PanelVer: cs.Panel.Ver}})
 			return nil
 		case RoleFrozen:
 			refuse(n.cfg.Grid.SID(cs.Handoff.Target))

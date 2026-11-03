@@ -831,6 +831,8 @@ func run(ctx context.Context) error {
 			return fmt.Errorf("attack %d: no monster across the border in p1's view", i)
 		}
 		startHP := p1.snapshot()[target].hp()
+		// 第 3 项 = A：伤害是 p1 的 Real 上面板的攻击（客户端从自己 SceneActor 的 mirror 看到 cell_attack）。
+		atk := attackOf(p1)
 		statsBefore, _ := gm(ctx, 1000, "gm.scene.partition", nil)
 		forwardedBefore := cellsStat(ctx, "DamageForwarded")
 		const n = 10
@@ -859,7 +861,7 @@ func run(ctx context.Context) error {
 		if applied != n {
 			return fmt.Errorf("attack %d: %d of %d applied (%v)", i, applied, n, statsAfter["attacks"])
 		}
-		wantHP := max(0, startHP-*damage*applied)
+		wantHP := max(0, startHP-atk*applied)
 		if err := waitFor(ctx, 3*time.Second, "target hp on the client", func() (bool, string) {
 			o, ok := p1.snapshot()[target]
 			return ok && o.hp() == wantHP, fmt.Sprintf("hp %d want %d", o.hp(), wantHP)
@@ -874,19 +876,94 @@ func run(ctx context.Context) error {
 			}
 			minHP := int32(math.MaxInt32)
 			for _, r := range got {
-				if r.Target != target || r.Outcome != "applied" || int64(r.Damage) != *damage {
+				if r.Target != target || r.Outcome != "applied" || int64(r.Damage) != atk {
 					return false, fmt.Sprintf("push %+v", r)
 				}
 				minHP = min(minHP, r.TargetHP)
 			}
 			return int64(minHP) == wantHP, fmt.Sprintf("lowest pushed hp %d want %d", minHP, wantHP)
 		}))
-		step(fmt.Sprintf("attack_across_%d", i), map[string]any{"target": target, "start_hp": startHP, "end_hp": wantHP,
+		step(fmt.Sprintf("attack_across_%d", i), map[string]any{"target": target, "start_hp": startHP, "end_hp": wantHP, "damage": atk,
 			"pushed_results": len(p1.resultsFor(firstSeq, lastSeq)),
 			"applied": applied, "duplicate": attackStat(statsAfter, "duplicate") - attackStat(statsBefore, "duplicate"),
 			"damage_forwarded_by_cells": cellsStat(ctx, "DamageForwarded") - forwardedBefore,
 			"damage_retries_total": cellsStat(ctx, "DamageRetries")})
 	}
+
+	// 第 3 项 = A：战斗面板的权威在 Cell 的 Real。p1 升一级（AddExp 一级的经验）：Base 在同一笔事务里推出新面板、提交后发给
+	// 当前 owner；客户端从自己 SceneActor 的 mirror 看到 cell_max_hp / cell_attack 变大、当前 HP 不回血；自己 Player 的
+	// self 视图里没有另一份 HP / 面板；之后打怪一次，伤害是新的攻击值。
+	soft("panel_level_up", func() error {
+		self, ok := p1.self()
+		if !ok {
+			return errors.New("p1 does not see itself")
+		}
+		maxBefore, atkBefore, hpBefore := asInt(self.fields["cell_max_hp"]), attackOf(p1), self.hp()
+		if maxBefore <= 0 || atkBefore != *damage {
+			return fmt.Errorf("before the level-up: cell_max_hp %d cell_attack %d, want a panel with the level-0 attack %d", maxBefore, atkBefore, *damage)
+		}
+		resp, err := p1.call(ctx, msgid.MsgAddExp, must(pb.MarshalAddExpRequest(&pb.AddExpRequest{Amount: 100})))
+		if err != nil {
+			return err
+		}
+		if r, err := pb.UnmarshalAddExpResponse(resp); err != nil || r.Code != 0 {
+			return fmt.Errorf("add_exp: %v %+v", err, r)
+		}
+		var maxAfter, atkAfter int64
+		if err := waitFor(ctx, 5*time.Second, "p1's scene actor shows the new panel", func() (bool, string) {
+			s, _ := p1.self()
+			maxAfter, atkAfter = asInt(s.fields["cell_max_hp"]), attackOf(p1)
+			return maxAfter > maxBefore && atkAfter > atkBefore, fmt.Sprintf("cell_max_hp %d cell_attack %d", maxAfter, atkAfter)
+		}); err != nil {
+			return err
+		}
+		if s, _ := p1.self(); s.hp() != hpBefore {
+			return fmt.Errorf("the level-up healed: cell_hp %d -> %d (the panel changes the cap only)", hpBefore, s.hp())
+		}
+		own, ok := p1.ownPlayer()
+		if !ok {
+			return errors.New("p1 does not hold its own Player")
+		}
+		for _, key := range []string{"cell_hp", "cell_max_hp", "cell_attack", "cell_power", "attr_final", "attr_base"} {
+			if _, has := own.fields[key]; has {
+				return fmt.Errorf("p1's own Player view carries %s (fields %v): a second copy of the HP / panel", key, own.fields)
+			}
+		}
+		state, err := gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p1.playerID})
+		if err != nil {
+			return err
+		}
+		if err := waitFor(ctx, 5*time.Second, "the base sees the panel confirmed", func() (bool, string) {
+			state, _ = gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p1.playerID})
+			return asInt(state["panel_ver"]) > 0 && asInt(state["panel_acked"]) == asInt(state["panel_ver"]) && asInt(state["attack"]) == atkAfter,
+				fmt.Sprintf("%v", state)
+		}); err != nil {
+			return err
+		}
+		here, _ := p1.self()
+		target := pickMonster(p1, func(p point) bool { return dist(p, here.pos()) <= 120 })
+		if target == 0 {
+			return errors.New("no monster near p1 to hit after the level-up")
+		}
+		startHP := p1.snapshot()[target].hp()
+		seq, err := p1.attack(ctx, target)
+		if err != nil {
+			return err
+		}
+		wantHP := max(0, startHP-atkAfter)
+		if err := waitFor(ctx, 5*time.Second, "one hit at the new attack", func() (bool, string) {
+			got := p1.resultsFor(seq, seq)
+			o := p1.snapshot()[target]
+			return len(got) == 1 && got[0].Outcome == "applied" && int64(got[0].Damage) == atkAfter && o.hp() == wantHP,
+				fmt.Sprintf("pushes %+v hp %d want %d", got, o.hp(), wantHP)
+		}); err != nil {
+			return err
+		}
+		step("panel_level_up", map[string]any{"cell_max_hp_before": maxBefore, "cell_max_hp_after": maxAfter, "cell_attack_before": atkBefore,
+			"cell_attack_after": atkAfter, "cell_hp": hpBefore, "base_panel": state, "hit_target": target, "hit_damage": atkAfter,
+			"target_hp": []int64{startHP, wantHP}})
+		return nil
+	}())
 
 	// 6. Monster 跨界：配置里有一只沿 +X / -X 往返的怪（walker，150 单位 / 秒，碰世界边缘反弹，约每 40s 过一次分界线）。
 	//    p2 站到它过线的位置旁边，等它从一个格交给另一个格（旧格 Real → 新格 Real），期间 p2 的客户端一直持有它。
@@ -941,7 +1018,7 @@ func run(ctx context.Context) error {
 			return err
 		}
 	}
-	wantHP := p2Self.hp() - 2**damage
+	wantHP := p2Self.hp() - 2*attackOf(p1)
 	if err := waitFor(ctx, 10*time.Second, "p2's hp written back to its Player", func() (bool, string) {
 		state, err := gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p2.playerID})
 		if err != nil {
@@ -1163,6 +1240,16 @@ func (c *client) createCount(id int64) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.creates[id]
+}
+
+// attackOf 是客户端从自己 SceneActor 的 mirror 看到的面板攻击（第 3 项 = A：伤害按它结算）。mirror 里没有这个字段时
+// （没有面板）伤害是配置的 attack_damage；面板本身由 panel_level_up 一步严格核对（那里先要求 cell_max_hp 存在）。
+func attackOf(c *client) int64 {
+	s, _ := c.self()
+	if v, ok := s.fields["cell_attack"]; ok {
+		return asInt(v)
+	}
+	return *damage
 }
 
 // ownPlayer 是客户端手里自己的 Player（kind 是 Player、unique 是玩家 ID；分区场景里经 self 视图来，E4）。

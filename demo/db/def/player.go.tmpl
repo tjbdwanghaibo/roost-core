@@ -154,6 +154,28 @@ type PlayerDao struct {
 	CellHP        int64  `dao:"persist,sync" store:"cell_hp"`
 	CellSnapEpoch uint64 `dao:"persist" store:"cell_snap_epoch"`
 	CellSnapSeq   uint64 `dao:"persist" store:"cell_snap_seq"`
+	// CellMaxHP / CellAttack / CellPower / CellPanelVer are the battle panel
+	// this Base derived from the player's growth (level, equipment: the Final
+	// attribute layer) for the partitioned scene, and its sequence
+	// (cellworld.Panel, maintainer decision 2026-11-04 item 3 = A). The
+	// panel's authority is the cell's Real; this is what the Base last sent
+	// it. Written in the same transaction as the level-up or the equipment
+	// change, so the sequence stays monotonic across a Base restart.
+	// CellPanelAcked is the highest sequence the Real has confirmed — it comes
+	// back with the write-back snapshot. Persisted. The three numbers are
+	// also synced for the same reason as CellHP: the SceneActor's mirror is
+	// packed with this DAO's encoding and carries the Real's panel; the
+	// player's own `self` view leaves them out (the panel and the HP of a
+	// partitioned scene are the scene actor's). CellPanelSentAt /
+	// CellPanelSince / CellPanelUnknown are the resend and "unknown" timers.
+	CellMaxHP        int64  `dao:"persist,sync" store:"cell_max_hp"`
+	CellAttack       int64  `dao:"persist,sync" store:"cell_attack"`
+	CellPower        int64  `dao:"persist,sync" store:"cell_power"`
+	CellPanelVer     uint64 `dao:"persist" store:"cell_panel_ver"`
+	CellPanelAcked   uint64 `dao:"persist" store:"cell_panel_acked"`
+	CellPanelSentAt  int64  `dao:"nopersist,nosync" store:"cell_panel_sent_at"`
+	CellPanelSince   int64  `dao:"nopersist,nosync" store:"cell_panel_since"`
+	CellPanelUnknown bool   `dao:"nopersist,nosync" store:"cell_panel_unknown"`
 }
 
 // Equipment is a nested struct: the generator gives it its own dirty

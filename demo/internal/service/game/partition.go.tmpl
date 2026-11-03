@@ -75,13 +75,15 @@ type partitionRuntime struct {
 
 	// 攻击结论（Base 侧，AttackResult 观察点）：诊断与端到端核对用的计数，不是业务状态。
 	attacksApplied, attacksDuplicate, attacksRejected, attacksUnknown atomic.Uint64
-	spawned                                                           atomic.Int64
+	// 面板结论（Base 侧，PanelResult 观察点，第 3 项）：同样只是计数。
+	panelsApplied, panelsDuplicate, panelsUnknown atomic.Uint64
+	spawned                                       atomic.Int64
 }
 
 // partitionPlayerMirrorMask / partitionMonsterMirrorMask：mirror 打包时写进载荷的字段（Player / Monster 的同步编码，
 // 客户端照常按 player / monster 命名空间解码，维护者 D2 = A）。
 var (
-	partitionPlayerMirrorMask  = syncMask(db.PlayerDaoSyncFields(), "PosX", "PosY", "CellHP")
+	partitionPlayerMirrorMask  = syncMask(db.PlayerDaoSyncFields(), "PosX", "PosY", "CellHP", "CellMaxHP", "CellAttack", "CellPower")
 	partitionMonsterMirrorMask = syncMask(db.MonsterDaoSyncFields(), "Template", "PosX", "PosY", "HP")
 )
 
@@ -150,7 +152,7 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 		Mirrors: rt.mirrors, Interest: bridge.interest,
 		Session:    coreentity.GetUniqueIDFromEntityID,
 		MirrorKind: partitionMirrorKind,
-		Hooks:      cellworld.Hooks{AttackResult: rt.attackResult},
+		Hooks:      cellworld.Hooks{AttackResult: rt.attackResult, PanelResult: rt.panelResult},
 	}
 	if cell, isCell := grid.CellOf(identity.Sid); isCell {
 		rt.cell = &cell
@@ -292,7 +294,8 @@ func partitionMirrorKind(s cellworld.EntityState) (string, uint32) {
 	return monster.SyncNamespaceMonster, uint32(monster.EntityKindMonster)
 }
 
-// packMirror 把 witness 里的一个对象打成客户端认识的载荷：玩家用 PlayerDao 的同步编码（位置与 HP），怪用
+// packMirror 把 witness 里的一个对象打成客户端认识的载荷：玩家用 PlayerDao 的同步编码（位置、HP 与 Real 上的战斗
+// 面板：cell_max_hp / cell_attack / cell_power，第 3 项 = A），怪用
 // MonsterDao 的（模板、位置与 HP）。直接填生成的同步补丁（db.SyncPlayerDao / db.SyncMonsterDao）再编码，不经 DAO 的
 // setter：这些对象不是本进程的实体，setter 会把持久字段（CellHP）登记进当前上下文的事务（Manager 的打包在别人的
 // 事务上下文里运行时就是一笔已关闭的事务，2026-11-03 端到端第一轮因此 panic）。
@@ -301,7 +304,10 @@ func (rt *partitionRuntime) packMirror(s cellworld.EntityState, _ coreentity.Syn
 		raw, err := db.MarshalSyncPlayerDao(&db.SyncPlayerDao{
 			EntityID: s.ID, SyncFormat: playerSyncFormat,
 			PosX: &db.SyncPlayerDaoPosXField{Value: s.X}, PosY: &db.SyncPlayerDaoPosYField{Value: s.Y},
-			CellHP: &db.SyncPlayerDaoCellHPField{Value: int64(s.HP)},
+			CellHP:     &db.SyncPlayerDaoCellHPField{Value: int64(s.HP)},
+			CellMaxHP:  &db.SyncPlayerDaoCellMaxHPField{Value: int64(s.Panel.MaxHP)},
+			CellAttack: &db.SyncPlayerDaoCellAttackField{Value: int64(s.Panel.Attack)},
+			CellPower:  &db.SyncPlayerDaoCellPowerField{Value: int64(s.Panel.Power)},
 		})
 		return coreentity.TakeFrozenSyncPayload(player.PlayerSyncCodec, raw), err
 	}
@@ -351,21 +357,36 @@ func (rt *partitionRuntime) attackResult(r cellworld.AttackResult) {
 	}
 	// 结论推给攻击方的客户端（维护者 2026-11-03 追加第 2 项）。这里在 Node 的提交后回调上（出站 goroutine），推送只准入
 	// 玩家连接的出站队列、不等写出；玩家已离线就丢掉（结论也在 gm.scene.partition 的计数里）。
-	push := attackResultPush(r, rt.config.AttackDamage)
+	push := attackResultPush(r)
 	playerID := coreentity.GetUniqueIDFromEntityID(r.Hit.Attacker)
 	if err := rt.push(context.Background(), playerID, msgid.MsgAttackResult, push); err != nil {
 		slog.Debug("partition: attack result not pushed", "player_id", playerID, "seq", r.Hit.Seq, "err", err)
 	}
 }
 
-// attackResultPush 把 cellworld 的结论翻成客户端的 AttackResultPush。
-func attackResultPush(r cellworld.AttackResult, damage int32) *pb.AttackResultPush {
+// panelResult 是 Base 收到的面板结论（提交之后、不阻塞）：计数并记日志。面板本身随 SceneActor 的 mirror 到客户端。
+func (rt *partitionRuntime) panelResult(r cellworld.PanelResult) {
+	switch {
+	case r.Outcome == cellworld.OutcomeUnknown:
+		rt.panelsUnknown.Add(1)
+	case r.Duplicate:
+		rt.panelsDuplicate.Add(1)
+	default:
+		rt.panelsApplied.Add(1)
+	}
+	slog.Debug("partition: panel concluded", "actor", r.Actor, "ver", r.Ver, "outcome", r.Outcome.String(), "duplicate", r.Duplicate,
+		"hp", r.HP, "max_hp", r.MaxHP)
+}
+
+// attackResultPush 把 cellworld 的结论翻成客户端的 AttackResultPush。伤害是目标格真正结算的值（攻击者面板的攻击，
+// 第 3 项 = A；没有面板时是 scene.partition.attack_damage）。
+func attackResultPush(r cellworld.AttackResult) *pb.AttackResultPush {
 	out := &pb.AttackResultPush{Seq: r.Hit.Seq, Target: r.Target, TargetHP: r.HP}
 	switch {
 	case r.Outcome == cellworld.OutcomeApplied && r.Duplicate:
 		out.Outcome = "duplicate"
 	case r.Outcome == cellworld.OutcomeApplied:
-		out.Outcome, out.Damage = "applied", damage
+		out.Outcome, out.Damage = "applied", r.Damage
 	case r.Outcome == cellworld.OutcomeUnknown:
 		out.Outcome, out.TargetHP = "unknown", 0
 	default:
@@ -393,7 +414,8 @@ func (rt *partitionRuntime) MoveIntent(ctx context.Context, playerID, vx, vy int
 	return rt.node.Move(ctx, entityID, vx, vy)
 }
 
-// AttackTarget sends one fixed-damage attack (scene.partition.attack_damage) and returns its sequence.
+// AttackTarget sends one attack and returns its sequence. The damage is the attacker's panel attack on its Real
+// (item 3 = A); scene.partition.attack_damage is the default for an attacker without a panel.
 func (rt *partitionRuntime) AttackTarget(ctx context.Context, playerID, target int64) (uint64, error) {
 	entityID, err := partitionPlayer(playerID)
 	if err != nil {
@@ -445,6 +467,9 @@ func (rt *partitionRuntime) stats(ctx context.Context) (map[string]any, error) {
 			"applied": rt.attacksApplied.Load(), "duplicate": rt.attacksDuplicate.Load(),
 			"rejected": rt.attacksRejected.Load(), "unknown": rt.attacksUnknown.Load(),
 		},
+		"panels": map[string]uint64{
+			"applied": rt.panelsApplied.Load(), "duplicate": rt.panelsDuplicate.Load(), "unknown": rt.panelsUnknown.Load(),
+		},
 		"spawned": rt.spawned.Load(),
 	}
 	if rt.cell != nil {
@@ -458,6 +483,7 @@ func (rt *partitionRuntime) stats(ctx context.Context) (map[string]any, error) {
 			entities = append(entities, map[string]any{
 				"id": s.State.ID, "kind": s.State.Kind, "role": s.Role, "owner": s.Owner.String(),
 				"x": s.State.X, "y": s.State.Y, "vx": s.State.VX, "vy": s.State.VY, "hp": s.State.HP, "epoch": s.State.Ver.Epoch, "idle": s.State.Idle,
+				"max_hp": s.State.Panel.MaxHP, "attack": s.State.Panel.Attack, "power": s.State.Panel.Power, "panel_ver": s.State.Panel.Ver,
 			})
 		}
 		out["entities"] = entities
@@ -477,6 +503,8 @@ func (rt *partitionRuntime) playerState(ctx context.Context, playerEntity int64)
 		"intent_seq": st.IntentSeq, "attack_seq": st.AttackSeq,
 		"view_age_ms": ageMillis(st.LastViewAt), "enter_age_ms": ageMillis(st.LastEnterAt), "lease_age_ms": ageMillis(st.LastLeaseAt),
 		"enter_hint": st.EnterHint, "lost_epoch": st.LostEpoch, "shown": st.Shown,
+		"max_hp": st.Panel.MaxHP, "attack": st.Panel.Attack, "power": st.Panel.Power, "panel_ver": st.Panel.Ver,
+		"panel_acked": st.PanelAcked, "panel_unknown": st.PanelUnknown,
 	}, nil
 }
 

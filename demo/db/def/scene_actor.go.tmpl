@@ -43,4 +43,10 @@ type SceneActorDao struct {
 	CellApplied []CellHit `dao:"nopersist,nosync" store:"cell_applied"`
 	// CellHandoff 是冻结中的交接（目标格、epoch、开始与上次发送时间）；Real 时为 nil。
 	CellHandoff *CellHandoff `dao:"nopersist,nosync" store:"cell_handoff"`
+	// CellMaxHP / CellAttack / CellPower / CellPanelVer 是战斗面板（cellworld.Panel，第 3 项 = A）：权威在这里（Real），
+	// 由 Base 的面板命令按序号更新、随交接带走；伤害取攻击者的 CellAttack，当前 HP 不超过 CellMaxHP（0 = 没有面板）。
+	CellMaxHP    int64  `dao:"nopersist,nosync" store:"cell_max_hp"`
+	CellAttack   int64  `dao:"nopersist,nosync" store:"cell_attack"`
+	CellPower    int64  `dao:"nopersist,nosync" store:"cell_power"`
+	CellPanelVer uint64 `dao:"nopersist,nosync" store:"cell_panel_ver"`
 }
