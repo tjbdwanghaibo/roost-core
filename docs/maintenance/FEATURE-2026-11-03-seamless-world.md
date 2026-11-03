@@ -1,6 +1,6 @@
 # 功能设计：多进程无缝大世界（2026-11-03）
 
-**状态：思路稿（维护者 2026-11-03：“可以先不做”“把这个方案思路先记到文档里”）；同日维护者要求“可以开一个分支先实现一版，并测试一下”，第一版原型只在分支 `feat/seamless-world-prototype` 上（§5 设计、§6 实测），未合入 main，不是现行能力。现行能力以 [MMORPG 接入手册](../framework/MMORPG-INTEGRATION.md) 为准。**
+**状态：思路稿（维护者 2026-11-03：“可以先不做”“把这个方案思路先记到文档里”）；同日维护者要求“可以开一个分支先实现一版，并测试一下”，第一版原型只在分支 `feat/seamless-world-prototype` 上（§5 设计、§6 实测）；同日维护者定下 v2 方向（Cell 是 Scene 的模式、Cell 部分是 Nest 实体），v2 也只在该分支（§7 设计、§8 实测与剩余缺口）。未合入 main，不是现行能力。现行能力以 [MMORPG 接入手册](../framework/MMORPG-INTEGRATION.md) 为准。**
 
 登记在 [DESIGN-TODO“按需求触发的功能”](DESIGN-TODO.md#按需求触发的功能)。
 
@@ -314,3 +314,100 @@ Cell 进程是普通 roost App：`App.Singleton(kitredis 的 SingletonStore)`，
 2. **B. cellworld v2**（框架）：`Region` / `Actor` / `ActorBeat`；v1 的确定性用例按新执行模型改写（断言含义不变）；新增真实 Nest 引擎 + EntityManager + 心跳驱动的进程内多格用例与两 OS 进程用例（NATS 私有端口、Redis 私有端口给单实例锁）；Base 侧 mirror 推给测试客户端（`frame.Receiver` 解帧）检查视野连续。
 3. **C. game-demo 分区配置**：Scene 支持分区、Monster 交接、Player 经 SceneActor；缺省不分区，`scripts/test-demo-generated.sh` 等全部通过。
 4. 每阶段测试通过即提交并推分支；某一步发现方向问题先停下来写进汇报。
+
+## 8. v2 实测结果与剩余缺口（2026-11-03）
+
+### 8.1 做了什么
+
+| 阶段 | 内容 | 位置 |
+| --- | --- | --- |
+| A. Sync | `policy.Mirrors[T]`：远端只读对象作为 subject，与本地实体同一 Manager、同一会话流；全量 / 增量 / 删除、按 (epoch, seq) 丢旧、墓碑、TTL 过期、删除后同 ID 重新出现走 remove-before-create。**只组合现有公开 API，不改 Manager、Interest、SubjectSyncState 的任何现有代码** | `framework/sync/entitysync/policy/mirror.go` |
+| B. 框架 | `Region`（Scene 持有的手写 DAO，写时登记逆操作）、`ActorState` / `Actor`（角色状态在实体 DAO）、`Node`（每进程端点：消息 → Nest 请求，提交后的发送 / 报告 / 销毁 → 有界出站队列）、`BaseState` / `BasePlayer`（Player 上的路由状态，看门狗 + 续租是 Player 心跳）、witness → Mirrors、SceneActor 租约、回写按版本幂等、Cell 崩溃按 Player 快照重建、线上格式版本号 | `gameplay/cellworld/` |
+| C. demo | **未做**，见 §8.5 | — |
+
+### 8.2 用例与结果
+
+macOS（Apple M5）本机。`GOWORK=off go test -race -count=1 ./gameplay/cellworld/ ./framework/sync/...` 全部通过；真实 NATS / Redis 用例要求 PATH 里有 nats-server（2.14.5）/ redis-server（8.10.1），测试自起私有端口、用完杀掉。
+
+| 层 | 用例 | 断言 |
+| --- | --- | --- |
+| Sync 单测 | mirror 与本地实体同一会话流；丢旧版本（同 epoch 小 seq、相同版本、更大 epoch 小 seq 是新的）；有 Delta 时按 mask 发增量、mask 0 发全量；删除 → remove、墓碑挡迟到版本、同一拍删除又出现；TTL 过期；位置决定可见（走出半径 remove、回来 create）；并发乱序 Apply 收敛到最大版本；Close 全部 remove | 解帧后的客户端操作序列与持有集合。**先对空桩跑：8 条全红**（[修前输出](../performance/benchmarks/cellworld-v2-20261103/mirror-red-before.txt)），实现后转绿；`framework/sync/...` 全部 `-race` 通过 |
+| 进程内多“进程”（各自 EntityManager、Nest 引擎、心跳驱动、Node） | v1 的直线、抖动（12 次交接）、斜穿四格、跨界攻击、慢交接（Offer 延迟 300ms）、20% 丢包 + 10% 重复 + 0～30ms 乱序 | v1 的全部断言（witness 连续：缺失 ≤ 1 份、间隔 ≤ 3 拍 + 50ms；至多一个 Real；伤害只结算一次），**新增客户端连续**：Base 进程 Manager 推出的帧解出来，玩家离开半径以内的静止 NPC 从未被 remove，结束时近处的 NPC 与自己的 SceneActor 都在客户端手里。实测 witness 缺失 0、最坏间隔约 82ms |
+| 细粒度（v1 handoff / combat 按新模型改写） | 交接留 Ghost、迟滞不交接、丢 3 个 Offer 与 2 个回复且其余全重复、回复全丢靠 Ghost 隐式确认、超时只删不恢复后 Base 重进、被拒恢复并用下一 epoch 重试、回复扣住 400ms 时来回越界、A→B→D 交接链、Enter 幂等与“有存活 Ghost 就拒绝”、Ghost 墓碑；伤害全部消息重复、距离 / 可见性拒绝、去重随交接带走、结果未知、去重表满拒绝 | 同 v1（realChecker 在每次**提交后**的身份变化上检查） |
+| 生命周期（新增） | Cell 崩溃后按 Player 快照重建（挨打回写 HP 90 → 崩溃 → 重进后 HP 90、epoch 更大）；Base 消失后 SceneActor 在 LeaseTimeout 内离场、邻格 Ghost 消失；回写全部重复 + 乱序时只接受更新的版本；**交接事务回滚不移交**（目标格安装到最后一步失败 → 新建的实体撤销、seen 还原 → 旧格重传同一 epoch → 第二次安装成功） | 三处变异各让断言变红（确认后不交出、不发 Ghost、区域表不随事务回滚），[记录](../performance/benchmarks/cellworld-v2-20261103/mutation-checks.txt) |
+| 真实 NATS | 直线、抖动、斜穿、跨界攻击 | 约定比替身放宽一拍；实测缺失 0、最坏间隔约 82ms |
+| 多 OS 进程（每个 Cell 是带单实例锁的 App 子进程，锁在私有 redis-server） | 来回穿越 + 跨界攻击 10 次；**kill -9** Cell 进程后新进程等旧锁过期（TTL 3s）接手，玩家按快照恢复（新 pid、HP 90）；**同 sid 起第二个 Cell 进程**在 startup_wait 内以 `ErrSingletonHeld` 启动失败，第一个照常服务；**Base 进程被 kill -9** 后 SceneActor 约 0.75s 离场（租约 1s） | 按各进程事件时间跨进程至多一个 Real（被 kill 的进程之后不算持有）、epoch 单调；伤害各只在一个进程结算一次 |
+
+其余验证：`GOWORK=off go build ./... && go vet ./...`、glsvet（nest、entity、dataengine/engine、sync/entitysync 含 policy、gameplay/cellworld）无输出、全量 `GOWORK=off go test ./...`、根包 `go test -count=1 .`（含 `TestCoreDependencyBoundary`：core 层测试不 import wiring）、`scripts/test-demo-generated.sh`（私有依赖：`scripts/mirror-local.sh`，偏移 26000，用后 clean）、`test-sync-modes-generated.sh`、`test-mmorpg-generated.sh`、`check-doc-anchors.py` 全部通过。demo / codegen 本轮没有改动，生成工程的通过只说明“普通模式不回归”，不说明分区模式在 demo 里可用。
+
+### 8.3 测量：与 v1 同负载对照
+
+同一负载（2×2 网格、每格一个 OS 进程、单机 nats-server、每格 N 个 3 m/s 随机游走 NPC、40 个随机游走玩家、20s 窗口、两轮），[原始输出与环境](../performance/benchmarks/cellworld-v2-20261103/README.md)。表里是两轮、四格的范围（v1 数字取自 §6.2）：
+
+| 每格 NPC | 版本 | 每格 CPU（一个核） | 每拍耗时 p50 / p99 | 每格出 | Ghost 延迟 p50 / p99 | 交接延迟 p50 / p99 | 视野（witness）延迟 p50 / p99 |
+| ---: | --- | ---: | --- | --- | --- | --- | --- |
+| 1k | v1 | 4.3～6.3% | 0.9～1.6 / 2.5～4.6ms（整拍） | 230～370 msg/s、310～400 KB/s | 1.5～1.9 / 3.8～5.9ms | 1.6～2.3 / 2.8～14.8ms | 0.22～0.28 / 1.1～1.2ms |
+| 1k | v2 | **31.1～37.0%** | 0.34～0.48 / 1.1～2.2ms（只是区域心跳；角色心跳另计） | 1000～1500 msg/s、425～580 KB/s | 0.25～0.30 / 1.1～1.5ms | 0.53～0.70 / 1.5～3.5ms | 0.34～0.43 / 1.5ms |
+| 5k | v1 | 13.4～17.1% | 3.7～5.1 / 5.9～9.8ms（整拍） | 295～438 msg/s、1.4～1.7 MB/s | 2.6～3.5 / 6.0～6.7ms | 4.5～6.0 / 6.3～11.1ms | 0.15 / 0.74～0.77ms |
+| 5k | v2 | **76.3～82.0%** | 0.63～0.80 / 2.0～3.4ms（同上） | 1800～2200 msg/s、1.7～2.4 MB/s | 0.27～0.37 / 1.0～2.0ms | 0.61～1.01 / 1.7～3.0ms | 0.26～0.28 / 0.73～0.97ms |
+
+两档、两轮都没有被拒、放弃、重传、出站队列丢弃、Nest 准入失败或 Real 冲突。Base 进程（父进程，含 Sync mirror 与客户端解帧）CPU 11～15%。
+
+**新执行模型的代价**：
+
+- **CPU 约 5 倍**（1k：5% → 33%；5k：15% → 80%）。主要是“每个实体每拍一笔 Nest 事务”本身：探针（[记录](../performance/benchmarks/cellworld-v2-20261103/probe-heartbeat-cost.txt)）里回调什么都不做的 50ms 心跳，1k 个实体就是 15%、5k 个 61% 的一个核；其余是报告批次与 Ghost 编码。按这个量级，5k 个 20Hz 的 NPC 一个格要接近一个核，v1 的单 goroutine 循环只要 1/6。
+- **延迟反而更好**：交接 Offer 在目标格是一次立即执行的 Scene handler，不再排在 tick 后面（v1 缺口 12），5k 时 p50 从约 5ms 降到约 0.7ms；Ghost 由出站 goroutine 在队列排空时攒批发出，不等整拍结束，p50 从 2.6～3.5ms 降到约 0.3ms。
+- **消息数约 4～5 倍**：Ghost 按报告批次（而不是按拍）发出，批次小、条数多；字节数接近（5k 时 1.7～2.4 MB/s 对 1.4～1.7 MB/s）。Ghost 仍是每拍全量，没有增量 / LOD（v1 缺口 11 未变）。
+- 同机数据，跨机网络延迟、长稳、10k 以上没有测（v1 缺口 16 未变）。
+
+### 8.4 v1 缺口的现状与 v2 新缺口
+
+| # | 缺口 | v2 状态 | 性质 |
+| --- | --- | --- | --- |
+| v1-1 | Cell 不在 Nest 上 | **已解决**：区域表在 Scene、角色状态在实体 DAO、心跳驱动、交接以事务为边界 | — |
+| v1-2 | 视野只到 Base、没到客户端 | **框架层已解决**：witness → `policy.Mirrors` → Base 的 Manager → 客户端（测试客户端解帧验证）；demo 未接 | 上线前必须解决（demo / 正式客户端格式） |
+| v1-3 | 战斗状态不回写 | **部分解决**：HP 与位置按版本回写（定时、离场、租约到期），重建用快照；Buff / 冷却原型里没有建模 | 上线前必须解决（字段清单与回写时机由产品定） |
+| v1-4 | NPC 崩溃丢失、无重建来源 | **未解决**：框架有 `Node.Spawn`，“新 Cell 进程按刷怪配置重建”要 demo 的每格 spawner（§7.8），没做 | 上线前必须解决 |
+| v1-5 | Cell 没有单实例保证 | **已解决**：Cell 是带单实例锁的 App（多进程用例验证同 sid 第二进程被拒、kill -9 后新进程等锁接手） | — |
+| v1-6 | 玩家 Real 没有租约 | **已解决**：SceneActor 租约（Base 每 LeasePeriod 续租，LeaseTimeout 离场） | — |
+| v1-7 | 重进防重复只有“存活 Ghost 就拒绝”一道 | 未变 | 上线前必须解决 |
+| v1-8 | 结算方不复核距离；没有鉴权 | 未变 | 上线前必须解决 |
+| v1-9 | 去重窗口按系统时间 | 未变 | 上线前必须解决（跨机前） |
+| v1-10 | 线上格式没有版本号 | **已解决**：`WireVersion = 2`，不是当前版本的消息按坏消息丢弃 | — |
+| v1-11 | Ghost 每拍全量 | 未变；v2 消息条数更多（按报告批次发） | 原型简化（容量阶段） |
+| v1-12 | 交接延迟随目标格每拍耗时增长 | **已改善**（见 8.3） | — |
+| v1-13 | 静态分区 | 未变 | 原型简化 |
+| v1-14 | 攻击只能打本格视野里的目标 | 未变 | 原型简化 |
+| v1-15 | Leave 尽力而为；配置不经 `app.LoadConfig` | Leave 有租约兜底；配置仍是 `NodeConfig` 结构体，没有 Mod 配置声明 | 原型简化（接 demo 时按 A4① 声明） |
+| v1-16 | 单机、短窗口测量 | 未变 | 原型简化 |
+| v2-1 | **每实体每拍一笔 Nest 事务的 CPU 代价**（8.3：约 5 倍） | 新 | **上线前必须解决或接受**：见 8.6 D1 |
+| v2-2 | witness 的空间索引每拍从区域表现建（A1：索引不常驻），O(本格 + Ghost) | 新 | 原型简化（5k 时区域心跳 p99 ≤ 3.4ms） |
+| v2-3 | Base 喂 mirror 在 Player handler 里直接调 Sync（不随事务回滚，靠按版本幂等）；handler 回滚时 mirror 可能比 BaseState 新一份 witness | 新 | 原型简化（无害：下一份 witness 覆盖） |
+| v2-4 | 客户端视野依赖 R_feed（witness 半径）≥ Base Interest 的离开半径 + 余量；超出 witness 半径的 mirror 停在最后位置直到 TTL 过期 | 新 | 定案前提，接 demo 时在配置校验里强制 |
+| v2-5 | 实体销毁在 Node 出站 goroutine 上执行（等实体锁时出站队列暂停） | 新 | 原型简化 |
+| v2-6 | 跨格 / 跨进程的队伍可见（GroupView / selfsync.Groups 从 Base 推）没接 | 新 | 上线前必须解决（§7.8 (b)） |
+| v2-7 | 一个进程既是 Cell 又是 Base（自己格里的玩家走本机回环）只在进程内用例覆盖，多进程用例里 Base 都是单独进程 | 新 | 原型简化 |
+| v2-8 | 区域表是手写 DAO（undoMap），没有生成 DAO 的 schema / 同步能力 | 新 | 需要维护者确认（8.6 D3） |
+
+### 8.5 没做的：demo 分区配置（阶段 C）
+
+没有改 `demo/`：Scene 的分区配置、Monster 交接、Player 经 SceneActor 参与都还只在框架层（`gameplay/cellworld` 的测试实体）验证过。原因：
+
+1. 接 demo 需要新的生成实体 SceneActor（DAO、lifecycle）、Monster / Player / Scene 各加一组 nopersist 字段与心跳、分区配置按 A4① 声明、Scene 桥在分区模式下改走 `Node.Enter / Move`、mirror 的打包要产出 demo 客户端认识的 `player` / `monster` 载荷，再重新生成 game-demo 跑全部生成工程门禁——量级与本轮框架部分相当。
+2. 其中 Monster 是否每只一个 20Hz 的格内心跳，取决于 8.6 D1 的决定（5k 只 NPC 约一个核）；先接 demo 再改执行方式会返工。
+3. SceneActor 在客户端是什么（8.6 D2）也要先定。
+
+接 demo 的入口已经备好：`NodeConfig.CreateActor` 接生成 lifecycle 的 `Create`（handler 内即 `CreateInScope`）；`Actor` / `RegionHost` / `BasePlayer` 三个接口就是 SceneActor / Monster、Scene、Player 要实现的全部方法；§7.8 的管理器分类不需要重写任何现有管理器。
+
+### 8.6 需要维护者决定
+
+- **D1 每实体心跳的 CPU 代价**（v2-1）。A：接受（每格 5k 个 20Hz NPC 约一个核）。B（推荐）：NPC 格内心跳按视野分档——区域表知道哪些 NPC 附近有玩家，没人看的 NPC 降到 200ms / 1s 档（heartbeat 已有档位与 SetPeriod），估计降到 1/3～1/5，代价是远处 NPC 的移动更粗、交接判断晚几拍。C：NPC 移动由 Scene 心跳批量积分，Monster 只保留战斗字段与事务（偏离“角色由自己的心跳驱动”，但 CPU 回到 v1 量级）。
+- **D2 SceneActor 在客户端的样子**。A（推荐）：mirror 打成 demo 现有 `player` 命名空间与 Player 的同步编码（位置、HP 字段），客户端不变；B：新的 `actor` 命名空间与编码，客户端区分 Player 与 SceneActor。
+- **D3 区域表的形式**（v2-8）。A（本轮）：框架内手写 DAO（undoMap 登记逆操作，与 `skill/combatcomponent.CombatDao` 同形）；B：由 Scene 的生成 DAO 承载（map 字段 + 生成 setter），可同步、可诊断，但 Ghost 表每拍大量写入会进 DAO 的脏标与 undo 记录。
+- **D4** 合入 main 时 `policy.Mirrors` 是否作为正式 API 写进 impl/04（本轮只在分支文档里）。
+
+### 8.7 方向判断
+
+- 维护者的两个决定（Cell 是 Scene 的模式、Cell 部分是 Nest 实体）在框架层落地后，**协议本身没有变复杂**：交接、伤害、重进的规则与 v1 相同，只是每一步落在哪笔事务里；“交接提交成功才算移交”由 Nest 的 handler 内新建 + 回滚撤销直接给出，只多了区域表的逆操作登记（变异 3 证明它是必要的）。Sync 侧不需要改 Manager / Interest：subject 本来就是不含观察者的内容状态。
+- 真正的新问题是 **v2-1 的 CPU 代价**：它不是实现细节，而是“每个移动实体一个 20Hz Nest 事务”这个前提的成本，NPC 数量越大越明显。是否进入 demo 与正式方案，建议先定 D1。
+- 其余上线前缺口（v1-4/7/8/9、v2-6）与 v1 的判断相同，都不在交接协议里，而在 NPC 重建、重进防重复、鉴权、跨机时钟与队伍可见这些外围。
