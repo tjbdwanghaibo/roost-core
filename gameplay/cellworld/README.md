@@ -1,62 +1,68 @@
-# cellworld：多进程无缝大世界 v1 原型
+# cellworld：分区 Scene 原型（v2）
 
-**原型，不是现行能力。** 只在分支 `feat/seamless-world-prototype` 上；设计、取舍与实测见 [无缝大世界方案 §5 / §6](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#5-v1-原型设计2026-11-03分支-featseamless-world-prototype)。不依赖、也不改动 Nest / DataEngine / Sync 三块。
+**原型，不是现行能力。** 只在分支 `feat/seamless-world-prototype` 上；设计、取舍与实测见 [无缝大世界方案 §7 / §8](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#7-v2-设计分区-scene2026-11-03分支-featseamless-world-prototype)（v1 见 §5 / §6）。
 
-沿 BigWorld 的 Cell + Ghost 流派：Player 不迁移（Player 进程充当 BaseApp），迁移的只是非持久的空间代理。
+沿 BigWorld 的 Cell + Ghost 流派，作为 **Scene 的一种模式**：声明了分区的 Scene 每个格由一个进程托管。Player 不迁移（Player 所在进程充当 BaseApp），角色在格里的部分是不持久的 Nest 实体 SceneActor，跟着交接走。
 
-## 角色
+## 状态放在哪
 
-| 类型 | 运行在 | 职责 |
+| 状态 | 放在哪 | 谁推进 |
 | --- | --- | --- |
-| `Grid` | 所有进程（同一份配置） | 静态方格分区：格 → Cell 进程 sid；边界带 G、交接迟滞 H |
-| `Cell` | 每个格一个进程（v1 一个进程一个格） | 本格 Real（唯一写权威）、邻格 Ghost（只读镜像）；按心跳积分位置、发 Ghost、交接、算玩家视野、结算伤害 |
-| `Base` | Player 所在 game 进程 | 记住玩家当前 owner Cell（epoch 只前进），转发移动意图与攻击，接收视野；视野静默或交接放弃时重新进入 |
-| `Transport` | — | 消息通道；`NATSTransport(fnats.IClient)` 用 NATS core pub/sub，每个进程一个收件主题 `roost.cellworld.<world>.<sid>` |
+| 格的区域表 `Region`：邻格 Ghost、交接 seen、墓碑、跨格伤害待决表、本格记录索引 | 该格的 **Scene 实体**（手写 DAO，写时登记逆操作） | Scene 的 `scene.cell` 心跳（`Node.RegionBeat`）与 Scene 上的 handler |
+| 角色 / NPC 的格内状态 `ActorState`：位置、速度、HP、去重表、交接进度、租约、回写时间 | **SceneActor / Monster 实体**的 DAO（`Actor.SetCellState` 经 DAO setter 写） | 实体自己的 `cell.actor` 心跳（`Node.ActorBeat`）与 handler |
+| 玩家的路由状态 `BaseState`：owner 格与 epoch、输入 / 攻击序号、快照（HP、位置、版本）、看门狗 | **Player 实体**（快照映射到持久字段） | Player 的 Base 心跳（`Node.BaseBeat`：看门狗 + 续租） |
+| 客户端看到的格内对象 | Base 进程 entitysync Manager 里的 **Sync mirror**（`policy.Mirrors[EntityState]`） | witness 到达时在 Player handler 里 Apply |
 
-## 用法
+`Node` 是每进程一个的端点：传输回调只解码并把消息投成 Nest 请求（Scene、[Scene, 角色]、[Scene, 攻击者, 目标]、Player）；事务提交后的发送、给区域的报告、实体销毁、跟进投递排进一个有界出站队列，由一个 goroutine 执行（Nest 不允许提交后回调里再 Dispatch）。Node 自己没有锁、不持有格内状态。
+
+## 交接以事务为边界
+
+旧格：角色心跳越界 → 同一笔事务里冻结（epoch+1）→ 提交后发 Offer；超时只删不恢复、告诉 Base。新格：Offer handler（锁 Scene + 该角色）在同一笔事务里经 `NodeConfig.CreateActor`（`EntityManager.Create`，handler 内即 `CreateInScope`，由事务捕获）建出实体、写成 Real、登记 seen，提交后才回“已接受”；回滚即撤销新建与区域表，不回复（旧格重传）。v1 的协议不变量（先冻结后 Offer、一个 epoch 一个目标、幂等回复、隐式确认）不变。
+
+## 用法（框架侧接线）
 
 ```go
-grid, _ := cellworld.NewGrid(cellworld.GridConfig{
-	CellSize: 50000, Cols: 2, Rows: 2, GhostBand: 3000, Hysteresis: 200,
-	Owners: map[cellworld.CellID]int32{{0, 0}: 101, {1, 0}: 102, {0, 1}: 103, {1, 1}: 104},
+node, _ := cellworld.NewNode(cellworld.NodeConfig{
+	World: "w1", SID: sid, Grid: grid, Transport: cellworld.NATSTransport(natsClient), Nest: nestMgr,
+	Destroy: func(ctx context.Context, e entity.IThreadSafeEntity) error {
+		return entityManager.Destroy(ctx, e, entity.DestroyReasonCommon, false)
+	},
+	// Cell 侧：本进程托管的格、持有 Region 的 Scene 实体、在 handler 内新建 SceneActor / Monster 的函数
+	Cell: &cellID, Scene: sceneEntityID, ViewRadius: 2500,
+	CreateActor: func(id int64, kind cellworld.EntityKind) (cellworld.Actor, error) { /* access.Create(...IsCreate...) */ },
+	// Base 侧：角色 ID → Player 实体 ID；witness 喂给 Sync mirror
+	PlayerEntity: playerOfActor, Mirrors: mirrors, Interest: interest, Session: sessionOfActor, MirrorKind: kindOf,
 })
+node.RegisterHandlers(nestMgr) // 引擎 Start 之前
+go node.Run(ctx)
 
-// Cell 进程（sid 101）
-cell, _ := cellworld.NewCell(cellworld.CellConfig{
-	World: "w1", Grid: grid, Cell: cellworld.CellID{Col: 0, Row: 0},
-	Transport: cellworld.NATSTransport(natsClient), ViewRadius: 2500, // Period 缺省 50ms
-})
-go cell.Run(ctx)
-<-cell.Ready()
-_ = cell.SpawnNPC(ctx, cellworld.EntityState{ID: 9001, X: 100, Y: 100, HP: 100})
-
-// BaseApp（Player 所在 game 进程，sid 900）
-base, _ := cellworld.NewBase(cellworld.BaseConfig{
-	World: "w1", SID: 900, Grid: grid, Transport: cellworld.NATSTransport(natsClient),
-	OnView:         func(v cellworld.View) { /* v.Entities 含邻区 Ghost */ },
-	OnAttackResult: func(r cellworld.AttackResult) { /* Applied / Rejected / Unknown */ },
-})
-go base.Run(ctx)
-<-base.Ready()
-_ = base.Enter(playerID, spatial.Point{X: 48000, Y: 1000}, 100)
-_ = base.Move(playerID, 500, 0) // 速度，单位 / 秒
-hit, _ := base.Attack(playerID, 9001, 10)
+// 实体侧：Scene 的心跳调 node.RegionBeat(scene, time.Now())；SceneActor / Monster 的心跳调 node.ActorBeat(actor, time.Now())；
+// Player 的 Base 心跳调 node.BaseBeat(player, time.Now())。
+_ = node.Spawn(ctx, cellworld.EntityState{ID: monsterID, X: 100, Y: 100, HP: 100}) // 本格生成 NPC（一笔 Scene + NPC 事务）
+_ = node.Enter(ctx, playerEntityID, sceneActorID, spatial.Point{X: 48000, Y: 1000}, 100)
+_ = node.Move(ctx, playerEntityID, 500, 0)
+hit, _ := node.Attack(ctx, playerEntityID, monsterID, 10)
 ```
+
+Cell 进程是普通 roost App：`app.New(...).Singleton(kitredis.SingletonStore)`、`singleton.enabled=true`，同 sid 的第二个进程启动失败，失锁 fail-stop；cellworld 不自己做单实例判断。
 
 ## 并发与契约
 
-- `Cell` 的全部状态只由 `Run` 的事件循环 goroutine 读写；传输回调只解码后非阻塞投进有界收件箱（满了丢弃并计数）。`SpawnNPC` / `Inspect` 经控制通道进循环执行，不能在 `Hooks` 回调里调用。
-- 消息至多一次：每个实体的版本是 (epoch, seq)，接收端只接受更新的版本；交接靠重传与幂等回复，伤害靠 HitID 去重（随交接带走）。
-- 同一 (实体, epoch) 至多一个 Cell 取得 Real：旧格先冻结再发 Offer，得不到结论时只删除、不恢复。
-- `Base` 用一把短锁保护玩家表；发布与 `OnView` / `OnAttackResult` 回调都在锁外。
+- 区域表只在 Scene 的 Nest 锁内读写；角色状态只在角色的 Nest 锁内读写；锁序 Scene（World 档）在前、角色（Other 档）在后。角色心跳不锁 Scene：它的结果在提交后经出站队列批量报给 Scene 的 handler。
+- 外发一律在提交之后：回滚的事务不外发。
+- 消息至多一次：每个实体的版本是 (epoch, seq)，接收端只接受更新的版本；交接靠重传与幂等回复，伤害靠 HitID 去重（去重表在目标实体上，随交接带走）；mirror 按对象版本取新的。
+- 同一 (实体, epoch) 至多一个格取得 Real；同一进程里同一 ID 至多一个实体（EntityManager 保证）。
 
 ## 测试
 
 | 文件 | 内容 |
 | --- | --- |
 | `grid_test.go` | 分区映射、边界带、迟滞、版本序 |
-| `handoff_test.go`、`combat_test.go` | 确定性夹具（手动投递，可丢 / 重复 / 扣住）：交接正常、丢失、重复、超时、拒绝、来回、斜穿四格链；跨格伤害只结算一次、迁移中重试、去重随交接、结果未知、去重表满 |
-| `world_test.go` | 进程内多 Cell（替身传输，可注入丢失 / 重复 / 乱序）：直线、抖动、斜穿四格、跨界攻击、慢交接窗口、丢包、Cell 崩溃重进 |
-| `nats_test.go` | 同一组场景跑在真实 nats-server 上（测试自起私有端口，PATH 里没有 nats-server 或 `-short` 时跳过） |
-| `process_test.go` | 每个 Cell 一个 OS 进程（测试二进制自 exec），跨进程检查至多一个 Real 与伤害只结算一次 |
+| `world_test.go` | 进程内多“进程”（各自的 EntityManager、Nest 引擎、心跳驱动、Node）：直线、抖动、斜穿四格、跨界攻击、慢交接、丢包；witness 连续与客户端（Base 的 Manager 推出的帧）连续 |
+| `handoff_test.go`、`combat_test.go` | v1 细粒度用例按新模型改写：丢失 / 重复 / 隐式确认 / 超时只删不恢复 / 被拒恢复 / 回复扣住时来回 / 交接链 / Enter 幂等与拒绝 / 墓碑；伤害只结算一次、距离与可见性、去重随交接、结果未知、去重表满 |
+| `lifecycle_test.go` | Cell 崩溃后按 Player 快照重建、Base 消失后租约离场、回写按版本幂等、交接事务回滚不移交 |
+| `nats_test.go` | 同一组场景跑在真实 nats-server 上（测试自起私有端口） |
+| `process_test.go` | 每个 Cell 是一个带单实例锁的 App 子进程（私有 redis-server）：跨进程至多一个 Real 与伤害只结算一次、kill -9 后按快照恢复、同 sid 第二个进程被拒、Base 进程消失后 SceneActor 清理 |
 | `measure_test.go` | 原型测量：`ROOST_CELLWORLD_PERF=1 GOWORK=off go test -run TestCellWorldMeasure -v ./gameplay/cellworld/`（档位 `ROOST_CELLWORLD_PERF_NPCS=1000,5000`，窗口 `ROOST_CELLWORLD_PERF_SECONDS=20`） |
+
+Sync mirror 的单测在 `framework/sync/entitysync/policy/mirror_test.go`。
