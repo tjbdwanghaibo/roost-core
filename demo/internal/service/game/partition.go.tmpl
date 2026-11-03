@@ -130,9 +130,7 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 		Destroy: func(ctx context.Context, e coreentity.IThreadSafeEntity) error {
 			return manager.Destroy(ctx, e, coreentity.DestroyReasonCommon, false)
 		},
-		// 不在内存的 SceneActor / Monster 不进 Nest 的加锁集合：DataEngine 的 getter 会把它们当成“聚合不存在”。
-		Loaded: func(id int64) bool { return manager.Get(id) != nil },
-		Scene:  area.ID(), CreateActor: rt.createActor,
+		Scene: area.ID(), CreateActor: rt.createActor,
 		ViewRadius: config.ViewRadius, WakeRadius: config.WakeRadius, IdlePeriod: config.IdlePeriod,
 		MaxSpeed: config.MaxSpeed, LeaseTimeout: config.LeaseTimeout, WritebackEvery: config.WritebackEvery,
 		PlayerEntity: func(actorID int64) int64 {

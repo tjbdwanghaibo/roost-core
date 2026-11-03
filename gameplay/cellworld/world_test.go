@@ -529,20 +529,43 @@ func TestWorldStraightCrossing(t *testing.T) {
 	scenarioStraightCrossing(t, startWorld(t, spec), contMaxMiss, contMaxGap)
 }
 
-// 接 demo 时发现（2026-11-03）：DataEngine 装好加载器的 getter 对不在内存的不持久实体（SceneActor / Monster）返回错误，
-// 不是 nil。Node 把还不存在的角色放进加锁集合（交接装入、进入、生成、伤害打到不在本格的目标）时整个请求失败。
-// strict getter 下照样走直线跨界、跨界攻击：Node 只锁在内存里的角色（NodeConfig.Loaded）。
-func TestWorldWithAGetterThatRefusesAbsentEntities(t *testing.T) {
+// 接 demo 时发现（2026-11-03）：正式进程的 getter 是装了 DataEngine 加载器的 ManagerAccess，原先对不在内存的不持久实体
+// （SceneActor / Monster）返回“聚合不存在”的错误而不是 nil，Node 把还不存在的角色放进加锁集合（交接装入、进入、生成、
+// 伤害打到不在本格的目标）时整个请求失败。框架统一后（E1 = B）ManagerAccess 对不持久种类内存未命中答 nil、不问加载器，
+// Node 不再自己过滤加锁集合：同一组场景在加载器替身下照常通过，加载器一次都没被问到。
+func TestWorldOnALoaderBackedGetter(t *testing.T) {
 	t.Run("straight", func(t *testing.T) {
 		spec, _ := loopbackSpec(t, 2, 1)
 		spec.strict = true
-		scenarioStraightCrossing(t, startWorld(t, spec), contMaxMiss, contMaxGap)
+		w := startWorld(t, spec)
+		scenarioStraightCrossing(t, w, contMaxMiss, contMaxGap)
+		w.requireLoaderNeverAsked(t)
 	})
 	t.Run("attack", func(t *testing.T) {
 		spec, _ := loopbackSpec(t, 2, 1)
 		spec.strict = true
-		scenarioAttackAcrossAndDuringMigration(t, startWorld(t, spec), false)
+		w := startWorld(t, spec)
+		scenarioAttackAcrossAndDuringMigration(t, w, false)
+		w.requireLoaderNeverAsked(t)
 	})
+}
+
+// requireLoaderNeverAsked 断言每个进程的加载器替身都没被调用（见 procSpec.strict）。
+func (w *world) requireLoaderNeverAsked(t *testing.T) {
+	t.Helper()
+	for _, p := range append([]*testProc{w.base}, mapValues(w.cells)...) {
+		if p.loader != nil && p.loader.asked.Load() != 0 {
+			t.Errorf("sid %d: the loader was asked %d time(s) for non-persistent kinds", p.sid, p.loader.asked.Load())
+		}
+	}
+}
+
+func mapValues[K comparable, V any](m map[K]V) []V {
+	out := make([]V, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	return out
 }
 
 func TestWorldJitterAtBoundary(t *testing.T) {

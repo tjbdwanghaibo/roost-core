@@ -2,11 +2,13 @@ package awaitflow_test
 
 import (
 	"context"
+	"errors"
 	flow "github.com/tjbdwanghaibo/roost-core/codegen/internal/entity/testdata/awaitflow"
 	sender "github.com/tjbdwanghaibo/roost-core/codegen/internal/entity/testdata/awaitflow/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"sync"
 	"testing"
 	"time"
@@ -87,5 +89,22 @@ func TestGeneratedDispatchFillsTheBusinessTimeAtExecution(t *testing.T) {
 	}
 	if got <= requestTime {
 		t.Fatalf("handler business time %d is not after the caller's %d", got, requestTime)
+	}
+}
+
+// 生成的分发包装拿到 nil 目标（Getter 答“不存在”：不持久的种类不在内存时就是这样，维护者 2026-11-03 决定 E1 = B）时回复
+// nest.ErrEntityNotFound 并带客户端码 entity_not_found，不把 nil 当成类型不符（ErrEntityTypeMismatch 会被客户端看成内部错误）。
+func TestGeneratedDispatchAnswersANilTargetAsNotFound(t *testing.T) {
+	flow.RegisterPlayerNestHandlers()
+	handler := nest.GetHandler(nest.NewHandlerName("StampVisit"))
+	if handler == nil {
+		t.Fatal("StampVisit is not registered")
+	}
+	_, err := handler([]entity.IThreadSafeEntity{nil}, []any{})
+	if !errors.Is(err, nest.ErrEntityNotFound) || errors.Is(err, nest.ErrEntityTypeMismatch) {
+		t.Fatalf("nil target: err = %v, want nest.ErrEntityNotFound (not a type mismatch)", err)
+	}
+	if code, _ := errcode.ClientError(err); code != errcode.CodeEntityNotFound {
+		t.Fatalf("nil target: client code = %d, want %d (entity_not_found)", code, errcode.CodeEntityNotFound)
 	}
 }

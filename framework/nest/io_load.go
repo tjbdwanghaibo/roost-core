@@ -217,3 +217,11 @@ func entityStateError(err error) error {
 	}
 	return errcode.Wrap(def, err)
 }
+
+// EntityNotFoundError 是“声明目标不存在、Getter 答 nil”的回复：满足 errors.Is(err, ErrEntityNotFound)，并带稳定的客户端码
+// errcode.ErrEntityNotFound（与 loader 报告“权威里不存在”时 entityStateError 给的码相同）。不持久的种类内存未命中由 Getter
+// 直接答 nil（entity.ManagerAccess，维护者 2026-11-03 决定 E1 = B），不再经 loader 的“聚合不存在”；这里给同一个码，客户端
+// 看到的答复与之前一致（entity_not_found，不是 CodeInternal）。生成的 handler 包装对非首个声明目标为 nil 时也返回它。
+func EntityNotFoundError() error {
+	return errcode.Wrap(errcode.ErrEntityNotFound, ErrEntityNotFound)
+}

@@ -42,7 +42,8 @@ type IThreadSafeEntityBase interface {
 	GetMutex() lock.Mutex
 }
 
-// Getter 按 ID 取实体。Getter 必须保留 context；LoadedEntitiesOnly 为真（业务 worker 或显式约束的 ctx）时
+// Getter 按 ID 取实体，不存在答 (nil, nil)（ManagerAccess：没有加载器、加载器确认不存在，或不持久的种类不在内存）。
+// Getter 必须保留 context；LoadedEntitiesOnly 为真（业务 worker 或显式约束的 ctx）时
 // 仅允许内存读取，冷目标返回可 errors.Is 判别的 ErrColdLoadInLogic，不能执行 I/O、
 // 不能等待加载，也不能 panic：冷缺失本身不阻塞，业务可以据此降级。
 // 在业务 worker 上返回的错误同时包裹 fctx.ErrBlockingInBusinessWorker。Nest 统一准入不调用
@@ -59,8 +60,8 @@ type Getter interface {
 // LoadedEntitiesOnly 契约返回 ErrColdLoadInLogic，需要预加载时业务使用显式 Slow。
 type LoadedChecker interface {
 	// IsLoaded 报告完整 ID 的实体是否无需加载即可读取：已在内存中返回 true；不在内存且
-	// 有可用加载器时返回 false；没有加载器时也返回 true——I/O 准备阶段同样读不到，缺失交由派发阶段
-	// 按不存在处理。
+	// 有可用加载器时返回 false；没有加载器、或 kind 是不持久的种类（noPersist / 没有 DAO，没有权威可加载）时
+	// 也返回 true——I/O 准备阶段同样读不到，缺失交由派发阶段按不存在处理。
 	IsLoaded(id int64) bool
 }
 

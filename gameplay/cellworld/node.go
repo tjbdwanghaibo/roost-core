@@ -32,13 +32,6 @@ type NodeConfig struct {
 	Nest nest.Client
 	// Destroy 销毁一个实体（正式路径：EntityManager.Destroy），在 Node 的出站 goroutine 上调用，不在业务 worker 上。
 	Destroy func(context.Context, fentity.IThreadSafeEntity) error
-	// Loaded 报告本进程内存里有没有这个实体（正式路径：EntityManager.Get(id) != nil）。Node 只把在内存里的角色 / NPC
-	// 放进 Nest 请求的加锁集合：SceneActor / Monster 是不持久的实体，不在内存就是不存在，可 DataEngine 装好加载器的
-	// getter 对不持久的种类返回“聚合不存在”的错误而不是 nil，名单里有它整个请求就失败（2026-11-03 接 demo 时发现）。
-	// 被略去的实体在 handler 里按 nil 处理（与没有加载器的 getter 相同）；新建实体的请求都锁 Scene，所以“检查时不在、
-	// handler 里已被另一个 Scene handler 建出”时新建失败、事务回滚，由对方重传。nil 时名单原样交给 Nest（测试替身的 getter
-	// 对不存在的实体本来就返回 nil）。
-	Loaded func(id int64) bool
 
 	// ---- Cell 侧（Cell 为 nil 时本进程不托管格）----
 
@@ -368,10 +361,7 @@ func (n *Node) pump(ctx context.Context) {
 					flush()
 				}
 			case jobDispatch:
-				if len(j.ids) == 1 && !n.loaded(j.ids[0]) {
-					break // 只锁角色的跟进（换档）：角色已不在本进程，丢弃
-				}
-				if err := n.dispatchLocked(ctx, j.handler, j.ids, j.params); err != nil {
+				if err := n.dispatch(ctx, j.handler, j.ids, j.params); err != nil {
 					n.stats.dispatchErrors.Add(1)
 				}
 			case jobDestroy:
@@ -465,7 +455,7 @@ func (n *Node) receive(data []byte) {
 	ctx := context.Background()
 	params := nest.Params{m}
 	dispatch := func(handler nest.HandlerName, ids ...int64) {
-		if err := n.dispatchLocked(ctx, handler, ids, params); err != nil {
+		if err := n.dispatch(ctx, handler, ids, params); err != nil {
 			n.stats.dispatchErrors.Add(1)
 		}
 	}
@@ -488,10 +478,6 @@ func (n *Node) receive(data []byte) {
 		}
 	case kindInput:
 		if cellOnly() && m.Input.ID != 0 {
-			if !n.loaded(m.Input.ID) {
-				n.stats.inputsDropped.Add(1) // 本进程没有这个角色：Base 从新 owner 的 witness 里看到序号落后会重发
-				return
-			}
 			dispatch(hInput, m.Input.ID)
 		}
 	case kindAttack:
@@ -596,30 +582,20 @@ func regionOf(es []fentity.IThreadSafeEntity) (*Region, error) {
 	return host.CellRegion(), nil
 }
 
-// loaded 报告 id 是否在本进程内存里（NodeConfig.Loaded；没配时一律当作在）。
-func (n *Node) loaded(id int64) bool {
-	return n.cfg.Loaded == nil || n.cfg.Loaded(id)
-}
-
-// dispatchLocked 把消息投给 handler：ids[0] 是 Scene（多实体请求）或唯一的角色，其余角色不在内存的从加锁集合里略去
-// （见 NodeConfig.Loaded），handler 按实体 ID 取角色，不按位置。
-func (n *Node) dispatchLocked(ctx context.Context, handler nest.HandlerName, ids []int64, params nest.Params) error {
-	if len(ids) > 1 {
-		kept := ids[:1:1]
-		for _, id := range ids[1:] {
-			if n.loaded(id) {
-				kept = append(kept, id)
-			}
-		}
-		ids = kept
-	}
+// dispatch 把消息投给 handler：ids[0] 是 Scene（多实体请求）或唯一的角色。名单里不在本进程内存的角色 / NPC（还没建出、
+// 已交出或已销毁）由 Nest 按不存在处理：它们是不持久的种类，getter 内存未命中即答 nil（framework/entity
+// kindHasNoAuthority，维护者 2026-11-03 决定 E1 = B），多实体请求里 handler 拿到 nil、按实体 ID 取角色（actorOf），
+// 只锁角色的单实体请求（输入、换档）由 Nest 以 ErrEntityNotFound 丢弃（Base 从新 owner 的 witness 里看到输入序号
+// 落后会重发；区域按下一份报告重新判断档位）。新建实体的请求都锁 Scene，所以“检查时不在、handler 里已被另一个 Scene
+// handler 建出”时新建失败、事务回滚，由对方重传。
+func (n *Node) dispatch(ctx context.Context, handler nest.HandlerName, ids []int64, params nest.Params) error {
 	if len(ids) == 1 {
 		return n.cfg.Nest.Dispatch(ctx, handler, ids[0], params)
 	}
 	return n.cfg.Nest.DispatchMulti(ctx, handler, ids, params)
 }
 
-// actorOf 在 handler 拿到的实体里找 ID 为 id 的角色；不在加锁集合里（不存在、被略去）时为 nil。
+// actorOf 在 handler 拿到的实体里找 ID 为 id 的角色；不在本进程（getter 答 nil）时为 nil。
 func actorOf(es []fentity.IThreadSafeEntity, id int64) Actor {
 	if id == 0 {
 		return nil
@@ -959,11 +935,8 @@ func (n *Node) Spawn(ctx context.Context, st EntityState) error {
 	if st.ID == 0 || !n.rect.Contains(st.Pos()) {
 		return fmt.Errorf("cellworld: spawn %d at %v outside cell %v", st.ID, st.Pos(), n.cell)
 	}
-	ids := []int64{n.cfg.Scene}
-	if n.loaded(st.ID) {
-		ids = append(ids, st.ID) // 已在本进程：handler 看到它并拒绝
-	}
-	_, err := n.cfg.Nest.RequestMulti(ctx, hSpawn, ids, nest.Params{st})
+	// 已在本进程时 handler 看到它并拒绝；不在时 handler 拿到 nil、在事务里新建。
+	_, err := n.cfg.Nest.RequestMulti(ctx, hSpawn, []int64{n.cfg.Scene, st.ID}, nest.Params{st})
 	return err
 }
 

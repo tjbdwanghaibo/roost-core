@@ -37,7 +37,7 @@ Player 的 `BaseState` 在 PlayerDao；接法与端到端结果见 [FEATURE §10
 
 | 项 | 规则 |
 | --- | --- |
-| `NodeConfig.Loaded` | 只有在本进程内存里的角色 / NPC 进 Nest 请求的加锁集合；handler 按实体 ID 取角色。DataEngine 装好加载器的 getter 对不在内存的不持久实体返回“聚合不存在”的错误而不是 nil，正式进程必须配它（`EntityManager.Get(id) != nil`）；nil 时名单原样交给 Nest（测试替身） |
+| 不在内存的角色 | 不持久的种类（SceneActor / Monster）内存未命中时 getter 答 nil、不问 DataEngine 加载器（框架契约，`docs/framework/impl/02-nest-entity.md` 第 6a 条，E1）。Node 把名单原样交给 Nest：多实体请求里 handler 拿到 nil、按实体 ID 取角色；只锁角色的单实体请求（输入、换档）由 Nest 以 not found 丢弃 |
 | 自己的 mirror 重新出现 | `policy.Mirrors.Generation` 是 mirror 每次新建的代号，`BaseState.ShownGen` 记玩家进入 Interest 时自己的代号；代号变了（owner 格崩溃、mirror 过期后又回来）就 `Interest.Resubscribe`，否则客户端看不到自己 |
 
 ## 交接以事务为边界

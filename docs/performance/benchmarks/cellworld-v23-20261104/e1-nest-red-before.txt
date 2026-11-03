@@ -1,0 +1,8 @@
+--- FAIL: TestAbsentNonPersistentTargetIsAnsweredWithoutTheLoader (0.00s)
+    cold_target_test.go:687: single absent non-persistent target: err = entity_not_found: entity not found: entity: entity does not exist in its authority: entity=9014229, want ErrEntityNotFound
+    cold_target_test.go:693: multi with an absent non-persistent second target: err = entity_not_found: entity not found: entity: entity does not exist in its authority: entity=9014229, want the handler to run with nil
+    cold_target_test.go:696: handler saw the absent second target as nil 0 time(s), want 1
+    cold_target_test.go:699: the loader was asked 2 time(s) for a non-persistent kind
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.587s
+FAIL

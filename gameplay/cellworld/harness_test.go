@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -145,6 +146,7 @@ type testProc struct {
 	engine  *nest.NestMgr
 	driver  *heartbeat.Driver
 	node    *Node
+	loader  *dataEngineShapedLoader // strict 时的加载器（ManagerAccess 不该为不持久种类问它）
 	scene   *testScene
 
 	sync     *entitysync.Manager
@@ -165,51 +167,37 @@ type procSpec struct {
 	grid      *Grid
 	transport Transport
 	mod       func(*NodeConfig)
-	// strict：Nest 的 getter 对不在内存的实体返回错误而不是 nil（DataEngine 装好加载器时对不持久种类就是这样）。
+	// strict：getter 是装了加载器的 ManagerAccess（正式进程的形状）；加载器像 DataEngine 的 Repository 一样对不持久的
+	// 种类答“聚合不存在”的错误。框架约定 ManagerAccess 对不持久种类不问加载器（E1），所以加载器一次都不该被调用。
 	strict bool
 }
 
-// strictGetter 是 DataEngine 加载器的替身：不在内存的实体是“聚合不存在”的错误。
-type strictGetter struct{ access *fentity.ManagerAccess }
+// dataEngineShapedLoader 是 DataEngine Repository 的替身：harness 的实体种类都是 noPersist，它对它们只会报错。
+type dataEngineShapedLoader struct{ asked atomic.Int64 }
 
-var errNoAggregate = errors.New("test getter: entity aggregate not found")
+var errNoAggregate = errors.New("test loader: entity aggregate not found")
 
-func (g strictGetter) Get(ctx context.Context, id int64, category fentity.EntityCategory) (fentity.IThreadSafeEntity, error) {
-	e, err := g.access.Get(ctx, id, category)
-	if err == nil && e == nil {
-		return nil, fmt.Errorf("%w: %d", errNoAggregate, id)
-	}
-	return e, err
-}
-
-func (g strictGetter) GetMany(ctx context.Context, ids []int64, categories []fentity.EntityCategory) ([]fentity.IThreadSafeEntity, error) {
-	out, err := g.access.GetMany(ctx, ids, categories)
-	if err != nil {
-		return nil, err
-	}
-	for i, e := range out {
-		if e == nil {
-			return nil, fmt.Errorf("%w: %d", errNoAggregate, ids[i])
-		}
-	}
-	return out, nil
+func (l *dataEngineShapedLoader) LoadEntity(_ context.Context, id int64, kind fentity.EntityKind) (fentity.IThreadSafeEntity, error) {
+	l.asked.Add(1)
+	return nil, fmt.Errorf("%w: entity %d kind %d has no persistent DAO", errNoAggregate, id, kind)
 }
 
 func startProc(t testing.TB, spec procSpec) *testProc {
 	t.Helper()
 	p := &testProc{t: t, sid: spec.sid, manager: fentity.NewEntityManager()}
 	p.access = fentity.NewManagerAccess(p.manager)
-	var getter fentity.Getter = p.access
 	if spec.strict {
-		getter = strictGetter{access: p.access}
+		p.loader = &dataEngineShapedLoader{}
+		if _, err := p.access.ConfigureLoader(p.loader); err != nil {
+			t.Fatal(err)
+		}
 	}
-	p.engine = nest.NewEngine(nest.NestOptionWithGetter(getter), nest.NestOptionWithTransactionCommitter(nullCommitter{}))
+	p.engine = nest.NewEngine(nest.NestOptionWithGetter(p.access), nest.NestOptionWithTransactionCommitter(nullCommitter{}))
 	cfg := NodeConfig{
 		World: "w", SID: spec.sid, Grid: spec.grid, Transport: spec.transport, Nest: p.engine,
 		Destroy: func(ctx context.Context, e fentity.IThreadSafeEntity) error {
 			return p.manager.Destroy(ctx, e, fentity.DestroyReasonCommon, false)
 		},
-		Loaded:     func(id int64) bool { return p.manager.Get(id) != nil },
 		ViewRadius: worldViewRadius,
 	}
 	if spec.cell != nil {
