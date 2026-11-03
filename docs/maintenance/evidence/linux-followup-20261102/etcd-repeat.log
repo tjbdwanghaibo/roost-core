@@ -1,0 +1,59 @@
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+{"level":"warn","ts":"2026-11-02T12:05:37.748809Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc000003200/127.0.0.1:36749","peer":"Peer{Addr: '127.0.0.1:36749', LocalAddr: '127.0.0.1:54066', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Txn","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:370: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=504ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (0.95s)
+=== RUN   TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget
+2026/11/02 12:05:37 INFO etcd Discovery: registered key=/rr-20261005-nc173/service/game/173 lease=6751917958393068293
+{"level":"warn","ts":"2026-11-02T12:05:38.505885Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc0004d2600/127.0.0.1:43453","peer":"Peer{Addr: '127.0.0.1:43453', LocalAddr: '127.0.0.1:37486', AuthInfo: 'insecure'}","method":"/etcdserverpb.Lease/LeaseRevoke","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:439: budgeted Close against a frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=501ms client_open=true
+2026/11/02 12:05:38 INFO etcd Discovery: deregistered key=/rr-20261005-nc173/service/game/173
+    real_etcd_integration_test.go:448: retry Close after the thaw: err=<nil> keys=0 client_open=false
+--- PASS: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (0.75s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+{"level":"warn","ts":"2026-11-02T12:05:39.647741Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc0004d3000/127.0.0.1:40197","peer":"Peer{Addr: '127.0.0.1:40197', LocalAddr: '127.0.0.1:50466', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Txn","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:370: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (1.15s)
+=== RUN   TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget
+2026/11/02 12:05:40 INFO etcd Discovery: registered key=/rr-20261005-nc173/service/game/173 lease=3242487948765095941
+{"level":"warn","ts":"2026-11-02T12:05:40.508231Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc000508800/127.0.0.1:35363","peer":"Peer{Addr: '127.0.0.1:35363', LocalAddr: '127.0.0.1:56560', AuthInfo: 'insecure'}","method":"/etcdserverpb.Lease/LeaseRevoke","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:439: budgeted Close against a frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=501ms client_open=true
+2026/11/02 12:05:40 INFO etcd Discovery: deregistered key=/rr-20261005-nc173/service/game/173
+    real_etcd_integration_test.go:448: retry Close after the thaw: err=<nil> keys=0 client_open=false
+--- PASS: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (0.85s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+{"level":"warn","ts":"2026-11-02T12:05:41.348225Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc000003400/127.0.0.1:34253","peer":"Peer{Addr: '127.0.0.1:34253', LocalAddr: '127.0.0.1:41866', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Txn","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:370: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (0.86s)
+=== RUN   TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget
+2026/11/02 12:05:41 INFO etcd Discovery: registered key=/rr-20261005-nc173/service/game/173 lease=6768524982019920133
+{"level":"warn","ts":"2026-11-02T12:05:42.215291Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc00014ac00/127.0.0.1:39609","peer":"Peer{Addr: '127.0.0.1:39609', LocalAddr: '127.0.0.1:47680', AuthInfo: 'insecure'}","method":"/etcdserverpb.Lease/LeaseRevoke","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:439: budgeted Close against a frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=501ms client_open=true
+{"level":"warn","ts":"2026-11-02T12:05:42.218202Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc00014ac00/127.0.0.1:39609","peer":"Peer{Addr: '127.0.0.1:39609', LocalAddr: '127.0.0.1:47680', AuthInfo: 'insecure'}","method":"/etcdserverpb.Lease/LeaseRevoke","attempt":0,"error":"rpc error: code = NotFound desc = etcdserver: requested lease not found"}
+2026/11/02 12:05:42 INFO etcd Discovery: lease already gone; its keys were removed with it lease=6768524982019920133 err="etcdserver: requested lease not found"
+2026/11/02 12:05:42 INFO etcd Discovery: deregistered key=/rr-20261005-nc173/service/game/173
+    real_etcd_integration_test.go:448: retry Close after the thaw: err=<nil> keys=0 client_open=false
+--- PASS: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (0.85s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+{"level":"warn","ts":"2026-11-02T12:05:43.154692Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc0004d2400/127.0.0.1:33711","peer":"Peer{Addr: '127.0.0.1:33711', LocalAddr: '127.0.0.1:34662', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Txn","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:370: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (0.95s)
+=== RUN   TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget
+2026/11/02 12:05:43 INFO etcd Discovery: registered key=/rr-20261005-nc173/service/game/173 lease=6823131127502246917
+{"level":"warn","ts":"2026-11-02T12:05:44.205968Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc00014ba00/127.0.0.1:42671","peer":"Peer{Addr: '127.0.0.1:42671', LocalAddr: '127.0.0.1:38794', AuthInfo: 'insecure'}","method":"/etcdserverpb.Lease/LeaseRevoke","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:439: budgeted Close against a frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=501ms client_open=true
+2026/11/02 12:05:44 INFO etcd Discovery: deregistered key=/rr-20261005-nc173/service/game/173
+    real_etcd_integration_test.go:448: retry Close after the thaw: err=<nil> keys=0 client_open=false
+--- PASS: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (1.04s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+{"level":"warn","ts":"2026-11-02T12:05:45.547695Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc0002fe000/127.0.0.1:44547","peer":"Peer{Addr: '127.0.0.1:44547', LocalAddr: '127.0.0.1:32936', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Txn","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:370: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (1.35s)
+=== RUN   TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget
+2026/11/02 12:05:45 INFO etcd Discovery: registered key=/rr-20261005-nc173/service/game/173 lease=8264564483238129925
+{"level":"warn","ts":"2026-11-02T12:05:46.202689Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc0002ff000/127.0.0.1:36107","peer":"Peer{Addr: '127.0.0.1:36107', LocalAddr: '127.0.0.1:59188', AuthInfo: 'insecure'}","method":"/etcdserverpb.Lease/LeaseRevoke","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:439: budgeted Close against a frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=501ms client_open=true
+2026/11/02 12:05:46 INFO etcd Discovery: deregistered key=/rr-20261005-nc173/service/game/173
+    real_etcd_integration_test.go:448: retry Close after the thaw: err=<nil> keys=0 client_open=false
+--- PASS: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (0.65s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/etcd/driver	10.415s

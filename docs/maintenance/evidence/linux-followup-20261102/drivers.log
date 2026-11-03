@@ -1,0 +1,628 @@
+=== RUN   TestNatsClientNilBoundaryFailsClosed
+--- PASS: TestNatsClientNilBoundaryFailsClosed (0.00s)
+=== RUN   TestInvokeNatsHandlerContainsAndReportsPanic
+2026/11/02 12:05:15 ERROR nats: subscription handler panic subject=test panic=boom
+--- PASS: TestInvokeNatsHandlerContainsAndReportsPanic (0.00s)
+=== RUN   TestSubscriptionValidationRejectsANilHandler
+--- PASS: TestSubscriptionValidationRejectsANilHandler (0.00s)
+=== RUN   TestClientTranslatesEachTransportErrorToItsSentinel
+--- PASS: TestClientTranslatesEachTransportErrorToItsSentinel (0.00s)
+=== RUN   TestClientRefusesInvalidSubjectsQueuesAndHandlers
+--- PASS: TestClientRefusesInvalidSubjectsQueuesAndHandlers (0.00s)
+=== RUN   TestRequestTranslatesFinishedContextsAndQueueSubscribeRequiresAQueue
+--- PASS: TestRequestTranslatesFinishedContextsAndQueueSubscribeRequiresAQueue (0.00s)
+=== RUN   TestRPCCallDoesNotRetryANonRetryableError
+--- PASS: TestRPCCallDoesNotRetryANonRetryableError (0.00s)
+=== RUN   TestJetStreamClientRefusesMissingClientAndHandler
+--- PASS: TestJetStreamClientRefusesMissingClientAndHandler (0.00s)
+=== RUN   TestAssembleRefusesConfigurationWithoutURL
+--- PASS: TestAssembleRefusesConfigurationWithoutURL (0.00s)
+=== RUN   TestEveryExportedDriverMethodHasAClosedStateCheck
+--- PASS: TestEveryExportedDriverMethodHasAClosedStateCheck (0.02s)
+=== RUN   TestEveryExportedDriverMethodReportsErrClosedAfterClose
+=== RUN   TestEveryExportedDriverMethodReportsErrClosedAfterClose/Assembly.Close
+=== RUN   TestEveryExportedDriverMethodReportsErrClosedAfterClose/Client.Close
+--- PASS: TestEveryExportedDriverMethodReportsErrClosedAfterClose (0.05s)
+    --- PASS: TestEveryExportedDriverMethodReportsErrClosedAfterClose/Assembly.Close (0.03s)
+    --- PASS: TestEveryExportedDriverMethodReportsErrClosedAfterClose/Client.Close (0.03s)
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Drain/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.DrainWithContext/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.FlushContext/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.ForInbox/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.MaxPayload/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Publish/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.PublishOnce/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.QueueSubscribe/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Request/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.RequestContext/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Subscribe/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.SubscribeBounded/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamClient.EnsureStream/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamClient.Publish/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamClient.Subscribe/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.DurableAckFloors/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.EnsureLogStream/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.Follow/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.KeyValue/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.LastMsg/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.Objects/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.PublishFenced/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.Purge/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.ReadRange/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.RequestMany/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.Call/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.CallAsync/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.CallWithTimeout/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.Reply/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/inboxClient.RequestContext/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Create/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Delete/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Get/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Put/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Update/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Watch/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logObjects.Delete/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logObjects.Get/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logObjects.Put/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/rawSubscription.Unsubscribe/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/subscription.Unsubscribe/ctx_live
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Drain/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.DrainWithContext/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.FlushContext/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.ForInbox/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.MaxPayload/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Publish/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.PublishOnce/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.QueueSubscribe/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Request/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.RequestContext/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Subscribe/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.SubscribeBounded/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamClient.EnsureStream/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamClient.Publish/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamClient.Subscribe/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.DurableAckFloors/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.EnsureLogStream/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.Follow/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.KeyValue/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.LastMsg/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.Objects/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.PublishFenced/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.Purge/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.ReadRange/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.RequestMany/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.Call/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.CallAsync/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.CallWithTimeout/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.Reply/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/inboxClient.RequestContext/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Create/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Delete/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Get/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Put/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Update/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Watch/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logObjects.Delete/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logObjects.Get/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logObjects.Put/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/rawSubscription.Unsubscribe/ctx_ended
+=== RUN   TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/subscription.Unsubscribe/ctx_ended
+--- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed (0.09s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Drain/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.DrainWithContext/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.FlushContext/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.ForInbox/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.MaxPayload/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Publish/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.PublishOnce/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.QueueSubscribe/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Request/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.RequestContext/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Subscribe/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.SubscribeBounded/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamClient.EnsureStream/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamClient.Publish/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamClient.Subscribe/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.DurableAckFloors/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.EnsureLogStream/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.Follow/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.KeyValue/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.LastMsg/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.Objects/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.PublishFenced/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.Purge/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.ReadRange/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.RequestMany/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.Call/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.CallAsync/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.CallWithTimeout/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.Reply/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/inboxClient.RequestContext/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Create/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Delete/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Get/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Put/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Update/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Watch/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logObjects.Delete/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logObjects.Get/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logObjects.Put/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/rawSubscription.Unsubscribe/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/subscription.Unsubscribe/ctx_live (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Drain/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.DrainWithContext/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.FlushContext/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.ForInbox/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.MaxPayload/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Publish/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.PublishOnce/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.QueueSubscribe/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Request/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.RequestContext/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.Subscribe/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/Client.SubscribeBounded/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamClient.EnsureStream/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamClient.Publish/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamClient.Subscribe/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.DurableAckFloors/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.EnsureLogStream/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.Follow/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.KeyValue/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.LastMsg/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.Objects/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.PublishFenced/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.Purge/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.ReadRange/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/JetStreamLogClient.RequestMany/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.Call/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.CallAsync/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.CallWithTimeout/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/RPCClient.Reply/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/inboxClient.RequestContext/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Create/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Delete/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Get/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Put/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Update/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logKV.Watch/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logObjects.Delete/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logObjects.Get/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/logObjects.Put/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/rawSubscription.Unsubscribe/ctx_ended (0.00s)
+    --- PASS: TestACallAdmittedBeforeCloseFinishingAfterItReportsErrClosed/subscription.Unsubscribe/ctx_ended (0.00s)
+=== RUN   TestInFlightCallAsyncExpiresAsErrClosedAfterClientClose
+--- PASS: TestInFlightCallAsyncExpiresAsErrClosedAfterClientClose (0.00s)
+=== RUN   TestCallsRacingCloseEitherCompleteOrReportErrClosed
+--- PASS: TestCallsRacingCloseEitherCompleteOrReportErrClosed (0.02s)
+=== RUN   TestAssemblyTerminalCloseErrorIsReportedOnce
+--- PASS: TestAssemblyTerminalCloseErrorIsReportedOnce (0.00s)
+=== RUN   TestAssemblyConcurrentCloseReportsTheTerminalErrorOnce
+--- PASS: TestAssemblyConcurrentCloseReportsTheTerminalErrorOnce (0.00s)
+=== RUN   TestRPCCallAsyncAfterAssemblyCloseReportsErrClosed
+--- PASS: TestRPCCallAsyncAfterAssemblyCloseReportsErrClosed (0.00s)
+=== RUN   TestRealLogEnsureStreamFixesTheAuthoritativeSettings
+    jetstream_log_real_integration_test.go:103: ROOST_NATS_CLUSTER_URL is not set: start a private three-node cluster with scripts/nats-cluster.sh start and eval "$(scripts/nats-cluster.sh env)"
+--- SKIP: TestRealLogEnsureStreamFixesTheAuthoritativeSettings (0.00s)
+=== RUN   TestRealLogWildcardFenceSerializesOneWriter
+    jetstream_log_real_integration_test.go:129: ROOST_NATS_CLUSTER_URL is not set: start a private three-node cluster with scripts/nats-cluster.sh start and eval "$(scripts/nats-cluster.sh env)"
+--- SKIP: TestRealLogWildcardFenceSerializesOneWriter (0.00s)
+=== RUN   TestRealLogConcurrentWritersExactlyOneWins
+    jetstream_log_real_integration_test.go:167: ROOST_NATS_CLUSTER_URL is not set: start a private three-node cluster with scripts/nats-cluster.sh start and eval "$(scripts/nats-cluster.sh env)"
+--- SKIP: TestRealLogConcurrentWritersExactlyOneWins (0.00s)
+=== RUN   TestRealLogAtomicBatchSemantics
+    jetstream_log_real_integration_test.go:215: ROOST_NATS_CLUSTER_URL is not set: start a private three-node cluster with scripts/nats-cluster.sh start and eval "$(scripts/nats-cluster.sh env)"
+--- SKIP: TestRealLogAtomicBatchSemantics (0.00s)
+=== RUN   TestRealLogAtomicBatchLimits
+    jetstream_log_real_integration_test.go:298: ROOST_NATS_CLUSTER_URL is not set: start a private three-node cluster with scripts/nats-cluster.sh start and eval "$(scripts/nats-cluster.sh env)"
+--- SKIP: TestRealLogAtomicBatchLimits (0.00s)
+=== RUN   TestRealLogLostAckIsResolvedByResending
+    jetstream_log_real_integration_test.go:386: ROOST_NATS_CLUSTER_URL is not set: start a private three-node cluster with scripts/nats-cluster.sh start and eval "$(scripts/nats-cluster.sh env)"
+--- SKIP: TestRealLogLostAckIsResolvedByResending (0.00s)
+=== RUN   TestRealLogReadFollowPurgeAndAckFloors
+    jetstream_log_real_integration_test.go:460: ROOST_NATS_CLUSTER_URL is not set: start a private three-node cluster with scripts/nats-cluster.sh start and eval "$(scripts/nats-cluster.sh env)"
+--- SKIP: TestRealLogReadFollowPurgeAndAckFloors (0.00s)
+=== RUN   TestRealLogAckFloorsOfIdleAndLaggingFilteredDurables
+    jetstream_log_real_integration_test.go:593: ROOST_NATS_CLUSTER_URL is not set: start a private three-node cluster with scripts/nats-cluster.sh start and eval "$(scripts/nats-cluster.sh env)"
+--- SKIP: TestRealLogAckFloorsOfIdleAndLaggingFilteredDurables (0.00s)
+=== RUN   TestRealLogAckFloorsDoNotTrustALaggingConsumerReplica
+    jetstream_log_real_integration_test.go:649: ROOST_NATS_CLUSTER_ROOT is not set (the data directory of scripts/nats-cluster.sh; the test reads its pid files)
+--- SKIP: TestRealLogAckFloorsDoNotTrustALaggingConsumerReplica (0.00s)
+=== RUN   TestRealLogKeyValueAndObjects
+    jetstream_log_real_integration_test.go:863: ROOST_NATS_CLUSTER_URL is not set: start a private three-node cluster with scripts/nats-cluster.sh start and eval "$(scripts/nats-cluster.sh env)"
+--- SKIP: TestRealLogKeyValueAndObjects (0.00s)
+=== RUN   TestRealLogRequestManyGathersEveryReply
+    jetstream_log_real_integration_test.go:977: ROOST_NATS_CLUSTER_URL is not set: start a private three-node cluster with scripts/nats-cluster.sh start and eval "$(scripts/nats-cluster.sh env)"
+--- SKIP: TestRealLogRequestManyGathersEveryReply (0.00s)
+=== RUN   TestRealLogLeaderKillKeepsAckedWritesAndResolvesUnknowns
+    jetstream_log_real_integration_test.go:1162: ROOST_NATS_CLUSTER_ROOT is not set (the data directory of scripts/nats-cluster.sh; the test reads its pid files)
+--- SKIP: TestRealLogLeaderKillKeepsAckedWritesAndResolvesUnknowns (0.00s)
+=== RUN   TestBuildLogMessagesRejectsBeforeSending
+=== RUN   TestBuildLogMessagesRejectsBeforeSending/empty
+=== RUN   TestBuildLogMessagesRejectsBeforeSending/too_many
+=== RUN   TestBuildLogMessagesRejectsBeforeSending/missing_msg_id
+=== RUN   TestBuildLogMessagesRejectsBeforeSending/msg_id_with_space
+=== RUN   TestBuildLogMessagesRejectsBeforeSending/wildcard_subject
+=== RUN   TestBuildLogMessagesRejectsBeforeSending/empty_token
+=== RUN   TestBuildLogMessagesRejectsBeforeSending/reserved_header
+=== RUN   TestBuildLogMessagesRejectsBeforeSending/header_key_with_colon
+=== RUN   TestBuildLogMessagesRejectsBeforeSending/header_value_with_newline
+=== RUN   TestBuildLogMessagesRejectsBeforeSending/bad_fence_filter
+=== RUN   TestBuildLogMessagesRejectsBeforeSending/over_max_payload
+--- PASS: TestBuildLogMessagesRejectsBeforeSending (0.00s)
+    --- PASS: TestBuildLogMessagesRejectsBeforeSending/empty (0.00s)
+    --- PASS: TestBuildLogMessagesRejectsBeforeSending/too_many (0.00s)
+    --- PASS: TestBuildLogMessagesRejectsBeforeSending/missing_msg_id (0.00s)
+    --- PASS: TestBuildLogMessagesRejectsBeforeSending/msg_id_with_space (0.00s)
+    --- PASS: TestBuildLogMessagesRejectsBeforeSending/wildcard_subject (0.00s)
+    --- PASS: TestBuildLogMessagesRejectsBeforeSending/empty_token (0.00s)
+    --- PASS: TestBuildLogMessagesRejectsBeforeSending/reserved_header (0.00s)
+    --- PASS: TestBuildLogMessagesRejectsBeforeSending/header_key_with_colon (0.00s)
+    --- PASS: TestBuildLogMessagesRejectsBeforeSending/header_value_with_newline (0.00s)
+    --- PASS: TestBuildLogMessagesRejectsBeforeSending/bad_fence_filter (0.00s)
+    --- PASS: TestBuildLogMessagesRejectsBeforeSending/over_max_payload (0.00s)
+=== RUN   TestBuildLogMessagesPutsTheFenceOnTheFirstAndCommitOnTheLast
+--- PASS: TestBuildLogMessagesPutsTheFenceOnTheFirstAndCommitOnTheLast (0.00s)
+=== RUN   TestEncodedHeaderSizeMatchesTheWireFormat
+--- PASS: TestEncodedHeaderSizeMatchesTheWireFormat (0.00s)
+=== RUN   TestLogAPIErrorClassification
+--- PASS: TestLogAPIErrorClassification (0.00s)
+=== RUN   TestParseBatchAck
+--- PASS: TestParseBatchAck (0.00s)
+=== RUN   TestServerVersionAtLeast
+--- PASS: TestServerVersionAtLeast (0.00s)
+=== RUN   TestBusinessHeadersRoundTripWithoutReservedKeys
+--- PASS: TestBusinessHeadersRoundTripWithoutReservedKeys (0.00s)
+=== RUN   TestJetStreamPublishRejectsReservedHeadersBeforeSending
+--- PASS: TestJetStreamPublishRejectsReservedHeadersBeforeSending (0.00s)
+=== RUN   TestLogFollowStopWaitsForTheCallbackWithinItsContext
+--- PASS: TestLogFollowStopWaitsForTheCallbackWithinItsContext (0.10s)
+=== RUN   TestLogFollowAdvanceIsMonotonic
+--- PASS: TestLogFollowAdvanceIsMonotonic (0.00s)
+=== RUN   TestDurableAckFloorsDoNotTrustTheConsumerReplicaView
+--- PASS: TestDurableAckFloorsDoNotTrustTheConsumerReplicaView (0.00s)
+=== RUN   TestDurableAckFloorsHoldUnansweredConsumersAtZero
+--- PASS: TestDurableAckFloorsHoldUnansweredConsumersAtZero (0.00s)
+=== RUN   TestDurableAckFloorsReadTheStreamEndFirst
+--- PASS: TestDurableAckFloorsReadTheStreamEndFirst (0.00s)
+=== RUN   TestJetStreamTerminalClassification
+--- PASS: TestJetStreamTerminalClassification (0.00s)
+=== RUN   TestInvokeJetStreamHandlerContainsPanic
+--- PASS: TestInvokeJetStreamHandlerContainsPanic (0.00s)
+=== RUN   TestJetStreamStreamConfigMapping
+--- PASS: TestJetStreamStreamConfigMapping (0.00s)
+=== RUN   TestJetStreamConsumerConfigMappingDefaults
+--- PASS: TestJetStreamConsumerConfigMappingDefaults (0.00s)
+=== RUN   TestJetStreamNakBackoffIsBounded
+--- PASS: TestJetStreamNakBackoffIsBounded (0.00s)
+=== RUN   TestJetStreamDrainKeepsHandlerContextAliveUntilBufferedMessagesFinish
+--- PASS: TestJetStreamDrainKeepsHandlerContextAliveUntilBufferedMessagesFinish (0.00s)
+=== RUN   TestJetStreamStopCanForcePendingDrain
+--- PASS: TestJetStreamStopCanForcePendingDrain (0.00s)
+=== RUN   TestJetStreamSettleFailureIsCountedPerOperation
+2026/11/02 12:05:15 WARN nats jetstream: settling delivery failed; broker will redeliver after ack wait op=ack subject=orders.created stream="" consumer="" stream_sequence=0 deliveries=0 err="nats: connection closed"
+2026/11/02 12:05:15 WARN nats jetstream: settling delivery failed; broker will redeliver after ack wait op=nak subject=orders.created stream="" consumer="" stream_sequence=0 deliveries=0 err="nats: timeout"
+2026/11/02 12:05:15 ERROR nats jetstream: terminating failed delivery subject=orders.created stream="" consumer="" stream_sequence=0 deliveries=0 reason=permanent err=poison
+2026/11/02 12:05:15 WARN nats jetstream: settling delivery failed; broker will redeliver after ack wait op=term subject=orders.created stream="" consumer="" stream_sequence=0 deliveries=0 err="nats: timeout"
+--- PASS: TestJetStreamSettleFailureIsCountedPerOperation (0.00s)
+=== RUN   TestJetStreamSettleSuccessLeavesFailureCounterUntouched
+--- PASS: TestJetStreamSettleSuccessLeavesFailureCounterUntouched (0.00s)
+=== RUN   TestJetStreamDeferredSettleAcksLaterAndDrainWaitsForIt
+--- PASS: TestJetStreamDeferredSettleAcksLaterAndDrainWaitsForIt (0.05s)
+=== RUN   TestJetStreamDeferredSettleYieldsToAHandlerErrorAndClosedSubscriptions
+2026/11/02 12:05:16 ERROR nats jetstream: terminating failed delivery subject=orders.created stream="" consumer="" stream_sequence=0 deliveries=0 reason=permanent err=poison
+--- PASS: TestJetStreamDeferredSettleYieldsToAHandlerErrorAndClosedSubscriptions (0.00s)
+=== RUN   TestJetStreamStopCancelsDeferredWorkButClosedWaitsForTheSettle
+--- PASS: TestJetStreamStopCancelsDeferredWorkButClosedWaitsForTheSettle (0.05s)
+=== RUN   TestHandleNatsDisconnectLogsExpectedCloseAsInfo
+--- PASS: TestHandleNatsDisconnectLogsExpectedCloseAsInfo (0.00s)
+=== RUN   TestHandleNatsDisconnectLogsUnexpectedErrorAsError
+--- PASS: TestHandleNatsDisconnectLogsUnexpectedErrorAsError (0.00s)
+=== RUN   TestIgnoreDiscoveredServersIsAnOptInThatReachesTheConnection
+--- PASS: TestIgnoreDiscoveredServersIsAnOptInThatReachesTheConnection (0.00s)
+=== RUN   TestConnectErrorDoesNotCarryURLCredentials
+--- PASS: TestConnectErrorDoesNotCarryURLCredentials (0.00s)
+=== RUN   TestRedactedURLsHidesTheWholeUserinfo
+--- PASS: TestRedactedURLsHidesTheWholeUserinfo (0.00s)
+=== RUN   TestBuildNatsOptionsCarriesTheSeparateAccount
+--- PASS: TestBuildNatsOptionsCarriesTheSeparateAccount (0.00s)
+=== RUN   TestRealRawRequestAndSubscriptionDrain
+--- PASS: TestRealRawRequestAndSubscriptionDrain (0.00s)
+=== RUN   TestRealRawSlowConsumerAndCloseWaitForActualCallback
+--- PASS: TestRealRawSlowConsumerAndCloseWaitForActualCallback (0.04s)
+=== RUN   TestRealRawCancellationDoesNotReplayAnAdmittedRequest
+--- PASS: TestRealRawCancellationDoesNotReplayAnAdmittedRequest (0.02s)
+=== RUN   TestRealScopedInboxReusesSubscriptionAndCancelsOnlyItsWaiter
+--- PASS: TestRealScopedInboxReusesSubscriptionAndCancelsOnlyItsWaiter (0.03s)
+=== RUN   TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose
+    real_nats_integration_test.go:355: non-closing methods answered in 26ms while nats.go still reports IsConnected = true
+--- PASS: TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose (0.23s)
+=== RUN   TestRealNatsRPCHonoursTheCallerDeadlineBeyondFiveSeconds
+--- PASS: TestRealNatsRPCHonoursTheCallerDeadlineBeyondFiveSeconds (6.46s)
+=== RUN   TestRealJetStreamSubscribeUpdatesAnExistingDurableInPlace
+--- PASS: TestRealJetStreamSubscribeUpdatesAnExistingDurableInPlace (0.02s)
+=== RUN   TestRealJetStreamDeferredSettleKeepsTheDurableFlowingAndAcksAfterDrain
+--- PASS: TestRealJetStreamDeferredSettleKeepsTheDurableFlowingAndAcksAfterDrain (5.32s)
+=== RUN   TestRPCBudgetAssemblyCloseBoundsCallbackDrain
+    rpc_contract_test.go:47: returned_before_callback_release=true close_error=context canceled
+--- PASS: TestRPCBudgetAssemblyCloseBoundsCallbackDrain (0.00s)
+=== RUN   TestRPCBudgetPendingTerminalRacesCompleteOnce
+--- PASS: TestRPCBudgetPendingTerminalRacesCompleteOnce (0.00s)
+=== RUN   TestRPCBudgetAssemblyClosesCompletedPool
+--- PASS: TestRPCBudgetAssemblyClosesCompletedPool (0.00s)
+=== RUN   TestRPCBudgetStopRetainsFullQueueFallbackAndAllowsRetry
+--- PASS: TestRPCBudgetStopRetainsFullQueueFallbackAndAllowsRetry (0.01s)
+=== RUN   TestRPCBudgetCallbackCanCancelItsOwnStopWait
+--- PASS: TestRPCBudgetCallbackCanCancelItsOwnStopWait (0.00s)
+=== RUN   TestRPCBudgetStopFallbackPanicDoesNotLoseOtherPending
+--- PASS: TestRPCBudgetStopFallbackPanicDoesNotLoseOtherPending (0.00s)
+=== RUN   TestRPCBudgetStopWaitsForTerminalClaimedBeforeShutdown
+--- PASS: TestRPCBudgetStopWaitsForTerminalClaimedBeforeShutdown (0.01s)
+=== RUN   TestRPCStopInsideCallbackAfterStopRequestedReturns
+--- PASS: TestRPCStopInsideCallbackAfterStopRequestedReturns (0.00s)
+=== RUN   TestRPCStopWaitsForTerminalClaimSkippedByDrainRange
+    rpc_contract_test.go:321: returned_while_claim_held=false stop_err=<nil> callback_ran_before_return=true
+--- PASS: TestRPCStopWaitsForTerminalClaimSkippedByDrainRange (0.20s)
+=== RUN   TestRpcClientStopCancelsPendingCalls
+--- PASS: TestRpcClientStopCancelsPendingCalls (0.00s)
+=== RUN   TestRpcClientDispatchCallbackCompletesWhenPoolRejects
+--- PASS: TestRpcClientDispatchCallbackCompletesWhenPoolRejects (0.02s)
+=== RUN   TestRpcClientCallAsyncAfterStopCancelsImmediately
+--- PASS: TestRpcClientCallAsyncAfterStopCancelsImmediately (0.00s)
+=== RUN   TestRpcClientPendingHasSingleTerminalWinner
+--- PASS: TestRpcClientPendingHasSingleTerminalWinner (0.02s)
+=== RUN   TestRpcClientCancelsOneHundredThousandPendingExactlyOnce
+--- PASS: TestRpcClientCancelsOneHundredThousandPendingExactlyOnce (3.89s)
+=== RUN   TestRpcTaskCompletesCallbackExactlyOnce
+=== RUN   TestRpcTaskCompletesCallbackExactlyOnce/handler_then_release
+=== RUN   TestRpcTaskCompletesCallbackExactlyOnce/release_only
+=== RUN   TestRpcTaskCompletesCallbackExactlyOnce/concurrent_arrivals
+=== RUN   TestRpcTaskCompletesCallbackExactlyOnce/nil_callback
+--- PASS: TestRpcTaskCompletesCallbackExactlyOnce (0.00s)
+    --- PASS: TestRpcTaskCompletesCallbackExactlyOnce/handler_then_release (0.00s)
+    --- PASS: TestRpcTaskCompletesCallbackExactlyOnce/release_only (0.00s)
+    --- PASS: TestRpcTaskCompletesCallbackExactlyOnce/concurrent_arrivals (0.00s)
+    --- PASS: TestRpcTaskCompletesCallbackExactlyOnce/nil_callback (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver	17.723s
+=== RUN   TestAssembleBuildsDiscoveryAndElectionsOnOneConnection
+{"level":"warn","ts":"2026-11-02T12:05:16.534994Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc000154e00/127.0.0.1:1","peer":"Peer{Addr: <nil>, LocalAddr: <nil>, AuthInfo: <nil>}","method":"/etcdserverpb.Maintenance/Status","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = latest balancer error: connection error: desc = \"transport: Error while dialing: dial tcp 127.0.0.1:1: connect: connection refused\""}
+{"level":"warn","ts":"2026-11-02T12:05:16.537020Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc000154e00/127.0.0.1:1","peer":"Peer{Addr: <nil>, LocalAddr: <nil>, AuthInfo: <nil>}","method":"/etcdserverpb.Maintenance/Status","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+--- PASS: TestAssembleBuildsDiscoveryAndElectionsOnOneConnection (0.31s)
+=== RUN   TestRealEtcdThreeNodeLeaderLossPreservesWatchDiscoveryAndElection
+{"level":"warn","ts":"2026-11-02T12:05:17.551623Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc0003f2000/127.0.0.1:37175","peer":"Peer{Addr: <nil>, LocalAddr: <nil>, AuthInfo: <nil>}","method":"/etcdserverpb.KV/Put","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = latest balancer error: connection error: desc = \"transport: Error while dialing: dial tcp 127.0.0.1:37175: connect: connection refused\""}
+2026/11/02 12:05:17 INFO etcd Discovery: registered key=/ha/service/game/7 lease=6606395395428486916
+    cluster_failover_integration_test.go:139: killed actual Raft leader node 1; two members remain
+{"level":"warn","ts":"2026-11-02T12:05:18.815656Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc0003f2000/127.0.0.1:37175","peer":"Peer{Addr: '127.0.0.1:37175', LocalAddr: '127.0.0.1:33630', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Put","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    cluster_failover_integration_test.go:178: watch resumed, discovery survived TTL, election advanced fence and resigned
+2026/11/02 12:05:25 INFO etcd Discovery: deregistered key=/ha/service/game/7
+--- PASS: TestRealEtcdThreeNodeLeaderLossPreservesWatchDiscoveryAndElection (8.88s)
+=== RUN   TestDiscoverySuppressesLeaseLostWarningAfterDeregister
+--- PASS: TestDiscoverySuppressesLeaseLostWarningAfterDeregister (0.00s)
+=== RUN   TestDiscoveryWarnsWhenLeaseLostUnexpectedly
+--- PASS: TestDiscoveryWarnsWhenLeaseLostUnexpectedly (0.00s)
+=== RUN   TestDiscoveryReregistersAfterUnexpectedLeaseLoss
+2026/11/02 12:05:25 INFO etcd Discovery: registered key=/roost/game/1 lease=101
+2026/11/02 12:05:25 WARN etcd Discovery: lease lost key=/roost/game/1
+2026/11/02 12:05:25 INFO etcd Discovery: registered key=/roost/game/1 lease=102
+2026/11/02 12:05:25 WARN etcd Discovery: lease lost key=/roost/game/1
+2026/11/02 12:05:25 INFO etcd Discovery: deregistered key=/roost/game/1
+--- PASS: TestDiscoveryReregistersAfterUnexpectedLeaseLoss (0.00s)
+=== RUN   TestDiscoveryDoesNotReregisterAfterDeregister
+2026/11/02 12:05:25 INFO etcd Discovery: registered key=/roost/game/1 lease=201
+2026/11/02 12:05:25 INFO etcd Discovery: deregistered key=/roost/game/1
+--- PASS: TestDiscoveryDoesNotReregisterAfterDeregister (0.02s)
+=== RUN   TestDiscoveryRejectsDuplicateRegisterWithoutLeakingFirstRegistration
+2026/11/02 12:05:25 INFO etcd Discovery: registered key=/roost/game/1 lease=301
+2026/11/02 12:05:25 INFO etcd Discovery: deregistered key=/roost/game/1
+--- PASS: TestDiscoveryRejectsDuplicateRegisterWithoutLeakingFirstRegistration (0.00s)
+=== RUN   TestServiceWatcherCloseCancelsUnderlyingWatchAndWaitsForLoop
+--- PASS: TestServiceWatcherCloseCancelsUnderlyingWatchAndWaitsForLoop (0.00s)
+=== RUN   TestDiscoveryDeregisterTreatsLeaseNotFoundAsDeregistered
+=== RUN   TestDiscoveryDeregisterTreatsLeaseNotFoundAsDeregistered/wrapped
+2026/11/02 12:05:25 INFO etcd Discovery: registered key=/roost/game/1 lease=401
+2026/11/02 12:05:25 WARN etcd Discovery: lease lost key=/roost/game/1
+2026/11/02 12:05:25 WARN etcd Discovery: register retry failed key=/roost/game/1 err="etcd unavailable" backoff=1ms
+2026/11/02 12:05:25 INFO etcd Discovery: lease already gone; its keys were removed with it lease=401 err="revoke: etcdserver: requested lease not found"
+2026/11/02 12:05:25 INFO etcd Discovery: deregistered key=/roost/game/1
+=== RUN   TestDiscoveryDeregisterTreatsLeaseNotFoundAsDeregistered/wrappedRPC
+2026/11/02 12:05:25 INFO etcd Discovery: registered key=/roost/game/1 lease=401
+2026/11/02 12:05:25 WARN etcd Discovery: lease lost key=/roost/game/1
+2026/11/02 12:05:25 WARN etcd Discovery: register retry failed key=/roost/game/1 err="etcd unavailable" backoff=1ms
+2026/11/02 12:05:25 INFO etcd Discovery: lease already gone; its keys were removed with it lease=401 err="revoke: rpc error: code = NotFound desc = etcdserver: requested lease not found"
+2026/11/02 12:05:25 INFO etcd Discovery: deregistered key=/roost/game/1
+=== RUN   TestDiscoveryDeregisterTreatsLeaseNotFoundAsDeregistered/clientv3
+2026/11/02 12:05:25 INFO etcd Discovery: registered key=/roost/game/1 lease=401
+2026/11/02 12:05:25 WARN etcd Discovery: lease lost key=/roost/game/1
+2026/11/02 12:05:25 WARN etcd Discovery: register retry failed key=/roost/game/1 err="etcd unavailable" backoff=1ms
+2026/11/02 12:05:25 INFO etcd Discovery: lease already gone; its keys were removed with it lease=401 err="etcdserver: requested lease not found"
+2026/11/02 12:05:25 INFO etcd Discovery: deregistered key=/roost/game/1
+=== RUN   TestDiscoveryDeregisterTreatsLeaseNotFoundAsDeregistered/grpcStatus
+2026/11/02 12:05:25 INFO etcd Discovery: registered key=/roost/game/1 lease=401
+2026/11/02 12:05:25 WARN etcd Discovery: lease lost key=/roost/game/1
+2026/11/02 12:05:25 WARN etcd Discovery: register retry failed key=/roost/game/1 err="etcd unavailable" backoff=1ms
+2026/11/02 12:05:25 INFO etcd Discovery: lease already gone; its keys were removed with it lease=401 err="rpc error: code = NotFound desc = etcdserver: requested lease not found"
+2026/11/02 12:05:25 INFO etcd Discovery: deregistered key=/roost/game/1
+--- PASS: TestDiscoveryDeregisterTreatsLeaseNotFoundAsDeregistered (0.01s)
+    --- PASS: TestDiscoveryDeregisterTreatsLeaseNotFoundAsDeregistered/wrapped (0.00s)
+    --- PASS: TestDiscoveryDeregisterTreatsLeaseNotFoundAsDeregistered/wrappedRPC (0.00s)
+    --- PASS: TestDiscoveryDeregisterTreatsLeaseNotFoundAsDeregistered/clientv3 (0.00s)
+    --- PASS: TestDiscoveryDeregisterTreatsLeaseNotFoundAsDeregistered/grpcStatus (0.00s)
+=== RUN   TestAssemblyCloseTreatsLeaseNotFoundAsDeregistered
+2026/11/02 12:05:25 INFO etcd Discovery: registered key=/roost/game/1 lease=401
+2026/11/02 12:05:25 WARN etcd Discovery: lease lost key=/roost/game/1
+2026/11/02 12:05:25 WARN etcd Discovery: register retry failed key=/roost/game/1 err="etcd unavailable" backoff=1ms
+2026/11/02 12:05:25 INFO etcd Discovery: lease already gone; its keys were removed with it lease=401 err="etcdserver: requested lease not found"
+2026/11/02 12:05:25 INFO etcd Discovery: deregistered key=/roost/game/1
+--- PASS: TestAssemblyCloseTreatsLeaseNotFoundAsDeregistered (0.00s)
+=== RUN   TestDiscoveryDeregisterStillReportsOtherRevokeErrors
+2026/11/02 12:05:25 INFO etcd Discovery: registered key=/roost/game/1 lease=401
+2026/11/02 12:05:25 WARN etcd Discovery: lease lost key=/roost/game/1
+2026/11/02 12:05:25 WARN etcd Discovery: register retry failed key=/roost/game/1 err="etcd unavailable" backoff=1ms
+2026/11/02 12:05:25 INFO etcd Discovery: deregistered key=/roost/game/1
+--- PASS: TestDiscoveryDeregisterStillReportsOtherRevokeErrors (0.00s)
+=== RUN   TestDiscoveryDeregisterStopsRegistrationThatCompletedDuringShutdown
+2026/11/02 12:05:25 INFO etcd Discovery: registered key=/roost/game/1 lease=501
+2026/11/02 12:05:25 WARN etcd Discovery: lease lost key=/roost/game/1
+2026/11/02 12:05:25 INFO etcd Discovery: registered key=/roost/game/1 lease=502
+2026/11/02 12:05:25 INFO etcd Discovery: deregistered key=/roost/game/1
+--- PASS: TestDiscoveryDeregisterStopsRegistrationThatCompletedDuringShutdown (0.00s)
+=== RUN   TestElectionFirstCampaignKeepsPreCampaignLeaderChannel
+--- PASS: TestElectionFirstCampaignKeepsPreCampaignLeaderChannel (0.00s)
+=== RUN   TestElectionLeaderPreservesBackendError
+--- PASS: TestElectionLeaderPreservesBackendError (0.00s)
+=== RUN   TestElectionCampaignContextCancellationAfterElectionDoesNotLoseLeadership
+--- PASS: TestElectionCampaignContextCancellationAfterElectionDoesNotLoseLeadership (0.01s)
+=== RUN   TestElectionFenceTracksLeadershipTerm
+--- PASS: TestElectionFenceTracksLeadershipTerm (0.00s)
+=== RUN   TestElectionResignClearsLifecycleBeforeReturning
+--- PASS: TestElectionResignClearsLifecycleBeforeReturning (0.00s)
+=== RUN   TestEtcdLifetimeSuccessfulCampaignDetachesCallerAndReleasesSessionContext
+--- PASS: TestEtcdLifetimeSuccessfulCampaignDetachesCallerAndReleasesSessionContext (0.00s)
+=== RUN   TestEtcdLifetimeCancellationBeforeLeadershipPublication
+--- PASS: TestEtcdLifetimeCancellationBeforeLeadershipPublication (0.00s)
+=== RUN   TestEtcdLifetimeCanceledCampaignNeverStartsSetup
+--- PASS: TestEtcdLifetimeCanceledCampaignNeverStartsSetup (0.00s)
+=== RUN   TestEtcdLifetimeNormalResignDoesNotCancelRevoke
+--- PASS: TestEtcdLifetimeNormalResignDoesNotCancelRevoke (0.00s)
+=== RUN   TestEtcdLifetimeCampaignCancellationReachesSessionGrant
+{"level":"warn","ts":"2026-11-02T12:05:25.475653Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc0004ca600/127.0.0.1:46653","peer":"Peer{Addr: '127.0.0.1:46653', LocalAddr: '127.0.0.1:53544', AuthInfo: 'insecure'}","method":"/etcdserverpb.Lease/LeaseGrant","attempt":0,"error":"rpc error: code = Canceled desc = context canceled"}
+    election_test.go:320: returned_after_campaign_cancel=true err=context canceled
+        context canceled
+--- PASS: TestEtcdLifetimeCampaignCancellationReachesSessionGrant (0.01s)
+=== RUN   TestEtcdLifetimeCampaignDeadlinePreservesCause
+{"level":"warn","ts":"2026-11-02T12:05:25.729604Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc000234000/127.0.0.1:41961","peer":"Peer{Addr: '127.0.0.1:41961', LocalAddr: '127.0.0.1:54368', AuthInfo: 'insecure'}","method":"/etcdserverpb.Lease/LeaseGrant","attempt":0,"error":"rpc error: code = Canceled desc = context canceled"}
+    election_test.go:324: returned_after_campaign_cancel=true err=context deadline exceeded
+        context canceled
+--- PASS: TestEtcdLifetimeCampaignDeadlinePreservesCause (0.25s)
+=== RUN   TestEtcdLifetimeWatcherCloseUnblocksFullDeliveryQueue
+--- PASS: TestEtcdLifetimeWatcherCloseUnblocksFullDeliveryQueue (0.00s)
+=== RUN   TestEtcdLifetimeMirrorReadCopyCASAndStaleRevision
+--- PASS: TestEtcdLifetimeMirrorReadCopyCASAndStaleRevision (0.00s)
+=== RUN   TestElectionResignHonoursTheCallerBudget
+    election_test.go:484: Resign(50ms) against a hanging Revoke: err=context deadline exceeded elapsed=50ms
+--- PASS: TestElectionResignHonoursTheCallerBudget (0.10s)
+=== RUN   TestElectionResignWaitsForTheRevokeWhenEtcdAnswers
+--- PASS: TestElectionResignWaitsForTheRevokeWhenEtcdAnswers (0.00s)
+=== RUN   TestElectionRevokeFailedCampaignRevokesBeforeReturning
+    election_test.go:655: revoke_ctx_err=<nil> has_deadline=true budget=5s
+--- PASS: TestElectionRevokeFailedCampaignRevokesBeforeReturning (0.00s)
+=== RUN   TestElectionRevokeCanceledCampaignOwnsOneBoundedRevoke
+    election_test.go:690: revoke_ctx_err=<nil> has_deadline=true budget=5s
+--- PASS: TestElectionRevokeCanceledCampaignOwnsOneBoundedRevoke (0.05s)
+=== RUN   TestElectionRevokeAbandonedRevokeEndsWithClient
+--- PASS: TestElectionRevokeAbandonedRevokeEndsWithClient (0.00s)
+=== RUN   TestLocalMirrorAppliesWatchEventsAndReturnsIndependentValues
+--- PASS: TestLocalMirrorAppliesWatchEventsAndReturnsIndependentValues (0.01s)
+=== RUN   TestLocalMirrorWaitsForServerWatchReadiness
+--- PASS: TestLocalMirrorWaitsForServerWatchReadiness (0.00s)
+=== RUN   TestLocalMirrorResnapshotsAfterWatchCloses
+--- PASS: TestLocalMirrorResnapshotsAfterWatchCloses (0.00s)
+=== RUN   TestLocalMirrorPublishesAndUsesRevisionCAS
+--- PASS: TestLocalMirrorPublishesAndUsesRevisionCAS (0.00s)
+=== RUN   TestLocalMirrorUsesNativeEtcdPrefixSemantics
+--- PASS: TestLocalMirrorUsesNativeEtcdPrefixSemantics (0.00s)
+=== RUN   TestLocalMirrorReportsWatchFailuresAndRejectsOutOfScopeKeys
+--- PASS: TestLocalMirrorReportsWatchFailuresAndRejectsOutOfScopeKeys (0.00s)
+=== RUN   TestLocalMirrorCloseMarksViewUnavailable
+--- PASS: TestLocalMirrorCloseMarksViewUnavailable (0.00s)
+=== RUN   TestLocalMirrorIgnoresStaleMalformedWatchValue
+--- PASS: TestLocalMirrorIgnoresStaleMalformedWatchValue (0.00s)
+=== RUN   TestLocalMirrorSubscriptionDeliversAtomicSnapshotAndOrderedChanges
+--- PASS: TestLocalMirrorSubscriptionDeliversAtomicSnapshotAndOrderedChanges (0.00s)
+=== RUN   TestLocalMirrorSubscriptionReceivesResnapshot
+--- PASS: TestLocalMirrorSubscriptionReceivesResnapshot (0.00s)
+=== RUN   TestLocalMirrorSlowSubscriptionIsIsolated
+--- PASS: TestLocalMirrorSlowSubscriptionIsIsolated (0.00s)
+=== RUN   TestLocalMirrorSubscriptionContainsHandlerPanic
+--- PASS: TestLocalMirrorSubscriptionContainsHandlerPanic (0.00s)
+=== RUN   TestLocalMirrorResnapshotsAfterMalformedWatchValue
+--- PASS: TestLocalMirrorResnapshotsAfterMalformedWatchValue (0.00s)
+=== RUN   TestNewLocalMirrorRefusesEachInvalidConfig
+=== RUN   TestNewLocalMirrorRefusesEachInvalidConfig/empty_prefix
+=== RUN   TestNewLocalMirrorRefusesEachInvalidConfig/no_decoder
+=== RUN   TestNewLocalMirrorRefusesEachInvalidConfig/no_encoder
+=== RUN   TestNewLocalMirrorRefusesEachInvalidConfig/no_clone
+=== RUN   TestNewLocalMirrorRefusesEachInvalidConfig/retry_max_below_min
+--- PASS: TestNewLocalMirrorRefusesEachInvalidConfig (0.00s)
+    --- PASS: TestNewLocalMirrorRefusesEachInvalidConfig/empty_prefix (0.00s)
+    --- PASS: TestNewLocalMirrorRefusesEachInvalidConfig/no_decoder (0.00s)
+    --- PASS: TestNewLocalMirrorRefusesEachInvalidConfig/no_encoder (0.00s)
+    --- PASS: TestNewLocalMirrorRefusesEachInvalidConfig/no_clone (0.00s)
+    --- PASS: TestNewLocalMirrorRefusesEachInvalidConfig/retry_max_below_min (0.00s)
+=== RUN   TestElectionResignAndLeaderRefuseWithoutALeadership
+--- PASS: TestElectionResignAndLeaderRefuseWithoutALeadership (0.01s)
+=== RUN   TestNewLocalMirrorRefusesClientsWithoutRevisionedSnapshots
+--- PASS: TestNewLocalMirrorRefusesClientsWithoutRevisionedSnapshots (0.00s)
+=== RUN   TestLocalMirrorWritesRefuseInvalidArgumentsBeforeReachingEtcd
+--- PASS: TestLocalMirrorWritesRefuseInvalidArgumentsBeforeReachingEtcd (0.00s)
+=== RUN   TestLocalMirrorRecordsAClosedWatchAsItsLastError
+--- PASS: TestLocalMirrorRecordsAClosedWatchAsItsLastError (0.01s)
+=== RUN   TestRealEtcdGetOfAMissingKeyIsNotFound
+--- PASS: TestRealEtcdGetOfAMissingKeyIsNotFound (0.63s)
+=== RUN   TestRealEtcdCloseAfterLeaseVanishedIsClean
+2026/11/02 12:05:27 INFO etcd Discovery: registered key=/roost/it/svc/game/7 lease=4642544482920541189
+2026/11/02 12:05:27 WARN etcd Discovery: lease lost key=/roost/it/svc/game/7
+{"level":"warn","ts":"2026-11-02T12:05:27.289017Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc000466200/127.0.0.1:41157","peer":"Peer{Addr: '127.0.0.1:41157', LocalAddr: '127.0.0.1:53260', AuthInfo: 'insecure'}","method":"/etcdserverpb.Lease/LeaseRevoke","attempt":0,"error":"rpc error: code = NotFound desc = etcdserver: requested lease not found"}
+2026/11/02 12:05:27 INFO etcd Discovery: lease already gone; its keys were removed with it lease=4642544482920541189 err="etcdserver: requested lease not found"
+2026/11/02 12:05:27 INFO etcd Discovery: deregistered key=/roost/it/svc/game/7
+--- PASS: TestRealEtcdCloseAfterLeaseVanishedIsClean (0.74s)
+=== RUN   TestRealEtcdFailedCampaignRevokesItsLease
+    real_etcd_integration_test.go:207: campaign_err=lost watcher waiting for delete lease_ttl_after_failed_campaign=-1 candidate_keys=0
+--- PASS: TestRealEtcdFailedCampaignRevokesItsLease (0.15s)
+=== RUN   TestRealEtcdCanceledWinningCampaignLeavesNoPhantomLeader
+    real_etcd_integration_test.go:237: first_campaign_err=context canceled other_campaign_err=<nil> first_lease_ttl=-1
+--- PASS: TestRealEtcdCanceledWinningCampaignLeavesNoPhantomLeader (0.64s)
+=== RUN   TestRealEtcdCanceledWaitingCampaignRevokesItsLease
+    real_etcd_integration_test.go:274: campaign_err=context deadline exceeded standby_lease_ttl=-1 keys=1
+--- PASS: TestRealEtcdCanceledWaitingCampaignRevokesItsLease (0.46s)
+=== RUN   TestRealEtcdResignHonoursTheCallerBudget
+{"level":"warn","ts":"2026-11-02T12:05:29.579493Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc000154200/127.0.0.1:38509","peer":"Peer{Addr: '127.0.0.1:38509', LocalAddr: '127.0.0.1:51444', AuthInfo: 'insecure'}","method":"/etcdserverpb.KV/Txn","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:370: Resign(500ms) against a frozen etcd: err=context deadline exceeded elapsed=501ms is_leader=false
+--- PASS: TestRealEtcdResignHonoursTheCallerBudget (1.06s)
+=== RUN   TestRealEtcdResignRevokesItsLease
+    real_etcd_integration_test.go:392: healthy Resign: err=<nil> lease_ttl=-1 keys=0
+--- PASS: TestRealEtcdResignRevokesItsLease (0.89s)
+=== RUN   TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget
+2026/11/02 12:05:31 INFO etcd Discovery: registered key=/rr-20261005-nc173/service/game/173 lease=5978424722390326789
+{"level":"warn","ts":"2026-11-02T12:05:32.051964Z","logger":"etcd-client","caller":"v3@v3.7.1/retry_interceptor.go:68","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc000155400/127.0.0.1:38655","peer":"Peer{Addr: '127.0.0.1:38655', LocalAddr: '127.0.0.1:41120', AuthInfo: 'insecure'}","method":"/etcdserverpb.Lease/LeaseRevoke","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = context deadline exceeded"}
+    real_etcd_integration_test.go:439: budgeted Close against a frozen etcd: err=etcd Discovery: revoke: context deadline exceeded elapsed=501ms client_open=true
+2026/11/02 12:05:32 INFO etcd Discovery: deregistered key=/rr-20261005-nc173/service/game/173
+    real_etcd_integration_test.go:448: retry Close after the thaw: err=<nil> keys=0 client_open=false
+--- PASS: TestRealEtcdAssemblyCloseRetriesTheRevokeAfterAFrozenBudget (1.56s)
+=== RUN   TestDiscoveryDeregisterStopContract
+2026/11/02 12:05:32 INFO etcd Discovery: registered key=/roost/game/1 lease=101
+2026/11/02 12:05:32 WARN etcd Discovery: lease lost key=/roost/game/1
+2026/11/02 12:05:32 WARN etcd Discovery: register retry failed key=/roost/game/1 err="setup failed" backoff=1ms
+2026/11/02 12:05:32 INFO etcd Discovery: deregistered key=/roost/game/1
+--- PASS: TestDiscoveryDeregisterStopContract (0.10s)
+=== RUN   TestAssemblyCloseStopContract
+2026/11/02 12:05:32 INFO etcd Discovery: deregistered key=/roost/game/1
+--- PASS: TestAssemblyCloseStopContract (0.10s)
+=== RUN   TestClientCloseErrorIsReportedOnceThenNil
+--- PASS: TestClientCloseErrorIsReportedOnceThenNil (0.00s)
+=== RUN   TestClientConcurrentCloseAllReturnNil
+--- PASS: TestClientConcurrentCloseAllReturnNil (0.00s)
+=== RUN   TestClientCallsAfterCloseFailFastWithErrClosed
+--- PASS: TestClientCallsAfterCloseFailFastWithErrClosed (0.00s)
+=== RUN   TestDiscoveryDeregisterWaitsForTheRegistrationLoopWithinItsContext
+2026/11/02 12:05:32 INFO etcd Discovery: registered key=/roost/game/1 lease=101
+2026/11/02 12:05:32 WARN etcd Discovery: lease lost key=/roost/game/1
+2026/11/02 12:05:32 WARN etcd Discovery: register retry failed key=/roost/game/1 err="setup failed" backoff=1ms
+2026/11/02 12:05:32 INFO etcd Discovery: deregistered key=/roost/game/1
+--- PASS: TestDiscoveryDeregisterWaitsForTheRegistrationLoopWithinItsContext (0.00s)
+=== RUN   TestAssemblyCloseKeepsTheClientUntilDeregisterSucceeds
+2026/11/02 12:05:32 INFO etcd Discovery: deregistered key=/roost/game/1
+--- PASS: TestAssemblyCloseKeepsTheClientUntilDeregisterSucceeds (0.00s)
+=== RUN   TestWatcherReadyWaitsForServerResponse
+--- PASS: TestWatcherReadyWaitsForServerResponse (0.00s)
+=== RUN   TestWatcherReadyReportsCompactedStartRevision
+--- PASS: TestWatcherReadyReportsCompactedStartRevision (0.00s)
+=== RUN   TestWatcherReadyReportsUnexpectedChannelClose
+--- PASS: TestWatcherReadyReportsUnexpectedChannelClose (0.00s)
+=== RUN   TestServiceWatcherReportsUnexpectedChannelClosure
+--- PASS: TestServiceWatcherReportsUnexpectedChannelClosure (0.00s)
+=== RUN   TestServiceWatcherCloseIsNotReportedAsFailure
+--- PASS: TestServiceWatcherCloseIsNotReportedAsFailure (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/etcd/driver	17.072s
