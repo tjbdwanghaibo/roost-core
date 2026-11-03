@@ -88,26 +88,44 @@ func abs64(v int64) int64 {
 
 // retier 是区域心跳里的档位判断（见文件头）：更新每个 NPC Real 的“无人起点”与上次请求时间（区域表，事务内），需要换档
 // 的投给 NPC 的 handler（提交后经出站队列）。只在状态变化时写区域表，没人在附近、已经慢档的 NPC 每拍不产生写。
-func (n *Node) retier(r *Region, now time.Time, fx *txEffects) {
+// “附近有没有人”从观察者一侧查：每个观察者在本拍的空间索引（与 witness 共用，见 beatView）里查 W + 最大 drift 内的
+// NPC，再按各自的 drift 精确判断；观察者通常远少于 NPC。
+func (n *Node) retier(r *Region, view *beatView, now time.Time, fx *txEffects) {
 	if n.cfg.IdlePeriod == 0 {
 		return
 	}
+	var watchers []spatial.Point
+	var maxDrift int64
+	for _, l := range r.locals.m {
+		switch {
+		case l.St.Kind == KindPlayer && (l.Role == RoleReal || l.Role == RoleFrozen):
+			watchers = append(watchers, l.St.Pos())
+		case l.St.Kind == KindNPC && l.Role == RoleReal:
+			maxDrift = max(maxDrift, n.drift(l.St, n.periodOf(l.St)))
+		}
+	}
+	for id, g := range r.ghosts.m {
+		if _, local := r.locals.m[id]; !local && g.St.Kind == KindPlayer {
+			watchers = append(watchers, g.St.Pos())
+		}
+	}
+	var watched map[int64]bool
+	if len(watchers) > 0 {
+		watched = n.watchedNPCs(r, view, watchers, maxDrift)
+	}
 	nowNano := now.UnixNano()
-	near := n.nearPlayers(r)
 	retry := int64(tierRetries) * int64(n.cfg.Period)
 	var idle uint64
 	for id, l := range r.locals.m {
 		if l.St.Kind != KindNPC || l.Role != RoleReal {
 			continue
 		}
-		period := n.cfg.Period
 		if l.St.Idle {
 			idle++
-			period = n.cfg.IdlePeriod
 		}
 		next := l
 		switch {
-		case near.within(l.St.Pos(), n.cfg.WakeRadius+n.drift(l.St, period)):
+		case watched[id]:
 			next.QuietSince = 0
 			if l.St.Idle && nowNano-l.TierAsked >= retry {
 				next.TierAsked = nowNano
@@ -127,73 +145,30 @@ func (n *Node) retier(r *Region, now time.Time, fx *txEffects) {
 	n.stats.idleNPCs.Store(idle)
 }
 
-// playerBuckets 是本拍观察者（玩家）位置的分桶：桶边长 size，查询半径不超过 size 时只看周围 3×3 个桶。一拍现建、用完即弃。
-type playerBuckets struct {
-	size    int64
-	buckets map[[2]int64][]spatial.Point
-}
-
-// nearPlayers 收集本格的观察者：本格玩家 Real / Frozen 与邻格玩家的 Ghost。桶边长取 W + 本格 NPC 里最大的 drift。
-func (n *Node) nearPlayers(r *Region) playerBuckets {
-	var points []spatial.Point
-	var maxDrift int64
-	for _, l := range r.locals.m {
-		switch {
-		case l.St.Kind == KindPlayer && (l.Role == RoleReal || l.Role == RoleFrozen):
-			points = append(points, l.St.Pos())
-		case l.St.Kind == KindNPC && l.Role == RoleReal:
-			period := n.cfg.Period
-			if l.St.Idle {
-				period = n.cfg.IdlePeriod
-			}
-			maxDrift = max(maxDrift, n.drift(l.St, period))
-		}
+// watchedNPCs 返回离某个观察者不超过 W + drift 的本格 NPC Real。
+func (n *Node) watchedNPCs(r *Region, view *beatView, watchers []spatial.Point, maxDrift int64) map[int64]bool {
+	index, _ := view.get(n, r)
+	if index == nil {
+		return nil
 	}
-	for id, g := range r.ghosts.m {
-		if _, local := r.locals.m[id]; !local && g.St.Kind == KindPlayer {
-			points = append(points, g.St.Pos())
-		}
-	}
-	b := playerBuckets{size: n.cfg.WakeRadius + maxDrift}
-	if len(points) == 0 {
-		return b
-	}
-	b.buckets = make(map[[2]int64][]spatial.Point, len(points))
-	for _, p := range points {
-		k := b.key(p)
-		b.buckets[k] = append(b.buckets[k], p)
-	}
-	return b
-}
-
-func (b playerBuckets) key(p spatial.Point) [2]int64 {
-	return [2]int64{floorDiv(p.X, b.size), floorDiv(p.Y, b.size)}
-}
-
-func floorDiv(v, d int64) int64 {
-	q := v / d
-	if v%d != 0 && v < 0 {
-		q--
-	}
-	return q
-}
-
-// within 报告 p 的 radius（≤ size）以内有没有观察者。
-func (b playerBuckets) within(p spatial.Point, radius int64) bool {
-	if len(b.buckets) == 0 {
-		return false
-	}
-	k := b.key(p)
-	for dx := int64(-1); dx <= 1; dx++ {
-		for dy := int64(-1); dy <= 1; dy++ {
-			for _, q := range b.buckets[[2]int64{k[0] + dx, k[1] + dy}] {
-				if spatial.WithinDistance(p, q, radius) {
-					return true
-				}
+	watched := make(map[int64]bool)
+	for _, w := range watchers {
+		for _, id := range index.QueryRadius(w, n.cfg.WakeRadius+maxDrift) {
+			if l, ok := r.locals.m[id]; ok && l.St.Kind == KindNPC && l.Role == RoleReal &&
+				spatial.WithinDistance(w, l.St.Pos(), n.cfg.WakeRadius+n.drift(l.St, n.periodOf(l.St))) {
+				watched[id] = true
 			}
 		}
 	}
-	return false
+	return watched
+}
+
+// periodOf 是区域按报告判断的档位周期（区域表里只有 EntityState，没有完整 ActorState）。
+func (n *Node) periodOf(st EntityState) time.Duration {
+	if st.Idle && n.cfg.IdlePeriod != 0 {
+		return n.cfg.IdlePeriod
+	}
+	return n.cfg.Period
 }
 
 // handleTier 是区域的换档请求（只锁 NPC）：NPC 仍是本格 Real 且档位不同才换，版本前进，提交后报告区域。冻结中、已交出、

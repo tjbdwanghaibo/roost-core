@@ -345,8 +345,9 @@ func (n *Node) regionBeat(r *Region, now time.Time, fx *txEffects) {
 			*out = append(*out, n.damageTo(p))
 		}
 	}
-	n.retier(r, now, fx)
-	n.witnesses(r, out)
+	view := &beatView{}
+	n.retier(r, view, now, fx)
+	n.witnesses(r, view, out)
 	var reals, ghosts uint64
 	for _, l := range r.locals.m {
 		if l.Role == RoleReal {
@@ -358,21 +359,22 @@ func (n *Node) regionBeat(r *Region, now time.Time, fx *txEffects) {
 	n.stats.ghosts.Store(ghosts)
 }
 
-// witnesses 给本格每个玩家 Real 推一份 witness：半径 R 内的本格记录与 Ghost（含自己），超出上限按距离取最近的。
-// 空间索引在这里现建、用完即弃。
-func (n *Node) witnesses(r *Region, out *[]outgoing) {
-	var observers []localRec
-	for _, l := range r.locals.m {
-		if l.Role == RoleReal && l.St.Kind == KindPlayer && l.St.Base != 0 {
-			observers = append(observers, l)
-		}
+// beatView 是一次区域心跳里现建的空间索引：本格记录与 Ghost（本格边界带以内的），witness 与 NPC 档位判断共用，
+// 第一次用到时才建、心跳结束即弃（A1：索引不常驻）。
+type beatView struct {
+	built  bool
+	index  *spatial.BlockIndex
+	states map[int64]EntityState
+}
+
+func (v *beatView) get(n *Node, r *Region) (*spatial.BlockIndex, map[int64]EntityState) {
+	if v.built {
+		return v.index, v.states
 	}
-	if len(observers) == 0 {
-		return
-	}
+	v.built = true
 	index, err := spatial.NewBlockIndex(n.indexBounds, n.cfg.IndexBlock)
 	if err != nil {
-		return
+		return nil, nil // indexBounds 与 IndexBlock 在 NewNode 时已校验为正，不会走到这里
 	}
 	states := make(map[int64]EntityState, len(r.locals.m)+len(r.ghosts.m))
 	for id, l := range r.locals.m {
@@ -387,6 +389,25 @@ func (n *Node) witnesses(r *Region, out *[]outgoing) {
 		}
 		states[id] = g.St
 		index.Add(id, g.St.Pos())
+	}
+	v.index, v.states = index, states
+	return index, states
+}
+
+// witnesses 给本格每个玩家 Real 推一份 witness：半径 R 内的本格记录与 Ghost（含自己），超出上限按距离取最近的。
+func (n *Node) witnesses(r *Region, view *beatView, out *[]outgoing) {
+	var observers []localRec
+	for _, l := range r.locals.m {
+		if l.Role == RoleReal && l.St.Kind == KindPlayer && l.St.Base != 0 {
+			observers = append(observers, l)
+		}
+	}
+	if len(observers) == 0 {
+		return
+	}
+	index, states := view.get(n, r)
+	if index == nil {
+		return
 	}
 	sort.Slice(observers, func(i, j int) bool { return observers[i].St.ID < observers[j].St.ID })
 	for _, o := range observers {

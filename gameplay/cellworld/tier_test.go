@@ -1,7 +1,6 @@
 package cellworld
 
 import (
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -146,39 +145,31 @@ func TestIdleTierGhostSurvivesSlowBeats(t *testing.T) {
 	}
 }
 
-// 慢档 NPC 一拍走 1500（> 边界带 1000）冲过边界：按 Period 分步积分、每步判交接，所以冻结点离边界不超过 H + 一步，
-// 旧格照样留下 Ghost；新格以慢档装入（档位随交接带走，不因交接回到快档）；全程至多一个 Real。
+// 慢档 NPC 一拍走 800（> H，整拍积分后再判交接会在边界外 800 以内任意处冻结）冲过边界：按 Period 分步积分、每步判
+// 交接，所以冻结点离边界不超过 H + 一步，旧格留下 Ghost；新格以慢档装入（档位随交接带走，不因交接回到快档）；全程
+// 至多一个 Real。一拍超过边界带（1500 > G）的几何由 TestIdleBeatIntegratesWholePeriodAndFreezesInsideBand 覆盖。
 func TestIdleTierFastCrossingHandsOffInsideBand(t *testing.T) {
-	spec, _ := idleSpec(t, 2, 1)
-	var (
-		mu       sync.Mutex
-		acquired = map[CellID]time.Time{}
-		ghostAt  atomic.Int64 // 交接后第一次在旧格看到的 Ghost 位置
-	)
+	spec, lb := idleSpec(t, 2, 1)
+	var offeredAt atomic.Int64 // 第一份 Offer 里的位置 = 冻结点
+	lb.setFault(func(_ string, m *wireMsg) (bool, bool, time.Duration) {
+		if m.Kind == kindOffer {
+			offeredAt.CompareAndSwap(0, m.Offer.State.X)
+		}
+		return false, false, 0
+	})
 	w := startWorld(t, spec)
 	a, b := CellID{0, 0}, CellID{1, 0}
 	npc := npcID(24)
-	w.spawn(a, EntityState{ID: npc, X: 5000, Y: 5000, VX: 1500, HP: 100})
+	w.spawn(a, EntityState{ID: npc, X: 7000, Y: 5000, VX: 800, HP: 100})
 	w.waitIdle(a, npc, true, 2*time.Second)
-	waitFor(t, 5*time.Second, "npc real in B", func() bool {
-		if s, ok := w.roleOf(b, npc); ok && s.Role == "real" {
-			mu.Lock()
-			if _, seen := acquired[b]; !seen {
-				acquired[b] = time.Now()
-			}
-			mu.Unlock()
-			if g, ok := w.roleOf(a, npc); ok && g.Role == "ghost" && ghostAt.Load() == 0 {
-				ghostAt.Store(g.State.X)
-			}
-			return true
-		}
-		return false
-	})
-	step := int64(1500) * int64(worldPeriod) / int64(time.Second)
+	waitFor(t, 8*time.Second, "npc real in B", func() bool { s, ok := w.roleOf(b, npc); return ok && s.Role == "real" })
+	step := int64(800) * int64(worldPeriod) / int64(time.Second)
 	limit := 10000 + w.grid.Hysteresis() + step
-	if x := ghostAt.Load(); x == 0 || x > limit {
-		t.Fatalf("old cell kept ghost at x=%d after the idle handoff, want a ghost at x <= %d (boundary + H + one %v step)", x, limit, worldPeriod)
+	if x := offeredAt.Load(); x == 0 || x > limit {
+		t.Fatalf("idle npc froze at x=%d, want x <= %d (boundary + H + one %v step)", x, limit, worldPeriod)
 	}
+	// 旧格在收到“已接受”的那笔事务里留下 Ghost，之后新格的慢拍更新它（一拍 800，仍在旧格边界带 1000 以内）。
+	waitFor(t, testIdlePeriod/2, "ghost left in A", func() bool { g, ok := w.roleOf(a, npc); return ok && g.Role == "ghost" && g.Owner == b })
 	if idle, _ := w.idleOf(b, npc); !idle {
 		t.Fatal("npc handed over while idle was installed fast; the tier should travel with the handoff")
 	}

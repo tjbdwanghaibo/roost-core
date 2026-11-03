@@ -9,13 +9,15 @@ M1 Ghost 过期不按慢档放宽（region.go regionBeat 去掉 ttl += IdlePerio
 
 M2 慢档整周期积分后只判一次交接（advance 先走完 20 步再判）
 --- FAIL: TestIdleTierFastCrossingHandsOffInsideBand (3.42s)
-    tier_test.go:176: old cell kept ghost at x=0 after the idle handoff, want a ghost at x <= 10175 (boundary + H + one 50ms step)
+    tier_test.go:169: idle npc froze at x=10520, want x <= 10140 (boundary + H + one 50ms step)
 --- FAIL: TestIdleBeatIntegratesWholePeriodAndFreezesInsideBand (0.00s)
-    tier_test.go:295: froze at x=11000, want in [10100, 10175]
+    tier_test.go:290: froze at x=11000, want in [10100, 10175]
+（用例先后两版：第一版在旧格 Inspect 里找 Ghost，与新格第一个慢拍的删除 / 更新赛跑，8 次里 2～3 次误报，
+改为从传输替身里截第一份 Offer 的位置作为冻结点；上面是改后的输出。）
 
 M3 冻结时丢掉慢档标记（freeze 里 st.Idle = false）
---- FAIL: TestIdleTierFastCrossingHandsOffInsideBand (3.42s)
-    tier_test.go:179: npc handed over while idle was installed fast; the tier should travel with the handoff
+--- FAIL: TestIdleTierFastCrossingHandsOffInsideBand (3.41s)
+    tier_test.go:174: npc handed over while idle was installed fast; the tier should travel with the handoff
 
 M4 去掉降档滞后（没人在附近就立即降档）
 --- FAIL: TestIdleTierNoFlappingAtWakeEdge (4.37s)
