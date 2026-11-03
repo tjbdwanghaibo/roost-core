@@ -1,0 +1,19 @@
+--- FAIL: TestMirrorJoinsTheSameSessionAsALocalEntity (0.00s)
+    mirror_test.go:184: first apply = 3, want created
+--- FAIL: TestMirrorDropsVersionsThatAreNotNewer (0.00s)
+    mirror_test.go:200: player 1 operations = [], want [create:500:full:e1s5]
+--- FAIL: TestMirrorSendsDeltaForMaskAndFullForZeroMask (0.00s)
+    mirror_test.go:218: player 1 operations = [], want [create:500:full:a]
+--- FAIL: TestMirrorRemoveTombstonesAndRecreates (0.00s)
+    mirror_test.go:231: player 1 operations = [], want [create:500:full:a]
+--- FAIL: TestMirrorExpiresObjectsNotHeardFrom (0.00s)
+    mirror_test.go:270: Expire removed 0, want 1
+--- FAIL: TestMirrorPositionDrivesVisibility (0.00s)
+    mirror_test.go:283: player 1 operations = [], want [create:500:full:here]
+--- FAIL: TestMirrorConcurrentAppliesConvergeOnTheNewestVersion (0.00s)
+    mirror_test.go:318: mirror 600 = {At:{X:0 Y:0} Label:} {0 0} false, want seq 50
+--- FAIL: TestMirrorCloseRemovesEverything (0.00s)
+    mirror_test.go:331: player 1 operations = [], want [create:500:full:a]
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.632s
+FAIL
