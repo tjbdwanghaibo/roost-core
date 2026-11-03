@@ -6,6 +6,8 @@
 >
 > v1.33.2 起夹具 handler 的业务时间改为约定参数 `nowUnixMilli`（分发包装从 fctx 填），**生成的 Sender 不带时间参数**，测试用 `clock.SetSource` 拨时钟；v1.33.1 上的旧夹具 / 旧手册 Sender 示例还带 `now`（SKILL.md §0）。二档 REAL 恢复用例需 ≥ v1.33.2（SKILL.md §7）。
 
+> 本篇命令按当前检出的脚本写（v1.40.0 起 DAO 字段写 `store` 键，v1.35.0 起在最终 `roost generate` 前安装公共 Robot）；目标是更早的 tag 时读该 tag 检出里的本文件（SKILL.md §0）。
+
 ## 1. 适用与不适用
 
 | 适用 | 不适用 / 要另想办法 |
@@ -47,13 +49,14 @@ fix_mod card-rpg-practice game/cardrpg/*.go game/gameplay/attribute/hero_stats.g
   game/entities/card_run/timer_handlers.go game/handler/card_rpg*.go
 gofmt -w db/def/*.go game/cardrpg/*.go game/gameplay/attribute/hero_stats.go \
   game/entities/card_run/timer_handlers.go game/handler/card_rpg*.go
+python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" card-rpg   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestCardRPG' ./game/cardrpg ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
 
-期望：`--- PASS: TestCardRPG` 恰好 **16** 条、0 skip；然后按 SKILL.md §3.4 收尾。
+期望：`--- PASS: TestCardRPG` 恰好 **17** 条（16 条业务 + `TestCardRPGRobotBusiness`）、0 skip；然后按 SKILL.md §3.4 收尾。
 
-## 4. demo 的最小玩法范围（CARD §3.4，16 条）
+## 4. demo 的最小玩法范围（CARD §3.4，16 条业务 + 1 条 Robot）
 
 配置原子热更与冻结；生成属性派生与快照独立；公开视图不含私钥；畸形状态与篡改冻结战斗 fail-closed；抽卡并发重放 / 保底 / 配置身份；抽卡拒绝与 undo 保留资金与随机流；养成与编队快照分离；并发开局只一局一扣体力；回合权威序号与重放不重挂期限；护盾 / 法力 / 毒 / 治疗战斗；以及领奖、重连视图等。最小可讲的玩法：首登 → 抽卡 → 开局（Player + Run 同事务）→ 出手若干回合（或超时托管）→ 胜利发奖一次。
 
@@ -85,15 +88,3 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestCardRPG' ./game/cardrp
 
 - `docs/framework/CARD-RPG-INTEGRATION.md`：§2 状态归谁、§3 生成与阅读顺序、§4～§7 设计要点、§8 更多路线、§9 接入坑、§11～§13 验收
 - `docs/framework/guide/07-config.md`（业务表发布、请求内一致性）、`docs/framework/guide/08-skill.md`、`docs/framework/guide/10-time.md` §4
-
-## v1.35.0 起的公共 Robot 接线
-
-手工生成 card-rpg 时，在最终 `roost generate` 前执行（`genre` 取本篇对应脚本名）：
-
-```sh
-python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" "$genre"
-```
-
-该步骤安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络验收；之后仍须正式 generate。自定义 module 由安装器读取 go.mod。最稳妥的完整顺序直接使用同检出的玩法脚本。网络用例现已覆盖该玩法的对局或经营闭环、结算重试与 TCP 重连；可信时间/敌方推进仍在服务器侧。准确步骤见 Robot 手册，不代表完整业务重登或真实存储恢复。
-
-验收数量与限制统一见 [Robot 手册](../../../framework/ROBOT.md)，不要沿用历史版本的通过数。

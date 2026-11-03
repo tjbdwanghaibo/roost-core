@@ -10,7 +10,7 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 - 本 skill 随 roost-core 版本发布，权威源在 `docs/agent-skills/roost-genre/`，提供流程、限制摘要和指针。**权威内容在 roost-core 仓库**：各篇 `docs/framework/<GENRE>-INTEGRATION.md`、`scripts/test-<genre>-generated.sh`、`scripts/testdata/<genre>/`、`docs/maintenance/KNOWN-LIMITS.md`。下文链接都是**相对 roost-core 根目录**的路径；读手册时以本机检出（如 `/Users/whb/roost/roost-core`）或 module cache 里对应版本的 `docs/` 为准，不以本文转述为准。
 - **`game` 模板只出框架骨架，各类型玩法来自夹具或业务代码**。已有 `game-demo` 是内置的完整参考应用；不要虚构 `project new -template slg` 一类不存在的模板。
 - 夹具里的数值（金币、时长、上限）都是样例；玩法规则缺少默认实现不算框架缺陷（KNOWN-LIMITS“游戏接入验收”首段）。
-- 生成 demo 前先确认目标 roost 版本；card-rpg、mmorpg、merge-casual 三个夹具 **v1.33.1 起可用**（2026-10-31 在 v1.33.1 检出实测 16 / 13 / 15 条 PASS），**最低版本 v1.33.1**：v1.33.0 上仍编译失败（见 §7）。实时派对房间（`party-room`）**v1.33.2 起有纵切（12 条）；弹性成局与组同步正式入口 v1.34.0 起（13 条）；业务层补位 v1.34.1 起（18 条，2026-10-31 在对应代码实测通过）**。三档夹具与命令不同，references/party-room.md 的命令序列是 18 条版；v1.33.1 及更早没有这条纵切。
+- 生成 demo 前先确认目标 roost 版本。本 skill 随 tag 发布，命令按同一检出的脚本写：**v1.40.0 起** `dao_add` 写必填的 `store` 键（更早的 tag 写 `bson`）；**v1.35.0 起**每篇在最终 `roost generate` 前多一步公共 Robot 安装（`scripts/testdata/robot-common/install.py`），九类状态玩法的场景数因此各 +1（MOBA 改为扩展 KCP 用例，仍 28 条）。目标是更早的 tag 时，读该 tag 检出里的本 skill 与脚本，不把这里的命令套上去。各篇最早可用版本：card-rpg、mmorpg、merge-casual 三个夹具 **v1.33.1 起可用**（2026-10-31 在 v1.33.1 检出实测 16 / 13 / 15 条 PASS），**最低版本 v1.33.1**：v1.33.0 上仍编译失败（见 §7）。实时派对房间（`party-room`）**v1.33.2 起有纵切（12 条）；弹性成局与组同步正式入口 v1.34.0 起（13 条）；业务层补位 v1.34.1 起（18 条，2026-10-31 在对应代码实测通过）**。三档夹具与命令不同，references/party-room.md 的命令序列是当前检出的 19 条版（18 条业务 + 1 条 Robot）；v1.33.1 及更早没有这条纵切。
 - 业务时间（v1.33.2 起全部十个夹具一致，guide/10-time.md §1A）：Nest handler 的最后一个参数是约定名 `nowUnixMilli`，由生成的分发包装从 fctx 填本条消息冻结的业务时间，**Sender 签名里没有时间、调用方不传 `now`**；测试拨时钟用 `clock.SetSource`（与驱动 `SetClock` 接同一个原子时钟，`t.Cleanup` 恢复）。v1.33.1 上 auto-chess / card-rpg / idle-sim / merge-casual / mmorpg / survival-extraction / tower-defense 七个夹具的 handler 仍收调用方传入的 `now int64`（Sender 带时间参数），按旧版手册写的调用代码升级后要去掉这个参数（CHANGELOG v1.33.2“变更”）。
 
 ## 1. 适用场景
@@ -42,7 +42,7 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 
 ### 3.1 前置与依赖方式
 
-- Go 版本按 roost-core `go.mod`（v1.33.0～v1.34.0 与 main `24a9dbc3` 均为 `go 1.27.0` / `toolchain go1.27.2`）；全程 `GOWORK=off`。v1.34.0 起生成物声明的最低 core 是 v1.34.0（`codegen/internal/roost/manifest.go`），联网方式 `project new` 解析不到更早版本。
+- Go 版本按 roost-core `go.mod`（`go` / `toolchain` 两行）；全程 `GOWORK=off`。生成物声明的最低 core 看目标检出 `codegen/internal/roost/manifest.go` 的 `minimumVersions.Core`（随功能版提高），联网方式 `project new` 解析不到比它更早的版本。
 - `CORE` = roost-core 源码目录，二选一：
   - **A. 本机检出**（推荐，已实测）：`CORE=/Users/whb/roost/roost-core`，切到目标版本的 tag / main。
   - **B. module cache**：`CORE=$(go env GOMODCACHE)/github.com/tjbdwanghaibo/roost-core@vX.Y.Z`。夹具随模块发布（`scripts/testdata/` 在模块包里）。仓库是私有模块，首次下载需要本机 git 凭据与 `GOPRIVATE=github.com/tjbdwanghaibo/*`（本机未设，B 的下载步骤未实测；从已有缓存目录构建 CLI 已实测可行，replace 指向缓存目录未实测）。
@@ -61,7 +61,7 @@ NAME=mygame; MOD=example.com/mygame       # 工程名与自定 Go module
 mkdir -p "$WORK"
 (cd "$CORE" && go build -o "$WORK/roost" ./codegen/cmd/roost)   # CLI 与 CORE 同版本
 ROOST="$WORK/roost"; DIR="$WORK/$NAME"
-# dao_add <实体类型名> <文件> "字段 类型 bson键 [dao标签]" ...：在 `type <X>Dao struct {` 后插入字段，标签缺省 persist
+# dao_add <实体类型名> <文件> "字段 类型 store键 [dao标签]" ...：在 `type <X>Dao struct {` 后插入字段，标签缺省 persist
 dao_add() {
   local t=$1 f=$2 ins="" n ty k tag s; shift 2
   for s in "$@"; do read -r n ty k tag <<<"$s"; ins+=$'\t'"$n $ty \`store:\"$k\" dao:\"${tag:-persist}\"\`"$'\n'; done
@@ -84,7 +84,7 @@ go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$CORE"
 
 ### 3.3 按玩法 add / 填字段 / 拷夹具
 
-见各 reference 的“生成最小 demo”一节。公共顺序：`add dao Player --entity Player` → `add entity <X>` + `add dao <X> --entity <X>` → `add timer --entity <X>`（需要持久期限时）→ `dao_add` 填字段 → `world` 改锁档 → `cp $CORE/scripts/testdata/<genre>/*.go.txt` 到工程 → `fix_mod` → `gofmt -w` → `roost generate`。
+见各 reference 的“生成最小 demo”一节。公共顺序：`add dao Player --entity Player` → `add entity <X>` + `add dao <X> --entity <X>` → `add timer --entity <X>`（需要持久期限时）→ `dao_add` 填字段 → `world` 改锁档 → `cp $CORE/scripts/testdata/<genre>/*.go.txt` 到工程 → `fix_mod` → `gofmt -w` → 安装公共 Robot（v1.35.0 起，`python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" <genre>`）→ `roost generate`。
 
 ### 3.4 验证（每篇都以此收尾）
 
@@ -117,7 +117,7 @@ cd "$CORE" && ROOST_<GENRE>_KEEP=1 bash scripts/test-<genre>-generated.sh   # �
 
 用户要压测时沿用 `robot` 的 transport/session/scenario/runner/loadtest。业务 PB 存在时 `roost generate` 同步生成 `loadtest/protocol/registry_gen.go`。生成新玩法时，自己的 PB、端点、Robot 步骤、数据断言、运行参数与说明必须一起交付；仅编译/直接调用 Nest 不算网络验收。不得自动给所有玩法塞一个 ping 然后声明完成。
 
-当前 main（本轮扩展尚未发版）13 类网络验收已覆盖既有玩法的对局或经营闭环：回合 PvP 至终态、社交种植/帮助/收获、合作三关领奖；九类状态玩法覆盖对应服务器推进与结算重试；MOBA 通过公共 LockstepBot 完成 KCP 整局和可信结算。准确步骤见 `docs/framework/ROBOT.md`。手工生成须安装同检出的 Robot 文件再 generate；公共快照测试 helper 也由安装器复制，不能漏掉。读取 DAO 要在 Nest 本地执行并持实体锁，拨业务钟用原子值。真实 Gate/账号/存储的通用链路已有独立验证，不自动覆盖每种玩法；TCP 重连不等同于完整业务重登或进程崩溃恢复。功能、容量、长稳、存储和客户端平台分别出结论。
+v1.35.0 起（v1.36.0 补齐闭环与 SyncProbe）13 类网络验收已覆盖既有玩法的对局或经营闭环：回合 PvP 至终态、社交种植/帮助/收获、合作三关领奖；九类状态玩法覆盖对应服务器推进与结算重试；MOBA 通过公共 LockstepBot 完成 KCP 整局和可信结算。准确步骤见 `docs/framework/ROBOT.md`。手工生成须安装同检出的 Robot 文件再 generate；公共快照测试 helper 也由安装器复制，不能漏掉。读取 DAO 要在 Nest 本地执行并持实体锁，拨业务钟用原子值。真实 Gate/账号/存储的通用链路已有独立验证，不自动覆盖每种玩法；TCP 重连不等同于完整业务重登或进程崩溃恢复。功能、容量、长稳、存储和客户端平台分别出结论。
 
 ## 4. “可运行”的两档
 
@@ -147,7 +147,7 @@ cd "$CORE" && ROOST_<GENRE>_KEEP=1 bash scripts/test-<genre>-generated.sh   # �
 | 12 | AOI：缺省 ApplySync 每玩家 ≤ 9 个视野（超出用 ApplyAsync）；一个会话持有目标受 `MaxObjects`（缺省 100）约束，超出**关闭整个会话** | guide/04-sync.md §2“视野”上限与两种应用模式；KNOWN-LIMITS“广播与 AOI”AOI 视野③ |
 | 13 | Saga 正式实现只在 macOS 单机测过：原生正向 c128 约 1050 saga/s；Linux、跨机未测；Saga 不是跨服瞬时原子交易。业务键唯一只在运行期间 + 终态保留期（`saga.terminal_retention`，缺省 1h）内成立，**保留期后可复用**，前后两轮靠协调器生成的生命周期身份区分（维护者 2026-10-31 定案 A）；要“同一业务键永远只有一笔”的业务在自己数据里记已用过的键 | KNOWN-LIMITS“Saga”；MMORPG-INTEGRATION §3；SAGA.md“定义”业务键与查询；guide/06-saga.md 幂等键 |
 | 14 | match 单分区“每秒成局人数 × `match.retention`”持续上限约 4500 人（本机单样本）。v1.34.0 起有弹性人数队列（`Queue.MinSize` / `FillAfterSeconds`，键 `2-8@20s`，过早的不满员局 `ErrGroupNotReady`；**先升级匹配服务再用**，旧服务端当固定队列）；没有存储原生补位 | guide/09-services.md §4；KNOWN-LIMITS“匹配的弹性人数成局与补位” |
-| 15 | 纵切脚本的**缺省模式**（离线、替身提交器）在 `scripts/pretag.sh` 里每次发版并行跑（`ROOST_PRETAG_GENRE_JOBS`，缺省 4），并把真实模式恢复夹具复制进生成工程 `go vet`（只编译不运行）：v1.33.1 起九个玩法纵切；**v1.33.2 起十个玩法纵切 + 三个离线生成器专项**（`test-heartbeat-generated.sh`、`test-level-generated.sh`、`test-sync-modes-generated.sh`）。根包 `TestGeneratedScriptsAreInPretag` 守卫每个 `scripts/test-*-generated.sh` 都在 pretag 里或登记豁免（豁免只剩 dataengine / remote / demo 三个需真实依赖的脚本）。**仍不在门禁里**：真实模式（`ROOST_<GENRE>_REAL=1`，需隔离 Mongo 等）要改模板 / 生成器时手动跑；守卫只查 pretag 调用了脚本，场景是否真执行靠各脚本的通过数断言。v1.33.0 及更早没有这道门禁（三个夹具因此在 v1.33.0 编译失败无人发现） | KNOWN-LIMITS“游戏接入验收”首段；docs/maintenance/README.md §5；CHANGELOG v1.33.1、v1.33.2 |
+| 15 | 纵切脚本的**缺省模式**（离线、替身提交器）在 `scripts/pretag.sh` 里每次发版并行跑（`ROOST_PRETAG_GENRE_JOBS`，缺省 4），并把真实模式恢复夹具复制进生成工程 `go vet`（只编译不运行）：v1.33.1 起九个玩法纵切；**v1.33.2 起十个玩法纵切 + 三个离线生成器专项**（`test-heartbeat-generated.sh`、`test-level-generated.sh`、`test-sync-modes-generated.sh`）；v1.35.0 起再加三类离散玩法（turn-pvp / coop-roguelike / social-sim）。根包 `TestGeneratedScriptsAreInPretag` 守卫每个 `scripts/test-*-generated.sh` 都在 pretag 里或登记豁免（豁免只剩 dataengine / remote / demo 三个需真实依赖的脚本）。**仍不在门禁里**：真实模式（`ROOST_<GENRE>_REAL=1`，需隔离 Mongo 等）要改模板 / 生成器时手动跑；守卫只查 pretag 调用了脚本，场景是否真执行靠各脚本的通过数断言。v1.33.0 及更早没有这道门禁（三个夹具因此在 v1.33.0 编译失败无人发现） | KNOWN-LIMITS“游戏接入验收”首段；docs/maintenance/README.md §5；CHANGELOG v1.33.1、v1.33.2 |
 | 16 | 真实 Unity / Godot / Unreal 引擎、跨机 HA、断电未验收 | KNOWN-LIMITS“平台与外部验证” |
 | 17 | 业务时间一律取自 ctx：handler 用约定参数 `nowUnixMilli`（Sender 不带时间），心跳 `Beat.Now`、定时器 `Fire.Now`；测试用 `clock.SetSource` 拨，不让调用方传 `now`（v1.33.2 起十个夹具一致，§0） | guide/10-time.md §1A；CHANGELOG v1.33.2“变更” |
 | 18 | 一个 Nest 只有一个 `EntitySync` 观察者：打开 `access.player.self_sync` 后它归自身视图的 Manager。房间 / 队伍要推给成员用 `access.player.sync_groups`（v1.34.0 起，与自身视图同一条连接、同一个推送编号，客户端按 Namespace + `Profile.Key` 分流；要求 self_sync、成员关系不持久）；不要自建 Manager 再交给 Nest——v1.34.0 前被静默覆盖，v1.34.0 起 `ErrEntitySyncObserverConflict`；政策要装到 Mod 的 Manager 上（`EntitySyncSetup.Attach`、`selfsync.Groups`） | ENTITY_SYNC.md“按组同步与 self_sync 共用连接（Groups）”；CHANGELOG v1.34.0；references/party-room.md §2、§5 |
@@ -183,7 +183,7 @@ cd "$CORE" && ROOST_<GENRE>_KEEP=1 bash scripts/test-<genre>-generated.sh   # �
 
 ## 8. 维护规则
 
-- 单玩家 PB → Nest 的薄边界优先复用 `roost add endpoint`：handler 可直接接收本工程当前协议的 PB 请求指针、返回唯一 PB 响应指针（当前 main 新增，发布状态看 CHANGELOG），避免手写字段搬运。普通领域参数仍可用；不能把多实体、身份来源、授权和领域 DTO 转换自动猜出来。目标取认证会话，PB 内容仍需校验；请求不能缓存到 Entity，响应不能引用 DAO 的可变容器。已有手写 endpoint 不覆盖；新建标准 endpoint 分为手写 `Handle<Protocol>`（`//roost:endpoint nest=<Handler>`）和持续生成的 `*_endpoint_gen.go`。授权写在手写入口，依赖 Entity 状态的校验写在 Nest 锁内；禁止编辑生成文件。命令与验证见 `codegen/docs/CODEGEN_REFERENCE.zh-CN.md`“PB 请求与响应直接接入 Nest”；真实 TCP + Sync 夹具为 `TestSelfSyncGeneratedProjectOverRealTCP`，存储为替身。
+- 单玩家 PB → Nest 的薄边界优先复用 `roost add endpoint`：handler 可直接接收本工程当前协议的 PB 请求指针、返回唯一 PB 响应指针（v1.38.0 起），避免手写字段搬运。普通领域参数仍可用；不能把多实体、身份来源、授权和领域 DTO 转换自动猜出来。目标取认证会话，PB 内容仍需校验；请求不能缓存到 Entity，响应不能引用 DAO 的可变容器。已有手写 endpoint 不覆盖；新建标准 endpoint 分为手写 `Handle<Protocol>`（`//roost:endpoint nest=<Handler>`）和持续生成的 `*_endpoint_gen.go`。授权写在手写入口，依赖 Entity 状态的校验写在 Nest 锁内；禁止编辑生成文件。命令与验证见 `codegen/docs/CODEGEN_REFERENCE.zh-CN.md`“PB 请求与响应直接接入 Nest”；真实 TCP + Sync 夹具为 `TestSelfSyncGeneratedProjectOverRealTCP`，存储为替身。
 
 
 - SLG / MMORPG 的玩家读取联盟、公会快照，按各 reference 的“普通 Player + Remote View”段及 [Remote 指南 §6](../../framework/guide/05-remote-mirror.md#6-普通-entity-写入--remote-view-读取) 生成共用请求 DTO；I/O 池预取，handler 仅取已准备视图。权威写入与快照读取分开，不能依据陈旧视图授予写权限。

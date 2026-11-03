@@ -2,12 +2,14 @@
 
 手册：`docs/framework/PARTY-ROOM-INTEGRATION.md`（下称 PARTY §N）。路径相对 roost-core 根目录，以检出或 module cache 中的 `docs/` 为准。
 
-> **版本要求：本篇命令序列（18 条场景，含补位）v1.34.1 起可用（2026-10-31 发布；发版前在 main `24a9dbc3` 实测 18 条 PASS，v1.34.1 与它代码相同）。** 分档：
+> **版本要求：本篇命令序列按当前检出写（19 条场景：18 条业务含补位 + 1 条业务 Robot；DAO 字段写 `store` 键，v1.40.0 起）。** 分档：
 > - **v1.33.2**：最早有这条纵切（12 条场景，房间同步靠夹具自建 Manager，匹配固定人数）；
 > - **v1.34.0**：弹性成局（`Queue.MinSize` / `FillAfterSeconds`）与组同步正式入口（`access.player.sync_groups`）起可用，生成物最低 core 升到 v1.34.0，纵切 13 条；没有补位；
-> - **v1.34.1（或 main `24a9dbc3` 之后）**：业务层补位（PARTY §6A），纵切 18 条。
+> - **v1.34.1**：业务层补位（PARTY §6A），纵切 18 条（2026-10-31 在 main `24a9dbc3` 实测，v1.34.1 与它代码相同）；
+> - **v1.35.0**：最终 generate 前安装公共 Robot，纵切 19 条；
+> - **v1.40.0**：DAO 定义改用必填 `store` 键（之前写 `bson`）。
 >
-> 三档的夹具文件与命令不同（v1.34.0 起没有 `sync.go.txt`、要加 access player / TCP / self_sync / sync_groups；补位版多 `backfill.go` 与 `game/partymatch`），**按目标版本检出里的 `scripts/test-party-room-generated.sh` 走**，不要拿本篇命令套旧版本。目标早于 v1.33.2 时告诉用户升级并停下，不要从别的夹具拼一个。
+> 各档的夹具文件与命令不同（v1.34.0 起没有 `sync.go.txt`、要加 access player / TCP / self_sync / sync_groups；补位版多 `backfill.go` 与 `game/partymatch`），**按目标版本检出里的 `scripts/test-party-room-generated.sh` 走**，不要拿本篇命令套旧版本。目标早于 v1.33.2 时告诉用户升级并停下，不要从别的夹具拼一个。
 
 ## 1. 适用与不适用
 
@@ -70,11 +72,12 @@ perl -0pi -e 's/^(    player:\n        service: game\n)/$1        self_sync: tru
 cp "$F/sync_group.go.txt" game/entities/party_room/sync_group.go
 fix_mod party-room-practice game/entities/party_room/sync_group.go
 gofmt -w game/entities/party_room/sync_group.go
+python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" party-room   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/partyroom ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
 
-期望：`--- PASS: TestPartyGame` 恰好 **18** 条（`game/partyroom` 3 条规则 + `game/handler` 15 条 Nest / 心跳 / 同步 / 补位）、0 skip；然后按 SKILL.md §3.4 收尾（`<前缀>` = `PartyGame`）。仓库脚本另把 `scripts/testdata/party-room/persistence/*_test.go` 复制为 `game/handler/party_room_*_test.go`、`fix_mod` / `gofmt` 后 `go vet ./game/handler`（真实模式夹具只编译）；一档 demo 可省。
+期望：`--- PASS: TestPartyGame` 恰好 **19** 条（`game/partyroom` 3 条规则 + `game/handler` 15 条 Nest / 心跳 / 同步 / 补位 + `TestPartyGameRobotBusiness`）、0 skip；然后按 SKILL.md §3.4 收尾（`<前缀>` = `PartyGame`）。仓库脚本另把 `scripts/testdata/party-room/persistence/*_test.go` 复制为 `game/handler/party_room_*_test.go`、`fix_mod` / `gofmt` 后 `go vet ./game/handler`（真实模式夹具只编译）；一档 demo 可省。
 
 - 场景前缀必须是 `TestPartyGame`：`add timer --entity PartyRoom` 会生成 `TestPartyRoomTimerTickHandlerMatchesTheDriver`，用 `^TestPartyRoom` 会多跑一条、计数对不上（PARTY §9）。
 - 本篇 Player 字段是 `Coins`（`persist,sync`）/ `Matches` / `Initialized`（不是别篇的 `Gold`）；同一工程叠加别篇夹具时要合并 Player 字段，不能各拷各的。
@@ -83,7 +86,7 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/part
 - `sync_group.go` 是 `project sync` 只在缺失时创建的业务文件，生成的缺省版本视图键是 `party_room`，本例 packer 只认 `RoomSyncProfile`，所以必须用夹具覆盖；覆盖后 `fix_mod`（它 import `game/partyroom`）。
 - 与 v1.33.2 版命令的差别：没有 `sync.go.txt`（自建 Manager 已删）；多 `backfill.go`、`game/partymatch/backfill.go`、`sync_group.go`；多 `add access player` / `add transport tcp` / roost.yaml / `project sync` 四步；`Coins` 改为 `persist,sync`。
 
-## 4. demo 的最小玩法范围（PARTY §3.4，18 条）
+## 4. demo 的最小玩法范围（PARTY §3.4，18 条业务 + 1 条 Robot）
 
 | 场景（`TestPartyGame…`） | 学到的框架契约 |
 | --- | --- |
@@ -150,15 +153,3 @@ go test -mod=mod -race -count=1 -timeout 3m -v -run '^TestPartyGame' ./game/part
 - `docs/framework/guide/10-time.md` §1A（业务时间）、§4（实体定时器）、§4A（心跳）
 - `docs/framework/TOWER-DEFENSE-INTEGRATION.md` 第一部分（房间实体、命令序号、多实体领奖讲得最细，PARTY §1 建议先读）
 - `docs/maintenance/KNOWN-LIMITS.md`“匹配的弹性人数成局与补位”、“游戏接入验收”派对房间行与表下房间内同步一条；`docs/maintenance/FEATURE-2026-10-31-match-flexible-grouping.md`（方案 A / B）、`FEATURE-2026-10-31-room-sync-groups.md`
-
-## v1.35.0 起的公共 Robot 接线
-
-手工生成 party-room 时，在最终 `roost generate` 前执行（`genre` 取本篇对应脚本名）：
-
-```sh
-python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" "$genre"
-```
-
-该步骤安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络验收；之后仍须正式 generate。自定义 module 由安装器读取 go.mod。最稳妥的完整顺序直接使用同检出的玩法脚本。网络用例现已覆盖该玩法的对局或经营闭环、结算重试与 TCP 重连；可信时间/敌方推进仍在服务器侧。准确步骤见 Robot 手册，不代表完整业务重登或真实存储恢复。
-
-验收数量与限制统一见 [Robot 手册](../../../framework/ROBOT.md)，不要沿用历史版本的通过数。

@@ -6,6 +6,8 @@
 >
 > v1.33.2 起夹具 handler 的业务时间改为约定参数 `nowUnixMilli`（分发包装从 fctx 填），**生成的 Sender 不带时间参数**，测试用 `clock.SetSource` 拨时钟；v1.33.1 上的旧夹具 / 旧手册 Sender 示例还带 `now`（SKILL.md §0）。二档 REAL 恢复用例需 ≥ v1.33.2（SKILL.md §7）。
 
+> 本篇命令按当前检出的脚本写（v1.40.0 起 DAO 字段写 `store` 键，v1.35.0 起在最终 `roost generate` 前安装公共 Robot）；目标是更早的 tag 时读该 tag 检出里的本文件（SKILL.md §0）。
+
 ## 1. 适用与不适用
 
 | 适用 | 不适用 / 要另想办法 |
@@ -64,7 +66,7 @@ for e in Scene Trade Monster; do
   "$ROOST" add entity "$e"
   "$ROOST" add dao "$e" --entity "$e"
 done
-# dao_i64 <实体> <文件> 字段...：全部 int64、bson 键取字段名小写（与脚本一致）
+# dao_i64 <实体> <文件> 字段...：全部 int64、store 键取字段名小写（与脚本一致）
 dao_i64() { local t=$1 f=$2 x a=(); shift 2; for x in "$@"; do a+=("$x int64 $(printf %s "$x" | tr A-Z a-z)"); done; dao_add "$t" "$f" "${a[@]}"; }
 dao_i64 Player db/def/player.go Gold PartyID SceneID SceneVersion TradeSeq TradeBuyer TradeAmount HP Items \
   AttackSeq LastAttackTarget CooldownUntil BuffValue BuffTimer ReviveTimer QuestKills QuestClaimed
@@ -77,13 +79,14 @@ for n in tasks tasks_test gameplay gameplay_test; do cp "$F/$n.go.txt" "game/han
 cp "$F/timer_handlers.go.txt" game/entities/player/timer_handlers.go
 fix_mod mmorpg-practice game/handler/mmo_*.go game/entities/player/timer_handlers.go
 gofmt -w db/def/*.go game/handler/mmo_*.go game/entities/player/timer_handlers.go
+python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" mmorpg   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
-go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPG(Party|Trade|Combat|Buff|Transfer|Death)' ./game/handler 2>&1 | tee "$WORK/test.log"
+go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPG(Party|Trade|Combat|Buff|Transfer|Death|Robot)' ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
 
-期望：`--- PASS: TestMMORPG` 恰好 **13** 条、0 skip；然后按 SKILL.md §3.4 收尾。
+期望：`--- PASS: TestMMORPG` 恰好 **14** 条（13 条业务 + `TestMMORPGRobotBusiness`）、0 skip；然后按 SKILL.md §3.4 收尾。
 
-## 4. demo 的最小玩法范围（MMO §4.4，7 组 13 条）
+## 4. demo 的最小玩法范围（MMO §4.4，7 组 13 条业务 + 1 条 Robot）
 
 两人组队 / 解散；并发转账重放与拒绝重试；Trade 托管交易（确认、取消、到期、并发竞争）；战斗 → 掉落 → 任务 → 副本完成；Buff 刷新与回滚；死亡与复活期限；切图、返回与旧请求。最小可讲的玩法：进图 → 打怪 → 拾取 → Buff 到期，再加一次面对面交易。
 
@@ -119,15 +122,3 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMMORPG(Party|Trade|Com
 - `docs/framework/guide/04-sync.md` §2（AOI 选型、上限、已测规模）、`docs/framework/INTEREST-BLOCK-AOI.md`
 - `docs/framework/guide/10-time.md` §4～§4E（定时器、心跳、移动、行为、技能推进）
 - `demo/README.md` 与 `demo/` 模板源码（game-demo 是完整参考）
-
-## v1.35.0 起的公共 Robot 接线
-
-手工生成 mmorpg 时，在最终 `roost generate` 前执行（`genre` 取本篇对应脚本名）：
-
-```sh
-python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" "$genre"
-```
-
-该步骤安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络验收；之后仍须正式 generate。自定义 module 由安装器读取 go.mod。最稳妥的完整顺序直接使用同检出的玩法脚本。网络用例现已覆盖该玩法的对局或经营闭环、结算重试与 TCP 重连；可信时间/敌方推进仍在服务器侧。准确步骤见 Robot 手册，不代表完整业务重登或真实存储恢复。
-
-验收数量与限制统一见 [Robot 手册](../../../framework/ROBOT.md)，不要沿用历史版本的通过数。

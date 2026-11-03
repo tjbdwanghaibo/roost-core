@@ -6,6 +6,8 @@
 >
 > v1.33.2 起夹具 handler 的业务时间改为约定参数 `nowUnixMilli`（分发包装从 fctx 填），**生成的 Sender 不带时间参数**，测试用 `clock.SetSource` 拨时钟；v1.33.1 上的旧夹具 / 旧手册 Sender 示例还带 `now`（SKILL.md §0）。二档 REAL 恢复用例需 ≥ v1.33.2（SKILL.md §7）。
 
+> 本篇命令按当前检出的脚本写（v1.40.0 起 DAO 字段写 `store` 键，v1.35.0 起在最终 `roost generate` 前安装公共 Robot）；目标是更早的 tag 时读该 tag 检出里的本文件（SKILL.md §0）。
+
 ## 1. 适用与不适用
 
 | 适用 | 不适用 / 要另想办法 |
@@ -40,11 +42,12 @@ cp "$F/handlers.go.txt"       game/handler/idle_sim.go
 cp "$F/gameplay_test.go.txt"  game/handler/idle_sim_test.go
 fix_mod idle-sim-practice game/idlesim/*.go game/entities/player/timer_handlers.go game/handler/idle_sim*.go
 gofmt -w db/def/*.go game/idlesim/*.go game/entities/player/timer_handlers.go game/handler/idle_sim*.go
+python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" idle-sim   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestIdleSim' ./game/idlesim ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
 
-期望 `--- PASS: TestIdleSim` 恰好 **12** 条、0 skip。
+期望 `--- PASS: TestIdleSim` 恰好 **13** 条（12 条业务 + `TestIdleSimRobotBusiness`）、0 skip。
 
 ### 3.2 合成休闲（`scripts/test-merge-casual-generated.sh`，v1.33.1 起可用）
 
@@ -60,18 +63,19 @@ cp "$F/handlers.go.txt"       game/handler/merge_casual.go
 cp "$F/gameplay_test.go.txt"  game/handler/merge_casual_test.go
 fix_mod merge-casual-practice game/mergecasual/*.go game/entities/player/timer_handlers.go game/handler/merge_casual*.go
 gofmt -w db/def/*.go game/mergecasual/*.go game/entities/player/timer_handlers.go game/handler/merge_casual*.go
+python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" merge-casual   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMergeCasual' ./game/mergecasual ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
 
-期望 `--- PASS: TestMergeCasual` 恰好 **15** 条、0 skip。两者都以 SKILL.md §3.4 收尾。
+期望 `--- PASS: TestMergeCasual` 恰好 **16** 条（15 条业务 + `TestMergeCasualRobotBusiness`）、0 skip。两者都以 SKILL.md §3.4 收尾。
 
 ## 4. demo 的最小玩法范围
 
 | 玩法 | 场景要点（数值是样例） |
 | --- | --- |
-| 放置（IDLE §3.4，12 条） | 分段积分与一次积分结果相同；三工坊并行队列独立完成；只退未开工任务且只退一次；仓库容量与订单原子；升级前先按旧倍率结算；驱动补触发不能延长离线窗口；跨日与缺席不放大每日奖励；undo 恢复队列 / 经济 / 唤醒期限 |
-| 合成（MERGE §3.4，15 条） | 棋盘权威与合成规则；生产器重放不重掷不重扣；出售撤销不复制物品；离线批次原子、拒绝云端冲突；设备接管 fence 旧写入；挑战只由服务器判胜、并发领奖一次；持久期限只判负一次 |
+| 放置（IDLE §3.4，12 条业务 + 1 条 Robot） | 分段积分与一次积分结果相同；三工坊并行队列独立完成；只退未开工任务且只退一次；仓库容量与订单原子；升级前先按旧倍率结算；驱动补触发不能延长离线窗口；跨日与缺席不放大每日奖励；undo 恢复队列 / 经济 / 唤醒期限 |
+| 合成（MERGE §3.4，15 条业务 + 1 条 Robot） | 棋盘权威与合成规则；生产器重放不重掷不重扣；出售撤销不复制物品；离线批次原子、拒绝云端冲突；设备接管 fence 旧写入；挑战只由服务器判胜、并发领奖一次；持久期限只判负一次 |
 
 ## 5. 业务限制清单
 
@@ -103,15 +107,3 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestMergeCasual' ./game/me
 - `docs/framework/IDLE-SIM-INTEGRATION.md`：§4 时间结算、§5 唤醒定时器、§6 幂等、§8 接入坑、§10～§12 验收
 - `docs/framework/MERGE-CASUAL-INTEGRATION.md`：§5 离线批次与设备代际、§6 时间、§7 广告与存储格式、§9 接入坑、§11～§13 验收
 - `docs/framework/guide/10-time.md` §2A（业务日）、§4（实体定时器）；`docs/framework/SCHEMA-MIGRATION.md`
-
-## v1.35.0 起的公共 Robot 接线
-
-手工生成 idle-sim、merge-casual、auto-chess 时，在最终 `roost generate` 前执行（`genre` 取本篇对应脚本名）：
-
-```sh
-python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" "$genre"
-```
-
-该步骤安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络验收；之后仍须正式 generate。自定义 module 由安装器读取 go.mod。最稳妥的完整顺序直接使用同检出的玩法脚本。网络用例现已覆盖该玩法的对局或经营闭环、结算重试与 TCP 重连；可信时间/敌方推进仍在服务器侧。准确步骤见 Robot 手册，不代表完整业务重登或真实存储恢复。
-
-验收数量与限制统一见 [Robot 手册](../../../framework/ROBOT.md)，不要沿用历史版本的通过数。

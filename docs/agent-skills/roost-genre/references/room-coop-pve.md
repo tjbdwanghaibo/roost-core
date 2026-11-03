@@ -12,6 +12,8 @@
 
 > **版本**：三个变体 v1.33.0 起可用。v1.33.2 起 handler 的业务时间改为约定参数 `nowUnixMilli`（分发包装从 fctx 填），**生成的 Sender 不带时间参数**，测试用 `clock.SetSource` 拨时钟；v1.33.1 及更早的手册 Sender 示例还带 `now`（SKILL.md §0）。二档 REAL 恢复用例需 ≥ v1.33.2（SKILL.md §7）。
 
+> 本篇命令按当前检出的脚本写（v1.40.0 起 DAO 字段写 `store` 键，v1.35.0 起在最终 `roost generate` 前安装公共 Robot）；目标是更早的 tag 时读该 tag 检出里的本文件（SKILL.md §0）。
+
 ## 1. 适用与不适用
 
 | 适用 | 不适用 / 要另想办法 |
@@ -40,7 +42,7 @@
 | `FIX`（夹具目录） | `tower-defense` | `survival-extraction` | `auto-chess` |
 | `H`（handler 文件名） | `tower_defense` | `survival_extraction` | `auto_chess` |
 | `TP`（测试前缀） | `TestTowerDefense` | `TestSurvivalExtraction` | `TestAutoChess` |
-| 期望 PASS 数 | 10 | 12 | 12 |
+| 期望 PASS 数（含 1 条业务 Robot） | 11 | 13 | 13 |
 
 ```bash
 E=TowerRoom E_FILE=tower_room PKG=towerdefense FIX=tower-defense H=tower_defense TP=TestTowerDefense   # 换变体改这一行
@@ -59,6 +61,7 @@ cp "$F/handlers.go.txt"       "game/handler/$H.go"
 cp "$F/gameplay_test.go.txt"  "game/handler/${H}_test.go"
 fix_mod "$FIX-practice" game/$PKG/*.go "game/entities/$E_FILE/timer_handlers.go" game/handler/$H*.go
 gofmt -w db/def/*.go game/$PKG/*.go game/entities/$E_FILE/*.go game/handler/$H*.go
+python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" "$FIX"   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 2m -v -run "^$TP" "./game/$PKG" ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
@@ -69,9 +72,9 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run "^$TP" "./game/$PKG" ./game/
 
 | 变体 | 夹具里的玩法（数值是样例） | 场景要点 |
 | --- | --- | --- |
-| 塔防（10 = 4 规则 + 6 Nest） | 5×5 地图与阻路 BFS、共享金币建 / 升 / 卖塔、准备与托管、三波战斗、基地胜负、团队奖励 | 并发抢格、阻路回滚、旧连接被拒、undo 恢复金币 / 路线 / 定时器、团队奖励原子（TD §3.4） |
-| 生存撤离（12 = 4 + 8） | 付费入场、共享采集、制作预扣、环境伤害、死亡掉落、撤离读条、永久兑付 | 入场原子幂等、资源点竞争、并发拾取、物资守恒、过期不能重进（SE §3.4） |
-| 自走棋（12） | 八席共享卡池与商店、经济与升级、合星、准备 / 战斗阶段、确定性战斗、淘汰排名、断线接管、按排名领奖 | 卡池守恒、并发买卡、准备竞争只冻结一场、期限后输入被拒、账本满保留原回执（AC §3.4） |
+| 塔防（11 = 4 规则 + 6 Nest + 1 Robot） | 5×5 地图与阻路 BFS、共享金币建 / 升 / 卖塔、准备与托管、三波战斗、基地胜负、团队奖励 | 并发抢格、阻路回滚、旧连接被拒、undo 恢复金币 / 路线 / 定时器、团队奖励原子（TD §3.4） |
+| 生存撤离（13 = 4 + 8 + 1 Robot） | 付费入场、共享采集、制作预扣、环境伤害、死亡掉落、撤离读条、永久兑付 | 入场原子幂等、资源点竞争、并发拾取、物资守恒、过期不能重进（SE §3.4） |
+| 自走棋（13 = 12 + 1 Robot） | 八席共享卡池与商店、经济与升级、合星、准备 / 战斗阶段、确定性战斗、淘汰排名、断线接管、按排名领奖 | 卡池守恒、并发买卡、准备竞争只冻结一场、期限后输入被拒、账本满保留原回执（AC §3.4） |
 
 ## 5. 业务限制清单
 
@@ -105,15 +108,3 @@ go test -mod=mod -race -count=1 -timeout 2m -v -run "^$TP" "./game/$PKG" ./game/
 - `docs/framework/guide/10-time.md` §4（实体定时器）、§4A（心跳，实时房间才需要，用法见 [party-room.md](party-room.md)）
 - `docs/framework/guide/09-services.md`（match / session 成局与运行会话，夹具里没有接线）
 - `docs/maintenance/KNOWN-LIMITS.md`“游戏接入验收”塔防 / 生存撤离 / 自走棋三行
-
-## v1.35.0 起的公共 Robot 接线
-
-手工生成 tower-defense、survival-extraction 时，在最终 `roost generate` 前执行（`genre` 取本篇对应脚本名）：
-
-```sh
-python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" "$genre"
-```
-
-该步骤安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络验收；之后仍须正式 generate。自定义 module 由安装器读取 go.mod。最稳妥的完整顺序直接使用同检出的玩法脚本。网络用例现已覆盖该玩法的对局或经营闭环、结算重试与 TCP 重连；可信时间/敌方推进仍在服务器侧。准确步骤见 Robot 手册，不代表完整业务重登或真实存储恢复。
-
-验收数量与限制统一见 [Robot 手册](../../../framework/ROBOT.md)，不要沿用历史版本的通过数。

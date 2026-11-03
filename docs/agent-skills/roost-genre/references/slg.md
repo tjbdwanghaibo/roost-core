@@ -2,6 +2,8 @@
 
 手册：`docs/framework/SLG-INTEGRATION.md`（下称 SLG §N）。路径相对 roost-core 根目录，以检出或 module cache 中的 `docs/` 为准。
 
+> 本篇命令按当前检出的脚本写（v1.40.0 起 DAO 字段写 `store` 键，v1.35.0 起在最终 `roost generate` 前安装公共 Robot）；目标是更早的 tag 时读该 tag 检出里的本文件（SKILL.md §0）。
+
 ## 1. 适用与不适用
 
 | 适用 | 不适用 / 要另想办法 |
@@ -50,11 +52,12 @@ cp "$F/tasks.go.txt"          game/handler/slg_tasks.go
 cp "$F/tasks_test.go.txt"     game/handler/slg_tasks_test.go
 fix_mod slg-practice game/entities/player/timer_handlers.go game/handler/slg_tasks*.go
 gofmt -w db/def/*.go game/entities/player/timer_handlers.go game/handler/slg_tasks*.go
+python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" slg   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLG' ./game/handler 2>&1 | tee "$WORK/test.log"
 ```
 
-期望：`--- PASS: TestSLG` 恰好 **6** 条、0 skip；然后按 SKILL.md §3.4 跑 build / vet / `id check` / `generate --check`。
+期望：`--- PASS: TestSLG` 恰好 **7** 条（6 条业务 + `TestSLGRobotBusiness`）、0 skip；然后按 SKILL.md §3.4 跑 build / vet / `id check` / `generate --check`。
 
 ### 3.1 进阶：加联盟活动（Remote 托管联盟权威）
 
@@ -87,15 +90,16 @@ cp "$F/alliance_authority.go.txt" game/handler/alliance_authority.go
 mkdir -p game/alliance && cp "$F"/alliance/*.go game/alliance/
 fix_mod slg-practice game/entities/player/timer_handlers.go game/handler/*.go game/alliance/*.go
 gofmt -w db/def/*.go game/entities/player/timer_handlers.go game/handler/*.go game/alliance/*.go
+python3 "$CORE/scripts/testdata/robot-common/install.py" "$CORE" "$DIR" slg   # 公共 Robot：业务 PB、TCP → Sender 接线、cmd/robot 与网络用例
 "$ROOST" generate
 go test -mod=mod -race -count=1 -timeout 2m -v -run '^TestSLG' ./game/handler 2>&1 | tee "$WORK/test.log"
 go test -mod=mod -race -count=1 -timeout 2m -v \
   -run '^(TestAllianceReportWindowFollowsTheCoordinatorReservationTTL|TestAllianceReceiverBudgetRejectsLateSuccess)$' ./game/alliance 2>&1 | tee "$WORK/alliance.log"
 ```
 
-期望：`test.log` 里 `--- PASS: TestSLG` 恰好 6 条、`alliance.log` 里两条顶层 PASS（`grep -c '^--- PASS: TestAlliance'` = 2），合计 8 条，即 `scripts/test-slg-generated.sh` 缺省模式（pretag 跑的就是这个形态）的全部断言；0 SKIP，再按 SKILL.md §3.4 跑 build / vet / `id check` / `generate --check`。其余联盟用例（`TestSLGAlliance*` 四条）要真实 Mongo / Redis / NATS，缺省只编译与 vet（SLG §11、§12.1）；`-run '^TestSLG'` 只跑 `./game/handler`，不会碰到它们。
+期望：`test.log` 里 `--- PASS: TestSLG` 恰好 7 条（含 Robot）、`alliance.log` 里两条顶层 PASS（`grep -c '^--- PASS: TestAlliance'` = 2），合计 9 条，即 `scripts/test-slg-generated.sh` 缺省模式（pretag 跑的就是这个形态）的全部断言；0 SKIP，再按 SKILL.md §3.4 跑 build / vet / `id check` / `generate --check`。其余联盟用例（`TestSLGAlliance*` 四条）要真实 Mongo / Redis / NATS，缺省只编译与 vet（SLG §11、§12.1）；`-run '^TestSLG'` 只跑 `./game/handler`，不会碰到它们。
 
-## 4. demo 的最小玩法范围（6 个场景，SLG §3.4）
+## 4. demo 的最小玩法范围（6 个业务场景 + 1 条 Robot，SLG §3.4）
 
 | 场景 | 学到的框架契约 |
 | --- | --- |
@@ -138,15 +142,3 @@ go test -mod=mod -race -count=1 -timeout 2m -v \
 - `docs/framework/guide/10-time.md` §4（实体定时器）、`docs/framework/guide/05-remote-mirror.md`、`docs/framework/INTEREST-BLOCK-AOI.md`
 - `docs/maintenance/KNOWN-LIMITS.md`“游戏接入验收”SLG 行
 - 参考实现：`demo/`（game-demo 模板）的 Map 组件、Guild、`activity.go.tmpl`、`saga/gift_item`
-
-## v1.35.0 起的公共 Robot 接线
-
-手工生成 slg 时，在最终 `roost generate` 前执行（`genre` 取本篇对应脚本名）：
-
-```sh
-python3 "$repo_root/scripts/testdata/robot-common/install.py" "$repo_root" "$project_root" "$genre"
-```
-
-该步骤安装业务 PB、已鉴权 TCP → Sender 接线、`loadtest.Commands`、`cmd/robot` 与网络验收；之后仍须正式 generate。自定义 module 由安装器读取 go.mod。最稳妥的完整顺序直接使用同检出的玩法脚本。网络用例现已覆盖该玩法的对局或经营闭环、结算重试与 TCP 重连；可信时间/敌方推进仍在服务器侧。准确步骤见 Robot 手册，不代表完整业务重登或真实存储恢复。
-
-验收数量与限制统一见 [Robot 手册](../../../framework/ROBOT.md)，不要沿用历史版本的通过数。
