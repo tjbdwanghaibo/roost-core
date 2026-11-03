@@ -135,8 +135,9 @@ func (cfg CellConfig) validate() error {
 		return bad("nil transport")
 	case !slices.Contains(heartbeat.Periods[:], cfg.Period):
 		return bad("period %v is not a heartbeat period", cfg.Period)
-	case cfg.ViewRadius <= 0 || cfg.ViewRadius > cfg.Grid.GhostBand():
-		return bad("view radius %d must be in (0, ghost band %d]", cfg.ViewRadius, cfg.Grid.GhostBand())
+	case cfg.ViewRadius <= 0 || cfg.ViewRadius+cfg.Grid.Hysteresis() > cfg.Grid.GhostBand():
+		// Real 最多越出本格 H 才交接，视野半径 R 内的邻区实体离本格至多 R + H，要都有 Ghost 就需要 R + H ≤ G。
+		return bad("view radius %d plus hysteresis %d must be in (0, ghost band %d]", cfg.ViewRadius, cfg.Grid.Hysteresis(), cfg.Grid.GhostBand())
 	case cfg.AttackRange < 0 || cfg.AttackRange > cfg.ViewRadius:
 		return bad("attack range %d must be in [0, view radius %d]", cfg.AttackRange, cfg.ViewRadius)
 	case cfg.IndexBlock <= 0 || cfg.MaxViewEntities < 0 || cfg.MaxReals < 0 || cfg.MaxSpeed < 0 ||
@@ -470,6 +471,9 @@ func (c *Cell) handle(m *wireMsg, now time.Time) {
 // send 编码并发布到 sid 的收件主题。发布失败只计数：协议本来就容忍丢失。
 func (c *Cell) send(sid int32, m *wireMsg) {
 	m.From = c.sid
+	if m.SentAt == 0 {
+		m.SentAt = time.Now().UnixNano()
+	}
 	data, err := encodeMsg(m)
 	if err != nil {
 		c.stats.publishErrors.Add(1)

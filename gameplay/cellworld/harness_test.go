@@ -291,3 +291,12 @@ func testGrid1x2(t *testing.T) *Grid {
 	}
 	return g
 }
+
+// forget 模拟进程死亡：该格持有的 Real 身份随进程消失（不会再有释放事件）。
+func (rc *realChecker) forget(cell CellID) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	for _, h := range rc.holders {
+		delete(h, cell)
+	}
+}
