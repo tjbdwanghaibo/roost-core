@@ -146,7 +146,7 @@ macOS arm64、Go 1.27.3，基线 `ffdc7b2d` 加本轮未提交工作树：13 类
 
 SLG 的 9 条含原 6 条、两条联盟断言与新增 Robot。合计 181 条自定义 module 场景；九类新增 TCP Robot，MOBA 原 KCP 用例扩到公共 LockstepBot 整局及客户端结算结果，回合 PvP/社交经营各 9 条，合作 10 条包含整局 TCP Robot。全部为上述明确范围，不代表完整生产端到端认证。
 
-最终代码通过 `go test ./...`、`go vet ./...`、`go test -race ./robot/...` 及文档/真实依赖入口门禁。13 类完整生成矩阵 `/tmp/roost-closed-loop-delivery-20261101` 全部通过：181 条自定义 module 场景、零测试 SKIP，生成漂移/ID/build/vet/race 检查通过。使用本文命令可重新生成，不依赖临时目录作长期证明。Linux 仅有前序交叉编译证据，本轮没有 Linux 实跑。
+最终代码通过 `go test ./...`、`go vet ./...`、`go test -race ./robot/...` 及文档/真实依赖入口门禁。13 类完整生成矩阵 `/tmp/roost-closed-loop-delivery-20261101` 全部通过：181 条自定义 module 场景、零测试 SKIP，生成漂移/ID/build/vet/race 检查通过。使用本文命令可重新生成，不依赖临时目录作长期证明。本轮没有 Linux 实跑；2026-11-02 的 [Linux 验收续报](../maintenance/LINUX-FUNCTIONAL-20261102.md)在 v1.37.1 上跑通同一 13 类矩阵（自定义 module 181 PASS、零 SKIP）。
 
 本轮初始失败保留在 `/tmp/roost-closed-loop-20261101` 与 `/tmp/roost-closed-loop-final-20261101`：网络回包后测试直接读 DAO 没有锁，MMORPG 测试同时读写 time.Time。现在由公共快照 helper 在 Nest 本地取锁复制，解析与断言留在测试 goroutine；网络时钟原子推进。修后完整矩阵通过，没有改变业务规则或减少场景。此前版本的验证过程见 Git 历史与 [v1.35.0 说明](../release/v1.35.0-NOTES.md)，本文只保留当前结果。
 
@@ -154,7 +154,7 @@ SLG 的 9 条含原 6 条、两条联盟断言与新增 Robot。合计 181 条�
 
 ## Sync 观测和真实 Gate 混合负载
 
-本节 SyncProbe、gate-mixed 及上文新增闭环是 main 未发版改动；v1.35.0 尚无 SyncProbe，必须使用同一检出的工具、夹具和运行库。
+本节 SyncProbe、gate-mixed 及上文新增闭环自 v1.36.0 起提供（v1.35.0 没有 SyncProbe）；必须使用同一检出的工具、夹具和运行库。
 
 每次运行创建独立 `robot.NewSyncProbe(maxPending)`，用 `runner.WithSyncProbe(probe)` 装配。业务从 `robot.Context.Config.SyncProbe` 获取同一实例（具体字段见代码）；直接驱动 Session 的夹具也可以独立使用。请求发起前 `Expect(SyncKey, time.Now(), timeout)`，成功应用并核对业务状态后 `Observe(key, appliedAt)`；断连时 `CancelConnection`。关联号由场景分配，Connection 在整个运行内唯一且重连换代，不能用每个机器人自己的 1、2 与别人碰撞。多个 setter 或 handler 可以合并成一帧，不能把版本差当作丢包。
 

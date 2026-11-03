@@ -101,7 +101,7 @@ type AllianceDao struct {
 
 完整类型范围、注册、版本水位和升级边界见 [Remote 指南](../../docs/framework/guide/05-remote-mirror.md)。
 
-### 必填的 store 键与变更告警（main，尚未发版）
+### 必填的 store 键与变更告警（v1.40.0 起）
 
 `//roost:dao`（Mongo 或内存 DAO）及其嵌套类型使用必填的专用 `store` tag 声明稳定键，推荐数字短键；业务代码仍用可读的 Go 名称：
 

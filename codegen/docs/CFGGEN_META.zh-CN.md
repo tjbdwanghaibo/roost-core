@@ -92,7 +92,7 @@ world, _ := cfg.WorldFrom(snap)              // 全局单例
 
 tables 上的规则生成为 `cfg` 标签，由 configdata 解析成与 tablegen 相同的 `configdata.FieldRule`，用同一个检查器在加载期执行（B10）。
 
-**globals 支持 `required` / `min` / `enum`**（维护者第十二轮决定，未发版）：生成为 `RegisterObject` 的 `ObjectDef.Rules` 字面量（对象注册路径不读 `cfg` 标签，所以 globals 的 struct 不带规则标签），configdata 每次 load / reload 用同一个检查器（`configdata/rules`）查；生成期用同一个 `rules.Rule.Validate` 查规则声明本身（`min` 是数字、`enum` 不空不重复）。违反时启动失败、reload 被拒且旧快照保持，错误点名配置名 / 字段 / 规则（如 `table world field width: min: value 0 is below min=1`）：
+**globals 支持 `required` / `min` / `enum`**（维护者第十二轮决定，v1.23.0 起）：生成为 `RegisterObject` 的 `ObjectDef.Rules` 字面量（对象注册路径不读 `cfg` 标签，所以 globals 的 struct 不带规则标签），configdata 每次 load / reload 用同一个检查器（`configdata/rules`）查；生成期用同一个 `rules.Rule.Validate` 查规则声明本身（`min` 是数字、`enum` 不空不重复）。违反时启动失败、reload 被拒且旧快照保持，错误点名配置名 / 字段 / 规则（如 `table world field width: min: value 0 is below min=1`）：
 
 ```yaml
 globals:

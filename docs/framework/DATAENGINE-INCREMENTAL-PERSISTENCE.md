@@ -2,9 +2,9 @@
 
 自 v1.39.0 起，普通 Mongo DAO 生成物采用以下持久化方式；版本状态见 [CHANGELOG](../../CHANGELOG.md)。需使用配套 core 与生成器重新生成 DAO，无新增 tag 或配置。持久格式仍为 BSON，WAL codec 不变，客户端 PB 同步协议不变。
 
-## 轻量标脏与数字短键（main，尚未发版）
+## 轻量标脏与数字短键（v1.40.0 起）
 
-新生成物最低 core 已设为待发布的 v1.40.0；发布前须用本地源码 replace，不能与已发布 v1.39.0 混用。
+这一节的生成物最低 core 是 v1.40.0，不能与 v1.39.0 及更早的 core 混用。
 
 保持现有包与提交链路：完整顶层字段用 `PersistChange.FullMask` 登记，只有子路径变化才分配 `PersistPaths`。完整字段覆盖同字段子路径，不扩大到其他字段；每次 setter 仍计入事务 revision。失败回滚、Sync 确认、WAL 与 Mongo 持久级别不变。
 

@@ -206,7 +206,7 @@ func (p playerSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.
 }
 ```
 
-`db.PlayerDaoSyncFields` 只在 DAO 有 sync 字段时生成；视图里的字段名取 DAO 的字段名或 bson 名，写了不存在的名字时 `NewSyncViewSet` 报错，packer 每次打包都返回这个错误。AOI 里别人看到的视图属于 Interest / AOI 政策的 Manager；同一个 Player 只能登记在一个 Manager，见下文“一个 Player 一个 Manager”。
+`db.PlayerDaoSyncFields` 只在 DAO 有 sync 字段时生成；视图里的字段名取 DAO 的字段名或 `store` 键，写了不存在的名字时 `NewSyncViewSet` 报错，packer 每次打包都返回这个错误。AOI 里别人看到的视图属于 Interest / AOI 政策的 Manager；同一个 Player 只能登记在一个 Manager，见下文“一个 Player 一个 Manager”。
 
 生成物（除推送编号外都在 `roost project sync` 会重写的文件里，关掉开关即恢复原样）：
 
