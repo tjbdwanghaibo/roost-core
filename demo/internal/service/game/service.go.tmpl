@@ -16,6 +16,7 @@ import (
  "github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
@@ -35,6 +36,9 @@ type Service struct {
 	stopSpawner    func()
 	spawner        *spawner
 	partition      *partitionRuntime
+	// cellHandlers 是分区场景 cellworld.Node 的 handler 名单：引擎启动前由 InstallNestHandlers 注册（partition.go），
+	// Init 里建 Node 时接上。不分区的进程也注册，只是永远不会被投递。
+	cellHandlers   *cellworld.Handlers
 	owners         *PlayerOwners
 	stopFlags      func()
 	stopPresence   func()
@@ -45,7 +49,7 @@ type Service struct {
 	activityPhase  fnats.IJetStreamSubscription
 }
 
-func New() *Service                    { return &Service{} }
+func New() *Service                    { return &Service{cellHandlers: cellworld.NewHandlers()} }
 func (*Service) Name() app.ServiceName { return app.ServiceName("{{GAME_SERVICE}}") }
 
 // ConfigSchema declares the keys this service's own code reads (game/settings):
@@ -153,7 +157,7 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	if partitioned.Enabled {
-		runtime, err := startPartition(registry, partitioned, area, scene)
+		runtime, err := startPartition(registry, partitioned, area, scene, s.cellHandlers)
 		if err != nil {
 			return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 		}

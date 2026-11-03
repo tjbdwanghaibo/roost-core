@@ -58,7 +58,8 @@ node, _ := cellworld.NewNode(cellworld.NodeConfig{
 	// Base 侧：角色 ID → Player 实体 ID；witness 喂给 Sync mirror
 	PlayerEntity: playerOfActor, Mirrors: mirrors, Interest: interest, Session: sessionOfActor, MirrorKind: kindOf,
 })
-node.RegisterHandlers(nestMgr) // 引擎 Start 之前
+_ = node.RegisterHandlers(nestMgr) // 引擎 Start 之前；Node 在引擎启动后才建时（正式进程：服务 Init 里），服务在引擎
+// 启动前经 wiring/nest 的 NestHandlerInstaller 钩子 Register 一份 cellworld.NewHandlers()，NodeConfig.Handlers 交给它（E3）
 go node.Run(ctx)
 
 // 实体侧：Scene 的心跳调 node.RegionBeat(scene, time.Now())；SceneActor / Monster 的心跳调 node.ActorBeat(actor, time.Now())

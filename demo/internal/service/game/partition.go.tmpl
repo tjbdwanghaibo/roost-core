@@ -94,7 +94,7 @@ func syncMask(fields []dataengine.SyncFieldMeta, names ...string) uint64 {
 
 // startPartition builds this process's part of the partitioned scene. It runs in Init after the scene bridge started
 // and before the player owners are published, so no player can join before it is in place.
-func startPartition(registry *app.Registry, config settings.ScenePartition, area *sceneentity.Scene, bridge *Scene) (*partitionRuntime, error) {
+func startPartition(registry *app.Registry, config settings.ScenePartition, area *sceneentity.Scene, bridge *Scene, handlers *cellworld.Handlers) (*partitionRuntime, error) {
 	grid, err := config.Grid()
 	if err != nil {
 		return nil, fmt.Errorf("partition: %w", err)
@@ -126,7 +126,7 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 	}
 	manager := access.Manager()
 	cfg := cellworld.NodeConfig{
-		World: config.World, SID: identity.Sid, Grid: grid, Transport: cellworld.NATSTransport(nats), Nest: client,
+		World: config.World, SID: identity.Sid, Grid: grid, Transport: cellworld.NATSTransport(nats), Nest: client, Handlers: handlers,
 		Destroy: func(ctx context.Context, e coreentity.IThreadSafeEntity) error {
 			return manager.Destroy(ctx, e, coreentity.DestroyReasonCommon, false)
 		},
@@ -153,9 +153,6 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 	}
 	rt.node = node
 	partition.Install(node, area.ID())
-	// Nest 引擎在 Mod 阶段已经启动，实例注册表不再收 handler；包级注册表在派发时解析（见 nest.getHandlerEntry），
-	// 一个进程只有一个 Node，handler 名不会重复。
-	node.RegisterHandlers(packageHandlers{})
 	if rt.cell != nil {
 		if err := area.HostCell(node.Config().Period); err != nil {
 			rt.stop()
@@ -186,11 +183,11 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 	return rt, nil
 }
 
-// packageHandlers 把 Node 的 handler 装进 Nest 的包级注册表（引擎启动之后的注册路径）。
-type packageHandlers struct{}
-
-func (packageHandlers) MustRegisterHandlerWithMeta(name corenest.HandlerName, handler corenest.BaseHandler, meta corenest.HandlerMeta) {
-	corenest.MustRegisterHandlerWithMeta(name, handler, meta)
+// InstallNestHandlers is the service's hook before the Nest engine starts (wiring/nest NestHandlerInstaller, E3):
+// the cellworld.Node handlers go onto this engine instance. The Node itself is only built in Init (it needs the scene
+// entity and the scene bridge), and NewNode binds it to these handlers through NodeConfig.Handlers.
+func (s *Service) InstallNestHandlers(engine corenest.HandlerRegistrar) error {
+	return s.cellHandlers.Register(engine)
 }
 
 // stop takes the Node down: no more messages are taken or sent. The entities go with the process (ephemeral).

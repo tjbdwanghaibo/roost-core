@@ -936,3 +936,32 @@ func TestStartupCleanupThatDoesNotFinishKeepsTheModsAndTheLock(t *testing.T) {
 		})
 	}
 }
+
+// serviceProbeMod 在 Provide / Start 时从注册表取 ModService。
+type serviceProbeMod struct {
+	registry           *Registry
+	atProvide, atStart any
+}
+
+func (m *serviceProbeMod) Name() ModName           { return "service_probe" }
+func (m *serviceProbeMod) Init(*viper.Viper) error { return nil }
+func (m *serviceProbeMod) Provide(r *Registry) error {
+	m.registry = r
+	m.atProvide, _ = r.Get(ModService)
+	return nil
+}
+func (m *serviceProbeMod) Start() error { m.atStart, _ = m.registry.Get(ModService); return nil }
+func (m *serviceProbeMod) Stop()        {}
+
+// App 在任何 Mod 之前把本次运行的 Service 登记为 ModService：Mod 在自己的引擎启动前调用服务声明的钩子
+// （wiring/nest 的 NestHandlerInstaller，E3）。Service.Init 照旧在全部 Mod 启动之后。
+func TestModsSeeTheRunningServiceBeforeTheyStart(t *testing.T) {
+	svc := &errService{}
+	probe := &serviceProbeMod{}
+	a := newTestApp(t, svc, probe)
+	a.RootCmd().SetArgs([]string{"game"})
+	_ = a.Execute()
+	if probe.atProvide != Service(svc) || probe.atStart != Service(svc) {
+		t.Fatalf("ModService at Provide = %v, at Start = %v; want the running service %p", probe.atProvide, probe.atStart, svc)
+	}
+}

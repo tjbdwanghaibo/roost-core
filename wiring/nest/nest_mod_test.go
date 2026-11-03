@@ -295,3 +295,88 @@ func TestLogLinesOutsideARequestCarryTheRunningNestFrame(t *testing.T) {
 	}
 	t.Fatalf("no probe line in the file log:\n%s", raw)
 }
+
+// installerService 是声明了 NestHandlerInstaller 的服务替身。
+type installerService struct {
+	calls int
+	err   error
+}
+
+func (s *installerService) Name() app.ServiceName           { return "game" }
+func (s *installerService) Init(*app.Registry) error        { return nil }
+func (s *installerService) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
+func (s *installerService) Shutdown(context.Context) error  { return nil }
+func (s *installerService) InstallNestHandlers(r corenest.HandlerRegistrar) error {
+	s.calls++
+	if s.err != nil {
+		return s.err
+	}
+	return r.RegisterHandlerWithMeta(corenest.NewHandlerName("installed_by_service"), func([]entity.IThreadSafeEntity, []any, ...corenest.HandlerOption) (any, error) {
+		return "ok", nil
+	}, corenest.HandlerMeta{Rollback: corenest.RollbackNone, Durability: corenest.DurabilityMemory})
+}
+
+// E3（维护者 2026-11-03 决定 B）：服务在 Nest 引擎启动之前把 handler 注册到本引擎实例（NestHandlerInstaller，经
+// app.ModService 找到服务），不走包级注册表与派发时的兜底解析；钩子只执行一次，失败让 Nest Mod 启动失败。
+func TestServiceInstallsInstanceHandlersBeforeTheEngineStarts(t *testing.T) {
+	cfg := viper.New()
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(mods.ModDataEngine, dataEngineNestProvider{committer: noOpCommitter{}}); err != nil {
+		t.Fatal(err)
+	}
+	svc := &installerService{}
+	if err := registry.Register(app.ModService, app.Service(svc)); err != nil {
+		t.Fatal(err)
+	}
+	mod := NewMod(emptyGetter{})
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = mod.StopWithContext(context.Background()) })
+	if svc.calls != 1 {
+		t.Fatalf("InstallNestHandlers called %d time(s), want 1", svc.calls)
+	}
+	if corenest.GetHandler(corenest.NewHandlerName("installed_by_service")) != nil {
+		t.Fatal("the service handler leaked into the package-level registry")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	// emptyGetter 对任何目标都答不存在：handler 在实例表里时请求走到取目标那一步（ErrEntityNotFound），不在时是 ErrHandlerNotFound。
+	entity.MustRegisterEntityKindCategory(entity.EntityKind(199), entity.EntityCategory(1))
+	target, err := entity.BuildEntityID(7, entity.EntityKind(199))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = mod.Engine().Request(ctx, corenest.NewHandlerName("installed_by_service"), target, nil)
+	if !errors.Is(err, corenest.ErrEntityNotFound) {
+		t.Fatalf("the engine does not know the service's handler: %v", err)
+	}
+
+	failing := &installerService{err: errors.New("refused")}
+	registry2 := app.NewRegistry(cfg)
+	if err := registry2.Register(mods.ModDataEngine, dataEngineNestProvider{committer: noOpCommitter{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry2.Register(app.ModService, app.Service(failing)); err != nil {
+		t.Fatal(err)
+	}
+	mod2 := NewMod(emptyGetter{})
+	if err := mod2.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod2.Provide(registry2); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod2.Start(); err == nil || !strings.Contains(err.Error(), "refused") {
+		t.Fatalf("Start with a failing hook = %v, want the hook's error", err)
+	}
+	if mod2.Engine().Running() {
+		t.Fatal("the engine started although the service's hook failed")
+	}
+}

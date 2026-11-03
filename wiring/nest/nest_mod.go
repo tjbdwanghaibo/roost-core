@@ -44,6 +44,10 @@ type Mod struct {
 	stopResync func(context.Context) error
 	// stopped 在 Nest 与 entitysync 都已停完并释放后置位，之后的 Stop 直接返回 nil。
 	stopped bool
+	// registry 是 Provide 时的 App 注册表：Start 从中取本次运行的 Service 调 NestHandlerInstaller；handlersInstalled
+	// 记钩子已经成功执行过。
+	registry          *app.Registry
+	handlersInstalled bool
 }
 
 // entityLoadNotifier 是 DataEngine 的可选能力（wiring/dataengine Mod.OnEntityLoaded）。
@@ -69,6 +73,15 @@ type engineConfig struct {
 	maxDelay        time.Duration
 	// unloadResync 来自 nest.unload_resync.*，零值字段取 entity 的默认（Workers 4、Attempts 5、QueueCapacity 4096）。
 	unloadResync entity.UnloadResyncConfig
+}
+
+// NestHandlerInstaller 是 Service 的可选钩子：Nest Mod 在引擎启动之前调用它，服务把只属于本引擎实例的 handler 注册
+// 上去（RegisterHandlerWithMeta 只在 Start 之前接受）。Service.Init 在全部 Mod 启动之后才执行，服务在 Init 里才建好
+// 的对象（例如分区场景的 cellworld.Node）由服务先给出 handler、Init 里再接上它们的实现（cellworld.Handlers）。
+// 钩子在 Mod Start 里同步执行，不能等待；返回错误则 Nest Mod 启动失败。App 经 app.ModService 把本次运行的 Service
+// 交给 Mod（见 framework/app），所以 Nest 在 shared_mods 还是服务专属 Mod 里都一样生效。维护者 2026-11-03 决定 E3 = B。
+type NestHandlerInstaller interface {
+	InstallNestHandlers(corenest.HandlerRegistrar) error
 }
 
 func NewMod(getter entity.Getter, opts ...corenest.NestOption) *Mod {
@@ -216,6 +229,7 @@ func (m *Mod) Provide(registry *app.Registry) error {
 		opts = append(opts, corenest.NestOptionWithEntitySync(m.entitySync))
 	}
 	m.engine = corenest.NewEngine(opts...)
+	m.registry = registry
 	m.bindDurableWatermark(m.engine)
 	capabilities := []mods.Capability{{Name: mods.ModNest, Value: m.engine}}
 	if _, exists := registry.Get(mods.ModEntityRuntime); !exists {
@@ -248,6 +262,9 @@ func (m *Mod) Provide(registry *app.Registry) error {
 func (m *Mod) Start() error {
 	if m == nil || m.engine == nil {
 		return fmt.Errorf("nest mod: engine not provided")
+	}
+	if err := m.installServiceHandlers(); err != nil {
+		return err
 	}
 	if m.entitySync != nil {
 		if err := m.entitySync.Start(context.Background()); err != nil {
@@ -380,4 +397,25 @@ func (m *Mod) checkHealth(context.Context) health.Result {
 		Status:  health.StatusOK,
 		Message: fmt.Sprintf("queue=%d delayed=%d", stats.Short.QueueLen+stats.Long.QueueLen+stats.IO.QueueLen+stats.ShortContinuations+stats.Queue.LongContinuations, stats.Delayed),
 	}
+}
+
+// installServiceHandlers 调用本次运行的 Service 的 NestHandlerInstaller 钩子（没有实现就什么都不做）。只调用一次：
+// Start 失败后重试不会重复注册（实例表对重名返回错误）。
+func (m *Mod) installServiceHandlers() error {
+	if m.handlersInstalled || m.registry == nil {
+		return nil
+	}
+	service, ok := m.registry.Get(app.ModService)
+	if !ok {
+		return nil
+	}
+	installer, ok := service.(NestHandlerInstaller)
+	if !ok {
+		return nil
+	}
+	if err := installer.InstallNestHandlers(m.engine); err != nil {
+		return fmt.Errorf("nest mod: service handlers: %w", err)
+	}
+	m.handlersInstalled = true
+	return nil
 }

@@ -28,8 +28,11 @@ type NodeConfig struct {
 	// Grid 是静态分区，所有进程一致。
 	Grid      *Grid
 	Transport Transport
-	// Nest 是本进程的 Nest 客户端（传输回调与出站队列把消息投成 Nest 请求）；handler 由 RegisterHandlers 装到引擎上。
-	Nest nest.Client
+	// Nest 是本进程的 Nest 客户端（传输回调与出站队列把消息投成 Nest 请求）。handler 要在引擎启动前装到引擎实例上：
+	// Node 先于引擎建好时调 RegisterHandlers；Node 在引擎启动之后才建（正式进程：服务 Init 里）时，服务先在引擎启动前
+	// Register 一份 Handlers，这里交给 Handlers，NewNode 把它接上本 Node。
+	Nest     nest.Client
+	Handlers *Handlers
 	// Destroy 销毁一个实体（正式路径：EntityManager.Destroy），在 Node 的出站 goroutine 上调用，不在业务 worker 上。
 	Destroy func(context.Context, fentity.IThreadSafeEntity) error
 
@@ -258,6 +261,7 @@ type Node struct {
 	running     atomic.Bool
 	lastExpire  atomic.Int64
 	stats       nodeCounters
+	handlers    *Handlers
 }
 
 // NewNode 校验配置并构造 Node。
@@ -266,7 +270,13 @@ func NewNode(cfg NodeConfig) (*Node, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	n := &Node{cfg: cfg, out: make(chan job, cfg.OutboxSize), ready: make(chan struct{})}
+	n := &Node{cfg: cfg, out: make(chan job, cfg.OutboxSize), ready: make(chan struct{}), handlers: cfg.Handlers}
+	if n.handlers == nil {
+		n.handlers = NewHandlers()
+	}
+	if err := n.handlers.bind(n); err != nil {
+		return nil, err
+	}
 	if cfg.Cell != nil {
 		n.cell, n.hostsCell = *cfg.Cell, true
 		n.rect = cfg.Grid.Rect(n.cell)
@@ -545,30 +555,60 @@ var (
 	hInspect = nest.NewHandlerName("cellworld_inspect")
 )
 
-// HandlerRegistrar 是 Nest 引擎注册 handler 的能力（*nest.NestMgr 满足）。
-type HandlerRegistrar interface {
-	MustRegisterHandlerWithMeta(nest.HandlerName, nest.BaseHandler, nest.HandlerMeta)
+// Handlers 是 Node 在 Nest 引擎上的 handler 名单，可以在 Node 建出来之前注册：正式进程里服务经 wiring/nest 的
+// NestHandlerInstaller 钩子在引擎启动前调用 Register（实例表只在 Start 之前接受注册），Node 在 Service.Init 里才建好
+// （它要场景实体、场景桥的 Manager / Interest），NewNode 时经 NodeConfig.Handlers 接上。接上之前的派发答
+// errHandlersUnbound（不会发生：只有 Node 自己投这些消息）。一个 Handlers 只接一个 Node，不是进程级注册表：
+// 它跟着服务实例走，同一进程的两个引擎各有各的（维护者 2026-11-03 决定 E3 = B）。
+type Handlers struct {
+	node atomic.Pointer[Node]
 }
 
-// RegisterHandlers 把 Node 的 handler 装到本进程的 Nest 引擎上（引擎 Start 之前）。全部 rollback=undo：区域表与角色
-// DAO 的修改随事务回滚。
-func (n *Node) RegisterHandlers(engine HandlerRegistrar) {
+var errHandlersUnbound = errors.New("cellworld: handlers are not bound to a node yet")
+
+// NewHandlers 返回一份还没接上 Node 的 handler 名单。
+func NewHandlers() *Handlers { return &Handlers{} }
+
+// Register 把全部 handler 装到 Nest 引擎实例上（引擎 Start 之前）。Cell 侧与 Base 侧的 handler 都注册：注册时还不知道
+// 本进程托管哪一格，没用到的那一侧永远不会被投递。全部 rollback=undo：区域表与角色 DAO 的修改随事务回滚。
+func (h *Handlers) Register(engine nest.HandlerRegistrar) error {
 	meta := nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync}
-	if n.hostsCell {
-		engine.MustRegisterHandlerWithMeta(hReports, n.handleReports, meta)
-		engine.MustRegisterHandlerWithMeta(hRegion, n.handleRegion, meta)
-		engine.MustRegisterHandlerWithMeta(hActor, n.handleActor, meta)
-		engine.MustRegisterHandlerWithMeta(hInput, n.handleInput, meta)
-		engine.MustRegisterHandlerWithMeta(hAttack, n.handleAttack, meta)
-		engine.MustRegisterHandlerWithMeta(hImplied, n.handleImplied, meta)
-		engine.MustRegisterHandlerWithMeta(hSpawn, n.handleSpawn, meta)
-		engine.MustRegisterHandlerWithMeta(hInspect, n.handleInspect, meta)
-		engine.MustRegisterHandlerWithMeta(hTier, n.handleTier, meta)
+	for _, entry := range []struct {
+		name nest.HandlerName
+		run  func(*Node, []fentity.IThreadSafeEntity, []any, ...nest.HandlerOption) (any, error)
+	}{
+		{hReports, (*Node).handleReports}, {hRegion, (*Node).handleRegion}, {hActor, (*Node).handleActor},
+		{hInput, (*Node).handleInput}, {hAttack, (*Node).handleAttack}, {hImplied, (*Node).handleImplied},
+		{hSpawn, (*Node).handleSpawn}, {hInspect, (*Node).handleInspect}, {hTier, (*Node).handleTier},
+		{hBase, (*Node).handleBase}, {hBaseCmd, (*Node).handleBaseCmd},
+	} {
+		run := entry.run
+		handler := func(es []fentity.IThreadSafeEntity, params []any, opts ...nest.HandlerOption) (any, error) {
+			n := h.node.Load()
+			if n == nil {
+				return nil, errHandlersUnbound
+			}
+			return run(n, es, params, opts...)
+		}
+		if err := engine.RegisterHandlerWithMeta(entry.name, handler, meta); err != nil {
+			return fmt.Errorf("cellworld: register %s: %w", entry.name.String(), err)
+		}
 	}
-	if n.cfg.PlayerEntity != nil {
-		engine.MustRegisterHandlerWithMeta(hBase, n.handleBase, meta)
-		engine.MustRegisterHandlerWithMeta(hBaseCmd, n.handleBaseCmd, meta)
+	return nil
+}
+
+// bind 把名单接到 n；已经接了别的 Node 时报错。
+func (h *Handlers) bind(n *Node) error {
+	if !h.node.CompareAndSwap(nil, n) && h.node.Load() != n {
+		return errors.New("cellworld: handlers are already bound to another node")
 	}
+	return nil
+}
+
+// RegisterHandlers 把本 Node 的 handler 装到 Nest 引擎上（引擎 Start 之前；Node 先于引擎启动建好时用，例如测试）。
+// 与 NodeConfig.Handlers 是同一份名单。
+func (n *Node) RegisterHandlers(engine nest.HandlerRegistrar) error {
+	return n.handlers.Register(engine)
 }
 
 func regionOf(es []fentity.IThreadSafeEntity) (*Region, error) {

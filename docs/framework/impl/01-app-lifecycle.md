@@ -17,6 +17,7 @@
 1. 重复 Mod 名启动拒绝；依赖与 capability 区分。
 2. 失锁、不可判定持久结果触发统一 fail-stop。
 3. Shutdown 超时不能提前释放仍被使用的依赖。
+4. 本次运行的 Service 在任何 Mod Init 之前登记为 `app.ModService`（未知服务类型不登记）；阶段顺序不变（Mod Init → Provide → Start，然后 Service.Init）。它只给 Mod 在自己的生命周期里调用服务声明的可选钩子，目前唯一的是 wiring/nest 的 `NestHandlerInstaller`：Nest Mod 在引擎 Start 之前调用 `InstallNestHandlers(nest.HandlerRegistrar)`，服务把只属于本引擎实例的 handler 注册上去（实例表只在 Start 之前接受注册），替代“引擎启动后注册到包级表、派发时兜底解析”。钩子失败则 Nest Mod 启动失败，只执行一次。维护者 2026-11-03 决定（无缝大世界 E3 = B）；回归：`TestModsSeeTheRunningServiceBeforeTheyStart`（app_test.go）、`TestServiceInstallsInstanceHandlersBeforeTheEngineStarts`（wiring/nest）。
 
 ## 3. 并发、失败与恢复的修改检查
 

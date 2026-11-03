@@ -351,6 +351,11 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 func (a *App) initRegistry(run *appRun, cfgPath string) error {
 	a.registry = NewRegistry(a.cfg)
 	a.registry.store[ModLogFrame] = &a.logFrame
+	// 服务在 Mod 之前登记（见 ModService）：Mod 的 Start 可能要在自己的引擎启动前调用服务声明的钩子，
+	// 而 Service.Init 在全部 Mod 启动之后才执行。登记不改变任何阶段的顺序。
+	if entry, ok := a.services[run.serverType]; ok && entry.svc != nil {
+		a.registry.store[ModService] = entry.svc
+	}
 	_, err := runStartupStep(run.startupCtx, run.sigChan, "app.init", func(ctx context.Context) error {
 		return a.emitLifecycle(ctx, lifecycle.Event{
 			Phase:   lifecycle.PhaseAppInit,

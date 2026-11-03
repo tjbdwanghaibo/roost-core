@@ -1,11 +1,14 @@
 package cellworld
 
 import (
+	"context"
 	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	fentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -150,4 +153,31 @@ func TestHandoffRollbackDoesNotHandOver(t *testing.T) {
 	}
 	time.Sleep(3 * worldPeriod)
 	w.assertSingleReal(actorID(1), b)
+}
+
+// E3：handler 名单先于 Node 注册（服务在引擎启动前经 NestHandlerInstaller 注册），同一引擎上不能注册两遍；
+// 一份名单只接一个 Node。harness 的每个进程都按这个顺序起（先注册、引擎 Start、再 NewNode）。
+func TestHandlersBindToExactlyOneNode(t *testing.T) {
+	h := NewHandlers()
+	engine := nest.NewEngine(nest.NestOptionWithGetter(fentity.NewManagerAccess(fentity.NewEntityManager())))
+	if err := h.Register(engine); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Register(engine); err == nil {
+		t.Fatal("registering the same names twice on one engine succeeded")
+	}
+	grid, err := NewGrid(GridConfig{Cols: 1, Rows: 1, CellSize: 1000, GhostBand: 100, Hysteresis: 10, Owners: map[CellID]int32{{}: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := NodeConfig{World: "w", SID: 1, Grid: grid, Transport: newLoopback(), Nest: engine, Handlers: h,
+		Destroy: func(context.Context, fentity.IThreadSafeEntity) error { return nil },
+		Cell:    &CellID{}, Scene: mustID(t, 1, kindTScene), ViewRadius: 50,
+		CreateActor: func(int64, EntityKind) (Actor, error) { return nil, errors.New("unused") }}
+	if _, err := NewNode(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewNode(cfg); err == nil {
+		t.Fatal("a second node bound the same handlers")
+	}
 }

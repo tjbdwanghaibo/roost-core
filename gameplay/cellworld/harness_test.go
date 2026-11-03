@@ -227,15 +227,20 @@ func startProc(t testing.TB, spec procSpec) *testProc {
 	if spec.mod != nil {
 		spec.mod(&cfg)
 	}
+	// 正式进程的顺序（E3）：handler 名单在引擎启动前注册到引擎实例，Node 在引擎启动之后才建、经 NodeConfig.Handlers 接上。
+	handlers := NewHandlers()
+	if err := handlers.Register(p.engine); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Handlers = handlers
 	node, err := NewNode(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	p.node = node
-	node.RegisterHandlers(p.engine)
-	if err := p.engine.Start(); err != nil {
-		t.Fatal(err)
-	}
 	p.driver = heartbeat.NewDriver(heartbeat.Config{Name: fmt.Sprintf("cell-%d", spec.sid)})
 	if err := p.driver.Bind(p.engine, func(id int64) fentity.IThreadSafeEntity { return p.manager.Get(id) }); err != nil {
 		t.Fatal(err)
