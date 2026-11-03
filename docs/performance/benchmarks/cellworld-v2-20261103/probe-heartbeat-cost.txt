@@ -1,0 +1,5 @@
+2026-11-03 探针：每个实体一个 50ms 心跳、回调只计数（空事务），真实 Nest 引擎 + heartbeat.Driver（批量投递），5s 窗口。
+macOS Apple M5，GOWORK=off go test（非 -race），nullCommitter。
+n=1000 beats/s=20035 cpu=15.3% of one core
+n=5000 beats/s=100154 cpu=60.9% of one core
+对照 v1（单 goroutine 事件循环，含全部模拟、Ghost、视野）：1k 4.3~6.3%，5k 13.4~17.1%（§6.2）。

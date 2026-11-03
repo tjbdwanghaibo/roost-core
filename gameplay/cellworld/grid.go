@@ -178,6 +178,20 @@ func (g *Grid) GhostTargets(owner CellID, p spatial.Point, dst []CellID) []CellI
 	return dst
 }
 
+// Neighbors 返回 id 周围 8 格里在网格内的格，按 (Row, Col) 顺序。
+func (g *Grid) Neighbors(id CellID) []CellID {
+	var out []CellID
+	for dr := int32(-1); dr <= 1; dr++ {
+		for dc := int32(-1); dc <= 1; dc++ {
+			n := CellID{Col: id.Col + dc, Row: id.Row + dr}
+			if (dr != 0 || dc != 0) && g.Contains(n) {
+				out = append(out, n)
+			}
+		}
+	}
+	return out
+}
+
 // InBand 报告 p 是否在 id 格外扩 G 的矩形内：Real 交接走后旧格据此决定降为 Ghost 还是删除。
 func (g *Grid) InBand(id CellID, p spatial.Point) bool {
 	return g.Contains(id) && expand(g.Rect(id), g.band).Contains(p)

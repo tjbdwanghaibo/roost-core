@@ -11,7 +11,10 @@ import (
 )
 
 // 线上格式：每个进程（Cell 或 Base）一个收件主题，消息是 msgpack 编码的 wireMsg，Kind 决定哪个字段有值。
-// 原型阶段没有格式版本号与跨版本兼容（未上线，见 §5）；字段用短键控制体积。
+// wireMsg.V 是格式版本（WireVersion）：不是当前版本的消息按坏消息丢弃（未上线，不做跨版本兼容）。字段用短键控制体积。
+
+// WireVersion 是当前线上格式版本。v2：加版本号、witness 带每个对象的版本、写回消息。
+const WireVersion uint8 = 2
 
 // EntityKind 区分玩家（有 BaseApp，接收视野）与 NPC（只在 Cell 里模拟）。
 type EntityKind uint8
@@ -45,8 +48,8 @@ type HitID struct {
 	Seq      uint64 `msgpack:"s"`
 }
 
-// appliedHit 是目标 Real 上已结算伤害的去重记录，随交接带走。
-type appliedHit struct {
+// AppliedHit 是目标 Real 上已结算伤害的去重记录，随交接带走（存在 SceneActor / Monster 的 DAO 里）。
+type AppliedHit struct {
 	Hit HitID `msgpack:"h"`
 	At  int64 `msgpack:"t"` // 结算时的系统时间（UnixNano），用于去重窗口过期
 }
@@ -104,10 +107,11 @@ const (
 	kindInput
 	kindAttack
 	kindOwner
-	kindView
+	kindWitness
 	kindAttackResult
 	kindLost
 	kindEnterRefused
+	kindWriteback
 )
 
 // ghostBatch：Real 的 owner 每拍发给一个邻格的 Ghost 更新（完整状态）与删除。
@@ -121,13 +125,13 @@ type ghostRemove struct {
 	Ver Version `msgpack:"v"`
 }
 
-// handoffOffer：旧格把 Real 交给新格。State.Ver.Epoch 是新 epoch；重传发同一份内容。
+// handoffOffer：旧格把 Real 交给新格。State.Ver.Epoch 是新 epoch；重传发同一份内容。Combat 是角色的其余战斗字段
+// （去重表、已应用输入序号），整份随交接带走。
 type handoffOffer struct {
 	State     EntityState  `msgpack:"s"`
 	From      CellID       `msgpack:"f"`
 	LastInput uint64       `msgpack:"in,omitempty"`
-	GhostedTo []CellID     `msgpack:"g,omitempty"`
-	Applied   []appliedHit `msgpack:"a,omitempty"`
+	Applied   []AppliedHit `msgpack:"a,omitempty"`
 }
 
 type handoffReply struct {
@@ -152,6 +156,8 @@ type damageReply struct {
 	Hint      int32         `msgpack:"hint,omitempty"` // OutcomeRetry 时所知 owner 的 sid，0 表示不知道
 }
 
+// enterReq：Base 让玩家进入（首次、Cell 崩溃后重进、交接放弃后补回）。State 是 Player 的最近快照（位置、HP），
+// 新格按它建 SceneActor。
 type enterReq struct {
 	State     EntityState `msgpack:"s"`
 	EpochHint uint64      `msgpack:"e"`
@@ -162,6 +168,8 @@ type leaveReq struct {
 	ID int64 `msgpack:"i"`
 }
 
+// inputReq 是移动意图，同时是 Base 对 SceneActor 的租约续期：Base 每 LeasePeriod 重发一次最新意图（序号不变），
+// SceneActor 收到任何一条都续租，只有序号前进的才改速度。
 type inputReq struct {
 	ID  int64  `msgpack:"i"`
 	Seq uint64 `msgpack:"q"`
@@ -181,23 +189,22 @@ type ownerNotice struct {
 	LastInput uint64 `msgpack:"in,omitempty"`
 }
 
-// ViewEntity 是视野里的一个实体。Ghost 为 true 表示它在本格只是只读镜像（Real 在邻格）。
-type ViewEntity struct {
-	ID    int64 `msgpack:"i"`
-	X     int64 `msgpack:"x"`
-	Y     int64 `msgpack:"y"`
-	HP    int32 `msgpack:"hp"`
-	Ghost bool  `msgpack:"g,omitempty"`
+// witnessMsg 是 Cell 给玩家 Base 的视野：半径 R 内的本格 Real / Frozen 与邻格 Ghost（含自己）。每个对象带它在 Cell
+// 上的版本 (epoch, seq)，Base 据此喂 Sync mirror（policy.Mirrors）：交接时旧格、新格的 witness 交错到达，按对象版本取新的。
+type witnessMsg struct {
+	Observer  int64         `msgpack:"o"`
+	Epoch     uint64        `msgpack:"e"`
+	Tick      uint64        `msgpack:"t"`
+	LastInput uint64        `msgpack:"in,omitempty"`
+	Self      EntityState   `msgpack:"s"`
+	Entities  []EntityState `msgpack:"v,omitempty"`
+	Truncated bool          `msgpack:"tr,omitempty"`
 }
 
-type viewMsg struct {
-	Observer  int64        `msgpack:"o"`
-	Epoch     uint64       `msgpack:"e"`
-	Tick      uint64       `msgpack:"t"`
-	LastInput uint64       `msgpack:"in,omitempty"`
-	Self      EntityState  `msgpack:"s"`
-	Entities  []ViewEntity `msgpack:"v,omitempty"`
-	Truncated bool         `msgpack:"tr,omitempty"`
+// writebackMsg 是 SceneActor 回写 Player 的战斗字段快照（原型只有 HP 与位置）。Ver 是 SceneActor 当时的版本，
+// 跨交接、跨重建单调；Base 只接受比 Player 上已存版本新的快照（幂等）。
+type writebackMsg struct {
+	State EntityState `msgpack:"s"`
 }
 
 type attackResultMsg struct {
@@ -220,6 +227,7 @@ type enterRefused struct {
 
 // wireMsg 是唯一的线上外壳。From 是发送进程的 sid；SentAt 是发送方系统时间（UnixNano），只用于测量。
 type wireMsg struct {
+	V      uint8   `msgpack:"ver"`
 	Kind   msgKind `msgpack:"k"`
 	From   int32   `msgpack:"f"`
 	SentAt int64   `msgpack:"t,omitempty"`
@@ -234,21 +242,28 @@ type wireMsg struct {
 	Input        *inputReq        `msgpack:"in,omitempty"`
 	Attack       *attackReq       `msgpack:"at,omitempty"`
 	Owner        *ownerNotice     `msgpack:"ow,omitempty"`
-	View         *viewMsg         `msgpack:"vw,omitempty"`
+	Witness      *witnessMsg      `msgpack:"vw,omitempty"`
 	AttackResult *attackResultMsg `msgpack:"ar,omitempty"`
 	Lost         *lostNotice      `msgpack:"ls,omitempty"`
 	EnterRefused *enterRefused    `msgpack:"rf,omitempty"`
+	Writeback    *writebackMsg    `msgpack:"wb,omitempty"`
 }
 
 var errBadMessage = errors.New("cellworld: malformed message")
 
-func encodeMsg(m *wireMsg) ([]byte, error) { return msgpack.Marshal(m) }
+func encodeMsg(m *wireMsg) ([]byte, error) {
+	m.V = WireVersion
+	return msgpack.Marshal(m)
+}
 
 // decodeMsg 解码并检查 Kind 与对应字段一致；不一致按坏消息丢弃，不进入状态机。
 func decodeMsg(data []byte) (*wireMsg, error) {
 	var m wireMsg
 	if err := msgpack.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("%w: %v", errBadMessage, err)
+	}
+	if m.V != WireVersion {
+		return nil, fmt.Errorf("%w: wire version %d, want %d", errBadMessage, m.V, WireVersion)
 	}
 	var present bool
 	switch m.Kind {
@@ -272,14 +287,16 @@ func decodeMsg(data []byte) (*wireMsg, error) {
 		present = m.Attack != nil
 	case kindOwner:
 		present = m.Owner != nil
-	case kindView:
-		present = m.View != nil
+	case kindWitness:
+		present = m.Witness != nil
 	case kindAttackResult:
 		present = m.AttackResult != nil
 	case kindLost:
 		present = m.Lost != nil
 	case kindEnterRefused:
 		present = m.EnterRefused != nil
+	case kindWriteback:
+		present = m.Writeback != nil
 	}
 	if !present {
 		return nil, fmt.Errorf("%w: kind %d without body", errBadMessage, m.Kind)

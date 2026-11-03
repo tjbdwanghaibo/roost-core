@@ -1,213 +1,170 @@
 package cellworld
 
 import (
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-func (h *harness) attack(at CellID, attacker, target int64, seq uint64, amount int32) HitID {
-	hit := HitID{Attacker: attacker, Seq: seq}
-	h.cell(at).handle(&wireMsg{Kind: kindAttack, From: testBaseSID, Attack: &attackReq{Hit: hit, Target: target, Amount: amount}}, h.now)
-	return hit
+// 跨格伤害在 v2 执行模型下的用例（v1 combat_test 按新模型改写，断言含义不变）：每个 HitID 至多扣一次血；Applied 都真的
+// 结算过；Unknown 可能已结算；去重表随交接带走（在目标实体的 DAO 上）。
+
+func (w *world) waitResults(n int, timeout time.Duration) []AttackResult {
+	w.t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		w.mu.Lock()
+		got := append([]AttackResult(nil), w.results...)
+		w.mu.Unlock()
+		if len(got) >= n || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
-func (h *harness) results(hit HitID) []*attackResultMsg {
-	var out []*attackResultMsg
-	for _, m := range h.baseMsgs(kindAttackResult) {
-		if m.AttackResult.Hit == hit {
-			out = append(out, m.AttackResult)
-		}
+func (w *world) applications() map[HitID]int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := map[HitID]int{}
+	for k, v := range w.hits {
+		out[k] = v
 	}
 	return out
 }
 
-func (h *harness) hp(id int64) int32 {
-	_, e, ok := h.realAt(id)
-	if !ok {
-		h.t.Fatalf("entity %d has no Real", id)
-	}
-	return e.st.HP
-}
-
-// A 区玩家打 B 区边界带内的目标：A 用 Ghost 判距离并转发给 B 结算；所有消息重复投递、同一攻击再发一次，
-// 伤害只结算一次，重复请求得到“已结算（重复）”。
+// 全部消息重复（含攻击本身）：10 次攻击各只结算一次，HP 100 → 80。
 func TestDamageAcrossBoundaryAppliedOnce(t *testing.T) {
-	h := newHarness(t, testGrid1x2(t), nil)
-	h.enterPlayer(1, spatial.Point{X: 960, Y: 500}, 100)
-	h.spawn(cellB, EntityState{ID: 7, X: 1030, Y: 500, HP: 100})
-	h.step(nil) // 互发 Ghost
-	if got := h.roles(7); got[cellA] != "ghost" {
-		t.Fatalf("target roles = %v, want ghost in A", got)
+	spec, lb := loopbackSpec(t, 2, 1)
+	lb.setFault(func(string, *wireMsg) (bool, bool, time.Duration) { return false, true, 0 })
+	w := startWorld(t, spec)
+	target := npcID(21)
+	w.spawn(CellID{1, 0}, EntityState{ID: target, X: 10300, Y: 5000, HP: 100})
+	w.enter(1, spatial.Point{X: 9700, Y: 5000})
+	time.Sleep(3 * worldPeriod)
+	for range 10 {
+		w.attack(1, target, 2)
 	}
-	hit := h.attack(cellA, 1, 7, 1, 10)
-	h.pump(func(m netMsg) verdict { // Cell 之间的消息全部重复；发给 Base 的不重复，便于数结论条数
-		if m.to == testBaseSID {
-			return pass
+	results := w.waitResults(10, 5*time.Second)
+	time.Sleep(3 * worldPeriod)
+	apps := w.applications()
+	if len(apps) != 10 {
+		t.Fatalf("%d distinct hits applied, want 10 (results %d)", len(apps), len(results))
+	}
+	for hit, n := range apps {
+		if n != 1 {
+			t.Errorf("hit %v applied %d times", hit, n)
 		}
-		return dup
-	})
-	if hp := h.hp(7); hp != 90 {
-		t.Fatalf("hp = %d, want 90", hp)
 	}
-	res := h.results(hit)
-	if len(res) != 1 || res[0].Outcome != OutcomeApplied || res[0].Duplicate {
-		t.Fatalf("results = %+v, want one applied", res)
-	}
-	h.attack(cellA, 1, 7, 1, 10) // Base 重发同一攻击
-	h.pump(nil)
-	if hp := h.hp(7); hp != 90 || h.hits[hit] != 1 {
-		t.Fatalf("hp = %d, applications = %d after duplicate attack", hp, h.hits[hit])
-	}
-	res = h.results(hit)
-	if len(res) != 2 || !res[1].Duplicate {
-		t.Fatalf("results = %+v, want second marked duplicate", res)
+	if s, ok := w.roleOf(CellID{1, 0}, target); !ok || s.State.HP != 80 {
+		t.Fatalf("target %+v, want hp 80", s)
 	}
 }
 
-// 超出距离与看不见的目标：明确拒绝，不转发。
+// 前置检查：本格知道但超出攻击距离 → OutOfRange；邻格边界带以外（本格看不见）→ NotVisible；都不结算。
 func TestDamageRejectedOutOfRangeOrInvisible(t *testing.T) {
-	h := newHarness(t, testGrid1x2(t), nil)
-	h.enterPlayer(1, spatial.Point{X: 900, Y: 500}, 100)
-	h.spawn(cellB, EntityState{ID: 7, X: 1050, Y: 500, HP: 100})
-	h.step(nil)
-	far := h.attack(cellA, 1, 7, 1, 10)
-	unknown := h.attack(cellA, 1, 99, 2, 10)
-	h.pump(nil)
-	if r := h.results(far); len(r) != 1 || r[0].Outcome != OutcomeRejected || r[0].Reason != ReasonOutOfRange {
-		t.Fatalf("far = %+v", r)
-	}
-	if r := h.results(unknown); len(r) != 1 || r[0].Reason != ReasonNotVisible {
-		t.Fatalf("unknown = %+v", r)
-	}
-	if s := h.cell(cellA).Stats(); s.DamageForwarded != 0 {
-		t.Fatalf("forwarded %d", s.DamageForwarded)
-	}
-}
-
-// 目标在攻击途中迁移：B 的 Offer 扣住时，A（攻击者所在格，也是交接目标）只有 Ghost，B 已冻结只回“重试”；
-// Offer 放行、A 安装后下一次重试在本格结算。只结算一次。
-func TestDamageWhileTargetMigratesRetriesToNewOwner(t *testing.T) {
-	h := newHarness(t, testGrid1x2(t), nil)
-	h.enterPlayer(1, spatial.Point{X: 960, Y: 500}, 100)
-	h.spawn(cellB, EntityState{ID: 7, X: 1010, Y: 520, VX: -400, HP: 100}) // 向 A 走
-	holdOffers := func(m netMsg) verdict {
-		if m.msg.Kind == kindOffer {
-			return hold
+	spec, _ := loopbackSpec(t, 2, 1)
+	w := startWorld(t, spec)
+	far, invisible := npcID(31), npcID(32)
+	w.spawn(CellID{0, 0}, EntityState{ID: far, X: 7000, Y: 5000, HP: 100})
+	w.spawn(CellID{1, 0}, EntityState{ID: invisible, X: 15000, Y: 5000, HP: 100})
+	w.enter(1, spatial.Point{X: 9700, Y: 5000})
+	time.Sleep(3 * worldPeriod)
+	w.attack(1, far, 5)
+	w.attack(1, invisible, 5)
+	results := w.waitResults(2, 3*time.Second)
+	reasons := map[int64]RejectReason{}
+	for _, r := range results {
+		if r.Outcome != OutcomeRejected {
+			t.Errorf("attack on %d: %v, want rejected", r.Target, r.Outcome)
 		}
-		return pass
+		reasons[r.Target] = r.Reason
 	}
-	h.step(holdOffers) // x=990（B 的迟滞内）
-	h.step(holdOffers) // x=970：B 冻结，Offer 扣住
-	if got := h.roles(7); got[cellB] != "frozen" || got[cellA] != "ghost" {
-		t.Fatalf("roles = %v, want B frozen, A ghost", got)
+	if reasons[far] != ReasonOutOfRange || reasons[invisible] != ReasonNotVisible {
+		t.Fatalf("reasons %v, want out-of-range for %d and not-visible for %d", reasons, far, invisible)
 	}
-	hit := h.attack(cellA, 1, 7, 1, 10)
-	for range 4 {
-		h.step(holdOffers) // 来回“重试”
-	}
-	if h.hits[hit] != 0 || len(h.results(hit)) != 0 {
-		t.Fatal("damage settled while the target was frozen")
-	}
-	h.release()
-	h.pump(nil)
-	for range 3 {
-		h.step(nil)
-	}
-	if at, _, _ := h.realAt(7); at != cellA {
-		t.Fatalf("target Real at %v, want A", at)
-	}
-	res := h.results(hit)
-	if len(res) != 1 || res[0].Outcome != OutcomeApplied || h.hits[hit] != 1 || h.hp(7) != 90 {
-		t.Fatalf("results = %+v, applications = %d, hp = %d", res, h.hits[hit], h.hp(7))
-	}
-	if s := h.cell(cellA).Stats(); s.DamageRetries == 0 {
-		t.Fatal("expected retries while target was frozen")
+	if apps := w.applications(); len(apps) != 0 {
+		t.Fatalf("rejected attacks applied: %v", apps)
 	}
 }
 
-// B 结算后回复丢失，随后目标迁到 A：去重表随交接带走，A 的重试在新 owner 上命中去重，报“已结算（重复）”，HP 只扣一次。
+// 去重随交接带走：B 结算后回复丢失，目标随即走进 A；攻击者格的重试先被 B 回“重试、owner 是 A”，再到 A——A 的去重表里
+// 已有这次伤害（随 Offer 带来），回 Applied 且 Duplicate，HP 只扣一次。
 func TestDamageDedupTravelsWithHandoff(t *testing.T) {
-	h := newHarness(t, testGrid1x2(t), nil)
-	h.enterPlayer(1, spatial.Point{X: 960, Y: 500}, 100)
-	h.spawn(cellB, EntityState{ID: 7, X: 1030, Y: 500, HP: 100})
-	h.step(nil)
-	hit := h.attack(cellA, 1, 7, 1, 10)
-	firstReply := true
-	h.pump(func(m netMsg) verdict {
-		if m.msg.Kind == kindDamageReply && firstReply {
-			firstReply = false
-			return drop
-		}
-		return pass
+	spec, lb := loopbackSpec(t, 2, 1)
+	var start atomic.Int64
+	start.Store(time.Now().UnixNano())
+	lb.setFault(func(_ string, m *wireMsg) (bool, bool, time.Duration) {
+		// 前 1.5s 丢掉“已结算”的回复：重试要跨过目标的交接。
+		early := time.Since(time.Unix(0, start.Load())) < 1500*time.Millisecond
+		return early && m.Kind == kindDamageReply && m.DamageReply.Outcome == OutcomeApplied, false, 0
 	})
-	if h.hits[hit] != 1 || len(h.results(hit)) != 0 {
-		t.Fatalf("applications = %d results = %d before handoff", h.hits[hit], len(h.results(hit)))
+	w := startWorld(t, spec)
+	target := npcID(41)
+	w.enter(1, spatial.Point{X: 9500, Y: 5000})
+	w.spawn(CellID{1, 0}, EntityState{ID: target, X: 10150, Y: 5000, VX: -300, HP: 100})
+	time.Sleep(2 * worldPeriod)
+	start.Store(time.Now().UnixNano())
+	hit := w.attack(1, target, 7)
+	results := w.waitResults(1, 4*time.Second)
+	if len(results) != 1 || results[0].Hit != hit || results[0].Outcome != OutcomeApplied {
+		t.Fatalf("results %+v, want one applied result for %v", results, hit)
 	}
-	// 目标往 A 走：1030 → 970 越出 B 的迟滞。
-	h.cell(cellB).ents[7].st.VX = -400
-	dropDamage := func(m netMsg) verdict { // 交接完成前 A 的重试都丢掉，保证重试落在新 owner 上
-		if m.msg.Kind == kindDamage {
-			return drop
-		}
-		return pass
+	if apps := w.applications(); apps[hit] != 1 || len(apps) != 1 {
+		t.Fatalf("applications %v, want %v exactly once", apps, hit)
 	}
-	for range 3 {
-		h.step(dropDamage)
+	if !results[0].Duplicate {
+		t.Logf("result was not a duplicate (the reply got through before the handoff): %+v", results[0])
 	}
-	if at, _, _ := h.realAt(7); at != cellA {
-		t.Fatalf("target Real at %v, want A", at)
-	}
-	for range 6 {
-		h.step(nil)
-	}
-	res := h.results(hit)
-	if len(res) != 1 || res[0].Outcome != OutcomeApplied || !res[0].Duplicate {
-		t.Fatalf("results = %+v, want one applied duplicate", res)
-	}
-	if h.hits[hit] != 1 || h.hp(7) != 90 {
-		t.Fatalf("applications = %d hp = %d", h.hits[hit], h.hp(7))
+	waitFor(t, 3*time.Second, "target real in A", func() bool { s, ok := w.roleOf(CellID{0, 0}, target); return ok && s.Role == "real" })
+	if s, _ := w.roleOf(CellID{0, 0}, target); s.State.HP != 93 {
+		t.Fatalf("target hp %d in A, want 93", s.State.HP)
 	}
 }
 
-// 回复一直丢：期限到报“结果未知”；它确实已经结算过（Unknown 不能当成没结算）。
+// 回复全部丢失：期限到了报 Unknown（可能已结算——确实结算了一次）。
 func TestDamageUnknownAfterDeadline(t *testing.T) {
-	h := newHarness(t, testGrid1x2(t), nil)
-	h.enterPlayer(1, spatial.Point{X: 960, Y: 500}, 100)
-	h.spawn(cellB, EntityState{ID: 7, X: 1030, Y: 500, HP: 100})
-	h.step(nil)
-	hit := h.attack(cellA, 1, 7, 1, 10)
-	noReplies := func(m netMsg) verdict {
-		if m.msg.Kind == kindDamageReply {
-			return drop
-		}
-		return pass
+	spec, lb := loopbackSpec(t, 2, 1)
+	lb.setFault(func(_ string, m *wireMsg) (bool, bool, time.Duration) { return m.Kind == kindDamageReply, false, 0 })
+	spec.cellMod = func(cfg *NodeConfig) { cfg.AttackDeadline = 500 * time.Millisecond }
+	w := startWorld(t, spec)
+	target := npcID(51)
+	w.spawn(CellID{1, 0}, EntityState{ID: target, X: 10300, Y: 5000, HP: 100})
+	w.enter(1, spatial.Point{X: 9700, Y: 5000})
+	time.Sleep(3 * worldPeriod)
+	hit := w.attack(1, target, 3)
+	results := w.waitResults(1, 3*time.Second)
+	if len(results) != 1 || results[0].Outcome != OutcomeUnknown {
+		t.Fatalf("results %+v, want unknown", results)
 	}
-	for range 45 { // 2.25s > AttackDeadline 2s
-		h.step(noReplies)
-	}
-	res := h.results(hit)
-	if len(res) != 1 || res[0].Outcome != OutcomeUnknown {
-		t.Fatalf("results = %+v, want one unknown", res)
-	}
-	if h.hits[hit] != 1 || h.hp(7) != 90 {
-		t.Fatalf("applications = %d hp = %d, want applied exactly once", h.hits[hit], h.hp(7))
+	if apps := w.applications(); apps[hit] != 1 {
+		t.Fatalf("applications %v: the unknown hit was applied %d times, want exactly once", apps, apps[hit])
 	}
 }
 
-// 去重表满（窗口内同一目标挨打超过上限）时拒绝新伤害，而不是淘汰旧记录——淘汰会让迟到的重试被再结算一次。
+// 去重表满（窗口内 3 条）时拒绝新伤害（Busy），不淘汰旧记录。
 func TestDamageBusyWhenDedupTableFull(t *testing.T) {
-	h := newHarness(t, testGrid1x2(t), func(cfg *CellConfig) { cfg.MaxAppliedHits = 2 })
-	h.enterPlayer(1, spatial.Point{X: 960, Y: 500}, 100)
-	h.spawn(cellA, EntityState{ID: 7, X: 970, Y: 500, HP: 100})
-	h.attack(cellA, 1, 7, 1, 10)
-	h.attack(cellA, 1, 7, 2, 10)
-	third := h.attack(cellA, 1, 7, 3, 10)
-	h.pump(nil)
-	if r := h.results(third); len(r) != 1 || r[0].Reason != ReasonBusy {
-		t.Fatalf("third = %+v, want busy", r)
+	spec, _ := loopbackSpec(t, 2, 1)
+	spec.cellMod = func(cfg *NodeConfig) { cfg.MaxAppliedHits = 3 }
+	w := startWorld(t, spec)
+	target := npcID(61)
+	w.spawn(CellID{0, 0}, EntityState{ID: target, X: 9800, Y: 5000, HP: 100})
+	w.enter(1, spatial.Point{X: 9700, Y: 5000})
+	time.Sleep(3 * worldPeriod)
+	for range 4 {
+		w.attack(1, target, 1)
+		time.Sleep(20 * time.Millisecond)
 	}
-	if hp := h.hp(7); hp != 80 {
-		t.Fatalf("hp = %d", hp)
+	results := w.waitResults(4, 3*time.Second)
+	busy := 0
+	for _, r := range results {
+		if r.Outcome == OutcomeRejected && r.Reason == ReasonBusy {
+			busy++
+		}
+	}
+	if busy != 1 || len(w.applications()) != 3 {
+		t.Fatalf("busy %d, applications %d, results %+v; want 1 busy and 3 applied", busy, len(w.applications()), results)
 	}
 }

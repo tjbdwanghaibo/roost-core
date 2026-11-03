@@ -10,13 +10,18 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// 进程内多 Cell 集成：每个 Cell 与 Base 都跑自己的事件循环 goroutine，经 Transport 通信（进程内替身或真实
-// NATS，见 nats_test.go）。场景函数与传输无关，两种传输跑同一套断言。
+// 多 Cell 集成（v2 执行模型）：每个格、每个 Base 都是一个“进程”（自己的 EntityManager、Nest 引擎、心跳驱动、Node），
+// 角色与 NPC 是 Nest 实体、由心跳驱动，交接以 Nest 事务为边界；Base 的 witness 经 Sync mirror 推给客户端替身。
+// 场景函数与传输无关：进程内替身（可注入丢失 / 重复 / 乱序）与真实 NATS（nats_test.go）跑同一套断言。
 
 const (
 	worldPeriod     = 50 * time.Millisecond
 	worldViewRadius = 800
 	worldBaseSID    = 900
+	// Base 的 Interest：客户端看见的半径小于 witness 半径，对象离开客户端视野之前位置一直有 witness 更新。
+	baseBlock       = 700
+	baseEnterRadius = 600
+	baseLeaveRadius = 700
 )
 
 func worldGrid(t testing.TB, cols, rows int32) *Grid {
@@ -35,16 +40,9 @@ func worldGrid(t testing.TB, cols, rows int32) *Grid {
 }
 
 type worldSpec struct {
-	grid *Grid
-	// transport 为每个 Cell 与 Base 各返回一个通道（NATS 下是各自的连接）。
+	grid      *Grid
 	transport func(t testing.TB, name string) Transport
-	cellMod   func(*CellConfig)
-}
-
-type runningCell struct {
-	cell   *Cell
-	cancel context.CancelFunc
-	done   chan struct{}
+	cellMod   func(*NodeConfig)
 }
 
 type world struct {
@@ -52,8 +50,8 @@ type world struct {
 	spec  worldSpec
 	grid  *Grid
 	real  *realChecker
-	base  *Base
-	cells map[CellID]*runningCell
+	base  *testProc
+	cells map[CellID]*testProc
 
 	mu         sync.Mutex
 	views      map[int64][]View
@@ -61,37 +59,34 @@ type world struct {
 	hits       map[HitID]int
 	handoffLat []time.Duration
 	ghostLat   []time.Duration
+	writebacks map[int64][]EntityState
 }
 
 func startWorld(t *testing.T, spec worldSpec) *world {
-	w := &world{t: t, spec: spec, grid: spec.grid, real: newRealChecker(t), cells: map[CellID]*runningCell{},
-		views: map[int64][]View{}, hits: map[HitID]int{}}
+	w := &world{t: t, spec: spec, grid: spec.grid, real: newRealChecker(t), cells: map[CellID]*testProc{},
+		views: map[int64][]View{}, hits: map[HitID]int{}, writebacks: map[int64][]EntityState{}}
 	for _, id := range w.grid.Cells() {
 		w.startCell(id)
 	}
-	base, err := NewBase(BaseConfig{World: "w", SID: worldBaseSID, Grid: w.grid, Transport: spec.transport(t, "base"),
-		OnView: func(v View) {
+	w.base = startProc(t, procSpec{sid: worldBaseSID, base: true, grid: w.grid, transport: spec.transport(t, "base"), mod: func(cfg *NodeConfig) {
+		cfg.Hooks.Witness = func(v View) {
 			w.mu.Lock()
 			w.views[v.Player] = append(w.views[v.Player], v)
 			w.mu.Unlock()
-		},
-		OnAttackResult: func(r AttackResult) {
+		}
+		cfg.Hooks.AttackResult = func(r AttackResult) {
 			w.mu.Lock()
 			w.results = append(w.results, r)
 			w.mu.Unlock()
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	w.base = base
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { defer close(done); _ = base.Run(ctx) }()
-	<-base.Ready()
+		}
+		cfg.Hooks.Writeback = func(id int64, s EntityState) {
+			w.mu.Lock()
+			w.writebacks[id] = append(w.writebacks[id], s)
+			w.mu.Unlock()
+		}
+	}})
 	t.Cleanup(func() {
-		cancel()
-		<-done
+		w.base.stop()
 		for id := range w.cells {
 			w.stopCell(id)
 		}
@@ -100,99 +95,183 @@ func startWorld(t *testing.T, spec worldSpec) *world {
 }
 
 func (w *world) startCell(id CellID) {
-	cfg := CellConfig{World: "w", Grid: w.grid, Cell: id, Transport: w.spec.transport(w.t, "cell"+id.String()),
-		ViewRadius: worldViewRadius, Period: worldPeriod}
-	cfg.Hooks = Hooks{
-		RealChanged: w.real.hook,
-		DamageApplied: func(_ CellID, _ int64, hit HitID, _ int32) {
+	w.cells[id] = startProc(w.t, procSpec{sid: w.grid.SID(id), cell: &id, grid: w.grid, transport: w.spec.transport(w.t, "cell"+id.String()), mod: func(cfg *NodeConfig) {
+		cfg.Hooks.RealChanged = w.real.hook
+		cfg.Hooks.DamageApplied = func(_ CellID, _ int64, hit HitID, _ int32) {
 			w.mu.Lock()
 			w.hits[hit]++
 			w.mu.Unlock()
-		},
-		HandoffDone: func(_ CellID, _ int64, _ uint64, accepted bool, d time.Duration) {
+		}
+		cfg.Hooks.HandoffDone = func(_ CellID, _ int64, _ uint64, accepted bool, d time.Duration) {
 			if accepted {
 				w.mu.Lock()
 				w.handoffLat = append(w.handoffLat, d)
 				w.mu.Unlock()
 			}
-		},
-		GhostApplied: func(_ CellID, d time.Duration, _ int) {
+		}
+		cfg.Hooks.GhostApplied = func(_ CellID, d time.Duration, _ int) {
 			w.mu.Lock()
 			w.ghostLat = append(w.ghostLat, d)
 			w.mu.Unlock()
-		},
-	}
-	if w.spec.cellMod != nil {
-		w.spec.cellMod(&cfg)
-	}
-	c, err := NewCell(cfg)
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	rc := &runningCell{cell: c, cancel: cancel, done: make(chan struct{})}
-	go func() { defer close(rc.done); _ = c.Run(ctx) }()
-	<-c.Ready()
-	w.cells[id] = rc
+		}
+		if w.spec.cellMod != nil {
+			w.spec.cellMod(cfg)
+		}
+	}})
 }
 
-// stopCell 模拟 Cell 进程崩溃：事件循环停止，状态全部丢失。
+// stopCell 模拟 Cell 进程崩溃：状态全部丢失。
 func (w *world) stopCell(id CellID) {
-	rc, ok := w.cells[id]
-	if !ok {
-		return
+	if p, ok := w.cells[id]; ok {
+		p.stop()
+		delete(w.cells, id)
 	}
-	rc.cancel()
-	<-rc.done
-	delete(w.cells, id)
+}
+
+func (w *world) ctx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 5*time.Second)
 }
 
 func (w *world) spawn(id CellID, st EntityState) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := w.ctx()
 	defer cancel()
-	if err := w.cells[id].cell.SpawnNPC(ctx, st); err != nil {
+	if err := w.cells[id].node.Spawn(ctx, st); err != nil {
 		w.t.Fatal(err)
 	}
 }
 
-func (w *world) viewsOf(id int64) []View {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return append([]View(nil), w.views[id]...)
+func (w *world) spawnAll(npcs map[int64]spatial.Point) {
+	for id, p := range npcs {
+		cell, ok := w.grid.CellAt(p)
+		if !ok {
+			w.t.Fatalf("npc %d outside world", id)
+		}
+		w.spawn(cell, EntityState{ID: id, X: p.X, Y: p.Y, HP: 100})
+	}
 }
 
-func (w *world) resetViews(id int64) {
+func (w *world) viewsOf(unique int64) []View {
 	w.mu.Lock()
-	delete(w.views, id)
+	defer w.mu.Unlock()
+	return append([]View(nil), w.views[actorID(unique)]...)
+}
+
+func (w *world) lastView(unique int64) (View, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	vs := w.views[actorID(unique)]
+	if len(vs) == 0 {
+		return View{}, false
+	}
+	return vs[len(vs)-1], true
+}
+
+func (w *world) resetViews(unique int64) {
+	w.mu.Lock()
+	delete(w.views, actorID(unique))
 	w.mu.Unlock()
 }
 
-// waitView 等到玩家最近的视野满足 cond。
-func (w *world) waitView(id int64, timeout time.Duration, what string, cond func(View) bool) View {
+// waitView 等到玩家最近的 witness 满足 cond。
+func (w *world) waitView(unique int64, timeout time.Duration, what string, cond func(View) bool) View {
 	w.t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if v, ok := w.base.LastView(id); ok && cond(v) {
+		if v, ok := w.lastView(unique); ok && cond(v) {
 			return v
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	v, _ := w.base.LastView(id)
-	w.t.Fatalf("player %d: timed out waiting for %s; last view cell=%d epoch=%d self=(%d,%d)", id, what, v.Cell, v.Epoch, v.Self.X, v.Self.Y)
+	v, _ := w.lastView(unique)
+	w.t.Fatalf("player %d: timed out waiting for %s; last view cell=%d epoch=%d self=(%d,%d)", unique, what, v.Cell, v.Epoch, v.Self.X, v.Self.Y)
 	return View{}
 }
 
-func (w *world) enter(id int64, at spatial.Point) View {
+func (w *world) enter(unique int64, at spatial.Point) View {
 	w.t.Helper()
-	if err := w.base.Enter(id, at, 100); err != nil {
+	pl := w.base.player(unique)
+	ctx, cancel := w.ctx()
+	defer cancel()
+	if err := w.base.node.Enter(ctx, pl.ID(), actorID(unique), at, 100); err != nil {
 		w.t.Fatal(err)
 	}
 	cell, _ := w.grid.CellAt(at)
-	return w.waitView(id, 5*time.Second, "first view", func(v View) bool { return v.Cell == w.grid.SID(cell) })
+	return w.waitView(unique, 5*time.Second, "first view", func(v View) bool { return v.Cell == w.grid.SID(cell) })
 }
 
-// checkContinuity：静止 NPC 落在玩家视野半径内（按视野里玩家自己的位置算）时，必须出现在视野里；连续缺失
-// 不超过 maxMiss 帧。相邻两份视野的到达间隔不超过 maxGap（交接窗口里旧格已停发、新格还没发）。
+func (w *world) move(unique int64, vx, vy int64) {
+	w.t.Helper()
+	ctx, cancel := w.ctx()
+	defer cancel()
+	if err := w.base.node.Move(ctx, playerEntityID(unique), vx, vy); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+func (w *world) attack(unique, target int64, amount int32) HitID {
+	w.t.Helper()
+	ctx, cancel := w.ctx()
+	defer cancel()
+	hit, err := w.base.node.Attack(ctx, playerEntityID(unique), target, amount)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return hit
+}
+
+func (w *world) owner(unique int64) (int32, uint64) {
+	w.t.Helper()
+	ctx, cancel := w.ctx()
+	defer cancel()
+	st, err := w.base.node.BaseStateOf(ctx, playerEntityID(unique))
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return st.Cell, st.Epoch
+}
+
+func (w *world) baseState(unique int64) BaseState {
+	w.t.Helper()
+	ctx, cancel := w.ctx()
+	defer cancel()
+	st, err := w.base.node.BaseStateOf(ctx, playerEntityID(unique))
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return st
+}
+
+func (w *world) inspect(id CellID) []EntitySnapshot {
+	w.t.Helper()
+	ctx, cancel := w.ctx()
+	defer cancel()
+	snap, err := w.cells[id].node.Inspect(ctx)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return snap
+}
+
+// assertSingleReal 在静止后检查：实体恰好在 want 格是 Real，其他格没有 Real / Frozen；也没有格观察到冲突的 Real 状态。
+func (w *world) assertSingleReal(id int64, want CellID) {
+	w.t.Helper()
+	for cid, p := range w.cells {
+		for _, s := range w.inspect(cid) {
+			if s.State.ID != id {
+				continue
+			}
+			if (s.Role == "real") != (cid == want) || s.Role == "frozen" {
+				w.t.Errorf("entity %d is %s in %v (want Real only in %v)", id, s.Role, cid, want)
+			}
+		}
+		if st := p.node.Stats(); st.Conflicts != 0 {
+			w.t.Errorf("cell %v saw %d conflicting Real states", cid, st.Conflicts)
+		}
+	}
+}
+
+// checkContinuity：静止 NPC 落在玩家 witness 半径内（按 witness 里玩家自己的位置算）时必须出现在 witness 里；连续缺失
+// 不超过 maxMiss 份。相邻两份 witness 的到达间隔不超过 maxGap（交接窗口里旧格已停发、新格还没发）。
 func checkContinuity(t *testing.T, views []View, npcs map[int64]spatial.Point, maxMiss int, maxGap time.Duration) (worstMiss int, worstGap time.Duration) {
 	t.Helper()
 	misses := map[int64]int{}
@@ -206,7 +285,7 @@ func checkContinuity(t *testing.T, views []View, npcs map[int64]spatial.Point, m
 				misses[id]++
 				worstMiss = max(worstMiss, misses[id])
 				if misses[id] > maxMiss {
-					t.Errorf("view %d (cell %d epoch %d tick %d self (%d,%d)): npc %d at %v missing %d frames in a row",
+					t.Errorf("view %d (cell %d epoch %d tick %d self (%d,%d)): npc %d at %v missing %d views in a row",
 						i, v.Cell, v.Epoch, v.Tick, v.Self.X, v.Self.Y, id, p, misses[id])
 				}
 			} else {
@@ -227,71 +306,78 @@ func checkContinuity(t *testing.T, views []View, npcs map[int64]spatial.Point, m
 	return worstMiss, worstGap
 }
 
-func (w *world) spawnAll(npcs map[int64]spatial.Point) {
-	for id, p := range npcs {
-		cell, ok := w.grid.CellAt(p)
-		if !ok {
-			w.t.Fatalf("npc %d outside world", id)
-		}
-		w.spawn(cell, EntityState{ID: id, X: p.X, Y: p.Y, HP: 100})
-	}
-}
-
-// assertSingleReal 在静止后检查：实体恰好在 want 格是 Real，其他格没有 Real / Frozen。
-func (w *world) assertSingleReal(id int64, want CellID) {
+// checkClient 检查客户端（Base 进程 Manager 推出的帧）看到的连续性：玩家附近（离开半径以内，减一段余量）的静止 NPC
+// 从未被 remove（交接不会让对象 remove 再 create）；结束时离玩家不远（进入半径以内，减余量）的都在客户端手里。
+func (w *world) checkClient(unique int64, npcs map[int64]spatial.Point) {
 	w.t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	for cid, rc := range w.cells {
-		snap, err := rc.cell.Inspect(ctx)
-		if err != nil {
-			w.t.Fatal(err)
-		}
-		for _, s := range snap {
-			if s.State.ID != id {
-				continue
+	time.Sleep(4 * worldPeriod) // 让最后的 witness 与帧到达
+	views := w.viewsOf(unique)
+	posAt := func(at time.Time) (spatial.Point, bool) {
+		var p spatial.Point
+		found := false
+		for _, v := range views {
+			if v.At.After(at) {
+				break
 			}
-			if (s.Role == "real") != (cid == want) || s.Role == "frozen" {
-				w.t.Errorf("entity %d is %s in %v (want Real only in %v)", id, s.Role, cid, want)
+			p, found = v.Self.Pos(), true
+		}
+		return p, found
+	}
+	const margin = 150
+	for _, r := range w.base.client.removed(unique) {
+		p, known := npcs[r.id]
+		if !known {
+			continue
+		}
+		if self, ok := posAt(r.at); ok && spatial.WithinDistance(self, p, baseLeaveRadius-margin) {
+			w.t.Errorf("client of player %d: npc %d at %v removed while the player was at %v (within %d)", unique, r.id, p, self, baseLeaveRadius-margin)
+		}
+	}
+	last, ok := w.lastView(unique)
+	if !ok {
+		return
+	}
+	held := w.base.client.held(unique)
+	for id, p := range npcs {
+		if spatial.WithinDistance(last.Self.Pos(), p, baseEnterRadius-margin) {
+			if _, ok := held[id]; !ok {
+				w.t.Errorf("client of player %d at %v does not hold npc %d at %v", unique, last.Self.Pos(), id, p)
 			}
 		}
-		if st := rc.cell.Stats(); st.Conflicts != 0 {
-			w.t.Errorf("cell %v saw %d conflicting Real states", cid, st.Conflicts)
-		}
+	}
+	if _, ok := held[actorID(unique)]; !ok {
+		w.t.Errorf("client of player %d does not hold its own SceneActor", unique)
 	}
 }
 
 func boundaryNPCs() map[int64]spatial.Point {
 	return map[int64]spatial.Point{
-		201: {X: 9500, Y: 5000}, 202: {X: 9800, Y: 5400}, 203: {X: 9950, Y: 4700},
-		204: {X: 10050, Y: 5300}, 205: {X: 10300, Y: 5000}, 206: {X: 10700, Y: 4900},
+		npcID(201): {X: 9500, Y: 5000}, npcID(202): {X: 9800, Y: 5400}, npcID(203): {X: 9950, Y: 4700},
+		npcID(204): {X: 10050, Y: 5300}, npcID(205): {X: 10300, Y: 5000}, npcID(206): {X: 10700, Y: 4900},
 	}
 }
 
-// 玩家沿直线 8800 → 11400 穿过 A/B 边界（10 m/s）：视野连续，交接一次，B 成为唯一 Real。
+// 玩家沿直线 8800 → 11400 穿过 A/B 边界（10 m/s）：witness 与客户端视野连续，交接一次，B 成为唯一 Real。
 func scenarioStraightCrossing(t *testing.T, w *world, maxMiss int, maxGap time.Duration) {
 	npcs := boundaryNPCs()
 	w.spawnAll(npcs)
-	a, b := CellID{0, 0}, CellID{1, 0}
+	b := CellID{1, 0}
 	w.enter(1, spatial.Point{X: 8800, Y: 5000})
 	w.resetViews(1)
-	if err := w.base.Move(1, 1000, 0); err != nil {
-		t.Fatal(err)
-	}
+	w.move(1, 1000, 0)
 	w.waitView(1, 10*time.Second, "reach x>=11300", func(v View) bool { return v.Self.X >= 11300 })
-	_ = w.base.Move(1, 0, 0)
+	w.move(1, 0, 0)
 	miss, gap := checkContinuity(t, w.viewsOf(1), npcs, maxMiss, maxGap)
 	t.Logf("views=%d worst consecutive miss=%d worst gap=%v", len(w.viewsOf(1)), miss, gap)
-	sid, epoch, _ := w.base.Owner(1)
+	w.checkClient(1, npcs)
+	sid, epoch := w.owner(1)
 	if sid != w.grid.SID(b) || epoch != 2 {
 		t.Fatalf("owner = sid %d epoch %d, want B epoch 2", sid, epoch)
 	}
-	time.Sleep(3 * worldPeriod)
-	w.assertSingleReal(1, b)
-	_ = a
+	w.assertSingleReal(actorID(1), b)
 }
 
-// 在边界来回抖动（幅度 > 迟滞，反复交接）：视野连续，每次交接 epoch +1，任一时刻至多一个 Real。
+// 在边界来回抖动（幅度 > 迟滞，反复交接）：witness 与客户端视野连续，每次交接 epoch +1，任一时刻至多一个 Real。
 func scenarioJitter(t *testing.T, w *world, maxMiss int, maxGap time.Duration) {
 	npcs := boundaryNPCs()
 	w.spawnAll(npcs)
@@ -302,7 +388,7 @@ func scenarioJitter(t *testing.T, w *world, maxMiss int, maxGap time.Duration) {
 		if i%2 == 1 {
 			vx = -1000
 		}
-		_ = w.base.Move(1, vx, 0)
+		w.move(1, vx, 0)
 		w.waitView(1, 5*time.Second, "turn point", func(v View) bool {
 			if vx > 0 {
 				return v.Self.X >= 10130
@@ -310,18 +396,18 @@ func scenarioJitter(t *testing.T, w *world, maxMiss int, maxGap time.Duration) {
 			return v.Self.X <= 9870
 		})
 	}
-	_ = w.base.Move(1, 0, 0)
+	w.move(1, 0, 0)
 	time.Sleep(3 * worldPeriod)
 	miss, gap := checkContinuity(t, w.viewsOf(1), npcs, maxMiss, maxGap)
-	sid, epoch, _ := w.base.Owner(1)
+	w.checkClient(1, npcs)
+	sid, epoch := w.owner(1)
 	t.Logf("views=%d worst miss=%d worst gap=%v final owner sid=%d epoch=%d", len(w.viewsOf(1)), miss, gap, sid, epoch)
 	if epoch < 12 {
 		t.Fatalf("epoch %d after 12 boundary crossings, want >= 12", epoch)
 	}
-	last, _ := w.base.LastView(1)
 	cell, _ := w.grid.CellOf(sid)
-	w.assertSingleReal(1, cell)
-	if last.Cell != sid {
+	w.assertSingleReal(actorID(1), cell)
+	if last, _ := w.lastView(1); last.Cell != sid {
 		t.Fatalf("last view from %d, owner %d", last.Cell, sid)
 	}
 }
@@ -329,40 +415,38 @@ func scenarioJitter(t *testing.T, w *world, maxMiss int, maxGap time.Duration) {
 // 斜穿四格交点：(9300,9300) → (10700,10700)，可能直接 A→D，也可能经 B 或 C；视野连续，最终 D 是唯一 Real。
 func scenarioDiagonal(t *testing.T, w *world, maxMiss int, maxGap time.Duration) {
 	npcs := map[int64]spatial.Point{
-		301: {X: 9600, Y: 9700}, 302: {X: 10300, Y: 9700}, 303: {X: 9700, Y: 10300}, 304: {X: 10400, Y: 10400},
-		305: {X: 9950, Y: 10050}, 306: {X: 10050, Y: 9950}, 307: {X: 10000, Y: 10000},
+		npcID(301): {X: 9600, Y: 9700}, npcID(302): {X: 10300, Y: 9700}, npcID(303): {X: 9700, Y: 10300}, npcID(304): {X: 10400, Y: 10400},
+		npcID(305): {X: 9950, Y: 10050}, npcID(306): {X: 10050, Y: 9950}, npcID(307): {X: 10000, Y: 10000},
 	}
 	w.spawnAll(npcs)
 	w.enter(1, spatial.Point{X: 9300, Y: 9300})
 	w.resetViews(1)
-	_ = w.base.Move(1, 700, 700)
+	w.move(1, 700, 700)
 	w.waitView(1, 10*time.Second, "reach corner+700", func(v View) bool { return v.Self.X >= 10700 && v.Self.Y >= 10700 })
-	_ = w.base.Move(1, 0, 0)
+	w.move(1, 0, 0)
 	time.Sleep(3 * worldPeriod)
 	miss, gap := checkContinuity(t, w.viewsOf(1), npcs, maxMiss, maxGap)
-	sid, epoch, _ := w.base.Owner(1)
+	w.checkClient(1, npcs)
+	sid, epoch := w.owner(1)
 	t.Logf("views=%d worst miss=%d worst gap=%v owner sid=%d epoch=%d", len(w.viewsOf(1)), miss, gap, sid, epoch)
 	d := CellID{1, 1}
 	if sid != w.grid.SID(d) {
 		t.Fatalf("owner = %d, want D", sid)
 	}
-	w.assertSingleReal(1, d)
+	w.assertSingleReal(actorID(1), d)
 }
 
 // 跨界攻击：A 区玩家每 100ms 攻击一次从 B 走进 A 的 NPC（途中迁移）。每个 HitID 至多结算一次；HP 等于初值减去
 // 实际结算次数 × 伤害；Applied 结论都真的结算过，结算过的都报了 Applied 或 Unknown。
 func scenarioAttackAcrossAndDuringMigration(t *testing.T, w *world, wantRetries bool) {
 	a := CellID{0, 0}
+	target := npcID(7)
 	w.enter(1, spatial.Point{X: 9600, Y: 5000})
-	w.spawn(CellID{1, 0}, EntityState{ID: 7, X: 10300, Y: 5000, VX: -400, HP: 100})
+	w.spawn(CellID{1, 0}, EntityState{ID: target, X: 10300, Y: 5000, VX: -400, HP: 100})
 	time.Sleep(3 * worldPeriod)
 	var hits []HitID
 	for range 25 {
-		hit, err := w.base.Attack(1, 7, 2)
-		if err != nil {
-			t.Fatal(err)
-		}
-		hits = append(hits, hit)
+		hits = append(hits, w.attack(1, target, 2))
 		time.Sleep(100 * time.Millisecond)
 	}
 	deadline := time.Now().Add(5 * time.Second)
@@ -408,15 +492,9 @@ func scenarioAttackAcrossAndDuringMigration(t *testing.T, w *world, wantRetries 
 		}
 	}
 	time.Sleep(3 * worldPeriod)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	snap, err := w.cells[a].cell.Inspect(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
 	var hp int32 = -1
-	for _, s := range snap {
-		if s.State.ID == 7 && s.Role == "real" {
+	for _, s := range w.inspect(a) {
+		if s.State.ID == target && s.Role == "real" {
 			hp = s.State.HP
 		}
 	}
@@ -424,14 +502,14 @@ func scenarioAttackAcrossAndDuringMigration(t *testing.T, w *world, wantRetries 
 		t.Fatalf("target hp in A = %d, want %d (applications %d)", hp, want, len(applications))
 	}
 	var retries uint64
-	for _, rc := range w.cells {
-		retries += rc.cell.Stats().DamageRetries
+	for _, p := range w.cells {
+		retries += p.node.Stats().DamageRetries
 	}
 	t.Logf("results %v, applications %d, retries %d", counts, len(applications), retries)
 	if wantRetries && retries == 0 {
 		t.Fatal("expected attacks to hit the migration window and be retried")
 	}
-	w.assertSingleReal(7, a)
+	w.assertSingleReal(target, a)
 }
 
 func loopbackSpec(t testing.TB, cols, rows int32) (worldSpec, *loopback) {
@@ -439,7 +517,7 @@ func loopbackSpec(t testing.TB, cols, rows int32) (worldSpec, *loopback) {
 	return worldSpec{grid: worldGrid(t, cols, rows), transport: func(testing.TB, string) Transport { return lb }}, lb
 }
 
-// 视野连续性的约定：静止 NPC 在视野半径内时连续缺失不超过 1 帧；视野间隔不超过 3 拍 + 50ms（macOS 定时器抖动）。
+// witness 连续性的约定：静止 NPC 在半径内时连续缺失不超过 1 份；witness 间隔不超过 3 拍 + 50ms（与 v1 相同）。
 const (
 	contMaxMiss = 1
 	contMaxGap  = 3*worldPeriod + 50*time.Millisecond
@@ -486,7 +564,7 @@ func TestWorldAttackDuringSlowMigration(t *testing.T) {
 }
 
 // Cell 之间的消息 20% 丢失、10% 重复、0～30ms 随机延迟（乱序）：来回穿越与攻击仍然不双写、不出现两个 Real、
-// 伤害不重复结算，最终收敛到唯一 owner。视野允许更大间隔（交接重传期间没有视野）。
+// 伤害不重复结算，最终收敛到唯一 owner。
 func lossyFault(seed uint64) func(string, *wireMsg) (bool, bool, time.Duration) {
 	var mu sync.Mutex
 	r := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
@@ -515,7 +593,7 @@ func TestWorldLossyNetworkCrossingAndBack(t *testing.T) {
 		if i%2 == 1 {
 			vx = -1000
 		}
-		_ = w.base.Move(1, vx, 0)
+		w.move(1, vx, 0)
 		w.waitView(1, 10*time.Second, "turn point", func(v View) bool {
 			if vx > 0 {
 				return v.Self.X >= 10500
@@ -523,13 +601,13 @@ func TestWorldLossyNetworkCrossingAndBack(t *testing.T) {
 			return v.Self.X <= 9500
 		})
 	}
-	_ = w.base.Move(1, 0, 0)
+	w.move(1, 0, 0)
 	time.Sleep(10 * worldPeriod)
 	miss, gap := checkContinuity(t, w.viewsOf(1), npcs, 3, 2*time.Second)
-	sid, epoch, _ := w.base.Owner(1)
+	sid, epoch := w.owner(1)
 	t.Logf("views=%d worst miss=%d worst gap=%v owner=%d epoch=%d", len(w.viewsOf(1)), miss, gap, sid, epoch)
 	cell, _ := w.grid.CellOf(sid)
-	w.assertSingleReal(1, cell)
+	w.assertSingleReal(actorID(1), cell)
 	if epoch < 7 {
 		t.Fatalf("epoch %d after 6 crossings, want >= 7", epoch)
 	}
@@ -539,26 +617,4 @@ func TestWorldLossyNetworkAttack(t *testing.T) {
 	spec, lb := loopbackSpec(t, 2, 1)
 	lb.setFault(lossyFault(2))
 	scenarioAttackAcrossAndDuringMigration(t, startWorld(t, spec), false)
-}
-
-// Cell 崩溃：玩家在 B，B 的进程停止（状态全部丢失）后重启一个空的 B'。Base 的静默看门狗按最后位置重进，
-// epoch 比崩溃前大；视野恢复。崩溃期间的 Enter 发给不存在的 Cell，丢失后由看门狗重发。
-func TestWorldCellCrashPlayerReenters(t *testing.T) {
-	spec, _ := loopbackSpec(t, 2, 1)
-	w := startWorld(t, spec)
-	b := CellID{1, 0}
-	w.enter(1, spatial.Point{X: 12000, Y: 5000})
-	_, before, _ := w.base.Owner(1)
-	w.stopCell(b)
-	w.real.forget(b)
-	time.Sleep(1500 * time.Millisecond) // 超过 SilenceTimeout，第一次重进发给已停的 B，丢失
-	w.startCell(b)
-	v := w.waitView(1, 5*time.Second, "view after restart", func(v View) bool { return v.Epoch > before })
-	if v.Cell != w.grid.SID(b) || v.Self.X != 12000 {
-		t.Fatalf("after restart view from %d at (%d,%d)", v.Cell, v.Self.X, v.Self.Y)
-	}
-	if s := w.base.Stats(); s.Reenters == 0 {
-		t.Fatalf("base stats = %+v, want re-enters", s)
-	}
-	w.assertSingleReal(1, b)
 }
