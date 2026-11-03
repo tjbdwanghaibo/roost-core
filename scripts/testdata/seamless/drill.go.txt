@@ -63,6 +63,8 @@ var (
 	token       = flag.String("token", "dev-gm-token", "admin token")
 	killCmd     = flag.String("kill", "", "shell command that kill -9s the Cell process of cell (1,0) (sid 1002)")
 	restartCmd  = flag.String("restart", "", "shell command that starts sid 1002 again and waits for it to be ready")
+	killBase    = flag.String("kill-base", "", "shell command that kill -9s the Base-only process sid 1004")
+	restartBase = flag.String("restart-base", "", "shell command that starts sid 1004 again and waits for it to be ready")
 	outPath     = flag.String("out", "", "evidence JSON")
 	damage      = flag.Int64("damage", 10, "scene.partition.attack_damage")
 )
@@ -138,6 +140,8 @@ type client struct {
 	selfSeen []time.Time
 	failure  error
 	closed   bool
+	// results 是收到的攻击结论推送（AttackResultPush，按到达顺序）。
+	results []*pb.AttackResultPush
 }
 
 func (c *client) start() {
@@ -156,6 +160,14 @@ func (c *client) start() {
 			}
 			if packet.Flags&wire.FlagSync != 0 && packet.MsgID == msgid.MsgEntitySync {
 				c.consume(packet.Payload)
+				continue
+			}
+			if packet.MsgID == msgid.MsgAttackResult {
+				if push, err := pb.UnmarshalAttackResultPush(packet.Payload); err == nil {
+					c.mu.Lock()
+					c.results = append(c.results, push)
+					c.mu.Unlock()
+				}
 				continue
 			}
 			c.mu.Lock()
@@ -675,6 +687,39 @@ func run(ctx context.Context) error {
 	step("enter", map[string]any{"p1": p1.playerID, "p2": p2.playerID, "p3": p3.playerID, "p1_at": self1.pos(), "p1_hp": self1.hp(),
 		"monsters_near_p1": monstersNear(p1, self1.pos(), keepRadius), "move_refused": "scene_partitioned"})
 
+	// E4：分区场景里自己的 Player 字段（exp 等）经自身视图走同一条连接：AddExp 之后客户端看到自己的 exp 变了；
+	// SceneActor 的 mirror 不带这些字段。
+	soft("own_state", func() error {
+		var before int64
+		if err := waitFor(ctx, 5*time.Second, "p1 holds its own Player", func() (bool, string) {
+			o, ok := p1.ownPlayer()
+			before = asInt(o.fields["exp"])
+			return ok, p1.describe()
+		}); err != nil {
+			return err
+		}
+		resp, err := p1.call(ctx, msgid.MsgAddExp, must(pb.MarshalAddExpRequest(&pb.AddExpRequest{Amount: 7})))
+		if err != nil {
+			return err
+		}
+		if r, err := pb.UnmarshalAddExpResponse(resp); err != nil || r.Code != 0 {
+			return fmt.Errorf("add_exp: %v %+v", err, r)
+		}
+		if err := waitFor(ctx, 5*time.Second, "p1 sees its exp change", func() (bool, string) {
+			o, _ := p1.ownPlayer()
+			return asInt(o.fields["exp"]) == before+7, fmt.Sprintf("exp %v want %d", o.fields["exp"], before+7)
+		}); err != nil {
+			return err
+		}
+		if s, ok := p1.self(); ok {
+			if _, carries := s.fields["exp"]; carries {
+				return fmt.Errorf("the scene actor's mirror carries exp: %v", s.fields)
+			}
+		}
+		step("own_state", map[string]any{"exp_before": before, "exp_after": before + 7})
+		return nil
+	}())
+
 	// p2 走到格 (1,0) 里靠边的位置站着（他是 p1 的“附近的其它玩家”，也是之后崩溃重建的对象）；p3 留在格 (0,0)。
 	if err := p2.walkTo(ctx, 3060, 1530, 200); err != nil {
 		return err
@@ -789,10 +834,16 @@ func run(ctx context.Context) error {
 		statsBefore, _ := gm(ctx, 1000, "gm.scene.partition", nil)
 		forwardedBefore := cellsStat(ctx, "DamageForwarded")
 		const n = 10
-		for range n {
-			if _, err := p1.attack(ctx, target); err != nil {
+		var firstSeq, lastSeq uint64
+		for k := range n {
+			seq, err := p1.attack(ctx, target)
+			if err != nil {
 				return err
 			}
+			if k == 0 {
+				firstSeq = seq
+			}
+			lastSeq = seq
 			time.Sleep(30 * time.Millisecond)
 		}
 		var statsAfter map[string]any
@@ -815,7 +866,23 @@ func run(ctx context.Context) error {
 		}); err != nil {
 			return err
 		}
+		// 第 2 项：每一次攻击的结论都推到攻击方客户端：applied、伤害、目标 HP 逐次下降到客户端同步里看到的值。
+		soft(fmt.Sprintf("attack_results_%d", i), waitFor(ctx, 5*time.Second, "attack results pushed to the attacker", func() (bool, string) {
+			got := p1.resultsFor(firstSeq, lastSeq)
+			if len(got) < n {
+				return false, fmt.Sprintf("%d of %d pushes", len(got), n)
+			}
+			minHP := int32(math.MaxInt32)
+			for _, r := range got {
+				if r.Target != target || r.Outcome != "applied" || int64(r.Damage) != *damage {
+					return false, fmt.Sprintf("push %+v", r)
+				}
+				minHP = min(minHP, r.TargetHP)
+			}
+			return int64(minHP) == wantHP, fmt.Sprintf("lowest pushed hp %d want %d", minHP, wantHP)
+		}))
 		step(fmt.Sprintf("attack_across_%d", i), map[string]any{"target": target, "start_hp": startHP, "end_hp": wantHP,
+			"pushed_results": len(p1.resultsFor(firstSeq, lastSeq)),
 			"applied": applied, "duplicate": attackStat(statsAfter, "duplicate") - attackStat(statsBefore, "duplicate"),
 			"damage_forwarded_by_cells": cellsStat(ctx, "DamageForwarded") - forwardedBefore,
 			"damage_retries_total": cellsStat(ctx, "DamageRetries")})
@@ -941,6 +1008,59 @@ func run(ctx context.Context) error {
 		"owner_after": after7["owner_sid"], "restart_seconds": restartedAt.Sub(killedAt).Seconds(),
 		"cell_b_monsters_respawned": cellB2["spawned"], "base_reenters": nodeStat(after7base(ctx), "Reenters")})
 
+	// 9（第 1 项）. Base 进程重启后回到保存的位置：p5 的 Base 是只做 Base 的 sid 1004。p5 走到 (1200, 1500)（远离 spawn
+	//    (2900, 1500)），等一次回写进 Player（快照位置随被接受的回写写进持久的 SavedPos*）；kill -9 sid 1004 再重启，p5
+	//    重新登录，进场位置是保存的位置，不是 spawn。
+	if *killBase != "" && *restartBase != "" {
+		soft("base_restart", func() error {
+			p5, err := login(ctx, accountsClient, "p5", 1004, nonce)
+			if err != nil {
+				return err
+			}
+			if err := waitFor(ctx, 10*time.Second, "p5 sees itself", func() (bool, string) {
+				_, ok := p5.self()
+				return ok, p5.describe()
+			}); err != nil {
+				return err
+			}
+			if err := p5.walkTo(ctx, 1200, 1500, 300); err != nil {
+				return err
+			}
+			if err := waitFor(ctx, 10*time.Second, "p5's position written back", func() (bool, string) {
+				state, err := gm(ctx, 1004, "gm.scene.partition", map[string]any{"player_id": p5.playerID})
+				if err != nil {
+					return false, err.Error()
+				}
+				return asInt(state["snapshot_seq"]) > 0 && dist(point{asInt(state["x"]), asInt(state["y"])}, point{1200, 1500}) <= 30, fmt.Sprintf("%v", state)
+			}); err != nil {
+				return err
+			}
+			time.Sleep(1500 * time.Millisecond) // 再过一次回写周期：保存的位置是停下之后的
+			p5.raw.Close()
+			if err := shell(*killBase); err != nil {
+				return fmt.Errorf("kill base: %w", err)
+			}
+			if err := shell(*restartBase); err != nil {
+				return fmt.Errorf("restart base: %w", err)
+			}
+			again, err := login(ctx, accountsClient, "p5", 1004, nonce)
+			if err != nil {
+				return err
+			}
+			defer again.raw.Close()
+			var at point
+			if err := waitFor(ctx, 20*time.Second, "p5 enters at its saved position", func() (bool, string) {
+				s, ok := again.self()
+				at = s.pos()
+				return ok && dist(at, point{1200, 1500}) <= 30, fmt.Sprintf("self %v ok %v", at, ok)
+			}); err != nil {
+				return err
+			}
+			step("base_restart", map[string]any{"p5": p5.playerID, "entered_at": at, "spawn": point{2900, 1500}})
+			return nil
+		}())
+	}
+
 	// 8. 普通场景照常：sid 1003 没有分区配置，Move 照旧返回落定的位置，MoveIntent 返回 scene_not_partitioned。
 	p4, err := login(ctx, accountsClient, "p4", 1003, nonce)
 	if err != nil {
@@ -984,6 +1104,9 @@ func run(ctx context.Context) error {
 	evidence["stats_start"] = map[string]any{"base_1000": base0, "cell_1001": cellA0, "cell_1002": cellB0}
 	for _, c := range append(clients, p4) {
 		c.raw.Close()
+	}
+	if len(softFailures) > 0 {
+		return fmt.Errorf("%d added check(s) failed: %s", len(softFailures), strings.Join(softFailures, "; "))
 	}
 	return nil
 }
@@ -1040,4 +1163,39 @@ func (c *client) createCount(id int64) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.creates[id]
+}
+
+// ownPlayer 是客户端手里自己的 Player（kind 是 Player、unique 是玩家 ID；分区场景里经 self 视图来，E4）。
+func (c *client) ownPlayer() (object, bool) {
+	for id, o := range c.snapshot() {
+		if entity.GetEntityKindFromID(id) != kindSceneActor && entity.GetUniqueIDFromEntityID(id) == c.playerID && o.ns == "player" {
+			if _, hasExp := o.fields["exp"]; hasExp {
+				return o, true
+			}
+		}
+	}
+	return object{}, false
+}
+
+// resultsFor 是 seq 在 [from, to] 之间的攻击结论推送。
+func (c *client) resultsFor(from, to uint64) []*pb.AttackResultPush {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []*pb.AttackResultPush
+	for _, r := range c.results {
+		if r.Seq >= from && r.Seq <= to {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// softFailures 收集追加检查（E4、第 1、2 项）的失败：一轮演练里全部跑完再报，修前一次就能看到每一项的红。
+var softFailures []string
+
+func soft(name string, err error) {
+	if err != nil {
+		softFailures = append(softFailures, name+": "+err.Error())
+		fmt.Printf("STEP %s FAIL %v\n", name, err)
+	}
 }

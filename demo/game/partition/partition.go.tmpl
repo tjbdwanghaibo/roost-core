@@ -177,12 +177,18 @@ func sameHandoff(h *db.CellHandoff, p *cellworld.HandoffState) bool {
 }
 
 // ReadBase 从 PlayerDao 读出 Player 的分区路由状态。快照位置取 PosX / PosY（实时，随 witness 更新）；HP 与快照版本
-// 取持久的 CellHP / CellSnapEpoch / CellSnapSeq：Base 重启后 Enter 以它们为准重建 SceneActor。
-func ReadBase(d *db.PlayerDao) cellworld.BaseState {
+// 取持久的 CellHP / CellSnapEpoch / CellSnapSeq：Base 重启后 Enter 以它们为准重建 SceneActor。Base 重启后重新装载的
+// Player 不在世界里、实时位置是零（PosX / PosY 不持久）：这时快照位置取持久的 SavedPosX / SavedPosY——条件是它记在
+// 这个分区场景之下（SavedSceneID == sceneID，sceneID 是本进程的分区场景 Scene ID），否则留零，Enter 取 spawn。
+func ReadBase(d *db.PlayerDao, sceneID int64) cellworld.BaseState {
+	x, y := d.GetPosX(), d.GetPosY()
+	if !d.GetCellInWorld() && x == 0 && y == 0 && sceneID != 0 && d.GetSavedSceneID() == sceneID {
+		x, y = d.GetSavedPosX(), d.GetSavedPosY()
+	}
 	return cellworld.BaseState{
 		Actor: d.GetCellActor(), InWorld: d.GetCellInWorld(),
 		Cell: d.GetCellOwner(), Epoch: d.GetCellEpoch(),
-		X: d.GetPosX(), Y: d.GetPosY(), HP: int32(d.GetCellHP()),
+		X: x, Y: y, HP: int32(d.GetCellHP()),
 		SnapVer:   cellworld.Version{Epoch: d.GetCellSnapEpoch(), Seq: d.GetCellSnapSeq()},
 		IntentSeq: d.GetCellIntentSeq(), VX: d.GetCellVX(), VY: d.GetCellVY(),
 		AttackSeq:  d.GetCellAttackSeq(),

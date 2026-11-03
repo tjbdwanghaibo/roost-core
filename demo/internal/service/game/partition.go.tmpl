@@ -17,7 +17,10 @@ import (
 	"{{MODULE}}/game/partition"
 	"{{MODULE}}/game/runtimeid"
 	"{{MODULE}}/game/settings"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	apperrors "{{MODULE}}/internal/errors"
+	pb "{{MODULE}}/protocol/pb"
+	"{{MODULE}}/protocol/msgid"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -65,6 +68,8 @@ type partitionRuntime struct {
 	access *coreentity.ManagerAccess
 
 	mirrors *policy.Mirrors[cellworld.EntityState]
+	// push 是玩家连接的推送（player TCP Runtime.PushPlayer）：攻击结论推给攻击方。没有接入层时为 nil。
+	push    func(ctx context.Context, playerID int64, msgID uint32, message any) error
 	cancel  context.CancelFunc
 	done    chan struct{}
 
@@ -116,6 +121,11 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 		return nil, errors.New("partition: nats client is unavailable")
 	}
 	rt := &partitionRuntime{config: config, grid: grid, sid: identity.Sid, scene: area, bridge: bridge, access: access}
+	if transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name); ok && transport != nil {
+		rt.push = func(ctx context.Context, playerID int64, msgID uint32, message any) error {
+			return transport.PushPlayer(ctx, playerID, msgID, message)
+		}
+	}
 	rt.mirrors, err = policy.NewMirrors(policy.MirrorConfig[cellworld.EntityState]{
 		Manager: bridge.manager, Interest: bridge.interest, TTL: partitionMirrorTTL,
 		Position: func(s cellworld.EntityState) spatial.Point { return s.Pos() },
@@ -336,6 +346,36 @@ func (rt *partitionRuntime) attackResult(r cellworld.AttackResult) {
 	}
 	slog.Debug("partition: attack concluded", "attacker", r.Hit.Attacker, "seq", r.Hit.Seq, "target", r.Target,
 		"outcome", r.Outcome.String(), "reason", r.Reason, "duplicate", r.Duplicate, "hp", r.HP)
+	if rt.push == nil {
+		return
+	}
+	// 结论推给攻击方的客户端（维护者 2026-11-03 追加第 2 项）。这里在 Node 的提交后回调上（出站 goroutine），推送只准入
+	// 玩家连接的出站队列、不等写出；玩家已离线就丢掉（结论也在 gm.scene.partition 的计数里）。
+	push := attackResultPush(r, rt.config.AttackDamage)
+	playerID := coreentity.GetUniqueIDFromEntityID(r.Hit.Attacker)
+	if err := rt.push(context.Background(), playerID, msgid.MsgAttackResult, push); err != nil {
+		slog.Debug("partition: attack result not pushed", "player_id", playerID, "seq", r.Hit.Seq, "err", err)
+	}
+}
+
+// attackResultPush 把 cellworld 的结论翻成客户端的 AttackResultPush。
+func attackResultPush(r cellworld.AttackResult, damage int32) *pb.AttackResultPush {
+	out := &pb.AttackResultPush{Seq: r.Hit.Seq, Target: r.Target, TargetHP: r.HP}
+	switch {
+	case r.Outcome == cellworld.OutcomeApplied && r.Duplicate:
+		out.Outcome = "duplicate"
+	case r.Outcome == cellworld.OutcomeApplied:
+		out.Outcome, out.Damage = "applied", damage
+	case r.Outcome == cellworld.OutcomeUnknown:
+		out.Outcome, out.TargetHP = "unknown", 0
+	default:
+		out.Outcome = "rejected"
+		out.Reason = map[cellworld.RejectReason]string{
+			cellworld.ReasonNotOwner: "not_owner", cellworld.ReasonNotVisible: "not_visible", cellworld.ReasonOutOfRange: "out_of_range",
+			cellworld.ReasonDead: "dead", cellworld.ReasonBusy: "busy",
+		}[r.Reason]
+	}
+	return out
 }
 
 // ---- 端点用的能力（PartitionCapability）----

@@ -136,6 +136,13 @@ const SceneCapability app.ModName = "{{GAME_SERVICE}}.scene"
 type Scene struct {
 	manager  *entitysync.Manager
 	interest *policy.Interest
+	// self binds, in a partitioned scene only, each member's own session to
+	// its Player subject with the "self" view (maintainer decision E4 = A):
+	// what the scene actor's mirror does not carry — exp, gold, the bag,
+	// equipment, guild — reaches the client over the same connection. In an
+	// ordinary scene the Player is the member's subject and the interest
+	// policy's self already shows it; self stays empty there.
+	self *policy.Direct
 
 	sessions scenePusher
 	// unsubscribe releases this bridge's session-close subscription.
@@ -205,6 +212,9 @@ type sceneMember struct {
 	generation uint64
 	ready      bool
 	opening    bool
+	// own is the member's Player in a partitioned scene (nil in an ordinary
+	// one): a session opened after a retry binds its own state then.
+	own *player.Player
 }
 
 // sceneLane is the demo's entitysync.Transport: one frame is one push on the
@@ -418,8 +428,64 @@ func newSceneWithMainView(lane entitysync.Transport, transport scenePusher, wate
 		_ = manager.Close(context.Background())
 		return nil, fmt.Errorf("scene: interest policy: %w", err)
 	}
-	scene.manager, scene.interest = manager, interest
+	self, err := policy.NewDirect(manager, func(observer int64) entitysync.SessionID { return entitysync.SessionID(observer) })
+	if err != nil {
+		interest.Close()
+		_ = manager.Close(context.Background())
+		return nil, fmt.Errorf("scene: self binding: %w", err)
+	}
+	scene.manager, scene.interest, scene.self = manager, interest, self
 	return scene, nil
+}
+
+// partitionSelfProfile is the Player view a member of a partitioned scene
+// gets of its own Player (the "self" view of NewPlayerSyncPacker): the
+// player's own state, not its position (the scene actor's mirror carries
+// that, and the HP).
+var partitionSelfProfile = coreentity.SyncProfile{Key: "self"}
+
+// bindPartitionSelf registers the member's Player as a subject of this
+// manager (only the partitioned scene does: there the Player is nobody's
+// spatial subject) and binds the member's own session to it. A registration
+// queued behind the previous leave's retirement binds when it is taken.
+// Called with transitions held, after the member's session is open.
+func (bridge *Scene) bindPartitionSelf(subject *player.Player, generation uint64) {
+	subjectID := subject.ID()
+	playerID := playerOf(subjectID)
+	bind := func() {
+		if err := bridge.self.Bind(playerID, subjectID, partitionSelfProfile); err != nil {
+			slog.Warn("scene: own player state not bound in the partitioned scene", "subject_id", subjectID, "err", err)
+		}
+	}
+	queued, err := bridge.manager.RegisterAfterRetirement(subject.Sync(), func(err error) {
+		if err != nil {
+			slog.Warn("scene: own player state not registered in the partitioned scene", "subject_id", subjectID, "err", err)
+			return
+		}
+		bridge.runLater(func() {
+			bridge.transitions.Lock()
+			defer bridge.transitions.Unlock()
+			if _, current := bridge.memberLocked(subjectID, generation); current {
+				bind()
+			}
+		})
+	})
+	if err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
+		slog.Warn("scene: own player state not registered in the partitioned scene", "subject_id", subjectID, "err", err)
+		return
+	}
+	if !queued {
+		bind()
+	}
+}
+
+// unbindPartitionSelf is the leave half: the binding goes, then the Player
+// subject (the client is told it is gone; the session closes right after).
+func (bridge *Scene) unbindPartitionSelf(subjectID int64) {
+	_ = bridge.self.Unbind(playerOf(subjectID), subjectID)
+	if err := bridge.manager.Unregister(subjectID); err != nil && !errors.Is(err, entitysync.ErrSubjectNotRegistered) {
+		slog.Debug("scene: own player state not retired", "subject_id", subjectID, "err", err)
+	}
 }
 
 // Start brings the tick up. It is separate from NewScene so a process that
@@ -688,13 +754,16 @@ func (bridge *Scene) joinPartition(ctx context.Context, rt *partitionRuntime, su
 			return fmt.Errorf("scene: hold session for %d: %w", subjectID, err)
 		}
 		bridge.mu.Lock()
-		bridge.members[subjectID] = sceneMember{generation: generation, opening: opening}
+		bridge.members[subjectID] = sceneMember{generation: generation, opening: opening, own: subject}
 		bridge.mu.Unlock()
 		if reopened {
 			bridge.interest.Resubscribe(playerID)
 		}
 		if opening {
+			// openLocked binds the own state once the session is open.
 			bridge.openLater(subjectID, generation, 2)
+		} else {
+			bridge.bindPartitionSelf(subject, generation)
 		}
 		return nil
 	}()
@@ -866,6 +935,7 @@ func (bridge *Scene) leaveLocked(subjectID int64) {
 		// are told by the next witnesses) and its own mirror and interest
 		// entry go with it (cellworld unshow); then the session closes.
 		rt.leave(context.Background(), subjectID)
+		bridge.unbindPartitionSelf(subjectID)
 		bridge.manager.CloseSession(entitysync.SessionID(playerOf(subjectID)))
 		return
 	}
@@ -1104,6 +1174,9 @@ func (bridge *Scene) openLocked(subjectID int64, member sceneMember, attempt int
 		return
 	}
 	bridge.interest.Resubscribe(playerOf(subjectID))
+	if member.own != nil {
+		bridge.bindPartitionSelf(member.own, member.generation)
+	}
 	slog.Info("scene: replication session opened after a retry", "subject_id", subjectID, "attempts", attempt)
 }
 

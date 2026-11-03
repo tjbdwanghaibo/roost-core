@@ -42,7 +42,9 @@ func (component *MapComponent) registerCellBase() error {
 
 // BaseState / SetBaseState / StartBase make the player a cellworld.BasePlayer.
 // Only under the player's own Nest lock.
-func (player *Player) BaseState() cellworld.BaseState { return partition.ReadBase(player.dao) }
+func (player *Player) BaseState() cellworld.BaseState {
+	return partition.ReadBase(player.dao, partition.SceneID())
+}
 
 func (player *Player) SetBaseState(st cellworld.BaseState) {
 	partition.WriteBase(player.dao, st, partition.SceneID())

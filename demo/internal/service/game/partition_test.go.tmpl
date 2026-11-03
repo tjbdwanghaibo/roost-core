@@ -61,3 +61,27 @@ func TestPartitionIsOffByDefault(t *testing.T) {
 		t.Fatalf("a disabled partition is refused: %v", err)
 	}
 }
+
+// The verdict the attacker's client gets (AttackResultPush, maintainer 2026-11-03 item 2): applied with the damage
+// and the target's HP after it, a retry the target's cell had already applied as a duplicate (no damage this
+// time), a refusal with its reason, and "unknown" — the target's cell did not answer, so no HP is claimed.
+func TestAttackResultPushNamesTheVerdict(t *testing.T) {
+	hit := cellworld.HitID{Attacker: 1, Seq: 9}
+	for _, tc := range []struct {
+		in   cellworld.AttackResult
+		want string
+		dmg  int32
+		hp   int32
+		why  string
+	}{
+		{cellworld.AttackResult{Hit: hit, Target: 5, Outcome: cellworld.OutcomeApplied, HP: 60}, "applied", 10, 60, ""},
+		{cellworld.AttackResult{Hit: hit, Target: 5, Outcome: cellworld.OutcomeApplied, Duplicate: true, HP: 60}, "duplicate", 0, 60, ""},
+		{cellworld.AttackResult{Hit: hit, Target: 5, Outcome: cellworld.OutcomeRejected, Reason: cellworld.ReasonOutOfRange, HP: 70}, "rejected", 0, 70, "out_of_range"},
+		{cellworld.AttackResult{Hit: hit, Target: 5, Outcome: cellworld.OutcomeUnknown, HP: 70}, "unknown", 0, 0, ""},
+	} {
+		got := attackResultPush(tc.in, 10)
+		if got.Seq != 9 || got.Target != 5 || got.Outcome != tc.want || got.Damage != tc.dmg || got.TargetHP != tc.hp || got.Reason != tc.why {
+			t.Errorf("%+v → %+v, want outcome %s damage %d hp %d reason %q", tc.in, got, tc.want, tc.dmg, tc.hp, tc.why)
+		}
+	}
+}

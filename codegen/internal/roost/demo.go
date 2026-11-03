@@ -666,6 +666,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/controllers/player/move_intent.go", why: "forward the intent to the owning cell through the Player's transaction; wait on no other process"},
 		{write: "protocol/def/attack_target.go", why: "a target in, the attack's sequence out; the verdict and the HP come later (D7 = A)"},
 		{write: "game/controllers/player/attack_target.go", why: "one fixed-damage attack, applied once by the target's own cell however often it is retried"},
+		{write: "protocol/def/attack_result.go", why: "the verdict pushed to the attacker: applied, duplicate, rejected with why, or unknown; the damage and the target's HP after it"},
 		{add: &AddOptions{Kind: "protocol", Name: "Purchase", Group: "game", Handler: "player"}, why: "buying: the demo plays the payment provider, everything around that is real"},
 		{write: "protocol/def/purchase.go", why: "a product id in; the order, the receipt's replay flag and the bag count out"},
 		{write: "game/controllers/player/purchase.go", why: "sign a callback, let the platform service record and deliver it, then drain the grant into the bag"},

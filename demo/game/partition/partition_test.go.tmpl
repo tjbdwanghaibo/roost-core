@@ -116,7 +116,7 @@ func TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack(t *testing.T) {
 	}
 	st := cellworld.BaseState{Actor: 7, InWorld: true, Cell: 1001, Epoch: 2, X: 2900, Y: 1500, HP: 100, IntentSeq: 3, VX: 100, AttackSeq: 4, Shown: true}
 	write(st)
-	if got := partition.ReadBase(dao); !reflect.DeepEqual(got, st) {
+	if got := partition.ReadBase(dao, sceneID); !reflect.DeepEqual(got, st) {
 		t.Fatalf("read back\n got %+v\nwant %+v", got, st)
 	}
 	if dao.GetSavedSceneID() != 0 || dao.GetSavedPosX() != 0 {
@@ -131,5 +131,38 @@ func TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack(t *testing.T) {
 	write(st)
 	if dao.GetSavedPosX() != 3010 {
 		t.Fatalf("a witness after the write-back moved the stored position to %d", dao.GetSavedPosX())
+	}
+}
+
+
+// Base 重启后 Player 从库里重新装载：实时位置（PosX / PosY，不持久）是零、不在世界里。进场位置取持久的快照位置
+// （SavedPosX / SavedPosY，只有记在这个分区场景之下才算），不是 spawn（维护者 2026-11-03 追加第 1 项）。
+func TestReloadedPlayerEntersAtItsSavedPosition(t *testing.T) {
+	const sceneID = 12345
+	reloaded := func(savedScene int64) *db.PlayerDao {
+		dao := db.NewPlayerDao()
+		player.RegisterEntity()
+		id, err := entity.BuildEntityID(8, player.EntityKindPlayer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dao.SetId(id)
+		// 模拟从库里装载的持久字段：持久字段的 setter 要在事务里调用。
+		if _, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "restore", func() (any, error) {
+			dao.SetSavedSceneID(savedScene)
+			dao.SetSavedPosX(1200)
+			dao.SetSavedPosY(1450)
+			dao.SetCellHP(70)
+			return nil, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return dao
+	}
+	if got := partition.ReadBase(reloaded(sceneID), sceneID); got.InWorld || got.X != 1200 || got.Y != 1450 || got.HP != 70 {
+		t.Fatalf("a reloaded player reads %+v, want its saved position (1200, 1450) and hp 70", got)
+	}
+	if got := partition.ReadBase(reloaded(999), sceneID); got.X != 0 || got.Y != 0 {
+		t.Fatalf("a position saved under another scene was used: %+v", got)
 	}
 }

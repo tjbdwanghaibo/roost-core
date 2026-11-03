@@ -5,7 +5,8 @@
 #   sid 1000：分区场景的 Base（不托管格），p1、p2 的连接在这里；
 #   sid 1001：格 (0,0) 的 Cell，同时是 p3 的 Base；
 #   sid 1002：格 (1,0) 的 Cell（演练中被 kill -9 再重启）；
-#   sid 1003：没有分区配置，普通场景（p4）。
+#   sid 1003：没有分区配置，普通场景（p4）；
+#   sid 1004：只做 Base（不托管格），p5 的连接在这里（演练中被 kill -9 再重启：进场回到保存的位置）。
 # 依赖全部是调用方给的私有实例（Mongo 副本集、NATS JetStream、Redis），etcd 由本脚本在私有端口自起；不读共享环境。
 # 客户端是 scripts/testdata/seamless/drill.go.txt（经真实 account 登录、玩家 TCP、demo 的同步帧解码）。
 # 结束时停掉本脚本起的全部进程、删除本次的库；证据（drill 输出、evidence.json、各进程日志）留在 $ROOST_SEAMLESS_OUT。
@@ -25,10 +26,10 @@ out="$ROOST_SEAMLESS_OUT"
 mkdir -p "$out"
 export GOWORK=off
 nats_url="${ROOST_DATAENGINE_IT_NATS_URL%%,*}"
-extra_sids="1001 1002 1003"
+extra_sids="1001 1002 1003 1004"
 
 # 固定端口（demo 生成配置）都要空着：别人的 demo 正在用时不跑。
-for port in 7000 7001 7002 7003 9000 9100 9101 9102 9103 9104 9105 9106 9107 9108 9109 9201 9202 9203 8901 8902 8903 "$etcd_port" "$((etcd_port + 1))"; do
+for port in 7000 7001 7002 7003 7004 9000 9100 9101 9102 9103 9104 9105 9106 9107 9108 9109 9201 9202 9203 9204 8901 8902 8903 8904 "$etcd_port" "$((etcd_port + 1))"; do
 	if nc -z 127.0.0.1 "$port" 2>/dev/null; then
 		echo "port $port is in use; refusing to run" >&2
 		exit 2
@@ -93,8 +94,8 @@ for f in configs/service/config.*.yaml; do
 		-e 's#^  ttl: 15s#  ttl: 6s#' -e 's#^  renew_interval: 3s#  renew_interval: 1s#' \
 		-e 's#^  guard: 5s#  guard: 2s#' -e 's#^  startup_wait: 30s#  startup_wait: 10s#' "$f"
 done
-sed -i '' 's#game_sids: \[1000, 1001, 1003\]#game_sids: [1000, 1001, 1002, 1003]#' configs/activity_groups.yaml
-grep -q 'game_sids: \[1000, 1001, 1002, 1003\]' configs/activity_groups.yaml
+sed -i '' 's#game_sids: \[1000, 1001, 1003\]#game_sids: [1000, 1001, 1002, 1003, 1004]#' configs/activity_groups.yaml
+grep -q 'game_sids: \[1000, 1001, 1002, 1003, 1004\]' configs/activity_groups.yaml
 
 # 分区场景：2 × 1 个 3000 × 3000 的格；格 (0,0) 归 sid 1001、格 (1,0) 归 sid 1002。四组怪：分界线两侧各三只静止的
 # （视野连续与跨界攻击），一只沿 X 往返的（约每 40s 过一次分界线：Monster 跨界）。回写 1s：崩溃前的 HP 很快进快照。
@@ -134,12 +135,13 @@ derive() { # sid ops client advertise source
 }
 derive 1001 9201 7001 8901 configs/service/config.game.yaml
 derive 1002 9202 7002 8902 configs/service/config.game.yaml
+derive 1004 9204 7004 8904 configs/service/config.game.yaml
 # sid 1003 没有 scene.partition：普通场景。
 derive 1003 9203 7003 8903 "$work_dir/config.game.ordinary.yaml"
 
 READY_TIMEOUT=120 sh deploy/dev/run.sh start >"$out/run-start.log" 2>&1 || { tail -40 "$out/run-start.log"; exit 1; }
 prefix="$(awk '/^account:/{a=1;next} a&&/^  key_prefix:/{print $2;exit} a&&/^[^ ]/{a=0}' configs/service/config.account.yaml | tr -d '"')"
-for sid in 1001 1003; do
+for sid in 1001 1003 1004; do
 	go run -mod=mod ./cmd/accountctl -redis "$ROOST_DATAENGINE_IT_REDIS_ADDR" -prefix "${prefix:-roost:account}" upsert-server -sid "$sid" >/dev/null
 done
 
@@ -157,6 +159,7 @@ start_game() { # sid ops
 start_game 1001 9201
 start_game 1002 9202
 start_game 1003 9203
+start_game 1004 9204
 
 cat >"$work_dir/restart-1002.sh" <<EOF
 cd "$project"
@@ -167,11 +170,21 @@ echo \$! > .dev/game1002.pid
 i=0
 until curl -fsS -o /dev/null http://127.0.0.1:9202/readyz 2>/dev/null; do i=\$((i+1)); [ \$i -lt 240 ] || exit 1; sleep 0.5; done
 EOF
+cat >"$work_dir/restart-1004.sh" <<EOF
+cd "$project"
+i=0
+while kill -0 \$(cat .dev/game1004.pid) 2>/dev/null; do i=\$((i+1)); [ \$i -lt 50 ] || exit 1; sleep 0.1; done
+./bin/app game --sid 1004 --config configs/service/config.game1004.yaml >>.dev/game1004.log 2>&1 &
+echo \$! > .dev/game1004.pid
+i=0
+until curl -fsS -o /dev/null http://127.0.0.1:9204/readyz 2>/dev/null; do i=\$((i+1)); [ \$i -lt 240 ] || exit 1; sleep 0.5; done
+EOF
 set +e
 "$work_dir/drill" -account-nats "$nats_url" -prefix cwdemo \
-	-endpoints 1000=127.0.0.1:7000,1001=127.0.0.1:7001,1003=127.0.0.1:7003 \
-	-ops 1000=127.0.0.1:9100,1001=127.0.0.1:9201,1002=127.0.0.1:9202,1003=127.0.0.1:9203 \
+	-endpoints 1000=127.0.0.1:7000,1001=127.0.0.1:7001,1003=127.0.0.1:7003,1004=127.0.0.1:7004 \
+	-ops 1000=127.0.0.1:9100,1001=127.0.0.1:9201,1002=127.0.0.1:9202,1003=127.0.0.1:9203,1004=127.0.0.1:9204 \
 	-kill "kill -9 \$(cat $project/.dev/game1002.pid)" -restart "sh $work_dir/restart-1002.sh" \
+	-kill-base "kill -9 \$(cat $project/.dev/game1004.pid)" -restart-base "sh $work_dir/restart-1004.sh" \
 	-out "$out/evidence.json" 2>&1 | tee "$out/drill.log"
 status=${PIPESTATUS[0]}
 set -e
@@ -180,7 +193,7 @@ if [[ "$status" != 0 ]]; then
 	echo "seamless: drill failed (status $status); logs in $out" >&2
 	exit "$status"
 fi
-for name in enter straight jitter diagonal attack_across_0 attack_across_1 monster_cross cell_crash ordinary_scene; do
+for name in enter own_state straight jitter diagonal attack_across_0 attack_across_1 monster_cross cell_crash base_restart ordinary_scene; do
 	grep -q "^STEP $name ok" "$out/drill.log" || { echo "seamless: step $name did not pass" >&2; exit 1; }
 done
 # 普通场景不回归：demo 自己的机器人（cmd/loadtest，完整链路）在没有分区配置的 sid 1003 上跑一轮。

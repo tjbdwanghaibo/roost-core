@@ -1,0 +1,28 @@
+//go:build protocoldef
+
+package protocoldef
+
+// AttackResultPush is the verdict of one AttackTarget in a partitioned scene,
+// sent to the attacker once its Base hears it (maintainer 2026-11-03, item 2:
+// the result reaches the attacker's client, not only the Base's log). Seq is
+// the sequence AttackTargetResponse named. Outcome is "applied", "duplicate"
+// (the target's cell had already applied this attack: a retry), "rejected"
+// (Reason says why: not_owner, not_visible, out_of_range, dead, busy) or
+// "unknown" (the target's cell did not answer in time: the damage may or may
+// not have been applied — the target's HP in the replicated state is the
+// truth). Damage is what this verdict applied (0 unless applied); TargetHP is
+// the target's HP after it, as the target's cell reported (0 when unknown).
+type AttackResultPush struct {
+	Seq      uint64 `pb:"1"`
+	Target   int64  `pb:"2"`
+	Outcome  string `pb:"3"`
+	Reason   string `pb:"4"`
+	Damage   int32  `pb:"5"`
+	TargetHP int32  `pb:"6"`
+}
+
+//roost:protocol group=game handler=player
+type AttackResultProtocol interface {
+	//roost:msg id=10104
+	AttackResult() AttackResultPush
+}
