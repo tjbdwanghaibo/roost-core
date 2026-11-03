@@ -64,6 +64,8 @@ Interest按视野归并（每个空间视野的距离与块覆盖、每个关系
 
 observer 的编号与视野（D14 A1 + B1，D19 扩成多视野）：observer 是一个空间视野（Interest 给的内部编号；玩家主视野与业务空间视野都是），subject 按实体 ID 编号，两张表互不相通；observer 登记时带它跟随的实体 `self`（不跟随为 0），`evaluatePair`、`evaluateObserver` 的入场候选与 `evaluateObserved` 的覆盖块都按 `self` 自排除。每个 observer 记自己的 `ObserverView`（LOD 层级 + 视野大小）推出的进入 / 离开半径与分档：`resubscribe` 的方框、进入 / 保持 / 分档、候选筛选都读它；`self` 变化时连同覆盖可见集一起重评。单个 observer 的块预算按 `AOIConfig.MaxLeaveRadius` 在构造时计算（`worstObserverBlocks`），所有视野先经 `normalizeView` 夹取量化，运行期不会超过启动期检查过的块数；一个玩家的全部空间视野合计按 `worstObserverBlocks × MaxViewsPerPlayer` 对 `InterestConfig.MaxPlayerBlocks` 核算。AOI 事件按视野的挂接玩家扇出，一个共享视野的一次可见性变化 = 挂接人数次贡献变化。用法见 [guide/04-sync](guide/04-sync.md#谁看见谁视野viewd19)。
 
+层与视图（2026-11-04）：AOI 只产生档号，层级（订阅的视图）由 Interest 在扇出时按视野**此刻的** LOD 层取 `BandLayer(level, band)`（`routeSpatial` / `seedSpatialLocked`）。换层时 AOI 完整重评，只对换了档的目标产生 `BandChanged`；档号不变的目标在新层可能对应另一个视图，由 `relayerLocked` 在 `SetObserverView`（`opMainView`）与 `placeViewLocked`（`SetSpatialView`、重新 `Enter` / `Watch`）之后先排空 AOI 事件、再按当前可见集给每个挂接玩家重给一遍贡献；层级没变的贡献在 `contribute` 里当场忽略，同一目标的多来源照常经 `selectedProfile` 合并。两层在共同档位与块覆盖上映射相同（缺省 `DefaultBandProfile`、只看档的映射）时 `sameLevelLayers` 直接跳过，帧与以前逐字节相同。块预算与 `MaxVisible` 不分层：层与视野大小相互独立，块预算按 `MaxLeaveRadius` 覆盖每一层的最大离开半径，`MaxVisible` 对每个观察者封顶、不随层变；没有“每层单独的 `MaxVisible`”，拉远层要看更多目标时按拉远的需要取 `MaxVisible`（近景也受它限）。
+
 当前政策批次分为：**串行短写入 → 并行Observer计算 → 串行订阅归并**。没有再实现并行写入的提交协调器，也没有读写同时进行的乐观重试。全部块写入完成后才开始读阶段，从而避免逐块读取时同一实体迁移造成漏读/重复。此选择缩短Nest入队路径，并把计算并行集中到较重的候选/距离工作，不能据此宣称空间写入吞吐随worker线性增长。
 
 每个observer独占可见集和事件缓冲。`Workers` 零值取GOMAXPROCS，批次内最多启动该数量的短计算任务；数量还受dirty observer数限制，不为每个块建立goroutine，也不把AOI计算放到Nest io 池。任务完成后才开始下一批写入。
@@ -98,7 +100,7 @@ AOICluster 的 `MaxVisible` 在所有区域候选中统一选择最近 N 个，�
 
 可见条件为 `watchBlocks ∩ observedBlocks ≠ ∅`，不再用实体到观察者的普通进入半径过滤。实体真实位于A而覆盖B/C时，观察B/C的人仍可见；同时观察B和C，也只有一个对象和一份订阅。移除B但仍命中C，不退订。
 
-块覆盖是每个空间视野的一个固定来源，命中的各个块不是独立订阅来源。与距离、关系视野与 self 收齐最终关系后再向Manager发布，来源切换不会先remove再create。层级取 `InterestConfig.BlockLayer`，零值跟随空间视野 0 档；视图仍经过现有白名单和优先级校验，不因覆盖增多扩大权限。
+块覆盖是每个空间视野的一个固定来源，命中的各个块不是独立订阅来源。与距离、关系视野与 self 收齐最终关系后再向Manager发布，来源切换不会先remove再create。层级取 `InterestConfig.BlockLayer`，零值跟随空间视野当前 LOD 层的 0 档（`BandLayer(level, 0)`，换层时一起重给）；视图仍经过现有白名单和优先级校验，不因覆盖增多扩大权限。
 
 block来源不占普通spatial的MaxVisible，因此总可见数可以超过原来49+自己；仍受会话传输、快照预算与背压约束，后续负载必须单独统计额外扇出。
 

@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- 新增：Interest 按 LOD 层换整套同步视图（`framework/sync/entitysync/policy`）。空间视野看见的目标按视野当前的 LOD 层与距离档取视图，`SetObserverView` / `SetSpatialView` / 重新 `Enter` 换层（半径不变也一样）后按新层的映射重给整个可见集，拉远后最近一圈也能整体换成战略视图（位置 / 阵营 / 图标），拉回恢复近景；同一目标的多来源沿用 `selectedProfile` 的优先级与字段包含选择。配了 `ViewSets` 时每层每档的视图都要声明，缺一个拒绝构造并指出层与档。`BlockLayer` 零值改为跟随视野当前层的 0 档。块预算与 `MaxVisible` 不分层（按 `MaxLeaveRadius` / 每个视野封顶），没有每层单独的 `MaxVisible`。缺省映射与只看档的映射行为不变：只配 `Bands` 或停在层 0 的工程帧逐字节相同，只换层不出帧。见 [guide/04-sync“视野参数”](docs/framework/guide/04-sync.md#谁看见谁视野viewd19)。
+- 变更：`InterestConfig.BandLayer` 由 `func(band int) entity.SyncProfile` 改为 `func(level, band int) entity.SyncProfile`，`DefaultBandProfile(band)` 改为 `DefaultBandProfile(level, band)`（忽略 level）。改法：原映射只看档的，签名加一个忽略的参数即可，`func(band int) …` → `func(_, band int) …`，`DefaultBandProfile(band)` → `DefaultBandProfile(level, band)`；要按层换视图的，按 `level` 分支返回。项目未上线，不保留旧签名。
+
 - 文档一致性整理（只改文档）：修复指向已删除 DESIGN-TODO 小节的断链；十份玩法手册、KNOWN-LIMITS 游戏接入表与 roost-genre skill 的场景数按脚本计数断言收进公共 Robot（例如派对房间 19 条 = 18 条业务 + 1 条 Robot），skill 命令序列补上 Robot 安装一步并修正 MOBA 的夹具位置；DAO 持久键说法跟上 v1.40.0 的必填 `store` 键；KNOWN-LIMITS 收敛已由维护者决定、已修复或已在 2026-11-02 Linux 续报复跑的条目；已发布功能去掉“未发版”标注。
 
 ## [v1.40.1] - 2026-11-02

@@ -704,7 +704,9 @@ func (in *Interest) runOpLocked(op *viewOp) {
 	case opMoveView:
 		_ = in.aoi.MoveObserver(op.handle, op.at)
 	case opMainView:
+		previous := in.viewLevelLocked(op.handle)
 		_, _ = in.aoi.SetObserverView(op.handle, op.sight)
+		in.relayerLocked(op.handle, previous)
 	case opResubscribe:
 		in.resubscribeLocked(op.player)
 	}
@@ -712,6 +714,7 @@ func (in *Interest) runOpLocked(op *viewOp) {
 
 // placeViewLocked 放置空间视野并维护跟随表：跟随的实体在场时视点取实体位置。
 func (in *Interest) placeViewLocked(handle, follow int64, at spatial.Point, sight ObserverView) {
+	previous := in.viewLevelLocked(handle)
 	if observer := in.aoi.observers[handle]; observer != nil && observer.self != follow {
 		in.unfollowLocked(observer.self, handle)
 	}
@@ -727,6 +730,44 @@ func (in *Interest) placeViewLocked(handle, follow int64, at spatial.Point, sigh
 		handles[handle] = struct{}{}
 	}
 	in.aoi.placeObserver(handle, follow, at, sight)
+	in.relayerLocked(handle, previous)
+}
+
+// viewLevelLocked 是空间视野当前的 LOD 层；视野还没放进 AOI 时返回 -1。
+func (in *Interest) viewLevelLocked(handle int64) int {
+	if observer := in.aoi.observers[handle]; observer != nil {
+		return observer.view.LOD
+	}
+	return -1
+}
+
+// relayerLocked 在空间视野从 previous 层换到别的层之后，按新层的映射重给它已挂接玩家的整个可见集。AOI 只对换了档的
+// 目标产生 BandChanged，档号没变的目标（例如最近一圈仍是 0 档）在新层可能对应另一个视图，只能在这里重给；层级没变的
+// 贡献由 contribute 当场忽略。两层在共同档位与块覆盖上映射相同时（缺省映射、只看档的映射）直接返回，帧逐字节不变。
+// 同一目标被别的来源也看见时，照常经 selectedProfile 合并（优先级、字段包含）。新放进 AOI 的视野（previous < 0）没有可重给的。
+func (in *Interest) relayerLocked(handle int64, previous int) {
+	observer := in.aoi.observers[handle]
+	if observer == nil || previous < 0 || previous == observer.view.LOD || len(in.spatialPlayers[handle]) == 0 ||
+		in.sameLevelLayers(previous, observer.view.LOD) {
+		return
+	}
+	// 先把换层产生的事件扇出（它们按视野的当前层取层级），再按当前可见集重给：与挂接时一样，可见集此刻与已生效的贡献一致。
+	in.drainAOILocked()
+	for _, playerID := range sortedIDs(in.spatialPlayers[handle]) {
+		in.seedSpatialLocked(playerID, handle, true)
+	}
+}
+
+// sameLevelLayers 报告两层在两层共有的档位与块覆盖上是否给同一层级——只有这些档位上的目标会在换层后保持原档号。
+func (in *Interest) sameLevelLayers(a, b int) bool {
+	aBands, _ := in.aoi.config.lodBands(a)
+	bBands, _ := in.aoi.config.lodBands(b)
+	for band := 0; band <= min(len(aBands), len(bBands)); band++ {
+		if in.layerFor(a, band) != in.layerFor(b, band) {
+			return false
+		}
+	}
+	return in.blockLayerFor(a) == in.blockLayerFor(b)
 }
 
 func (in *Interest) unfollowLocked(entityID, handle int64) {
@@ -745,11 +786,13 @@ func (in *Interest) seedSpatialLocked(playerID, handle int64, enter bool) {
 	if observer == nil {
 		return
 	}
+	level := observer.view.LOD
 	for _, subject := range sortedVisible(observer.visible) {
-		in.contribute(pair{observer: playerID, subject: subject}, contribution{view: handle}, in.layerForBand(observer.visible[subject]), enter)
+		in.contribute(pair{observer: playerID, subject: subject}, contribution{view: handle}, in.layerFor(level, observer.visible[subject]), enter)
 	}
+	block := in.blockLayerFor(level)
 	for _, subject := range sortedVisible(observer.blockVisible) {
-		in.contribute(pair{observer: playerID, subject: subject}, contribution{view: handle, block: true}, in.blockLayer, enter)
+		in.contribute(pair{observer: playerID, subject: subject}, contribution{view: handle, block: true}, block, enter)
 	}
 }
 
@@ -790,9 +833,12 @@ func (in *Interest) routeSpatial(event InterestEvent, block bool) {
 	enter := event.Kind != InterestLeave
 	var layer entity.SyncProfile
 	if enter {
-		layer = in.blockLayer
-		if !block {
-			layer = in.layerForBand(event.Band)
+		// 层取视野此刻的层：同一批里换过层时，较早的事件按当前层给出最终层级，档号不变的目标由 relayerLocked 重给。
+		level := in.viewLevelLocked(event.Observer)
+		if block {
+			layer = in.blockLayerFor(level)
+		} else {
+			layer = in.layerFor(level, event.Band)
 		}
 	}
 	source := contribution{view: event.Observer, block: block}
@@ -801,8 +847,17 @@ func (in *Interest) routeSpatial(event InterestEvent, block bool) {
 	}
 }
 
-func (in *Interest) layerForBand(band int) entity.SyncProfile {
-	return in.bandLayer(max(band, 0)).Normalize()
+// layerFor 是 LOD 层 level 的第 band 档对应的层级（BandLayer）。
+func (in *Interest) layerFor(level, band int) entity.SyncProfile {
+	return in.bandLayer(max(level, 0), max(band, 0)).Normalize()
+}
+
+// blockLayerFor 是 LOD 层 level 上额外块覆盖的层级：显式配置的 BlockLayer，否则跟随该层的 0 档。
+func (in *Interest) blockLayerFor(level int) entity.SyncProfile {
+	if in.blockFollows {
+		return in.layerFor(level, 0)
+	}
+	return in.blockLayer
 }
 
 // ---- 层级合并 ----

@@ -62,6 +62,8 @@ type AOIConfig struct {
 	Bands []int64
 	// LODs 是观察者可选的 LOD 层级表，下标即 ObserverView.LOD，每层是一组距离分档（规则同 Bands）。
 	// 为空时只有层级 0，分档取 Bands。每层分档递增、为正、不超过 MaxLeaveRadius，启动期校验。
+	// 每层每档订阅哪个视图由 InterestConfig.BandLayer(level, band) 决定，拉远层可以整体换成另一套视图。
+	// 层与视野大小相互独立：块预算按 MaxLeaveRadius、MaxVisible 按观察者，对每一层都一样。
 	LODs [][]int64
 	// 观察者视野大小（ObserverView.Radius，即进入半径）的允许范围与量化步长。
 	// 离开半径 = 视野大小 + 滞回量，滞回量取缺省视野的 LeaveRadius − EnterRadius；
@@ -144,7 +146,7 @@ func (c AOIConfig) validate() error {
 	if len(c.LODs) > 0 && len(c.Bands) > 0 {
 		return fmt.Errorf("%w: Bands and LODs both set", ErrInterestConfig)
 	}
-	for level := range max(len(c.LODs), 1) {
+	for level := range c.levels() {
 		bands, _ := c.lodBands(level)
 		for index, edge := range bands {
 			if edge <= 0 || index > 0 && edge <= bands[index-1] || edge > c.MaxLeaveRadius {
@@ -180,14 +182,8 @@ func (c AOIConfig) lodBands(level int) (bands []int64, ok bool) {
 	return c.LODs[level], true
 }
 
-// maxBands 是所有层级里分档最多的那一层的分档数；距离档号的取值是 0..maxBands。
-func (c AOIConfig) maxBands() int {
-	most := len(c.Bands)
-	for _, bands := range c.LODs {
-		most = max(most, len(bands))
-	}
-	return most
-}
+// levels 是 LOD 层数：配了 LODs 时是它的长度，否则只有层 0。
+func (c AOIConfig) levels() int { return max(len(c.LODs), 1) }
 
 // hysteresis 是离开半径比视野大小多出的量，取缺省视野的差。
 func (c AOIConfig) hysteresis() int64 { return c.LeaveRadius - c.EnterRadius }

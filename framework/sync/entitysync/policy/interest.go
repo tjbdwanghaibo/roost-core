@@ -31,10 +31,15 @@ type InterestConfig struct {
 	// ViewChangeInterval 是同一玩家两次主视野修改（SetObserverView）之间的最小间隔，超频的请求拒绝并计数；
 	// 零值 1 秒，负数拒绝构造。服务端改业务空间视野（SetSpatialView）不限速。
 	ViewChangeInterval time.Duration
-	// BandLayer 把空间视野的距离档换成同步层级（订阅要的视图）。nil 取 DefaultBandProfile：
-	// 0 档 → 缺省视图，n 档 → {Key: "bandN", LOD: n}。
-	BandLayer func(band int) entity.SyncProfile
-	// BlockLayer 是额外块覆盖（QueueObservedBlocks）给的层级；零值跟随空间视野 0 档。
+	// BandLayer 把空间视野看见的目标换成同步层级（订阅要的视图）：level 是这个视野当前的 LOD 层
+	// （ObserverView.LOD，即 AOIConfig.LODs 的下标；只配 Bands 时恒为 0），band 是目标在该层分档里的档号
+	// （0..len(该层分档)，超出最后一条边的取 len）。同一 (level, band) 必须总是返回同一层级：构造时对每一层的
+	// 每一档各调一次做校验（配了 ViewSets 时每个结果都要在每个实体类型里声明，缺了拒绝构造），运行中在应用侧
+	// 串行调用。视野换层（SetObserverView / SetSpatialView / 重新 Enter）后按新层的映射重给整个可见集，所以
+	// “拉远后整体换成战略视图”只需让拉远层的每一档都返回战略视图（例子见 guide/04-sync“谁看见谁”）。
+	// nil 取 DefaultBandProfile：只看档，各层相同——0 档 → 缺省视图，n 档 → {Key: "bandN", LOD: n}。
+	BandLayer func(level, band int) entity.SyncProfile
+	// BlockLayer 是额外块覆盖（QueueObservedBlocks）给的层级；零值跟随视野当前层的 0 档（BandLayer(level, 0)）。
 	BlockLayer entity.SyncProfile
 	// SelfLayer 是玩家经 self 看自己的层级；零值是缺省视图（"default"）。
 	SelfLayer entity.SyncProfile
@@ -187,12 +192,14 @@ type Interest struct {
 	now          func() time.Time
 
 	// ---- 应用侧：以下全部受 mu 保护，只有应用方读写（登记侧不持 mu，从不读写它们）----
-	mu               sync.Mutex
-	subscriptions    *entitysync.SubscriptionSource
-	aoi              *AOI
-	selfVisible      bool
-	bandLayer        func(int) entity.SyncProfile
+	mu            sync.Mutex
+	subscriptions *entitysync.SubscriptionSource
+	aoi           *AOI
+	selfVisible   bool
+	bandLayer     func(level, band int) entity.SyncProfile
+	// blockLayer 是显式配置的块覆盖层级；blockFollows 为真时没有配置，块覆盖跟随视野当前层的 0 档（blockLayerFor）。
 	blockLayer       entity.SyncProfile
+	blockFollows     bool
 	selfLayer        entity.SyncProfile
 	compareProfiles  func(entity.SyncProfile, entity.SyncProfile) int
 	viewSets         map[string]*entity.SyncViewSet
@@ -305,11 +312,8 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		onRefusal: config.OnRefusal,
 	}
 	in.registry.init(maxViews, maxPlayers, cmp.Or(config.MaxSpatialViews, DefaultMaxSpatialViews))
-	in.blockLayer = config.BlockLayer
-	if in.blockLayer == (entity.SyncProfile{}) {
-		in.blockLayer = bandLayer(0)
-	}
-	in.blockLayer = in.blockLayer.Normalize()
+	in.blockLayer = config.BlockLayer.Normalize()
+	in.blockFollows = config.BlockLayer == (entity.SyncProfile{})
 	in.subscriptions = config.Manager.NewSubscriptionSourceWithResubmit(in.resubmit)
 	in.compareProfiles = config.Manager.CompareProfiles
 	in.validatePriority = config.Manager.ValidateViewPriority
@@ -368,9 +372,9 @@ const DefaultViewChangeInterval = time.Second
 // sessionOf 是观察者到会话的换算：观察者就是玩家 ID，会话 ID 等于玩家 ID。
 func sessionOf(observer int64) entitysync.SessionID { return entitysync.SessionID(observer) }
 
-// DefaultBandProfile is the layer mapping used when none is configured:
-// band 0 (nearest) is the default profile, band n asks for LOD n.
-func DefaultBandProfile(band int) entity.SyncProfile {
+// DefaultBandProfile 是不配置 BandLayer 时的映射：只看档、不看层——0 档（最近）是缺省视图，n 档是
+// {Key: "bandN", LOD: n}。各层映射相同，所以只换层不会重发视图。
+func DefaultBandProfile(_, band int) entity.SyncProfile {
 	if band <= 0 {
 		return entity.SyncProfile{}
 	}

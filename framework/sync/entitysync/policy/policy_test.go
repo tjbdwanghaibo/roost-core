@@ -783,11 +783,11 @@ func TestProfileAssemblyChecksFallbackSchemaAndPriority(t *testing.T) {
 	}
 	defer m.Close(context.Background())
 	layers := map[int]entity.SyncProfile{0: near}
-	bandLayer := func(band int) entity.SyncProfile {
+	bandLayer := func(level, band int) entity.SyncProfile {
 		if layer, ok := layers[band]; ok {
 			return layer
 		}
-		return DefaultBandProfile(band)
+		return DefaultBandProfile(level, band)
 	}
 	cfg := InterestConfig{Manager: m, AOI: interestConfig(), ViewSets: map[string]*entity.SyncViewSet{"player": views}, SelfLayer: near, BandLayer: bandLayer}
 	if _, err := NewInterest(cfg); !errors.Is(err, entity.ErrSyncViewUnknown) {
@@ -825,7 +825,7 @@ func TestProfileAssemblyCopiesSetsAndRejectsDynamicUnknownView(t *testing.T) {
 	defer m.Close(context.Background())
 	sets := map[string]*entity.SyncViewSet{"player": views}
 	dynamic := known
-	in, err := NewInterest(InterestConfig{Manager: m, AOI: interestConfig(), ViewSets: sets, SelfLayer: known, BandLayer: func(int) entity.SyncProfile { return dynamic }})
+	in, err := NewInterest(InterestConfig{Manager: m, AOI: interestConfig(), ViewSets: sets, SelfLayer: known, BandLayer: func(int, int) entity.SyncProfile { return dynamic }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -834,7 +834,7 @@ func TestProfileAssemblyCopiesSetsAndRejectsDynamicUnknownView(t *testing.T) {
 	player(t, m, 1)
 	dynamic = entity.SyncProfile{Key: "not-declared"}
 	var refusals []Refusal
-	in.contribute(pair{observer: 1, subject: 1}, contribution{view: 1}, in.layerForBand(0), true)
+	in.contribute(pair{observer: 1, subject: 1}, contribution{view: 1}, in.layerFor(0, 0), true)
 	in.settlePair(pair{observer: 1, subject: 1}, &refusals)
 	if len(refusals) != 1 || !errors.Is(refusals[0].Err, entity.ErrSyncViewUnknown) {
 		t.Fatalf("refusals: %+v", refusals)
@@ -1321,7 +1321,7 @@ func TestDistanceBandsChangeTheSubscribedView(t *testing.T) {
 	}
 	mustApply(t, interest)
 	requireSessions(t, manager, moverID, entitysync.SessionID(watcherID))
-	if got := recorder.profile(); got != DefaultBandProfile(0).Normalize() {
+	if got := recorder.profile(); got != DefaultBandProfile(0, 0).Normalize() {
 		t.Fatalf("near view = %+v", got)
 	}
 	if err := interest.Move(moverID, spatial.Point{X: 600, Y: 500}); err != nil {
@@ -1329,7 +1329,7 @@ func TestDistanceBandsChangeTheSubscribedView(t *testing.T) {
 	}
 	mustApply(t, interest)
 	requireSessions(t, manager, moverID, entitysync.SessionID(watcherID))
-	if got := recorder.profile(); got != DefaultBandProfile(1).Normalize() {
+	if got := recorder.profile(); got != DefaultBandProfile(0, 1).Normalize() {
 		t.Fatalf("far view = %+v", got)
 	}
 }

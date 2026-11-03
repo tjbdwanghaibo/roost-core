@@ -1174,7 +1174,7 @@ func TestInterestUnionsTheLayersOfDifferentViews(t *testing.T) {
 		t.Fatal(err)
 	}
 	in, err := NewInterest(InterestConfig{Manager: m, AOI: AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150},
-		BandLayer: func(int) entity.SyncProfile { return near }})
+		BandLayer: func(int, int) entity.SyncProfile { return near }})
 	if err != nil {
 		t.Fatal(err)
 	}

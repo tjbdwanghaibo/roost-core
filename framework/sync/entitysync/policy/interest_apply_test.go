@@ -187,12 +187,12 @@ func TestDirectCallsDoNotWaitForTheAOIBatch(t *testing.T) {
 				Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150,
 				EnterRadius: 120, LeaveRadius: 150,
 			},
-			BandLayer: func(band int) entity.SyncProfile {
+			BandLayer: func(level, band int) entity.SyncProfile {
 				if p := armed.Swap(nil); p != nil {
 					close(p.entered)
 					<-p.release
 				}
-				return DefaultBandProfile(band)
+				return DefaultBandProfile(level, band)
 			},
 		})
 		if err != nil {
@@ -440,9 +440,9 @@ func newBudgetHarness(t *testing.T, batchSize int, perFact, perEvent time.Durati
 			Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150,
 			EnterRadius: 120, LeaveRadius: 150,
 		},
-		BandLayer: func(band int) entity.SyncProfile {
+		BandLayer: func(level, band int) entity.SyncProfile {
 			h.events.Add(1)
-			return DefaultBandProfile(band)
+			return DefaultBandProfile(level, band)
 		},
 	})
 	if err != nil {

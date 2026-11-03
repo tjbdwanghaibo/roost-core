@@ -263,7 +263,7 @@ func TestInflightFactsKeepBudgetAndPendingHeadDoesNotStarve(t *testing.T) {
 		in.maxQueuedFacts = 1
 		entered, release := make(chan struct{}), make(chan struct{})
 		player(t, m, 1)
-		in.bandLayer = func(int) entity.SyncProfile {
+		in.bandLayer = func(int, int) entity.SyncProfile {
 			select {
 			case <-entered:
 			default:

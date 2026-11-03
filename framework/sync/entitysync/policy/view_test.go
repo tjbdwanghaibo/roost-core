@@ -1,16 +1,20 @@
-// 视野：空间 / 关系两类逻辑视野、玩家与视野多对多、按视野计数的合并、同步层级取高或并集、按视野的 MaxVisible、
+// 视野：空间 / 关系两类逻辑视野、玩家与视野多对多、按视野计数的合并、同步层级取高或并集、按 LOD 层换视图、按视野的 MaxVisible、
 // 挂接上限、跟随实体、移除视野。断言看 Manager 的订阅表与 packer 实际打包的字段。
 
 package policy
 
 import (
+	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -194,7 +198,7 @@ func TestLayersOfSeveralViewsTakeTheRicherOrTheUnion(t *testing.T) {
 	interest, err := NewInterest(InterestConfig{
 		Manager: manager,
 		AOI:     AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150, Bands: []int64{40}},
-		BandLayer: func(band int) entity.SyncProfile {
+		BandLayer: func(level, band int) entity.SyncProfile {
 			if band == 0 {
 				return near
 			}
@@ -237,6 +241,296 @@ func TestLayersOfSeveralViewsTakeTheRicherOrTheUnion(t *testing.T) {
 	// 退出联盟视野：只剩远处与近处，取包含它的近处，身份就是 near 本身。
 	mustView(t, interest.DetachView(watcherID, allianceView))
 	expect("far + near", near, name|pos|hp)
+}
+
+// ---- 按 LOD 层换整套视图 ----
+
+// viewLog 解码每一帧，按 (会话, 目标) 记下客户端最近收到的那份 subject 更新（视图身份与载荷）。
+type viewLog struct {
+	mu     sync.Mutex
+	frames map[entitysync.SessionID]int
+	last   map[[2]int64]entity.SubjectSyncUpdate
+}
+
+func (l *viewLog) Push(_ context.Context, session entitysync.SessionID, data []byte) error {
+	decoded, err := entitysync.DecodeFrame(data, frame.DefaultLimits())
+	if err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.last == nil {
+		l.last, l.frames = make(map[[2]int64]entity.SubjectSyncUpdate), make(map[entitysync.SessionID]int)
+	}
+	l.frames[session]++
+	for _, object := range decoded.Objects {
+		for _, component := range object.Components {
+			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
+			if err != nil {
+				return err
+			}
+			l.last[[2]int64{int64(session), update.SubjectID}] = update
+		}
+	}
+	return nil
+}
+
+// received 是会话 observer 最近收到的 subject 的视图与字段（maskedSubject 的载荷就是字段掩码那一个字节）。
+func (l *viewLog) received(observer, subject int64) (entity.SyncProfile, uint64, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	update, ok := l.last[[2]int64{observer, subject}]
+	payload := update.Payload.BytesCopy()
+	if !ok || len(payload) != 1 {
+		return update.Profile, 0, false
+	}
+	return update.Profile, uint64(payload[0]), true
+}
+
+func (l *viewLog) count(session entitysync.SessionID) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.frames[session]
+}
+
+// 字段：name / pos / hp / rank / faction。近景（near）含 faction，所以远景（far）与战略视图（strategic）都被它包含；
+// 战略视图与近景、远景的字段都不同。
+const (
+	lodName, lodPos, lodHP, lodRank, lodFaction uint64 = 1, 2, 4, 8, 16
+)
+
+var (
+	lodNear      = entity.SyncProfile{Key: "near"}
+	lodFar       = entity.SyncProfile{Key: "far", LOD: 1}
+	lodStrategic = entity.SyncProfile{Key: "strategic", LOD: 2}
+	lodAlliance  = entity.SyncProfile{Key: "alliance"}
+)
+
+func lodViews(t *testing.T) *entity.SyncViewSet {
+	t.Helper()
+	views, err := entity.NewSyncViewSet(
+		entity.SyncView{Profile: entity.SyncProfile{}, Fields: lodName | lodPos | lodHP | lodRank | lodFaction},
+		entity.SyncView{Profile: lodNear, Fields: lodName | lodPos | lodHP | lodFaction},
+		entity.SyncView{Profile: lodFar, Fields: lodName | lodPos | lodFaction, Priority: 1},
+		entity.SyncView{Profile: lodStrategic, Fields: lodPos | lodFaction, Priority: 2},
+		entity.SyncView{Profile: lodAlliance, Fields: lodName | lodRank},
+		// 缺省映射（DefaultBandProfile）的 1 档。
+		entity.SyncView{Profile: DefaultBandProfile(0, 1), Fields: lodName | lodPos, Priority: 1},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return views
+}
+
+// strategicLayer：层 0 按距离给近景 / 远景，层 1（拉远）每一档都给战略视图。
+func strategicLayer(level, band int) entity.SyncProfile {
+	switch {
+	case level == 1:
+		return lodStrategic
+	case band == 0:
+		return lodNear
+	}
+	return lodFar
+}
+
+// lodScene 是一个玩家（watcherID，镜头在 (500, 500)）与两层 LOD：层 0 / 层 1 的分档都是 {40}，只换层时档号不变。
+type lodScene struct {
+	manager  *entitysync.Manager
+	interest *Interest
+	log      *viewLog
+	views    *entity.SyncViewSet
+}
+
+func newLODScene(t *testing.T, mode ApplyMode, layer func(level, band int) entity.SyncProfile) *lodScene {
+	t.Helper()
+	scene := &lodScene{log: &viewLog{}, views: lodViews(t)}
+	manager, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: scene.log})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = manager.Close(context.Background()) })
+	scene.manager = manager
+	scene.interest, err = NewInterest(InterestConfig{
+		Manager: manager, ApplyMode: mode, ViewChangeInterval: time.Nanosecond, BandLayer: layer,
+		AOI: AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150,
+			LODs: [][]int64{{40}, {40}}},
+		ViewSets: map[string]*entity.SyncViewSet{"unit": scene.views},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(scene.interest.Close)
+	player(t, manager, watcherID)
+	mustView(t, scene.interest.Enter(watcherID, watcherID, spatial.Point{X: 500, Y: 500}, ObserverView{}))
+	return scene
+}
+
+// settle 应用并结算，再走几次 Flush 把帧交付给客户端。
+func (s *lodScene) settle(t *testing.T) {
+	t.Helper()
+	mustApply(t, s.interest)
+	for range 3 {
+		if err := s.manager.Flush(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func (s *lodScene) expect(t *testing.T, step string, subject int64, profile entity.SyncProfile, fields uint64) {
+	t.Helper()
+	s.settle(t)
+	gotProfile, gotFields, ok := s.log.received(watcherID, subject)
+	if !ok || gotProfile != profile.Normalize() || gotFields != fields {
+		t.Fatalf("%s: client got view %+v fields %05b for %d, want %+v fields %05b", step, gotProfile, gotFields, subject, profile.Normalize(), fields)
+	}
+}
+
+func (s *lodScene) setLevel(t *testing.T, level int) {
+	t.Helper()
+	if _, err := s.interest.SetObserverView(watcherID, ObserverView{LOD: level}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 拉远：只换层（半径与档号都不变）时，0 档与 1 档的目标都换成层 1 指定的战略视图，客户端收到的视图与字段跟着变；
+// 换回层 0 恢复近景 / 远景。修复前 BandLayer 只收档号、换层不换档时不重评，换层后 0 档仍是近景。
+func TestZoomingOutSwapsTheWholeView(t *testing.T) {
+	forEachApplyMode(t, func(t *testing.T, mode ApplyMode) {
+		scene := newLODScene(t, mode, strategicLayer)
+		const close, farther = int64(2001), int64(2002)
+		maskedSubject(t, scene.manager, close, scene.views)
+		maskedSubject(t, scene.manager, farther, scene.views)
+		mustView(t, scene.interest.Show(close, spatial.Point{X: 520, Y: 500}))
+		mustView(t, scene.interest.Show(farther, spatial.Point{X: 580, Y: 500}))
+		scene.expect(t, "level 0 band 0", close, lodNear, lodName|lodPos|lodHP|lodFaction)
+		scene.expect(t, "level 0 band 1", farther, lodFar, lodName|lodPos|lodFaction)
+		scene.setLevel(t, 1)
+		scene.expect(t, "level 1 band 0", close, lodStrategic, lodPos|lodFaction)
+		scene.expect(t, "level 1 band 1", farther, lodStrategic, lodPos|lodFaction)
+		requireSessions(t, scene.manager, close, entitysync.SessionID(watcherID))
+		// 拉远期间新进入视野的目标直接拿战略视图。
+		const arriving = int64(2003)
+		maskedSubject(t, scene.manager, arriving, scene.views)
+		mustView(t, scene.interest.Show(arriving, spatial.Point{X: 510, Y: 510}))
+		scene.expect(t, "arrival at level 1", arriving, lodStrategic, lodPos|lodFaction)
+		scene.setLevel(t, 0)
+		scene.expect(t, "back to level 0 band 0", close, lodNear, lodName|lodPos|lodHP|lodFaction)
+		scene.expect(t, "back to level 0 band 1", farther, lodFar, lodName|lodPos|lodFaction)
+		scene.expect(t, "arrival back at level 0", arriving, lodNear, lodName|lodPos|lodHP|lodFaction)
+	})
+}
+
+// 业务空间视野换层（SetSpatialView）同样重给：眼位拉远后它看见的目标换成战略视图。
+func TestSpatialViewLevelChangeSwapsItsView(t *testing.T) {
+	scene := newLODScene(t, ApplySync, strategicLayer)
+	const ward, target = ViewID(77), int64(2001)
+	maskedSubject(t, scene.manager, target, scene.views)
+	mustView(t, scene.interest.Show(target, spatial.Point{X: 900, Y: 900}))
+	mustView(t, scene.interest.DefineSpatialView(ward, spatial.Point{X: 910, Y: 900}, ObserverView{}, 0))
+	mustView(t, scene.interest.AttachView(watcherID, ward))
+	scene.expect(t, "ward at level 0", target, lodNear, lodName|lodPos|lodHP|lodFaction)
+	if _, err := scene.interest.SetSpatialView(ward, ObserverView{LOD: 1}); err != nil {
+		t.Fatal(err)
+	}
+	scene.expect(t, "ward at level 1", target, lodStrategic, lodPos|lodFaction)
+}
+
+// 多来源：拉远的主视野与别的来源同时看见一个目标时，沿用现有选择——包含关系取数据多的（近处眼位的近景包含战略视图），
+// 互不包含取并集（联盟视野 + 战略视图）；来源撤掉后回到只剩战略视图。
+func TestZoomedOutViewMergesWithOtherSources(t *testing.T) {
+	scene := newLODScene(t, ApplySync, strategicLayer)
+	const target = int64(2001)
+	maskedSubject(t, scene.manager, target, scene.views)
+	mustView(t, scene.interest.Show(target, spatial.Point{X: 520, Y: 500}))
+	scene.setLevel(t, 1)
+	scene.expect(t, "zoomed out", target, lodStrategic, lodPos|lodFaction)
+	// 近处一个层 0 的眼位：近景包含战略视图，只订阅近景。
+	const ward = ViewID(901)
+	mustView(t, scene.interest.DefineSpatialView(ward, spatial.Point{X: 530, Y: 500}, ObserverView{}, 0))
+	mustView(t, scene.interest.AttachView(watcherID, ward))
+	scene.expect(t, "zoomed out + near ward", target, lodNear, lodName|lodPos|lodHP|lodFaction)
+	mustView(t, scene.interest.DetachView(watcherID, ward))
+	scene.expect(t, "ward detached", target, lodStrategic, lodPos|lodFaction)
+	// 联盟视野与战略视图互不包含：取并集。
+	const allianceView = ViewID(900)
+	mustView(t, scene.interest.DefineRelationView(allianceView, lodAlliance))
+	mustView(t, scene.interest.AddViewMembers(allianceView, target))
+	mustView(t, scene.interest.AttachView(watcherID, allianceView))
+	scene.expect(t, "zoomed out + alliance", target, entity.UnionSyncProfiles(lodStrategic, lodAlliance), lodName|lodPos|lodRank|lodFaction)
+	// 带着联盟视野换回层 0：近景与联盟互不包含，仍取并集。
+	scene.setLevel(t, 0)
+	scene.expect(t, "level 0 + alliance", target, entity.UnionSyncProfiles(lodNear, lodAlliance), lodName|lodPos|lodHP|lodRank|lodFaction)
+}
+
+// 额外块覆盖不配 BlockLayer 时跟随视野当前层的 0 档：远处目标经块覆盖被看见，拉远后也换成战略视图。
+func TestBlockCoverageFollowsTheViewLevel(t *testing.T) {
+	scene := newLODScene(t, ApplySync, strategicLayer)
+	const target = int64(2001)
+	maskedSubject(t, scene.manager, target, scene.views)
+	mustView(t, scene.interest.Show(target, spatial.Point{X: 950, Y: 950}))
+	e := factEntity(t, target)
+	mustView(t, scene.interest.QueueObservedBlocks(e, []int64{scene.interest.BlockAt(spatial.Point{X: 500, Y: 500})}))
+	flushInterest(t, scene.interest, scene.manager)
+	scene.expect(t, "block at level 0", target, lodNear, lodName|lodPos|lodHP|lodFaction)
+	scene.setLevel(t, 1)
+	scene.expect(t, "block at level 1", target, lodStrategic, lodPos|lodFaction)
+}
+
+// 缺省映射与只看档的映射：各层映射相同，只换层不重发——换层之后客户端一帧也没多收。
+func TestLevelSwitchWithoutLevelSpecificLayersSendsNothing(t *testing.T) {
+	for name, layer := range map[string]func(level, band int) entity.SyncProfile{
+		"default":   nil,
+		"band only": func(_, band int) entity.SyncProfile { return strategicLayer(0, band) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			scene := newLODScene(t, ApplySync, layer)
+			const target = int64(2001)
+			maskedSubject(t, scene.manager, target, scene.views)
+			mustView(t, scene.interest.Show(target, spatial.Point{X: 520, Y: 500}))
+			scene.settle(t)
+			before := scene.log.count(entitysync.SessionID(watcherID))
+			scene.setLevel(t, 1)
+			scene.settle(t)
+			scene.setLevel(t, 0)
+			scene.settle(t)
+			if got := scene.log.count(entitysync.SessionID(watcherID)); got != before {
+				t.Fatalf("switching levels with level-independent layers sent %d more frames", got-before)
+			}
+		})
+	}
+}
+
+// 启动期校验：配了 ViewSets 时，每一层的每一档用到的视图都要声明，拉远层用到未声明的视图即拒绝构造并指出层与档。
+func TestUndeclaredLevelViewIsRefusedAtConstruction(t *testing.T) {
+	manager := newManager(t)
+	views := lodViews(t)
+	undeclared := entity.SyncProfile{Key: "minimap", LOD: 3}
+	_, err := NewInterest(InterestConfig{
+		Manager: manager,
+		AOI: AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150,
+			LODs: [][]int64{{40}, {40, 80}}},
+		BandLayer: func(level, band int) entity.SyncProfile {
+			if level == 1 && band == 2 {
+				return undeclared
+			}
+			return strategicLayer(level, band)
+		},
+		ViewSets: map[string]*entity.SyncViewSet{"unit": views},
+	})
+	if !errors.Is(err, entity.ErrSyncViewUnknown) || !strings.Contains(err.Error(), "LOD 1 band 2") {
+		t.Fatalf("an undeclared view on LOD 1 band 2 was accepted: %v", err)
+	}
+	// 显式 BlockLayer 仍单独校验。
+	_, err = NewInterest(InterestConfig{
+		Manager: manager, BandLayer: strategicLayer, BlockLayer: undeclared,
+		AOI: AOIConfig{Bounds: spatial.Rect{Max: spatial.Point{X: 1000, Y: 1000}}, BlockSize: 150, EnterRadius: 120, LeaveRadius: 150,
+			LODs: [][]int64{{40}, {40}}},
+		ViewSets: map[string]*entity.SyncViewSet{"unit": views},
+	})
+	if !errors.Is(err, entity.ErrSyncViewUnknown) {
+		t.Fatalf("an undeclared block layer was accepted: %v", err)
+	}
 }
 
 // MaxVisible 按每个视野计：上限 1 时，两个视野各看见一个目标，玩家看见两个。

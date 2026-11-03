@@ -48,7 +48,7 @@ PrepareViews 汇总所需 profile；优先级配置先参与选择，再按确�
 
 | 视野 | 是什么 | 给的同步层级 | 入口 |
 | --- | --- | --- | --- |
-| 空间视野 | 一个视点 + `ObserverView{LOD, Radius}` + 可选跟随实体 | 按距离档：`InterestConfig.BandLayer(band)`（缺省 0 档 default、n 档 `bandN`）；额外块覆盖 `BlockLayer` | `DefineSpatialView(id, at, sight, follow)`、`MoveSpatialView`、`SetSpatialView`（服务端改视野，不限速）、`SetViewFollow` |
+| 空间视野 | 一个视点 + `ObserverView{LOD, Radius}` + 可选跟随实体 | 按视野当前的 LOD 层与距离档：`InterestConfig.BandLayer(level, band)`（缺省只看档：0 档 default、n 档 `bandN`，各层相同）；额外块覆盖 `BlockLayer`（零值跟随当前层的 0 档） | `DefineSpatialView(id, at, sight, follow)`、`MoveSpatialView`、`SetSpatialView`（服务端改视野，不限速）、`SetViewFollow` |
 | 关系视野 | 一个显式的实体集合（联盟、队伍、好友、阵营全体单位） | 定义时给的一个层级 | `DefineRelationView(id, layer)`、`SetViewMembers` / `AddViewMembers` / `RemoveViewMembers` |
 
 `AttachView(playerID, id)` 把视野挂给玩家，`DetachView` 解除，`RemoveView(id)` 移除视野并自动从所有玩家解除（之后同一 ID 可重新定义）。一个联盟一份关系视野挂给全体成员，成员加入、退出只改这一份集合和挂接；副本阵营的每个单位一个跟随它的空间视野，挂给阵营里每个玩家——任何一个单位看得见，全阵营都看得见；RTS、召唤物是一个玩家挂多个空间视野。读：`ViewPlayers`、`ViewMembers`、`ViewVisible`、`Seen(playerID)`（玩家经任一视野持有的全部目标，诊断用）。
@@ -120,14 +120,53 @@ MOBA 一行 2026-10-22 改正（原写 ApplySync，见学习分支 `learn/main-r
 **视野参数**（D14 B1）。每个空间视野有自己的 `ObserverView{LOD, Radius}`，零值是缺省视野：
 
 - `AOIConfig.LODs` 是 LOD 层级表，下标即层级号，每层一组距离分档（规则同 `Bands`）；不配时只有层级 0、分档取 `Bands`，两者不能同时配。
+- 每层每档订阅哪个视图由 `InterestConfig.BandLayer(level, band)` 决定：`level` 是视野当前的层（`ObserverView.LOD`），`band` 是目标在该层分档里的档号（`0..len(该层分档)`）。所以拉远层可以整体换一套视图（见下面的战略视图例子）；不配时用 `DefaultBandProfile`，只看档、各层相同。同一 `(level, band)` 必须总返回同一视图。
 - 视野大小（`Radius`，即进入半径）允许范围 `[MinViewRadius, MaxLeaveRadius − 滞回量]`，按 `ViewRadiusStep` 从 `MinViewRadius` 起向下取整；离开半径 = 视野大小 + 滞回量，滞回量取缺省视野的 `LeaveRadius − EnterRadius`。零值：最小取 `EnterRadius`、最大取 `LeaveRadius`、步长 1，即只允许缺省视野。`EnterRadius` 必须落在量化网格上。
-- 启动期检查：单个视野的块预算（`MaxObserverBlocks`）按 `MaxLeaveRadius` 算，超出拒绝（`ErrInterestBudget`）；每层分档递增、为正、不超过 `MaxLeaveRadius`。运行期的视野一律先归一，不会越过启动期检查过的范围。
+- 启动期检查：单个视野的块预算（`MaxObserverBlocks`）按 `MaxLeaveRadius` 算，超出拒绝（`ErrInterestBudget`）；每层分档递增、为正、不超过 `MaxLeaveRadius`；配了 `ViewSets` 时，`BandLayer` 对每一层的每一档给出的视图（以及显式的 `BlockLayer`、`SelfLayer`）都要在每个实体类型的 ViewSet 里声明，缺一个就拒绝构造，报错指出层与档（`spatial LOD 1 band 2 layer: ... unknown sync view`）。运行期的视野一律先归一，不会越过启动期检查过的范围。
+- 层与视野大小相互独立：块预算按 `MaxLeaveRadius`、`MaxVisible` 按每个空间视野计，对每一层都一样，没有“每层单独的 `MaxVisible`”。拉远层通常配大半径、看见的目标更多：`MaxVisible` 按拉远时要看到的数量取（它同时是近景的上限），`MaxObjects` 照上面“上限”的规则留够；单个目标的成本靠拉远视图字段少来降。
 
 客户端的 AOI / LOD 请求只改玩家主视野：接入层收到 `(lodLevel, viewRadius)` 后调用 `Interest.SetObserverView(playerID, ObserverView{LOD, Radius})`，与移动请求一样直接进政策、随后 `Apply`：
 
 - 层级必须是配置里的，否则 `ErrObserverView`；视野大小由服务端夹取并量化，防止改过的客户端拉大视野多看单位、放大订阅与带宽。
 - 量化后与当前相同的请求什么也不做、不占限速；同一玩家距上次生效不足 `InterestConfig.ViewChangeInterval`（缺省 1 秒，负数拒绝构造）的请求返回 `ErrObserverViewRate`。两种拒绝都计 `entitysync_interest_view_rejected_total{reason="rate"|"lod"}`。
-- 生效后完整重评：视野变大，新进入的目标订阅、下发全量；变小，超出离开半径的退订；只换层级，按新分档重发视图。返回值是此后生效的视野（拒绝时是当前视野），接入层回给客户端。
+- 生效后完整重评：视野变大，新进入的目标订阅、下发全量；变小，超出离开半径的退订；换层级（半径不变也一样）按新层的分档与 `BandLayer(新层, 档)` 重给整个可见集，视图变了的目标重发（新视图的全量），没变的不出帧。同一目标还被别的视野看见时，照常按上面的“同步层级”规则合并（包含取数据多的，不包含取并集）。返回值是此后生效的视野（拒绝时是当前视野），接入层回给客户端。业务空间视野用 `SetSpatialView` 换层，规则相同。
+
+**拉远换战略视图**的例子：层 0 是近景（按距离分近 / 远两档），层 1 是拉远（半径放大，只要位置、阵营、图标）。
+
+```go
+var unitViews, _ = dataengine.NewSyncViewSet(db.UnitDaoSyncFields(),
+	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}}, // 经 self 看自己（SelfLayer 缺省）
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: []string{"Name", "PosX", "PosY", "HP", "Faction", "Icon"}},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "far", LOD: 1}, Fields: []string{"Name", "PosX", "PosY", "Faction", "Icon"}, Priority: 1},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "strategic", LOD: 2}, Fields: []string{"PosX", "PosY", "Faction", "Icon"}, Priority: 2},
+)
+
+interest, err := policy.NewInterest(policy.InterestConfig{
+	Manager: manager,
+	AOI: policy.AOIConfig{
+		Bounds: worldBounds, BlockSize: 256, EnterRadius: 200, LeaveRadius: 240,
+		MaxLeaveRadius: 1240, ViewRadiusStep: 200, // 拉远时客户端请求 Radius 1000
+		LODs:           [][]int64{{80}, {}},      // 层 0：80 以内近景、外面远景；层 1：一档
+		MaxVisible:     96,                       // 按拉远时要看到的数量取，近景也受它限
+	},
+	BandLayer: func(level, band int) entity.SyncProfile {
+		switch {
+		case level == 1:
+			return entity.SyncProfile{Key: "strategic", LOD: 2} // 拉远：每一档都是战略视图
+		case band == 0:
+			return entity.SyncProfile{Key: "near"}
+		}
+		return entity.SyncProfile{Key: "far", LOD: 1}
+	},
+	ViewSets: map[string]*entity.SyncViewSet{"unit": unitViews}, // 每层每档的视图都要在这里声明
+})
+
+// 客户端拉远 / 拉近（两次请求之间受 ViewChangeInterval 限速）：
+_, err = interest.SetObserverView(playerID, policy.ObserverView{LOD: 1, Radius: 1000})
+_, err = interest.SetObserverView(playerID, policy.ObserverView{})
+```
+
+拉远后最近一圈的目标也换成 `strategic`；拉回层 0 恢复 `near` / `far`。块预算按最大的离开半径（`MaxLeaveRadius`）在启动期核算，`MaxVisible` 对任何层、任何半径都封顶，拉远不会越过它们。回归：[view_test.go](../../../framework/sync/entitysync/policy/view_test.go) `TestZoomingOutSwapsTheWholeView`、`TestZoomedOutViewMergesWithOtherSources`、`TestUndeclaredLevelViewIsRefusedAtConstruction`。
 
 game-demo 的接法：`scene_view` 请求（消息 10025，`SceneViewRequest{LodLevel, ViewRadius}`）→ `HandleSceneView` → `Scene.SetView` → `SetObserverView` + `Apply`；未配置的层级、超频、不在场景分别回 `scene_view_lod`（100022）、`scene_view_rate`（100023）、`scene_position`（100013）。队伍是每队一个关系视野（`Scene.SetTeam`）。SLG 夹具（`scripts/testdata/slg/alliance`）的联盟是一个共享关系视野（成员是联盟共有的据点），侦察是玩家私有的关系视野，两者各自持有同一个据点，最后一个释放才退订。
 
