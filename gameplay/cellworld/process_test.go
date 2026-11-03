@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -20,13 +21,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
+
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
-	kitredis "github.com/tjbdwanghaibo/roost-core/wiring/redis"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
 )
 
 // 多进程：每个 Cell 是测试二进制自 exec 出来的独立 OS 进程（TestCellProcessChild），而且是一个普通 roost App——
-// app.New(...).Singleton(kitredis.SingletonStore)，singleton.enabled=true，锁在测试自起的私有 redis-server 上：
+// app.New(...).Singleton(opener)，singleton.enabled=true，锁在测试自起的私有 redis-server 上（opener 是下面的 lockStore：
+// 与 wiring/redis 的 SingletonStore 同样转到 core 的 redis.CompareAndSet / CompareAndDelete；core 层的包不能 import wiring）：
 // 同 sid 的第二个 Cell 进程拿不到锁、启动失败；失锁 fail-stop（App 的统一保证，cellworld 不自己做）。进程之间经
 // 真实 nats-server 通信。子进程把 Real 取得 / 失去、伤害结算等事件按行写到 stdout（JSON，带 pid 与系统时间），父进程
 // 据此跨进程检查“同一 (实体, epoch) 只有一个进程取得 Real、Real 区间不重叠”。父进程关闭子进程 stdin 即让它退出并打印
@@ -202,12 +207,13 @@ func runChild(raw string) int {
 	}
 	defer os.RemoveAll(dir)
 	config := filepath.Join(dir, "config.cell.yaml")
-	yaml := fmt.Sprintf("singleton:\n  enabled: true\n  key_prefix: %q\n  ttl: 3s\n  renew_interval: 500ms\n  guard: 1s\n  startup_wait: 6s\nredis:\n  addr: %q\n", spec.LockPrefix, spec.Redis)
+	yaml := fmt.Sprintf("singleton:\n  enabled: true\n  key_prefix: %q\n  ttl: 3s\n  renew_interval: 500ms\n  guard: 1s\n  startup_wait: 6s\n", spec.LockPrefix)
 	if err := os.WriteFile(config, []byte(yaml), 0o600); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
-	a := app.New("cellworld-cell", "test").Singleton(kitredis.SingletonStore).RegisterServer("cell", svc)
+	opener := func(*viper.Viper) (app.SingletonStore, error) { return newLockStore(spec.Redis) }
+	a := app.New("cellworld-cell", "test").Singleton(opener).RegisterServer("cell", svc)
 	a.RootCmd().SetArgs([]string{"cell", "--config", config, "--sid", fmt.Sprint(sid)})
 	if err := a.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "cell app:", err)
@@ -215,6 +221,50 @@ func runChild(raw string) int {
 	}
 	return 0
 }
+
+// lockStore 是单实例锁的后端：与 wiring/redis 的 SingletonStore 相同的两个 CAS 原语加逐键 GET。
+type lockStore struct{ client fredis.IRedis }
+
+func newLockStore(addr string) (app.SingletonStore, error) {
+	client, err := redisdriver.NewClient(&fredis.Config{Addr: addr, MaxRetries: -1})
+	if err != nil {
+		return nil, err
+	}
+	return &lockStore{client: client}, nil
+}
+
+func (s *lockStore) CompareAndSet(ctx context.Context, key string, expected, next []byte, ttl time.Duration) (bool, []byte, error) {
+	result, err := fredis.CompareAndSet(ctx, s.client, fredis.CompareAndSetCommand{Key: key, Expected: expected, Next: next, TTL: ttl})
+	if err != nil {
+		return false, nil, err
+	}
+	return result.Applied, result.Current, nil
+}
+
+func (s *lockStore) CompareAndDelete(ctx context.Context, key string, expected []byte) (bool, error) {
+	result, err := fredis.CompareAndDelete(ctx, s.client, key, expected)
+	if err != nil {
+		return false, err
+	}
+	return result.Applied, nil
+}
+
+func (s *lockStore) Get(ctx context.Context, keys []string) ([][]byte, error) {
+	out := make([][]byte, len(keys))
+	for i, key := range keys {
+		value, err := s.client.Get(ctx, key)
+		switch {
+		case errors.Is(err, fredis.ErrNil):
+		case err != nil:
+			return nil, err
+		default:
+			out[i] = value
+		}
+	}
+	return out, nil
+}
+
+func (s *lockStore) Close() error { return s.client.Close() }
 
 // cellService 是 Cell 进程的 App 服务：Serve 起本格（startProc 同一套接线），stdin EOF 时打印统计并返回（App 停 Mod、
 // 释放单实例锁）。
