@@ -117,6 +117,44 @@ type PlayerDao struct {
 	// has no use for it. Old receipts are pruned by the step itself after
 	// saga.receipt_retention.
 	SagaReceipts map[string][]byte `dao:"persist" store:"saga_receipts"`
+
+	// The Cell* fields are the player's routing state for a partitioned scene
+	// (scene.partition, gameplay/cellworld.BaseState): this process is the
+	// player's Base, the scene's authority is the Cell process of the cell
+	// the player stands in, and these say which one that is, which epoch,
+	// the move intent and its sequence, the attack sequence and the watchdog
+	// times. The Player's own heartbeat ("cell.base") reads and writes them.
+	// `nopersist,nosync`: they describe one login on one process; a restarted
+	// Base enters again.
+	CellActor     int64  `dao:"nopersist,nosync" store:"cell_actor"`
+	CellInWorld   bool   `dao:"nopersist,nosync" store:"cell_in_world"`
+	CellOwner     int32  `dao:"nopersist,nosync" store:"cell_owner"`
+	CellEpoch     uint64 `dao:"nopersist,nosync" store:"cell_epoch"`
+	CellIntentSeq uint64 `dao:"nopersist,nosync" store:"cell_intent_seq"`
+	CellVX        int64  `dao:"nopersist,nosync" store:"cell_vx"`
+	CellVY        int64  `dao:"nopersist,nosync" store:"cell_vy"`
+	CellAttackSeq uint64 `dao:"nopersist,nosync" store:"cell_attack_seq"`
+	CellViewAt    int64  `dao:"nopersist,nosync" store:"cell_view_at"`
+	CellEnterAt   int64  `dao:"nopersist,nosync" store:"cell_enter_at"`
+	CellLeaseAt   int64  `dao:"nopersist,nosync" store:"cell_lease_at"`
+	CellHint      int32  `dao:"nopersist,nosync" store:"cell_hint"`
+	CellLostEpoch uint64 `dao:"nopersist,nosync" store:"cell_lost_epoch"`
+	CellLostAt    int64  `dao:"nopersist,nosync" store:"cell_lost_at"`
+	CellShown     bool   `dao:"nopersist,nosync" store:"cell_shown"`
+	CellShownGen  uint64 `dao:"nopersist,nosync" store:"cell_shown_gen"`
+	// CellHP / CellSnapEpoch / CellSnapSeq are the player's snapshot from the
+	// partitioned scene: the HP its SceneActor last wrote back and that
+	// write-back's version. Persisted — they are what a crashed Cell rebuilds
+	// the SceneActor from, and a restarted Base must still refuse an older
+	// write-back. CellHP is also synced: the Base's mirror of the player's
+	// SceneActor is packed with this DAO's encoding (the client's `player`
+	// namespace, D2 = A), and HP is one of the fields it carries. The live
+	// position is PosX / PosY; the snapshot position is SavedPosX / SavedPosY
+	// with SavedSceneID = the partitioned scene, written with each accepted
+	// write-back (the fixed moment, not every witness).
+	CellHP        int64  `dao:"persist,sync" store:"cell_hp"`
+	CellSnapEpoch uint64 `dao:"persist" store:"cell_snap_epoch"`
+	CellSnapSeq   uint64 `dao:"persist" store:"cell_snap_seq"`
 }
 
 // Equipment is a nested struct: the generator gives it its own dirty

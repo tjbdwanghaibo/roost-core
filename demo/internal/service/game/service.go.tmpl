@@ -34,6 +34,7 @@ type Service struct {
 	scene          *Scene
 	stopSpawner    func()
 	spawner        *spawner
+	partition      *partitionRuntime
 	owners         *PlayerOwners
 	stopFlags      func()
 	stopPresence   func()
@@ -141,13 +142,35 @@ func (s *Service) Init(registry *app.Registry) error {
 	}
  // Scene 自己拥有 Manager；Nest Mod 没有这个句柄，健康检查由此登记。
  if checks,ok:=app.Lookup[*health.Registry](registry,mods.ModHealth);ok && checks!=nil {checks.Register("entitysync.scene",scene)}
-	// The spawner last among the scene's users: it needs both the entity and
-	// the bridge, and it starts producing subjects immediately.
-	stopSpawner, spawn, err := startSpawner(context.Background(), registry, area, scene)
+	// A partitioned scene (scene.partition, partition.go) instead of the
+	// spawner: this process is a Cell (its sid owns a cell: it hosts the
+	// cell's region and spawns the cell's monsters) and the Base of its own
+	// players. Before the player owners are published, so no login can join
+	// before it is in place. Without scene.partition.enabled nothing of it
+	// exists and the scene is the ordinary one.
+	partitioned, err := settings.LoadPartition(registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
-	s.stopSpawner, s.spawner = stopSpawner, spawn
+	if partitioned.Enabled {
+		runtime, err := startPartition(registry, partitioned, area, scene)
+		if err != nil {
+			return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+		}
+		scene.partition.Store(runtime)
+		s.partition = runtime
+		if err := registry.Register(PartitionCapability, runtime); err != nil {
+			return fmt.Errorf("{{GAME_SERVICE}}: publish partitioned scene: %w", err)
+		}
+	} else {
+		// The spawner last among the scene's users: it needs both the entity and
+		// the bridge, and it starts producing subjects immediately.
+		stopSpawner, spawn, err := startSpawner(context.Background(), registry, area, scene)
+		if err != nil {
+			return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+		}
+		s.stopSpawner, s.spawner = stopSpawner, spawn
+	}
 	// 本进程为哪些玩家服务（playerowner.go），在问它的消费者之前发布：matchmaker 和赠礼步骤在启动时
 	// 各查一次这个能力，查不到就拒绝启动。玩家绑定在哪个 sid 是 account 写进角色的静态事实，同一 sid
 	// 只有一个进程由 App 单实例锁保证，所以这里只是一张本地驻留表，不碰 Redis。下面装好卸载与连接之后
@@ -243,7 +266,7 @@ func (s *Service) Init(registry *app.Registry) error {
 	s.activityPhase = phase
 	// The operator surface: GM commands on the admin registry the ops Mod
 	// serves (gm.go). Registered last, when everything they call is up.
-	if err := registerGMCommands(registry, s.spawner, s.activity); err != nil {
+	if err := registerGMCommands(registry, s.spawner, s.activity, s.partition); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	return nil
@@ -338,6 +361,14 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	if s.stopSpawner != nil {
 		s.stopSpawner()
 		s.stopSpawner = nil
+	}
+	// The partitioned scene's node before the scene: it feeds the scene's
+	// manager (the mirrors), and nothing is taken from or sent to the other
+	// cells once it is down. The SceneActors and monsters it holds go with the
+	// process: the Bases re-enter their players elsewhere or here again.
+	if s.partition != nil {
+		s.partition.stop()
+		s.partition = nil
 	}
 	// The scene last among the fan-out paths: closing it stops the
 	// replication loop and the transport sink, and anything still preparing

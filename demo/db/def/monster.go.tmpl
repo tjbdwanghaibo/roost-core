@@ -37,4 +37,42 @@ type MonsterDao struct {
 	// Written by the state watcher in the same transaction as the buff, so
 	// it rolls back with it.
 	Rooted bool `dao:"nopersist,sync" store:"rooted"`
+
+	// The Cell* fields are the monster's state as a walker of a partitioned
+	// scene (scene.partition, gameplay/cellworld; maintainer decision D5 = A):
+	// velocity, version, role, handoff and the damage dedup list. Position and
+	// HP are PosX / PosY / HP above. They carry the same names and keys as
+	// SceneActorDao's, so game/partition maps both with one function, and a
+	// monster of an ordinary scene never writes them. `nopersist,nosync`: a
+	// partitioned monster is seen by clients through the Base process's Sync
+	// mirror, not through this entity's own subject.
+	CellVX          int64        `dao:"nopersist,nosync" store:"cell_vx"`
+	CellVY          int64        `dao:"nopersist,nosync" store:"cell_vy"`
+	CellEpoch       uint64       `dao:"nopersist,nosync" store:"cell_epoch"`
+	CellSeq         uint64       `dao:"nopersist,nosync" store:"cell_seq"`
+	CellIdle        bool         `dao:"nopersist,nosync" store:"cell_idle"`
+	CellBase        int32        `dao:"nopersist,nosync" store:"cell_base"`
+	CellRole        int32        `dao:"nopersist,nosync" store:"cell_role"`
+	CellLastInput   uint64       `dao:"nopersist,nosync" store:"cell_last_input"`
+	CellRetryAfter  int64        `dao:"nopersist,nosync" store:"cell_retry_after"`
+	CellLeaseUntil  int64        `dao:"nopersist,nosync" store:"cell_lease_until"`
+	CellWritebackAt int64        `dao:"nopersist,nosync" store:"cell_writeback_at"`
+	CellApplied     []CellHit    `dao:"nopersist,nosync" store:"cell_applied"`
+	CellHandoff     *CellHandoff `dao:"nopersist,nosync" store:"cell_handoff"`
+}
+
+// CellHit 是一条已结算伤害的去重记录（cellworld.AppliedHit）。
+type CellHit struct {
+	Attacker int64  `store:"attacker"`
+	Seq      uint64 `store:"seq"`
+	At       int64  `store:"at"`
+}
+
+// CellHandoff 是冻结中的交接（cellworld.HandoffState）。时间是系统时间 UnixNano。
+type CellHandoff struct {
+	Col       int32  `store:"col"`
+	Row       int32  `store:"row"`
+	Epoch     uint64 `store:"epoch"`
+	StartedAt int64  `store:"started_at"`
+	LastSent  int64  `store:"last_sent"`
 }

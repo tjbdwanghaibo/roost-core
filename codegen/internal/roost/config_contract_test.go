@@ -347,8 +347,10 @@ func TestDoctorReadsBusinessDeclarationsFromTheProcess(t *testing.T) {
 		if item.Status != StatusOK {
 			t.Errorf("%s: %s %s", item.Name, item.Status, item.Detail)
 		}
-		if item.Name == "config-schema:game" && !strings.Contains(item.Detail, "(4 business key(s))") {
-			t.Errorf("config-schema:game = %q; want the four keys game/settings declares beyond the framework's (activity.key_prefix, activity.groups_file, platform.key_prefix, platform.payment_secret)", item.Detail)
+		// 4 个业务键（activity.key_prefix、activity.groups_file、platform.key_prefix、platform.payment_secret）加分区场景
+		// 原型 scene.partition.* 的 28 个（game/settings/partition.go，分支 feat/seamless-world-prototype）。
+		if item.Name == "config-schema:game" && !strings.Contains(item.Detail, "(32 business key(s))") {
+			t.Errorf("config-schema:game = %q; want the 32 keys game/settings declares beyond the framework's (activity.*, platform.* and scene.partition.*)", item.Detail)
 		}
 	}
 

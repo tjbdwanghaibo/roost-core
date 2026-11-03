@@ -1,0 +1,454 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"slices"
+	"sync/atomic"
+	"time"
+
+	db "{{MODULE}}/db"
+	monster "{{MODULE}}/game/entities/monster"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	scene_actor "{{MODULE}}/game/entities/scene_actor"
+	"{{MODULE}}/game/partition"
+	"{{MODULE}}/game/runtimeid"
+	"{{MODULE}}/game/settings"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// 分区场景（scene.partition，原型）：本进程在其中的那一份。
+//
+// 每个 game 进程读同一份 scene.partition。sid 是 owners 之一的进程是那个格的 **Cell**：本进程的 Scene 实体持有
+// 格的区域表（cellworld.Region），刷本格的怪，站在本格的玩家由这里的 SceneActor 代表；每个进程都是自己玩家的
+// **Base**：Player 不迁移，玩家的路由状态在 Player 上，Cell 发来的视野（witness）喂给场景桥的 Sync mirror，
+// 客户端照旧从本进程这一条连接收帧。两边都在同一个 cellworld.Node 上，Node 把 NATS 上的消息投成 Nest 请求，
+// 状态全在实体上（Scene / SceneActor / Monster / Player），这里不持有任何格内状态、也没有带锁的进程级表
+// （维护者 2026-11-03 的约束）。设计与实测见 roost-core 分支 feat/seamless-world-prototype 的
+// docs/maintenance/FEATURE-2026-11-03-seamless-world.md §10。
+//
+// 进程级的保证（同一 sid 只有一个进程、失锁即停）是 App 单实例锁给的（singleton.enabled），这里不另做。
+
+// PartitionCapability is the name the partitioned scene is published under
+// (only on a process whose scene is partitioned).
+const PartitionCapability app.ModName = "{{GAME_SERVICE}}.scene.partition"
+
+// partitionMirrorTTL：mirror 多久没有出现在任何 witness 里就删除（witness 每个区域心跳一份，缺省 50ms）。
+const partitionMirrorTTL = time.Second
+
+// partitionBlockSize 是分区模式下 Base 的 Interest 的 AOI 网格边长（世界比普通地图大得多）。
+const partitionBlockSize = 200
+
+// Base 的最大离开半径必须与 settings 声明里检查的那个数一致：view_radius 的下限按它校验。
+const _ = uint(sceneMaxLeaveRadius-settings.PartitionMaxBaseLeaveRadius) + uint(settings.PartitionMaxBaseLeaveRadius-sceneMaxLeaveRadius)
+
+type partitionRuntime struct {
+	config settings.ScenePartition
+	grid   *cellworld.Grid
+	node   *cellworld.Node
+	sid    int32
+	cell   *cellworld.CellID
+	scene  *sceneentity.Scene
+	bridge *Scene
+	access *coreentity.ManagerAccess
+
+	mirrors *policy.Mirrors[cellworld.EntityState]
+	cancel  context.CancelFunc
+	done    chan struct{}
+
+	// 攻击结论（Base 侧，AttackResult 观察点）：诊断与端到端核对用的计数，不是业务状态。
+	attacksApplied, attacksDuplicate, attacksRejected, attacksUnknown atomic.Uint64
+	spawned                                                           atomic.Int64
+}
+
+// partitionPlayerMirrorMask / partitionMonsterMirrorMask：mirror 打包时写进载荷的字段（Player / Monster 的同步编码，
+// 客户端照常按 player / monster 命名空间解码，维护者 D2 = A）。
+var (
+	partitionPlayerMirrorMask  = syncMask(db.PlayerDaoSyncFields(), "PosX", "PosY", "CellHP")
+	partitionMonsterMirrorMask = syncMask(db.MonsterDaoSyncFields(), "Template", "PosX", "PosY", "HP")
+)
+
+func syncMask(fields []dataengine.SyncFieldMeta, names ...string) uint64 {
+	var mask uint64
+	for _, name := range names {
+		field, ok := dataengine.SyncFieldByName(fields, name)
+		if !ok {
+			panic(fmt.Sprintf("partition: sync field %s is not declared", name))
+		}
+		mask |= field.Bit
+	}
+	return mask
+}
+
+// startPartition builds this process's part of the partitioned scene. It runs in Init after the scene bridge started
+// and before the player owners are published, so no player can join before it is in place.
+func startPartition(registry *app.Registry, config settings.ScenePartition, area *sceneentity.Scene, bridge *Scene) (*partitionRuntime, error) {
+	grid, err := config.Grid()
+	if err != nil {
+		return nil, fmt.Errorf("partition: %w", err)
+	}
+	identity, err := settings.Identity(registry)
+	if err != nil {
+		return nil, fmt.Errorf("partition: %w", err)
+	}
+	client, ok := app.Lookup[corenest.Client](registry, mods.ModNest)
+	if !ok || client == nil {
+		return nil, errors.New("partition: nest client is unavailable")
+	}
+	access, ok := app.Lookup[*coreentity.ManagerAccess](registry, mods.ModEntityRuntime)
+	if !ok || access == nil || access.Manager() == nil {
+		return nil, errors.New("partition: entity runtime is unavailable")
+	}
+	nats, ok := app.Lookup[fnats.IClient](registry, mods.ModNats)
+	if !ok || nats == nil {
+		return nil, errors.New("partition: nats client is unavailable")
+	}
+	rt := &partitionRuntime{config: config, grid: grid, sid: identity.Sid, scene: area, bridge: bridge, access: access}
+	rt.mirrors, err = policy.NewMirrors(policy.MirrorConfig[cellworld.EntityState]{
+		Manager: bridge.manager, Interest: bridge.interest, TTL: partitionMirrorTTL,
+		Position: func(s cellworld.EntityState) spatial.Point { return s.Pos() },
+		Snapshot: rt.packMirror,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("partition: mirrors: %w", err)
+	}
+	manager := access.Manager()
+	cfg := cellworld.NodeConfig{
+		World: config.World, SID: identity.Sid, Grid: grid, Transport: cellworld.NATSTransport(nats), Nest: client,
+		Destroy: func(ctx context.Context, e coreentity.IThreadSafeEntity) error {
+			return manager.Destroy(ctx, e, coreentity.DestroyReasonCommon, false)
+		},
+		// 不在内存的 SceneActor / Monster 不进 Nest 的加锁集合：DataEngine 的 getter 会把它们当成“聚合不存在”。
+		Loaded: func(id int64) bool { return manager.Get(id) != nil },
+		Scene:  area.ID(), CreateActor: rt.createActor,
+		ViewRadius: config.ViewRadius, WakeRadius: config.WakeRadius, IdlePeriod: config.IdlePeriod,
+		MaxSpeed: config.MaxSpeed, LeaseTimeout: config.LeaseTimeout, WritebackEvery: config.WritebackEvery,
+		PlayerEntity: func(actorID int64) int64 {
+			id, _ := coreentity.BuildEntityID(coreentity.GetUniqueIDFromEntityID(actorID), player.EntityKindPlayer)
+			return id
+		},
+		Mirrors: rt.mirrors, Interest: bridge.interest,
+		Session:    coreentity.GetUniqueIDFromEntityID,
+		MirrorKind: partitionMirrorKind,
+		Hooks:      cellworld.Hooks{AttackResult: rt.attackResult},
+	}
+	if cell, isCell := grid.CellOf(identity.Sid); isCell {
+		rt.cell = &cell
+		cfg.Cell = &cell
+	}
+	node, err := cellworld.NewNode(cfg)
+	if err != nil {
+		rt.mirrors.Close()
+		return nil, fmt.Errorf("partition: %w", err)
+	}
+	rt.node = node
+	partition.Install(node, area.ID())
+	// Nest 引擎在 Mod 阶段已经启动，实例注册表不再收 handler；包级注册表在派发时解析（见 nest.getHandlerEntry），
+	// 一个进程只有一个 Node，handler 名不会重复。
+	node.RegisterHandlers(packageHandlers{})
+	if rt.cell != nil {
+		if err := area.HostCell(node.Config().Period); err != nil {
+			rt.stop()
+			return nil, fmt.Errorf("partition: %w", err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rt.cancel, rt.done = cancel, make(chan struct{})
+	go func() {
+		defer close(rt.done)
+		if err := node.Run(ctx); err != nil {
+			slog.Error("partition: node stopped", "err", err)
+		}
+	}()
+	select {
+	case <-node.Ready():
+	case <-rt.done:
+		partition.Uninstall(node)
+		return nil, errors.New("partition: node did not start")
+	}
+	if rt.cell != nil {
+		if err := rt.spawnMonsters(ctx); err != nil {
+			rt.stop()
+			return nil, err
+		}
+	}
+	slog.Info("partition: this process joined the partitioned scene", "sid", identity.Sid, "cell", rt.cell, "world", config.World, "bounds", grid.Bounds())
+	return rt, nil
+}
+
+// packageHandlers 把 Node 的 handler 装进 Nest 的包级注册表（引擎启动之后的注册路径）。
+type packageHandlers struct{}
+
+func (packageHandlers) MustRegisterHandlerWithMeta(name corenest.HandlerName, handler corenest.BaseHandler, meta corenest.HandlerMeta) {
+	corenest.MustRegisterHandlerWithMeta(name, handler, meta)
+}
+
+// stop takes the Node down: no more messages are taken or sent. The entities go with the process (ephemeral).
+func (rt *partitionRuntime) stop() {
+	if rt == nil {
+		return
+	}
+	if rt.cancel != nil {
+		rt.cancel()
+		<-rt.done
+	}
+	if rt.node != nil {
+		partition.Uninstall(rt.node)
+	}
+	if rt.mirrors != nil {
+		rt.mirrors.Close()
+	}
+}
+
+// createActor 在 Node 的 handler 里新建 SceneActor（玩家）或 Monster（NPC）：EntityManager.Create 在 handler 内即
+// CreateInScope，由事务捕获，回滚就撤销发布。实体按 partition.CellMode 登记格内心跳。
+func (rt *partitionRuntime) createActor(id int64, kind cellworld.EntityKind) (cellworld.Actor, error) {
+	want := monster.EntityKindMonster
+	if kind == cellworld.KindPlayer {
+		want = scene_actor.EntityKindSceneActor
+	}
+	if got := coreentity.GetEntityKindFromID(id); got != want {
+		return nil, fmt.Errorf("partition: entity %d is kind %d, want %d", id, got, want)
+	}
+	e, err := rt.access.Create(&coreentity.EntityCreateParam{
+		IsCreate: true, Id: id, Kind: want, Category: coreentity.EntityCategoryOther, Param: partition.CellMode{},
+	})
+	if err != nil {
+		return nil, err
+	}
+	actor, ok := e.(cellworld.Actor)
+	if !ok {
+		return nil, fmt.Errorf("partition: entity %T is not a cell actor", e)
+	}
+	return actor, nil
+}
+
+// spawnMonsters 刷满本格的刷怪点（按格的刷怪表：只刷落在本格里的点与只）。Monster ID 的序号从启动时刻起算：
+// 一只从本格走到邻格的怪活得比本进程长，重启后的本进程不能再发出它的 ID（runtimeid.NewStartingAt）。原型不补刷：
+// 死了的怪留在原地（HP 0），被交接走的不回原格补（FEATURE §10 缺口）。
+func (rt *partitionRuntime) spawnMonsters(ctx context.Context) error {
+	start := (time.Now().Unix() - partitionEpoch) << 6
+	ids, err := runtimeid.NewStartingAt(rt.sid, max(start, 0))
+	if err != nil {
+		return fmt.Errorf("partition: %w", err)
+	}
+	rect := rt.grid.Rect(*rt.cell)
+	names := make([]string, 0, len(rt.config.Spawns))
+	for name := range rt.config.Spawns {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		point := rt.config.Spawns[name]
+		for i := range point.Count {
+			at := spatial.Point{X: point.X + int64(i)*point.Spread, Y: point.Y}
+			if !rect.Contains(at) {
+				continue
+			}
+			unique, err := ids.Next()
+			if err != nil {
+				return fmt.Errorf("partition: %w", err)
+			}
+			id, err := coreentity.BuildEntityID(unique, monster.EntityKindMonster)
+			if err != nil {
+				return fmt.Errorf("partition: %w", err)
+			}
+			if err := rt.node.Spawn(ctx, cellworld.EntityState{ID: id, X: at.X, Y: at.Y, VX: point.VX, VY: point.VY, HP: point.HP}); err != nil {
+				return fmt.Errorf("partition: spawn %s #%d: %w", name, i, err)
+			}
+			rt.spawned.Add(1)
+		}
+	}
+	slog.Info("partition: monsters spawned in this cell", "cell", rt.cell, "count", rt.spawned.Load())
+	return nil
+}
+
+// partitionEpoch 是 Monster ID 序号起点的时间原点（2026-01-01 UTC）：每秒 64 个序号，34 位序号够用约 8 年。
+const partitionEpoch = 1767225600
+
+// partitionMirrorKind 给出 mirror 在帧上的命名空间与 kind：玩家的 SceneActor 是 player（D2 = A：客户端不变），
+// NPC 是 monster。
+func partitionMirrorKind(s cellworld.EntityState) (string, uint32) {
+	if s.Kind == cellworld.KindPlayer {
+		return player.SyncNamespacePlayer, uint32(player.EntityKindPlayer)
+	}
+	return monster.SyncNamespaceMonster, uint32(monster.EntityKindMonster)
+}
+
+// packMirror 把 witness 里的一个对象打成客户端认识的载荷：玩家用 PlayerDao 的同步编码（位置与 HP），怪用
+// MonsterDao 的（模板、位置与 HP）。直接填生成的同步补丁（db.SyncPlayerDao / db.SyncMonsterDao）再编码，不经 DAO 的
+// setter：这些对象不是本进程的实体，setter 会把持久字段（CellHP）登记进当前上下文的事务（Manager 的打包在别人的
+// 事务上下文里运行时就是一笔已关闭的事务，2026-11-03 端到端第一轮因此 panic）。
+func (rt *partitionRuntime) packMirror(s cellworld.EntityState, _ coreentity.SyncProfile) (coreentity.FrozenSyncPayload, error) {
+	if s.Kind == cellworld.KindPlayer {
+		raw, err := db.MarshalSyncPlayerDao(&db.SyncPlayerDao{
+			EntityID: s.ID, SyncFormat: playerSyncFormat,
+			PosX: &db.SyncPlayerDaoPosXField{Value: s.X}, PosY: &db.SyncPlayerDaoPosYField{Value: s.Y},
+			CellHP: &db.SyncPlayerDaoCellHPField{Value: int64(s.HP)},
+		})
+		return coreentity.TakeFrozenSyncPayload(player.PlayerSyncCodec, raw), err
+	}
+	raw, err := db.MarshalSyncMonsterDao(&db.SyncMonsterDao{
+		EntityID: s.ID, SyncFormat: monsterSyncFormat,
+		Template: &db.SyncMonsterDaoTemplateField{Value: rt.config.MonsterTemplate},
+		PosX:     &db.SyncMonsterDaoPosXField{Value: s.X}, PosY: &db.SyncMonsterDaoPosYField{Value: s.Y},
+		HP: &db.SyncMonsterDaoHPField{Value: int64(s.HP)},
+	})
+	return coreentity.TakeFrozenSyncPayload(monster.MonsterSyncCodec, raw), err
+}
+
+// playerSyncFormat / monsterSyncFormat 是生成同步编码的格式号，从一份空 DAO 的编码里读出（不在这里写死生成器的常量）。
+var (
+	playerSyncFormat = func() uint32 {
+		patch, err := db.UnmarshalSyncPlayerDao(db.NewPlayerDao().MarshalSync(partitionPlayerMirrorMask))
+		if err != nil {
+			panic(fmt.Sprintf("partition: player sync format: %v", err))
+		}
+		return patch.SyncFormat
+	}()
+	monsterSyncFormat = func() uint32 {
+		patch, err := db.UnmarshalSyncMonsterDao(db.NewMonsterDao().MarshalSync(partitionMonsterMirrorMask))
+		if err != nil {
+			panic(fmt.Sprintf("partition: monster sync format: %v", err))
+		}
+		return patch.SyncFormat
+	}()
+)
+
+// attackResult 是 Base 收到的攻击结论（提交之后、不阻塞）：计数并记日志。客户端看 HP 的变化从同步来。
+func (rt *partitionRuntime) attackResult(r cellworld.AttackResult) {
+	switch {
+	case r.Outcome == cellworld.OutcomeApplied && r.Duplicate:
+		rt.attacksDuplicate.Add(1)
+	case r.Outcome == cellworld.OutcomeApplied:
+		rt.attacksApplied.Add(1)
+	case r.Outcome == cellworld.OutcomeUnknown:
+		rt.attacksUnknown.Add(1)
+	default:
+		rt.attacksRejected.Add(1)
+	}
+	slog.Debug("partition: attack concluded", "attacker", r.Hit.Attacker, "seq", r.Hit.Seq, "target", r.Target,
+		"outcome", r.Outcome.String(), "reason", r.Reason, "duplicate", r.Duplicate, "hp", r.HP)
+}
+
+// ---- 端点用的能力（PartitionCapability）----
+
+func partitionPlayer(playerID int64) (int64, error) {
+	return coreentity.BuildEntityID(playerID, player.EntityKindPlayer)
+}
+
+// MoveIntent forwards a velocity to the cell that owns the player now (one transaction on the Player).
+func (rt *partitionRuntime) MoveIntent(ctx context.Context, playerID, vx, vy int64) error {
+	entityID, err := partitionPlayer(playerID)
+	if err != nil {
+		return err
+	}
+	return rt.node.Move(ctx, entityID, vx, vy)
+}
+
+// AttackTarget sends one fixed-damage attack (scene.partition.attack_damage) and returns its sequence.
+func (rt *partitionRuntime) AttackTarget(ctx context.Context, playerID, target int64) (uint64, error) {
+	entityID, err := partitionPlayer(playerID)
+	if err != nil {
+		return 0, err
+	}
+	if target == 0 {
+		return 0, apperrors.ErrPartitionNotEntered
+	}
+	hit, err := rt.node.Attack(ctx, entityID, target, rt.config.AttackDamage)
+	if err != nil {
+		return 0, err
+	}
+	return hit.Seq, nil
+}
+
+// enter 让玩家以自己的 SceneActor 进入分区场景（场景桥的 Join 在会话开好之后调）。已经在里面（重连）时不动：
+// Base 的 Interest 里仍有他，新会话由 Resubscribe 拿到快照。位置取 Player 的快照（在世界里时），否则取 spawn。
+func (rt *partitionRuntime) enter(ctx context.Context, playerEntity int64) error {
+	st, err := rt.node.BaseStateOf(ctx, playerEntity)
+	if err != nil {
+		return err
+	}
+	if st.InWorld {
+		return nil
+	}
+	actor, err := coreentity.BuildEntityID(coreentity.GetUniqueIDFromEntityID(playerEntity), scene_actor.EntityKindSceneActor)
+	if err != nil {
+		return err
+	}
+	at := spatial.Point{X: rt.config.SpawnX, Y: rt.config.SpawnY}
+	if pos := st.Pos(); pos != (spatial.Point{}) && rt.grid.Bounds().Contains(pos) {
+		at = pos
+	}
+	return rt.node.Enter(ctx, playerEntity, actor, at, rt.config.PlayerHP)
+}
+
+// leave 让玩家离开分区场景（尽力而为：消息丢了由 SceneActor 的租约兜底离场）。
+func (rt *partitionRuntime) leave(ctx context.Context, playerEntity int64) {
+	if err := rt.node.Leave(ctx, playerEntity); err != nil && !errors.Is(err, cellworld.ErrNotInWorld) {
+		slog.Debug("partition: player did not leave the partitioned scene", "player_entity", playerEntity, "err", err)
+	}
+}
+
+// stats 是 gm.scene.partition 的结果：本进程的格、Node 计数、Base 侧攻击结论、mirror 计数，Cell 还带区域表快照。
+func (rt *partitionRuntime) stats(ctx context.Context) (map[string]any, error) {
+	out := map[string]any{
+		"sid": rt.sid, "node": rt.node.Stats(), "mirrors": rt.mirrors.Stats(), "mirrors_held": rt.mirrors.Len(),
+		"attacks": map[string]uint64{
+			"applied": rt.attacksApplied.Load(), "duplicate": rt.attacksDuplicate.Load(),
+			"rejected": rt.attacksRejected.Load(), "unknown": rt.attacksUnknown.Load(),
+		},
+		"spawned": rt.spawned.Load(),
+	}
+	if rt.cell != nil {
+		out["cell"] = rt.cell.String()
+		snapshot, err := rt.node.Inspect(ctx)
+		if err != nil {
+			return nil, err
+		}
+		entities := make([]map[string]any, 0, len(snapshot))
+		for _, s := range snapshot {
+			entities = append(entities, map[string]any{
+				"id": s.State.ID, "kind": s.State.Kind, "role": s.Role, "owner": s.Owner.String(),
+				"x": s.State.X, "y": s.State.Y, "vx": s.State.VX, "vy": s.State.VY, "hp": s.State.HP, "epoch": s.State.Ver.Epoch, "idle": s.State.Idle,
+			})
+		}
+		out["entities"] = entities
+	}
+	return out, nil
+}
+
+// player state for gm.scene.partition {"player_id": …}: the Base's view of one player.
+func (rt *partitionRuntime) playerState(ctx context.Context, playerEntity int64) (map[string]any, error) {
+	st, err := rt.node.BaseStateOf(ctx, playerEntity)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"actor": st.Actor, "in_world": st.InWorld, "owner_sid": st.Cell, "epoch": st.Epoch,
+		"x": st.X, "y": st.Y, "hp": st.HP, "snapshot_epoch": st.SnapVer.Epoch, "snapshot_seq": st.SnapVer.Seq,
+		"intent_seq": st.IntentSeq, "attack_seq": st.AttackSeq,
+		"view_age_ms": ageMillis(st.LastViewAt), "enter_age_ms": ageMillis(st.LastEnterAt), "lease_age_ms": ageMillis(st.LastLeaseAt),
+		"enter_hint": st.EnterHint, "lost_epoch": st.LostEpoch, "shown": st.Shown,
+	}, nil
+}
+
+// ageMillis 是 UnixNano 时间戳距今的毫秒数（0 表示从未）。
+func ageMillis(at int64) int64 {
+	if at == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, at)).Milliseconds()
+}

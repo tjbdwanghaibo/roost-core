@@ -1,0 +1,35 @@
+package player
+
+import (
+	"context"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// scenePartition is the slice of the game service's partitioned scene
+// (scene.partition, internal/service/<game>/partition.go) the endpoints use.
+// It is published only on a process whose scene is partitioned, so its
+// absence is how an endpoint knows the scene is an ordinary one.
+type scenePartition interface {
+	// MoveIntent forwards a velocity to the cell that owns the player now.
+	MoveIntent(ctx context.Context, playerID, vx, vy int64) error
+	// AttackTarget sends one fixed-damage attack and returns its sequence.
+	AttackTarget(ctx context.Context, playerID, target int64) (uint64, error)
+}
+
+// partitionCapability is what the game service publishes its partitioned
+// scene under.
+const partitionCapability app.ModName = "{{GAME_SERVICE}}.scene.partition"
+
+// Partition is this process's partitioned scene, or nil when its scene is an
+// ordinary one.
+func (controller *Controller) Partition() scenePartition {
+	if controller == nil || controller.registry == nil {
+		return nil
+	}
+	partition, ok := app.Lookup[scenePartition](controller.registry, partitionCapability)
+	if !ok || partition == nil {
+		return nil
+	}
+	return partition
+}

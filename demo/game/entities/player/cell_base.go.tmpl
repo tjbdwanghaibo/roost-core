@@ -1,0 +1,58 @@
+package player
+
+import (
+	"errors"
+	"time"
+
+	"{{MODULE}}/game/partition"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+)
+
+// In a partitioned scene (scene.partition, gameplay/cellworld) the player does
+// not move between processes: this process is its Base, and its part on the
+// map is a SceneActor on the Cell process of the cell it stands in. What the
+// Base needs to follow it — which cell owns it at which epoch, the move
+// intent, the attack sequence, the watchdog times and the snapshot the
+// SceneActor writes back — is cellworld.BaseState, held in PlayerDao's Cell*
+// fields (game/partition ReadBase / WriteBase) so a handler or beat that
+// rolls back restores it. The watchdog and the lease renewal are this
+// player's own beat, "cell.base" (Node.BaseBeat).
+
+// registerCellBase registers the routing beat when this process runs a
+// partitioned scene; it is started by the Node when the player enters it.
+func (component *MapComponent) registerCellBase() error {
+	node := partition.Node()
+	if node == nil {
+		return nil
+	}
+	owner := component.owner
+	reg, err := component.host.Register("cell.base", node.Config().WatchPeriod, func(heartbeat.Beat) error {
+		if n := partition.Node(); n != nil {
+			return n.BaseBeat(owner, time.Now())
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	component.cellBase = reg
+	return nil
+}
+
+// BaseState / SetBaseState / StartBase make the player a cellworld.BasePlayer.
+// Only under the player's own Nest lock.
+func (player *Player) BaseState() cellworld.BaseState { return partition.ReadBase(player.dao) }
+
+func (player *Player) SetBaseState(st cellworld.BaseState) {
+	partition.WriteBase(player.dao, st, partition.SceneID())
+}
+
+func (player *Player) StartBase() error {
+	if player.mapComp.cellBase == nil {
+		return errors.New("player: this process runs no partitioned scene")
+	}
+	return player.mapComp.cellBase.Start()
+}
+
+var _ cellworld.BasePlayer = (*Player)(nil)

@@ -1,0 +1,71 @@
+package monster
+
+import (
+	"errors"
+	"time"
+
+	"{{MODULE}}/game/partition"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+)
+
+// A monster of a partitioned scene (scene.partition) is a walker of its cell
+// (maintainer decision D5 = A): position, velocity, HP and the idle tier,
+// moved by the cell's own beat ("cell.actor", Node.ActorBeat), handed over
+// to the next cell's process when it walks across. None of the AI, the walk
+// (movement.Move), the state set or the buffs runs: their state lives in
+// components and DAOs the handoff does not carry. GM commands that need them
+// (gm.scene.root) answer "not supported" in a partitioned scene.
+//
+// The cell state is MonsterDao's (PosX / PosY / HP and the Cell* fields),
+// mapped by game/partition with the same function the SceneActor uses.
+
+func isCellMode(param any) bool {
+	_, ok := param.(partition.CellMode)
+	return ok
+}
+
+// registerCell registers the cell beat on the monster's heartbeat host; the
+// Node starts it (StartCell) in the transaction that installs the monster.
+func (component *ActorComponent) registerCell() error {
+	node := partition.Node()
+	if node == nil {
+		return errors.New("this process runs no partitioned scene")
+	}
+	owner := component.owner
+	reg, err := component.host.Register("cell.actor", node.Config().Period, func(heartbeat.Beat) error {
+		if n := partition.Node(); n != nil {
+			return n.ActorBeat(owner, time.Now())
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	component.cell = reg
+	return nil
+}
+
+// CellState / SetCellState / StartCell / SetCellPeriod make the monster a
+// cellworld.Actor. Only under the monster's own Nest lock.
+func (monster *Monster) CellState() cellworld.ActorState {
+	return partition.ReadActor(monster.dao, monster.ID(), cellworld.KindNPC)
+}
+
+func (monster *Monster) SetCellState(st cellworld.ActorState) { partition.WriteActor(monster.dao, st) }
+
+func (monster *Monster) StartCell() error {
+	if monster.act.cell == nil {
+		return errors.New("monster: not created by the partitioned scene")
+	}
+	return monster.act.cell.Start()
+}
+
+func (monster *Monster) SetCellPeriod(period time.Duration) error {
+	if monster.act.cell == nil {
+		return errors.New("monster: not created by the partitioned scene")
+	}
+	return monster.act.cell.SetPeriod(period)
+}
+
+var _ cellworld.Actor = (*Monster)(nil)

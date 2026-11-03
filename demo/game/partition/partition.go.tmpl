@@ -1,0 +1,226 @@
+// Package partition 是分区场景（scene.partition，gameplay/cellworld）在实体一侧的接线：本进程的 cellworld.Node
+// 装在哪里、SceneActor / Monster 的 DAO 与 cellworld.ActorState 怎么互相映射、Player 的 DAO 与 cellworld.BaseState
+// 怎么互相映射。实体包（scene_actor、monster、player、scene）与 game 服务都引用它，它不引用任何实体包。
+//
+// 原型，不是现行能力：设计与取舍见 roost-core 分支 feat/seamless-world-prototype 的
+// docs/maintenance/FEATURE-2026-11-03-seamless-world.md §10。没有声明 scene.partition.enabled 的进程从不安装 Node，
+// 这里的函数也不会被调用，普通场景的行为不变。
+package partition
+
+import (
+	"sync/atomic"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+)
+
+// node 是本进程的 cellworld 端点。game 服务在 Init 里建好后 Install、Shutdown 时 Uninstall；实体的格内心跳
+// （cell.actor / scene.cell / cell.base）在回调里读它，没装（或已卸）时什么都不做。
+var (
+	node  atomic.Pointer[cellworld.Node]
+	scene atomic.Int64
+)
+
+// Install 装上本进程的 Node 与分区场景的 Scene ID（Player 的快照位置记在 SavedSceneID = 它之下）。一个进程一个。
+func Install(n *cellworld.Node, sceneID int64) {
+	scene.Store(sceneID)
+	node.Store(n)
+}
+
+// Uninstall 卸下 n（只卸自己装的那一个）。
+func Uninstall(n *cellworld.Node) { node.CompareAndSwap(n, nil) }
+
+// Node 是本进程的 Node；不是分区进程时为 nil。
+func Node() *cellworld.Node { return node.Load() }
+
+// SceneID 是分区场景的 Scene ID（Install 时给出）。
+func SceneID() int64 { return scene.Load() }
+
+// CellMode 是分区场景的 Node 在 handler 里新建 SceneActor / Monster 时的 EntityCreateParam.Param：实体据此登记
+// 格内心跳（cell.actor），Monster 也据此知道自己是“格内心跳的行者”，不启动 AI / 动作 / 移动 / 状态 / Buff
+// （维护者 2026-11-03 决定 D5 = A）。
+type CellMode struct{}
+
+// CellDao 是 SceneActorDao 与 MonsterDao 共有的那组生成读写器：两个 DAO 用同名字段承载 cellworld.ActorState，
+// 所以一份映射同时服务两种实体。
+type CellDao interface {
+	GetPosX() int64
+	SetPosX(int64)
+	GetPosY() int64
+	SetPosY(int64)
+	GetHP() int64
+	SetHP(int64)
+	GetCellVX() int64
+	SetCellVX(int64)
+	GetCellVY() int64
+	SetCellVY(int64)
+	GetCellEpoch() uint64
+	SetCellEpoch(uint64)
+	GetCellSeq() uint64
+	SetCellSeq(uint64)
+	GetCellIdle() bool
+	SetCellIdle(bool)
+	GetCellBase() int32
+	SetCellBase(int32)
+	GetCellRole() int32
+	SetCellRole(int32)
+	GetCellLastInput() uint64
+	SetCellLastInput(uint64)
+	GetCellRetryAfter() int64
+	SetCellRetryAfter(int64)
+	GetCellLeaseUntil() int64
+	SetCellLeaseUntil(int64)
+	GetCellWritebackAt() int64
+	SetCellWritebackAt(int64)
+	RangeCellApplied(func(int, db.CellHit) bool)
+	CellAppliedLen() int
+	SetCellAppliedAll([]db.CellHit)
+	GetCellHandoff() *db.CellHandoff
+	SetCellHandoff(*db.CellHandoff)
+}
+
+// ReadActor 从 DAO 读出一份 ActorState（新建的切片与指针：调用方改它不影响 DAO，cellworld 的值语义要求如此）。
+// id 与 kind 来自实体本身，不在 DAO 里。只在实体自己的 Nest 锁内调用。
+func ReadActor(d CellDao, id int64, kind cellworld.EntityKind) cellworld.ActorState {
+	st := cellworld.ActorState{
+		EntityState: cellworld.EntityState{
+			ID: id, Kind: kind, Base: d.GetCellBase(),
+			X: d.GetPosX(), Y: d.GetPosY(), VX: d.GetCellVX(), VY: d.GetCellVY(),
+			HP:   int32(d.GetHP()),
+			Ver:  cellworld.Version{Epoch: d.GetCellEpoch(), Seq: d.GetCellSeq()},
+			Idle: d.GetCellIdle(),
+		},
+		Role:        cellworld.Role(d.GetCellRole()),
+		LastInput:   d.GetCellLastInput(),
+		RetryAfter:  d.GetCellRetryAfter(),
+		LeaseUntil:  d.GetCellLeaseUntil(),
+		WritebackAt: d.GetCellWritebackAt(),
+	}
+	if n := d.CellAppliedLen(); n > 0 {
+		st.Applied = make([]cellworld.AppliedHit, 0, n)
+		d.RangeCellApplied(func(_ int, h db.CellHit) bool {
+			st.Applied = append(st.Applied, cellworld.AppliedHit{Hit: cellworld.HitID{Attacker: h.GetAttacker(), Seq: h.GetSeq()}, At: h.GetAt()})
+			return true
+		})
+	}
+	if h := d.GetCellHandoff(); h != nil {
+		st.Handoff = &cellworld.HandoffState{
+			Target: cellworld.CellID{Col: h.GetCol(), Row: h.GetRow()}, Epoch: h.GetEpoch(),
+			StartedAt: h.GetStartedAt(), LastSent: h.GetLastSent(),
+		}
+	}
+	return st
+}
+
+// WriteActor 把 st 写进 DAO，经生成 setter（每个 setter 在 rollback=undo 的事务里登记逆操作，值没变时什么都不做），
+// 所以心跳或 handler 回滚时格内状态一起还原。去重表与交接进度只在内容变化时整份替换：它们一旦写进 DAO 就不原地改
+// （回滚的逆操作引用旧值）。只在实体自己的 Nest 锁内调用。
+func WriteActor(d CellDao, st cellworld.ActorState) {
+	d.SetPosX(st.X)
+	d.SetPosY(st.Y)
+	d.SetHP(int64(st.HP))
+	d.SetCellVX(st.VX)
+	d.SetCellVY(st.VY)
+	d.SetCellEpoch(st.Ver.Epoch)
+	d.SetCellSeq(st.Ver.Seq)
+	d.SetCellIdle(st.Idle)
+	d.SetCellBase(st.Base)
+	d.SetCellRole(int32(st.Role))
+	d.SetCellLastInput(st.LastInput)
+	d.SetCellRetryAfter(st.RetryAfter)
+	d.SetCellLeaseUntil(st.LeaseUntil)
+	d.SetCellWritebackAt(st.WritebackAt)
+	if !sameApplied(d, st.Applied) {
+		hits := make([]db.CellHit, len(st.Applied))
+		for i, a := range st.Applied {
+			hits[i].SetAttacker(a.Hit.Attacker)
+			hits[i].SetSeq(a.Hit.Seq)
+			hits[i].SetAt(a.At)
+		}
+		d.SetCellAppliedAll(hits)
+	}
+	if !sameHandoff(d.GetCellHandoff(), st.Handoff) {
+		var h *db.CellHandoff
+		if p := st.Handoff; p != nil {
+			h = &db.CellHandoff{}
+			h.SetCol(p.Target.Col)
+			h.SetRow(p.Target.Row)
+			h.SetEpoch(p.Epoch)
+			h.SetStartedAt(p.StartedAt)
+			h.SetLastSent(p.LastSent)
+		}
+		d.SetCellHandoff(h)
+	}
+}
+
+func sameApplied(d CellDao, applied []cellworld.AppliedHit) bool {
+	if d.CellAppliedLen() != len(applied) {
+		return false
+	}
+	same := true
+	d.RangeCellApplied(func(i int, h db.CellHit) bool {
+		a := applied[i]
+		same = h.GetAttacker() == a.Hit.Attacker && h.GetSeq() == a.Hit.Seq && h.GetAt() == a.At
+		return same
+	})
+	return same
+}
+
+func sameHandoff(h *db.CellHandoff, p *cellworld.HandoffState) bool {
+	switch {
+	case h == nil || p == nil:
+		return h == nil && p == nil
+	default:
+		return h.GetCol() == p.Target.Col && h.GetRow() == p.Target.Row && h.GetEpoch() == p.Epoch &&
+			h.GetStartedAt() == p.StartedAt && h.GetLastSent() == p.LastSent
+	}
+}
+
+// ReadBase 从 PlayerDao 读出 Player 的分区路由状态。快照位置取 PosX / PosY（实时，随 witness 更新）；HP 与快照版本
+// 取持久的 CellHP / CellSnapEpoch / CellSnapSeq：Base 重启后 Enter 以它们为准重建 SceneActor。
+func ReadBase(d *db.PlayerDao) cellworld.BaseState {
+	return cellworld.BaseState{
+		Actor: d.GetCellActor(), InWorld: d.GetCellInWorld(),
+		Cell: d.GetCellOwner(), Epoch: d.GetCellEpoch(),
+		X: d.GetPosX(), Y: d.GetPosY(), HP: int32(d.GetCellHP()),
+		SnapVer:   cellworld.Version{Epoch: d.GetCellSnapEpoch(), Seq: d.GetCellSnapSeq()},
+		IntentSeq: d.GetCellIntentSeq(), VX: d.GetCellVX(), VY: d.GetCellVY(),
+		AttackSeq:  d.GetCellAttackSeq(),
+		LastViewAt: d.GetCellViewAt(), LastEnterAt: d.GetCellEnterAt(), LastLeaseAt: d.GetCellLeaseAt(),
+		EnterHint: d.GetCellHint(), LostEpoch: d.GetCellLostEpoch(), LostAt: d.GetCellLostAt(),
+		Shown: d.GetCellShown(), ShownGen: d.GetCellShownGen(),
+	}
+}
+
+// WriteBase 把 st 写进 PlayerDao（生成 setter：回滚即还原；持久字段随这笔事务进 WAL）。快照版本前进（Base 接受了
+// 一次回写）时，同一笔事务里把位置写进持久的 SavedPosX / SavedPosY / SavedSceneID：回写是“固定时机”，witness
+// 不是——实时位置只写不持久的 PosX / PosY。sceneID 是分区场景的 Scene ID。
+func WriteBase(d *db.PlayerDao, st cellworld.BaseState, sceneID int64) {
+	snapshot := st.SnapVer != (cellworld.Version{Epoch: d.GetCellSnapEpoch(), Seq: d.GetCellSnapSeq()})
+	d.SetCellActor(st.Actor)
+	d.SetCellInWorld(st.InWorld)
+	d.SetCellOwner(st.Cell)
+	d.SetCellEpoch(st.Epoch)
+	d.SetPosX(st.X)
+	d.SetPosY(st.Y)
+	d.SetCellHP(int64(st.HP))
+	d.SetCellSnapEpoch(st.SnapVer.Epoch)
+	d.SetCellSnapSeq(st.SnapVer.Seq)
+	d.SetCellIntentSeq(st.IntentSeq)
+	d.SetCellVX(st.VX)
+	d.SetCellVY(st.VY)
+	d.SetCellAttackSeq(st.AttackSeq)
+	d.SetCellViewAt(st.LastViewAt)
+	d.SetCellEnterAt(st.LastEnterAt)
+	d.SetCellLeaseAt(st.LastLeaseAt)
+	d.SetCellHint(st.EnterHint)
+	d.SetCellLostEpoch(st.LostEpoch)
+	d.SetCellLostAt(st.LostAt)
+	d.SetCellShown(st.Shown)
+	d.SetCellShownGen(st.ShownGen)
+	if snapshot {
+		d.SetSavedSceneID(sceneID)
+		d.SetSavedPosX(st.X)
+		d.SetSavedPosY(st.Y)
+	}
+}

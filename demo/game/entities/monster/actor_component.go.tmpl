@@ -60,6 +60,11 @@ type ActorComponent struct {
 	combat   *combatcomponent.CombatComponent
 	// combatBeats counts the buff heartbeat's beats (tests, diagnostics).
 	combatBeats atomic.Int64
+	// cell is the partitioned scene's beat ("cell.actor", gameplay/cellworld
+	// Node.ActorBeat): registered only for a monster the partitioned scene's
+	// Node created (partition.CellMode), started by the Node in the
+	// transaction that installs the monster. Nil in an ordinary scene.
+	cell *heartbeat.Reg
 }
 
 // IActorEntity is the narrow lock-safe view for Nest handlers that drive a
@@ -126,6 +131,15 @@ func (component *ActorComponent) OnInitFinish(param *entity.EntityCreateParam, i
 		OnBeat: func(combatcomponent.BuffBeat) error { component.combatBeats.Add(1); return nil },
 	}); err != nil {
 		return fmt.Errorf("actor component: %w", err)
+	}
+	// A walker of a partitioned scene (maintainer decision D5 = A): the
+	// parts above are built but never started — Spawn is not called, so the
+	// AI has no strategy, no walk begins and no buff is applied — and the one
+	// beat that moves it is the cell's (cell.go).
+	if param != nil && isCellMode(param.Param) {
+		if err := component.registerCell(); err != nil {
+			return fmt.Errorf("actor component: %w", err)
+		}
 	}
 	if err := component.combat.BindStates(component.states, combatcomponent.StateBinding{State: actor.Rooted, Tags: []combat.Tag{actor.TagRoot}}); err != nil {
 		return fmt.Errorf("actor component: %w", err)

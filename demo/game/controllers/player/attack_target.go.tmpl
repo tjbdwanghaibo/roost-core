@@ -1,0 +1,43 @@
+package player
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+
+	playeraccess "{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleAttackTarget sends one fixed-damage attack in a partitioned scene
+// (maintainer decision D7 = A) and answers with its sequence as soon as the
+// Player's transaction recorded it. The verdict is asynchronous: the
+// attacker's cell checks view and range, the target's cell — across the
+// border when the target is — applies the damage once per sequence however
+// often the request is retried, and the HP change reaches every client that
+// sees the target through the replicated state.
+func (controller *Controller) HandleAttackTarget(context *playeraccess.Context, request *pb.AttackTargetRequest) (*pb.AttackTargetResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("attack_target endpoint: context and request are required")
+	}
+	partition := controller.Partition()
+	if partition == nil {
+		code, reason := errcode.ClientError(apperrors.ErrSceneNotPartitioned)
+		return &pb.AttackTargetResponse{Code: code, Reason: reason}, nil
+	}
+	seq, err := partition.AttackTarget(context.Context(), context.PlayerID, request.Target)
+	if err != nil {
+		if errors.Is(err, cellworld.ErrNotInWorld) {
+			err = apperrors.ErrPartitionNotEntered
+		}
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("attack_target failed", "player_id", context.PlayerID, "target", request.Target, "err", err)
+		}
+		return &pb.AttackTargetResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.AttackTargetResponse{Seq: seq}, nil
+}

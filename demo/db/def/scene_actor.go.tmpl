@@ -1,0 +1,46 @@
+package dbdef
+
+// SceneActorDao 是玩家在分区场景里那一部分（SceneActor，gameplay/cellworld）的格内状态。
+//
+// 分区场景（scene.partition，见 game/settings）里玩家不迁移：Player 留在自己 sid 的 Base 进程，
+// 玩家所在格的 Cell 进程上有一个不持久的 SceneActor 实体代表他，跨格交接时整份状态随交接走
+// （ID = BuildEntityID(玩家 ID, SceneActor)，交接前后不变）。这里就是那“整份状态”：
+// cellworld.ActorState 的每个字段对应一个生成字段，game/partition 的 ReadActor / WriteActor
+// 做映射（只写变化了的字段）。字段在生成 DAO 里，是为了让生成 setter 登记逆操作：心跳或
+// handler 的事务回滚时状态一起还原（维护者 2026-11-03 决定 D8 = A，不用手写 DAO 或字节字段）。
+//
+// 全部 `nopersist,nosync`：Cell 进程崩溃后由 Base 按 Player 的快照重建 SceneActor，这里没有
+// 值得存的东西；客户端看到的是 Base 进程上的 Sync mirror（player 命名空间与 Player 的同步
+// 编码，D2 = A），不是这个实体本身。`nocoll`：没有集合，只生成读写器、回滚快照。
+//
+// Monster 的格内状态用同名字段（MonsterDao 的 Cell* 与 PosX / PosY / HP），两者共用一份映射；嵌套类型 CellHit /
+// CellHandoff 定义在 monster.go（Monster 的定义先于本文件写进工程，生成步骤按顺序刷新）。
+//
+//roost:dao nocoll
+type SceneActorDao struct {
+	PosX int64 `dao:"nopersist,nosync" store:"pos_x"`
+	PosY int64 `dao:"nopersist,nosync" store:"pos_y"`
+	HP   int64 `dao:"nopersist,nosync" store:"hp"`
+	// CellVX / CellVY 是速度（单位 / 秒）：玩家由 MoveIntent 设定，Cell 每拍积分。
+	CellVX int64 `dao:"nopersist,nosync" store:"cell_vx"`
+	CellVY int64 `dao:"nopersist,nosync" store:"cell_vy"`
+	// CellEpoch / CellSeq 是状态版本（cellworld.Version）：epoch 每次交接 +1，seq 单调。
+	CellEpoch uint64 `dao:"nopersist,nosync" store:"cell_epoch"`
+	CellSeq   uint64 `dao:"nopersist,nosync" store:"cell_seq"`
+	// CellIdle：NPC 在慢档（D1）；玩家恒为 false。
+	CellIdle bool `dao:"nopersist,nosync" store:"cell_idle"`
+	// CellBase 是玩家 Base 进程的 sid（NPC 为 0）。
+	CellBase int32 `dao:"nopersist,nosync" store:"cell_base"`
+	// CellRole 是 cellworld.Role：none / real / frozen / gone。
+	CellRole int32 `dao:"nopersist,nosync" store:"cell_role"`
+	// CellLastInput 是已应用的移动意图序号；CellRetryAfter 是交接被拒后的退避截止；
+	// CellLeaseUntil 是租约截止（Base 消失后自行离场）；CellWritebackAt 是下一次定时回写。
+	CellLastInput   uint64 `dao:"nopersist,nosync" store:"cell_last_input"`
+	CellRetryAfter  int64  `dao:"nopersist,nosync" store:"cell_retry_after"`
+	CellLeaseUntil  int64  `dao:"nopersist,nosync" store:"cell_lease_until"`
+	CellWritebackAt int64  `dao:"nopersist,nosync" store:"cell_writeback_at"`
+	// CellApplied 是伤害去重表（HitID → 结算时间），随交接带走：重复、迟到、改投新 owner 的伤害只结算一次。
+	CellApplied []CellHit `dao:"nopersist,nosync" store:"cell_applied"`
+	// CellHandoff 是冻结中的交接（目标格、epoch、开始与上次发送时间）；Real 时为 nil。
+	CellHandoff *CellHandoff `dao:"nopersist,nosync" store:"cell_handoff"`
+}
