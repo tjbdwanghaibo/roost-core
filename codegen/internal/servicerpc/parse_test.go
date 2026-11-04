@@ -989,13 +989,159 @@ func TestAShardKeyIsValidated(t *testing.T) {
 	}
 }
 
-// 生成侧还没有按槽位路由的客户端时，shard= 方法生成失败、写明原因，不生成一个发队列组的客户端。
-func TestAShardMethodIsNotGeneratedAsAQueueGroupCall(t *testing.T) {
+// shard= 必须改变生成的客户端把调用发往何处（联盟服务方案阶段 2 接阶段 1）：编译生成的包，对着记录型总线跑——
+// 按槽位表 CallTo 槽位的 sid；服务端答复改投时改投一次；handler 把 servicerpc.Redirect 的 owner 写进响应；
+// ClientMod 从 alliance.slots / alliance.shards 读表，缺表时 Init 拒绝。
+func TestAShardMarkerRoutesTheGeneratedClientBySlot(t *testing.T) {
 	services, err := ParseDir(writeDir(t, shardedService))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Generate(services[0]); err == nil || !strings.Contains(err.Error(), "shard=allianceID") {
-		t.Fatalf("a shard= method must not generate a queue-group client, got %v", err)
+	files, err := Generate(services[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := map[string]string{
+		"alliance.go": shardedService,
+		"run.go": "package alliance\n\nimport (\n\t\"context\"\n\n\t\"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc\"\n)\n\n" +
+			"func (s *Server) run(ctx context.Context) error { <-ctx.Done(); return nil }\n\n" +
+			"func Error(err error) (int32, string) { return servicerpc.Error(err) }\n",
+		"slot_test.go": shardRoutingTest,
+	}
+	for _, file := range files {
+		sources[file.Name] = string(file.Content)
+	}
+	runGeneratedPackageTests(t, sources)
+}
+
+// shardRoutingTest runs inside the generated package. Join carries shard=allianceID.
+const shardRoutingTest = `package alliance
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+)
+
+// slotBus records CallTo sids; redirectFrom answers its first call with a redirect to redirectTo.
+type slotBus struct {
+	bus.IBus
+	mu           sync.Mutex
+	sids         []int32
+	redirectFrom int32
+	redirectTo   int32
+}
+
+func (b *slotBus) CallTo(_ context.Context, _ string, sid int32, _ string, _ any, resp any) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sids = append(b.sids, sid)
+	if sid == b.redirectFrom {
+		out := resp.(*rpcJoinResponse)
+		out.Code, out.Reason, out.RedirectSid = errcode.CodeRedirect, "not the owner", b.redirectTo
+	}
+	return nil
+}
+
+func (b *slotBus) Call(context.Context, string, string, any, any) error {
+	return errors.New("a shard= method must not go to the queue group")
+}
+
+func table(t *testing.T) *servicerpc.SlotTable {
+	t.Helper()
+	slots, err := servicerpc.ParseSlotTable(256, []string{"3000:0-127", "3001:128-255"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slots
+}
+
+func TestJoinGoesToTheSlotOwnerAndFollowsOneRedirect(t *testing.T) {
+	recorder := &slotBus{}
+	client, err := NewBusClient(recorder, "", 0, table(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, id := range []int64{5, 200, 256 + 5} {
+		if _, err := client.Join(ctx, "r", id, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := recorder.sids; len(got) != 3 || got[0] != 3000 || got[1] != 3001 || got[2] != 3000 {
+		t.Fatalf("Join routed to %v, want the slot owners [3000 3001 3000]", got)
+	}
+	redirected := &slotBus{redirectFrom: 3000, redirectTo: 3001}
+	client, err = NewBusClient(redirected, "", 0, table(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Join(ctx, "r", 5, 1); err != nil {
+		t.Fatalf("Join after a redirect: %v", err)
+	}
+	if got := redirected.sids; len(got) != 2 || got[0] != 3000 || got[1] != 3001 {
+		t.Fatalf("redirected Join went to %v, want [3000 3001]", got)
+	}
+	if _, err := NewBusClient(recorder, "", 0, nil); err == nil {
+		t.Fatal("a shard client without a slot table was accepted")
 	}
 }
+
+type ownerElsewhere struct{}
+
+func (ownerElsewhere) Join(context.Context, string, int64, int64) (uint64, error) {
+	return 0, servicerpc.Redirect(3001, errors.New("fenced"))
+}
+
+type handlerBus struct {
+	bus.IBus
+	handlers map[string]bus.RpcHandlerFunc
+}
+
+func (b *handlerBus) HandleRpc(method string, handler bus.RpcHandlerFunc) error {
+	b.handlers[method] = handler
+	return nil
+}
+
+func TestTheHandlerPutsTheOwnerIntoTheResponse(t *testing.T) {
+	b := &handlerBus{handlers: map[string]bus.RpcHandlerFunc{}}
+	if err := RegisterHandlers(b, ownerElsewhere{}); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := bus.MessagePackCodec{}.Marshal(rpcJoinRequest{RequestID: "r", AllianceID: 5, PlayerID: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := b.handlers[MethodJoin](bus.NewRPCContext(context.Background(), MethodJoin, payload, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := out.(rpcJoinResponse)
+	if resp.Code != errcode.CodeRedirect || resp.RedirectSID() != 3001 {
+		t.Fatalf("handler answered code %d redirect %d, want CodeRedirect to 3001", resp.Code, resp.RedirectSID())
+	}
+}
+
+func TestClientModReadsTheSlotTable(t *testing.T) {
+	cfg := viper.New()
+	if err := NewClientMod().Init(cfg); err == nil {
+		t.Fatal("ClientMod without alliance.slots / alliance.shards was accepted")
+	}
+	cfg.Set("alliance.slots", 256)
+	cfg.Set("alliance.shards", []string{"3000:0-255"})
+	if err := NewClientMod().Init(cfg); err != nil {
+		t.Fatalf("ClientMod with a slot table: %v", err)
+	}
+	cfg.Set("alliance.shards", []string{"3000:0-100"})
+	if err := NewClientMod().Init(cfg); err == nil || !strings.Contains(err.Error(), "alliance") {
+		t.Fatalf("a table that leaves slots uncovered was accepted: %v", err)
+	}
+}
+`

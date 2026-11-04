@@ -110,6 +110,16 @@ type {{.Response}} struct {
 	rpcStatus
 {{range .ResponseFields}}	{{.}}
 {{end}}}
+{{if .Shard}}
+// RedirectSID implements servicerpc.RedirectProvider: a "not the owner" answer
+// carries the owner's sid, and the client redirects to it once.
+func (r {{.Response}}) RedirectSID() int32 { return r.RedirectSid }
+{{end}}{{end}}{{if .AnyShard}}
+// redirectSID is the owner sid of a servicerpc.Redirect answer, 0 otherwise.
+func redirectSID(err error) int32 {
+	sid, _ := servicerpc.RedirectSID(err)
+	return sid
+}
 {{end}}
 // --- server ---
 
@@ -133,8 +143,8 @@ func RegisterHandlers(b bus.IBus, service {{.Iface}}) error {
 				return {{.Response}}{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
 			}
 			{{if .HasResults}}{{range $i, $r := .Results}}{{if $i}}, {{end}}{{$r.Name}}{{end}}, err := service.{{.Name}}({{.CallArgs}})
-			return {{.Response}}{rpcStatus: statusOf(err), {{.ResultFields}}}, nil{{else}}err := service.{{.Name}}({{.CallArgs}})
-			return {{.Response}}{rpcStatus: statusOf(err)}, nil{{end}}
+			return {{.Response}}{rpcStatus: statusOf(err), {{.ResultFields}}{{if .Shard}}, RedirectSid: redirectSID(err){{end}}}, nil{{else}}err := service.{{.Name}}({{.CallArgs}})
+			return {{.Response}}{rpcStatus: statusOf(err){{if .Shard}}, RedirectSid: redirectSID(err){{end}}}, nil{{end}}
 		},
 {{end}}	}
 	// Registered against Methods rather than by ranging the map, so a method
@@ -168,6 +178,11 @@ const DefaultCallTimeout = 3 * time.Second
 // implementation detail.
 type BusClient struct {
 	rpc *servicerpc.BusClient
+{{- if .AnyShard}}
+	// slots routes the shard= methods: slot of the key → sid. A routing hint;
+	// the instance that is not the owner answers a redirect.
+	slots *servicerpc.SlotTable
+{{- end}}
 }
 
 {{if .AnyAffinity}}// AffinityMethods are the methods that route by an affinity key: every call
@@ -211,6 +226,28 @@ func NewBusClient(b bus.IBus, discovery fetcd.IDiscovery, serviceType string, ti
 	}, opts...)
 	return &BusClient{rpc: servicerpc.NewDiscoveredBusClient(b, serviceType, timeout, discovery, options...)}, nil
 }
+{{else if .AnyShard}}// NewBusClient builds a client. serviceType empty means ServiceType; timeout
+// non-positive means DefaultCallTimeout.
+//
+// slots is required: the shard= methods go to the sid the slot table names
+// for the key's slot (servicerpc.SlotTableConfig, read by ClientMod from
+// {{.ServiceType}}.slots / {{.ServiceType}}.shards). Without it the call
+// could only go to the queue group, i.e. to an instance that is not the owner.
+func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, slots *servicerpc.SlotTable, opts ...servicerpc.Option) (*BusClient, error) {
+	if b == nil {
+		return nil, fmt.Errorf("{{.Package}}: bus is nil")
+	}
+	if slots == nil {
+		return nil, fmt.Errorf("{{.Package}}: slot table is nil; shard= methods route by it")
+	}
+	if serviceType == "" {
+		serviceType = ServiceType
+	}
+	if timeout <= 0 {
+		timeout = DefaultCallTimeout
+	}
+	return &BusClient{rpc: servicerpc.NewBusClient(b, serviceType, timeout, opts...), slots: slots}, nil
+}
 {{else}}// NewBusClient builds a client. serviceType empty means ServiceType; timeout
 // non-positive means DefaultCallTimeout.
 func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
@@ -245,6 +282,18 @@ func (c *BusClient) callByAffinity(ctx context.Context, method string, req any, 
 	}
 	return c.rpc.CallDiscoveredChecked(ctx, method, req, resp, "{{.ServiceType}} call failed")
 }
+{{end}}{{if .AnyShard}}
+// callBySlot sends a shard= method to the sid the slot table names for key's
+// slot, and redirects once when that instance answers it is not the owner
+// (servicerpc.CallSlotChecked). key is the business number that encodes the
+// slot (an entity's unique id, not the full entity id). Classify the error
+// with servicerpc.Classify: OK / Rejected / Retryable / Unknown.
+func (c *BusClient) callBySlot(ctx context.Context, key int64, method string, req any, resp any) error {
+	if c == nil || c.rpc == nil {
+		return fmt.Errorf("{{.Package}}: client is not configured")
+	}
+	return c.rpc.CallSlotChecked(ctx, c.slots, key, method, req, resp, "{{.ServiceType}} call failed")
+}
 {{end}}{{range .Methods}}
 {{range .Doc}}{{.}}
 {{end}}// {{.Name}} implements {{$.Iface}}.
@@ -253,8 +302,11 @@ func (c *BusClient) {{.Name}}(ctx context.Context{{if .ParamList}}, {{.ParamList
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, {{.Affinity}})
 {{end}}	var resp {{.Response}}
-	err := c.{{if .Affinity}}callByAffinity{{else}}call{{end}}(ctx, {{.Const}}, {{.Wire}}{
-{{range .Params}}		{{exportName .Name}}: {{.Name}},
+{{if .Shard}}	// Routed by the slot of {{.Shard}}: the slot table names the owning
+	// instance; a stale table is corrected by one redirect.
+	err := c.callBySlot(ctx, {{.Shard}}, {{.Const}}, {{.Wire}}{
+{{else}}	err := c.{{if .Affinity}}callByAffinity{{else}}call{{end}}(ctx, {{.Const}}, {{.Wire}}{
+{{end}}{{range .Params}}		{{exportName .Name}}: {{.Name}},
 {{end}}	}, &resp)
 	return {{if .HasResults}}{{.ResultReturns}}, {{end}}err
 }
@@ -514,6 +566,9 @@ type ClientMod struct {
 
 	serviceType string
 	timeout     time.Duration
+{{- if .AnyShard}}
+	slots       *servicerpc.SlotTable
+{{- end}}
 	client      *BusClient
 }
 
@@ -556,6 +611,12 @@ type clientModConfig struct {
 	Client struct {
 		ServiceType string        ` + "`" + `config:"service_type" default:"{{.ServiceType}}" help:"bus service type the calls are addressed to"` + "`" + `
 		CallTimeout time.Duration ` + "`" + `config:"call_timeout" min:"0" help:"timeout of one call; 0 keeps DefaultCallTimeout (3s)"` + "`" + `
+{{- if .AnyShard}}
+		// {{.ServiceType}}.slots / {{.ServiceType}}.shards: the slot table the
+		// shard= methods route by. The owner reads the same keys; every
+		// process must agree (roost doctor checks the configs).
+		servicerpc.SlotTableConfig
+{{- end}}
 	} ` + "`" + `config:"{{.ServiceType}}"` + "`" + `
 }
 
@@ -576,6 +637,13 @@ func (m *ClientMod) Init(cfg *viper.Viper) error {
 		return fmt.Errorf("{{.Package}} client mod: %w", err)
 	}
 	m.transport = servicerpc.OptionsFromConfig(cfg)
+{{- if .AnyShard}}
+	slots, err := settings.Client.Table()
+	if err != nil {
+		return fmt.Errorf("{{.Package}} client mod: {{.ServiceType}}: %w", err)
+	}
+	m.slots = slots
+{{- end}}
 	m.serviceType = settings.Client.ServiceType
 	m.timeout = DefaultCallTimeout
 	if settings.Client.CallTimeout > 0 {
@@ -600,6 +668,7 @@ func (m *ClientMod) Provide(r *app.Registry) error {
 			"affinity key and need service discovery — add the etcd Mod to this process", mods.ModEtcdDiscov, AffinityMethods)
 	}
 	client, err := NewBusClient(busClient, discovery, m.serviceType, m.timeout, m.clientOptions()...)
+{{else if .AnyShard}}	client, err := NewBusClient(busClient, m.serviceType, m.timeout, m.slots, m.clientOptions()...)
 {{else}}	client, err := NewBusClient(busClient, m.serviceType, m.timeout, m.clientOptions()...)
 {{end}}	if err != nil {
 		return fmt.Errorf("{{.Package}} client mod: %w", err)

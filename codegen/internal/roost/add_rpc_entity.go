@@ -9,13 +9,14 @@ import "fmt"
 //     服务按 requestID 幂等；Result(target, requestID) 回答这笔请求的结局。
 //   - 接收端处理预算 HandleBudget：普通 Bus RPC 不把调用方截止时间带到接收端，整次处理（进 Nest、等提交确认）
 //     由接收端自己限时。
-//   - 答复四类：成功（新状态版本）、业务拒绝（业务错误码）、未执行可重试（ErrRetryLater）、结果未知
-//     （ErrResultUnknown）。classify 把框架错误归到后两类。
+//   - 答复四类用框架的约定（阶段 1）：写的错误经 wiring/remoteentity.RPCWriteAnswer 转成答复——未执行可重试是
+//     errcode.CodeRetryable、不是 owner 是 CodeRedirect（带 owner sid），结果未知原样返回；调用方用
+//     servicerpc.Classify 分成 OK / Rejected / Retryable / Unknown。项目不再自己分配这两类错误码。
 //
 // 请求回执（requestID → 结果）放在被改的实体里、随业务修改同一事务提交，属于服务骨架（方案阶段 3），
 // 这里只在注释里写出 handler 里的顺序。
 
-func renderEntityRPCInterface(snake, pascal string, codes []int64) string {
+func renderEntityRPCInterface(snake, pascal string, code int64) string {
 	return fmt.Sprintf(`// Package %[1]s is an entity service this project owns: the entities it writes
 // belong to the owning service (//roost:entity service=<owner>), and other
 // processes change them only through the %[2]s interface below. roost servicerpc
@@ -34,27 +35,20 @@ import (
 
 //go:generate go run github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc -dir .
 
-// The answers a caller can get besides success and a business rejection (a
-// coded error of the project's own). Codes are allocated from the manifest's
-// errcode space; roost id check knows about them.
-var (
-	// ErrRequestInvalid answers a request the handlers cannot decode or that
-	// lacks a request id.
-	ErrRequestInvalid = errcode.Define(%[3]d, "%[1]s_request_invalid", "%[1]s: request is invalid")
-	// ErrRetryLater: the request was NOT executed (the service is recovering,
-	// the entity is changing owner or reloading, the service is overloaded).
-	// Send it again with the same request id.
-	ErrRetryLater = errcode.Define(%[4]d, "%[1]s_retry_later", "%[1]s: not executed, retry with the same request id")
-	// ErrResultUnknown: the request may or may not have been committed (the
-	// handling budget ran out, the commit result is indeterminate). Do not
-	// treat it as failed; ask Result with the same request id, or send the
-	// request again with it, until a success or a rejection comes back.
-	ErrResultUnknown = errcode.Define(%[5]d, "%[1]s_result_unknown", "%[1]s: result unknown, query Result with the same request id")
-)
+// ErrRequestInvalid answers a request the handlers cannot decode or that lacks
+// a request id. The code is allocated from the manifest's errcode space.
+//
+// The other answers are the framework's (servicerpc.Classify on the caller):
+// a business rejection is a coded error of the project's own; "not executed,
+// retry with the same request id" is errcode.CodeRetryable; "not the owner"
+// is errcode.CodeRedirect; a timeout or CodeInternal means the result is
+// unknown — ask Result with the same request id, or send it again.
+var ErrRequestInvalid = errcode.Define(%[3]d, "%[1]s_request_invalid", "%[1]s: request is invalid")
 
 // Error maps an error to the code and reason a caller sees; the generated
 // handlers fill the response status from it. errcode.ClientError knows every
-// coded error and collapses anything else to CodeInternal.
+// coded error (CodeRetryable / CodeRedirect included) and collapses anything
+// else to CodeInternal.
 func Error(err error) (int32, string) { return errcode.ClientError(err) }
 
 // %[2]s is what another process may ask of this service.
@@ -65,7 +59,8 @@ func Error(err error) (int32, string) { return errcode.ClientError(err) }
 // request more than once). callerID and callerSID come from the caller's
 // authenticated session, never from client-supplied fields. A write answers
 // the entity's new state version; show the result from the reply, and read
-// mirrors afterwards no older than that version.
+// mirrors afterwards no older than that version. A method whose calls must
+// reach the instance owning the target's slot carries //roost:rpc shard=<id>.
 //
 //roost:rpc service_type=%[1]s capability=rpc.%[1]s
 type %[2]s interface {
@@ -78,7 +73,7 @@ type %[2]s interface {
 	// state version the write produced.
 	Result(ctx context.Context, target int64, requestID string) (found bool, code int32, version uint64, err error)
 }
-`, snake, pascal, codes[0], codes[1], codes[2])
+`, snake, pascal, code)
 }
 
 func renderEntityRPCService(snake, pascal string) string {
@@ -91,19 +86,25 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
 )
 
 // HandleBudget is how long the receiving side spends on one request. A plain
 // bus RPC does not carry the caller's deadline to the receiver, so the handler
 // bounds the whole handling (entering Nest, waiting for the commit to be
 // confirmed) itself. When it runs out the write may already be committed: the
-// answer is ErrResultUnknown, never a plain failure.
+// answer stays a timeout (result unknown), never a plain failure.
 const HandleBudget = 5 * time.Second
 
 // Service implements %[2]s in the owning process. Application code: generated
 // once, yours afterwards. Give New the generated Nest senders of the entities
-// this service owns and wire them in the bootstrap's NewMod(New(...)) call.
-type Service struct{}
+// this service owns, the Remote ownership manager and this process's sid, and
+// wire them in the bootstrap's NewMod(New(...)) call. Until owners is set,
+// "not the owner" is answered as retryable instead of a redirect.
+type Service struct {
+	owners   entity.RemoteOwnershipManager
+	localSID int32
+}
 
 // New builds the service.
 func New() *Service { return &Service{} }
@@ -118,16 +119,16 @@ func New() *Service { return &Service{} }
 //     caller's permission against the authoritative state, then writes the
 //     change and the receipt in the same transaction and returns the new
 //     state version (or a business rejection);
-//  4. returns classify(err) so the caller can tell "not executed" from
-//     "result unknown".
+//  4. returns s.answer(ctx, target, err), so the caller can tell "not
+//     executed" and "not the owner" from "result unknown".
 func (s *Service) Apply(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64) (uint64, error) {
 	if requestID == "" || target == 0 {
 		return 0, fmt.Errorf("%%w: request id and target are required", ErrRequestInvalid)
 	}
 	ctx, cancel := context.WithTimeout(ctx, HandleBudget)
 	defer cancel()
-	_, _, _ = ctx, callerID, callerSID
-	return 0, classify(errors.New("%[1]s: Apply is not implemented"))
+	_, _ = callerID, callerSID
+	return 0, s.answer(ctx, target, errors.New("%[1]s: Apply is not implemented"))
 }
 
 // Result is the placeholder receipt lookup: read the receipt for requestID on
@@ -138,30 +139,17 @@ func (s *Service) Result(ctx context.Context, target int64, requestID string) (b
 	}
 	ctx, cancel := context.WithTimeout(ctx, HandleBudget)
 	defer cancel()
-	_ = ctx
-	return false, 0, 0, classify(errors.New("%[1]s: Result is not implemented"))
+	return false, 0, 0, s.answer(ctx, target, errors.New("%[1]s: Result is not implemented"))
 }
 
-// classify sorts what a write returned into the answers a caller acts on.
-// Business rejections (the project's coded errors) and successes pass through.
-func classify(err error) error {
-	switch {
-	case err == nil:
-		return nil
-	// Not executed: the write was refused before anything was committed.
-	case errors.Is(err, entity.ErrRemoteOwnerTransition),
-		errors.Is(err, entity.ErrRemoteEntityReloading),
-		errors.Is(err, entity.ErrRemoteOverloaded),
-		errors.Is(err, entity.ErrRemoteFenced):
-		return fmt.Errorf("%%w: %%w", ErrRetryLater, err)
-	// Result unknown: the commit may have happened.
-	case errors.Is(err, context.DeadlineExceeded),
-		errors.Is(err, entity.ErrRemotePersistenceIndeterminate),
-		errors.Is(err, entity.ErrRemoteCommitTimeout),
-		errors.Is(err, entity.ErrRemoteCommitNotFinalized):
-		return fmt.Errorf("%%w: %%w", ErrResultUnknown, err)
-	}
-	return err
+// answer turns what a write on target returned into the RPC answer
+// (wiring/remoteentity.RPCWriteAnswer): retryable when it was refused before
+// anything committed, a redirect to the owner when this instance is not it,
+// unchanged for success, business rejections and unknown results. It reads
+// the ownership record, so it runs here in the RPC handler (I/O), never inside
+// a Nest handler.
+func (s *Service) answer(ctx context.Context, target int64, err error) error {
+	return kitremoteentity.RPCWriteAnswer(ctx, s.owners, s.localSID, target, err)
 }
 
 var _ %[2]s = (*Service)(nil)

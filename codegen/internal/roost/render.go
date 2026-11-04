@@ -602,6 +602,10 @@ func renderModConstructor(m Manifest, name string, allMods []string, service str
 		}
 		return "kitdataengine.NewMod(" + strings.Join(options, ", ") + ")"
 	case "remote_entity":
+		if m.ownedRemote && service != "" {
+			// 有 Remote kind 声明了归属服务（//roost:entity service=）：别的服务拥有的 kind 拒绝认领与写许可。
+			return "kitremoteentity.NewRemoteEntityMod(0, kitremoteentity.WithMongoStorage(EntityAccess), " + foreignKindsOption(service) + ")"
+		}
 		return "kitremoteentity.NewRemoteEntityMod(0, kitremoteentity.WithMongoStorage(EntityAccess))"
 	case "nest":
 		if selfSyncNest(m, service) {

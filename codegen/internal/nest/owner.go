@@ -127,6 +127,9 @@ type ownedKind struct {
 	Service string
 }
 
+// Remote 托管的归属 kind 才进 ForeignKinds：RemoteEntityMod 在 Init 时要求它们是已注册的 Remote 托管 kind；
+// 本地 kind 的 service= 只影响 handler 注册。
+
 type ownershipFile struct {
 	Imports  []bootstrapPackage
 	Services []ownedService
@@ -170,6 +173,9 @@ func generateOwnership(scan ownerScan, regs map[string][]bootstrapRegistration, 
 		data.Services = append(data.Services, entry)
 	}
 	for _, item := range scan.owned {
+		if !item.Remote {
+			continue
+		}
 		importPath, err := importPathForDir(scan.moduleRoot, scan.modulePath, item.Dir)
 		if err != nil {
 			return false, err
@@ -222,9 +228,9 @@ import (
 {{- end }}
 )
 
-// entityOwners 是声明了归属服务的 kind（//roost:entity service=<name>）：这些 kind 只由归属服务写。
-// 没有列出的 kind 保持原行为，任何带 Nest 的服务都能写。
-var entityOwners = map[entity.EntityKind]string{
+// remoteKindOwners 是声明了归属服务（//roost:entity service=<name>）的 Remote 托管 kind：只由归属服务写，
+// 别的服务的 RemoteEntityMod 经 ForeignKinds 拒绝认领与写许可。本地 kind 的归属只影响 handler 注册，不在表里。
+var remoteKindOwners = map[entity.EntityKind]string{
 {{- range .Kinds }}
 	{{ .Expr }}: "{{ .Service }}",
 {{- end }}
@@ -237,11 +243,12 @@ var ownedNestHandlers = map[string][]func(*nest.NestMgr) error{
 {{- end }}
 }
 
-// ForeignKinds 返回别的服务拥有、service 不得写的 kind（排序）。Remote Manager 用它在认领与写许可前拒绝，
+// ForeignKinds 返回别的服务拥有、service 不得写的 Remote 托管 kind（排序）。bootstrap 把它交给 service 的
+// RemoteEntityMod（kitremoteentity.WithForeignKinds），认领与写许可前拒绝（entity.ErrRemoteKindNotOwned），
 // 防止别的服务的进程先写到一个新实体、把它认领走。
 func ForeignKinds(service string) []entity.EntityKind {
 	var out []entity.EntityKind
-	for kind, owner := range entityOwners {
+	for kind, owner := range remoteKindOwners {
 		if owner != service {
 			out = append(out, kind)
 		}

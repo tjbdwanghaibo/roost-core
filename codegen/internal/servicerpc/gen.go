@@ -76,13 +76,6 @@ func Generate(service Service) ([]File, error) { return GenerateWith(service, Op
 
 // GenerateWith is Generate with a choice of half and header command.
 func GenerateWith(service Service, opts Options) ([]File, error) {
-	// shard= 已解析、校验，但按槽位表选 sid、处理“改投”答复的客户端在框架的 servicerpc 里（联盟服务方案阶段 1），
-	// 本版本还没有。生成一个照旧发队列组的客户端会把请求送到任意实例，所以在这里拒绝，而不是悄悄忽略。
-	for _, method := range service.Methods {
-		if method.Shard != "" {
-			return nil, fmt.Errorf("method %s declares shard=%s, but the slot-table client it needs is not in this roost-core yet; remove shard= until it is", method.Name, method.Shard)
-		}
-	}
 	view, err := newView(service)
 	if err != nil {
 		return nil, err
@@ -148,6 +141,10 @@ type view struct {
 	Service
 	SourceImport string
 	Runtime      bool
+	// AnyShard is true when at least one method routes by the slot table
+	// (//roost:rpc shard=): the client needs the table, the ClientMod reads
+	// <service_type>.slots / .shards (servicerpc.SlotTableConfig).
+	AnyShard bool
 	// AnyAffinity is true when at least one method routes by key.
 	//
 	// It drives whether the generated constructor installs the picker option.
@@ -309,6 +306,11 @@ func newView(service Service) (view, error) {
 		mv.ResultFields = strings.Join(fields, ", ")
 		mv.ResultReturns = strings.Join(returns, ", ")
 
+		if method.Shard != "" {
+			v.AnyShard = true
+			// 改投答复带 owner sid：CallSlotChecked 经响应的 RedirectSID() 读它（servicerpc.RedirectProvider）。
+			mv.ResponseFields = append(mv.ResponseFields, "RedirectSid int32 `json:\"redirect_sid,omitempty\"`")
+		}
 		if method.Affinity != "" {
 			v.AnyAffinity = true
 			if v.AffinityMethods != "" {

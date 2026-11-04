@@ -135,6 +135,15 @@ func buildService(facts pkgFacts, pkgName, path, name string, options map[string
 				where, method.Name, method.Shard, found.Name, found.Type)
 		}
 	}
+	// 一个服务的方法要么按亲和选实例、要么按槽位表：两种客户端的构造参数不同（发现 vs 槽位表），混在一起没有使用者。
+	hasShard, hasAffinity := false, false
+	for _, method := range service.Methods {
+		hasShard = hasShard || method.Shard != ""
+		hasAffinity = hasAffinity || method.Affinity != ""
+	}
+	if hasShard && hasAffinity {
+		return Service{}, fmt.Errorf("%s: %s mixes shard= and affinity= methods; a service routes by its slot table or by affinity, not both", where, service.Interface)
+	}
 	// Affinity is read off an argument at call time, so it has to name one.
 	//
 	// Two forms are accepted: a bare parameter, which must be a string, and
@@ -203,6 +212,9 @@ func emittedNames(service Service) []string {
 	for _, method := range service.Methods {
 		if method.Affinity != "" && !slices.Contains(names, "AffinityMethods") {
 			names = append(names, "AffinityMethods")
+		}
+		if method.Shard != "" && !slices.Contains(names, "redirectSID") {
+			names = append(names, "redirectSID")
 		}
 		names = append(names,
 			"Method"+method.Name,

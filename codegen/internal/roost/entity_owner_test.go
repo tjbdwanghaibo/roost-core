@@ -134,3 +134,79 @@ func TestEntityOwnerScopesHandlersLifecycleAndDoctor(t *testing.T) {
 		}
 	}
 }
+
+// remote=managed 的归属 kind（阶段 1 接线）：每个装 remote_entity 的服务把别的服务拥有的 Remote kind 交给
+// RemoteEntityMod（WithForeignKinds），认领与写许可前拒绝；ForeignKinds 只列 Remote 托管 kind（RemoteEntityMod
+// 的 Init 要求它们是已注册的 Remote 托管 kind）。生成工程能编译。
+func TestOwnedRemoteKindIsForeignToEveryOtherRemoteEntityService(t *testing.T) {
+	t.Parallel()
+	_, root, err := NewProject(NewOptions{
+		Name: "planet", Module: "example.com/planet", Out: filepath.Join(t.TempDir(), "planet"),
+		Services: []string{"game", "alliance"}, Mods: []string{"configdata", "nest", "remote_entity"}, Features: []string{"entity", "dao", "nest"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, options := range []AddOptions{{Kind: "entity", Name: "Guild"}, {Kind: "entity", Name: "Shard"}} {
+		if _, err := Add(root, options); err != nil {
+			t.Fatalf("add %s: %v", options.Name, err)
+		}
+	}
+	guild := filepath.Join(root, "game", "entities", "guild", "entity.go")
+	raw, err := os.ReadFile(guild)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := strings.Replace(string(raw), "category=entity.EntityCategoryOther", "category=entity.EntityCategoryRemote remote=managed service=alliance", 1)
+	remote = strings.Replace(remote, "*entity.EntityBase", "*entity.RemoteEntityBase", 1)
+	if err := os.WriteFile(guild, []byte(remote), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 本地 kind 也声明归属：只影响 handler 注册，不进 ForeignKinds。
+	shard := filepath.Join(root, "game", "entities", "shard", "entity.go")
+	if raw, err = os.ReadFile(shard); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(shard, []byte(strings.Replace(string(raw), "category=entity.EntityCategoryOther", "category=entity.EntityCategoryOther service=alliance", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Run([]string{"project", "sync", "--root", root}, &out, &out); err != nil {
+		t.Fatalf("project sync: %v\n%s", err, out.String())
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	bootstrap := readProjectFile(t, root, "internal/bootstrap/generated.go")
+	for _, service := range []string{"game", "alliance"} {
+		if want := `kitremoteentity.WithForeignKinds(registry.ForeignKinds("` + service + `")...)`; !strings.Contains(bootstrap, want) {
+			t.Errorf("bootstrap lacks %s:\n%s", want, bootstrap)
+		}
+	}
+	ownership := readProjectFile(t, root, "internal/registry/ownership_gen.go")
+	if !strings.Contains(ownership, "EntityKindGuild: \"alliance\"") || regexpLocalKindInRemoteOwners(ownership) {
+		t.Errorf("ForeignKinds must list only the Remote kind:\n%s", ownership)
+	}
+	if testing.Short() {
+		return
+	}
+	useLocalRoostCore(t, root)
+	for _, action := range []string{"build", "vet"} {
+		check := exec.Command("go", action, "./...")
+		check.Dir = root
+		check.Env = append(os.Environ(), "GOWORK=off")
+		if output, err := check.CombinedOutput(); err != nil {
+			t.Fatalf("go %s with an owned Remote kind: %v\n%s", action, err, output)
+		}
+	}
+}
+
+// regexpLocalKindInRemoteOwners 报告 remoteKindOwners 表里出现了本地 kind（Shard）。
+func regexpLocalKindInRemoteOwners(source string) bool {
+	_, table, found := strings.Cut(source, "remoteKindOwners = map[entity.EntityKind]string{")
+	if !found {
+		return false
+	}
+	table, _, _ = strings.Cut(table, "}")
+	return strings.Contains(table, "EntityKindShard")
+}

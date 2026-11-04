@@ -423,11 +423,20 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
 
 拥有者必须带 Nest（没有时拒绝并给出 `roost add mod nest -service <owner>`）。骨架改成写契约：写方法的前几个参数是
 `requestID string, callerID int64, callerSID int32`（服务按 requestID 幂等，调用者身份来自调用方已鉴权的会话），
-`Result(ctx, target, requestID)` 回答这笔请求的结局；`ErrRequestInvalid` 之外多分两个错误码 `ErrRetryLater`（未执行，同一
-requestID 重试）与 `ErrResultUnknown`（可能已提交，用同一 requestID 查 `Result`），`service.go` 的 `classify` 把 Remote
-写准入 / 提交的框架错误归到这两类，`HandleBudget` 是接收端自己的处理预算（普通 Bus RPC 不带调用方截止时间）。
-owner Mod 依赖 `nats` 与 `nest`：Nest（与它之前的 DataEngine 启动排空）启动之后才在总线上注册 handler，恢复期间的请求得到
-no responders。请求回执（requestID → 结果）放在被改的实体里、与业务修改同一事务提交，骨架只在注释里写出 handler 的顺序。
+`Result(ctx, target, requestID)` 回答这笔请求的结局，`HandleBudget` 是接收端自己的处理预算（普通 Bus RPC 不带调用方截止时间）。
+写的错误经 `wiring/remoteentity.RPCWriteAnswer` 转成框架答复（未执行 `errcode.CodeRetryable`、不是 owner `CodeRedirect`，
+结果未知原样返回），调用方用 `servicerpc.Classify` 分四类。owner Mod 依赖 `nats` 与 `nest`：Nest 启动之后（框架保证 DataEngine
+恢复已完成）才在总线上注册 handler，恢复期间的请求得到 no responders。请求回执（requestID → 结果）放在被改的实体里、与业务修改
+同一事务提交，骨架只在注释里写出 handler 的顺序。
+
+多实例分片时给写方法加 `//roost:rpc shard=<id>`（参数是编码槽位的 `int64` 业务号），调用方与拥有者的配置写同一张槽位表：
+
+    alliance:
+      slots: 256
+      shards: ["3000:0-127", "3001:128-255"]
+
+生成的客户端按槽位发往表上的 sid、遇到“改投”改投一次；doctor 的 `rpc-slots:<rpc>` 检查调用方写了表、各服务取值一致。
+槽位表只是路由提示，真正的 owner 以 Remote 的持久所有权记录为准（[方案 §2.7](../../docs/maintenance/FEATURE-2026-11-04-alliance-service.md#27-分片接管与迁移决定-2)）。
 
 ### 6.w 实体归属服务：`//roost:entity service=<name>`
 
@@ -575,6 +584,7 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 - `config-sections:<service>`（只读，维护者 2026-10-17 决定）：按服务实际注册的 Mod（共享 Mod 加 `effectiveServiceMods`，与生成器同一份计算）找开发配置、生产示例与 k8s Secret 示例（`stringData` 的 `config.yaml`）里缺的顶层配置段——每个 Mod 的起始段、托管框架服务的段；带 DataEngine 的服务还有 `redis:` 与 `singleton:` 段，且 `singleton.enabled` 须为 `true`。缺段为 WARN（不让 doctor 失败），WARN 里给出可直接追加到该文件末尾的文本（生产示例与 Secret 已按生产改写：地址 `CHANGE_ME`、流副本 3；Secret 已缩进四格）。典型来源：在 `add` 命令之外手改 `roost.yaml` 加 Mod 后 `project sync`（sync 不追加配置段，行为不变），或修复前走过 `add access` / `add rpc` 的工程。业务有意删掉的段同样会报——不需要时忽略；想消掉提示又保持代码默认值，留一个空段（例如 `saga: {}`）。“有没有”只看行首的 `<key>:`，段里的值不比较。doctor 没有另外的豁免开关。
 - `config-across-services`（维护者 2026-10-19 批准）：同一工程各服务之间——声明里带 `shared` 的共享资源名（`nats.prefix`、效果流名与主题前缀及 saga 的 start 效果流、saga 库 / 流 / 主题、Remote 库与 L2 前缀、`etcd.service_prefix`、`singleton.key_prefix`、业务时区 `time.business_timezone` / `time.business_day_start` 等）在开发配置集与生产示例里各自必须一致；开发配置集里带 `listen` 的监听地址（`ops.addr`、`web.addr`、`player_access.tcp.addr`，开关打开时）端口不得冲突，带 `unique` 的 `etcd.advertise_addr` 各服务不同。FAIL 并点名服务、键与取值。与 `roost config check --all` 同一个实现（`checkConfigAcrossServices`），不需要编译工程。
 - `config-check:<service>`：用同一个编译好的进程对每个服务的开发配置运行 `<bin> <service> --check-config --config configs/service/config.<service>.yaml`（与进程启动前同一处检查）：除键的声明外，还有各 Mod 配置结构体的跨键规则与跨 Mod 一致性规则（`app.ModConfigCrossChecker`，例如同进程有 DataEngine 时显式写的 `saga.start_effect_stream` / `start_effect_prefix` 必须等于 `dataengine.effects.stream` / `subject_prefix`）。不通过为 FAIL，详情是进程的报错与可直接复跑的命令。生产示例与 Secret 示例带占位值，不在这里跑；发布前对真实生产配置运行同一条命令。工程编译不过时不报这一项。
+- `rpc-slots:<rpc>`：工程 rpc 有 `//roost:rpc shard=` 方法时出现：调用方（`uses_rpcs`）的配置缺 `<service_type>.slots` / `.shards` 为 FAIL 并给出写法；写了这两个键的服务之间取值不同为 FAIL（开发配置、生产示例各自比较）。
 - `entity-owner`：有实体声明 `service=` 时出现（[§6.w](#6w-实体归属服务roostentity-service)）：`service=` 写错为 FAIL；别的服务的代码构造了归属 kind 的 Sender 为 FAIL，详情写出文件与归属服务。
 - `remote-runtime`：工程里有 `remote=managed` 实体（声明了 `service=` 的除外，它们按 `entity-owner` 检查归属服务）时，带 Nest 的服务全都没有 `remote_entity` Mod 为 FAIL（运行时每次写都会被拒），只有部分服务缺为 WARN，详情给出 `roost add mod remote_entity -service <service>`；`roost generate` 在跑生成器之前做同一检查（全缺时拒绝，部分缺时打印 WARN）。没有这类实体时不报这一项。
 - `saga-steps:<saga>` / `effect-consumer:<service>/<func>`（只读，WARN 不让 doctor 失败）：`roost add saga` 生成的 `steps.go` 有 `StartSteps` / `RegisterSteps`，工程里却没有非测试文件导入该 saga 包并调用它（或调用处所在包没有 `Steps.Drain(ctx)`）时 WARN；`roost add effect` 生成的 `start<Topic>EffectConsumer` 在服务包里没有被调用时 WARN。生成器不改写服务的 Init / Shutdown，这两项提醒“生成了但没启动”——没启动时进程照常起来，步骤命令却等到超时、effect 堆在流里。文本判据（注释不算调用），只说明写了，不证明运行时一定走到；`steps.go` 里没有这两个函数（如 game-demo 手写接线）时不报。

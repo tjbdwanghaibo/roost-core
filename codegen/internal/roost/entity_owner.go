@@ -70,12 +70,22 @@ func ownedHandlersModCall(service string) string {
 	return fmt.Sprintf("registry.NewOwnedNestHandlersMod(%q)", service)
 }
 
+// foreignKindsOption 是 remote_entity Mod 构造里交给 RemoteEntityMod 的外来 kind（阶段 1 的
+// kitremoteentity.WithForeignKinds，Init 时校验每个 kind 是已注册的 Remote 托管 kind）。
+func foreignKindsOption(service string) string {
+	return fmt.Sprintf("kitremoteentity.WithForeignKinds(registry.ForeignKinds(%q)...)", service)
+}
+
 // withEntityOwners 记下拥有 kind 的服务（渲染 bootstrap 用）。扫描失败时不记：生成前检查会报同一个错误。
 func (m Manifest) withEntityOwners(root string) Manifest {
 	owned, err := projectEntityOwners(root)
+	m.ownedRemote = false
 	if err != nil || len(owned) == 0 {
 		m.ownerServices = nil
 		return m
+	}
+	for _, item := range owned {
+		m.ownedRemote = m.ownedRemote || item.Remote
 	}
 	services := map[string]bool{}
 	for _, service := range entityowner.Services(owned) {
@@ -105,8 +115,16 @@ func checkEntityOwnersBeforeGenerate(root string, m Manifest) error {
 	for _, service := range entityowner.Services(owned) {
 		owners[service] = true
 	}
+	ownedRemote := false
+	for _, item := range owned {
+		ownedRemote = ownedRemote || item.Remote
+	}
 	for _, service := range sortedServiceNames(m) {
-		if owners[service] != strings.Contains(string(raw), ownedHandlersModCall(service)) {
+		// 只看服务自己的 Mod：shared_mods 里的 remote_entity 不知道是哪个服务，不带 ForeignKinds（renderModConstructor）。
+		own, _ := resolveMods(effectiveServiceMods(m, service))
+		wantForeign := ownedRemote && contains(own, "remote_entity")
+		if owners[service] != strings.Contains(string(raw), ownedHandlersModCall(service)) ||
+			wantForeign != strings.Contains(string(raw), foreignKindsOption(service)) {
 			return fmt.Errorf("entity owners (//roost:entity service=) changed and internal/bootstrap/generated.go does not match for service %s; "+
 				"run: roost project sync (then roost generate)", service)
 		}

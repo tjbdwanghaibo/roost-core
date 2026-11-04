@@ -72,23 +72,19 @@ func addRPC(root string, m Manifest, options AddOptions) ([]string, error) {
 	if _, err := os.Stat(filepath.Join(root, dir)); err == nil {
 		return nil, fmt.Errorf("%s already exists", dir)
 	}
-	count := 1
-	if options.EntityService {
-		count = 3 // ErrRequestInvalid、ErrRetryLater、ErrResultUnknown
-	}
-	codes, err := nextIDs(root, m, "errcode", count)
+	code, err := NextID(root, m, "errcode", "")
 	if err != nil {
-		return nil, fmt.Errorf("allocate the rpc error codes: %w", err)
+		return nil, fmt.Errorf("allocate ErrRequestInvalid code: %w", err)
 	}
 
 	files := map[string]string{
-		dir + "/" + snake + ".go": renderRPCInterface(snake, pascal, codes[0]),
+		dir + "/" + snake + ".go": renderRPCInterface(snake, pascal, code),
 		dir + "/service.go":       renderRPCService(snake, pascal),
 		dir + "/mod.go":           renderRPCMod(snake, false),
 		dir + "/server_run.go":    renderRPCServerRun(snake),
 	}
 	if options.EntityService {
-		files[dir+"/"+snake+".go"] = renderEntityRPCInterface(snake, pascal, codes)
+		files[dir+"/"+snake+".go"] = renderEntityRPCInterface(snake, pascal, code)
 		files[dir+"/service.go"] = renderEntityRPCService(snake, pascal)
 		files[dir+"/mod.go"] = renderRPCMod(snake, true)
 	}
@@ -221,34 +217,6 @@ func (s *Service) Ping(_ context.Context, callerID int64, message string) (strin
 
 var _ %[2]s = (*Service)(nil)
 `, snake, pascal)
-}
-
-// nextIDs 分配 count 个连续空闲的号（按 NextID 的同一扫描，跳过已用的号）。
-func nextIDs(root string, m Manifest, kind string, count int) ([]int64, error) {
-	space, ok := m.IDs[kind]
-	if !ok || space.Min <= 0 || space.Max < space.Min {
-		return nil, fmt.Errorf("id space %q is not configured", kind)
-	}
-	uses, err := ScanIDs(root)
-	if err != nil {
-		return nil, err
-	}
-	used := map[int64]bool{}
-	for _, use := range uses {
-		if use.Kind == kind {
-			used[use.ID] = true
-		}
-	}
-	var out []int64
-	for id := space.Min; id <= space.Max && len(out) < count; id++ {
-		if !used[id] {
-			out = append(out, id)
-		}
-	}
-	if len(out) < count {
-		return nil, fmt.Errorf("id space %s is exhausted", kind)
-	}
-	return out, nil
 }
 
 // renderRPCMod 是 owner Mod。afterNest（-entity-service）时依赖 nest：App 按依赖顺序 Start，Nest 在 DataEngine

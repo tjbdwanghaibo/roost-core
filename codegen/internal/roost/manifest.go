@@ -81,6 +81,9 @@ type Manifest struct {
 	// ownerServices 是至少拥有一个 kind 的服务（//roost:entity service=），由 withEntityOwners 从工程源码读出，
 	// 渲染 bootstrap 时给这些服务装归属 handler 的 Mod。Not part of roost.yaml.
 	ownerServices map[string]bool
+	// ownedRemote 表示有 Remote 托管 kind 声明了归属服务：每个装 remote_entity 的服务都把别的服务拥有的
+	// Remote kind 交给 RemoteEntityMod（WithForeignKinds）。Not part of roost.yaml.
+	ownedRemote bool
 }
 
 type ProjectSpec struct {

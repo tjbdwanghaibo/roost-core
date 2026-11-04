@@ -41,7 +41,7 @@
 | `//roost:object` | 单例配置 schema struct | `name`、`file`、`json` |
 | `//roost:attribute` | 属性 profile struct | `index`、`max` |
 | `//roost:web` | HTTP handler | 必需 `method`、`path`、`body`；可选 `headers`、`compress`、`errors`、`status` |
-| `//roost:rpc` | 服务接口 / 接口方法 | 接口：`service_type`、`capability`；方法：`affinity`、`shard` |
+| `//roost:rpc` | 服务接口 / 接口方法 | 接口：`service_type`、`capability`；方法：`affinity`、`shard`（按槽位表路由，参数是 `int64` 业务号；见 [CODEGEN_REFERENCE](CODEGEN_REFERENCE.zh-CN.md)） |
 | `//roost:register` | 导出的包级注册函数 | `phase`、`order` |
 
 `//roost:cache` 是 glsvet 的组件字段检查说明，不是生成器：表示明确允许不参与事务回滚的缓存字段，不能用它把事务状态绕开 DAO。`//go:generate` 与 `//go:build protocoldef` 属于 Go 工具链，也不是 Roost tag。
@@ -159,7 +159,7 @@ type Player struct {
 | `comp:"CompTypeProfile"` | 组件类型号表达式；可加 `,cold` 声明按需初始化 |
 | `dao:"players"` | DAO 装配名称；可加 `,cold` 声明按需初始化，不是 DAO 定义字段的能力选项 |
 
-`service=<name>` 只在实体标记上声明一次（不在 `roost.yaml` 再写一份）。取值必须是 `roost.yaml` 声明的业务服务、带 Nest；`remote=managed` 时还要有 `remote_entity`，否则 `roost generate` 报出实体与服务名。声明之后：锁住这个 kind 的 `//roost:nest` handler 只在归属服务的 Nest 引擎上注册（生成 `Register<File>NestHandlersOn(mgr)`，由 `internal/registry/ownership_gen.go` 的 `NewOwnedNestHandlersMod` 在归属服务的 Provide 里注册），别的服务发过去得到“handler 未注册”；`ForeignKinds(service)` 给出别的服务拥有的 kind（Remote Manager 的认领 / 写许可守卫接线等框架阶段 1）；`roost add lifecycle` 缺省落到归属服务；doctor 的 `entity-owner` 检查别的服务构造了它的 Sender。一个 handler 锁住两个不同服务的 kind、同一源文件里 handler 归属不一致、方法 handler 或原生步骤 handler 锁住归属 kind、同一实体包里两个实体声明不同服务，都在生成期拒绝。改了 `service=` 先 `roost project sync` 再 `roost generate`（bootstrap 与生成物不一致时 generate 拒绝并给出这条命令）。
+`service=<name>` 只在实体标记上声明一次（不在 `roost.yaml` 再写一份）。取值必须是 `roost.yaml` 声明的业务服务、带 Nest；`remote=managed` 时还要有 `remote_entity`，否则 `roost generate` 报出实体与服务名。声明之后：锁住这个 kind 的 `//roost:nest` handler 只在归属服务的 Nest 引擎上注册（生成 `Register<File>NestHandlersOn(mgr)`，由 `internal/registry/ownership_gen.go` 的 `NewOwnedNestHandlersMod` 在归属服务的 Provide 里注册），别的服务发过去得到“handler 未注册”；`remote=managed` 的归属 kind 进 `ForeignKinds(service)`，每个装 `remote_entity` 的服务的 RemoteEntityMod 带 `WithForeignKinds(registry.ForeignKinds("<service>")...)`，别的服务的进程认领与写许可前被拒（`entity.ErrRemoteKindNotOwned`）；本地 kind 的 `service=` 只影响 handler 注册；`roost add lifecycle` 缺省落到归属服务；doctor 的 `entity-owner` 检查别的服务构造了它的 Sender。一个 handler 锁住两个不同服务的 kind、同一源文件里 handler 归属不一致、方法 handler 或原生步骤 handler 锁住归属 kind、同一实体包里两个实体声明不同服务，都在生成期拒绝。改了 `service=` 先 `roost project sync` 再 `roost generate`（bootstrap 与生成物不一致时 generate 拒绝并给出这条命令）。
 
 `remote=mirror`、`lifetime=mirror_cache` 不再生成实体。读已有完整 DAO 镜像时用 `//roost:mirror entityKind=... coll=...` DTO；按字段发布视图时用上一节的 `remoteview`。旧 `syncPacker` / `syncTopic` 不应使用，当前对应 `subjectPacker` / `syncNamespace`。
 
