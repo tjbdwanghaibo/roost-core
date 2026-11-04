@@ -8,6 +8,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 	"log/slog"
 	"runtime/debug"
 	"strings"
@@ -81,6 +82,9 @@ type Bus struct {
 	mu          sync.RWMutex
 	handlers    map[string]HandlerFunc    // "module:msgName" → handler
 	rpcHandlers map[string]RpcHandlerFunc // "method" → handler
+	// rpcCalls 是每个经 HandleRpc 注册的方法的 handler 执行准入与在途计数（WithdrawRpc 关准入、等它排空）。
+	// 受 mu 保护；没有条目的方法按一直准入处理。
+	rpcCalls map[string]*operation.Lifetime
 
 	// dispatcher pool for incoming messages
 	lifeMu   sync.Mutex
@@ -101,9 +105,15 @@ type Bus struct {
 
 	// subscriptions
 	subs []nats.ISubscription
-	// rpcQueueSubs 是每个轻量 RPC 方法的服务级队列组订阅（<prefix>.rpc.<svc>.<method>，队列 <svc>_rpc），
-	// LeaveRPCQueue 按方法退出时取出并退订；值为 nil 表示已经退出。受 lifeMu 保护。
-	rpcQueueSubs map[string]nats.ISubscription
+	// rpcSubs 是每个轻量 RPC 方法的两个订阅：服务级队列组（<prefix>.rpc.<svc>.<method>，队列 <svc>_rpc）与本 sid 的
+	// 实例主题。LeaveRPCQueue 退出队列组、WithdrawRpc 撤下两者时取出并退订，取出后字段为 nil。受 lifeMu 保护。
+	rpcSubs map[string]*rpcMethodSubs
+}
+
+// rpcMethodSubs 是一个轻量 RPC 方法在本实例上的订阅；nil 表示已经退出 / 撤下。
+type rpcMethodSubs struct {
+	queue    nats.ISubscription
+	instance nats.ISubscription
 }
 
 // New creates a Bus instance. Call Start() to begin receiving messages.
@@ -128,6 +138,7 @@ func New(client nats.IClient, rpc nats.IRpc, codec Codec, cfg Config) *Bus {
 		subject:     nats.NewSubjectBuilder(cfg.Prefix),
 		handlers:    make(map[string]HandlerFunc),
 		rpcHandlers: make(map[string]RpcHandlerFunc),
+		rpcCalls:    make(map[string]*operation.Lifetime),
 	}
 }
 
@@ -651,25 +662,30 @@ func (b *Bus) HandleRpc(method string, handler RpcHandlerFunc) error {
 		return fmt.Errorf("bus: duplicate rpc handler %s", method)
 	}
 	b.rpcHandlers[method] = handler
+	b.rpcCalls[method] = &operation.Lifetime{}
 	b.mu.Unlock()
 
 	if b.jetStreamRPCEnabled() {
 		if err := b.subscribeJetStreamRPCMethod(method); err != nil {
-			b.mu.Lock()
-			delete(b.rpcHandlers, method)
-			b.mu.Unlock()
+			b.forgetRPCHandler(method)
 			return err
 		}
 		return nil
 	}
 
 	if _, err := b.subscribeLightweightRPCMethod(method); err != nil {
-		b.mu.Lock()
-		delete(b.rpcHandlers, method)
-		b.mu.Unlock()
+		b.forgetRPCHandler(method)
 		return err
 	}
 	return nil
+}
+
+// forgetRPCHandler 撤销一次没有订阅成功的 HandleRpc 登记。
+func (b *Bus) forgetRPCHandler(method string) {
+	b.mu.Lock()
+	delete(b.rpcHandlers, method)
+	delete(b.rpcCalls, method)
+	b.mu.Unlock()
 }
 
 func (b *Bus) subscribeLightweightRPCMethod(method string) ([]nats.ISubscription, error) {
@@ -697,10 +713,10 @@ func (b *Bus) subscribeLightweightRPCMethod(method string) ([]nats.ISubscription
 	}
 	subs := []nats.ISubscription{sub, instanceSub}
 	b.subs = append(b.subs, subs...)
-	if b.rpcQueueSubs == nil {
-		b.rpcQueueSubs = make(map[string]nats.ISubscription)
+	if b.rpcSubs == nil {
+		b.rpcSubs = make(map[string]*rpcMethodSubs)
 	}
-	b.rpcQueueSubs[method] = sub
+	b.rpcSubs[method] = &rpcMethodSubs{queue: sub, instance: instanceSub}
 	return subs, nil
 }
 
@@ -739,8 +755,8 @@ func (b *Bus) LeaveRPCQueue(method string) error {
 		b.lifeMu.Unlock()
 		return fmt.Errorf("bus: cannot leave an rpc queue group while stopping or stopped")
 	}
-	sub, subscribed := b.rpcQueueSubs[method]
-	if !subscribed || sub == nil {
+	owned, subscribed := b.rpcSubs[method]
+	if !subscribed || owned.queue == nil {
 		// 已经退出（nil），或 HandleRpc 还没订阅完（没有条目）：前者幂等，后者没有可退的订阅。
 		b.lifeMu.Unlock()
 		if subscribed {
@@ -748,14 +764,10 @@ func (b *Bus) LeaveRPCQueue(method string) error {
 		}
 		return fmt.Errorf("bus: rpc method %s has no queue group subscription", method)
 	}
-	b.rpcQueueSubs[method] = nil
+	sub := owned.queue
+	owned.queue = nil
 	// 从 b.subs 里拿掉：停止时不再退订它一次。
-	for i, owned := range b.subs {
-		if owned == sub {
-			b.subs = append(b.subs[:i], b.subs[i+1:]...)
-			break
-		}
-	}
+	b.disownSubscriptionLocked(sub)
 	b.lifeMu.Unlock()
 	if err := sub.Unsubscribe(); err != nil {
 		return fmt.Errorf("bus: leave rpc queue group %s: %w", method, err)
@@ -963,6 +975,7 @@ func (b *Bus) dispatchRpc(task *incomingTask) {
 	method := task.natsMsg.MsgName
 	b.mu.RLock()
 	handler, ok := b.rpcHandlers[method]
+	calls := b.rpcCalls[method]
 	b.mu.RUnlock()
 
 	if !ok {
@@ -976,6 +989,15 @@ func (b *Bus) dispatchRpc(task *incomingTask) {
 			}
 		}
 		return
+	}
+	// 撤下（WithdrawRpc）之后到达的请求不进 handler，答复“没有执行、可重试”。准入到答复发出之间计入在途：
+	// WithdrawRpc 返回 nil 时这个方法已准入的请求都已答复。
+	if calls != nil {
+		if !calls.Begin() {
+			b.refuseWithdrawnRPC(task.replySubject, method)
+			return
+		}
+		defer calls.End()
 	}
 
 	ctx := &RpcContext{

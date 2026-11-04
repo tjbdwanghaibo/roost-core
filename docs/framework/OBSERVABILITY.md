@@ -211,6 +211,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | --- | --- | --- |
 | `nats.jetstream.terminal.total{reason}` | Counter | 消费者终止（Term）的投递：`max_deliver` = 重试到上限仍失败，`permanent` = 处理方返回永久错误；**非零即事故** |
 | `nats.jetstream.settle_failures.total{op}` | Counter | ack / nak / term 本身失败（`op`），broker 会在 ack wait 后重投 |
+| `nats.jetstream.consumer_create_retry.total` | Counter | 建 durable 消费者单次 2s 没收到回答、用同一配置重发的次数（多个实例同时建同一个 durable 时集群可能只回答其中一个，见 guide/09）；偶发为正常，持续增长说明 JetStream API 回答慢 |
 
 ### 机器人 / 压测（core/robot）
 
@@ -384,6 +385,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `manager.start.duration` | Histogram | `manager/engine.go:ObserveHistogram` |
 | `manager.started` | Gauge | `manager/engine.go:SetGauge` |
 | `mongo.ensure_index.election_retries.total` | Counter | `mongo/driver/collection.go:IncCounter` |
+| `nats.jetstream.consumer_create_retry.total` | Counter | `nats/driver/jetstream.go:IncCounter` |
 | `nats.jetstream.settle_failures.total` | Counter | `nats/driver/jetstream.go:IncCounter` |
 | `nats.jetstream.terminal.total` | Counter | `nats/driver/jetstream.go:IncCounter` |
 | `nats.rpc.callback.latency` | Histogram | `nats/driver/rpc.go:ObserveHistogram` |

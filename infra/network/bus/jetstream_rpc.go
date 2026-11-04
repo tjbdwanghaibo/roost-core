@@ -107,6 +107,8 @@ type jetStreamRPC struct {
 	mu          sync.Mutex
 	subs        []fnats.IJetStreamSubscription // request consumers
 	responseSub fnats.IJetStreamSubscription
+	// serviceSubs 是每个方法的服务级 consumer 订阅（subs 里也有），WithdrawRpc 按方法停掉它；停掉后删除条目。
+	serviceSubs map[string]fnats.IJetStreamSubscription
 
 	// 请求 handler 在 nats.go 的 consume 回调 goroutine 里同步执行，
 	// 不在 Bus 的 pool 里，pool 排空管不到它们；nats.go 的 ConsumeContext.Stop 也不等在途
@@ -245,7 +247,30 @@ func (b *Bus) subscribeJetStreamRPCMethod(method string) error {
 	}
 	b.addJetStreamRPCSubscription(serviceSub)
 	b.addJetStreamRPCSubscription(instanceSub)
+	b.jsRPC.mu.Lock()
+	if b.jsRPC.serviceSubs == nil {
+		b.jsRPC.serviceSubs = make(map[string]fnats.IJetStreamSubscription)
+	}
+	b.jsRPC.serviceSubs[method] = serviceSub
+	b.jsRPC.mu.Unlock()
 	return nil
+}
+
+// stopJetStreamRPCServiceConsumers 停掉 methods 的服务级 consumer 订阅（WithdrawRpc 第 2 步）：共享 durable 的后续投递
+// 交给别的实例。本实例的 consumer 不停，见 WithdrawRpc。Stop 幂等，Bus 停止时会再停一次。
+func (b *Bus) stopJetStreamRPCServiceConsumers(methods []string) {
+	b.jsRPC.mu.Lock()
+	var subs []fnats.IJetStreamSubscription
+	for _, method := range methods {
+		if sub := b.jsRPC.serviceSubs[method]; sub != nil {
+			subs = append(subs, sub)
+			delete(b.jsRPC.serviceSubs, method)
+		}
+	}
+	b.jsRPC.mu.Unlock()
+	for _, sub := range subs {
+		sub.Stop()
+	}
 }
 
 func (b *Bus) addJetStreamRPCSubscription(sub fnats.IJetStreamSubscription) {
@@ -445,6 +470,13 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	}
 	processCtx, cancel := b.jetStreamRPCProcessContext(req)
 	defer cancel()
+	// 撤下（WithdrawRpc）之后投递来的请求不进 handler，答复“没有执行、可重试”并确认。
+	if calls := b.rpcMethodCalls(req.MsgName); ok && calls != nil {
+		if !calls.Begin() {
+			return b.replyJetStreamRPC(processCtx, &req, label, nil, withdrawnRPCError(req.MsgName))
+		}
+		defer calls.End()
+	}
 	// handler 可能跑得比 AckWait 久（期限取调用方截止）：处理期间定期发 in-progress，broker 不会把这条
 	// 重投给共享 durable 的另一个实例并发执行。
 	defer b.keepJetStreamRPCInProgress(msg, processCtx)()

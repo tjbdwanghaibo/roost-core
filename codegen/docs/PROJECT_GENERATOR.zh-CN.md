@@ -411,11 +411,17 @@ Entity wire 会生成 Component/DAO getter，
     # 调用方：roost.yaml services.gate.uses_rpcs: [guild]，然后 make sync
 
 生成 `internal/rpc/guild/`：`guild.go`（`//roost:rpc` 接口 `Guild`、`ErrRequestInvalid`（码来自 `ids.errcode`）、`Error` 映射）、
-`service.go`（实现骨架）、`mod.go`（owner Mod：发布 capability、Start 时在 bus 上注册 handler）、`server_run.go`（独立进程用的 Server 钩子），
+`service.go`（实现骨架）、`mod.go`（owner Mod：发布 capability、Start 时在 bus 上注册 handler、`StopWithContext` 时撤下，见下）、`server_run.go`（独立进程用的 Server 钩子），
 以及 servicerpc 生成的 `guild_rpc_gen.go` / `guild_rpc_assembly_gen.go`。清单里 `services.game.rpcs: [guild]`、feature `rpc` 自动加上，
 bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装配 `rpcGuild.NewClientMod()`；两边都自动带 nats mod。
 调用方 `app.Lookup[guild.Guild](registry, guild.CapabilityName)` 拿接口——服务日后搬进独立进程（`a.RegisterServer(..., guild.NewServer(), ...)`）业务代码不变。
 `make generate` 重生成两半，`generate --check` 把它们当生成物比对。
+
+owner Mod 停止时先撤 handler（2026-11-04 起）：`StopWithContext` 调 `bus.RPCWithdrawer.WithdrawRpc(ctx, Methods...)`，
+之后到达本实例的请求答 `errcode.CodeRetryable`（没有执行）或 no responders，已进 handler 的请求答复完才返回。App 按依赖逆序停 Mod，
+所以 Service 用到的 Mod（Nest、存储……）写进 owner Mod 的 `DependsOn`，它们就在 handler 撤下之后才停；没写的依赖可能先停。
+等在途请求的时间算在 App 分给 owner Mod 的停机份额里（生成器不为它声明预算，至少 3s 保底），超过时 App 不再停后面的 Mod。
+骨架生成一次后归业务所有，之前生成的 `mod.go`（`Stop()` 是空操作）要按新骨架补上 `StopWithContext`。
 
 拥有者是独占实体的服务（实体标记 `service=<owner>`，例如联盟服务）时加 `-entity-service`：
 
@@ -444,7 +450,8 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
 - `-entity-service` 骨架：`Apply` / `Result` 已标 route；`Service.CheckRoute` 调 `kitremoteentity.RPCRouteCheck`（生成的 route
   handler 先调它，服务没实现 `RouteChecker` 时注册 handler 被拒）；owner Mod 依赖 `nats`、`nest`、`remote_entity`，经
   `OptionalDependsOn` 排在起服预加载（`mods.ModRemoteEntityPreload`）之后，Start 时把 Remote Manager 与本进程 sid 交给
-  `Service.SetOwnership` 再注册 handler——恢复与预加载完成前请求得到 no responders（可重试，未执行）。所以 `-entity-service`
+  `Service.SetOwnership` 再注册 handler——恢复与预加载完成前请求得到 no responders（可重试，未执行）；停机时先于 Nest 撤下
+  handler（上文），停机窗口里的请求同样是“可重试”，不会进已停的 Nest 答成结果未知。所以 `-entity-service`
   要求拥有者已经托管 Remote 实体 kind，没有时拒绝并写明怎么声明。
 - 调用方：生成的 ClientMod 在 Provide 时经 `kitremoteentity.RouteSource` 取路由查找（`OptionalDependsOn` remote_entity /
   remote_mirror）；调用 route 方法的服务（`uses_rpcs`）既没有 `remote_entity` 也没有 `remote_mirror` 时 `roost generate` 拒绝并给出

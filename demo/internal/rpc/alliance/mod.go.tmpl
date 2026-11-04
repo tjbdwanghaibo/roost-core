@@ -26,6 +26,9 @@ import (
 type Mod struct {
 	service  *Service
 	registry *app.Registry
+	// bus is where Start registered the handlers; StopWithContext withdraws
+	// them there. nil until the handlers are registered.
+	bus bus.IBus
 }
 
 // NewMod wraps the implementation.
@@ -76,13 +79,42 @@ func (m *Mod) Start() error {
 	if !ok || busClient == nil {
 		return fmt.Errorf("alliance mod: capability %q not found; the process needs the nats mod", mods.ModBus)
 	}
-	return RegisterHandlers(busClient, m.service)
+	if err := RegisterHandlers(busClient, m.service); err != nil {
+		return err
+	}
+	m.bus = busClient
+	return nil
 }
 
-func (m *Mod) Stop() {}
+// StopWithContext withdraws the handlers before the Mods they use stop. The
+// App stops Mods in reverse dependency order, so this runs before Nest and
+// the Remote Mod: a request that arrives from now on gets "not executed,
+// retry" (errcode.CodeRetryable) or no responders — never a handler running
+// on a stopped Nest, whose answer would be "result unknown". Requests
+// already in a handler are answered first; when ctx ends before that, the
+// error keeps the App from stopping what they still use.
+func (m *Mod) StopWithContext(ctx context.Context) error {
+	if m.bus == nil {
+		return nil
+	}
+	withdrawer, ok := m.bus.(bus.RPCWithdrawer)
+	if !ok {
+		return nil // a bus double without withdrawal: its handlers go when it stops
+	}
+	return withdrawer.WithdrawRpc(ctx, Methods...)
+}
+
+// Stop is StopWithContext for a caller without a deadline; a handler is
+// bounded by HandleBudget, so the wait is too.
+func (m *Mod) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), HandleBudget)
+	defer cancel()
+	_ = m.StopWithContext(ctx)
+}
 
 var (
 	_ app.Mod                           = (*Mod)(nil)
+	_ app.ModStopperWithContext         = (*Mod)(nil)
 	_ app.ModDependencyProvider         = (*Mod)(nil)
 	_ app.ModOptionalDependencyProvider = (*Mod)(nil)
 )

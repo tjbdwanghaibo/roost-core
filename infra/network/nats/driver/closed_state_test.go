@@ -192,6 +192,9 @@ var closedStateChecks = map[string]closedStateCheck{
 	"subscription.Unsubscribe": {want: wantErrClosed, call: func(e *closedStateEnv) error {
 		return e.sub.Unsubscribe()
 	}},
+	"subscription.DrainContext": {want: wantErrClosed, call: func(e *closedStateEnv) error {
+		return e.sub.DrainContext(e.ctx)
+	}},
 	"subscription.IsValid": {want: wantNil, call: func(e *closedStateEnv) error {
 		return reportedTrue(e.sub.IsValid(), "IsValid")
 	}},

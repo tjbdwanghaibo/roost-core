@@ -691,3 +691,334 @@ func TestRoostGenerateAndGoGenerateWriteTheSameRPCHeader(t *testing.T) {
 		}
 	}
 }
+
+// owner Mod 停机先撤 handler（联盟服务冒烟的观察 ②）：App 按依赖逆序停 Mod，owner Mod 在 Nest / Remote 之前停；它的
+// Stop 曾是空操作，handler 一直挂到 nats Mod 停止，停机窗口里的请求进了已停的 Nest，调用方拿到 internal（结果未知）。
+// 生成工程里按 App 的停法（实现了 StopWithContext 就调它）停 owner Mod，之后经真实 Bus 发来的请求必须是“可重试”
+// （no responders 或 CodeRetryable），-entity-service 与普通 rpc 的 owner Mod 都一样。传输是测试里的内存 NATS。
+func TestGeneratedRPCOwnerModWithdrawsItsHandlersWhenItStops(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and tests a generated project")
+	}
+	t.Parallel()
+	_, root, err := NewProject(NewOptions{
+		Name: "planet", Module: "example.com/planet", Out: filepath.Join(t.TempDir(), "planet"),
+		Services: []string{"game", "alliance"}, Mods: []string{"configdata"}, Features: []string{"entity", "dao", "nest", "protocol", "errcode"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mod := range []string{"nest", "remote_entity"} {
+		if _, err := Add(root, AddOptions{Kind: "mod", Name: mod, Service: "alliance"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	declareRemoteGuild(t, root, "service=alliance")
+	if _, err := Add(root, AddOptions{Kind: "rpc", Name: "Alliance", Service: "alliance", EntityService: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "rpc", Name: "Notice", Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	for rel, source := range map[string]string{
+		"internal/rpc/alliance/memnats_test.go": strings.Replace(generatedMemNATSTest, "package rpcpkg", "package alliance", 1),
+		"internal/rpc/alliance/stop_test.go":    generatedEntityOwnerStopTest,
+		"internal/rpc/notice/memnats_test.go":   strings.Replace(generatedMemNATSTest, "package rpcpkg", "package notice", 1),
+		"internal/rpc/notice/stop_test.go":      generatedPlainOwnerStopTest,
+	} {
+		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(rel)), []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	useLocalRoostCore(t, root)
+	test := exec.Command("go", "test", "-count=1", "-run", "TestOwnerModStop", "./internal/rpc/alliance/", "./internal/rpc/notice/")
+	test.Dir = root
+	test.Env = append(os.Environ(), "GOWORK=off")
+	if output, err := test.CombinedOutput(); err != nil {
+		t.Fatalf("the generated owner Mods' stop tests failed: %v\n%s", err, output)
+	}
+}
+
+// generatedMemNATSTest 是生成工程测试用的内存 NATS（fnats.IClient + fnats.IRpc）：订阅按精确主题登记，队列组只交给一个
+// 订阅者，没有订阅者的请求得到 fnats.ErrNoResponders，与真实 NATS 对“撤掉订阅”的答复相同。
+const generatedMemNATSTest = `package rpcpkg
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+)
+
+type memNATS struct {
+	mu      sync.Mutex
+	subs    map[*memSub]struct{}
+	waiting map[string]chan []byte
+	seq     int
+}
+
+func newMemNATS() *memNATS {
+	return &memNATS{subs: map[*memSub]struct{}{}, waiting: map[string]chan []byte{}}
+}
+
+type memSub struct {
+	n       *memNATS
+	subject string
+	handler fnats.MsgHandler
+}
+
+func (s *memSub) Unsubscribe() error {
+	s.n.mu.Lock()
+	defer s.n.mu.Unlock()
+	delete(s.n.subs, s)
+	return nil
+}
+
+func (s *memSub) IsValid() bool {
+	s.n.mu.Lock()
+	defer s.n.mu.Unlock()
+	_, ok := s.n.subs[s]
+	return ok
+}
+
+func (n *memNATS) subscribe(subject string, handler fnats.MsgHandler) (fnats.ISubscription, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	sub := &memSub{n: n, subject: subject, handler: handler}
+	n.subs[sub] = struct{}{}
+	return sub, nil
+}
+
+func (n *memNATS) Subscribe(subject string, handler fnats.MsgHandler) (fnats.ISubscription, error) {
+	return n.subscribe(subject, handler)
+}
+
+func (n *memNATS) QueueSubscribe(subject, _ string, handler fnats.MsgHandler) (fnats.ISubscription, error) {
+	return n.subscribe(subject, handler)
+}
+
+func (n *memNATS) Publish(subject string, data []byte) error {
+	n.mu.Lock()
+	var handlers []fnats.MsgHandler
+	for sub := range n.subs {
+		if sub.subject == subject {
+			handlers = append(handlers, sub.handler)
+		}
+	}
+	n.mu.Unlock()
+	for _, handler := range handlers {
+		handler(&fnats.Msg{Subject: subject, Data: data})
+	}
+	return nil
+}
+
+func (n *memNATS) Request(string, []byte, time.Duration) ([]byte, error) {
+	return nil, errors.New("memnats: use IRpc")
+}
+func (n *memNATS) Drain() error { return nil }
+func (n *memNATS) Close()       {}
+
+func (n *memNATS) Call(ctx context.Context, subject string, req []byte) ([]byte, error) {
+	n.mu.Lock()
+	var target *memSub
+	for sub := range n.subs {
+		if sub.subject == subject {
+			target = sub
+			break
+		}
+	}
+	if target == nil {
+		n.mu.Unlock()
+		return nil, fnats.ErrNoResponders
+	}
+	n.seq++
+	inbox := fmt.Sprintf("_INBOX.%d", n.seq)
+	reply := make(chan []byte, 1)
+	n.waiting[inbox] = reply
+	n.mu.Unlock()
+	target.handler(&fnats.Msg{Subject: subject, Reply: inbox, Data: append([]byte(nil), req...)})
+	select {
+	case data := <-reply:
+		return data, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (n *memNATS) CallWithTimeout(subject string, req []byte, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return n.Call(ctx, subject, req)
+}
+
+func (n *memNATS) CallAsync(subject string, req []byte, cb fnats.RpcCallback) {
+	go func() { cb(n.CallWithTimeout(subject, req, time.Second)) }()
+}
+
+func (n *memNATS) Reply(inbox string, resp []byte) error {
+	n.mu.Lock()
+	reply := n.waiting[inbox]
+	delete(n.waiting, inbox)
+	n.mu.Unlock()
+	if reply != nil {
+		reply <- resp
+	}
+	return nil
+}
+
+var (
+	_ fnats.IClient = (*memNATS)(nil)
+	_ fnats.IRpc    = (*memNATS)(nil)
+)
+`
+
+// generatedOwnerStopHelpers 是两份 stop 测试共用的部分：起服务端与调用方两个 Bus，按 App 的规则停 owner Mod。
+const generatedOwnerStopHelpers = `
+func startBus(t *testing.T, n *memNATS, svc string, sid int32) *bus.Bus {
+	t.Helper()
+	b := bus.New(n, n, nil, bus.Config{Sid: sid, SvcType: svc, WorkerNum: 2})
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = b.StopWithContext(context.Background()) })
+	return b
+}
+
+// stopLikeTheApp 停 Mod 的方式与 App 相同：实现了 StopWithContext 就带预算调它，否则调 Stop。
+func stopLikeTheApp(t *testing.T, mod app.Mod) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if stopper, ok := mod.(app.ModStopperWithContext); ok {
+		if err := stopper.StopWithContext(ctx); err != nil {
+			t.Fatalf("owner Mod StopWithContext: %v", err)
+		}
+		return
+	}
+	mod.Stop()
+}
+`
+
+const generatedEntityOwnerStopTest = `package alliance
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// localOwners 让路由前置检查认定本实例（sid 3000）是每个实体的 owner。
+type localOwners struct{ entity.IRemoteEntityManager }
+
+func (localOwners) GetRemoteOwnership(context.Context, int64) (entity.RemoteEntityMarkerLease, bool, error) {
+	return entity.RemoteEntityMarkerLease{OwnerSid: 3000}, true, nil
+}
+
+type ownerAt int32
+
+func (o ownerAt) LookupRoute(context.Context, int64) (int32, error) { return int32(o), nil }
+
+// owner Mod 停止之后（App 随后停 Nest 与 Remote），发来的路由请求必须是“可重试，未执行”，不能再进 handler。
+func TestOwnerModStopWithdrawsTheHandlersBeforeNestStops(t *testing.T) {
+	n := newMemNATS()
+	server, caller := startBus(t, n, ServiceType, 3000), startBus(t, n, "game", 9100)
+	cfg := viper.New()
+	cfg.Set("sid", 3000)
+	cfg.Set("server_type", ServiceType)
+	registry := app.NewRegistry(cfg)
+	if err := mods.RegisterAll(registry,
+		mods.Capability{Name: mods.ModBus, Value: bus.IBus(server)},
+		mods.Capability{Name: mods.ModRemoteEntity, Value: entity.IRemoteEntityManager(localOwners{})},
+	); err != nil {
+		t.Fatal(err)
+	}
+	mod := NewMod(New())
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewBusClient(caller, ownerAt(3000), "", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// 停机之前请求进 handler（骨架的 Apply 还没实现，答复是它自己的错误，不是“可重试”）。
+	if _, err := client.Apply(ctx, "req-1", 7, 9100, 1); servicerpc.Classify(err) == servicerpc.OutcomeRetryable {
+		t.Fatalf("before the stop the request must reach the handler, got %v", err)
+	}
+	stopLikeTheApp(t, mod)
+	_, err = client.Apply(ctx, "req-2", 7, 9100, 1)
+	if outcome := servicerpc.Classify(err); outcome != servicerpc.OutcomeRetryable {
+		t.Fatalf("a request after the owner Mod stopped was answered %v (outcome %s); want no responders or CodeRetryable: "+
+			"the handler must be withdrawn before Nest stops", err, outcome)
+	}
+}
+` + generatedOwnerStopHelpers
+
+const generatedPlainOwnerStopTest = `package notice
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// 普通 rpc 的 owner Mod 同一规则：停止之后的请求不再进 handler（它用的依赖随后就停）。
+func TestOwnerModStopWithdrawsTheHandlers(t *testing.T) {
+	n := newMemNATS()
+	server, caller := startBus(t, n, ServiceType, 1), startBus(t, n, "gate", 9100)
+	cfg := viper.New()
+	registry := app.NewRegistry(cfg)
+	if err := mods.RegisterAll(registry, mods.Capability{Name: mods.ModBus, Value: bus.IBus(server)}); err != nil {
+		t.Fatal(err)
+	}
+	mod := NewMod(New())
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewBusClient(caller, "", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if reply, err := client.Ping(ctx, 7, "hello"); err != nil {
+		t.Fatalf("before the stop: reply %q err %v", reply, err)
+	}
+	stopLikeTheApp(t, mod)
+	reply, err := client.Ping(ctx, 7, "hello")
+	if outcome := servicerpc.Classify(err); outcome != servicerpc.OutcomeRetryable {
+		t.Fatalf("a request after the owner Mod stopped was answered %q, %v (outcome %s); want no responders or CodeRetryable: "+
+			"the handler must be withdrawn when its Mod stops", reply, err, outcome)
+	}
+}
+` + generatedOwnerStopHelpers

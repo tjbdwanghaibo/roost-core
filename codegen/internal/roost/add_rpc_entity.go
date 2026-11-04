@@ -197,11 +197,14 @@ var (
 }
 
 // renderEntityRPCMod 是 -entity-service 的 owner Mod：依赖 nats、nest、remote_entity；经 OptionalDependsOn 排在起服预加载
-// 之后（没装预加载 Mod 时没有这条边）；Start 时把 Remote Manager 与本进程 sid 交给 Service，再在总线上注册 handler。
+// 之后（没装预加载 Mod 时没有这条边）；Start 时把 Remote Manager 与本进程 sid 交给 Service，再在总线上注册 handler；
+// StopWithContext 撤下 handler（bus.RPCWithdrawer）并等在途请求答复完——App 按依赖逆序停 Mod，这一步在 Nest 停止之前，
+// 停机窗口里的请求得到“可重试，未执行”或 no responders，而不是进已停的 Nest、答“结果未知”（联盟服务冒烟的观察 ②）。
 func renderEntityRPCMod(snake string) string {
 	return fmt.Sprintf(`package %[1]s
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/spf13/viper"
@@ -219,6 +222,9 @@ import (
 type Mod struct {
 	service  *Service
 	registry *app.Registry
+	// bus is where Start registered the handlers; StopWithContext withdraws
+	// them there. nil until the handlers are registered.
+	bus bus.IBus
 }
 
 // NewMod wraps the implementation the bootstrap builds with New(...).
@@ -277,13 +283,42 @@ func (m *Mod) Start() error {
 	if !ok || busClient == nil {
 		return fmt.Errorf("%[1]s mod: capability %%q not found; the process needs the nats mod", mods.ModBus)
 	}
-	return RegisterHandlers(busClient, m.service)
+	if err := RegisterHandlers(busClient, m.service); err != nil {
+		return err
+	}
+	m.bus = busClient
+	return nil
 }
 
-func (m *Mod) Stop() {}
+// StopWithContext withdraws the handlers before the Mods they use stop. The
+// App stops Mods in reverse dependency order, so this runs before Nest and
+// the Remote Mod: a request that arrives from now on gets "not executed,
+// retry" (errcode.CodeRetryable) or no responders — never a handler running
+// on a stopped Nest, whose answer would be "result unknown". Requests
+// already in a handler are answered first; when ctx ends before that, the
+// error keeps the App from stopping what they still use.
+func (m *Mod) StopWithContext(ctx context.Context) error {
+	if m.bus == nil {
+		return nil
+	}
+	withdrawer, ok := m.bus.(bus.RPCWithdrawer)
+	if !ok {
+		return nil // a bus double without withdrawal: its handlers go when it stops
+	}
+	return withdrawer.WithdrawRpc(ctx, Methods...)
+}
+
+// Stop is StopWithContext for a caller without a deadline; a handler is
+// bounded by HandleBudget, so the wait is too.
+func (m *Mod) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), HandleBudget)
+	defer cancel()
+	_ = m.StopWithContext(ctx)
+}
 
 var (
 	_ app.Mod                           = (*Mod)(nil)
+	_ app.ModStopperWithContext         = (*Mod)(nil)
 	_ app.ModDependencyProvider         = (*Mod)(nil)
 	_ app.ModOptionalDependencyProvider = (*Mod)(nil)
 )
