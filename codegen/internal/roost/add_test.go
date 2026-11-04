@@ -490,9 +490,10 @@ func TestAddRPCEntityServiceScaffoldsTheWriteContract(t *testing.T) {
 	}
 }
 
-// //roost:rpc shard=（槽位表路由）按 2026-11-04 路由决定移除：写了它的接口在生成期报错并指向 //roost:rpc route，
-// 不再生成槽位表客户端，doctor 也没有 rpc-slots 项。
-func TestShardMarkerIsRefusedAtGeneration(t *testing.T) {
+// //roost:rpc route 只能用在拥有 Remote 托管 kind 的服务的 rpc 上（联盟服务方案 §2.10 第 2 项）：路由客户端按实体的
+// Redis 路由登记与持久所有权记录找 owner，只有 //roost:entity remote=managed service=<owner> 的 kind 有这两样；拥有者
+// 没有这类 kind 时每次调用都只会得到“实体不存在”，所以 roost generate 在跑任何生成器之前拒绝并写明原因。
+func TestARouteRPCNeedsAnOwnerThatOwnsARemoteKind(t *testing.T) {
 	t.Parallel()
 	_, root, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: filepath.Join(t.TempDir(), "planet"),
@@ -506,12 +507,21 @@ func TestShardMarkerIsRefusedAtGeneration(t *testing.T) {
 	}
 	iface := filepath.Join(root, "internal", "rpc", "alliance", "alliance.go")
 	source := readProjectFile(t, root, "internal/rpc/alliance/alliance.go")
-	sharded := strings.Replace(source, "\tApply(ctx", "\t//roost:rpc shard=target\n\tApply(ctx", 1)
-	if err := os.WriteFile(iface, []byte(sharded), 0o644); err != nil {
+	routed := strings.Replace(source, "\tApply(ctx", "\t//roost:rpc route\n\tApply(ctx", 1)
+	if routed == source {
+		t.Fatalf("rpc skeleton shape changed; update this test:\n%s", source)
+	}
+	if err := os.WriteFile(iface, []byte(routed), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err == nil || !strings.Contains(err.Error(), "改用 //roost:rpc route") {
-		t.Fatalf("generate with shard= = %v; want it refused, pointing at //roost:rpc route", err)
+	err = Generate(root, GenerateOptions{Stdout: io.Discard})
+	if err == nil {
+		t.Fatal("generate accepted a route method on an rpc whose owner owns no Remote managed kind")
+	}
+	for _, want := range []string{"internal/rpc/alliance", "Alliance.Apply", "owns no Remote managed entity kind", "remote=managed service=alliance"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not name %q", err, want)
+		}
 	}
 }
 

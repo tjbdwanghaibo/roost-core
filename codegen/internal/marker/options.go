@@ -28,6 +28,10 @@ type Spec struct {
 	// Renamed maps a retired key to its replacement. The old spelling is
 	// refused with a pointer to the new one rather than silently aliased.
 	Renamed map[string]string
+	// Removed maps a retired key that has no one-to-one replacement to what to
+	// write instead. It is refused with that explanation rather than reported
+	// as an unknown key, so an existing marker says why it stopped working.
+	Removed map[string]string
 }
 
 // The marker kinds that take options. Each generator validates its own kinds
@@ -46,11 +50,18 @@ var (
 	Table     = Spec{Kind: "table", Keys: []string{"name", "file", "json", "key"}}
 	Object    = Spec{Kind: "object", Keys: []string{"name", "file", "json"}}
 	// RPC covers both places the marker goes: service_type / capability on
-	// the interface, affinity / shard / reliable on a method.
-	RPC    = Spec{Kind: "rpc", Keys: []string{"service_type", "capability", "affinity", "shard"}, Flags: []string{"reliable"}}
+	// the interface, affinity / route / reliable on a method. route is both a
+	// flag (the key is the parameter named target) and a key (route=<param>).
+	RPC = Spec{
+		Kind: "rpc", Keys: []string{"service_type", "capability", "affinity", "route"}, Flags: []string{"reliable", "route"},
+		// 槽位表按 2026-11-04 路由决定移除（联盟服务方案决定 2、§2.7）：shard= 的参数是编码槽位的业务号，route 的键是
+		// 完整 Entity ID，不是同一个值，所以不按 Renamed 自动指过去。
+		Removed: map[string]string{"shard": "slot tables were removed; a method on an existing entity carries //roost:rpc route " +
+			"(the key is its int64 parameter target, a full entity id) or route=<param>, and a create method carries no route"},
+	}
 	Entity = Spec{
 		Kind: "entity",
-		Keys: []string{"id", "entityKind", "category", "businessPool", "remote", "noPersist", "lifetime", "sync", "syncNamespace", "syncPacker", "subjectPacker", "service"},
+		Keys: []string{"id", "entityKind", "category", "businessPool", "remote", "noPersist", "lifetime", "sync", "syncNamespace", "syncPacker", "subjectPacker", "service", "preload"},
 		// Renamed: the value is the wire namespace every update
 		// of the subject carries, and "topic" suggested a bus that does not exist.
 		Renamed: map[string]string{"syncTopic": "syncNamespace"},
@@ -88,6 +99,9 @@ func (s Spec) Parse(body string) (map[string]string, error) {
 		key, value, hasValue := strings.Cut(token, "=")
 		if newKey, renamed := s.Renamed[key]; renamed {
 			return nil, fmt.Errorf("marker option %q was renamed: write %s=%s", key, newKey, value)
+		}
+		if instead, removed := s.Removed[key]; removed {
+			return nil, fmt.Errorf("marker option %q was removed: %s", key, instead)
 		}
 		isKey, isFlag := slices.Contains(s.Keys, key), slices.Contains(s.Flags, key)
 		switch {

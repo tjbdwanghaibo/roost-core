@@ -157,7 +157,7 @@ func TestOwnedRemoteKindIsForeignToEveryOtherRemoteEntityService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := strings.Replace(string(raw), "category=entity.EntityCategoryOther", "category=entity.EntityCategoryRemote remote=managed service=alliance", 1)
+	remote := strings.Replace(string(raw), "category=entity.EntityCategoryOther", "category=entity.EntityCategoryRemote remote=managed service=alliance preload=startup", 1)
 	remote = strings.Replace(remote, "*entity.EntityBase", "*entity.RemoteEntityBase", 1)
 	if err := os.WriteFile(guild, []byte(remote), 0o644); err != nil {
 		t.Fatal(err)
@@ -190,13 +190,44 @@ func TestOwnedRemoteKindIsForeignToEveryOtherRemoteEntityService(t *testing.T) {
 	if testing.Short() {
 		return
 	}
+	// 登记路由与预加载的 kind（联盟服务方案 §2.7）：alliance 拥有 Guild（Remote、preload=startup），game 什么都不拥有；
+	// 本地 kind Shard 不登记路由。
+	kinds := `package registry
+
+import (
+	"slices"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	guild "example.com/planet/game/entities/guild"
+)
+
+func TestRouteAndPreloadKinds(t *testing.T) {
+	want := []entity.EntityKind{guild.EntityKindGuild}
+	if got := RouteKinds("alliance"); !slices.Equal(got, want) {
+		t.Fatalf("RouteKinds(alliance) = %v, want %v", got, want)
+	}
+	if got := PreloadKinds("alliance"); !slices.Equal(got, want) {
+		t.Fatalf("PreloadKinds(alliance) = %v, want %v", got, want)
+	}
+	if got := RouteKinds("game"); len(got) != 0 {
+		t.Fatalf("RouteKinds(game) = %v, want none", got)
+	}
+	if got := PreloadKinds("game"); len(got) != 0 {
+		t.Fatalf("PreloadKinds(game) = %v, want none", got)
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(root, "internal", "registry", "route_kinds_test.go"), []byte(kinds), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	useLocalRoostCore(t, root)
-	for _, action := range []string{"build", "vet"} {
-		check := exec.Command("go", action, "./...")
+	for _, args := range [][]string{{"build", "./..."}, {"vet", "./..."}, {"test", "-count=1", "./internal/registry/"}} {
+		check := exec.Command("go", args...)
 		check.Dir = root
 		check.Env = append(os.Environ(), "GOWORK=off")
 		if output, err := check.CombinedOutput(); err != nil {
-			t.Fatalf("go %s with an owned Remote kind: %v\n%s", action, err, output)
+			t.Fatalf("go %s with an owned Remote kind: %v\n%s", strings.Join(args, " "), err, output)
 		}
 	}
 }

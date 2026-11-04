@@ -23,6 +23,8 @@ import (
 //     消息得到“handler 未注册”。未声明归属的 handler 照旧进包级 RegisterNestHandlers，所有进程都有。
 //  2. ForeignKinds(service)：别的服务拥有的 kind，供 Remote Manager 在认领与写许可前拒绝（运行期守卫在框架里，
 //     见 docs/maintenance/FEATURE-2026-11-04-alliance-service.md §2.10 第 1 项）。
+//  3. RouteKinds(service) / PreloadKinds(service)：本服务拥有的 Remote 托管 kind（实体加载后在 Redis 登记路由）与
+//     其中声明了 preload=startup 的 kind（起服预加载），同一次扫描交给本服务的 Remote Mod（方案 §2.7、§2.10 第 2 项）。
 //
 // handler 的归属按目标参数类型所在的包解析：类型来自 game/entities/<pkg>，这个包里的实体声明了 service= 就归它。
 // 同一个 handler 锁住两个不同服务的 kind 时没有进程能执行它，生成期拒绝；一个源文件里的 handler 归属必须一致，
@@ -125,6 +127,7 @@ type ownedService struct {
 type ownedKind struct {
 	Expr    string // alias.EntityKindGuild
 	Service string
+	Preload bool // preload=startup
 }
 
 // Remote 托管的归属 kind 才进 ForeignKinds：RemoteEntityMod 在 Init 时要求它们是已注册的 Remote 托管 kind；
@@ -184,7 +187,7 @@ func generateOwnership(scan ownerScan, regs map[string][]bootstrapRegistration, 
 		if !strings.Contains(kind, ".") {
 			kind = aliasOf(importPath) + "." + kind
 		}
-		data.Kinds = append(data.Kinds, ownedKind{Expr: kind, Service: item.Service})
+		data.Kinds = append(data.Kinds, ownedKind{Expr: kind, Service: item.Service, Preload: item.Preload})
 	}
 	for alias, importPath := range used {
 		data.Imports = append(data.Imports, bootstrapPackage{Alias: alias, ImportPath: importPath})
@@ -236,6 +239,14 @@ var remoteKindOwners = map[entity.EntityKind]string{
 {{- end }}
 }
 
+// startupPreloadKinds 是声明了 preload=startup 的归属 Remote kind：归属服务起服时加载 owner 是本 sid 的这些实体
+// 并登记路由。没有声明的 kind 只在第一次访问时冷加载。
+var startupPreloadKinds = map[entity.EntityKind]bool{
+{{- range .Kinds }}{{ if .Preload }}
+	{{ .Expr }}: true,
+{{- end }}{{ end }}
+}
+
 // ownedNestHandlers 按归属服务列出只在该服务的 Nest 引擎实例上注册的 handler（锁住归属 kind 的 handler）。
 var ownedNestHandlers = map[string][]func(*nest.NestMgr) error{
 {{- range .Services }}
@@ -254,6 +265,31 @@ func ForeignKinds(service string) []entity.EntityKind {
 		}
 	}
 	slices.Sort(out)
+	return out
+}
+
+// RouteKinds 返回 service 拥有的 Remote 托管 kind（排序）：这些实体在 service 的实例上加载后，在 Redis 登记
+// “实体 ID → sid + 所有权代际”的路由提示，//roost:rpc route 的调用方据此找到 owner（联盟服务方案 §2.7）。
+func RouteKinds(service string) []entity.EntityKind {
+	var out []entity.EntityKind
+	for kind, owner := range remoteKindOwners {
+		if owner == service {
+			out = append(out, kind)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// PreloadKinds 返回 RouteKinds(service) 里声明了 preload=startup 的 kind（排序）：service 起服时、在路由 rpc 的
+// handler 注册之前加载 owner 是本 sid 的这些实体。
+func PreloadKinds(service string) []entity.EntityKind {
+	var out []entity.EntityKind
+	for _, kind := range RouteKinds(service) {
+		if startupPreloadKinds[kind] {
+			out = append(out, kind)
+		}
+	}
 	return out
 }
 

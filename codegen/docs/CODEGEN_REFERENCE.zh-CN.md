@@ -1103,7 +1103,16 @@ type Mail interface {
 | 首参不是 `context.Context` | 不接 ctx 的方法不做 I/O，没有理由是一次往返 |
 | 包里没有 `ErrRequestInvalid` | 生成的 handler 需要一个带码的错误回答"这一帧读不懂"；用 `CodeInternal` 会把调用方的畸形请求报成服务端故障 |
 | `affinity=` 指向不存在的参数，或裸 key 不是 string | 亲和 key 在调用时从实参读；派生形式写 `affinity=x.Key()` |
-| 写了 `shard=` | 槽位表路由已移除（联盟服务方案 2026-11-04 路由决定，§2.7）；多实例实体服务改用路由 RPC（`//roost:rpc route`），按完整 Entity ID 经 Redis 路由登记与持久所有权记录找 owner |
+| `route` / `route=<param>` 指向不存在的参数（只写 `route` 时找名为 `target` 的参数）、参数不是 `int64`，或与 `affinity=` 同时写 | 路由键是方法作用的已有实体的完整 Entity ID（kind 在 ID 里，联盟服务方案 §2.3）；按 owner 与按 key 哈希是两种互斥的选实例方式 |
+| 一个服务里既有 route 方法又有 `affinity=` 方法 | 两种客户端的构造参数不同（路由查找 / 服务发现），一个服务只用一种 |
+| `shard=` | 槽位表已移除（2026-11-04 路由决定），报“已移除”并给出 `route` 写法；`shard=` 的参数是编码槽位的业务号，不能原样改成 `route=` |
+| 工程 rpc 有 route 方法，拥有它的服务却不拥有任何 Remote 托管 kind（`roost generate`） | 路由查找按 Redis 路由登记与持久所有权记录找 owner，只有 `//roost:entity remote=managed service=<owner>` 的 kind 有这两样 |
+
+`//roost:rpc route` 标在对已有实体的方法上：生成的客户端经框架的路由查找（本进程缓存 → Redis 路由登记 → 持久所有权记录，都没有就答
+“实体不存在”）发往 owner，遇到“改投”（`errcode.CodeRedirect`，响应的 `RedirectSid`）改投一次，no responders 后重新查找一次；生成的
+handler 把服务实现返回的 `servicerpc.Redirect` 的 owner 写进响应。创建类方法不标 route，照旧经队列组随机路由。调用方用
+`servicerpc.Classify` 分 OK / Rejected / Retryable / Unknown。路由查找客户端与服务端前置检查在框架的路由改造里（联盟服务方案第 4 节
+1R），接上之前写了 route 的方法生成期拒绝。
 | 生成名与包内已有声明撞名 | 生成的那边不能动（`pkg.Server` 在每个服务里读法一致）；撞名的若是函数或常量，会在编译失败前先改掉整个包的含义 |
 | 一个包里两个被标记的接口 | 生成文件在包级声明十几个固定名字；`app.Service` 每进程一个，两个被标记的接口应是两个包 |
 

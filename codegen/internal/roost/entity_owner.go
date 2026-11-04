@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/entityowner"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/servicerpc"
 )
 
 // 实体归属服务（//roost:entity service=<name>，维护者 2026-11-04 决定，见
@@ -21,6 +22,8 @@ import (
 //     ownership_gen.go 由 generate 写，两者从同一次扫描得到；改了 service= 而没 sync 时 generate 拒绝。
 //   - add lifecycle 缺省落到归属服务，拒绝别的服务。
 //   - doctor 的 entity-owner 检查：别的服务的代码构造了归属 kind 的 Sender（写必须经归属服务的 rpc）。
+//   - //roost:rpc route 只能用在拥有 Remote 托管 kind 的服务的 rpc 上（checkRouteRPCOwners）；preload=startup 的
+//     写法在 entityowner 扫描时校验。
 //
 // 未声明 service= 的 kind 不受这些约束，保持原行为：任何带 Nest 的服务都注册、都能写。
 
@@ -104,6 +107,9 @@ func checkEntityOwnersBeforeGenerate(root string, m Manifest) error {
 	if err := validateEntityOwners(root, m, owned); err != nil {
 		return err
 	}
+	if err := checkRouteRPCOwners(root, m, owned); err != nil {
+		return err
+	}
 	raw, err := os.ReadFile(filepath.Join(root, "internal", "bootstrap", "generated.go"))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -127,6 +133,44 @@ func checkEntityOwnersBeforeGenerate(root string, m Manifest) error {
 			wantForeign != strings.Contains(string(raw), foreignKindsOption(service)) {
 			return fmt.Errorf("entity owners (//roost:entity service=) changed and internal/bootstrap/generated.go does not match for service %s; "+
 				"run: roost project sync (then roost generate)", service)
+		}
+	}
+	return nil
+}
+
+// checkRouteRPCOwners 要求写了 //roost:rpc route 的工程 rpc 由拥有 Remote 托管 kind 的服务拥有（联盟服务方案
+// §2.10 第 2 项）。路由方法的客户端按实体的 Redis 路由登记、再按持久所有权记录找 owner（§2.7），两者只有本服务拥有的
+// Remote 托管 kind（//roost:entity remote=managed service=<owner>）才有；拥有者没有这类 kind 时每次调用都只会得到
+// “实体不存在”，所以生成期拒绝。add rpc -entity-service 只是骨架形状、不记进 roost.yaml，规则按拥有者的实体判断。
+// 解析失败的 rpc 包跳过：同一个错误由随后的 servicerpc 生成报出，带文件与行。
+func checkRouteRPCOwners(root string, m Manifest, owned []entityowner.Owned) error {
+	routeServices := map[string]bool{}
+	for _, service := range entityowner.RouteServices(owned) {
+		routeServices[service] = true
+	}
+	for _, dir := range projectRPCDirs(root, m) {
+		services, err := servicerpc.ParseDir(filepath.Join(root, filepath.FromSlash(dir)))
+		if err != nil {
+			continue
+		}
+		rpc := filepath.Base(dir)
+		owner := ""
+		for _, name := range sortedServiceNames(m) {
+			if contains(m.Services[name].Rpcs, rpc) {
+				owner = name
+				break
+			}
+		}
+		for _, service := range services {
+			for _, method := range service.Methods {
+				if method.Route == "" || routeServices[owner] {
+					continue
+				}
+				return fmt.Errorf("%s: method %s.%s is a route method (//roost:rpc route, key %s), but its owner service %s owns no Remote managed entity kind; "+
+					"a route call finds the entity's owner through the route registration and the durable ownership record, which only kinds declared "+
+					"//roost:entity remote=managed service=%s have. Declare the entity it acts on that way, or drop the route marker (a create method routes to any instance)",
+					dir, service.Interface, method.Name, method.Route, owner, owner)
+			}
 		}
 	}
 	return nil

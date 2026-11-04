@@ -108,6 +108,44 @@ func buildService(facts pkgFacts, pkgName, path, name string, options map[string
 			"— so rename the existing one",
 			where, emitted, emitted, kind, pkgName, emitted)
 	}
+	// route 方法按实体的 owner 选实例（联盟服务方案 §2.3、§2.10 第 2 项，维护者 2026-11-04“按推荐”）：路由键是方法的
+	// int64 参数，取完整 Entity ID——kind 在 ID 里，Redis 路由登记与持久所有权记录都按它查，标记不用再写 kind。
+	// 与 affinity= 是两种互斥的选实例方式：一个按 owner，一个按 key 的哈希。
+	for index := range service.Methods {
+		method := &service.Methods[index]
+		if method.Route == "" {
+			continue
+		}
+		if method.Affinity != "" {
+			return Service{}, fmt.Errorf("%s: method %s declares both route and affinity=; a call goes either to the entity's owner or to an affinity instance, not both",
+				where, method.Name)
+		}
+		var found *Field
+		for i := range method.Params {
+			if method.Params[i].Name == method.Route {
+				found = &method.Params[i]
+				break
+			}
+		}
+		if found == nil {
+			return Service{}, fmt.Errorf("%s: method %s is a route method keyed by %s, but it has no parameter %s; "+
+				"write //roost:rpc route=<param> to name the int64 parameter that holds the entity id", where, method.Name, method.Route, method.Route)
+		}
+		if found.Type != "int64" {
+			return Service{}, fmt.Errorf("%s: method %s is a route method keyed by %s, but %s is %s; the route key is the int64 full entity id of the entity the call acts on",
+				where, method.Name, method.Route, found.Name, found.Type)
+		}
+	}
+	// 一个服务的方法要么按 owner 路由、要么按亲和：两种客户端的构造参数不同（路由查找 vs 服务发现）。实体服务按 owner
+	// 路由，亲和用于按 key 分区的无实体服务（match），两种混在一个服务里没有使用者。
+	hasRoute, hasAffinity := false, false
+	for _, method := range service.Methods {
+		hasRoute = hasRoute || method.Route != ""
+		hasAffinity = hasAffinity || method.Affinity != ""
+	}
+	if hasRoute && hasAffinity {
+		return Service{}, fmt.Errorf("%s: %s mixes route and affinity= methods; a service routes to entity owners or by affinity, not both", where, service.Interface)
+	}
 	// Affinity is read off an argument at call time, so it has to name one.
 	//
 	// Two forms are accepted: a bare parameter, which must be a string, and
@@ -177,6 +215,9 @@ func emittedNames(service Service) []string {
 		if method.Affinity != "" && !slices.Contains(names, "AffinityMethods") {
 			names = append(names, "AffinityMethods")
 		}
+		if method.Route != "" && !slices.Contains(names, "redirectSID") {
+			names = append(names, "redirectSID")
+		}
 		names = append(names,
 			"Method"+method.Name,
 			"rpc"+method.Name+"Request",
@@ -191,9 +232,12 @@ func buildMethod(index typeIndex, where string, item *ast.Field, funcType *ast.F
 	method := Method{Name: name, Doc: commentLines(item.Doc)}
 	if options, ok := interfaceMarker(item.Doc, item.Comment); ok {
 		method.Affinity = options["affinity"]
-		if _, shard := options["shard"]; shard {
-			// 槽位表路由按 2026-11-04 路由决定移除（联盟服务方案 §2.7）：实体加载时在 Redis 登记路由，RPC 标为路由 RPC。
-			return Method{}, fmt.Errorf("%s: method %s: //roost:rpc shard= 已移除（槽位表路由，联盟服务方案 2026-11-04 路由决定），改用 //roost:rpc route", where, name)
+		// route 是标志也是键：只写 route 时键是名为 target 的参数，route=<param> 指定别的参数。
+		if route, ok := options["route"]; ok {
+			if route == "true" {
+				route = "target"
+			}
+			method.Route = route
 		}
 		if _, reliable := options["reliable"]; reliable {
 			return Method{}, fmt.Errorf("%s: method %s cannot select reliable per method; configure nats.rpc.transport=jetstream on both owner and client", where, name)

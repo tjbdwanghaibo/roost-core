@@ -140,3 +140,75 @@ func TestHandlerAcrossTwoOwningServicesIsRejected(t *testing.T) {
 		t.Fatalf("handler over kinds owned by two services must be refused with both names, got %v", err)
 	}
 }
+
+// 本服务登记路由的 kind 与起服预加载的 kind（联盟服务方案 §2.7、§2.10 第 2 项）来自同一次归属扫描：RouteKinds 是
+// 本服务拥有的 Remote 托管 kind，PreloadKinds 是其中声明了 preload=startup 的。没写 preload= 的 kind 不预加载。
+func TestRouteAndPreloadKindsComeFromTheOwnershipScan(t *testing.T) {
+	root := ownedProject(t, "//roost:entity id=1 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed service=alliance preload=startup")
+	if err := Run([]string{"-dir", filepath.Join(root, "game")}, io.Discard); err != nil {
+		t.Fatalf("nest: %v", err)
+	}
+	ownership := readOwned(t, root, "internal/registry/ownership_gen.go")
+	_, preload, found := strings.Cut(ownership, "var startupPreloadKinds = map[entity.EntityKind]bool{")
+	preload, _, _ = strings.Cut(preload, "}")
+	if !found || !strings.Contains(preload, "guild.EntityKindGuild: true") ||
+		!strings.Contains(ownership, "func RouteKinds(service string) []entity.EntityKind") ||
+		!strings.Contains(ownership, "func PreloadKinds(service string) []entity.EntityKind") {
+		t.Fatalf("ownership_gen.go must list Guild as a startup preload kind and give RouteKinds / PreloadKinds:\n%s", ownership)
+	}
+
+	entityFile := filepath.Join(root, "game", "entities", "guild", "entity.go")
+	raw := strings.Replace(readOwned(t, root, "game/entities/guild/entity.go"), " preload=startup", "", 1)
+	if err := os.WriteFile(entityFile, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"-dir", filepath.Join(root, "game")}, io.Discard); err != nil {
+		t.Fatalf("nest without preload=: %v", err)
+	}
+	ownership = readOwned(t, root, "internal/registry/ownership_gen.go")
+	_, preload, _ = strings.Cut(ownership, "var startupPreloadKinds = map[entity.EntityKind]bool{")
+	preload, _, _ = strings.Cut(preload, "}")
+	if strings.Contains(preload, "EntityKindGuild") || !strings.Contains(ownership, `guild.EntityKindGuild: "alliance"`) {
+		t.Fatalf("a kind without preload= must still route but not preload:\n%s", ownership)
+	}
+}
+
+// preload=startup 只能写在 remote=managed 且声明了 service= 的实体上：预加载的范围是“持久所有权记录的 owner 是本 sid
+// 的实体”，只有归属某个服务的 Remote 托管 kind 有。取值只有 startup。
+func TestPreloadIsRefusedOutsideAnOwnedRemoteEntity(t *testing.T) {
+	for name, tc := range map[string]struct{ guild, player, want string }{
+		"local entity without service": {
+			guild:  "//roost:entity id=1 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed service=alliance",
+			player: "category=entity.EntityCategoryPlayer preload=startup",
+			want:   "preload=startup needs remote=managed and service=",
+		},
+		"local entity with service": {
+			guild:  "//roost:entity id=1 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed service=alliance",
+			player: "category=entity.EntityCategoryPlayer service=game preload=startup",
+			want:   "preload=startup needs remote=managed and service=",
+		},
+		"remote entity without service": {
+			guild: "//roost:entity id=1 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed preload=startup",
+			want:  "preload=startup needs remote=managed and service=",
+		},
+		"unknown policy": {
+			guild: "//roost:entity id=1 entityKind=EntityKindGuild category=entity.EntityCategoryRemote remote=managed service=alliance preload=lazy",
+			want:  `preload="lazy" is not a preload policy`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := ownedProject(t, tc.guild)
+			if tc.player != "" {
+				playerFile := filepath.Join(root, "game", "entities", "player", "entity.go")
+				raw := strings.Replace(readOwned(t, root, "game/entities/player/entity.go"), "category=entity.EntityCategoryPlayer", tc.player, 1)
+				if err := os.WriteFile(playerFile, []byte(raw), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := Run([]string{"-dir", filepath.Join(root, "game")}, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+}

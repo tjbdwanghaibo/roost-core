@@ -110,6 +110,16 @@ type {{.Response}} struct {
 	rpcStatus
 {{range .ResponseFields}}	{{.}}
 {{end}}}
+{{if .Route}}
+// RedirectSID implements servicerpc.RedirectProvider: a "not the owner" answer
+// carries the owner's sid, and the client redirects to it once.
+func (r {{.Response}}) RedirectSID() int32 { return r.RedirectSid }
+{{end}}{{end}}{{if .AnyRoute}}
+// redirectSID is the owner sid of a servicerpc.Redirect answer, 0 otherwise.
+func redirectSID(err error) int32 {
+	sid, _ := servicerpc.RedirectSID(err)
+	return sid
+}
 {{end}}
 // --- server ---
 
@@ -133,8 +143,8 @@ func RegisterHandlers(b bus.IBus, service {{.Iface}}) error {
 				return {{.Response}}{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
 			}
 			{{if .HasResults}}{{range $i, $r := .Results}}{{if $i}}, {{end}}{{$r.Name}}{{end}}, err := service.{{.Name}}({{.CallArgs}})
-			return {{.Response}}{rpcStatus: statusOf(err), {{.ResultFields}}}, nil{{else}}err := service.{{.Name}}({{.CallArgs}})
-			return {{.Response}}{rpcStatus: statusOf(err)}, nil{{end}}
+			return {{.Response}}{rpcStatus: statusOf(err), {{.ResultFields}}{{if .Route}}, RedirectSid: redirectSID(err){{end}}}, nil{{else}}err := service.{{.Name}}({{.CallArgs}})
+			return {{.Response}}{rpcStatus: statusOf(err){{if .Route}}, RedirectSid: redirectSID(err){{end}}}, nil{{end}}
 		},
 {{end}}	}
 	// Registered against Methods rather than by ranging the map, so a method

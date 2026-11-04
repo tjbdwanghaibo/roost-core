@@ -69,6 +69,14 @@ type Method struct {
 	// turns that bound into cross-replica contention. Affinity is therefore a
 	// per-method transport property, not a default.
 	Affinity string
+	// Route names the int64 parameter that holds the full entity id of an
+	// existing entity the call acts on (//roost:rpc route → "target",
+	// //roost:rpc route=<param> → param), or "" for a method that may go to any
+	// instance (a create method). The generated client sends a route method to
+	// the instance that owns that entity, found through the framework's route
+	// lookup, and follows one redirect (联盟服务方案 §2.3、§2.7). The lookup is
+	// a hint; the durable Remote ownership stays the authority.
+	Route string
 	// Doc is the method's own comment, carried into the generated client so
 	// the generated code reads like the interface rather than like a table.
 	Doc []string

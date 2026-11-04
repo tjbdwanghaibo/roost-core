@@ -429,7 +429,25 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
 恢复已完成）才在总线上注册 handler，恢复期间的请求得到 no responders。请求回执（requestID → 结果）放在被改的实体里、与业务修改
 同一事务提交，骨架只在注释里写出 handler 的顺序。
 
-多实例时写方法用路由 RPC：调用方按完整 Entity ID 经 Redis 路由登记与持久所有权记录找 owner、改投一次，服务端前置检查不让不存在的实体进入写准入（框架接口见 [guide/09“路由 RPC 与改投”](../../docs/framework/guide/09-services.md#2a-路由-rpc-与改投)）。原来的 `//roost:rpc shard=` 槽位表路由已移除，写了它生成期报错；`//roost:rpc route` 的生成随联盟服务方案 2R 落地（[方案 §2.7](../../docs/maintenance/FEATURE-2026-11-04-alliance-service.md#27-分片接管与迁移决定-2)）。
+多实例时，对已有实体的方法标 `//roost:rpc route`（联盟服务方案 2026-11-04 路由决定，[§2.3](../../docs/maintenance/FEATURE-2026-11-04-alliance-service.md#23-写rpc-契约)、
+[§2.7](../../docs/maintenance/FEATURE-2026-11-04-alliance-service.md#27-分片接管与迁移决定-2)）：路由键缺省是方法里名为 `target` 的 `int64`
+参数，取**完整 Entity ID**（kind 在 ID 里，`roost id entity` 换算）；用别的参数时写 `//roost:rpc route=<param>`。骨架的 `target` 就是完整 Entity ID。
+
+    // Join 加入联盟 target。
+    //roost:rpc route
+    Join(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64) (version uint64, err error)
+
+- 生成的客户端经框架的路由查找把调用发给 target 的 owner：本进程缓存 → Redis 路由登记 → 持久所有权记录，都没有就答“实体不存在”、
+  请求不发出去；遇到“改投”改投一次，no responders 后重新查找一次。生成的 handler 先做服务端前置检查（实体不存在、不是 owner 时
+  不进 Nest）。查找结果只是提示，写准入仍由所有权记录 + fence 裁决。不需要任何分片配置键。**接线状态**：路由查找客户端与服务端
+  前置检查在框架的路由改造里（方案第 4 节 1R），接上之前写了 route 的方法在生成期拒绝并写明原因，不生成发往任意实例的客户端。
+- 创建类方法（例如 `Found`）**不标** route，照旧走 NATS 队列组随机路由：NATS 只在已注册 handler 的实例里选，新实例一加入就承接新建。
+  随机路由下同一个 requestID 的重发可能落到别的实例，所以它的回执要记在按稳定 ID 路由的实体上（例如发起者的成员守卫）。
+- 校验：路由键必须是方法的 `int64` 参数；不能与 `affinity=` 写在同一方法上，一个服务也不混用两种；拥有这个 rpc 的服务必须拥有
+  至少一个 Remote 托管 kind（`//roost:entity remote=managed service=<owner>`），否则 `roost generate` 拒绝——路由查找只认得这类
+  kind 的登记与所有权记录。旧的 `shard=` 生成期报“已移除”。
+- 实体加载后在 Redis 登记路由的 kind，就是拥有者自己的 Remote 托管 kind（`registry.RouteKinds("<owner>")`，生成在
+  `internal/registry/ownership_gen.go`）；需要起服就常驻的类型在实体标记上写 `preload=startup`（[§6.w](#6w-实体归属服务roostentity-service)）。
 
 ### 6.w 实体归属服务：`//roost:entity service=<name>`
 
@@ -439,6 +457,12 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
 `roost add lifecycle` 缺省落到归属服务；doctor 的 `entity-owner` 项报告别的服务的代码（`internal/service/<name>/`、它拥有的
 `internal/rpc/<rpc>/`、玩家接入代码）构造了这个 kind 的 Sender。没写 `service=` 的 kind 保持原行为，任何带 Nest 的服务都注册、都能写。
 标记写法与拒绝规则见 [TAGS](TAGS.zh-CN.md)；实现见 [impl/12 §2G](../../docs/framework/impl/12-codegen.md#2g-实体归属服务service)。
+
+归属服务拥有的 Remote 托管 kind 就是它在 Redis 登记路由的 kind（`registry.RouteKinds("<service>")`）。数量可控、需要起服就常驻的
+类型（例如靠心跳推进活动阶段的联盟）在实体标记上再写 `preload=startup`：归属服务起服时、路由 rpc 的 handler 注册之前，加载持久
+所有权记录的 owner 是本 sid 的这个 kind 的全部实体并登记路由（`registry.PreloadKinds("<service>")`）。没写就不预加载，第一次访问时
+冷加载。`preload=` 只有 `startup` 一个取值，只能写在 `remote=managed` 且声明了 `service=` 的实体上，否则生成期报错。两份列表
+经 ModOption 交给本服务的 `remote_entity`（与 `WithForeignKinds` 同一种传法，不加 YAML 键；接线等框架路由改造）。
 
 ### 6.y 按实体的持久定时器：`roost add timer`
 

@@ -7,6 +7,9 @@ import "fmt"
 //
 //   - 每个写方法带 requestID（调用方生成、重试时不变）与调用者身份（callerID、callerSID 来自调用方已鉴权的会话），
 //     服务按 requestID 幂等；Result(target, requestID) 回答这笔请求的结局。
+//   - target 是完整 Entity ID（kind 在 ID 里）。对已有实体的方法标 //roost:rpc route（路由键缺省是 target，
+//     route=<param> 指定别的 int64 参数），客户端按实体的路由登记与所有权记录发往 owner、改投一次；创建类方法不标，
+//     走队列组随机路由，它的 requestID 记在按稳定 ID 路由的实体上（方案 §2.3）。
 //   - 接收端处理预算 HandleBudget：普通 Bus RPC 不把调用方截止时间带到接收端，整次处理（进 Nest、等提交确认）
 //     由接收端自己限时。
 //   - 答复四类用框架的约定（阶段 1）：写的错误经 wiring/remoteentity.RPCWriteAnswer 转成答复——未执行可重试是
@@ -60,6 +63,14 @@ func Error(err error) (int32, string) { return errcode.ClientError(err) }
 // authenticated session, never from client-supplied fields. A write answers
 // the entity's new state version; show the result from the reply, and read
 // mirrors afterwards no older than that version.
+//
+// target is the full entity id (roost id entity) of the entity a method acts
+// on. A method on an existing entity carries //roost:rpc route: the call goes
+// to the instance that owns target, found through the entity's route
+// registration and ownership record, and follows one redirect (route=<param>
+// names another int64 parameter). A create method carries no route and any
+// instance may take it; anchor its request id on an entity routed by a stable
+// id, since the new entity does not exist yet when a retry arrives.
 //
 //roost:rpc service_type=%[1]s capability=rpc.%[1]s
 type %[2]s interface {

@@ -30,11 +30,17 @@ type Owned struct {
 	Service string
 	// Remote 表示 remote=managed。
 	Remote bool
+	// Preload 表示 preload=startup：归属服务起服时加载 owner 是本 sid 的这个 kind 的全部实体并登记路由
+	// （联盟服务方案 §2.7“起服预加载”）。只能写在 remote=managed 且声明了 service= 的实体上。
+	Preload bool
 	// Dir 是实体包目录（绝对路径）。
 	Dir string
 	// Position 是标记所在的 file:line，用于报错。
 	Position string
 }
+
+// PreloadStartup 是 preload= 唯一的取值：归属服务起服时预加载。
+const PreloadStartup = "startup"
 
 // Scan 读 gameDir/entities/*/ 下全部实体标记，返回声明了 service= 的实体，按 Dir、Entity 排序。
 // 这是生成工程放实体的唯一位置（roost add entity、id 检查与 remote 宿主检查读同一处）。
@@ -98,12 +104,25 @@ func scanFile(path string) ([]Owned, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%s:%d: //roost:entity %w", position.Filename, position.Line, err)
 			}
+			where := fmt.Sprintf("%s:%d", position.Filename, position.Line)
 			service, declared := params["service"]
+			remote := strings.EqualFold(strings.TrimSpace(params["remote"]), "managed")
+			// preload= 是实体类型的显式策略（维护者 2026-11-04：“没有规则就不加载，需要 entity 显示加规则”）。只有一个取值；
+			// 预加载的范围是“所有权记录的 owner 是本 sid 的实体”，所以只对归属某个服务的 Remote 托管 kind 有意义。
+			preload, hasPreload := params["preload"]
+			if hasPreload {
+				switch {
+				case strings.TrimSpace(preload) != PreloadStartup:
+					return nil, fmt.Errorf("%s: //roost:entity preload=%q is not a preload policy; the only one is preload=%s (omit it to load on demand)", where, preload, PreloadStartup)
+				case !remote || !declared:
+					return nil, fmt.Errorf("%s: //roost:entity preload=%s needs remote=managed and service=<name>: the owning service preloads "+
+						"the entities whose durable Remote owner is its sid, and only a Remote managed kind owned by a service has one", where, PreloadStartup)
+				}
+			}
 			if !declared {
 				continue
 			}
 			service = strings.TrimSpace(service)
-			where := fmt.Sprintf("%s:%d", position.Filename, position.Line)
 			if !validServiceName(service) {
 				return nil, fmt.Errorf("%s: //roost:entity service=%q is not a service name (lower snake case, as in roost.yaml services)", where, service)
 			}
@@ -123,7 +142,8 @@ func scanFile(path string) ([]Owned, error) {
 				Entity:   entityName,
 				Kind:     kind,
 				Service:  service,
-				Remote:   strings.EqualFold(strings.TrimSpace(params["remote"]), "managed"),
+				Remote:   remote,
+				Preload:  hasPreload,
 				Dir:      filepath.Dir(path),
 				Position: where,
 			})
@@ -158,6 +178,18 @@ func DirOwners(owned []Owned) (map[string]string, error) {
 		out[item.Dir] = item.Service
 	}
 	return out, nil
+}
+
+// RouteServices 返回至少拥有一个 Remote 托管 kind 的服务（排序去重）：这些服务登记路由（联盟服务方案 §2.7），
+// 它们拥有的 rpc 才能写 //roost:rpc route——路由查找按 Redis 登记与持久所有权记录找 owner，只有 Remote 托管 kind 有。
+func RouteServices(owned []Owned) []string {
+	var remote []Owned
+	for _, item := range owned {
+		if item.Remote {
+			remote = append(remote, item)
+		}
+	}
+	return Services(remote)
 }
 
 // Services 返回至少拥有一个 kind 的服务，排序去重。

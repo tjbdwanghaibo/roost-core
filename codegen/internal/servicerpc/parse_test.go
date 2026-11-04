@@ -947,8 +947,10 @@ func TestAssemblyCollisionIsCheckedWhereCodeWillBeWritten(t *testing.T) {
 	}
 }
 
-// shard=<param>（槽位表路由）按 2026-11-04 路由决定移除：解析时报错并指向 //roost:rpc route。
-const shardedService = `package alliance
+// route（联盟服务方案 §2.3、§2.10 第 2 项，维护者 2026-11-04“按推荐”）：对已有实体的方法按实体的 owner 选实例。
+// 路由键是方法的 int64 参数，取完整 Entity ID；只写 route 时键是名为 target 的参数，route=<param> 指定别的参数。
+// 不能与 affinity= 同一方法，一个服务也不混用两种。创建类方法不标 route，照旧走队列组随机路由。
+const routedService = `package alliance
 
 import "context"
 
@@ -958,14 +960,58 @@ var ErrRequestInvalid error
 
 //roost:rpc service_type=alliance capability=rpc.alliance
 type Alliance interface {
-	//roost:rpc shard=allianceID
-	Join(ctx context.Context, requestID string, allianceID int64, playerID int64) (version uint64, err error)
+	// Found creates an alliance: no route, any instance may take it.
+	Found(ctx context.Context, requestID string, callerID int64, name string) (allianceID int64, err error)
+	//roost:rpc route
+	Join(ctx context.Context, requestID string, target int64, playerID int64) (version uint64, err error)
+	//roost:rpc route=allianceID
+	Info(ctx context.Context, allianceID int64) (version uint64, err error)
 }
 `
 
-func TestAShardMarkerIsRefused(t *testing.T) {
-	_, err := ParseDir(writeDir(t, shardedService))
-	if err == nil || !strings.Contains(err.Error(), "shard= 已移除") || !strings.Contains(err.Error(), "//roost:rpc route") {
-		t.Fatalf("shard= parsed: %v; want it refused, pointing at //roost:rpc route", err)
+func TestARouteKeyIsParsed(t *testing.T) {
+	services, err := ParseDir(writeDir(t, routedService))
+	if err != nil {
+		t.Fatalf("route was refused: %v", err)
+	}
+	got := map[string]string{}
+	for _, method := range services[0].Methods {
+		got[method.Name] = method.Route
+	}
+	if got["Found"] != "" || got["Join"] != "target" || got["Info"] != "allianceID" {
+		t.Fatalf("parsed routes %v, want Found unrouted, Join keyed by target, Info keyed by allianceID", got)
+	}
+}
+
+func TestARouteKeyIsValidated(t *testing.T) {
+	for name, tc := range map[string]struct{ from, to, want string }{
+		"bare route without target": {"//roost:rpc route=allianceID\n\tInfo", "//roost:rpc route\n\tInfo", "no parameter target"},
+		"names no parameter":        {"//roost:rpc route=allianceID", "//roost:rpc route=guildID", "no parameter guildID"},
+		"not an int64":              {"//roost:rpc route\n\tJoin", "//roost:rpc route=requestID\n\tJoin", "requestID is string"},
+		"together with affinity":    {"//roost:rpc route=allianceID", "//roost:rpc route=allianceID affinity=requestID", "both route and affinity="},
+		"mixed with affinity":       {"\t// Found creates", "\t//roost:rpc affinity=name\n\t// Found creates", "mixes route and affinity="},
+		"shard is removed":          {"//roost:rpc route=allianceID", "//roost:rpc shard=allianceID", `marker option "shard" was removed`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(routedService, tc.from) {
+				t.Fatalf("fixture lacks %q", tc.from)
+			}
+			_, err := ParseDir(writeDir(t, strings.Replace(routedService, tc.from, tc.to, 1)))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("%s: got %v, want an error containing %q", tc.to, err, tc.want)
+			}
+		})
+	}
+}
+
+// 路由客户端（servicerpc 的路由查找与 CallRoutedChecked）在框架的路由改造（方案第 4 节 1R）里；接线之前生成一个照旧
+// 发队列组的客户端会把请求送到任意实例，所以生成期拒绝并写明原因。
+func TestARouteMethodIsRefusedUntilTheRouteClientIsWired(t *testing.T) {
+	services, err := ParseDir(writeDir(t, routedService))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Generate(services[0]); err == nil || !strings.Contains(err.Error(), "route lookup client") {
+		t.Fatalf("generating a route method before the route client exists: %v", err)
 	}
 }
