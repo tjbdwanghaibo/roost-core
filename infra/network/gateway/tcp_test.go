@@ -659,9 +659,7 @@ func TestALoginThatFinishesLateDoesNotDisplaceANewerConnectionOfTheSameSession(t
 	if err := request(newer, 3); err != nil {
 		t.Fatalf("the newer connection was closed by an older connection's login that finished after it: %v", err)
 	}
-	if got := runtime.ActiveSessions(7); got != 1 {
-		t.Fatalf("active sessions = %d, want only the newer connection", got)
-	}
+	waitRegistered(t, runtime, 7, 1)
 }
 
 // A15 (closing batch 2): a handler that does not honor its context. The
