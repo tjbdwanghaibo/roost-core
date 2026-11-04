@@ -530,6 +530,10 @@ func serviceModConstructors(m Manifest, name string, allMods []string) []string 
 	if m.ownerServices[name] && contains(mods, "nest") {
 		out = append(out, ownedHandlersModCall(name))
 	}
+	// 有 preload=startup kind：预加载 Mod 排在 remote_entity、Nest 之后，路由 rpc 的 owner Mod 排在它之后。
+	if m.preloadServices[name] && contains(mods, "remote_entity") {
+		out = append(out, preloadModCall)
+	}
 	if spec, hosted := frameworkCatalog[m.Services[name].Framework]; hosted {
 		args := make([]string, 0, len(spec.ModArgs))
 		for _, arg := range spec.ModArgs {
@@ -603,8 +607,16 @@ func renderModConstructor(m Manifest, name string, allMods []string, service str
 		return "kitdataengine.NewMod(" + strings.Join(options, ", ") + ")"
 	case "remote_entity":
 		if m.ownedRemote && service != "" {
-			// 有 Remote kind 声明了归属服务（//roost:entity service=）：别的服务拥有的 kind 拒绝认领与写许可。
-			return "kitremoteentity.NewRemoteEntityMod(0, kitremoteentity.WithMongoStorage(EntityAccess), " + foreignKindsOption(service) + ")"
+			// 有 Remote kind 声明了归属服务（//roost:entity service=）：别的服务拥有的 kind 拒绝认领与写许可；本服务拥有的
+			// kind 加载后登记路由，其中 preload=startup 的起服预加载。
+			options := []string{"kitremoteentity.WithMongoStorage(EntityAccess)", foreignKindsOption(service)}
+			if m.routeServices[service] {
+				options = append(options, routeKindsOption(service))
+			}
+			if m.preloadServices[service] {
+				options = append(options, preloadKindsOption(service))
+			}
+			return "kitremoteentity.NewRemoteEntityMod(0, " + strings.Join(options, ", ") + ")"
 		}
 		return "kitremoteentity.NewRemoteEntityMod(0, kitremoteentity.WithMongoStorage(EntityAccess))"
 	case "nest":

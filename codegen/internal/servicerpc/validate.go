@@ -207,7 +207,7 @@ func emittedNames(service Service) []string {
 			names = append(names, "AffinityMethods")
 		}
 		if method.Route != "" && !slices.Contains(names, "redirectSID") {
-			names = append(names, "redirectSID")
+			names = append(names, "redirectSID", "RouteMethods", "RouteChecker")
 		}
 		names = append(names,
 			"Method"+method.Name,

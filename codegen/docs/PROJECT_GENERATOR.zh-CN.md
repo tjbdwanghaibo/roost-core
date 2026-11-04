@@ -439,8 +439,17 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
 
 - 生成的客户端经框架的路由查找把调用发给 target 的 owner：本进程缓存 → Redis 路由登记 → 持久所有权记录，都没有就答“实体不存在”、
   请求不发出去；遇到“改投”改投一次，no responders 后重新查找一次。生成的 handler 先做服务端前置检查（实体不存在、不是 owner 时
-  不进 Nest）。查找结果只是提示，写准入仍由所有权记录 + fence 裁决。不需要任何分片配置键。**接线状态**：路由查找客户端与服务端
-  前置检查在框架的路由改造里（方案第 4 节 1R），接上之前写了 route 的方法在生成期拒绝并写明原因，不生成发往任意实例的客户端。
+  不进 Nest）。查找结果只是提示，写准入仍由所有权记录 + fence 裁决。不需要任何分片配置键。框架接口见
+  [guide/09“路由 RPC 与改投”](../../docs/framework/guide/09-services.md#2a-路由-rpc-与改投)。
+- `-entity-service` 骨架：`Apply` / `Result` 已标 route；`Service.CheckRoute` 调 `kitremoteentity.RPCRouteCheck`（生成的 route
+  handler 先调它，服务没实现 `RouteChecker` 时注册 handler 被拒）；owner Mod 依赖 `nats`、`nest`、`remote_entity`，经
+  `OptionalDependsOn` 排在起服预加载（`mods.ModRemoteEntityPreload`）之后，Start 时把 Remote Manager 与本进程 sid 交给
+  `Service.SetOwnership` 再注册 handler——恢复与预加载完成前请求得到 no responders（可重试，未执行）。所以 `-entity-service`
+  要求拥有者已经托管 Remote 实体 kind，没有时拒绝并写明怎么声明。
+- 调用方：生成的 ClientMod 在 Provide 时经 `kitremoteentity.RouteSource` 取路由查找（`OptionalDependsOn` remote_entity /
+  remote_mirror）；调用 route 方法的服务（`uses_rpcs`）既没有 `remote_entity` 也没有 `remote_mirror` 时 `roost generate` 拒绝并给出
+  `roost add mod remote_mirror -service <caller>`。构造参数按服务实际用到的策略：有 route 方法才要路由查找，有 `affinity=` 方法
+  才要服务发现。拥有者有预加载 kind 时，owner Mod（`mod.go`）不提 `ModRemoteEntityPreload` 也拒绝。
 - 创建类方法（例如 `Found`）**不标** route，照旧走 NATS 队列组随机路由：NATS 只在已注册 handler 的实例里选，新实例一加入就承接新建。
   随机路由下同一个 requestID 的重发可能落到别的实例，所以它的回执要记在按稳定 ID 路由的实体上（例如发起者的成员守卫）。
 - 路由是方法级策略：一个服务可以同时有 route、`affinity=` 与不标的方法，每个方法按自己的标记选路径，生成的客户端只要求该服务
@@ -463,7 +472,7 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
 类型（例如靠心跳推进活动阶段的联盟）在实体标记上再写 `preload=startup`：归属服务起服时、路由 rpc 的 handler 注册之前，加载持久
 所有权记录的 owner 是本 sid 的这个 kind 的全部实体并登记路由（`registry.PreloadKinds("<service>")`）。没写就不预加载，第一次访问时
 冷加载。`preload=` 只有 `startup` 一个取值，只能写在 `remote=managed` 且声明了 `service=` 的实体上，否则生成期报错。两份列表
-经 ModOption 交给本服务的 `remote_entity`（与 `WithForeignKinds` 同一种传法，不加 YAML 键；接线等框架路由改造）。
+经 ModOption 交给本服务的 `remote_entity`（`kitremoteentity.WithRouteKinds(registry.RouteKinds("<service>")...)`、`WithPreloadKinds(registry.PreloadKinds("<service>")...)`，与 `WithForeignKinds` 同一种传法，不加 YAML 键）；有预加载 kind 的服务还装 `kitremoteentity.NewRemotePreloadMod()`。改了 `preload=` 先 `roost project sync`（bootstrap 与归属不一致时 generate 拒绝）。
 
 ### 6.y 按实体的持久定时器：`roost add timer`
 

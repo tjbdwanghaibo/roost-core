@@ -180,18 +180,6 @@ func DirOwners(owned []Owned) (map[string]string, error) {
 	return out, nil
 }
 
-// RouteServices 返回至少拥有一个 Remote 托管 kind 的服务（排序去重）：这些服务登记路由（联盟服务方案 §2.7），
-// 它们拥有的 rpc 才能写 //roost:rpc route——路由查找按 Redis 登记与持久所有权记录找 owner，只有 Remote 托管 kind 有。
-func RouteServices(owned []Owned) []string {
-	var remote []Owned
-	for _, item := range owned {
-		if item.Remote {
-			remote = append(remote, item)
-		}
-	}
-	return Services(remote)
-}
-
 // Services 返回至少拥有一个 kind 的服务，排序去重。
 func Services(owned []Owned) []string {
 	seen := map[string]bool{}

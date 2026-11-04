@@ -67,6 +67,16 @@ func addRPC(root string, m Manifest, options AddOptions) ([]string, error) {
 		} else if !contains(resolved, "nest") {
 			return nil, fmt.Errorf("rpc -entity-service writes entities through Nest, but service %s has no nest mod; run: roost add mod nest -service %s", service, service)
 		}
+		// 骨架的 Apply / Result 标了 //roost:rpc route：路由查找只认得拥有者托管的 Remote 实体 kind（checkRouteRPCOwners
+		// 的同一条规则），先在这里拒绝，免得生成的骨架让下一次 roost generate 失败。
+		owned, err := projectEntityOwners(root)
+		if err != nil {
+			return nil, fmt.Errorf("scan entity owners: %w", err)
+		}
+		if route, _ := routeAndPreloadServices(owned); !route[service] {
+			return nil, fmt.Errorf("rpc -entity-service routes its methods to the owner of their entity (//roost:rpc route), but service %s owns no Remote managed entity kind; "+
+				"mark the entity it serves //roost:entity remote=managed service=%s (category=entity.EntityCategoryRemote, *entity.RemoteEntityBase) and run roost project sync first", service, service)
+		}
 	}
 	dir := rpcDir(snake)
 	if _, err := os.Stat(filepath.Join(root, dir)); err == nil {
@@ -80,13 +90,13 @@ func addRPC(root string, m Manifest, options AddOptions) ([]string, error) {
 	files := map[string]string{
 		dir + "/" + snake + ".go": renderRPCInterface(snake, pascal, code),
 		dir + "/service.go":       renderRPCService(snake, pascal),
-		dir + "/mod.go":           renderRPCMod(snake, false),
+		dir + "/mod.go":           renderRPCMod(snake),
 		dir + "/server_run.go":    renderRPCServerRun(snake),
 	}
 	if options.EntityService {
 		files[dir+"/"+snake+".go"] = renderEntityRPCInterface(snake, pascal, code)
 		files[dir+"/service.go"] = renderEntityRPCService(snake, pascal)
-		files[dir+"/mod.go"] = renderRPCMod(snake, true)
+		files[dir+"/mod.go"] = renderEntityRPCMod(snake)
 	}
 	rollbackPaths := make([]string, 0, len(files)+2)
 	for rel := range files {
@@ -219,19 +229,10 @@ var _ %[2]s = (*Service)(nil)
 `, snake, pascal)
 }
 
-// renderRPCMod 是 owner Mod。afterNest（-entity-service）时依赖 nest：App 按依赖顺序 Start，Nest 在 DataEngine
-// 之后启动（DataEngine 的启动排空在此之前完成），总线 handler 在 Nest 之后注册，恢复完成前到来的请求得到
-// no responders——未执行，调用方用同一 RequestID 重试。
-func renderRPCMod(snake string, afterNest bool) string {
-	depends, dependsDoc := "[]app.ModName{mods.ModNats}", "// DependsOn names the Mod that publishes the bus."
-	if afterNest {
-		depends = "[]app.ModName{mods.ModNats, mods.ModNest}"
-		dependsDoc = "// DependsOn names the bus and Nest: the handlers are registered in Start, after Nest\n" +
-			"// (and the DataEngine recovery before it) has started, so a request that arrives\n" +
-			"// while the process is still recovering finds no responder — not executed, and the\n" +
-			"// caller retries with the same request id."
-	}
-	return strings.NewReplacer("{{DEPENDS}}", depends, "{{DEPENDS_DOC}}", dependsDoc).Replace(renderRPCModTemplate(snake))
+// renderRPCMod 是普通 rpc 的 owner Mod（-entity-service 的见 renderEntityRPCMod）：只依赖发布总线的 nats Mod。
+func renderRPCMod(snake string) string {
+	return strings.NewReplacer("{{DEPENDS}}", "[]app.ModName{mods.ModNats}",
+		"{{DEPENDS_DOC}}", "// DependsOn names the Mod that publishes the bus.").Replace(renderRPCModTemplate(snake))
 }
 
 func renderRPCModTemplate(snake string) string {

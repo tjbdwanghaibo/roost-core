@@ -441,7 +441,7 @@ func TestAddRPCEntityServiceScaffoldsTheWriteContract(t *testing.T) {
 	t.Parallel()
 	_, root, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: filepath.Join(t.TempDir(), "planet"),
-		Services: []string{"game", "alliance"}, Mods: []string{"configdata"}, Features: []string{"protocol", "errcode"},
+		Services: []string{"game", "alliance"}, Mods: []string{"configdata"}, Features: []string{"entity", "dao", "nest", "protocol", "errcode"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -449,9 +449,16 @@ func TestAddRPCEntityServiceScaffoldsTheWriteContract(t *testing.T) {
 	if _, err := Add(root, AddOptions{Kind: "rpc", Name: "Alliance", Service: "alliance", EntityService: true}); err == nil || !strings.Contains(err.Error(), "roost add mod nest -service alliance") {
 		t.Fatalf("an entity-service rpc owned by a service without Nest must be refused with the fix, got %v", err)
 	}
-	if _, err := Add(root, AddOptions{Kind: "mod", Name: "nest", Service: "alliance"}); err != nil {
-		t.Fatal(err)
+	for _, mod := range []string{"nest", "remote_entity"} {
+		if _, err := Add(root, AddOptions{Kind: "mod", Name: mod, Service: "alliance"}); err != nil {
+			t.Fatal(err)
+		}
 	}
+	// 骨架的 Apply / Result 标了 route：拥有者还没托管 Remote 实体 kind 时拒绝并写明怎么声明。
+	if _, err := Add(root, AddOptions{Kind: "rpc", Name: "Alliance", Service: "alliance", EntityService: true}); err == nil || !strings.Contains(err.Error(), "remote=managed service=alliance") {
+		t.Fatalf("an entity-service rpc whose owner has no Remote managed kind must be refused with the declaration to write, got %v", err)
+	}
+	declareRemoteGuild(t, root, "service=alliance")
 	// 经命令行走一遍：-entity-service 要在 add rpc 的参数白名单里。
 	var cliOut bytes.Buffer
 	if err := Run([]string{"add", "rpc", "Alliance", "-service", "alliance", "-entity-service", "--root", root}, &cliOut, &cliOut); err != nil {
@@ -460,21 +467,30 @@ func TestAddRPCEntityServiceScaffoldsTheWriteContract(t *testing.T) {
 	iface := readProjectFile(t, root, "internal/rpc/alliance/alliance.go")
 	for _, want := range []string{
 		"requestID string, callerID int64, callerSID int32",
-		"Result(ctx context.Context, target int64, requestID string) (found bool, code int32, version uint64, err error)",
-		"errcode.CodeRetryable", "errcode.CodeRedirect",
+		"//roost:rpc route\n\tApply(ctx context.Context",
+		"//roost:rpc route\n\tResult(ctx context.Context, target int64, requestID string) (found bool, code int32, version uint64, err error)",
+		"errcode.CodeRetryable", "errcode.CodeRedirect", "target is the full entity id",
 	} {
 		if !strings.Contains(iface, want) {
 			t.Errorf("interface lacks %q:\n%s", want, iface)
 		}
 	}
 	service := readProjectFile(t, root, "internal/rpc/alliance/service.go")
-	for _, want := range []string{"HandleBudget", "context.WithTimeout(ctx, HandleBudget)", "kitremoteentity.RPCWriteAnswer(ctx, s.owners, s.localSID, target, err)"} {
+	for _, want := range []string{"HandleBudget", "context.WithTimeout(ctx, HandleBudget)", "kitremoteentity.RPCWriteAnswer(ctx, s.owners, s.localSID, target, err)",
+		"kitremoteentity.RPCRouteCheck(ctx, s.owners, s.localSID, target)", "_ RouteChecker = (*Service)(nil)"} {
 		if !strings.Contains(service, want) {
 			t.Errorf("service skeleton lacks %q:\n%s", want, service)
 		}
 	}
-	if mod := readProjectFile(t, root, "internal/rpc/alliance/mod.go"); !strings.Contains(mod, "[]app.ModName{mods.ModNats, mods.ModNest}") {
-		t.Errorf("owner Mod must start after Nest:\n%s", mod)
+	mod := readProjectFile(t, root, "internal/rpc/alliance/mod.go")
+	for _, want := range []string{"[]app.ModName{mods.ModNats, mods.ModNest, mods.ModRemoteEntity}", "[]app.ModName{mods.ModRemoteEntityPreload}", "m.service.SetOwnership(owners, identity.Sid)"} {
+		if !strings.Contains(mod, want) {
+			t.Errorf("owner Mod lacks %q:\n%s", want, mod)
+		}
+	}
+	if transport := readProjectFile(t, root, "internal/rpc/alliance/alliance_rpc_gen.go"); !strings.Contains(transport, "c.callRouted(ctx, target, MethodApply") ||
+		!strings.Contains(transport, "routes.CheckRoute(ctx.Context(), wire.Target)") {
+		t.Errorf("the generated transport must route Apply to the owner and check the route first:\n%s", transport)
 	}
 	if testing.Short() {
 		return
@@ -490,9 +506,38 @@ func TestAddRPCEntityServiceScaffoldsTheWriteContract(t *testing.T) {
 	}
 }
 
-// //roost:rpc route 只能用在拥有 Remote 托管 kind 的服务的 rpc 上（联盟服务方案 §2.10 第 2 项）：路由客户端按实体的
-// Redis 路由登记与持久所有权记录找 owner，只有 //roost:entity remote=managed service=<owner> 的 kind 有这两样；拥有者
-// 没有这类 kind 时每次调用都只会得到“实体不存在”，所以 roost generate 在跑任何生成器之前拒绝并写明原因。
+// declareRemoteGuild 加实体 Guild（若还没有），把它改成 Remote 托管并写上 extra（例如 service=alliance preload=startup），
+// 然后 project sync。
+func declareRemoteGuild(t *testing.T, root, extra string) {
+	t.Helper()
+	path := filepath.Join(root, "game", "entities", "guild", "entity.go")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if _, err := Add(root, AddOptions{Kind: "entity", Name: "Guild"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := strings.Replace(string(raw), "category=entity.EntityCategoryOther", "category=entity.EntityCategoryRemote remote=managed "+extra, 1)
+	remote = strings.Replace(remote, "*entity.EntityBase", "*entity.RemoteEntityBase", 1)
+	if remote == string(raw) {
+		t.Fatalf("entity marker shape changed; update this helper:\n%s", raw)
+	}
+	if err := os.WriteFile(path, []byte(remote), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Run([]string{"project", "sync", "--root", root}, &out, &out); err != nil {
+		t.Fatalf("project sync: %v\n%s", err, out.String())
+	}
+}
+
+// 路由是方法级策略：只查标了 route 的方法。标了 route 的方法要求它所在 rpc 的拥有者托管 Remote 实体 kind——路由客户端
+// 按实体的 Redis 路由登记与持久所有权记录找 owner，只有 //roost:entity remote=managed service=<owner> 的 kind 有这两样；
+// 拥有者没有这类 kind 时每次调用都只会得到“实体不存在”，所以 roost generate 在跑任何生成器之前拒绝并写明原因。
+// 同一个 rpc 不标 route 时照常生成。
 func TestARouteRPCNeedsAnOwnerThatOwnsARemoteKind(t *testing.T) {
 	t.Parallel()
 	_, root, err := NewProject(NewOptions{
@@ -502,12 +547,15 @@ func TestARouteRPCNeedsAnOwnerThatOwnsARemoteKind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Add(root, AddOptions{Kind: "rpc", Name: "Alliance", Service: "alliance", EntityService: true}); err != nil {
+	if _, err := Add(root, AddOptions{Kind: "rpc", Name: "Alliance", Service: "alliance"}); err != nil {
 		t.Fatal(err)
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatalf("an rpc without route methods must generate whatever its owner hosts: %v", err)
 	}
 	iface := filepath.Join(root, "internal", "rpc", "alliance", "alliance.go")
 	source := readProjectFile(t, root, "internal/rpc/alliance/alliance.go")
-	routed := strings.Replace(source, "\tApply(ctx", "\t//roost:rpc route\n\tApply(ctx", 1)
+	routed := strings.Replace(source, "\tPing(ctx", "\t//roost:rpc route=callerID\n\tPing(ctx", 1)
 	if routed == source {
 		t.Fatalf("rpc skeleton shape changed; update this test:\n%s", source)
 	}
@@ -518,9 +566,104 @@ func TestARouteRPCNeedsAnOwnerThatOwnsARemoteKind(t *testing.T) {
 	if err == nil {
 		t.Fatal("generate accepted a route method on an rpc whose owner owns no Remote managed kind")
 	}
-	for _, want := range []string{"internal/rpc/alliance", "Alliance.Apply", "owns no Remote managed entity kind", "remote=managed service=alliance"} {
+	for _, want := range []string{"internal/rpc/alliance", "Alliance.Ping", "owns no Remote managed entity kind", "remote=managed service=alliance"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q does not name %q", err, want)
+		}
+	}
+}
+
+// 路由 rpc 的工程接线（联盟服务方案 §2.7、§2.10 第 2 项）：拥有者的 remote_entity 带 WithRouteKinds / WithPreloadKinds、
+// 有预加载 kind 时装 RemotePreloadMod，owner Mod 排在预加载之后；调用方要有发布路由查找的 Mod（remote_mirror）；
+// generate 前核对 bootstrap 与这些规则。生成工程能编译、vet。
+func TestRouteRPCWiringInTheGeneratedProject(t *testing.T) {
+	t.Parallel()
+	_, root, err := NewProject(NewOptions{
+		Name: "planet", Module: "example.com/planet", Out: filepath.Join(t.TempDir(), "planet"),
+		Services: []string{"game", "alliance"}, Mods: []string{"configdata", "nest"}, Features: []string{"entity", "dao", "nest", "protocol", "errcode"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "mod", Name: "remote_entity", Service: "alliance"}); err != nil {
+		t.Fatal(err)
+	}
+	declareRemoteGuild(t, root, "service=alliance preload=startup")
+	if _, err := Add(root, AddOptions{Kind: "rpc", Name: "Alliance", Service: "alliance", EntityService: true}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	game := m.Services["game"]
+	game.UsesRpcs = []string{"alliance"}
+	m.Services["game"] = game
+	raw, err := m.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ManifestName), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// game 调用路由方法却没有路由查找：sync 之后的生成被拒并给出命令。
+	if _, err := SyncProject(root); err == nil || !strings.Contains(err.Error(), "roost add mod remote_mirror -service game") {
+		t.Fatalf("a caller of route methods without remote_mirror / remote_entity must be refused with the fix, got %v", err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "mod", Name: "remote_mirror", Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	// owner Mod 没排在预加载之后：拒绝。
+	modPath := filepath.Join(root, "internal", "rpc", "alliance", "mod.go")
+	mod := readProjectFile(t, root, "internal/rpc/alliance/mod.go")
+	unordered := strings.Replace(mod, "[]app.ModName{mods.ModRemoteEntityPreload}", "nil", 1)
+	if err := os.WriteFile(modPath, []byte(unordered), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err == nil || !strings.Contains(err.Error(), "ModRemoteEntityPreload") {
+		t.Fatalf("an owner Mod not ordered after the preload must be refused, got %v", err)
+	}
+	if err := os.WriteFile(modPath, []byte(mod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	bootstrap := readProjectFile(t, root, "internal/bootstrap/generated.go")
+	alliance, gameSection, found := strings.Cut(bootstrap, `app.ServiceName("game")`)
+	if !found {
+		t.Fatalf("bootstrap has no game service:\n%s", bootstrap)
+	}
+	for _, want := range []string{`kitremoteentity.WithRouteKinds(registry.RouteKinds("alliance")...)`, `kitremoteentity.WithPreloadKinds(registry.PreloadKinds("alliance")...)`, "kitremoteentity.NewRemotePreloadMod()"} {
+		if !strings.Contains(alliance, want) {
+			t.Errorf("alliance bootstrap lacks %s:\n%s", want, bootstrap)
+		}
+	}
+	if strings.Contains(gameSection, "RouteKinds") || strings.Contains(gameSection, "NewRemotePreloadMod") || !strings.Contains(gameSection, "rpcAlliance.NewClientMod()") {
+		t.Errorf("game only calls the rpc: a ClientMod, no route registration, no preload:\n%s", bootstrap)
+	}
+	// 去掉 preload=startup 而不 sync：bootstrap 还装着预加载，generate 要求先 sync。
+	guild := filepath.Join(root, "game", "entities", "guild", "entity.go")
+	entitySource := readProjectFile(t, root, "game/entities/guild/entity.go")
+	if err := os.WriteFile(guild, []byte(strings.Replace(entitySource, " preload=startup", "", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err == nil || !strings.Contains(err.Error(), "roost project sync") {
+		t.Fatalf("a bootstrap that still preloads after preload= was removed must ask for project sync, got %v", err)
+	}
+	if err := os.WriteFile(guild, []byte(entitySource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if testing.Short() {
+		return
+	}
+	useLocalRoostCore(t, root)
+	for _, action := range []string{"build", "vet"} {
+		check := exec.Command("go", action, "./...")
+		check.Dir = root
+		check.Env = append(os.Environ(), "GOWORK=off")
+		if output, err := check.CombinedOutput(); err != nil {
+			t.Fatalf("go %s with a route rpc: %v\n%s", action, err, output)
 		}
 	}
 }

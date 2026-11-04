@@ -120,6 +120,22 @@ func redirectSID(err error) int32 {
 	sid, _ := servicerpc.RedirectSID(err)
 	return sid
 }
+
+// RouteMethods are the methods that act on an existing entity and go to its
+// owner (//roost:rpc route): the client finds the owner through the route
+// lookup, and the handler checks the route before the implementation runs.
+const RouteMethods = "{{.RouteMethods}}"
+
+// RouteChecker is the server-side check every route method runs before the
+// implementation (联盟服务方案 §2.3): nil means this instance serves the
+// entity; otherwise the error is the answer — servicerpc.EntityNotFound (a
+// non-create request must not claim an entity that does not exist), a
+// servicerpc.Redirect to the owner, or servicerpc.Retryable. The owning
+// service implements it, normally with wiring/remoteentity.RPCRouteCheck, and
+// RegisterHandlers refuses a service that does not.
+type RouteChecker interface {
+	CheckRoute(ctx context.Context, entityID int64) error
+}
 {{end}}
 // --- server ---
 
@@ -136,12 +152,26 @@ func RegisterHandlers(b bus.IBus, service {{.Iface}}) error {
 	if service == nil {
 		return fmt.Errorf("{{.Package}}: service is nil")
 	}
+{{- if .AnyRoute}}
+	// RouteMethods check the route before the implementation: a request for an
+	// entity this instance does not own must not reach Nest, where the first
+	// write would claim an entity that does not exist.
+	routes, ok := service.(RouteChecker)
+	if !ok {
+		return fmt.Errorf("{{.Package}}: %T does not implement RouteChecker, which %s need; implement CheckRoute with wiring/remoteentity.RPCRouteCheck", service, RouteMethods)
+	}
+{{- end}}
 	handlers := map[string]bus.RpcHandlerFunc{
 {{range .Methods}}		{{.Const}}: func(ctx *bus.RpcContext) (any, error) {
 			var wire {{.Wire}}
 			if err := ctx.Decode(&wire); err != nil {
 				return {{.Response}}{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
 			}
+{{- if .Route}}
+			if err := routes.CheckRoute(ctx.Context(), wire.{{exportName .Route}}); err != nil {
+				return {{.Response}}{rpcStatus: statusOf(err), RedirectSid: redirectSID(err)}, nil
+			}
+{{- end}}
 			{{if .HasResults}}{{range $i, $r := .Results}}{{if $i}}, {{end}}{{$r.Name}}{{end}}, err := service.{{.Name}}({{.CallArgs}})
 			return {{.Response}}{rpcStatus: statusOf(err), {{.ResultFields}}{{if .Route}}, RedirectSid: redirectSID(err){{end}}}, nil{{else}}err := service.{{.Name}}({{.CallArgs}})
 			return {{.Response}}{rpcStatus: statusOf(err){{if .Route}}, RedirectSid: redirectSID(err){{end}}}, nil{{end}}
@@ -178,12 +208,17 @@ const DefaultCallTimeout = 3 * time.Second
 // implementation detail.
 type BusClient struct {
 	rpc *servicerpc.BusClient
+{{- if .AnyRoute}}
+	// routes finds the owner of an entity for RouteMethods
+	// (wiring/remoteentity.RouteSource). A hint; a redirect corrects it.
+	routes servicerpc.RouteResolver
+{{- end}}
 }
 
 {{if .AnyAffinity}}// AffinityMethods are the methods that route by an affinity key: every call
 // carrying the same key reaches the same instance.
 const AffinityMethods = "{{.AffinityMethods}}"
-
+{{end}}{{if and .AnyAffinity (not .AnyRoute)}}
 // NewBusClient builds a client. serviceType empty means ServiceType; timeout
 // non-positive means DefaultCallTimeout.
 //
@@ -221,6 +256,41 @@ func NewBusClient(b bus.IBus, discovery fetcd.IDiscovery, serviceType string, ti
 	}, opts...)
 	return &BusClient{rpc: servicerpc.NewDiscoveredBusClient(b, serviceType, timeout, discovery, options...)}, nil
 }
+{{else if .AnyRoute}}// NewBusClient builds a client. serviceType empty means ServiceType; timeout
+// non-positive means DefaultCallTimeout.
+//
+// Each method picks its own path from its marker: RouteMethods go to the
+// owner of their entity through routes, {{if .AnyAffinity}}AffinityMethods to the instance their
+// key picks through discovery, {{end}}and the rest to the queue group (any
+// instance). routes is required: without it a route call could only go to an
+// instance that may not own the entity.
+func NewBusClient(b bus.IBus, {{if .AnyAffinity}}discovery fetcd.IDiscovery, {{end}}routes servicerpc.RouteResolver, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
+	if b == nil {
+		return nil, fmt.Errorf("{{.Package}}: bus is nil")
+	}
+{{- if .AnyAffinity}}
+	if discovery == nil {
+		return nil, fmt.Errorf("{{.Package}}: discovery is nil; %s route by an affinity key and need service discovery to reach one instance per key", AffinityMethods)
+	}
+{{- end}}
+	if routes == nil {
+		return nil, fmt.Errorf("{{.Package}}: route resolver is nil; %s go to the owner of their entity and need wiring/remoteentity.RouteSource", RouteMethods)
+	}
+	if serviceType == "" {
+		serviceType = ServiceType
+	}
+	if timeout <= 0 {
+		timeout = DefaultCallTimeout
+	}
+{{- if .AnyAffinity}}
+	options := append([]servicerpc.Option{
+		servicerpc.WithKeyAffinity(servicerpc.AffinityKeyFromContext),
+	}, opts...)
+	return &BusClient{rpc: servicerpc.NewDiscoveredBusClient(b, serviceType, timeout, discovery, options...), routes: routes}, nil
+{{- else}}
+	return &BusClient{rpc: servicerpc.NewBusClient(b, serviceType, timeout, opts...), routes: routes}, nil
+{{- end}}
+}
 {{else}}// NewBusClient builds a client. serviceType empty means ServiceType; timeout
 // non-positive means DefaultCallTimeout.
 func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ...servicerpc.Option) (*BusClient, error) {
@@ -255,6 +325,19 @@ func (c *BusClient) callByAffinity(ctx context.Context, method string, req any, 
 	}
 	return c.rpc.CallDiscoveredChecked(ctx, method, req, resp, "{{.ServiceType}} call failed")
 }
+{{end}}{{if .AnyRoute}}
+// callRouted sends a route method to the owner of entityID (a full entity
+// id): the route lookup names the owner, a redirect answer is followed once,
+// and no responders triggers one fresh lookup
+// (servicerpc.(*BusClient).CallRoutedChecked). An entity without an ownership
+// record is answered as not found without sending anything. Classify the
+// error with servicerpc.Classify: OK / Rejected / Retryable / Unknown.
+func (c *BusClient) callRouted(ctx context.Context, entityID int64, method string, req any, resp any) error {
+	if c == nil || c.rpc == nil {
+		return fmt.Errorf("{{.Package}}: client is not configured")
+	}
+	return c.rpc.CallRoutedChecked(ctx, c.routes, entityID, method, req, resp, "{{.ServiceType}} call failed")
+}
 {{end}}{{range .Methods}}
 {{range .Doc}}{{.}}
 {{end}}// {{.Name}} implements {{$.Iface}}.
@@ -263,8 +346,10 @@ func (c *BusClient) {{.Name}}(ctx context.Context{{if .ParamList}}, {{.ParamList
 	// same instance, so contention on that key stays in one process.
 	ctx = servicerpc.WithAffinityKey(ctx, {{.Affinity}})
 {{end}}	var resp {{.Response}}
-	err := c.{{if .Affinity}}callByAffinity{{else}}call{{end}}(ctx, {{.Const}}, {{.Wire}}{
-{{range .Params}}		{{exportName .Name}}: {{.Name}},
+{{if .Route}}	// Routed to the owner of {{.Route}} (a full entity id).
+	err := c.callRouted(ctx, {{.Route}}, {{.Const}}, {{.Wire}}{
+{{else}}	err := c.{{if .Affinity}}callByAffinity{{else}}call{{end}}(ctx, {{.Const}}, {{.Wire}}{
+{{end}}{{range .Params}}		{{exportName .Name}}: {{.Name}},
 {{end}}	}, &resp)
 	return {{if .HasResults}}{{.ResultReturns}}, {{end}}err
 }
@@ -363,6 +448,9 @@ import (
 {{if .AnyAffinity}}	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
 {{end}}	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+{{- if .AnyRoute}}
+	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
+{{- end}}
 )
 
 // OwnerCapabilities is what the owning Mod registers: the interface every
@@ -550,6 +638,14 @@ func (m *ClientMod) Name() app.ModName { return CapabilityName }
 // refused at assembly rather than left to route those calls at random.
 func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats, mods.ModEtcd} }
 {{else}}func (m *ClientMod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }
+{{end}}{{if .AnyRoute}}
+// OptionalDependsOn orders Provide after the Mod that publishes the route
+// lookup RouteMethods need (mods.ModRemoteRoute): RemoteEntityMod in the
+// owning service's processes, RemoteMirrorMod (with its Mongo loader) in a
+// read-only caller. Provide refuses a process that has neither.
+func (m *ClientMod) OptionalDependsOn() []app.ModName {
+	return []app.ModName{mods.ModRemoteEntity, mods.ModRemoteMirror}
+}
 {{end}}
 
 // clientModConfig is what the client Mod reads (maintainer decision):
@@ -609,7 +705,14 @@ func (m *ClientMod) Provide(r *app.Registry) error {
 		return fmt.Errorf("{{.Package}} client mod: capability %q not found; %s route by an "+
 			"affinity key and need service discovery — add the etcd Mod to this process", mods.ModEtcdDiscov, AffinityMethods)
 	}
-	client, err := NewBusClient(busClient, discovery, m.serviceType, m.timeout, m.clientOptions()...)
+{{end}}{{if .AnyRoute}}	// RouteMethods go to the owner of their entity: the route lookup comes from
+	// the Remote Mod of this process (owner or read-only mirror).
+	routes, err := kitremoteentity.RouteSource(r)
+	if err != nil {
+		return fmt.Errorf("{{.Package}} client mod: %s go to the owner of their entity: %w", RouteMethods, err)
+	}
+	client, err := NewBusClient(busClient, {{if .AnyAffinity}}discovery, {{end}}routes, m.serviceType, m.timeout, m.clientOptions()...)
+{{else if .AnyAffinity}}	client, err := NewBusClient(busClient, discovery, m.serviceType, m.timeout, m.clientOptions()...)
 {{else}}	client, err := NewBusClient(busClient, m.serviceType, m.timeout, m.clientOptions()...)
 {{end}}	if err != nil {
 		return fmt.Errorf("{{.Package}} client mod: %w", err)

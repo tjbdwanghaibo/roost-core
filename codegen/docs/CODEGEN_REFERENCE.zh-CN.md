@@ -1110,8 +1110,11 @@ type Mail interface {
 `//roost:rpc route` 标在对已有实体的方法上：生成的客户端经框架的路由查找（本进程缓存 → Redis 路由登记 → 持久所有权记录，都没有就答
 “实体不存在”）发往 owner，遇到“改投”（`errcode.CodeRedirect`，响应的 `RedirectSid`）改投一次，no responders 后重新查找一次；生成的
 handler 把服务实现返回的 `servicerpc.Redirect` 的 owner 写进响应。创建类方法不标 route，照旧经队列组随机路由。路由是方法级策略：一个服务可以同时有 route、`affinity=` 与不标的方法，各走各的路径。调用方用
-`servicerpc.Classify` 分 OK / Rejected / Retryable / Unknown。路由查找客户端与服务端前置检查在框架的路由改造里（联盟服务方案第 4 节
-1R），接上之前写了 route 的方法生成期拒绝。
+`servicerpc.Classify` 分 OK / Rejected / Retryable / Unknown。生成形状：`BusClient` 多一个 `routes servicerpc.RouteResolver`，
+`NewBusClient(b, [discovery,] routes, serviceType, timeout, opts...)`（有 `affinity=` 方法才有 discovery），route 方法经 `callRouted` →
+`CallRoutedChecked`；包里多 `RouteMethods` 常量与 `RouteChecker` 接口，`RegisterHandlers` 要求服务实现 `CheckRoute`，route 方法的
+handler 先调它（非 nil 时把答复与 `RedirectSid` 写进响应、不调实现）；ClientMod 经 `wiring/remoteentity.RouteSource` 取路由查找，
+`OptionalDependsOn` remote_entity / remote_mirror。
 | 生成名与包内已有声明撞名 | 生成的那边不能动（`pkg.Server` 在每个服务里读法一致）；撞名的若是函数或常量，会在编译失败前先改掉整个包的含义 |
 | 一个包里两个被标记的接口 | 生成文件在包级声明十几个固定名字；`app.Service` 每进程一个，两个被标记的接口应是两个包 |
 

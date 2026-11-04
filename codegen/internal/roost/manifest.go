@@ -84,6 +84,11 @@ type Manifest struct {
 	// ownedRemote 表示有 Remote 托管 kind 声明了归属服务：每个装 remote_entity 的服务都把别的服务拥有的
 	// Remote kind 交给 RemoteEntityMod（WithForeignKinds）。Not part of roost.yaml.
 	ownedRemote bool
+	// routeServices 是拥有 Remote 托管 kind 的服务：它们的 RemoteEntityMod 带 WithRouteKinds，实体加载后登记路由；
+	// preloadServices 是其中有 preload=startup kind 的服务：再带 WithPreloadKinds 并装 RemotePreloadMod
+	// （联盟服务方案 §2.7）。Not part of roost.yaml.
+	routeServices   map[string]bool
+	preloadServices map[string]bool
 }
 
 type ProjectSpec struct {

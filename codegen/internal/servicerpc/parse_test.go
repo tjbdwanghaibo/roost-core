@@ -1020,14 +1020,270 @@ func TestRouteAndAffinityMethodsCoexistInOneService(t *testing.T) {
 	}
 }
 
-// 路由客户端（servicerpc 的路由查找与 CallRoutedChecked）在框架的路由改造（方案第 4 节 1R）里；接线之前生成一个照旧
-// 发队列组的客户端会把请求送到任意实例，所以生成期拒绝并写明原因。
-func TestARouteMethodIsRefusedUntilTheRouteClientIsWired(t *testing.T) {
-	services, err := ParseDir(writeDir(t, routedService))
+// 路由是方法级策略（维护者 2026-11-04）：编译生成的包，对着记录型总线跑——同一个服务里不标的方法走队列组、affinity=
+// 方法按 key 发往发现到的实例、route 方法经路由查找发往实体的 owner（改投一次、查不到不发）；构造参数按服务实际用到
+// 的策略要求；route handler 先做服务端前置检查，没实现 RouteChecker 的服务注册被拒；ClientMod 从注册表取路由查找。
+func TestRouteAffinityAndUnmarkedMethodsEachTakeTheirOwnPath(t *testing.T) {
+	services, err := ParseDir(writeDir(t, mixedRoutingService))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Generate(services[0]); err == nil || !strings.Contains(err.Error(), "route lookup client") {
-		t.Fatalf("generating a route method before the route client exists: %v", err)
+	files, err := Generate(services[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := map[string]string{
+		"alliance.go": mixedRoutingService,
+		"run.go": "package alliance\n\nimport (\n\t\"context\"\n\n\t\"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n)\n\n" +
+			"func (s *Server) run(ctx context.Context) error { <-ctx.Done(); return nil }\n\n" +
+			"func Error(err error) (int32, string) { return errcode.ClientError(err) }\n",
+		"route_test.go": mixedRoutingTest,
+	}
+	for _, file := range files {
+		sources[file.Name] = string(file.Content)
+	}
+	runGeneratedPackageTests(t, sources)
+}
+
+const mixedRoutingService = `package alliance
+
+import "context"
+
+var ErrRequestInvalid error
+
+//roost:rpc service_type=alliance capability=rpc.alliance
+type Alliance interface {
+	// Found creates an alliance: no marker, any instance may take it.
+	Found(ctx context.Context, requestID string, name string) (allianceID int64, err error)
+	//roost:rpc affinity=name
+	Search(ctx context.Context, name string) (allianceID int64, err error)
+	//roost:rpc route
+	Join(ctx context.Context, requestID string, target int64, playerID int64) (version uint64, err error)
+}
+`
+
+// mixedRoutingTest runs inside the generated package.
+const mixedRoutingTest = `package alliance
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// recordingBus records queue-group calls and CallTo sids per method; a Join sent
+// to redirectFrom is answered "not the owner, go to redirectTo".
+type recordingBus struct {
+	bus.IBus
+	mu           sync.Mutex
+	queued       []string
+	sids         map[string][]int32
+	redirectFrom int32
+	redirectTo   int32
+}
+
+func (b *recordingBus) Call(_ context.Context, _ string, method string, _ any, _ any) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.queued = append(b.queued, method)
+	return nil
+}
+
+func (b *recordingBus) CallTo(_ context.Context, _ string, sid int32, method string, _ any, resp any) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sids[method] = append(b.sids[method], sid)
+	if method == MethodJoin && sid == b.redirectFrom {
+		out := resp.(*rpcJoinResponse)
+		out.Code, out.Reason, out.RedirectSid = errcode.CodeRedirect, "not the owner", b.redirectTo
+	}
+	return nil
+}
+
+type threeInstances struct{ fetcd.IDiscovery }
+
+func (threeInstances) Discover(context.Context, string) ([]*fetcd.ServiceInfo, error) {
+	return []*fetcd.ServiceInfo{{Sid: 11}, {Sid: 12}, {Sid: 13}}, nil
+}
+
+// owners is the route lookup: entity id -> owner sid; anything else has no ownership record.
+type owners struct {
+	mu      sync.Mutex
+	sids    map[int64]int32
+	lookups int
+}
+
+func (o *owners) LookupRoute(_ context.Context, id int64) (int32, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.lookups++
+	if sid, ok := o.sids[id]; ok {
+		return sid, nil
+	}
+	return 0, servicerpc.EntityNotFound(id)
+}
+
+func TestEachMethodTakesTheRouteItsMarkerNames(t *testing.T) {
+	recorder := &recordingBus{sids: map[string][]int32{}}
+	routes := &owners{sids: map[int64]int32{500: 3000, 600: 3001}}
+	client, err := NewBusClient(recorder, threeInstances{}, routes, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := client.Found(ctx, "r1", "wolves"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := client.Search(ctx, "wolves"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := client.Join(ctx, "r2", 500, 7); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Join(ctx, "r3", 600, 7); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(recorder.queued, []string{MethodFound}) {
+		t.Fatalf("queue group got %v; only the unmarked Found may go there", recorder.queued)
+	}
+	search := recorder.sids[MethodSearch]
+	if len(search) != 3 || search[0] < 11 || search[0] > 13 || search[1] != search[0] || search[2] != search[0] {
+		t.Fatalf("Search (affinity=name) went to %v; one key must reach one discovered instance", search)
+	}
+	if got := recorder.sids[MethodJoin]; !slices.Equal(got, []int32{3000, 3001}) {
+		t.Fatalf("Join (route) went to %v, want the owners [3000 3001]", got)
+	}
+
+	redirected := &recordingBus{sids: map[string][]int32{}, redirectFrom: 3000, redirectTo: 3001}
+	client, err = NewBusClient(redirected, threeInstances{}, routes, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Join(ctx, "r4", 500, 7); err != nil {
+		t.Fatalf("Join after a redirect: %v", err)
+	}
+	if got := redirected.sids[MethodJoin]; !slices.Equal(got, []int32{3000, 3001}) {
+		t.Fatalf("redirected Join went to %v, want [3000 3001]", got)
+	}
+	before := len(redirected.sids[MethodJoin])
+	_, err = client.Join(ctx, "r5", 999, 7)
+	if servicerpc.Classify(err) != servicerpc.OutcomeRejected || len(redirected.sids[MethodJoin]) != before || len(redirected.queued) != 0 {
+		t.Fatalf("Join on an entity without an owner: err=%v sent=%v queued=%v; want a rejection and nothing sent",
+			err, redirected.sids[MethodJoin][before:], redirected.queued)
 	}
 }
+
+func TestTheConstructorAsksForWhatTheMethodsUse(t *testing.T) {
+	routes := &owners{}
+	if _, err := NewBusClient(&recordingBus{}, threeInstances{}, nil, "", 0); err == nil || !strings.Contains(err.Error(), "Join") {
+		t.Fatalf("NewBusClient without a route lookup = %v, want a refusal naming Join", err)
+	}
+	if _, err := NewBusClient(&recordingBus{}, nil, routes, "", 0); err == nil || !strings.Contains(err.Error(), "Search") {
+		t.Fatalf("NewBusClient without discovery = %v, want a refusal naming Search", err)
+	}
+}
+
+type plainService struct{ joined int }
+
+func (s *plainService) Found(context.Context, string, string) (int64, error) { return 1, nil }
+func (s *plainService) Search(context.Context, string) (int64, error)        { return 1, nil }
+func (s *plainService) Join(context.Context, string, int64, int64) (uint64, error) {
+	s.joined++
+	return 9, nil
+}
+
+// checkedService answers CheckRoute from a table: 500 is ours, 600 is 3001's, the rest do not exist.
+type checkedService struct{ plainService }
+
+func (s *checkedService) CheckRoute(_ context.Context, id int64) error {
+	switch id {
+	case 500:
+		return nil
+	case 600:
+		return servicerpc.Redirect(3001, errors.New("owned elsewhere"))
+	default:
+		return servicerpc.EntityNotFound(id)
+	}
+}
+
+type handlerBus struct {
+	bus.IBus
+	handlers map[string]bus.RpcHandlerFunc
+}
+
+func (b *handlerBus) HandleRpc(method string, handler bus.RpcHandlerFunc) error {
+	b.handlers[method] = handler
+	return nil
+}
+
+func TestTheRouteHandlerChecksTheRouteFirst(t *testing.T) {
+	if err := RegisterHandlers(&handlerBus{handlers: map[string]bus.RpcHandlerFunc{}}, &plainService{}); err == nil || !strings.Contains(err.Error(), "RouteChecker") {
+		t.Fatalf("RegisterHandlers for a service without CheckRoute = %v, want a refusal naming RouteChecker", err)
+	}
+	service := &checkedService{}
+	b := &handlerBus{handlers: map[string]bus.RpcHandlerFunc{}}
+	if err := RegisterHandlers(b, service); err != nil {
+		t.Fatal(err)
+	}
+	join := func(target int64) rpcJoinResponse {
+		payload, err := bus.MessagePackCodec{}.Marshal(rpcJoinRequest{RequestID: "r", Target: target, PlayerID: 7})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := b.handlers[MethodJoin](bus.NewRPCContext(context.Background(), MethodJoin, payload, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.(rpcJoinResponse)
+	}
+	if resp := join(600); resp.Code != errcode.CodeRedirect || resp.RedirectSID() != 3001 || service.joined != 0 {
+		t.Fatalf("Join on an entity owned by 3001: code %d redirect %d joined %d; want CodeRedirect to 3001 and the implementation not called",
+			resp.Code, resp.RedirectSID(), service.joined)
+	}
+	if resp := join(999); resp.Code != errcode.CodeEntityNotFound || service.joined != 0 {
+		t.Fatalf("Join on an entity without an owner: code %d joined %d; want CodeEntityNotFound and the implementation not called", resp.Code, service.joined)
+	}
+	if resp := join(500); resp.Code != 0 || resp.Version != 9 || service.joined != 1 {
+		t.Fatalf("Join on our entity: code %d version %d joined %d; want it served", resp.Code, resp.Version, service.joined)
+	}
+}
+
+func TestClientModTakesTheRouteLookupFromTheRegistry(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(mods.ModBus, bus.IBus(&recordingBus{})); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(mods.ModEtcdDiscov, fetcd.IDiscovery(threeInstances{})); err != nil {
+		t.Fatal(err)
+	}
+	mod := NewClientMod()
+	if err := mod.Init(viper.New()); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err == nil || !strings.Contains(err.Error(), string(mods.ModRemoteRoute)) {
+		t.Fatalf("ClientMod.Provide without a route lookup = %v, want a refusal naming %s", err, mods.ModRemoteRoute)
+	}
+	if !slices.Contains(mod.OptionalDependsOn(), mods.ModRemoteEntity) || !slices.Contains(mod.OptionalDependsOn(), mods.ModRemoteMirror) {
+		t.Fatalf("ClientMod.OptionalDependsOn = %v, want the Remote Mods that publish the route lookup", mod.OptionalDependsOn())
+	}
+	if err := registry.Register(mods.ModRemoteRoute, servicerpc.RouteResolver(&owners{})); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatalf("ClientMod.Provide with a route lookup: %v", err)
+	}
+}
+`

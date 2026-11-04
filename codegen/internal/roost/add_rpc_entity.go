@@ -9,7 +9,12 @@ import "fmt"
 //     服务按 requestID 幂等；Result(target, requestID) 回答这笔请求的结局。
 //   - target 是完整 Entity ID（kind 在 ID 里）。对已有实体的方法标 //roost:rpc route（路由键缺省是 target，
 //     route=<param> 指定别的 int64 参数），客户端按实体的路由登记与所有权记录发往 owner、改投一次；创建类方法不标，
-//     走队列组随机路由，它的 requestID 记在按稳定 ID 路由的实体上（方案 §2.3）。
+//     走队列组随机路由，它的 requestID 记在按稳定 ID 路由的实体上（方案 §2.3）。骨架的 Apply、Result 都标了 route，
+//     所以拥有者必须托管 Remote 实体 kind（addRPC 检查）。
+//   - 服务端前置检查：route 方法的生成 handler 先调 Service.CheckRoute（kitremoteentity.RPCRouteCheck）——实体不存在、
+//     不是 owner、所有权读不了时不进实现；owner Mod 在 Start 里把 Remote Manager 与本进程 sid 交给 Service
+//     （SetOwnership），再注册 handler。owner Mod 依赖 nats、nest、remote_entity，并经 OptionalDependsOn 排在起服
+//     预加载（mods.ModRemoteEntityPreload）之后：恢复与预加载完成前请求得到 no responders（可重试，未执行）。
 //   - 接收端处理预算 HandleBudget：普通 Bus RPC 不把调用方截止时间带到接收端，整次处理（进 Nest、等提交确认）
 //     由接收端自己限时。
 //   - 答复四类用框架的约定（阶段 1）：写的错误经 wiring/remoteentity.RPCWriteAnswer 转成答复——未执行可重试是
@@ -76,11 +81,15 @@ func Error(err error) (int32, string) { return errcode.ClientError(err) }
 type %[2]s interface {
 	// Apply is a placeholder write on the entity target; replace it with the
 	// service's real write methods, each with the same first parameters.
+	//
+	//roost:rpc route
 	Apply(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64) (version uint64, err error)
 	// Result answers what the write requestID on target did: found=false
 	// means it was never executed (sending it again is safe); otherwise code
 	// is 0 for success or the business rejection's code, and version is the
 	// state version the write produced.
+	//
+	//roost:rpc route
 	Result(ctx context.Context, target int64, requestID string) (found bool, code int32, version uint64, err error)
 }
 `, snake, pascal, code)
@@ -108,9 +117,10 @@ const HandleBudget = 5 * time.Second
 
 // Service implements %[2]s in the owning process. Application code: generated
 // once, yours afterwards. Give New the generated Nest senders of the entities
-// this service owns, the Remote ownership manager and this process's sid, and
-// wire them in the bootstrap's NewMod(New(...)) call. Until owners is set,
-// "not the owner" is answered as retryable instead of a redirect.
+// this service owns and wire them in the bootstrap's NewMod(New(...)) call.
+// The owner Mod hands it the Remote ownership manager and this process's sid
+// (SetOwnership) before the handlers are registered; until then every route
+// check answers "not executed, retry".
 type Service struct {
 	owners   entity.RemoteOwnershipManager
 	localSID int32
@@ -118,6 +128,22 @@ type Service struct {
 
 // New builds the service.
 func New() *Service { return &Service{} }
+
+// SetOwnership gives the service the Remote ownership manager and this
+// process's sid. The owner Mod calls it in Start, before RegisterHandlers.
+func (s *Service) SetOwnership(owners entity.RemoteOwnershipManager, localSID int32) {
+	s.owners, s.localSID = owners, localSID
+}
+
+// CheckRoute implements RouteChecker: the generated handler of every route
+// method calls it before the method (wiring/remoteentity.RPCRouteCheck). nil
+// means this instance owns target (an entity owned here but not loaded yet is
+// loaded and its route registered); otherwise it answers "entity not found"
+// (no ownership record: a non-create request must not claim it), a redirect to
+// the owner, or "not executed, retry".
+func (s *Service) CheckRoute(ctx context.Context, target int64) error {
+	return kitremoteentity.RPCRouteCheck(ctx, s.owners, s.localSID, target)
+}
 
 // Apply is the placeholder write. A real write method:
 //
@@ -162,6 +188,103 @@ func (s *Service) answer(ctx context.Context, target int64, err error) error {
 	return kitremoteentity.RPCWriteAnswer(ctx, s.owners, s.localSID, target, err)
 }
 
-var _ %[2]s = (*Service)(nil)
+var (
+	_ %[2]s        = (*Service)(nil)
+	_ RouteChecker = (*Service)(nil)
+)
 `, snake, pascal)
+}
+
+// renderEntityRPCMod 是 -entity-service 的 owner Mod：依赖 nats、nest、remote_entity；经 OptionalDependsOn 排在起服预加载
+// 之后（没装预加载 Mod 时没有这条边）；Start 时把 Remote Manager 与本进程 sid 交给 Service，再在总线上注册 handler。
+func renderEntityRPCMod(snake string) string {
+	return fmt.Sprintf(`package %[1]s
+
+import (
+	"fmt"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// Mod is the owner side of this rpc inside the entity service's process. It
+// publishes the capability twice (the interface for consumers in this process,
+// the implementation under the owner-only name) and registers the bus
+// handlers, so a process that assembled NewClientMod reaches this
+// implementation. Application code: generated once, yours afterwards.
+type Mod struct {
+	service  *Service
+	registry *app.Registry
+}
+
+// NewMod wraps the implementation the bootstrap builds with New(...).
+func NewMod(service *Service) *Mod { return &Mod{service: service} }
+
+// Name is the capability name, so the Mod's name and what it publishes are
+// one fact.
+func (m *Mod) Name() app.ModName { return CapabilityName }
+
+// DependsOn names the bus, Nest and the Remote Mod: the handlers are
+// registered in Start, after Nest (and the DataEngine recovery before it) has
+// started, so a request that arrives while the process is still recovering
+// finds no responder — not executed, and the caller retries with the same
+// request id.
+func (m *Mod) DependsOn() []app.ModName {
+	return []app.ModName{mods.ModNats, mods.ModNest, mods.ModRemoteEntity}
+}
+
+// OptionalDependsOn orders Start after the startup preload
+// (//roost:entity preload=startup) when this process has one: no request is
+// served before the owned entities are loaded and their routes registered.
+func (m *Mod) OptionalDependsOn() []app.ModName {
+	return []app.ModName{mods.ModRemoteEntityPreload}
+}
+
+func (m *Mod) Init(*viper.Viper) error {
+	if m.service == nil {
+		return fmt.Errorf("%[1]s mod: service is nil")
+	}
+	return nil
+}
+
+func (m *Mod) Provide(r *app.Registry) error {
+	if r == nil {
+		return fmt.Errorf("%[1]s mod: registry is nil")
+	}
+	m.registry = r
+	return mods.RegisterAll(r, OwnerCapabilities(m.service)...)
+}
+
+// Start hands the service the Remote ownership manager and this process's sid
+// (the route check needs both), then registers the handlers on the bus. Start
+// rather than Provide because the bus is published by another Mod and every
+// Mod's Provide runs before any Start.
+func (m *Mod) Start() error {
+	owners, ok := app.Lookup[entity.IRemoteEntityManager](m.registry, mods.ModRemoteEntity)
+	if !ok || owners == nil {
+		return fmt.Errorf("%[1]s mod: capability %%q not found; the owning service needs the remote_entity mod", mods.ModRemoteEntity)
+	}
+	var identity app.ServiceIdentity
+	if err := app.LoadConfig(m.registry.Config(), &identity); err != nil {
+		return fmt.Errorf("%[1]s mod: %%w", err)
+	}
+	m.service.SetOwnership(owners, identity.Sid)
+	busClient, ok := app.Lookup[bus.IBus](m.registry, mods.ModBus)
+	if !ok || busClient == nil {
+		return fmt.Errorf("%[1]s mod: capability %%q not found; the process needs the nats mod", mods.ModBus)
+	}
+	return RegisterHandlers(busClient, m.service)
+}
+
+func (m *Mod) Stop() {}
+
+var (
+	_ app.Mod                           = (*Mod)(nil)
+	_ app.ModDependencyProvider         = (*Mod)(nil)
+	_ app.ModOptionalDependencyProvider = (*Mod)(nil)
+)
+`, snake)
 }

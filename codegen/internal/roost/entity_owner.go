@@ -79,10 +79,40 @@ func foreignKindsOption(service string) string {
 	return fmt.Sprintf("kitremoteentity.WithForeignKinds(registry.ForeignKinds(%q)...)", service)
 }
 
+// routeKindsOption / preloadKindsOption 是归属服务的 remote_entity 构造里交给 RemoteEntityMod 的两份列表（联盟服务方案
+// §2.7）：本服务拥有的 Remote 托管 kind 在加载后登记 Redis 路由，其中 preload=startup 的起服预加载。
+func routeKindsOption(service string) string {
+	return fmt.Sprintf("kitremoteentity.WithRouteKinds(registry.RouteKinds(%q)...)", service)
+}
+
+func preloadKindsOption(service string) string {
+	return fmt.Sprintf("kitremoteentity.WithPreloadKinds(registry.PreloadKinds(%q)...)", service)
+}
+
+// preloadModCall 是有预加载 kind 的服务 bootstrap 里装的预加载 Mod：排在 remote_entity、Nest（与 DataEngine 恢复）之后，
+// 路由 rpc 的 owner Mod 经 OptionalDependsOn 排在它之后，预加载完成前不在总线上接请求。
+const preloadModCall = "kitremoteentity.NewRemotePreloadMod()"
+
+// routeAndPreloadServices 返回拥有 Remote 托管 kind 的服务与其中有预加载 kind 的服务。
+func routeAndPreloadServices(owned []entityowner.Owned) (route, preload map[string]bool) {
+	route, preload = map[string]bool{}, map[string]bool{}
+	for _, item := range owned {
+		if !item.Remote {
+			continue
+		}
+		route[item.Service] = true
+		if item.Preload {
+			preload[item.Service] = true
+		}
+	}
+	return route, preload
+}
+
 // withEntityOwners 记下拥有 kind 的服务（渲染 bootstrap 用）。扫描失败时不记：生成前检查会报同一个错误。
 func (m Manifest) withEntityOwners(root string) Manifest {
 	owned, err := projectEntityOwners(root)
 	m.ownedRemote = false
+	m.routeServices, m.preloadServices = nil, nil
 	if err != nil || len(owned) == 0 {
 		m.ownerServices = nil
 		return m
@@ -90,6 +120,7 @@ func (m Manifest) withEntityOwners(root string) Manifest {
 	for _, item := range owned {
 		m.ownedRemote = m.ownedRemote || item.Remote
 	}
+	m.routeServices, m.preloadServices = routeAndPreloadServices(owned)
 	services := map[string]bool{}
 	for _, service := range entityowner.Services(owned) {
 		services[service] = true
@@ -125,12 +156,18 @@ func checkEntityOwnersBeforeGenerate(root string, m Manifest) error {
 	for _, item := range owned {
 		ownedRemote = ownedRemote || item.Remote
 	}
+	routes, preloads := routeAndPreloadServices(owned)
 	for _, service := range sortedServiceNames(m) {
 		// 只看服务自己的 Mod：shared_mods 里的 remote_entity 不知道是哪个服务，不带 ForeignKinds（renderModConstructor）。
 		own, _ := resolveMods(effectiveServiceMods(m, service))
-		wantForeign := ownedRemote && contains(own, "remote_entity")
+		hasRemote := contains(own, "remote_entity")
+		wantForeign := ownedRemote && hasRemote
+		wantRoute := routes[service] && hasRemote
+		wantPreload := preloads[service] && hasRemote
 		if owners[service] != strings.Contains(string(raw), ownedHandlersModCall(service)) ||
-			wantForeign != strings.Contains(string(raw), foreignKindsOption(service)) {
+			wantForeign != strings.Contains(string(raw), foreignKindsOption(service)) ||
+			wantRoute != strings.Contains(string(raw), routeKindsOption(service)) ||
+			wantPreload != strings.Contains(string(raw), preloadKindsOption(service)) {
 			return fmt.Errorf("entity owners (//roost:entity service=) changed and internal/bootstrap/generated.go does not match for service %s; "+
 				"run: roost project sync (then roost generate)", service)
 		}
@@ -138,16 +175,20 @@ func checkEntityOwnersBeforeGenerate(root string, m Manifest) error {
 	return nil
 }
 
-// checkRouteRPCOwners 要求写了 //roost:rpc route 的工程 rpc 由拥有 Remote 托管 kind 的服务拥有（联盟服务方案
-// §2.10 第 2 项）。路由方法的客户端按实体的 Redis 路由登记、再按持久所有权记录找 owner（§2.7），两者只有本服务拥有的
-// Remote 托管 kind（//roost:entity remote=managed service=<owner>）才有；拥有者没有这类 kind 时每次调用都只会得到
-// “实体不存在”，所以生成期拒绝。add rpc -entity-service 只是骨架形状、不记进 roost.yaml，规则按拥有者的实体判断。
+// checkRouteRPCOwners 是路由 rpc（//roost:rpc route，联盟服务方案 §2.10 第 2 项）在工程层的三条规则。路由是方法级策略，
+// 只查标了 route 的方法，不标 route 的 rpc（例如 mail）不受影响：
+//
+//   - 拥有者必须托管 Remote 实体 kind（//roost:entity remote=managed service=<owner>）：路由客户端按实体的 Redis 路由
+//     登记、再按持久所有权记录找 owner（§2.7），只有这类 kind 有；没有时每次调用都只会得到“实体不存在”。
+//     add rpc -entity-service 只是骨架形状、不进 roost.yaml，规则按拥有者的实体判断。
+//   - 调用方（uses_rpcs）要有发布路由查找的 Mod：remote_entity（自己也写 Remote 实体）或 remote_mirror（只读，带 Mongo）。
+//     生成的 ClientMod 在 Provide 时从注册表取它（kitremoteentity.RouteSource）。
+//   - 拥有者有 preload=startup kind 时，owner Mod（mod.go，业务文件）要把 mods.ModRemoteEntityPreload 写进
+//     OptionalDependsOn：预加载完成前不在总线上注册 handler（§2.7“时机”）。按源码文本查。
+//
 // 解析失败的 rpc 包跳过：同一个错误由随后的 servicerpc 生成报出，带文件与行。
 func checkRouteRPCOwners(root string, m Manifest, owned []entityowner.Owned) error {
-	routeServices := map[string]bool{}
-	for _, service := range entityowner.RouteServices(owned) {
-		routeServices[service] = true
-	}
+	routeServices, preloadServices := routeAndPreloadServices(owned)
 	for _, dir := range projectRPCDirs(root, m) {
 		services, err := servicerpc.ParseDir(filepath.Join(root, filepath.FromSlash(dir)))
 		if err != nil {
@@ -161,15 +202,45 @@ func checkRouteRPCOwners(root string, m Manifest, owned []entityowner.Owned) err
 				break
 			}
 		}
+		routed := ""
 		for _, service := range services {
 			for _, method := range service.Methods {
-				if method.Route == "" || routeServices[owner] {
+				if method.Route == "" {
+					continue
+				}
+				if routed == "" {
+					routed = service.Interface + "." + method.Name
+				}
+				if routeServices[owner] {
 					continue
 				}
 				return fmt.Errorf("%s: method %s.%s is a route method (//roost:rpc route, key %s), but its owner service %s owns no Remote managed entity kind; "+
 					"a route call finds the entity's owner through the route registration and the durable ownership record, which only kinds declared "+
 					"//roost:entity remote=managed service=%s have. Declare the entity it acts on that way, or drop the route marker (a create method routes to any instance)",
 					dir, service.Interface, method.Name, method.Route, owner, owner)
+			}
+		}
+		if routed == "" {
+			continue
+		}
+		for _, caller := range sortedServiceNames(m) {
+			if !contains(m.Services[caller].UsesRpcs, rpc) {
+				continue
+			}
+			mods, err := resolveMods(effectiveServiceMods(m, caller))
+			if err != nil {
+				return err
+			}
+			if !contains(mods, "remote_entity") && !contains(mods, "remote_mirror") {
+				return fmt.Errorf("service %s calls %s, a route method of rpc %s, but has neither remote_entity nor remote_mirror to look up the entity's owner; "+
+					"run: roost add mod remote_mirror -service %s", caller, routed, rpc, caller)
+			}
+		}
+		if preloadServices[owner] {
+			raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(dir), "mod.go"))
+			if err == nil && !strings.Contains(string(raw), "ModRemoteEntityPreload") {
+				return fmt.Errorf("%s/mod.go: rpc %s has route methods and its owner %s preloads entities (preload=startup), but the owner Mod does not order itself after "+
+					"the preload: add mods.ModRemoteEntityPreload to its OptionalDependsOn, so no request is served before the preload finishes", dir, rpc, owner)
 			}
 		}
 	}
