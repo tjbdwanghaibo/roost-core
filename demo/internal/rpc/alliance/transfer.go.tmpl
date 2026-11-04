@@ -3,22 +3,22 @@ package alliance
 import (
 	"context"
 	"fmt"
-	"slices"
+	"time"
 
-	db "{{MODULE}}/db"
 	alliance "{{MODULE}}/game/entities/alliance"
 	alliance_member "{{MODULE}}/game/entities/alliance_member"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
-	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
-	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// Scan lists the entity ids of one kind in the store (alliance.transfer by
-// count: "N of the entities this instance owns").
-type Scan interface {
-	EntityIDs(ctx context.Context, kind entity.EntityKind) ([]int64, error)
-}
+// transferStopMargin is how much of the command's deadline (ops.admin_timeout)
+// a transfer leaves unused: once less than this remains it starts no further
+// move and reports More, so the operator command answers inside its deadline
+// whatever count asked for. One move takes tens of milliseconds.
+const transferStopMargin = 2 * time.Second
+
+// transferListPage is how many owned ids one listing page asks for.
+const transferListPage = 1000
 
 // TransferReport is what a transfer did.
 type TransferReport struct {
@@ -30,16 +30,26 @@ type TransferReport struct {
 	Pending []int64 `json:"pending,omitempty"`
 	// Failed: entity id -> why; nothing was moved for them.
 	Failed map[int64]string `json:"failed,omitempty"`
+	// More: the command's deadline came near and it stopped early; the
+	// entities not reached are still this instance's. Run it again.
+	More bool `json:"more,omitempty"`
 }
 
 // TransferOwnership moves alliances and guards this instance owns to toSID
 // (plan §2.7: scaling out, or emptying an instance before it is stopped):
 // the entities in ids (full entity ids, AllianceTarget / GuardTarget), or —
 // ids empty — the first count of the entities this instance owns, alliances
-// first. One TransferRemoteOwnership per entity: it drains the writes already
-// admitted here and fences this instance before toSID may write; toSID loads
-// the entity on the first request routed to it. Only the current owner can
+// first, listed by owner from the ownership records (Deps.Owned): the cost is
+// what this instance owns, not every alliance in the store. One
+// TransferRemoteOwnership per entity: it drains the writes already admitted
+// here and fences this instance before toSID may write; toSID loads the
+// entity on the first request routed to it. Only the current owner can
 // transfer, so the command runs on the instance that gives the entities away.
+//
+// It is bounded by ctx: with less than transferStopMargin left it stops and
+// reports More (moved so far stays moved); run it again for the rest. An
+// owned id may be an empty claim (an alliance whose founding was refused):
+// it moves like any other, and stays an entity that does not exist.
 //
 // While it runs, a write to an entity being moved answers "not executed";
 // after it, this instance's route check redirects to toSID and the route
@@ -56,8 +66,8 @@ func (s *Service) TransferOwnership(ctx context.Context, ids []int64, count int,
 		return report, fmt.Errorf("%w: target sid %d", ErrRequestInvalid, toSID)
 	case (len(ids) == 0) == (count <= 0):
 		return report, fmt.Errorf("%w: give either entity ids or a positive count", ErrRequestInvalid)
-	case len(ids) == 0 && s.deps.Scan == nil:
-		return report, fmt.Errorf("alliance: transfer by count needs the store scan")
+	case len(ids) == 0 && s.deps.Owned == nil:
+		return report, fmt.Errorf("alliance: transfer by count needs the owned-entity listing")
 	}
 	if len(ids) == 0 {
 		var err error
@@ -66,6 +76,10 @@ func (s *Service) TransferOwnership(ctx context.Context, ids []int64, count int,
 		}
 	}
 	for _, id := range ids {
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < transferStopMargin {
+			report.More = true
+			break
+		}
 		if !entity.MatchEntityID(id, alliance.EntityKindAlliance) && !entity.MatchEntityID(id, alliance_member.EntityKindAllianceMember) {
 			report.Failed[id] = "not an alliance or a guard entity id"
 			continue
@@ -99,27 +113,26 @@ func (s *Service) TransferOwnership(ctx context.Context, ids []int64, count int,
 	return report, nil
 }
 
-// ownedEntities is the first count alliances and guards whose ownership
-// record names this instance (a store scan, then one ownership read each:
-// an operator command, not a hot path).
+// ownedEntities is the first count alliances, then guards, whose ownership
+// record names this instance: pages of the owner listing (an index read per
+// page), so a count of thousands costs a few reads, not a scan of the store.
 func (s *Service) ownedEntities(ctx context.Context, count int) ([]int64, error) {
 	var owned []int64
 	for _, kind := range []entity.EntityKind{alliance.EntityKindAlliance, alliance_member.EntityKindAllianceMember} {
-		ids, err := s.deps.Scan.EntityIDs(ctx, kind)
-		if err != nil {
-			return nil, err
-		}
-		slices.Sort(ids)
-		for _, id := range ids {
-			if len(owned) == count {
-				return owned, nil
+		after := int64(0)
+		for len(owned) < count {
+			ids, next, err := s.deps.Owned.ListOwnedRemoteEntities(ctx, []entity.EntityKind{kind}, after, min(transferListPage, count-len(owned)))
+			if err != nil {
+				return nil, fmt.Errorf("alliance: list owned entities: %w", err)
 			}
-			if _, here, err := s.owned(ctx, id); err == nil && here {
-				owned = append(owned, id)
+			owned = append(owned, ids...)
+			if next == 0 {
+				break
 			}
+			after = next
 		}
 	}
-	return owned, nil
+	return owned[:min(len(owned), count)], nil
 }
 
 // guardPending reports whether the guard id has an open reservation.
@@ -132,33 +145,4 @@ func (s *Service) guardPending(ctx context.Context, id int64) (bool, error) {
 		return false, err
 	}
 	return state.PendingRequestID != "", nil
-}
-
-// mongoScan is Scan over the DAO collections.
-type mongoScan struct {
-	mongo     fmongo.IMongo
-	databases func(logical string) string
-}
-
-func (m mongoScan) EntityIDs(ctx context.Context, kind entity.EntityKind) ([]int64, error) {
-	var database, collection string
-	switch kind {
-	case alliance.EntityKindAlliance:
-		database, collection = db.AllianceDaoDBName, db.AllianceDaoCollection
-	case alliance_member.EntityKindAllianceMember:
-		database, collection = db.AllianceMemberDaoDBName, db.AllianceMemberDaoCollection
-	default:
-		return nil, fmt.Errorf("alliance: no collection for kind %d", kind)
-	}
-	var docs []struct {
-		ID int64 `bson:"_id"`
-	}
-	if err := m.mongo.Database(m.databases(database)).Collection(collection).Find(ctx, bson.M{}, &docs); err != nil {
-		return nil, fmt.Errorf("alliance: scan %s: %w", collection, err)
-	}
-	ids := make([]int64, 0, len(docs))
-	for _, doc := range docs {
-		ids = append(ids, doc.ID)
-	}
-	return ids, nil
 }

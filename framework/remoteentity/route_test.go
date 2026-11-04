@@ -502,6 +502,45 @@ func TestEmptyClaimIsAnOwnedEntityThatDoesNotExist(t *testing.T) {
 	}
 }
 
+// Manager.ListOwnedRemoteEntities 是运维按 owner 枚举的正式入口：只列本 sid 独占的、kind 在列表里的实体，一页受
+// OwnedListPageLimit 约束；没有枚举能力的所有权存储明确报错。
+func TestListOwnedRemoteEntitiesListsThisSidsExclusiveEntities(t *testing.T) {
+	registerRouteKinds()
+	ctx := context.Background()
+	markers := &listingMarkerStore{mockMarkerStore: newMockMarkerStore()}
+	mgr := newRoutedManager(t, 1000, newFakeRouteStore(), markers, newRemoteTestLoader())
+	var want []int64
+	for raw := int64(7701); raw < 7701+OwnedListPageLimit+5; raw++ {
+		id := newTestRemoteEntity(raw, 1, routeKindAlliance).GUId()
+		markers.leases[id] = entity.RemoteEntityMarkerLease{OwnerSid: 1000, MarkerEpoch: 1, RouteEpoch: 1}
+		want = append(want, id)
+	}
+	slices.Sort(want)
+	otherOwner := newTestRemoteEntity(9001, 1, routeKindAlliance).GUId()
+	otherKind := newTestRemoteEntity(9002, 1, routeKindMember).GUId()
+	markers.leases[otherOwner] = entity.RemoteEntityMarkerLease{OwnerSid: 2000, MarkerEpoch: 1, RouteEpoch: 1}
+	markers.leases[otherKind] = entity.RemoteEntityMarkerLease{OwnerSid: 1000, MarkerEpoch: 1, RouteEpoch: 1}
+
+	ids, _, err := mgr.ListOwnedRemoteEntities(ctx, []entity.EntityKind{routeKindAlliance}, 0, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(ids, want[:OwnedListPageLimit]) {
+		t.Fatalf("listed %d ids (first %v); want the first %d alliances this sid owns", len(ids), ids[:min(3, len(ids))], OwnedListPageLimit)
+	}
+	if ids, _, err := mgr.ListOwnedRemoteEntities(ctx, []entity.EntityKind{routeKindAlliance}, want[OwnedListPageLimit-1], 10); err != nil || !slices.Equal(ids, want[OwnedListPageLimit:]) {
+		t.Fatalf("second page = %v, %v; want the remaining %d", ids, err, len(want)-OwnedListPageLimit)
+	}
+	if ids, _, err := mgr.ListOwnedRemoteEntities(ctx, nil, 0, 10); err != nil || len(ids) != 0 {
+		t.Fatalf("no kinds = %v, %v; want an empty page", ids, err)
+	}
+
+	plain := newRoutedManager(t, 1000, newFakeRouteStore(), newMockMarkerStore(), newRemoteTestLoader())
+	if _, _, err := plain.ListOwnedRemoteEntities(ctx, []entity.EntityKind{routeKindAlliance}, 0, 10); err == nil {
+		t.Fatal("an ownership store that cannot enumerate must fail the listing")
+	}
+}
+
 func TestStopDeletesHeldRoutesAndStopsRenewal(t *testing.T) {
 	store, markers := newFakeRouteStore(), newMockMarkerStore()
 	loader := newRemoteTestLoader()

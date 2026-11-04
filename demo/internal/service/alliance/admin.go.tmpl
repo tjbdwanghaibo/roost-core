@@ -49,8 +49,9 @@ func registerAdminCommands(registry *app.Registry, service *rpcalliance.Service)
 		{
 			Name: adminTransfer,
 			Description: "move alliances and guards THIS instance owns to to_sid: {ids: [full entity ids], to_sid} or {count, to_sid} " +
-				"(the first count it owns, alliances first). Run on the instance giving them away; guards with an open reservation are " +
-				"reported as pending, run again once they settle. Callers follow the new owner by redirect and the route registration",
+				"(the first count it owns, alliances first, listed by owner). Run on the instance giving them away; guards with an open reservation are " +
+				"reported as pending, run again once they settle; more=true means the command stopped before its deadline (ops.admin_timeout), run it again. " +
+				"Callers follow the new owner by redirect and the route registration",
 			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
 				payload, err := admin.DecodePayload[transferPayload](cmd)
 				if err != nil {
@@ -60,7 +61,7 @@ func registerAdminCommands(registry *app.Registry, service *rpcalliance.Service)
 				if err != nil {
 					return admin.Result{}, fmt.Errorf("%w: %v", admin.ErrCommandInvalid, err)
 				}
-				return admin.Result{Data: map[string]any{"moved": report.Moved, "pending": report.Pending, "failed": report.Failed}}, nil
+				return admin.Result{Data: map[string]any{"moved": report.Moved, "pending": report.Pending, "failed": report.Failed, "more": report.More}}, nil
 			},
 		},
 		{

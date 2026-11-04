@@ -46,6 +46,10 @@ func (s *Service) BindRegistry(ctx context.Context, registry *app.Registry) erro
 	if !ok || remote == nil {
 		return fmt.Errorf("alliance service: the remote_entity Mod is required")
 	}
+	owned, ok := remote.(entity.RemoteOwnedEntityLister)
+	if !ok {
+		return fmt.Errorf("alliance service: the Remote manager %T cannot list the entities it owns", remote)
+	}
 	busClient, ok := app.Lookup[bus.IBus](registry, mods.ModBus)
 	if !ok || busClient == nil {
 		return fmt.Errorf("alliance service: the bus is unavailable")
@@ -90,7 +94,7 @@ func (s *Service) BindRegistry(ctx context.Context, registry *app.Registry) erro
 		Notify: func(_ context.Context, homeSID int32, notice MemberNotice) error {
 			return busClient.SendByType(GameServiceType, homeSID, NoticeModule, notice)
 		},
-		Scan: mongoScan{mongo: mongoClient, databases: databases.Physical},
+		Owned: owned,
 	}); err != nil {
 		return err
 	}

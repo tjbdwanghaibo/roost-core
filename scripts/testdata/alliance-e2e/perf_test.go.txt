@@ -47,8 +47,8 @@ func TestAllianceE2EShortPerf(t *testing.T) {
 	}
 	var procs []*proc
 	for i := 0; i < 4; i++ {
-		// alliance.transfer {count} 扫 DAO 集合再逐个读所有权，上万个实体时超过缺省的 ops.admin_timeout 10s（KNOWN-LIMITS），短测放宽。
-		procs = append(procs, s.start(fmt.Sprintf("alliance-%d", 3000+i), "alliance", int32(3000+i), procOptions{keys: [][3]string{{"ops", "admin_timeout", "600s"}}}))
+		// alliance.transfer {count} 按 owner 分页枚举、按命令期限分批（答 more 时再调），缺省的 ops.admin_timeout 10s 够用。
+		procs = append(procs, s.start(fmt.Sprintf("alliance-%d", 3000+i), "alliance", int32(3000+i), procOptions{}))
 	}
 	a := procs[0]
 	client := s.client(nil, 20*time.Second)
@@ -116,19 +116,27 @@ func TestAllianceE2EShortPerf(t *testing.T) {
 			t.Logf("PERF founded %d more alliances on 4 instances in %v (%.0f/s)", more, took.Round(time.Second), float64(more)/took.Seconds())
 		}
 		start := time.Now()
-		moved := 0
+		moved, calls, partial := 0, 0, 0
+		var slowest time.Duration
 		for _, p := range procs[1:] {
 			for {
+				callStart := time.Now()
 				data := s.admin(p, "alliance.transfer", map[string]any{"count": 100000, "to_sid": 3000})
+				slowest = max(slowest, time.Since(callStart))
+				calls++
 				list, _ := data["moved"].([]any)
 				pending, _ := data["pending"].([]any)
+				if more, _ := data["more"].(bool); more {
+					partial++
+				}
 				moved += len(list)
 				if len(list) == 0 && len(pending) == 0 {
 					break
 				}
 			}
 		}
-		t.Logf("PERF transferred %d entities (alliances and founders' guards) to 3000 in %v", moved, time.Since(start).Round(time.Millisecond))
+		t.Logf("PERF transferred %d entities (alliances and founders' guards) to 3000 in %v: %d admin calls (%d stopped at the deadline margin), slowest call %v (ops.admin_timeout 10s)",
+			moved, time.Since(start).Round(time.Millisecond), calls, partial, slowest.Round(time.Millisecond))
 		s.stop(a, syscall.SIGINT)
 		launched := time.Now()
 		s.launch(a)

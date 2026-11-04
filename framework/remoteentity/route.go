@@ -375,6 +375,34 @@ func (m *Manager) PreloadOwnedEntities(ctx context.Context, kinds []entity.Entit
 	return report, nil
 }
 
+// OwnedListPageLimit 是 Manager.ListOwnedRemoteEntities 一页的上限：更大的 limit 按它截断，调用方按 next 继续翻页。
+const OwnedListPageLimit = 1000
+
+var _ entity.RemoteOwnedEntityLister = (*Manager)(nil)
+
+// ListOwnedRemoteEntities 实现 entity.RemoteOwnedEntityLister：按 owner（本 sid）枚举持久所有权记录里独占的、kind 在
+// kinds 里的实体，一页至多 min(limit, OwnedListPageLimit) 个（与起服预加载同一个查询，OwnedEntityLister）。kinds 为空
+// 或 limit ≤ 0 返回空页。要 I/O，只能在 I/O 段调用（快池上调用返回 fctx 的阻塞错误）。
+func (m *Manager) ListOwnedRemoteEntities(ctx context.Context, kinds []entity.EntityKind, after int64, limit int) ([]int64, int64, error) {
+	if err := fctx.BlockingError("remoteentity.ListOwnedRemoteEntities"); err != nil {
+		return nil, 0, err
+	}
+	if m == nil || m.ownershipStore == nil || m.cfg == nil {
+		return nil, 0, entity.ErrRemoteWriteCapabilityDisabled
+	}
+	if len(kinds) == 0 || limit <= 0 {
+		return nil, 0, nil
+	}
+	lister, ok := m.ownershipStore.(OwnedEntityLister)
+	if !ok {
+		return nil, 0, fmt.Errorf("remote_entity: ownership store %T cannot enumerate owned entities", m.ownershipStore)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return lister.ListOwnedRemoteEntities(ctx, m.localSid, kinds, after, min(limit, OwnedListPageLimit))
+}
+
 // startRouteRenewal 启动续期循环（Assembly.Start 调用）；已启动或已停止时无操作。
 func (m *Manager) startRouteRenewal() {
 	r := m.routes

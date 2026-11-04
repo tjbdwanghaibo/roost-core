@@ -140,7 +140,7 @@ func (c *cluster) start(sid int32) *instance {
 	}
 	if err := in.svc.Bind(Deps{
 		Nest: in.engine, LocalSID: sid, Rules: c.rules, Owners: in.remote,
-		Entities: in.store, Sequence: c, Peers: peers, Scan: in.store,
+		Entities: in.store, Sequence: c, Peers: peers, Owned: in.remote,
 		Notify: func(_ context.Context, homeSID int32, notice MemberNotice) error {
 			c.mu.Lock()
 			defer c.mu.Unlock()
@@ -388,8 +388,8 @@ func (b testBus) CallTo(ctx context.Context, _ string, sid int32, method string,
 	return codec.Unmarshal(encoded, resp)
 }
 
-// entityStore is one instance's loaded entities: the Nest getter, Entities
-// (what the generated lifecycles do in production) and Scan.
+// entityStore is one instance's loaded entities: the Nest getter and Entities
+// (what the generated lifecycles do in production).
 type entityStore struct {
 	mu       sync.Mutex
 	entities map[int64]entity.IThreadSafeEntity
@@ -456,7 +456,7 @@ func (s *entityStore) EnsureShard(_ context.Context, sid int32) error {
 	return s.ensure(int64(sid), alliance_shard.EntityKindAllianceShard)
 }
 
-// EntityIDs implements Scan over what this instance has loaded.
+// EntityIDs lists the ids of kind this instance has loaded.
 func (s *entityStore) EntityIDs(_ context.Context, kind entity.EntityKind) ([]int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -586,6 +586,24 @@ func (r *fakeRemote) PrepareRemoteWriteBatch(_ context.Context, ids []int64) (en
 func (r *fakeRemote) GetRemoteOwnership(_ context.Context, id int64) (entity.RemoteEntityMarkerLease, bool, error) {
 	sid, ok := r.c.owner(id)
 	return entity.RemoteEntityMarkerLease{OwnerSid: sid, MarkerEpoch: 1, RouteEpoch: 1}, ok, nil
+}
+
+// ListOwnedRemoteEntities implements entity.RemoteOwnedEntityLister over the
+// cluster's ownership records, like the Remote manager's owner listing.
+func (r *fakeRemote) ListOwnedRemoteEntities(_ context.Context, kinds []entity.EntityKind, after int64, limit int) ([]int64, int64, error) {
+	r.c.mu.Lock()
+	var ids []int64
+	for id, owner := range r.c.owners {
+		if owner == r.sid && id > after && slices.ContainsFunc(kinds, func(kind entity.EntityKind) bool { return entity.MatchEntityID(id, kind) }) {
+			ids = append(ids, id)
+		}
+	}
+	r.c.mu.Unlock()
+	slices.Sort(ids)
+	if limit <= 0 || len(ids) <= limit {
+		return ids, 0, nil
+	}
+	return ids[:limit], ids[limit-1], nil
 }
 
 func (r *fakeRemote) TransferRemoteOwnership(_ context.Context, id int64, to int32) (entity.RemoteEntityMarkerLease, error) {
