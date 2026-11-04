@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/nats"
@@ -884,6 +885,8 @@ func (b *Bus) dispatchTask(key int64, task *incomingTask) {
 // refuseTask settles a task the dispatcher did not admit. An RPC request is
 // answered with a failure envelope at once: it was definitely not executed, so
 // the caller must not wait out its timeout and treat the outcome as unknown.
+// 答复包在 errcode.ErrRetryable 里（调用方看到 CodeRetryable，servicerpc.Classify 归为可重试）：只写
+// errRPCNotAdmitted 时 errcode.ClientError 把它折成 CodeInternal，调用方仍只能按结果未知处理（App 生命周期方案缺口 4）。
 // It also stays out of the dead-letter queue — that queue holds async messages
 // a requeue can deliver again, and an RPC entry has neither its reply subject
 // nor its session, so a requeue could only turn it into a module message no
@@ -896,7 +899,7 @@ func (b *Bus) refuseTask(task *incomingTask, reason string, cause error) {
 	if task.replySubject == "" || b.rpc == nil {
 		return
 	}
-	data, err := encodeRPCFailure(b.codec, fmt.Errorf("%w: %s: %w", errRPCNotAdmitted, task.natsMsg.MsgName, cause))
+	data, err := encodeRPCFailure(b.codec, errcode.Wrap(errcode.ErrRetryable, fmt.Errorf("%w: %s: %w", errRPCNotAdmitted, task.natsMsg.MsgName, cause)))
 	if err != nil {
 		slog.Error("bus: marshal rpc refusal failed", "method", task.natsMsg.MsgName, "err", err)
 		return

@@ -24,12 +24,17 @@ func refusedRPCTask(id string) *incomingTask {
 	}
 }
 
+// expectRefusalReply 断言调度器没接纳的请求立即得到答复，而且答复是 CodeRetryable：调度器拒绝的请求确定没有执行，
+// 调用方要能用同一 RequestID 重发；答成 CodeInternal 调用方只能按结果未知处理（App 生命周期方案缺口 4）。
 func expectRefusalReply(t *testing.T, b *Bus, rpc *lifecycleRpc, label string) {
 	t.Helper()
 	select {
 	case raw := <-rpc.replies:
-		if err := decodeRPCResponse(b.codec, raw, &struct{}{}); err == nil {
+		err := decodeRPCResponse(b.codec, raw, &struct{}{})
+		if err == nil {
 			t.Errorf("%s: refusal decoded as success", label)
+		} else if code := errcode.CodeOf(err); code != errcode.CodeRetryable {
+			t.Errorf("%s: refusal answered %v (code %d); want CodeRetryable: the request was definitely not executed", label, err, code)
 		}
 	case <-time.After(time.Second):
 		t.Errorf("%s: no reply; the caller waits for its whole timeout and sees an unknown outcome", label)
