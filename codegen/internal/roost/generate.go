@@ -442,6 +442,10 @@ func runGenerators(ctx context.Context, root string, manifest Manifest, generato
 	} else if partial != "" && !options.DryRun {
 		fmt.Fprintln(options.Stdout, "WARN: "+partial)
 	}
+	// 实体归属服务（//roost:entity service=）：取值必须是声明过的、带 Nest 的业务服务，bootstrap 与归属一致。
+	if err := checkEntityOwnersBeforeGenerate(root, manifest); err != nil {
+		return err
+	}
 	for _, gen := range generators {
 		if !gen.Always && !hasFeature(manifest, gen.Feature) {
 			continue

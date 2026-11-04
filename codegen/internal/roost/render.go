@@ -526,6 +526,10 @@ func serviceModConstructors(m Manifest, name string, allMods []string) []string 
 	for _, mod := range mods {
 		out = append(out, renderModConstructor(m, mod, allMods, name))
 	}
+	// 本服务拥有 kind（//roost:entity service=）：锁住它们的 handler 只注册在这里的 Nest 引擎上（entity_owner.go）。
+	if m.ownerServices[name] && contains(mods, "nest") {
+		out = append(out, ownedHandlersModCall(name))
+	}
 	if spec, hosted := frameworkCatalog[m.Services[name].Framework]; hosted {
 		args := make([]string, 0, len(spec.ModArgs))
 		for _, arg := range spec.ModArgs {

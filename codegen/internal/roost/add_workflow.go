@@ -3,6 +3,7 @@ package roost
 import (
 	"bytes"
 	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/codegen/internal/entityowner"
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol"
 	"go/ast"
 	"go/format"
@@ -21,6 +22,17 @@ func addEntityLifecycle(root string, manifest Manifest, options AddOptions) ([]s
 		return nil, err
 	}
 	service := lifecycleService(manifest, options.Service)
+	// 声明了归属服务的实体（//roost:entity service=）：lifecycle 只在归属服务里用，缺省落到它，别的服务拒绝。
+	owned, err := projectEntityOwners(root)
+	if err != nil {
+		return nil, err
+	}
+	if owner := entityowner.ServiceOf(owned, entityName); owner != "" {
+		if requested := toSnake(options.Service); requested != "" && requested != owner {
+			return nil, fmt.Errorf("entity %s declares service=%s; its lifecycle belongs to that service, not %s", toPascal(entityName), owner, requested)
+		}
+		service = owner
+	}
 	serviceSpec, serviceExists := manifest.Services[service]
 	if !serviceExists {
 		if strings.TrimSpace(options.Service) != "" {

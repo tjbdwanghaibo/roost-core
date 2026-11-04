@@ -90,6 +90,18 @@ DESIGN-TODO D20～D22 的生成器接入（维护者 2026-10-21 要求）。[add
 - **DAO 引用形状生成期拒绝**（维护者 2026-10-30 决定 A；行为收紧）：[parse.go](../../../codegen/internal/dao/parse.go) 的 `validateReferenceShapes` 在 `parseDefDir` 解析完全部定义文件后运行（“是不是嵌套类型”以最终的 `Definitions.Nested` 为准，与生成时 `isNestedType` 一致），逐个查 Mongo DAO（含 `nocoll`）与嵌套 struct 的字段，`referenceShapeProblem` 给出原因：基本类型指针字段、指向非嵌套类型的指针（字段 / slice 元素 / map 值）、slice 元素是 `[]` / `map[` / `*` 开头的类型、map 值是 map、map 值是 slice 但不满足 `CopiesMapValue`（元素不是基本类型）。报错格式 `dao|nested struct <类型> field <字段> (<Go 类型>): <原因>; use []byte, a slice of a basic type, a basic type, or a pointer to a nested struct (*T, []*T, map[K]*T); …`，经 `Run` 包成 `parse definitions: …`。不变量：生成出来的 DAO / 嵌套类型里，取值方法交出的值要么按值传递、要么是副本（`IsBytes` 的 `GetXAll`、`CopiesMapValue`）、要么是嵌套类型指针（改动经其 setter 标脏），调用方手里没有能绕过 setter 改 DAO 的引用（非指针嵌套 struct 值与 `[]T` / `map[K]T` 的嵌套值不在本条范围）。`//roost:redisdao` 整值读写、没有字段 setter，不查。判定按语法：底层是 slice / map 的命名类型认不出。允许的定义生成代码没有变化，golden 不变。回归：[failfast_test.go](../../../codegen/internal/dao/failfast_test.go) `TestGenerationRejectsReferenceShapesTheAccessorsWouldShare`（11 个子用例走完整 `Run`，修前全部生成成功、报 “generation accepted a reference shape whose accessors share the DAO's memory”）、`TestGenerationAcceptsTheShapesTheAccessorsCopyOrOwn`（允许形状在 DAO 与两层嵌套里照常生成）。2026-10-30 逐个核对：codegen dao / entity testdata、`roost add saga -native` testdata、game-demo 的 `db/def` 模板、`roost add dao` 骨架加回执字段、下游 ai-game-blackbox-server 的 `db/def/player.go` 在新规则下都照常生成。
 - **webroute `headers=` / `compress=gzip` / `errors=` / `status=`**：[marker/options.go](../../../codegen/internal/marker/options.go) 的 `Web` 词表加两个可选键，必填由 [parse.go](../../../codegen/internal/webroute/parse.go) 的 `requiredMarkerKeys` 检查；`parseHeaderBindings` 规范化头名并拒绝坏写法，`Route.Headers` / `Route.Compress` 交给 [gen.go](../../../codegen/internal/webroute/gen.go)：`DecodeJSON` 之后逐条 `request.F = r.Header.Get("N")`，结果写出集中在 `writeResult`：`compress=` × `errors=` 选 `WriteResult` / `WriteResultWithMapper` / `WriteCompressedResult` / `WriteCompressedResultWithMapper`，`status=` 给状态实参（缺省 `http.StatusOK`、2xx 整数原样、`response` 时先生成 `if err == nil { status = webroute.SuccessStatus(status, response) }`，出错时不调用响应的方法）；四个都不写时输出与原来逐字相同。`errors=` 只认本包标识符（生成文件不加 import）。生成器只做语法检查（2B），字段不是 string 时在生成文件赋值行编译失败。运行期：[httpserver/server.go](../../../infra/network/httpserver/server.go) 的 `JSONCompressed`（先完整编码，再按 `AcceptsGzip` 与 `minBytes` 决定压缩；编码失败与 `JSON` 共用 `writeEncodeFailure` 回 500；`gzip.Writer` 池化）、`AcceptsGzip`、`AddVary`；[webroute/route.go](../../../infra/network/webroute/route.go) 的 `WriteCompressedResult`（错误响应走 `WriteResult` 不压缩，两路都加 `Vary`）、`WriteCompressedResultWithMapper`、`SuccessStatus`（只认 200～299，否则 fallback）、`CompressMinBytes = 1024`、`RawRequest.Query`（`r.URL.Query()`，每次解析出新 map，即副本）。回归：生成器 `TestParseReadsHeaderBindingsAndCompression`、`TestParseRefusesEachBadHeaderOrCompressionOption`、`TestParseReadsErrorMapperAndSuccessStatus`、`TestParseRefusesEachBadErrorMapperOrSuccessStatus`、`TestGoldenRoutes`（[testdata/routes](../../../codegen/internal/webroute/testdata/routes/handlers.go) → [golden](../../../codegen/internal/webroute/testdata/golden/webroute_gen.go)）、`TestGeneratedRoutesRunAgainstTheRuntime`（fixture + 生成物 + [testdata/runtime/routes_test.go](../../../codegen/internal/webroute/testdata/runtime/routes_test.go) 放进替换为当前检出的一次性模块，httptest 端到端）；运行时 `TestACompressedRouteNegotiatesGzipWithTheClient`、`TestReadRawCarriesTheQueryValues`、`TestSuccessStatusTakesOnlyA2xxFromTheResponse`、`TestWriteCompressedResultWithMapperMapsErrorsThroughTheMapper`、`TestAcceptsGzipFollowsTheAcceptEncodingQualities`、`TestJSONCompressedReportsAnEncodeFailureUncompressed`。发版时生成物用到 `WriteCompressedResult`，`minimumVersions.Core` 要升到含它的版本。
 
+## 2G. 实体归属服务（service=）
+
+联盟服务方案阶段 2 第 1 项（[FEATURE-2026-11-04-alliance-service §2.10](../../maintenance/FEATURE-2026-11-04-alliance-service.md#210-生成器最小增量决定-3)，维护者 2026-11-04 决定：声明在实体标记、未声明的 kind 保持现行为）。
+
+- **一次扫描**：[entityowner/owner.go](../../../codegen/internal/entityowner/owner.go) 的 `Scan` 读 `game/entities/*/*.go` 的 `//roost:entity`（经 `marker.Entity` 词表，`service` 是其中一个键），返回声明了 `service=` 的实体（结构体名、kind 常量、服务、是否 `remote=managed`、包目录、位置）；`DirOwners` 按包目录给出归属，同包两个服务时拒绝（handler 目标按包解析）。nest 生成器与 roost 命令共用它。
+- **handler 拆分**：[nest/owner.go](../../../codegen/internal/nest/owner.go) 的 `fileOwner` 按目标参数类型的限定符经源文件 import 找到包目录、查归属；一个 handler 两个服务、同文件归属不一致、方法 handler / 原生步骤锁住归属 kind 时拒绝。有归属的文件由 `generateOwnedHandlers` 生成 `Register<File>NestHandlersOn(mgr *nest.NestMgr) error`（实例级 `RegisterHandlerWithMeta`，不经 `sync.Once`、不进包级表与 hotcode 登记），不进 `internal/registry/nest_gen.go` 的 `RegisterNestHandlers`。`generateOwnership` 写 `internal/registry/ownership_gen.go`：`entityOwners`（kind → 服务）、`ownedNestHandlers`（服务 → 注册函数）、`ForeignKinds(service)`、`NewOwnedNestHandlersMod(service)`（`DependsOn` nest，Provide 时从 `mods.ModNest` 取引擎注册——全部 Provide 先于任何 Start，所以早于引擎启动）。没有任何声明时删除该文件，工程回到原生成形状。
+- **工程层**：[roost/entity_owner.go](../../../codegen/internal/roost/entity_owner.go)。`validateEntityOwners`（服务存在、不是托管框架服务、带 nest，`remote=managed` 时带 remote_entity）；`withEntityOwners` 让 `renderProject` 知道哪些服务拥有 kind，`serviceModConstructors` 给它们追加 `registry.NewOwnedNestHandlersMod("<service>")`（停机预算按同一份列表多计一个 Mod）；`checkEntityOwnersBeforeGenerate` 在 `runGenerators` 之前校验，并在 bootstrap 与归属不一致时要求先 `roost project sync`；`addEntityLifecycle` 缺省取归属服务、拒绝别的服务；doctor 的 `checkEntityOwnerUse`（`entity-owner`）按源码文本查归属 handler 的 `New<X>Sender` 是否出现在别的服务的代码里（`internal/service/<name>/`、该服务拥有的 `internal/rpc/<rpc>/`、`internal/access/player/` 与 `game/controllers/` 归 `access.player.service`；`game/` 下的共用代码看不出调用方，不查）。
+- **运行期守卫不在生成器**：别的服务的进程先写到新实体会把它认领走（[方案 §1.2](../../maintenance/FEATURE-2026-11-04-alliance-service.md#12-remote-写准入独占模式本来就不经-redis-锁)），由框架阶段 1 的 Remote Manager 外来 kind 守卫拒绝；生成器给出 `ForeignKinds`，bootstrap 接线待阶段 1 落地。
+- **已知限制**：归属 handler 不登记 hotcode（实例注册表没有补丁名登记）；doctor 是文本判据，只证明写了、不证明运行时走到。
+
+回归：[nest/owner_test.go](../../../codegen/internal/nest/owner_test.go)（`TestOwnedKindHandlersRegisterOnlyOnTheOwningService`：修前 aggregate 里仍有 `RegisterJoinGuildNestHandlers()`，报 “handler of an owned kind must not be registered in every process”；`TestHandlerAcrossTwoOwningServicesIsRejected` 修前 `got <nil>`）、[roost/entity_owner_test.go](../../../codegen/internal/roost/entity_owner_test.go)（`TestGenerateRejectsAnEntityOwnedByAnUndeclaredService` 修前 “generate accepted service=aliance”；`TestEntityOwnerScopesHandlersLifecycleAndDoctor` 修前 “generate with a stale bootstrap must ask for project sync, got <nil>”，并对生成工程跑 build / vet）。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。
@@ -268,6 +280,14 @@ DESIGN-TODO D20～D22 的生成器接入（维护者 2026-10-21 要求）。[add
 | --- | --- |
 | [main.go](../../../codegen/internal/errcode/main.go) | `Definition` |
 
+### codegen/internal/entityowner
+
+1 个实现文件；测试经 nest 与 roost 包（见 §2G）。
+
+| 源码 | 导出类型（定位用） |
+| --- | --- |
+| [owner.go](../../../codegen/internal/entityowner/owner.go) | `Owned`、`Scan`、`DirOwners`、`Services`、`ServiceOf` |
+
 ### codegen/internal/genutil
 
 2 个实现文件、0 个测试文件。
@@ -295,6 +315,7 @@ DESIGN-TODO D20～D22 的生成器接入（维护者 2026-10-21 要求）。[add
 | [bootstrap.go](../../../codegen/internal/nest/bootstrap.go) | 函数/方法或内部实现；见源码 |
 | [gen.go](../../../codegen/internal/nest/gen.go) | 函数/方法或内部实现；见源码 |
 | [main.go](../../../codegen/internal/nest/main.go) | 函数/方法或内部实现；见源码 |
+| [owner.go](../../../codegen/internal/nest/owner.go) | 实体归属服务的 handler 拆分与 `ownership_gen.go`（§2G） |
 | [parse.go](../../../codegen/internal/nest/parse.go) | `FuncInfo`、`RemoteAccessInfo`、`EntityParam`、`NonEntityParam`、`RetParam`、`ErrorRetParam`、`ParseResult`、`ImportInfo` |
 | [run.go](../../../codegen/internal/nest/run.go) | 函数/方法或内部实现；见源码 |
 
@@ -567,6 +588,7 @@ DESIGN-TODO D20～D22 的生成器接入（维护者 2026-10-21 要求）。[add
 
 - [generated_signatures_test.go](../../../codegen/internal/nest/generated_signatures_test.go)：`TestABlankParameterNameGeneratesUsableCode`、`TestSenderRefusesATypeDeclaredInTheHandlerPackage`、`TestSenderRefusesARemoteRequestStructWithoutSuggestingAMove`、`TestHandlerSideGenerationDoesNotImportReturnOnlyPackages`
 - [handler_contract_test.go](../../../codegen/internal/nest/handler_contract_test.go)：`TestParseFileRefusesValueReceiversAndBadTargetDeclarations`、`TestParseFileRejectsDuplicateRemoteAliasesWithinAndAcrossFiles`、`TestModuleDiscoveryRejectsBrokenOrMissingGoMod`、`TestGeneratePipelinedHandlerMeta`、`TestParseFileRejectsRemainingRemoteTagViolations`；其余 1 项见文件
+- [owner_test.go](../../../codegen/internal/nest/owner_test.go)：`TestOwnedKindHandlersRegisterOnlyOnTheOwningService`、`TestHandlerAcrossTwoOwningServicesIsRejected`
 - [nest_test.go](../../../codegen/internal/nest/nest_test.go)：`TestParseFile`、`TestValidateTransactionOptionsRejectsLegacyDirty`、`TestParseFileReadsRemoteRequestTagsFromPackageFiles`、`TestGenerate`、`TestGenerateMultipleNonErrorReturns`；其余 7 项见文件
 - [retirement_test.go](../../../codegen/internal/nest/retirement_test.go)：`TestRunRetiresNestOutputsAfterLastMarkerRemoved`、`TestRunWithoutSenderRetiresOnlySenderOutputs`
 - [run_test.go](../../../codegen/internal/nest/run_test.go)：`TestRunReturnsFlagErrors`

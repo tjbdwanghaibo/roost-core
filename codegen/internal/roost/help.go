@@ -278,7 +278,7 @@ name := dao.GetName()`,
 roost add component <name> --entity <owner>
 roost add dao <name> --entity <owner>
 roost generate`,
-		Configuration: `高层 add 命令自动分配 ID、注册 Component 工厂、生成窄 Entity 接口，并更新 Entity 的 ComponentManager/DaoManager 与字段 tag；Entity wire 生成 getter。只有一个 Entity 时 Component 可省略 --entity；多个时拒绝猜测。底层 Entity marker 使用 //roost:entity entityKind=<const>，还可配置 businessPool=short|long、remote=managed、sync=true、syncNamespace、subjectPacker。`,
+		Configuration: `高层 add 命令自动分配 ID、注册 Component 工厂、生成窄 Entity 接口，并更新 Entity 的 ComponentManager/DaoManager 与字段 tag；Entity wire 生成 getter。只有一个 Entity 时 Component 可省略 --entity；多个时拒绝猜测。底层 Entity marker 使用 //roost:entity entityKind=<const>，还可配置 businessPool=short|long、remote=managed、sync=true、syncNamespace、subjectPacker；service=<服务名> 声明归属服务（只在那个服务注册锁住它的 handler，别的服务经 rpc 写；未声明时任何带 Nest 的服务都能写），改了之后先 roost project sync 再 roost generate。`,
 		Example: `//roost:entity entityKind=EntityKindPlayer
 type Player struct {
     *entity.EntityBase

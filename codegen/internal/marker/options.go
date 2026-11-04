@@ -50,7 +50,7 @@ var (
 	RPC    = Spec{Kind: "rpc", Keys: []string{"service_type", "capability", "affinity"}, Flags: []string{"reliable"}}
 	Entity = Spec{
 		Kind: "entity",
-		Keys: []string{"id", "entityKind", "category", "businessPool", "remote", "noPersist", "lifetime", "sync", "syncNamespace", "syncPacker", "subjectPacker"},
+		Keys: []string{"id", "entityKind", "category", "businessPool", "remote", "noPersist", "lifetime", "sync", "syncNamespace", "syncPacker", "subjectPacker", "service"},
 		// Renamed: the value is the wire namespace every update
 		// of the subject carries, and "topic" suggested a bus that does not exist.
 		Renamed: map[string]string{"syncTopic": "syncNamespace"},

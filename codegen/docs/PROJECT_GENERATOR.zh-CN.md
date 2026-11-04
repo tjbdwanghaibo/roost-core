@@ -416,6 +416,15 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
 调用方 `app.Lookup[guild.Guild](registry, guild.CapabilityName)` 拿接口——服务日后搬进独立进程（`a.RegisterServer(..., guild.NewServer(), ...)`）业务代码不变。
 `make generate` 重生成两半，`generate --check` 把它们当生成物比对。
 
+### 6.w 实体归属服务：`//roost:entity service=<name>`
+
+一个 kind 只该由一个服务写时（例如联盟服务独占 `Alliance`），在实体标记上写 `service=alliance`，然后
+`roost project sync && roost generate`。生成器只在 alliance 的 bootstrap 装 `registry.NewOwnedNestHandlersMod("alliance")`，
+锁住这个 kind 的 handler 只注册在 alliance 进程的 Nest 引擎上；别的服务要写它，经 alliance 的 rpc（`roost add rpc -service alliance`）。
+`roost add lifecycle` 缺省落到归属服务；doctor 的 `entity-owner` 项报告别的服务的代码（`internal/service/<name>/`、它拥有的
+`internal/rpc/<rpc>/`、玩家接入代码）构造了这个 kind 的 Sender。没写 `service=` 的 kind 保持原行为，任何带 Nest 的服务都注册、都能写。
+标记写法与拒绝规则见 [TAGS](TAGS.zh-CN.md)；实现见 [impl/12 §2G](../../docs/framework/impl/12-codegen.md#2g-实体归属服务service)。
+
 ### 6.y 按实体的持久定时器：`roost add timer`
 
     roost add timer --entity Player          # 组件名缺省 timer；--component BuffClock 改名

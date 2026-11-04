@@ -28,14 +28,20 @@ func generate(funcs []*FuncInfo, pkg string, outFile string, force bool, senderO
 	if senderOnly {
 		mode = senderModeAsync
 	}
-	return generateWithMode(funcs, pkg, outFile, force, mode, registerFunc)
+	return generateWithMode(funcs, pkg, outFile, force, mode, registerFunc, "")
+}
+
+// generateOwnedHandlers 生成归属 ownerService 的 handler 文件：注册函数是 <RegisterFunc>On(mgr)，只在归属服务的
+// 引擎实例上注册（见 owner.go），不进包级注册表。
+func generateOwnedHandlers(funcs []*FuncInfo, pkg string, outFile string, force bool, registerFunc, ownerService string) (bool, error) {
+	return generateWithMode(funcs, pkg, outFile, force, senderModeNone, registerFunc, ownerService)
 }
 
 func generateSyncSender(funcs []*FuncInfo, pkg string, outFile string, force bool) (bool, error) {
-	return generateWithMode(funcs, pkg, outFile, force, senderModeSync, "")
+	return generateWithMode(funcs, pkg, outFile, force, senderModeSync, "", "")
 }
 
-func generateWithMode(funcs []*FuncInfo, pkg string, outFile string, force bool, mode senderMode, registerFunc string) (bool, error) {
+func generateWithMode(funcs []*FuncInfo, pkg string, outFile string, force bool, mode senderMode, registerFunc, ownerService string) (bool, error) {
 	var buf bytes.Buffer
 	receiverType, err := commonReceiverType(funcs)
 	if err != nil {
@@ -68,6 +74,7 @@ func generateWithMode(funcs []*FuncInfo, pkg string, outFile string, force bool,
 		AsyncSenderOnly: mode == senderModeAsync,
 		SyncSenderOnly:  mode == senderModeSync,
 		RegisterFunc:    registerFunc,
+		OwnerService:    ownerService,
 		SenderType:      senderTypeName(outFile),
 		ReceiverType:    receiverType,
 	}
@@ -113,8 +120,11 @@ type templateFile struct {
 	AsyncSenderOnly bool
 	SyncSenderOnly  bool
 	RegisterFunc    string
-	SenderType      string
-	ReceiverType    string
+	// OwnerService 非空表示本文件的 handler 锁住 //roost:entity service=<OwnerService> 的 kind：注册函数改为
+	// <RegisterFunc>On(mgr)，在归属服务的引擎实例上注册（不进包级注册表、不经 sync.Once）。
+	OwnerService string
+	SenderType   string
+	ReceiverType string
 }
 
 // Sender 与 handler 位于不同作用域：业务的 id / ctx 等合法参数不能遮住路由参数、局部变量或类型包。
@@ -574,7 +584,9 @@ import (
 {{- if not .SenderOnly}}
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"errors"
+	{{- if not .OwnerService}}
 	"sync"
+	{{- end}}
 	{{- if usesBusinessTime .Funcs}}
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	{{- end}}
@@ -605,7 +617,7 @@ var (
 	handlerName{{trimHandler .Name}} = nest.NewHandlerName("{{.RawName}}")
 {{- end}}
 )
-{{if not .SenderOnly}}
+{{if and (not .SenderOnly) (not .OwnerService)}}
 var {{firstToLower .RegisterFunc}}Once sync.Once
 {{end}}
 {{if .SenderOnly}}
@@ -891,7 +903,21 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 {{end}}
 {{end}}
 
-{{if not .SenderOnly}}
+{{if and (not .SenderOnly) .OwnerService}}
+
+// {{.RegisterFunc}}On 在归属服务 {{.OwnerService}} 的 Nest 引擎实例上注册本文件的 handler：目标 kind 声明了
+// //roost:entity service={{.OwnerService}}，别的服务的进程不注册它（发过去的消息得到“handler 未注册”）。
+// 由 internal/registry/ownership_gen.go 的 Mod 在 Provide 里调用，先于引擎 Start。
+func {{.RegisterFunc}}On(mgr *nest.NestMgr) error {
+{{- range .Funcs}}
+	if err := mgr.RegisterHandlerWithMeta(handlerName{{trimHandler .Name}}, invoke{{trimHandler .Name}}, {{rollbackMeta .}}); err != nil {
+		return err
+	}
+{{- end}}
+	return nil
+}
+{{end}}
+{{if and (not .SenderOnly) (not .OwnerService)}}
 
 func {{.RegisterFunc}}({{if .ReceiverType}}receiver {{.ReceiverType}}{{end}}) {
 	{{if .ReceiverType}}if receiver == nil { panic("nest: nil handler receiver for {{.RegisterFunc}}") }{{end}}

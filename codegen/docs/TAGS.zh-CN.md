@@ -28,7 +28,7 @@
 | --- | --- | --- |
 | `//roost:dao` | DAO 定义 struct；生成事务化读写、持久与同步代码 | `coll`、`db`、`dbscope`、`schema`；或独立 flag `nocoll` |
 | `//roost:redisdao` | Redis DAO 定义 struct；生成 Redis 访问包装 | 必需 `key`、`prefix`；可选 `mode`、`key_type`、`version`、`ttl`、`name` |
-| `//roost:entity` | Entity struct；生成工厂、装配、生命周期 | `id`、`entityKind`、`category`、`businessPool`、`remote`、`noPersist`、`lifetime`、`sync`、`syncNamespace`、`subjectPacker` |
+| `//roost:entity` | Entity struct；生成工厂、装配、生命周期 | `id`、`entityKind`、`category`、`businessPool`、`remote`、`noPersist`、`lifetime`、`sync`、`syncNamespace`、`subjectPacker`、`service` |
 | `//roost:component type=N` | 组件声明；供 ID 空间检查 | `type` 为组件类型号；不代替组件实现、工厂和 Entity 的 `comp` 接线 |
 | `//roost:mirror` | 手写只读 DTO；生成读取器 | `entityKind`、`coll`，对应拥有者 kind 与 DAO 集合 |
 | `//roost:endpoint` | 手写 `Controller.Handle<Protocol>` 方法；持续生成同包 dispatch 转交 | 必需 `nest=<Nest handler>`；协议名由方法名推导 |
@@ -155,8 +155,11 @@ type Player struct {
 | `sync=true` | 生成 EntitySync builder 接线 |
 | `syncNamespace` | 同步 wire namespace |
 | `subjectPacker` | packer 工厂表达式；只有 `sync=true` 时可写 |
+| `service` | 归属服务：只有这个服务写这个 kind（见下段）。不写时保持原行为，任何带 Nest 的服务都能写 |
 | `comp:"CompTypeProfile"` | 组件类型号表达式；可加 `,cold` 声明按需初始化 |
 | `dao:"players"` | DAO 装配名称；可加 `,cold` 声明按需初始化，不是 DAO 定义字段的能力选项 |
+
+`service=<name>` 只在实体标记上声明一次（不在 `roost.yaml` 再写一份）。取值必须是 `roost.yaml` 声明的业务服务、带 Nest；`remote=managed` 时还要有 `remote_entity`，否则 `roost generate` 报出实体与服务名。声明之后：锁住这个 kind 的 `//roost:nest` handler 只在归属服务的 Nest 引擎上注册（生成 `Register<File>NestHandlersOn(mgr)`，由 `internal/registry/ownership_gen.go` 的 `NewOwnedNestHandlersMod` 在归属服务的 Provide 里注册），别的服务发过去得到“handler 未注册”；`ForeignKinds(service)` 给出别的服务拥有的 kind（Remote Manager 的认领 / 写许可守卫接线等框架阶段 1）；`roost add lifecycle` 缺省落到归属服务；doctor 的 `entity-owner` 检查别的服务构造了它的 Sender。一个 handler 锁住两个不同服务的 kind、同一源文件里 handler 归属不一致、方法 handler 或原生步骤 handler 锁住归属 kind、同一实体包里两个实体声明不同服务，都在生成期拒绝。改了 `service=` 先 `roost project sync` 再 `roost generate`（bootstrap 与生成物不一致时 generate 拒绝并给出这条命令）。
 
 `remote=mirror`、`lifetime=mirror_cache` 不再生成实体。读已有完整 DAO 镜像时用 `//roost:mirror entityKind=... coll=...` DTO；按字段发布视图时用上一节的 `remoteview`。旧 `syncPacker` / `syncTopic` 不应使用，当前对应 `subjectPacker` / `syncNamespace`。
 
