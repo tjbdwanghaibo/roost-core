@@ -298,3 +298,151 @@ func (m *registryProbeMod) Init(*viper.Viper) error   { return nil }
 func (m *registryProbeMod) Provide(r *Registry) error { return m.onProvide(r) }
 func (m *registryProbeMod) Start() error              { return nil }
 func (m *registryProbeMod) Stop()                     {}
+
+// handlerOwnerMod 像生成的 owner Mod：Start 时就在总线上登记 handler，所以 Service.Init 还没返回时进程已经在接请求。
+type handlerOwnerMod struct {
+	bus     *fakeIngressBus
+	handler func() string
+	stopped atomic.Bool
+}
+
+func (m *handlerOwnerMod) Name() ModName           { return "owner" }
+func (m *handlerOwnerMod) Init(*viper.Viper) error { return nil }
+func (m *handlerOwnerMod) Provide(*Registry) error { return nil }
+func (m *handlerOwnerMod) Start() error            { m.bus.handle(m.handler); return nil }
+func (m *handlerOwnerMod) Stop()                   { m.stopped.Store(true) }
+
+// slowInitService 的 Init 卡到 release（像 alliance 在 Init 里建 effect 消费者的几秒）。
+type slowInitService struct {
+	entered        chan struct{}
+	release        chan struct{}
+	shutdownCalled atomic.Bool
+	initReturned   atomic.Bool
+	shutdownEarly  atomic.Bool
+}
+
+func (s *slowInitService) Name() ServiceName { return "game" }
+func (s *slowInitService) Init(*Registry) error {
+	close(s.entered)
+	<-s.release
+	s.initReturned.Store(true)
+	return nil
+}
+func (s *slowInitService) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
+func (s *slowInitService) Shutdown(context.Context) error {
+	if !s.initReturned.Load() {
+		s.shutdownEarly.Store(true)
+	}
+	s.shutdownCalled.Store(true)
+	return nil
+}
+
+// 启动中（Service.Init 还没返回）收到停机信号（缺口 1）：handler 已在 owner Mod Start 时登记，信号之前已进 handler 的请求
+// 必须答完；信号之后到达的答“没执行”；等 Init 返回后照常 Service.Shutdown、逆序停 Mod。修前 App 收到信号直接返回、
+// 不停 Mod：进程随即退出，在途请求没有答复（调用方超时、结果未知），Mod 与连接被进程退出硬断。
+func TestSignalDuringServiceInitStopsInOrderAndAnswersInFlightRequests(t *testing.T) {
+	bus := &fakeIngressBus{}
+	store := &ingressStoreMod{name: "store"}
+	handlerEntered, handlerRelease := make(chan struct{}), make(chan struct{})
+	var first atomic.Bool
+	var answered atomic.Bool
+	owner := &handlerOwnerMod{bus: bus, handler: func() string {
+		if first.CompareAndSwap(false, true) {
+			close(handlerEntered)
+			<-handlerRelease
+			answered.Store(true)
+		}
+		if store.stopped.Load() {
+			return "internal: store stopped"
+		}
+		return answerOK
+	}}
+	svc := &slowInitService{entered: make(chan struct{}), release: make(chan struct{})}
+	a := New("roost-test", "0.0.0")
+	a.Mods(bus, store)
+	a.RegisterServer("game", svc, owner)
+	a.cfg.Set("log.file", false)
+	a.cfg.Set("log.dir", t.TempDir())
+	a.cfg.Set("shutdown.total_timeout", "5s")
+	a.RootCmd().SetArgs([]string{"game"})
+	signals := make(chan os.Signal, 1)
+	a.signalSource = func() (<-chan os.Signal, func()) { return signals, func() {} }
+	result := make(chan error, 1)
+	go func() { result <- a.Execute() }()
+	releaseHandler := sync.OnceFunc(func() { close(handlerRelease) })
+	releaseInit := sync.OnceFunc(func() { close(svc.release) })
+	t.Cleanup(func() { releaseHandler(); releaseInit() })
+
+	<-svc.entered
+	inFlight := make(chan string, 1)
+	go func() { inFlight <- bus.deliver() }()
+	<-handlerEntered
+	signals <- os.Interrupt
+
+	var returnedEarly bool
+	select {
+	case <-result:
+		returnedEarly = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	afterSignal := bus.deliver()
+	if returnedEarly {
+		t.Fatalf("run returned right after the signal while a request was still in its handler (answered=%v) and Service.Init was still running; "+
+			"Service.Shutdown=%v store stopped=%v: the process exits, the caller times out and the Mods are cut off",
+			answered.Load(), svc.shutdownCalled.Load(), store.stopped.Load())
+	}
+	releaseHandler()
+	if got := <-inFlight; got != answerOK {
+		t.Errorf("the request in flight at the signal was answered %q, want %q", got, answerOK)
+	}
+	time.Sleep(50 * time.Millisecond)
+	releaseInit()
+	err, returned := awaitRunWithin(t, result, 3*time.Second)
+	if !returned {
+		t.Fatal("run did not return after Service.Init finished")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("run = %v, want the interrupted startup (context.Canceled)", err)
+	}
+	if afterSignal != answerRetryable {
+		t.Errorf("a request after the signal was answered %q, want %q", afterSignal, answerRetryable)
+	}
+	if !svc.shutdownCalled.Load() || svc.shutdownEarly.Load() {
+		t.Errorf("Service.Shutdown called=%v before Init returned=%v; want it called once Init returned", svc.shutdownCalled.Load(), svc.shutdownEarly.Load())
+	}
+	if !owner.stopped.Load() || !store.stopped.Load() || !bus.stopped.Load() {
+		t.Errorf("owner stopped=%v store stopped=%v bus stopped=%v; want every started Mod stopped", owner.stopped.Load(), store.stopped.Load(), bus.stopped.Load())
+	}
+}
+
+// 启动超时（不是信号，待决定 D2 = A）：已启动部分的输入照样先关（在途答完、之后的答“没执行”），但不等那个已经超时的步骤，
+// 保留依赖与锁返回。修前直接返回，输入一直开着到进程退出。
+func TestStartupTimeoutClosesTheInputsWithoutWaitingForTheStep(t *testing.T) {
+	bus := &fakeIngressBus{}
+	store := &ingressStoreMod{name: "store"}
+	owner := &handlerOwnerMod{bus: bus, handler: func() string { return answerOK }}
+	svc := &slowInitService{entered: make(chan struct{}), release: make(chan struct{})}
+	t.Cleanup(func() { close(svc.release) })
+	a := New("roost-test", "0.0.0")
+	a.Mods(bus, store)
+	a.RegisterServer("game", svc, owner)
+	a.cfg.Set("log.file", false)
+	a.cfg.Set("log.dir", t.TempDir())
+	a.cfg.Set("startup.timeout", "300ms")
+	a.RootCmd().SetArgs([]string{"game"})
+	a.signalSource = func() (<-chan os.Signal, func()) { return make(chan os.Signal), func() {} }
+	result := make(chan error, 1)
+	go func() { result <- a.Execute() }()
+	<-svc.entered
+	err, returned := awaitRunWithin(t, result, 3*time.Second)
+	if !returned || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("run returned=%v err=%v, want the startup deadline", returned, err)
+	}
+	if got := bus.deliver(); got != answerRetryable {
+		t.Errorf("a request after the startup timeout was answered %q, want %q: the inputs of what started stay open", got, answerRetryable)
+	}
+	if svc.shutdownCalled.Load() || owner.stopped.Load() || store.stopped.Load() || bus.stopped.Load() {
+		t.Errorf("Service.Shutdown=%v owner=%v store=%v bus=%v stopped while Service.Init is still running; want them kept",
+			svc.shutdownCalled.Load(), owner.stopped.Load(), store.stopped.Load(), bus.stopped.Load())
+	}
+}

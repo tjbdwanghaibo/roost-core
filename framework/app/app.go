@@ -201,10 +201,13 @@ func (a *App) printConfigSchema(serverType ServiceName, out io.Writer) error {
 //   - singletonReleasable / singletonReleaseDeadline：单实例锁 finish 的释放判定。singletonReleasable
 //     只在“全部 Mod 都停完”的路径上置位（逐个返回点置位，漏掉的路径默认不释放，键在 TTL 内自然过期，
 //     方向是安全的）；singletonReleaseDeadline 是停机路径 shutdownCtx 的截止时间。
-//   - startedSharedMods / startedServiceMods：已 Start 的 Mod，启动失败与停机按逆序停止它们。
+//   - providedSharedMods / providedServiceMods：调过 Provide 的 Mod（含 Provide 失败的那个：它可能已部分登记），
+//     启动失败与启动被打断时逆序停止它们。
+//   - startedSharedMods / startedServiceMods：Start 成功返回的 Mod，停机第一步关它们的输入，正常停机逆序停止它们。
+//   - initializedService：Init 已返回（不论成败）的 Service，收尾时调它的 Shutdown；nil 表示 Init 还没返回过。
 //
-// 启动阶段的 runStartupStep 返回 finished=false（超时或被信号打断）时阶段仍可能在跑：各步骤直接返回，
-// 不停 Mod、不置 singletonReleasable，交由进程退出收回资源。
+// 启动阶段的 runStartupStep 返回 finished=false（超时或被信号打断）时阶段仍可能在跑：各步骤把它交给
+// stopInterruptedStartup，按“先关输入、收到信号时等这一步、再停已开始的部分”收尾。
 type appRun struct {
 	serverType     ServiceName
 	sigChan        <-chan os.Signal
@@ -217,8 +220,11 @@ type appRun struct {
 	singletonReleasable      bool
 	singletonReleaseDeadline time.Time
 
-	startedSharedMods  []Mod
-	startedServiceMods []Mod
+	providedSharedMods  []Mod
+	providedServiceMods []Mod
+	startedSharedMods   []Mod
+	startedServiceMods  []Mod
+	initializedService  Service
 }
 
 func (a *App) run(serverType ServiceName) (runErr error) {
@@ -351,7 +357,7 @@ func (a *App) run(serverType ServiceName) (runErr error) {
 func (a *App) initRegistry(run *appRun, cfgPath string) error {
 	a.registry = NewRegistry(a.cfg)
 	a.registry.store[ModLogFrame] = &a.logFrame
-	_, err := runStartupStep(run.startupCtx, run.sigChan, "app.init", func(ctx context.Context) error {
+	finished, err, pending := runStartupStep(run.startupCtx, run.sigChan, "app.init", func(ctx context.Context) error {
 		return a.emitLifecycle(ctx, lifecycle.Event{
 			Phase:   lifecycle.PhaseAppInit,
 			Service: string(run.serverType),
@@ -362,6 +368,9 @@ func (a *App) initRegistry(run *appRun, cfgPath string) error {
 			},
 		})
 	})
+	if !finished {
+		return a.stopInterruptedStartup(run, err, pending, nil)
+	}
 	return err
 }
 
@@ -392,53 +401,152 @@ func (run *appRun) finishSingleton() {
 	run.singleton.finish(run.singletonReleasable, run.singletonReleaseDeadline)
 }
 
-// stopStartedMods 是启动失败路径的收尾：先逆序停服务专属 Mod，再逆序停共享 Mod，
-// 返回是否全部停完（决定能否释放单实例锁）。还没有服务专属 Mod 启动时第一段为空操作。
-func (run *appRun) stopStartedMods() bool {
-	return allStopped(
-		stopModsReverse(run.startedServiceMods, "mod stop (service-specific)"),
-		stopModsReverse(run.startedSharedMods, "mod stop"))
+// cleanupAfterStartupFailure 是启动失败（某一步返回错误、启动检查点发现 fail-stop）的收尾，与停机同一顺序：
+// 先关已启动部分的输入并排空（closeIngress），再调 Service.Shutdown（Init 已返回过时），最后逆序停已 Provide 的
+// 服务专属 Mod、共享 Mod，全部停完才允许释放单实例锁。任何一步没在时限内结束都保留后面的依赖与锁。
+// 返回收尾中的错误（并入启动错误）。
+func (a *App) cleanupAfterStartupFailure(run *appRun) error {
+	ctx, cancel := context.WithTimeout(context.Background(), a.settings.Shutdown.TotalTimeout)
+	defer cancel()
+	drained, err := run.closeIngress(ctx, a.registry, run.initializedService)
+	if !drained {
+		return err
+	}
+	if svc := run.initializedService; svc != nil {
+		stopped, cleanupErr := shutdownAfterStartupFailure(svc)
+		err = errors.Join(err, cleanupErr)
+		if !stopped {
+			// Service 的组件可能还在用 Mod：不停 Mod、不释放锁（singletonReleasable 保持 false），
+			// 进程退出后键在 TTL 内过期。
+			return err
+		}
+	}
+	run.singletonReleasable = run.stopProvidedMods()
+	return err
 }
 
-// startSharedMods 对共享 Mod 依次执行 Init → Provide → Start。Provide / Start 失败时逆序停止
-// 已 Provide 的共享 Mod（Provide 失败的那个也停，它可能已部分登记）。
+// stopProvidedMods 逆序停已 Provide 的服务专属 Mod、再停共享 Mod（无总截止，每个 Mod 用自己的默认时长），
+// 返回是否全部停完（决定能否释放单实例锁）。
+func (run *appRun) stopProvidedMods() bool {
+	return allStopped(
+		stopModsReverse(run.providedServiceMods, "mod stop (service-specific)"),
+		stopModsReverse(run.providedSharedMods, "mod stop"))
+}
+
+// stopInterruptedStartup 是启动阶段没在等待中结束（pending 仍在跑）时的收尾，与停机同一套顺序，只停已经开始的部分
+// （App 生命周期方案 §3.5）：
+//
+//  1. 停机预算（shutdown.total_timeout）开始计时，关已启动部分的输入并排空：在途请求答完，之后的答“没执行”。
+//  2. startup.timeout 到期（不是信号）：那一步已经超过自己的预算、多半卡住，不再等它，保留依赖与锁返回（待决定 D2）。
+//  3. 收到信号：在停机预算内等那一步返回，onDone 按它是什么补登记（Provide / Start 返回了算已 Provide / 已 Start，
+//     Service.Init 返回了算 Service 已初始化）；再关一次输入（这一步期间新启动、新登记的）。
+//  4. Service 已初始化 → Service.Shutdown；然后按停机预算逆序停已 Provide 的服务专属 Mod、共享 Mod，全部停完才释放锁。
+//
+// 任何一步没在预算内结束都保留依赖与锁返回（与正常停机相同）。返回值是打断原因（带 context.Canceled / DeadlineExceeded）
+// 并入收尾中的错误。不发布 service.stopping / service.stopped（service.started 没有发布过）。
+func (a *App) stopInterruptedStartup(run *appRun, cause error, pending *startupStep, onDone func(stepErr error)) error {
+	total := a.settings.Shutdown.TotalTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), total)
+	defer cancel()
+	result := cause
+	join := func(err error) {
+		if err != nil {
+			result = errors.Join(result, err)
+		}
+	}
+	step, bySignal := "", false
+	if pending != nil {
+		step, bySignal = pending.name, pending.bySignal
+	}
+	slog.Warn("startup interrupted; closing the inputs of what has started", "step", step, "signal", bySignal, "budget", total)
+	drained, err := run.closeIngress(ctx, a.registry, run.initializedService)
+	join(err)
+	if !drained || !bySignal {
+		return result
+	}
+	select {
+	case stepErr := <-pending.result:
+		if onDone != nil {
+			onDone(stepErr)
+		}
+		if stepErr != nil {
+			join(fmt.Errorf("app: startup %s: %w", pending.name, stepErr))
+		}
+	case <-ctx.Done():
+		join(fmt.Errorf("app: startup %s did not return within shutdown.total_timeout after the interruption; keeping its dependencies: %w", pending.name, ctx.Err()))
+		return result
+	}
+	drained, err = run.closeIngress(ctx, a.registry, run.initializedService)
+	join(err)
+	if !drained {
+		return result
+	}
+	if svc := run.initializedService; svc != nil {
+		serviceCtx, serviceCancel := context.WithCancel(ctx)
+		stopped, err := shutdownServiceWithin(serviceCtx, svc)
+		serviceCancel()
+		join(err)
+		if !stopped {
+			return result
+		}
+	}
+	modStopCtx, modStopCancel := run.modStopContext(ctx, total)
+	defer modStopCancel()
+	if err := stopModsReverseBefore(modStopCtx, run.providedServiceMods, run.providedSharedMods, "mod stop (service-specific)"); err != nil {
+		join(err)
+		if stopIncomplete(err) {
+			return result
+		}
+	}
+	if err := stopModsReverseWithContext(modStopCtx, run.providedSharedMods, "mod stop"); err != nil {
+		join(err)
+		run.singletonReleasable = !stopIncomplete(err)
+	} else {
+		run.singletonReleasable = true
+	}
+	slog.Info("startup interrupted; stopped what had started", "type", run.serverType)
+	return result
+}
+
+// startSharedMods 对共享 Mod 依次执行 Init → Provide → Start。Provide / Start 失败时按启动失败收尾（逆序停止
+// 已 Provide 的共享 Mod，Provide 失败的那个也停，它可能已部分登记）。
 func (a *App) startSharedMods(run *appRun, sharedMods []Mod) error {
 	for _, mod := range sharedMods {
 		slog.Info("mod init", "mod", mod.Name())
-		finished, err := runStartupStep(run.startupCtx, run.sigChan, "mod init "+string(mod.Name()), func(context.Context) error { return mod.Init(a.cfg) })
+		finished, err, pending := runStartupStep(run.startupCtx, run.sigChan, "mod init "+string(mod.Name()), func(context.Context) error { return mod.Init(a.cfg) })
 		if !finished {
-			return err
+			return a.stopInterruptedStartup(run, err, pending, nil)
 		}
 		if err != nil {
 			run.singletonReleasable = true
 			return fmt.Errorf("mod %s init: %w", mod.Name(), err)
 		}
 	}
-	var providedSharedMods []Mod
 	for _, mod := range sharedMods {
-		finished, err := runStartupStep(run.startupCtx, run.sigChan, "mod provide "+string(mod.Name()), func(context.Context) error { return mod.Provide(a.registry) })
+		finished, err, pending := runStartupStep(run.startupCtx, run.sigChan, "mod provide "+string(mod.Name()), func(context.Context) error { return mod.Provide(a.registry) })
 		if !finished {
-			return err
+			return a.stopInterruptedStartup(run, err, pending, func(error) { run.providedSharedMods = append(run.providedSharedMods, mod) })
 		}
+		run.providedSharedMods = append(run.providedSharedMods, mod)
 		if err != nil {
-			run.singletonReleasable = stopModsReverse(append(providedSharedMods, mod), "mod stop after provide error")
-			return fmt.Errorf("mod %s provide: %w", mod.Name(), err)
+			return errors.Join(fmt.Errorf("mod %s provide: %w", mod.Name(), err), a.cleanupAfterStartupFailure(run))
 		}
-		providedSharedMods = append(providedSharedMods, mod)
 	}
 	for _, mod := range sharedMods {
 		if err := run.startupFailure(); err != nil {
-			run.singletonReleasable = stopModsReverse(providedSharedMods, "mod stop")
-			return err
+			return errors.Join(err, a.cleanupAfterStartupFailure(run))
 		}
 		slog.Info("mod start", "mod", mod.Name())
-		finished, err := runStartupStep(run.startupCtx, run.sigChan, "mod start "+string(mod.Name()), func(context.Context) error { return mod.Start() })
+		finished, err, pending := runStartupStep(run.startupCtx, run.sigChan, "mod start "+string(mod.Name()), func(context.Context) error { return mod.Start() })
 		if !finished {
-			return err
+			return a.stopInterruptedStartup(run, err, pending, func(stepErr error) {
+				if stepErr == nil {
+					run.startedSharedMods = append(run.startedSharedMods, mod)
+				}
+			})
 		}
 		if err != nil {
-			run.singletonReleasable = stopModsReverse(providedSharedMods, "mod stop")
-			return fmt.Errorf("mod %s start: %w", mod.Name(), err)
+			return errors.Join(fmt.Errorf("mod %s start: %w", mod.Name(), err), a.cleanupAfterStartupFailure(run))
 		}
 		run.startedSharedMods = append(run.startedSharedMods, mod)
 	}
@@ -446,12 +554,11 @@ func (a *App) startSharedMods(run *appRun, sharedMods []Mod) error {
 }
 
 // resolveServiceEntry 找到本服务类型的入口，并对它的专属 Mod 排序（共享 Mod 视为已满足的依赖）。
-// 失败时共享 Mod 已全部启动，逆序停止它们。
+// 失败时共享 Mod 已全部启动，按启动失败收尾。
 func (a *App) resolveServiceEntry(run *appRun, sharedMods []Mod) (*serviceEntry, []Mod, error) {
 	entry, ok := a.services[run.serverType]
 	if !ok {
-		run.singletonReleasable = run.stopStartedMods()
-		return nil, nil, fmt.Errorf("unknown server type: %s", run.serverType)
+		return nil, nil, errors.Join(fmt.Errorf("unknown server type: %s", run.serverType), a.cleanupAfterStartupFailure(run))
 	}
 	sharedNames := make(map[ModName]struct{}, len(sharedMods))
 	for _, mod := range sharedMods {
@@ -459,57 +566,49 @@ func (a *App) resolveServiceEntry(run *appRun, sharedMods []Mod) (*serviceEntry,
 	}
 	serviceMods, err := sortMods(entry.mods, sharedNames)
 	if err != nil {
-		run.singletonReleasable = run.stopStartedMods()
-		return nil, nil, err
+		return nil, nil, errors.Join(err, a.cleanupAfterStartupFailure(run))
 	}
 	return entry, serviceMods, nil
 }
 
-// startServiceMods 对服务专属 Mod 依次执行 Init → Provide → Start。失败时先逆序停服务专属 Mod
-// （Provide 阶段停已 Provide 的、含失败的那个；Start 阶段停已 Provide 的），再停已启动的共享 Mod。
+// startServiceMods 对服务专属 Mod 依次执行 Init → Provide → Start。失败时按启动失败收尾：先关已启动部分的输入，
+// 再逆序停已 Provide 的服务专属 Mod（含 Provide 失败的那个），再停共享 Mod。
 func (a *App) startServiceMods(run *appRun, serviceMods []Mod) error {
 	for _, mod := range serviceMods {
 		slog.Info("mod init (service-specific)", "mod", mod.Name())
-		finished, err := runStartupStep(run.startupCtx, run.sigChan, "mod init "+string(mod.Name()), func(context.Context) error { return mod.Init(a.cfg) })
+		finished, err, pending := runStartupStep(run.startupCtx, run.sigChan, "mod init "+string(mod.Name()), func(context.Context) error { return mod.Init(a.cfg) })
 		if !finished {
-			return err
+			return a.stopInterruptedStartup(run, err, pending, nil)
 		}
 		if err != nil {
-			run.singletonReleasable = run.stopStartedMods()
-			return fmt.Errorf("mod %s init: %w", mod.Name(), err)
+			return errors.Join(fmt.Errorf("mod %s init: %w", mod.Name(), err), a.cleanupAfterStartupFailure(run))
 		}
 	}
-	var providedServiceMods []Mod
 	for _, mod := range serviceMods {
-		finished, err := runStartupStep(run.startupCtx, run.sigChan, "mod provide "+string(mod.Name()), func(context.Context) error { return mod.Provide(a.registry) })
+		finished, err, pending := runStartupStep(run.startupCtx, run.sigChan, "mod provide "+string(mod.Name()), func(context.Context) error { return mod.Provide(a.registry) })
 		if !finished {
-			return err
+			return a.stopInterruptedStartup(run, err, pending, func(error) { run.providedServiceMods = append(run.providedServiceMods, mod) })
 		}
+		run.providedServiceMods = append(run.providedServiceMods, mod)
 		if err != nil {
-			run.singletonReleasable = allStopped(
-				stopModsReverse(append(providedServiceMods, mod), "mod stop after provide error (service-specific)"),
-				stopModsReverse(run.startedSharedMods, "mod stop"))
-			return fmt.Errorf("mod %s provide: %w", mod.Name(), err)
+			return errors.Join(fmt.Errorf("mod %s provide: %w", mod.Name(), err), a.cleanupAfterStartupFailure(run))
 		}
-		providedServiceMods = append(providedServiceMods, mod)
 	}
 	for _, mod := range serviceMods {
 		if err := run.startupFailure(); err != nil {
-			run.singletonReleasable = allStopped(
-				stopModsReverse(providedServiceMods, "mod stop (service-specific)"),
-				stopModsReverse(run.startedSharedMods, "mod stop"))
-			return err
+			return errors.Join(err, a.cleanupAfterStartupFailure(run))
 		}
 		slog.Info("mod start (service-specific)", "mod", mod.Name())
-		finished, err := runStartupStep(run.startupCtx, run.sigChan, "mod start "+string(mod.Name()), func(context.Context) error { return mod.Start() })
+		finished, err, pending := runStartupStep(run.startupCtx, run.sigChan, "mod start "+string(mod.Name()), func(context.Context) error { return mod.Start() })
 		if !finished {
-			return err
+			return a.stopInterruptedStartup(run, err, pending, func(stepErr error) {
+				if stepErr == nil {
+					run.startedServiceMods = append(run.startedServiceMods, mod)
+				}
+			})
 		}
 		if err != nil {
-			run.singletonReleasable = allStopped(
-				stopModsReverse(providedServiceMods, "mod stop (service-specific)"),
-				stopModsReverse(run.startedSharedMods, "mod stop"))
-			return fmt.Errorf("mod %s start: %w", mod.Name(), err)
+			return errors.Join(fmt.Errorf("mod %s start: %w", mod.Name(), err), a.cleanupAfterStartupFailure(run))
 		}
 		run.startedServiceMods = append(run.startedServiceMods, mod)
 	}
@@ -519,10 +618,9 @@ func (a *App) startServiceMods(run *appRun, serviceMods []Mod) error {
 // confirmModsStarted 在全部 Mod 启动后再查一次 RuntimeFailure，然后发布 mods.started。
 func (a *App) confirmModsStarted(run *appRun) error {
 	if err := run.startupFailure(); err != nil {
-		run.singletonReleasable = run.stopStartedMods()
-		return err
+		return errors.Join(err, a.cleanupAfterStartupFailure(run))
 	}
-	finished, err := runStartupStep(run.startupCtx, run.sigChan, "mods.started", func(ctx context.Context) error {
+	finished, err, pending := runStartupStep(run.startupCtx, run.sigChan, "mods.started", func(ctx context.Context) error {
 		return a.emitLifecycle(ctx, lifecycle.Event{
 			Phase:   lifecycle.PhaseModsStarted,
 			Service: string(run.serverType),
@@ -530,31 +628,32 @@ func (a *App) confirmModsStarted(run *appRun) error {
 		})
 	})
 	if !finished {
-		return err
+		return a.stopInterruptedStartup(run, err, pending, nil)
 	}
 	if err != nil {
-		run.singletonReleasable = run.stopStartedMods()
-		return err
+		return errors.Join(err, a.cleanupAfterStartupFailure(run))
 	}
 	return nil
 }
 
 // initService 执行 Service.Init、再查一次 RuntimeFailure，然后发布 service.started。
-// Init 失败与 Init 之后的启动失败走同一条收尾：先收回 Service 已启动的部分，再停 Mod、释放锁；
-// Service 在预算内停不下来就保留 Mod 与锁，与正常停机相同。
+// Init 失败与 Init 之后的启动失败走同一条收尾（cleanupAfterStartupFailure）：先关输入，再收回 Service 已启动的部分
+// （Init 返回错误时同样调 Shutdown：Init 可能已经起了后台循环、订阅），再停 Mod、释放锁；Service 在时限内停不下来
+// 就保留 Mod 与锁，与正常停机相同。
 func (a *App) initService(run *appRun, svc Service) error {
 	slog.Info("service init", "service", svc.Name())
-	finished, startErr := runStartupStep(run.startupCtx, run.sigChan, "service init "+string(svc.Name()), func(context.Context) error { return svc.Init(a.registry) })
+	finished, startErr, pending := runStartupStep(run.startupCtx, run.sigChan, "service init "+string(svc.Name()), func(context.Context) error { return svc.Init(a.registry) })
 	if !finished {
-		return startErr
+		return a.stopInterruptedStartup(run, startErr, pending, func(error) { run.initializedService = svc })
 	}
+	run.initializedService = svc
 	if startErr != nil {
 		startErr = fmt.Errorf("service %s init: %w", svc.Name(), startErr)
 	} else {
 		startErr = run.startupFailure()
 	}
 	if startErr == nil {
-		finished, startErr = runStartupStep(run.startupCtx, run.sigChan, "service.started", func(ctx context.Context) error {
+		finished, startErr, pending = runStartupStep(run.startupCtx, run.sigChan, "service.started", func(ctx context.Context) error {
 			return a.emitLifecycle(ctx, lifecycle.Event{
 				Phase:   lifecycle.PhaseServiceStarted,
 				Service: string(run.serverType),
@@ -562,21 +661,11 @@ func (a *App) initService(run *appRun, svc Service) error {
 			})
 		})
 		if !finished {
-			return startErr
+			return a.stopInterruptedStartup(run, startErr, pending, nil)
 		}
 	}
 	if startErr != nil {
-		stopped, cleanupErr := shutdownAfterStartupFailure(svc)
-		if cleanupErr != nil {
-			startErr = errors.Join(startErr, cleanupErr)
-		}
-		if !stopped {
-			// Service 的组件可能还在用 Mod：不停 Mod、不释放锁（singletonReleasable 保持 false），
-			// 进程退出后键在 TTL 内过期。
-			return startErr
-		}
-		run.singletonReleasable = run.stopStartedMods()
-		return startErr
+		return errors.Join(startErr, a.cleanupAfterStartupFailure(run))
 	}
 	return nil
 }
@@ -770,6 +859,11 @@ const startupCleanupTimeout = 5 * time.Second
 func shutdownAfterStartupFailure(svc Service) (stopped bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), startupCleanupTimeout)
 	defer cancel()
+	return shutdownServiceWithin(ctx, svc)
+}
+
+// shutdownServiceWithin 在 ctx 内调用 Service.Shutdown 并等它返回（启动收尾用，规则见 shutdownAfterStartupFailure）。
+func shutdownServiceWithin(ctx context.Context, svc Service) (stopped bool, err error) {
 	type outcome struct {
 		err      error
 		panicked bool

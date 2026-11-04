@@ -773,6 +773,8 @@ func TestStartupHookCancellationPreservesDependencies(t *testing.T) {
 			shared := &singletonProbeMod{name: "probe_shared"}
 			h := newSingletonHarness(t, []Mod{shared}, nil)
 			h.app.cfg.Set("startup.timeout", "200ms")
+			// 收到信号时 App 在停机预算内等这一步返回（App 生命周期方案 §3.5）；hook 不返回，预算到期后保留依赖返回。
+			h.app.cfg.Set("shutdown.total_timeout", "200ms")
 			entered, release := make(chan struct{}), make(chan struct{})
 			h.svc.onInit = func(r *Registry) error {
 				registerBlockingHook(t, r, lifecycle.PhaseServiceStarted, release, entered)
@@ -809,6 +811,8 @@ func TestSignalDuringModStartNeverReachesServiceInit(t *testing.T) {
 		close(exited)
 	}}
 	h := newSingletonHarness(t, []Mod{shared}, nil)
+	// 收到信号时 App 在停机预算内等正在跑的 Start 返回（App 生命周期方案 §3.5）；它一直不返回，预算到期后保留依赖返回。
+	h.app.cfg.Set("shutdown.total_timeout", "200ms")
 	result := h.start()
 	t.Cleanup(func() { close(release); <-exited })
 	select {
@@ -823,6 +827,45 @@ func TestSignalDuringModStartNeverReachesServiceInit(t *testing.T) {
 	}
 	if h.svc.registry != nil || shared.stops.Load() != 0 || len(h.store.releaseCalls()) != 0 {
 		t.Fatal("interrupted startup entered service Init or released live dependencies")
+	}
+}
+
+// 收到信号时正在跑的 Mod Start 在停机预算内返回了：它算已启动，与先启动的 Mod 一起逆序停止，全部停完才释放单实例锁；
+// Service.Init 不会被调用（App 生命周期方案 §3.5）。修前 App 直接返回，Mod 与锁留给进程退出。
+func TestSignalDuringModStartStopsWhatStartedOnceTheStartReturns(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	first := &singletonProbeMod{name: "probe_first"}
+	var heldAtStop atomic.Bool
+	var h *singletonHarness
+	second := &singletonProbeMod{name: "probe_second", onStart: func() {
+		close(entered)
+		<-release
+	}, onStop: func() { heldAtStop.Store(len(h.store.value(testSingletonKey)) > 0) }}
+	h = newSingletonHarness(t, []Mod{first, second}, nil)
+	result := h.start()
+	select {
+	case <-entered:
+	case <-time.After(testWaitLimit):
+		t.Fatal("mod never started")
+	}
+	h.signals <- os.Interrupt
+	if _, returned := awaitRunWithin(t, result, 100*time.Millisecond); returned {
+		close(release)
+		t.Fatal("run returned while a Mod Start was still running; it must wait for it within the shutdown budget")
+	}
+	close(release)
+	err, returned := awaitRunWithin(t, result, testWaitLimit)
+	if !returned || !errors.Is(err, context.Canceled) {
+		t.Fatalf("startup returned=%v err=%v, want the interrupted startup", returned, err)
+	}
+	if h.svc.registry != nil {
+		t.Fatal("interrupted startup entered Service.Init")
+	}
+	if first.stops.Load() != 1 || second.stops.Load() != 1 || !heldAtStop.Load() {
+		t.Fatalf("stops first=%d second=%d heldAtStop=%v; want both stopped once while still holding the lock", first.stops.Load(), second.stops.Load(), heldAtStop.Load())
+	}
+	if len(h.store.releaseCalls()) != 1 {
+		t.Fatalf("releases = %+v, want one release after everything stopped", h.store.releaseCalls())
 	}
 }
 
