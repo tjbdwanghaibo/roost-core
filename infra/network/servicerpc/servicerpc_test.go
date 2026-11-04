@@ -3,6 +3,7 @@ package servicerpc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -183,6 +184,43 @@ func TestRoundRobinSpreadsWhileKeyAffinityPins(t *testing.T) {
 	}
 	if len(targets) < 2 {
 		t.Fatalf("every key routed to one instance: %v", targets)
+	}
+}
+
+// orderKeyBus 记下每次 CallTo 的 ctx 里的顺序键（bus.OrderKeyFromContext）。
+type orderKeyBus struct {
+	bus.IBus
+	keys []string
+}
+
+func (b *orderKeyBus) CallTo(ctx context.Context, _ string, _ int32, _ string, _ any, resp any) error {
+	key, _ := bus.OrderKeyFromContext(ctx)
+	b.keys = append(b.keys, key)
+	if out, ok := resp.(*routedResponse); ok {
+		*out = routedResponse{}
+	}
+	return nil
+}
+
+// affinity 方法的键同时是顺序键：选中的实例上同一个键的请求按到达顺序逐个处理（保持此前同一方法串行时“同键不互相
+// 争用”的效果），不同键并行；路由 RPC 的顺序键是实体 ID；不带 affinity 键的调用不带顺序键。
+func TestAffinityAndRoutedCallsCarryAnOrderKey(t *testing.T) {
+	ctx := context.Background()
+	b := &orderKeyBus{}
+	client := NewDiscoveredBusClient(b, "match", time.Second, &fakeDiscovery{infos: []*fetcd.ServiceInfo{{Sid: 1}, {Sid: 2}}},
+		WithKeyAffinity(AffinityKeyFromContext))
+	if err := client.CallDiscoveredChecked(WithAffinityKey(ctx, "queue:ranked:2"), "Enqueue", struct{}{}, &routedResponse{}, "enqueue"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CallDiscoveredChecked(ctx, "Enqueue", struct{}{}, &routedResponse{}, "enqueue"); err != nil {
+		t.Fatal(err)
+	}
+	routed := NewBusClient(b, "alliance", time.Second)
+	if err := routed.CallRoutedChecked(ctx, &mapResolver{owners: map[int64]int32{routedAlliance: 3000}}, routedAlliance, "Join", struct{}{}, &routedResponse{}, "join"); err != nil {
+		t.Fatal(err)
+	}
+	if want := fmt.Sprintf("[queue:ranked:2  %d]", routedAlliance); fmt.Sprint(b.keys) != want {
+		t.Fatalf("order keys %q; want %s (affinity key, none, entity id)", b.keys, want)
 	}
 }
 

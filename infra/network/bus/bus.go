@@ -62,9 +62,12 @@ type Config struct {
 	Sid       int32  // current server id
 	SvcType   string // current service type
 	Prefix    string // subject prefix
-	WorkerNum int    // dispatcher worker count, default: 8
-	QueueCap  int    // per-worker queue capacity, default: 1024
-	Reliable  ReliableConfig
+	WorkerNum int    // 模块消息的派发 worker 数，缺省 8
+	QueueCap  int    // 模块消息每个 worker 的队列容量，缺省 1024
+	// RPCMaxPending 是本实例在跑与排队的 RPC 请求合计上限，超出的请求不进 handler（轻量 RPC 答可重试，JetStream RPC
+	// 交还 broker）。缺省 WorkerNum × QueueCap。RPC 不占模块消息的 worker，派发规则见 rpc_dispatch.go。
+	RPCMaxPending int
+	Reliable      ReliableConfig
 }
 
 // Bus implements IBus using NATS IClient and IRpc.
@@ -87,7 +90,10 @@ type Bus struct {
 	// 受 mu 保护；没有条目的方法按一直准入处理。
 	rpcCalls map[string]*operation.Lifetime
 
-	// dispatcher pool for incoming messages
+	// rpcDispatch 按顺序键派发 RPC 请求（rpc_dispatch.go），goroutine 由 pool 起。
+	rpcDispatch *rpcDispatcher
+
+	// dispatcher pool for incoming messages：模块消息按目标模块派到固定 worker；RPC 只借它的 TryGo 起 goroutine。
 	lifeMu   sync.Mutex
 	pool     *worker.Pool[*incomingTask]
 	ctx      atomic.Pointer[context.Context] // read lock-free by dispatch paths
@@ -132,6 +138,9 @@ func New(client nats.IClient, rpc nats.IRpc, codec Codec, cfg Config) *Bus {
 	if cfg.QueueCap <= 0 {
 		cfg.QueueCap = 1024
 	}
+	if cfg.RPCMaxPending <= 0 {
+		cfg.RPCMaxPending = cfg.WorkerNum * cfg.QueueCap
+	}
 	if cfg.Prefix == "" {
 		cfg.Prefix = "roost"
 	}
@@ -147,6 +156,7 @@ func New(client nats.IClient, rpc nats.IRpc, codec Codec, cfg Config) *Bus {
 		handlers:    make(map[string]HandlerFunc),
 		rpcHandlers: make(map[string]RpcHandlerFunc),
 		rpcCalls:    make(map[string]*operation.Lifetime),
+		rpcDispatch: newRPCDispatcher(cfg.RPCMaxPending),
 	}
 }
 
@@ -559,9 +569,11 @@ func (b *Bus) callSubject(ctx context.Context, subject string, method string, to
 	}
 	now := time.Now()
 	requestID := b.nextMsgID()
+	orderKey, _ := OrderKeyFromContext(ctx)
 	wire, err := b.codec.Marshal(&nats.NatsMsg{
 		FromSid: b.cfg.Sid, ToSid: toSid, MsgName: method, Payload: payload,
 		SessionId: requestID, MsgID: requestID, Attempt: 1, CreatedAt: now.UnixMilli(),
+		OrderKey: orderKey,
 	})
 	if err != nil {
 		return fmt.Errorf("bus: marshal rpc request envelope: %w", err)
@@ -828,7 +840,7 @@ func (b *Bus) onMessage(msg *nats.Msg) {
 		isRpc:   false,
 		release: b.msgCalls.End,
 	}
-	// Hash by module name for ordering guarantee within same module
+	// 模块消息按目标模块派到固定 worker：同一模块的消息按到达顺序逐个处理（模块消息是异步投递，接收方依赖这个顺序）。
 	key := hashString(natsMsg.ToModule)
 	b.dispatchTask(key, task)
 }
@@ -850,8 +862,38 @@ func (b *Bus) onRpcMessage(msg *nats.Msg) {
 		isRpc:        true,
 		replySubject: msg.Reply,
 	}
-	key := hashString(natsMsg.MsgName)
-	b.dispatchTask(key, task)
+	b.acceptRPC(task)
+}
+
+// acceptRPC 派发一个轻量 RPC 请求；没被接纳的立即答复“没有执行、可重试”。
+func (b *Bus) acceptRPC(task *incomingTask) {
+	if err := b.dispatchRPC(task); err != nil {
+		b.refuseTask(task, "dispatch failed: "+err.Error(), err)
+		task.settle()
+	}
+}
+
+// dispatchRPC 按顺序键把 RPC 任务交给派发（rpc_dispatch.go）。返回 nil 表示接纳、一定会执行；拒绝（Bus 没在运行、
+// 在跑与排队的请求已到上限）时任务没有执行，由调用方答复（轻量 RPC）或交还 broker（JetStream RPC）。
+func (b *Bus) dispatchRPC(task *incomingTask) error {
+	b.lifeMu.Lock()
+	pool := b.pool
+	b.lifeMu.Unlock()
+	if pool == nil {
+		slog.Warn("bus: drop rpc request because dispatcher is not running", "method", task.natsMsg.MsgName)
+		return errDispatcherNotRunning
+	}
+	err := b.rpcDispatch.dispatch(pool, task.natsMsg.OrderKey, task, b.handleTask)
+	if err != nil {
+		slog.Error("bus: dispatch rpc request failed", "method", task.natsMsg.MsgName, "request_id", task.natsMsg.SessionId, "err", err)
+		_, name := b.incomingLabels(task.natsMsg, true)
+		metrics.IncCounter("bus_dispatch_drop_total", metrics.Labels{
+			"module": "",
+			"msg":    name,
+			"reason": err.Error(),
+		}, 1)
+	}
+	return err
 }
 
 func (b *Bus) extractRpcMethod(subject string) string {
@@ -931,6 +973,10 @@ func (b *Bus) refuseTask(task *incomingTask, reason string, cause error) {
 
 func (b *Bus) handleTask(task *incomingTask) {
 	defer task.settle()
+	if task.jetStream != nil {
+		b.serveJetStreamRPCDelivery(task.jetStream)
+		return
+	}
 	if task.isRpc {
 		b.dispatchRpc(task)
 	} else {
@@ -1195,12 +1241,14 @@ type incomingTask struct {
 	// release 结束这条消息的准入（msgCalls.End），在处理完或被拒绝之后由 settle 调用一次；RPC 任务为 nil
 	// （RPC 的准入在 handler 开始时，见 dispatchRpc）。
 	release func()
+	// jetStream 非 nil 时这是一次推迟结算的 JetStream RPC 投递（onJetStreamRPCRequest），由它的处理函数执行、结算。
+	jetStream *jetStreamRPCDelivery
 }
 
 func (t *incomingTask) OnRelease() {}
 
-// settle 结束任务的准入。调度池接受的任务一定会被执行（worker.TryCast 的契约），所以每个任务恰好经过
-// handleTask 或 dispatchTask 的拒绝分支之一。
+// settle 结束任务的准入。调度池与 RPC 派发接受的任务一定会被执行（worker.TryCast / rpcDispatcher.dispatch 的契约），
+// 所以每个任务恰好经过 handleTask 或派发的拒绝分支之一。
 func (t *incomingTask) settle() {
 	if t.release != nil {
 		t.release()

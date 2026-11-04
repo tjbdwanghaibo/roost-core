@@ -36,7 +36,7 @@ func (s *suite) foundMany(client *rpcalliance.BusClient, n int, leaderBase int64
 			for i := range next {
 				leader := leaderBase + int64(i) + 1
 				var reply rpcalliance.Reply
-				// Found 在一个实例上按方法串行（约 9 个/秒），排队时间随并发增长：单次期限给足 20s，免得超时重发再排一遍队。
+				// 单次期限给足 20s：机器负载高时 Found 排队，免得超时重发再排一遍队。
 				var err error
 				for attempt := 0; attempt < 5; attempt++ {
 					ctx, cancel := context.WithTimeout(s.ctx, 20*time.Second)
@@ -205,7 +205,7 @@ func TestAllianceE2ECrashTakeoverAndScaleIn(t *testing.T) {
 	onB := s.foundOn(client, 3001, 8, &leader)
 	onA := s.foundOn(client, 3000, 2, &leader)
 
-	// ① 在途请求：200 个玩家并发入会到 3001 上的联盟，发出约 400ms 后 kill -9 3001（入会在该实例上按方法串行，约 75ms 一个，此时大部分还在排队）。
+	// ① 在途请求：200 个玩家并发入会到 3001 上的联盟，发出约 400ms 后 kill -9 3001（同一联盟的入会在 owner 上按到达顺序逐个处理，约 75ms 一个，8 个联盟之间并行，此时大部分还在排队）。
 	const players = 200
 	outcomes := make([]joinOutcome, players)
 	var wg sync.WaitGroup

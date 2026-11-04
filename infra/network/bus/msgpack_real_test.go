@@ -205,7 +205,7 @@ func TestRealWithdrawRpcAnswersEveryRequestDefinitely(t *testing.T) {
 		return b
 	}
 	server, caller := newBus(3000), newBus(9000)
-	// Slow 的第一个请求卡在 handler 里（在 Nest 里等提交确认）；Join 一直有请求进来。两个方法在不同的派发 worker 上，
+	// Slow 的第一个请求卡在 handler 里（在 Nest 里等提交确认）；Join 一直有请求进来。不带顺序键的请求各自执行，
 	// 撤下期间 Join 的请求照常到达。
 	entered, release := make(chan struct{}), make(chan struct{})
 	if err := server.HandleRpc("Slow", func(*RpcContext) (any, error) {
@@ -217,9 +217,6 @@ func TestRealWithdrawRpcAnswersEveryRequestDefinitely(t *testing.T) {
 	}
 	if err := server.HandleRpc("Join", func(*RpcContext) (any, error) { return int32(3000), nil }); err != nil {
 		t.Fatal(err)
-	}
-	if hashString("Slow")%4 == hashString("Join")%4 {
-		t.Fatal("Slow and Join share a dispatch worker; rename one")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

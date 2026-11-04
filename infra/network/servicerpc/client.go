@@ -194,6 +194,13 @@ func (c *BusClient) CallDiscoveredChecked(ctx context.Context, method string, re
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	// affinity 方法（KeyAffinityPicker 取到键）：键同时是顺序键，选中的实例上同一个键的请求按到达顺序逐个处理
+	// （bus.WithOrderKey），保持“同一个键落到同一实例、不互相争用”的意图；不同键并行。
+	if picker, ok := c.picker.(KeyAffinityPicker); ok && picker.Key != nil {
+		if key, ok := picker.Key(ctx); ok && key != "" {
+			ctx = bus.WithOrderKey(ctx, key)
+		}
+	}
 	// 发现、选择和传输共用预算；Call 的子期限
 	// 不会延长这个 parent，发现耗时不会换来一份新的完整 transport 预算。
 	callCtx, cancel := context.WithTimeout(ctx, c.timeout)

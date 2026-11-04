@@ -3,10 +3,14 @@ package bus
 import (
 	"context"
 	"errors"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"fmt"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 )
 
 func TestJetStreamRPCRequestWithoutReplySubjectIsNotExecuted(t *testing.T) {
@@ -242,5 +246,138 @@ func TestJetStreamDeliveryAfterStopDoesNotRunBusiness(t *testing.T) {
 	}
 	if runs != 0 {
 		t.Errorf("business ran %d times for a delivery after the stop", runs)
+	}
+}
+
+// deferredJetStreamRequest 是支持推迟结算的投递（与 driver 的 DeferSettle 同一约定）：settled 收到这次投递的结算结果。
+func deferredJetStreamRequest(t *testing.T, b *Bus, method, requestID, orderKey string, settled chan<- string) *fnats.JetStreamMsg {
+	t.Helper()
+	data, err := b.codec.Marshal(&fnats.NatsMsg{
+		FromSid:      2001,
+		MsgName:      method,
+		SessionId:    requestID,
+		MsgID:        requestID,
+		ReplySubject: "roost.rpc_resp.2001." + requestID,
+		DeadlineAt:   time.Now().Add(5 * time.Second).UnixMilli(),
+		OrderKey:     orderKey,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := &fnats.JetStreamMsg{Subject: "roost.rpc.mail." + method, Data: data, NumDelivered: 1}
+	var once atomic.Bool
+	msg.DeferSettle = func() func(error) {
+		if !once.CompareAndSwap(false, true) {
+			return nil
+		}
+		return func(err error) { settled <- fmt.Sprintf("%s %v", requestID, err) }
+	}
+	return msg
+}
+
+// JetStream RPC 的派发与轻量 RPC 同一规则：consumer 回调推迟结算、交给派发后立即返回（一个 consumer 上的请求不再串行），
+// 不同顺序键（以及不带键）的请求并行，同一个键按投递顺序逐个处理；每次投递在 handler 返回、应答发布之后才确认，
+// Bus 停止等推迟中的投递结算完。
+func TestJetStreamRPCDispatchesByOrderKeyAndSettlesAfterTheReply(t *testing.T) {
+	b, js := jetStreamStopTestBus(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	var events []string
+	if err := b.HandleRpc("mail.Apply", func(ctx *RpcContext) (any, error) {
+		mu.Lock()
+		events = append(events, "start "+ctx.MsgID)
+		mu.Unlock()
+		if ctx.MsgID == "a1" {
+			close(entered)
+			<-release
+		}
+		mu.Lock()
+		events = append(events, "end "+ctx.MsgID)
+		mu.Unlock()
+		return map[string]int{"code": 0}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	consume := js.handlerForFilter("roost.rpc.mail.mail.Apply")
+	settled := make(chan string, 8)
+	deliver := func(requestID, key string) {
+		t.Helper()
+		returned := make(chan error, 1)
+		go func() {
+			returned <- consume(context.Background(), deferredJetStreamRequest(t, b, "mail.Apply", requestID, key, settled))
+		}()
+		select {
+		case err := <-returned:
+			if err != nil {
+				t.Fatalf("delivery %s returned %v; want nil after handing it to the dispatcher", requestID, err)
+			}
+		case <-time.After(3 * time.Second):
+			close(release)
+			t.Fatalf("the consumer callback for %s did not return: a blocked handler would hold every later request of this consumer", requestID)
+		}
+	}
+	deliver("a1", "alliance-1")
+	<-entered
+	deliver("a2", "alliance-1")
+	deliver("b1", "alliance-2")
+	deliver("u1", "")
+	got := map[string]bool{}
+	for range 2 {
+		select {
+		case result := <-settled:
+			got[result] = true
+		case <-time.After(3 * time.Second):
+			close(release)
+			t.Fatalf("requests for another key / without a key were not settled while alliance-1 was blocked; settled %v", got)
+		}
+	}
+	if !got["b1 <nil>"] || !got["u1 <nil>"] {
+		t.Fatalf("settled %v; want b1 and u1 acknowledged", got)
+	}
+	for _, id := range []string{"b1", "u1"} {
+		if !js.publishedTo("roost.rpc_resp.2001." + id) {
+			t.Errorf("%s was settled without its response being published", id)
+		}
+	}
+	mu.Lock()
+	for _, event := range events {
+		if event == "start a2" {
+			mu.Unlock()
+			close(release)
+			t.Fatalf("a2 entered the handler while a1 (same order key) was still running: %v", events)
+		}
+	}
+	mu.Unlock()
+
+	// 停止等推迟中的投递：a1 还卡着时有预算的停止返回 ctx 错误。
+	budget, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := stopWithin(t, b, budget, "budgeted stop"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("stop with a deferred delivery in the handler = %v; want the budget's ctx error", err)
+	}
+	close(release)
+	if err := stopWithin(t, b, context.Background(), "retry stop"); err != nil {
+		t.Fatalf("retry stop = %v", err)
+	}
+	for _, want := range []string{"a1", "a2"} {
+		select {
+		case result := <-settled:
+			if !strings.HasPrefix(result, want+" ") {
+				t.Fatalf("settled %q; want %s next (same key, delivery order)", result, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s was not settled after the stop drained", want)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	order := []string{}
+	for _, event := range events {
+		if strings.HasSuffix(event, " a1") || strings.HasSuffix(event, " a2") {
+			order = append(order, event)
+		}
+	}
+	if fmt.Sprint(order) != "[start a1 end a1 start a2 end a2]" {
+		t.Fatalf("alliance-1 ran %v; want a1 then a2, one at a time", order)
 	}
 }

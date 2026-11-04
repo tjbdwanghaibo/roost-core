@@ -6,6 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -246,5 +249,193 @@ func TestClassifySeparatesNotExecutedFromUnknown(t *testing.T) {
 		if got := Classify(tc.err); got != tc.want {
 			t.Errorf("%s: Classify(%v) = %s, want %s", tc.name, tc.err, got, tc.want)
 		}
+	}
+}
+
+// loopbackNATS 是进程内的 NATS 替身，同时是 IClient 与 IRpc：Call 把请求按主题交给订阅它的 handler（真实 Bus 的
+// onRpcMessage），等 Reply 送回答复。同一主题的 handler 由各调用方的 goroutine 调用——与真实 NATS 一样，Bus 的接收
+// 回调只解码并交给派发，不在回调里跑业务。
+type loopbackNATS struct {
+	mu      sync.Mutex
+	subs    map[string]fnats.MsgHandler
+	pending map[string]chan []byte
+	seq     atomic.Uint64
+}
+
+func newLoopbackNATS() *loopbackNATS {
+	return &loopbackNATS{subs: map[string]fnats.MsgHandler{}, pending: map[string]chan []byte{}}
+}
+
+type loopbackSub struct{}
+
+func (loopbackSub) Unsubscribe() error { return nil }
+func (loopbackSub) IsValid() bool      { return true }
+
+func (n *loopbackNATS) Publish(string, []byte) error { return nil }
+func (n *loopbackNATS) Request(string, []byte, time.Duration) ([]byte, error) {
+	return nil, errors.New("loopback: Request is not used")
+}
+func (n *loopbackNATS) Subscribe(subject string, handler fnats.MsgHandler) (fnats.ISubscription, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.subs[subject] = handler
+	return loopbackSub{}, nil
+}
+func (n *loopbackNATS) QueueSubscribe(subject, _ string, handler fnats.MsgHandler) (fnats.ISubscription, error) {
+	return n.Subscribe(subject, handler)
+}
+func (n *loopbackNATS) Drain() error { return nil }
+func (n *loopbackNATS) Close()       {}
+
+func (n *loopbackNATS) Call(ctx context.Context, subject string, req []byte) ([]byte, error) {
+	reply := fmt.Sprintf("_INBOX.%d", n.seq.Add(1))
+	answer := make(chan []byte, 1)
+	n.mu.Lock()
+	handler := n.subs[subject]
+	n.pending[reply] = answer
+	n.mu.Unlock()
+	defer func() {
+		n.mu.Lock()
+		delete(n.pending, reply)
+		n.mu.Unlock()
+	}()
+	if handler == nil {
+		return nil, fmt.Errorf("%w: %s", fnats.ErrNoResponders, subject)
+	}
+	handler(&fnats.Msg{Subject: subject, Reply: reply, Data: append([]byte(nil), req...)})
+	select {
+	case data := <-answer:
+		return data, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+func (n *loopbackNATS) CallWithTimeout(subject string, req []byte, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return n.Call(ctx, subject, req)
+}
+func (n *loopbackNATS) CallAsync(string, []byte, fnats.RpcCallback) {}
+func (n *loopbackNATS) Reply(reply string, resp []byte) error {
+	n.mu.Lock()
+	answer := n.pending[reply]
+	n.mu.Unlock()
+	if answer != nil {
+		answer <- resp
+	}
+	return nil
+}
+
+// fixedResolver 把每个实体都路由到同一个 sid（并发安全）。
+type fixedResolver int32
+
+func (r fixedResolver) LookupRoute(context.Context, int64) (int32, error) { return int32(r), nil }
+
+type applyRequest struct {
+	Entity int64
+	Seq    int
+}
+
+// 路由 RPC 的接收端并发与顺序（联盟阶段 5 实测：同一实例上同一方法按方法名落在一个派发 worker 上串行，Info 约 100 次/秒、
+// Join 约 13 次/秒，16 个不同联盟也一样）。承诺：
+//   - 发往不同实体的同一路由方法互不阻塞：一个实体的 handler 卡住（在 Nest 里等提交确认）时，别的实体照常完成；
+//   - 同一实体的请求按到达顺序逐个处理：后到的不在先到的返回之前进 handler。
+//
+// 用真实的 Bus（客户端与服务端）、真实的 BusClient.CallRoutedChecked，只把 NATS 换成进程内回环。实体数（16）大于派发
+// worker 数，任何“按键哈希到固定 worker”的做法都会让某个实体与卡住的那个落在同一个 worker 上。
+func TestRoutedCallsToDifferentEntitiesRunInParallelAndOneEntityInArrivalOrder(t *testing.T) {
+	const serverSID = 3000
+	network := newLoopbackNATS()
+	server := bus.New(network, network, nil, bus.Config{Sid: serverSID, SvcType: "alliance", WorkerNum: 4})
+	caller := bus.New(network, network, nil, bus.Config{Sid: 9000, SvcType: "game", WorkerNum: 4})
+	for _, b := range []*bus.Bus{server, caller} {
+		if err := b.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = b.StopWithContext(context.Background()) })
+	}
+	const blocked = routedAlliance
+	entered, release := make(chan struct{}), make(chan struct{})
+	var mu sync.Mutex
+	var events []string
+	record := func(event string) {
+		mu.Lock()
+		events = append(events, event)
+		mu.Unlock()
+	}
+	if err := server.HandleRpc("Apply", func(ctx *bus.RpcContext) (any, error) {
+		var req applyRequest
+		if err := ctx.Decode(&req); err != nil {
+			return nil, err
+		}
+		record(fmt.Sprintf("start %d#%d", req.Entity, req.Seq))
+		if req.Entity == blocked && req.Seq == 0 {
+			close(entered)
+			<-release
+		}
+		record(fmt.Sprintf("end %d#%d", req.Entity, req.Seq))
+		return &routedResponse{Value: "ok"}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := NewBusClient(caller, "alliance", 10*time.Second)
+	call := func(entity int64, seq int) error {
+		var resp routedResponse
+		return client.CallRoutedChecked(context.Background(), fixedResolver(serverSID), entity, "Apply", applyRequest{Entity: entity, Seq: seq}, &resp, "apply")
+	}
+
+	first := make(chan error, 1)
+	go func() { first <- call(blocked, 0) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first request never reached the handler")
+	}
+	second := make(chan error, 1)
+	go func() { second <- call(blocked, 1) }()
+
+	others := make(chan error, 16)
+	for i := range 16 {
+		go func() { others <- call(routedAlliance+int64(i+1)<<20, 0) }()
+	}
+	deadline := time.After(3 * time.Second)
+	for done := 0; done < 16; done++ {
+		select {
+		case err := <-others:
+			if err != nil {
+				t.Fatalf("routed call to another entity: %v", err)
+			}
+		case <-deadline:
+			close(release)
+			t.Fatalf("only %d of 16 routed calls to other entities completed while entity %d's handler was blocked; "+
+				"requests for different entities must not wait for each other", done, blocked)
+		}
+	}
+	mu.Lock()
+	for _, event := range events {
+		if event == fmt.Sprintf("start %d#1", blocked) {
+			mu.Unlock()
+			close(release)
+			t.Fatalf("the second request for entity %d entered the handler while the first was still running; events %v", blocked, events)
+		}
+	}
+	mu.Unlock()
+	close(release)
+	for _, done := range []chan error{first, second} {
+		if err := <-done; err != nil {
+			t.Fatalf("request for entity %d: %v", blocked, err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	order := []string{}
+	for _, event := range events {
+		if strings.HasSuffix(event, fmt.Sprintf(" %d#0", blocked)) || strings.HasSuffix(event, fmt.Sprintf(" %d#1", blocked)) {
+			order = append(order, event)
+		}
+	}
+	want := fmt.Sprintf("[start %[1]d#0 end %[1]d#0 start %[1]d#1 end %[1]d#1]", blocked)
+	if fmt.Sprint(order) != want {
+		t.Fatalf("requests for entity %d ran %v; want arrival order, one at a time %s", blocked, order, want)
 	}
 }

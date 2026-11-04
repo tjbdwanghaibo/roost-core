@@ -2,10 +2,11 @@ package e2e
 
 // 短测（ALLIANCE_E2E_PERF=1，单轮 ≤ 30 分钟；方案 §2.7 续期量估算、KNOWN-LIMITS 路由边界 ①⑥）：
 //   - 路由 RPC 延迟：带路由缓存的客户端顺序 / 16 并发调 Info、Join；
-//   - 预加载起服时间与常驻内存随“owner 是本 sid 的联盟数”（ALLIANCE_E2E_PERF_COUNTS，缺省 1000,10000）：四个实例并发建盟
-//     （Found 在一个实例上按方法串行，约 9 个/秒），再用 alliance.transfer 全部转给 3000，3000 正常停机后同 sid 拉起；
+//   - 预加载起服时间与常驻内存随“owner 是本 sid 的联盟数”（ALLIANCE_E2E_PERF_COUNTS，缺省 1000,10000）：四个实例并发建盟，
+//     再用 alliance.transfer 全部转给 3000，3000 正常停机后同 sid 拉起；
 //   - 续期量：拉起后 30s 内 route_renew_total{result="renewed"} 的增量，折算成每 10s。
-// Mirror 回源量在 TestAllianceE2EMirrorRevalidation（同样只在 ALLIANCE_E2E_PERF=1 时跑）。
+// Mirror 回源量在 TestAllianceE2EMirrorRevalidation、一个实例上 RPC 吞吐随并发的变化在 TestAllianceE2ERPCConcurrency
+// （同样只在 ALLIANCE_E2E_PERF=1 时跑）。
 
 import (
 	"context"
@@ -222,4 +223,93 @@ func TestAllianceE2EMirrorRevalidation(t *testing.T) {
 				staleness, len(lat), window, busy, idle, float64(busy-idle)/window.Seconds(), durations(lat))
 		})
 	}
+}
+
+// TestAllianceE2ERPCConcurrency：一个 alliance 实例上 RPC 的吞吐与延迟随并发的变化（总线接收端的派发规则，
+// docs/framework/guide/09-services.md“接收端并发与顺序”）。只起 3000 一个实例，调用方带路由缓存：
+//   - found：不带顺序键，各自执行；
+//   - info / join：路由 RPC，顺序键是联盟实体 ID——分散到 16 个联盟时并行，集中在一个联盟时按到达顺序逐个处理。
+// 结果按“PERF rpc <名字> conc=… n=… failed=… …/s p50 … p99 …”输出，前后对照见 docs/performance/benchmarks/rpc-dispatch-20261104。
+func TestAllianceE2ERPCConcurrency(t *testing.T) {
+	perfOnly(t)
+	s := newSuite(t, 30*time.Minute)
+	s.start("alliance-3000", "alliance", 3000, procOptions{keys: [][3]string{{"alliance", "max_members", "500"}}})
+	client := s.client(nil, 60*time.Second)
+	measure := func(name string, conc, perWorker int, call func(ctx context.Context, w, i int) error) {
+		var mu sync.Mutex
+		var lat []time.Duration
+		failed := 0
+		var firstErr error
+		start := time.Now()
+		var wg sync.WaitGroup
+		for w := 0; w < conc; w++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := 0; i < perWorker; i++ {
+					st := time.Now()
+					err := call(s.ctx, w, i)
+					mu.Lock()
+					lat = append(lat, time.Since(st))
+					if err != nil {
+						failed++
+						if firstErr == nil {
+							firstErr = err
+						}
+					}
+					mu.Unlock()
+				}
+			}()
+		}
+		wg.Wait()
+		elapsed := time.Since(start)
+		sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
+		t.Logf("PERF rpc %s conc=%d n=%d failed=%d in %v %.1f/s %s", name, conc, len(lat), failed, elapsed.Round(time.Millisecond), float64(len(lat))/elapsed.Seconds(), durations(lat))
+		if firstErr != nil {
+			t.Logf("PERF rpc %s first error: %v", name, firstErr)
+		}
+	}
+	var idsMu sync.Mutex
+	var ids []int64
+	found := func(ctx context.Context, leader int64) error {
+		reply, err := client.Found(ctx, fmt.Sprintf("found-%d", leader), leader, 1000, fmt.Sprintf("p-%d", leader), true)
+		if err == nil {
+			idsMu.Lock()
+			ids = append(ids, reply.Alliance.AllianceID)
+			idsMu.Unlock()
+		}
+		return err
+	}
+	measure("found", 1, 16, func(ctx context.Context, w, i int) error { return found(ctx, int64(5_000_000+i)) })
+	measure("found", 16, 8, func(ctx context.Context, w, i int) error { return found(ctx, int64(5_100_000+w*100+i)) })
+	if len(ids) < 16 {
+		t.Fatalf("only %d alliances founded", len(ids))
+	}
+	measure("info", 1, 200, func(ctx context.Context, w, i int) error {
+		_, err := client.Info(ctx, target(t, ids[i%16]))
+		return err
+	})
+	measure("info-spread16", 16, 100, func(ctx context.Context, w, i int) error {
+		_, err := client.Info(ctx, target(t, ids[w]))
+		return err
+	})
+	measure("info-same", 16, 50, func(ctx context.Context, w, i int) error {
+		_, err := client.Info(ctx, target(t, ids[0]))
+		return err
+	})
+	measure("join", 1, 32, func(ctx context.Context, w, i int) error {
+		p := int64(6_000_000 + i)
+		_, err := client.Join(ctx, fmt.Sprint("perf-join-", p), p, 1000, target(t, ids[1+i%15]))
+		return err
+	})
+	measure("join-spread16", 16, 8, func(ctx context.Context, w, i int) error {
+		p := int64(6_100_000 + w*100 + i)
+		_, err := client.Join(ctx, fmt.Sprint("perf-join-", p), p, 1000, target(t, ids[w]))
+		return err
+	})
+	measure("join-same", 16, 8, func(ctx context.Context, w, i int) error {
+		p := int64(6_200_000 + w*100 + i)
+		_, err := client.Join(ctx, fmt.Sprint("perf-join-", p), p, 1000, target(t, ids[0]))
+		return err
+	})
 }

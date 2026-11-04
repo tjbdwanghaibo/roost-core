@@ -368,7 +368,9 @@ func (b *Bus) callJetStreamRPC(ctx context.Context, subject string, method strin
 	if deadline, ok := callCtx.Deadline(); ok {
 		deadlineAt = deadline.UnixMilli()
 	}
+	orderKey, _ := OrderKeyFromContext(ctx)
 	req := &fnats.NatsMsg{
+		OrderKey:     orderKey,
 		FromSid:      b.cfg.Sid,
 		ToSid:        toSid,
 		MsgName:      method,
@@ -446,8 +448,13 @@ func (b *Bus) onJetStreamRPCResponse(_ context.Context, msg *fnats.JetStreamMsg)
 	return nil
 }
 
-// onJetStreamRPCRequest 是 JetStream RPC 请求的服务端入口：登记在途 handler → 解码请求、查 handler →
-// 准入（应答主题、过期）→ 建立处理期限并持续发 in-progress → 调用 handler → 编码并发布应答。
+// onJetStreamRPCRequest 是 JetStream RPC 请求的服务端入口（consumer 的回调）：登记在途 handler → 解码请求、查 handler →
+// 准入（应答主题、过期）→ 建立处理期限并开始发 in-progress → 推迟这次投递的结算，按顺序键交给 RPC 派发
+// （rpc_dispatch.go，与轻量 RPC 同一规则）后立即返回，consumer 接着投递下一条；派发的任务调用 handler、发布应答、结算。
+//
+// 回调里同步跑 handler 会让一个 consumer（每个方法一个服务级、一个本实例的）上的请求全部串行，与此前轻量 RPC 按方法名
+// 选 worker 是同一个容量问题。派发拒绝（在跑与排队的请求已到上限、Bus 没在运行）时返回错误，消息交还 broker（NAK）
+// 重投；传输不支持推迟结算（测试替身）时在回调里同步处理。
 // 返回非 nil 让消息交还 broker（NAK）；准入拒绝与已发布应答返回 nil（确认）。
 func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg) error {
 	if msg == nil {
@@ -456,9 +463,9 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	if !b.jsRPC.handlers.Begin() {
 		return errJetStreamRPCStopping
 	}
-	defer b.jsRPC.handlers.End()
 	var req fnats.NatsMsg
 	if err := b.codec.Unmarshal(msg.Data, &req); err != nil {
+		b.jsRPC.handlers.End()
 		return fmt.Errorf("bus: decode jetstream rpc req: %w", err)
 	}
 	if req.MsgName == "" {
@@ -466,29 +473,86 @@ func (b *Bus) onJetStreamRPCRequest(ctx context.Context, msg *fnats.JetStreamMsg
 	}
 	handler, label, ok := b.jetStreamRPCHandler(req.MsgName)
 	if !b.admitJetStreamRPCRequest(msg, &req, label) {
+		b.jsRPC.handlers.End()
 		return nil
 	}
-	processCtx, cancel := b.jetStreamRPCProcessContext(req)
-	defer cancel()
-	// 撤下（WithdrawRpc）之后投递来的请求不进 handler，答复“没有执行、可重试”并确认。
-	if calls := b.rpcMethodCalls(req.MsgName); ok && calls != nil {
+	d := &jetStreamRPCDelivery{msg: msg, req: req, handler: handler, label: label, registered: ok}
+	d.processCtx, d.cancel = b.jetStreamRPCProcessContext(req)
+	// handler 可能跑得比 AckWait 久（期限取调用方截止），在派发队列里也可能等一会儿：从这里起定期发 in-progress，
+	// broker 不会把这条重投给共享 durable 的另一个实例并发执行。
+	d.stopInProgress = b.keepJetStreamRPCInProgress(msg, d.processCtx)
+	if msg.DeferSettle != nil {
+		d.settle = msg.DeferSettle()
+	}
+	if d.settle == nil {
+		// 不能推迟结算：在回调里处理，按返回值结算。
+		return b.finishJetStreamRPCDelivery(d, b.serveJetStreamRPC(d))
+	}
+	if err := b.dispatchRPC(&incomingTask{natsMsg: &d.req, isRpc: true, jetStream: d}); err != nil {
+		b.recordJetStreamRPCRequest(label, "not_admitted")
+		// 推迟之后回调返回错误：传输按这个错误立即结算（NAK），之后的 settle 不再生效。
+		return b.finishJetStreamRPCDelivery(d, fmt.Errorf("bus: jetstream rpc %s not admitted; returned to the broker: %w", req.MsgName, err))
+	}
+	return nil
+}
+
+// jetStreamRPCDelivery 是一次已准入的 JetStream RPC 投递：在 onJetStreamRPCRequest 里建立，由派发的任务（或回调本身）
+// 处理并结算。从建立到 finishJetStreamRPCDelivery 之间计入 jsRPC.handlers 的在途。
+type jetStreamRPCDelivery struct {
+	msg        *fnats.JetStreamMsg
+	req        fnats.NatsMsg
+	handler    RpcHandlerFunc
+	label      string
+	registered bool
+
+	processCtx     context.Context
+	cancel         context.CancelFunc
+	stopInProgress func()
+	settle         func(error) // 推迟的结算；nil 表示由回调的返回值结算
+}
+
+// serveJetStreamRPCDelivery 是派发任务的入口：处理一次推迟结算的投递并结算。
+func (b *Bus) serveJetStreamRPCDelivery(d *jetStreamRPCDelivery) {
+	err := b.serveJetStreamRPC(d)
+	_ = b.finishJetStreamRPCDelivery(d, err)
+}
+
+// finishJetStreamRPCDelivery 停心跳、结束处理期限，按 err 结算（推迟的投递调用 settle；同步处理的由回调返回 err），
+// 最后结束在途登记：Bus 停止等在途归零时，这次投递已经结算。
+func (b *Bus) finishJetStreamRPCDelivery(d *jetStreamRPCDelivery, err error) error {
+	d.stopInProgress()
+	d.cancel()
+	if d.settle != nil {
+		d.settle(err)
+	}
+	b.jsRPC.handlers.End()
+	return err
+}
+
+// serveJetStreamRPC 处理一次投递：撤下检查 → 调用 handler → 编码并发布应答。返回值决定结算（nil 确认，非 nil 交还 broker）。
+func (b *Bus) serveJetStreamRPC(d *jetStreamRPCDelivery) error {
+	req := &d.req
+	// 在派发队列里等过：期限已过的请求调用方已经放弃，确认、不执行（与准入时的过期检查同一规则）。
+	if req.DeadlineAt > 0 && time.Now().UnixMilli() > req.DeadlineAt {
+		slog.Warn("bus: drop jetstream rpc request that expired while queued", "method", req.MsgName, "request_id", req.SessionId)
+		b.recordJetStreamRPCRequest(d.label, "expired")
+		return nil
+	}
+	// 撤下（WithdrawRpc）之后才轮到的请求不进 handler，答复“没有执行、可重试”并确认。
+	if calls := b.rpcMethodCalls(req.MsgName); d.registered && calls != nil {
 		if !calls.Begin() {
-			return b.replyJetStreamRPC(processCtx, &req, label, nil, withdrawnRPCError(req.MsgName))
+			return b.replyJetStreamRPC(d.processCtx, req, d.label, nil, withdrawnRPCError(req.MsgName))
 		}
 		defer calls.End()
 	}
-	// handler 可能跑得比 AckWait 久（期限取调用方截止）：处理期间定期发 in-progress，broker 不会把这条
-	// 重投给共享 durable 的另一个实例并发执行。
-	defer b.keepJetStreamRPCInProgress(msg, processCtx)()
-
-	if !ok {
-		return b.refuseJetStreamRPCWithoutHandler(&req, label)
+	if !d.registered {
+		return b.refuseJetStreamRPCWithoutHandler(req, d.label)
 	}
-	rpcCtx := b.newJetStreamRPCContext(processCtx, &req)
+	rpcCtx := b.newJetStreamRPCContext(d.processCtx, req)
 	_, release := fctx.NewContext(fctx.WithBase(rpcCtx.Context()), fctx.WithSource("bus_jsrpc"), fctx.WithHandler(req.MsgName))
 	defer release()
-	resp, handlerErr := callJetStreamRPCHandler(handler, rpcCtx)
-	return b.replyJetStreamRPC(processCtx, &req, label, resp, handlerErr)
+	resp, handlerErr := callJetStreamRPCHandler(d.handler, rpcCtx)
+	return b.replyJetStreamRPC(d.processCtx, req, d.label, resp, handlerErr)
 }
 
 // jetStreamRPCHandler 查找方法的 handler，并给出指标用的方法标签。
