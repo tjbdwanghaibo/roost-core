@@ -101,6 +101,7 @@ sync-aoi `-move-driver=heartbeat`、nest-game `ROOST_NEST_GAME_HEARTBEAT_DRIVER=
 - **心跳模式没有计划时刻**：sync-aoi 的 `Planned` 取这一拍消息冻结的业务时间、nest-game 的 `Completion` 从回调开始算，都不含驱动与快池的迟到（看 `beat_interval_ms` / `Beats.Interval` 与跳拍计数），与全局循环的“计划 → 客户端”不是同一口径。
 - **sync-aoi 心跳模式的核对弱于全局循环**：位置取决于心跳时机，客户端只核对在实体的巡逻带上（全局循环逐项核对位置）；同一实体在一个 tick 里改两次时第二次不计时（照常核对）。
 - **负载形状不同**：心跳模式的移动者是固定集合、持续巡逻（改值速率按与全局循环相同折算），全局循环每 tick 换一批实体；两者 AOI 进出的空间分布不同。
+- **sync-aoi 端到端用例不判零跳拍**（2026-11-04）：`TestHeartbeatPatrolReachesClientsAndTheAOI` 曾在一次多 agent 并发的全量里以 `inflight 4` 失败。宿主把进程挂起超过一个 50ms 档位时，驱动恢复后逐格补走，每个登记的上一拍还在途，到期的拍按设计跳过（每个登记至多一拍在途、迟到不补投）；用 SIGSTOP / SIGCONT 把测试进程冻结 200ms 可确定复现（修前 10/10 失败，`inflight` 23～25、投递 = 执行），这是调度迟到，不是心跳或 AOI 缺陷。用例改为核对与调度无关的计数（投递的每一拍都执行，或在执行侧按停止 / 重复丢弃；没有准入失败、卡住与动作失败），测量窗口按“每个移动者在窗口里写过两次位置”结束（至多 200 个 tick）；冻结 200ms 时修后 10/10 通过。零跳拍仍是正式压测（`main` 的 `verdict`）的门槛；用例因此不再能发现“负载下跳拍变多”这类性能退化，那由正式压测负责。
 
 ### game-demo 的移动、怪物与场景时间（D20 第 3 期）
 
@@ -328,6 +329,14 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **每次 Hold → Ready 都按全量重发仍在的对象**：没有“只停发布、保留基线与待发 Remove”的暂停原语（方案 B，维护者决定暂不做，[DESIGN-TODO“保持现状的决定”](DESIGN-TODO.md#待维护者决定不急)第 4 项）。按周期刷新权限、每轮都 Hold 的业务（SLG §7.5 / §7.7）每个周期每个对象重发一次全量；SLG 文档建议只在权限读失败与重连时 Hold。
 - **仍有订阅但一时没有可发的快照时，新 epoch 的 Full 会推迟**：例如 Ready 时剩下的订阅指向已卸载、等待重载的实体，或被冷创建预算推到后面的窗口；Full 发出之前接收端还留着上一 epoch 的对象（包括 held 期间撤掉的）。只在一个订阅都不剩时才补空 Full（读代码推断，未写用例）。
 
+### 同一 SessionID 的重连
+
+嵌入 TCP 的 `TCPServer.registerSession` 按连接被接受的先后定同一 SessionID 的新旧（2026-11-04，回归 `TestALoginThatFinishesLateDoesNotDisplaceANewerConnectionOfTheSameSession`）：迟到完成的旧登录在 ack 之后被拒登记并断开。剩余边界：
+
+- **独立 Gate 模式的 Game 绑定表仍按 Bind 完成先后替换**（读代码推断，未写用例）：`bindingTable.finish` 让后完成的 Bind 胜出并退役上一条绑定、通知 Gate 关闭它。旧连接的认证 / Bind 慢于新连接时，Game 侧照样把新连接的绑定退役，新连接被断开；Gate 本地的 `TCPServer` 已不再让旧连接登记，所以结果与修前相同（两条都不剩），不会更坏。要修需要把 Gate 的接受序号带进 Bind 请求，由 Game 比较——只对同一 Gate 实例内的连接有意义，跨 Gate 的同一 SessionID 没有可比较的先后，属于方案选择，待维护者决定。
+- **“接受先后”只代表同一客户端的重连意图**：两台设备用同一 SessionID 交错登录时，留下的是接受得更晚的那条；SessionID 本来就标识一次登录，框架不另做裁决。
+- **Robot 的 `connect` 发出认证帧不等 ack**：连接动作返回不代表握手完成，紧接着的 `Reconnect` 让两条连接的握手在服务端交错；修复后这种交错不再踢掉新连接，Robot 本身未改。
+
 ### 广播与 AOI
 
 - **SyncBus投递**：有限次数、保留期限及容量，不保证绝不丢；定位为默认可丢广播（维护者 2026-10-15）。需要最终一致的业务自建快照 / 对账闭环，不能仅测重试成功；兜底写法见 [guide/04-sync §5](../framework/guide/04-sync.md#syncbus-的定位与丢失兜底)；框架级对账是未排期候选（[DESIGN-TODO](DESIGN-TODO.md#未排期候选) D2）。
@@ -348,7 +357,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **endpoint 服务器决定的参数**：只识别业务时间这一类约定名（`nowUnix` / `nowUnixMilli`，`int64`，由生成的 Nest 分发包装在 handler 执行时从 `fctx` 填，D22-1）；其他服务器决定的值（玩家状态、配置）在 handler 里读，没有 `--server-param` 一类的通用标记。约定名是全局的：任何 `//roost:nest` handler 的参数叫这两个名字就不再从消息里取，要调用方传一个时间时换个名字（例如 `resolvedAtUnix`）。
 - **Saga / Remote / Skill 的 doctor 检查**：`remote-runtime` 在带 Nest 的服务部分缺 `remote_entity` 时只 WARN（实体由哪个服务写静态上看不出）；技能目录由生成的 `catalog_test.go` 与 doctor `skills:catalog` 检查，服务 Init 里调 `CompileAll` 归业务。
 - **configdata 重载内容未变也递增版本**（维护者 2026-10-18 决定 B）：照常发布、递增版本，回答 / 日志 / 指标标明 `changed=false`（`configdata.reload.total{result="unchanged"}`）；理由是监听者依赖每次重载都执行（如开关表用重载恢复表值）。版本号不是内容版本，内容是否变化看 `changed` / `hash`。
-- **mmorpg 玩法生成工程的 `TestMMORPGRobotBusiness` 偶发失败（2026-11-04，尚未确认）**：维护者复核 App 生命周期改动时，`test-genres-generated.py` 的 mmorpg 一类失败一次——同一用例里第 4 次起 robot（每次都用同一个 `SessionID "owner"` 重连）在第 0 步得到 `robot session: closed`；同一工程 `-race` 单独循环 15 次全部通过（机器负载约 15）。该用例只依赖 gateway / robot / clock，生命周期改动没有碰这些包；怀疑是同一会话 ID 连续重连时旧会话的关闭踢掉了新会话，没有复现、没有定位。同类的还有 `scripts/perf/sync-aoi` 的 `TestHeartbeatPatrolReachesClientsAndTheAOI` 在一次全量里跳拍失败（inflight 4），重跑通过。夹具按测试名全局注册 handler，`-count>1` 会 panic（`duplicate handler`），复现要用循环单跑。
+- **mmorpg 玩法生成工程的 `TestMMORPGRobotBusiness` 偶发失败（2026-11-04，已定位并修复）**：根因在嵌入 TCP 接入，不在夹具——同一 SessionID 的旧连接迟到完成的登录把已经在服务的新连接关掉（见 [CHANGELOG](../../CHANGELOG.md) `[Unreleased]` 与本文[同一 SessionID 的重连](#同一-sessionid-的重连)）。失败的是第 4 次 robot，它的第 0 步就是 `Reconnect`：Robot 的 `connect` 发出认证帧不等 ack，紧接着重连并关闭旧连接，旧连接的握手在服务端照常走完、晚于新连接登记。按这个顺序直接打 `TCPServer` 的探针修前 3000 轮 31 次新连接被关、修后 0 次；生成工程同一用例（8 路并行、修前 / 修后二进制交替各 5 轮）修前 1600 次失败 15 次、全部是 `step 0: robot session: closed`，修后 1600 次 0 失败。同一次报告里的 `scripts/perf/sync-aoi` `TestHeartbeatPatrolReachesClientsAndTheAOI` 跳拍失败（inflight 4）是用例的时序假设，不是缺陷，见本文“压测工具的心跳驱动”一节。
 - **文档提交号门禁**（`TestDocumentedCommitsAreReachableFromHEAD`）：浅克隆（CI 默认 depth=1）整条跳过，只在本地完整检出与 release 工作流（fetch-depth: 0）生效；纯数字短 SHA 与不带反引号的提交号不检查；只查“在 HEAD 历史里”，不查是不是文档所说的改动。分支上的文档引用本分支提交时 rebase 后会红：引用本轮改动优先写测试名 / CHANGELOG 条目，或合入后改成 main 上的提交号。
 
 ### 业务 HTTP 路由与配置检查
