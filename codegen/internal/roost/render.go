@@ -601,7 +601,14 @@ func renderModConstructor(m Manifest, name string, allMods []string, service str
 		return "kitmanager.NewManagerMod(service" + safeIdent(service) + ".Managers()...)"
 	case "dataengine":
 		options := []string{"kitdataengine.WithEntityAccess(EntityAccess)"}
-		if contains(allMods, "remote_entity") {
+		// Remote 投影要本进程的 remote_entity 能力：按本服务自己的 Mod 判断，不按整个工程——同一工程里只读
+		// Mirror 的服务（remote_mirror）或不碰 Remote 的服务也装 dataengine，开了投影起服即报
+		// capability "remote_entity" not found。shared_mods 里的 dataengine（service 为空）保持按全工程判断。
+		remoteMods := allMods
+		if service != "" {
+			remoteMods, _ = resolveMods(effectiveServiceMods(m, service))
+		}
+		if contains(remoteMods, "remote_entity") {
 			options = append(options, "kitdataengine.WithRemoteProjection(true)")
 		}
 		return "kitdataengine.NewMod(" + strings.Join(options, ", ") + ")"

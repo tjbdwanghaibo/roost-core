@@ -65,3 +65,35 @@ func TestRemoteMirrorModIsACatalogModExclusiveWithRemoteEntity(t *testing.T) {
 		}
 	}
 }
+
+// DataEngine 的 Remote 投影只开在装了 remote_entity 的服务上：同一工程里另一个服务（只读 Mirror 进程，或根本
+// 不碰 Remote 的服务）装 dataengine 时不能带 WithRemoteProjection(true)——那个服务没有 remote_entity 能力，
+// 起服时 dataengine Provide 报 capability "remote_entity" not found。game-demo 联盟方案第 4 阶段
+// （game 只装 remote_mirror、alliance 装 remote_entity）第一次真正起进程时撞到。
+func TestDataEngineRemoteProjectionFollowsTheServicesOwnRemoteEntity(t *testing.T) {
+	t.Parallel()
+	m := Manifest{Services: map[string]ServiceSpec{
+		"game":     {Mods: []string{"dataengine", "remote_mirror"}},
+		"alliance": {Mods: []string{"dataengine", "remote_entity"}},
+		"plain":    {Mods: []string{"dataengine"}},
+	}}
+	allMods := allProjectMods(m)
+	for service, want := range map[string]bool{"alliance": true, "game": false, "plain": false} {
+		mods, err := resolveMods(effectiveServiceMods(m, service))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := ""
+		for _, constructor := range serviceModConstructors(m, service, allMods) {
+			if strings.HasPrefix(constructor, "kitdataengine.NewMod(") {
+				got = constructor
+			}
+		}
+		if got == "" {
+			t.Fatalf("%s (mods %v) assembles no dataengine Mod", service, mods)
+		}
+		if strings.Contains(got, "WithRemoteProjection(true)") != want {
+			t.Errorf("%s (mods %v): %s; remote projection wanted=%v", service, mods, got, want)
+		}
+	}
+}
