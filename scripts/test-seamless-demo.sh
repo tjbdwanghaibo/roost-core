@@ -180,15 +180,12 @@ echo \$! > .dev/game1004.pid
 i=0
 until curl -fsS -o /dev/null http://127.0.0.1:9204/readyz 2>/dev/null; do i=\$((i+1)); [ \$i -lt 240 ] || exit 1; sleep 0.5; done
 EOF
-# team_roster_cross_base（两个 Base 交替写同一个 Team）是 FEATURE §13 记下的未解决问题：缺省标成已知失败，
-# ROOST_SEAMLESS_EXPECT_FAIL= （空）时按普通检查跑。
 set +e
 "$work_dir/drill" -account-nats "$nats_url" -prefix cwdemo \
 	-endpoints 1000=127.0.0.1:7000,1001=127.0.0.1:7001,1003=127.0.0.1:7003,1004=127.0.0.1:7004 \
 	-ops 1000=127.0.0.1:9100,1001=127.0.0.1:9201,1002=127.0.0.1:9202,1003=127.0.0.1:9203,1004=127.0.0.1:9204 \
 	-kill "kill -9 \$(cat $project/.dev/game1002.pid)" -restart "sh $work_dir/restart-1002.sh" \
 	-kill-base "kill -9 \$(cat $project/.dev/game1004.pid)" -restart-base "sh $work_dir/restart-1004.sh" \
-	-expect-fail "${ROOST_SEAMLESS_EXPECT_FAIL-team_roster_cross_base}" \
 	-out "$out/evidence.json" 2>&1 | tee "$out/drill.log"
 status=${PIPESTATUS[0]}
 set -e
@@ -197,7 +194,7 @@ if [[ "$status" != 0 ]]; then
 	echo "seamless: drill failed (status $status); logs in $out" >&2
 	exit "$status"
 fi
-for name in enter own_state straight jitter diagonal attack_across_0 attack_across_1 panel_level_up monster_cross cell_crash base_restart team_panel ordinary_scene; do
+for name in enter own_state straight jitter diagonal attack_across_0 attack_across_1 panel_level_up monster_cross cell_crash base_restart team_panel team_roster_cross_base ordinary_scene; do
 	grep -q "^STEP $name ok" "$out/drill.log" || { echo "seamless: step $name did not pass" >&2; exit 1; }
 done
 # 普通场景不回归：demo 自己的机器人（cmd/loadtest，完整链路）在没有分区配置的 sid 1003 上跑一轮。

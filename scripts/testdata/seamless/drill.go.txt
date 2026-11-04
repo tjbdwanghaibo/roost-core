@@ -67,7 +67,6 @@ var (
 	restartBase = flag.String("restart-base", "", "shell command that starts sid 1004 again and waits for it to be ready")
 	outPath     = flag.String("out", "", "evidence JSON")
 	damage      = flag.Int64("damage", 10, "scene.partition.attack_damage")
-	expectFail  = flag.String("expect-fail", "", "comma-separated steps known to fail (documented gaps): their failure prints EXPECTED-FAIL and does not fail the drill")
 )
 
 type point struct{ X, Y int64 }
@@ -1156,7 +1155,7 @@ func run(ctx context.Context) error {
 	if *killBase != "" && *restartBase != "" {
 		soft("team_panel", teamPanel(ctx, accountsClient, nonce, p1))
 		if progress, _ := evidence["team_panel"].(map[string]any); progress["removed_after_leave_ms"] != nil {
-			expectable("team_roster_cross_base", teamRosterCrossBase(ctx, p1))
+			soft("team_roster_cross_base", teamRosterCrossBase(ctx, p1))
 		}
 	}
 
@@ -1392,8 +1391,8 @@ func teamPanel(ctx context.Context, accountsClient *svcaccount.BusClient, nonce 
 }
 
 // teamRosterCrossBase：p6 在 sid 1004 上写过 Team（接受、离队）之后，p1 在 sid 1000 上再读 / 解散同一支队伍——两个 Base
-// 交替写同一个 Remote 托管实体（共享模式）。见 FEATURE §13：本轮发现 sid 1000 内存里的旧副本不会重新加载
-// （state version conflict），由 -expect-fail 标记，待维护者决定。
+// 交替写同一个 Remote 托管实体（共享模式）。sid 1000 内存里的副本停在建队时的版本，写准入发现落后后从权威卸载重载
+// （main e12e3dc8，framework/remoteentity/batch.go 的 staleWriteTarget），这一步应照常成功。
 func teamRosterCrossBase(ctx context.Context, p1 *client) error {
 	rest, err := p1.team(ctx, msgid.MsgTeamInfo, must(pb.MarshalTeamInfoRequest(&pb.TeamInfoRequest{})))
 	if err != nil {
@@ -1508,23 +1507,6 @@ func (c *client) resultsFor(from, to uint64) []*pb.AttackResultPush {
 
 // softFailures 收集追加检查（E4、第 1、2 项）的失败：一轮演练里全部跑完再报，修前一次就能看到每一项的红。
 var softFailures []string
-
-// expectable 是可以标成已知失败的追加检查（-expect-fail）：失败时打 “STEP <名字> EXPECTED-FAIL …”、不计入失败；标了却
-// 通过时打 “STEP <名字> ok” 并提示去掉标记。没标时同 soft。
-func expectable(name string, err error) {
-	known := false
-	for _, n := range strings.Split(*expectFail, ",") {
-		known = known || strings.TrimSpace(n) == name
-	}
-	switch {
-	case !known:
-		soft(name, err)
-	case err != nil:
-		fmt.Printf("STEP %s EXPECTED-FAIL %v\n", name, err)
-	default:
-		fmt.Printf("STEP %s passed although marked -expect-fail; drop the mark\n", name)
-	}
-}
 
 func soft(name string, err error) {
 	if err != nil {

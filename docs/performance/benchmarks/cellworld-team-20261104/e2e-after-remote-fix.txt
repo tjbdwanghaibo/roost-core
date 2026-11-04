@@ -1,0 +1,22 @@
+# 合入 main（e12e3dc8）后、去掉 -expect-fail 的端到端：scripts/test-seamless-demo.sh；私有依赖 scripts/mirror-local.sh 偏移 24000，etcd 58579；macOS（Apple M5）
+seamless: work dir <tmp> evidence <scratch>
+2026/11/04 10:20:13 INFO bus: subscribed subject=cwdemo.srv.0
+2026/11/04 10:20:13 INFO bus: subscribed subject=cwdemo.svc.seamlessdrill.0
+2026/11/04 10:20:13 INFO bus: subscribed subject=cwdemo.svc.seamlessdrill.all
+2026/11/04 10:20:13 INFO bus: subscribed subject=cwdemo.srv.all
+STEP enter ok {"monsters_near_p1":[2323454526324605969,2323454526324606993,2323454526324608017,2323472118510715921],"move_refused":"scene_partitioned","p1":100001,"p1_at":{"X":2900,"Y":1500},"p1_hp":100,"p2":100002,"p3":100003}
+STEP own_state ok {"exp_after":7,"exp_before":0}
+STEP straight ok {"creates_p2":2,"nearby_removed":0,"owner_changes":2,"self_gap_ms":50}
+STEP jitter ok {"owner_changes":8,"self_gap_ms":50}
+STEP diagonal ok {"self_gap_ms":53}
+STEP attack_across_0 ok {"applied":10,"damage":10,"damage_forwarded_by_cells":10,"damage_retries_total":0,"duplicate":0,"end_hp":0,"pushed_results":10,"start_hp":100,"target":2323472118510716945}
+STEP attack_across_1 ok {"applied":10,"damage":10,"damage_forwarded_by_cells":10,"damage_retries_total":0,"duplicate":0,"end_hp":0,"pushed_results":10,"start_hp":100,"target":2323454526324606993}
+STEP panel_level_up ok {"base_panel":{"actor":102401049,"attack":12,"attack_seq":20,"enter_age_ms":23864,"enter_hint":0,"epoch":14,"hp":100,"in_world":true,"intent_seq":23,"lease_age_ms":37,"lost_epoch":0,"max_hp":110,"owner_sid":1002,"panel_acked":2,"panel_unknown":false,"panel_ver":2,"power":35,"shown":true,"snapshot_epoch":14,"snapshot_seq":483,"view_age_ms":37,"x":3075,"y":1497},"cell_attack_after":12,"cell_attack_before":10,"cell_hp":100,"cell_max_hp_after":110,"cell_max_hp_before":100,"hit_damage":12,"hit_target":2323472118510717969,"target_hp":[100,88]}
+STEP monster_cross ok {"creates_on_p2":1,"from_sid":1002,"handoffs_accepted_cell_a":8,"handoffs_accepted_cell_b":7,"walker":2323454526324609041}
+STEP cell_crash ok {"base_reenters":6,"cell_b_monsters_respawned":3,"epoch_after":3,"epoch_before":2,"owner_after":1002,"p2_hp_after":76,"p2_hp_before":76,"restart_seconds":6.329094041}
+STEP base_restart ok {"entered_at":{"X":1175,"Y":1500},"p5":100004,"saved":{"X":1175,"Y":1500},"spawn":{"X":2900,"Y":1500}}
+STEP team_panel ok {"apart":2486,"p1":100001,"p1_sees_p6":{"_id":102405145,"cell_attack":10,"cell_hp":100,"cell_max_hp":100,"cell_power":30,"pos_x":5420,"pos_y":1500},"p6":100005,"panel_after_ms":101,"removed_after_kill_ms":2956,"removed_after_leave_ms":134,"restored_after_restart":true,"restored_members":[100001,100005],"team":4611686018427388957}
+STEP team_roster_cross_base ok {"disband_ver":4,"members_after_leave":[100001]}
+STEP ordinary_scene ok {"move":"ok","move_intent":"scene_not_partitioned","p4":100006}
+seamlessdrill: all steps passed
+seamless: all steps passed; evidence in <scratch>
