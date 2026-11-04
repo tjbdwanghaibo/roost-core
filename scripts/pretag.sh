@@ -98,8 +98,16 @@ echo "pretag: checking go.mod / go.sum are tidy"
 GOWORK=off go mod tidy
 git diff --quiet -- go.mod go.sum || fail "go.mod / go.sum are not tidy; commit the result of go mod tidy first (the CI unit job diffs them)"
 echo "pretag: testing with GOWORK=off"
+# -timeout 30m: go test's default is 10 minutes per test binary. codegen/internal/roost
+# generates, syncs and compiles whole game-demo projects and spends almost all of that time in
+# file-system calls, so it tracks the host's I/O load more than its own work: on this 10-core
+# macOS host it took 377-784s alone on 2026-11-04 (1-minute load 10-19), and full runs panicked
+# with "test timed out after 10m0s" with no failing test. After that day's t.Parallel / fixture
+# round it took 299-444s under load 18-25 (an intermediate state of that round reached ~815s
+# while other jobs saturated the disk), so the cap sits well above the slowest package instead
+# of at the default; a real hang still fails, just later.
 test_log="$(mktemp)"
-if ! GOWORK=off go test ./... >"$test_log" 2>&1; then
+if ! GOWORK=off go test -timeout 30m ./... >"$test_log" 2>&1; then
   grep -E '^(--- FAIL|FAIL|panic:)' "$test_log" >&2 || tail -50 "$test_log" >&2
   fail "go test ./... failed (full output: $test_log)"
 fi

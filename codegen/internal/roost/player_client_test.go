@@ -425,6 +425,7 @@ func TestClientSDKAgainstGeneratedPlayerTCP(t *testing.T) {
 	if _, err := exec.LookPath("dotnet"); err != nil {
 		t.Skip(".NET SDK unavailable; Go tests do not prove C# consumption")
 	}
+	t.Parallel()
 	repo, err := filepath.Abs("../../..")
 	if err != nil {
 		t.Fatal(err)
@@ -509,6 +510,7 @@ func TestClientSDKAgainstGeneratedPlayerTCP(t *testing.T) {
 
 // 注册扩展使用空业务工程，隔离game-demo真实服务依赖；不把假Nest当执行链验收。
 func TestClientSDKRegistrationHook(t *testing.T) {
+	t.Parallel()
 	repo, err := filepath.Abs("../../..")
 	if err != nil {
 		t.Fatal(err)

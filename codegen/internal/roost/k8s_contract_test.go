@@ -76,6 +76,7 @@ func summarizeConfigKeys(keys []string) string {
 // The game-demo gets saga (add saga) and player_access (add transport tcp)
 // after its configs are rendered; every service's Secret must still match.
 func TestGameDemoKubernetesSecretExamplesMirrorTheProductionExamples(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	m, err := LoadManifest(root)
 	if err != nil {

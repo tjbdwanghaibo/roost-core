@@ -11,6 +11,7 @@ import (
 // D16 · project next 的进阶引导：必做链完成后，列出框架有、工程还没用的能力（rpc / saga / attribute /
 // skill / webroute / cfggen），每条一个命令一个理由；用了的不再提示。
 func TestOptionalHintsNameWhatTheProjectHasNotUsedYet(t *testing.T) {
+	t.Parallel()
 	root := copyOfNewProject(t, "configdata")
 	m, err := LoadManifest(root)
 	if err != nil {

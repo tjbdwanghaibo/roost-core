@@ -14,8 +14,8 @@ package roost
 //     对下面每一种夹具实跑证明（生成物不含目标绝对路径，也不依赖时间）。
 //   - 每个用例的副本在自己的 t.TempDir 里，路径形状与原来的 filepath.Join(t.TempDir(), "planet") 相同。
 //   - NewProject 本身（暂存、改名提交、Windows 上的改名重试）仍由直接调用它的用例覆盖：
-//     TestDemoTemplateGeneratesABuildableWritePath、TestNewProjectSyncPreservesBusinessFiles 等，
-//     以及上面的等价性用例。
+//     TestDemoTemplateFollowsTheGameServiceName、TestNewProjectSyncPreservesBusinessFiles 等，
+//     以及下面的等价性用例（它对每种夹具都真实 NewProject 一次）。
 //   - 生成失败时，每个取用该夹具的用例都以同一个错误失败，与原来各自 NewProject 失败相同。
 //
 // 同一编号还给本包耗时 0.5s 以上、且满足下列条件的用例加了 t.Parallel：只读写自己 t.TempDir 里的工程，
@@ -25,6 +25,22 @@ package roost
 // .roost-sync-* 暂存树为工作目录，Windows 上暂存目录因此删不掉）。顶层并行用例只会在全部串行用例结束后一起跑，
 // 所以留在串行的用例（用钩子的 TestSyncRefusesAConfigEditedWhileItRuns、读相对路径的
 // literal_coupling_test.go、RR-20260927-01 在 Windows 上靠持有句柄注入写失败的两条）不受影响。
+//
+// 2026-11-04 测试耗时一轮（整包 377～784s，全量 go test ./... 在负载高时撞上缺省 10 分钟超时）：
+//   - 串行阶段占 45%～65%（170～516s）：顶层串行用例跑完之前并行用例一个都不开始，而第一个取 game-demo 夹具的
+//     串行用例要独自等夹具真实生成（负载高时 30～60s），几条编译 / 运行生成工程的串行用例（C# 客户端、
+//     self-sync、实体定时器端到端）又各要 15～45s。按上面同样的条件给它们加了 t.Parallel；
+//     其中两条原来用 t.Setenv 设 GOWORK / GOFLAGS（t.Setenv 改整个进程，不能与 t.Parallel 同用），
+//     改为子进程的 cmd.Env（generatedProjectGoEnv）。它们进程内调用的 roost generate 自己的 go mod tidy
+//     本来就强制 GOWORK=off，-mod 对 go mod tidy 不起作用，行为不变。负载高时（load 15～20）原来不到 0.5s 的
+//     串行小用例也要 2～20s，所以同样条件下单跑 1.5s 以上的也加了；仍留在串行的是设钩子 / t.Setenv / 发信号的
+//     （TestTemplateFailureDoesNotPublishPartialProject、TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput、
+//     TestSyncRefusesAConfigEditedWhileItRuns、staging_unix_test.go 的中断与 PATH 替身用例）、观察子进程工作目录的
+//     TestSyncProjectStagesNeverBecomeAChildsWorkingDirectory，以及上面说的 Windows 写失败注入两条。
+//   - 生成工程本身的耗时几乎全是文件系统调用（单跑 game-demo 生成 CPU 只占墙钟约 16%；整包 CPU 约 640s 对墙钟 595s），
+//     generatorRuns 锁整包累计只持有约 80s，不是瓶颈。省下的是重复的整工程生成：TestDemoTemplateGeneratesABuildableWritePath
+//     原先对与 game-demo 夹具完全相同的参数再 NewProject 一次，改为取夹具副本；等价性用例的四个子用例并行，
+//     game-demo 那条不再排在另外三条后面。把 -parallel 调到 32 在同样负载下没有更快（820s 对 814s），没有改。
 
 import (
 	"bytes"
@@ -79,6 +95,13 @@ func TestMain(m *testing.M) {
 	}
 	projectFixturesMu.Unlock()
 	os.Exit(code)
+}
+
+// generatedProjectGoEnv 是在生成工程里运行 go 子进程的环境：GOWORK=off（不让外层 go.work 接管生成工程），
+// GOFLAGS=-mod=mod（replace 到本仓库之后 go.sum 可能缺条目，由 go 自己补）。经 exec.Cmd.Env 显式传给子进程，
+// 不用 t.Setenv：后者改的是整个测试进程的环境，用了它的用例不能 t.Parallel。
+func generatedProjectGoEnv() []string {
+	return append(os.Environ(), "GOWORK=off", "GOFLAGS=-mod=mod")
 }
 
 // generatedProjectFixture 返回 name 对应夹具的只读原件目录，只真实生成一次。调用方不得修改它。
@@ -225,6 +248,8 @@ func TestProjectFixtureCopiesMatchAFreshNewProject(t *testing.T) {
 	t.Parallel()
 	for _, name := range slices.Sorted(maps.Keys(projectFixtureOptions)) {
 		t.Run(name, func(t *testing.T) {
+			// 各夹具彼此独立；game-demo 一条单独就要 30～60s，串着跑会把整包的结束时间拖到它后面。
+			t.Parallel()
 			options, _ := projectFixtureOptionsFor(name)
 			options.Out = filepath.Join(t.TempDir(), "fresh", options.Name)
 			_, fresh, err := NewProject(options)

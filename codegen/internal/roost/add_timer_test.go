@@ -251,8 +251,7 @@ func TestEntityTimerGeneratedProjectEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GOWORK", "off")
-	t.Setenv("GOFLAGS", "-mod=mod")
+	t.Parallel()
 	root := newTimerProject(t)
 	modPath := filepath.Join(root, "go.mod")
 	mod, err := os.ReadFile(modPath)
@@ -297,6 +296,7 @@ func TestEntityTimerGeneratedProjectEndToEnd(t *testing.T) {
 	} {
 		command := exec.CommandContext(ctx, "go", args...)
 		command.Dir = root
+		command.Env = generatedProjectGoEnv()
 		output, err := command.CombinedOutput()
 		if err != nil {
 			t.Fatalf("go %s: %v\n%s", strings.Join(args, " "), err, output)

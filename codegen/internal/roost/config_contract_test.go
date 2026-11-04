@@ -214,6 +214,7 @@ func TestPlayerTCPDeclarationAgreesWithKit(t *testing.T) {
 // “本服务没有 Mod 声明”的警告；完整的 doctor 编译工程、读回 game 服务自己的声明之后零警告
 // （TestDoctorReadsBusinessDeclarationsFromTheProcess）。
 func TestGameDemoConfigsPassTheDoctorConfigCheck(t *testing.T) {
+	t.Parallel()
 	root := copyOfNewProject(t, "game-demo")
 	m, err := LoadManifest(root)
 	if err != nil {

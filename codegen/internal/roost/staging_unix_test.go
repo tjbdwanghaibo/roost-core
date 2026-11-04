@@ -443,6 +443,7 @@ func diffDigests(before, after map[string][sha256.Size]byte) []string {
 // 承诺：错误里的文件路径指向工程本身；errors.Is 链不受影响。
 
 func TestStagedGeneratorErrorsNameTheProjectPath(t *testing.T) {
+	t.Parallel()
 	root := copyOfNewProject(t, "configdata")
 	broken := filepath.Join(root, "internal", "broken", "broken.go")
 	if err := os.MkdirAll(filepath.Dir(broken), 0o755); err != nil {

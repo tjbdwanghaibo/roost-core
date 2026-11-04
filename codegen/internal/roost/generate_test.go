@@ -180,6 +180,7 @@ func TestGenerateAndSyncIgnoreTheProjectsRuntimeOutput(t *testing.T) {
 // `git add -A` 不会把 WAL 段提交进仓库；configs/data（生成器输出、要提交）不能被顺带忽略。
 
 func TestGeneratedGitignoreIgnoresTheRuntimeOutputGenerationSkips(t *testing.T) {
+	t.Parallel()
 	git, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("git is not installed")
@@ -247,6 +248,7 @@ func TestGenerateChangedSeesChangesOfAProjectInARepositorySubdirectory(t *testin
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
+	t.Parallel()
 	repo := t.TempDir()
 	project := filepath.Join(repo, "sub", "proj")
 	writeFile(t, filepath.Join(project, "protocol", "def", "game.go"), "package def\n")
@@ -313,6 +315,7 @@ func TestGenerateChangedCountsBothSidesOfARename(t *testing.T) {
 // schema 已写、configs/table 还没有 CSV 是标准脚手架状态：`roost generate` 跳过 config-data，而不是因为读不到 CSV 失败；
 // `generate --check` 同样通过。
 func TestGenerateSkipsConfigDataWhenSchemaHasNoCSVYet(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"config"}})
 	if err != nil {
@@ -345,6 +348,7 @@ func TestGenerateSkipsConfigDataWhenSchemaHasNoCSVYet(t *testing.T) {
 // （模板由生成器整份重写，不带生成头，提交阶段要按目录认领），且随后 generate --check 认为它是最新的。
 
 func TestGenerateWritesTheTableTemplateItReports(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"config"}})
 	if err != nil {

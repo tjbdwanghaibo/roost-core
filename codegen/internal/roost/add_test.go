@@ -326,6 +326,7 @@ func TestAddRefusesEachInvalidKindParameter(t *testing.T) {
 
 // The handler kind is refused when the project never enabled the nest feature.
 func TestAddHandlerRequiresNestFeature(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: target,
@@ -344,6 +345,7 @@ func TestControllerScaffoldTransactionalGeneration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compiles a generated player-access project")
 	}
+	t.Parallel()
 	root := copyOfNewProject(t, "configdata")
 	for _, step := range []AddOptions{{Kind: "access", Name: "player", Service: "game"}, {Kind: "protocol", Name: "Hello", Group: "game", Handler: "player"}} {
 		if _, err := Add(root, step); err != nil {

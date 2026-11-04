@@ -34,8 +34,8 @@ Nest 执行池命名为 short/long/io，不保留 fast/slow 旧名；配置、AP
 GOWORK=off go build ./...
 GOWORK=off go vet ./...
 GOWORK=off go test -count=1 .
-# 改动包的定向测试；跨包行为修改再跑全仓
-GOWORK=off go test ./...
+# 改动包的定向测试；跨包行为修改再跑全仓（-timeout 30m：codegen/internal/roost 单包负载高时接近 10 分钟缺省上限，与 pretag 相同）
+GOWORK=off go test -timeout 30m ./...
 # 并发相关改动在支持 race 的环境运行受影响包
 GOWORK=off go test -race ./framework/nest ./framework/sync/entitysync
 # 改生成器或模板：重生成，确认无漂移，再编译真实消费工程
@@ -104,6 +104,8 @@ scripts/release.sh vX.Y.Z [--min-core]
 
 pretag 除 build / vet / tidy / `go test ./...` / 生成物漂移 / C# SDK 外，还并行跑十个玩法纵切脚本的缺省模式（`scripts/test-<玩法>-generated.sh`，离线）、MMORPG 多地图 TCP `scripts/test-mmorpg-scenes.sh`（离线，单跑约 25 秒）与三个离线生成器专项（`test-heartbeat-generated.sh`、`test-level-generated.sh`、`test-sync-modes-generated.sh`，维护者 2026-10-31 决定纳入）；并发数 `ROOST_PRETAG_GENRE_JOBS`，缺省 4，本机 45～125 秒，视机器负载（2026-10-31 同机负载 4～6 时九个 50 秒、十二个 63 秒，三个专项单跑约 25 / 4 / 4 秒），失败时打印该脚本日志路径并保留生成工程。新增 `scripts/test-*-generated.sh`，或玩法接入手册（`docs/framework/*-INTEGRATION.md`）点名的其他 `scripts/test-*.sh`，要加进 pretag 的列表，或在根包 `TestGeneratedScriptsAreInPretag` 的豁免表里写明由谁跑。
 
+pretag 的全量测试是 `GOWORK=off go test -timeout 30m ./...`（2026-11-04 起）。`go test` 缺省每个测试二进制 10 分钟；最慢的 `codegen/internal/roost` 耗时几乎全在文件系统调用上，随机器 I/O 负载变化很大：当天单包改前 377～784s、改后 299～444s（1 分钟负载 10～25），其他任务占满磁盘时到过约 815s。超时只会在真卡住时触发，此时先看 `uptime` 与 `ps` 有没有别的重负载，再看卡在哪条用例（`-json` 输出里最后一个 `run` 没有 `pass` 的）；不要把超时调回缺省。
+
 验证只跑一次：pretag（已在脚本里）就是发版的验收线，不重复功能合并时已做过的验证（运行时专项、故障矩阵、性能样本在改动合入时按影响范围做，结果写进对应 CHANGELOG 条目或 NOTES）。不能把没跑的检查写成通过。
 
 当前版本号只有一个来源：CHANGELOG 最上面的已归档段（与 `framework-release.yaml` 的 `release:` 相同），入口文档不再写死“当前版本 vX.Y.Z”，发版也就不必改它们。
@@ -147,6 +149,7 @@ WAL目录使用单写持久卷，不同实例不得共享同一写目录。Mongo
 - 写真实 Redis 的用例用 `infra/storage/redis/redistest` 取唯一前缀（`redistest.Prefix`）或为自己生成的唯一前缀注册清理（`redistest.Cleanup`），在建存储 / Mod 之前调用，用例结束时删掉键名含该前缀的键（单机与 Cluster 都按主节点 SCAN，不 FLUSH）；不要只删自己列举的几个键名。CI `service-redis` 末尾要求 Redis 为空，漏清理会在那里变红；固定键名（前缀不含本次运行唯一的部分）即使清理了也不允许，那一步发现不了，复核方法见[外部验证](EXTERNAL-VERIFICATION.md#服务层-redis-组指向共享隔离环境的-redis2026-10-15)。
 - 服务层 Redis 组（CI `service-redis` job 的包与变量组）**允许**指向共享隔离环境的 Redis（2026-10-15 核对：无固定键名，跑完键名清单不变）。条件：只设 CI 的五个 Redis 门变量，unset 其余 `ROOST_DATAENGINE_IT_*` / `ROOST_IT_*`（否则 `wiring/dataengine` 的真实依赖与故障用例会跟着在共享环境上跑）；确认 `remote-acceptance.lock` 不存在；前后只读核对 `DBSIZE` / `--scan` 键名清单，不 FLUSH。共享 Redis 不为空时，判据是“本次运行前后键名清单不变”，不是“跑完为空”。
 - 生成工程里需要真实依赖的用例（`codegen/internal/entity/testdata` 下复制进生成工程运行的目录、`demo/` 的 `*_test.go.tmpl`、把用例写进新生成工程的仓库内测试）`go test ./...` 看不到；新增时让 `dataengine-env.sh test` 调用的生成工程脚本（`scripts/test-{dataengine,remote,demo}-generated.sh`）以 `-run` 选中它，或在根包 `integration_coverage_test.go` 的表里写明专门入口，否则 `TestGeneratedProjectRealDependencyTestsHaveAnEntry` 变红。
+- `codegen/internal/roost` 是全仓最慢的包（生成、同步、编译整个 game-demo；本机耗时几乎全在文件系统调用上，负载高时单包 6～14 分钟）。新用例：要的是“NewProject 生成出来的那棵树”时用 `copyOfNewProject` 取已登记夹具的私有副本（新形状登记进 `projectFixtureOptions`，自动受等价性用例核对），不要再对同一组参数 `NewProject`；只读写自己 `t.TempDir` 的用例加 `t.Parallel()`；给生成工程里的 `go` 子进程传环境用 `exec.Cmd.Env`（`generatedProjectGoEnv`），不用 `t.Setenv`（它改整个进程，用了的用例不能并行）。必须串行的是设包级钩子（`syncProjectBeforeCommit`、`buildVersion`、`stagePhaseHook`）、`t.Setenv`、发信号或观察子进程工作目录的用例，规则与现状写在 `project_fixture_test.go` 头注释。
 - 先红后绿：每个修复先有一条在修前代码上确实变红、且红在承诺本身上的回归，修前失败文本原样记录；不在“恰好能过的规模”上宣布验收。
 
 ### 生成代码

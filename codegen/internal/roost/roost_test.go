@@ -148,6 +148,7 @@ func TestNewProjectSyncPreservesBusinessFiles(t *testing.T) {
 }
 
 func TestAddProtocolAllocatesIDAndCheckDetectsDuplicate(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"protocol"}})
 	if err != nil {
@@ -189,6 +190,7 @@ func TestLoadManifestRejectsUnknownFields(t *testing.T) {
 }
 
 func TestUpgradeCanReadVersionsBelowCurrentFloor(t *testing.T) {
+	t.Parallel()
 	root := copyOfNewProject(t, "bare")
 	manifestPath := filepath.Join(root, ManifestName)
 	raw, err := os.ReadFile(manifestPath)
@@ -257,6 +259,7 @@ func TestProductionConfigRejectsDevelopmentValues(t *testing.T) {
 }
 
 func TestConfigCheckAllValidatesEveryDeclaredService(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Services: []string{"game", "gate"}, Mods: []string{"configdata"}})
 	if err != nil {
@@ -300,6 +303,7 @@ func configCheckExitCode(err error) int {
 // --service、--file（按文件名认出服务）与 --all 三种入口一致；修前 config check 只看 sid 与生产禁用值，
 // 拼错的 mongo.urii 报 "config is valid"，进程启动时静默退回默认地址。
 func TestConfigCheckRejectsMisspelledFrameworkKeys(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata", "nest"}})
 	if err != nil {
@@ -336,6 +340,7 @@ func TestConfigCheckRejectsMisspelledFrameworkKeys(t *testing.T) {
 // roost.yaml 读不出来时 config check 不能把文件报成通过：声明检查需要它，静默跳过就是放过拼错的键。
 // 修前 --service / --file 打印一行 "keys not checked" 后报 "config is valid"，还提示“到有 roost.yaml 的工程里跑”。
 func TestConfigCheckFailsWhenManifestDoesNotLoad(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata", "nest"}})
 	if err != nil {
@@ -364,6 +369,7 @@ func TestConfigCheckFailsWhenManifestDoesNotLoad(t *testing.T) {
 // 框架段里由业务服务声明的键（例如认证器读的 player_access.tcp.dev_auth）不算拼错：静态检查发现可疑键后
 // 按进程的业务声明复核。
 func TestConfigFileDeclarationsAcceptBusinessKeysInFrameworkSections(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata", "nest"}})
 	if err != nil {
@@ -397,6 +403,7 @@ func TestConfigFileDeclarationsAcceptBusinessKeysInFrameworkSections(t *testing.
 }
 
 func TestAddCamelCaseProtocolUsesSnakeFileAndPascalTypes(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"protocol"}})
 	if err != nil {
@@ -500,6 +507,7 @@ func TestBeginnerEntityComponentAndDAOFlowWiresAggregate(t *testing.T) {
 }
 
 func TestAddComponentInfersOnlyEntityAndRejectsAmbiguity(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"entity"}})
 	if err != nil {
@@ -1392,6 +1400,7 @@ func TestRelatedBusinessFilesPreserveConcurrentEntityEdit(t *testing.T) {
 }
 
 func TestAddRejectsTraversalInRelatedNames(t *testing.T) {
+	t.Parallel()
 	root := copyOfNewProject(t, "bare")
 	if _, err := Add(root, AddOptions{Kind: "component", Name: "Profile", Entity: `..\..\outside`}); err == nil || !strings.Contains(err.Error(), "invalid Entity name") {
 		t.Fatalf("traversal Entity error = %v", err)
@@ -1454,6 +1463,7 @@ func TestGuardedRollbackDoesNotOverwriteConcurrentEdit(t *testing.T) {
 }
 
 func TestAddSkillUsesStablePackageAndNeutralDefinition(t *testing.T) {
+	t.Parallel()
 	root := copyOfNewProject(t, "bare")
 	paths, err := Add(root, AddOptions{Kind: "skill", Name: "Fireball"})
 	if err != nil {
@@ -1484,6 +1494,7 @@ func TestAddSkillUsesStablePackageAndNeutralDefinition(t *testing.T) {
 // 加载路径（CompileAll → skill.Parse / skill.Compile）编译全部 JSON，写坏的定义在 go test 就失败，而不是等到业务
 // 自己接上编译或上线后第一次施放。已有 catalog.go、还没有测试的工程，下一次 add skill 补上测试。
 func TestAddSkillGeneratesACatalogTest(t *testing.T) {
+	t.Parallel()
 	root := copyOfNewProject(t, "bare")
 	paths, err := Add(root, AddOptions{Kind: "skill", Name: "Fireball"})
 	if err != nil {
@@ -1530,6 +1541,7 @@ func TestSkillCatalogTestRejectsABrokenDefinition(t *testing.T) {
 	if testing.Short() {
 		t.Skip("compiles a generated project")
 	}
+	t.Parallel()
 	root := copyOfNewProject(t, "bare")
 	if _, err := Add(root, AddOptions{Kind: "skill", Name: "Fireball"}); err != nil {
 		t.Fatal(err)
@@ -1667,6 +1679,7 @@ func TestAddSagaGeneratesValidatedDefinition(t *testing.T) {
 }
 
 func TestAddSagaRequiresSteps(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"saga"}})
 	if err != nil {
@@ -2242,6 +2255,7 @@ func TestSyncRefusesUnmanagedMakefile(t *testing.T) {
 }
 
 func TestDiffIgnoresResolvedUserOwnedGoMod(t *testing.T) {
+	t.Parallel()
 	root := copyOfNewProject(t, "bare")
 	goModPath := filepath.Join(root, "go.mod")
 	goMod, err := os.ReadFile(goModPath)

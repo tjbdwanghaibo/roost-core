@@ -210,8 +210,7 @@ func TestSelfSyncGeneratedProjectOverRealTCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GOWORK", "off")
-	t.Setenv("GOFLAGS", "-mod=mod")
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "planet")
 	if _, _, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: root, Mods: []string{"configdata", "mongo", "nats", "dataengine", "nest"}}); err != nil {
 		t.Fatal(err)
@@ -421,6 +420,7 @@ func (controller *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.E
 		for _, args := range [][]string{{"build", "./..."}, {"vet", "./..."}, {"test", "-race", "-count=1", "-run", "^(TestSelfSyncEndToEnd|TestSelfSyncFrameLimitFollowsTheAccessLimit)$", "-v", "./internal/bootstrap"}} {
 			command := exec.CommandContext(ctx, "go", args...)
 			command.Dir = root
+			command.Env = generatedProjectGoEnv()
 			out, err := command.CombinedOutput()
 			if err != nil {
 				t.Fatalf("%s: go %s: %v\n%s", label, strings.Join(args, " "), err, out)
@@ -458,6 +458,7 @@ func (controller *Controller) HandleEnterGame(ctx *playeraccess.Context, _ *pb.E
 	}
 	command := exec.Command("go", "build", "./...")
 	command.Dir = root
+	command.Env = generatedProjectGoEnv()
 	if out, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("back to the default packer: go build: %v\n%s", err, out)
 	}

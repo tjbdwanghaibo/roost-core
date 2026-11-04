@@ -159,6 +159,7 @@ func opsPortOf(t *testing.T, root, service string) int {
 }
 
 func TestGeneratedShutdownTimeoutFollowsEachServicesMods(t *testing.T) {
+	t.Parallel()
 	target := newGameDemo(t)
 	counts, declares := bootstrapModCounts(t, target)
 	// The real game service of the demo: 23 service Mods (etcd among them, for the
@@ -185,6 +186,7 @@ func TestGeneratedShutdownTimeoutFollowsEachServicesMods(t *testing.T) {
 
 // A service with few Mods gets a smaller window than the demo's game service.
 func TestGeneratedShutdownTimeoutIsSmallerForAServiceWithFewMods(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	if _, _, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target,
 		Services: []string{"gate"}, Mods: []string{"configdata"}, Features: []string{"config"}}); err != nil {
@@ -598,6 +600,7 @@ func TestOneSyncConvergesAfterAServiceGainsAMod(t *testing.T) {
 // what the generator would render now. Templates raised by hand to 120s: the
 // OK line says 120s.
 func TestDoctorShowsTheGracePeriodTheTemplatesOnDiskSet(t *testing.T) {
+	t.Parallel()
 	root := copyOfNewProject(t, "configdata")
 	graces := deployedGraces(t, root, "game")
 	generated := graces["k8s"]
@@ -856,6 +859,7 @@ func TestDoctorReportsTheAppsFallbackWhenItCannotCoverTheMods(t *testing.T) {
 // dataengine.shutdown_timeout 0s runs on kit/dataengine's 30s: a total that
 // covers "0s declared" but not the real 30s is a WARN.
 func TestDoctorJudgesANonPositiveDataEngineBudgetAsItsFallback(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	dev := gameConfigs[0]
 	plan := gamePlan(t, root)
@@ -897,6 +901,7 @@ func TestDoctorAdviceFollowsTheConfiguredDataEngineBudget(t *testing.T) {
 
 // Configs that set different dataengine budgets get the advice each needs.
 func TestDoctorAdvicePerFileWhenTheConfigsDiffer(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	prod, secret := gameConfigs[1], gameConfigs[2]
 	plan := gamePlan(t, root)
@@ -997,6 +1002,7 @@ func TestDoctorNamesTheFileAndKeyOfAnExampleItCannotParse(t *testing.T) {
 // A real shortfall next to a parse failure keeps its advice, and the advice
 // follows the shortfall rather than the file the doctor could not read.
 func TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	prod := "configs/service/config.game.prod.example.yaml"
 	secret := "deploy/k8s/base/secret.game.example.yaml"
@@ -1022,6 +1028,7 @@ func TestDoctorKeepsTheAdviceForARealShortfallNextToAParseFailure(t *testing.T) 
 // The dev config is what deploy/dev runs directly; an invalid duration there
 // stays a FAIL (unchanged by this fix).
 func TestDoctorStillFailsOnAnInvalidDurationInTheDevConfig(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	dev := "configs/service/config.game.yaml"
 	setShutdownTotal(t, root, dev, "soon")
@@ -1049,6 +1056,7 @@ func setPlayerTCPShutdownTimeout(t *testing.T, root, rel, value string) {
 
 // The generated game service's window counts the player TCP Mod's 10s.
 func TestGeneratedShutdownCountsThePlayerTCPStopBudget(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	plan := gamePlan(t, root)
 	if plan.playerTCP != 1 || plan.dataEngine != 1 || plan.mirror != 1 || plan.declared != generatedDataEngineShutdownTimeout+generatedPlayerTCPShutdownTimeout+generatedMirrorShutdownTimeout {
@@ -1078,6 +1086,7 @@ var playerTCPConfigs = gameConfigs[:2]
 // doctor reads the listener's budget from the config: raised to 30s, the
 // generated total no longer covers it, and the advice counts the 30s.
 func TestDoctorCountsTheConfiguredPlayerTCPStopBudget(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	plan := gamePlan(t, root)
 	for _, rel := range playerTCPConfigs {
@@ -1103,6 +1112,7 @@ func TestDoctorCountsTheConfiguredPlayerTCPStopBudget(t *testing.T) {
 // a WARN naming the file and key in an example (like any value the doctor
 // cannot use), never a budget.
 func TestDoctorRejectsANegativePlayerTCPShutdownTimeout(t *testing.T) {
+	t.Parallel()
 	root := newGameDemo(t)
 	dev, prod := gameConfigs[0], gameConfigs[1]
 	setPlayerTCPShutdownTimeout(t, root, prod, "-1s")

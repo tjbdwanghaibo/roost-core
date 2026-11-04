@@ -338,10 +338,10 @@ publisher, _ := syncstream.NewPublisherWithOptions(bus, syncstream.PublisherOpti
 ### 11.2 完整测试入口
 
 ```sh
-# 仓库根，GOWORK=off
-go test ./... -count=1
+# 仓库根，GOWORK=off；全仓带 -timeout 30m（codegen/internal/roost 单包负载高时接近 10 分钟缺省上限）
+go test ./... -count=1 -timeout 30m
 go vet ./...
-go test -race ./... -count=1
+go test -race ./... -count=1 -timeout 30m
 
 # 基准
 go test ./framework/sync/syncstream -run '^$' -bench . -benchmem
