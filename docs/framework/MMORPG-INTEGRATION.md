@@ -40,7 +40,7 @@ Player 当前**静态绑定 game sid**：跨服玩法由 Remote / Saga 协作，
 | 背包、装备与属性 | Player 组件、嵌套 DAO、Nest rollback | [EquipItem](../../demo/game/handler/equip_item.go.tmpl)：背包扣新装备、换装、归还旧装备、刷新属性同事务 | 格数、绑定、强化与数值；派生属性不能成为另一份权威 |
 | 技能与配置 | `gameplay/skill`、configdata、不可变 Program | [技能指南](guide/08-skill.md)、[配置指南](guide/07-config.md)；Parse → Compile → Host → Runtime | Host 的权威副作用、配置版本、跨 tick 状态与恢复；Skill Runtime 不自动进入 Nest undo |
 | 匹配、聊天与战斗房间 | match / chat / session、Lockstep | game-demo 正式机器人执行聊天、组队匹配、房间战斗和状态同步（`cmd/loadtest`） | MMORPG 世界状态同步不必采用 Lockstep；按具体玩法选择 |
-| 公会与跨服读取 | 实体服务（Remote 托管 `service=`、路由 RPC）、Mirror、Saga | demo 的 alliance 服务与 game 侧公会（[WALKTHROUGH](../../demo/WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror)）；[Remote 指南](guide/05-remote-mirror.md) | 公会权限、命名、成员与跨服观察政策；Mirror 是快照，不授予写权 |
+| 公会与跨服读取 | 实体服务（Remote 托管 `service=`、路由 RPC）、Mirror、Saga | demo 的 alliance 服务与 game 侧公会（[WALKTHROUGH](../../demo/WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror)）；[Remote 指南](guide/05-remote-mirror.md)；真实进程端到端 `scripts/test-alliance-e2e.sh`（私有依赖，手动跑，见 [联盟服务方案 §7 阶段 5](../maintenance/FEATURE-2026-11-04-alliance-service.md#7-实施记录)） | 公会权限、命名、成员与跨服观察政策；Mirror 是快照，不授予写权 |
 | 跨 sid 赠礼与补偿 | Saga 原生步骤、事务性 effect、邮件 | `roost add saga -native` / `roost add effect`；[demo 赠礼 saga](../../demo/saga/gift_item/)；§13 的双 sid 脚本 | 收件人路由、补偿、人工收口与重试期限；Saga 不是跨服瞬时原子交易 |
 | 邮件、支付、活动与排行 | mail / platform / activity / rank、持久业务账本 | demo 真实端点与 `scripts/test-demo-generated.sh` | 订单与领奖身份、赛季、补发政策；服务的有限去重环不替代长期资产账本 |
 | 重启、搬服和观测 | 文件 WAL、Mongo、readiness、排空、schema、静态 sid 单实例 | [搬服](PLAYER-MIGRATION.md)、[schema](SCHEMA-MIGRATION.md)、[观测](OBSERVABILITY.md) | 部署容量、恢复目标、监控接收与运维；不删除 WAL 绕过恢复错误 |

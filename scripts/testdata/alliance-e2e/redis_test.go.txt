@@ -1,0 +1,152 @@
+package e2e
+
+// Redis 不可用（方案 §5“Redis 不可用时的退化”、KNOWN-LIMITS 路由边界 ②）：两个 alliance 实例与调用方都经 toxiproxy 的
+// redis 代理连 Redis，断开代理（Redis 本身不动）期间路由 RPC 回退读所有权记录，量一次 Mongo 点读放大；断开期间把路由
+// 登记删掉（模拟 Redis 丢键），恢复后续期答“不存在”触发重新登记。最后断开超过单实例锁的续期期限，记下进程的处理
+// （单实例锁同样连这个 Redis：App 失锁即 fail-stop，见 framework/app 单实例锁）。
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	coreremote "github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
+)
+
+// infoRound 用新建的客户端（空路由缓存）依次读每个联盟 rounds 遍，返回调用数、失败数、所有权点读数与延迟。
+func (s *suite) infoRound(lookup lookupResolver, owners *countingOwners, alliances []int64, d time.Duration) (calls, failed int, reads int64, lat []time.Duration) {
+	before := owners.reads.Load()
+	end := time.Now().Add(d)
+	for time.Now().Before(end) {
+		for _, id := range alliances {
+			client := s.client(lookup, 3*time.Second)
+			start := time.Now()
+			_, err := client.Info(s.ctx, target(s.t, id))
+			lat = append(lat, time.Since(start))
+			calls++
+			if err != nil {
+				failed++
+			}
+		}
+	}
+	sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
+	return calls, failed, owners.reads.Load() - before, lat
+}
+
+func TestAllianceE2ERedisOutage(t *testing.T) {
+	s := newSuite(t, 15*time.Minute)
+	if s.proxiedRedis == "" {
+		t.Skip("ROOST_DATAENGINE_IT_REDIS_PROXIED_ADDR not set")
+	}
+	s.toxiproxyRedis(true)
+	t.Cleanup(func() { s.toxiproxyRedis(true) })
+	opts := procOptions{redis: s.proxiedRedis}
+	a := s.start("alliance-3000", "alliance", 3000, opts)
+	b := s.start("alliance-3001", "alliance", 3001, opts)
+	_, proxiedLookup, owners := s.newLookup(s.proxiedRedis)
+	resolver := lookupResolver{proxiedLookup}
+	client := s.client(resolver, 3*time.Second)
+	leader := int64(800_000)
+	var alliances []int64
+	alliances = append(alliances, s.foundOn(client, 3000, 4, &leader)...)
+	alliances = append(alliances, s.foundOn(client, 3001, 4, &leader)...)
+
+	calls, failed, reads, lat := s.infoRound(resolver, owners, alliances, 3*time.Second)
+	t.Logf("REDIS up: %d info calls (fresh route cache each), %d failed, %d ownership reads (%.2f per call), p50 %v p99 %v",
+		calls, failed, reads, float64(reads)/float64(calls), percentile(lat, .5), percentile(lat, .99))
+	if failed != 0 || reads != 0 {
+		t.Fatalf("with Redis up: %d failed, %d ownership reads; want 0 and 0", failed, reads)
+	}
+
+	// 短断开（6s，短于单实例锁的失锁期限）：路由 RPC 照常答，每次缓存未命中多一次 Mongo 点读。
+	s.toxiproxyRedis(false)
+	outage := time.Now()
+	calls, failed, reads, lat = s.infoRound(resolver, owners, alliances, 4*time.Second)
+	t.Logf("REDIS down: %d info calls, %d failed, %d ownership reads (%.2f per call), p50 %v p99 %v",
+		calls, failed, reads, float64(reads)/float64(calls), percentile(lat, .5), percentile(lat, .99))
+	if failed != 0 || reads != int64(calls) {
+		t.Fatalf("with Redis down: %d of %d failed, %d ownership reads; want 0 failures and one read per call", failed, calls, reads)
+	}
+	// 断开期间跨实例入会（守卫在 3000、联盟在 3001，实例之间的路由 RPC 也回退所有权记录）。
+	player := int64(810_000)
+	if err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
+		_, err := client.Join(ctx, fmt.Sprintf("j-%d", player), player, 1000, target(t, alliances[0]))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
+		_, err := client.Leave(ctx, fmt.Sprintf("l-%d", player), player, 1000, target(t, alliances[0]))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
+		_, err := client.Join(ctx, fmt.Sprintf("j2-%d", player), player, 1000, target(t, alliances[4]))
+		return err
+	}); err != nil {
+		t.Fatalf("cross-instance join with Redis down: %v", err)
+	}
+	// 断开期间丢键：直接在 Redis 上删掉全部联盟的登记。
+	var keys []string
+	for _, id := range alliances {
+		keys = append(keys, coreremote.RouteKey(s.prefix, target(t, id)))
+	}
+	s.redis.Del(s.ctx, keys...)
+	t.Logf("REDIS outage so far %v", time.Since(outage).Round(time.Millisecond))
+	s.toxiproxyRedis(true)
+	restored := time.Now()
+	if !s.alive(a) || !s.alive(b) {
+		t.Fatalf("an instance stopped during a %v Redis outage", restored.Sub(outage).Round(time.Millisecond))
+	}
+	s.eventually("the renewal finds the lost registrations and registers them again", 40*time.Second, func() (bool, string) {
+		missing := 0
+		for _, id := range alliances {
+			if s.routeValue(target(t, id)) == "" {
+				missing++
+			}
+		}
+		return missing == 0, fmt.Sprintf("%d of %d missing", missing, len(alliances))
+	})
+	t.Logf("REDIS registrations back %v after Redis returned", time.Since(restored).Round(time.Millisecond))
+	g, err := client.Guard(s.ctx, guard(t, player))
+	if err != nil || g.State.AllianceID != alliances[4] || g.State.PendingRequestID != "" {
+		t.Fatalf("guard after the outage: %+v %v", g.State, err)
+	}
+
+	// 长断开：超过单实例锁的续期期限（ttl 15s、guard 5s），记下实例怎么处理。
+	s.toxiproxyRedis(false)
+	long := time.Now()
+	var stoppedAfter []string
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) && (s.alive(a) || s.alive(b)) {
+		time.Sleep(200 * time.Millisecond)
+	}
+	for _, p := range []*proc{a, b} {
+		if s.alive(p) {
+			stoppedAfter = append(stoppedAfter, fmt.Sprintf("%s still running", p.name))
+		} else {
+			stoppedAfter = append(stoppedAfter, fmt.Sprintf("%s exited (%v)", p.name, p.exitErr))
+		}
+	}
+	t.Logf("REDIS long outage: after %v: %s", time.Since(long).Round(time.Second), strings.Join(stoppedAfter, "; "))
+	s.toxiproxyRedis(true)
+	for _, p := range []*proc{a, b} {
+		if !s.alive(p) {
+			s.launch(p)
+			s.waitReady(p, 2*time.Minute)
+		}
+	}
+	for _, id := range alliances {
+		err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
+			_, err := s.client(resolver, 3*time.Second).Info(ctx, target(t, id))
+			return err
+		})
+		if err != nil {
+			t.Fatalf("alliance %d after the long outage: %v", id, err)
+		}
+	}
+}
