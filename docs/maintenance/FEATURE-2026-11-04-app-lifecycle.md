@@ -1,6 +1,6 @@
 # 功能设计：App 生命周期——停机先关外部输入（2026-11-04）
 
-**状态：方案已写、按推荐实施中（维护者 2026-11-04：“同一个问题：App 的生命周期管理”，要求整体设计、补齐欠缺；方案里需拍板的点按推荐先做，列在“待决定”）。** 实施与验证记录在第 8 节。
+**状态：已按推荐实施（维护者 2026-11-04：“同一个问题：App 的生命周期管理”，要求整体设计、补齐欠缺；方案里需拍板的点按推荐先做，列在“待决定”）。** 实施与验证记录在第 8 节。
 
 基线 `afd61beb`（origin/main）。codebase-memory 本轮连不上，第 1 节的现状全部按当前源码与 `rg` 核对，引用写到文件:行（行号按基线）。
 
@@ -168,4 +168,25 @@ func AddIngress(r *Registry, name string, closer IngressCloser) error
 
 ## 8. 实施记录
 
-（实施后补）
+每个缺口先在基线上写出变红的回归（红的文本原样记在对应提交信息里），再改到绿；每个提交单独可编译。
+
+| 提交 | 缺口 | 改动 | 修前变红的回归 |
+| --- | --- | --- | --- |
+| `aa55e801` | 4 | `refuseTask` 答 `errcode.CodeRetryable` | `infra/network/bus` `TestRefusedRPCIsAnsweredAtOnceWhenTheDispatcherIsNotRunning` / `…WhenTheQueueIsFull`：答复是 `server error (code 1)`（`CodeInternal`） |
+| `4f2a0708` | 2、3、5 | App 停机第一步 `closeIngress`（`ingress.go`）；`(*bus.Bus).CloseIngress`（撤全部 RPC 方法 + 排空模块消息）；`NatsMod.CloseIngress` | `framework/app` `TestRequestsAfterShutdownBeginsNeverReachTheHandler`（`Service.Shutdown` 期间的请求答 ok、存储 Mod 停止时答 `internal: store stopped`）、`TestWaitingForInFlightRequestsIsNotChargedToOneModsShare`（owner Mod 份额耗尽，`mod owner stop: context deadline exceeded`，后面的 Mod 没停）；`TestCloseIngressClosesEveryInputOfTheBus`、`TestNatsModClosesTheBusInputsButKeepsSending`（接口不存在） |
+| `dde90b7e` | 7 | `ops.Server.CloseIngress`，之后 `/admin/execute` 答 503 | `infra/observe/ops` `TestCloseIngressRefusesAdminCommandsAndWaitsForTheRunningOne`（接口不存在） |
+| `f97df246` | 6 | `SubscribeEffects` 与 `Steps.Start` 登记 `AddIngress`，关闭时 Drain 并等订阅关闭；`CloseRegisteredIngress` | `wiring/dataengine` `TestSubscribeEffectsIsClosedWithTheAppsInputs`、`wiring/saga` `TestStepsAreClosedWithTheAppsInputs`：App 关完输入时 `drains=0` |
+| `9c7c8c5f` | 1 | `runStartupStep` 交还没等到的步骤；`stopInterruptedStartup` / `cleanupAfterStartupFailure` | `framework/app` `TestSignalDuringServiceInitStopsInOrderAndAnswersInFlightRequests`（信号后立即返回，在途请求没答、没 `Service.Shutdown`、没停 Mod）、`TestStartupTimeoutClosesTheInputsWithoutWaitingForTheStep`（超时后的请求答 ok）、`TestSignalDuringModStartStopsWhatStartedOnceTheStartReturns`（Mod Start 还在跑就返回） |
+| `109d673c` | D4 | 删掉 `roost add rpc` 两种 owner Mod 与 game-demo alliance 模板里的 `StopWithContext` 撤下代码；生成工程回归改名 `TestGeneratedRPCOwnerHandlersAreWithdrawnWhenTheAppStops`（先 `CloseIngress` 再停 Mod） | （删除既有代码，回归改为按 App 的顺序驱动） |
+
+**真实进程**（私有依赖 `scripts/mirror-local.sh`：三节点 NATS、Mongo 副本集、Redis；自起 etcd；偏移改用 33500，因为 33000 的 NATS / Redis 端口被本机别的环境占着）。用当前生成器重新生成 game-demo（修前取基线 `afd61beb`，它已带 `4947c62a` 的 owner Mod 撤下；修后取本分支），两个 alliance 实例（sid 3000、3001）或两个 mail 实例，持续打请求时对其中一个发 SIGINT，客户端按 `servicerpc.Classify` 与传输错误分类计数。alliance 的“Init 中”场景给 `Service.Init` 加了冒烟专用的 4s 睡眠（模拟 Init 里建消费者的几秒，补丁只在冒烟工程里），owner Mod Start 已登记 handler，睡眠期间 SIGINT。客户端请求期限 3s，NATS 地址是三个节点的列表（服务端与客户端各自随机连一个，会跨节点）。
+
+| 场景（次数） | 修前 | 修后 |
+| --- | --- | --- |
+| alliance 运行中停（15 / 15） | internal 0、超时 0；可重试 5～10 / 次 | internal 0；可重试 7～10 / 次；**15 次里 2 次超时**（一次 5 个 Found、一次 1 个 Info） |
+| alliance Init 中停（5 / 5） | **每次 12 个 Info 超时**（12 个并发请求全部挂到进程退出）；进程 9～95ms 就退出 | 超时 0、internal 0；每次 10～11 个可重试；进程等 Init 返回后按顺序停，0.5～4.5s 退出 |
+| mail 运行中停（5 / 5） | **internal 共 4 个（1 次）、超时共 6 个（3 次）** | internal 0、超时 0；可重试 2～39 / 次 |
+
+no responders（发往已停实例 sid 的路由读）两边都有，是停下之后的正常答复，不计入。修后 alliance 运行中的 2 次超时属于 KNOWN-LIMITS“App 停机关输入后的边界”①（集群里退订兴趣的传播窗口）：日志里关输入分别在 32ms / 236ms 内完成、之后没有错误，按现象推断是退订之后经别的节点转来的请求被丢（没有逐个请求核对服务端，属推断）；修前同一场景的撤下走的是同一个 `WithdrawRpc`，上一轮（`4947c62a`）测过 22 次里 1 次。15 对 15 次的样本区分不了两边的这个比例。证据（分类结果、每次的进程日志、冒烟源码）在本轮的临时目录，不进仓库。
+
+**验收**：gofmt；`GOWORK=off go build ./...`、改动包 `go vet`；glsvet（`./framework/nest ./framework/entity ./framework/dataengine/engine ./framework/sync/entitysync ./framework/app ./infra/network/bus ./wiring/nats`）；改动包 `-race`；根包；`check-doc-anchors.py`；全量 `go test ./...`；`scripts/test-demo-generated.sh`、`scripts/test-remote-generated.sh`、`scripts/test-genres-generated.py`。

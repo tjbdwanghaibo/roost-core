@@ -17,6 +17,8 @@
 1. 重复 Mod 名启动拒绝；依赖与 capability 区分。
 2. 失锁、不可判定持久结果触发统一 fail-stop。
 3. Shutdown 超时不能提前释放仍被使用的依赖。
+4. 停机第一步关全部外部输入并排空（`ingress.go` 的 `closeIngress`，在 `service.stopping` 之后、`Service.Shutdown` 与 Mod 停止之前；没排空不往下走）。新增外部输入时实现 `IngressCloser` 或在建立处 `AddIngress`，不在 Mod 的 Stop 里各自撤；`CloseIngress` 必须幂等、只停接收、ctx 错误可重试。
+5. 启动被信号打断走 `stopInterruptedStartup`（关输入 → 在停机预算内等那一步 → Shutdown → 停已 Provide 的 Mod → 放锁）；启动失败走 `cleanupAfterStartupFailure`（同一顺序）。`runStartupStep` 没等到的步骤以 `startupStep` 交还，不能当作已结束。
 
 ## 3. 并发、失败与恢复的修改检查
 
@@ -31,7 +33,7 @@
 
 ### app
 
-15 个实现文件、8 个测试文件。
+16 个实现文件、9 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -41,6 +43,7 @@
 | [config_schema.go](../../../framework/app/config_schema.go) | `ConfigSchema`、`ModConfigSchema`、`ModConfigCrossChecker`、`ServiceIdentity` |
 | [config_validation.go](../../../framework/app/config_validation.go) | 函数/方法或内部实现；见源码 |
 | [config_values.go](../../../framework/app/config_values.go) | 函数/方法或内部实现；见源码 |
+| [ingress.go](../../../framework/app/ingress.go) | `IngressCloser`、`IngressFunc`（`AddIngress`、`CloseRegisteredIngress`） |
 | [log_frame.go](../../../framework/app/log_frame.go) | `LogFrame` |
 | [manager.go](../../../framework/app/manager.go) | `IManager`、`IManagerStopperWithContext`、`ManagerDependencyProvider` |
 | [mod.go](../../../framework/app/mod.go) | `Mod`、`ModStopperWithContext`、`ModStopBudgetProvider`、`ModDependencyProvider`、`ModOptionalDependencyProvider` |
@@ -100,6 +103,7 @@
 - [business_clock_contract_test.go](../../../framework/app/business_clock_contract_test.go)：`TestBusinessClockFollowsTheConfiguredOffset`、`TestOffsetMovesBusinessTimeButNotTheSingletonLease`、`TestBusinessTimeMovingBackRefusesToStart`、`TestBusinessTimeMayMoveForwardOrStay`、`TestTheHighWaterMarkAdvancesWhileRunning`；其余 4 项见文件
 - [config_contract_test.go](../../../framework/app/config_contract_test.go)：`TestCheckConfigRequiresAnExistingFile`、`TestCheckConfigAcceptsExistingDefaultFileWithoutStartingService`、`TestSortModsRejectsNameAlreadyOwnedBySharedMod`、`TestConfigIntAcceptsWholeNumbersOnly`、`TestCheckConfigReportsEveryModsErrorsAtOnce`；其余 15 项见文件
 - [example_test.go](../../../framework/app/example_test.go)
+- [ingress_test.go](../../../framework/app/ingress_test.go)：`TestRequestsAfterShutdownBeginsNeverReachTheHandler`、`TestWaitingForInFlightRequestsIsNotChargedToOneModsShare`、`TestInputsThatDoNotDrainKeepTheServiceAndTheMods`、`TestAddIngressIsClosedBeforeServiceShutdown`、`TestSignalDuringServiceInitStopsInOrderAndAnswersInFlightRequests`、`TestStartupTimeoutClosesTheInputsWithoutWaitingForTheStep`；`app_test.go` 的 `TestSignalDuringModStartStopsWhatStartedOnceTheStartReturns`
 - [mod_test.go](../../../framework/app/mod_test.go)：`TestSortModsOrdersPresentOptionalDependencies`、`TestSortModsIgnoresAbsentOptionalDependencies`、`TestSortModsDetectsOptionalDependencyCycle`、`TestSingleModValidation`、`TestSingleModExecuteFailsBeforeInit`；其余 2 项见文件
 - [singleton_identity_test.go](../../../framework/app/singleton_identity_test.go)：`TestSingletonIdentityChecksTheCurrentToken`、`TestSingletonIdentityCapabilityUsesTheSameHeldLock`、`TestSingletonIncarnationIsTheHeldLocksIdentity`
 - [singleton_test.go](../../../framework/app/singleton_test.go)：`TestSingletonWaitsForTheHolderBeforeAnyModInit`、`TestSingletonGivesUpAtStartupWaitWithoutTakingTheKey`、`TestSingletonTakesOverAfterTheHolderExpires`、`TestSingletonReportsAnUnavailableStoreAtStartupWait`、`TestSingletonClaimsItsOwnValueAfterALostAcquireReply`；其余 21 项见文件

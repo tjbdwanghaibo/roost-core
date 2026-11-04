@@ -28,7 +28,20 @@ RuntimeFailure 是进程级不能继续安全写入的信号；失败回调包�
 
 发起关闭 → 在调用方 context 内等待真实排空 → 排空后释放资源。发起关闭幂等；等待超时返回 context 错误，对象与底层资源保留供继续等待。不能把关闭 channel 当成所有回调退出，也不能因等待超时提前释放单实例锁。
 
-Service.Shutdown 先于 Mod 的逆序停止；因此业务停机过程中某些 listener 仍可能存在，拒绝新业务由准入门控制。依赖未排空时，不继续释放它依赖的更底层 Mod。容器终止宽限期应覆盖 Service、所有 Mod 预算和锁释放时间。
+停机顺序（`shutdown.total_timeout` 一个窗口）：发布 `service.stopping`（ops 撤销就绪）→ **关全部外部输入并排空** → `Service.Shutdown` → 逆序停服务专属 Mod、再停共享 Mod → 释放单实例锁 → 发布 `service.stopped`。依赖未排空时，不继续释放它依赖的更底层 Mod。容器终止宽限期应覆盖关输入、Service、所有 Mod 预算和锁释放时间。
+
+### 4.1 停机第一步：关外部输入
+
+不变量：**任何外部输入，在它用到的依赖停止之前，已经关闭准入并排空。** 关闭之后到达的请求得到确定的“没执行、可重试”（`errcode.CodeRetryable`）或 no responders，关闭之前已经接受的答完再往下走。App 统一做，模块与生成模板不各自实现（[方案](../../maintenance/FEATURE-2026-11-04-app-lifecycle.md)）：
+
+- 拥有外部输入的 Mod / Service 实现 `app.IngressCloser`（`CloseIngress(ctx)`：关准入、幂等，在 ctx 内等已接受的处理完；ctx 先结束返回 ctx 错误、可再调；只停“接收”，出向能力留到它的 Stop）。运行中才建立的输入（`Service.Init` 里订阅的消费者）经 `app.AddIngress(registry, name, closer)` 登记；第一步开始之后再登记被拒。
+- App 在 `service.stopping` 之后、`Service.Shutdown` 与任何 Mod 停止之前**并发**调用全部 `CloseIngress`（已 Start 的 Mod、Init 已返回的 Service、Registry 登记的），在同一个停机预算内等它们返回。任何一个没排空（ctx 错误、到期不返回、panic）按停机不完整处理：不调 `Shutdown`、不停 Mod、不放锁。等在途的时间花在总预算里，不占某个 Mod 的停机份额。
+- 框架里已经接上的输入：总线（nats Mod → `Bus.CloseIngress`：全部已注册 RPC 方法撤下、模块消息不再接收，出向发送照常到 Bus 停止）、ops 的 `/admin/execute`（之后答 503 “service stopping”，健康 / 就绪 / 指标照常）、`kitdataengine.SubscribeEffects` 建的 effect 消费者与 `kitsaga.Steps` 的步骤消费者（Drain 并等在途）。所以 owner Mod、生成的独立进程 `Server`、内置服务的 Mod 都不用自己撤 handler。
+- 依赖序已经保证的输入不在第一步：玩家 TCP、网关、实体定时器的 Mod 依赖它们用到的 Mod，逆序停止时先停。业务在 `Service.Init` 里直接用 `IJetStream.Subscribe` 建的消费者不自动登记，由业务 `Shutdown` 负责，或自己 `AddIngress`。
+
+### 4.2 启动中收到停机信号与启动失败
+
+启动中（某个 Mod 的 Start、`Service.Init` 还没返回）收到信号，走同一套有序停机、只停已经开始的部分：停机预算开始计时 → 关已启动部分的输入（在途请求答完，之后的答“没执行”）→ 在预算内等正在跑的那一步返回（Mod 的 Init / Start 与 `Service.Init` 不收 ctx，只能等）→ 它返回了就算已启动 → `Service.Shutdown`（Init 已返回时）→ 逆序停已 Provide 的 Mod → 放锁。那一步在预算内不返回，保留依赖与锁返回。`startup.timeout` 到期（不是信号）只关输入、不等那个已经超时的步骤，保留依赖与锁返回。启动失败（某一步返回错误、启动检查点发现 fail-stop）同样先关输入，再 `Service.Shutdown`、停 Mod。
 
 ## 5. 配置与观测
 
