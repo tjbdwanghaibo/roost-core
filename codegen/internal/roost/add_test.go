@@ -490,9 +490,9 @@ func TestAddRPCEntityServiceScaffoldsTheWriteContract(t *testing.T) {
 	}
 }
 
-// //roost:rpc shard= 的槽位表（阶段 1 的 servicerpc.SlotTableConfig，键 <service_type>.slots / .shards）：调用方
-// 必须配置，所有写了它的服务取值必须相同（slots 是整数，用不了 shared tag），doctor 的 rpc-slots 项核对。
-func TestDoctorChecksTheSlotTableOfAShardedRPC(t *testing.T) {
+// //roost:rpc shard=（槽位表路由）按 2026-11-04 路由决定移除：写了它的接口在生成期报错并指向 //roost:rpc route，
+// 不再生成槽位表客户端，doctor 也没有 rpc-slots 项。
+func TestShardMarkerIsRefusedAtGeneration(t *testing.T) {
 	t.Parallel()
 	_, root, err := NewProject(NewOptions{
 		Name: "planet", Module: "example.com/planet", Out: filepath.Join(t.TempDir(), "planet"),
@@ -504,72 +504,14 @@ func TestDoctorChecksTheSlotTableOfAShardedRPC(t *testing.T) {
 	if _, err := Add(root, AddOptions{Kind: "rpc", Name: "Alliance", Service: "alliance", EntityService: true}); err != nil {
 		t.Fatal(err)
 	}
-	m, err := LoadManifest(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	game := m.Services["game"]
-	game.UsesRpcs = []string{"alliance"}
-	m.Services["game"] = game
-	raw, err := m.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ManifestName), raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := SyncProject(root); err != nil {
-		t.Fatal(err)
-	}
-	if m, err = LoadManifest(root); err != nil {
-		t.Fatal(err)
-	}
-	if items := checkSlotTables(root, m); len(items) != 0 {
-		t.Fatalf("an rpc without shard= methods must not be checked: %+v", items)
-	}
 	iface := filepath.Join(root, "internal", "rpc", "alliance", "alliance.go")
 	source := readProjectFile(t, root, "internal/rpc/alliance/alliance.go")
 	sharded := strings.Replace(source, "\tApply(ctx", "\t//roost:rpc shard=target\n\tApply(ctx", 1)
 	if err := os.WriteFile(iface, []byte(sharded), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
-		t.Fatalf("generate with shard=: %v", err)
-	}
-	items := checkSlotTables(root, m)
-	if len(items) != 1 || items[0].Status != StatusFail || !strings.Contains(items[0].Detail, "configs/service/config.game.yaml") || !strings.Contains(items[0].Detail, "alliance.slots") {
-		t.Fatalf("a caller without the slot table = %+v; want one FAIL naming the game config and alliance.slots", items)
-	}
-	appendYAML := func(file, body string) {
-		path := filepath.Join(root, "configs", "service", "config."+file+".yaml")
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, append(raw, []byte(body)...), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	appendYAML("game", "\nalliance:\n  slots: 256\n  shards: [\"3000:0-255\"]\n")
-	appendYAML("game.prod.example", "\nalliance:\n  slots: 256\n  shards: [\"3000:0-255\"]\n")
-	if items := checkSlotTables(root, m); len(items) != 1 || items[0].Status != StatusOK {
-		t.Fatalf("after the caller configures the table = %+v; want OK", items)
-	}
-	appendYAML("alliance", "\nalliance:\n  slots: 256\n  shards: [\"3000:0-127\", \"3001:128-255\"]\n")
-	if items := checkSlotTables(root, m); len(items) != 1 || items[0].Status != StatusFail || !strings.Contains(items[0].Detail, "alliance.shards") {
-		t.Fatalf("owner and caller disagree on the table = %+v; want FAIL naming alliance.shards", items)
-	}
-	if testing.Short() {
-		return
-	}
-	useLocalRoostCore(t, root)
-	for _, action := range []string{"build", "vet"} {
-		check := exec.Command("go", action, "./...")
-		check.Dir = root
-		check.Env = append(os.Environ(), "GOWORK=off")
-		if output, err := check.CombinedOutput(); err != nil {
-			t.Fatalf("go %s with a sharded rpc: %v\n%s", action, err, output)
-		}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err == nil || !strings.Contains(err.Error(), "改用 //roost:rpc route") {
+		t.Fatalf("generate with shard= = %v; want it refused, pointing at //roost:rpc route", err)
 	}
 }
 

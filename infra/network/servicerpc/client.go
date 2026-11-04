@@ -35,6 +35,8 @@ type BusClient struct {
 	nextServer  atomic.Uint64
 	picker      DiscoveryPicker
 	transport   Transport
+	// routes 是路由 RPC 的路由缓存（CallRoutedChecked），每个客户端一份。
+	routes *routeCache
 }
 
 type DiscoveryPicker interface {
@@ -108,7 +110,8 @@ func NewBusClient(b bus.IBus, serviceType string, timeout time.Duration, opts ..
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	c := &BusClient{bus: b, serviceType: serviceType, timeout: timeout, picker: RoundRobinPicker{}, transport: TransportLightweight}
+	c := &BusClient{bus: b, serviceType: serviceType, timeout: timeout, picker: RoundRobinPicker{}, transport: TransportLightweight,
+		routes: newRouteCache(RouteCacheTTL, RouteCacheCapacity)}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(c)

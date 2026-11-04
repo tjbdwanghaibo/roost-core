@@ -59,8 +59,7 @@ func Error(err error) (int32, string) { return errcode.ClientError(err) }
 // request more than once). callerID and callerSID come from the caller's
 // authenticated session, never from client-supplied fields. A write answers
 // the entity's new state version; show the result from the reply, and read
-// mirrors afterwards no older than that version. A method whose calls must
-// reach the instance owning the target's slot carries //roost:rpc shard=<id>.
+// mirrors afterwards no older than that version.
 //
 //roost:rpc service_type=%[1]s capability=rpc.%[1]s
 type %[2]s interface {

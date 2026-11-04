@@ -108,42 +108,6 @@ func buildService(facts pkgFacts, pkgName, path, name string, options map[string
 			"— so rename the existing one",
 			where, emitted, emitted, kind, pkgName, emitted)
 	}
-	// shard= 按槽位表路由（联盟服务方案 §2.10 第 2 项）：参数必须是这个方法的 int64 参数（编码了槽位的实体 ID，
-	// 或玩家 ID），槽位由它对槽位总数取模得到。与 affinity= 是两种互斥的选实例方式。
-	for index := range service.Methods {
-		method := &service.Methods[index]
-		if method.Shard == "" {
-			continue
-		}
-		if method.Affinity != "" {
-			return Service{}, fmt.Errorf("%s: method %s declares both shard= and affinity=; a call goes either to the slot table's owner or to an affinity instance, not both",
-				where, method.Name)
-		}
-		var found *Field
-		for i := range method.Params {
-			if method.Params[i].Name == method.Shard {
-				found = &method.Params[i]
-				break
-			}
-		}
-		if found == nil {
-			return Service{}, fmt.Errorf("%s: method %s declares shard=%s but has no parameter %s; the slot is read off an argument at call time",
-				where, method.Name, method.Shard, method.Shard)
-		}
-		if found.Type != "int64" {
-			return Service{}, fmt.Errorf("%s: method %s declares shard=%s, but %s is %s; the shard key is an int64 entity or player id whose slot is id modulo the slot count",
-				where, method.Name, method.Shard, found.Name, found.Type)
-		}
-	}
-	// 一个服务的方法要么按亲和选实例、要么按槽位表：两种客户端的构造参数不同（发现 vs 槽位表），混在一起没有使用者。
-	hasShard, hasAffinity := false, false
-	for _, method := range service.Methods {
-		hasShard = hasShard || method.Shard != ""
-		hasAffinity = hasAffinity || method.Affinity != ""
-	}
-	if hasShard && hasAffinity {
-		return Service{}, fmt.Errorf("%s: %s mixes shard= and affinity= methods; a service routes by its slot table or by affinity, not both", where, service.Interface)
-	}
 	// Affinity is read off an argument at call time, so it has to name one.
 	//
 	// Two forms are accepted: a bare parameter, which must be a string, and
@@ -213,9 +177,6 @@ func emittedNames(service Service) []string {
 		if method.Affinity != "" && !slices.Contains(names, "AffinityMethods") {
 			names = append(names, "AffinityMethods")
 		}
-		if method.Shard != "" && !slices.Contains(names, "redirectSID") {
-			names = append(names, "redirectSID")
-		}
 		names = append(names,
 			"Method"+method.Name,
 			"rpc"+method.Name+"Request",
@@ -230,7 +191,10 @@ func buildMethod(index typeIndex, where string, item *ast.Field, funcType *ast.F
 	method := Method{Name: name, Doc: commentLines(item.Doc)}
 	if options, ok := interfaceMarker(item.Doc, item.Comment); ok {
 		method.Affinity = options["affinity"]
-		method.Shard = options["shard"]
+		if _, shard := options["shard"]; shard {
+			// 槽位表路由按 2026-11-04 路由决定移除（联盟服务方案 §2.7）：实体加载时在 Redis 登记路由，RPC 标为路由 RPC。
+			return Method{}, fmt.Errorf("%s: method %s: //roost:rpc shard= 已移除（槽位表路由，联盟服务方案 2026-11-04 路由决定），改用 //roost:rpc route", where, name)
+		}
 		if _, reliable := options["reliable"]; reliable {
 			return Method{}, fmt.Errorf("%s: method %s cannot select reliable per method; configure nats.rpc.transport=jetstream on both owner and client", where, name)
 		}

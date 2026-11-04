@@ -101,6 +101,9 @@ type Bus struct {
 
 	// subscriptions
 	subs []nats.ISubscription
+	// rpcQueueSubs 是每个轻量 RPC 方法的服务级队列组订阅（<prefix>.rpc.<svc>.<method>，队列 <svc>_rpc），
+	// LeaveRPCQueue 按方法退出时取出并退订；值为 nil 表示已经退出。受 lifeMu 保护。
+	rpcQueueSubs map[string]nats.ISubscription
 }
 
 // New creates a Bus instance. Call Start() to begin receiving messages.
@@ -694,7 +697,71 @@ func (b *Bus) subscribeLightweightRPCMethod(method string) ([]nats.ISubscription
 	}
 	subs := []nats.ISubscription{sub, instanceSub}
 	b.subs = append(b.subs, subs...)
+	if b.rpcQueueSubs == nil {
+		b.rpcQueueSubs = make(map[string]nats.ISubscription)
+	}
+	b.rpcQueueSubs[method] = sub
 	return subs, nil
+}
+
+// ErrRPCQueueLeaveUnsupported 表示这个总线的 RPC 传输不能按实例退出服务级队列组（JetStream RPC：服务级 consumer
+// 是全部实例共享的 durable，没有“本实例的那一份订阅”可退）。
+var ErrRPCQueueLeaveUnsupported = errors.New("bus: leaving an rpc queue group is only supported on the lightweight rpc transport")
+
+// RPCQueueLeaver 是 LeaveRPCQueue 的能力接口：业务从注册表拿到的是 IBus，用类型断言取它。
+type RPCQueueLeaver interface {
+	LeaveRPCQueue(method string) error
+}
+
+var _ RPCQueueLeaver = (*Bus)(nil)
+
+// LeaveRPCQueue 让本实例退出 method 的服务级队列组，是缩容的第一步（联盟服务方案 §2.7“缩容”）：之后不指定 sid 的
+// Call（生成客户端的缺省随机路由，创建类方法走它）只会落到别的实例；本 sid 的实例主题照常订阅，CallTo 本实例
+// （路由 RPC、改投）不受影响。退订之前已经投递到本实例的请求照常处理。
+//
+// 只支持轻量 RPC：JetStream RPC 返回 ErrRPCQueueLeaveUnsupported。method 必须已经用 HandleRpc 注册；
+// 重复调用返回 nil。退出后不能重新加入（重新加入要重启实例），停止中或已停止的总线返回错误。
+func (b *Bus) LeaveRPCQueue(method string) error {
+	if b == nil {
+		return fmt.Errorf("bus: nil bus")
+	}
+	if b.jetStreamRPCEnabled() {
+		return ErrRPCQueueLeaveUnsupported
+	}
+	b.mu.RLock()
+	_, registered := b.rpcHandlers[method]
+	b.mu.RUnlock()
+	if !registered {
+		return fmt.Errorf("bus: rpc method %s has no handler on this instance", method)
+	}
+	b.lifeMu.Lock()
+	if b.stopping || b.stopped {
+		b.lifeMu.Unlock()
+		return fmt.Errorf("bus: cannot leave an rpc queue group while stopping or stopped")
+	}
+	sub, subscribed := b.rpcQueueSubs[method]
+	if !subscribed || sub == nil {
+		// 已经退出（nil），或 HandleRpc 还没订阅完（没有条目）：前者幂等，后者没有可退的订阅。
+		b.lifeMu.Unlock()
+		if subscribed {
+			return nil
+		}
+		return fmt.Errorf("bus: rpc method %s has no queue group subscription", method)
+	}
+	b.rpcQueueSubs[method] = nil
+	// 从 b.subs 里拿掉：停止时不再退订它一次。
+	for i, owned := range b.subs {
+		if owned == sub {
+			b.subs = append(b.subs[:i], b.subs[i+1:]...)
+			break
+		}
+	}
+	b.lifeMu.Unlock()
+	if err := sub.Unsubscribe(); err != nil {
+		return fmt.Errorf("bus: leave rpc queue group %s: %w", method, err)
+	}
+	slog.Info("bus: left rpc queue group", "method", method, "svc", b.cfg.SvcType, "sid", b.cfg.Sid)
+	return nil
 }
 
 // --- Internal ---

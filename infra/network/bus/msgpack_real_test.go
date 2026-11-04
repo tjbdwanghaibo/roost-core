@@ -94,3 +94,71 @@ func TestRealMessagePackCoreRPCErrorAndAsyncBus(t *testing.T) {
 		t.Fatal("async message did not arrive")
 	}
 }
+
+// 缩容第一步在真实 NATS 上（联盟服务方案 §2.7）：实例 A 退出 Found 的队列组后，不指定 sid 的 Call 全部落到实例 B；
+// CallTo A 的实例主题照常由 A 处理。
+func TestRealLeaveRPCQueueStopsNewQueueRequestsReachingTheInstance(t *testing.T) {
+	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if url == "" {
+		t.Skip("private NATS URL not configured")
+	}
+	assembly, err := driver.Assemble(fnats.DefaultConfig(url), driver.ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(assembly.Client.Close)
+	prefix := fmt.Sprintf("roost.leave.%d", time.Now().UnixNano())
+	newBus := func(sid int32) *Bus {
+		b := New(assembly.Client, assembly.RPC, nil, Config{Sid: sid, SvcType: "alliance", Prefix: prefix, WorkerNum: 2, QueueCap: 64})
+		if err := b.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := b.StopWithContext(ctx); err != nil {
+				t.Error(err)
+			}
+		})
+		return b
+	}
+	a, b, caller := newBus(3000), newBus(3001), newBus(9000)
+	for _, server := range []*Bus{a, b} {
+		sid := server.cfg.Sid
+		if err := server.HandleRpc("Found", func(*RpcContext) (any, error) { return sid, nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := assembly.Client.FlushContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	served := func(calls int) map[int32]int {
+		counts := map[int32]int{}
+		for range calls {
+			var sid int32
+			if err := caller.Call(ctx, "alliance", "Found", struct{}{}, &sid); err != nil {
+				t.Fatal(err)
+			}
+			counts[sid]++
+		}
+		return counts
+	}
+	if before := served(64); before[3000] == 0 || before[3001] == 0 {
+		t.Fatalf("before leaving, the queue group served %v; want both instances", before)
+	}
+	if err := a.LeaveRPCQueue("Found"); err != nil {
+		t.Fatal(err)
+	}
+	if err := assembly.Client.FlushContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := served(64); after[3000] != 0 || after[3001] != 64 {
+		t.Fatalf("after 3000 left the queue group, Call was served %v; want all 64 by 3001", after)
+	}
+	var sid int32
+	if err := caller.CallTo(ctx, "alliance", 3000, "Found", struct{}{}, &sid); err != nil || sid != 3000 {
+		t.Fatalf("CallTo the instance that left = %d, %v; its instance subject must keep serving", sid, err)
+	}
+}

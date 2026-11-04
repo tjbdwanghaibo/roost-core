@@ -339,3 +339,58 @@ func TestRPCErrorResponseUsesCodeReasonEnvelope(t *testing.T) {
 		t.Fatalf("resp = %+v, want code/reason envelope", resp)
 	}
 }
+
+// 缩容第一步（联盟服务方案 §2.7）：LeaveRPCQueue 只退出这个方法的服务级队列组订阅，本 sid 的实例主题与别的方法照常；
+// 重复调用无操作；没注册的方法与 JetStream 传输明确拒绝。
+func TestLeaveRPCQueueDropsOnlyThatMethodsQueueSubscription(t *testing.T) {
+	client := &lifecycleClient{}
+	b := New(client, nil, nil, Config{Sid: 3000, SvcType: "alliance"})
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = b.StopWithContext(context.Background()) })
+	for _, method := range []string{"Found", "Join"} {
+		if err := b.HandleRpc(method, func(*RpcContext) (any, error) { return struct{}{}, nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	find := func(subject, queue string) *lifecycleSub {
+		for _, sub := range client.subs {
+			if sub.subject == subject && sub.queue == queue {
+				return sub
+			}
+		}
+		t.Fatalf("no subscription %s queue=%q", subject, queue)
+		return nil
+	}
+	foundQueue := find("roost.rpc.alliance.Found", "alliance_rpc")
+	foundInstance := find(b.subject.RpcInstance("alliance", 3000, "Found"), "")
+	joinQueue := find("roost.rpc.alliance.Join", "alliance_rpc")
+
+	if err := b.LeaveRPCQueue("Found"); err != nil {
+		t.Fatalf("LeaveRPCQueue: %v", err)
+	}
+	if foundQueue.valid || foundQueue.unsubscribe != 1 {
+		t.Fatalf("Found queue subscription valid=%v unsubscribed=%d; want it left the queue group once", foundQueue.valid, foundQueue.unsubscribe)
+	}
+	if !foundInstance.valid || !joinQueue.valid {
+		t.Fatalf("instance subject valid=%v, Join queue valid=%v; only the Found queue group may be left", foundInstance.valid, joinQueue.valid)
+	}
+	for _, sub := range b.subs {
+		if sub == fnats.ISubscription(foundQueue) {
+			t.Fatal("the left subscription is still owned by the bus; Stop would unsubscribe it again")
+		}
+	}
+	if err := b.LeaveRPCQueue("Found"); err != nil || foundQueue.unsubscribe != 1 {
+		t.Fatalf("second LeaveRPCQueue err=%v unsubscribed=%d; want an idempotent no-op", err, foundQueue.unsubscribe)
+	}
+	if err := b.LeaveRPCQueue("Missing"); err == nil {
+		t.Fatal("leaving a method without a handler must be refused")
+	}
+
+	js := New(&lifecycleClient{}, nil, nil, Config{Sid: 3001, SvcType: "alliance"})
+	js.jsRPC = &jetStreamRPC{js: &captureJetStreamRPC{}}
+	if err := js.LeaveRPCQueue("Found"); !errors.Is(err, ErrRPCQueueLeaveUnsupported) {
+		t.Fatalf("JetStream transport err=%v; want ErrRPCQueueLeaveUnsupported", err)
+	}
+}
