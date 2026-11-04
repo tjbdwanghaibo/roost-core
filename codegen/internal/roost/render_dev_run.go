@@ -342,10 +342,19 @@ const (
 	secondGameClientPort = 7001
 )
 
-// firstBusinessService is the process deploy/dev/second-game.sh runs a second
-// copy of: the project's own service, not a hosted framework one. A project
-// with only framework services has nothing to run twice.
+// firstBusinessService is the game: the process deploy/dev/second-game.sh runs
+// a second copy of, whose sids the activity groups file lists. It is the
+// business service players connect to (access.player.service) when the
+// project declares one — a project may add other business services, and one
+// named before the game (game-demo's alliance service) must not take its
+// place — otherwise the first business service by name. A project with only
+// framework services has nothing to run twice.
 func firstBusinessService(m Manifest) string {
+	if access, ok := m.Access["player"]; ok {
+		if _, declared := m.Services[access.Service]; declared && !m.isFrameworkService(access.Service) {
+			return access.Service
+		}
+	}
 	for _, name := range sortedServiceNames(m) {
 		if !m.isFrameworkService(name) {
 			return name
