@@ -230,7 +230,7 @@ go test ./game/skills/          # TestSkillCatalogCompiles 编译全部定义
 		Summary: "配置并自动补齐 Wiring Mod 依赖",
 		Usage: `roost add mod <name> -service <service>
 roost project new <name> -module <go-module> -mods <comma-separated-mods>`,
-		Configuration: `可用 Mod：lock、ops、statslog、configdata、etcd、redis、mongo、nats、sync、remote_entity、dataengine、nest、heartbeat、saga。Data Engine 是唯一持久化引擎；添加 nest 或 saga 时自动补齐 dataengine、mongo 和 nats。`,
+		Configuration: `可用 Mod：lock、ops、statslog、configdata、etcd、redis、mongo、nats、sync、remote_entity、remote_mirror（只读进程的 Remote 快照，与 remote_entity 互斥）、dataengine、nest、heartbeat、saga。Data Engine 是唯一持久化引擎；添加 nest 或 saga 时自动补齐 dataengine、mongo 和 nats。`,
 		Example: `roost add mod saga -service game
 # roost.yaml
 services:

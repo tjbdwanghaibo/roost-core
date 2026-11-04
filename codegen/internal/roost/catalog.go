@@ -96,6 +96,14 @@ var modCatalog = map[string]modSpec{
 	"remote_entity": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity", Alias: "kitremoteentity", Depends: []string{"redis", "mongo", "syncbus"},
 	},
+	// remote_mirror 是只读进程的 Remote 快照装配（wiring/remoteentity.RemoteMirrorMod）：读别的服务拥有的 Remote 实体
+	// （//roost:mirror DTO，MirrorSource(registry)），没有写 Manager、Mongo 原子 backend 与分布式锁，所以这个进程
+	// 没有能力写 Remote 实体。依赖 redis（L2）、syncbus（推送）、mongo（只读权威 loader）。与 remote_entity 互斥
+	// （validateManifest）：owner 进程的 RemoteEntityMod 自己发布同一个只读能力。
+	"remote_mirror": {
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity", Alias: "kitremoteentity", Constructor: "kitremoteentity.NewRemoteMirrorMod(0)",
+		Depends: []string{"redis", "mongo", "syncbus"},
+	},
 	"dataengine": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/dataengine", Alias: "kitdataengine", Depends: []string{"mongo", "nats"},
 	},

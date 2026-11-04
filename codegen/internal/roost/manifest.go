@@ -320,8 +320,12 @@ func (m Manifest) Validate() error {
 		if !validName(name) {
 			joined = errors.Join(joined, fmt.Errorf("invalid service name %q", name))
 		}
-		if _, err := resolveMods(service.Mods); err != nil {
+		if resolved, err := resolveMods(service.Mods); err != nil {
 			joined = errors.Join(joined, fmt.Errorf("service %s: %w", name, err))
+		} else if contains(resolved, "remote_mirror") && contains(resolved, "remote_entity") {
+			// 只读 Mirror 与写 Remote 的 Mod 发布同一个只读能力（remote_entity.mirror）；owner 进程用 RemoteEntityMod 的。
+			joined = errors.Join(joined, fmt.Errorf("service %s: remote_mirror (read-only) and remote_entity (owner) cannot both be assembled; "+
+				"a process that writes Remote entities reads snapshots through remote_entity, drop remote_mirror", name))
 		}
 		shared := make(map[string]bool, len(m.SharedMods))
 		for _, mod := range m.SharedMods {

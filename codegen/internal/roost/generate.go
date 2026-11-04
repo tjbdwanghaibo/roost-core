@@ -711,9 +711,19 @@ func remoteRuntimeHosts(root string, m Manifest) (missing, partial string, err e
 	if err != nil {
 		return "", "", err
 	}
+	// 声明了归属服务（service=）的 kind 只由归属服务写，归属服务带 remote_entity 由 validateEntityOwners 检查；
+	// 别的服务（例如只装 remote_mirror 的只读进程）没有 remote_entity 是预期形状，不再提示。
+	owned, err := projectEntityOwners(root)
+	if err != nil {
+		return "", "", err
+	}
+	ownedNames := map[string]bool{}
+	for _, item := range owned {
+		ownedNames[item.Entity] = true
+	}
 	var managed []string
 	for _, kind := range kinds {
-		if kind.managed {
+		if kind.managed && !ownedNames[kind.name] {
 			managed = append(managed, kind.name)
 		}
 	}

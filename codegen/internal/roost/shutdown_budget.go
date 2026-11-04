@@ -37,6 +37,10 @@ import (
 const (
 	// generatedModStopFloor mirrors app.undeclaredModStopFloor.
 	generatedModStopFloor = 3 * time.Second
+	// generatedMirrorShutdownTimeout is remote_entity.mirror.shutdown_timeout as
+	// the generated config writes it: the stop budget wiring/remoteentity's
+	// RemoteMirrorMod declares (catalog Mod remote_mirror).
+	generatedMirrorShutdownTimeout = 5 * time.Second
 	// generatedDataEngineShutdownTimeout is dataengine.shutdown_timeout as the
 	// generated config writes it (catalog.go): the stop budget wiring/dataengine
 	// declares to the App.
@@ -135,6 +139,11 @@ func serviceShutdownPlan(m Manifest, service string) serviceShutdown {
 			plan.dataEngine++
 			plan.declared += generatedDataEngineShutdownTimeout
 		}
+	}
+	// 只读 Mirror Mod 声明 remote_entity.mirror.shutdown_timeout（生成配置写 5s）。
+	if contains(own, "remote_mirror") {
+		plan.declaring++
+		plan.declared += generatedMirrorShutdownTimeout
 	}
 	// Registered by serviceModConstructors under the same condition.
 	if serviceOwnsPlayerTCP(m, service) {

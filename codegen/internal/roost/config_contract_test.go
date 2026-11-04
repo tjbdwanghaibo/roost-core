@@ -44,11 +44,19 @@ func fullConfigManifest(t *testing.T) Manifest {
 	m := gameTemplateManifest(t)
 	game := m.Services["game"]
 	for name := range modCatalog {
-		if _, declared := kitConfigSchemas[name]; declared && !contains(game.Mods, name) && !contains(m.SharedMods, name) {
+		// remote_mirror 与 remote_entity 互斥：只读 Mirror 装在单独的 reader 服务里。
+		if _, declared := kitConfigSchemas[name]; declared && name != "remote_mirror" && !contains(game.Mods, name) && !contains(m.SharedMods, name) {
 			game.Mods = append(game.Mods, name)
 		}
 	}
 	m.Services["game"] = game
+	block := 0
+	for _, spec := range m.Services {
+		if spec.PortBlock != nil {
+			block = max(block, *spec.PortBlock+1)
+		}
+	}
+	m.Services["reader"] = ServiceSpec{Mods: []string{"remote_mirror"}, PortBlock: &block}
 	m.Access = map[string]AccessSpec{"player": {Service: "game", Transports: []string{"tcp"}}}
 	if err := m.Validate(); err != nil {
 		t.Fatal(err)
