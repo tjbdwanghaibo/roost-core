@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
 )
@@ -16,10 +18,35 @@ const PlayerTCPType = "player-tcp"
 // frame and its acknowledgement.
 const AuthMessageID uint32 = 0
 
-// AuthPacket is what an AuthProvider returns: the token the server hands to
-// the application authenticator. Its sequence is assigned on the wire.
+// AuthPacket 是 AuthProvider 返回的握手首包：票据外面套一层连接代号信封（wire.EncodeAuth），代号取
+// NextConnectionGeneration，所以每次连接（包括重连）都要重新调用一次，不能缓存复用同一个包。服务端在鉴权前剥掉
+// 信封，业务 authenticator 只看到票据原文；同一 SessionID 的两条连接落在不同 Gate 实例时，Game 按代号认出迟到
+// 完成的旧握手（GATEWAY §3）。序列号在写出时分配。票据为空或以 0x00 开头时原样发出，由服务端拒绝。
 func AuthPacket(token string) *Packet {
-	return &Packet{MsgID: AuthMessageID, Payload: []byte(token)}
+	payload, err := wire.EncodeAuth(token, NextConnectionGeneration())
+	if err != nil {
+		payload = []byte(token)
+	}
+	return &Packet{MsgID: AuthMessageID, Payload: payload}
+}
+
+// lastConnectionGeneration 是本进程最近一次发出的连接代号。
+var lastConnectionGeneration atomic.Uint64
+
+// NextConnectionGeneration 返回一个新的连接代号：max(上一个 + 1, 当前 Unix 纳秒)。
+//
+// 进程内严格递增，与时钟无关（时钟回拨时继续 +1）。进程重启后不需要持久状态也仍然更大：重启至少耗时毫秒级，
+// 新进程的第一个代号取自当时的时钟，大于旧进程发出过的任何代号——除非旧进程每纳秒发起一次以上连接（不可能），
+// 或重启前后时钟被往回拨过。往回拨的后果有界：新进程的握手只在与旧进程仍在途的握手重叠时可能被当成旧的拒掉一次，
+// 重连即恢复；已确认的旧绑定挡不住之后到达的新连接（bindingTable.finish）。
+func NextConnectionGeneration() uint64 {
+	for {
+		last := lastConnectionGeneration.Load()
+		next := max(last+1, uint64(time.Now().UnixNano()))
+		if lastConnectionGeneration.CompareAndSwap(last, next) {
+			return next
+		}
+	}
 }
 
 func DialPlayerTCP(ctx context.Context, cfg Config) (Conn, error) {

@@ -10,7 +10,7 @@
 
 没有 PB 定义就没有业务 Robot 协议表。生成工程通过 build 不代表已经接好网络；不能为了“每类都有 Robot”发一个无业务效果的 ping。玩法定义、鉴权身份与服务器端点先具备，再补请求、响应和最终数据断言。
 
-`transport.PlayerTCPType`（`player-tcp`）同时服务嵌入 TCP 和独立 Gate，使用公共 RS v2。握手、通知、请求共用递增线序列；推送按 FlagPush 区分，不能被相同序号的请求吞掉。完整写出后应答超时释放关联，迟到响应丢弃；发送阶段超时关闭连接，阻止半帧复用及阻塞写积累；序列耗尽或关联表达到 4096 时关闭连接，不无限增长。demo 的 playertcp 仅委托这个实现。
+`transport.PlayerTCPType`（`player-tcp`）同时服务嵌入 TCP 和独立 Gate，使用公共 RS v2。握手首包由 `transport.AuthPacket(token)` 构造，每次调用（每次连接、包括重连）带一个新的连接代号（`NextConnectionGeneration`，信封格式见 [client/README](../../client/README.md#鉴权首包的连接代号)），供 Game 在跨 Gate 时认出迟到完成的旧握手（[GATEWAY §3](GATEWAY.md#3-绑定与请求结果)），AuthProvider 不要缓存复用同一个包。握手、通知、请求共用递增线序列；推送按 FlagPush 区分，不能被相同序号的请求吞掉。完整写出后应答超时释放关联，迟到响应丢弃；发送阶段超时关闭连接，阻止半帧复用及阻塞写积累；序列耗尽或关联表达到 4096 时关闭连接，不无限增长。demo 的 playertcp 仅委托这个实现。
 
 ## 三种测试口径
 

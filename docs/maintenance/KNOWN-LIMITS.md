@@ -336,11 +336,13 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 ### 同一 SessionID 的重连
 
-嵌入 TCP 的 `TCPServer.registerSession` 与独立 Gate 模式下 Game 的绑定表（同一 Gate 实例内）都按连接被接受的先后定同一 SessionID 的新旧（2026-11-04，回归 `TestALoginThatFinishesLateDoesNotDisplaceANewerConnectionOfTheSameSession`、`TestALateBindOfAnOlderConnectionDoesNotRetireTheNewerBindingOfTheSameSession`）：迟到完成的旧登录 / 旧 Bind 被拒，不关闭新连接。契约见 [GATEWAY §3](../framework/GATEWAY.md#3-绑定与请求结果)。剩余边界：
+嵌入 TCP 的 `TCPServer.registerSession` 与独立 Gate 模式下 Game 的绑定表（同一 Gate 实例内）都按连接被接受的先后定同一 SessionID 的新旧（2026-11-04，回归 `TestALoginThatFinishesLateDoesNotDisplaceANewerConnectionOfTheSameSession`、`TestALateBindOfAnOlderConnectionDoesNotRetireTheNewerBindingOfTheSameSession`）：迟到完成的旧登录 / 旧 Bind 被拒，不关闭新连接。跨 Gate 实例按客户端在认证帧里带的连接代号定（2026-11-05，回归 `TestAcrossGatesALateBindWithAnOlderConnectionGenerationDoesNotRetireTheNewerBinding`、真实 NATS 的 `TestRealAcrossGatesALateOlderBindDoesNotDisplaceTheNewerConnection`）。契约见 [GATEWAY §3](../framework/GATEWAY.md#3-绑定与请求结果)。剩余边界：
 
-- **跨 Gate 实例仍按 Bind 完成先后替换**：同一 SessionID 的两条连接落在不同 Gate 实例时，两边的接受序号没有可比较的先后，Game 让后完成的 Bind 胜出、退役先完成的那条并通知它的 Gate 关闭（同一 SID 的 Gate 重启前后也是不同实例：旧代际的连接已随进程消失，新代际的 Bind 照常替换残留绑定，这是想要的结果）。客户端放弃一条 Gate 上的握手、立即连到另一个 Gate 重连，而旧握手的 Bind 迟到完成时，新连接仍会被断开（结果与修前相同）。要消除需要跨 Gate 可比较的顺序（例如客户端在票据 / 认证帧里带单调的连接代号），属于协议与客户端的方案选择，未排期。
+- **跨 Gate 时没带连接代号的客户端仍按 Bind 完成先后替换**：C# / C++ 运行库（`client/dotnet`、`client/cpp`、Unity）目前发票据原文、不带代号，任一方没带代号时 Game 让后完成的 Bind 胜出——客户端放弃一个 Gate 上的握手、立即连到另一个 Gate，而旧握手的 Bind 迟到完成时，新连接仍被断开（与修前相同）。Go 的 robot / 生成工程 loadtest 已发送代号。给这些运行库加信封（[client/README](../../client/README.md#鉴权首包的连接代号)）未排期。
+- **带了代号也识别不出的迟到 Bind**：Game 只拒“到达 Game 早于新绑定被确认”的旧 Bind。旧连接的 Gate 在发出 Bind 之前就慢了（Gate 本地鉴权、`ResolveGame`、身份核对、NATS 积压），旧 Bind 在新绑定确认之后才到达时按后完成者胜出处理，新连接被断开（客户端重连一次恢复）。这条条件是为了让代号锁不死会话（论证见 GATEWAY §3），没有测量这种情形的实际概率。
+- **客户端重启前后时钟往回拨**：Go 客户端的代号取 `max(上一个 + 1, 当前 Unix 纳秒)`，重启后若时钟被往回拨，新进程的代号可能小于旧进程仍在途的握手；两者在 Game 上重叠、且旧的先确认时，新连接的 Bind 被拒一次，重连即恢复（读代码推断，未写用例；绑定表的“确认之后到达照常替换”有 `TestBindingTableOrdersASessionAcrossGatesByConnectionGeneration`）。
 - **“接受先后”只代表同一客户端的重连意图**：两台设备用同一 SessionID 交错登录时，留下的是接受得更晚的那条；SessionID 本来就标识一次登录，框架不另做裁决。
-- **Robot 的 `connect` 发出认证帧不等 ack**：连接动作返回不代表握手完成，紧接着的 `Reconnect` 让两条连接的握手在服务端交错；修复后这种交错不再踢掉新连接，Robot 本身未改。
+- **Robot 的 `connect` 发出认证帧不等 ack**：连接动作返回不代表握手完成，紧接着的 `Reconnect` 让两条连接的握手在服务端交错；修复后这种交错不再踢掉新连接（同一 Gate 内靠接受序号，跨 Gate 靠 Robot 自 2026-11-05 起在认证帧里带的连接代号），Robot 不等 ack 的行为本身未改。
 
 ### 广播与 AOI
 

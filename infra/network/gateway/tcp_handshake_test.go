@@ -194,3 +194,102 @@ func TestTCPCloseInterruptsBlockedWriteAndPushSequencesFollowStream(t *testing.T
 	}
 	producers.Wait()
 }
+
+// 认证帧的连接代号信封（wire.EncodeAuth）：服务端在鉴权前剥掉，Authenticator 与 BeforeACK 只看到票据原文，代号
+// 记在连接上（ConnectionSession.Generation）；票据原文没有代号（0）。以 0x00 开头却不是完整信封的首包按坏帧拒绝，
+// 不交给 Authenticator，也不回 ack。
+func TestTCPAuthEnvelopeCarriesTheConnectionGenerationAndHidesItFromAuthentication(t *testing.T) {
+	tokens := make(chan string, 8)
+	generations := make(chan uint64, 8)
+	config := DefaultTCPConfig()
+	config.Addr = "127.0.0.1:0"
+	server, err := NewTCPServer(config, emptyTCPDispatch, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (Principal, error) {
+		tokens <- token
+		return Principal{PlayerID: 7, SessionID: "session-" + token, ServerID: 2}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.ConnectHandshake(handshakeTestHooks{
+		before: func(_ context.Context, session ConnectionSession, ticket string) error {
+			tokens <- "before:" + ticket
+			generations <- session.Generation()
+			return nil
+		},
+		after: func(context.Context, ConnectionSession) error { return nil },
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := server.Stop(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	handshake := func(payload []byte) (acked bool) {
+		t.Helper()
+		connection, err := net.Dial("tcp", server.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer connection.Close()
+		if err := wire.Write(connection, []*wire.Packet{{Seq: 1, Payload: payload}}, 8192); err != nil {
+			t.Fatal(err)
+		}
+		_ = connection.SetReadDeadline(time.Now().Add(time.Second))
+		ack, err := wire.Read(connection, 8192)
+		return err == nil && ack.MsgID == 0 && ack.Seq == 1
+	}
+	expect := func(want ...string) {
+		t.Helper()
+		for _, token := range want {
+			select {
+			case got := <-tokens:
+				if got != token {
+					t.Fatalf("authentication saw %q, want %q", got, token)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("authentication never saw %q", token)
+			}
+		}
+	}
+
+	envelope, err := wire.EncodeAuth("ticket", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !handshake(envelope) {
+		t.Fatal("the enveloped authentication was not acknowledged")
+	}
+	expect("ticket", "before:ticket")
+	if got := <-generations; got != 42 {
+		t.Fatalf("connection generation = %d, want 42", got)
+	}
+	if !handshake([]byte("plain")) {
+		t.Fatal("the plain ticket was not acknowledged")
+	}
+	expect("plain", "before:plain")
+	if got := <-generations; got != 0 {
+		t.Fatalf("connection generation without an envelope = %d, want 0", got)
+	}
+
+	for name, payload := range map[string][]byte{
+		"wrong tag":       append([]byte{0, 'X', 0, 0, 0, 0, 0, 0, 0, 42}, "ticket"...),
+		"zero generation": append([]byte{0, 'G', 0, 0, 0, 0, 0, 0, 0, 0}, "ticket"...),
+		"no ticket":       {0, 'G', 0, 0, 0, 0, 0, 0, 0, 42},
+		"truncated":       {0, 'G', 0, 0},
+	} {
+		if handshake(payload) {
+			t.Errorf("%s: a malformed envelope was acknowledged", name)
+		}
+	}
+	select {
+	case got := <-tokens:
+		t.Fatalf("a malformed envelope reached authentication as %q", got)
+	default:
+	}
+}

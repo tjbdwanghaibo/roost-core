@@ -27,10 +27,13 @@ type TCPDispatch func(context.Context, Session, uint32, uint32, wire.PayloadKind
 // 每连接随机 nonce 不来自客户端。写入只接受完整包，复用唯一的 socket 写临界区。
 // Admission 是连接被接受时取得的序号（本进程内严格递增、从 1 开始），同一 SessionID 的新旧以它为准：
 // 嵌入 TCP 在 registerSession 比较，独立 Gate 把它带进 Bind，由 Game 的绑定表在同一 Gate 实例内比较。
+// Generation 是客户端在认证帧里带来的连接代号（wire.EncodeAuth，没带为 0）；独立 Gate 把它带进 Bind，Game 只在
+// 同一 SessionID 的两条连接来自不同 Gate 实例、接受序号不可比较时用它判新旧（GATEWAY §3）。
 type ConnectionSession interface {
 	Session
 	ConnectionID() string
 	Admission() uint64
+	Generation() uint64
 	WritePacket(context.Context, uint32, uint32, wire.PayloadKind, bool, []byte) error
 }
 
@@ -339,12 +342,13 @@ func (server *TCPServer) serveConnection(connection net.Conn, admission uint64) 
 			<-server.handshakeSlots
 		}
 	}()
-	authFrame, release, principal, ok := server.authenticateConnection(handshakeCtx, connection)
+	authFrame, release, principal, generation, ok := server.authenticateConnection(handshakeCtx, connection)
 	if !ok {
 		return
 	}
 	session := newTCPSession(connectionCtx, cancel, connection, principal, server.config, server.outbound)
 	session.admission = admission
+	session.generation = generation
 	registered := false
 	defer func() { server.closeConnectionSession(session, registered) }()
 	if !server.acknowledgeHandshake(handshakeCtx, session, authFrame, release) {
@@ -406,29 +410,39 @@ func (server *TCPServer) acquireHandshakeSlot(connectionCtx, handshakeCtx contex
 	}
 }
 
-// authenticateConnection 读取并校验认证帧，交给 authenticator 认证。成功时返回认证帧与它的缓冲归还函数（由调用方
-// 在 BeforeACK 之后归还）；失败时已在这里关闭连接并归还缓冲，ok 为 false。
-func (server *TCPServer) authenticateConnection(handshakeCtx context.Context, connection net.Conn) (authFrame frame, release func(), principal Principal, ok bool) {
+// authenticateConnection 读取并校验认证帧，交给 authenticator 认证。成功时返回认证帧（载荷已换成票据原文）、它的
+// 缓冲归还函数（由调用方在 BeforeACK 之后归还）与客户端带来的连接代号（没带为 0）；失败时已在这里关闭连接并归还
+// 缓冲，ok 为 false。
+func (server *TCPServer) authenticateConnection(handshakeCtx context.Context, connection net.Conn) (authFrame frame, release func(), principal Principal, generation uint64, ok bool) {
 	authFrame, release, err := server.readFrameLimit(connection, server.config.MaxHandshakeBytes)
 	if err != nil {
 		metrics.IncCounter("player_tcp_frame_error_total", nil, 1)
 		_ = connection.Close()
-		return frame{}, nil, Principal{}, false
+		return frame{}, nil, Principal{}, 0, false
 	}
 	if authFrame.flags != 0 || authFrame.messageID != 0 || authFrame.sequence == 0 || len(authFrame.payload) == 0 {
 		metrics.IncCounter("player_tcp_auth_failure_total", nil, 1)
 		release()
 		_ = connection.Close()
-		return frame{}, nil, Principal{}, false
+		return frame{}, nil, Principal{}, 0, false
 	}
-	principal, err = server.authenticator.Authenticate(handshakeCtx, string(authFrame.payload), connection.RemoteAddr())
+	// 剥掉连接代号信封（wire.DecodeAuth）：Authenticator 与独立 Gate 转给 Game 的 Bind 只看到票据原文。
+	ticket, generation, err := wire.DecodeAuth(authFrame.payload)
+	if err != nil {
+		metrics.IncCounter("player_tcp_auth_failure_total", nil, 1)
+		release()
+		_ = connection.Close()
+		return frame{}, nil, Principal{}, 0, false
+	}
+	authFrame.payload = ticket
+	principal, err = server.authenticator.Authenticate(handshakeCtx, string(ticket), connection.RemoteAddr())
 	if err != nil || !principal.Authenticated() || handshakeCtx.Err() != nil {
 		metrics.IncCounter("player_tcp_auth_failure_total", nil, 1)
 		_ = connection.Close()
 		release()
-		return frame{}, nil, Principal{}, false
+		return frame{}, nil, Principal{}, 0, false
 	}
-	return authFrame, release, principal, true
+	return authFrame, release, principal, generation, true
 }
 
 // closeConnectionSession 在连接返回时关闭会话、等它的 writeLoop 退出（关闭 socket 会打断正在进行的写），

@@ -104,7 +104,23 @@ client.EntitiesReset += () => ClearVisibleEntities();
 | 2 | Lockstep | 显式注册的输入/Hash/Catchup Notify；广播/历史页推送 |
 | 3 | 保留 | 拒绝 |
 
-bits3..7必须为0。PB请求/响应flags=0，PB推送=1，Sync推送=3；Lockstep上行Notify=4，下行push=5。类型选择解码器，message_id选择业务路由，两者分别判断，不能只看seq或编号猜类型。ID=0的控制帧flags必须为0：首包payload是票据原始UTF-8字节，成功ACK使用相同seq且payload为空，它不经过PB解码。
+bits3..7必须为0。PB请求/响应flags=0，PB推送=1，Sync推送=3；Lockstep上行Notify=4，下行push=5。类型选择解码器，message_id选择业务路由，两者分别判断，不能只看seq或编号猜类型。ID=0的控制帧flags必须为0：首包payload是票据原始UTF-8字节（或下面的连接代号信封），成功ACK使用相同seq且payload为空，它不经过PB解码。
+
+### 鉴权首包的连接代号
+
+首包payload可以写成带连接代号的信封，让服务端在同一SessionID的两条连接落在不同Gate时认出迟到完成的旧握手（客户端放弃一次握手、立即连到另一个Gate重连的情形；规则见[GATEWAY §3](../docs/framework/GATEWAY.md#3-绑定与请求结果)）：
+
+| 偏移 | 大小 | 字段 | 语义 |
+| --- | ---: | --- | --- |
+| 0 | 1 | marker | `0x00` |
+| 1 | 1 | tag | ASCII `G` |
+| 2 | 8 | generation | 连接代号，uint64大端，非0 |
+| 10 | N | ticket | 票据原文，非空 |
+
+- 不带代号时payload就是票据原文，行为与以前相同（跨Gate时后完成的握手胜出）。票据原文因此不能以`0x00`开头；以`0x00`开头却不是完整信封（tag不是`G`、代号为0、没有票据）的首包按坏帧拒绝。服务端在鉴权前剥掉信封，业务authenticator只看到票据原文。
+- **每次连接（包括重连）取一个新代号**，同一客户端越晚发起的连接代号越大，而且**客户端重启后仍要更大**：推荐`max(上一个 + 1, 当前UTC Unix纳秒)`，上一个只存在内存里。进程内严格递增、不受时钟回拨影响；重启后从当时的时钟起算，自然大于旧进程发过的代号。不要用从1开始的纯内存计数器：重启后新连接会输给旧连接。精度只有毫秒的平台用`Unix毫秒 × 1000000`。
+- 时钟在重启前后被往回拨时，新连接的代号可能偏小；后果只是与旧进程仍在途的握手重叠时被拒一次，重连即恢复。服务端只在重叠的握手之间比较代号，一个异常大的代号挡不住之后的正常重连。
+- Go实现：`wire.EncodeAuth(ticket, generation)`；robot的`transport.AuthPacket(token)`每次调用自动取`transport.NextConnectionGeneration()`。C#/C++运行库当前仍发票据原文（未实现信封）。
 
 正式生成的player TCP要求客户端首包和后续包seq非零、单连接按线上发送顺序递增（允许uint32回绕）。C#在发送锁内分配seq；推送seq属于服务器独立空间，即使与请求相同也不能匹配待应答请求。正式TCP接收PB业务请求和显式注册的Lockstep Notify，客户端Sync请求在Dispatch前拒绝。类型不符在decoder/handler前拒绝，各类共用同一个message_id注册表。原始Sync推送复用既有frame v1 / SubjectUpdate v2 / 应用packer；内部版本未随外层改变。
 

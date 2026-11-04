@@ -70,3 +70,18 @@ func TestPlayerTransportSeparatesPushAndRetiresTimedOutRequest(t *testing.T) {
 		t.Fatal("pending wire mappings leaked")
 	}
 }
+
+// 每次 AuthPacket 都带一个新的、更大的连接代号，票据原文不变；同一进程里重连的握手因此总比之前的新。
+func TestAuthPacketCarriesAnIncreasingConnectionGeneration(t *testing.T) {
+	var last uint64
+	for range 1000 {
+		ticket, generation, err := wire.DecodeAuth(AuthPacket("ticket").Payload)
+		if err != nil || string(ticket) != "ticket" {
+			t.Fatalf("auth payload decodes to %q: %v", ticket, err)
+		}
+		if generation <= last {
+			t.Fatalf("connection generation %d after %d, want increasing", generation, last)
+		}
+		last = generation
+	}
+}

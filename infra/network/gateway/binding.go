@@ -42,10 +42,14 @@ type bindingRecord struct {
 	ready         chan struct{}
 	result        ControlResponse
 	receiverID    uint64
-	admission     uint64 // Bind 带来的接受序号（ControlRequest.Admission），只与同一 Gate 实例的记录比较
+	admission     uint64    // Bind 带来的接受序号（ControlRequest.Admission），只与同一 Gate 实例的记录比较
+	generation    uint64    // Bind 带来的客户端连接代号（ControlRequest.Generation，0 为没带），只与另一个 Gate 实例的记录比较
+	arrived       time.Time // Bind 到达 Game 的时刻（receiveControl 收下请求时），跨 Gate 判新旧时与已有绑定的确认时刻比较
+	confirmedAt   time.Time // finish 确认这条绑定的时刻
 }
 
-// bindingSupersededReason 是迟到的旧 Bind 被拒的原因：同一 Gate 实例上同一 SessionID 已绑定的是更晚接受的连接。
+// bindingSupersededReason 是迟到的旧 Bind 被拒的原因：同一 SessionID 已绑定的是更新的连接（同一 Gate 实例按接受
+// 序号、跨 Gate 实例按客户端连接代号，见 supersedes）。
 // Gate 据此把这次握手当作正常的会话关闭收尾（不按通道故障告警）。
 const bindingSupersededReason = "superseded by a newer connection of the session"
 
@@ -67,8 +71,9 @@ func newBindingTable(config Config, game ProcessIdentity) *bindingTable {
 	return &bindingTable{config: config, game: game, byConnection: make(map[connectionKey]*bindingRecord), bySession: make(map[string]*bindingRecord), byReceiver: make(map[uint64]*bindingRecord)}
 }
 
-// reserve 的 owner 负责唯一一次鉴权与 finish。重复 Bind 等待同一结果，不重复注册队列。
-func (table *bindingTable) reserve(request ControlRequest) (record *bindingRecord, owner bool, err error) {
+// reserve 的 owner 负责唯一一次鉴权与 finish。重复 Bind 等待同一结果，不重复注册队列。arrived 是这次 Bind 到达
+// Game 的时刻（进入控制队列之前），只在本次成为 owner 时记入记录。
+func (table *bindingTable) reserve(request ControlRequest, arrived time.Time) (record *bindingRecord, owner bool, err error) {
 	if err := request.Validate(); err != nil {
 		return nil, false, err
 	}
@@ -84,7 +89,7 @@ func (table *bindingTable) reserve(request ControlRequest) (record *bindingRecor
 	if prior := table.byConnection[key]; prior != nil {
 		want := prior.identity
 		want.BindID = ""
-		if want != request.Binding || prior.ticketHash != hash || prior.admission != request.Admission {
+		if want != request.Binding || prior.ticketHash != hash || prior.admission != request.Admission || prior.generation != request.Generation {
 			return nil, false, ErrBindingStale
 		}
 		if prior.state == bindingClosed {
@@ -105,7 +110,7 @@ func (table *bindingTable) reserve(request ControlRequest) (record *bindingRecor
 	table.nextReceiver++
 	identity := request.Binding
 	identity.BindID = newBindingToken()
-	record = &bindingRecord{identity: identity, ticketHash: hash, state: bindingPending, leaseUntil: time.Now().Add(table.config.RequestTimeout), ready: make(chan struct{}), receiverID: table.nextReceiver, admission: request.Admission}
+	record = &bindingRecord{identity: identity, ticketHash: hash, state: bindingPending, leaseUntil: time.Now().Add(table.config.RequestTimeout), ready: make(chan struct{}), receiverID: table.nextReceiver, admission: request.Admission, generation: request.Generation, arrived: arrived}
 	table.byConnection[key] = record
 	table.byReceiver[record.receiverID] = record
 	table.active++
@@ -128,7 +133,7 @@ func (table *bindingTable) pruneLocked(now time.Time) {
 // 的鉴权慢于新连接），拒绝它、不退役任何人，Gate 收到拒绝后关掉那条旧连接；若让后完成者胜出，它会退役正在服务的
 // 新绑定并通知 Gate 关掉新连接，而旧连接又被 Gate 本地按接受先后拒登记，两条都不剩。判定与写入在同一把锁里，两次
 // Bind 无论怎样交错，留下的都是接受得更晚的那条，与嵌入 TCP 的 registerSession 同一规则。
-// 不同 Gate 实例（含同一 Gate 重启后的新代际）的序号各自从头编号，没有可比较的先后，仍是后完成者胜出。
+// 不同 Gate 实例（含同一 Gate 重启后的新代际）的序号各自从头编号，不可比较，改比客户端连接代号，见 supersedes。
 func (table *bindingTable) finish(record *bindingRecord, accepted bool) (previous *bindingRecord, result ControlResponse) {
 	table.mu.Lock()
 	defer table.mu.Unlock()
@@ -144,13 +149,14 @@ func (table *bindingTable) finish(record *bindingRecord, accepted bool) (previou
 		table.closeLocked(record)
 		return nil, record.result
 	}
-	if previous != nil && previous.identity.Gate == record.identity.Gate && previous.admission > record.admission {
+	if previous != nil && supersedes(previous, record) {
 		table.closeLocked(record)
 		record.result.Reason = bindingSupersededReason
 		return nil, record.result
 	}
 	record.state = bindingConfirmed
-	record.leaseUntil = time.Now().Add(table.config.Lease)
+	record.confirmedAt = time.Now()
+	record.leaseUntil = record.confirmedAt.Add(table.config.Lease)
 	if previous != nil && previous != record {
 		table.closeLocked(previous)
 	}
@@ -158,6 +164,26 @@ func (table *bindingTable) finish(record *bindingRecord, accepted bool) (previou
 	record.result = ControlResponse{ExecutionResult: ExecutionResult{Version: InternalVersion, Outcome: Completed}, Binding: record.identity, LeaseUntilUnixNano: record.leaseUntil.UnixNano()}
 	close(record.ready)
 	return previous, record.result
+}
+
+// supersedes 判断同一 SessionID 已确认的 current 是否比正要完成的 record 更新，是则 record 是一次迟到完成的旧
+// Bind，应被拒。
+//
+//   - 同一 Gate 实例（Binding.Gate 含进程代际）：比 Gate 给的接受序号，精确、不依赖客户端，连接代号不参与。
+//   - 不同 Gate 实例：接受序号不可比较，改比客户端在认证帧里带来的连接代号（wire.EncodeAuth），三个条件同时成立
+//     才拒：两边都带了代号；current 的代号更大；record 到达 Game 早于 current 被确认（两次握手在 Game 上重叠）。
+//     任一不成立就退回“后完成者胜出”。
+//
+// 第三个条件让代号只裁决重叠的握手：current 确认之后才到达的 Bind 无论代号多小都照常替换它。所以一个带了超大
+// 代号（客户端缺陷或时钟回拨）的绑定挡不住之后的正常重连，客户端也不能用代号锁死自己的会话；被它拒掉的只有确认时
+// 已经在途的那几次 Bind，客户端重连一次即恢复。代价是覆盖面：旧连接的 Bind 在新绑定确认之后才到达 Game（Gate A
+// 在发 Bind 之前就慢了）时识别不出，结果与没有代号相同。
+func supersedes(current, record *bindingRecord) bool {
+	if current.identity.Gate == record.identity.Gate {
+		return current.admission > record.admission
+	}
+	return current.generation != 0 && record.generation != 0 && current.generation > record.generation &&
+		record.arrived.Before(current.confirmedAt)
 }
 
 func (table *bindingTable) await(ctx context.Context, record *bindingRecord) (ControlResponse, error) {

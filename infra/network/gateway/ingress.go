@@ -33,11 +33,12 @@ type GameDependencies struct {
 
 // GameIngress 只拥有接入身份、准入及发送关系。业务执行仍由注入的正式 dispatcher 完成。
 type controlJob struct {
-	request ControlRequest
-	reply   string
-	ctx     context.Context
-	cancel  context.CancelFunc
-	bytes   int64
+	request  ControlRequest
+	reply    string
+	ctx      context.Context
+	cancel   context.CancelFunc
+	bytes    int64
+	received time.Time // 收下请求的时刻；Bind 记为到达时刻（bindingRecord.arrived），不含控制队列里的等待
 }
 
 type GameIngress struct {
@@ -110,7 +111,7 @@ func checkChannelSize(config Config, client fnats.RawClient) error {
 	binding := Binding{PlayerID: 9223372036854775807, SessionID: strings.Repeat("s", 128), Gate: longIdentity, Game: longIdentity, ConnectionNonce: strings.Repeat("n", 32), BindID: strings.Repeat("b", 32)}
 	packet := OutboundPacket{Version: InternalVersion, Binding: binding, OutSeq: ^uint64(0), Budget: Budget{DeadlineUnixNano: 9223372036854775807, RemainingNanos: int64(time.Minute)}, MessageID: ^uint32(0), Kind: wire.PayloadLockstep, Push: true, Payload: make([]byte, config.MaxPayloadBytes)}
 	forward := ForwardRequest{Version: InternalVersion, Binding: binding, RequestID: strings.Repeat("r", 32), Budget: packet.Budget, MessageID: ^uint32(0), Sequence: ^uint32(0), Kind: wire.PayloadLockstep, Payload: packet.Payload}
-	control := ControlRequest{Version: InternalVersion, Operation: Bind, Binding: binding, Budget: packet.Budget, Ticket: strings.Repeat("t", 8192), Admission: ^uint64(0)}
+	control := ControlRequest{Version: InternalVersion, Operation: Bind, Binding: binding, Budget: packet.Budget, Ticket: strings.Repeat("t", 8192), Admission: ^uint64(0), Generation: ^uint64(0)}
 	broadcast := BroadcastRequest{Version: InternalVersion, Source: longIdentity, Target: longIdentity, BroadcastID: strings.Repeat("b", 32), Budget: packet.Budget, Audience: Audience{Kind: Players, PlayerIDs: make([]int64, config.MaxBroadcastPlayers)}, MessageID: ^uint32(0), Payload: packet.Payload}
 	for index := range broadcast.Audience.PlayerIDs {
 		broadcast.Audience.PlayerIDs[index] = 9223372036854775807
@@ -203,6 +204,7 @@ func (game *GameIngress) receiveControl(msg *fnats.Msg) {
 	if err != nil || subject != msg.Subject || !replyMatches(game.config.Namespace, "gate", request.Binding.Gate, msg.Reply) {
 		return
 	}
+	received := time.Now()
 	ctx, cancel, err := request.Budget.Context(game.ctx, game.config.RequestTimeout, game.config.ClockSkew)
 	if err != nil {
 		game.replyControl(msg.Reply, ControlResponse{ExecutionResult: ExecutionResult{Version: InternalVersion, Outcome: NotAdmitted, Reason: "expired control"}})
@@ -226,13 +228,13 @@ func (game *GameIngress) receiveControl(msg *fnats.Msg) {
 	game.controlWait.Add(1)
 	game.controlRequests++
 	game.controlBytes += int64(len(msg.Data))
-	game.controls <- controlJob{request: request, reply: msg.Reply, ctx: ctx, cancel: cancel, bytes: int64(len(msg.Data))}
+	game.controls <- controlJob{request: request, reply: msg.Reply, ctx: ctx, cancel: cancel, bytes: int64(len(msg.Data)), received: received}
 	game.mu.Unlock()
 }
 
 func (game *GameIngress) controlWorker() {
 	for job := range game.controls {
-		response := game.handleControl(job.ctx, job.request)
+		response := game.handleControl(job.ctx, job.request, job.received)
 		game.replyControl(job.reply, response)
 		job.cancel()
 		game.mu.Lock()
@@ -243,7 +245,7 @@ func (game *GameIngress) controlWorker() {
 	}
 }
 
-func (game *GameIngress) handleControl(ctx context.Context, request ControlRequest) (response ControlResponse) {
+func (game *GameIngress) handleControl(ctx context.Context, request ControlRequest, received time.Time) (response ControlResponse) {
 	response.ExecutionResult = ExecutionResult{Version: InternalVersion, Outcome: NotAdmitted, Reason: "control refused"}
 	defer func() {
 		if value := recover(); value != nil {
@@ -281,7 +283,7 @@ func (game *GameIngress) handleControl(ctx context.Context, request ControlReque
 		}
 		return result
 	}
-	record, owner, err := game.bindings.reserve(request)
+	record, owner, err := game.bindings.reserve(request, received)
 	if err != nil {
 		return response
 	}

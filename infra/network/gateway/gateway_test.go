@@ -145,6 +145,7 @@ type benchConnectionSession struct {
 
 func (s *benchConnectionSession) ConnectionID() string { return s.id }
 func (s *benchConnectionSession) Admission() uint64    { return 1 }
+func (s *benchConnectionSession) Generation() uint64   { return 0 }
 func (s *benchConnectionSession) WritePacket(context.Context, uint32, uint32, wire.PayloadKind, bool, []byte) error {
 	return nil
 }

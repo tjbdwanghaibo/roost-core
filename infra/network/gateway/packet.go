@@ -15,7 +15,8 @@ import (
 
 // InternalVersion 是 Gate↔Game 内部协议版本，两端严格相等才处理。
 // 2：Bind 携带连接的接受序号（ControlRequest.Admission）。
-const InternalVersion uint16 = 2
+// 3：Bind 携带客户端的连接代号（ControlRequest.Generation）。
+const InternalVersion uint16 = 3
 
 type ProcessIdentity struct {
 	ServerID    int32
@@ -140,6 +141,9 @@ type ControlRequest struct {
 	// Admission 只用于 Bind：Gate 给这条连接的接受序号（ConnectionSession.Admission，Gate 进程内递增、非 0）。
 	// Game 的绑定表对同一 Gate 实例（Binding.Gate 含进程代际）的同一 SessionID 据此判新旧；不同 Gate 实例的序号不比较。
 	Admission uint64
+	// Generation 只用于 Bind：客户端在认证帧里带来的连接代号（ConnectionSession.Generation，wire.EncodeAuth），0 表示
+	// 没带。Game 只在同一 SessionID 的已有绑定来自另一个 Gate 实例时用它判新旧，见 bindingTable.finish。
+	Generation uint64
 }
 
 type ControlResponse struct {
@@ -223,7 +227,7 @@ func (request ControlRequest) Validate() error {
 			return ErrInvalidRequest
 		}
 		return binding.validateConnection()
-	} else if request.Ticket != "" || request.Admission != 0 {
+	} else if request.Ticket != "" || request.Admission != 0 || request.Generation != 0 {
 		return ErrInvalidRequest
 	}
 	return binding.Validate()

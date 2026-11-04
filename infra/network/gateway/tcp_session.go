@@ -23,6 +23,7 @@ type tcpSession struct {
 	principal       Principal
 	nonce           string
 	admission       uint64 // acceptLoop 给的接受序号（connectionAdmissions，进程内递增），同一 SessionID 的新旧以它为准（registerSession、独立 Gate 的 Bind）
+	generation      uint64 // 客户端认证帧带来的连接代号（wire.DecodeAuth，没带为 0），独立 Gate 带进 Bind 供跨 Gate 判新旧
 	writeTimeout    time.Duration
 	maxPayloadBytes uint32
 	writeMu         sync.Mutex
@@ -173,6 +174,8 @@ func (session *tcpSession) Principal() Principal { return clonePrincipal(session
 func (session *tcpSession) ConnectionID() string { return session.nonce }
 
 func (session *tcpSession) Admission() uint64 { return session.admission }
+
+func (session *tcpSession) Generation() uint64 { return session.generation }
 
 // WritePacket 是独立 Gate 的出站写：Gate 的 AsyncTransport 已为每连接排队并有自己的发送期限，
 // 这里同步写 socket，结果直接回给那条队列；它与 writeLoop 共用 writeMu 与推送序号。

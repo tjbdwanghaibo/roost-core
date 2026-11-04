@@ -29,7 +29,7 @@ func TestConcurrentBindSharesOneOwnerAndOneIdentity(t *testing.T) {
 	records := make(chan *bindingRecord, 32)
 	for range 32 {
 		wait.Go(func() {
-			record, owner, err := table.reserve(request)
+			record, owner, err := table.reserve(request, time.Now())
 			if err != nil {
 				t.Error(err)
 				return
@@ -63,7 +63,7 @@ func TestConcurrentBindSharesOneOwnerAndOneIdentity(t *testing.T) {
 	}
 	altered := request
 	altered.Ticket = "another-ticket"
-	if _, _, err := table.reserve(altered); !errors.Is(err, ErrBindingStale) {
+	if _, _, err := table.reserve(altered, time.Now()); !errors.Is(err, ErrBindingStale) {
 		t.Fatalf("changed proof=%v", err)
 	}
 }
@@ -71,7 +71,7 @@ func TestConcurrentBindSharesOneOwnerAndOneIdentity(t *testing.T) {
 func TestBindingActivationReplacementAndOldCloseAreIsolated(t *testing.T) {
 	identity := packetTestBinding()
 	table := newBindingTable(DefaultConfig(), identity.Game)
-	old, _, err := table.reserve(bindRequest(identity))
+	old, _, err := table.reserve(bindRequest(identity), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestBindingActivationReplacementAndOldCloseAreIsolated(t *testing.T) {
 	}
 	nextIdentity := identity
 	nextIdentity.ConnectionNonce = newBindingToken()
-	next, _, err := table.reserve(bindRequest(nextIdentity))
+	next, _, err := table.reserve(bindRequest(nextIdentity), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestBindingActivationReplacementAndOldCloseAreIsolated(t *testing.T) {
 			t.Fatalf("idempotent unbind=%+v %v", result, err)
 		}
 	}
-	if _, _, err := table.reserve(bindRequest(nextIdentity)); !errors.Is(err, ErrBindingStale) {
+	if _, _, err := table.reserve(bindRequest(nextIdentity), time.Now()); !errors.Is(err, ErrBindingStale) {
 		t.Fatalf("late Bind resurrected closed connection: %v", err)
 	}
 }
@@ -123,32 +123,32 @@ func TestBindingTerminalCapacityIsReservedBeforeAdmission(t *testing.T) {
 	config.MaxBindings = 2
 	config.MaxTombstones = 2
 	table := newBindingTable(config, identity.Game)
-	first, _, err := table.reserve(bindRequest(identity))
+	first, _, err := table.reserve(bindRequest(identity), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	table.finish(first, false)
 	secondIdentity := identity
 	secondIdentity.ConnectionNonce = newBindingToken()
-	second, _, err := table.reserve(bindRequest(secondIdentity))
+	second, _, err := table.reserve(bindRequest(secondIdentity), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	table.finish(second, false)
 	thirdIdentity := identity
 	thirdIdentity.ConnectionNonce = newBindingToken()
-	if _, _, err := table.reserve(bindRequest(thirdIdentity)); !errors.Is(err, ErrAdmissionFull) {
+	if _, _, err := table.reserve(bindRequest(thirdIdentity), time.Now()); !errors.Is(err, ErrAdmissionFull) {
 		t.Fatalf("active terminal evicted: %v", err)
 	}
 	first.terminalUntil = time.Now().Add(-time.Second)
-	third, _, err := table.reserve(bindRequest(thirdIdentity))
+	third, _, err := table.reserve(bindRequest(thirdIdentity), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if third.receiverID <= second.receiverID {
 		t.Fatal("receiver ID reused")
 	}
-	if _, _, err := table.reserve(bindRequest(secondIdentity)); !errors.Is(err, ErrBindingStale) {
+	if _, _, err := table.reserve(bindRequest(secondIdentity), time.Now()); !errors.Is(err, ErrBindingStale) {
 		t.Fatalf("retained terminal resurrected: %v", err)
 	}
 }
@@ -156,7 +156,7 @@ func TestBindingTerminalCapacityIsReservedBeforeAdmission(t *testing.T) {
 func TestSessionReplacementDoesNotCrossPlayerIdentity(t *testing.T) {
 	identity := packetTestBinding()
 	table := newBindingTable(DefaultConfig(), identity.Game)
-	first, _, err := table.reserve(bindRequest(identity))
+	first, _, err := table.reserve(bindRequest(identity), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestSessionReplacementDoesNotCrossPlayerIdentity(t *testing.T) {
 	other := identity
 	other.PlayerID++
 	other.ConnectionNonce = newBindingToken()
-	second, _, err := table.reserve(bindRequest(other))
+	second, _, err := table.reserve(bindRequest(other), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestAnIngressBindingIsPushableWhileItsActivationCallbackRuns(t *testing.T) 
 		t.Helper()
 		request := bindRequest(identity)
 		request.Binding.ConnectionNonce = newBindingToken()
-		record, _, err := game.bindings.reserve(request)
+		record, _, err := game.bindings.reserve(request, time.Now())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -353,18 +353,48 @@ func echoRequest(server *TCPServer, connection net.Conn, sequence uint32) error 
 	return nil
 }
 
-// dialPending 连上 server 并发出认证帧，不等 ack（握手停在服务端的哪一步由用例控制）。
+// dialPending 连上 server 并发出认证帧（票据原文，不带连接代号），不等 ack（握手停在服务端的哪一步由用例控制）。
 func dialPending(t *testing.T, server *TCPServer, token string) net.Conn {
 	t.Helper()
+	return dialPendingGeneration(t, server, token, 0)
+}
+
+// dialPendingGeneration 同 dialPending，认证帧带客户端连接代号 generation（0 为不带）。
+func dialPendingGeneration(t *testing.T, server *TCPServer, token string, generation uint64) net.Conn {
+	t.Helper()
+	payload, err := wire.EncodeAuth(token, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
 	connection, err := net.Dial("tcp", server.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = connection.Close() })
-	if err := (&tcpSession{connection: connection, writeTimeout: time.Second}).writeFrame(context.Background(), 0, 0, 1, []byte(token)); err != nil {
+	if err := (&tcpSession{connection: connection, writeTimeout: time.Second}).writeFrame(context.Background(), 0, 0, 1, payload); err != nil {
 		t.Fatal(err)
 	}
 	return connection
+}
+
+// handshakeOutcome 读一条已发认证帧的连接的第一帧：认证 ack 返回 true（连接留着），服务端关闭返回 false；2 秒内
+// 两者都没有判失败。
+func handshakeOutcome(t *testing.T, server *TCPServer, connection net.Conn) (acked bool) {
+	t.Helper()
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	got, release, err := server.readFrame(connection)
+	if err != nil {
+		var timeout net.Error
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			t.Fatal("the handshake neither finished nor closed")
+		}
+		return false
+	}
+	release()
+	if got.messageID != 0 || got.sequence != 1 {
+		t.Fatalf("first frame %d/%d, want the authentication ack", got.messageID, got.sequence)
+	}
+	return true
 }
 
 // finishPending 读完一条已发认证帧的连接直到服务端关闭它，返回是否收到过认证 ack；2 秒内未关闭判失败。
@@ -520,10 +550,76 @@ func TestTheNewerBindOfASessionReplacesTheOlderThatFinishedFirst(t *testing.T) {
 	}
 }
 
-// 跨 Gate 实例的同一 SessionID 没有可比较的接受先后：Game 不比较不同 Gate 的序号，仍是后完成的 Bind 胜出。
-// 用例让另一个 Gate 上先接受（本进程的序号更小）的连接迟到完成：若 Game 跨 Gate 比较序号，它会被当成迟到的旧
-// 登录拒掉；正确行为是它替换先完成的那条，那条连接被所在的 Gate 关掉。
-func TestAcrossGatesTheLaterFinishedBindOfASessionWins(t *testing.T) {
+// 跨 Gate 实例的同一 SessionID：客户端在 Gate A 上放弃握手（旧连接，代号 100）、立即连到 Gate B（新连接，代号
+// 200），A 上的旧 Bind 停在 Game 的鉴权里；B 上的新连接走完 Bind → ACK → Activate 并答完一个请求，再放行旧 Bind。
+// 两边的接受序号不可比较，Game 按客户端连接代号判新旧：迟到的旧 Bind 被拒、不退役新绑定，Gate A 不发 ack、关掉
+// 旧连接，新连接继续服务。修前 Game 跨 Gate 不比较、后完成者胜出：新绑定被退役、Gate B 关掉新连接。
+func TestAcrossGatesALateBindWithAnOlderConnectionGenerationDoesNotRetireTheNewerBinding(t *testing.T) {
+	broker := newLoopbackBroker()
+	gateA := ProcessIdentity{ServerID: 11, Incarnation: "gate000000000001"}
+	gateB := ProcessIdentity{ServerID: 12, Incarnation: "gate000000000002"}
+	gameID := ProcessIdentity{ServerID: 22, Incarnation: "game000000000001"}
+	principal := Principal{PlayerID: 7, ServerID: gameID.ServerID, SessionID: "same"}
+	oldEntered, releaseOld := make(chan struct{}), make(chan struct{})
+	gameAuth := AuthenticatorFunc(func(_ context.Context, ticket string, _ net.Addr) (Principal, error) {
+		if ticket == "old" {
+			close(oldEntered)
+			<-releaseOld
+		}
+		return principal, nil
+	})
+	activated := make(chan Binding, 4)
+	game := startStandaloneGame(t, broker, gameID, gameAuth, func(binding Binding) { activated <- binding })
+	gatePrincipal := AuthenticatorFunc(func(context.Context, string, net.Addr) (Principal, error) { return principal, nil })
+	serverA := startStandaloneGate(t, broker, gateA, gameID, gatePrincipal)
+	serverB := startStandaloneGate(t, broker, gateB, gameID, gatePrincipal)
+
+	old := dialPendingGeneration(t, serverA, "old", 100)
+	select {
+	case <-oldEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the old connection's Bind never reached the Game authenticator")
+	}
+	newer := dialPendingGeneration(t, serverB, "new", 200)
+	if !handshakeOutcome(t, serverB, newer) {
+		t.Fatal("the newer connection on gate B was not acknowledged")
+	}
+	if err := echoRequest(serverB, newer, 2); err != nil {
+		t.Fatalf("the newer connection could not serve a request before the old Bind finished: %v", err)
+	}
+	var newerBinding Binding
+	select {
+	case newerBinding = <-activated:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the newer connection was never activated")
+	}
+
+	close(releaseOld)
+	// Game 在回复旧 Bind 之前已经定下绑定表；Gate A 收到回复后才结束旧连接的握手（ack 或关闭）。
+	oldAcked := handshakeOutcome(t, serverA, old)
+	game.bindings.mu.Lock()
+	current := game.bindings.bySession[principal.SessionID]
+	var currentBinding Binding
+	var currentState bindingState
+	if current != nil {
+		currentBinding, currentState = current.identity, current.state
+	}
+	game.bindings.mu.Unlock()
+	if currentBinding != newerBinding || currentState != bindingActive {
+		t.Errorf("the newer binding on gate B was retired by an older connection's Bind on gate A that finished after it: current=%+v state=%d, want the newer %+v active", currentBinding, currentState, newerBinding)
+	}
+	if err := echoRequest(serverB, newer, 3); err != nil {
+		t.Errorf("the newer connection on gate B was closed by an older connection's Bind that finished after it: %v", err)
+	}
+	if oldAcked {
+		t.Error("the old connection on gate A whose Bind finished late was acknowledged; the Gate must close it on the refused Bind")
+	}
+}
+
+// 跨 Gate 实例、认证帧都没带连接代号（老客户端、非 Go 客户端没实现）：没有可比较的先后，仍是后完成的 Bind 胜出。
+// 用例让另一个 Gate 上先接受（本进程的序号更小）的连接迟到完成：若 Game 跨 Gate 比较接受序号，它会被当成迟到的
+// 旧登录拒掉；正确行为是它替换先完成的那条，那条连接被所在的 Gate 关掉。
+func TestAcrossGatesWithoutGenerationsTheLaterFinishedBindOfASessionWins(t *testing.T) {
 	broker := newLoopbackBroker()
 	gateA := ProcessIdentity{ServerID: 11, Incarnation: "gate000000000001"}
 	gateB := ProcessIdentity{ServerID: 12, Incarnation: "gate000000000002"}
@@ -592,7 +688,7 @@ func TestBindingTableOrdersASessionByAdmissionWithinOneGate(t *testing.T) {
 		request.Binding.Gate = gate
 		request.Binding.ConnectionNonce = newBindingToken()
 		request.Admission = admission
-		record, owner, err := table.reserve(request)
+		record, owner, err := table.reserve(request, time.Now())
 		if err != nil || !owner {
 			t.Fatalf("reserve: owner=%v err=%v", owner, err)
 		}
@@ -636,11 +732,101 @@ func TestBindingTableOrdersASessionByAdmissionWithinOneGate(t *testing.T) {
 	// 同一连接的重复 Bind 换了序号：不是同一次 Bind，拒绝。
 	request := bindRequest(identity)
 	request.Admission = 5
-	if _, _, err := table.reserve(request); err != nil {
+	if _, _, err := table.reserve(request, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	request.Admission = 6
-	if _, _, err := table.reserve(request); !errors.Is(err, ErrBindingStale) {
+	if _, _, err := table.reserve(request, time.Now()); !errors.Is(err, ErrBindingStale) {
 		t.Fatalf("a retried Bind with another admission = %v, want ErrBindingStale", err)
+	}
+}
+
+// 绑定表跨 Gate 实例的新旧：比客户端连接代号，只裁决在 Game 上重叠的两次 Bind。
+//   - 新连接（代号 200）先确认，确认前已到达的旧 Bind（代号 100）迟到完成：被拒，新绑定不受影响。
+//   - 旧的先确认、新的后完成：新的替换旧的。
+//   - 已确认的绑定代号再大，也挡不住确认之后才到达的 Bind：后者照常替换（代号锁不死会话）。
+//   - 任一方没带代号：后完成者胜出。
+//   - 同一 Gate 实例只比接受序号，代号不参与。
+//   - 同一连接的重复 Bind 换了代号：不是同一次 Bind，拒绝。
+func TestBindingTableOrdersASessionAcrossGatesByConnectionGeneration(t *testing.T) {
+	identity := packetTestBinding()
+	gateA := identity.Gate
+	gateB := ProcessIdentity{ServerID: gateA.ServerID + 1, Incarnation: gateA.Incarnation + "b"}
+	bind := func(table *bindingTable, gate ProcessIdentity, admission, generation uint64) *bindingRecord {
+		t.Helper()
+		request := bindRequest(identity)
+		request.Binding.Gate = gate
+		request.Binding.ConnectionNonce = newBindingToken()
+		request.Admission = admission
+		request.Generation = generation
+		record, owner, err := table.reserve(request, time.Now())
+		if err != nil || !owner {
+			t.Fatalf("reserve: owner=%v err=%v", owner, err)
+		}
+		return record
+	}
+	refused := func(table *bindingTable, late, current *bindingRecord) {
+		t.Helper()
+		previous, result := table.finish(late, true)
+		if previous != nil || result.Outcome != NotAdmitted || result.Reason != bindingSupersededReason || late.state != bindingClosed {
+			t.Fatalf("late older Bind: previous=%v result=%+v state=%d; want refused as superseded", previous, result, late.state)
+		}
+		if table.bySession[identity.SessionID] != current || current.state != bindingConfirmed {
+			t.Fatal("a refused late Bind retired the newer binding")
+		}
+	}
+	replaces := func(table *bindingTable, later, earlier *bindingRecord) {
+		t.Helper()
+		previous, result := table.finish(later, true)
+		if previous != earlier || result.Outcome != Completed || earlier.state != bindingClosed || table.bySession[identity.SessionID] != later {
+			t.Fatalf("later Bind: previous=%v result=%+v; want it to replace the earlier binding", previous, result)
+		}
+	}
+
+	// 新连接在 B 上先确认，A 上确认前已到达的旧 Bind 迟到完成。A 的接受序号更大也不影响（不同 Gate 不比序号）。
+	table := newBindingTable(DefaultConfig(), identity.Game)
+	older, newer := bind(table, gateA, 50, 100), bind(table, gateB, 1, 200)
+	table.finish(newer, true)
+	refused(table, older, newer)
+
+	// 旧的先确认，新的后完成。
+	table = newBindingTable(DefaultConfig(), identity.Game)
+	older, newer = bind(table, gateA, 1, 100), bind(table, gateB, 1, 200)
+	table.finish(older, true)
+	replaces(table, newer, older)
+
+	// 已确认的是超大代号，之后到达的小代号 Bind 照常替换它。
+	table = newBindingTable(DefaultConfig(), identity.Game)
+	huge := bind(table, gateA, 1, ^uint64(0))
+	table.finish(huge, true)
+	replaces(table, bind(table, gateB, 1, 100), huge)
+
+	// 任一方没带代号：后完成者胜出。
+	for _, generations := range [][2]uint64{{0, 200}, {100, 0}, {0, 0}} {
+		table = newBindingTable(DefaultConfig(), identity.Game)
+		late, first := bind(table, gateA, 1, generations[0]), bind(table, gateB, 1, generations[1])
+		table.finish(first, true)
+		replaces(table, late, first)
+	}
+
+	// 同一 Gate 实例只比接受序号：序号更大、代号更小的新连接替换旧的；序号更小、代号更大的迟到 Bind 被拒。
+	table = newBindingTable(DefaultConfig(), identity.Game)
+	older, newer = bind(table, gateA, 3, 200), bind(table, gateA, 9, 100)
+	table.finish(older, true)
+	replaces(table, newer, older)
+	table = newBindingTable(DefaultConfig(), identity.Game)
+	older, newer = bind(table, gateA, 3, 200), bind(table, gateA, 9, 100)
+	table.finish(newer, true)
+	refused(table, older, newer)
+
+	// 同一连接的重复 Bind 换了代号：拒绝。
+	request := bindRequest(identity)
+	request.Generation = 5
+	if _, _, err := table.reserve(request, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	request.Generation = 6
+	if _, _, err := table.reserve(request, time.Now()); !errors.Is(err, ErrBindingStale) {
+		t.Fatalf("a retried Bind with another generation = %v, want ErrBindingStale", err)
 	}
 }

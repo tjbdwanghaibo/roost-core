@@ -29,11 +29,19 @@ NATS ACL 必须限制每个进程的来源前缀和自己的 reply inbox。应�
 
 完整绑定含 PlayerID、SessionID、Gate/Game SID 与 incarnation、连接 nonce、Game 签发 BindID。先 Bind，再物理写出 AuthACK，最后 Activate。OnActive/OnClosed 用 Game 分配的不复用数值 receiver 建立和关闭 Sync/Room 生命周期；旧关闭、旧出站失败不会解绑新连接。不同 SessionID 可属于同一玩家，没有框架隐式全局单点登录。
 
-同一 SessionID 的新连接替换旧连接，新旧按连接被接受的先后定，不按握手完成的先后（2026-11-04 修复；修前后完成者胜出，客户端放弃握手立即重连时旧连接会把新连接踢掉）。每条连接被接受时取得本进程内递增的接受序号（`ConnectionSession.Admission`）：
+同一 SessionID 的新连接替换旧连接，新旧按连接被接受的先后定，不按握手完成的先后（2026-11-04 修复；修前后完成者胜出，客户端放弃握手立即重连时旧连接会把新连接踢掉）。每条连接被接受时取得本进程内递增的接受序号（`ConnectionSession.Admission`）；客户端还可以在认证帧里带一个**连接代号**（`ConnectionSession.Generation`，2026-11-05），用于接受序号不可比较的跨 Gate 情形：
 
-- **嵌入 TCP**（以及 Gate 本地的连接表）：`TCPServer.registerSession` 在同一把锁里比较，已登记的是更晚接受的连接时，迟到完成的旧登录在 ack 之后被拒登记并断开，不关闭新连接（回归 `TestALoginThatFinishesLateDoesNotDisplaceANewerConnectionOfTheSameSession`）。
-- **独立 Gate**：Gate 把序号随 Bind 交给 Game（`ControlRequest.Admission`，内部协议版本 2）。Game 绑定表 `bindingTable.finish` 对**同一 Gate 实例**（`Binding.Gate` 含进程代际）的同一 SessionID 按序号判新旧：已绑定的是更晚接受的连接时，迟到完成的旧 Bind 被拒（原因 `superseded by a newer connection of the session`）、不退役任何绑定，Gate 收到拒绝后不发 ack、关掉那条旧连接；旧连接先完成时，新连接的 Bind 照常替换它。判定与写入同一把锁，两次 Bind 无论怎样交错，留下的都是接受得更晚的那条（回归 `TestALateBindOfAnOlderConnectionDoesNotRetireTheNewerBindingOfTheSameSession`、`TestTheNewerBindOfASessionReplacesTheOlderThatFinishedFirst`）。
-- **跨 Gate 实例**的同一 SessionID 没有可比较的先后（各 Gate 的序号各自编号；同一 SID 的 Gate 重启后是新代际、序号从头开始），Game 不比较，仍是后完成的 Bind 胜出，被替换的那条由它所在的 Gate 关闭（`TestAcrossGatesTheLaterFinishedBindOfASessionWins`）。客户端在两个 Gate 之间交错重连时仍可能两条都不剩，见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#同一-sessionid-的重连)。
+- **嵌入 TCP**（以及 Gate 本地的连接表）：`TCPServer.registerSession` 在同一把锁里比较接受序号，已登记的是更晚接受的连接时，迟到完成的旧登录在 ack 之后被拒登记并断开，不关闭新连接（回归 `TestALoginThatFinishesLateDoesNotDisplaceANewerConnectionOfTheSameSession`）。同一进程内接受先后是精确的，不看连接代号。
+- **独立 Gate、同一 Gate 实例**：Gate 把序号随 Bind 交给 Game（`ControlRequest.Admission`）。Game 绑定表 `bindingTable.finish` 对**同一 Gate 实例**（`Binding.Gate` 含进程代际）的同一 SessionID 按序号判新旧：已绑定的是更晚接受的连接时，迟到完成的旧 Bind 被拒（原因 `superseded by a newer connection of the session`）、不退役任何绑定，Gate 收到拒绝后不发 ack、关掉那条旧连接；旧连接先完成时，新连接的 Bind 照常替换它。判定与写入同一把锁，两次 Bind 无论怎样交错，留下的都是接受得更晚的那条（回归 `TestALateBindOfAnOlderConnectionDoesNotRetireTheNewerBindingOfTheSameSession`、`TestTheNewerBindOfASessionReplacesTheOlderThatFinishedFirst`）。连接代号不参与。
+- **独立 Gate、跨 Gate 实例**（含同一 SID 的 Gate 重启后的新代际）：各 Gate 的序号各自编号、不可比较，Game 改比 Bind 带来的客户端连接代号（`ControlRequest.Generation`，内部协议版本 3）。以下三条同时成立时，迟到完成的 Bind 按上一条同样被拒、同样收尾：两边都带了代号；已绑定的那条代号更大；这次 Bind **到达 Game 早于**已绑定的那条被确认（两次握手在 Game 上重叠）。任一条不成立就是后完成者胜出，被替换的那条由它所在的 Gate 关闭（回归 `TestAcrossGatesALateBindWithAnOlderConnectionGenerationDoesNotRetireTheNewerBinding`、真实 NATS 的 `TestRealAcrossGatesALateOlderBindDoesNotDisplaceTheNewerConnection`；缺省代号 `TestAcrossGatesWithoutGenerationsTheLaterFinishedBindOfASessionWins`；绑定表各分支 `TestBindingTableOrdersASessionAcrossGatesByConnectionGeneration`）。
+
+**连接代号**由客户端生成、服务端只比大小：
+
+- **放在认证帧里**，不放登录票据：票据由登录服签发，同一会话重连通常复用同一张，带不出“哪次连接更晚”；代号是每次连接的客户端事实。认证帧载荷写成信封 `0x00 'G' <8 字节大端代号> <票据原文>`（`wire.EncodeAuth`），不带代号时载荷就是票据原文（老客户端、非 Go 客户端无需改动，行为与修前相同）。`TCPServer` 在鉴权前剥掉信封（`wire.DecodeAuth`），业务 `Authenticator` 与 Game 的二次鉴权只看到票据原文；以 0x00 开头却不是完整信封的首包按坏帧拒绝。字节布局与非 Go 客户端的生成方法见[客户端说明](../../client/README.md#鉴权首包的连接代号)。
+- **来源要在客户端重启后仍单调**：Go 客户端（`robot/transport.AuthPacket` 每次调用取 `NextConnectionGeneration`）用 `max(上一个 + 1, 当前 Unix 纳秒)`。进程内严格递增、与时钟无关；重启后不需要持久状态也更大，因为重启至少耗时毫秒级、新进程从当时的时钟起算。纯内存计数器不行：重启后从 1 开始，新连接会输给旧连接。
+- **时钟回拨的后果有界**：客户端重启前后时钟被往回拨时，新进程的代号可能小于旧进程。它只在与旧进程仍在途的握手重叠时被当成旧的拒掉一次（新连接被关，客户端重连一次即恢复）；已确认的旧绑定挡不住之后到达的 Bind。不会两条都断、也不会永久拒绝。
+- **代号锁不死会话**：“到达早于确认”这一条让代号只裁决在 Game 上重叠的握手。一条带超大代号的绑定（客户端缺陷、或持票据者故意）确认之后，任何之后到达的 Bind 无论代号多小都照常替换它，所以正常的新连接替换旧连接不受影响；被它拒掉的只有确认时已经在途的那几次 Bind。比较只在同一 SessionID 内进行，碰不到别的会话。
+- **覆盖面**：旧连接的 Bind 在新绑定确认之后才到达 Game（Gate 在发 Bind 之前就慢了：Gate 本地鉴权、`ResolveGame`、身份核对，或 NATS 积压），识别不出，结果与没有代号相同，见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#同一-sessionid-的重连)。
 
 Gate Forward 只有一次传输尝试。预算包含 Gate 等待、NATS、Game 等待与正式 dispatcher；控制请求也有条目/字节上限和固定 worker，排队消耗原预算。
 
