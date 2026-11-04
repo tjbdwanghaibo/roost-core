@@ -1,6 +1,6 @@
 # 功能设计：多进程无缝大世界（2026-11-03）
 
-**状态：思路稿（维护者 2026-11-03：“可以先不做”“把这个方案思路先记到文档里”）；同日维护者要求“可以开一个分支先实现一版，并测试一下”，第一版原型只在分支 `feat/seamless-world-prototype` 上（§5 设计、§6 实测）；同日维护者定下 v2 方向（Cell 是 Scene 的模式、Cell 部分是 Nest 实体），v2 也只在该分支（§7 设计、§8 实测与剩余缺口）；同日维护者定下 D1～D4，v2.1 的 NPC 降档与 demo 接入的方向问题见 §9；同日维护者定下 D5～D8，v2.2 的 game-demo 接入与多进程端到端见 §10。2026-11-04 的框架契约 E1～E4 与追加项见 §11，第 3 项（战斗面板放 Cell）见 §12，第 4 项（跨 Base 的队伍面板，Remote 托管的 Team）见 §13。未合入 main，不是现行能力。现行能力以 [MMORPG 接入手册](../framework/MMORPG-INTEGRATION.md) 为准。**
+**状态：思路稿（维护者 2026-11-03：“可以先不做”“把这个方案思路先记到文档里”）；同日维护者要求“可以开一个分支先实现一版，并测试一下”，第一版原型只在分支 `feat/seamless-world-prototype` 上（§5 设计、§6 实测）；同日维护者定下 v2 方向（Cell 是 Scene 的模式、Cell 部分是 Nest 实体），v2 也只在该分支（§7 设计、§8 实测与剩余缺口）；同日维护者定下 D1～D4，v2.1 的 NPC 降档与 demo 接入的方向问题见 §9；同日维护者定下 D5～D8，v2.2 的 game-demo 接入与多进程端到端见 §10。2026-11-04 的框架契约 E1～E4 与追加项见 §11，第 3 项（战斗面板放 Cell）见 §12，第 4 项（跨 Base 的队伍面板，Remote 托管的 Team）见 §13。2026-11-04 维护者决定原型也合进 main（合入的冲突、编号重排、Team 归属与待决定见 §14）：代码在 main 上，但仍是原型（`gameplay/cellworld`、game-demo 的 `scene.partition` 缺省关闭），不是承诺的正式能力；上线前缺口见 §6.3～§13.6。正式能力以 [MMORPG 接入手册](../framework/MMORPG-INTEGRATION.md) 为准。**
 
 登记在 [DESIGN-TODO“按需求触发的功能”](DESIGN-TODO.md#按需求触发的功能)。
 
@@ -758,6 +758,8 @@ v2-6（分区模式下 `SetTeam` 的成员是 Player 实体）：E4 之后 Playe
 
 ### 11.9 合入 main 前还要做的
 
+> 2026-11-04 合入 main 时逐项处理，结论见 [§14.5](#145-119-与-137-逐项结论)。
+
 - E1～E3 是框架契约：合入时 CHANGELOG `[Unreleased]` 写清三条（不持久种类的 nil 答复与 `EntityNotFoundError`、Interest self 跟着 Hide / Show、`app.ModService` + `NestHandlerInstaller`），框架文档已改（impl/02 第 6a 条、guide/04 Interest 一节、impl/01 第 4 条）；codegen 的分发包装形状变了，按发版流程决定是否需要 `--min-core`（生成物用了新 API `nest.EntityNotFoundError`，需要）。
 - E3：Nest 的“派发时按包级表兜底解析”是否收敛（框架测试与引擎构造后注册的包级 handler 依赖它），以及 demo `game/partition.Install` 这一类“实体找本进程 Node”的原子指针是否要换成实体注入，单独定。
 - E4：确认 §11.4 的做法（场景桥 Manager 上的 self 绑定）替代翻 `access.player.self_sync` 开关。
@@ -969,6 +971,8 @@ demo 单测（[demo-unit-red-before.txt](../performance/benchmarks/cellworld-tea
 
 ### 13.7 合入 main 前还要做的
 
+> 2026-11-04 合入 main 时逐项处理，结论见 [§14.5](#145-119-与-137-逐项结论)。
+
 - CHANGELOG `[Unreleased]` 写：cellworld 线上格式 v5（队伍面板消息）、`policy.MirrorItem.Hold`（新增字段，不影响已有调用方）、game-demo 新增 Team 实体（kind 7、`remote=managed`、集合 `team`、计数器集合 `_team_id_sequence`）、组队协议 msg 10029～10033、错误码 100027～100032、`PlayerDao.TeamID`（持久）与队伍面板的不持久字段、`scene.partition.team.*` 四个键；升级须先停旧进程。
 - 已完成：13.6 开头的版本冲突由 main `e12e3dc8` 修复，分支 merge main（`3c3ad379`）后去掉端到端的 `-expect-fail team_roster_cross_base`，端到端通过。
 - 仍待做：“尚未确认”的 Guild 跨进程写入确认（若成立，是 demo 公会的缺陷，按 bugfix 流程另修）。
@@ -979,3 +983,94 @@ demo 单测（[demo-unit-red-before.txt](../performance/benchmarks/cellworld-tea
 ### 13.8 方向判断
 
 cellworld 第五轮改动。本轮新出现的问题都在 cellworld 之外：Remote 托管实体缺省独占（跨 Base 写成员表要先切共享模式，框架已有能力，是接入用法）；Interest.Hide 会清掉关系视野成员（Interest 的既有语义，cellworld 按成员表对齐即可）；共享模式下多个进程交替写时旧副本不重新加载（13.6 开头：共享模式的多写者路径没有被两个 Manager 的用例覆盖过；已由 main `e12e3dc8` 在 Remote 写准入里修复并补上两个 Manager 交替写的用例，分支端到端随之通过）。cellworld 自己没有新的协议缺陷。cellworld 现在承担的 Base 之间的通道（快照、成员表通知）与 Cell ↔ Base 的通道是同一个传输、同一个出站队列、同一套“至多一次 + 版本 + 重读兜底”的语义；若将来 Base 之间还要更多种消息（邀请推送、跨 Base 私聊等），建议把“Base 之间按玩家静态 sid 投递”从 cellworld 拆成独立的小包，避免 cellworld 变成通用的跨进程总线。
+
+## 14. 合入 main（2026-11-04）
+
+维护者 2026-11-04 决定原型也合进 main。本节记下分支跟上 main 时的冲突与处理、编号重排、Team 归属的做法、与 App 生命周期新规则的对齐，以及 §11.9 / §13.7 每一项的结论。codebase-memory-mcp 本轮连不上（MCP 连接关闭），结构结论都按当前源码与 `rg` 得出。
+
+### 14.1 怎么合
+
+分支 `5071f5f6` 落后 main 43 个提交（联盟服务阶段 1～5、停机撤 handler `4947c62a`、App 生命周期 `edd1ccb7`）。按共享分支只用 merge 的规则做了两次普通 merge：`649f2c78`（合到 `ee732878`）与 `4412ee45`（main 随后多了 `fad01157` 测试提速，无冲突）。文本冲突 6 个文件：
+
+| 文件 | 冲突 | 处理 |
+| --- | --- | --- |
+| `framework/app/app.go` `initRegistry` | 分支在 Mod 之前登记 `ModService`（E3）；main 把 `runStartupStep` 改成三返回值、启动被打断走 `stopInterruptedStartup` | 两者都保留：先登记 `ModService`，再按 main 的形状发布 `app.init` |
+| `docs/framework/impl/01-app-lifecycle.md` 第 2 节 | 两边都加了第 4 条 | 分支的 `ModService` / `NestHandlerInstaller` 为第 4 条，main 的停机关输入、启动打断顺延为第 5、6 条 |
+| demo `game/settings/settings.go` | 分支加 `Scene`，main 加 `Guild` | 并存 |
+| demo `internal/service/game/gm.go` | import | main 删掉了公会 GM，`settings` 不再用；保留分区 GM 用的 `apperrors` |
+| demo `game/controllers/player/controller.go` | 分支持有 `GuildLifecycle`、`TeamLifecycle` 与两个号段计数器；main 删掉本地公会、改持 alliance RPC 与两个 Mirror reader | 采用 main 的公会字段；保留 `TeamLifecycle` 与队伍号计数器 `_team_id_sequence`（Mongo 查找与库名映射随之补回） |
+| `codegen/internal/roost/config_contract_test.go` | game 的业务键数：main 7、分支 4 + 32 | 7 + 32 = 39 |
+
+合并后的语义冲突（没有文本冲突、但合起来不对）在 14.2、14.3、14.4。
+
+### 14.2 编号重排
+
+main 先分配的号保持不变，分支的让出（项目未上线，不做兼容；升级须先停旧进程，见 CHANGELOG）：
+
+| 种类 | main 已用 | 分支原来 | 合入后 |
+| --- | --- | --- | --- |
+| 实体 kind | Alliance 6、AllianceMember 7、AllianceShard 8 | SceneActor 6、Team 7 | SceneActor **9**、Team **10**（不复用已删 Guild 的号） |
+| 组件 | Alliance 的 Roster 2008、Guard 2009 | Team 的 Roster 2008（生成 demo 时 `component id 2008 is already used`） | Team 的 Roster **2010** |
+| 请求消息 | 公会 10021～10023、10027～10030 | MoveIntent 10027、AttackTarget 10028、组队 10029～10033 | MoveIntent **10031**、AttackTarget **10032**、TeamInvite / TeamAccept / TeamLeave / TeamDisband / TeamInfo **10033～10037** |
+| 推送 | GuildNoticePush 10104 | AttackResultPush 10104 | AttackResultPush **10105** |
+| 错误码 | 100024、100025（guild_moved / guild_pending）、100030～100042（alliance_*） | scene_partitioned / scene_not_partitioned / partition_not_entered 100024～100026，team_* 100027～100032 | 分区 **100043～100045**、组队 **100046～100051**（连续成段，不填 100026～100029 的空号） |
+
+演练客户端（`scripts/testdata/seamless/drill.go.txt`）里写死的 SceneActor kind 与两个错误码同步改；它用生成工程的 `msgid` 常量，消息号不用改。§10～§13 正文里的旧编号是当时的记录，不回改。
+
+### 14.3 Team 的归属
+
+**冲突**：原型的 Team（`remote=managed`、共享模式）由各 Base（game 进程）在 `[Team, Player]` 一笔事务里写——成员表与本人的副本同一笔提交，“一人一队”与成员表原子。main 的联盟阶段 4 把 game 的 `remote_entity` 换成只读 `remote_mirror`（决定 S：“game 进程没有能力写联盟实体”），合并后 game 没有 Remote 写运行时，Team 写不了（`remote=managed` 要求归属服务装 `remote_entity`）。
+
+两种做法：
+
+| | A：Team 归一个实体服务独占（alliance 模式） | B（推荐，已实施）：Team 归 game 服务，game 保留 `remote_entity` |
+| --- | --- | --- |
+| 做法 | Team `service=alliance`（或新 team 服务），写走路由 RPC（Invite / Accept / Leave / Disband / Info + 回执），读走 Mirror，成员变化由服务通知各 Base | Team 声明 `service=game`、共享模式照旧；game 不装 `remote_mirror`、装 `remote_entity`；联盟两种 kind 对 game 是 `ForeignKinds` |
+| “一人一队” | Team 与玩家在两个事务域：要么像 `AllianceMember` 一样给每名玩家一个守卫实体（预约 → 加成员 → 确认，期限到按权威收尾），要么在 Player 上做带请求号的挂起状态 + 重读收尾；联盟服务这一整套（含守卫、回执、Saga）在 game-demo 模板与生成步骤里约 5000 行，规模参考 | 仍是一笔 `[Team, Player]` 事务，原子 |
+| 联盟的保证 | game 没有写运行时（能力上不可写） | 改由框架守卫给出：game 的 Remote 运行时对联盟 kind 的认领与写准入返回 `entity.ErrRemoteKindNotOwned`（联盟方案 §2.10 第 1 项原本的机制）；读经同一个 Mod 提供的 Mirror（`MirrorSource` 对 `RemoteEntityMod` 同样可用） |
+| 代价 | 大：新 RPC、守卫、回执、通知、重读改为 I/O 段读 Mirror（Node 出站 goroutine 不能阻塞，要另起执行者）；端到端多一个服务进程 | 每个 game 进程都带 Remote 写运行时（Redis 锁、Mongo 提交、outbox；联盟阶段 4 之前本来如此）；Team 的每笔改动与每名队员每 `resync_every` 一次重读仍是共享模式 Remote 事务（v2.5-5） |
+| 与方向的关系 | 与联盟的“实体服务独占、写走 RPC”一致 | 共享模式是维护者保留的正式能力（联盟方案决定 E：“共享模式与所有权往返仍是正式能力”；2.10 第 1 项：“跨 Base Team 的共享模式不受影响”）；但与决定 S 的“game 不装 remote_entity”不同 |
+
+推荐 B 作为本次合入的做法：原型的原子性不变、改动小，联盟的不可写由框架守卫兜住；A 是原型走向正式能力时的方向（队伍若要跨服、要更强的队伍能力，或共享模式的重读开销成为瓶颈时），代价按联盟阶段 3 估。实施（`649f2c78`）：生成器 `demo.go` 不再把 game 的 `remote_entity` 换成 `remote_mirror`；Team 模板 `service={{GAME_SERVICE}}`；生成的 `ownership_gen.go` 里 Team 归 game、联盟两种 kind 归 alliance，Team 的 handler 只在 game 的 Nest 上注册（alliance 进程的 `ForeignKinds` 含 Team）；Team 声明了 `service=` 后进了 game 的路由登记 kind 列表，但共享模式的实体不登记路由（`registerRoute` 跳过 `lease.Shared`），没有路由 RPC 调它。`demo_test` 改为钉住“game 有 remote_entity、没有 remote_mirror，ownership 把两类 kind 分给两个服务”；WALKTHROUGH、KNOWN-LIMITS 的公会条目与联盟方案 §2.1 加了注。
+
+### 14.4 与 App 生命周期新规则的对齐
+
+main 的新规则（`edd1ccb7`，[impl/01 第 5 条](../framework/impl/01-app-lifecycle.md#2-必须保持的契约)）：外部输入在停机第一步关准入并排空，之后才 `Service.Shutdown`、停 Mod。逐项核对 Cell / Base 的输入：
+
+| 输入 | 性质 | 合入前 | 合入后 |
+| --- | --- | --- | --- |
+| cellworld 收件（Enter、攻击、交接 Offer / 回复、witness、owner 通知、面板命令、队伍快照与成员通知；NATS core 订阅，回调里投 Nest 或喂 mirror） | 外部输入 | 只在 `Service.Shutdown` 里随 Node 的 ctx 停，第一步之后仍投 Nest | **`Node.CloseIngress`**（`97f00ccd`）：准入门 → 等在途回调 → 退订；game-demo 在 Node 就绪后 `app.AddIngress(registry, "partition.cellworld", node)`，停机第一步关。先红后绿 `TestCloseIngressStopsTakingMessagesAndWaitsForTheOneInFlight`（修前 `CloseIngress with a message in flight = <nil>, want the ctx error`） |
+| 停机中的 Cell 上进行到一半的交接 | 协议状态 | — | 收件关了之后对方的 Offer 回复丢弃，由交接超时（`HandoffAbort`）与 Base 的重进兜底，与进程退出时相同 |
+| 格内心跳 `cell.actor`、区域心跳 `scene.cell`、Base 心跳 `cell.base` | 进程内部输入 | demo 的心跳驱动，`Service.Shutdown` 第一批停（`stopHeartbeat`） | 不变（按依赖序，不挪到第一步） |
+| 出站 goroutine 上的跟进投递（给区域的报告、隐式完成交接、`GroupResync`） | 进程内部 | `partition.stop` 取消 Node 的 ctx | 不变；第一步之后 Nest 与 Remote 仍在，投递照常 |
+| 组队端点、攻击 / 移动端点 | 玩家 TCP | 玩家 TCP Mod 按依赖序先停 | 不变 |
+
+### 14.5 §11.9 与 §13.7 逐项结论
+
+| 项 | 结论 |
+| --- | --- |
+| CHANGELOG：E1～E3 三条框架契约、E4、cellworld 线上格式（v5）、`policy.MirrorItem.Hold`、game-demo 的 Team / 协议 / 错误码 / Player 字段、升级须先停旧进程 | **已写**进 `[Unreleased]`（编号按 14.2 重排后的；线上格式写 v5，v4 是中间版本） |
+| `--min-core` | **发版时要带**：生成的分发包装用了新 API `nest.EntityNotFoundError`；CHANGELOG 的 E1 条写明。本次不发版，不改 `minimumVersions` |
+| impl/04 的 Mirrors 一节（D4、`MirrorItem.Hold`、`Interest.Hide` 会清关系视野成员） | **已写**：[impl/04 §2F](../framework/impl/04-sync.md#2f-远端只读对象policymirrors与-interest-的两条相关语义)，连同 E2 的 self 规则、文件表与回归入口 |
+| “尚未确认”的 Guild 跨进程写入（§13.6） | **关闭**：同一现象 main 已独立确认（联盟方案 §0、KNOWN-LIMITS 原条目“game-demo 的公会跨进程写会被拒”，`writer fenced`），并由联盟阶段 4（`95a65e55`）把公会迁到 alliance 服务解决；game 本地的 Guild 实体已删，不再有可验证的对象 |
+| E3：Nest 派发时按包级表兜底解析（`getHandlerEntry`）是否收敛 | **不做，列待决定**。生成的 handler 在 `init` 里注册到包级表、引擎构造时取快照，兜底只服务于“引擎构造之后才注册到包级表”的调用方（主要是框架与生成工程的测试，如 demo 的 `scene_movement_test`）；实例表优先，没有正确性问题。收敛要把这些测试改成实例注册，按发现的调用方分批做 |
+| E3：demo `game/partition.Install` 这类“实体找本进程 Node”的原子指针是否换成实体注入 | **不做，列待决定**。Player 由 DataEngine 装载，没有创建参数可以带 Node；换掉它要框架给实体加注入入口（例如 Manager 级的依赖表），属于新能力 |
+| E4：场景桥 self 绑定替代翻 `access.player.self_sync` | **已定**（维护者 §12.3 确认），不再列 |
+| 第 3、4 项 | 已实施（§12.2、§13）；端到端“两个 Base 上彼此不在视野内的队友互相看到位置 / HP”是 `team_panel` 一步 |
+| NATS 鉴权（§5.2、§6.3 第 8 条：任何连上 NATS 的进程都能往 Cell 主题发 Enter / Damage）与结算方不复核攻击距离 | **不做**：原型；上线前必须解决（参考 Gate 的 NATS ACL）。合入 main 后登记进 KNOWN-LIMITS（“无缝大世界原型”一条） |
+| 合入 main 的方式 | 见 14.7 |
+
+### 14.6 待决定（都已按推荐先做或先不做）
+
+1. **Team 的归属**：B（已实施）还是 A（14.3）。推荐 B 至原型转正式能力时再评估 A。
+2. **game 读者的 Mirror 陈旧上限**：联盟方案推荐 5s、未改；B 之后 game 的 Mirror 来自 `remote_entity` 段的同一个键 `remote_entity.cached_max_staleness`，结论不变。
+3. **E3 的两个收敛点**（14.5）：推荐暂不做。
+4. 原有的待产品规则照旧：E5 刷怪账本（§11.8）、面板变化不回血（v2.4-1）、邀请不推送（v2.5-1）等。
+
+### 14.7 合入 main 的方式
+
+推荐 **merge（`--no-ff`），不 squash**：分支的 30 多个提交各自带着先红后绿的修前文本（提交说明）与证据目录，文档（§9～§14、benchmarks README）按提交号引用它们，根包 `TestDocumentedCommitsAreReachableFromHEAD` 要求被引用的提交在 HEAD 历史里——squash 之后这些号全部失效，要么改文档、要么加豁免；分支已经两次 merge main，历史里没有 rebase 造成的重复提交。代价是 main 的一线历史多一条分支线。
+
+### 14.8 验证
+
+见 CHANGELOG 与本次交回的报告（合入后在同一工作树、同机跑：gofmt、build、vet、glsvet、改动包 `-race`、根包、doc anchors、全量 `go test -timeout 30m ./...`、`test-seamless-demo.sh` 14 步、`test-demo-generated.sh`、`test-remote-generated.sh`、`test-genres-generated.py`、`test-alliance-e2e.sh`）；结果补在下面。

@@ -131,6 +131,18 @@
 
 回归：[view_test.go](../../../framework/sync/entitysync/policy/view_test.go)（多空间视野不互相退订、共享关系视野扇出、阵营视野、层级取高或并集与实际打包字段、按视野的 `MaxVisible`、挂接上限、跟随可改可空、移除视野、ID / 种类 / Leave、块预算），[policy_test.go](../../../framework/sync/entitysync/policy/policy_test.go) 的 D19 基线（`TestRelationMembershipSubscribesAndReleases`、`TestDistanceKeepsASubscriptionTheRelationDropped`、`TestDistanceBandsChangeTheSubscribedView`、`TestSelfVisibilityFollowsConfigAndLeave`、`TestTeamMembersSeeEachOtherAndLeaveCleansBothSides`，在旧 API 上写下、改结构后只改准备步骤）与 D14 的 `TestObserverAndSubjectIDSpacesStayApart`、`TestTwoObserversDoNotReleaseEachOthersSubscription`、`TestSetObserverView*`、`TestWatchSeesWithoutBeingSeen`、`TestQueuedMoveCarriesTheViewsThatFollowTheEntity`；[aoi_test.go](../../../framework/sync/entitysync/policy/aoi_test.go) `TestInterestUnionsTheLayersOfDifferentViews` 与 D14 的 AOI 用例；`framework/entity` 的 `TestSyncLayerUnionResolvesFieldsAndPriority`、`entitysync` 的 `TestUnionProfilePriorityIsItsBestLayer`。基准：`BenchmarkRelationViewMemberChange`、`BenchmarkRelationViewAttach`、`BenchmarkSpatialViewsPerPlayer`、`BenchmarkSharedSpatialView`（只量登记表与扇出，不含 Manager）；`scripts/perf/sync-aoi` 的 `-views-per-player` / `-alliance-size`。
 
+## 2F. 远端只读对象（policy.Mirrors）与 Interest 的两条相关语义
+
+`policy.Mirrors[T]`（[mirror.go](../../../framework/sync/entitysync/policy/mirror.go)）把“权威不在本进程、本进程没有它的 Nest 实体，但本进程的客户端要看见它”的对象接进同一个 Manager 与 Interest：分区 Scene 里 Base 进程的玩家看见所在格（另一个进程）的 Real / Ghost，以及别的 Base 上队友的快照，都是它（`gameplay/cellworld`，无缝大世界原型 D4，2026-11-04 随原型合入 main 写进本节；设计与验证见 [无缝大世界方案](../../maintenance/FEATURE-2026-11-03-seamless-world.md) §7.2、§13.2）。实现要守住：
+
+1. **只认版本，不认投递顺序**。`MirrorVersion{Epoch, Seq}` 按字典序比较，`Apply` 只接受严格更新的版本，旧的、重复的丢弃；`Mask` 是相对上一个被接受版本的字段掩码，调用方跳过中间版本时必须给 0（全量）。不绑实体的 `SubjectSyncState`：packer 在捕获路径上现取最新已接受的内容，`Snapshot` / `Delta` 不得阻塞、不得回调 Mirrors。
+2. **保留时间按份给**。`MirrorConfig.TTL` 是缺省保留时间；`MirrorItem.Hold`（2026-11-04 新增，非零时）只对这一份内容生效，同一对象的保留时间跟着**最近一次被接受的那份**走（cellworld 里 witness 每拍一份按 TTL 1s、队伍快照每秒一份按 3s）。`Expire` 按它删除；删除留墓碑 2 × max(TTL, 保留时间)，墓碑期内同版本或更旧的内容不复活。回归 `TestMirrorHoldOverridesTTLPerItem`（修前 `at 1.5s Expire removed 3, want 2`）。
+3. **删除走 Interest.Hide**：`Remove` / `Expire` 依次 `Interest.Hide` → `Manager.Unregister` → 关状态 → 留墓碑；同 ID 再出现时 `Register` 排在退役之后、再 `Show`。
+4. **`Interest.Hide` 会把目标从所有关系视野的成员里去掉**（Interest 的既有语义，[interest.go](../../../framework/sync/entitysync/policy/interest.go) `Hide`）。所以一个 mirror 过期删除之后，即使同一对象后来又出现，它也**不会自动回到**之前的关系视野里：调用方要按自己的成员表重新 `SetMembers` / 加回（cellworld 的组关系视野在 Base 心跳里每拍比较视野成员与成员表，`groupViewDrifted`）。空间视野不受影响：再次 `Show` 进空间索引就按距离重新订阅。
+5. **self 跟着自身实体的 Hide / Show 走**（无缝大世界 E2，2026-11-03）：以某实体为 self 的玩家，在它被 `Hide` 期间看不见自己，再次 `Show` / `Move` 进空间索引时自动恢复（`Interest.selfBy` 反查，`removeSubjectLocked` 收回、`placeSubjectLocked` 恢复）。回归 `TestSelfFollowsItsEntityThroughHideAndShow`（policy_test.go）。
+
+回归：[mirror_test.go](../../../framework/sync/entitysync/policy/mirror_test.go) `TestMirrorJoinsTheSameSessionAsALocalEntity`、`TestMirrorDropsVersionsThatAreNotNewer`、`TestMirrorSendsDeltaForMaskAndFullForZeroMask`、`TestMirrorRemoveTombstonesAndRecreates`、`TestMirrorExpiresObjectsNotHeardFrom`、`TestMirrorPositionDrivesVisibility`、`TestMirrorConcurrentAppliesConvergeOnTheNewestVersion`、`TestMirrorCloseRemovesEverything`、`TestMirrorHoldOverridesTTLPerItem`；接入方的端到端在 `gameplay/cellworld`（`group_test.go`、`world_test.go`）与 `scripts/test-seamless-demo.sh`。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。
@@ -184,7 +196,7 @@
 
 ### sync/entitysync/policy
 
-14 个实现文件、9 个测试文件。
+15 个实现文件、11 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -196,6 +208,7 @@
 | [group_view.go](../../../framework/sync/entitysync/policy/group_view.go) | `GroupViewConfig`、`GroupView` |
 | [interest.go](../../../framework/sync/entitysync/policy/interest.go) | `InterestConfig`、`Refusal`、`Interest` |
 | [interest_queue.go](../../../framework/sync/entitysync/policy/interest_queue.go) | 函数/方法或内部实现；见源码 |
+| [mirror.go](../../../framework/sync/entitysync/policy/mirror.go) | `MirrorVersion`、`MirrorConfig`、`MirrorItem`、`Mirrors`、`ErrMirrorConfig`、`ErrMirrorsClosed`（第 2F 节） |
 | [profiles.go](../../../framework/sync/entitysync/policy/profiles.go) | 函数/方法或内部实现；见源码 |
 | [view.go](../../../framework/sync/entitysync/policy/view.go) | `ViewID`、`MainView`、视野错误 `ErrViewUnknown` / `ErrViewExists` / `ErrViewKind` / `ErrViewLimit` |
 
@@ -330,6 +343,7 @@
 - [view_test.go](../../../framework/sync/entitysync/policy/view_test.go)：`TestOnePlayersSpatialViewsDoNotReleaseEachOther`、`TestSharedRelationViewFansMemberChangesOut`、`TestCampViewsShareEveryUnitsSightWithTheWholeCamp`、`TestLayersOfSeveralViewsTakeTheRicherOrTheUnion`、`TestMaxVisibleCountsPerView`；其余 5 项见文件
 - [self_view_test.go](../../../framework/sync/entitysync/policy/self_view_test.go)：`TestSelfViewSendsAFullSnapshotThenDeltas`、`TestSelfViewWaitsForTheEntityToAppear`、`TestSelfViewReconnectGetsAFullSnapshot`、`TestSelfViewReplacedConnectionKeepsTheView`、`TestSelfViewWaitsForTheConnectionToCloseAfterALoss`、`TestSelfViewEveryIsolatedLossIsRecoveredByTheReconnect`、`TestSelfViewLossRacingANewConnection`、`TestSelfViewCountsPlayersOnlineWithoutASession`、`TestSelfViewUnloadRetractionIsResubmitted`、`TestSelfViewRolledBackCreateIsBoundAgain`、`TestSelfViewCloseDuringFlush`、`TestSelfViewLoginAndDisconnectRace`、`TestNewSelfViewRefusesAnIncompleteConfig`
 - [group_view_test.go](../../../framework/sync/entitysync/policy/group_view_test.go)：`TestGroupViewFollowsTheSessionsOfTheSelfView`、`TestGroupViewRoomIsResentWithTheSecondConnection`、`TestGroupViewWaitsForTheGroupEntity`、`TestGroupViewLeaveAndDisband`、`TestGroupViewDisbandThenRejoinBeforeTheStage`、`TestGroupViewRefusesBeyondTheMemberLimit`
+- [mirror_test.go](../../../framework/sync/entitysync/policy/mirror_test.go)：第 2F 节列出的 9 项
 - [resubmit_test.go](../../../framework/sync/entitysync/policy/resubmit_test.go)：`TestInterestResubmitsASubscriptionTheFrameworkRetracted`、`TestInterestDoesNotResubmitAPairItReleasedWhileTheSubjectWasAway`、`TestEachPolicyResubmitsItsOwnRetractedSubscription`、`TestGroupAndDirectResubmitAfterRetraction`、`TestGroupResubmitsAfterASecondRetractionBeforeDelivery`；其余 5 项见文件
 
 ### sync/frame
