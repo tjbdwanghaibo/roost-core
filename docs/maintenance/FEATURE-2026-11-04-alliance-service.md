@@ -1,6 +1,6 @@
 # 功能设计：联盟 / 公会服务（2026-11-04）
 
-**状态：方案已定、未实施（维护者 2026-11-04 定方向：“先写方案，按推荐”）。仓库里没有对应代码；现行公会行为与它的限制以 [KNOWN-LIMITS“Remote”](KNOWN-LIMITS.md#remote) 为准。**
+**状态：方案已定、实施中（维护者 2026-11-04 定方向：“先写方案，按推荐”；同日“未声明归属的 kind 按 A，其他 5 条也按推荐，开始实施”）。现行公会行为与它的限制以 [KNOWN-LIMITS“Remote”](KNOWN-LIMITS.md#remote) 为准，各阶段落地情况记在第 7 节。**
 
 登记在 [DESIGN-TODO“按需求触发的功能”](DESIGN-TODO.md#按需求触发的功能)。基线 `e12e3dc8`（origin/main）。codebase-memory 本轮连不上，第 1 节的现状结论全部按源码与 `rg` 核对，引用写到文件与函数。
 
@@ -245,6 +245,7 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 现有生成器已经能做：声明 alliance 业务服务及其 mods、多 sid 实例、`roost add rpc` 的服务与调用方、Remote 托管实体与 DAO、`//roost:mirror` DTO、Player 原生步骤 Saga。只补下面四件，不新建一整套“实体服务”生成器：
 
 1. **实体归属服务**：实体标记加 `service=<name>`（或 `roost.yaml` 里 `services.<name>.entities`），只声明一次。生成器据此只在该服务注册这个 kind 的 Nest handler 与 lifecycle；运行期 Remote Manager 拿到“本服务可写的 kind”列表，对不在列表里的 kind 拒绝认领与写许可（不靠调用方自觉，防止别的服务的进程把新实体认领走，1.2）。doctor 检查“声明了归属的 kind 被别的服务的 Sender 调用”。
+   - **未声明归属的 kind 保持现行为**（维护者 2026-11-04 选 A）：任何带 Nest 的服务都能写，只有声明了 `service=` 的 kind 受守卫约束；Player 的静态 sid 归属、跨 Base Team 的共享模式、SLG 联盟夹具都不受影响。声明位置用实体注解 `service=<name>`，不在 `roost.yaml` 再写一份。
 2. **按分片路由的 RPC**：`//roost:rpc shard=<param>`（参数是联盟 ID 或玩家 ID），生成的客户端读 `alliance.slots` / `alliance.shards` 算 sid、`CallTo`、处理一次“改投”。框架侧在 `infra/network/servicerpc` 加按槽位表选 sid 的 picker 与“改投”答复码；配置声明与校验一次。
 3. **只读 Mirror Mod**：Mod 目录加 `remote_mirror`（`wiring/remoteentity.NewRemoteMirrorMod`），依赖 `redis`、`syncbus`、`mongo`；带 Nest 的服务装了它时，wiring 的 Nest Mod 用 `MirrorSource` 接上 `NestOptionWithRemoteSnapshotResolver`，使 `RemoteViewRef` 在只读进程可用。
 4. **写 RPC 的约定**：`roost add rpc` 增加 `-entity-service` 选项，骨架方法带 `requestID` 参数、`Result` 查询、处理预算与 2.3 的四类答复；owner Mod 依赖 `nest`（现在的 owner Mod 只依赖 `nats`，`add_rpc.go` 的 `renderRPCMod`），保证 DataEngine 恢复与 Nest 启动之后才在总线上接请求；请求回执的 DAO 字段与读写方法由同一选项生成到实体上。
@@ -299,9 +300,9 @@ game-demo 是参考实现，不改成生成产物；以上四件生成器能力�
 - **接管依赖 WAL 卷**：换机拉起同 sid 必须带上原 WAL 卷，或先确认 WAL 已排空；与 game sid 相同的部署约束，部署文档要写明。
 - **平台**：只在 macOS 本机验收；Linux 复跑与跨机不在本轮。
 
-## 6. 待维护者决定的剩余问题
+## 6. 剩余问题的决定（维护者 2026-11-04：全部按推荐，即每条的 A）
 
-上面的决定没有覆盖、确实需要产品或架构选择的只有下面几条。
+下面五条当时列为待定，维护者 2026-11-04 全部选 A（推荐项），按 A 实施；B / C 保留作记录。
 
 1. **联盟人数上限**。成员表是一个文档。
    - A（推荐）：上限可配置，缺省 100、硬上限 500；超过就拒绝。代价：千人级联盟要另做。
@@ -319,3 +320,16 @@ game-demo 是参考实现，不改成生成产物；以上四件生成器能力�
 5. **在线通知的可靠性**（2.5 的被踢、入会通知）。
    - A（推荐）：尽力投递，登录时从 Mirror 补齐。
    - B：每个玩家一个可靠收件箱，未读通知持久化、登录时补投。代价：多一个持久结构与清理规则。
+
+## 7. 实施记录
+
+按第 4 节的阶段推进，每个阶段合入 main 时在这里补一行：提交、验收结果、与方案的偏差。
+
+| 阶段 | 状态 | 提交 | 备注 |
+| --- | --- | --- | --- |
+| 1 框架 | 进行中 | — | — |
+| 2 生成器 | 进行中 | — | — |
+| 3 服务骨架 | 未开始 | — | 依赖 1 |
+| 4 demo 迁移 | 未开始 | — | 依赖 2、3 |
+| 5 测试与端到端 | 未开始 | — | 依赖 4 |
+| 6 文档 | 未开始 | — | — |
