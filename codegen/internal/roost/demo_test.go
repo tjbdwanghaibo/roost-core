@@ -120,15 +120,13 @@ func TestDemoTemplateKeepsTheGameTemplateAndItsFeatures(t *testing.T) {
 // the handler's parameters and the request fields that must match — are
 // present. Compilation against roost-core is verified by CI, which generates a
 // project from this template and builds it.
+//
+// 工程取 game-demo 夹具的副本：夹具的 NewOptions 与这里原先直接传给 NewProject 的逐字段相同，副本与一次新鲜
+// NewProject 逐字节相同由 TestProjectFixtureCopiesMatchAFreshNewProject 证明（它对 game-demo 真实生成一次再比对），
+// 所以断言对象不变；省掉的是同一组参数的又一次完整生成（本包最慢的两条之一，负载高时 150s 以上）。
 func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	t.Parallel()
-	target := filepath.Join(t.TempDir(), "planet")
-	if _, _, err := NewProject(NewOptions{
-		Name: "planet", Module: "example.com/planet", Out: target,
-		Mods: []string{"configdata", "mongo", "nats", "dataengine", "nest"}, Template: demoTemplateName,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	target := copyOfNewProject(t, "game-demo")
 
 	shipped, err := demoSourceFiles()
 	if err != nil {

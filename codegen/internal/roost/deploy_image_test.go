@@ -189,6 +189,7 @@ func shadows(target, dir string) bool {
 }
 
 func TestProductionImageCarriesConfigDataWhereConfigDataDirResolves(t *testing.T) {
+	t.Parallel()
 	t.Run("game-demo on disk", func(t *testing.T) {
 		root := newGameDemo(t)
 		m, err := LoadManifest(root)
@@ -413,6 +414,7 @@ func assertKubernetesWritableMount(t *testing.T, file func(rel string) (string, 
 }
 
 func TestGeneratedDeploymentsGiveStatsLogAWritableDirectory(t *testing.T) {
+	t.Parallel()
 	t.Run("game-demo on disk", func(t *testing.T) {
 		root := newGameDemo(t)
 		m, err := LoadManifest(root)

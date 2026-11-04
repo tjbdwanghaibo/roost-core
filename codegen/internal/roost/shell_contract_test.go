@@ -74,6 +74,7 @@ func assertShellInstallCarriesConfigData(t *testing.T, m Manifest, file func(rel
 }
 
 func TestShellInstallPutsConfigDataWhereConfigDataDirResolves(t *testing.T) {
+	t.Parallel()
 	t.Run("game-demo on disk", func(t *testing.T) {
 		root := newGameDemo(t)
 		m, err := LoadManifest(root)

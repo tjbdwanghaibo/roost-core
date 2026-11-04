@@ -18,6 +18,7 @@ import (
 // 生成的 main 内嵌 time/tzdata，运行镜像里没有 zoneinfo 时也能加载 Asia/Shanghai。
 
 func TestGeneratedConfigsWriteTheBusinessTimeZone(t *testing.T) {
+	t.Parallel()
 	root := copyOfNewProject(t, "game-demo")
 	matches, err := filepath.Glob(filepath.Join(root, "configs", "service", "config.*.yaml"))
 	if err != nil || len(matches) < 4 {
@@ -126,6 +127,7 @@ func requireZoneinfoHidden(t *testing.T, ctx context.Context) {
 // 生成的 main 内嵌 time/tzdata：带上它的副作用导入的程序在看不到系统 zoneinfo 的环境里仍能加载 Asia/Shanghai；
 // 对照程序（没有这些导入）在同一环境里加载失败，说明环境确实模拟了没有 zoneinfo 的镜像。
 func TestGeneratedMainEmbedsTheTimeZoneDatabase(t *testing.T) {
+	t.Parallel()
 	main := renderMain(Manifest{Project: ProjectSpec{Module: "example.com/tzprobe"}})
 	imports := blankImports(t, main)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

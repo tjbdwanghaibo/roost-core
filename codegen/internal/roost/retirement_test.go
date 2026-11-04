@@ -13,6 +13,7 @@ import (
 )
 
 func TestStagedProjectCommitSeesEntityRetirement(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"entity"}})
 	if err != nil {
@@ -64,6 +65,7 @@ func TestStagedProjectCommitSeesEntityRetirement(t *testing.T) {
 }
 
 func TestStagedProjectCommitAndCheckSeeTableJSONRetirement(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Features: []string{"config"}})
 	if err != nil {

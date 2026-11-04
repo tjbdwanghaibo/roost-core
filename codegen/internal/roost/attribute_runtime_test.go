@@ -29,6 +29,7 @@ func TestAttributeRuntimeFileIsMarkedGenerated(t *testing.T) {
 
 // A generated project with the feature must pass doctor's template check.
 func TestGeneratedAttributeProjectPassesTheTemplateCheck(t *testing.T) {
+	t.Parallel()
 	target := filepath.Join(t.TempDir(), "planet")
 	_, root, err := NewProject(NewOptions{Name: "planet", Module: "example.com/planet", Out: target, Mods: []string{"configdata"}, Features: []string{"attribute"}})
 	if err != nil {
