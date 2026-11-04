@@ -150,6 +150,45 @@ func TestEntityManagerCreateUsesInstanceDependencies(t *testing.T) {
 	}
 }
 
+// 只给唯一号（生成的 lifecycle Create / GetOrCreate 都这样调）新建的实体，实体锁也必须是 LockManager 里按完整 ID
+// 取的那把：修前 build 在规范 ID 之前按 param.Id（仍为 0）取锁，所有这样新建的实体共用 ID 0 的一把锁——不同实体的
+// Nest 消息互相串行，同 ID 的加载与新建也不再互斥（2026-11-05 联盟 Join 吞吐定位时发现）。
+func TestEntityManagerCreateByUniqueIDGetsItsOwnLock(t *testing.T) {
+	manager := NewEntityManager()
+	access := NewManagerAccess(manager)
+	var created []IThreadSafeEntity
+	for _, uniqueID := range []int64{101, 102} {
+		value, err := access.Create(&EntityCreateParam{IsCreate: true, UniqueID: uniqueID, Kind: testEntityKind})
+		if err != nil {
+			t.Fatal(err)
+		}
+		created = append(created, value)
+	}
+	for _, value := range created {
+		if got := value.GetMutex().LockId(); got != value.ID() {
+			t.Fatalf("entity %d holds the lock of id %d", value.ID(), got)
+		}
+		if value.GetMutex() != manager.locks.GetLock(value.ID()) {
+			t.Fatalf("entity %d does not use the LockManager lock of its own id", value.ID())
+		}
+	}
+	// 一个实体的锁被别的 goroutine 持有时，另一个实体的锁必须仍可取得。
+	first, second := created[0].GetMutex(), created[1].GetMutex()
+	held, release := make(chan struct{}), make(chan struct{})
+	go func() {
+		first.Lock()
+		close(held)
+		<-release
+		first.Unlock()
+	}()
+	<-held
+	defer close(release)
+	if !second.TryLock() {
+		t.Fatalf("entity %d is blocked by the lock of entity %d", created[1].ID(), created[0].ID())
+	}
+	second.Unlock()
+}
+
 func TestEntityManagerCreateInScopeLocksBeforePublication(t *testing.T) {
 	manager := NewEntityManager()
 	id := mustBuildTestEntityID(t, 99, testEntityCategory, testEntityKind)

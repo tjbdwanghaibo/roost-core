@@ -251,6 +251,12 @@ func (m *EntityManager) build(param *EntityCreateParam) (IThreadSafeEntity, erro
 			return nil, err
 		}
 	}
+	// 先把 Id / UniqueID 规范成完整 ID 再取锁：只给唯一号时 param.Id 还是 0，按它取锁会让所有这样新建的实体
+	// 共用 ID 0 的一把锁（下面的 LockId 校验也因两边都是 0 而放过），不同实体互相串行、同 ID 的加载与新建不再互斥。
+	// BuildEntity 随后再规范一次是幂等的。
+	if err := param.NormalizeID(param.Kind); err != nil {
+		return nil, err
+	}
 	if param.Mutex == nil {
 		param.Mutex = m.locks.GetLock(param.Id)
 	}

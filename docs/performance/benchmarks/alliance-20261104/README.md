@@ -26,7 +26,7 @@ scripts/mirror-local.sh clean
 | `Join`，分在 4 个实例 | 16 | 24 · 317 ms / 2.2 s | 20 · 761 ms / 2.2 s |
 | `Found`（建盟，队列组） | 16（4 实例） | 16～18 个/秒 | — |
 
-同一实例上同一方法的请求是串行处理的（bus 按方法名哈希选 worker，见 KNOWN-LIMITS“实体服务的 RPC 在一个实例上按方法串行”）：一个实例上 16 并发读 16 个不同联盟也只有约 100 次/秒，`Join` 约 13 次/秒、`Found` 约 9 个/秒；并发只增加排队时间。（同日已修：总线改为按顺序键派发，前后对照见 [rpc-dispatch-20261104](../rpc-dispatch-20261104/README.md)。）
+同一实例上同一方法的请求是串行处理的（bus 按方法名哈希选 worker，见 KNOWN-LIMITS“实体服务的 RPC 在一个实例上按方法串行”）：一个实例上 16 并发读 16 个不同联盟也只有约 100 次/秒，`Join` 约 13 次/秒、`Found` 约 9 个/秒；并发只增加排队时间。（同日已修：总线改为按顺序键派发，前后对照见 [rpc-dispatch-20261104](../rpc-dispatch-20261104/README.md)。总线修好后 `Join` 分散到多个联盟仍上不去的原因——实体锁错位与投影器的 effect 顺序类——见 [alliance-join-20261105](../alliance-join-20261105/README.md)。）
 
 ## 预加载与续期（`TestAllianceE2EShortPerf`）
 
