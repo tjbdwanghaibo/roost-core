@@ -399,7 +399,7 @@ func demoActivityKeys(root, gameService string) error {
 }
 
 func demoScaffoldSteps(gameService string) []demoScaffoldStep {
-	return []demoScaffoldStep{
+	steps := []demoScaffoldStep{
 		{add: &AddOptions{Kind: "component", Name: "Profile", Entity: "Player"}, why: "Player's identity state"},
 		{add: &AddOptions{Kind: "component", Name: "Bag", Entity: "Player"}, why: "Player's item state"},
 		{add: &AddOptions{Kind: "dao", Name: "Player", Entity: "Player"}, why: "persistence for both components"},
@@ -736,6 +736,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/chat/collaborators.go", why: "a chat service with a written-down policy, one text type and a granted system path"},
 		{write: "internal/service/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},
 	}
+	return append(steps, demoAllianceSteps()...)
 }
 
 // scaffoldDemoTemplate builds the demo on top of the game template: Player

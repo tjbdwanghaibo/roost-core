@@ -1,0 +1,194 @@
+package alliance_member
+
+import (
+	"fmt"
+	"time"
+
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/alliancerule"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+//roost:component type=2009
+const CompTypeGuard entity.ComponentType = 2009
+
+// GuardComponent is "one player, one alliance" (plan §2.5).
+//
+// A player joins in two steps when their guard and the alliance are on
+// different service instances: the guard is reserved for (alliance, request
+// id), the alliance admits the player under that request id, and the guard is
+// confirmed from the alliance's "member changed" effect — or released when
+// the alliance refused. A reservation blocks every other alliance. If it is
+// still open at its deadline, the guard asks the alliance (Settle) what became
+// of the request, which also makes that answer final, and confirms or releases
+// by it: never on the clock alone, because a request still in flight could
+// otherwise seat the player after the guard let go. When guard and alliance
+// are on the same instance, the three steps are one transaction (Join).
+//
+// Leaving is the reverse: the alliance drops the seat, then the guard is
+// cleared — only for the membership that ended (its join request id), so a
+// late "left" cannot clear a newer membership.
+type GuardComponent struct {
+	entity.ComponentBase
+	owner *AllianceMember
+}
+
+// IGuardEntity is the narrow lock-safe view for Nest handlers using this
+// component. The generated Entity wire implements the getter.
+type IGuardEntity interface {
+	entity.IThreadSafeEntity
+	GuardComp() *GuardComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeGuard, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*AllianceMember)
+		if !ok {
+			return nil, fmt.Errorf("guard component: owner %T is not *AllianceMember", owner)
+		}
+		return &GuardComponent{owner: typed}, nil
+	})
+}
+
+func (component *GuardComponent) Name() string { return "guard" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (component *GuardComponent) Owner() *AllianceMember { return component.owner }
+
+// PlayerID is the player this guard belongs to.
+func (component *GuardComponent) PlayerID() int64 {
+	return entity.GetUniqueIDFromEntityID(component.owner.ID())
+}
+
+// Execute runs one write with its receipt (alliancerule.Execute) at the
+// guard's current state version.
+func (component *GuardComponent) Execute(requestID string, nowUnix int64, retention time.Duration, apply func() (int64, error)) (alliancerule.Outcome, error) {
+	return alliancerule.Execute(guardReceipts{dao: component.owner.Dao()}, requestID, component.owner.EntityVersion(), nowUnix, retention, apply)
+}
+
+// Receipt reads the receipt of requestID.
+func (component *GuardComponent) Receipt(requestID string) (alliancerule.Receipt, bool) {
+	return guardReceipts{dao: component.owner.Dao()}.Receipt(requestID)
+}
+
+// CheckFree refuses when the player is in an alliance, another request is
+// admitting them, or they left too recently.
+func (component *GuardComponent) CheckFree(requestID string, nowUnix int64, cooldown time.Duration) error {
+	dao := component.owner.Dao()
+	if dao.GetAllianceID() != 0 {
+		return errcode.Wrap(apperrors.ErrAllianceMembership, nil, "alliance_id", dao.GetAllianceID())
+	}
+	if pending := dao.GetPendingRequestID(); pending != "" && pending != requestID {
+		return errcode.Wrap(apperrors.ErrAllianceMembership, nil, "pending_alliance_id", dao.GetPendingAllianceID())
+	}
+	if left := dao.GetLeftAtUnix(); cooldown > 0 && left > 0 && nowUnix-left < int64(cooldown/time.Second) {
+		return errcode.Wrap(apperrors.ErrAllianceCooldown, nil, "left_at_unix", left)
+	}
+	return nil
+}
+
+// Reserve holds the guard for allianceID under requestID until deadlineUnix
+// (after CheckFree). The caller arms the deadline on the instance's
+// AllianceShard in the same transaction.
+func (component *GuardComponent) Reserve(allianceID int64, requestID string, deadlineUnix int64) {
+	dao := component.owner.Dao()
+	dao.SetPendingAllianceID(allianceID)
+	dao.SetPendingRequestID(requestID)
+	dao.SetPendingDeadlineUnix(deadlineUnix)
+}
+
+// Join records the player as in allianceID under requestID (after
+// CheckFree); the same-instance form of reserve + confirm.
+func (component *GuardComponent) Join(allianceID int64, requestID string) {
+	dao := component.owner.Dao()
+	dao.SetAllianceID(allianceID)
+	dao.SetJoinRequestID(requestID)
+	component.clearPending()
+}
+
+// Resolve settles the reservation of requestID: joined confirms it (the
+// alliance seated the player), otherwise it is released. A reservation that
+// is not requestID's — already settled, or never made — is left alone and
+// Resolve reports false; that is what makes a redelivered resolution
+// harmless.
+func (component *GuardComponent) Resolve(requestID string, allianceID int64, joined bool) bool {
+	dao := component.owner.Dao()
+	if requestID == "" || dao.GetPendingRequestID() != requestID || dao.GetPendingAllianceID() != allianceID {
+		return false
+	}
+	if joined {
+		component.Join(allianceID, requestID)
+		return true
+	}
+	component.clearPending()
+	return true
+}
+
+// Clear ends the membership of allianceID that joinRequestID made, when it is
+// still the current one; reports whether it did.
+func (component *GuardComponent) Clear(allianceID int64, joinRequestID string, nowUnix int64) bool {
+	dao := component.owner.Dao()
+	if dao.GetAllianceID() != allianceID || dao.GetJoinRequestID() != joinRequestID {
+		return false
+	}
+	dao.SetAllianceID(0)
+	dao.SetJoinRequestID("")
+	dao.SetLeftAtUnix(nowUnix)
+	return true
+}
+
+// State is the guard as answered to callers, at version.
+func (component *GuardComponent) State(version int64) alliancerule.MemberState {
+	dao := component.owner.Dao()
+	return alliancerule.MemberState{
+		PlayerID: component.PlayerID(), AllianceID: dao.GetAllianceID(), JoinRequestID: dao.GetJoinRequestID(),
+		PendingAllianceID: dao.GetPendingAllianceID(), PendingRequestID: dao.GetPendingRequestID(),
+		PendingDeadlineUnix: dao.GetPendingDeadlineUnix(), LeftAtUnix: dao.GetLeftAtUnix(), Version: version,
+	}
+}
+
+// CurrentVersion is the guard's state version now.
+func (component *GuardComponent) CurrentVersion() int64 { return component.owner.EntityVersion() }
+
+func (component *GuardComponent) clearPending() {
+	dao := component.owner.Dao()
+	if dao.GetPendingRequestID() == "" && dao.GetPendingAllianceID() == 0 && dao.GetPendingDeadlineUnix() == 0 {
+		return
+	}
+	dao.SetPendingAllianceID(0)
+	dao.SetPendingRequestID("")
+	dao.SetPendingDeadlineUnix(0)
+}
+
+// guardReceipts adapts AllianceMemberDao.Requests to alliancerule.ReceiptStore.
+type guardReceipts struct{ dao *db.AllianceMemberDao }
+
+func (r guardReceipts) Receipt(requestID string) (alliancerule.Receipt, bool) {
+	stored, ok := r.dao.GetRequests(requestID)
+	if !ok || stored == nil {
+		return alliancerule.Receipt{}, false
+	}
+	return alliancerule.Receipt{Code: stored.GetCode(), Version: stored.GetVersion(), Subject: stored.GetSubject(), AtUnix: stored.GetAtUnix()}, true
+}
+
+func (r guardReceipts) PutReceipt(requestID string, receipt alliancerule.Receipt) {
+	stored := &db.AllianceMemberReceipt{}
+	stored.SetCode(receipt.Code)
+	stored.SetVersion(receipt.Version)
+	stored.SetSubject(receipt.Subject)
+	stored.SetAtUnix(receipt.AtUnix)
+	r.dao.SetRequests(requestID, stored)
+}
+
+func (r guardReceipts) DeleteReceipt(requestID string) { r.dao.DelRequests(requestID) }
+
+func (r guardReceipts) RangeReceipts(f func(string, alliancerule.Receipt) bool) {
+	r.dao.RangeRequests(func(requestID string, stored *db.AllianceMemberReceipt) bool {
+		if stored == nil {
+			return true
+		}
+		return f(requestID, alliancerule.Receipt{Code: stored.GetCode(), Version: stored.GetVersion(), Subject: stored.GetSubject(), AtUnix: stored.GetAtUnix()})
+	})
+}

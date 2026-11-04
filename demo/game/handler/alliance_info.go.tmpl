@@ -1,0 +1,28 @@
+package handler
+
+import (
+	"{{MODULE}}/game/alliancerule"
+	alliance "{{MODULE}}/game/entities/alliance"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// handlerAllianceInfo is the authoritative read (GM, checking after a write).
+// Players read the alliance through its mirror instead (phase 4).
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceInfo(target alliance.IRosterEntity) (alliancerule.View, error) {
+	roster := target.RosterComp()
+	if !roster.Founded() {
+		return alliancerule.View{}, errcode.Wrap(apperrors.ErrAllianceMissing, nil, "alliance_id", roster.AllianceID())
+	}
+	return roster.View(roster.CurrentVersion()), nil
+}
+
+// handlerAllianceReceipt reads one request's receipt (Result).
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceReceipt(target alliance.IRosterEntity, requestID string) (alliancerule.ReceiptAnswer, error) {
+	receipt, found := target.RosterComp().Receipt(requestID)
+	return alliancerule.ReceiptAnswer{Found: found, Receipt: receipt}, nil
+}

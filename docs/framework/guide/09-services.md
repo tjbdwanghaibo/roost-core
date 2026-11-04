@@ -25,7 +25,7 @@ owner 是持有服务数据的一方，client 是调用方；领域实现与接�
 | rank | service/rank | 排行更新、查询和幂等 |
 | directory | service/directory | 全局名字目录的预留/提交/释放 |
 
-十个领域及服务运行逻辑统一在 service，Wiring 提供本地 Mod、远端 ClientMod 和进程接线；旧领域 alias 已删除。directory 是嵌入能力，game-demo 托管其余九个框架服务，加 game 共十个进程。
+十个领域及服务运行逻辑统一在 service，Wiring 提供本地 Mod、远端 ClientMod 和进程接线；旧领域 alias 已删除。directory 是嵌入能力，game-demo 托管其余九个框架服务，加 game 与 alliance（联盟服务骨架，见[联盟服务方案](../../maintenance/FEATURE-2026-11-04-alliance-service.md)）共十一个进程。
 
 ## 1A. Session 运行会话
 

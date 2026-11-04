@@ -1,0 +1,628 @@
+package alliance
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	"{{MODULE}}/game/effects"
+	alliance "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+	alliance_shard "{{MODULE}}/game/entities/alliance_shard"
+	"{{MODULE}}/game/handler"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+)
+
+// The harness runs alliance service instances in one test process. What is
+// real: each instance's Nest engine, the generated senders and dispatch, the
+// handlers and the entity rules, undo, the transaction's effects; the
+// generated BusClient (route lookup, one redirect, a fresh lookup after no
+// responders) and the generated handlers (the route check before the method,
+// the redirect target in the response), with requests and responses encoded
+// by the bus codec. What stands in:
+//
+//   - testBus delivers a call to the handlers the target instance
+//     registered (no handler: no responders), and gives the queue group's
+//     calls (Found) to the instance a test names, or round robin;
+//   - the cluster is the route lookup: a stale hint when a test sets one
+//     (an old Redis registration or cache), otherwise the ownership record;
+//   - fakeRemote is the Remote runtime: one ownership table for the whole
+//     cluster (the persistent ownership records), whose first write claims
+//     an entity atomically and fences every other instance, plus fences a
+//     test injects; each instance keeps its own loaded entities;
+//   - the committer records the commit records' effects; the test hands them
+//     to the consumers (deliverEffects).
+//
+// Mongo, Redis, the WAL and the effect stream are not here: the real
+// dependencies are the smoke test's (phase 5).
+
+func registerAllianceEntities() {
+	alliance.RegisterEntity()
+	alliance_member.RegisterEntity()
+	alliance_shard.RegisterEntity()
+}
+
+// registerAllianceHandlers registers the alliance handlers on one engine, the
+// way the generated NewOwnedNestHandlersMod("alliance") does in the alliance
+// process: the kinds are owned (service=alliance), so their handlers are
+// instance-registered, never in the package-level table.
+func registerAllianceHandlers(t *testing.T, engine *nest.NestMgr) {
+	t.Helper()
+	for _, register := range []func(*nest.NestMgr) error{
+		handler.RegisterAllianceApplyNestHandlersOn, handler.RegisterAllianceDonateNestHandlersOn,
+		handler.RegisterAllianceAdmitNestHandlersOn, handler.RegisterAllianceAdmitReservedNestHandlersOn,
+		handler.RegisterAllianceInfoNestHandlersOn, handler.RegisterAllianceRejectNestHandlersOn,
+		handler.RegisterAllianceFoundNestHandlersOn, handler.RegisterAllianceGuardNestHandlersOn,
+		handler.RegisterAllianceTransferNestHandlersOn, handler.RegisterAllianceWarNestHandlersOn,
+		handler.RegisterAllianceRemoveNestHandlersOn, handler.RegisterAllianceSettleNestHandlersOn,
+	} {
+		if err := register(engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// cluster is the instances and what they share: the ownership records, the id
+// counter, the notices sent to game servers.
+type cluster struct {
+	t         *testing.T
+	instances map[int32]*instance
+	rules     Rules
+	now       time.Time
+
+	mu      sync.Mutex
+	seq     int64
+	owners  map[int64]int32 // the persistent ownership records
+	hints   map[int64]int32 // stale route hints, in front of the records
+	gates   map[int64]*claimGate
+	notices []MemberNotice
+	next    int
+}
+
+type instance struct {
+	sid       int32
+	svc       *Service
+	engine    *nest.NestMgr
+	store     *entityStore
+	remote    *fakeRemote
+	committer *effectLog
+
+	mu       sync.Mutex
+	handlers map[string]bus.RpcHandlerFunc
+}
+
+// newCluster starts one instance per sid.
+func newCluster(t *testing.T, rules Rules, sids ...int32) *cluster {
+	t.Helper()
+	registerAllianceEntities()
+	c := &cluster{
+		t: t, instances: map[int32]*instance{}, rules: rules, now: time.Unix(1_800_000_000, 0),
+		owners: map[int64]int32{}, hints: map[int64]int32{}, gates: map[int64]*claimGate{},
+	}
+	for _, sid := range sids {
+		c.instances[sid] = c.start(sid)
+	}
+	return c
+}
+
+func defaultRules() Rules {
+	return Rules{MaxMembers: 100, ReservationTTL: 30 * time.Second, ReceiptRetention: 168 * time.Hour}
+}
+
+func (c *cluster) start(sid int32) *instance {
+	c.t.Helper()
+	in := &instance{sid: sid, svc: New(), store: &entityStore{entities: map[int64]entity.IThreadSafeEntity{}},
+		committer: &effectLog{}, handlers: map[string]bus.RpcHandlerFunc{}}
+	in.remote = &fakeRemote{c: c, sid: sid, fenced: map[int64]error{}, admitted: map[int64]int{}}
+	in.engine = nest.NewEngine(
+		nest.NestOptionWithGetter(in.store),
+		nest.NestOptionWithTransactionCommitter(in.committer),
+		nest.NestOptionWithRemoteEntityManager(in.remote),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}),
+	)
+	registerAllianceHandlers(c.t, in.engine)
+	if err := in.engine.Start(); err != nil {
+		c.t.Fatal(err)
+	}
+	c.t.Cleanup(func() { _ = in.engine.Shutdown(context.Background()) })
+	peers, err := NewBusClient(testBus{c: c, self: in}, c, ServiceType, 5*time.Second)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	if err := in.svc.Bind(Deps{
+		Nest: in.engine, LocalSID: sid, Rules: c.rules, Owners: in.remote,
+		Entities: in.store, Sequence: c, Peers: peers, Scan: in.store,
+		Notify: func(_ context.Context, homeSID int32, notice MemberNotice) error {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			c.notices = append(c.notices, notice)
+			return nil
+		},
+		Now: func() time.Time { return c.now },
+	}); err != nil {
+		c.t.Fatal(err)
+	}
+	if err := in.store.EnsureShard(context.Background(), sid); err != nil {
+		c.t.Fatal(err)
+	}
+	if err := RegisterHandlers(testBus{c: c, self: in}, in.svc); err != nil {
+		c.t.Fatal(err)
+	}
+	return in
+}
+
+// client is a caller outside the service (a game process): the generated
+// client, the queue group round robin.
+func (c *cluster) client() *BusClient { return c.via(0) }
+
+// via is the caller whose queue-group calls (Found) the instance sid takes.
+func (c *cluster) via(sid int32) *BusClient {
+	c.t.Helper()
+	client, err := NewBusClient(testBus{c: c, queue: sid}, c, ServiceType, 5*time.Second)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	return client
+}
+
+// LookupRoute implements servicerpc.RouteResolver: a stale hint first (an
+// old Redis registration), then the ownership record; no record is "entity
+// not found".
+func (c *cluster) LookupRoute(_ context.Context, id int64) (int32, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if sid, ok := c.hints[id]; ok {
+		return sid, nil
+	}
+	if sid, ok := c.owners[id]; ok {
+		return sid, nil
+	}
+	return 0, servicerpc.EntityNotFound(id)
+}
+
+// Next implements Sequence: one counter shared by the instances (one Mongo
+// document in production).
+func (c *cluster) Next(context.Context) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.seq++
+	return c.seq, nil
+}
+
+// owner is id's ownership record.
+func (c *cluster) owner(id int64) (int32, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sid, ok := c.owners[id]
+	return sid, ok
+}
+
+// hint makes the route lookup answer sid for id, whatever the record says.
+func (c *cluster) hint(id int64, sid int32) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.hints[id] = sid
+}
+
+// seedGuard creates playerID's guard on instance sid, as an earlier request
+// would have: loaded there, and its ownership record naming sid.
+func (c *cluster) seedGuard(t *testing.T, sid int32, playerID int64) {
+	t.Helper()
+	if err := c.instances[sid].store.EnsureGuard(context.Background(), playerID); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.owners[mustGuardTarget(t, playerID)] = sid
+}
+
+// claimGate holds the admissions of one entity until want of them have
+// arrived, so that two instances that both found it unowned also claim it
+// at the same time.
+type claimGate struct {
+	want, arrived int
+	release       chan struct{}
+}
+
+func (c *cluster) gate(id int64, want int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gates[id] = &claimGate{want: want, release: make(chan struct{})}
+}
+
+func (c *cluster) await(ids []int64) {
+	c.mu.Lock()
+	var wait []chan struct{}
+	for _, id := range ids {
+		if gate := c.gates[id]; gate != nil {
+			gate.arrived++
+			if gate.arrived == gate.want {
+				close(gate.release)
+			}
+			wait = append(wait, gate.release)
+		}
+	}
+	c.mu.Unlock()
+	for _, release := range wait {
+		select {
+		case <-release:
+		case <-time.After(5 * time.Second):
+			c.t.Errorf("claim gate: the concurrent admissions never arrived together")
+		}
+	}
+}
+
+// deliverEffects hands every effect committed so far, on every instance, to
+// the service's consumers, the way the effect stream would (once each, in
+// commit order per instance), until none are left. It returns how many it
+// delivered.
+func (c *cluster) deliverEffects() int {
+	c.t.Helper()
+	delivered := 0
+	for round := 0; round < 10; round++ {
+		n := 0
+		for _, sid := range c.sids() {
+			in := c.instances[sid]
+			for _, effect := range in.committer.take() {
+				n++
+				var err error
+				switch effect.Topic {
+				case effects.TopicAllianceMemberChanged:
+					var event effects.AllianceMemberChanged
+					mustDecode(c.t, effect.Payload, &event)
+					err = in.svc.HandleMemberChanged(context.Background(), event)
+				case effects.TopicAllianceReservationDue:
+					var event effects.AllianceReservationDue
+					mustDecode(c.t, effect.Payload, &event)
+					err = in.svc.HandleReservationDue(context.Background(), event)
+				case effects.TopicAllianceWarDeclared:
+					var event effects.AllianceWarDeclared
+					mustDecode(c.t, effect.Payload, &event)
+					err = in.svc.HandleWarDeclared(context.Background(), event)
+				default:
+					c.t.Fatalf("unexpected effect topic %q", effect.Topic)
+				}
+				if err != nil {
+					c.t.Fatalf("consume %s: %v", effect.Topic, err)
+				}
+			}
+		}
+		if n == 0 {
+			return delivered
+		}
+		delivered += n
+	}
+	c.t.Fatal("effects keep producing effects")
+	return delivered
+}
+
+func (c *cluster) sids() []int32 {
+	sids := make([]int32, 0, len(c.instances))
+	for sid := range c.instances {
+		sids = append(sids, sid)
+	}
+	slices.Sort(sids)
+	return sids
+}
+
+func mustDecode(t *testing.T, payload []byte, into any) {
+	t.Helper()
+	if err := json.Unmarshal(payload, into); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// testBus is the bus as one process sees it: self's handlers are registered
+// on it (nil for a caller outside the service), CallTo reaches the handlers
+// another instance registered, and Call — the queue group — reaches the
+// instance queue names, or the next one round robin.
+type testBus struct {
+	bus.IBus
+	c     *cluster
+	self  *instance
+	queue int32
+}
+
+var codec = bus.MessagePackCodec{}
+
+func (b testBus) HandleRpc(method string, handler bus.RpcHandlerFunc) error {
+	if b.self == nil {
+		return fmt.Errorf("test bus: a caller registers no handlers")
+	}
+	b.self.mu.Lock()
+	defer b.self.mu.Unlock()
+	b.self.handlers[method] = handler
+	return nil
+}
+
+func (b testBus) Call(ctx context.Context, svcType, method string, req, resp any) error {
+	sid := b.queue
+	if sid == 0 {
+		b.c.mu.Lock()
+		sids := make([]int32, 0, len(b.c.instances))
+		for candidate := range b.c.instances {
+			sids = append(sids, candidate)
+		}
+		slices.Sort(sids)
+		sid = sids[b.c.next%len(sids)]
+		b.c.next++
+		b.c.mu.Unlock()
+	}
+	return b.CallTo(ctx, svcType, sid, method, req, resp)
+}
+
+func (b testBus) CallTo(ctx context.Context, _ string, sid int32, method string, req, resp any) error {
+	b.c.mu.Lock()
+	target := b.c.instances[sid]
+	b.c.mu.Unlock()
+	var handle bus.RpcHandlerFunc
+	if target != nil {
+		target.mu.Lock()
+		handle = target.handlers[method]
+		target.mu.Unlock()
+	}
+	if handle == nil {
+		return fmt.Errorf("%w: %s on sid %d", fnats.ErrNoResponders, method, sid)
+	}
+	payload, err := codec.Marshal(req)
+	if err != nil {
+		return err
+	}
+	out, err := handle(bus.NewRPCContext(ctx, method, payload, codec))
+	if err != nil {
+		return err
+	}
+	encoded, err := codec.Marshal(out)
+	if err != nil {
+		return err
+	}
+	return codec.Unmarshal(encoded, resp)
+}
+
+// entityStore is one instance's loaded entities: the Nest getter, Entities
+// (what the generated lifecycles do in production) and Scan.
+type entityStore struct {
+	mu       sync.Mutex
+	entities map[int64]entity.IThreadSafeEntity
+}
+
+func (s *entityStore) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.entities[id]
+	if !ok {
+		// What the Remote write admission answers for an id this process
+		// cannot load (remoteentity batch.go).
+		return nil, fmt.Errorf("%w: entity %d not found", entity.ErrRemoteRejected, id)
+	}
+	return value, nil
+}
+
+func (s *entityStore) GetMany(ctx context.Context, ids []int64, categories []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := s.Get(ctx, id, categories[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+func (s *entityStore) ensure(unique int64, kind entity.EntityKind) error {
+	id, err := entity.BuildEntityID(unique, kind)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.entities[id]; ok {
+		return nil
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: kind, Id: id})
+	if err != nil {
+		return err
+	}
+	s.entities[id] = built
+	return nil
+}
+
+func (s *entityStore) has(id int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.entities[id]
+	return ok
+}
+
+func (s *entityStore) EnsureAlliance(_ context.Context, allianceID int64) error {
+	return s.ensure(allianceID, alliance.EntityKindAlliance)
+}
+
+func (s *entityStore) EnsureGuard(_ context.Context, playerID int64) error {
+	return s.ensure(playerID, alliance_member.EntityKindAllianceMember)
+}
+
+func (s *entityStore) EnsureShard(_ context.Context, sid int32) error {
+	return s.ensure(int64(sid), alliance_shard.EntityKindAllianceShard)
+}
+
+// EntityIDs implements Scan over what this instance has loaded.
+func (s *entityStore) EntityIDs(_ context.Context, kind entity.EntityKind) ([]int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ids []int64
+	for id := range s.entities {
+		if entity.MatchEntityID(id, kind) {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// founded is the alliances this instance holds that have a leader.
+func (s *entityStore) founded(t *testing.T) map[int64]int64 {
+	t.Helper()
+	ids := must(s.EntityIDs(context.Background(), alliance.EntityKindAlliance))
+	leaders := map[int64]int64{}
+	for _, id := range ids {
+		value, err := s.Get(context.Background(), id, entity.EntityCategoryRemote)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if leader := value.(*alliance.Alliance).Dao().GetLeaderID(); leader != 0 {
+			leaders[entity.GetUniqueIDFromEntityID(id)] = leader
+		}
+	}
+	return leaders
+}
+
+func (s *entityStore) shard(t *testing.T, sid int32) *alliance_shard.AllianceShard {
+	t.Helper()
+	id, _ := entity.BuildEntityID(int64(sid), alliance_shard.EntityKindAllianceShard)
+	value, err := s.Get(context.Background(), id, entity.EntityCategoryOther)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value.(*alliance_shard.AllianceShard)
+}
+
+// effectLog is the transaction committer: it keeps the effects of every
+// committed record, in commit order.
+type effectLog struct {
+	mu      sync.Mutex
+	records int
+	effects []dataengine.Effect
+}
+
+func (l *effectLog) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.records++
+	for _, effect := range record.Effects {
+		l.effects = append(l.effects, dataengine.CloneEffect(effect))
+	}
+	return nil
+}
+
+func (l *effectLog) take() []dataengine.Effect {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	taken := l.effects
+	l.effects = nil
+	return taken
+}
+
+func (l *effectLog) count() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.records
+}
+
+// fakeRemote stands in for one instance's Remote runtime over the cluster's
+// ownership records: write admission claims an entity that has no record
+// for this instance (atomically: the cluster's lock), admits one this
+// instance owns, and fences one another instance owns — like the first-write
+// claim of remote=managed entities. A test can also fence an entity with a
+// given error.
+type fakeRemote struct {
+	entity.IRemoteEntityManager
+	c   *cluster
+	sid int32
+
+	mu       sync.Mutex
+	fenced   map[int64]error
+	admitted map[int64]int // admissions attempted per entity, on this instance
+}
+
+func (r *fakeRemote) fence(id int64, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fenced[id] = err
+}
+
+func (r *fakeRemote) admissions(id int64) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.admitted[id]
+}
+
+func (r *fakeRemote) PrepareRemoteWriteBatch(_ context.Context, ids []int64) (entity.RemoteWriteBatch, error) {
+	r.mu.Lock()
+	for _, id := range ids {
+		r.admitted[id]++
+	}
+	for _, id := range ids {
+		if err := r.fenced[id]; err != nil {
+			r.mu.Unlock()
+			return nil, err
+		}
+	}
+	r.mu.Unlock()
+	r.c.await(ids)
+	r.c.mu.Lock()
+	defer r.c.mu.Unlock()
+	for _, id := range ids {
+		owner, ok := r.c.owners[id]
+		switch {
+		case !ok:
+			r.c.owners[id] = r.sid // the first write claims it
+		case owner != r.sid:
+			return nil, fmt.Errorf("%w: entity=%d owner=%d", entity.ErrRemoteFenced, id, owner)
+		}
+	}
+	return &fakeBatch{ids: append([]int64(nil), ids...)}, nil
+}
+
+func (r *fakeRemote) GetRemoteOwnership(_ context.Context, id int64) (entity.RemoteEntityMarkerLease, bool, error) {
+	sid, ok := r.c.owner(id)
+	return entity.RemoteEntityMarkerLease{OwnerSid: sid, MarkerEpoch: 1, RouteEpoch: 1}, ok, nil
+}
+
+func (r *fakeRemote) TransferRemoteOwnership(_ context.Context, id int64, to int32) (entity.RemoteEntityMarkerLease, error) {
+	r.c.mu.Lock()
+	defer r.c.mu.Unlock()
+	if owner := r.c.owners[id]; owner != r.sid {
+		return entity.RemoteEntityMarkerLease{}, fmt.Errorf("%w: entity=%d owner=%d", entity.ErrRemoteFenced, id, owner)
+	}
+	r.c.owners[id] = to
+	return entity.RemoteEntityMarkerLease{OwnerSid: to, MarkerEpoch: 2, RouteEpoch: 2}, nil
+}
+
+// fakeBatch admits the write and commits nothing remotely: the entity's
+// memory is the state, as after a successful Remote commit.
+type fakeBatch struct{ ids []int64 }
+
+func (b *fakeBatch) EntityIDs() []int64                                            { return b.ids }
+func (b *fakeBatch) FinalizeLocked(entity.RemoteTransactionOutcome) error          { return nil }
+func (b *fakeBatch) Commits() []entity.RemoteCommit                                { return nil }
+func (b *fakeBatch) Commit(context.Context) ([]entity.RemoteCommitReceipt, error) { return nil, nil }
+func (b *fakeBatch) Abort(context.Context, error) error                           { return nil }
+func (b *fakeBatch) Indeterminate(context.Context, error) error                   { return nil }
+func (b *fakeBatch) Close(context.Context) error                                  { return nil }
+
+func must[T any](value T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
+func mustAllianceTarget(t *testing.T, allianceID int64) int64 {
+	t.Helper()
+	return must(AllianceTarget(allianceID))
+}
+
+func mustGuardTarget(t *testing.T, playerID int64) int64 {
+	t.Helper()
+	return must(GuardTarget(playerID))
+}

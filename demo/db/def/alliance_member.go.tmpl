@@ -1,0 +1,42 @@
+package dbdef
+
+// AllianceMemberDao is one player's alliance guard, owned by the alliance
+// service (its id is the player's unique id; whichever instance created it
+// first owns it, by its Remote ownership record).
+//
+// It is not a second roster: the alliance's own Members is the authority. It
+// exists because "one player, one alliance" spans alliances that may live on
+// different service instances, which no single alliance transaction can
+// enforce. A join reserves the guard first (Pending*), the alliance then
+// admits the player, and the guard is confirmed; when the two disagree, the
+// alliance wins (see game/alliancerule).
+//
+//roost:dao coll=alliance_member db=main
+type AllianceMemberDao struct {
+	// AllianceID is the alliance the player is in, 0 for none.
+	AllianceID int64 `dao:"persist" store:"alliance_id"`
+	// JoinRequestID is the request that made the current membership.
+	JoinRequestID string `dao:"persist" store:"join_request_id"`
+	// PendingAllianceID / PendingRequestID / PendingDeadlineUnix are an
+	// outstanding reservation: alliance PendingAllianceID is admitting the
+	// player under request PendingRequestID. Until it is confirmed or
+	// released no other alliance may take the player. At the deadline the
+	// guard asks the alliance what became of the request; it never releases
+	// on the clock alone.
+	PendingAllianceID   int64  `dao:"persist" store:"pending_alliance_id"`
+	PendingRequestID    string `dao:"persist" store:"pending_request_id"`
+	PendingDeadlineUnix int64  `dao:"persist" store:"pending_deadline_unix"`
+	// LeftAtUnix is when the player last left or was removed (rejoin cooldown).
+	LeftAtUnix int64 `dao:"persist" store:"left_at_unix"`
+	// Requests is the receipts of the writes that target this player
+	// directly (founding an alliance), same rules as AllianceDao.Requests.
+	Requests map[string]*AllianceMemberReceipt `dao:"persist,map=fast" store:"requests"`
+}
+
+// AllianceMemberReceipt is AllianceReceipt for the guard.
+type AllianceMemberReceipt struct {
+	Code    int32 `store:"code"`
+	Version int64 `store:"version"`
+	Subject int64 `store:"subject"`
+	AtUnix  int64 `store:"at_unix"`
+}

@@ -1,0 +1,75 @@
+package alliance
+
+import (
+	"context"
+	"fmt"
+
+	"{{MODULE}}/game/alliancerule"
+	"{{MODULE}}/game/effects"
+	alliance "{{MODULE}}/game/entities/alliance"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+)
+
+// DeclareWar implements Alliance (plan §2.9). Two alliances this instance
+// owns are written in one transaction; an enemy on another instance gets its
+// side from the effect (HandleWarDeclared → AcknowledgeWar there, a route
+// RPC). Operations that must be atomic across instances move the alliances
+// onto one instance first (alliance.transfer); nothing here coordinates two
+// instances atomically. An enemy id that has no ownership record was never
+// founded: refused as alliance_missing, before anything is written.
+func (s *Service) DeclareWar(ctx context.Context, requestID string, callerID int64, _ int32, target int64, enemyID int64) (Reply, error) {
+	if err := requireRequest(requestID, callerID, enemyID); err != nil {
+		return s.reply(alliancerule.Answer{}, err)
+	}
+	enemy, err := AllianceTarget(enemyID)
+	if err != nil {
+		return s.reply(alliancerule.Answer{}, fmt.Errorf("%w: enemy %d: %v", ErrRequestInvalid, enemyID, err))
+	}
+	var answer alliancerule.Answer
+	err = s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) error {
+		exists, here, err := s.owned(ctx, enemy)
+		switch {
+		case err != nil:
+			return err
+		case !exists:
+			return errAllianceMissing(enemyID)
+		}
+		wars := syncsender.NewAllianceWarSender(s.deps.Nest)
+		if here {
+			answer, err = wars.MultiSync_AllianceDeclareWar(ctx, target, enemy, requestID, callerID, s.retention())
+			if !s.moved(ctx, enemy, err) {
+				return err
+			}
+		}
+		answer, err = wars.Sync_AllianceDeclareWarDetached(ctx, target, requestID, callerID, enemyID, s.retention())
+		return err
+	})
+	return s.reply(answer, err)
+}
+
+// AcknowledgeWar implements Alliance.
+func (s *Service) AcknowledgeWar(ctx context.Context, requestID string, target int64, declarerID int64) (Reply, error) {
+	var answer alliancerule.Answer
+	err := requireRequest(requestID, declarerID)
+	if err == nil {
+		err = s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) (err error) {
+			answer, err = syncsender.NewAllianceWarSender(s.deps.Nest).Sync_AllianceAcknowledgeWar(ctx, target, requestID, declarerID, s.retention())
+			return err
+		})
+	}
+	return s.reply(answer, err)
+}
+
+// HandleWarDeclared consumes effects.AllianceWarDeclared: the enemy's side of
+// a cross-instance declaration. A refusal there is final for that request id
+// and is not retried; an error that is not final redelivers the effect.
+func (s *Service) HandleWarDeclared(ctx context.Context, event effects.AllianceWarDeclared) error {
+	enemy, err := AllianceTarget(event.EnemyID)
+	if err != nil {
+		return fmt.Errorf("alliance: war %s: enemy %d: %w", event.RequestID, event.EnemyID, err)
+	}
+	if _, err := s.deps.Peers.AcknowledgeWar(ctx, event.RequestID, enemy, event.AllianceID); !final(err) {
+		return fmt.Errorf("alliance: record war %s on alliance %d: %w", event.RequestID, event.EnemyID, err)
+	}
+	return nil
+}

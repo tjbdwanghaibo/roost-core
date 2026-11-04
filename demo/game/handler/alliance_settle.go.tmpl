@@ -1,0 +1,19 @@
+package handler
+
+import (
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	alliance "{{MODULE}}/game/entities/alliance"
+)
+
+// handlerAllianceSettle answers what became of requestID on this alliance and
+// makes the answer final (RosterComponent.Settle). The guard of a player whose
+// reservation passed its deadline calls it before resolving.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceSettle(target alliance.IRosterEntity, requestID string, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.RosterComp()
+	outcome, err := roster.Settle(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second)
+	return answer(roster, outcome, err)
+}

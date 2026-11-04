@@ -1,0 +1,70 @@
+package dbdef
+
+// AllianceDao is an alliance's persistent state, owned by the alliance service.
+//
+// The alliance is a remote-managed entity written only by the alliance
+// service instance that owns it (its Remote ownership record; the id is a
+// number from one counter and says nothing about the instance). Game
+// processes never write it: they call
+// the service's RPC, and read it through a Remote mirror (phase 4 of the
+// alliance plan). Members is the single authority on who is in the alliance;
+// the per-player AllianceMember only guards "one player, one alliance" and
+// yields to this roster when the two disagree.
+//
+// The whole roster is one document, written as a whole: its size is a real
+// limit (alliance.max_members, default 100, hard limit 500).
+//
+//roost:dao coll=alliance db=main
+type AllianceDao struct {
+	Name          string `dao:"persist" store:"name"`
+	LeaderID      int64  `dao:"persist" store:"leader_id"`
+	OpenJoin      bool   `dao:"persist" store:"open_join"`
+	Funds         int64  `dao:"persist" store:"funds"`
+	CreatedAtUnix int64  `dao:"persist" store:"created_at_unix"`
+	// Members is player unique id -> their seat.
+	Members map[int64]*AllianceSeat `dao:"persist,map=fast" store:"members"`
+	// Applications is player unique id -> the pending application.
+	Applications map[int64]*AllianceApplication `dao:"persist,map=fast" store:"applications"`
+	// Wars is the alliances this one is at war with: alliance id -> since.
+	// A declaration between two alliances on one service instance writes both
+	// sides in one transaction; across instances the declaring side records
+	// first and the other side follows from its effect (plan §2.9).
+	Wars map[int64]int64 `dao:"persist,map=fast" store:"wars"`
+	// Requests is the request receipts: request id -> what that write did.
+	// A receipt commits in the same transaction as the change it records, so
+	// a redelivered request replays it instead of running again; rejections
+	// are recorded too, so a request once refused stays refused. Pruned after
+	// alliance.receipt_retention, a few per write.
+	Requests map[string]*AllianceReceipt `dao:"persist,map=fast" store:"requests"`
+}
+
+// AllianceSeat is one member's place in the alliance.
+type AllianceSeat struct {
+	Role         int32 `store:"role"`
+	JoinedAtUnix int64 `store:"joined_at_unix"`
+	// HomeSID is the game server the player belongs to: where membership
+	// notices are sent.
+	HomeSID      int32 `store:"home_sid"`
+	Contribution int64 `store:"contribution"`
+	// JoinRequestID is the request that made this membership. The player's
+	// AllianceMember guard records the same id, so a late "membership ended"
+	// clears the guard only for the membership it ended.
+	JoinRequestID string `store:"join_request_id"`
+}
+
+// AllianceApplication is a pending request to join, waiting for the leader.
+type AllianceApplication struct {
+	AppliedAtUnix int64 `store:"applied_at_unix"`
+	HomeSID       int32 `store:"home_sid"`
+}
+
+// AllianceReceipt is what one request did: Code 0 is success, otherwise the
+// business rejection's code; Version is the alliance state version the
+// write produced; Subject is the request's result id (the player admitted,
+// the new leader, ...).
+type AllianceReceipt struct {
+	Code    int32 `store:"code"`
+	Version int64 `store:"version"`
+	Subject int64 `store:"subject"`
+	AtUnix  int64 `store:"at_unix"`
+}

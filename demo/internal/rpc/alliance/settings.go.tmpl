@@ -1,0 +1,45 @@
+package alliance
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// Settings is the alliance.* section, declared once here: the alliance
+// service declares it (internal/service/alliance ConfigSchema), the App checks
+// it at start and doctor knows it. There is no routing setting: which
+// instance serves an alliance is its Remote ownership record, found through
+// the route registration (plan §2.7).
+type Settings struct {
+	MaxMembers       int           `config:"max_members" default:"100" min:"1" max:"500" example:"100" help:"roster limit per alliance. The roster is one document written as a whole, so its size is a real cost; 500 is the hard limit"`
+	ReservationTTL   time.Duration `config:"reservation_ttl" default:"30s" min:"1s" example:"30s" help:"how long a cross-instance join holds the player's guard before the guard asks the alliance what became of it (never released on the clock alone)"`
+	ReceiptRetention time.Duration `config:"receipt_retention" default:"168h" min:"1h" example:"168h" help:"how long a request receipt is kept: longer than any caller retries one request id (the saga step receipts use the same default)"`
+	RejoinCooldown   time.Duration `config:"rejoin_cooldown" default:"0s" min:"0s" example:"0s" help:"how long after leaving or being removed a player may not join an alliance; 0 disables it"`
+}
+
+// Rules is the part of Settings a write needs.
+func (settings Settings) Rules() Rules {
+	return Rules{MaxMembers: settings.MaxMembers, ReservationTTL: settings.ReservationTTL, ReceiptRetention: settings.ReceiptRetention, RejoinCooldown: settings.RejoinCooldown}
+}
+
+type config struct {
+	app.ServiceIdentity
+	Alliance Settings `config:"alliance"`
+}
+
+// Schema is the alliance service's config declaration.
+func Schema() app.ConfigSchema { return app.SchemaOf(config{}) }
+
+// LoadSettings reads the declaration from the registry's config.
+func LoadSettings(registry *app.Registry) (app.ServiceIdentity, Settings, error) {
+	if registry == nil {
+		return app.ServiceIdentity{}, Settings{}, fmt.Errorf("alliance settings: app registry is required")
+	}
+	var loaded config
+	if err := app.LoadConfig(registry.Config(), &loaded); err != nil {
+		return app.ServiceIdentity{}, Settings{}, fmt.Errorf("alliance settings: %w", err)
+	}
+	return loaded.ServiceIdentity, loaded.Alliance, nil
+}

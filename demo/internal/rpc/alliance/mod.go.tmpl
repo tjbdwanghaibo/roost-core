@@ -1,0 +1,88 @@
+package alliance
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// Mod publishes the alliance service in its owning process: the capability
+// in Provide, the bus handlers in Start.
+//
+// roost add rpc -entity-service generated it depending on the bus, Nest and
+// the Remote Mod, and ordered after the startup preload; the demo's Start
+// binds the whole service (BindRegistry) where the scaffold only handed it
+// the ownership manager. The App starts Mods in dependency order, so the Data
+// Engine has drained its WAL, Nest is running and this instance's alliances
+// are loaded with their routes registered (Alliance is preload=startup)
+// before Start registers the handlers. A request that arrives earlier finds
+// no responder — not executed — and the caller sends it again with the same
+// request id.
+type Mod struct {
+	service  *Service
+	registry *app.Registry
+}
+
+// NewMod wraps the implementation.
+func NewMod(service *Service) *Mod { return &Mod{service: service} }
+
+// Name is the capability name: one Mod per capability.
+func (m *Mod) Name() app.ModName { return CapabilityName }
+
+// DependsOn names the bus, Nest and the Remote Mod.
+func (m *Mod) DependsOn() []app.ModName {
+	return []app.ModName{mods.ModNats, mods.ModNest, mods.ModRemoteEntity}
+}
+
+// OptionalDependsOn orders Start after the startup preload
+// (//roost:entity preload=startup on Alliance): no request is served before
+// this instance's alliances are loaded and their routes registered.
+func (m *Mod) OptionalDependsOn() []app.ModName {
+	return []app.ModName{mods.ModRemoteEntityPreload}
+}
+
+func (m *Mod) Init(*viper.Viper) error {
+	if m.service == nil {
+		return fmt.Errorf("alliance mod: service is nil")
+	}
+	return nil
+}
+
+func (m *Mod) Provide(r *app.Registry) error {
+	if r == nil {
+		return fmt.Errorf("alliance mod: registry is nil")
+	}
+	m.registry = r
+	return mods.RegisterAll(r, OwnerCapabilities(m.service)...)
+}
+
+// bindTimeout bounds binding at start: loading or creating this instance's
+// AllianceShard from the store.
+const bindTimeout = 30 * time.Second
+
+// Start binds the service to this process, then registers the handlers.
+func (m *Mod) Start() error {
+	ctx, cancel := context.WithTimeout(context.Background(), bindTimeout)
+	defer cancel()
+	if err := m.service.BindRegistry(ctx, m.registry); err != nil {
+		return fmt.Errorf("alliance mod: %w", err)
+	}
+	busClient, ok := app.Lookup[bus.IBus](m.registry, mods.ModBus)
+	if !ok || busClient == nil {
+		return fmt.Errorf("alliance mod: capability %q not found; the process needs the nats mod", mods.ModBus)
+	}
+	return RegisterHandlers(busClient, m.service)
+}
+
+func (m *Mod) Stop() {}
+
+var (
+	_ app.Mod                           = (*Mod)(nil)
+	_ app.ModDependencyProvider         = (*Mod)(nil)
+	_ app.ModOptionalDependencyProvider = (*Mod)(nil)
+)

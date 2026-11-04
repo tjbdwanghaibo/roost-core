@@ -1,0 +1,56 @@
+package handler
+
+import (
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	"{{MODULE}}/game/effects"
+	alliance "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+)
+
+// handlerAllianceRemove unseats a player (leave: actor == target; kick: the
+// leader) when their guard is on the same instance, clearing the guard in the
+// same transaction.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceRemove(target alliance.IRosterEntity, member alliance_member.IGuardEntity, requestID string, actorID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster, guard := target.RosterComp(), member.GuardComp()
+	targetID := guard.PlayerID()
+	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		if err := roster.CheckRemoval(actorID, targetID); err != nil {
+			return targetID, err
+		}
+		joinRequestID, homeSID := roster.Remove(targetID)
+		guard.Clear(roster.AllianceID(), joinRequestID, nowUnix)
+		return targetID, effects.EmitAllianceMemberChanged(removalEvent(roster, actorID, targetID, homeSID, joinRequestID, true))
+	})
+	return answer(roster, outcome, err)
+}
+
+// handlerAllianceRemoveDetached unseats a player whose guard is on another
+// instance; the effect it records clears the guard there.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceRemoveDetached(target alliance.IRosterEntity, requestID string, actorID int64, targetID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.RosterComp()
+	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		if err := roster.CheckRemoval(actorID, targetID); err != nil {
+			return targetID, err
+		}
+		joinRequestID, homeSID := roster.Remove(targetID)
+		return targetID, effects.EmitAllianceMemberChanged(removalEvent(roster, actorID, targetID, homeSID, joinRequestID, false))
+	})
+	return answer(roster, outcome, err)
+}
+
+func removalEvent(roster *alliance.RosterComponent, actorID, targetID int64, homeSID int32, joinRequestID string, guardSettled bool) effects.AllianceMemberChanged {
+	change := effects.MemberLeft
+	if actorID != targetID {
+		change = effects.MemberKicked
+	}
+	return effects.AllianceMemberChanged{
+		AllianceID: roster.AllianceID(), PlayerID: targetID, HomeSID: homeSID, Change: change,
+		JoinRequestID: joinRequestID, GuardSettled: guardSettled, Version: roster.CurrentVersion() + 1,
+	}
+}
