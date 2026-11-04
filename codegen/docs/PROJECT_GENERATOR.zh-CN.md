@@ -411,17 +411,17 @@ Entity wire 会生成 Component/DAO getter，
     # 调用方：roost.yaml services.gate.uses_rpcs: [guild]，然后 make sync
 
 生成 `internal/rpc/guild/`：`guild.go`（`//roost:rpc` 接口 `Guild`、`ErrRequestInvalid`（码来自 `ids.errcode`）、`Error` 映射）、
-`service.go`（实现骨架）、`mod.go`（owner Mod：发布 capability、Start 时在 bus 上注册 handler、`StopWithContext` 时撤下，见下）、`server_run.go`（独立进程用的 Server 钩子），
+`service.go`（实现骨架）、`mod.go`（owner Mod：发布 capability、Start 时在 bus 上注册 handler；停机时由 App 统一撤下，见下）、`server_run.go`（独立进程用的 Server 钩子），
 以及 servicerpc 生成的 `guild_rpc_gen.go` / `guild_rpc_assembly_gen.go`。清单里 `services.game.rpcs: [guild]`、feature `rpc` 自动加上，
 bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装配 `rpcGuild.NewClientMod()`；两边都自动带 nats mod。
 调用方 `app.Lookup[guild.Guild](registry, guild.CapabilityName)` 拿接口——服务日后搬进独立进程（`a.RegisterServer(..., guild.NewServer(), ...)`）业务代码不变。
 `make generate` 重生成两半，`generate --check` 把它们当生成物比对。
 
-owner Mod 停止时先撤 handler（2026-11-04 起）：`StopWithContext` 调 `bus.RPCWithdrawer.WithdrawRpc(ctx, Methods...)`，
-之后到达本实例的请求答 `errcode.CodeRetryable`（没有执行）或 no responders，已进 handler 的请求答复完才返回。App 按依赖逆序停 Mod，
-所以 Service 用到的 Mod（Nest、存储……）写进 owner Mod 的 `DependsOn`，它们就在 handler 撤下之后才停；没写的依赖可能先停。
-等在途请求的时间算在 App 分给 owner Mod 的停机份额里（生成器不为它声明预算，至少 3s 保底），超过时 App 不再停后面的 Mod。
-骨架生成一次后归业务所有，之前生成的 `mod.go`（`Stop()` 是空操作）要按新骨架补上 `StopWithContext`。
+停机时 handler 由 App 统一撤下（[App 生命周期](../../docs/framework/guide/01-app-lifecycle.md)）：App 停机第一步（`Service.Shutdown`
+与任何 Mod 停止之前）经 nats Mod 的 `CloseIngress` 撤下总线上的全部 handler——之后到达本实例的请求答 `errcode.CodeRetryable`
+（没有执行）或 no responders，已进 handler 的请求答复完才往下走——然后才停 Nest、存储与 owner Mod 自己。所以 owner Mod 的 `Stop`
+是空操作，独立进程的 `Server`（`Service.Init` 注册 handler）同样不用撤；等在途请求的时间花在停机总预算里，不占某个 Mod 的份额。
+2026-11-04 一度生成过的 `StopWithContext`（调 `WithdrawRpc`）留在已生成的 `mod.go` 里无害（第二次撤下是空操作），可以删掉。
 
 拥有者是独占实体的服务（实体标记 `service=<owner>`，例如联盟服务）时加 `-entity-service`：
 

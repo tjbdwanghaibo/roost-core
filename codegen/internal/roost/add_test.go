@@ -692,11 +692,12 @@ func TestRoostGenerateAndGoGenerateWriteTheSameRPCHeader(t *testing.T) {
 	}
 }
 
-// owner Mod 停机先撤 handler（联盟服务冒烟的观察 ②）：App 按依赖逆序停 Mod，owner Mod 在 Nest / Remote 之前停；它的
-// Stop 曾是空操作，handler 一直挂到 nats Mod 停止，停机窗口里的请求进了已停的 Nest，调用方拿到 internal（结果未知）。
-// 生成工程里按 App 的停法（实现了 StopWithContext 就调它）停 owner Mod，之后经真实 Bus 发来的请求必须是“可重试”
-// （no responders 或 CodeRetryable），-entity-service 与普通 rpc 的 owner Mod 都一样。传输是测试里的内存 NATS。
-func TestGeneratedRPCOwnerModWithdrawsItsHandlersWhenItStops(t *testing.T) {
+// 停机先撤 handler（联盟服务冒烟的观察 ②，App 生命周期方案）：App 停机第一步经 nats Mod 的 CloseIngress 撤下总线上的
+// 全部 handler，之后才停 Nest / Remote 与 owner Mod 自己；没有这一步时 handler 一直挂到 nats Mod 停止，停机窗口里的
+// 请求进了已停的 Nest，调用方拿到 internal（结果未知）。生成工程里按 App 的停法（先关总线输入、再停 owner Mod）停，
+// 之后经真实 Bus 发来的请求必须是“可重试”（no responders 或 CodeRetryable），-entity-service 与普通 rpc 都一样；
+// 生成的 owner Mod 自己不再撤（Stop 是空操作）。传输是测试里的内存 NATS。
+func TestGeneratedRPCOwnerHandlersAreWithdrawnWhenTheAppStops(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and tests a generated project")
 	}
@@ -878,7 +879,8 @@ var (
 )
 `
 
-// generatedOwnerStopHelpers 是两份 stop 测试共用的部分：起服务端与调用方两个 Bus，按 App 的规则停 owner Mod。
+// generatedOwnerStopHelpers 是两份 stop 测试共用的部分：起服务端与调用方两个 Bus，按 App 的停法停：先关总线的输入（App
+// 停机第一步，nats Mod 的 CloseIngress），再停 owner Mod。
 const generatedOwnerStopHelpers = `
 func startBus(t *testing.T, n *memNATS, svc string, sid int32) *bus.Bus {
 	t.Helper()
@@ -890,11 +892,14 @@ func startBus(t *testing.T, n *memNATS, svc string, sid int32) *bus.Bus {
 	return b
 }
 
-// stopLikeTheApp 停 Mod 的方式与 App 相同：实现了 StopWithContext 就带预算调它，否则调 Stop。
-func stopLikeTheApp(t *testing.T, mod app.Mod) {
+// stopLikeTheApp 与 App 的停法相同：停机第一步关总线的输入，然后停 Mod（实现了 StopWithContext 就带预算调它，否则调 Stop）。
+func stopLikeTheApp(t *testing.T, server *bus.Bus, mod app.Mod) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	if err := server.CloseIngress(ctx); err != nil {
+		t.Fatalf("closing the bus inputs: %v", err)
+	}
 	if stopper, ok := mod.(app.ModStopperWithContext); ok {
 		if err := stopper.StopWithContext(ctx); err != nil {
 			t.Fatalf("owner Mod StopWithContext: %v", err)
@@ -931,7 +936,7 @@ type ownerAt int32
 
 func (o ownerAt) LookupRoute(context.Context, int64) (int32, error) { return int32(o), nil }
 
-// owner Mod 停止之后（App 随后停 Nest 与 Remote），发来的路由请求必须是“可重试，未执行”，不能再进 handler。
+// App 停机开始之后（随后停 Nest 与 Remote），发来的路由请求必须是“可重试，未执行”，不能再进 handler。
 func TestOwnerModStopWithdrawsTheHandlersBeforeNestStops(t *testing.T) {
 	n := newMemNATS()
 	server, caller := startBus(t, n, ServiceType, 3000), startBus(t, n, "game", 9100)
@@ -964,11 +969,11 @@ func TestOwnerModStopWithdrawsTheHandlersBeforeNestStops(t *testing.T) {
 	if _, err := client.Apply(ctx, "req-1", 7, 9100, 1); servicerpc.Classify(err) == servicerpc.OutcomeRetryable {
 		t.Fatalf("before the stop the request must reach the handler, got %v", err)
 	}
-	stopLikeTheApp(t, mod)
+	stopLikeTheApp(t, server, mod)
 	_, err = client.Apply(ctx, "req-2", 7, 9100, 1)
 	if outcome := servicerpc.Classify(err); outcome != servicerpc.OutcomeRetryable {
 		t.Fatalf("a request after the owner Mod stopped was answered %v (outcome %s); want no responders or CodeRetryable: "+
-			"the handler must be withdrawn before Nest stops", err, outcome)
+			"the App must withdraw the handler before Nest stops", err, outcome)
 	}
 }
 ` + generatedOwnerStopHelpers
@@ -987,7 +992,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
-// 普通 rpc 的 owner Mod 同一规则：停止之后的请求不再进 handler（它用的依赖随后就停）。
+// 普通 rpc 同一规则：App 停机开始之后的请求不再进 handler（它用的依赖随后就停）。
 func TestOwnerModStopWithdrawsTheHandlers(t *testing.T) {
 	n := newMemNATS()
 	server, caller := startBus(t, n, ServiceType, 1), startBus(t, n, "gate", 9100)
@@ -1014,11 +1019,11 @@ func TestOwnerModStopWithdrawsTheHandlers(t *testing.T) {
 	if reply, err := client.Ping(ctx, 7, "hello"); err != nil {
 		t.Fatalf("before the stop: reply %q err %v", reply, err)
 	}
-	stopLikeTheApp(t, mod)
+	stopLikeTheApp(t, server, mod)
 	reply, err := client.Ping(ctx, 7, "hello")
 	if outcome := servicerpc.Classify(err); outcome != servicerpc.OutcomeRetryable {
 		t.Fatalf("a request after the owner Mod stopped was answered %q, %v (outcome %s); want no responders or CodeRetryable: "+
-			"the handler must be withdrawn when its Mod stops", reply, err, outcome)
+			"the App must withdraw the handler when it stops", reply, err, outcome)
 	}
 }
 ` + generatedOwnerStopHelpers

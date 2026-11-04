@@ -14,8 +14,11 @@ import (
 
 // Generated shutdown window.
 //
-// The App stops a service in one shutdown.total_timeout window: Service.Shutdown
-// first, then the service's own Mods and the shared Mods in reverse order, each
+// The App stops a service in one shutdown.total_timeout window: it first closes
+// every input and waits for the requests already admitted (app.IngressCloser:
+// the bus's RPC handlers and messages, ops admin commands, effect and saga step
+// consumers), then Service.Shutdown, then the service's own Mods and the shared
+// Mods in reverse order, each
 // with a deadline planned from what is left (app.modStopBudget). A Mod without
 // a declared stop budget keeps a fixed floor (app.undeclaredModStopFloor, 3s);
 // a Mod that declares one (dataengine: dataengine.shutdown_timeout; the player
@@ -59,8 +62,10 @@ const (
 	// 之前这个 Mod 不声明预算，App 只给它 3s 保底（低于它自己的 10s，与
 	// nest.request_timeout 3s 也没有余量）；现在它声明 shutdown_timeout，生成公式与 doctor 同步计入。
 	generatedPlayerTCPShutdownTimeout = 10 * time.Second
-	// generatedShutdownMargin is for Service.Shutdown, which runs inside the
-	// same window before any Mod stops (the App starts the clock before it).
+	// generatedShutdownMargin is for closing the inputs and Service.Shutdown,
+	// which run inside the same window before any Mod stops (the App starts the
+	// clock before them). Closing the inputs waits for the requests already in a
+	// handler — normally milliseconds, at most a request's own budget.
 	// Generated services only close in-process loops there — a hosted framework
 	// Server returns at once — so 5s is an allowance, the same one the
 	// REPRO-2026-09-26-06 §2 probe spends. The Mods themselves need no extra

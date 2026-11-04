@@ -229,8 +229,8 @@ var _ %[2]s = (*Service)(nil)
 `, snake, pascal)
 }
 
-// renderRPCMod 是普通 rpc 的 owner Mod（-entity-service 的见 renderEntityRPCMod）：只依赖发布总线的 nats Mod。
-// StopWithContext 撤下 handler 并等在途请求答复完（与 entity-service 的同一规则）：之后 App 才停排在它前面的 Mod。
+// renderRPCMod 是普通 rpc 的 owner Mod（-entity-service 的见 renderEntityRPCMod）：只依赖发布总线的 nats Mod。停机时
+// handler 由 App 的第一步统一撤下（nats Mod 的 CloseIngress），Mod 自己不撤。
 func renderRPCMod(snake string) string {
 	return strings.NewReplacer("{{DEPENDS}}", "[]app.ModName{mods.ModNats}",
 		"{{DEPENDS_DOC}}", "// DependsOn names the Mod that publishes the bus.").Replace(renderRPCModTemplate(snake))
@@ -240,9 +240,7 @@ func renderRPCModTemplate(snake string) string {
 	return fmt.Sprintf(`package %[1]s
 
 import (
-	"context"
 	"fmt"
-	"time"
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -261,9 +259,6 @@ import (
 type Mod struct {
 	service  *Service
 	registry *app.Registry
-	// bus is where Start registered the handlers; StopWithContext withdraws
-	// them there. nil until the handlers are registered.
-	bus bus.IBus
 }
 
 // NewMod wraps the implementation the bootstrap builds with New(...).
@@ -299,45 +294,19 @@ func (m *Mod) Start() error {
 	if !ok || busClient == nil {
 		return fmt.Errorf("%[1]s mod: capability %%q not found; the process needs the nats mod", mods.ModBus)
 	}
-	if err := RegisterHandlers(busClient, m.service); err != nil {
-		return err
-	}
-	m.bus = busClient
-	return nil
+	return RegisterHandlers(busClient, m.service)
 }
 
-// StopWithContext withdraws the handlers. The App stops Mods in reverse
-// dependency order: a Mod this one depends on (add it to DependsOn when the
-// Service uses one) stops after the handlers are gone, so a request that
-// arrives from now on gets "not executed, retry" (errcode.CodeRetryable) or no
-// responders instead of a handler running on a stopped dependency. Requests
-// already in a handler are answered first; when ctx ends before that, the
-// error keeps the App from stopping what they still use.
-func (m *Mod) StopWithContext(ctx context.Context) error {
-	if m.bus == nil {
-		return nil
-	}
-	withdrawer, ok := m.bus.(bus.RPCWithdrawer)
-	if !ok {
-		return nil // a bus double without withdrawal: its handlers go when it stops
-	}
-	return withdrawer.WithdrawRpc(ctx, Methods...)
-}
-
-// stopTimeout bounds Stop, which has no deadline of its own; the App calls
-// StopWithContext with its share of shutdown.total_timeout instead.
-const stopTimeout = 5 * time.Second
-
-// Stop is StopWithContext for a caller without a deadline.
-func (m *Mod) Stop() {
-	ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
-	defer cancel()
-	_ = m.StopWithContext(ctx)
-}
+// Stop has nothing to do. The handlers Start registered are withdrawn by the
+// App before any Mod stops: the first step of its shutdown closes every input
+// (the nats Mod's CloseIngress withdraws all the bus's RPC handlers and waits
+// for the requests already in them), so a request that arrives once the
+// shutdown began gets "not executed, retry" (errcode.CodeRetryable) or no
+// responders, never a handler running on a stopped Nest.
+func (m *Mod) Stop() {}
 
 var (
 	_ app.Mod                   = (*Mod)(nil)
-	_ app.ModStopperWithContext = (*Mod)(nil)
 	_ app.ModDependencyProvider = (*Mod)(nil)
 )
 `, snake)
