@@ -11,6 +11,7 @@ import (
 	"net"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
@@ -24,11 +25,18 @@ type TCPDispatch func(context.Context, Session, uint32, uint32, wire.PayloadKind
 
 // ConnectionSession 仅供接入基础设施使用，业务端点仍使用最小的 Session。
 // 每连接随机 nonce 不来自客户端。写入只接受完整包，复用唯一的 socket 写临界区。
+// Admission 是连接被接受时取得的序号（本进程内严格递增、从 1 开始），同一 SessionID 的新旧以它为准：
+// 嵌入 TCP 在 registerSession 比较，独立 Gate 把它带进 Bind，由 Game 的绑定表在同一 Gate 实例内比较。
 type ConnectionSession interface {
 	Session
 	ConnectionID() string
+	Admission() uint64
 	WritePacket(context.Context, uint32, uint32, wire.PayloadKind, bool, []byte) error
 }
+
+// connectionAdmissions 给本进程所有 TCPServer 接受的连接统一编号。按进程而不是按监听计数，独立 Gate 带进 Bind 的
+// 序号在同一 Gate 实例（同一进程代际）内就总是可比较的，不依赖一个 Gate 只挂一个监听。
+var connectionAdmissions atomic.Uint64
 
 // TCPHandshake 让独立 Gate 在同一个握手预算内完成 Bind → ACK → Activate。
 // Closed 必须快速返回，通知丢失由绑定租期兜底，不能阻塞连接排空。
@@ -242,8 +250,6 @@ func (server *TCPServer) Stop(ctx context.Context) error {
 func (server *TCPServer) acceptLoop(listener net.Listener) {
 	defer server.wait.Done()
 	backoff := 5 * time.Millisecond
-	// accepted 给每条连接按接受先后编号（只有这一个 goroutine 写），同一 SessionID 的新旧以它为准（registerSession）。
-	var accepted uint64
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
@@ -285,8 +291,8 @@ func (server *TCPServer) acceptLoop(listener net.Listener) {
 			server.ipConnections[host]++
 			server.wait.Add(1)
 			server.mu.Unlock()
-			accepted++
-			go server.serveConnection(connection, accepted)
+			// 接受序号在连接登记进连接表后、启动服务协程前取得：同一 SessionID 的新旧以它为准（registerSession、Bind）。
+			go server.serveConnection(connection, connectionAdmissions.Add(1))
 		default:
 			metrics.IncCounter("player_tcp_connection_rejected_total", nil, 1)
 			_ = connection.Close()
@@ -295,7 +301,7 @@ func (server *TCPServer) acceptLoop(listener net.Listener) {
 }
 
 // serveConnection 服务一条已接受的连接：取得握手槽 → 认证 → BeforeACK 与 ack → 注册会话 → AfterACK →
-// 归还握手槽 → 读循环按序分发请求。admission 是 acceptLoop 给的接受序号，注册时据此判断同一 SessionID 的新旧；
+// 归还握手槽 → 读循环按序分发请求。admission 是 acceptLoop 给的接受序号（connectionAdmissions），注册时据此判断同一 SessionID 的新旧；
 // 同一 SessionID 已登记的是更晚接受的连接时，本连接在 ack 之后被拒登记、直接结束。
 //
 // 资源所有权：连接槽、连接表与按 IP 计数、wait 由 acceptLoop 取得，这里在返回时归还。握手槽从取得起持有到

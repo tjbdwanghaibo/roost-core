@@ -57,7 +57,7 @@ Gate：accepted → authenticating → binding → active → draining → close
 Game：binding → active → closing → closed
 ```
 
-同一 ConnectionNonce 的 Bind 重试只能返回同一结果；Unbind 后不能用迟到 Bind 复活。终态记录按控制请求有效期、续期窗口和时钟余量保留并有总量上限；过期请求直接拒绝，不为防重放无限保存历史。相同 SessionID 的替换只能在 Game 原子更新绑定时完成，并在外部放行业务前结束；旧 Unbind/Kick/发送错误只关闭自己持有的 BindID。
+同一 ConnectionNonce 的 Bind 重试只能返回同一结果；Unbind 后不能用迟到 Bind 复活。终态记录按控制请求有效期、续期窗口和时钟余量保留并有总量上限；过期请求直接拒绝，不为防重放无限保存历史。相同 SessionID 的替换只能在 Game 原子更新绑定时完成，并在外部放行业务前结束；旧 Unbind/Kick/发送错误只关闭自己持有的 BindID。同一 Gate 实例内谁替换谁按 Bind 携带的连接接受序号定（更晚接受者胜出，迟到的旧 Bind 被拒），跨 Gate 实例后完成者胜出，见 [GATEWAY §3](GATEWAY.md#3-绑定与请求结果)。
 
 先 Bind 成功，再发外部鉴权 ACK。初始绑定可以存在，但 Sync session 保持 held；Gate 的 ACK 写出并准备接收业务后发送 Activate，才允许 Game 主动推送。Activate 与 ACK 丢失、重复、超时都需幂等；未激活绑定到期清理。需要 EnterGame 才建立订阅的业务继续走原正式 handler，不在 Bind 里偷偷执行登录业务。
 
@@ -95,7 +95,7 @@ Bus 的请求体、NatsMsg 外层信封、成功响应体和成功/失败信封�
 
 | 消息 | 关键字段/返回 | 责任 |
 | --- | --- | --- |
-| Bind / Activate | 进程身份、ConnectionNonce、可信认证证明、目标 Game；返回 BindID | 确认路由与绑定，控制重复和激活窗口 |
+| Bind / Activate | 进程身份、ConnectionNonce、可信认证证明、目标 Game，Bind 另带连接接受序号；返回 BindID | 确认路由与绑定，控制重复和激活窗口，同一 Gate 内按接受先后定同一 SessionID 的新旧 |
 | Forward | 完整绑定、RequestID、MsgID、外部 Seq、PayloadKind、期限、剩余预算、原字节 | Game 校验后走现有 ProtocolRegistry 和 Sender |
 | Outbound | 完整绑定、每绑定 OutSeq、response/push 类别、MsgID/Seq、PayloadKind、原字节 | Game 统一出站，Gate 完整包入队并返回准入 ACK |
 | Broadcast | 来源进程/权限、BroadcastID、目标 Gate 代次、显式受众、MsgID、PB 字节和期限 | 每 Gate 一份广播，再按本地活动连接有界扇出；返回准入统计 |

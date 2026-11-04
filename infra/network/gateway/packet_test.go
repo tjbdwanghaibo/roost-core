@@ -46,13 +46,23 @@ func TestBindingPacketHasCompleteIdentityAndCurrentFormat(t *testing.T) {
 		}
 	}
 	// Bind 的随机 ID 由 Game 签发，客户端/Gate 不能自选接管旧绑定。
-	bind := ControlRequest{Version: InternalVersion, Operation: Bind, Binding: binding, Ticket: "ticket"}
+	bind := ControlRequest{Version: InternalVersion, Operation: Bind, Binding: binding, Ticket: "ticket", Admission: 1}
 	if err := bind.Validate(); err == nil {
 		t.Fatal("caller supplied BindID")
 	}
 	bind.Binding.BindID = ""
 	if err := bind.Validate(); err != nil {
 		t.Fatal(err)
+	}
+	// Bind 必须带 Gate 给连接的接受序号（同一 SessionID 判新旧用），其他控制请求不带。
+	unordered := bind
+	unordered.Admission = 0
+	if err := unordered.Validate(); err == nil {
+		t.Fatal("Bind without an admission sequence")
+	}
+	renew := ControlRequest{Version: InternalVersion, Operation: Renew, Binding: binding, Admission: 1}
+	if err := renew.Validate(); err == nil {
+		t.Fatal("non-Bind control carried an admission sequence")
 	}
 	bind.Operation = Activate
 	if err := bind.Validate(); err == nil {

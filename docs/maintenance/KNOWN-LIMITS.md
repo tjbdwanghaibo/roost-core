@@ -336,9 +336,9 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 ### 同一 SessionID 的重连
 
-嵌入 TCP 的 `TCPServer.registerSession` 按连接被接受的先后定同一 SessionID 的新旧（2026-11-04，回归 `TestALoginThatFinishesLateDoesNotDisplaceANewerConnectionOfTheSameSession`）：迟到完成的旧登录在 ack 之后被拒登记并断开。剩余边界：
+嵌入 TCP 的 `TCPServer.registerSession` 与独立 Gate 模式下 Game 的绑定表（同一 Gate 实例内）都按连接被接受的先后定同一 SessionID 的新旧（2026-11-04，回归 `TestALoginThatFinishesLateDoesNotDisplaceANewerConnectionOfTheSameSession`、`TestALateBindOfAnOlderConnectionDoesNotRetireTheNewerBindingOfTheSameSession`）：迟到完成的旧登录 / 旧 Bind 被拒，不关闭新连接。契约见 [GATEWAY §3](../framework/GATEWAY.md#3-绑定与请求结果)。剩余边界：
 
-- **独立 Gate 模式的 Game 绑定表仍按 Bind 完成先后替换**（读代码推断，未写用例）：`bindingTable.finish` 让后完成的 Bind 胜出并退役上一条绑定、通知 Gate 关闭它。旧连接的认证 / Bind 慢于新连接时，Game 侧照样把新连接的绑定退役，新连接被断开；Gate 本地的 `TCPServer` 已不再让旧连接登记，所以结果与修前相同（两条都不剩），不会更坏。要修需要把 Gate 的接受序号带进 Bind 请求，由 Game 比较——只对同一 Gate 实例内的连接有意义，跨 Gate 的同一 SessionID 没有可比较的先后，属于方案选择，待维护者决定。
+- **跨 Gate 实例仍按 Bind 完成先后替换**：同一 SessionID 的两条连接落在不同 Gate 实例时，两边的接受序号没有可比较的先后，Game 让后完成的 Bind 胜出、退役先完成的那条并通知它的 Gate 关闭（同一 SID 的 Gate 重启前后也是不同实例：旧代际的连接已随进程消失，新代际的 Bind 照常替换残留绑定，这是想要的结果）。客户端放弃一条 Gate 上的握手、立即连到另一个 Gate 重连，而旧握手的 Bind 迟到完成时，新连接仍会被断开（结果与修前相同）。要消除需要跨 Gate 可比较的顺序（例如客户端在票据 / 认证帧里带单调的连接代号），属于协议与客户端的方案选择，未排期。
 - **“接受先后”只代表同一客户端的重连意图**：两台设备用同一 SessionID 交错登录时，留下的是接受得更晚的那条；SessionID 本来就标识一次登录，框架不另做裁决。
 - **Robot 的 `connect` 发出认证帧不等 ack**：连接动作返回不代表握手完成，紧接着的 `Reconnect` 让两条连接的握手在服务端交错；修复后这种交错不再踢掉新连接，Robot 本身未改。
 

@@ -42,7 +42,12 @@ type bindingRecord struct {
 	ready         chan struct{}
 	result        ControlResponse
 	receiverID    uint64
+	admission     uint64 // Bind 带来的接受序号（ControlRequest.Admission），只与同一 Gate 实例的记录比较
 }
+
+// bindingSupersededReason 是迟到的旧 Bind 被拒的原因：同一 Gate 实例上同一 SessionID 已绑定的是更晚接受的连接。
+// Gate 据此把这次握手当作正常的会话关闭收尾（不按通道故障告警）。
+const bindingSupersededReason = "superseded by a newer connection of the session"
 
 // bindingTable 保留有效终态，并在新 Bind 准入时预留未来终态的位置。
 // 关闭已有连接不能因 tombstone 容量满而忘掉事实，迟到 Bind 也不能复活它。
@@ -79,7 +84,7 @@ func (table *bindingTable) reserve(request ControlRequest) (record *bindingRecor
 	if prior := table.byConnection[key]; prior != nil {
 		want := prior.identity
 		want.BindID = ""
-		if want != request.Binding || prior.ticketHash != hash {
+		if want != request.Binding || prior.ticketHash != hash || prior.admission != request.Admission {
 			return nil, false, ErrBindingStale
 		}
 		if prior.state == bindingClosed {
@@ -100,7 +105,7 @@ func (table *bindingTable) reserve(request ControlRequest) (record *bindingRecor
 	table.nextReceiver++
 	identity := request.Binding
 	identity.BindID = newBindingToken()
-	record = &bindingRecord{identity: identity, ticketHash: hash, state: bindingPending, leaseUntil: time.Now().Add(table.config.RequestTimeout), ready: make(chan struct{}), receiverID: table.nextReceiver}
+	record = &bindingRecord{identity: identity, ticketHash: hash, state: bindingPending, leaseUntil: time.Now().Add(table.config.RequestTimeout), ready: make(chan struct{}), receiverID: table.nextReceiver, admission: request.Admission}
 	table.byConnection[key] = record
 	table.byReceiver[record.receiverID] = record
 	table.active++
@@ -117,6 +122,13 @@ func (table *bindingTable) pruneLocked(now time.Time) {
 
 // finish 必须在真实鉴权/队列注册结束后调用。替换 SessionID 时只关闭对应旧记录；
 // 调用方在锁外按返回的 previous 清理旧 lifetime，不能在此持锁等待网络或 Nest。
+//
+// 同一 SessionID 的新旧：同一 Gate 实例（Binding.Gate 含进程代际）上的两条连接按 Gate 给的接受序号定，不按 Bind
+// 完成的先后——已绑定的是更晚接受的连接时，本记录是一次迟到完成的旧 Bind（客户端放弃这次握手后已经重连，或旧连接
+// 的鉴权慢于新连接），拒绝它、不退役任何人，Gate 收到拒绝后关掉那条旧连接；若让后完成者胜出，它会退役正在服务的
+// 新绑定并通知 Gate 关掉新连接，而旧连接又被 Gate 本地按接受先后拒登记，两条都不剩。判定与写入在同一把锁里，两次
+// Bind 无论怎样交错，留下的都是接受得更晚的那条，与嵌入 TCP 的 registerSession 同一规则。
+// 不同 Gate 实例（含同一 Gate 重启后的新代际）的序号各自从头编号，没有可比较的先后，仍是后完成者胜出。
 func (table *bindingTable) finish(record *bindingRecord, accepted bool) (previous *bindingRecord, result ControlResponse) {
 	table.mu.Lock()
 	defer table.mu.Unlock()
@@ -130,6 +142,11 @@ func (table *bindingTable) finish(record *bindingRecord, accepted bool) (previou
 	previous = table.bySession[record.identity.SessionID]
 	if previous != nil && previous.identity.PlayerID != record.identity.PlayerID {
 		table.closeLocked(record)
+		return nil, record.result
+	}
+	if previous != nil && previous.identity.Gate == record.identity.Gate && previous.admission > record.admission {
+		table.closeLocked(record)
+		record.result.Reason = bindingSupersededReason
 		return nil, record.result
 	}
 	record.state = bindingConfirmed
