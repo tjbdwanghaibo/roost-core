@@ -513,6 +513,104 @@ func TestWithdrawnRPCIsAnsweredRetryableAndNeverReachesTheHandler(t *testing.T) 
 	}
 }
 
+// 停机第一步（App 经 NatsMod 调 CloseIngress，App 生命周期方案）：全部已注册方法撤下——之后的请求答 CodeRetryable、
+// 不进 handler；四个基础主题的订阅退掉；CloseIngress 返回之前，已经接收的模块消息（在跑的与排队的）都处理完，之后到达的
+// 不进 handler。各方法不必由各自的 Mod 撤（生成的 Server、内置服务的 Mod 都不撤）。
+func TestCloseIngressClosesEveryInputOfTheBus(t *testing.T) {
+	client := &lifecycleClient{}
+	rpc := &lifecycleRpc{replies: make(chan []byte, 8)}
+	b := New(client, rpc, nil, Config{Sid: 3000, SvcType: "mail", WorkerNum: 1, QueueCap: 8})
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = b.StopWithContext(context.Background()) })
+	var rpcCalls, msgCalls atomic.Int32
+	for _, method := range []string{"mail.Send", "mail.List"} {
+		if err := b.HandleRpc(method, func(*RpcContext) (any, error) { rpcCalls.Add(1); return struct{}{}, nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entered, release := make(chan struct{}, 4), make(chan struct{})
+	if err := b.Handle("mail", "notice", func(*MsgContext) {
+		entered <- struct{}{}
+		<-release
+		msgCalls.Add(1)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	closer, ok := any(b).(interface{ CloseIngress(context.Context) error })
+	if !ok {
+		t.Fatal("*bus.Bus has no CloseIngress: the App cannot close the bus's inputs before the Mods its handlers use stop")
+	}
+	var server *lifecycleSub
+	for _, sub := range client.subs {
+		if sub.subject == b.subject.Server(3000) {
+			server = sub
+		}
+	}
+	message := func() *fnats.Msg {
+		data, err := b.encodeMsg(3000, "mail", "notice", struct{}{}, fnats.BroadcastNone)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &fnats.Msg{Subject: server.subject, Data: data}
+	}
+	// 一条在 handler 里、一条在队列里。
+	server.handler(message())
+	<-entered
+	server.handler(message())
+
+	closed := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		closed <- closer.CloseIngress(ctx)
+	}()
+	select {
+	case err := <-closed:
+		t.Fatalf("CloseIngress returned %v while an accepted message was still in its handler", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-closed; err != nil {
+		t.Fatalf("CloseIngress: %v", err)
+	}
+	if n := msgCalls.Load(); n != 2 {
+		t.Fatalf("%d accepted messages handled before CloseIngress returned, want 2 (the running and the queued one)", n)
+	}
+	for _, sub := range client.subs {
+		if sub.valid {
+			t.Errorf("subscription %s queue=%q still valid after CloseIngress", sub.subject, sub.queue)
+		}
+	}
+	server.handler(message()) // 传输层退订之后还送来的一条（替身不管退订）：总线自己的准入也要挡住它
+	time.Sleep(50 * time.Millisecond)
+	if n := msgCalls.Load(); n != 2 {
+		t.Fatalf("a message after CloseIngress reached the handler (%d calls)", n)
+	}
+	for _, method := range []string{"mail.Send", "mail.List"} {
+		b.dispatchTask(1, &incomingTask{isRpc: true, replySubject: "_INBOX." + method,
+			natsMsg: &fnats.NatsMsg{MsgName: method, SessionId: method, MsgID: method}})
+		select {
+		case raw := <-rpc.replies:
+			if err := decodeRPCResponse(b.codec, raw, &struct{}{}); errcode.CodeOf(err) != errcode.CodeRetryable {
+				t.Errorf("%s after CloseIngress was answered %v (code %d); want CodeRetryable", method, err, errcode.CodeOf(err))
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s after CloseIngress got no answer", method)
+		}
+	}
+	if rpcCalls.Load() != 0 {
+		t.Fatalf("RPC handlers ran %d times after CloseIngress", rpcCalls.Load())
+	}
+	if err := b.HandleRpc("mail.Late", func(*RpcContext) (any, error) { return nil, nil }); err == nil {
+		t.Fatal("HandleRpc after CloseIngress succeeded: a handler registered now would never be closed")
+	}
+	if err := closer.CloseIngress(context.Background()); err != nil {
+		t.Fatalf("second CloseIngress = %v, want an idempotent nil", err)
+	}
+}
+
 // JetStream RPC 没有 no responders：撤下停掉这个方法的服务级 consumer（共享 durable 交给别的实例），本实例的 consumer
 // 留到 Bus 停止，之后投递来的请求答复 CodeRetryable 并确认，不进 handler。
 func TestWithdrawnJetStreamRPCStopsTheServiceConsumerAndAnswersRetryable(t *testing.T) {

@@ -106,6 +106,13 @@ type Bus struct {
 
 	// subscriptions
 	subs []nats.ISubscription
+	// msgSubs 是 Start 建的四个基础主题订阅（模块消息的入口），CloseIngress 排空并退掉它们。受 lifeMu 保护。
+	msgSubs []nats.ISubscription
+	// ingressClosed 在 CloseIngress 开始时置位：之后 HandleRpc 拒绝（新注册的 handler 不会再被关闭）。受 lifeMu 保护。
+	ingressClosed bool
+	// msgCalls 是模块消息的准入与在途计数：onMessage 接收时 Begin（含在调度池里排队的），处理完或被拒绝时 End。
+	// CloseIngress 关准入并等它归零。
+	msgCalls operation.Lifetime
 	// rpcSubs 是每个轻量 RPC 方法的两个订阅：服务级队列组（<prefix>.rpc.<svc>.<method>，队列 <svc>_rpc）与本 sid 的
 	// 实例主题。LeaveRPCQueue 退出队列组、WithdrawRpc 撤下两者时取出并退订，取出后字段为 nil。受 lifeMu 保护。
 	rpcSubs map[string]*rpcMethodSubs
@@ -311,6 +318,7 @@ func (b *Bus) startLocked() (func() error, error) {
 			return drain, fmt.Errorf("bus: subscribe %s: %w", s.subject, err)
 		}
 		b.subs = append(b.subs, sub)
+		b.msgSubs = append(b.msgSubs, sub)
 		slog.Info("bus: subscribed", "subject", s.subject)
 	}
 
@@ -364,6 +372,7 @@ func (b *Bus) StopWithContext(ctx context.Context) error {
 	}
 	subs := b.subs
 	b.subs = nil
+	b.msgSubs = nil
 	pool := b.pool
 	b.pool = nil
 	b.drainPool = pool
@@ -473,6 +482,7 @@ func (b *Bus) detachLocked() func() error {
 	}
 	subs := b.subs
 	b.subs = nil
+	b.msgSubs = nil
 	pool := b.pool
 	b.pool = nil
 	return func() error {
@@ -644,10 +654,10 @@ func (b *Bus) HandleRpc(method string, handler RpcHandlerFunc) error {
 		return fmt.Errorf("bus: nil bus")
 	}
 	b.lifeMu.Lock()
-	unavailable := b.stopping || b.stopped
+	unavailable := b.stopping || b.stopped || b.ingressClosed
 	b.lifeMu.Unlock()
 	if unavailable {
-		return fmt.Errorf("bus: cannot register rpc handler while stopping or stopped")
+		return errRPCRegistrationClosed
 	}
 	b.mu.Lock()
 	if method == "" {
@@ -699,8 +709,8 @@ func (b *Bus) subscribeLightweightRPCMethod(method string) ([]nats.ISubscription
 	subject := b.subject.Rpc(b.cfg.SvcType, method)
 	b.lifeMu.Lock()
 	defer b.lifeMu.Unlock()
-	if b.stopping || b.stopped {
-		return nil, fmt.Errorf("bus: cannot register rpc handler while stopping or stopped")
+	if b.stopping || b.stopped || b.ingressClosed {
+		return nil, errRPCRegistrationClosed
 	}
 	sub, err := b.client.QueueSubscribe(subject, b.cfg.SvcType+"_rpc", b.onRpcMessage)
 	if err != nil {
@@ -806,9 +816,17 @@ func (b *Bus) onMessage(msg *nats.Msg) {
 		slog.Error("bus: decode nats msg failed", "err", err)
 		return
 	}
+	// 准入在接收时（不是 handler 开始时）：CloseIngress 先排空订阅、再关准入，排空期间送来、还在调度池里排队的
+	// 消息已经准入，CloseIngress 等它们处理完；关准入之后还送来的（传输层退订之前的最后几条）不进 handler。
+	if !b.msgCalls.Begin() {
+		slog.Warn("bus: drop module message after the inputs were closed", "module", natsMsg.ToModule, "msg", natsMsg.MsgName, "msg_id", natsMsg.MsgID)
+		b.deadLetter(natsMsg, errMessageIngressClosed.Error())
+		return
+	}
 	task := &incomingTask{
 		natsMsg: natsMsg,
 		isRpc:   false,
+		release: b.msgCalls.End,
 	}
 	// Hash by module name for ordering guarantee within same module
 	key := hashString(natsMsg.ToModule)
@@ -863,6 +881,7 @@ func (b *Bus) dispatchTask(key int64, task *incomingTask) {
 		task.OnRelease()
 		slog.Warn("bus: drop message because dispatcher is not running")
 		b.refuseTask(task, "dispatcher not running", errDispatcherNotRunning)
+		task.settle()
 		return
 	}
 	if err := pool.Dispatch(key, task); err != nil {
@@ -879,6 +898,7 @@ func (b *Bus) dispatchTask(key int64, task *incomingTask) {
 			"reason": err.Error(),
 		}, 1)
 		b.refuseTask(task, "dispatch failed: "+err.Error(), err)
+		task.settle()
 	}
 }
 
@@ -910,6 +930,7 @@ func (b *Bus) refuseTask(task *incomingTask, reason string, cause error) {
 }
 
 func (b *Bus) handleTask(task *incomingTask) {
+	defer task.settle()
 	if task.isRpc {
 		b.dispatchRpc(task)
 	} else {
@@ -1171,9 +1192,21 @@ type incomingTask struct {
 	natsMsg      *nats.NatsMsg
 	isRpc        bool
 	replySubject string
+	// release 结束这条消息的准入（msgCalls.End），在处理完或被拒绝之后由 settle 调用一次；RPC 任务为 nil
+	// （RPC 的准入在 handler 开始时，见 dispatchRpc）。
+	release func()
 }
 
 func (t *incomingTask) OnRelease() {}
+
+// settle 结束任务的准入。调度池接受的任务一定会被执行（worker.TryCast 的契约），所以每个任务恰好经过
+// handleTask 或 dispatchTask 的拒绝分支之一。
+func (t *incomingTask) settle() {
+	if t.release != nil {
+		t.release()
+		t.release = nil
+	}
+}
 
 // --- helpers ---
 
@@ -1214,4 +1247,8 @@ var (
 	// dispatcher did not admit its request.
 	errRPCNotAdmitted       = errors.New("bus: rpc request not admitted")
 	errDispatcherNotRunning = errors.New("bus: dispatcher not running")
+	// errRPCRegistrationClosed 是 CloseIngress 之后、停止中或已停止时 HandleRpc 的错误。
+	errRPCRegistrationClosed = errors.New("bus: cannot register rpc handler: the bus inputs are closed, or it is stopping or stopped")
+	// errMessageIngressClosed 是 CloseIngress 之后还送来的模块消息的死信原因。
+	errMessageIngressClosed = errors.New("bus: module message arrived after the inputs were closed")
 )

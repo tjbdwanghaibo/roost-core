@@ -57,7 +57,11 @@ func (b *Bus) WithdrawRpc(ctx context.Context, methods ...string) error {
 		}
 	}
 	b.mu.RUnlock()
+	return b.withdrawRPC(ctx, methods, calls)
+}
 
+// withdrawRPC 是 WithdrawRpc 的三步（methods 已核对过、calls 是它们的在途计数）。
+func (b *Bus) withdrawRPC(ctx context.Context, methods []string, calls []*operation.Lifetime) error {
 	for _, lifetime := range calls {
 		lifetime.Stop()
 	}
@@ -178,4 +182,97 @@ func (b *Bus) refuseWithdrawnRPC(replySubject, method string) {
 	if err := b.rpc.Reply(replySubject, data); err != nil {
 		slog.Error("bus: reply withdrawn rpc refusal failed", "method", method, "err", err)
 	}
+}
+
+// CloseIngress 关闭这个总线的全部外部输入并在 ctx 内排空，是 App 停机的第一步（app.IngressCloser，由拥有总线的
+// NatsMod 转调；App 生命周期方案 docs/maintenance/FEATURE-2026-11-04-app-lifecycle.md）：
+//
+//  1. 之后 HandleRpc 拒绝：这时注册的 handler 不会再被关闭。
+//  2. 对全部已注册的 RPC 方法做 WithdrawRpc 的三步：之后到达的请求答 errcode.CodeRetryable 或 no responders（JetStream
+//     RPC 的实例 consumer 留到 Bus 停止、期间答可重试），等已进 handler 的答复完。注册它们的是生成的 owner Mod、生成的
+//     Server（Service.Init）还是内置服务，都由这里统一撤下，各自不必再撤。
+//  3. 排空并退掉四个基础主题的订阅（模块消息的入口），然后关模块消息的准入、等已接收的（在跑的与在调度池里排队的）处理完。
+//     之后的模块消息不进 handler：核心 NATS 不持久，等同于进程退出之后发来的消息（可靠模式下进死信）。
+//
+// 只停“接收”：Send / Call、JetStream RPC 的应答 consumer 照常，直到 Bus 停止（Service.Shutdown 与之后停止的 Mod 还要
+// 发消息、调别的服务）。ctx 先结束返回 ctx 错误、准入保持关闭，用新 ctx 再调用继续等；返回 nil 之后不再有输入在处理。
+// 重复调用返回 nil。
+func (b *Bus) CloseIngress(ctx context.Context) error {
+	if b == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	b.lifeMu.Lock()
+	b.ingressClosed = true
+	b.lifeMu.Unlock()
+
+	// 置位之后收集：之后的 HandleRpc 已被拒绝，这里拿到的就是全部（与置位并发、订阅还没完成的那一个会自己撤销登记）。
+	b.mu.RLock()
+	methods := make([]string, 0, len(b.rpcHandlers))
+	calls := make([]*operation.Lifetime, 0, len(b.rpcHandlers))
+	for method := range b.rpcHandlers {
+		methods = append(methods, method)
+		if lifetime := b.rpcCalls[method]; lifetime != nil {
+			calls = append(calls, lifetime)
+		}
+	}
+	b.mu.RUnlock()
+	if len(methods) > 0 {
+		if err := b.withdrawRPC(ctx, methods, calls); err != nil {
+			return fmt.Errorf("bus: close inputs: %w", err)
+		}
+	}
+	if err := b.drainMessageSubscriptions(ctx); err != nil {
+		return fmt.Errorf("bus: close inputs: %w", err)
+	}
+	b.msgCalls.Stop()
+	if err := b.msgCalls.Wait(ctx); err != nil {
+		return fmt.Errorf("bus: close inputs: module messages still being handled: %w", err)
+	}
+	return nil
+}
+
+// drainMessageSubscriptions 并发排空四个基础主题的订阅，排空成功的从记录与 b.subs 里拿掉（Bus 停止时不再退订），失败或
+// 超时的留给重试。Bus 停止中或已停止时订阅归停止流程处理。
+func (b *Bus) drainMessageSubscriptions(ctx context.Context) error {
+	b.lifeMu.Lock()
+	if b.stopping || b.stopped {
+		b.lifeMu.Unlock()
+		return nil
+	}
+	subs := append([]nats.ISubscription(nil), b.msgSubs...)
+	b.lifeMu.Unlock()
+	if len(subs) == 0 {
+		return nil
+	}
+	errs := make([]error, len(subs))
+	var wg sync.WaitGroup
+	for i, sub := range subs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = drainRPCSubscription(ctx, sub)
+		}()
+	}
+	wg.Wait()
+	b.lifeMu.Lock()
+	for i, sub := range subs {
+		if errs[i] != nil {
+			continue
+		}
+		for j, owned := range b.msgSubs {
+			if owned == sub {
+				b.msgSubs = append(b.msgSubs[:j], b.msgSubs[j+1:]...)
+				break
+			}
+		}
+		b.disownSubscriptionLocked(sub)
+	}
+	b.lifeMu.Unlock()
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("drain message subscriptions: %w", err)
+	}
+	return nil
 }

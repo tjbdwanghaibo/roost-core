@@ -210,8 +210,8 @@ func (b *Bus) subscribeJetStreamRPCMethod(method string) error {
 	}
 	b.lifeMu.Lock()
 	defer b.lifeMu.Unlock()
-	if b.stopping || b.stopped {
-		return fmt.Errorf("bus: cannot register rpc handler while stopping or stopped")
+	if b.stopping || b.stopped || b.ingressClosed {
+		return errRPCRegistrationClosed
 	}
 	cfg := b.jsRPC.cfg
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.SetupTimeout)

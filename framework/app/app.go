@@ -614,9 +614,9 @@ func (run *appRun) waitForStop(serveErr <-chan error) (serviceErr error, serveDo
 	return serviceErr, serveDone
 }
 
-// shutdown 是优雅停机：发布 service.stopping → 等 Serve 与 Service.Shutdown 返回 → 逆序停服务专属
-// Mod、再停共享 Mod（决定单实例锁能否释放）→ 发布 service.stopped。任何一步在预算内没结束都直接返回，
-// 保留仍可能被访问的依赖与锁。
+// shutdown 是优雅停机：发布 service.stopping → 关全部外部输入并排空（closeIngress）→ 等 Serve 与
+// Service.Shutdown 返回 → 逆序停服务专属 Mod、再停共享 Mod（决定单实例锁能否释放）→ 发布 service.stopped。
+// 任何一步在预算内没结束都直接返回，保留仍可能被访问的依赖与锁。
 func (a *App) shutdown(run *appRun, svc Service, serveErr <-chan error, serveDone bool, serviceErr error) error {
 	shutdownTimeout := a.settings.Shutdown.TotalTimeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -637,6 +637,14 @@ func (a *App) shutdown(run *appRun, svc Service, serveErr <-chan error, serveDon
 	if !stoppingFinished {
 		// service.stopping 的 hook 在停机预算内没返回，可能还在用 Service 与 Mod：和 Service.Shutdown
 		// 不完整相同，不调 Shutdown、不停 Mod、不释放单实例锁。
+		return errors.Join(serviceErr, shutdownErr)
+	}
+	// 停机第一步：关全部外部输入并排空（ingress.go）。之后才停业务与 Mod；排空没完成就保留依赖与锁。
+	drained, err := run.closeIngress(shutdownCtx, a.registry, svc)
+	if err != nil {
+		shutdownErr = errors.Join(shutdownErr, err)
+	}
+	if !drained {
 		return errors.Join(serviceErr, shutdownErr)
 	}
 	serviceErr, shutdownErr, complete := awaitServeAndShutdown(shutdownCtx, svc, serveErr, serveDone, serviceErr, shutdownErr)
