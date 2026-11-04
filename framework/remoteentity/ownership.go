@@ -52,6 +52,7 @@ func (m *Manager) ClaimRemoteOwnership(ctx context.Context, id int64) (entity.Re
 	if err := m.applyLiveOwnership(ctx, wrapper, next, entity.RemoteOwnershipLocalOwned, 0); err != nil {
 		return entity.RemoteEntityMarkerLease{}, err
 	}
+	m.registerRoute(ctx, wrapper.id, wrapper.kind, next)
 	return next, nil
 }
 
@@ -132,6 +133,9 @@ func (m *Manager) TransferRemoteOwnership(ctx context.Context, id int64, newOwne
 	if err := m.transitionLiveOwnership(ctx, wrapper, expected, entity.RemoteOwnershipDraining); err != nil {
 		return entity.RemoteEntityMarkerLease{}, err
 	}
+	// 进入 Draining 后按值删除本进程的路由登记：转移期间调用方回退读所有权记录，转完后新 owner 带更新的代际登记。
+	// 转移被证明没发生（下面 settle 恢复原模式）时不在这里补登记，下一次写准入或前置检查会重新登记。
+	m.dropRoute(ctx, wrapper.id, RouteValue(m.localSid, expected.MarkerEpoch))
 	next, err := m.ownershipStore.TransferExpected(ctx, wrapper.id, expected, newOwnerSID)
 	if err != nil {
 		return m.settleIndeterminateOwnership(wrapper, expected, err, "transfer",

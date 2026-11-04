@@ -126,6 +126,13 @@ func Assemble(deps AssemblyDeps, cfg *Config, localSid int32, mongoCfg MongoBack
 	}
 	manager.SetBackend(backend)
 	manager.SetOwnershipStore(authority)
+	if len(cfg.RouteKinds) > 0 {
+		routes, err := NewRouteStore(deps.Redis, cfg.SnapshotL2KeyPrefix, cfg.RouteTTL)
+		if err != nil {
+			return nil, err
+		}
+		manager.routes = newRouteRegistry(routes, cfg)
+	}
 	return &Assembly{Manager: manager, LockFactory: lockFactory, AtomicStore: atomicStore, cfg: cfg}, nil
 }
 
@@ -196,6 +203,7 @@ func (a *Assembly) Start(ctx context.Context, bus fsyncbus.ISyncBus) error {
 		return err
 	}
 	a.Manager.StartFinalizer()
+	a.Manager.startRouteRenewal()
 	started = true
 	a.started = true
 	return nil
@@ -218,6 +226,10 @@ func (a *Assembly) Stop(ctx context.Context) error {
 	// finalizer 是单次生命周期；一旦开始停止，同一个 Assembly 就不能再次启动。
 	a.stopping = true
 	if a.Manager != nil {
+		// 先停路由续期并删掉本进程的登记：停机后调用方回退读所有权记录（仍指向本 sid，同 sid 拉起后照常服务）。
+		if err := a.Manager.stopRouteRenewal(ctx); err != nil {
+			return err
+		}
 		if err := a.Manager.StopFinalizer(ctx); err != nil {
 			return err
 		}

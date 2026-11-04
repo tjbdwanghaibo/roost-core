@@ -209,6 +209,11 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 			return nil, err
 		}
 	}
+	if !marked {
+		// 独占写准入成功：实体已加载、owner 是本 sid（冷加载后的第一次写、首写认领都经这里）。登记路由，已登记同一个值
+		// 时不碰 Redis；失败只记指标，不影响这次写。
+		w.mgr.registerRoute(ctx, w.id, w.kind, marker)
+	}
 	return &remoteWriteEntry{wrapper: w, entity: remoteEntity, lease: lease, distLock: distLocked}, nil
 }
 
@@ -261,6 +266,8 @@ func (w *remoteEntityWrapper) confirmWriteOwnership(ctx context.Context) (marked
 	}
 	marked = w.isMarked()
 	if !marked && !w.isLocalOwner() {
+		// 所有权已是别人：本进程不再持有它的路由登记（只按值删自己写的）。
+		w.mgr.dropRoute(ctx, w.id, "")
 		return false, fmt.Errorf("%w: entity=%d owner=%d", entity.ErrRemoteFenced, w.id, w.leaseOwner())
 	}
 	return marked, nil

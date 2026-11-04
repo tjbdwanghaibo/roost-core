@@ -36,6 +36,8 @@ type Manager struct {
 	// foreignKinds 是 cfg.ForeignKinds 的集合，构造时冻结；空表示不限制（见 rejectForeignKind）。
 	foreignKinds map[entity.EntityKind]struct{}
 	remote       *remoteState
+	// routes 是 Redis 路由登记（route.go）；没有登记 kind 时为 nil。Assemble 在封存依赖之前设置。
+	routes *routeRegistry
 	// snapshots 是快照读、兴趣、复制接收与它们的生命周期。Manager 只组合并委托它，
 	// owner 的提交后发布经它的包内入口 publishCommitted。
 	snapshots *SnapshotClient

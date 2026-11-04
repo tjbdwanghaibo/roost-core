@@ -19,6 +19,9 @@ type IPipeline interface {
 	ZAdd(ctx context.Context, key string, members ...Z)
 	RPush(ctx context.Context, key string, values ...any)
 	LPop(ctx context.Context, key string) *FutureBytes
+	// Eval 把一条脚本排进 pipeline（每条命令发脚本原文）。Cluster 客户端按脚本的第一个键路由，所以每条脚本只能碰
+	// 同一槽位的键。与 IRedis.Eval 不同，排队的脚本属于写命令：回复丢失时不经驱动重放，Exec 只在整条确定没执行时重发。
+	Eval(ctx context.Context, script string, keys []string, args ...any) *FutureAny
 
 	// Exec sends buffered commands and populates futures. Inspect each future
 	// for its command's error even when Exec returns nil.
@@ -43,6 +46,20 @@ func NewFutureBytes(val []byte, err error) *FutureBytes {
 func (f *FutureBytes) Result() ([]byte, error) { return f.val, f.err }
 
 func (f *FutureBytes) SetResult(val []byte, err error) {
+	f.val = val
+	f.err = err
+}
+
+// FutureAny holds a deferred script reply from pipeline (the same value
+// IRedis.Eval returns: int64, string, []any or nil).
+type FutureAny struct {
+	val any
+	err error
+}
+
+func (f *FutureAny) Result() (any, error) { return f.val, f.err }
+
+func (f *FutureAny) SetResult(val any, err error) {
 	f.val = val
 	f.err = err
 }

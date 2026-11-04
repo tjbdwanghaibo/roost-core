@@ -20,6 +20,12 @@ type pipeline struct {
 	bytesFutures     []*pipelineBytesCmd
 	stringMapFutures []*pipelineStringMapCmd
 	int64Futures     []*pipelineInt64Cmd
+	anyFutures       []*pipelineAnyCmd
+}
+
+type pipelineAnyCmd struct {
+	cmd    *goredis.Cmd
+	future *fredis.FutureAny
 }
 
 type pipelineBytesCmd struct {
@@ -112,11 +118,19 @@ func (p *pipeline) LPop(ctx context.Context, key string) *fredis.FutureBytes {
 	return f
 }
 
+func (p *pipeline) Eval(ctx context.Context, script string, keys []string, args ...any) *fredis.FutureAny {
+	cmd := queueWrite(ctx, p, func(b goredis.Pipeliner) *goredis.Cmd { return b.Eval(ctx, script, keys, args...) })
+	f := &fredis.FutureAny{}
+	p.anyFutures = append(p.anyFutures, &pipelineAnyCmd{cmd: cmd, future: f})
+	return f
+}
+
 func (p *pipeline) Exec(ctx context.Context) error {
 	defer func() {
 		p.bytesFutures = nil
 		p.stringMapFutures = nil
 		p.int64Futures = nil
+		p.anyFutures = nil
 		p.hasWrites = false
 	}()
 	commands, err := p.pipe.Exec(ctx)
@@ -149,6 +163,15 @@ func (p *pipeline) Exec(ctx context.Context) error {
 		val, cmdErr := mc.cmd.Result()
 		mc.future.SetResult(val, cmdErr)
 	}
+	for _, ac := range p.anyFutures {
+		val, cmdErr := ac.cmd.Result()
+		if cmdErr == goredis.Nil {
+			// 脚本返回 nil（Lua false）：结果为空，不是错误。
+			ac.future.SetResult(nil, nil)
+		} else {
+			ac.future.SetResult(val, cmdErr)
+		}
+	}
 	// Preserve transport/aggregate errors after filling every future. Redis
 	// Nil may be the first command error while a later write failed; writes
 	// without futures still need their error reported by Exec.
@@ -168,6 +191,7 @@ func (p *pipeline) Discard() {
 	p.bytesFutures = nil
 	p.stringMapFutures = nil
 	p.int64Futures = nil
+	p.anyFutures = nil
 	p.hasWrites = false
 }
 

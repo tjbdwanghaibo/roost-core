@@ -621,6 +621,11 @@ func (p *refHMapFakePipeline) RPush(context.Context, string, ...any) {}
 func (p *refHMapFakePipeline) LPop(context.Context, string) *fredis.FutureBytes {
 	return fredis.NewFutureBytes(nil, fredis.ErrNil)
 }
+func (p *refHMapFakePipeline) Eval(context.Context, string, []string, ...any) *fredis.FutureAny {
+	future := &fredis.FutureAny{}
+	future.SetResult(nil, errors.New("refHMapFakePipeline: Eval is not used by RefHMap"))
+	return future
+}
 func (p *refHMapFakePipeline) Exec(context.Context) error {
 	for _, cmd := range p.commands {
 		cmd()
