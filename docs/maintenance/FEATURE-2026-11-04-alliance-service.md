@@ -396,7 +396,7 @@ game-demo 是参考实现，不改成生成产物；以上四件生成器能力�
 ## 5. 风险与未验证项
 
 - **Remote 实体 handler 里 `EmitStart` / `Emit`**：阶段 1 第 ④ 项已补真实依赖端到端（`remoteflow` 的 `TestGeneratedRemoteHandlerEmitsEffectsWithTheRemoteWrite`，2026-11-04 macOS 私有依赖通过）：effect 与 Remote 写同一条提交记录投影、各发布一次，失败不提交。本用例只覆盖单进程 strict 与 memory 升 strict，不含 Remote handler 提交后 kill -9、WAL 重放时 effect 的去重（阶段 5 的 Saga 用例覆盖）。
-- **写 RPC 延迟**：唯一的 Remote 写样本是 strict p50 / p99 约 117 / 195 ms（1.2），加上 RPC 一跳与 Mongo `GrantWrite`。公会操作可以接受。阶段 5 实测（带路由缓存、单并发，本机有后台负载）：`Join` p50 86～115ms、p99 131～235ms，`Info` p50 9～17ms；同一实例上同一方法串行（KNOWN-LIMITS“实体服务的 RPC 在一个实例上按方法串行”），并发只增加排队。
+- **写 RPC 延迟**：唯一的 Remote 写样本是 strict p50 / p99 约 117 / 195 ms（1.2），加上 RPC 一跳与 Mongo `GrantWrite`。公会操作可以接受。阶段 5 实测（带路由缓存、单并发，本机有后台负载）：`Join` p50 86～115ms、p99 131～235ms，`Info` p50 9～17ms；同一实例上同一方法串行（KNOWN-LIMITS“实体服务的 RPC 在一个实例上按方法串行”），并发只增加排队。同日已修：总线按顺序键派发，不同联盟并行、同一联盟按到达顺序（[benchmarks/rpc-dispatch-20261104](../performance/benchmarks/rpc-dispatch-20261104/README.md)）。
 - **Mirror 数字是历史值**：1.3 的读延迟与推送延迟来自 2026-10-06（v1.21 时期），之后 Remote 链路改过；阶段 5 只做短测，不做长稳。
 - **视图版本与单调读**：写 RPC 返回的是实体版本；`remoteview` 视图的水位只在视图字段变化时推进。缺省用读实体缺省快照的 `//roost:mirror` DTO 避开这个问题；若业务改用字段视图做写后读，要先核对 Monotonic 对视图 scope 的判定（阶段 5 只验证了 DTO 路径：写答复版本作 `MinVersion` 后两个 game 进程都读到；字段视图没有核对）。
 - **兴趣表容量**：每个在线玩家一个 `AllianceMember` 兴趣时，大规模在线会接近缺省上限（2.4），没有测。
