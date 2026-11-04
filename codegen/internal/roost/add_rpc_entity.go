@@ -85,12 +85,13 @@ type %[2]s interface {
 	//roost:rpc route
 	Apply(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64) (version uint64, err error)
 	// Result answers what the write requestID on target did: found=false
-	// means it was never executed (sending it again is safe); otherwise code
-	// is 0 for success or the business rejection's code, and version is the
-	// state version the write produced.
+	// means it was never executed (sending it again is safe); otherwise
+	// outcome is 0 for success or the business rejection's code, and version
+	// is the state version the write produced. (Not named code: the response
+	// already carries the envelope's Code, and servicerpc refuses the clash.)
 	//
 	//roost:rpc route
-	Result(ctx context.Context, target int64, requestID string) (found bool, code int32, version uint64, err error)
+	Result(ctx context.Context, target int64, requestID string) (found bool, outcome int32, version uint64, err error)
 }
 `, snake, pascal, code)
 }

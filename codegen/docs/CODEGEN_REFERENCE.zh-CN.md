@@ -1102,6 +1102,7 @@ type Mail interface {
 | 未导出类型、`any`、chan、func、嵌套超过 8 层 | 同上，或根本无法编码 |
 | 首参不是 `context.Context` | 不接 ctx 的方法不做 I/O，没有理由是一次往返 |
 | 包里没有 `ErrRequestInvalid` | 生成的 handler 需要一个带码的错误回答"这一帧读不懂"；用 `CodeInternal` 会把调用方的畸形请求报成服务端故障 |
+| 结果导出后叫 `Code` / `Reason`（route 方法还有 `RedirectSid`），或两个参数 / 两个结果导出后同名（`id` / `Id`） | 响应结构体内嵌封套 `Code` / `Reason`，同名时 Go 能编译（外层遮住内嵌），但 msgpack 第一次编解码就报 `already has field=Code`，请求得不到答复 |
 | `affinity=` 指向不存在的参数，或裸 key 不是 string | 亲和 key 在调用时从实参读；派生形式写 `affinity=x.Key()` |
 | `route` / `route=<param>` 指向不存在的参数（只写 `route` 时找名为 `target` 的参数）、参数不是 `int64`，或与 `affinity=` 同时写 | 路由键是方法作用的已有实体的完整 Entity ID（kind 在 ID 里，联盟服务方案 §2.3）；按 owner 与按 key 哈希是两种互斥的选实例方式 |
 | `shard=` | 槽位表已移除（2026-11-04 路由决定），报“已移除”并给出 `route` 写法；`shard=` 的参数是编码槽位的业务号，不能原样改成 `route=` |

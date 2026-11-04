@@ -468,7 +468,7 @@ func TestAddRPCEntityServiceScaffoldsTheWriteContract(t *testing.T) {
 	for _, want := range []string{
 		"requestID string, callerID int64, callerSID int32",
 		"//roost:rpc route\n\tApply(ctx context.Context",
-		"//roost:rpc route\n\tResult(ctx context.Context, target int64, requestID string) (found bool, code int32, version uint64, err error)",
+		"//roost:rpc route\n\tResult(ctx context.Context, target int64, requestID string) (found bool, outcome int32, version uint64, err error)",
 		"errcode.CodeRetryable", "errcode.CodeRedirect", "target is the full entity id",
 	} {
 		if !strings.Contains(iface, want) {

@@ -1003,6 +1003,34 @@ func TestARouteKeyIsValidated(t *testing.T) {
 	}
 }
 
+// 响应结构体内嵌封套 rpcStatus（Code / Reason），route 方法的响应还有 RedirectSid；结果名导出后与它们同名时，生成的
+// 结构体在 Go 里能编译（外层字段遮住内嵌字段），但 msgpack 编解码在运行期报 "already has field=Code"，请求得不到答复。
+// 同理两个参数或两个结果导出后同名（id / Id）时线上字段重名。生成期按名字拒绝，并写明改哪个名字。
+func TestAFieldNameThatCollidesOnTheWireIsRefused(t *testing.T) {
+	for name, tc := range map[string]struct{ from, to, want string }{
+		"result code":            {"(version uint64, err error)\n\t//roost:rpc route=allianceID", "(code int32, err error)\n\t//roost:rpc route=allianceID", "result code"},
+		"result reason":          {"(allianceID int64, err error)", "(reason string, err error)", "result reason"},
+		"route result redirect":  {"(version uint64, err error)\n\t//roost:rpc route=allianceID", "(redirectSid int32, err error)\n\t//roost:rpc route=allianceID", "result redirectSid"},
+		"results differ in case": {"(allianceID int64, err error)", "(allianceID int64, AllianceID int64, err error)", "AllianceID"},
+		"params differ in case":  {"name string)", "name string, Name string)", "Name"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(routedService, tc.from) {
+				t.Fatalf("fixture lacks %q", tc.from)
+			}
+			_, err := ParseDir(writeDir(t, strings.Replace(routedService, tc.from, tc.to, 1)))
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "wire") {
+				t.Fatalf("%s: got %v, want a refusal naming %q and the wire field it collides with", tc.to, err, tc.want)
+			}
+		})
+	}
+	// 不标 route 的方法没有 RedirectSid，结果叫 redirectSid 不冲突。
+	plain := strings.Replace(routedService, "(allianceID int64, err error)", "(redirectSid int32, err error)", 1)
+	if _, err := ParseDir(writeDir(t, plain)); err != nil {
+		t.Fatalf("an unrouted method's result redirectSid collides with nothing, but was refused: %v", err)
+	}
+}
+
 // 路由是方法级策略（维护者 2026-11-04）：一个服务可以同时有 route、affinity= 与不标的方法，每个方法按自己的标记
 // 选路径；只有同一个方法不能同时标 route 与 affinity=。
 func TestRouteAndAffinityMethodsCoexistInOneService(t *testing.T) {

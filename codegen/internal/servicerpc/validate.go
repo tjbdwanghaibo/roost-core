@@ -137,6 +137,21 @@ func buildService(facts pkgFacts, pkgName, path, name string, options map[string
 				where, method.Name, method.Route, found.Name, found.Type)
 		}
 	}
+	// 参数与结果导出后成为线上结构体的字段：请求结构体只有参数，响应结构体内嵌封套 rpcStatus（Code / Reason），route
+	// 方法的响应还有 RedirectSid。同名时 Go 能编译（外层字段遮住内嵌字段），但 msgpack 在第一次编解码时报
+	// "already has field=Code"，请求永远得不到答复——-entity-service 骨架的 Result 曾把结果叫 code，就是这样坏的。
+	for _, method := range service.Methods {
+		reserved := map[string]string{"Code": "the response envelope's status code", "Reason": "the response envelope's reason"}
+		if method.Route != "" {
+			reserved["RedirectSid"] = "the route response's redirect sid"
+		}
+		if err := checkWireFields(where, method.Name, "result", method.Results, reserved); err != nil {
+			return Service{}, err
+		}
+		if err := checkWireFields(where, method.Name, "parameter", method.Params, nil); err != nil {
+			return Service{}, err
+		}
+	}
 	// Affinity is read off an argument at call time, so it has to name one.
 	//
 	// Two forms are accepted: a bare parameter, which must be a string, and
@@ -388,4 +403,22 @@ func commentLines(group *ast.CommentGroup) []string {
 		lines = append(lines, text)
 	}
 	return lines
+}
+
+// checkWireFields 拒绝导出后与线上结构体已有字段（reserved：字段名 → 它是什么）或彼此同名的参数 / 结果。
+func checkWireFields(where, method, what string, fields []Field, reserved map[string]string) error {
+	seen := map[string]string{}
+	for _, field := range fields {
+		exported := exportName(field.Name)
+		if holder, ok := reserved[exported]; ok {
+			return fmt.Errorf("%s: method %s has a %s %s, which becomes the wire field %s — already %s; rename the %s",
+				where, method, what, field.Name, exported, holder, what)
+		}
+		if other, ok := seen[exported]; ok {
+			return fmt.Errorf("%s: method %s has %ss %s and %s, which both become the wire field %s; rename one",
+				where, method, what, other, field.Name, exported)
+		}
+		seen[exported] = field.Name
+	}
+	return nil
 }
