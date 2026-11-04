@@ -113,8 +113,9 @@ func checkRemoteEntityKeys(t *testing.T, name string, cfg *viper.Viper) {
 		}
 	}
 	defaults := coreremote.DefaultConfig()
-	if got := cfg.GetDuration("remote_entity.cached_max_staleness"); got != cfg.GetDuration("remote_entity.snapshot_cache_ttl") {
-		t.Errorf("%s: cached_max_staleness = %v, want snapshot_cache_ttl (%v): unset it follows snapshot_cache_ttl", name, got, cfg.GetDuration("remote_entity.snapshot_cache_ttl"))
+	// 生成值等于 snapshot_cache_ttl（不配置时的语义）；只读方可以收紧（game-demo 的 game 读联盟 Mirror 写 5s），不能放宽。
+	if got, ttl := cfg.GetDuration("remote_entity.cached_max_staleness"), cfg.GetDuration("remote_entity.snapshot_cache_ttl"); got <= 0 || got > ttl {
+		t.Errorf("%s: cached_max_staleness = %v, want positive and at most snapshot_cache_ttl (%v): unset it follows snapshot_cache_ttl", name, got, ttl)
 	}
 	if got := cfg.GetInt("remote_entity.snapshot_interest_per_consumer"); got != defaults.SnapshotInterestPerConsumer {
 		t.Errorf("%s: snapshot_interest_per_consumer = %d, want DefaultConfig %d", name, got, defaults.SnapshotInterestPerConsumer)
