@@ -9,6 +9,7 @@
 #   - TestAllianceE2EOneAllianceUnderRace      一人一盟：守卫与联盟分属两个实例时并发入会 / 批准，kill -9 任一方后收尾；
 #   - TestAllianceE2ERedisOutage               Redis（经 toxiproxy）断开期间路由回退所有权记录的点读放大、恢复后重新登记；
 #   - TestAllianceE2EGamePlayers               两个 game 进程上的玩家同一公会互相读到、通知跨进程、Saga 只扣一次只退一次；
+#   - TestAllianceE2ERejectedFoundingAfterRestart  建盟被拒留下的空认领：重启后预加载计 empty、不报错，Info 答确定的“不存在”；
 #   - TestAllianceE2EShortPerf                 只在 ALLIANCE_E2E_PERF=1 时跑：续期量、预加载 1k / 10k、路由 RPC 延迟；
 #   - TestAllianceE2EMirrorRevalidation        只在 ALLIANCE_E2E_PERF=1 时跑：cached_max_staleness 30s / 5s 的 Mirror 回源量。
 #   - TestAllianceE2ERPCConcurrency            只在 ALLIANCE_E2E_PERF=1 时跑：一个实例上 Found / Info / Join 的吞吐随并发与顺序键的变化（约 2 分钟）。
@@ -48,7 +49,7 @@ etcd --name alliance-e2e --data-dir "$work_dir/etcd" \
 	--initial-cluster "alliance-e2e=http://127.0.0.1:$((etcd_port + 1))" >"$work_dir/etcd.log" 2>&1 &
 etcd_pid=$!
 
-default_run='^TestAllianceE2E(PreloadOrder|CrashTakeoverAndScaleIn|OneAllianceUnderRace|RedisOutage|GamePlayers)$'
+default_run='^TestAllianceE2E(PreloadOrder|CrashTakeoverAndScaleIn|OneAllianceUnderRace|RedisOutage|GamePlayers|RejectedFoundingAfterRestart)$'
 export GOWORK=off
 cd "$repo_dir"
 go run ./codegen/cmd/roost project new planet -module example.com/planet -out "$work_dir/planet" -template game-demo --skip-deps

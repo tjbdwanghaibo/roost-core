@@ -249,7 +249,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 
 多实例：`sh deploy/dev/second-alliance.sh start` 在同一台机器上起第二个 alliance（sid 1001、ops 9210）。建盟经队列组分到两个实例，
 每个联盟归接到它的实例；其余调用经路由登记找到 owner。缩容一台：在它的 ops 上 ① `alliance.stop_founding`（退出 `Found` 的队列组，
-新联盟只落到别的实例）② 反复 `alliance.transfer {"count": N, "to_sid": <另一个 sid>}` 直到它什么都不拥有 ③ 停进程。
+新联盟只落到别的实例）② 反复 `alliance.transfer {"count": N, "to_sid": <另一个 sid>}` 直到它什么都不拥有（按 owner 枚举本实例持有的；一次调用在 `ops.admin_timeout` 前停下时答 `"more": true`，接着再调）③ 停进程。
 公会的 GM 读写（原 `gm.guild.*`）改为 alliance 进程自己的 `alliance.info` / `alliance.guard`，按权威读。
 
 ## 地图：Scene 是一个实体，它的 system 各自带锁

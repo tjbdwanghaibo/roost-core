@@ -2,7 +2,7 @@ package e2e
 
 // 路由与接管：预加载完成前不接请求（原 2R 草稿，改为经 Found 建状态、不再直接写所有权集合）、kill -9 时在途请求的
 // 答复与同 RequestID 收敛、登记 TTL 过期与同 sid 拉起后的重新登记、alliance.transfer 之后调用方缓存改投、
-// stop_founding + transfer + 停进程的缩容三步。
+// stop_founding + transfer + 停进程的缩容三步、建盟被拒留下的空认领在重启后答确定的“不存在”。
 
 import (
 	"context"
@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 
 	rpcalliance "example.com/planet/internal/rpc/alliance"
@@ -80,6 +81,7 @@ type logLine struct {
 	Loaded int    `json:"loaded"`
 	Failed int    `json:"failed"`
 	Listed int    `json:"listed"`
+	Empty  int    `json:"empty"`
 }
 
 // preloadWindow 从进程日志（JSON 行）里取最后一次起服的预加载开始 / 完成与 owner Mod 开始的时刻。
@@ -381,4 +383,60 @@ func TestAllianceE2ECrashTakeoverAndScaleIn(t *testing.T) {
 	}
 	sort.Strings(ids)
 	t.Logf("SCALE-IN 3001 stopped; alliances %s and %d guards answered by 3000", strings.Join(ids, ","), len(outcomes))
+}
+
+// TestAllianceE2ERejectedFoundingAfterRestart：建盟被拒（发起者已在联盟）时，发出的联盟号在写准入里被首写认领、事务回滚，
+// 留下“所有权记录是本实例、权威里没有数据”的空认领。同 sid 重启后：预加载把它计为 empty（不算 failed、不记 ERROR、
+// 不登记路由）；对它的 Info 答确定的“不存在”（框架的 entity_not_found；重启前内存里还有业务新建的空实例，答业务的
+// 100031），而不是一直“可重试”（修前：remote.4）。
+func TestAllianceE2ERejectedFoundingAfterRestart(t *testing.T) {
+	s := newSuite(t, 10*time.Minute)
+	a := s.start("alliance-3000", "alliance", 3000, procOptions{})
+	client := s.client(nil, 5*time.Second)
+	const leader = int64(400_001)
+	founded := s.found(client, leader)
+	again, err := client.Found(s.ctx, "found-again-400001", leader, 1000, "e2e-again", true)
+	if servicerpc.Classify(err) != servicerpc.OutcomeRejected {
+		t.Fatalf("a second founding by a member answered %+v %v, want a rejection", again, err)
+	}
+	next := s.found(client, leader+1)
+	empty := next.Alliance.AllianceID - 1 // 一个实例、一个计数器：两次成功之间被拒的那次发的号
+	if empty == founded.Alliance.AllianceID {
+		t.Fatalf("no alliance id was minted for the refused founding (founded %d, next %d)", founded.Alliance.AllianceID, next.Alliance.AllianceID)
+	}
+	lease, claimed, err := s.owners.GetRemoteOwnership(s.ctx, target(t, empty))
+	if err != nil || !claimed || lease.OwnerSid != 3000 {
+		t.Fatalf("ownership of the refused alliance %d = %+v %v %v; the refused founding left no claim, so the case under test does not arise", empty, lease, claimed, err)
+	}
+	_, before := client.Info(s.ctx, target(t, empty))
+	if servicerpc.Classify(before) != servicerpc.OutcomeRejected {
+		t.Fatalf("info on the refused alliance before restart: %v (%s), want a definite rejection", before, servicerpc.Classify(before))
+	}
+
+	s.stop(a, syscall.SIGINT)
+	s.launch(a)
+	s.waitReady(a, 2*time.Minute)
+	time.Sleep(300 * time.Millisecond)
+	_, _, _, report := preloadWindow(t, a.log)
+	if report.Failed != 0 || report.Empty < 1 || report.Loaded < 2 {
+		t.Fatalf("preload after restart: listed=%d loaded=%d empty=%d failed=%d; want the empty claim counted as empty, nothing failed",
+			report.Listed, report.Loaded, report.Empty, report.Failed)
+	}
+	if raw, err := os.ReadFile(a.log); err != nil || strings.Contains(string(raw), "preload failed") {
+		t.Fatalf("the restarted instance logged a failed preload (read err %v):\n%s", err, tail(a.log, 20))
+	}
+	if value := s.routeValue(target(t, empty)); value != "" {
+		t.Fatalf("the empty claim got a route registration %q", value)
+	}
+	for attempt := 0; attempt < 3; attempt++ {
+		_, after := client.Info(s.ctx, target(t, empty))
+		if servicerpc.Classify(after) != servicerpc.OutcomeRejected || servicerpc.Code(after) != errcode.CodeEntityNotFound {
+			t.Fatalf("info on the refused alliance after restart: %v (%s), want a definite entity_not_found (before restart: %v)", after, servicerpc.Classify(after), before)
+		}
+	}
+	if reply, err := client.Info(s.ctx, target(t, founded.Alliance.AllianceID)); err != nil || reply.Alliance.AllianceID != founded.Alliance.AllianceID {
+		t.Fatalf("info on the founded alliance after restart: %+v %v", reply.Alliance, err)
+	}
+	t.Logf("EMPTY-CLAIM alliance %d: before restart %v; after restart preload listed=%d loaded=%d empty=%d failed=%d, info answers entity_not_found",
+		empty, before, report.Listed, report.Loaded, report.Empty, report.Failed)
 }

@@ -132,7 +132,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `remote_entity.route_delete_total{result}` | Counter | 转移出去、失去所有权与停机时按值删除登记：ok / error（按 TTL 过期） |
 | `remote_entity.route_lookup_total{source}` | Counter | 路由查找的来源：redis / authority（Redis 没有登记或读不了，回退读所有权记录）/ not_found（实体不存在）/ error（所有权记录也读不了）。authority 占比高说明登记缺失（Redis 不可用、刚重启、续期失败），每次多一次 Mongo 点读 |
 | `remote_entity.route_lookup_fallback_total{reason}` | Counter | 查找回退到所有权记录的原因：redis_missing / redis_error |
-| `remote_entity.preload_total{result}` | Counter | 起服预加载每个实体的结果：ok / skipped（枚举之后所有权已变）/ error（加载失败，留给按需冷加载；应为零） |
+| `remote_entity.preload_total{result}` | Counter | 起服预加载每个实体的结果：ok / skipped（枚举之后所有权已变）/ empty（空认领：所有权是本 sid、权威里没有聚合）/ deleted（删过档）/ error（加载失败，留给按需冷加载；应为零） |
 
 ### 帧同步（sync/lockstep）
 

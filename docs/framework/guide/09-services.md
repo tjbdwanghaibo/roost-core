@@ -86,7 +86,7 @@ RPC 生成物分传输半与装配半：接口包持有 wire/handler/BusClient�
 
 **服务端**：
 
-- **前置检查**：路由 RPC 的 handler 在进 Nest 之前调 `wiring/remoteentity.RPCRouteCheck(ctx, owners, localSID, id)`（签名与 `RPCWriteAnswer` 同一风格，`owners` 是注册表里的 Remote Manager）。实体已在本地加载、所有权是本 sid：返回 nil，不做 I/O。否则读持久所有权记录：没有记录答 `servicerpc.EntityNotFound`（非创建类请求不得进入写准入，否则首写会把一个不存在的 ID 认领走）；owner 是本 sid 就冷加载、登记路由，返回 nil；owner 是别的 sid 答 `servicerpc.Redirect(owner)`；读不了或加载失败答 `Retryable`。进 Nest 之后写准入照常按所有权记录 + fence 裁决，前置检查只是省掉一次白进 Nest。
+- **前置检查**：路由 RPC 的 handler 在进 Nest 之前调 `wiring/remoteentity.RPCRouteCheck(ctx, owners, localSID, id)`（签名与 `RPCWriteAnswer` 同一风格，`owners` 是注册表里的 Remote Manager）。实体已在本地加载、所有权是本 sid：返回 nil，不做 I/O。否则读持久所有权记录：没有记录答 `servicerpc.EntityNotFound`（非创建类请求不得进入写准入，否则首写会把一个不存在的 ID 认领走）；owner 是本 sid 就冷加载、登记路由，返回 nil；owner 是本 sid 而权威里没有这个实体（空认领：认领它的事务被拒绝回滚或提交前崩溃，[REMOTE_ENTITY“路由登记”](../REMOTE_ENTITY.md#路由登记)）也返回 nil、不登记，创建类请求照常首写，其余请求由 Nest 答 `entity_not_found`；删过档答 `errcode.ErrEntityDeleted`；owner 是别的 sid 答 `servicerpc.Redirect(owner)`；读不了或加载失败答 `Retryable`。进 Nest 之后写准入照常按所有权记录 + fence 裁决，前置检查只是省掉一次白进 Nest。
 - **写的答复**：Remote 实体写的错误经 `wiring/remoteentity.RPCWriteAnswer(ctx, owners, localSID, id, err)` 转成答复：fence 时读一次权威所有权，owner 是别的 sid 就改投；重载、转移中、写额度满、准入版本冲突给可重试；结果未知原样返回。它读所有权要 I/O，只能在 RPC handler（I/O 段）里调。
 - **服务端答复**：`servicerpc.Redirect(ownerSID, cause)`（owner 未知时退化为 `Retryable`）、`servicerpc.Retryable(cause)`、`servicerpc.EntityNotFound(id)`；响应的状态码照旧取 `servicerpc.Error(answer)`，改投目标取 `servicerpc.RedirectSID(answer)`。框架码 `errcode.CodeRetryable = 4`、`errcode.CodeRedirect = 5`。
 
@@ -94,7 +94,7 @@ RPC 生成物分传输半与装配半：接口包持有 wire/handler/BusClient�
 
 - 登记的 kind 经 `wiring/remoteentity.WithRouteKinds(kinds...)` 交给本服务的 `RemoteEntityMod`（生成器由实体注解 `service=` 推出，不是 YAML 键）。
 - 起服预加载是实体类型的显式策略：`WithPreloadKinds(kinds...)` 加 `NewRemotePreloadMod()`；路由 RPC 的 owner Mod 把 `mods.ModRemoteEntityPreload` 写进 `OptionalDependsOn`，预加载完成前不注册 handler。
-- 缩容：先让要下线的实例退出创建类方法的队列组（`(*bus.Bus).LeaveRPCQueue(method)`，经 `bus.RPCQueueLeaver` 断言取得；实例主题照常接路由 RPC），再把它持有的实体用 `TransferRemoteOwnership` 转走，确认持有数为 0 后停。只支持轻量 RPC；JetStream RPC 的服务级 consumer 是全部实例共享的 durable，返回 `bus.ErrRPCQueueLeaveUnsupported`。退出后不能重新加入，要重新加入就重启实例。
+- 缩容：先让要下线的实例退出创建类方法的队列组（`(*bus.Bus).LeaveRPCQueue(method)`，经 `bus.RPCQueueLeaver` 断言取得；实例主题照常接路由 RPC），再把它持有的实体用 `TransferRemoteOwnership` 转走（按 owner 枚举用 `Manager.ListOwnedRemoteEntities`，分页、代价与本实例持有数成正比），确认持有数为 0 后停。只支持轻量 RPC；JetStream RPC 的服务级 consumer 是全部实例共享的 durable，返回 `bus.ErrRPCQueueLeaveUnsupported`。退出后不能重新加入，要重新加入就重启实例。
 
 **四类答复**：`servicerpc.Classify(err)` 给出 `OutcomeOK`、`OutcomeRejected`（业务错误码与“实体不存在”，不重试）、`OutcomeRetryable`（确定没执行：no responders、`CodeRetryable`、`CodeRedirect`，原 RequestID 重试）、`OutcomeUnknown`（超时、取消、`CodeInternal`、传输或解码错误等一切拿不准的，原 RequestID 查结果或重发）。
 
