@@ -70,7 +70,8 @@ func PoisonEffect(err error) error {
 //     （result=poison，ERROR 日志点名 durable、主题与流序号）。
 //   - 重投到 MaxDeliver 仍失败：broker 侧 Term，见 EffectConsumer.MaxDeliver。
 //
-// 返回的订阅由调用方 Drain（服务 Shutdown 里）；回执 TTL 不长于 dataengine.effects.max_age 时拒绝订阅。
+// 返回的订阅登记成 App 的输入：App 停机第一步 Drain 并等在途 effect 处理完（业务 Shutdown 里再 Drain() 是空操作，可以留着）；
+// 回执 TTL 不长于 dataengine.effects.max_age 时拒绝订阅。
 func SubscribeEffects(ctx context.Context, registry *app.Registry, consumer EffectConsumer, handler nestwal.EffectHandler) (fnats.IJetStreamSubscription, error) {
 	if registry == nil || handler == nil {
 		return nil, errors.New("dataengine effects: registry and handler are required")
@@ -107,7 +108,7 @@ func SubscribeEffects(ctx context.Context, registry *app.Registry, consumer Effe
 	if err := inbox.EnsureInfrastructure(ctx); err != nil {
 		return nil, fmt.Errorf("dataengine effects %s: prepare inbox: %w", durable, err)
 	}
-	return jetstream.Subscribe(ctx, fnats.JetStreamConsumerConfig{
+	subscription, err := jetstream.Subscribe(ctx, fnats.JetStreamConsumerConfig{
 		Stream: settings.Effects.Stream, Name: durable, Durable: durable,
 		FilterSubject: settings.Effects.subjectPrefix() + "." + topic, DeliverPolicy: fnats.JetStreamDeliverAll,
 		AckWait: consumer.AckWait, MaxDeliver: consumer.MaxDeliver, MaxAckPending: consumer.MaxAckPending,
@@ -115,6 +116,30 @@ func SubscribeEffects(ctx context.Context, registry *app.Registry, consumer Effe
 	}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
 		return handleEffect(messageCtx, durable, consumer.AckWait, inbox, message, handler)
 	})
+	if err != nil || subscription == nil {
+		return subscription, err
+	}
+	// effect 消费者是外部输入：登记给 App，停机第一步 Drain 并等在途 effect 处理完，之后才停 Nest / DataEngine（App 生命周期
+	// 方案）。业务 Shutdown 里的 Drain() 之后是空操作。App 已经在关输入时拒绝登记，撤掉刚建的订阅。
+	if err := app.AddIngress(registry, "effect consumer "+durable, drainOnClose{subscription}); err != nil {
+		subscription.Stop()
+		return nil, fmt.Errorf("dataengine effects %s: %w", durable, err)
+	}
+	return subscription, nil
+}
+
+// drainOnClose 是 effect 订阅的 app.IngressCloser：Drain（停止拉取、交完已取到的）后在 ctx 内等订阅关闭（在途 handler
+// 返回、推迟的结算完成）。ctx 先结束返回 ctx 错误，订阅保留，再调用接着等。
+type drainOnClose struct{ subscription fnats.IJetStreamSubscription }
+
+func (d drainOnClose) CloseIngress(ctx context.Context) error {
+	d.subscription.Drain()
+	select {
+	case <-d.subscription.Closed():
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // handleEffect 处理一次投递并给出 ack / nak / Term 的结论（返回值交给 JetStream 适配层结算）。

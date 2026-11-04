@@ -387,3 +387,38 @@ func TestStepsProbeTheMongoTransactionLifetimeAgainstTheStepWindow(t *testing.T)
 		t.Fatalf("saga.step.mongo_txn_lifetime_exceeds_budget += %d, want 2 (60s and 27s)", got)
 	}
 }
+
+// Saga 步骤消费者是外部输入：Steps.Start 成功后把自己登记给 App（app.AddIngress），App 停机第一步调 Steps.Drain 等
+// 在途步骤处理完，之后才停 Nest / DataEngine（App 生命周期方案缺口 6）。修前只靠业务 Shutdown 记得调 Drain。
+func TestStepsAreClosedWithTheAppsInputs(t *testing.T) {
+	js := &stepsJetStream{}
+	registry := stepsRegistry(t, js)
+	steps, _ := NewSteps(registry, "game-gift")
+	steps.Native("debit", "gift.debit", nativeBody)
+	if err := steps.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		closed <- app.CloseRegisteredIngress(ctx, registry)
+	}()
+	select {
+	case err := <-closed:
+		t.Fatalf("the App's inputs closed (%v) with a step delivery still in flight; drains=%d: the steps are not one of the App's inputs", err, js.subs[0].drains)
+	case <-time.After(50 * time.Millisecond):
+	}
+	for _, sub := range js.subs {
+		close(sub.release)
+	}
+	if err := <-closed; err != nil {
+		t.Fatalf("closing the inputs: %v", err)
+	}
+	if err := steps.Drain(context.Background()); err != nil {
+		t.Fatalf("Drain after the App closed the inputs = %v, want an idempotent nil", err)
+	}
+	if js.subs[0].drains != 1 {
+		t.Fatalf("consumer drained %d times, want 1", js.subs[0].drains)
+	}
+}

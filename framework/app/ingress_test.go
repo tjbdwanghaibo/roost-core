@@ -287,9 +287,6 @@ func TestAddIngressIsClosedBeforeServiceShutdown(t *testing.T) {
 	if !errors.Is(lateErr, errIngressClosed) {
 		t.Fatalf("AddIngress after the inputs closed = %v, want errIngressClosed", lateErr)
 	}
-	if err := AddIngress(registry, "consumer", IngressFunc(func(context.Context) error { return nil })); err == nil {
-		t.Fatal("AddIngress accepted a duplicate name")
-	}
 }
 
 type registryProbeMod struct {

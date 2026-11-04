@@ -26,7 +26,29 @@ type effectsJetStream struct {
 	mu      sync.Mutex
 	config  fnats.JetStreamConsumerConfig
 	handler fnats.JetStreamHandler
+	sub     *effectsSubscription
 }
+
+// effectsSubscription 是订阅替身：Drain 只发起，在途投递处理完（release）之后才关闭 Closed，与真实消费者一样。
+type effectsSubscription struct {
+	mu      sync.Mutex
+	drains  int
+	release chan struct{}
+	once    sync.Once
+	closed  chan struct{}
+}
+
+func (s *effectsSubscription) Stop() { s.once.Do(func() { close(s.closed) }) }
+func (s *effectsSubscription) Drain() {
+	s.mu.Lock()
+	s.drains++
+	s.mu.Unlock()
+	go func() {
+		<-s.release
+		s.Stop()
+	}()
+}
+func (s *effectsSubscription) Closed() <-chan struct{} { return s.closed }
 
 func (*effectsJetStream) EnsureStream(context.Context, fnats.JetStreamConfig) error { return nil }
 func (*effectsJetStream) Publish(context.Context, string, []byte, fnats.JetStreamPublishOptions) (fnats.JetStreamPublishAck, error) {
@@ -36,7 +58,8 @@ func (j *effectsJetStream) Subscribe(_ context.Context, cfg fnats.JetStreamConsu
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.config, j.handler = cfg, handler
-	return nil, nil
+	j.sub = &effectsSubscription{release: make(chan struct{}), closed: make(chan struct{})}
+	return j.sub, nil
 }
 
 func (j *effectsJetStream) deliver(t *testing.T, data []byte) error {
@@ -222,5 +245,36 @@ func TestSubscribeEffectsRefusesUnsafeOrIncompleteConsumers(t *testing.T) {
 	}
 	if _, err := SubscribeEffects(context.Background(), f.registry, EffectConsumer{Durable: "game-mail", Topic: "player.level_up"}, nil); err == nil {
 		t.Error("nil handler accepted")
+	}
+}
+
+// effect 消费者是外部输入：SubscribeEffects 把它登记给 App（app.AddIngress），App 停机第一步 Drain 并等在途 effect
+// 处理完（Closed），之后才停 Nest / DataEngine（App 生命周期方案缺口 6）。修前只靠业务 Shutdown 里的 Drain()，它只发起、
+// 不等，Shutdown 返回时在途 effect 还在跑，App 接着停它用的依赖；忘了 Drain 的业务服务则一直收到停机最后。
+func TestSubscribeEffectsIsClosedWithTheAppsInputs(t *testing.T) {
+	f := newEffectsFixture(t, map[string]any{"dataengine.database": "planet"})
+	consumer := EffectConsumer{Durable: "game-level-up-mail", Topic: "player.level_up"}
+	subscription, err := SubscribeEffects(context.Background(), f.registry, consumer, func(context.Context, nestwal.EffectEnvelope) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		closed <- app.CloseRegisteredIngress(ctx, f.registry)
+	}()
+	select {
+	case err := <-closed:
+		t.Fatalf("the App's inputs closed (%v) with an effect still in flight; drains=%d: the consumer is not one of the App's inputs", err, f.js.sub.drains)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(f.js.sub.release)
+	if err := <-closed; err != nil {
+		t.Fatalf("closing the inputs: %v", err)
+	}
+	subscription.Drain() // 业务 Shutdown 里的 Drain() 照旧可以留着：之后是空操作
+	if f.js.sub.drains < 1 {
+		t.Fatalf("consumer drained %d times", f.js.sub.drains)
 	}
 }

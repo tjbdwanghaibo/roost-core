@@ -41,8 +41,8 @@ type namedIngress struct {
 	closer IngressCloser
 }
 
-// AddIngress 登记一个运行中建立的外部输入，App 在停机第一步关闭它（见 IngressCloser）。name 用于日志，同一个 Registry 里
-// 不能重复。停机第一步开始之后再登记返回错误：调用方应当撤掉刚建立的输入（App 不会再关它）。
+// AddIngress 登记一个运行中建立的外部输入，App 在停机第一步关闭它（见 IngressCloser）。name 只用于日志与错误。停机
+// 第一步开始之后再登记返回错误：调用方应当撤掉刚建立的输入（App 不会再关它）。
 func AddIngress(r *Registry, name string, closer IngressCloser) error {
 	if r == nil || closer == nil || name == "" {
 		return fmt.Errorf("app: AddIngress needs a registry, a name and a closer")
@@ -51,11 +51,6 @@ func AddIngress(r *Registry, name string, closer IngressCloser) error {
 	defer r.mu.Unlock()
 	if r.ingressClosed {
 		return fmt.Errorf("%w: input %q", errIngressClosed, name)
-	}
-	for _, existing := range r.ingress {
-		if existing.name == name {
-			return fmt.Errorf("app: input %q already registered", name)
-		}
 	}
 	r.ingress = append(r.ingress, namedIngress{name: name, closer: closer})
 	return nil
@@ -88,6 +83,19 @@ func (run *appRun) closeIngress(ctx context.Context, registry *Registry, svc Ser
 		closers = append(closers, namedIngress{name: "service " + string(svc.Name()), closer: closer})
 	}
 	closers = append(closers, registry.closingIngress()...)
+	return closeInputs(ctx, closers)
+}
+
+// CloseRegisteredIngress 关闭经 AddIngress 登记的全部输入（并发，在 ctx 内等它们排空），之后 AddIngress 拒绝。App 停机
+// 第一步连同 Mod 与 Service 的输入一起关，不用调它；没有 App 而直接驱动 Mod / Service 的工具与测试用它得到同样的收尾。
+// 有输入没在 ctx 内排空时返回的错误 errors.Is ctx 的错误。
+func CloseRegisteredIngress(ctx context.Context, r *Registry) error {
+	_, err := closeInputs(ctx, r.closingIngress())
+	return err
+}
+
+// closeInputs 并发调用 closers 并在 ctx 内等全部返回，见 closeIngress。
+func closeInputs(ctx context.Context, closers []namedIngress) (complete bool, err error) {
 	if len(closers) == 0 {
 		return true, nil
 	}
