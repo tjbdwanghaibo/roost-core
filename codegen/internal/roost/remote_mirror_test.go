@@ -97,3 +97,30 @@ func TestDataEngineRemoteProjectionFollowsTheServicesOwnRemoteEntity(t *testing.
 		}
 	}
 }
+
+// doctor 按配置核对停机窗口时也要计入只读 Mirror 的预算（remote_entity.mirror.shutdown_timeout，生成配置写 5s）：
+// 生成器的计划算了它，doctor 却把它当作“声明了 0s”，比计划少 5s，于是差一秒盖不住的 total 被判 OK。
+func TestDoctorCountsTheMirrorStopBudget(t *testing.T) {
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
+	var out bytes.Buffer
+	if err := Run([]string{"add", "mod", "remote_mirror", "-service", "game", "--root", root}, &out, &out); err != nil {
+		t.Fatalf("add mod remote_mirror: %v\n%s", err, out.String())
+	}
+	m, err := LoadManifest(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := serviceShutdownPlan(m, "game")
+	dev := "configs/service/config.game.yaml"
+	short := plan.total - plan.margin - time.Second
+	setShutdownTotal(t, root, dev, seconds(short))
+	if item := shutdownStatus(t, root)["shutdown:game"]; item.Status != StatusWarn || !strings.Contains(item.Detail, dev+": total_timeout "+seconds(short)+" cannot cover") {
+		t.Fatalf("total_timeout %s, one second short of the plan (%s declared, the mirror's 5s among them): %s %s, want a WARN naming %s",
+			seconds(short), seconds(plan.declared), item.Status, item.Detail, dev)
+	}
+	setShutdownTotal(t, root, dev, seconds(plan.total))
+	if item := shutdownStatus(t, root)["shutdown:game"]; item.Status != StatusOK {
+		t.Fatalf("total_timeout %s as generated: %s %s, want OK", seconds(plan.total), item.Status, item.Detail)
+	}
+}
