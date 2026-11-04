@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 分区场景（scene.partition，原型，分支 feat/seamless-world-prototype）在生成 game-demo 上的多进程端到端演练。
 #
-# 生成工程（-template game-demo，当前检出），十个 demo 进程（九个托管服务 + sid 1000 的 game）之外再起三个 game：
+# 生成工程（-template game-demo，当前检出），十一个 demo 进程（九个托管服务、alliance 与 sid 1000 的 game）之外再起四个 game：
 #   sid 1000：分区场景的 Base（不托管格），p1、p2 的连接在这里；
 #   sid 1001：格 (0,0) 的 Cell，同时是 p3 的 Base；
 #   sid 1002：格 (1,0) 的 Cell（演练中被 kill -9 再重启）；
@@ -30,7 +30,7 @@ nats_url="${ROOST_DATAENGINE_IT_NATS_URL%%,*}"
 extra_sids="1001 1002 1003 1004"
 
 # 固定端口（demo 生成配置）都要空着：别人的 demo 正在用时不跑。
-for port in 7000 7001 7002 7003 7004 9000 9100 9101 9102 9103 9104 9105 9106 9107 9108 9109 9201 9202 9203 9204 8901 8902 8903 8904 "$etcd_port" "$((etcd_port + 1))"; do
+for port in 7000 7001 7002 7003 7004 9000 9010 9100 9101 9102 9103 9104 9105 9106 9107 9108 9109 9110 9201 9202 9203 9204 8901 8902 8903 8904 "$etcd_port" "$((etcd_port + 1))"; do
 	if nc -z 127.0.0.1 "$port" 2>/dev/null; then
 		echo "port $port is in use; refusing to run" >&2
 		exit 2

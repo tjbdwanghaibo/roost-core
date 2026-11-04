@@ -163,8 +163,8 @@ scene:
 其他玩家与自己是 `player` 命名空间（位置与 `cell_hp`），怪是 `monster`。`gm.scene.partition` 看本进程的格、计数与区域表。
 **组队与队伍面板**（维护者 2026-11-04 第 4 项 = A，只在分区场景）：`TeamInvite(invitee)`（没有队伍时建一支、自己当队长）、
 `TeamAccept(team_id)`、`TeamLeave()`（队长离队时队长交给剩下玩家 ID 最小的那名）、`TeamDisband()`（只有队长）、`TeamInfo()`，
-答复都是成员表（`TeamResponse`）。成员表在 Remote 托管的 `Team` 实体上（与公会同一种实体），每个端点是一笔 [Team, Player]
-事务；普通场景答 `scene_not_partitioned`，普通场景的组队仍是匹配（不动）。队友的位置与 HP 从**队伍面板**来：每名队员的 Base
+答复都是成员表（`TeamResponse`）。成员表在 Remote 托管的 `Team` 实体上（`service=game`、共享模式：成员在不同的 game 进程上；game 因此装着
+`remote_entity`，联盟实体对它是别的服务的、写不了），每个端点是一笔 [Team, Player] 事务；普通场景答 `scene_not_partitioned`，普通场景的组队仍是匹配（不动）。队友的位置与 HP 从**队伍面板**来：每名队员的 Base
 每 `snapshot_every` 把他的 SceneActor 状态发给其他队员的 Base，客户端在同一条同步流里收到队友的 SceneActor（`player`
 命名空间，位置与 `cell_hp`），不论距离；在视野里的队友就是同一个对象，不重复推。被邀请的人从别处得知队伍 ID（原型不推送邀请）。
 多进程端到端（两个 Cell、一个独立 Base、kill -9 后重建、跨 Base 的队伍面板、普通场景照常）：仓库的 `scripts/test-seamless-demo.sh`。
