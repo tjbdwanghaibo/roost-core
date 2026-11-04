@@ -2,7 +2,8 @@
 # exists, chat on the world channel and read it back, add an item, earn
 # exp (the reward mail it sends is then listed and claimed), gift an item to
 # itself through the saga and claim it back, watch a gift to nobody get
-# compensated, clear a dungeon run,
+# compensated, clear a dungeon run, found a guild in the alliance service,
+# donate to it and claim its reward (three sagas),
 # queue for a duel and then a ranked match, earn enough exp to level up (which sends a reward mail
 # through the effect chain), queue for a duel until matched, read the World's
 # counters. Run an even number of robots: duels need pairs. Param keys are the request fields' snake_case
@@ -161,22 +162,59 @@ scenarios:
         # the action, because "the replay was free" is only visible as an
         # exact count.
         - action: activity_standing
-        # The guild: an entity that belongs to no process in particular.
-        # Founding takes its distributed lock; reading "my guild" does not,
-        # because the player keeps a copy of that one fact — and the two have
-        # to agree, which is what the second step checks.
-        # Founding takes the guild's distributed lock. It is idempotent per
-        # (player, name), so the client may repeat it: a lost reply replays
-        # the same answer instead of minting a second guild.
-        #
-        # There is no retry wrapper here on purpose. The one temporary answer
-        # this endpoint gives — guild_busy (100020), while a restarted
-        # process waits out its predecessor's lock lease — is not something a
-        # tight client loop fixes: measured, the dispatch itself waits far
-        # longer than the lease (W-2026-09-20-04). Wrapping it would hide that
-        # behind a slow, green run.
+        # The guild lives in the alliance service, not in this game process.
+        # Founding costs gold coins (item 9001, guild.found_cost: 100), so it is
+        # a saga: the game debits the fee, the alliance service founds the
+        # guild, and a refusal would refund the fee. found_guild answers
+        # "accepted" with the saga's key; guild_op_status polls it until it
+        # ends, and expect_guild_op wants it completed (the status also names
+        # the guild founded). Donating and claiming the guild reward are sagas
+        # of the same shape.
+        - action: add_item
+          param:
+            item_id: 9001
+            count: 200
         - action: found_guild
-        - action: guild_info
+        - retry:
+            times: 40
+            node:
+              sequence:
+                - wait: 250ms
+                - action: guild_op_status
+        - action: expect_guild_op
+          param:
+            status: completed
+        # "My guild" reads the robot's guard mirror, then the guild's: Remote
+        # mirrors are eventually consistent (the owner publishes after each
+        # commit), so the read is retried until the snapshot is there.
+        - retry:
+            times: 20
+            node:
+              sequence:
+                - wait: 100ms
+                - action: guild_info
+        - action: donate_guild
+          param:
+            amount: 10
+        - retry:
+            times: 40
+            node:
+              sequence:
+                - wait: 250ms
+                - action: guild_op_status
+        - action: expect_guild_op
+          param:
+            status: completed
+        - action: claim_guild_reward
+        - retry:
+            times: 40
+            node:
+              sequence:
+                - wait: 250ms
+                - action: guild_op_status
+        - action: expect_guild_op
+          param:
+            status: completed
         # A paid order, across the platform process: the endpoint signs a
         # callback, the platform service records and delivers it, the grant
         # lands in Redis and the game drains it into the bag. Then a second

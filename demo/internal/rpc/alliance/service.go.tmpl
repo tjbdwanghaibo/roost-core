@@ -31,6 +31,10 @@ type Rules struct {
 	ReservationTTL   time.Duration
 	ReceiptRetention time.Duration
 	RejoinCooldown   time.Duration
+	// The alliance reward: what one claim gives and how often (ClaimReward).
+	RewardItemID int64
+	RewardCount  int32
+	RewardPeriod time.Duration
 }
 
 // Entities brings the entities a write locks into this process: a Remote
@@ -104,6 +108,8 @@ func (s *Service) Bind(deps Deps) error {
 		return errors.New("alliance service: local sid is required")
 	case deps.Rules.MaxMembers <= 0 || deps.Rules.ReservationTTL <= 0 || deps.Rules.ReceiptRetention <= 0:
 		return errors.New("alliance service: max members, reservation ttl and receipt retention must be positive")
+	case deps.Rules.RewardItemID <= 0 || deps.Rules.RewardCount <= 0 || deps.Rules.RewardPeriod < time.Second:
+		return errors.New("alliance service: the reward item, count and period must be positive")
 	}
 	if deps.Now == nil {
 		deps.Now = time.Now

@@ -1,0 +1,122 @@
+package alliance
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"testing"
+	"time"
+
+	allianceentity "{{MODULE}}/game/entities/alliance"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+)
+
+// foundingInstance answers Found and Info with its own sid; it stands in for
+// one alliance instance's service behind the generated handlers.
+type foundingInstance struct {
+	rpcalliance.Alliance
+	sid int32
+}
+
+func (i foundingInstance) CheckRoute(context.Context, int64) error { return nil }
+
+func (i foundingInstance) Found(context.Context, string, int64, int32, string, bool) (rpcalliance.Reply, error) {
+	return rpcalliance.Reply{ServedBySID: i.sid}, nil
+}
+
+func (i foundingInstance) Info(context.Context, int64) (rpcalliance.Reply, error) {
+	return rpcalliance.Reply{ServedBySID: i.sid}, nil
+}
+
+// ownedBy is a route lookup that names one owner for every entity.
+type ownedBy int32
+
+func (o ownedBy) LookupRoute(context.Context, int64) (int32, error) { return int32(o), nil }
+
+// Scale-in, step 1 (plan §2.7), on a real NATS bus with the generated
+// handlers and client: after alliance.stop_founding on instance 3000, every
+// founding request goes to 3001 — new alliances are no longer created on the
+// instance being drained — while a route RPC for an alliance 3000 owns still
+// reaches 3000 on its own subject, until alliance.transfer moves it.
+//
+// ROOST_DATAENGINE_IT_NATS_URL (scripts/test-demo-generated.sh); skipped
+// without it.
+func TestStopFoundingSendsNewAlliancesToTheOtherInstances(t *testing.T) {
+	url := os.Getenv("ROOST_DATAENGINE_IT_NATS_URL")
+	if url == "" {
+		t.Skip("ROOST_DATAENGINE_IT_NATS_URL not set")
+	}
+	assembly, err := driver.Assemble(fnats.DefaultConfig(url), driver.ClientOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(assembly.Client.Close)
+	prefix := fmt.Sprintf("roost.alliance.scalein.%d", time.Now().UnixNano())
+	newBus := func(serviceType string, sid int32) *bus.Bus {
+		b := bus.New(assembly.Client, assembly.RPC, nil, bus.Config{Sid: sid, SvcType: serviceType, Prefix: prefix, WorkerNum: 2, QueueCap: 64})
+		if err := b.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = b.StopWithContext(ctx)
+		})
+		return b
+	}
+	draining, staying := newBus(rpcalliance.ServiceType, 3000), newBus(rpcalliance.ServiceType, 3001)
+	for _, instance := range []struct {
+		bus *bus.Bus
+		sid int32
+	}{{draining, 3000}, {staying, 3001}} {
+		if err := rpcalliance.RegisterHandlers(instance.bus, foundingInstance{sid: instance.sid}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	client, err := rpcalliance.NewBusClient(newBus("game", 1000), ownedBy(3000), rpcalliance.ServiceType, 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := assembly.Client.FlushContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	found := func(calls int) map[int32]int {
+		served := map[int32]int{}
+		for i := range calls {
+			reply, err := client.Found(ctx, fmt.Sprintf("found-%d", i), 1, 1000, "g", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			served[reply.ServedBySID]++
+		}
+		return served
+	}
+	if before := found(64); before[3000] == 0 || before[3001] == 0 {
+		t.Fatalf("before stop_founding, Found was served %v; want both instances in the queue group", before)
+	}
+	if err := stopFounding(draining); err != nil {
+		t.Fatal(err)
+	}
+	if err := stopFounding(draining); err != nil {
+		t.Fatalf("stop_founding again: %v; it must be idempotent", err)
+	}
+	if err := assembly.Client.FlushContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if after := found(64); after[3000] != 0 || after[3001] != 64 {
+		t.Fatalf("after stop_founding on 3000, Found was served %v; want all 64 by 3001", after)
+	}
+	allianceentity.RegisterEntity()
+	target, err := rpcalliance.AllianceTarget(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply, err := client.Info(ctx, target); err != nil || reply.ServedBySID != 3000 {
+		t.Fatalf("Info for an alliance 3000 owns = %+v, %v; the draining instance must keep serving what it owns", reply, err)
+	}
+}

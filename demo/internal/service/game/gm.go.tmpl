@@ -6,13 +6,11 @@ import (
 	"log/slog"
 
 	gameactivity "{{MODULE}}/game/activity"
-	guild "{{MODULE}}/game/entities/guild"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/rewards"
-	"{{MODULE}}/game/settings"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -54,14 +52,7 @@ const (
 	gmActClose  = "gm.activity.close"
 	gmFlagList  = "gm.flag.list"
 	gmFlagSet   = "gm.flag.set"
-	gmGuildInfo = "gm.guild.info"
-	gmGuildJoin = "gm.guild.join"
 )
-
-type gmGuildPayload struct {
-	GuildID  int64 `json:"guild_id"`
-	PlayerID int64 `json:"player_id,omitempty"`
-}
 
 type gmFlagSetPayload struct {
 	Name    string `json:"name"`
@@ -156,14 +147,6 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 	if err != nil {
 		return fmt.Errorf("gm: %w", err)
 	}
-	// Which process answered. It is in the guild results because that is the
-	// one thing a remote-managed entity makes observable, and an operator
-	// running the same command on two processes should see it change.
-	identity, err := settings.Identity(registry)
-	if err != nil {
-		return fmt.Errorf("gm: %w", err)
-	}
-	localSID := identity.Sid
 	// player_id is whichever id the operator has at hand: the unique id the
 	// client sees (EnterGameResponse.PlayerID, the mail recipient) or the
 	// full entity id Mongo stores as the Player document's _id. The two
@@ -406,57 +389,6 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 					return admin.Result{}, err
 				}
 				return admin.Result{Data: map[string]any{"activity_id": activityID}}, nil
-			},
-		},
-		{
-			Name: gmGuildInfo,
-			Description: "read a guild through its distributed lock: {guild_id}. " +
-				"Run it on two different game processes and watch served_by change — " +
-				"a remote-managed entity is owned by whoever holds the lock, for as long as they hold it.",
-			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
-				payload, err := admin.DecodePayload[gmGuildPayload](command)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				if !entity.MatchEntityID(payload.GuildID, guild.EntityKindGuild) {
-					return admin.Result{}, fmt.Errorf("%w: %d is not a guild id", admin.ErrCommandInvalid, payload.GuildID)
-				}
-				info, err := syncsender.NewGuildInfoSender(nestClient).Sync_GuildInfo(ctx, payload.GuildID)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				return admin.Result{Data: map[string]any{
-					"guild_id": info.GuildID, "name": info.Name, "members": info.Members,
-					"founder_id": info.FounderID, "served_by": localSID,
-				}}, nil
-			},
-		},
-		{
-			Name: gmGuildJoin,
-			Description: "put a player into a guild from THIS process: {guild_id, player_id}. " +
-				"It is the cross-process write: the guild may have been founded on another process, " +
-				"and this one takes its lock, loads it, writes the roster and the player's own copy in one transaction.",
-			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
-				payload, err := admin.DecodePayload[gmGuildPayload](command)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				if !entity.MatchEntityID(payload.GuildID, guild.EntityKindGuild) {
-					return admin.Result{}, fmt.Errorf("%w: %d is not a guild id", admin.ErrCommandInvalid, payload.GuildID)
-				}
-				playerID, entityID, err := playerIDs(payload.PlayerID)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				info, err := syncsender.NewJoinGuildSender(nestClient).
-					MultiSync_JoinGuild(ctx, payload.GuildID, entityID, playerID)
-				if err != nil {
-					return admin.Result{}, err
-				}
-				return admin.Result{Data: map[string]any{
-					"guild_id": info.GuildID, "members": info.Members,
-					"player_id": playerID, "served_by": localSID,
-				}}, nil
 			},
 		},
 		{

@@ -2,12 +2,22 @@
 
 package protocoldef
 
-// FoundGuildRequest creates a guild with this player as its founder.
+// The guild endpoints. A guild lives in the alliance service, not in this
+// process: joining and leaving are one alliance RPC each, answered with the
+// guild's new state; founding, donating and claiming the guild reward also
+// change the player's Bag, so they start a saga and answer "accepted" with the
+// saga's key (GuildOpStatus reports how it went); reading a guild reads its
+// Remote mirror. See game/guild for the rules and the codes.
+
+// FoundGuildRequest founds a guild led by this player. The fee (guild.found_cost
+// gold coins, item 9001) is taken by the saga and refunded if the alliance
+// service refuses (an invalid name, the player is already in a guild).
 type FoundGuildRequest struct {
-	Name string `pb:"1"`
+	Name     string `pb:"1"`
+	OpenJoin bool   `pb:"2"`
 }
 
-// JoinGuildRequest joins an existing guild by id. The id comes from somewhere
+// JoinGuildRequest joins an open guild by id. The id comes from somewhere
 // outside this demo — a list endpoint, a friend, a recruitment board — which
 // is deliberately not modelled: the point here is the cross-process join, not
 // guild discovery.
@@ -15,27 +25,66 @@ type JoinGuildRequest struct {
 	GuildID int64 `pb:"1"`
 }
 
-// GuildInfoRequest reads a guild. Empty means "the one I am in".
+// LeaveGuildRequest leaves the guild the player is in. A leader transfers the
+// leadership first (alliance_leader).
+type LeaveGuildRequest struct{}
+
+// GuildInfoRequest reads a guild from its mirror. GuildID 0 means "the one I
+// am in". MinVersion is the Version a write answered with: the read is then
+// Monotonic — never older than that write — instead of Cached.
 type GuildInfoRequest struct {
-	GuildID int64 `pb:"1"`
+	GuildID    int64 `pb:"1"`
+	MinVersion int64 `pb:"2"`
 }
 
-// GuildResponse is what all three answer with.
+// DonateGuildRequest donates gold coins to the guild the player is in.
+type DonateGuildRequest struct {
+	Amount int32 `pb:"1"`
+}
+
+// ClaimGuildRewardRequest claims this period's guild reward.
+type ClaimGuildRewardRequest struct{}
+
+// GuildOpStatusRequest asks how a guild saga went: Op is found / donate /
+// reward, SagaKey the key its start answered with.
+type GuildOpStatusRequest struct {
+	Op      string `pb:"1"`
+	SagaKey string `pb:"2"`
+}
+
+// GuildResponse is what join, leave and info answer with, and what found,
+// donate and claim answer when they are accepted (SagaKey set, nothing else
+// yet).
 type GuildResponse struct {
 	Code    int32  `pb:"1"`
 	Reason  string `pb:"2"`
 	GuildID int64  `pb:"3"`
 	Name    string `pb:"4"`
 	Members int32  `pb:"5"`
-	// ServedBySID is the game process that ran this call.
-	//
-	// It is in the answer because it is the one observable difference a
-	// remote-managed entity makes, and it is worth being precise about what
-	// it means: the guild has no permanent home. Whichever process takes its
-	// distributed lock owns it for that transaction, so two players on two
-	// processes joining the same guild produce two different values here —
-	// and the roster is still one document that both writes went through.
+	// ServedBySID is the alliance service instance that answered a join or
+	// leave (each guild is owned by one instance, found through its route);
+	// 0 for a mirror read, which no instance answered.
 	ServedBySID int32 `pb:"6"`
+	LeaderID    int64 `pb:"7"`
+	Funds       int64 `pb:"8"`
+	// Version is the guild's state version: a write's answer carries the
+	// version it produced; send it back as GuildInfoRequest.MinVersion.
+	Version int64 `pb:"9"`
+	// SagaKey is set when a saga was started (found, donate, claim reward).
+	SagaKey string `pb:"10"`
+}
+
+// GuildOpStatusResponse is a guild saga's state: unknown until the start has
+// been consumed, then the coordinator's status (completed, compensated,
+// failed, ...), its current step and last error, and the guild the saga
+// founded / donated to / claimed in once known.
+type GuildOpStatusResponse struct {
+	Code      int32  `pb:"1"`
+	Reason    string `pb:"2"`
+	Status    string `pb:"3"`
+	Step      int32  `pb:"4"`
+	LastError string `pb:"5"`
+	GuildID   int64  `pb:"6"`
 }
 
 //roost:protocol group=game handler=player
@@ -46,4 +95,12 @@ type GuildProtocol interface {
 	JoinGuild(JoinGuildRequest) GuildResponse
 	//roost:msg id=10023
 	GuildInfo(GuildInfoRequest) GuildResponse
+	//roost:msg id=10027
+	LeaveGuild(LeaveGuildRequest) GuildResponse
+	//roost:msg id=10028
+	DonateGuild(DonateGuildRequest) GuildResponse
+	//roost:msg id=10029
+	ClaimGuildReward(ClaimGuildRewardRequest) GuildResponse
+	//roost:msg id=10030
+	GuildOpStatus(GuildOpStatusRequest) GuildOpStatusResponse
 }

@@ -260,3 +260,58 @@ func TestAllianceSettingsEnforceTheHardMemberLimit(t *testing.T) {
 		t.Fatalf("501 loaded: err=%v, want max_members refused", err)
 	}
 }
+
+// The alliance reward (the game's reward saga, plan §2.6): a member claims
+// once per period, a non-member is refused, the claim answers the reward from
+// alliance.reward_*, a redelivered claim replays its receipt, and the
+// compensation releases exactly that claim — after which the member may claim
+// again. Releasing anything else changes nothing.
+func TestAllianceRewardIsClaimedOncePerPeriodAndReleasedByItsClaim(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000)
+	client := c.client()
+	allianceID := found(t, c, 3000, "found", 100, true)
+	guard := mustGuardTarget(t, 100)
+
+	reply, err := client.ClaimReward(ctx, "claim-1", 100, homeSID, guard)
+	if err != nil || reply.AllianceID != allianceID || reply.ItemID != 1002 || reply.Count != 5 || reply.State.RewardPeriod == 0 {
+		t.Fatalf("first claim = %+v, %v; want the reward of alliance %d", reply, err, allianceID)
+	}
+	if again, err := client.ClaimReward(ctx, "claim-1", 100, homeSID, guard); err != nil || !again.Replayed {
+		t.Fatalf("redelivered claim = %+v, %v; want its receipt replayed", again, err)
+	}
+	_, err = client.ClaimReward(ctx, "claim-2", 100, homeSID, guard)
+	requireRejected(t, "a second claim in the same period", err, apperrors.ErrAllianceReward)
+
+	if released, err := client.ReleaseReward(ctx, guard, "claim-2"); err != nil || released.Changed {
+		t.Fatalf("release of a claim that was refused = %+v, %v; want nothing released", released, err)
+	}
+	if released, err := client.ReleaseReward(ctx, guard, "claim-1"); err != nil || !released.Changed || released.State.RewardPeriod != 0 {
+		t.Fatalf("release of claim-1 = %+v, %v; want it released", released, err)
+	}
+	if released, err := client.ReleaseReward(ctx, guard, "claim-1"); err != nil || released.Changed {
+		t.Fatalf("release of claim-1 again = %+v, %v; want nothing (idempotent)", released, err)
+	}
+	if reply, err := client.ClaimReward(ctx, "claim-3", 100, homeSID, guard); err != nil || reply.Replayed {
+		t.Fatalf("claim after the release = %+v, %v; want a fresh claim", reply, err)
+	}
+
+	// A player in no alliance: their guard does not exist (entity not found);
+	// one who left: refused as not a member.
+	_, err = client.ClaimReward(ctx, "claim-4", 101, homeSID, mustGuardTarget(t, 101))
+	if servicerpc.Classify(err) != servicerpc.OutcomeRejected {
+		t.Fatalf("claim by a player with no guard: err = %v, want a rejection", err)
+	}
+	target := mustAllianceTarget(t, allianceID)
+	if _, err := client.Join(ctx, "join-102", 102, homeSID, target); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Leave(ctx, "leave-102", 102, homeSID, target); err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.ClaimReward(ctx, "claim-5", 102, homeSID, mustGuardTarget(t, 102))
+	requireRejected(t, "a claim by a former member", err, apperrors.ErrAllianceMissing)
+	// Only the player's own guard: a claim on someone else's is invalid.
+	if _, err := client.ClaimReward(ctx, "claim-6", 101, homeSID, guard); err == nil {
+		t.Fatal("player 101 claimed on player 100's guard")
+	}
+}

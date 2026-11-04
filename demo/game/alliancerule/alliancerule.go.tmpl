@@ -62,7 +62,7 @@ var rejections = []*errcode.IntError{
 	apperrors.ErrAllianceName, apperrors.ErrAllianceMissing, apperrors.ErrAllianceFull,
 	apperrors.ErrAllianceDenied, apperrors.ErrAllianceMembership, apperrors.ErrAllianceApplication,
 	apperrors.ErrAllianceLeader, apperrors.ErrAllianceAmount, apperrors.ErrAllianceCooldown,
-	apperrors.ErrAllianceExpired, apperrors.ErrAllianceWar,
+	apperrors.ErrAllianceExpired, apperrors.ErrAllianceWar, apperrors.ErrAllianceReward,
 }
 
 // IsRejection reports whether err is an alliance business rejection.
@@ -190,9 +190,9 @@ type MemberView struct {
 	Contribution int64
 }
 
-// View is the alliance as a write or Info answers it — the shape the
-// alliance mirror DTO will have (phase 4), so the game shows a write's
-// result from the reply and reads the mirror afterwards with
+// View is the alliance as a write or Info answers it — and as the game
+// builds it from the alliance mirror (AllianceMirror.View), so the game shows
+// a write's result from the reply and reads the mirror afterwards with
 // Monotonic(after = Version).
 type View struct {
 	AllianceID int64
@@ -215,6 +215,8 @@ type MemberState struct {
 	PendingRequestID    string
 	PendingDeadlineUnix int64
 	LeftAtUnix          int64
+	// RewardPeriod is the last reward period the player claimed (0: none).
+	RewardPeriod int64
 	Version             int64
 }
 

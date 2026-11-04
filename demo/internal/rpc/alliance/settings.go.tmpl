@@ -17,11 +17,22 @@ type Settings struct {
 	ReservationTTL   time.Duration `config:"reservation_ttl" default:"30s" min:"1s" example:"30s" help:"how long a cross-instance join holds the player's guard before the guard asks the alliance what became of it (never released on the clock alone)"`
 	ReceiptRetention time.Duration `config:"receipt_retention" default:"168h" min:"1h" example:"168h" help:"how long a request receipt is kept: longer than any caller retries one request id (the saga step receipts use the same default)"`
 	RejoinCooldown   time.Duration `config:"rejoin_cooldown" default:"0s" min:"0s" example:"0s" help:"how long after leaving or being removed a player may not join an alliance; 0 disables it"`
+	// The alliance reward (ClaimReward, the game's reward saga). Prototype
+	// defaults: one stack of an item from the demo's item table per member per
+	// period. The alliance service does not read the game's item table; an
+	// item the game does not know is refused by the game's grant step, and the
+	// saga then releases the claim.
+	RewardItemID int64         `config:"reward_item_id" default:"1002" min:"1" example:"1002" help:"prototype default: the item a member gets for claiming the alliance reward (an id in the game's item table)"`
+	RewardCount  int32         `config:"reward_count" default:"5" min:"1" max:"9999" example:"5" help:"prototype default: how many of reward_item_id one claim gives"`
+	RewardPeriod time.Duration `config:"reward_period" default:"24h" min:"1m" example:"24h" help:"prototype default: a member claims the alliance reward once per period, counted on the business clock from the Unix epoch"`
 }
 
 // Rules is the part of Settings a write needs.
 func (settings Settings) Rules() Rules {
-	return Rules{MaxMembers: settings.MaxMembers, ReservationTTL: settings.ReservationTTL, ReceiptRetention: settings.ReceiptRetention, RejoinCooldown: settings.RejoinCooldown}
+	return Rules{
+		MaxMembers: settings.MaxMembers, ReservationTTL: settings.ReservationTTL, ReceiptRetention: settings.ReceiptRetention, RejoinCooldown: settings.RejoinCooldown,
+		RewardItemID: settings.RewardItemID, RewardCount: settings.RewardCount, RewardPeriod: settings.RewardPeriod,
+	}
 }
 
 type config struct {

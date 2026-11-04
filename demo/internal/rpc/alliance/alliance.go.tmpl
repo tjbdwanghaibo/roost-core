@@ -1,9 +1,10 @@
 // Package alliance is the alliance service's RPC: the only way to change an
 // alliance or a player's alliance guard. The service owns the Alliance and
 // AllianceMember entities (remote=managed, service=alliance, one writer
-// each); game processes call it, and read alliances through Remote mirrors
-// (phase 4 of the alliance plan,
-// docs/maintenance/FEATURE-2026-11-04-alliance-service.md in roost-core).
+// each); game processes call it (uses_rpcs: [alliance]), and read alliances
+// through Remote mirrors (game/entities/alliance AllianceMirror; the alliance
+// plan, docs/maintenance/FEATURE-2026-11-04-alliance-service.md in
+// roost-core).
 //
 // roost add rpc -entity-service scaffolded it; roost servicerpc generates the
 // transport (alliance_rpc_gen.go: the routed BusClient, the handlers that run
@@ -85,8 +86,8 @@ type Alliance interface {
 	// Transfer hands leadership to another member; leader only.
 	//roost:rpc route
 	Transfer(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64, newLeaderID int64) (reply Reply, err error)
-	// Donate adds to the alliance's funds (the saga step after the game
-	// debited the player, phase 4).
+	// Donate adds to the alliance's funds (the donate saga's step after the
+	// game debited the player's coins).
 	//roost:rpc route
 	Donate(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64, amount int64) (reply Reply, err error)
 	// DeclareWar declares war on the alliance enemyID; leader only. Both
@@ -108,6 +109,18 @@ type Alliance interface {
 	// decided there and sending it again is safe.
 	//roost:rpc route
 	Result(ctx context.Context, target int64, requestID string) (reply ResultReply, err error)
+	// ClaimReward takes this period's alliance reward for the caller — the
+	// first step of the game's reward saga (plan §2.6). target is the
+	// caller's guard (GuardTarget(callerID)): only a member claims, once per
+	// alliance.reward_period. The reply names the reward the game hands over
+	// in the saga's next step.
+	//roost:rpc route
+	ClaimReward(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64) (reply RewardReply, err error)
+	// ReleaseReward undoes the claim claimRequestID made on the guard target:
+	// the reward saga's compensation when the game could not hand the reward
+	// over (the bag was full). Idempotent: only that claim is released.
+	//roost:rpc route
+	ReleaseReward(ctx context.Context, target int64, claimRequestID string) (reply GuardReply, err error)
 
 	// The calls below are between alliance service instances (the two-step
 	// join and founding of plan §2.3 / §2.5, cross-instance wars of §2.9); a
@@ -163,6 +176,18 @@ type GuardReply struct {
 	// the request id reserved for (or founded, for Found).
 	AllianceID  int64 `json:"alliance_id,omitempty"`
 	ServedBySID int32 `json:"served_by_sid"`
+}
+
+// RewardReply is ClaimReward's answer: the guard after the claim, the
+// alliance it was claimed in and the reward the game hands over (the alliance
+// service's alliance.reward_* settings).
+type RewardReply struct {
+	State      alliancerule.MemberState `json:"state"`
+	AllianceID int64                    `json:"alliance_id"`
+	ItemID     int64                    `json:"item_id"`
+	Count      int32                    `json:"count"`
+	Replayed   bool                     `json:"replayed,omitempty"`
+	ServedBySID int32                   `json:"served_by_sid"`
 }
 
 // ResultReply is a receipt lookup's answer.

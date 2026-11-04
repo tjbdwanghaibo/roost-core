@@ -8,7 +8,7 @@ import (
 )
 
 // handlerAllianceInfo is the authoritative read (GM, checking after a write).
-// Players read the alliance through its mirror instead (phase 4).
+// Players read the alliance through its mirror instead (AllianceMirror).
 //
 //roost:nest rollback=undo durability=strict
 func handlerAllianceInfo(target alliance.IRosterEntity) (alliancerule.View, error) {

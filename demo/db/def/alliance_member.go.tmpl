@@ -28,6 +28,12 @@ type AllianceMemberDao struct {
 	PendingDeadlineUnix int64  `dao:"persist" store:"pending_deadline_unix"`
 	// LeftAtUnix is when the player last left or was removed (rejoin cooldown).
 	LeftAtUnix int64 `dao:"persist" store:"left_at_unix"`
+	// RewardPeriod is the last reward period (alliance.reward_period on the
+	// business clock) whose alliance reward the player claimed, and
+	// RewardRequestID the claim that took it — the reward saga's compensation
+	// releases only that claim (ReleaseReward).
+	RewardPeriod    int64  `dao:"persist" store:"reward_period"`
+	RewardRequestID string `dao:"persist" store:"reward_request_id"`
 	// Requests is the receipts of the writes that target this player
 	// directly (founding an alliance), same rules as AllianceDao.Requests.
 	Requests map[string]*AllianceMemberReceipt `dao:"persist,map=fast" store:"requests"`

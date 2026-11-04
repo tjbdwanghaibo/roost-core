@@ -15,8 +15,7 @@ type IAllianceEntity interface{ entity.IThreadSafeEntity }
 // remote=managed, but never shared: every alliance belongs to one alliance
 // service instance — the one its Remote ownership record names, which is the
 // instance that founded it until an operator transfers it (alliance.transfer)
-// — and only that instance writes it: every write is a route RPC to it. That is the
-// difference from the demo's Guild, which any game process may lock: the
+// — and only that instance writes it: every write is a route RPC to it. The
 // alliance has one writer, so a transaction takes no distributed lock, only
 // the Remote write admission (a fenced grant in Mongo). Several alliances on
 // the same instance can share one Nest transaction.

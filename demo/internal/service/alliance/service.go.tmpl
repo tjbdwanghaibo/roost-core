@@ -7,9 +7,10 @@
 // (internal/rpc/alliance/mod.go) binds the service and registers its bus
 // handlers before this runs.
 //
-// Phase 3 of the alliance plan (docs/maintenance/FEATURE-2026-11-04-alliance-service.md
-// in roost-core): the service exists beside the demo's Guild and nothing
-// calls it yet; phase 4 moves the guild onto it.
+// The alliance plan (docs/maintenance/FEATURE-2026-11-04-alliance-service.md
+// in roost-core): this service is the game's guild. Game processes write
+// guilds only through its RPC (directly, or as a guild saga's step) and read
+// them through Remote mirrors; they have no Remote write runtime.
 package alliance
 
 import (

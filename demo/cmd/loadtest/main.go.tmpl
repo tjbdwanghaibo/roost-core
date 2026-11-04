@@ -221,10 +221,9 @@ func (login *accountLogin) authPacket(rb *robot.Context) (*transport.Packet, err
 	}
 	rb.PlayerID = role.PlayerID
 	rb.Blackboard.Set("player_id", role.PlayerID)
-	// Every robot founds its own guild. A literal name in the scenario would
-	// make the demo runnable exactly once against a given database: the
-	// second run would collide on the name and fail with guild_exists, which
-	// says nothing about the code under test.
+	// Every robot founds its own guild, under a name of its own: names are not
+	// unique in the alliance service, but a per-robot name keeps a run's
+	// guilds apart when reading them back.
 	rb.Blackboard.Set("guild_name", fmt.Sprintf("robot guild %d", role.PlayerID))
 	return playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", role.PlayerID, session.Token)), nil
 }
@@ -508,37 +507,74 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			rb.Blackboard.Set("activity_id", resp.ActivityID)
 			return nil
 		}))
-	// found_guild / guild_info: the demo's one entity that does not belong to
-	// this process.
-	//
-	// From the client's side it looks like every other endpoint, which is the
-	// claim being tested: the guild id carries the remote bit, so the
-	// transaction behind it took a distributed lock, loaded the guild from the
-	// authoritative store and wrote it back fenced — and none of that reaches
-	// the wire. What the response does carry is which process served the call
-	// (`served_by`), because in a two-process run that is the only visible
-	// difference, and the demo's second-game.sh exists to make it visible.
-	action.MustRegisterCall[pb.FoundGuildRequest, pb.GuildResponse](actions, protocols, "found_guild", msgid.MsgFoundGuild,
-		action.MapField[pb.GuildResponse]("Name", "guild_name"),
-		action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
+	// The guild is the alliance service's (game/guild in the generated
+	// project). found_guild, donate_guild and claim_guild_reward change the
+	// robot's Bag as well, so each starts a saga and answers with its key;
+	// guild_op_status polls it (in a retry node, like gift_status) and
+	// expect_guild_op judges the end. join_guild / leave_guild are one alliance
+	// RPC each, answered with the guild after the write and the alliance
+	// instance that served it (served_by). guild_info reads the guild mirror:
+	// eventually consistent, so the scenario reads it in a retry node too.
+	guildStarted := func(op string) action.CallOption[pb.GuildResponse] {
+		return action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
 				return err
 			}
-			if resp.GuildID == 0 {
-				return fmt.Errorf("the guild was founded with no id")
+			if resp.SagaKey == "" {
+				return fmt.Errorf("%s_guild was accepted without a saga key", op)
 			}
-			if resp.Members != 1 {
-				return fmt.Errorf("a new guild has %d members, want its founder", resp.Members)
-			}
-			if resp.ServedBySID == 0 {
-				return fmt.Errorf("the answer does not say which process served it")
-			}
-			rb.Blackboard.Set("guild_id", resp.GuildID)
+			rb.Blackboard.Set("guild_op", op)
+			rb.Blackboard.Set("guild_saga", resp.SagaKey)
 			return nil
+		})
+	}
+	action.MustRegisterCall[pb.FoundGuildRequest, pb.GuildResponse](actions, protocols, "found_guild", msgid.MsgFoundGuild,
+		action.MapField[pb.GuildResponse]("Name", "guild_name"), guildStarted("found"))
+	action.MustRegisterCall[pb.DonateGuildRequest, pb.GuildResponse](actions, protocols, "donate_guild", msgid.MsgDonateGuild, guildStarted("donate"))
+	action.MustRegisterCall[pb.ClaimGuildRewardRequest, pb.GuildResponse](actions, protocols, "claim_guild_reward", msgid.MsgClaimGuildReward, guildStarted("reward"))
+	action.MustRegisterCall[pb.GuildOpStatusRequest, pb.GuildOpStatusResponse](actions, protocols, "guild_op_status", msgid.MsgGuildOpStatus,
+		action.MapField[pb.GuildOpStatusResponse]("Op", "guild_op"),
+		action.MapField[pb.GuildOpStatusResponse]("SagaKey", "guild_saga"),
+		action.OnResp(func(rb *robot.Context, resp *pb.GuildOpStatusResponse) error {
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return err
+			}
+			switch resp.Status {
+			case "completed", "compensated", "failed", "manual_required":
+				rb.Blackboard.Set("guild_op_status", resp.Status)
+				rb.Blackboard.Set("guild_op_error", resp.LastError)
+				if resp.GuildID != 0 {
+					rb.Blackboard.Set("guild_id", resp.GuildID)
+				}
+				return nil
+			}
+			return fmt.Errorf("guild saga still %s (step %d)", resp.Status, resp.Step)
 		}))
-	// guild_info with no id reads "the guild I am in" — the player's own copy
-	// of that one fact, which is why it costs a local lock and not a
-	// distributed one. It has to agree with what founding returned.
+	actions.MustRegister(action.Func{ActionName: "expect_guild_op", Handle: func(_ context.Context, rb *robot.Context, param any) error {
+		want := action.ParamsOf(rb, param).String("status", "completed")
+		got, _ := rb.Blackboard.Get("guild_op_status")
+		if got != want {
+			op, _ := rb.Blackboard.Get("guild_op")
+			lastError, _ := rb.Blackboard.Get("guild_op_error")
+			return fmt.Errorf("guild %v saga ended %v, want %s (last error: %v)", op, got, want, lastError)
+		}
+		return nil
+	}})
+	guildAnswered := action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
+		if err := coded(resp.Code, resp.Reason); err != nil {
+			return err
+		}
+		if resp.ServedBySID == 0 {
+			return fmt.Errorf("the answer does not say which alliance instance served it")
+		}
+		rb.Blackboard.Set("guild_version", resp.Version)
+		return nil
+	})
+	action.MustRegisterCall[pb.JoinGuildRequest, pb.GuildResponse](actions, protocols, "join_guild", msgid.MsgJoinGuild, guildAnswered)
+	action.MustRegisterCall[pb.LeaveGuildRequest, pb.GuildResponse](actions, protocols, "leave_guild", msgid.MsgLeaveGuild, guildAnswered)
+	// guild_info with no id reads "the guild I am in": the robot's guard
+	// mirror, then the guild's. It has to agree with what the found saga
+	// reported, and a guild has at least its founder.
 	action.MustRegisterCall[pb.GuildInfoRequest, pb.GuildResponse](actions, protocols, "guild_info", msgid.MsgGuildInfo,
 		action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
@@ -547,8 +583,7 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 			raw, _ := rb.Blackboard.Get("guild_id")
 			founded, _ := raw.(int64)
 			if founded != 0 && resp.GuildID != founded {
-				return fmt.Errorf("the player's own copy says guild %d, the one they founded is %d",
-					resp.GuildID, founded)
+				return fmt.Errorf("the mirror says guild %d, the one the robot founded is %d", resp.GuildID, founded)
 			}
 			if resp.Members < 1 {
 				return fmt.Errorf("guild %d reports %d members", resp.GuildID, resp.Members)
@@ -860,6 +895,14 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalJoinGuildRequest(message)
 	case *pb.GuildInfoRequest:
 		return pb.MarshalGuildInfoRequest(message)
+	case *pb.LeaveGuildRequest:
+		return pb.MarshalLeaveGuildRequest(message)
+	case *pb.DonateGuildRequest:
+		return pb.MarshalDonateGuildRequest(message)
+	case *pb.ClaimGuildRewardRequest:
+		return pb.MarshalClaimGuildRewardRequest(message)
+	case *pb.GuildOpStatusRequest:
+		return pb.MarshalGuildOpStatusRequest(message)
 	default:
 		return nil, fmt.Errorf("pb codec: no marshal for %T", value)
 	}
@@ -1007,6 +1050,12 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 		*message = *decoded
 	case *pb.GuildResponse:
 		decoded, err := pb.UnmarshalGuildResponse(data)
+		if err != nil {
+			return err
+		}
+		*message = *decoded
+	case *pb.GuildOpStatusResponse:
+		decoded, err := pb.UnmarshalGuildOpStatusResponse(data)
 		if err != nil {
 			return err
 		}

@@ -1,0 +1,99 @@
+#!/usr/bin/env sh
+# A second alliance service instance on this machine, against the same Mongo /
+# Redis / NATS (the demo's guild service; FEATURE-2026-11-04-alliance-service
+# §2.7 in roost-core).
+#   sh deploy/dev/run.sh start              # every service, alliance on its configured sid
+#   sh deploy/dev/second-alliance.sh start  # this one, afterwards
+#   sh deploy/dev/second-alliance.sh stop
+#
+# Config is derived from configs/service/config.alliance.yaml the first time
+# and written to configs/service/config.alliance2.yaml; edit that file to keep
+# changes. What differs: the sid, the ops port, the etcd advertise address and
+# the WAL directory (the dev config names data/wal/alliance explicitly, and one
+# WAL directory serves one process).
+#
+# With two instances, founding spreads over both (Found is delivered through
+# the bus queue group) and each guild is owned by the instance that founded it;
+# every other guild call goes to its owner through the route registration.
+# Scaling this instance in again, on its own ops endpoint:
+#   1. alliance.stop_founding                 — it leaves Found's queue group;
+#   2. alliance.transfer {"count": N, "to_sid": <the other sid>} until it owns nothing;
+#   3. sh deploy/dev/second-alliance.sh stop.
+#   curl -s -H 'X-Admin-Token: dev-gm-token' -d '{"name":"alliance.stop_founding"}' http://127.0.0.1:9210/admin/execute
+set -eu
+SERVICE="alliance"
+SID="${SECOND_SID:-1001}"
+OPS_PORT="${SECOND_OPS_PORT:-9210}"
+ADVERTISE_PORT="${SECOND_ADVERTISE_PORT:-9020}"
+SOURCE="configs/service/config.$SERVICE.yaml"
+TARGET="configs/service/config.${SERVICE}2.yaml"
+DEV_DIR=".dev"
+BIN="bin/app"
+PID_FILE="$DEV_DIR/${SERVICE}2.pid"
+LOG_FILE="$DEV_DIR/${SERVICE}2.log"
+READY_TIMEOUT="${READY_TIMEOUT:-90}"
+
+derive_config() {
+  [ -f "$TARGET" ] && return 0
+  [ -f "$SOURCE" ] || { echo "$SOURCE not found; run from the project root" >&2; exit 1; }
+  sed \
+    -e "s/^\(  *\)sid: .*/\1sid: $SID/" \
+    -e "s/^sid: .*/sid: $SID/" \
+    -e "s#^\(  *\)addr: \(.*\):9110\$#\1addr: \2:$OPS_PORT#" \
+    -e "s#^\(  *\)advertise_addr: \(.*\):9010\$#\1advertise_addr: \2:$ADVERTISE_PORT#" \
+    -e "s#^\(  *\)dir: data/wal/alliance\$#\1dir: data/wal/alliance-$SID#" \
+    "$SOURCE" > "$TARGET"
+  echo "wrote $TARGET (sid $SID, ops $OPS_PORT, advertise $ADVERTISE_PORT, WAL data/wal/alliance-$SID)"
+}
+
+ready_url() {
+  addr=$(awk '/^ops:/{o=1;next} o&&/^  addr:/{print $2;exit} o&&/^[^ ]/{o=0}' "$TARGET" | tr -d '"')
+  [ -n "$addr" ] || addr="127.0.0.1:$OPS_PORT"
+  printf 'http://%s/readyz' "$(printf '%s' "$addr" | sed 's/^0\.0\.0\.0/127.0.0.1/')"
+}
+
+cmd_start() {
+  derive_config
+  mkdir -p "$DEV_DIR"
+  if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    echo "${SERVICE}2 already running (pid $(cat "$PID_FILE"))"; return 0
+  fi
+  if curl -fsS -o /dev/null "$(ready_url)" 2>/dev/null; then
+    echo "something is already listening on the ops port ($(ready_url)); stop it first, or set SECOND_OPS_PORT" >&2
+    exit 1
+  fi
+  [ -x "$BIN" ] || go build -o "$BIN" .
+  "$BIN" "$SERVICE" --sid "$SID" --config "$TARGET" > "$LOG_FILE" 2>&1 &
+  echo $! > "$PID_FILE"
+  url=$(ready_url)
+  i=0
+  while [ "$i" -lt "$READY_TIMEOUT" ]; do
+    kill -0 "$(cat "$PID_FILE")" 2>/dev/null || { echo "${SERVICE}2 exited; see $LOG_FILE" >&2; tail -3 "$LOG_FILE" >&2; exit 1; }
+    if curl -fsS -o /dev/null "$url" 2>/dev/null; then
+      echo "${SERVICE}2 ready on sid $SID (ops $url); logs in $LOG_FILE"
+      return 0
+    fi
+    i=$((i + 1)); sleep 1
+  done
+  echo "${SERVICE}2 did not become ready in ${READY_TIMEOUT}s; see $LOG_FILE" >&2
+  exit 1
+}
+
+cmd_stop() {
+  [ -f "$PID_FILE" ] || { echo "${SERVICE}2 not running"; return 0; }
+  pid=$(cat "$PID_FILE")
+  kill "$pid" 2>/dev/null || true
+  i=0
+  # The alliance service's stop grace in deploy/dev/run.sh.
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 85 ]; do i=$((i + 1)); sleep 1; done
+  rm -f "$PID_FILE"
+  echo "${SERVICE}2: stopped"
+}
+
+case "${1:-}" in
+  start) cmd_start ;;
+  stop) cmd_stop ;;
+  restart) cmd_stop; cmd_start ;;
+  logs) tail -f "$LOG_FILE" ;;
+  *) echo "usage: sh deploy/dev/second-alliance.sh start|stop|restart|logs" >&2; exit 2 ;;
+esac

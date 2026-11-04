@@ -115,7 +115,7 @@ func newCluster(t *testing.T, rules Rules, sids ...int32) *cluster {
 }
 
 func defaultRules() Rules {
-	return Rules{MaxMembers: 100, ReservationTTL: 30 * time.Second, ReceiptRetention: 168 * time.Hour}
+	return Rules{MaxMembers: 100, ReservationTTL: 30 * time.Second, ReceiptRetention: 168 * time.Hour, RewardItemID: 1002, RewardCount: 5, RewardPeriod: 24 * time.Hour}
 }
 
 func (c *cluster) start(sid int32) *instance {

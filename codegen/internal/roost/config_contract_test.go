@@ -307,7 +307,7 @@ func TestGeneratedProjectConfigGuardCatchesDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	edited = strings.Replace(string(raw), "\tlocalSID := identity.Sid\n", "\tlocalSID := identity.Sid\n\t_ = registry.Config().GetString(\"gm.secret_knob\")\n", 1)
+	edited = strings.Replace(string(raw), "\tworldID, err := lifecycle.WorldID(registry)\n", "\t_ = registry.Config().GetString(\"gm.secret_knob\")\n\tworldID, err := lifecycle.WorldID(registry)\n", 1)
 	if edited == string(raw) {
 		t.Fatal("gm.go changed shape; update this test")
 	}
@@ -355,8 +355,8 @@ func TestDoctorReadsBusinessDeclarationsFromTheProcess(t *testing.T) {
 		if item.Status != StatusOK {
 			t.Errorf("%s: %s %s", item.Name, item.Status, item.Detail)
 		}
-		if item.Name == "config-schema:game" && !strings.Contains(item.Detail, "(4 business key(s))") {
-			t.Errorf("config-schema:game = %q; want the four keys game/settings declares beyond the framework's (activity.key_prefix, activity.groups_file, platform.key_prefix, platform.payment_secret)", item.Detail)
+		if item.Name == "config-schema:game" && !strings.Contains(item.Detail, "(7 business key(s))") {
+			t.Errorf("config-schema:game = %q; want the seven keys the project's own code declares beyond the framework's: game/settings (activity.key_prefix, activity.groups_file, platform.key_prefix, platform.payment_secret, guild.found_cost) and the alliance RPC client (alliance.service_type, alliance.call_timeout)", item.Detail)
 		}
 	}
 

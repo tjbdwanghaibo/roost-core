@@ -230,7 +230,8 @@ func (component *RosterComponent) Transfer(actorID, newLeaderID int64) error {
 // Donate adds amount to the alliance's funds and to the member's
 // contribution. The resource it comes from is the player's, on the game
 // server: the game side debits it first (a native saga step on the Player,
-// phase 4) and this write is the saga's next step, idempotent by request id.
+// the donate saga) and this write is the saga's next step, idempotent by
+// request id.
 func (component *RosterComponent) Donate(actorID, amount int64) error {
 	seat, member := component.Seat(actorID)
 	if !member {

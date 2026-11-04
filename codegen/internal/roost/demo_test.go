@@ -451,11 +451,25 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if controller := read("game/controllers/player/controller.go"); !strings.Contains(controller, "lifecycle.PlayerFromRegistry(") {
 		t.Errorf("controller does not hold the Player lifecycle:\n%s", controller)
 	}
-	if guild := read("game/controllers/player/guild.go"); !strings.Contains(guild, "controller.nextGuildID(") || strings.Contains(guild, "controller.RuntimeIDs(") {
-		t.Fatal("persistent guild creation must use the durable allocator")
+	// Guilds live in the alliance service (FEATURE-2026-11-04-alliance-service
+	// §2.6): the game owns no Remote entity, reads guilds through read-only
+	// mirrors and changes them only through the alliance RPC.
+	demoManifest, err := LoadManifest(target)
+	if err != nil {
+		t.Fatal(err)
 	}
-	read("game/controllers/player/guild_ids.go")
-	read("game/controllers/player/guild_ids_test.go")
+	gameSpec := demoManifest.Services["game"]
+	if contains(gameSpec.Mods, "remote_entity") || !contains(gameSpec.Mods, "remote_mirror") || !contains(gameSpec.UsesRpcs, "alliance") {
+		t.Errorf("game mods %v, uses_rpcs %v: want remote_mirror without remote_entity, and the alliance RPC", gameSpec.Mods, gameSpec.UsesRpcs)
+	}
+	if guild := read("game/controllers/player/guild.go"); !strings.Contains(guild, "controller.alliances.Join(") || !strings.Contains(guild, "entity.RemoteReadMonotonic") {
+		t.Errorf("guild endpoints do not go through the alliance RPC and the mirrors:\n%s", guild)
+	}
+	for _, gone := range []string{"game/entities/guild", "db/def/guild.go", "game/controllers/player/guild_ids.go", "game/handler/join_guild.go"} {
+		if _, err := os.Stat(filepath.Join(target, filepath.FromSlash(gone))); !os.IsNotExist(err) {
+			t.Errorf("%s still generated (err=%v): the game-local guild is gone", gone, err)
+		}
+	}
 	if bind := read("game/protocol_handlers/player/protocol_gen.go"); !strings.Contains(bind, "HandleEnterGame") {
 		t.Errorf("EnterGame is not bound to the controller:\n%s", bind)
 	}

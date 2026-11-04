@@ -1,0 +1,414 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/guild"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	alliancedonate "{{MODULE}}/saga/alliance_donate"
+	alliancefound "{{MODULE}}/saga/alliance_found"
+	alliancereward "{{MODULE}}/saga/alliance_reward"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/ownerroute"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
+)
+
+// The guild sagas' steps (plan §2.6 of the alliance plan): the three guild
+// operations that change the player's own Bag as well as the guild.
+//
+//	saga             step 1                         step 2                         compensations
+//	alliance_found   debit the fee (native)         Found (Mongo step → RPC)       refund the fee; a founded alliance is kept
+//	alliance_donate  debit the coins (native)       Donate (Mongo step → RPC)      refund the coins; a donation is kept
+//	alliance_reward  ClaimReward (Mongo step → RPC) grant the reward (native)      ReleaseReward; take the reward back
+//
+// Two transaction domains in two processes, so two kinds of step, for the
+// reason gift_saga.go gives: a Player step is a Nest transaction on the
+// player's bound sid and takes the native path (its receipt in
+// PlayerDao.SagaReceipts, written in the same WAL record as the Bag change,
+// so one operation takes effect at most once); a guild step is a call to the
+// alliance service and takes the Mongo path (an inbox receipt per operation in
+// the saga database). A native step could not do the guild's part even in
+// principle: this process has no Remote write runtime, and a native step that
+// wrote a Remote entity would be refused (saga.ErrNativeStepRemoteWrite). The
+// alliance service is idempotent per request id, and the request id is the
+// command's IdempotencyKey — the same operation, however many attempts and
+// redeliveries, is one request there.
+//
+// How a guild step answers (the alliance RPC's four answers, plan §2.3):
+// success → Success, with what the service answered in the payload for the
+// next step; a rejection (alliance_name, alliance_membership, not a member,
+// already claimed, the alliance does not exist) → Success=false,
+// Retryable=false, and the coordinator compensates the steps that completed;
+// "not executed" or "unknown" → an error: the Mongo step rolls back, the
+// command is redelivered and the same request id is sent again, which the
+// service answers from its receipt if the first one did take effect.
+//
+// The Player steps run only on the player's bound sid: admission and handoff
+// exactly as for the gift saga (gift_saga.go admitPhase / handOver), over a
+// handoff module of their own.
+const (
+	// guildSagaSteps names the guild step consumers: durables
+	// `game-alliance-<step>`, inbox `_game-alliance_step_inbox`.
+	guildSagaSteps = "game-alliance"
+
+	guildHandoffModule  = "game.alliance.handoff"
+	guildHandoffMsgName = "alliance.step.handoff"
+
+	// The native steps, by the name a handoff carries.
+	phaseFoundDebit     = "found-debit"
+	phaseFoundRefund    = "found-refund"
+	phaseDonateDebit    = "donate-debit"
+	phaseDonateRefund   = "donate-refund"
+	phaseRewardGrant    = "reward-grant"
+	phaseRewardTakeBack = "reward-take-back"
+)
+
+// guildStepHandoff is a guild saga's Player step that arrived at the wrong
+// game process, on its way to the player's bound sid (giftStepHandoff's twin).
+type guildStepHandoff struct {
+	PlayerID int64        `json:"player_id"`
+	SID      int32        `json:"sid"`
+	Phase    string       `json:"phase"`
+	Command  saga.Command `json:"command"`
+}
+
+// MsgName pins the wire name (see giftStepHandoff.MsgName).
+func (guildStepHandoff) MsgName() string { return guildHandoffMsgName }
+
+// guildAlliance is the part of the alliance RPC the guild steps call. The
+// process's is the generated client (rpcalliance.CapabilityName, assembled
+// from uses_rpcs: [alliance]); the tests stand it in.
+type guildAlliance interface {
+	Found(ctx context.Context, requestID string, callerID int64, callerSID int32, name string, openJoin bool) (rpcalliance.Reply, error)
+	Donate(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64, amount int64) (rpcalliance.Reply, error)
+	ClaimReward(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64) (rpcalliance.RewardReply, error)
+	ReleaseReward(ctx context.Context, target int64, claimRequestID string) (rpcalliance.GuardReply, error)
+}
+
+type guildSteps struct {
+	nest      corenest.Client
+	alliances guildAlliance
+	owners    playerOwnership
+	runtime   *kitsaga.Steps
+	handoff   *ownerroute.Router[guildStepHandoff, int32, sidRoute]
+}
+
+// startGuildSagas registers the guild steps and starts their consumers, in
+// Init after the gift saga's (the saga Mod has started; the player ownership
+// table is published). The returned Steps is drained in Shutdown.
+func startGuildSagas(ctx context.Context, registry *app.Registry) (*kitsaga.Steps, error) {
+	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || nestClient == nil {
+		return nil, fmt.Errorf("guild sagas: nest client is unavailable")
+	}
+	alliances, ok := app.Lookup[rpcalliance.Alliance](registry, rpcalliance.CapabilityName)
+	if !ok || alliances == nil {
+		return nil, fmt.Errorf("guild sagas: capability %q not found; list alliance under services.{{GAME_SERVICE}}.uses_rpcs", rpcalliance.CapabilityName)
+	}
+	owners, ok := app.Lookup[*PlayerOwners](registry, PlayerOwnerCapability)
+	if !ok || owners == nil {
+		return nil, fmt.Errorf("guild sagas: player ownership (%s) is not published yet; it must be registered before the step consumers subscribe", PlayerOwnerCapability)
+	}
+	busClient, ok := app.Lookup[bus.IBus](registry, mods.ModBus)
+	if !ok || busClient == nil {
+		return nil, fmt.Errorf("guild sagas: capability %q not found", mods.ModBus)
+	}
+	runtime, err := kitsaga.NewSteps(registry, guildSagaSteps)
+	if err != nil {
+		return nil, fmt.Errorf("guild sagas: %w", err)
+	}
+	steps := guildSteps{nest: nestClient, alliances: alliances, owners: owners, runtime: runtime}
+	steps.handoff = &ownerroute.Router[guildStepHandoff, int32, sidRoute]{
+		LocalSid:  owners.SID(),
+		Routes:    sidRoutes{},
+		Transport: ownerroute.NewBusTransport[guildStepHandoff](busClient, "{{GAME_SERVICE}}", guildHandoffModule),
+		Executor:  steps.runHandoff,
+		KeyOf:     func(cmd *guildStepHandoff) int32 { return cmd.SID },
+		ValidKey:  func(sid int32) bool { return sid > 0 },
+	}
+	// The receiving half first, so no peer can forward to a process that is
+	// not listening yet (the gift saga's order).
+	if err := ownerroute.RegisterBusHandler(busClient, guildHandoffModule, guildHandoffMsgName, steps.runHandoff); err != nil {
+		return nil, fmt.Errorf("guild sagas: register handoff handler: %w", err)
+	}
+	steps.register(runtime)
+	if err := runtime.Start(ctx); err != nil {
+		return nil, fmt.Errorf("guild sagas: %w", err)
+	}
+	return runtime, nil
+}
+
+// register names the twelve steps against the generated topic constants.
+// The Player steps carry the admission check; the guild steps do not — any
+// game process may call the alliance service.
+func (steps guildSteps) register(runtime *kitsaga.Steps) {
+	native := func(phase, topic string, body saga.NativeStepBody) {
+		runtime.Native(phase, topic, body, kitsaga.WithAdmit(steps.admitOwned(phase)))
+	}
+	native(phaseFoundDebit, alliancefound.TopicDebit, steps.debitCoins)
+	native(phaseFoundRefund, alliancefound.TopicDebitCompensation, steps.refundCoins)
+	runtime.Mongo("found", alliancefound.TopicFound, steps.found)
+	runtime.Mongo("found-undo", alliancefound.TopicFoundCompensation, steps.keep("found"))
+	native(phaseDonateDebit, alliancedonate.TopicDebit, steps.debitCoins)
+	native(phaseDonateRefund, alliancedonate.TopicDebitCompensation, steps.refundCoins)
+	runtime.Mongo("donate", alliancedonate.TopicDonate, steps.donate)
+	runtime.Mongo("donate-undo", alliancedonate.TopicDonateCompensation, steps.keep("donate"))
+	runtime.Mongo("claim", alliancereward.TopicClaim, steps.claim)
+	runtime.Mongo("claim-undo", alliancereward.TopicClaimCompensation, steps.release)
+	native(phaseRewardGrant, alliancereward.TopicGrant, steps.grant)
+	native(phaseRewardTakeBack, alliancereward.TopicGrantCompensation, steps.takeBack)
+}
+
+// --- the Player steps (native, on the player's bound sid) ---
+
+// debitCoins takes the founding fee or the donation. Not enough coins is the
+// refusal item_short: the saga fails with nothing to compensate.
+func (steps guildSteps) debitCoins(ctx context.Context, step saga.NativeStep) error {
+	state, playerID, err := guildTarget(step.Command())
+	if err != nil {
+		return err
+	}
+	_, err = syncsender.NewGuildDebitSender(steps.nest).Sync_GuildDebit(ctx, playerID, guild.CoinItemID, state.Coins, step)
+	return err
+}
+
+// refundCoins is the debit's compensation: the guild refused (or the saga
+// gave up on it), so the coins go back. A stack that filled up meanwhile is a
+// refused compensation — manual_required, for an operator.
+func (steps guildSteps) refundCoins(ctx context.Context, step saga.NativeStep) error {
+	state, playerID, err := guildTarget(step.Command())
+	if err != nil {
+		return err
+	}
+	_, err = syncsender.NewGuildCreditSender(steps.nest).Sync_GuildCredit(ctx, playerID, guild.CoinItemID, state.Coins, step)
+	return err
+}
+
+// grant hands the alliance reward over (the reward the claim step answered).
+// A full stack is bag_full: the coordinator then releases the claim.
+func (steps guildSteps) grant(ctx context.Context, step saga.NativeStep) error {
+	state, playerID, err := guildTarget(step.Command())
+	if err != nil {
+		return err
+	}
+	_, err = syncsender.NewGuildCreditSender(steps.nest).Sync_GuildCredit(ctx, playerID, state.ItemID, state.Count, step)
+	return err
+}
+
+// takeBack is the grant's compensation. It runs only for a grant that
+// succeeded after the coordinator had given up on it (no step follows the
+// grant): the reward is taken back as the claim is released.
+func (steps guildSteps) takeBack(ctx context.Context, step saga.NativeStep) error {
+	state, playerID, err := guildTarget(step.Command())
+	if err != nil {
+		return err
+	}
+	_, err = syncsender.NewGuildDebitSender(steps.nest).Sync_GuildDebit(ctx, playerID, state.ItemID, state.Count, step)
+	return err
+}
+
+// --- the guild steps (Mongo steps calling the alliance service) ---
+
+// found asks the alliance service to found the alliance. Its request id is
+// the command's IdempotencyKey; the service anchors it on the founder's guard,
+// so a redelivery that lands on another alliance instance founds nothing new
+// (plan §2.3). The alliance founded goes into the payload.
+func (steps guildSteps) found(ctx context.Context, command saga.Command) (saga.Completion, error) {
+	state, err := guild.Decode(command.Payload)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	reply, err := steps.alliances.Found(ctx, command.IdempotencyKey, state.PlayerID, state.SID, state.Name, state.OpenJoin)
+	return guildCompletion(command, err, func() guild.State {
+		state.AllianceID = reply.Alliance.AllianceID
+		return state
+	})
+}
+
+// donate records the donation in the alliance's funds and the member's
+// contribution. Not a member (any more) is a rejection: the coins are
+// refunded.
+func (steps guildSteps) donate(ctx context.Context, command saga.Command) (saga.Completion, error) {
+	state, err := guild.Decode(command.Payload)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	target, err := rpcalliance.AllianceTarget(state.AllianceID)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	_, err = steps.alliances.Donate(ctx, command.IdempotencyKey, state.PlayerID, state.SID, target, int64(state.Coins))
+	return guildCompletion(command, err, nil)
+}
+
+// claim takes this period's alliance reward on the player's guard. The
+// claim's request id and the reward go into the payload: the grant gives it,
+// and the compensation releases exactly this claim.
+func (steps guildSteps) claim(ctx context.Context, command saga.Command) (saga.Completion, error) {
+	state, err := guild.Decode(command.Payload)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	target, err := rpcalliance.GuardTarget(state.PlayerID)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	reply, err := steps.alliances.ClaimReward(ctx, command.IdempotencyKey, state.PlayerID, state.SID, target)
+	return guildCompletion(command, err, func() guild.State {
+		state.ClaimRequestID = command.IdempotencyKey
+		state.AllianceID, state.ItemID, state.Count = reply.AllianceID, reply.ItemID, reply.Count
+		return state
+	})
+}
+
+// release is the claim's compensation: the grant was refused (bag full), so
+// the claim is released and the player may claim again. Idempotent on the
+// service side (only that claim is released); a guard that does not exist has
+// nothing to release.
+func (steps guildSteps) release(ctx context.Context, command saga.Command) (saga.Completion, error) {
+	state, err := guild.Decode(command.Payload)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	if state.ClaimRequestID == "" {
+		return saga.Completion{Success: true}, nil
+	}
+	target, err := rpcalliance.GuardTarget(state.PlayerID)
+	if err != nil {
+		return refuse(err.Error()), nil
+	}
+	_, err = steps.alliances.ReleaseReward(ctx, target, state.ClaimRequestID)
+	if err != nil && errcode.CodeOf(err) == errcode.CodeEntityNotFound {
+		err = nil
+	}
+	return guildCompletion(command, err, nil)
+}
+
+// keep is the compensation of found and donate. It runs only when the guild
+// step succeeded after the coordinator had given up on it (no step follows
+// it): the debit has been refunded by then, and the alliance — or the
+// donation — is kept. The demo does not disband an alliance or claw back
+// funds for it; it is logged for an operator (KNOWN-LIMITS, alliance service).
+func (guildSteps) keep(step string) saga.StepHandler {
+	return func(_ context.Context, command saga.Command) (saga.Completion, error) {
+		slog.Warn("guild saga: the "+step+" step succeeded after the saga gave up; its result is kept and the coins were refunded",
+			"saga_id", command.SagaID, "operation", command.IdempotencyKey)
+		return saga.Completion{Success: true}, nil
+	}
+}
+
+// guildCompletion turns an alliance RPC answer into the step's result:
+// success (with next as the payload for the following steps, when given), a
+// rejection the coordinator compensates, or an error that redelivers the
+// command — "not executed" and "unknown" both: the same request id is sent
+// again and the service answers it from its receipt.
+func guildCompletion(command saga.Command, err error, next func() guild.State) (saga.Completion, error) {
+	if err == nil {
+		completion := saga.Completion{Success: true}
+		if next != nil {
+			data, encodeErr := guild.Encode(next())
+			if encodeErr != nil {
+				return saga.Completion{}, encodeErr
+			}
+			completion.Data = data
+		}
+		return completion, nil
+	}
+	if servicerpc.Classify(err) == servicerpc.OutcomeRejected {
+		_, reason := errcode.ClientError(err)
+		return refuse(reason), nil
+	}
+	return saga.Completion{}, fmt.Errorf("guild saga %s: %s: %w", command.SagaID, command.StepName, err)
+}
+
+// guildTarget decodes a Player step's payload and builds the player's entity id.
+func guildTarget(command saga.Command) (guild.State, int64, error) {
+	state, err := guild.Decode(command.Payload)
+	if err != nil {
+		return guild.State{}, 0, err
+	}
+	playerID, err := entity.BuildEntityID(state.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return guild.State{}, 0, err
+	}
+	return state, playerID, nil
+}
+
+// --- admission and handoff of the Player steps (gift_saga.go's rules) ---
+
+func (steps guildSteps) admitOwned(phase string) func(context.Context, saga.Command) error {
+	return func(ctx context.Context, command saga.Command) error {
+		if steps.owners == nil {
+			return nil
+		}
+		state, err := guild.Decode(command.Payload)
+		if err != nil {
+			// Admission answers "whose work is this", not "is it valid": a
+			// payload no process can read is admitted, and the step refuses it.
+			slog.Warn("guild saga: admitting a step whose payload is unreadable", "command", command.ID, "err", err)
+			return nil
+		}
+		if state.SID <= 0 {
+			return fmt.Errorf("guild saga: step %s for player %d names no sid; it cannot be routed", command.ID, state.PlayerID)
+		}
+		local, err := steps.owners.AdmitBound(state.PlayerID, state.SID)
+		if !local {
+			steps.handOver(ctx, phase, state, command)
+			return fmt.Errorf("guild saga: player %d is bound to sid %d, not this process; leaving the step for it", state.PlayerID, state.SID)
+		}
+		if err != nil {
+			return fmt.Errorf("guild saga: player %d: %w", state.PlayerID, err)
+		}
+		return nil
+	}
+}
+
+// handOver routes a Player step to the player's bound sid; best effort, the
+// redelivery is the safety net.
+func (steps guildSteps) handOver(ctx context.Context, phase string, state guild.State, command saga.Command) {
+	if steps.handoff == nil {
+		return
+	}
+	if err := steps.handoff.Route(ctx, &guildStepHandoff{PlayerID: state.PlayerID, SID: state.SID, Phase: phase, Command: command}); err != nil {
+		slog.Warn("guild saga: step not handed over; redelivery will find the player's sid", "player_id", state.PlayerID, "sid", state.SID, "phase", phase, "err", err)
+	}
+}
+
+// runHandoff runs a Player step another process handed over: envelope and
+// payload must agree, the framework checks phase against topic, and the
+// player must be served here — otherwise nothing runs and the holder of the
+// message keeps redelivering.
+func (steps guildSteps) runHandoff(ctx context.Context, cmd *guildStepHandoff) error {
+	if cmd == nil {
+		return fmt.Errorf("guild saga: empty handoff")
+	}
+	state, err := guild.Decode(cmd.Command.Payload)
+	if err != nil {
+		return fmt.Errorf("guild saga: handoff payload: %w", err)
+	}
+	if state.PlayerID != cmd.PlayerID || state.SID != cmd.SID {
+		return fmt.Errorf("guild saga: handoff for player %d on sid %d carries a step for player %d on sid %d", cmd.PlayerID, cmd.SID, state.PlayerID, state.SID)
+	}
+	err = steps.runtime.RunHandedOver(ctx, cmd.Phase, cmd.Command, func(context.Context, saga.Command) bool {
+		if steps.owners == nil {
+			return true
+		}
+		local, err := steps.owners.AdmitBound(state.PlayerID, state.SID)
+		return local && err == nil
+	})
+	if err != nil {
+		return fmt.Errorf("guild saga: handoff %s: %w", cmd.Phase, err)
+	}
+	return nil
+}

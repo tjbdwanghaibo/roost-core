@@ -1,0 +1,55 @@
+package handler
+
+import (
+	"fmt"
+	"time"
+
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/guild"
+	apperrors "{{MODULE}}/internal/errors"
+	alliancedonate "{{MODULE}}/saga/alliance_donate"
+	alliancefound "{{MODULE}}/saga/alliance_found"
+	alliancereward "{{MODULE}}/saga/alliance_reward"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// handlerStartGuildOp starts one of the guild sagas (found, donate, claim
+// reward) from inside the player's Nest transaction, the way StartGift starts
+// the gift saga: it changes nothing on the Player, checks under the lock that
+// the coins the saga's debit will take are there, and emits the saga start
+// intent into the same WAL record; the Data Engine outbox delivers it to the
+// coordinator, which commands the steps (internal/service/<game>/alliance_saga.go).
+//
+// The coin check is advisory — the coins can still be spent before the debit
+// step runs; then the debit refuses with the same item_short and the saga
+// fails with nothing to compensate. The business key comes from the endpoint
+// (op, player, session, frame sequence), so a retried frame folds into the
+// same saga.
+//
+//roost:nest rollback=undo durability=strict
+func handlerStartGuildOp(target player.IBagEntity, op string, state []byte, coins int32, businessKey string) (string, error) {
+	if coins > 0 {
+		if have := target.BagComp().ItemCount(guild.CoinItemID); have < coins {
+			return "", errcode.Wrap(apperrors.ErrItemShort, nil, "item_id", guild.CoinItemID, "have", have, "want", coins)
+		}
+	}
+	var start saga.StartRequest
+	switch op {
+	case guild.OpFound:
+		start = saga.StartRequest{Type: alliancefound.Type, DefinitionVersion: alliancefound.Version}
+	case guild.OpDonate:
+		start = saga.StartRequest{Type: alliancedonate.Type, DefinitionVersion: alliancedonate.Version}
+	case guild.OpReward:
+		start = saga.StartRequest{Type: alliancereward.Type, DefinitionVersion: alliancereward.Version}
+	default:
+		return "", fmt.Errorf("guild saga: unknown operation %q", op)
+	}
+	start.BusinessKey = businessKey
+	start.Data = state
+	start.DeadlineAt = time.Now().Add(guild.Deadline) //glsvet:system-clock a saga deadline is the coordinator's system time
+	if err := saga.EmitStart(start); err != nil {
+		return "", err
+	}
+	return businessKey, nil
+}

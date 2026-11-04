@@ -6,6 +6,7 @@ import (
 
 	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
@@ -14,6 +15,10 @@ const (
 	adminTransfer = "alliance.transfer"
 	adminInfo     = "alliance.info"
 	adminGuard    = "alliance.guard"
+	// adminStopFounding is the first step of scaling an instance in (plan
+	// §2.7 缩容): it stops taking new alliances, then alliance.transfer moves
+	// what it owns, then it is stopped.
+	adminStopFounding = "alliance.stop_founding"
 )
 
 type transferPayload struct {
@@ -89,10 +94,40 @@ func registerAdminCommands(registry *app.Registry, service *rpcalliance.Service)
 			},
 		},
 	}
+	if busClient, ok := app.Lookup[bus.IBus](registry, mods.ModBus); ok && busClient != nil {
+		definitions = append(definitions, admin.CommandDef{
+			Name: adminStopFounding,
+			Description: "stop taking new alliances on THIS instance (scale-in, step 1): leave Found's bus queue group, so founding " +
+				"requests go to the other instances; route RPCs on what it owns keep arriving on its own subject. Not undone until the " +
+				"process restarts. Then alliance.transfer {count, to_sid} until it owns nothing, then stop it",
+			Handler: func(context.Context, admin.Command) (admin.Result, error) {
+				if err := stopFounding(busClient); err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{"left": rpcalliance.MethodFound}}, nil
+			},
+		})
+	}
 	for _, definition := range definitions {
 		if err := commands.Register(definition); err != nil {
 			return fmt.Errorf("alliance: admin command %s: %w", definition.Name, err)
 		}
+	}
+	return nil
+}
+
+// stopFounding takes this instance out of the queue group Found is delivered
+// through (bus.RPCQueueLeaver): a founding request goes to one instance of
+// the group, so after this it lands on the others. Route RPCs are sent to an
+// owner's own subject and are not affected; an instance keeps serving what it
+// owns until alliance.transfer has moved it away. Idempotent.
+func stopFounding(busClient bus.IBus) error {
+	leaver, ok := busClient.(bus.RPCQueueLeaver)
+	if !ok {
+		return fmt.Errorf("alliance: this bus (%T) cannot leave an rpc queue group", busClient)
+	}
+	if err := leaver.LeaveRPCQueue(rpcalliance.MethodFound); err != nil {
+		return fmt.Errorf("alliance: leave the %s queue group: %w", rpcalliance.MethodFound, err)
 	}
 	return nil
 }

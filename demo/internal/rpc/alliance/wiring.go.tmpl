@@ -120,8 +120,8 @@ func (e lifecycleEntities) EnsureShard(ctx context.Context, sid int32) error {
 }
 
 // mongoSequence is Sequence over one Mongo counter: $inc with upsert,
-// answered after the update (the demo's guild ids are minted the same way,
-// nextGuildID). Founding is rare, so one counter is not contended.
+// answered after the update. Founding is rare, so one counter is not
+// contended.
 type mongoSequence struct{ coll fmongo.ICollection }
 
 func (m mongoSequence) Next(ctx context.Context) (int64, error) {

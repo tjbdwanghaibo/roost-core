@@ -6,8 +6,8 @@ package dbdef
 // service instance that owns it (its Remote ownership record; the id is a
 // number from one counter and says nothing about the instance). Game
 // processes never write it: they call
-// the service's RPC, and read it through a Remote mirror (phase 4 of the
-// alliance plan). Members is the single authority on who is in the alliance;
+// the service's RPC, and read it through a Remote mirror
+// (game/entities/alliance AllianceMirror). Members is the single authority on who is in the alliance;
 // the per-player AllianceMember only guards "one player, one alliance" and
 // yields to this roster when the two disagree.
 //

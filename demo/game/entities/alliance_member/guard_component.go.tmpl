@@ -139,13 +139,48 @@ func (component *GuardComponent) Clear(allianceID int64, joinRequestID string, n
 	return true
 }
 
+// ClaimReward records that the player took the alliance reward of period
+// under requestID (the claim step of the reward saga). Only a member claims,
+// once per period: the guard is the player's side of the alliance, and the
+// period mark lives beside the membership so a claim and a leave serialise
+// on one lock. It checks before it changes anything (alliancerule.Execute).
+// Returns the alliance the reward was claimed in.
+func (component *GuardComponent) ClaimReward(requestID string, period int64) (int64, error) {
+	dao := component.owner.Dao()
+	if dao.GetAllianceID() == 0 {
+		return 0, errcode.Wrap(apperrors.ErrAllianceMissing, nil, "player_id", component.PlayerID())
+	}
+	if dao.GetRewardPeriod() >= period {
+		return dao.GetAllianceID(), errcode.Wrap(apperrors.ErrAllianceReward, nil, "period", period, "claimed_by", dao.GetRewardRequestID())
+	}
+	dao.SetRewardPeriod(period)
+	dao.SetRewardRequestID(requestID)
+	return dao.GetAllianceID(), nil
+}
+
+// ReleaseReward undoes the claim requestID made (the reward saga's
+// compensation: the game could not hand the reward over). A claim that is not
+// requestID's — never made, already released, or a later period's — is left
+// alone and ReleaseReward reports false, so a redelivered release changes
+// nothing and can never release somebody else's claim.
+func (component *GuardComponent) ReleaseReward(requestID string) bool {
+	dao := component.owner.Dao()
+	if requestID == "" || dao.GetRewardRequestID() != requestID {
+		return false
+	}
+	dao.SetRewardPeriod(0)
+	dao.SetRewardRequestID("")
+	return true
+}
+
 // State is the guard as answered to callers, at version.
 func (component *GuardComponent) State(version int64) alliancerule.MemberState {
 	dao := component.owner.Dao()
 	return alliancerule.MemberState{
 		PlayerID: component.PlayerID(), AllianceID: dao.GetAllianceID(), JoinRequestID: dao.GetJoinRequestID(),
 		PendingAllianceID: dao.GetPendingAllianceID(), PendingRequestID: dao.GetPendingRequestID(),
-		PendingDeadlineUnix: dao.GetPendingDeadlineUnix(), LeftAtUnix: dao.GetLeftAtUnix(), Version: version,
+		PendingDeadlineUnix: dao.GetPendingDeadlineUnix(), LeftAtUnix: dao.GetLeftAtUnix(),
+		RewardPeriod: dao.GetRewardPeriod(), Version: version,
 	}
 }
 

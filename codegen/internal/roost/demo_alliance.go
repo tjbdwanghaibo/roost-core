@@ -8,10 +8,11 @@ import (
 )
 
 // demoAllianceService is the alliance service the demo adds beside the game
-// (phase 3 of docs/maintenance/FEATURE-2026-11-04-alliance-service.md): an
-// entity service that owns every Alliance and AllianceMember. Nothing in the
-// game calls it yet — the demo's Guild keeps working as before — and phase 4
-// moves the guild onto it.
+// (phases 3 and 4 of docs/maintenance/FEATURE-2026-11-04-alliance-service.md):
+// an entity service that owns every Alliance and AllianceMember. The game's
+// guild is this service: the game process has no Remote write runtime, calls
+// the alliance RPC for every guild write (directly, or as the guild step of a
+// saga) and reads guilds through Remote mirrors.
 const demoAllianceService = "alliance"
 
 // demoAllianceSteps builds the alliance service with the generator commands
@@ -26,7 +27,7 @@ const demoAllianceService = "alliance"
 // roost add rpc -entity-service makes the owner Mod start after Nest and the
 // preload. The request receipts, the rules, the founding and the two-step
 // join are the demo's own code.
-func demoAllianceSteps() []demoScaffoldStep {
+func demoAllianceSteps(gameService string) []demoScaffoldStep {
 	return []demoScaffoldStep{
 		{add: &AddOptions{Kind: "service", Name: demoAllianceService, Mods: []string{"dataengine", "etcd", "mongo", "nats", "nest", "redis", "remote_entity"}},
 			why: "the alliance service: its own process with Nest, the Data Engine and the Remote runtime, owning every alliance (plan §2.1)"},
@@ -102,7 +103,80 @@ func demoAllianceSteps() []demoScaffoldStep {
 		{write: "internal/service/alliance/alliance_reservation_due_consumer.go", why: "settle with the alliance, then resolve the guard"},
 		{write: "internal/service/alliance/alliance_war_declared_consumer.go", why: "the enemy side of a cross-instance declaration"},
 		{run: demoAllianceConfig, why: "the alliance.* section in the alliance service's configs, and a dev WAL directory of its own"},
+		{run: enableDemoAllianceAdmin, why: "the alliance dev config enables the ops admin endpoint: alliance.transfer / info / guard / stop_founding on a developer machine"},
+		{write: "internal/service/alliance/admin_test.go", why: "stop_founding on a real NATS bus: after it, founding requests land on the other instance and route RPCs still reach this one"},
+		{write: "deploy/dev/second-alliance.sh", why: "a second alliance instance on this machine (its own sid, ops port, advertise address and WAL directory): founding spreads over both"},
+
+		// The game side (phase 4): the guild is the alliance service's.
+		{write: "game/entities/alliance/mirror.go", why: "the alliance mirror DTO a game server reads (//roost:mirror), in the shape a write answers with"},
+		{write: "game/entities/alliance_member/mirror.go", why: "the guard mirror: which guild a player is in, one read by the player's id"},
+		{write: "game/guild/guild.go", why: "the game's side: the price of a guild, the guild sagas' payload, the service's four answers as client codes"},
+		{add: &AddOptions{Kind: "saga", Name: "AllianceFound", Service: gameService, Steps: []string{"debit", "found"}}, why: "found a guild: the fee from the Bag (native), then Found on the alliance service (Mongo step)"},
+		{add: &AddOptions{Kind: "saga", Name: "AllianceDonate", Service: gameService, Steps: []string{"debit", "donate"}}, why: "donate: the coins from the Bag (native), then Donate (Mongo step)"},
+		{add: &AddOptions{Kind: "saga", Name: "AllianceReward", Service: gameService, Steps: []string{"claim", "grant"}}, why: "the guild reward: ClaimReward on the guard (Mongo step), then the grant (native)"},
+		{write: "saga/alliance_found/steps.go", why: "registration lives with the service (alliance_saga.go): bound-sid admission and the alliance RPC"},
+		{write: "saga/alliance_donate/steps.go", why: "registration lives with the service (alliance_saga.go)"},
+		{write: "saga/alliance_reward/steps.go", why: "registration lives with the service (alliance_saga.go)"},
+		{add: &AddOptions{Kind: "handler", Name: "ShowGuild", Entity: "Player", Component: "Profile"}, why: "which guild the player is shown in: a nopersist,sync display field"},
+		{write: "game/handler/show_guild.go", why: "set at login, after the player's own join / leave, on a notice; a leave notice hides only the guild it is about"},
+		{add: &AddOptions{Kind: "handler", Name: "StartGuildOp", Entity: "Player", Component: "Bag"}, why: "a guild saga starts inside the player's transaction"},
+		{write: "game/handler/start_guild_op.go", why: "check the coins under the lock, emit the saga start in the same WAL record"},
+		{add: &AddOptions{Kind: "handler", Name: "GuildDebit", Entity: "Player", Component: "Bag"}, why: "the guild sagas' native Bag debit"},
+		{write: "game/handler/guild_debit.go", why: "fee, donation, taking a late reward back: receipt and Bag in one WAL record"},
+		{add: &AddOptions{Kind: "handler", Name: "GuildCredit", Entity: "Player", Component: "Bag"}, why: "the guild sagas' native Bag credit"},
+		{write: "game/handler/guild_credit.go", why: "refunds and the reward grant: a full stack refuses, and the coordinator compensates"},
+		{write: "game/handler/guild_steps_test.go", why: "the native steps on a real Nest: the debit takes once however often it is delivered, the refund puts it back, a full bag refuses the grant"},
+		{write: "db/guild_display_test.go", why: "PlayerDao.GuildID is shown (sync) but never persisted: the roster is the only authority"},
+		{run: demoGameUsesAlliance, why: "the game calls the alliance RPC (uses_rpcs: [alliance]) and prices a guild (guild.found_cost)"},
+		{add: &AddOptions{Kind: "protocol", Name: "Guild", Group: "game", Handler: "player"}, why: "the guild endpoints: found / donate / claim (sagas), join / leave (RPC), info (mirror), op status"},
+		{write: "protocol/def/guild.go", why: "one response shape for writes and reads, the version to read after, the saga key"},
+		{add: &AddOptions{Kind: "protocol", Name: "GuildNotice", Group: "game", Handler: "player"}, why: "the server push for a membership notice"},
+		{write: "protocol/def/guild_notice.go", why: "a notify: guild, change, version"},
+		{write: "game/controllers/player/guild.go", why: "every write is the alliance RPC or a saga whose guild step is one; every read is a mirror"},
+		{write: "game/controllers/player/guild_test.go", why: "invalid names refused before anything moves, the four answers as codes, mirror reads and MinVersion"},
+		{write: "internal/service/game/alliance_saga.go", why: "the guild sagas' twelve steps: Player steps native on the bound sid, guild steps through the RPC with the IdempotencyKey as request id"},
+		{write: "internal/service/game/alliance_saga_test.go", why: "a refused founding refunds the fee; not executed and unknown redeliver; the reward claim and its release"},
+		{write: "internal/service/game/alliance_notice.go", why: "membership notices update an online player's display and reach their client; offline players catch up at login"},
+		{write: "internal/service/game/alliance_notice_test.go", why: "a notice reaches an online member and loads nobody offline; a late leave does not hide a newer guild"},
 	}
+}
+
+// demoGameUsesAlliance makes the game service a caller of the alliance RPC
+// (services.<game>.uses_rpcs: [alliance]: the generated ClientMod, whose route
+// methods find an entity's owner through the remote_mirror Mod's lookup) and
+// writes the guild.* section the game declares (game/settings Guild). It runs
+// after roost add rpc, because a manifest naming an rpc nobody owns is refused.
+func demoGameUsesAlliance(root, gameService string) error {
+	manifestBefore, err := os.ReadFile(filepath.Join(root, ManifestName))
+	if err != nil {
+		return err
+	}
+	m, err := LoadManifest(root)
+	if err != nil {
+		return err
+	}
+	spec := m.Services[gameService]
+	if !contains(spec.UsesRpcs, demoAllianceService) {
+		spec.UsesRpcs = append(append([]string(nil), spec.UsesRpcs...), demoAllianceService)
+		m.Services[gameService] = spec
+		// Synced like roost add mod: the bootstrap assembles the ClientMod and
+		// the shutdown budget counts it.
+		if err := commitManifestSync(root, manifestBefore, m); err != nil {
+			return err
+		}
+	}
+	const block = "guild:\n" +
+		"  # Gold coins (item 9001) the found_guild saga takes from the founder;\n" +
+		"  # refunded when the alliance service refuses the founding.\n" +
+		"  found_cost: 100\n"
+	return appendDemoGameConfig(root, gameService, "guild", block, block)
+}
+
+// enableDemoAllianceAdmin turns the ops admin endpoint on in the alliance
+// service's dev config, as enableDemoAdmin does for the game: the alliance
+// operator commands answer on its ops.addr with the dev token.
+func enableDemoAllianceAdmin(root, _ string) error {
+	return enableDemoAdmin(root, demoAllianceService)
 }
 
 // demoAllianceConfig writes the alliance.* section into the alliance
@@ -130,7 +204,12 @@ func demoAllianceConfig(root, _ string) error {
 		"  max_members: 100\n" +
 		"  reservation_ttl: 30s\n" +
 		"  receipt_retention: 168h\n" +
-		"  rejoin_cooldown: 0s\n"
+		"  rejoin_cooldown: 0s\n" +
+		"  # The alliance reward (prototype defaults): reward_count of reward_item_id\n" +
+		"  # per member per reward_period; the game hands it over in its reward saga.\n" +
+		"  reward_item_id: 1002\n" +
+		"  reward_count: 5\n" +
+		"  reward_period: 24h\n"
 	if err := appendDemoGameConfig(root, demoAllianceService, "alliance", block, block); err != nil {
 		return err
 	}

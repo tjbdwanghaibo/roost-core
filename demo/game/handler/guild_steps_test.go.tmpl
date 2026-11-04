@@ -1,0 +1,162 @@
+package handler
+
+import (
+	"context"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"{{MODULE}}/configs/generated"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/guild"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	alliancefound "{{MODULE}}/saga/alliance_found"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+)
+
+// pipelinedRecorder is a committer for durability=pipelined handlers (the
+// guild sagas' native steps): every record is durable at once.
+type pipelinedRecorder struct {
+	mu      sync.Mutex
+	records []dataengine.CommitRecord
+}
+
+type durableTicket uint64
+
+func (t durableTicket) LSN() uint64 { return uint64(t) }
+func (durableTicket) Done() <-chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (durableTicket) Err() error { return nil }
+
+func (c *pipelinedRecorder) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.records = append(c.records, dataengine.CloneCommitRecord(record))
+	return nil
+}
+
+func (c *pipelinedRecorder) Enqueue(ctx context.Context, record dataengine.CommitRecord) (nest.CommitTicket, error) {
+	if err := c.Commit(ctx, record); err != nil {
+		return nil, err
+	}
+	return durableTicket(c.DurableLSN()), nil
+}
+
+func (c *pipelinedRecorder) DurableLSN() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return uint64(len(c.records))
+}
+
+// newGuildStepHarness is one Player on a real Nest whose committer takes
+// pipelined records, with the project's item table loaded.
+func newGuildStepHarness(t *testing.T) (*player.Player, nest.Client) {
+	t.Helper()
+	player.RegisterEntity()
+	RegisterAddItemNestHandlers()
+	RegisterGuildDebitNestHandlers()
+	RegisterGuildCreditNestHandlers()
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatalf("register config data: %v", err)
+	}
+	store := configdata.NewStore(registry, filepath.Join("..", "..", "configs", "data"))
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatalf("load config data: %v", err)
+	}
+	configdata.SetDefaultStore(store)
+	id, err := entity.BuildEntityID(4343, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: player.EntityKindPlayer, Id: id})
+	if err != nil {
+		t.Fatalf("build player: %v", err)
+	}
+	value := built.(*player.Player)
+	engine := nest.NewEngine(
+		nest.NestOptionWithGetter(singleEntityGetter{value: value}),
+		nest.NestOptionWithTransactionCommitter(&pipelinedRecorder{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}),
+	)
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start nest: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	return value, engine
+}
+
+func guildCommand(t *testing.T, key string, attempt uint32, phase saga.Phase, topic string) saga.Command {
+	t.Helper()
+	payload, err := guild.Encode(guild.State{PlayerID: 4343, SID: 1000, Coins: 100, Name: "g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	return saga.Command{
+		ID: key + "/" + string(rune('0'+attempt)), IdempotencyKey: key, SagaID: "guild-saga", SagaType: alliancefound.Type,
+		DefinitionVersion: alliancefound.Version, BusinessKey: "guild-found:4343", StepName: "debit", Phase: phase,
+		Attempt: attempt, Topic: topic, Payload: payload, DeadlineAt: now.Add(time.Hour), CreatedAt: now,
+	}
+}
+
+// The guild sagas' native Bag steps: the fee is taken once per operation
+// however often its command is delivered (the receipt in PlayerDao.SagaReceipts
+// replays), the refund — the debit's compensation, a different operation —
+// puts it back, and a grant into a full stack is a refusal the coordinator
+// compensates, with the Bag untouched.
+func TestGuildNativeStepsTakeEffectOncePerOperation(t *testing.T) {
+	subject, client := newGuildStepHarness(t)
+	ctx := context.Background()
+	if _, err := syncsender.NewAddItemSender(client).Sync_AddItem(ctx, subject.ID(), guild.CoinItemID, 150); err != nil {
+		t.Fatal(err)
+	}
+	debit := func(command saga.Command) saga.StepOutcome {
+		t.Helper()
+		outcome, err := saga.RunNativeStep(ctx, command, 0, func(ctx context.Context, step saga.NativeStep) error {
+			_, err := syncsender.NewGuildDebitSender(client).Sync_GuildDebit(ctx, subject.ID(), guild.CoinItemID, 100, step)
+			return err
+		})
+		if err != nil {
+			t.Fatalf("debit %s: %v", command.ID, err)
+		}
+		return outcome
+	}
+	first := debit(guildCommand(t, "fee-1", 1, saga.PhaseForward, alliancefound.TopicDebit))
+	if first.Kind != saga.StepExecuted || !first.Completion.Success || subject.BagComp().ItemCount(guild.CoinItemID) != 50 {
+		t.Fatalf("first debit = %+v, coins %d; want executed, 50 left", first, subject.BagComp().ItemCount(guild.CoinItemID))
+	}
+	again := debit(guildCommand(t, "fee-1", 2, saga.PhaseForward, alliancefound.TopicDebit))
+	if again.Kind != saga.StepReplayed || subject.BagComp().ItemCount(guild.CoinItemID) != 50 {
+		t.Fatalf("redelivered debit = %+v, coins %d; want the receipt replayed and 50 left", again, subject.BagComp().ItemCount(guild.CoinItemID))
+	}
+	refund, err := saga.RunNativeStep(ctx, guildCommand(t, "fee-1-refund", 1, saga.PhaseCompensate, alliancefound.TopicDebitCompensation), 0,
+		func(ctx context.Context, step saga.NativeStep) error {
+			_, err := syncsender.NewGuildCreditSender(client).Sync_GuildCredit(ctx, subject.ID(), guild.CoinItemID, 100, step)
+			return err
+		})
+	if err != nil || refund.Kind != saga.StepExecuted || !refund.Completion.Success || subject.BagComp().ItemCount(guild.CoinItemID) != 150 {
+		t.Fatalf("refund = %+v, %v, coins %d; want the fee back (150)", refund, err, subject.BagComp().ItemCount(guild.CoinItemID))
+	}
+
+	const manaPotion = int64(1002)
+	if _, err := syncsender.NewAddItemSender(client).Sync_AddItem(ctx, subject.ID(), manaPotion, 99); err != nil {
+		t.Fatal(err)
+	}
+	grant, err := saga.RunNativeStep(ctx, guildCommand(t, "reward-1", 1, saga.PhaseForward, alliancefound.TopicDebit), 0,
+		func(ctx context.Context, step saga.NativeStep) error {
+			_, err := syncsender.NewGuildCreditSender(client).Sync_GuildCredit(ctx, subject.ID(), manaPotion, 5, step)
+			return err
+		})
+	if err != nil || grant.Kind != saga.StepExecuted || grant.Completion.Success || grant.Completion.Retryable || subject.BagComp().ItemCount(manaPotion) != 99 {
+		t.Fatalf("grant into a full stack = %+v, %v, potions %d; want a non-retryable refusal and the stack unchanged", grant, err, subject.BagComp().ItemCount(manaPotion))
+	}
+}

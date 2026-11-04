@@ -37,8 +37,13 @@ import (
 const defaultConfig = "configs/service/config.{{GAME_SERVICE}}.yaml"
 
 // remoteManaged 是本工程 remote=managed 实体的集合（"<逻辑库>/<集合>"）：落在按 sid 分库里时报告会点名，所有权
-// 元数据按 Remote 规则另行处理。game-demo 的 Guild 在共享库 main 里，合服不搬它。
-var remoteManaged = []string{db.GuildDaoDBName + "/" + db.GuildDaoCollection}
+// 元数据按 Remote 规则另行处理。game-demo 的公会是联盟服务的 Alliance / AllianceMember（共享库 main，只由
+// alliance 服务写），不归任何 game sid，合服不搬它们。成员记录里的原服 sid 只用于成员变化通知：合服后发往
+// 被合并 sid 的通知没有进程接收，按尽力投递丢弃，玩家下次登录从 Mirror 补齐显示。
+var remoteManaged = []string{
+	db.AllianceDaoDBName + "/" + db.AllianceDaoCollection,
+	db.AllianceMemberDaoDBName + "/" + db.AllianceMemberDaoCollection,
+}
 
 func main() {
 	if len(os.Args) < 2 {

@@ -96,17 +96,20 @@ type PlayerDao struct {
 	//
 	// 当前 schema 为 2；框架只加载同版本文档，不自动转换历史数据。
 	PurchaseClaims map[string]int64 `dao:"persist,map=fast" store:"purchase_claims"`
-	// GuildID is the guild this player belongs to, or 0.
+	// GuildID is the guild this player is shown in, or 0 — a display field,
+	// not a fact of the player's.
 	//
-	// The roster lives on the guild — which is a remote-managed entity owned
-	// by whichever process holds its lock — and this is the player's own copy
-	// of one fact from it. Two places for one fact is normally the thing to
-	// avoid; it is right here because the alternative is taking a distributed
-	// lock every time the game wants to know whether a player has a guild.
-	// The rule that keeps them from drifting: both are written in the SAME
-	// transaction (game/handler/join_guild.go), which is possible precisely
-	// because Nest can lock a remote entity and a local one together.
-	GuildID int64 `dao:"persist,sync" store:"guild_id"`
+	// Membership has one authority: the alliance's roster, owned and written
+	// by the alliance service (decision 1 of the alliance plan,
+	// docs/maintenance/FEATURE-2026-11-04-alliance-service.md in roost-core).
+	// A persisted copy here would be a second fact that a process on another
+	// machine cannot write in the same transaction, and the two would drift.
+	// So it is nopersist: filled at login from the player's guard mirror,
+	// changed by this player's own join / leave answers and by the alliance
+	// service's membership notices (internal/service/{{GAME_SERVICE}}/alliance_notice.go),
+	// and replicated (sync) so nearby players see the guild. No write decision
+	// reads it: the alliance service decides every guild write on its roster.
+	GuildID int64 `dao:"nopersist,sync" store:"guild_id"`
 	// SagaReceipts is where the gift saga's native steps (debit and its
 	// refund) keep their receipts: operation (saga.Command.IdempotencyKey) ->
 	// the framework's encoding of saga.StepReceipt. The step writes it in the

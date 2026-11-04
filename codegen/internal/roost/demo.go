@@ -114,16 +114,26 @@ func applyDemoTemplate(m *Manifest, gameService string) error {
 		game.Mods = append(game.Mods, "redis")
 		m.Services[gameService] = game
 	}
-	// The guild is a remote-managed entity: it belongs to whichever process
-	// holds its distributed lock, not to the one that created it. That is the
-	// only way a roster shared by players on different processes can be
-	// written correctly, and it needs the remote-entity runtime (which brings
-	// room with it).
+	// The guild is the alliance service's (demo_alliance.go): every alliance
+	// and every player's membership guard is owned and written by that
+	// service. The game process gets the read-only Remote mirror runtime and
+	// no Remote write runtime at all (the default game mods include
+	// remote_entity; it is taken out here) — without remote_entity it has no way to
+	// write, or claim, a guild entity, so the alliance RPC is the only path to
+	// a guild write (decision S of the alliance plan). uses_rpcs: [alliance]
+	// is added once the rpc exists (demoGameUsesAlliance).
 	game = m.Services[gameService]
-	if resolved, err := resolveMods(game.Mods); err == nil && !contains(resolved, "remote_entity") {
-		game.Mods = append(game.Mods, "remote_entity")
-		m.Services[gameService] = game
+	readOnly := make([]string, 0, len(game.Mods)+1)
+	for _, mod := range game.Mods {
+		if mod != "remote_entity" {
+			readOnly = append(readOnly, mod)
+		}
 	}
+	if !contains(readOnly, "remote_mirror") {
+		readOnly = append(readOnly, "remote_mirror")
+	}
+	game.Mods = readOnly
+	m.Services[gameService] = game
 	for _, feature := range []string{"protocol", "entity", "nest", "dao", "config", "errcode", "attribute"} {
 		if !contains(m.Features, feature) {
 			m.Features = append(m.Features, feature)
@@ -625,30 +635,10 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{add: &AddOptions{Kind: "handler", Name: "GrantPurchase", Entity: "Player", Component: "Bag"}, why: "a paid order becomes items: the order id lands in the same WAL record as the grant"},
 		{write: "game/handler/grant_purchase.go", why: "the third instance of one shape: authoritative moment in, identity recorded in the same transaction, admission and pruning the same predicate"},
 		{write: "game/handler/grant_purchase_test.go", why: "the replay a client cannot produce: the same order drained twice grants once, and a grant past its window is refused rather than repeated"},
-		{add: &AddOptions{Kind: "entity", Name: "Guild"}, why: "the demo's first entity that does not belong to one process"},
-		{write: "db/def/guild.go", why: "the roster: a map of members, written under a distributed lock"},
-		{write: "game/entities/guild/entity.go", why: "remote=managed and EntityCategoryRemote: the distributed lock is taken before any local mutex, so a remote kind must rank first"},
-		{add: &AddOptions{Kind: "lifecycle", Name: "Guild", Service: gameService}, why: "founding creates the aggregate before anything can lock it: a remote entity is loaded from the store, so it has to be in the store"},
-		{write: "game/entities/guild/roster_component.go", why: "found / join / snapshot, all under the guild's lock — a handler cannot tell it crossed a network"},
-		{write: "internal/errors/guild_name.go", why: "a coded failure in the manifest's errcode space"},
-		{write: "internal/errors/guild_exists.go", why: "founding is insert-only on the guild's own state: two processes racing produce one guild and one refusal"},
-		{write: "internal/errors/guild_missing.go", why: "\"you joined nothing\" and \"the guild is gone\" are different things to a player"},
-		{write: "internal/errors/guild_full.go", why: "the roster is one locked document per write, so its size is a real limit"},
-		{write: "internal/errors/guild_busy.go", why: "拿不到远端锁是可重试的暂时答案（最常见的原因是进程刚重启、前任的租约还没过期），不是内部错误"},
-		{add: &AddOptions{Kind: "handler", Name: "FoundGuild", Entity: "Guild", Component: "Roster"}, why: "two entities, guild first: the remote lock is taken at the top of the dispatch"},
-		{write: "game/handler/found_guild.go", why: "the player's copy of \"which guild\" is written in the same transaction as the roster"},
-		{add: &AddOptions{Kind: "handler", Name: "JoinGuild", Entity: "Guild", Component: "Roster"}, why: "the demo's one operation that genuinely crosses processes"},
-		{write: "game/handler/join_guild.go", why: "a remote entity and a local one held together; the handler cannot tell the difference"},
-		{add: &AddOptions{Kind: "handler", Name: "GuildInfo", Entity: "Guild", Component: "Roster"}, why: "a read still takes the distributed lock; saying so beats pretending it is free"},
-		{write: "game/handler/guild_info.go", why: "what a mirror would be for, and why this demo does not use one"},
-		{add: &AddOptions{Kind: "handler", Name: "PlayerGuild", Entity: "Player", Component: "Profile"}, why: "\"which guild am I in\" costs a local lock, not a distributed one"},
-		{write: "game/handler/player_guild.go", why: "the player's own copy, written by the join transaction"},
-		{add: &AddOptions{Kind: "protocol", Name: "Guild", Group: "game", Handler: "player"}, why: "the guild endpoints: found, join, read"},
-		{write: "protocol/def/guild.go", why: "three messages behind one response shape, carrying which process served the call"},
-		{write: "game/controllers/player/guild.go", why: "read against the dungeon endpoints: the remote entity changes nothing at this layer"},
-		{write: "game/controllers/player/guild_ids.go", why: "persistent guild IDs must survive process restarts"},
-		{write: "game/controllers/player/guild_ids_test.go", why: "same-sid restarts and concurrent creators must not reuse guild IDs"},
-		{write: "game/controllers/player/guild_test.go", why: "a guild name that is invalid on its face is refused before any state read, durable id reservation or entity creation"},
+		{write: "internal/errors/guild_missing.go", why: "\"you are in no guild\" and \"that guild was never founded\" are different things to a player"},
+		{write: "internal/errors/guild_busy.go", why: "the alliance service did not execute the request (no instance ready, a guild being moved): retryable, not an internal error"},
+		{write: "internal/errors/guild_moved.go", why: "the redirect to a guild's owner did not reach it either: an operator is moving it; retryable"},
+		{write: "internal/errors/guild_pending.go", why: "no answer in time: the write may have happened, and the same request id is answered from the receipt"},
 		{write: "game/controllers/player/enter_game_test.go", why: "a cold login stuck behind its projection answers login_timeout within the login budget and leaves the shared load running; a login without a server_id claim, or bound to another server, is refused as player_elsewhere before anything loads"},
 		{add: &AddOptions{Kind: "protocol", Name: "Purchase", Group: "game", Handler: "player"}, why: "buying: the demo plays the payment provider, everything around that is real"},
 		{write: "protocol/def/purchase.go", why: "a product id in; the order, the receipt's replay flag and the bag count out"},
@@ -736,7 +726,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/chat/collaborators.go", why: "a chat service with a written-down policy, one text type and a granted system path"},
 		{write: "internal/service/session/collaborators.go", why: "a session service whose releaser frees the demo's (resource-less) dungeon"},
 	}
-	return append(steps, demoAllianceSteps()...)
+	return append(steps, demoAllianceSteps(gameService)...)
 }
 
 // scaffoldDemoTemplate builds the demo on top of the game template: Player

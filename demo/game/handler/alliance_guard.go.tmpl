@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"time"
 
 	"{{MODULE}}/game/alliancerule"
@@ -69,4 +70,41 @@ func handlerGuardInfo(target alliance_member.IGuardEntity) (alliancerule.MemberS
 func handlerGuardReceipt(target alliance_member.IGuardEntity, requestID string) (alliancerule.ReceiptAnswer, error) {
 	receipt, found := target.GuardComp().Receipt(requestID)
 	return alliancerule.ReceiptAnswer{Found: found, Receipt: receipt}, nil
+}
+
+// handlerGuardClaimReward is the reward saga's claim step on the service side:
+// mark this period's alliance reward as taken by requestID, with its receipt,
+// so a redelivered claim replays instead of claiming twice and a second claim
+// in the same period is refused (alliance_reward). The reward itself is the
+// game's to hand over (the saga's next step, on the player's game server).
+//
+// Periods are counted on the business clock: period n covers
+// [(n-1)·periodSeconds, n·periodSeconds), so 0 means "never claimed". The
+// answer's Subject is the alliance the reward was claimed in.
+//
+//roost:nest rollback=undo durability=strict
+func handlerGuardClaimReward(target alliance_member.IGuardEntity, requestID string, periodSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
+	if periodSeconds <= 0 {
+		return alliancerule.GuardAnswer{}, fmt.Errorf("alliance reward: period must be positive, got %ds", periodSeconds)
+	}
+	guard := target.GuardComp()
+	period := nowUnix/periodSeconds + 1
+	outcome, err := guard.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		return guard.ClaimReward(requestID, period)
+	})
+	if err != nil {
+		return alliancerule.GuardAnswer{}, err
+	}
+	return alliancerule.GuardAnswer{Outcome: outcome, State: guard.State(guard.CurrentVersion())}, nil
+}
+
+// handlerGuardReleaseReward undoes the claim claimRequestID made (the reward
+// saga's compensation). Only that claim is touched, so a redelivered release
+// changes nothing.
+//
+//roost:nest rollback=undo durability=strict
+func handlerGuardReleaseReward(target alliance_member.IGuardEntity, claimRequestID string) (alliancerule.GuardAnswer, error) {
+	guard := target.GuardComp()
+	changed := guard.ReleaseReward(claimRequestID)
+	return alliancerule.GuardAnswer{Changed: changed, State: guard.State(guard.CurrentVersion())}, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"{{MODULE}}/game/alliancerule"
 	"{{MODULE}}/game/effects"
@@ -84,6 +85,53 @@ func (s *Service) ClearGuard(ctx context.Context, target int64, allianceID int64
 	return s.guardReply(answer, err)
 }
 
+// ClaimReward implements Alliance. A player claims only for themself: target
+// must be the caller's own guard.
+func (s *Service) ClaimReward(ctx context.Context, requestID string, callerID int64, _ int32, target int64) (RewardReply, error) {
+	var answer alliancerule.GuardAnswer
+	err := requireRequest(requestID, callerID)
+	if err == nil {
+		if own, guardErr := GuardTarget(callerID); guardErr != nil || own != target {
+			err = fmt.Errorf("%w: target %d is not the guard of player %d", ErrRequestInvalid, target, callerID)
+		}
+	}
+	if err == nil {
+		err = s.call(ctx, target, alliance_member.EntityKindAllianceMember, func(ctx context.Context) error {
+			if err := s.deps.Entities.EnsureGuard(ctx, callerID); err != nil {
+				return err
+			}
+			var err error
+			answer, err = syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardClaimReward(ctx, target, requestID,
+				int64(s.deps.Rules.RewardPeriod/time.Second), s.retention())
+			return err
+		})
+	}
+	if err == nil {
+		err = answer.Err()
+	}
+	return RewardReply{
+		State: answer.State, AllianceID: answer.Subject, ItemID: s.deps.Rules.RewardItemID, Count: s.deps.Rules.RewardCount,
+		Replayed: answer.Replayed, ServedBySID: s.deps.LocalSID,
+	}, err
+}
+
+// ReleaseReward implements Alliance.
+func (s *Service) ReleaseReward(ctx context.Context, target int64, claimRequestID string) (GuardReply, error) {
+	var answer alliancerule.GuardAnswer
+	err := requireRequest(claimRequestID)
+	if err == nil {
+		err = s.call(ctx, target, alliance_member.EntityKindAllianceMember, func(ctx context.Context) error {
+			if err := s.deps.Entities.EnsureGuard(ctx, entity.GetUniqueIDFromEntityID(target)); err != nil {
+				return err
+			}
+			var err error
+			answer, err = syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardReleaseReward(ctx, target, claimRequestID)
+			return err
+		})
+	}
+	return s.guardReply(answer, err)
+}
+
 // shard is this instance's AllianceShard id, created on first use.
 func (s *Service) shard(ctx context.Context) (int64, error) {
 	if err := s.deps.Entities.EnsureShard(ctx, s.deps.LocalSID); err != nil {
@@ -95,9 +143,10 @@ func (s *Service) shard(ctx context.Context) (int64, error) {
 // --- effect consumers (internal/service/alliance subscribes them) ---
 
 // MemberNotice is the best-effort notice a player's game server gets when
-// their membership changes; the game updates what it shows and pushes it to
-// the client (phase 4). A notice that is lost is made up for at the next
-// login, which reads the mirror.
+// their membership changes; the game updates what an online player is shown
+// and pushes GuildNotice to the client (internal/service/<game>/alliance_notice.go).
+// A notice that is lost is made up for at the next login, which reads the
+// mirror.
 type MemberNotice struct {
 	AllianceID int64  `json:"alliance_id"`
 	PlayerID   int64  `json:"player_id"`
