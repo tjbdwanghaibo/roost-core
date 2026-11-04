@@ -162,7 +162,7 @@ type Player struct {
 
 `service=<name>` 只在实体标记上声明一次（不在 `roost.yaml` 再写一份）。取值必须是 `roost.yaml` 声明的业务服务、带 Nest；`remote=managed` 时还要有 `remote_entity`，否则 `roost generate` 报出实体与服务名。声明之后：锁住这个 kind 的 `//roost:nest` handler 只在归属服务的 Nest 引擎上注册（生成 `Register<File>NestHandlersOn(mgr)`，由 `internal/registry/ownership_gen.go` 的 `NewOwnedNestHandlersMod` 在归属服务的 Provide 里注册），别的服务发过去得到“handler 未注册”；`remote=managed` 的归属 kind 进 `ForeignKinds(service)`，每个装 `remote_entity` 的服务的 RemoteEntityMod 带 `WithForeignKinds(registry.ForeignKinds("<service>")...)`，别的服务的进程认领与写许可前被拒（`entity.ErrRemoteKindNotOwned`）；本地 kind 的 `service=` 只影响 handler 注册；`roost add lifecycle` 缺省落到归属服务；doctor 的 `entity-owner` 检查别的服务构造了它的 Sender。一个 handler 锁住两个不同服务的 kind、同一源文件里 handler 归属不一致、方法 handler 或原生步骤 handler 锁住归属 kind、同一实体包里两个实体声明不同服务，都在生成期拒绝。改了 `service=` 先 `roost project sync` 再 `roost generate`（bootstrap 与生成物不一致时 generate 拒绝并给出这条命令）。
 
-归属服务拥有的 `remote=managed` kind 在实体加载后登记 Redis 路由（`registry.RouteKinds("<service>")`），它们之中写了 `preload=startup` 的起服预加载（`registry.PreloadKinds("<service>")`）；两份列表都在 `ownership_gen.go`，与 `ForeignKinds` 同一次扫描（联盟服务方案 §2.7）。只有拥有这类 kind 的服务的 rpc 能写 `//roost:rpc route`（见 [CODEGEN_REFERENCE](CODEGEN_REFERENCE.zh-CN.md)）。
+归属服务拥有的 `remote=managed` kind 在实体加载后登记 Redis 路由（`registry.RouteKinds("<service>")`），它们之中写了 `preload=startup` 的起服预加载（`registry.PreloadKinds("<service>")`）；两份列表都在 `ownership_gen.go`，与 `ForeignKinds` 同一次扫描（联盟服务方案 §2.7）。路由是方法级策略：标了 `//roost:rpc route` 的方法要求它所在 rpc 的拥有者托管这类 kind，不标 route 的 rpc 不受影响（见 [CODEGEN_REFERENCE](CODEGEN_REFERENCE.zh-CN.md)）。
 
 `remote=mirror`、`lifetime=mirror_cache` 不再生成实体。读已有完整 DAO 镜像时用 `//roost:mirror entityKind=... coll=...` DTO；按字段发布视图时用上一节的 `remoteview`。旧 `syncPacker` / `syncTopic` 不应使用，当前对应 `subjectPacker` / `syncNamespace`。
 

@@ -443,9 +443,10 @@ bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装
   前置检查在框架的路由改造里（方案第 4 节 1R），接上之前写了 route 的方法在生成期拒绝并写明原因，不生成发往任意实例的客户端。
 - 创建类方法（例如 `Found`）**不标** route，照旧走 NATS 队列组随机路由：NATS 只在已注册 handler 的实例里选，新实例一加入就承接新建。
   随机路由下同一个 requestID 的重发可能落到别的实例，所以它的回执要记在按稳定 ID 路由的实体上（例如发起者的成员守卫）。
-- 校验：路由键必须是方法的 `int64` 参数；不能与 `affinity=` 写在同一方法上，一个服务也不混用两种；拥有这个 rpc 的服务必须拥有
-  至少一个 Remote 托管 kind（`//roost:entity remote=managed service=<owner>`），否则 `roost generate` 拒绝——路由查找只认得这类
-  kind 的登记与所有权记录。旧的 `shard=` 生成期报“已移除”。
+- 路由是方法级策略：一个服务可以同时有 route、`affinity=` 与不标的方法，每个方法按自己的标记选路径，生成的客户端只要求该服务
+  实际用到的策略所需的构造参数。校验：路由键必须是方法的 `int64` 参数；同一个方法不能同时标 route 与 `affinity=`；标了 route 的
+  方法要求拥有这个 rpc 的服务托管至少一个 Remote 实体 kind（`//roost:entity remote=managed service=<owner>`），否则 `roost generate`
+  拒绝——路由查找只认得这类 kind 的登记与所有权记录。不标 route 的 rpc（例如 mail）不受影响。旧的 `shard=` 生成期报“已移除”。
 - 实体加载后在 Redis 登记路由的 kind，就是拥有者自己的 Remote 托管 kind（`registry.RouteKinds("<owner>")`，生成在
   `internal/registry/ownership_gen.go`）；需要起服就常驻的类型在实体标记上写 `preload=startup`（[§6.w](#6w-实体归属服务roostentity-service)）。
 

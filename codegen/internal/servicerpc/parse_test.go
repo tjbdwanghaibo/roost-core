@@ -989,7 +989,6 @@ func TestARouteKeyIsValidated(t *testing.T) {
 		"names no parameter":        {"//roost:rpc route=allianceID", "//roost:rpc route=guildID", "no parameter guildID"},
 		"not an int64":              {"//roost:rpc route\n\tJoin", "//roost:rpc route=requestID\n\tJoin", "requestID is string"},
 		"together with affinity":    {"//roost:rpc route=allianceID", "//roost:rpc route=allianceID affinity=requestID", "both route and affinity="},
-		"mixed with affinity":       {"\t// Found creates", "\t//roost:rpc affinity=name\n\t// Found creates", "mixes route and affinity="},
 		"shard is removed":          {"//roost:rpc route=allianceID", "//roost:rpc shard=allianceID", `marker option "shard" was removed`},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1001,6 +1000,23 @@ func TestARouteKeyIsValidated(t *testing.T) {
 				t.Fatalf("%s: got %v, want an error containing %q", tc.to, err, tc.want)
 			}
 		})
+	}
+}
+
+// 路由是方法级策略（维护者 2026-11-04）：一个服务可以同时有 route、affinity= 与不标的方法，每个方法按自己的标记
+// 选路径；只有同一个方法不能同时标 route 与 affinity=。
+func TestRouteAndAffinityMethodsCoexistInOneService(t *testing.T) {
+	mixed := strings.Replace(routedService, "\t// Found creates", "\t//roost:rpc affinity=name\n\t// Found creates", 1)
+	services, err := ParseDir(writeDir(t, mixed))
+	if err != nil {
+		t.Fatalf("a service with route, affinity= and unmarked methods was refused: %v", err)
+	}
+	got := map[string]string{}
+	for _, method := range services[0].Methods {
+		got[method.Name] = method.Route + "|" + method.Affinity
+	}
+	if got["Found"] != "|name" || got["Join"] != "target|" || got["Info"] != "allianceID|" {
+		t.Fatalf("parsed (route|affinity) %v, want Found affinity=name, Join route target, Info route allianceID", got)
 	}
 }
 

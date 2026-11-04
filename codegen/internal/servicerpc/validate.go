@@ -110,7 +110,8 @@ func buildService(facts pkgFacts, pkgName, path, name string, options map[string
 	}
 	// route 方法按实体的 owner 选实例（联盟服务方案 §2.3、§2.10 第 2 项，维护者 2026-11-04“按推荐”）：路由键是方法的
 	// int64 参数，取完整 Entity ID——kind 在 ID 里，Redis 路由登记与持久所有权记录都按它查，标记不用再写 kind。
-	// 与 affinity= 是两种互斥的选实例方式：一个按 owner，一个按 key 的哈希。
+	// 路由是方法级策略（维护者 2026-11-04）：一个服务里可以同时有 route、affinity= 与不标的方法，每个方法按自己的标记
+	// 选路径；同一个方法不能既按 owner 又按 key 的哈希选实例。
 	for index := range service.Methods {
 		method := &service.Methods[index]
 		if method.Route == "" {
@@ -135,16 +136,6 @@ func buildService(facts pkgFacts, pkgName, path, name string, options map[string
 			return Service{}, fmt.Errorf("%s: method %s is a route method keyed by %s, but %s is %s; the route key is the int64 full entity id of the entity the call acts on",
 				where, method.Name, method.Route, found.Name, found.Type)
 		}
-	}
-	// 一个服务的方法要么按 owner 路由、要么按亲和：两种客户端的构造参数不同（路由查找 vs 服务发现）。实体服务按 owner
-	// 路由，亲和用于按 key 分区的无实体服务（match），两种混在一个服务里没有使用者。
-	hasRoute, hasAffinity := false, false
-	for _, method := range service.Methods {
-		hasRoute = hasRoute || method.Route != ""
-		hasAffinity = hasAffinity || method.Affinity != ""
-	}
-	if hasRoute && hasAffinity {
-		return Service{}, fmt.Errorf("%s: %s mixes route and affinity= methods; a service routes to entity owners or by affinity, not both", where, service.Interface)
 	}
 	// Affinity is read off an argument at call time, so it has to name one.
 	//
