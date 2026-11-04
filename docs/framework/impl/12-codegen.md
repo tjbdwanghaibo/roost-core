@@ -102,6 +102,15 @@ DESIGN-TODO D20～D22 的生成器接入（维护者 2026-10-21 要求）。[add
 
 回归：[nest/owner_test.go](../../../codegen/internal/nest/owner_test.go)（`TestOwnedKindHandlersRegisterOnlyOnTheOwningService`：修前 aggregate 里仍有 `RegisterJoinGuildNestHandlers()`，报 “handler of an owned kind must not be registered in every process”；`TestHandlerAcrossTwoOwningServicesIsRejected` 修前 `got <nil>`）、[roost/entity_owner_test.go](../../../codegen/internal/roost/entity_owner_test.go)（`TestGenerateRejectsAnEntityOwnedByAnUndeclaredService` 修前 “generate accepted service=aliance”；`TestEntityOwnerScopesHandlersLifecycleAndDoctor` 修前 “generate with a stale bootstrap must ask for project sync, got <nil>”，并对生成工程跑 build / vet）。
 
+## 2H. 只读 Mirror Mod 与 add rpc -entity-service
+
+联盟服务方案阶段 2 第 3、4 项。
+
+- **`remote_mirror`**：[catalog.go](../../../codegen/internal/roost/catalog.go) 的 catalog Mod（`kitremoteentity.NewRemoteMirrorMod(0)`，`Depends: redis, mongo, syncbus`），配置段来自 [configschemagen](../../../wiring/internal/configschemagen/main.go) 的 `remote_mirror` 组（只含 Mirror Mod 的声明）。`Manifest.Validate` 拒绝同一服务同时装 `remote_mirror` 与 `remote_entity`（owner 的 RemoteEntityMod 自己发布同一个只读能力）。停机预算：`serviceShutdownPlan` 按 `generatedMirrorShutdownTimeout`（5s，与生成配置的 `remote_entity.mirror.shutdown_timeout` 相同）计入声明预算。`remoteRuntimeHosts` 不再把声明了 `service=` 的 kind 算进“带 Nest 却没有 remote_entity”的提示（归属服务由 `validateEntityOwners` 检查）。带 Nest 的只读进程把 `MirrorSource` 接到 Nest 快照来源（`RemoteViewRef`）在框架阶段 1。
+- **`add rpc -entity-service`**：[add_rpc.go](../../../codegen/internal/roost/add_rpc.go) 校验拥有者的 `resolveMods(effectiveServiceMods)` 含 nest，`nextIDs` 一次分配三个错误码；模板在 [add_rpc_entity.go](../../../codegen/internal/roost/add_rpc_entity.go)（`renderEntityRPCInterface`：`Apply(requestID, callerID, callerSID, target) (version)` 占位写方法与 `Result(target, requestID) (found, code, version)`；`renderEntityRPCService`：`HandleBudget`、`classify`——`ErrRemoteOwnerTransition` / `ErrRemoteEntityReloading` / `ErrRemoteOverloaded` / `ErrRemoteFenced` 归“未执行可重试”，`context.DeadlineExceeded` / `ErrRemotePersistenceIndeterminate` / `ErrRemoteCommitTimeout` / `ErrRemoteCommitNotFinalized` 归“结果未知”）；`renderRPCMod(snake, afterNest)` 让 owner Mod `DependsOn` nats + nest。三个文件都是业务文件，只建一次。“改投”答复（分片路由，阶段 1 的 servicerpc 答复码）落地后再接进 `classify` 与生成的调用方。
+
+回归：[remote_mirror_test.go](../../../codegen/internal/roost/remote_mirror_test.go) `TestRemoteMirrorModIsACatalogModExclusiveWithRemoteEntity`（修前 `add mod remote_mirror: unknown wiring mod "remote_mirror"`；含生成工程 build / vet）；[add_test.go](../../../codegen/internal/roost/add_test.go) `TestAddRPCEntityServiceScaffoldsTheWriteContract`（修前选项被忽略，报 “an entity-service rpc owned by a service without Nest must be refused with the fix, got <nil>”；含生成工程 build / vet）；[config_contract_test.go](../../../codegen/internal/roost/config_contract_test.go) 的 `fullConfigManifest` 把 `remote_mirror` 放在单独的 reader 服务里。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。

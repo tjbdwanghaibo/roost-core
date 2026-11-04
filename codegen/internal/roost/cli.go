@@ -294,6 +294,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	id := fs.Int64("id", 0, "explicit numeric ID")
 	withAI := fs.Bool("ai", false, "behavior: also build an AI heartbeat controller and an example strategy")
 	withState := fs.Bool("state", false, "behavior: also scaffold a gameplay/state Catalog")
+	entityService := fs.Bool("entity-service", false, "rpc: the owner is an entity service (Nest): write methods carry a request id, a Result query, a handling budget, and the owner Mod starts after Nest")
 	if err := fs.Parse(args[2:]); err != nil {
 		return err
 	}
@@ -321,7 +322,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitOrderedList(*steps), Native: splitOrderedList(*native), Consumer: *consumer, Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, AI: *withAI, State: *withState, ID: *id, Warnings: stderr})
+	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitOrderedList(*steps), Native: splitOrderedList(*native), Consumer: *consumer, Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, AI: *withAI, State: *withState, EntityService: *entityService, ID: *id, Warnings: stderr})
 	if err != nil {
 		return err
 	}

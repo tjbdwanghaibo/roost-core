@@ -433,3 +433,57 @@ func TestManualReplyDoesNotEncodeAgain(t *testing.T) {
  if err!=nil || response!=nil || encoded!=0 || session.replies!=1 {t.Fatalf("response=%v err=%v encoded=%d replies=%d",response,err,encoded,session.replies)}
 }
 `
+
+// add rpc -entity-service（联盟服务方案 §2.3 / §2.10 第 4 项）：写方法带 RequestID，Result 按 RequestID 查回执，
+// 接收端有自己的处理预算，答复分成成功 / 业务拒绝 / 未执行可重试 / 结果未知；owner Mod 依赖 nest，
+// Nest（与它之前的 DataEngine 恢复）启动之后才在总线上接请求。拥有者没有 Nest 时拒绝。生成工程能编译。
+func TestAddRPCEntityServiceScaffoldsTheWriteContract(t *testing.T) {
+	t.Parallel()
+	_, root, err := NewProject(NewOptions{
+		Name: "planet", Module: "example.com/planet", Out: filepath.Join(t.TempDir(), "planet"),
+		Services: []string{"game", "alliance"}, Mods: []string{"configdata"}, Features: []string{"protocol", "errcode"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "rpc", Name: "Alliance", Service: "alliance", EntityService: true}); err == nil || !strings.Contains(err.Error(), "roost add mod nest -service alliance") {
+		t.Fatalf("an entity-service rpc owned by a service without Nest must be refused with the fix, got %v", err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "mod", Name: "nest", Service: "alliance"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Add(root, AddOptions{Kind: "rpc", Name: "Alliance", Service: "alliance", EntityService: true}); err != nil {
+		t.Fatalf("add rpc -entity-service: %v", err)
+	}
+	iface := readProjectFile(t, root, "internal/rpc/alliance/alliance.go")
+	for _, want := range []string{
+		"requestID string, callerID int64, callerSID int32",
+		"Result(ctx context.Context, target int64, requestID string) (found bool, code int32, version uint64, err error)",
+		"ErrRetryLater", "ErrResultUnknown",
+	} {
+		if !strings.Contains(iface, want) {
+			t.Errorf("interface lacks %q:\n%s", want, iface)
+		}
+	}
+	service := readProjectFile(t, root, "internal/rpc/alliance/service.go")
+	for _, want := range []string{"HandleBudget", "context.WithTimeout(ctx, HandleBudget)", "func classify(err error) error", "entity.ErrRemotePersistenceIndeterminate"} {
+		if !strings.Contains(service, want) {
+			t.Errorf("service skeleton lacks %q:\n%s", want, service)
+		}
+	}
+	if mod := readProjectFile(t, root, "internal/rpc/alliance/mod.go"); !strings.Contains(mod, "[]app.ModName{mods.ModNats, mods.ModNest}") {
+		t.Errorf("owner Mod must start after Nest:\n%s", mod)
+	}
+	if testing.Short() {
+		return
+	}
+	useLocalRoostCore(t, root)
+	for _, action := range []string{"build", "vet"} {
+		check := exec.Command("go", action, "./...")
+		check.Dir = root
+		check.Env = append(os.Environ(), "GOWORK=off")
+		if output, err := check.CombinedOutput(); err != nil {
+			t.Fatalf("go %s after add rpc -entity-service: %v\n%s", action, err, output)
+		}
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/servicerpc"
 )
@@ -58,20 +59,38 @@ func addRPC(root string, m Manifest, options AddOptions) ([]string, error) {
 			return nil, fmt.Errorf("rpc %q is already owned by service %q", snake, name)
 		}
 	}
+	// -entity-service：拥有者是带 Nest 的实体服务（联盟服务方案 §2.3）。写经 Nest 落到实体，owner Mod 要排在
+	// Nest 之后才在总线上接请求，所以拥有者必须有 Nest。
+	if options.EntityService {
+		if resolved, err := resolveMods(effectiveServiceMods(m, service)); err != nil {
+			return nil, err
+		} else if !contains(resolved, "nest") {
+			return nil, fmt.Errorf("rpc -entity-service writes entities through Nest, but service %s has no nest mod; run: roost add mod nest -service %s", service, service)
+		}
+	}
 	dir := rpcDir(snake)
 	if _, err := os.Stat(filepath.Join(root, dir)); err == nil {
 		return nil, fmt.Errorf("%s already exists", dir)
 	}
-	code, err := NextID(root, m, "errcode", "")
+	count := 1
+	if options.EntityService {
+		count = 3 // ErrRequestInvalid、ErrRetryLater、ErrResultUnknown
+	}
+	codes, err := nextIDs(root, m, "errcode", count)
 	if err != nil {
-		return nil, fmt.Errorf("allocate ErrRequestInvalid code: %w", err)
+		return nil, fmt.Errorf("allocate the rpc error codes: %w", err)
 	}
 
 	files := map[string]string{
-		dir + "/" + snake + ".go": renderRPCInterface(snake, pascal, code),
+		dir + "/" + snake + ".go": renderRPCInterface(snake, pascal, codes[0]),
 		dir + "/service.go":       renderRPCService(snake, pascal),
-		dir + "/mod.go":           renderRPCMod(snake),
+		dir + "/mod.go":           renderRPCMod(snake, false),
 		dir + "/server_run.go":    renderRPCServerRun(snake),
+	}
+	if options.EntityService {
+		files[dir+"/"+snake+".go"] = renderEntityRPCInterface(snake, pascal, codes)
+		files[dir+"/service.go"] = renderEntityRPCService(snake, pascal)
+		files[dir+"/mod.go"] = renderRPCMod(snake, true)
 	}
 	rollbackPaths := make([]string, 0, len(files)+2)
 	for rel := range files {
@@ -204,7 +223,50 @@ var _ %[2]s = (*Service)(nil)
 `, snake, pascal)
 }
 
-func renderRPCMod(snake string) string {
+// nextIDs 分配 count 个连续空闲的号（按 NextID 的同一扫描，跳过已用的号）。
+func nextIDs(root string, m Manifest, kind string, count int) ([]int64, error) {
+	space, ok := m.IDs[kind]
+	if !ok || space.Min <= 0 || space.Max < space.Min {
+		return nil, fmt.Errorf("id space %q is not configured", kind)
+	}
+	uses, err := ScanIDs(root)
+	if err != nil {
+		return nil, err
+	}
+	used := map[int64]bool{}
+	for _, use := range uses {
+		if use.Kind == kind {
+			used[use.ID] = true
+		}
+	}
+	var out []int64
+	for id := space.Min; id <= space.Max && len(out) < count; id++ {
+		if !used[id] {
+			out = append(out, id)
+		}
+	}
+	if len(out) < count {
+		return nil, fmt.Errorf("id space %s is exhausted", kind)
+	}
+	return out, nil
+}
+
+// renderRPCMod 是 owner Mod。afterNest（-entity-service）时依赖 nest：App 按依赖顺序 Start，Nest 在 DataEngine
+// 之后启动（DataEngine 的启动排空在此之前完成），总线 handler 在 Nest 之后注册，恢复完成前到来的请求得到
+// no responders——未执行，调用方用同一 RequestID 重试。
+func renderRPCMod(snake string, afterNest bool) string {
+	depends, dependsDoc := "[]app.ModName{mods.ModNats}", "// DependsOn names the Mod that publishes the bus."
+	if afterNest {
+		depends = "[]app.ModName{mods.ModNats, mods.ModNest}"
+		dependsDoc = "// DependsOn names the bus and Nest: the handlers are registered in Start, after Nest\n" +
+			"// (and the DataEngine recovery before it) has started, so a request that arrives\n" +
+			"// while the process is still recovering finds no responder — not executed, and the\n" +
+			"// caller retries with the same request id."
+	}
+	return strings.NewReplacer("{{DEPENDS}}", depends, "{{DEPENDS_DOC}}", dependsDoc).Replace(renderRPCModTemplate(snake))
+}
+
+func renderRPCModTemplate(snake string) string {
 	return fmt.Sprintf(`package %[1]s
 
 import (
@@ -236,8 +298,8 @@ func NewMod(service *Service) *Mod { return &Mod{service: service} }
 // one fact.
 func (m *Mod) Name() app.ModName { return CapabilityName }
 
-// DependsOn names the Mod that publishes the bus.
-func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }
+{{DEPENDS_DOC}}
+func (m *Mod) DependsOn() []app.ModName { return {{DEPENDS}} }
 
 func (m *Mod) Init(*viper.Viper) error {
 	if m.service == nil {
