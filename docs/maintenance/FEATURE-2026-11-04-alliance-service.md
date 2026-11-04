@@ -1,8 +1,8 @@
 # 功能设计：联盟 / 公会服务（2026-11-04）
 
-**状态：方案已定、实施中（维护者 2026-11-04 定方向：“先写方案，按推荐”；同日“未声明归属的 kind 按 A，其他 5 条也按推荐，开始实施”）。现行公会行为与它的限制以 [KNOWN-LIMITS“Remote”](KNOWN-LIMITS.md#remote) 为准，各阶段落地情况记在第 7 节。**
+**状态：方案已定、实施中（维护者 2026-11-04 定方向：“先写方案，按推荐”；同日“未声明归属的 kind 按 A，其他 5 条也按推荐，开始实施”）。同日维护者改写决定 2：分片保留，路由改为“实体加载时在 Redis 登记带过期的路由 + RPC 标为路由 RPC”，不用槽位表（决定一览、2.7）。现行公会行为与它的限制以 [KNOWN-LIMITS“Remote”](KNOWN-LIMITS.md#remote) 为准，各阶段落地情况记在第 7 节。**
 
-登记在 [DESIGN-TODO“按需求触发的功能”](DESIGN-TODO.md#按需求触发的功能)。基线 `e12e3dc8`（origin/main）。codebase-memory 本轮连不上，第 1 节的现状结论全部按源码与 `rg` 核对，引用写到文件与函数。
+登记在 [DESIGN-TODO“按需求触发的功能”](DESIGN-TODO.md#按需求触发的功能)。基线 `e12e3dc8`（origin/main）；路由改写按 `40a6cacf`（origin/main，阶段 1、2 已合入）核对。codebase-memory 两次都连不上，第 1 节的现状结论全部按源码与 `rg` 核对，引用写到文件与函数。
 
 ## 0. 问题与维护者原话
 
@@ -24,8 +24,8 @@ game-demo 的 `Guild` 是 Remote 托管实体，但从不进入共享模式：�
 | W | 写 | game 进程经 RPC 调服务（申请、审批、踢人、捐献、转让盟主……）；权限与规则在服务里按权威判；每个请求带 RequestID，按它幂等；超时按“结果未知”，用同一 RequestID 重查；写 RPC 返回新状态与版本 |
 | R | 读 | 玩家侧经 Remote Mirror 读只读快照（成员、信息、科技），最终一致；任何写权限都不得依据 Mirror 判断 |
 | 1 | 成员关系 | 唯一权威在联盟，**Player 上不存 GuildID**；game 进程经 Mirror 或一次查询得知。要改玩家数据的操作（建盟扣钱、捐献、领联盟奖励）走 JetStream Saga 跨进程步骤 |
-| 2 | 分片与接管 | 按联盟 ID 分片到多个服务实例，复用 ownerroute 的“路由提示 + 持久 fence”分工；崩溃接管靠 App 单实例锁 + DataEngine 恢复；扩缩容用 `TransferRemoteOwnership` 按分片迁移 |
-| 3 | 生成器 | 现有生成器能声明“带 Nest / DataEngine / Remote 的业务服务”，缺的是“实体归哪个服务写”“按分片路由的 RPC”“只读 Mirror Mod”三件；做这三件最小增量，不新建一整套“实体服务”生成器 |
+| 2 | 分片与路由 | **维护者 2026-11-04 改写，替换原“槽位表”**。原话要点：“存在分片，可以 service 启动时候就 load entity，entity 在 load 时候注册路由信息到 redis 中，rpc 标记是路由 rpc，底层就会去找，起服 load entity 是 entity 类型的一个策略”；“如果没有规则就不加载，需要 entity 显示加规则”；“新建实体就走 rpc 的随机路由”；“redis 的记录可以使用带 expired time 的”。即：保留多实例，**不在 ID 里编码槽位、不要分片表、业务 RPC 不写 `shard=`**；实体在某实例加载（冷加载或预加载）时把“实体 ID → sid + 所有权代际”登记到 Redis，带 TTL，owner 批量续期，卸载 / 迁走时按值条件删除，kill -9 靠过期；RPC 只标“路由 RPC”，框架按本地缓存 → Redis → 持久所有权记录查找 owner，都没有就答“实体不存在”；Redis 只是提示，写准入仍由所有权记录 + fence 裁决，不对就改投（沿用 ownerroute 的“路由提示 + 持久 fence”分工）；新建实体走随机路由；起服预加载是实体类型的显式策略（`preload=startup`），不声明就只按需冷加载。崩溃接管靠 App 单实例锁 + DataEngine 恢复；迁移用 `TransferRemoteOwnership`，扩容不自动再均衡（2.7） |
+| 3 | 生成器 | 现有生成器能声明“带 Nest / DataEngine / Remote 的业务服务”，缺的是“实体归哪个服务写”“路由 RPC 与预加载策略”（2026-11-04 起替换原“按分片路由的 RPC”）“只读 Mirror Mod”三件；做这三件最小增量，不新建一整套“实体服务”生成器 |
 | 4 | 新鲜度与写后可见 | Mirror 读取有明确的陈旧上限；写 RPC 返回新状态和版本，界面用返回值立刻显示，之后的 Mirror 读带这个版本做单调读 |
 | E | 与现有的关系 | `e12e3dc8` 的多写者修复保留（共享模式与所有权往返仍是正式能力）；跨 Base Team（原型分支 `feat/seamless-world-prototype`）先不动；KNOWN-LIMITS 的公会条目改为指向本方案 |
 
@@ -69,6 +69,11 @@ game-demo 的 `Guild` 是 Remote 托管实体，但从不进入共享模式：�
 - `infra/network/servicerpc/affinity.go` 的 `KeyAffinityPicker`：按 key 的哈希对**当前发现到的实例集合**取模。注释写明它不是正确性机制，实例增减时映射跟着变。所以它不能直接当联盟分片表用：映射变了，请求就落到不是 owner 的实例上。
 - NATS RPC 客户端在超时与 no responders 时按策略自动重试（`infra/network/nats/driver/rpc.go` 的 `isRetryable`），同一请求可能送达多次；写 RPC 必须按 RequestID 幂等。
 - 普通 Bus RPC 不把调用方截止时间传到接收端，接收端要给整次处理自己的预算（[SLG §7.7](../framework/SLG-INTEGRATION.md#77-进阶深化联合链路的接法要点)“跨实体 / 跨服投递”一行）；JetStream RPC 才按调用方截止建立处理期限。
+- **随机路由有两条现成路径**（2026-11-04 按 `40a6cacf` 核实）：
+  - **队列组**（生成客户端的缺省）：没有路由标记的方法经生成的 `call` 走 `CallChecked(ctx, 0, …)` → `Bus.Call`，发到服务级主题 `<prefix>.rpc.<svc>.<method>`（`codegen/internal/servicerpc/template.go`）。接收端在 `infra/network/bus/bus.go` 注册 handler 时同时订阅这个主题（NATS 队列组 `<svc>_rpc`）和本 sid 的实例主题，NATS 在**已注册 handler 的实例**里任选一个。恢复中、handler 还没注册的实例不在候选里。
+  - **服务发现 + picker**：`servicerpc.NewDiscoveredBusClient` + `CallDiscoveredChecked`，经 etcd 发现实例，`PickServer` 用 picker 选 sid 再 `CallTo`，发现与调用共用一份预算；picker 缺省是 `RoundRobinPicker`（按调用序号对候选取模）。生成客户端只有 `affinity=` 方法走这条（`callByAffinity`，picker 是 `KeyAffinityPicker`，没有 key 时回退 `RoundRobinPicker`）。etcd 里登记了、但 handler 还没注册的实例也可能被选中，得到 no responders。
+  - 所以“生成客户端用 `CallDiscoveredChecked`”不准确：生成客户端的缺省随机路由是队列组。2.3 推荐创建类 RPC 沿用队列组。
+- **阶段 1 已落地的槽位表**（`infra/network/servicerpc/slots.go`）：`SlotTable`、`ParseSlotTable`、`SlotTableConfig`（`slots` / `shards`）、`CallSlotChecked`、`MaxSlots`。按 2026-11-04 路由决定移除（第 4 节 1R）；同一文件里的 `Redirect`、`Retryable`、`RedirectProvider`、`Classify` 与框架码 `CodeRetryable` / `CodeRedirect` 保留，路由 RPC 继续用。
 
 ### 1.5 App 单实例锁与接管
 
@@ -83,7 +88,7 @@ game-demo 的 `Guild` 是 Remote 托管实体，但从不进入共享模式：�
 
 ### 1.7 ownerroute
 
-`infra/network/ownerroute/route.go` 的 `Router`：`Resolver` 给出 owner sid，本地执行或经 `Transport` 单向发送（`BusTransport.Send`，没有回复）。仓库里唯一的使用者是 demo 送礼 saga 的步骤转交。指南的定位是“路由提示不能替代持久 fence 校验”（[guide/14](../framework/guide/14-foundation.md)）。本方案沿用这个分工：分片表只是路由提示，持久 owner 与 fence 才是权威；需要回复的写走 servicerpc，不用 `BusTransport`。
+`infra/network/ownerroute/route.go` 的 `Router`：`Resolver` 给出 owner sid，本地执行或经 `Transport` 单向发送（`BusTransport.Send`，没有回复）。仓库里唯一的使用者是 demo 送礼 saga 的步骤转交。指南的定位是“路由提示不能替代持久 fence 校验”（[guide/14](../framework/guide/14-foundation.md)）。本方案沿用这个分工：Redis 里的路由登记（2.7）只是路由提示，持久 owner 与 fence 才是权威；需要回复的写走 servicerpc，不用 `BusTransport`。
 
 ### 1.8 生成器现状
 
@@ -102,6 +107,13 @@ game-demo 的 `Guild` 是 Remote 托管实体，但从不进入共享模式：�
 
 game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/second-game.sh`，sid 1001）加九个托管框架服务，共十个进程（[demo README](../../demo/README.md#本地实跑)）。
 
+### 1.9 路由登记与预加载相关的现状（2026-11-04 补）
+
+- **持久所有权记录**：控制库的 `_remote_entity_meta` 集合（`framework/remoteentity/mongo_committer.go`），`_id` 是完整 Entity ID，字段 `_owner_sid`、`_owner_epoch`（MarkerEpoch，每次所有权变更加一，`mongo_authority.go` 的 `changeOwnership`）、`_owner_route`（RouteEpoch，转移时加一，`TransferExpected`）。`GetRemoteOwnership` 只在写 Manager 上（`framework/remoteentity/ownership.go`），只装 Mirror Mod 的进程现在读不到它。这个集合没有 `_owner_sid` 索引（`EnsureIndexes` 只给 `_remote_entity_transactions` 建了索引）。kind 在 ID 的低 10 位（category 2 位 + kind 8 位，`framework/entity/idgen.go`），按 kind 范围查 `_id` 做不到。
+- **Redis**：Remote Mod 已经依赖 Redis（共享模式的分布式锁、L2 快照）。L2 键是 `remote_entity:snapshot:*`，可以加部署前缀 `remote_entity.snapshot_l2_key_prefix`（同一个 Redis 库上的多个部署必须设不同的值，不允许 hash tag，`wiring/remoteentity/config.go`）。按值比较的 Lua 脚本已有先例（`framework/remoteentity/versioned_lock_lua.go`）。只读进程的 Mirror Mod 依赖 `redis`、`mongo`、`syncbus`，两个存储都连得上。
+- **起服加载实体：框架没有这个能力**。`framework/dataengine/load.go` 的 `Loader.LoadAll` 是通用资源加载器：按 `LoadTemplate`（库、资源、依赖、过滤、`OnLoad` 回调）分层流式读文档，交给回调处理。正式代码里没有调用者，只有 `load_test.go` / `validate_test.go` 在用。它不按所有权过滤，不把文档放进 Remote Manager 或 Nest 实体生命周期，也不登记路由。Remote 实体现在只在第一次写准入时从权威冷加载（1.2）。
+- **Remote 实体不会空闲卸载**：`framework/remoteentity` 里没有按空闲时间卸载的逻辑。已加载的集合只在转移出去、写准入拒绝后卸载或进程退出时缩小。
+
 ## 2. 方案
 
 ### 2.1 服务形状与拓扑
@@ -118,7 +130,7 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 
 - alliance 是工程里的一个业务服务（不是框架托管服务），mods：`nest`、`dataengine`、`remote_entity`、`nats`、`etcd`（注册发现），需要定时逻辑时加 `heartbeat` 或本地实体定时器（2.8）。
 - game 进程不再装 `remote_entity`，改装只读的 Mirror Mod（2.10 第 3 项），因此 game 进程**没有能力**写联盟实体；写只能走 RPC。
-- 缺省部署一个 alliance 实例：所有联盟在同一进程，任何多联盟操作都能一笔事务。容量不够时才按 2.7 分片。
+- 缺省部署一个 alliance 实例：所有联盟在同一进程，任何多联盟操作都能一笔事务。容量不够时才加实例，按 2.7 路由。
 
 ### 2.2 实体与数据
 
@@ -128,13 +140,35 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 | `AllianceMember`（Remote 托管） | 玩家 ID 派生 | 所在联盟、待定的入会预约、退盟冷却、每日捐献计数、请求回执 | “一人一盟”的守卫与玩家维度的联盟状态，见 2.5；**不是**第二份成员权威，与联盟成员表不一致时以联盟为准 |
 | `AllianceShard`（普通本地实体，每实例一个） | 实例 sid | 联盟定时任务的持久节点 | 承载 `roost add timer`，见 2.8 |
 
-- **联盟 ID 编码分片槽位**：`ID = 序号 × SlotCount + slot`。路由只按 ID 计算，不查表；`AllianceMember` 的槽位按玩家 ID 取模。序号用每个槽位一个 Mongo 计数器（沿用 demo `nextGuildID` 的 `$inc` + majority 写确认），发号失败留空号不回收。
+- **联盟 ID 不编码槽位**（2026-11-04 路由决定）：联盟 ID 由服务内一个 Mongo 计数器发号，沿用 demo `nextGuildID` 的 `$inc` + majority 写确认，发号失败留空号不回收。ID 与哪个实例持有无关。`AllianceMember` 的 ID 由玩家 ID 加 kind 得出。哪个实例持有某个实体只看持久所有权记录，调用方经 2.7 的路由查找找到它。建盟频率低，单个计数器的争用可以忽略。
 - **请求回执放在被改的实体里**：`Requests map[RequestID]回执`（结果摘要 + 时间），随业务修改同一事务提交与回滚，同一 RequestID 再来时回放原结果；保留期与上限按 Saga 回执的做法（`saga.receipt_retention` 缺省 168h，每次提交顺手剪过期项）。第一个实施版本放在服务骨架里，等第二个实体服务出现再考虑上升为框架件。
 - **成员表放一个文档**：沿用 demo 的整文档读写，人数上限是真实限制（见第 6 节第 1 条）。
 
 ### 2.3 写：RPC 契约
 
 **接口形状**（`roost add rpc Alliance -service alliance` 生成，方法按业务增加）：`Found`、`Apply`、`Approve`、`Join`（无审批的直入）、`Leave`、`Kick`、`Transfer`、`Donate`、`ClaimReward`、`Info`（权威读，给 GM 与写后核对）、`Result(target, requestID)`（按 RequestID 查回执）。每个写方法的参数都含 `requestID`、调用者玩家 ID、调用者原服 sid；调用者身份来自 game 进程的已鉴权会话，不来自客户端字段。
+
+**两类方法**（2026-11-04 路由决定）：
+
+- **路由 RPC**（标 `//roost:rpc route`，2.10 第 2 项）：对已有实体的写与权威读，包括 `Apply`、`Approve`、`Join`、`Leave`、`Kick`、`Transfer`、`Donate`、`ClaimReward`、`Info`、`Result`，以及实例之间对 `AllianceMember` 的守卫调用（2.5）。
+  - 路由键缺省是方法的 `target` 参数，推荐取**完整 Entity ID**：kind 已经在 ID 里，Redis 键与所有权记录的 `_id` 直接用它，标记不用再写 kind。备选是业务号（unique id）加标记上的 `kind=`，代价是每个方法多一处声明。
+  - 客户端查找顺序：① 本进程路由缓存；② Redis 路由登记；③ 读持久所有权记录，有 owner 就发给 owner，owner 收到后冷加载并登记；④ 都没有就答“实体不存在”，请求不发出去。细节见 2.7。
+  - 查找结果只是提示，最终由服务端裁决。
+- **创建类 RPC**（`Found`）：不标路由，走现成的随机路由。推荐沿用生成客户端缺省的队列组（1.4）：NATS 只在已注册 handler 的实例里选，恢复中的实例不会接到新建请求。备选是 `NewDiscoveredBusClient` + 缺省 `RoundRobinPicker`（`CallDiscoveredChecked`），它要多一次 etcd 发现，还可能选中 handler 未就绪的实例。接到请求的实例新建实体，经首写的 `ClaimOwnership` 认领所有权，再登记路由。
+- **随机路由下的创建幂等**：同一个 RequestID 重发时可能落到别的实例，所以回执不能放在新实体上，那时它还不存在。回执放在按稳定 ID 路由的实体上。建盟放在发起者的 `AllianceMember`（2.5），流程如下：
+  1. 实例先经路由 RPC 在发起者的 `AllianceMember` 上记下“RequestID → 本次发出的联盟 ID”（同时就是一人一盟的预约）；
+  2. 再建联盟。
+
+  重发落到别的实例时会读到这条记录，就沿用同一个联盟 ID 继续：所有权认领是原子 CAS，两个实例并发时只有一个成为 owner，另一个按改投走。所以不会建出第二个联盟。以后别的实体服务的创建类方法也按这条规则：幂等锚在一个按稳定 ID 路由的实体上，或由调用方在路由之前定下新实体 ID。
+
+**服务端前置检查**（路由 RPC 在进 Nest 之前，框架件，与 `RPCWriteAnswer` 放在一处）：
+
+- 实体已在本地加载、所有权是本 sid：直接处理。
+- 否则读持久所有权记录：
+  - 没有记录：答“实体不存在”。非创建类方法不得进入写准入，否则首写会把一个不存在的 ID 认领走（1.2）。
+  - owner 是本 sid：冷加载、登记路由，再处理。
+  - owner 是别的 sid：答“改投”（`servicerpc.Redirect`）。
+- 进 Nest 之后，写准入照常按所有权记录 + fence 裁决。阶段 1 的 `RPCWriteAnswer` 把 fenced 映射为改投，前置检查只是省掉一次白进 Nest。
 
 **服务端处理**：RPC handler 在 I/O 段，用自己的处理预算（1.4）调生成的 `Sync_*` Sender 进 Nest；handler 在实体锁内先查回执，再按权威判权限与规则，写回执与修改，返回新状态。
 
@@ -143,8 +177,8 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 | 答复 | 什么时候 | 调用方怎么做 |
 | --- | --- | --- |
 | 成功 + 新状态 + 版本 | 提交已确认，或回执回放 | 界面直接用返回值；后续 Mirror 读带这个版本（2.4） |
-| 业务拒绝（带错误码） | 权限不足、已满、已在别的联盟、名字非法等 | 显示原因，不重试 |
-| 可重试，未执行 | 服务未就绪（启动恢复中、handler 未注册，表现为 no responders）、所有权转移中、写准入在本实例发现自己不是 owner | 原 RequestID 重试；“不是 owner”带新 owner sid，调用方改投一次（2.7） |
+| 业务拒绝（带错误码） | 权限不足、已满、已在别的联盟、名字非法等；实体不存在（路由查找与服务端前置检查都没有所有权记录） | 显示原因，不重试 |
+| 可重试，未执行 | 服务未就绪（启动恢复中、预加载未完成、handler 未注册，表现为 no responders）、所有权转移中、本实例不是 owner（前置检查或写准入发现） | 原 RequestID 重试；“不是 owner”带 owner sid，调用方改投一次；no responders 时调用方重新查找一次路由（2.7） |
 | 结果未知 | RPC 超时、`ErrRemotePersistenceIndeterminate`、处理预算到期 | 客户端显示“处理中”；game 端点用原 RequestID 调 `Result` 或原样重发，直到得到成功或拒绝 |
 
 **写后立刻看到**：写 RPC 返回本次提交后的联盟视图（与 Mirror DTO 同一形状）和实体版本 `StateVersion`。需要“写完立刻看到”的界面用返回值，不去读 Mirror。
@@ -166,6 +200,8 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
   2. 在联盟 A 的事务里加成员，写回执 r；同一事务 `Emit` 一个“成员已变化”effect；
   3. effect 消费者在玩家的 `AllianceMember` 上把预约确认成“在联盟 A”。第 2 步被明确拒绝时释放预约。
   预约带期限；期限到了仍未确认，守卫方先向联盟 A 的权威问“玩家是否在成员表里”，按权威确认或释放，不按超时直接释放。两个实体在同一实例时三步合成一笔多实体事务。退盟、踢人反向：先改成员表，再由 effect 清 `AllianceMember`。
+- **跨实例照旧两步，新增的实例间调用一律走路由 RPC**（2026-11-04 路由决定）：`AllianceMember` 按玩家 ID，可能和联盟在不同实例，阶段 3 已实现的“预约 → 确认 → 期限到了按联盟权威收尾”保留。联盟实例对守卫的调用（预约、确认、释放、清除）与守卫方向联盟问权威，都按目标的完整 ID 走路由 RPC（2.3），不再按槽位表找实例。
+- **守卫还不存在时**（玩家从没入过盟）：由发起调用的联盟实例在本地新建并认领，入会预约与联盟在同一实例，常见情况就是一笔多实体事务。认领是原子 CAS：两个实例并发新建同一个守卫时只有一个成为 owner，输的一方在写准入被 fence，按改投改走路由 RPC。
 - **game 进程怎么知道“我在哪个盟”**：`AllianceMember` 的 ID 由玩家 ID 算出，直接读它的 Mirror，再按其中的联盟 ID 读联盟 Mirror；不需要查找服务。
 - **附近玩家头顶的公会**：`PlayerDao.GuildID` 改为 `dao:"nopersist,sync"` 的显示字段，登录时从 Mirror 填，收到成员变化通知时更新。它只用于显示与同步，任何写判断都不读它。
 - **在线通知**：成员变化 effect 的消费者按成员记录里的原服 sid 经 Bus 发给该 game 进程（尽力投递）；game 进程更新显示字段并推客户端。玩家不在线或消息丢失时，下次登录从 Mirror 补齐。
@@ -193,7 +229,7 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 | `guild_info`（我的） | `AllianceMember` Mirror → 联盟 Mirror | Mirror |
 | `gm.guild.info` / `gm.guild.join` | 移到 alliance 进程自己的 GM 命令（ops `/admin/execute`），读用权威 | 服务内 |
 | `PlayerDao.GuildID`（persist） | `nopersist,sync` 显示字段 | Mirror + 通知 |
-| `nextGuildID`（game 里的 Mongo 计数器） | 移到服务，按槽位发号 | 服务内 |
+| `nextGuildID`（game 里的 Mongo 计数器） | 移到服务，一个计数器发号（不按槽位，2.2） | 服务内 |
 | 错误码 `guild_*` | 保留；增加“服务忙 / 改投 / 结果未知”三类 | RPC 答复 |
 | 响应里的 `ServedBySID` | 改为处理请求的 alliance 实例 sid | RPC |
 | loadtest / Robot `found_guild`、`guild_info` | 增加两个 game 进程上的玩家加入同一公会 | 验收 |
@@ -202,13 +238,55 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 
 ### 2.7 分片、接管与迁移（决定 2）
 
-**分片数怎么配**：
+**2026-11-04 起的做法**（维护者改写决定 2，原槽位表做法见第 3 节）：多个实例分担实体，但某个实体归哪个实例，只由 Remote 的持久所有权记录决定。Redis 里另登记一份带过期的路由提示，让调用方大多数时候不用读 Mongo。不在 ID 里编码槽位，没有分片配置，业务 RPC 不写 `shard=`。
 
-- `alliance.slots`：槽位总数，全部进程相同、上线后不改（编码在联盟 ID 里），推荐 256。
-- `alliance.shards`：槽位区间到 sid 的表，例如 `["3000:0-127", "3001:128-255"]`。规则只声明一次（配置结构体 + tag），运行期加载时校验覆盖全部槽位、区间不重叠、sid 不重复；game 与 alliance 两类服务读同一个键，doctor 的跨服务配置检查核对两边一致。
-- 一个实例时表里只有一行 `3000:0-255`。
+**哪些 kind 登记路由**：声明了 `service=` 的 Remote 托管 kind。这份列表生成器已经有（阶段 2 的 `ForeignKinds` 来自同一次扫描），经 ModOption 交给本服务的 Remote Mod，不加 YAML 键。
 
-**路由**：调用方按 `slot(ID)` 查表得到 sid，`CallTo` 这个 sid。表只是提示：真正的 owner 是 Remote 的持久所有权记录，写准入照常 fence。实例收到不归自己的请求时（表过期、迁移中），读 `GetRemoteOwnership` 得到当前 owner，答复“改投 sid X”；调用方改投一次，仍不对就按可重试失败回复。
+**路由登记（Redis，推荐值）**：
+
+| 项 | 推荐 | 理由 |
+| --- | --- | --- |
+| 键 | `<部署前缀>:remote_entity:route:<完整 Entity ID>`。部署前缀沿用 `remote_entity.snapshot_l2_key_prefix`，不加 hash tag | 每个实体一个键，脚本只碰一个键，Redis Cluster 下按键自然分散。共用一个 Redis 的部署本来就必须设不同的前缀（1.9），不新增配置键 |
+| 值 | `<owner sid>:<MarkerEpoch>` | MarkerEpoch 是所有权记录里每次所有权变更都加一的代际（1.9），比较它就知道两条登记谁新。同 sid 崩溃重启时代际不变，登记值也不变 |
+| TTL | 30s | kill -9 后过期前的登记仍指向同一个 sid，同 sid 拉起后它本来就是对的；真正错的登记只来自“迁走后旧 owner 没删掉”，而那时新 owner 的登记带更新的代际会覆盖它。所以 TTL 不需要很短，主要用来回收没人续的键 |
+| 续期 | owner 每 10s 对本实例已加载、所有权是本 sid 的登记 kind 实体批量续期，用 pipeline，每批不超过 1000 个键 | TTL 内能续 3 次，偶发一次失败不会掉登记 |
+| 登记脚本 | 实体在本实例加载完成后执行（冷加载、预加载、新建认领后都算）：键不存在、或已存代际不大于自己的代际，才 `SET … PX`；已存的代际更新就不写，记一次指标 | 迟到的旧 owner 登记盖不掉新 owner |
+| 续期脚本 | 值和自己的完全相同才 `PEXPIRE`，否则返回“不同”或“不存在” | 续期不重建键：续期批次在转移之前拼好、转移之后才执行时，不会把已删掉的旧登记写回去。返回“不存在”（Redis 丢键，或曾长时间连不上）时，先确认本地所有权仍是本 sid，再走登记脚本；返回“不同”时不再续这个键 |
+| 删除脚本 | 值相同才 `DEL`；在卸载、转移出去（进入 Draining 后、Fenced 时）、进程正常停机时执行 | 只删自己写的，旧进程删不掉新 owner 的登记 |
+| kill -9 | 不删，靠 TTL 过期 | 见 TTL 一行 |
+
+三个脚本沿用 Remote 分布式锁按值比较的 Lua 写法（1.9）。
+
+**续期量估算**：
+
+- 每个实例每 10s 续一遍自己已加载的登记 kind 实体。一万个联盟是每秒 1000 次 `PEXPIRE`，每批 1000 个键时约每秒 1 次 pipeline 往返。
+- `AllianceMember` 按需加载，Remote 实体又不会空闲卸载（1.9），加载集合会随“做过入会 / 退盟的玩家”一直增长。再按 5 万个估：合计每秒 6000 次、约 6 次 pipeline 往返，对单个 Redis 是小负载。
+- 以上是估算，阶段 5 实测。如果 `AllianceMember` 的加载量远大于这个数，再评估守卫的空闲卸载或更长的 TTL。
+
+**续期或登记失败**：只记日志和指标，不影响写准入，因为准入看的是所有权记录。登记缺失期间，调用方回退去读所有权记录，每次多一次 Mongo 点读。
+
+**调用方查找与缓存**（框架件，game 进程与 alliance 实例共用）：
+
+- **顺序**：本地缓存 → Redis `GET` → 按 `_id` 点读 `_remote_entity_meta` → 都没有就答“实体不存在”。读到 owner 就发给它，owner 冷加载并登记。只读进程没有写 Manager，需要 Mirror Mod 新增一个只读的所有权查询（1.9）。alliance 实例直接用写 Manager 的 `GetRemoteOwnership`。
+- **缓存**：按实体 ID 存 (sid, MarkerEpoch)，有效期 30s（与 Redis TTL 相同），条数有上限（推荐 65536，LRU）。缓存只是提示，正确性靠改投，所以有效期长一点只是偶尔多一跳。
+  - 收到改投答复：把缓存改成改投目标，在同一份预算内改投一次。
+  - 收到 no responders（NATS 客户端已按策略重试过，1.4）：删掉这条缓存，重新查一次 Redis / 所有权记录。查到不同的 sid 才在同一份预算内再发一次，否则按“可重试，未执行”返回。缩容后旧缓存指向已经下线的 sid，靠这一条纠正。
+- **负缓存**：推荐不做“实体不存在”的负缓存，要做也不超过 1s。刚建好的实体会被别的进程立刻访问（建盟后马上有人入会），负缓存会让它们在有效期内看不见这个实体；而查一个不存在的实体本来只多一次 Mongo 点读。
+
+**起服预加载（实体类型的显式策略）**：
+
+- **声明**：实体注解 `preload=startup`（2.10 第 2 项）。没有声明就不预加载，只按需冷加载。
+- **范围**：所有权记录的 owner 是本 sid 的该 kind 实体。框架现在没有这个能力（1.9），要新增：
+  - 给 `_remote_entity_meta` 加 `{_owner_sid: 1}` 索引，按 `_owner_sid` 查；kind 用 ID 低位按位过滤，不改元数据文档格式。
+  - Remote Manager 增加“只加载、不写”的入口，批量冷加载，限制并发。
+  - 加载完成后批量登记路由。
+- **时机**：在 DataEngine 恢复与 Nest 启动之后、RPC owner Mod 在总线上注册 handler 之前。App 按依赖顺序 Start，预加载做成 Remote Mod 的启动步骤，或一个单独的 Mod，让路由 RPC 的 owner Mod 依赖它。预加载完成前的请求得到 no responders（“可重试，未执行”），和恢复期间一样。
+- **失败**：
+  - 查询失败：启动失败，由进程管理拉起重试，与 DataEngine 恢复失败的处理一致。
+  - 单个实体加载失败：记错误和指标，跳过它。这个实体留给按需冷加载，到时同样会报错并答给调用方，不让一个坏文档挡住整个服务。
+- **用在哪**：数量可控、需要常驻的类型。联盟要靠独占模式心跳推进活动阶段时，实体必须已经加载，所以 `Alliance` 声明预加载。`AllianceMember`（每个玩家一个）不预加载。
+
+**新建实体**：走创建类 RPC 的随机路由（2.3）。接到的实例新建实体、认领、登记。新实例一加入服务就进了随机路由的候选集合，所以扩容后新建的实体自然会分到新实例。
 
 **崩溃接管**（kill -9、宿主机故障）：
 
@@ -216,28 +294,47 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 2. 新进程在第一个 Mod Init 前等单实例锁：旧进程崩溃时最多等 `singleton.ttl`（缺省 15s）；旧进程只是卡住时，新进程要等锁过期才启动，旧进程按续期期限判定失锁并 fail-stop（Nest 经 OnFail 围栏），两代不同时写（单实例锁的保证，1.5）。
 3. DataEngine 从本 sid 的 WAL 恢复未投影的记录，Remote outbox 补发未发布的快照；RPC 的 owner Mod 依赖 Nest（2.10 第 4 项），总线 handler 在这之后才注册，之前的请求得到 no responders。
 4. 所有权记录仍指向这个 sid，不需要转移。
+5. 声明了预加载的类型在启动时重新加载并登记（代际不变，登记值和崩溃前一样）。没有预加载的类型，第一次请求经旧登记（未过期时仍指向同一个 sid）或回退读所有权记录找到本实例，冷加载并登记。
 
-**接管窗口内写请求的答复**：进程不在时，NATS 回 no responders（未投递，“可重试，未执行”）；崩溃那一刻在途的请求是超时（“结果未知”，原 RequestID 重查）；新进程恢复期间 handler 还没注册，同样是 no responders（“可重试，未执行”）。game 端点把前后两类合成“服务忙，请稍后”，把超时显示为“处理中”。只读不受影响：Mirror 从 L2 继续读，陈旧上限内读到崩溃前最后发布的版本。
+**接管窗口内写请求的答复**：
 
-**扩缩容迁移**（例如 1 个实例扩到 2 个）：
+- 进程不在时，NATS 回 no responders：未投递，属于“可重试，未执行”。
+- 崩溃那一刻在途的请求超时：属于“结果未知”，用原 RequestID 重查。
+- 新进程恢复或预加载期间 handler 还没注册：同样是 no responders，“可重试，未执行”。
 
-1. 起新实例 3001（此时表里还没有它，它不接写）。
-2. 在旧 owner 3000 上执行运维命令“把槽位 128–255 转给 3001”：逐个联盟 `TransferRemoteOwnership(id, 3001)`，每个先排空已准入的写；转移期间这个联盟的写答复“可重试”，转完的答复“改投 3001”。只有当前 owner 能发起转移，所以命令跑在旧实例里。
-3. 滚动更新各进程的 `alliance.shards`；更新前的调用方靠“改投”继续工作。
-4. 3001 第一次写到某个联盟时从 Mongo 冷加载。缩容反向。
+game 端点把 no responders 显示为“服务忙，请稍后”，把超时显示为“处理中”。只读不受影响：Mirror 从 L2 继续读，陈旧上限内读到崩溃前最后发布的版本。
 
-迁移只转移活着的 owner；死掉的 owner 只能按“崩溃接管”同 sid 拉起，不能由别的 sid 接走（`TransferRemoteOwnership` 要求本地是 owner）。
+**迁移（运维命令）**：
+
+1. 在当前 owner 上执行运维命令，把指定的实体（ID 列表，或“本实例持有的 N 个”）转给目标 sid。命令逐个调用 `TransferRemoteOwnership(id, to)`，每个先排空已准入的写。只有当前 owner 能发起转移，所以命令跑在旧实例里。枚举“本实例持有的”与预加载用同一个按 `_owner_sid` 的查询。
+2. 转移期间，这个实体的写答“可重试”。转完后旧 owner 按值条件删除自己的登记；之后发到旧 owner 的请求经前置检查答“改投”。
+3. 新 owner 不预先加载。第一次请求经改投或回退读所有权记录到达，新 owner 冷加载并登记；新代际会盖掉任何迟到的旧登记。转移命令完成后通知新 owner 立即加载（对预加载类型有用）是可选项，推荐先不做。
+4. 联盟的定时节点与有未决预约的守卫随迁移一起处理（2.8；阶段 3 已经把有未决预约的守卫报为 pending，过期后重跑）。
+
+迁移窗口内，调用方的缓存或 Redis 仍指向旧 owner 时会多一跳改投；旧 owner 已经退出时得到 no responders，调用方重新查找。
+
+**扩容**：新实例加入后只承接新建实体（随机路由）。推荐**不自动再均衡**已有实体：自动再均衡要决定迁哪些、什么时候迁，每次迁移还有秒级不可写窗口。需要时用上面的运维命令按需转。代价是老实例的负载要等运维迁走，或随联盟解散自然下降。
+
+**缩容**：
+
+1. 先让要下线的实例不再接新建。推荐让它退出创建类方法的队列组，实例主题照常接路由 RPC；这要求 bus 提供按方法退出队列组的入口，目前没有，列在第 4 节 1R。备选：创建类方法答改投到另一个实例，生成客户端的创建调用也处理一次改投。
+2. 用同一条运维命令把它持有的全部实体转走。
+3. 确认持有数为 0 后再停。
+
+不转走就停掉的实例，它的实体只能等同一个 sid 被拉起。
+
+迁移只转移活着的 owner；死掉的 owner 只能按“崩溃接管”同 sid 拉起，不能由别的 sid 接走（`TransferRemoteOwnership` 要求本地是 owner）。登记过期后，调用方回退读到的仍是这个死掉的 sid，请求一直得到 no responders（“可重试，未执行”），直到它被拉起。
 
 ### 2.8 定时逻辑、仓库、排行
 
-- **定时**：Remote 托管实体不能挂 `roost add timer`（1.8）。每个实例一个普通本地实体 `AllianceShard`（按 sid 归属，用现有实体定时器），节点记“哪个联盟、什么时候、做什么”；到期回调用异步 Sender 给对应联盟发 Nest 消息。联盟在线期间的周期推进（例如活动阶段）可以用独占模式下的心跳。迁移槽位时，旧实例把这些联盟的节点删掉、新实例在冷加载后补建（规则在骨架里写死）。Remote 实体原生持久定时器（D11 方案 C）不在本方案范围。
+- **定时**：Remote 托管实体不能挂 `roost add timer`（1.8）。每个实例一个普通本地实体 `AllianceShard`（按 sid 归属，用现有实体定时器），节点记“哪个联盟、什么时候、做什么”；到期回调用异步 Sender 给对应联盟发 Nest 消息。联盟在线期间的周期推进（例如活动阶段）可以用独占模式下的心跳。用运维命令迁移联盟时（2.7），旧实例把这些联盟的节点删掉，新实例在冷加载后补建（规则在骨架里写死）。Remote 实体原生持久定时器（D11 方案 C）不在本方案范围。
 - **仓库**：联盟 DAO 的字段，写走 RPC；存入 / 取出涉及 Player 时按 2.6 走 Saga。
 - **排行**：联盟内排行（贡献）在联盟 DAO 里算；跨联盟排行用 `service/rank`，由联盟事务 `Emit` 的 effect 推进，不在锁内调 RPC。
 
 ### 2.9 多联盟事务
 
 - 同一实例上的多个联盟：一笔多实体 Nest 事务（Remote 原子批次，1.2）。宣战、外交、合并在缺省单实例部署下都是这种。
-- 分到不同实例时：用两步（发起方记意图 → 对方受理 → 发起方确认），每步带 RequestID，最终一致。需要原子的操作（合并）先把参与的联盟所在槽位迁到同一实例，再一笔事务。
+- 分到不同实例时：用两步（发起方记意图 → 对方受理 → 发起方确认），每步带 RequestID，最终一致。需要原子的操作（合并）先用运维命令把参与的联盟迁到同一实例（2.7），再一笔事务。
 - 是否要求跨实例的强一致外交，是产品选择，见第 6 节第 4 条。
 
 ### 2.10 生成器：最小增量（决定 3）
@@ -246,7 +343,11 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 
 1. **实体归属服务**：实体标记加 `service=<name>`（或 `roost.yaml` 里 `services.<name>.entities`），只声明一次。生成器据此只在该服务注册这个 kind 的 Nest handler 与 lifecycle；运行期 Remote Manager 拿到“本服务可写的 kind”列表，对不在列表里的 kind 拒绝认领与写许可（不靠调用方自觉，防止别的服务的进程把新实体认领走，1.2）。doctor 检查“声明了归属的 kind 被别的服务的 Sender 调用”。
    - **未声明归属的 kind 保持现行为**（维护者 2026-11-04 选 A）：任何带 Nest 的服务都能写，只有声明了 `service=` 的 kind 受守卫约束；Player 的静态 sid 归属、跨 Base Team 的共享模式、SLG 联盟夹具都不受影响。声明位置用实体注解 `service=<name>`，不在 `roost.yaml` 再写一份。
-2. **按分片路由的 RPC**：`//roost:rpc shard=<param>`（参数是联盟 ID 或玩家 ID），生成的客户端读 `alliance.slots` / `alliance.shards` 算 sid、`CallTo`、处理一次“改投”。框架侧在 `infra/network/servicerpc` 加按槽位表选 sid 的 picker 与“改投”答复码；配置声明与校验一次。
+2. **路由 RPC 标记与预加载注解**（2026-11-04 路由决定，替换原 `//roost:rpc shard=<param>` 与槽位配置）：
+   - `//roost:rpc route`：方法级标记。路由键缺省是名为 `target` 的 `int64` 参数（完整 Entity ID，2.3），用别的参数时写 `route=<param>`。生成的客户端经框架的路由查找（2.7）`CallTo` owner，处理一次改投，以及 no responders 后的一次重新查找；生成的 handler 先做服务端前置检查（2.3）。不标的方法照旧走队列组随机路由，创建类方法就属于这一类。不需要任何分片配置键，doctor 也不再核对表。
+   - 实体注解 `preload=startup`：生成器把这些 kind 经 ModOption 交给本服务的 Remote Mod 作为预加载列表（与 `WithForeignKinds` 同一种传法，不加 YAML 键）。只能写在 `remote=managed` 且声明了 `service=` 的实体上，否则生成期报错。没写就不预加载。
+   - 登记路由的 kind 列表（声明了 `service=` 的 Remote 托管 kind）由同一次扫描交给 Remote Mod（2.7）。
+   - 阶段 2 已落地、按新决定移除：`shard=` 的解析与校验、生成客户端的 `callBySlot` 与 `NewBusClient` 的 `*servicerpc.SlotTable` 参数、ClientMod 嵌入的 `servicerpc.SlotTableConfig`（`<service_type>.slots` / `.shards` 两个配置键）、doctor 的 `rpc-slots:<rpc>`（`codegen/internal/roost/slot_tables.go`）。响应里的 `RedirectSid` 与生成 handler 把改投 owner 写进响应的逻辑保留。
 3. **只读 Mirror Mod**：Mod 目录加 `remote_mirror`（`wiring/remoteentity.NewRemoteMirrorMod`），依赖 `redis`、`syncbus`、`mongo`；带 Nest 的服务装了它时，wiring 的 Nest Mod 用 `MirrorSource` 接上 `NestOptionWithRemoteSnapshotResolver`，使 `RemoteViewRef` 在只读进程可用。
 4. **写 RPC 的约定**：`roost add rpc` 增加 `-entity-service` 选项，骨架方法带 `requestID` 参数、`Result` 查询、处理预算与 2.3 的四类答复；owner Mod 依赖 `nest`（现在的 owner Mod 只依赖 `nats`，`add_rpc.go` 的 `renderRPCMod`），保证 DataEngine 恢复与 Nest 启动之后才在总线上接请求；请求回执的 DAO 字段与读写方法由同一选项生成到实体上。
 
@@ -266,26 +367,31 @@ game-demo 是参考实现，不改成生成产物；以上四件生成器能力�
 | 业务里直接用 Redis CAS（`versionstore` 一类） | 维护者原话“太山寨”。成员、权限的条件更新散在业务代码里，与 Mongo 权威、Mirror 发布、Nest 事务不在一条链路上 |
 | 联盟做普通本地实体（不是 Remote），服务自己发布快照 | 失去 Mirror 的发布、L2 水位与推送，失去 `TransferRemoteOwnership` 迁移与 fence；要重做一遍 Remote 已有的东西 |
 | Player 上保留持久 `GuildID`（与联盟同事务写） | 联盟与 Player 不在同一进程后，两边只能经 Saga 同步，两份事实会分叉；决定 1 选联盟为唯一权威 |
-| 用 `KeyAffinityPicker` 当分片表 | 映射随发现到的实例集合变化，实例重启或扩容时请求落到非 owner 上（1.4） |
-| `saga.coordinators` 式的“sid 列表取模”分配 | 增减一个实例会让大部分槽位换 owner；显式区间表只移动要迁的槽位 |
+| 槽位表：ID 编码槽位 + 部署配置的“槽位区间 → sid”表（原决定 2，阶段 1 ②、阶段 2 ② 已实现） | 维护者 2026-11-04 改为按实体在 Redis 登记路由（2.7），放弃的原因：① 槽位数编码在 ID 里，上线后不能改；② 区间表要在所有调用方和服务实例之间保持一致，滚动更新期间靠改投兜底，doctor 也只能核对配置文件；③ 扩缩容以槽位区间为单位迁移，粒度粗，新实例要等运维分配槽位才能接新建；④ 新建实体前要先判断槽位归属（`table.OwnerOf`），否则表过期的实例会把别的槽位的新实体认领走（guide/09 §2A 的边界），守卫与联盟按各自 ID 取模、常常分到不同实例。改成按实体登记后，ID 与部署无关，新实例直接承接新建，迁移粒度是单个实体，没有要同步的部署配置。代价：多一份 Redis 软状态和续期流量；登记缺失时第一次访问多一次 Mongo 点读；起服预加载要新增框架能力 |
+| 用 `KeyAffinityPicker` 当路由 | 映射随发现到的实例集合变化，实例重启或扩容时请求落到非 owner 上（1.4） |
+| `saga.coordinators` 式的“sid 列表取模”分配 | 增减一个实例会让大部分实体换 owner；按实体登记只移动运维指定的实体 |
+| 扩容后自动再均衡已有实体 | 要决定迁哪些、什么时候迁，每次迁移有秒级不可写窗口；扩容后新实例先承接新建，已有实体用运维命令按需迁（2.7） |
+| 路由登记不带过期、只靠 owner 显式删除 | kill -9 的 owner 删不掉自己的登记，换 sid 下线的实例会留下永久的错误提示；带 TTL 的登记在没人续期时自己消失（维护者“redis 的记录可以使用带 expired time 的”） |
 | 用 `service/directory` 预约做“一人一盟” | 预约在 Redis、带过期，与 Mongo 里的成员权威是两个存储；`AllianceMember` 守卫在同一套 Remote 链路里，可以和联盟一起迁移、一起恢复 |
 | 新建完整的“实体服务”生成器（一条命令出全部骨架） | 现有命令已覆盖大部分，缺的只是 2.10 的四件；整套生成器要维护第二份服务模板 |
 | 服务内用 Durability memory（直写 Mongo、不要 WAL 卷） | 带 effect / Saga 启动的事务仍会升到 strict（1.6），WAL 卷省不掉；与 game sid 用同一个“按 sid 的 WAL 卷”运维模型更简单。是否对纯联盟写单独用 memory，留到阶段 5 量完延迟再定 |
 
 ## 4. 实施拆分
 
-估时按一名熟悉仓库的实施者计，含测试与文档，不含等待评审。
+估时按一名熟悉仓库的实施者计，含测试与文档，不含等待评审。2026-11-04 路由决定之后重排：阶段 1、2 已合入 main，其中的槽位表部分由 1R、2R 移除；阶段 3 的本地分支按旧槽位方案实现，改造后再推送。
 
 | 阶段 | 内容 | 验收 | 估时 |
 | --- | --- | --- | --- |
-| 1 框架 | ① Remote Manager 的“本服务可写 kind”守卫（认领与写许可前拒绝）；② `servicerpc` 槽位表 picker、“改投”答复码与配置声明；③ wiring Nest Mod 在装了只读 Mirror Mod 时接上快照来源；④ Remote 实体 handler 里 `Emit` 的真实依赖用例（1.6 缺的那条） | 每项先红后绿；`framework/remoteentity`、`framework/nest`、`infra/network/servicerpc`、`wiring/*` 受影响包 `-race`；跨包改动 push 前全量 `GOWORK=off go test ./...` | 4～6 天 |
-| 2 生成器 | 2.10 的四件：实体 `service=`、`//roost:rpc shard=`、`remote_mirror` Mod、`add rpc -entity-service`；doctor 与 `--check-config` 共用同一份声明 | 生成器包测试；临时生成工程 build / vet / test；`go generate ./...` 后 porcelain 干净 | 4～5 天 |
-| 3 服务骨架 | demo 内的 alliance 服务：`Alliance`、`AllianceMember`、`AllianceShard`，RPC 接口与 handler，请求回执，成员变化 effect 与通知，槽位转移运维命令 | 服务包单元测试：回执回放、权限、一人一盟两步与期限后按权威收尾、多联盟一笔事务 | 3～4 天 |
-| 4 demo 迁移 | 2.6 的对应表全部落地；game 去掉 `remote_entity`、装只读 Mirror；dev-run 加 alliance 实例；Robot / loadtest 场景；注释改正 | 重新生成 game-demo，build / vet / test、`roost id check`、`roost generate --check` 干净；`make dev-smoke` 通过 | 3～4 天 |
-| 5 测试与端到端 | 新脚本（或扩展 `scripts/test-demo-generated.sh`）在真实依赖上跑：**两个 game 进程上的玩家加入同一公会**并互相读到；**alliance 实例 kill -9** 后同 sid 拉起，窗口内请求只得到“可重试 / 结果未知”，原 RequestID 重查后结论唯一、无重复入会；**分片迁移** 1 → 2 实例，迁移中持续写不丢、不重复，旧表调用方经改投成功；**Saga 扣钱失败回滚**：建盟被拒后金币退回，Player 扣款步骤后 kill -9 game 进程，恢复后只扣一次、退一次；一人一盟：两个联盟并发批准同一玩家只成功一个。另做单实例写 RPC 延迟与 Mirror 回源量的短测（≤ 30 分钟一轮） | 全部 `-race`；证据进 `docs/performance/benchmarks/<label>/`；Linux 与跨机不在本轮验收 | 5～7 天 |
-| 6 文档 | guide/05、guide/09 增加“实体服务”一节；demo WALKTHROUGH；KNOWN-LIMITS 删旧条目、登记剩余边界；CHANGELOG；功能版发版前写 `docs/release/vX.Y.0-NOTES.md`（存储格式变化按未上线规则：不兼容、需清空公会数据） | `scripts/check-doc-anchors.py` 0 broken；根包 `GOWORK=off go test -count=1 .` | 1～2 天 |
+| 1 框架 | **已合入 main**（第 7 节）：① Remote Manager 的外来 kind 守卫；② `servicerpc` 改投 / 可重试答复、四类判定，以及槽位表（槽位表由 1R 移除）；③ wiring Nest Mod 在装了只读 Mirror Mod 时接上快照来源；④ Remote 实体 handler 里 `Emit` 的真实依赖用例 | — | 已完成 |
+| 2 生成器 | **已合入 main**（第 7 节）：① 实体 `service=`、② `//roost:rpc shard=`（由 2R 移除）、③ `remote_mirror` Mod、④ `add rpc -entity-service` | — | 已完成 |
+| 1R 框架：路由改造 | ① **Redis 路由登记**：登记 / 续期 / 删除三个按值比较的脚本；Remote Manager 在加载完成、新建认领、转移出去、卸载、正常停机时调用；按批 pipeline 的续期循环；登记 kind 列表的 ModOption（`framework/remoteentity`、`wiring/remoteentity`）。② **路由查找**：`servicerpc` 定义查找接口与 `CallRoutedChecked`（缓存、改投一次、no responders 后重新查找一次），实现放在 Remote 一侧（缓存 → Redis → 所有权记录）；Mirror Mod 提供只读的所有权查询。③ **服务端前置检查**：放在 `wiring/remoteentity`，与 `RPCWriteAnswer` 同处，非创建类方法不让不存在的实体进入写准入。④ **起服预加载**：`_remote_entity_meta` 的 `{_owner_sid: 1}` 索引、按 owner 与 kind 枚举、Remote Manager 的“只加载不写”入口、预加载步骤排在 owner Mod 注册 handler 之前、预加载 kind 的 ModOption。⑤ **移除槽位表**：`SlotTable`、`ParseSlotTable`、`SlotTableConfig`、`CallSlotChecked`、`MaxSlots`。保留 `Redirect` / `Retryable` / `RedirectProvider` / `Classify`、框架码、`RPCWriteAnswer`、实体归属守卫、Mirror 接 Nest。guide/09 §2A 改写为“路由 RPC 与改投”。CHANGELOG `[Unreleased]` 里槽位表与 `shard=` 两条没有发过版，直接改写，不写“移除”。⑥ **缩容入口**：bus 按方法退出队列组 | 每项先红后绿，红要落在承诺上：迟到的旧 owner 删除或续期不影响新 owner 的登记；kill -9 后登记按 TTL 过期；Redis 不可用时路由回退所有权记录、写准入不受影响；非创建类请求不会认领不存在的实体；预加载只加载 owner 是本 sid 的实体，完成前不接请求；no responders 后改投到新 owner。受影响包 `-race`，push 前全量 `GOWORK=off go test ./...`；真实依赖用 `scripts/mirror-local.sh`，脚本在 Redis Cluster 上也跑一遍 | 4～6 天 |
+| 2R 生成器：路由改造 | `//roost:rpc route` / `route=<param>`（生成客户端走 `CallRoutedChecked`，生成 handler 调前置检查）；实体注解 `preload=startup` 及其校验；登记 kind 与预加载 kind 的 ModOption 接线；移除 `shard=`、`callBySlot`、ClientMod 的槽位配置、doctor `rpc-slots:<rpc>`；`add rpc -entity-service` 骨架的注释改成“`target` 是完整 Entity ID，写方法标 `route`”；PROJECT_GENERATOR §6 改写 | 生成器包测试；临时生成工程（game + 两个 alliance 实例）build / vet / test，`go generate ./...` 后 porcelain 干净，`roost id check`、`roost generate --check` 通过；`test-genres` / `test-remote` / `test-demo-generated` 通过 | 2～3 天 |
+| 3 服务骨架（改造本地分支 `feat/alliance-p3-service`，改完再推送） | 去掉槽位编码 ID（`alliancerule.AllianceUniqueID`、按槽位的计数器改为一个计数器）；运维命令 `alliance.transfer_slots` 改为 `alliance.transfer`（ID 列表或数量，跑在 owner 上，保留“有未决预约的守卫报 pending”）；`Peers` 的按槽位 BusClient 改为路由 RPC；Found 前的 `table.OwnerOf` 判断改为随机路由 + 发起者 `AllianceMember` 上的 RequestID 记录（2.3）；“表说归我才服务”改用框架前置检查；`Result(allianceID)` / `GuardResult(playerID)` 可合并为按完整 ID 的 `Result(target)`；`Alliance` 声明 `preload=startup`；配置去掉 `alliance.slots` / `.shards` | 原 12 个用例按新路由重跑，保留每条的红证据；新增两条：创建请求重发落到另一个实例时不建第二个联盟；守卫并发新建只有一个 owner | 2～3 天 |
+| 4 demo 迁移 | 2.6 的对应表全部落地；game 去掉 `remote_entity`、装只读 Mirror；dev-run 加两个 alliance 实例；Robot / loadtest 场景；注释改正 | 重新生成 game-demo，build / vet / test、`roost id check`、`roost generate --check` 干净；`make dev-smoke` 通过 | 3～4 天 |
+| 5 测试与端到端 | 新脚本（或扩展 `scripts/test-demo-generated.sh`）在真实依赖上跑：**两个 game 进程上的玩家加入同一公会**并互相读到；**实例扩容**：1 个实例扩到 2 个后连续建盟，新联盟分布到两个实例，已有联盟不动；**运维迁移**：把一批联盟转到新实例，迁移中持续写不丢、不重复，持有旧缓存或旧登记的调用方经改投成功；**alliance 实例 kill -9**：窗口内请求只得到“可重试 / 结果未知”，原 RequestID 重查后结论唯一、无重复入会；不拉起时它的登记在 TTL 后过期，同 sid 拉起后预加载类型重新登记，未预加载类型由第一个请求冷加载并登记；**Redis 停掉期间**写照常（回退所有权记录），恢复后续期重建登记；**Saga 扣钱失败回滚**：建盟被拒后金币退回，Player 扣款步骤后 kill -9 game 进程，恢复后只扣一次、退一次；**一人一盟**：两个实例上的联盟并发批准同一玩家，只成功一个。另做短测（每轮不超过 30 分钟）：单实例写 RPC 延迟、Mirror 回源量、续期量与查找回退率 | 全部 `-race`；证据进 `docs/performance/benchmarks/<label>/`；Linux 与跨机不在本轮验收 | 5～7 天 |
+| 6 文档 | guide/05、guide/09 增加“实体服务”一节（含路由登记与预加载）；REMOTE_ENTITY 写路由登记的契约；demo WALKTHROUGH；KNOWN-LIMITS 删旧条目、登记剩余边界；CHANGELOG；功能版发版前写 `docs/release/vX.Y.0-NOTES.md`（存储格式变化按未上线规则：不兼容，需清空公会数据） | `scripts/check-doc-anchors.py` 0 broken；根包 `GOWORK=off go test -count=1 .` | 1～2 天 |
 
-合计约 20～28 天。阶段 1、2 可以并行；3 依赖 1；4 依赖 2、3；5 依赖 4。
+剩余合计约 17～25 天（1R 4～6、2R 2～3、3 改造 2～3、4 3～4、5 5～7、6 1～2）。1R、2R 可以并行，前提是先定下 `CallRoutedChecked`、前置检查与两个 ModOption 的接口；3 依赖 1R、2R；4 依赖 3；5 依赖 4。阶段 3 的本地分支改造完成、维护者复核之前不推送。
 
 ## 5. 风险与未验证项
 
@@ -296,7 +402,12 @@ game-demo 是参考实现，不改成生成产物；以上四件生成器能力�
 - **兴趣表容量**：每个在线玩家一个 `AllianceMember` 兴趣时，大规模在线会接近缺省上限（2.4），没有测。
 - **成员表文档大小**：整文档读写，人数上限越大每笔写越重；上千人联盟没有测（第 6 节第 1 条）。
 - **一人一盟的两步**：期限、权威收尾与 effect 重投的组合是本方案新写的协议，阶段 3 用单元测试、阶段 5 用并发批准与 kill -9 验证；之前不能宣称“一人一盟”成立。
-- **槽位表滚动更新期间**：调用方的旧表靠“改投”一次，改投目标也在转移中时答复可重试；高频写联盟在迁移时会有秒级不可写。
+- **Redis 不可用时的退化**：登记与续期失败只影响路由效率。缓存未命中的请求回退读所有权记录，每次多一次 Mongo 点读，延迟上升；写准入不受影响。Redis 恢复后，续期返回“不存在”会触发重新登记。Redis 长时间不可用时 Mongo 点读放大多少没有测（阶段 5 测一次）。
+- **路由抖动**：迁移、续期失败、kill -9 后登记过期再重新登记，这些期间同一个实体的请求可能多一跳改投，或多一次重新查找。改投只跟一次；改投目标也在转移中时答“可重试”。高频写的联盟在迁移时仍有秒级不可写。
+- **预加载的起服时间与内存**：两者随“owner 是本 sid 的该 kind 实体数”线性增长。按每个联盟文档约 20KB 估，一万个约 200MB，起服要从 Mongo 读同样的量，没有测。这个策略只给数量可控的类型用，`AllianceMember` 不预加载。
+- **续期流量与加载集合只增不减**：续期量是“已加载的登记 kind 实体数 / 10s”。`AllianceMember` 按需加载，Remote 实体又没有空闲卸载（1.9），长时间运行后加载集合只增不减（2.7 的估算）。
+- **随机路由下的创建幂等**：建盟的回执锚在发起者的 `AllianceMember` 上（2.3），这是本方案新写的协议，阶段 3 改造时补用例。
+- **死掉的 owner**：不拉起同 sid，它的实体就转不走。登记过期后调用方仍从所有权记录查到它，请求一直是“可重试”，这与原方案相同。
 - **接管依赖 WAL 卷**：换机拉起同 sid 必须带上原 WAL 卷，或先确认 WAL 已排空；与 game sid 相同的部署约束，部署文档要写明。
 - **平台**：只在 macOS 本机验收；Linux 复跑与跨机不在本轮。
 
@@ -327,9 +438,10 @@ game-demo 是参考实现，不改成生成产物；以上四件生成器能力�
 
 | 阶段 | 状态 | 提交 | 备注 |
 | --- | --- | --- | --- |
-| 1 框架 | 本地完成，待维护者复核推送 | `f5544d37`（①②）、`6b949c30`（③，`0281f183` 补 Mod 依赖名检查）、`1323a763`（④） | 验收（2026-11-04 macOS，私有依赖 `scripts/mirror-local.sh` 偏移 22000）：受影响包 `-race`、全量 `go test ./...`、根包、glsvet、doc anchors 0 broken、`test-remote-generated.sh` 全部 PASS（MirrorLocal 两项按门变量 SKIP）、`test-demo-generated.sh` PASS、`test-remote-matrix.sh` 21 格 PASS。① 守卫按维护者 A 做成“别的服务的 kind”黑名单：`coreremote.Config.ForeignKinds` / `wiring/remoteentity.WithForeignKinds`，不是 2.10 原文的“本服务可写 kind”白名单；只经 ModOption 传入、不加 YAML 键（声明只在实体注解一处，阶段 2 生成）。拒绝点覆盖写准入与 `beginOwnershipTransition` 的全部所有权操作，哨兵 `entity.ErrRemoteKindNotOwned`。② `servicerpc.SlotTable` / `SlotTableConfig` / `CallSlotChecked` / `Redirect` / `Retryable` / `Classify`，新框架码 `errcode.CodeRetryable = 4`、`CodeRedirect = 5`；Remote 写错误到答复的映射放在 `wiring/remoteentity.RPCWriteAnswer`（infra 不能依赖 framework）。`SlotTableConfig` 的 `slots` 是整数、不能用 `shared` tag，跨服务一致性核对留给阶段 2 的 doctor。新建实体时服务端按 `table.OwnerOf` 判断槽位归属留给阶段 3（guide/09 2A 边界）。③ `nest.MirrorSnapshotResolver`，wiring Nest Mod 在没有写 Manager、有 `ModRemoteMirror` 时接上。④ 端到端首跑即绿，未发现缺陷。“恢复完成前不接请求”框架已由 App 启动顺序保证（DataEngine Start 排空 WAL），owner Mod 依赖 `nest` 由阶段 2 生成器声明 |
-| 2 生成器 | 本地完成，待维护者复核推送 | `c1ff3ade`（① service=）、`3e791441`（③ remote_mirror）、`57eaa127`（④ -entity-service）、`28f93073`（② shard= 解析）、`89255aef`（接阶段 1）、`9a94d338`（CLI 白名单与 rpc 文件头修复） | 验收（2026-11-04 macOS，私有依赖 `scripts/mirror-local.sh` 偏移 38000）：gofmt、build、vet、根包、全量 `go test ./...`、doc anchors 0 broken、`test-sync-modes` / `test-genres`（13 类 passed）/ `test-remote` / `test-mmorpg` / `test-demo-generated` 全部通过；新生成工程（game + alliance、Remote 托管 Guild `service=alliance`、`add rpc -entity-service` + `shard=`）build / vet / test、`go generate ./...` 后 porcelain 干净、`roost id check`、`roost generate --check` 通过。偏差：① 归属 handler 由生成的 `NewOwnedNestHandlersMod` 在 Provide 时注册到引擎实例（不登记 hotcode），`ForeignKinds` 只含 Remote 托管 kind；② `shard=` 参数是编码槽位的业务号（unique id），一个服务不混用 `shard=` 与 `affinity=`，槽位表一致性由 doctor `rpc-slots:<rpc>` 按配置文件核对（slots 是整数用不了 shared tag），生成器不自动往配置里写表；④ 请求回执的实体字段按 §2.2 留给阶段 3，不由 `-entity-service` 生成；答复码用阶段 1 的框架码，工程只分配 `ErrRequestInvalid`。顺带修复 `roost generate` 与 `//go:generate` 互改 rpc 文件头（既有缺陷） |
-| 3 服务骨架 | 未开始 | — | 依赖 1 |
-| 4 demo 迁移 | 未开始 | — | 依赖 2、3 |
+| 1 框架 | 已合入 main；②里的槽位表按 2026-11-04 路由决定由第 4 节 1R 移除 | `f5544d37`（①②）、`6b949c30`（③，`0281f183` 补 Mod 依赖名检查）、`1323a763`（④） | 验收（2026-11-04 macOS，私有依赖 `scripts/mirror-local.sh` 偏移 22000）：受影响包 `-race`、全量 `go test ./...`、根包、glsvet、doc anchors 0 broken、`test-remote-generated.sh` 全部 PASS（MirrorLocal 两项按门变量 SKIP）、`test-demo-generated.sh` PASS、`test-remote-matrix.sh` 21 格 PASS。① 守卫按维护者 A 做成“别的服务的 kind”黑名单：`coreremote.Config.ForeignKinds` / `wiring/remoteentity.WithForeignKinds`，不是 2.10 原文的“本服务可写 kind”白名单；只经 ModOption 传入、不加 YAML 键（声明只在实体注解一处，阶段 2 生成）。拒绝点覆盖写准入与 `beginOwnershipTransition` 的全部所有权操作，哨兵 `entity.ErrRemoteKindNotOwned`。② `servicerpc.SlotTable` / `SlotTableConfig` / `CallSlotChecked` / `Redirect` / `Retryable` / `Classify`，新框架码 `errcode.CodeRetryable = 4`、`CodeRedirect = 5`；Remote 写错误到答复的映射放在 `wiring/remoteentity.RPCWriteAnswer`（infra 不能依赖 framework）。`SlotTableConfig` 的 `slots` 是整数、不能用 `shared` tag，跨服务一致性核对留给阶段 2 的 doctor。新建实体时服务端按 `table.OwnerOf` 判断槽位归属留给阶段 3（guide/09 2A 边界）。③ `nest.MirrorSnapshotResolver`，wiring Nest Mod 在没有写 Manager、有 `ModRemoteMirror` 时接上。④ 端到端首跑即绿，未发现缺陷。“恢复完成前不接请求”框架已由 App 启动顺序保证（DataEngine Start 排空 WAL），owner Mod 依赖 `nest` 由阶段 2 生成器声明 |
+| 2 生成器 | 已合入 main；② `shard=` 按 2026-11-04 路由决定由第 4 节 2R 移除 | `c1ff3ade`（① service=）、`3e791441`（③ remote_mirror）、`57eaa127`（④ -entity-service）、`28f93073`（② shard= 解析）、`89255aef`（接阶段 1）、`9a94d338`（CLI 白名单与 rpc 文件头修复） | 验收（2026-11-04 macOS，私有依赖 `scripts/mirror-local.sh` 偏移 38000）：gofmt、build、vet、根包、全量 `go test ./...`、doc anchors 0 broken、`test-sync-modes` / `test-genres`（13 类 passed）/ `test-remote` / `test-mmorpg` / `test-demo-generated` 全部通过；新生成工程（game + alliance、Remote 托管 Guild `service=alliance`、`add rpc -entity-service` + `shard=`）build / vet / test、`go generate ./...` 后 porcelain 干净、`roost id check`、`roost generate --check` 通过。偏差：① 归属 handler 由生成的 `NewOwnedNestHandlersMod` 在 Provide 时注册到引擎实例（不登记 hotcode），`ForeignKinds` 只含 Remote 托管 kind；② `shard=` 参数是编码槽位的业务号（unique id），一个服务不混用 `shard=` 与 `affinity=`，槽位表一致性由 doctor `rpc-slots:<rpc>` 按配置文件核对（slots 是整数用不了 shared tag），生成器不自动往配置里写表；④ 请求回执的实体字段按 §2.2 留给阶段 3，不由 `-entity-service` 生成；答复码用阶段 1 的框架码，工程只分配 `ErrRequestInvalid`。顺带修复 `roost generate` 与 `//go:generate` 互改 rpc 文件头（既有缺陷） |
+| 路由决定变更 | 方案已改写 | 本行所在的文档提交 | 2026-11-04 维护者改写决定 2：分片保留，不用槽位表；路由改为实体加载时在 Redis 登记带过期的“实体 ID → sid + 代际”，RPC 标为路由 RPC，由框架按缓存 → Redis → 所有权记录查找，新建实体走随机路由，起服预加载是实体类型的显式策略（`preload=startup`）。改动：决定一览第 2 行、1.4（核实随机路由：生成客户端缺省是队列组，不是 `CallDiscoveredChecked`）、新增 1.9、2.2、2.3、2.5、2.7、2.10 第 2 项、第 3 节、第 4 节（新增 1R / 2R，阶段 3 改为改造）、第 5 节。guide/09 §2A、PROJECT_GENERATOR §6 与 CHANGELOG `[Unreleased]` 仍按槽位表描述，在 1R / 2R 实施时随代码改 |
+| 3 服务骨架 | 本地分支 `feat/alliance-p3-service` 按旧槽位方案实现，未推送；按第 4 节第 3 行改造后再推送 | — | 依赖 1R、2R |
+| 4 demo 迁移 | 未开始 | — | 依赖 3 |
 | 5 测试与端到端 | 未开始 | — | 依赖 4 |
 | 6 文档 | 未开始 | — | — |
