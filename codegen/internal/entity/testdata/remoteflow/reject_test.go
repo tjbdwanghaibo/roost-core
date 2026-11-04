@@ -159,9 +159,11 @@ func (c *unreachableCommitter) CommitStatus(ctx context.Context, id entity.Remot
 }
 
 // holdingProjection 是投影存储适配器替身：选中实体的记录停在 release 之前，放行后照常交给正式 MongoStore 投影。
+// heldEffects 记下被拦住的那条记录里有几个 effect（与 Remote 写同一条提交记录）。
 type holdingProjection struct {
 	*engine.MongoStore
-	gate faultGate
+	gate        faultGate
+	heldEffects atomic.Int32
 }
 
 func (p *holdingProjection) Project(ctx context.Context, record coredata.CommitRecord) error {
@@ -172,6 +174,7 @@ func (p *holdingProjection) Project(ctx context.Context, record coredata.CommitR
 		}
 	}
 	if held, release, _, ok := p.gate.take(remote); ok {
+		p.heldEffects.Store(int32(len(record.Effects)))
 		close(held)
 		select {
 		case <-release:
@@ -232,6 +235,9 @@ type rejectRig struct {
 	afterCommit, afterCommitOnFast atomic.Int32
 	// ref 是订阅者持有的对象，remove 帧只有 ref 没有内容。
 	ref frame.ObjectRef
+	// effects 是 outbox 的发布端：缺省像 noEffects 一样拒绝（不该有 effect 的用例出 effect 时发布一直失败），
+	// emit_test.go 打开 accept 后记下发布的 effect。
+	effects *effectRecorder
 }
 
 // newRejectRig 装配一套正式链路；register 在 Nest 启动前登记用例自己的 handler（可为 nil）；extra 追加 Nest 选项（例如阶段指标）。
@@ -311,7 +317,8 @@ func newRejectRig(t *testing.T, ctx context.Context, mongo fmongo.IMongo, redis 
 	if err != nil {
 		t.Fatal(err)
 	}
-	outbox, err := engine.NewOutboxWorker(outboxStore, noEffects{}, engine.OutboxWorkerOptions{Owner: "remote-reject"})
+	rig.effects = &effectRecorder{}
+	outbox, err := engine.NewOutboxWorker(outboxStore, rig.effects, engine.OutboxWorkerOptions{Owner: "remote-reject"})
 	if err != nil {
 		t.Fatal(err)
 	}

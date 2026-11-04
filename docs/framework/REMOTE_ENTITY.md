@@ -15,6 +15,8 @@ Remote Entity 只保留一条写链路：Nest 声明目标 → 全局顺序获�
 3. 权威 snapshot；
 4. transaction receipt 与待发布 outbox。
 
+Remote 实体 handler 里 `nest.Emit` / `saga.EmitStart`：Emit 把 memory 升到 strict，effect 与 Remote 写进同一条 WAL 提交记录，投影时一起进 Mongo（DataEngine 投影的同一个事务），outbox 在投影之后各发布一次；handler 失败时两者都不提交。2026-11-04 起有真实依赖端到端（`codegen/internal/entity/testdata/remoteflow/emit_test.go` 的 `TestGeneratedRemoteHandlerEmitsEffectsWithTheRemoteWrite`，经 `scripts/test-remote-generated.sh`，strict 与声明 memory 两种 handler）：投影被拦住时 Mongo 与 outbox 都看不到这笔，记录里正好两个 effect；放行后版本 +1、两个 effect 各发布一次；失败的 handler 不留 Remote 写也不发 effect。原生 saga 步骤仍不能写 Remote（[SAGA.md 第 7 条](SAGA.md#原生步骤执行契约u-0280维护者-2026-10-05-决定2026-10-28-决定-2a-改为回执在实体里)），这里覆盖的是“Remote handler 启动 saga / 发 effect”。
+
 多实体写要求 `IRemoteAtomicBatchCommitter`，不支持时 fail-fast，绝不退化成逐实体提交。删除 commit 必须带完整 `RemoteDataDelete` 集合，codegen 自动生成。
 
 框架只接受完整的 `IRemoteEntityBackend`，并通过 `IRemoteEntityManager.SetBackend` 一次注入，缺少 load、原子 batch commit、snapshot loader 或 outbox 任一能力都会在编译期暴露。组合方式是 `remoteentity.NewBackend(loader, remoteentity.NewMongoCommitter(...))`：业务只实现 `LoadRemoteEntity`，Wiring中由 `WithMongoStorage(loader)` 装配（没有 `NewMongoBackend`）。DAO 库名映射表只给 DataEngine 一次（`engine.MongoStoreConfig.Databases`：wiring 由 DataEngine Mod 冻结后传入，自建装配用 `dataengine.NewDatabaseMap` 合成），`engine.Assemble` / `MongoStore.SetRemoteProjection` 接 Remote 投影时自动把同一张表绑给 `Backend` / `MongoCommitter`（二者实现 `dataengine.DatabaseMapBinder`）；Remote 存储已绑另一张表时接线报错、不覆盖。没有表时两边都拒绝读写带库名的 DAO 文档（`dataengine.ErrDatabaseMapNotBound`，维护者 2026-10-21）。Remote 要在接上投影之前写 DAO 文档时（例如先启动、恢复上一轮未完成的提交），先调 `Backend.BindDatabaseMap` 绑同一张。

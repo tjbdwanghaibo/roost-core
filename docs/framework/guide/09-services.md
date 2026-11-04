@@ -74,6 +74,8 @@ RPC 生成物分传输半与装配半：接口包持有 wire/handler/BusClient�
 - **四类答复**：`servicerpc.Classify(err)` 给出 `OutcomeOK`、`OutcomeRejected`（业务错误码，不重试）、`OutcomeRetryable`（确定没执行：no responders、`CodeRetryable`、`CodeRedirect`，原 RequestID 重试）、`OutcomeUnknown`（超时、取消、`CodeInternal`、传输或解码错误等一切拿不准的，原 RequestID 查结果或重发）。
 - **现有 NATS 客户端的自动重试**：轻量 RPC 在 no responders 时按 `nats.rpc` 重试策略退避重试，直到次数或调用期限用完（目标在期间恢复时请求就在这次调用里执行）；BusClient 总给调用带期限，单次尝试用满整个期限，超时不会在同一次调用里重发。但调用方自己的重试、JetStream RPC 的重投仍会让同一请求送达多次，所以写 RPC 必须按 RequestID 幂等，超时一律按结果未知。普通 Bus RPC 不把调用方截止时间传到接收端（上一节）。
 
+- **恢复完成前不接请求**：App 按依赖顺序逐个 Start Mod（共享 Mod 先于服务专属 Mod），DataEngine Mod 的 Start 在返回前把 WAL 里未投影的记录排空（`Runtime.drainAtStartup`，受 `dataengine.startup_timeout` 约束），Nest Mod 可选依赖 DataEngine 与 `remote_entity`。所以只要实体服务的 RPC owner Mod 声明 `DependsOn` 含 `nest`，它在 Start 里注册总线 handler 时恢复已经完成；之前的轻量 RPC 得到 no responders（“可重试，未执行”）。这一条框架已经保证，不需要新机制；生成的 owner Mod 现在只依赖 `nats`，改为依赖 `nest` 由生成器（`roost add rpc -entity-service`，联盟方案阶段 2）负责。JetStream RPC 传输下请求先进流、handler 注册后才投递，不是 no responders。
+
 边界：槽位表与“首写认领”合在一起时，表过期的实例收到一个**还没有所有权记录**的新实体会把它认领走（同一服务内部不受实体归属守卫约束）；新建实体的服务端要先按 `table.OwnerOf` 判断槽位归不归自己，这一条由服务骨架（联盟方案阶段 3）负责。回归：`infra/network/servicerpc` 的 `slots_test.go`、`wiring/remoteentity` 的 `rpc_answer_test.go`。
 
 ## 3. 存储与幂等
