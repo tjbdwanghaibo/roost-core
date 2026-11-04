@@ -201,6 +201,12 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 		partition.Uninstall(node)
 		return nil, errors.New("partition: node did not start")
 	}
+	// 别的进程经传输发来的消息（Enter、攻击、交接、witness、队伍快照与成员通知）是本进程的外部输入：登记给 App，停机第一步
+	// 关掉收件并等在途的回调（App 生命周期方案），之后 Service.Shutdown 才停 Node 的出站（stop）、Nest 才停。
+	if err := app.AddIngress(registry, "partition.cellworld", node); err != nil {
+		rt.stop()
+		return nil, fmt.Errorf("partition: %w", err)
+	}
 	if rt.cell != nil {
 		if err := rt.spawnMonsters(ctx); err != nil {
 			rt.stop()

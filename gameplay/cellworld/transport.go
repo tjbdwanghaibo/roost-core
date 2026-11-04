@@ -9,8 +9,8 @@ import (
 // Transport 是 Cell 与 Base 之间的消息通道：至多一次、可能丢失 / 重复 / 乱序（协议靠版本、重传与去重容忍）。
 //
 // Subscribe 的 handler 在传输自己的 goroutine 上调用，必须快速返回、不能阻塞；data 只在调用期间有效。
-// 返回的 unsubscribe 之后可能还有在途回调结束前的最后几次调用：Cell / Base 的 handler 只往不关闭的有界
-// 收件箱做非阻塞投递，所以不需要等回调排空。
+// 返回的 unsubscribe 之后可能还有在途回调结束前的最后几次调用：Node 自己有准入门（CloseIngress 先关门、等在途回调
+// 返回再退订），所以传输不必保证退订时回调已排空。
 type Transport interface {
 	Publish(subject string, data []byte) error
 	Subscribe(subject string, handler func(data []byte)) (unsubscribe func() error, err error)

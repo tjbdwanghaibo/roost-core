@@ -3,6 +3,7 @@ package cellworld
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -185,5 +186,101 @@ func TestHandlersBindToExactlyOneNode(t *testing.T) {
 	}
 	if _, err := NewNode(cfg); err == nil {
 		t.Fatal("a second node bound the same handlers")
+	}
+}
+
+// blockingNest 把一种 handler 的投递挡在准入里，用来造“传输回调正在处理中”的状态；其余照常交给引擎。
+type blockingNest struct {
+	nest.Client
+	handler    nest.HandlerName
+	entered    chan struct{}
+	release    chan struct{}
+	dispatched atomic.Int64
+}
+
+func (b *blockingNest) Dispatch(ctx context.Context, h nest.HandlerName, id int64, p nest.Params, opts ...nest.SendOpt) error {
+	if h == b.handler {
+		b.dispatched.Add(1)
+		select {
+		case b.entered <- struct{}{}:
+		default:
+		}
+		<-b.release
+	}
+	return b.Client.Dispatch(ctx, h, id, p, opts...)
+}
+
+// App 停机第一步关外部输入（App 生命周期方案，main edd1ccb7）：cellworld 的收件（别的进程经 NATS 发来的 Enter / 攻击 /
+// 交接 / witness / 队伍快照）是外部输入。CloseIngress 之后到达的消息不再投进 Nest、不再喂 mirror；调用时正在处理的那一条
+// （传输回调里的准入）处理完才返回，ctx 先到期返回 ctx 错误、用新 ctx 再调继续等；出站照常（Run 不退出）。
+func TestCloseIngressStopsTakingMessagesAndWaitsForTheOneInFlight(t *testing.T) {
+	lb := newLoopback()
+	grid := worldGrid(t, 2, 1)
+	cell := CellID{0, 0}
+	var gate *blockingNest
+	p := startProc(t, procSpec{sid: grid.SID(cell), cell: &cell, grid: grid, transport: lb, mod: func(cfg *NodeConfig) {
+		gate = &blockingNest{Client: cfg.Nest, handler: hInput, entered: make(chan struct{}, 1), release: make(chan struct{})}
+		cfg.Nest = gate
+	}})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(gate.release) }) }
+	defer p.stop()
+	defer release() // 失败退出时先放开挡住的回调，否则停传输会一直等它
+	send := func(seq uint64) {
+		data, err := encodeMsg(&wireMsg{Kind: kindInput, From: 999, Input: &inputReq{ID: actorID(7), Seq: seq, VX: 1}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := lb.Publish(Subject("w", p.sid), data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(1)
+	select {
+	case <-gate.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first input never reached the dispatch")
+	}
+	// 第一条还在准入里：CloseIngress 不能先返回；ctx 到期答 ctx 错误。
+	short, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	err := p.node.CloseIngress(short)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CloseIngress with a message in flight = %v, want the ctx error (it must wait for the one in flight)", err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- p.node.CloseIngress(context.Background()) }()
+	select {
+	case err := <-closed:
+		t.Fatalf("CloseIngress returned %v while the first message was still in flight", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	release()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("CloseIngress after the one in flight finished = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("CloseIngress did not return after the message in flight finished")
+	}
+	in := p.node.Stats().MsgsIn
+	send(2)
+	send(3)
+	time.Sleep(200 * time.Millisecond)
+	if got := gate.dispatched.Load(); got != 1 {
+		t.Fatalf("inputs dispatched after CloseIngress: %d in all, want only the first one", got)
+	}
+	if s := p.node.Stats(); s.MsgsIn != in {
+		t.Fatalf("messages taken after CloseIngress: %d → %d, want none", in, s.MsgsIn)
+	}
+	// 出站与 Run 不受影响：Run 只在 ctx 结束时返回。
+	select {
+	case <-p.done:
+		t.Fatal("Run returned after CloseIngress; only the receiving side may stop")
+	default:
+	}
+	if err := p.node.CloseIngress(context.Background()); err != nil {
+		t.Fatalf("a second CloseIngress = %v, want nil (idempotent)", err)
 	}
 }

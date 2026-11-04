@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -293,8 +294,16 @@ type Node struct {
 	ready       chan struct{}
 	running     atomic.Bool
 	lastExpire  atomic.Int64
-	stats       nodeCounters
-	handlers    *Handlers
+	// ingress 是收件的准入门（CloseIngress）：closed 之后回调直接丢弃；busy 是正在执行的回调数，closed 且归零时关 idle。
+	ingress struct {
+		sync.Mutex
+		closed      bool
+		busy        int
+		idle        chan struct{}
+		unsubscribe func() error
+	}
+	stats    nodeCounters
+	handlers *Handlers
 }
 
 // NewNode 校验配置并构造 Node。
@@ -329,11 +338,25 @@ func (n *Node) Run(ctx context.Context) error {
 	if !n.running.CompareAndSwap(false, true) {
 		return errors.New("cellworld: node already ran")
 	}
-	unsubscribe, err := n.cfg.Transport.Subscribe(Subject(n.cfg.World, n.cfg.SID), n.receive)
-	if err != nil {
-		return fmt.Errorf("cellworld: subscribe sid %d: %w", n.cfg.SID, err)
+	n.ingress.Lock()
+	if !n.ingress.closed {
+		unsubscribe, err := n.cfg.Transport.Subscribe(Subject(n.cfg.World, n.cfg.SID), n.receive)
+		if err != nil {
+			n.ingress.Unlock()
+			return fmt.Errorf("cellworld: subscribe sid %d: %w", n.cfg.SID, err)
+		}
+		var once sync.Once
+		n.ingress.unsubscribe = func() error {
+			var err error
+			once.Do(func() { err = unsubscribe() })
+			return err
+		}
 	}
-	defer func() { _ = unsubscribe() }()
+	stopReceiving := n.ingress.unsubscribe
+	n.ingress.Unlock()
+	if stopReceiving != nil {
+		defer func() { _ = stopReceiving() }()
+	}
 	close(n.ready)
 	n.pump(ctx)
 	return nil
@@ -492,6 +515,10 @@ func (n *Node) registerCommit(fx *txEffects) {
 
 // receive 是传输回调：解码后投成 Nest 请求。不阻塞（Dispatch 只做准入）；准入失败计数，协议靠重传容忍。
 func (n *Node) receive(data []byte) {
+	if !n.admit() {
+		return
+	}
+	defer n.admitted()
 	n.stats.msgsIn.Add(1)
 	n.stats.bytesIn.Add(uint64(len(data)))
 	m, err := decodeMsg(data)
@@ -1159,4 +1186,58 @@ func (n *Node) handleInspect(es []fentity.IThreadSafeEntity, _ []any, _ ...nest.
 	}
 	slices.SortFunc(out, func(a, b EntitySnapshot) int { return int(a.State.ID - b.State.ID) })
 	return out, nil
+}
+
+// CloseIngress 关闭本进程的 cellworld 收件，实现 app.IngressCloser（App 停机第一步：别的进程经传输发来的 Enter / 攻击 /
+// 交接 / witness / 队伍快照与成员通知都是外部输入，要在 Service.Shutdown 与 Nest 停止之前关掉）。
+//
+// 关准入（幂等）：之后进来的回调直接丢弃（不解码、不计 MsgsIn、不投 Nest、不喂 mirror）；在 ctx 内等调用时正在执行的
+// 回调返回（它们只做 Nest 准入或 mirror 的短锁更新），然后退订收件主题。ctx 先到期返回 ctx 错误，用新 ctx 再调继续等。
+// 只停“接收”：出站 goroutine、Base / Cell 的心跳与已经准入 Nest 的请求照常，直到 Run 的 ctx 结束（Service.Shutdown）。
+// 丢掉的消息由协议容忍（重传、租约、看门狗），与进程退出时一样。
+func (n *Node) CloseIngress(ctx context.Context) error {
+	n.ingress.Lock()
+	if !n.ingress.closed {
+		n.ingress.closed = true
+		n.ingress.idle = make(chan struct{})
+		if n.ingress.busy == 0 {
+			close(n.ingress.idle)
+		}
+	}
+	idle := n.ingress.idle
+	n.ingress.Unlock()
+	select {
+	case <-idle:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	// 准入门已经挡住新回调、在途的都返回了，再退订：有的传输（进程内替身）退订时要等投递 goroutine 的回调结束。
+	n.ingress.Lock()
+	unsubscribe := n.ingress.unsubscribe
+	n.ingress.unsubscribe = nil
+	n.ingress.Unlock()
+	if unsubscribe != nil {
+		_ = unsubscribe()
+	}
+	return nil
+}
+
+// admit 在传输回调开始时取准入：关闭之后答 false；成功时调用方处理完必须调 admitted。
+func (n *Node) admit() bool {
+	n.ingress.Lock()
+	defer n.ingress.Unlock()
+	if n.ingress.closed {
+		return false
+	}
+	n.ingress.busy++
+	return true
+}
+
+func (n *Node) admitted() {
+	n.ingress.Lock()
+	defer n.ingress.Unlock()
+	n.ingress.busy--
+	if n.ingress.closed && n.ingress.busy == 0 {
+		close(n.ingress.idle)
+	}
 }
