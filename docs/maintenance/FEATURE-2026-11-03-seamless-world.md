@@ -1,6 +1,6 @@
 # 功能设计：多进程无缝大世界（2026-11-03）
 
-**状态：思路稿（维护者 2026-11-03：“可以先不做”“把这个方案思路先记到文档里”）；同日维护者要求“可以开一个分支先实现一版，并测试一下”，第一版原型只在分支 `feat/seamless-world-prototype` 上（§5 设计、§6 实测）；同日维护者定下 v2 方向（Cell 是 Scene 的模式、Cell 部分是 Nest 实体），v2 也只在该分支（§7 设计、§8 实测与剩余缺口）；同日维护者定下 D1～D4，v2.1 的 NPC 降档与 demo 接入的方向问题见 §9；同日维护者定下 D5～D8，v2.2 的 game-demo 接入与多进程端到端见 §10。未合入 main，不是现行能力。现行能力以 [MMORPG 接入手册](../framework/MMORPG-INTEGRATION.md) 为准。**
+**状态：思路稿（维护者 2026-11-03：“可以先不做”“把这个方案思路先记到文档里”）；同日维护者要求“可以开一个分支先实现一版，并测试一下”，第一版原型只在分支 `feat/seamless-world-prototype` 上（§5 设计、§6 实测）；同日维护者定下 v2 方向（Cell 是 Scene 的模式、Cell 部分是 Nest 实体），v2 也只在该分支（§7 设计、§8 实测与剩余缺口）；同日维护者定下 D1～D4，v2.1 的 NPC 降档与 demo 接入的方向问题见 §9；同日维护者定下 D5～D8，v2.2 的 game-demo 接入与多进程端到端见 §10。2026-11-04 的框架契约 E1～E4 与追加项见 §11，第 3 项（战斗面板放 Cell）见 §12，第 4 项（跨 Base 的队伍面板，Remote 托管的 Team）见 §13。未合入 main，不是现行能力。现行能力以 [MMORPG 接入手册](../framework/MMORPG-INTEGRATION.md) 为准。**
 
 登记在 [DESIGN-TODO“按需求触发的功能”](DESIGN-TODO.md#按需求触发的功能)。
 
@@ -868,3 +868,113 @@ demo 单测（[demo-unit-red-before.txt](../performance/benchmarks/cellworld-v24
 ### 12.3 E4
 
 做法确认，§11.4 不变。
+
+## 13. v2.5：跨 Base 的队伍面板（第 4 项 = A，2026-11-04）
+
+维护者 2026-11-04 对 §12.1 的决定：**A**——分区场景另设一种**不开战斗**的组队关系（邀请 / 接受，以及离队、队长解散），成员表放在 **Remote 托管的 Team 实体**上（不放队长的 Player 上）；普通场景、匹配、锁步战斗都不动。队伍面板：Base 之间经 cellworld 已有的 NATS 传输每 1s 互发本 Base 上队员的快照，收到的放进 mirror、推给本进程的队员；快照超过 3 个周期没更新从面板移除；成员在哪个 Base 按 Player 的静态 sid 归属推出；同 Base / 视野内的队友沿用现有路径，不重复推。队伍规模、邀请过期等取 demo 级缺省（配置声明一次、加载时校验一次），标“原型缺省”。§12.2 的“面板变化不回血”维持暂定，不改。
+
+codebase-memory-mcp 本轮连不上（MCP 连接关闭），结构结论（调用方、实现方、`Interest.Hide` 对关系视野的影响、Remote 托管实体的所有权模式）都按当前源码与 `rg` 得出。
+
+### 13.1 先跟上 main（rebase）
+
+分支原 HEAD/origin 2dfa7169（rebase 前的提交，已不在分支历史里），merge-base `a54f392e`；main 上多了一个提交 `dd49f5a6 feat(policy)：Interest 按 LOD 层换整套同步视图`（`BandLayer` 改为 `func(level, band int)`）。`git rebase origin/main` 27 个提交**没有文本冲突**：分支的 E2（`interest.go` 的 self 跟着 Hide / Show 走）与 main 的改动在同一文件的不同位置；分支里没有 `BandLayer` 的调用方（cellworld、demo 分区代码都不配它），签名变化不需要改分支代码。rebase 后 `GOWORK=off go build ./... && go vet ./...` 通过，`go test -race -count=1 ./framework/sync/entitysync/policy/ ./gameplay/cellworld/...` 通过（policy 10.6s、cellworld 129.2s）。CHANGELOG 分支本身不改，`[Unreleased]` 只有 main 的那一条。按维护者同意 `git push --force-with-lease origin HEAD:feat/seamless-world-prototype`（2dfa7169 → `3bd2e484`），`merge-base --is-ancestor origin/main HEAD` 核对通过。rebase 改了分支提交的 SHA：本文与证据目录 README 里引用的分支提交号随之换成 rebase 后的（根包 `TestDocumentedCommitsAreReachableFromHEAD` 要求引用的提交在 HEAD 的历史里）。
+
+### 13.2 设计
+
+**两层**：组队关系与成员表是 game 的（demo：Team 实体 + 组队协议）；Base 之间的快照、收件、面板视野与成员表缓存的收敛是 cellworld 的（`group.go`，与具体的“队伍”无关：任何“玩家分组、成员在不同 Base 上”的关系都能用）。
+
+| 层 | 内容 | 位置 |
+| --- | --- | --- |
+| 成员表（权威） | Team 实体（`remote=managed`、`EntityCategoryRemote`，与 Guild 同一种）：`Leader`、`Members`（玩家 ID → 他的 Base 的 sid）、`Invites`（被邀请人 → 过期时间）、`Ver`（每次成员或队长变化 +1）。规则在 `RosterComponent`：只有队长邀请与解散；邀请过期；成员上限在邀请与接受时查（被邀请的人不占名额）；重复接受是无变化的成功；队长离队交给剩下玩家 ID 最小的那名，最后一个人离队等于解散；解散后文档保留（成员表空、版本照旧前进，ID 不复用） | demo `game/entities/team/`、`db/def/team.go` |
+| 共享模式 | Remote 托管实体缺省由第一个写者**独占**，别的进程写入被 fence 拒绝（`entity.ErrRemoteFenced`，见 13.5 第一轮端到端）。队员在不同 Base 上都要写成员表：建队的进程在建出实体后 `ClaimRemoteOwnership` + `EnterRemoteSharedMode`（框架现有能力，SLG 联盟同一用法），之后每一笔 [Team, Player] 事务经分布式锁写。共享模式不能挂心跳，Team 没有心跳 | demo `game/controllers/player/team.go` `shareTeam` |
+| 组队协议 | `TeamInvite(invitee)`（没有队伍时先保留持久 ID、建实体、切共享，再由同一笔邀请事务建成：邀请人是队长与第一名成员）、`TeamAccept(team_id)`、`TeamLeave()`、`TeamDisband()`、`TeamInfo()`（msg 10029～10033，答复都是成员表 `TeamResponse`）；错误码 `team_exists` / `team_missing` / `team_not_leader` / `team_not_invited` / `team_full` / `team_busy`（100027～100032）；普通场景答 `scene_not_partitioned`。每个端点一笔 [Team, Player] 事务（Team 的分布式锁在 Player 的本地锁之前），成员表与本人的副本（`PlayerDao.TeamID`，持久）同一笔写。新队伍的 ID 来自持久计数器（`_team_id_sequence`，与公会号同一种）。被邀请的人从别处得知队伍 ID（原型不推送邀请） | demo `protocol/def/team.go`、`game/handler/team_*.go`、`internal/errors/team.go` |
+| 成员表缓存 | `cellworld.Group{ID, Ver, Members[{Player, Actor, SID}]}`，Base 在 Player 上缓存一份（`GroupPlayer`）：demo 映射到 `PlayerDao` 的 `TeamID`（持久）与 `TeamVer` / `TeamMembers`（不持久，嵌套类型 `TeamSeat`），经生成 setter 写（回滚即还原；成员列表只在变化时整份替换）。成员的 Base 就是成员表里记的 sid（入队那一刻服务他的进程 = 他的静态归属） | cellworld `group.go`；demo `cell_base.go` |
+| 改成员表 | 组队 handler 在同一笔事务里 `Node.SetGroup(本人, 新表)`，并 `Node.NotifyGroup(新表, 离开的人)`：提交后发 `kindGroupNotice` 给变化前后全部成员所在的 Base（含本进程：同 Base 的别的队员也要更新）。收件 Base 把通知投成那些玩家的 Player 请求，**只在缓存的是同一组、缓存版本非 0、通知的版本更新时采纳**；玩家不在新表里就清空（离队、被解散）。迟到 / 重复的旧通知什么都不改；版本 0（Base 重启、Player 重新加载）只认重读 | cellworld `NotifyGroup` / `onGroupNotice` |
+| 重读 | Base 心跳：缓存版本为 0 时一个快照周期一次、平时每 `resync_every`（缺省 10s）一次，经 `NodeConfig.GroupResync` 投一笔 `[Team, Player]` 的 `handlerTeamSync`（出站 goroutine 上，`MultiSend_` 只做准入，不等）：玩家在表里就写新表，不在就清空。兜住丢失的通知（例如提交之后、发出之前进程崩溃），面板最多晚一个 `resync_every` 收敛 | cellworld `groupBeat`；demo `team_sync.go` |
+| 快照 | Base 心跳每 `snapshot_every`（缺省 1s）把玩家**自己的 SceneActor 状态**（本进程 mirror 里最新的 witness 自己：位置、HP、面板，带 Real 上的版本 (epoch, seq)）发给其他队员所在的 Base（`kindGroupSnap`，每个 sid 一份，**不发给自己的 sid**：同 Base 的队友本来就在本进程的 mirror 里）。还没有自己的 witness（刚进入、owner 格崩溃中）时不发 | cellworld `groupBeat` |
+| 收件 | 传输回调里按版本喂**同一个** Sync mirror（`policy.Mirrors`，不经 Nest：快照不属于本进程的任何实体，mirror 按版本幂等、只取短锁），保留 `GroupHold` = 3 × 快照周期（新增 `MirrorItem.Hold`：同一个 mirror 里 witness 的对象保留 1s、队伍快照保留 3s，跟着最近一次被接受的那份走；墓碑 2 × max(TTL, Hold)）。subject 是队友的 SceneActor ID：队友在本进程某个玩家的视野里时，witness 与快照两路按版本取新的，是一个对象 | cellworld `onGroupSnap`；framework `policy/mirror.go` |
+| 面板 | 每名玩家一个**组关系视野**（Interest 的 relation view，ID = `NodeConfig.GroupView(玩家)`，demo 取 `1<<53 \| 玩家号`，与场景桥的 sceneView、匹配队伍的视野不相交）：成员是其他队员的 SceneActor，玩家挂接它，不论距离都订阅队友。在空间视野里的队友与它是同一个 subject，Interest 合并成一份订阅（**不重复推**）；走出视野后由快照接着供，不删不重建。视野在 Base 心跳里按缓存的成员表对齐（成员表变了的下一拍；幂等，事务回滚了下一拍再设）。`Interest.Hide` 会把目标从所有关系视野里拿掉——队友的 mirror 过期删除时就是这样——所以心跳每拍比较视野成员与成员表，快照重新到来、mirror 重新出现后加回 | cellworld `setGroupView` / `groupViewDrifted` |
+| 同 Base 队友 | 不经 Base 之间的快照：他的 SceneActor 在本进程的 mirror 里（witness 自己），组关系视野直接订阅它。demo 原有的 `SetTeam`（匹配队伍，Player 实体的关系视野）不动 | — |
+| 线上格式 | `WireVersion` 4 → 5（新增 `kindGroupSnap` / `kindGroupNotice`）；未上线，不兼容旧进程，升级须先停旧进程 | cellworld `wire.go` |
+
+没有新增带锁的进程级管理器：成员表缓存在 Player 上，快照在 mirror（框架已有的那一个）里，视野在 Interest 里，Node 自己仍然没有锁；handler 里没有同步请求（重读经出站队列只做准入）。没有动 Remote 托管实体的框架代码：跨 Base 写成员表用的是现有的共享模式。
+
+**规则与原型缺省**（`scene.partition.team`，`game/settings/partition.go` 声明一次、加载时校验一次）：
+
+| 键 | 缺省 | 校验 | 说明 |
+| --- | --- | --- | --- |
+| `max_members` | 4 | 2～16 | 一支队伍最多几人（原型缺省） |
+| `invite_ttl` | 60s | ≥ 1s、整秒 | 邀请多久不接受就过期（原型缺省；成员表按秒记过期时间） |
+| `snapshot_every` | 1s | ≥ 100ms、是 Base 心跳 100ms 的整数倍 | 队员快照的间隔；**3 个周期没更新的队友从面板移除**（维护者定的规则，不另设键） |
+| `resync_every` | 10s | 长于 `snapshot_every` | 从 Team 重读成员表的间隔（原型缺省） |
+
+队长交接给剩下玩家 ID 最小的那名、最后一人离队即解散、解散后文档保留、被邀请人从别处得知队伍 ID，都是原型缺省，产品可改。
+
+### 13.3 先红后绿
+
+修前输出在 [cellworld-team-20261104](../performance/benchmarks/cellworld-team-20261104/)。cellworld 分两段红：只有类型、线上消息与 API 骨架时（[unit-red-before.txt](../performance/benchmarks/cellworld-team-20261104/unit-red-before.txt)），以及快照、保留时间、组关系视野做了而通知与重读还没做时（[unit-red-stage2.txt](../performance/benchmarks/cellworld-team-20261104/unit-red-stage2.txt)），这样通知与重读的用例各自红在自己的承诺上。
+
+| 用例 | 钉住的承诺 | 修前（原文摘录） |
+| --- | --- | --- |
+| `policy` `TestMirrorHoldOverridesTTLPerItem` | 同一个 mirror 里按份给保留时间：3s 的队伍快照 1.5s 时还在、3.1s 时删除；被一份没给保留时间的更新覆盖后按 TTL；墓碑按 2 × 保留时间 | `at 1.5s Expire removed 3, want 2 (the TTL-held 501 and 502, whose last accepted item had no hold)` |
+| `TestGroupPanelAcrossBases` | 两个 Base 上彼此不在视野里的队员互相看见位置与 HP；同 Base 的队友从本进程 mirror 来，Base 不给自己的 sid 发快照；一个周期一份 | `timed out waiting for the teammate on the other base of player 2; holds it false` |
+| `TestGroupPanelExpiresWhenTheBaseStopsAndComesBack` | 对方 Base 停了，`hold - 周期 - 一拍` 之内面板里还在，约 3 个周期后移除；重启后缓存版本 0，下一个周期就重读，面板恢复 | 骨架：`timed out waiting for the teammate of player 2`；第二段：`timed out waiting for a resync of player 2 after its base restarted` |
+| `TestGroupPanelFollowsAHandoff` | 队员走过格的分界线（交接，epoch 变大）：面板里的它只被创建一次、没有被删除，位置跟着更新；交接后唯一 Real | 骨架：`timed out waiting for the teammate of player 2` |
+| `TestGroupNoticesChangeTheRoster` | 离队：对方采纳版本 2、成员只剩自己，面板在过期之前就移除他；迟到的版本 1 通知不采纳、不把人加回；再入队（版本 3）后互相可见；解散（版本 4，空表）后对方 Base 的缓存清空、面板清空 | 第二段：`timed out waiting for player 1 adopts version 2` |
+| `TestGroupResyncCoversALostNotice` | 通知全丢：缓存停在旧版本，按 `GroupResyncEvery` 重读收敛，离队的人移除 | 第二段：`timed out waiting for player 1 resynced to version 2` |
+| `TestGroupPanelMergesWithTheSpatialView` | 视野里的队友：组队前后客户端只持有一个对象；走出视野（> 2000）后由快照接着供，创建次数 1、没有删除 | 骨架：`timed out waiting for the teammate walked out of view of player 2` |
+
+实现过程中出现过一次红（已修，不在骨架阶段）：`TestGroupPanelExpiresWhenTheBaseStopsAndComesBack` 的“重启后恢复”一步，mirror 已经回来（`mirror on 900 true`）而客户端没有重新持有队友（`seen [1873]` 只有自己）——`Interest.Hide` 在过期删除时把队友从组关系视野里拿掉了，视野版本没变就不会重设。改成 Base 心跳每拍比较视野成员与成员表（`groupViewDrifted`）。
+
+demo 单测（[demo-unit-red-before.txt](../performance/benchmarks/cellworld-team-20261104/demo-unit-red-before.txt)：生成的 game-demo 里 Team 成员表的方法不做事、Player 只记队伍 ID、BaseState 的队伍面板字段没映射、`scene.partition.team` 不校验时）：`TestTeamRosterRules` / `TestTeamLastMemberOutDisbands`（修前 `after found: {… Leader:0 Ver:0 Members:[] …}`）、`TestCellGroupIsThePlayersCopyAndRollsBack`（修前 `read back {ID:9001 Ver:0 Members:[]} … want {ID:9001 Ver:3 Members:[…]}`）、`TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack`（映射带队伍面板的计时与视野版本，修前 `GroupSentAt:0 … want … GroupSentAt:60 GroupSyncAt:70 GroupViewID:9001 GroupViewVer:3`）、`TestPartitionConfigIsCheckedAtLoad` 新增 4 条（修前 `want an error containing "team.snapshot_every", got <nil>` 等）。修后全部通过；cellworld 与 policy 全包 `-race` 通过。
+
+### 13.4 端到端
+
+`scripts/test-seamless-demo.sh` 新增 `team_panel`（追加检查）：sid 1000 的 p1（Base 不托管格）与 sid 1004 的 p6（只做 Base）。p6 走到离 p1 远的一侧（约 2500，远超 witness 半径 400，彼此不在视野里）；p1 `TeamInvite(p6)`、p6 `TeamAccept`；两边客户端在 5s 内看见对方的 SceneActor（位置误差 ≤ 30、HP > 0）；kill -9 p6 的 Base，`hold - 周期` 之前 p1 面板里还有 p6，约 3 个周期后移除；重启 sid 1004、p6 重新登录：`TeamInfo` 仍是两人的队伍（成员表在 Team 实体上），p1 与 p6 互相再次看见；p6 `TeamLeave`，两边面板都移除对方。新增 `team_roster_cross_base`：之后 p1 在 sid 1000 上 `TeamInfo` / `TeamDisband`（两个 Base 交替写同一个 Team，见 13.6 开头），脚本缺省以 `-expect-fail` 把它标成已知失败（`ROOST_SEAMLESS_EXPECT_FAIL=` 置空时按普通检查跑）。原有的 `base_restart` 断言改为与停下后 Base 所知的位置（已随回写进快照）比较：原来按字面的 1200、容差 30，而 walkTo 越过目标才停、客户端看到的自己晚约 100ms，本轮两次越过 40（1160）误报。
+
+私有依赖：`scripts/mirror-local.sh` 偏移 36000（根目录在会话 scratchpad），etcd 58479；同机 macOS（Apple M5）。
+
+| 轮 | 代码 | 结果 |
+| --- | --- | --- |
+| 第一轮（[e2e-first-run-fenced.txt](../performance/benchmarks/cellworld-team-20261104/e2e-first-run-fenced.txt)） | 全部实现，但建队后没切共享模式 | p6 的 `TeamAccept` 答内部错误：`remote entity: writer fenced: entity=… owner=1000`（Team 由 sid 1000 第一次写时独占认领）。改为建队时 `ClaimRemoteOwnership` + `EnterRemoteSharedMode` |
+| 第二轮 | 同上 + 共享模式 | 脚本清理只删 `cwdemo` / `cwdemo_saga`，上一轮的 `cwdemo_remote`（Remote 权威）留着、队伍号从 1 重新发，撞上旧权威（`loaded version 0, authority 1`）。清理加上 `cwdemo_remote`（测试环境问题，不是产品问题） |
+| 修前（[e2e-red-before.txt](../performance/benchmarks/cellworld-team-20261104/e2e-red-before.txt)） | 本轮全部改动，服务里不配 `GroupView`（组队协议、Team、共享模式都在，队伍面板关闭） | `team_panel` 红在承诺上：`p1 sees p6 in the team panel: not reached within 5s (held false map[])`；其余原有步骤绿（`base_restart` 是上面说的字面 1200 误报） |
+| 第三轮（[e2e-cross-base-write-conflict.txt](../performance/benchmarks/cellworld-team-20261104/e2e-cross-base-write-conflict.txt)） | 全部实现 | 队伍面板的断言全部通过；最后 p1 在 sid 1000 上 `TeamInfo` 答内部错误：`remote entity: state version conflict: entity … loaded version 1, authority 3`——13.6 开头 |
+| 修后（[e2e-green.txt](../performance/benchmarks/cellworld-team-20261104/e2e-green.txt)、[evidence](../performance/benchmarks/cellworld-team-20261104/e2e-green-evidence.json)） | 本轮（含 `-expect-fail team_roster_cross_base`） | 13 步通过，`team_roster_cross_base` EXPECTED-FAIL。`team_panel`：p1 与 p6 相距 2483；组队后 152ms 互相看见（p1 看到 p6 的 `pos_x 5420`、`cell_hp 100`、`cell_max_hp 100`）；kill p6 的 Base 后 2903ms 从 p1 面板移除（3 个 1s 周期）；重启后 `TeamInfo` 成员 `[100001, 100005]`、互相再次看见；p6 离队后 86ms 从 p1 面板移除。`base_restart`：停在 (1190, 1500)，重启后在 (1190, 1500) 进场 |
+
+### 13.5 不回归
+
+全部在同一工作树、同机（macOS，Apple M5），`GOWORK=off`、从模块根：gofmt 无输出；`go build ./... && go vet ./...`；glsvet（`./framework/nest/... ./framework/entity/... ./framework/dataengine/engine/... ./framework/sync/entitysync/... ./gameplay/cellworld/...`）无违例；`python3 scripts/check-doc-anchors.py` 0 broken；根包 `go test -count=1 .`；`go test -race -count=1 ./gameplay/cellworld/ ./framework/sync/entitysync/policy/`（cellworld 138.9s、policy 8.7s，含 nats / process 子进程用例；之后 cellworld 只改了 README）；全量 `go test -count=1 ./...`（163 个包 ok，含 codegen；`codegen/internal/roost` 的 `TestDoctorReadsBusinessDeclarationsFromTheProcess` 按新增的 4 个 `scene.partition.team.*` 键把期望的业务键数从 32 改为 36）；`scripts/test-demo-generated.sh`（私有依赖，8 个真实依赖用例 PASS）、`test-mmorpg-generated.sh`（`IDs are valid`、`generated files are up to date`）、`test-sync-modes-generated.sh`、`python3 scripts/test-genres-generated.py --out …` 13 类全部 passed；新生成的 game-demo `go vet ./...` 通过、`go generate ./...` 后 porcelain 干净；本仓 `go generate ./...` 后 porcelain 干净；端到端见 13.4。本轮没有改 nest / entity / dataengine 的代码；policy 只加了 `MirrorItem.Hold`（`go test -race` 见上）。
+
+### 13.6 剩余缺口
+
+**需要维护者决定：两个 Base 交替写同一个共享模式的 Team 时，先写过的 Base 再写失败。** 端到端第三轮：Team 由 sid 1000 建立（建队那一笔事务，版本 1），sid 1004 的 p6 接受（版本 2）、离队（版本 3），之后 sid 1000 上 p1 的 `TeamInfo`（`handlerTeamSync`，一笔 [Team, Player] 事务）答 `remote entity: state version conflict: entity 4611686018427388957 loaded version 1, authority 3`。代码路径（当前源码，`rg` 核对；codebase-memory-mcp 连不上）：共享模式写准入 `remoteEntityWrapper.beginWrite`（`framework/remoteentity/batch.go`）在分布式锁下拿到权威版本 3，`loadWriteTarget` 发现本进程内存副本版本 1 ≠ 3，调 `loadEntity` → `Backend.LoadRemoteEntity` → `ManagerAccess.LoadRemoteEntity`（`framework/entity/manager_access.go`）→ `access.Get`，而 `Get` 对已在内存里的实体直接返回那个旧实例、不重新加载；随后 `stateVersion != expectedVersion` 返回 `ErrRemoteVersionConflict`，旧实例留在内存里（这条路径不走持久拒绝后的 `unloadRejectedEntities`“卸载后重载”）。所以 sid 1000 上这支队伍之后的每一笔写都会同样失败，直到旧实例因别的原因离开内存；sid 1000 上的周期重读（`GroupResync`）也一样失败，那里的队员缓存只能靠成员表通知更新。框架里没有两个 Manager 交替写同一个共享实体的用例（`framework/remoteentity` 与 `codegen/internal/entity/testdata/remoteflow` 的共享模式用例都只有一个 Manager）。**已定位到代码路径，没有做框架层的最小复现。** 按维护者的停止条件（Remote 托管实体的现有能力撑不住时先停下汇报、不硬改框架），本轮没有改框架，也没有在 demo 里绕；端到端把这一步标成已知失败（`team_roster_cross_base`）。选项：
+
+- **A（推荐）**：框架修——共享模式写准入发现本进程副本落后权威时，先把旧副本按 `DestroyReasonMemoryUnload` 卸载（与 `unloadRejectedEntities` 同一机制、同一本地执行入口与 Sync 规则），再经 loader 从权威加载，而不是返回版本冲突。改 `framework/remoteentity`，先红后绿要补“两个 Manager 交替写同一个共享实体”的用例（真实 Redis + Mongo）。所有用共享模式的业务（demo 的 Team、SLG 联盟）都受益。代价：Remote 写路径的改动，要重跑 Remote 的故障矩阵。
+- **B**：demo 绕——组队端点与重读遇到 `ErrRemoteVersionConflict` 时，game 服务卸载本进程的 Team 副本（`ManagerAccess.Unload`）再重试一次。框架不动，但每个用共享 Remote 实体的业务都要自己做同样的事。
+- **C**：Team 不用共享模式：单一 owner 进程，别的 Base 的组队请求转发到 owner 执行（ownerroute / Remote 路由）。代价：跨进程请求与 owner 迁移，组队不再是“哪个 Base 都能直接写”。
+
+另有一条**尚未确认**的观察：demo 的 Guild 与 Team 是同一种 `remote=managed` 实体，代码里没有切共享模式；Team 没切时跨 Base 写被 `writer fenced … owner=1000` 拒绝（13.4 第一轮）。若别的进程上的玩家加入另一个进程建立的公会，很可能同样被拒；切了共享模式之后又会碰到上一条。本轮没有验证 Guild（不在第 4 项范围）。
+
+| # | 缺口 | 性质 |
+| --- | --- | --- |
+| v2.5-0 | 两个 Base 交替写同一个共享模式的 Team：先写过的 Base 再写得到版本冲突（上面） | **需要维护者决定** |
+| v2.5-1 | 邀请不推送给被邀请的人：被邀请人从别处得知队伍 ID 再 `TeamAccept`（原型）。要推送就是一条跨 Base 的消息（被邀请人的 Base 可从他的绑定 sid 得知），与成员表通知同一种 | 原型简化 |
+| v2.5-2 | 收件方不核对快照的发送者是否真是本进程某个玩家的队友（集群内互信）；不相干的快照只进 mirror、没有视野订阅，3 个周期后过期，但会被本进程空间视野里正好在那个位置附近的玩家看见（与真实世界状态一致：那个人确实在那里） | 原型简化 |
+| v2.5-3 | 面板的队友状态比 witness 旧最多一个快照周期（1s）加传输延迟；队友在视野里时 witness 更新的那一份优先（按版本） | 设计如此（周期由 `snapshot_every` 调） |
+| v2.5-4 | 关系视野里暂时没有 subject 的队友（不在世界里、对方 Base 停了、快照还没到）由 Interest 每次结算重说订阅（被 Manager 拒绝、进重试表），与 demo 原有的 `SetTeam` 里离线队员相同；队伍规模小（≤ 16），没有测到可见的开销 | 原型简化 |
+| v2.5-5 | 成员表通知与重读之间的窗口：通知丢了时别的 Base 上的缓存最多晚 `resync_every`（10s）收敛；这期间离队的人还在对方面板里（直到他的快照停了 3 个周期）。每名在世界里的队员每 10s 一次 Remote 事务（分布式锁 + 加载） | 原型缺省，可调 |
+| v2.5-6 | 解散的 Team 文档不删（ID 不复用，成员表为空）；长期运行会积累空文档 | 原型简化 |
+| v2.5-7 | 队伍面板只在分区场景、只在玩家进了世界之后工作（Base 心跳只在 `InWorld` 时跑）；不在世界里的队员不发快照、他的面板也不更新 | 原型简化 |
+| v2.5-8 | 普通场景的 Player 多了 `TeamID`（持久，从不写）与 6 个不持久字段 | 原型简化（与 v2.2 / v2.4 的 `Cell*` 同理） |
+
+### 13.7 合入 main 前还要做的
+
+- CHANGELOG `[Unreleased]` 写：cellworld 线上格式 v5（队伍面板消息）、`policy.MirrorItem.Hold`（新增字段，不影响已有调用方）、game-demo 新增 Team 实体（kind 7、`remote=managed`、集合 `team`、计数器集合 `_team_id_sequence`）、组队协议 msg 10029～10033、错误码 100027～100032、`PlayerDao.TeamID`（持久）与队伍面板的不持久字段、`scene.partition.team.*` 四个键；升级须先停旧进程。
+- 13.6 开头的版本冲突按维护者的选择处理之后，去掉端到端的 `-expect-fail team_roster_cross_base`；“尚未确认”的 Guild 跨进程写入一并确认（若成立，是 demo 公会的缺陷，按 bugfix 流程另修）。
+- `MirrorItem.Hold` 与 Interest 的 `Hide` 会清关系视野成员这两件事，合入时写进 impl/04 的 Mirrors 一节（与 §11.9 的 D4 一起）。
+- §11.9 的其余各项照旧。
+
+### 13.8 方向判断
+
+cellworld 第五轮改动。本轮新出现的问题都在 cellworld 之外：Remote 托管实体缺省独占（跨 Base 写成员表要先切共享模式，框架已有能力，是接入用法）；Interest.Hide 会清掉关系视野成员（Interest 的既有语义，cellworld 按成员表对齐即可）；共享模式下多个进程交替写时旧副本不重新加载（13.6 开头：共享模式的多写者路径没有被两个 Manager 的用例覆盖过，是细节缺陷还是 Remote 共享模式前提的缺口，需要维护者判断）。cellworld 自己没有新的协议缺陷。cellworld 现在承担的 Base 之间的通道（快照、成员表通知）与 Cell ↔ Base 的通道是同一个传输、同一个出站队列、同一套“至多一次 + 版本 + 重读兜底”的语义；若将来 Base 之间还要更多种消息（邀请推送、跨 Base 私聊等），建议把“Base 之间按玩家静态 sid 投递”从 cellworld 拆成独立的小包，避免 cellworld 变成通用的跨进程总线。
