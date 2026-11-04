@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 )
 
@@ -276,6 +277,44 @@ func TestRemoteManagedDispatchWithoutRemoteRuntimeNamesTheFix(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
 		}
+	}
+}
+
+// prepareNotFoundManager 的写准入像框架 Manager 冷加载一个权威里没有聚合的实体（空认领）那样失败。
+type prepareNotFoundManager struct {
+	entity.IRemoteEntityManager
+	err error
+}
+
+func (m prepareNotFoundManager) PrepareRemoteWriteBatch(context.Context, []int64) (entity.RemoteWriteBatch, error) {
+	return nil, m.err
+}
+
+// Remote 声明目标的加载（写准入里的冷加载）与本地声明目标同一条规则：权威确认的“不存在 / 删过档”包装成稳定的客户端码
+// （entityStateError），不是 CodeInternal（生成 RPC 会答“结果未知”）。联盟服务阶段 5：空认领的实体重启后经路由前置
+// 检查进 Nest，修前 Info 答 remote.1 server error。
+func TestRemoteTargetLoadStateBecomesAClientCode(t *testing.T) {
+	const kind entity.EntityKind = 198 // 本包其他用例没用过（195 / 196 在上面两条用例里）
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	id, err := entity.BuildEntityID(9204, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		cause error
+		code  int32
+	}{
+		{fmt.Errorf("remote_entity: load entity %d: %w", id, entity.ErrAuthorityEntityNotFound), errcode.CodeEntityNotFound},
+		{fmt.Errorf("remote_entity: load entity %d: %w", id, entity.ErrAuthorityEntityDeleted), errcode.CodeEntityDeleted},
+	} {
+		err := prepareRemoteWriteBatch(prepareNotFoundManager{err: tc.cause}, &Msg{Type: MsgTypeSingle, Tid: id, HasRemote: true})
+		if errcode.CodeOf(err) != tc.code || !errors.Is(err, tc.cause) {
+			t.Errorf("remote target load %v: err=%v code=%d, want code %d with the cause kept", tc.cause, err, errcode.CodeOf(err), tc.code)
+		}
+	}
+	other := errors.New("mongo: not primary")
+	if err := prepareRemoteWriteBatch(prepareNotFoundManager{err: other}, &Msg{Type: MsgTypeSingle, Tid: id, HasRemote: true}); err != other {
+		t.Errorf("an unrelated admission error was changed: %v", err)
 	}
 }
 

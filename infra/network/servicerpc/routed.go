@@ -21,11 +21,13 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
@@ -265,6 +267,8 @@ func (c *routeCache) len() int {
 //     删掉这条缓存，经 resolver 重新查一次，查到不同的 sid 才再发一次，否则原样返回（可重试，未执行）。
 //   - resolver 答复 EntityNotFound：原样返回（业务拒绝），请求不发出去；resolver 的其他错误按 Retryable 返回。
 //
+// 请求带实体 ID 作顺序键（bus.WithOrderKey）：owner 上同一实体的请求按到达顺序逐个进 handler，不同实体并行。
+//
 // 全部尝试共用 BusClient 的一份 timeout 预算。必须在 I/O 段调用（与 Call 相同，快池上返回 fctx 的阻塞错误）。
 // resp 必须是指向响应结构体的指针：再次发送前清零，避免上一次响应的字段（改投码、owner sid）残留到结果里。
 func (c *BusClient) CallRoutedChecked(ctx context.Context, resolver RouteResolver, entityID int64, method string, req any, resp any, fallback string) error {
@@ -280,9 +284,8 @@ func (c *BusClient) CallRoutedChecked(ctx context.Context, resolver RouteResolve
 	if entityID == 0 {
 		return errcode.Wrap(errcode.ErrEntityNotFound, errors.New("servicerpc: routed call without an entity id"))
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	// 顺序键是实体 ID：owner 上同一实体的请求按到达顺序逐个处理，不同实体并行（bus.WithOrderKey）。
+	ctx = bus.WithOrderKey(ctx, strconv.FormatInt(entityID, 10))
 	callCtx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	target, err := c.lookupRoute(callCtx, resolver, entityID)

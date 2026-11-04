@@ -85,7 +85,7 @@ func TestRealControlQueueBoundedAndQueuedBudgetExpires(t *testing.T) {
 		b, _ := gateway.BudgetFromContext(deadline)
 		cancel()
 		binding := gateway.Binding{PlayerID: 1, SessionID: fmt.Sprintf("session%d", index), Gate: gateID, Game: gameID, ConnectionNonce: fmt.Sprintf("%032d", index)}
-		data, _ := codec.Marshal(gateway.ControlRequest{Version: gateway.InternalVersion, Operation: gateway.Bind, Binding: binding, Ticket: "ticket", Budget: b})
+		data, _ := codec.Marshal(gateway.ControlRequest{Version: gateway.InternalVersion, Operation: gateway.Bind, Binding: binding, Ticket: "ticket", Budget: b, Admission: uint64(index + 1)})
 		response, err := gateRaw.RequestContext(ctx, subject, data)
 		if err != nil {
 			t.Error(err)

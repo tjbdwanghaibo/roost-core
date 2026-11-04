@@ -29,6 +29,12 @@ NATS ACL 必须限制每个进程的来源前缀和自己的 reply inbox。应�
 
 完整绑定含 PlayerID、SessionID、Gate/Game SID 与 incarnation、连接 nonce、Game 签发 BindID。先 Bind，再物理写出 AuthACK，最后 Activate。OnActive/OnClosed 用 Game 分配的不复用数值 receiver 建立和关闭 Sync/Room 生命周期；旧关闭、旧出站失败不会解绑新连接。不同 SessionID 可属于同一玩家，没有框架隐式全局单点登录。
 
+同一 SessionID 的新连接替换旧连接，新旧按连接被接受的先后定，不按握手完成的先后（2026-11-04 修复；修前后完成者胜出，客户端放弃握手立即重连时旧连接会把新连接踢掉）。每条连接被接受时取得本进程内递增的接受序号（`ConnectionSession.Admission`）：
+
+- **嵌入 TCP**（以及 Gate 本地的连接表）：`TCPServer.registerSession` 在同一把锁里比较，已登记的是更晚接受的连接时，迟到完成的旧登录在 ack 之后被拒登记并断开，不关闭新连接（回归 `TestALoginThatFinishesLateDoesNotDisplaceANewerConnectionOfTheSameSession`）。
+- **独立 Gate**：Gate 把序号随 Bind 交给 Game（`ControlRequest.Admission`，内部协议版本 2）。Game 绑定表 `bindingTable.finish` 对**同一 Gate 实例**（`Binding.Gate` 含进程代际）的同一 SessionID 按序号判新旧：已绑定的是更晚接受的连接时，迟到完成的旧 Bind 被拒（原因 `superseded by a newer connection of the session`）、不退役任何绑定，Gate 收到拒绝后不发 ack、关掉那条旧连接；旧连接先完成时，新连接的 Bind 照常替换它。判定与写入同一把锁，两次 Bind 无论怎样交错，留下的都是接受得更晚的那条（回归 `TestALateBindOfAnOlderConnectionDoesNotRetireTheNewerBindingOfTheSameSession`、`TestTheNewerBindOfASessionReplacesTheOlderThatFinishedFirst`）。
+- **跨 Gate 实例**的同一 SessionID 没有可比较的先后（各 Gate 的序号各自编号；同一 SID 的 Gate 重启后是新代际、序号从头开始），Game 不比较，仍是后完成的 Bind 胜出，被替换的那条由它所在的 Gate 关闭（`TestAcrossGatesTheLaterFinishedBindOfASessionWins`）。客户端在两个 Gate 之间交错重连时仍可能两条都不剩，见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#同一-sessionid-的重连)。
+
 Gate Forward 只有一次传输尝试。预算包含 Gate 等待、NATS、Game 等待与正式 dispatcher；控制请求也有条目/字节上限和固定 worker，排队消耗原预算。
 
 - `NotAdmitted`：确认未交给 dispatcher。

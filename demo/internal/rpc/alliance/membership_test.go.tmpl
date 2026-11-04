@@ -1,6 +1,7 @@
 package alliance
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -443,5 +444,18 @@ func TestTransferOwnershipKeepsReservedGuards(t *testing.T) {
 	err = in.svc.CheckRoute(ctx, target)
 	if redirect, _ := servicerpc.RedirectSID(err); redirect != 3001 {
 		t.Fatalf("route check on the old owner: err %v, want redirect to 3001", err)
+	}
+
+	// Bounded by the command's deadline: with less than the stop margin left
+	// nothing more is moved, and the report says to run it again.
+	c.seedGuard(t, 3000, 106)
+	short, cancel := context.WithTimeout(ctx, transferStopMargin/2)
+	defer cancel()
+	report, err = in.svc.TransferOwnership(short, nil, 10, 3001)
+	if err != nil || !report.More || len(report.Moved) != 0 {
+		t.Fatalf("transfer near its deadline: report %+v err %v, want nothing moved and More", report, err)
+	}
+	if owner, _ := c.owner(mustGuardTarget(t, 106)); owner != 3000 {
+		t.Fatalf("guard 106 moved to %d past the deadline margin", owner)
 	}
 }

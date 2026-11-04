@@ -11,6 +11,7 @@ import (
 	"net"
 	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
@@ -24,11 +25,18 @@ type TCPDispatch func(context.Context, Session, uint32, uint32, wire.PayloadKind
 
 // ConnectionSession 仅供接入基础设施使用，业务端点仍使用最小的 Session。
 // 每连接随机 nonce 不来自客户端。写入只接受完整包，复用唯一的 socket 写临界区。
+// Admission 是连接被接受时取得的序号（本进程内严格递增、从 1 开始），同一 SessionID 的新旧以它为准：
+// 嵌入 TCP 在 registerSession 比较，独立 Gate 把它带进 Bind，由 Game 的绑定表在同一 Gate 实例内比较。
 type ConnectionSession interface {
 	Session
 	ConnectionID() string
+	Admission() uint64
 	WritePacket(context.Context, uint32, uint32, wire.PayloadKind, bool, []byte) error
 }
+
+// connectionAdmissions 给本进程所有 TCPServer 接受的连接统一编号。按进程而不是按监听计数，独立 Gate 带进 Bind 的
+// 序号在同一 Gate 实例（同一进程代际）内就总是可比较的，不依赖一个 Gate 只挂一个监听。
+var connectionAdmissions atomic.Uint64
 
 // TCPHandshake 让独立 Gate 在同一个握手预算内完成 Bind → ACK → Activate。
 // Closed 必须快速返回，通知丢失由绑定租期兜底，不能阻塞连接排空。
@@ -283,7 +291,8 @@ func (server *TCPServer) acceptLoop(listener net.Listener) {
 			server.ipConnections[host]++
 			server.wait.Add(1)
 			server.mu.Unlock()
-			go server.serveConnection(connection)
+			// 接受序号在连接登记进连接表后、启动服务协程前取得：同一 SessionID 的新旧以它为准（registerSession、Bind）。
+			go server.serveConnection(connection, connectionAdmissions.Add(1))
 		default:
 			metrics.IncCounter("player_tcp_connection_rejected_total", nil, 1)
 			_ = connection.Close()
@@ -292,12 +301,13 @@ func (server *TCPServer) acceptLoop(listener net.Listener) {
 }
 
 // serveConnection 服务一条已接受的连接：取得握手槽 → 认证 → BeforeACK 与 ack → 注册会话 → AfterACK →
-// 归还握手槽 → 读循环按序分发请求。
+// 归还握手槽 → 读循环按序分发请求。admission 是 acceptLoop 给的接受序号（connectionAdmissions），注册时据此判断同一 SessionID 的新旧；
+// 同一 SessionID 已登记的是更晚接受的连接时，本连接在 ack 之后被拒登记、直接结束。
 //
 // 资源所有权：连接槽、连接表与按 IP 计数、wait 由 acceptLoop 取得，这里在返回时归还。握手槽从取得起持有到
 // AfterACK 完成（handshakeHeld），中途返回由 defer 归还。会话创建后，返回时先从查找表移除（已注册时，之后的推送
 // 找不到它）、再关闭会话并等写协程退出、然后发布关闭事件（已注册时）并通知 handshake.Closed。
-func (server *TCPServer) serveConnection(connection net.Conn) {
+func (server *TCPServer) serveConnection(connection net.Conn, admission uint64) {
 	defer func() {
 		if value := recover(); value != nil {
 			_ = connection.Close()
@@ -334,12 +344,15 @@ func (server *TCPServer) serveConnection(connection net.Conn) {
 		return
 	}
 	session := newTCPSession(connectionCtx, cancel, connection, principal, server.config, server.outbound)
+	session.admission = admission
 	registered := false
 	defer func() { server.closeConnectionSession(session, registered) }()
 	if !server.acknowledgeHandshake(handshakeCtx, session, authFrame, release) {
 		return
 	}
-	server.registerSession(session)
+	if !server.registerSession(session) {
+		return
+	}
 	registered = true
 	defer server.forgetSession(session)
 	if server.handshake != nil {
@@ -554,9 +567,21 @@ func (server *TCPServer) dispatchRequest(connectionCtx context.Context, session 
 	return true
 }
 
-func (server *TCPServer) registerSession(current *tcpSession) {
+// registerSession 把会话登记为它的 SessionID 的当前连接，并关闭被替换的上一条连接；返回 false 表示没有登记。
+//
+// 同一 SessionID 的新旧按连接被接受的先后（admission）定，不按握手完成的先后：已登记的是更晚接受的连接时，
+// 本连接是一次迟到完成的旧登录（客户端放弃这次握手后已经重连，或认证慢于新连接），不登记、不关闭任何人，由调用方
+// 结束它；若让后登记者胜出，这次旧登录会把正在服务的新连接关掉。判定与写入在同一把锁里，两条连接无论怎样交错，
+// 留下的都是接受得更晚的那条。admission 为 0（包内测试直接登记）时退化为后登记者胜出。
+func (server *TCPServer) registerSession(current *tcpSession) bool {
 	server.mu.Lock()
 	previous := server.sessions[current.principal.SessionID]
+	if previous != nil && previous != current && previous.admission > current.admission {
+		server.mu.Unlock()
+		slog.Debug("player tcp: a login finished after a newer connection of the same session; closing it",
+			"player_id", current.principal.PlayerID, "session_id", current.principal.SessionID)
+		return false
+	}
 	server.sessions[current.principal.SessionID] = current
 	byPlayer := server.playerSessions[current.principal.PlayerID]
 	if byPlayer == nil {
@@ -568,6 +593,7 @@ func (server *TCPServer) registerSession(current *tcpSession) {
 	if previous != nil && previous != current {
 		_ = previous.Close(ErrSessionClosed)
 	}
+	return true
 }
 
 // publishSessionClosed says, once and asynchronously, that a registered

@@ -376,6 +376,7 @@ func (c *captureJetStreamRPC) Publish(ctx context.Context, subject string, data 
 	}
 	c.mu.Lock()
 	c.publishes = append(c.publishes, capturedJetStreamPublish{subject: subject, data: append([]byte(nil), data...), opts: opts})
+	sequence := uint64(len(c.publishes))
 	hook := c.publishHook
 	err := c.publishErr
 	c.mu.Unlock()
@@ -385,7 +386,7 @@ func (c *captureJetStreamRPC) Publish(ctx context.Context, subject string, data 
 	if err != nil {
 		return fnats.JetStreamPublishAck{}, err
 	}
-	return fnats.JetStreamPublishAck{Stream: "test", Sequence: uint64(len(c.publishes))}, nil
+	return fnats.JetStreamPublishAck{Stream: "test", Sequence: sequence}, nil
 }
 
 func (c *captureJetStreamRPC) Subscribe(_ context.Context, cfg fnats.JetStreamConsumerConfig, handler fnats.JetStreamHandler) (fnats.IJetStreamSubscription, error) {

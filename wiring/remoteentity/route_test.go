@@ -6,6 +6,7 @@ package remoteentity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -50,6 +51,8 @@ func TestRPCRouteCheckAnswersFromTheOwnershipRecord(t *testing.T) {
 		{"no ownership record", &routedServer{}, servicerpc.OutcomeRejected, errcode.CodeEntityNotFound},
 		{"owned elsewhere", &routedServer{owner: 3001, found: true}, servicerpc.OutcomeRetryable, servicerpc.CodeRedirect},
 		{"authority unreachable", &routedServer{err: errors.New("mongo down")}, servicerpc.OutcomeRetryable, servicerpc.CodeRetryable},
+		// 删过档（D10）是确定的状态：答 entity_deleted，不可重试（修前折成 CodeRetryable，永不收敛）。
+		{"deleted entity", &routedServer{owner: local, found: true, err: fmt.Errorf("remote_entity: entity 1 was deleted: %w", entity.ErrAuthorityEntityDeleted)}, servicerpc.OutcomeRejected, errcode.CodeEntityDeleted},
 	} {
 		answer := RPCRouteCheck(ctx, tc.server, local, 1)
 		if servicerpc.Classify(answer) != tc.outcome || servicerpc.Code(answer) != tc.code || tc.server.calls != 1 {

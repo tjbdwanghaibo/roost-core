@@ -500,6 +500,18 @@ type RemoteOwnershipManager interface {
 	TransferRemoteOwnership(context.Context, int64, int32) (RemoteEntityMarkerLease, error)
 }
 
+// RemoteOwnedEntityLister 按 owner 枚举本实例独占（非共享）的 Remote 实体：运维迁移“本实例持有的 N 个”、缩容到持有数为 0。
+// 框架 Manager（framework/remoteentity）实现它，经持久所有权记录的 owner 索引分页查询，代价与本实例持有的数量成正比，
+// 不随全集群实体数增长。
+//
+// 一页按 ID 升序给出 kind 在 kinds 里、ID 大于 after 的至多 limit 个；next 是下一页的 after，0 表示已到底。结果是查询
+// 时刻的快照：之后转走 / 认领的实体可能多出或缺少，调用方对每个 ID 照常经 TransferRemoteOwnership 等入口裁决。列出
+// 的实体可能是空认领（有所有权记录、业务上还不存在，见 framework/remoteentity 的 errOwnedEntityEmpty）。要 I/O，
+// 只能在 I/O 段调用。
+type RemoteOwnedEntityLister interface {
+	ListOwnedRemoteEntities(ctx context.Context, kinds []EntityKind, after int64, limit int) (ids []int64, next int64, err error)
+}
+
 // RemoteSnapshotInterest 是可续约的软状态订阅。scope 与 policy 是键的一部分，支持生成的 LOD / 投影变体。
 type RemoteSnapshotInterest struct {
 	ConsumerSID int32

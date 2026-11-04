@@ -47,7 +47,7 @@ func TestRefusedRPCIsAnsweredAtOnceWhenTheDispatcherIsNotRunning(t *testing.T) {
 	b := New(&lifecycleClient{}, rpc, nil, Config{Sid: 7, SvcType: "mail"})
 	b.EnableReliable(store, ReliableConfig{Enabled: true})
 
-	b.dispatchTask(1, refusedRPCTask("not-running"))
+	b.acceptRPC(refusedRPCTask("not-running"))
 	expectRefusalReply(t, b, rpc, "dispatcher not running")
 	entries, _ := store.ListDeadLetters(context.Background(), DeadLetterQuery{MsgName: "mail.Send"})
 	if len(entries) != 0 {
@@ -79,12 +79,12 @@ func TestRefusedRPCIsAnsweredAtOnceWhenTheQueueIsFull(t *testing.T) {
 		_ = b.StopWithContext(context.Background())
 	})
 
-	b.dispatchTask(1, refusedRPCTask("running"))
+	b.acceptRPC(refusedRPCTask("running"))
 	<-entered
-	// The handler holds the only worker; past the queue capacity every request
-	// is refused, and while the handler blocks any reply can only be a refusal.
+	// RPCMaxPending 缺省 WorkerNum × QueueCap = 1：在跑的这一个占满上限，之后每个请求都被拒绝；handler 卡住期间
+	// 任何答复都只能是拒绝。
 	for i := 0; i < 64; i++ {
-		b.dispatchTask(1, refusedRPCTask(fmt.Sprintf("queued-%d", i)))
+		b.acceptRPC(refusedRPCTask(fmt.Sprintf("queued-%d", i)))
 	}
 	expectRefusalReply(t, b, rpc, "queue full")
 	entries, _ := store.ListDeadLetters(context.Background(), DeadLetterQuery{MsgName: "mail.Send"})
@@ -428,7 +428,7 @@ func TestWithdrawRpcStopContract(t *testing.T) {
 			}
 		},
 		Block: func(testing.TB) {
-			b.dispatchTask(1, &incomingTask{isRpc: true, replySubject: "_INBOX.inflight",
+			b.acceptRPC(&incomingTask{isRpc: true, replySubject: "_INBOX.inflight",
 				natsMsg: &fnats.NatsMsg{MsgName: "alliance.Join", SessionId: "inflight", MsgID: "inflight"}})
 			select {
 			case <-entered:
@@ -472,7 +472,7 @@ func TestWithdrawnRPCIsAnsweredRetryableAndNeverReachesTheHandler(t *testing.T) 
 	}
 	answer := func(method string) error {
 		t.Helper()
-		b.dispatchTask(1, &incomingTask{isRpc: true, replySubject: "_INBOX." + method,
+		b.acceptRPC(&incomingTask{isRpc: true, replySubject: "_INBOX." + method,
 			natsMsg: &fnats.NatsMsg{MsgName: method, SessionId: method, MsgID: method}})
 		select {
 		case raw := <-rpc.replies:
@@ -589,7 +589,7 @@ func TestCloseIngressClosesEveryInputOfTheBus(t *testing.T) {
 		t.Fatalf("a message after CloseIngress reached the handler (%d calls)", n)
 	}
 	for _, method := range []string{"mail.Send", "mail.List"} {
-		b.dispatchTask(1, &incomingTask{isRpc: true, replySubject: "_INBOX." + method,
+		b.acceptRPC(&incomingTask{isRpc: true, replySubject: "_INBOX." + method,
 			natsMsg: &fnats.NatsMsg{MsgName: method, SessionId: method, MsgID: method}})
 		select {
 		case raw := <-rpc.replies:
@@ -652,5 +652,82 @@ func TestWithdrawnJetStreamRPCStopsTheServiceConsumerAndAnswersRetryable(t *test
 	}
 	if calls.Load() != 0 {
 		t.Fatalf("the withdrawn handler ran %d times", calls.Load())
+	}
+}
+
+// replyRecorder 是记下答复主题的 IRpc 替身。
+type replyRecorder struct {
+	lifecycleRpc
+	answered chan string
+}
+
+func (r *replyRecorder) Reply(subject string, _ []byte) error {
+	r.answered <- subject
+	return nil
+}
+
+// deliverRPC 编码一个轻量 RPC 请求信封，经 HandleRpc 建的服务级队列组订阅交给 Bus（与 NATS 投递同一入口）。
+func deliverRPC(t *testing.T, b *Bus, client *lifecycleClient, method, requestID string) {
+	t.Helper()
+	data, err := b.codec.Marshal(&fnats.NatsMsg{FromSid: 9000, MsgName: method, SessionId: requestID, MsgID: requestID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sub := range client.subs {
+		if sub.queue != "" && strings.HasSuffix(sub.subject, "."+method) {
+			sub.handler(&fnats.Msg{Subject: sub.subject, Reply: "_INBOX." + requestID, Data: data})
+			return
+		}
+	}
+	t.Fatalf("no queue-group subscription for %s", method)
+}
+
+// 不带路由键的 RPC（建盟 Found、mail 等）同一方法的请求可以并行：一个请求的 handler 卡住时，同一方法的下一个请求照常
+// 完成（联盟阶段 5：按方法名选派发 worker，Found 约 9 个/秒）。
+func TestRPCWithoutOrderKeyRunsConcurrentlyWithinOneMethod(t *testing.T) {
+	client := &lifecycleClient{}
+	rpc := &replyRecorder{answered: make(chan string, 8)}
+	b := New(client, rpc, nil, Config{Sid: 3000, SvcType: "alliance", WorkerNum: 4})
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		_ = b.StopWithContext(context.Background())
+	})
+	var calls atomic.Int32
+	if err := b.HandleRpc("alliance.Found", func(*RpcContext) (any, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return struct{}{}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deliverRPC(t, b, client, "alliance.Found", "first")
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first request never reached the handler")
+	}
+	deliverRPC(t, b, client, "alliance.Found", "second")
+	select {
+	case subject := <-rpc.answered:
+		if subject != "_INBOX.second" {
+			t.Fatalf("answered %s first; want the second request while the first is blocked", subject)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the second request of the same method was not answered while the first one's handler was blocked; " +
+			"requests without an order key must not wait for each other")
+	}
+	close(release)
+	if subject := <-rpc.answered; subject != "_INBOX.first" {
+		t.Fatalf("answered %s; want the first request", subject)
 	}
 }

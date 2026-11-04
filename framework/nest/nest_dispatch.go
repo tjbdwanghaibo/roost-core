@@ -711,7 +711,9 @@ func prepareRemoteWriteBatch(manager entity.IRemoteEntityManager, msg *Msg) erro
 	}
 	batch, err := manager.PrepareRemoteWriteBatch(prepareCtx, ids)
 	if err != nil {
-		return err
+		// 写准入里冷加载的就是声明目标：权威确认的“不存在 / 删过档”与本地声明目标同一条规则给稳定客户端码
+		// （例如空认领：有所有权记录、权威里没有聚合），其余准入错误原样返回。
+		return targetLoadError(err)
 	}
 	if batch == nil {
 		return entity.ErrRemoteWriteCapabilityDisabled

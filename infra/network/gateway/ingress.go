@@ -110,7 +110,7 @@ func checkChannelSize(config Config, client fnats.RawClient) error {
 	binding := Binding{PlayerID: 9223372036854775807, SessionID: strings.Repeat("s", 128), Gate: longIdentity, Game: longIdentity, ConnectionNonce: strings.Repeat("n", 32), BindID: strings.Repeat("b", 32)}
 	packet := OutboundPacket{Version: InternalVersion, Binding: binding, OutSeq: ^uint64(0), Budget: Budget{DeadlineUnixNano: 9223372036854775807, RemainingNanos: int64(time.Minute)}, MessageID: ^uint32(0), Kind: wire.PayloadLockstep, Push: true, Payload: make([]byte, config.MaxPayloadBytes)}
 	forward := ForwardRequest{Version: InternalVersion, Binding: binding, RequestID: strings.Repeat("r", 32), Budget: packet.Budget, MessageID: ^uint32(0), Sequence: ^uint32(0), Kind: wire.PayloadLockstep, Payload: packet.Payload}
-	control := ControlRequest{Version: InternalVersion, Operation: Bind, Binding: binding, Budget: packet.Budget, Ticket: strings.Repeat("t", 8192)}
+	control := ControlRequest{Version: InternalVersion, Operation: Bind, Binding: binding, Budget: packet.Budget, Ticket: strings.Repeat("t", 8192), Admission: ^uint64(0)}
 	broadcast := BroadcastRequest{Version: InternalVersion, Source: longIdentity, Target: longIdentity, BroadcastID: strings.Repeat("b", 32), Budget: packet.Budget, Audience: Audience{Kind: Players, PlayerIDs: make([]int64, config.MaxBroadcastPlayers)}, MessageID: ^uint32(0), Payload: packet.Payload}
 	for index := range broadcast.Audience.PlayerIDs {
 		broadcast.Audience.PlayerIDs[index] = 9223372036854775807

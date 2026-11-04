@@ -76,8 +76,9 @@ type Deps struct {
 	Peers Alliance
 	// Notify sends a best-effort membership notice to a game server.
 	Notify func(ctx context.Context, homeSID int32, notice MemberNotice) error
-	// Scan lists stored entity ids (alliance.transfer by count only).
-	Scan Scan
+	// Owned lists the entities this instance owns, by owner (alliance.transfer
+	// by count only). Production: the Remote manager.
+	Owned entity.RemoteOwnedEntityLister
 	// Now is the business clock (deadlines are compared with Nest's nowUnix,
 	// which is business time too).
 	Now func() time.Time

@@ -128,6 +128,7 @@ func demoAllianceSteps(gameService string) []demoScaffoldStep {
 		{write: "game/handler/guild_steps_test.go", why: "the native steps on a real Nest: the debit takes once however often it is delivered, the refund puts it back, a full bag refuses the grant"},
 		{write: "db/guild_display_test.go", why: "PlayerDao.GuildID is shown (sync) but never persisted: the roster is the only authority"},
 		{run: demoGameUsesAlliance, why: "the game calls the alliance RPC (uses_rpcs: [alliance]) and prices a guild (guild.found_cost)"},
+		{run: demoGameMirrorStaleness, why: "the game reads guilds through Remote mirrors: remote_entity.cached_max_staleness 5s bounds how stale a read can be when pushes stop"},
 		{add: &AddOptions{Kind: "protocol", Name: "Guild", Group: "game", Handler: "player"}, why: "the guild endpoints: found / donate / claim (sagas), join / leave (RPC), info (mirror), op status"},
 		{write: "protocol/def/guild.go", why: "one response shape for writes and reads, the version to read after, the saga key"},
 		{add: &AddOptions{Kind: "protocol", Name: "GuildNotice", Group: "game", Handler: "player"}, why: "the server push for a membership notice"},
@@ -170,6 +171,54 @@ func demoGameUsesAlliance(root, gameService string) error {
 		"  # refunded when the alliance service refuses the founding.\n" +
 		"  found_cost: 100\n"
 	return appendDemoGameConfig(root, gameService, "guild", block, block)
+}
+
+// demoGameMirrorStaleness sets remote_entity.cached_max_staleness to 5s in
+// the game service's three configs (dev, production example, k8s Secret
+// example). The game reads every guild through Remote mirrors (plan §1.3):
+// while pushes flow a read is fresh within tens of milliseconds; when they
+// stop (an owner restarting, a reader past its push quota) a cached snapshot
+// is re-confirmed once it is older than this. Measured in phase 5: the
+// re-confirmations are the distinct keys being read divided by this bound —
+// about 20,000 Redis HGET per second for 100,000 players online at 5s.
+func demoGameMirrorStaleness(root, gameService string) error {
+	const (
+		before = "确认不了就不交出。不配置时等于 snapshot_cache_ttl（这里写成与它相同）；配置了必须为正。\n"
+		after  = "确认不了就不交出。不配置时等于 snapshot_cache_ttl；配置了必须为正。game-demo：game 经 Mirror 读公会，\n"
+		value  = "cached_max_staleness: 30s\n"
+		next   = "推送中断时最长 5s 回源一次（回源量 = 在读的不同 key 数 / 5s，联盟服务方案 §1.3）。\n"
+	)
+	for _, rel := range []string{
+		"configs/service/config." + gameService + ".yaml",
+		"configs/service/config." + gameService + ".prod.example.yaml",
+		"deploy/k8s/base/secret." + gameService + ".example.yaml",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		raw, err := os.ReadFile(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		text := string(raw)
+		at := strings.Index(text, before)
+		if at < 0 || strings.Count(text, before) != 1 {
+			return fmt.Errorf("%s: expected one remote_entity.cached_max_staleness comment", path)
+		}
+		lineStart := strings.LastIndex(text[:at], "\n") + 1
+		indent := text[lineStart:at]
+		indent = indent[:len(indent)-len(strings.TrimLeft(indent, " "))]
+		old := before + indent + value
+		if !strings.Contains(text, old) {
+			return fmt.Errorf("%s: expected cached_max_staleness: 30s after its comment", path)
+		}
+		text = strings.Replace(text, old, after+indent+"# "+next+indent+"cached_max_staleness: 5s\n", 1)
+		if err := writeAtomic(path, []byte(text), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // enableDemoAllianceAdmin turns the ops admin endpoint on in the alliance

@@ -173,6 +173,11 @@ func (gate *Gate) BeforeACK(ctx context.Context, session ConnectionSession, tick
 	if !principal.Authenticated() || principal.ServerID <= 0 || !gate.ready() {
 		return ErrUnauthenticated
 	}
+	// 接受序号随 Bind 交给 Game，同一 SessionID 的新旧由 Game 的绑定表在本 Gate 实例内判定（bindingTable.finish）。
+	admission := session.Admission()
+	if admission == 0 {
+		return ErrInvalidRequest
+	}
 	if own, err := gate.deps.Matches(ctx, "gate", gate.identity); err != nil || !own {
 		return ErrBindingStale
 	}
@@ -204,7 +209,7 @@ func (gate *Gate) BeforeACK(ctx context.Context, session ConnectionSession, tick
 		gate.closeConnection(connection, err)
 		return err
 	}
-	result, err := gate.control(ctx, binding, Bind, ticket)
+	result, err := gate.control(ctx, binding, Bind, ticket, admission)
 	if err != nil {
 		gate.closeConnection(connection, err)
 		return err
@@ -243,7 +248,7 @@ func (gate *Gate) AfterACK(ctx context.Context, session ConnectionSession) error
 	gate.forwards.Add(1)
 	gate.mu.Unlock()
 	defer gate.forwards.Done()
-	result, err := gate.control(ctx, binding, Activate, "")
+	result, err := gate.control(ctx, binding, Activate, "", 0)
 	if err != nil {
 		gate.closeConnection(connection, err)
 		return err
@@ -266,12 +271,13 @@ func (gate *Gate) Closed(session ConnectionSession) {
 	}
 }
 
-func (gate *Gate) control(ctx context.Context, binding Binding, operation ControlOperation, ticket string) (ControlResponse, error) {
+// control 发一次控制请求；ticket 与 admission 只有 Bind 携带。
+func (gate *Gate) control(ctx context.Context, binding Binding, operation ControlOperation, ticket string, admission uint64) (ControlResponse, error) {
 	budget, err := BudgetFromContext(ctx)
 	if err != nil {
 		return ControlResponse{}, err
 	}
-	request := ControlRequest{Version: InternalVersion, Binding: binding, Operation: operation, Ticket: ticket, Budget: budget}
+	request := ControlRequest{Version: InternalVersion, Binding: binding, Operation: operation, Ticket: ticket, Budget: budget, Admission: admission}
 	data, err := gate.codec.Marshal(request)
 	if err != nil {
 		return ControlResponse{}, err
@@ -287,6 +293,12 @@ func (gate *Gate) control(ctx context.Context, binding Binding, operation Contro
 	var result ControlResponse
 	if err = gate.codec.Unmarshal(data, &result); err != nil {
 		return result, err
+	}
+	if result.Version == InternalVersion && operation == Bind && result.Outcome == NotAdmitted && result.Reason == bindingSupersededReason {
+		// 同一 SessionID 已绑定的是本 Gate 更晚接受的连接：这是一次迟到完成的旧登录，按会话关闭收尾、不告警。
+		slog.Debug("gate: a Bind finished after a newer connection of the same session; closing it",
+			"player_id", binding.PlayerID, "session_id", binding.SessionID)
+		return result, fmt.Errorf("%w: %s", ErrSessionClosed, result.Reason)
 	}
 	if result.Version != InternalVersion || result.Outcome != Completed {
 		return result, fmt.Errorf("%w: control outcome %d: %s", ErrBindingStale, result.Outcome, result.Reason)
@@ -345,7 +357,7 @@ func (gate *Gate) controlWorker() {
 			}
 		}
 		if err == nil {
-			result, err = gate.control(ctx, job.binding, job.operation, "")
+			result, err = gate.control(ctx, job.binding, job.operation, "", 0)
 		}
 		cancel()
 		if job.operation == Renew {

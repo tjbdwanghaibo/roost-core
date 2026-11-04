@@ -62,6 +62,8 @@ type loadMover struct {
 	// lastSet 是上次写位置时这一拍的业务时间（UnixNano），用来量心跳间隔。
 	lastSet int64
 	stats   *moveStats
+	// measured 是测量窗口里（loadTick > 0）写位置的次数；实体锁内写，测试线程按它等每个移动者都动过。
+	measured atomic.Int64
 }
 
 // MoveComponent 让 movement 的动作找到实体的 Move（movement.MoveOwner）。
@@ -97,6 +99,7 @@ func (f subjectFields) SetPos(at spatial.Point) {
 	s.data.Changed = time.Now().UnixNano()
 	s.tracker.MarkSync(1)
 	if m := s.mover; m.stats != nil && step > 0 {
+		m.measured.Add(1)
 		if m.lastSet != 0 {
 			m.stats.interval(time.Duration(beatNow-m.lastSet), m.period)
 		}
