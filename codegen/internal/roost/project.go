@@ -237,7 +237,9 @@ func SyncProjectContext(ctx context.Context, root string) (SyncResult, error) {
 	// concurrent-edit checks. The refreshed files are committed with the rest
 	// below; inputs was snapshotted before the refresh, so it still describes
 	// the real project.
-	refreshed, err := refreshGeneratedShutdownConfigs(stage, manifest)
+	// withEntityOwners: a service owning entity kinds also runs their handler
+	// Mod (NewOwnedNestHandlersMod), which the templates count; the totals must too.
+	refreshed, err := refreshGeneratedShutdownConfigs(stage, manifest.withEntityOwners(stage))
 	if err != nil {
 		return SyncResult{}, inProjectPaths(fmt.Errorf("refresh shutdown.total_timeout: %w", err), stage, absRoot)
 	}
