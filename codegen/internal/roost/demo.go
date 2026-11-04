@@ -117,16 +117,29 @@ func applyDemoTemplate(m *Manifest, gameService string) error {
 	// The guild is the alliance service's (demo_alliance.go): every alliance
 	// and every player's membership guard is owned and written by that
 	// service, and the game reads them through the Remote mirror the
-	// remote_entity Mod also serves. The game keeps remote_entity (the
-	// default game mods include it) for the one Remote kind it owns itself: a
+	// remote_entity Mod also serves. The game has remote_entity for the one
+	// Remote kind it owns itself: a
 	// partitioned scene's Team (service=<game>, shared between the game
 	// processes that are its members' Bases; FEATURE-2026-11-03-seamless-world
 	// §14). The alliance kinds are foreign to it (service=alliance), so its
 	// Remote runtime refuses to claim or write them
 	// (entity.ErrRemoteKindNotOwned): the alliance RPC stays the only path to
 	// a guild write (decision S of the alliance plan), held by the framework's
-	// guard rather than by the game lacking the runtime. uses_rpcs: [alliance]
-	// is added once the rpc exists (demoGameUsesAlliance).
+	// guard rather than by the game lacking the runtime. A caller who narrowed
+	// -mods still gets it: the Team cannot be written without it. uses_rpcs:
+	// [alliance] is added once the rpc exists (demoGameUsesAlliance).
+	game = m.Services[gameService]
+	writer := make([]string, 0, len(game.Mods)+1)
+	for _, mod := range game.Mods {
+		if mod != "remote_mirror" { // the read-only mirror and remote_entity exclude each other
+			writer = append(writer, mod)
+		}
+	}
+	if !contains(writer, "remote_entity") {
+		writer = append(writer, "remote_entity")
+	}
+	game.Mods = writer
+	m.Services[gameService] = game
 	for _, feature := range []string{"protocol", "entity", "nest", "dao", "config", "errcode", "attribute"} {
 		if !contains(m.Features, feature) {
 			m.Features = append(m.Features, feature)
