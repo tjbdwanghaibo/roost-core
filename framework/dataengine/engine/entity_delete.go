@@ -131,7 +131,8 @@ func (runtime *Runtime) admitRemoteEntityDelete(ctx context.Context, value entit
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	batch, err := runtime.remoteManager.PrepareRemoteWriteBatch(ctx, []int64{value.ID()})
+	// 这里在 EntityManager.Destroy 持有 value 的实体锁时准备批次：value 落后于权威时写准入不能卸载重载它，按版本冲突拒绝。
+	batch, err := runtime.remoteManager.PrepareRemoteWriteBatch(entity.WithRemoteWriteTargetHeld(ctx), []int64{value.ID()})
 	if err != nil {
 		return entity.DeleteAdmissionImmediate, err
 	}

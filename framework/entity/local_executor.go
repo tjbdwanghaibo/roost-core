@@ -37,6 +37,23 @@ func RunLocal(ctx context.Context, fn func()) error {
 	return nil
 }
 
+type remoteWriteTargetHeldKey struct{}
+
+// WithRemoteWriteTargetHeld 标记调用方已持有 Remote 写目标实例的实体锁，例如事务外独立删档在 EntityManager.Destroy
+// 的锁内准备 Remote 写批次。写准入发现这份实例落后于权威时不能把它卸载重载（卸载要取同一把锁，就地执行会在删档
+// 中途把实例换掉），按版本冲突拒绝；落后的实例留到下一次不持锁的写准入再换。
+func WithRemoteWriteTargetHeld(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, remoteWriteTargetHeldKey{}, true)
+}
+
+// RemoteWriteTargetHeld 报告 ctx 是否带 WithRemoteWriteTargetHeld 标记。
+func RemoteWriteTargetHeld(ctx context.Context) bool {
+	return ctx != nil && ctx.Value(remoteWriteTargetHeldKey{}) == true
+}
+
 // ErrColdLoadInLogic 表示业务池阶段缺少预加载目标。应在消息上声明全部冷目标（或用 SendOptionIO 强制 I/O 准备），
 // 不能在持有 Guard 时把半个 handler 转移到 io 池。
 var ErrColdLoadInLogic = errors.New("entity: cold load forbidden in logic; declare targets and dispatch with SendOptionIO preparation")

@@ -1115,6 +1115,15 @@ func thawAcknowledgedRemote(remote entity.IThreadSafeRemoteEntity, marked bool) 
 	return remote.TransitionRemoteOwnership(target)
 }
 
+// remoteCommitHeldBy 报告内存实例是否就是 commit 的写者：写准入把租约写进实例的版本向量（applyWriteLease），
+// 定稿用同一份租约填 BaseVersion 与 LockFence，所以写者的向量在确认前是 (BaseVersion, LockFence)，确认后（重复确认）
+// 是 (NextVersion, LockFence)。写者持有写门直到持久结论，期间向量不会被别的写入改动。
+// 更早提交的迟到确认由调用方先用 remoteReceiptObsolete 排除。
+func remoteCommitHeldBy(remote entity.IThreadSafeRemoteEntity, commit entity.RemoteCommit) bool {
+	current := remote.RemoteVersionVector()
+	return current.LockFence == commit.LockFence && (current.StateVersion == commit.BaseVersion || current.StateVersion == commit.NextVersion)
+}
+
 func remoteCommitAlreadyAcknowledged(remote entity.IThreadSafeRemoteEntity, vector entity.RemoteVersionVector) bool {
 	state := remote.RemoteOwnershipState()
 	return remote.RemoteVersionVector() == vector && (state == entity.RemoteOwnershipLocalOwned || state == entity.RemoteOwnershipShared)
@@ -1138,6 +1147,14 @@ func (m *Manager) acknowledgeRemoteCommit(commit entity.RemoteCommit) error {
 		return nil
 	}
 	if remote, ok := live.(entity.IThreadSafeRemoteEntity); ok {
+		if !remoteCommitHeldBy(remote, commit) {
+			// 这份内存实例不是这笔提交的写者：outbox 协调者扫描的是共享 outbox 里的全部未发布事务，会代发别的进程（共享
+			// 模式的另一个写者、转走所有权期间的新所有者）的提交，或重启后重放的、实例加载时还没带上的提交。实例里没有
+			// 这笔修改，把版本推进到 NextVersion 会让它冒充最新，下一笔整文档写就覆盖掉这笔修改。保持落后，写准入按
+			// staleWriteTarget 从权威重载；发布与版本通知照常。
+			metrics.IncCounter("remote_entity.foreign_ack_skipped_total", nil, 1)
+			return nil
+		}
 		vector := entity.RemoteVersionVector{StateVersion: commit.NextVersion, MarkerEpoch: commit.MarkerEpoch, LockFence: commit.LockFence, RouteEpoch: commit.RouteEpoch}
 		if err := remote.SetRemoteVersionVector(vector); err != nil {
 			// 并发取得新许可可能发生在上面的读取之后；再次核对完整向量。

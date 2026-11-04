@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -855,15 +856,19 @@ func TestPhysicsServiceRunnerCoversNativeIntegration(t *testing.T) {
 // 每次发版在缺省模式（离线、替身提交器）跑一遍；三个离线生成器专项（heartbeat / level / sync-modes）同批跑
 // （维护者 2026-10-31 决定纳入）。pretagExemptGeneratedScripts 是不进 pretag 的生成工程脚本（目前都要外部依赖），
 // 每条写明由谁跑；新增的 scripts/test-*-generated.sh 要么在 pretag 里，要么在这里登记原因。
+// 玩法接入手册（docs/framework/*-INTEGRATION.md）点名的其他验收脚本同样适用：scripts/test-mmorpg-scenes.sh
+// 不匹配 *-generated.sh，v1.35.0 起 DAO 同步载荷换成 PB 后它的 BSON 客户端一直红，直到 2026-11-04 才发现。
 var pretagExemptGeneratedScripts = map[string]string{
+	"scripts/test-mmorpg-cross-sid.sh":     "需要已启动的双 sid game-demo 与隔离 Mongo / NATS / Redis / etcd；按 MMORPG-INTEGRATION §13 手动跑",
 	"scripts/test-dataengine-generated.sh": "需要隔离 Mongo；由 wiring/scripts/integration/dataengine-env.sh test 跑（见 generatedRealDependencyEntries）",
 	"scripts/test-remote-generated.sh":     "需要隔离 Mongo / Redis / NATS；由 dataengine-env.sh test 与 mirror-local.sh 跑",
 	"scripts/test-demo-generated.sh":       "需要隔离 Mongo / Redis / NATS；由 dataengine-env.sh test 与 mirror-local.sh 跑；game-demo 的离线 build / vet / test 在 go test ./... 与 release.sh 里",
 }
 
-// TestGeneratedScriptsAreInPretag：每个 scripts/test-*-generated.sh 都在 scripts/pretag.sh 的非注释行里出现，或登记在
-// pretagExemptGeneratedScripts。保证的是“发版时调用”这一层：只查脚本路径写在 pretag 的命令里，不检查脚本本身
-// 是否真的跑到了用例（那由各脚本自己的通过数断言负责）；登记了豁免却已删除的脚本同样报错，免得豁免表过期。
+// TestGeneratedScriptsAreInPretag：每个 scripts/test-*-generated.sh，以及玩法接入手册点名的每个 scripts/test-*.sh，
+// 都在 scripts/pretag.sh 的非注释行里出现，或登记在 pretagExemptGeneratedScripts。保证的是“发版时调用”这一层：
+// 只查脚本路径写在 pretag 的命令里，不检查脚本本身是否真的跑到了用例（那由各脚本自己的通过数断言负责）；
+// 登记了豁免却已删除（或手册不再点名）的脚本同样报错，免得豁免表过期。
 func TestGeneratedScriptsAreInPretag(t *testing.T) {
 	raw, err := os.ReadFile(filepath.FromSlash("scripts/pretag.sh"))
 	if err != nil {
@@ -883,6 +888,27 @@ func TestGeneratedScriptsAreInPretag(t *testing.T) {
 	}
 	if len(scripts) == 0 {
 		t.Fatal("no scripts/test-*-generated.sh found; the guard is looking in the wrong place")
+	}
+	// 手册里写成验收入口的脚本不一定叫 *-generated.sh（如多地图 TCP 的 test-mmorpg-scenes.sh），一并纳入。
+	manuals, err := filepath.Glob(filepath.FromSlash("docs/framework/*-INTEGRATION.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := regexp.MustCompile(`scripts/test-[a-z0-9-]+\.sh`)
+	for _, manual := range manuals {
+		text, err := os.ReadFile(manual)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, script := range named.FindAllString(string(text), -1) {
+			if _, err := os.Stat(filepath.FromSlash(script)); err != nil {
+				t.Errorf("%s names %s, which does not exist", filepath.ToSlash(manual), script)
+				continue
+			}
+			if !strings.HasSuffix(script, "-generated.sh") && !slices.Contains(scripts, filepath.FromSlash(script)) {
+				scripts = append(scripts, filepath.FromSlash(script))
+			}
+		}
 	}
 	seen := map[string]bool{}
 	genre := 0
@@ -906,10 +932,6 @@ func TestGeneratedScriptsAreInPretag(t *testing.T) {
 		}
 	}
 	// 每个玩法接入手册（docs/framework/<玩法>-INTEGRATION.md）都有自己的纵切脚本，脚本必须在 pretag 里。
-	manuals, err := filepath.Glob(filepath.FromSlash("docs/framework/*-INTEGRATION.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, manual := range manuals {
 		name := strings.ToLower(strings.TrimSuffix(filepath.Base(manual), "-INTEGRATION.md"))
 		script := "scripts/test-" + name + "-generated.sh"

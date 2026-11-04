@@ -21,11 +21,13 @@ var (
 	ErrRemoteWriteCapabilityDisabled = errors.New("remote entity: write capability disabled")
 	ErrRemoteInvalidStateTransition  = errors.New("remote entity: invalid ownership transition")
 	ErrRemoteCommitNotFinalized      = errors.New("remote entity: commit not finalized")
-	// ErrRemoteEntityReloading 表示实例因 Remote 写被持久拒绝而隔离、框架正在把它仅内存卸载并从权威重新加载：
-	// gate 释放到卸载完成之间的下一写者、卸载（Destroy）过程中发起的重载都得到它。
+	// ErrRemoteEntityReloading 表示本进程的内存实例不能再写、框架正在把它仅内存卸载并从权威重新加载。两种来源：
+	// ① 实例因 Remote 写被持久拒绝而隔离：gate 释放到卸载完成之间的下一写者、卸载（Destroy）过程中发起的重载；
+	// ② 写准入发现实例落后于权威（共享模式下别的进程写过，或所有权转走又转回），卸载它没有完成（实体锁等待超时、
+	// 业务池拒绝投递）或重载撞上卸载收尾窗口。
 	// 这是可重试错误：卸载完成后的下一次访问得到从权威重载的新实例。它包裹 ErrRemoteFenced，
 	// 既有 errors.Is(err, ErrRemoteFenced) 判断保持成立；需要区分“可重试的重载窗口”时先判断本哨兵。
-	ErrRemoteEntityReloading = fmt.Errorf("%w: rejected instance is being unloaded and reloaded from the authority (retryable)", ErrRemoteFenced)
+	ErrRemoteEntityReloading = fmt.Errorf("%w: local instance is being unloaded and reloaded from the authority (retryable)", ErrRemoteFenced)
 	// ErrNoRemoteRuntime 表示写的是 Remote 托管（remote=managed）实体，而本进程没有装 Remote 运行时：写权限、fence 与
 	// 远端提交都由 remote_entity Mod（wiring/remoteentity）提供，没有它就不会把这类写当本地写，一律拒绝。
 	// 它包裹 ErrRemoteWriteCapabilityDisabled，既有 errors.Is 判断不变；文本点名修法。
