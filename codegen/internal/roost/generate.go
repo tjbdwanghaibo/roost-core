@@ -167,9 +167,10 @@ func generatorsFor(m Manifest, force bool) []generator {
 		// only when the content changed, so -force is not needed.
 		{Feature: "rpc", Name: "servicerpc", Prefixes: []string{"internal/rpc/"}, Run: func(root string, w io.Writer) error {
 			for _, dir := range projectRPCDirs(root, m) {
-				// "./" + dir, relative to root: servicerpc writes the flag
-				// into the generated header as the command to rerun.
-				if err := servicerpc.RunIn(root, []string{"-dir", "./" + dir}, w); err != nil {
+				// 在 rpc 包目录里以 -dir . 运行：servicerpc 把参数写进生成文件头作为重跑命令，必须与接口文件的
+				// //go:generate（-dir .）一致，否则 go generate ./... 与 roost generate 互相改写文件头，
+				// generate --check 永远报过期。
+				if err := servicerpc.RunIn(filepath.Join(root, filepath.FromSlash(dir)), []string{"-dir", "."}, w); err != nil {
 					return fmt.Errorf("%s: %w", dir, err)
 				}
 			}

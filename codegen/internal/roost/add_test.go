@@ -452,8 +452,10 @@ func TestAddRPCEntityServiceScaffoldsTheWriteContract(t *testing.T) {
 	if _, err := Add(root, AddOptions{Kind: "mod", Name: "nest", Service: "alliance"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Add(root, AddOptions{Kind: "rpc", Name: "Alliance", Service: "alliance", EntityService: true}); err != nil {
-		t.Fatalf("add rpc -entity-service: %v", err)
+	// 经命令行走一遍：-entity-service 要在 add rpc 的参数白名单里。
+	var cliOut bytes.Buffer
+	if err := Run([]string{"add", "rpc", "Alliance", "-service", "alliance", "-entity-service", "--root", root}, &cliOut, &cliOut); err != nil {
+		t.Fatalf("roost add rpc -entity-service: %v\n%s", err, cliOut.String())
 	}
 	iface := readProjectFile(t, root, "internal/rpc/alliance/alliance.go")
 	for _, want := range []string{
@@ -567,6 +569,30 @@ func TestDoctorChecksTheSlotTableOfAShardedRPC(t *testing.T) {
 		check.Env = append(os.Environ(), "GOWORK=off")
 		if output, err := check.CombinedOutput(); err != nil {
 			t.Fatalf("go %s with a sharded rpc: %v\n%s", action, err, output)
+		}
+	}
+}
+
+// roost generate 写进 rpc 生成文件头的重跑命令必须与接口文件的 //go:generate 相同：否则 go generate ./... 改写文件头，
+// 生成工程 porcelain 不干净、generate --check 报过期。
+func TestRoostGenerateAndGoGenerateWriteTheSameRPCHeader(t *testing.T) {
+	t.Parallel()
+	root := copyOfNewProject(t, "configdata")
+	if _, err := Add(root, AddOptions{Kind: "rpc", Name: "Guild", Service: "game"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Generate(root, GenerateOptions{Stdout: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	iface := readProjectFile(t, root, "internal/rpc/guild/guild.go")
+	_, command, found := strings.Cut(iface, "//go:generate ")
+	if !found {
+		t.Fatalf("interface has no //go:generate:\n%s", iface)
+	}
+	command, _, _ = strings.Cut(command, "\n")
+	for _, rel := range []string{"internal/rpc/guild/guild_rpc_gen.go", "internal/rpc/guild/guild_rpc_assembly_gen.go"} {
+		if header := readProjectFile(t, root, rel); !strings.Contains(header, "//\t"+command+"\n") {
+			t.Errorf("%s does not cite the //go:generate command %q:\n%s", rel, command, header[:min(len(header), 600)])
 		}
 	}
 }

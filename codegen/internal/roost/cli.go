@@ -310,7 +310,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		"skill": {"root"}, "table": {"root"}, "dao": {"root", "entity"},
 		"webroute": {"root", "service"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps", "native", "entity", "component"},
 		"effect": {"root", "consumer"},
-		"rpc":    {"root", "service"}, "timer": {"root", "entity", "component", "service", "id"},
+		"rpc":    {"root", "service", "entity-service"}, "timer": {"root", "entity", "component", "service", "id"},
 		"heartbeat": {"root", "entity", "service", "id"}, "behavior": {"root", "entity", "service", "id", "ai", "state"},
 		"timedomain": {"root", "entity", "id"},
 		"attribute":  {"root"},
