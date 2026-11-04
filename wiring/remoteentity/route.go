@@ -11,6 +11,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	coreremote "github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	fctx "github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
@@ -76,6 +77,9 @@ var _ RoutedEntityServer = (*coreremote.Manager)(nil)
 //   - 否则读持久所有权记录：
 //   - 没有记录：servicerpc.EntityNotFound（业务拒绝）。非创建类请求不得进入写准入，否则首写会把一个不存在的 ID 认领走；
 //   - owner 是本 sid：冷加载、登记路由，nil；
+//   - owner 是本 sid、权威里没有这个实体（空认领：认领它的事务被拒绝回滚，或提交前崩溃）：nil，不加载不登记——
+//     请求交给业务，创建类请求照常首写，其余请求由 Nest 冷加载答确定的“不存在”（errcode.ErrEntityNotFound）；
+//   - owner 是本 sid、删过档：errcode.ErrEntityDeleted（业务拒绝，这个 ID 不可再用）；
 //   - owner 是别的 sid：servicerpc.Redirect(owner)。
 //   - 读不了所有权记录、加载失败、owners 还没装好：servicerpc.Retryable（没有执行）。
 //
@@ -105,6 +109,9 @@ func RPCRouteCheck(ctx context.Context, owners entity.RemoteOwnershipManager, lo
 	case errors.Is(err, entity.ErrRemoteKindNotOwned):
 		// 这个 kind 归别的服务：调用方把请求发错了服务，不是可重试的状态。
 		return err
+	case errors.Is(err, entity.ErrAuthorityEntityDeleted):
+		// 删过档（D10）：确定的状态，重试也不会变。
+		return errcode.Wrap(errcode.ErrEntityDeleted, err)
 	case err != nil:
 		return servicerpc.Retryable(err)
 	case !found:
@@ -184,7 +191,7 @@ func (m *RemotePreloadMod) Start() error {
 		return fmt.Errorf("remote_entity preload mod: %w", err)
 	}
 	slog.Info("remote_entity preload mod: preloaded owned entities", "kinds", kinds,
-		"listed", report.Listed, "loaded", report.Loaded, "skipped", report.Skipped, "failed", report.Failed)
+		"listed", report.Listed, "loaded", report.Loaded, "skipped", report.Skipped, "empty", report.Empty, "deleted", report.Deleted, "failed", report.Failed)
 	return nil
 }
 

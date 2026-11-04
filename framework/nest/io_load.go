@@ -197,7 +197,7 @@ func targetLoadError(err error) error {
 //     errcode.CodeEntityDeleted：这个 ID 不可再用，重新登录也不会恢复（D10 方案 B）。
 //
 // 生成 endpoint 经 errcode.ClientError 给客户端该码、不按 CodeInternal 记 ERROR。调用位置：声明目标的加载
-// （singleDispatch / dispatchMany / I/O 准备的 GetMany）。
+// （singleDispatch / dispatchMany / I/O 准备的 GetMany / Remote 声明目标的写准入 prepareRemoteWriteBatch）。
 func entityStateError(err error) error {
 	if err == nil {
 		return nil

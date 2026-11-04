@@ -167,8 +167,23 @@ func (m *Manager) withEntityGate(parent context.Context, id int64, fn func(conte
 	return fn(ctx, wrapper)
 }
 
+// errOwnedEntityEmpty 是 routedOwnership 对“空认领”的结论：所有权记录是本 sid（独占），权威里却没有这个实体的聚合
+// （DataEngine 冷加载答 entity.ErrAuthorityEntityNotFound）。来源：首写认领发生在写准入（事务提交之前），认领它的事务
+// 随后被业务拒绝回滚、或进程在提交前崩溃，认领不撤销。框架对它的统一语义是“本实例拥有、业务上还不存在的实体”：
+//
+//   - 路由前置检查答“由本实例服务”，不加载、不登记路由——请求交给业务：创建类请求（GetOrCreate）在写准入里照常
+//     首写（同 ID 再建），其余请求由 Nest 冷加载答确定的“不存在”（errcode.ErrEntityNotFound，nest 的 entityStateError）；
+//   - 起服预加载计入 PreloadReport.Empty，不算失败、不记 ERROR、不登记路由。
+//
+// 删过档的实体（entity.ErrAuthorityEntityDeleted，D10）不是空认领：那个 ID 不可再用，前置检查答“删过档”，预加载计入
+// PreloadReport.Deleted。满足 errors.Is(err, entity.ErrAuthorityEntityNotFound)。
+var errOwnedEntityEmpty = fmt.Errorf("remote_entity: owned by this instance but the entity does not exist in its authority (empty claim): %w", entity.ErrAuthorityEntityNotFound)
+
 // routedOwnership 是前置检查、预加载与续期重登记共用的一步：向权威确认所有权，owner 是本 sid（独占）就保证实体已
 // 加载并登记路由。调用方持有写门。返回权威里的 owner（没有记录时 found=false）与是否由本进程服务。
+//
+// owner 是本 sid、冷加载得到权威确认的“不存在”时返回 errOwnedEntityEmpty（空认领），得到“删过档”时返回满足
+// entity.ErrAuthorityEntityDeleted 的错误；两者都不登记路由。其余加载错误（权威读不了、数据坏）原样包装返回。
 func (m *Manager) routedOwnership(ctx context.Context, w *remoteEntityWrapper) (owner int32, found bool, err error) {
 	if err := w.refreshMarked(ctx); err != nil {
 		return 0, false, fmt.Errorf("remote_entity: read ownership %d: %w", w.id, err)
@@ -187,7 +202,12 @@ func (m *Manager) routedOwnership(ctx context.Context, w *remoteEntityWrapper) (
 	}
 	if w.lookupLocalEntity() == nil {
 		loaded, err := w.loadEntity(ctx)
-		if err != nil {
+		switch {
+		case errors.Is(err, entity.ErrAuthorityEntityDeleted):
+			return lease.OwnerSid, true, fmt.Errorf("remote_entity: entity %d was deleted: %w", w.id, err)
+		case errors.Is(err, entity.ErrAuthorityEntityNotFound):
+			return lease.OwnerSid, true, fmt.Errorf("remote_entity: entity %d: %w", w.id, errOwnedEntityEmpty)
+		case err != nil:
 			return lease.OwnerSid, true, fmt.Errorf("remote_entity: load entity %d: %w", w.id, err)
 		}
 		if loaded == nil {
@@ -204,6 +224,9 @@ func (m *Manager) routedOwnership(ctx context.Context, w *remoteEntityWrapper) (
 //   - 实体的路由由本进程持有（已加载、独占、已登记）：直接返回本 sid，不做 I/O；
 //   - 否则在写门下读持久所有权记录：没有记录 found=false（非创建类请求不得认领不存在的实体）；owner 是别人返回它
 //     （调用方答改投）；owner 是本 sid 就冷加载、登记路由，再返回本 sid。
+//   - owner 是本 sid、权威里没有聚合（空认领，见 errOwnedEntityEmpty）：返回本 sid、nil，不登记——请求交给业务，
+//     创建类请求照常首写，其余请求由 Nest 答“不存在”。
+//   - owner 是本 sid、删过档：返回满足 entity.ErrAuthorityEntityDeleted 的错误（调用方答“删过档”，不重试）。
 //
 // 进 Nest 之后写准入照常按所有权记录 + fence 裁决，这一步只是省掉一次白进 Nest。归属于别的服务的 kind 返回
 // ErrRemoteKindNotOwned。要 I/O，只能在 I/O 段（RPC handler）调用。
@@ -229,6 +252,9 @@ func (m *Manager) ServeRoutedRequest(ctx context.Context, id int64) (owner int32
 		owner, found, serveErr = m.routedOwnership(ctx, w)
 		return serveErr
 	})
+	if errors.Is(err, errOwnedEntityEmpty) {
+		return owner, found, nil
+	}
 	return owner, found, err
 }
 
@@ -248,6 +274,10 @@ type PreloadReport struct {
 	Loaded int
 	// Skipped 是枚举之后所有权已变（转走或进了共享模式）的实体数。
 	Skipped int
+	// Empty 是空认领（所有权记录是本 sid、权威里没有聚合，见 errOwnedEntityEmpty）的实体数：不加载、不登记，不算失败。
+	Empty int
+	// Deleted 是删过档（只剩墓碑）的实体数：不加载、不登记，不算失败。
+	Deleted int
 	// Failed 是加载失败、留给按需冷加载的实体数（错误已记日志与指标）。
 	Failed int
 }
@@ -262,6 +292,7 @@ const (
 //
 // 枚举（所有权记录查询）失败返回错误，调用方让启动失败，由进程管理拉起重试——与 DataEngine 恢复失败一样。单个实体
 // 加载失败只记错误与指标、跳过它：它留给按需冷加载，到时同样会报错并答给调用方，不让一个坏文档挡住整个服务。
+// 权威确认不存在（空认领）与删过档的实体是确定的状态，不是失败：分别计入 Empty / Deleted，不记 ERROR、不登记路由。
 // 加载并发上限 16。要在 DataEngine 恢复与 Nest 启动之后、路由 RPC 的 owner 在总线上注册 handler 之前调用
 // （wiring/remoteentity.RemotePreloadMod）。
 func (m *Manager) PreloadOwnedEntities(ctx context.Context, kinds []entity.EntityKind) (PreloadReport, error) {
@@ -316,6 +347,12 @@ func (m *Manager) PreloadOwnedEntities(ctx context.Context, kinds []entity.Entit
 					return loadErr
 				})
 				switch {
+				case errors.Is(err, errOwnedEntityEmpty):
+					count(&report.Empty)
+					routeMetric("remote_entity.preload_total", "empty")
+				case errors.Is(err, entity.ErrAuthorityEntityDeleted):
+					count(&report.Deleted)
+					routeMetric("remote_entity.preload_total", "deleted")
 				case err != nil:
 					count(&report.Failed)
 					routeMetric("remote_entity.preload_total", "error")

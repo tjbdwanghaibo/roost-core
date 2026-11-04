@@ -7,6 +7,7 @@ package remoteentity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -416,6 +417,88 @@ func TestPreloadLoadsOnlyEntitiesThisSidOwns(t *testing.T) {
 	markers.listErr = errors.New("mongo: not primary")
 	if _, err := mgr.PreloadOwnedEntities(context.Background(), []entity.EntityKind{routeKindAlliance}); err == nil {
 		t.Fatal("a failed enumeration must fail the preload")
+	}
+}
+
+// repositoryLoader 像 DataEngine 的聚合仓库那样答“权威里没有”：替身里没有的实体答满足 entity.ErrAuthorityEntityNotFound
+// 的错误（engine.ErrEntityAggregateNotFound），deleted 里的答满足 entity.ErrAuthorityEntityDeleted 的错误。
+type repositoryLoader struct {
+	*remoteTestLoader
+	deleted map[int64]bool
+}
+
+func (l *repositoryLoader) LoadRemoteEntity(ctx context.Context, id int64, kind entity.EntityKind) (entity.IThreadSafeRemoteEntity, error) {
+	loaded, err := l.remoteTestLoader.LoadRemoteEntity(ctx, id, kind)
+	switch {
+	case err != nil || loaded != nil:
+		return loaded, err
+	case l.deleted[id]:
+		return nil, fmt.Errorf("test repository: aggregate %d was deleted: %w", id, entity.ErrAuthorityEntityDeleted)
+	default:
+		return nil, fmt.Errorf("test repository: aggregate %d not found: %w", id, entity.ErrAuthorityEntityNotFound)
+	}
+}
+
+// 空认领（联盟服务阶段 5）：首写认领发生在写准入，认领它的事务被拒绝回滚后认领不撤销，权威里没有聚合。同 sid 重启后
+// 预加载把它计为 Empty（不算失败、不登记），前置检查答“由本实例服务”（交给业务：读请求由 Nest 答不存在，创建类请求
+// 照常首写），之后同 ID 的首写成功并登记路由。删过档的（D10）与之区分：预加载计为 Deleted，前置检查答删过档。
+func TestEmptyClaimIsAnOwnedEntityThatDoesNotExist(t *testing.T) {
+	registerRouteKinds()
+	ctx := context.Background()
+	store := newFakeRouteStore()
+	markers := &listingMarkerStore{mockMarkerStore: newMockMarkerStore()}
+
+	// 重启前：业务在本地新建实体（GetOrCreate），写准入首写认领并登记，事务被拒绝回滚（Abort），没有任何提交。
+	before := newRemoteTestLoader()
+	created := newTestRemoteEntity(7501, 1, routeKindAlliance)
+	before.add(created)
+	first := newRoutedManager(t, 1000, store, markers, before)
+	id := created.GUId()
+	if err := writeOnce(t, first, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, claimed, _ := markers.GetOwnership(ctx, id); !claimed {
+		t.Fatal("the rolled-back first write did not leave its claim; the case under test does not arise")
+	}
+	if err := first.stopRouteRenewal(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 同 sid 重启：内存里没有它，权威里也没有聚合。另有一个删过档的实体，所有权记录同样是本 sid。
+	tombstone := newTestRemoteEntity(7502, 1, routeKindAlliance)
+	markers.leases[tombstone.GUId()] = entity.RemoteEntityMarkerLease{OwnerSid: 1000, MarkerEpoch: 1, RouteEpoch: 1}
+	after := &repositoryLoader{remoteTestLoader: newRemoteTestLoader(), deleted: map[int64]bool{tombstone.GUId(): true}}
+	restarted := newRoutedManager(t, 1000, store, markers, after)
+	report, err := restarted.PreloadOwnedEntities(ctx, []entity.EntityKind{routeKindAlliance})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Listed != 2 || report.Empty != 1 || report.Deleted != 1 || report.Failed != 0 || report.Loaded != 0 {
+		t.Fatalf("preload report %+v; want the empty claim counted as Empty and the tombstone as Deleted, neither as Failed", report)
+	}
+	if restarted.RouteHeld(id) || store.value(id) != "" || restarted.RouteHeld(tombstone.GUId()) {
+		t.Fatalf("preload registered an entity that does not exist: route=%q", store.value(id))
+	}
+
+	// 前置检查：空认领由本实例服务（不是“可重试”，也不登记）；删过档答删过档。
+	owner, found, err := restarted.ServeRoutedRequest(ctx, id)
+	if err != nil || !found || owner != 1000 {
+		t.Fatalf("route check on the empty claim = %d,%v,%v; want served here (1000,true,nil)", owner, found, err)
+	}
+	if restarted.RouteHeld(id) || store.value(id) != "" {
+		t.Fatalf("the route check registered the empty claim: route=%q", store.value(id))
+	}
+	if _, _, err := restarted.ServeRoutedRequest(ctx, tombstone.GUId()); !errors.Is(err, entity.ErrAuthorityEntityDeleted) {
+		t.Fatalf("route check on the deleted entity err=%v; want ErrAuthorityEntityDeleted", err)
+	}
+
+	// 同 ID 再建：业务新建实例后，写准入照常首写（所有权本来就是本 sid），之后才登记路由。
+	after.add(newTestRemoteEntity(7501, 1, routeKindAlliance))
+	if err := writeOnce(t, restarted, id); err != nil {
+		t.Fatalf("first write on the empty claim after restart: %v", err)
+	}
+	if got := store.value(id); got != "1000:1" || !restarted.RouteHeld(id) {
+		t.Fatalf("after the re-creating write route=%q held=%v; want 1000:1", got, restarted.RouteHeld(id))
 	}
 }
 
