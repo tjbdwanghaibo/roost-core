@@ -305,6 +305,12 @@ func (s *MongoCommitter) EnsureRemoteStorage(ctx context.Context) error {
 	if ttl <= 0 {
 		ttl = 7 * 24 * time.Hour
 	}
+	// 起服预加载与运维迁移按 owner 枚举实体（ListOwnedRemoteEntities）：_id 带 kind，按 kind 范围查不了，靠这个索引。
+	if err := s.controlDB().Collection(remoteMetaCollection).EnsureIndexes(ctx, []fmongo.IndexModel{
+		{Keys: bson.D{{Key: "_owner_sid", Value: 1}}, Name: "owner_sid"},
+	}); err != nil {
+		return fmt.Errorf("remote_entity: ensure ownership indexes: %w", err)
+	}
 	if err := s.controlDB().Collection(remoteTxCollection).EnsureIndexes(ctx, []fmongo.IndexModel{
 		{Keys: bson.D{{Key: "state", Value: 1}, {Key: "created_at", Value: 1}}, Name: "state_created_at"},
 		// 只有已确认的记录带 expires_at；未发布的提交永远不能过期（稀疏索引）。

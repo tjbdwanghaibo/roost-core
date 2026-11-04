@@ -218,6 +218,15 @@ func (s *Steps) Start(ctx context.Context) error {
 		}
 		subs = append(subs, stepSubs...)
 	}
+	// 步骤消费者是外部输入：登记给 App，停机第一步由 App 调 Drain（关准入、等在途），之后才停 Nest / DataEngine
+	// （App 生命周期方案）；业务 Shutdown 里再调 Drain 是空操作。App 已经在关输入时拒绝登记，撤掉刚订阅的。
+	if err := app.AddIngress(s.registry, "saga steps "+s.group, app.IngressFunc(s.Drain)); err != nil {
+		for _, started := range subs {
+			started.Stop()
+		}
+		_ = load.stop(context.WithoutCancel(ctx), true)
+		return fmt.Errorf("saga steps %s: %w", s.group, err)
+	}
 	s.participant, s.subs, s.load, s.started = participant, subs, load, true
 	return nil
 }
@@ -300,7 +309,8 @@ func (s *Steps) startLoadSignal(ctx context.Context, participant Participant) (*
 }
 
 // Drain 停止接收新命令并在 ctx 内等全部消费者处理完在途投递（幂等），然后停止准入信号并删掉自己的键。超时返回 ctx 的错误并
-// 保留消费者：用新的 ctx 再调用会接着等，Stop 强制停止。在服务 Shutdown 里调用；未 Start 时直接返回 nil。
+// 保留消费者：用新的 ctx 再调用会接着等，Stop 强制停止。App 停机第一步会调它（Start 时登记成 App 的输入）；业务在服务
+// Shutdown 里再调一次也可以（空操作）。未 Start 时直接返回 nil。
 func (s *Steps) Drain(ctx context.Context) error {
 	if s == nil {
 		return nil

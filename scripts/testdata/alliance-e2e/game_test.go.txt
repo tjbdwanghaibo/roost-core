@@ -1,0 +1,463 @@
+package e2e
+
+// 两个 game 进程上的玩家（方案 §2.4、§2.6，阶段 4 留下的未验证项）：game 1000 / 1001 + alliance 3000 / 3001 + game 依赖的
+// 九个托管服务，玩家经 account 登录、玩家 TCP 调正式端点。① 1000 上的玩家建盟（Saga 扣道具 9001），1001 上的玩家入会
+// （路由 RPC），双方用写答复的版本作 MinVersion 读 Mirror 都看到两人；1000 上在线的盟主收到成员通知推送。② 捐献只扣一次、
+// 公会资金只加一次。③ 建盟被服务拒绝时退费（或在端点预检就拒绝、不扣）。④ 捐献 Saga 在 Player 扣款步骤之后 kill -9 玩家
+// 所在的 game，同时公会一侧被冻结后 kill -9：拉起后只扣一次、只加一次。⑤ 建盟时两个 alliance 实例都被冻结后 kill -9：
+// 拉起后只建一个公会、只扣一次。
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os/exec"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"go.mongodb.org/mongo-driver/v2/bson"
+
+	rpcalliance "example.com/planet/internal/rpc/alliance"
+	"example.com/planet/protocol/msgid"
+	"example.com/planet/protocol/pb"
+)
+
+const gold = 9001 // 建盟费与捐献扣的道具（configs/table/item.csv）
+
+// player 是一个经 account 登录、连在某个 game 进程玩家 TCP 上的客户端。
+type player struct {
+	t      *testing.T
+	id     int64
+	sid    int32
+	conn   net.Conn
+	mu     sync.Mutex
+	seq    uint32
+	wait   map[uint32]chan *wire.Packet
+	pushes chan *wire.Packet
+}
+
+var accountOnce sync.Map
+
+// login 走真实凭证路径：account 的 Login → CreateRole（角色建在 sid 上）→ SelectRole，拿会话票据握手，再 enter_game、scene_ready。
+func (s *suite) login(game *proc, openID string) *player {
+	t := s.t
+	accounts, err := svcaccount.NewBusClient(s.bus, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Second)
+	defer cancel()
+	account, err := accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: openID, Credential: "demo:" + openID})
+	if err != nil {
+		t.Fatalf("login %s: %v", openID, err)
+	}
+	var playerID int64
+	if raw, ok := accountOnce.Load(s.prefix + openID); ok {
+		playerID = raw.(int64)
+	} else {
+		role, err := accounts.CreateRole(ctx, account.ID, game.sid, "e2e_"+openID)
+		if err != nil {
+			t.Fatalf("create role %s on %d: %v", openID, game.sid, err)
+		}
+		playerID = role.PlayerID
+		accountOnce.Store(s.prefix+openID, playerID)
+	}
+	session, err := accounts.SelectRole(ctx, account.ID, playerID)
+	if err != nil {
+		t.Fatalf("select role %d: %v", playerID, err)
+	}
+	conn, err := net.DialTimeout("tcp", game.client, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wire.Write(conn, []*wire.Packet{{MsgID: 0, Seq: 1, Payload: []byte(fmt.Sprintf("session:%d:%s", playerID, session.Token))}}, wire.DefaultMaxPayload); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	ack, err := wire.Read(conn, wire.DefaultMaxPayload)
+	if err != nil || ack.MsgID != 0 || ack.Seq != 1 {
+		t.Fatalf("handshake of %d on %s: %+v %v", playerID, game.name, ack, err)
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+	p := &player{t: t, id: playerID, sid: game.sid, conn: conn, seq: 1, wait: map[uint32]chan *wire.Packet{}, pushes: make(chan *wire.Packet, 4096)}
+	go p.read()
+	t.Cleanup(func() { _ = conn.Close() })
+	enter := call(p, msgid.MsgEnterGame, &pb.EnterGameRequest{ClientVersion: "e2e"}, pb.MarshalEnterGameRequest, pb.UnmarshalEnterGameResponse)
+	if enter.Code != 0 || enter.PlayerID != playerID {
+		t.Fatalf("enter_game %d: %+v", playerID, enter)
+	}
+	ready := call(p, msgid.MsgSceneReady, &pb.SceneReadyRequest{}, pb.MarshalSceneReadyRequest, pb.UnmarshalSceneReadyResponse)
+	if ready.Code != 0 {
+		t.Fatalf("scene_ready %d: %+v", playerID, ready)
+	}
+	return p
+}
+
+func (p *player) read() {
+	for {
+		packet, err := wire.Read(p.conn, wire.DefaultMaxPayload)
+		if err != nil {
+			p.mu.Lock()
+			for seq, ch := range p.wait {
+				close(ch)
+				delete(p.wait, seq)
+			}
+			p.mu.Unlock()
+			return
+		}
+		if packet.Flags&wire.FlagPush != 0 {
+			if packet.Flags&(wire.FlagSync|wire.FlagLockstep) == 0 {
+				select {
+				case p.pushes <- packet:
+				default:
+				}
+			}
+			continue
+		}
+		p.mu.Lock()
+		ch := p.wait[packet.Seq]
+		delete(p.wait, packet.Seq)
+		p.mu.Unlock()
+		if ch != nil {
+			ch <- packet
+		}
+	}
+}
+
+// call 发一个请求、等它的答复（同一连接上按 Seq 对应）。
+func call[Req, Resp any](p *player, id uint32, request *Req, marshal func(*Req) ([]byte, error), unmarshal func([]byte) (*Resp, error)) *Resp {
+	t := p.t
+	t.Helper()
+	payload, err := marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := make(chan *wire.Packet, 1)
+	p.mu.Lock()
+	p.seq++
+	seq := p.seq
+	p.wait[seq] = ch
+	err = wire.Write(p.conn, []*wire.Packet{{MsgID: id, Seq: seq, Payload: payload}}, wire.DefaultMaxPayload)
+	p.mu.Unlock()
+	if err != nil {
+		t.Fatalf("player %d: write %d: %v", p.id, id, err)
+	}
+	select {
+	case packet, ok := <-ch:
+		if !ok {
+			t.Fatalf("player %d: connection closed waiting for msg %d", p.id, id)
+		}
+		resp, err := unmarshal(packet.Payload)
+		if err != nil {
+			t.Fatalf("player %d: decode msg %d: %v", p.id, id, err)
+		}
+		return resp
+	case <-time.After(30 * time.Second):
+		t.Fatalf("player %d: no answer to msg %d", p.id, id)
+	}
+	return nil
+}
+
+// addGold 给道具 9001 加 count，返回加之后的数量。
+func (p *player) addGold(count int32) int32 {
+	resp := call(p, msgid.MsgAddItem, &pb.AddItemRequest{ItemID: gold, Count: count}, pb.MarshalAddItemRequest, pb.UnmarshalAddItemResponse)
+	if resp.Code != 0 {
+		p.t.Fatalf("player %d add_item: %+v", p.id, resp)
+	}
+	return resp.Count
+}
+
+// gold 读道具 9001 的数量：加 1 再减去这 1（加道具是唯一不改别的状态的正式读法）。调用方自己记着多出来的 1。
+func (p *player) gold() int32 { return p.addGold(1) - 1 }
+
+func (p *player) guildInfo(guildID, minVersion int64) *pb.GuildResponse {
+	return call(p, msgid.MsgGuildInfo, &pb.GuildInfoRequest{GuildID: guildID, MinVersion: minVersion}, pb.MarshalGuildInfoRequest, pb.UnmarshalGuildResponse)
+}
+
+// opStatus 轮询公会 Saga 到终态，返回最后一次状态。
+func (p *player) waitOp(op, key string, limit time.Duration) *pb.GuildOpStatusResponse {
+	deadline := time.Now().Add(limit)
+	var last *pb.GuildOpStatusResponse
+	for time.Now().Before(deadline) {
+		last = call(p, msgid.MsgGuildOpStatus, &pb.GuildOpStatusRequest{Op: op, SagaKey: key}, pb.MarshalGuildOpStatusRequest, pb.UnmarshalGuildOpStatusResponse)
+		switch last.Status {
+		case "completed", "compensated", "failed", "manual_required":
+			return last
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	p.t.Fatalf("player %d: %s saga %s not terminal within %v: %+v", p.id, op, key, limit, last)
+	return nil
+}
+
+func (p *player) opStep(op, key string) *pb.GuildOpStatusResponse {
+	return call(p, msgid.MsgGuildOpStatus, &pb.GuildOpStatusRequest{Op: op, SagaKey: key}, pb.MarshalGuildOpStatusRequest, pb.UnmarshalGuildOpStatusResponse)
+}
+
+func (p *player) startOp(op string, request any) string {
+	var resp *pb.GuildResponse
+	switch r := request.(type) {
+	case *pb.FoundGuildRequest:
+		resp = call(p, msgid.MsgFoundGuild, r, pb.MarshalFoundGuildRequest, pb.UnmarshalGuildResponse)
+	case *pb.DonateGuildRequest:
+		resp = call(p, msgid.MsgDonateGuild, r, pb.MarshalDonateGuildRequest, pb.UnmarshalGuildResponse)
+	}
+	if resp.Code != 0 || resp.SagaKey == "" {
+		p.t.Fatalf("player %d %s_guild: %+v", p.id, op, resp)
+	}
+	return resp.SagaKey
+}
+
+// fullStack 起 game 依赖的九个托管服务、两个 alliance 实例与两个 game 进程，并在 account 登记两个 game sid。
+func (s *suite) fullStack(gameOpts procOptions) (games, alliances [2]*proc) {
+	t := s.t
+	var wg sync.WaitGroup
+	var helpers []*proc
+	for _, service := range []string{"account", "activity", "chat", "global", "mail", "match", "platform", "rank", "session"} {
+		s.mu.Lock()
+		config, ops, client := s.derive(service, service, 1000, s.next, procOptions{})
+		s.next++
+		p := &proc{name: service, service: service, sid: 1000, config: config, ops: ops, client: client, log: s.logs + "/" + service + ".log"}
+		s.procs[service] = p
+		s.mu.Unlock()
+		s.launch(p)
+		helpers = append(helpers, p)
+	}
+	for _, p := range helpers {
+		wg.Add(1)
+		go func(p *proc) { defer wg.Done(); s.waitReady(p, 2*time.Minute) }(p)
+	}
+	wg.Wait()
+	alliances[0] = s.start("alliance-3000", "alliance", 3000, procOptions{})
+	alliances[1] = s.start("alliance-3001", "alliance", 3001, procOptions{})
+	games[0] = s.start("game-1000", "game", 1000, gameOpts)
+	games[1] = s.start("game-1001", "game", 1001, gameOpts)
+	for _, sid := range []int32{1000, 1001} {
+		out, err := exec.Command(s.accountctl, "-redis", s.redisAddr, "-prefix", "roost:"+s.prefix+":account", "upsert-server", "-sid", fmt.Sprint(sid)).CombinedOutput()
+		if err != nil {
+			t.Fatalf("accountctl upsert-server %d: %v %s", sid, err, out)
+		}
+	}
+	return games, alliances
+}
+
+// countLed 数盟主是 leader 的联盟：发号计数器（alliance 服务自己的业务集合 _alliance_id_sequence）给出发过的最大号，
+// 逐个经路由 RPC 读权威联盟（没建成的号答 entity_not_found）。不解读 Remote 的存储格式。
+func (s *suite) countLed(leader int64) (int64, []int64) {
+	var counter struct {
+		Next int64 `bson:"next"`
+	}
+	if err := s.mongo.Database(s.prefix).Collection("_alliance_id_sequence").FindOne(s.ctx, bson.M{"_id": "alliance"}).Decode(&counter); err != nil {
+		s.t.Fatal(err)
+	}
+	client := s.client(nil, 3*time.Second)
+	var led []int64
+	for id := int64(1); id <= counter.Next; id++ {
+		var info rpcalliance.Reply
+		err, _ := definite(s.ctx, 15*time.Second, func(ctx context.Context) error {
+			var err error
+			info, err = client.Info(ctx, target(s.t, id))
+			return err
+		})
+		if err != nil && servicerpc.Classify(err) != servicerpc.OutcomeRejected {
+			s.t.Logf("GAMES alliance number %d gives no definite answer: %v", id, err)
+		}
+		if err == nil && info.Alliance.LeaderID == leader {
+			led = append(led, id)
+		}
+	}
+	return int64(len(led)), led
+}
+
+// funds 是公会的权威资金（经路由 RPC 读 owner）。
+func (s *suite) funds(guildID int64) (int64, int32) {
+	info, err := s.client(nil, 3*time.Second).Info(s.ctx, target(s.t, guildID))
+	if err != nil {
+		s.t.Fatalf("info %d: %v", guildID, err)
+	}
+	return info.Alliance.Funds, info.ServedBySID
+}
+
+func (s *suite) ownerOf(guildID int64, alliances [2]*proc) *proc {
+	_, sid := s.funds(guildID)
+	for _, p := range alliances {
+		if p.sid == sid {
+			return p
+		}
+	}
+	s.t.Fatalf("guild %d served by unknown sid %d", guildID, sid)
+	return nil
+}
+
+func TestAllianceE2EGamePlayers(t *testing.T) {
+	s := newSuite(t, 25*time.Minute)
+	games, alliances := s.fullStack(procOptions{})
+	cost := int32(100) // guild.found_cost
+
+	// ① 跨 game 进程：A 在 1000 建盟，B 在 1001 入会，双方带写版本读 Mirror。
+	a := s.login(games[0], s.prefix+"-a")
+	b := s.login(games[1], s.prefix+"-b")
+	a.addGold(1000)
+	key := a.startOp("found", &pb.FoundGuildRequest{Name: "e2e guild", OpenJoin: true})
+	status := a.waitOp("found", key, time.Minute)
+	if status.Status != "completed" || status.GuildID == 0 {
+		t.Fatalf("found saga: %+v", status)
+	}
+	guildID := status.GuildID
+	if got := a.gold(); got != 1000-cost {
+		t.Fatalf("A gold after founding: %d, want %d", got, 1000-cost)
+	}
+	join := call(b, msgid.MsgJoinGuild, &pb.JoinGuildRequest{GuildID: guildID}, pb.MarshalJoinGuildRequest, pb.UnmarshalGuildResponse)
+	if join.Code != 0 || join.Members != 2 || join.ServedBySID == 0 {
+		t.Fatalf("B join from game 1001: %+v", join)
+	}
+	readB := b.guildInfo(guildID, join.Version)
+	readA := a.guildInfo(0, join.Version)
+	if readB.Code != 0 || readB.Members != 2 || readA.Code != 0 || readA.GuildID != guildID || readA.Members != 2 {
+		t.Fatalf("read your write: B (game 1001) %+v; A (game 1000) %+v; want both to see 2 members at version >= %d", readB, readA, join.Version)
+	}
+	t.Logf("GAMES guild %d founded on game 1000 (owner alliance %d), B joined from game 1001 at version %d; both read 2 members (versions %d / %d)",
+		guildID, join.ServedBySID, join.Version, readA.Version, readB.Version)
+	var notice *pb.GuildNoticePush
+	deadline := time.After(10 * time.Second)
+	for notice == nil {
+		select {
+		case packet := <-a.pushes:
+			if packet.MsgID == msgid.MsgGuildNotice {
+				n, err := pb.UnmarshalGuildNoticePush(packet.Payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if n.GuildID == guildID {
+					notice = n
+				}
+			}
+		case <-deadline:
+			t.Fatalf("A on game 1000 got no guild notice for B's join on game 1001")
+		}
+	}
+	t.Logf("GAMES A on game 1000 was pushed %+v", notice)
+
+	// ② 捐献只扣一次、只加一次。
+	b.addGold(500)
+	before, _ := s.funds(guildID)
+	key = b.startOp("donate", &pb.DonateGuildRequest{Amount: 50})
+	if status := b.waitOp("donate", key, time.Minute); status.Status != "completed" {
+		t.Fatalf("donate saga: %+v", status)
+	}
+	after, _ := s.funds(guildID)
+	if after-before != 50 || b.gold() != 450 {
+		t.Fatalf("donate: funds %d → %d, B gold %d; want +50 and 450", before, after, b.gold()-1)
+	}
+	bGold := int32(451) // 450，加上 gold() 读数时加的 1
+
+	// ③ 建盟与入会同时发生：C 在 game 1000 上建盟的同时被 RPC 拉进公会。端点预检先于入会提交时 Saga 起跑，服务端按
+	// 守卫裁决：入会先提交则 Found 答 alliance_membership、Saga 补偿退费；Found 先提交则入会被拒、C 是新公会的盟主、扣一次。
+	// 预检已看到成员身份时直接拒绝、不扣。三种都只能“恰好一个公会、钱对得上”。
+	client := s.client(nil, 3*time.Second)
+	paths := map[string]int{}
+	for i := 0; i < 6; i++ {
+		c := s.login(games[0], fmt.Sprintf("%s-c%d", s.prefix, i))
+		c.addGold(500)
+		joined := make(chan error, 1)
+		go func() {
+			_, err := client.Join(s.ctx, fmt.Sprintf("rpc-join-%d", c.id), c.id, 1000, target(t, guildID))
+			joined <- err
+		}()
+		resp := call(c, msgid.MsgFoundGuild, &pb.FoundGuildRequest{Name: "second guild", OpenJoin: true}, pb.MarshalFoundGuildRequest, pb.UnmarshalGuildResponse)
+		joinErr := <-joined
+		path, wantGold := "endpoint-refused", int32(500)
+		if resp.SagaKey != "" {
+			status := c.waitOp("found", resp.SagaKey, time.Minute)
+			switch status.Status {
+			case "completed":
+				path, wantGold = "found-first", 500-cost
+				if joinErr == nil {
+					t.Fatalf("C %d founded guild %d and also joined guild %d", c.id, status.GuildID, guildID)
+				}
+			case "compensated", "failed":
+				path = "refunded"
+				if joinErr != nil {
+					t.Fatalf("C %d: founding refused (%s) but the join failed too: %v", c.id, status.LastError, joinErr)
+				}
+			default:
+				t.Fatalf("C founding: saga %+v", status)
+			}
+		} else if joinErr != nil {
+			t.Fatalf("C %d: founding refused at the endpoint (%d %s) and the join failed: %v", c.id, resp.Code, resp.Reason, joinErr)
+		}
+		paths[path]++
+		if got := c.gold(); got != wantGold {
+			t.Fatalf("C %d (%s): gold %d, want %d", c.id, path, got, wantGold)
+		}
+		if led, where := s.countLed(c.id); (path == "found-first") != (led == 1) || led > 1 {
+			t.Fatalf("C %d (%s): leads %d alliances %v", c.id, path, led, where)
+		}
+	}
+	t.Logf("GAMES concurrent join + found: %v", paths)
+
+	// ④ 捐献：公会 owner 冻结（SIGSTOP）→ B 发起捐献 → 等 Player 扣款步骤完成 → kill -9 B 所在的 game 1001 与冻结的 owner →
+	// 同 sid 拉起 → Saga 收尾，只扣一次、只加一次。
+	owner := s.ownerOf(guildID, alliances)
+	before, _ = s.funds(guildID)
+	s.signal(owner, syscall.SIGSTOP)
+	key = b.startOp("donate", &pb.DonateGuildRequest{Amount: 30})
+	s.eventually("the debit step completes while the guild side is frozen", 30*time.Second, func() (bool, string) {
+		st := b.opStep("donate", key)
+		return st.Step >= 1, fmt.Sprintf("%+v", st)
+	})
+	s.stop(games[1], syscall.SIGKILL)
+	s.stop(owner, syscall.SIGKILL)
+	s.launch(owner)
+	s.waitReady(owner, 2*time.Minute)
+	s.launch(games[1])
+	s.waitReady(games[1], 2*time.Minute)
+	b = s.login(games[1], s.prefix+"-b")
+	if status := b.waitOp("donate", key, 3*time.Minute); status.Status != "completed" {
+		t.Fatalf("donate after kill -9 of game 1001 and the frozen owner: %+v", status)
+	}
+	after, _ = s.funds(guildID)
+	if got := b.gold(); after-before != 30 || got != bGold-30 {
+		t.Fatalf("donate across kill -9: funds %d → %d (want +30), B gold %d (want %d)", before, after, got, bGold-30)
+	}
+	t.Logf("GAMES donate across kill -9 of game 1001 (after the debit) and of the frozen owner %s: funds +30, gold -30", owner.name)
+
+	// ⑤ 建盟：两个 alliance 实例都冻结 → D（game 1000）发起建盟 → 扣款步骤完成 → 两个实例都 kill -9 → 拉起 → 只建一个、只扣一次。
+	d := s.login(games[0], s.prefix+"-d")
+	d.addGold(500)
+	for _, p := range alliances {
+		s.signal(p, syscall.SIGSTOP)
+	}
+	key = d.startOp("found", &pb.FoundGuildRequest{Name: "frozen guild", OpenJoin: true})
+	s.eventually("the found debit completes while both alliance instances are frozen", 30*time.Second, func() (bool, string) {
+		st := d.opStep("found", key)
+		return st.Step >= 1, fmt.Sprintf("%+v", st)
+	})
+	time.Sleep(4 * time.Second) // 让 Found 的请求在冻结的实例上超时（结果未知）一次
+	for _, p := range alliances {
+		s.stop(p, syscall.SIGKILL)
+	}
+	for _, p := range alliances {
+		s.launch(p)
+	}
+	for _, p := range alliances {
+		s.waitReady(p, 2*time.Minute)
+	}
+	status = d.waitOp("found", key, 3*time.Minute)
+	if status.Status != "completed" || status.GuildID == 0 {
+		t.Fatalf("found across kill -9 of both alliance instances: %+v", status)
+	}
+	if got := d.gold(); got != 500-cost {
+		t.Fatalf("D gold after founding across kill -9: %d, want %d", got, 500-cost)
+	}
+	led, where := s.countLed(d.id)
+	if led != 1 {
+		t.Fatalf("alliances led by D: %d (%v), want exactly 1", led, where)
+	}
+	t.Logf("GAMES found across kill -9 of both frozen alliance instances: guild %d, one alliance led by D, gold -%d once", status.GuildID, cost)
+}

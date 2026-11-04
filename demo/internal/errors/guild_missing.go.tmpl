@@ -2,7 +2,8 @@ package errors
 
 import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 
-// ErrGuildMissing: there is no guild with that id. It is a coded refusal
-// rather than an empty answer because "you joined nothing" and "the guild is
-// gone" are different things to a player.
+// ErrGuildMissing: there is no guild with that id (nobody founded it: the
+// alliance service has no ownership record for it), or the player is in no
+// guild. It is a coded refusal rather than an empty answer because "you joined
+// nothing" and "the guild is gone" are different things to a player.
 var ErrGuildMissing = errcode.Define(100018, "guild_missing", "guild not found")

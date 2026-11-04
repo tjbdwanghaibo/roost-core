@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/codegen/internal/servicerpc"
 )
@@ -58,6 +59,25 @@ func addRPC(root string, m Manifest, options AddOptions) ([]string, error) {
 			return nil, fmt.Errorf("rpc %q is already owned by service %q", snake, name)
 		}
 	}
+	// -entity-service：拥有者是带 Nest 的实体服务（联盟服务方案 §2.3）。写经 Nest 落到实体，owner Mod 要排在
+	// Nest 之后才在总线上接请求，所以拥有者必须有 Nest。
+	if options.EntityService {
+		if resolved, err := resolveMods(effectiveServiceMods(m, service)); err != nil {
+			return nil, err
+		} else if !contains(resolved, "nest") {
+			return nil, fmt.Errorf("rpc -entity-service writes entities through Nest, but service %s has no nest mod; run: roost add mod nest -service %s", service, service)
+		}
+		// 骨架的 Apply / Result 标了 //roost:rpc route：路由查找只认得拥有者托管的 Remote 实体 kind（checkRouteRPCOwners
+		// 的同一条规则），先在这里拒绝，免得生成的骨架让下一次 roost generate 失败。
+		owned, err := projectEntityOwners(root)
+		if err != nil {
+			return nil, fmt.Errorf("scan entity owners: %w", err)
+		}
+		if route, _ := routeAndPreloadServices(owned); !route[service] {
+			return nil, fmt.Errorf("rpc -entity-service routes its methods to the owner of their entity (//roost:rpc route), but service %s owns no Remote managed entity kind; "+
+				"mark the entity it serves //roost:entity remote=managed service=%s (category=entity.EntityCategoryRemote, *entity.RemoteEntityBase) and run roost project sync first", service, service)
+		}
+	}
 	dir := rpcDir(snake)
 	if _, err := os.Stat(filepath.Join(root, dir)); err == nil {
 		return nil, fmt.Errorf("%s already exists", dir)
@@ -72,6 +92,11 @@ func addRPC(root string, m Manifest, options AddOptions) ([]string, error) {
 		dir + "/service.go":       renderRPCService(snake, pascal),
 		dir + "/mod.go":           renderRPCMod(snake),
 		dir + "/server_run.go":    renderRPCServerRun(snake),
+	}
+	if options.EntityService {
+		files[dir+"/"+snake+".go"] = renderEntityRPCInterface(snake, pascal, code)
+		files[dir+"/service.go"] = renderEntityRPCService(snake, pascal)
+		files[dir+"/mod.go"] = renderEntityRPCMod(snake)
 	}
 	rollbackPaths := make([]string, 0, len(files)+2)
 	for rel := range files {
@@ -204,7 +229,14 @@ var _ %[2]s = (*Service)(nil)
 `, snake, pascal)
 }
 
+// renderRPCMod 是普通 rpc 的 owner Mod（-entity-service 的见 renderEntityRPCMod）：只依赖发布总线的 nats Mod。停机时
+// handler 由 App 的第一步统一撤下（nats Mod 的 CloseIngress），Mod 自己不撤。
 func renderRPCMod(snake string) string {
+	return strings.NewReplacer("{{DEPENDS}}", "[]app.ModName{mods.ModNats}",
+		"{{DEPENDS_DOC}}", "// DependsOn names the Mod that publishes the bus.").Replace(renderRPCModTemplate(snake))
+}
+
+func renderRPCModTemplate(snake string) string {
 	return fmt.Sprintf(`package %[1]s
 
 import (
@@ -236,8 +268,8 @@ func NewMod(service *Service) *Mod { return &Mod{service: service} }
 // one fact.
 func (m *Mod) Name() app.ModName { return CapabilityName }
 
-// DependsOn names the Mod that publishes the bus.
-func (m *Mod) DependsOn() []app.ModName { return []app.ModName{mods.ModNats} }
+{{DEPENDS_DOC}}
+func (m *Mod) DependsOn() []app.ModName { return {{DEPENDS}} }
 
 func (m *Mod) Init(*viper.Viper) error {
 	if m.service == nil {
@@ -265,6 +297,12 @@ func (m *Mod) Start() error {
 	return RegisterHandlers(busClient, m.service)
 }
 
+// Stop has nothing to do. The handlers Start registered are withdrawn by the
+// App before any Mod stops: the first step of its shutdown closes every input
+// (the nats Mod's CloseIngress withdraws all the bus's RPC handlers and waits
+// for the requests already in them), so a request that arrives once the
+// shutdown began gets "not executed, retry" (errcode.CodeRetryable) or no
+// responders, never a handler running on a stopped Nest.
 func (m *Mod) Stop() {}
 
 var (

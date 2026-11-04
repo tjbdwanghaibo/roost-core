@@ -1,0 +1,404 @@
+package alliance
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	alliance "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
+)
+
+// HandleBudget is how long the service spends on one request. A plain bus RPC
+// does not carry the caller's deadline, so the receiver bounds the whole
+// handling (entering Nest, waiting for the commit) itself; when it runs out
+// the write may already have committed, and the answer is "unknown".
+const HandleBudget = 5 * time.Second
+
+// Rules are the alliance settings a write needs (alliance.* in the service's
+// config, internal/service/alliance).
+type Rules struct {
+	MaxMembers       int
+	ReservationTTL   time.Duration
+	ReceiptRetention time.Duration
+	RejoinCooldown   time.Duration
+	// The alliance reward: what one claim gives and how often (ClaimReward).
+	RewardItemID int64
+	RewardCount  int32
+	RewardPeriod time.Duration
+}
+
+// Entities brings the entities a write locks into this process: a Remote
+// entity is loaded from its store when Nest locks it, and one that has no
+// record anywhere yet (a new alliance, a player's first guard) is created
+// here — the first write's admission claims it for this instance (an atomic
+// claim: of two instances creating the same entity, one becomes its owner and
+// the other is fenced). The instance's AllianceShard must exist before a
+// reservation can arm a deadline on it. Production: the generated lifecycles
+// (wiring.go).
+type Entities interface {
+	EnsureAlliance(ctx context.Context, allianceID int64) error
+	EnsureGuard(ctx context.Context, playerID int64) error
+	EnsureShard(ctx context.Context, sid int32) error
+}
+
+// Sequence mints alliance ids from one counter (plan §2.2). Production: a
+// Mongo counter (wiring.go). A number whose alliance never got founded stays
+// unused.
+type Sequence interface {
+	Next(ctx context.Context) (int64, error)
+}
+
+// Deps is everything the service needs, bound once before the bus handlers
+// are registered (Mod.Start) and read-only after that.
+type Deps struct {
+	Nest     corenest.Client
+	LocalSID int32
+	Rules    Rules
+	// Owners reads (and, for alliance.transfer, moves) Remote ownership; it is
+	// also the route check's source (kitremoteentity.RPCRouteCheck).
+	Owners   entity.RemoteOwnershipManager
+	Entities Entities
+	Sequence Sequence
+	// Peers is Alliance through the bus: the generated BusClient, whose route
+	// methods go to the owner of their target. Every call this service makes
+	// on an entity it may not own goes through it — on this instance too, in
+	// which case the bus delivers it here.
+	Peers Alliance
+	// Notify sends a best-effort membership notice to a game server.
+	Notify func(ctx context.Context, homeSID int32, notice MemberNotice) error
+	// Scan lists stored entity ids (alliance.transfer by count only).
+	Scan Scan
+	// Now is the business clock (deadlines are compared with Nest's nowUnix,
+	// which is business time too).
+	Now func() time.Time
+}
+
+// Service implements Alliance in the owning process.
+//
+// Every write runs in the RPC handler's I/O segment: the generated handler
+// has checked the route (this instance owns target), the service brings the
+// entities into existence, then one generated Sync_ / MultiSync_ call into
+// Nest, where the entity's rules decide under its lock (the handlers in
+// game/handler/alliance_*.go). Nothing here judges a permission or a rule —
+// those read the authoritative state, which only the lock holder sees.
+type Service struct {
+	deps Deps
+}
+
+// New builds an unbound service; the Mod binds it in Start (after Nest and
+// the startup preload).
+func New() *Service { return &Service{} }
+
+// Bind sets the dependencies. Called once, before the handlers are registered.
+func (s *Service) Bind(deps Deps) error {
+	switch {
+	case deps.Nest == nil || deps.Owners == nil || deps.Entities == nil || deps.Sequence == nil || deps.Peers == nil:
+		return errors.New("alliance service: nest, ownership, entities, sequence and peers are required")
+	case deps.LocalSID <= 0:
+		return errors.New("alliance service: local sid is required")
+	case deps.Rules.MaxMembers <= 0 || deps.Rules.ReservationTTL <= 0 || deps.Rules.ReceiptRetention <= 0:
+		return errors.New("alliance service: max members, reservation ttl and receipt retention must be positive")
+	case deps.Rules.RewardItemID <= 0 || deps.Rules.RewardCount <= 0 || deps.Rules.RewardPeriod < time.Second:
+		return errors.New("alliance service: the reward item, count and period must be positive")
+	}
+	if deps.Now == nil {
+		deps.Now = time.Now
+	}
+	s.deps = deps
+	return nil
+}
+
+// AllianceTarget is the route key of an alliance: its full entity id.
+func AllianceTarget(allianceID int64) (int64, error) {
+	return entity.BuildEntityID(allianceID, alliance.EntityKindAlliance)
+}
+
+// GuardTarget is the route key of a player's guard (AllianceMember).
+func GuardTarget(playerID int64) (int64, error) {
+	return entity.BuildEntityID(playerID, alliance_member.EntityKindAllianceMember)
+}
+
+// --- routing ---
+
+// CheckRoute implements RouteChecker: the generated handler of every route
+// method calls it before the method. nil means this instance owns target
+// (one owned here but not loaded yet is loaded, and its route registered);
+// otherwise it answers "entity not found" (no ownership record — a request
+// that does not create must not claim it), a redirect to the owner, or "not
+// executed, retry" (plan §2.3, wiring/remoteentity.RPCRouteCheck).
+func (s *Service) CheckRoute(ctx context.Context, target int64) error {
+	return kitremoteentity.RPCRouteCheck(ctx, s.deps.Owners, s.deps.LocalSID, target)
+}
+
+// claimable reports whether id may be written on this instance in a
+// transaction with an entity this instance owns: it is owned here, or it has
+// no ownership record yet — then this instance creates it, and the
+// transaction's admission claims it. Of two instances claiming the same id
+// at once, one becomes its owner and the other is fenced (moved).
+func (s *Service) claimable(ctx context.Context, id int64) (bool, error) {
+	lease, found, err := s.deps.Owners.GetRemoteOwnership(ctx, id)
+	if err != nil {
+		return false, servicerpc.Retryable(fmt.Errorf("alliance: read the owner of %d: %w", id, err))
+	}
+	return !found || lease.OwnerSid == s.deps.LocalSID, nil
+}
+
+// owned reports whether id has an ownership record, and whether it names
+// this instance.
+func (s *Service) owned(ctx context.Context, id int64) (exists, here bool, err error) {
+	lease, found, err := s.deps.Owners.GetRemoteOwnership(ctx, id)
+	if err != nil {
+		return false, false, servicerpc.Retryable(fmt.Errorf("alliance: read the owner of %d: %w", id, err))
+	}
+	return found, found && lease.OwnerSid == s.deps.LocalSID, nil
+}
+
+// moved reports whether a write fenced on id lost id to another instance
+// (a concurrent claim won, or an operator transferred it): then the write
+// goes on through the route RPC instead.
+func (s *Service) moved(ctx context.Context, id int64, err error) bool {
+	if _, redirected := servicerpc.RedirectSID(err); !redirected && !errors.Is(err, entity.ErrRemoteFenced) {
+		return false
+	}
+	exists, here, lookupErr := s.owned(ctx, id)
+	return lookupErr == nil && exists && !here
+}
+
+// call runs one Nest call on target, which must be of kind, within
+// HandleBudget. A framework error from Nest becomes the RPC answer here: not
+// executed (servicerpc.Retryable), redirect (this instance was fenced: the
+// owner is read from the ownership record, kitremoteentity.RPCWriteAnswer),
+// or unknown (timeouts, an indeterminate commit — returned as they are).
+// Business rejections are not errors at this level: the handler committed
+// them in the outcome, and the caller turns the outcome into the answer.
+func (s *Service) call(ctx context.Context, target int64, kind entity.EntityKind, run func(ctx context.Context) error) error {
+	if target <= 0 || !entity.MatchEntityID(target, kind) {
+		return fmt.Errorf("%w: target %d is not an entity of kind %d", ErrRequestInvalid, target, kind)
+	}
+	ctx, cancel := context.WithTimeout(ctx, HandleBudget)
+	defer cancel()
+	if err := run(ctx); err != nil {
+		if errors.Is(err, corenest.ErrNestTimeout) {
+			return err // unknown: the message may still run
+		}
+		return kitremoteentity.RPCWriteAnswer(ctx, s.deps.Owners, s.deps.LocalSID, target, err)
+	}
+	return nil
+}
+
+func (s *Service) reply(answer alliancerule.Answer, err error) (Reply, error) {
+	if err == nil {
+		err = answer.Err()
+	}
+	return Reply{Alliance: answer.View, Replayed: answer.Replayed, ServedBySID: s.deps.LocalSID}, err
+}
+
+func (s *Service) guardReply(answer alliancerule.GuardAnswer, err error) (GuardReply, error) {
+	if err == nil {
+		err = answer.Err()
+	}
+	return GuardReply{State: answer.State, Changed: answer.Changed, Replayed: answer.Replayed, AllianceID: answer.Subject, ServedBySID: s.deps.LocalSID}, err
+}
+
+func (s *Service) resultReply(answer alliancerule.ReceiptAnswer, err error) (ResultReply, error) {
+	return ResultReply{Found: answer.Found, Outcome: answer.Receipt.Code, Version: answer.Receipt.Version, Subject: answer.Receipt.Subject, ServedBySID: s.deps.LocalSID}, err
+}
+
+func (s *Service) retention() int64 { return int64(s.deps.Rules.ReceiptRetention / time.Second) }
+
+func (s *Service) cooldown() int64 { return int64(s.deps.Rules.RejoinCooldown / time.Second) }
+
+func requireRequest(requestID string, ids ...int64) error {
+	if requestID == "" {
+		return fmt.Errorf("%w: request id is required", ErrRequestInvalid)
+	}
+	return requireIDs(ids...)
+}
+
+func requireIDs(ids ...int64) error {
+	for _, id := range ids {
+		if id <= 0 {
+			return fmt.Errorf("%w: ids must be positive", ErrRequestInvalid)
+		}
+	}
+	return nil
+}
+
+// final reports whether a peer's answer decided the request (success or a
+// rejection — an alliance rule, or an entity that does not exist), as
+// opposed to "not executed" or "unknown".
+func final(err error) bool {
+	return err == nil || alliancerule.IsRejection(err) || servicerpc.Classify(err) == servicerpc.OutcomeRejected
+}
+
+// passOn is a peer's answer that did not decide the request, as this
+// request's answer: a redirect it carries names the peer entity's owner, not
+// this target's, so the caller must not follow it — it becomes "not
+// executed".
+func passOn(err error) error {
+	if errcode.CodeOf(err) == servicerpc.CodeRedirect {
+		return servicerpc.Retryable(err)
+	}
+	return err
+}
+
+// --- writes on one alliance ---
+
+// Apply implements Alliance.
+func (s *Service) Apply(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64) (Reply, error) {
+	var answer alliancerule.Answer
+	err := requireRequest(requestID, callerID)
+	if err == nil {
+		err = s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) (err error) {
+			answer, err = syncsender.NewAllianceApplySender(s.deps.Nest).Sync_AllianceApply(ctx, target, requestID, callerID, callerSID, s.retention())
+			return err
+		})
+	}
+	return s.reply(answer, err)
+}
+
+// Reject implements Alliance.
+func (s *Service) Reject(ctx context.Context, requestID string, callerID int64, _ int32, target int64, applicantID int64) (Reply, error) {
+	var answer alliancerule.Answer
+	err := requireRequest(requestID, callerID, applicantID)
+	if err == nil {
+		err = s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) (err error) {
+			answer, err = syncsender.NewAllianceRejectSender(s.deps.Nest).Sync_AllianceReject(ctx, target, requestID, callerID, applicantID, s.retention())
+			return err
+		})
+	}
+	return s.reply(answer, err)
+}
+
+// Transfer implements Alliance.
+func (s *Service) Transfer(ctx context.Context, requestID string, callerID int64, _ int32, target int64, newLeaderID int64) (Reply, error) {
+	var answer alliancerule.Answer
+	err := requireRequest(requestID, callerID, newLeaderID)
+	if err == nil {
+		err = s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) (err error) {
+			answer, err = syncsender.NewAllianceTransferSender(s.deps.Nest).Sync_AllianceTransfer(ctx, target, requestID, callerID, newLeaderID, s.retention())
+			return err
+		})
+	}
+	return s.reply(answer, err)
+}
+
+// Donate implements Alliance.
+func (s *Service) Donate(ctx context.Context, requestID string, callerID int64, _ int32, target int64, amount int64) (Reply, error) {
+	var answer alliancerule.Answer
+	err := requireRequest(requestID, callerID)
+	if err == nil {
+		err = s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) (err error) {
+			answer, err = syncsender.NewAllianceDonateSender(s.deps.Nest).Sync_AllianceDonate(ctx, target, requestID, callerID, amount, s.retention())
+			return err
+		})
+	}
+	return s.reply(answer, err)
+}
+
+// Info implements Alliance.
+func (s *Service) Info(ctx context.Context, target int64) (Reply, error) {
+	var answer alliancerule.Answer
+	err := s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) (err error) {
+		answer.View, err = syncsender.NewAllianceInfoSender(s.deps.Nest).Sync_AllianceInfo(ctx, target)
+		return err
+	})
+	return s.reply(answer, err)
+}
+
+// Settle implements Alliance. The recorded answer — success, or the
+// rejection the request got (alliance_expired when Settle itself decided it) —
+// is the reply's Outcome, not this call's error.
+func (s *Service) Settle(ctx context.Context, target int64, requestID string) (ResultReply, error) {
+	var answer alliancerule.Answer
+	err := requireRequest(requestID)
+	if err == nil {
+		err = s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) (err error) {
+			answer, err = syncsender.NewAllianceSettleSender(s.deps.Nest).Sync_AllianceSettle(ctx, target, requestID, s.retention())
+			return err
+		})
+	}
+	return s.resultReply(alliancerule.ReceiptAnswer{Found: err == nil, Receipt: answer.Receipt}, err)
+}
+
+// Result implements Alliance: the receipt on the alliance, or on the
+// player's guard (Found, ReserveGuard), by target's kind.
+func (s *Service) Result(ctx context.Context, target int64, requestID string) (ResultReply, error) {
+	var answer alliancerule.ReceiptAnswer
+	err := requireRequest(requestID)
+	if err == nil && entity.MatchEntityID(target, alliance_member.EntityKindAllianceMember) {
+		err = s.call(ctx, target, alliance_member.EntityKindAllianceMember, func(ctx context.Context) (err error) {
+			answer, err = syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardReceipt(ctx, target, requestID)
+			return err
+		})
+	} else if err == nil {
+		err = s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) (err error) {
+			answer, err = syncsender.NewAllianceInfoSender(s.deps.Nest).Sync_AllianceReceipt(ctx, target, requestID)
+			return err
+		})
+	}
+	return s.resultReply(answer, err)
+}
+
+// onAlliance runs a write on allianceID, an alliance that may not exist yet:
+// here when this instance owns it or nobody does (then it is created here
+// and the write's admission claims it), through the route RPC (remote) when
+// another instance owns it — or when another instance claimed it while this
+// one was trying. It is how a founding (Establish) and a deadline's Settle
+// reach an alliance id that was minted but perhaps never written.
+func (s *Service) onAlliance(ctx context.Context, allianceID int64, local func(ctx context.Context, target int64) error, remote func(ctx context.Context, target int64) error) error {
+	target, err := AllianceTarget(allianceID)
+	if err != nil {
+		return fmt.Errorf("%w: alliance %d: %v", ErrRequestInvalid, allianceID, err)
+	}
+	here, err := s.claimable(ctx, target)
+	if err != nil {
+		return err
+	}
+	if here {
+		if err := s.deps.Entities.EnsureAlliance(ctx, allianceID); err != nil {
+			return err
+		}
+		err = local(ctx, target)
+		if !s.moved(ctx, target, err) {
+			return err
+		}
+	}
+	return remote(ctx, target)
+}
+
+// errAllianceMissing answers a request naming an alliance id that has no
+// ownership record: nobody founded it.
+func errAllianceMissing(allianceID int64) error {
+	return errcode.Wrap(apperrors.ErrAllianceMissing, nil, "alliance_id", allianceID)
+}
+
+// AllianceInfo is Info for an operator command: the alliance by its id,
+// through the route RPC, so whichever instance runs the command reaches the
+// owner.
+func (s *Service) AllianceInfo(ctx context.Context, allianceID int64) (Reply, error) {
+	target, err := AllianceTarget(allianceID)
+	if err != nil {
+		return Reply{}, fmt.Errorf("%w: alliance %d: %v", ErrRequestInvalid, allianceID, err)
+	}
+	return s.deps.Peers.Info(ctx, target)
+}
+
+// GuardInfo is Guard for an operator command, the same way.
+func (s *Service) GuardInfo(ctx context.Context, playerID int64) (GuardReply, error) {
+	target, err := GuardTarget(playerID)
+	if err != nil {
+		return GuardReply{}, fmt.Errorf("%w: player %d: %v", ErrRequestInvalid, playerID, err)
+	}
+	return s.deps.Peers.Guard(ctx, target)
+}

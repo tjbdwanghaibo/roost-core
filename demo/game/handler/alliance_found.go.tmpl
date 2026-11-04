@@ -1,0 +1,78 @@
+package handler
+
+import (
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	"{{MODULE}}/game/effects"
+	alliance "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+)
+
+// handlerAllianceFound founds an alliance when the founder's guard is on this
+// instance (owned here, or new and claimed by this transaction): a fresh
+// Alliance and the guard in one transaction. The receipt is on the guard —
+// the alliance id did not exist before this request — and records the
+// alliance it founded (Subject), so a retry of the same request id, on any
+// instance, finds that alliance instead of founding a second one. The
+// alliance records the same request id too, so a retry that reaches it
+// through Establish replays instead of failing on "already founded".
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceFound(target alliance.IRosterEntity, founder alliance_member.IGuardEntity, requestID string, name string, homeSID int32, openJoin bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster, guard := target.RosterComp(), founder.GuardComp()
+	founderID := guard.PlayerID()
+	retention := time.Duration(retentionSeconds) * time.Second
+	outcome, err := guard.Execute(requestID, nowUnix, retention, func() (int64, error) {
+		if err := alliancerule.ValidateName(name); err != nil {
+			return roster.AllianceID(), err
+		}
+		if err := guard.CheckFree(requestID, nowUnix, time.Duration(cooldownSeconds)*time.Second); err != nil {
+			return roster.AllianceID(), err
+		}
+		if err := roster.Found(name, founderID, homeSID, openJoin, requestID, nowUnix); err != nil {
+			return roster.AllianceID(), err
+		}
+		guard.Join(roster.AllianceID(), requestID)
+		return roster.AllianceID(), effects.EmitAllianceMemberChanged(effects.AllianceMemberChanged{
+			AllianceID: roster.AllianceID(), PlayerID: founderID, HomeSID: homeSID, Change: effects.MemberJoined,
+			JoinRequestID: requestID, GuardSettled: true, Version: roster.CurrentVersion() + 1,
+		})
+	})
+	if err != nil {
+		return alliancerule.Answer{}, err
+	}
+	// A replay carries the alliance it founded in its receipt (Subject); the
+	// alliance locked here is the fresh id this delivery minted, which stays
+	// unfounded. The service answers a replay from that alliance.
+	if outcome.Replayed || outcome.Code != 0 {
+		return alliancerule.Answer{Outcome: outcome}, nil
+	}
+	if _, err := roster.Execute(requestID, nowUnix, retention, func() (int64, error) { return founderID, nil }); err != nil {
+		return alliancerule.Answer{}, err
+	}
+	return alliancerule.Answer{Outcome: outcome, View: roster.View(roster.CurrentVersion() + 1)}, nil
+}
+
+// handlerAllianceEstablish is step 2 of a founding whose founder's guard is on
+// another instance: the guard has been reserved for (this alliance,
+// requestID) — that reservation is what binds the request to this alliance
+// id — and this founds the alliance under the same request id. The effect it
+// records confirms the guard (GuardSettled=false). The receipt makes a retry a
+// replay; an alliance the guard's deadline settled first (alliance_expired,
+// RosterComponent.Settle) refuses the late founding the same way.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceEstablish(target alliance.IRosterEntity, requestID string, founderID int64, name string, homeSID int32, openJoin bool, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.RosterComp()
+	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		if err := roster.Found(name, founderID, homeSID, openJoin, requestID, nowUnix); err != nil {
+			return founderID, err
+		}
+		return founderID, effects.EmitAllianceMemberChanged(effects.AllianceMemberChanged{
+			AllianceID: roster.AllianceID(), PlayerID: founderID, HomeSID: homeSID, Change: effects.MemberJoined,
+			JoinRequestID: requestID, Version: roster.CurrentVersion() + 1,
+		})
+	})
+	return answer(roster, outcome, err)
+}

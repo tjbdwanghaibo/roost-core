@@ -1,0 +1,9 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// ErrGuildMoved: the request went to the alliance instance the route said
+// owned the guild, was redirected once, and the redirect did not reach the
+// owner either — an operator is moving the guild between instances
+// (alliance.transfer). Nothing happened; send the same request again.
+var ErrGuildMoved = errcode.Define(100024, "guild_moved", "guild is moving between servers, try again")

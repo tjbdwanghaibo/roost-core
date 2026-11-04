@@ -114,11 +114,23 @@ func resolveAcceptedSnapshot(access RemoteAccess, resolver RemoteSnapshotResolve
 	return snapshot, nil
 }
 
-// resolveRemoteSnapshot 从 resolver（装配时）或 Remote Manager 读取快照。未指定一致性时按读取方式取 Cached 或 Monotonic。
+// resolveRemoteSnapshot 从 resolver（装配时）或 Remote Manager 读取快照。
 func resolveRemoteSnapshot(access RemoteAccess, resolver RemoteSnapshotResolver, manager entity.IRemoteEntityManager) (entity.RemoteSnapshot, error) {
 	if resolver != nil {
 		return resolver.ResolveRemoteSnapshot(access)
 	}
+	if manager == nil {
+		return entity.RemoteSnapshot{}, fmt.Errorf("nest: Remote Entity snapshot reader is not configured")
+	}
+	return readRemoteSnapshot(access, manager.ReadRemoteSnapshot)
+}
+
+// remoteSnapshotRead 是一次快照读（Remote Manager 与只读 Mirror 客户端各自给出），minVersion 是最低状态版本。
+type remoteSnapshotRead func(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error)
+
+// readRemoteSnapshot 是两种快照来源共用的读取规则：未指定一致性时按读取方式取 Cached 或 Monotonic，AllowStale 的
+// Cached 读不把下限交给读出口，读到的信封解码成 RemoteSnapshot。
+func readRemoteSnapshot(access RemoteAccess, read remoteSnapshotRead) (entity.RemoteSnapshot, error) {
 	consistency := access.Consistency
 	if consistency == 0 {
 		if access.Mode == RemoteAcquireCache {
@@ -131,16 +143,13 @@ func resolveRemoteSnapshot(access RemoteAccess, resolver RemoteSnapshotResolver,
 	if current := fctx.CurrentContext(); current != nil && current.Base != nil {
 		baseCtx = current.Base
 	}
-	if manager == nil {
-		return entity.RemoteSnapshot{}, fmt.Errorf("nest: Remote Entity snapshot reader is not configured")
-	}
 	minVersion := access.MinVersion
 	if access.AllowStale && consistency == entity.RemoteReadCached {
 		// AllowStale 接受低于 MinVersion 的快照（调用方的 RemoteSnapshot.Accepts 判定）。Cached 读出口对不满足
 		// 最低版本的 L1 返回 ErrRemoteSnapshotStale，不能把下限交给它，否则 allow_stale 失效。
 		minVersion = 0
 	}
-	envelope, found, err := manager.ReadRemoteSnapshot(baseCtx, entity.RemoteSnapshotKey{
+	envelope, found, err := read(baseCtx, entity.RemoteSnapshotKey{
 		Tenant: access.Tenant, EntityID: access.Ref.EntityID, Kind: access.Ref.Kind,
 		Scope: uint32(access.Scope), Policy: access.Policy,
 	}, consistency, minVersion)
@@ -160,6 +169,25 @@ func resolveRemoteSnapshot(access RemoteAccess, resolver RemoteSnapshotResolver,
 		Source: entity.RemoteSnapshotSourceCache, ReadAt: time.Now().UnixMilli(),
 		ExpiresAt: envelope.ExpiresAt / int64(time.Millisecond), Data: data,
 	}, nil
+}
+
+// MirrorSnapshotResolver 把只读快照能力（entity.RemoteSnapshotReadOnly：只读进程的 Mirror 客户端，
+// wiring/remoteentity.MirrorSource）接成 Nest 的快照来源，供没有 Remote 写 Manager 的进程预取 RemoteViewRef。
+// 读取规则与经 Remote Manager 时相同（同一个 readRemoteSnapshot）：MinVersion 作为 After 的状态版本，Monotonic 在
+// 缓存不满足时回源一次；Linearizable 只在只读客户端声明了线性化 loader 时可用，否则得到 ErrRemoteReadUnsupported。
+func MirrorSnapshotResolver(reader entity.RemoteSnapshotReadOnly) RemoteSnapshotResolver {
+	if reader == nil {
+		return nil
+	}
+	return mirrorSnapshotResolver{reader: reader}
+}
+
+type mirrorSnapshotResolver struct{ reader entity.RemoteSnapshotReadOnly }
+
+func (r mirrorSnapshotResolver) ResolveRemoteSnapshot(access RemoteAccess) (entity.RemoteSnapshot, error) {
+	return readRemoteSnapshot(access, func(ctx context.Context, key entity.RemoteSnapshotKey, consistency entity.RemoteReadConsistency, minVersion uint64) (entity.RemoteSnapshotEnvelope, bool, error) {
+		return r.reader.ReadSnapshot(ctx, entity.RemoteSnapshotRead{Key: key, Consistency: consistency, After: entity.RemoteObservation{StateVersion: minVersion}})
+	})
 }
 
 // collectRemoteAccess 收集参数中全部 RemoteAccessProvider 声明的访问。

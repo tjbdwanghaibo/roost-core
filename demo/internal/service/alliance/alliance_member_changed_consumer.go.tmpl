@@ -1,0 +1,33 @@
+package alliance
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"{{MODULE}}/game/effects"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+)
+
+// AllianceMemberChangedEffectDurable names the JetStream consumer; every
+// alliance instance shares it, so each effect is handled by one of them (the
+// guard calls it makes are route RPCs to the guard's owner, whichever instance
+// that is).
+const AllianceMemberChangedEffectDurable = "alliance-member-changed"
+
+// startAllianceMemberChangedEffectConsumer finishes guards and sends
+// membership notices (rpcalliance.Service.HandleMemberChanged).
+func startAllianceMemberChangedEffectConsumer(ctx context.Context, registry *app.Registry, service *rpcalliance.Service) (fnats.IJetStreamSubscription, error) {
+	consumer := kitdataengine.EffectConsumer{Durable: AllianceMemberChangedEffectDurable, Topic: effects.TopicAllianceMemberChanged}
+	return kitdataengine.SubscribeEffects(ctx, registry, consumer, func(ctx context.Context, envelope nestwal.EffectEnvelope) error {
+		var event effects.AllianceMemberChanged
+		if err := json.Unmarshal(envelope.Payload, &event); err != nil {
+			return kitdataengine.PoisonEffect(fmt.Errorf("alliance.member_changed consumer: decode effect %s: %w", envelope.EffectID, err))
+		}
+		return service.HandleMemberChanged(ctx, event)
+	})
+}

@@ -1,0 +1,140 @@
+package alliance
+
+import (
+	"context"
+	"fmt"
+
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/lifecycle"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// GameServiceType is the bus service type of the game servers members belong
+// to: membership notices go to <GameServiceType>/<home sid>.
+const GameServiceType = "{{GAME_SERVICE}}"
+
+// sequenceCollection holds the alliance id counter (one document), in the
+// physical database of the alliance DAO.
+const sequenceCollection = "_alliance_id_sequence"
+
+// sequenceID is the counter's document id.
+const sequenceID = "alliance"
+
+// BindRegistry binds the service to the process it runs in. The Mod calls it
+// in Start — after Nest (and the Data Engine recovery before it) has started
+// and the startup preload has loaded this instance's alliances — and before
+// the bus handlers are registered; it creates this instance's AllianceShard
+// first, so no request finds it missing.
+func (s *Service) BindRegistry(ctx context.Context, registry *app.Registry) error {
+	identity, settings, err := LoadSettings(registry)
+	if err != nil {
+		return err
+	}
+	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || nestClient == nil {
+		return fmt.Errorf("alliance service: nest client is unavailable")
+	}
+	remote, ok := app.Lookup[entity.IRemoteEntityManager](registry, mods.ModRemoteEntity)
+	if !ok || remote == nil {
+		return fmt.Errorf("alliance service: the remote_entity Mod is required")
+	}
+	busClient, ok := app.Lookup[bus.IBus](registry, mods.ModBus)
+	if !ok || busClient == nil {
+		return fmt.Errorf("alliance service: the bus is unavailable")
+	}
+	mongoClient, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
+	if !ok || mongoClient == nil {
+		return fmt.Errorf("alliance service: the mongo Mod is required")
+	}
+	databases, err := kitdataengine.Databases(registry)
+	if err != nil {
+		return fmt.Errorf("alliance service: %w", err)
+	}
+	alliances, err := lifecycle.AllianceFromRegistry(registry)
+	if err != nil {
+		return err
+	}
+	members, err := lifecycle.AllianceMemberFromRegistry(registry)
+	if err != nil {
+		return err
+	}
+	shards, err := lifecycle.AllianceShardFromRegistry(registry)
+	if err != nil {
+		return err
+	}
+	// Calls to entities this instance may not own (guards, other alliances)
+	// go through the bus to their owner: the route lookup is the Remote
+	// Mod's (cache → Redis registration → ownership record).
+	routes, err := kitremoteentity.RouteSource(registry)
+	if err != nil {
+		return fmt.Errorf("alliance service: %w", err)
+	}
+	peers, err := NewBusClient(busClient, routes, ServiceType, DefaultCallTimeout)
+	if err != nil {
+		return err
+	}
+	business := app.BusinessClock(registry)
+	entities := lifecycleEntities{alliances: alliances, members: members, shards: shards}
+	if err := s.Bind(Deps{
+		Nest: nestClient, LocalSID: identity.Sid, Rules: settings.Rules(),
+		Owners: remote, Entities: entities, Peers: peers, Now: business.Now,
+		Sequence: mongoSequence{coll: mongoClient.Database(databases.Physical(db.AllianceDaoDBName)).Collection(sequenceCollection)},
+		Notify: func(_ context.Context, homeSID int32, notice MemberNotice) error {
+			return busClient.SendByType(GameServiceType, homeSID, NoticeModule, notice)
+		},
+		Scan: mongoScan{mongo: mongoClient, databases: databases.Physical},
+	}); err != nil {
+		return err
+	}
+	return entities.EnsureShard(ctx, identity.Sid)
+}
+
+// lifecycleEntities is Entities over the generated lifecycles.
+type lifecycleEntities struct {
+	alliances *lifecycle.AllianceLifecycle
+	members   *lifecycle.AllianceMemberLifecycle
+	shards    *lifecycle.AllianceShardLifecycle
+}
+
+func (e lifecycleEntities) EnsureAlliance(ctx context.Context, allianceID int64) error {
+	_, _, err := e.alliances.GetOrCreate(ctx, allianceID)
+	return err
+}
+
+func (e lifecycleEntities) EnsureGuard(ctx context.Context, playerID int64) error {
+	_, _, err := e.members.GetOrCreate(ctx, playerID)
+	return err
+}
+
+func (e lifecycleEntities) EnsureShard(ctx context.Context, sid int32) error {
+	_, _, err := e.shards.GetOrCreate(ctx, int64(sid))
+	return err
+}
+
+// mongoSequence is Sequence over one Mongo counter: $inc with upsert,
+// answered after the update. Founding is rare, so one counter is not
+// contended.
+type mongoSequence struct{ coll fmongo.ICollection }
+
+func (m mongoSequence) Next(ctx context.Context) (int64, error) {
+	var counter struct {
+		Next int64 `bson:"next"`
+	}
+	err := m.coll.FindOneAndUpdate(ctx, bson.M{"_id": sequenceID}, bson.M{"$inc": bson.M{"next": int64(1)}}, &counter,
+		fmongo.FindOneAndUpdateOption{Upsert: true, ReturnAfter: true})
+	if err != nil {
+		return 0, fmt.Errorf("alliance sequence: %w", err)
+	}
+	if counter.Next <= 0 || uint64(counter.Next) >= entity.StaticUniqueIDBase {
+		return 0, fmt.Errorf("alliance sequence: counter %d is outside the dynamic id range", counter.Next)
+	}
+	return counter.Next, nil
+}

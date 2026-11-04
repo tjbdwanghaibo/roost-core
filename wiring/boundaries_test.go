@@ -241,6 +241,8 @@ func TestEveryModDependencyNamesAKitMod(t *testing.T) {
 		ops.NewOpsMod(),
 		redis.NewRedisMod(),
 		remoteentity.NewRemoteEntityMod(0, remoteentity.WithMongoStorage(access)),
+		// 只读进程的 Mirror Mod（nest 可选依赖它：没有写 Manager 时 RemoteViewRef 预取经它读快照）。
+		remoteentity.NewRemoteMirrorMod(0),
 		syncbus.NewSyncBusMod(0),
 		saga.NewMod(),
 		statslog.NewStatsLogMod(),

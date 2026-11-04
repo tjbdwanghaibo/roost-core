@@ -9,12 +9,12 @@ import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 // stands in, and the Base cannot answer "where you landed" without waiting on
 // another process — and GM commands that need a monster's AI, walk or buffs,
 // which a partitioned scene's monster does not run.
-var ErrScenePartitioned = errcode.Define(100024, "scene_partitioned", "not supported in a partitioned scene")
+var ErrScenePartitioned = errcode.Define(100043, "scene_partitioned", "not supported in a partitioned scene")
 
 // ErrSceneNotPartitioned answers MoveIntent / AttackTarget on a process whose
 // scene is an ordinary one: there, Move and MoveTarget are the movement.
-var ErrSceneNotPartitioned = errcode.Define(100025, "scene_not_partitioned", "this scene is not partitioned")
+var ErrSceneNotPartitioned = errcode.Define(100044, "scene_not_partitioned", "this scene is not partitioned")
 
 // ErrPartitionNotEntered answers MoveIntent / AttackTarget from a player that
 // has not entered the partitioned scene (yet), or whose cell is not known yet.
-var ErrPartitionNotEntered = errcode.Define(100026, "partition_not_entered", "not in the partitioned scene")
+var ErrPartitionNotEntered = errcode.Define(100045, "partition_not_entered", "not in the partitioned scene")

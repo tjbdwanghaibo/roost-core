@@ -1,0 +1,35 @@
+package effects
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// TopicAllianceReservationDue is recorded by the AllianceShard timer when a
+// guard reservation reaches its deadline unconfirmed. The timer fires inside
+// the shard's Nest lock, where no I/O may happen; the consumer (the alliance
+// service) does the I/O: it asks the alliance to settle the request (the
+// alliance is the authority) and resolves the guard by the answer. A consumer
+// that cannot reach the alliance fails the effect, which is redelivered — the
+// guard is never released on the clock alone.
+const TopicAllianceReservationDue = "alliance.reservation_due"
+
+// AllianceReservationDue is the payload.
+type AllianceReservationDue struct {
+	PlayerID   int64  `json:"player_id"`
+	AllianceID int64  `json:"alliance_id"`
+	RequestID  string `json:"request_id"`
+}
+
+// EmitAllianceReservationDue records the effect on the current Nest
+// transaction, keyed by the player.
+func EmitAllianceReservationDue(event AllianceReservationDue) error {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("effects: encode %s: %w", TopicAllianceReservationDue, err)
+	}
+	return nest.Emit(nest.Effect{Topic: TopicAllianceReservationDue, Key: strconv.FormatInt(event.PlayerID, 10), Payload: payload})
+}

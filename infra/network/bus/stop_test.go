@@ -17,10 +17,12 @@ import (
 // handler；“资源”是响应消费者——在途 handler 可能还在等嵌套可靠调用的回包，排空之后才停（stopJetStreamRPCResponses），
 // 随后调用方才交还连接。
 
-// responseStopRecordingJetStream 记录响应消费者（rpc_resp 过滤主题）是否被停掉。
+// responseStopRecordingJetStream 记录响应消费者（rpc_resp 过滤主题）是否被停掉；onStop 非 nil 时每个 consumer 停掉都报告
+// 它的过滤主题。
 type responseStopRecordingJetStream struct {
 	*captureJetStreamRPC
 	responseStopped atomic.Bool
+	onStop          func(filter string)
 }
 
 type recordingJetStreamSub struct {
@@ -34,9 +36,14 @@ func (r *responseStopRecordingJetStream) Subscribe(ctx context.Context, cfg fnat
 	if _, err := r.captureJetStreamRPC.Subscribe(ctx, cfg, handler); err != nil {
 		return nil, err
 	}
-	onStop := func() {}
-	if strings.Contains(cfg.FilterSubject, ".rpc_resp.") {
-		onStop = func() { r.responseStopped.Store(true) }
+	filter := cfg.FilterSubject
+	onStop := func() {
+		if strings.Contains(filter, ".rpc_resp.") {
+			r.responseStopped.Store(true)
+		}
+		if r.onStop != nil {
+			r.onStop(filter)
+		}
 	}
 	return recordingJetStreamSub{onStop: onStop}, nil
 }

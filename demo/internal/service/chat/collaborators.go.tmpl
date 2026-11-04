@@ -17,7 +17,9 @@ import (
 // The demo's rule is deliberately small: the world channel and 1:1 private
 // conversations are open to every authenticated player; groups are refused
 // because the demo has none (a real game grants them from its guild / party
-// membership); the system channel is publish-refused here and served by the
+// membership — for a guild, the alliance service's roster as its Remote mirror
+// shows it, kept current by the service's membership notices; the chat
+// process would read the mirror, not ask a game server); the system channel is publish-refused here and served by the
 // privileged path only. What matters is that every refusal is a decision
 // written down, not a default: the generated stub refused everything.
 func Policy() chat.ChannelPolicy {

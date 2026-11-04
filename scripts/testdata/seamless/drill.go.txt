@@ -42,7 +42,7 @@ import (
 )
 
 const (
-	kindSceneActor = entity.EntityKind(6)
+	kindSceneActor = entity.EntityKind(9)
 	kindMonster    = entity.EntityKind(4)
 	// boundary 是两个格的分界线 x（cell_size 3000，2 × 1）。
 	boundary = 3000
@@ -681,7 +681,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if r, _ := pb.UnmarshalMoveResponse(moveResp); r == nil || r.Code != 100024 {
+	if r, _ := pb.UnmarshalMoveResponse(moveResp); r == nil || r.Code != 100043 {
 		return fmt.Errorf("move in a partitioned scene: want scene_partitioned, got %+v", r)
 	}
 	step("enter", map[string]any{"p1": p1.playerID, "p2": p2.playerID, "p3": p3.playerID, "p1_at": self1.pos(), "p1_hp": self1.hp(),
@@ -1175,7 +1175,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if r, _ := pb.UnmarshalMoveIntentResponse(intent); r == nil || r.Code != 100025 {
+	if r, _ := pb.UnmarshalMoveIntentResponse(intent); r == nil || r.Code != 100044 {
 		return fmt.Errorf("move_intent in an ordinary scene: want scene_not_partitioned, got %+v", r)
 	}
 	if err := waitFor(ctx, 5*time.Second, "p4 sees itself in the ordinary scene", func() (bool, string) {

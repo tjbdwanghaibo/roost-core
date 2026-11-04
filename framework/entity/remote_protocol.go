@@ -31,7 +31,11 @@ var (
 	// ErrNoRemoteRuntime 表示写的是 Remote 托管（remote=managed）实体，而本进程没有装 Remote 运行时：写权限、fence 与
 	// 远端提交都由 remote_entity Mod（wiring/remoteentity）提供，没有它就不会把这类写当本地写，一律拒绝。
 	// 它包裹 ErrRemoteWriteCapabilityDisabled，既有 errors.Is 判断不变；文本点名修法。
-	ErrNoRemoteRuntime = fmt.Errorf("%w: this process has no Remote runtime; register the remote_entity Mod (wiring/remoteentity) "+
+	// ErrRemoteKindNotOwned 表示这个 kind 声明归属于别的服务（Remote Manager 配置的 ForeignKinds），本进程不能认领它的
+	// 所有权、也拿不到写许可：写只能经归属服务的 RPC。它在任何所有权记录被读写之前返回，不会把新实体认领给本进程。
+	// 这是部署 / 调用方错误，不可重试；它包裹 ErrRemoteWriteCapabilityDisabled，既有 errors.Is 判断不变。
+	ErrRemoteKindNotOwned = fmt.Errorf("%w: entity kind is owned by another service; write through that service", ErrRemoteWriteCapabilityDisabled)
+	ErrNoRemoteRuntime    = fmt.Errorf("%w: this process has no Remote runtime; register the remote_entity Mod (wiring/remoteentity) "+
 		"in this service (generated projects: roost add mod remote_entity -service <service>)", ErrRemoteWriteCapabilityDisabled)
 )
 

@@ -1,0 +1,164 @@
+package alliance
+
+import (
+	"context"
+	"fmt"
+	"slices"
+
+	db "{{MODULE}}/db"
+	alliance "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// Scan lists the entity ids of one kind in the store (alliance.transfer by
+// count: "N of the entities this instance owns").
+type Scan interface {
+	EntityIDs(ctx context.Context, kind entity.EntityKind) ([]int64, error)
+}
+
+// TransferReport is what a transfer did.
+type TransferReport struct {
+	// Moved: ownership is now toSID's.
+	Moved []int64 `json:"moved"`
+	// Pending: guards with an open reservation, left in place — the
+	// reservation's deadline is armed on this instance's shard. Run the
+	// transfer again after the reservation settles (at most reservation_ttl).
+	Pending []int64 `json:"pending,omitempty"`
+	// Failed: entity id -> why; nothing was moved for them.
+	Failed map[int64]string `json:"failed,omitempty"`
+}
+
+// TransferOwnership moves alliances and guards this instance owns to toSID
+// (plan §2.7: scaling out, or emptying an instance before it is stopped):
+// the entities in ids (full entity ids, AllianceTarget / GuardTarget), or —
+// ids empty — the first count of the entities this instance owns, alliances
+// first. One TransferRemoteOwnership per entity: it drains the writes already
+// admitted here and fences this instance before toSID may write; toSID loads
+// the entity on the first request routed to it. Only the current owner can
+// transfer, so the command runs on the instance that gives the entities away.
+//
+// While it runs, a write to an entity being moved answers "not executed";
+// after it, this instance's route check redirects to toSID and the route
+// registration names toSID once it has loaded the entity. Callers need no
+// configuration change.
+//
+// A guard with an open reservation is not moved (Pending): its deadline is a
+// node on this instance's AllianceShard, and the guard and its deadline move
+// together or not at all. Run the command again once it has settled.
+func (s *Service) TransferOwnership(ctx context.Context, ids []int64, count int, toSID int32) (TransferReport, error) {
+	report := TransferReport{Failed: map[int64]string{}}
+	switch {
+	case toSID <= 0 || toSID == s.deps.LocalSID:
+		return report, fmt.Errorf("%w: target sid %d", ErrRequestInvalid, toSID)
+	case (len(ids) == 0) == (count <= 0):
+		return report, fmt.Errorf("%w: give either entity ids or a positive count", ErrRequestInvalid)
+	case len(ids) == 0 && s.deps.Scan == nil:
+		return report, fmt.Errorf("alliance: transfer by count needs the store scan")
+	}
+	if len(ids) == 0 {
+		var err error
+		if ids, err = s.ownedEntities(ctx, count); err != nil {
+			return report, err
+		}
+	}
+	for _, id := range ids {
+		if !entity.MatchEntityID(id, alliance.EntityKindAlliance) && !entity.MatchEntityID(id, alliance_member.EntityKindAllianceMember) {
+			report.Failed[id] = "not an alliance or a guard entity id"
+			continue
+		}
+		lease, found, err := s.deps.Owners.GetRemoteOwnership(ctx, id)
+		switch {
+		case err != nil:
+			report.Failed[id] = err.Error()
+			continue
+		case !found || lease.OwnerSid != s.deps.LocalSID:
+			report.Failed[id] = fmt.Sprintf("not owned by this instance (owner %d)", lease.OwnerSid)
+			continue
+		}
+		if entity.MatchEntityID(id, alliance_member.EntityKindAllianceMember) {
+			pending, err := s.guardPending(ctx, id)
+			if err != nil {
+				report.Failed[id] = err.Error()
+				continue
+			}
+			if pending {
+				report.Pending = append(report.Pending, id)
+				continue
+			}
+		}
+		if _, err := s.deps.Owners.TransferRemoteOwnership(ctx, id, toSID); err != nil {
+			report.Failed[id] = err.Error()
+			continue
+		}
+		report.Moved = append(report.Moved, id)
+	}
+	return report, nil
+}
+
+// ownedEntities is the first count alliances and guards whose ownership
+// record names this instance (a store scan, then one ownership read each:
+// an operator command, not a hot path).
+func (s *Service) ownedEntities(ctx context.Context, count int) ([]int64, error) {
+	var owned []int64
+	for _, kind := range []entity.EntityKind{alliance.EntityKindAlliance, alliance_member.EntityKindAllianceMember} {
+		ids, err := s.deps.Scan.EntityIDs(ctx, kind)
+		if err != nil {
+			return nil, err
+		}
+		slices.Sort(ids)
+		for _, id := range ids {
+			if len(owned) == count {
+				return owned, nil
+			}
+			if _, here, err := s.owned(ctx, id); err == nil && here {
+				owned = append(owned, id)
+			}
+		}
+	}
+	return owned, nil
+}
+
+// guardPending reports whether the guard id has an open reservation.
+func (s *Service) guardPending(ctx context.Context, id int64) (bool, error) {
+	if err := s.deps.Entities.EnsureGuard(ctx, entity.GetUniqueIDFromEntityID(id)); err != nil {
+		return false, err
+	}
+	state, err := syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardInfo(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return state.PendingRequestID != "", nil
+}
+
+// mongoScan is Scan over the DAO collections.
+type mongoScan struct {
+	mongo     fmongo.IMongo
+	databases func(logical string) string
+}
+
+func (m mongoScan) EntityIDs(ctx context.Context, kind entity.EntityKind) ([]int64, error) {
+	var database, collection string
+	switch kind {
+	case alliance.EntityKindAlliance:
+		database, collection = db.AllianceDaoDBName, db.AllianceDaoCollection
+	case alliance_member.EntityKindAllianceMember:
+		database, collection = db.AllianceMemberDaoDBName, db.AllianceMemberDaoCollection
+	default:
+		return nil, fmt.Errorf("alliance: no collection for kind %d", kind)
+	}
+	var docs []struct {
+		ID int64 `bson:"_id"`
+	}
+	if err := m.mongo.Database(m.databases(database)).Collection(collection).Find(ctx, bson.M{}, &docs); err != nil {
+		return nil, fmt.Errorf("alliance: scan %s: %w", collection, err)
+	}
+	ids := make([]int64, 0, len(docs))
+	for _, doc := range docs {
+		ids = append(ids, doc.ID)
+	}
+	return ids, nil
+}

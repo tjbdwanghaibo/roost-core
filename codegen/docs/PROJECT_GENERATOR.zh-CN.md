@@ -271,6 +271,7 @@ features 是项目级**代码生成开关**，与 mods 是两个维度：feature
 | `nats` | — | NATS、JetStream、RPC 和 Bus |
 | `syncbus` | `nats` | NATS 或 JetStream 同步 Bus（运行期缺省前缀 `roost.sync`；生成配置写 `<project>.sync`） |
 | `remote_entity` | `redis`、`mongo`、`syncbus` | 跨服实体所有权、原子事务、快照分发与版本锁 |
+| `remote_mirror` | `redis`、`mongo`、`syncbus` | 只读进程的 Remote 快照（`wiring/remoteentity.NewRemoteMirrorMod`）：经 `MirrorSource(registry)` 读别的服务拥有的 Remote 实体，没有写 Manager 与分布式锁；与 `remote_entity` 不能装在同一个服务；停机预算按 `remote_entity.mirror.shutdown_timeout`（生成 5s）计入 |
 | `dataengine` | `mongo`、`nats` | Nest transaction WAL、Mongo projection、聚合加载/migration、effect outbox |
 | `manager` | — | 本服务的内存单例 manager 生命周期 |
 | `nest` | `dataengine`（自动补齐） | 实例级 Nest 引擎装配 |
@@ -410,11 +411,75 @@ Entity wire 会生成 Component/DAO getter，
     # 调用方：roost.yaml services.gate.uses_rpcs: [guild]，然后 make sync
 
 生成 `internal/rpc/guild/`：`guild.go`（`//roost:rpc` 接口 `Guild`、`ErrRequestInvalid`（码来自 `ids.errcode`）、`Error` 映射）、
-`service.go`（实现骨架）、`mod.go`（owner Mod：发布 capability、Start 时在 bus 上注册 handler）、`server_run.go`（独立进程用的 Server 钩子），
+`service.go`（实现骨架）、`mod.go`（owner Mod：发布 capability、Start 时在 bus 上注册 handler；停机时由 App 统一撤下，见下）、`server_run.go`（独立进程用的 Server 钩子），
 以及 servicerpc 生成的 `guild_rpc_gen.go` / `guild_rpc_assembly_gen.go`。清单里 `services.game.rpcs: [guild]`、feature `rpc` 自动加上，
 bootstrap 在 game 进程装配 `rpcGuild.NewMod(rpcGuild.New())`，在 gate 装配 `rpcGuild.NewClientMod()`；两边都自动带 nats mod。
 调用方 `app.Lookup[guild.Guild](registry, guild.CapabilityName)` 拿接口——服务日后搬进独立进程（`a.RegisterServer(..., guild.NewServer(), ...)`）业务代码不变。
 `make generate` 重生成两半，`generate --check` 把它们当生成物比对。
+
+停机时 handler 由 App 统一撤下（[App 生命周期](../../docs/framework/guide/01-app-lifecycle.md)）：App 停机第一步（`Service.Shutdown`
+与任何 Mod 停止之前）经 nats Mod 的 `CloseIngress` 撤下总线上的全部 handler——之后到达本实例的请求答 `errcode.CodeRetryable`
+（没有执行）或 no responders，已进 handler 的请求答复完才往下走——然后才停 Nest、存储与 owner Mod 自己。所以 owner Mod 的 `Stop`
+是空操作，独立进程的 `Server`（`Service.Init` 注册 handler）同样不用撤；等在途请求的时间花在停机总预算里，不占某个 Mod 的份额。
+2026-11-04 一度生成过的 `StopWithContext`（调 `WithdrawRpc`）留在已生成的 `mod.go` 里无害（第二次撤下是空操作），可以删掉。
+
+拥有者是独占实体的服务（实体标记 `service=<owner>`，例如联盟服务）时加 `-entity-service`：
+
+    roost add rpc Alliance -service alliance -entity-service
+
+拥有者必须带 Nest（没有时拒绝并给出 `roost add mod nest -service <owner>`）。骨架改成写契约：写方法的前几个参数是
+`requestID string, callerID int64, callerSID int32`（服务按 requestID 幂等，调用者身份来自调用方已鉴权的会话），
+`Result(ctx, target, requestID)` 回答这笔请求的结局，`HandleBudget` 是接收端自己的处理预算（普通 Bus RPC 不带调用方截止时间）。
+写的错误经 `wiring/remoteentity.RPCWriteAnswer` 转成框架答复（未执行 `errcode.CodeRetryable`、不是 owner `CodeRedirect`，
+结果未知原样返回），调用方用 `servicerpc.Classify` 分四类。owner Mod 依赖 `nats` 与 `nest`：Nest 启动之后（框架保证 DataEngine
+恢复已完成）才在总线上注册 handler，恢复期间的请求得到 no responders。请求回执（requestID → 结果）放在被改的实体里、与业务修改
+同一事务提交，骨架只在注释里写出 handler 的顺序。
+
+多实例时，对已有实体的方法标 `//roost:rpc route`（联盟服务方案 2026-11-04 路由决定，[§2.3](../../docs/maintenance/FEATURE-2026-11-04-alliance-service.md#23-写rpc-契约)、
+[§2.7](../../docs/maintenance/FEATURE-2026-11-04-alliance-service.md#27-分片接管与迁移决定-2)）：路由键缺省是方法里名为 `target` 的 `int64`
+参数，取**完整 Entity ID**（kind 在 ID 里，`roost id entity` 换算）；用别的参数时写 `//roost:rpc route=<param>`。骨架的 `target` 就是完整 Entity ID。
+
+    // Join 加入联盟 target。
+    //roost:rpc route
+    Join(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64) (version uint64, err error)
+
+- 生成的客户端经框架的路由查找把调用发给 target 的 owner：本进程缓存 → Redis 路由登记 → 持久所有权记录，都没有就答“实体不存在”、
+  请求不发出去；遇到“改投”改投一次，no responders 后重新查找一次。生成的 handler 先做服务端前置检查（实体不存在、不是 owner 时
+  不进 Nest）。查找结果只是提示，写准入仍由所有权记录 + fence 裁决。不需要任何分片配置键。框架接口见
+  [guide/09“路由 RPC 与改投”](../../docs/framework/guide/09-services.md#2a-路由-rpc-与改投)。
+- `-entity-service` 骨架：`Apply` / `Result` 已标 route；`Service.CheckRoute` 调 `kitremoteentity.RPCRouteCheck`（生成的 route
+  handler 先调它，服务没实现 `RouteChecker` 时注册 handler 被拒）；owner Mod 依赖 `nats`、`nest`、`remote_entity`，经
+  `OptionalDependsOn` 排在起服预加载（`mods.ModRemoteEntityPreload`）之后，Start 时把 Remote Manager 与本进程 sid 交给
+  `Service.SetOwnership` 再注册 handler——恢复与预加载完成前请求得到 no responders（可重试，未执行）；停机时先于 Nest 撤下
+  handler（上文），停机窗口里的请求同样是“可重试”，不会进已停的 Nest 答成结果未知。所以 `-entity-service`
+  要求拥有者已经托管 Remote 实体 kind，没有时拒绝并写明怎么声明。
+- 调用方：生成的 ClientMod 在 Provide 时经 `kitremoteentity.RouteSource` 取路由查找（`OptionalDependsOn` remote_entity /
+  remote_mirror）；调用 route 方法的服务（`uses_rpcs`）既没有 `remote_entity` 也没有 `remote_mirror` 时 `roost generate` 拒绝并给出
+  `roost add mod remote_mirror -service <caller>`。构造参数按服务实际用到的策略：有 route 方法才要路由查找，有 `affinity=` 方法
+  才要服务发现。拥有者有预加载 kind 时，owner Mod（`mod.go`）不提 `ModRemoteEntityPreload` 也拒绝。
+- 创建类方法（例如 `Found`）**不标** route，照旧走 NATS 队列组随机路由：NATS 只在已注册 handler 的实例里选，新实例一加入就承接新建。
+  随机路由下同一个 requestID 的重发可能落到别的实例，所以它的回执要记在按稳定 ID 路由的实体上（例如发起者的成员守卫）。
+- 路由是方法级策略：一个服务可以同时有 route、`affinity=` 与不标的方法，每个方法按自己的标记选路径，生成的客户端只要求该服务
+  实际用到的策略所需的构造参数。校验：路由键必须是方法的 `int64` 参数；同一个方法不能同时标 route 与 `affinity=`；标了 route 的
+  方法要求拥有这个 rpc 的服务托管至少一个 Remote 实体 kind（`//roost:entity remote=managed service=<owner>`），否则 `roost generate`
+  拒绝——路由查找只认得这类 kind 的登记与所有权记录。不标 route 的 rpc（例如 mail）不受影响。旧的 `shard=` 生成期报“已移除”。
+- 实体加载后在 Redis 登记路由的 kind，就是拥有者自己的 Remote 托管 kind（`registry.RouteKinds("<owner>")`，生成在
+  `internal/registry/ownership_gen.go`）；需要起服就常驻的类型在实体标记上写 `preload=startup`（[§6.w](#6w-实体归属服务roostentity-service)）。
+
+### 6.w 实体归属服务：`//roost:entity service=<name>`
+
+一个 kind 只该由一个服务写时（例如联盟服务独占 `Alliance`），在实体标记上写 `service=alliance`，然后
+`roost project sync && roost generate`。生成器只在 alliance 的 bootstrap 装 `registry.NewOwnedNestHandlersMod("alliance")`，
+锁住这个 kind 的 handler 只注册在 alliance 进程的 Nest 引擎上；别的服务要写它，经 alliance 的 rpc（`roost add rpc -service alliance`）。
+`roost add lifecycle` 缺省落到归属服务；doctor 的 `entity-owner` 项报告别的服务的代码（`internal/service/<name>/`、它拥有的
+`internal/rpc/<rpc>/`、玩家接入代码）构造了这个 kind 的 Sender。没写 `service=` 的 kind 保持原行为，任何带 Nest 的服务都注册、都能写。
+标记写法与拒绝规则见 [TAGS](TAGS.zh-CN.md)；实现见 [impl/12 §2G](../../docs/framework/impl/12-codegen.md#2g-实体归属服务service)。
+
+归属服务拥有的 Remote 托管 kind 就是它在 Redis 登记路由的 kind（`registry.RouteKinds("<service>")`）。数量可控、需要起服就常驻的
+类型（例如靠心跳推进活动阶段的联盟）在实体标记上再写 `preload=startup`：归属服务起服时、路由 rpc 的 handler 注册之前，加载持久
+所有权记录的 owner 是本 sid 的这个 kind 的全部实体并登记路由（`registry.PreloadKinds("<service>")`）。没写就不预加载，第一次访问时
+冷加载。`preload=` 只有 `startup` 一个取值，只能写在 `remote=managed` 且声明了 `service=` 的实体上，否则生成期报错。两份列表
+经 ModOption 交给本服务的 `remote_entity`（`kitremoteentity.WithRouteKinds(registry.RouteKinds("<service>")...)`、`WithPreloadKinds(registry.PreloadKinds("<service>")...)`，与 `WithForeignKinds` 同一种传法，不加 YAML 键）；有预加载 kind 的服务还装 `kitremoteentity.NewRemotePreloadMod()`。改了 `preload=` 先 `roost project sync`（bootstrap 与归属不一致时 generate 拒绝）。
 
 ### 6.y 按实体的持久定时器：`roost add timer`
 
@@ -553,7 +618,8 @@ CI 默认执行格式化、vet、测试、race、生成一致性、配置和 ID 
 - `config-sections:<service>`（只读，维护者 2026-10-17 决定）：按服务实际注册的 Mod（共享 Mod 加 `effectiveServiceMods`，与生成器同一份计算）找开发配置、生产示例与 k8s Secret 示例（`stringData` 的 `config.yaml`）里缺的顶层配置段——每个 Mod 的起始段、托管框架服务的段；带 DataEngine 的服务还有 `redis:` 与 `singleton:` 段，且 `singleton.enabled` 须为 `true`。缺段为 WARN（不让 doctor 失败），WARN 里给出可直接追加到该文件末尾的文本（生产示例与 Secret 已按生产改写：地址 `CHANGE_ME`、流副本 3；Secret 已缩进四格）。典型来源：在 `add` 命令之外手改 `roost.yaml` 加 Mod 后 `project sync`（sync 不追加配置段，行为不变），或修复前走过 `add access` / `add rpc` 的工程。业务有意删掉的段同样会报——不需要时忽略；想消掉提示又保持代码默认值，留一个空段（例如 `saga: {}`）。“有没有”只看行首的 `<key>:`，段里的值不比较。doctor 没有另外的豁免开关。
 - `config-across-services`（维护者 2026-10-19 批准）：同一工程各服务之间——声明里带 `shared` 的共享资源名（`nats.prefix`、效果流名与主题前缀及 saga 的 start 效果流、saga 库 / 流 / 主题、Remote 库与 L2 前缀、`etcd.service_prefix`、`singleton.key_prefix`、业务时区 `time.business_timezone` / `time.business_day_start` 等）在开发配置集与生产示例里各自必须一致；开发配置集里带 `listen` 的监听地址（`ops.addr`、`web.addr`、`player_access.tcp.addr`，开关打开时）端口不得冲突，带 `unique` 的 `etcd.advertise_addr` 各服务不同。FAIL 并点名服务、键与取值。与 `roost config check --all` 同一个实现（`checkConfigAcrossServices`），不需要编译工程。
 - `config-check:<service>`：用同一个编译好的进程对每个服务的开发配置运行 `<bin> <service> --check-config --config configs/service/config.<service>.yaml`（与进程启动前同一处检查）：除键的声明外，还有各 Mod 配置结构体的跨键规则与跨 Mod 一致性规则（`app.ModConfigCrossChecker`，例如同进程有 DataEngine 时显式写的 `saga.start_effect_stream` / `start_effect_prefix` 必须等于 `dataengine.effects.stream` / `subject_prefix`）。不通过为 FAIL，详情是进程的报错与可直接复跑的命令。生产示例与 Secret 示例带占位值，不在这里跑；发布前对真实生产配置运行同一条命令。工程编译不过时不报这一项。
-- `remote-runtime`：工程里有 `remote=managed` 实体时，带 Nest 的服务全都没有 `remote_entity` Mod 为 FAIL（运行时每次写都会被拒），只有部分服务缺为 WARN，详情给出 `roost add mod remote_entity -service <service>`；`roost generate` 在跑生成器之前做同一检查（全缺时拒绝，部分缺时打印 WARN）。没有这类实体时不报这一项。
+- `entity-owner`：有实体声明 `service=` 时出现（[§6.w](#6w-实体归属服务roostentity-service)）：`service=` 写错为 FAIL；别的服务的代码构造了归属 kind 的 Sender 为 FAIL，详情写出文件与归属服务。
+- `remote-runtime`：工程里有 `remote=managed` 实体（声明了 `service=` 的除外，它们按 `entity-owner` 检查归属服务）时，带 Nest 的服务全都没有 `remote_entity` Mod 为 FAIL（运行时每次写都会被拒），只有部分服务缺为 WARN，详情给出 `roost add mod remote_entity -service <service>`；`roost generate` 在跑生成器之前做同一检查（全缺时拒绝，部分缺时打印 WARN）。没有这类实体时不报这一项。
 - `saga-steps:<saga>` / `effect-consumer:<service>/<func>`（只读，WARN 不让 doctor 失败）：`roost add saga` 生成的 `steps.go` 有 `StartSteps` / `RegisterSteps`，工程里却没有非测试文件导入该 saga 包并调用它（或调用处所在包没有 `Steps.Drain(ctx)`）时 WARN；`roost add effect` 生成的 `start<Topic>EffectConsumer` 在服务包里没有被调用时 WARN。生成器不改写服务的 Init / Shutdown，这两项提醒“生成了但没启动”——没启动时进程照常起来，步骤命令却等到超时、effect 堆在流里。文本判据（注释不算调用），只说明写了，不证明运行时一定走到；`steps.go` 里没有这两个函数（如 game-demo 手写接线）时不报。
 - `skills:catalog`：工程有 `game/skills/catalog.go` 时运行 `go test ./game/skills/`（生成的 `catalog_test.go` 用 `CompileAll` 编译全部技能 JSON），写坏的定义为 FAIL 并带编译器原话；没有 `catalog_test.go` 为 WARN（下一次 `roost add skill` 补上）。工程编译不过时不报这一项。
 - `config-reads`：扫工程源码，直接调 viper 读方法 / `app.Config*` 单键读取、或声明了却没有任何代码读的字段为 FAIL（与 app / wiring 的守卫同一份实现 `internal/configschema/guard.go`）。

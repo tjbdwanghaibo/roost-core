@@ -7,11 +7,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 )
 
@@ -253,5 +255,67 @@ func TestConcurrentOpsStartStopUsesCapturedServer(t *testing.T) {
 	group.Wait()
 	if err := mod.StopWithContext(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// 停机第一步（App 经 app.IngressCloser 关输入，App 生命周期方案缺口 7）：之后的 /admin/execute 不执行、答 503，
+// 已在执行的命令先跑完 CloseIngress 才返回；健康 / 就绪照常。没有这一步时 ops 是共享 Mod、停得晚，停机期间的运维命令
+// （例如联盟的 alliance.transfer）照常执行，落在已停的 Nest / Remote 上。
+func TestCloseIngressRefusesAdminCommandsAndWaitsForTheRunningOne(t *testing.T) {
+	m := &Server{adminEnabled: true, adminToken: "b7", commands: admin.NewRegistry()}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var runs atomic.Int32
+	if err := m.commands.Register(admin.CommandDef{Name: "transfer", Handler: func(context.Context, admin.Command) (admin.Result, error) {
+		if runs.Add(1) == 1 {
+			close(entered)
+			<-release
+		}
+		return admin.Result{OK: true}, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	execute := func() int {
+		r := httptest.NewRequest(http.MethodPost, "/admin/execute", strings.NewReader(`{"name":"transfer"}`))
+		r.Header.Set("Authorization", "Bearer b7")
+		w := httptest.NewRecorder()
+		m.handleAdminExecute(w, r)
+		return w.Code
+	}
+	running := make(chan int, 1)
+	go func() { running <- execute() }()
+	<-entered
+	closer, ok := any(m).(interface{ CloseIngress(context.Context) error })
+	if !ok {
+		close(release)
+		t.Fatal("ops Server has no CloseIngress: admin commands keep running while the App stops the Mods they use")
+	}
+	closed := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		closed <- closer.CloseIngress(ctx)
+	}()
+	select {
+	case err := <-closed:
+		t.Fatalf("CloseIngress returned %v while a command was still running", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if code := execute(); code != http.StatusServiceUnavailable {
+		t.Errorf("a command after CloseIngress answered %d, want 503 (not executed)", code)
+	}
+	close(release)
+	if err := <-closed; err != nil {
+		t.Fatalf("CloseIngress: %v", err)
+	}
+	if code := <-running; code != http.StatusOK {
+		t.Errorf("the running command answered %d, want 200", code)
+	}
+	if n := runs.Load(); n != 1 {
+		t.Errorf("command ran %d times, want only the one accepted before CloseIngress", n)
+	}
+	w := httptest.NewRecorder()
+	m.handleHealth(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if w.Code != http.StatusOK {
+		t.Errorf("/healthz after CloseIngress = %d, want 200", w.Code)
 	}
 }

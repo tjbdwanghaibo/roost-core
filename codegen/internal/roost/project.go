@@ -237,7 +237,9 @@ func SyncProjectContext(ctx context.Context, root string) (SyncResult, error) {
 	// concurrent-edit checks. The refreshed files are committed with the rest
 	// below; inputs was snapshotted before the refresh, so it still describes
 	// the real project.
-	refreshed, err := refreshGeneratedShutdownConfigs(stage, manifest)
+	// withEntityOwners: a service owning entity kinds also runs their handler
+	// Mod (NewOwnedNestHandlersMod), which the templates count; the totals must too.
+	refreshed, err := refreshGeneratedShutdownConfigs(stage, manifest.withEntityOwners(stage))
 	if err != nil {
 		return SyncResult{}, inProjectPaths(fmt.Errorf("refresh shutdown.total_timeout: %w", err), stage, absRoot)
 	}
@@ -289,7 +291,7 @@ var syncProjectBeforeCommit func()
 // outputs, plus newly created Controller scaffolds. Existing application-owned
 // source is copied into staging for parsing and is never copied back implicitly.
 func planStagedProjectCommit(root, stage string, manifest Manifest) ([]syncChange, error) {
-	plan, err := renderProject(manifest.withConfiguredShutdown(stage).withServicePackages(stage))
+	plan, err := renderProject(manifest.withConfiguredShutdown(stage).withServicePackages(stage).withEntityOwners(stage))
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +552,7 @@ func verifySyncChangeCurrent(change syncChange) error {
 func planManifestSync(root string, manifest Manifest) (SyncResult, []syncChange, error) {
 	// The deployment grace periods follow the totals the project's configs
 	// actually set, so the render reads them from root.
-	plan, err := renderProject(manifest.withConfiguredShutdown(root).withServicePackages(root))
+	plan, err := renderProject(manifest.withConfiguredShutdown(root).withServicePackages(root).withEntityOwners(root))
 	if err != nil {
 		return SyncResult{}, nil, err
 	}

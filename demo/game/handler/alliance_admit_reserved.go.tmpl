@@ -1,0 +1,33 @@
+package handler
+
+import (
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	"{{MODULE}}/game/effects"
+	alliance "{{MODULE}}/game/entities/alliance"
+)
+
+// handlerAllianceAdmitReserved is step 2 of a join whose guard is on another
+// instance: the guard has been reserved for (this alliance, requestID), and
+// this seats the player under the same request id. The effect it records is
+// what confirms the guard (GuardSettled=false); a rejection is recorded too,
+// so a reservation the guard later settles by this request's receipt can
+// never turn into a seat.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceAdmitReserved(target alliance.IRosterEntity, requestID string, actorID int64, playerID int64, callerSID int32, viaApplication bool, maxMembers int32, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+	roster := target.RosterComp()
+	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		homeSID, err := roster.AdmissionHome(actorID, playerID, callerSID, viaApplication, int(maxMembers))
+		if err != nil {
+			return playerID, err
+		}
+		roster.Admit(playerID, homeSID, requestID, nowUnix)
+		return playerID, effects.EmitAllianceMemberChanged(effects.AllianceMemberChanged{
+			AllianceID: roster.AllianceID(), PlayerID: playerID, HomeSID: homeSID, Change: effects.MemberJoined,
+			JoinRequestID: requestID, Version: roster.CurrentVersion() + 1,
+		})
+	})
+	return answer(roster, outcome, err)
+}

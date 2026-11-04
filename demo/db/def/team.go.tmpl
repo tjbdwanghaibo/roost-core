@@ -1,7 +1,7 @@
 package dbdef
 
 // TeamDao 是分区场景里一支队伍的成员表（维护者 2026-11-04 第 4 项 = A：组队关系的权威放在 Remote 托管的 Team 实体上，
-// 不放在队长的 Player 上）。与 Guild 同一种实体：谁拿到它的分布式锁、谁在那一笔事务里是它的 owner，所以不同 Base
+// 不放在队长的 Player 上）。共享模式的 Remote 实体：谁拿到它的分布式锁、谁在那一笔事务里是它的 owner，所以不同 Base
 // 进程上的玩家都能改同一份成员表；每一笔改动是一次 Remote 事务（分布式锁 + 加载 + 带 fence 的提交）。
 //
 // 只在分区场景里使用（普通场景的组队是匹配，见 internal/service/<game>/matchmaker.go，与它无关）。不同步：客户端从

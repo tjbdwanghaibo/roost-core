@@ -18,6 +18,8 @@
 2. L2 是快照水位权威，Mongo 是数据权威。
 3. interest 非零代际、完整身份与撤销水位一起校验。
 4. 超时或断线不等于未提交，写额度必须按真实完成释放。
+5. 实体归属守卫（`Config.ForeignKinds`）在写额度、wrapper 与任何所有权读写之前判，覆盖写准入与 `beginOwnershipTransition` 的全部所有权操作；读所有权与快照不经它。新增会认领或改所有权的入口必须同样先过 `rejectForeignKind`（[REMOTE_ENTITY](../REMOTE_ENTITY.md#实体归属守卫)）。
+6. 路由登记（[route.go](../../../framework/remoteentity/route.go)、[route_store.go](../../../framework/remoteentity/route_store.go)）只是提示：写准入不读它；登记、删除与续期“不存在”分支的重登都在实体写门下做，与所有权转换串行；登记 / 续期 / 删除三个 Lua 脚本按值比较（登记比代际，续期不重建键，删除只删自己的值）；Redis 失败只记指标、不影响写准入。前置检查（`ServeRoutedRequest`）没有所有权记录时答不存在，不认领；预加载在写门下向权威复核 owner 后只加载、不写。新增登记点必须持写门，新增删除点用 `dropRoute`（[REMOTE_ENTITY](../REMOTE_ENTITY.md#路由登记)）。
 
 ## 2A. 有界发布调度实现走读
 
@@ -74,7 +76,7 @@ Rejected 的写入点（[batch.go](../../../framework/remoteentity/batch.go)、[
 
 ### remoteentity
 
-26 个实现文件、46 个测试文件。
+28 个实现文件、48 个测试文件。
 
 | 源码 | 导出类型（定位用） |
 | --- | --- |
@@ -91,11 +93,13 @@ Rejected 的写入点（[batch.go](../../../framework/remoteentity/batch.go)、[
 | [local_runtime.go](../../../framework/remoteentity/local_runtime.go) | 函数/方法或内部实现；见源码 |
 | [manager.go](../../../framework/remoteentity/manager.go) | `Manager` |
 | [marker.go](../../../framework/remoteentity/marker.go) | 函数/方法或内部实现；见源码 |
-| [mongo_authority.go](../../../framework/remoteentity/mongo_authority.go) | `WriteAuthority`、`WriteGrant`、`WriteAuthorityProvider` |
+| [mongo_authority.go](../../../framework/remoteentity/mongo_authority.go) | `WriteAuthority`、`WriteGrant`、`WriteAuthorityProvider`、`OwnedEntityLister`、`MongoOwnershipReader` |
 | [mongo_committer.go](../../../framework/remoteentity/mongo_committer.go) | `MongoCommitter`、`AtomicCommitStore` |
 | [mongo_payload.go](../../../framework/remoteentity/mongo_payload.go) | 函数/方法或内部实现；见源码 |
 | [outbox_publish.go](../../../framework/remoteentity/outbox_publish.go) | 函数/方法或内部实现；见源码 |
 | [ownership.go](../../../framework/remoteentity/ownership.go) | 函数/方法或内部实现；见源码 |
+| [route.go](../../../framework/remoteentity/route.go) | `PreloadReport`（路由登记、续期、前置检查与预加载挂在 `Manager` 上） |
+| [route_store.go](../../../framework/remoteentity/route_store.go) | `RouteStore`、`RouteEntry`、`RouteRenewResult`、`OwnershipReader`、`RouteLookup` |
 | [snapshot_client.go](../../../framework/remoteentity/snapshot_client.go) | `SnapshotClient`、`SnapshotClientDeps`、`SnapshotClientStats` |
 | [snapshot_l2.go](../../../framework/remoteentity/snapshot_l2.go) | `SnapshotL2TombstoneWaitStats` |
 | [syncer.go](../../../framework/remoteentity/syncer.go) | `SnapshotReplicaStore` |
@@ -150,11 +154,13 @@ Rejected 的写入点（[batch.go](../../../framework/remoteentity/batch.go)、[
 - [mirror_local_bench_integration_test.go](../../../framework/remoteentity/mirror_local_bench_integration_test.go)
 - [mirror_step4_jetstream_integration_test.go](../../../framework/remoteentity/mirror_step4_jetstream_integration_test.go)：`TestRealJetStreamLiveDurableNameShape`、`TestRealJetStreamLiveSubscriptionConfirmsAndResumes`、`TestRealJetStreamLiveSnapshotPushReachesTheReader`
 - [mongo_authority_test.go](../../../framework/remoteentity/mongo_authority_test.go)：`TestMongoAuthorityFencesUncommittedWriterAndReplaysCommittedTransaction`、`TestMongoAuthoritySharedTransitionsAndOverflow`、`TestMongoAuthorityRejectsUnsupportedMetadata`、`TestMongoAuthorityLostGrantReplyDoesNotAllocateTwice`、`TestOwnerRoutedAdmissionRechecksDurableOwnerDespiteHotCache`；其余 5 项见文件
+- [route_test.go](../../../framework/remoteentity/route_test.go)：`TestRouteIsRegisteredOnWriteAndDeletedWhenOwnershipMovesAway`、`TestRouteRenewalReRegistersMissingKeysOnlyWhileStillTheOwner`、`TestRedisOutageKeepsWriteAdmissionAndFallsBackToTheOwnershipRecord`、`TestServeRoutedRequestNeverClaimsAMissingEntity`、`TestPreloadLoadsOnlyEntitiesThisSidOwns`；其余 2 项见文件
+- [route_redis_integration_test.go](../../../framework/remoteentity/route_redis_integration_test.go)：`TestRealRouteScriptsCompareByValue`（单机与 Cluster）、`TestRealRouteRegistrationExpiresWithoutRenewal`、`TestRealListOwnedRemoteEntitiesFiltersByOwnerAndKind`、`TestRealRouteFollowsOwnershipAcrossTransferAndKill`
 - [outbox_crash_integration_test.go](../../../framework/remoteentity/outbox_crash_integration_test.go)：`TestRemoteOutboxCrashHelper`、`TestRealRemoteOutboxRecoversAfterCommitBeforePublicationCrash`
 - [outbox_test.go](../../../framework/remoteentity/outbox_test.go)：`TestOutboxFailedFirstPageDoesNotStarveLaterTransaction`、`TestOutboxIndependentTransactionsPublishWhileOverlappingTransactionWaits`、`TestOutboxWorkerLimitAndCancellationRetainUnpublishedTransactions`、`TestExplicitOutboxRecoveryIsDrainedBeforeStop`、`TestPublicationFailureDoesNotBlockLaterProjection`；其余 1 项见文件
 - [owner_startup_election_integration_test.go](../../../framework/remoteentity/owner_startup_election_integration_test.go)：`TestMirrorLocalOwnerStorageInitSurvivesAMongoElection`
 - [ownership_redis_integration_test.go](../../../framework/remoteentity/ownership_redis_integration_test.go)：`TestRealRemoteOwnershipClaimAndTransfer`
-- [ownership_test.go](../../../framework/remoteentity/ownership_test.go)：`TestConcurrentOwnershipClaimElectsExactlyOneOwner`、`TestOwnershipModeTransitionsAdvanceMarkerEpoch`、`TestEnterSharedPromiseLostReplyFollowsAuthorityIntoSharedMode`、`TestEnterSharedPromiseLostReplyFreezesUntilAuthorityAnswers`、`TestLeaveSharedPromiseLostReplyFollowsAuthorityIntoLocalOwned`；其余 11 项见文件
+- [ownership_test.go](../../../framework/remoteentity/ownership_test.go)：`TestConcurrentOwnershipClaimElectsExactlyOneOwner`、`TestOwnershipModeTransitionsAdvanceMarkerEpoch`、`TestEnterSharedPromiseLostReplyFollowsAuthorityIntoSharedMode`、`TestEnterSharedPromiseLostReplyFreezesUntilAuthorityAnswers`、`TestLeaveSharedPromiseLostReplyFollowsAuthorityIntoLocalOwned`；其余 12 项见文件（含实体归属守卫 `TestForeignKindIsRejectedBeforeOwnershipClaim`）
 - [pipelined_contract_test.go](../../../framework/remoteentity/pipelined_contract_test.go)：`TestPipelinedRemoteBatchLocalRecordIsFsyncedBeforeVisible`、`TestPipelinedRemoteOutcomeMatchesStrict`
 - [process_lock_integration_test.go](../../../framework/remoteentity/process_lock_integration_test.go)：`TestRemoteLeaseProcessHelper`、`TestRealRemoteProcessKillRecoversLease`、`TestRealRemoteProcessPartitionFencesOldOwner`、`TestRealRemoteColdAdmissionDeadlineUnderLatency`、`TestRealRemoteDurableAuthorityProcessPartition`
 - [redis_acquire_unknown_integration_test.go](../../../framework/remoteentity/redis_acquire_unknown_integration_test.go)：`TestRealVersionedLockReacquiresAfterAcquireReplyLost`、`TestRealVersionedLockReacquiresAcrossUnknownChain`、`TestRealVersionedLockLateAcquireScript`

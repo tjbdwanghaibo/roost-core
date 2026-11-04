@@ -167,9 +167,10 @@ func generatorsFor(m Manifest, force bool) []generator {
 		// only when the content changed, so -force is not needed.
 		{Feature: "rpc", Name: "servicerpc", Prefixes: []string{"internal/rpc/"}, Run: func(root string, w io.Writer) error {
 			for _, dir := range projectRPCDirs(root, m) {
-				// "./" + dir, relative to root: servicerpc writes the flag
-				// into the generated header as the command to rerun.
-				if err := servicerpc.RunIn(root, []string{"-dir", "./" + dir}, w); err != nil {
+				// 在 rpc 包目录里以 -dir . 运行：servicerpc 把参数写进生成文件头作为重跑命令，必须与接口文件的
+				// //go:generate（-dir .）一致，否则 go generate ./... 与 roost generate 互相改写文件头，
+				// generate --check 永远报过期。
+				if err := servicerpc.RunIn(filepath.Join(root, filepath.FromSlash(dir)), []string{"-dir", "."}, w); err != nil {
 					return fmt.Errorf("%s: %w", dir, err)
 				}
 			}
@@ -442,6 +443,10 @@ func runGenerators(ctx context.Context, root string, manifest Manifest, generato
 	} else if partial != "" && !options.DryRun {
 		fmt.Fprintln(options.Stdout, "WARN: "+partial)
 	}
+	// 实体归属服务（//roost:entity service=）：取值必须是声明过的、带 Nest 的业务服务，bootstrap 与归属一致。
+	if err := checkEntityOwnersBeforeGenerate(root, manifest); err != nil {
+		return err
+	}
 	for _, gen := range generators {
 		if !gen.Always && !hasFeature(manifest, gen.Feature) {
 			continue
@@ -707,9 +712,19 @@ func remoteRuntimeHosts(root string, m Manifest) (missing, partial string, err e
 	if err != nil {
 		return "", "", err
 	}
+	// 声明了归属服务（service=）的 kind 只由归属服务写，归属服务带 remote_entity 由 validateEntityOwners 检查；
+	// 别的服务（例如只装 remote_mirror 的只读进程）没有 remote_entity 是预期形状，不再提示。
+	owned, err := projectEntityOwners(root)
+	if err != nil {
+		return "", "", err
+	}
+	ownedNames := map[string]bool{}
+	for _, item := range owned {
+		ownedNames[item.Entity] = true
+	}
 	var managed []string
 	for _, kind := range kinds {
-		if kind.managed {
+		if kind.managed && !ownedNames[kind.name] {
 			managed = append(managed, kind.name)
 		}
 	}

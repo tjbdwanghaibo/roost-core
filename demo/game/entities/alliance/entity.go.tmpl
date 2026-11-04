@@ -1,0 +1,45 @@
+package alliance
+
+import (
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+const EntityKindAlliance entity.EntityKind = 6
+
+// IAllianceEntity is the lock-safe business view used by Nest handlers.
+type IAllianceEntity interface{ entity.IThreadSafeEntity }
+
+// Alliance is one alliance, owned by the alliance service.
+//
+// remote=managed, but never shared: every alliance belongs to one alliance
+// service instance — the one its Remote ownership record names, which is the
+// instance that founded it until an operator transfers it (alliance.transfer)
+// — and only that instance writes it: every write is a route RPC to it. The
+// alliance has one writer, so a transaction takes no distributed lock, only
+// the Remote write admission (a fenced grant in Mongo). Several alliances on
+// the same instance can share one Nest transaction.
+//
+// Category: EntityCategoryRemote, rank 1, before everything — required of a
+// remote-managed kind. A transaction that holds an alliance and a player's
+// AllianceMember (also Remote) orders them by id within the rank.
+//
+// service=alliance declares that once: the kind's Nest handlers are
+// registered only in the alliance service (internal/registry/ownership_gen.go),
+// and every other service's Remote manager refuses to admit a write to it or
+// claim it (WithForeignKinds), so no other process can take a new alliance
+// over by writing it first.
+//
+// preload=startup: an instance loads every alliance it owns when it starts,
+// before its RPC handlers are registered, and registers their routes in Redis
+// (plan §2.7) — alliances are few and stay loaded. A kind without it (the
+// AllianceMember) is loaded on its first request.
+//
+//roost:entity id=6 entityKind=EntityKindAlliance category=entity.EntityCategoryRemote remote=managed service=alliance preload=startup
+type Alliance struct {
+	*entity.RemoteEntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	roster *RosterComponent `comp:"CompTypeRoster"`
+	dao    *db.AllianceDao  `dao:"alliance"`
+}

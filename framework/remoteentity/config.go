@@ -1,9 +1,30 @@
 package remoteentity
 
-import "time"
+import (
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
 
 // Config 是 Remote Entity 模块的配置。
 type Config struct {
+	// ForeignKinds 是声明归属于别的服务的 Remote 托管 kind（实体注解 service=<别的服务>，由生成器 / wiring 传入）。
+	// 本进程对这些 kind 不认领所有权（写准入里的首写认领与 ClaimRemoteOwnership）、不发写许可、不做模式切换与转移，
+	// 一律返回 entity.ErrRemoteKindNotOwned；读（GetRemoteOwnership、快照）不受影响。nil / 空 = 不限制，
+	// 未声明归属的 kind 行为与没有这个字段时逐字相同。
+	ForeignKinds []entity.EntityKind
+	// RouteKinds 是在 Redis 登记路由的 Remote 托管 kind（联盟服务方案 §2.7：声明了 service= 的 kind，生成器 / wiring 经
+	// ModOption 传入，不是 YAML 键）。本进程加载这些 kind 的独占实体后登记“实体 ID → sid + 所有权代际”，续期、转移出去
+	// 与停机时删除。nil / 空 = 不登记，行为与没有这个字段时逐字相同。
+	RouteKinds []entity.EntityKind
+	// PreloadKinds 是起服预加载的 Remote 托管 kind（实体注解 preload=startup，经 ModOption 传入）：
+	// wiring/remoteentity.RemotePreloadMod 在启动时对它们调 Manager.PreloadOwnedEntities。nil / 空 = 不预加载。
+	PreloadKinds []entity.EntityKind
+	// RouteTTL / RouteRenewInterval / RouteRenewBatch 是路由登记的 TTL、续期间隔与每批键数；零值取 DefaultRouteTTL（30s）、
+	// DefaultRouteRenewInterval（10s）与 DefaultRouteRenewBatch（1000）。不是 YAML 键，测试用来缩短时间。
+	RouteTTL             time.Duration
+	RouteRenewInterval   time.Duration
+	RouteRenewBatch      int
 	MaxWriteBatch        int
 	SnapshotCacheShards  int
 	SnapshotCacheEntries int

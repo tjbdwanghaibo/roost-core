@@ -108,6 +108,50 @@ func buildService(facts pkgFacts, pkgName, path, name string, options map[string
 			"— so rename the existing one",
 			where, emitted, emitted, kind, pkgName, emitted)
 	}
+	// route 方法按实体的 owner 选实例（联盟服务方案 §2.3、§2.10 第 2 项，维护者 2026-11-04“按推荐”）：路由键是方法的
+	// int64 参数，取完整 Entity ID——kind 在 ID 里，Redis 路由登记与持久所有权记录都按它查，标记不用再写 kind。
+	// 路由是方法级策略（维护者 2026-11-04）：一个服务里可以同时有 route、affinity= 与不标的方法，每个方法按自己的标记
+	// 选路径；同一个方法不能既按 owner 又按 key 的哈希选实例。
+	for index := range service.Methods {
+		method := &service.Methods[index]
+		if method.Route == "" {
+			continue
+		}
+		if method.Affinity != "" {
+			return Service{}, fmt.Errorf("%s: method %s declares both route and affinity=; a call goes either to the entity's owner or to an affinity instance, not both",
+				where, method.Name)
+		}
+		var found *Field
+		for i := range method.Params {
+			if method.Params[i].Name == method.Route {
+				found = &method.Params[i]
+				break
+			}
+		}
+		if found == nil {
+			return Service{}, fmt.Errorf("%s: method %s is a route method keyed by %s, but it has no parameter %s; "+
+				"write //roost:rpc route=<param> to name the int64 parameter that holds the entity id", where, method.Name, method.Route, method.Route)
+		}
+		if found.Type != "int64" {
+			return Service{}, fmt.Errorf("%s: method %s is a route method keyed by %s, but %s is %s; the route key is the int64 full entity id of the entity the call acts on",
+				where, method.Name, method.Route, found.Name, found.Type)
+		}
+	}
+	// 参数与结果导出后成为线上结构体的字段：请求结构体只有参数，响应结构体内嵌封套 rpcStatus（Code / Reason），route
+	// 方法的响应还有 RedirectSid。同名时 Go 能编译（外层字段遮住内嵌字段），但 msgpack 在第一次编解码时报
+	// "already has field=Code"，请求永远得不到答复——-entity-service 骨架的 Result 曾把结果叫 code，就是这样坏的。
+	for _, method := range service.Methods {
+		reserved := map[string]string{"Code": "the response envelope's status code", "Reason": "the response envelope's reason"}
+		if method.Route != "" {
+			reserved["RedirectSid"] = "the route response's redirect sid"
+		}
+		if err := checkWireFields(where, method.Name, "result", method.Results, reserved); err != nil {
+			return Service{}, err
+		}
+		if err := checkWireFields(where, method.Name, "parameter", method.Params, nil); err != nil {
+			return Service{}, err
+		}
+	}
 	// Affinity is read off an argument at call time, so it has to name one.
 	//
 	// Two forms are accepted: a bare parameter, which must be a string, and
@@ -177,6 +221,9 @@ func emittedNames(service Service) []string {
 		if method.Affinity != "" && !slices.Contains(names, "AffinityMethods") {
 			names = append(names, "AffinityMethods")
 		}
+		if method.Route != "" && !slices.Contains(names, "redirectSID") {
+			names = append(names, "redirectSID", "RouteMethods", "RouteChecker")
+		}
 		names = append(names,
 			"Method"+method.Name,
 			"rpc"+method.Name+"Request",
@@ -191,6 +238,13 @@ func buildMethod(index typeIndex, where string, item *ast.Field, funcType *ast.F
 	method := Method{Name: name, Doc: commentLines(item.Doc)}
 	if options, ok := interfaceMarker(item.Doc, item.Comment); ok {
 		method.Affinity = options["affinity"]
+		// route 是标志也是键：只写 route 时键是名为 target 的参数，route=<param> 指定别的参数。
+		if route, ok := options["route"]; ok {
+			if route == "true" {
+				route = "target"
+			}
+			method.Route = route
+		}
 		if _, reliable := options["reliable"]; reliable {
 			return Method{}, fmt.Errorf("%s: method %s cannot select reliable per method; configure nats.rpc.transport=jetstream on both owner and client", where, name)
 		}
@@ -349,4 +403,22 @@ func commentLines(group *ast.CommentGroup) []string {
 		lines = append(lines, text)
 	}
 	return lines
+}
+
+// checkWireFields 拒绝导出后与线上结构体已有字段（reserved：字段名 → 它是什么）或彼此同名的参数 / 结果。
+func checkWireFields(where, method, what string, fields []Field, reserved map[string]string) error {
+	seen := map[string]string{}
+	for _, field := range fields {
+		exported := exportName(field.Name)
+		if holder, ok := reserved[exported]; ok {
+			return fmt.Errorf("%s: method %s has a %s %s, which becomes the wire field %s — already %s; rename the %s",
+				where, method, what, field.Name, exported, holder, what)
+		}
+		if other, ok := seen[exported]; ok {
+			return fmt.Errorf("%s: method %s has %ss %s and %s, which both become the wire field %s; rename one",
+				where, method, what, other, field.Name, exported)
+		}
+		seen[exported] = field.Name
+	}
+	return nil
 }

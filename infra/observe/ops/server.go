@@ -22,6 +22,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/internal/operation"
 )
 
 const opsMaxJSONBodyBytes int64 = 1 << 20
@@ -51,6 +52,9 @@ type Server struct {
 	stats        func() (any, error)
 	ready        atomic.Bool
 	readyMsg     atomic.Value
+	// commandCalls 是 /admin/execute 的准入与在途计数：CloseIngress（App 停机第一步）关准入、等在跑的命令结束；
+	// 健康、就绪、指标不受影响，留到 Stop。
+	commandCalls operation.Lifetime
 }
 
 // Config 是运行参数；配置读取、进程能力查找和就绪生命周期接线属于 Wiring。
@@ -164,6 +168,20 @@ func (m *Server) Stop() {
 	if err := m.StopWithContext(ctx); err != nil {
 		slog.Warn("ops: shutdown failed", "err", err)
 	}
+}
+
+// CloseIngress 关 /admin/execute 的准入并在 ctx 内等在跑的命令结束（App 停机第一步，app.IngressCloser；OpsMod 内嵌
+// Server，自动实现）。之后的命令答 503、不执行：运维命令（例如迁移实体）用的 Nest / Remote 随后就停。健康、就绪、
+// 指标照常，直到 StopWithContext。ctx 先结束返回 ctx 错误，可再调用继续等；重复调用返回 nil。
+func (m *Server) CloseIngress(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m.commandCalls.Stop()
+	if err := m.commandCalls.Wait(ctx); err != nil {
+		return fmt.Errorf("ops: admin commands still running: %w", err)
+	}
+	return nil
 }
 
 func (m *Server) StopWithContext(ctx context.Context) error {
@@ -312,6 +330,13 @@ func (m *Server) handleAdminExecute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "admin registry unavailable"})
 		return
 	}
+	if !m.commandCalls.Begin() {
+		slog.Warn("admin execute refused", "outcome", "stopping", "remote_addr", r.RemoteAddr, "command", cmd.Name)
+		metrics.IncCounter("admin.http_refused.total", metrics.Labels{"reason": "stopping"}, 1)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "service stopping; command not executed"})
+		return
+	}
+	defer m.commandCalls.End()
 	if cmd.TraceID == "" {
 		cmd.TraceID = rand.Text()
 	}

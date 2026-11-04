@@ -33,7 +33,11 @@ type Manager struct {
 	ownershipStore  entity.IRemoteEntityOwnershipStore
 	cfg             *Config
 	localSid        int32
-	remote          *remoteState
+	// foreignKinds 是 cfg.ForeignKinds 的集合，构造时冻结；空表示不限制（见 rejectForeignKind）。
+	foreignKinds map[entity.EntityKind]struct{}
+	remote       *remoteState
+	// routes 是 Redis 路由登记（route.go）；没有登记 kind 时为 nil。Assemble 在封存依赖之前设置。
+	routes *routeRegistry
 	// snapshots 是快照读、兴趣、复制接收与它们的生命周期。Manager 只组合并委托它，
 	// owner 的提交后发布经它的包内入口 publishCommitted。
 	snapshots *SnapshotClient
@@ -120,6 +124,12 @@ func NewManager(lockFactory redis.IVersionedLockFactory, cfg *Config, localSid i
 			mgr.lockFactoryErr = fmt.Errorf("remote_entity: lock factory %T does not provide fenced locks (redis.IFencedVersionedLock); shared entities cannot be served", lockFactory)
 		}
 	}
+	if cfg != nil && len(cfg.ForeignKinds) > 0 {
+		mgr.foreignKinds = make(map[entity.EntityKind]struct{}, len(cfg.ForeignKinds))
+		for _, kind := range cfg.ForeignKinds {
+			mgr.foreignKinds[kind] = struct{}{}
+		}
+	}
 	mgr.remote = newRemoteState(cfg)
 	var l2 cache.Store[entity.RemoteSnapshotKey, entity.RemoteSnapshotEnvelope]
 	if len(snapshotL2) > 0 {
@@ -137,6 +147,17 @@ func NewManager(lockFactory redis.IVersionedLockFactory, cfg *Config, localSid i
 		},
 	})
 	return mgr
+}
+
+// rejectForeignKind 是实体归属守卫：kind 声明归属于别的服务时返回 ErrRemoteKindNotOwned。所有会认领所有权、
+// 发写许可或改所有权的入口（PrepareRemoteWriteBatch、beginOwnershipTransition）在读写任何所有权记录之前调用它，
+// 所以别的服务的进程即使先写到一个新实体，也不会把它认领走。没有配置 ForeignKinds 时恒为 nil。
+func (m *Manager) rejectForeignKind(id int64, kind entity.EntityKind) error {
+	if _, foreign := m.foreignKinds[kind]; !foreign {
+		return nil
+	}
+	metrics.IncCounter("remote_entity.foreign_kind_rejected_total", nil, 1)
+	return fmt.Errorf("%w: entity=%d kind=%d sid=%d", entity.ErrRemoteKindNotOwned, id, kind, m.localSid)
 }
 
 // LockFactoryError 返回本 Manager 不会创建 wrapper 的原因，没有时为 nil。Mod 把它转成 Provide 失败，配置错误的部署

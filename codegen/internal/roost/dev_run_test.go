@@ -134,3 +134,25 @@ func TestDevRunRegistersTheGameServerOnTheAccountServicesRedisCluster(t *testing
 		})
 	}
 }
+
+// The game is the business service players connect to, not the first business
+// service by name: a project that adds another business service named before
+// it (game-demo's alliance service) must still run its second local process,
+// its activity group and its stop budgets for the game.
+func TestFirstBusinessServiceIsThePlayerAccessService(t *testing.T) {
+	m := Manifest{
+		Services: map[string]ServiceSpec{
+			"account":  {Framework: "account"},
+			"alliance": {Mods: []string{"nest"}},
+			"game":     {Mods: []string{"nest"}},
+		},
+		Access: map[string]AccessSpec{"player": {Service: "game"}},
+	}
+	if got := firstBusinessService(m); got != "game" {
+		t.Fatalf("firstBusinessService = %q, want the player access service game", got)
+	}
+	delete(m.Access, "player")
+	if got := firstBusinessService(m); got != "alliance" {
+		t.Fatalf("without player access: firstBusinessService = %q, want the first business service by name", got)
+	}
+}

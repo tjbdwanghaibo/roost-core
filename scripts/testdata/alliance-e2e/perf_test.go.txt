@@ -1,0 +1,225 @@
+package e2e
+
+// 短测（ALLIANCE_E2E_PERF=1，单轮 ≤ 30 分钟；方案 §2.7 续期量估算、KNOWN-LIMITS 路由边界 ①⑥）：
+//   - 路由 RPC 延迟：带路由缓存的客户端顺序 / 16 并发调 Info、Join；
+//   - 预加载起服时间与常驻内存随“owner 是本 sid 的联盟数”（ALLIANCE_E2E_PERF_COUNTS，缺省 1000,10000）：四个实例并发建盟
+//     （Found 在一个实例上按方法串行，约 9 个/秒），再用 alliance.transfer 全部转给 3000，3000 正常停机后同 sid 拉起；
+//   - 续期量：拉起后 30s 内 route_renew_total{result="renewed"} 的增量，折算成每 10s。
+// Mirror 回源量在 TestAllianceE2EMirrorRevalidation（同样只在 ALLIANCE_E2E_PERF=1 时跑）。
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"example.com/planet/protocol/msgid"
+	"example.com/planet/protocol/pb"
+)
+
+func perfOnly(t *testing.T) {
+	if os.Getenv("ALLIANCE_E2E_PERF") != "1" {
+		t.Skip("ALLIANCE_E2E_PERF=1 not set")
+	}
+}
+
+func durations(sorted []time.Duration) string {
+	return fmt.Sprintf("p50 %v p99 %v max %v", percentile(sorted, .5).Round(10*time.Microsecond), percentile(sorted, .99).Round(10*time.Microsecond), sorted[len(sorted)-1].Round(10*time.Microsecond))
+}
+
+func TestAllianceE2EShortPerf(t *testing.T) {
+	perfOnly(t)
+	s := newSuite(t, 40*time.Minute)
+	counts := []int{1000, 10000}
+	if raw := os.Getenv("ALLIANCE_E2E_PERF_COUNTS"); raw != "" {
+		counts = nil
+		for _, field := range strings.Split(raw, ",") {
+			n, _ := strconv.Atoi(field)
+			counts = append(counts, n)
+		}
+	}
+	var procs []*proc
+	for i := 0; i < 4; i++ {
+		// alliance.transfer {count} 扫 DAO 集合再逐个读所有权，上万个实体时超过缺省的 ops.admin_timeout 10s（KNOWN-LIMITS），短测放宽。
+		procs = append(procs, s.start(fmt.Sprintf("alliance-%d", 3000+i), "alliance", int32(3000+i), procOptions{keys: [][3]string{{"ops", "admin_timeout", "600s"}}}))
+	}
+	a := procs[0]
+	client := s.client(nil, 20*time.Second)
+
+	// 路由 RPC 延迟（四个实例都在，联盟分在各实例；客户端带缓存）。
+	ids, took := s.foundMany(client, 64, 1_000_000, 16)
+	t.Logf("PERF founded 64 alliances on 4 instances in %v", took.Round(time.Millisecond))
+	measure := func(name string, conc, perWorker int, call func(ctx context.Context, w, i int) error) {
+		var mu sync.Mutex
+		var lat []time.Duration
+		failed := 0
+		start := time.Now()
+		var wg sync.WaitGroup
+		for w := 0; w < conc; w++ {
+			w := w
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := 0; i < perWorker; i++ {
+					st := time.Now()
+					err := call(s.ctx, w, i)
+					mu.Lock()
+					lat = append(lat, time.Since(st))
+					if err != nil {
+						failed++
+					}
+					mu.Unlock()
+				}
+			}()
+		}
+		wg.Wait()
+		sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
+		t.Logf("PERF latency %s conc=%d n=%d failed=%d %.0f/s %s", name, conc, len(lat), failed, float64(len(lat))/time.Since(start).Seconds(), durations(lat))
+	}
+	measure("info", 1, 1000, func(ctx context.Context, w, i int) error {
+		_, err := client.Info(ctx, target(t, ids[i%len(ids)]))
+		return err
+	})
+	measure("info", 16, 125, func(ctx context.Context, w, i int) error {
+		_, err := client.Info(ctx, target(t, ids[(w*125+i)%len(ids)]))
+		return err
+	})
+	measure("info-one-instance", 16, 40, func(ctx context.Context, w, i int) error {
+		_, err := client.Info(ctx, target(t, ids[0]))
+		return err
+	})
+	measure("join", 1, 200, func(ctx context.Context, w, i int) error {
+		p := int64(2_000_000 + i)
+		_, err := client.Join(ctx, fmt.Sprint("perf-join-", p), p, 1000, target(t, ids[i%len(ids)]))
+		return err
+	})
+	measure("join", 16, 25, func(ctx context.Context, w, i int) error {
+		p := int64(2_100_000 + w*100 + i)
+		_, err := client.Join(ctx, fmt.Sprint("perf-join-", p), p, 1000, target(t, ids[(w*25+i)%len(ids)]))
+		return err
+	})
+
+	founded := len(ids)
+	leaderBase := int64(3_000_000)
+	for _, n := range counts {
+		if more := n - founded; more > 0 {
+			_, took := s.foundMany(client, more, leaderBase, 24)
+			leaderBase += int64(more)
+			founded = n
+			t.Logf("PERF founded %d more alliances on 4 instances in %v (%.0f/s)", more, took.Round(time.Second), float64(more)/took.Seconds())
+		}
+		start := time.Now()
+		moved := 0
+		for _, p := range procs[1:] {
+			for {
+				data := s.admin(p, "alliance.transfer", map[string]any{"count": 100000, "to_sid": 3000})
+				list, _ := data["moved"].([]any)
+				pending, _ := data["pending"].([]any)
+				moved += len(list)
+				if len(list) == 0 && len(pending) == 0 {
+					break
+				}
+			}
+		}
+		t.Logf("PERF transferred %d entities (alliances and founders' guards) to 3000 in %v", moved, time.Since(start).Round(time.Millisecond))
+		s.stop(a, syscall.SIGINT)
+		launched := time.Now()
+		s.launch(a)
+		s.waitReady(a, 5*time.Minute)
+		ready := time.Since(launched)
+		pStart, pDone, _, report := preloadWindow(t, a.log)
+		rss := rssMB(a)
+		r0 := s.metric(a, "remote_entity_route_renew_total", `result="renewed"`)
+		time.Sleep(30 * time.Second)
+		r1 := s.metric(a, "remote_entity_route_renew_total", `result="renewed"`)
+		t.Logf("PERF n=%d owned by 3000: preload listed=%d loaded=%d failed=%d took %v; start→ready %v; rss after preload %.0f MiB (30s later %.0f MiB); renewals %.0f per 10s",
+			n, report.Listed, report.Loaded, report.Failed, pDone.Sub(pStart).Round(time.Millisecond), ready.Round(time.Millisecond), rss, rssMB(a), (r1-r0)/3)
+	}
+}
+
+// redisCalls 是 Redis INFO commandstats 里某个命令的累计调用数。
+func (s *suite) redisCalls(command string) int64 {
+	info, err := s.redis.Info(s.ctx, "commandstats").Result()
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	for _, line := range strings.Split(info, "\n") {
+		if !strings.HasPrefix(line, "cmdstat_"+command+":") {
+			continue
+		}
+		for _, field := range strings.Split(strings.TrimPrefix(line, "cmdstat_"+command+":"), ",") {
+			if v, ok := strings.CutPrefix(field, "calls="); ok {
+				n, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+				return n
+			}
+		}
+	}
+	return 0
+}
+
+// TestAllianceE2EMirrorRevalidation：game 读公会走只读 Mirror（Monotonic）；推送正常时缓存的快照超过 cached_max_staleness
+// 才回 L2（Redis HGET）重新确认。两轮各起一套全栈，cached_max_staleness 分别 30s / 5s：20 个玩家在 game 1000 上每 250ms 读
+// 一次“我的公会”（守卫 + 联盟两个 Mirror），60s；回源量取 Redis 的 HGET 调用增量减去同长度无读取窗口的底噪。
+func TestAllianceE2EMirrorRevalidation(t *testing.T) {
+	perfOnly(t)
+	for _, staleness := range []string{"30s", "5s"} {
+		t.Run(staleness, func(t *testing.T) {
+			s := newSuite(t, 15*time.Minute)
+			games, _ := s.fullStack(procOptions{keys: [][3]string{{"remote_entity", "cached_max_staleness", staleness}}})
+			leader := s.login(games[0], s.prefix+"-leader")
+			leader.addGold(1000)
+			status := leader.waitOp("found", leader.startOp("found", &pb.FoundGuildRequest{Name: "mirror guild", OpenJoin: true}), time.Minute)
+			if status.Status != "completed" {
+				t.Fatalf("found: %+v", status)
+			}
+			var readers []*player
+			for i := 0; i < 20; i++ {
+				p := s.login(games[0], fmt.Sprintf("%s-r%d", s.prefix, i))
+				join := call(p, msgid.MsgJoinGuild, &pb.JoinGuildRequest{GuildID: status.GuildID}, pb.MarshalJoinGuildRequest, pb.UnmarshalGuildResponse)
+				if join.Code != 0 {
+					t.Fatalf("join: %+v", join)
+				}
+				readers = append(readers, p)
+			}
+			time.Sleep(5 * time.Second)
+			window := 60 * time.Second
+			idle0 := s.redisCalls("hget")
+			time.Sleep(window)
+			idle := s.redisCalls("hget") - idle0
+			busy0 := s.redisCalls("hget")
+			var mu sync.Mutex
+			var lat []time.Duration
+			var wg sync.WaitGroup
+			end := time.Now().Add(window)
+			for _, p := range readers {
+				wg.Add(1)
+				go func(p *player) {
+					defer wg.Done()
+					for time.Now().Before(end) {
+						st := time.Now()
+						resp := p.guildInfo(0, 0)
+						mu.Lock()
+						lat = append(lat, time.Since(st))
+						mu.Unlock()
+						if resp.Code != 0 || resp.GuildID != status.GuildID {
+							t.Errorf("guild_info: %+v", resp)
+							return
+						}
+						time.Sleep(250 * time.Millisecond)
+					}
+				}(p)
+			}
+			wg.Wait()
+			busy := s.redisCalls("hget") - busy0
+			sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
+			t.Logf("MIRROR cached_max_staleness=%s: %d guild_info reads (2 mirror keys each, 21 distinct keys) in %v; Redis HGET %d (idle window %d) → %.1f revalidations/s over the idle floor; guild_info %s",
+				staleness, len(lat), window, busy, idle, float64(busy-idle)/window.Seconds(), durations(lat))
+		})
+	}
+}

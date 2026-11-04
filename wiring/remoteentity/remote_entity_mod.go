@@ -32,6 +32,11 @@ type RemoteEntityMod struct {
 	backend     entity.IRemoteEntityBackend
 	mongoLoader entity.IRemoteEntityLoader
 	mongoConfig coreremote.MongoBackendConfig
+	// foreignKinds 见 WithForeignKinds；Init 校验后写进 coreremote.Config.ForeignKinds。
+	foreignKinds []entity.EntityKind
+	// routeKinds / preloadKinds 见 WithRouteKinds / WithPreloadKinds；Init 校验后写进 coreremote.Config。
+	routeKinds   []entity.EntityKind
+	preloadKinds []entity.EntityKind
 }
 
 type ModOption func(*RemoteEntityMod)
@@ -45,6 +50,31 @@ func WithBackend(backend entity.IRemoteEntityBackend) ModOption {
 // from the registered Mongo capability.
 func WithMongoStorage(loader entity.IRemoteEntityLoader) ModOption {
 	return func(mod *RemoteEntityMod) { mod.mongoLoader = loader }
+}
+
+// WithForeignKinds 声明归属于别的服务的 Remote 托管 kind（联盟服务方案 §2.10 第 1 条）：本进程对它们不认领所有权、
+// 不发写许可，写准入与 ClaimRemoteOwnership 返回 entity.ErrRemoteKindNotOwned。生成工程由实体注解 service=<name>
+// 推出列表（每个服务传“归属于别的服务的 kind”）；手写装配直接传。不传 = 不限制，未声明归属的 kind 行为不变。
+// Init 时校验一次：每个 kind 都必须是已注册的 Remote 托管 kind。
+func WithForeignKinds(kinds ...entity.EntityKind) ModOption {
+	return func(mod *RemoteEntityMod) { mod.foreignKinds = append(mod.foreignKinds, kinds...) }
+}
+
+// WithRouteKinds 声明本服务在 Redis 登记路由的 Remote 托管 kind（联盟服务方案 §2.7：声明了 service=<本服务> 的 kind，
+// 生成器由同一次扫描推出，与 WithForeignKinds 同一种传法，不加 YAML 键）。本进程加载这些 kind 的独占实体后登记
+// “实体 ID → sid + 所有权代际”（TTL 30s，每 10s 批量续期），转移出去、失去所有权与正常停机时按值删除；调用方经
+// RouteSource 找 owner。不传 = 不登记，行为不变。Init 时校验一次：必须是已注册的 Remote 托管 kind，且不在
+// WithForeignKinds 里。
+func WithRouteKinds(kinds ...entity.EntityKind) ModOption {
+	return func(mod *RemoteEntityMod) { mod.routeKinds = append(mod.routeKinds, kinds...) }
+}
+
+// WithPreloadKinds 声明起服预加载的 Remote 托管 kind（实体注解 preload=startup）：RemotePreloadMod 在启动时加载所有权
+// 记录里 owner 是本 sid 的这些 kind 的实体并登记路由，完成前路由 RPC 的 owner Mod 不注册 handler。不传 = 只按需
+// 冷加载。Init 时校验一次：必须是已注册的 Remote 托管 kind，且不在 WithForeignKinds 里；配置检查时要求同一服务装了
+// NewRemotePreloadMod。
+func WithPreloadKinds(kinds ...entity.EntityKind) ModOption {
+	return func(mod *RemoteEntityMod) { mod.preloadKinds = append(mod.preloadKinds, kinds...) }
 }
 
 func NewRemoteEntityMod(localSid int32, opts ...ModOption) *RemoteEntityMod {
@@ -100,7 +130,53 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	// DAO 文档的库名映射由 DataEngine Mod 冻结，engine.Assemble 接 Remote 投影（remote_entity.atomic_store）时
 	// 经 MongoStore.SetRemoteProjection 绑过来；存储未绑定就写 DAO 文档一律拒绝（dataengine.ErrDatabaseMapNotBound），
 	// 不按逻辑库名写错库。
+	for _, kind := range m.foreignKinds {
+		if !entity.IsEntityKindRemoteManaged(kind) {
+			return fmt.Errorf("remote_entity mod: foreign kind %d is not a registered Remote-managed (remote=managed) kind", kind)
+		}
+	}
+	m.cfg.ForeignKinds = append([]entity.EntityKind(nil), m.foreignKinds...)
+	routeKinds, err := m.ownedKinds("route", m.routeKinds)
+	if err != nil {
+		return err
+	}
+	preloadKinds, err := m.ownedKinds("preload", m.preloadKinds)
+	if err != nil {
+		return err
+	}
+	m.cfg.RouteKinds, m.cfg.PreloadKinds = routeKinds, preloadKinds
 	m.mongoConfig = coreremote.MongoBackendConfig{Database: re.Mongo.Database, TransactionTTL: re.Mongo.TransactionTTL}
+	return nil
+}
+
+// ownedKinds 校验 WithRouteKinds / WithPreloadKinds 的列表：已注册的 Remote 托管 kind、不归别的服务、不重复。
+func (m *RemoteEntityMod) ownedKinds(option string, kinds []entity.EntityKind) ([]entity.EntityKind, error) {
+	seen := make(map[entity.EntityKind]struct{}, len(kinds))
+	out := make([]entity.EntityKind, 0, len(kinds))
+	for _, kind := range kinds {
+		if !entity.IsEntityKindRemoteManaged(kind) {
+			return nil, fmt.Errorf("remote_entity mod: %s kind %d is not a registered Remote-managed (remote=managed) kind", option, kind)
+		}
+		for _, foreign := range m.foreignKinds {
+			if foreign == kind {
+				return nil, fmt.Errorf("remote_entity mod: %s kind %d is also declared foreign (owned by another service)", option, kind)
+			}
+		}
+		if _, dup := seen[kind]; dup {
+			continue
+		}
+		seen[kind] = struct{}{}
+		out = append(out, kind)
+	}
+	return out, nil
+}
+
+// CheckConfigAcrossMods（app.ModConfigCrossChecker）：声明了预加载 kind 的服务必须装 RemotePreloadMod，否则这些 kind
+// 不会被预加载、路由 RPC 也不会等它。
+func (m *RemoteEntityMod) CheckConfigAcrossMods(_ *viper.Viper, registered func(app.ModName) bool) error {
+	if m != nil && len(m.preloadKinds) > 0 && !registered(mods.ModRemoteEntityPreload) {
+		return fmt.Errorf("remote_entity mod: preload kinds %v are declared (WithPreloadKinds) but %q is not installed; add wiring/remoteentity.NewRemotePreloadMod()", m.preloadKinds, mods.ModRemoteEntityPreload)
+	}
 	return nil
 }
 
@@ -131,6 +207,11 @@ func (m *RemoteEntityMod) Provide(r *app.Registry) error {
 		return err
 	}
 	m.asm = asm
+	// 路由查找：Redis 登记 → 写 Manager 读持久所有权记录（本进程调别的实例上的路由 RPC 时用）。
+	routes, err := newRouteResolver(redis, m.cfg.SnapshotL2KeyPrefix, asm.Manager)
+	if err != nil {
+		return fmt.Errorf("remote_entity mod: %w", err)
+	}
 
 	// Register into app registry
 	if err := mods.RegisterAll(r,
@@ -140,6 +221,7 @@ func (m *RemoteEntityMod) Provide(r *app.Registry) error {
 		// 同进程的只读读取与只读服务用同一个能力名（Mirror 第 5 步）：业务读 DTO 的代码在两处一样。
 		// 只读的 RemoteMirrorMod 再装进同一进程会撞这个名字、启动即失败——同一 sid 不开第二个客户端。
 		mods.Capability{Name: mods.ModRemoteMirror, Value: entity.RemoteSnapshotReadOnly(asm.Manager.SnapshotClient())},
+		mods.Capability{Name: mods.ModRemoteRoute, Value: routes},
 	); err != nil {
 		return err
 	}

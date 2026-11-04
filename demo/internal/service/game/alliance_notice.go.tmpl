@@ -1,0 +1,105 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	"{{MODULE}}/game/effects"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/ownerroute"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// The alliance service's membership notices (plan §2.5, decision 5 A): when a
+// player's membership changes — they joined, left, were kicked — the alliance
+// instance that made the change sends rpcalliance.MemberNotice to the game
+// server the player belongs to (bus module rpcalliance.NoticeModule, message
+// "alliance.member_notice", addressed <game>/<home sid>). This process updates
+// what an ONLINE player is shown (PlayerDao.GuildID, a display field) and
+// pushes GuildNotice to their client.
+//
+// Best effort, by decision: the notice is not stored or retried. A player who
+// is offline gets nothing now — their next login reads the guard mirror
+// (game/controllers/player enter_game.go). A notice that is lost, or arrives
+// out of order, leaves the display stale until the next login or the next
+// notice; no decision reads the display.
+
+// guildNoticePush is the push side of the player connection the notices use.
+type guildNoticePush interface {
+	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
+	ActiveSessions(playerID int64) int
+}
+
+type guildNotices struct {
+	nest corenest.Client
+	push guildNoticePush
+}
+
+// installGuildNotices registers the notice handler on the bus. It runs in
+// Init, after the player transport is assembled.
+func installGuildNotices(registry *app.Registry) error {
+	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || nestClient == nil {
+		return errors.New("guild notices: nest client is unavailable")
+	}
+	transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
+	if !ok || transport == nil {
+		return errors.New("guild notices: player tcp runtime is unavailable")
+	}
+	busClient, ok := app.Lookup[bus.IBus](registry, mods.ModBus)
+	if !ok || busClient == nil {
+		return fmt.Errorf("guild notices: capability %q not found", mods.ModBus)
+	}
+	notices := guildNotices{nest: nestClient, push: transport}
+	if err := ownerroute.RegisterBusHandler(busClient, rpcalliance.NoticeModule, rpcalliance.MemberNotice{}.MsgName(), notices.apply); err != nil {
+		return fmt.Errorf("guild notices: register handler: %w", err)
+	}
+	return nil
+}
+
+// apply handles one notice. It never fails the delivery: there is nothing to
+// retry towards (the sender does not wait), and the next login corrects the
+// display anyway.
+func (n guildNotices) apply(ctx context.Context, notice *rpcalliance.MemberNotice) error {
+	if notice == nil || notice.PlayerID <= 0 || notice.AllianceID <= 0 {
+		return nil
+	}
+	// Online here, or nothing to do. The check is what keeps a notice from
+	// loading an offline player into this process just to change a field that
+	// is not persisted.
+	if n.push.ActiveSessions(notice.PlayerID) == 0 {
+		return nil
+	}
+	shown, replaces := notice.AllianceID, int64(0)
+	switch notice.Change {
+	case effects.MemberJoined:
+	case effects.MemberLeft, effects.MemberKicked:
+		shown, replaces = 0, notice.AllianceID
+	default:
+		slog.Debug("guild notice: unknown change", "player_id", notice.PlayerID, "change", notice.Change)
+		return nil
+	}
+	playerID, err := entity.BuildEntityID(notice.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil
+	}
+	if _, err := syncsender.NewShowGuildSender(n.nest).Sync_ShowGuild(ctx, playerID, shown, replaces); err != nil {
+		slog.Debug("guild notice: display not updated; the next login reads the mirror", "player_id", notice.PlayerID, "err", err)
+	}
+	push := pb.GuildNoticePush{GuildID: notice.AllianceID, Change: notice.Change, Version: notice.Version}
+	if err := n.push.PushPlayer(ctx, notice.PlayerID, msgid.MsgGuildNotice, &push); err != nil {
+		slog.Debug("guild notice: push not delivered", "player_id", notice.PlayerID, "err", err)
+	}
+	return nil
+}

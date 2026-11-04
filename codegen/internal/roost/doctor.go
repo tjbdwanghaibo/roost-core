@@ -103,7 +103,7 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 	report.Items = append(report.Items, checkConfigSections(root, m)...)
 	report.Items = append(report.Items, checkConfigAcrossServicesItem(root, m))
 	report.Items = append(report.Items, checkConfigReads(root))
-	report.Items = append(report.Items, checkShutdownBudgets(root, m)...)
+	report.Items = append(report.Items, checkShutdownBudgets(root, m.withEntityOwners(root))...)
 	report.Items = append(report.Items, checkLogicOffsets(root, m))
 	// 合服清单要编译工程里的 cmd/sidmerge；编译不过时这一项是 WARN（compile:go-list 另报 FAIL）。
 	if item, ok := checkMergeReadiness(ctx, root, goAvailable); ok {
@@ -120,6 +120,7 @@ func DoctorWithOptions(ctx context.Context, root string, options DoctorOptions, 
 		report.Items = append(report.Items, item)
 	}
 	report.Items = append(report.Items, checkStepAndEffectWiring(root, m)...)
+	report.Items = append(report.Items, checkEntityOwnerUse(root, m)...)
 	report.Items = append(report.Items, checkWebRouteServing(root, m)...)
 	if selfSyncEnabled(m) {
 		if status, err := checkSelfSync(root, m); err != nil {
@@ -1164,11 +1165,11 @@ func diffManifest(root string, m Manifest, includeManifest bool, stdout io.Write
 			}
 		}
 	}
-	refreshed, err := refreshGeneratedShutdownConfigs(shutdownStage, m)
+	refreshed, err := refreshGeneratedShutdownConfigs(shutdownStage, m.withEntityOwners(root))
 	if err != nil {
 		return fmt.Errorf("preview shutdown.total_timeout refresh: %w", err)
 	}
-	plan, err := renderProject(m.withConfiguredShutdown(shutdownStage).withServicePackages(root))
+	plan, err := renderProject(m.withConfiguredShutdown(shutdownStage).withServicePackages(root).withEntityOwners(root))
 	if err != nil {
 		return err
 	}

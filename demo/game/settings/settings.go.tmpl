@@ -30,6 +30,7 @@ type Config struct {
 	app.ServiceIdentity
 	Activity Activity `config:"activity"`
 	Platform Platform `config:"platform"`
+	Guild    Guild    `config:"guild"`
 	Scene    Scene    `config:"scene"`
 }
 
@@ -58,6 +59,13 @@ type Platform struct {
 
 // ValidateConfig checks what the tags cannot: a key prefix with whitespace in
 // it would put this process's keys somewhere the coordinator never looks.
+// Guild is what a guild costs in this game: the alliance service decides
+// membership, the game decides prices (game/guild). Declared once here and
+// checked when the process starts.
+type Guild struct {
+	FoundCost int32 `config:"found_cost" default:"100" min:"1" max:"9999" example:"100" help:"gold coins (item 9001) the found_guild saga takes from the founder, refunded when the alliance service refuses the founding"`
+}
+
 func (a Activity) ValidateConfig(bool) error { return mods.CheckKeyPrefix("activity", a.KeyPrefix) }
 
 // ValidateConfig: the same rule for the platform prefix.
@@ -118,6 +126,17 @@ func LoadPlatform(registry *app.Registry) (Platform, error) {
 		return Platform{}, err
 	}
 	return config.Platform, nil
+}
+
+// LoadGuild reads guild.*.
+func LoadGuild(registry *app.Registry) (Guild, error) {
+	var config struct {
+		Guild Guild `config:"guild"`
+	}
+	if err := load(registry, &config); err != nil {
+		return Guild{}, err
+	}
+	return config.Guild, nil
 }
 
 func load(registry *app.Registry, dst any) error {

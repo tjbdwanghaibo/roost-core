@@ -204,6 +204,9 @@ func RunIn(base string, args []string, stdout io.Writer) error {
 			if method.Affinity != "" {
 				suffix += fmt.Sprintf(" affinity=%s", method.Affinity)
 			}
+			if method.Route != "" {
+				suffix += fmt.Sprintf(" route=%s", method.Route)
+			}
 			_, _ = fmt.Fprintf(stdout, "  %-14s params=%d results=%d%s\n",
 				method.Name, len(method.Params), len(method.Results), suffix)
 		}

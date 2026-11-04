@@ -946,3 +946,372 @@ func TestAssemblyCollisionIsCheckedWhereCodeWillBeWritten(t *testing.T) {
 		t.Fatalf("output collision accepted: %v", err)
 	}
 }
+
+// route（联盟服务方案 §2.3、§2.10 第 2 项，维护者 2026-11-04“按推荐”）：对已有实体的方法按实体的 owner 选实例。
+// 路由键是方法的 int64 参数，取完整 Entity ID；只写 route 时键是名为 target 的参数，route=<param> 指定别的参数。
+// 不能与 affinity= 同一方法，一个服务也不混用两种。创建类方法不标 route，照旧走队列组随机路由。
+const routedService = `package alliance
+
+import "context"
+
+// Every service package must declare this: the generated transport reports it
+// for a payload it cannot decode. The generator checks for it by name.
+var ErrRequestInvalid error
+
+//roost:rpc service_type=alliance capability=rpc.alliance
+type Alliance interface {
+	// Found creates an alliance: no route, any instance may take it.
+	Found(ctx context.Context, requestID string, callerID int64, name string) (allianceID int64, err error)
+	//roost:rpc route
+	Join(ctx context.Context, requestID string, target int64, playerID int64) (version uint64, err error)
+	//roost:rpc route=allianceID
+	Info(ctx context.Context, allianceID int64) (version uint64, err error)
+}
+`
+
+func TestARouteKeyIsParsed(t *testing.T) {
+	services, err := ParseDir(writeDir(t, routedService))
+	if err != nil {
+		t.Fatalf("route was refused: %v", err)
+	}
+	got := map[string]string{}
+	for _, method := range services[0].Methods {
+		got[method.Name] = method.Route
+	}
+	if got["Found"] != "" || got["Join"] != "target" || got["Info"] != "allianceID" {
+		t.Fatalf("parsed routes %v, want Found unrouted, Join keyed by target, Info keyed by allianceID", got)
+	}
+}
+
+func TestARouteKeyIsValidated(t *testing.T) {
+	for name, tc := range map[string]struct{ from, to, want string }{
+		"bare route without target": {"//roost:rpc route=allianceID\n\tInfo", "//roost:rpc route\n\tInfo", "no parameter target"},
+		"names no parameter":        {"//roost:rpc route=allianceID", "//roost:rpc route=guildID", "no parameter guildID"},
+		"not an int64":              {"//roost:rpc route\n\tJoin", "//roost:rpc route=requestID\n\tJoin", "requestID is string"},
+		"together with affinity":    {"//roost:rpc route=allianceID", "//roost:rpc route=allianceID affinity=requestID", "both route and affinity="},
+		"shard is removed":          {"//roost:rpc route=allianceID", "//roost:rpc shard=allianceID", `marker option "shard" was removed`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(routedService, tc.from) {
+				t.Fatalf("fixture lacks %q", tc.from)
+			}
+			_, err := ParseDir(writeDir(t, strings.Replace(routedService, tc.from, tc.to, 1)))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("%s: got %v, want an error containing %q", tc.to, err, tc.want)
+			}
+		})
+	}
+}
+
+// 响应结构体内嵌封套 rpcStatus（Code / Reason），route 方法的响应还有 RedirectSid；结果名导出后与它们同名时，生成的
+// 结构体在 Go 里能编译（外层字段遮住内嵌字段），但 msgpack 编解码在运行期报 "already has field=Code"，请求得不到答复。
+// 同理两个参数或两个结果导出后同名（id / Id）时线上字段重名。生成期按名字拒绝，并写明改哪个名字。
+func TestAFieldNameThatCollidesOnTheWireIsRefused(t *testing.T) {
+	for name, tc := range map[string]struct{ from, to, want string }{
+		"result code":            {"(version uint64, err error)\n\t//roost:rpc route=allianceID", "(code int32, err error)\n\t//roost:rpc route=allianceID", "result code"},
+		"result reason":          {"(allianceID int64, err error)", "(reason string, err error)", "result reason"},
+		"route result redirect":  {"(version uint64, err error)\n\t//roost:rpc route=allianceID", "(redirectSid int32, err error)\n\t//roost:rpc route=allianceID", "result redirectSid"},
+		"results differ in case": {"(allianceID int64, err error)", "(allianceID int64, AllianceID int64, err error)", "AllianceID"},
+		"params differ in case":  {"name string)", "name string, Name string)", "Name"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(routedService, tc.from) {
+				t.Fatalf("fixture lacks %q", tc.from)
+			}
+			_, err := ParseDir(writeDir(t, strings.Replace(routedService, tc.from, tc.to, 1)))
+			if err == nil || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), "wire") {
+				t.Fatalf("%s: got %v, want a refusal naming %q and the wire field it collides with", tc.to, err, tc.want)
+			}
+		})
+	}
+	// 不标 route 的方法没有 RedirectSid，结果叫 redirectSid 不冲突。
+	plain := strings.Replace(routedService, "(allianceID int64, err error)", "(redirectSid int32, err error)", 1)
+	if _, err := ParseDir(writeDir(t, plain)); err != nil {
+		t.Fatalf("an unrouted method's result redirectSid collides with nothing, but was refused: %v", err)
+	}
+}
+
+// 路由是方法级策略（维护者 2026-11-04）：一个服务可以同时有 route、affinity= 与不标的方法，每个方法按自己的标记
+// 选路径；只有同一个方法不能同时标 route 与 affinity=。
+func TestRouteAndAffinityMethodsCoexistInOneService(t *testing.T) {
+	mixed := strings.Replace(routedService, "\t// Found creates", "\t//roost:rpc affinity=name\n\t// Found creates", 1)
+	services, err := ParseDir(writeDir(t, mixed))
+	if err != nil {
+		t.Fatalf("a service with route, affinity= and unmarked methods was refused: %v", err)
+	}
+	got := map[string]string{}
+	for _, method := range services[0].Methods {
+		got[method.Name] = method.Route + "|" + method.Affinity
+	}
+	if got["Found"] != "|name" || got["Join"] != "target|" || got["Info"] != "allianceID|" {
+		t.Fatalf("parsed (route|affinity) %v, want Found affinity=name, Join route target, Info route allianceID", got)
+	}
+}
+
+// 路由是方法级策略（维护者 2026-11-04）：编译生成的包，对着记录型总线跑——同一个服务里不标的方法走队列组、affinity=
+// 方法按 key 发往发现到的实例、route 方法经路由查找发往实体的 owner（改投一次、查不到不发）；构造参数按服务实际用到
+// 的策略要求；route handler 先做服务端前置检查，没实现 RouteChecker 的服务注册被拒；ClientMod 从注册表取路由查找。
+func TestRouteAffinityAndUnmarkedMethodsEachTakeTheirOwnPath(t *testing.T) {
+	services, err := ParseDir(writeDir(t, mixedRoutingService))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := Generate(services[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := map[string]string{
+		"alliance.go": mixedRoutingService,
+		"run.go": "package alliance\n\nimport (\n\t\"context\"\n\n\t\"github.com/tjbdwanghaibo/roost-core/infra/base/errcode\"\n)\n\n" +
+			"func (s *Server) run(ctx context.Context) error { <-ctx.Done(); return nil }\n\n" +
+			"func Error(err error) (int32, string) { return errcode.ClientError(err) }\n",
+		"route_test.go": mixedRoutingTest,
+	}
+	for _, file := range files {
+		sources[file.Name] = string(file.Content)
+	}
+	runGeneratedPackageTests(t, sources)
+}
+
+const mixedRoutingService = `package alliance
+
+import "context"
+
+var ErrRequestInvalid error
+
+//roost:rpc service_type=alliance capability=rpc.alliance
+type Alliance interface {
+	// Found creates an alliance: no marker, any instance may take it.
+	Found(ctx context.Context, requestID string, name string) (allianceID int64, err error)
+	//roost:rpc affinity=name
+	Search(ctx context.Context, name string) (allianceID int64, err error)
+	//roost:rpc route
+	Join(ctx context.Context, requestID string, target int64, playerID int64) (version uint64, err error)
+}
+`
+
+// mixedRoutingTest runs inside the generated package.
+const mixedRoutingTest = `package alliance
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	fetcd "github.com/tjbdwanghaibo/roost-core/infra/network/etcd"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// recordingBus records queue-group calls and CallTo sids per method; a Join sent
+// to redirectFrom is answered "not the owner, go to redirectTo".
+type recordingBus struct {
+	bus.IBus
+	mu           sync.Mutex
+	queued       []string
+	sids         map[string][]int32
+	redirectFrom int32
+	redirectTo   int32
+}
+
+func (b *recordingBus) Call(_ context.Context, _ string, method string, _ any, _ any) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.queued = append(b.queued, method)
+	return nil
+}
+
+func (b *recordingBus) CallTo(_ context.Context, _ string, sid int32, method string, _ any, resp any) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.sids[method] = append(b.sids[method], sid)
+	if method == MethodJoin && sid == b.redirectFrom {
+		out := resp.(*rpcJoinResponse)
+		out.Code, out.Reason, out.RedirectSid = errcode.CodeRedirect, "not the owner", b.redirectTo
+	}
+	return nil
+}
+
+type threeInstances struct{ fetcd.IDiscovery }
+
+func (threeInstances) Discover(context.Context, string) ([]*fetcd.ServiceInfo, error) {
+	return []*fetcd.ServiceInfo{{Sid: 11}, {Sid: 12}, {Sid: 13}}, nil
+}
+
+// owners is the route lookup: entity id -> owner sid; anything else has no ownership record.
+type owners struct {
+	mu      sync.Mutex
+	sids    map[int64]int32
+	lookups int
+}
+
+func (o *owners) LookupRoute(_ context.Context, id int64) (int32, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.lookups++
+	if sid, ok := o.sids[id]; ok {
+		return sid, nil
+	}
+	return 0, servicerpc.EntityNotFound(id)
+}
+
+func TestEachMethodTakesTheRouteItsMarkerNames(t *testing.T) {
+	recorder := &recordingBus{sids: map[string][]int32{}}
+	routes := &owners{sids: map[int64]int32{500: 3000, 600: 3001}}
+	client, err := NewBusClient(recorder, threeInstances{}, routes, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := client.Found(ctx, "r1", "wolves"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := client.Search(ctx, "wolves"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := client.Join(ctx, "r2", 500, 7); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Join(ctx, "r3", 600, 7); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(recorder.queued, []string{MethodFound}) {
+		t.Fatalf("queue group got %v; only the unmarked Found may go there", recorder.queued)
+	}
+	search := recorder.sids[MethodSearch]
+	if len(search) != 3 || search[0] < 11 || search[0] > 13 || search[1] != search[0] || search[2] != search[0] {
+		t.Fatalf("Search (affinity=name) went to %v; one key must reach one discovered instance", search)
+	}
+	if got := recorder.sids[MethodJoin]; !slices.Equal(got, []int32{3000, 3001}) {
+		t.Fatalf("Join (route) went to %v, want the owners [3000 3001]", got)
+	}
+
+	redirected := &recordingBus{sids: map[string][]int32{}, redirectFrom: 3000, redirectTo: 3001}
+	client, err = NewBusClient(redirected, threeInstances{}, routes, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Join(ctx, "r4", 500, 7); err != nil {
+		t.Fatalf("Join after a redirect: %v", err)
+	}
+	if got := redirected.sids[MethodJoin]; !slices.Equal(got, []int32{3000, 3001}) {
+		t.Fatalf("redirected Join went to %v, want [3000 3001]", got)
+	}
+	before := len(redirected.sids[MethodJoin])
+	_, err = client.Join(ctx, "r5", 999, 7)
+	if servicerpc.Classify(err) != servicerpc.OutcomeRejected || len(redirected.sids[MethodJoin]) != before || len(redirected.queued) != 0 {
+		t.Fatalf("Join on an entity without an owner: err=%v sent=%v queued=%v; want a rejection and nothing sent",
+			err, redirected.sids[MethodJoin][before:], redirected.queued)
+	}
+}
+
+func TestTheConstructorAsksForWhatTheMethodsUse(t *testing.T) {
+	routes := &owners{}
+	if _, err := NewBusClient(&recordingBus{}, threeInstances{}, nil, "", 0); err == nil || !strings.Contains(err.Error(), "Join") {
+		t.Fatalf("NewBusClient without a route lookup = %v, want a refusal naming Join", err)
+	}
+	if _, err := NewBusClient(&recordingBus{}, nil, routes, "", 0); err == nil || !strings.Contains(err.Error(), "Search") {
+		t.Fatalf("NewBusClient without discovery = %v, want a refusal naming Search", err)
+	}
+}
+
+type plainService struct{ joined int }
+
+func (s *plainService) Found(context.Context, string, string) (int64, error) { return 1, nil }
+func (s *plainService) Search(context.Context, string) (int64, error)        { return 1, nil }
+func (s *plainService) Join(context.Context, string, int64, int64) (uint64, error) {
+	s.joined++
+	return 9, nil
+}
+
+// checkedService answers CheckRoute from a table: 500 is ours, 600 is 3001's, the rest do not exist.
+type checkedService struct{ plainService }
+
+func (s *checkedService) CheckRoute(_ context.Context, id int64) error {
+	switch id {
+	case 500:
+		return nil
+	case 600:
+		return servicerpc.Redirect(3001, errors.New("owned elsewhere"))
+	default:
+		return servicerpc.EntityNotFound(id)
+	}
+}
+
+type handlerBus struct {
+	bus.IBus
+	handlers map[string]bus.RpcHandlerFunc
+}
+
+func (b *handlerBus) HandleRpc(method string, handler bus.RpcHandlerFunc) error {
+	b.handlers[method] = handler
+	return nil
+}
+
+func TestTheRouteHandlerChecksTheRouteFirst(t *testing.T) {
+	if err := RegisterHandlers(&handlerBus{handlers: map[string]bus.RpcHandlerFunc{}}, &plainService{}); err == nil || !strings.Contains(err.Error(), "RouteChecker") {
+		t.Fatalf("RegisterHandlers for a service without CheckRoute = %v, want a refusal naming RouteChecker", err)
+	}
+	service := &checkedService{}
+	b := &handlerBus{handlers: map[string]bus.RpcHandlerFunc{}}
+	if err := RegisterHandlers(b, service); err != nil {
+		t.Fatal(err)
+	}
+	join := func(target int64) rpcJoinResponse {
+		payload, err := bus.MessagePackCodec{}.Marshal(rpcJoinRequest{RequestID: "r", Target: target, PlayerID: 7})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := b.handlers[MethodJoin](bus.NewRPCContext(context.Background(), MethodJoin, payload, nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.(rpcJoinResponse)
+	}
+	if resp := join(600); resp.Code != errcode.CodeRedirect || resp.RedirectSID() != 3001 || service.joined != 0 {
+		t.Fatalf("Join on an entity owned by 3001: code %d redirect %d joined %d; want CodeRedirect to 3001 and the implementation not called",
+			resp.Code, resp.RedirectSID(), service.joined)
+	}
+	if resp := join(999); resp.Code != errcode.CodeEntityNotFound || service.joined != 0 {
+		t.Fatalf("Join on an entity without an owner: code %d joined %d; want CodeEntityNotFound and the implementation not called", resp.Code, service.joined)
+	}
+	if resp := join(500); resp.Code != 0 || resp.Version != 9 || service.joined != 1 {
+		t.Fatalf("Join on our entity: code %d version %d joined %d; want it served", resp.Code, resp.Version, service.joined)
+	}
+}
+
+func TestClientModTakesTheRouteLookupFromTheRegistry(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(mods.ModBus, bus.IBus(&recordingBus{})); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(mods.ModEtcdDiscov, fetcd.IDiscovery(threeInstances{})); err != nil {
+		t.Fatal(err)
+	}
+	mod := NewClientMod()
+	if err := mod.Init(viper.New()); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err == nil || !strings.Contains(err.Error(), string(mods.ModRemoteRoute)) {
+		t.Fatalf("ClientMod.Provide without a route lookup = %v, want a refusal naming %s", err, mods.ModRemoteRoute)
+	}
+	if !slices.Contains(mod.OptionalDependsOn(), mods.ModRemoteEntity) || !slices.Contains(mod.OptionalDependsOn(), mods.ModRemoteMirror) {
+		t.Fatalf("ClientMod.OptionalDependsOn = %v, want the Remote Mods that publish the route lookup", mod.OptionalDependsOn())
+	}
+	if err := registry.Register(mods.ModRemoteRoute, servicerpc.RouteResolver(&owners{})); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatalf("ClientMod.Provide with a route lookup: %v", err)
+	}
+}
+`

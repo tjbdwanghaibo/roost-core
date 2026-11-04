@@ -298,6 +298,25 @@ func (m *NatsMod) Stop() {
 	}
 }
 
+// CloseIngress 关闭总线的全部外部输入并在 ctx 内排空（App 停机第一步，app.IngressCloser）：已注册的 RPC 方法全部撤下、
+// 模块消息不再接收，出向发送照常到 StopWithContext。见 (*bus.Bus).CloseIngress。
+func (m *NatsMod) CloseIngress(ctx context.Context) error {
+	if ctx == nil {
+		ctx = fctx.BaseContext()
+	}
+	if err := m.stopSerial.Lock(ctx); err != nil {
+		return err
+	}
+	b := m.bus
+	m.stopSerial.Unlock()
+	if b == nil {
+		return nil
+	}
+	return b.CloseIngress(ctx)
+}
+
+var _ app.IngressCloser = (*NatsMod)(nil)
+
 // StopWithContext 先停 Bus、再关 Assembly；排空超出预算时保留对象供再次停止，见下方注释。
 // 并发调用串行执行，后到者在自己的 ctx 内等第一个做完；读写 m.bus / m.asm 都在锁内。
 func (m *NatsMod) StopWithContext(ctx context.Context) error {

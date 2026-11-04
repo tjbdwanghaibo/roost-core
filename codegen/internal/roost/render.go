@@ -526,6 +526,14 @@ func serviceModConstructors(m Manifest, name string, allMods []string) []string 
 	for _, mod := range mods {
 		out = append(out, renderModConstructor(m, mod, allMods, name))
 	}
+	// 本服务拥有 kind（//roost:entity service=）：锁住它们的 handler 只注册在这里的 Nest 引擎上（entity_owner.go）。
+	if m.ownerServices[name] && contains(mods, "nest") {
+		out = append(out, ownedHandlersModCall(name))
+	}
+	// 有 preload=startup kind：预加载 Mod 排在 remote_entity、Nest 之后，路由 rpc 的 owner Mod 排在它之后。
+	if m.preloadServices[name] && contains(mods, "remote_entity") {
+		out = append(out, preloadModCall)
+	}
 	if spec, hosted := frameworkCatalog[m.Services[name].Framework]; hosted {
 		args := make([]string, 0, len(spec.ModArgs))
 		for _, arg := range spec.ModArgs {
@@ -593,11 +601,30 @@ func renderModConstructor(m Manifest, name string, allMods []string, service str
 		return "kitmanager.NewManagerMod(service" + safeIdent(service) + ".Managers()...)"
 	case "dataengine":
 		options := []string{"kitdataengine.WithEntityAccess(EntityAccess)"}
-		if contains(allMods, "remote_entity") {
+		// Remote 投影要本进程的 remote_entity 能力：按本服务自己的 Mod 判断，不按整个工程——同一工程里只读
+		// Mirror 的服务（remote_mirror）或不碰 Remote 的服务也装 dataengine，开了投影起服即报
+		// capability "remote_entity" not found。shared_mods 里的 dataengine（service 为空）保持按全工程判断。
+		remoteMods := allMods
+		if service != "" {
+			remoteMods, _ = resolveMods(effectiveServiceMods(m, service))
+		}
+		if contains(remoteMods, "remote_entity") {
 			options = append(options, "kitdataengine.WithRemoteProjection(true)")
 		}
 		return "kitdataengine.NewMod(" + strings.Join(options, ", ") + ")"
 	case "remote_entity":
+		if m.ownedRemote && service != "" {
+			// 有 Remote kind 声明了归属服务（//roost:entity service=）：别的服务拥有的 kind 拒绝认领与写许可；本服务拥有的
+			// kind 加载后登记路由，其中 preload=startup 的起服预加载。
+			options := []string{"kitremoteentity.WithMongoStorage(EntityAccess)", foreignKindsOption(service)}
+			if m.routeServices[service] {
+				options = append(options, routeKindsOption(service))
+			}
+			if m.preloadServices[service] {
+				options = append(options, preloadKindsOption(service))
+			}
+			return "kitremoteentity.NewRemoteEntityMod(0, " + strings.Join(options, ", ") + ")"
+		}
 		return "kitremoteentity.NewRemoteEntityMod(0, kitremoteentity.WithMongoStorage(EntityAccess))"
 	case "nest":
 		if selfSyncNest(m, service) {

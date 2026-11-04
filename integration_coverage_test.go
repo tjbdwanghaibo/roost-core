@@ -533,7 +533,7 @@ var generatedRealDependencyEntries = []struct {
 }{
 	{"codegen/internal/entity/testdata/dataengine", "scripts/test-dataengine-generated.sh", "^TestGeneratedDataEngine"},
 	{"codegen/internal/entity/testdata/remoteflow", "scripts/test-remote-generated.sh", "^TestGeneratedRemote"},
-	{"demo/game/controllers/player/guild_ids_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestGuildIDsRealMongo"},
+	{"demo/internal/service/alliance/admin_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestStopFoundingSendsNewAlliancesToTheOtherInstances$"},
 	{"demo/internal/service/platform/purchase_delivery_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPurchaseDeliveryDurableWinner$"},
 	{"demo/internal/service/game/activity_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestActivityBoardKeepsTheLatestCumulativeScore$"},
 	{"demo/game/controllers/player/finish_dungeon_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestDungeonClearsBoardCountsEachRunOnceRealRedis$"},
@@ -547,6 +547,13 @@ var generatedRealDependencyEntries = []struct {
 var generatedRealDependencyElsewhere = []struct {
 	test, script, mention, why string
 }{
+	{"TestAllianceE2EPreloadOrder", "scripts/test-alliance-e2e.sh", "TestAllianceE2EPreloadOrder", "联盟服务阶段 5 真实依赖端到端：生成 game-demo 起真实进程（alliance 两实例、game 两进程与九个托管服务），kill -9 / SIGSTOP / 断 toxiproxy 的 redis 代理，自起私有 etcd；只对 scripts/mirror-local.sh 起的私有环境跑（会断开它的 redis 代理），约 7 分钟（本机实测 400s，含生成与编译），不进 dataengine-env.sh test 与 pretag"},
+	{"TestAllianceE2ECrashTakeoverAndScaleIn", "scripts/test-alliance-e2e.sh", "TestAllianceE2ECrashTakeoverAndScaleIn", "联盟服务阶段 5 真实依赖端到端：生成 game-demo 起真实进程（alliance 两实例、game 两进程与九个托管服务），kill -9 / SIGSTOP / 断 toxiproxy 的 redis 代理，自起私有 etcd；只对 scripts/mirror-local.sh 起的私有环境跑（会断开它的 redis 代理），约 7 分钟（本机实测 400s，含生成与编译），不进 dataengine-env.sh test 与 pretag"},
+	{"TestAllianceE2EOneAllianceUnderRace", "scripts/test-alliance-e2e.sh", "TestAllianceE2EOneAllianceUnderRace", "联盟服务阶段 5 真实依赖端到端：生成 game-demo 起真实进程（alliance 两实例、game 两进程与九个托管服务），kill -9 / SIGSTOP / 断 toxiproxy 的 redis 代理，自起私有 etcd；只对 scripts/mirror-local.sh 起的私有环境跑（会断开它的 redis 代理），约 7 分钟（本机实测 400s，含生成与编译），不进 dataengine-env.sh test 与 pretag"},
+	{"TestAllianceE2ERedisOutage", "scripts/test-alliance-e2e.sh", "TestAllianceE2ERedisOutage", "联盟服务阶段 5 真实依赖端到端：生成 game-demo 起真实进程（alliance 两实例、game 两进程与九个托管服务），kill -9 / SIGSTOP / 断 toxiproxy 的 redis 代理，自起私有 etcd；只对 scripts/mirror-local.sh 起的私有环境跑（会断开它的 redis 代理），约 7 分钟（本机实测 400s，含生成与编译），不进 dataengine-env.sh test 与 pretag"},
+	{"TestAllianceE2EGamePlayers", "scripts/test-alliance-e2e.sh", "TestAllianceE2EGamePlayers", "联盟服务阶段 5 真实依赖端到端：生成 game-demo 起真实进程（alliance 两实例、game 两进程与九个托管服务），kill -9 / SIGSTOP / 断 toxiproxy 的 redis 代理，自起私有 etcd；只对 scripts/mirror-local.sh 起的私有环境跑（会断开它的 redis 代理），约 7 分钟（本机实测 400s，含生成与编译），不进 dataengine-env.sh test 与 pretag"},
+	{"TestAllianceE2EShortPerf", "scripts/test-alliance-e2e.sh", "TestAllianceE2EShortPerf", "联盟服务阶段 5 短测：ALLIANCE_E2E_PERF=1 时由 scripts/test-alliance-e2e.sh 跑（单轮 ≤ 30 分钟），性能入口"},
+	{"TestAllianceE2EMirrorRevalidation", "scripts/test-alliance-e2e.sh", "TestAllianceE2EMirrorRevalidation", "联盟服务阶段 5 短测：ALLIANCE_E2E_PERF=1 时由 scripts/test-alliance-e2e.sh 跑（单轮 ≤ 30 分钟），性能入口"},
 	{"TestAllianceReportWindowFollowsTheCoordinatorReservationTTL", "scripts/test-slg-generated.sh", "'^TestAllianceReportWindowFollowsTheCoordinatorReservationTTL$'", "缺省模式就跑，不需要真实依赖：内存版本存储 + 只记次数的协调器替身，补报截止跟随协调器的 ReservationTTL（零值按 DefaultReservationTTL）；夹具与真实依赖用例同包，所以登记在这张表"},
 	{"TestAllianceReceiverBudgetRejectsLateSuccess", "scripts/test-slg-generated.sh", "'^TestAllianceReceiverBudgetRejectsLateSuccess$'", "缺省模式就跑，不需要真实依赖：bus.NewRPCContext 以不带期限的基础 context 模拟 dispatchRpc，接收端预算到期后按 ctx 等待的回调结束、迟到的成功不回复、期限内成功照常回复、非正预算拒绝；夹具与真实依赖用例同包，所以登记在这张表"},
 	{"TestSLGAllianceRPCReceiverBudget", "scripts/test-slg-generated.sh", "'^TestSLGAllianceRPCReceiverBudget$'", "ROOST_SLG_REAL=1，只用隔离 NATS：两个真实 Bus 的普通 RPC，调用方 300ms 超时返回时接收端回调仍在运行且其 context 没有调用方期限（框架现行契约：dispatchRpc 用接收端 Bus 的基础 context）；接收端 receiverBudget 200ms 到期后迟到成功不回复成功、期限内成功照常回复；不含 JetStream RPC（它按调用方截止建立处理期限）"},
@@ -863,6 +870,7 @@ var pretagExemptGeneratedScripts = map[string]string{
 	"scripts/test-dataengine-generated.sh": "需要隔离 Mongo；由 wiring/scripts/integration/dataengine-env.sh test 跑（见 generatedRealDependencyEntries）",
 	"scripts/test-remote-generated.sh":     "需要隔离 Mongo / Redis / NATS；由 dataengine-env.sh test 与 mirror-local.sh 跑",
 	"scripts/test-demo-generated.sh":       "需要隔离 Mongo / Redis / NATS；由 dataengine-env.sh test 与 mirror-local.sh 跑；game-demo 的离线 build / vet / test 在 go test ./... 与 release.sh 里",
+	"scripts/test-alliance-e2e.sh":         "联盟服务真实依赖端到端：需要 scripts/mirror-local.sh 起的私有环境（含 toxiproxy）与 etcd，约 7 分钟（本机实测 400s，含生成与编译）；按 MMORPG-INTEGRATION“公会与跨服读取”手动跑",
 }
 
 // TestGeneratedScriptsAreInPretag：每个 scripts/test-*-generated.sh，以及玩法接入手册点名的每个 scripts/test-*.sh，

@@ -14,8 +14,11 @@ import (
 
 // Generated shutdown window.
 //
-// The App stops a service in one shutdown.total_timeout window: Service.Shutdown
-// first, then the service's own Mods and the shared Mods in reverse order, each
+// The App stops a service in one shutdown.total_timeout window: it first closes
+// every input and waits for the requests already admitted (app.IngressCloser:
+// the bus's RPC handlers and messages, ops admin commands, effect and saga step
+// consumers), then Service.Shutdown, then the service's own Mods and the shared
+// Mods in reverse order, each
 // with a deadline planned from what is left (app.modStopBudget). A Mod without
 // a declared stop budget keeps a fixed floor (app.undeclaredModStopFloor, 3s);
 // a Mod that declares one (dataengine: dataengine.shutdown_timeout; the player
@@ -37,6 +40,10 @@ import (
 const (
 	// generatedModStopFloor mirrors app.undeclaredModStopFloor.
 	generatedModStopFloor = 3 * time.Second
+	// generatedMirrorShutdownTimeout is remote_entity.mirror.shutdown_timeout as
+	// the generated config writes it: the stop budget wiring/remoteentity's
+	// RemoteMirrorMod declares (catalog Mod remote_mirror).
+	generatedMirrorShutdownTimeout = 5 * time.Second
 	// generatedDataEngineShutdownTimeout is dataengine.shutdown_timeout as the
 	// generated config writes it (catalog.go): the stop budget wiring/dataengine
 	// declares to the App.
@@ -55,8 +62,10 @@ const (
 	// 之前这个 Mod 不声明预算，App 只给它 3s 保底（低于它自己的 10s，与
 	// nest.request_timeout 3s 也没有余量）；现在它声明 shutdown_timeout，生成公式与 doctor 同步计入。
 	generatedPlayerTCPShutdownTimeout = 10 * time.Second
-	// generatedShutdownMargin is for Service.Shutdown, which runs inside the
-	// same window before any Mod stops (the App starts the clock before it).
+	// generatedShutdownMargin is for closing the inputs and Service.Shutdown,
+	// which run inside the same window before any Mod stops (the App starts the
+	// clock before them). Closing the inputs waits for the requests already in a
+	// handler — normally milliseconds, at most a request's own budget.
 	// Generated services only close in-process loops there — a hosted framework
 	// Server returns at once — so 5s is an allowance, the same one the
 	// REPRO-2026-09-26-06 §2 probe spends. The Mods themselves need no extra
@@ -87,11 +96,13 @@ type serviceShutdown struct {
 	// declaring is how many of them declare a stop budget; declared is the sum.
 	declaring int
 	declared  time.Duration
-	// dataEngine and playerTCP are how many of the declaring Mods are
-	// dataengine and the player TCP listener: the doctor reads each one's
-	// budget from its own config key. Not part of the rendered block.
+	// dataEngine, playerTCP and mirror are how many of the declaring Mods are
+	// dataengine, the player TCP listener and the read-only Remote mirror:
+	// the doctor reads each one's budget from its own config key. Not part of
+	// the rendered block.
 	dataEngine int
 	playerTCP  int
+	mirror     int
 	margin     time.Duration
 	// release is the singleton release share (generatedSingletonRelease) for a
 	// service whose generated config turns the singleton on, zero otherwise.
@@ -135,6 +146,12 @@ func serviceShutdownPlan(m Manifest, service string) serviceShutdown {
 			plan.dataEngine++
 			plan.declared += generatedDataEngineShutdownTimeout
 		}
+	}
+	// 只读 Mirror Mod 声明 remote_entity.mirror.shutdown_timeout（生成配置写 5s）。
+	if contains(own, "remote_mirror") {
+		plan.declaring++
+		plan.mirror++
+		plan.declared += generatedMirrorShutdownTimeout
 	}
 	// Registered by serviceModConstructors under the same condition.
 	if serviceOwnsPlayerTCP(m, service) {
@@ -555,6 +572,11 @@ type shutdownSettings struct {
 			ShutdownTimeout string `yaml:"shutdown_timeout"`
 		} `yaml:"tcp"`
 	} `yaml:"player_access"`
+	RemoteEntity struct {
+		Mirror struct {
+			ShutdownTimeout string `yaml:"shutdown_timeout"`
+		} `yaml:"mirror"`
+	} `yaml:"remote_entity"`
 	// Singleton.Enabled is read as text and parsed like viper's GetBool, so a
 	// value the App accepts never makes the doctor's parse fail.
 	Singleton struct {
@@ -567,7 +589,8 @@ type shutdownSettings struct {
 // dataengine.shutdown_timeout missing or non-positive is wiring/dataengine's 30s;
 // player_access.tcp.shutdown_timeout missing uses the
 // generated Mod's 10s; an explicit non-positive value stops the Mod from starting
-// (validateConfig), reported as an error.
+// (validateConfig), reported as an error; remote_entity.mirror.shutdown_timeout
+// missing is the mirror Mod's 5s, non-positive likewise an error.
 func configuredDeclaredBudgets(plan serviceShutdown, settings shutdownSettings) (time.Duration, error) {
 	var declared time.Duration
 	if plan.dataEngine > 0 {
@@ -593,6 +616,18 @@ func configuredDeclaredBudgets(plan serviceShutdown, settings shutdownSettings) 
 			return 0, fmt.Errorf("player_access.tcp.shutdown_timeout: explicit zero is invalid; the player tcp Mod refuses to start")
 		}
 		declared += value * time.Duration(plan.playerTCP)
+	}
+	// 只读 Mirror：remote_entity.mirror.shutdown_timeout 缺省 5s（wiring/remoteentity 的声明），非正值起服即被
+	// 配置校验拒绝（min:"1ns"）。
+	if plan.mirror > 0 {
+		value, err := parseConfigDuration(settings.RemoteEntity.Mirror.ShutdownTimeout, generatedMirrorShutdownTimeout)
+		if err != nil {
+			return 0, fmt.Errorf("remote_entity.mirror.shutdown_timeout: %w", err)
+		}
+		if value <= 0 {
+			return 0, fmt.Errorf("remote_entity.mirror.shutdown_timeout: %s is not positive; the configuration check refuses it", value)
+		}
+		declared += value * time.Duration(plan.mirror)
 	}
 	return declared, nil
 }

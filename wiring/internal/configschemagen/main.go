@@ -62,6 +62,8 @@ func groups() map[string][]app.ConfigSchema {
 		"nats":          {kitnats.NewNatsMod(nil).ConfigSchema()},
 		"syncbus":       {kitsyncbus.NewSyncBusMod(0).ConfigSchema()},
 		"remote_entity": {kitremoteentity.NewRemoteEntityMod(0).ConfigSchema(), kitremoteentity.NewRemoteMirrorMod(0).ConfigSchema()},
+		// remote_mirror：只读进程只装 Mirror Mod（catalog Mod，与 remote_entity 互斥）。
+		"remote_mirror": {kitremoteentity.NewRemoteMirrorMod(0).ConfigSchema()},
 		"dataengine":    {kitnest.NewMod(nil).ConfigSchema(), kitdataengine.NewMod().ConfigSchema()},
 		"saga":          {kitsaga.NewMod().ConfigSchema()},
 		// heartbeat：roost add heartbeat / behavior 装在实体所在服务（catalog Mod，依赖 nest）；NewMod 的参数只在 Init 用。

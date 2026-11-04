@@ -30,7 +30,9 @@ type AddOptions struct {
 	// AI / State are roost add behavior options: build an AI heartbeat
 	// controller next to the Behavior, and scaffold a gameplay/state Catalog.
 	AI, State bool
-	ID        int64
+	// EntityService 是 roost add rpc -entity-service：拥有者是带 Nest 的实体服务，骨架写成带 RequestID 的写契约。
+	EntityService bool
+	ID            int64
 	// Warnings receives what the command could not do but did not fail for,
 	// such as a k8s Secret example it cannot recognise.
 	// nil means os.Stderr, so nothing is skipped silently.

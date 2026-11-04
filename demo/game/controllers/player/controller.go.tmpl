@@ -1,7 +1,6 @@
 package player
 
 import (
- db "{{MODULE}}/db"
 	"context"
 	"errors"
 	"fmt"
@@ -9,7 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	db "{{MODULE}}/db"
 	"{{MODULE}}/game/chatroom"
+	alliance "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	lifecycle "{{MODULE}}/game/lifecycle"
@@ -17,11 +19,13 @@ import (
 	"{{MODULE}}/game/runtimeid"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/skills"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
 	svcactivity "github.com/tjbdwanghaibo/roost-core/service/activity"
 	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
@@ -44,8 +48,14 @@ type Controller struct {
 	registry   *app.Registry
 	nestClient corenest.Client
 	players    *lifecycle.PlayerLifecycle
-	guilds     *lifecycle.GuildLifecycle
-	teams      *lifecycle.TeamLifecycle
+	// The guild is the alliance service's (game/guild): writes go through its
+	// RPC client, reads through the two Remote mirrors.
+	alliances       rpcalliance.Alliance
+	allianceMirrors *entity.RemoteMirrorReader[alliance.AllianceMirror]
+	memberMirrors   *entity.RemoteMirrorReader[alliance_member.AllianceMemberMirror]
+	guildSettings   settings.Guild
+	// A partitioned scene's team (game/entities/team): this game service owns it.
+	teams *lifecycle.TeamLifecycle
 	matcher    svcmatch.Matchmaker
 	messaging  svcchat.Messaging
 	mailer     svcmail.Mail
@@ -64,12 +74,12 @@ type Controller struct {
 	// paymentSecret is the demo's stand-in for a payment provider's signing
 	// key. A real game process does not hold one (see the purchase endpoint).
 	paymentSecret string
-	// Runtime IDs are only for ephemeral objects; persistent guild IDs come
-	// from Mongo so another incarnation of this sid cannot reuse them.
+	// Runtime IDs are only for ephemeral objects.
 	serverSID int32
 	ids       *runtimeid.Allocator
-	guildIDs  fmongo.ICollection
-	teamIDs   fmongo.ICollection
+	// teamIDs is the persistent counter a new team's id comes from (another
+	// incarnation of this sid, or another sid, never reuses one).
+	teamIDs fmongo.ICollection
 
 	// The skill catalog, compiled from game/skills/*.json on first use.
 	skillsOnce   sync.Once
@@ -181,7 +191,26 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
-	guilds, err := lifecycle.GuildFromRegistry(registry)
+	// The alliance service: its RPC client (assembled from uses_rpcs:
+	// [alliance]) and the read-only mirrors of its two kinds (the
+	// remote_mirror Mod's snapshot source).
+	alliances, ok := app.Lookup[rpcalliance.Alliance](registry, rpcalliance.CapabilityName)
+	if !ok || alliances == nil {
+		return nil, fmt.Errorf("player controller: capability %q not found; list alliance under services.<game>.uses_rpcs", rpcalliance.CapabilityName)
+	}
+	mirrors, err := kitremoteentity.MirrorSource(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
+	allianceMirrors, err := alliance.NewAllianceMirrorReader(mirrors)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
+	memberMirrors, err := alliance_member.NewAllianceMemberMirrorReader(mirrors)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
+	guildSettings, err := settings.LoadGuild(registry)
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
@@ -243,12 +272,12 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	}
 	mongoClient, ok := app.Lookup[fmongo.IMongo](registry, mods.ModMongo)
 	if !ok || mongoClient == nil {
-		return nil, fmt.Errorf("player controller: guild id allocator requires mongo")
+		return nil, fmt.Errorf("player controller: the team id allocator requires mongo")
 	}
-	// 公会号序列与 Guild 文档在同一个物理库：Guild DAO 的 db= 是逻辑库名，经 DataEngine 冻结的映射表换算。
+	// 队伍号序列与 Team 文档在同一个物理库：Team DAO 的 db= 是逻辑库名，经 DataEngine 冻结的映射表换算。
 	databases, err := kitdataengine.Databases(registry)
 	if err != nil {
-		return nil, fmt.Errorf("player controller: guild id allocator: %w", err)
+		return nil, fmt.Errorf("player controller: %w", err)
 	}
 	worldID, err := lifecycle.WorldID(registry)
 	if err != nil {
@@ -259,12 +288,12 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
 	return &Controller{
-		registry: registry, nestClient: client, players: players, guilds: guilds, teams: teams,
+		registry: registry, nestClient: client, players: players, teams: teams,
+		alliances: alliances, allianceMirrors: allianceMirrors, memberMirrors: memberMirrors, guildSettings: guildSettings,
 		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, ranking: ranking,
 		payments: payments, paymentSecret: paymentSecret,
 		serverSID: serverSID, ids: ids,
-		guildIDs: mongoClient.Database(databases.Physical(db.GuildDaoDBName)).Collection("_guild_id_sequence"),
-		teamIDs:  mongoClient.Database(databases.Physical(db.TeamDaoDBName)).Collection("_team_id_sequence"),
+		teamIDs: mongoClient.Database(databases.Physical(db.TeamDaoDBName)).Collection("_team_id_sequence"),
 		presence: chatroom.DefaultPresence(), worldID: worldID, sceneID: sceneID,
 	}, nil
 }
@@ -404,15 +433,6 @@ func (controller *Controller) Payments() svcplatform.Platform {
 		return nil
 	}
 	return controller.payments
-}
-
-// Guilds is the guild lifecycle: creating the aggregate a guild's
-// distributed lock will later be taken on.
-func (controller *Controller) Guilds() (*lifecycle.GuildLifecycle, error) {
-	if controller == nil || controller.guilds == nil {
-		return nil, errors.New("player controller: guild lifecycle is unavailable")
-	}
-	return controller.guilds, nil
 }
 
 // ServerSID is this process's id. It is in a few answers so that a two-process

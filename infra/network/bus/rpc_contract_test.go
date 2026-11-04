@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/internal/stopcontract"
 )
 
 func refusedRPCTask(id string) *incomingTask {
@@ -21,12 +24,17 @@ func refusedRPCTask(id string) *incomingTask {
 	}
 }
 
+// expectRefusalReply 断言调度器没接纳的请求立即得到答复，而且答复是 CodeRetryable：调度器拒绝的请求确定没有执行，
+// 调用方要能用同一 RequestID 重发；答成 CodeInternal 调用方只能按结果未知处理（App 生命周期方案缺口 4）。
 func expectRefusalReply(t *testing.T, b *Bus, rpc *lifecycleRpc, label string) {
 	t.Helper()
 	select {
 	case raw := <-rpc.replies:
-		if err := decodeRPCResponse(b.codec, raw, &struct{}{}); err == nil {
+		err := decodeRPCResponse(b.codec, raw, &struct{}{})
+		if err == nil {
 			t.Errorf("%s: refusal decoded as success", label)
+		} else if code := errcode.CodeOf(err); code != errcode.CodeRetryable {
+			t.Errorf("%s: refusal answered %v (code %d); want CodeRetryable: the request was definitely not executed", label, err, code)
 		}
 	case <-time.After(time.Second):
 		t.Errorf("%s: no reply; the caller waits for its whole timeout and sees an unknown outcome", label)
@@ -337,5 +345,312 @@ func TestRPCErrorResponseUsesCodeReasonEnvelope(t *testing.T) {
 
 	if resp.Code != 598877 || resp.Reason != "rpc test failed" {
 		t.Fatalf("resp = %+v, want code/reason envelope", resp)
+	}
+}
+
+// 缩容第一步（联盟服务方案 §2.7）：LeaveRPCQueue 只退出这个方法的服务级队列组订阅，本 sid 的实例主题与别的方法照常；
+// 重复调用无操作；没注册的方法与 JetStream 传输明确拒绝。
+func TestLeaveRPCQueueDropsOnlyThatMethodsQueueSubscription(t *testing.T) {
+	client := &lifecycleClient{}
+	b := New(client, nil, nil, Config{Sid: 3000, SvcType: "alliance"})
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = b.StopWithContext(context.Background()) })
+	for _, method := range []string{"Found", "Join"} {
+		if err := b.HandleRpc(method, func(*RpcContext) (any, error) { return struct{}{}, nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	find := func(subject, queue string) *lifecycleSub {
+		for _, sub := range client.subs {
+			if sub.subject == subject && sub.queue == queue {
+				return sub
+			}
+		}
+		t.Fatalf("no subscription %s queue=%q", subject, queue)
+		return nil
+	}
+	foundQueue := find("roost.rpc.alliance.Found", "alliance_rpc")
+	foundInstance := find(b.subject.RpcInstance("alliance", 3000, "Found"), "")
+	joinQueue := find("roost.rpc.alliance.Join", "alliance_rpc")
+
+	if err := b.LeaveRPCQueue("Found"); err != nil {
+		t.Fatalf("LeaveRPCQueue: %v", err)
+	}
+	if foundQueue.valid || foundQueue.unsubscribe != 1 {
+		t.Fatalf("Found queue subscription valid=%v unsubscribed=%d; want it left the queue group once", foundQueue.valid, foundQueue.unsubscribe)
+	}
+	if !foundInstance.valid || !joinQueue.valid {
+		t.Fatalf("instance subject valid=%v, Join queue valid=%v; only the Found queue group may be left", foundInstance.valid, joinQueue.valid)
+	}
+	for _, sub := range b.subs {
+		if sub == fnats.ISubscription(foundQueue) {
+			t.Fatal("the left subscription is still owned by the bus; Stop would unsubscribe it again")
+		}
+	}
+	if err := b.LeaveRPCQueue("Found"); err != nil || foundQueue.unsubscribe != 1 {
+		t.Fatalf("second LeaveRPCQueue err=%v unsubscribed=%d; want an idempotent no-op", err, foundQueue.unsubscribe)
+	}
+	if err := b.LeaveRPCQueue("Missing"); err == nil {
+		t.Fatal("leaving a method without a handler must be refused")
+	}
+
+	js := New(&lifecycleClient{}, nil, nil, Config{Sid: 3001, SvcType: "alliance"})
+	js.jsRPC = &jetStreamRPC{js: &captureJetStreamRPC{}}
+	if err := js.LeaveRPCQueue("Found"); !errors.Is(err, ErrRPCQueueLeaveUnsupported) {
+		t.Fatalf("JetStream transport err=%v; want ErrRPCQueueLeaveUnsupported", err)
+	}
+}
+
+// 撤下 handler（WithdrawRpc）是注册它的 Mod 停止的第一步（联盟服务冒烟：handler 一直挂到 nats Mod 停止，停机窗口里的
+// 请求进了已停的 Nest、答复成了结果未知）。套共用停机契约骨架：卡住的工作是一个已进 handler 的请求，“释放”是它
+// 返回并答复——WithdrawRpc 返回 nil 之后调用方才停 handler 依赖的 Mod。
+func TestWithdrawRpcStopContract(t *testing.T) {
+	var b *Bus
+	rpc := &lifecycleRpc{replies: make(chan []byte, 4)}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var returned atomic.Bool
+	stopcontract.Check(t, stopcontract.Hooks{
+		Start: func(testing.TB) {
+			b = New(&lifecycleClient{}, rpc, nil, Config{Sid: 3000, SvcType: "alliance", WorkerNum: 2})
+			if err := b.Start(); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = b.StopWithContext(context.Background()) })
+			if err := b.HandleRpc("alliance.Join", func(*RpcContext) (any, error) {
+				close(entered)
+				<-release // 不看 ctx 的业务，例如在 Nest 里等提交确认
+				returned.Store(true)
+				return struct{}{}, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		},
+		Block: func(testing.TB) {
+			b.dispatchTask(1, &incomingTask{isRpc: true, replySubject: "_INBOX.inflight",
+				natsMsg: &fnats.NatsMsg{MsgName: "alliance.Join", SessionId: "inflight", MsgID: "inflight"}})
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the in-flight request never reached the handler")
+			}
+		},
+		Stop:     func(ctx context.Context) error { return b.WithdrawRpc(ctx, "alliance.Join") },
+		Release:  func() { close(release) },
+		Released: returned.Load,
+	})
+	// 已准入的请求照常答复成功。
+	select {
+	case raw := <-rpc.replies:
+		if err := decodeRPCResponse(b.codec, raw, &struct{}{}); err != nil {
+			t.Fatalf("the in-flight request was answered %v; an admitted request must get its own answer", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the in-flight request got no answer")
+	}
+}
+
+// 撤下之后到达的请求不进 handler，答复 CodeRetryable（确定没执行，调用方用同一 RequestID 重发）；这个方法的队列组与
+// 实例主题订阅被退掉、Bus 停止时不再退订第二次；别的方法照常服务。没注册的方法明确拒绝，重复撤下无操作。
+func TestWithdrawnRPCIsAnsweredRetryableAndNeverReachesTheHandler(t *testing.T) {
+	client := &lifecycleClient{}
+	rpc := &lifecycleRpc{replies: make(chan []byte, 4)}
+	b := New(client, rpc, nil, Config{Sid: 3000, SvcType: "alliance", WorkerNum: 1})
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = b.StopWithContext(context.Background()) })
+	var joinCalls, infoCalls atomic.Int32
+	for method, calls := range map[string]*atomic.Int32{"alliance.Join": &joinCalls, "alliance.Info": &infoCalls} {
+		if err := b.HandleRpc(method, func(*RpcContext) (any, error) { calls.Add(1); return struct{}{}, nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.WithdrawRpc(context.Background(), "alliance.Join"); err != nil {
+		t.Fatalf("WithdrawRpc: %v", err)
+	}
+	answer := func(method string) error {
+		t.Helper()
+		b.dispatchTask(1, &incomingTask{isRpc: true, replySubject: "_INBOX." + method,
+			natsMsg: &fnats.NatsMsg{MsgName: method, SessionId: method, MsgID: method}})
+		select {
+		case raw := <-rpc.replies:
+			return decodeRPCResponse(b.codec, raw, &struct{}{})
+		case <-time.After(time.Second):
+			t.Fatalf("%s: no answer; the caller would wait out its timeout and see an unknown outcome", method)
+			return nil
+		}
+	}
+	if err := answer("alliance.Join"); errcode.CodeOf(err) != errcode.CodeRetryable {
+		t.Fatalf("a request after the withdrawal was answered %v (code %d); want CodeRetryable (not executed)", err, errcode.CodeOf(err))
+	}
+	if joinCalls.Load() != 0 {
+		t.Fatalf("the withdrawn handler ran %d times", joinCalls.Load())
+	}
+	if err := answer("alliance.Info"); err != nil || infoCalls.Load() != 1 {
+		t.Fatalf("the other method: err=%v calls=%d; only the withdrawn method may stop", err, infoCalls.Load())
+	}
+	for _, sub := range client.subs {
+		withdrawn := strings.HasSuffix(sub.subject, ".alliance.Join")
+		if withdrawn && (sub.valid || sub.unsubscribe != 1) {
+			t.Errorf("subscription %s queue=%q valid=%v unsubscribed=%d; want withdrawn once", sub.subject, sub.queue, sub.valid, sub.unsubscribe)
+		}
+		if !withdrawn && !sub.valid {
+			t.Errorf("subscription %s was withdrawn with alliance.Join", sub.subject)
+		}
+		for _, owned := range b.subs {
+			if withdrawn && owned == fnats.ISubscription(sub) {
+				t.Errorf("withdrawn subscription %s is still owned by the bus; Stop would unsubscribe it again", sub.subject)
+			}
+		}
+	}
+	if err := b.WithdrawRpc(context.Background(), "alliance.Join"); err != nil {
+		t.Fatalf("second WithdrawRpc = %v; want an idempotent no-op", err)
+	}
+	if err := b.WithdrawRpc(context.Background(), "alliance.Missing"); err == nil {
+		t.Fatal("withdrawing a method without a handler must be refused")
+	}
+}
+
+// 停机第一步（App 经 NatsMod 调 CloseIngress，App 生命周期方案）：全部已注册方法撤下——之后的请求答 CodeRetryable、
+// 不进 handler；四个基础主题的订阅退掉；CloseIngress 返回之前，已经接收的模块消息（在跑的与排队的）都处理完，之后到达的
+// 不进 handler。各方法不必由各自的 Mod 撤（生成的 Server、内置服务的 Mod 都不撤）。
+func TestCloseIngressClosesEveryInputOfTheBus(t *testing.T) {
+	client := &lifecycleClient{}
+	rpc := &lifecycleRpc{replies: make(chan []byte, 8)}
+	b := New(client, rpc, nil, Config{Sid: 3000, SvcType: "mail", WorkerNum: 1, QueueCap: 8})
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = b.StopWithContext(context.Background()) })
+	var rpcCalls, msgCalls atomic.Int32
+	for _, method := range []string{"mail.Send", "mail.List"} {
+		if err := b.HandleRpc(method, func(*RpcContext) (any, error) { rpcCalls.Add(1); return struct{}{}, nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entered, release := make(chan struct{}, 4), make(chan struct{})
+	if err := b.Handle("mail", "notice", func(*MsgContext) {
+		entered <- struct{}{}
+		<-release
+		msgCalls.Add(1)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	closer, ok := any(b).(interface{ CloseIngress(context.Context) error })
+	if !ok {
+		t.Fatal("*bus.Bus has no CloseIngress: the App cannot close the bus's inputs before the Mods its handlers use stop")
+	}
+	var server *lifecycleSub
+	for _, sub := range client.subs {
+		if sub.subject == b.subject.Server(3000) {
+			server = sub
+		}
+	}
+	message := func() *fnats.Msg {
+		data, err := b.encodeMsg(3000, "mail", "notice", struct{}{}, fnats.BroadcastNone)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &fnats.Msg{Subject: server.subject, Data: data}
+	}
+	// 一条在 handler 里、一条在队列里。
+	server.handler(message())
+	<-entered
+	server.handler(message())
+
+	closed := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		closed <- closer.CloseIngress(ctx)
+	}()
+	select {
+	case err := <-closed:
+		t.Fatalf("CloseIngress returned %v while an accepted message was still in its handler", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-closed; err != nil {
+		t.Fatalf("CloseIngress: %v", err)
+	}
+	if n := msgCalls.Load(); n != 2 {
+		t.Fatalf("%d accepted messages handled before CloseIngress returned, want 2 (the running and the queued one)", n)
+	}
+	for _, sub := range client.subs {
+		if sub.valid {
+			t.Errorf("subscription %s queue=%q still valid after CloseIngress", sub.subject, sub.queue)
+		}
+	}
+	server.handler(message()) // 传输层退订之后还送来的一条（替身不管退订）：总线自己的准入也要挡住它
+	time.Sleep(50 * time.Millisecond)
+	if n := msgCalls.Load(); n != 2 {
+		t.Fatalf("a message after CloseIngress reached the handler (%d calls)", n)
+	}
+	for _, method := range []string{"mail.Send", "mail.List"} {
+		b.dispatchTask(1, &incomingTask{isRpc: true, replySubject: "_INBOX." + method,
+			natsMsg: &fnats.NatsMsg{MsgName: method, SessionId: method, MsgID: method}})
+		select {
+		case raw := <-rpc.replies:
+			if err := decodeRPCResponse(b.codec, raw, &struct{}{}); errcode.CodeOf(err) != errcode.CodeRetryable {
+				t.Errorf("%s after CloseIngress was answered %v (code %d); want CodeRetryable", method, err, errcode.CodeOf(err))
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s after CloseIngress got no answer", method)
+		}
+	}
+	if rpcCalls.Load() != 0 {
+		t.Fatalf("RPC handlers ran %d times after CloseIngress", rpcCalls.Load())
+	}
+	if err := b.HandleRpc("mail.Late", func(*RpcContext) (any, error) { return nil, nil }); err == nil {
+		t.Fatal("HandleRpc after CloseIngress succeeded: a handler registered now would never be closed")
+	}
+	if err := closer.CloseIngress(context.Background()); err != nil {
+		t.Fatalf("second CloseIngress = %v, want an idempotent nil", err)
+	}
+}
+
+// JetStream RPC 没有 no responders：撤下停掉这个方法的服务级 consumer（共享 durable 交给别的实例），本实例的 consumer
+// 留到 Bus 停止，之后投递来的请求答复 CodeRetryable 并确认，不进 handler。
+func TestWithdrawnJetStreamRPCStopsTheServiceConsumerAndAnswersRetryable(t *testing.T) {
+	js := &responseStopRecordingJetStream{captureJetStreamRPC: &captureJetStreamRPC{}}
+	stopped := map[string]bool{}
+	var mu sync.Mutex
+	js.onStop = func(filter string) { mu.Lock(); stopped[filter] = true; mu.Unlock() }
+	b := New(&lifecycleClient{}, &lifecycleRpc{}, nil, Config{Sid: 3000, SvcType: "alliance", WorkerNum: 1})
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.EnableJetStreamRPC(js, JetStreamRPCConfig{RequestTTL: 5 * time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = b.StopWithContext(context.Background()) })
+	var calls atomic.Int32
+	if err := b.HandleRpc("alliance.Join", func(*RpcContext) (any, error) { calls.Add(1); return struct{}{}, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.WithdrawRpc(context.Background(), "alliance.Join"); err != nil {
+		t.Fatalf("WithdrawRpc: %v", err)
+	}
+	service, instance := b.subject.Rpc("alliance", "alliance.Join"), b.subject.RpcInstance("alliance", 3000, "alliance.Join")
+	mu.Lock()
+	if !stopped[service] || stopped[instance] {
+		t.Fatalf("stopped consumers %v; want the service consumer %s stopped and the instance consumer kept", stopped, service)
+	}
+	mu.Unlock()
+	req := &fnats.NatsMsg{MsgName: "alliance.Join", SessionId: "late", ReplySubject: "roost.rpc_resp.9100.late", DeadlineAt: time.Now().Add(time.Minute).UnixMilli()}
+	raw, err := b.codec.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.onJetStreamRPCRequest(context.Background(), &fnats.JetStreamMsg{Subject: instance, Data: raw}); err != nil {
+		t.Fatalf("a delivery after the withdrawal must be answered and acknowledged, got %v", err)
+	}
+	if err := decodeRPCResponse(b.codec, js.lastPublish().data, &struct{}{}); errcode.CodeOf(err) != errcode.CodeRetryable {
+		t.Fatalf("answer %v (code %d); want CodeRetryable", err, errcode.CodeOf(err))
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("the withdrawn handler ran %d times", calls.Load())
 	}
 }

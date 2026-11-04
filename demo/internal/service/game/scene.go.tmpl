@@ -93,8 +93,9 @@ const (
 	// outside it: its own entity (self), the scene's subject (the scene view)
 	// and the other member of its duel / ranked team (GroupSize 2, one team
 	// at a time) — sceneReservedObjects. 64 leaves another 33 below the
-	// limit for relation views a game adds later (a guild, a party of more
-	// than two) without revisiting this number, and it is the usual order of
+	// limit for relation views a game adds later (a guild — its members from
+	// the alliance mirror and the membership notices —, a party of more than
+	// two) without revisiting this number, and it is the usual order of
 	// "players drawn around you" for an MMO client. newSceneOn refuses a
 	// configuration in which the two no longer fit.
 	sceneMaxVisible      = 64

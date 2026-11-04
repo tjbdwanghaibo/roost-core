@@ -44,11 +44,19 @@ func fullConfigManifest(t *testing.T) Manifest {
 	m := gameTemplateManifest(t)
 	game := m.Services["game"]
 	for name := range modCatalog {
-		if _, declared := kitConfigSchemas[name]; declared && !contains(game.Mods, name) && !contains(m.SharedMods, name) {
+		// remote_mirror 与 remote_entity 互斥：只读 Mirror 装在单独的 reader 服务里。
+		if _, declared := kitConfigSchemas[name]; declared && name != "remote_mirror" && !contains(game.Mods, name) && !contains(m.SharedMods, name) {
 			game.Mods = append(game.Mods, name)
 		}
 	}
 	m.Services["game"] = game
+	block := 0
+	for _, spec := range m.Services {
+		if spec.PortBlock != nil {
+			block = max(block, *spec.PortBlock+1)
+		}
+	}
+	m.Services["reader"] = ServiceSpec{Mods: []string{"remote_mirror"}, PortBlock: &block}
 	m.Access = map[string]AccessSpec{"player": {Service: "game", Transports: []string{"tcp"}}}
 	if err := m.Validate(); err != nil {
 		t.Fatal(err)
@@ -299,7 +307,7 @@ func TestGeneratedProjectConfigGuardCatchesDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	edited = strings.Replace(string(raw), "\tlocalSID := identity.Sid\n", "\tlocalSID := identity.Sid\n\t_ = registry.Config().GetString(\"gm.secret_knob\")\n", 1)
+	edited = strings.Replace(string(raw), "\tworldID, err := lifecycle.WorldID(registry)\n", "\t_ = registry.Config().GetString(\"gm.secret_knob\")\n\tworldID, err := lifecycle.WorldID(registry)\n", 1)
 	if edited == string(raw) {
 		t.Fatal("gm.go changed shape; update this test")
 	}
@@ -347,11 +355,11 @@ func TestDoctorReadsBusinessDeclarationsFromTheProcess(t *testing.T) {
 		if item.Status != StatusOK {
 			t.Errorf("%s: %s %s", item.Name, item.Status, item.Detail)
 		}
-		// 4 个业务键（activity.key_prefix、activity.groups_file、platform.key_prefix、platform.payment_secret）加分区场景
-		// 原型 scene.partition.* 的 32 个（game/settings/partition.go，分支 feat/seamless-world-prototype；其中 team.* 4 个
-		// 是第 4 项的组队与队伍面板）。
-		if item.Name == "config-schema:game" && !strings.Contains(item.Detail, "(36 business key(s))") {
-			t.Errorf("config-schema:game = %q; want the 36 keys game/settings declares beyond the framework's (activity.*, platform.* and scene.partition.*)", item.Detail)
+		// 7 个工程自己的键：game/settings 的 activity.key_prefix、activity.groups_file、platform.key_prefix、
+		// platform.payment_secret、guild.found_cost 与联盟 RPC 客户端的 alliance.service_type、alliance.call_timeout；
+		// 加分区场景原型 scene.partition.* 的 32 个（game/settings/partition.go；其中 team.* 4 个是组队与队伍面板）。
+		if item.Name == "config-schema:game" && !strings.Contains(item.Detail, "(39 business key(s))") {
+			t.Errorf("config-schema:game = %q; want the 39 keys the project's own code declares beyond the framework's: game/settings (activity.*, platform.*, guild.found_cost, scene.partition.*) and the alliance RPC client (alliance.service_type, alliance.call_timeout)", item.Detail)
 		}
 	}
 

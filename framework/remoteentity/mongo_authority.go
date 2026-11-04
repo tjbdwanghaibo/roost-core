@@ -3,6 +3,7 @@ package remoteentity
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -178,4 +179,81 @@ func (s *MongoCommitter) TransferExpected(ctx context.Context, id int64, old ent
 	next.OwnerSid = owner
 	next.RouteEpoch++
 	return s.changeOwnership(ctx, id, old, next)
+}
+
+// OwnedEntityLister 按 owner 枚举持久所有权记录（起服预加载、运维迁移“本实例持有的”）。MongoCommitter 实现它。
+type OwnedEntityLister interface {
+	// ListOwnedRemoteEntities 按 ID 升序返回 owner 独占（非共享）的、kind 在 kinds 里的实体 ID 中大于 after 的一页
+	// （最多 limit 个）。next 是下一页的 after；为 0 表示已经到底。
+	ListOwnedRemoteEntities(ctx context.Context, owner int32, kinds []entity.EntityKind, after int64, limit int) (ids []int64, next int64, err error)
+}
+
+var _ OwnedEntityLister = (*MongoCommitter)(nil)
+
+// ListOwnedRemoteEntities 经 {_owner_sid: 1} 索引按 owner 查 _remote_entity_meta。kind 在 ID 的低位（category 2 位 +
+// kind 8 位，entity/idgen.go），用 _id 对 1024 取模过滤（每个 kind 四个 category 余数），不改元数据文档格式；
+// 返回前再按 ResolveEntityID 核对一次。
+func (s *MongoCommitter) ListOwnedRemoteEntities(ctx context.Context, owner int32, kinds []entity.EntityKind, after int64, limit int) ([]int64, int64, error) {
+	if s == nil || s.mongo == nil || s.database == "" {
+		return nil, 0, entity.ErrRemoteWriteCapabilityDisabled
+	}
+	if owner == 0 || len(kinds) == 0 || limit <= 0 {
+		return nil, 0, nil
+	}
+	tagSpan := int64(1) << entity.EntityIDTagBits
+	wanted := make(map[entity.EntityKind]struct{}, len(kinds))
+	remainders := make(bson.A, 0, len(kinds)<<entity.EntityCategoryBits)
+	for _, kind := range kinds {
+		wanted[kind] = struct{}{}
+		for category := int64(0); category < 1<<entity.EntityCategoryBits; category++ {
+			remainder := int64(kind)<<entity.EntityKindShift | category
+			remainders = append(remainders, bson.M{"_id": bson.M{"$mod": bson.A{tagSpan, remainder}}})
+		}
+	}
+	filter := bson.M{
+		"_owner_sid":    owner,
+		"_owner_shared": false,
+		"_authority":    true,
+		"_id":           bson.M{"$gt": after},
+		"$or":           remainders,
+	}
+	var docs []mongoAuthority
+	if err := s.controlDB().Collection(remoteMetaCollection).Find(ctx, filter, &docs, fmongo.FindOption{Sort: bson.D{{Key: "_id", Value: 1}}, Limit: int64(limit)}); err != nil {
+		return nil, 0, err
+	}
+	ids := make([]int64, 0, len(docs))
+	for _, doc := range docs {
+		if _, ok := wanted[entity.ResolveEntityID(doc.ID).Kind]; ok && doc.Owner == owner && !doc.Shared {
+			ids = append(ids, doc.ID)
+		}
+	}
+	next := int64(0)
+	if len(docs) == limit {
+		next = docs[len(docs)-1].ID
+	}
+	return ids, next, nil
+}
+
+// MongoOwnershipReader 是只读进程（Mirror Mod）读持久所有权记录的入口：只读 _remote_entity_meta，没有写许可、认领与
+// 转移。路由查找在 Redis 没有登记时用它（RouteLookup）。
+type MongoOwnershipReader struct {
+	store *MongoCommitter
+}
+
+var _ OwnershipReader = (*MongoOwnershipReader)(nil)
+
+// NewMongoOwnershipReader 在 database（remote_entity.mongo.database）上建只读的所有权查询。
+func NewMongoOwnershipReader(mongo fmongo.IMongo, database string) (*MongoOwnershipReader, error) {
+	if mongo == nil || database == "" {
+		return nil, errors.New("remote_entity: ownership reader requires a mongo client and the control database")
+	}
+	return &MongoOwnershipReader{store: &MongoCommitter{mongo: mongo, database: database}}, nil
+}
+
+// GetRemoteOwnership 读一条所有权记录；没有记录 found=false。
+func (r *MongoOwnershipReader) GetRemoteOwnership(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, bool, error) {
+	if entity.ResolveEntityID(id).FullID == 0 {
+		return entity.RemoteEntityMarkerLease{}, false, fmt.Errorf("%w: invalid entity %d", entity.ErrRemoteRejected, id)
+	}
+	return r.store.GetOwnership(ctx, id)
 }

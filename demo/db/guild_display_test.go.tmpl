@@ -1,0 +1,40 @@
+package db
+
+import (
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// PlayerDao.GuildID is a display field: nopersist, sync. The alliance service's
+// roster is the only authority on membership (decision 1 of the alliance plan),
+// so a Player document never carries a guild — a persisted copy written by a
+// game process could not be kept in the roster's transaction and would drift.
+// Both directions: a stored document's guild_id is not loaded, and the
+// document the DAO writes has none. The field still exists for replication:
+// nearby players see the guild (the "near" sync view).
+func TestPlayerGuildIDIsShownButNeverPersisted(t *testing.T) {
+	stored, err := bson.Marshal(bson.M{"_id": int64(42), "name": "stored", "guild_id": int64(7)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dao := NewPlayerDao()
+	dao.SetId(42)
+	if err := dao.RestorePersisted(stored, PlayerDaoSchemaVersion, 1); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if dao.GetName() != "stored" {
+		t.Fatalf("restored name %q, want the stored one", dao.GetName())
+	}
+	if got := dao.GetGuildID(); got != 0 {
+		t.Fatalf("GuildID restored from the Player document = %d; membership is the alliance roster's, the game only shows it", got)
+	}
+	var written bson.M
+	if err := bson.Unmarshal(dao.MarshalPersist(dataengine.AllFields), &written); err != nil {
+		t.Fatal(err)
+	}
+	if value, persisted := written["guild_id"]; persisted {
+		t.Fatalf("the Player document the DAO writes carries guild_id = %v", value)
+	}
+}

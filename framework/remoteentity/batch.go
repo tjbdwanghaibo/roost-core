@@ -88,6 +88,12 @@ func (m *Manager) PrepareRemoteWriteBatch(ctx context.Context, ids []int64) (_ e
 	if m.backend == nil {
 		return nil, entity.ErrRemoteWriteCapabilityDisabled
 	}
+	// 归属守卫先于写额度、wrapper 与任何所有权读写，整批一起判：批里有一个 kind 不归本服务，整批不碰权威。
+	for _, id := range ordered {
+		if err := m.rejectForeignKind(id, entity.ResolveEntityID(id).Kind); err != nil {
+			return nil, err
+		}
+	}
 	if !m.reserveRemoteWriteSlot() {
 		return nil, entity.ErrRemoteOverloaded
 	}
@@ -203,6 +209,11 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 			return nil, err
 		}
 	}
+	if !marked {
+		// 独占写准入成功：实体已加载、owner 是本 sid（冷加载后的第一次写、首写认领都经这里）。登记路由，已登记同一个值
+		// 时不碰 Redis；失败只记指标，不影响这次写。
+		w.mgr.registerRoute(ctx, w.id, w.kind, marker)
+	}
 	return &remoteWriteEntry{wrapper: w, entity: remoteEntity, lease: lease, distLock: distLocked}, nil
 }
 
@@ -255,6 +266,8 @@ func (w *remoteEntityWrapper) confirmWriteOwnership(ctx context.Context) (marked
 	}
 	marked = w.isMarked()
 	if !marked && !w.isLocalOwner() {
+		// 所有权已是别人：本进程不再持有它的路由登记（只按值删自己写的）。
+		w.mgr.dropRoute(ctx, w.id, "")
 		return false, fmt.Errorf("%w: entity=%d owner=%d", entity.ErrRemoteFenced, w.id, w.leaseOwner())
 	}
 	return marked, nil

@@ -141,6 +141,12 @@ type view struct {
 	Service
 	SourceImport string
 	Runtime      bool
+	// AnyRoute is true when at least one method routes to an entity's owner
+	// (//roost:rpc route): its response carries the owner sid of a redirect.
+	AnyRoute bool
+	// RouteMethods names the route methods, for the errors a client without
+	// a route lookup or a service without RouteChecker gets.
+	RouteMethods string
 	// AnyAffinity is true when at least one method routes by key.
 	//
 	// It drives whether the generated constructor installs the picker option.
@@ -175,7 +181,8 @@ func qualifyAssembly(source []byte, importPath, iface string) ([]byte, error) {
 	}
 	names := map[string]bool{iface: true, "CapabilityName": true, "LocalCapabilityName": true,
 		"ServiceType": true, "Capability": true, "RegisterHandlers": true, "Methods": true,
-		"BusClient": true, "NewBusClient": true, "DefaultCallTimeout": true, "AffinityMethods": true}
+		"BusClient": true, "NewBusClient": true, "DefaultCallTimeout": true, "AffinityMethods": true,
+		"RouteMethods": true}
 	skip := map[*ast.Ident]bool{}
 	ast.Inspect(f, func(n ast.Node) bool {
 		if s, ok := n.(*ast.SelectorExpr); ok {
@@ -302,6 +309,15 @@ func newView(service Service) (view, error) {
 		mv.ResultFields = strings.Join(fields, ", ")
 		mv.ResultReturns = strings.Join(returns, ", ")
 
+		if method.Route != "" {
+			v.AnyRoute = true
+			if v.RouteMethods != "" {
+				v.RouteMethods += ", "
+			}
+			v.RouteMethods += method.Name
+			// 改投答复带 owner sid：路由客户端经响应的 RedirectSID() 读它（servicerpc.RedirectProvider）。
+			mv.ResponseFields = append(mv.ResponseFields, "RedirectSid int32 `json:\"redirect_sid,omitempty\"`")
+		}
 		if method.Affinity != "" {
 			v.AnyAffinity = true
 			if v.AffinityMethods != "" {

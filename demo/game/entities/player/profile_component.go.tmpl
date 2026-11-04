@@ -29,20 +29,16 @@ type IProfileEntity interface {
 	ProfileComp() *ProfileComponent
 }
 
-// GuildID is the guild this player belongs to, or 0.
-//
-// It is the player's own copy of one fact that lives on the guild's roster.
-// Two places for one fact is normally what to avoid; it is right here because
-// the alternative is taking the guild's DISTRIBUTED lock every time the game
-// wants to know whether a player has a guild. What keeps them from drifting
-// is that both are written in the same transaction — possible because Nest
-// can hold a remote entity and a local one together (game/handler/join_guild.go).
+// GuildID is the guild this player is shown in, or 0: a display field
+// (PlayerDao.GuildID is nopersist). The alliance service's roster is the only
+// authority on membership; nothing that decides a write reads this.
 func (component *ProfileComponent) GuildID() int64 {
 	return component.Owner().Dao().GetGuildID()
 }
 
-// SetGuild records the player's side of a join. It is called only from the
-// transaction that also writes the roster.
+// SetGuild changes what the player is shown in: at login from the guard
+// mirror, after this player's own join / leave, on a membership notice
+// (game/handler/show_guild.go). It is never persisted.
 func (component *ProfileComponent) SetGuild(guildID int64) {
 	component.Owner().Dao().SetGuildID(guildID)
 	component.Owner().PublishSyncDirty()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -396,5 +397,92 @@ func TestJetStreamStopCancelsDeferredWorkButClosedWaitsForTheSettle(t *testing.T
 	}
 	if len(msg.calls) != 1 || msg.calls[0] != "nak" {
 		t.Fatalf("settle calls = %v, want [nak]", msg.calls)
+	}
+}
+
+// lostReplyJetStream 模拟 JetStream 集群没回答建消费者的请求（同一 durable 被多个实例同时建立时只回答一个）：前 lost 次
+// CreateOrUpdateConsumer 等到期限后返回 context.DeadlineExceeded——调用方 ctx 没有期限时按 nats.go 的做法套上缺省期限
+// （这里用 defaultTimeout 代替 5s）——之后的调用返回已经建好的消费者。
+type lostReplyJetStream struct {
+	gojs.JetStream
+	lost           int
+	defaultTimeout time.Duration
+	err            error // 非 nil 时每次都返回它（不重发的错误）
+
+	mu    sync.Mutex
+	calls int
+}
+
+func (j *lostReplyJetStream) CreateOrUpdateConsumer(ctx context.Context, _ string, _ gojs.ConsumerConfig) (gojs.Consumer, error) {
+	j.mu.Lock()
+	j.calls++
+	call := j.calls
+	j.mu.Unlock()
+	if j.err != nil {
+		return nil, j.err
+	}
+	if call <= j.lost {
+		if _, ok := ctx.Deadline(); !ok {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, j.defaultTimeout)
+			defer cancel()
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return createdConsumer{}, nil
+}
+
+func (j *lostReplyJetStream) callCount() int {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.calls
+}
+
+type createdConsumer struct{ gojs.Consumer }
+
+func (createdConsumer) Consume(gojs.MessageHandler, ...gojs.PullConsumeOpt) (gojs.ConsumeContext, error) {
+	return newFakeConsumeContext(), nil
+}
+
+// 两个实例同时起服、同时建同一个 durable 时（联盟服务冒烟 2026-11-04），没收到回答的一方曾等满 nats.go 的缺省期限、
+// 以 context deadline exceeded 让 Service.Init 失败退出，而消费者其实已经建好。单次尝试超时、调用方 ctx 还没结束时
+// 用同一配置重发（CreateOrUpdate 幂等）；调用方自己的期限到了、或别的错误，不重发；重发有次数上限。
+func TestSubscribeSendsTheConsumerCreateAgainWhenTheReplyIsLost(t *testing.T) {
+	restoreTimeout, restoreAttempts := consumerCreateAttemptTimeout, consumerCreateAttempts
+	consumerCreateAttemptTimeout, consumerCreateAttempts = 50*time.Millisecond, 4
+	t.Cleanup(func() { consumerCreateAttemptTimeout, consumerCreateAttempts = restoreTimeout, restoreAttempts })
+	cfg := fnats.JetStreamConsumerConfig{Stream: "EFFECTS", Name: "alliance-reservation-due", Durable: "alliance-reservation-due",
+		FilterSubject: "roost.effect.alliance.reservation_due", AckWait: 30 * time.Second}
+	handler := func(context.Context, *fnats.JetStreamMsg) error { return nil }
+
+	js := &lostReplyJetStream{lost: 1, defaultTimeout: 100 * time.Millisecond}
+	sub, err := (&JetStreamClient{js: js}).Subscribe(context.Background(), cfg, handler)
+	if err != nil {
+		t.Fatalf("Subscribe after one lost reply = %v (after %d create requests); the consumer exists, the request must be sent again", err, js.callCount())
+	}
+	sub.Stop()
+	if js.callCount() != 2 {
+		t.Fatalf("create requests = %d, want 2 (the lost one and its retry)", js.callCount())
+	}
+
+	// 一直没有回答：次数用完后返回最后一次的超时。
+	silent := &lostReplyJetStream{lost: 100, defaultTimeout: time.Second}
+	if _, err := (&JetStreamClient{js: silent}).Subscribe(context.Background(), cfg, handler); !errors.Is(err, context.DeadlineExceeded) || silent.callCount() != 4 {
+		t.Fatalf("never answered: err=%v requests=%d, want context.DeadlineExceeded after 4 requests", err, silent.callCount())
+	}
+
+	// 调用方自己的期限到了：不再重发。
+	bounded := &lostReplyJetStream{lost: 100, defaultTimeout: time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := (&JetStreamClient{js: bounded}).Subscribe(ctx, cfg, handler); !errors.Is(err, context.DeadlineExceeded) || bounded.callCount() != 1 {
+		t.Fatalf("caller deadline: err=%v requests=%d, want the deadline after 1 request", err, bounded.callCount())
+	}
+
+	// 别的错误（例如不可原地修改的配置冲突）不重发。
+	conflict := &lostReplyJetStream{err: errors.New("consumer create failed")}
+	if _, err := (&JetStreamClient{js: conflict}).Subscribe(context.Background(), cfg, handler); err == nil || conflict.callCount() != 1 {
+		t.Fatalf("other error: err=%v requests=%d, want it returned after 1 request", err, conflict.callCount())
 	}
 }

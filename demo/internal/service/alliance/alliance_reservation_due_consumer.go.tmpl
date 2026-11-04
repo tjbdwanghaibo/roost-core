@@ -1,0 +1,33 @@
+package alliance
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"{{MODULE}}/game/effects"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+)
+
+// AllianceReservationDueEffectDurable names the JetStream consumer for guard
+// reservation deadlines.
+const AllianceReservationDueEffectDurable = "alliance-reservation-due"
+
+// startAllianceReservationDueEffectConsumer settles expired reservations with
+// their alliance (rpcalliance.Service.HandleReservationDue). A consumer that
+// cannot reach the alliance fails the effect and it is redelivered: the guard
+// is never released on the clock alone.
+func startAllianceReservationDueEffectConsumer(ctx context.Context, registry *app.Registry, service *rpcalliance.Service) (fnats.IJetStreamSubscription, error) {
+	consumer := kitdataengine.EffectConsumer{Durable: AllianceReservationDueEffectDurable, Topic: effects.TopicAllianceReservationDue}
+	return kitdataengine.SubscribeEffects(ctx, registry, consumer, func(ctx context.Context, envelope nestwal.EffectEnvelope) error {
+		var event effects.AllianceReservationDue
+		if err := json.Unmarshal(envelope.Payload, &event); err != nil {
+			return kitdataengine.PoisonEffect(fmt.Errorf("alliance.reservation_due consumer: decode effect %s: %w", envelope.EffectID, err))
+		}
+		return service.HandleReservationDue(ctx, event)
+	})
+}

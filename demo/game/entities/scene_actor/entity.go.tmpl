@@ -13,7 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 )
 
-const EntityKindSceneActor entity.EntityKind = 6
+const EntityKindSceneActor entity.EntityKind = 9
 
 // ISceneActorEntity is the lock-safe business view used by Nest handlers.
 type ISceneActorEntity interface{ entity.IThreadSafeEntity }
@@ -29,7 +29,7 @@ type ISceneActorEntity interface{ entity.IThreadSafeEntity }
 // Category：rank 5（Other），与 Monster 同档，在 Scene（World，rank 2）之后加锁——Node 的 handler 一律先锁 Scene、
 // 再锁角色。
 //
-//roost:entity id=6 entityKind=EntityKindSceneActor category=entity.EntityCategoryOther noPersist=true lifetime=ephemeral
+//roost:entity id=9 entityKind=EntityKindSceneActor category=entity.EntityCategoryOther noPersist=true lifetime=ephemeral
 type SceneActor struct {
 	*entity.EntityBase
 	entity.ComponentManager

@@ -77,6 +77,18 @@ type Manifest struct {
 	// directory already uses, filled by withServicePackages when rendering
 	// into an existing project. Not part of roost.yaml.
 	servicePackages map[string]string
+
+	// ownerServices 是至少拥有一个 kind 的服务（//roost:entity service=），由 withEntityOwners 从工程源码读出，
+	// 渲染 bootstrap 时给这些服务装归属 handler 的 Mod。Not part of roost.yaml.
+	ownerServices map[string]bool
+	// ownedRemote 表示有 Remote 托管 kind 声明了归属服务：每个装 remote_entity 的服务都把别的服务拥有的
+	// Remote kind 交给 RemoteEntityMod（WithForeignKinds）。Not part of roost.yaml.
+	ownedRemote bool
+	// routeServices 是拥有 Remote 托管 kind 的服务：它们的 RemoteEntityMod 带 WithRouteKinds，实体加载后登记路由；
+	// preloadServices 是其中有 preload=startup kind 的服务：再带 WithPreloadKinds 并装 RemotePreloadMod
+	// （联盟服务方案 §2.7）。Not part of roost.yaml.
+	routeServices   map[string]bool
+	preloadServices map[string]bool
 }
 
 type ProjectSpec struct {
@@ -316,8 +328,12 @@ func (m Manifest) Validate() error {
 		if !validName(name) {
 			joined = errors.Join(joined, fmt.Errorf("invalid service name %q", name))
 		}
-		if _, err := resolveMods(service.Mods); err != nil {
+		if resolved, err := resolveMods(service.Mods); err != nil {
 			joined = errors.Join(joined, fmt.Errorf("service %s: %w", name, err))
+		} else if contains(resolved, "remote_mirror") && contains(resolved, "remote_entity") {
+			// 只读 Mirror 与写 Remote 的 Mod 发布同一个只读能力（remote_entity.mirror）；owner 进程用 RemoteEntityMod 的。
+			joined = errors.Join(joined, fmt.Errorf("service %s: remote_mirror (read-only) and remote_entity (owner) cannot both be assembled; "+
+				"a process that writes Remote entities reads snapshots through remote_entity, drop remote_mirror", name))
 		}
 		shared := make(map[string]bool, len(m.SharedMods))
 		for _, mod := range m.SharedMods {

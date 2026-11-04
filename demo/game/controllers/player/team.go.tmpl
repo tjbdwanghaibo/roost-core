@@ -23,8 +23,8 @@ import (
 )
 
 // 分区场景的组队端点（维护者 2026-11-04 第 4 项 = A）：邀请 / 接受 / 离队 / 解散 / 查看。成员表在 Remote 托管的 Team
-// 实体上，每个端点是一笔 [Team, Player] 事务——与公会同一种写法；端点只决定队伍 ID 从哪来（新队伍：持久计数器，
-// 与 Guild 一样不能用进程内的运行期 ID）。普通场景的进程上它们答 scene_not_partitioned：普通场景的组队是匹配。
+// 实体上，每个端点是一笔 [Team, Player] 事务（Team 的分布式锁 + Player 的本地锁，成员表与本人的副本同一笔提交）；端点只决定队伍 ID 从哪来（新队伍：
+// 持久计数器，不能用进程内的运行期 ID）。普通场景的进程上它们答 scene_not_partitioned：普通场景的组队是匹配。
 //
 // 规则（原型缺省，scene.partition.team 声明、加载时校验）：一名玩家同时只在一支队伍里；只有队长能邀请与解散；邀请
 // invite_ttl 后过期；成员数不超过 max_members。队友的位置 / HP 不从这里来：每名队员的 Base 把快照发给其他队员的
@@ -195,7 +195,7 @@ func (controller *Controller) Teams() (*lifecycle.TeamLifecycle, error) {
 	return controller.teams, nil
 }
 
-// nextTeamID 保留一个持久的队伍号（与公会号同一种计数器，各自一份）：同 sid 的下一个进程、别的 sid 的进程都不会再发出它。
+// nextTeamID 保留一个持久的队伍号（Mongo 计数器 `$inc`）：同 sid 的下一个进程、别的 sid 的进程都不会再发出它。
 func (controller *Controller) nextTeamID(ctx gocontext.Context) (int64, error) {
 	if controller == nil || controller.teamIDs == nil {
 		return 0, fmt.Errorf("team id allocator: persistent counter is unavailable")

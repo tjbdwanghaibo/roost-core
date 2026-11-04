@@ -3,6 +3,7 @@ package remoteentity
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
@@ -22,7 +23,7 @@ import (
 // 本机兴趣表只是被过期条目占满时，健康检查不能一直报 capacity exhausted：过期条目只在需要新建兴趣或定期续租时清理，
 // 健康检查不能直接按 map 长度判断，否则读满一阵之后、活跃兴趣早已为 0 时仍永远是 Fail。
 //
-// kind 253：本包测试只注册这一个 kind。
+// kind 253：本包测试只注册这一个 kind（归属守卫用例也用它；250 故意不注册）。
 const interestHealthKind entity.EntityKind = 253
 
 func TestExpiredLocalInterestsDoNotKeepHealthFailing(t *testing.T) {
@@ -157,5 +158,48 @@ func TestRemoteEntityModDoesNotLogStoppedWhenStopFails(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), `msg="remote_entity mod: stopped"`) {
 		t.Fatalf("a completed stop did not log it:\n%s", logs.String())
+	}
+}
+
+// 实体归属守卫的装配：WithForeignKinds 在 Init 校验一次（必须是已注册的 Remote 托管 kind），Provide 出来的 Manager
+// 对这些 kind 在认领前拒绝；不传时 Config.ForeignKinds 为空，行为不变。
+func TestRemoteEntityModForeignKinds(t *testing.T) {
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: interestHealthKind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	cfg := viper.New()
+	cfg.Set("sid", 1101)
+
+	if err := NewRemoteEntityMod(0, WithForeignKinds(250)).Init(cfg); err == nil || !strings.Contains(err.Error(), "foreign kind 250") {
+		t.Fatalf("unregistered foreign kind: Init err = %v, want rejection", err)
+	}
+	plain := NewRemoteEntityMod(0)
+	if err := plain.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(plain.cfg.ForeignKinds) != 0 {
+		t.Fatalf("no WithForeignKinds: ForeignKinds = %v, want empty", plain.cfg.ForeignKinds)
+	}
+
+	r := app.NewRegistry(cfg)
+	if err := r.Register(mods.ModRedis, fredis.IRedis(&tokenRecordingRedis{})); err != nil {
+		t.Fatal(err)
+	}
+	backend, err := coreremote.NewBackend(entity.NewManagerAccess(entity.NewEntityManager()), coreremote.NewMongoCommitter(unusedMongo{}, "remote_entity", 1101, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod := NewRemoteEntityMod(0, WithBackend(backend), WithForeignKinds(interestHealthKind))
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(r); err != nil {
+		t.Fatal(err)
+	}
+	manager := app.MustLookup[entity.IRemoteEntityManager](r, mods.ModRemoteEntity)
+	id, err := entity.BuildEntityID(9601, interestHealthKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.PrepareRemoteWriteBatch(context.Background(), []int64{id}); !errors.Is(err, entity.ErrRemoteKindNotOwned) {
+		t.Fatalf("foreign kind write admission through the Mod: %v, want ErrRemoteKindNotOwned", err)
 	}
 }

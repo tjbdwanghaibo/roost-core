@@ -42,15 +42,22 @@ const (
 	ModRemoteEntityAtomicStore app.ModName = "remote_entity.atomic_store"
 	// ModRemoteMirror 是只读快照能力（entity.RemoteSnapshotReadOnly，Mirror 第 5 步）：只读服务由
 	// wiring/remoteentity.RemoteMirrorMod 提供，owner 进程由 RemoteEntityMod 以 Manager.SnapshotClient() 提供。
-	ModRemoteMirror  app.ModName = "remote_entity.mirror"
-	ModLock          app.ModName = "lock"
-	ModOps           app.ModName = "ops"
-	ModStatsLog      app.ModName = "stats_log"
-	ModConfigData    app.ModName = "config_data"
-	ModNest          app.ModName = "nest"
-	ModSaga          app.ModName = "saga"
-	ModEntityRuntime app.ModName = "entity.runtime"
-	ModManager       app.ModName = "manager"
+	ModRemoteMirror app.ModName = "remote_entity.mirror"
+	// ModRemoteRoute 是路由 RPC 的查找能力（servicerpc.RouteResolver，联盟服务方案 §2.7）：Redis 路由登记 → 持久
+	// 所有权记录。owner 进程由 RemoteEntityMod 提供，只读进程由 RemoteMirrorMod 提供；业务经
+	// wiring/remoteentity.RouteSource 取用。
+	ModRemoteRoute app.ModName = "remote_entity.route"
+	// ModRemoteEntityPreload 是起服预加载 Mod（wiring/remoteentity.RemotePreloadMod）：排在 remote_entity、DataEngine
+	// 与 Nest 之后，路由 RPC 的 owner Mod 经 OptionalDependsOn 排在它之后，预加载完成前不注册 handler。
+	ModRemoteEntityPreload app.ModName = "remote_entity.preload"
+	ModLock                app.ModName = "lock"
+	ModOps                 app.ModName = "ops"
+	ModStatsLog            app.ModName = "stats_log"
+	ModConfigData          app.ModName = "config_data"
+	ModNest                app.ModName = "nest"
+	ModSaga                app.ModName = "saga"
+	ModEntityRuntime       app.ModName = "entity.runtime"
+	ModManager             app.ModName = "manager"
 	// ModEntityTimer 是按实体持久定时器的驱动装配（wiring/entitytimer）。
 	ModEntityTimer app.ModName = "entity_timer"
 	// ModHeartbeat 是按实体心跳的驱动装配（wiring/heartbeat），同名登记 *gameplay/heartbeat.Driver。

@@ -1,0 +1,284 @@
+package e2e
+
+// 一人一盟（方案 §2.5、§5“一人一盟的两步”）：守卫与联盟分属两个实例时，同一玩家并发入会 / 被两个联盟批准，只有一个成功；
+// kill -9 守卫方或联盟方之后，按同一 RequestID 重发、期限到守卫方 Settle、effect 重投收尾，不出现一人两盟，也不出现
+// 永不释放的预约。
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+
+	rpcalliance "example.com/planet/internal/rpc/alliance"
+)
+
+// pair 是两个实例上各一个联盟：a 在 3000，b 在 3001。
+type pair struct{ a, b int64 }
+
+func (s *suite) foundPair(client *rpcalliance.BusClient, leader *int64, open bool) pair {
+	t := s.t
+	var p pair
+	for tries := 0; p.a == 0 || p.b == 0; tries++ {
+		if tries > 100 {
+			t.Fatal("Found never landed on both instances")
+		}
+		*leader++
+		var reply rpcalliance.Reply
+		err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
+			var err error
+			reply, err = client.Found(ctx, fmt.Sprintf("found-%d", *leader), *leader, 1000, fmt.Sprintf("e2e-%d", *leader), open)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case reply.ServedBySID == 3000 && p.a == 0:
+			p.a = reply.Alliance.AllianceID
+		case reply.ServedBySID == 3001 && p.b == 0:
+			p.b = reply.Alliance.AllianceID
+		}
+	}
+	return p
+}
+
+// checkOneAlliance：每个玩家至多在一个联盟的成员表里，守卫记的就是那个联盟，且最终没有未决预约。返回各联盟的人数。
+func (s *suite) checkOneAlliance(client *rpcalliance.BusClient, alliances []int64, players []int64, settle time.Duration) map[int64]int {
+	t := s.t
+	var lastDetail string
+	deadline := time.Now().Add(settle)
+	for {
+		in := map[int64][]int64{}
+		sizes := map[int64]int{}
+		for _, id := range alliances {
+			var info rpcalliance.Reply
+			err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
+				var err error
+				info, err = client.Info(ctx, target(t, id))
+				return err
+			})
+			if err != nil {
+				t.Fatalf("info %d: %v", id, err)
+			}
+			sizes[id] = len(info.Alliance.Members)
+			for player := range members(info.Alliance) {
+				in[player] = append(in[player], id)
+			}
+		}
+		pending := 0
+		for _, player := range players {
+			if len(in[player]) > 1 {
+				t.Fatalf("ONE-ALLIANCE VIOLATED: player %d is a member of %v", player, in[player])
+			}
+			var g rpcalliance.GuardReply
+			err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
+				var err error
+				g, err = client.Guard(ctx, guard(t, player))
+				return err
+			})
+			if err != nil && servicerpc.Classify(err) != servicerpc.OutcomeRejected {
+				t.Fatalf("guard %d: %v", player, err)
+			}
+			want := int64(0)
+			if len(in[player]) == 1 {
+				want = in[player][0]
+			}
+			if g.State.PendingRequestID != "" {
+				pending++
+				lastDetail = fmt.Sprintf("player %d guard %+v", player, g.State)
+				continue
+			}
+			if g.State.AllianceID != want {
+				t.Fatalf("player %d: guard says alliance %d, membership says %v", player, g.State.AllianceID, in[player])
+			}
+		}
+		if pending == 0 {
+			return sizes
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("RESERVATION NEVER RELEASED: %d guards still pending %v after the settle window; e.g. %s", pending, settle, lastDetail)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// raceJoins：每个玩家同时向 p.a、p.b 入会（apply=true 时改为两个盟主同时批准），重发到确定答复。返回两边都成功的人数。
+func (s *suite) raceJoins(client *rpcalliance.BusClient, p pair, players []int64, approveBy map[int64]int64, kill func()) (both, one, none int) {
+	t := s.t
+	type result struct{ a, b error }
+	results := make([]result, len(players))
+	var wg sync.WaitGroup
+	gate := make(chan struct{})
+	for i, player := range players {
+		for side, alliance := range []int64{p.a, p.b} {
+			i, player, side, alliance := i, player, side, alliance
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-gate
+				request := fmt.Sprintf("race-%d-%d", player, alliance)
+				err, _ := definite(s.ctx, 3*time.Minute, func(ctx context.Context) error {
+					var err error
+					if approveBy != nil {
+						_, err = client.Approve(ctx, request, approveBy[alliance], 1000, target(t, alliance), player)
+					} else {
+						_, err = client.Join(ctx, request, player, 1000, target(t, alliance))
+					}
+					return err
+				})
+				if side == 0 {
+					results[i].a = err
+				} else {
+					results[i].b = err
+				}
+			}()
+		}
+	}
+	close(gate)
+	if kill != nil {
+		kill()
+	}
+	wg.Wait()
+	for i, r := range results {
+		okA, okB := r.a == nil, r.b == nil
+		for _, err := range []error{r.a, r.b} {
+			if err != nil && servicerpc.Classify(err) != servicerpc.OutcomeRejected {
+				t.Fatalf("player %d: no definite answer: %v", players[i], err)
+			}
+		}
+		switch {
+		case okA && okB:
+			both++
+		case okA || okB:
+			one++
+		default:
+			none++
+		}
+	}
+	return both, one, none
+}
+
+func TestAllianceE2EOneAllianceUnderRace(t *testing.T) {
+	s := newSuite(t, 20*time.Minute)
+	opts := procOptions{keys: [][3]string{{"alliance", "reservation_ttl", "5s"}}}
+	a := s.start("alliance-3000", "alliance", 3000, opts)
+	b := s.start("alliance-3001", "alliance", 3001, opts)
+	client := s.client(nil, 3*time.Second)
+	leader := int64(600_000)
+	const n = 24
+	players := func(base int64) []int64 {
+		out := make([]int64, n)
+		for i := range out {
+			out[i] = base + int64(i)
+		}
+		return out
+	}
+	// 守卫先建在 3000：入 3000 上的联盟再退出（rejoin_cooldown 0s）。
+	guardOnA := func(ids []int64, p pair) {
+		for _, player := range ids {
+			for _, step := range []func(ctx context.Context) error{
+				func(ctx context.Context) error {
+					_, err := client.Join(ctx, fmt.Sprintf("pre-join-%d", player), player, 1000, target(t, p.a))
+					return err
+				},
+				func(ctx context.Context) error {
+					_, err := client.Leave(ctx, fmt.Sprintf("pre-leave-%d", player), player, 1000, target(t, p.a))
+					return err
+				},
+			} {
+				if err, _ := definite(s.ctx, time.Minute, step); err != nil {
+					t.Fatalf("player %d: %v", player, err)
+				}
+			}
+		}
+	}
+	settle := 90 * time.Second
+
+	// ① 守卫还不存在：两个实例并发新建守卫，原子认领只留一个，输的一方改走两步。
+	p1 := s.foundPair(client, &leader, true)
+	ids := players(700_000)
+	both, one, none := s.raceJoins(client, p1, ids, nil, nil)
+	sizes := s.checkOneAlliance(client, []int64{p1.a, p1.b}, ids, settle)
+	t.Logf("RACE fresh guards: both=%d one=%d none=%d sizes=%v", both, one, none, sizes)
+	if both != 0 || one != n {
+		t.Fatalf("fresh guards: %d players got both joins, %d one, %d none; want exactly one each", both, one, none)
+	}
+
+	// ② 守卫在 3000：入 3000 的联盟走同实例事务，入 3001 的走两步（预约 → 加成员 → effect 确认）。
+	p2 := s.foundPair(client, &leader, true)
+	ids = players(710_000)
+	guardOnA(ids, p2)
+	both, one, none = s.raceJoins(client, p2, ids, nil, nil)
+	sizes = s.checkOneAlliance(client, []int64{p2.a, p2.b}, ids, settle)
+	t.Logf("RACE guards on 3000: both=%d one=%d none=%d sizes=%v", both, one, none, sizes)
+	if both != 0 || one != n {
+		t.Fatalf("guards on 3000: both=%d one=%d none=%d; want exactly one each", both, one, none)
+	}
+
+	// ③ 两个不开放的联盟各收到申请，两位盟主并发批准同一个玩家。
+	p3 := s.foundPair(client, &leader, false)
+	leaders := map[int64]int64{}
+	for _, id := range []int64{p3.a, p3.b} {
+		info, err := client.Info(s.ctx, target(t, id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaders[id] = info.Alliance.LeaderID
+	}
+	ids = players(720_000)
+	for _, player := range ids {
+		for _, id := range []int64{p3.a, p3.b} {
+			if err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
+				_, err := client.Apply(ctx, fmt.Sprintf("apply-%d-%d", player, id), player, 1000, target(t, id))
+				return err
+			}); err != nil {
+				t.Fatalf("apply %d to %d: %v", player, id, err)
+			}
+		}
+	}
+	both, one, none = s.raceJoins(client, p3, ids, leaders, nil)
+	sizes = s.checkOneAlliance(client, []int64{p3.a, p3.b}, ids, settle)
+	t.Logf("RACE approvals: both=%d one=%d none=%d sizes=%v", both, one, none, sizes)
+	if both != 0 || one != n {
+		t.Fatalf("approvals: both=%d one=%d none=%d; want exactly one each", both, one, none)
+	}
+
+	// ④ kill -9 守卫方（3000）：两步进行中守卫所在实例崩溃，同 sid 拉起后按期限与重发收尾。
+	p4 := s.foundPair(client, &leader, true)
+	ids = players(730_000)
+	guardOnA(ids, p4)
+	both, one, none = s.raceJoins(client, p4, ids, nil, func() {
+		time.Sleep(400 * time.Millisecond)
+		s.stop(a, syscall.SIGKILL)
+		time.Sleep(2 * time.Second)
+		s.launch(a)
+		s.waitReady(a, 2*time.Minute)
+	})
+	sizes = s.checkOneAlliance(client, []int64{p4.a, p4.b}, ids, settle)
+	t.Logf("RACE kill -9 guard side: both=%d one=%d none=%d sizes=%v", both, one, none, sizes)
+	if both != 0 {
+		t.Fatalf("kill -9 guard side: %d players were told both joins succeeded", both)
+	}
+
+	// ⑤ kill -9 联盟方（3001）：两步里加成员的一方崩溃。
+	p5 := s.foundPair(client, &leader, true)
+	ids = players(740_000)
+	guardOnA(ids, p5)
+	both, one, none = s.raceJoins(client, p5, ids, nil, func() {
+		time.Sleep(400 * time.Millisecond)
+		s.stop(b, syscall.SIGKILL)
+		time.Sleep(2 * time.Second)
+		s.launch(b)
+		s.waitReady(b, 2*time.Minute)
+	})
+	sizes = s.checkOneAlliance(client, []int64{p5.a, p5.b}, ids, settle)
+	t.Logf("RACE kill -9 alliance side: both=%d one=%d none=%d sizes=%v", both, one, none, sizes)
+	if both != 0 {
+		t.Fatalf("kill -9 alliance side: %d players were told both joins succeeded", both)
+	}
+}

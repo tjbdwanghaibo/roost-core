@@ -87,7 +87,7 @@ func (c *JetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 	if handler == nil {
 		return nil, errors.New("nats jetstream: handler is nil")
 	}
-	consumer, err := c.js.CreateOrUpdateConsumer(ctx, cfg.Stream, toJetStreamConsumerConfig(cfg))
+	consumer, err := c.createOrUpdateConsumer(ctx, cfg)
 	if err != nil {
 		return nil, consumerConfigError(cfg, c.client.wrapError(err))
 	}
@@ -102,6 +102,43 @@ func (c *JetStreamClient) Subscribe(ctx context.Context, cfg fnats.JetStreamCons
 	}
 	sub.watch(cc)
 	return sub, nil
+}
+
+// 建立 / 更新持久消费者的单次尝试期限与次数（createOrUpdateConsumer）。变量只为测试可调。
+var (
+	consumerCreateAttemptTimeout = 2 * time.Second
+	consumerCreateAttempts       = 4
+)
+
+// createOrUpdateConsumer 建立或原地更新 cfg 的持久消费者。单次尝试超时、调用方 ctx 还没结束时用同一配置重发，最多
+// consumerCreateAttempts 次，每次不超过 consumerCreateAttemptTimeout，总时长仍受调用方 ctx 约束。
+//
+// 原因：同一个服务的多个实例同时起服时会同时建同一个 durable（effect 消费者、服务级 RPC consumer、saga 步骤消费者
+// 都是全部实例共用的 durable），JetStream 集群这时可能只回答其中一个请求，另一个请求方一直等不到回答——消费者其实已经
+// 建好。联盟服务两实例冒烟（2026-11-04，私有 3 节点 NATS、nats-server 2.14.5）：一个进程在 Service.Init 建
+// alliance-reservation-due 时等满 nats.go 的 API 缺省期限 5s，context deadline exceeded 退出，nats-server 日志里这个
+// consumer 在 16ms 内两次选出 leader，另一个进程正常建好并消费。CreateOrUpdate 对同一配置幂等，重发拿到的就是已经建好的
+// 消费者；单次期限比缺省 5s 短，调用方自带期限时（总线 RPC 的 SetupTimeout 5s）也还有重发的余地。其他错误
+// （配置冲突、流不存在、连接关闭）不重发。
+func (c *JetStreamClient) createOrUpdateConsumer(ctx context.Context, cfg fnats.JetStreamConsumerConfig) (gojs.Consumer, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	consumerCfg := toJetStreamConsumerConfig(cfg)
+	for attempt := 1; ; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, consumerCreateAttemptTimeout)
+		consumer, err := c.js.CreateOrUpdateConsumer(attemptCtx, cfg.Stream, consumerCfg)
+		cancel()
+		if err == nil {
+			return consumer, nil
+		}
+		if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil || attempt >= consumerCreateAttempts {
+			return nil, err
+		}
+		metrics.IncCounter("nats.jetstream.consumer_create_retry.total", nil, 1)
+		slog.Warn("nats jetstream: creating a consumer got no answer in time; sending the same request again",
+			"stream", cfg.Stream, "consumer", consumerCfg.Durable, "attempt", attempt, "attempt_timeout", consumerCreateAttemptTimeout)
+	}
 }
 
 // consumerConfigError 给建立 / 更新持久消费者的失败带上流与消费者名（否则启动失败的报错不说是哪个 durable）。

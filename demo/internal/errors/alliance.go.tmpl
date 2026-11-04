@@ -1,0 +1,41 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// The alliance service's business rejections (internal/rpc/alliance). Each
+// is an answer the service decided under the alliance's lock and recorded in
+// the request's receipt, so the same request id gets the same rejection
+// again; none of them means "try again". The service's not-executed and
+// result-unknown answers are the framework's (servicerpc.Retryable /
+// Redirect, timeouts), not codes here.
+var (
+	// ErrAllianceName: the name is empty, too long or has control characters.
+	ErrAllianceName = errcode.Define(100030, "alliance_name", "alliance name is invalid")
+	// ErrAllianceMissing: no alliance with that id, or the player is not in it.
+	ErrAllianceMissing = errcode.Define(100031, "alliance_missing", "alliance or member not found")
+	// ErrAllianceFull: the roster is at alliance.max_members. The roster is one
+	// document per write, so its size is a real limit.
+	ErrAllianceFull = errcode.Define(100032, "alliance_full", "alliance is full")
+	// ErrAllianceDenied: the caller's role does not allow the operation.
+	ErrAllianceDenied = errcode.Define(100033, "alliance_denied", "not allowed for your role in the alliance")
+	// ErrAllianceMembership: the player is already in an alliance, or another
+	// alliance is admitting them right now (one player, one alliance).
+	ErrAllianceMembership = errcode.Define(100034, "alliance_membership", "player is already in an alliance or joining one")
+	// ErrAllianceApplication: no such application, or one is already pending.
+	ErrAllianceApplication = errcode.Define(100035, "alliance_application", "no such application, or already applied")
+	// ErrAllianceLeader: the leader cannot leave or be removed; transfer first.
+	ErrAllianceLeader = errcode.Define(100036, "alliance_leader", "the leader must transfer leadership first")
+	// ErrAllianceAmount: a donation amount that is not positive or overflows.
+	ErrAllianceAmount = errcode.Define(100037, "alliance_amount", "donation amount is invalid")
+	// ErrAllianceCooldown: the player left an alliance too recently.
+	ErrAllianceCooldown = errcode.Define(100038, "alliance_cooldown", "left an alliance too recently")
+	// ErrAllianceWar: already at war with that alliance, at war with too many,
+	// or declaring war on itself.
+	ErrAllianceWar = errcode.Define(100041, "alliance_war", "war declaration refused")
+	// ErrAllianceExpired: the guard gave up on this request when its
+	// reservation expired; the request will not take effect any more.
+	ErrAllianceExpired = errcode.Define(100039, "alliance_expired", "the join request expired")
+	// ErrAllianceReward: the alliance reward of this period was already
+	// claimed (ClaimReward, the reward saga's first step).
+	ErrAllianceReward = errcode.Define(100042, "alliance_reward", "alliance reward already claimed this period")
+)

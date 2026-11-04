@@ -16,6 +16,10 @@ Remote Entity 是具有权威写入与版本的共享实体。写仍通过 Nest 
 
 把实体声明成 Remote 托管要同时改三处：标记 `category=entity.EntityCategoryRemote remote=managed`、嵌入 `*entity.RemoteEntityBase`（生成器漏换时报错并点名要换的字段），以及写它的 Nest 服务装 `remote_entity` Mod（`wiring/remoteentity`）。没有 Remote 运行时的进程不会把这类写当本地写：Nest 派发与 DataEngine 删除一律返回 `entity.ErrNoRemoteRuntime`（包裹 `ErrRemoteWriteCapabilityDisabled`，文本给出加 Mod 的命令）。生成工程里 `roost generate` 与 doctor 的 `remote-runtime` 项在带 Nest 的服务全都没有 `remote_entity` 时拒绝并给出 `roost add mod remote_entity -service <service>`；只有部分服务缺时提示（实体由哪个服务写，静态上看不出）。
 
+实体归某个服务写时（例如联盟服务独占全部 Alliance），别的服务的进程用 `wiring/remoteentity.WithForeignKinds(kinds...)` 声明这些 kind：写准入与 `ClaimRemoteOwnership` 等所有权操作在读写任何所有权记录之前返回 `entity.ErrRemoteKindNotOwned`，不会把新实体认领走；读快照不受影响，没声明的 kind 行为不变。见 [Remote Entity 契约“实体归属守卫”](../REMOTE_ENTITY.md#实体归属守卫)。
+
+实体服务有多个实例时，归属服务的 `RemoteEntityMod` 用 `WithRouteKinds(kinds...)` 声明登记路由的 kind：owner 加载这些 kind 的独占实体后在 Redis 登记带 TTL 的“实体 ID → sid + 所有权代际”，批量续期，转移出去、失去所有权与正常停机时按值删除，kill -9 靠过期；调用方的路由 RPC 经 `RouteSource` 查 owner（Redis → 持久所有权记录），服务端前置检查 `RPCRouteCheck` 不让不存在的实体进入写准入。登记只是路由提示，写准入仍只看所有权记录与 fence。`WithPreloadKinds` 加 `NewRemotePreloadMod()` 是起服预加载：只加载所有权记录里 owner 是本 sid 的实体，完成前路由 RPC 不接请求。见 [Remote Entity 契约“路由登记”](../REMOTE_ENTITY.md#路由登记) 与 [guide/09“路由 RPC 与改投”](09-services.md#2a-路由-rpc-与改投)。
+
 ## 2. 写入生命周期
 
 准备参与实体和写许可 → 业务池 handler 修改 DAO → 事务局部变更形成 Remote 批次 → 持久确认 → finalizer 收尾/释放。参与者必须判断本事务变化，不能用对象全局 dirty 推断。取消等待不撤销已经准入的持久写；结果未知保留 fence/恢复责任。
@@ -116,7 +120,7 @@ func handlerApplyAllianceBonus(p player.IPlayerEntity, req requests.AllianceRequ
 
 ### 调度与失败边界
 
-1. Nest 识别参数的 `RemoteAccessProvider`，在 I/O 池读取并校验快照；默认经 Remote Manager，也可配置 `NestOptionWithRemoteSnapshotResolver` 接入只读快照来源。需要提前装配快照读取及对应类型的解码能力。
+1. Nest 识别参数的 `RemoteAccessProvider`，在 I/O 池读取并校验快照；默认经 Remote Manager，也可配置 `NestOptionWithRemoteSnapshotResolver` 接入只读快照来源。需要提前装配快照读取及对应类型的解码能力。只读进程（装 `wiring/remoteentity.NewRemoteMirrorMod`、不装 `remote_entity` 写能力）由 wiring 的 Nest Mod 自动接上：没有写 Manager 而注册表里有 `mods.ModRemoteMirror` 时，用 `nest.MirrorSnapshotResolver(MirrorSource)` 作快照来源（2026-11-04），读取规则与经 Manager 相同——`MinVersion` 即 After 的状态版本，Monotonic 在缓存不满足时回源一次，Cached 冷读在没有 L2 值时是未命中；Linearizable 只在只读 loader 声明了线性化读时可用。业务另给的 resolver 选项仍然优先。回归：`wiring/nest` 的 `TestReadOnlyProcessPrefetchesRemoteViewThroughMirror`。
 2. I/O 完成后回到业务池，取得普通 Entity 的 Guard 执行 handler。访问器读取当前请求上下文，不再做 I/O；只在当前 handler 生命周期内使用，不保存到异步任务中。
 3. `required` 的读取失败、身份不匹配或版本过旧使请求失败，handler 不执行。可选读取失败时访问器返回 `false`，业务明确降级；无效引用/重复别名属于声明错误，不靠可选模式忽略。多个请求参数的别名不能重复。
 4. View 不自动写回 Remote，也不会使玩家和公会构成原子事务。读取策略只约束预取时刻，不保证排队后执行时公会仍未变化；玩家中途退会/换会须在锁内核对引用。扣联盟资源、审批成员、撤权等权威判断走 Remote 写入或拥有者命令，跨权威事务按 Saga 契约处理。

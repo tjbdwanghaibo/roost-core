@@ -1,0 +1,110 @@
+package handler
+
+import (
+	"fmt"
+	"time"
+
+	"{{MODULE}}/game/alliancerule"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
+	alliance_shard "{{MODULE}}/game/entities/alliance_shard"
+)
+
+// handlerGuardReserve is step 1 of a join whose alliance is on another
+// instance: reserve the player's guard for (allianceID, requestID) and arm the
+// reservation's deadline on this instance's shard, in one transaction. The
+// receipt makes a redelivered reserve a replay, so a reserve that arrives
+// after the reservation was settled cannot re-open it.
+//
+//roost:nest rollback=undo durability=strict
+func handlerGuardReserve(target alliance_member.IGuardEntity, shard alliance_shard.ITimerEntity, requestID string, allianceID int64, deadlineUnix int64, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
+	guard := target.GuardComp()
+	outcome, err := guard.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		if err := guard.CheckFree(requestID, nowUnix, time.Duration(cooldownSeconds)*time.Second); err != nil {
+			return allianceID, err
+		}
+		guard.Reserve(allianceID, requestID, deadlineUnix)
+		shard.TimerComp().ArmReservation(guard.PlayerID(), allianceID, requestID, time.Unix(deadlineUnix, 0))
+		return allianceID, nil
+	})
+	if err != nil {
+		return alliancerule.GuardAnswer{}, err
+	}
+	return alliancerule.GuardAnswer{Outcome: outcome, State: guard.State(guard.CurrentVersion())}, nil
+}
+
+// handlerGuardResolve settles a reservation: joined confirms it, otherwise it
+// is released; the deadline is disarmed with it. Only the reservation of
+// requestID is touched, so a redelivered resolution changes nothing.
+//
+//roost:nest rollback=undo durability=strict
+func handlerGuardResolve(target alliance_member.IGuardEntity, shard alliance_shard.ITimerEntity, requestID string, allianceID int64, joined bool) (alliancerule.GuardAnswer, error) {
+	guard := target.GuardComp()
+	changed := guard.Resolve(requestID, allianceID, joined)
+	if changed {
+		shard.TimerComp().DisarmReservation(guard.PlayerID(), requestID)
+	}
+	return alliancerule.GuardAnswer{Changed: changed, State: guard.State(guard.CurrentVersion())}, nil
+}
+
+// handlerGuardClear ends the membership that joinRequestID made in allianceID,
+// if it is still the current one (after the alliance unseated the player).
+//
+//roost:nest rollback=undo durability=strict
+func handlerGuardClear(target alliance_member.IGuardEntity, allianceID int64, joinRequestID string, nowUnix int64) (alliancerule.GuardAnswer, error) {
+	guard := target.GuardComp()
+	changed := guard.Clear(allianceID, joinRequestID, nowUnix)
+	return alliancerule.GuardAnswer{Changed: changed, State: guard.State(guard.CurrentVersion())}, nil
+}
+
+// handlerGuardInfo reads the player's guard.
+//
+//roost:nest rollback=undo durability=strict
+func handlerGuardInfo(target alliance_member.IGuardEntity) (alliancerule.MemberState, error) {
+	guard := target.GuardComp()
+	return guard.State(guard.CurrentVersion()), nil
+}
+
+// handlerGuardReceipt reads one request's receipt on the guard (Found, Reserve).
+//
+//roost:nest rollback=undo durability=strict
+func handlerGuardReceipt(target alliance_member.IGuardEntity, requestID string) (alliancerule.ReceiptAnswer, error) {
+	receipt, found := target.GuardComp().Receipt(requestID)
+	return alliancerule.ReceiptAnswer{Found: found, Receipt: receipt}, nil
+}
+
+// handlerGuardClaimReward is the reward saga's claim step on the service side:
+// mark this period's alliance reward as taken by requestID, with its receipt,
+// so a redelivered claim replays instead of claiming twice and a second claim
+// in the same period is refused (alliance_reward). The reward itself is the
+// game's to hand over (the saga's next step, on the player's game server).
+//
+// Periods are counted on the business clock: period n covers
+// [(n-1)·periodSeconds, n·periodSeconds), so 0 means "never claimed". The
+// answer's Subject is the alliance the reward was claimed in.
+//
+//roost:nest rollback=undo durability=strict
+func handlerGuardClaimReward(target alliance_member.IGuardEntity, requestID string, periodSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
+	if periodSeconds <= 0 {
+		return alliancerule.GuardAnswer{}, fmt.Errorf("alliance reward: period must be positive, got %ds", periodSeconds)
+	}
+	guard := target.GuardComp()
+	period := nowUnix/periodSeconds + 1
+	outcome, err := guard.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
+		return guard.ClaimReward(requestID, period)
+	})
+	if err != nil {
+		return alliancerule.GuardAnswer{}, err
+	}
+	return alliancerule.GuardAnswer{Outcome: outcome, State: guard.State(guard.CurrentVersion())}, nil
+}
+
+// handlerGuardReleaseReward undoes the claim claimRequestID made (the reward
+// saga's compensation). Only that claim is touched, so a redelivered release
+// changes nothing.
+//
+//roost:nest rollback=undo durability=strict
+func handlerGuardReleaseReward(target alliance_member.IGuardEntity, claimRequestID string) (alliancerule.GuardAnswer, error) {
+	guard := target.GuardComp()
+	changed := guard.ReleaseReward(claimRequestID)
+	return alliancerule.GuardAnswer{Changed: changed, State: guard.State(guard.CurrentVersion())}, nil
+}

@@ -1,0 +1,52 @@
+package effects
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// TopicAllianceMemberChanged is recorded by every alliance write that seats or
+// unseats a player, in the same transaction as the roster change (the
+// transactional outbox: a write that reached the store always produces it,
+// one that rolled back never does). Its consumer is the alliance service
+// (internal/service/alliance): it finishes the player's AllianceMember guard
+// when the write could not change it in the same transaction, and sends the
+// player's game server a best-effort notice.
+const TopicAllianceMemberChanged = "alliance.member_changed"
+
+// Membership changes.
+const (
+	MemberJoined = "joined"
+	MemberLeft   = "left"
+	MemberKicked = "kicked"
+)
+
+// AllianceMemberChanged is the payload.
+type AllianceMemberChanged struct {
+	AllianceID int64  `json:"alliance_id"`
+	PlayerID   int64  `json:"player_id"`
+	HomeSID    int32  `json:"home_sid"`
+	Change     string `json:"change"`
+	// JoinRequestID identifies the membership: for joined, the request that
+	// made it (also the guard's reservation id); for left / kicked, the one
+	// that ended.
+	JoinRequestID string `json:"join_request_id"`
+	// GuardSettled: the player's guard was changed in the same transaction
+	// (guard and alliance on one instance); the consumer only notifies.
+	GuardSettled bool `json:"guard_settled"`
+	// Version is the alliance's state version this change produced.
+	Version int64 `json:"version"`
+}
+
+// EmitAllianceMemberChanged records the effect on the current Nest
+// transaction, keyed by the player.
+func EmitAllianceMemberChanged(event AllianceMemberChanged) error {
+	payload, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("effects: encode %s: %w", TopicAllianceMemberChanged, err)
+	}
+	return nest.Emit(nest.Effect{Topic: TopicAllianceMemberChanged, Key: strconv.FormatInt(event.PlayerID, 10), Payload: payload})
+}

@@ -112,6 +112,9 @@ func (m *RemoteMirrorMod) DependsOn() []app.ModName {
 	return dependencies
 }
 
+// OptionalDependsOn：装了 mongo 时排在它之后，Provide 才能用它建只读的所有权查询（路由查找）。
+func (m *RemoteMirrorMod) OptionalDependsOn() []app.ModName { return []app.ModName{mods.ModMongo} }
+
 // Provide 建客户端（未启动）并登记只读能力与健康项。
 func (m *RemoteMirrorMod) Provide(r *app.Registry) error {
 	if m == nil || m.cfg == nil {
@@ -146,6 +149,21 @@ func (m *RemoteMirrorMod) Provide(r *app.Registry) error {
 	// 登记的是只读接口：类型断言拿不到发布 / 提交能力（SnapshotClient 本身也没有导出的写方法）。
 	if err := r.Register(mods.ModRemoteMirror, entity.RemoteSnapshotReadOnly(client)); err != nil {
 		return fmt.Errorf("remote_entity mirror mod: %w", err)
+	}
+	// 路由查找（联盟服务方案 §2.7）：Redis 登记 → 只读的持久所有权记录查询。只读进程没有写 Manager，所有权记录经
+	// remote_entity.mongo.database 直接读；用 WithMirrorLoader 换掉 Mongo 又没装 mongo 时不提供（RouteSource 报缺能力）。
+	if mongoClient, ok := app.Lookup[fmongo.IMongo](r, mods.ModMongo); ok && mongoClient != nil {
+		owners, err := coreremote.NewMongoOwnershipReader(mongoClient, m.database)
+		if err != nil {
+			return fmt.Errorf("remote_entity mirror mod: %w", err)
+		}
+		routes, err := newRouteResolver(redis, m.cfg.SnapshotL2KeyPrefix, owners)
+		if err != nil {
+			return fmt.Errorf("remote_entity mirror mod: %w", err)
+		}
+		if err := r.Register(mods.ModRemoteRoute, routes); err != nil {
+			return fmt.Errorf("remote_entity mirror mod: %w", err)
+		}
 	}
 	healthRegistry.Register("remote_mirror", health.CheckerFunc(m.checkHealth))
 	m.client, m.registry, m.linearizable = client, r, linearizable

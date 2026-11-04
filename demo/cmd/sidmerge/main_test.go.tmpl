@@ -38,7 +38,8 @@ func TestTheChecklistReadsThisProjectsConfigAndDAOs(t *testing.T) {
 	if !persistent["syncbus"] || persistent["service rpc"] || !persistent["saga stream"] {
 		t.Fatalf("bus items = %+v", list.Bus)
 	}
-	if len(remoteManaged) == 0 || remoteManaged[0] != db.GuildDaoDBName+"/"+db.GuildDaoCollection {
-		t.Fatalf("remoteManaged = %v, want the Guild DAO's collection", remoteManaged)
+	if len(remoteManaged) != 2 || remoteManaged[0] != db.AllianceDaoDBName+"/"+db.AllianceDaoCollection ||
+		remoteManaged[1] != db.AllianceMemberDaoDBName+"/"+db.AllianceMemberDaoCollection {
+		t.Fatalf("remoteManaged = %v, want the alliance service's two collections", remoteManaged)
 	}
 }

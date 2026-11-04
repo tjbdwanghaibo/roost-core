@@ -31,6 +31,7 @@ type Service struct {
 	levelUpMail    fnats.IJetStreamSubscription
 	stopMatchmaker func()
 	giftSteps      *kitsaga.Steps
+	guildSteps     *kitsaga.Steps
 	battles        *battleManager
 	scene          *Scene
 	stopSpawner    func()
@@ -216,6 +217,17 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.giftSteps = giftSteps
+	// The guild sagas' step consumers (alliance_saga.go: found, donate, claim
+	// reward — the Player steps here, the guild steps through the alliance
+	// RPC), and the alliance service's membership notices (alliance_notice.go).
+	guildSteps, err := startGuildSagas(context.Background(), registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.guildSteps = guildSteps
+	if err := installGuildNotices(registry); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
 	// The paid-order drain: the game side of the platform service's handover
 	// (purchase_drain.go). Published rather than started — it runs when a
 	// player is in hand, not on a timer.
@@ -319,6 +331,13 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			s.giftSteps.Stop()
 		}
 		s.giftSteps = nil
+	}
+	if s.guildSteps != nil {
+		if err := s.guildSteps.Drain(ctx); err != nil {
+			slog.Warn("guild saga steps did not drain in time; stopping them", "err", err)
+			s.guildSteps.Stop()
+		}
+		s.guildSteps = nil
 	}
 	// After the matchmaker, so no new battle is opened while rooms close.
 	if s.battles != nil {

@@ -1,4 +1,5 @@
-// 所有权与 marker：Claim 只选出一个 owner，模式切换推进 epoch，丢回复时随权威收敛或冻结，键前缀隔离与参数校验。
+// 所有权与 marker：Claim 只选出一个 owner，模式切换推进 epoch，丢回复时随权威收敛或冻结，键前缀隔离与参数校验；
+// 声明归属于别的服务的 kind（ForeignKinds）在认领与写许可之前拒绝，未声明的 kind 照旧首写认领。
 
 package remoteentity
 
@@ -720,4 +721,91 @@ type nopLoader struct{}
 
 func (nopLoader) LoadRemoteEntity(context.Context, int64, entity.EntityKind) (entity.IThreadSafeRemoteEntity, error) {
 	return nil, nil
+}
+
+// 实体归属守卫（联盟服务方案 §2.10 第 1 条）：kind 声明归属于别的服务时，这个进程先写一个新实体不能把它认领走——
+// 拒绝发生在读写任何所有权记录之前，权威里不留记录；归属服务照常首写认领；未声明归属的 kind 行为不变。
+func TestForeignKindIsRejectedBeforeOwnershipClaim(t *testing.T) {
+	const ownedElsewhere, undeclared entity.EntityKind = 160, 161
+	entity.MustRegisterEntityKindDefs(
+		entity.EntityKindDef{Kind: ownedElsewhere, Category: 1, RemotePolicy: entity.RemotePolicyManaged},
+		entity.EntityKindDef{Kind: undeclared, Category: 1, RemotePolicy: entity.RemotePolicyManaged},
+	)
+	store := newMockMarkerStore()
+	loader := newRemoteTestLoader()
+	alliance := newTestRemoteEntity(1601, 1, ownedElsewhere)
+	other := newTestRemoteEntity(1602, 1, undeclared)
+	loader.add(alliance, other)
+	newMgr := func(sid int32, foreign []entity.EntityKind) *Manager {
+		cfg := DefaultConfig()
+		cfg.ForeignKinds = foreign
+		m := NewManager(newMockVersionedLockFactory(), cfg, sid)
+		m.SetOwnershipStore(store)
+		m.SetBackend(loader)
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = m.StopFinalizer(ctx)
+		})
+		return m
+	}
+	game := newMgr(1000, []entity.EntityKind{ownedElsewhere})
+	service := newMgr(3000, nil)
+	ctx := context.Background()
+	noRecord := func(stage string, id int64) {
+		t.Helper()
+		store.mu.Lock()
+		lease, found := store.leases[id]
+		store.mu.Unlock()
+		if found {
+			t.Fatalf("%s: foreign-kind write left an ownership record %+v", stage, lease)
+		}
+	}
+
+	// 别的服务的进程先写：写准入与显式认领都在认领前拒绝，混在一批里的未声明 kind 也不留记录（整批先校验）。
+	if _, err := game.PrepareRemoteWriteBatch(ctx, []int64{alliance.GUId()}); !errors.Is(err, entity.ErrRemoteKindNotOwned) {
+		t.Fatalf("foreign write admission: %v, want ErrRemoteKindNotOwned", err)
+	}
+	noRecord("prepare", alliance.GUId())
+	if _, err := game.PrepareRemoteWriteBatch(ctx, []int64{other.GUId(), alliance.GUId()}); !errors.Is(err, entity.ErrRemoteKindNotOwned) {
+		t.Fatalf("mixed batch: %v, want ErrRemoteKindNotOwned", err)
+	}
+	noRecord("mixed batch", other.GUId())
+	if _, err := game.ClaimRemoteOwnership(ctx, alliance.GUId()); !errors.Is(err, entity.ErrRemoteKindNotOwned) {
+		t.Fatalf("foreign claim: %v, want ErrRemoteKindNotOwned", err)
+	}
+	noRecord("claim", alliance.GUId())
+
+	// 归属服务照常首写认领。
+	batch, err := service.PrepareRemoteWriteBatch(ctx, []int64{alliance.GUId()})
+	if err != nil {
+		t.Fatalf("owning service write admission: %v", err)
+	}
+	_ = batch.Abort(ctx, errors.New("probe"))
+	if err := batch.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if lease, found, err := service.GetRemoteOwnership(ctx, alliance.GUId()); err != nil || !found || lease.OwnerSid != 3000 {
+		t.Fatalf("owning service lease=%+v found=%v err=%v", lease, found, err)
+	}
+	// 有了 owner 之后别的服务的进程仍按归属拒绝（不是普通 fence），读所有权不受影响——改投要靠它。
+	if _, err := game.PrepareRemoteWriteBatch(ctx, []int64{alliance.GUId()}); !errors.Is(err, entity.ErrRemoteKindNotOwned) {
+		t.Fatalf("foreign write after owner claimed: %v", err)
+	}
+	if lease, found, err := game.GetRemoteOwnership(ctx, alliance.GUId()); err != nil || !found || lease.OwnerSid != 3000 {
+		t.Fatalf("foreign process ownership read lease=%+v found=%v err=%v", lease, found, err)
+	}
+
+	// 未声明归属的 kind：别的服务的进程照旧首写认领。
+	batch, err = game.PrepareRemoteWriteBatch(ctx, []int64{other.GUId()})
+	if err != nil {
+		t.Fatalf("undeclared kind write admission: %v", err)
+	}
+	_ = batch.Abort(ctx, errors.New("probe"))
+	if err := batch.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if lease, found, err := game.GetRemoteOwnership(ctx, other.GUId()); err != nil || !found || lease.OwnerSid != 1000 {
+		t.Fatalf("undeclared kind lease=%+v found=%v err=%v", lease, found, err)
+	}
 }

@@ -43,16 +43,23 @@ func run(args []string, stdout io.Writer) error {
 	generateBootstrap := filepath.Base(absDir) == "game"
 	var moduleRoot string
 	var modulePath string
+	var owners ownerScan
 	if generateBootstrap {
 		moduleRoot, modulePath, err = findModuleInfo(absDir)
 		if err != nil {
 			return fmt.Errorf("find module: %w", err)
+		}
+		// 实体归属服务（//roost:entity service=）：锁住归属 kind 的 handler 只在归属服务注册（owner.go）。
+		owners, err = scanOwners(absDir, moduleRoot, modulePath)
+		if err != nil {
+			return fmt.Errorf("scan entity owners: %w", err)
 		}
 	}
 
 	// Walk directory and find all files with supported Nest markers.
 	var totalGenerated int
 	var bootstrapRegs []bootstrapRegistration
+	ownedRegs := map[string][]bootstrapRegistration{}
 	expected := make(map[string]bool)
 	err = filepath.Walk(absDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -103,17 +110,27 @@ func run(args []string, stdout io.Writer) error {
 		expected[outFile] = true
 
 		registerFunc := registerFuncName(baseName)
+		owner, err := owners.fileOwner(path, outDir, funcs)
+		if err != nil {
+			return err
+		}
 		if generateBootstrap && !hasReceiverHandler(funcs) {
 			importPath, err := importPathForDir(moduleRoot, modulePath, outDir)
 			if err != nil {
 				return fmt.Errorf("resolve import path %s: %w", outDir, err)
 			}
-			bootstrapRegs = append(bootstrapRegs, bootstrapRegistration{
-				ImportPath:   importPath,
-				RegisterFunc: registerFunc,
-			})
+			reg := bootstrapRegistration{ImportPath: importPath, RegisterFunc: registerFunc}
+			if owner != "" {
+				ownedRegs[owner] = append(ownedRegs[owner], reg)
+			} else {
+				bootstrapRegs = append(bootstrapRegs, reg)
+			}
 		}
-		changed, err = generate(funcs, pkg, outFile, *force, false, registerFunc)
+		if owner != "" {
+			changed, err = generateOwnedHandlers(funcs, pkg, outFile, *force, registerFunc, owner)
+		} else {
+			changed, err = generate(funcs, pkg, outFile, *force, false, registerFunc)
+		}
 		if err != nil {
 			return fmt.Errorf("generate %s: %w", outFile, err)
 		}
@@ -186,6 +203,15 @@ func run(args []string, stdout io.Writer) error {
 		}
 		if changed {
 			fmt.Fprintf(stdout, "generated: %s\n", outFile)
+			totalGenerated++
+		}
+		ownershipFile := filepath.Join(registryDir, "ownership_gen.go")
+		changed, err = generateOwnership(owners, ownedRegs, ownershipFile, *force)
+		if err != nil {
+			return fmt.Errorf("generate ownership %s: %w", ownershipFile, err)
+		}
+		if changed {
+			fmt.Fprintf(stdout, "generated: %s\n", ownershipFile)
 			totalGenerated++
 		}
 	}

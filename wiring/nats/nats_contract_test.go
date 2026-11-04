@@ -396,3 +396,49 @@ func TestNatsModPublishesTheJetStreamLogCapability(t *testing.T) {
 		t.Fatalf("capability %q not published", mods.ModNatsJetStream)
 	}
 }
+
+// NatsMod 是总线的拥有者，App 停机第一步经 app.IngressCloser 关总线的全部输入（App 生命周期方案）：之后到达的模块消息
+// 不进 handler（handler 跑在随后就停的 Nest 上），出向 Send 照常（Service.Shutdown 与之后停的 Mod 还要发）。
+func TestNatsModClosesTheBusInputsButKeepsSending(t *testing.T) {
+	client := &stopRetryClient{}
+	rpc := natsdriver.NewRPCClient(nil, fnats.DefaultRetryPolicy(), 1)
+	b := bus.New(client, rpc, nil, bus.Config{Sid: 1, SvcType: "game", WorkerNum: 1, QueueCap: 4})
+	handled := make(chan struct{}, 4)
+	if err := b.Handle("m", "*nats.stopRetryPing", func(*bus.MsgContext) { handled <- struct{}{} }); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	m := &NatsMod{bus: b, asm: &natsdriver.Assembly{RPC: rpc}}
+	t.Cleanup(func() { _ = m.StopWithContext(context.Background()) })
+	if err := b.Send(1, "m", &stopRetryPing{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handled:
+	case <-time.After(time.Second):
+		t.Fatal("a message before the close was not handled")
+	}
+	closer, ok := any(m).(app.IngressCloser)
+	if !ok {
+		t.Fatal("NatsMod does not implement app.IngressCloser: the App cannot close the bus's inputs before the Mods its handlers use stop")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := closer.CloseIngress(ctx); err != nil {
+		t.Fatalf("CloseIngress: %v", err)
+	}
+	// stopRetryClient 退订后仍把发布交给回调：这里验证的是总线自己的准入，不靠传输层。
+	if err := b.Send(1, "m", &stopRetryPing{}); err != nil {
+		t.Fatalf("Send after CloseIngress = %v; the outgoing side must keep working until the Mod stops", err)
+	}
+	select {
+	case <-handled:
+		t.Fatal("a message after CloseIngress reached the handler")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := b.HandleRpc("game.Late", func(*bus.RpcContext) (any, error) { return nil, nil }); err == nil {
+		t.Fatal("HandleRpc after CloseIngress succeeded: a handler registered now would never be closed")
+	}
+}

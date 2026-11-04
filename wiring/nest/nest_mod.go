@@ -95,7 +95,7 @@ func (m *Mod) DependsOn() []app.ModName { return nil }
 // OptionalDependsOn ensures the Remote Entity transaction participant is
 // visible during Provide when the application has installed it.
 func (m *Mod) OptionalDependsOn() []app.ModName {
-	return []app.ModName{mods.ModDataEngine, mods.ModRemoteEntity}
+	return []app.ModName{mods.ModDataEngine, mods.ModRemoteEntity, mods.ModRemoteMirror}
 }
 
 // workerPool 是 nest.short / nest.long / nest.io 的声明：0 取框架缺省。
@@ -217,6 +217,11 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	opts = append(opts, engineOptions...)
 	if remoteManager, ok := app.Lookup[entity.IRemoteEntityManager](registry, mods.ModRemoteEntity); ok && remoteManager != nil {
 		opts = append(opts, corenest.NestOptionWithRemoteEntityManager(remoteManager))
+	} else if mirror, ok := app.Lookup[entity.RemoteSnapshotReadOnly](registry, mods.ModRemoteMirror); ok && mirror != nil {
+		// 只读进程（装了 wiring/remoteentity.NewRemoteMirrorMod、没有 remote_entity 写能力）：RemoteViewRef 预取经
+		// Mirror 客户端读快照。装了写 Manager 的进程照旧经 Manager 读（它的 Mirror 能力就是同一个 SnapshotClient）。
+		// 业务选项里另给的 NestOptionWithRemoteSnapshotResolver 排在后面，仍然优先。
+		opts = append(opts, corenest.NestOptionWithRemoteSnapshotResolver(corenest.MirrorSnapshotResolver(mirror)))
 	}
 	opts = append(opts, m.opts...)
 	if m.entitySync != nil {

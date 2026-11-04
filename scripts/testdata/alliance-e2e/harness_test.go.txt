@@ -1,0 +1,704 @@
+package e2e
+
+// 联盟服务阶段 5 的真实依赖端到端（FEATURE-2026-11-04-alliance-service §7 阶段 5）。由 scripts/test-alliance-e2e.sh
+// 复制进新生成的 game-demo 的 e2e/ 目录后运行：生成工程的二进制起真实进程（alliance 两个实例、game 两个进程以及
+// game 依赖的九个托管服务），测试进程只做调用方与观察者——经生成的路由 BusClient、玩家 TCP、运维 /admin 命令驱动，
+// 不直接写任何内部格式（_remote_entity_meta、Redis 路由登记、WAL）。状态一律经正式入口造：建盟 / 入会走 RPC，
+// 迁移走 alliance.transfer，崩溃用 kill -9，冻结用 SIGSTOP。
+//
+// 每个用例一个唯一前缀：NATS 主题 / 流、Mongo 库、Redis 键、etcd 键都带它，结束时删掉；进程的工作目录是用例自己的
+// 临时目录（WAL、日志），configs 链接回生成工程。端口从 ALLIANCE_E2E_PORT_BASE 起按进程分配。
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+	goredis "github.com/redis/go-redis/v9"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	coreremote "github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	redisdriver "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	kitnats "github.com/tjbdwanghaibo/roost-core/wiring/nats"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+
+	"example.com/planet/game/alliancerule"
+	"example.com/planet/internal/registry"
+	rpcalliance "example.com/planet/internal/rpc/alliance"
+)
+
+// suite 是一个用例的现场：依赖地址、唯一前缀、起的进程与测试进程里的调用方。
+type suite struct {
+	t                                    *testing.T
+	ctx                                  context.Context
+	binary, accountctl, root, work, logs string
+	mongoURI, natsURL, redisAddr         string
+	proxiedRedis, toxiproxy, etcd        string
+	prefix                               string
+	portBase                             int
+
+	mu    sync.Mutex
+	procs map[string]*proc
+	next  int
+
+	bus     bus.IBus
+	stopBus func()
+	redis   *goredis.Client
+	mongo   *mongo.Client
+	owners  *countingOwners
+	lookup  *coreremote.RouteLookup
+	routes  *coreremote.RouteStore
+}
+
+// proc 是一个起过的服务进程。同名进程重启沿用端口与配置。
+type proc struct {
+	name, service string
+	sid           int32
+	config, log   string
+	ops, client   string
+	cmd           *exec.Cmd
+	done          chan struct{}
+	exitErr       error
+}
+
+func env(t *testing.T, name string) string {
+	t.Helper()
+	value := os.Getenv(name)
+	if value == "" {
+		t.Skipf("%s not set: run scripts/test-alliance-e2e.sh", name)
+	}
+	return value
+}
+
+// newSuite 读依赖地址、建唯一前缀与调用方客户端；用例结束时停全部进程、删本前缀的数据。
+func newSuite(t *testing.T, timeout time.Duration) *suite {
+	binary := env(t, "ALLIANCE_E2E_BINARY")
+	s := &suite{
+		t: t, binary: binary, accountctl: os.Getenv("ALLIANCE_E2E_ACCOUNTCTL"),
+		root: env(t, "ALLIANCE_E2E_ROOT"), etcd: env(t, "ALLIANCE_E2E_ETCD"),
+		mongoURI: env(t, "ROOST_DATAENGINE_IT_MONGO_URI"), natsURL: env(t, "ROOST_DATAENGINE_IT_NATS_URL"),
+		redisAddr: env(t, "ROOST_DATAENGINE_IT_REDIS_ADDR"), proxiedRedis: os.Getenv("ROOST_DATAENGINE_IT_REDIS_PROXIED_ADDR"),
+		toxiproxy: os.Getenv("ROOST_DATAENGINE_IT_TOXIPROXY_URL"),
+		procs:     map[string]*proc{},
+		prefix:    "a5" + strconv.FormatInt(time.Now().UnixNano()%1_000_000_000_000, 36),
+	}
+	s.portBase = 35100
+	if raw := os.Getenv("ALLIANCE_E2E_PORT_BASE"); raw != "" {
+		s.portBase, _ = strconv.Atoi(raw)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	s.ctx = ctx
+	s.work = t.TempDir()
+	if err := os.Symlink(filepath.Join(s.root, "configs"), filepath.Join(s.work, "configs")); err != nil {
+		t.Fatal(err)
+	}
+	s.logs = filepath.Join(s.work, "logs")
+	if dir := os.Getenv("ALLIANCE_E2E_LOGS"); dir != "" {
+		s.logs = filepath.Join(dir, t.Name())
+	}
+	if err := os.MkdirAll(s.logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.RegisterAll(); err != nil && !strings.Contains(err.Error(), "already") {
+		t.Fatal(err)
+	}
+	s.connect()
+	t.Cleanup(func() {
+		s.stopAll()
+		s.cleanup()
+		cancel()
+	})
+	t.Logf("prefix %s, logs %s", s.prefix, s.logs)
+	return s
+}
+
+// countingOwners 数路由查找回退到 Mongo 所有权记录的次数（方案 §5“Redis 不可用时的退化”要量的点读放大）。
+type countingOwners struct {
+	reader coreremote.OwnershipReader
+	reads  atomic.Int64
+}
+
+func (c *countingOwners) GetRemoteOwnership(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, bool, error) {
+	c.reads.Add(1)
+	return c.reader.GetRemoteOwnership(ctx, id)
+}
+
+func (s *suite) connect() {
+	t := s.t
+	cfg := viper.New()
+	cfg.Set("nats.url", s.natsURL)
+	cfg.Set("nats.prefix", s.prefix)
+	cfg.Set("server_type", "e2eclient")
+	cfg.Set("sid", 9100)
+	reg := app.NewRegistry(cfg)
+	natsMod := kitnats.NewNatsMod(bus.MessagePackCodec{})
+	for _, step := range []func() error{func() error { return natsMod.Init(cfg) }, func() error { return natsMod.Provide(reg) }, natsMod.Start} {
+		if err := step(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.stopBus = func() { natsMod.Stop() }
+	s.bus, _ = app.Lookup[bus.IBus](reg, mods.ModBus)
+
+	s.redis = goredis.NewClient(&goredis.Options{Addr: s.redisAddr})
+	client, err := mongo.Connect(options.Client().ApplyURI(s.mongoURI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.mongo = client
+	s.routes, s.lookup, s.owners = s.newLookup(s.redisAddr)
+}
+
+// newLookup 建一份调用方路由查找（Redis 登记 → Mongo 所有权记录），与 game 进程经 RouteSource 用的是同一组件；
+// 返回的 countingOwners 数它回退读所有权记录的次数。
+func (s *suite) newLookup(redisAddr string) (*coreremote.RouteStore, *coreremote.RouteLookup, *countingOwners) {
+	t := s.t
+	redis, err := redisdriver.NewClient(&fredis.Config{Addr: redisAddr, PoolSize: 8, MinIdleConns: 1, DialTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, MaxRetries: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mongoClient, err := mongodriver.NewClient(&fmongo.Config{URI: s.mongoURI, ConnectTimeout: 5 * time.Second, MaxPoolSize: 16, MinPoolSize: 1, MaxIdleTime: time.Minute, TransactionTimeout: 10 * time.Second}, mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes, err := coreremote.NewRouteStore(redis, s.prefix, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := coreremote.NewMongoOwnershipReader(mongoClient, s.prefix+"_remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owners := &countingOwners{reader: reader}
+	lookup, err := coreremote.NewRouteLookup(routes, owners)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return routes, lookup, owners
+}
+
+type lookupResolver struct{ lookup *coreremote.RouteLookup }
+
+func (r lookupResolver) LookupRoute(ctx context.Context, id int64) (int32, error) {
+	owner, found, err := r.lookup.LookupOwner(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	if !found {
+		return 0, servicerpc.EntityNotFound(id)
+	}
+	return owner, nil
+}
+
+type fixedOwner int32
+
+func (o fixedOwner) LookupRoute(context.Context, int64) (int32, error) { return int32(o), nil }
+
+// client 是生成的路由 BusClient；同一个客户端带路由缓存，新建一个就是空缓存。
+func (s *suite) client(resolver servicerpc.RouteResolver, timeout time.Duration) *rpcalliance.BusClient {
+	if resolver == nil {
+		resolver = lookupResolver{s.lookup}
+	}
+	client, err := rpcalliance.NewBusClient(s.bus, resolver, "", timeout)
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	return client
+}
+
+// ---- 配置与进程 ----
+
+var (
+	opsAddr       = regexp.MustCompile(`(?m)^(\s+addr: )127\.0\.0\.1:91\d\d$`)
+	advertiseAddr = regexp.MustCompile(`(?m)^(\s+advertise_addr: )127\.0\.0\.1:90\d\d$`)
+	projectName   = regexp.MustCompile(`\bplanet(_[a-z]+)?\b`)
+)
+
+// setKey 改 section 下第一处 key 的值（缩进的子键也算）；找不到就失败，免得改了个寂寞。
+func setKey(t *testing.T, text, section, key, value string) string {
+	t.Helper()
+	pattern := regexp.MustCompile(`(?m)(^` + regexp.QuoteMeta(section) + `:\n(?:[ \t].*\n|\n)*?[ \t]+` + regexp.QuoteMeta(key) + `:)[^\n]*`)
+	if !pattern.MatchString(text) {
+		// 生成配置里没写的键（取缺省）：加在 section 的第一行。
+		head := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(section) + `:\n`)
+		if !head.MatchString(text) {
+			t.Fatalf("config has no section %s", section)
+		}
+		return head.ReplaceAllString(text, section+":\n  "+key+": "+value+"\n")
+	}
+	done := false
+	return pattern.ReplaceAllStringFunc(text, func(match string) string {
+		if done {
+			return match
+		}
+		done = true
+		sub := pattern.FindStringSubmatch(match)
+		return sub[1] + " " + value
+	})
+}
+
+// procOptions 是进程配置的差异：Redis 地址（经 toxiproxy 时用代理地址）与额外的键。
+type procOptions struct {
+	redis string
+	keys  [][3]string // section, key, value
+}
+
+// derive 从生成的开发配置派生一个进程的配置：依赖地址、唯一前缀、本进程的端口与 WAL 目录。
+func (s *suite) derive(name, service string, sid int32, index int, opts procOptions) (configPath, ops, client string) {
+	t := s.t
+	raw, err := os.ReadFile(filepath.Join(s.root, "configs", "service", "config."+service+".yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
+			line = projectName.ReplaceAllString(line, s.prefix+"$1")
+			line = strings.ReplaceAll(line, "PLANET_", strings.ToUpper(s.prefix)+"_")
+		}
+		lines = append(lines, line)
+	}
+	text := strings.Join(lines, "\n")
+	redis := s.redisAddr
+	if opts.redis != "" {
+		redis = opts.redis
+	}
+	ops = fmt.Sprintf("127.0.0.1:%d", s.portBase+index)
+	client = fmt.Sprintf("127.0.0.1:%d", s.portBase+200+index)
+	text = strings.ReplaceAll(text, "mongodb://127.0.0.1:27017/?replicaSet=rs0", s.mongoURI)
+	text = strings.ReplaceAll(text, "nats://127.0.0.1:4222", s.natsURL)
+	text = strings.ReplaceAll(text, "127.0.0.1:6379", redis)
+	text = strings.ReplaceAll(text, "[127.0.0.1:2379]", "["+s.etcd+"]")
+	text = strings.ReplaceAll(text, "0.0.0.0:7000", client)
+	text = opsAddr.ReplaceAllString(text, "${1}"+ops)
+	text = advertiseAddr.ReplaceAllString(text, fmt.Sprintf("${1}127.0.0.1:%d", s.portBase+100+index))
+	text = strings.ReplaceAll(text, `snapshot_l2_key_prefix: ""`, `snapshot_l2_key_prefix: "`+s.prefix+`"`)
+	text = strings.ReplaceAll(text, "max_bytes: 8589934592", "max_bytes: 268435456")
+	text = strings.ReplaceAll(text, "dir: data/wal/alliance\n", fmt.Sprintf("dir: data/wal/alliance-%d\n", sid))
+	text = setKey(t, text, "log", "file", "false")
+	text = setKey(t, text, "stats_log", "enabled", "false")
+	for _, kv := range opts.keys {
+		text = setKey(t, text, kv[0], kv[1], kv[2])
+	}
+	configPath = filepath.Join(s.work, name+".yaml")
+	if err := os.WriteFile(configPath, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return configPath, ops, client
+}
+
+// start 起一个服务进程并等它 /readyz 就绪。name 唯一；同名进程停过之后再 start 沿用原配置与端口（同 sid 拉起）。
+func (s *suite) start(name, service string, sid int32, opts procOptions) *proc {
+	s.mu.Lock()
+	p := s.procs[name]
+	if p == nil {
+		config, ops, client := s.derive(name, service, sid, s.next, opts)
+		s.next++
+		p = &proc{name: name, service: service, sid: sid, config: config, ops: ops, client: client, log: filepath.Join(s.logs, name+".log")}
+		s.procs[name] = p
+	}
+	s.mu.Unlock()
+	s.launch(p)
+	s.waitReady(p, 120*time.Second)
+	return p
+}
+
+func (s *suite) launch(p *proc) {
+	t := s.t
+	if p.cmd != nil {
+		select {
+		case <-p.done:
+		default:
+			t.Fatalf("%s is still running", p.name)
+		}
+	}
+	f, err := os.OpenFile(p.log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(s.binary, p.service, "--sid", fmt.Sprint(p.sid), "--config", p.config)
+	cmd.Dir = s.work
+	cmd.Stdout, cmd.Stderr = f, f
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	p.cmd, p.done = cmd, make(chan struct{})
+	go func(p *proc, cmd *exec.Cmd, f *os.File) {
+		p.exitErr = cmd.Wait()
+		_ = f.Close()
+		close(p.done)
+	}(p, cmd, f)
+	t.Logf("started %s (%s --sid %d) pid %d", p.name, p.service, p.sid, cmd.Process.Pid)
+}
+
+func (s *suite) waitReady(p *proc, limit time.Duration) {
+	t := s.t
+	deadline := time.Now().Add(limit)
+	for time.Now().Before(deadline) {
+		select {
+		case <-p.done:
+			t.Fatalf("%s exited before it was ready (%v); log %s:\n%s", p.name, p.exitErr, p.log, tail(p.log, 20))
+		default:
+		}
+		resp, err := http.Get("http://" + p.ops + "/readyz")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("%s not ready within %v; log %s:\n%s", p.name, limit, p.log, tail(p.log, 20))
+}
+
+func tail(path string, n int) string {
+	raw, _ := os.ReadFile(path)
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// stop 发信号并等进程退出：SIGINT 走正常停机，SIGKILL 就是 kill -9。
+func (s *suite) stop(p *proc, sig syscall.Signal) {
+	if p == nil || p.cmd == nil {
+		return
+	}
+	select {
+	case <-p.done:
+		return
+	default:
+	}
+	if sig == syscall.SIGINT {
+		_ = p.cmd.Process.Signal(syscall.SIGCONT)
+	}
+	_ = p.cmd.Process.Signal(sig)
+	select {
+	case <-p.done:
+	case <-time.After(150 * time.Second):
+		_ = p.cmd.Process.Kill()
+		<-p.done
+	}
+	s.t.Logf("stopped %s with %v (%v)", p.name, sig, p.exitErr)
+}
+
+func (s *suite) signal(p *proc, sig syscall.Signal) {
+	if err := p.cmd.Process.Signal(sig); err != nil {
+		s.t.Fatalf("signal %v to %s: %v", sig, p.name, err)
+	}
+}
+
+func (s *suite) alive(p *proc) bool {
+	select {
+	case <-p.done:
+		return false
+	default:
+		return true
+	}
+}
+
+func (s *suite) stopAll() {
+	s.mu.Lock()
+	var procs []*proc
+	for _, p := range s.procs {
+		procs = append(procs, p)
+	}
+	s.mu.Unlock()
+	// game 先停，alliance 次之，其余最后（与 deploy/dev/run.sh 的逆序一致）。
+	rank := map[string]int{"game": 0, "alliance": 1}
+	sort.Slice(procs, func(i, j int) bool {
+		ri, ok := rank[procs[i].service]
+		if !ok {
+			ri = 2
+		}
+		rj, ok := rank[procs[j].service]
+		if !ok {
+			rj = 2
+		}
+		return ri < rj
+	})
+	for _, p := range procs {
+		s.stop(p, syscall.SIGINT)
+	}
+	errorLines := 0
+	for _, p := range procs {
+		raw, _ := os.ReadFile(p.log)
+		errorLines += bytes.Count(raw, []byte(`"level":"ERROR"`))
+	}
+	s.t.Logf("all processes stopped; %d ERROR log lines in total", errorLines)
+}
+
+// cleanup 删掉本前缀的库、流、键（只删自己的）。
+func (s *suite) cleanup() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if s.stopBus != nil {
+		s.stopBus()
+	}
+	if s.mongo != nil {
+		names, _ := s.mongo.ListDatabaseNames(ctx, bson.M{"name": bson.M{"$regex": "^" + s.prefix}})
+		for _, name := range names {
+			_ = s.mongo.Database(name).Drop(ctx)
+		}
+		_ = s.mongo.Disconnect(ctx)
+	}
+	if s.redis != nil {
+		var cursor uint64
+		for {
+			keys, next, err := s.redis.Scan(ctx, cursor, "*"+s.prefix+"*", 1000).Result()
+			if err != nil {
+				break
+			}
+			if len(keys) > 0 {
+				s.redis.Del(ctx, keys...)
+			}
+			if cursor = next; cursor == 0 {
+				break
+			}
+		}
+		_ = s.redis.Close()
+	}
+	if nc, err := nats.Connect(s.natsURL); err == nil {
+		if js, err := jetstream.New(nc); err == nil {
+			upper := strings.ToUpper(s.prefix)
+			names := js.StreamNames(ctx)
+			var drop []string
+			for name := range names.Name() {
+				if strings.Contains(strings.ToUpper(name), upper) {
+					drop = append(drop, name)
+				}
+			}
+			for _, name := range drop {
+				_ = js.DeleteStream(ctx, name)
+			}
+		}
+		nc.Close()
+	}
+}
+
+// ---- 运维、Redis、指标 ----
+
+// admin 在进程的 ops 端点上执行一条 /admin 命令，返回 data。
+func (s *suite) admin(p *proc, name string, payload any) map[string]any {
+	t := s.t
+	body := map[string]any{"name": name}
+	if payload != nil {
+		body["payload"] = payload
+	}
+	raw, _ := json.Marshal(body)
+	req, _ := http.NewRequestWithContext(s.ctx, http.MethodPost, "http://"+p.ops+"/admin/execute", bytes.NewReader(raw))
+	req.Header.Set("X-Admin-Token", "dev-gm-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("admin %s on %s: %v", name, p.name, err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin %s on %s: %d %s", name, p.name, resp.StatusCode, out)
+	}
+	var decoded struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("admin %s: %v: %s", name, err, out)
+	}
+	return decoded.Data
+}
+
+func (s *suite) routeValue(id int64) string {
+	value, _ := s.redis.Get(s.ctx, coreremote.RouteKey(s.prefix, id)).Result()
+	return value
+}
+
+// metric 读进程 /metrics 里名字含 name、标签含 labels 的样本之和。
+func (s *suite) metric(p *proc, name string, labels ...string) float64 {
+	resp, err := http.Get("http://" + p.ops + "/metrics")
+	if err != nil {
+		s.t.Fatalf("metrics of %s: %v", p.name, err)
+	}
+	defer resp.Body.Close()
+	var sum float64
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 1<<20), 1<<20)
+	for scanner.Scan() {
+		line := scanner.Text()
+		metricName := line
+		if cut := strings.IndexAny(line, "{ "); cut >= 0 {
+			metricName = line[:cut]
+		}
+		if strings.HasPrefix(line, "#") || !strings.HasSuffix(metricName, name) {
+			continue
+		}
+		match := true
+		for _, label := range labels {
+			if !strings.Contains(line, label) {
+				match = false
+			}
+		}
+		if !match {
+			continue
+		}
+		fields := strings.Fields(line)
+		value, _ := strconv.ParseFloat(fields[len(fields)-1], 64)
+		sum += value
+	}
+	return sum
+}
+
+// rssMB 是进程常驻内存（ps 的 rss，MiB）。
+func rssMB(p *proc) float64 {
+	out, err := exec.Command("ps", "-o", "rss=", "-p", fmt.Sprint(p.cmd.Process.Pid)).Output()
+	if err != nil {
+		return 0
+	}
+	kb, _ := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	return kb / 1024
+}
+
+// toxiproxyRedis 打开 / 关闭 toxiproxy 的 redis 代理（只影响经代理连 Redis 的进程，Redis 本身不动）。
+func (s *suite) toxiproxyRedis(enabled bool) {
+	t := s.t
+	if s.toxiproxy == "" {
+		t.Fatal("ROOST_DATAENGINE_IT_TOXIPROXY_URL not set")
+	}
+	raw, _ := json.Marshal(map[string]any{"enabled": enabled})
+	resp, err := http.Post(s.toxiproxy+"/proxies/redis", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		t.Fatalf("toxiproxy redis enabled=%v: %d", enabled, resp.StatusCode)
+	}
+}
+
+// ---- 断言辅助 ----
+
+func (s *suite) eventually(what string, limit time.Duration, check func() (bool, string)) {
+	s.t.Helper()
+	deadline := time.Now().Add(limit)
+	last := ""
+	for time.Now().Before(deadline) {
+		ok, detail := check()
+		if ok {
+			return
+		}
+		last = detail
+		time.Sleep(200 * time.Millisecond)
+	}
+	s.t.Fatalf("%s: not within %v: %s", what, limit, last)
+}
+
+// definite 用同一个 RequestID 重发写请求，直到得到确定的答复（成功或业务拒绝）；“可重试 / 结果未知”都重发。
+func definite(ctx context.Context, limit time.Duration, call func(context.Context) error) (err error, attempts int) {
+	deadline := time.Now().Add(limit)
+	for {
+		attempts++
+		callCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		err = call(callCtx)
+		cancel()
+		switch servicerpc.Classify(err) {
+		case servicerpc.OutcomeOK, servicerpc.OutcomeRejected:
+			return err, attempts
+		}
+		if time.Now().After(deadline) {
+			return err, attempts
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// found 建一个开放加入的联盟（Found 走队列组，落到哪个实例由总线决定）。
+func (s *suite) found(client *rpcalliance.BusClient, leader int64) rpcalliance.Reply {
+	s.t.Helper()
+	var reply rpcalliance.Reply
+	err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
+		var err error
+		reply, err = client.Found(ctx, fmt.Sprintf("found-%d", leader), leader, 1000, fmt.Sprintf("e2e-%d", leader), true)
+		return err
+	})
+	if err != nil {
+		s.t.Fatalf("found by %d: %v", leader, err)
+	}
+	return reply
+}
+
+// foundOn 建联盟直到 sid 上有 n 个，返回这些联盟 ID（其余实例上建的也留着，不影响用例）。
+func (s *suite) foundOn(client *rpcalliance.BusClient, sid int32, n int, nextLeader *int64) []int64 {
+	var ids []int64
+	for tries := 0; len(ids) < n; tries++ {
+		if tries > 50*n+50 {
+			s.t.Fatalf("Found never landed %d times on %d", n, sid)
+		}
+		*nextLeader++
+		reply := s.found(client, *nextLeader)
+		if reply.ServedBySID == sid {
+			ids = append(ids, reply.Alliance.AllianceID)
+		}
+	}
+	return ids
+}
+
+func target(t *testing.T, allianceID int64) int64 {
+	id, err := rpcalliance.AllianceTarget(allianceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func guard(t *testing.T, playerID int64) int64 {
+	id, err := rpcalliance.GuardTarget(playerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// members 是联盟答复里的成员 ID。
+func members(view alliancerule.View) map[int64]bool {
+	out := make(map[int64]bool, len(view.Members))
+	for _, member := range view.Members {
+		out[member.PlayerID] = true
+	}
+	return out
+}
+
+// percentile 取已排序样本的 p 分位。
+func percentile(sorted []time.Duration, p float64) time.Duration {
+	if len(sorted) == 0 {
+		return 0
+	}
+	index := int(float64(len(sorted)-1) * p)
+	return sorted[index]
+}

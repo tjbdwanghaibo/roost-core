@@ -132,8 +132,8 @@ EnterGame 端点 ─ PublishSystem(actor=game, "player N entered") ─▶ chat �
 ChatHistory 端点 ─ History(viewer, after_seq, limit) ─▶ chat 服务（服务端校验读权限）—— 重连补读路径
 ```
 
-- `internal/service/chat/collaborators.go`：策略写成决定——world（只有 world 1）与 private 对所有认证玩家开放，group 拒绝（demo 没有队伍 /
-  公会成员关系），system 频道只读；`Bodies()` 注册唯一的 `text` 类型，校验函数与端点共用（端点先校验，免一次总线往返）；
+- `internal/service/chat/collaborators.go`：策略写成决定——world（只有 world 1）与 private 对所有认证玩家开放，group 拒绝（demo 没有队伍；
+  公会群聊没接，接时成员来源是 alliance 服务的 Mirror 与成员变化通知），system 频道只读；`Bodies()` 注册唯一的 `text` 类型，校验函数与端点共用（端点先校验，免一次总线往返）；
   `System()` 无条件 `GrantSystem()`——这是对部署的陈述：chat 只经内网 NATS 可达，没有端点转发 PublishSystem。总线对不可信一方可达的部署要换成查调用者身份。
 - **推送是捷径，序号是依据**：每条投递都带 `Seq`，错过推送的客户端用 `ChatHistory(after_seq)` 补读——机器人脚本就是这么写的
   （它自己那句的推送可能先于响应到达而被丢，所以 `wait_push` 外面套了 selector，再用 history 断言）。
@@ -210,6 +210,49 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 - **边界**：原生收件箱的租约必须长于消费者的 `AckWait`（框架取 2 分钟 vs 30 秒，`kitsaga.NativeLeaseDuration`），否则租约会在消息还没 ack 时过期、让第二个进程开始同一条命令；
   消费者会当场拒绝这种配置。载荷解不出来的命令没有事务可以承载拒绝，只能靠重投与 deadline 收场。
   deliver 那条仍然是"两次提交"：mail 服务的去重是第二层，不是同一条记录。
+
+## 跨服务：公会 = alliance 服务（写走 RPC 或 saga，读走 Mirror）
+
+公会由独立的 alliance 服务独占（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：`Alliance`（联盟）与
+`AllianceMember`（每个玩家的成员守卫）是 Remote 托管实体、`service=alliance`，只有 alliance 进程能认领、能写。game 进程装着
+`remote_entity`，但只为它自己拥有的一种 Remote 实体——分区场景的组队 `Team`（`service=game`，无缝大世界原型，见
+[方案 §14](../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#14-合入-main2026-11-04)）；联盟两种 kind 对它是“别的服务的”
+（生成的 `ForeignKinds`），它的 Remote 运行时对它们拒绝认领与写（`entity.ErrRemoteKindNotOwned`），读经同一个 Mod 提供的 Mirror。
+`uses_rpcs: [alliance]` 让它拿到生成的 `rpcalliance` ClientMod（路由查找经 `RouteSource`）。所以 game 改公会只有两条路：
+
+- **只改公会**——`join_guild`（10022）、`leave_guild`（10027）：一次路由 RPC（`Join` / `Leave`，发往联盟的 owner 实例），
+  请求号 = 玩家 + 会话 + 帧序号（`guild.RequestID`），同一帧重发由服务端回执回放；答复带联盟新状态、版本与处理实例
+  `ServedBySID`。成功后端点在玩家自己的 Nest 事务里改显示字段（`ShowGuild`）。
+- **公会与玩家背包一起改**——`found_guild`（10021，建盟费 `guild.found_cost`，金币是道具 9001）、`donate_guild`（10028）、
+  `claim_guild_reward`（10029）：两个事务域，各一个 saga（`saga/alliance_found`、`alliance_donate`、`alliance_reward`）。端点
+  `StartGuildOp` 在玩家锁内做建议性检查后 `saga.EmitStart`，立即答“已受理”与交易号（`SagaKey`），结果用 `guild_op_status`（10030）查。
+  步骤在 `internal/service/<game>/alliance_saga.go`：Player 一侧是**原生步骤**（`GuildDebit` / `GuildCredit`，`durability=pipelined`，
+  回执在 `PlayerDao.SagaReceipts`，只在玩家绑定的 sid 上跑，准入 / 转交与送礼相同）；公会一侧是 **Mongo 步骤**，步骤体调 alliance RPC，
+  请求号 = 命令的 `IdempotencyKey`。
+
+  | saga | 正向 | 补偿 |
+  | --- | --- | --- |
+  | 建盟 | ① 扣建盟费（原生）② `Found`（Mongo → RPC） | ① 退费；② 迟到成功时保留联盟、记日志 |
+  | 捐献 | ① 扣金币（原生）② `Donate` | ① 退费；② 迟到成功时保留捐献、记日志 |
+  | 领奖 | ① `ClaimReward` 在守卫上记本周期已领（Mongo → RPC，奖励由服务答出、写进 payload）② 发奖（原生） | ② 背包满被拒 → 补偿 ①：`ReleaseReward` 只撤这一次领取；② 的补偿把奖励扣回 |
+
+  公会步骤按 RPC 的四类答复回应：成功 → 下一步；业务拒绝（名字非法、已在联盟、不是成员、本周期已领）→ 不可重试的失败，
+  协调器补偿已完成的步骤（建盟被拒即退费）；“没执行”“结果未知”→ 返回错误，步骤回滚重投、同一请求号再问一次，
+  真执行过的由服务端回执答出，不会退了费又建成盟。
+- **读**——`guild_info`（10023）：先读自己的 `AllianceMemberMirror`（ID 由玩家 ID 算出）得到联盟号，再读 `AllianceMirror`
+  （`//roost:mirror` 只读 DTO，形状与 `alliancerule.View` 相同）。都用 Monotonic：缓存未命中时会回源加载（Cached 不加载）；
+  客户端带上写答复里的 `Version` 作 `MinVersion`，读到的不会比自己刚写的旧，镜像还没追上时答 `guild_busy`、稍后再查。
+  Mirror 只用于展示与预检（例如“已在公会”直接提示），写判断一律在服务里按权威做。
+
+`PlayerDao.GuildID` 是 `nopersist,sync` 的显示字段（附近玩家头顶的公会），不落库：登录时从 Mirror 填（`EnterGame` 的
+`refreshGuild`），收到成员变化通知时更新。通知是 alliance 的 effect 消费者按成员的原服 sid 经 Bus 发来的 `alliance.member_notice`
+（`internal/service/<game>/alliance_notice.go`）：玩家在本进程在线才处理——改显示字段（离开只清“正显示这个公会”的，晚到的旧
+退盟不会盖掉新公会）并推 `GuildNoticePush`（10104）；尽力投递，丢了由下次登录补齐。
+
+多实例：`sh deploy/dev/second-alliance.sh start` 在同一台机器上起第二个 alliance（sid 1001、ops 9210）。建盟经队列组分到两个实例，
+每个联盟归接到它的实例；其余调用经路由登记找到 owner。缩容一台：在它的 ops 上 ① `alliance.stop_founding`（退出 `Found` 的队列组，
+新联盟只落到别的实例）② 反复 `alliance.transfer {"count": N, "to_sid": <另一个 sid>}` 直到它什么都不拥有 ③ 停进程。
+公会的 GM 读写（原 `gm.guild.*`）改为 alliance 进程自己的 `alliance.info` / `alliance.guard`，按权威读。
 
 ## 地图：Scene 是一个实体，它的 system 各自带锁
 
@@ -609,9 +652,13 @@ server 关掉，机器人报 `connect: auth send: robot session: closed`，serve
 `ExpGranted`，两处变更进同一条 WAL 记录，要么都落库要么都不。Nest 按档位锁：World 先、Player 后。生成的 Sender 变成
 `MultiSync_AddExp(ctx, target, stats, amount)`，一个实体一个 id；`roost add endpoint` 只接单实体 handler，所以这个端点手写。
 
-公会创建还有一个事务外的边界：端点先在持久计数器保留 ID、通过 lifecycle 在本进程创建实体，之后才进入 `FoundGuild` 的两实体事务。只看字节就能判定无效的名字（空、全空白、含控制字符、非法 UTF-8）必须在这些步骤之前返回 `guild_name`（100016），否则事务虽然拒绝了业务写入，前面已消耗的 ID 并不会随之回滚、内存里还留一个空 Guild 实例。规则只写在 `guild.ValidateName` 一处：端点第一步调用它，`RosterComponent.Found` 也调用它，保护其他调用入口。名字原样保存不裁剪，同一请求的重试按原名比对。因别的原因失败（例如同一玩家的两个并发创建只有一个通过）留下的空号不回收重用。
+公会名字的规则只写在 `alliancerule.ValidateName` 一处（空、全空白、超过 48 字节、含控制字符、非法 UTF-8 拒绝为
+`alliance_name`）：`found_guild` 端点第一步调用它，在扣建盟费、启动 saga 之前拒绝；alliance 服务的 `Found` 再按同一规则判一次。
 
-**名字长度上限、敏感词、全服唯一是业务规则，框架不处理**（维护者 2026-10-17 决定），demo 也不实现：`ValidateName` 只拒绝“不看状态就能判定无效”的名字，两个公会可以同名、靠 `guild_id` 区分。长度上限与敏感词加在 `ValidateName` 同一处即可（同样要在保留 ID 之前）。需要全服唯一的名字时用框架已有的占名原语 `service/directory`（`wiring/directory` 装配，用法见 [Service 篇 §4](../docs/framework/guide/09-services.md#4-关键业务边界)）：保留 ID 之前先 `Reserve` 占名，公会创建成功后 `Commit`，失败 `Cancel`；预约带过期，进程中途崩溃时名字到期自动释放，不会被永久占死。
+**敏感词、全服唯一是业务规则，框架不处理**（维护者 2026-10-17 决定），demo 也不实现，两个公会可以同名、靠联盟号区分。
+敏感词加在 `ValidateName` 同一处。需要全服唯一的名字时用框架已有的占名原语 `service/directory`（`wiring/directory` 装配，用法见
+[Service 篇 §4](../docs/framework/guide/09-services.md#4-关键业务边界)）：建盟前先 `Reserve` 占名，成功后 `Commit`，失败 `Cancel`；
+预约带过期，进程中途崩溃时名字到期自动释放，不会被永久占死。
 
 **档位编进实体 id**：改一个 kind 的 category 会改它所有实体的 id，已落库的文档全部失配。所以这是在第一条文档落库之前
 决定一次的事；之后再改等于一次数据迁移。

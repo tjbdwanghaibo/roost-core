@@ -25,7 +25,7 @@ owner 是持有服务数据的一方，client 是调用方；领域实现与接�
 | rank | service/rank | 排行更新、查询和幂等 |
 | directory | service/directory | 全局名字目录的预留/提交/释放 |
 
-十个领域及服务运行逻辑统一在 service，Wiring 提供本地 Mod、远端 ClientMod 和进程接线；旧领域 alias 已删除。directory 是嵌入能力，game-demo 托管其余九个框架服务，加 game 共十个进程。
+十个领域及服务运行逻辑统一在 service，Wiring 提供本地 Mod、远端 ClientMod 和进程接线；旧领域 alias 已删除。directory 是嵌入能力，game-demo 托管其余九个框架服务，加 game 与 alliance（联盟服务骨架，见[联盟服务方案](../../maintenance/FEATURE-2026-11-04-alliance-service.md)）共十一个进程。
 
 ## 1A. Session 运行会话
 
@@ -62,6 +62,49 @@ owner Mod 持有存储并发布公开接口与 .local；Server 注册总线 hand
 RPC 生成物分传输半与装配半：接口包持有 wire/handler/BusClient，wiring 持有接线 Server/ClientMod/OwnerCapabilities。运维 Admin、Sweep、ForceRelease 等本地能力不应自动暴露成任意总线调用。affinity 需要 discovery 支撑，缺失时不能装成“看似有效”的路由。
 
 接收端期限：普通 Bus RPC（`Bus.HandleRpc` / `CallTo`）的 handler 拿到的 `RpcContext.Context()` 是接收端 Bus 的基础 context（[dispatchRpc](../../../infra/network/bus/bus.go)），只在 Bus 停止时取消；调用方的 deadline 不随请求传过来，调用方超时只是停止等待。JetStream RPC 按调用方截止建立处理期限。业务自注册的普通 RPC 要给整次处理自己的预算，预算过后的成功不回复成功、交给调用方按原身份重试；接法与真实 NATS 上的核对见 [SLG §7.7](../SLG-INTEGRATION.md#77-进阶深化联合链路的接法要点)（`receiverBudget`）。
+
+## 2A. 路由 RPC 与改投
+
+实体服务（例如独占全部联盟的 alliance 服务，见[联盟服务方案](../../maintenance/FEATURE-2026-11-04-alliance-service.md#27-分片接管与迁移决定-2)）有多个实例时，某个实体归哪个实例只由 Remote 的持久所有权记录决定。实体 ID 不编码实例、没有分片配置；owner 加载实体时在 Redis 登记一份带过期的路由提示，调用方按它找 owner，找错了由服务端改投纠正。不用 `KeyAffinityPicker`：它按当前发现到的实例取模，实例增减时映射跟着变。
+
+**两类方法**：
+
+- **路由 RPC**：对已有实体的写与权威读。路由键是完整 Entity ID（kind 在 ID 里）。客户端用 `(*servicerpc.BusClient).CallRoutedChecked(ctx, resolver, entityID, method, req, resp, fallback)`，查找顺序是本客户端的路由缓存 → 查找接口 `servicerpc.RouteResolver`（Redis 登记 → 持久所有权记录）。都没有时答“实体不存在”（`servicerpc.EntityNotFound`，`errcode.CodeEntityNotFound`，业务拒绝），请求不发出去。
+- **创建类 RPC**（新建实体）：不标路由，走生成客户端缺省的队列组（`Bus.Call`，NATS 只在已注册 handler 的实例里选）。接到的实例新建实体、经首写认领所有权、登记路由。创建的幂等锚在一个按稳定 ID 路由的实体上，或由调用方在路由之前定下新实体 ID（方案 2.3）。
+
+**客户端（`infra/network/servicerpc`，`routed.go`）**：
+
+- **缓存**：每个 `BusClient` 一份，按实体 ID 存 owner sid，有效期 `RouteCacheTTL`（30s，与 Redis 登记的 TTL 相同），最多 `RouteCacheCapacity`（65536）条、LRU 淘汰。缓存只是提示，正确性靠改投。不做“实体不存在”的负缓存：刚建好的实体会被别的进程立刻访问。
+- **改投**：服务端答复 `CodeRedirect` 且响应实现 `RedirectProvider`（`RedirectSID() int32`）给出另一个 sid 时，缓存改成它，改投一次。改投后仍不对答复 `CodeRedirect`（归“可重试”）。
+- **no responders**：目标 sid 没有这个方法的订阅（owner 下线、缩容后的旧缓存、恢复中；NATS 客户端已按策略重试过）时删掉缓存，经查找接口重新查一次，查到不同的 sid 才再发一次，否则原样返回（可重试，未执行）。
+- 全部尝试共用 `BusClient` 的一份 timeout 预算，再次发送前把响应清零（`resp` 必须是指针）。必须在 I/O 段调用。查找接口的其他错误（Redis 与所有权记录都读不了）按 `Retryable` 返回。
+- 指标：`servicerpc_route_lookup_total{service,source=cache|resolver}`、`servicerpc_route_redirect_total{service}`、`servicerpc_route_relookup_total{service}`。
+
+**取用查找接口**：`wiring/remoteentity.RouteSource(registry)` 返回注册表里的 `mods.ModRemoteRoute`。owner 进程由 `RemoteEntityMod` 提供（所有权记录经写 Manager 读）；只读进程由 `RemoteMirrorMod` 提供（所有权记录经只读的 Mongo 查询读，需要 mongo Mod；用 `WithMirrorLoader` 换掉 Mongo 又没装 mongo 时没有这个能力）。
+
+**服务端**：
+
+- **前置检查**：路由 RPC 的 handler 在进 Nest 之前调 `wiring/remoteentity.RPCRouteCheck(ctx, owners, localSID, id)`（签名与 `RPCWriteAnswer` 同一风格，`owners` 是注册表里的 Remote Manager）。实体已在本地加载、所有权是本 sid：返回 nil，不做 I/O。否则读持久所有权记录：没有记录答 `servicerpc.EntityNotFound`（非创建类请求不得进入写准入，否则首写会把一个不存在的 ID 认领走）；owner 是本 sid 就冷加载、登记路由，返回 nil；owner 是别的 sid 答 `servicerpc.Redirect(owner)`；读不了或加载失败答 `Retryable`。进 Nest 之后写准入照常按所有权记录 + fence 裁决，前置检查只是省掉一次白进 Nest。
+- **写的答复**：Remote 实体写的错误经 `wiring/remoteentity.RPCWriteAnswer(ctx, owners, localSID, id, err)` 转成答复：fence 时读一次权威所有权，owner 是别的 sid 就改投；重载、转移中、写额度满、准入版本冲突给可重试；结果未知原样返回。它读所有权要 I/O，只能在 RPC handler（I/O 段）里调。
+- **服务端答复**：`servicerpc.Redirect(ownerSID, cause)`（owner 未知时退化为 `Retryable`）、`servicerpc.Retryable(cause)`、`servicerpc.EntityNotFound(id)`；响应的状态码照旧取 `servicerpc.Error(answer)`，改投目标取 `servicerpc.RedirectSID(answer)`。框架码 `errcode.CodeRetryable = 4`、`errcode.CodeRedirect = 5`。
+
+**路由登记、预加载与缩容**（契约见 [REMOTE_ENTITY“路由登记”](../REMOTE_ENTITY.md#路由登记)）：
+
+- 登记的 kind 经 `wiring/remoteentity.WithRouteKinds(kinds...)` 交给本服务的 `RemoteEntityMod`（生成器由实体注解 `service=` 推出，不是 YAML 键）。
+- 起服预加载是实体类型的显式策略：`WithPreloadKinds(kinds...)` 加 `NewRemotePreloadMod()`；路由 RPC 的 owner Mod 把 `mods.ModRemoteEntityPreload` 写进 `OptionalDependsOn`，预加载完成前不注册 handler。
+- 缩容：先让要下线的实例退出创建类方法的队列组（`(*bus.Bus).LeaveRPCQueue(method)`，经 `bus.RPCQueueLeaver` 断言取得；实例主题照常接路由 RPC），再把它持有的实体用 `TransferRemoteOwnership` 转走，确认持有数为 0 后停。只支持轻量 RPC；JetStream RPC 的服务级 consumer 是全部实例共享的 durable，返回 `bus.ErrRPCQueueLeaveUnsupported`。退出后不能重新加入，要重新加入就重启实例。
+
+**四类答复**：`servicerpc.Classify(err)` 给出 `OutcomeOK`、`OutcomeRejected`（业务错误码与“实体不存在”，不重试）、`OutcomeRetryable`（确定没执行：no responders、`CodeRetryable`、`CodeRedirect`，原 RequestID 重试）、`OutcomeUnknown`（超时、取消、`CodeInternal`、传输或解码错误等一切拿不准的，原 RequestID 查结果或重发）。
+
+**现有 NATS 客户端的自动重试**：轻量 RPC 在 no responders 时按 `nats.rpc` 重试策略退避重试，直到次数或调用期限用完（目标在期间恢复时请求就在这次调用里执行）；BusClient 总给调用带期限，单次尝试用满整个期限，超时不会在同一次调用里重发。但调用方自己的重试、JetStream RPC 的重投仍会让同一请求送达多次，所以写 RPC 必须按 RequestID 幂等，超时一律按结果未知。普通 Bus RPC 不把调用方截止时间传到接收端（上一节）。
+
+**恢复完成前不接请求**：App 按依赖顺序逐个 Start Mod（共享 Mod 先于服务专属 Mod），DataEngine Mod 的 Start 在返回前把 WAL 里未投影的记录排空（`Runtime.drainAtStartup`，受 `dataengine.startup_timeout` 约束），Nest Mod 可选依赖 DataEngine 与 `remote_entity`，预加载 Mod 依赖 `remote_entity` 与 `nest`、可选依赖 DataEngine，它的 Start 跑完预加载才返回。所以实体服务的 RPC owner Mod 声明依赖 `nest`（并可选依赖预加载 Mod）时，它在 Start 里注册总线 handler 时恢复与预加载都已完成；之前的轻量 RPC 得到 no responders（“可重试，未执行”）。JetStream RPC 传输下请求先进流、handler 注册后才投递，不是 no responders。
+
+**停机先撤 handler**：App 停机第一步（`Service.Shutdown` 与任何 Mod 停止之前）经 nats Mod 的 `CloseIngress` 调 `(*bus.Bus).CloseIngress`，一次撤下总线上全部已注册的 RPC 方法并停止接收模块消息（[App 生命周期 §4.1](01-app-lifecycle.md#41-停机第一步关外部输入)）。注册 handler 的是 owner Mod（Start 时）、生成的独立进程 `Server`（`Service.Init` 时）还是框架内置服务，都由这里统一撤，各自不必再撤。每个方法走 `WithdrawRpc` 的三步：关准入（之后到达本实例的请求不进 handler，答 `errcode.CodeRetryable`，确定没执行）→ 撤订阅（轻量 RPC 排空并退掉队列组与实例主题，之后发往本 sid 的得到 no responders、不指定 sid 的落到别的实例；排空把服务端处理退订之前已发出的请求照常交给上一步的答复，不丢成超时；集群里经别的节点转来、在退订兴趣传播完之前到达的请求仍会被服务端丢掉、调用方超时，任何订阅退掉都有这个窗口，见 KNOWN-LIMITS）→ 在停机预算内等已进 handler 的请求答复完。JetStream RPC 没有 no responders：停掉该方法的服务级 consumer（共享 durable 交给别的实例），本实例的 consumer 留到 Bus 停止，期间投递来的请求答 `CodeRetryable` 并确认。之后 `HandleRpc` 返回错误。出向的 `Send` / `Call` 与 JetStream RPC 应答 consumer 照常，直到 nats Mod 停止。调度池拒绝（池满、调度器没在跑）的请求同样答 `CodeRetryable`。`WithdrawRpc` 仍可单独用来撤某个方法（缩容），重复撤下是空操作。没有这一步时 handler 一直挂到 nats Mod 停止，中间到达的请求进已停的 Nest，`ErrNestStopped` 经 `RPCWriteAnswer` 原样返回成 `CodeInternal`，调用方只能按结果未知处理（联盟服务两实例冒烟，2026-11-04）。
+
+**多个实例同时建同一个 durable**：effect 消费者、服务级 RPC consumer、saga 步骤消费者都是全部实例共用的 durable，同时起服的实例会同时建它；JetStream 集群这时可能只回答其中一个请求（联盟服务两实例冒烟，失败方等满 nats.go 缺省 5s、`Service.Init` 报 `context deadline exceeded` 退出）。驱动 `JetStreamClient.Subscribe` 建消费者单次 2s，没有回答且调用方 ctx 还没结束时用同一配置重发（`CreateOrUpdate` 幂等），最多 4 次（`nats.jetstream.consumer_create_retry.total` 与 WARN 日志）。回归：`infra/network/nats/driver` 的 `TestSubscribeSendsTheConsumerCreateAgainWhenTheReplyIsLost`（替身模拟没有回答的请求）。
+
+回归：`infra/network/servicerpc` 的 `routed_test.go`；`framework/remoteentity` 的 `route_test.go`、`route_redis_integration_test.go`；`wiring/remoteentity` 的 `route_test.go`、`rpc_answer_test.go`；`infra/network/bus` 的 `rpc_contract_test.go`（`TestLeaveRPCQueueDropsOnlyThatMethodsQueueSubscription`、`TestWithdrawRpcStopContract`、`TestWithdrawnRPCIsAnsweredRetryableAndNeverReachesTheHandler`、`TestWithdrawnJetStreamRPCStopsTheServiceConsumerAndAnswersRetryable`）与真实 NATS 的 `TestRealLeaveRPCQueueStopsNewQueueRequestsReachingTheInstance`、`TestRealWithdrawRpcAnswersEveryRequestDefinitely`；总线关输入与调度池拒绝：`infra/network/bus` 的 `TestCloseIngressClosesEveryInputOfTheBus`、`TestRefusedRPCIsAnsweredAtOnceWhenTheQueueIsFull`；生成工程的停机：`codegen/internal/roost` 的 `TestGeneratedRPCOwnerHandlersAreWithdrawnWhenTheAppStops`；App 层：`framework/app` 的 `ingress_test.go`。
 
 ## 3. 存储与幂等
 

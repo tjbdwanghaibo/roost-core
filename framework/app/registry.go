@@ -18,6 +18,9 @@ type Registry struct {
 	mu    sync.RWMutex
 	store map[ModName]any
 	cfg   *viper.Viper
+	// ingress 是 AddIngress 登记的外部输入；ingressClosed 在 App 停机第一步开始时置位，之后不再接受登记。受 mu 保护。
+	ingress       []namedIngress
+	ingressClosed bool
 }
 
 // Capability is one atomic Registry registration entry.

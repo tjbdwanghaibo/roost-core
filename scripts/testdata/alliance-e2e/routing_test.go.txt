@@ -1,0 +1,384 @@
+package e2e
+
+// 路由与接管：预加载完成前不接请求（原 2R 草稿，改为经 Found 建状态、不再直接写所有权集合）、kill -9 时在途请求的
+// 答复与同 RequestID 收敛、登记 TTL 过期与同 sid 拉起后的重新登记、alliance.transfer 之后调用方缓存改投、
+// stop_founding + transfer + 停进程的缩容三步。
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+
+	rpcalliance "example.com/planet/internal/rpc/alliance"
+)
+
+// foundMany 并发建 n 个联盟（发起者 leaderBase+1..），返回联盟 ID 与耗时。
+func (s *suite) foundMany(client *rpcalliance.BusClient, n int, leaderBase int64, workers int) ([]int64, time.Duration) {
+	start := time.Now()
+	ids := make([]int64, n)
+	var wg sync.WaitGroup
+	next := make(chan int)
+	errs := make(chan error, workers)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range next {
+				leader := leaderBase + int64(i) + 1
+				var reply rpcalliance.Reply
+				// Found 在一个实例上按方法串行（约 9 个/秒），排队时间随并发增长：单次期限给足 20s，免得超时重发再排一遍队。
+				var err error
+				for attempt := 0; attempt < 5; attempt++ {
+					ctx, cancel := context.WithTimeout(s.ctx, 20*time.Second)
+					reply, err = client.Found(ctx, fmt.Sprintf("found-%d", leader), leader, 1000, fmt.Sprintf("e2e-%d", leader), true)
+					cancel()
+					if err == nil || servicerpc.Classify(err) == servicerpc.OutcomeRejected {
+						break
+					}
+				}
+				if err != nil {
+					errs <- fmt.Errorf("found %d: %w", leader, err)
+					return
+				}
+				ids[i] = reply.Alliance.AllianceID
+			}
+		}()
+	}
+	for i := 0; i < n; i++ {
+		select {
+		case next <- i:
+		case err := <-errs:
+			close(next)
+			wg.Wait()
+			s.t.Fatal(err)
+		}
+	}
+	close(next)
+	wg.Wait()
+	select {
+	case err := <-errs:
+		s.t.Fatal(err)
+	default:
+	}
+	return ids, time.Since(start)
+}
+
+type logLine struct {
+	Time   string `json:"time"`
+	Msg    string `json:"msg"`
+	Mod    string `json:"mod"`
+	Loaded int    `json:"loaded"`
+	Failed int    `json:"failed"`
+	Listed int    `json:"listed"`
+}
+
+// preloadWindow 从进程日志（JSON 行）里取最后一次起服的预加载开始 / 完成与 owner Mod 开始的时刻。
+func preloadWindow(t *testing.T, path string) (start, done, owner time.Time, report logLine) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parse := func(s string) time.Time {
+		v, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t.Fatalf("log time %q: %v", s, err)
+		}
+		return v
+	}
+	for _, text := range strings.Split(string(raw), "\n") {
+		var line logLine
+		if json.Unmarshal([]byte(text), &line) != nil {
+			continue
+		}
+		switch {
+		case line.Msg == "mod start (service-specific)" && line.Mod == "remote_entity.preload":
+			start, done, owner = parse(line.Time), time.Time{}, time.Time{}
+		case strings.HasPrefix(line.Msg, "remote_entity preload mod: preloaded owned entities"):
+			done, report = parse(line.Time), line
+		case line.Msg == "mod start (service-specific)" && line.Mod == string(rpcalliance.CapabilityName):
+			owner = parse(line.Time)
+		}
+	}
+	return start, done, owner, report
+}
+
+// TestAllianceE2EPreloadOrder：生成工程的 alliance 进程（真实 bootstrap、owner Mod、预加载 Mod）在起服预加载完成之前
+// 不在总线上接路由 RPC。状态经 Found 造：单实例建 ALLIANCE_E2E_PRELOAD（缺省 500）个联盟，正常停机，再同 sid 拉起；
+// 客户端从进程启动起每 5ms 发一次 Result（route），记下每次是 no responders 还是答复。同时记下预加载时间与常驻内存
+// （方案 §2.7 / KNOWN-LIMITS ⑥ 要的随实体数增长）。
+func TestAllianceE2EPreloadOrder(t *testing.T) {
+	s := newSuite(t, 15*time.Minute)
+	count := 500
+	if raw := os.Getenv("ALLIANCE_E2E_PRELOAD"); raw != "" {
+		count, _ = strconv.Atoi(raw)
+	}
+	a := s.start("alliance-3000", "alliance", 3000, procOptions{})
+	rssEmpty := rssMB(a)
+	ids, took := s.foundMany(s.client(nil, 20*time.Second), count, 100_000, 16)
+	t.Logf("founded %d alliances in %v (%.0f/s); rss %.0f MiB before, %.0f MiB after", count, took.Round(time.Millisecond), float64(count)/took.Seconds(), rssEmpty, rssMB(a))
+	s.stop(a, syscall.SIGINT)
+
+	first := target(t, ids[0])
+	probe := s.client(fixedOwner(3000), 300*time.Millisecond)
+	type attempt struct {
+		at       time.Time
+		answered bool
+		err      error
+	}
+	var attempts []attempt
+	launched := time.Now()
+	s.launch(a)
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(s.ctx, 300*time.Millisecond)
+		_, err := probe.Result(ctx, first, "probe")
+		cancel()
+		answered := servicerpc.Classify(err) == servicerpc.OutcomeOK || servicerpc.Classify(err) == servicerpc.OutcomeRejected
+		attempts = append(attempts, attempt{time.Now(), answered, err})
+		if answered {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	last := attempts[len(attempts)-1]
+	if !last.answered {
+		t.Fatalf("alliance never answered after restart: %v", last.err)
+	}
+	s.waitReady(a, time.Minute)
+	time.Sleep(300 * time.Millisecond)
+	start, done, owner, report := preloadWindow(t, a.log)
+	if start.IsZero() || done.IsZero() || owner.IsZero() {
+		t.Fatalf("log lacks preload start %v / done %v / owner Mod start %v", start, done, owner)
+	}
+	if report.Loaded < count {
+		t.Fatalf("the preload loaded %d of %d alliances (listed %d, failed %d)", report.Loaded, count, report.Listed, report.Failed)
+	}
+	if owner.Before(done) {
+		t.Fatalf("the owner Mod started at %v, before the preload finished at %v", owner, done)
+	}
+	during := 0
+	for _, a := range attempts {
+		if a.answered && a.at.Before(done) {
+			t.Fatalf("a route request was answered at %v, before the preload finished at %v: %v", a.at, done, a.err)
+		}
+		if !a.answered && a.at.After(start) && a.at.Before(done) {
+			during++
+		}
+	}
+	if during == 0 {
+		t.Fatalf("no request landed inside the preload window %v..%v; raise ALLIANCE_E2E_PRELOAD", start, done)
+	}
+	if value := s.routeValue(first); !strings.HasPrefix(value, "3000:") {
+		t.Fatalf("after the preload the registration of %d is %q", first, value)
+	}
+	t.Logf("PRELOAD n=%d listed=%d loaded=%d failed=%d preload=%v start→ready=%v rss_after_preload=%.0fMiB; %d requests during the preload got no responders; first answer +%v after it",
+		count, report.Listed, report.Loaded, report.Failed, done.Sub(start).Round(time.Millisecond), time.Since(launched).Round(time.Millisecond), rssMB(a), during, last.at.Sub(done).Round(time.Millisecond))
+}
+
+type joinOutcome struct {
+	player, alliance int64
+	request          string
+	first            servicerpc.Outcome
+	err              error
+}
+
+// TestAllianceE2ECrashTakeoverAndScaleIn：两个实例。① kill -9 时在途的入会请求答“可重试”或“结果未知”，同 RequestID
+// 查 Result、重发后得到确定结果，每个玩家恰好入会一次；② kill -9 后登记仍在、请求可重试，TTL 过期后登记消失、仍可重试；
+// 同 sid 拉起后预加载重新登记（值不变）；③ alliance.transfer 迁走一个联盟，带旧缓存的调用方经改投到新 owner；固定答
+// 旧 owner 的调用方同样改投；④ 缩容三步：stop_founding → transfer 到持有数为 0 → 停进程，联盟由另一实例接着答、成员不丢。
+func TestAllianceE2ECrashTakeoverAndScaleIn(t *testing.T) {
+	s := newSuite(t, 15*time.Minute)
+	a := s.start("alliance-3000", "alliance", 3000, procOptions{})
+	b := s.start("alliance-3001", "alliance", 3001, procOptions{})
+	client := s.client(nil, 3*time.Second)
+	leader := int64(200_000)
+	onB := s.foundOn(client, 3001, 8, &leader)
+	onA := s.foundOn(client, 3000, 2, &leader)
+
+	// ① 在途请求：200 个玩家并发入会到 3001 上的联盟，发出约 400ms 后 kill -9 3001（入会在该实例上按方法串行，约 75ms 一个，此时大部分还在排队）。
+	const players = 200
+	outcomes := make([]joinOutcome, players)
+	var wg sync.WaitGroup
+	startGate := make(chan struct{})
+	for i := 0; i < players; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-startGate
+			o := joinOutcome{player: 300_000 + int64(i), alliance: onB[i%len(onB)]}
+			o.request = fmt.Sprintf("join-%d", o.player)
+			_, o.err = client.Join(s.ctx, o.request, o.player, 1000, target(t, o.alliance))
+			o.first = servicerpc.Classify(o.err)
+			outcomes[i] = o
+		}()
+	}
+	close(startGate)
+	time.Sleep(400 * time.Millisecond)
+	s.stop(b, syscall.SIGKILL)
+	killedAt := time.Now()
+	wg.Wait()
+	counts := map[servicerpc.Outcome]int{}
+	for _, o := range outcomes {
+		counts[o.first]++
+		if o.first == servicerpc.OutcomeRejected {
+			t.Fatalf("player %d: a join refused while its owner was killed: %v", o.player, o.err)
+		}
+	}
+	t.Logf("KILL in-flight joins: ok=%d retryable=%d unknown=%d", counts[servicerpc.OutcomeOK], counts[servicerpc.OutcomeRetryable], counts[servicerpc.OutcomeUnknown])
+
+	// ② kill -9 之后：登记仍指向 3001，请求可重试；TTL 过期后登记消失，请求仍可重试（所有权记录仍指向 3001）。
+	tB := target(t, onB[0])
+	before := s.routeValue(tB)
+	if !strings.HasPrefix(before, "3001:") {
+		t.Fatalf("right after kill -9 the registration of %d is %q, want still 3001", tB, before)
+	}
+	if _, err := s.client(nil, time.Second).Info(s.ctx, tB); servicerpc.Classify(err) != servicerpc.OutcomeRetryable {
+		t.Fatalf("info on the killed owner: %v (%s), want retryable", err, servicerpc.Classify(err))
+	}
+	s.eventually("the killed instance's registrations expire", 60*time.Second, func() (bool, string) {
+		return s.routeValue(tB) == "", s.routeValue(tB)
+	})
+	t.Logf("KILL registrations of 3001 expired %v after kill -9", time.Since(killedAt).Round(time.Second))
+	if _, err := s.client(nil, time.Second).Info(s.ctx, tB); servicerpc.Classify(err) != servicerpc.OutcomeRetryable {
+		t.Fatalf("info with the owner down and its registration expired: %v, want retryable", err)
+	}
+
+	// 同 sid 拉起：预加载重新登记，值（sid:代际）与崩溃前相同。
+	restarted := time.Now()
+	s.launch(b)
+	s.waitReady(b, 2*time.Minute)
+	if value := s.routeValue(tB); value != before {
+		t.Fatalf("after restart the registration of %d is %q, want %q (same sid, same epoch)", tB, value, before)
+	}
+	t.Logf("KILL 3001 ready %v after restart, registration %q restored by the preload", time.Since(restarted).Round(time.Millisecond), before)
+
+	// 在途请求收敛：先按原 RequestID 查 Result（确定执行没有），再重发得到确定答复；每个玩家恰好是成员一次。
+	executed, notExecuted := 0, 0
+	for _, o := range outcomes {
+		if o.first == servicerpc.OutcomeOK {
+			continue
+		}
+		var result rpcalliance.ResultReply
+		err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
+			var err error
+			result, err = client.Result(ctx, target(t, o.alliance), o.request)
+			return err
+		})
+		if err != nil {
+			t.Fatalf("player %d: result of %s: %v", o.player, o.request, err)
+		}
+		if result.Found {
+			executed++
+		} else {
+			notExecuted++
+		}
+		var reply rpcalliance.Reply
+		err, _ = definite(s.ctx, time.Minute, func(ctx context.Context) error {
+			var err error
+			reply, err = client.Join(ctx, o.request, o.player, 1000, target(t, o.alliance))
+			return err
+		})
+		if err != nil {
+			t.Fatalf("player %d: resend %s: %v", o.player, o.request, err)
+		}
+		if result.Found && !reply.Replayed {
+			t.Fatalf("player %d: Result said %s was executed, but the resend was not a replay", o.player, o.request)
+		}
+	}
+	t.Logf("KILL unanswered joins after restart: executed before the crash=%d, not executed=%d; all resent to a definite answer", executed, notExecuted)
+	for _, id := range onB {
+		info, err := client.Info(s.ctx, target(t, id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		in := members(info.Alliance)
+		for _, o := range outcomes {
+			if o.alliance == id && !in[o.player] {
+				t.Fatalf("player %d is not a member of %d after its join converged", o.player, id)
+			}
+		}
+		if len(info.Alliance.Members) != len(in) {
+			t.Fatalf("alliance %d lists a member twice: %+v", id, info.Alliance.Members)
+		}
+	}
+	for _, o := range outcomes {
+		g, err := client.Guard(s.ctx, guard(t, o.player))
+		if err != nil || g.State.AllianceID != o.alliance || g.State.PendingRequestID != "" {
+			t.Fatalf("player %d guard %+v err %v, want alliance %d with nothing pending", o.player, g.State, err, o.alliance)
+		}
+	}
+
+	// ③ 迁移后改投：cached 先把 onA[0] 的 owner（3000）缓存下来；在 3000 上 transfer 给 3001；cached 再调用经改投到 3001。
+	cached := s.client(nil, 3*time.Second)
+	tA := target(t, onA[0])
+	if reply, err := cached.Info(s.ctx, tA); err != nil || reply.ServedBySID != 3000 {
+		t.Fatalf("info before transfer: %+v %v", reply.ServedBySID, err)
+	}
+	moved := s.admin(a, "alliance.transfer", map[string]any{"ids": []int64{tA}, "to_sid": 3001})
+	t.Logf("TRANSFER %v", moved)
+	lookupsBefore := s.owners.reads.Load()
+	reply, err := cached.Info(s.ctx, tA)
+	if err != nil || reply.ServedBySID != 3001 {
+		t.Fatalf("info through the cached route after transfer: served by %d err %v, want 3001", reply.ServedBySID, err)
+	}
+	if reply, err := s.client(fixedOwner(3000), 3*time.Second).Info(s.ctx, tA); err != nil || reply.ServedBySID != 3001 {
+		t.Fatalf("info through a client that always names 3000: served by %d err %v, want 3001", reply.ServedBySID, err)
+	}
+	s.eventually("the new owner registers the moved alliance", 15*time.Second, func() (bool, string) {
+		return strings.HasPrefix(s.routeValue(tA), "3001:"), s.routeValue(tA)
+	})
+	t.Logf("TRANSFER cached caller followed the redirect to 3001 (ownership reads during it: %d); registration now %q", s.owners.reads.Load()-lookupsBefore, s.routeValue(tA))
+
+	// ④ 缩容三步：3001 退出 Found 队列组 → 把持有的全部转给 3000 → 停 3001。
+	s.admin(b, "alliance.stop_founding", nil)
+	for i := 0; i < 6; i++ {
+		if reply := s.found(client, leader+int64(i)+1); reply.ServedBySID != 3000 {
+			t.Fatalf("after stop_founding on 3001 a new alliance landed on %d", reply.ServedBySID)
+		}
+	}
+	leader += 6
+	var rounds []string
+	s.eventually("3001 gives everything away", 2*time.Minute, func() (bool, string) {
+		data := s.admin(b, "alliance.transfer", map[string]any{"count": 1000, "to_sid": 3000})
+		rounds = append(rounds, fmt.Sprint(data))
+		moved, _ := data["moved"].([]any)
+		pending, _ := data["pending"].([]any)
+		failed, _ := data["failed"].([]any)
+		if len(failed) > 0 {
+			t.Fatalf("transfer failed: %v", data)
+		}
+		return len(moved) == 0 && len(pending) == 0, fmt.Sprint(data)
+	})
+	t.Logf("SCALE-IN transfer rounds: %d", len(rounds))
+	s.stop(b, syscall.SIGINT)
+	all := append(append([]int64{}, onB...), onA...)
+	for _, id := range all {
+		info, err := s.client(nil, 3*time.Second).Info(s.ctx, target(t, id))
+		if err != nil || info.ServedBySID != 3000 {
+			t.Fatalf("alliance %d after scale-in: served by %d err %v", id, info.ServedBySID, err)
+		}
+	}
+	for _, o := range outcomes {
+		g, err := client.Guard(s.ctx, guard(t, o.player))
+		if err != nil || g.ServedBySID != 3000 || g.State.AllianceID != o.alliance {
+			t.Fatalf("guard %d after scale-in: %+v served by %d err %v", o.player, g.State, g.ServedBySID, err)
+		}
+	}
+	ids := make([]string, 0, len(all))
+	for _, id := range all {
+		ids = append(ids, fmt.Sprint(id))
+	}
+	sort.Strings(ids)
+	t.Logf("SCALE-IN 3001 stopped; alliances %s and %d guards answered by 3000", strings.Join(ids, ","), len(outcomes))
+}
