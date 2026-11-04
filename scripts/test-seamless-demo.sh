@@ -95,7 +95,7 @@ for f in configs/service/config.*.yaml; do
 		-e 's#^  ttl: 15s#  ttl: 6s#' -e 's#^  renew_interval: 3s#  renew_interval: 1s#' \
 		-e 's#^  guard: 5s#  guard: 2s#' -e 's#^  startup_wait: 30s#  startup_wait: 10s#' "$f"
 done
-sed -i '' 's#game_sids: \[1000, 1001, 1003\]#game_sids: [1000, 1001, 1002, 1003, 1004]#' configs/activity_groups.yaml
+sed -i '' -E 's#game_sids: \[[0-9, ]*\]#game_sids: [1000, 1001, 1002, 1003, 1004]#' configs/activity_groups.yaml
 grep -q 'game_sids: \[1000, 1001, 1002, 1003, 1004\]' configs/activity_groups.yaml
 
 # 分区场景：2 × 1 个 3000 × 3000 的格；格 (0,0) 归 sid 1001、格 (1,0) 归 sid 1002。四组怪：分界线两侧各三只静止的
