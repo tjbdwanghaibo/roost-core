@@ -18,6 +18,8 @@ Remote Entity 是具有权威写入与版本的共享实体。写仍通过 Nest 
 
 实体归某个服务写时（例如联盟服务独占全部 Alliance），别的服务的进程用 `wiring/remoteentity.WithForeignKinds(kinds...)` 声明这些 kind：写准入与 `ClaimRemoteOwnership` 等所有权操作在读写任何所有权记录之前返回 `entity.ErrRemoteKindNotOwned`，不会把新实体认领走；读快照不受影响，没声明的 kind 行为不变。见 [Remote Entity 契约“实体归属守卫”](../REMOTE_ENTITY.md#实体归属守卫)。
 
+实体服务有多个实例时，归属服务的 `RemoteEntityMod` 用 `WithRouteKinds(kinds...)` 声明登记路由的 kind：owner 加载这些 kind 的独占实体后在 Redis 登记带 TTL 的“实体 ID → sid + 所有权代际”，批量续期，转移出去、失去所有权与正常停机时按值删除，kill -9 靠过期；调用方的路由 RPC 经 `RouteSource` 查 owner（Redis → 持久所有权记录），服务端前置检查 `RPCRouteCheck` 不让不存在的实体进入写准入。登记只是路由提示，写准入仍只看所有权记录与 fence。`WithPreloadKinds` 加 `NewRemotePreloadMod()` 是起服预加载：只加载所有权记录里 owner 是本 sid 的实体，完成前路由 RPC 不接请求。见 [Remote Entity 契约“路由登记”](../REMOTE_ENTITY.md#路由登记) 与 [guide/09“路由 RPC 与改投”](09-services.md#2a-路由-rpc-与改投)。
+
 ## 2. 写入生命周期
 
 准备参与实体和写许可 → 业务池 handler 修改 DAO → 事务局部变更形成 Remote 批次 → 持久确认 → finalizer 收尾/释放。参与者必须判断本事务变化，不能用对象全局 dirty 推断。取消等待不撤销已经准入的持久写；结果未知保留 fence/恢复责任。

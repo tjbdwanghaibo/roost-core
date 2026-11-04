@@ -41,7 +41,7 @@
 | `//roost:object` | 单例配置 schema struct | `name`、`file`、`json` |
 | `//roost:attribute` | 属性 profile struct | `index`、`max` |
 | `//roost:web` | HTTP handler | 必需 `method`、`path`、`body`；可选 `headers`、`compress`、`errors`、`status` |
-| `//roost:rpc` | 服务接口 / 接口方法 | 接口：`service_type`、`capability`；方法：`affinity`、`shard`（按槽位表路由，参数是 `int64` 业务号；见 [CODEGEN_REFERENCE](CODEGEN_REFERENCE.zh-CN.md)） |
+| `//roost:rpc` | 服务接口 / 接口方法 | 接口：`service_type`、`capability`；方法：`affinity`；`shard` 已移除（生成期报错，改用 `route`，见 [CODEGEN_REFERENCE](CODEGEN_REFERENCE.zh-CN.md)） |
 | `//roost:register` | 导出的包级注册函数 | `phase`、`order` |
 
 `//roost:cache` 是 glsvet 的组件字段检查说明，不是生成器：表示明确允许不参与事务回滚的缓存字段，不能用它把事务状态绕开 DAO。`//go:generate` 与 `//go:build protocoldef` 属于 Go 工具链，也不是 Roost tag。

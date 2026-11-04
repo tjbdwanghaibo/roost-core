@@ -105,6 +105,9 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `bus_dispatch_total` / `bus_dispatch_drop_total` / `bus_dispatch_duration` | C/C/D | 总线吞吐与丢弃 |
 | `bus_dead_letter_total` / `_requeue_total` / `_purge_total` | Counter | 死信生命周期 |
 | `bus_duplicate_total`、`bus_rpc_*` | Counter/Gauge | 去重与 RPC 水位。可靠 RPC 的 `method` 标签有界（RR-20261006-19）：被调方只用注册过的方法，其余 `_unregistered`；调用方每个 Bus 至多 256 个方法，其余 `_other` |
+| `servicerpc_route_lookup_total{service,source}` | Counter | 路由 RPC 查 owner：source=cache（本客户端路由缓存命中）/ resolver（问查找接口：Redis 登记 → 所有权记录）。service 是被调服务类型 |
+| `servicerpc_route_redirect_total{service}` | Counter | 服务端答复改投、客户端改投一次的次数；迁移或登记过期期间增长 |
+| `servicerpc_route_relookup_total{service}` | Counter | no responders 后删缓存、重新查找的次数；缩容、owner 下线或恢复期间增长 |
 | `failurelog_*_total` | Counter | 失败日志生命周期（append/delete/purge/trim 均带 namespace label） |
 | `failurelog_degraded_total{namespace,op}` | Counter | 适配器没有 Lua（Eval 返回空结果）时走了非原子回退；生产驱动不应出现，非零说明接了不支持脚本的 IRedis。脚本报错（结果未知）不降级，计入 `failurelog_append_total{result="error"}` 等并返回错误（RR-20261005-NC-160） |
 | `obs.series.dropped{metric}` | Counter | 指标基数打满后被丢弃的写入数（**非零即告警**：该 metric 的新 label 组合已静默失效） |
@@ -124,6 +127,12 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `remote_entity.stale_reload_total` | Counter | 写准入发现本进程的内存实例落后于权威（共享模式下别的进程写过、或所有权转走期间新所有者写过）或停在 Fenced，把它仅内存卸载、从权威重载的次数。共享模式多写者交替写时正常增长，独占模式下应接近零 |
 | `remote_entity.foreign_kind_rejected_total` | Counter | 实体归属守卫拒绝的写准入与所有权操作：kind 声明归属于别的服务（`ForeignKinds`），本进程不认领、不写。应为零；增长说明有代码在别的服务的进程里直接写这类实体，写应改走归属服务的 RPC |
 | `remote_entity.foreign_ack_skipped_total` | Counter | outbox 协调者代发的提交不是本进程内存实例写的（共享 outbox 里别的进程的事务、重启后重放到加载时还没带上它的实例），没有推进这份实例版本的次数；之后这份实例由写准入从权威重载 |
+| `remote_entity.route_register_total{result}` | Counter | 路由登记（联盟服务方案 §2.7，[REMOTE_ENTITY“路由登记”](REMOTE_ENTITY.md#路由登记)）：result=ok / stale（Redis 里已有更新代际，本进程是迟到的旧 owner）/ error（Redis 失败，只影响路由效率，续期时重登）。error 持续增长说明 Redis 不可用，调用方在回退读所有权记录 |
+| `remote_entity.route_renew_total{result}` | Counter | 每轮续期每个键的结果：renewed / replaced（值已被新 owner 换掉，不再续）/ missing（键丢了，向权威确认后重登）/ error（整批失败）。replaced 与 missing 在迁移、Redis 丢键之后出现；稳定运行时只有 renewed |
+| `remote_entity.route_delete_total{result}` | Counter | 转移出去、失去所有权与停机时按值删除登记：ok / error（按 TTL 过期） |
+| `remote_entity.route_lookup_total{source}` | Counter | 路由查找的来源：redis / authority（Redis 没有登记或读不了，回退读所有权记录）/ not_found（实体不存在）/ error（所有权记录也读不了）。authority 占比高说明登记缺失（Redis 不可用、刚重启、续期失败），每次多一次 Mongo 点读 |
+| `remote_entity.route_lookup_fallback_total{reason}` | Counter | 查找回退到所有权记录的原因：redis_missing / redis_error |
+| `remote_entity.preload_total{result}` | Counter | 起服预加载每个实体的结果：ok / skipped（枚举之后所有权已变）/ error（加载失败，留给按需冷加载；应为零） |
 
 ### 帧同步（sync/lockstep）
 
@@ -448,6 +457,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `remote_entity.outbox.snapshots` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
 | `remote_entity.outbox.mark_published` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
 | `remote_entity.outbox.transaction` | Histogram | `remoteentity/transaction_manager.go:ObserveHistogram` |
+| `remote_entity.preload_total` | Counter | `remoteentity/route.go:routeMetric` |
 | `remote_entity.quarantine_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.rejected_unload_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.rejected_unload_total` | Counter | `remoteentity/local_runtime.go:IncCounter` |
@@ -469,6 +479,11 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `remote_entity.remote.republish_scheduled_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.remote.republish_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.remote.write_gate_wait` | Duration | `remoteentity/batch.go:ObserveDuration` |
+| `remote_entity.route_delete_total` | Counter | `remoteentity/route.go:routeMetric` |
+| `remote_entity.route_lookup_fallback_total` | Counter | `remoteentity/route_store.go:IncCounter` |
+| `remote_entity.route_lookup_total` | Counter | `remoteentity/route_store.go:IncCounter` |
+| `remote_entity.route_register_total` | Counter | `remoteentity/route.go:routeMetric` |
+| `remote_entity.route_renew_total` | Counter | `remoteentity/route.go:routeMetric` |
 | `remote_entity.snapshot_bootstrap_overflow_total` | Counter | `entity/remote_snapshot.go:IncCounter` |
 | `remote_entity.snapshot_bootstrap_replay_failed_total` | Counter | `entity/remote_snapshot.go:IncCounter` |
 | `remote_entity.snapshot_l2_tombstone_wait_total` | Counter | `remoteentity/snapshot_l2.go:IncCounter` |
@@ -530,6 +545,9 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `service.dropped.total` | Counter | `servicemetrics/metrics_reporter.go:IncCounter` |
 | `service.refused.total` | Counter | `servicemetrics/metrics_reporter.go:IncCounter` |
 | `service.replayed.total` | Counter | `servicemetrics/metrics_reporter.go:IncCounter` |
+| `servicerpc_route_lookup_total` | Counter | `servicerpc/routed.go:IncCounter` |
+| `servicerpc_route_redirect_total` | Counter | `servicerpc/routed.go:IncCounter` |
+| `servicerpc_route_relookup_total` | Counter | `servicerpc/routed.go:IncCounter` |
 | `skill.passive.dispatch_rejected.total` | Counter | `skill/runtime_dispatch.go:IncCounter` |
 | `skill.root_event.capacity_dropped.total` | Counter | `skill/runtime_dispatch.go:IncCounter` |
 | `skill.spawn.abandoned.total` | Counter | `skill/runtime_spawn_stop.go:IncCounter` |

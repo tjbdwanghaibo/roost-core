@@ -18,7 +18,7 @@
 2. 幂等身份跨重试保持，未知结果不当作未执行。
 3. account 身份、玩家号和名字规则是必需协作者。
 4. 领域模型、存储、RPC 传输和周期运行均在 service；Wiring 只构造实例并委托生命周期。
-5. 按槽位路由（[slots.go](../../../infra/network/servicerpc/slots.go)）：槽位表只是提示，构造时一次校验覆盖 / 重叠 / sid 重复；`CallSlotChecked` 最多改投一次、改投前清零响应；`Classify` 只把确定没执行的（no responders、`CodeRetryable`、`CodeRedirect`）归可重试，拿不准的一律结果未知。Remote 写错误到答复的映射在 [wiring/remoteentity/rpc_answer.go](../../../wiring/remoteentity/rpc_answer.go)。回归：`slots_test.go`、`rpc_answer_test.go`；使用见[设计篇 2A](../guide/09-services.md#2a-按槽位路由与改投)。
+5. 路由 RPC（[routed.go](../../../infra/network/servicerpc/routed.go)）：`CallRoutedChecked` 按 `BusClient` 自己的路由缓存（30s、LRU 65536）→ `RouteResolver` 找 owner；改投最多一次、改投前清零响应并把缓存改成改投目标；no responders 删缓存、重新查找一次，查到别的 sid 才再发；查找接口答“实体不存在”时不发请求；没有负缓存。`Classify` 只把确定没执行的（no responders、`CodeRetryable`、`CodeRedirect`）归可重试，“实体不存在”归业务拒绝，拿不准的一律结果未知。查找接口的实现（Redis 登记 → 持久所有权记录）、服务端前置检查 `RPCRouteCheck` 与 Remote 写错误到答复的映射 `RPCWriteAnswer` 在 [wiring/remoteentity](../../../wiring/remoteentity/route.go)（infra 不能依赖 framework）。缩容入口 `(*bus.Bus).LeaveRPCQueue` 只退订这个方法的服务级队列组订阅（从 `b.subs` 拿掉，停止时不重复退订），实例主题不动。回归：`routed_test.go`、`rpc_answer_test.go`、`wiring/remoteentity/route_test.go`、`bus/rpc_contract_test.go`；使用见[设计篇 2A](../guide/09-services.md#2a-路由-rpc-与改投)。
 
 ## 2A. 一个服务的两层实现
 

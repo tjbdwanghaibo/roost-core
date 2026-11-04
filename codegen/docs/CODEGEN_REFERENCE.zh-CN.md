@@ -1103,15 +1103,7 @@ type Mail interface {
 | 首参不是 `context.Context` | 不接 ctx 的方法不做 I/O，没有理由是一次往返 |
 | 包里没有 `ErrRequestInvalid` | 生成的 handler 需要一个带码的错误回答"这一帧读不懂"；用 `CodeInternal` 会把调用方的畸形请求报成服务端故障 |
 | `affinity=` 指向不存在的参数，或裸 key 不是 string | 亲和 key 在调用时从实参读；派生形式写 `affinity=x.Key()` |
-| `shard=` 指向不存在的参数、参数不是 `int64`，或与 `affinity=` 同时写 | 按槽位表路由的 key 是编码了槽位的实体 ID 或玩家 ID（联盟服务方案 §2.7）；两种选实例方式互斥 |
-| 一个服务里既有 `shard=` 方法又有 `affinity=` 方法 | 两种客户端的构造参数不同（槽位表 / 服务发现），一个服务只用一种 |
-
-`shard=<param>` 的方法由生成的客户端经 `servicerpc.(*BusClient).CallSlotChecked` 发往槽位表上 `param` 所在槽位的 sid，
-实例答复“改投”（`errcode.CodeRedirect`，响应的 `RedirectSid`）时改投一次；`NewBusClient` 多一个必填的
-`*servicerpc.SlotTable`，ClientMod 读 `<service_type>.slots` / `.shards`（`servicerpc.SlotTableConfig`，必填）。`param` 是编码槽位的
-业务号（实体的 unique id；拿着完整实体 ID 时先 `entity.ResolveEntityID(id).UniqueID`）。服务实现把写的错误经
-`wiring/remoteentity.RPCWriteAnswer` 转成答复，生成的 handler 把 `servicerpc.Redirect` 的 owner 写进响应；调用方用
-`servicerpc.Classify` 分 OK / Rejected / Retryable / Unknown。调用方与拥有者的配置要写同一张表，doctor 的 `rpc-slots:<rpc>` 核对。
+| 写了 `shard=` | 槽位表路由已移除（联盟服务方案 2026-11-04 路由决定，§2.7）；多实例实体服务改用路由 RPC（`//roost:rpc route`），按完整 Entity ID 经 Redis 路由登记与持久所有权记录找 owner |
 | 生成名与包内已有声明撞名 | 生成的那边不能动（`pkg.Server` 在每个服务里读法一致）；撞名的若是函数或常量，会在编译失败前先改掉整个包的含义 |
 | 一个包里两个被标记的接口 | 生成文件在包级声明十几个固定名字；`app.Service` 每进程一个，两个被标记的接口应是两个包 |
 

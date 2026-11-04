@@ -52,7 +52,24 @@ Durability 1/2/3（async / strict / 随 strict 路径提交的 pipelined）的 W
 - **声明**：`coreremote.Config.ForeignKinds []entity.EntityKind` 列出“声明归属于别的服务”的 kind；wiring 经 `wiring/remoteentity.WithForeignKinds(kinds...)` 传入（生成工程由实体注解 `service=<name>` 推出，阶段 2），Mod Init 时校验一次：每个 kind 都必须是已注册的 Remote 托管 kind。不写 YAML 键，不在两处声明。
 - **拒绝点**：`PrepareRemoteWriteBatch` 在写额度、wrapper 与任何所有权读写之前整批检查，批里有一个 foreign kind 整批拒绝；`ClaimRemoteOwnership`、`EnterRemoteSharedMode`、`LeaveRemoteSharedMode`、`TransferRemoteOwnership` 在 `beginOwnershipTransition` 里同样先拒绝。返回 `entity.ErrRemoteKindNotOwned`（包裹 `ErrRemoteWriteCapabilityDisabled`，不可重试），计 `remote_entity.foreign_kind_rejected_total`。权威里不会留下这个进程的所有权记录。
 - **不受影响**：`GetRemoteOwnership` 与快照读照常（RPC 服务端“改投”要读 owner）；未列入的 kind（`ForeignKinds` 为空时即全部 kind）行为与没有守卫时逐字相同——Player 的静态 sid 归属、共享模式、SLG 联盟夹具都不变。
-- **边界**：守卫只管本进程，不校验别的进程的配置；归属服务本身仍按首写认领与持久 fence 决定哪个实例是 owner（分片与改投见 [guide/09“按槽位路由与改投”](guide/09-services.md#2a-按槽位路由与改投)）。回归：`ownership_test.go` 的 `TestForeignKindIsRejectedBeforeOwnershipClaim`、`wiring/remoteentity` 的 `TestRemoteEntityModForeignKinds`。
+- **边界**：守卫只管本进程，不校验别的进程的配置；归属服务本身仍按首写认领与持久 fence 决定哪个实例是 owner（多实例路由与改投见 [guide/09“路由 RPC 与改投”](guide/09-services.md#2a-路由-rpc-与改投)）。回归：`ownership_test.go` 的 `TestForeignKindIsRejectedBeforeOwnershipClaim`、`wiring/remoteentity` 的 `TestRemoteEntityModForeignKinds`。
+
+## 路由登记
+
+实体服务有多个实例时（[联盟服务方案 2.7](../maintenance/FEATURE-2026-11-04-alliance-service.md#27-分片接管与迁移决定-2)），owner 在 Redis 登记一份带过期的“实体 ID → owner sid + 所有权代际”，调用方的路由 RPC 按它找 owner（[guide/09“路由 RPC 与改投”](guide/09-services.md#2a-路由-rpc-与改投)）。它只是路由提示：写准入永远只看所有权记录与 fence，不读登记。实现：`framework/remoteentity` 的 `route_store.go`（键、值、三个脚本、查找）与 `route.go`（Manager 上的登记、续期、前置检查与预加载）。
+
+- **哪些 kind**：`coreremote.Config.RouteKinds`，wiring 经 `wiring/remoteentity.WithRouteKinds(kinds...)` 传入（生成工程是声明了 `service=<本服务>` 的 Remote 托管 kind），Mod Init 校验一次：已注册的 Remote 托管 kind、不在 `WithForeignKinds` 里。不写 YAML 键；不传时没有登记，行为与没有这项功能时逐字相同。
+- **键与值**：键 `<remote_entity.snapshot_l2_key_prefix>:remote_entity:route:<完整 Entity ID>`（前缀为空时没有前缀与冒号，与 L2 快照键同一规则，不带 hash tag，Redis Cluster 下按键分散）；值 `<owner sid>:<MarkerEpoch>`。MarkerEpoch 每次所有权变更加一，同 sid 崩溃重启时不变。
+- **三个按值比较的脚本**：登记——键不存在或已存代际不比本次新才 `SET … PX`（代际按十进制字符串比较，不经 Lua number），迟到的旧 owner 盖不掉新 owner；续期——值完全相同才 `PEXPIRE`，否则答“不同”或“不存在”，不重建键；删除——值相同才 `DEL`。
+- **登记时机**：独占写准入成功（冷加载后的第一次写、首写认领）、`ClaimRemoteOwnership`、路由 RPC 前置检查冷加载之后（`Manager.ServeRoutedRequest`）、起服预加载之后。同一个值只写一次 Redis，之后由续期维持。登记失败只记指标与日志、不影响这次写，实体仍记在本进程的登记表里，续期得到“不存在”时重登。
+- **删除时机**：`TransferRemoteOwnership` 进入 Draining 之后（转移被证明没发生时不补登，下一次写准入或前置检查重登）；写准入发现所有权已是别人（fence）；正常停机（`Assembly.Stop` 先停续期循环再按值批量删除，删除失败只记日志、按 TTL 过期）。kill -9 不删，靠 TTL。Remote 实体没有空闲卸载；仅内存卸载后重载（持久拒绝、落后副本）不改所有权，登记保留。
+- **续期**：`RouteRenewInterval`（10s）一轮，对本进程登记表里的实体按 `RouteRenewBatch`（1000）一批 pipeline 执行续期脚本，TTL `RouteTTL`（30s）。“不同”不再续；“不存在”先在实体写门下向权威确认所有权仍是本 sid 且独占，再登记。整批失败（Redis 不可用）只计数，下一轮再试。续期循环挂在 Manager 生命周期上（`Assembly.Start` 启动、`Assembly.Stop` 停）。
+- **串行化**：所有登记与删除都在实体的写门下做（续期“不存在”分支也先取写门），与所有权转换串行：转移持有写门直到结束，不会出现“转移刚删掉登记、并发的登记把旧代际写回、续期再续下去”。
+- **查找**：`coreremote.RouteLookup.LookupOwner`：Redis 有登记就用；没有、读不了或值坏了就读持久所有权记录；都没有答“不存在”。Redis 不可用时每次查找多一次 Mongo 点读，写准入不受影响。owner 进程经写 Manager 的 `GetRemoteOwnership` 读，只读进程（Mirror Mod）经 `coreremote.MongoOwnershipReader` 读同一个 `_remote_entity_meta`。
+- **前置检查**：`Manager.ServeRoutedRequest(ctx, id)`：本进程持有登记的实体直接返回本 sid（不做 I/O）；否则在写门下读所有权记录——没有记录答不存在（**不认领**），owner 是别人返回它，owner 是本 sid（独占）就冷加载、登记。wiring 的 `RPCRouteCheck` 把它映射成 RPC 答复。
+- **起服预加载**：`Manager.PreloadOwnedEntities(ctx, kinds)` 经 `{_owner_sid: 1}` 索引（`EnsureRemoteStorage` 建）按 owner 枚举 `_remote_entity_meta`（`MongoCommitter.ListOwnedRemoteEntities`，kind 用 `_id` 对 1024 取模过滤，不改元数据文档格式），只取本 sid 独占的；每个实体在写门下向权威复核后只加载、不写，再登记；并发 16。枚举失败返回错误（启动失败）；单个实体加载失败计数并跳过，留给按需冷加载。wiring 的 `RemotePreloadMod` 在 `remote_entity`、`nest`（与可选的 `dataengine`）之后同步跑完它，`WithPreloadKinds` 声明 kind，声明了却没装这个 Mod 时配置检查报错。
+- **指标**：`remote_entity.route_register_total{result=ok|stale|error}`、`remote_entity.route_renew_total{result=renewed|replaced|missing|error}`、`remote_entity.route_delete_total{result}`、`remote_entity.route_lookup_total{source=redis|authority|not_found|error}`、`remote_entity.route_lookup_fallback_total{reason=redis_missing|redis_error}`、`remote_entity.preload_total{result=ok|skipped|error}`。
+- **边界**：登记表只增不减（实体不空闲卸载），续期量是“已加载的登记 kind 实体数 / 10s”；死掉的 owner 不拉起同 sid 时登记过期，调用方回退读到的仍是它，请求一直是“可重试”。回归：`route_test.go`（替身存储上的 Manager 行为）、`route_redis_integration_test.go`（真实 Redis 单机与 Cluster 上的三个脚本、TTL 过期、真实 Mongo 上的按 owner 枚举、两个 Manager 之间的转移与 kill -9 端到端）。
 
 ## 读取
 
