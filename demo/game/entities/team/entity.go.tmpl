@@ -1,0 +1,27 @@
+package team
+
+import (
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+const EntityKindTeam entity.EntityKind = 7
+
+// Team 是分区场景里的一支队伍（维护者 2026-11-04 第 4 项 = A）：邀请 / 接受 / 离队 / 解散的组队关系，不开战斗房间。
+//
+// 与 Guild 同一种实体（remote=managed）：队员在不同的 Base 进程上，都要改同一份成员表，所以它不属于任何一个进程——
+// 谁拿到它的分布式锁，谁在那一笔事务里是它的 owner。成员表只在这里（权威）；每名队员的 Player 上有一份缓存
+// （TeamID 持久，成员表与版本不持久），队伍面板按缓存把队员快照发给别的 Base（gameplay/cellworld 的 group.go）。
+// 普通场景、匹配、锁步战斗都不碰它。
+//
+// Category：EntityCategoryRemote（rank 1）：分布式锁在任何本地锁之前取，[Team, Player] 的事务在每个进程上都是
+// 先 Team 后 Player。
+//
+//roost:entity id=7 entityKind=EntityKindTeam category=entity.EntityCategoryRemote remote=managed
+type Team struct {
+	*entity.RemoteEntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	roster *RosterComponent `comp:"CompTypeRoster"`
+	dao    *db.TeamDao      `dao:"team"`
+}

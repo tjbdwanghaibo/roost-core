@@ -1,6 +1,6 @@
 # 环境
 
-- 日期：2026-11-03；分支 feat/seamless-world-prototype，基于 e3ae67da（测量时工作树含未提交的 process_test.go / measure_test.go，内容即随后的提交）
+- 日期：2026-11-03；分支 feat/seamless-world-prototype，基于 ce9f4126（测量时工作树含未提交的 process_test.go / measure_test.go，内容即随后的提交）
 - 机器：Apple M5，10 核，macOS 26.5.2
 - Go：go1.27.3；nats-server v2.14.5；redis-server 8.10.1
 - 命令：`ROOST_CELLWORLD_PERF=1 GOWORK=off go test -count=1 -run TestCellWorldMeasure -v -timeout 0 ./gameplay/cellworld/`，两轮连续执行（非 -race）

@@ -67,6 +67,7 @@ var (
 	restartBase = flag.String("restart-base", "", "shell command that starts sid 1004 again and waits for it to be ready")
 	outPath     = flag.String("out", "", "evidence JSON")
 	damage      = flag.Int64("damage", 10, "scene.partition.attack_damage")
+	expectFail  = flag.String("expect-fail", "", "comma-separated steps known to fail (documented gaps): their failure prints EXPECTED-FAIL and does not fail the drill")
 )
 
 type point struct{ X, Y int64 }
@@ -1113,6 +1114,16 @@ func run(ctx context.Context) error {
 				return err
 			}
 			time.Sleep(1500 * time.Millisecond) // 再过一次回写周期：保存的位置是停下之后的
+			// 停下的位置：walkTo 越过目标才停（客户端看到的自己晚约 100ms，300 单位 / 秒时越过 25～40），比较对象是停下之后
+			// Base 所知的位置（已随回写进快照），不是字面的 1200（v2.5 轮次里两次越过 40 而误报）。
+			stopped, err := gm(ctx, 1004, "gm.scene.partition", map[string]any{"player_id": p5.playerID})
+			if err != nil {
+				return err
+			}
+			saved := point{asInt(stopped["x"]), asInt(stopped["y"])}
+			if dist(saved, point{1200, 1500}) > 100 {
+				return fmt.Errorf("p5 stopped at %v, want near (1200, 1500), far from the spawn", saved)
+			}
 			p5.raw.Close()
 			if err := shell(*killBase); err != nil {
 				return fmt.Errorf("kill base: %w", err)
@@ -1129,13 +1140,24 @@ func run(ctx context.Context) error {
 			if err := waitFor(ctx, 20*time.Second, "p5 enters at its saved position", func() (bool, string) {
 				s, ok := again.self()
 				at = s.pos()
-				return ok && dist(at, point{1200, 1500}) <= 30, fmt.Sprintf("self %v ok %v", at, ok)
+				return ok && dist(at, saved) <= 30, fmt.Sprintf("self %v ok %v saved %v", at, ok, saved)
 			}); err != nil {
 				return err
 			}
-			step("base_restart", map[string]any{"p5": p5.playerID, "entered_at": at, "spawn": point{2900, 1500}})
+			step("base_restart", map[string]any{"p5": p5.playerID, "entered_at": at, "saved": saved, "spawn": point{2900, 1500}})
 			return nil
 		}())
+	}
+
+	// 7b. 跨 Base 的队伍面板（第 4 项 = A）：p1（Base sid 1000）邀请 p6（Base sid 1004），两人彼此不在视野里（相距超过
+	//     witness 半径）；入队后在各自的客户端里看见对方的 SceneActor（位置、HP），不论距离。p6 的 Base 被 kill -9 后
+	//     3 个快照周期（1s × 3）没更新，p1 的面板移除 p6；重启、重新登录后队伍还在（成员表在 Team 实体上），面板恢复；
+	//     p6 离队后两边的面板都移除对方；最后 p1 解散。
+	if *killBase != "" && *restartBase != "" {
+		soft("team_panel", teamPanel(ctx, accountsClient, nonce, p1))
+		if progress, _ := evidence["team_panel"].(map[string]any); progress["removed_after_leave_ms"] != nil {
+			expectable("team_roster_cross_base", teamRosterCrossBase(ctx, p1))
+		}
 	}
 
 	// 8. 普通场景照常：sid 1003 没有分区配置，Move 照旧返回落定的位置，MoveIntent 返回 scene_not_partitioned。
@@ -1185,6 +1207,213 @@ func run(ctx context.Context) error {
 	if len(softFailures) > 0 {
 		return fmt.Errorf("%d added check(s) failed: %s", len(softFailures), strings.Join(softFailures, "; "))
 	}
+	return nil
+}
+
+// team 发一个组队请求（invite / accept / leave / disband / info），答复的业务码非 0 时报错。
+func (c *client) team(ctx context.Context, id uint32, payload []byte) (*pb.TeamResponse, error) {
+	resp, err := c.call(ctx, id, payload)
+	if err != nil {
+		return nil, err
+	}
+	r, err := pb.UnmarshalTeamResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+	if r.Code != 0 {
+		return r, fmt.Errorf("%s team msg %d: code %d %s", c.name, id, r.Code, r.Reason)
+	}
+	return r, nil
+}
+
+// actorOf 是客户端手里玩家 playerID 的 SceneActor（本进程没有登记实体种类：按 kind 与 unique 认）。
+func (c *client) actorOf(playerID int64) (object, bool) {
+	for id, o := range c.snapshot() {
+		if entity.GetEntityKindFromID(id) == kindSceneActor && entity.GetUniqueIDFromEntityID(id) == playerID {
+			return o, true
+		}
+	}
+	return object{}, false
+}
+
+// removedAt 是客户端最近一次删除玩家 playerID 的 SceneActor 的时间（since 之后）。
+func (c *client) removedAt(playerID int64, since time.Time) (time.Time, bool) {
+	for _, r := range c.removalsSince(since) {
+		if entity.GetEntityKindFromID(r.ID) == kindSceneActor && entity.GetUniqueIDFromEntityID(r.ID) == playerID {
+			return r.At, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// teamPanel 是 7b 的演练（见 run 里的说明）。快照周期是 scene.partition.team.snapshot_every 的缺省 1s。
+func teamPanel(ctx context.Context, accountsClient *svcaccount.BusClient, nonce string, p1 *client) error {
+	const every = time.Second
+	p6, err := login(ctx, accountsClient, "p6", 1004, nonce)
+	if err != nil {
+		return err
+	}
+	if err := waitFor(ctx, 10*time.Second, "p6 sees itself", func() (bool, string) {
+		_, ok := p6.self()
+		return ok, p6.describe()
+	}); err != nil {
+		return err
+	}
+	self1, ok := p1.self()
+	if !ok {
+		return fmt.Errorf("p1 does not hold itself: %s", p1.describe())
+	}
+	target := point{600, 1500}
+	if dist(self1.pos(), target) < dist(self1.pos(), point{5400, 1500}) {
+		target = point{5400, 1500}
+	}
+	if err := p6.walkTo(ctx, target.X, target.Y, 300); err != nil {
+		return err
+	}
+	self1, _ = p1.self()
+	self6, _ := p6.self()
+	apart := dist(self1.pos(), self6.pos())
+	if apart <= 1000 {
+		return fmt.Errorf("p1 at %v and p6 at %v are %d apart, want them out of each other's view (> 1000)", self1.pos(), self6.pos(), apart)
+	}
+	if _, seen := p1.actorOf(p6.playerID); seen {
+		return fmt.Errorf("p1 already holds p6 before the team: %s", p1.describe())
+	}
+
+	invited, err := p1.team(ctx, msgid.MsgTeamInvite, must(pb.MarshalTeamInviteRequest(&pb.TeamInviteRequest{Invitee: p6.playerID})))
+	if err != nil {
+		return err
+	}
+	joined, err := p6.team(ctx, msgid.MsgTeamAccept, must(pb.MarshalTeamAcceptRequest(&pb.TeamAcceptRequest{TeamID: invited.TeamID})))
+	if err != nil {
+		return err
+	}
+	if joined.Leader != p1.playerID || len(joined.Members) != 2 {
+		return fmt.Errorf("after accept: %+v, want leader p1 and two members", joined)
+	}
+	seen := func(viewer, member *client, near point) error {
+		return waitFor(ctx, 5*time.Second, viewer.name+" sees "+member.name+" in the team panel", func() (bool, string) {
+			o, ok := viewer.actorOf(member.playerID)
+			return ok && dist(o.pos(), near) <= 30 && o.hp() > 0, fmt.Sprintf("held %v %v", ok, o.fields)
+		})
+	}
+	formed := time.Now()
+	if err := seen(p1, p6, self6.pos()); err != nil {
+		return err
+	}
+	if err := seen(p6, p1, self1.pos()); err != nil {
+		return err
+	}
+	panelAfter := time.Since(formed)
+	o6, _ := p1.actorOf(p6.playerID)
+	// 中间结果随做随记：后面的断言失败时 evidence.json 里仍有前面的观测。
+	progress := map[string]any{"team": invited.TeamID, "p1": p1.playerID, "p6": p6.playerID, "apart": apart,
+		"p1_sees_p6": o6.fields, "panel_after_ms": panelAfter.Milliseconds()}
+	evidence["team_panel"] = progress
+
+	// p6 的 Base 被 kill -9：快照停了，超过 3 个周期没更新，p1 的面板移除 p6（不早于最后一份快照之后 3 个周期）。
+	p6.raw.Close()
+	killed := time.Now()
+	if err := shell(*killBase); err != nil {
+		return fmt.Errorf("kill base: %w", err)
+	}
+	// 最后一份快照最早在 kill 之前一个周期（加一拍 Base 心跳）发出：kill 之后约 3 - 1.1 个周期之内面板里还有它。
+	time.Sleep(2*every - 400*time.Millisecond)
+	if _, still := p1.actorOf(p6.playerID); !still {
+		return fmt.Errorf("p6 left p1's panel %v after its base was killed, before 3 periods without a snapshot", time.Since(killed))
+	}
+	if err := waitFor(ctx, 6*time.Second, "p6 removed from p1's panel", func() (bool, string) {
+		_, still := p1.actorOf(p6.playerID)
+		return !still, ""
+	}); err != nil {
+		return err
+	}
+	removedAt, _ := p1.removedAt(p6.playerID, killed)
+	gone := removedAt.Sub(killed)
+	progress["removed_after_kill_ms"] = gone.Milliseconds()
+	if gone < 2*every-300*time.Millisecond || gone > 3*every+2*time.Second {
+		return fmt.Errorf("p6 left p1's panel %v after its base was killed, want about 3 periods (%v)", gone, 3*every)
+	}
+
+	// 重启：队伍在 Team 实体上，p6 重新登录后它的 Base 从 Team 重读成员表，面板恢复。
+	if err := shell(*restartBase); err != nil {
+		return fmt.Errorf("restart base: %w", err)
+	}
+	again, err := login(ctx, accountsClient, "p6", 1004, nonce)
+	if err != nil {
+		return err
+	}
+	defer again.raw.Close()
+	if err := waitFor(ctx, 20*time.Second, "p6 back in the world", func() (bool, string) {
+		_, ok := again.self()
+		return ok, again.describe()
+	}); err != nil {
+		return err
+	}
+	info, err := again.team(ctx, msgid.MsgTeamInfo, must(pb.MarshalTeamInfoRequest(&pb.TeamInfoRequest{})))
+	if err != nil {
+		return err
+	}
+	progress["restored_members"] = info.Members
+	if info.TeamID != invited.TeamID || len(info.Members) != 2 {
+		return fmt.Errorf("after p6's base restarted: team %+v, want team %d with both", info, invited.TeamID)
+	}
+	selfAgain, _ := again.self()
+	if err := seen(p1, again, selfAgain.pos()); err != nil {
+		return err
+	}
+	self1, _ = p1.self()
+	if err := seen(again, p1, self1.pos()); err != nil {
+		return err
+	}
+	progress["restored_after_restart"] = true
+
+	// p6 离队：两边的面板都移除对方（经成员表通知，远早于 3 个周期的过期）。
+	left := time.Now()
+	if _, err := again.team(ctx, msgid.MsgTeamLeave, must(pb.MarshalTeamLeaveRequest(&pb.TeamLeaveRequest{}))); err != nil {
+		return err
+	}
+	if err := waitFor(ctx, 5*time.Second, "p6 removed from p1's panel after leaving", func() (bool, string) {
+		_, still := p1.actorOf(again.playerID)
+		return !still, ""
+	}); err != nil {
+		return err
+	}
+	leftGone := time.Since(left)
+	if err := waitFor(ctx, 5*time.Second, "p1 removed from p6's panel after p6 left", func() (bool, string) {
+		_, still := again.actorOf(p1.playerID)
+		return !still, ""
+	}); err != nil {
+		return err
+	}
+	progress["removed_after_leave_ms"] = leftGone.Milliseconds()
+	step("team_panel", progress)
+	return nil
+}
+
+// teamRosterCrossBase：p6 在 sid 1004 上写过 Team（接受、离队）之后，p1 在 sid 1000 上再读 / 解散同一支队伍——两个 Base
+// 交替写同一个 Remote 托管实体（共享模式）。见 FEATURE §13：本轮发现 sid 1000 内存里的旧副本不会重新加载
+// （state version conflict），由 -expect-fail 标记，待维护者决定。
+func teamRosterCrossBase(ctx context.Context, p1 *client) error {
+	rest, err := p1.team(ctx, msgid.MsgTeamInfo, must(pb.MarshalTeamInfoRequest(&pb.TeamInfoRequest{})))
+	if err != nil {
+		return err
+	}
+	if len(rest.Members) != 1 || rest.Members[0] != p1.playerID {
+		return fmt.Errorf("after p6 left: %+v, want only p1", rest)
+	}
+	disbanded, err := p1.team(ctx, msgid.MsgTeamDisband, must(pb.MarshalTeamDisbandRequest(&pb.TeamDisbandRequest{})))
+	if err != nil {
+		return err
+	}
+	after, err := p1.team(ctx, msgid.MsgTeamInfo, must(pb.MarshalTeamInfoRequest(&pb.TeamInfoRequest{})))
+	if err != nil {
+		return err
+	}
+	if after.TeamID != 0 {
+		return fmt.Errorf("after disband: %+v, want no team", after)
+	}
+	step("team_roster_cross_base", map[string]any{"members_after_leave": rest.Members, "disband_ver": disbanded.Ver})
 	return nil
 }
 
@@ -1279,6 +1508,23 @@ func (c *client) resultsFor(from, to uint64) []*pb.AttackResultPush {
 
 // softFailures 收集追加检查（E4、第 1、2 项）的失败：一轮演练里全部跑完再报，修前一次就能看到每一项的红。
 var softFailures []string
+
+// expectable 是可以标成已知失败的追加检查（-expect-fail）：失败时打 “STEP <名字> EXPECTED-FAIL …”、不计入失败；标了却
+// 通过时打 “STEP <名字> ok” 并提示去掉标记。没标时同 soft。
+func expectable(name string, err error) {
+	known := false
+	for _, n := range strings.Split(*expectFail, ",") {
+		known = known || strings.TrimSpace(n) == name
+	}
+	switch {
+	case !known:
+		soft(name, err)
+	case err != nil:
+		fmt.Printf("STEP %s EXPECTED-FAIL %v\n", name, err)
+	default:
+		fmt.Printf("STEP %s passed although marked -expect-fail; drop the mark\n", name)
+	}
+}
 
 func soft(name string, err error) {
 	if err != nil {

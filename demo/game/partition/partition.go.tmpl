@@ -216,6 +216,8 @@ func ReadBase(d *db.PlayerDao, sceneID int64) cellworld.BaseState {
 		},
 		PanelAcked: d.GetCellPanelAcked(), PanelSentAt: d.GetCellPanelSentAt(), PanelSince: d.GetCellPanelSince(),
 		PanelUnknown: d.GetCellPanelUnknown(),
+		GroupSentAt:  d.GetCellGroupSentAt(), GroupSyncAt: d.GetCellGroupSyncAt(),
+		GroupViewID: d.GetCellGroupViewID(), GroupViewVer: d.GetCellGroupViewVer(),
 	}
 }
 
@@ -252,6 +254,10 @@ func WriteBase(d *db.PlayerDao, st cellworld.BaseState, sceneID int64) {
 	d.SetCellPanelSentAt(st.PanelSentAt)
 	d.SetCellPanelSince(st.PanelSince)
 	d.SetCellPanelUnknown(st.PanelUnknown)
+	d.SetCellGroupSentAt(st.GroupSentAt)
+	d.SetCellGroupSyncAt(st.GroupSyncAt)
+	d.SetCellGroupViewID(st.GroupViewID)
+	d.SetCellGroupViewVer(st.GroupViewVer)
 	if snapshot {
 		d.SetSavedSceneID(sceneID)
 		d.SetSavedPosX(st.X)

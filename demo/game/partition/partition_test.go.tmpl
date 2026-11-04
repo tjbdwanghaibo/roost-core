@@ -116,7 +116,8 @@ func TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack(t *testing.T) {
 		}
 	}
 	st := cellworld.BaseState{Actor: 7, InWorld: true, Cell: 1001, Epoch: 2, X: 2900, Y: 1500, HP: 100, IntentSeq: 3, VX: 100, AttackSeq: 4, Shown: true,
-		Panel: cellworld.Panel{MaxHP: 110, Attack: 12, Power: 35, Ver: 2}, PanelAcked: 1, PanelSentAt: 50, PanelSince: 40, PanelUnknown: true}
+		Panel: cellworld.Panel{MaxHP: 110, Attack: 12, Power: 35, Ver: 2}, PanelAcked: 1, PanelSentAt: 50, PanelSince: 40, PanelUnknown: true,
+		GroupSentAt: 60, GroupSyncAt: 70, GroupViewID: 9001, GroupViewVer: 3}
 	write(st)
 	if got := partition.ReadBase(dao, sceneID); !reflect.DeepEqual(got, st) {
 		t.Fatalf("read back\n got %+v\nwant %+v", got, st)

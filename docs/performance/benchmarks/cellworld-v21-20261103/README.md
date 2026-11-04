@@ -2,7 +2,7 @@
 
 原型量级数据，不是容量保证。设计与解读见 [无缝大世界方案 §9](../../../maintenance/FEATURE-2026-11-03-seamless-world.md#9-v21d1-降档与-demo-接入2026-11-03)。
 
-- 日期：2026-11-03；分支 feat/seamless-world-prototype，代码为 eaeb0284（D1 实现 + 档位判断与 witness 共用索引）
+- 日期：2026-11-03；分支 feat/seamless-world-prototype，代码为 91a76ccd（D1 实现 + 档位判断与 witness 共用索引）
 - 机器：Apple M5，10 核，macOS 26.5.2；测量期间机器有常驻后台负载（load average 约 4.5，swap 已用约 3.5GB），同机交替跑 v2 / v2+D1 两轮
 - Go：go1.27.3；nats-server v2.14.5；redis-server 8.10.1
 - 命令（非 -race，先 `go test -c` 编出测试二进制，再按档位环境变量各跑一次）：

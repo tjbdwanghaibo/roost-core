@@ -1,6 +1,6 @@
-# cellworld：分区 Scene 原型（v2.4）
+# cellworld：分区 Scene 原型（v2.5）
 
-**原型，不是现行能力。** 只在分支 `feat/seamless-world-prototype` 上；设计、取舍与实测见 [无缝大世界方案 §7 / §8](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#7-v2-设计分区-scene2026-11-03分支-featseamless-world-prototype)（v1 见 §5 / §6，v2.1 的 NPC 降档见 §9，v2.2 的 game-demo 接入与多进程端到端见 §10，v2.3 的框架契约见 §11，v2.4 的战斗面板见 §12）。
+**原型，不是现行能力。** 只在分支 `feat/seamless-world-prototype` 上；设计、取舍与实测见 [无缝大世界方案 §7 / §8](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#7-v2-设计分区-scene2026-11-03分支-featseamless-world-prototype)（v1 见 §5 / §6，v2.1 的 NPC 降档见 §9，v2.2 的 game-demo 接入与多进程端到端见 §10，v2.3 的框架契约见 §11，v2.4 的战斗面板见 §12，v2.5 的跨 Base 队伍面板见 §13）。
 
 沿 BigWorld 的 Cell + Ghost 流派，作为 **Scene 的一种模式**：声明了分区的 Scene 每个格由一个进程托管。Player 不迁移（Player 所在进程充当 BaseApp），角色在格里的部分是不持久的 Nest 实体 SceneActor，跟着交接走。
 
@@ -11,7 +11,8 @@
 | 格的区域表 `Region`：邻格 Ghost、交接 seen、墓碑、跨格伤害待决表、本格记录索引 | 该格的 **Scene 实体**（手写 DAO，写时登记逆操作） | Scene 的 `scene.cell` 心跳（`Node.RegionBeat`）与 Scene 上的 handler |
 | 角色 / NPC 的格内状态 `ActorState`：位置、速度、HP、**战斗面板 `Panel`**、去重表、交接进度、租约、回写时间 | **SceneActor / Monster 实体**的 DAO（`Actor.SetCellState` 经 DAO setter 写） | 实体自己的 `cell.actor` 心跳（`Node.ActorBeat`）与 handler |
 | 玩家的路由状态 `BaseState`：owner 格与 epoch、输入 / 攻击序号、快照（HP、位置、版本）、**待发面板与已确认序号**、看门狗 | **Player 实体**（快照与面板映射到持久字段） | Player 的 Base 心跳（`Node.BaseBeat`：看门狗 + 续租 + 面板重发） |
-| 客户端看到的格内对象 | Base 进程 entitysync Manager 里的 **Sync mirror**（`policy.Mirrors[EntityState]`） | witness 到达时在 Player handler 里 Apply |
+| 客户端看到的格内对象 | Base 进程 entitysync Manager 里的 **Sync mirror**（`policy.Mirrors[EntityState]`） | witness 到达时在 Player handler 里 Apply；别的 Base 发来的队员快照在传输回调里 Apply |
+| 队伍成员表的缓存 `Group`（ID、版本、每名成员的 Player / SceneActor / Base sid） | **Player 实体**（game 映射到 DAO；权威在 game，demo 是 Remote 托管的 Team 实体） | game 改成员表的事务（`Node.SetGroup` / `NotifyGroup`）、成员表通知、重读 |
 
 `Node` 是每进程一个的端点：传输回调只解码并把消息投成 Nest 请求（Scene、[Scene, 角色]、[Scene, 攻击者, 目标]、Player）；事务提交后的发送、给区域的报告、实体销毁、跟进投递排进一个有界出站队列，由一个 goroutine 执行（Nest 不允许提交后回调里再 Dispatch）。Node 自己没有锁、不持有格内状态。
 
@@ -56,6 +57,24 @@ Player 的 `BaseState` 在 PlayerDao；接法与端到端结果见 [FEATURE §10
 | 伤害 | 攻击者所在格（攻击者是那里的 Real）按攻击者面板的 `Attack` 定伤害值，没有面板时取 `Attack(…, amount)` 的缺省值；转发给目标格的是定好的数值；结论带实际伤害（`AttackResult.Damage`） |
 | 上限 | 当前 HP 不超过 `MaxHP`（0 = 无上限）：进入时快照 HP 高于上限 → 夹；上限变小 → 夹；**上限变大不回血**（暂定，可改） |
 
+## 队伍面板（v2.5，第 4 项 = A）
+
+维护者 2026-11-04 决定：不同 Base 进程上、彼此不在视野里的队友互相看见位置与 HP；成员表的权威在 game（demo 是 Remote 托管的
+Team 实体，组队协议是分区场景专用的邀请 / 接受 / 离队 / 解散，普通场景、匹配、锁步战斗不动）。设计与实测见
+[FEATURE §13](../../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#13-v25跨-base-的队伍面板第-4-项--a2026-11-04)。代码在 `group.go`。
+
+| 项 | 规则 |
+| --- | --- |
+| 成员表 | `Group{ID, Ver, Members}`，`Ver` 是权威每次改成员表时 +1；Base 在 Player 上缓存一份（`GroupPlayer.CellGroup / SetCellGroup`，经 DAO setter，回滚即还原） |
+| 改成员表 | game 在改权威的那笔事务里 `Node.SetGroup(自己, 新表)`，并 `Node.NotifyGroup(新表, 离开的人)`：提交后发 `kindGroupNotice` 给变化前后全部成员所在的 Base（含本进程） |
+| 采纳通知 | 只在缓存的是同一组、缓存版本非 0、通知的版本更新时采纳；玩家不在新表里就清空。迟到 / 重复的旧通知不改任何东西；版本 0（重启、重新加载）只认重读 |
+| 重读 | 缓存版本为 0 时一个 `GroupEvery` 一次、平时每 `GroupResyncEvery`（缺省 10s）一次，经 `NodeConfig.GroupResync` 投一笔 game 的事务（出站 goroutine 上，只做准入），兜住丢失的通知 |
+| 快照 | Base 心跳每 `GroupEvery`（缺省 1s）把玩家自己的 SceneActor 状态（本进程 mirror 里最新的 witness 自己，带 Real 的版本）发给其他队员的 Base（`kindGroupSnap`），不发给自己的 sid：同 Base 的队友本来就在本进程的 mirror 里 |
+| 收件 | 传输回调里按版本喂同一个 Sync mirror，`MirrorItem.Hold = GroupHold`（缺省 3 × GroupEvery）：3 个周期没更新就过期删除。与 witness 同一个 subject（队友的 SceneActor ID），队友在视野里时两路按版本取新的 |
+| 面板 | 每名玩家一个组关系视野（`NodeConfig.GroupView` 给 ID）：成员是其他队员的 SceneActor，玩家挂接它，不论距离都订阅队友；在空间视野里的队友与它合并成一份订阅，不重复推。Base 心跳按缓存的成员表对齐视野（`Interest.Hide` 会把过期的队友从关系视野里拿掉，快照重新到来时下一拍加回） |
+| 换格 | 快照跟着队友自己 Base 的 witness 走：交接后的 epoch 更大，收件方按版本更新同一个对象，不删不重建 |
+| 信任 | 收件方不核对快照的发送者是否真是本进程某个玩家的队友（原型：集群内互信）；不相干的快照只进 mirror、没有视野订阅，过期即删 |
+
 ## 交接以事务为边界
 
 旧格：角色心跳越界 → 同一笔事务里冻结（epoch+1）→ 提交后发 Offer；超时只删不恢复、告诉 Base。新格：Offer handler（锁 Scene + 该角色）在同一笔事务里经 `NodeConfig.CreateActor`（`EntityManager.Create`，handler 内即 `CreateInScope`，由事务捕获）建出实体、写成 Real、登记 seen，提交后才回“已接受”；回滚即撤销新建与区域表，不回复（旧格重传）。v1 的协议不变量（先冻结后 Offer、一个 epoch 一个目标、幂等回复、隐式确认）不变。
@@ -73,6 +92,8 @@ node, _ := cellworld.NewNode(cellworld.NodeConfig{
 	CreateActor: func(id int64, kind cellworld.EntityKind) (cellworld.Actor, error) { /* access.Create(...IsCreate...) */ },
 	// Base 侧：角色 ID → Player 实体 ID；witness 喂给 Sync mirror
 	PlayerEntity: playerOfActor, Mirrors: mirrors, Interest: interest, Session: sessionOfActor, MirrorKind: kindOf,
+	// 队伍面板（可选）：每名玩家的组关系视野 ID；重读成员表的一笔 game 事务（只做准入）
+	GroupView: teamViewOf, GroupResync: func(ctx context.Context, team, player int64) error { /* MultiSend_TeamSync */ },
 })
 _ = node.RegisterHandlers(nestMgr) // 引擎 Start 之前；Node 在引擎启动后才建时（正式进程：服务 Init 里），服务在引擎
 // 启动前经 wiring/nest 的 NestHandlerInstaller 钩子 Register 一份 cellworld.NewHandlers()，NodeConfig.Handlers 交给它（E3）
@@ -86,6 +107,7 @@ _ = node.Enter(ctx, playerEntityID, sceneActorID, spatial.Point{X: 48000, Y: 100
 _ = node.Move(ctx, playerEntityID, 500, 0)
 hit, _ := node.Attack(ctx, playerEntityID, monsterID, 10) // 10 是缺省伤害：攻击者有面板时用面板的攻击
 // 面板：Player 的 handler 里（升级、换装之后）node.UpdatePanel(player)，同一笔事务提交后发给 owner
+// 队伍：改成员表的那笔 [Team, Player] 事务里 node.SetGroup(player, group) 与 node.NotifyGroup(group, 离开的成员)
 ```
 
 Cell 进程是普通 roost App：`app.New(...).Singleton(kitredis.SingletonStore)`、`singleton.enabled=true`，同 sid 的第二个进程启动失败，失锁 fail-stop；cellworld 不自己做单实例判断。
@@ -105,6 +127,7 @@ Cell 进程是普通 roost App：`app.New(...).Singleton(kitredis.SingletonStore
 | `world_test.go` | 进程内多“进程”（另有 strict getter 版：不在内存的实体答错误，同 DataEngine）（各自的 EntityManager、Nest 引擎、心跳驱动、Node）：直线、抖动、斜穿四格、跨界攻击、慢交接、丢包；witness 连续与客户端（Base 的 Manager 推出的帧）连续 |
 | `handoff_test.go`、`combat_test.go` | v1 细粒度用例按新模型改写：丢失 / 重复 / 隐式确认 / 超时只删不恢复 / 被拒恢复 / 回复扣住时来回 / 交接链 / Enter 幂等与拒绝 / 墓碑；伤害只结算一次、距离与可见性、去重随交接、结果未知、去重表满；战斗面板（v2.4）：伤害按攻击者面板、上限夹血不回血、命令丢失重发、重复与乱序只应用一次、交接中改投新 owner、结果未知只报一次 |
 | `tier_test.go` | D1：无人时降档、邻格玩家（Ghost）靠近升档、W 边上来回不抖动、慢档 Ghost 不过期、慢档一拍冲过边界仍在边界带内交接并以慢档装入、慢档 NPC 被跨界攻击只结算一次、`advance` 分步积分单元 |
+| `group_test.go` | 队伍面板（v2.5）：两个 Base 上彼此不在视野里的队员互相看见位置 / HP、同 Base 队友不经快照、一个周期一份；对方 Base 停了 3 个周期后移除、重启后重读恢复；队员换格时面板不删不重建；离队 / 迟到的旧通知 / 再入队 / 解散；通知丢了由重读收敛；视野内的队友只有一个对象，走出视野不闪 |
 | `lifecycle_test.go` | Cell 崩溃后按 Player 快照重建（含客户端重新持有自己、面板随 Enter 回到新 SceneActor）、Base 消失后租约离场、回写按版本幂等、交接事务回滚不移交 |
 | `nats_test.go` | 同一组场景跑在真实 nats-server 上（测试自起私有端口） |
 | `process_test.go` | 每个 Cell 是一个带单实例锁的 App 子进程（私有 redis-server）：跨进程至多一个 Real 与伤害只结算一次、kill -9 后按快照恢复、同 sid 第二个进程被拒、Base 进程消失后 SceneActor 清理 |

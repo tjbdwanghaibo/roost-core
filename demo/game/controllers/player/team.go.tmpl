@@ -1,0 +1,217 @@
+package player
+
+import (
+	gocontext "context"
+	"errors"
+	"fmt"
+	"log/slog"
+
+	player "{{MODULE}}/game/entities/player"
+	team "{{MODULE}}/game/entities/team"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	lifecycle "{{MODULE}}/game/lifecycle"
+	playeraccess "{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// 分区场景的组队端点（维护者 2026-11-04 第 4 项 = A）：邀请 / 接受 / 离队 / 解散 / 查看。成员表在 Remote 托管的 Team
+// 实体上，每个端点是一笔 [Team, Player] 事务——与公会同一种写法；端点只决定队伍 ID 从哪来（新队伍：持久计数器，
+// 与 Guild 一样不能用进程内的运行期 ID）。普通场景的进程上它们答 scene_not_partitioned：普通场景的组队是匹配。
+//
+// 规则（原型缺省，scene.partition.team 声明、加载时校验）：一名玩家同时只在一支队伍里；只有队长能邀请与解散；邀请
+// invite_ttl 后过期；成员数不超过 max_members。队友的位置 / HP 不从这里来：每名队员的 Base 把快照发给其他队员的
+// Base，经队伍面板（组关系视野）推给客户端。
+
+func (controller *Controller) HandleTeamInvite(context *playeraccess.Context, request *pb.TeamInviteRequest) (*pb.TeamResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("team_invite endpoint: context and request are required")
+	}
+	return controller.teamCall(context, "invite", func(ctx gocontext.Context, partition scenePartition, self int64) (team.Info, error) {
+		maxMembers, ttl := partition.TeamRules()
+		current, err := syncsender.NewPlayerTeamSender(controller.NestClient()).Sync_PlayerTeam(ctx, self)
+		if err != nil {
+			return team.Info{}, err
+		}
+		target := current
+		if target == 0 {
+			// 新队伍：先保留一个持久 ID、建出实体（远端实体要先在存储里才能被加锁加载），再由邀请那一笔事务建成。
+			unique, err := controller.nextTeamID(ctx)
+			if err != nil {
+				return team.Info{}, err
+			}
+			teams, err := controller.Teams()
+			if err != nil {
+				return team.Info{}, err
+			}
+			created, err := teams.Create(ctx, unique)
+			if err != nil {
+				return team.Info{}, err
+			}
+			target = created.ID()
+			if err := controller.shareTeam(ctx, target); err != nil {
+				return team.Info{}, err
+			}
+		}
+		return syncsender.NewTeamInviteSender(controller.NestClient()).MultiSync_TeamInvite(ctx, target, self,
+			request.Invitee, controller.ServerSID(), maxMembers, int64(ttl.Seconds()))
+	})
+}
+
+func (controller *Controller) HandleTeamAccept(context *playeraccess.Context, request *pb.TeamAcceptRequest) (*pb.TeamResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("team_accept endpoint: context and request are required")
+	}
+	return controller.teamCall(context, "accept", func(ctx gocontext.Context, partition scenePartition, self int64) (team.Info, error) {
+		if !entity.MatchEntityID(request.TeamID, team.EntityKindTeam) {
+			return team.Info{}, errcode.Wrap(apperrors.ErrTeamMissing, nil, "team_id", request.TeamID)
+		}
+		maxMembers, _ := partition.TeamRules()
+		return syncsender.NewTeamAcceptSender(controller.NestClient()).MultiSync_TeamAccept(ctx, request.TeamID, self,
+			controller.ServerSID(), maxMembers)
+	})
+}
+
+func (controller *Controller) HandleTeamLeave(context *playeraccess.Context, request *pb.TeamLeaveRequest) (*pb.TeamResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("team_leave endpoint: context and request are required")
+	}
+	return controller.teamCall(context, "leave", func(ctx gocontext.Context, _ scenePartition, self int64) (team.Info, error) {
+		current, err := controller.currentTeam(ctx, self)
+		if err != nil {
+			return team.Info{}, err
+		}
+		return syncsender.NewTeamLeaveSender(controller.NestClient()).MultiSync_TeamLeave(ctx, current, self)
+	})
+}
+
+func (controller *Controller) HandleTeamDisband(context *playeraccess.Context, request *pb.TeamDisbandRequest) (*pb.TeamResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("team_disband endpoint: context and request are required")
+	}
+	return controller.teamCall(context, "disband", func(ctx gocontext.Context, _ scenePartition, self int64) (team.Info, error) {
+		current, err := controller.currentTeam(ctx, self)
+		if err != nil {
+			return team.Info{}, err
+		}
+		return syncsender.NewTeamDisbandSender(controller.NestClient()).MultiSync_TeamDisband(ctx, current, self)
+	})
+}
+
+// HandleTeamInfo 读自己所在队伍的成员表（同时刷新本 Base 的缓存：走的是重读那一笔 [Team, Player] 事务）。不在队伍里时
+// 答空的队伍 ID。
+func (controller *Controller) HandleTeamInfo(context *playeraccess.Context, request *pb.TeamInfoRequest) (*pb.TeamResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("team_info endpoint: context and request are required")
+	}
+	return controller.teamCall(context, "info", func(ctx gocontext.Context, _ scenePartition, self int64) (team.Info, error) {
+		current, err := syncsender.NewPlayerTeamSender(controller.NestClient()).Sync_PlayerTeam(ctx, self)
+		if err != nil || current == 0 {
+			return team.Info{}, err
+		}
+		info, err := syncsender.NewTeamSyncSender(controller.NestClient()).MultiSync_TeamSync(ctx, current, self)
+		if err != nil {
+			return team.Info{}, err
+		}
+		if _, in := info.Seats[entity.GetUniqueIDFromEntityID(self)]; !in {
+			return team.Info{}, nil
+		}
+		return info, nil
+	})
+}
+
+// teamCall 是五个端点共同的外壳：普通场景答 scene_not_partitioned，拿不到队伍的分布式锁答 team_busy（可重试），其余
+// 业务码原样回给客户端，内部错误记日志。
+func (controller *Controller) teamCall(context *playeraccess.Context, stage string, call func(gocontext.Context, scenePartition, int64) (team.Info, error)) (*pb.TeamResponse, error) {
+	partition := controller.Partition()
+	if partition == nil {
+		code, reason := errcode.ClientError(apperrors.ErrSceneNotPartitioned)
+		return &pb.TeamResponse{Code: code, Reason: reason}, nil
+	}
+	self, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, fmt.Errorf("team_%s endpoint: %w", stage, err)
+	}
+	info, err := call(context.Context(), partition, self)
+	if err != nil {
+		if errors.Is(err, corenest.ErrNestTimeout) {
+			err = errcode.Wrap(apperrors.ErrTeamBusy, nil, "stage", stage)
+		}
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("team endpoint failed", "stage", stage, "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.TeamResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.TeamResponse{TeamID: info.TeamID, Leader: info.Leader, Members: info.Members, Ver: info.Ver}, nil
+}
+
+// shareTeam 让新队伍可以从任何 Base 写：Remote 托管实体缺省由第一个写者独占，别的进程的写被 fence 拒绝
+// （entity.ErrRemoteFenced）；队员在不同 Base 上都要改同一份成员表，所以建队的进程先认领、再切到共享模式（框架现有的
+// ClaimRemoteOwnership / EnterRemoteSharedMode，与 SLG 联盟的用法相同），之后每一笔 [Team, Player] 事务都经分布式锁写。
+// 共享模式下实体不能挂心跳，Team 没有心跳。失败时这个 ID 留下一个没建成的空实体（版本 0），玩家的副本没写，下一次邀请
+// 换一个新 ID。
+func (controller *Controller) shareTeam(ctx gocontext.Context, id int64) error {
+	remote, ok := app.Lookup[entity.IRemoteEntityManager](controller.registry, mods.ModRemoteEntity)
+	if !ok || remote == nil {
+		return errors.New("team: the remote entity runtime is unavailable")
+	}
+	lease, err := remote.ClaimRemoteOwnership(ctx, id)
+	if err != nil {
+		return fmt.Errorf("team %d: claim: %w", id, err)
+	}
+	if !lease.Shared {
+		if _, err := remote.EnterRemoteSharedMode(ctx, id); err != nil {
+			return fmt.Errorf("team %d: enter shared mode: %w", id, err)
+		}
+	}
+	return nil
+}
+
+// currentTeam 是玩家自己副本里的队伍 ID（本地锁）；不在队伍里答 team_missing。
+func (controller *Controller) currentTeam(ctx gocontext.Context, self int64) (int64, error) {
+	current, err := syncsender.NewPlayerTeamSender(controller.NestClient()).Sync_PlayerTeam(ctx, self)
+	if err != nil {
+		return 0, err
+	}
+	if current == 0 {
+		return 0, errcode.Wrap(apperrors.ErrTeamMissing, nil, "player_id", entity.GetUniqueIDFromEntityID(self))
+	}
+	return current, nil
+}
+
+// Teams is the team lifecycle: creating the aggregate a new team's lock is taken on.
+func (controller *Controller) Teams() (*lifecycle.TeamLifecycle, error) {
+	if controller == nil || controller.teams == nil {
+		return nil, errors.New("player controller: team lifecycle is unavailable")
+	}
+	return controller.teams, nil
+}
+
+// nextTeamID 保留一个持久的队伍号（与公会号同一种计数器，各自一份）：同 sid 的下一个进程、别的 sid 的进程都不会再发出它。
+func (controller *Controller) nextTeamID(ctx gocontext.Context) (int64, error) {
+	if controller == nil || controller.teamIDs == nil {
+		return 0, fmt.Errorf("team id allocator: persistent counter is unavailable")
+	}
+	var counter struct {
+		Next int64 `bson:"next"`
+	}
+	err := controller.teamIDs.FindOneAndUpdate(ctx,
+		bson.M{"_id": "team"},
+		bson.M{"$inc": bson.M{"next": int64(1)}}, &counter,
+		fmongo.FindOneAndUpdateOption{Upsert: true, ReturnAfter: true})
+	if err != nil {
+		return 0, fmt.Errorf("team id allocator: reserve: %w", err)
+	}
+	if counter.Next <= 0 || uint64(counter.Next) >= entity.StaticUniqueIDBase {
+		return 0, fmt.Errorf("team id allocator: counter outside dynamic range: %d", counter.Next)
+	}
+	return counter.Next, nil
+}

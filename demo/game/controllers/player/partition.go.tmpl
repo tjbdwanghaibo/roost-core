@@ -2,6 +2,7 @@ package player
 
 import (
 	"context"
+	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
@@ -15,6 +16,9 @@ type scenePartition interface {
 	MoveIntent(ctx context.Context, playerID, vx, vy int64) error
 	// AttackTarget sends one fixed-damage attack and returns its sequence.
 	AttackTarget(ctx context.Context, playerID, target int64) (uint64, error)
+	// TeamRules are scene.partition.team's limits the team endpoints pass to
+	// the Team's handlers: the most members, and how long an invitation lasts.
+	TeamRules() (maxMembers int32, inviteTTL time.Duration)
 }
 
 // partitionCapability is what the game service publishes its partitioned

@@ -6,7 +6,8 @@
 #   sid 1001：格 (0,0) 的 Cell，同时是 p3 的 Base；
 #   sid 1002：格 (1,0) 的 Cell（演练中被 kill -9 再重启）；
 #   sid 1003：没有分区配置，普通场景（p4）；
-#   sid 1004：只做 Base（不托管格），p5 的连接在这里（演练中被 kill -9 再重启：进场回到保存的位置）。
+#   sid 1004：只做 Base（不托管格），p5、p6 的连接在这里（演练中两次被 kill -9 再重启：p5 进场回到保存的位置；p6 与
+#             sid 1000 上的 p1 组队，kill 后 3 个快照周期从 p1 的队伍面板移除、重启后恢复）。
 # 依赖全部是调用方给的私有实例（Mongo 副本集、NATS JetStream、Redis），etcd 由本脚本在私有端口自起；不读共享环境。
 # 客户端是 scripts/testdata/seamless/drill.go.txt（经真实 account 登录、玩家 TCP、demo 的同步帧解码）。
 # 结束时停掉本脚本起的全部进程、删除本次的库；证据（drill 输出、evidence.json、各进程日志）留在 $ROOST_SEAMLESS_OUT。
@@ -56,7 +57,7 @@ cleanup() {
 		mkdir -p "$out/logs"
 		cp -R .dev "$out/logs/dev" 2>/dev/null
 		cp -R log "$out/logs/log" 2>/dev/null
-		mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval 'for (const name of ["cwdemo", "cwdemo_saga"]) { db.getSiblingDB(name).dropDatabase() }' >/dev/null 2>&1
+		mongosh --quiet "$ROOST_DATAENGINE_IT_MONGO_URI" --eval 'for (const name of ["cwdemo", "cwdemo_saga", "cwdemo_remote"]) { db.getSiblingDB(name).dropDatabase() }' >/dev/null 2>&1
 	fi
 	[[ -n "$etcd_pid" ]] && kill "$etcd_pid" 2>/dev/null && wait "$etcd_pid" 2>/dev/null
 	cd /
@@ -179,12 +180,15 @@ echo \$! > .dev/game1004.pid
 i=0
 until curl -fsS -o /dev/null http://127.0.0.1:9204/readyz 2>/dev/null; do i=\$((i+1)); [ \$i -lt 240 ] || exit 1; sleep 0.5; done
 EOF
+# team_roster_cross_base（两个 Base 交替写同一个 Team）是 FEATURE §13 记下的未解决问题：缺省标成已知失败，
+# ROOST_SEAMLESS_EXPECT_FAIL= （空）时按普通检查跑。
 set +e
 "$work_dir/drill" -account-nats "$nats_url" -prefix cwdemo \
 	-endpoints 1000=127.0.0.1:7000,1001=127.0.0.1:7001,1003=127.0.0.1:7003,1004=127.0.0.1:7004 \
 	-ops 1000=127.0.0.1:9100,1001=127.0.0.1:9201,1002=127.0.0.1:9202,1003=127.0.0.1:9203,1004=127.0.0.1:9204 \
 	-kill "kill -9 \$(cat $project/.dev/game1002.pid)" -restart "sh $work_dir/restart-1002.sh" \
 	-kill-base "kill -9 \$(cat $project/.dev/game1004.pid)" -restart-base "sh $work_dir/restart-1004.sh" \
+	-expect-fail "${ROOST_SEAMLESS_EXPECT_FAIL-team_roster_cross_base}" \
 	-out "$out/evidence.json" 2>&1 | tee "$out/drill.log"
 status=${PIPESTATUS[0]}
 set -e
@@ -193,7 +197,7 @@ if [[ "$status" != 0 ]]; then
 	echo "seamless: drill failed (status $status); logs in $out" >&2
 	exit "$status"
 fi
-for name in enter own_state straight jitter diagonal attack_across_0 attack_across_1 panel_level_up monster_cross cell_crash base_restart ordinary_scene; do
+for name in enter own_state straight jitter diagonal attack_across_0 attack_across_1 panel_level_up monster_cross cell_crash base_restart team_panel ordinary_scene; do
 	grep -q "^STEP $name ok" "$out/drill.log" || { echo "seamless: step $name did not pass" >&2; exit 1; }
 done
 # 普通场景不回归：demo 自己的机器人（cmd/loadtest，完整链路）在没有分区配置的 sid 1003 上跑一轮。

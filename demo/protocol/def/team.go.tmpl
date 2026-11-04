@@ -1,0 +1,59 @@
+//go:build protocoldef
+
+package protocoldef
+
+// 分区场景的组队（scene.partition，维护者 2026-11-04 第 4 项 = A）：不开战斗房间的组队关系。成员表在 Remote 托管的
+// Team 实体上；队友的位置与 HP 不从这些答复来，而是从队伍面板——每名队员的 Base 把他的快照发给其他队员的 Base，
+// 客户端在同一条同步流里收到队友的 SceneActor（player 命名空间），不论距离。普通场景的进程答 scene_not_partitioned。
+
+// TeamInviteRequest invites another player (by player id). A player with no
+// team founds one with this call and becomes its leader; only the leader
+// invites. The invitee learns the team id from somewhere outside this demo
+// (the inviter tells them) and answers with TeamAccept — the invitation is
+// not pushed to the invitee (prototype).
+type TeamInviteRequest struct {
+	Invitee int64 `pb:"1"`
+}
+
+// TeamAcceptRequest joins a team this player was invited to.
+type TeamAcceptRequest struct {
+	TeamID int64 `pb:"1"`
+}
+
+// TeamLeaveRequest leaves the player's team. A leader who leaves hands the
+// lead to the remaining member with the smallest player id; the last one out
+// disbands it.
+type TeamLeaveRequest struct{}
+
+// TeamDisbandRequest disbands the team (leader only).
+type TeamDisbandRequest struct{}
+
+// TeamInfoRequest reads the player's team (and refreshes its Base's copy).
+type TeamInfoRequest struct{}
+
+// TeamResponse is what all five answer with: the roster after the call
+// (TeamID 0 = not in a team). Codes: team_exists, team_missing,
+// team_not_leader, team_not_invited, team_full, team_busy (retry),
+// scene_not_partitioned.
+type TeamResponse struct {
+	Code    int32   `pb:"1"`
+	Reason  string  `pb:"2"`
+	TeamID  int64   `pb:"3"`
+	Leader  int64   `pb:"4"`
+	Members []int64 `pb:"5"`
+	Ver     uint64  `pb:"6"`
+}
+
+//roost:protocol group=game handler=player
+type TeamProtocol interface {
+	//roost:msg id=10029
+	TeamInvite(TeamInviteRequest) TeamResponse
+	//roost:msg id=10030
+	TeamAccept(TeamAcceptRequest) TeamResponse
+	//roost:msg id=10031
+	TeamLeave(TeamLeaveRequest) TeamResponse
+	//roost:msg id=10032
+	TeamDisband(TeamDisbandRequest) TeamResponse
+	//roost:msg id=10033
+	TeamInfo(TeamInfoRequest) TeamResponse
+}

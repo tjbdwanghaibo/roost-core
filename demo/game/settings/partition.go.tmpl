@@ -49,6 +49,8 @@ type ScenePartition struct {
 	PlayerHP int32 `config:"player_hp" default:"100" min:"1" help:"a player's HP the first time it enters the partitioned scene"`
 	// MonsterTemplate 是分区场景里刷出的 Monster 的模板（客户端按它画）。
 	MonsterTemplate int32 `config:"monster_template" default:"9001" help:"template id the partitioned scene's monsters are drawn with"`
+	// Team 是分区场景的组队与队伍面板（维护者 2026-11-04 第 4 项 = A）。
+	Team PartitionTeam `config:"team"`
 	// Spawns 是按格的刷怪表：每一项一个刷怪点，Cell 进程只刷落在自己格里的点（启动时刷满；原型不补刷，见 FEATURE §10）。
 	Spawns map[string]PartitionSpawn `config:"spawns" help:"spawn points of the partitioned scene, by name; each Cell spawns the points inside its own cell when it starts"`
 }
@@ -63,6 +65,20 @@ type PartitionSpawn struct {
 	VY     int64 `config:"vy" default:"0" help:"speed along Y, units per second"`
 	HP     int32 `config:"hp" default:"100" min:"1" help:"each monster's HP"`
 }
+
+// PartitionTeam 是分区场景的组队规则与队伍面板的节奏（原型缺省：demo 级合理值，产品可改）。成员表在 Remote 托管的
+// Team 实体上；每名队员的 Base 每 snapshot_every 把他的位置 / HP 发给其他队员的 Base，3 个周期没更新的队友从面板移除
+// （维护者定的规则，不另设键）；Base 每 resync_every 从 Team 重读一次成员表，兜住丢失的变化通知。
+type PartitionTeam struct {
+	MaxMembers    int32         `config:"max_members" default:"4" min:"2" max:"16" help:"most members of one team (prototype default)"`
+	InviteTTL     time.Duration `config:"invite_ttl" default:"60s" min:"1s" help:"an invitation not accepted within this expires"`
+	SnapshotEvery time.Duration `config:"snapshot_every" default:"1s" min:"100ms" help:"how often each member's Base sends the member's position and HP to the other members' Bases; a teammate with no snapshot for 3 of these leaves the team panel"`
+	ResyncEvery   time.Duration `config:"resync_every" default:"10s" min:"1s" help:"how often a Base rereads a member's roster from the team, so a lost change notice is caught; longer than snapshot_every"`
+}
+
+// PartitionBaseWatchPeriod 是 Base 心跳（看门狗 + 续租 + 队伍面板）的周期：cellworld NodeConfig.WatchPeriod 的缺省值，
+// 队伍快照按它的节拍发出，snapshot_every 不能比它短，且须是它的整数倍。
+const PartitionBaseWatchPeriod = 100 * time.Millisecond
 
 // PartitionMaxBaseLeaveRadius 是 Base 进程 Interest 能有的最大离开半径（internal/service/game/scene.go 的
 // sceneMaxLeaveRadius，那里有编译期断言二者一致）。客户端视野由 Base 的 Interest 按 mirror 位置决定，mirror 的位置
@@ -99,6 +115,15 @@ func (p ScenePartition) ValidateConfig(bool) error {
 	}
 	if p.IdlePeriod != 0 && (!slices.Contains(heartbeat.Periods[:], p.IdlePeriod) || p.IdlePeriod <= heartbeat.Periods[0] || p.IdlePeriod%heartbeat.Periods[0] != 0) {
 		bad("idle_period %v must be 0 or a heartbeat tier longer than %v", p.IdlePeriod, heartbeat.Periods[0])
+	}
+	if t := p.Team; t.SnapshotEvery < PartitionBaseWatchPeriod || t.SnapshotEvery%PartitionBaseWatchPeriod != 0 {
+		bad("team.snapshot_every %v must be a multiple of the Base beat %v", t.SnapshotEvery, PartitionBaseWatchPeriod)
+	}
+	if t := p.Team; t.ResyncEvery <= t.SnapshotEvery {
+		bad("team.resync_every %v must exceed team.snapshot_every %v", t.ResyncEvery, t.SnapshotEvery)
+	}
+	if t := p.Team; t.InviteTTL%time.Second != 0 {
+		bad("team.invite_ttl %v must be whole seconds (invitations expire on the second)", t.InviteTTL)
 	}
 	if p.LeaseTimeout <= 500*time.Millisecond {
 		bad("lease_timeout %v must exceed the Base's lease renewal (500ms)", p.LeaseTimeout)

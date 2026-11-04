@@ -1,0 +1,30 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	team "{{MODULE}}/game/entities/team"
+	"{{MODULE}}/game/partition"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+)
+
+// handlerTeamSync 从 Team（权威）重读玩家缓存的成员表：玩家的 Base 在缓存版本为 0（Base 重启、Player 重新加载）时与
+// 每 scene.partition.team.resync_every 投一次（cellworld NodeConfig.GroupResync），兜住丢失的成员变化通知；TeamInfo
+// 端点也走它。玩家已不在这支队伍（缓存的 TeamID 不是它）时只读不写；成员表里没有他（被解散、被移出）时清掉他的副本。
+//
+//roost:nest rollback=undo durability=strict
+func handlerTeamSync(target team.IRosterEntity, member player.IProfileEntity) (team.Info, error) {
+	roster := target.RosterComp()
+	info := roster.Snapshot()
+	self := member.ProfileComp().Owner()
+	node := partition.Node()
+	if node == nil || self.TeamID() != target.ID() {
+		return info, nil
+	}
+	if roster.Member(entity.GetUniqueIDFromEntityID(member.ID())) {
+		node.SetGroup(self, teamGroup(info))
+	} else {
+		node.SetGroup(self, cellworld.Group{})
+	}
+	return info, nil
+}

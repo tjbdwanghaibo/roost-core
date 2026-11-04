@@ -1,0 +1,1 @@
+{"time":"2026-11-04T08:21:36.372891+08:00","level":"ERROR","msg":"team endpoint failed","frame":179,"server_time_ms":1793751696372,"stage":"accept","player_id":100005,"err":"remote entity: writer fenced: entity=4611686018427388957 owner=1000"}

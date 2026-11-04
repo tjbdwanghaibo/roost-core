@@ -1,0 +1,23 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 分区场景的组队（Team，维护者 2026-11-04 第 4 项 = A）答复的业务码。普通场景的进程上组队端点答 scene_not_partitioned。
+
+// ErrTeamExists：玩家已经在另一支队伍里（先离队），或要建的队伍已经建过。
+var ErrTeamExists = errcode.Define(100027, "team_exists", "already in a team")
+
+// ErrTeamMissing：队伍不存在、已解散，或玩家不在这支队伍里。
+var ErrTeamMissing = errcode.Define(100028, "team_missing", "no such team, or not in it")
+
+// ErrTeamNotLeader：只有队长能邀请与解散。
+var ErrTeamNotLeader = errcode.Define(100029, "team_not_leader", "only the leader may do this")
+
+// ErrTeamNotInvited：没有被邀请、邀请已过期，或邀请的对象不合法（自己、无效 ID）。
+var ErrTeamNotInvited = errcode.Define(100030, "team_not_invited", "no valid invitation")
+
+// ErrTeamFull：成员数已到 scene.partition.team.max_members。
+var ErrTeamFull = errcode.Define(100031, "team_full", "the team is full")
+
+// ErrTeamBusy：没能及时拿到队伍的分布式锁（最常见的是进程刚重启、前任的租约还没过期）；可重试，不是内部错误。
+var ErrTeamBusy = errcode.Define(100032, "team_busy", "the team is busy, try again")

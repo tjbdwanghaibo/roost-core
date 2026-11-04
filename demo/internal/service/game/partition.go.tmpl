@@ -14,6 +14,7 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	scene_actor "{{MODULE}}/game/entities/scene_actor"
+	handlersender "{{MODULE}}/game/handler/sender"
 	"{{MODULE}}/game/partition"
 	"{{MODULE}}/game/runtimeid"
 	"{{MODULE}}/game/settings"
@@ -50,6 +51,10 @@ const PartitionCapability app.ModName = "{{GAME_SERVICE}}.scene.partition"
 
 // partitionMirrorTTL：mirror 多久没有出现在任何 witness 里就删除（witness 每个区域心跳一份，缺省 50ms）。
 const partitionMirrorTTL = time.Second
+
+// partitionTeamViews 是队伍面板的组关系视野 ID 段（cellworld NodeConfig.GroupView）：每名玩家一个，1<<53 | 玩家号。
+// 场景桥自己的视野是 sceneView（1<<40）与匹配队伍的计数器（从 1 起），玩家号不超过 52 位，三段不相交。
+const partitionTeamViews policy.ViewID = 1 << 53
 
 // partitionBlockSize 是分区模式下 Base 的 Interest 的 AOI 网格边长（世界比普通地图大得多）。
 const partitionBlockSize = 200
@@ -153,6 +158,17 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 		Session:    coreentity.GetUniqueIDFromEntityID,
 		MirrorKind: partitionMirrorKind,
 		Hooks:      cellworld.Hooks{AttackResult: rt.attackResult, PanelResult: rt.panelResult},
+		// 队伍面板（第 4 项 = A）：每名队员的 Base 每 snapshot_every 把他的 SceneActor 状态发给其他队员的 Base，收到的进
+		// 同一个 mirror、3 个周期没更新过期；每名玩家一个组关系视野（成员是其他队员的 SceneActor）。成员表的权威是 Team
+		// 实体：缓存版本为 0 时与每 resync_every 投一笔 [Team, Player] 重读（只做准入，不等）。
+		GroupView: func(playerEntity int64) policy.ViewID {
+			return partitionTeamViews | policy.ViewID(coreentity.GetUniqueIDFromEntityID(playerEntity))
+		},
+		WatchPeriod: settings.PartitionBaseWatchPeriod,
+		GroupEvery:  config.Team.SnapshotEvery, GroupResyncEvery: config.Team.ResyncEvery,
+		GroupResync: func(ctx context.Context, group, playerEntity int64) error {
+			return handlersender.NewTeamSyncSender(client).MultiSend_TeamSync(ctx, group, playerEntity)
+		},
 	}
 	if cell, isCell := grid.CellOf(identity.Sid); isCell {
 		rt.cell = &cell
@@ -400,6 +416,11 @@ func attackResultPush(r cellworld.AttackResult) *pb.AttackResultPush {
 }
 
 // ---- 端点用的能力（PartitionCapability）----
+
+// TeamRules are scene.partition.team's limits for the team endpoints.
+func (rt *partitionRuntime) TeamRules() (int32, time.Duration) {
+	return rt.config.Team.MaxMembers, rt.config.Team.InviteTTL
+}
 
 func partitionPlayer(playerID int64) (int64, error) {
 	return coreentity.BuildEntityID(playerID, player.EntityKindPlayer)

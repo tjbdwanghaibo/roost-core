@@ -2,8 +2,10 @@ package player
 
 import (
 	"errors"
+	"slices"
 	"time"
 
+	db "{{MODULE}}/db"
 	"{{MODULE}}/game/partition"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
@@ -81,4 +83,46 @@ func (player *Player) StartBase() error {
 	return player.mapComp.cellBase.Start()
 }
 
-var _ cellworld.BasePlayer = (*Player)(nil)
+// TeamID is the partitioned scene's team this player is in (0 = none): the
+// player's own copy of one fact of the Team's roster, written in the same
+// [Team, Player] transaction as the roster (game/handler/team_*.go).
+func (player *Player) TeamID() int64 { return player.dao.GetTeamID() }
+
+// CellGroup / SetCellGroup make the player a cellworld.GroupPlayer: the
+// Base's copy of its team's roster (maintainer decision 2026-11-04, item 4 =
+// A — the team panel across Bases). The team id is persisted (a restarted
+// Base knows which team to reread); the version and the members are not, so
+// after a restart the version is 0 and the Node rereads the Team
+// (NodeConfig.GroupResync). Only under the player's own Nest lock.
+func (player *Player) CellGroup() cellworld.Group {
+	g := cellworld.Group{ID: player.dao.GetTeamID(), Ver: player.dao.GetTeamVer()}
+	player.dao.RangeTeamMembers(func(_ int, seat db.TeamSeat) bool {
+		g.Members = append(g.Members, cellworld.GroupMember{Player: seat.GetPlayer(), Actor: seat.GetActor(), SID: seat.GetSID()})
+		return true
+	})
+	return g
+}
+
+// SetCellGroup writes the copy through the generated setters (a rollback
+// restores it). The member list is replaced whole and only when it changed:
+// once written into the DAO a slice is not edited in place (the undo holds
+// the old one).
+func (player *Player) SetCellGroup(g cellworld.Group) {
+	player.dao.SetTeamID(g.ID)
+	player.dao.SetTeamVer(g.Ver)
+	if slices.Equal(player.CellGroup().Members, g.Members) {
+		return
+	}
+	seats := make([]db.TeamSeat, len(g.Members))
+	for i, m := range g.Members {
+		seats[i].SetPlayer(m.Player)
+		seats[i].SetActor(m.Actor)
+		seats[i].SetSID(m.SID)
+	}
+	player.dao.SetTeamMembersAll(seats)
+}
+
+var (
+	_ cellworld.BasePlayer  = (*Player)(nil)
+	_ cellworld.GroupPlayer = (*Player)(nil)
+)

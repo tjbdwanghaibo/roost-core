@@ -782,13 +782,15 @@ v2-6（分区模式下 `SetTeam` 的成员是 Player 实体）：E4 之后 Playe
 
 - §10.6 判断“接入暴露的缺陷集中在框架原型 ↔ 正式 Nest / DataEngine / Interest 的接缝上”，本轮把这三处接缝在框架里定成契约，cellworld 侧对应的三处绕法（Loaded 过滤、mirror 代号 + Resubscribe、包级注册表 + 兜底）全部删掉，cellworld 的测试改成走正式形状（装了加载器的 ManagerAccess、先注册后建 Node）。这是 cellworld 第四轮改动；本轮没有新的协议缺陷，新增的问题（§11.6）是产品 / 架构选择而不是实现错误：战斗字段在“养成数据推出的面板”与“场景内的战斗状态”之间怎么切、Base 之间要不要有数据通道。二者都决定无缝大世界能不能从“原型”走向“正式能力”，建议在合入 main 之前先定。
 
-## 12. v2.4：第 3 项 = A、第 4 项 = A、E4 确认（2026-11-04，进行中）
+## 12. v2.4：第 3 项 = A、第 4 项 = A、E4 确认（2026-11-04）
 
-> 第 3 项已实施（§12.2）；第 4 项等维护者定队伍来源（§12.1），本轮不做。
+> 第 3 项已实施（§12.2）；第 4 项当时停下（§12.1），维护者定 A 之后在 §13 实施。
 
 维护者 2026-11-04 的决定（都按 §11.6 的推荐）：**第 3 项 = A**（养成输入留 Base；面板——最大 HP、攻击、power、将来的 buff——与当前 HP 的权威在 Cell 的 Real，Base 升级 / 换装时向目标 Real 发“面板变化”命令，与攻击同一套转发、去重、结果未知语义，结果随快照回写）；**第 4 项 = A（原型）**（Base 之间经 cellworld 的 NATS 传输每 1s 互发队员快照，收到的放进 mirror、用 GroupView 推给本进程队员；成员沿用 demo 的 `SetTeam`，成员所在 Base 按 Player 的静态 sid 归属推出，快照超过 3 个周期未更新从面板移除）；**E4 的做法确认**为场景桥 Manager 上的 `self` 绑定（`policy.Direct`），不打开 `access.player.self_sync`。
 
 ### 12.1 第 4 项：停下——`SetTeam` 的成员关系拿不到另一个 Base 上的另一半
+
+> **已由 §13 实施**：维护者 2026-11-04 定 A（分区场景另设不开战斗的组队关系，成员表在 Remote 托管的 Team 实体上）。下面是当时停下的依据，保留作追溯。
 
 维护者给的停止条件（“若发现成员关系拿不到对端 Base 上的另一半，先停下汇报”）成立，第 4 项没有写代码。依据（当前源码，`rg` 核对）：
 
@@ -839,7 +841,7 @@ demo 单测（[demo-unit-red-before.txt](../performance/benchmarks/cellworld-v24
 
 | 轮 | 代码 | 结果 |
 | --- | --- | --- |
-| 修前（[e2e-red-before.txt](../performance/benchmarks/cellworld-v24-20261104/e2e-red-before.txt)） | 分支 HEAD `a46cd71e` + 新的演练客户端与脚本 | 只有 `panel_level_up` 红：`before the level-up: cell_max_hp 0 cell_attack 10, want a panel with the level-0 attack 10`（mirror 里没有面板）；其余 11 步全绿（伤害是固定的 10，p2 崩溃前 HP 100 → 80） |
+| 修前（[e2e-red-before.txt](../performance/benchmarks/cellworld-v24-20261104/e2e-red-before.txt)） | 分支 HEAD `dfbd77a6` + 新的演练客户端与脚本 | 只有 `panel_level_up` 红：`before the level-up: cell_max_hp 0 cell_attack 10, want a panel with the level-0 attack 10`（mirror 里没有面板）；其余 11 步全绿（伤害是固定的 10，p2 崩溃前 HP 100 → 80） |
 | 修后（[e2e-green.txt](../performance/benchmarks/cellworld-v24-20261104/e2e-green.txt)、[evidence.json](../performance/benchmarks/cellworld-v24-20261104/e2e-green-evidence.json)） | 本轮 | 12 步全部通过。`panel_level_up`：`cell_max_hp` 100 → 110、`cell_attack` 10 → 12、`cell_hp` 保持 100；Base 侧面板 ver 2 已确认（attack 12、max_hp 110、power 35）；升级后一击伤害 12、目标 HP 100 → 88。跨界打怪两轮仍是 applied 10 / duplicate 0、伤害 10（0 级的攻击恰好等于 `attack_damage`）；`cell_crash` 里 p1（已升级）打 p2 两下 100 → 76，按快照重建后 HP 76；`base_restart`、普通场景（`Move` 照旧、`MoveIntent` 得 `scene_not_partitioned`、demo 机器人在 sid 1003 跑一轮）通过 |
 
 **不回归**（同一工作树、同机，`GOWORK=off`、从模块根）：gofmt 无输出；`go build ./... && go vet ./...`；glsvet（`./framework/nest/... ./framework/entity/... ./framework/dataengine/engine/... ./framework/sync/entitysync/... ./gameplay/cellworld/...`）无违例；`python3 scripts/check-doc-anchors.py` 0 broken；根包 `go test -count=1 .`；`go test -race -count=1 ./gameplay/cellworld/`（含 nats / process 子进程用例）；全量 `go test -count=1 ./...`（含 codegen）；`scripts/test-demo-generated.sh`（私有依赖，真实依赖用例全部 PASS、`roost id check` / `roost generate --check` 通过）、`test-mmorpg-generated.sh`、`test-sync-modes-generated.sh`、`test-genres-generated.py` 13 类全部 passed；新生成的 game-demo `go generate ./...` 后 porcelain 干净；本仓 `go generate ./...` 后 porcelain 干净；端到端见上。本轮没有改 nest / entity / sync 的代码（只动 cellworld 与 game-demo 模板），所以这几个包的 `-race` 没有重跑，它们的普通测试在全量里通过。

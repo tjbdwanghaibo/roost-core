@@ -13,6 +13,7 @@ func validPartition() ScenePartition {
 		WritebackEvery: 5 * time.Second, LeaseTimeout: 3 * time.Second, MaxSpeed: 300, AttackDamage: 10,
 		SpawnX: 2900, SpawnY: 1500, PlayerHP: 100,
 		Spawns: map[string]PartitionSpawn{"a": {X: 100, Y: 100, Count: 3, Spread: 20, HP: 100}},
+		Team:   PartitionTeam{MaxMembers: 4, InviteTTL: time.Minute, SnapshotEvery: time.Second, ResyncEvery: 10 * time.Second},
 	}
 }
 
@@ -38,6 +39,10 @@ func TestPartitionConfigIsCheckedAtLoad(t *testing.T) {
 		{"spawn outside the world", func(p *ScenePartition) { p.Spawns["a"] = PartitionSpawn{X: 5990, Y: 10, Count: 2, Spread: 20, HP: 1} }, "outside the world"},
 		{"monster faster than max speed", func(p *ScenePartition) { p.Spawns["a"] = PartitionSpawn{X: 10, Y: 10, Count: 1, VX: 400, HP: 1} }, "exceeds max_speed"},
 		{"bad world name", func(p *ScenePartition) { p.World = "a.b" }, "world"},
+		{"team snapshots faster than the Base beat", func(p *ScenePartition) { p.Team.SnapshotEvery = 50 * time.Millisecond }, "team.snapshot_every"},
+		{"team snapshots off the Base beat", func(p *ScenePartition) { p.Team.SnapshotEvery = 250 * time.Millisecond }, "team.snapshot_every"},
+		{"team resync not longer than a snapshot", func(p *ScenePartition) { p.Team.ResyncEvery = time.Second }, "team.resync_every"},
+		{"team invitation not whole seconds", func(p *ScenePartition) { p.Team.InviteTTL = 1500 * time.Millisecond }, "team.invite_ttl"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := validPartition()

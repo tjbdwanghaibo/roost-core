@@ -45,6 +45,7 @@ type Controller struct {
 	nestClient corenest.Client
 	players    *lifecycle.PlayerLifecycle
 	guilds     *lifecycle.GuildLifecycle
+	teams      *lifecycle.TeamLifecycle
 	matcher    svcmatch.Matchmaker
 	messaging  svcchat.Messaging
 	mailer     svcmail.Mail
@@ -68,6 +69,7 @@ type Controller struct {
 	serverSID int32
 	ids       *runtimeid.Allocator
 	guildIDs  fmongo.ICollection
+	teamIDs   fmongo.ICollection
 
 	// The skill catalog, compiled from game/skills/*.json on first use.
 	skillsOnce   sync.Once
@@ -183,6 +185,10 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
+	teams, err := lifecycle.TeamFromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("player controller: %w", err)
+	}
 	// The same capabilities internal/service/<game>'s generated Match() and
 	// Chat() accessors return; looked up here directly so this package does
 	// not import the service package.
@@ -253,11 +259,12 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
 	return &Controller{
-		registry: registry, nestClient: client, players: players, guilds: guilds,
+		registry: registry, nestClient: client, players: players, guilds: guilds, teams: teams,
 		matcher: matcher, messaging: messaging, mailer: mailer, sessions: sessions, ranking: ranking,
 		payments: payments, paymentSecret: paymentSecret,
 		serverSID: serverSID, ids: ids,
 		guildIDs: mongoClient.Database(databases.Physical(db.GuildDaoDBName)).Collection("_guild_id_sequence"),
+		teamIDs:  mongoClient.Database(databases.Physical(db.TeamDaoDBName)).Collection("_team_id_sequence"),
 		presence: chatroom.DefaultPresence(), worldID: worldID, sceneID: sceneID,
 	}, nil
 }

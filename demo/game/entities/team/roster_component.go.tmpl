@@ -1,0 +1,197 @@
+package team
+
+import (
+	"fmt"
+	"slices"
+
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+//roost:component type=2008
+const CompTypeRoster entity.ComponentType = 2008
+
+// RosterComponent 管队伍的成员表。每个方法都在 Team 的分布式锁内运行（Nest 先准备好远端实体再跑 handler）。
+//
+// 规则（原型缺省，规模与过期由 scene.partition.team 声明、加载时校验，handler 把它们作为参数传进来）：只有队长能邀请
+// 与解散；同一名玩家同时只在一支队伍里（由调用方核对玩家自己的 TeamID）；邀请在 invite_ttl 后过期；成员数不超过
+// max_members（被邀请的人不占名额，接受时再查）；队长离队时队长交给剩下玩家 ID 最小的那名，没人剩下就等于解散；解散
+// 后文档保留、成员表为空、版本照旧前进（同一个 ID 不再复用）。
+type RosterComponent struct {
+	entity.ComponentBase
+	owner *Team
+}
+
+// IRosterEntity is the narrow lock-safe view for Nest handlers.
+type IRosterEntity interface {
+	entity.IThreadSafeEntity
+	RosterComp() *RosterComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeRoster, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Team)
+		if !ok {
+			return nil, fmt.Errorf("team roster component: owner %T is not *Team", owner)
+		}
+		return &RosterComponent{owner: typed}, nil
+	})
+}
+
+func (component *RosterComponent) Name() string { return "team_roster" }
+
+func (component *RosterComponent) Owner() *Team { return component.owner }
+
+// Info 是成员表的一份副本（越过 Nest 边界的值）：Members 是玩家 ID（升序），Seats 是玩家 ID → Base 的 sid。
+type Info struct {
+	TeamID  int64
+	Leader  int64
+	Ver     uint64
+	Members []int64
+	Seats   map[int64]int32
+}
+
+// Snapshot 读成员表（调用方持有锁）。
+func (component *RosterComponent) Snapshot() Info {
+	dao := component.Owner().Dao()
+	info := Info{TeamID: component.Owner().ID(), Leader: dao.GetLeader(), Ver: uint64(dao.GetVer()), Seats: map[int64]int32{}}
+	dao.RangeMembers(func(player, sid int64) bool {
+		info.Members = append(info.Members, player)
+		info.Seats[player] = int32(sid)
+		return true
+	})
+	slices.Sort(info.Members)
+	return info
+}
+
+// Member 报告玩家是否在队里。
+func (component *RosterComponent) Member(player int64) bool {
+	_, in := component.Owner().Dao().GetMembers(player)
+	return in
+}
+
+// Found 让 leader 成为一支新队伍的队长与第一名成员。只对从没建成过的队伍（版本 0）有效。
+func (component *RosterComponent) Found(leader int64, sid int32) error {
+	dao := component.Owner().Dao()
+	if dao.GetVer() != 0 {
+		return errcode.Wrap(apperrors.ErrTeamExists, nil, "team_id", component.Owner().ID())
+	}
+	dao.SetLeader(leader)
+	dao.SetMembers(leader, int64(sid))
+	dao.SetVer(1)
+	return nil
+}
+
+// Invite 记下队长 leader 对 invitee 的邀请，expireAt（unix 秒）之后过期。已在队里的不再邀请（不是错误）。
+func (component *RosterComponent) Invite(leader, invitee int64, maxMembers int, nowUnix, expireAt int64) error {
+	dao := component.Owner().Dao()
+	switch {
+	case dao.GetLeader() == 0:
+		return errcode.Wrap(apperrors.ErrTeamMissing, nil, "team_id", component.Owner().ID())
+	case dao.GetLeader() != leader:
+		return errcode.Wrap(apperrors.ErrTeamNotLeader, nil, "team_id", component.Owner().ID(), "leader", dao.GetLeader())
+	case invitee == leader || invitee <= 0:
+		return errcode.Wrap(apperrors.ErrTeamNotInvited, nil, "invitee", invitee)
+	case component.Member(invitee):
+		return nil
+	case dao.MembersLen() >= maxMembers:
+		return errcode.Wrap(apperrors.ErrTeamFull, nil, "team_id", component.Owner().ID(), "max", maxMembers)
+	}
+	component.pruneInvites(nowUnix)
+	dao.SetInvites(invitee, expireAt)
+	return nil
+}
+
+// Accept 让被邀请的 player 入队（sid 是他的 Base）。已在队里是无变化的成功（客户端与传输会重试）。
+func (component *RosterComponent) Accept(player int64, sid int32, maxMembers int, nowUnix int64) error {
+	dao := component.Owner().Dao()
+	if dao.GetLeader() == 0 {
+		return errcode.Wrap(apperrors.ErrTeamMissing, nil, "team_id", component.Owner().ID())
+	}
+	if component.Member(player) {
+		return nil
+	}
+	expireAt, invited := dao.GetInvites(player)
+	if !invited || expireAt < nowUnix {
+		component.pruneInvites(nowUnix)
+		return errcode.Wrap(apperrors.ErrTeamNotInvited, nil, "team_id", component.Owner().ID())
+	}
+	if dao.MembersLen() >= maxMembers {
+		return errcode.Wrap(apperrors.ErrTeamFull, nil, "team_id", component.Owner().ID(), "max", maxMembers)
+	}
+	dao.DelInvites(player)
+	dao.SetMembers(player, int64(sid))
+	dao.SetVer(dao.GetVer() + 1)
+	return nil
+}
+
+// Leave 让 player 离队。队长离队时队长交给剩下玩家 ID 最小的那名；没人剩下时队伍等于解散（邀请一并清掉）。
+func (component *RosterComponent) Leave(player int64) error {
+	dao := component.Owner().Dao()
+	if !component.Member(player) {
+		return errcode.Wrap(apperrors.ErrTeamMissing, nil, "team_id", component.Owner().ID(), "player_id", player)
+	}
+	dao.DelMembers(player)
+	if dao.GetLeader() == player {
+		next := int64(0)
+		dao.RangeMembers(func(member, _ int64) bool {
+			if next == 0 || member < next {
+				next = member
+			}
+			return true
+		})
+		dao.SetLeader(next)
+		if next == 0 {
+			component.clearInvites()
+		}
+	}
+	dao.SetVer(dao.GetVer() + 1)
+	return nil
+}
+
+// Disband 由队长解散队伍：成员表与邀请清空，版本前进。返回解散前的成员表（要通知他们的 Base）。
+func (component *RosterComponent) Disband(leader int64) (Info, error) {
+	dao := component.Owner().Dao()
+	if dao.GetLeader() == 0 {
+		return Info{}, errcode.Wrap(apperrors.ErrTeamMissing, nil, "team_id", component.Owner().ID())
+	}
+	if dao.GetLeader() != leader {
+		return Info{}, errcode.Wrap(apperrors.ErrTeamNotLeader, nil, "team_id", component.Owner().ID(), "leader", dao.GetLeader())
+	}
+	before := component.Snapshot()
+	for _, member := range before.Members {
+		dao.DelMembers(member)
+	}
+	component.clearInvites()
+	dao.SetLeader(0)
+	dao.SetVer(dao.GetVer() + 1)
+	return before, nil
+}
+
+// pruneInvites 删掉已过期的邀请（文档不随过期的邀请无限变大）。
+func (component *RosterComponent) pruneInvites(nowUnix int64) {
+	dao := component.Owner().Dao()
+	var expired []int64
+	dao.RangeInvites(func(invitee, expireAt int64) bool {
+		if expireAt < nowUnix {
+			expired = append(expired, invitee)
+		}
+		return true
+	})
+	for _, invitee := range expired {
+		dao.DelInvites(invitee)
+	}
+}
+
+func (component *RosterComponent) clearInvites() {
+	dao := component.Owner().Dao()
+	var all []int64
+	dao.RangeInvites(func(invitee, _ int64) bool {
+		all = append(all, invitee)
+		return true
+	})
+	for _, invitee := range all {
+		dao.DelInvites(invitee)
+	}
+}
