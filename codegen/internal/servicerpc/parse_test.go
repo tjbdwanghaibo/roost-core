@@ -946,3 +946,56 @@ func TestAssemblyCollisionIsCheckedWhereCodeWillBeWritten(t *testing.T) {
 		t.Fatalf("output collision accepted: %v", err)
 	}
 }
+
+// shard=<param>（联盟服务方案 §2.10 第 2 项）：按实体 ID 里的槽位把调用路由到槽位表上的 sid。参数必须是方法的
+// int64 参数（实体 ID 或玩家 ID），不能与 affinity= 同时写。
+const shardedService = `package alliance
+
+import "context"
+
+// Every service package must declare this: the generated transport reports it
+// for a payload it cannot decode. The generator checks for it by name.
+var ErrRequestInvalid error
+
+//roost:rpc service_type=alliance capability=rpc.alliance
+type Alliance interface {
+	//roost:rpc shard=allianceID
+	Join(ctx context.Context, requestID string, allianceID int64, playerID int64) (version uint64, err error)
+}
+`
+
+func TestAShardKeyIsParsed(t *testing.T) {
+	services, err := ParseDir(writeDir(t, shardedService))
+	if err != nil {
+		t.Fatalf("shard= was refused: %v", err)
+	}
+	if got := services[0].Methods[0].Shard; got != "allianceID" {
+		t.Fatalf("parsed shard %q", got)
+	}
+}
+
+func TestAShardKeyIsValidated(t *testing.T) {
+	for name, tc := range map[string]struct{ marker, want string }{
+		"names no parameter":     {"//roost:rpc shard=guildID", "no parameter guildID"},
+		"not an int64":           {"//roost:rpc shard=requestID", "requestID is string"},
+		"together with affinity": {"//roost:rpc shard=allianceID affinity=requestID", "both shard= and affinity="},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseDir(writeDir(t, strings.Replace(shardedService, "//roost:rpc shard=allianceID", tc.marker, 1)))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("%s: got %v, want an error containing %q", tc.marker, err, tc.want)
+			}
+		})
+	}
+}
+
+// 生成侧还没有按槽位路由的客户端时，shard= 方法生成失败、写明原因，不生成一个发队列组的客户端。
+func TestAShardMethodIsNotGeneratedAsAQueueGroupCall(t *testing.T) {
+	services, err := ParseDir(writeDir(t, shardedService))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Generate(services[0]); err == nil || !strings.Contains(err.Error(), "shard=allianceID") {
+		t.Fatalf("a shard= method must not generate a queue-group client, got %v", err)
+	}
+}

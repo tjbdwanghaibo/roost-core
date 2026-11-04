@@ -69,6 +69,12 @@ type Method struct {
 	// turns that bound into cross-replica contention. Affinity is therefore a
 	// per-method transport property, not a default.
 	Affinity string
+	// Shard names the int64 parameter (an entity id that encodes its slot, or a
+	// player id) whose slot picks the instance from the slot table: the call goes
+	// to that sid, and a reply that the instance is not the owner redirects it
+	// once (联盟服务方案 §2.7). The table is a routing hint; the durable Remote
+	// ownership stays the authority. "" for any instance.
+	Shard string
 	// Doc is the method's own comment, carried into the generated client so
 	// the generated code reads like the interface rather than like a table.
 	Doc []string

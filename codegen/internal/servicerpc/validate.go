@@ -108,6 +108,33 @@ func buildService(facts pkgFacts, pkgName, path, name string, options map[string
 			"— so rename the existing one",
 			where, emitted, emitted, kind, pkgName, emitted)
 	}
+	// shard= 按槽位表路由（联盟服务方案 §2.10 第 2 项）：参数必须是这个方法的 int64 参数（编码了槽位的实体 ID，
+	// 或玩家 ID），槽位由它对槽位总数取模得到。与 affinity= 是两种互斥的选实例方式。
+	for index := range service.Methods {
+		method := &service.Methods[index]
+		if method.Shard == "" {
+			continue
+		}
+		if method.Affinity != "" {
+			return Service{}, fmt.Errorf("%s: method %s declares both shard= and affinity=; a call goes either to the slot table's owner or to an affinity instance, not both",
+				where, method.Name)
+		}
+		var found *Field
+		for i := range method.Params {
+			if method.Params[i].Name == method.Shard {
+				found = &method.Params[i]
+				break
+			}
+		}
+		if found == nil {
+			return Service{}, fmt.Errorf("%s: method %s declares shard=%s but has no parameter %s; the slot is read off an argument at call time",
+				where, method.Name, method.Shard, method.Shard)
+		}
+		if found.Type != "int64" {
+			return Service{}, fmt.Errorf("%s: method %s declares shard=%s, but %s is %s; the shard key is an int64 entity or player id whose slot is id modulo the slot count",
+				where, method.Name, method.Shard, found.Name, found.Type)
+		}
+	}
 	// Affinity is read off an argument at call time, so it has to name one.
 	//
 	// Two forms are accepted: a bare parameter, which must be a string, and
@@ -191,6 +218,7 @@ func buildMethod(index typeIndex, where string, item *ast.Field, funcType *ast.F
 	method := Method{Name: name, Doc: commentLines(item.Doc)}
 	if options, ok := interfaceMarker(item.Doc, item.Comment); ok {
 		method.Affinity = options["affinity"]
+		method.Shard = options["shard"]
 		if _, reliable := options["reliable"]; reliable {
 			return Method{}, fmt.Errorf("%s: method %s cannot select reliable per method; configure nats.rpc.transport=jetstream on both owner and client", where, name)
 		}

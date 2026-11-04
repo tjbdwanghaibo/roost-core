@@ -76,6 +76,13 @@ func Generate(service Service) ([]File, error) { return GenerateWith(service, Op
 
 // GenerateWith is Generate with a choice of half and header command.
 func GenerateWith(service Service, opts Options) ([]File, error) {
+	// shard= 已解析、校验，但按槽位表选 sid、处理“改投”答复的客户端在框架的 servicerpc 里（联盟服务方案阶段 1），
+	// 本版本还没有。生成一个照旧发队列组的客户端会把请求送到任意实例，所以在这里拒绝，而不是悄悄忽略。
+	for _, method := range service.Methods {
+		if method.Shard != "" {
+			return nil, fmt.Errorf("method %s declares shard=%s, but the slot-table client it needs is not in this roost-core yet; remove shard= until it is", method.Name, method.Shard)
+		}
+	}
 	view, err := newView(service)
 	if err != nil {
 		return nil, err

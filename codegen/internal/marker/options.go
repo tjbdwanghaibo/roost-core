@@ -46,8 +46,8 @@ var (
 	Table     = Spec{Kind: "table", Keys: []string{"name", "file", "json", "key"}}
 	Object    = Spec{Kind: "object", Keys: []string{"name", "file", "json"}}
 	// RPC covers both places the marker goes: service_type / capability on
-	// the interface, affinity / reliable on a method.
-	RPC    = Spec{Kind: "rpc", Keys: []string{"service_type", "capability", "affinity"}, Flags: []string{"reliable"}}
+	// the interface, affinity / shard / reliable on a method.
+	RPC    = Spec{Kind: "rpc", Keys: []string{"service_type", "capability", "affinity", "shard"}, Flags: []string{"reliable"}}
 	Entity = Spec{
 		Kind: "entity",
 		Keys: []string{"id", "entityKind", "category", "businessPool", "remote", "noPersist", "lifetime", "sync", "syncNamespace", "syncPacker", "subjectPacker", "service"},
