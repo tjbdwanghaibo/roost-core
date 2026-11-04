@@ -147,6 +147,14 @@ func (mgr *NestMgr) getHandlerEntry(name HandlerName) (handlerEntry, bool) {
 	return entry, ok
 }
 
+// HandlerRegistrar 是“在引擎实例上注册 handler”的能力（*NestMgr 满足）。服务经 wiring/nest 的 NestHandlerInstaller
+// 钩子在引擎启动之前拿到它；Start 之后注册返回错误。
+type HandlerRegistrar interface {
+	RegisterHandlerWithMeta(name HandlerName, handler BaseHandler, meta HandlerMeta) error
+}
+
+var _ HandlerRegistrar = (*NestMgr)(nil)
+
 // RegisterHandlerWithMeta 只在本引擎实例上注册 handler。测试与多引擎进程应优先使用它而不是包级注册表：实例表在
 // 引擎之间、`go test -count>1` 重跑之间互不冲突，也不需要 ResetHandlersForTest 清理。只能在 Start 之前注册——
 // 派发开始后实例表无锁读取。查找顺序是先实例、后包级（见 getHandlerEntry）。

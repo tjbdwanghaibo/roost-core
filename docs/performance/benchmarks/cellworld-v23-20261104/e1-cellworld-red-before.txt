@@ -1,0 +1,13 @@
+2026/11/03 23:59:41 WARN async handler failed title=nest handler=cellworld_actor type=Multi key=104270 tid=0 tids=2 groups=0 cost=false remote=false err="test loader: entity aggregate not found: entity 1873 kind 212 has no persistent DAO"
+2026/11/03 23:59:43 WARN async handler failed title=nest handler=cellworld_actor type=Multi key=104270 tid=0 tids=2 groups=0 cost=false remote=false err="test loader: entity aggregate not found: entity 1873 kind 212 has no persistent DAO"
+2026/11/03 23:59:44 WARN async handler failed title=nest handler=cellworld_actor type=Multi key=104270 tid=0 tids=2 groups=0 cost=false remote=false err="test loader: entity aggregate not found: entity 1873 kind 212 has no persistent DAO"
+2026/11/03 23:59:45 WARN async handler failed title=nest handler=cellworld_actor type=Multi key=104270 tid=0 tids=2 groups=0 cost=false remote=false err="test loader: entity aggregate not found: entity 1873 kind 212 has no persistent DAO"
+2026/11/03 23:59:46 WARN async handler failed title=nest handler=cellworld_actor type=Multi key=104270 tid=0 tids=2 groups=0 cost=false remote=false err="test loader: entity aggregate not found: entity 1873 kind 212 has no persistent DAO"
+--- FAIL: TestWorldOnALoaderBackedGetter (5.01s)
+    --- FAIL: TestWorldOnALoaderBackedGetter/straight (0.00s)
+        world_test.go:140: test loader: entity aggregate not found: entity 207701 kind 213 has no persistent DAO
+    --- FAIL: TestWorldOnALoaderBackedGetter/attack (5.01s)
+        world_test.go:445: player 1: timed out waiting for first view; last view cell=0 epoch=0 self=(0,0)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	5.664s
+FAIL

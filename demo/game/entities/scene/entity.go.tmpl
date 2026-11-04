@@ -8,10 +8,12 @@ import (
 	db "{{MODULE}}/db"
 	"{{MODULE}}/game/actor"
 	"{{MODULE}}/game/flags"
+	"{{MODULE}}/game/partition"
 	gamescene "{{MODULE}}/game/scene"
 	sceneruntime "{{MODULE}}/game/scene/runtime"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
@@ -89,6 +91,17 @@ type Scene struct {
 	spawns atomic.Pointer[func([]gamescene.SpawnRequest)]
 	// spawnBeats counts the population beats that ran (tests, diagnostics).
 	spawnBeats atomic.Int64
+
+	// region is this scene's cell of a partitioned scene (gameplay/cellworld
+	// Region: the neighbours' ghosts, the handoff records, the pending
+	// cross-cell damage, the index of the cell's own reals), and cellReg is
+	// its beat ("scene.cell", Node.RegionBeat). Both are set once by HostCell
+	// before the Node receives anything, and only read afterwards; the
+	// region itself is only touched under this scene's Nest lock. Nil on a
+	// process that hosts no cell — an ordinary scene, or a partitioned
+	// scene's Base-only process.
+	region  *cellworld.Region
+	cellReg *heartbeat.Reg
 }
 
 type spaceBox struct{ space movement.Space }
@@ -298,6 +311,40 @@ func (s *Scene) PublishSyncDirty() {
 		s.MarkSyncDirty(mask)
 	}
 }
+
+// HostCell makes this scene the holder of a partitioned scene's cell on this
+// process: a fresh region (what a restarted Cell knows is nothing; its
+// monsters are spawned again from the partition config, its players entered
+// again by their Bases) and the region's beat, started at once (not in a
+// transaction). Called once by the game service, after the Node is built and
+// before it runs.
+func (s *Scene) HostCell(period time.Duration) error {
+	if s.region != nil {
+		return fmt.Errorf("scene %d: already hosts a cell", s.ID())
+	}
+	if s.host == nil {
+		return fmt.Errorf("scene %d: not initialized", s.ID())
+	}
+	reg, err := s.host.Register("scene.cell", period, func(heartbeat.Beat) error {
+		if node := partition.Node(); node != nil {
+			return node.RegionBeat(s, time.Now())
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("scene %d: %w", s.ID(), err)
+	}
+	s.region = cellworld.NewRegion()
+	if err := reg.Start(); err != nil {
+		return fmt.Errorf("scene %d: %w", s.ID(), err)
+	}
+	s.cellReg = reg
+	return nil
+}
+
+// CellRegion is the cell's region (cellworld.RegionHost); nil when this
+// process hosts no cell. Only under this scene's Nest lock.
+func (s *Scene) CellRegion() *cellworld.Region { return s.region }
 
 // ISceneEntity is the lock-safe business view for Nest handlers that address
 // a Scene.

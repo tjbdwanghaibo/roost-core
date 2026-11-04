@@ -120,6 +120,85 @@ type PlayerDao struct {
 	// has no use for it. Old receipts are pruned by the step itself after
 	// saga.receipt_retention.
 	SagaReceipts map[string][]byte `dao:"persist" store:"saga_receipts"`
+
+	// The Cell* fields are the player's routing state for a partitioned scene
+	// (scene.partition, gameplay/cellworld.BaseState): this process is the
+	// player's Base, the scene's authority is the Cell process of the cell
+	// the player stands in, and these say which one that is, which epoch,
+	// the move intent and its sequence, the attack sequence and the watchdog
+	// times. The Player's own heartbeat ("cell.base") reads and writes them.
+	// `nopersist,nosync`: they describe one login on one process; a restarted
+	// Base enters again.
+	CellActor     int64  `dao:"nopersist,nosync" store:"cell_actor"`
+	CellInWorld   bool   `dao:"nopersist,nosync" store:"cell_in_world"`
+	CellOwner     int32  `dao:"nopersist,nosync" store:"cell_owner"`
+	CellEpoch     uint64 `dao:"nopersist,nosync" store:"cell_epoch"`
+	CellIntentSeq uint64 `dao:"nopersist,nosync" store:"cell_intent_seq"`
+	CellVX        int64  `dao:"nopersist,nosync" store:"cell_vx"`
+	CellVY        int64  `dao:"nopersist,nosync" store:"cell_vy"`
+	CellAttackSeq uint64 `dao:"nopersist,nosync" store:"cell_attack_seq"`
+	CellViewAt    int64  `dao:"nopersist,nosync" store:"cell_view_at"`
+	CellEnterAt   int64  `dao:"nopersist,nosync" store:"cell_enter_at"`
+	CellLeaseAt   int64  `dao:"nopersist,nosync" store:"cell_lease_at"`
+	CellHint      int32  `dao:"nopersist,nosync" store:"cell_hint"`
+	CellLostEpoch uint64 `dao:"nopersist,nosync" store:"cell_lost_epoch"`
+	CellLostAt    int64  `dao:"nopersist,nosync" store:"cell_lost_at"`
+	CellShown     bool   `dao:"nopersist,nosync" store:"cell_shown"`
+	// CellHP / CellSnapEpoch / CellSnapSeq are the player's snapshot from the
+	// partitioned scene: the HP its SceneActor last wrote back and that
+	// write-back's version. Persisted — they are what a crashed Cell rebuilds
+	// the SceneActor from, and a restarted Base must still refuse an older
+	// write-back. CellHP is also synced: the Base's mirror of the player's
+	// SceneActor is packed with this DAO's encoding (the client's `player`
+	// namespace, D2 = A), and HP is one of the fields it carries. The live
+	// position is PosX / PosY; the snapshot position is SavedPosX / SavedPosY
+	// with SavedSceneID = the partitioned scene, written with each accepted
+	// write-back (the fixed moment, not every witness).
+	CellHP        int64  `dao:"persist,sync" store:"cell_hp"`
+	CellSnapEpoch uint64 `dao:"persist" store:"cell_snap_epoch"`
+	CellSnapSeq   uint64 `dao:"persist" store:"cell_snap_seq"`
+	// CellMaxHP / CellAttack / CellPower / CellPanelVer are the battle panel
+	// this Base derived from the player's growth (level, equipment: the Final
+	// attribute layer) for the partitioned scene, and its sequence
+	// (cellworld.Panel, maintainer decision 2026-11-04 item 3 = A). The
+	// panel's authority is the cell's Real; this is what the Base last sent
+	// it. Written in the same transaction as the level-up or the equipment
+	// change, so the sequence stays monotonic across a Base restart.
+	// CellPanelAcked is the highest sequence the Real has confirmed — it comes
+	// back with the write-back snapshot. Persisted. The three numbers are
+	// also synced for the same reason as CellHP: the SceneActor's mirror is
+	// packed with this DAO's encoding and carries the Real's panel; the
+	// player's own `self` view leaves them out (the panel and the HP of a
+	// partitioned scene are the scene actor's). CellPanelSentAt /
+	// CellPanelSince / CellPanelUnknown are the resend and "unknown" timers.
+	CellMaxHP        int64  `dao:"persist,sync" store:"cell_max_hp"`
+	CellAttack       int64  `dao:"persist,sync" store:"cell_attack"`
+	CellPower        int64  `dao:"persist,sync" store:"cell_power"`
+	CellPanelVer     uint64 `dao:"persist" store:"cell_panel_ver"`
+	CellPanelAcked   uint64 `dao:"persist" store:"cell_panel_acked"`
+	CellPanelSentAt  int64  `dao:"nopersist,nosync" store:"cell_panel_sent_at"`
+	CellPanelSince   int64  `dao:"nopersist,nosync" store:"cell_panel_since"`
+	CellPanelUnknown bool   `dao:"nopersist,nosync" store:"cell_panel_unknown"`
+	// TeamID 是分区场景里这名玩家所在的队伍（Team 实体 ID，0 = 不在队伍里），是 Team 成员表里一个事实的本人副本：入队、
+	// 离队、解散都在同一笔 [Team, Player] 事务里写它（与 GuildID 同理）。别人解散队伍时这里由成员表通知或重读清掉。持久：
+	// Base 重启后靠它知道去重读哪支队伍。
+	TeamID int64 `dao:"persist" store:"team_id"`
+	// TeamVer / TeamMembers 是 Base 缓存的成员表（cellworld.Group）：版本与每名成员的 Player、SceneActor、Base sid。不持久：
+	// 重启后版本为 0，Node 从 Team 实体重读（GroupResync）。CellGroupSentAt / CellGroupSyncAt / CellGroupViewID /
+	// CellGroupViewVer 是队伍面板的计时与组关系视野的版本（cellworld.BaseState）。
+	TeamVer          uint64     `dao:"nopersist,nosync" store:"team_ver"`
+	TeamMembers      []TeamSeat `dao:"nopersist,nosync" store:"team_members"`
+	CellGroupSentAt  int64      `dao:"nopersist,nosync" store:"cell_group_sent_at"`
+	CellGroupSyncAt  int64      `dao:"nopersist,nosync" store:"cell_group_sync_at"`
+	CellGroupViewID  int64      `dao:"nopersist,nosync" store:"cell_group_view_id"`
+	CellGroupViewVer uint64     `dao:"nopersist,nosync" store:"cell_group_view_ver"`
+}
+
+// TeamSeat 是缓存的成员表里的一名成员（cellworld.GroupMember）。
+type TeamSeat struct {
+	Player int64 `store:"player"`
+	Actor  int64 `store:"actor"`
+	SID    int32 `store:"sid"`
 }
 
 // Equipment is a nested struct: the generator gives it its own dirty

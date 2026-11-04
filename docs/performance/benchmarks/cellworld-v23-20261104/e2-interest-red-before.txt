@@ -1,0 +1,5 @@
+--- FAIL: TestSelfFollowsItsEntityThroughHideAndShow (0.00s)
+    policy_test.go:1411: unregister=true: shown again, the player does not see itself
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.487s
+FAIL

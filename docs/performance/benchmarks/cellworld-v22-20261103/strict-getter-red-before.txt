@@ -1,0 +1,15 @@
+# 2026-11-03 先红：TestWorldWithAGetterThatRefusesAbsentEntities，harness 的 NodeConfig.Loaded 置 nil（Node 按修复前的做法把每个 ID 放进加锁集合）
+# 命令：GOWORK=off go test -count=1 -run TestWorldWithAGetterThatRefusesAbsentEntities ./gameplay/cellworld/
+2026/11/03 22:47:59 WARN async handler failed title=nest handler=cellworld_actor type=Multi key=104270 tid=0 tids=2 groups=0 cost=false remote=false err="test getter: entity aggregate not found: 1873"
+2026/11/03 22:48:00 WARN async handler failed title=nest handler=cellworld_actor type=Multi key=104270 tid=0 tids=2 groups=0 cost=false remote=false err="test getter: entity aggregate not found: 1873"
+2026/11/03 22:48:01 WARN async handler failed title=nest handler=cellworld_actor type=Multi key=104270 tid=0 tids=2 groups=0 cost=false remote=false err="test getter: entity aggregate not found: 1873"
+2026/11/03 22:48:02 WARN async handler failed title=nest handler=cellworld_actor type=Multi key=104270 tid=0 tids=2 groups=0 cost=false remote=false err="test getter: entity aggregate not found: 1873"
+2026/11/03 22:48:03 WARN async handler failed title=nest handler=cellworld_actor type=Multi key=104270 tid=0 tids=2 groups=0 cost=false remote=false err="test getter: entity aggregate not found: 1873"
+--- FAIL: TestWorldWithAGetterThatRefusesAbsentEntities (5.01s)
+    --- FAIL: TestWorldWithAGetterThatRefusesAbsentEntities/straight (0.00s)
+        world_test.go:140: test getter: entity aggregate not found: 208725
+    --- FAIL: TestWorldWithAGetterThatRefusesAbsentEntities/attack (5.00s)
+        world_test.go:445: player 1: timed out waiting for first view; last view cell=0 epoch=0 self=(0,0)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	5.632s
+FAIL

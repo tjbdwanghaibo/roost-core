@@ -1,0 +1,57 @@
+package settings
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func validPartition() ScenePartition {
+	return ScenePartition{
+		Enabled: true, World: "w1", CellSize: 3000, Cols: 2, Rows: 1, Owners: []string{"1001", "1002"},
+		GhostBand: 500, Hysteresis: 50, ViewRadius: 400, IdlePeriod: time.Second,
+		WritebackEvery: 5 * time.Second, LeaseTimeout: 3 * time.Second, MaxSpeed: 300, AttackDamage: 10,
+		SpawnX: 2900, SpawnY: 1500, PlayerHP: 100,
+		Spawns: map[string]PartitionSpawn{"a": {X: 100, Y: 100, Count: 3, Spread: 20, HP: 100}},
+		Team:   PartitionTeam{MaxMembers: 4, InviteTTL: time.Minute, SnapshotEvery: time.Second, ResyncEvery: 10 * time.Second},
+	}
+}
+
+// The rules the cell protocol needs are checked when the config loads, not when the first player walks into them.
+func TestPartitionConfigIsCheckedAtLoad(t *testing.T) {
+	if err := (ScenePartition{}).ValidateConfig(false); err != nil {
+		t.Fatalf("a disabled partition checks nothing: %v", err)
+	}
+	if err := validPartition().ValidateConfig(false); err != nil {
+		t.Fatalf("valid: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*ScenePartition)
+		want string
+	}{
+		{"owners do not cover the grid", func(p *ScenePartition) { p.Owners = []string{"1001"} }, "owners lists 1 sids"},
+		{"one sid owns two cells", func(p *ScenePartition) { p.Owners = []string{"1001", "1001"} }, "owns both"},
+		{"view radius plus hysteresis exceeds the band", func(p *ScenePartition) { p.ViewRadius = 480 }, "must not exceed ghost_band"},
+		{"view radius below the Base's leave radius", func(p *ScenePartition) { p.ViewRadius = 200 }, "must cover the Base's largest leave radius"},
+		{"wake radius below the view radius", func(p *ScenePartition) { p.WakeRadius = 350 }, "wake_radius"},
+		{"idle period not a tier", func(p *ScenePartition) { p.IdlePeriod = 300 * time.Millisecond }, "idle_period"},
+		{"spawn outside the world", func(p *ScenePartition) { p.Spawns["a"] = PartitionSpawn{X: 5990, Y: 10, Count: 2, Spread: 20, HP: 1} }, "outside the world"},
+		{"monster faster than max speed", func(p *ScenePartition) { p.Spawns["a"] = PartitionSpawn{X: 10, Y: 10, Count: 1, VX: 400, HP: 1} }, "exceeds max_speed"},
+		{"bad world name", func(p *ScenePartition) { p.World = "a.b" }, "world"},
+		{"team snapshots faster than the Base beat", func(p *ScenePartition) { p.Team.SnapshotEvery = 50 * time.Millisecond }, "team.snapshot_every"},
+		{"team snapshots off the Base beat", func(p *ScenePartition) { p.Team.SnapshotEvery = 250 * time.Millisecond }, "team.snapshot_every"},
+		{"team resync not longer than a snapshot", func(p *ScenePartition) { p.Team.ResyncEvery = time.Second }, "team.resync_every"},
+		{"team invitation not whole seconds", func(p *ScenePartition) { p.Team.InviteTTL = 1500 * time.Millisecond }, "team.invite_ttl"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := validPartition()
+			p.Spawns = map[string]PartitionSpawn{"a": p.Spawns["a"]}
+			tc.edit(&p)
+			err := p.ValidateConfig(false)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want an error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+}

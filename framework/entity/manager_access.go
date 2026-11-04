@@ -219,8 +219,20 @@ func (binding entityLoaderBinding) loadContext(leader context.Context) (context.
 	}
 }
 
+// kindHasNoAuthority 报告 kind 是登记过的不持久种类（noPersist，或一个 DAO 都没有）：它没有权威存储，内存里没有就是
+// 不存在，ManagerAccess 不把它交给加载器——唯一的正式加载器 DataEngine Repository 对它只会答“聚合不存在”的错误，
+// 那样 Nest 会为一次不可能成功的加载把请求转到 I/O 阶段、再让整条请求失败（维护者 2026-11-03 决定 E1 = B：不持久种类
+// 的“不存在”统一答 (nil, nil)，与没有加载器时相同）。判定与 Repository 拒绝的条件逐字相同（builder.NoPersist ||
+// len(DaoBuilders) == 0），所以持久种类的答复不变；没有登记 builder 的 kind 不算，照旧交给加载器报“没有 builder”。
+// 注册表是原子读，可在准入（任何 goroutine）与快池上调用。
+func kindHasNoAuthority(kind EntityKind) bool {
+	bp := GetEntityBuilderParam(kind)
+	return bp != nil && (bp.NoPersist || len(bp.DaoBuilders) == 0)
+}
+
 // Get 实现 Getter：先查内存；未命中且配置了 loader 时冷加载（共享加载，见 loadEntityShared）。ctx 标记了
-// LoadedEntitiesOnly（Nest 业务阶段）时不加载，返回 ErrColdLoadInLogic。不存在时返回 (nil, nil)。
+// LoadedEntitiesOnly（Nest 业务阶段）时不加载，返回 ErrColdLoadInLogic。不存在时返回 (nil, nil)：没有 loader，
+// 或 kind 不持久（kindHasNoAuthority，不问 loader、业务阶段也不算冷缺失）。
 func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityCategory) (IThreadSafeEntity, error) {
 	if access == nil || access.manager == nil || id == 0 {
 		return nil, nil
@@ -228,6 +240,9 @@ func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityC
 	meta := ResolveEntityID(id)
 	if value := access.manager.GetWithCategory(meta.FullID, category); value != nil {
 		return value, nil
+	}
+	if kindHasNoAuthority(meta.Kind) {
+		return nil, nil
 	}
 	binding := access.currentLoader()
 	if binding.loader == nil {
@@ -250,12 +265,16 @@ func (access *ManagerAccess) Get(ctx context.Context, id int64, category EntityC
 }
 
 // IsLoaded 实现 LoadedChecker：一次分片 map 查找，未命中时再读一次加载器配置；
-// 不加载、不等待 singleflight、不 Touch，可在任何 goroutine 上调用。
+// 不加载、不等待 singleflight、不 Touch，可在任何 goroutine 上调用。不持久的种类（kindHasNoAuthority）没有可加载的
+// 东西，未命中也答 true，派发阶段按不存在处理。
 func (access *ManagerAccess) IsLoaded(id int64) bool {
 	if access == nil || access.manager == nil || id == 0 {
 		return true
 	}
 	if access.manager.Get(id) != nil {
+		return true
+	}
+	if kindHasNoAuthority(ResolveEntityID(id).Kind) {
 		return true
 	}
 	access.loaderMu.RLock()
@@ -471,7 +490,7 @@ type entityLoadRequest struct {
 	indices []int
 }
 
-// GetMany 实现 Getter：按位置返回各 ID 的实体（不存在为 nil）。已加载的直接取；缺失的按 ID 去重后以有限并发冷加载，
+// GetMany 实现 Getter：按位置返回各 ID 的实体（不存在为 nil，含不在内存的不持久种类）。已加载的直接取；缺失的按 ID 去重后以有限并发冷加载，
 // 第一个错误（含分类不符）取消其余加载并返回。LoadedEntitiesOnly 时缺失即返回 ErrColdLoadInLogic。
 func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categories []EntityCategory) ([]IThreadSafeEntity, error) {
 	result := make([]IThreadSafeEntity, len(ids))
@@ -488,6 +507,9 @@ func (access *ManagerAccess) GetMany(ctx context.Context, ids []int64, categorie
 			}
 			result[index] = value
 			continue
+		}
+		if kindHasNoAuthority(meta.Kind) {
+			continue // 不持久的种类：不在内存就是不存在，留 nil 占位，不加载（见 kindHasNoAuthority）
 		}
 		request := requestsByID[meta.FullID]
 		if request == nil {

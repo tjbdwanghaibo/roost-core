@@ -1,0 +1,5 @@
+--- FAIL: TestReloadedPlayerEntersAtItsSavedPosition (0.00s)
+    partition_test.go:163: a reloaded player reads {Actor:0 InWorld:false Cell:0 Epoch:0 X:0 Y:0 HP:70 SnapVer:{Epoch:0 Seq:0} IntentSeq:0 VX:0 VY:0 AttackSeq:0 LastViewAt:0 LastEnterAt:0 LastLeaseAt:0 EnterHint:0 LostEpoch:0 LostAt:0 Shown:false}, want its saved position (1200, 1450) and hp 70
+FAIL
+FAIL	example.com/cwdemo/game/partition	0.545s
+FAIL

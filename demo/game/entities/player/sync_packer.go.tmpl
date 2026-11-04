@@ -31,6 +31,11 @@ var playerViews, playerViewsErr = dataengine.NewSyncViewSet(db.PlayerDaoSyncFiel
 	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}, Priority: -1},
 	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: []string{"Name", "Level", "PosX", "PosY", "SceneID", "Facing", "Equipment", "GuildID"}, Priority: 0},
 	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "far", LOD: 1}, Fields: []string{"Name", "Level", "PosX", "PosY", "SceneID"}, Priority: 10},
+	// self is what a member of a partitioned scene gets of its own Player (maintainer decision E4 = A): its own
+	// state. Not the position and not the HP — the scene actor's mirror carries those, and the partitioned scene's
+	// position and HP live on the cell; not the attribute maps either (which combat field lives where in a
+	// partitioned scene waits on the maintainer, FEATURE §11).
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"Name", "Level", "Exp", "Gold", "Items", "Equipment", "GuildID"}, Priority: 0},
 )
 
 // A snapshot is what a brand-new subscriber gets, and what a resync produces:

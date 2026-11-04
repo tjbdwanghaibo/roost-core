@@ -31,6 +31,13 @@ type Config struct {
 	Activity Activity `config:"activity"`
 	Platform Platform `config:"platform"`
 	Guild    Guild    `config:"guild"`
+	Scene    Scene    `config:"scene"`
+}
+
+// Scene is the game's map settings. Only the partitioned mode has keys of its
+// own today; without them every process runs the ordinary scene.
+type Scene struct {
+	Partition ScenePartition `config:"partition"`
 }
 
 // Activity is where the activity coordinator keeps its keys and which group
@@ -97,6 +104,17 @@ func LoadActivity(registry *app.Registry) (app.ServiceIdentity, Activity, error)
 		return app.ServiceIdentity{}, Activity{}, err
 	}
 	return config.ServiceIdentity, config.Activity, nil
+}
+
+// LoadPartition reads only the partitioned-scene keys.
+func LoadPartition(registry *app.Registry) (ScenePartition, error) {
+	var config struct {
+		Scene Scene `config:"scene"`
+	}
+	if err := load(registry, &config); err != nil {
+		return ScenePartition{}, err
+	}
+	return config.Scene.Partition, nil
 }
 
 // LoadPlatform reads only the platform keys.

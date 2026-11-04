@@ -1,0 +1,23 @@
+--- FAIL: TestDamageUsesTheAttackersPanel (2.27s)
+    combat_test.go:245: attacker 1873 on 73557: damage 0, want 17 (results [{Hit:{Attacker:1873 Seq:1} Target:73557 Outcome:applied Reason:0 Duplicate:false HP:98 Damage:0} {Hit:{Attacker:1873 Seq:2} Target:74581 Outcome:applied Reason:0 Duplicate:false HP:98 Damage:0} {Hit:{Attacker:2897 Seq:1} Target:74581 Outcome:applied Reason:0 Duplicate:false HP:95 Damage:0}])
+    combat_test.go:245: attacker 1873 on 74581: damage 0, want 17 (results [{Hit:{Attacker:1873 Seq:1} Target:73557 Outcome:applied Reason:0 Duplicate:false HP:98 Damage:0} {Hit:{Attacker:1873 Seq:2} Target:74581 Outcome:applied Reason:0 Duplicate:false HP:98 Damage:0} {Hit:{Attacker:2897 Seq:1} Target:74581 Outcome:applied Reason:0 Duplicate:false HP:95 Damage:0}])
+    combat_test.go:245: attacker 2897 on 74581: damage 0, want 3 (results [{Hit:{Attacker:1873 Seq:1} Target:73557 Outcome:applied Reason:0 Duplicate:false HP:98 Damage:0} {Hit:{Attacker:1873 Seq:2} Target:74581 Outcome:applied Reason:0 Duplicate:false HP:98 Damage:0} {Hit:{Attacker:2897 Seq:1} Target:74581 Outcome:applied Reason:0 Duplicate:false HP:95 Damage:0}])
+    combat_test.go:248: timed out waiting for hp settles
+--- FAIL: TestPanelCapsCurrentHPWithoutHealing (4.03s)
+    combat_test.go:264: enter: real 1873 in (1,0) has panel {MaxHP:0 Attack:0 Power:0 Ver:0} hp 100, want panel ver 1
+--- FAIL: TestPanelCommandLostIsResent (4.04s)
+    combat_test.go:308: enter: real 1873 in (1,0) has panel {MaxHP:0 Attack:0 Power:0 Ver:0} hp 100, want panel ver 1
+--- FAIL: TestPanelCommandDuplicatedOrReorderedAppliesOnce (4.03s)
+    combat_test.go:347: enter: real 1873 in (1,0) has panel {MaxHP:0 Attack:0 Power:0 Ver:0} hp 100, want panel ver 1
+--- FAIL: TestPanelChangeDuringHandoff (4.46s)
+    combat_test.go:397: panel after the handoff: real 1873 in (1,0) has panel {MaxHP:0 Attack:0 Power:0 Ver:0} hp 100, want panel ver 2
+2026/11/04 01:06:36 WARN heartbeat: beats skipped (previous beat still in flight, admission refused, or presumed lost); the entity's worker is falling behind or a callback is slow driver=cell-101 since_last_warn=map[inflight:1] sample_entity=104270 sample_registration=scene.cell sample_reason=inflight
+2026/11/04 01:06:36 WARN heartbeat: beats skipped (previous beat still in flight, admission refused, or presumed lost); the entity's worker is falling behind or a callback is slow driver=cell-102 since_last_warn=map[inflight:1] sample_entity=1873 sample_registration=cell.actor sample_reason=inflight
+--- FAIL: TestPanelUnknownWhenUnconfirmed (4.03s)
+    combat_test.go:441: enter: real 1873 in (1,0) has panel {MaxHP:0 Attack:0 Power:0 Ver:0} hp 100, want panel ver 1
+2026/11/04 01:06:40 WARN async handler failed title=nest handler=cellworld_input type=Single key=1873 tid=1873 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+--- FAIL: TestCellCrashPlayerReentersFromSnapshot (2.44s)
+    lifecycle_test.go:51: after restart: panel {MaxHP:0 Attack:0 Power:0 Ver:0}, want {MaxHP:150 Attack:4 Power:23 Ver:1}
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	26.171s
+FAIL

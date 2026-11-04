@@ -1,0 +1,17 @@
+# 修前（只有类型、线上消息与 API 骨架：SetGroup 只写缓存，NotifyGroup 不发，Base 心跳不发快照、不设组视野）
+# HEAD 3bd2e484 + 未提交的骨架；GOWORK=off go test -count=1 -run TestGroup ./gameplay/cellworld/
+--- FAIL: TestGroupPanelAcrossBases (5.71s)
+    group_test.go:211: player 1 on sid 900: timed out waiting for the teammate on the other base of player 2; holds it false ({ID:0 Kind:0 Base:0 X:0 Y:0 VX:0 VY:0 HP:0 Ver:{Epoch:0 Seq:0} Idle:false Panel:{MaxHP:0 Attack:0 Power:0 Ver:0}}), node stats {…}
+--- FAIL: TestGroupPanelExpiresWhenTheBaseStopsAndComesBack (5.09s)
+    group_test.go:249: player 1 on sid 900: timed out waiting for the teammate of player 2; holds it false ({ID:0 Kind:0 Base:0 X:0 Y:0 VX:0 VY:0 HP:0 Ver:{Epoch:0 Seq:0} Idle:false Panel:{MaxHP:0 Attack:0 Power:0 Ver:0}}), node stats {…}
+--- FAIL: TestGroupPanelFollowsAHandoff (5.10s)
+    group_test.go:289: player 1 on sid 900: timed out waiting for the teammate of player 2; holds it false ({ID:0 Kind:0 Base:0 X:0 Y:0 VX:0 VY:0 HP:0 Ver:{Epoch:0 Seq:0} Idle:false Panel:{MaxHP:0 Attack:0 Power:0 Ver:0}}), node stats {…}
+--- FAIL: TestGroupNoticesChangeTheRoster (5.10s)
+    group_test.go:322: player 1 on sid 900: timed out waiting for the teammate of player 2; holds it false ({ID:0 Kind:0 Base:0 X:0 Y:0 VX:0 VY:0 HP:0 Ver:{Epoch:0 Seq:0} Idle:false Panel:{MaxHP:0 Attack:0 Power:0 Ver:0}}), node stats {…}
+--- FAIL: TestGroupResyncCoversALostNotice (5.10s)
+    group_test.go:378: player 1 on sid 900: timed out waiting for the teammate of player 2; holds it false ({ID:0 Kind:0 Base:0 X:0 Y:0 VX:0 VY:0 HP:0 Ver:{Epoch:0 Seq:0} Idle:false Panel:{MaxHP:0 Attack:0 Power:0 Ver:0}}), node stats {…}
+--- FAIL: TestGroupPanelMergesWithTheSpatialView (5.74s)
+    group_test.go:415: player 1 on sid 900: timed out waiting for the teammate walked out of view of player 2; holds it false ({ID:0 Kind:0 Base:0 X:0 Y:0 VX:0 VY:0 HP:0 Ver:{Epoch:0 Seq:0} Idle:false Panel:{MaxHP:0 Attack:0 Power:0 Ver:0}}), node stats {…}
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	32.233s
+FAIL

@@ -1,0 +1,10 @@
+--- FAIL: TestManagerAccessAnswersAbsentNonPersistentKindsWithoutTheLoader (0.00s)
+    manager_access_test.go:357: IsLoaded(absent non-persistent) = false: Nest would route it to I/O preparation for a load that cannot exist
+    manager_access_test.go:360: Get(absent non-persistent) = (<nil>, test loader: kind has no persistent DAO), want (nil, nil)
+    manager_access_test.go:363: GetMany(absent non-persistent) = ([], test loader: kind has no persistent DAO), want ([nil], nil)
+    manager_access_test.go:367: fast-stage Get(absent non-persistent) = (<nil>, entity: cold load forbidden in logic; declare targets and dispatch with SendOptionIO preparation: entity 79863), want (nil, nil)
+    manager_access_test.go:370: fast-stage GetMany(absent non-persistent) = ([], entity: cold load forbidden in logic; declare targets and dispatch with SendOptionIO preparation: entity 79863), want ([nil], nil)
+    manager_access_test.go:373: the loader was asked 2 time(s) for a kind that has no persistent DAO
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/entity	0.649s
+FAIL

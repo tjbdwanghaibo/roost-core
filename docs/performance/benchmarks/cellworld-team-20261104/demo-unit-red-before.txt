@@ -1,0 +1,30 @@
+# demo 修前（骨架：Team 成员表方法不做事、Player 只记队伍 ID、BaseState 的队伍面板字段没映射、scene.partition.team 不校验）
+# 生成的 game-demo（本分支 + 未提交的模板）；GOWORK=off go test -count=1 ./game/entities/team/ ./game/entities/player/ ./game/partition/ ./game/settings/
+--- FAIL: TestTeamRosterRules (0.00s)
+    roster_component_test.go:61: after found: {TeamID:4611686018427388957 Leader:0 Ver:0 Members:[] Seats:map[]}
+--- FAIL: TestTeamLastMemberOutDisbands (0.00s)
+    roster_component_test.go:143: after the last member left: {TeamID:4611686018427388957 Leader:0 Ver:0 Members:[] Seats:map[]}, 0 invitations
+FAIL
+FAIL	example.com/cwdemo/game/entities/team	0.503s
+--- FAIL: TestCellGroupIsThePlayersCopyAndRollsBack (0.00s)
+    cell_group_test.go:32: read back {ID:9001 Ver:0 Members:[]} (team id 9001), want {ID:9001 Ver:3 Members:[{Player:1001 Actor:2001 SID:1000} {Player:1002 Actor:2002 SID:1004}]}
+FAIL
+FAIL	example.com/cwdemo/game/entities/player	0.867s
+--- FAIL: TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack (0.00s)
+    partition_test.go:123: read back
+         got {Actor:7 InWorld:true Cell:1001 Epoch:2 X:2900 Y:1500 HP:100 SnapVer:{Epoch:0 Seq:0} IntentSeq:3 VX:100 VY:0 AttackSeq:4 LastViewAt:0 LastEnterAt:0 LastLeaseAt:0 EnterHint:0 LostEpoch:0 LostAt:0 Shown:true Panel:{MaxHP:110 Attack:12 Power:35 Ver:2} PanelAcked:1 PanelSentAt:50 PanelSince:40 PanelUnknown:true GroupSentAt:0 GroupSyncAt:0 GroupViewID:0 GroupViewVer:0}
+        want {Actor:7 InWorld:true Cell:1001 Epoch:2 X:2900 Y:1500 HP:100 SnapVer:{Epoch:0 Seq:0} IntentSeq:3 VX:100 VY:0 AttackSeq:4 LastViewAt:0 LastEnterAt:0 LastLeaseAt:0 EnterHint:0 LostEpoch:0 LostAt:0 Shown:true Panel:{MaxHP:110 Attack:12 Power:35 Ver:2} PanelAcked:1 PanelSentAt:50 PanelSince:40 PanelUnknown:true GroupSentAt:60 GroupSyncAt:70 GroupViewID:9001 GroupViewVer:3}
+FAIL
+FAIL	example.com/cwdemo/game/partition	1.926s
+--- FAIL: TestPartitionConfigIsCheckedAtLoad (0.00s)
+    --- FAIL: TestPartitionConfigIsCheckedAtLoad/team_snapshots_faster_than_the_Base_beat (0.00s)
+        partition_test.go:53: want an error containing "team.snapshot_every", got <nil>
+    --- FAIL: TestPartitionConfigIsCheckedAtLoad/team_snapshots_off_the_Base_beat (0.00s)
+        partition_test.go:53: want an error containing "team.snapshot_every", got <nil>
+    --- FAIL: TestPartitionConfigIsCheckedAtLoad/team_resync_not_longer_than_a_snapshot (0.00s)
+        partition_test.go:53: want an error containing "team.resync_every", got <nil>
+    --- FAIL: TestPartitionConfigIsCheckedAtLoad/team_invitation_not_whole_seconds (0.00s)
+        partition_test.go:53: want an error containing "team.invite_ttl", got <nil>
+FAIL
+FAIL	example.com/cwdemo/game/settings	1.391s
+FAIL

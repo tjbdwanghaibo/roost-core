@@ -26,6 +26,10 @@ func invokeClaimReward(es []entity.IThreadSafeEntity, params []any, opts ...nest
 		err = nest.NewEntityCountMismatchError(handlerNameClaimReward.String(), len(es), 1)
 		return
 	}
+	if es[0] == nil {
+		err = nest.EntityNotFoundError()
+		return
+	}
 	e0, ok := es[0].(*Player)
 	if !ok {
 		err = nest.ErrEntityTypeMismatch
@@ -48,6 +52,10 @@ func invokeClaimReward(es []entity.IThreadSafeEntity, params []any, opts ...nest
 func invokeStampVisit(es []entity.IThreadSafeEntity, params []any, opts ...nest.HandlerOption) (ret any, err error) {
 	if len(es) != 1 {
 		err = nest.NewEntityCountMismatchError(handlerNameStampVisit.String(), len(es), 1)
+		return
+	}
+	if es[0] == nil {
+		err = nest.EntityNotFoundError()
 		return
 	}
 	e0, ok := es[0].(*Player)

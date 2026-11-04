@@ -1,0 +1,41 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	team "{{MODULE}}/game/entities/team"
+	"{{MODULE}}/game/partition"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// handlerTeamLeave 让玩家离队（队长离队时队长交给剩下玩家 ID 最小的那名，没人剩下就等于解散）：成员表与他自己的缓存
+// 同一笔事务清掉，提交后把新成员表通知给剩下的成员与他自己的 Base。成员表里已经没有他（被解散了、缓存还没收到通知）时
+// 只清自己的副本，答成功。
+//
+//roost:nest rollback=undo durability=strict
+func handlerTeamLeave(target team.IRosterEntity, member player.IProfileEntity) (team.Info, error) {
+	node := partition.Node()
+	if node == nil {
+		return team.Info{}, apperrors.ErrSceneNotPartitioned
+	}
+	roster := target.RosterComp()
+	self := member.ProfileComp().Owner()
+	if self.TeamID() != target.ID() {
+		return team.Info{}, errcode.Wrap(apperrors.ErrTeamMissing, nil, "team_id", target.ID())
+	}
+	unique := entity.GetUniqueIDFromEntityID(member.ID())
+	if !roster.Member(unique) {
+		node.SetGroup(self, cellworld.Group{})
+		return roster.Snapshot(), nil
+	}
+	before := teamGroup(roster.Snapshot())
+	if err := roster.Leave(unique); err != nil {
+		return team.Info{}, err
+	}
+	info := roster.Snapshot()
+	node.SetGroup(self, cellworld.Group{})
+	node.NotifyGroup(teamGroup(info), teamSeat(before, member.ID()))
+	return info, nil
+}

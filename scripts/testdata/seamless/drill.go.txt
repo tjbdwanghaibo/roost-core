@@ -1,0 +1,1516 @@
+// Command seamlessdrill 是分区场景（scene.partition）在生成 game-demo 上的端到端演练客户端：经真实 account 登录、
+// 真实玩家 TCP 连接、demo 的协议与同步帧解码（game/clientsync），驱动玩家在两个 Cell 进程之间走动、打怪、互打，
+// 由脚本在约定的时刻 kill -9 一个 Cell 进程并重启，最后检查普通场景照常可用。只在独立开发环境运行。
+//
+//	seamlessdrill -account-nats nats://… -prefix cwdemo -endpoints 1000=…,1001=…,1003=… -ops 1000=…,1001=…,1002=…,1003=… \
+//	  -kill 'kill -9 $(cat .dev/game1002.pid)' -restart 'sh restart-1002.sh' -out evidence.json
+//
+// 每一步打印一行 “STEP <名字> ok …” 或以非零退出并说明哪条断言失败；evidence.json 是各步的计数与观测。
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"math"
+	"net/http"
+	"os"
+	"os/exec"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"MMO_MODULE/game/clientsync"
+	"MMO_MODULE/loadtest/playertcp"
+	"MMO_MODULE/protocol/msgid"
+	"MMO_MODULE/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	natsdriver "github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver"
+	"github.com/tjbdwanghaibo/roost-core/robot/transport"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+const (
+	kindSceneActor = entity.EntityKind(9)
+	kindMonster    = entity.EntityKind(4)
+	// boundary 是两个格的分界线 x（cell_size 3000，2 × 1）。
+	boundary = 3000
+	// keepRadius：Base 的 Interest 进入半径 120、离开半径 150；离自己这么近的对象被 remove 就算视野不连续
+	// （位置按最后一份同步算，留出一帧的位移余量）。
+	keepRadius = 130
+	// jitterKeepRadius：抖动时 p1 以 300 单位 / 秒来回，客户端看到的自己比服务端晚约 100ms（30 单位）。
+	jitterKeepRadius = 100
+	// walkerKeepRadius：walker 以 150 单位 / 秒经过 p2，它在客户端的位置晚约 100ms（15 单位）。
+	walkerKeepRadius = 115
+)
+
+var (
+	accountNATS = flag.String("account-nats", "", "NATS url of the account service's bus")
+	prefix      = flag.String("prefix", "", "bus prefix")
+	endpoints   = flag.String("endpoints", "", "sid=host:port list of player TCP endpoints")
+	opsAddrs    = flag.String("ops", "", "sid=host:port list of ops endpoints (GM)")
+	token       = flag.String("token", "dev-gm-token", "admin token")
+	killCmd     = flag.String("kill", "", "shell command that kill -9s the Cell process of cell (1,0) (sid 1002)")
+	restartCmd  = flag.String("restart", "", "shell command that starts sid 1002 again and waits for it to be ready")
+	killBase    = flag.String("kill-base", "", "shell command that kill -9s the Base-only process sid 1004")
+	restartBase = flag.String("restart-base", "", "shell command that starts sid 1004 again and waits for it to be ready")
+	outPath     = flag.String("out", "", "evidence JSON")
+	damage      = flag.Int64("damage", 10, "scene.partition.attack_damage")
+)
+
+type point struct{ X, Y int64 }
+
+func dist(a, b point) int64 {
+	return int64(math.Hypot(float64(a.X-b.X), float64(a.Y-b.Y)))
+}
+
+// object 是客户端手里的一个对象（合并后的字段）。
+type object struct {
+	ns      string
+	fields  map[string]any
+	created time.Time
+	updated time.Time
+}
+
+func (o object) pos() point {
+	return point{X: asInt(o.fields["pos_x"]), Y: asInt(o.fields["pos_y"])}
+}
+
+func (o object) hp() int64 {
+	if v, ok := o.fields["cell_hp"]; ok {
+		return asInt(v)
+	}
+	return asInt(o.fields["hp"])
+}
+
+func asInt(v any) int64 {
+	switch t := v.(type) {
+	case int64:
+		return t
+	case int32:
+		return int64(t)
+	case uint64:
+		return int64(t)
+	case uint32:
+		return int64(t)
+	case float64:
+		return int64(t)
+	case json.Number:
+		n, _ := t.Int64()
+		return n
+	}
+	return 0
+}
+
+type removal struct {
+	ID   int64     `json:"id"`
+	At   time.Time `json:"at"`
+	Dist int64     `json:"dist"`
+	Self point     `json:"self"`
+	Obj  point     `json:"obj"`
+}
+
+// client 是一个已登录玩家的连接：一个读 goroutine 分发响应（按 seq）与同步帧（按会话解帧，记创建 / 删除）。
+type client struct {
+	name     string
+	sid      int32
+	playerID int64
+	actorID  int64
+	raw      transport.Conn
+
+	mu       sync.Mutex
+	seq      uint32
+	pending  map[uint32]chan *transport.Packet
+	refs     map[frame.ObjectRef]int64
+	held     map[int64]*object
+	removes  []removal
+	creates  map[int64]int
+	frames   int
+	selfSeen []time.Time
+	failure  error
+	closed   bool
+	// results 是收到的攻击结论推送（AttackResultPush，按到达顺序）。
+	results []*pb.AttackResultPush
+}
+
+func (c *client) start() {
+	go func() {
+		for {
+			packet, err := c.raw.ReadPacket()
+			if err != nil {
+				c.mu.Lock()
+				c.closed = true
+				for _, ch := range c.pending {
+					close(ch)
+				}
+				c.pending = map[uint32]chan *transport.Packet{}
+				c.mu.Unlock()
+				return
+			}
+			if packet.Flags&wire.FlagSync != 0 && packet.MsgID == msgid.MsgEntitySync {
+				c.consume(packet.Payload)
+				continue
+			}
+			if packet.MsgID == msgid.MsgAttackResult {
+				if push, err := pb.UnmarshalAttackResultPush(packet.Payload); err == nil {
+					c.mu.Lock()
+					c.results = append(c.results, push)
+					c.mu.Unlock()
+				}
+				continue
+			}
+			c.mu.Lock()
+			ch := c.pending[packet.Seq]
+			delete(c.pending, packet.Seq)
+			c.mu.Unlock()
+			if ch != nil {
+				ch <- packet
+			}
+		}
+	}()
+}
+
+func (c *client) consume(payload []byte) {
+	decoded, err := entitysync.DecodeFrame(payload, frame.DefaultLimits())
+	now := time.Now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err != nil {
+		c.failure = fmt.Errorf("%s: decode frame: %w", c.name, err)
+		return
+	}
+	c.frames++
+	for _, obj := range decoded.Objects {
+		subject := c.refs[obj.Ref]
+		fields := map[string]any{}
+		ns := ""
+		for _, component := range obj.Components {
+			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
+			if err != nil {
+				c.failure = fmt.Errorf("%s: decode update: %w", c.name, err)
+				return
+			}
+			subject, ns = update.SubjectID, update.Namespace
+			if len(update.Payload.BytesCopy()) == 0 {
+				continue
+			}
+			doc, err := clientsync.DecodeFields(update)
+			if err != nil {
+				c.failure = fmt.Errorf("%s: decode fields: %w", c.name, err)
+				return
+			}
+			for k, v := range doc {
+				fields[k] = v
+			}
+		}
+		// 自己的 SceneActor：ID 是 BuildEntityID(玩家 ID, SceneActor)。本进程没有登记实体种类，按 kind 与 unique 认。
+		if c.actorID == 0 && entity.GetEntityKindFromID(subject) == kindSceneActor && entity.GetUniqueIDFromEntityID(subject) == c.playerID {
+			c.actorID = subject
+		}
+		switch obj.Operation {
+		case frame.ObjectCreate:
+			c.refs[obj.Ref] = subject
+			c.held[subject] = &object{ns: ns, fields: fields, created: now, updated: now}
+			c.creates[subject]++
+		case frame.ObjectUpdate:
+			o := c.held[subject]
+			if o == nil {
+				o = &object{ns: ns, fields: map[string]any{}, created: now}
+				c.held[subject] = o
+			}
+			for k, v := range fields {
+				o.fields[k] = v
+			}
+			o.updated = now
+		case frame.ObjectRemove:
+			r := removal{ID: subject, At: now}
+			if o := c.held[subject]; o != nil {
+				r.Obj = o.pos()
+			}
+			if self := c.held[c.actorID]; self != nil {
+				r.Self = self.pos()
+				r.Dist = dist(r.Self, r.Obj)
+			}
+			c.removes = append(c.removes, r)
+			delete(c.refs, obj.Ref)
+			delete(c.held, subject)
+		}
+		if subject == c.actorID && (obj.Operation == frame.ObjectCreate || obj.Operation == frame.ObjectUpdate) {
+			c.selfSeen = append(c.selfSeen, now)
+		}
+	}
+}
+
+func (c *client) call(ctx context.Context, id uint32, payload []byte) ([]byte, error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, fmt.Errorf("%s: connection closed", c.name)
+	}
+	c.seq++
+	seq := c.seq
+	ch := make(chan *transport.Packet, 1)
+	c.pending[seq] = ch
+	c.mu.Unlock()
+	if err := c.raw.WritePackets([]*transport.Packet{{MsgID: id, Seq: seq, Payload: payload}}); err != nil {
+		return nil, err
+	}
+	select {
+	case packet, ok := <-ch:
+		if !ok {
+			return nil, fmt.Errorf("%s: connection closed while waiting for msg %d", c.name, id)
+		}
+		return packet.Payload, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(10 * time.Second):
+		return nil, fmt.Errorf("%s: no response to msg %d", c.name, id)
+	}
+}
+
+// snapshot 是客户端此刻手里的对象（拷贝）。
+func (c *client) snapshot() map[int64]object {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[int64]object, len(c.held))
+	for id, o := range c.held {
+		copied := *o
+		copied.fields = map[string]any{}
+		for k, v := range o.fields {
+			copied.fields[k] = v
+		}
+		out[id] = copied
+	}
+	return out
+}
+
+// describe 列出客户端手里的对象（失败信息用）。
+func (c *client) describe() string {
+	var parts []string
+	for id, o := range c.snapshot() {
+		parts = append(parts, fmt.Sprintf("%d(kind %d %s %v)", id, entity.GetEntityKindFromID(id), o.ns, o.fields))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, " ")
+}
+
+func (c *client) self() (object, bool) {
+	c.mu.Lock()
+	id := c.actorID
+	c.mu.Unlock()
+	o, ok := c.snapshot()[id]
+	return o, ok
+}
+
+func (c *client) removalsSince(t time.Time) []removal {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []removal
+	for _, r := range c.removes {
+		if !r.At.Before(t) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func (c *client) err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failure
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
+
+func pairs(list string) map[int32]string {
+	out := map[int32]string{}
+	for _, pair := range strings.Split(list, ",") {
+		key, value, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		if !ok {
+			continue
+		}
+		sid, _ := strconv.Atoi(key)
+		out[int32(sid)] = value
+	}
+	return out
+}
+
+func accounts() (*svcaccount.BusClient, func(), error) {
+	assembly, err := natsdriver.Assemble(fnats.DefaultConfig(*accountNATS), natsdriver.ClientOptions{})
+	if err != nil {
+		return nil, nil, err
+	}
+	b := bus.New(assembly.Client, assembly.RPC, nil, bus.Config{SvcType: "seamlessdrill", Prefix: *prefix, WorkerNum: 2, QueueCap: 64})
+	if err := b.Start(); err != nil {
+		return nil, nil, err
+	}
+	client, err := svcaccount.NewBusClient(b, "", 0)
+	if err != nil {
+		b.Stop()
+		return nil, nil, err
+	}
+	return client, b.Stop, nil
+}
+
+// login 经 account 登录、建角色、选角色，连上 sid 的玩家 TCP，EnterGame，装好解码器后 SceneReady。
+func login(ctx context.Context, accounts *svcaccount.BusClient, name string, sid int32, nonce string) (*client, error) {
+	openID := "seamless-" + nonce + "-" + name
+	account, err := accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: openID, Credential: "demo:" + openID})
+	if err != nil {
+		return nil, fmt.Errorf("login %s: %w", name, err)
+	}
+	role, err := accounts.CreateRole(ctx, account.ID, sid, "sl_"+name+"_"+nonce)
+	if err != nil {
+		return nil, fmt.Errorf("create role %s: %w", name, err)
+	}
+	session, err := accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	if err != nil {
+		return nil, fmt.Errorf("select role %s: %w", name, err)
+	}
+	endpoint := pairs(*endpoints)[sid]
+	if endpoint == "" {
+		return nil, fmt.Errorf("no endpoint for sid %d", sid)
+	}
+	raw, err := transport.Dial(ctx, transport.Config{Type: playertcp.TransportType, Endpoint: endpoint, DialTimeout: 5 * time.Second})
+	if err != nil {
+		return nil, err
+	}
+	c := &client{name: name, sid: sid, playerID: role.PlayerID, raw: raw,
+		pending: map[uint32]chan *transport.Packet{}, refs: map[frame.ObjectRef]int64{}, held: map[int64]*object{}, creates: map[int64]int{}}
+	if err := raw.WritePackets([]*transport.Packet{playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", role.PlayerID, session.Token))}); err != nil {
+		raw.Close()
+		return nil, err
+	}
+	c.start()
+	resp, err := c.call(ctx, msgid.MsgEnterGame, must(pb.MarshalEnterGameRequest(&pb.EnterGameRequest{ClientVersion: "seamlessdrill"})))
+	if err != nil {
+		return nil, err
+	}
+	entered, err := pb.UnmarshalEnterGameResponse(resp)
+	if err != nil || entered.Code != 0 {
+		return nil, fmt.Errorf("enter game %s: %v %+v", name, err, entered)
+	}
+	ready, err := c.call(ctx, msgid.MsgSceneReady, must(pb.MarshalSceneReadyRequest(&pb.SceneReadyRequest{})))
+	if err != nil {
+		return nil, err
+	}
+	if r, err := pb.UnmarshalSceneReadyResponse(ready); err != nil || r.Code != 0 {
+		return nil, fmt.Errorf("scene ready %s: %v %+v", name, err, r)
+	}
+	return c, nil
+}
+
+func (c *client) moveIntent(ctx context.Context, vx, vy int64) error {
+	resp, err := c.call(ctx, msgid.MsgMoveIntent, must(pb.MarshalMoveIntentRequest(&pb.MoveIntentRequest{VX: vx, VY: vy})))
+	if err != nil {
+		return err
+	}
+	r, err := pb.UnmarshalMoveIntentResponse(resp)
+	if err != nil {
+		return err
+	}
+	if r.Code != 0 {
+		return fmt.Errorf("%s move_intent (%d,%d): code %d %s", c.name, vx, vy, r.Code, r.Reason)
+	}
+	return nil
+}
+
+func (c *client) attack(ctx context.Context, target int64) (uint64, error) {
+	resp, err := c.call(ctx, msgid.MsgAttackTarget, must(pb.MarshalAttackTargetRequest(&pb.AttackTargetRequest{Target: target})))
+	if err != nil {
+		return 0, err
+	}
+	r, err := pb.UnmarshalAttackTargetResponse(resp)
+	if err != nil {
+		return 0, err
+	}
+	if r.Code != 0 {
+		return 0, fmt.Errorf("%s attack_target %d: code %d %s", c.name, target, r.Code, r.Reason)
+	}
+	return r.Seq, nil
+}
+
+// waitFor polls cond every 50ms until it holds or the timeout passes.
+func waitFor(ctx context.Context, timeout time.Duration, what string, cond func() (bool, string)) error {
+	deadline := time.Now().Add(timeout)
+	last := ""
+	for {
+		ok, detail := cond()
+		if ok {
+			return nil
+		}
+		last = detail
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s: not reached within %s (%s)", what, timeout, last)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// walkTo 以速度 speed 走向 x（只沿 X），到了停下；走动期间检查自己的同步不断档。
+func (c *client) walkTo(ctx context.Context, x, y int64, speed int64) error {
+	self, ok := c.self()
+	if !ok {
+		return fmt.Errorf("%s: does not see itself", c.name)
+	}
+	from := self.pos()
+	dx, dy := x-from.X, y-from.Y
+	length := math.Hypot(float64(dx), float64(dy))
+	if length < 5 {
+		return nil
+	}
+	vx := int64(float64(dx) / length * float64(speed))
+	vy := int64(float64(dy) / length * float64(speed))
+	if err := c.moveIntent(ctx, vx, vy); err != nil {
+		return err
+	}
+	err := waitFor(ctx, time.Duration(length/float64(speed)*float64(time.Second))+5*time.Second, c.name+" walk", func() (bool, string) {
+		s, ok := c.self()
+		if !ok {
+			return false, "self not seen"
+		}
+		p := s.pos()
+		remaining := (x-p.X)*vx + (y-p.Y)*vy
+		return remaining <= 0, fmt.Sprintf("at %v", p)
+	})
+	if stopErr := c.moveIntent(ctx, 0, 0); err == nil {
+		err = stopErr
+	}
+	return err
+}
+
+// gm runs one GM command on the process of sid.
+func gm(ctx context.Context, sid int32, name string, payload any) (map[string]any, error) {
+	addr := pairs(*opsAddrs)[sid]
+	body := map[string]any{"name": name}
+	if payload != nil {
+		body["payload"] = payload
+	}
+	raw, _ := json.Marshal(body)
+	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/admin/execute", bytes.NewReader(raw))
+	request.Header.Set("X-Admin-Token", *token)
+	request.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	var result struct {
+		OK      bool           `json:"ok"`
+		Message string         `json:"message"`
+		Data    map[string]any `json:"data"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber() // 实体 ID 超过 2^53，按 float64 解会丢位
+	if err := decoder.Decode(&result); err != nil {
+		return nil, fmt.Errorf("gm %s on %d: %s: %w", name, sid, data, err)
+	}
+	if !result.OK {
+		return nil, fmt.Errorf("gm %s on %d: %s", name, sid, result.Message)
+	}
+	return result.Data, nil
+}
+
+func nodeStat(stats map[string]any, key string) int64 {
+	node, _ := stats["node"].(map[string]any)
+	return asInt(node[key])
+}
+
+func attackStat(stats map[string]any, key string) int64 {
+	attacks, _ := stats["attacks"].(map[string]any)
+	return asInt(attacks[key])
+}
+
+// cellEntities lists the region entries of a Cell process (gm.scene.partition).
+func cellEntities(ctx context.Context, sid int32) ([]map[string]any, error) {
+	stats, err := gm(ctx, sid, "gm.scene.partition", nil)
+	if err != nil {
+		return nil, err
+	}
+	raw, _ := stats["entities"].([]any)
+	out := make([]map[string]any, 0, len(raw))
+	for _, item := range raw {
+		if m, ok := item.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+func roleIn(entities []map[string]any, id int64) string {
+	for _, e := range entities {
+		if asInt(e["id"]) == id {
+			s, _ := e["role"].(string)
+			return s
+		}
+	}
+	return ""
+}
+
+var evidence = map[string]any{}
+
+func step(name string, detail map[string]any) {
+	evidence[name] = detail
+	raw, _ := json.Marshal(detail)
+	fmt.Printf("STEP %s ok %s\n", name, raw)
+}
+
+// nearbyRemovals 是 since 之后 c 在 radius 以内丢掉的对象（视野不连续）。距离按客户端最后一份同步算，比服务端
+// 判断时的位置晚一两帧：走得越快余量越大（keepRadius 用于 ≤ 150 单位 / 秒，快速抖动用更小的半径）。
+func nearbyRemovals(c *client, since time.Time, radius int64) []removal {
+	var bad []removal
+	for _, r := range c.removalsSince(since) {
+		if r.Dist <= radius {
+			bad = append(bad, r)
+		}
+	}
+	return bad
+}
+
+// selfGap 是 since 之后 c 自己的同步更新的最大间隔。
+func selfGap(c *client, since time.Time) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var worst time.Duration
+	last := since
+	for _, t := range c.selfSeen {
+		if t.Before(since) {
+			continue
+		}
+		worst = max(worst, t.Sub(last))
+		last = t
+	}
+	return max(worst, time.Since(last))
+}
+
+func monstersNear(c *client, at point, radius int64) []int64 {
+	var ids []int64
+	for id, o := range c.snapshot() {
+		if entity.GetEntityKindFromID(id) == kindMonster && dist(o.pos(), at) <= radius {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
+func shell(command string) error {
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+	return cmd.Run()
+}
+
+func main() {
+	playertcp.MustRegister()
+	flag.Parse()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	err := run(ctx)
+	if *outPath != "" {
+		raw, _ := json.MarshalIndent(evidence, "", "  ")
+		_ = os.WriteFile(*outPath, append(raw, '\n'), 0o644)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "seamlessdrill: FAIL: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("seamlessdrill: all steps passed")
+}
+
+func run(ctx context.Context) error {
+	accountsClient, stop, err := accounts()
+	if err != nil {
+		return err
+	}
+	defer stop()
+	nonce := strconv.FormatInt(time.Now().UnixNano()%1_000_000_000, 36)
+
+	// 1. 登录 → 进分区场景：p1、p2 的 Base 是 sid 1000（不托管格的进程），p3 的 Base 是 sid 1001（同时是格 (0,0) 的 Cell）。
+	p1, err := login(ctx, accountsClient, "p1", 1000, nonce)
+	if err != nil {
+		return err
+	}
+	p2, err := login(ctx, accountsClient, "p2", 1000, nonce)
+	if err != nil {
+		return err
+	}
+	p3, err := login(ctx, accountsClient, "p3", 1001, nonce)
+	if err != nil {
+		return err
+	}
+	clients := []*client{p1, p2, p3}
+	for _, c := range clients {
+		c := c
+		if err := waitFor(ctx, 10*time.Second, c.name+" sees itself", func() (bool, string) {
+			s, ok := c.self()
+			return ok && s.hp() > 0, fmt.Sprintf("self %d held %s err %v", c.actorID, c.describe(), c.err())
+		}); err != nil {
+			return err
+		}
+	}
+	self1, _ := p1.self()
+	if err := waitFor(ctx, 5*time.Second, "p1 sees monsters near the border", func() (bool, string) {
+		ids := monstersNear(p1, self1.pos(), keepRadius)
+		return len(ids) >= 2, fmt.Sprint(ids)
+	}); err != nil {
+		return err
+	}
+	// 普通移动协议在分区场景里被拒（D6 = A）。
+	moveResp, err := p1.call(ctx, msgid.MsgMove, must(pb.MarshalMoveRequest(&pb.MoveRequest{X: 1, Y: 1})))
+	if err != nil {
+		return err
+	}
+	if r, _ := pb.UnmarshalMoveResponse(moveResp); r == nil || r.Code != 100043 {
+		return fmt.Errorf("move in a partitioned scene: want scene_partitioned, got %+v", r)
+	}
+	step("enter", map[string]any{"p1": p1.playerID, "p2": p2.playerID, "p3": p3.playerID, "p1_at": self1.pos(), "p1_hp": self1.hp(),
+		"monsters_near_p1": monstersNear(p1, self1.pos(), keepRadius), "move_refused": "scene_partitioned"})
+
+	// E4：分区场景里自己的 Player 字段（exp 等）经自身视图走同一条连接：AddExp 之后客户端看到自己的 exp 变了；
+	// SceneActor 的 mirror 不带这些字段。
+	soft("own_state", func() error {
+		var before int64
+		if err := waitFor(ctx, 5*time.Second, "p1 holds its own Player", func() (bool, string) {
+			o, ok := p1.ownPlayer()
+			before = asInt(o.fields["exp"])
+			return ok, p1.describe()
+		}); err != nil {
+			return err
+		}
+		resp, err := p1.call(ctx, msgid.MsgAddExp, must(pb.MarshalAddExpRequest(&pb.AddExpRequest{Amount: 7})))
+		if err != nil {
+			return err
+		}
+		if r, err := pb.UnmarshalAddExpResponse(resp); err != nil || r.Code != 0 {
+			return fmt.Errorf("add_exp: %v %+v", err, r)
+		}
+		if err := waitFor(ctx, 5*time.Second, "p1 sees its exp change", func() (bool, string) {
+			o, _ := p1.ownPlayer()
+			return asInt(o.fields["exp"]) == before+7, fmt.Sprintf("exp %v want %d", o.fields["exp"], before+7)
+		}); err != nil {
+			return err
+		}
+		if s, ok := p1.self(); ok {
+			if _, carries := s.fields["exp"]; carries {
+				return fmt.Errorf("the scene actor's mirror carries exp: %v", s.fields)
+			}
+		}
+		step("own_state", map[string]any{"exp_before": before, "exp_after": before + 7})
+		return nil
+	}())
+
+	// p2 走到格 (1,0) 里靠边的位置站着（他是 p1 的“附近的其它玩家”，也是之后崩溃重建的对象）；p3 留在格 (0,0)。
+	if err := p2.walkTo(ctx, 3060, 1530, 200); err != nil {
+		return err
+	}
+	if err := p3.walkTo(ctx, 2940, 1470, 200); err != nil {
+		return err
+	}
+	base0, _ := gm(ctx, 1000, "gm.scene.partition", nil)
+	cellA0, _ := gm(ctx, 1001, "gm.scene.partition", nil)
+	cellB0, _ := gm(ctx, 1002, "gm.scene.partition", nil)
+
+	// 2. 直线跨界：p1 从格 (0,0) 走进格 (1,0) 再走回来。附近的怪与其它玩家（p2、p3）在他的客户端里不被 remove。
+	since := time.Now()
+	// 走到格 (1,0) 里（过了 3000 + H，交给 sid 1002），此时 p2（Base 同在 sid 1000）就在旁边；走回格 (0,0) 后 p3
+	// （Base 在 sid 1001）在旁边。两头各确认一次手里有对方。
+	if err := p1.walkTo(ctx, 3150, 1500, 100); err != nil {
+		return err
+	}
+	if _, ok := p1.snapshot()[p2.actorID]; !ok {
+		return fmt.Errorf("straight crossing: p1 in cell (1,0) does not hold p2: %s", p1.describe())
+	}
+	if err := p1.walkTo(ctx, 2850, 1500, 100); err != nil {
+		return err
+	}
+	if _, ok := p1.snapshot()[p3.actorID]; !ok {
+		return fmt.Errorf("straight crossing: p1 back in cell (0,0) does not hold p3: %s", p1.describe())
+	}
+	if bad := nearbyRemovals(p1, since, keepRadius); len(bad) > 0 {
+		return fmt.Errorf("straight crossing: p1 lost nearby objects %+v", bad)
+	}
+	gap := selfGap(p1, since)
+	if gap > 500*time.Millisecond {
+		return fmt.Errorf("straight crossing: p1's own state stalled %s", gap)
+	}
+	base1, _ := gm(ctx, 1000, "gm.scene.partition", nil)
+	step("straight", map[string]any{"owner_changes": nodeStat(base1, "OwnerChanges") - nodeStat(base0, "OwnerChanges"),
+		"self_gap_ms": gap.Milliseconds(), "nearby_removed": 0, "creates_p2": p1.createCount(p2.actorID)})
+
+	// 3. 抖动：在分界线两侧每 300ms 换向，约 4s。
+	since = time.Now()
+	before := nodeStat(base1, "OwnerChanges")
+	// 从 2900 起，以 300 单位 / 秒每 0.67s 换向（每段 200）：每段都越过对面格的迟滞线（3050 / 2950），来回交接。
+	if err := p1.walkTo(ctx, 2900, 1500, 150); err != nil {
+		return err
+	}
+	for i := range 8 {
+		v := int64(300)
+		if i%2 == 1 {
+			v = -300
+		}
+		if err := p1.moveIntent(ctx, v, 0); err != nil {
+			return err
+		}
+		time.Sleep(667 * time.Millisecond)
+	}
+	if err := p1.moveIntent(ctx, 0, 0); err != nil {
+		return err
+	}
+	time.Sleep(500 * time.Millisecond)
+	if bad := nearbyRemovals(p1, since, jitterKeepRadius); len(bad) > 0 {
+		return fmt.Errorf("jitter: p1 lost nearby objects %+v", bad)
+	}
+	gap = selfGap(p1, since)
+	base2, _ := gm(ctx, 1000, "gm.scene.partition", nil)
+	if gap > 500*time.Millisecond {
+		return fmt.Errorf("jitter: p1's own state stalled %s", gap)
+	}
+	if changes := nodeStat(base2, "OwnerChanges") - before; changes < 4 {
+		return fmt.Errorf("jitter: only %d owner changes", changes)
+	}
+	step("jitter", map[string]any{"owner_changes": nodeStat(base2, "OwnerChanges") - before, "self_gap_ms": gap.Milliseconds()})
+
+	// 4. 斜穿：沿对角线穿过分界线（2 × 1 的网格没有四格交点，四格交点在框架的进程内用例里）。
+	since = time.Now()
+	if err := p1.walkTo(ctx, 3120, 1620, 120); err != nil {
+		return err
+	}
+	if err := p1.walkTo(ctx, 2880, 1380, 120); err != nil {
+		return err
+	}
+	if bad := nearbyRemovals(p1, since, keepRadius); len(bad) > 0 {
+		return fmt.Errorf("diagonal: p1 lost nearby objects %+v", bad)
+	}
+	gap = selfGap(p1, since)
+	if gap > 500*time.Millisecond {
+		return fmt.Errorf("diagonal: p1's own state stalled %s", gap)
+	}
+	step("diagonal", map[string]any{"self_gap_ms": gap.Milliseconds()})
+
+	// 5. 跨界打怪：p1 站在格 (0,0)，打格 (1,0) 里一只静止的怪 10 次；再站到格 (1,0) 打格 (0,0) 的怪 10 次。
+	//    结论按 Base 的计数核对，HP 按客户端看到的核对：HP 下降 = 伤害 × 结算数，且每次都结算了。
+	type hitPlan struct {
+		stand  point
+		target func() int64
+	}
+	plans := []hitPlan{
+		// 格 (0,0) 里（从未越过 3000 - H）打格 (1,0) 的怪（3010..3040）。
+		{stand: point{2950, 1500}, target: func() int64 { return pickMonster(p1, func(p point) bool { return p.X >= boundary && p.X < boundary+100 }) }},
+		// 走过 3000 + H 交给格 (1,0) 后打格 (0,0) 的怪（2960..2990）。
+		{stand: point{3070, 1500}, target: func() int64 { return pickMonster(p1, func(p point) bool { return p.X < boundary && p.X > boundary-100 }) }},
+	}
+	for i, plan := range plans {
+		if err := p1.walkTo(ctx, plan.stand.X, plan.stand.Y, 100); err != nil {
+			return err
+		}
+		time.Sleep(300 * time.Millisecond)
+		target := plan.target()
+		if target == 0 {
+			return fmt.Errorf("attack %d: no monster across the border in p1's view", i)
+		}
+		startHP := p1.snapshot()[target].hp()
+		// 第 3 项 = A：伤害是 p1 的 Real 上面板的攻击（客户端从自己 SceneActor 的 mirror 看到 cell_attack）。
+		atk := attackOf(p1)
+		statsBefore, _ := gm(ctx, 1000, "gm.scene.partition", nil)
+		forwardedBefore := cellsStat(ctx, "DamageForwarded")
+		const n = 10
+		var firstSeq, lastSeq uint64
+		for k := range n {
+			seq, err := p1.attack(ctx, target)
+			if err != nil {
+				return err
+			}
+			if k == 0 {
+				firstSeq = seq
+			}
+			lastSeq = seq
+			time.Sleep(30 * time.Millisecond)
+		}
+		var statsAfter map[string]any
+		if err := waitFor(ctx, 5*time.Second, "attack verdicts", func() (bool, string) {
+			statsAfter, _ = gm(ctx, 1000, "gm.scene.partition", nil)
+			got := attackStat(statsAfter, "applied") + attackStat(statsAfter, "rejected") + attackStat(statsAfter, "unknown") -
+				attackStat(statsBefore, "applied") - attackStat(statsBefore, "rejected") - attackStat(statsBefore, "unknown")
+			return got >= n, fmt.Sprintf("verdicts %d", got)
+		}); err != nil {
+			return err
+		}
+		applied := attackStat(statsAfter, "applied") - attackStat(statsBefore, "applied")
+		if applied != n {
+			return fmt.Errorf("attack %d: %d of %d applied (%v)", i, applied, n, statsAfter["attacks"])
+		}
+		wantHP := max(0, startHP-atk*applied)
+		if err := waitFor(ctx, 3*time.Second, "target hp on the client", func() (bool, string) {
+			o, ok := p1.snapshot()[target]
+			return ok && o.hp() == wantHP, fmt.Sprintf("hp %d want %d", o.hp(), wantHP)
+		}); err != nil {
+			return err
+		}
+		// 第 2 项：每一次攻击的结论都推到攻击方客户端：applied、伤害、目标 HP 逐次下降到客户端同步里看到的值。
+		soft(fmt.Sprintf("attack_results_%d", i), waitFor(ctx, 5*time.Second, "attack results pushed to the attacker", func() (bool, string) {
+			got := p1.resultsFor(firstSeq, lastSeq)
+			if len(got) < n {
+				return false, fmt.Sprintf("%d of %d pushes", len(got), n)
+			}
+			minHP := int32(math.MaxInt32)
+			for _, r := range got {
+				if r.Target != target || r.Outcome != "applied" || int64(r.Damage) != atk {
+					return false, fmt.Sprintf("push %+v", r)
+				}
+				minHP = min(minHP, r.TargetHP)
+			}
+			return int64(minHP) == wantHP, fmt.Sprintf("lowest pushed hp %d want %d", minHP, wantHP)
+		}))
+		step(fmt.Sprintf("attack_across_%d", i), map[string]any{"target": target, "start_hp": startHP, "end_hp": wantHP, "damage": atk,
+			"pushed_results": len(p1.resultsFor(firstSeq, lastSeq)),
+			"applied": applied, "duplicate": attackStat(statsAfter, "duplicate") - attackStat(statsBefore, "duplicate"),
+			"damage_forwarded_by_cells": cellsStat(ctx, "DamageForwarded") - forwardedBefore,
+			"damage_retries_total": cellsStat(ctx, "DamageRetries")})
+	}
+
+	// 第 3 项 = A：战斗面板的权威在 Cell 的 Real。p1 升一级（AddExp 一级的经验）：Base 在同一笔事务里推出新面板、提交后发给
+	// 当前 owner；客户端从自己 SceneActor 的 mirror 看到 cell_max_hp / cell_attack 变大、当前 HP 不回血；自己 Player 的
+	// self 视图里没有另一份 HP / 面板；之后打怪一次，伤害是新的攻击值。
+	soft("panel_level_up", func() error {
+		self, ok := p1.self()
+		if !ok {
+			return errors.New("p1 does not see itself")
+		}
+		maxBefore, atkBefore, hpBefore := asInt(self.fields["cell_max_hp"]), attackOf(p1), self.hp()
+		if maxBefore <= 0 || atkBefore != *damage {
+			return fmt.Errorf("before the level-up: cell_max_hp %d cell_attack %d, want a panel with the level-0 attack %d", maxBefore, atkBefore, *damage)
+		}
+		resp, err := p1.call(ctx, msgid.MsgAddExp, must(pb.MarshalAddExpRequest(&pb.AddExpRequest{Amount: 100})))
+		if err != nil {
+			return err
+		}
+		if r, err := pb.UnmarshalAddExpResponse(resp); err != nil || r.Code != 0 {
+			return fmt.Errorf("add_exp: %v %+v", err, r)
+		}
+		var maxAfter, atkAfter int64
+		if err := waitFor(ctx, 5*time.Second, "p1's scene actor shows the new panel", func() (bool, string) {
+			s, _ := p1.self()
+			maxAfter, atkAfter = asInt(s.fields["cell_max_hp"]), attackOf(p1)
+			return maxAfter > maxBefore && atkAfter > atkBefore, fmt.Sprintf("cell_max_hp %d cell_attack %d", maxAfter, atkAfter)
+		}); err != nil {
+			return err
+		}
+		if s, _ := p1.self(); s.hp() != hpBefore {
+			return fmt.Errorf("the level-up healed: cell_hp %d -> %d (the panel changes the cap only)", hpBefore, s.hp())
+		}
+		own, ok := p1.ownPlayer()
+		if !ok {
+			return errors.New("p1 does not hold its own Player")
+		}
+		for _, key := range []string{"cell_hp", "cell_max_hp", "cell_attack", "cell_power", "attr_final", "attr_base"} {
+			if _, has := own.fields[key]; has {
+				return fmt.Errorf("p1's own Player view carries %s (fields %v): a second copy of the HP / panel", key, own.fields)
+			}
+		}
+		state, err := gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p1.playerID})
+		if err != nil {
+			return err
+		}
+		if err := waitFor(ctx, 5*time.Second, "the base sees the panel confirmed", func() (bool, string) {
+			state, _ = gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p1.playerID})
+			return asInt(state["panel_ver"]) > 0 && asInt(state["panel_acked"]) == asInt(state["panel_ver"]) && asInt(state["attack"]) == atkAfter,
+				fmt.Sprintf("%v", state)
+		}); err != nil {
+			return err
+		}
+		here, _ := p1.self()
+		target := pickMonster(p1, func(p point) bool { return dist(p, here.pos()) <= 120 })
+		if target == 0 {
+			return errors.New("no monster near p1 to hit after the level-up")
+		}
+		startHP := p1.snapshot()[target].hp()
+		seq, err := p1.attack(ctx, target)
+		if err != nil {
+			return err
+		}
+		wantHP := max(0, startHP-atkAfter)
+		if err := waitFor(ctx, 5*time.Second, "one hit at the new attack", func() (bool, string) {
+			got := p1.resultsFor(seq, seq)
+			o := p1.snapshot()[target]
+			return len(got) == 1 && got[0].Outcome == "applied" && int64(got[0].Damage) == atkAfter && o.hp() == wantHP,
+				fmt.Sprintf("pushes %+v hp %d want %d", got, o.hp(), wantHP)
+		}); err != nil {
+			return err
+		}
+		step("panel_level_up", map[string]any{"cell_max_hp_before": maxBefore, "cell_max_hp_after": maxAfter, "cell_attack_before": atkBefore,
+			"cell_attack_after": atkAfter, "cell_hp": hpBefore, "base_panel": state, "hit_target": target, "hit_damage": atkAfter,
+			"target_hp": []int64{startHP, wantHP}})
+		return nil
+	}())
+
+	// 6. Monster 跨界：配置里有一只沿 +X / -X 往返的怪（walker，150 单位 / 秒，碰世界边缘反弹，约每 40s 过一次分界线）。
+	//    p2 站到它过线的位置旁边，等它从一个格交给另一个格（旧格 Real → 新格 Real），期间 p2 的客户端一直持有它。
+	walker, owner, walkerY, err := findWalker(ctx)
+	if err != nil {
+		return err
+	}
+	if err := p2.walkTo(ctx, boundary, walkerY+40, 200); err != nil {
+		return err
+	}
+	since = time.Now()
+	var sawWalker time.Time
+	if err := waitFor(ctx, 60*time.Second, "walker handed to the other cell", func() (bool, string) {
+		if o, ok := p2.snapshot()[walker]; ok {
+			if self, ok := p2.self(); ok && dist(o.pos(), self.pos()) <= 100 && sawWalker.IsZero() {
+				sawWalker = time.Now()
+			}
+		}
+		a, _ := cellEntities(ctx, 1001)
+		b, _ := cellEntities(ctx, 1002)
+		now := map[int32]string{1001: roleIn(a, walker), 1002: roleIn(b, walker)}
+		other := int32(1001)
+		if owner == 1001 {
+			other = 1002
+		}
+		return now[other] == "real" && now[owner] != "real" && !sawWalker.IsZero(), fmt.Sprintf("roles %v seen %v", now, !sawWalker.IsZero())
+	}); err != nil {
+		return err
+	}
+	if bad := nearbyRemovals(p2, since, walkerKeepRadius); len(bad) > 0 {
+		return fmt.Errorf("monster crossing: p2 lost nearby objects %+v", bad)
+	}
+	cellA1, _ := gm(ctx, 1001, "gm.scene.partition", nil)
+	cellB1, _ := gm(ctx, 1002, "gm.scene.partition", nil)
+	step("monster_cross", map[string]any{"walker": walker, "from_sid": owner, "creates_on_p2": p2.createCount(walker),
+		"handoffs_accepted_cell_a": nodeStat(cellA1, "HandoffsAccepted") - nodeStat(cellA0, "HandoffsAccepted"),
+		"handoffs_accepted_cell_b": nodeStat(cellB1, "HandoffsAccepted") - nodeStat(cellB0, "HandoffsAccepted")})
+	if err := p2.walkTo(ctx, 3060, 1530, 200); err != nil {
+		return err
+	}
+
+	// 7. kill -9 一个 Cell 进程（格 (1,0)，sid 1002）后玩家重进、HP 按快照恢复：p1 先打 p2 两下（HP 100 → 80），等回写
+	//    进 Player（Base 进程 sid 1000）；kill -9 sid 1002 再重启，p2 的 Base 静默看门狗重进，新的 SceneActor 按快照建出。
+	// p1 回到格 (0,0)（越过 3000 - H），这样被杀的只有 p2 所在的格。
+	if err := p1.walkTo(ctx, 2930, 1520, 100); err != nil {
+		return err
+	}
+	time.Sleep(300 * time.Millisecond)
+	p2Self, _ := p2.self()
+	for range 2 {
+		if _, err := p1.attack(ctx, p2.actorID); err != nil {
+			return err
+		}
+	}
+	wantHP := p2Self.hp() - 2*attackOf(p1)
+	if err := waitFor(ctx, 10*time.Second, "p2's hp written back to its Player", func() (bool, string) {
+		state, err := gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p2.playerID})
+		if err != nil {
+			return false, err.Error()
+		}
+		return asInt(state["hp"]) == wantHP && asInt(state["snapshot_seq"]) > 0, fmt.Sprintf("%v", state)
+	}); err != nil {
+		return err
+	}
+	before7, _ := gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p2.playerID})
+	if *killCmd == "" || *restartCmd == "" {
+		return errors.New("-kill and -restart are required")
+	}
+	// 崩溃期间每 500ms 记一次 Base 眼里的 p2（证据与排查用）。
+	var trace []map[string]any
+	traceDone := make(chan struct{})
+	traceStop := make(chan struct{})
+	go func() {
+		defer close(traceDone)
+		for {
+			select {
+			case <-traceStop:
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+			if state, err := gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p2.playerID}); err == nil {
+				state["at"] = time.Now().Format("15:04:05.000")
+				trace = append(trace, state)
+			}
+		}
+	}()
+	defer func() {
+		select {
+		case <-traceStop:
+		default:
+			close(traceStop)
+		}
+		<-traceDone
+		evidence["cell_crash_trace"] = trace
+	}()
+	killedAt := time.Now()
+	if err := shell(*killCmd); err != nil {
+		return fmt.Errorf("kill: %w", err)
+	}
+	if err := shell(*restartCmd); err != nil {
+		return fmt.Errorf("restart: %w", err)
+	}
+	restartedAt := time.Now()
+	if err := waitFor(ctx, 30*time.Second, "p2 re-entered with its snapshot hp", func() (bool, string) {
+		state, err := gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p2.playerID})
+		if err != nil {
+			return false, err.Error()
+		}
+		s, ok := p2.self()
+		return asInt(state["epoch"]) > asInt(before7["epoch"]) && ok && s.hp() == wantHP && s.updated.After(restartedAt),
+			fmt.Sprintf("base %v client hp %d", state, s.hp())
+	}); err != nil {
+		return err
+	}
+	after7, _ := gm(ctx, 1000, "gm.scene.partition", map[string]any{"player_id": p2.playerID})
+	cellB2, _ := gm(ctx, 1002, "gm.scene.partition", nil)
+	selfNow, _ := p2.self()
+	step("cell_crash", map[string]any{"p2_hp_before": wantHP, "p2_hp_after": selfNow.hp(), "epoch_before": before7["epoch"], "epoch_after": after7["epoch"],
+		"owner_after": after7["owner_sid"], "restart_seconds": restartedAt.Sub(killedAt).Seconds(),
+		"cell_b_monsters_respawned": cellB2["spawned"], "base_reenters": nodeStat(after7base(ctx), "Reenters")})
+
+	// 9（第 1 项）. Base 进程重启后回到保存的位置：p5 的 Base 是只做 Base 的 sid 1004。p5 走到 (1200, 1500)（远离 spawn
+	//    (2900, 1500)），等一次回写进 Player（快照位置随被接受的回写写进持久的 SavedPos*）；kill -9 sid 1004 再重启，p5
+	//    重新登录，进场位置是保存的位置，不是 spawn。
+	if *killBase != "" && *restartBase != "" {
+		soft("base_restart", func() error {
+			p5, err := login(ctx, accountsClient, "p5", 1004, nonce)
+			if err != nil {
+				return err
+			}
+			if err := waitFor(ctx, 10*time.Second, "p5 sees itself", func() (bool, string) {
+				_, ok := p5.self()
+				return ok, p5.describe()
+			}); err != nil {
+				return err
+			}
+			if err := p5.walkTo(ctx, 1200, 1500, 300); err != nil {
+				return err
+			}
+			if err := waitFor(ctx, 10*time.Second, "p5's position written back", func() (bool, string) {
+				state, err := gm(ctx, 1004, "gm.scene.partition", map[string]any{"player_id": p5.playerID})
+				if err != nil {
+					return false, err.Error()
+				}
+				return asInt(state["snapshot_seq"]) > 0 && dist(point{asInt(state["x"]), asInt(state["y"])}, point{1200, 1500}) <= 30, fmt.Sprintf("%v", state)
+			}); err != nil {
+				return err
+			}
+			time.Sleep(1500 * time.Millisecond) // 再过一次回写周期：保存的位置是停下之后的
+			// 停下的位置：walkTo 越过目标才停（客户端看到的自己晚约 100ms，300 单位 / 秒时越过 25～40），比较对象是停下之后
+			// Base 所知的位置（已随回写进快照），不是字面的 1200（v2.5 轮次里两次越过 40 而误报）。
+			stopped, err := gm(ctx, 1004, "gm.scene.partition", map[string]any{"player_id": p5.playerID})
+			if err != nil {
+				return err
+			}
+			saved := point{asInt(stopped["x"]), asInt(stopped["y"])}
+			if dist(saved, point{1200, 1500}) > 100 {
+				return fmt.Errorf("p5 stopped at %v, want near (1200, 1500), far from the spawn", saved)
+			}
+			p5.raw.Close()
+			if err := shell(*killBase); err != nil {
+				return fmt.Errorf("kill base: %w", err)
+			}
+			if err := shell(*restartBase); err != nil {
+				return fmt.Errorf("restart base: %w", err)
+			}
+			again, err := login(ctx, accountsClient, "p5", 1004, nonce)
+			if err != nil {
+				return err
+			}
+			defer again.raw.Close()
+			var at point
+			if err := waitFor(ctx, 20*time.Second, "p5 enters at its saved position", func() (bool, string) {
+				s, ok := again.self()
+				at = s.pos()
+				return ok && dist(at, saved) <= 30, fmt.Sprintf("self %v ok %v saved %v", at, ok, saved)
+			}); err != nil {
+				return err
+			}
+			step("base_restart", map[string]any{"p5": p5.playerID, "entered_at": at, "saved": saved, "spawn": point{2900, 1500}})
+			return nil
+		}())
+	}
+
+	// 7b. 跨 Base 的队伍面板（第 4 项 = A）：p1（Base sid 1000）邀请 p6（Base sid 1004），两人彼此不在视野里（相距超过
+	//     witness 半径）；入队后在各自的客户端里看见对方的 SceneActor（位置、HP），不论距离。p6 的 Base 被 kill -9 后
+	//     3 个快照周期（1s × 3）没更新，p1 的面板移除 p6；重启、重新登录后队伍还在（成员表在 Team 实体上），面板恢复；
+	//     p6 离队后两边的面板都移除对方；最后 p1 解散。
+	if *killBase != "" && *restartBase != "" {
+		soft("team_panel", teamPanel(ctx, accountsClient, nonce, p1))
+		if progress, _ := evidence["team_panel"].(map[string]any); progress["removed_after_leave_ms"] != nil {
+			soft("team_roster_cross_base", teamRosterCrossBase(ctx, p1))
+		}
+	}
+
+	// 8. 普通场景照常：sid 1003 没有分区配置，Move 照旧返回落定的位置，MoveIntent 返回 scene_not_partitioned。
+	p4, err := login(ctx, accountsClient, "p4", 1003, nonce)
+	if err != nil {
+		return err
+	}
+	moved, err := p4.call(ctx, msgid.MsgMove, must(pb.MarshalMoveRequest(&pb.MoveRequest{X: 510, Y: 505})))
+	if err != nil {
+		return err
+	}
+	if r, err := pb.UnmarshalMoveResponse(moved); err != nil || r.Code != 0 || r.X != 510 || r.Y != 505 {
+		return fmt.Errorf("ordinary scene move: %v %+v", err, r)
+	}
+	intent, err := p4.call(ctx, msgid.MsgMoveIntent, must(pb.MarshalMoveIntentRequest(&pb.MoveIntentRequest{VX: 1})))
+	if err != nil {
+		return err
+	}
+	if r, _ := pb.UnmarshalMoveIntentResponse(intent); r == nil || r.Code != 100044 {
+		return fmt.Errorf("move_intent in an ordinary scene: want scene_not_partitioned, got %+v", r)
+	}
+	if err := waitFor(ctx, 5*time.Second, "p4 sees itself in the ordinary scene", func() (bool, string) {
+		for id, o := range p4.snapshot() {
+			if entity.GetUniqueIDFromEntityID(id) == p4.playerID && o.pos() == (point{510, 505}) {
+				return true, ""
+			}
+		}
+		return false, fmt.Sprint(len(p4.snapshot()))
+	}); err != nil {
+		return err
+	}
+	step("ordinary_scene", map[string]any{"p4": p4.playerID, "move": "ok", "move_intent": "scene_not_partitioned"})
+
+	for _, c := range append(clients, p4) {
+		if err := c.err(); err != nil {
+			return err
+		}
+	}
+	baseEnd, _ := gm(ctx, 1000, "gm.scene.partition", nil)
+	cellAEnd, _ := gm(ctx, 1001, "gm.scene.partition", nil)
+	cellBEnd, _ := gm(ctx, 1002, "gm.scene.partition", nil)
+	evidence["stats_end"] = map[string]any{"base_1000": baseEnd, "cell_1001": cellAEnd, "cell_1002": cellBEnd}
+	evidence["stats_start"] = map[string]any{"base_1000": base0, "cell_1001": cellA0, "cell_1002": cellB0}
+	for _, c := range append(clients, p4) {
+		c.raw.Close()
+	}
+	if len(softFailures) > 0 {
+		return fmt.Errorf("%d added check(s) failed: %s", len(softFailures), strings.Join(softFailures, "; "))
+	}
+	return nil
+}
+
+// team 发一个组队请求（invite / accept / leave / disband / info），答复的业务码非 0 时报错。
+func (c *client) team(ctx context.Context, id uint32, payload []byte) (*pb.TeamResponse, error) {
+	resp, err := c.call(ctx, id, payload)
+	if err != nil {
+		return nil, err
+	}
+	r, err := pb.UnmarshalTeamResponse(resp)
+	if err != nil {
+		return nil, err
+	}
+	if r.Code != 0 {
+		return r, fmt.Errorf("%s team msg %d: code %d %s", c.name, id, r.Code, r.Reason)
+	}
+	return r, nil
+}
+
+// actorOf 是客户端手里玩家 playerID 的 SceneActor（本进程没有登记实体种类：按 kind 与 unique 认）。
+func (c *client) actorOf(playerID int64) (object, bool) {
+	for id, o := range c.snapshot() {
+		if entity.GetEntityKindFromID(id) == kindSceneActor && entity.GetUniqueIDFromEntityID(id) == playerID {
+			return o, true
+		}
+	}
+	return object{}, false
+}
+
+// removedAt 是客户端最近一次删除玩家 playerID 的 SceneActor 的时间（since 之后）。
+func (c *client) removedAt(playerID int64, since time.Time) (time.Time, bool) {
+	for _, r := range c.removalsSince(since) {
+		if entity.GetEntityKindFromID(r.ID) == kindSceneActor && entity.GetUniqueIDFromEntityID(r.ID) == playerID {
+			return r.At, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// teamPanel 是 7b 的演练（见 run 里的说明）。快照周期是 scene.partition.team.snapshot_every 的缺省 1s。
+func teamPanel(ctx context.Context, accountsClient *svcaccount.BusClient, nonce string, p1 *client) error {
+	const every = time.Second
+	p6, err := login(ctx, accountsClient, "p6", 1004, nonce)
+	if err != nil {
+		return err
+	}
+	if err := waitFor(ctx, 10*time.Second, "p6 sees itself", func() (bool, string) {
+		_, ok := p6.self()
+		return ok, p6.describe()
+	}); err != nil {
+		return err
+	}
+	self1, ok := p1.self()
+	if !ok {
+		return fmt.Errorf("p1 does not hold itself: %s", p1.describe())
+	}
+	target := point{600, 1500}
+	if dist(self1.pos(), target) < dist(self1.pos(), point{5400, 1500}) {
+		target = point{5400, 1500}
+	}
+	if err := p6.walkTo(ctx, target.X, target.Y, 300); err != nil {
+		return err
+	}
+	self1, _ = p1.self()
+	self6, _ := p6.self()
+	apart := dist(self1.pos(), self6.pos())
+	if apart <= 1000 {
+		return fmt.Errorf("p1 at %v and p6 at %v are %d apart, want them out of each other's view (> 1000)", self1.pos(), self6.pos(), apart)
+	}
+	if _, seen := p1.actorOf(p6.playerID); seen {
+		return fmt.Errorf("p1 already holds p6 before the team: %s", p1.describe())
+	}
+
+	invited, err := p1.team(ctx, msgid.MsgTeamInvite, must(pb.MarshalTeamInviteRequest(&pb.TeamInviteRequest{Invitee: p6.playerID})))
+	if err != nil {
+		return err
+	}
+	joined, err := p6.team(ctx, msgid.MsgTeamAccept, must(pb.MarshalTeamAcceptRequest(&pb.TeamAcceptRequest{TeamID: invited.TeamID})))
+	if err != nil {
+		return err
+	}
+	if joined.Leader != p1.playerID || len(joined.Members) != 2 {
+		return fmt.Errorf("after accept: %+v, want leader p1 and two members", joined)
+	}
+	seen := func(viewer, member *client, near point) error {
+		return waitFor(ctx, 5*time.Second, viewer.name+" sees "+member.name+" in the team panel", func() (bool, string) {
+			o, ok := viewer.actorOf(member.playerID)
+			return ok && dist(o.pos(), near) <= 30 && o.hp() > 0, fmt.Sprintf("held %v %v", ok, o.fields)
+		})
+	}
+	formed := time.Now()
+	if err := seen(p1, p6, self6.pos()); err != nil {
+		return err
+	}
+	if err := seen(p6, p1, self1.pos()); err != nil {
+		return err
+	}
+	panelAfter := time.Since(formed)
+	o6, _ := p1.actorOf(p6.playerID)
+	// 中间结果随做随记：后面的断言失败时 evidence.json 里仍有前面的观测。
+	progress := map[string]any{"team": invited.TeamID, "p1": p1.playerID, "p6": p6.playerID, "apart": apart,
+		"p1_sees_p6": o6.fields, "panel_after_ms": panelAfter.Milliseconds()}
+	evidence["team_panel"] = progress
+
+	// p6 的 Base 被 kill -9：快照停了，超过 3 个周期没更新，p1 的面板移除 p6（不早于最后一份快照之后 3 个周期）。
+	p6.raw.Close()
+	killed := time.Now()
+	if err := shell(*killBase); err != nil {
+		return fmt.Errorf("kill base: %w", err)
+	}
+	// 最后一份快照最早在 kill 之前一个周期（加一拍 Base 心跳）发出：kill 之后约 3 - 1.1 个周期之内面板里还有它。
+	time.Sleep(2*every - 400*time.Millisecond)
+	if _, still := p1.actorOf(p6.playerID); !still {
+		return fmt.Errorf("p6 left p1's panel %v after its base was killed, before 3 periods without a snapshot", time.Since(killed))
+	}
+	if err := waitFor(ctx, 6*time.Second, "p6 removed from p1's panel", func() (bool, string) {
+		_, still := p1.actorOf(p6.playerID)
+		return !still, ""
+	}); err != nil {
+		return err
+	}
+	removedAt, _ := p1.removedAt(p6.playerID, killed)
+	gone := removedAt.Sub(killed)
+	progress["removed_after_kill_ms"] = gone.Milliseconds()
+	if gone < 2*every-300*time.Millisecond || gone > 3*every+2*time.Second {
+		return fmt.Errorf("p6 left p1's panel %v after its base was killed, want about 3 periods (%v)", gone, 3*every)
+	}
+
+	// 重启：队伍在 Team 实体上，p6 重新登录后它的 Base 从 Team 重读成员表，面板恢复。
+	if err := shell(*restartBase); err != nil {
+		return fmt.Errorf("restart base: %w", err)
+	}
+	again, err := login(ctx, accountsClient, "p6", 1004, nonce)
+	if err != nil {
+		return err
+	}
+	defer again.raw.Close()
+	if err := waitFor(ctx, 20*time.Second, "p6 back in the world", func() (bool, string) {
+		_, ok := again.self()
+		return ok, again.describe()
+	}); err != nil {
+		return err
+	}
+	info, err := again.team(ctx, msgid.MsgTeamInfo, must(pb.MarshalTeamInfoRequest(&pb.TeamInfoRequest{})))
+	if err != nil {
+		return err
+	}
+	progress["restored_members"] = info.Members
+	if info.TeamID != invited.TeamID || len(info.Members) != 2 {
+		return fmt.Errorf("after p6's base restarted: team %+v, want team %d with both", info, invited.TeamID)
+	}
+	selfAgain, _ := again.self()
+	if err := seen(p1, again, selfAgain.pos()); err != nil {
+		return err
+	}
+	self1, _ = p1.self()
+	if err := seen(again, p1, self1.pos()); err != nil {
+		return err
+	}
+	progress["restored_after_restart"] = true
+
+	// p6 离队：两边的面板都移除对方（经成员表通知，远早于 3 个周期的过期）。
+	left := time.Now()
+	if _, err := again.team(ctx, msgid.MsgTeamLeave, must(pb.MarshalTeamLeaveRequest(&pb.TeamLeaveRequest{}))); err != nil {
+		return err
+	}
+	if err := waitFor(ctx, 5*time.Second, "p6 removed from p1's panel after leaving", func() (bool, string) {
+		_, still := p1.actorOf(again.playerID)
+		return !still, ""
+	}); err != nil {
+		return err
+	}
+	leftGone := time.Since(left)
+	if err := waitFor(ctx, 5*time.Second, "p1 removed from p6's panel after p6 left", func() (bool, string) {
+		_, still := again.actorOf(p1.playerID)
+		return !still, ""
+	}); err != nil {
+		return err
+	}
+	progress["removed_after_leave_ms"] = leftGone.Milliseconds()
+	step("team_panel", progress)
+	return nil
+}
+
+// teamRosterCrossBase：p6 在 sid 1004 上写过 Team（接受、离队）之后，p1 在 sid 1000 上再读 / 解散同一支队伍——两个 Base
+// 交替写同一个 Remote 托管实体（共享模式）。sid 1000 内存里的副本停在建队时的版本，写准入发现落后后从权威卸载重载
+// （main e12e3dc8，framework/remoteentity/batch.go 的 staleWriteTarget），这一步应照常成功。
+func teamRosterCrossBase(ctx context.Context, p1 *client) error {
+	rest, err := p1.team(ctx, msgid.MsgTeamInfo, must(pb.MarshalTeamInfoRequest(&pb.TeamInfoRequest{})))
+	if err != nil {
+		return err
+	}
+	if len(rest.Members) != 1 || rest.Members[0] != p1.playerID {
+		return fmt.Errorf("after p6 left: %+v, want only p1", rest)
+	}
+	disbanded, err := p1.team(ctx, msgid.MsgTeamDisband, must(pb.MarshalTeamDisbandRequest(&pb.TeamDisbandRequest{})))
+	if err != nil {
+		return err
+	}
+	after, err := p1.team(ctx, msgid.MsgTeamInfo, must(pb.MarshalTeamInfoRequest(&pb.TeamInfoRequest{})))
+	if err != nil {
+		return err
+	}
+	if after.TeamID != 0 {
+		return fmt.Errorf("after disband: %+v, want no team", after)
+	}
+	step("team_roster_cross_base", map[string]any{"members_after_leave": rest.Members, "disband_ver": disbanded.Ver})
+	return nil
+}
+
+// pickMonster 选 p1 视野里满足位置条件、HP 最高的一只怪。
+func pickMonster(c *client, where func(point) bool) int64 {
+	var best int64
+	bestHP := int64(-1)
+	for id, o := range c.snapshot() {
+		if entity.GetEntityKindFromID(id) != kindMonster || !where(o.pos()) {
+			continue
+		}
+		if o.hp() > bestHP {
+			best, bestHP = id, o.hp()
+		}
+	}
+	return best
+}
+
+// findWalker 从两个 Cell 的区域表里找那只在走的怪（vx != 0 的 Real）：它的 ID、所在格的 sid 与 y。
+func findWalker(ctx context.Context) (int64, int32, int64, error) {
+	for _, sid := range []int32{1001, 1002} {
+		entities, err := cellEntities(ctx, sid)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		for _, e := range entities {
+			if e["role"] == "real" && asInt(e["vx"]) != 0 && entity.GetEntityKindFromID(asInt(e["id"])) == kindMonster {
+				return asInt(e["id"]), sid, asInt(e["y"]), nil
+			}
+		}
+	}
+	return 0, 0, 0, errors.New("no walking monster in either cell")
+}
+
+// cellsStat 是两个 Cell 进程的某个 Node 计数之和。
+func cellsStat(ctx context.Context, key string) int64 {
+	var total int64
+	for _, sid := range []int32{1001, 1002} {
+		stats, err := gm(ctx, sid, "gm.scene.partition", nil)
+		if err == nil {
+			total += nodeStat(stats, key)
+		}
+	}
+	return total
+}
+
+func after7base(ctx context.Context) map[string]any {
+	stats, _ := gm(ctx, 1000, "gm.scene.partition", nil)
+	return stats
+}
+
+func (c *client) createCount(id int64) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.creates[id]
+}
+
+// attackOf 是客户端从自己 SceneActor 的 mirror 看到的面板攻击（第 3 项 = A：伤害按它结算）。mirror 里没有这个字段时
+// （没有面板）伤害是配置的 attack_damage；面板本身由 panel_level_up 一步严格核对（那里先要求 cell_max_hp 存在）。
+func attackOf(c *client) int64 {
+	s, _ := c.self()
+	if v, ok := s.fields["cell_attack"]; ok {
+		return asInt(v)
+	}
+	return *damage
+}
+
+// ownPlayer 是客户端手里自己的 Player（kind 是 Player、unique 是玩家 ID；分区场景里经 self 视图来，E4）。
+func (c *client) ownPlayer() (object, bool) {
+	for id, o := range c.snapshot() {
+		if entity.GetEntityKindFromID(id) != kindSceneActor && entity.GetUniqueIDFromEntityID(id) == c.playerID && o.ns == "player" {
+			if _, hasExp := o.fields["exp"]; hasExp {
+				return o, true
+			}
+		}
+	}
+	return object{}, false
+}
+
+// resultsFor 是 seq 在 [from, to] 之间的攻击结论推送。
+func (c *client) resultsFor(from, to uint64) []*pb.AttackResultPush {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []*pb.AttackResultPush
+	for _, r := range c.results {
+		if r.Seq >= from && r.Seq <= to {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// softFailures 收集追加检查（E4、第 1、2 项）的失败：一轮演练里全部跑完再报，修前一次就能看到每一项的红。
+var softFailures []string
+
+func soft(name string, err error) {
+	if err != nil {
+		softFailures = append(softFailures, name+": "+err.Error())
+		fmt.Printf("STEP %s FAIL %v\n", name, err)
+	}
+}

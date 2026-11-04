@@ -130,6 +130,7 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 
 - alliance 是工程里的一个业务服务（不是框架托管服务），mods：`nest`、`dataengine`、`remote_entity`、`nats`、`etcd`（注册发现），需要定时逻辑时加 `heartbeat` 或本地实体定时器（2.8）。
 - game 进程不再装 `remote_entity`，改装只读的 Mirror Mod（2.10 第 3 项），因此 game 进程**没有能力**写联盟实体；写只能走 RPC。
+  - **2026-11-04 合入无缝大世界原型后（待维护者确认）**：game 为分区场景的组队 `Team`（`service=game`、共享模式，成员在不同 game 进程上）重新装 `remote_entity`。联盟实体对 game 仍然不可写，保证改由第 2.10 第 1 项的归属守卫给出（`ForeignKinds`：认领与写准入返回 `entity.ErrRemoteKindNotOwned`），而不是 game 没有写运行时；取舍与另一种做法（Team 也归一个实体服务）见 [无缝大世界方案 §14](FEATURE-2026-11-03-seamless-world.md#14-合入-main2026-11-04)。
 - 缺省部署一个 alliance 实例：所有联盟在同一进程，任何多联盟操作都能一笔事务。容量不够时才加实例，按 2.7 路由。
 
 ### 2.2 实体与数据

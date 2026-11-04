@@ -122,6 +122,53 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
   （Redis Cluster 用 `-redis-cluster <种子,…>`；`make dev-run` 已代为执行）。
 - **`player:<id>` 凭据与 demo 渠道不是认证**：只为了让裸客户端跑通 demo，上线前按[功能逐项说明 · auth.go](WALKTHROUGH.md#authgo两种凭据)替换。
 
+## 分区场景（原型，分支 feat/seamless-world-prototype）
+
+缺省不分区：没有 `scene.partition` 的配置，game 跑普通场景，上面的一切照旧。`scene.partition.enabled: true` 把本进程的场景变成
+分区场景（`gameplay/cellworld`，Cell + Ghost）的一员：sid 在 `owners` 里的进程托管那个格（**Cell**），每个进程都是自己玩家的
+**Base**（Player 不迁移，玩家站在哪个格，那个格的进程上就有他的 SceneActor）。设计、取舍与端到端结果见
+[无缝大世界方案 §10](../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#10-v22demo-接入分区-scene2026-11-03)。
+
+每个 game 进程读同一份（加到 `configs/service/config.game*.yaml`；声明与校验在 `game/settings/partition.go`）：
+
+```yaml
+scene:
+  partition:
+    enabled: true
+    world: planet          # Cell / Base 消息的 NATS 主题命名空间（core pub/sub）
+    cell_size: 3000        # 2 × 1 个 3000 的格：世界 6000 × 3000
+    cols: 2
+    rows: 1
+    owners: ["1001", "1002"]   # 行优先：格 (0,0) 归 sid 1001，(1,0) 归 sid 1002
+    ghost_band: 500        # G：边界带
+    hysteresis: 50         # H：越出本格多远才交接
+    view_radius: 400       # R：witness 半径；R + H ≤ G，R ≥ Base 的最大离开半径 300
+    idle_period: 1s        # 附近没有玩家的怪的心跳档位（D1，缺省 1s；0 不降档）
+    writeback_every: 5s    # SceneActor 把 HP 与位置写回 Player
+    attack_damage: 10      # AttackTarget 的固定伤害
+    spawn_x: 2900          # 没有快照的玩家从这里进入
+    spawn_y: 1500
+    spawns:                # 按格的刷怪表：每个 Cell 启动时刷满落在自己格里的点
+      near_border: {x: 2960, y: 1500, count: 3, spread: 15}
+      walker: {x: 1500, y: 1700, count: 1, vx: 150}
+    team:                  # 组队与队伍面板（原型缺省，都可省略）
+      max_members: 4       # 一支队伍最多几人
+      invite_ttl: 60s      # 邀请多久不接受就过期（整秒）
+      snapshot_every: 1s   # 每名队员的 Base 多久把他的位置 / HP 发给其他队员的 Base；3 个周期没更新的队友从面板移除
+      resync_every: 10s    # Base 多久从 Team 重读一次成员表（兜住丢失的变化通知），长于 snapshot_every
+```
+
+分区场景里玩家用 `MoveIntent(vx, vy)`（速度，`(0,0)` 停下）移动、`AttackTarget(target)` 攻击；`Move` / `MoveTarget` 与
+`gm.scene.root` 返回 `scene_partitioned`；普通场景里 `MoveIntent` / `AttackTarget` 返回 `scene_not_partitioned`。客户端看到的
+其他玩家与自己是 `player` 命名空间（位置与 `cell_hp`），怪是 `monster`。`gm.scene.partition` 看本进程的格、计数与区域表。
+**组队与队伍面板**（维护者 2026-11-04 第 4 项 = A，只在分区场景）：`TeamInvite(invitee)`（没有队伍时建一支、自己当队长）、
+`TeamAccept(team_id)`、`TeamLeave()`（队长离队时队长交给剩下玩家 ID 最小的那名）、`TeamDisband()`（只有队长）、`TeamInfo()`，
+答复都是成员表（`TeamResponse`）。成员表在 Remote 托管的 `Team` 实体上（`service=game`、共享模式：成员在不同的 game 进程上；game 因此装着
+`remote_entity`，联盟实体对它是别的服务的、写不了），每个端点是一笔 [Team, Player] 事务；普通场景答 `scene_not_partitioned`，普通场景的组队仍是匹配（不动）。队友的位置与 HP 从**队伍面板**来：每名队员的 Base
+每 `snapshot_every` 把他的 SceneActor 状态发给其他队员的 Base，客户端在同一条同步流里收到队友的 SceneActor（`player`
+命名空间，位置与 `cell_hp`），不论距离；在视野里的队友就是同一个对象，不重复推。被邀请的人从别处得知队伍 ID（原型不推送邀请）。
+多进程端到端（两个 Cell、一个独立 Base、kill -9 后重建、跨 Base 的队伍面板、普通场景照常）：仓库的 `scripts/test-seamless-demo.sh`。
+
 ## 改这里的东西之后
 
 1. `GOWORK=off go test ./codegen/internal/roost/ -run TestDemo` —— 嵌入清单、步骤与文件一致性、生成后可解析。

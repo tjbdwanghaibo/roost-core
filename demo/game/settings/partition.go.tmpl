@@ -1,0 +1,174 @@
+package settings
+
+import (
+	"errors"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// ScenePartition 声明分区场景（gameplay/cellworld 的 Cell + Ghost，原型）：把 game 的场景切成静态网格，每个格由一个
+// game 进程（Cell）托管，玩家留在自己 sid 的进程（Base），站在哪个格就由那个格的 Cell 进程上的 SceneActor 代表。
+// 每个 game 进程读同一份；enabled 为 false（缺省）时本进程跑普通场景，其余键不读、不校验，demo 现有行为不变。
+//
+// 声明一次、加载时校验一次（维护者的配置规则）：cellworld 的几何约束（R + H ≤ G、W + H ≤ G、R ≥ Base 的最大
+// 离开半径）、owner 映射、慢档档位与刷怪点都在 ValidateConfig 里，进程启动前就拒绝，doctor 与 --check-config 同一份。
+type ScenePartition struct {
+	Enabled bool `config:"enabled" default:"false" help:"turn this process's scene into a member of the partitioned scene: a Cell when its sid is one of owners, otherwise a Base for its own players"`
+	// World 是 Cell / Base 之间消息的 NATS 主题命名空间（<world>.<sid>，core pub/sub，不经 JetStream）。
+	World string `config:"world" default:"seamless" help:"subject namespace of the cells' messages (letters, digits, - and _); every process of one partitioned scene uses the same"`
+	// 网格：原点 (0, 0)，cols × rows 个边长 cell_size 的方格；owners 按行优先给出每个格的 Cell 进程 sid。
+	CellSize int64    `config:"cell_size" default:"3000" min:"1" help:"side of one cell, in world units"`
+	Cols     int32    `config:"cols" default:"2" min:"1" help:"cells along X"`
+	Rows     int32    `config:"rows" default:"1" min:"1" help:"cells along Y"`
+	Owners   []string `config:"owners" help:"the sid of the Cell process of each cell, row-major (cell (0,0), (1,0), ..., then the next row); each sid owns one cell"`
+	// GhostBand G / Hysteresis H：Real 落在邻格外扩 G 的带里就向它发 Ghost；越出本格 H 才交接。
+	GhostBand  int64 `config:"ghost_band" default:"500" min:"1" help:"width of the band along a cell's edge whose reals are mirrored to the neighbour as ghosts (G)"`
+	Hysteresis int64 `config:"hysteresis" default:"50" min:"0" help:"how far a real may stray out of its cell before it is handed over (H)"`
+	// ViewRadius R 是 witness（Cell 发给 Base 的视野）的半径；WakeRadius W 是 NPC 降档 / 升档的判断半径（0 = R）。
+	ViewRadius int64 `config:"view_radius" default:"400" min:"1" help:"radius of a player's witness, the view its cell sends its Base (R); R + H <= G, and R must cover the Base's largest leave radius"`
+	WakeRadius int64 `config:"wake_radius" default:"0" min:"0" help:"a monster with no player within this radius drops to idle_period (W, 0 = view_radius); view_radius <= W and W + H <= G"`
+	// IdlePeriod 是附近没有玩家的 NPC 的心跳档位（D1；维护者 2026-11-03：demo 缺省 1s）。0 = 不降档。
+	IdlePeriod time.Duration `config:"idle_period" default:"1s" min:"0" help:"beat period of a monster no player is near (a heartbeat tier, a multiple of 50ms); 0 keeps every monster at 50ms"`
+	// WritebackEvery：SceneActor 把 HP 与位置写回 Player 的间隔（另在离场、交接放弃时写）。LeaseTimeout：Base 多久没续租
+	// SceneActor 就离场。
+	WritebackEvery time.Duration `config:"writeback_every" default:"5s" min:"100ms" help:"how often a player's SceneActor writes its HP and position back to the Player (also on leaving)"`
+	LeaseTimeout   time.Duration `config:"lease_timeout" default:"3s" min:"1s" help:"a SceneActor whose Base has not renewed its lease for this long leaves the scene"`
+	// MaxSpeed 是 MoveIntent 速度每个分量的上限；AttackDamage 是 AttackTarget 的固定伤害（D7 = A：技能 / Buff 不跨格）。
+	MaxSpeed     int64 `config:"max_speed" default:"300" min:"1" help:"largest move-intent speed per axis, units per second"`
+	AttackDamage int32 `config:"attack_damage" default:"10" min:"1" help:"the fixed damage of one attack_target"`
+	// 玩家进入时的位置与 HP（没有快照时）。
+	SpawnX   int64 `config:"spawn_x" default:"2900" help:"where a player with no snapshot in the partitioned scene enters, X"`
+	SpawnY   int64 `config:"spawn_y" default:"1500" help:"where a player with no snapshot in the partitioned scene enters, Y"`
+	PlayerHP int32 `config:"player_hp" default:"100" min:"1" help:"a player's HP the first time it enters the partitioned scene"`
+	// MonsterTemplate 是分区场景里刷出的 Monster 的模板（客户端按它画）。
+	MonsterTemplate int32 `config:"monster_template" default:"9001" help:"template id the partitioned scene's monsters are drawn with"`
+	// Team 是分区场景的组队与队伍面板（维护者 2026-11-04 第 4 项 = A）。
+	Team PartitionTeam `config:"team"`
+	// Spawns 是按格的刷怪表：每一项一个刷怪点，Cell 进程只刷落在自己格里的点（启动时刷满；原型不补刷，见 FEATURE §10）。
+	Spawns map[string]PartitionSpawn `config:"spawns" help:"spawn points of the partitioned scene, by name; each Cell spawns the points inside its own cell when it starts"`
+}
+
+// PartitionSpawn 是一个刷怪点：count 只在 (x, y) 起、沿 X 每隔 spread 一只，速度 (vx, vy)（走到世界边缘反弹）。
+type PartitionSpawn struct {
+	X      int64 `config:"x" help:"first monster, X"`
+	Y      int64 `config:"y" help:"first monster, Y"`
+	Count  int32 `config:"count" default:"1" min:"1" max:"1000" help:"how many monsters"`
+	Spread int64 `config:"spread" default:"20" min:"0" help:"distance between two monsters of the point, along X"`
+	VX     int64 `config:"vx" default:"0" help:"speed along X, units per second"`
+	VY     int64 `config:"vy" default:"0" help:"speed along Y, units per second"`
+	HP     int32 `config:"hp" default:"100" min:"1" help:"each monster's HP"`
+}
+
+// PartitionTeam 是分区场景的组队规则与队伍面板的节奏（原型缺省：demo 级合理值，产品可改）。成员表在 Remote 托管的
+// Team 实体上；每名队员的 Base 每 snapshot_every 把他的位置 / HP 发给其他队员的 Base，3 个周期没更新的队友从面板移除
+// （维护者定的规则，不另设键）；Base 每 resync_every 从 Team 重读一次成员表，兜住丢失的变化通知。
+type PartitionTeam struct {
+	MaxMembers    int32         `config:"max_members" default:"4" min:"2" max:"16" help:"most members of one team (prototype default)"`
+	InviteTTL     time.Duration `config:"invite_ttl" default:"60s" min:"1s" help:"an invitation not accepted within this expires"`
+	SnapshotEvery time.Duration `config:"snapshot_every" default:"1s" min:"100ms" help:"how often each member's Base sends the member's position and HP to the other members' Bases; a teammate with no snapshot for 3 of these leaves the team panel"`
+	ResyncEvery   time.Duration `config:"resync_every" default:"10s" min:"1s" help:"how often a Base rereads a member's roster from the team, so a lost change notice is caught; longer than snapshot_every"`
+}
+
+// PartitionBaseWatchPeriod 是 Base 心跳（看门狗 + 续租 + 队伍面板）的周期：cellworld NodeConfig.WatchPeriod 的缺省值，
+// 队伍快照按它的节拍发出，snapshot_every 不能比它短，且须是它的整数倍。
+const PartitionBaseWatchPeriod = 100 * time.Millisecond
+
+// PartitionMaxBaseLeaveRadius 是 Base 进程 Interest 能有的最大离开半径（internal/service/game/scene.go 的
+// sceneMaxLeaveRadius，那里有编译期断言二者一致）。客户端视野由 Base 的 Interest 按 mirror 位置决定，mirror 的位置
+// 只来自 witness：离开半径超过 witness 半径时，视野边上的对象会停在最后位置直到过期（FEATURE §8.4 v2-4）。
+const PartitionMaxBaseLeaveRadius = 300
+
+// ValidateConfig 在加载时检查 tag 管不到的规则；enabled 为 false 时什么都不查。
+func (p ScenePartition) ValidateConfig(bool) error {
+	if !p.Enabled {
+		return nil
+	}
+	var errs []error
+	bad := func(format string, args ...any) { errs = append(errs, fmt.Errorf("scene.partition: "+format, args...)) }
+	grid, err := p.Grid()
+	if err != nil {
+		bad("%v", err)
+	}
+	wake := p.WakeRadius
+	if wake == 0 {
+		wake = p.ViewRadius
+	}
+	switch {
+	case p.World == "" || strings.Trim(p.World, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != "":
+		bad("world %q: only letters, digits, - and _", p.World)
+	}
+	if p.ViewRadius+p.Hysteresis > p.GhostBand {
+		bad("view_radius %d + hysteresis %d must not exceed ghost_band %d: a neighbour's real within the view must be a ghost here", p.ViewRadius, p.Hysteresis, p.GhostBand)
+	}
+	if p.ViewRadius < PartitionMaxBaseLeaveRadius {
+		bad("view_radius %d must cover the Base's largest leave radius %d: what a client sees comes only from the witness", p.ViewRadius, PartitionMaxBaseLeaveRadius)
+	}
+	if wake < p.ViewRadius || wake+p.Hysteresis > p.GhostBand {
+		bad("wake_radius %d must be in [view_radius %d, ghost_band %d - hysteresis %d]", wake, p.ViewRadius, p.GhostBand, p.Hysteresis)
+	}
+	if p.IdlePeriod != 0 && (!slices.Contains(heartbeat.Periods[:], p.IdlePeriod) || p.IdlePeriod <= heartbeat.Periods[0] || p.IdlePeriod%heartbeat.Periods[0] != 0) {
+		bad("idle_period %v must be 0 or a heartbeat tier longer than %v", p.IdlePeriod, heartbeat.Periods[0])
+	}
+	if t := p.Team; t.SnapshotEvery < PartitionBaseWatchPeriod || t.SnapshotEvery%PartitionBaseWatchPeriod != 0 {
+		bad("team.snapshot_every %v must be a multiple of the Base beat %v", t.SnapshotEvery, PartitionBaseWatchPeriod)
+	}
+	if t := p.Team; t.ResyncEvery <= t.SnapshotEvery {
+		bad("team.resync_every %v must exceed team.snapshot_every %v", t.ResyncEvery, t.SnapshotEvery)
+	}
+	if t := p.Team; t.InviteTTL%time.Second != 0 {
+		bad("team.invite_ttl %v must be whole seconds (invitations expire on the second)", t.InviteTTL)
+	}
+	if p.LeaseTimeout <= 500*time.Millisecond {
+		bad("lease_timeout %v must exceed the Base's lease renewal (500ms)", p.LeaseTimeout)
+	}
+	if grid != nil {
+		for name, spawn := range p.Spawns {
+			last := spatial.Point{X: spawn.X + int64(spawn.Count-1)*spawn.Spread, Y: spawn.Y}
+			if !grid.Bounds().Contains(spawn.Pos()) || !grid.Bounds().Contains(last) {
+				bad("spawns.%s: %v..%v is outside the world %v", name, spawn.Pos(), last, grid.Bounds())
+			}
+			if abs(spawn.VX) > p.MaxSpeed || abs(spawn.VY) > p.MaxSpeed {
+				bad("spawns.%s: speed (%d, %d) exceeds max_speed %d", name, spawn.VX, spawn.VY, p.MaxSpeed)
+			}
+		}
+		if !grid.Bounds().Contains(spatial.Point{X: p.SpawnX, Y: p.SpawnY}) {
+			bad("spawn (%d, %d) is outside the world %v", p.SpawnX, p.SpawnY, grid.Bounds())
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Grid 是 owners 等键描述的静态分区。
+func (p ScenePartition) Grid() (*cellworld.Grid, error) {
+	if len(p.Owners) != int(p.Cols)*int(p.Rows) {
+		return nil, fmt.Errorf("owners lists %d sids for %d x %d cells", len(p.Owners), p.Cols, p.Rows)
+	}
+	owners := make(map[cellworld.CellID]int32, len(p.Owners))
+	for i, raw := range p.Owners {
+		sid, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 32)
+		if err != nil || sid <= 0 {
+			return nil, fmt.Errorf("owners[%d] = %q is not a sid", i, raw)
+		}
+		owners[cellworld.CellID{Col: int32(i) % p.Cols, Row: int32(i) / p.Cols}] = int32(sid)
+	}
+	return cellworld.NewGrid(cellworld.GridConfig{
+		CellSize: p.CellSize, Cols: p.Cols, Rows: p.Rows, GhostBand: p.GhostBand, Hysteresis: p.Hysteresis, Owners: owners,
+	})
+}
+
+// Pos 是刷怪点第一只的位置。
+func (s PartitionSpawn) Pos() spatial.Point { return spatial.Point{X: s.X, Y: s.Y} }
+
+func abs(v int64) int64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}

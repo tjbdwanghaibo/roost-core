@@ -1,0 +1,40 @@
+{
+  "team_panel": {
+    "apart": 2483,
+    "p1": 100001,
+    "p1_sees_p6": {
+      "_id": 102405145,
+      "cell_attack": 10,
+      "cell_hp": 100,
+      "cell_max_hp": 100,
+      "cell_power": 30,
+      "pos_x": 5420,
+      "pos_y": 1500
+    },
+    "p6": 100005,
+    "panel_after_ms": 152,
+    "removed_after_kill_ms": 2903,
+    "removed_after_leave_ms": 86,
+    "restored_after_restart": true,
+    "restored_members": [
+      100001,
+      100005
+    ],
+    "team": 4611686018427388957
+  },
+  "base_restart": {
+    "entered_at": {
+      "X": 1190,
+      "Y": 1500
+    },
+    "p5": 100004,
+    "saved": {
+      "X": 1190,
+      "Y": 1500
+    },
+    "spawn": {
+      "X": 2900,
+      "Y": 1500
+    }
+  }
+}

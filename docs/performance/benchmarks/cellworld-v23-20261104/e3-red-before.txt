@@ -1,0 +1,10 @@
+--- FAIL: TestServiceInstallsInstanceHandlersBeforeTheEngineStarts (0.00s)
+    nest_mod_test.go:343: InstallNestHandlers called 0 time(s), want 1
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/nest	0.221s
+FAIL
+--- FAIL: TestModsSeeTheRunningServiceBeforeTheyStart (0.00s)
+    app_test.go:965: ModService at Provide = <nil>, at Start = <nil>; want the running service 0x…
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/app	0.169s
+FAIL

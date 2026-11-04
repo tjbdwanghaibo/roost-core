@@ -1,0 +1,17 @@
+# D1 用例对空桩（配置字段、Actor.SetCellPeriod、计数已加，降档逻辑未实现）的输出，2026-11-03，macOS Apple M5
+# GOWORK=off go test -count=1 -run 'TestIdle' ./gameplay/cellworld/
+--- FAIL: TestIdleTierWithoutPlayersAndWakeOnApproach (3.01s)
+    tier_test.go:62: timed out waiting for npc tier
+--- FAIL: TestIdleTierNoFlappingAtWakeEdge (3.01s)
+    tier_test.go:96: timed out waiting for npc tier
+--- FAIL: TestIdleTierGhostSurvivesSlowBeats (3.01s)
+    tier_test.go:132: timed out waiting for npc tier
+--- FAIL: TestIdleTierFastCrossingHandsOffInsideBand (2.00s)
+    tier_test.go:158: timed out waiting for npc tier
+--- FAIL: TestIdleTierDamageAcrossBoundaryAppliedOnce (3.01s)
+    tier_test.go:202: timed out waiting for npc tier
+--- FAIL: TestIdleBeatIntegratesWholePeriodAndFreezesInsideBand (0.00s)
+    tier_test.go:285: idle beat moved npc to x=5050 role real, want x=6000 (one 1s at 1000/s) and still real
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	14.673s
+FAIL

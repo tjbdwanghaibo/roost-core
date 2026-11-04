@@ -674,6 +674,10 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 {{- if $p.IsGroup}}
 	e{{$p.Index}} := make([]{{$p.Type}}, groupSize{{$p.Index}})
 	for i := 0; i < groupSize{{$p.Index}}; i++ {
+		if es[i+index] == nil {
+			err = nest.EntityNotFoundError()
+			return
+		}
 		groupEntity, ok := es[i+index].({{$p.Type}})
 		if !ok {
 			err = nest.ErrEntityTypeMismatch
@@ -682,6 +686,10 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 		e{{$p.Index}}[i] = groupEntity
 	}
 {{- else}}
+	if es[index] == nil {
+		err = nest.EntityNotFoundError()
+		return
+	}
 	e{{$p.Index}}, ok := es[index].({{$p.Type}})
 	if !ok {
 		err = nest.ErrEntityTypeMismatch
@@ -696,6 +704,10 @@ func invoke{{trimHandler .Name}}({{if $.ReceiverType}}receiver {{$.ReceiverType}
 		return
 	}
 {{- range $i, $p := .Entities}}
+	if es[{{$i}}] == nil {
+		err = nest.EntityNotFoundError()
+		return
+	}
 	e{{$p.Index}}, ok := es[{{$i}}].({{$p.Type}})
 	if !ok {
 		err = nest.ErrEntityTypeMismatch

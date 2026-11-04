@@ -1,0 +1,59 @@
+=== v2-r1 idle=0 players=spread Tue Nov  3 20:55:51 CST 2026
+=== RUN   TestCellWorldMeasure
+=== RUN   TestCellWorldMeasure/1000
+    measure_test.go:122: idle period 0ms, players concentrated in one cell false
+    measure_test.go:123: level 1000 NPC/cell, 40 players, window 20s; base (parent process, incl. Sync mirrors and client decode) CPU 11.2% of one core; views accepted 16007 stale 2 owner changes 7 re-enters 0; witness latency p50 0.32ms p99 1.41ms max 4.88ms (n=16007); mirrors 385
+    measure_test.go:137: cell (0,0): idle NPCs 0 of 1021 reals, actor beats 20311/s, tier changes idle 0 fast 0
+    measure_test.go:139: cell (0,0): reals 1021 ghosts 127 | CPU 32.5% of one core | region beat p50 0.43ms p99 1.88ms max 7.65ms | out 1266 msg/s 460 KB/s, in 1541 msg/s 312 KB/s | ghost latency p50 0.28ms p99 1.47ms (n=26993) | handoffs 75 (p50 0.51ms p99 1.85ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:137: cell (1,0): idle NPCs 0 of 1015 reals, actor beats 20347/s, tier changes idle 0 fast 0
+    measure_test.go:139: cell (1,0): reals 1015 ghosts 110 | CPU 33.7% of one core | region beat p50 0.44ms p99 1.60ms max 3.29ms | out 1520 msg/s 581 KB/s, in 1452 msg/s 272 KB/s | ghost latency p50 0.24ms p99 1.17ms (n=22672) | handoffs 72 (p50 0.61ms p99 3.17ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:137: cell (0,1): idle NPCs 0 of 983 reals, actor beats 19787/s, tier changes idle 0 fast 0
+    measure_test.go:139: cell (0,1): reals 983 ghosts 127 | CPU 35.2% of one core | region beat p50 0.40ms p99 1.75ms max 2.89ms | out 1467 msg/s 437 KB/s, in 1363 msg/s 286 KB/s | ghost latency p50 0.24ms p99 1.06ms (n=23977) | handoffs 71 (p50 0.55ms p99 2.11ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:137: cell (1,1): idle NPCs 0 of 1021 reals, actor beats 20362/s, tier changes idle 0 fast 0
+    measure_test.go:139: cell (1,1): reals 1021 ghosts 102 | CPU 35.5% of one core | region beat p50 0.45ms p99 1.88ms max 3.03ms | out 1436 msg/s 416 KB/s, in 1345 msg/s 255 KB/s | ghost latency p50 0.25ms p99 1.27ms (n=23542) | handoffs 54 (p50 0.57ms p99 2.90ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+=== RUN   TestCellWorldMeasure/5000
+    measure_test.go:122: idle period 0ms, players concentrated in one cell false
+    measure_test.go:123: level 5000 NPC/cell, 40 players, window 20s; base (parent process, incl. Sync mirrors and client decode) CPU 15.2% of one core; views accepted 15998 stale 2 owner changes 7 re-enters 0; witness latency p50 0.26ms p99 0.87ms max 1.78ms (n=15998); mirrors 1719
+    measure_test.go:137: cell (0,0): idle NPCs 0 of 5060 reals, actor beats 100750/s, tier changes idle 0 fast 0
+    measure_test.go:139: cell (0,0): reals 5060 ghosts 624 | CPU 83.4% of one core | region beat p50 0.84ms p99 3.52ms max 4.30ms | out 2141 msg/s 1881 KB/s, in 2022 msg/s 1246 KB/s | ghost latency p50 0.30ms p99 1.24ms (n=36073) | handoffs 334 (p50 0.73ms p99 2.92ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:137: cell (1,0): idle NPCs 0 of 5000 reals, actor beats 100231/s, tier changes idle 0 fast 0
+    measure_test.go:139: cell (1,0): reals 5000 ghosts 615 | CPU 84.6% of one core | region beat p50 0.95ms p99 2.74ms max 3.92ms | out 2232 msg/s 2398 KB/s, in 2221 msg/s 1172 KB/s | ghost latency p50 0.33ms p99 1.53ms (n=37566) | handoffs 330 (p50 0.73ms p99 1.97ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:137: cell (0,1): idle NPCs 0 of 4993 reals, actor beats 99966/s, tier changes idle 0 fast 0
+    measure_test.go:139: cell (0,1): reals 4993 ghosts 627 | CPU 79.0% of one core | region beat p50 1.13ms p99 2.91ms max 3.04ms | out 1906 msg/s 1827 KB/s, in 2070 msg/s 1236 KB/s | ghost latency p50 0.38ms p99 2.15ms (n=37526) | handoffs 372 (p50 0.91ms p99 2.68ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:137: cell (1,1): idle NPCs 0 of 4986 reals, actor beats 99872/s, tier changes idle 0 fast 0
+    measure_test.go:139: cell (1,1): reals 4986 ghosts 598 | CPU 79.4% of one core | region beat p50 0.80ms p99 2.90ms max 3.44ms | out 2027 msg/s 1747 KB/s, in 2003 msg/s 1185 KB/s | ghost latency p50 0.29ms p99 1.57ms (n=36174) | handoffs 328 (p50 1.04ms p99 3.18ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+--- PASS: TestCellWorldMeasure (52.45s)
+    --- PASS: TestCellWorldMeasure/1000 (26.17s)
+    --- PASS: TestCellWorldMeasure/5000 (26.28s)
+PASS
+=== d1-r1 idle=1000 players=spread Tue Nov  3 20:56:44 CST 2026
+=== RUN   TestCellWorldMeasure
+=== RUN   TestCellWorldMeasure/1000
+    measure_test.go:122: idle period 1000ms, players concentrated in one cell false
+    measure_test.go:123: level 1000 NPC/cell, 40 players, window 20s; base (parent process, incl. Sync mirrors and client decode) CPU 12.1% of one core; views accepted 16009 stale 0 owner changes 7 re-enters 0; witness latency p50 0.27ms p99 0.98ms max 2.28ms (n=16009); mirrors 387
+    measure_test.go:137: cell (0,0): idle NPCs 899 of 1021 reals, actor beats 3339/s, tier changes idle 236 fast 246
+    measure_test.go:139: cell (0,0): reals 1021 ghosts 126 | CPU 14.0% of one core | region beat p50 0.72ms p99 1.92ms max 2.49ms | out 601 msg/s 269 KB/s, in 622 msg/s 95 KB/s | ghost latency p50 0.19ms p99 0.88ms (n=8631) | handoffs 75 (p50 0.54ms p99 2.66ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:137: cell (1,0): idle NPCs 847 of 1015 reals, actor beats 4491/s, tier changes idle 385 fast 355
+    measure_test.go:139: cell (1,0): reals 1015 ghosts 108 | CPU 14.5% of one core | region beat p50 0.76ms p99 1.65ms max 2.06ms | out 716 msg/s 381 KB/s, in 570 msg/s 65 KB/s | ghost latency p50 0.23ms p99 1.17ms (n=5006) | handoffs 72 (p50 0.47ms p99 1.57ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:137: cell (0,1): idle NPCs 880 of 983 reals, actor beats 2887/s, tier changes idle 199 fast 219
+    measure_test.go:139: cell (0,1): reals 983 ghosts 129 | CPU 11.2% of one core | region beat p50 0.70ms p99 1.91ms max 2.21ms | out 409 msg/s 219 KB/s, in 464 msg/s 63 KB/s | ghost latency p50 0.23ms p99 1.08ms (n=5967) | handoffs 71 (p50 0.47ms p99 1.59ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:137: cell (1,1): idle NPCs 929 of 1021 reals, actor beats 2803/s, tier changes idle 196 fast 193
+    measure_test.go:139: cell (1,1): reals 1021 ghosts 103 | CPU 10.6% of one core | region beat p50 0.65ms p99 1.84ms max 2.17ms | out 304 msg/s 177 KB/s, in 387 msg/s 45 KB/s | ghost latency p50 0.20ms p99 1.01ms (n=4364) | handoffs 54 (p50 0.39ms p99 1.29ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+=== RUN   TestCellWorldMeasure/5000
+    measure_test.go:122: idle period 1000ms, players concentrated in one cell false
+    measure_test.go:123: level 5000 NPC/cell, 40 players, window 20s; base (parent process, incl. Sync mirrors and client decode) CPU 18.9% of one core; views accepted 16018 stale 1 owner changes 7 re-enters 0; witness latency p50 0.35ms p99 0.95ms max 42.82ms (n=16018); mirrors 1729
+    measure_test.go:137: cell (0,0): idle NPCs 4532 of 5059 reals, actor beats 14780/s, tier changes idle 1159 fast 1162
+    measure_test.go:139: cell (0,0): reals 5059 ghosts 617 | CPU 30.7% of one core | region beat p50 2.31ms p99 4.57ms max 15.69ms | out 1180 msg/s 955 KB/s, in 1355 msg/s 343 KB/s | ghost latency p50 0.24ms p99 2.94ms (n=22712) | handoffs 335 (p50 0.62ms p99 3.90ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:137: cell (1,0): idle NPCs 4230 of 4999 reals, actor beats 21325/s, tier changes idle 1900 fast 1801
+    measure_test.go:139: cell (1,0): reals 4999 ghosts 610 | CPU 37.5% of one core | region beat p50 2.36ms p99 4.26ms max 4.67ms | out 1494 msg/s 1528 KB/s, in 1110 msg/s 190 KB/s | ghost latency p50 0.25ms p99 0.88ms (n=15311) | handoffs 332 (p50 0.52ms p99 3.41ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:137: cell (0,1): idle NPCs 4576 of 4993 reals, actor beats 12877/s, tier changes idle 913 fast 913
+    measure_test.go:139: cell (0,1): reals 4993 ghosts 622 | CPU 26.4% of one core | region beat p50 2.14ms p99 3.70ms max 4.04ms | out 918 msg/s 790 KB/s, in 951 msg/s 210 KB/s | ghost latency p50 0.28ms p99 2.56ms (n=15138) | handoffs 370 (p50 0.62ms p99 4.14ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+    measure_test.go:137: cell (1,1): idle NPCs 4518 of 4990 reals, actor beats 12940/s, tier changes idle 875 fast 939
+    measure_test.go:139: cell (1,1): reals 4990 ghosts 595 | CPU 26.4% of one core | region beat p50 2.16ms p99 4.16ms max 5.08ms | out 753 msg/s 685 KB/s, in 941 msg/s 164 KB/s | ghost latency p50 0.23ms p99 2.33ms (n=14902) | handoffs 328 (p50 0.57ms p99 3.97ms), rejected 0 aborted 0 retransmits 0 | outbox drops 0 dispatch errors 0 conflicts 0
+--- PASS: TestCellWorldMeasure (52.46s)
+    --- PASS: TestCellWorldMeasure/1000 (26.17s)
+    --- PASS: TestCellWorldMeasure/5000 (26.29s)
+PASS
+=== v2-r2 idle=0 players=spread Tue Nov  3 20:57:37 CST 2026
+=== RUN   TestCellWorldMeasure
+=== RUN   TestCellWorldMeasure/1000

@@ -450,15 +450,20 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 		t.Errorf("controller does not hold the Player lifecycle:\n%s", controller)
 	}
 	// Guilds live in the alliance service (FEATURE-2026-11-04-alliance-service
-	// §2.6): the game owns no Remote entity, reads guilds through read-only
-	// mirrors and changes them only through the alliance RPC.
+	// §2.6): the game reads guilds through the mirrors and changes them only
+	// through the alliance RPC. It keeps remote_entity for the partitioned
+	// scene's Team, the one Remote kind it owns (FEATURE-2026-11-03-seamless-world
+	// §14); the alliance kinds are foreign to its Remote runtime.
 	demoManifest, err := LoadManifest(target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	gameSpec := demoManifest.Services["game"]
-	if contains(gameSpec.Mods, "remote_entity") || !contains(gameSpec.Mods, "remote_mirror") || !contains(gameSpec.UsesRpcs, "alliance") {
-		t.Errorf("game mods %v, uses_rpcs %v: want remote_mirror without remote_entity, and the alliance RPC", gameSpec.Mods, gameSpec.UsesRpcs)
+	if !contains(gameSpec.Mods, "remote_entity") || contains(gameSpec.Mods, "remote_mirror") || !contains(gameSpec.UsesRpcs, "alliance") {
+		t.Errorf("game mods %v, uses_rpcs %v: want remote_entity (for its Team) without remote_mirror, and the alliance RPC", gameSpec.Mods, gameSpec.UsesRpcs)
+	}
+	if ownership := read("internal/registry/ownership_gen.go"); !strings.Contains(ownership, "alliance.EntityKindAlliance") || !strings.Contains(ownership, "team.EntityKindTeam") {
+		t.Errorf("ownership does not split the alliance kinds and the team between the two services:\n%s", ownership)
 	}
 	if guild := read("game/controllers/player/guild.go"); !strings.Contains(guild, "controller.alliances.Join(") || !strings.Contains(guild, "entity.RemoteReadMonotonic") {
 		t.Errorf("guild endpoints do not go through the alliance RPC and the mirrors:\n%s", guild)

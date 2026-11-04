@@ -116,23 +116,29 @@ func applyDemoTemplate(m *Manifest, gameService string) error {
 	}
 	// The guild is the alliance service's (demo_alliance.go): every alliance
 	// and every player's membership guard is owned and written by that
-	// service. The game process gets the read-only Remote mirror runtime and
-	// no Remote write runtime at all (the default game mods include
-	// remote_entity; it is taken out here) — without remote_entity it has no way to
-	// write, or claim, a guild entity, so the alliance RPC is the only path to
-	// a guild write (decision S of the alliance plan). uses_rpcs: [alliance]
-	// is added once the rpc exists (demoGameUsesAlliance).
+	// service, and the game reads them through the Remote mirror the
+	// remote_entity Mod also serves. The game has remote_entity for the one
+	// Remote kind it owns itself: a
+	// partitioned scene's Team (service=<game>, shared between the game
+	// processes that are its members' Bases; FEATURE-2026-11-03-seamless-world
+	// §14). The alliance kinds are foreign to it (service=alliance), so its
+	// Remote runtime refuses to claim or write them
+	// (entity.ErrRemoteKindNotOwned): the alliance RPC stays the only path to
+	// a guild write (decision S of the alliance plan), held by the framework's
+	// guard rather than by the game lacking the runtime. A caller who narrowed
+	// -mods still gets it: the Team cannot be written without it. uses_rpcs:
+	// [alliance] is added once the rpc exists (demoGameUsesAlliance).
 	game = m.Services[gameService]
-	readOnly := make([]string, 0, len(game.Mods)+1)
+	writer := make([]string, 0, len(game.Mods)+1)
 	for _, mod := range game.Mods {
-		if mod != "remote_entity" {
-			readOnly = append(readOnly, mod)
+		if mod != "remote_mirror" { // the read-only mirror and remote_entity exclude each other
+			writer = append(writer, mod)
 		}
 	}
-	if !contains(readOnly, "remote_mirror") {
-		readOnly = append(readOnly, "remote_mirror")
+	if !contains(writer, "remote_entity") {
+		writer = append(writer, "remote_entity")
 	}
-	game.Mods = readOnly
+	game.Mods = writer
 	m.Services[gameService] = game
 	for _, feature := range []string{"protocol", "entity", "nest", "dao", "config", "errcode", "attribute"} {
 		if !contains(m.Features, feature) {
@@ -640,6 +646,46 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/errors/guild_moved.go", why: "the redirect to a guild's owner did not reach it either: an operator is moving it; retryable"},
 		{write: "internal/errors/guild_pending.go", why: "no answer in time: the write may have happened, and the same request id is answered from the receipt"},
 		{write: "game/controllers/player/enter_game_test.go", why: "a cold login stuck behind its projection answers login_timeout within the login budget and leaves the shared load running; a login without a server_id claim, or bound to another server, is refused as player_elsewhere before anything loads"},
+		{add: &AddOptions{Kind: "entity", Name: "SceneActor"}, why: "a player's part on a partitioned scene's map: the entity the cell's process holds for it, handed over to the next cell's process with it (prototype, scene.partition)"},
+		{add: &AddOptions{Kind: "dao", Name: "SceneActor", Entity: "SceneActor"}, why: "its cell state in a generated DAO: the setters record the undo, so a beat or handler that rolls back restores it (maintainer decision D8 = A)"},
+		{write: "db/def/scene_actor.go", why: "position, velocity, HP, version, role, lease, write-back time, the damage dedup list and the handoff in progress — //roost:dao nocoll, all nopersist,nosync; the nested types the monster's cell state shares"},
+		{write: "game/entities/scene_actor/entity.go", why: "noPersist ephemeral, created only by the partitioned scene's node inside its handler, moved by its own cell.actor beat; a cellworld.Actor over its DAO"},
+		{write: "game/partition/partition.go", why: "where this process's cellworld node is installed, and the one mapping between a DAO and the cell / Base state for SceneActor, Monster and Player"},
+		{write: "game/partition/partition_test.go", why: "the mapping is the whole state for both DAOs, a read is a copy, a failed transaction restores it through the generated undo, and the stored snapshot position moves only with a write-back"},
+		{write: "game/entities/monster/cell.go", why: "a partitioned scene's monster is a walker of its cell (D5 = A): the cell beat and the cellworld.Actor over MonsterDao; AI, walk, state and buffs are not started"},
+		{write: "game/entities/player/cell_base.go", why: "the player as its partitioned scene's Base: routing state in PlayerDao, the cell.base beat for the watchdog and the lease, and its copy of its team's roster for the team panel"},
+		{write: "game/entities/player/cell_group_test.go", why: "the team copy on the Player: the team id persists, the version and members do not, a read is a copy, a failed transaction restores it"},
+		{write: "game/settings/partition_test.go", why: "the partition rules refused at load: owners, the band, the Base's leave radius, the wake radius, the idle tier, spawn points and speeds"},
+		{write: "game/settings/partition.go", why: "scene.partition declared once and checked at load: the grid, the owners, the radii the cell protocol needs (R + H <= G, W + H <= G, R covers the Base's leave radius), the idle tier and the per-cell spawn points"},
+		{write: "internal/errors/scene_partition.go", why: "what a partitioned scene refuses (Move, MoveTarget, a root) and what an ordinary one does (MoveIntent, AttackTarget) are coded, not internal"},
+		{write: "protocol/def/move_intent.go", why: "a velocity in, taken out: the cell integrates it and the position comes with the replicated state (D6 = A)"},
+		{write: "game/controllers/player/partition.go", why: "the partitioned scene as an optional capability: its absence is how an endpoint knows the scene is ordinary"},
+		{write: "game/controllers/player/move_intent.go", why: "forward the intent to the owning cell through the Player's transaction; wait on no other process"},
+		{write: "protocol/def/attack_target.go", why: "a target in, the attack's sequence out; the verdict and the HP come later (D7 = A)"},
+		{write: "game/controllers/player/attack_target.go", why: "one fixed-damage attack, applied once by the target's own cell however often it is retried"},
+		{write: "protocol/def/attack_result.go", why: "the verdict pushed to the attacker: applied, duplicate, rejected with why, or unknown; the damage and the target's HP after it"},
+		{add: &AddOptions{Kind: "entity", Name: "Team"}, why: "a partitioned scene's team (prototype, maintainer decision 2026-11-04 item 4 = A): invite / accept / leave / disband, no battle room; its members are on different Bases, so the roster is remote-managed, owned by the game service and shared between its processes"},
+		{write: "db/def/team.go", why: "the roster: leader, members with their Base's sid, invitations with their expiry, and a version every Base's copy is compared by"},
+		{write: "game/entities/team/entity.go", why: "remote=managed, service=<game> and EntityCategoryRemote: [Team, Player] takes the distributed lock before the player's; the alliance service refuses it"},
+		{add: &AddOptions{Kind: "lifecycle", Name: "Team", Service: gameService}, why: "a new team's aggregate is created before its first transaction can lock it"},
+		{write: "game/entities/team/roster_component.go", why: "found / invite / accept / leave / disband under the team's lock; the size limit and the invitation's expiry come in as parameters from scene.partition.team"},
+		{write: "game/entities/team/roster_component_test.go", why: "the team's rules on its roster: only the leader invites and disbands, invitations expire, the size limit holds at accept, a repeated accept changes nothing, the lead passes to the smallest id left, the last one out disbands, a failed transaction rolls the version back"},
+		{write: "internal/errors/team.go", why: "what the team endpoints refuse is coded: already in a team, no such team, not the leader, not invited, full, busy"},
+		{write: "game/handler/team_group.go", why: "the roster as the Base's copy (cellworld.Group): each member's Player, SceneActor and Base sid"},
+		{add: &AddOptions{Kind: "handler", Name: "TeamInvite", Entity: "Team", Component: "Roster"}, why: "the leader invites; a player without a team founds one in the same transaction"},
+		{write: "game/handler/team_invite.go", why: "found and invite under the team's lock, the founder's own copy written with it"},
+		{add: &AddOptions{Kind: "handler", Name: "TeamAccept", Entity: "Team", Component: "Roster"}, why: "an invited player joins"},
+		{write: "game/handler/team_accept.go", why: "the roster and the joiner's copy in one transaction; the other members' Bases are told after the commit"},
+		{add: &AddOptions{Kind: "handler", Name: "TeamLeave", Entity: "Team", Component: "Roster"}, why: "a member leaves; a leader's lead passes on"},
+		{write: "game/handler/team_leave.go", why: "the roster and the leaver's copy in one transaction; the rest are told"},
+		{add: &AddOptions{Kind: "handler", Name: "TeamDisband", Entity: "Team", Component: "Roster"}, why: "the leader disbands"},
+		{write: "game/handler/team_disband.go", why: "the other members' copies are on other processes: a notice clears them, a reread catches a lost one"},
+		{add: &AddOptions{Kind: "handler", Name: "TeamSync", Entity: "Team", Component: "Roster"}, why: "a Base rereads a member's roster from the team"},
+		{write: "game/handler/team_sync.go", why: "after a restart (the copy's version is 0) and every resync_every, so a lost change notice is caught"},
+		{add: &AddOptions{Kind: "handler", Name: "PlayerTeam", Entity: "Player", Component: "Profile"}, why: "\"which team am I in\" costs a local lock"},
+		{write: "game/handler/player_team.go", why: "the player's own copy, written by the team transactions"},
+		{write: "protocol/def/team.go", why: "invite, accept, leave, disband, info behind one roster answer; teammates' positions come from the team panel, not from here"},
+		{write: "game/controllers/player/team.go", why: "a persistent team id for a new team, then one [Team, Player] transaction per call; scene_not_partitioned on an ordinary scene"},
 		{add: &AddOptions{Kind: "protocol", Name: "Purchase", Group: "game", Handler: "player"}, why: "buying: the demo plays the payment provider, everything around that is real"},
 		{write: "protocol/def/purchase.go", why: "a product id in; the order, the receipt's replay flag and the bag count out"},
 		{write: "game/controllers/player/purchase.go", why: "sign a callback, let the platform service record and deliver it, then drain the grant into the bag"},
@@ -696,6 +742,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "game/runtimeid/runtimeid.go", why: "ids for entities the process creates at run time: the sid goes in the id, so two processes cannot mint the same one"},
 		{write: "game/runtimeid/runtimeid_test.go", why: "two shards never collide, an unencodable sid fails at startup, exhaustion refuses instead of wrapping"},
 		{write: "internal/service/game/spawner.go", why: "the scene's population decisions turned into Entities: create, place, replicate, put on the map, and only then count"},
+		{write: "internal/service/game/partition_test.go", why: "the mirrors decode with the demo's own decoder as player and monster, and a zero config is the ordinary scene"},
+		{write: "internal/service/game/partition.go", why: "this process's part of the partitioned scene: the cellworld node (Cell when its sid owns a cell, Base for its players), the Sync mirrors the witnesses feed, the cell's monsters"},
 		{write: "internal/service/game/heartbeat.go", why: "the heartbeat driver bound to this process's Nest by hand, before any entity that takes a host from it"},
 		{write: "internal/service/game/scene_movement_test.go", why: "the movement chain end to end on a real Nest and heartbeat driver: a goal walked to and seen by a watcher, a walk replaced, a patrol, a rooted monster, the population refilled by the scene's beat, a 2x scene"},
 		{write: "internal/service/game/spawner_test.go", why: "where the sid comes from: the registry's config, not the runtime-config slot the config-data Mod overwrites"},

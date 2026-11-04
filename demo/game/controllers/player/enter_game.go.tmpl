@@ -14,6 +14,7 @@ import (
 	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
 	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
@@ -98,8 +99,15 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 	// On the map. The position is the player's own state, so it is written in
 	// a transaction like everything else; the scene only answers "where can
 	// this player stand".
+	//
+	// In a partitioned scene (scene.partition) this process is the player's
+	// Base and the map is the cells': there is no local ground to stand on,
+	// and Join enters the player through the cell its snapshot position is in.
 	spawn := lifecycle.WorldSceneConfig().Spawn
-	at, err := syncsender.NewEnterSceneSender(controller.NestClient()).MultiSync_EnterScene(context.Context(), subject.ID(), controller.WorldSceneID(), spawn.X, spawn.Y)
+	var at spatial.Point
+	if controller.Partition() == nil {
+		at, err = syncsender.NewEnterSceneSender(controller.NestClient()).MultiSync_EnterScene(context.Context(), subject.ID(), controller.WorldSceneID(), spawn.X, spawn.Y)
+	}
 	if err != nil {
 		slog.Warn("enter_game: player not placed on the map", "player_id", context.PlayerID, "err", err)
 	} else if scene, sceneErr := controller.Scene(); sceneErr != nil {

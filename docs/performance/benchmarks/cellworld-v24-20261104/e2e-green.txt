@@ -1,0 +1,18 @@
+2026/11/04 01:22:37 INFO nats: connected url=nats://127.0.0.1:48222
+2026/11/04 01:22:37 INFO bus: subscribed subject=cwdemo.srv.0
+2026/11/04 01:22:37 INFO bus: subscribed subject=cwdemo.svc.seamlessdrill.0
+2026/11/04 01:22:37 INFO bus: subscribed subject=cwdemo.svc.seamlessdrill.all
+2026/11/04 01:22:37 INFO bus: subscribed subject=cwdemo.srv.all
+STEP enter ok {"monsters_near_p1":[2323454524210676753,2323454524210677777,2323454524210678801,2323472116396721169],"move_refused":"scene_partitioned","p1":100006,"p1_at":{"X":2900,"Y":1500},"p1_hp":100,"p2":100007,"p3":100008}
+STEP own_state ok {"exp_after":7,"exp_before":0}
+STEP straight ok {"creates_p2":2,"nearby_removed":0,"owner_changes":2,"self_gap_ms":50}
+STEP jitter ok {"owner_changes":8,"self_gap_ms":50}
+STEP diagonal ok {"self_gap_ms":50}
+STEP attack_across_0 ok {"applied":10,"damage":10,"damage_forwarded_by_cells":10,"damage_retries_total":0,"duplicate":0,"end_hp":0,"pushed_results":10,"start_hp":100,"target":2323472116396721169}
+STEP attack_across_1 ok {"applied":10,"damage":10,"damage_forwarded_by_cells":10,"damage_retries_total":0,"duplicate":0,"end_hp":0,"pushed_results":10,"start_hp":100,"target":2323454524210677777}
+STEP panel_level_up ok {"base_panel":{"actor":102406169,"attack":12,"attack_seq":20,"enter_age_ms":23296,"enter_hint":0,"epoch":14,"hp":100,"in_world":true,"intent_seq":23,"lease_age_ms":43,"lost_epoch":0,"max_hp":110,"owner_sid":1002,"panel_acked":2,"panel_unknown":false,"panel_ver":2,"power":35,"shown":true,"snapshot_epoch":14,"snapshot_seq":473,"view_age_ms":43,"x":3077,"y":1512},"cell_attack_after":12,"cell_attack_before":10,"cell_hp":100,"cell_max_hp_after":110,"cell_max_hp_before":100,"hit_damage":12,"hit_target":2323454524210678801,"target_hp":[100,88]}
+STEP monster_cross ok {"creates_on_p2":1,"from_sid":1002,"handoffs_accepted_cell_a":8,"handoffs_accepted_cell_b":7,"walker":2323454524210679825}
+STEP cell_crash ok {"base_reenters":6,"cell_b_monsters_respawned":3,"epoch_after":3,"epoch_before":2,"owner_after":1002,"p2_hp_after":76,"p2_hp_before":76,"restart_seconds":6.317112292}
+STEP base_restart ok {"entered_at":{"X":1175,"Y":1500},"p5":100009,"spawn":{"X":2900,"Y":1500}}
+STEP ordinary_scene ok {"move":"ok","move_intent":"scene_not_partitioned","p4":100010}
+seamlessdrill: all steps passed

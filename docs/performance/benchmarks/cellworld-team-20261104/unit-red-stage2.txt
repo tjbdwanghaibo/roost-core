@@ -1,0 +1,11 @@
+# 修前第二段（快照、mirror 保留时间、组关系视野已做；NotifyGroup 不发、GroupResync 不调）
+# 同一工作树；GOWORK=off go test -count=1 -run TestGroup ./gameplay/cellworld/
+--- FAIL: TestGroupPanelExpiresWhenTheBaseStopsAndComesBack (3.83s)
+    group_test.go:272: timed out waiting for a resync of player 2 after its base restarted
+--- FAIL: TestGroupNoticesChangeTheRoster (2.19s)
+    group_test.go:328: timed out waiting for player 1 adopts version 2
+--- FAIL: TestGroupResyncCoversALostNotice (3.20s)
+    group_test.go:386: timed out waiting for player 1 resynced to version 2
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	15.820s
+FAIL

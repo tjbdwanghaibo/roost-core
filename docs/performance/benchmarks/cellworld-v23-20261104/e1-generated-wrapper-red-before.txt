@@ -1,0 +1,5 @@
+--- FAIL: TestGeneratedDispatchAnswersANilTargetAsNotFound (0.00s)
+    await_test.go:105: nil target: err = nest: entity type mismatch, want nest.ErrEntityNotFound (not a type mismatch)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/entity/testdata/awaitflow	0.494s
+FAIL

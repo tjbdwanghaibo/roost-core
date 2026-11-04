@@ -617,3 +617,33 @@ func sameAttrs(left, right map[int32]int64) bool {
 	}
 	return true
 }
+
+// The partitioned scene's battle panel (maintainer decision 2026-11-04, item
+// 3 = A) is what the growth gives: the Final layer's hp, attack and power,
+// before and after a level-up. The Base sends it to the cell's Real, whose
+// copy is the authority; the Player only derives it.
+func TestCellPanelIsTheFinalLayer(t *testing.T) {
+	subject := newAttributePlayer(t, 7301)
+	check := func(when string) {
+		t.Helper()
+		final, ok := subject.AttributeComp().Final()
+		if !ok {
+			t.Fatalf("%s: no final layer", when)
+		}
+		got := subject.CellPanel()
+		if int64(got.MaxHP) != final.HP || int64(got.Attack) != final.Attack || int64(got.Power) != final.Power || got.Ver != 0 {
+			t.Fatalf("%s: panel %+v, final hp %d attack %d power %d", when, got, final.HP, final.Attack, final.Power)
+		}
+	}
+	check("built")
+	before := subject.CellPanel()
+	if _, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "level_up", func() (any, error) {
+		return subject.ProfileComp().AddExp(ExpPerLevel)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	check("levelled up")
+	if after := subject.CellPanel(); after.MaxHP <= before.MaxHP || after.Attack <= before.Attack {
+		t.Fatalf("a level-up did not raise the panel: %+v -> %+v", before, after)
+	}
+}

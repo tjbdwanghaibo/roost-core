@@ -324,7 +324,7 @@ func TestUnloadResyncStormIsBounded(t *testing.T) {
 	h := newResyncHarness(t, &scriptedLoader{label: "authority", gate: gate}, entity.UnloadResyncConfig{Workers: workers, QueueCapacity: queue})
 	stale := make([]*resyncEntity, 0, entities)
 	for i := 0; i < entities; i++ {
-		value := h.resident(int64(6000+i), "rejected", false)
+		value := h.resident(int64(440+i), "rejected", false) // 原始 ID 的 kind 位落在 110～119：同包没有登记这些 kind（登记成不持久种类的 ID 不经加载器，见 kindHasNoAuthority）
 		if err := h.sync.Subscribe(1, value.ID(), entity.SyncProfile{}); err != nil {
 			t.Fatal(err)
 		}

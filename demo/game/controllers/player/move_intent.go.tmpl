@@ -1,0 +1,43 @@
+package player
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+
+	playeraccess "{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleMoveIntent is how a player moves in a partitioned scene: the velocity
+// goes to the cell that owns the player now (one transaction on the Player,
+// which records the intent and sends it after the commit) and the answer is
+// "taken" at once — the position arrives with the replicated state. This
+// process waits on nothing in another process: the Base cannot know where a
+// Cell has walked the player without asking it, which is why a partitioned
+// scene has no Move ("where did I land") and no MoveTarget (maintainer
+// decision D6 = A).
+func (controller *Controller) HandleMoveIntent(context *playeraccess.Context, request *pb.MoveIntentRequest) (*pb.MoveIntentResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("move_intent endpoint: context and request are required")
+	}
+	partition := controller.Partition()
+	if partition == nil {
+		code, reason := errcode.ClientError(apperrors.ErrSceneNotPartitioned)
+		return &pb.MoveIntentResponse{Code: code, Reason: reason}, nil
+	}
+	if err := partition.MoveIntent(context.Context(), context.PlayerID, request.VX, request.VY); err != nil {
+		if errors.Is(err, cellworld.ErrNotInWorld) {
+			err = apperrors.ErrPartitionNotEntered
+		}
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("move_intent failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.MoveIntentResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.MoveIntentResponse{}, nil
+}

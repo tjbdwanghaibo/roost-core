@@ -638,3 +638,64 @@ func TestColdTargetDeletedInAuthorityAnswersEntityDeletedCode(t *testing.T) {
 		t.Fatalf("handler ran %d time(s), loader calls %d", ran.Load(), loader.calls.Load())
 	}
 }
+
+// nestEphemeralKind 是不持久的本地种类（kind 245：nest 包测试未用），给 E1 的用例。
+const nestEphemeralKind entity.EntityKind = 245
+
+func init() {
+	entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+		Category:  entity.EntityCategory(1),
+		Kind:      nestEphemeralKind,
+		NoPersist: true,
+		Builder: func(param *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+			return newMockEntity(param.Id, param.Category), nil
+		},
+	})
+}
+
+// 不持久的种类没有权威，不在内存就是不存在（维护者 2026-11-03 决定 E1 = B）。装了加载器的 ManagerAccess 不为它问加载器：
+// 准入不转 I/O 阶段，单目标（及多目标的首个目标）回复 ErrEntityNotFound 并带客户端码 entity_not_found（与加载器报告
+// “不存在”时的码相同），多目标的其余位置把 nil 交给 handler，由 handler 决定（例如在事务里新建）。原先加载器（DataEngine
+// Repository）对它答“聚合不存在”，整个请求失败、handler 不运行。
+func TestAbsentNonPersistentTargetIsAnsweredWithoutTheLoader(t *testing.T) {
+	manager := entity.NewEntityManager()
+	access := entity.NewManagerAccess(manager)
+	loader := &absentLoader{}
+	if _, err := access.ConfigureLoader(loader); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewEngine(NestOptionWithGetter(access), NestOptionWithWorkerPools(WorkerPoolConfig{1, 8}, WorkerPoolConfig{}, WorkerPoolConfig{1, 8}))
+	var sawNil atomic.Int32
+	mgr.MustRegisterHandlerWithMeta(NewHandlerName("ephemeral"), func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		if len(es) == 2 && es[1] == nil {
+			sawNil.Add(1)
+		}
+		return nil, nil
+	}, HandlerMeta{Rollback: RollbackNone, Durability: DurabilityMemory})
+	startColdTargetEngine(t, mgr)
+
+	present := mustBuildCastID(t, 8801, entity.EntityCategory(1), nestEphemeralKind)
+	if err := manager.TryAdd(newMockEntity(present, entity.EntityCategory(1))); err != nil {
+		t.Fatal(err)
+	}
+	absent := mustBuildCastID(t, 8802, entity.EntityCategory(1), nestEphemeralKind)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	_, err := mgr.Request(ctx, NewHandlerName("ephemeral"), absent, nil)
+	if !errors.Is(err, ErrEntityNotFound) {
+		t.Errorf("single absent non-persistent target: err = %v, want ErrEntityNotFound", err)
+	}
+	if code, _ := errcode.ClientError(err); code != errcode.CodeEntityNotFound {
+		t.Errorf("single absent non-persistent target: client code = %d, want %d", code, errcode.CodeEntityNotFound)
+	}
+	if _, err := mgr.RequestMulti(ctx, NewHandlerName("ephemeral"), []int64{present, absent}, nil); err != nil {
+		t.Errorf("multi with an absent non-persistent second target: err = %v, want the handler to run with nil", err)
+	}
+	if sawNil.Load() != 1 {
+		t.Errorf("handler saw the absent second target as nil %d time(s), want 1", sawNil.Load())
+	}
+	if n := loader.calls.Load(); n != 0 {
+		t.Errorf("the loader was asked %d time(s) for a non-persistent kind", n)
+	}
+}

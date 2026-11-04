@@ -1,0 +1,89 @@
+package scene_actor
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/actor"
+	"{{MODULE}}/game/partition"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+)
+
+const EntityKindSceneActor entity.EntityKind = 9
+
+// ISceneActorEntity is the lock-safe business view used by Nest handlers.
+type ISceneActorEntity interface{ entity.IThreadSafeEntity }
+
+// SceneActor 是玩家在分区场景里的那一部分（gameplay/cellworld 的 SceneActor）：玩家站在哪个格，那个格的 Cell
+// 进程上就有一个它，位置、速度、HP、伤害去重表与交接进度都在它的 DAO 上（SceneActorDao），跨格交接时整份带走，
+// ID 不变（BuildEntityID(玩家 ID, SceneActor)）。Player 本身留在自己 sid 的 Base 进程，不迁移。
+//
+// 只由分区场景的 Node 在 Nest handler 里建（EntityManager.Create，handler 内即 CreateInScope：事务回滚即撤销），
+// 由 Node 在提交后销毁；不经 lifecycle，普通场景里从不存在。`noPersist=true lifetime=ephemeral`：Cell 进程崩溃后
+// 由 Base 按 Player 的快照重建。不同步：客户端看到的是 Base 进程上的 Sync mirror（player 命名空间）。
+//
+// Category：rank 5（Other），与 Monster 同档，在 Scene（World，rank 2）之后加锁——Node 的 handler 一律先锁 Scene、
+// 再锁角色。
+//
+//roost:entity id=9 entityKind=EntityKindSceneActor category=entity.EntityCategoryOther noPersist=true lifetime=ephemeral
+type SceneActor struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	dao *db.SceneActorDao `dao:"scene_actor"`
+
+	// host / cell 是格内心跳 cell.actor（Node.ActorBeat）：OnInitFinish 登记、StartCell 启动、SetCellPeriod 换档。
+	host *heartbeat.Host
+	cell *heartbeat.Reg
+}
+
+// OnInitFinish 登记格内心跳（不启动：Node 在装好状态的那笔事务里 StartCell，提交后生效）。只接受分区场景的 Node
+// 建出的实例：别的路径建出的 SceneActor 没有格可待。
+func (a *SceneActor) OnInitFinish(param *entity.EntityCreateParam) error {
+	if param == nil {
+		return errors.New("scene actor: no create param")
+	}
+	if _, ok := param.Param.(partition.CellMode); !ok {
+		return fmt.Errorf("scene actor %d: only the partitioned scene creates scene actors", a.ID())
+	}
+	node := partition.Node()
+	if node == nil {
+		return fmt.Errorf("scene actor %d: this process runs no partitioned scene", a.ID())
+	}
+	a.host = actor.Heartbeat.NewHost(a)
+	reg, err := a.host.Register("cell.actor", node.Config().Period, func(heartbeat.Beat) error {
+		if n := partition.Node(); n != nil {
+			return n.ActorBeat(a, time.Now())
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("scene actor %d: %w", a.ID(), err)
+	}
+	a.cell = reg
+	return nil
+}
+
+// OnDestroy 让格内心跳离开驱动。
+func (a *SceneActor) OnDestroy(entity.EntityDestroyReason) {
+	if a.host != nil {
+		a.host.OnDestroy()
+	}
+}
+
+// CellState / SetCellState / StartCell / SetCellPeriod 实现 cellworld.Actor，只在本实体的 Nest 锁内调用。
+func (a *SceneActor) CellState() cellworld.ActorState {
+	return partition.ReadActor(a.dao, a.ID(), cellworld.KindPlayer)
+}
+
+func (a *SceneActor) SetCellState(st cellworld.ActorState) { partition.WriteActor(a.dao, st) }
+
+func (a *SceneActor) StartCell() error { return a.cell.Start() }
+
+func (a *SceneActor) SetCellPeriod(period time.Duration) error { return a.cell.SetPeriod(period) }
+
+var _ cellworld.Actor = (*SceneActor)(nil)

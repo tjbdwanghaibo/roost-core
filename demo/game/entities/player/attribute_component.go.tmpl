@@ -125,6 +125,7 @@ func (component *AttributeComponent) LevelUp(levels int32) {
 	writeAttrs(base, dao.RangeAttrBase, dao.SetAttrBase, dao.DelAttrBase)
 	component.recompose()
 	component.owner.PublishSyncDirty()
+	component.owner.cellPanelChanged()
 }
 
 // RefreshGear recomputes the gear layer from what the player is WEARING.
@@ -140,6 +141,7 @@ func (component *AttributeComponent) RefreshGear() {
 	writeAttrs(component.baseAt(dao.GetLevel()), dao.RangeAttrBase, dao.SetAttrBase, dao.DelAttrBase)
 	component.recompose()
 	component.owner.PublishSyncDirty()
+	component.owner.cellPanelChanged()
 }
 
 // derive writes the two derived layers from what they are derived from: Gear

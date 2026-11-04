@@ -1,0 +1,13 @@
+2026-11-03 v2 断言能否抓到问题（变异后跑 TestWorldStraightCrossing，跑完还原）：
+1) node.go onOfferReply：收到“已接受”后不交出（角色恢复 Real、不销毁）——
+--- FAIL: TestWorldStraightCrossing (2.77s)
+    world_test.go:375: owner = sid 102 epoch 30, want B epoch 2
+2) region.go applyReports：Real 不向邻格发 Ghost——
+--- FAIL: TestWorldStraightCrossing (2.73s)
+    world_test.go:370: view 12 (cell 101 epoch 1 tick 14 self (9400,5000)): npc 209749 at {10050 5300} missing 2 views in a row
+    （后续每份 witness 缺失计数递增）
+3) region.go undoMap.remember 不登记逆操作（区域表不随事务回滚）后跑 TestHandoffRollbackDoesNotHandOver——
+--- FAIL: TestHandoffRollbackDoesNotHandOver (0.23s)
+    lifecycle_test.go:129: install attempted 1 times, want the failed one and a retry
+   （第一次安装在 StartCell 失败、事务回滚，但 seen 里留下“已接受”：重传的 Offer 被直接回复“已接受”而不安装，
+    区域索引里还留着不存在的 Real，B 照它发 witness。）

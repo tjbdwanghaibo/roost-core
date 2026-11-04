@@ -1,0 +1,7 @@
+# 端到端第三轮（全部实现，没有 -expect-fail 拆分）：队伍面板的断言都通过，最后 p1（sid 1000）在 p6（sid 1004）写过 Team 之后
+# 读同一支队伍失败。sid 1000 的日志：
+{"time":"2026-11-04T08:35:09.86514+08:00","level":"ERROR","msg":"team endpoint failed","frame":1897,"server_time_ms":1793752509865,"stage":"info","player_id":100001,"err":"remote entity: state version conflict: entity 4611686018427388957 loaded version 1, authority 3"}
+# drill：
+STEP base_restart ok {"entered_at":{"X":1175,"Y":1500},"p5":100004,"spawn":{"X":2900,"Y":1500}}
+STEP team_panel FAIL p1 team msg 10033: code 1 server error
+seamlessdrill: FAIL: 1 added check(s) failed: team_panel: p1 team msg 10033: code 1 server error

@@ -214,8 +214,10 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 ## 跨服务：公会 = alliance 服务（写走 RPC 或 saga，读走 Mirror）
 
 公会由独立的 alliance 服务独占（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：`Alliance`（联盟）与
-`AllianceMember`（每个玩家的成员守卫）是 Remote 托管实体、`service=alliance`，只有 alliance 进程能认领、能写。game 进程**不装
-`remote_entity`**，只装只读的 `remote_mirror`（`roost.yaml` 里 game 的 mods；生成器在 `demo.go` 里换掉缺省的 remote_entity），
+`AllianceMember`（每个玩家的成员守卫）是 Remote 托管实体、`service=alliance`，只有 alliance 进程能认领、能写。game 进程装着
+`remote_entity`，但只为它自己拥有的一种 Remote 实体——分区场景的组队 `Team`（`service=game`，无缝大世界原型，见
+[方案 §14](../docs/maintenance/FEATURE-2026-11-03-seamless-world.md#14-合入-main2026-11-04)）；联盟两种 kind 对它是“别的服务的”
+（生成的 `ForeignKinds`），它的 Remote 运行时对它们拒绝认领与写（`entity.ErrRemoteKindNotOwned`），读经同一个 Mod 提供的 Mirror。
 `uses_rpcs: [alliance]` 让它拿到生成的 `rpcalliance` ClientMod（路由查找经 `RouteSource`）。所以 game 改公会只有两条路：
 
 - **只改公会**——`join_guild`（10022）、`leave_guild`（10027）：一次路由 RPC（`Join` / `Leave`，发往联盟的 owner 实例），

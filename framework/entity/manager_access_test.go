@@ -322,3 +322,73 @@ func checkColdMiss(t *testing.T, name string, call func() error) {
 		t.Fatalf("%s: err=%v, want ErrColdLoadInLogic with the fast-worker marker", name, err)
 	}
 }
+
+// kindAwareLoader 像 DataEngine 的 Repository 一样回答：没有持久 DAO 的种类一律报“聚合不存在”，其余按 counting 加载。
+type kindAwareLoader struct {
+	countingAggregateLoader
+	refused atomic.Int32
+}
+
+var errTestNoPersistentDAO = errors.New("test loader: kind has no persistent DAO")
+
+func (l *kindAwareLoader) LoadEntity(ctx context.Context, id int64, kind EntityKind) (IThreadSafeEntity, error) {
+	if bp := GetEntityBuilderParam(kind); bp != nil && (bp.NoPersist || len(bp.DaoBuilders) == 0) {
+		l.refused.Add(1)
+		return nil, errTestNoPersistentDAO
+	}
+	return l.countingAggregateLoader.LoadEntity(ctx, id, kind)
+}
+
+// 不持久的种类没有权威：内存里没有就是不存在。ManagerAccess 对它不问加载器，Get / GetMany 答 (nil, nil) / nil 占位，
+// IsLoaded 报告“无需加载”（Nest 准入不为它转 I/O 阶段），业务阶段（LoadedEntitiesOnly）同样是 nil 而不是 ErrColdLoadInLogic。
+// 持久种类的答复不变：未命中照旧交给加载器（维护者 2026-11-03 决定 E1 = B）。
+func TestManagerAccessAnswersAbsentNonPersistentKindsWithoutTheLoader(t *testing.T) {
+	manager := NewEntityManager()
+	access := NewManagerAccess(manager)
+	loader := &kindAwareLoader{countingAggregateLoader: countingAggregateLoader{manager: manager}}
+	if _, err := access.ConfigureLoader(loader); err != nil {
+		t.Fatal(err)
+	}
+	ephemeral, err := BuildEntityID(77, testRuntimeRebuildKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if access.IsLoaded(ephemeral) != true {
+		t.Error("IsLoaded(absent non-persistent) = false: Nest would route it to I/O preparation for a load that cannot exist")
+	}
+	if value, err := access.Get(context.Background(), ephemeral, EntityCategoryNone); value != nil || err != nil {
+		t.Errorf("Get(absent non-persistent) = (%v, %v), want (nil, nil)", value, err)
+	}
+	if values, err := access.GetMany(context.Background(), []int64{ephemeral}, nil); err != nil || len(values) != 1 || values[0] != nil {
+		t.Errorf("GetMany(absent non-persistent) = (%v, %v), want ([nil], nil)", values, err)
+	}
+	fast := WithLoadedEntitiesOnly(context.Background())
+	if value, err := access.Get(fast, ephemeral, EntityCategoryNone); value != nil || err != nil {
+		t.Errorf("fast-stage Get(absent non-persistent) = (%v, %v), want (nil, nil)", value, err)
+	}
+	if values, err := access.GetMany(fast, []int64{ephemeral}, nil); err != nil || len(values) != 1 || values[0] != nil {
+		t.Errorf("fast-stage GetMany(absent non-persistent) = (%v, %v), want ([nil], nil)", values, err)
+	}
+	if n := loader.refused.Load(); n != 0 {
+		t.Errorf("the loader was asked %d time(s) for a kind that has no persistent DAO", n)
+	}
+
+	// 持久种类逐字不变：未命中、有加载器 → IsLoaded false，Get 交给加载器（这里加载失败，错误原样返回），业务阶段冷缺失。
+	persistent, err := BuildEntityID(78, testEntityKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if access.IsLoaded(persistent) {
+		t.Error("IsLoaded(absent persistent) = true, want false")
+	}
+	loader.fail.Store(true)
+	if _, err := access.Get(context.Background(), persistent, EntityCategoryNone); !errors.Is(err, ErrEntityNotManaged) {
+		t.Errorf("Get(absent persistent) err = %v, want the loader's error", err)
+	}
+	if _, err := access.Get(fast, persistent, EntityCategoryNone); !errors.Is(err, ErrColdLoadInLogic) {
+		t.Errorf("fast-stage Get(absent persistent) err = %v, want ErrColdLoadInLogic", err)
+	}
+	if loader.loads.Load() != 1 {
+		t.Errorf("persistent loads = %d, want 1", loader.loads.Load())
+	}
+}

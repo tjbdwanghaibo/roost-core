@@ -1,0 +1,145 @@
+package team
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"testing"
+
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 分区场景组队的规则（原型缺省）在成员表上：只有队长邀请与解散；邀请过期；成员上限只在接受时查；同一个人重复接受
+// 是无变化的成功；队长离队交给剩下玩家 ID 最小的那名，最后一个人离队等于解散；每次成员变化版本 +1，失败的事务连同
+// 版本一起回滚。这些都在 Team 的分布式锁内（handler 里），这里直接在一笔本地事务里调。
+
+type nullCommitter struct{}
+
+func (nullCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
+
+func newTestTeam(t *testing.T) *Team {
+	t.Helper()
+	RegisterEntity()
+	e, err := NewTeam(&entity.EntityCreateParam{IsCreate: true, UniqueID: 1, Kind: EntityKindTeam})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// in 在一笔事务里跑 f（持久字段的 setter 只在事务里调用）。f 返回错误时事务回滚。
+func in(t *testing.T, f func(*RosterComponent) error, e *Team) error {
+	t.Helper()
+	_, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "team_roster", func() (any, error) {
+		return nil, f(e.RosterComp())
+	})
+	return err
+}
+
+func TestTeamRosterRules(t *testing.T) {
+	e := newTestTeam(t)
+	const now = int64(1_000_000)
+	const leader, second, third = 10, 11, 12
+	must := func(what string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+	}
+	refused := func(what string, err, want error) {
+		t.Helper()
+		if !errors.Is(err, want) {
+			t.Fatalf("%s: got %v, want %v", what, err, want)
+		}
+	}
+	snapshot := func() Info { return e.RosterComp().Snapshot() }
+
+	must("found", in(t, func(r *RosterComponent) error { return r.Found(leader, 1000) }, e))
+	if s := snapshot(); s.Leader != leader || s.Ver != 1 || !slices.Equal(s.Members, []int64{leader}) || s.Seats[leader] != 1000 {
+		t.Fatalf("after found: %+v", s)
+	}
+	refused("found twice", in(t, func(r *RosterComponent) error { return r.Found(second, 1004) }, e), apperrors.ErrTeamExists)
+	refused("a member who is not the leader invites", in(t, func(r *RosterComponent) error { return r.Invite(second, third, 4, now, now+60) }, e), apperrors.ErrTeamNotLeader)
+	refused("the leader invites himself", in(t, func(r *RosterComponent) error { return r.Invite(leader, leader, 4, now, now+60) }, e), apperrors.ErrTeamNotInvited)
+	refused("accept without an invitation", in(t, func(r *RosterComponent) error { return r.Accept(second, 1004, 4, now) }, e), apperrors.ErrTeamNotInvited)
+
+	must("invite", in(t, func(r *RosterComponent) error { return r.Invite(leader, second, 4, now, now+60) }, e))
+	if s := snapshot(); s.Ver != 1 {
+		t.Fatalf("an invitation changed the roster version: %+v", s)
+	}
+	must("accept", in(t, func(r *RosterComponent) error { return r.Accept(second, 1004, 4, now+10) }, e))
+	if s := snapshot(); s.Ver != 2 || !slices.Equal(s.Members, []int64{leader, second}) || s.Seats[second] != 1004 {
+		t.Fatalf("after accept: %+v", s)
+	}
+	must("accept again", in(t, func(r *RosterComponent) error { return r.Accept(second, 1004, 4, now+11) }, e))
+	if s := snapshot(); s.Ver != 2 {
+		t.Fatalf("a repeated accept changed the version: %+v", s)
+	}
+
+	must("invite with a short expiry", in(t, func(r *RosterComponent) error { return r.Invite(leader, third, 4, now, now+5) }, e))
+	refused("accept after the invitation expired", in(t, func(r *RosterComponent) error { return r.Accept(third, 1000, 4, now+6) }, e), apperrors.ErrTeamNotInvited)
+	refused("invite into a full team", in(t, func(r *RosterComponent) error { return r.Invite(leader, third, 2, now, now+60) }, e), apperrors.ErrTeamFull)
+	must("invite again", in(t, func(r *RosterComponent) error { return r.Invite(leader, third, 4, now, now+60) }, e))
+	refused("accept into a team that filled up after the invitation", in(t, func(r *RosterComponent) error { return r.Accept(third, 1000, 2, now+1) }, e), apperrors.ErrTeamFull)
+
+	// 失败的事务连同版本一起回滚。
+	failure := errors.New("a later step failed")
+	if err := in(t, func(r *RosterComponent) error {
+		if err := r.Accept(third, 1000, 4, now+1); err != nil {
+			return err
+		}
+		return failure
+	}, e); !errors.Is(err, failure) {
+		t.Fatalf("rolled-back accept: %v", err)
+	}
+	if s := snapshot(); s.Ver != 2 || slices.Contains(s.Members, third) {
+		t.Fatalf("a rolled-back accept left %+v", s)
+	}
+
+	must("accept", in(t, func(r *RosterComponent) error { return r.Accept(third, 1000, 4, now+1) }, e))
+	must("the leader leaves", in(t, func(r *RosterComponent) error { return r.Leave(leader) }, e))
+	if s := snapshot(); s.Leader != second || s.Ver != 4 || !slices.Equal(s.Members, []int64{second, third}) {
+		t.Fatalf("after the leader left: %+v, want leader %d (the smallest id left) and version 4", s, second)
+	}
+	refused("leave a team one is not in", in(t, func(r *RosterComponent) error { return r.Leave(leader) }, e), apperrors.ErrTeamMissing)
+	refused("a member who is not the leader disbands", in(t, func(r *RosterComponent) error { _, err := r.Disband(third); return err }, e), apperrors.ErrTeamNotLeader)
+
+	var before Info
+	must("disband", in(t, func(r *RosterComponent) error {
+		var err error
+		before, err = r.Disband(second)
+		return err
+	}, e))
+	if !slices.Equal(before.Members, []int64{second, third}) {
+		t.Fatalf("disband returned the members %v, want the ones to tell: %v", before.Members, []int64{second, third})
+	}
+	if s := snapshot(); s.Leader != 0 || s.Ver != 5 || len(s.Members) != 0 {
+		t.Fatalf("after disband: %+v", s)
+	}
+	refused("accept into a disbanded team", in(t, func(r *RosterComponent) error { return r.Accept(leader, 1000, 4, now) }, e), apperrors.ErrTeamMissing)
+	refused("invite into a disbanded team", in(t, func(r *RosterComponent) error { return r.Invite(second, leader, 4, now, now+60) }, e), apperrors.ErrTeamMissing)
+	if n := e.Dao().InvitesLen(); n != 0 {
+		t.Fatalf("a disbanded team keeps %d invitations", n)
+	}
+}
+
+// 最后一个人离队等于解散：队长为 0，邀请清掉，版本前进。
+func TestTeamLastMemberOutDisbands(t *testing.T) {
+	e := newTestTeam(t)
+	if err := in(t, func(r *RosterComponent) error {
+		if err := r.Found(10, 1000); err != nil {
+			return err
+		}
+		if err := r.Invite(10, 11, 4, 100, 160); err != nil {
+			return err
+		}
+		return r.Leave(10)
+	}, e); err != nil {
+		t.Fatal(err)
+	}
+	if s := e.RosterComp().Snapshot(); s.Leader != 0 || s.Ver != 2 || len(s.Members) != 0 || e.Dao().InvitesLen() != 0 {
+		t.Fatalf("after the last member left: %+v, %d invitations", s, e.Dao().InvitesLen())
+	}
+}

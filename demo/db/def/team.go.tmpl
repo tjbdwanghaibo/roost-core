@@ -1,0 +1,21 @@
+package dbdef
+
+// TeamDao 是分区场景里一支队伍的成员表（维护者 2026-11-04 第 4 项 = A：组队关系的权威放在 Remote 托管的 Team 实体上，
+// 不放在队长的 Player 上）。共享模式的 Remote 实体：谁拿到它的分布式锁、谁在那一笔事务里是它的 owner，所以不同 Base
+// 进程上的玩家都能改同一份成员表；每一笔改动是一次 Remote 事务（分布式锁 + 加载 + 带 fence 的提交）。
+//
+// 只在分区场景里使用（普通场景的组队是匹配，见 internal/service/<game>/matchmaker.go，与它无关）。不同步：客户端从
+// 端点的答复里拿到成员表，队友的位置与 HP 从队伍面板（Base 之间的快照，gameplay/cellworld 的 group.go）来。
+//
+//roost:dao coll=team db=main
+type TeamDao struct {
+	// Leader 是队长的玩家 ID；0 表示队伍已解散（或还没建成）。解散的队伍不删除文档（原型缺省）：成员表为空、Ver 照旧前进。
+	Leader int64 `dao:"persist" store:"leader"`
+	// Members 是玩家 ID → 这名玩家的 Base 的 sid（静态归属：入队那一刻在哪个进程，就是他的 Base）。各 Base 按它把队员
+	// 快照发给对方。
+	Members map[int64]int64 `dao:"persist,map=fast" store:"members"`
+	// Invites 是被邀请的玩家 ID → 邀请过期时间（unix 秒）。接受时检查，过期的在下一次改动时清掉。
+	Invites map[int64]int64 `dao:"persist,map=fast" store:"invites"`
+	// Ver 是成员表的版本：每次 Members 或 Leader 变化 +1，只前进。各 Base 的缓存与通知按它取新的。
+	Ver int64 `dao:"persist" store:"ver"`
+}

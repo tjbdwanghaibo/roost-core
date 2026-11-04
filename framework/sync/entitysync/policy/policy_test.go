@@ -1363,6 +1363,57 @@ func TestSelfVisibilityFollowsConfigAndLeave(t *testing.T) {
 	}
 }
 
+// self 跟着自己的目标走：自己的实体被 Hide（例如 Base 上自己的 mirror 过期：Hide + 注销）时 self 一起撤掉，再次
+// Show（重新登记之后）时恢复，客户端重新收到自己的全量。self 不是空间订阅，原先 Hide 不撤它：Interest 以为还持有、
+// Manager 却随注销丢了它，重新出现后谁也不再说，玩家从此看不到自己（维护者 2026-11-03 决定 E2 = B：Interest 的契约，
+// 不只 mirror 会碰到）。玩家 ID 与自身实体 ID 分开（mirror 的 ID 不是玩家 ID）。
+func TestSelfFollowsItsEntityThroughHideAndShow(t *testing.T) {
+	const self int64 = 9001
+	at := spatial.Point{X: 500, Y: 500}
+	for _, unregister := range []bool{true, false} {
+		manager := newManager(t)
+		interest := newInterest(t, manager)
+		if err := manager.OpenSession(entitysync.SessionID(watcherID)); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.Register(subjectState(t, self)); err != nil {
+			t.Fatal(err)
+		}
+		if err := interest.Enter(watcherID, self, at, ObserverView{}); err != nil {
+			t.Fatal(err)
+		}
+		mustApply(t, interest)
+		if !subscribed(manager, watcherID, self) {
+			t.Fatalf("unregister=%v: entering did not show the player itself", unregister)
+		}
+		if err := interest.Hide(self); err != nil {
+			t.Fatal(err)
+		}
+		if unregister {
+			if err := manager.Unregister(self); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mustApply(t, interest)
+		if subscribed(manager, watcherID, self) {
+			t.Fatalf("unregister=%v: the hidden self is still subscribed", unregister)
+		}
+		if unregister {
+			if err := manager.Register(subjectState(t, self)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := interest.Show(self, at); err != nil {
+			t.Fatal(err)
+		}
+		mustApply(t, interest)
+		if !subscribed(manager, watcherID, self) {
+			t.Fatalf("unregister=%v: shown again, the player does not see itself", unregister)
+		}
+		interest.Close()
+	}
+}
+
 // 队伍：三个成员彼此可见（离得再远也一样）；一个成员离队只撤和他有关的 pair；
 // 离场（Leave）的成员作为观察者与作为目标两边都被清掉，重新进场后不会凭旧队伍看见任何人。
 func TestTeamMembersSeeEachOtherAndLeaveCleansBothSides(t *testing.T) {

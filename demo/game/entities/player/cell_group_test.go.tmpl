@@ -1,0 +1,52 @@
+package player
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+)
+
+// 队伍面板（第 4 项 = A）：Base 缓存的成员表在 PlayerDao 上——队伍 ID 持久（重启后知道去重读哪支队伍），版本与成员
+// 不持久；读出来的是一份副本；写在事务里，事务失败时整份还原（组队 handler 的 [Team, Player] 事务失败不留半份）。
+func TestCellGroupIsThePlayersCopyAndRollsBack(t *testing.T) {
+	subject := newAttributePlayer(t, 7101)
+	write := func(g cellworld.Group, fail error) error {
+		t.Helper()
+		_, err := nest.RunIsolatedTransaction(context.Background(), attributeCommitter{}, "cell_group", func() (any, error) {
+			subject.SetCellGroup(g)
+			return nil, fail
+		})
+		return err
+	}
+	team := cellworld.Group{ID: 9001, Ver: 3, Members: []cellworld.GroupMember{
+		{Player: 1001, Actor: 2001, SID: 1000}, {Player: 1002, Actor: 2002, SID: 1004},
+	}}
+	if err := write(team, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := subject.CellGroup(); !reflect.DeepEqual(got, team) || subject.TeamID() != 9001 {
+		t.Fatalf("read back %+v (team id %d), want %+v", got, subject.TeamID(), team)
+	}
+	got := subject.CellGroup()
+	got.Members[0].SID = 1
+	if again := subject.CellGroup(); !reflect.DeepEqual(again, team) {
+		t.Fatalf("a read copy reached the DAO: %+v", again)
+	}
+	failure := errors.New("a later step of the team transaction failed")
+	if err := write(cellworld.Group{}, failure); !errors.Is(err, failure) {
+		t.Fatalf("transaction: %v", err)
+	}
+	if got := subject.CellGroup(); !reflect.DeepEqual(got, team) {
+		t.Fatalf("not restored after the failed transaction: %+v", got)
+	}
+	if err := write(cellworld.Group{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := subject.CellGroup(); got.ID != 0 || got.Ver != 0 || len(got.Members) != 0 || subject.TeamID() != 0 {
+		t.Fatalf("after leaving: %+v", got)
+	}
+}

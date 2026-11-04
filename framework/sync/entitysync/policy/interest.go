@@ -213,7 +213,10 @@ type Interest struct {
 	spatialPlayers map[int64]map[int64]struct{}
 	followers      map[int64]map[int64]struct{}
 	selfOf         map[int64]int64
-	placed         map[int64]uint64
+	// selfBy 是 selfOf 的反查：自身实体 → 以它为 self 的玩家。目标被 Hide（退出空间索引）时 self 一起撤掉、
+	// 再次放进空间索引（Show / Move / Enter）时恢复：self 跟着自己的目标走，Hide 期间不看自己（E2）。
+	selfBy map[int64]map[int64]struct{}
+	placed map[int64]uint64
 	// departedPlayers / departedSubjects：自上次结算以来被 Leave / Unwatch / Hide 撤除的玩家与目标。同一次结算里
 	// 它们的 pair 又被持有时，先退订再订阅（业务可能在两次调用之间注销 / 重新登记了目标、关闭 / 重开了会话）。
 	departedPlayers  map[int64]struct{}
@@ -305,6 +308,7 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		spatialPlayers:  make(map[int64]map[int64]struct{}),
 		followers:       make(map[int64]map[int64]struct{}),
 		selfOf:          make(map[int64]int64),
+		selfBy:          make(map[int64]map[int64]struct{}),
 		placed:          make(map[int64]uint64),
 		departedPlayers: make(map[int64]struct{}), departedSubjects: make(map[int64]struct{}),
 		covers:       make(map[[2]entity.SyncProfile]bool),
@@ -669,14 +673,54 @@ func (in *Interest) Resubscribe(observer int64) {
 
 // ---- 应用侧的命令实现（持 mu，在 AOI 批次写阶段之外） ----
 
-// placeSubjectLocked 登记或移动目标并记下它的代际，把跟随它的空间视野移到同一位置。
+// placeSubjectLocked 登记或移动目标并记下它的代际，把跟随它的空间视野移到同一位置。目标原先不在空间索引里（第一次、
+// 或 Hide 之后再出现）时，以它为 self 的玩家重新看见自己（见 selfBy）。
 func (in *Interest) placeSubjectLocked(id int64, at spatial.Point, gen uint64) {
 	if err := in.aoi.AddSubject(id, at); err != nil {
 		in.applyErr = errors.Join(in.applyErr, fmt.Errorf("policy: place subject %d: %w", id, err))
 		return
 	}
+	_, wasPlaced := in.placed[id]
 	in.placed[id] = gen
 	in.moveFollowersLocked(id, at)
+	if !wasPlaced {
+		in.contributeSelfLocked(id, true)
+	}
+}
+
+// contributeSelfLocked 给（enter）或收回（!enter）以 subject 为 self 的玩家的 self 贡献（按玩家 ID 顺序，结果确定）。
+// 收回发生在目标被 Hide 时：self 不是空间订阅，不随空间索引的离开事件撤掉，不在这里撤，Interest 会一直以为持有它，
+// 而业务随 Hide 注销、重新登记目标之后 Manager 已经忘了这份订阅（例如 Base 上自己的 mirror 过期后又回来）。
+func (in *Interest) contributeSelfLocked(subject int64, enter bool) {
+	if !in.selfVisible {
+		return
+	}
+	for _, playerID := range sortedIDs(in.selfBy[subject]) {
+		in.contribute(pair{observer: playerID, subject: subject}, contribution{}, in.selfLayer, enter)
+	}
+}
+
+// setSelfLocked 记下（subject != 0）或撤掉玩家的 self 映射，维护 selfOf 与 selfBy 两个方向。
+func (in *Interest) setSelfLocked(playerID, subject int64) {
+	if old, ok := in.selfOf[playerID]; ok {
+		if players := in.selfBy[old]; players != nil {
+			delete(players, playerID)
+			if len(players) == 0 {
+				delete(in.selfBy, old)
+			}
+		}
+		delete(in.selfOf, playerID)
+	}
+	if subject == 0 {
+		return
+	}
+	in.selfOf[playerID] = subject
+	players := in.selfBy[subject]
+	if players == nil {
+		players = make(map[int64]struct{}, 1)
+		in.selfBy[subject] = players
+	}
+	players[playerID] = struct{}{}
 }
 
 // placeMainLocked 放置（或重新放置）主视野，并把它挂给玩家自己。
@@ -691,7 +735,7 @@ func (in *Interest) placeMainLocked(playerID, handle, follow int64, at spatial.P
 func (in *Interest) leaveLocked(playerID, handle, subject int64) {
 	in.departedPlayers[playerID] = struct{}{}
 	if self, ok := in.selfOf[playerID]; ok {
-		delete(in.selfOf, playerID)
+		in.setSelfLocked(playerID, 0)
 		in.contribute(pair{observer: playerID, subject: self}, contribution{}, entity.SyncProfile{}, false)
 	}
 	if handle != 0 {
@@ -702,8 +746,12 @@ func (in *Interest) leaveLocked(playerID, handle, subject int64) {
 	}
 }
 
-// removeSubjectLocked 让目标退出空间索引（Leave / Hide）。它之前还没确认的排队事实随 placed 的删除作废。
+// removeSubjectLocked 让目标退出空间索引（Leave / Hide）。它之前还没确认的排队事实随 placed 的删除作废；以它为 self
+// 的玩家这期间看不见自己（再次放置时恢复，见 placeSubjectLocked）。
 func (in *Interest) removeSubjectLocked(id int64) {
+	if _, placed := in.placed[id]; placed {
+		in.contributeSelfLocked(id, false)
+	}
 	in.departedSubjects[id] = struct{}{}
 	delete(in.placed, id)
 	_ = in.aoi.RemoveSubject(id)

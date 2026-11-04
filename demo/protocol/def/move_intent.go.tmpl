@@ -1,0 +1,33 @@
+//go:build protocoldef
+
+package protocoldef
+
+// MoveIntentRequest is how a player moves in a partitioned scene
+// (scene.partition): a velocity, units per second on each axis, kept until
+// the next intent; (0, 0) stops. Nothing else — no destination mode
+// (maintainer decision D6 = A). The authority over the player's position is
+// the Cell process of the cell it stands in, which integrates the velocity on
+// its own beat and hands the player over to the next cell's process when it
+// walks across; the Base (this process) forwards the intent to whichever cell
+// owns the player now, and resends it to the new owner after a handover.
+// Each component is clamped to scene.partition.max_speed by the cell.
+type MoveIntentRequest struct {
+	VX int64 `pb:"1"`
+	VY int64 `pb:"2"`
+}
+
+// MoveIntentResponse says the intent was taken (Code 0), not where the player
+// is: the position comes with the replicated state, frame by frame, like
+// every other position. A process whose scene is ordinary answers
+// scene_not_partitioned; a player that has not entered the partitioned
+// scene yet, partition_not_entered.
+type MoveIntentResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+}
+
+//roost:protocol group=game handler=player
+type MoveIntentProtocol interface {
+	//roost:msg id=10031
+	MoveIntent(MoveIntentRequest) MoveIntentResponse
+}

@@ -1,0 +1,128 @@
+package player
+
+import (
+	"errors"
+	"slices"
+	"time"
+
+	db "{{MODULE}}/db"
+	"{{MODULE}}/game/partition"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+)
+
+// In a partitioned scene (scene.partition, gameplay/cellworld) the player does
+// not move between processes: this process is its Base, and its part on the
+// map is a SceneActor on the Cell process of the cell it stands in. What the
+// Base needs to follow it — which cell owns it at which epoch, the move
+// intent, the attack sequence, the watchdog times and the snapshot the
+// SceneActor writes back — is cellworld.BaseState, held in PlayerDao's Cell*
+// fields (game/partition ReadBase / WriteBase) so a handler or beat that
+// rolls back restores it. The watchdog and the lease renewal are this
+// player's own beat, "cell.base" (Node.BaseBeat).
+
+// registerCellBase registers the routing beat when this process runs a
+// partitioned scene; it is started by the Node when the player enters it.
+func (component *MapComponent) registerCellBase() error {
+	node := partition.Node()
+	if node == nil {
+		return nil
+	}
+	owner := component.owner
+	reg, err := component.host.Register("cell.base", node.Config().WatchPeriod, func(heartbeat.Beat) error {
+		if n := partition.Node(); n != nil {
+			return n.BaseBeat(owner, time.Now())
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	component.cellBase = reg
+	return nil
+}
+
+// BaseState / SetBaseState / StartBase make the player a cellworld.BasePlayer.
+// Only under the player's own Nest lock.
+func (player *Player) BaseState() cellworld.BaseState {
+	return partition.ReadBase(player.dao, partition.SceneID())
+}
+
+func (player *Player) SetBaseState(st cellworld.BaseState) {
+	partition.WriteBase(player.dao, st, partition.SceneID())
+}
+
+// CellPanel is the battle panel the player's growth gives now — the Final
+// attribute layer's hp, attack and power (maintainer decision 2026-11-04,
+// item 3 = A: the growth inputs stay on the Base, the panel's authority is
+// the cell's Real). The Node numbers it and sends it when it changed.
+func (player *Player) CellPanel() cellworld.Panel {
+	final, ok := player.AttributeComp().Final()
+	if !ok {
+		return cellworld.Panel{}
+	}
+	return cellworld.Panel{MaxHP: int32(final.HP), Attack: int32(final.Attack), Power: int32(final.Power)}
+}
+
+// cellPanelChanged hands a changed panel to the partitioned scene, inside the
+// transaction that changed the growth (level-up, equipment): the new panel
+// and its sequence are written into the Player's routing state with it, and
+// the Node sends it to the owner cell after the commit — a rollback takes it
+// back with the level. No request is made from here (the handler must not
+// wait). A process without a partitioned scene does nothing.
+func (player *Player) cellPanelChanged() {
+	if node := partition.Node(); node != nil {
+		_ = node.UpdatePanel(player)
+	}
+}
+
+func (player *Player) StartBase() error {
+	if player.mapComp.cellBase == nil {
+		return errors.New("player: this process runs no partitioned scene")
+	}
+	return player.mapComp.cellBase.Start()
+}
+
+// TeamID is the partitioned scene's team this player is in (0 = none): the
+// player's own copy of one fact of the Team's roster, written in the same
+// [Team, Player] transaction as the roster (game/handler/team_*.go).
+func (player *Player) TeamID() int64 { return player.dao.GetTeamID() }
+
+// CellGroup / SetCellGroup make the player a cellworld.GroupPlayer: the
+// Base's copy of its team's roster (maintainer decision 2026-11-04, item 4 =
+// A — the team panel across Bases). The team id is persisted (a restarted
+// Base knows which team to reread); the version and the members are not, so
+// after a restart the version is 0 and the Node rereads the Team
+// (NodeConfig.GroupResync). Only under the player's own Nest lock.
+func (player *Player) CellGroup() cellworld.Group {
+	g := cellworld.Group{ID: player.dao.GetTeamID(), Ver: player.dao.GetTeamVer()}
+	player.dao.RangeTeamMembers(func(_ int, seat db.TeamSeat) bool {
+		g.Members = append(g.Members, cellworld.GroupMember{Player: seat.GetPlayer(), Actor: seat.GetActor(), SID: seat.GetSID()})
+		return true
+	})
+	return g
+}
+
+// SetCellGroup writes the copy through the generated setters (a rollback
+// restores it). The member list is replaced whole and only when it changed:
+// once written into the DAO a slice is not edited in place (the undo holds
+// the old one).
+func (player *Player) SetCellGroup(g cellworld.Group) {
+	player.dao.SetTeamID(g.ID)
+	player.dao.SetTeamVer(g.Ver)
+	if slices.Equal(player.CellGroup().Members, g.Members) {
+		return
+	}
+	seats := make([]db.TeamSeat, len(g.Members))
+	for i, m := range g.Members {
+		seats[i].SetPlayer(m.Player)
+		seats[i].SetActor(m.Actor)
+		seats[i].SetSID(m.SID)
+	}
+	player.dao.SetTeamMembersAll(seats)
+}
+
+var (
+	_ cellworld.BasePlayer  = (*Player)(nil)
+	_ cellworld.GroupPlayer = (*Player)(nil)
+)

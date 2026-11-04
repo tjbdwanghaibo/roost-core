@@ -6,6 +6,7 @@ import (
 
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	playeraccess "{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 	player "{{MODULE}}/game/entities/player"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -23,6 +24,13 @@ import (
 func (controller *Controller) HandleMoveTarget(context *playeraccess.Context, request *pb.MoveTargetRequest) (*pb.MoveTargetResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("move_target endpoint: context and request are required")
+	}
+	// A partitioned scene has no "stand here" and no server walk: the Cell
+	// process owns the player's position, and a player moves by intent
+	// (HandleMoveIntent; maintainer decision D6 = A).
+	if controller.Partition() != nil {
+		code, reason := errcode.ClientError(apperrors.ErrScenePartitioned)
+		return &pb.MoveTargetResponse{Code: code, Reason: reason}, nil
 	}
 	playerEntityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
 	if err != nil {

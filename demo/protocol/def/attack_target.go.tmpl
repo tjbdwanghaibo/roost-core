@@ -1,0 +1,32 @@
+//go:build protocoldef
+
+package protocoldef
+
+// AttackTargetRequest attacks one thing the player sees in a partitioned
+// scene (scene.partition): Target is its subject id as the replicated state
+// names it — a monster, or another player's scene actor. The damage is fixed
+// (scene.partition.attack_damage; maintainer decision D7 = A: skills and
+// buffs do not cross cells). The attacker's cell checks that the target is in
+// its view and in range, and the target's own cell — the other cell's
+// process when the target is across the border — applies it, exactly once
+// however often the request is retried on the way.
+type AttackTargetRequest struct {
+	Target int64 `pb:"1"`
+}
+
+// AttackTargetResponse says the attack was sent (Code 0) and names it: Seq is
+// this player's attack sequence, the identity the target's cell deduplicates
+// on. The verdict comes later and on its own — applied, refused (not
+// visible, out of range, dead), or unknown when the target's cell did not
+// answer in time — and the HP change arrives with the replicated state.
+type AttackTargetResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	Seq    uint64 `pb:"3"`
+}
+
+//roost:protocol group=game handler=player
+type AttackTargetProtocol interface {
+	//roost:msg id=10032
+	AttackTarget(AttackTargetRequest) AttackTargetResponse
+}

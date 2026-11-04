@@ -350,10 +350,10 @@ func (mgr *NestMgr) singleDispatch(name string, id int64, params []any) (any, er
 	if err != nil {
 		return nil, targetLoadError(err)
 	}
-	// 生产 Getter 以 (nil, nil) 表示“实体不存在”（未命中且没有 loader，或 loader 确认不存在），必须回复
-	// ErrEntityNotFound，不能解引用 nil 让顶层恢复把“不存在”和“框架出错”变成同一个回答。
+	// 生产 Getter 以 (nil, nil) 表示“实体不存在”（未命中且没有 loader、loader 确认不存在，或不持久的种类不在内存），
+	// 必须回复 ErrEntityNotFound，不能解引用 nil 让顶层恢复把“不存在”和“框架出错”变成同一个回答。
 	if e == nil {
-		return nil, ErrEntityNotFound
+		return nil, EntityNotFoundError()
 	}
 	if !e.Touch() {
 		if mgr.beforeIOPreparation() {
@@ -436,7 +436,7 @@ func (mgr *NestMgr) dispatchMany(entry handlerEntry, name string, ids []int64, p
 		return nil, declaredTargetCold(ErrEntityNotFound)
 	}
 	if firstDispatchEntityMissing(es) {
-		return nil, ErrEntityNotFound
+		return nil, EntityNotFoundError()
 	}
 	return mgr.dispatchLoadedEntities(entry, name, es, lockEs, params, opts...)
 }

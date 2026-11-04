@@ -1,0 +1,11 @@
+2026/11/03 23:31:12 INFO nats: connected url=nats://127.0.0.1:44222
+STEP enter ok {"monsters_near_p1":[2323454523772634129,2323454523772635153,2323454523772636177,2323472115958678545],"move_refused":"scene_partitioned","p1":100035,"p1_at":{"X":2900,"Y":1500},"p1_hp":100,"p2":100036,"p3":100037}
+STEP straight ok {"creates_p2":2,"nearby_removed":0,"owner_changes":2,"self_gap_ms":50}
+STEP jitter ok {"owner_changes":8,"self_gap_ms":50}
+STEP diagonal ok {"self_gap_ms":50}
+STEP attack_across_0 ok {"applied":10,"damage_forwarded_by_cells":10,"damage_retries_total":0,"duplicate":0,"end_hp":0,"start_hp":100,"target":2323472115958679569}
+STEP attack_across_1 ok {"applied":10,"damage_forwarded_by_cells":10,"damage_retries_total":0,"duplicate":0,"end_hp":0,"start_hp":100,"target":2323454523772635153}
+STEP monster_cross ok {"creates_on_p2":1,"from_sid":1002,"handoffs_accepted_cell_a":8,"handoffs_accepted_cell_b":7,"walker":2323454523772637201}
+STEP cell_crash ok {"base_reenters":5,"cell_b_monsters_respawned":3,"epoch_after":3,"epoch_before":2,"owner_after":1002,"p2_hp_after":80,"p2_hp_before":80,"restart_seconds":5.191861}
+STEP ordinary_scene ok {"move":"ok","move_intent":"scene_not_partitioned","p4":100038}
+seamlessdrill: all steps passed

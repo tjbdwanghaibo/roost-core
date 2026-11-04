@@ -11,6 +11,7 @@ import (
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/rewards"
+	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -49,6 +50,7 @@ const (
 	gmSceneKill = "gm.scene.kill"
 	gmSceneRoot = "gm.scene.root"
 	gmSceneTime = "gm.scene.time_rate"
+	gmScenePart = "gm.scene.partition"
 	gmActClose  = "gm.activity.close"
 	gmFlagList  = "gm.flag.list"
 	gmFlagSet   = "gm.flag.set"
@@ -68,6 +70,10 @@ type gmSceneRootPayload struct {
 	MonsterID int64 `json:"monster_id"`
 	Rooted    bool  `json:"rooted"`
 	Seconds   int64 `json:"seconds,omitempty"`
+}
+
+type gmScenePartPayload struct {
+	PlayerID int64 `json:"player_id,omitempty"`
 }
 
 type gmSceneTimePayload struct {
@@ -122,7 +128,7 @@ type gmMailSendPayload struct {
 }
 
 // registerGMCommands is called from Init, after every Mod has started.
-func registerGMCommands(registry *app.Registry, spawn *spawner, activity *ActivityRunner) error {
+func registerGMCommands(registry *app.Registry, spawn *spawner, activity *ActivityRunner, partitioned *partitionRuntime) error {
 	commands, ok := app.Lookup[*admin.Registry](registry, mods.ModAdmin)
 	if !ok || commands == nil {
 		return fmt.Errorf("gm: admin registry %q is unavailable", mods.ModAdmin)
@@ -342,6 +348,11 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 				"A timed root (seconds > 0) wears off on the monster's buff heartbeat. " +
 				"Payload: {\"monster_id\": <entity id from gm.scene.population>, \"rooted\": true|false, \"seconds\": <0 = until freed>}.",
 			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
+				// A partitioned scene's monster runs no buffs (D5 = A): there is
+				// nothing for a root to stop.
+				if partitioned != nil {
+					return admin.Result{}, apperrors.ErrScenePartitioned
+				}
 				payload, err := admin.DecodePayload[gmSceneRootPayload](command)
 				if err != nil {
 					return admin.Result{}, err
@@ -351,6 +362,37 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 					return admin.Result{}, err
 				}
 				return admin.Result{Data: map[string]any{"monster_id": payload.MonsterID, "rooted": rooted}}, nil
+			},
+		},
+		{
+			Name: gmScenePart,
+			Description: "the partitioned scene on this process (scene.partition): its cell, the node's counters, the Base's " +
+				"attack verdicts and mirrors, and the cell's region (reals, frozen, ghosts). With {\"player_id\": <id>} the " +
+				"Base's routing state of that player instead (owner cell, epoch, snapshot HP and version).",
+			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
+				if partitioned == nil {
+					return admin.Result{}, apperrors.ErrSceneNotPartitioned
+				}
+				payload, err := admin.DecodePayload[gmScenePartPayload](command)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				if payload.PlayerID != 0 {
+					_, entityID, err := playerIDs(payload.PlayerID)
+					if err != nil {
+						return admin.Result{}, err
+					}
+					data, err := partitioned.playerState(ctx, entityID)
+					if err != nil {
+						return admin.Result{}, err
+					}
+					return admin.Result{Data: data}, nil
+				}
+				data, err := partitioned.stats(ctx)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: data}, nil
 			},
 		},
 		{

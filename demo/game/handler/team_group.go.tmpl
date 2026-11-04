@@ -1,0 +1,38 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	scene_actor "{{MODULE}}/game/entities/scene_actor"
+	team "{{MODULE}}/game/entities/team"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+)
+
+// teamGroup 把 Team 的成员表换成 Base 缓存的那份（cellworld.Group）：每名成员的 Player、在分区场景里的 SceneActor
+// （ID 跨格不变）与 Base 的 sid。组队 handler 都在 [Team, Player] 事务里用它：写自己的缓存（Node.SetGroup）、通知别的
+// 成员的 Base（Node.NotifyGroup）。
+func teamGroup(info team.Info) cellworld.Group {
+	g := cellworld.Group{ID: info.TeamID, Ver: info.Ver}
+	for _, unique := range info.Members {
+		playerID, err := entity.BuildEntityID(unique, player.EntityKindPlayer)
+		if err != nil {
+			continue
+		}
+		actorID, err := entity.BuildEntityID(unique, scene_actor.EntityKindSceneActor)
+		if err != nil {
+			continue
+		}
+		g.Members = append(g.Members, cellworld.GroupMember{Player: playerID, Actor: actorID, SID: info.Seats[unique]})
+	}
+	return g
+}
+
+// teamSeat 是一名玩家在成员表里的那一项（离队、被解散的人：通知也要发到他的 Base）。
+func teamSeat(g cellworld.Group, playerEntity int64) []cellworld.GroupMember {
+	for _, m := range g.Members {
+		if m.Player == playerEntity {
+			return []cellworld.GroupMember{m}
+		}
+	}
+	return nil
+}
