@@ -40,7 +40,7 @@ Player 当前**静态绑定 game sid**：跨服玩法由 Remote / Saga 协作，
 | 背包、装备与属性 | Player 组件、嵌套 DAO、Nest rollback | [EquipItem](../../demo/game/handler/equip_item.go.tmpl)：背包扣新装备、换装、归还旧装备、刷新属性同事务 | 格数、绑定、强化与数值；派生属性不能成为另一份权威 |
 | 技能与配置 | `gameplay/skill`、configdata、不可变 Program | [技能指南](guide/08-skill.md)、[配置指南](guide/07-config.md)；Parse → Compile → Host → Runtime | Host 的权威副作用、配置版本、跨 tick 状态与恢复；Skill Runtime 不自动进入 Nest undo |
 | 匹配、聊天与战斗房间 | match / chat / session、Lockstep | game-demo 正式机器人执行聊天、组队匹配、房间战斗和状态同步（`cmd/loadtest`） | MMORPG 世界状态同步不必采用 Lockstep；按具体玩法选择 |
-| 公会与跨服读取 | Remote Entity、lease / fence、Mirror | demo Guild 的 Remote Sender / Mirror 接法；[Remote 指南](guide/05-remote-mirror.md) | 公会权限、命名、成员与跨服观察政策；Mirror 是快照，不授予写权 |
+| 公会与跨服读取 | 实体服务（Remote 托管 `service=`、路由 RPC）、Mirror、Saga | demo 的 alliance 服务与 game 侧公会（[WALKTHROUGH](../../demo/WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror)）；[Remote 指南](guide/05-remote-mirror.md) | 公会权限、命名、成员与跨服观察政策；Mirror 是快照，不授予写权 |
 | 跨 sid 赠礼与补偿 | Saga 原生步骤、事务性 effect、邮件 | `roost add saga -native` / `roost add effect`；[demo 赠礼 saga](../../demo/saga/gift_item/)；§13 的双 sid 脚本 | 收件人路由、补偿、人工收口与重试期限；Saga 不是跨服瞬时原子交易 |
 | 邮件、支付、活动与排行 | mail / platform / activity / rank、持久业务账本 | demo 真实端点与 `scripts/test-demo-generated.sh` | 订单与领奖身份、赛季、补发政策；服务的有限去重环不替代长期资产账本 |
 | 重启、搬服和观测 | 文件 WAL、Mongo、readiness、排空、schema、静态 sid 单实例 | [搬服](PLAYER-MIGRATION.md)、[schema](SCHEMA-MIGRATION.md)、[观测](OBSERVABILITY.md) | 部署容量、恢复目标、监控接收与运维；不删除 WAL 绕过恢复错误 |
@@ -158,7 +158,7 @@ sid A 的玩家 → 本地 Nest 扣物品 / 记意图 → Saga / outbox
 
 生成器入口：`roost add saga <name> -service <service> -steps <s1,s2,...> [-native <step,...> -entity <Entity> -component <Component>]` 与 `roost add effect <topic> -consumer <service>`，细节见 `roost help saga`、`roost help effect` 与 [Saga 指南](guide/06-saga.md)。步骤只执行本步骤声明的实体事务，持锁期间不同步访问另一个服务；原生步骤按 sid 分片时加 `WithAdmit` 准入（命令只在拥有该实体的进程执行，见 demo 赠礼 saga）。单进程容量见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md)“Saga 原生步骤容量（单进程）”与[最新实测](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-CHECKPOINT-20261018.md)（优化过程见 [SAGA-OPT](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/SAGA-OPT-20261018.md)）。
 
-Remote / Mirror 用于公会等跨服实体：读镜像不代表拥有写权，写走正式 owner / lease / fence 路径。
+Remote / Mirror 用于公会等跨服实体：读镜像不代表拥有写权，写走正式 owner / lease / fence 路径。game-demo 把公会放进独立的 alliance 服务：game 只装只读 Mirror，只改公会的操作（入会、退会）是一次路由 RPC，同时改玩家背包的操作（建盟扣费、捐献、领奖）是 Saga——Player 一侧原生步骤，公会一侧 Mongo 步骤调 RPC、请求号取命令的 `IdempotencyKey`。
 
 #### 6.1 下一步方向：跨服世界 Boss / 限时副本
 
@@ -273,7 +273,7 @@ go test -race -count=1 ./internal/service/game ./game/scene/... ./cmd/loadtest
    ```
 
    然后把 `configs/service/config.*.yaml` 的 Mongo / NATS / Redis / etcd 地址改指隔离环境（见 [demo README](../../demo/README.md)“本地实跑”），按需改 ops 端口避免冲突。
-2. `sh deploy/dev/run.sh start`：起 account 等九个托管服务、alliance 服务骨架和 sid 1000 的 game（共十一个进程），并把 sid 1000 注册进 account。
+2. `sh deploy/dev/run.sh start`：起 account 等九个托管服务、alliance 服务（game 的公会走它；第二个实例用 `sh deploy/dev/second-alliance.sh start`）和 sid 1000 的 game（共十一个进程），并把 sid 1000 注册进 account。
 3. 起第二个 game：优先用生成器提供的 `sh deploy/dev/second-game.sh start`。它从 `config.game.yaml` 派生 `config.game2.yaml`，改四处——sid 1001、ops 端口（`9200 + game 的端口块号`，game-demo 是 9200）、玩家 TCP 端口 7001、`etcd.advertise_addr` 的端口（`8900 + 端口块号`，game-demo 是 8900；端口块见[项目生成器](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)）——然后等它的 `/readyz`。WAL 目录不用改：生成的开发配置不写 `dataengine.wal.dir`，运行期按 sid 取 `data/wal/dataengine/1001`，与 sid 1000 的 `data/wal/dataengine/1000` 分开（配置里手写了 `…/wal/dataengine` 的，脚本把它改成 `…/wal/dataengine-1001`）；端口可用 `SECOND_OPS_PORT`、`SECOND_CLIENT_PORT`、`SECOND_ADVERTISE_PORT` 覆盖。`etcd.advertise_addr` 写进服务注册，同一台机器上的每个进程各用一个（维护者 2026-10-19 决定；生成的配置里 game、activity、match 已各不相同，`roost config check --all` 会拒绝两个服务写同一个）；服务间请求仍按 NATS 主题 `<prefix>.svc.<type>.<sid>` 寻址。second-game.sh **不会**把 sid 1001 注册进 account，要手动注册，Redis 参数与 run.sh 读 `config.account.yaml` 的方式一致（`redis.addr`、`redis.password`、`redis.db`、`account.key_prefix`；用 Redis Cluster 时改传 `-redis-cluster <cluster_addrs>`）：
 
    ```bash

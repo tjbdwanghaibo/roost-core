@@ -37,7 +37,8 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `game/`（其余子目录） | 玩法与策略：`matchmaking`、`chatroom`、`dungeon`、`ranking`、`rewards`、`battle`、`scene`、`skills`、`gift` 等；`actor` 是玩家与怪物共用的心跳驱动、动作词表、状态目录与移动接线 |
 | `saga/gift_item/` | 送礼 saga 定义 |
 | `internal/service/<服务>/` | 各服务进程：game 的消费者、matchmaker、scene、battle、GM；account / chat / session 的 collaborators |
-| `internal/rpc/alliance/`、`internal/service/alliance/`、`game/alliancerule/`、`game/entities/alliance*/` | 联盟服务骨架（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)阶段 3）：独立的 alliance 进程独占 Alliance / AllianceMember（Remote 托管、`service=alliance`）与每实例一个的 AllianceShard（定时器宿主），对已有实体的写走路由 RPC（发往实体的 owner；Alliance 起服预加载并登记路由），建盟走随机路由，请求回执与改动同事务；game 还没有调用它，现有公会照旧 |
+| `internal/rpc/alliance/`、`internal/service/alliance/`、`game/alliancerule/`、`game/entities/alliance*/` | 联盟服务（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：独立的 alliance 进程独占 Alliance / AllianceMember（Remote 托管、`service=alliance`）与每实例一个的 AllianceShard（定时器宿主），对已有实体的写走路由 RPC（发往实体的 owner；Alliance 起服预加载并登记路由），建盟走随机路由，请求回执与改动同事务；运维命令 `alliance.info` / `alliance.guard` / `alliance.transfer` / `alliance.stop_founding` |
+| `game/guild/`、`saga/alliance_*/`、`internal/service/<game>/alliance_saga.go`、`alliance_notice.go` | game 侧的公会：game 只装只读 Mirror（`game/entities/alliance*/mirror.go`），入会 / 退会一次 RPC，建盟扣费 / 捐献 / 领奖各一个 saga（Player 原生步骤 + 调 RPC 的 Mongo 步骤），接收成员变化通知推给在线玩家；见 [WALKTHROUGH](WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror) |
 | `internal/access/player/tcp/` | 玩家 TCP 接入的鉴权（`auth.go`） |
 | `configs/` | 配置表 schema、CSV、生成数据与各服务配置 |
 | `cmd/loadtest`、`loadtest/` | 机器人压测与场景脚本；`cmd/accountctl` 是操作员工具 |
@@ -53,9 +54,10 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 ```bash
 make dev-up      # deploy/dev/docker-compose.yaml：Mongo 副本集 rs0、NATS JetStream、Redis
 make dev-run     # deploy/dev/run.sh start：编译 bin/app，先起九个托管服务（account → activity → chat → global → mail → match → platform → rank → session），
-                 # 再起 alliance（联盟服务骨架，game 尚未调用它），最后起 game，共十一个进程，等每个 /readyz，
+                 # 再起 alliance（联盟服务，game 的公会走它），最后起 game，共十一个进程，等每个 /readyz，
                  # 再用 cmd/accountctl 把 sid 1000 注册进 account（否则 CreateRole 拒绝）；日志与 pid 在 .dev/
-make dev-smoke   # 两个机器人走完整条链（登录 → 聊天 → 加道具 → 升级 → 匹配 → 世界计数）
+make dev-smoke   # 两个机器人走完整条链（登录 → 聊天 → 加道具 → 升级 → 匹配 → 世界计数 → 建盟 / 捐献 / 领奖 saga）
+sh deploy/dev/second-alliance.sh start   # 可选：第二个 alliance 实例（sid 1001），建盟分到两个实例；缩容步骤见脚本头
 make loadtest LOADTEST_COUNT=20   # 更多机器人；偶数，duel 两人一组
 make dev-stop
 ```
