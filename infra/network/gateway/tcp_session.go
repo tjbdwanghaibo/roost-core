@@ -22,6 +22,7 @@ type tcpSession struct {
 	connection      net.Conn
 	principal       Principal
 	nonce           string
+	admission       uint64 // acceptLoop 给的接受序号（递增），同一 SessionID 的新旧以它为准（registerSession）
 	writeTimeout    time.Duration
 	maxPayloadBytes uint32
 	writeMu         sync.Mutex

@@ -29,6 +29,8 @@ NATS ACL 必须限制每个进程的来源前缀和自己的 reply inbox。应�
 
 完整绑定含 PlayerID、SessionID、Gate/Game SID 与 incarnation、连接 nonce、Game 签发 BindID。先 Bind，再物理写出 AuthACK，最后 Activate。OnActive/OnClosed 用 Game 分配的不复用数值 receiver 建立和关闭 Sync/Room 生命周期；旧关闭、旧出站失败不会解绑新连接。不同 SessionID 可属于同一玩家，没有框架隐式全局单点登录。
 
+同一 SessionID 的新连接替换旧连接。嵌入 TCP（以及 Gate 本地的连接表）按连接被接受的先后定新旧，不按握手完成的先后：已登记的是更晚接受的连接时，迟到完成的旧登录在 ack 之后被拒登记并断开，不关闭新连接（2026-11-04 修复；修前后完成登记者胜出，客户端放弃握手立即重连时旧连接会把新连接踢掉，回归 `TestALoginThatFinishesLateDoesNotDisplaceANewerConnectionOfTheSameSession`）。独立 Gate 的 Game 绑定表仍按 Bind 完成先后替换，同类交错下新连接仍会被断开，见 [KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#同一-sessionid-的重连)。
+
 Gate Forward 只有一次传输尝试。预算包含 Gate 等待、NATS、Game 等待与正式 dispatcher；控制请求也有条目/字节上限和固定 worker，排队消耗原预算。
 
 - `NotAdmitted`：确认未交给 dispatcher。

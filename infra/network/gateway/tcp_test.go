@@ -575,6 +575,95 @@ func TestClosingASessionCancelsItsInFlightDispatch(t *testing.T) {
 	waitReleased(t, server, 1)
 }
 
+// 同一 SessionID 先后两条连接：先接受的旧连接握手慢（认证器卡住），后接受的新连接已经登录并在服务请求。旧连接的
+// 登录随后完成时不能把新连接踢掉——客户端放弃一次握手立即重连（Robot 的 Reconnect、玩家网络切换）时，旧连接的
+// 认证帧已经到达服务端，它的握手会照常走完。确定的交错：旧连接停在认证器里，新连接走完握手并答完一个请求（请求
+// 只在登记之后读取，所以新连接已登记），再放行旧连接。修复前旧连接登记时关闭了新连接（mmorpg 生成工程
+// TestMMORPGRobotBusiness 偶发 “robot session: closed” 的根因）。
+func TestALoginThatFinishesLateDoesNotDisplaceANewerConnectionOfTheSameSession(t *testing.T) {
+	config := DefaultTCPConfig()
+	config.Addr = "127.0.0.1:0"
+	config.HandshakeTimeout = 5 * time.Second
+	oldEntered, releaseOld := make(chan struct{}), make(chan struct{})
+	dispatch := func(_ context.Context, _ Session, msgID, seq uint32, _ wire.PayloadKind, payload []byte) (any, error) {
+		return &TCPResponse{MessageID: stuckResponseID, Sequence: seq, Payload: payload}, nil
+	}
+	server, err := NewTCPServer(config, dispatch, AuthenticatorFunc(func(_ context.Context, token string, _ net.Addr) (Principal, error) {
+		if token == "old" {
+			close(oldEntered)
+			<-releaseOld
+		}
+		return Principal{PlayerID: 7, SessionID: "same"}, nil
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = server.Stop(ctx)
+	})
+	runtime := &TCPRuntime{}
+	runtime.server.Store(server)
+	// request 发一个请求并读它的应答；连接已被服务端关闭时返回错误。
+	request := func(connection net.Conn, sequence uint32) error {
+		client := &tcpSession{connection: connection, writeTimeout: time.Second}
+		if err := client.writeFrame(context.Background(), 0, stuckRequestID, sequence, []byte("ping")); err != nil {
+			return err
+		}
+		_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+		response, release, err := server.readFrame(connection)
+		if err != nil {
+			return err
+		}
+		release()
+		if response.sequence != sequence {
+			return fmt.Errorf("answer for sequence %d, want %d", response.sequence, sequence)
+		}
+		return nil
+	}
+
+	old, err := net.Dial("tcp", server.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = old.Close() })
+	if err := (&tcpSession{connection: old, writeTimeout: time.Second}).writeFrame(context.Background(), 0, 0, 1, []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-oldEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the old connection's login never reached the authenticator")
+	}
+	newer := dialAuthenticated(t, server, "new")
+	if err := request(newer, 2); err != nil {
+		t.Fatalf("the newer connection could not serve a request before the old login finished: %v", err)
+	}
+
+	close(releaseOld)
+	_ = old.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if ack, release, err := server.readFrame(old); err == nil {
+		release()
+		if ack.messageID != 0 || ack.sequence != 1 {
+			t.Fatalf("unexpected frame on the old connection %+v", ack)
+		}
+		// 旧连接拿到 ack 之后被拒登记：它的请求得不到应答。修复前它登记成功、能应答。
+		if err := request(old, 2); err == nil {
+			t.Error("the old connection whose login finished late was registered and served a request")
+		}
+	}
+	if err := request(newer, 3); err != nil {
+		t.Fatalf("the newer connection was closed by an older connection's login that finished after it: %v", err)
+	}
+	if got := runtime.ActiveSessions(7); got != 1 {
+		t.Fatalf("active sessions = %d, want only the newer connection", got)
+	}
+}
+
 // A15 (closing batch 2): a handler that does not honor its context. The
 // dispatch budget bounds the wait, not the work: at the deadline the
 // handler's context ends, but the read loop is synchronous (per-connection
@@ -1545,7 +1634,7 @@ func TestTheSessionClosedEventIsPublishedAfterTheConnectionReturnsItsResidentByt
 	server.mu.Unlock()
 	server.wait.Add(1)
 	served := make(chan struct{})
-	go func() { defer close(served); server.serveConnection(connection) }()
+	go func() { defer close(served); server.serveConnection(connection, 1) }()
 
 	handshake := &tcpSession{connection: client, writeTimeout: time.Second}
 	if err := handshake.writeFrame(context.Background(), 0, 0, 1, []byte("token")); err != nil {
