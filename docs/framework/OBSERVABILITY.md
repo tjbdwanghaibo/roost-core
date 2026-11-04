@@ -568,7 +568,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 
 `dataengine.projector.parallel_window.*` 是按实体分片并行投影的窗口计数：`total` 是以并行通道投影的窗口数，`lanes.total` / `records.total` 是这些窗口的通道数与记录数合计（相除得平均通道数与平均窗口大小），`truncated.total` 是某通道因逐条退回而提前停下、本轮只确认到前缀的窗口数（偶发属正常，持续增长说明重放的已应用记录多，查 WAL 确认是否受阻）。窗口里全部记录互相冲突时走串行路径，不计入。`dataengine.projection.pending` 在准入与确认/撤销时更新；outbox.pending / oldest_age_ms 随既有后台采样和健康采样更新，单位分别是条、毫秒。正式装配每进程一个 Engine；自行创建多个 Engine 必须另行提供实例聚合，不能把进程 gauge 当多实例总和。
 
-`admin.execute.total` 标签为已注册命令名（未知名归 `_unregistered`）和固定 outcome；`admin.http_refused.total` 记录鉴权拒绝。审计日志包含开始/结束、trace_id、调用方声明的 operator/source 与耗时，不记录 payload、token、返回 Data。operator/source 不是已验证身份。超时结果为 unknown，长时间不配合 ctx 的 handler 可能只有开始记录。`entity.kick` / `entity.unload`（D16）另各记一条 Info 日志，带 player_id / entity、reason、trace_id、operator 与结果，可按 trace_id 与审计日志对上；`entity.unload` 的 busy / timeout 是确定的“没有卸载”，不包裹 ctx 错误，outcome 记 `error` 而不是 `unknown`。
+`admin.execute.total` 标签为已注册命令名（未知名归 `_unregistered`）和固定 outcome；`admin.http_refused.total` 记录拒绝：`reason=unauthorized` 是鉴权拒绝，`reason=stopping` 是 App 停机第一步关了命令准入之后到达的命令（答 503、没有执行，[App 生命周期](guide/01-app-lifecycle.md)）。审计日志包含开始/结束、trace_id、调用方声明的 operator/source 与耗时，不记录 payload、token、返回 Data。operator/source 不是已验证身份。超时结果为 unknown，长时间不配合 ctx 的 handler 可能只有开始记录。`entity.kick` / `entity.unload`（D16）另各记一条 Info 日志，带 player_id / entity、reason、trace_id、operator 与结果，可按 trace_id 与审计日志对上；`entity.unload` 的 busy / timeout 是确定的“没有卸载”，不包裹 ctx 错误，outcome 记 `error` 而不是 `unknown`。
 
 `bus_rpc_pending_requests{transport}` 是 RPC 全部在途数量 Gauge；原来的 bus_rpc_pending_total 名称已移除，面板迁移到新名。按方法的 bus_rpc_pending 保持原样。
 
