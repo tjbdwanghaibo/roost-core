@@ -234,6 +234,8 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](https://github.c
 
 ### Remote
 
+- **多写者本地副本**（2026-11-04 修复后的边界，契约见 [REMOTE_ENTITY“多写者：本地副本与权威”](../framework/REMOTE_ENTITY.md#多写者本地副本与权威)）：写准入发现本地实例落后于权威或停在 `Fenced` 时卸载重载，需要 loader 实现 `IRemoteEntityUnloader`（正式 `ManagerAccess` 实现了）；自定义 loader 不支持卸载时照旧报版本冲突 / fenced，直到业务自己重载。事务外独立删档持有实体锁，遇到落后实例按版本冲突拒绝，不在删档中途换实例；先有一次 Nest 写准入（或 `ManagerAccess.Unload`）换掉旧实例再删。回归用两进程共用的 Mongo 权威替身与 Redis 版本锁替身（`write_admission_test.go`），以及 `scripts/test-remote-generated.sh` / `test-remote-matrix.sh` 的现有真实依赖用例；两个真实进程交替写同一共享实体的真实依赖用例没有加。
+- **game-demo 的公会跨进程写会被拒**（2026-11-04 核实，demo 行为待维护者决定）：`Guild` 是 Remote 托管实体但从不 `EnterRemoteSharedMode`，第一笔写（`FoundGuild`）由创建它的进程认领独占所有权；另一个进程的 `JoinGuild`（客户端端点或 GM `guild.join`）在写准入被拒，`writer fenced: entity=… owner=<创建进程 sid>`，客户端拿到 internal 错误码。模板注释（`join_guild` handler、`Guild` 实体、GM `guild.join` 说明）写的是“任意进程都能写”，与行为不符。现有验收没有覆盖：`scripts/test-demo-generated.sh` 只跑公会 ID 发号（`TestGuildIDsRealMongo*`），Robot 只在同一进程上 `found_guild` / `guild_info`。
 - **Remote WAL级Rejected处理**（`38b710a2`）：Durability 1/2/3 的正式链路不产生 Remote Rejected，strict / pipelined 的 `Commit` 失败一律带 `ErrRemotePersistenceIndeterminate`；tracker 的 Rejected 收尾只剩 Durability 0 来源。守卫 `TestWALRemoteAuthorityConflictNeverProducesRejected` 只覆盖正式 MongoStore / MongoCommitter 投影链路；自定义投影存储若产生 Rejected，strict / pipelined 仍按结果未知回复、由 finalizer 按 tracker 结论收尾（`TestRemoteWALCommitFailureNeverRepliesRemotePartRejected`）。
 
 ### Saga

@@ -287,3 +287,29 @@ func TestLocalDeleteAdmissionRequiresPreparer(t *testing.T) {
 		t.Fatalf("bare entity outside tx: admission=%v err=%v", admission, err)
 	}
 }
+
+// heldMarkerBatchManager 记下 PrepareRemoteWriteBatch 收到的 ctx 是否带“调用方已持有写目标实体锁”标记，然后拒绝。
+type heldMarkerBatchManager struct {
+	entity.IRemoteEntityManager
+	held *bool
+}
+
+func (m heldMarkerBatchManager) PrepareRemoteWriteBatch(ctx context.Context, _ []int64) (entity.RemoteWriteBatch, error) {
+	*m.held = entity.RemoteWriteTargetHeld(ctx)
+	return nil, entity.ErrRemoteVersionConflict
+}
+
+// 事务外独立删档在 EntityManager.Destroy 持有实体锁时准备 Remote 批次：必须告诉写准入“写目标的锁在调用方手里”，
+// 否则写准入发现实例落后于权威时会去卸载它（取同一把可重入锁），在删档中途把实例换掉。
+func TestStandaloneRemoteDeleteTellsAdmissionTheTargetLockIsHeld(t *testing.T) {
+	ensureDeleteGuardKinds()
+	var held bool
+	runtime := newDeleteRuntime(entity.NewEntityManager(), heldMarkerBatchManager{held: &held})
+	admission, err := runtime.admitEntityDelete(context.Background(), newRemoteDeleteEntity(806), 1)
+	if !errors.Is(err, entity.ErrRemoteVersionConflict) || admission != entity.DeleteAdmissionImmediate {
+		t.Fatalf("admission=%v err=%v", admission, err)
+	}
+	if !held {
+		t.Fatal("standalone remote delete prepared its batch without entity.WithRemoteWriteTargetHeld")
+	}
+}

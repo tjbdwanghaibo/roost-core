@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -306,8 +307,21 @@ func (w *remoteEntityWrapper) writeMarker() (entity.RemoteEntityMarkerLease, err
 
 // loadWriteTarget 返回本次写入的实例：本地已有且（需要对齐权威版本时）版本与 expectedVersion 一致就直接用，
 // 否则从后端加载。实例不存在返回 ErrRemoteRejected；旧实例正在卸载返回可重试的 ErrRemoteEntityReloading。
+//
+// 正式 loader（ManagerAccess.LoadRemoteEntity）内存命中时返回的就是本地那份实例，“从后端加载”本身换不掉它。
+// 所以需要对齐权威、而本地实例已不能代表权威时（staleWriteTarget），先把它从本进程内存卸掉，再加载：
+// 未命中才会经 loader 从权威重建。
 func (w *remoteEntityWrapper) loadWriteTarget(ctx context.Context, matchAuthority bool, expectedVersion int64) (entity.IThreadSafeRemoteEntity, error) {
 	remoteEntity := w.lookupLocalEntity()
+	if remoteEntity != nil && matchAuthority && w.staleWriteTarget(remoteEntity, expectedVersion) && !entity.RemoteWriteTargetHeld(ctx) {
+		unloaded, err := w.unloadStaleWriteTarget(ctx, remoteEntity)
+		if err != nil {
+			return nil, err
+		}
+		if unloaded {
+			remoteEntity = nil
+		}
+	}
 	if remoteEntity == nil || (matchAuthority && (remoteEntity.EntityVersion() != expectedVersion || expectedVersion <= 0)) {
 		var loadErr error
 		remoteEntity, loadErr = w.loadEntity(ctx)
@@ -324,6 +338,60 @@ func (w *remoteEntityWrapper) loadWriteTarget(ctx context.Context, matchAuthorit
 		return nil, fmt.Errorf("%w: entity %d not found", entity.ErrRemoteRejected, w.id)
 	}
 	return remoteEntity, nil
+}
+
+// staleWriteTarget 报告本地实例在权威刚确认本节点可写（独占的持久许可，或共享模式的分布式锁 + 许可）之后是否
+// 还能用作写目标。两种情况不能用，必须从权威重载：
+//   - 版本落后于权威：别的进程在共享模式下写过（或所有权转走期间新所有者写过），内存里没有那些修改；
+//   - 停在 Fenced：所有权转走时被置为 Fenced，状态表里它不会自己恢复，权威又把写许可交回本节点。
+//
+// 持久拒绝后等待框架卸载的实例（rejectedReloadPending）不在这里处理：那条路径自己卸载并交付结论，
+// 写准入照旧返回可重试的 ErrRemoteEntityReloading。版本领先于权威不按落后处理，仍由版本校验拒绝。
+func (w *remoteEntityWrapper) staleWriteTarget(local entity.IThreadSafeRemoteEntity, expectedVersion int64) bool {
+	if w.rejectedReloadPending(local) {
+		return false
+	}
+	if expectedVersion > 0 && local.EntityVersion() < expectedVersion {
+		return true
+	}
+	return local.RemoteOwnershipState() == entity.RemoteOwnershipFenced
+}
+
+// unloadStaleWriteTarget 把不能再写的本地实例仅内存卸载（与持久拒绝后的卸载同一入口：Backend.UnloadRemoteEntity
+// → ManagerAccess.Unload，DestroyReasonMemoryUnload，不删持久数据），让随后的加载从权威重建。
+//
+// 调用方持有写门、所有权读锁与（共享模式）分布式锁；卸载要取实体锁，经 ctx 的本地执行入口（Nest I/O 准备阶段注入
+// 的业务池续行）执行，等锁受 ctx（OpTimeout）约束。实体锁持有者不会反过来等这几把锁：带 Remote 目标的消息在 I/O
+// 阶段先取写门、后取 Guard，所有权转换也是先写门后实体锁。
+//
+// loader 不支持卸载时返回 (false, nil)，调用方按旧路径加载（换不掉实例，随后的版本校验照旧拒绝）。卸载没有完成
+// （等锁超时、业务池拒绝投递）返回可重试的 ErrRemoteEntityReloading；实例已离开 EntityManager、只是业务销毁回调
+// 出错时按已卸载处理（只记日志），与 unloadRejectedEntities 相同。
+func (w *remoteEntityWrapper) unloadStaleWriteTarget(ctx context.Context, stale entity.IThreadSafeRemoteEntity) (bool, error) {
+	unloader, ok := w.mgr.backend.(entity.IRemoteEntityUnloader)
+	if !ok {
+		return false, nil
+	}
+	var unloadErr error
+	ran, runErr := runLocalStep(ctx, func() {
+		unloadErr = unloadRemoteEntityOnce(ctx, unloader, stale)
+	})
+	switch {
+	case runErr != nil || !ran:
+		if runErr == nil {
+			runErr = errors.New("local executor did not run the unload")
+		}
+		return false, fmt.Errorf("%w: entity %d: unload stale local copy: %w", entity.ErrRemoteEntityReloading, w.id, runErr)
+	case errors.Is(unloadErr, entity.ErrRemoteUnloadUnsupported):
+		return false, nil
+	case unloadErr != nil && !stale.IsRemoved():
+		return false, fmt.Errorf("%w: entity %d: unload stale local copy: %w", entity.ErrRemoteEntityReloading, w.id, unloadErr)
+	case unloadErr != nil:
+		slog.Error("remote_entity: lifecycle hook failed while unloading a stale local copy", "entity", w.id, "err", unloadErr)
+	}
+	w.detachEntity(stale)
+	metrics.IncCounter("remote_entity.stale_reload_total", nil, 1)
+	return true, nil
 }
 
 // admitWriteOwnershipState 检查实例的所有权状态能否接受写入。Recovering 就地解冻（err 是解冻失败）；

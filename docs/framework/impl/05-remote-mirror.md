@@ -31,6 +31,12 @@
 
 Rejected 的写入点（[batch.go](../../../framework/remoteentity/batch.go)、[transaction_manager.go](../../../framework/remoteentity/transaction_manager.go)）：Durability 0 的 `ApplyRemoteCommits` 把 fenced / 版本冲突 / 拒绝记为 Rejected；`remoteWriteBatch.Commit` 只在 Durability 0 且错误不带未知哨兵时同步回滚（`rejected`），其余失败一律标 `indeterminate` 交 finalizer；`Abort`（WAL 准入前）只在 tracker 记 Rejected；`rejectUnresolvedMemoryTransaction` 只对 Durability 0 调 `RejectUnresolvedRemoteCommits` 写持久拒绝。`processDeferredRemoteClose` 的 Rejected 分支（`settleRejectedRemoteEntries` → `finishRejectedRemoteClose` → `deliverRemoteOutcome(false)`）与 `Close` 的明确拒绝分支（`unloadRejectedEntities`）由这两条 Durability 0 来源共用。`waitedCommitError` 让等待投影器结论的 strict / pipelined 失败一律带 `ErrRemotePersistenceIndeterminate`。WAL 级没有拒绝写入点：MongoStore 投影把权威 CAS 冲突包成 `ErrProjectionConflict` 并 fatal，投影器在同一 Mongo 事务成功后再调 `ApplyRemoteCommits` 只做幂等读回。
 
+## 2C. 多写者本地副本走读
+
+[batch.go](../../../framework/remoteentity/batch.go) 的 `beginWrite` 在取得写许可（`GrantWrite` 或 `lockSharedWrite`）之后调 `loadWriteTarget`：`staleWriteTarget` 判定本地实例版本落后于许可版本、或状态为 `Fenced`（持久拒绝等待卸载的实例除外，交给 2B 的路径）；`unloadStaleWriteTarget` 经 `runLocalStep`（ctx 的本地执行入口）调 `Backend.UnloadRemoteEntity`，成功后 `detachEntity`，再 `loadEntity` 从 loader 加载。持有的资源顺序是写门 → 所有权读锁 → 分布式锁 → 实体锁（卸载内），与带 Remote 目标的消息（I/O 阶段先写门、后 Guard）和所有权转换（先写门后实体锁）一致。ctx 带 `entity.WithRemoteWriteTargetHeld`（[entity_delete.go](../../../framework/dataengine/engine/entity_delete.go) 的独立删档）时不卸载。
+
+[transaction_manager.go](../../../framework/remoteentity/transaction_manager.go) 的 `acknowledgeRemoteCommit` 在 `remoteReceiptObsolete` 之后用 `remoteCommitHeldBy` 核对实例是这笔提交的写者（LockFence 相同、StateVersion 是 BaseVersion 或 NextVersion），不是就跳过确认。回归见 [write_admission_test.go](../../../framework/remoteentity/write_admission_test.go) 的 `TestSharedModeWriterReloadsALocalCopyLeftBehindByAnotherProcess`、`TestPublishingAnotherProcessesCommitDoesNotAdvanceTheLocalCopy`、`TestOwnerRoutedWriterReloadsALocalCopyLeftBehindWhileItWasNotTheOnlyWriter`、`TestOwnershipTransferredBackWithoutWritesLeavesTheOwnerWritable`、`TestStaleWriteTargetHeldByTheCallerIsRefusedNotUnloaded`、`TestSharedModeWritersAlternateThroughNest`（两个进程共用 Mongo 权威替身与 Redis 版本锁替身，正式 `ManagerAccess` loader）。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。
@@ -172,7 +178,7 @@ Rejected 的写入点（[batch.go](../../../framework/remoteentity/batch.go)、[
 - [unresolved_rejection_race_integration_test.go](../../../framework/remoteentity/unresolved_rejection_race_integration_test.go)：`TestRealMongoRejectionWaitsForInFlightCommitThenReportsApplied`、`TestRealMongoRejectionWinsAfterInFlightCommitAborts`、`TestRealMongoRejectionFirstAbortsTheInFlightCommit`
 - [versioned_lock_generation_test.go](../../../framework/remoteentity/versioned_lock_generation_test.go)：`TestVersionedLockNewGenerationRenewsWhileOldTouchGoroutineExits`、`TestVersionedLockTouchRestartStressNoLostRenewal`、`TestDelayedUnlockCannotClearReacquiredGeneration`
 - [versioned_lock_test.go](../../../framework/remoteentity/versioned_lock_test.go)：`TestVersionedLockReacquiresAfterAcquireReplyLost`、`TestVersionedLockLostAcquireDefersToOtherHolder`、`TestVersionedLockUnsentAcquireKeepsUnknownReleaseReclaimable`、`TestVersionedLockReacquiresAcrossUnknownChain`、`TestVersionedLockLateAcquireScriptCannotTakeNewGeneration`；其余 13 项见文件
-- [write_admission_test.go](../../../framework/remoteentity/write_admission_test.go)：`TestColdRemoteAdmissionHonorsCallerCancellation`、`TestRemoteBatchSharesOneBoundedAdmissionDeadline`、`TestAuthorityLockUsesDurableVersionAndCleansFailedAdmission`、`TestAuthorityLockRetriesKnownLeaseExpiryBeforeBusinessAdmission`、`TestRemoteWriteBudgetIsIndependentAndNonBlocking`；其余 4 项见文件
+- [write_admission_test.go](../../../framework/remoteentity/write_admission_test.go)：`TestColdRemoteAdmissionHonorsCallerCancellation`、`TestRemoteBatchSharesOneBoundedAdmissionDeadline`、`TestAuthorityLockUsesDurableVersionAndCleansFailedAdmission`、`TestAuthorityLockRetriesKnownLeaseExpiryBeforeBusinessAdmission`、`TestRemoteWriteBudgetIsIndependentAndNonBlocking`；其余 10 项见文件
 
 </details>
 
