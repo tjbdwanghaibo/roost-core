@@ -289,7 +289,7 @@ game-demo 是参考实现，不改成生成产物；以上四件生成器能力�
 
 ## 5. 风险与未验证项
 
-- **Remote 实体 handler 里 `EmitStart` / `Emit`**：投影结构上支持（同一 Mongo 事务），真实依赖下没有端到端用例，阶段 1 第 ④ 项先补；补之前 2.5 的 effect 链与 2.6 的服务侧启动不能算可用。
+- **Remote 实体 handler 里 `EmitStart` / `Emit`**：阶段 1 第 ④ 项已补真实依赖端到端（`remoteflow` 的 `TestGeneratedRemoteHandlerEmitsEffectsWithTheRemoteWrite`，2026-11-04 macOS 私有依赖通过）：effect 与 Remote 写同一条提交记录投影、各发布一次，失败不提交。本用例只覆盖单进程 strict 与 memory 升 strict，不含 Remote handler 提交后 kill -9、WAL 重放时 effect 的去重（阶段 5 的 Saga 用例覆盖）。
 - **写 RPC 延迟**：唯一的 Remote 写样本是 strict p50 / p99 约 117 / 195 ms（1.2），加上 RPC 一跳与 Mongo `GrantWrite`。公会操作可以接受，但没有联盟服务自己的测量。
 - **Mirror 数字是历史值**：1.3 的读延迟与推送延迟来自 2026-10-06（v1.21 时期），之后 Remote 链路改过；阶段 5 只做短测，不做长稳。
 - **视图版本与单调读**：写 RPC 返回的是实体版本；`remoteview` 视图的水位只在视图字段变化时推进。缺省用读实体缺省快照的 `//roost:mirror` DTO 避开这个问题；若业务改用字段视图做写后读，要先在阶段 5 核对 Monotonic 对视图 scope 的判定。
@@ -327,7 +327,7 @@ game-demo 是参考实现，不改成生成产物；以上四件生成器能力�
 
 | 阶段 | 状态 | 提交 | 备注 |
 | --- | --- | --- | --- |
-| 1 框架 | 进行中 | — | — |
+| 1 框架 | 本地完成，待维护者复核推送 | `f5544d37`（①②）、`6b949c30`（③，`0281f183` 补 Mod 依赖名检查）、`1323a763`（④） | 验收（2026-11-04 macOS，私有依赖 `scripts/mirror-local.sh` 偏移 22000）：受影响包 `-race`、全量 `go test ./...`、根包、glsvet、doc anchors 0 broken、`test-remote-generated.sh` 全部 PASS（MirrorLocal 两项按门变量 SKIP）、`test-demo-generated.sh` PASS、`test-remote-matrix.sh` 21 格 PASS。① 守卫按维护者 A 做成“别的服务的 kind”黑名单：`coreremote.Config.ForeignKinds` / `wiring/remoteentity.WithForeignKinds`，不是 2.10 原文的“本服务可写 kind”白名单；只经 ModOption 传入、不加 YAML 键（声明只在实体注解一处，阶段 2 生成）。拒绝点覆盖写准入与 `beginOwnershipTransition` 的全部所有权操作，哨兵 `entity.ErrRemoteKindNotOwned`。② `servicerpc.SlotTable` / `SlotTableConfig` / `CallSlotChecked` / `Redirect` / `Retryable` / `Classify`，新框架码 `errcode.CodeRetryable = 4`、`CodeRedirect = 5`；Remote 写错误到答复的映射放在 `wiring/remoteentity.RPCWriteAnswer`（infra 不能依赖 framework）。`SlotTableConfig` 的 `slots` 是整数、不能用 `shared` tag，跨服务一致性核对留给阶段 2 的 doctor。新建实体时服务端按 `table.OwnerOf` 判断槽位归属留给阶段 3（guide/09 2A 边界）。③ `nest.MirrorSnapshotResolver`，wiring Nest Mod 在没有写 Manager、有 `ModRemoteMirror` 时接上。④ 端到端首跑即绿，未发现缺陷。“恢复完成前不接请求”框架已由 App 启动顺序保证（DataEngine Start 排空 WAL），owner Mod 依赖 `nest` 由阶段 2 生成器声明 |
 | 2 生成器 | 进行中 | — | — |
 | 3 服务骨架 | 未开始 | — | 依赖 1 |
 | 4 demo 迁移 | 未开始 | — | 依赖 2、3 |
