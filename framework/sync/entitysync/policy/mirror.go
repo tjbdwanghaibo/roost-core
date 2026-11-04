@@ -57,7 +57,8 @@ type MirrorConfig[T any] struct {
 	Snapshot func(T, entity.SyncProfile) (entity.FrozenSyncPayload, error)
 	// Delta 可选：把内容按字段掩码编码成增量。mask 是自上次交付以来各次 Apply 的 Mask 之并。为 nil 时只发全量。
 	Delta func(T, entity.SyncProfile, uint64) (entity.FrozenSyncPayload, error)
-	// TTL：超过它没有 Apply 的 mirror 由 Expire 删除；墓碑保留 2×TTL。
+	// TTL：超过它没有 Apply 的 mirror 由 Expire 删除（单份内容可用 MirrorItem.Hold 换成别的保留时间）；墓碑保留
+	// 2 × max(TTL, 保留时间)。
 	TTL time.Duration
 }
 
@@ -72,6 +73,9 @@ type MirrorItem[T any] struct {
 	// Mask 是相对上一个被接受版本改了哪些字段；0 表示全量。调用方跳过了中间版本（丢消息）时必须给 0：
 	// 增量只在相邻版本之间成立。
 	Mask uint64
+	// Hold 是这份内容被接受后、没有更新时保留多久（Expire 按它删除）；0 取 MirrorConfig.TTL。同一对象可以有发送周期
+	// 不同的来源（分区 Scene 里 witness 每拍一份、队伍快照每秒一份）：保留时间跟着最近一次被接受的那份走。
+	Hold time.Duration
 }
 
 // MirrorOutcome 是 Apply 的结果。
@@ -114,6 +118,7 @@ type mirrorEntry[T any] struct {
 	state   *entity.SubjectSyncState
 	at      spatial.Point
 	heardAt time.Time
+	hold    time.Duration // 最近一次被接受的内容的保留时间（MirrorItem.Hold，0 已换成 TTL）
 }
 
 type mirrorTomb struct {
@@ -172,7 +177,7 @@ func (m *Mirrors[T]) Apply(item MirrorItem[T], now time.Time) (MirrorOutcome, er
 }
 
 func (m *Mirrors[T]) createLocked(item MirrorItem[T], at spatial.Point, now time.Time) (MirrorOutcome, error) {
-	e := &mirrorEntry[T]{version: item.Version, at: at, heardAt: now}
+	e := &mirrorEntry[T]{version: item.Version, at: at, heardAt: now, hold: m.holdOf(item)}
 	content := item.Content
 	e.content.Store(&content)
 	e.state = entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{
@@ -210,7 +215,7 @@ func (m *Mirrors[T]) updateLocked(e *mirrorEntry[T], item MirrorItem[T], at spat
 	}
 	content := item.Content
 	e.content.Store(&content)
-	e.version, e.heardAt = item.Version, now
+	e.version, e.heardAt, e.hold = item.Version, now, m.holdOf(item)
 	if item.Mask == 0 || m.cfg.Delta == nil {
 		e.state.MarkFullDirty(entity.SyncFullReasonDirty)
 	} else {
@@ -258,7 +263,8 @@ func (m *Mirrors[T]) Remove(id int64, ver MirrorVersion, now time.Time) bool {
 	return false
 }
 
-// Expire 删除超过 TTL 没有 Apply 的 mirror，并清理过期墓碑；返回删除的 mirror 数。调用方按自己的节拍调用。
+// Expire 删除超过保留时间（最近一次被接受的 MirrorItem.Hold，没给时 TTL）没有 Apply 的 mirror，并清理过期墓碑；
+// 返回删除的 mirror 数。调用方按自己的节拍调用。
 func (m *Mirrors[T]) Expire(now time.Time) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -267,7 +273,7 @@ func (m *Mirrors[T]) Expire(now time.Time) int {
 	}
 	removed := 0
 	for id, e := range m.entries {
-		if now.Sub(e.heardAt) > m.cfg.TTL {
+		if now.Sub(e.heardAt) > e.hold {
 			m.dropLocked(id, e, e.version, now)
 			removed++
 		}
@@ -287,7 +293,16 @@ func (m *Mirrors[T]) dropLocked(id int64, e *mirrorEntry[T], ver MirrorVersion, 
 	_ = m.cfg.Manager.Unregister(id)
 	e.state.Close()
 	delete(m.entries, id)
-	m.tombs[id] = mirrorTomb{version: ver, until: now.Add(2 * m.cfg.TTL)}
+	// 墓碑按这个对象的保留时间（至少 TTL）：保留得久的来源发得慢，迟到的旧份也来得晚。
+	m.tombs[id] = mirrorTomb{version: ver, until: now.Add(2 * max(m.cfg.TTL, e.hold))}
+}
+
+// holdOf 是一份内容被接受后的保留时间：MirrorItem.Hold，没给时取 TTL。
+func (m *Mirrors[T]) holdOf(item MirrorItem[T]) time.Duration {
+	if item.Hold > 0 {
+		return item.Hold
+	}
+	return m.cfg.TTL
 }
 
 // Get 返回 id 当前已接受的内容与版本。

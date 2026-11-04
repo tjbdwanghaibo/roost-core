@@ -15,8 +15,9 @@ import (
 
 // WireVersion 是当前线上格式版本。v2：加版本号、witness 带每个对象的版本、写回消息。v3：EntityState 带心跳档位（Idle，D1）。
 // v4：EntityState 带战斗面板（Panel）；面板命令与结论（kindPanel / kindPanelResult）；伤害结论带实际伤害值；owner 通知带
-// Real 上的面板序号。未上线，旧版本的消息按坏消息丢弃（升级须先停旧进程）。
-const WireVersion uint8 = 4
+// Real 上的面板序号。v5：队伍面板的队员快照与成员表通知（kindGroupSnap / kindGroupNotice，group.go）。未上线，旧版本的
+// 消息按坏消息丢弃（升级须先停旧进程）。
+const WireVersion uint8 = 5
 
 // EntityKind 区分玩家（有 BaseApp，接收视野）与 NPC（只在 Cell 里模拟）。
 type EntityKind uint8
@@ -148,6 +149,8 @@ const (
 	kindWriteback
 	kindPanel
 	kindPanelResult
+	kindGroupSnap
+	kindGroupNotice
 )
 
 // ghostBatch：Real 的 owner 每拍发给一个邻格的 Ghost 更新（完整状态）与删除。
@@ -275,6 +278,20 @@ type panelResult struct {
 	Hint      int32         `msgpack:"hint,omitempty"`
 }
 
+// groupSnap 是 Base 发给别的队员的 Base 的一份快照（队伍面板，group.go）：本进程这名队员的 SceneActor 状态，取自本进程
+// 自己的 mirror（最新一份 witness 里的自己，带 Real 上的版本），收件方按版本喂 mirror。Group / Ver 是发送方缓存的成员表。
+type groupSnap struct {
+	Group int64       `msgpack:"g"`
+	Ver   uint64      `msgpack:"gv"`
+	State EntityState `msgpack:"s"`
+}
+
+// groupNotice 是成员表变化的通知：发给变化前后全部成员所在的 Base，To 是收件 Base 上要更新的玩家（Player 实体 ID）。
+type groupNotice struct {
+	Group Group   `msgpack:"g"`
+	To    []int64 `msgpack:"to"`
+}
+
 type lostNotice struct {
 	State EntityState `msgpack:"s"`
 }
@@ -308,6 +325,8 @@ type wireMsg struct {
 	Writeback    *writebackMsg    `msgpack:"wb,omitempty"`
 	Panel        *panelReq        `msgpack:"pn,omitempty"`
 	PanelResult  *panelResult     `msgpack:"pr,omitempty"`
+	GroupSnap    *groupSnap       `msgpack:"gs,omitempty"`
+	GroupNotice  *groupNotice     `msgpack:"gn,omitempty"`
 }
 
 var errBadMessage = errors.New("cellworld: malformed message")
@@ -362,6 +381,10 @@ func decodeMsg(data []byte) (*wireMsg, error) {
 		present = m.Panel != nil
 	case kindPanelResult:
 		present = m.PanelResult != nil
+	case kindGroupSnap:
+		present = m.GroupSnap != nil
+	case kindGroupNotice:
+		present = m.GroupNotice != nil
 	}
 	if !present {
 		return nil, fmt.Errorf("%w: kind %d without body", errBadMessage, m.Kind)

@@ -125,9 +125,10 @@ func (s *testScene) OnDestroy(fentity.EntityDestroyReason) { s.host.OnDestroy() 
 
 type testPlayer struct {
 	*fentity.EntityBase
-	dao  *undoCell[BaseState]
-	host *heartbeat.Host
-	reg  *heartbeat.Reg
+	dao   *undoCell[BaseState]
+	group *undoCell[Group] // 队伍面板：Player 上缓存的成员表（game 里是 PlayerDao 的字段）
+	host  *heartbeat.Host
+	reg   *heartbeat.Reg
 	// panel 是“养成输入推出的面板”的替身（game 里是属性的 Final 层）：测试 goroutine 写、Player 的 handler 里读。
 	panelMu sync.Mutex
 	panel   Panel
@@ -150,7 +151,20 @@ func (p *testPlayer) Base() *fentity.EntityBase             { return p.EntityBas
 func (p *testPlayer) BaseState() BaseState                  { return p.dao.v }
 func (p *testPlayer) SetBaseState(st BaseState)             { p.dao.set(st) }
 func (p *testPlayer) StartBase() error                      { return p.reg.Start() }
+func (p *testPlayer) CellGroup() Group                      { return p.group.v }
+func (p *testPlayer) SetCellGroup(g Group)                  { p.group.set(g) }
 func (p *testPlayer) OnDestroy(fentity.EntityDestroyReason) { p.host.OnDestroy() }
+
+var hTestGroup = nest.NewHandlerName("cellworld_test_group")
+
+// testGroupCmd：set 时把玩家的成员表写成 group；notice 非空时同一笔事务提交后把它通知给它的成员与 former 所在的 Base
+// （game 里离队的 handler 是 set 空表 + 通知新表）。都不给时只读成员表。
+type testGroupCmd struct {
+	set    bool
+	group  Group
+	notice *Group
+	former []GroupMember
+}
 
 // testProc 是一个“进程”：自己的 EntityManager、Nest 引擎、心跳驱动与 Node。Cell 进程有一个 Scene；Base 进程有
 // entitysync Manager + Interest + Mirrors（客户端是 clientModel）。
@@ -248,6 +262,23 @@ func startProc(t testing.TB, spec procSpec) *testProc {
 	if err := handlers.Register(p.engine); err != nil {
 		t.Fatal(err)
 	}
+	// 测试用的“业务 handler”：在 Player 的事务里改成员表（game 里是 [Team, Player] 的组队 handler）。
+	if err := p.engine.RegisterHandlerWithMeta(hTestGroup, func(es []fentity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+		pl, ok := es[0].(*testPlayer)
+		if !ok || pl == nil {
+			return nil, errors.New("test group: no player")
+		}
+		cmd := params[0].(testGroupCmd)
+		if cmd.set {
+			p.node.SetGroup(pl, cmd.group)
+		}
+		if cmd.notice != nil {
+			p.node.NotifyGroup(*cmd.notice, cmd.former)
+		}
+		return pl.CellGroup(), nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync}); err != nil {
+		t.Fatal(err)
+	}
 	if err := p.engine.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +368,7 @@ func (p *testProc) player(unique int64) *testPlayer {
 	if e := p.manager.Get(id); e != nil {
 		return e.(*testPlayer)
 	}
-	pl := &testPlayer{EntityBase: fentity.NewEntityBase(id, fentity.EntityCategoryPlayer, true, kindTPlayer), dao: &undoCell[BaseState]{}}
+	pl := &testPlayer{EntityBase: fentity.NewEntityBase(id, fentity.EntityCategoryPlayer, true, kindTPlayer), dao: &undoCell[BaseState]{}, group: &undoCell[Group]{}}
 	pl.host = p.driver.NewHost(pl)
 	reg, err := pl.host.Register("cell.base", p.node.Config().WatchPeriod, func(heartbeat.Beat) error { return p.node.BaseBeat(pl, time.Now()) })
 	if err != nil {

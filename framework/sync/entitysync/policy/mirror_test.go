@@ -341,3 +341,41 @@ func TestMirrorCloseRemovesEverything(t *testing.T) {
 		t.Fatal("apply after Close succeeded")
 	}
 }
+
+// 保留时间按来源：Hold 给出的对象按它过期（队伍快照每秒一份、保留 3s），没给的按 TTL（witness 每拍一份、保留 1s）；
+// 同一对象的保留时间跟着最近一次被接受的那份走：长保留的对象被一份短保留的更新覆盖后，按短的过期。
+func TestMirrorHoldOverridesTTLPerItem(t *testing.T) {
+	h := newMirrorHarness(t, false)
+	start := time.Unix(1000, 0)
+	hold := func(id int64, ver MirrorVersion, label string, d time.Duration, now time.Time) {
+		t.Helper()
+		if _, err := h.mirrors.Apply(MirrorItem[mirrorContent]{
+			ID: id, Namespace: "monster", Kind: 4, Version: ver, Content: mirrorContent{At: mirrorNear, Label: label}, Hold: d,
+		}, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hold(500, MirrorVersion{Epoch: 1, Seq: 1}, "team", 3*time.Second, start)
+	h.apply(501, MirrorVersion{Epoch: 1, Seq: 1}, mirrorNear, "witness", 0, start)
+	hold(502, MirrorVersion{Epoch: 1, Seq: 1}, "team", 3*time.Second, start)
+	h.apply(502, MirrorVersion{Epoch: 1, Seq: 2}, mirrorNear, "witness", 0, start.Add(100*time.Millisecond))
+	h.flush()
+	h.client.take(1)
+	if got := h.mirrors.Expire(start.Add(1500 * time.Millisecond)); got != 2 {
+		t.Fatalf("at 1.5s Expire removed %d, want 2 (the TTL-held 501 and 502, whose last accepted item had no hold)", got)
+	}
+	if _, _, ok := h.mirrors.Get(500); !ok {
+		t.Fatal("the mirror held for 3s expired at 1.5s")
+	}
+	if got := h.mirrors.Expire(start.Add(2900 * time.Millisecond)); got != 0 {
+		t.Fatalf("at 2.9s Expire removed %d, want 0", got)
+	}
+	if got := h.mirrors.Expire(start.Add(3100 * time.Millisecond)); got != 1 {
+		t.Fatalf("at 3.1s Expire removed %d, want 1 (the 3s hold ran out)", got)
+	}
+	// 墓碑至少保留 2 × 保留时间：6s 时清理过期墓碑之后，迟到的旧快照仍不能让它复活。
+	h.mirrors.Expire(start.Add(6 * time.Second))
+	if outcome := h.apply(500, MirrorVersion{Epoch: 1, Seq: 1}, mirrorNear, "late", 0, start.Add(7*time.Second)); outcome != MirrorTombstoned {
+		t.Fatalf("a late copy of the expired 3s-held mirror came back as %v, want tombstoned", outcome)
+	}
+}

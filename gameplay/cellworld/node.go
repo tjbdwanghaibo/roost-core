@@ -99,6 +99,22 @@ type NodeConfig struct {
 	// View 是玩家在 Interest 里的主视野（零值取缺省）。
 	View policy.ObserverView
 
+	// ---- 队伍面板（Base 侧；GroupView 为 nil 时不启用，group.go）----
+
+	// GroupView 给出玩家（Player 实体 ID）的组关系视野 ID：成员是其他队员的 SceneActor，玩家挂接它，不论距离都看见队员；
+	// 在空间视野里的队员与它是同一个 subject，Interest 合并成一份订阅，不重复推。每个玩家一个，不能与本进程别的视野相同。
+	// 启用时 Mirrors 必填。GroupLayer 是这个视野给的同步层级（零值是缺省视图）。
+	GroupView  func(playerEntity int64) policy.ViewID
+	GroupLayer fentity.SyncProfile
+	// GroupEvery：本进程每名队员的快照发给其他队员的 Base 的间隔，零值 1s，不短于 WatchPeriod。GroupHold：收到的快照
+	// 保留多久，超过就从面板移除；零值 3 × GroupEvery（维护者：3 个周期没更新视为过期），必须长于 GroupEvery。
+	GroupEvery, GroupHold time.Duration
+	// GroupResync 从权威重读玩家的成员表（game 的一笔事务，demo 是 [Team, Player]）：在出站 goroutine 上调用，只做准入、
+	// 不等结论。缓存的版本为 0（Base 重启、Player 重新加载）时下一个 GroupEvery 就调，之后每 GroupResyncEvery 一次，兜住
+	// 丢失的成员变化通知。nil 表示不重读。GroupResyncEvery 零值 10s，必须长于 GroupEvery。
+	GroupResync      func(ctx context.Context, group, playerEntity int64) error
+	GroupResyncEvery time.Duration
+
 	// OutboxSize：出站队列容量（提交后的发送、报告、销毁）；满了丢弃并计数。零值 65536。
 	OutboxSize int
 	// ReportBatch：一次投给 Scene 的角色报告上限；零值 512。
@@ -178,6 +194,9 @@ func (cfg NodeConfig) withDefaults() NodeConfig {
 	setDur(&cfg.LostGrace, 500*time.Millisecond)
 	setDur(&cfg.LeasePeriod, 500*time.Millisecond)
 	setDur(&cfg.PanelDeadline, 2*time.Second)
+	setDur(&cfg.GroupEvery, time.Second)
+	setDur(&cfg.GroupHold, 3*cfg.GroupEvery)
+	setDur(&cfg.GroupResyncEvery, 10*time.Second)
 	setInt(&cfg.OutboxSize, 65536)
 	setInt(&cfg.ReportBatch, 512)
 	return cfg
@@ -247,6 +266,11 @@ func (cfg NodeConfig) validate() error {
 			return bad("panel deadline %v must exceed lease period %v", cfg.PanelDeadline, cfg.LeasePeriod)
 		case cfg.Mirrors != nil && (cfg.Interest == nil || cfg.Session == nil || cfg.MirrorKind == nil):
 			return bad("mirrors need interest, session and mirror kind")
+		case cfg.GroupView != nil && cfg.Mirrors == nil:
+			return bad("the team panel (group view) needs mirrors")
+		case cfg.GroupView != nil && (cfg.GroupEvery < cfg.WatchPeriod || cfg.GroupHold <= cfg.GroupEvery || cfg.GroupResyncEvery <= cfg.GroupEvery):
+			return bad("group every %v must be at least watch period %v, and group hold %v and group resync every %v must exceed it",
+				cfg.GroupEvery, cfg.WatchPeriod, cfg.GroupHold, cfg.GroupResyncEvery)
 		}
 	}
 	return nil
@@ -324,6 +348,7 @@ const (
 	jobReport
 	jobDispatch
 	jobDestroy
+	jobCall
 )
 
 type job struct {
@@ -334,6 +359,7 @@ type job struct {
 	ids     []int64
 	params  nest.Params
 	entity  fentity.IThreadSafeEntity
+	call    func(context.Context) // jobCall：在出站 goroutine 上执行（只做准入的投递，例如 GroupResync）
 }
 
 type outgoing struct {
@@ -387,6 +413,8 @@ func (n *Node) pump(ctx context.Context) {
 				if err := n.cfg.Destroy(ctx, j.entity); err != nil {
 					n.stats.destroyErrors.Add(1)
 				}
+			case jobCall:
+				j.call(ctx)
 			}
 			select {
 			case j = <-n.out:
@@ -505,6 +533,18 @@ func (n *Node) receive(data []byte) {
 				dispatch(hAttack, n.cfg.Scene, m.Attack.Hit.Attacker)
 			} else {
 				dispatch(hAttack, n.cfg.Scene, m.Attack.Hit.Attacker, m.Attack.Target)
+			}
+		}
+	case kindGroupSnap:
+		n.onGroupSnap(m.GroupSnap)
+	case kindGroupNotice:
+		if n.cfg.PlayerEntity == nil {
+			n.stats.decodeErrors.Add(1)
+			return
+		}
+		for _, player := range m.GroupNotice.To {
+			if player != 0 {
+				dispatch(hBase, player)
 			}
 		}
 	case kindOwner, kindWitness, kindAttackResult, kindLost, kindEnterRefused, kindWriteback, kindPanelResult:

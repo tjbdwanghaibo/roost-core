@@ -1,0 +1,5 @@
+--- FAIL: TestMirrorHoldOverridesTTLPerItem (0.00s)
+    mirror_test.go:365: at 1.5s Expire removed 3, want 2 (the TTL-held 501 and 502, whose last accepted item had no hold)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.526s
+FAIL

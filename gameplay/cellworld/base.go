@@ -57,6 +57,12 @@ type BaseState struct {
 	PanelSentAt  int64  `msgpack:"ps"`
 	PanelSince   int64  `msgpack:"pi"`
 	PanelUnknown bool   `msgpack:"pu"`
+	// 队伍面板（group.go，不持久）：GroupSentAt 是上一次把自己的快照发给别的队员的 Base 的时间，GroupSyncAt 是上一次
+	// 请求重读成员表的时间；GroupViewID / GroupViewVer 是组关系视野现在按哪一份成员表设的（与缓存的成员表不同就重设）。
+	GroupSentAt  int64  `msgpack:"gs"`
+	GroupSyncAt  int64  `msgpack:"gy"`
+	GroupViewID  int64  `msgpack:"gi"`
+	GroupViewVer uint64 `msgpack:"gw"`
 }
 
 // Pos 返回快照位置。
@@ -364,6 +370,10 @@ func (n *Node) handleBase(es []fentity.IThreadSafeEntity, params []any, _ ...nes
 			n.stats.enterRefusals.Add(1)
 			st.EnterHint = m.EnterRefused.Hint
 		}
+	case kindGroupNotice:
+		if gp, ok := p.(GroupPlayer); ok {
+			n.onGroupNotice(gp, &st, m.GroupNotice.Group)
+		}
 	case kindWriteback:
 		s := m.Writeback.State
 		if s.ID == st.Actor && s.Ver.Newer(st.SnapVer) {
@@ -461,7 +471,12 @@ func (n *Node) feedMirrors(st *BaseState, w *witnessMsg, now time.Time) {
 		}
 		st.Shown = true
 	}
-	// 过期清理按 Base 心跳节奏（同一进程里多个玩家共用一份 mirror，按时间戳限频，只有一个玩家真正去扫）。
+	n.expireMirrors(now)
+}
+
+// expireMirrors 按 Base 心跳节奏清理过期的 mirror（同一进程里多个玩家共用一份 mirror，按时间戳限频，只有一个玩家真正
+// 去扫）。witness 与队伍面板的心跳都调它：本进程的玩家都收不到 witness 时（例如 owner 格崩溃），收到的队友快照照样过期。
+func (n *Node) expireMirrors(now time.Time) {
 	if last := n.lastExpire.Load(); now.UnixNano()-last >= int64(n.cfg.WatchPeriod) && n.lastExpire.CompareAndSwap(last, now.UnixNano()) {
 		n.cfg.Mirrors.Expire(now)
 	}
@@ -479,6 +494,10 @@ func (n *Node) unshow(st *BaseState, now time.Time) {
 		n.cfg.Mirrors.Remove(st.Actor, ver, now)
 	}
 	st.Shown = false
+	if st.GroupViewID != 0 {
+		n.removeGroupView(n.cfg.PlayerEntity(st.Actor))
+		st.GroupViewID, st.GroupViewVer = 0, 0
+	}
 }
 
 // BaseBeat 是 Player 的 Base 心跳（看门狗 + 续租）：初次 Enter 丢失则重发；交接放弃（Lost）后宽限期内没有更新的
@@ -529,6 +548,9 @@ func (n *Node) BaseBeat(p BasePlayer, now time.Time) error {
 				fx.hooks = append(fx.hooks, func() { hook(result) })
 			}
 		}
+	}
+	if gp, ok := p.(GroupPlayer); ok && n.cfg.GroupView != nil {
+		n.groupBeat(gp, &st, now, fx)
 	}
 	p.SetBaseState(st)
 	n.registerCommit(fx)

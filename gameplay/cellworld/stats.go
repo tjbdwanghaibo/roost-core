@@ -24,6 +24,12 @@ type NodeStats struct {
 	// Base 侧 PanelsSent（含重发）/ PanelUnknown（超过 PanelDeadline 未确认）。
 	PanelsApplied, PanelsDuplicate, PanelRetries uint64
 	PanelsSent, PanelUnknown                     uint64
+	// 队伍面板（第 4 项）：GroupSnapsSent / GroupSnapsIn（发出 / 收到的队员快照，收到的按版本进 mirror）、GroupNoticesSent /
+	// GroupAdopted / GroupStale（成员变化通知：发出、采纳、版本不新或不是同一组而不采纳）、GroupResyncs（请求重读成员表）、
+	// GroupViewErrors（组关系视野的 Interest 调用失败，下一拍重设）。
+	GroupSnapsSent, GroupSnapsIn               uint64
+	GroupNoticesSent, GroupAdopted, GroupStale uint64
+	GroupResyncs, GroupViewErrors              uint64
 }
 
 type nodeCounters struct {
@@ -43,6 +49,9 @@ type nodeCounters struct {
 	reals, ghosts, idleNPCs                         atomic.Uint64
 	panelsApplied, panelsDuplicate, panelRetries    atomic.Uint64
 	panelsSent, panelUnknown                        atomic.Uint64
+	groupSnapsSent, groupSnapsIn                    atomic.Uint64
+	groupNoticesSent, groupAdopted, groupStale      atomic.Uint64
+	groupResyncs, groupViewErrors                   atomic.Uint64
 }
 
 // Stats 返回计数快照，任何 goroutine 可调用。
@@ -65,5 +74,8 @@ func (n *Node) Stats() NodeStats {
 		Reals: s.reals.Load(), Ghosts: s.ghosts.Load(), IdleNPCs: s.idleNPCs.Load(),
 		PanelsApplied: s.panelsApplied.Load(), PanelsDuplicate: s.panelsDuplicate.Load(), PanelRetries: s.panelRetries.Load(),
 		PanelsSent: s.panelsSent.Load(), PanelUnknown: s.panelUnknown.Load(),
+		GroupSnapsSent: s.groupSnapsSent.Load(), GroupSnapsIn: s.groupSnapsIn.Load(),
+		GroupNoticesSent: s.groupNoticesSent.Load(), GroupAdopted: s.groupAdopted.Load(), GroupStale: s.groupStale.Load(),
+		GroupResyncs: s.groupResyncs.Load(), GroupViewErrors: s.groupViewErrors.Load(),
 	}
 }
