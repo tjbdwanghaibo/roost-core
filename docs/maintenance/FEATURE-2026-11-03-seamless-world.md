@@ -1073,4 +1073,17 @@ main 的新规则（`edd1ccb7`，[impl/01 第 5 条](../framework/impl/01-app-li
 
 ### 14.8 验证
 
-见 CHANGELOG 与本次交回的报告（合入后在同一工作树、同机跑：gofmt、build、vet、glsvet、改动包 `-race`、根包、doc anchors、全量 `go test -timeout 30m ./...`、`test-seamless-demo.sh` 14 步、`test-demo-generated.sh`、`test-remote-generated.sh`、`test-genres-generated.py`、`test-alliance-e2e.sh`）；结果补在下面。
+合入后同一工作树、同机（macOS），`GOWORK=off`、从模块根，私有依赖 `scripts/mirror-local.sh`（偏移 36200，用后 clean）：
+
+| 项 | 结果 |
+| --- | --- |
+| gofmt / `go build ./...` / `go vet ./...` | 无输出 / 通过 |
+| glsvet（nest、entity、dataengine/engine、sync/entitysync、cellworld、remoteentity、app） | 无违例 |
+| `go test -race -count=1`：cellworld（142.8s）、policy、app、wiring/nest、nest、entity | 通过 |
+| 根包 `go test -count=1 .`、`check-doc-anchors.py` | 通过、0 broken |
+| 全量 `go test -count=1 -timeout 30m ./...` | 第一次：除 `codegen/internal/roost` 外 162 个包 ok，这个包 20 多条红在“收窄 -mods 的 game 没有 remote_entity”与停机预算钉住值（`b361f019` 修）；修后 `go test ./codegen/...` 全部通过 |
+| `scripts/test-seamless-demo.sh` | 第一次在活动组 `game_sids` 的字面替换处静默退出（main 的缺省列表变了，`a68fd11f` 修）；修后 **14 步全部通过**（`team_panel` 组队后 101ms 互相看见、kill Base 后 2912ms 移除、离队后 94ms 移除；`team_roster_cross_base` 解散版本 4；`cell_crash` 重启 8.9s；sid 1003 普通场景机器人通过）；停机日志有 `inputs closed` |
+| `scripts/test-alliance-e2e.sh`（game 现在装 `remote_entity`） | 5 条全部 PASS（两 game 进程入会、一人一盟竞争、Redis 中断、预加载顺序、崩溃接管与缩容） |
+| `scripts/test-demo-generated.sh`、`scripts/test-remote-generated.sh` | 通过（MirrorLocal 三项按门变量 SKIP，与 main 相同） |
+| `test-genres-generated.py` | 13 类全部 passed |
+| 新生成 game-demo | build / vet / test 通过，`roost id check`、`roost generate --check` 通过，`go generate ./...` 后 porcelain 干净；本仓 `go generate ./...` 后 porcelain 干净 |
