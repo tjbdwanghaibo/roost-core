@@ -234,6 +234,10 @@ func (m *Manager) beginOwnershipTransition(parent context.Context, id int64, loc
 	if meta.FullID == 0 || !entity.IsEntityKindRemoteManaged(meta.Kind) {
 		return nil, nil, nil, fmt.Errorf("%w: invalid entity %d", entity.ErrRemoteRejected, id)
 	}
+	// 认领、模式切换与转移都改所有权记录，归属于别的服务的 kind 在这之前拒绝（读 GetRemoteOwnership 不经这里）。
+	if err := m.rejectForeignKind(meta.FullID, meta.Kind); err != nil {
+		return nil, nil, nil, err
+	}
 	ctx, cancel := m.ownershipContext(parent)
 	wrapper := m.getOrCreate(meta.FullID, meta.Category, meta.Kind)
 	if wrapper == nil {

@@ -18,6 +18,7 @@
 2. 幂等身份跨重试保持，未知结果不当作未执行。
 3. account 身份、玩家号和名字规则是必需协作者。
 4. 领域模型、存储、RPC 传输和周期运行均在 service；Wiring 只构造实例并委托生命周期。
+5. 按槽位路由（[slots.go](../../../infra/network/servicerpc/slots.go)）：槽位表只是提示，构造时一次校验覆盖 / 重叠 / sid 重复；`CallSlotChecked` 最多改投一次、改投前清零响应；`Classify` 只把确定没执行的（no responders、`CodeRetryable`、`CodeRedirect`）归可重试，拿不准的一律结果未知。Remote 写错误到答复的映射在 [wiring/remoteentity/rpc_answer.go](../../../wiring/remoteentity/rpc_answer.go)。回归：`slots_test.go`、`rpc_answer_test.go`；使用见[设计篇 2A](../guide/09-services.md#2a-按槽位路由与改投)。
 
 ## 2A. 一个服务的两层实现
 

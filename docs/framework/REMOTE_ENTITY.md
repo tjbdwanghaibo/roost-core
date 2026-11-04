@@ -43,6 +43,15 @@ Durability 1/2/3（async / strict / 随 strict 路径提交的 pipelined）的 W
 - **outbox 确认只落到写者实例**：每个进程的 outbox 协调者扫描共享 outbox 里全部未发布事务，会代发别的进程的提交。确认（推进版本向量、生成实体的 `AcknowledgeRemoteCommit`）只在本地实例就是这笔提交的写者时执行：它的版本向量在确认前是 `(BaseVersion, LockFence)`、重复确认时是 `(NextVersion, LockFence)`。否则不动这份实例（计 `remote_entity.foreign_ack_skipped_total`），由下一次写准入从权威重载；发布与版本通知照常。修复前代发会把没有那笔修改的实例推进到新版本，下一笔整文档写覆盖掉别的进程的修改。
 - **边界**：loader 不支持卸载（自定义 loader 没实现 `IRemoteEntityUnloader`）时换不掉实例，落后时照旧报 `ErrRemoteVersionConflict`、`Fenced` 时报 `ErrRemoteFenced`；事务外独立删档（`Destroy(deletePersisted=true)` 不在 handler 内）在 `EntityManager.Destroy` 持实体锁时准备批次，带 `entity.WithRemoteWriteTargetHeld`，实例落后时不卸载、按版本冲突拒绝，下一次 Nest 写准入换掉它之后再删。非写入路径读本进程内存里的 Remote 实例（不经写准入）可能是旧的，跨进程读取用快照（下一节）。
 
+## 实体归属守卫
+
+独占模式下没有所有权记录的实体由**第一个写它的进程**认领（写准入里的 `ClaimOwnership`）。实体归某个服务写（例如联盟服务独占全部 Alliance，见[联盟服务方案](../maintenance/FEATURE-2026-11-04-alliance-service.md#210-生成器最小增量决定-3)）时，别的服务的进程一旦先写到一个新实体就会把它认领走。守卫（2026-11-04）：
+
+- **声明**：`coreremote.Config.ForeignKinds []entity.EntityKind` 列出“声明归属于别的服务”的 kind；wiring 经 `wiring/remoteentity.WithForeignKinds(kinds...)` 传入（生成工程由实体注解 `service=<name>` 推出，阶段 2），Mod Init 时校验一次：每个 kind 都必须是已注册的 Remote 托管 kind。不写 YAML 键，不在两处声明。
+- **拒绝点**：`PrepareRemoteWriteBatch` 在写额度、wrapper 与任何所有权读写之前整批检查，批里有一个 foreign kind 整批拒绝；`ClaimRemoteOwnership`、`EnterRemoteSharedMode`、`LeaveRemoteSharedMode`、`TransferRemoteOwnership` 在 `beginOwnershipTransition` 里同样先拒绝。返回 `entity.ErrRemoteKindNotOwned`（包裹 `ErrRemoteWriteCapabilityDisabled`，不可重试），计 `remote_entity.foreign_kind_rejected_total`。权威里不会留下这个进程的所有权记录。
+- **不受影响**：`GetRemoteOwnership` 与快照读照常（RPC 服务端“改投”要读 owner）；未列入的 kind（`ForeignKinds` 为空时即全部 kind）行为与没有守卫时逐字相同——Player 的静态 sid 归属、共享模式、SLG 联盟夹具都不变。
+- **边界**：守卫只管本进程，不校验别的进程的配置；归属服务本身仍按首写认领与持久 fence 决定哪个实例是 owner（分片与改投见 [guide/09“按槽位路由与改投”](guide/09-services.md#2a-按槽位路由与改投)）。回归：`ownership_test.go` 的 `TestForeignKindIsRejectedBeforeOwnershipClaim`、`wiring/remoteentity` 的 `TestRemoteEntityModForeignKinds`。
+
 ## 读取
 
 业务读取 `RemoteSnapshotEnvelope`，不读取远端 live Entity。L1/L2 以 tenant/entity/kind/scope/policy 为完整 key；payload 是 `FrozenRemoteSnapshotPayload`，L1 命中不复制 backing bytes，解码时显式取 copy。相同 epoch/version 的不同 checksum 被拒绝。checksum（CRC64）在 Mongo 中只存 8 字节 Binary 一种形态；旧版本写下的 BSON 数字形态与 null / undefined 不再读取，解码时报 `remote checksum has unexpected BSON type`。

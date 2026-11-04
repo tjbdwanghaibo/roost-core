@@ -18,6 +18,7 @@
 2. L2 是快照水位权威，Mongo 是数据权威。
 3. interest 非零代际、完整身份与撤销水位一起校验。
 4. 超时或断线不等于未提交，写额度必须按真实完成释放。
+5. 实体归属守卫（`Config.ForeignKinds`）在写额度、wrapper 与任何所有权读写之前判，覆盖写准入与 `beginOwnershipTransition` 的全部所有权操作；读所有权与快照不经它。新增会认领或改所有权的入口必须同样先过 `rejectForeignKind`（[REMOTE_ENTITY](../REMOTE_ENTITY.md#实体归属守卫)）。
 
 ## 2A. 有界发布调度实现走读
 
@@ -154,7 +155,7 @@ Rejected 的写入点（[batch.go](../../../framework/remoteentity/batch.go)、[
 - [outbox_test.go](../../../framework/remoteentity/outbox_test.go)：`TestOutboxFailedFirstPageDoesNotStarveLaterTransaction`、`TestOutboxIndependentTransactionsPublishWhileOverlappingTransactionWaits`、`TestOutboxWorkerLimitAndCancellationRetainUnpublishedTransactions`、`TestExplicitOutboxRecoveryIsDrainedBeforeStop`、`TestPublicationFailureDoesNotBlockLaterProjection`；其余 1 项见文件
 - [owner_startup_election_integration_test.go](../../../framework/remoteentity/owner_startup_election_integration_test.go)：`TestMirrorLocalOwnerStorageInitSurvivesAMongoElection`
 - [ownership_redis_integration_test.go](../../../framework/remoteentity/ownership_redis_integration_test.go)：`TestRealRemoteOwnershipClaimAndTransfer`
-- [ownership_test.go](../../../framework/remoteentity/ownership_test.go)：`TestConcurrentOwnershipClaimElectsExactlyOneOwner`、`TestOwnershipModeTransitionsAdvanceMarkerEpoch`、`TestEnterSharedPromiseLostReplyFollowsAuthorityIntoSharedMode`、`TestEnterSharedPromiseLostReplyFreezesUntilAuthorityAnswers`、`TestLeaveSharedPromiseLostReplyFollowsAuthorityIntoLocalOwned`；其余 11 项见文件
+- [ownership_test.go](../../../framework/remoteentity/ownership_test.go)：`TestConcurrentOwnershipClaimElectsExactlyOneOwner`、`TestOwnershipModeTransitionsAdvanceMarkerEpoch`、`TestEnterSharedPromiseLostReplyFollowsAuthorityIntoSharedMode`、`TestEnterSharedPromiseLostReplyFreezesUntilAuthorityAnswers`、`TestLeaveSharedPromiseLostReplyFollowsAuthorityIntoLocalOwned`；其余 12 项见文件（含实体归属守卫 `TestForeignKindIsRejectedBeforeOwnershipClaim`）
 - [pipelined_contract_test.go](../../../framework/remoteentity/pipelined_contract_test.go)：`TestPipelinedRemoteBatchLocalRecordIsFsyncedBeforeVisible`、`TestPipelinedRemoteOutcomeMatchesStrict`
 - [process_lock_integration_test.go](../../../framework/remoteentity/process_lock_integration_test.go)：`TestRemoteLeaseProcessHelper`、`TestRealRemoteProcessKillRecoversLease`、`TestRealRemoteProcessPartitionFencesOldOwner`、`TestRealRemoteColdAdmissionDeadlineUnderLatency`、`TestRealRemoteDurableAuthorityProcessPartition`
 - [redis_acquire_unknown_integration_test.go](../../../framework/remoteentity/redis_acquire_unknown_integration_test.go)：`TestRealVersionedLockReacquiresAfterAcquireReplyLost`、`TestRealVersionedLockReacquiresAcrossUnknownChain`、`TestRealVersionedLockLateAcquireScript`

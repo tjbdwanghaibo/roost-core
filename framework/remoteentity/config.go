@@ -1,9 +1,18 @@
 package remoteentity
 
-import "time"
+import (
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
 
 // Config 是 Remote Entity 模块的配置。
 type Config struct {
+	// ForeignKinds 是声明归属于别的服务的 Remote 托管 kind（实体注解 service=<别的服务>，由生成器 / wiring 传入）。
+	// 本进程对这些 kind 不认领所有权（写准入里的首写认领与 ClaimRemoteOwnership）、不发写许可、不做模式切换与转移，
+	// 一律返回 entity.ErrRemoteKindNotOwned；读（GetRemoteOwnership、快照）不受影响。nil / 空 = 不限制，
+	// 未声明归属的 kind 行为与没有这个字段时逐字相同。
+	ForeignKinds         []entity.EntityKind
 	MaxWriteBatch        int
 	SnapshotCacheShards  int
 	SnapshotCacheEntries int

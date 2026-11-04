@@ -28,6 +28,12 @@ const (
 	// 与 CodeEntityNotFound 分开：重新登录不会让它恢复（登录边界的 GetOrCreate 同样返回本码），
 	// 客户端不应重试或自动重新登录，而应提示角色已删除，由产品流程换用新的 ID（新建角色）。
 	CodeEntityDeleted int32 = 3
+	// CodeRetryable：请求**没有执行**，可以用同一个 RequestID 原样重试（服务恢复中、实体所有权转移中、
+	// 本实例正在从权威重载实体）。与 CodeInternal 分开：CodeInternal 不保证没执行，调用方只能按“结果未知”处理。
+	CodeRetryable int32 = 4
+	// CodeRedirect：请求没有执行，因为本实例不是目标实体的 owner；响应里带它所知的 owner sid
+	// （servicerpc.RedirectProvider），调用方改投一次。本实例也不知道 owner 时按 CodeRetryable 答复。
+	CodeRedirect int32 = 5
 
 	// FrameworkCodeLast 是框架段的上界（含）；业务码段的下界必须大于它。生成器的 manifest 校验
 	// 持有同值副本（codegen/internal/roost/manifest.go 的 frameworkErrcodeLast），改动须同步。
@@ -44,6 +50,13 @@ var ErrEntityNotFound = Define(CodeEntityNotFound, "entity_not_found", "entity n
 // 包装原错误（entity.ErrAuthorityEntityDeleted、DataEngine 的 ErrEntityAggregateDeleted 仍可 errors.Is 判别）：
 // Nest 在声明目标的加载结果处包装，生成 lifecycle 在 Get / GetOrCreate（登录边界）处包装。
 var ErrEntityDeleted = Define(CodeEntityDeleted, "entity_deleted", "entity deleted")
+
+// ErrRetryable 是 CodeRetryable 的定义：服务端确认这个请求没有执行时用 Wrap(ErrRetryable, cause) 答复。
+var ErrRetryable = Define(CodeRetryable, "retryable", "not executed; retry with the same request id")
+
+// ErrRedirect 是 CodeRedirect 的定义：服务端不是目标实体的 owner。改投目标不在错误里，由响应的
+// RedirectSID 携带（servicerpc.Redirect / RedirectSID）。
+var ErrRedirect = Define(CodeRedirect, "redirect", "not the owner; redirect to the owner")
 
 const internalReason = "server error"
 

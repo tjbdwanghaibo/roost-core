@@ -63,6 +63,19 @@ RPC 生成物分传输半与装配半：接口包持有 wire/handler/BusClient�
 
 接收端期限：普通 Bus RPC（`Bus.HandleRpc` / `CallTo`）的 handler 拿到的 `RpcContext.Context()` 是接收端 Bus 的基础 context（[dispatchRpc](../../../infra/network/bus/bus.go)），只在 Bus 停止时取消；调用方的 deadline 不随请求传过来，调用方超时只是停止等待。JetStream RPC 按调用方截止建立处理期限。业务自注册的普通 RPC 要给整次处理自己的预算，预算过后的成功不回复成功、交给调用方按原身份重试；接法与真实 NATS 上的核对见 [SLG §7.7](../SLG-INTEGRATION.md#77-进阶深化联合链路的接法要点)（`receiverBudget`）。
 
+## 2A. 按槽位路由与改投
+
+实体服务（例如独占全部联盟的 alliance 服务，见[联盟服务方案](../../maintenance/FEATURE-2026-11-04-alliance-service.md#27-分片接管与迁移决定-2)）按实体 ID 分片到多个实例时，调用方用槽位表选 sid，不用 `KeyAffinityPicker`（它按当前发现到的实例取模，实例增减时映射跟着变）。2026-11-04 起 `infra/network/servicerpc` 提供：
+
+- **槽位表**：`SlotTable`（`NewSlotTable` / `ParseSlotTable`），`SlotOf(key)` = key 对槽位总数取模，`OwnerOf(key)` 给出 sid。key 是编码了槽位的业务号（联盟 ID = 序号 × slots + 槽位，或玩家 ID），带 kind 位的完整实体 ID 先取 `entity.ResolveEntityID(id).UniqueID`。表只是路由提示，真正的 owner 是 Remote 的持久所有权记录。
+- **配置声明一次**：`servicerpc.SlotTableConfig`（`slots`、`shards`，例如 `slots: 256`、`shards: ["3000:0-127", "3001:128-255"]`）嵌进 Mod 的配置结构体、加 section tag（例如 `config:"alliance"`），`app.LoadConfig` 加载时经 `ValidateConfig` 校验一次：槽位总数 1..65536，区间在范围内、互不重叠、覆盖全部槽位，sid 为正且不重复；全部问题一次报出。`Table()` 取出路由表。
+- **改投**：`BusClient.CallSlotChecked(ctx, table, key, method, req, resp, fallback)` 按表 `CallTo`；服务端答复 `CodeRedirect` 且响应实现 `RedirectProvider`（`RedirectSID() int32`）给出另一个 sid 时改投一次，两次共用一份 timeout 预算，改投前把响应清零（`resp` 必须是指针）。改投后仍不对答复 `CodeRedirect`（归“可重试”）。
+- **服务端答复**：`servicerpc.Redirect(ownerSID, cause)`（owner 未知时退化为 `Retryable`）、`servicerpc.Retryable(cause)`；响应的状态码照旧取 `servicerpc.Error(answer)`，改投目标取 `servicerpc.RedirectSID(answer)`。Remote 实体写的错误经 `wiring/remoteentity.RPCWriteAnswer(ctx, owners, localSID, id, err)` 转成答复：fence 时读一次权威所有权，owner 是别的 sid 就改投；重载、转移中、写额度满、准入版本冲突给可重试；结果未知原样返回。它读所有权要 I/O，只能在 RPC handler（I/O 段）里调。新框架码 `errcode.CodeRetryable = 4`、`errcode.CodeRedirect = 5`。
+- **四类答复**：`servicerpc.Classify(err)` 给出 `OutcomeOK`、`OutcomeRejected`（业务错误码，不重试）、`OutcomeRetryable`（确定没执行：no responders、`CodeRetryable`、`CodeRedirect`，原 RequestID 重试）、`OutcomeUnknown`（超时、取消、`CodeInternal`、传输或解码错误等一切拿不准的，原 RequestID 查结果或重发）。
+- **现有 NATS 客户端的自动重试**：轻量 RPC 在 no responders 时按 `nats.rpc` 重试策略退避重试，直到次数或调用期限用完（目标在期间恢复时请求就在这次调用里执行）；BusClient 总给调用带期限，单次尝试用满整个期限，超时不会在同一次调用里重发。但调用方自己的重试、JetStream RPC 的重投仍会让同一请求送达多次，所以写 RPC 必须按 RequestID 幂等，超时一律按结果未知。普通 Bus RPC 不把调用方截止时间传到接收端（上一节）。
+
+边界：槽位表与“首写认领”合在一起时，表过期的实例收到一个**还没有所有权记录**的新实体会把它认领走（同一服务内部不受实体归属守卫约束）；新建实体的服务端要先按 `table.OwnerOf` 判断槽位归不归自己，这一条由服务骨架（联盟方案阶段 3）负责。回归：`infra/network/servicerpc` 的 `slots_test.go`、`wiring/remoteentity` 的 `rpc_answer_test.go`。
+
 ## 3. 存储与幂等
 
 这些服务多数以 Redis/versionstore 存储自己的记录，不是玩家 DAO WAL 的旁路。key_prefix 必填且按环境隔离；rank 的 Lua 与 mail 信封等有独立原语。写操作用请求 ID/令牌/状态条件保证业务重试，传输超时和业务拒绝通过不同错误表达。

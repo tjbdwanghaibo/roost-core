@@ -51,8 +51,10 @@ func TestFrameworkCodesAreExactlyAsAllocated(t *testing.T) {
 	frameworkDefinitions := map[int32]*IntError{
 		CodeEntityNotFound: ErrEntityNotFound,
 		CodeEntityDeleted:  ErrEntityDeleted,
+		CodeRetryable:      ErrRetryable,
+		CodeRedirect:       ErrRedirect,
 	}
-	const frameworkAllocated = 2 // CodeInternal 不是 Define 出来的，只作回退码，不计入
+	const frameworkAllocated = 4 // CodeInternal 不是 Define 出来的，只作回退码，不计入
 	if len(frameworkDefinitions) != frameworkAllocated {
 		t.Fatalf("%d framework codes paired, want %d", len(frameworkDefinitions), frameworkAllocated)
 	}

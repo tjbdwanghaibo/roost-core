@@ -32,6 +32,8 @@ type RemoteEntityMod struct {
 	backend     entity.IRemoteEntityBackend
 	mongoLoader entity.IRemoteEntityLoader
 	mongoConfig coreremote.MongoBackendConfig
+	// foreignKinds 见 WithForeignKinds；Init 校验后写进 coreremote.Config.ForeignKinds。
+	foreignKinds []entity.EntityKind
 }
 
 type ModOption func(*RemoteEntityMod)
@@ -45,6 +47,14 @@ func WithBackend(backend entity.IRemoteEntityBackend) ModOption {
 // from the registered Mongo capability.
 func WithMongoStorage(loader entity.IRemoteEntityLoader) ModOption {
 	return func(mod *RemoteEntityMod) { mod.mongoLoader = loader }
+}
+
+// WithForeignKinds 声明归属于别的服务的 Remote 托管 kind（联盟服务方案 §2.10 第 1 条）：本进程对它们不认领所有权、
+// 不发写许可，写准入与 ClaimRemoteOwnership 返回 entity.ErrRemoteKindNotOwned。生成工程由实体注解 service=<name>
+// 推出列表（每个服务传“归属于别的服务的 kind”）；手写装配直接传。不传 = 不限制，未声明归属的 kind 行为不变。
+// Init 时校验一次：每个 kind 都必须是已注册的 Remote 托管 kind。
+func WithForeignKinds(kinds ...entity.EntityKind) ModOption {
+	return func(mod *RemoteEntityMod) { mod.foreignKinds = append(mod.foreignKinds, kinds...) }
 }
 
 func NewRemoteEntityMod(localSid int32, opts ...ModOption) *RemoteEntityMod {
@@ -100,6 +110,12 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	// DAO 文档的库名映射由 DataEngine Mod 冻结，engine.Assemble 接 Remote 投影（remote_entity.atomic_store）时
 	// 经 MongoStore.SetRemoteProjection 绑过来；存储未绑定就写 DAO 文档一律拒绝（dataengine.ErrDatabaseMapNotBound），
 	// 不按逻辑库名写错库。
+	for _, kind := range m.foreignKinds {
+		if !entity.IsEntityKindRemoteManaged(kind) {
+			return fmt.Errorf("remote_entity mod: foreign kind %d is not a registered Remote-managed (remote=managed) kind", kind)
+		}
+	}
+	m.cfg.ForeignKinds = append([]entity.EntityKind(nil), m.foreignKinds...)
 	m.mongoConfig = coreremote.MongoBackendConfig{Database: re.Mongo.Database, TransactionTTL: re.Mongo.TransactionTTL}
 	return nil
 }

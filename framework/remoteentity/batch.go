@@ -88,6 +88,12 @@ func (m *Manager) PrepareRemoteWriteBatch(ctx context.Context, ids []int64) (_ e
 	if m.backend == nil {
 		return nil, entity.ErrRemoteWriteCapabilityDisabled
 	}
+	// 归属守卫先于写额度、wrapper 与任何所有权读写，整批一起判：批里有一个 kind 不归本服务，整批不碰权威。
+	for _, id := range ordered {
+		if err := m.rejectForeignKind(id, entity.ResolveEntityID(id).Kind); err != nil {
+			return nil, err
+		}
+	}
 	if !m.reserveRemoteWriteSlot() {
 		return nil, entity.ErrRemoteOverloaded
 	}

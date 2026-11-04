@@ -122,6 +122,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `remote_entity.finalize_retry_total` / `release_failure_total` / `quarantine_error_total` / `remote_entity_transaction_tracker_drop_total` | Counter | 收尾/隔离异常（均应为零基线） |
 | `remote_entity.deferred_outcome_not_run_total{outcome}` | Counter | Remote 结果未知的事务拿到持久结论时 Nest 已停机 / 已 fence，提交后工作（AfterCommit、Sync 放行）未执行（RR-20260926-61）；停机窗口外应为零 |
 | `remote_entity.stale_reload_total` | Counter | 写准入发现本进程的内存实例落后于权威（共享模式下别的进程写过、或所有权转走期间新所有者写过）或停在 Fenced，把它仅内存卸载、从权威重载的次数。共享模式多写者交替写时正常增长，独占模式下应接近零 |
+| `remote_entity.foreign_kind_rejected_total` | Counter | 实体归属守卫拒绝的写准入与所有权操作：kind 声明归属于别的服务（`ForeignKinds`），本进程不认领、不写。应为零；增长说明有代码在别的服务的进程里直接写这类实体，写应改走归属服务的 RPC |
 | `remote_entity.foreign_ack_skipped_total` | Counter | outbox 协调者代发的提交不是本进程内存实例写的（共享 outbox 里别的进程的事务、重启后重放到加载时还没带上它的实例），没有推进这份实例版本的次数；之后这份实例由写准入从权威重载 |
 
 ### 帧同步（sync/lockstep）
@@ -441,6 +442,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `remote_entity.finalize_retry_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.finalize_status_read_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.foreign_ack_skipped_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.foreign_kind_rejected_total` | Counter | `remoteentity/manager.go:IncCounter` |
 | `remote_entity.lock_takeover_total` | Counter | `remoteentity/versioned_lock.go:IncCounter` |
 | `remote_entity.outbox.scan` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
 | `remote_entity.outbox.snapshots` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |

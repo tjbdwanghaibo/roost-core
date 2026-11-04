@@ -16,6 +16,8 @@ Remote Entity 是具有权威写入与版本的共享实体。写仍通过 Nest 
 
 把实体声明成 Remote 托管要同时改三处：标记 `category=entity.EntityCategoryRemote remote=managed`、嵌入 `*entity.RemoteEntityBase`（生成器漏换时报错并点名要换的字段），以及写它的 Nest 服务装 `remote_entity` Mod（`wiring/remoteentity`）。没有 Remote 运行时的进程不会把这类写当本地写：Nest 派发与 DataEngine 删除一律返回 `entity.ErrNoRemoteRuntime`（包裹 `ErrRemoteWriteCapabilityDisabled`，文本给出加 Mod 的命令）。生成工程里 `roost generate` 与 doctor 的 `remote-runtime` 项在带 Nest 的服务全都没有 `remote_entity` 时拒绝并给出 `roost add mod remote_entity -service <service>`；只有部分服务缺时提示（实体由哪个服务写，静态上看不出）。
 
+实体归某个服务写时（例如联盟服务独占全部 Alliance），别的服务的进程用 `wiring/remoteentity.WithForeignKinds(kinds...)` 声明这些 kind：写准入与 `ClaimRemoteOwnership` 等所有权操作在读写任何所有权记录之前返回 `entity.ErrRemoteKindNotOwned`，不会把新实体认领走；读快照不受影响，没声明的 kind 行为不变。见 [Remote Entity 契约“实体归属守卫”](../REMOTE_ENTITY.md#实体归属守卫)。
+
 ## 2. 写入生命周期
 
 准备参与实体和写许可 → 业务池 handler 修改 DAO → 事务局部变更形成 Remote 批次 → 持久确认 → finalizer 收尾/释放。参与者必须判断本事务变化，不能用对象全局 dirty 推断。取消等待不撤销已经准入的持久写；结果未知保留 fence/恢复责任。
