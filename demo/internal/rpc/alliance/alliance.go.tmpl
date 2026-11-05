@@ -92,7 +92,8 @@ type Alliance interface {
 	Donate(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64, amount int64) (reply Reply, err error)
 	// DeclareWar declares war on the alliance enemyID; leader only. Both
 	// alliances on one instance: one transaction. Otherwise this side now,
-	// the enemy's side eventually (AcknowledgeWar).
+	// with a durable wait for the enemy, and the enemy's side eventually: the
+	// service asks the enemy (AcknowledgeWar) until it answers — no effect.
 	//roost:rpc route
 	DeclareWar(ctx context.Context, requestID string, callerID int64, callerSID int32, target int64, enemyID int64) (reply Reply, err error)
 	// Info is the authoritative read of an alliance (GM, checking after a
@@ -100,9 +101,19 @@ type Alliance interface {
 	//roost:rpc route
 	Info(ctx context.Context, target int64) (reply Reply, err error)
 	// Guard is the authoritative read of a player's guard (target is the
-	// guard: GuardTarget).
+	// guard: GuardTarget), as it is — a stale-occupied guard is not healed.
 	//roost:rpc route
 	Guard(ctx context.Context, target int64) (reply GuardReply, err error)
+	// Membership answers which alliance the player of the guard target is
+	// in, as the roster has it: a held guard is healed from its holder first
+	// (a membership the roster no longer has is cleared, a reservation the
+	// roster seated is confirmed); the reply's State.AllianceID is the
+	// alliance, 0 for none (a reservation still on its way is none yet). The
+	// game asks it at login when the player's own copy shows no guild — a
+	// membership made while they were offline. A player who never had a guard
+	// is answered "entity not found" (servicerpc.EntityNotFound): no alliance.
+	//roost:rpc route
+	Membership(ctx context.Context, target int64) (reply GuardReply, err error)
 	// Result answers what request requestID did on target: an alliance for
 	// the writes on it, or the founder's guard (GuardTarget) for Found and
 	// ReserveGuard, whose receipts are there. Found=false means it was never
@@ -145,7 +156,8 @@ type Alliance interface {
 	//roost:rpc route
 	ClearGuard(ctx context.Context, target int64, allianceID int64, joinRequestID string) (reply GuardReply, err error)
 	// AcknowledgeWar records the enemy side of a cross-instance declaration
-	// on the alliance target.
+	// on the alliance target. Idempotent by request id (its receipt): the
+	// declaring instance asks again after a lost answer or a restart.
 	//roost:rpc route
 	AcknowledgeWar(ctx context.Context, requestID string, target int64, declarerID int64) (reply Reply, err error)
 	// Settle answers what requestID did on the alliance target for playerID;

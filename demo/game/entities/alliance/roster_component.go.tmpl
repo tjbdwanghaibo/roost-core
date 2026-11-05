@@ -295,6 +295,43 @@ func (component *RosterComponent) RecordWar(enemyID, nowUnix int64) {
 	component.owner.Dao().SetWars(enemyID, nowUnix)
 }
 
+// AwaitWarAck records, with the declaration of a war on enemyID across
+// instances, that the enemy has not acknowledged it yet (AllianceDao.WarAcks):
+// the owning instance asks the enemy until it answers.
+func (component *RosterComponent) AwaitWarAck(requestID string, enemyID int64) {
+	component.owner.Dao().SetWarAcks(requestID, enemyID)
+}
+
+// WarAckPending reports whether the war declared under requestID still waits
+// for its enemy's acknowledgment.
+func (component *RosterComponent) WarAckPending(requestID string) bool {
+	_, pending := component.owner.Dao().GetWarAcks(requestID)
+	return pending
+}
+
+// EndWarAck removes the wait of requestID once the enemy answered; reports
+// whether there was one, so a second answer for the same request changes
+// nothing.
+func (component *RosterComponent) EndWarAck(requestID string) bool {
+	dao := component.owner.Dao()
+	if _, pending := dao.GetWarAcks(requestID); !pending {
+		return false
+	}
+	dao.DelWarAcks(requestID)
+	return true
+}
+
+// WarAcks lists the declarations still waiting for their enemy, by request id.
+func (component *RosterComponent) WarAcks() []alliancerule.WarAck {
+	var acks []alliancerule.WarAck
+	component.owner.Dao().RangeWarAcks(func(requestID string, enemyID int64) bool {
+		acks = append(acks, alliancerule.WarAck{RequestID: requestID, EnemyID: enemyID})
+		return true
+	})
+	slices.SortFunc(acks, func(a, b alliancerule.WarAck) int { return cmp.Compare(a.RequestID, b.RequestID) })
+	return acks
+}
+
 // View is the alliance as answered to callers, at version.
 func (component *RosterComponent) View(version int64) alliancerule.View {
 	dao := component.owner.Dao()

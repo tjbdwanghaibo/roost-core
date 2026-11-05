@@ -2,10 +2,15 @@
 // owns every Alliance and AllianceMember (remote=managed, one writer each:
 // the instance its Remote ownership record names) and answers the RPC in
 // internal/rpc/alliance. This file is the
-// app.Service half: it declares the alliance.* config, consumes the
-// service's own effects and registers the operator commands. The RPC Mod
+// app.Service half: it declares the alliance.* config, registers the operator
+// commands and stops the service's follow-ups at shutdown. The RPC Mod
 // (internal/rpc/alliance/mod.go) binds the service and registers its bus
 // handlers before this runs.
+//
+// It consumes no effects: no alliance write records one (maintainer,
+// 2026-11-05). The member's notice, finishing a guard on another instance, a
+// reservation's deadline and the enemy's side of a war are the RPC service's,
+// after the write answered (plan §2.5B).
 //
 // The alliance plan (docs/maintenance/FEATURE-2026-11-04-alliance-service.md
 // in roost-core): this service is the game's guild. Game processes write
@@ -15,19 +20,15 @@ package alliance
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 )
 
 // Service is the alliance process's app.Service.
 type Service struct {
-	memberChanged  fnats.IJetStreamSubscription
-	reservationDue fnats.IJetStreamSubscription
-	warDeclared    fnats.IJetStreamSubscription
+	rpc *rpcalliance.Service
 }
 
 // New builds the service.
@@ -40,47 +41,31 @@ func (*Service) Name() app.ServiceName { return app.ServiceName("alliance") }
 // the App checks them at start and doctor knows them.
 func (*Service) ConfigSchema() app.ConfigSchema { return rpcalliance.Schema() }
 
-// Init starts the effect consumers and registers the operator commands. The
-// RPC Mod has bound the service already.
+// Init registers the operator commands. The RPC Mod has bound the service
+// already.
 func (s *Service) Init(registry *app.Registry) error {
 	local, ok := app.Lookup[rpcalliance.Alliance](registry, rpcalliance.LocalCapabilityName)
 	service, isLocal := local.(*rpcalliance.Service)
 	if !ok || !isLocal {
 		return fmt.Errorf("alliance: the alliance RPC Mod is not assembled in this process")
 	}
-	var err error
-	if s.memberChanged, err = startAllianceMemberChangedEffectConsumer(context.Background(), registry, service); err != nil {
-		return err
-	}
-	if s.reservationDue, err = startAllianceReservationDueEffectConsumer(context.Background(), registry, service); err != nil {
-		return errors.Join(err, s.drain())
-	}
-	if s.warDeclared, err = startAllianceWarDeclaredEffectConsumer(context.Background(), registry, service); err != nil {
-		return errors.Join(err, s.drain())
-	}
-	if err := registerAdminCommands(registry, service); err != nil {
-		return errors.Join(err, s.drain())
-	}
-	return nil
+	s.rpc = service
+	return registerAdminCommands(registry, service)
 }
 
 // Serve blocks until the App stops.
 func (*Service) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
 
-// Shutdown drains the consumers: effects in flight finish; a reliable one
-// that does not is redelivered to the next process holding the durable, a
-// best-effort one (membership notices, reservation deadlines) is gone — the
-// guard heals on the next request that finds it held.
-func (s *Service) Shutdown(context.Context) error { return s.drain() }
-
-func (s *Service) drain() error {
-	for _, subscription := range []*fnats.IJetStreamSubscription{&s.memberChanged, &s.reservationDue, &s.warDeclared} {
-		if *subscription != nil {
-			(*subscription).Drain()
-			*subscription = nil
-		}
+// Shutdown stops the RPC service's follow-ups (rpcalliance.Service.Stop):
+// the App has closed the RPC ingress, and Nest and the bus still run until
+// it returns. A reservation deadline or a war's retry that was armed and not
+// run is made up after the restart (the next request that finds the guard
+// held; the scan of the wars still waiting).
+func (s *Service) Shutdown(ctx context.Context) error {
+	if s.rpc == nil {
+		return nil
 	}
-	return nil
+	return s.rpc.Stop(ctx)
 }
 
 var (

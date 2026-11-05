@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"{{MODULE}}/game/effects"
+	"{{MODULE}}/game/alliancerule"
 	"{{MODULE}}/game/handler"
 	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 	"{{MODULE}}/protocol/msgid"
@@ -58,19 +58,19 @@ func TestAMemberNoticeReachesAnOnlineMember(t *testing.T) {
 	notices := guildNotices{nest: engine, push: push}
 	ctx := context.Background()
 
-	if err := notices.apply(ctx, &rpcalliance.MemberNotice{AllianceID: 7, PlayerID: 501, Change: effects.MemberJoined, Version: 4}); err != nil {
+	if err := notices.apply(ctx, &rpcalliance.MemberNotice{AllianceID: 7, PlayerID: 501, Change: alliancerule.MemberJoined, Version: 4}); err != nil {
 		t.Fatal(err)
 	}
 	if got := online.ProfileComp().GuildID(); got != 7 {
 		t.Fatalf("online member shows guild %d after a join notice, want 7", got)
 	}
-	if len(push.pushed) != 1 || push.to[0] != 501 || push.pushed[0].GuildID != 7 || push.pushed[0].Change != effects.MemberJoined || push.pushed[0].Version != 4 {
+	if len(push.pushed) != 1 || push.to[0] != 501 || push.pushed[0].GuildID != 7 || push.pushed[0].Change != alliancerule.MemberJoined || push.pushed[0].Version != 4 {
 		t.Fatalf("pushed %v to %v, want one GuildNotice(7, joined, 4) to 501", push.pushed, push.to)
 	}
 
 	// Offline: the harness holds no entity 502, so loading it would fail the
 	// test through the getter; the notice must not try.
-	if err := notices.apply(ctx, &rpcalliance.MemberNotice{AllianceID: 7, PlayerID: 502, Change: effects.MemberJoined, Version: 5}); err != nil {
+	if err := notices.apply(ctx, &rpcalliance.MemberNotice{AllianceID: 7, PlayerID: 502, Change: alliancerule.MemberJoined, Version: 5}); err != nil {
 		t.Fatal(err)
 	}
 	if offline.ProfileComp().GuildID() != 0 || len(push.pushed) != 1 {
@@ -79,16 +79,16 @@ func TestAMemberNoticeReachesAnOnlineMember(t *testing.T) {
 
 	// The player moved to guild 9; a late "left 7" must not hide guild 9, and
 	// "left 9" does.
-	if err := notices.apply(ctx, &rpcalliance.MemberNotice{AllianceID: 9, PlayerID: 501, Change: effects.MemberJoined, Version: 1}); err != nil {
+	if err := notices.apply(ctx, &rpcalliance.MemberNotice{AllianceID: 9, PlayerID: 501, Change: alliancerule.MemberJoined, Version: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := notices.apply(ctx, &rpcalliance.MemberNotice{AllianceID: 7, PlayerID: 501, Change: effects.MemberLeft, Version: 6}); err != nil {
+	if err := notices.apply(ctx, &rpcalliance.MemberNotice{AllianceID: 7, PlayerID: 501, Change: alliancerule.MemberLeft, Version: 6}); err != nil {
 		t.Fatal(err)
 	}
 	if got := online.ProfileComp().GuildID(); got != 9 {
 		t.Fatalf("a late leave of guild 7 changed the display to %d, want 9", got)
 	}
-	if err := notices.apply(ctx, &rpcalliance.MemberNotice{AllianceID: 9, PlayerID: 501, Change: effects.MemberKicked, Version: 2}); err != nil {
+	if err := notices.apply(ctx, &rpcalliance.MemberNotice{AllianceID: 9, PlayerID: 501, Change: alliancerule.MemberKicked, Version: 2}); err != nil {
 		t.Fatal(err)
 	}
 	if got := online.ProfileComp().GuildID(); got != 0 {

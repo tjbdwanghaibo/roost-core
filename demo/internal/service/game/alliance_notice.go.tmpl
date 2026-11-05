@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"{{MODULE}}/game/effects"
+	"{{MODULE}}/game/alliancerule"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -30,13 +30,14 @@ import (
 // persisted copy) and pushes GuildNotice to their client.
 //
 // Best effort, by decision: the notice is not stored or retried (the alliance
-// service sends it as a best-effort effect after the change is durable). A
-// player who is offline gets nothing now — their next login checks the copy
-// against the guild's mirror (game/controllers/player enter_game.go), which
-// hides a guild they were removed from; a join they missed while offline
-// shows after their next guild action or notice. A notice that is lost, or
-// arrives out of order, leaves the copy stale the same way; no write decision
-// reads it.
+// service publishes it straight to this process once the write answered; no
+// effect carries it). A player who is offline gets nothing now — their next
+// login checks the copy against the guild's mirror (game/controllers/player
+// enter_game.go), which hides a guild they were removed from, and, when the
+// copy shows no guild, asks the alliance service which guild they are in
+// (Membership), which shows a join they missed while offline. A notice that is
+// lost, or arrives out of order, leaves the copy stale until the next notice
+// or login the same way; no write decision reads it.
 
 // guildNoticePush is the push side of the player connection the notices use.
 type guildNoticePush interface {
@@ -85,8 +86,8 @@ func (n guildNotices) apply(ctx context.Context, notice *rpcalliance.MemberNotic
 	}
 	shown, replaces := notice.AllianceID, int64(0)
 	switch notice.Change {
-	case effects.MemberJoined:
-	case effects.MemberLeft, effects.MemberKicked:
+	case alliancerule.MemberJoined:
+	case alliancerule.MemberLeft, alliancerule.MemberKicked:
 		shown, replaces = 0, notice.AllianceID
 	default:
 		slog.Debug("guild notice: unknown change", "player_id", notice.PlayerID, "change", notice.Change)

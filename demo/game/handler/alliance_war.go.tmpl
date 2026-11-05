@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"{{MODULE}}/game/alliancerule"
-	"{{MODULE}}/game/effects"
 	alliance "{{MODULE}}/game/entities/alliance"
 )
 
@@ -31,8 +30,13 @@ func handlerAllianceDeclareWar(target alliance.IRosterEntity, enemy alliance.IRo
 }
 
 // handlerAllianceDeclareWarDetached declares war on an alliance on another
-// instance: this side is recorded now, the enemy's side follows from the
-// effect (AcknowledgeWar there, same request id).
+// instance: this side is recorded now, together with the wait for the
+// enemy's acknowledgment (WarAcks), in one transaction — no effect. The
+// service then calls AcknowledgeWar on the enemy (same request id) and ends
+// the wait once the enemy answered; until then the wait is what makes the
+// service ask again (with backoff while it runs, after a restart from the
+// preloaded alliances). WarPending reports the wait, fresh or replayed, so a
+// retried declaration asks the enemy again too.
 //
 //roost:nest rollback=undo durability=strict
 func handlerAllianceDeclareWarDetached(target alliance.IRosterEntity, requestID string, actorID int64, enemyID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
@@ -42,9 +46,30 @@ func handlerAllianceDeclareWarDetached(target alliance.IRosterEntity, requestID 
 			return enemyID, err
 		}
 		roster.RecordWar(enemyID, nowUnix)
-		return enemyID, effects.EmitAllianceWarDeclared(effects.AllianceWarDeclared{AllianceID: roster.AllianceID(), EnemyID: enemyID, RequestID: requestID})
+		roster.AwaitWarAck(requestID, enemyID)
+		return enemyID, nil
 	})
-	return answer(roster, outcome, err)
+	reply, err := answer(roster, outcome, err)
+	reply.WarPending = err == nil && roster.WarAckPending(requestID)
+	return reply, err
+}
+
+// handlerAllianceWarAcknowledged ends the wait of the war declared under
+// requestID: the enemy answered AcknowledgeWar with a final answer (recorded
+// its side, or refused it — the declaring side keeps its record either way).
+// Conditional on the request id, so a second answer changes nothing.
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceWarAcknowledged(target alliance.IRosterEntity, requestID string) (bool, error) {
+	return target.RosterComp().EndWarAck(requestID), nil
+}
+
+// handlerAllianceWarAcks lists the declarations still waiting for their enemy
+// (the service's scan after a restart).
+//
+//roost:nest rollback=undo durability=strict
+func handlerAllianceWarAcks(target alliance.IRosterEntity) ([]alliancerule.WarAck, error) {
+	return target.RosterComp().WarAcks(), nil
 }
 
 // handlerAllianceAcknowledgeWar records the enemy side of a cross-instance
@@ -52,6 +77,8 @@ func handlerAllianceDeclareWarDetached(target alliance.IRosterEntity, requestID 
 // many) records the refusal in its receipt; the declaring side keeps its
 // record — the two-step form is eventually consistent, not atomic, which is
 // the maintainer's decision for cross-instance diplomacy (plan §6, item 4 A).
+// The receipt makes a repeated acknowledgment (the declarer asks again after a
+// lost answer, a restart, a retried declaration) a replay.
 //
 //roost:nest rollback=undo durability=strict
 func handlerAllianceAcknowledgeWar(target alliance.IRosterEntity, requestID string, declarerID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {

@@ -1,9 +1,11 @@
 package player
 
 import (
+	stdcontext "context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"{{MODULE}}/game/alliancerule"
 	player "{{MODULE}}/game/entities/player"
@@ -20,6 +22,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
@@ -29,8 +32,9 @@ import (
 // mirror read of the alliance. Which guild the player is in is the player's
 // own copy (PlayerDao.GuildID, persisted and synced): written in the player's
 // transaction after their own join / leave / founding succeeded, by a
-// membership notice while they are online, and checked against the guild's
-// mirror at login. What the endpoints still decide from it is the cheap part:
+// membership notice while they are online, and at login checked against the
+// guild's mirror — or, when it shows none, looked up from the alliance
+// service (refreshGuild). What the endpoints still decide from it is the cheap part:
 // a name that is invalid on its face, a request from a player shown in no
 // guild. Those pre-checks are advisory and may be stale; the alliance service
 // decides again on its roster, and its answer wins.
@@ -299,19 +303,25 @@ func (controller *Controller) showGuild(context *playeraccess.Context, guildID i
 	}
 }
 
-// refreshGuild checks the player's copy against the guild's mirror (login):
-// a guild that no longer exists, or whose roster no longer has the player (a
-// leave or kick whose notice the player missed while offline), is hidden.
-// Best effort — a mirror that cannot be read leaves the copy as it is. A
-// join the player missed while offline (an approval) is not discovered here:
-// the copy shows it after the next notice or the player's own guild action
-// (docs/maintenance/KNOWN-LIMITS.md).
+// refreshGuild brings the player's copy in line with the alliance service at
+// login, best effort (a failure leaves the copy as it is and is logged; the
+// login goes on):
+//
+//   - the copy shows a guild: it is checked against that guild's mirror — a
+//     guild that no longer exists, or whose roster no longer has the player
+//     (a leave or kick whose notice the player missed while offline), is
+//     hidden;
+//   - the copy shows none: the alliance service is asked which guild the
+//     player is in (lookupGuild) — a membership made while they were offline
+//     (an approval; the notice found nobody online) is shown.
 func (controller *Controller) refreshGuild(context *playeraccess.Context) {
 	shown, err := controller.shownGuild(context)
-	if err != nil || shown == 0 {
-		if err != nil {
-			slog.Warn("enter_game: guild copy not read", "player_id", context.PlayerID, "err", err)
-		}
+	if err != nil {
+		slog.Warn("enter_game: guild copy not read", "player_id", context.PlayerID, "err", err)
+		return
+	}
+	if shown == 0 {
+		controller.lookupGuild(context)
 		return
 	}
 	target, err := rpcalliance.AllianceTarget(shown)
@@ -326,6 +336,40 @@ func (controller *Controller) refreshGuild(context *playeraccess.Context) {
 	}
 	if _, member := value.Value.Members[context.PlayerID]; !found || !value.Value.Founded() || !member {
 		controller.showGuild(context, 0, shown)
+	}
+}
+
+// guildLookupTimeout bounds the login's question to the alliance service: a
+// share of the login's dispatch budget, so an alliance service that does not
+// answer delays the login by at most this and never fails it.
+const guildLookupTimeout = time.Second
+
+// lookupGuild asks the alliance service which guild the player is in
+// (Membership on the player's guard: the roster's answer, the guard healed
+// first if it is stale) and shows it. It runs in the login endpoint — the
+// player access goroutine, not a Nest pool — and changes the copy in the
+// player's own transaction (ShowGuild). A player who never had a guard is
+// answered "entity not found": no guild, nothing to show. Any other failure
+// is logged and leaves the copy at none; the next notice or login makes up
+// for it.
+func (controller *Controller) lookupGuild(context *playeraccess.Context) {
+	target, err := rpcalliance.GuardTarget(context.PlayerID)
+	if err != nil {
+		return
+	}
+	ctx, cancel := stdcontext.WithTimeout(context.Context(), guildLookupTimeout)
+	defer cancel()
+	reply, err := controller.alliances.Membership(ctx, target)
+	switch {
+	case err == nil:
+	case servicerpc.Classify(err) == servicerpc.OutcomeRejected:
+		return // no guard: never in a guild
+	default:
+		slog.Warn("enter_game: guild not looked up; the copy stays at none until the next notice or login", "player_id", context.PlayerID, "err", err)
+		return
+	}
+	if guildID := reply.State.AllianceID; guildID != 0 {
+		controller.showGuild(context, guildID, 0)
 	}
 }
 

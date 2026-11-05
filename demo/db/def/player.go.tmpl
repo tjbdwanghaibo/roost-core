@@ -105,8 +105,10 @@ type PlayerDao struct {
 	// This copy is written in the player's own transaction after the player's
 	// join / leave / founding succeeded, by the alliance service's membership
 	// notices while the player is online
-	// (internal/service/{{GAME_SERVICE}}/alliance_notice.go), and hidden at
-	// login when the guild's mirror no longer has the player. It is persisted
+	// (internal/service/{{GAME_SERVICE}}/alliance_notice.go), and at login
+	// hidden when the guild's mirror no longer has the player, or — when it
+	// shows none — set from the alliance service's Membership answer (a join
+	// approved while the player was offline). It is persisted
 	// because nothing else on the game side knows the player's guild: the
 	// membership guards are not mirrored to game servers (AllianceMember
 	// declares snapshots=none). It may drift from the roster (a lost notice);

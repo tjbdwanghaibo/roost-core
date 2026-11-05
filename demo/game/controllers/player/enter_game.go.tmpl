@@ -130,11 +130,14 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 		slog.Info("enter_game: settled paid orders on login", "player_id", context.PlayerID, "count", len(settled))
 	}
 	// The guild the player is shown in (PlayerDao.GuildID, the player's own
-	// persisted copy) is checked against that guild's mirror at every login,
-	// which makes up for a leave or kick notice the player missed while
-	// offline (alliance_notice.go in the service package). Best effort — the
-	// guild is the alliance service's, and a failed read leaves the copy as
-	// it is.
+	// persisted copy) is brought in line with the alliance service at every
+	// login, which makes up for membership notices the player missed while
+	// offline (alliance_notice.go in the service package): a guild shown is
+	// checked against its mirror (a leave or kick), and when none is shown
+	// the alliance service is asked which guild the player is in (an
+	// approval). Best effort, bounded (guildLookupTimeout) — the guild is the
+	// alliance service's, and a failure leaves the copy as it is without
+	// failing the login.
 	controller.refreshGuild(context)
 	// Server-wide mail (AudienceBroadcast) sent while this player was offline
 	// reaches the mailbox now: the login half of mail.LazyBroadcast. The mail

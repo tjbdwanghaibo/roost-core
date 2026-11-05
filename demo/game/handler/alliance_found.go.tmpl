@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"{{MODULE}}/game/alliancerule"
-	"{{MODULE}}/game/effects"
 	alliance "{{MODULE}}/game/entities/alliance"
 	alliance_member "{{MODULE}}/game/entities/alliance_member"
 )
@@ -18,6 +17,8 @@ import (
 // alliance records the same request id too, so a retry that reaches it
 // through Establish replays instead of failing on "already founded".
 // deferHeld: as for handlerAllianceAdmit (the receipt checked is the guard's).
+// The answer names the founder's new membership (Member) for the service's
+// notice; no effect is recorded.
 //
 //roost:nest rollback=undo durability=strict
 func handlerAllianceFound(target alliance.IRosterEntity, founder alliance_member.IGuardEntity, requestID string, name string, homeSID int32, openJoin bool, deferHeld bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
@@ -38,10 +39,7 @@ func handlerAllianceFound(target alliance.IRosterEntity, founder alliance_member
 			return roster.AllianceID(), err
 		}
 		guard.Join(roster.AllianceID(), requestID)
-		return roster.AllianceID(), effects.EmitAllianceMemberChanged(effects.AllianceMemberChanged{
-			AllianceID: roster.AllianceID(), PlayerID: founderID, HomeSID: homeSID, Change: effects.MemberJoined,
-			Version: roster.CurrentVersion() + 1,
-		})
+		return roster.AllianceID(), nil
 	})
 	if err != nil {
 		return alliancerule.Answer{}, err
@@ -55,7 +53,10 @@ func handlerAllianceFound(target alliance.IRosterEntity, founder alliance_member
 	if _, err := roster.Execute(requestID, nowUnix, retention, func() (int64, error) { return founderID, nil }); err != nil {
 		return alliancerule.Answer{}, err
 	}
-	return alliancerule.Answer{Outcome: outcome, View: roster.View(roster.CurrentVersion() + 1)}, nil
+	return alliancerule.Answer{
+		Outcome: outcome, View: roster.View(roster.CurrentVersion() + 1),
+		Member: alliancerule.MemberChange{PlayerID: founderID, HomeSID: homeSID, Change: alliancerule.MemberJoined},
+	}, nil
 }
 
 // handlerAllianceEstablish is step 2 of a founding whose founder's guard is on
@@ -65,19 +66,21 @@ func handlerAllianceFound(target alliance.IRosterEntity, founder alliance_member
 // confirms the guard with a direct ResolveGuard afterwards (a lost one is
 // healed from this roster). The receipt makes a retry a
 // replay; an alliance the guard's deadline settled first (alliance_expired,
-// RosterComponent.Settle) refuses the late founding the same way.
+// RosterComponent.Settle) refuses the late founding the same way. The answer
+// names the founder's membership (Member) for the service's notice.
 //
 //roost:nest rollback=undo durability=strict
 func handlerAllianceEstablish(target alliance.IRosterEntity, requestID string, founderID int64, name string, homeSID int32, openJoin bool, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster := target.RosterComp()
+	var joined alliancerule.MemberChange
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
 		if err := roster.Found(name, founderID, homeSID, openJoin, requestID, nowUnix); err != nil {
 			return founderID, err
 		}
-		return founderID, effects.EmitAllianceMemberChanged(effects.AllianceMemberChanged{
-			AllianceID: roster.AllianceID(), PlayerID: founderID, HomeSID: homeSID, Change: effects.MemberJoined,
-			Version: roster.CurrentVersion() + 1,
-		})
+		joined = alliancerule.MemberChange{PlayerID: founderID, HomeSID: homeSID, Change: alliancerule.MemberJoined}
+		return founderID, nil
 	})
-	return answer(roster, outcome, err)
+	reply, err := answer(roster, outcome, err)
+	reply.Member = joined
+	return reply, err
 }

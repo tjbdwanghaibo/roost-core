@@ -9,11 +9,13 @@
 // the route registration (plan §2.7).
 //
 // The service owns two remote-managed kinds (game/entities/alliance,
-// game/entities/alliance_member) and one local timer host
-// (game/entities/alliance_shard); its RPC is internal/rpc/alliance. The
-// design is docs/maintenance/FEATURE-2026-11-04-alliance-service.md in
-// roost-core (§2.2 entities, §2.3 the four answers, §2.5 one player one
-// alliance).
+// game/entities/alliance_member); its RPC is internal/rpc/alliance. No
+// alliance write records an effect: whatever follows a write (the member's
+// notice, finishing a guard on another instance, the enemy's side of a war)
+// is the service layer's, after the write answered. The design is
+// docs/maintenance/FEATURE-2026-11-04-alliance-service.md in roost-core
+// (§2.2 entities, §2.3 the four answers, §2.5 one player one alliance, §2.5B
+// no effects).
 package alliancerule
 
 import (
@@ -32,6 +34,14 @@ import (
 const (
 	RoleMember int32 = 1
 	RoleLeader int32 = 2
+)
+
+// Membership changes, as a write reports them (MemberChange) and the member's
+// game server is told (the service's MemberNotice).
+const (
+	MemberJoined = "joined"
+	MemberLeft   = "left"
+	MemberKicked = "kicked"
 )
 
 // MaxWars bounds how many alliances one alliance is at war with.
@@ -245,12 +255,38 @@ func (state MemberState) Holder() (allianceID int64, requestID string, pending, 
 //
 // Ended is the join request id of the membership a removal of a player whose
 // guard is on another instance ended (the service's ClearGuard names it).
+//
+// Member is the membership this write changed — set only when the write ran
+// now and succeeded, never on a replay: the service sends the member's game
+// server a best-effort notice of it once the write answered.
+//
+// WarPending: the alliance holds a cross-instance war declared under this
+// request whose enemy has not acknowledged it yet (AllianceDao.WarAcks), so
+// the service asks the enemy now (fresh or replayed).
 type Answer struct {
 	Outcome
-	View      View
-	GuardHeld bool
-	Guard     MemberState
-	Ended     string
+	View       View
+	GuardHeld  bool
+	Guard      MemberState
+	Ended      string
+	Member     MemberChange
+	WarPending bool
+}
+
+// MemberChange is one membership change: the player, the game server they
+// belong to (where the notice goes) and how it changed (MemberJoined, ...).
+// The zero value is no change.
+type MemberChange struct {
+	PlayerID int64
+	HomeSID  int32
+	Change   string
+}
+
+// WarAck is a cross-instance war declared under RequestID that EnemyID has
+// not acknowledged yet (AllianceDao.WarAcks).
+type WarAck struct {
+	RequestID string
+	EnemyID   int64
 }
 
 // GuardAnswer is a guard write's answer: the outcome (for writes with a

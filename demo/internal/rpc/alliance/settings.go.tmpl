@@ -14,7 +14,7 @@ import (
 // the route registration (plan §2.7).
 type Settings struct {
 	MaxMembers       int           `config:"max_members" default:"100" min:"1" max:"500" example:"100" help:"roster limit per alliance. The roster is one document written as a whole, so its size is a real cost; 500 is the hard limit"`
-	ReservationTTL   time.Duration `config:"reservation_ttl" default:"30s" min:"1s" example:"30s" help:"how long a cross-instance join holds the player's guard before the guard asks the alliance what became of it (never released on the clock alone)"`
+	ReservationTTL   time.Duration `config:"reservation_ttl" default:"30s" min:"1s" example:"30s" help:"how long a cross-instance join holds the player's guard before the guard asks the alliance what became of it (never released on the clock alone). The deadline is armed in the reserving instance's process; after a restart the next request that finds the guard held asks instead"`
 	ReceiptRetention time.Duration `config:"receipt_retention" default:"168h" min:"1h" example:"168h" help:"how long a request receipt is kept: longer than any caller retries one request id (the saga step receipts use the same default)"`
 	RejoinCooldown   time.Duration `config:"rejoin_cooldown" default:"0s" min:"0s" example:"0s" help:"how long after leaving or being removed a player may not join an alliance; 0 disables it"`
 	// The alliance reward (ClaimReward, the game's reward saga). Prototype

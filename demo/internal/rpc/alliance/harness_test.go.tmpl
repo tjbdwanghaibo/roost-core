@@ -2,17 +2,14 @@ package alliance
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
-	"{{MODULE}}/game/effects"
 	alliance "{{MODULE}}/game/entities/alliance"
 	alliance_member "{{MODULE}}/game/entities/alliance_member"
-	alliance_shard "{{MODULE}}/game/entities/alliance_shard"
 	"{{MODULE}}/game/handler"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -28,7 +25,7 @@ import (
 // generated BusClient (route lookup, one redirect, a fresh lookup after no
 // responders) and the generated handlers (the route check before the method,
 // the redirect target in the response), with requests and responses encoded
-// by the bus codec. What stands in:
+// by the bus codec, and the service's follow-ups (followUps). What stands in:
 //
 //   - testBus delivers a call to the handlers the target instance
 //     registered (no handler: no responders), and gives the queue group's
@@ -40,8 +37,11 @@ import (
 //     an entity atomically and fences every other instance, plus fences a
 //     test injects; each instance keeps its own loaded entities;
 //   - the committer records the commit records' (reliable) effects and the
-//     best-effort effects sent after each durable commit; the test hands
-//     them to the consumers (deliverEffects).
+//     best-effort effects sent after each durable commit — an alliance write
+//     records none, and runFollowUps fails the test if one did;
+//   - the follow-ups' timers (Deps.AfterFunc) are a queue on the cluster's
+//     business clock: armed work runs only when the test calls runFollowUps,
+//     and only once its time (c.now) has come.
 //
 // Mongo, Redis, the WAL and the effect stream are not here: the real
 // dependencies are the smoke test's (phase 5).
@@ -49,7 +49,6 @@ import (
 func registerAllianceEntities() {
 	alliance.RegisterEntity()
 	alliance_member.RegisterEntity()
-	alliance_shard.RegisterEntity()
 }
 
 // registerAllianceHandlers registers the alliance handlers on one engine, the
@@ -104,6 +103,7 @@ type instance struct {
 	store     *entityStore
 	remote    *fakeRemote
 	committer *effectLog
+	due       *dueQueue
 
 	mu       sync.Mutex
 	handlers map[string]bus.RpcHandlerFunc
@@ -132,6 +132,7 @@ func (c *cluster) start(sid int32) *instance {
 	c.t.Helper()
 	in := &instance{sid: sid, svc: New(), store: &entityStore{entities: map[int64]entity.IThreadSafeEntity{}},
 		committer: &effectLog{}, handlers: map[string]bus.RpcHandlerFunc{}}
+	in.due = &dueQueue{c: c}
 	in.remote = &fakeRemote{c: c, sid: sid, fenced: map[int64]error{}, admitted: map[int64]int{}}
 	in.engine = nest.NewEngine(
 		nest.NestOptionWithGetter(in.store),
@@ -157,13 +158,12 @@ func (c *cluster) start(sid int32) *instance {
 			c.notices = append(c.notices, notice)
 			return nil
 		},
-		Now: func() time.Time { return c.now },
+		Now:       func() time.Time { return c.now },
+		AfterFunc: in.due.after,
 	}); err != nil {
 		c.t.Fatal(err)
 	}
-	if err := in.store.EnsureShard(context.Background(), sid); err != nil {
-		c.t.Fatal(err)
-	}
+	c.t.Cleanup(func() { _ = in.svc.Stop(context.Background()) })
 	if err := RegisterHandlers(testBus{c: c, self: in}, in.svc); err != nil {
 		c.t.Fatal(err)
 	}
@@ -249,6 +249,25 @@ func (c *cluster) gate(id int64, want int) {
 	c.gates[id] = &claimGate{want: want, release: make(chan struct{})}
 }
 
+// awaitArrival waits until one admission of id has reached its gate (the
+// gated write holds its transaction's locks from then on).
+func (c *cluster) awaitArrival(t *testing.T, id int64) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c.mu.Lock()
+		arrived := c.gates[id] != nil && c.gates[id].arrived > 0
+		c.mu.Unlock()
+		if arrived {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no admission of %d reached its gate", id)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func (c *cluster) await(ids []int64) {
 	c.mu.Lock()
 	var wait []chan struct{}
@@ -271,48 +290,102 @@ func (c *cluster) await(ids []int64) {
 	}
 }
 
-// deliverEffects hands every effect committed so far, on every instance, to
-// the service's consumers, the way the effect stream would (once each, in
-// commit order per instance), until none are left. It returns how many it
-// delivered.
-func (c *cluster) deliverEffects() int {
+// runFollowUps runs the follow-ups every instance has armed whose time has
+// come (c.now), in rounds, until none is due — the work a round arms (a retry
+// for later, the asks of a scan) runs in a later round if it is due. Alliance
+// writes record no effect: it fails the test when an instance's committer
+// saw one. It returns how many it ran.
+func (c *cluster) runFollowUps() int {
 	c.t.Helper()
-	delivered := 0
-	for round := 0; round < 10; round++ {
+	ran := 0
+	for round := 0; round < 20; round++ {
 		n := 0
 		for _, sid := range c.sids() {
 			in := c.instances[sid]
-			for _, effect := range append(in.committer.take(), in.committer.takeBestEffort()...) {
+			if count := in.committer.effectCount(); count != 0 {
+				c.t.Fatalf("instance %d recorded %d effects; alliance writes record none", sid, count)
+			}
+			for _, item := range in.due.take() {
 				n++
-				var err error
-				switch effect.Topic {
-				case effects.TopicAllianceMemberChanged:
-					var event effects.AllianceMemberChanged
-					mustDecode(c.t, effect.Payload, &event)
-					err = in.svc.HandleMemberChanged(context.Background(), event)
-				case effects.TopicAllianceReservationDue:
-					var event effects.AllianceReservationDue
-					mustDecode(c.t, effect.Payload, &event)
-					err = in.svc.HandleReservationDue(context.Background(), event)
-				case effects.TopicAllianceWarDeclared:
-					var event effects.AllianceWarDeclared
-					mustDecode(c.t, effect.Payload, &event)
-					err = in.svc.HandleWarDeclared(context.Background(), event)
-				default:
-					c.t.Fatalf("unexpected effect topic %q", effect.Topic)
-				}
-				if err != nil {
-					c.t.Fatalf("consume %s: %v", effect.Topic, err)
-				}
+				item()
 			}
 		}
 		if n == 0 {
-			return delivered
+			return ran
 		}
-		delivered += n
+		ran += n
 	}
-	c.t.Fatal("effects keep producing effects")
-	return delivered
+	c.t.Fatal("follow-ups keep arming follow-ups that are due at once")
+	return ran
+}
+
+// restartFollowUps is the instance's process stopping and starting again as
+// far as the follow-ups go: what was armed is gone (nothing of it is
+// persistent). The entities stay — in production they are reloaded from the
+// store, the alliances by the startup preload.
+func (c *cluster) restartFollowUps(sid int32) {
+	c.t.Helper()
+	in := c.instances[sid]
+	if err := in.svc.Stop(context.Background()); err != nil {
+		c.t.Fatal(err)
+	}
+	in.due.clear()
+	in.svc.follow = newFollowUps(in.due.after)
+}
+
+// dueQueue is Deps.AfterFunc for the tests: armed work waits in the queue
+// with its time on the cluster's business clock, and runs when the test runs
+// it (runFollowUps), in the test's goroutine.
+type dueQueue struct {
+	c     *cluster
+	mu    sync.Mutex
+	items []*dueItem
+}
+
+type dueItem struct {
+	at      time.Time
+	f       func()
+	stopped bool
+}
+
+func (q *dueQueue) after(d time.Duration, f func()) func() bool {
+	item := &dueItem{at: q.c.now.Add(d), f: f}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.items = append(q.items, item)
+	return func() bool {
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		was := !item.stopped
+		item.stopped = true
+		return was
+	}
+}
+
+// take removes and returns the work due now.
+func (q *dueQueue) take() []func() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var due []func()
+	kept := q.items[:0]
+	for _, item := range q.items {
+		switch {
+		case item.stopped:
+		case !item.at.After(q.c.now):
+			item.stopped = true
+			due = append(due, item.f)
+		default:
+			kept = append(kept, item)
+		}
+	}
+	q.items = kept
+	return due
+}
+
+func (q *dueQueue) clear() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.items = nil
 }
 
 func (c *cluster) sids() []int32 {
@@ -322,13 +395,6 @@ func (c *cluster) sids() []int32 {
 	}
 	slices.Sort(sids)
 	return sids
-}
-
-func mustDecode(t *testing.T, payload []byte, into any) {
-	t.Helper()
-	if err := json.Unmarshal(payload, into); err != nil {
-		t.Fatal(err)
-	}
 }
 
 // testBus is the bus as one process sees it: self's handlers are registered
@@ -481,10 +547,6 @@ func (s *entityStore) EnsureGuard(_ context.Context, playerID int64) error {
 	return s.ensure(playerID, alliance_member.EntityKindAllianceMember)
 }
 
-func (s *entityStore) EnsureShard(_ context.Context, sid int32) error {
-	return s.ensure(int64(sid), alliance_shard.EntityKindAllianceShard)
-}
-
 // EntityIDs lists the ids of kind this instance has loaded.
 func (s *entityStore) EntityIDs(_ context.Context, kind entity.EntityKind) ([]int64, error) {
 	s.mu.Lock()
@@ -513,16 +575,6 @@ func (s *entityStore) founded(t *testing.T) map[int64]int64 {
 		}
 	}
 	return leaders
-}
-
-func (s *entityStore) shard(t *testing.T, sid int32) *alliance_shard.AllianceShard {
-	t.Helper()
-	id, _ := entity.BuildEntityID(int64(sid), alliance_shard.EntityKindAllianceShard)
-	value, err := s.Get(context.Background(), id, entity.EntityCategoryOther)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return value.(*alliance_shard.AllianceShard)
 }
 
 // effectLog is the transaction committer: it keeps the effects of every
@@ -573,6 +625,14 @@ func (l *effectLog) count() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.records
+}
+
+// effectCount is how many effects, reliable and best effort, were recorded
+// and not taken.
+func (l *effectLog) effectCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.effects) + len(l.bestEffort)
 }
 
 // fakeRemote stands in for one instance's Remote runtime over the cluster's

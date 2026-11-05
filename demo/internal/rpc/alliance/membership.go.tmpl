@@ -6,7 +6,6 @@ import (
 	"log/slog"
 
 	"{{MODULE}}/game/alliancerule"
-	"{{MODULE}}/game/effects"
 	alliance "{{MODULE}}/game/entities/alliance"
 	alliance_member "{{MODULE}}/game/entities/alliance_member"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -119,6 +118,9 @@ func (s *Service) foundHere(ctx context.Context, requestID string, callerID int6
 		reply, err := s.foundReplay(ctx, requestID, callerID, callerSID, answer.Receipt, name, openJoin)
 		return reply, true, minted, err
 	}
+	if err == nil {
+		s.notify(ctx, answer)
+	}
 	reply, err = s.reply(answer, err)
 	return reply, true, minted, err
 }
@@ -167,10 +169,11 @@ func (s *Service) foundReplay(ctx context.Context, requestID string, callerID in
 	return s.establish(ctx, requestID, callerID, callerSID, receipt.Subject, name, openJoin)
 }
 
-// establish founds allianceID for requestID wherever it belongs (onAlliance),
-// then confirms the founder's reservation directly (finishGuard; a founding
-// whose guard is on this instance was confirmed in its own transaction and
-// the call changes nothing).
+// establish founds allianceID for requestID wherever it belongs (onAlliance;
+// the instance that founds it sends the founder's notice), then confirms the
+// founder's reservation directly (finishGuard; a founding whose guard is on
+// this instance was confirmed in its own transaction and the call changes
+// nothing).
 func (s *Service) establish(ctx context.Context, requestID string, founderID int64, homeSID int32, allianceID int64, name string, openJoin bool) (Reply, error) {
 	var reply Reply
 	err := s.onAlliance(ctx, allianceID,
@@ -183,7 +186,7 @@ func (s *Service) establish(ctx context.Context, requestID string, founderID int
 			return err
 		})
 	if err == nil {
-		s.finishGuard(ctx, founderID, allianceID, requestID, effects.MemberJoined)
+		s.finishGuard(ctx, founderID, allianceID, requestID, alliancerule.MemberJoined)
 	}
 	return reply, err
 }
@@ -201,6 +204,9 @@ func (s *Service) Establish(ctx context.Context, requestID string, callerID int6
 		answer, err = syncsender.NewAllianceFoundSender(s.deps.Nest).Sync_AllianceEstablish(ctx, target, requestID, callerID, name, callerSID, openJoin, s.retention())
 		return err
 	})
+	if err == nil {
+		s.notify(ctx, answer)
+	}
 	return s.reply(answer, err)
 }
 
@@ -237,10 +243,11 @@ func (s *Service) Join(ctx context.Context, requestID string, callerID int64, ca
 //
 // A rejection in step 2 releases the reservation at once (best effort); a
 // lost confirmation or release, or an answer that is not final in either
-// step, leaves the reservation pending: its deadline's notice, or the next
-// request that finds the guard held, settles it with this alliance and heals
-// the guard (healGuard) — never on the clock alone. No effect finishes
-// anything: the membership notice is best effort.
+// step, leaves the reservation pending: its deadline (armed in the guard
+// instance's process by ReserveGuard), or the next request that finds the
+// guard held, settles it with this alliance and heals the guard (healGuard)
+// — never on the clock alone. No effect finishes anything; the member's
+// notice is sent after the admission answered (notify, best effort).
 //
 // A guard held by another alliance or request is healed from its holder
 // before the admission is decided: here (deferHeld, then healGuard), or by
@@ -276,6 +283,9 @@ func (s *Service) admit(ctx context.Context, requestID string, actorID int64, ca
 				err = admitOnce(false)
 			}
 			if !s.moved(ctx, guard, err) {
+				if err == nil {
+					s.notify(ctx, answer)
+				}
 				return err
 			}
 		}
@@ -295,7 +305,8 @@ func (s *Service) admit(ctx context.Context, requestID string, actorID int64, ca
 		switch {
 		case err != nil:
 		case answer.Code == 0:
-			s.finishGuard(ctx, playerID, allianceID, requestID, effects.MemberJoined)
+			s.notify(ctx, answer)
+			s.finishGuard(ctx, playerID, allianceID, requestID, alliancerule.MemberJoined)
 		default:
 			if _, releaseErr := s.deps.Peers.ResolveGuard(ctx, requestID, guard, allianceID, false); releaseErr != nil {
 				slog.Warn("alliance: reservation not released after a refused admission; its deadline or the next request heals it",
@@ -333,7 +344,8 @@ func (s *Service) Kick(ctx context.Context, requestID string, callerID int64, _ 
 // transaction when the guard is this instance's, otherwise by a direct
 // ClearGuard on the guard's owner (finishGuard: best effort; a lost one
 // leaves the guard stale-occupied until the next request that finds it held
-// heals it from this roster).
+// heals it from this roster). The member's notice follows the write
+// (notify).
 func (s *Service) remove(ctx context.Context, requestID string, actorID, target, memberID int64) (Reply, error) {
 	guard, err := GuardTarget(memberID)
 	if err != nil {
@@ -351,12 +363,18 @@ func (s *Service) remove(ctx context.Context, requestID string, actorID, target,
 			}
 			answer, err = syncsender.NewAllianceRemoveSender(s.deps.Nest).MultiSync_AllianceRemove(ctx, target, guard, requestID, actorID, s.retention())
 			if !s.moved(ctx, guard, err) {
+				if err == nil {
+					s.notify(ctx, answer)
+				}
 				return err
 			}
 		}
 		answer, err = syncsender.NewAllianceRemoveSender(s.deps.Nest).Sync_AllianceRemoveDetached(ctx, target, requestID, actorID, memberID, s.retention())
+		if err == nil {
+			s.notify(ctx, answer)
+		}
 		if err == nil && answer.Ended != "" {
-			s.finishGuard(ctx, memberID, entity.GetUniqueIDFromEntityID(target), answer.Ended, effects.MemberLeft)
+			s.finishGuard(ctx, memberID, entity.GetUniqueIDFromEntityID(target), answer.Ended, alliancerule.MemberLeft)
 		}
 		return err
 	})

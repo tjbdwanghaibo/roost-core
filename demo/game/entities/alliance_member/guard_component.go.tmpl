@@ -31,14 +31,16 @@ const CompTypeGuard entity.ComponentType = 2009
 // id), the alliance admits the player under that request id, and the guard is
 // confirmed by a direct ResolveGuard — or released when the alliance refused.
 // A reservation blocks every other alliance. If that call is lost the guard
-// stays pending: the reservation's deadline (a best-effort notice from the
-// instance's AllianceShard) or the next request that finds the guard held
-// (HeldAgainst; the service's healGuard) asks the alliance (Settle) what
-// became of the request, which also makes that answer final, and confirms or
-// releases by it: never on the clock alone, because a request still in flight
-// could otherwise seat the player after the guard let go. When guard and
-// alliance are on the same instance, the three steps are one transaction
-// (Join).
+// stays pending: the reservation's deadline (armed in the process of the
+// instance that made it; not persisted) or the next request that finds the
+// guard held (HeldAgainst; the service's healGuard) asks the alliance (Settle)
+// what became of the request, which also makes that answer final, and
+// confirms or releases by it: never on the clock alone, because a request
+// still in flight could otherwise seat the player after the guard let go.
+// When guard and alliance are on the same instance, the three steps are one
+// transaction (Join). Every guard write is a transaction on the guard alone
+// (or the guard and the alliance it joins on one instance): no shared entity,
+// so the guards of different players never wait on each other.
 //
 // Leaving is the reverse: the alliance drops the seat, then the guard is
 // cleared — only for the membership that ended (its join request id), so a

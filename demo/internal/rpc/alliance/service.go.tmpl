@@ -42,13 +42,10 @@ type Rules struct {
 // record anywhere yet (a new alliance, a player's first guard) is created
 // here — the first write's admission claims it for this instance (an atomic
 // claim: of two instances creating the same entity, one becomes its owner and
-// the other is fenced). The instance's AllianceShard must exist before a
-// reservation can arm a deadline on it. Production: the generated lifecycles
-// (wiring.go).
+// the other is fenced). Production: the generated lifecycles (wiring.go).
 type Entities interface {
 	EnsureAlliance(ctx context.Context, allianceID int64) error
 	EnsureGuard(ctx context.Context, playerID int64) error
-	EnsureShard(ctx context.Context, sid int32) error
 }
 
 // Sequence mints alliance ids from one counter (plan §2.2). Production: a
@@ -74,7 +71,9 @@ type Deps struct {
 	// on an entity it may not own goes through it — on this instance too, in
 	// which case the bus delivers it here.
 	Peers Alliance
-	// Notify sends a best-effort membership notice to a game server.
+	// Notify sends a best-effort membership notice to a game server (a bus
+	// publish: it does not wait for the game). The service sends it after a
+	// write that changed a membership answered; nil sends nothing.
 	Notify func(ctx context.Context, homeSID int32, notice MemberNotice) error
 	// Owned lists the entities this instance owns, by owner (alliance.transfer
 	// by count only). Production: the Remote manager.
@@ -82,6 +81,9 @@ type Deps struct {
 	// Now is the business clock (deadlines are compared with Nest's nowUnix,
 	// which is business time too).
 	Now func() time.Time
+	// AfterFunc arms the service's follow-ups in this process (followUps);
+	// nil is time.AfterFunc. Tests run the armed work themselves.
+	AfterFunc AfterFunc
 }
 
 // Service implements Alliance in the owning process.
@@ -92,8 +94,14 @@ type Deps struct {
 // Nest, where the entity's rules decide under its lock (the handlers in
 // game/handler/alliance_*.go). Nothing here judges a permission or a rule —
 // those read the authoritative state, which only the lock holder sees.
+//
+// What follows a write — the member's notice, finishing a guard on another
+// instance, the enemy's side of a war — is the service's too, after the
+// write answered: no alliance write records an effect (plan §2.5B). Work that
+// waits for a clock or a retry runs in follow (followUps).
 type Service struct {
-	deps Deps
+	deps   Deps
+	follow *followUps
 }
 
 // New builds an unbound service; the Mod binds it in Start (after Nest and
@@ -116,7 +124,21 @@ func (s *Service) Bind(deps Deps) error {
 		deps.Now = time.Now
 	}
 	s.deps = deps
+	s.follow = newFollowUps(deps.AfterFunc)
 	return nil
+}
+
+// Stop stops the service's follow-ups (followUps.stop: admission closed,
+// running work cancelled and waited for within ctx). The alliance process
+// calls it from its Shutdown, after the RPC ingress closed and before Nest
+// and the bus stop. A follow-up that was armed and not run is not needed for
+// correctness (followUps); a timeout returns ctx's error and leaves the
+// dependencies to the caller, who must not stop them yet.
+func (s *Service) Stop(ctx context.Context) error {
+	if s.follow == nil {
+		return nil
+	}
+	return s.follow.stop(ctx)
 }
 
 // AllianceTarget is the route key of an alliance: its full entity id.

@@ -7,7 +7,6 @@ import (
 
 	alliance "{{MODULE}}/game/entities/alliance"
 	alliance_member "{{MODULE}}/game/entities/alliance_member"
-	syncsender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 )
 
@@ -24,9 +23,11 @@ const transferListPage = 1000
 type TransferReport struct {
 	// Moved: ownership is now toSID's.
 	Moved []int64 `json:"moved"`
-	// Pending: guards with an open reservation, left in place — the
-	// reservation's deadline is armed on this instance's shard. Run the
-	// transfer again after the reservation settles (at most reservation_ttl).
+	// Pending: alliances with a cross-instance war their enemy has not
+	// acknowledged yet (AllianceDao.WarAcks), left in place — this instance
+	// is the one that keeps asking the enemy. Run the transfer again once the
+	// enemy answered (usually at once; while its instance is unreachable, as
+	// soon as it is back).
 	Pending []int64 `json:"pending,omitempty"`
 	// Failed: entity id -> why; nothing was moved for them.
 	Failed map[int64]string `json:"failed,omitempty"`
@@ -56,9 +57,11 @@ type TransferReport struct {
 // registration names toSID once it has loaded the entity. Callers need no
 // configuration change.
 //
-// A guard with an open reservation is not moved (Pending): its deadline is a
-// node on this instance's AllianceShard, and the guard and its deadline move
-// together or not at all. Run the command again once it has settled.
+// An alliance whose cross-instance war still waits for the enemy is not moved
+// (Pending): the wait is asked again by its owner's follow-ups, which do not
+// move with it. A guard with an open reservation moves like any other: its
+// deadline, armed in this process, heals it through the route RPC wherever it
+// is, and a lost deadline is made up by the next request that finds it held.
 func (s *Service) TransferOwnership(ctx context.Context, ids []int64, count int, toSID int32) (TransferReport, error) {
 	report := TransferReport{Failed: map[int64]string{}}
 	switch {
@@ -93,13 +96,13 @@ func (s *Service) TransferOwnership(ctx context.Context, ids []int64, count int,
 			report.Failed[id] = fmt.Sprintf("not owned by this instance (owner %d)", lease.OwnerSid)
 			continue
 		}
-		if entity.MatchEntityID(id, alliance_member.EntityKindAllianceMember) {
-			pending, err := s.guardPending(ctx, id)
+		if entity.MatchEntityID(id, alliance.EntityKindAlliance) {
+			acks, err := s.warAcks(ctx, id)
 			if err != nil {
 				report.Failed[id] = err.Error()
 				continue
 			}
-			if pending {
+			if len(acks) > 0 {
 				report.Pending = append(report.Pending, id)
 				continue
 			}
@@ -133,26 +136,4 @@ func (s *Service) ownedEntities(ctx context.Context, count int) ([]int64, error)
 		}
 	}
 	return owned[:min(len(owned), count)], nil
-}
-
-// guardPending reports whether the guard id has an open reservation. One past
-// its deadline is healed first (healGuard: its alliance settles it) — the
-// deadline's notice is best effort, and a reservation nobody finishes must not
-// keep the guard here for good.
-func (s *Service) guardPending(ctx context.Context, id int64) (bool, error) {
-	if err := s.deps.Entities.EnsureGuard(ctx, entity.GetUniqueIDFromEntityID(id)); err != nil {
-		return false, err
-	}
-	state, err := syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardInfo(ctx, id)
-	if err != nil || state.PendingRequestID == "" {
-		return false, err
-	}
-	if state.PendingDeadlineUnix > s.deps.Now().Unix() {
-		return true, nil
-	}
-	if err := s.healGuard(ctx, state); err != nil {
-		return false, err
-	}
-	state, err = syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardInfo(ctx, id)
-	return err == nil && state.PendingRequestID != "", err
 }

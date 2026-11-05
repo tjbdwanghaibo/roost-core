@@ -31,9 +31,8 @@ const sequenceID = "alliance"
 // BindRegistry binds the service to the process it runs in. The Mod calls it
 // in Start — after Nest (and the Data Engine recovery before it) has started
 // and the startup preload has loaded this instance's alliances — and before
-// the bus handlers are registered; it creates this instance's AllianceShard
-// first, so no request finds it missing.
-func (s *Service) BindRegistry(ctx context.Context, registry *app.Registry) error {
+// the bus handlers are registered.
+func (s *Service) BindRegistry(registry *app.Registry) error {
 	identity, settings, err := LoadSettings(registry)
 	if err != nil {
 		return err
@@ -70,10 +69,6 @@ func (s *Service) BindRegistry(ctx context.Context, registry *app.Registry) erro
 	if err != nil {
 		return err
 	}
-	shards, err := lifecycle.AllianceShardFromRegistry(registry)
-	if err != nil {
-		return err
-	}
 	// Calls to entities this instance may not own (guards, other alliances)
 	// go through the bus to their owner: the route lookup is the Remote
 	// Mod's (cache → Redis registration → ownership record).
@@ -86,26 +81,23 @@ func (s *Service) BindRegistry(ctx context.Context, registry *app.Registry) erro
 		return err
 	}
 	business := app.BusinessClock(registry)
-	entities := lifecycleEntities{alliances: alliances, members: members, shards: shards}
-	if err := s.Bind(Deps{
+	entities := lifecycleEntities{alliances: alliances, members: members}
+	return s.Bind(Deps{
 		Nest: nestClient, LocalSID: identity.Sid, Rules: settings.Rules(),
 		Owners: remote, Entities: entities, Peers: peers, Now: business.Now,
 		Sequence: mongoSequence{coll: mongoClient.Database(databases.Physical(db.AllianceDaoDBName)).Collection(sequenceCollection)},
+		// A publish to the member's game server: it does not wait for the game.
 		Notify: func(_ context.Context, homeSID int32, notice MemberNotice) error {
 			return busClient.SendByType(GameServiceType, homeSID, NoticeModule, notice)
 		},
 		Owned: owned,
-	}); err != nil {
-		return err
-	}
-	return entities.EnsureShard(ctx, identity.Sid)
+	})
 }
 
 // lifecycleEntities is Entities over the generated lifecycles.
 type lifecycleEntities struct {
 	alliances *lifecycle.AllianceLifecycle
 	members   *lifecycle.AllianceMemberLifecycle
-	shards    *lifecycle.AllianceShardLifecycle
 }
 
 func (e lifecycleEntities) EnsureAlliance(ctx context.Context, allianceID int64) error {
@@ -115,11 +107,6 @@ func (e lifecycleEntities) EnsureAlliance(ctx context.Context, allianceID int64)
 
 func (e lifecycleEntities) EnsureGuard(ctx context.Context, playerID int64) error {
 	_, _, err := e.members.GetOrCreate(ctx, playerID)
-	return err
-}
-
-func (e lifecycleEntities) EnsureShard(ctx context.Context, sid int32) error {
-	_, _, err := e.shards.GetOrCreate(ctx, int64(sid))
 	return err
 }
 

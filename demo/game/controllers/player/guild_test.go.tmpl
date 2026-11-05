@@ -9,6 +9,7 @@ import (
 
 	"{{MODULE}}/game/alliancerule"
 	alliance "{{MODULE}}/game/entities/alliance"
+	alliance_member "{{MODULE}}/game/entities/alliance_member"
 	playerentity "{{MODULE}}/game/entities/player"
 	playeraccess "{{MODULE}}/game/playeraccess"
 	apperrors "{{MODULE}}/internal/errors"
@@ -28,9 +29,19 @@ import (
 // embedded interface), so an endpoint that calls something unexpected fails.
 type allianceStub struct {
 	rpcalliance.Alliance
-	join      func(requestID string, callerID int64, callerSID int32, target int64) (rpcalliance.Reply, error)
-	leave     func(requestID string, callerID int64, callerSID int32, target int64) (rpcalliance.Reply, error)
-	joinCalls int
+	join            func(requestID string, callerID int64, callerSID int32, target int64) (rpcalliance.Reply, error)
+	leave           func(requestID string, callerID int64, callerSID int32, target int64) (rpcalliance.Reply, error)
+	membership      func(target int64) (rpcalliance.GuardReply, error)
+	joinCalls       int
+	membershipCalls int
+}
+
+func (s *allianceStub) Membership(ctx context.Context, target int64) (rpcalliance.GuardReply, error) {
+	s.membershipCalls++
+	if _, bounded := ctx.Deadline(); !bounded {
+		return rpcalliance.GuardReply{}, errors.New("the login's lookup must be bounded")
+	}
+	return s.membership(target)
 }
 
 func (s *allianceStub) Join(_ context.Context, requestID string, callerID int64, callerSID int32, target int64) (rpcalliance.Reply, error) {
@@ -229,5 +240,60 @@ func TestLoginHidesAGuildThePlayerIsNoLongerIn(t *testing.T) {
 	controller.refreshGuild(guildContext(12))
 	if slices.Contains(nest.calls, "handlerShowGuild") {
 		t.Fatalf("a member's copy was changed at login: %v", nest.calls)
+	}
+}
+
+// A player whose copy shows no guild asks the alliance service at login which
+// guild they are in (Membership, bounded): a join approved while they were
+// offline — its notice found nobody online — is shown. A player who never had
+// a guard ("entity not found"), a reservation still on its way, or an
+// alliance service that cannot answer leaves the copy at none, and the login
+// goes on. A copy that shows a guild is checked against the mirror instead,
+// without asking.
+func TestLoginLooksUpAGuildJoinedWhileOffline(t *testing.T) {
+	alliance_member.RegisterEntity()
+	guard, err := rpcalliance.GuardTarget(stuckPlayerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer := func(reply rpcalliance.GuardReply, err error) *allianceStub {
+		return &allianceStub{membership: func(target int64) (rpcalliance.GuardReply, error) {
+			if target != guard {
+				t.Fatalf("membership asked for %d, want the player's guard %d", target, guard)
+			}
+			return reply, err
+		}}
+	}
+	stub := answer(rpcalliance.GuardReply{State: alliancerule.MemberState{PlayerID: stuckPlayerID, AllianceID: 7}}, nil)
+	controller, nest := guildController(t, stub, mirrorStub{}, 0)
+	controller.refreshGuild(guildContext(20))
+	if stub.membershipCalls != 1 || nest.handler != "handlerShowGuild" || nest.params[0] != int64(7) || nest.params[1] != int64(0) {
+		t.Fatalf("a guild joined while offline: %d lookups, last call %q %v; want one lookup and ShowGuild(7, replaces 0)", stub.membershipCalls, nest.handler, nest.params)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		reply rpcalliance.GuardReply
+		err   error
+	}{
+		{"never had a guard", rpcalliance.GuardReply{}, servicerpc.EntityNotFound(guard)},
+		{"a reservation on its way", rpcalliance.GuardReply{State: alliancerule.MemberState{PlayerID: stuckPlayerID, PendingAllianceID: 7, PendingRequestID: "r"}}, nil},
+		{"the alliance service does not answer", rpcalliance.GuardReply{}, fnats.ErrNoResponders},
+	} {
+		stub := answer(tc.reply, tc.err)
+		controller, nest := guildController(t, stub, mirrorStub{}, 0)
+		controller.refreshGuild(guildContext(21))
+		if stub.membershipCalls != 1 || slices.Contains(nest.calls, "handlerShowGuild") {
+			t.Fatalf("%s: %d lookups, calls %v; want one lookup and the copy left at none", tc.name, stub.membershipCalls, nest.calls)
+		}
+	}
+
+	seven, _ := rpcalliance.AllianceTarget(7)
+	snapshots := mirrorStub{seven: {payload: bson.M{"name": "seven", "leader_id": int64(1), "members": bson.M{"4242": bson.M{"role": int32(1)}}}, version: 3}}
+	stub = &allianceStub{} // Membership panics if it is called
+	controller, _ = guildController(t, stub, snapshots, 7)
+	controller.refreshGuild(guildContext(22))
+	if stub.membershipCalls != 0 {
+		t.Fatal("a copy that shows a guild was looked up")
 	}
 }

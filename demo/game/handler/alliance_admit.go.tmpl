@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"{{MODULE}}/game/alliancerule"
-	"{{MODULE}}/game/effects"
 	alliance "{{MODULE}}/game/entities/alliance"
 	alliance_member "{{MODULE}}/game/entities/alliance_member"
 )
@@ -21,8 +20,9 @@ import (
 // service heals the guard from its holder first (it may be stale) and asks
 // again with deferHeld=false, which records the refusal if it still holds.
 //
-// Nothing is left to finish: the membership notice to the game server is a
-// best-effort effect, not an outbox record.
+// Nothing is left to finish and no effect is recorded: the answer names the
+// membership it changed (Member), and the service sends the player's game
+// server a best-effort notice of it after the write answered.
 //
 //roost:nest rollback=undo durability=strict
 func handlerAllianceAdmit(target alliance.IRosterEntity, member alliance_member.IGuardEntity, requestID string, actorID int64, callerSID int32, viaApplication bool, deferHeld bool, maxMembers int32, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
@@ -31,6 +31,7 @@ func handlerAllianceAdmit(target alliance.IRosterEntity, member alliance_member.
 	if _, decided := roster.Receipt(requestID); deferHeld && !decided && guard.HeldAgainst(requestID) {
 		return alliancerule.Answer{GuardHeld: true, Guard: guard.State(guard.CurrentVersion())}, nil
 	}
+	var joined alliancerule.MemberChange
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
 		homeSID, err := roster.AdmissionHome(actorID, playerID, callerSID, viaApplication, int(maxMembers))
 		if err != nil {
@@ -41,10 +42,10 @@ func handlerAllianceAdmit(target alliance.IRosterEntity, member alliance_member.
 		}
 		roster.Admit(playerID, homeSID, requestID, nowUnix)
 		guard.Join(roster.AllianceID(), requestID)
-		return playerID, effects.EmitAllianceMemberChanged(effects.AllianceMemberChanged{
-			AllianceID: roster.AllianceID(), PlayerID: playerID, HomeSID: homeSID, Change: effects.MemberJoined,
-			Version: roster.CurrentVersion() + 1,
-		})
+		joined = alliancerule.MemberChange{PlayerID: playerID, HomeSID: homeSID, Change: alliancerule.MemberJoined}
+		return playerID, nil
 	})
-	return answer(roster, outcome, err)
+	reply, err := answer(roster, outcome, err)
+	reply.Member = joined
+	return reply, err
 }

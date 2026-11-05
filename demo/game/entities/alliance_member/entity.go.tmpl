@@ -24,9 +24,10 @@ type IAllianceMemberEntity interface{ entity.IThreadSafeEntity }
 // remote=managed, EntityCategoryRemote and service=alliance for the same
 // reasons as Alliance. snapshots=none: nothing reads a guard's Remote
 // snapshot — game servers mirror only the alliance and keep the player's
-// guild on the Player, and the guard's owner loads it, hands it over
-// (alliance.transfer, scale-in) and answers alliance.guard from its DAO
-// document and the ownership record — so its commits write the guard
+// guild on the Player (asking Membership at login when it shows none), and
+// the guard's owner loads it, hands it over (alliance.transfer, scale-in)
+// and answers alliance.guard and Membership from its DAO document and the
+// ownership record — so its commits write the guard
 // document and nothing else (no _remote_entity_snapshots document, no L2
 // entry, no broadcast).
 //

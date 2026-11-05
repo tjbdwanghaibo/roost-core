@@ -3,20 +3,36 @@ package alliance
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"{{MODULE}}/game/alliancerule"
-	"{{MODULE}}/game/effects"
 	alliance "{{MODULE}}/game/entities/alliance"
 	syncsender "{{MODULE}}/game/handler/syncsender"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // DeclareWar implements Alliance (plan §2.9). Two alliances this instance
-// owns are written in one transaction; an enemy on another instance gets its
-// side from the effect (HandleWarDeclared → AcknowledgeWar there, a route
-// RPC). Operations that must be atomic across instances move the alliances
-// onto one instance first (alliance.transfer); nothing here coordinates two
-// instances atomically. An enemy id that has no ownership record was never
-// founded: refused as alliance_missing, before anything is written.
+// owns are written in one transaction. An enemy on another instance: this
+// side records the war and a durable wait for the enemy (AllianceDao.WarAcks)
+// in one transaction, the declaration answers, and the service then asks the
+// enemy to record its side (acknowledgeWar → AcknowledgeWar there, a route
+// RPC) — no effect. Operations that must be atomic across instances move the
+// alliances onto one instance first (alliance.transfer); nothing here
+// coordinates two instances atomically. An enemy id that has no ownership
+// record was never founded: refused as alliance_missing, before anything is
+// written.
+//
+// Why the enemy's side is recorded eventually (plan §2.9): the wait commits
+// with this side, and is ended only once the enemy gave a final answer
+// (recorded, or refused — the declaring side keeps its record either way).
+// While it exists, the instance that owns this alliance asks again: right
+// after the declaration, then with backoff while it runs (retryDelay), after
+// a restart from the preloaded alliances (ScanWars), and whenever the
+// declaration is retried (its replay reports the wait). An alliance with a
+// wait is not transferred (TransferOwnership), so the owner that keeps asking
+// is the one that holds the wait. AcknowledgeWar is idempotent by request id,
+// so an acknowledgment that arrives late or twice is a replay.
 func (s *Service) DeclareWar(ctx context.Context, requestID string, callerID int64, _ int32, target int64, enemyID int64) (Reply, error) {
 	if err := requireRequest(requestID, callerID, enemyID); err != nil {
 		return s.reply(alliancerule.Answer{}, err)
@@ -44,6 +60,9 @@ func (s *Service) DeclareWar(ctx context.Context, requestID string, callerID int
 		answer, err = wars.Sync_AllianceDeclareWarDetached(ctx, target, requestID, callerID, enemyID, s.retention())
 		return err
 	})
+	if err == nil && answer.WarPending {
+		s.askEnemy(entity.GetUniqueIDFromEntityID(target), enemyID, requestID, 0)
+	}
 	return s.reply(answer, err)
 }
 
@@ -60,16 +79,114 @@ func (s *Service) AcknowledgeWar(ctx context.Context, requestID string, target i
 	return s.reply(answer, err)
 }
 
-// HandleWarDeclared consumes effects.AllianceWarDeclared: the enemy's side of
-// a cross-instance declaration. A refusal there is final for that request id
-// and is not retried; an error that is not final redelivers the effect.
-func (s *Service) HandleWarDeclared(ctx context.Context, event effects.AllianceWarDeclared) error {
-	enemy, err := AllianceTarget(event.EnemyID)
+// warKey names a war's wait among the follow-ups.
+func warKey(declarerID int64, requestID string) string {
+	return fmt.Sprintf("war:%d:%s", declarerID, requestID)
+}
+
+// askEnemy arms acknowledgeWar for the war declarerID declared on enemyID
+// under requestID: now for the first attempt (the declaration has answered),
+// later for the next ones (attemptDelay).
+func (s *Service) askEnemy(declarerID, enemyID int64, requestID string, attempt int) {
+	s.follow.arm(warKey(declarerID, requestID), attemptDelay(attempt), func(ctx context.Context) {
+		s.acknowledgeWar(ctx, declarerID, enemyID, requestID, attempt)
+	})
+}
+
+// acknowledgeWar asks the enemy to record its side of the war declarerID
+// declared under requestID (AcknowledgeWar, the route RPC), then ends the
+// declarer's wait with a conditional transaction (by request id). Only the
+// declarer's owner does it: one that has given the alliance away leaves the
+// wait to the new owner. An answer that is not final — the enemy's instance
+// not reachable, not executed, unknown — or a wait that could not be ended is
+// tried again later (retryDelay); a final one (recorded or refused) ends it.
+func (s *Service) acknowledgeWar(ctx context.Context, declarerID, enemyID int64, requestID string, attempt int) {
+	declarer, err := AllianceTarget(declarerID)
 	if err != nil {
-		return fmt.Errorf("alliance: war %s: enemy %d: %w", event.RequestID, event.EnemyID, err)
+		return
 	}
-	if _, err := s.deps.Peers.AcknowledgeWar(ctx, event.RequestID, enemy, event.AllianceID); !final(err) {
-		return fmt.Errorf("alliance: record war %s on alliance %d: %w", event.RequestID, event.EnemyID, err)
+	enemy, err := AllianceTarget(enemyID)
+	if err != nil {
+		return
 	}
-	return nil
+	if _, here, err := s.owned(ctx, declarer); err == nil && !here {
+		slog.Info("alliance: war wait left to the declarer's new owner", "alliance_id", declarerID, "request_id", requestID)
+		return
+	}
+	_, err = s.deps.Peers.AcknowledgeWar(ctx, requestID, enemy, declarerID)
+	if final(err) {
+		if err != nil {
+			slog.Info("alliance: the enemy refused its side of a war; the declaring side keeps its record",
+				"alliance_id", declarerID, "enemy_id", enemyID, "request_id", requestID, "err", err)
+		}
+		err = s.call(ctx, declarer, alliance.EntityKindAlliance, func(ctx context.Context) error {
+			_, err := syncsender.NewAllianceWarSender(s.deps.Nest).Sync_AllianceWarAcknowledged(ctx, declarer, requestID)
+			return err
+		})
+		if err == nil {
+			return
+		}
+	}
+	if ctx.Err() != nil {
+		return // stopping: the wait is durable, the next start scans it
+	}
+	metrics.IncCounter("alliance.war_ack_retry_total", nil, 1)
+	slog.Warn("alliance: the enemy's side of a war is not recorded yet; asking again",
+		"alliance_id", declarerID, "enemy_id", enemyID, "request_id", requestID, "attempt", attempt, "err", err)
+	s.askEnemy(declarerID, enemyID, requestID, attempt+1)
+}
+
+// ScanWars finds the wars this instance's alliances still wait for and asks
+// their enemies again: the alliance Mod runs it once at start, after the
+// startup preload loaded this instance's alliances and the handlers were
+// registered. It runs among the follow-ups (in the background, stopped with
+// them); a listing that fails is tried again later. Its cost is one Nest read
+// per alliance this instance owns, once per start.
+func (s *Service) ScanWars() {
+	s.scanWars(0)
+}
+
+func (s *Service) scanWars(attempt int) {
+	if s.deps.Owned == nil {
+		return
+	}
+	s.follow.arm("war-scan", attemptDelay(attempt), func(ctx context.Context) {
+		if err := s.scanWarsOnce(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("alliance: scan for wars waiting for their enemy failed; trying again", "attempt", attempt, "err", err)
+			s.scanWars(attempt + 1)
+		}
+	})
+}
+
+func (s *Service) scanWarsOnce(ctx context.Context) error {
+	after := int64(0)
+	for {
+		ids, next, err := s.deps.Owned.ListOwnedRemoteEntities(ctx, []entity.EntityKind{alliance.EntityKindAlliance}, after, transferListPage)
+		if err != nil {
+			return fmt.Errorf("list owned alliances: %w", err)
+		}
+		for _, id := range ids {
+			acks, err := s.warAcks(ctx, id)
+			if err != nil {
+				return fmt.Errorf("alliance %d: %w", id, err)
+			}
+			for _, ack := range acks {
+				s.askEnemy(entity.GetUniqueIDFromEntityID(id), ack.EnemyID, ack.RequestID, 0)
+			}
+		}
+		if next == 0 {
+			return nil
+		}
+		after = next
+	}
+}
+
+// warAcks reads the wars the alliance target (this instance's) still waits for.
+func (s *Service) warAcks(ctx context.Context, target int64) ([]alliancerule.WarAck, error) {
+	var acks []alliancerule.WarAck
+	err := s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) (err error) {
+		acks, err = syncsender.NewAllianceWarSender(s.deps.Nest).Sync_AllianceWarAcks(ctx, target)
+		return err
+	})
+	return acks, err
 }

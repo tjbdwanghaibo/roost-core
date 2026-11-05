@@ -20,9 +20,10 @@ type AllianceMemberDao struct {
 	// PendingAllianceID / PendingRequestID / PendingDeadlineUnix are an
 	// outstanding reservation: alliance PendingAllianceID is admitting the
 	// player under request PendingRequestID. Until it is confirmed or
-	// released no other alliance may take the player. At the deadline the
-	// guard asks the alliance what became of the request; it never releases
-	// on the clock alone.
+	// released no other alliance may take the player. At the deadline (armed
+	// in the reserving instance's process, not stored) — or when the next
+	// request finds the guard held — the guard asks the alliance what became
+	// of the request; it never releases on the clock alone.
 	PendingAllianceID   int64  `dao:"persist" store:"pending_alliance_id"`
 	PendingRequestID    string `dao:"persist" store:"pending_request_id"`
 	PendingDeadlineUnix int64  `dao:"persist" store:"pending_deadline_unix"`

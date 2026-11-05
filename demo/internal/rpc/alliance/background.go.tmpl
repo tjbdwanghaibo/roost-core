@@ -1,0 +1,150 @@
+package alliance
+
+import (
+	"context"
+	"sync"
+	"time"
+)
+
+// AfterFunc runs f in its own goroutine after d and returns what stops it
+// (time.AfterFunc's Stop). Deps.AfterFunc replaces it in tests, which run the
+// armed work themselves.
+type AfterFunc func(d time.Duration, f func()) (stop func() bool)
+
+func realAfterFunc(d time.Duration, f func()) func() bool { return time.AfterFunc(d, f).Stop }
+
+// followUps is what the service does after a write has answered, in this
+// process, on its own clock: the deadline of a guard reservation this
+// instance made (heal the guard from its alliance once it passes), asking an
+// enemy alliance again to record a war, the scan for wars still waiting for
+// their enemy after a start. No alliance write records an effect (plan
+// §2.5B); this is where the work an effect consumer did now runs.
+//
+// Nothing here is persistent, by design, and nothing here is needed for
+// correctness — each kind of work states what makes up for it when the
+// process stops with it armed: a reservation is healed by the next request
+// that finds the guard held, a war's wait (AllianceDao.WarAcks) is durable and
+// rescanned at the next start.
+//
+// Work runs in its own goroutine (time.AfterFunc), never on a Nest pool: it
+// makes RPCs and Nest calls and waits for them. One key is armed at most
+// once; arming it again replaces the earlier one.
+//
+// Stop follows the three-step stop: it closes admission and stops every armed
+// timer (idempotent), cancels the context of the work already running and
+// waits for it within the caller's ctx — a timeout returns ctx's error and a
+// later Stop waits again — and only then may the service's dependencies
+// (Nest, the bus) stop. The alliance process calls it from its
+// app.Service.Shutdown, after the App closed the RPC ingress and before any
+// Mod stops.
+type followUps struct {
+	after AfterFunc
+
+	mu      sync.Mutex
+	armed   map[string]*armedWork
+	stopped bool
+	ctx     context.Context
+	cancel  context.CancelFunc
+	running sync.WaitGroup
+}
+
+type armedWork struct{ stop func() bool }
+
+func newFollowUps(after AfterFunc) *followUps {
+	if after == nil {
+		after = realAfterFunc
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &followUps{after: after, armed: map[string]*armedWork{}, ctx: ctx, cancel: cancel}
+}
+
+// arm runs work after delay under key, replacing work armed under the same
+// key. After Stop it does nothing.
+func (f *followUps) arm(key string, delay time.Duration, work func(ctx context.Context)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stopped {
+		return
+	}
+	if earlier := f.armed[key]; earlier != nil {
+		earlier.stop()
+	}
+	armed := &armedWork{}
+	f.armed[key] = armed
+	armed.stop = f.after(max(delay, 0), func() { f.fire(key, armed, work) })
+}
+
+// disarm drops the work armed under key, if it has not started.
+func (f *followUps) disarm(key string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if armed := f.armed[key]; armed != nil {
+		armed.stop()
+		delete(f.armed, key)
+	}
+}
+
+func (f *followUps) fire(key string, armed *armedWork, work func(ctx context.Context)) {
+	f.mu.Lock()
+	if f.stopped || f.armed[key] != armed {
+		f.mu.Unlock()
+		return // stopped, or replaced / disarmed after the timer had fired
+	}
+	delete(f.armed, key)
+	f.running.Add(1)
+	ctx := f.ctx
+	f.mu.Unlock()
+	defer f.running.Done()
+	work(ctx)
+}
+
+// pending is how many keys are armed and not started (tests, metrics).
+func (f *followUps) pending() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.armed)
+}
+
+// stop is the three-step stop described on followUps.
+func (f *followUps) stop(ctx context.Context) error {
+	f.mu.Lock()
+	if !f.stopped {
+		f.stopped = true
+		for key, armed := range f.armed {
+			armed.stop()
+			delete(f.armed, key)
+		}
+		f.cancel()
+	}
+	f.mu.Unlock()
+	drained := make(chan struct{})
+	go func() {
+		f.running.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// retryDelay is how long after the attempt-th failed attempt (from 0) a
+// follow-up tries again: 5s doubling, at most a minute.
+func retryDelay(attempt int) time.Duration {
+	const first, most = 5 * time.Second, time.Minute
+	if attempt >= 4 {
+		return most
+	}
+	return min(first<<max(attempt, 0), most)
+}
+
+// attemptDelay is when attempt runs: the first (0) at once, the n-th after
+// retryDelay(n-1).
+func attemptDelay(attempt int) time.Duration {
+	if attempt <= 0 {
+		return 0
+	}
+	return retryDelay(attempt - 1)
+}

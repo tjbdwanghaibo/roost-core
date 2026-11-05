@@ -6,19 +6,21 @@ import (
 
 	"{{MODULE}}/game/alliancerule"
 	alliance_member "{{MODULE}}/game/entities/alliance_member"
-	alliance_shard "{{MODULE}}/game/entities/alliance_shard"
 )
 
 // handlerGuardReserve is step 1 of a join whose alliance is on another
-// instance: reserve the player's guard for (allianceID, requestID) and arm the
-// reservation's deadline on this instance's shard, in one transaction. The
-// receipt makes a redelivered reserve a replay, so a reserve that arrives
-// after the reservation was settled cannot re-open it. deferHeld: as for
+// instance: reserve the player's guard for (allianceID, requestID) until
+// deadlineUnix. One entity, the guard: the deadline is not a timer node in
+// this transaction — the service arms it in its own process once the
+// reservation answered (the guard is its own lock, so reservations of
+// different players never wait on each other). The receipt makes a
+// redelivered reserve a replay, so a reserve that arrives after the
+// reservation was settled cannot re-open it. deferHeld: as for
 // handlerAllianceAdmit — a guard held by something else answers Held and
 // records nothing, so the service can heal it first.
 //
 //roost:nest rollback=undo durability=strict
-func handlerGuardReserve(target alliance_member.IGuardEntity, shard alliance_shard.ITimerEntity, requestID string, allianceID int64, deadlineUnix int64, deferHeld bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
+func handlerGuardReserve(target alliance_member.IGuardEntity, requestID string, allianceID int64, deadlineUnix int64, deferHeld bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
 	guard := target.GuardComp()
 	if _, decided := guard.Receipt(requestID); deferHeld && !decided && guard.HeldAgainst(requestID) {
 		return alliancerule.GuardAnswer{Held: true, State: guard.State(guard.CurrentVersion())}, nil
@@ -28,7 +30,6 @@ func handlerGuardReserve(target alliance_member.IGuardEntity, shard alliance_sha
 			return allianceID, err
 		}
 		guard.Reserve(allianceID, requestID, deadlineUnix)
-		shard.TimerComp().ArmReservation(guard.PlayerID(), allianceID, requestID, time.Unix(deadlineUnix, 0))
 		return allianceID, nil
 	})
 	if err != nil {
@@ -38,16 +39,14 @@ func handlerGuardReserve(target alliance_member.IGuardEntity, shard alliance_sha
 }
 
 // handlerGuardResolve settles a reservation: joined confirms it, otherwise it
-// is released; the deadline is disarmed with it. Only the reservation of
-// requestID is touched, so a redelivered resolution changes nothing.
+// is released. Only the reservation of requestID is touched, so a redelivered
+// resolution changes nothing. (The service disarms its in-process deadline
+// once the guard no longer holds the reservation.)
 //
 //roost:nest rollback=undo durability=strict
-func handlerGuardResolve(target alliance_member.IGuardEntity, shard alliance_shard.ITimerEntity, requestID string, allianceID int64, joined bool) (alliancerule.GuardAnswer, error) {
+func handlerGuardResolve(target alliance_member.IGuardEntity, requestID string, allianceID int64, joined bool) (alliancerule.GuardAnswer, error) {
 	guard := target.GuardComp()
 	changed := guard.Resolve(requestID, allianceID, joined)
-	if changed {
-		shard.TimerComp().DisarmReservation(guard.PlayerID(), requestID)
-	}
 	return alliancerule.GuardAnswer{Changed: changed, State: guard.State(guard.CurrentVersion())}, nil
 }
 

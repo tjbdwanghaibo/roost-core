@@ -7,33 +7,26 @@ import (
 	"time"
 
 	"{{MODULE}}/game/alliancerule"
-	"{{MODULE}}/game/effects"
 	alliance_member "{{MODULE}}/game/entities/alliance_member"
-	alliance_shard "{{MODULE}}/game/entities/alliance_shard"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
-// Guard implements Alliance.
+// Guard implements Alliance: the guard as it is, not healed (Membership
+// heals it first).
 func (s *Service) Guard(ctx context.Context, target int64) (GuardReply, error) {
-	var answer alliancerule.GuardAnswer
-	err := s.call(ctx, target, alliance_member.EntityKindAllianceMember, func(ctx context.Context) error {
-		if err := s.deps.Entities.EnsureGuard(ctx, entity.GetUniqueIDFromEntityID(target)); err != nil {
-			return err
-		}
-		var err error
-		answer.State, err = syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardInfo(ctx, target)
-		return err
-	})
-	return s.guardReply(answer, err)
+	state, err := s.guardState(ctx, target)
+	return s.guardReply(alliancerule.GuardAnswer{State: state}, err)
 }
 
 // ReserveGuard implements Alliance (step 1 of a two-step join or founding).
 // A guard held by another alliance or request is healed from its holder
 // first (healGuard), then asked again; a holder that cannot be reached
-// answers "not executed".
+// answers "not executed". A reservation that holds once it answered —
+// made now, or replayed and still open — has its deadline armed in this
+// process (armReservation).
 func (s *Service) ReserveGuard(ctx context.Context, requestID string, target int64, allianceID int64, deadlineUnix int64) (GuardReply, error) {
 	err := requireRequest(requestID, allianceID, deadlineUnix)
 	if err != nil {
@@ -45,41 +38,45 @@ func (s *Service) ReserveGuard(ctx context.Context, requestID string, target int
 			answer, err = s.reserveGuard(ctx, requestID, target, allianceID, deadlineUnix, false)
 		}
 	}
+	if err == nil && answer.State.PendingRequestID == requestID {
+		s.armReservation(answer.State)
+	}
 	return s.guardReply(answer, err)
 }
 
+// reserveGuard is one reservation transaction: the guard alone (its own
+// lock — two players' reservations never wait on each other).
 func (s *Service) reserveGuard(ctx context.Context, requestID string, target int64, allianceID int64, deadlineUnix int64, deferHeld bool) (alliancerule.GuardAnswer, error) {
 	var answer alliancerule.GuardAnswer
 	err := s.call(ctx, target, alliance_member.EntityKindAllianceMember, func(ctx context.Context) error {
-		shard, err := s.shard(ctx)
-		if err != nil {
-			return err
-		}
 		if err := s.deps.Entities.EnsureGuard(ctx, entity.GetUniqueIDFromEntityID(target)); err != nil {
 			return err
 		}
-		answer, err = syncsender.NewAllianceGuardSender(s.deps.Nest).MultiSync_GuardReserve(ctx, target, shard, requestID, allianceID, deadlineUnix, deferHeld, s.cooldown(), s.retention())
+		var err error
+		answer, err = syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardReserve(ctx, target, requestID, allianceID, deadlineUnix, deferHeld, s.cooldown(), s.retention())
 		return err
 	})
 	return answer, err
 }
 
-// ResolveGuard implements Alliance.
+// ResolveGuard implements Alliance. A guard that no longer holds the
+// reservation afterwards has its deadline disarmed here (it was armed by the
+// ReserveGuard that made it, on the guard's owner).
 func (s *Service) ResolveGuard(ctx context.Context, requestID string, target int64, allianceID int64, joined bool) (GuardReply, error) {
 	var answer alliancerule.GuardAnswer
 	err := requireRequest(requestID, allianceID)
 	if err == nil {
 		err = s.call(ctx, target, alliance_member.EntityKindAllianceMember, func(ctx context.Context) error {
-			shard, err := s.shard(ctx)
-			if err != nil {
-				return err
-			}
 			if err := s.deps.Entities.EnsureGuard(ctx, entity.GetUniqueIDFromEntityID(target)); err != nil {
 				return err
 			}
-			answer, err = syncsender.NewAllianceGuardSender(s.deps.Nest).MultiSync_GuardResolve(ctx, target, shard, requestID, allianceID, joined)
+			var err error
+			answer, err = syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardResolve(ctx, target, requestID, allianceID, joined)
 			return err
 		})
+	}
+	if err == nil && answer.State.PendingRequestID != requestID {
+		s.follow.disarm(reservationKey(entity.GetUniqueIDFromEntityID(target), requestID))
 	}
 	return s.guardReply(answer, err)
 }
@@ -154,21 +151,14 @@ func (s *Service) ReleaseReward(ctx context.Context, target int64, claimRequestI
 	return s.guardReply(answer, err)
 }
 
-// shard is this instance's AllianceShard id, created on first use.
-func (s *Service) shard(ctx context.Context) (int64, error) {
-	if err := s.deps.Entities.EnsureShard(ctx, s.deps.LocalSID); err != nil {
-		return 0, err
-	}
-	return entity.BuildEntityID(int64(s.deps.LocalSID), alliance_shard.EntityKindAllianceShard)
-}
-
 // --- the guard as a cache of the rosters ---
 
 // healGuard brings a held guard in line with the roster that holds it. The
 // guard is a cache of the rosters: it may be stale-occupied (a ResolveGuard or
 // ClearGuard that should have finished it was lost), never stale-empty.
-// observed is the guard as a request found it; its holder (alliance X,
-// request R — pending or joined) is asked for the authoritative answer:
+// observed is the guard as a request (or a reservation's deadline, or the
+// game's login lookup) found it; its holder (alliance X, request R — pending
+// or joined) is asked for the authoritative answer:
 //
 //   - Settle(X, R, player, decide) on X, in one transaction: reports whether
 //     the player holds a seat under R now (Seated) and whether R has an
@@ -240,7 +230,8 @@ func (s *Service) healGuard(ctx context.Context, observed alliancerule.MemberSta
 
 // onGuard runs a guard call on the guard's owner: this service when it is
 // this instance's (no bus round trip back to itself), the route RPC
-// otherwise (a reservation-deadline notice is handled by any instance).
+// otherwise (a reservation's deadline runs on the instance that made the
+// reservation, which may have given the guard away since).
 func (s *Service) onGuard(ctx context.Context, guard int64, run func(peer Alliance) error) error {
 	_, here, err := s.owned(ctx, guard)
 	if err != nil {
@@ -282,7 +273,7 @@ func (s *Service) finishGuard(ctx context.Context, playerID, allianceID int64, r
 	guard, err := GuardTarget(playerID)
 	if err == nil {
 		switch change {
-		case effects.MemberJoined:
+		case alliancerule.MemberJoined:
 			_, err = s.deps.Peers.ResolveGuard(ctx, requestID, guard, allianceID, true)
 		default:
 			_, err = s.deps.Peers.ClearGuard(ctx, guard, allianceID, requestID)
@@ -295,13 +286,14 @@ func (s *Service) finishGuard(ctx context.Context, playerID, allianceID int64, r
 	}
 }
 
-// --- effect consumers (internal/service/alliance subscribes them; both best effort) ---
+// --- after a write: the member's notice, the reservation's deadline, the login's lookup ---
 
 // MemberNotice is the best-effort notice a player's game server gets when
 // their membership changes; the game updates what an online player is shown
 // and pushes GuildNotice to the client (internal/service/<game>/alliance_notice.go).
-// A notice that is lost is made up for at the next login, which checks the
-// guild the player is shown in against the alliance's mirror.
+// A notice that is lost is made up for at the next login: the game checks the
+// guild the player is shown in against the alliance's mirror, and asks
+// Membership when it shows none.
 type MemberNotice struct {
 	AllianceID int64  `json:"alliance_id"`
 	PlayerID   int64  `json:"player_id"`
@@ -315,32 +307,122 @@ func (MemberNotice) MsgName() string { return "alliance.member_notice" }
 // NoticeModule is the bus module the game server handles MemberNotice on.
 const NoticeModule = "alliance"
 
-// HandleMemberChanged consumes the best-effort effects.AllianceMemberChanged:
-// it notifies the player's game server. It finishes nothing — the guard is
-// the writes' and healGuard's — so losing it only delays what the player is
-// shown.
-func (s *Service) HandleMemberChanged(ctx context.Context, event effects.AllianceMemberChanged) error {
-	if s.deps.Notify == nil || event.HomeSID <= 0 {
-		return nil
+// notify sends the member's game server the notice of the membership a write
+// changed (answer.Member, set only by a write that ran now and succeeded —
+// a replay sends nothing), straight from the service once the write answered:
+// a bus publish, so it does not wait for the game, and it runs in the RPC
+// handler's I/O segment, never in a Nest handler. Best effort: a notice that
+// cannot be sent is logged and not retried; it finishes nothing (the guard is
+// the writes' and healGuard's), so losing it only delays what the player is
+// shown until the next notice or login.
+func (s *Service) notify(ctx context.Context, answer alliancerule.Answer) {
+	change := answer.Member
+	if s.deps.Notify == nil || change.PlayerID <= 0 || change.HomeSID <= 0 {
+		return
 	}
-	notice := MemberNotice{AllianceID: event.AllianceID, PlayerID: event.PlayerID, Change: event.Change, Version: event.Version}
-	if err := s.deps.Notify(ctx, event.HomeSID, notice); err != nil {
-		slog.Debug("alliance: member notice not delivered; the player sees it at the next login",
-			"player_id", event.PlayerID, "home_sid", event.HomeSID, "err", err)
+	notice := MemberNotice{AllianceID: answer.View.AllianceID, PlayerID: change.PlayerID, Change: change.Change, Version: answer.View.Version}
+	if err := s.deps.Notify(ctx, change.HomeSID, notice); err != nil {
+		metrics.IncCounter("alliance.member_notice_lost_total", metrics.Labels{"change": change.Change}, 1)
+		slog.Warn("alliance: member notice not sent; the player sees the change at the next notice or login",
+			"player_id", change.PlayerID, "alliance_id", notice.AllianceID, "home_sid", change.HomeSID, "err", err)
 	}
-	return nil
 }
 
-// HandleReservationDue consumes the best-effort effects.AllianceReservationDue:
-// a guard reservation reached its deadline unconfirmed. It heals the guard the
-// way a request that found it held would (healGuard: the alliance settles the
-// request — which also makes its answer final — and the guard follows the
-// answer). Nothing is released on the clock: an alliance that cannot be
-// reached leaves the reservation pending (the error is only logged; the next
-// request that finds the guard held tries again).
-func (s *Service) HandleReservationDue(ctx context.Context, event effects.AllianceReservationDue) error {
-	due := s.deps.Now().Unix() // the timer fired: the deadline has passed
-	return s.healGuard(ctx, alliancerule.MemberState{PlayerID: event.PlayerID, PendingAllianceID: event.AllianceID, PendingRequestID: event.RequestID, PendingDeadlineUnix: due})
+// reservationKey names a reservation's deadline among the follow-ups.
+func reservationKey(playerID int64, requestID string) string {
+	return fmt.Sprintf("reservation:%d:%s", playerID, requestID)
+}
+
+// armReservation arms, in this process, the deadline of the reservation the
+// guard state holds (the instance that made it — the guard's owner). At the
+// deadline the guard is healed the way a request that found it held would
+// heal it (reservationDue). The deadline is not persisted: it is only what
+// finishes an abandoned reservation without waiting for the next request
+// (correctness is the healing's). Lost with this process, or never armed
+// because the reservation answered nothing here, it is made up by the next
+// request that finds the guard held (Join, Found, ReserveGuard, ClaimReward,
+// the game's Membership lookup at login, a transfer).
+func (s *Service) armReservation(state alliancerule.MemberState) {
+	s.armReservationAttempt(state.PlayerID, state.PendingAllianceID, state.PendingRequestID, state.PendingDeadlineUnix, 0)
+}
+
+func (s *Service) armReservationAttempt(playerID, allianceID int64, requestID string, deadlineUnix int64, attempt int) {
+	delay := time.Unix(deadlineUnix, 0).Sub(s.deps.Now())
+	if attempt > 0 {
+		delay = attemptDelay(attempt)
+	}
+	s.follow.arm(reservationKey(playerID, requestID), delay, func(ctx context.Context) {
+		s.reservationDue(ctx, playerID, allianceID, requestID, deadlineUnix, attempt)
+	})
+}
+
+// reservationDue runs when the deadline of (playerID, allianceID, requestID)
+// has passed: if the guard still holds that reservation it is healed —
+// its alliance settles the request (which also makes the answer final) and
+// the guard is confirmed or released by the answer, never on the clock alone.
+// An alliance that cannot be reached leaves the reservation pending and the
+// heal is tried again later (retryDelay), as long as this process runs.
+func (s *Service) reservationDue(ctx context.Context, playerID, allianceID int64, requestID string, deadlineUnix int64, attempt int) {
+	if now := s.deps.Now().Unix(); now < deadlineUnix {
+		// The business clock was moved back after the deadline was armed.
+		s.armReservationAttempt(playerID, allianceID, requestID, deadlineUnix, 0)
+		return
+	}
+	guard, err := GuardTarget(playerID)
+	if err != nil {
+		return
+	}
+	var state GuardReply
+	err = s.onGuard(ctx, guard, func(peer Alliance) (err error) {
+		state, err = peer.Guard(ctx, guard)
+		return err
+	})
+	if err == nil && (state.State.PendingRequestID != requestID || state.State.PendingAllianceID != allianceID) {
+		return // settled meanwhile
+	}
+	if err == nil {
+		err = s.healGuard(ctx, state.State)
+	}
+	if err != nil && ctx.Err() == nil {
+		slog.Warn("alliance: reservation deadline not settled; trying again",
+			"player_id", playerID, "alliance_id", allianceID, "request_id", requestID, "attempt", attempt, "err", err)
+		s.armReservationAttempt(playerID, allianceID, requestID, deadlineUnix, attempt+1)
+	}
+}
+
+// Membership implements Alliance: which alliance the player of the guard
+// target is in, as the roster has it. The game asks at login when the
+// player's own copy shows no guild — a membership made while they were
+// offline, whose notice found nobody online. A held guard is healed from its
+// holder first (healGuard): a membership the roster no longer has is
+// cleared, a reservation the roster seated is confirmed, one past its
+// deadline is settled; a reservation still on its way answers no alliance
+// yet. The guard is a cache that may be stale-occupied but never
+// stale-empty, so a guard that holds nothing is the answer as it is.
+func (s *Service) Membership(ctx context.Context, target int64) (GuardReply, error) {
+	state, err := s.guardState(ctx, target)
+	if err == nil {
+		if _, _, _, held := state.Holder(); held {
+			if err = s.healGuard(ctx, state); err == nil {
+				state, err = s.guardState(ctx, target)
+			}
+		}
+	}
+	return s.guardReply(alliancerule.GuardAnswer{State: state}, err)
+}
+
+// guardState reads the guard target, which this instance owns.
+func (s *Service) guardState(ctx context.Context, target int64) (alliancerule.MemberState, error) {
+	var state alliancerule.MemberState
+	err := s.call(ctx, target, alliance_member.EntityKindAllianceMember, func(ctx context.Context) error {
+		if err := s.deps.Entities.EnsureGuard(ctx, entity.GetUniqueIDFromEntityID(target)); err != nil {
+			return err
+		}
+		var err error
+		state, err = syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardInfo(ctx, target)
+		return err
+	})
+	return state, err
 }
 
 // settle asks the alliance what became of requestID for playerID (Settle)
