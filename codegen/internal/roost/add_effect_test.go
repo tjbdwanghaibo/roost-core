@@ -40,7 +40,8 @@ func TestAddEffectGeneratesPayloadEmitAndConsumer(t *testing.T) {
 		"kitdataengine.SubscribeEffects(ctx, registry, consumer,",
 		"return kitdataengine.PoisonEffect(",
 		"envelope.EffectID",
-		"has not been measured on its own",
+		"dataengine.effect_consumer.workers",
+		"Effects with the same envelope.Key (the key given to\n// Emit) are handled one at a time in arrival order",
 	} {
 		if !strings.Contains(consumer, want) {
 			t.Errorf("player_level_up_consumer.go lacks %q:\n%s", want, consumer)
