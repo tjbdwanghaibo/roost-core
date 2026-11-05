@@ -284,6 +284,8 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	steps := fs.String("steps", "", "comma-separated Saga steps, in execution order")
 	native := fs.String("native", "", "comma-separated Saga steps (a subset of -steps) whose business is a Nest transaction")
 	consumer := fs.String("consumer", "", "service consuming an effect")
+	delivery := fs.String("delivery", "", "effect durability: reliable (default, transactional outbox) | best_effort (sent once after the write is durable)")
+	order := fs.String("order", "", "effect consumer order in one process: entity (default, one key at a time) | none")
 	group := fs.String("group", "", "ID allocation group")
 	entityName := fs.String("entity", "", "owning Entity for component/DAO wiring")
 	componentName := fs.String("component", "", "Component capability for a Nest handler")
@@ -309,7 +311,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 		"lifecycle": {"root", "entity", "service"}, "endpoint": {"root", "handler", "protocol", "nest-handler", "lifecycle"},
 		"skill": {"root"}, "table": {"root"}, "dao": {"root", "entity"},
 		"webroute": {"root", "service"}, "errcode": {"root", "id"}, "saga": {"root", "service", "steps", "native", "entity", "component"},
-		"effect": {"root", "consumer"},
+		"effect": {"root", "consumer", "delivery", "order"},
 		"rpc":    {"root", "service", "entity-service"}, "timer": {"root", "entity", "component", "service", "id"},
 		"heartbeat": {"root", "entity", "service", "id"}, "behavior": {"root", "entity", "service", "id", "ai", "state"},
 		"timedomain": {"root", "entity", "id"},
@@ -322,7 +324,7 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitOrderedList(*steps), Native: splitOrderedList(*native), Consumer: *consumer, Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, AI: *withAI, State: *withState, EntityService: *entityService, ID: *id, Warnings: stderr})
+	paths, err := Add(root, AddOptions{Kind: args[0], Name: args[1], Service: *service, Mods: splitList(*mods), Steps: splitOrderedList(*steps), Native: splitOrderedList(*native), Consumer: *consumer, Delivery: *delivery, Order: *order, Group: *group, Entity: *entityName, Component: *componentName, Handler: *handlerDomain, Protocol: *protocolName, NestHandler: *nestHandler, Lifecycle: *lifecycleEntity, AI: *withAI, State: *withState, EntityService: *entityService, ID: *id, Warnings: stderr})
 	if err != nil {
 		return err
 	}

@@ -390,12 +390,15 @@ roost generate`,
 	},
 	{
 		Name: "effect", Aliases: []string{"outbox", "effects"},
-		Summary: "生成事务性 effect（outbox）：载荷类型、topic 常量、Emit 辅助与消费服务的 SubscribeEffects 骨架",
-		Usage:   `roost add effect <topic> -consumer <service>`,
-		Configuration: `<topic> 是点分名字（例如 player.level_up，saga.* 保留给 saga）。生成 game/effects/<topic>.go（载荷 struct、Topic<Topic> 常量、Emit<Topic>(key, event)：在 Nest handler 里调用，effect 与实体修改进同一条 WAL 记录，事务回滚则不发）与 internal/service/<consumer>/<topic>_consumer.go（start<Topic>EffectConsumer：kitdataengine.SubscribeEffects，载荷解不开返回 kitdataengine.PoisonEffect，durable <consumer>-<topic>）。都是业务文件、只建一次；effect 文件已存在时只建新消费服务的消费者（同一 effect 多个消费者）。消费服务需要 dataengine Mod（效果流与回执库取 dataengine.effects.*、dataengine.database，不另配）。
-语义：至少一次投递、按 EffectID 至多一次生效——handler 在 Mongo 事务里运行，经它的 ctx 写的 Mongo 与回执一起提交；调用别的服务在事务外，要按 envelope.EffectID 幂等。普通错误退避重投，PoisonEffect 丢弃并计 dataengine.effect_consumer.handled_total{result="poison"}。骨架默认返回错误（重投、不丢），写完业务前不会把 effect 当作已处理。
+		Summary: "生成 effect：载荷类型、topic 与持久性常量、Emit 辅助与消费服务的 SubscribeEffects 骨架；持久性 reliable（事务 outbox，缺省）/ best_effort，消费顺序 entity（缺省）/ none",
+		Usage:   `roost add effect <topic> -consumer <service> [-delivery reliable|best_effort] [-order entity|none]`,
+		Configuration: `<topic> 是点分名字（例如 player.level_up，saga.* 保留给 saga）。生成 game/effects/<topic>.go（载荷 struct、Topic<Topic> 与 Delivery<Topic> 常量、Emit<Topic>(key, event)：在 Nest handler 里调用，事务回滚、被拒或结局未知都不发）与 internal/service/<consumer>/<topic>_consumer.go（start<Topic>EffectConsumer：kitdataengine.SubscribeEffects，载荷解不开返回 kitdataengine.PoisonEffect，durable <consumer>-<topic>）。都是业务文件、只建一次；effect 文件已存在时只建新消费服务的消费者（同一 effect 多个消费者）。消费服务需要 dataengine Mod（效果流与回执库取 dataengine.effects.*、dataengine.database，不另配）。
+持久性（-delivery，生产方在 effect 文件里声明一次，消费者骨架引用同一常量；effect 文件已存在时不能再给 -delivery）：reliable（缺省）effect 与实体修改进同一条 WAL 记录，经事务 outbox 发到效果流，消费方带 Mongo 回执；best_effort 不进 WAL、没有 outbox 与回执，写到达持久点（回复调用方那一刻；async 事务因此升为 strict）后经 NATS 发一次，主题 <dataengine.effects.subject_prefix>_best_effort.<topic>，至多一次——写后发前进程停止、发送队列满（dataengine.effects.best_effort_queue）或连接断开都会丢，handler 出错只记日志与计数、不重投，只用于丢了有别处补的通知。
+消费顺序（-order）：entity（缺省）信封 Key 相同的按到达顺序逐条处理；none 不按 Key 排队，只受 workers 上限。全局顺序是生产方 dataengine.projection.effect_order=wal 的事，不在消费者选。
+reliable 语义：至少一次投递、按 EffectID 至多一次生效——handler 在 Mongo 事务里运行，经它的 ctx 写的 Mongo 与回执一起提交；调用别的服务在事务外，要按 envelope.EffectID 幂等。普通错误退避重投，PoisonEffect 丢弃并计 dataengine.effect_consumer.handled_total{result="poison"}。骨架默认返回错误（重投、不丢），写完业务前不会把 effect 当作已处理。
 服务的 Init / Shutdown 归业务、不改写：Init 里 subscription, err := start<Topic>EffectConsumer(context.Background(), registry)，Shutdown 里 subscription.Drain()；roost project doctor 的 effect-consumer:<service>/<func> 在没人调用时 WARN。顺序与容量：一个副本同时跑至多 dataengine.effect_consumer.workers（缺省 16）个 handler，信封 Key（Emit 时给的 key）相同的 effect 按到达顺序逐条处理、不同 Key 并发，没有 Key 的不与任何 effect 排序；共享 durable 的副本之间不保证顺序。速率约 workers / handler 延迟，量大时加副本共享 durable。`,
 		Example: `roost add effect player.level_up -consumer game
+roost add effect player.online_notice -consumer game -delivery best_effort -order none
 roost generate`,
 	},
 	{

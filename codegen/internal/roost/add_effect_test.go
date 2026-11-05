@@ -23,7 +23,8 @@ func TestAddEffectGeneratesPayloadEmitAndConsumer(t *testing.T) {
 		`const TopicPlayerLevelUp = "player.level_up"`,
 		"type PlayerLevelUp struct {",
 		"func EmitPlayerLevelUp(key string, event PlayerLevelUp) error",
-		"nest.Emit(nest.Effect{Topic: TopicPlayerLevelUp, Key: key, Payload: payload})",
+		"const DeliveryPlayerLevelUp = nest.EffectReliable",
+		"nest.Emit(nest.Effect{Topic: TopicPlayerLevelUp, Key: key, Payload: payload, Delivery: DeliveryPlayerLevelUp})",
 		// 组件里取玩家号要用 UniqueID：ID() 是编码后的 EntityID（新用户第七轮照直觉写 Owner().ID() 发出 9423877 而不是 9203）。
 		"Owner().UniqueID()",
 	} {
@@ -36,7 +37,7 @@ func TestAddEffectGeneratesPayloadEmitAndConsumer(t *testing.T) {
 		"package game",
 		`const PlayerLevelUpEffectDurable = "game-player-level_up"`,
 		"func startPlayerLevelUpEffectConsumer(ctx context.Context, registry *app.Registry) (fnats.IJetStreamSubscription, error)",
-		"kitdataengine.EffectConsumer{Durable: PlayerLevelUpEffectDurable, Topic: effects.TopicPlayerLevelUp}",
+		"kitdataengine.EffectConsumer{Durable: PlayerLevelUpEffectDurable, Topic: effects.TopicPlayerLevelUp,\n\t\tDelivery: effects.DeliveryPlayerLevelUp, Order: kitdataengine.EffectOrderEntity}",
 		"kitdataengine.SubscribeEffects(ctx, registry, consumer,",
 		"return kitdataengine.PoisonEffect(",
 		"envelope.EffectID",
@@ -77,6 +78,30 @@ func TestAddEffectGeneratesPayloadEmitAndConsumer(t *testing.T) {
 	}
 }
 
+// -delivery best_effort / -order none：持久性常量写进 effect 文件，消费者骨架引用它并选不排队的顺序。
+func TestAddEffectChoosesDeliveryAndOrder(t *testing.T) {
+	t.Parallel()
+	root := copyOfSagaNativeProject(t)
+	var out bytes.Buffer
+	if err := Run([]string{"add", "effect", "player.online_notice", "-consumer", "game", "-delivery", "best_effort", "-order", "none", "--root", root}, &out, &out); err != nil {
+		t.Fatalf("add effect: %v\n%s", err, out.String())
+	}
+	effect := readProjectFile(t, root, "game/effects/player_online_notice.go")
+	for _, want := range []string{
+		"const DeliveryPlayerOnlineNotice = nest.EffectBestEffort",
+		"Delivery: DeliveryPlayerOnlineNotice})",
+		"best effort: no WAL record, no\n// outbox, no inbox.",
+	} {
+		if !strings.Contains(effect, want) {
+			t.Errorf("game/effects/player_online_notice.go lacks %q:\n%s", want, effect)
+		}
+	}
+	consumer := readProjectFile(t, root, "internal/service/game/player_online_notice_consumer.go")
+	if want := "Delivery: effects.DeliveryPlayerOnlineNotice, Order: kitdataengine.EffectOrderNone}"; !strings.Contains(consumer, want) {
+		t.Errorf("player_online_notice_consumer.go lacks %q:\n%s", want, consumer)
+	}
+}
+
 // 错误输入在写盘之前被拒绝，工程逐字节不变：坏主题、saga.* 保留、未知服务、消费服务没有 dataengine、重复 add。
 func TestAddEffectRejectsBadInputWithoutTouchingTheProject(t *testing.T) {
 	t.Parallel()
@@ -84,6 +109,9 @@ func TestAddEffectRejectsBadInputWithoutTouchingTheProject(t *testing.T) {
 	var out bytes.Buffer
 	if err := Run([]string{"add", "service", "lobby", "--root", root}, &out, &out); err != nil {
 		t.Fatalf("add service lobby: %v\n%s", err, out.String())
+	}
+	if err := Run([]string{"add", "service", "mailer", "-mods", "dataengine", "--root", root}, &out, &out); err != nil {
+		t.Fatalf("add service mailer: %v\n%s", err, out.String())
 	}
 	if _, err := Add(root, AddOptions{Kind: "effect", Name: "player.level_up", Consumer: "game"}); err != nil {
 		t.Fatal(err)
@@ -105,6 +133,9 @@ func TestAddEffectRejectsBadInputWithoutTouchingTheProject(t *testing.T) {
 		{"consumer without dataengine", []string{"player.renamed", "-consumer", "lobby"}, "effect consumer service lobby needs the dataengine Mod"},
 		{"repeat", []string{"player.level_up", "-consumer", "game"}, "internal/service/game/player_level_up_consumer.go already exists"},
 		{"hand-written effect file", []string{"hand.written", "-consumer", "game"}, `game/effects/hand_written.go exists but does not declare "type HandWritten struct"`},
+		{"bad delivery", []string{"player.renamed", "-consumer", "game", "-delivery", "sometimes"}, `invalid -delivery "sometimes"`},
+		{"bad order", []string{"player.renamed", "-consumer", "game", "-order", "global"}, `invalid -order "global"`},
+		{"delivery for an existing effect", []string{"player.level_up", "-consumer", "mailer", "-delivery", "best_effort"}, "its durability is declared there (DeliveryPlayerLevelUp)"},
 		{"unsupported flag", []string{"player.renamed", "-consumer", "game", "-steps", "a"}, "unsupported flags for add effect: -steps"},
 	} {
 		err := Run(append([]string{"add", "effect"}, append(tc.args, "--root", root)...), &out, &out)

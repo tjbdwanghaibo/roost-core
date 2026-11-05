@@ -139,6 +139,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "dataengine.effects.max_bytes", Kind: "int", Default: "8589934592", Min: "1", Starter: true, Example: "8589934592"},
 		{Name: "dataengine.effects.duplicate_window", Kind: "duration", Default: "10m", Min: "1ns", Starter: true, Example: "10m"},
 		{Name: "dataengine.effects.replicas", Kind: "int", Default: "1", Min: "1", Starter: true, Example: "1"},
+		{Name: "dataengine.effects.best_effort_queue", Kind: "int", Default: "8192", Min: "1", Help: "best_effort effect 的进程内发送队列容量：事务持久之后入队、经 NATS（不经 JetStream / outbox）发出一次，\n队列满时丢弃并计 dataengine.effects.best_effort_total{result=\"dropped\"}（至多一次，见 docs/framework/impl/03-dataengine.md“effect 持久性与顺序”）", Starter: true, Example: "8192"},
 		{Name: "dataengine.effect_consumer.workers", Kind: "int", Default: "16", Min: "1", Max: "1024", Help: "wiring/dataengine.SubscribeEffects 的每个 effect 消费者在本进程同时在跑的 handler 数（EffectConsumer.Workers 不写时取它）。\n同一实体（信封 Key）的 effect 仍按到达顺序逐条处理，不同实体并发；1 = 逐条处理（2026-11-05 之前的行为）。\n已接纳未结算的 effect 不超过消费者的 MaxAckPending（缺省 256）"},
 		{Name: "nest.pipelined.allowlist", Kind: "strings", Help: "允许 durability=pipelined 的 handler；空表示全部允许。声明 pipelined 的 saga 原生步骤 handler 由框架自动加入，不用写", Starter: true, Example: "[]"},
 		{Name: "nest.pipelined.async_workers", Kind: "int", Min: "0", Help: "异步完成池的 worker 数（0 取缺省 4）。异步完成只给本进程声明 durability=pipelined 的 saga 原生步骤 handler 用，\n没有这类 handler 时不建完成池、本项不起作用", Starter: true, Example: "8"},
