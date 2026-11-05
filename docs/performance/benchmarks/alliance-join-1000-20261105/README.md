@@ -110,7 +110,7 @@ effect outbox（同一批运行的 `/metrics`：暂存 = 成功的 `Join` / `Lea
 
 ## effect 消费者并发（2026-11-05 晚）
 
-维护者决定 A（effect 消费者进程内按实体并发，契约见 [impl/03 effect 消费者进程内并发](../../../framework/impl/03-dataengine.md#effect-消费者进程内并发)）与 B（`dataengine.outbox.workers` 缺省 2 → 8，试用值）实施后的同机对照。
+维护者决定 A（effect 消费者进程内按实体并发，契约见 [impl/03 effect 消费者进程内并发](../../../framework/impl/03-dataengine.md#effect-消费者进程内并发)）与 B（`dataengine.outbox.workers` 缺省 2 → 8；2026-11-06 维护者定为正式缺省）实施后的同机对照。
 
 - 环境同上（私有 `scripts/mirror-local.sh`，偏移 36000；一个 alliance 实例）。本机这段时间负载很高：1 分钟 load average 10～72（多数在 16～42），`Join` 吞吐的轮间差别大于改动本身，只作量级参考。
 - 探针：上面的重试版（128 / 256 并发，每级新玩家 `Join` → `Leave` → 守卫已存在 `Join` → `Leave`，每段 12 s），本轮在探针里加了每秒一次的采样：`alliance-member-changed` 消费者的 ok + duplicate 计数（`/metrics`）、outbox 积压、JetStream 消费者的 `num_pending + num_ack_pending`；各级跑完后再观察 90 s（第 4、5 对 30 s）不再写入的尾段。
@@ -137,7 +137,7 @@ effect outbox（同一批运行的 `/metrics`：暂存 = 成功的 `Join` / `Lea
 结论：
 
 1. **effect 消费者跟上了**：修前压测期间 29～43 条/秒、无新写入时 92～108 条/秒，一轮压测留下 1.2～2.1 万条没消费；修后压测期间 227～300 条/秒，JetStream 积压峰值不到 160 条，压测结束即为 0。“修后 + 消费者 1”退回修前的样子，提升来自消费者并发本身。消费者的上限这一轮没有测到（写入量先到顶）。
-2. **outbox 8 个 worker**：修后代码配 2 个时压测结束 outbox 还有 1.5～1.9 千条，配 8 个时不到 100 条；`Join` 吞吐看不出差别。仍是试用值，维护者最终压测再定。
+2. **outbox 8 个 worker**：修后代码配 2 个时压测结束 outbox 还有 1.5～1.9 千条，配 8 个时不到 100 条；`Join` 吞吐看不出差别。维护者 2026-11-06 定为正式缺省 8。
 3. **`Join` 吞吐没有可分辨的变化**：128 并发修前 260～348、修后 291～367；256 并发两边都在 130～352 之间大幅波动，p50 与轮次负载同向。256 并发“重试 50 次仍可重试”的最终失败修前 28～278、修后 103～440；“修后代码 + 修前缺省”与修前背靠背两对（第 4、5 对，负载 60～70）是 278 / 188 对 218 / 305，在噪声内。修后 effect 链路与 RPC 同时占 Mongo（修前把这部分推迟成积压），在本机这样的负载下看不出它对 RPC 的影响，要在安静的机器上再比。
 
 证据（未提交）：`artifacts/runs/<轮次>/`（`probe.log`、`effseries.txt` 每秒采样、各段前后 `/metrics`）、`artifacts/probe/`（`series-eff*.sh`、`effsum.py`）。
