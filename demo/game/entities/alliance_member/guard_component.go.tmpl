@@ -119,8 +119,10 @@ func (component *GuardComponent) HeldAgainst(requestID string) bool {
 }
 
 // Reserve holds the guard for allianceID under requestID until deadlineUnix
-// (after CheckFree). The caller arms the deadline on the instance's
-// AllianceShard in the same transaction.
+// (after CheckFree). The deadline is the persisted part; the service arms a
+// process-local follow-up for it once the reservation answered (a restart
+// loses that follow-up, and the next request that finds the guard held heals
+// it instead).
 func (component *GuardComponent) Reserve(allianceID int64, requestID string, deadlineUnix int64) {
 	dao := component.owner.Dao()
 	dao.SetPendingAllianceID(allianceID)

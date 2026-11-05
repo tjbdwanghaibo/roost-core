@@ -186,6 +186,42 @@ effect outbox（同一批运行的 `/metrics`：暂存 = 成功的 `Join` / `Lea
 
 证据（未提交）：`artifacts/perf/runs/{m,x,t}-{before,after}-<轮>/`（`probe.log`、`mprof-<段>.txt` profiler 按集合 / 命令形状的计数、两实例各段前后 `/metrics`），`artifacts/probe/`（`series.sh`、`mongo-profile.sh`、`analyze.py`、`joincross_test.go.txt`）。
 
+## 联盟不用 effect（2026-11-05 晚）
+
+维护者 2026-11-05 晚的决定（[方案 §2.5B](../../../maintenance/FEATURE-2026-11-04-alliance-service.md#25b-联盟不用-effect2026-11-05-晚)）：联盟全部不用 effect——成员通知由服务层写成功后直接发，预约期限改为持有守卫的进程里的到期回调（删除 `AllianceShard`），跨实例宣战改为宣战方事务里的持久“等确认”+ 直接调用对方 `AcknowledgeWar`。
+
+- 环境同上（私有 `scripts/mirror-local.sh`，偏移 36000），机器同时有别的负载：1 分钟 load average 起跑 5～13、跑完 26～47。
+- 检出：修前 = `4998e9d1`（上一节之后，成员通知 / 预约期限是 best_effort effect、预约期限的宿主是 `AllianceShard`）；修后 = 分支 `feat/alliance-no-effect`。交替 3 轮，每轮每侧四项：
+  - **命令数（m）**：一个 alliance 实例、16 个联盟、16 并发，新玩家 `Join` → `Leave` → 守卫已存在 `Join`，每段 4 s，Mongo profiler 按成功次数平均；
+  - **跨实例命令数与时延（x）**：两个实例，16 个联盟在 3001、玩家守卫先在 3000 上建好，16 并发入 / 退，每段 384 次，开 profiler；
+  - **跨实例 64 并发（y）**：同上，64 个联盟、64 并发、每段 1536 次，不开 profiler；
+  - **同实例吞吐（t）**：重试版 128 / 256 并发，每段 12 s；另补 3 轮只跑 t、修后先跑（排除先后顺序）。
+
+每次成功操作的 Mongo 命令数（不计 outbox 后台轮询）：
+
+| 操作 | 修前 3 轮 | 修后 3 轮 | 说明 |
+| --- | --- | --- | --- |
+| 新玩家 `Join`（同实例） | 20.20～20.23 | 20.24～20.29 | 同实例路径修前已不写 effect，不变 |
+| `Leave`（同实例） | 16.17～16.22 | 16.07～16.25 | 同上 |
+| 守卫已存在 `Join`（同实例） | 16.22～16.25 | 16.09～16.25 | 同上 |
+| 跨实例 `Join` | 40.16～40.26（联盟库 3.00） | 37.73～40.83（联盟库 1.00～1.04） | 少了预约 / 确认两次 `AllianceShard` 文档写；超时多的轮次 Remote 事务标记摊得多 |
+| 跨实例 `Leave` | 26.59～27.11 | 27.05～31.33 | 不经过 shard，不变；修后两轮超时多，摊高 |
+
+跨实例 `Join`（成功次/秒 · p50；失败指最终答复不是成功）：
+
+| 并发 | 修前 3 轮 | 修后 3 轮 |
+| --- | --- | --- |
+| 16（x，开 profiler） | 9.9～10.6 · 1.49～1.61 s，失败 0 | 10.0 / 42.6 / 8.5 · 0.26～0.28 s，失败 26 / 1 / 42 |
+| 64（y，不开 profiler） | 9.3～11.2 · 4.1～4.7 s，失败 283～548 | 29.0～32.8 · 0.34～0.38 s，失败 195～349 |
+
+结论：
+
+1. **跨实例入会不再在一个 shard 上排成一条线**：p50 降到约十分之一；64 并发成功次数约 3 倍。修前 64 并发的失败是 `ReserveGuard` 在 shard 上排队超过 3 s。
+2. **修后跨实例的失败与 16 并发吞吐的抖动是 Remote outbox 代发的问题，不是本改动引入**：别的进程代发了写者的提交，写者进程的 tracker 停在 Applied，写等到 3 s 超时，延迟收尾持写门到 `finalize_projection_timeout`（30 s），同一联盟 / 守卫随后约 30 s 的写全部超时（[KNOWN-LIMITS](../../../maintenance/KNOWN-LIMITS.md) 对应条，含证据与可选修法）。修前同一现象出现在跨实例 `Leave`（3 轮里 2 轮有约 3 s 的请求，其中 1 轮 11 次失败），修后跨实例写不再被 shard 限速，`Join` 也碰到。
+3. **同实例命令数不变**（修前这条路径已不写 effect）。**同实例重试版吞吐修后偏低、未确认原因**：6 轮新玩家 `Join` 128 并发修前 296～435（中位约 374）、修后 238～410（中位约 296），`Leave` 128 并发约 380 → 约 300；但同实例路径的代码差别只有“写成功后发一条 core NATS 通知”替代“提交器发 best_effort effect”，Mongo 命令数相同，修后连纯 Mongo 的 `mark_published` 均值也慢约 12%（18.3 → 20.5 ms），更像同机负载差异；要在安静的机器上再比。
+
+证据（未提交）：`artifacts/perf/runs/{m,x,y,t}-{before,after}-<轮>/`、`artifacts/perf/runs/inv-1/`（延迟收尾日志）、`artifacts/perf/runs/q-after-1/`（goroutine 栈），探针 `artifacts/probe/`（`joincross_test.go.txt` 加了 `JOINCROSS_CONC`、`JOINCROSS_QUIT`）。
+
 ## 复跑
 
 探针用例与脚本在本轮的证据目录（`artifacts/probe/`，未提交）：`run-scale.sh <检出> <标签>`，环境变量 `JOINSCALE_LEVELS`、`JOINSCALE_ALLIANCES`、`JOINSCALE_SECONDS`、`JOINSCALE_PROFILE`、`JOINSCALE_PERL`（改生成的 alliance 配置）、`JOINSCALE_RETRY=1`（重试版）、`JOINSCALE_MONGOSNAP` / `JOINSCALE_MPROF_HOOK`（Mongo 计数与 profiler）。正式入口仍是 `TestAllianceE2ERPCConcurrency`（`scripts/test-alliance-e2e.sh`，`ALLIANCE_E2E_PERF=1`）。

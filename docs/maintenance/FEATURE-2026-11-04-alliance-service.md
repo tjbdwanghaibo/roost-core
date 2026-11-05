@@ -285,6 +285,8 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 - `TestLoginLooksUpAGuildJoinedWhileOffline`（game 端点）：副本为 0 时问一次（带上界）并写回；没有守卫、预约在途、服务不可达都保持 0；副本不为 0 不问。修前：`a guild joined while offline: 0 lookups, last call "handlerPlayerGuild" []`。
 - e2e：`TestAllianceE2EGamePlayers` 加 ①b（E 下线期间被拉进公会，再登录后“我的公会”直接可读）；`TestAllianceE2EOneAllianceUnderRace` 的收敛检查改为前半个窗口只等进程内期限，之后用 `Membership` 模拟“下一个碰到守卫的请求”，并记下需要碰的个数（kill -9 守卫方时期限随进程丢失）。
 
+**实测**（同机与 `4998e9d1` 交替 3 轮，[基准页“联盟不用 effect”](../performance/benchmarks/alliance-join-1000-20261105/README.md#联盟不用-effect2026-11-05-晚)）：同实例 `Join` / `Leave` 每次的 Mongo 命令数不变（这条路径修前已不写 effect）；跨实例 `Join` 少两次 shard 文档写，64 并发成功 9.3～11.2 → 29.0～32.8 次/秒、p50 4.1～4.7 s → 0.34～0.38 s，16 并发 p50 1.49～1.61 s → 0.26～0.28 s。修后跨实例仍有成批 3 s 超时、同一实体随后约 30 s 写不进：已定位为 Remote outbox 代发不通知写者进程（框架，未修，[KNOWN-LIMITS](KNOWN-LIMITS.md) 对应条给了 A / B / C），修前跨实例 `Leave` 偶发的 3 s 超时按同一原因理解。
+
 ### 2.6 要改玩家数据的操作：Saga（决定 1）
 
 规则：Player 在 game 进程，联盟在 alliance 服务，两边是两个事务域。改 Player 的步骤是 Player 上的原生步骤（回执在 Player，demo 已有 `SagaReceipts`）；改联盟的步骤是 Mongo 步骤，步骤体调 alliance RPC，`RequestID = IdempotencyKey`（原生步骤不能写 Remote，1.6）。Saga 从 game 进程的 Player handler 里 `EmitStart` 启动；端点回复“已受理”与交易号，结果经 `Result` / 通知确认（[SAGA.md“跨服交易”](../framework/SAGA.md#跨服交易使用约束)）。
