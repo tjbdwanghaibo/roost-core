@@ -441,7 +441,7 @@ func (g *effectGate) order() []string {
 	return append([]string(nil), g.started...)
 }
 
-func waitFor(t *testing.T, what string, ch <-chan struct{}) {
+func waitClosed(t *testing.T, what string, ch <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-ch:
@@ -489,7 +489,7 @@ func TestSubscribeEffectsRunsDifferentEntitiesConcurrently(t *testing.T) {
 		t.Fatal(err)
 	}
 	a1 := js.push(t, "a-1", "1001")
-	waitFor(t, "a-1 handler started", gate.startedCh("a-1"))
+	waitClosed(t, "a-1 handler started", gate.startedCh("a-1"))
 	b1 := js.push(t, "b-1", "2002")
 	if err := waitSettled(t, b1); err != nil {
 		t.Fatalf("b-1 settled with %v, want ack", err)
@@ -513,7 +513,7 @@ func TestSubscribeEffectsKeepsOneEntityInArrivalOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	a1 := js.push(t, "a-1", "1001")
-	waitFor(t, "a-1 handler started", gate.startedCh("a-1"))
+	waitClosed(t, "a-1 handler started", gate.startedCh("a-1"))
 	a2 := js.push(t, "a-2", "1001")
 	b1 := js.push(t, "b-1", "2002")
 	// b-1 结算说明回调已经越过 a-2（逐条投递）：a-2 已被接纳，但 a-1 没完成，a-2 不能开始。
@@ -547,11 +547,11 @@ func TestSubscribeEffectsBoundsEffectsInFlight(t *testing.T) {
 	}
 	a1 := js.push(t, "a-1", "1001")
 	b1 := js.push(t, "b-1", "2002")
-	waitFor(t, "a-1 handler started", gate.startedCh("a-1"))
-	waitFor(t, "b-1 handler started", gate.startedCh("b-1"))
+	waitClosed(t, "a-1 handler started", gate.startedCh("a-1"))
+	waitClosed(t, "b-1 handler started", gate.startedCh("b-1"))
 	c1 := js.push(t, "c-1", "3003")
 	d1 := js.push(t, "d-1", "4004")
-	waitFor(t, "the callback took c-1", c1.entered)
+	waitClosed(t, "the callback took c-1", c1.entered)
 	time.Sleep(50 * time.Millisecond) // 给错误实现留出越过上界的机会；下面的断言不依赖这段时间成立
 	if isClosed(c1.returned) || isClosed(gate.startedCh("c-1")) || isClosed(d1.entered) {
 		t.Fatalf("over the in-flight bound: c-1 callback returned=%v started=%v, d-1 delivered=%v",
@@ -582,10 +582,10 @@ func TestSubscribeEffectsCapsRunningHandlersAtWorkers(t *testing.T) {
 	}
 	js.push(t, "a-1", "1001")
 	js.push(t, "b-1", "2002")
-	waitFor(t, "a-1 handler started", gate.startedCh("a-1"))
-	waitFor(t, "b-1 handler started", gate.startedCh("b-1"))
+	waitClosed(t, "a-1 handler started", gate.startedCh("a-1"))
+	waitClosed(t, "b-1 handler started", gate.startedCh("b-1"))
 	c1 := js.push(t, "c-1", "3003")
-	waitFor(t, "c-1 admitted (callback returned)", c1.returned)
+	waitClosed(t, "c-1 admitted (callback returned)", c1.returned)
 	time.Sleep(50 * time.Millisecond) // 同上：只给错误实现机会
 	if isClosed(gate.startedCh("c-1")) {
 		t.Fatalf("c-1 started with 2 handlers already running and workers = 2; order %v", gate.order())
@@ -615,7 +615,7 @@ func TestSubscribeEffectsWithOneWorkerHandlesInTheCallback(t *testing.T) {
 				t.Fatal(err)
 			}
 			a1 := js.push(t, "a-1", "1001")
-			waitFor(t, "a-1 handler started", gate.startedCh("a-1"))
+			waitClosed(t, "a-1 handler started", gate.startedCh("a-1"))
 			b1 := js.push(t, "b-1", "2002")
 			time.Sleep(50 * time.Millisecond)
 			if isClosed(a1.returned) || isClosed(b1.entered) {
@@ -643,10 +643,10 @@ func TestSubscribeEffectsReturnsQueuedEffectsOnStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	a1, b1 := js.push(t, "a-1", "1001"), js.push(t, "b-1", "2002")
-	waitFor(t, "a-1 handler started", gate.startedCh("a-1"))
-	waitFor(t, "b-1 handler started", gate.startedCh("b-1"))
+	waitClosed(t, "a-1 handler started", gate.startedCh("a-1"))
+	waitClosed(t, "b-1 handler started", gate.startedCh("b-1"))
 	c1 := js.push(t, "c-1", "3003")
-	waitFor(t, "c-1 admitted", c1.returned)
+	waitClosed(t, "c-1 admitted", c1.returned)
 	js.stop()
 	for _, d := range []*serialDelivery{a1, b1, c1} {
 		if err := waitSettled(t, d); !errors.Is(err, context.Canceled) {
@@ -691,7 +691,7 @@ func TestSubscribeEffectsKeepsQueuedEffectsInProgress(t *testing.T) {
 	}
 	var first, second atomic.Int32
 	a1 := js.pushWith(t, "a-1", "1001", func() error { first.Add(1); return nil })
-	waitFor(t, "a-1 handler started", gate.startedCh("a-1"))
+	waitClosed(t, "a-1 handler started", gate.startedCh("a-1"))
 	a2 := js.pushWith(t, "a-2", "1001", func() error { second.Add(1); return nil })
 	if err := waitSettled(t, a1); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a-1 settled with %v, want its ack-wait deadline", err)
