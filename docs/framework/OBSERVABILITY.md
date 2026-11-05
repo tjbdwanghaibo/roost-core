@@ -127,6 +127,8 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `remote_entity.stale_reload_total` | Counter | 写准入发现本进程的内存实例落后于权威（共享模式下别的进程写过、或所有权转走期间新所有者写过）或停在 Fenced，把它仅内存卸载、从权威重载的次数。共享模式多写者交替写时正常增长，独占模式下应接近零 |
 | `remote_entity.foreign_kind_rejected_total` | Counter | 实体归属守卫拒绝的写准入与所有权操作：kind 声明归属于别的服务（`ForeignKinds`），本进程不认领、不写。应为零；增长说明有代码在别的服务的进程里直接写这类实体，写应改走归属服务的 RPC |
 | `remote_entity.foreign_ack_skipped_total` | Counter | outbox 协调者代发的提交不是本进程内存实例写的（共享 outbox 里别的进程的事务、重启后重放到加载时还没带上它的实例），没有推进这份实例版本的次数；之后这份实例由写准入从权威重载 |
+| `remote_entity.outbox.takeover_total{reason}` | Counter | 本进程代发别的进程写的 Remote 提交（[REMOTE_ENTITY“outbox 发布归属”](REMOTE_ENTITY.md#outbox-发布归属)）：reason=grace（写入后超过 `outbox_takeover_grace` 仍未发布，写者多半已崩溃）/ successor（同一实体上排在它后面的提交要发布，前面的写者已失去这个实体）。稳定运行时应为零；增长对应进程崩溃或接管 |
+| `remote_entity.finalize_projection_timeout_total` | Counter | Durability 1/2/3 的延迟收尾等到 `finalize_projection_timeout` 期限 tracker 仍没有结论、才回源权威的次数。应为零；增长说明投影器停滞，或写者的提交被别的进程代发而没人通知它（2026-11-06 修复前跨实例写的 30 s 卡顿即此） |
 | `remote_entity.route_register_total{result}` | Counter | 路由登记（联盟服务方案 §2.7，[REMOTE_ENTITY“路由登记”](REMOTE_ENTITY.md#路由登记)）：result=ok / stale（Redis 里已有更新代际，本进程是迟到的旧 owner）/ error（Redis 失败，只影响路由效率，续期时重登）。error 持续增长说明 Redis 不可用，调用方在回退读所有权记录 |
 | `remote_entity.route_renew_total{result}` | Counter | 每轮续期每个键的结果：renewed / replaced（值已被新 owner 换掉，不再续）/ missing（键丢了，向权威确认后重登）/ error（整批失败）。replaced 与 missing 在迁移、Redis 丢键之后出现；稳定运行时只有 renewed |
 | `remote_entity.route_delete_total{result}` | Counter | 转移出去、失去所有权与停机时按值删除登记：ok / error（按 TTL 过期） |
@@ -456,6 +458,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `player_tcp_write_error_total` | Counter | `infra/network/gateway/tcp_session.go:IncCounter` |
 | `remote_entity.deferred_outcome_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.deferred_outcome_not_run_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.finalize_projection_timeout_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.finalize_retry_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.finalize_status_read_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.foreign_ack_skipped_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
@@ -465,6 +468,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `remote_entity.outbox.snapshots` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
 | `remote_entity.outbox.mark_published` | Duration | `remoteentity/transaction_manager.go:ObserveDuration` |
 | `remote_entity.outbox.transaction` | Histogram | `remoteentity/transaction_manager.go:ObserveHistogram` |
+| `remote_entity.outbox.takeover_total` | Counter | `remoteentity/outbox_publish.go:IncCounter` |
 | `remote_entity.preload_total` | Counter | `remoteentity/route.go:routeMetric` |
 | `remote_entity.quarantine_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.rejected_unload_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |

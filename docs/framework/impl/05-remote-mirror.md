@@ -14,7 +14,7 @@
 
 ## 2. 必须保持的契约
 
-1. 同实体 outbox 保序，跨实体独立事务有界并行。
+1. 同实体 outbox 保序，跨实体独立事务有界并行。写者自己的提交立即发布，别的进程的提交过宽限期（或同实体已有要发布的后继）才代发；改扫描或标记逻辑时不能让非写者在宽限期内代发，否则写者的 tracker 没人通知（[REMOTE_ENTITY](../REMOTE_ENTITY.md#outbox-发布归属)）。
 2. L2 是快照水位权威，Mongo 是数据权威。
 3. interest 非零代际、完整身份与撤销水位一起校验。
 4. 超时或断线不等于未提交，写额度必须按真实完成释放。
@@ -23,9 +23,11 @@
 
 ## 2A. 有界发布调度实现走读
 
-[outbox_publish.go](../../../framework/remoteentity/outbox_publish.go)的publishOutboxPage由持outboxSerial的唯一协调者调用。每页最多256项，worker缺省8、上限64；为事务全部Entity和重复TransactionID记录前序依赖。只有waiting归零的项才交给worker，等待热点链不占worker。
+[outbox_publish.go](../../../framework/remoteentity/outbox_publish.go)的publishOutboxPage由持outboxSerial的唯一协调者调用。每页最多256项，worker缺省32、上限64；为事务全部Entity和重复TransactionID记录前序依赖。只有waiting归零的项才交给worker，等待热点链不占worker。
 
 每次尝试结束释放后继，失败项保留持久Applied供恢复；取消后不再补新任务，但必须收完已经派发的结果才交还生命周期。因此这里保证依赖顺序的尝试，不承诺失败前序一定成功才尝试后继；消费仍依赖版本/水位拒绝陈旧状态。跨页先排空，保持页扫描的所有权。
+
+发布前先经同文件的 `selectOutboxPage` 决定发布归属（[REMOTE_ENTITY“outbox 发布归属”](../REMOTE_ENTITY.md#outbox-发布归属)）：`RemoteCommitStatus.WriterSID` 等于本进程 sid、为 0 或没有 `CreatedAt` 的立即发；别的进程写的按 `CreatedAt + outboxTakeoverGrace()`（`Config.OutboxTakeoverGrace`，零值与下限取 `FinalizeProjectionTimeout`）判断到期；再从后往前把“同一实体上排在要发布的提交前面”的留存提交改为立即发（可连锁）。留下的提交里最早的到期时刻由 `RecoverOutbox` 收集，返回时（含出错返回）交 `armOutboxTakeover` 安排一次 `scheduleOutboxRepublish`（`remoteState.takeoverTimer`，只保留最早的一个，`StopFinalizer` 停掉）。不分页的自定义存储在一页有留存时结束本轮，不反复读同一页。`remoteState.outboxNow` 是只给测试用的时钟观察缝。写者 sid 由 [mongo_committer.go](../../../framework/remoteentity/mongo_committer.go) 的 `ApplyRemoteCommitsInTransaction` 写进事务记录（`writer_sid`），`remoteStatusFromMongoTransaction` 读回。
 
 [transaction_manager.go](../../../framework/remoteentity/transaction_manager.go)的RecoverOutbox/runOutboxRepublish负责恢复扫描，publishAppliedRemoteTransaction负责发布单事务。finalizer的等待、投影确认和写许可释放需另外追踪，不能把发布调度的完成误用为提交确认。
 
@@ -157,7 +159,7 @@ Rejected 的写入点（[batch.go](../../../framework/remoteentity/batch.go)、[
 - [route_test.go](../../../framework/remoteentity/route_test.go)：`TestRouteIsRegisteredOnWriteAndDeletedWhenOwnershipMovesAway`、`TestRouteRenewalReRegistersMissingKeysOnlyWhileStillTheOwner`、`TestRedisOutageKeepsWriteAdmissionAndFallsBackToTheOwnershipRecord`、`TestServeRoutedRequestNeverClaimsAMissingEntity`、`TestPreloadLoadsOnlyEntitiesThisSidOwns`、`TestEmptyClaimIsAnOwnedEntityThatDoesNotExist`（空认领：预加载计 Empty、前置检查由本实例服务、同 ID 再建；删过档计 Deleted）、`TestListOwnedRemoteEntitiesListsThisSidsExclusiveEntities`；其余 2 项见文件
 - [route_redis_integration_test.go](../../../framework/remoteentity/route_redis_integration_test.go)：`TestRealRouteScriptsCompareByValue`（单机与 Cluster）、`TestRealRouteRegistrationExpiresWithoutRenewal`、`TestRealListOwnedRemoteEntitiesFiltersByOwnerAndKind`、`TestRealRouteFollowsOwnershipAcrossTransferAndKill`
 - [outbox_crash_integration_test.go](../../../framework/remoteentity/outbox_crash_integration_test.go)：`TestRemoteOutboxCrashHelper`、`TestRealRemoteOutboxRecoversAfterCommitBeforePublicationCrash`
-- [outbox_test.go](../../../framework/remoteentity/outbox_test.go)：`TestOutboxFailedFirstPageDoesNotStarveLaterTransaction`、`TestOutboxIndependentTransactionsPublishWhileOverlappingTransactionWaits`、`TestOutboxWorkerLimitAndCancellationRetainUnpublishedTransactions`、`TestExplicitOutboxRecoveryIsDrainedBeforeStop`、`TestPublicationFailureDoesNotBlockLaterProjection`；其余 1 项见文件
+- [outbox_test.go](../../../framework/remoteentity/outbox_test.go)：`TestOutboxFailedFirstPageDoesNotStarveLaterTransaction`、`TestOutboxIndependentTransactionsPublishWhileOverlappingTransactionWaits`、`TestOutboxWorkerLimitAndCancellationRetainUnpublishedTransactions`、`TestExplicitOutboxRecoveryIsDrainedBeforeStop`、`TestPublicationFailureDoesNotBlockLaterProjection`、发布归属 `TestOutboxWriterPublishesItsOwnCommitBeforeOtherCoordinators`；其余 8 项见文件
 - [owner_startup_election_integration_test.go](../../../framework/remoteentity/owner_startup_election_integration_test.go)：`TestMirrorLocalOwnerStorageInitSurvivesAMongoElection`
 - [ownership_redis_integration_test.go](../../../framework/remoteentity/ownership_redis_integration_test.go)：`TestRealRemoteOwnershipClaimAndTransfer`
 - [ownership_test.go](../../../framework/remoteentity/ownership_test.go)：`TestConcurrentOwnershipClaimElectsExactlyOneOwner`、`TestOwnershipModeTransitionsAdvanceMarkerEpoch`、`TestEnterSharedPromiseLostReplyFollowsAuthorityIntoSharedMode`、`TestEnterSharedPromiseLostReplyFreezesUntilAuthorityAnswers`、`TestLeaveSharedPromiseLostReplyFollowsAuthorityIntoLocalOwned`；其余 12 项见文件（含实体归属守卫 `TestForeignKindIsRejectedBeforeOwnershipClaim`）

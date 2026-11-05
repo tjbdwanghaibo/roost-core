@@ -48,6 +48,44 @@ func TestCachedMaxStalenessConfiguration(t *testing.T) {
 	}
 }
 
+// remote_entity.outbox_takeover_grace：不配置时为 0（core 取 finalize_projection_timeout）；配置值原样交给 core；
+// 短于 finalize_projection_timeout（未配置时按它的缺省 30s）在 Init 拒绝，错误点名两个键。
+func TestOutboxTakeoverGraceConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		grace, projection any
+		want              time.Duration
+		reject            bool
+	}{
+		{nil, nil, 0, false},
+		{"45s", nil, 45 * time.Second, false},
+		{"10s", "10s", 10 * time.Second, false},
+		{"10s", nil, 0, true},
+		{"20s", "1m", 0, true},
+	} {
+		cfg := viper.New()
+		if tc.grace != nil {
+			cfg.Set("remote_entity.outbox_takeover_grace", tc.grace)
+		}
+		if tc.projection != nil {
+			cfg.Set("remote_entity.finalize_projection_timeout", tc.projection)
+		}
+		mod := NewRemoteEntityMod(1000)
+		err := mod.Init(cfg)
+		if tc.reject {
+			if err == nil || !strings.Contains(err.Error(), "outbox_takeover_grace") || !strings.Contains(err.Error(), "finalize_projection_timeout") {
+				t.Fatalf("grace=%v projection=%v: Init err=%v, want a rejection naming both keys", tc.grace, tc.projection, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("grace=%v projection=%v: %v", tc.grace, tc.projection, err)
+		}
+		if mod.cfg.OutboxTakeoverGrace != tc.want {
+			t.Fatalf("grace=%v: OutboxTakeoverGrace=%v, want %v", tc.grace, mod.cfg.OutboxTakeoverGrace, tc.want)
+		}
+	}
+}
+
 func TestClusterRequiresNonEmptyLockHashTag(t *testing.T) {
 	for _, key := range []string{"", "e", "e{", "e{}", "e{}{valid}"} {
 		t.Run(key, func(t *testing.T) {

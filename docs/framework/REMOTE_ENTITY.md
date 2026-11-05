@@ -27,6 +27,20 @@ Nest WAL当前codec7 持久化完整 RemoteCommit（mutation、delete、snapshot
 
 Mongo transaction首先标记`Applied`；唯一的`RecoverOutbox`协调者负责快照/复制发布，成功后标记`Committed`。投影只持久提交并唤醒outbox，finalizer只确认和释放，不自行发布；`ApplyRemoteCommits`成功只代表持久回执，需要发布确认的调用者等待`FlushRemoteTransaction`。memory/strict/pipelined的回复与写额度释放语义保持不变，不能提前到Applied。
 
+### outbox 发布归属
+
+每个进程的协调者都扫描共享 outbox 里全部 Applied 提交，但等发布结论的 tracker（strict 写的确认、延迟收尾的等待）只在写者进程里。别的进程代发后写者没人通知：修复前（2026-11-06）写者的 strict 写等到 Nest 请求期限（3 s）超时、转延迟收尾，收尾持写门等到 `finalize_projection_timeout`（30 s）才回源释放，同一实体其间的写全部在写门上超时。规则：
+
+- **写者自己发**：事务记录带写者 sid（`_remote_entity_transactions.writer_sid`，`MongoCommitter` 的 sid）。扫描立即发布本进程写的提交；没有写者（自定义 outbox 不填 `RemoteCommitStatus.WriterSID`）或没有写入时刻的，同样立即发布（修复前的行为）。
+- **别的进程过宽限期才代发**：别的进程写的提交写入（`created_at`，写者的时钟）后超过 `remote_entity.outbox_takeover_grace` 仍是 Applied，视为写者已经不在，由扫到它的进程代发（`remote_entity.outbox.takeover_total{reason="grace"}`）。宽限期零值与下限都是 `finalize_projection_timeout`（wiring 对更小的配置值报错）：写者活着但发布慢、被代发时，它的 tracker 仍没人通知，要等延迟收尾到期回源才结束；宽限期不短于收尾期限，代发发生时写者的收尾期限也已基本到期（收尾期限从 strict 等待超时后才开始算），写者不会因代发再多挂一个收尾期限。写者自己标记时发现记录已是 Committed（读页之后被代发），`MarkRemoteCommitPublished` 照旧当作成功，tracker 正常结束。
+- **同实体后继立即代发**：一页里同一实体上排在某个留存提交后面、本轮要发布的提交已经存在时，留存提交立即代发并先发（`reason="successor"`）。同一实体的提交在写门与写锁下串行，写者发布前一直持有它们，后面能有别的提交说明前面的写者已经失去这个实体（崩溃后被接管）；这样接管者的写不用陪着等宽限期，同实体发布顺序也保持。只在页内判断，跨页时后面的提交照常先发（与发布失败时相同，同实体顺序只在一页内尽力保持）。
+- **崩溃接管**：写者崩溃后可能再没有本地写去唤醒别的协调者，所以每次扫描为留存提交里最早的到期时刻安排一次唤醒（`armOutboxTakeover`），到期后扫到它的进程代发。发布按事务 `_id` 幂等：`MarkRemoteCommitPublished` 只把 Applied 改成 Committed，重复发布同一快照由版本 / 水位去重；两个进程同时到期代发，第二个标记时读到 Committed 视为成功。代价是写者崩溃留下的提交晚一个宽限期才发布（订阅方在这段时间读不到推送，回源仍是新版本）。
+- **同 sid 重启**：同 sid 的新进程把旧进程留下的提交当作自己的，启动恢复（`Assembly.Start` → `RecoverOutbox`）立即发布，不等宽限期；单实例锁保证此时旧进程已经不在。崩溃重启的短暂重叠里两边都可能发布，按上一条幂等。
+- **不回源**：写者的 tracker 停在 Applied 时不另外点读权威（KNOWN-LIMITS 原条目的方案 B），只靠自己的发布推进 tracker、靠延迟收尾的期限兜底；宽限期下限保证代发之后写者最多再等一次 strict 等待的剩余时间（strict 的收尾期限从等待超时后才开始算），或一次收尾重试间隔（async 的收尾期限早于代发到期，之后按 `finalize_retry_interval` 退避回源，最长 5 s）。延迟收尾因期限到期才回源的次数计 `remote_entity.finalize_projection_timeout_total`，正常应为 0。
+- **时钟**：宽限期按写者写入的 `created_at` 与代发方的本地时钟比较，依赖各进程时钟大致同步（NTP）。写者时钟慢于代发方超过宽限期时退化为修复前的立即代发（只影响时延，不影响正确性）；快时崩溃接管再晚相应时间。
+
+回归：[outbox_test.go](../../framework/remoteentity/outbox_test.go) 的 `TestOutboxWriterPublishesItsOwnCommitBeforeOtherCoordinators`（两个协调者共享 outbox，非写者先扫，写者的 strict 写在期限内确认；修复前停在 Applied 等到超时）、`TestOutboxForeignCommitIsTakenOverOnlyAfterTheGrace`、`TestOutboxCrashedWritersCommitIsPublishedAfterTheGraceWithoutAnotherWake`、`TestOutboxRestartedWriterWithTheSameSidPublishesLeftoverCommitsAtOnce`、`TestOutboxForeignPredecessorOfAPublishedCommitIsTakenOverFirst`、`TestOutboxWriterFindingItsCommitAlreadyPublishedCompletesItsTracker`、`TestOutboxWriterOvertakenBeforeItsScanIsReleasedAtTheProjectionDeadline`。
+
 ### 持久拒绝（Rejected）的来源与收尾
 
 事务的 Rejected 只有 Durability 0（memory）一种生产来源：`Commit` 直接写权威时被明确拒绝（写前校验失败、fenced、版本冲突），在业务池同步回滚、隔离，`Close` 释放后仅内存卸载；结果未知时由 finalizer 回源，读不到结论就用 `RejectUnresolvedRemoteCommits` 以同一事务 `_id` 写下持久拒绝（撞键则按已有记录的真实状态收尾），拿到 Rejected 后回滚、隔离、释放 gate、仅内存卸载，再把 false 交给提交后工作。WAL 准入前的 `Abort` 只在本进程 tracker 记 Rejected，不写持久记录。
@@ -42,7 +56,7 @@ Durability 1/2/3（async / strict / 随 strict 路径提交的 pipelined）的 W
 共享模式下多个进程都能写同一实体，每个写者进程内存里各有一份实例；独占模式下所有权转走又转回、或退出共享回到独占，也会让本进程的实例错过别的进程的提交。内存实例只在本进程写入时随确认推进，别的进程的提交不会改它。规则（2026-11-04 修复，见 CHANGELOG）：
 
 - **写准入对齐权威**：取得写许可（独占的持久许可，或共享模式的分布式锁 + 许可）后，本地实例版本落后于权威版本、或停在 `Fenced`（转出时置入，状态表里不会自己恢复）时，先经 `Backend.UnloadRemoteEntity`（正式 loader 是 `ManagerAccess.Unload`，`DestroyReasonMemoryUnload`，不删持久数据）把它仅内存卸载，再加载：内存未命中才会经 loader 从权威重建。卸载经 ctx 的本地执行入口（Nest I/O 准备阶段注入的业务池续行）执行，等实体锁受 OpTimeout 约束；卸载没完成或重载撞上卸载收尾窗口返回可重试的 `entity.ErrRemoteEntityReloading`（包裹 `ErrRemoteFenced`）。Sync 与持久拒绝后的卸载同一规则：旧同步状态关闭、订阅保持，重载后全量。持久拒绝等待框架卸载的实例仍走拒绝收尾那条路径。
-- **outbox 确认只落到写者实例**：每个进程的 outbox 协调者扫描共享 outbox 里全部未发布事务，会代发别的进程的提交。确认（推进版本向量、生成实体的 `AcknowledgeRemoteCommit`）只在本地实例就是这笔提交的写者时执行：它的版本向量在确认前是 `(BaseVersion, LockFence)`、重复确认时是 `(NextVersion, LockFence)`。否则不动这份实例（计 `remote_entity.foreign_ack_skipped_total`），由下一次写准入从权威重载；发布与版本通知照常。修复前代发会把没有那笔修改的实例推进到新版本，下一笔整文档写覆盖掉别的进程的修改。
+- **outbox 确认只落到写者实例**：每个进程的 outbox 协调者扫描共享 outbox 里全部未发布事务，过了宽限期会代发别的进程的提交（[outbox 发布归属](#outbox-发布归属)）。确认（推进版本向量、生成实体的 `AcknowledgeRemoteCommit`）只在本地实例就是这笔提交的写者时执行：它的版本向量在确认前是 `(BaseVersion, LockFence)`、重复确认时是 `(NextVersion, LockFence)`。否则不动这份实例（计 `remote_entity.foreign_ack_skipped_total`），由下一次写准入从权威重载；发布与版本通知照常。修复前代发会把没有那笔修改的实例推进到新版本，下一笔整文档写覆盖掉别的进程的修改。
 - **边界**：loader 不支持卸载（自定义 loader 没实现 `IRemoteEntityUnloader`）时换不掉实例，落后时照旧报 `ErrRemoteVersionConflict`、`Fenced` 时报 `ErrRemoteFenced`；事务外独立删档（`Destroy(deletePersisted=true)` 不在 handler 内）在 `EntityManager.Destroy` 持实体锁时准备批次，带 `entity.WithRemoteWriteTargetHeld`，实例落后时不卸载、按版本冲突拒绝，下一次 Nest 写准入换掉它之后再删。非写入路径读本进程内存里的 Remote 实例（不经写准入）可能是旧的，跨进程读取用快照（下一节）。
 
 ## 实体归属守卫

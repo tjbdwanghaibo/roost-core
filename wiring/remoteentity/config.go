@@ -102,6 +102,7 @@ type entityConfig struct {
 		VersionTTL                time.Duration `config:"version_ttl" min:"0" example:"24h"`
 		FinalizeRetryInterval     time.Duration `config:"finalize_retry_interval" min:"0" example:"500ms"`
 		FinalizeProjectionTimeout time.Duration `config:"finalize_projection_timeout" min:"0"`
+		OutboxTakeoverGrace       time.Duration `config:"outbox_takeover_grace" min:"0" help:"别的进程写的 Remote 提交写入后多久仍未发布才由本进程代发（写者自己的提交立即发布）；0 取 finalize_projection_timeout，不能小于它"`
 		MaxWriteBatch             int           `config:"max_write_batch" min:"0" example:"64"`
 		MaxConcurrentWrites       int           `config:"max_concurrent_writes" default:"128" min:"0" help:"同时在途的 Remote 写许可；0 取 async_finalize_capacity，大于它时按它封顶；与 async_finalize_* 一起按 Remote 写入峰值定容"`
 		AsyncFinalizeCapacity     int           `config:"async_finalize_capacity" min:"0" example:"4096"`
@@ -119,6 +120,17 @@ type entityConfig struct {
 // ValidateConfig：锁状态与 fence 在一个 Lua 里更新，Redis Cluster 下锁键必须显式带同槽的 hash tag；
 // 不自动改键，否则滚动发布时新旧节点会锁住不同身份。
 func (c *entityConfig) ValidateConfig(bool) error {
+	// 宽限期不短于延迟收尾的投影期限：写者活着但发布慢、被别的进程代发时，它的 tracker 要等收尾期限到期回源才结束；
+	// 宽限期更短会让写者在代发之后还要挂到收尾期限（coreremote.Config.OutboxTakeoverGrace）。
+	if grace := c.RemoteEntity.OutboxTakeoverGrace; grace > 0 {
+		projection := c.RemoteEntity.FinalizeProjectionTimeout
+		if projection <= 0 {
+			projection = coreremote.DefaultConfig().FinalizeProjectionTimeout
+		}
+		if grace < projection {
+			return fmt.Errorf("remote_entity: outbox_takeover_grace %v is shorter than finalize_projection_timeout %v; leave it 0 or set it no shorter", grace, projection)
+		}
+	}
 	if len(c.ClusterAddrs) == 0 {
 		return nil
 	}

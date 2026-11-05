@@ -304,6 +304,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "remote_entity.version_ttl", Kind: "duration", Min: "0", Starter: true, Example: "24h"},
 		{Name: "remote_entity.finalize_retry_interval", Kind: "duration", Min: "0", Starter: true, Example: "500ms"},
 		{Name: "remote_entity.finalize_projection_timeout", Kind: "duration", Min: "0"},
+		{Name: "remote_entity.outbox_takeover_grace", Kind: "duration", Min: "0", Help: "别的进程写的 Remote 提交写入后多久仍未发布才由本进程代发（写者自己的提交立即发布）；0 取 finalize_projection_timeout，不能小于它"},
 		{Name: "remote_entity.max_write_batch", Kind: "int", Min: "0", Starter: true, Example: "64"},
 		{Name: "remote_entity.max_concurrent_writes", Kind: "int", Default: "128", Min: "0", Help: "同时在途的 Remote 写许可；0 取 async_finalize_capacity，大于它时按它封顶；与 async_finalize_* 一起按 Remote 写入峰值定容"},
 		{Name: "remote_entity.async_finalize_capacity", Kind: "int", Min: "0", Starter: true, Example: "4096"},

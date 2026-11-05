@@ -117,6 +117,7 @@ func (m *RemoteEntityMod) Init(cfg *viper.Viper) error {
 	setPositive(&m.cfg.UnlockRetryInterval, re.UnlockRetryInterval)
 	setPositive(&m.cfg.FinalizeRetryInterval, re.FinalizeRetryInterval)
 	setPositive(&m.cfg.FinalizeProjectionTimeout, re.FinalizeProjectionTimeout)
+	setPositive(&m.cfg.OutboxTakeoverGrace, re.OutboxTakeoverGrace)
 	setPositive(&m.cfg.MaxWriteBatch, re.MaxWriteBatch)
 	re.snapshotConfig.apply(m.cfg)
 	setPositive(&m.cfg.AsyncFinalizeCapacity, re.AsyncFinalizeCapacity)
