@@ -302,6 +302,8 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `admin.execute.total` | Counter | `admin/admin.go:IncCounter` |
 | `alliance.guard_finish_lost_total` | Counter | `demo/internal/rpc/alliance/guard.go.tmpl (template)` |
 | `alliance.guard_healed_total` | Counter | `demo/internal/rpc/alliance/guard.go.tmpl (template)` |
+| `alliance.member_notice_lost_total` | Counter | `demo/internal/rpc/alliance/guard.go.tmpl (template)` |
+| `alliance.war_ack_retry_total` | Counter | `demo/internal/rpc/alliance/war.go.tmpl (template)` |
 | `admin.http_refused.total` | Counter | [Ops接线与实现](impl/11-observability.md) |
 | `app.business_time.advance_failed.total` | Counter | `app/business_time.go:IncCounter` |
 | `bus_dead_letter_purge_total` | Counter | `bus/bus.go:IncCounter` |
