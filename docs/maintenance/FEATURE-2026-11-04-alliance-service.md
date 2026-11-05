@@ -139,7 +139,7 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 | --- | --- | --- | --- |
 | `Alliance`（Remote 托管） | 联盟 ID | 名字、盟主、成员表（玩家 → 职位、加入时间、静态原服 sid）、科技、仓库、请求回执 | 成员关系的唯一权威 |
 | `AllianceMember`（Remote 托管） | 玩家 ID 派生 | 所在联盟、待定的入会预约、退盟冷却、每日捐献计数、请求回执 | “一人一盟”的守卫与玩家维度的联盟状态，见 2.5；**不是**第二份成员权威，与联盟成员表不一致时以联盟为准 |
-| `AllianceShard`（普通本地实体，每实例一个） | 实例 sid | 联盟定时任务的持久节点 | 承载 `roost add timer`，见 2.8 |
+| ~~`AllianceShard`（普通本地实体，每实例一个）~~ | ~~实例 sid~~ | ~~联盟定时任务的持久节点~~ | 2026-11-05 删除：唯一用途是预约期限，改在进程内布置（2.5B） |
 
 - **联盟 ID 不编码槽位**（2026-11-04 路由决定）：联盟 ID 由服务内一个 Mongo 计数器发号，沿用 demo `nextGuildID` 的 `$inc` + majority 写确认，发号失败留空号不回收。ID 与哪个实例持有无关。`AllianceMember` 的 ID 由玩家 ID 加 kind 得出。哪个实例持有某个实体只看持久所有权记录，调用方经 2.7 的路由查找找到它。建盟频率低，单个计数器的争用可以忽略。
 - **请求回执放在被改的实体里**：`Requests map[RequestID]回执`（结果摘要 + 时间），随业务修改同一事务提交与回滚，同一 RequestID 再来时回放原结果；保留期与上限按 Saga 回执的做法（`saga.receipt_retention` 缺省 168h，每次提交顺手剪过期项）。第一个实施版本放在服务骨架里，等第二个实体服务出现再考虑上升为框架件。
@@ -203,9 +203,9 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
   预约带期限；期限到了仍未确认，守卫方先向联盟 A 的权威问“玩家是否在成员表里”，按权威确认或释放，不按超时直接释放。两个实体在同一实例时三步合成一笔多实体事务。退盟、踢人反向：先改成员表，再由 effect 清 `AllianceMember`。（2026-11-05 起第 3 步与退盟的清除改为直接调用 + 惰性自愈，不再用 effect，见 2.5A。）
 - **跨实例照旧两步，新增的实例间调用一律走路由 RPC**（2026-11-04 路由决定）：`AllianceMember` 按玩家 ID，可能和联盟在不同实例，阶段 3 已实现的“预约 → 确认 → 期限到了按联盟权威收尾”保留。联盟实例对守卫的调用（预约、确认、释放、清除）与守卫方向联盟问权威，都按目标的完整 ID 走路由 RPC（2.3），不再按槽位表找实例。
 - **守卫还不存在时**（玩家从没入过盟）：由发起调用的联盟实例在本地新建并认领，入会预约与联盟在同一实例，常见情况就是一笔多实体事务。认领是原子 CAS：两个实例并发新建同一个守卫时只有一个成为 owner，输的一方在写准入被 fence，按改投改走路由 RPC。
-- **game 进程怎么知道“我在哪个盟”**（2026-11-05 改，原为读守卫的 Mirror）：守卫不再同步给 game（`AllianceMember` 声明 `snapshots=none`），game 只镜像联盟。“在哪个盟”是玩家自己的副本 `PlayerDao.GuildID`（`persist,sync`）：玩家自己的入会 / 退会 / 建盟成功后在玩家事务里写（`ShowGuild`；建盟在 `guild_op_status` 看到 saga 完成时写），在线时收到成员通知更新，登录时对照该联盟的 Mirror 名单清掉已不在的。它只用于显示与建议性预检，任何写判断都在 alliance 服务按名单做。缺口：离线时被批准入会，通知没人收，副本要到下一条通知或玩家自己的公会操作才显示（KNOWN-LIMITS）。
+- **game 进程怎么知道“我在哪个盟”**（2026-11-05 改，原为读守卫的 Mirror）：守卫不再同步给 game（`AllianceMember` 声明 `snapshots=none`），game 只镜像联盟。“在哪个盟”是玩家自己的副本 `PlayerDao.GuildID`（`persist,sync`）：玩家自己的入会 / 退会 / 建盟成功后在玩家事务里写（`ShowGuild`；建盟在 `guild_op_status` 看到 saga 完成时写），在线时收到成员通知更新，登录时对照该联盟的 Mirror 名单清掉已不在的；**副本为 0 时登录向 alliance 问一次 `Membership`**（2026-11-05 晚，决定 D，见 2.5B），补上离线时被批准的入会。它只用于显示与建议性预检，任何写判断都在 alliance 服务按名单做。
 - **附近玩家头顶的公会**：同一个 `PlayerDao.GuildID`（sync）。
-- **在线通知**：成员变化以 best_effort effect 在变更持久之后发出，消费者按成员记录里的原服 sid 经 Bus 发给该 game 进程（尽力投递）；game 进程更新副本并推客户端。
+- **在线通知**（2026-11-05 晚改，原为 best_effort effect）：写答复之后由 alliance 服务层直接按成员记录里的原服 sid 经 Bus 发给该 game 进程（尽力投递，失败只记日志）；game 进程更新副本并推客户端。见 2.5B。
 
 ### 2.5A 守卫是名单的缓存：惰性自愈（2026-11-05）
 
@@ -221,7 +221,7 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
    - 向 X 问 `Settle(X, R, P, decide)`（一个联盟事务）：答 P 现在是否坐在 R 名下（`Seated`）、R 有没有结论（`Found`）。`decide` 在“守卫是 joined”或“预约已过期限”时为真：X 从没定论的 R 记成 `alliance_expired`（P 坐在 R 名下而回执已清理的，记成功），之后同一 R 的准入只回放结论；期限内的预约 `decide` 为假，只问不写——那次入会可能还在路上，截断它会把两个联盟并发批准变成“过期”。X 还没有所有权记录（建盟在途）时，不定论的问话直接答“没有结论”，不去认领。
    - pending(X, R)：有结论或已坐下才 `ResolveGuard(R, joined=Seated)`；都没有就保持占着（照原判断答“已在入会中”）。joined(X, R) 而没坐下：`ClearGuard(X, R)`；坐着就不动。
    - `ResolveGuard` / `ClearGuard` 是条件事务：守卫仍是观察到的 (X, R) 才改。之后照原判断重做一次（`deferHeld=false`）。
-4. 预约期限：`AllianceShard` 的持久定时器到期发一条 best_effort 的 `alliance.reservation_due`，消费者做第 3 步；丢了由下一个碰到守卫的请求做。
+4. 预约期限：~~`AllianceShard` 的持久定时器到期发一条 best_effort 的 `alliance.reservation_due`，消费者做第 3 步~~（2026-11-05 晚改为作出预约的实例在进程内布置，到期直接做第 3 步，见 2.5B）；丢了由下一个碰到守卫的请求做。
 
 **为什么清空 / 释放守卫之后不会“过时地空着”**（P 坐在 X 名下 ⇒ 守卫占着 X）：
 
@@ -231,6 +231,59 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 - 唯一假设（自愈之前就有）：回执清理（`alliance.receipt_retention`）之后不再用同一个请求号重试。
 
 回归（`internal/rpc/alliance`）：`TestGuardHealsAfterALostCrossInstanceClear`（修前：`join after a lost clear: … player is already in an alliance or joining one`）、`TestGuardHealsALostReservationResolution`（坐下了确认丢失：下一次 Join 经 `Settle` 确认守卫，修前 `guard … PendingAllianceID:1 … want confirmed in 1`；没坐下：期限内的 Join 被拒、预约不被截断，过期限后 Join 经 `Settle` 定论为过期、释放并加入别的联盟，迟到的准入答 `alliance_expired`）、`TestGuardHealingNeverLeavesASeatedPlayerUnguarded`（两实例并发入退盟、三分之一的直接收尾被丢：一人至多一盟、在名单里则守卫占着该联盟；变异“自愈无条件清 joined”时红：`player 300 is a member of [1 2]`）、`TestOnePlayerOneAllianceAcrossInstances`（期限内不定论的约束：曾因自愈截断在途入会红过一次，答 `alliance_expired`）、`TestSameInstanceMembershipRecordsNoReliableEffect`（修前：`same-instance found / join / leave recorded reliable effects [alliance.member_changed ×3], want none`）；e2e 的一人一盟断言改为“在名单里 ⇒ 守卫占着该联盟”立即判错 + settle 窗口内收敛。
+
+### 2.5B 联盟不用 effect（2026-11-05 晚）
+
+维护者 2026-11-05 决定：**alliance 相关逻辑全部不用 effect**，reliable 与 best_effort 都不用（框架保留这两种模式给其他服务，[impl/03](../framework/impl/03-dataengine.md#effect-持久性reliable--best_effort与消费顺序entity--none) 不变）。原来还在用的三条与它们的替代：
+
+| 原 effect | 原用途 | 现在 | 丢失时的兜底 |
+| --- | --- | --- | --- |
+| `alliance.member_changed`（best_effort，admit / remove / found / establish） | 成员通知 | 写的 handler 在答复里带上本次改动（`Answer.Member`：玩家、原服 sid、joined / left / kicked，只在这次真的执行且成功时有，回放没有）；服务层在 `Sync_` 调用返回之后、答复调用方之前 `notify`：一次 Bus publish（`SendByType`，不等 game），失败计 `alliance.member_notice_lost_total` 并记日志 | 在线：下一条通知；离线：登录补齐（下文 D） |
+| `alliance.reservation_due`（best_effort，`AllianceShard` 定时器） | 预约期限到了按联盟权威收尾 | 作出预约的实例（守卫的 owner）在 `ReserveGuard` 答复后、守卫仍为本请求预约着时，在**进程内**布置期限（`followUps`，`time.AfterFunc`）；到期读守卫，仍是这条预约就 `healGuard`；联盟暂不可达则按 5s 起倍增、最多 1 分钟重试；`ResolveGuard` 后守卫不再持有时撤掉 | 期限不持久：随进程丢失（崩溃、重启）的，由下一个碰到守卫的请求收尾——Join / Found / ReserveGuard / ClaimReward、登录的 `Membership`、transfer；正确性本来就由 2.5A 的自愈保证，期限只是主动收尾的优化 |
+| `alliance.war_declared`（reliable） | 跨实例宣战时对方一侧 | 见下文“宣战” | 持久标记 + 运行中重试 + 启动扫描 |
+
+对应删除：三个 effect 定义、三个消费者与它们的 durable / 队列组名（`alliance-member-notice`、`alliance-reservation-heal`、`alliance-war-declared`），生成器 `demo_alliance.go` 里的三条 `add effect` 与 `AllianceShard` 的实体 / DAO / 定时器 / 生命周期，`internal/service/alliance` 不再订阅任何 effect。项目未部署，不迁移旧 durable：升级时旧 JetStream 消费者与 `alliance_shard` 集合直接不再使用，需要时由运维删除。
+
+**服务层的后续工作（`followUps`，`internal/rpc/alliance/background.go`）**：写答复之后、要等时钟或重试的工作（预约期限、宣战的再次确认、启动扫描）在服务进程内各自的 goroutine 里跑，不在 Nest 池上；同一个 key 只布一次。停机按三步：`Service.Stop(ctx)` 关准入、撤掉全部已布置的、取消在跑的上下文并在 ctx 内等它们结束；alliance 进程的 `app.Service.Shutdown` 调它——App 先关全部输入，再等 Shutdown，最后才停 Nest 与 Bus。这里的东西都不持久，也都不是正确性的前提（各自的兜底见上表与下文）。
+
+**为什么预约期限放进程内，而不是“守卫自己的计时器”或“按玩家哈希到多个 shard”**（决定 F 一并解决）：
+
+- 守卫是 Remote 托管实体，框架拒绝在它上面挂持久定时器（`codegen/internal/entity/timer_host.go`：所有权在进程间迁移时期限的语义没有定义），“守卫自己的持久计时器”不是现有能力。
+- 按玩家哈希到 N 个本地 shard：每次预约 / 确认仍是“守卫 + 一个 shard”的多实体事务（多一个本地 WAL 写），同一 shard 上的入会照样串行（只是 N 条线），还要 N 的配置、shard 的建立与迁移规则，并且定时器在 shard 锁里触发后仍需“AfterCommit → 交给服务层”的桥。换来的只是“崩溃后期限还会准点再触发”。
+- 正确性不依赖期限（2.5A：守卫只许过时地占着，碰到就自愈），所以持久化期限只买到“崩溃后不用等下一次碰到”。进程内期限让每个守卫写都只锁守卫本身：不同玩家的预约 / 确认之间没有任何共享实体。
+- 如果以后要“崩溃后也准点”，再按第二种做（或给框架补 Remote 实体的期限能力），不要回到“每实例一个 shard”。
+
+**宣战（跨实例，不用 effect，敌方 `Wars` 最终一定补上）**：
+
+1. 宣战方 `handlerAllianceDeclareWarDetached` 在同一事务里记 `Wars[enemy]`、回执和**待对方确认**的持久标记 `WarAcks[requestID] = enemyID`（联盟 DAO 字段，`war_acks`）。答复带 `WarPending`（新执行或回放时标记仍在）。
+2. 答复之后服务层立即（`followUps`，不拖慢宣战的答复）调敌方 owner 的 `AcknowledgeWar(requestID, enemy, declarer)`（路由 RPC）。
+3. 对方给出**最终答复**（记下了、或按规则拒绝——拒绝时宣战方保留自己一侧，沿用第 6 节第 4 条 A 的“两步最终一致、不原子”）后，宣战方用条件事务 `handlerAllianceWarAcknowledged` 按请求号删掉标记（已删则什么也不改）。
+4. 答复不是最终（对方实例不可达、未执行、结果未知）或删标记失败：标记还在，由下面的驱动再问。
+
+持久的重试驱动选的是“运行中重试 + 启动扫描”，不是“下次触达该联盟时惰性补发”——后者对一个没人再碰的联盟没有上界：
+
+- **运行中**：宣战方 owner 进程按 5s 起倍增、最多 1 分钟重试，直到对方给出最终答复；
+- **重启后**：联盟是 `preload=startup`，owner 起服时全部加载；alliance Mod 在注册 handler 之后跑一次 `ScanWars`（列出本实例拥有的联盟，逐个读 `WarAcks`），对每个未清的标记再问一次。代价：每次起服每个联盟一次 Nest 读；
+- **重发宣战**：同一请求号的 `DeclareWar` 回放时标记仍在，也会再问；
+- **不迁移**：有未清标记的联盟 `alliance.transfer` 不搬（`TransferReport.Pending`），保证一直在问的就是持有标记的那个 owner；守卫不再因为有预约而不搬（它的期限在进程内、经路由 RPC 收尾，在哪个实例都能收）。
+
+最坏延迟：对方可达时是一次 RPC；对方实例不可达时，是它恢复后最多一个重试间隔（≤ 1 分钟）；宣战方 owner 崩溃时，是它同 sid 拉起、预加载完成之后的一次扫描。前提：标记所在的 sid 最终会再起来（App 单实例锁保证同一 sid 只有一个进程）。
+
+**确认迟到 / 重复无害**：`AcknowledgeWar` 在敌方联盟上按请求号记回执，同一请求号再来只回放（`Replayed`），不会重复记 `Wars` 也不会改结论；回执清理（`alliance.receipt_retention`，缺省 168h）之后才到的重复确认会执行 `CheckWar`，因为已在交战而被拒、只写一条拒绝回执，同样不改状态（demo 没有“停战”操作；以后加停战时，停战与迟到确认的先后要另行约束）。删标记是按请求号的条件事务，重试、回放、扫描并发收尾同一条标记只删一次。同实例宣战仍是一笔两边事务，没有标记。
+
+**登录补齐（决定 D）**：新增路由 RPC `Membership(target=GuardTarget(player))`：读守卫；守卫被占着就先 `healGuard`（名单里已没有的 joined 清掉、名单已安排座位的预约确认、过了期限的预约定论），再读一次，答 `State.AllianceID`（0 = 不在任何联盟；还在途的预约算 0）。从没入过盟的玩家没有守卫，路由检查答“实体不存在”。game 的 `EnterGame` 在 `refreshGuild` 里：副本不为 0 照旧对照 Mirror；副本为 0 时调 `Membership`（`guildLookupTimeout` = 1s 上界，在玩家接入的请求 goroutine 上，不在 Nest 池），拿到联盟号就在玩家事务里 `ShowGuild` 写回；失败（不可达、超时）副本保持 0、记 Warn，登录照常。代价：副本为 0 的玩家每次登录一次路由查找（多数是从没入过盟的玩家：调用方查路由缓存 → Redis → 所有权记录点读后答“不存在”，请求不发出）。
+
+**不变量（去 effect 之后不变）**：一人至多一盟；守卫是名单的缓存，只许过时地占着、绝不过时地空着（2.5A 的论证不依赖 effect，也不依赖期限）；成员通知、期限、宣战再确认都在写**答复之后**由服务层做，没有任何一项在 Nest handler 里做 I/O。“玩家在名单里但守卫空着”的交错：所有清空 / 释放守卫的写仍只来自 `ResolveGuard` / `ClearGuard` 的条件事务与同实例事务，与 2.5A 相同，本次没有新增清空守卫的路径（期限到期走的仍是 `healGuard`）。
+
+回归（`internal/rpc/alliance` 与 `game/controllers/player`）：
+
+- `TestAllianceWritesRecordNoEffect`：两个实例上建盟、同 / 跨实例入退、批准、踢人、同 / 跨实例宣战、预约过期限，任何实例记下 effect（reliable 或 best_effort）即红；同时要求通知按顺序直接发出、敌方一侧与过期预约在没有 effect 的情况下收尾。修前（基线 4998e9d1 的生成工程，只加一个空的 `runFollowUps` 桩）：`instance 3000: alliance writes recorded effects [alliance.war_declared (reliable) alliance.member_changed (best_effort) ×6]`、`instance 3001: … [alliance.member_changed (best_effort) ×3]`、`the enemy's side of the cross-instance war was not recorded without an effect: b's wars []`、`the reservation past its deadline was not settled without an effect: guard {… PendingRequestID:reserve-205 …}`、`membership notices sent straight from the service: got []`。
+- `TestLostWarAcknowledgmentIsMadeUp`：第一次确认丢失后运行中重试补上；丢失后宣战方“重启”（已布置的全部丢掉）由 `ScanWars` 补上；重复宣战与重复确认是回放、敌方只记一次；有等待的联盟不迁移。修前不适用（基线靠可靠 effect）；变异验证：`ScanWars` 改成空函数时红（`after the restart scan: e's wars [], a's waits [{war-a-e 3}]`），去掉运行中重试时红（`after the retry: b's wars [], a's waits [{war-a-b 2}]`）。
+- `TestReservationsOfDifferentPlayersDoNotWaitOnEachOther`（决定 F，确定性：用写准入闸门把 301 的预约卡在它的事务里、锁已持有，302 的预约必须在此期间完成）。修前：`302's reservation waited for 301's: remote.1: server error`（基线的 `handlerGuardReserve` 是 `[守卫, AllianceShard]` 多实体事务，302 排在 shard 锁后 2s 超时）。
+- `TestReservationDeadlineIsSettledByTheAlliance`（改为进程内期限：到期前不跑、联盟不可达时不释放并重布、可达后释放、迟到的批准答 `alliance_expired`、已坐下的确认；期限随“重启”丢失后由下一次批准收尾）、`TestTransferOwnershipMovesWhatThisInstanceOwns`（原 `…KeepsReservedGuards`：有预约的守卫现在照常搬，搬走后旧实例上的期限仍经路由收尾）。
+- `TestMembershipAnswersTheRostersAlliance`：成员答联盟号、名单里已没有的 joined 被清并答 0、已坐下而确认丢失的预约被确认、没有守卫答“实体不存在”。
+- `TestLoginLooksUpAGuildJoinedWhileOffline`（game 端点）：副本为 0 时问一次（带上界）并写回；没有守卫、预约在途、服务不可达都保持 0；副本不为 0 不问。修前：`a guild joined while offline: 0 lookups, last call "handlerPlayerGuild" []`。
+- e2e：`TestAllianceE2EGamePlayers` 加 ①b（E 下线期间被拉进公会，再登录后“我的公会”直接可读）；`TestAllianceE2EOneAllianceUnderRace` 的收敛检查改为前半个窗口只等进程内期限，之后用 `Membership` 模拟“下一个碰到守卫的请求”，并记下需要碰的个数（kill -9 守卫方时期限随进程丢失）。
 
 ### 2.6 要改玩家数据的操作：Saga（决定 1）
 
@@ -353,14 +406,14 @@ game 端点把 no responders 显示为“服务忙，请稍后”，把超时显
 
 ### 2.8 定时逻辑、仓库、排行
 
-- **定时**：Remote 托管实体不能挂 `roost add timer`（1.8）。每个实例一个普通本地实体 `AllianceShard`（按 sid 归属，用现有实体定时器），节点记“哪个联盟、什么时候、做什么”；到期回调用异步 Sender 给对应联盟发 Nest 消息。联盟在线期间的周期推进（例如活动阶段）可以用独占模式下的心跳。用运维命令迁移联盟时（2.7），旧实例把这些联盟的节点删掉，新实例在冷加载后补建（规则在骨架里写死）。Remote 实体原生持久定时器（D11 方案 C）不在本方案范围。
+- **定时**：Remote 托管实体不能挂 `roost add timer`（1.8）。~~每个实例一个普通本地实体 `AllianceShard`（按 sid 归属，用现有实体定时器），节点记“哪个联盟、什么时候、做什么”；到期回调用异步 Sender 给对应联盟发 Nest 消息。~~ 2026-11-05 起联盟服务没有持久定时器：唯一用到的预约期限改在进程内（2.5B），`AllianceShard` 删除。以后真有需要持久、准点的联盟定时任务时，再按“到期 → AfterCommit 把 I/O 交给服务层”的方式加回一个本地实体，并按联盟分散，不要回到“每实例一个、写路径都锁它”。联盟在线期间的周期推进（例如活动阶段）可以用独占模式下的心跳。用运维命令迁移联盟时（2.7），旧实例把这些联盟的节点删掉，新实例在冷加载后补建（规则在骨架里写死）。Remote 实体原生持久定时器（D11 方案 C）不在本方案范围。
 - **仓库**：联盟 DAO 的字段，写走 RPC；存入 / 取出涉及 Player 时按 2.6 走 Saga。
 - **排行**：联盟内排行（贡献）在联盟 DAO 里算；跨联盟排行用 `service/rank`，由联盟事务 `Emit` 的 effect 推进，不在锁内调 RPC。
 
 ### 2.9 多联盟事务
 
 - 同一实例上的多个联盟：一笔多实体 Nest 事务（Remote 原子批次，1.2）。宣战、外交、合并在缺省单实例部署下都是这种。
-- 分到不同实例时：用两步（发起方记意图 → 对方受理 → 发起方确认），每步带 RequestID，最终一致。需要原子的操作（合并）先用运维命令把参与的联盟迁到同一实例（2.7），再一笔事务。
+- 分到不同实例时：用两步（发起方记意图 → 对方受理 → 发起方确认），每步带 RequestID，最终一致。需要原子的操作（合并）先用运维命令把参与的联盟迁到同一实例（2.7），再一笔事务。宣战的两步（2026-11-05 晚起不用 effect）：发起方同一事务记 `Wars` 与持久的“待对方确认”（`WarAcks`），答复后服务层直接调对方的 `AcknowledgeWar`，对方最终答复后条件事务清标记；细节与最终一致的论证见 2.5B。
 - 是否要求跨实例的强一致外交，是产品选择，见第 6 节第 4 条。
 
 ### 2.10 生成器：最小增量（决定 3）
@@ -448,14 +501,14 @@ game-demo 是参考实现，不改成生成产物；以上四件生成器能力�
    - A（推荐）：在范围内。一个部署一个联盟服务，联盟可以有任意 game sid 的玩家，这正是独立服务的好处；成员记录带原服 sid 用于通知。代价：合服、分服时联盟不随某个服走，运维要知道这一点。
    - B：按服组隔离，联盟带服组标识，跨组加入拒绝。代价：多一层校验；需要时以后可以从 A 收紧到 B。
 3. **“一人一盟”的实现**（2.5，本方案推导出的设计，维护者此前没有定过）。
-   - A（推荐）：`AllianceMember` 守卫 + 两步（预约 → 联盟加成员 → effect 确认），期限到了按联盟权威收尾。
+   - A（推荐）：`AllianceMember` 守卫 + 两步（预约 → 联盟加成员 → effect 确认），期限到了按联盟权威收尾。（2026-11-05 起确认改为直接调用 + 惰性自愈，不用 effect：2.5A、2.5B。）
    - B：用 `service/directory` 按玩家预约。代价：多一个 Redis 存储与过期语义，不随 Remote 一起迁移恢复。
    - C：允许一人多盟（不做守卫）。代价：产品语义变化。
 4. **跨实例的多联盟操作**（2.9）。
    - A（推荐）：同实例一笔事务；跨实例的宣战、外交走两步最终一致；合并这类必须原子的先迁到同一实例。缺省单实例部署下全部是一笔事务。
    - B：要求跨实例也原子。代价：要在服务内再实现跨实例两阶段提交，框架现在没有。
 5. **在线通知的可靠性**（2.5 的被踢、入会通知）。
-   - A（推荐）：尽力投递，登录时从 Mirror 补齐。
+   - A（推荐）：尽力投递，登录时从 Mirror 补齐。（2026-11-05 晚：通知由服务层直接发；离线时的入会在登录时经 `Membership` 补齐，2.5B。）
    - B：每个玩家一个可靠收件箱，未读通知持久化、登录时补投。代价：多一个持久结构与清理规则。
 
 ## 7. 实施记录

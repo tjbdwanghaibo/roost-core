@@ -79,10 +79,8 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 | 通用订阅 `wiring/dataengine.SubscribeEffects` 与生成器骨架（`roost add effect`） | 共享 durable、`MaxAckPending` 缺省 256 并发在途、失败重投；Mongo inbox 按 EffectID 去重；框架从未承诺 effect 全局顺序（[NEST_TRANSACTION_WAL](../NEST_TRANSACTION_WAL.md) 只承诺至少一次与 `Effect.ID` 去重） |
 | game-demo `player.level_up` → 升级邮件（`level_up_mail.go`） | 每条 effect 独立发一封邮件、按 EffectID 幂等；同一玩家的 effect 同实体，仍按 WAL 顺序 |
 | game-demo `activity.phase_due` → `NotifyPhaseDue`（`activity.go`） | 只由 World 实体发出（同实体有序）；inbox 去重，`NotifyPhase` 按 game sid 幂等，迟到 / 重投答“已报告” |
-| alliance `alliance.member_changed` → `HandleMemberChanged`（`internal/rpc/alliance/guard.go`） | 2026-11-05 起是 best_effort（不进 WAL / outbox，本表的投影顺序与它无关）：只给玩家的 game 服发 `MemberNotice`，丢失或乱序只让显示过时到下一条通知或下次登录；守卫收尾不再经 effect（下节“effect 持久性”） |
-| alliance `alliance.reservation_due` → `HandleReservationDue` | 2026-11-05 起是 best_effort：向联盟 `Settle`（定论即终局）后按结论自愈守卫；丢了由下一个碰到守卫的请求自愈 |
-| alliance `alliance.war_declared` → `HandleWarDeclared` | `AcknowledgeWar` 按请求号幂等，拒绝为终局 |
-| game 侧收联盟通知（`internal/service/game/alliance_notice.go`） | 走总线消息，不是 effect；尽力而为、容忍乱序（同上） |
+| game-demo alliance 服务 | 2026-11-05 晚起不产生、不消费任何 effect（[联盟服务方案 §2.5B](../../maintenance/FEATURE-2026-11-04-alliance-service.md#25b-联盟不用-effect2026-11-05-晚)）：成员通知、预约期限、跨实例宣战的对方一侧都由服务层在写答复之后直接做 |
+| game 侧收联盟通知（`internal/service/game/alliance_notice.go`） | 走总线消息，不是 effect；尽力而为、容忍乱序 |
 | genre 夹具（`scripts/testdata/*`）、`service/`、`gameplay/` | 没有 `nest.Emit` / effect 消费者 |
 
 ### effect 消费者进程内并发
@@ -91,7 +89,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 
 - **并发度**：`EffectConsumer.Workers`，不写取 `dataengine.effect_consumer.workers`（缺省 16，`min:1 max:1024`，加载配置时校验一次；`Workers` 负数拒绝订阅）。`1` 时在回调里同步处理、不推迟结算，与此前逐条处理逐字相同；传输不支持推迟结算（`DeferSettle == nil`，测试替身）时同样退回逐条。
 - **顺序**：同一 `Key` 的 effect 在本进程按到达顺序逐条处理（前一条 handler 返回、结算之后才开始下一条），不同 `Key` 并发，同时在跑的 handler ≤ Workers。`Key` 为空的 effect 各自处理、不与任何 effect 排序——没有实体可排，串成一条会让所有无 Key 的 effect 互相挡住；仓内生产方都给了 Key（下表）。同一进程内不同实体的处理先后不再与流顺序相同；多实例共享 durable 时本来就不成立，nak 退避重投也本来就可能让同一实体的 effect 晚于它后面那条生效。
-- **派发**：回调解开信封（解不开照旧 Term）→ 取一个在途名额 → `JetStreamMsg.DeferSettle` 推迟结算 → 交给 [worker.KeyedDispatcher](../../../infra/base/worker/keyed.go)（与总线 RPC 的按顺序键派发同一份实现，[rpc_dispatch.go](../../../infra/network/bus/rpc_dispatch.go)）后返回，nats.go 接着投下一条；派发的任务等一个 worker 名额、跑 inbox 事务、按结果 `settle`。按 Key 排队而不是哈希到固定 worker：handler 会同步调别的服务（成员变化 effect 调守卫所在实例），固定 worker 让一个慢实体挡住同 worker 上的其他实体。
+- **派发**：回调解开信封（解不开照旧 Term）→ 取一个在途名额 → `JetStreamMsg.DeferSettle` 推迟结算 → 交给 [worker.KeyedDispatcher](../../../infra/base/worker/keyed.go)（与总线 RPC 的按顺序键派发同一份实现，[rpc_dispatch.go](../../../infra/network/bus/rpc_dispatch.go)）后返回，nats.go 接着投下一条；派发的任务等一个 worker 名额、跑 inbox 事务、按结果 `settle`。按 Key 排队而不是哈希到固定 worker：handler 会同步调别的服务（当时的联盟成员变化 effect 调守卫所在实例），固定 worker 让一个慢实体挡住同 worker 上的其他实体。
 - **准入上界**：已接纳未结算（排队与在跑）的 effect ≤ 消费者的 `MaxAckPending`（缺省 256，与 broker 侧在途上限同一个数）。满了回调停在准入处等一条结算（背压）：这条不确认、不 nak，nats.go 不投后面的；订阅 Stop（handler ctx 取消）时按 ctx 错误 nak 交还 broker。不 nak 而是等，是因为 nak 的那条会在退避后才重投，同一实体后面的 effect 会先被接纳，顺序就乱了。
 - **AckWait**：排队期间每 AckWait/2 发一次 in-progress（[fnats.KeepInProgress](../../../infra/network/nats/jetstream.go)，与总线 JetStream RPC 共用）；排队超过 AckWait/10 的开始处理前再发一次，broker 侧的重投期限不早于 handler 期限（AckWait，从开始处理算）减 AckWait/10。handler 开始后不再发心跳：卡住的 handler 照旧在 AckWait 后被 broker 重投，不会被心跳无限续命。
 - **不变**：inbox 事务、按 EffectID 去重、至少一次、ok / duplicate / retry / poison 计数与 Term 规则、App 停机 Drain 等全部推迟的结算完成（订阅的 `Closed`）。handler panic 只结束这一条（nak 重投），同 Key 后面的照常处理。
@@ -102,9 +100,6 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 | 消费者 | Key | 依据 |
 | --- | --- | --- |
 | game-demo `player.level_up` → 升级邮件（`level_up_mail.go`） | 玩家 ID | 每条独立发一封邮件、`RequestID` = EffectID 幂等；同一玩家仍按到达顺序 |
-| alliance `alliance.member_changed` → `HandleMemberChanged`（best_effort，2026-11-05 起） | 玩家 ID | 只给这个玩家的 game 服发通知；同一玩家的通知同 Key、在本进程按到达顺序，乱序只让显示过时 |
-| alliance `alliance.reservation_due` → `HandleReservationDue`（best_effort，2026-11-05 起） | 玩家 ID | 向联盟 `Settle`（期限已过，定论即终局，联盟侧按路由键有序），再用条件守卫事务按结论自愈这个玩家的守卫；同一联盟不同玩家的 `Settle` 由联盟实体串行裁决 |
-| alliance `alliance.war_declared` → `HandleWarDeclared` | 敌方联盟 ID | `AcknowledgeWar` 按请求号幂等，拒绝为终局；同一敌方联盟仍有序 |
 | `roost add effect` 生成的骨架 | 业务传给 `Emit<Topic>(key, …)` 的 key | 骨架注释与 `roost help effect` 写明“同 Key 有序、不同 Key 并发、无 Key 不排序、跨副本不保证” |
 
 不经 `SubscribeEffects`、不受影响的：saga 启动中继 `SubscribeNestStarts`（自己的 `Workers`，本来就不保证顺序）；game-demo `activity.phase_due`（`nestwal.SubscribeJetStreamEffects` 直接订阅，仍在回调里逐条）。没有发现依赖跨实体顺序的消费者。
@@ -126,7 +121,7 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 - **消费顺序 `EffectConsumer.Order`**（两种持久性都适用）：`entity`（缺省）即上一节“同 Key 有序、不同 Key 并发”；`none` 不按 Key 排队（`KeyedDispatcher` 的空键），只受 Workers 上限。全局顺序仍只有生产端 `dataengine.projection.effect_order: wal`，不在消费者选。
 - 回归：[transaction_test.go](../../../framework/nest/transaction_test.go) `TestBestEffortEffectIsPublishedOnlyAfterTheCommitIsDurable`（async 升 strict、记录里没有 best_effort）、`TestBestEffortEffectIsNotPublishedWithoutACommit`（handler 失败 / 提交被拒 / 结果未知 / 没有发送能力）；[pipelined_commit_test.go](../../../framework/nest/pipelined_commit_test.go) `TestBestEffortEffectWaitsForThePipelinedTicket`；[effects_test.go](../../../wiring/dataengine/effects_test.go) `TestSubscribeEffectsWithOrderNoneDoesNotQueueByEntity`、`TestSubscribeEffectsBestEffortHasNoInboxAndNoRedelivery`、`TestBestEffortPublisherSendsAfterEnqueueAndDropsWhenFull`。变异核对（发送挪到持久提交之前）：strict / pipelined / 被拒 / 结果未知四条全红。
 
-仓内的 best_effort 生产方只有 game-demo 联盟的 `alliance.member_changed`（成员通知）与 `alliance.reservation_due`（预约期限通知）；联盟守卫的收尾不再经 effect，改为“守卫是名单的缓存、碰到时自愈”（[联盟服务方案](../../maintenance/FEATURE-2026-11-04-alliance-service.md)）。
+仓内目前没有 best_effort 生产方：引入它的 game-demo 联盟的 `alliance.member_changed` / `alliance.reservation_due` 已于 2026-11-05 晚随“联盟全部不用 effect”删除（[联盟服务方案 §2.5B](../../maintenance/FEATURE-2026-11-04-alliance-service.md#25b-联盟不用-effect2026-11-05-晚)）。两种模式与上面的契约保留给其他服务；框架回归（`transaction_test.go`、`pipelined_commit_test.go`、`effects_test.go` 与 NATS 集成用例）不依赖 demo。
 
 ## 3. 并发、失败与恢复的修改检查
 

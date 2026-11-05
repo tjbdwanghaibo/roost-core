@@ -343,6 +343,23 @@ func TestAllianceE2EGamePlayers(t *testing.T) {
 	}
 	t.Logf("GAMES A on game 1000 was pushed %+v", notice)
 
+	// ①b 离线时入会（维护者 2026-11-05 决定 D）：E 在 game 1001 建角后下线，期间被拉进公会（RPC，等价于离线时被批准）——
+	// 成员通知到了 game 1001 但 E 不在线，副本仍是 0；E 再登录时 enter_game 发现副本为 0，向 alliance 问一次守卫
+	// （Membership），把公会号写回自己的副本，“我的公会”直接可读。两处等待只是让下线与通知先落定，不是正确性的前提：
+	// 通知若赶上 E 在线，副本由通知写上，同样满足断言。
+	e := s.login(games[1], s.prefix+"-e")
+	_ = e.conn.Close()
+	time.Sleep(time.Second)
+	if _, err := s.client(nil, 3*time.Second).Join(s.ctx, fmt.Sprintf("rpc-join-offline-%d", e.id), e.id, games[1].sid, target(t, guildID)); err != nil {
+		t.Fatalf("E joined while offline: %v", err)
+	}
+	time.Sleep(time.Second)
+	e = s.login(games[1], s.prefix+"-e")
+	if mine := e.guildInfo(0, 0); mine.Code != 0 || mine.GuildID != guildID {
+		t.Fatalf("E after logging in again: my guild %+v, want guild %d (looked up at login)", mine, guildID)
+	}
+	t.Logf("GAMES E joined guild %d while offline and sees it after logging in again", guildID)
+
 	// ② 捐献只扣一次、只加一次。
 	b.addGold(500)
 	before, _ := s.funds(guildID)

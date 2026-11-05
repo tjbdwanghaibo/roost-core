@@ -247,16 +247,20 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
 守卫 `AllianceMember` 不同步给 game 进程（`snapshots=none`：它的提交只写守卫文档，没有 Remote 快照、L2 条目与广播）；game
 只镜像 `Alliance`。“玩家在哪个公会”是 `PlayerDao.GuildID`（`persist,sync`，附近玩家头顶也显示）：玩家自己的入会 / 退会 /
 建盟成功后在玩家事务里写（`ShowGuild`；建盟在 `guild_op_status` 看到 saga 完成时写），在线时收到成员变化通知更新，登录时
-（`EnterGame` 的 `refreshGuild`）对照该公会的 Mirror：公会不存在或名单里已没有这名玩家（离线时被踢 / 退出的通知没收到）就清掉。
-通知是 alliance 在变更持久之后以 **best_effort effect** 发出、消费者按成员的原服 sid 经 Bus 转来的 `alliance.member_notice`
-（`internal/service/<game>/alliance_notice.go`）：玩家在本进程在线才处理——改副本（离开只清“正显示这个公会”的，晚到的旧
-退盟不会盖掉新公会）并推 `GuildNoticePush`（10104）；至多一次，丢了不重发。离线时被批准入会这类“加入”的通知没人补：
-副本要到下一条通知或玩家自己的公会操作才会显示（[KNOWN-LIMITS](../docs/maintenance/KNOWN-LIMITS.md)）。
+（`EnterGame` 的 `refreshGuild`）对照该公会的 Mirror：公会不存在或名单里已没有这名玩家（离线时被踢 / 退出的通知没收到）就清掉；
+副本为 0 时向 alliance 问一次（只读 RPC `Membership`，按玩家守卫路由；守卫被占就先自愈再答），答出公会就在玩家事务里写回——
+离线时被批准入会的玩家下次登录就能看到公会。这次查询在登录流程的 RPC 阶段做（不在快池里等），超时 1 秒；失败只记日志、副本保持 0，
+不影响登录。
+通知是 alliance 写答复成功之后由**服务层直接**按成员的原服 sid 经 Bus 发的 `alliance.member_notice`（不经 effect；
+`internal/service/<game>/alliance_notice.go`）：玩家在本进程在线才处理——改副本（离开只清“正显示这个公会”的，晚到的旧
+退盟不会盖掉新公会）并推 `GuildNoticePush`（10104）；至多一次，丢了不重发、只记日志与 `alliance.member_notice_lost_total`。
 
-alliance 服务内部也不再有可靠 effect：守卫是名单的缓存，只允许“过时地占着”、绝不“过时地空着”。跨实例两步写成功后服务直接调
-`ResolveGuard` / `ClearGuard` 收尾（尽力而为）；丢了，下一个碰到守卫被占的请求（Join / Found 的预约、`ClaimReward`）先向持有它的
-联盟问权威结论（`Settle`：预约过了期限才定论为过期，否则只问不写），再用条件守卫事务落下结论后照常判断；预约的期限由 `AllianceShard`
-的持久定时器发一条 best_effort 的 `alliance.reservation_due`，消费者做同样的自愈。
+alliance 服务不产生、不消费任何 effect（2026-11-05 晚起）：守卫是名单的缓存，只允许“过时地占着”、绝不“过时地空着”。跨实例两步写成功后服务直接调
+`ResolveGuard` / `ClearGuard` 收尾（尽力而为）；丢了，下一个碰到守卫被占的请求（Join / Found 的预约、`ClaimReward`、登录查询）先向持有它的
+联盟问权威结论（`Settle`：预约过了期限才定论为过期，否则只问不写），再用条件守卫事务落下结论后照常判断。预约的期限由持有守卫的进程在内存里
+排一个到期回调（预约成功时排、收尾时撤），到点做同样的自愈；进程重启丢了它，就退回“下一个碰到守卫的请求自愈”。跨实例宣战：宣战方在
+自己的事务里记下“等对方确认”，答复后服务直接调对方的 `AcknowledgeWar`（按请求号幂等），拿到最终答复才条件清掉标记；没拿到按退避重试，
+进程重启时启动扫描补发（[联盟服务方案 §2.5B](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md#25b-联盟不用-effect2026-11-05-晚)）。
 
 多实例：`sh deploy/dev/second-alliance.sh start` 在同一台机器上起第二个 alliance（sid 1001、ops 9210）。建盟经队列组分到两个实例，
 每个联盟归接到它的实例；其余调用经路由登记找到 owner。缩容一台：在它的 ops 上 ① `alliance.stop_founding`（退出 `Found` 的队列组，
