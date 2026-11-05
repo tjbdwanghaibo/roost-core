@@ -33,7 +33,7 @@ Mongo transaction首先标记`Applied`；唯一的`RecoverOutbox`协调者负责
 
 Durability 1/2/3（async / strict / 随 strict 路径提交的 pipelined）的 WAL 投影不产生 Rejected：投影器写权威遇到 fence / 版本冲突是 `ErrProjectionConflict` fatal（进程级 fail-stop，记录不 ack）。strict / pipelined 的 `Commit` 失败因此一律带 `entity.ErrRemotePersistenceIndeterminate`（回复判别表第 2 行），框架自带 remoteentity 只在 memory 下回复 `nest.ErrRemotePartRejected`；finalizer 对 WAL 事务读不到结论时只隔离重试，不写拒绝。维护者 2026-10-14 据此删除了只供测试注入 WAL 级拒绝的 `MongoCommitter` / `Backend.RejectRemoteCommitsInTransaction` 与 `Manager.RejectRemoteTransaction`；守卫用例 `TestWALRemoteAuthorityConflictNeverProducesRejected`、`TestRemoteWALCommitFailureNeverRepliesRemotePartRejected`。
 
-协调者共用启动恢复、显式恢复、重试和停止屏障，页内按完整事务有界并行；涉及任意同一Entity的事务按扫描顺序尝试，失败仍保留Applied。正式配置`remote_entity.outbox_publish_workers`默认8（0取8），范围1～64；设1用于串行诊断，不随Nest io 池 worker数放大。带游标的正式Backend可越过失败页继续扫描，不删除失败记录。页间先排空；停止必须等已派发发布结束。
+协调者共用启动恢复、显式恢复、重试和停止屏障，页内按完整事务有界并行；涉及任意同一Entity的事务按扫描顺序尝试，失败仍保留Applied。正式配置`remote_entity.outbox_publish_workers`默认32（0取32；2026-11-05 由8调大，strict 写等发布完成才答复，8 个并发在联盟 Join 约 330 次/秒时已占满约 86%），范围1～64；设1用于串行诊断，不随Nest io 池 worker数放大。带游标的正式Backend可越过失败页继续扫描，不删除失败记录。页间先排空；停止必须等已派发发布结束。
 
 未发布记录不设置TTL，只有完成发布的记录才进入过期回收。发布与ACK保持幂等。实体侧的`AcknowledgeRemoteCommit`必须并发安全：outbox和Committed回执的本地确认可能交错，生成实体经`Tracker.AdvanceVersion`原子CAS满足。阶段耗时见[指标](OBSERVABILITY.md)，功能验收不能当作新TPS结论。
 

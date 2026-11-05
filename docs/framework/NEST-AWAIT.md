@@ -10,7 +10,7 @@
 | `nest.long` | 长业务 | Guard 保护 |
 | `nest.io` | I/O、冷加载、Remote 准备与收尾 | 禁止直接取得 Guard/Cast |
 
-每组分别配置 `workers`、`queue_capacity`。配置统一按职责使用 short/long/io。长池默认 worker 数等于短池，等待容量 4096；短池与 I/O 池沿用既有缺省值。CPU 密集长业务仍消耗 CPU，更多 worker 不代表更多算力。
+每组分别配置 `workers`、`queue_capacity`。配置统一按职责使用 short/long/io。长池默认 worker 数等于短池，等待容量 4096；短池沿用既有缺省值；I/O 池等待容量缺省 64，worker 缺省 max(256, 4×短池)（2026-11-05 由 max(32, 4×短池) 调大：strict / Remote 写从准备到持久确认都占一个 I/O worker，缺省须不低于 `remote_entity.max_concurrent_writes` 的缺省 128，让写准入先答“可重试”，回归 `wiring/nest` 的 `TestDefaultIOPoolCoversRemoteWriteAdmission`）。CPU 密集长业务仍消耗 CPU，更多 worker 不代表更多算力。
 
 一个接线配置例子（这些数值只用于说明，不是容量建议）：
 

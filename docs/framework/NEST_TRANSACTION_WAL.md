@@ -130,7 +130,7 @@ WAL 是 at-least-once replay。以下情况会重复执行：mutation 已落库�
 - 不允许把不可幂等的外部调用放入 `AfterCommit`；应改为 `nest.Emit`；
 - Mongo Store 使用 transaction receipt 与 expected/next version CAS 吸收重复 replay；版本冲突只有在已投影完全相同事务时才是幂等成功。
 
-投影可以按实体分片并行（`dataengine.projection.workers`，缺省 8，1 = 串行）：replay 仍按 append 顺序读出，冲突键（文档 `_id`、回执 / 协调文档身份、effect ID、事务 ID；`dataengine.projection.effect_order: wal` 时再加“带 effect”这一整类）相交的记录保持 append 顺序投影，不相交的记录同时投影——缺省（`entity`，维护者 2026-11-05）下不相干实体的 effect 进 outbox 的先后可能与 append 顺序不同，effect 本来只承诺至少一次与 `Effect.ID` 去重，不承诺全局顺序（[impl/03 effect 顺序范围](impl/03-dataengine.md#effect-顺序范围)）；checkpoint 只推进到连续成功前缀，崩溃后前缀之后已投影的记录由事务标记（批量与多 mutation / 特殊记录）或“窗口内同文档最后一条”的 `_last_tx` 判定为已应用，不因文档已是更高版本而误报冲突。投影冲突仍 fail-stop，`Flush`、关闭、原生步骤与运维卸载屏障不变。详见 [impl/03 §2A](impl/03-dataengine.md#2a-聚合恢复与投影实现走读)。
+投影可以按实体分片并行（`dataengine.projection.workers`，缺省 32（2026-11-05 由 8 调大），1 = 串行）：replay 仍按 append 顺序读出，冲突键（文档 `_id`、回执 / 协调文档身份、effect ID、事务 ID；`dataengine.projection.effect_order: wal` 时再加“带 effect”这一整类）相交的记录保持 append 顺序投影，不相交的记录同时投影——缺省（`entity`，维护者 2026-11-05）下不相干实体的 effect 进 outbox 的先后可能与 append 顺序不同，effect 本来只承诺至少一次与 `Effect.ID` 去重，不承诺全局顺序（[impl/03 effect 顺序范围](impl/03-dataengine.md#effect-顺序范围)）；checkpoint 只推进到连续成功前缀，崩溃后前缀之后已投影的记录由事务标记（批量与多 mutation / 特殊记录）或“窗口内同文档最后一条”的 `_last_tx` 判定为已应用，不因文档已是更高版本而误报冲突。投影冲突仍 fail-stop，`Flush`、关闭、原生步骤与运维卸载屏障不变。详见 [impl/03 §2A](impl/03-dataengine.md#2a-聚合恢复与投影实现走读)。
 
 同一 `CommitRecord` 的普通 mutation、Remote commit、Saga receipt 与 effect staging 按需进入一个 Mongo transaction，读侧不会看到跨文档中间态。生成 DAO 的 WAL version 使用 `dataengine.Tracker.Version()+1`，投影确认后由 `AcceptMutation` 推进。
 

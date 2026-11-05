@@ -1,0 +1,113 @@
+# 联盟 `Join` 逐级加并发：卡点与缺省值调整（2026-11-05 下午）
+
+目标（维护者 2026-11-05）：一个 alliance 实例上、分散到多个联盟的 `Join` / `Leave` 至少 1000 次/秒。上一轮（[alliance-join-20261105](../alliance-join-20261105/README.md)）在 16 个联盟、每个联盟 1 个并发下到约 92～108 次/秒。本轮把并发逐级加到 16 / 64 / 128 / 256（联盟数同步加到最多 256 个，每个 worker 一个联盟、玩家都不同），在吞吐不再上升的那一级用 `/metrics`、goroutine 快照、CPU / block / mutex profile、Mongo `serverStatus` 计数与 profiler 定位卡点。
+
+结论：
+
+1. **16 并发时是压测并发不够**：单条 `Join` 约 150～180 ms，16 并发约 80～90 次/秒，加并发后吞吐继续上升。
+2. **64 并发起被框架缺省值依次封顶**（都是 Little 定律：上限 ≈ 并发度 ÷ 单次耗时）：
+   - **Nest I/O 池 40 个 worker**（缺省 max(32, 4×短池)）：strict Remote 写从准备到持久确认都占一个 I/O worker。64 并发时 goroutine 快照里 40 个 worker 全停在 `waitTrackedRemoteTransaction`；128 并发起 I/O 队列（64）满，八成请求被拒，而且答的是 `CodeInternal`（“server error”），不是“可重试”。
+   - **投影通道 8 条**（`dataengine.projection.workers` 缺省 8）：只把 I/O 池调到 512 时，128 并发仍约 153 次/秒，一个并行窗口约 100 条记录、每条通道约 12 条串行 Mongo 事务（单条约 52 ms），窗口约 650 ms。
+   - **Remote 提交 outbox 发布 8 个并发**（`remote_entity.outbox_publish_workers` 缺省 8）：上面两项放开后，约 330 次/秒时 8 个发布 worker 已占满约 86%（单事务约 21 ms：两份快照 + 写“已发布”）。
+3. **这台机器的硬上限是 Mongo**：缺省值放开后 128～256 并发约 340～400 次/秒（调用方对“可重试”退避重试），再放开写额度、I/O 池、effect outbox 并发都不再上升；每次 `Join` 约 22～25 条 Mongo 命令（约 1.15 个提交的事务），直接压同一副本集的对照数据见下。**本机到不了 1000/s**。
+4. **effect 链路跟不上（不在 RPC 答复路径上，但决定能否持续）**：DataEngine effect outbox 认领逐条撞车，2 个与 8 个 worker 都只发约 40 条/s（已修，约 220～330 条/s）；`SubscribeEffects` 的消费者在一个进程里逐条处理，约 50 条/s（未改，交维护者决定）。
+
+## 环境与方法
+
+- macOS（Apple M5，10 核），Go 1.27.3；`scripts/mirror-local.sh` 私有依赖（偏移 36000：Mongo 三节点副本集同盘、WiredTiger 缓存 0.5 GB；NATS 三节点 JetStream；Redis）+ 自起 etcd；生成的 game-demo 二进制起一个 alliance 实例（3000，`alliance.max_members` 500）。本机有其他会话的负载，1 分钟 load average 6～48，单轮 12～15 s，数字只作量级与同机对照。
+- 探针（未提交，与 `TestAllianceE2ERPCConcurrency` 同一套 harness）：建最多 257 个联盟、`Info` 预热；每一级并发 C：C 个 worker 各打一个联盟，限时新玩家 `Join` → 同一批玩家 `Leave` → 再 `Join` 另一个联盟（守卫已存在）→ 再 `Leave`。“不重试”的探针把每次调用的答复照记；“重试”的探针对“可重试”（`servicerpc.OutcomeRetryable`）退避 20～50 ms 后用同一 RequestID 重试（至多 50 次），只计最终结果，模拟真实调用方。表里是**成功**次/秒。
+- 检出：修前 = `9bf1e9e4` 的缺省（I/O 池 40 / 队列 64、投影 8 通道、Remote 发布 8）；修后 = 本轮改动（I/O 池 256、投影 32、Remote 发布 32、effect outbox 批量认领 / 确认、队列满答“可重试”）。“新代码 + 旧缺省”用同一二进制、配置写回旧值，用来把缺省值的作用与代码改动分开。
+
+## 每一级并发（新玩家 `Join`，成功次/秒 · p50；失败指最终答复不是成功）
+
+| 并发 | 修前缺省（3 轮） | 新代码 + 旧缺省（2～3 轮） | 修后缺省（2～3 轮） |
+| --- | --- | --- | --- |
+| 16 | 80.3 · 181 ms | — | — |
+| 64 | 151.9 / 175.7 / 176.7 · 350～390 ms | 148.9 / 179.5 · 346～411 ms | 264.4 / 236.3 · 228～251 ms |
+| 128（不重试） | 103～162，**81～84% 失败**（I/O 队列满） | 154.8 / 185.1，81～83% 失败 | 341.5 / 377.0，0 失败 · 310～335 ms |
+| 128（重试） | — | 181.7 · 662 ms | 341.6 · 350 ms |
+| 256（不重试） | 65～89，97～98% 失败 | 105～114，97% 失败 | 213～289，89～91% 失败（写额度 128 答“可重试”） |
+| 256（重试） | — | 194.0 · 990 ms，**11% 最终失败** | **398.3** · 554 ms，0 失败 |
+
+`Leave` 与守卫已存在的 `Join` 同一量级（修后重试 256 并发：`Leave` 364.2、守卫已存在 `Join` 380.5；修后 64 并发 `Leave` 260～292）。修前 128 并发起 `Leave` 的成功数很低，是因为它退的是上一段没入成的玩家（答“不是成员”）。
+
+各候选旋钮单独放开（新代码之前的同一基线，不重试，128 并发）：
+
+| 配置 | 新玩家 `Join` | 卡点 |
+| --- | --- | --- |
+| 缺省 | 153～162（81% 失败） | I/O 池 40 |
+| I/O 512 | 153 | 投影 8 通道（24 个窗口 / 16 s，单条事务约 52 ms） |
+| I/O 512 + 投影 64 | 255 | Mongo / Remote 发布 |
+| I/O 512 + 投影 16 / 32 / 64 + Remote 发布 32 + 连接池 256 + effect outbox 8 | 253 / 284 / 255～263 | Mongo |
+| 修后缺省 + 写额度 512 + I/O 768 + effect outbox 8（重试） | 272（256 并发 270～347） | Mongo（effect outbox 跟上了，抢走一部分 Mongo 容量） |
+
+## 各阶段（`/metrics` 差值，修后缺省前一版的 I/O 256 + 投影 32 配置，128 并发新玩家 `Join`，4042 次）
+
+| | 均值 |
+| --- | --- |
+| Nest 派发总耗时（`nest_dispatch_cost`） | 349 ms |
+| 其中 Remote 写准备（两个实体各一次 `GrantWrite`） | 59 ms |
+| handler 持锁 | 18 ms |
+| 等 strict 确认（WAL fsync + 投影窗口 + Remote 发布） | 257 ms |
+| Remote 发布单个事务 / 其中写“已发布” | 21 / 19 ms（8 个 worker 合计忙 85 s / 12.3 s ≈ 86%） |
+| WAL fsync | 9.3 ms（702 批 / 4042 次追加，已是组提交） |
+
+CPU：alliance 进程 0.5～1.2 核（profile 里 35% 是系统调用），三个 mongod 合计 1.5～3 核，机器 load average 13～48。block / mutex profile 没有框架内的锁热点；goroutine 快照里等待的都是 Mongo 往返与 strict 确认。
+
+## Mongo 是本机上限：每次 `Join` 的 Mongo 量与直接压测对照
+
+`serverStatus` 差值（128 并发）与 profiler（16 并发，全部业务库 level 2）一致：每次新玩家 `Join` 约 10 次 find、3 次 findAndModify（两次 `GrantWrite` CAS + effect 认领）、4 次 insert、5 次 update（7 个文档更新），约 22～25 条命令，提交 1.15 个事务；新玩家另有 1 个只读事务被中止（守卫冷加载未命中）。守卫已存在的 `Join` 与 `Leave` 约 22 条命令、1.8～1.9 个事务（含 effect 消费者的 inbox 事务）。128 并发约 340 次/秒时主节点约 9400 条命令/秒。
+
+直接压同一副本集（`w:majority` + `j:true`、读 majority，与框架客户端相同；Go 小程序，10 s 一档，未提交）：
+
+| 形状 | c1 | c16 | c32 | c64 | c128 | c256 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 单文档 update | — | — | — | 3429/s | — | 7935/s |
+| 单文档 findAndModify | 112/s（p50 8.2 ms） | — | — | 3542/s | — | 7940/s |
+| 事务（1 读 + 5 写 + 1 插入） | 114/s（p50 8.6 ms） | 918/s | 1182/s | 1642/s | 367/s | 297/s |
+| 简化的 Join 形状（2 次 CAS + 上面的事务 + 1 次 update，约 9 条命令） | 28/s（p50 34 ms） | 229/s | 410/s | 756/s | 855/s | 240/s |
+
+本机单次 majority 写约 8 ms（三个成员同盘、日志 fsync），事务在 128 并发以上明显下降（缓存 0.5 GB、CPU 被其他负载占用）。只有约 9 条命令的简化形状最好约 750～850 次/秒；真实 `Join` 约 22～25 条命令，按命令数折算约 300～400 次/秒，与修后的实测吻合。
+
+## 改了什么
+
+| 改动 | 证据 |
+| --- | --- |
+| `nest.io.workers` 缺省 max(32, 4×短池) → max(256, 4×短池) | 修前 64 并发 40 个 I/O worker 全在等 strict 确认；回归 `TestDefaultIOPoolCoversRemoteWriteAdmission`（修前 `default I/O workers = 32, below the default Remote write admission 128`） |
+| `dataengine.projection.workers` 缺省 8 → 32 | 只放开 I/O 池时 128 并发 153 次/秒、投影窗口约 650 ms；放开投影后 255～284 |
+| `remote_entity.outbox_publish_workers` 缺省 8 → 32 | 约 330 次/秒时 8 个发布 worker 已忙约 86% |
+| Nest 派发队列满（`nest.ErrQueueFull`）答“可重试” | 修前答 `CodeInternal`（“server error”）；回归 `TestRPCWriteAnswerRedirectsToTheDurableOwner` 新增一例（修前 `outcome=unknown`） |
+| DataEngine effect outbox 一批认领三次往返、一批确认一次往返 | outbox 发布约 30～70 → 220～330 条/s；回归见 [impl/03 第 6A 条](../../../framework/impl/03-dataengine.md) |
+
+修后与修前的同机对照：64 并发约 150～180 → 236～264 次/秒；128 并发从八成失败到 0 失败、约 340～377 次/秒；256 并发（调用方重试）194（11% 最终失败）→ 398（0 失败）。
+
+effect outbox（同一批运行的 `/metrics`：暂存 = 成功的 `Join` / `Leave` 数，发布 = 暂存 − outbox 积压增量）：
+
+| | 暂存 | outbox 发布 | 消费者（`alliance-member-changed`） |
+| --- | --- | --- | --- |
+| 修前（2 个 worker；8 个 worker 也约 40） | 37～181/s | 29～72/s | 36～49/s |
+| 修后（2 个 worker） | 236～398/s | 195～326/s | 36～57/s |
+| 修后 + `dataengine.outbox.workers: 8` | 254～347/s | 263～338/s（跟上） | 30～43/s |
+
+## 离 1000/s 还差什么
+
+- **本机**：Mongo 约 300～400 次/秒封顶，差约 2.5～3 倍；框架缺省值已不是本机的卡点（再放开写额度、I/O 池都不再上升）。
+- **生产硬件上的估算（未实测）**：1000 次/秒约需主节点 2.2～2.5 万条命令/秒、约 1200 个提交的事务/秒、约 8000～9000 次单文档 majority 写/秒。三成员分机、NVMe、同机房 RTT 0.2～0.5 ms 时单次 majority 写约 1～2 ms（本机 8 ms），这个量是否够要在目标硬件上直接压（本轮的直接压测程序可复用）。框架侧按 Little 定律、单次 `Join` 约 50～80 ms 估：I/O 池 256 → 3000/s 以上；写额度 `max_concurrent_writes` 128 → 约 1600～2500/s；投影 32 通道（单条事务约 10 ms）→ 约 3000/s；Remote 发布 32 → 5000/s 以上；effect outbox 2 个 worker 一批 64 条 → 每个 worker 约 1500/s。**仍会低于 1000/s 的是 effect 消费者**：`SubscribeEffects` 一个进程逐条处理（nats.go 单 goroutine 回调，`handleEffect` 不推迟结算），每条一个 Mongo inbox 事务，生产上约 200 条/s / 进程；成员变化通知与跨实例入会的守卫收尾都在这条链上，持续 1000/s 时 JetStream 上会一直积压。
+- 写额度 128 在本机 256 并发时答“可重试”，但放到 512 不提高吞吐（被 Mongo 卡住）；生产上它约在 1600～2500/s，暂不改。
+
+## 需要维护者决定（未改）
+
+- **A. effect 消费者在进程内并发**（推荐）：`SubscribeEffects` / `EffectConsumer` 加 `Workers`（例如缺省 16），按信封的 `Key`（实体）分片，同一实体仍在一个进程内按到达顺序逐条处理，不同实体并发（用已有的 `DeferSettle` 推迟结算）。收益：消费速率约 × 并发度（本机预计从约 50 到数百条/s，未测）。代价：同一进程内不同实体的 effect 处理先后不再与流顺序相同——多实例共享 durable 时这本来就不成立，仓内消费者已按此核对过（[impl/03 effect 顺序范围](../../../framework/impl/03-dataengine.md#effect-顺序范围)），但这是消费侧的并发语义变化。B：保持逐条，靠多开实例分摊。
+- **B. effect outbox 缺省 worker 数**：生成配置写死 `dataengine.outbox.workers: 2`；本机 2 个在约 330 次/秒时开始积压，8 个能跟上，但会多占 Mongo（RPC 吞吐因此低一些）。可选：生成配置改 4 或 8（要改模板、重生成夹具），或保持 2 由部署按写入峰值定。
+- **C. 减少每次 `Join` 的 Mongo 命令数**（都动 Remote 持久链路契约，只列方向，未做实验）：两次 `GrantWrite` CAS 并进投影事务（写权威栅栏挪到投影时判定）；Remote 发布的两份快照写进投影事务；投影后 `ApplyRemoteCommits` 的 `CommitStatus` 回读（事务刚写过）省掉；带 Remote / effect 的记录在一条通道里合成一个 Mongo 事务（现在每条一个）。合计可能省 20～30% 命令，离本机 1000/s 仍远。
+- **D. strict 写在投影完成（Applied）而不是发布完成（Committed）时答复**：每次省约 20～40 ms 延迟与一部分 I/O worker 占用，不提高 Mongo 上限；改的是 strict 的答复契约。
+
+## 未验证 / 未定位
+
+- 修后 + 写额度 512 时 256 并发仍有大量“可重试”答复（重试 5 万多次），来源没有拆（I/O 队列、写额度之外的哪一项）。
+- 修后 `Leave` / 守卫已存在 `Join` 在 128 并发不重试时有 6～31% 答“可重试”（写额度 128 含后台收尾的占用），重试后为 0。
+- 生产硬件上的 Mongo 容量没有实测，上面的估算只按命令数与 Little 定律推算。
+
+## 复跑
+
+探针用例与脚本在本轮的证据目录（`artifacts/probe/`，未提交）：`run-scale.sh <检出> <标签>`，环境变量 `JOINSCALE_LEVELS`、`JOINSCALE_ALLIANCES`、`JOINSCALE_SECONDS`、`JOINSCALE_PROFILE`、`JOINSCALE_PERL`（改生成的 alliance 配置）、`JOINSCALE_RETRY=1`（重试版）、`JOINSCALE_MONGOSNAP` / `JOINSCALE_MPROF_HOOK`（Mongo 计数与 profiler）。正式入口仍是 `TestAllianceE2ERPCConcurrency`（`scripts/test-alliance-e2e.sh`，`ALLIANCE_E2E_PERF=1`）。
