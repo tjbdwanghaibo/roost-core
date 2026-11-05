@@ -23,7 +23,7 @@ v1.25.0已实现嵌入 Game 的 TCP 与独立 Gate 两种正式接入。两者�
 
 使用发现时，两端设置 `RegisterDiscovery=true`，并装配 `etcd.NewEtcdMod(etcd.WithoutServiceRegistration())`。接入监听/订阅启动及 NATS Flush 完成后才登记候选；一个 Discovery 只有一个登记拥有者。Game 候选必须带 `access.incarnation` 与 `access.ingress_ready=true`。Gate 默认用 FixedGameResolver 只查固定 SID；也可以显式注入 ResolveGame。发现只是候选，真正的身份由 SingletonIdentityChecker 核对。
 
-NATS ACL 必须限制每个进程的来源前缀和自己的 reply inbox。应用 payload 自报 GateID 不构成认证。正式权限配置和已测边界见[具体契约](GATEWAY-IMPLEMENTATION.md)；测试用私有 broker 和临时测试用户，不要求修改共享业务 broker。
+信任边界是内网加 Gate 的客户端鉴权（维护者 2026-11-05）：NATS 只供内部服务使用、只在内网可达，开连接级账号（`nats.username` / `password`）；Gate 有状态，只有鉴权并绑定成功的连接才能把数据经 NATS 送进 Game。按 subject 限制每个进程来源前缀与 reply inbox 的 NATS ACL 是可选加固，不是部署前提。不开 ACL 时，应用 payload 自报的 GateID 与 subject 只防误投、不防内网进程冒充——内网进程被攻破不在这个模型的防护范围内。可选 ACL 的权限配置和已测边界见[具体契约](GATEWAY-IMPLEMENTATION.md)；测试用私有 broker 和临时测试用户，不要求修改共享业务 broker。
 
 ## 3. 绑定与请求结果
 
