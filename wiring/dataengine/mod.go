@@ -164,7 +164,10 @@ type config struct {
 		MaxOldestAge    time.Duration `config:"max_oldest_age" min:"0" example:"30m"`
 		BacklogInterval time.Duration `config:"backlog_interval" default:"1s" min:"1ns"`
 	} `config:"dataengine.outbox"`
-	Effects   EffectsConfig `config:"dataengine.effects"`
+	Effects        EffectsConfig `config:"dataengine.effects"`
+	EffectConsumer struct {
+		Workers int `config:"workers" default:"16" min:"1" max:"1024" help:"wiring/dataengine.SubscribeEffects 的每个 effect 消费者在本进程同时在跑的 handler 数（EffectConsumer.Workers 不写时取它）。\n同一实体（信封 Key）的 effect 仍按到达顺序逐条处理，不同实体并发；1 = 逐条处理（2026-11-05 之前的行为）。\n已接纳未结算的 effect 不超过消费者的 MaxAckPending（缺省 256）"`
+	} `config:"dataengine.effect_consumer"`
 	Pipelined struct {
 		Allowlist          []string `config:"allowlist" example:"[]" help:"允许 durability=pipelined 的 handler；空表示全部允许。声明 pipelined 的 saga 原生步骤 handler 由框架自动加入，不用写"`
 		AsyncWorkers       int      `config:"async_workers" min:"0" example:"8" help:"异步完成池的 worker 数（0 取缺省 4）。异步完成只给本进程声明 durability=pipelined 的 saga 原生步骤 handler 用，\n没有这类 handler 时不建完成池、本项不起作用"`

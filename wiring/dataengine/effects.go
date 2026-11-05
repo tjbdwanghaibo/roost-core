@@ -11,6 +11,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
@@ -38,6 +39,9 @@ type EffectConsumer struct {
 	NakBackoffMax time.Duration // 不写取 30s
 	// ReceiptTTL 不写取 30 天，必须长于 dataengine.effects.max_age（流里的 effect 还可能被重投时回执不能先过期）。
 	ReceiptTTL time.Duration
+	// Workers 是本进程里这个消费者同时在跑的 handler 数上限；不写（0）取 dataengine.effect_consumer.workers（缺省 16），
+	// 负数拒绝订阅。1 = 在 nats.go 的回调里逐条处理（引入并发之前的行为）。并发规则见 SubscribeEffects。
+	Workers int
 }
 
 // 缺省值。
@@ -70,6 +74,18 @@ func PoisonEffect(err error) error {
 //     （result=poison，ERROR 日志点名 durable、主题与流序号）。
 //   - 重投到 MaxDeliver 仍失败：broker 侧 Term，见 EffectConsumer.MaxDeliver。
 //
+// 进程内并发（Workers > 1，维护者 2026-11-05）：
+//   - 同一实体（信封的 Key）的 effect 在本进程按到达顺序逐条处理：前一条的 handler 返回、结算之后才开始下一条。
+//     不同 Key 的 effect 并发，同时在跑的 handler 不超过 Workers。Key 为空的 effect 各自处理、不承诺顺序（没有实体可排）。
+//   - 同一进程里不同实体的 effect 处理先后不再与流顺序相同；多个实例共享 durable 时本来就不成立。失败重投（nak 退避）
+//     本来就让同一实体的 effect 可能晚于它后面的那条生效，这一点不变。
+//   - 已接纳、还没结算（排队与在跑）的 effect 不超过 MaxAckPending：满了以后回调停在准入处等一条结算（背压），这条既不
+//     确认也不 nak，nats.go 不再投后面的；订阅 Stop 时它 nak 交还 broker。
+//   - 排队期间每 AckWait/2 发一次 in-progress；排队超过 AckWait/10 的，开始处理前再发一次，broker 侧的重投期限不早于
+//     handler 的期限（AckWait）减 AckWait/10。
+//   - 结算推迟到 handler 返回（JetStreamMsg.DeferSettle），回执、去重与 ack / nak / Term 规则与逐条处理相同。传输不支持
+//     推迟结算（测试替身）时在回调里逐条处理。
+//
 // 返回的订阅登记成 App 的输入：App 停机第一步 Drain 并等在途 effect 处理完（业务 Shutdown 里再 Drain() 是空操作，可以留着）；
 // 回执 TTL 不长于 dataengine.effects.max_age 时拒绝订阅。
 func SubscribeEffects(ctx context.Context, registry *app.Registry, consumer EffectConsumer, handler nestwal.EffectHandler) (fnats.IJetStreamSubscription, error) {
@@ -79,6 +95,9 @@ func SubscribeEffects(ctx context.Context, registry *app.Registry, consumer Effe
 	durable, topic := strings.TrimSpace(consumer.Durable), strings.Trim(strings.TrimSpace(consumer.Topic), ".")
 	if durable == "" || topic == "" || strings.ContainsAny(durable, ". *>\t\n") {
 		return nil, fmt.Errorf("dataengine effects: consumer %q on topic %q: durable (no '.', '*', '>' or spaces) and topic are required", consumer.Durable, consumer.Topic)
+	}
+	if consumer.Workers < 0 {
+		return nil, fmt.Errorf("dataengine effects %s: workers %d must not be negative (0 takes dataengine.effect_consumer.workers)", durable, consumer.Workers)
 	}
 	consumer = consumer.withDefaults()
 	var settings config
@@ -108,14 +127,22 @@ func SubscribeEffects(ctx context.Context, registry *app.Registry, consumer Effe
 	if err := inbox.EnsureInfrastructure(ctx); err != nil {
 		return nil, fmt.Errorf("dataengine effects %s: prepare inbox: %w", durable, err)
 	}
+	workers := consumer.Workers
+	if workers == 0 {
+		workers = settings.EffectConsumer.Workers
+	}
+	callback := func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
+		return handleEffect(messageCtx, durable, consumer.AckWait, inbox, message, handler)
+	}
+	if workers > 1 {
+		callback = newEffectDispatcher(durable, consumer, workers, inbox, handler).deliver
+	}
 	subscription, err := jetstream.Subscribe(ctx, fnats.JetStreamConsumerConfig{
 		Stream: settings.Effects.Stream, Name: durable, Durable: durable,
 		FilterSubject: settings.Effects.subjectPrefix() + "." + topic, DeliverPolicy: fnats.JetStreamDeliverAll,
 		AckWait: consumer.AckWait, MaxDeliver: consumer.MaxDeliver, MaxAckPending: consumer.MaxAckPending,
 		NakBackoffMin: consumer.NakBackoffMin, NakBackoffMax: consumer.NakBackoffMax,
-	}, func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
-		return handleEffect(messageCtx, durable, consumer.AckWait, inbox, message, handler)
-	})
+	}, callback)
 	if err != nil || subscription == nil {
 		return subscription, err
 	}
@@ -144,16 +171,31 @@ func (d drainOnClose) CloseIngress(ctx context.Context) error {
 
 // handleEffect 处理一次投递并给出 ack / nak / Term 的结论（返回值交给 JetStream 适配层结算）。
 func handleEffect(ctx context.Context, durable string, ackWait time.Duration, inbox *nestwal.MongoEffectInbox, message *fnats.JetStreamMsg, handler nestwal.EffectHandler) error {
+	envelope, err := decodeEffect(durable, message)
+	if err != nil {
+		return err
+	}
+	return processEffect(ctx, durable, ackWait, inbox, message, envelope, handler)
+}
+
+// decodeEffect 解开信封；解不开或没有 EffectID 返回毒消息错误（Term）。
+func decodeEffect(durable string, message *fnats.JetStreamMsg) (nestwal.EffectEnvelope, error) {
 	var envelope nestwal.EffectEnvelope
 	if message == nil || len(message.Data) == 0 {
-		return poisonEffect(durable, message, errors.New("empty effect message"))
+		return envelope, poisonEffect(durable, message, errors.New("empty effect message"))
 	}
 	if err := json.Unmarshal(message.Data, &envelope); err != nil || envelope.EffectID == "" {
 		if err == nil {
 			err = errors.New("effect envelope has no effect_id")
 		}
-		return poisonEffect(durable, message, fmt.Errorf("decode effect: %w", err))
+		return envelope, poisonEffect(durable, message, fmt.Errorf("decode effect: %w", err))
 	}
+	return envelope, nil
+}
+
+// processEffect 在 inbox 事务里运行 handler（ctx 以 AckWait 为截止），按结果计数并给出结算结论。
+func processEffect(ctx context.Context, durable string, ackWait time.Duration, inbox *nestwal.MongoEffectInbox, message *fnats.JetStreamMsg,
+	envelope nestwal.EffectEnvelope, handler nestwal.EffectHandler) error {
 	processCtx, cancel := context.WithTimeout(ctx, ackWait)
 	defer cancel()
 	duplicate, err := inbox.Handle(processCtx, envelope, handler)
@@ -170,6 +212,113 @@ func handleEffect(ctx context.Context, durable string, ackWait time.Duration, in
 	default:
 		metrics.IncCounter("dataengine.effect_consumer.handled_total", metrics.Labels{"consumer": durable, "result": "ok"}, 1)
 	}
+	return nil
+}
+
+// effectDispatcher 是 Workers > 1 时的投递回调（规则见 SubscribeEffects“进程内并发”）：回调解开信封、在准入处取一个
+// 在途名额（满了就等，背压）、推迟结算，按信封 Key 交给 worker.KeyedDispatcher（与总线 RPC 的按顺序键派发同一份实现）
+// 后立即返回，nats.go 接着投下一条；派发的任务等一个 worker 名额、处理、结算。
+//
+// 为什么按 Key 排队而不是按 Key 哈希到固定 worker：handler 会同步调用别的服务（联盟成员变化 effect 调守卫所在实例），
+// 固定 worker 让一个慢实体挡住同 worker 上的其他实体；按 Key 排队时一个慢 handler 只挡住自己的实体和一个 worker 名额。
+type effectDispatcher struct {
+	durable string
+	ackWait time.Duration
+	inbox   *nestwal.MongoEffectInbox
+	handler nestwal.EffectHandler
+
+	inFlight chan struct{} // 已接纳、还没结算的 effect（排队与在跑），容量 MaxAckPending
+	running  chan struct{} // 在跑的 handler，容量 Workers
+	keyed    *worker.KeyedDispatcher
+}
+
+func newEffectDispatcher(durable string, consumer EffectConsumer, workers int, inbox *nestwal.MongoEffectInbox, handler nestwal.EffectHandler) *effectDispatcher {
+	return &effectDispatcher{
+		durable: durable, ackWait: consumer.AckWait, inbox: inbox, handler: handler,
+		inFlight: make(chan struct{}, consumer.MaxAckPending),
+		running:  make(chan struct{}, workers),
+		// 真正的上界是 inFlight。派发器自己的计数在任务返回时才减，比 inFlight 的释放（任务里 settle 之后）晚一步：
+		// 已释放名额、还没返回的任务至多 MaxAckPending 个，所以它的上限取两倍，永远不会先到。
+		keyed: worker.NewKeyedDispatcher(2 * consumer.MaxAckPending),
+	}
+}
+
+// deliver 是 nats.go 的回调。返回 nil 表示已接纳（结算由派发的任务完成）；返回错误时按错误立即结算。
+func (d *effectDispatcher) deliver(ctx context.Context, message *fnats.JetStreamMsg) error {
+	if message == nil || message.DeferSettle == nil {
+		return handleEffect(ctx, d.durable, d.ackWait, d.inbox, message, d.handler)
+	}
+	envelope, err := decodeEffect(d.durable, message)
+	if err != nil {
+		return err
+	}
+	select {
+	case d.inFlight <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	settle := message.DeferSettle()
+	if settle == nil {
+		// 订阅正在结束，不能推迟：在回调里处理。
+		defer func() { <-d.inFlight }()
+		return processEffect(ctx, d.durable, d.ackWait, d.inbox, message, envelope, d.handler)
+	}
+	admitted := time.Now()
+	stopInProgress := fnats.KeepInProgress(ctx, message, d.ackWait/2, d.inProgressFailed(message))
+	run := func() {
+		var err error
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("dataengine effects: handler panic: %v", recovered)
+				slog.Error("dataengine effects: handler panicked; the effect will be redelivered", "consumer", d.durable, "effect_id", envelope.EffectID, "err", err)
+			}
+			settle(err)
+			<-d.inFlight
+		}()
+		err = d.run(ctx, message, envelope, admitted, stopInProgress)
+	}
+	if err := d.keyed.Dispatch(envelope.Key, startEffectTask, run); err != nil {
+		// 不会发生（派发上限是准入名额的两倍，见 newEffectDispatcher）；按错误立即结算（nak）。
+		stopInProgress()
+		<-d.inFlight
+		return fmt.Errorf("dataengine effects %s: dispatch effect %s: %w", d.durable, envelope.EffectID, err)
+	}
+	return nil
+}
+
+// run 等一个 worker 名额后处理一条已接纳的 effect；订阅 Stop（ctx 取消）时不再处理，返回 ctx 错误（nak）。
+func (d *effectDispatcher) run(ctx context.Context, message *fnats.JetStreamMsg, envelope nestwal.EffectEnvelope, admitted time.Time, stopInProgress func()) error {
+	select {
+	case d.running <- struct{}{}:
+	case <-ctx.Done():
+		stopInProgress()
+		return ctx.Err()
+	}
+	defer func() { <-d.running }()
+	stopInProgress()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// 排队久的先重置 broker 的 AckWait 计时，让它的重投期限跟上 handler 的期限（AckWait）。
+	if message.InProgress != nil && time.Since(admitted) >= d.ackWait/10 {
+		if err := message.InProgress(); err != nil {
+			d.inProgressFailed(message)(err)
+		}
+	}
+	return processEffect(ctx, d.durable, d.ackWait, d.inbox, message, envelope, d.handler)
+}
+
+func (d *effectDispatcher) inProgressFailed(message *fnats.JetStreamMsg) func(error) {
+	return func(err error) {
+		slog.Warn("dataengine effects: in-progress ack failed; the broker may redeliver the effect after ack wait", "consumer", d.durable,
+			"subject", message.Subject, "stream_sequence", message.StreamSeq, "err", err)
+	}
+}
+
+// startEffectTask 给派发的任务起 goroutine。不进池：每个任务都持着一次推迟的结算，订阅的 Closed 等全部结算完成，
+// 生命周期由订阅管。
+func startEffectTask(task func()) error {
+	go task()
 	return nil
 }
 

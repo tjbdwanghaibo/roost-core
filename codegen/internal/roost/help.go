@@ -394,7 +394,7 @@ roost generate`,
 		Usage:   `roost add effect <topic> -consumer <service>`,
 		Configuration: `<topic> 是点分名字（例如 player.level_up，saga.* 保留给 saga）。生成 game/effects/<topic>.go（载荷 struct、Topic<Topic> 常量、Emit<Topic>(key, event)：在 Nest handler 里调用，effect 与实体修改进同一条 WAL 记录，事务回滚则不发）与 internal/service/<consumer>/<topic>_consumer.go（start<Topic>EffectConsumer：kitdataengine.SubscribeEffects，载荷解不开返回 kitdataengine.PoisonEffect，durable <consumer>-<topic>）。都是业务文件、只建一次；effect 文件已存在时只建新消费服务的消费者（同一 effect 多个消费者）。消费服务需要 dataengine Mod（效果流与回执库取 dataengine.effects.*、dataengine.database，不另配）。
 语义：至少一次投递、按 EffectID 至多一次生效——handler 在 Mongo 事务里运行，经它的 ctx 写的 Mongo 与回执一起提交；调用别的服务在事务外，要按 envelope.EffectID 幂等。普通错误退避重投，PoisonEffect 丢弃并计 dataengine.effect_consumer.handled_total{result="poison"}。骨架默认返回错误（重投、不丢），写完业务前不会把 effect 当作已处理。
-服务的 Init / Shutdown 归业务、不改写：Init 里 subscription, err := start<Topic>EffectConsumer(context.Background(), registry)，Shutdown 里 subscription.Drain()；roost project doctor 的 effect-consumer:<service>/<func> 在没人调用时 WARN。容量：一个副本在 durable 上逐条处理（约 1/handler 延迟），未单独测量；量大时加副本共享 durable。`,
+服务的 Init / Shutdown 归业务、不改写：Init 里 subscription, err := start<Topic>EffectConsumer(context.Background(), registry)，Shutdown 里 subscription.Drain()；roost project doctor 的 effect-consumer:<service>/<func> 在没人调用时 WARN。顺序与容量：一个副本同时跑至多 dataengine.effect_consumer.workers（缺省 16）个 handler，信封 Key（Emit 时给的 key）相同的 effect 按到达顺序逐条处理、不同 Key 并发，没有 Key 的不与任何 effect 排序；共享 durable 的副本之间不保证顺序。速率约 workers / handler 延迟，量大时加副本共享 durable。`,
 		Example: `roost add effect player.level_up -consumer game
 roost generate`,
 	},

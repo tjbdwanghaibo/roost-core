@@ -206,11 +206,14 @@ const %[3]sEffectDurable = %[5]q
 // dataengine.effect_consumer.handled_total{result="poison"}; a nonzero count
 // needs a person).
 //
-// Capacity: a replica handles one effect at a time from the durable (the
-// JetStream callback is serial), so its rate is about 1 / the handler's latency;
-// the effect consumer has not been measured on its own (a native saga step's
-// callback, a Mongo transaction plus a Nest commit, takes roughly 30-35ms). More
-// load needs more replicas sharing the durable.
+// Order and capacity: a replica runs up to dataengine.effect_consumer.workers
+// handlers at once (default 16; EffectConsumer.Workers overrides it, 1 handles
+// one effect at a time). Effects with the same envelope.Key (the key given to
+// Emit) are handled one at a time in arrival order, different keys
+// concurrently, so the key should name what must stay ordered (the player id,
+// say); an effect without a key is ordered with nothing. Replicas sharing the
+// durable split the effects with no order between them. Its rate is about
+// workers / the handler's latency; more load needs more replicas.
 func %[6]s(ctx context.Context, registry *app.Registry) (fnats.IJetStreamSubscription, error) {
 	consumer := kitdataengine.EffectConsumer{Durable: %[3]sEffectDurable, Topic: effects.Topic%[3]s}
 	return kitdataengine.SubscribeEffects(ctx, registry, consumer, func(ctx context.Context, envelope nestwal.EffectEnvelope) error {
