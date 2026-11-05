@@ -86,6 +86,13 @@ type Mutation struct {
 	Remote          *entity.RemoteCommit
 }
 
+// Effect 是随事务登记的外部效果。Delivery 由生产方声明（nest.Emit 时写在 Effect 上），决定它怎么离开进程：
+//   - EffectReliable（零值）：进事务的提交记录（WAL）→ 投影事务里暂存进 outbox → 发布到效果流（JetStream）→ 消费方
+//     Mongo inbox 按 EffectID 去重；至少一次投递、至多一次生效。
+//   - EffectBestEffort：不进提交记录、不写 outbox / inbox；这次写到达它的持久点之后由 Nest 交给 committer 经 NATS
+//     发出一次，至多一次（规则见 nest.RollbackTx.Emit）。
+//
+// 提交记录里只会有 reliable effect（ValidateCommitRecord 拒绝别的）。
 type Effect struct {
 	ID          string
 	Topic       string
@@ -93,6 +100,41 @@ type Effect struct {
 	Payload     []byte
 	Headers     map[string]string
 	AvailableAt int64
+	Delivery    EffectDelivery
+}
+
+// EffectDelivery 是 effect 的持久性（生产端声明），见 Effect。
+type EffectDelivery uint8
+
+const (
+	// EffectReliable 是缺省：事务性 outbox，至少一次。
+	EffectReliable EffectDelivery = iota
+	// EffectBestEffort：持久点之后经 NATS 发一次，至多一次；不写 outbox / inbox。
+	EffectBestEffort
+)
+
+// String 返回配置与代码生成用的名字：reliable | best_effort。
+func (d EffectDelivery) String() string {
+	switch d {
+	case EffectReliable:
+		return "reliable"
+	case EffectBestEffort:
+		return "best_effort"
+	default:
+		return fmt.Sprintf("effect_delivery(%d)", uint8(d))
+	}
+}
+
+// ParseEffectDelivery 解析 reliable | best_effort；空串取 reliable。
+func ParseEffectDelivery(value string) (EffectDelivery, error) {
+	switch value {
+	case "", "reliable":
+		return EffectReliable, nil
+	case "best_effort", "best-effort":
+		return EffectBestEffort, nil
+	default:
+		return EffectReliable, fmt.Errorf("dataengine: unknown effect delivery %q (reliable | best_effort)", value)
+	}
 }
 
 type Receipt struct {

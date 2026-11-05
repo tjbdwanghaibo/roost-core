@@ -62,9 +62,12 @@ var (
 	ErrRemotePartRejected = errors.New("nest: local transaction committed but its remote part was rejected")
 	// ErrEntityReleaseFailed 表示准入后的解锁 hook 失败。它不表示事务被拒绝，
 	// 调用方仍需检查同时返回的 ErrCommitIndeterminate，不能据此重试整笔业务。
-	ErrEntityReleaseFailed           = errors.New("nest: entity release failed after admission")
-	ErrTransactionClosed             = errors.New("nest: transaction is already closed")
-	ErrCommitterRequired             = errors.New("nest: durable transaction committer is required")
+	ErrEntityReleaseFailed = errors.New("nest: entity release failed after admission")
+	ErrTransactionClosed   = errors.New("nest: transaction is already closed")
+	ErrCommitterRequired   = errors.New("nest: durable transaction committer is required")
+	// ErrBestEffortPublisherRequired 表示事务登记了 best_effort effect，而 committer 不提供 BestEffortEffectPublisher：
+	// 提交点明确拒绝（带 ErrCommitRejected，按回滚策略撤销），部署配置错误，不静默丢掉 effect。
+	ErrBestEffortPublisherRequired   = errors.New("nest: best_effort effects require a committer that can publish them")
 	ErrDurableRemoteWriteUnsupported = errors.New("nest: durable remote write requires a lease-aware WAL committer")
 	ErrRemoteBroadcastUnsupported    = errors.New("nest: remote-managed entities cannot use broadcast dispatch")
 	// ErrCommitRejected 表示事务在写任何持久记录之前被明确拒绝：committer / Enqueue 拒绝，Remote 批次 FinalizeLocked

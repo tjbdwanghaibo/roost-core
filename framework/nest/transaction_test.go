@@ -603,3 +603,152 @@ func TestSyncRequestDoesNotHandTheCallersTransactionToTheCallee(t *testing.T) {
 		})
 	}
 }
+
+// bestEffortCommitter 是带 BestEffortEffectPublisher 的 committer：Commit 可以被 gate 挡住（模拟锁内等 fsync），
+// PublishBestEffort 记下交来的 effect。
+type bestEffortCommitter struct {
+	recordingCommitter
+	entered   chan struct{}
+	gate      chan struct{}
+	published chan []Effect
+}
+
+func newBestEffortCommitter(blocking bool) *bestEffortCommitter {
+	c := &bestEffortCommitter{entered: make(chan struct{}, 4), published: make(chan []Effect, 4)}
+	if blocking {
+		c.gate = make(chan struct{})
+	}
+	return c
+}
+
+func (c *bestEffortCommitter) Commit(ctx context.Context, record CommitRecord) error {
+	c.entered <- struct{}{}
+	if c.gate != nil {
+		<-c.gate
+	}
+	return c.recordingCommitter.Commit(ctx, record)
+}
+
+func (c *bestEffortCommitter) PublishBestEffort(_ TransactionID, effects []Effect) {
+	c.published <- effects
+}
+
+func registerBestEffortHandler(t *testing.T, name string, durability DurabilityPolicy, fail error) (int64, *rollbackTestDao, *mockGetter) {
+	t.Helper()
+	getter := newMockGetter()
+	id := mustBuildCastID(t, 340, entity.EntityCategory(1), nestLocalKind)
+	dao := &rollbackTestDao{id: id, Value: 10}
+	getter.Add(&rollbackTestEntity{EntityBase: entity.NewEntityBase(id, entity.EntityCategory(1), false, nestLocalKind), dao: dao})
+	MustRegisterHandlerWithMeta(NewHandlerName(name), func(es []entity.IThreadSafeEntity, _ []any, _ ...HandlerOption) (any, error) {
+		ent := es[0].(*rollbackTestEntity)
+		old := ent.dao.Value
+		if !RecordUndo(ent.dao, 1, func() error { ent.dao.Value = old; return nil }) {
+			return nil, errors.New("missing undo transaction")
+		}
+		ent.dao.Value = 20
+		if err := MarkPersist(ent.dao, 1); err != nil {
+			return nil, err
+		}
+		if err := Emit(Effect{Topic: "player.notice", Key: "340", Payload: []byte("n"), Delivery: EffectBestEffort}); err != nil {
+			return nil, err
+		}
+		return "ok", fail
+	}, HandlerMeta{Rollback: RollbackUndo, Durability: durability})
+	return id, dao, getter
+}
+
+// best_effort effect 不进提交记录，并且在提交点（strict：锁内等 fsync 的 Commit）返回之前不发；async 的 handler 升到 strict。
+func TestBestEffortEffectIsPublishedOnlyAfterTheCommitIsDurable(t *testing.T) {
+	t.Cleanup(ResetHandlersForTest)
+	committer := newBestEffortCommitter(true)
+	id, dao, getter := registerBestEffortHandler(t, "test_best_effort_after_durable", DurabilityAsync, nil)
+	InitNest(
+		NestOptionWithGetter(getter),
+		NestOptionWithTransactionCommitter(committer),
+		NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
+		NestOptionWithTickDuration(100*time.Millisecond),
+	)
+	defer StopNest()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Nest.Request(context.Background(), NewHandlerName("test_best_effort_after_durable"), id, nil)
+		done <- err
+	}()
+	<-committer.entered
+	var early []Effect
+	select {
+	case early = <-committer.published:
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(committer.gate)
+	if early != nil {
+		<-done
+		t.Fatalf("best_effort effect published before the commit was durable: %+v", early)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	select {
+	case effects := <-committer.published:
+		if len(effects) != 1 || effects[0].Topic != "player.notice" || effects[0].Key != "340" || effects[0].ID == "" || effects[0].Delivery != EffectBestEffort {
+			t.Fatalf("published=%+v", effects)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("best_effort effect was not published after the commit")
+	}
+	if len(committer.record.Effects) != 0 {
+		t.Fatalf("best_effort effect went into the commit record: %+v", committer.record.Effects)
+	}
+	if committer.record.Durability != dataengine.DurabilityStrict || dao.Value != 20 {
+		t.Fatalf("durability=%s value=%d, want strict (async upgraded) and the write kept", committer.record.Durability, dao.Value)
+	}
+}
+
+// 回滚、提交被拒、结果未知的事务都不发 best_effort effect；committer 发不了时整笔拒绝。
+func TestBestEffortEffectIsNotPublishedWithoutACommit(t *testing.T) {
+	cases := []struct {
+		name      string
+		handler   error
+		commitErr error
+		publisher bool
+		want      error
+	}{
+		{name: "handler_fails", handler: errors.New("refused"), publisher: true},
+		{name: "commit_rejected", commitErr: errors.New("wal full"), publisher: true, want: ErrCommitRejected},
+		{name: "commit_unknown", commitErr: errors.Join(ErrCommitIndeterminate, errors.New("fsync unknown")), publisher: true, want: ErrCommitIndeterminate},
+		{name: "no_publisher", want: ErrBestEffortPublisherRequired},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Cleanup(ResetHandlersForTest)
+			name := "test_best_effort_no_commit_" + c.name
+			id, dao, getter := registerBestEffortHandler(t, name, DurabilityStrict, c.handler)
+			best := newBestEffortCommitter(false)
+			best.err = c.commitErr
+			var committer TransactionCommitter = best
+			if !c.publisher {
+				committer = &best.recordingCommitter
+			}
+			InitNest(
+				NestOptionWithGetter(getter),
+				NestOptionWithTransactionCommitter(committer),
+				NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
+				NestOptionWithTickDuration(100*time.Millisecond),
+			)
+			defer StopNest()
+			_, err := Nest.Request(context.Background(), NewHandlerName(name), id, nil)
+			if err == nil || (c.want != nil && !errors.Is(err, c.want)) {
+				t.Fatalf("err=%v, want %v", err, c.want)
+			}
+			if c.name == "no_publisher" && (!errors.Is(err, ErrCommitRejected) || dao.Value != 10 || len(best.record.Mutations) != 0) {
+				t.Fatalf("err=%v value=%d record=%+v: a committer that cannot publish must refuse before anything is written", err, dao.Value, best.record)
+			}
+			select {
+			case effects := <-best.published:
+				t.Fatalf("best_effort effect published for a transaction that did not commit: %+v", effects)
+			case <-time.After(100 * time.Millisecond):
+			}
+		})
+	}
+}

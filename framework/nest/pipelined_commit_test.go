@@ -641,3 +641,77 @@ func TestPipelinedAdmissionRejectAndEmptyRecord(t *testing.T) {
 		})
 	}
 }
+
+// bestEffortPipelinedCommitter 记下 best_effort effect 与交来时已持久的 LSN 水位。
+type bestEffortPipelinedCommitter struct {
+	*pipelinedTestCommitter
+	published chan uint64 // 交来时的 DurableLSN
+}
+
+func (c *bestEffortPipelinedCommitter) PublishBestEffort(_ TransactionID, effects []Effect) {
+	if len(effects) == 1 && effects[0].Topic == "player.notice" {
+		c.published <- c.DurableLSN()
+	}
+}
+
+// pipelined：实体锁在票据持久之前就释放，但 best_effort effect 要等票据持久；票据结果未知时不发。
+func TestBestEffortEffectWaitsForThePipelinedTicket(t *testing.T) {
+	for _, outcome := range []error{nil, errors.Join(ErrCommitIndeterminate, errors.New("fsync unknown"))} {
+		t.Run(map[bool]string{true: "durable", false: "indeterminate"}[outcome == nil], func(t *testing.T) {
+			t.Cleanup(ResetHandlersForTest)
+			id, _, getter := registerBestEffortHandler(t, "test_best_effort_pipelined", DurabilityPipelined, nil)
+			committer := &bestEffortPipelinedCommitter{pipelinedTestCommitter: newPipelinedTestCommitter(false), published: make(chan uint64, 4)}
+			InitNest(
+				NestOptionWithGetter(getter),
+				NestOptionWithTransactionCommitter(committer),
+				NestOptionWithWorkerPools(WorkerPoolConfig{Workers: 1, QueueCap: 64}, WorkerPoolConfig{}, WorkerPoolConfig{}),
+				NestOptionWithTickDuration(100*time.Millisecond),
+			)
+			defer StopNest()
+			done := make(chan error, 1)
+			go func() {
+				_, err := Nest.Request(context.Background(), NewHandlerName("test_best_effort_pipelined"), id, nil)
+				done <- err
+			}()
+			<-committer.enqueued
+			early := false
+			select {
+			case <-committer.published:
+				early = true
+			case <-time.After(100 * time.Millisecond):
+			}
+			committer.resolveAll(outcome)
+			err := <-done
+			if early {
+				t.Fatal("best_effort effect published before the ticket was durable (durable lsn 0)")
+			}
+			if outcome != nil {
+				if !errors.Is(err, ErrCommitIndeterminate) {
+					t.Fatalf("err=%v, want indeterminate", err)
+				}
+				select {
+				case lsn := <-committer.published:
+					t.Fatalf("best_effort effect published for an indeterminate ticket (durable lsn %d)", lsn)
+				case <-time.After(100 * time.Millisecond):
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("request: %v", err)
+			}
+			select {
+			case lsn := <-committer.published:
+				if lsn < 1 {
+					t.Fatalf("published with durable lsn %d, want the ticket (1) durable", lsn)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("best_effort effect was not published after the ticket")
+			}
+			committer.mu.Lock()
+			defer committer.mu.Unlock()
+			if len(committer.records) != 1 || len(committer.records[0].Effects) != 0 {
+				t.Fatalf("records=%+v: best_effort effects must stay out of the WAL record", committer.records)
+			}
+		})
+	}
+}

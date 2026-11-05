@@ -301,7 +301,11 @@ func (tx *RollbackTx) rejectCommit(cause error) error {
 // commitDurable 是 memory / async / strict（以及回退到 strict 路径的 pipelined）的锁内提交：交给 committer，
 // 明确拒绝则回滚，结果未知则 abandon 并 fence；成功后记录提交事实并执行 Commit 收尾。
 func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCommitter, msg *Msg) error {
-	if err := tx.durableCommit(ctx, committer); err != nil {
+	publisher, err := tx.bestEffortPublisher(committer)
+	if err == nil {
+		err = tx.durableCommit(ctx, committer)
+	}
+	if err != nil {
 		if errors.Is(err, ErrCommitIndeterminate) {
 			if tx.dispatch == nil {
 				// 嵌套独立事务结果未知：WAL 里可能已有它，外层消息同样不能重排。
@@ -346,6 +350,7 @@ func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCo
 			tx.AfterCommit(func() { notifier.TransactionReleased(txID) })
 		}
 	}
+	tx.scheduleBestEffort(publisher)
 	return tx.Commit()
 }
 
@@ -357,6 +362,10 @@ func (tx *RollbackTx) commitDurable(ctx context.Context, committer TransactionCo
 //   - 没有完成泵：纯第一阶段。
 func (tx *RollbackTx) commitPipelined(ctx context.Context, committer PipelinedTransactionCommitter, es []entity.IThreadSafeEntity, releaseLocks func(), route completionRoute, msg *Msg, ret any) error {
 	// 准备和 Enqueue 是锁内的拒绝边界；准入后只允许完成或报告结果不确定。
+	publisher, err := tx.bestEffortPublisher(committer)
+	if err != nil {
+		return tx.rejectCommit(err)
+	}
 	ticket, err := tx.pipelinedEnqueue(ctx, committer)
 	if ticket != nil {
 		// WAL 已接纳这条记录：即使随后准入失败或 ticket 结果未知，重新准入都会让它再执行一次。
@@ -377,6 +386,8 @@ func (tx *RollbackTx) commitPipelined(ctx context.Context, committer PipelinedTr
 		txID := tx.ID()
 		tx.AfterCommit(func() { notifier.TransactionReleased(txID) })
 	}
+	// 提交后回调在票据持久之后才执行（下面两条路径的 commit(true)），best_effort effect 随它们发出。
+	tx.scheduleBestEffort(publisher)
 	if ticket != nil && route.deferred && route.pump != nil && msg != nil {
 		// 排序位置在锁内占用；完成执行还必须等待所有实体实际解锁。
 		handoff := prepareCompletion(route.pump, msg, es, tx, ticket, tx.handler, ret)

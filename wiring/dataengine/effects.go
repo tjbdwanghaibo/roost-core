@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
@@ -39,10 +40,29 @@ type EffectConsumer struct {
 	NakBackoffMax time.Duration // 不写取 30s
 	// ReceiptTTL 不写取 30 天，必须长于 dataengine.effects.max_age（流里的 effect 还可能被重投时回执不能先过期）。
 	ReceiptTTL time.Duration
+	// Delivery 必须与生产方声明的相同（roost add effect 生成的 effects.Delivery<Topic>）：reliable（缺省）订阅效果流
+	// （JetStream durable + Mongo inbox，至少一次、按 EffectID 至多一次生效）；best_effort 用 NATS 队列订阅（队列组 =
+	// Durable），没有 inbox、没有重投，handler 出错只记日志与 handled_total{result="failed"}（见 effects_best_effort.go）。
+	// best_effort 时 Inbox、MaxDeliver、NakBackoff*、ReceiptTTL 不起作用；AckWait 仍是 handler ctx 的截止，MaxAckPending
+	// 仍是已接纳未处理完的上界。
+	Delivery coredata.EffectDelivery
+	// Order 是进程内的处理顺序：entity（缺省，空值同）——同一 Key 按到达顺序逐条、不同 Key 并发；none——不按 Key 排队，
+	// 只受 Workers 上限（Key 只是数据）。跨副本、全局顺序都不保证（全局顺序见生产端 dataengine.projection.effect_order）。
+	Order EffectOrder
 	// Workers 是本进程里这个消费者同时在跑的 handler 数上限；不写（0）取 dataengine.effect_consumer.workers（缺省 16），
 	// 负数拒绝订阅。1 = 在 nats.go 的回调里逐条处理（引入并发之前的行为）。并发规则见 SubscribeEffects。
 	Workers int
 }
+
+// EffectOrder 是 effect 消费者在本进程里的处理顺序，见 EffectConsumer.Order。
+type EffectOrder string
+
+const (
+	// EffectOrderEntity（缺省）：同一信封 Key 按到达顺序逐条处理，不同 Key 并发。
+	EffectOrderEntity EffectOrder = "entity"
+	// EffectOrderNone：不按 Key 排队，只受 Workers 上限。
+	EffectOrderNone EffectOrder = "none"
+)
 
 // 缺省值。
 const (
@@ -99,10 +119,27 @@ func SubscribeEffects(ctx context.Context, registry *app.Registry, consumer Effe
 	if consumer.Workers < 0 {
 		return nil, fmt.Errorf("dataengine effects %s: workers %d must not be negative (0 takes dataengine.effect_consumer.workers)", durable, consumer.Workers)
 	}
+	switch consumer.Order {
+	case "", EffectOrderEntity, EffectOrderNone:
+	default:
+		return nil, fmt.Errorf("dataengine effects %s: order %q is not entity | none", durable, consumer.Order)
+	}
+	switch consumer.Delivery {
+	case coredata.EffectReliable, coredata.EffectBestEffort:
+	default:
+		return nil, fmt.Errorf("dataengine effects %s: unknown delivery %s", durable, consumer.Delivery)
+	}
 	consumer = consumer.withDefaults()
 	var settings config
 	if err := app.LoadConfig(registry.Config(), &settings); err != nil {
 		return nil, fmt.Errorf("dataengine effects %s: %w", durable, err)
+	}
+	workers := consumer.Workers
+	if workers == 0 {
+		workers = settings.EffectConsumer.Workers
+	}
+	if consumer.Delivery == coredata.EffectBestEffort {
+		return subscribeBestEffortEffects(registry, consumer, durable, topic, settings, workers, handler)
 	}
 	if consumer.ReceiptTTL <= settings.Effects.MaxAge {
 		return nil, fmt.Errorf("dataengine effects %s: receipt ttl %s must exceed dataengine.effects.max_age (%s): an effect still on the stream "+
@@ -127,10 +164,6 @@ func SubscribeEffects(ctx context.Context, registry *app.Registry, consumer Effe
 	if err := inbox.EnsureInfrastructure(ctx); err != nil {
 		return nil, fmt.Errorf("dataengine effects %s: prepare inbox: %w", durable, err)
 	}
-	workers := consumer.Workers
-	if workers == 0 {
-		workers = settings.EffectConsumer.Workers
-	}
 	callback := func(messageCtx context.Context, message *fnats.JetStreamMsg) error {
 		return handleEffect(messageCtx, durable, consumer.AckWait, inbox, message, handler)
 	}
@@ -146,13 +179,30 @@ func SubscribeEffects(ctx context.Context, registry *app.Registry, consumer Effe
 	if err != nil || subscription == nil {
 		return subscription, err
 	}
-	// effect 消费者是外部输入：登记给 App，停机第一步 Drain 并等在途 effect 处理完，之后才停 Nest / DataEngine（App 生命周期
-	// 方案）。业务 Shutdown 里的 Drain() 之后是空操作。App 已经在关输入时拒绝登记，撤掉刚建的订阅。
+	return registerEffectIngress(registry, durable, subscription)
+}
+
+// registerEffectIngress 把 effect 订阅登记成 App 的外部输入：停机第一步 Drain 并等在途 effect 处理完，之后才停 Nest /
+// DataEngine（App 生命周期方案）。业务 Shutdown 里的 Drain() 之后是空操作。App 已经在关输入时拒绝登记，撤掉刚建的订阅。
+func registerEffectIngress(registry *app.Registry, durable string, subscription fnats.IJetStreamSubscription) (fnats.IJetStreamSubscription, error) {
 	if err := app.AddIngress(registry, "effect consumer "+durable, drainOnClose{subscription}); err != nil {
 		subscription.Stop()
 		return nil, fmt.Errorf("dataengine effects %s: %w", durable, err)
 	}
 	return subscription, nil
+}
+
+// subscribeBestEffortEffects 是 best_effort 消费者：不建 inbox、不看回执 TTL，NATS 队列订阅 BestEffortSubject。
+func subscribeBestEffortEffects(registry *app.Registry, consumer EffectConsumer, durable, topic string, settings config, workers int, handler nestwal.EffectHandler) (fnats.IJetStreamSubscription, error) {
+	client, ok := app.Lookup[fnats.IClient](registry, mods.ModNats)
+	if !ok || client == nil {
+		return nil, fmt.Errorf("dataengine effects %s: capability %q not found", durable, mods.ModNats)
+	}
+	subscription, err := subscribeBestEffort(client, BestEffortSubject(settings.Effects.subjectPrefix(), topic), durable, consumer, workers, handler)
+	if err != nil {
+		return nil, fmt.Errorf("dataengine effects %s: %w", durable, err)
+	}
+	return registerEffectIngress(registry, durable, subscription)
 }
 
 // drainOnClose 是 effect 订阅的 app.IngressCloser：Drain（停止拉取、交完已取到的）后在 ctx 内等订阅关闭（在途 handler
@@ -226,6 +276,7 @@ type effectDispatcher struct {
 	ackWait time.Duration
 	inbox   *nestwal.MongoEffectInbox
 	handler nestwal.EffectHandler
+	ordered bool // Order != none：按信封 Key 排队
 
 	inFlight chan struct{} // 已接纳、还没结算的 effect（排队与在跑），容量 MaxAckPending
 	running  chan struct{} // 在跑的 handler，容量 Workers
@@ -234,7 +285,7 @@ type effectDispatcher struct {
 
 func newEffectDispatcher(durable string, consumer EffectConsumer, workers int, inbox *nestwal.MongoEffectInbox, handler nestwal.EffectHandler) *effectDispatcher {
 	return &effectDispatcher{
-		durable: durable, ackWait: consumer.AckWait, inbox: inbox, handler: handler,
+		durable: durable, ackWait: consumer.AckWait, inbox: inbox, handler: handler, ordered: consumer.Order != EffectOrderNone,
 		inFlight: make(chan struct{}, consumer.MaxAckPending),
 		running:  make(chan struct{}, workers),
 		// 真正的上界是 inFlight。派发器自己的计数在任务返回时才减，比 inFlight 的释放（任务里 settle 之后）晚一步：
@@ -277,7 +328,11 @@ func (d *effectDispatcher) deliver(ctx context.Context, message *fnats.JetStream
 		}()
 		err = d.run(ctx, message, envelope, admitted, stopInProgress)
 	}
-	if err := d.keyed.Dispatch(envelope.Key, startEffectTask, run); err != nil {
+	key := envelope.Key
+	if !d.ordered {
+		key = "" // order=none：不按 Key 排队，只受 Workers 上限
+	}
+	if err := d.keyed.Dispatch(key, startEffectTask, run); err != nil {
 		// 不会发生（派发上限是准入名额的两倍，见 newEffectDispatcher）；按错误立即结算（nak）。
 		stopInProgress()
 		<-d.inFlight

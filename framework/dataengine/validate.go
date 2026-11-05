@@ -73,6 +73,10 @@ func ValidateCommitRecord(record CommitRecord) error {
 		if effect.ID == "" || effect.Topic == "" {
 			return fmt.Errorf("dataengine: invalid effect %d", i)
 		}
+		if effect.Delivery != EffectReliable {
+			// best_effort 不进提交记录（nest 在 Emit 时就分开放）；混进来说明调用方绕过了 nest，拒绝而不是当作 reliable 发。
+			return fmt.Errorf("dataengine: effect %d (%s) is %s; only reliable effects are recorded", i, effect.Topic, effect.Delivery)
+		}
 	}
 	for i, receipt := range record.Receipts {
 		if receipt.Namespace == "" || receipt.ID == "" {

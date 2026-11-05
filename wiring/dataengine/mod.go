@@ -38,6 +38,8 @@ type Mod struct {
 	cfg      modConfig
 	registry *app.Registry
 	asm      *engine.Assembly
+	// bestEffort 发送 best_effort effect（corenest.BestEffortEffectPublisher）；Provide 建、Start 起、Stop 排空。
+	bestEffort *bestEffortPublisher
 
 	fatalMu  sync.RWMutex
 	fatalErr error
@@ -72,6 +74,7 @@ type modConfig struct {
 	outbox          engine.OutboxWorkerOptions
 	effectPrefix    string
 	effectStream    fnats.JetStreamConfig
+	bestEffortQueue int
 	startupTimeout  time.Duration
 	shutdownTimeout time.Duration
 	pipelined       engine.PipelinedRuntimeConfig
@@ -118,6 +121,9 @@ type EffectsConfig struct {
 	MaxBytes        int64         `config:"max_bytes" default:"8589934592" min:"1" example:"8589934592"`
 	DuplicateWindow time.Duration `config:"duplicate_window" default:"10m" min:"1ns" example:"10m"`
 	Replicas        int           `config:"replicas" default:"1" min:"1" example:"1"`
+	// BestEffortQueue 是 best_effort effect（nest.EffectBestEffort）的进程内发送队列：事务持久之后入队，一个后台 goroutine
+	// 经 NATS 发出；满了丢弃并计 dataengine.effects.best_effort_total{result="dropped"}。
+	BestEffortQueue int `config:"best_effort_queue" default:"8192" min:"1" example:"8192" help:"best_effort effect 的进程内发送队列容量：事务持久之后入队、经 NATS（不经 JetStream / outbox）发出一次，\n队列满时丢弃并计 dataengine.effects.best_effort_total{result=\"dropped\"}（至多一次，见 docs/framework/impl/03-dataengine.md“effect 持久性与顺序”）"`
 }
 
 // config 是 wiring/dataengine 读的键（维护者决定）。数字与时长写 0 的取 core 缺省（声明里 min:"0" 的键）；
@@ -275,7 +281,7 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	mod.cfg = modConfig{
 		mongo: engine.MongoStoreConfig{DefaultDatabase: settings.Database, Databases: databases, ServerID: sid,
 			TransactionReceiptTTL: settings.TransactionReceiptTTL, ReceiptTTL: settings.ReceiptTTL},
-		wal: wal, projector: projector, outbox: outbox, effectPrefix: prefix,
+		wal: wal, projector: projector, outbox: outbox, effectPrefix: prefix, bestEffortQueue: effects.BestEffortQueue,
 		effectStream: fnats.JetStreamConfig{
 			Name: effects.Stream, Subjects: []string{prefix + ".>"}, Storage: fnats.JetStreamStorageFile,
 			MaxAge: effects.MaxAge, Duplicates: effects.DuplicateWindow, Replicas: effects.Replicas, MaxBytes: effects.MaxBytes,
@@ -364,6 +370,11 @@ func (mod *Mod) Provide(registry *app.Registry) error {
 		return err
 	}
 	mod.registry, mod.asm = registry, asm
+	// best_effort effect 经 NATS 核心发布。NATS Mod 总是同时登记 JetStream 与核心客户端；只给了 JetStream 的装配（测试）
+	// 没有发送端：入队时计 result="unavailable" 并告警，不让事务失败。
+	if natsClient, ok := app.Lookup[fnats.IClient](registry, mods.ModNats); ok && natsClient != nil {
+		mod.bestEffort = newBestEffortPublisher(natsClient, mod.cfg.effectPrefix, mod.cfg.bestEffortQueue)
+	}
 	if err := mods.RegisterAll(registry,
 		mods.Capability{Name: mods.ModDataEngine, Value: mod},
 		mods.Capability{Name: mods.ModDataEngineDatabases, Value: mod.cfg.mongo.Databases},
@@ -393,7 +404,11 @@ func (mod *Mod) Start() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), mod.cfg.startupTimeout)
 	defer cancel()
-	return mod.asm.Start(ctx)
+	if err := mod.asm.Start(ctx); err != nil {
+		return err
+	}
+	mod.bestEffort.start()
+	return nil
 }
 
 func (mod *Mod) Stop() {
@@ -419,7 +434,19 @@ func (mod *Mod) StopWithContext(ctx context.Context) error {
 	if mod == nil {
 		return nil
 	}
-	return mod.asm.Shutdown(ctx)
+	if err := mod.asm.Shutdown(ctx); err != nil {
+		return err
+	}
+	// Nest 已先停（App 停机顺序），不会再有 best_effort effect 入队：把队列里剩下的在 ctx 内发完。
+	return mod.bestEffort.stop(ctx)
+}
+
+// PublishBestEffort 实现 corenest.BestEffortEffectPublisher：只入队（可能在快池上调用），见 bestEffortPublisher。
+func (mod *Mod) PublishBestEffort(transactionID corenest.TransactionID, effects []corenest.Effect) {
+	if mod == nil {
+		return
+	}
+	mod.bestEffort.enqueue(transactionID, effects)
 }
 
 func (mod *Mod) Runtime() *engine.Runtime {
@@ -588,6 +615,7 @@ func (mod *Mod) checkHealth(ctx context.Context) health.Result {
 var _ corenest.PipelinedTransactionCommitter = (*Mod)(nil)
 var _ corenest.TransactionReleaseNotifier = (*Mod)(nil)
 var _ corenest.LocalExecutorBinder = (*Mod)(nil)
+var _ corenest.BestEffortEffectPublisher = (*Mod)(nil)
 
 // 效果流（ROOST_EFFECTS）的缺省名字与保留期，与 EffectsConfig 的声明相同（TestEffectStreamDefaultsMatchTheDeclaration）。
 // saga Mod 的配置检查用 LoadEffectsConfig 读同一份，校验完成回执比流里的结果活得久（维护者决定）。

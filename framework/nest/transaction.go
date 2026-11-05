@@ -93,6 +93,17 @@ func newTransactionID() TransactionID {
 // Nest 与生成代码使用的持久模型别名；类型由 dataengine 包定义并拥有。
 type EntityMutation = dataengine.Mutation
 type Effect = dataengine.Effect
+
+// EffectDelivery 是 effect 的持久性（生产端声明，见 dataengine.Effect 与 RollbackTx.Emit）。
+type EffectDelivery = dataengine.EffectDelivery
+
+const (
+	// EffectReliable 是缺省：事务性 outbox（WAL → outbox → 效果流 → 消费方 inbox），至少一次。
+	EffectReliable = dataengine.EffectReliable
+	// EffectBestEffort：持久点之后经 NATS 发一次，至多一次，不写 outbox / inbox。
+	EffectBestEffort = dataengine.EffectBestEffort
+)
+
 type CommitRecord = dataengine.CommitRecord
 
 // CommitFence 标识一条 WAL 记录（段号 + 帧结束偏移），用于确认。
@@ -119,6 +130,13 @@ type TransactionReleaseNotifier interface {
 // Remote Entity Manager 与 Getter（entity.ManagerAccess：发布领头请求已离开的共享冷加载）以同样方式绑定。
 type LocalExecutorBinder interface {
 	BindLocalExecutor(run func(func()) error)
+}
+
+// BestEffortEffectPublisher 是 committer 的可选能力：发送事务里的 best_effort effect（RollbackTx.Emit）。Nest 在这次写
+// 到达持久点之后、以提交后回调调用它，调用可能发生在快池上：实现只能入队、不能阻塞或等待网络，队列满时丢弃并计数
+// （至多一次）。effects 归实现所有。
+type BestEffortEffectPublisher interface {
+	PublishBestEffort(transactionID TransactionID, effects []Effect)
 }
 
 // CommitTicket 在已入队记录持久时完成。Err 成功时为 nil，fsync 结果未知时为 ErrCommitIndeterminate，不允许其他错误：

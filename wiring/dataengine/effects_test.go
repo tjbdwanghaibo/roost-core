@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
@@ -704,5 +705,185 @@ func TestSubscribeEffectsKeepsQueuedEffectsInProgress(t *testing.T) {
 	}
 	if got := second.Load(); got < 2 {
 		t.Errorf("a-2 queued ~200ms at ack wait 200ms but sent %d in-progress acks, want ≥ 2 (heartbeat + before start)", got)
+	}
+}
+
+// Order = none：同一实体的 effect 不再排队，只受 Workers 上限——a-1 被钉住时，同 Key 的 a-2 照样处理完。
+func TestSubscribeEffectsWithOrderNoneDoesNotQueueByEntity(t *testing.T) {
+	f, js := newSerialEffectsFixture(t, nil)
+	gate := newEffectGate("a-1")
+	consumer := EffectConsumer{Durable: "game-level-up-mail", Topic: "player.level_up", Order: EffectOrderNone}
+	if _, err := SubscribeEffects(context.Background(), f.registry, consumer, gate.handler); err != nil {
+		t.Fatal(err)
+	}
+	a1 := js.push(t, "a-1", "1001")
+	waitClosed(t, "a-1 handler started", gate.startedCh("a-1"))
+	a2 := js.push(t, "a-2", "1001")
+	if err := waitSettled(t, a2); err != nil {
+		t.Fatalf("a-2 settled with %v, want ack while a-1 of the same key is still running", err)
+	}
+	notSettled(t, a1)
+	gate.release("a-1")
+	if err := waitSettled(t, a1); err != nil {
+		t.Fatalf("a-1 settled with %v", err)
+	}
+	if _, err := SubscribeEffects(context.Background(), f.registry, EffectConsumer{Durable: "x", Topic: "player.level_up", Order: "wal"}, gate.handler); err == nil {
+		t.Fatal("order \"wal\" accepted; the consumer side knows entity | none only")
+	}
+}
+
+// bestEffortNATS 是 NATS 核心客户端的替身：记下发布，队列订阅的回调由测试在一个 goroutine 里逐条调用（nats.go 的方式）。
+type bestEffortNATS struct {
+	mu         sync.Mutex
+	published  []fnats.Msg
+	subject    string
+	queue      string
+	handler    fnats.MsgHandler
+	sub        *bestEffortNATSSubscription
+	publishErr error
+}
+
+type bestEffortNATSSubscription struct {
+	unsubscribed atomic.Bool
+}
+
+func (s *bestEffortNATSSubscription) Unsubscribe() error { s.unsubscribed.Store(true); return nil }
+func (s *bestEffortNATSSubscription) IsValid() bool      { return !s.unsubscribed.Load() }
+
+func (n *bestEffortNATS) Publish(subject string, data []byte) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.publishErr != nil {
+		return n.publishErr
+	}
+	n.published = append(n.published, fnats.Msg{Subject: subject, Data: append([]byte(nil), data...)})
+	return nil
+}
+func (*bestEffortNATS) Request(string, []byte, time.Duration) ([]byte, error) {
+	return nil, errors.New("unused")
+}
+func (*bestEffortNATS) Subscribe(string, fnats.MsgHandler) (fnats.ISubscription, error) {
+	return nil, errors.New("unused")
+}
+func (n *bestEffortNATS) QueueSubscribe(subject, queue string, handler fnats.MsgHandler) (fnats.ISubscription, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.subject, n.queue, n.handler, n.sub = subject, queue, handler, &bestEffortNATSSubscription{}
+	return n.sub, nil
+}
+func (*bestEffortNATS) Drain() error { return nil }
+func (*bestEffortNATS) Close()       {}
+
+func (n *bestEffortNATS) deliver(t *testing.T, id, key string) {
+	t.Helper()
+	raw, err := json.Marshal(nestwal.EffectEnvelope{TransactionID: "tx-" + id, EffectID: id, Topic: "player.level_up", Key: key, Payload: []byte(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.mu.Lock()
+	handler := n.handler
+	n.mu.Unlock()
+	handler(&fnats.Msg{Subject: n.subject, Data: raw})
+}
+
+func newBestEffortFixture(t *testing.T, yaml map[string]any) (effectsFixture, *bestEffortNATS) {
+	t.Helper()
+	f := newEffectsFixture(t, yaml)
+	client := &bestEffortNATS{}
+	if err := f.registry.Register(mods.ModNats, fnats.IClient(client)); err != nil {
+		t.Fatal(err)
+	}
+	return f, client
+}
+
+// best_effort 消费者：NATS 队列订阅（队列组 = durable）BestEffortSubject，不碰 inbox；handler 出错只计 failed、不重投；
+// 同一实体按到达顺序、不同实体并发（与 reliable 相同的派发）；Drain 等在跑的 handler 返回后才 Closed。
+func TestSubscribeEffectsBestEffortHasNoInboxAndNoRedelivery(t *testing.T) {
+	f, client := newBestEffortFixture(t, map[string]any{"dataengine.effects.subject_prefix": "demo.effect"})
+	gate := newEffectGate("a-1")
+	var calls atomic.Int64
+	handler := func(ctx context.Context, envelope nestwal.EffectEnvelope) error {
+		calls.Add(1)
+		if envelope.EffectID == "bad" {
+			return errors.New("handler failed")
+		}
+		return gate.handler(ctx, envelope)
+	}
+	consumer := EffectConsumer{Durable: "game-level-up-mail", Topic: "player.level_up", Delivery: nest.EffectBestEffort}
+	subscription, err := SubscribeEffects(context.Background(), f.registry, consumer, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.subject != "demo.effect_best_effort.player.level_up" || client.queue != "game-level-up-mail" {
+		t.Fatalf("subscribed %q queue %q", client.subject, client.queue)
+	}
+	client.deliver(t, "a-1", "1001")
+	waitClosed(t, "a-1 handler started", gate.startedCh("a-1"))
+	client.deliver(t, "a-2", "1001")
+	client.deliver(t, "b-1", "2002")
+	client.deliver(t, "bad", "3003")
+	waitClosed(t, "b-1 handled while a-1 runs", gate.startedCh("b-1"))
+	if isClosed(gate.startedCh("a-2")) {
+		t.Fatalf("a-2 started before a-1 of the same entity finished; order %v", gate.order())
+	}
+	subscription.Drain()
+	if isClosed(subscription.Closed()) {
+		t.Fatal("Closed before the running handler returned")
+	}
+	gate.release("a-1")
+	waitClosed(t, "subscription closed after drain", subscription.Closed())
+	if order := strings.Join(gate.order(), ","); !strings.HasSuffix(order, "a-1,b-1,a-2") && order != "a-1,b-1,a-2" {
+		t.Fatalf("handler start order %q, want a-2 after a-1", order)
+	}
+	if got, want := calls.Load(), int64(4); got != want {
+		t.Fatalf("handler ran %d times, want %d (a failure is not redelivered)", got, want)
+	}
+	if ok, failed := f.handled("ok"), f.handled("failed"); ok != 3 || failed != 1 {
+		t.Fatalf("handled ok=%d failed=%d, want 3 and 1", ok, failed)
+	}
+	if !client.sub.unsubscribed.Load() {
+		t.Fatal("drain did not give up the subscription")
+	}
+	if sessions := f.mongo.Sessions(); sessions != 0 {
+		t.Fatalf("best_effort consumer opened %d Mongo sessions; it has no inbox", sessions)
+	}
+}
+
+// 发送端：入队不阻塞；后台 goroutine 按 BestEffortSubject 发出与可靠 effect 相同的信封；队列满丢弃并计数；stop 发完剩下的。
+func TestBestEffortPublisherSendsAfterEnqueueAndDropsWhenFull(t *testing.T) {
+	client := &bestEffortNATS{}
+	publisher := newBestEffortPublisher(client, "demo.effect", 2)
+	var txID nest.TransactionID
+	txID[15] = 7
+	effects := []nest.Effect{
+		{ID: "e1", Topic: "alliance.member_changed", Key: "1", Payload: []byte(`{"a":1}`), Delivery: nest.EffectBestEffort},
+		{ID: "e2", Topic: "alliance.member_changed", Key: "2", Payload: []byte(`{"a":2}`), Delivery: nest.EffectBestEffort},
+		{ID: "e3", Topic: "alliance.member_changed", Key: "3", Payload: []byte(`{"a":3}`), Delivery: nest.EffectBestEffort},
+	}
+	publisher.enqueue(txID, effects) // 没启动：容量 2，第三条丢弃
+	client.mu.Lock()
+	if len(client.published) != 0 {
+		t.Fatal("published before start")
+	}
+	client.mu.Unlock()
+	publisher.start()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := publisher.stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	publisher.enqueue(txID, effects[:1]) // 停机之后不再接收
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(client.published) != 2 {
+		t.Fatalf("published %d, want 2 (capacity 2, the third dropped)", len(client.published))
+	}
+	var envelope nestwal.EffectEnvelope
+	if err := json.Unmarshal(client.published[0].Data, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if client.published[0].Subject != "demo.effect_best_effort.alliance.member_changed" || envelope.EffectID != "e1" || envelope.Key != "1" ||
+		envelope.TransactionID != txID.String() || string(envelope.Payload) != `{"a":1}` {
+		t.Fatalf("published %s %+v", client.published[0].Subject, envelope)
 	}
 }

@@ -95,11 +95,14 @@ type RollbackTx struct {
 	mutationKeys           map[mutationKey]struct{}
 	effects                []Effect
 	effectIDs              map[string]struct{}
-	receipts               []dataengine.Receipt
-	receiptDigests         map[receiptKey][]byte
-	receiptRevision        uint64 // 回执原位写入的代次；失败创建不能仅比较回执数量。
-	remoteWrite            bool
-	deleteIntents          map[int64]struct{}
+	// bestEffort 是 Emit 登记的 best_effort effect：不进提交记录，持久点之后经 committer 的 BestEffortEffectPublisher 发出
+	// （scheduleBestEffort）；回滚 / abandon 丢弃。
+	bestEffort      []Effect
+	receipts        []dataengine.Receipt
+	receiptDigests  map[receiptKey][]byte
+	receiptRevision uint64 // 回执原位写入的代次；失败创建不能仅比较回执数量。
+	remoteWrite     bool
+	deleteIntents   map[int64]struct{}
 	// created 是 handler 内 CreateInScope 新建的实体，准入前再次加入 SyncMutation。
 	created []entity.IThreadSafeEntity
 	// createLockBusy 是 handler 内新建实体时第一次锁冲突的错误。可回滚的事务据此在
@@ -374,7 +377,18 @@ func keyOfMutation(mutation EntityMutation) mutationKey {
 	return mutationKey{database: mutation.Key.Database, resource: mutation.Key.Resource, entityID: mutation.Key.ID}
 }
 
-// Emit 登记一条随事务持久的外部效果（outbox）。未指定 ID 时按事务 ID 与序号生成。
+// Emit 登记一条外部效果。未指定 ID 时按事务 ID 与序号生成；同一事务里 ID 不能重复。持久性由 effect.Delivery 声明：
+//
+//   - EffectReliable（缺省）：随事务持久的 outbox——进同一条提交记录（WAL），投影事务里暂存进 outbox，提交后发布到效果流。
+//     memory 事务升到 strict（outbox 只有在实体锁释放前持久准入才有意义）。
+//   - EffectBestEffort：不进提交记录、不写 outbox / inbox。这次写到达它的持久点之后，Nest 把它交给 committer 的
+//     BestEffortEffectPublisher（非阻塞入队，由 committer 经 NATS 发一次），与提交后回调（AfterCommit）同一时刻：
+//     strict 在 WAL fsync 之后、实体锁释放之后；pipelined 在提交票据持久之后；带 Remote 批次的在 Remote 持久结论之后
+//     （strict / pipelined 即投影器把权威写进 Mongo 之后，与给调用方的成功回复同一时刻；结论未知时交给批次的持久结论，
+//     拒绝则不发）。async 事务升到 strict（async 的提交点早于 fsync，在那里发出会通知一个可能丢掉的改动）；memory 事务
+//     不改级别（它不能有持久改动，见 refuseMemoryPersistentWrite，没有可丢的持久内容）。回滚、明确拒绝、结果未知（abandon）
+//     的事务不发。进程在持久点之后、发出之前崩溃（或 committer 的发送队列满、NATS 断开）就丢：至多一次。committer 不提供
+//     BestEffortEffectPublisher 时在提交点拒绝整笔事务（ErrBestEffortPublisherRequired），不静默丢弃。
 func (tx *RollbackTx) Emit(effect Effect) error {
 	if tx == nil || tx.state != rollbackTxOpen {
 		return ErrTransactionClosed
@@ -382,8 +396,13 @@ func (tx *RollbackTx) Emit(effect Effect) error {
 	if effect.Topic == "" {
 		return errors.New("nest: effect topic is empty")
 	}
+	switch effect.Delivery {
+	case EffectReliable, EffectBestEffort:
+	default:
+		return fmt.Errorf("nest: effect %q has unknown delivery %s", effect.Topic, effect.Delivery)
+	}
 	if effect.ID == "" {
-		effect.ID = tx.id.String() + ":" + fmt.Sprint(len(tx.effects)+1)
+		effect.ID = tx.id.String() + ":" + fmt.Sprint(len(tx.effects)+len(tx.bestEffort)+1)
 	}
 	if tx.effectIDs == nil {
 		tx.effectIDs = make(map[string]struct{}, 4)
@@ -392,12 +411,45 @@ func (tx *RollbackTx) Emit(effect Effect) error {
 		return fmt.Errorf("nest: duplicate effect id %q", effect.ID)
 	}
 	tx.effectIDs[effect.ID] = struct{}{}
+	if effect.Delivery == EffectBestEffort {
+		if tx.durability == DurabilityAsync {
+			tx.durability = DurabilityStrict
+		}
+		tx.bestEffort = append(tx.bestEffort, dataengine.CloneEffect(effect))
+		return nil
+	}
 	// outbox 只有在实体锁释放前持久准入才有意义：memory 事务升到 strict，不提供会丢失的“outbox”。
 	if tx.durability == DurabilityMemory {
 		tx.durability = DurabilityStrict
 	}
 	tx.effects = append(tx.effects, dataengine.CloneEffect(effect))
 	return nil
+}
+
+// bestEffortPublisher 是提交点（锁内、写任何持久记录之前）的检查：有 best_effort effect 时 committer 必须能发送它们，
+// 否则整笔明确拒绝。没有 best_effort effect 时返回 nil, nil。
+func (tx *RollbackTx) bestEffortPublisher(committer TransactionCommitter) (BestEffortEffectPublisher, error) {
+	if len(tx.bestEffort) == 0 {
+		return nil, nil
+	}
+	publisher, ok := committer.(BestEffortEffectPublisher)
+	if !ok || publisher == nil {
+		return nil, fmt.Errorf("%w: handler %q emitted %d best_effort effect(s) (first %q) but the committer %T cannot send them",
+			ErrBestEffortPublisherRequired, tx.handler, len(tx.bestEffort), tx.bestEffort[0].Topic, committer)
+	}
+	return publisher, nil
+}
+
+// scheduleBestEffort 在持久提交成功之后把 best_effort effect 登记成提交后回调：与 AfterCommit 同一时刻、同一条路径
+// （Guard 解锁后、Remote 批次的持久结论之后、pipelined 票据持久之后）交给 publisher。回调只入队、不等待（它可能在
+// 快池上执行）。publisher 已由 bestEffortPublisher 在提交点确认。
+func (tx *RollbackTx) scheduleBestEffort(publisher BestEffortEffectPublisher) {
+	if len(tx.bestEffort) == 0 || publisher == nil {
+		return
+	}
+	effects, txID := tx.bestEffort, tx.id
+	tx.bestEffort = nil
+	tx.AfterCommit(func() { publisher.PublishBestEffort(txID, effects) })
 }
 
 // Emit 向当前 Nest 事务登记外部效果；不在事务内时返回 ErrTransactionClosed。
@@ -453,6 +505,7 @@ func (tx *RollbackTx) Rollback() error {
 	tx.mutationKeys = nil
 	tx.effects = nil
 	tx.effectIDs = nil
+	tx.bestEffort = nil
 	tx.receipts = nil
 	tx.receiptDigests = nil
 	return errors.Join(errs...)
@@ -578,6 +631,7 @@ func (tx *RollbackTx) abandon() {
 	tx.preparedMutations = nil
 	tx.mutationKeys = nil
 	tx.effectIDs = nil
+	tx.bestEffort = nil
 	tx.receipts = nil
 	tx.receiptDigests = nil
 	tx.deleteIntents = nil
