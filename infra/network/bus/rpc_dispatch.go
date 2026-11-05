@@ -3,10 +3,7 @@ package bus
 import (
 	"context"
 	"errors"
-	"sync"
-	"sync/atomic"
 
-	"github.com/tjbdwanghaibo/roost-core/infra/base/goroutine"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 )
 
@@ -57,78 +54,24 @@ func OrderKeyFromContext(ctx context.Context) (string, bool) {
 	return key, ok && key != ""
 }
 
-// rpcDispatcher 按顺序键派发 RPC 任务（规则见本文件开头）。零值不可用，由 newRPCDispatcher 建立。
+// rpcDispatcher 按顺序键派发 RPC 任务（规则见本文件开头），排队与上限由 worker.KeyedDispatcher 实现（effect 消费者的
+// 按实体派发用同一份）。零值不可用，由 newRPCDispatcher 建立。
 type rpcDispatcher struct {
-	limit   int64
-	pending atomic.Int64 // 已接纳、还没处理完（在跑与排队）的请求数
-
-	mu    sync.Mutex
-	lanes map[string]*rpcLane // 活跃的键；条目存在 ⇔ 这个键有一个 goroutine 在处理它的队列
-}
-
-// rpcLane 是一个活跃键排队等候的请求（不含正在处理的那个），受 rpcDispatcher.mu 保护。
-type rpcLane struct {
-	queue []*incomingTask
+	keyed *worker.KeyedDispatcher
 }
 
 func newRPCDispatcher(limit int) *rpcDispatcher {
-	if limit <= 0 {
-		limit = 1
-	}
-	return &rpcDispatcher{limit: int64(limit), lanes: make(map[string]*rpcLane)}
+	return &rpcDispatcher{keyed: worker.NewKeyedDispatcher(limit)}
 }
 
 // dispatch 接纳一个任务交给 run 执行；返回 nil 表示接纳，任务一定会被执行（池停止也会等它）。拒绝时任务没有执行，
-// 由调用方答复或交还 broker。
+// 由调用方答复或交还 broker。goroutine 经池的 TryGo 起；panic 只结束这一个任务，同键后面的请求照常处理。
 func (d *rpcDispatcher) dispatch(pool *worker.Pool[*incomingTask], key string, task *incomingTask, run func(*incomingTask)) error {
-	if d.pending.Add(1) > d.limit {
-		d.pending.Add(-1)
+	err := d.keyed.Dispatch(key, func(body func()) error {
+		return pool.TryGo(task, func(*incomingTask) { body() })
+	}, func() { run(task) })
+	if errors.Is(err, worker.ErrKeyedDispatcherFull) {
 		return errRPCOverloaded
 	}
-	if key == "" {
-		if err := pool.TryGo(task, func(task *incomingTask) { d.runOne(task, run) }); err != nil {
-			d.pending.Add(-1)
-			return err
-		}
-		return nil
-	}
-	// 持 mu 起 goroutine 再登记：新 goroutine 处理完第一个任务后要取 mu 检查队列，这时登记一定已经完成；
-	// 排到已有键后面的任务一定会被那个 goroutine 取走（它在 mu 下确认队列为空才删除条目、退出）。
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if lane := d.lanes[key]; lane != nil {
-		lane.queue = append(lane.queue, task)
-		return nil
-	}
-	lane := &rpcLane{}
-	if err := pool.TryGo(task, func(first *incomingTask) { d.drain(key, lane, first, run) }); err != nil {
-		d.pending.Add(-1)
-		return err
-	}
-	d.lanes[key] = lane
-	return nil
-}
-
-// drain 依次处理一个键的请求：先处理 first，再取这个键排队的下一个，队列空了删除条目并退出。
-func (d *rpcDispatcher) drain(key string, lane *rpcLane, first *incomingTask, run func(*incomingTask)) {
-	task := first
-	for {
-		d.runOne(task, run)
-		d.mu.Lock()
-		if len(lane.queue) == 0 {
-			delete(d.lanes, key)
-			d.mu.Unlock()
-			return
-		}
-		task = lane.queue[0]
-		lane.queue[0] = nil
-		lane.queue = lane.queue[1:]
-		d.mu.Unlock()
-	}
-}
-
-// runOne 执行一个任务。panic 只结束这一个任务：排在同一个键后面的请求照常处理（否则条目留在表里，后到的请求永远排队）。
-func (d *rpcDispatcher) runOne(task *incomingTask, run func(*incomingTask)) {
-	defer d.pending.Add(-1)
-	goroutine.SafeFunc(func() { run(task) })
+	return err
 }

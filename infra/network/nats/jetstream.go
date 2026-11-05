@@ -2,6 +2,7 @@ package nats
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
@@ -98,4 +99,36 @@ type IJetStreamSubscription interface {
 	Stop()
 	Drain()
 	Closed() <-chan struct{}
+}
+
+// KeepInProgress 每隔 interval 调用一次 msg.InProgress（重置 broker 对这次投递的 AckWait 计时），直到返回的 stop 被调用
+// 或 ctx 结束；InProgress 失败交给 onFailure（可为 nil），下一次照发。msg 或 InProgress 为 nil、interval ≤ 0 时什么也不做。
+// 用定时器而不是每条投递一个 goroutine。总线 JetStream RPC 在请求排队与处理期间、effect 消费者在 effect 排队期间用它，
+// 避免 broker 把仍在本实例上的投递重投给别的实例并发执行。
+func KeepInProgress(ctx context.Context, msg *JetStreamMsg, interval time.Duration, onFailure func(error)) (stop func()) {
+	if msg == nil || msg.InProgress == nil || interval <= 0 {
+		return func() {}
+	}
+	var mu sync.Mutex
+	stopped := false
+	var timer *time.Timer
+	mu.Lock() // 回调先取 mu 再读 timer：赋值在锁内，回调一定看到它
+	defer mu.Unlock()
+	timer = time.AfterFunc(interval, func() {
+		mu.Lock()
+		defer mu.Unlock()
+		if stopped || ctx.Err() != nil {
+			return
+		}
+		if err := msg.InProgress(); err != nil && onFailure != nil {
+			onFailure(err)
+		}
+		timer.Reset(interval)
+	})
+	return func() {
+		mu.Lock()
+		stopped = true
+		timer.Stop()
+		mu.Unlock()
+	}
 }

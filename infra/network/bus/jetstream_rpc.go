@@ -681,34 +681,10 @@ func (b *Bus) replyJetStreamRPC(processCtx context.Context, req *fnats.NatsMsg, 
 // 心跳只持续到请求期限：期限之后调用方已放弃，停止心跳让 broker 重投，收到的实例按 DeadlineAt 判过期
 // 直接确认、不执行。心跳失败（连接抖动）只记日志，退回 at-least-once。用定时器而不是每请求一个 goroutine。
 func (b *Bus) keepJetStreamRPCInProgress(msg *fnats.JetStreamMsg, processCtx context.Context) (stop func()) {
-	ackWait := b.jsRPC.cfg.AckWait
-	if msg == nil || msg.InProgress == nil || ackWait <= 0 {
-		return func() {}
-	}
-	interval := ackWait / 2
-	var mu sync.Mutex
-	stopped := false
-	var timer *time.Timer
-	mu.Lock() // 回调先取 mu 再读 timer：赋值在锁内，回调一定看到它
-	defer mu.Unlock()
-	timer = time.AfterFunc(interval, func() {
-		mu.Lock()
-		defer mu.Unlock()
-		if stopped || processCtx.Err() != nil {
-			return
-		}
-		if err := msg.InProgress(); err != nil {
-			metrics.IncCounter("bus_rpc_in_progress_failures_total", nil, 1)
-			slog.Warn("bus: jetstream rpc in-progress ack failed; the broker may redeliver after ack wait", "subject", msg.Subject, "err", err)
-		}
-		timer.Reset(interval)
+	return fnats.KeepInProgress(processCtx, msg, b.jsRPC.cfg.AckWait/2, func(err error) {
+		metrics.IncCounter("bus_rpc_in_progress_failures_total", nil, 1)
+		slog.Warn("bus: jetstream rpc in-progress ack failed; the broker may redeliver after ack wait", "subject", msg.Subject, "err", err)
 	})
-	return func() {
-		mu.Lock()
-		stopped = true
-		timer.Stop()
-		mu.Unlock()
-	}
 }
 
 func (b *Bus) jetStreamRPCProcessContext(req fnats.NatsMsg) (context.Context, context.CancelFunc) {
