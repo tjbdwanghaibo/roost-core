@@ -85,6 +85,30 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 | game 侧收联盟通知（`internal/service/game/alliance_notice.go`） | 走总线消息，不是 effect；尽力而为、容忍乱序（同上） |
 | genre 夹具（`scripts/testdata/*`）、`service/`、`gameplay/` | 没有 `nest.Emit` / effect 消费者 |
 
+### effect 消费者进程内并发
+
+`wiring/dataengine.SubscribeEffects`（[effects.go](../../../wiring/dataengine/effects.go)）在一个进程里按信封 `Key` 并发处理（维护者 2026-11-05 决定 A；此前 nats.go 单 goroutine 回调里逐条跑完、每条一个 Mongo inbox 事务，本机约 50 条/秒，[benchmarks/alliance-join-1000-20261105](../../performance/benchmarks/alliance-join-1000-20261105/README.md)）。契约：
+
+- **并发度**：`EffectConsumer.Workers`，不写取 `dataengine.effect_consumer.workers`（缺省 16，`min:1 max:1024`，加载配置时校验一次；`Workers` 负数拒绝订阅）。`1` 时在回调里同步处理、不推迟结算，与此前逐条处理逐字相同；传输不支持推迟结算（`DeferSettle == nil`，测试替身）时同样退回逐条。
+- **顺序**：同一 `Key` 的 effect 在本进程按到达顺序逐条处理（前一条 handler 返回、结算之后才开始下一条），不同 `Key` 并发，同时在跑的 handler ≤ Workers。`Key` 为空的 effect 各自处理、不与任何 effect 排序——没有实体可排，串成一条会让所有无 Key 的 effect 互相挡住；仓内生产方都给了 Key（下表）。同一进程内不同实体的处理先后不再与流顺序相同；多实例共享 durable 时本来就不成立，nak 退避重投也本来就可能让同一实体的 effect 晚于它后面那条生效。
+- **派发**：回调解开信封（解不开照旧 Term）→ 取一个在途名额 → `JetStreamMsg.DeferSettle` 推迟结算 → 交给 [worker.KeyedDispatcher](../../../infra/base/worker/keyed.go)（与总线 RPC 的按顺序键派发同一份实现，[rpc_dispatch.go](../../../infra/network/bus/rpc_dispatch.go)）后返回，nats.go 接着投下一条；派发的任务等一个 worker 名额、跑 inbox 事务、按结果 `settle`。按 Key 排队而不是哈希到固定 worker：handler 会同步调别的服务（成员变化 effect 调守卫所在实例），固定 worker 让一个慢实体挡住同 worker 上的其他实体。
+- **准入上界**：已接纳未结算（排队与在跑）的 effect ≤ 消费者的 `MaxAckPending`（缺省 256，与 broker 侧在途上限同一个数）。满了回调停在准入处等一条结算（背压）：这条不确认、不 nak，nats.go 不投后面的；订阅 Stop（handler ctx 取消）时按 ctx 错误 nak 交还 broker。不 nak 而是等，是因为 nak 的那条会在退避后才重投，同一实体后面的 effect 会先被接纳，顺序就乱了。
+- **AckWait**：排队期间每 AckWait/2 发一次 in-progress（[fnats.KeepInProgress](../../../infra/network/nats/jetstream.go)，与总线 JetStream RPC 共用）；排队超过 AckWait/10 的开始处理前再发一次，broker 侧的重投期限不早于 handler 期限（AckWait，从开始处理算）减 AckWait/10。handler 开始后不再发心跳：卡住的 handler 照旧在 AckWait 后被 broker 重投，不会被心跳无限续命。
+- **不变**：inbox 事务、按 EffectID 去重、至少一次、ok / duplicate / retry / poison 计数与 Term 规则、App 停机 Drain 等全部推迟的结算完成（订阅的 `Closed`）。handler panic 只结束这一条（nak 重投），同 Key 后面的照常处理。
+- 回归（[effects_test.go](../../../wiring/dataengine/effects_test.go)，替身按 nats.go 的方式逐条投递并支持 `DeferSettle`）：不同实体并发、同实体按到达顺序、在途上界背压、Workers 上限、Workers=1 逐条（配置与字段两种写法）、Stop 时排队的 nak、panic、排队心跳；修前前四条全红（回调被钉住的 handler 挡住，后面的 effect 5 s 内不结算）。
+
+核对（2026-11-05，当前源码；codebase-memory 图谱连不上，直接读源码与 `rg`）：仓内经 `SubscribeEffects` 的消费者在“同 Key 有序、不同 Key 并发”下都成立，Key 都是实体：
+
+| 消费者 | Key | 依据 |
+| --- | --- | --- |
+| game-demo `player.level_up` → 升级邮件（`level_up_mail.go`） | 玩家 ID | 每条独立发一封邮件、`RequestID` = EffectID 幂等；同一玩家仍按到达顺序 |
+| alliance `alliance.member_changed` → `HandleMemberChanged` | 玩家 ID | 只改这个玩家的守卫（`ResolveGuard` / `ClearGuard`，按请求号幂等）并给他发通知；不同玩家的守卫与通知互不相干。同一玩家的入会 / 退出 / 再入会同 Key、在本进程按到达顺序（比原来只靠守卫预留串起更强）；跨实例仍靠守卫预留 |
+| alliance `alliance.reservation_due` → `HandleReservationDue` | 玩家 ID | 先向联盟 `Settle`（结论终局，联盟侧按路由键有序），再按结论解这个玩家的守卫；同一联盟不同玩家的 `Settle` 并发到达联盟，由联盟实体串行裁决 |
+| alliance `alliance.war_declared` → `HandleWarDeclared` | 敌方联盟 ID | `AcknowledgeWar` 按请求号幂等，拒绝为终局；同一敌方联盟仍有序 |
+| `roost add effect` 生成的骨架 | 业务传给 `Emit<Topic>(key, …)` 的 key | 骨架注释与 `roost help effect` 写明“同 Key 有序、不同 Key 并发、无 Key 不排序、跨副本不保证” |
+
+不经 `SubscribeEffects`、不受影响的：saga 启动中继 `SubscribeNestStarts`（自己的 `Workers`，本来就不保证顺序）；game-demo `activity.phase_due`（`nestwal.SubscribeJetStreamEffects` 直接订阅，仍在回调里逐条）。没有发现依赖跨实体顺序的消费者。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。
