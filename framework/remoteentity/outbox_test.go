@@ -661,3 +661,302 @@ func TestOutboxWriterPublishesItsOwnCommitBeforeOtherCoordinators(t *testing.T) 
 		t.Fatalf("another process published the writer's commit inside the takeover grace: marks=%d", marks)
 	}
 }
+
+// outboxClock 是发布归属判定用的可控时钟：设了时刻就用它，清空后回到真实时间。
+type outboxClock struct{ at atomic.Pointer[time.Time] }
+
+func (c *outboxClock) set(at time.Time) { c.at.Store(&at) }
+func (c *outboxClock) real()            { c.at.Store(nil) }
+func (c *outboxClock) now() time.Time {
+	if at := c.at.Load(); at != nil {
+		return *at
+	}
+	return time.Now()
+}
+
+// insertAppliedOutboxCommit 直接写一条已持久未发布（Applied）的事务记录，模拟写者已经崩溃、没来得及发布。
+func insertAppliedOutboxCommit(t *testing.T, mongo fmongo.IMongo, tx entity.RemoteTransactionID, entityID int64, base uint64, writer int32, created time.Time) {
+	t.Helper()
+	commit := entity.RemoteCommit{TransactionID: tx, EntityID: entityID, Kind: outboxOwnerKind, BaseVersion: base, NextVersion: base + 1,
+		MarkerEpoch: 1, LockFence: 1, RouteEpoch: 1, Schema: 1, Codec: 1}
+	doc := mongoRemoteTransaction{ID: tx.String(), State: uint8(entity.RemoteCommitApplied), WriterSID: writer, CreatedAt: created.UTC(),
+		Receipts: []mongoRemoteReceipt{encodeMongoReceipt(remoteCommitReceipt(commit))}}
+	doc.Commits, doc.MutationMasks = storeRemoteCommits([]entity.RemoteCommit{commit})
+	if _, err := mongo.Database("control").Collection(remoteTxCollection).InsertOne(context.Background(), doc); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func outboxCommitState(t *testing.T, process *outboxProcess, tx entity.RemoteTransactionID) entity.RemoteCommitState {
+	t.Helper()
+	status, err := process.storage.MongoCommitter.CommitStatus(context.Background(), tx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return status.State
+}
+
+// 宽限期：别的进程写的提交在写入后宽限期内不代发，到期那一刻起代发，且只发布一次；扫描时为最早的留存提交安排了到期唤醒。
+func TestOutboxForeignCommitIsTakenOverOnlyAfterTheGrace(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mongo := newRemoteMongoFake()
+	cfg := DefaultConfig()
+	cfg.FinalizeProjectionTimeout = time.Minute // 宽限期取它：测试时钟远离真实时间，计时器不会在用例里触发
+	other := newOutboxPeer(t, mongo, 2000, cfg, true)
+	clock := &outboxClock{}
+	other.mgr.remote.outboxNow = clock.now
+	created := time.Unix(1_800_000_000, 0)
+	tx := remoteTestTxID(202)
+	insertAppliedOutboxCommit(t, mongo, tx, 7401, 1, 1000, created)
+
+	clock.set(created.Add(time.Minute - time.Millisecond))
+	if err := other.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if state := outboxCommitState(t, other, tx); state != entity.RemoteCommitApplied || other.storage.marks.Load() != 0 {
+		t.Fatalf("taken over inside the grace: state=%v marks=%d", state, other.storage.marks.Load())
+	}
+	other.mgr.remote.republishMu.Lock()
+	due, armed := other.mgr.remote.takeoverDue, other.mgr.remote.takeoverTimer != nil
+	other.mgr.remote.republishMu.Unlock()
+	if !armed || !due.Equal(created.Add(time.Minute)) {
+		t.Fatalf("no wake-up at the grace expiry: armed=%v due=%v want %v", armed, due, created.Add(time.Minute))
+	}
+
+	clock.set(created.Add(time.Minute))
+	if err := other.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if state := outboxCommitState(t, other, tx); state != entity.RemoteCommitCommitted {
+		t.Fatalf("not taken over at the grace expiry: state=%v", state)
+	}
+	if err := other.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if marks := other.storage.marks.Load(); marks != 1 {
+		t.Fatalf("published %d times, want once", marks)
+	}
+}
+
+// 写者崩溃：它留下的 Applied 提交没有任何本地写再去唤醒别的进程，别的进程在第一次扫描时为它安排到期唤醒，宽限期后
+// 自行代发；提交不丢、只发布一次，之后同 sid 重启的写者也不会再发一次。
+func TestOutboxCrashedWritersCommitIsPublishedAfterTheGraceWithoutAnotherWake(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	mongo := newRemoteMongoFake()
+	cfg := DefaultConfig()
+	cfg.FinalizeProjectionTimeout = 300 * time.Millisecond
+	cfg.FinalizeRetryInterval = 10 * time.Millisecond
+	// 写者：strict 写持久为 Applied 后协调者一直停在读页之前，相当于发布前崩溃。
+	writer := newOutboxWriter(t, mongo, 1000, cfg, false)
+	tx := remoteTestTxID(203)
+	batch := writer.writeStrict(t, ctx, tx)
+	defer batch.Abort(context.Background(), nil)
+	awaitSignal(t, ctx, writer.storage.scanStarted, "the writer's outbox scan")
+	status, err := writer.storage.MongoCommitter.CommitStatus(ctx, tx)
+	if err != nil || status.State != entity.RemoteCommitApplied || status.WriterSID != 1000 {
+		t.Fatalf("durable record=%+v err=%v, want Applied written by 1000", status, err)
+	}
+
+	other := newOutboxPeer(t, mongo, 2000, cfg, true)
+	clock := &outboxClock{}
+	other.mgr.remote.outboxNow = clock.now
+	clock.set(status.CreatedAt)
+	if err := other.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if state := outboxCommitState(t, other, tx); state != entity.RemoteCommitApplied {
+		t.Fatalf("taken over before the grace: state=%v", state)
+	}
+	clock.real()
+	// 不再调用 RecoverOutbox、也没有本地写：只靠扫描时安排的到期唤醒。
+	for outboxCommitState(t, other, tx) != entity.RemoteCommitCommitted {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the crashed writer's commit was never published (marks=%d)", other.storage.marks.Load())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	restarted := newOutboxPeer(t, mongo, 1000, cfg, true)
+	if err := restarted.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if marks := other.storage.marks.Load() + restarted.storage.marks.Load() + writer.storage.marks.Load(); marks != 1 {
+		t.Fatalf("published %d times, want once", marks)
+	}
+}
+
+// 同 sid 重启：新进程把旧进程（同一个 sid）留下的 Applied 提交当作自己的，启动恢复立即发布，不等宽限期；别的进程仍按
+// 宽限期留着它。单实例锁保证此时旧进程已经不在。
+func TestOutboxRestartedWriterWithTheSameSidPublishesLeftoverCommitsAtOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mongo := newRemoteMongoFake()
+	cfg := DefaultConfig()
+	created := time.Now()
+	tx := remoteTestTxID(204)
+	insertAppliedOutboxCommit(t, mongo, tx, 7402, 1, 1000, created)
+
+	other := newOutboxPeer(t, mongo, 2000, cfg, true)
+	clock := &outboxClock{}
+	other.mgr.remote.outboxNow = clock.now
+	clock.set(created)
+	if err := other.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	restarted := newOutboxPeer(t, mongo, 1000, cfg, true)
+	restarted.mgr.remote.outboxNow = clock.now
+	if err := restarted.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if state := outboxCommitState(t, restarted, tx); state != entity.RemoteCommitCommitted {
+		t.Fatalf("the restarted writer left its predecessor's commit unpublished: state=%v", state)
+	}
+	if marks := other.storage.marks.Load(); marks != 0 {
+		t.Fatalf("another process took it over inside the grace: marks=%d", marks)
+	}
+	if state := restarted.mgr.localRemoteCommitState(tx); state != entity.RemoteCommitCommitted {
+		t.Fatalf("restarted writer tracker=%v, want Committed", state)
+	}
+}
+
+// 同一实体上排在后面的提交本轮要发布时，前面别的进程留下的提交立即代发、先于它发布；无关实体上的留存提交不受影响。
+func TestOutboxForeignPredecessorOfAPublishedCommitIsTakenOverFirst(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mongo := newRemoteMongoFake()
+	cfg := DefaultConfig()
+	cfg.OutboxPublishWorkers = 4
+	created := time.Now()
+	crashed, own, unrelated := remoteTestTxID(205), remoteTestTxID(206), remoteTestTxID(207)
+	insertAppliedOutboxCommit(t, mongo, crashed, 7403, 1, 1000, created)
+	insertAppliedOutboxCommit(t, mongo, own, 7403, 2, 2000, created.Add(time.Millisecond))
+	insertAppliedOutboxCommit(t, mongo, unrelated, 7404, 1, 1000, created.Add(2*time.Millisecond))
+
+	other := newOutboxPeer(t, mongo, 2000, cfg, true)
+	clock := &outboxClock{}
+	other.mgr.remote.outboxNow = clock.now
+	clock.set(created.Add(3 * time.Millisecond))
+	var mu sync.Mutex
+	var order []entity.RemoteTransactionID
+	other.storage.beforeMark = func(id entity.RemoteTransactionID) {
+		mu.Lock()
+		order = append(order, id)
+		mu.Unlock()
+	}
+	if err := other.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 2 || order[0] != crashed || order[1] != own {
+		t.Fatalf("publication order=%v, want [%v %v]", order, crashed, own)
+	}
+	if state := outboxCommitState(t, other, unrelated); state != entity.RemoteCommitApplied {
+		t.Fatalf("unrelated foreign commit taken over inside the grace: state=%v", state)
+	}
+}
+
+// 写者活着但慢：它的协调者已读到页、标记之前别的进程（宽限期已过）抢先代发。写者标记时发现权威里已是 Committed，
+// 当作完成，tracker 结束，strict 写照常得到确认。
+func TestOutboxWriterFindingItsCommitAlreadyPublishedCompletesItsTracker(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	mongo := newRemoteMongoFake()
+	writer := newOutboxWriter(t, mongo, 1000, DefaultConfig(), true)
+	other := newOutboxPeer(t, mongo, 2000, DefaultConfig(), true)
+	clock := &outboxClock{}
+	other.mgr.remote.outboxNow = clock.now
+	clock.set(time.Now().Add(time.Hour))
+	tx := remoteTestTxID(208)
+	var once sync.Once
+	writer.storage.beforeMark = func(id entity.RemoteTransactionID) {
+		if id == tx {
+			once.Do(func() {
+				if err := other.mgr.RecoverOutbox(ctx); err != nil {
+					t.Error(err)
+				}
+			})
+		}
+	}
+	batch := writer.writeStrict(t, ctx, tx)
+	defer batch.Close(context.Background())
+	commitCtx, cancelCommit := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelCommit()
+	_, err := batch.Commit(commitCtx)
+	if state := writer.mgr.localRemoteCommitState(tx); err != nil || state != entity.RemoteCommitCommitted {
+		t.Fatalf("writer err=%v tracker=%v, want its strict write confirmed", err, state)
+	}
+	if marks := other.storage.marks.Load(); marks != 1 {
+		t.Fatalf("the other process did not take over first: marks=%d", marks)
+	}
+}
+
+// 写者活着但慢，且别的进程在写者读页之前就代发了：写者的协调者读不到这笔提交，没人通知它的 tracker（不回源是有意的，
+// 见 REMOTE_ENTITY“outbox 发布归属”）。strict 写超时转延迟收尾，收尾在投影期限到期时回源读到 Committed 释放——
+// 宽限期不短于这个期限，所以真实部署里代发发生时写者的收尾期限也已基本到期；这里钉住收尾不会超出期限挂着。
+func TestOutboxWriterOvertakenBeforeItsScanIsReleasedAtTheProjectionDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	mongo := newRemoteMongoFake()
+	cfg := DefaultConfig()
+	cfg.FinalizeProjectionTimeout = 300 * time.Millisecond
+	cfg.FinalizeRetryInterval = 10 * time.Millisecond
+	writer := newOutboxWriter(t, mongo, 1000, cfg, false)
+	steps := make(chan string, 16)
+	writer.mgr.remote.finalizeTrace = func(_ entity.RemoteTransactionID, step string) { steps <- step }
+	writer.mgr.StartFinalizer()
+	other := newOutboxPeer(t, mongo, 2000, cfg, true)
+	clock := &outboxClock{}
+	other.mgr.remote.outboxNow = clock.now
+	clock.set(time.Now().Add(time.Hour))
+	tx := remoteTestTxID(209)
+	batch := writer.writeStrict(t, ctx, tx)
+	awaitSignal(t, ctx, writer.storage.scanStarted, "the writer's outbox scan")
+	if err := other.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	close(writer.storage.scanRelease)
+	commitCtx, cancelCommit := context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancelCommit()
+	if _, err := batch.Commit(commitCtx); !errors.Is(err, entity.ErrRemotePersistenceIndeterminate) {
+		t.Fatalf("commit err=%v, want the strict wait to end without a conclusion", err)
+	}
+	closed := time.Now()
+	if err := batch.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for step := ""; step != "released"; {
+		select {
+		case step = <-steps:
+		case <-ctx.Done():
+			t.Fatal("the deferred close was never released")
+		}
+	}
+	if elapsed := time.Since(closed); elapsed > cfg.FinalizeProjectionTimeout+2*time.Second {
+		t.Fatalf("released %v after Close, want about FinalizeProjectionTimeout (%v)", elapsed, cfg.FinalizeProjectionTimeout)
+	}
+	if state := writer.mgr.localRemoteCommitState(tx); state != entity.RemoteCommitCommitted {
+		t.Fatalf("writer tracker=%v after release, want Committed", state)
+	}
+}
+
+// 宽限期的零值与下限都是 FinalizeProjectionTimeout。
+func TestOutboxTakeoverGraceFloorsAtTheProjectionTimeout(t *testing.T) {
+	for _, tc := range []struct{ grace, projection, want time.Duration }{
+		{0, 30 * time.Second, 30 * time.Second},
+		{time.Second, 30 * time.Second, 30 * time.Second},
+		{time.Minute, 30 * time.Second, time.Minute},
+		{0, 0, 30 * time.Second},
+	} {
+		cfg := DefaultConfig()
+		cfg.OutboxTakeoverGrace, cfg.FinalizeProjectionTimeout = tc.grace, tc.projection
+		if got := NewManager(newMockVersionedLockFactory(), cfg, 1000).outboxTakeoverGrace(); got != tc.want {
+			t.Fatalf("grace=%v projection=%v: got %v want %v", tc.grace, tc.projection, got, tc.want)
+		}
+	}
+}
