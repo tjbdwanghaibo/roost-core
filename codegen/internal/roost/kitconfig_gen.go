@@ -124,7 +124,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 		{Name: "dataengine.projection.max_unacked_records", Kind: "int", Min: "0", Help: "未投影 WAL 记录数的硬上限（0 不限）：到上限时新的 Nest 提交在 WAL 准入前被拒。同进程有 saga Mod 且准入开启时必须 > 0 且 ≥ 4 × saga.admission.high_records", Starter: true, Example: "20000"},
 		{Name: "dataengine.projection.warn_unacked_records", Kind: "int", Min: "0"},
 		{Name: "dataengine.outbox.owner", Kind: "string", Help: "不写取 dataengine-<sid>"},
-		{Name: "dataengine.outbox.workers", Kind: "int", Default: "2", Min: "1", Starter: true, Example: "2"},
+		{Name: "dataengine.outbox.workers", Kind: "int", Default: "8", Min: "1", Help: "effect outbox 发布 worker 数（每个 worker 一批认领、发布、确认）。缺省 8（2026-11-05 由 2 调大，压测后再定：2 个 worker 在本机约 330 次/秒开始积压）", Starter: true, Example: "8"},
 		{Name: "dataengine.outbox.batch_size", Kind: "int", Default: "64", Min: "1", Starter: true, Example: "64"},
 		{Name: "dataengine.outbox.lease_duration", Kind: "duration", Default: "30s", Min: "1ns", Starter: true, Example: "30s"},
 		{Name: "dataengine.outbox.poll_interval", Kind: "duration", Default: "100ms", Min: "1ns", Starter: true, Example: "100ms"},

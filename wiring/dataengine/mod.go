@@ -154,7 +154,7 @@ type config struct {
 	} `config:"dataengine.projection"`
 	Outbox struct {
 		Owner           string        `config:"owner" help:"不写取 dataengine-<sid>"`
-		Workers         int           `config:"workers" default:"2" min:"1" example:"2"`
+		Workers         int           `config:"workers" default:"8" min:"1" example:"8" help:"effect outbox 发布 worker 数（每个 worker 一批认领、发布、确认）。缺省 8（2026-11-05 由 2 调大，压测后再定：2 个 worker 在本机约 330 次/秒开始积压）"`
 		BatchSize       int           `config:"batch_size" default:"64" min:"1" example:"64"`
 		LeaseDuration   time.Duration `config:"lease_duration" default:"30s" min:"1ns" example:"30s"`
 		PollInterval    time.Duration `config:"poll_interval" default:"100ms" min:"1ns" example:"100ms"`
