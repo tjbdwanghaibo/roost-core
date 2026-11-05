@@ -318,10 +318,19 @@ func TestInterestRefreshGapWaitEndsOnStop(t *testing.T) {
 	if err := reader.Stop(ctx); err != nil {
 		t.Fatalf("Stop with a refresh waiting on its gap: %v", err)
 	}
+	// Stop 等的是遍历持有的 work 准入（runInterestRefresh 的 defer work.End()），它在遍历收尾之后才释放，
+	// 所以 Stop 返回时遍历状态必定已经收尾。不能用 done 判断：done 是包装 goroutine 在 run 返回之后才关的，
+	// 与 Stop 返回之间有个窗口（-race -count=200 约 5 次误红）。
+	reader.refreshMu.Lock()
+	running := reader.refreshRunning
+	reader.refreshMu.Unlock()
+	if running {
+		t.Fatal("Stop returned while the refresh run was still running")
+	}
 	select {
 	case <-done:
-	default:
-		t.Fatal("Stop returned while the refresh run was still running")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the refresh run goroutine did not exit after Stop")
 	}
 	if got := reader.acceptInterestRefresh(); got != "stopped" {
 		t.Fatalf("accept after Stop = %q, want stopped", got)
