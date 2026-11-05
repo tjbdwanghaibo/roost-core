@@ -143,6 +143,9 @@ func readRemoteSnapshot(access RemoteAccess, read remoteSnapshotRead) (entity.Re
 	if current := fctx.CurrentContext(); current != nil && current.Base != nil {
 		baseCtx = current.Base
 	}
+	if err := entity.CheckRemoteSnapshotsEnabled(access.Ref.Kind); err != nil {
+		return entity.RemoteSnapshot{}, err
+	}
 	minVersion := access.MinVersion
 	if access.AllowStale && consistency == entity.RemoteReadCached {
 		// AllowStale 接受低于 MinVersion 的快照（调用方的 RemoteSnapshot.Accepts 判定）。Cached 读出口对不满足

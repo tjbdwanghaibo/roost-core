@@ -123,6 +123,9 @@ func NewRemoteMirrorReader[T any](source RemoteSnapshotReadOnly, spec RemoteMirr
 	if spec.Kind == EntityKindNone || spec.Schema == 0 {
 		return nil, fmt.Errorf("remote mirror: spec needs a kind and a schema")
 	}
+	if err := CheckRemoteSnapshotsEnabled(spec.Kind); err != nil {
+		return nil, fmt.Errorf("remote mirror: %w", err)
+	}
 	return &RemoteMirrorReader[T]{source: source, spec: spec, decode: decode}, nil
 }
 

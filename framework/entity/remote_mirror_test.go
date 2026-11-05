@@ -271,3 +271,20 @@ func TestRemoteSnapshotReadExitsShareOnePostCondition(t *testing.T) {
 		}
 	})
 }
+
+// snapshots=none 的 kind 没有快照可读：在登记过它的进程里，构造它的 Mirror 读者直接报错，而不是永远读到“没有”。
+func TestMirrorReaderRefusesAKindThatPublishesNoSnapshots(t *testing.T) {
+	const kind EntityKind = 249
+	spec := RemoteMirrorSpec{Kind: kind, Scope: 1, Schema: 77, Codec: 1}
+	decode := func(data []byte) (string, error) { return string(data), nil }
+	if _, err := NewRemoteMirrorReader(fixedReadOnly{}, spec, decode); err != nil {
+		t.Fatalf("before DisableRemoteSnapshots: %v", err)
+	}
+	DisableRemoteSnapshots(kind)
+	if !RemoteSnapshotsDisabled(kind) || RemoteSnapshotsDisabled(kind+1) {
+		t.Fatal("DisableRemoteSnapshots did not mark exactly its kind")
+	}
+	if _, err := NewRemoteMirrorReader(fixedReadOnly{}, spec, decode); !errors.Is(err, ErrRemoteSnapshotsDisabled) {
+		t.Fatalf("err = %v, want ErrRemoteSnapshotsDisabled", err)
+	}
+}

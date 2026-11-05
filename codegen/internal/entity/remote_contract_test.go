@@ -184,3 +184,86 @@ func TestGenerateEmitsAndReconcilesRemoteGuardTests(t *testing.T) {
 		t.Fatalf("stale companion test survived the entity losing remote management: %v", err)
 	}
 }
+
+// snapshots=none（Remote 托管 kind 级选项）：提交只带 DAO 写，不生成快照、DAO 视图与删除时的失效，登记时把 kind
+// 标成不发布快照；不是 remote=managed 的实体、拼错的值在生成前被拒。
+func TestSnapshotsNoneDropsTheRemoteSnapshots(t *testing.T) {
+	entities, pkg, err := parseDir(filepath.Join("testdata", "remote"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	render := func(ent EntityDef) string {
+		t.Helper()
+		out := filepath.Join(t.TempDir(), "guild_gen_wire.go")
+		if _, err := generate(ent, pkg, out, true); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	published := render(entities[0])
+	snapshotless := entities[0]
+	snapshotless.NoSnapshots = true
+	none := render(snapshotless)
+	for _, code := range []string{
+		"commit.Snapshots = append(commit.Snapshots",
+		"entity.BuildRemoteDAOViews(",
+		"commit.Invalidations = append(",
+		"entity.MustRegisterRemoteSnapshotDecoder(",
+	} {
+		if !strings.Contains(published, code) {
+			t.Errorf("snapshots=published lacks %q", code)
+		}
+		if strings.Contains(none, code) {
+			t.Errorf("snapshots=none still generates %q", code)
+		}
+	}
+	for _, code := range []string{"entity.DisableRemoteSnapshots(EntityKindGuild)", "commit.Mutations = append(commit.Mutations, mutation)"} {
+		if !strings.Contains(none, code) {
+			t.Errorf("snapshots=none lacks %q", code)
+		}
+	}
+
+	for _, tc := range []struct {
+		params map[string]string
+		want   string
+	}{
+		{map[string]string{"snapshots": "none"}, "snapshots=none applies to a remote=managed entity"},
+		{map[string]string{"remote": "none", "snapshots": "none"}, "snapshots=none applies to a remote=managed entity"},
+		{map[string]string{"remote": "managed", "snapshots": "off"}, `snapshots="off" is not one of published|none`},
+	} {
+		if err := validateMarkerValues(tc.params); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%v: err = %v, want %q", tc.params, err, tc.want)
+		}
+	}
+	if err := validateMarkerValues(map[string]string{"remote": "managed", "snapshots": "none"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 指向 snapshots=none kind 的 //roost:mirror 永远读不到东西：工程扫描时拒绝（跨包按常量名匹配）。
+func TestMirrorOfASnapshotlessKindIsRefused(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("owner/member.go", "package owner\n\nimport \"github.com/tjbdwanghaibo/roost-core/framework/entity\"\n\nconst EntityKindMember entity.EntityKind = 240\n\n//roost:entity entityKind=EntityKindMember remote=managed snapshots=none\ntype Member struct {\n\t*entity.RemoteEntityBase\n\tentity.DaoManager\n}\n")
+	write("reader/member_view.go", "package reader\n\nimport owner \"example.com/game/owner\"\n\nvar _ = owner.EntityKindMember\n\n//roost:mirror entityKind=owner.EntityKindMember coll=members\ntype MemberView struct {\n\tAllianceID int64 `bson:\"alliance_id\"`\n}\n")
+	err := rejectMirrorsOfSnapshotlessKinds([]string{filepath.Join(root, "owner"), filepath.Join(root, "reader")})
+	if err == nil || !strings.Contains(err.Error(), "//roost:mirror MemberView reads owner.EntityKindMember, whose entity Member declares snapshots=none") {
+		t.Fatalf("err = %v", err)
+	}
+	if err := rejectMirrorsOfSnapshotlessKinds([]string{filepath.Join(root, "owner")}); err != nil {
+		t.Fatalf("no mirror: %v", err)
+	}
+}

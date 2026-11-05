@@ -404,7 +404,10 @@ func register{{.Entity.Name}}Entity() {
 			},
 {{- end}}
 		})
-{{- if .RemoteV2}}
+{{- if and .RemoteV2 .Entity.NoSnapshots}}
+		// snapshots=none: no Remote snapshot is written or published for this kind.
+		entity.DisableRemoteSnapshots({{.Entity.EntityKind}})
+{{- else if .RemoteV2}}
 {{- range .Entity.Daos}}
 		entity.RegisterRemoteDAOViews({{ctor .TypeName}}(), {{$.Entity.EntityKind}})
 		entity.MustRegisterRemoteSnapshotDecoder(
@@ -590,10 +593,12 @@ func (e *{{.Entity.Name}}) BuildRemoteCommitLocked(lease entity.RemoteWriteLease
 				Collection: e.{{.FieldName}}.CollName(), ID: e.{{.FieldName}}.Id(),
 			})
 		}
+{{- if not $.Entity.NoSnapshots}}
 		commit.Invalidations = append(commit.Invalidations, entity.RemoteDAOViewKeys({{ctor .TypeName}}(), e.GUId(), e.GetEntityKind())...)
 		commit.Invalidations = append(commit.Invalidations, entity.RemoteSnapshotKey{
 			EntityID: e.GUId(), Kind: e.GetEntityKind(), Scope: entity.RemoteSnapshotScope({{daoCollectionConst .TypeName}}),
 		})
+{{- end}}
 {{- end}}
 		return commit, nil
 	}
@@ -621,6 +626,7 @@ func (e *{{.Entity.Name}}) BuildRemoteCommitLocked(lease entity.RemoteWriteLease
 				Data:          data,
 			}
 			commit.Mutations = append(commit.Mutations, mutation)
+{{- if not $.Entity.NoSnapshots}}
 			views, err := entity.BuildRemoteDAOViews(e.{{.FieldName}}, e.GUId(), e.GetEntityKind(), mask)
 			if err != nil { return entity.RemoteCommit{}, fmt.Errorf("{{$.Entity.Name}}: build remote views for {{.CollName}}: %w", err) }
 			commit.Snapshots = append(commit.Snapshots, views...)
@@ -633,6 +639,7 @@ func (e *{{.Entity.Name}}) BuildRemoteCommitLocked(lease entity.RemoteWriteLease
 				Data:     append([]byte(nil), data...),
 				Checksum: entity.RemoteSnapshotChecksum(data),
 			})
+{{- end}}
 		}
 	}
 {{- end}}

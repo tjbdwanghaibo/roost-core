@@ -36,6 +36,11 @@ type EntityDef struct {
 	Imports         []ImportDef
 	ExistingMethods map[string]bool
 	RemoteBase      bool // embeds entity.RemoteEntityBase
+	// NoSnapshots: snapshots=none on a remote=managed entity — its commits
+	// carry only the DAO writes, no Remote snapshot (no
+	// _remote_entity_snapshots document, no L2 entry, no interest broadcast),
+	// and nothing can read it as a //roost:mirror or a RemoteViewRef.
+	NoSnapshots bool
 }
 
 // ImportDef is an imported package referenced by generated code.
@@ -233,6 +238,7 @@ func extractEntities(fset *token.FileSet, f *ast.File, content []byte, filePath 
 						return nil, fmt.Errorf("%s:%d: //roost:entity %w", filePath, m.line, err)
 					}
 					ent.RemotePolicy = parseRemoteParam(m.params["remote"])
+					ent.NoSnapshots = m.params["snapshots"] == "none"
 					if pool := m.params["businessPool"]; pool != "" {
 						if pool != "short" && pool != "long" {
 							return nil, fmt.Errorf("invalid businessPool %q: want short or long", pool)
@@ -300,6 +306,17 @@ func validateMarkerValues(params map[string]string) error {
 			return fmt.Errorf(`remote=%q is no longer supported: lock order comes from the entity's category, so register the kind in a category (entity.EntityCategoryWorld / entity.EntityCategoryOther / ...) and use remote=none|managed`, v)
 		}
 		return fmt.Errorf(`remote=%q is not one of none|managed (a read-only mirror is a //roost:mirror DTO)`, v)
+	}
+	if v, ok := params["snapshots"]; ok {
+		switch v {
+		case "published":
+		case "none":
+			if parseRemoteParam(params["remote"]) != "entity.RemotePolicyManaged" {
+				return errors.New(`snapshots=none applies to a remote=managed entity (only those publish Remote snapshots)`)
+			}
+		default:
+			return fmt.Errorf(`snapshots=%q is not one of published|none`, v)
+		}
 	}
 	if v, ok := params["category"]; ok && !validCategoryParam(v) {
 		return fmt.Errorf(`category=%q is not a category constant expression (e.g. entity.EntityCategoryOther, view.EntityCategoryPlayer, EntityCategoryWorld)`, v)

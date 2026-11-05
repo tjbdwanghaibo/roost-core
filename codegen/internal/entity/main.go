@@ -75,6 +75,9 @@ func run(args []string, stdout io.Writer) error {
 		return nil
 	}
 
+	if err := rejectMirrorsOfSnapshotlessKinds(scanDirs); err != nil {
+		return err
+	}
 	selfSyncFound := false
 	for _, dir := range scanDirs {
 		// Parse all .go files in the directory
@@ -219,6 +222,52 @@ func run(args []string, stdout io.Writer) error {
 		return fmt.Errorf("-self-sync %s: no //roost:entity struct named %s under %s", *selfSync, *selfSync, scanDir)
 	}
 	return nil
+}
+
+// rejectMirrorsOfSnapshotlessKinds refuses a //roost:mirror DTO whose owner
+// kind declares snapshots=none: nothing is ever published for it, so the
+// mirror would read "not found" for good. Kinds are matched by their constant
+// name (EntityKindX, or pkg.EntityKindX in another package) over every
+// directory this run scans; the generated registration also refuses such a
+// reader at run time (entity.ErrRemoteSnapshotsDisabled) in a process that
+// registered the kind.
+func rejectMirrorsOfSnapshotlessKinds(dirs []string) error {
+	snapshotless := map[string]string{}
+	type mirrorAt struct {
+		def MirrorDef
+		dir string
+	}
+	var mirrors []mirrorAt
+	for _, dir := range dirs {
+		defs, _, err := parsePackage(dir)
+		if err != nil {
+			return fmt.Errorf("parse %s: %w", dir, err)
+		}
+		for _, ent := range defs.Entities {
+			if ent.NoSnapshots {
+				snapshotless[kindConstName(ent.EntityKind)] = ent.Name
+			}
+		}
+		for _, mirror := range defs.Mirrors {
+			mirrors = append(mirrors, mirrorAt{def: mirror, dir: dir})
+		}
+	}
+	for _, mirror := range mirrors {
+		if owner, ok := snapshotless[kindConstName(mirror.def.EntityKind)]; ok {
+			return fmt.Errorf("%s: //roost:mirror %s reads %s, whose entity %s declares snapshots=none: no snapshot is ever published for it; drop the mirror or the snapshots=none",
+				mirror.dir, mirror.def.Name, mirror.def.EntityKind, owner)
+		}
+	}
+	return nil
+}
+
+// kindConstName is the constant's own name in a kind expression
+// (pkg.EntityKindX → EntityKindX).
+func kindConstName(expr string) string {
+	if i := strings.LastIndex(expr, "."); i >= 0 {
+		return expr[i+1:]
+	}
+	return expr
 }
 
 func entityNames(entities []EntityDef) []string {
