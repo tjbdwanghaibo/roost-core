@@ -99,7 +99,8 @@ func (m *Mod) OptionalDependsOn() []app.ModName {
 }
 
 // workerPool 是 nest.short / nest.long / nest.io 的声明：0 取框架缺省。
-// 短业务池等待缺省为65536（全池共享），I/O 池为64；显式值仍按独立预算生效。
+// 短业务池等待缺省为65536（全池共享），I/O 池为64；I/O 池 worker 缺省 max(256, 4×短池)（strict / Remote 写在 I/O worker
+// 上等持久确认，见 framework/nest dispatcher 的 defaultIOWorkers）。显式值仍按独立预算生效。
 type workerPool struct {
 	Workers       int `config:"workers" min:"0" example:"0"`
 	QueueCapacity int `config:"queue_capacity" min:"0" example:"0"`

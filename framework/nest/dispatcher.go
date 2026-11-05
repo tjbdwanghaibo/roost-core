@@ -126,6 +126,9 @@ func (m *Dispatcher) ConfigureDelayedAdmission(capacity int, maxDelay time.Durat
 	}
 }
 
+// defaultIOWorkers 是 I/O 池 worker 数缺省值的下限（nest.io.workers 写 0 时取 max(它, 4×短池)）。
+const defaultIOWorkers = 256
+
 // OnInit 初始化延时队列并启动延时泵，按配置（未配置取默认值）建立 short / io / long 三池。
 func (m *Dispatcher) OnInit() {
 	m.mu.Lock()
@@ -141,7 +144,10 @@ func (m *Dispatcher) OnInit() {
 
 	io := m.ioConfig
 	if io.Workers <= 0 {
-		io.Workers = max(32, m.workerNum*4)
+		// strict / Remote 写在 I/O worker 上等持久确认（投影 + 发布），一个写批次从准备到答复都占着一个 I/O worker。
+		// 缺省因此不低于 defaultIOWorkers，让 Remote 的写准入（remote_entity.max_concurrent_writes，缺省 128，满时答
+		// “可重试”）先于 I/O 池成为上限；原缺省 max(32, 4×短池) 在 10 核机器上是 40，联盟 Join 吞吐被它封顶（2026-11-05）。
+		io.Workers = max(defaultIOWorkers, m.workerNum*4)
 	}
 	if io.QueueCap <= 0 {
 		io.QueueCap = 64

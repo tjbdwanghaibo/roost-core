@@ -27,7 +27,7 @@ type outboxPublicationResult struct {
 func (m *Manager) publishOutboxPage(ctx context.Context, pending []entity.RemoteCommitStatus) error {
 	workers := m.cfg.OutboxPublishWorkers
 	if workers <= 0 {
-		workers = 8
+		workers = 32
 	}
 	workers = min(workers, 64, len(pending))
 	if workers == 0 {

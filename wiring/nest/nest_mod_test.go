@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	coreremote "github.com/tjbdwanghaibo/roost-core/framework/remoteentity"
 	coresaga "github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/health"
@@ -88,6 +89,33 @@ func TestModProvidesInstanceClientAndHealth(t *testing.T) {
 	}
 	if mod.Engine().Running() {
 		t.Fatal("engine still running")
+	}
+}
+
+// strict / Remote 写从准备到持久确认都占着一个 I/O worker：nest.io.workers 不写时，I/O 池不能比 Remote 的写准入
+// （remote_entity.max_concurrent_writes 缺省）先成为上限，否则写入峰值在 I/O 池排队、队列满时被拒，而不是由写准入
+// 答“可重试”。原缺省 max(32, 4×短池) 在短池 10 个 worker 时只有 40（联盟 Join 吞吐被它封顶，2026-11-05）。
+func TestDefaultIOPoolCoversRemoteWriteAdmission(t *testing.T) {
+	cfg := viper.New()
+	cfg.Set("nest.short.workers", 1)
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(mods.ModDataEngine, dataEngineNestProvider{committer: noOpCommitter{}}); err != nil {
+		t.Fatal(err)
+	}
+	mod := NewMod(emptyGetter{})
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mod.StopWithContext(context.Background()) }()
+	writes := coreremote.DefaultConfig().MaxConcurrentWrites
+	if got := mod.Engine().Stats().IO.WorkerNum; got < writes {
+		t.Fatalf("default I/O workers = %d, below the default Remote write admission %d", got, writes)
 	}
 }
 

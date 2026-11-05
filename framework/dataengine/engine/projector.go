@@ -58,7 +58,9 @@ type ProjectorOptions struct {
 	ReplayBatchRecords int
 	ReplayBatchBytes   int
 	ReplayReadBytes    int // 一轮回放保留的逻辑字节上限；首条超大记录允许独占。
-	// ProjectionWorkers 是按实体分片并行投影的通道数上限（同时在途的投影调用数），0 取缺省 8，1 = 串行（含 Remote）。
+	// ProjectionWorkers 是按实体分片并行投影的通道数上限（同时在途的投影调用数），0 取缺省 32，1 = 串行（含 Remote）。
+	// 带回执 / effect / Remote 写的记录每条一个 Mongo 事务，吞吐约为“通道数 ÷ 单条事务时延”；缺省 8 时本机联盟 Join
+	// 在约 150 次/秒封顶（单条约 50ms，2026-11-05），32 让通道数不先于 Mongo 成为上限。
 	// 只在 Store 实现 ParallelProjectionStore 时生效。
 	ProjectionWorkers int
 	// EffectOrder 是带 effect 的记录之间的投影顺序范围（只在并行投影时起作用），空取 EffectOrderEntity。
@@ -86,7 +88,7 @@ func DefaultProjectorOptions() ProjectorOptions {
 		RetryMin: 10 * time.Millisecond, RetryMax: 5 * time.Second,
 		IdlePoll: time.Second, ReplayBatchRecords: 256, ReplayBatchBytes: 4 << 20, ReplayReadBytes: 4 << 20, CloseWAL: true,
 		CheckpointRecords: 256, CheckpointInterval: 20 * time.Millisecond,
-		ProjectionWorkers: 8,
+		ProjectionWorkers: 32,
 	}
 }
 

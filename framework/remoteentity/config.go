@@ -69,7 +69,9 @@ type Config struct {
 	AsyncFinalizeCapacity int
 	AsyncFinalizeWorkers  int
 	// OutboxPublishWorkers 是唯一协调者内部发布独立事务的并发度，与Nestio 池和写额度无关。
-	// 零值取8，上限64；设为1可串行诊断。涉及同一Entity的事务按扫描顺序尝试。
+	// 零值取32，上限64；设为1可串行诊断。涉及同一Entity的事务按扫描顺序尝试。strict 写要等发布完成才答复，
+	// 每个事务约 3 次 Mongo 写（两份快照 + 已发布），吞吐约为“并发度 ÷ 单事务耗时”：原缺省 8 在本机联盟 Join 约
+	// 330 次/秒时已占满约 86%（单事务约 21ms，2026-11-05）。
 	OutboxPublishWorkers  int
 	TransactionTrackLimit int
 	TransactionTrackTTL   time.Duration
@@ -119,7 +121,7 @@ func DefaultConfig() *Config {
 		MaxConcurrentWrites:             128,
 		AsyncFinalizeCapacity:           4096,
 		AsyncFinalizeWorkers:            16,
-		OutboxPublishWorkers:            8,
+		OutboxPublishWorkers:            32,
 		TransactionTrackLimit:           65536,
 		TransactionTrackTTL:             10 * time.Minute,
 		FinalizeRetryInterval:           500 * time.Millisecond,

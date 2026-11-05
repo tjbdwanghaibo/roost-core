@@ -106,7 +106,7 @@ type entityConfig struct {
 		MaxConcurrentWrites       int           `config:"max_concurrent_writes" default:"128" min:"0" help:"同时在途的 Remote 写许可；0 取 async_finalize_capacity，大于它时按它封顶；与 async_finalize_* 一起按 Remote 写入峰值定容"`
 		AsyncFinalizeCapacity     int           `config:"async_finalize_capacity" min:"0" example:"4096"`
 		AsyncFinalizeWorkers      int           `config:"async_finalize_workers" min:"0" example:"16"`
-		OutboxPublishWorkers      int           `config:"outbox_publish_workers" default:"8" min:"0" max:"64" help:"唯一发布协调者内的独立事务并发；0取8，同Entity保序"`
+		OutboxPublishWorkers      int           `config:"outbox_publish_workers" default:"32" min:"0" max:"64" help:"唯一发布协调者内的独立事务并发；0取32，同Entity保序"`
 		TransactionTrackLimit     int           `config:"transaction_track_limit" min:"0" example:"100000"`
 		TransactionTrackTTL       time.Duration `config:"transaction_track_ttl" min:"0" example:"10m"`
 		WrapperCapacity           int           `config:"wrapper_capacity" min:"0" example:"65536"`
