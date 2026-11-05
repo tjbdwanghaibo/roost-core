@@ -4,10 +4,15 @@ package e2e
 // redis 代理连 Redis，断开代理（Redis 本身不动）期间路由 RPC 回退读所有权记录，量一次 Mongo 点读放大；断开期间把路由
 // 登记删掉（模拟 Redis 丢键），恢复后续期答“不存在”触发重新登记。最后断开超过单实例锁的续期期限，记下进程的处理
 // （单实例锁同样连这个 Redis：App 失锁即 fail-stop，见 framework/app 单实例锁）。
+//
+// 短断开必须短于单实例锁扛得住的时长，而且有确定的余量（见 shortOutageLimit）：短断开由 redisOutage 执行，断开期间的
+// 步骤带截止时间，做完立即恢复并断言实际断开时长，恢复后等两个实例的锁重新续上。
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"testing"
@@ -36,6 +41,113 @@ func (s *suite) infoRound(lookup lookupResolver, owners *countingOwners, allianc
 	return calls, failed, owners.reads.Load() - before, lat
 }
 
+// 单实例锁的时间参数：用例显式写进两个 alliance 实例的配置，短断开的上限由它们算出。ttl 用 30s 而不是缺省 15s：
+// 缺省参数下对任意相位只扛得住 9s，减去驱动恢复与余量只剩 6s，而断开期间的 info 轮、入会 / 退会 / 跨实例入会合起来
+// 本机要 8～10s（每次断开开头，各进程的 go-redis 连接池每个请求先拨号重试 5 次、约 0.4s），拆成几次断开也各要 2.5～6s，
+// 放不进 6s。缺省参数下锁在哪一拍失锁由 framework/app 的 TestSingletonSurvivesAStoreOutageOnlyUntilTheLastChanceBeat 钉住，
+// 这里只验证路由在 Redis 断开期间的退化，所以给锁足够的余量；长断开那段记下这组参数下的 fail-stop。
+const (
+	lockTTL   = 30 * time.Second
+	lockGuard = 5 * time.Second
+	lockRenew = 3 * time.Second
+)
+
+// shortOutageLimit 是短断开的上限：单实例锁对任意节拍相位都扛得住的断开，减去 go-redis 恢复的延迟，再留余量。
+//   - 续期节拍是上一次 Applied 的 asked（T）+ k × renew_interval，回复不早于 T + ttl − guard 的失败判失锁。toxiproxy 关代理时
+//     拨号立即被拒，最后一次能挽回的是 T 之后第一个不早于 T + ttl − guard 的节拍（这组参数 T+27s，缺省参数 T+12s）；断开可能
+//     在 T 之后将近一个 renew_interval 才开始，所以对任意相位都扛得住的只有 (⌈(ttl−guard)/renew⌉ − 1) × renew（24s；缺省 9s，
+//     不是 ttl − guard）。
+//   - go-redis 连接池连续 PoolSize 次拨号失败后不再拨号、直接返回上次的错误，由后台每秒探测一次；锁客户端 PoolSize 2，
+//     断开两拍后就进入这个状态，Redis 恢复后续期最多还要失败约 1s（本机实测 1.02s）。
+//   - 余下 2s 给本机负载下节拍与回复的延迟（节拍晚到、失败回复越过 T + ttl − guard 都会提前失锁）。
+//
+// 原用例用缺省参数、断开时长没有上限（注释写 6s，本机实测 8～9.4s，入会重试慢时更长），越过了缺省参数的 9s − 1s：最后一拍
+// 仍落在断开里或拨号退避里的那个实例失锁，用例报“4 of 8 missing”或断开期间的入会 no responders。
+func shortOutageLimit() time.Duration {
+	lastChance := (lockTTL - lockGuard + lockRenew - 1) / lockRenew * lockRenew
+	const driverRecovery, margin = time.Second, 2 * time.Second
+	return lastChance - lockRenew - driverRecovery - margin
+}
+
+// lockOptions 把单实例锁的时间参数写进进程配置。
+func lockOptions(redis string) procOptions {
+	return procOptions{redis: redis, keys: [][3]string{
+		{"singleton", "ttl", lockTTL.String()},
+		{"singleton", "guard", lockGuard.String()},
+		{"singleton", "renew_interval", lockRenew.String()},
+		{"singleton", "startup_wait", (2 * lockTTL).String()}, // App 要求 ≥ ttl + 2 × renew_interval
+	}}
+}
+
+// redisOutage 断开 redis 代理执行 steps：steps 拿到截止在 shortOutageLimit 的 ctx，返回后立即恢复代理，并断言实际断开时长
+// 不超过上限、steps 在截止前做完（没做完说明本机太慢，报出来而不是让锁的余量被吃掉）。恢复后等 procs 的单实例锁都重新
+// 续上（/readyz 的 singleton 为 ok）。
+func (s *suite) redisOutage(what string, procs []*proc, steps func(ctx context.Context)) (restored time.Time) {
+	t := s.t
+	t.Helper()
+	limit := shortOutageLimit()
+	ctx, cancel := context.WithTimeout(s.ctx, limit)
+	defer cancel()
+	s.toxiproxyRedis(false)
+	down := time.Now()
+	steps(ctx)
+	stepsErr := ctx.Err()
+	s.toxiproxyRedis(true)
+	restored = time.Now()
+	outage := restored.Sub(down)
+	t.Logf("REDIS outage (%s): %v (limit %v)", what, outage.Round(time.Millisecond), limit)
+	if stepsErr != nil {
+		t.Fatalf("%s did not finish within the %v outage limit (the machine is too slow for this step; the limit keeps the singleton lock's margin)", what, limit)
+	}
+	if outage > limit+time.Second {
+		t.Fatalf("%s kept Redis down for %v, more than the %v limit", what, outage.Round(time.Millisecond), limit)
+	}
+	for _, p := range procs {
+		if !s.alive(p) {
+			t.Fatalf("%s stopped during a %v Redis outage (limit %v)", p.name, outage.Round(time.Millisecond), limit)
+		}
+	}
+	s.eventually(what+": every singleton lock renewed after the outage", 4*lockRenew, func() (bool, string) {
+		for _, p := range procs {
+			if state := singletonHealth(p); state != "ok" {
+				return false, fmt.Sprintf("%s singleton %s", p.name, state)
+			}
+		}
+		return true, ""
+	})
+	return restored
+}
+
+// definiteBy 是截止到 ctx 的 definite：断开期间的步骤不越过断开上限（ctx 到期时返回最后一次的错误）。
+func definiteBy(ctx context.Context, call func(context.Context) error) (error, int) {
+	deadline, _ := ctx.Deadline()
+	return definite(ctx, time.Until(deadline), call)
+}
+
+// singletonHealth 读进程 /readyz 里 singleton 检查的状态（ok / degraded / fail；读不到为空）。
+func singletonHealth(p *proc) string {
+	resp, err := http.Get("http://" + p.ops + "/readyz")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Dependencies []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"dependencies"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&body) != nil {
+		return ""
+	}
+	for _, dep := range body.Dependencies {
+		if dep.Name == "singleton" {
+			return dep.Status
+		}
+	}
+	return ""
+}
+
 func TestAllianceE2ERedisOutage(t *testing.T) {
 	s := newSuite(t, 15*time.Minute)
 	if s.proxiedRedis == "" {
@@ -43,7 +155,7 @@ func TestAllianceE2ERedisOutage(t *testing.T) {
 	}
 	s.toxiproxyRedis(true)
 	t.Cleanup(func() { s.toxiproxyRedis(true) })
-	opts := procOptions{redis: s.proxiedRedis}
+	opts := lockOptions(s.proxiedRedis)
 	a := s.start("alliance-3000", "alliance", 3000, opts)
 	b := s.start("alliance-3001", "alliance", 3001, opts)
 	_, proxiedLookup, owners := s.newLookup(s.proxiedRedis)
@@ -61,47 +173,40 @@ func TestAllianceE2ERedisOutage(t *testing.T) {
 		t.Fatalf("with Redis up: %d failed, %d ownership reads; want 0 and 0", failed, reads)
 	}
 
-	// 短断开（6s，短于单实例锁的失锁期限）：路由 RPC 照常答，每次缓存未命中多一次 Mongo 点读。
-	s.toxiproxyRedis(false)
-	outage := time.Now()
-	calls, failed, reads, lat = s.infoRound(resolver, owners, alliances, 4*time.Second)
-	t.Logf("REDIS down: %d info calls, %d failed, %d ownership reads (%.2f per call), p50 %v p99 %v",
-		calls, failed, reads, float64(reads)/float64(calls), percentile(lat, .5), percentile(lat, .99))
-	if failed != 0 || reads != int64(calls) {
-		t.Fatalf("with Redis down: %d of %d failed, %d ownership reads; want 0 failures and one read per call", failed, calls, reads)
-	}
-	// 断开期间跨实例入会（守卫在 3000、联盟在 3001，实例之间的路由 RPC 也回退所有权记录）。
+	// 短断开：路由 RPC 照常答，每次缓存未命中多一次 Mongo 点读；断开期间入会 / 退会与跨实例入会（守卫在 3000、联盟在 3001，
+	// 实例之间的路由 RPC 也回退所有权记录）；最后直接在 Redis 上删掉全部联盟的登记（模拟丢键），恢复后由续期重新登记。
 	player := int64(810_000)
-	if err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
-		_, err := client.Join(ctx, fmt.Sprintf("j-%d", player), player, 1000, target(t, alliances[0]))
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
-		_, err := client.Leave(ctx, fmt.Sprintf("l-%d", player), player, 1000, target(t, alliances[0]))
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err, _ := definite(s.ctx, time.Minute, func(ctx context.Context) error {
-		_, err := client.Join(ctx, fmt.Sprintf("j2-%d", player), player, 1000, target(t, alliances[4]))
-		return err
-	}); err != nil {
-		t.Fatalf("cross-instance join with Redis down: %v", err)
-	}
-	// 断开期间丢键：直接在 Redis 上删掉全部联盟的登记。
 	var keys []string
 	for _, id := range alliances {
 		keys = append(keys, coreremote.RouteKey(s.prefix, target(t, id)))
 	}
-	s.redis.Del(s.ctx, keys...)
-	t.Logf("REDIS outage so far %v", time.Since(outage).Round(time.Millisecond))
-	s.toxiproxyRedis(true)
-	restored := time.Now()
-	if !s.alive(a) || !s.alive(b) {
-		t.Fatalf("an instance stopped during a %v Redis outage", restored.Sub(outage).Round(time.Millisecond))
-	}
+	restored := s.redisOutage("short outage", []*proc{a, b}, func(ctx context.Context) {
+		calls, failed, reads, lat = s.infoRound(resolver, owners, alliances, 4*time.Second)
+		t.Logf("REDIS down: %d info calls, %d failed, %d ownership reads (%.2f per call), p50 %v p99 %v",
+			calls, failed, reads, float64(reads)/float64(calls), percentile(lat, .5), percentile(lat, .99))
+		if failed != 0 || reads != int64(calls) {
+			t.Fatalf("with Redis down: %d of %d failed, %d ownership reads; want 0 failures and one read per call", failed, calls, reads)
+		}
+		if err, _ := definiteBy(ctx, func(ctx context.Context) error {
+			_, err := client.Join(ctx, fmt.Sprintf("j-%d", player), player, 1000, target(t, alliances[0]))
+			return err
+		}); err != nil && ctx.Err() == nil {
+			t.Fatal(err)
+		}
+		if err, _ := definiteBy(ctx, func(ctx context.Context) error {
+			_, err := client.Leave(ctx, fmt.Sprintf("l-%d", player), player, 1000, target(t, alliances[0]))
+			return err
+		}); err != nil && ctx.Err() == nil {
+			t.Fatal(err)
+		}
+		if err, _ := definiteBy(ctx, func(ctx context.Context) error {
+			_, err := client.Join(ctx, fmt.Sprintf("j2-%d", player), player, 1000, target(t, alliances[4]))
+			return err
+		}); err != nil && ctx.Err() == nil {
+			t.Fatalf("cross-instance join with Redis down: %v", err)
+		}
+		s.redis.Del(ctx, keys...)
+	})
 	s.eventually("the renewal finds the lost registrations and registers them again", 40*time.Second, func() (bool, string) {
 		missing := 0
 		for _, id := range alliances {
@@ -117,11 +222,11 @@ func TestAllianceE2ERedisOutage(t *testing.T) {
 		t.Fatalf("guard after the outage: %+v %v", g.State, err)
 	}
 
-	// 长断开：超过单实例锁的续期期限（ttl 15s、guard 5s），记下实例怎么处理。
+	// 长断开：超过单实例锁扛得住的时长（这组参数下断开开始后 24～27s 失锁，见 shortOutageLimit），记下实例怎么处理。
 	s.toxiproxyRedis(false)
 	long := time.Now()
 	var stoppedAfter []string
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(lockTTL + 15*time.Second)
 	for time.Now().Before(deadline) && (s.alive(a) || s.alive(b)) {
 		time.Sleep(200 * time.Millisecond)
 	}

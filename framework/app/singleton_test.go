@@ -975,6 +975,80 @@ func TestSingletonUnknownRenewalTimeoutLosesNoLaterThanTheWindowEnd(t *testing.T
 	}
 }
 
+// 后端短暂不可用时能扛多久（guide/01“单实例锁在后端短暂不可用时”）：节拍点是上一次 Applied 的 asked（T0）+ k × renew_interval，
+// 回复不早于 T0+ttl−guard 的失败判 Lost，所以“最后一次能挽回的节拍”是失败回复第一次落到 T0+ttl−guard 之后的那一拍：
+// 立即失败（连接被拒）时是 T0 之后第一个不早于 T0+ttl−guard 的节拍（缺省 T0+12s），请求挂到单次超时才失败时早一拍
+// （T0+9s：它的超时结论落在 T0+12s，已过 T0+10s）。不可用在这一拍之前结束就继续持有，晚于它就失锁。
+// 断开可能在 T0 之后将近一个 renew_interval 才开始，所以对任意相位都扛得住的断开比这一拍再短一个 renew_interval
+// （缺省 9s / 6s），不是 ttl − guard。这里钉住“最后一拍”本身；客户端在后端恢复后多久才真正重连不在 App 里（见文档）。
+func TestSingletonSurvivesAStoreOutageOnlyUntilTheLastChanceBeat(t *testing.T) {
+	refusedBeat := time.Duration((testSingletonTTL-testSingletonGuard+testSingletonRenew-1)/testSingletonRenew) * testSingletonRenew
+	for _, tc := range []struct {
+		name     string
+		hang     bool          // true：请求一直没有回复，直到单次超时；false：立即报错（连接被拒）
+		until    time.Duration // 不可用持续到 T0 + until（此刻发起的请求已经成功）
+		wantHeld bool
+	}{
+		{"refused until the last chance beat", false, refusedBeat, true},
+		{"refused past the last chance beat", false, refusedBeat + time.Millisecond, false},
+		{"hanging until the last chance beat", true, refusedBeat - testSingletonRenew, true},
+		{"hanging past the last chance beat", true, refusedBeat - testSingletonRenew + time.Millisecond, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSingletonHarness(t, nil, nil)
+			result := h.start()
+			h.awaitServed(t, result)
+			t0 := h.status(t).validUntil.Add(-testSingletonTTL)
+			restored := t0.Add(tc.until)
+			var recoveredAt atomic.Pointer[time.Time]
+			h.store.setOnCAS(func(call fakeCASCall, apply func() (bool, []byte)) (bool, []byte, error) {
+				if call.at.Before(restored) {
+					if tc.hang {
+						h.clock.Advance(call.timeout)
+						return false, nil, context.DeadlineExceeded
+					}
+					return false, nil, errors.New("dial tcp: connection refused")
+				}
+				applied, current := apply()
+				if applied && recoveredAt.Load() == nil {
+					at := call.at
+					recoveredAt.Store(&at)
+				}
+				return applied, current, nil
+			})
+			for recoveredAt.Load() == nil {
+				select {
+				case err := <-result:
+					if tc.wantHeld {
+						t.Fatalf("lost the lock (%v) although the store was back at T0+%v", err, tc.until)
+					}
+					if !errors.Is(err, ErrSingletonLost) {
+						t.Fatalf("run error = %v, want ErrSingletonLost", err)
+					}
+					return
+				case <-h.clock.timerReady(1):
+					h.clock.AdvanceToNext(t)
+				case <-time.After(testWaitLimit):
+					t.Fatal("renewal neither rescheduled nor lost the lock")
+				}
+			}
+			if !tc.wantHeld {
+				t.Fatalf("renewed at T0+%v although the store was unavailable until T0+%v", recoveredAt.Load().Sub(t0), tc.until)
+			}
+			if got := recoveredAt.Load().Sub(t0); got != tc.until {
+				t.Fatalf("first renewal after the outage at T0+%v, want the beat at T0+%v", got, tc.until)
+			}
+			h.awaitWaiting(t, result, true)
+			if status := h.status(t); status.state != singletonHeld {
+				t.Fatalf("status after the outage = %+v, want held", status)
+			}
+			if err := h.stop(t, result); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+		})
+	}
+}
+
 // #6：进程卡住、窗口按时间已过，但恢复后（asked 在恢复之后）的那次 Renew Applied → 继续持有。
 func TestSingletonAnAppliedRenewalAfterAStallKeepsTheLock(t *testing.T) {
 	h := newSingletonHarness(t, nil, nil)

@@ -24,6 +24,15 @@ App 提供服务选择、Mod 依赖排序、配置声明检查、实例 Registry
 
 RuntimeFailure 是进程级不能继续安全写入的信号；失败回调包含 Nest fence。fence 与 readiness 各有职责：前者保护写入，后者告知流量入口。单实例失锁不能仅记录警告后继续服务。活性查询只回答是否仍持有进程锁，不证明实体写权限或业务健康。
 
+### 单实例锁在后端短暂不可用时
+
+续期按固定节拍：上一次及时 Applied 的发起时刻记为 T，节拍点是 T + k × `renew_interval`；报错或超时记“结果未知”、下一拍重试；回复不早于 T + `ttl − guard` 的失败判失锁并 fail-stop（让进程在键可能过期之前停下）。所以后端（Redis）不可用时，最后一次能挽回的是“失败回复第一次落到 T + `ttl − guard` 之后”的那一拍，它之前恢复就继续持有，晚于它就失锁：
+
+- 立即失败（连接被拒）：T 之后第一个不早于 T + `ttl − guard` 的节拍，即 T + ⌈(`ttl − guard`) / `renew_interval`⌉ × `renew_interval`（缺省 15s / 5s / 3s 时 T+12s）；
+- 请求挂到单次超时才失败（丢包）：再早一拍（缺省 T+9s，它的超时结论落在 T+12s）。
+
+不可用可能在 T 之后将近一个 `renew_interval` 才开始，所以**从断开开始算，对任意相位都扛得住的时长比上面再短一个 `renew_interval`**：缺省配置下连接被拒时 9～12s、丢包时 6～9s，不是 `ttl − guard`。Redis 后端还要再减去驱动的恢复延迟：go-redis 连接池连续 `PoolSize` 次拨号失败后不再拨号、直接返回上次的错误，由后台每秒探测一次，锁客户端（`PoolSize` 2）断开两拍后就进入这个状态，Redis 恢复后续期最多还会失败约 1s。依赖“Redis 短断开不停服”的用例或运维预案按这个时长留余量；这只会让失锁提前，不会让两个进程同时持锁。回归：`TestSingletonSurvivesAStoreOutageOnlyUntilTheLastChanceBeat`（singleton_test.go）。
+
 ## 4. 三步停机
 
 发起关闭 → 在调用方 context 内等待真实排空 → 排空后释放资源。发起关闭幂等；等待超时返回 context 错误，对象与底层资源保留供继续等待。不能把关闭 channel 当成所有回调退出，也不能因等待超时提前释放单实例锁。
