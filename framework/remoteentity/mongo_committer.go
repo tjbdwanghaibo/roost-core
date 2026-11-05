@@ -109,8 +109,11 @@ type mongoRemoteTransaction struct {
 	MutationMasks [][]int64             `bson:"mutation_masks,omitempty"`
 	Digest        []byte                `bson:"digest"`
 	Cause         string                `bson:"cause,omitempty"`
-	CreatedAt     time.Time             `bson:"created_at"`
-	ExpiresAt     *time.Time            `bson:"expires_at,omitempty"`
+	// WriterSID 是写进这笔提交的进程 sid（MongoCommitter.serverID），决定 outbox 的发布归属：写者立即发布，
+	// 别的进程过了宽限期才代发（Manager.selectOutboxPage）。没有这个字段的记录读出 0，按写者未知立即发布。
+	WriterSID int32      `bson:"writer_sid,omitempty"`
+	CreatedAt time.Time  `bson:"created_at"`
+	ExpiresAt *time.Time `bson:"expires_at,omitempty"`
 }
 
 // storeRemoteCommits 给出写进事务记录的提交副本：变更掩码是 uint64 位集，BSON 只有有符号 64 位整数，最高位为 1 的掩码
@@ -223,7 +226,7 @@ func (s *MongoCommitter) ApplyRemoteCommitsInTransaction(ctx context.Context, co
 	if err := s.writeCommitPayloads(ctx, commits); err != nil {
 		return nil, err
 	}
-	doc := mongoRemoteTransaction{ID: txID.String(), State: uint8(entity.RemoteCommitApplied), Digest: append([]byte(nil), digest...), CreatedAt: time.Now().UTC()}
+	doc := mongoRemoteTransaction{ID: txID.String(), State: uint8(entity.RemoteCommitApplied), Digest: append([]byte(nil), digest...), WriterSID: s.serverID, CreatedAt: time.Now().UTC()}
 	doc.Commits, doc.MutationMasks = storeRemoteCommits(commits)
 	for _, receipt := range receipts {
 		doc.Receipts = append(doc.Receipts, encodeMongoReceipt(receipt))
@@ -342,7 +345,7 @@ func (s *MongoCommitter) loadTransaction(ctx context.Context, id entity.RemoteTr
 }
 
 func remoteStatusFromMongoTransaction(id entity.RemoteTransactionID, doc mongoRemoteTransaction) entity.RemoteCommitStatus {
-	status := entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitState(doc.State), Cause: doc.Cause}
+	status := entity.RemoteCommitStatus{TransactionID: id, State: entity.RemoteCommitState(doc.State), Cause: doc.Cause, WriterSID: doc.WriterSID, CreatedAt: doc.CreatedAt}
 	for _, receipt := range doc.Receipts {
 		status.Receipts = append(status.Receipts, decodeMongoReceipt(receipt))
 	}

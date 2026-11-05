@@ -54,6 +54,12 @@ type remoteState struct {
 	republishMu      sync.Mutex
 	republishRunning bool
 	republishDirty   bool
+	// takeoverTimer 在最早一笔“别的进程写、还在宽限期内”的提交到期时再唤醒一次发布循环（armOutboxTakeover）；
+	// takeoverDue 是它的到期时刻。二者由 republishMu 保护，StopFinalizer 停掉计时器。
+	takeoverTimer *time.Timer
+	takeoverDue   time.Time
+	// outboxNow 是发布归属判定用的时钟观察缝（宽限期是否已过）；生产为 nil 取 time.Now。只能在发布开始前设置。
+	outboxNow func() time.Time
 	// finalizeTrace 是只读观察缝：每次处理完一个延迟收尾项后报告走了哪一步
 	// （released / retry / await_projection / abandoned），供回归按事件顺序同步，不参与决策。
 	// 生产装配为 nil；只能在 finalizer 启动前设置。
@@ -261,9 +267,16 @@ func (m *Manager) processDeferredRemoteClose(state *remoteState, item deferredRe
 		}
 		tracked, done := m.trackedRemoteOutcome(item.txID)
 		// tracker 不存在（done 为 nil）只会是已结束的记录被容量/TTL 淘汰：结论已经有了，直接回源。
-		if done != nil && !projectorReported(tracked.State) && time.Now().Before(item.projectionDeadline) {
-			m.awaitRemoteProjection(state, item, done)
-			return
+		if done != nil && !projectorReported(tracked.State) {
+			if time.Now().Before(item.projectionDeadline) {
+				m.awaitRemoteProjection(state, item, done)
+				return
+			}
+			if item.attempt == 0 {
+				// 等到期限 tracker 仍没有结论（没人推进它）才回源：正常情况下应为 0。曾经的来源是别的进程代发了本进程写的
+				// 提交（outbox 发布归属修复前）；仍出现时看投影器是否停滞。
+				metrics.IncCounter("remote_entity.finalize_projection_timeout_total", nil, 1)
+			}
 		}
 	}
 	if !remoteCommitFinal(m.localRemoteCommitState(item.txID)) {
@@ -536,6 +549,12 @@ func (m *Manager) StopFinalizer(ctx context.Context) error {
 	m.remote.stopping = true
 	m.remote.finalizeCancel()
 	m.remote.retryMu.Unlock()
+	m.remote.republishMu.Lock()
+	if m.remote.takeoverTimer != nil {
+		m.remote.takeoverTimer.Stop()
+		m.remote.takeoverTimer = nil
+	}
+	m.remote.republishMu.Unlock()
 	select {
 	case <-m.remote.finalizeDone:
 		return nil
@@ -699,6 +718,9 @@ func (m *Manager) RecoverOutbox(ctx context.Context) error {
 	pager, paged := outbox.(entity.IRemoteCommitOutboxPager)
 	var cursor entity.RemoteOutboxCursor
 	var failed error
+	// 本轮跳过的别的进程的提交里最早的到期时刻；扫描结束（含出错返回）时据此定时再扫，写者崩溃后没人再唤醒也能代发。
+	var takeoverDue time.Time
+	defer func() { m.armOutboxTakeover(takeoverDue) }()
 	for {
 		var pending []entity.RemoteCommitStatus
 		var next entity.RemoteOutboxCursor
@@ -716,11 +738,19 @@ func (m *Manager) RecoverOutbox(ctx context.Context) error {
 		if len(pending) == 0 {
 			return failed
 		}
-		failed = errors.Join(failed, m.publishOutboxPage(ctx, pending))
+		selected, due := m.selectOutboxPage(pending)
+		if !due.IsZero() && (takeoverDue.IsZero() || due.Before(takeoverDue)) {
+			takeoverDue = due
+		}
+		failed = errors.Join(failed, m.publishOutboxPage(ctx, selected))
 		if err := ctx.Err(); err != nil {
 			return errors.Join(failed, err)
 		}
 		if len(pending) < 256 {
+			return failed
+		}
+		if !paged && len(selected) < len(pending) {
+			// 不分页的存储每次都从头读：留在宽限期内的提交会一直占着这一页，再读只会读到同样的内容。
 			return failed
 		}
 		if next.TransactionID != "" {

@@ -366,6 +366,11 @@ type RemoteCommitStatus struct {
 	Receipts      []RemoteCommitReceipt
 	Commits       []RemoteCommit
 	Cause         string
+	// WriterSID 是把这笔提交写进权威的进程 sid，CreatedAt 是写入时刻（写者的时钟）。outbox 扫描据此决定发布归属：
+	// 本进程写的立即发布，别的进程写的过了宽限期才代发（REMOTE_ENTITY“outbox 发布归属”）。存储不记录写者时为 0 /
+	// 零值，按“写者未知”立即发布（修前的行为）。
+	WriterSID int32
+	CreatedAt time.Time
 }
 
 func (s RemoteCommitStatus) Clone() RemoteCommitStatus {

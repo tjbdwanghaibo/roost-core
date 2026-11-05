@@ -80,8 +80,15 @@ type Config struct {
 	// 不回源、不发布，等投影/唯一outbox推进tracker；超期后按回源结论收尾
 	// （投影器停滞、DataEngine fence 等）。零值取 30s。
 	FinalizeProjectionTimeout time.Duration
-	WrapperCapacity           int
-	WrapperIdleTTL            time.Duration
+	// OutboxTakeoverGrace 是 outbox 代发别的进程提交前的宽限期（kit：remote_entity.outbox_takeover_grace）：每个进程只立即
+	// 发布自己写的提交，别的进程写的提交在写入（CreatedAt）之后过了这段时间仍未发布，才视为写者已经不在、由本进程代发
+	// （同一实体上排在它后面的提交已经要发布时立即代发，见 Manager.selectOutboxPage）。零值与下限都是
+	// FinalizeProjectionTimeout：写者活着但发布慢、被别的进程代发时，它的 tracker 没人通知，要等延迟收尾到期回源才结束；
+	// 宽限期不短于收尾期限，代发发生时写者的收尾期限也已基本到期，写者不会因代发再多挂一个收尾期限。
+	// 代价是写者崩溃后，它留下的提交晚一个宽限期才发布。
+	OutboxTakeoverGrace time.Duration
+	WrapperCapacity     int
+	WrapperIdleTTL      time.Duration
 	// 版本锁设置
 	// LockKey 是版本锁键的前缀 / 锁身份（kit：remote_entity.lock_key），键为 lock:<LockKey>:<id> 与 lock:<LockKey>:<id>:fence。
 	// 缺省 "e" 不带部署前缀且不能自动改（改了滚动发布的新旧节点会锁住不同身份）；共用一个 Redis db 的

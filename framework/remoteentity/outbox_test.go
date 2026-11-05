@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/internal/stopcontract"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -489,5 +490,174 @@ func TestProjectorRetryAndFinalizerAcknowledgeConcurrently(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		_ = mgr.StopFinalizer(ctx)
 		cancel()
+	}
+}
+
+// ---- outbox 发布归属：写者自己先发，别的进程过了宽限期才代发 ----
+
+// gatedOutboxStorage 让测试决定一个进程的 outbox 协调者何时读页、标记前做什么，把“别的进程先扫到”放在确定的位置。
+type gatedOutboxStorage struct {
+	*MongoCommitter
+	scanStarted chan struct{} // 第一次读页时关闭
+	scanRelease chan struct{} // 关闭后读页继续
+	startOnce   sync.Once
+	beforeMark  func(entity.RemoteTransactionID)
+	marks       atomic.Int32
+}
+
+func newGatedOutboxStorage(committer *MongoCommitter, open bool) *gatedOutboxStorage {
+	storage := &gatedOutboxStorage{MongoCommitter: committer, scanStarted: make(chan struct{}), scanRelease: make(chan struct{})}
+	if open {
+		close(storage.scanRelease)
+	}
+	return storage
+}
+
+func (s *gatedOutboxStorage) PendingRemoteCommitPage(ctx context.Context, after entity.RemoteOutboxCursor, limit int) ([]entity.RemoteCommitStatus, entity.RemoteOutboxCursor, error) {
+	s.startOnce.Do(func() { close(s.scanStarted) })
+	select {
+	case <-s.scanRelease:
+	case <-ctx.Done():
+		return nil, after, ctx.Err()
+	}
+	return s.MongoCommitter.PendingRemoteCommitPage(ctx, after, limit)
+}
+
+func (s *gatedOutboxStorage) MarkRemoteCommitPublished(ctx context.Context, id entity.RemoteTransactionID) error {
+	if s.beforeMark != nil {
+		s.beforeMark(id)
+	}
+	s.marks.Add(1)
+	return s.MongoCommitter.MarkRemoteCommitPublished(ctx, id)
+}
+
+// outboxProcess 是共享同一个 Mongo（同一个 outbox）的一个进程：Manager、它的存储，写者另有实体与 WAL 投影器。
+type outboxProcess struct {
+	mgr       *Manager
+	storage   *gatedOutboxStorage
+	live      *testRemoteEntity
+	projector *engine.Projector
+}
+
+const outboxOwnerKind entity.EntityKind = 136
+
+func newOutboxPeer(t *testing.T, mongo fmongo.IMongo, sid int32, cfg *Config, scanOpen bool) *outboxProcess {
+	t.Helper()
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: outboxOwnerKind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	committer := newBoundMongoCommitter(mongo, "control", sid, 0)
+	storage := newGatedOutboxStorage(committer, scanOpen)
+	loader := newRemoteTestLoader()
+	backend, err := NewBackend(loader, storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewManager(newMockVersionedLockFactory(), cfg, sid)
+	mgr.SetBackend(backend)
+	mgr.SetOwnershipStore(committer)
+	t.Cleanup(func() {
+		close(storage.scanReleaseOnce())
+		stop, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = mgr.StopFinalizer(stop)
+	})
+	process := &outboxProcess{mgr: mgr, storage: storage}
+	process.live = newTestRemoteEntity(7300+int64(sid%100), 1, outboxOwnerKind)
+	loader.add(process.live)
+	return process
+}
+
+// scanReleaseOnce 返回一个可以安全关闭的通道：已打开的门返回新通道，避免清理时重复关闭。
+func (s *gatedOutboxStorage) scanReleaseOnce() chan struct{} {
+	select {
+	case <-s.scanRelease:
+		return make(chan struct{})
+	default:
+		return s.scanRelease
+	}
+}
+
+// newOutboxWriter 在 newOutboxPeer 之上接 DataEngine 的 WAL 投影器：strict 写经投影器在 Mongo 事务里持久为 Applied，
+// 再由 ApplyRemoteCommits 把 tracker 置为 Applied 并唤醒本进程的协调者——与正式链路相同。
+func newOutboxWriter(t *testing.T, mongo fmongo.IMongo, sid int32, cfg *Config, scanOpen bool) *outboxProcess {
+	t.Helper()
+	process := newOutboxPeer(t, mongo, sid, cfg, scanOpen)
+	store, err := engine.NewMongoStore(mongo, engine.MongoStoreConfig{Databases: process.storage.databases.Load(), DefaultDatabase: "game", ServerID: sid, TransactionReceiptTTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.SetRemoteProjection(process.storage, process.mgr); err != nil {
+		t.Fatal(err)
+	}
+	walOptions := nestwal.DefaultOptions(t.TempDir())
+	walOptions.GroupCommitInterval = time.Millisecond
+	wal, err := nestwal.Open(walOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	process.projector, err = engine.NewProjector(wal, store, engine.ProjectorOptions{
+		CloseWAL: true, IdlePoll: 10 * time.Millisecond, RetryMin: 5 * time.Millisecond, RetryMax: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closing, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = process.projector.Close(closing)
+	})
+	return process
+}
+
+// writeStrict 走 strict 写到“实体锁已释放、等确认”之前：WAL 追加、释放事务让投影器投影。返回的批次由调用方 Commit / Close。
+func (p *outboxProcess) writeStrict(t *testing.T, ctx context.Context, tx entity.RemoteTransactionID) entity.RemoteWriteBatch {
+	t.Helper()
+	batch, err := p.mgr.PrepareRemoteWriteBatch(ctx, []int64{p.live.GUId()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.live.dirty.set(true)
+	if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "outbox-owner", "", true, uint8(nest.DurabilityStrict.Record()))); err != nil {
+		t.Fatal(err)
+	}
+	if err = p.projector.Commit(ctx, remoteCommitRecord(nest.DurabilityStrict.Record(), batch.Commits())); err != nil {
+		t.Fatal(err)
+	}
+	p.projector.TransactionReleased(coredata.TransactionID(tx))
+	return batch
+}
+
+// 两个进程的 outbox 协调者共享 outbox。写者的投影器刚把 strict 写持久为 Applied、自己的协调者还没读页时，别的进程的协调者
+// 先扫描：它不能代发（还在宽限期内），写者自己发布，strict 写在请求期限内得到确认、tracker 结束。
+// 修复前别的进程代发并标记已发布，写者的协调者读不到这笔提交，tracker 停在 Applied，strict 写等到期限超时、转延迟收尾，
+// 收尾持写门到 FinalizeProjectionTimeout（KNOWN-LIMITS 原“跨实例写偶发 3 s 超时”）。
+func TestOutboxWriterPublishesItsOwnCommitBeforeOtherCoordinators(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	mongo := newRemoteMongoFake()
+	writer := newOutboxWriter(t, mongo, 1000, DefaultConfig(), false)
+	other := newOutboxPeer(t, mongo, 2000, DefaultConfig(), true)
+	tx := remoteTestTxID(201)
+	batch := writer.writeStrict(t, ctx, tx)
+	defer batch.Close(context.Background())
+
+	awaitSignal(t, ctx, writer.storage.scanStarted, "the writer's outbox scan")
+	if state := writer.mgr.localRemoteCommitState(tx); state != entity.RemoteCommitApplied {
+		t.Fatalf("writer tracker=%v before any publication, want Applied", state)
+	}
+	if err := other.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	close(writer.storage.scanRelease)
+
+	commitCtx, cancelCommit := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelCommit()
+	_, err := batch.Commit(commitCtx)
+	state := writer.mgr.localRemoteCommitState(tx)
+	if err != nil || state != entity.RemoteCommitCommitted {
+		t.Fatalf("the writer's strict write was not confirmed within its deadline: err=%v writer tracker=%v (marks: writer=%d other=%d)",
+			err, state, writer.storage.marks.Load(), other.storage.marks.Load())
+	}
+	if marks := other.storage.marks.Load(); marks != 0 {
+		t.Fatalf("another process published the writer's commit inside the takeover grace: marks=%d", marks)
 	}
 }
