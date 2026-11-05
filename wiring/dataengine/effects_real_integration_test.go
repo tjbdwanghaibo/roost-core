@@ -12,11 +12,15 @@ import (
 	"testing"
 	"time"
 
+	gonats "github.com/nats-io/nats.go"
+	gojs "github.com/nats-io/nats.go/jetstream"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -104,5 +108,96 @@ func TestRealSubscribeEffectsDeliversEachEffectOnce(t *testing.T) {
 	}
 	if got := handled("poison"); got != 1 {
 		t.Fatalf("handled_total{result=poison} = %d, want 1", got)
+	}
+}
+
+// best_effort 在真实 NATS 上（2026-11-05 effect 持久性）：DataEngine Mod 的发送器（Nest 在持久点之后调用的
+// PublishBestEffort）→ core NATS → SubscribeEffects 的 best_effort 消费者（队列订阅，Order none、4 个 worker）。核对：
+//   - 每个 effect 交到 handler 恰好一次，信封（事务号、EffectID、Key、载荷）原样；
+//   - handler 出错的那一条只记 failed，不重投；解不开的信封记 poison；
+//   - 不经 JetStream：效果流里没有消息（不建 inbox 由单元测试 TestSubscribeEffectsBestEffortHasNoInboxAndNoRedelivery 钉住）。
+//
+// 发送与订阅共用 fixture 的同一条 NATS 连接，订阅先于发布到达服务端（NATS 单连接有序），所以不会因兴趣还没登记而丢。
+func TestRealBestEffortEffectsReachTheConsumerOnceWithoutTheStream(t *testing.T) {
+	fx := newRealFixture(t)
+	durable := fmt.Sprintf("best-effort-%d", os.Getpid())
+	var mu sync.Mutex
+	runs := map[string]int{}
+	seen := map[string]nestwal.EffectEnvelope{}
+	consumer := EffectConsumer{Durable: durable, Topic: "player.notice", Delivery: coredata.EffectBestEffort, Order: EffectOrderNone, Workers: 4}
+	sub, err := SubscribeEffects(fx.context(), fx.registry, consumer, func(_ context.Context, envelope nestwal.EffectEnvelope) error {
+		mu.Lock()
+		runs[envelope.EffectID]++
+		seen[envelope.EffectID] = envelope
+		mu.Unlock()
+		if envelope.EffectID == "notice-fails" {
+			return errors.New("push: player offline")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Drain()
+
+	var txID corenest.TransactionID
+	txID[15] = 51
+	fx.dataMod.PublishBestEffort(txID, []corenest.Effect{
+		{ID: "notice-1", Topic: "player.notice", Key: "201", Payload: []byte(`{"n":1}`), Delivery: corenest.EffectBestEffort},
+		{ID: "notice-fails", Topic: "player.notice", Key: "202", Payload: []byte(`{"n":2}`), Delivery: corenest.EffectBestEffort},
+		{ID: "notice-3", Topic: "player.notice", Key: "201", Payload: []byte(`{"n":3}`), Delivery: corenest.EffectBestEffort},
+	})
+	client := app.MustLookup[fnats.IClient](fx.registry, mods.ModNats)
+	if err := client.Publish(BestEffortSubject(fx.effectSub, "player.notice"), []byte("not json")); err != nil {
+		t.Fatal(err)
+	}
+	metricsRegistry := app.MustLookup[*metrics.Registry](fx.registry, app.ModMetrics)
+	counter := func(name, label, value string) int64 {
+		var total int64
+		for _, metric := range metricsRegistry.Snapshot() {
+			if metric.Name == name && metric.Labels[label] == value && (name != "dataengine.effect_consumer.handled_total" || metric.Labels["consumer"] == durable) {
+				total += metric.Value
+			}
+		}
+		return total
+	}
+	waitFor(t, 20*time.Second, "three effects handled", func() bool {
+		return counter("dataengine.effect_consumer.handled_total", "result", "ok") == 2 &&
+			counter("dataengine.effect_consumer.handled_total", "result", "failed") == 1
+	})
+	time.Sleep(500 * time.Millisecond) // 给失败的那条留出被（错误地）重投的时间
+	mu.Lock()
+	defer mu.Unlock()
+	if runs["notice-1"] != 1 || runs["notice-fails"] != 1 || runs["notice-3"] != 1 || len(runs) != 3 {
+		t.Fatalf("handler runs = %v; want each of the three effects once (the failing one not redelivered)", runs)
+	}
+	if got := seen["notice-3"]; got.TransactionID != txID.String() || got.Key != "201" || got.Topic != "player.notice" || string(got.Payload) != `{"n":3}` {
+		t.Fatalf("envelope = %+v", got)
+	}
+	if got := counter("dataengine.effects.best_effort_total", "result", "published"); got != 3 {
+		t.Fatalf("best_effort_total{result=published} = %d, want 3", got)
+	}
+	if got := counter("dataengine.effect_consumer.handled_total", "result", "poison"); got != 1 {
+		t.Fatalf("handled_total{result=poison} = %d, want 1 (the undecodable message)", got)
+	}
+	raw, err := gonats.Connect(os.Getenv("ROOST_DATAENGINE_IT_NATS_URL"), gonats.Timeout(2*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	js, err := gojs.New(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := js.Stream(fx.context(), fx.stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := stream.Info(fx.context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.State.Msgs != 0 {
+		t.Fatalf("effect stream holds %d messages; best_effort effects must not go through JetStream", info.State.Msgs)
 	}
 }
