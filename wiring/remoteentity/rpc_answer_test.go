@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/worker"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 )
 
@@ -56,6 +58,8 @@ func TestRPCWriteAnswerRedirectsToTheDurableOwner(t *testing.T) {
 		{"transfer in progress", entity.ErrRemoteOwnerTransition, servicerpc.OutcomeRetryable},
 		{"write slots full", entity.ErrRemoteOverloaded, servicerpc.OutcomeRetryable},
 		{"admission version conflict", entity.ErrRemoteVersionConflict, servicerpc.OutcomeRetryable},
+		// Nest 派发队列满（例如 io 池的 worker 都在等 strict 确认）：准入时就拒绝，handler 没有开始，确定没执行。
+		{"nest dispatch queue full", fmt.Errorf("sync sender: %w", errors.Join(corenest.ErrQueueFull, worker.ErrWorkerQueueFull)), servicerpc.OutcomeRetryable},
 		{"indeterminate wrapping a fence", errors.Join(entity.ErrRemotePersistenceIndeterminate, entity.ErrRemoteFenced), servicerpc.OutcomeUnknown},
 		{"budget expired", context.DeadlineExceeded, servicerpc.OutcomeUnknown},
 		{"business rejection", servicerpc.Check(100001, "alliance full", ""), servicerpc.OutcomeRejected},

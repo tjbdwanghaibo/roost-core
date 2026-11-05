@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
 )
 
@@ -16,7 +17,9 @@ import (
 //   - 结果未知（entity.ErrRemotePersistenceIndeterminate、ErrRemoteCommitTimeout、ctx 到期）：原样返回，调用方按
 //     CodeInternal / 超时归为“结果未知”，用同一 RequestID 查结果。先于下面各条判断：结果未知的错误可能同时包着 fence。
 //   - 确定没执行、可重试：重载窗口（ErrRemoteEntityReloading）、所有权转移中（ErrRemoteOwnerTransition）、写额度满
-//     （ErrRemoteOverloaded）、准入时版本冲突（ErrRemoteVersionConflict）→ servicerpc.Retryable。
+//     （ErrRemoteOverloaded）、准入时版本冲突（ErrRemoteVersionConflict）、Nest 派发队列满（corenest.ErrQueueFull：
+//     准入时拒绝，handler 没有开始；常见于 io 池的 worker 全在等 strict 确认。带 Remote 写批次的段不能 Await
+//     （nest.ErrAwaitContext），所以 Remote 写拿到它只可能来自准入，不会是“前一段已执行、恢复段被拒”）→ servicerpc.Retryable。
 //   - 本实例不是 owner（ErrRemoteFenced）：读一次权威的所有权记录，owner 是别的 sid 就答复 servicerpc.Redirect(owner)，
 //     读不到或 owner 仍是本实例就答复 Retryable。读所有权要 I/O，所以只能在 I/O 段（RPC handler）里调。
 //
@@ -29,7 +32,8 @@ func RPCWriteAnswer(ctx context.Context, owners entity.RemoteOwnershipManager, l
 		errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		return err
 	case errors.Is(err, entity.ErrRemoteEntityReloading), errors.Is(err, entity.ErrRemoteOwnerTransition),
-		errors.Is(err, entity.ErrRemoteOverloaded), errors.Is(err, entity.ErrRemoteVersionConflict):
+		errors.Is(err, entity.ErrRemoteOverloaded), errors.Is(err, entity.ErrRemoteVersionConflict),
+		errors.Is(err, corenest.ErrQueueFull):
 		return servicerpc.Retryable(err)
 	case errors.Is(err, entity.ErrRemoteFenced):
 		if owners == nil {
