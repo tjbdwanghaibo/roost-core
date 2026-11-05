@@ -6,7 +6,6 @@ import (
 	"log/slog"
 
 	"{{MODULE}}/game/alliancerule"
-	alliance_member "{{MODULE}}/game/entities/alliance_member"
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/guild"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -26,11 +25,15 @@ import (
 
 // The guild endpoints. The guild is the alliance service's (game/guild): this
 // process cannot write it — it has no Remote write runtime — so every write is
-// an alliance RPC or a saga whose guild step is one, and every read is a
-// mirror read. What the endpoints still decide is the cheap part: a name that
-// is invalid on its face, a request from a player the mirror shows in no
-// guild. Those pre-checks read the mirror and may be stale; the alliance
-// service decides again on its authoritative state, and its answer wins.
+// an alliance RPC or a saga whose guild step is one, and every guild read is a
+// mirror read of the alliance. Which guild the player is in is the player's
+// own copy (PlayerDao.GuildID, persisted and synced): written in the player's
+// transaction after their own join / leave / founding succeeded, by a
+// membership notice while they are online, and checked against the guild's
+// mirror at login. What the endpoints still decide from it is the cheap part:
+// a name that is invalid on its face, a request from a player shown in no
+// guild. Those pre-checks are advisory and may be stale; the alliance service
+// decides again on its roster, and its answer wins.
 //
 // Mirror reads are Monotonic: with no version they serve the cache within its
 // staleness bound and load on a miss (a Cached read never loads, so a guild
@@ -50,10 +53,10 @@ func (controller *Controller) HandleFoundGuild(context *playeraccess.Context, re
 	if err := alliancerule.ValidateName(request.Name); err != nil {
 		return guildRefusal(context, "found_guild", err), nil
 	}
-	if member, err := controller.memberMirror(context); err != nil {
+	if shown, err := controller.shownGuild(context); err != nil {
 		return guildRefusal(context, "found_guild", err), nil
-	} else if member.AllianceID != 0 {
-		return guildRefusal(context, "found_guild", errcode.Wrap(apperrors.ErrAllianceMembership, nil, "alliance_id", member.AllianceID)), nil
+	} else if shown != 0 {
+		return guildRefusal(context, "found_guild", errcode.Wrap(apperrors.ErrAllianceMembership, nil, "alliance_id", shown)), nil
 	}
 	cost := controller.guildSettings.FoundCost
 	return controller.startGuildOp(context, guild.OpFound, guild.State{Coins: cost, Name: request.Name, OpenJoin: request.OpenJoin}, cost)
@@ -83,21 +86,21 @@ func (controller *Controller) HandleJoinGuild(context *playeraccess.Context, req
 	return guildReply(reply.Alliance, reply.ServedBySID), nil
 }
 
-// HandleLeaveGuild leaves the guild the guard mirror shows the player in. A
-// stale mirror at worst names a guild the player already left: the service
-// answers that from its roster.
+// HandleLeaveGuild leaves the guild the player is shown in. A stale copy at
+// worst names a guild the player already left: the service answers that from
+// its roster.
 func (controller *Controller) HandleLeaveGuild(context *playeraccess.Context, request *pb.LeaveGuildRequest) (*pb.GuildResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("leave_guild endpoint: context and request are required")
 	}
-	member, err := controller.memberMirror(context)
+	shown, err := controller.shownGuild(context)
 	if err != nil {
 		return guildRefusal(context, "leave_guild", err), nil
 	}
-	if member.AllianceID == 0 {
+	if shown == 0 {
 		return guildRefusal(context, "leave_guild", errcode.Wrap(apperrors.ErrGuildMissing, nil, "player_id", context.PlayerID)), nil
 	}
-	target, err := rpcalliance.AllianceTarget(member.AllianceID)
+	target, err := rpcalliance.AllianceTarget(shown)
 	if err != nil {
 		return guildRefusal(context, "leave_guild", err), nil
 	}
@@ -110,23 +113,23 @@ func (controller *Controller) HandleLeaveGuild(context *playeraccess.Context, re
 	if err != nil {
 		return guildRefusal(context, "leave_guild", err), nil
 	}
-	controller.showGuild(context, 0, member.AllianceID)
+	controller.showGuild(context, 0, shown)
 	return guildReply(reply.Alliance, reply.ServedBySID), nil
 }
 
-// HandleGuildInfo reads a guild from its mirror: by id, or the player's own
-// (the guard mirror names it).
+// HandleGuildInfo reads a guild from its mirror: by id, or the one the player
+// is shown in.
 func (controller *Controller) HandleGuildInfo(context *playeraccess.Context, request *pb.GuildInfoRequest) (*pb.GuildResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("guild_info endpoint: context and request are required")
 	}
 	guildID := request.GuildID
 	if guildID == 0 {
-		member, err := controller.memberMirror(context)
+		shown, err := controller.shownGuild(context)
 		if err != nil {
 			return guildRefusal(context, "guild_info", err), nil
 		}
-		guildID = member.AllianceID
+		guildID = shown
 	}
 	view, err := controller.allianceMirror(context, guildID, request.MinVersion)
 	if err != nil {
@@ -145,14 +148,14 @@ func (controller *Controller) HandleDonateGuild(context *playeraccess.Context, r
 	if request.Amount <= 0 {
 		return guildRefusal(context, "donate_guild", errcode.Wrap(apperrors.ErrAllianceAmount, nil, "amount", request.Amount)), nil
 	}
-	member, err := controller.memberMirror(context)
+	shown, err := controller.shownGuild(context)
 	if err != nil {
 		return guildRefusal(context, "donate_guild", err), nil
 	}
-	if member.AllianceID == 0 {
+	if shown == 0 {
 		return guildRefusal(context, "donate_guild", errcode.Wrap(apperrors.ErrGuildMissing, nil, "player_id", context.PlayerID)), nil
 	}
-	return controller.startGuildOp(context, guild.OpDonate, guild.State{Coins: request.Amount, AllianceID: member.AllianceID}, request.Amount)
+	return controller.startGuildOp(context, guild.OpDonate, guild.State{Coins: request.Amount, AllianceID: shown}, request.Amount)
 }
 
 // HandleClaimGuildReward starts the reward saga: the alliance service marks
@@ -162,11 +165,11 @@ func (controller *Controller) HandleClaimGuildReward(context *playeraccess.Conte
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("claim_guild_reward endpoint: context and request are required")
 	}
-	member, err := controller.memberMirror(context)
+	shown, err := controller.shownGuild(context)
 	if err != nil {
 		return guildRefusal(context, "claim_guild_reward", err), nil
 	}
-	if member.AllianceID == 0 {
+	if shown == 0 {
 		return guildRefusal(context, "claim_guild_reward", errcode.Wrap(apperrors.ErrGuildMissing, nil, "player_id", context.PlayerID)), nil
 	}
 	return controller.startGuildOp(context, guild.OpReward, guild.State{}, 0)
@@ -211,6 +214,11 @@ func (controller *Controller) HandleGuildOpStatus(context *playeraccess.Context,
 	if err != nil || state.PlayerID != context.PlayerID {
 		return &pb.GuildOpStatusResponse{Status: unknown}, nil
 	}
+	if request.Op == guild.OpFound && record.Status == saga.StatusCompleted && state.AllianceID != 0 {
+		// The founder's own copy, in case the founding's notice was lost: the
+		// completed saga is the alliance service's answer. Idempotent.
+		controller.showGuild(context, state.AllianceID, 0)
+	}
 	return &pb.GuildOpStatusResponse{Status: record.Status.String(), Step: int32(record.Step), LastError: record.LastError, GuildID: state.AllianceID}, nil
 }
 
@@ -243,21 +251,15 @@ func (controller *Controller) startGuildOp(context *playeraccess.Context, op str
 	return &pb.GuildResponse{SagaKey: started}, nil
 }
 
-// memberMirror reads the player's guard: which guild they are in. A player
-// who never joined one has no guard (not found) — that is "in no guild".
-func (controller *Controller) memberMirror(context *playeraccess.Context) (alliance_member.AllianceMemberMirror, error) {
-	guardID, err := rpcalliance.GuardTarget(context.PlayerID)
+// shownGuild reads the guild the player is shown in (PlayerDao.GuildID),
+// under the player's lock: the player's own copy of their membership, 0 for
+// none. Advisory: the alliance service decides every guild write on its roster.
+func (controller *Controller) shownGuild(context *playeraccess.Context) (int64, error) {
+	playerID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
 	if err != nil {
-		return alliance_member.AllianceMemberMirror{}, err
+		return 0, err
 	}
-	value, found, err := controller.memberMirrors.Read(context.Context(), guardID, entity.RemoteReadMonotonic, entity.RemoteObservation{})
-	if err != nil {
-		return alliance_member.AllianceMemberMirror{}, errcode.Wrap(apperrors.ErrGuildBusy, err, "player_id", context.PlayerID)
-	}
-	if !found {
-		return alliance_member.AllianceMemberMirror{}, nil
-	}
-	return value.Value, nil
+	return syncsender.NewPlayerGuildSender(controller.NestClient()).Sync_PlayerGuild(context.Context(), playerID)
 }
 
 // allianceMirror reads a guild; minVersion > 0 asks for a state no older than
@@ -284,9 +286,9 @@ func (controller *Controller) allianceMirror(context *playeraccess.Context, guil
 	return value.Value.View(guildID, int64(value.Observation.StateVersion)), nil
 }
 
-// showGuild updates what the player is shown in after their own join or
-// leave. Best effort: the display is not persisted and the next login reads
-// the mirror anyway.
+// showGuild updates the player's copy after their own join or leave (or a
+// founding they asked the status of). Best effort: a copy left stale is
+// corrected by a notice or checked at the next login.
 func (controller *Controller) showGuild(context *playeraccess.Context, guildID int64, replaces int64) {
 	playerID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
 	if err == nil {
@@ -297,14 +299,34 @@ func (controller *Controller) showGuild(context *playeraccess.Context, guildID i
 	}
 }
 
-// refreshGuild sets the display from the guard mirror (login). Best effort.
+// refreshGuild checks the player's copy against the guild's mirror (login):
+// a guild that no longer exists, or whose roster no longer has the player (a
+// leave or kick whose notice the player missed while offline), is hidden.
+// Best effort — a mirror that cannot be read leaves the copy as it is. A
+// join the player missed while offline (an approval) is not discovered here:
+// the copy shows it after the next notice or the player's own guild action
+// (docs/maintenance/KNOWN-LIMITS.md).
 func (controller *Controller) refreshGuild(context *playeraccess.Context) {
-	member, err := controller.memberMirror(context)
-	if err != nil {
-		slog.Warn("enter_game: guild not read from the mirror; the display stays empty until a notice or the next login", "player_id", context.PlayerID, "err", err)
+	shown, err := controller.shownGuild(context)
+	if err != nil || shown == 0 {
+		if err != nil {
+			slog.Warn("enter_game: guild copy not read", "player_id", context.PlayerID, "err", err)
+		}
 		return
 	}
-	controller.showGuild(context, member.AllianceID, 0)
+	target, err := rpcalliance.AllianceTarget(shown)
+	if err != nil {
+		controller.showGuild(context, 0, shown)
+		return
+	}
+	value, found, err := controller.allianceMirrors.Read(context.Context(), target, entity.RemoteReadMonotonic, entity.RemoteObservation{})
+	if err != nil {
+		slog.Warn("enter_game: guild not checked against its mirror", "player_id", context.PlayerID, "guild_id", shown, "err", err)
+		return
+	}
+	if _, member := value.Value.Members[context.PlayerID]; !found || !value.Value.Founded() || !member {
+		controller.showGuild(context, 0, shown)
+	}
 }
 
 // boundSID is this process's sid: every player served here is bound to it

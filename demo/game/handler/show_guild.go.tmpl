@@ -5,11 +5,11 @@ import (
 )
 
 // handlerShowGuild sets which guild the player is shown in (PlayerDao.GuildID,
-// nopersist,sync) and reports whether it changed. Nothing is persisted: the
-// alliance service's roster is the authority, and this is the display copy the
-// game fills at login from the guard mirror, after the player's own join /
-// leave, and on a membership notice. The sync field carries it to the client
-// and to nearby players.
+// persist,sync) and reports whether it changed. The alliance service's roster
+// is the authority; this is the player's own copy, written after the player's
+// own join / leave / founding, on a membership notice, and hidden at login
+// when the guild's mirror no longer has the player. The sync field carries it
+// to the client and to nearby players.
 //
 // replaces makes the change conditional: when it is not 0 the field changes
 // only if it still shows replaces. A "left guild 7" notice that arrives after

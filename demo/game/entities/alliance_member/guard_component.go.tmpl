@@ -16,20 +16,34 @@ const CompTypeGuard entity.ComponentType = 2009
 
 // GuardComponent is "one player, one alliance" (plan §2.5).
 //
+// The guard is a cache of the rosters (AllianceDao.Members, the authority).
+// It may be stale-occupied — naming an alliance or a reservation the roster
+// no longer backs, because a call that should have finished it was lost —
+// but never stale-empty: a player seated in alliance X under request J always
+// has a guard that names (X, J), joined or pending. Every write that empties
+// the guard keeps that: it happens only after X's answer is final (Resolve
+// after X decided or Settle fixed the request; Clear after X removed the
+// seat), and only when the guard still holds what was observed (Resolve and
+// Clear are conditional on alliance and request id).
+//
 // A player joins in two steps when their guard and the alliance are on
 // different service instances: the guard is reserved for (alliance, request
 // id), the alliance admits the player under that request id, and the guard is
-// confirmed from the alliance's "member changed" effect — or released when
-// the alliance refused. A reservation blocks every other alliance. If it is
-// still open at its deadline, the guard asks the alliance (Settle) what became
-// of the request, which also makes that answer final, and confirms or releases
-// by it: never on the clock alone, because a request still in flight could
-// otherwise seat the player after the guard let go. When guard and alliance
-// are on the same instance, the three steps are one transaction (Join).
+// confirmed by a direct ResolveGuard — or released when the alliance refused.
+// A reservation blocks every other alliance. If that call is lost the guard
+// stays pending: the reservation's deadline (a best-effort notice from the
+// instance's AllianceShard) or the next request that finds the guard held
+// (HeldAgainst; the service's healGuard) asks the alliance (Settle) what
+// became of the request, which also makes that answer final, and confirms or
+// releases by it: never on the clock alone, because a request still in flight
+// could otherwise seat the player after the guard let go. When guard and
+// alliance are on the same instance, the three steps are one transaction
+// (Join).
 //
 // Leaving is the reverse: the alliance drops the seat, then the guard is
 // cleared — only for the membership that ended (its join request id), so a
-// late "left" cannot clear a newer membership.
+// late "left" cannot clear a newer membership. A lost clear leaves the guard
+// stale-occupied until the next request that finds it held asks the alliance.
 type GuardComponent struct {
 	entity.ComponentBase
 	owner *AllianceMember
@@ -87,6 +101,19 @@ func (component *GuardComponent) CheckFree(requestID string, nowUnix int64, cool
 		return errcode.Wrap(apperrors.ErrAllianceCooldown, nil, "left_at_unix", left)
 	}
 	return nil
+}
+
+// HeldAgainst reports whether the guard is held for anything but requestID:
+// a membership, or another request's reservation — what CheckFree would
+// refuse apart from the rejoin cooldown. A request that finds it held may
+// heal it first (the holder may be stale) before it is decided.
+func (component *GuardComponent) HeldAgainst(requestID string) bool {
+	dao := component.owner.Dao()
+	if dao.GetAllianceID() != 0 {
+		return true
+	}
+	pending := dao.GetPendingRequestID()
+	return pending != "" && pending != requestID
 }
 
 // Reserve holds the guard for allianceID under requestID until deadlineUnix

@@ -16,10 +16,21 @@ import (
 // viaApplication: the leader approves an application; otherwise the player
 // joins an open alliance.
 //
+// deferHeld: when the guard is held by another alliance or request and the
+// request was not decided before, answer GuardHeld and record nothing — the
+// service heals the guard from its holder first (it may be stale) and asks
+// again with deferHeld=false, which records the refusal if it still holds.
+//
+// Nothing is left to finish: the membership notice to the game server is a
+// best-effort effect, not an outbox record.
+//
 //roost:nest rollback=undo durability=strict
-func handlerAllianceAdmit(target alliance.IRosterEntity, member alliance_member.IGuardEntity, requestID string, actorID int64, callerSID int32, viaApplication bool, maxMembers int32, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+func handlerAllianceAdmit(target alliance.IRosterEntity, member alliance_member.IGuardEntity, requestID string, actorID int64, callerSID int32, viaApplication bool, deferHeld bool, maxMembers int32, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster, guard := target.RosterComp(), member.GuardComp()
 	playerID := guard.PlayerID()
+	if _, decided := roster.Receipt(requestID); deferHeld && !decided && guard.HeldAgainst(requestID) {
+		return alliancerule.Answer{GuardHeld: true, Guard: guard.State(guard.CurrentVersion())}, nil
+	}
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
 		homeSID, err := roster.AdmissionHome(actorID, playerID, callerSID, viaApplication, int(maxMembers))
 		if err != nil {
@@ -32,7 +43,7 @@ func handlerAllianceAdmit(target alliance.IRosterEntity, member alliance_member.
 		guard.Join(roster.AllianceID(), requestID)
 		return playerID, effects.EmitAllianceMemberChanged(effects.AllianceMemberChanged{
 			AllianceID: roster.AllianceID(), PlayerID: playerID, HomeSID: homeSID, Change: effects.MemberJoined,
-			JoinRequestID: requestID, GuardSettled: true, Version: roster.CurrentVersion() + 1,
+			Version: roster.CurrentVersion() + 1,
 		})
 	})
 	return answer(roster, outcome, err)

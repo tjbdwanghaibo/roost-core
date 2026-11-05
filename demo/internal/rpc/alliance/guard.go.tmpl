@@ -12,6 +12,8 @@ import (
 	alliance_shard "{{MODULE}}/game/entities/alliance_shard"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // Guard implements Alliance.
@@ -29,23 +31,37 @@ func (s *Service) Guard(ctx context.Context, target int64) (GuardReply, error) {
 }
 
 // ReserveGuard implements Alliance (step 1 of a two-step join or founding).
+// A guard held by another alliance or request is healed from its holder
+// first (healGuard), then asked again; a holder that cannot be reached
+// answers "not executed".
 func (s *Service) ReserveGuard(ctx context.Context, requestID string, target int64, allianceID int64, deadlineUnix int64) (GuardReply, error) {
-	var answer alliancerule.GuardAnswer
 	err := requireRequest(requestID, allianceID, deadlineUnix)
-	if err == nil {
-		err = s.call(ctx, target, alliance_member.EntityKindAllianceMember, func(ctx context.Context) error {
-			shard, err := s.shard(ctx)
-			if err != nil {
-				return err
-			}
-			if err := s.deps.Entities.EnsureGuard(ctx, entity.GetUniqueIDFromEntityID(target)); err != nil {
-				return err
-			}
-			answer, err = syncsender.NewAllianceGuardSender(s.deps.Nest).MultiSync_GuardReserve(ctx, target, shard, requestID, allianceID, deadlineUnix, s.cooldown(), s.retention())
-			return err
-		})
+	if err != nil {
+		return s.guardReply(alliancerule.GuardAnswer{}, err)
+	}
+	answer, err := s.reserveGuard(ctx, requestID, target, allianceID, deadlineUnix, true)
+	if err == nil && answer.Held {
+		if err = s.healGuard(ctx, answer.State); err == nil {
+			answer, err = s.reserveGuard(ctx, requestID, target, allianceID, deadlineUnix, false)
+		}
 	}
 	return s.guardReply(answer, err)
+}
+
+func (s *Service) reserveGuard(ctx context.Context, requestID string, target int64, allianceID int64, deadlineUnix int64, deferHeld bool) (alliancerule.GuardAnswer, error) {
+	var answer alliancerule.GuardAnswer
+	err := s.call(ctx, target, alliance_member.EntityKindAllianceMember, func(ctx context.Context) error {
+		shard, err := s.shard(ctx)
+		if err != nil {
+			return err
+		}
+		if err := s.deps.Entities.EnsureGuard(ctx, entity.GetUniqueIDFromEntityID(target)); err != nil {
+			return err
+		}
+		answer, err = syncsender.NewAllianceGuardSender(s.deps.Nest).MultiSync_GuardReserve(ctx, target, shard, requestID, allianceID, deadlineUnix, deferHeld, s.cooldown(), s.retention())
+		return err
+	})
+	return answer, err
 }
 
 // ResolveGuard implements Alliance.
@@ -96,6 +112,12 @@ func (s *Service) ClaimReward(ctx context.Context, requestID string, callerID in
 		}
 	}
 	if err == nil {
+		// Only a member claims, and a stale-occupied guard must not let a
+		// player who left claim: the guard is checked against its alliance
+		// first (healGuard; a real member is left as it is).
+		err = s.verifyGuard(ctx, target, requestID)
+	}
+	if err == nil {
 		err = s.call(ctx, target, alliance_member.EntityKindAllianceMember, func(ctx context.Context) error {
 			if err := s.deps.Entities.EnsureGuard(ctx, callerID); err != nil {
 				return err
@@ -140,13 +162,146 @@ func (s *Service) shard(ctx context.Context) (int64, error) {
 	return entity.BuildEntityID(int64(s.deps.LocalSID), alliance_shard.EntityKindAllianceShard)
 }
 
-// --- effect consumers (internal/service/alliance subscribes them) ---
+// --- the guard as a cache of the rosters ---
+
+// healGuard brings a held guard in line with the roster that holds it. The
+// guard is a cache of the rosters: it may be stale-occupied (a ResolveGuard or
+// ClearGuard that should have finished it was lost), never stale-empty.
+// observed is the guard as a request found it; its holder (alliance X,
+// request R — pending or joined) is asked for the authoritative answer:
+//
+//   - Settle(X, R, player, decide) on X, in one transaction: reports whether
+//     the player holds a seat under R now (Seated) and whether R has an
+//     answer. decide — a membership, or a reservation past its deadline —
+//     also records R's answer if X never decided it (alliance_expired, or
+//     success when the player holds a seat under R whose receipt was
+//     pruned), so no admission under R can change the answer afterwards.
+//     A reservation before its deadline is not decided: its join may still
+//     be on the way to X, and cutting it short would turn a race between two
+//     approvals into an expiry; it is healed only when X already answered.
+//   - pending (X, R): ResolveGuard(R, joined=Seated) — confirmed if seated,
+//     released otherwise — once R is answered; before that nothing.
+//   - joined (X, R) and not seated: ClearGuard(X, R). Seated: nothing, the
+//     guard was right.
+//
+// ResolveGuard and ClearGuard change the guard only while it still holds
+// exactly (X, R) — the observed state — so a heal racing another heal or a
+// direct finish changes nothing twice. Why emptying it is safe: once R has
+// an answer on X (a deciding Settle recorded it, or X had decided R before —
+// the non-deciding case releases only then), the player cannot get a seat in
+// X under R any more (an admission under R replays R's recorded answer), and a seat in X under any other
+// request needs the guard free (same-instance join: checked in the same
+// transaction) or reserved for that request (cross-instance join): neither
+// is possible while the guard holds (X, R). So "not seated under R" read in
+// Settle's transaction stays true until the conditional write. The one
+// assumption, as before healing: a request id is not retried after its
+// receipts were pruned (alliance.receipt_retention).
+//
+// It runs in the service layer (the RPC handler's I/O segment), never inside
+// a guard handler: the questions are RPCs, and a Nest handler on the fast
+// pool must not wait. An error is "not executed" for the request that found
+// the guard held: nothing of it was decided.
+func (s *Service) healGuard(ctx context.Context, observed alliancerule.MemberState) error {
+	allianceID, requestID, pending, held := observed.Holder()
+	if !held {
+		return nil
+	}
+	guard, err := GuardTarget(observed.PlayerID)
+	if err != nil {
+		return fmt.Errorf("%w: player %d: %v", ErrRequestInvalid, observed.PlayerID, err)
+	}
+	decide := !pending || s.deps.Now().Unix() >= observed.PendingDeadlineUnix
+	settled, err := s.settle(ctx, allianceID, requestID, observed.PlayerID, decide)
+	if err != nil {
+		return servicerpc.Retryable(fmt.Errorf("alliance: ask alliance %d about request %s of player %d: %w", allianceID, requestID, observed.PlayerID, err))
+	}
+	switch {
+	case pending && !settled.Found && !settled.Seated:
+		return nil // still on the way to X: the reservation holds until X answers or its deadline passes
+	case pending:
+		err = s.onGuard(ctx, guard, func(peer Alliance) error {
+			_, err := peer.ResolveGuard(ctx, requestID, guard, allianceID, settled.Seated)
+			return err
+		})
+	case !settled.Seated:
+		err = s.onGuard(ctx, guard, func(peer Alliance) error {
+			_, err := peer.ClearGuard(ctx, guard, allianceID, requestID)
+			return err
+		})
+	default:
+		return nil
+	}
+	if err != nil && !final(err) {
+		return servicerpc.Retryable(fmt.Errorf("alliance: heal the guard of player %d: %w", observed.PlayerID, err))
+	}
+	metrics.IncCounter("alliance.guard_healed_total", metrics.Labels{"pending": fmt.Sprint(pending)}, 1)
+	return nil
+}
+
+// onGuard runs a guard call on the guard's owner: this service when it is
+// this instance's (no bus round trip back to itself), the route RPC
+// otherwise (a reservation-deadline notice is handled by any instance).
+func (s *Service) onGuard(ctx context.Context, guard int64, run func(peer Alliance) error) error {
+	_, here, err := s.owned(ctx, guard)
+	if err != nil {
+		return err
+	}
+	if here {
+		return run(s)
+	}
+	return run(s.deps.Peers)
+}
+
+// verifyGuard heals the guard target from its holder whatever it holds (the
+// reward claim: a member is checked against the roster every time).
+func (s *Service) verifyGuard(ctx context.Context, target int64, requestID string) error {
+	var state alliancerule.MemberState
+	err := s.call(ctx, target, alliance_member.EntityKindAllianceMember, func(ctx context.Context) error {
+		if err := s.deps.Entities.EnsureGuard(ctx, entity.GetUniqueIDFromEntityID(target)); err != nil {
+			return err
+		}
+		var receipt alliancerule.ReceiptAnswer
+		var err error
+		if receipt, err = syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardReceipt(ctx, target, requestID); err != nil || receipt.Found {
+			return err // a replay is answered from its receipt
+		}
+		state, err = syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardInfo(ctx, target)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	return s.healGuard(ctx, state)
+}
+
+// finishGuard is the direct finishing call after a cross-instance write
+// (confirm a reservation, or clear an ended membership). Best effort: a lost
+// one leaves the guard stale-occupied, which healGuard corrects for the next
+// request that finds it held.
+func (s *Service) finishGuard(ctx context.Context, playerID, allianceID int64, requestID string, change string) {
+	guard, err := GuardTarget(playerID)
+	if err == nil {
+		switch change {
+		case effects.MemberJoined:
+			_, err = s.deps.Peers.ResolveGuard(ctx, requestID, guard, allianceID, true)
+		default:
+			_, err = s.deps.Peers.ClearGuard(ctx, guard, allianceID, requestID)
+		}
+	}
+	if err != nil {
+		metrics.IncCounter("alliance.guard_finish_lost_total", metrics.Labels{"change": change}, 1)
+		slog.Warn("alliance: guard not finished; the next request that finds it held heals it",
+			"player_id", playerID, "alliance_id", allianceID, "request_id", requestID, "change", change, "err", err)
+	}
+}
+
+// --- effect consumers (internal/service/alliance subscribes them; both best effort) ---
 
 // MemberNotice is the best-effort notice a player's game server gets when
 // their membership changes; the game updates what an online player is shown
 // and pushes GuildNotice to the client (internal/service/<game>/alliance_notice.go).
-// A notice that is lost is made up for at the next login, which reads the
-// mirror.
+// A notice that is lost is made up for at the next login, which checks the
+// guild the player is shown in against the alliance's mirror.
 type MemberNotice struct {
 	AllianceID int64  `json:"alliance_id"`
 	PlayerID   int64  `json:"player_id"`
@@ -160,76 +315,59 @@ func (MemberNotice) MsgName() string { return "alliance.member_notice" }
 // NoticeModule is the bus module the game server handles MemberNotice on.
 const NoticeModule = "alliance"
 
-// HandleMemberChanged consumes effects.AllianceMemberChanged: it finishes the
-// guard when the write could not (the guard is on another instance), then
-// notifies the player's game server. An error redelivers the effect; the guard
-// calls are idempotent (they change only the reservation or the membership
-// the effect names), so a redelivery is harmless. The notice is best effort
-// and never fails the effect.
+// HandleMemberChanged consumes the best-effort effects.AllianceMemberChanged:
+// it notifies the player's game server. It finishes nothing — the guard is
+// the writes' and healGuard's — so losing it only delays what the player is
+// shown.
 func (s *Service) HandleMemberChanged(ctx context.Context, event effects.AllianceMemberChanged) error {
-	if !event.GuardSettled {
-		guard, err := GuardTarget(event.PlayerID)
-		if err != nil {
-			return fmt.Errorf("alliance: member change for player %d: %w", event.PlayerID, err)
-		}
-		switch event.Change {
-		case effects.MemberJoined:
-			_, err = s.deps.Peers.ResolveGuard(ctx, event.JoinRequestID, guard, event.AllianceID, true)
-		case effects.MemberLeft, effects.MemberKicked:
-			_, err = s.deps.Peers.ClearGuard(ctx, guard, event.AllianceID, event.JoinRequestID)
-		default:
-			return fmt.Errorf("alliance: member change %q is unknown", event.Change)
-		}
-		// A guard that does not exist has nothing to finish (entity not
-		// found is final); anything not final redelivers the effect.
-		if !final(err) {
-			return fmt.Errorf("alliance: finish the guard of player %d: %w", event.PlayerID, err)
-		}
+	if s.deps.Notify == nil || event.HomeSID <= 0 {
+		return nil
 	}
-	if s.deps.Notify != nil && event.HomeSID > 0 {
-		notice := MemberNotice{AllianceID: event.AllianceID, PlayerID: event.PlayerID, Change: event.Change, Version: event.Version}
-		if err := s.deps.Notify(ctx, event.HomeSID, notice); err != nil {
-			slog.Debug("alliance: member notice not delivered; the player sees it at the next login",
-				"player_id", event.PlayerID, "home_sid", event.HomeSID, "err", err)
-		}
+	notice := MemberNotice{AllianceID: event.AllianceID, PlayerID: event.PlayerID, Change: event.Change, Version: event.Version}
+	if err := s.deps.Notify(ctx, event.HomeSID, notice); err != nil {
+		slog.Debug("alliance: member notice not delivered; the player sees it at the next login",
+			"player_id", event.PlayerID, "home_sid", event.HomeSID, "err", err)
 	}
 	return nil
 }
 
-// HandleReservationDue consumes effects.AllianceReservationDue: a guard
-// reservation reached its deadline unconfirmed. The alliance is asked to
-// settle the request — which also makes its answer final — and the guard is
-// resolved by that answer. Nothing is released on the clock: if the alliance
-// cannot be reached the error redelivers the effect.
+// HandleReservationDue consumes the best-effort effects.AllianceReservationDue:
+// a guard reservation reached its deadline unconfirmed. It heals the guard the
+// way a request that found it held would (healGuard: the alliance settles the
+// request — which also makes its answer final — and the guard follows the
+// answer). Nothing is released on the clock: an alliance that cannot be
+// reached leaves the reservation pending (the error is only logged; the next
+// request that finds the guard held tries again).
 func (s *Service) HandleReservationDue(ctx context.Context, event effects.AllianceReservationDue) error {
-	settled, err := s.settle(ctx, event.AllianceID, event.RequestID)
-	if err != nil {
-		return fmt.Errorf("alliance: settle request %s with alliance %d: %w", event.RequestID, event.AllianceID, err)
-	}
-	guard, err := GuardTarget(event.PlayerID)
-	if err != nil {
-		return fmt.Errorf("alliance: reservation of player %d: %w", event.PlayerID, err)
-	}
-	if _, err := s.deps.Peers.ResolveGuard(ctx, event.RequestID, guard, event.AllianceID, settled.Outcome == 0); !final(err) {
-		return fmt.Errorf("alliance: resolve the guard of player %d: %w", event.PlayerID, err)
-	}
-	return nil
+	due := s.deps.Now().Unix() // the timer fired: the deadline has passed
+	return s.healGuard(ctx, alliancerule.MemberState{PlayerID: event.PlayerID, PendingAllianceID: event.AllianceID, PendingRequestID: event.RequestID, PendingDeadlineUnix: due})
 }
 
-// settle asks the alliance what became of requestID (Settle) wherever it is
-// (onAlliance). An alliance id that has no owner yet is a founding whose
-// instance reserved the guard and never created the alliance: it is created
-// here, empty, so the request's alliance_expired can be recorded on it and a
-// late Establish of that request is refused.
-func (s *Service) settle(ctx context.Context, allianceID int64, requestID string) (ResultReply, error) {
+// settle asks the alliance what became of requestID for playerID (Settle)
+// wherever it is (onAlliance). An alliance id that has no owner yet is a
+// founding whose instance reserved the guard and has not created the
+// alliance: deciding, it is created here, empty, so the request's
+// alliance_expired can be recorded on it and a late Establish of that request
+// is refused; not deciding, the founding may still be on its way and nothing
+// is answered.
+func (s *Service) settle(ctx context.Context, allianceID int64, requestID string, playerID int64, decide bool) (ResultReply, error) {
 	var settled ResultReply
+	if !decide {
+		target, err := AllianceTarget(allianceID)
+		if err != nil {
+			return settled, fmt.Errorf("%w: alliance %d: %v", ErrRequestInvalid, allianceID, err)
+		}
+		if exists, _, err := s.owned(ctx, target); err != nil || !exists {
+			return settled, err
+		}
+	}
 	err := s.onAlliance(ctx, allianceID,
 		func(ctx context.Context, target int64) (err error) {
-			settled, err = s.Settle(ctx, target, requestID)
+			settled, err = s.Settle(ctx, target, requestID, playerID, decide)
 			return err
 		},
 		func(ctx context.Context, target int64) (err error) {
-			settled, err = s.deps.Peers.Settle(ctx, target, requestID)
+			settled, err = s.deps.Peers.Settle(ctx, target, requestID, playerID, decide)
 			return err
 		})
 	return settled, err

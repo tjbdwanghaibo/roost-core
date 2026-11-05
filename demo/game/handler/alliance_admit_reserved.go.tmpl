@@ -10,10 +10,10 @@ import (
 
 // handlerAllianceAdmitReserved is step 2 of a join whose guard is on another
 // instance: the guard has been reserved for (this alliance, requestID), and
-// this seats the player under the same request id. The effect it records is
-// what confirms the guard (GuardSettled=false); a rejection is recorded too,
-// so a reservation the guard later settles by this request's receipt can
-// never turn into a seat.
+// this seats the player under the same request id. The service confirms the
+// guard with a direct ResolveGuard afterwards (a lost one is healed from this
+// roster); a rejection is recorded too, so a reservation the guard later
+// settles by this request's receipt can never turn into a seat.
 //
 //roost:nest rollback=undo durability=strict
 func handlerAllianceAdmitReserved(target alliance.IRosterEntity, requestID string, actorID int64, playerID int64, callerSID int32, viaApplication bool, maxMembers int32, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
@@ -26,7 +26,7 @@ func handlerAllianceAdmitReserved(target alliance.IRosterEntity, requestID strin
 		roster.Admit(playerID, homeSID, requestID, nowUnix)
 		return playerID, effects.EmitAllianceMemberChanged(effects.AllianceMemberChanged{
 			AllianceID: roster.AllianceID(), PlayerID: playerID, HomeSID: homeSID, Change: effects.MemberJoined,
-			JoinRequestID: requestID, Version: roster.CurrentVersion() + 1,
+			Version: roster.CurrentVersion() + 1,
 		})
 	})
 	return answer(roster, outcome, err)

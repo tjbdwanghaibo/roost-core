@@ -13,16 +13,19 @@ import (
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 )
 
-// AllianceMemberChangedEffectDurable names the JetStream consumer; every
-// alliance instance shares it, so each effect is handled by one of them (the
-// guard calls it makes are route RPCs to the guard's owner, whichever instance
-// that is).
-const AllianceMemberChangedEffectDurable = "alliance-member-changed"
+// AllianceMemberChangedEffectDurable names the consumer of the best-effort
+// membership notices: the NATS queue group every alliance instance joins, so
+// each notice is handled by one of them. (Until 2026-11-05 this was the
+// JetStream durable "alliance-member-changed" of a reliable effect that also
+// finished guards; that durable is no longer used — the project is not
+// deployed, so it is not migrated.)
+const AllianceMemberChangedEffectDurable = "alliance-member-notice"
 
-// startAllianceMemberChangedEffectConsumer finishes guards and sends
-// membership notices (rpcalliance.Service.HandleMemberChanged).
+// startAllianceMemberChangedEffectConsumer sends membership notices to game
+// servers (rpcalliance.Service.HandleMemberChanged). Best effort, as the
+// effect: no inbox, no redelivery.
 func startAllianceMemberChangedEffectConsumer(ctx context.Context, registry *app.Registry, service *rpcalliance.Service) (fnats.IJetStreamSubscription, error) {
-	consumer := kitdataengine.EffectConsumer{Durable: AllianceMemberChangedEffectDurable, Topic: effects.TopicAllianceMemberChanged}
+	consumer := kitdataengine.EffectConsumer{Durable: AllianceMemberChangedEffectDurable, Topic: effects.TopicAllianceMemberChanged, Delivery: effects.DeliveryAllianceMemberChanged}
 	return kitdataengine.SubscribeEffects(ctx, registry, consumer, func(ctx context.Context, envelope nestwal.EffectEnvelope) error {
 		var event effects.AllianceMemberChanged
 		if err := json.Unmarshal(envelope.Payload, &event); err != nil {

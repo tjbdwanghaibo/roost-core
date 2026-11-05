@@ -212,7 +212,8 @@ func (s *Service) guardReply(answer alliancerule.GuardAnswer, err error) (GuardR
 }
 
 func (s *Service) resultReply(answer alliancerule.ReceiptAnswer, err error) (ResultReply, error) {
-	return ResultReply{Found: answer.Found, Outcome: answer.Receipt.Code, Version: answer.Receipt.Version, Subject: answer.Receipt.Subject, ServedBySID: s.deps.LocalSID}, err
+	return ResultReply{Found: answer.Found, Outcome: answer.Receipt.Code, Version: answer.Receipt.Version, Subject: answer.Receipt.Subject,
+		Seated: answer.Seated, ServedBySID: s.deps.LocalSID}, err
 }
 
 func (s *Service) retention() int64 { return int64(s.deps.Rules.ReceiptRetention / time.Second) }
@@ -318,18 +319,19 @@ func (s *Service) Info(ctx context.Context, target int64) (Reply, error) {
 }
 
 // Settle implements Alliance. The recorded answer — success, or the
-// rejection the request got (alliance_expired when Settle itself decided it) —
-// is the reply's Outcome, not this call's error.
-func (s *Service) Settle(ctx context.Context, target int64, requestID string) (ResultReply, error) {
-	var answer alliancerule.Answer
-	err := requireRequest(requestID)
+// rejection the request got (alliance_expired when a deciding Settle decided
+// it) — is the reply's Outcome, not this call's error; Seated is the roster
+// now.
+func (s *Service) Settle(ctx context.Context, target int64, requestID string, playerID int64, decide bool) (ResultReply, error) {
+	var answer alliancerule.ReceiptAnswer
+	err := requireRequest(requestID, playerID)
 	if err == nil {
 		err = s.call(ctx, target, alliance.EntityKindAlliance, func(ctx context.Context) (err error) {
-			answer, err = syncsender.NewAllianceSettleSender(s.deps.Nest).Sync_AllianceSettle(ctx, target, requestID, s.retention())
+			answer, err = syncsender.NewAllianceSettleSender(s.deps.Nest).Sync_AllianceSettle(ctx, target, requestID, playerID, decide, s.retention())
 			return err
 		})
 	}
-	return s.resultReply(alliancerule.ReceiptAnswer{Found: err == nil, Receipt: answer.Receipt}, err)
+	return s.resultReply(answer, err)
 }
 
 // Result implements Alliance: the receipt on the alliance, or on the

@@ -184,9 +184,10 @@ scenarios:
         - action: expect_guild_op
           param:
             status: completed
-        # "My guild" reads the robot's guard mirror, then the guild's: Remote
-        # mirrors are eventually consistent (the owner publishes after each
-        # commit), so the read is retried until the snapshot is there.
+        # "My guild" reads the robot's own copy (set when guild_op_status saw
+        # the founding completed), then the guild's mirror: Remote mirrors are
+        # eventually consistent (the owner publishes after each commit), so
+        # the read is retried until the snapshot is there.
         - retry:
             times: 20
             node:

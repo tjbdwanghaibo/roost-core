@@ -29,16 +29,18 @@ type IProfileEntity interface {
 	ProfileComp() *ProfileComponent
 }
 
-// GuildID is the guild this player is shown in, or 0: a display field
-// (PlayerDao.GuildID is nopersist). The alliance service's roster is the only
-// authority on membership; nothing that decides a write reads this.
+// GuildID is the guild this player is shown in, or 0: the player's own
+// persisted copy of their membership (PlayerDao.GuildID). The alliance
+// service's roster is the only authority on membership; the game's guild
+// endpoints use this copy only for advisory pre-checks.
 func (component *ProfileComponent) GuildID() int64 {
 	return component.Owner().Dao().GetGuildID()
 }
 
-// SetGuild changes what the player is shown in: at login from the guard
-// mirror, after this player's own join / leave, on a membership notice
-// (game/handler/show_guild.go). It is never persisted.
+// SetGuild changes the player's copy: after this player's own join / leave /
+// founding, on a membership notice, or at login when the guild's mirror no
+// longer has the player (game/handler/show_guild.go). It is persisted with
+// the player's transaction.
 func (component *ProfileComponent) SetGuild(guildID int64) {
 	component.Owner().Dao().SetGuildID(guildID)
 	component.Owner().PublishSyncDirty()

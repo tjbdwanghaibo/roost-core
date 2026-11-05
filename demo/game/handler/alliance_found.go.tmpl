@@ -17,12 +17,16 @@ import (
 // instance, finds that alliance instead of founding a second one. The
 // alliance records the same request id too, so a retry that reaches it
 // through Establish replays instead of failing on "already founded".
+// deferHeld: as for handlerAllianceAdmit (the receipt checked is the guard's).
 //
 //roost:nest rollback=undo durability=strict
-func handlerAllianceFound(target alliance.IRosterEntity, founder alliance_member.IGuardEntity, requestID string, name string, homeSID int32, openJoin bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
+func handlerAllianceFound(target alliance.IRosterEntity, founder alliance_member.IGuardEntity, requestID string, name string, homeSID int32, openJoin bool, deferHeld bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster, guard := target.RosterComp(), founder.GuardComp()
 	founderID := guard.PlayerID()
 	retention := time.Duration(retentionSeconds) * time.Second
+	if _, decided := guard.Receipt(requestID); deferHeld && !decided && guard.HeldAgainst(requestID) {
+		return alliancerule.Answer{GuardHeld: true, Guard: guard.State(guard.CurrentVersion())}, nil
+	}
 	outcome, err := guard.Execute(requestID, nowUnix, retention, func() (int64, error) {
 		if err := alliancerule.ValidateName(name); err != nil {
 			return roster.AllianceID(), err
@@ -36,7 +40,7 @@ func handlerAllianceFound(target alliance.IRosterEntity, founder alliance_member
 		guard.Join(roster.AllianceID(), requestID)
 		return roster.AllianceID(), effects.EmitAllianceMemberChanged(effects.AllianceMemberChanged{
 			AllianceID: roster.AllianceID(), PlayerID: founderID, HomeSID: homeSID, Change: effects.MemberJoined,
-			JoinRequestID: requestID, GuardSettled: true, Version: roster.CurrentVersion() + 1,
+			Version: roster.CurrentVersion() + 1,
 		})
 	})
 	if err != nil {
@@ -57,8 +61,9 @@ func handlerAllianceFound(target alliance.IRosterEntity, founder alliance_member
 // handlerAllianceEstablish is step 2 of a founding whose founder's guard is on
 // another instance: the guard has been reserved for (this alliance,
 // requestID) — that reservation is what binds the request to this alliance
-// id — and this founds the alliance under the same request id. The effect it
-// records confirms the guard (GuardSettled=false). The receipt makes a retry a
+// id — and this founds the alliance under the same request id. The service
+// confirms the guard with a direct ResolveGuard afterwards (a lost one is
+// healed from this roster). The receipt makes a retry a
 // replay; an alliance the guard's deadline settled first (alliance_expired,
 // RosterComponent.Settle) refuses the late founding the same way.
 //
@@ -71,7 +76,7 @@ func handlerAllianceEstablish(target alliance.IRosterEntity, requestID string, f
 		}
 		return founderID, effects.EmitAllianceMemberChanged(effects.AllianceMemberChanged{
 			AllianceID: roster.AllianceID(), PlayerID: founderID, HomeSID: homeSID, Change: effects.MemberJoined,
-			JoinRequestID: requestID, Version: roster.CurrentVersion() + 1,
+			Version: roster.CurrentVersion() + 1,
 		})
 	})
 	return answer(roster, outcome, err)

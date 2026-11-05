@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"{{MODULE}}/game/alliancerule"
 	alliance "{{MODULE}}/game/entities/alliance"
-	alliance_member "{{MODULE}}/game/entities/alliance_member"
 	playerentity "{{MODULE}}/game/entities/player"
 	playeraccess "{{MODULE}}/game/playeraccess"
 	apperrors "{{MODULE}}/internal/errors"
@@ -68,24 +68,20 @@ func (m mirrorStub) ReadSnapshot(_ context.Context, read entity.RemoteSnapshotRe
 }
 
 // guildController is a controller whose guild dependencies are stubs: the
-// alliance RPC, both mirrors over one snapshot table, Nest recording calls.
-func guildController(t *testing.T, alliances rpcalliance.Alliance, snapshots mirrorStub) (*Controller, *recordingNest) {
+// alliance RPC, the alliance mirror over a snapshot table, Nest recording
+// calls and answering PlayerGuild with shown (the player's copy).
+func guildController(t *testing.T, alliances rpcalliance.Alliance, snapshots mirrorStub, shown int64) (*Controller, *recordingNest) {
 	t.Helper()
 	playerentity.RegisterEntity()
 	alliance.RegisterEntity()
-	alliance_member.RegisterEntity()
 	allianceMirrors, err := alliance.NewAllianceMirrorReader(snapshots)
 	if err != nil {
 		t.Fatal(err)
 	}
-	memberMirrors, err := alliance_member.NewAllianceMemberMirrorReader(snapshots)
-	if err != nil {
-		t.Fatal(err)
-	}
-	nest := &recordingNest{}
+	nest := &recordingNest{answers: map[string]any{"handlerPlayerGuild": shown}}
 	controller := &Controller{
 		registry: app.NewRegistry(viper.New()), nestClient: nest,
-		alliances: alliances, allianceMirrors: allianceMirrors, memberMirrors: memberMirrors,
+		alliances: alliances, allianceMirrors: allianceMirrors,
 	}
 	var published playerOwners = &sidOwners{}
 	controller.owners.Store(&published)
@@ -99,7 +95,7 @@ func guildContext(seq uint32) *playeraccess.Context {
 // A name that is invalid on its face is refused (alliance_name) before any
 // coin moves or the service is asked: no Nest call, no mirror read, no RPC.
 func TestFoundGuildRefusesAnInvalidNameBeforeAnythingMoves(t *testing.T) {
-	controller, nest := guildController(t, &allianceStub{}, nil)
+	controller, nest := guildController(t, &allianceStub{}, nil, 0)
 	for _, name := range []string{"", "   ", "\t\n", "guild\x00name", "guild\u0085name", "bad\xffbytes"} {
 		response, err := controller.HandleFoundGuild(guildContext(1), &pb.FoundGuildRequest{Name: name})
 		if err != nil || response == nil || response.Code != apperrors.ErrAllianceName.Code() || nest.handler != "" {
@@ -109,10 +105,10 @@ func TestFoundGuildRefusesAnInvalidNameBeforeAnythingMoves(t *testing.T) {
 }
 
 // Founding is a saga, started from the player's transaction with the fee as
-// the coins it checks; a player the mirror shows in a guild is refused first.
+// the coins it checks; a player shown in a guild (their own copy) is refused
+// first.
 func TestFoundGuildStartsTheSagaWithTheFee(t *testing.T) {
-	controller, nest := guildController(t, &allianceStub{}, mirrorStub{})
-	guardID, _ := rpcalliance.GuardTarget(stuckPlayerID)
+	controller, nest := guildController(t, &allianceStub{}, mirrorStub{}, 0)
 	controller.guildSettings.FoundCost = 100
 	response, err := controller.HandleFoundGuild(guildContext(2), &pb.FoundGuildRequest{Name: "valid"})
 	if err != nil || response.Code != 0 || response.SagaKey == "" {
@@ -122,10 +118,10 @@ func TestFoundGuildStartsTheSagaWithTheFee(t *testing.T) {
 		t.Fatalf("found_guild called %q with %v, want handlerStartGuildOp(found, state, 100, key)", nest.handler, nest.params)
 	}
 
-	controller, nest = guildController(t, &allianceStub{}, mirrorStub{guardID: {payload: bson.M{"alliance_id": int64(7)}, version: 3}})
+	controller, nest = guildController(t, &allianceStub{}, mirrorStub{}, 7)
 	response, err = controller.HandleFoundGuild(guildContext(3), &pb.FoundGuildRequest{Name: "valid"})
-	if err != nil || response.Code != apperrors.ErrAllianceMembership.Code() || nest.handler != "" {
-		t.Fatalf("found_guild by a member = %+v, %v (nest %q)", response, err, nest.handler)
+	if err != nil || response.Code != apperrors.ErrAllianceMembership.Code() || slices.Contains(nest.calls, "handlerStartGuildOp") {
+		t.Fatalf("found_guild by a member = %+v, %v (nest %v)", response, err, nest.calls)
 	}
 }
 
@@ -158,7 +154,7 @@ func TestJoinGuildGoesThroughTheAllianceRPC(t *testing.T) {
 				view := alliancerule.View{AllianceID: 7, Name: "seven", LeaderID: 1, Members: []alliancerule.MemberView{{PlayerID: 1}, {PlayerID: stuckPlayerID}}, Version: 5}
 				return rpcalliance.Reply{Alliance: view, ServedBySID: 3001}, tc.err
 			}}
-			controller, nest := guildController(t, stub, nil)
+			controller, nest := guildController(t, stub, nil, 0)
 			response, err := controller.HandleJoinGuild(guildContext(9), &pb.JoinGuildRequest{GuildID: 7})
 			if err != nil || response.Code != tc.code {
 				t.Fatalf("join_guild = %+v, %v; want code %d", response, err, tc.code)
@@ -182,18 +178,15 @@ func TestJoinGuildGoesThroughTheAllianceRPC(t *testing.T) {
 	}
 }
 
-// Reading a guild reads its mirror: the player's own through the guard
-// mirror; MinVersion makes the read refuse a state older than the write.
+// Reading a guild reads its mirror: the player's own is the one their copy
+// names; MinVersion makes the read refuse a state older than the write.
 func TestGuildInfoReadsTheMirrors(t *testing.T) {
 	alliance.RegisterEntity()
-	alliance_member.RegisterEntity()
-	guardID, _ := rpcalliance.GuardTarget(stuckPlayerID)
 	allianceID, _ := rpcalliance.AllianceTarget(7)
 	snapshots := mirrorStub{
-		guardID:    {payload: bson.M{"alliance_id": int64(7)}, version: 2},
 		allianceID: {payload: bson.M{"name": "seven", "leader_id": int64(1), "funds": int64(40), "members": bson.M{"1": bson.M{"role": int32(2)}, "4242": bson.M{"role": int32(1)}}}, version: 6},
 	}
-	controller, _ := guildController(t, &allianceStub{}, snapshots)
+	controller, _ := guildController(t, &allianceStub{}, snapshots, 7)
 	response, err := controller.HandleGuildInfo(guildContext(4), &pb.GuildInfoRequest{})
 	if err != nil || response.Code != 0 || response.GuildID != 7 || response.Name != "seven" || response.Members != 2 || response.Funds != 40 || response.Version != 6 {
 		t.Fatalf("guild_info (mine) = %+v, %v", response, err)
@@ -203,5 +196,38 @@ func TestGuildInfoReadsTheMirrors(t *testing.T) {
 	}
 	if response, _ := controller.HandleGuildInfo(guildContext(6), &pb.GuildInfoRequest{GuildID: 8}); response.Code != apperrors.ErrGuildMissing.Code() {
 		t.Fatalf("guild_info of a guild nobody founded = %+v, want guild_missing", response)
+	}
+}
+
+// At login the player's copy is checked against the guild's mirror: a guild
+// whose roster no longer has the player (a kick or leave whose notice they
+// missed while offline) or that nobody founded is hidden — conditionally on
+// the copy still naming it; a guild that has them stays.
+func TestLoginHidesAGuildThePlayerIsNoLongerIn(t *testing.T) {
+	alliance.RegisterEntity()
+	seven, _ := rpcalliance.AllianceTarget(7)
+	snapshots := mirrorStub{
+		seven: {payload: bson.M{"name": "seven", "leader_id": int64(1), "members": bson.M{"1": bson.M{"role": int32(2)}}}, version: 6},
+	}
+	controller, nest := guildController(t, &allianceStub{}, snapshots, 7)
+	controller.refreshGuild(guildContext(10))
+	if nest.handler != "handlerShowGuild" || nest.params[0] != int64(0) || nest.params[1] != int64(7) {
+		t.Fatalf("a guild that no longer has the player: last call %q %v, want ShowGuild(0, replaces 7)", nest.handler, nest.params)
+	}
+
+	controller, nest = guildController(t, &allianceStub{}, snapshots, 8) // nobody founded 8
+	controller.refreshGuild(guildContext(11))
+	if nest.handler != "handlerShowGuild" || nest.params[0] != int64(0) || nest.params[1] != int64(8) {
+		t.Fatalf("a guild nobody founded: last call %q %v, want ShowGuild(0, replaces 8)", nest.handler, nest.params)
+	}
+
+	snapshots[seven] = struct {
+		payload any
+		version uint64
+	}{payload: bson.M{"name": "seven", "leader_id": int64(1), "members": bson.M{"1": bson.M{"role": int32(2)}, "4242": bson.M{"role": int32(1)}}}, version: 7}
+	controller, nest = guildController(t, &allianceStub{}, snapshots, 7)
+	controller.refreshGuild(guildContext(12))
+	if slices.Contains(nest.calls, "handlerShowGuild") {
+		t.Fatalf("a member's copy was changed at login: %v", nest.calls)
 	}
 }

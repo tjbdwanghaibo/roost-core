@@ -1,0 +1,13 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerPlayerGuild reads the guild the player is shown in (PlayerDao.GuildID)
+// under the Player's lock: a read handler, like PlayerLevel. The guild
+// endpoints use it for their advisory pre-checks and to know which guild to
+// leave, donate to or claim from; the alliance service decides on its roster.
+//
+//roost:nest
+func handlerPlayerGuild(target player.IProfileEntity) (int64, error) {
+	return target.ProfileComp().GuildID(), nil
+}

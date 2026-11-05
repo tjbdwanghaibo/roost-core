@@ -135,14 +135,24 @@ func (s *Service) ownedEntities(ctx context.Context, count int) ([]int64, error)
 	return owned[:min(len(owned), count)], nil
 }
 
-// guardPending reports whether the guard id has an open reservation.
+// guardPending reports whether the guard id has an open reservation. One past
+// its deadline is healed first (healGuard: its alliance settles it) — the
+// deadline's notice is best effort, and a reservation nobody finishes must not
+// keep the guard here for good.
 func (s *Service) guardPending(ctx context.Context, id int64) (bool, error) {
 	if err := s.deps.Entities.EnsureGuard(ctx, entity.GetUniqueIDFromEntityID(id)); err != nil {
 		return false, err
 	}
 	state, err := syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardInfo(ctx, id)
-	if err != nil {
+	if err != nil || state.PendingRequestID == "" {
 		return false, err
 	}
-	return state.PendingRequestID != "", nil
+	if state.PendingDeadlineUnix > s.deps.Now().Unix() {
+		return true, nil
+	}
+	if err := s.healGuard(ctx, state); err != nil {
+		return false, err
+	}
+	state, err = syncsender.NewAllianceGuardSender(s.deps.Nest).Sync_GuardInfo(ctx, id)
+	return err == nil && state.PendingRequestID != "", err
 }

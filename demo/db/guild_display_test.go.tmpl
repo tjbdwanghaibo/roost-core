@@ -7,14 +7,14 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// PlayerDao.GuildID is a display field: nopersist, sync. The alliance service's
-// roster is the only authority on membership (decision 1 of the alliance plan),
-// so a Player document never carries a guild — a persisted copy written by a
-// game process could not be kept in the roster's transaction and would drift.
-// Both directions: a stored document's guild_id is not loaded, and the
-// document the DAO writes has none. The field still exists for replication:
-// nearby players see the guild (the "near" sync view).
-func TestPlayerGuildIDIsShownButNeverPersisted(t *testing.T) {
+// PlayerDao.GuildID is the player's own copy of their membership: persisted
+// and synced. The alliance service's roster is the only authority on
+// membership (decision 1 of the alliance plan), but the membership guards are
+// not mirrored to game servers (AllianceMember declares snapshots=none), so
+// the copy on the Player document is what the game knows across logins. Both
+// directions: a stored document's guild_id is loaded, and the document the
+// DAO writes carries it. Nearby players see the guild (the "near" sync view).
+func TestPlayerGuildIDIsPersistedAsThePlayersCopy(t *testing.T) {
 	stored, err := bson.Marshal(bson.M{"_id": int64(42), "name": "stored", "guild_id": int64(7)})
 	if err != nil {
 		t.Fatal(err)
@@ -24,17 +24,14 @@ func TestPlayerGuildIDIsShownButNeverPersisted(t *testing.T) {
 	if err := dao.RestorePersisted(stored, PlayerDaoSchemaVersion, 1); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	if dao.GetName() != "stored" {
-		t.Fatalf("restored name %q, want the stored one", dao.GetName())
-	}
-	if got := dao.GetGuildID(); got != 0 {
-		t.Fatalf("GuildID restored from the Player document = %d; membership is the alliance roster's, the game only shows it", got)
+	if got := dao.GetGuildID(); got != 7 {
+		t.Fatalf("GuildID restored from the Player document = %d, want 7", got)
 	}
 	var written bson.M
 	if err := bson.Unmarshal(dao.MarshalPersist(dataengine.AllFields), &written); err != nil {
 		t.Fatal(err)
 	}
-	if value, persisted := written["guild_id"]; persisted {
-		t.Fatalf("the Player document the DAO writes carries guild_id = %v", value)
+	if value := written["guild_id"]; value != int64(7) {
+		t.Fatalf("the Player document the DAO writes carries guild_id = %v, want 7", value)
 	}
 }

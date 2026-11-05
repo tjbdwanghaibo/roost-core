@@ -39,8 +39,9 @@ import (
 //     cluster (the persistent ownership records), whose first write claims
 //     an entity atomically and fences every other instance, plus fences a
 //     test injects; each instance keeps its own loaded entities;
-//   - the committer records the commit records' effects; the test hands them
-//     to the consumers (deliverEffects).
+//   - the committer records the commit records' (reliable) effects and the
+//     best-effort effects sent after each durable commit; the test hands
+//     them to the consumers (deliverEffects).
 //
 // Mongo, Redis, the WAL and the effect stream are not here: the real
 // dependencies are the smoke test's (phase 5).
@@ -86,6 +87,14 @@ type cluster struct {
 	gates   map[int64]*claimGate
 	notices []MemberNotice
 	next    int
+	// lost is how many of the next bus calls of a method are lost on the way
+	// (the caller gets "no responders"): the deterministic seam the guard
+	// self-healing tests use to drop a finishing call.
+	lost map[string]int
+	// dropEvery loses every k-th bus call of a method (k = dropEvery[m]),
+	// counted in calls[m]: a steady loss rate for the concurrency tests.
+	dropEvery map[string]int
+	calls     map[string]int
 }
 
 type instance struct {
@@ -106,7 +115,8 @@ func newCluster(t *testing.T, rules Rules, sids ...int32) *cluster {
 	registerAllianceEntities()
 	c := &cluster{
 		t: t, instances: map[int32]*instance{}, rules: rules, now: time.Unix(1_800_000_000, 0),
-		owners: map[int64]int32{}, hints: map[int64]int32{}, gates: map[int64]*claimGate{},
+		owners: map[int64]int32{}, hints: map[int64]int32{}, gates: map[int64]*claimGate{}, lost: map[string]int{},
+		dropEvery: map[string]int{}, calls: map[string]int{},
 	}
 	for _, sid := range sids {
 		c.instances[sid] = c.start(sid)
@@ -272,7 +282,7 @@ func (c *cluster) deliverEffects() int {
 		n := 0
 		for _, sid := range c.sids() {
 			in := c.instances[sid]
-			for _, effect := range in.committer.take() {
+			for _, effect := range append(in.committer.take(), in.committer.takeBestEffort()...) {
 				n++
 				var err error
 				switch effect.Topic {
@@ -360,10 +370,29 @@ func (b testBus) Call(ctx context.Context, svcType, method string, req, resp any
 	return b.CallTo(ctx, svcType, sid, method, req, resp)
 }
 
+// lose makes the next n bus calls of method fail with "no responders"
+// before they reach any handler.
+func (c *cluster) lose(method string, n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.lost[method] = n
+}
+
 func (b testBus) CallTo(ctx context.Context, _ string, sid int32, method string, req, resp any) error {
 	b.c.mu.Lock()
 	target := b.c.instances[sid]
+	lost := b.c.lost[method] > 0
+	if lost {
+		b.c.lost[method]--
+	}
+	if k := b.c.dropEvery[method]; k > 0 {
+		b.c.calls[method]++
+		lost = lost || b.c.calls[method]%k == 0
+	}
 	b.c.mu.Unlock()
+	if lost {
+		return fmt.Errorf("%w: %s lost on the way to sid %d", fnats.ErrNoResponders, method, sid)
+	}
 	var handle bus.RpcHandlerFunc
 	if target != nil {
 		target.mu.Lock()
@@ -497,11 +526,29 @@ func (s *entityStore) shard(t *testing.T, sid int32) *alliance_shard.AllianceSha
 }
 
 // effectLog is the transaction committer: it keeps the effects of every
-// committed record, in commit order.
+// committed record, in commit order, and — as the best-effort publisher —
+// the best-effort effects sent after a durable commit.
 type effectLog struct {
-	mu      sync.Mutex
-	records int
-	effects []dataengine.Effect
+	mu         sync.Mutex
+	records    int
+	effects    []dataengine.Effect
+	bestEffort []dataengine.Effect
+}
+
+func (l *effectLog) PublishBestEffort(_ nest.TransactionID, sent []nest.Effect) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, effect := range sent {
+		l.bestEffort = append(l.bestEffort, dataengine.CloneEffect(effect))
+	}
+}
+
+func (l *effectLog) takeBestEffort() []dataengine.Effect {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	taken := l.bestEffort
+	l.bestEffort = nil
+	return taken
 }
 
 func (l *effectLog) Commit(_ context.Context, record dataengine.CommitRecord) error {
@@ -542,6 +589,16 @@ type fakeRemote struct {
 	mu       sync.Mutex
 	fenced   map[int64]error
 	admitted map[int64]int // admissions attempted per entity, on this instance
+	capture  bool          // build and keep the Remote commits (fakeBatch)
+	commits  []entity.RemoteCommit
+}
+
+// built returns the Remote commits this instance's writes built so far, as
+// the real batch builds them (the generated BuildRemoteCommitLocked).
+func (r *fakeRemote) built() []entity.RemoteCommit {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.commits)
 }
 
 func (r *fakeRemote) fence(id int64, err error) {
@@ -580,7 +637,7 @@ func (r *fakeRemote) PrepareRemoteWriteBatch(_ context.Context, ids []int64) (en
 			return nil, fmt.Errorf("%w: entity=%d owner=%d", entity.ErrRemoteFenced, id, owner)
 		}
 	}
-	return &fakeBatch{ids: append([]int64(nil), ids...)}, nil
+	return &fakeBatch{ids: append([]int64(nil), ids...), remote: r}, nil
 }
 
 func (r *fakeRemote) GetRemoteOwnership(_ context.Context, id int64) (entity.RemoteEntityMarkerLease, bool, error) {
@@ -617,11 +674,44 @@ func (r *fakeRemote) TransferRemoteOwnership(_ context.Context, id int64, to int
 }
 
 // fakeBatch admits the write and commits nothing remotely: the entity's
-// memory is the state, as after a successful Remote commit.
-type fakeBatch struct{ ids []int64 }
+// memory is the state, as after a successful Remote commit. With
+// fakeRemote.capture set it builds each entity's commit under the lock the way
+// the real batch does (the generated BuildRemoteCommitLocked) and keeps it
+// (fakeRemote.built), so a test can see what would be written; building
+// claims the transaction's changes of those entities, so the record the
+// committer sees no longer carries them.
+type fakeBatch struct {
+	ids    []int64
+	remote *fakeRemote
+}
 
-func (b *fakeBatch) EntityIDs() []int64                                            { return b.ids }
-func (b *fakeBatch) FinalizeLocked(entity.RemoteTransactionOutcome) error          { return nil }
+func (b *fakeBatch) EntityIDs() []int64 { return b.ids }
+func (b *fakeBatch) FinalizeLocked(outcome entity.RemoteTransactionOutcome) error {
+	b.remote.mu.Lock()
+	capture := b.remote.capture
+	b.remote.mu.Unlock()
+	if !capture {
+		return nil
+	}
+	store := b.remote.c.instances[b.remote.sid].store
+	for _, id := range b.ids {
+		store.mu.Lock()
+		value := store.entities[id]
+		store.mu.Unlock()
+		participant, ok := value.(entity.IRemoteCommitParticipant)
+		if !ok || !participant.HasRemoteCommitLocked(outcome) {
+			continue
+		}
+		commit, err := participant.BuildRemoteCommitLocked(entity.RemoteWriteLease{EntityID: id, MarkerEpoch: 1, RouteEpoch: 1}, outcome)
+		if err != nil {
+			return err
+		}
+		b.remote.mu.Lock()
+		b.remote.commits = append(b.remote.commits, commit)
+		b.remote.mu.Unlock()
+	}
+	return nil
+}
 func (b *fakeBatch) Commits() []entity.RemoteCommit                                { return nil }
 func (b *fakeBatch) Commit(context.Context) ([]entity.RemoteCommitReceipt, error) { return nil, nil }
 func (b *fakeBatch) Abort(context.Context, error) error                           { return nil }

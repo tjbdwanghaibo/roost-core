@@ -8,14 +8,20 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
-// TopicAllianceReservationDue is recorded by the AllianceShard timer when a
+// TopicAllianceReservationDue is emitted by the AllianceShard timer when a
 // guard reservation reaches its deadline unconfirmed. The timer fires inside
 // the shard's Nest lock, where no I/O may happen; the consumer (the alliance
 // service) does the I/O: it asks the alliance to settle the request (the
-// alliance is the authority) and resolves the guard by the answer. A consumer
-// that cannot reach the alliance fails the effect, which is redelivered — the
-// guard is never released on the clock alone.
+// alliance is the authority) and resolves the guard by the answer — never on
+// the clock alone. It is best effort (DeliveryAllianceReservationDue): a lost
+// notice, or one whose alliance cannot be reached, leaves the reservation
+// pending until the next request that finds the guard held heals it the same
+// way (rpc/alliance guard.go, healGuard).
 const TopicAllianceReservationDue = "alliance.reservation_due"
+
+// DeliveryAllianceReservationDue is how the effect travels; its consumer
+// subscribes with the same value.
+const DeliveryAllianceReservationDue = nest.EffectBestEffort
 
 // AllianceReservationDue is the payload.
 type AllianceReservationDue struct {
@@ -24,12 +30,12 @@ type AllianceReservationDue struct {
 	RequestID  string `json:"request_id"`
 }
 
-// EmitAllianceReservationDue records the effect on the current Nest
+// EmitAllianceReservationDue emits the effect on the current Nest
 // transaction, keyed by the player.
 func EmitAllianceReservationDue(event AllianceReservationDue) error {
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("effects: encode %s: %w", TopicAllianceReservationDue, err)
 	}
-	return nest.Emit(nest.Effect{Topic: TopicAllianceReservationDue, Key: strconv.FormatInt(event.PlayerID, 10), Payload: payload})
+	return nest.Emit(nest.Effect{Topic: TopicAllianceReservationDue, Key: strconv.FormatInt(event.PlayerID, 10), Payload: payload, Delivery: DeliveryAllianceReservationDue})
 }

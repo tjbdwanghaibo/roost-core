@@ -19,10 +19,18 @@ type recordingNest struct {
 	corenest.Client
 	handler string
 	params  corenest.Params
+	calls   []string
+	// answers is what a handler answers, by name; the others answer
+	// "gift-saga" (a saga key).
+	answers map[string]any
 }
 
 func (client *recordingNest) Request(_ context.Context, name corenest.HandlerName, _ int64, params corenest.Params, _ ...corenest.SendOpt) (any, error) {
 	client.handler, client.params = name.String(), params
+	client.calls = append(client.calls, name.String())
+	if answer, ok := client.answers[name.String()]; ok {
+		return answer, nil
+	}
 	return "gift-saga", nil
 }
 

@@ -220,23 +220,53 @@ type MemberState struct {
 	Version             int64
 }
 
+// Holder is what holds the guard, if anything: the pending reservation
+// (pending=true: alliance PendingAllianceID, request PendingRequestID) or the
+// membership (alliance AllianceID, request JoinRequestID). A pending
+// reservation is reported first: it is the newer of the two.
+func (state MemberState) Holder() (allianceID int64, requestID string, pending, held bool) {
+	switch {
+	case state.PendingRequestID != "":
+		return state.PendingAllianceID, state.PendingRequestID, true, true
+	case state.AllianceID != 0:
+		return state.AllianceID, state.JoinRequestID, false, true
+	default:
+		return 0, "", false, false
+	}
+}
+
 // Answer is an alliance write's answer: the outcome and the alliance after it.
+//
+// GuardHeld: the write was not decided and nothing was recorded, because the
+// player's guard is held by another alliance or request (Guard) and the
+// caller asked to be told first (deferHeld): the guard may be stale — a
+// finishing call that was lost — and the service heals it from the alliance
+// that holds it before deciding (rpc/alliance guard.go, healGuard).
+//
+// Ended is the join request id of the membership a removal of a player whose
+// guard is on another instance ended (the service's ClearGuard names it).
 type Answer struct {
 	Outcome
-	View View
+	View      View
+	GuardHeld bool
+	Guard     MemberState
+	Ended     string
 }
 
 // GuardAnswer is a guard write's answer: the outcome (for writes with a
-// receipt) and the guard after it.
+// receipt) and the guard after it. Held is GuardHeld for a reservation.
 type GuardAnswer struct {
 	Outcome
 	Changed bool
+	Held    bool
 	State   MemberState
 }
 
 // ReceiptAnswer is a receipt lookup: Found=false means the request was never
-// decided on that entity.
+// decided on that entity. Seated (Settle only) reports whether the player is
+// in the alliance's roster under that request id now.
 type ReceiptAnswer struct {
 	Found   bool
 	Receipt Receipt
+	Seated  bool
 }

@@ -129,12 +129,12 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 	} else if len(settled) > 0 {
 		slog.Info("enter_game: settled paid orders on login", "player_id", context.PlayerID, "count", len(settled))
 	}
-	// The guild the player is shown in (PlayerDao.GuildID, a display field
-	// that is never persisted): read from the player's guard mirror at every
-	// login, which also makes up for a membership notice the player missed
-	// while offline (alliance_notice.go in the service package). Best effort —
-	// the guild is the alliance service's, and a failed read only leaves the
-	// display empty until the next login or notice.
+	// The guild the player is shown in (PlayerDao.GuildID, the player's own
+	// persisted copy) is checked against that guild's mirror at every login,
+	// which makes up for a leave or kick notice the player missed while
+	// offline (alliance_notice.go in the service package). Best effort — the
+	// guild is the alliance service's, and a failed read leaves the copy as
+	// it is.
 	controller.refreshGuild(context)
 	// Server-wide mail (AudienceBroadcast) sent while this player was offline
 	// reaches the mailbox now: the login half of mail.LazyBroadcast. The mail
@@ -144,7 +144,7 @@ func (controller *Controller) HandleEnterGame(context *playeraccess.Context, req
 	// from the same profile afterwards. Without LazyBroadcast configured
 	// (internal/service/mail/collaborators.go Broadcast()) it is a no-op.
 	// A game with guild-wide broadcasts adds mail.GuildScope(guild) here — the
-	// guild from the guard mirror, as refreshGuild reads it — and pulls again
+	// guild the player is shown in, as refreshGuild checks it — and pulls again
 	// when a membership notice says the player joined or left. Best effort — a
 	// failed pull is retried by the next List / Summary / login.
 	if mailer := controller.Mailer(); mailer != nil {

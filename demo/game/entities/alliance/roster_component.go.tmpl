@@ -68,17 +68,38 @@ func (component *RosterComponent) Receipt(requestID string) (alliancerule.Receip
 	return rosterReceipts{dao: component.owner.Dao()}.Receipt(requestID)
 }
 
-// Settle answers what became of requestID and makes the answer final: the
-// recorded receipt when there is one, otherwise a rejection receipt
-// (alliance_expired) written now, so a delivery of that request that is still
-// in flight is refused when it arrives. The AllianceMember guard calls it when
-// a reservation's deadline passes (one player, one alliance): the alliance is
-// the authority on whether the player got in, and after Settle the answer
-// cannot change any more.
-func (component *RosterComponent) Settle(requestID string, nowUnix int64, retention time.Duration) (alliancerule.Outcome, error) {
-	return component.Execute(requestID, nowUnix, retention, func() (int64, error) {
+// Settle answers what became of requestID for playerID. seated reports
+// whether the player holds a seat under requestID now (a request that
+// succeeded may have been followed by a leave); decided whether the request
+// has an answer (a receipt) after the call.
+//
+// decide makes the answer final: the recorded receipt when there is one,
+// otherwise — the player is seated under requestID (its receipt was pruned) —
+// a success receipt, or a rejection receipt (alliance_expired) written now, so
+// a delivery of that request that is still in flight is refused when it
+// arrives. Without decide nothing is written: a request still in flight stays
+// undecided (decided false) and may still seat the player.
+//
+// The AllianceMember guard's healing calls it (one player, one alliance): the
+// alliance is the authority on whether the player is in, and after a deciding
+// Settle no admission under requestID can change that any more — it replays
+// the recorded answer.
+func (component *RosterComponent) Settle(requestID string, playerID int64, decide bool, nowUnix int64, retention time.Duration) (outcome alliancerule.Outcome, decided, seated bool, err error) {
+	seatedUnder := func() bool {
+		seat, ok := component.Seat(playerID)
+		return ok && seat.GetJoinRequestID() == requestID
+	}
+	if !decide {
+		receipt, found := component.Receipt(requestID)
+		return alliancerule.Outcome{Receipt: receipt}, found, seatedUnder(), nil
+	}
+	outcome, err = component.Execute(requestID, nowUnix, retention, func() (int64, error) {
+		if seatedUnder() {
+			return playerID, nil
+		}
 		return 0, errcode.Wrap(apperrors.ErrAllianceExpired, nil, "request_id", requestID)
 	})
+	return outcome, err == nil, err == nil && seatedUnder(), err
 }
 
 // Founded reports whether the alliance has been founded (has a leader).

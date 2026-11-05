@@ -23,34 +23,42 @@ func handlerAllianceRemove(target alliance.IRosterEntity, member alliance_member
 		}
 		joinRequestID, homeSID := roster.Remove(targetID)
 		guard.Clear(roster.AllianceID(), joinRequestID, nowUnix)
-		return targetID, effects.EmitAllianceMemberChanged(removalEvent(roster, actorID, targetID, homeSID, joinRequestID, true))
+		return targetID, effects.EmitAllianceMemberChanged(removalEvent(roster, actorID, targetID, homeSID))
 	})
 	return answer(roster, outcome, err)
 }
 
 // handlerAllianceRemoveDetached unseats a player whose guard is on another
-// instance; the effect it records clears the guard there.
+// instance. The service clears the guard there with a direct ClearGuard
+// afterwards (best effort: a lost one leaves the guard stale-occupied until
+// the next request that finds it held heals it from this roster). The answer
+// carries the membership that ended (Ended), which ClearGuard names; a replay
+// does not (the first delivery already tried, and healing covers a loss).
 //
 //roost:nest rollback=undo durability=strict
 func handlerAllianceRemoveDetached(target alliance.IRosterEntity, requestID string, actorID int64, targetID int64, retentionSeconds int64, nowUnix int64) (alliancerule.Answer, error) {
 	roster := target.RosterComp()
+	var ended string
 	outcome, err := roster.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
 		if err := roster.CheckRemoval(actorID, targetID); err != nil {
 			return targetID, err
 		}
 		joinRequestID, homeSID := roster.Remove(targetID)
-		return targetID, effects.EmitAllianceMemberChanged(removalEvent(roster, actorID, targetID, homeSID, joinRequestID, false))
+		ended = joinRequestID
+		return targetID, effects.EmitAllianceMemberChanged(removalEvent(roster, actorID, targetID, homeSID))
 	})
-	return answer(roster, outcome, err)
+	reply, err := answer(roster, outcome, err)
+	reply.Ended = ended
+	return reply, err
 }
 
-func removalEvent(roster *alliance.RosterComponent, actorID, targetID int64, homeSID int32, joinRequestID string, guardSettled bool) effects.AllianceMemberChanged {
+func removalEvent(roster *alliance.RosterComponent, actorID, targetID int64, homeSID int32) effects.AllianceMemberChanged {
 	change := effects.MemberLeft
 	if actorID != targetID {
 		change = effects.MemberKicked
 	}
 	return effects.AllianceMemberChanged{
 		AllianceID: roster.AllianceID(), PlayerID: targetID, HomeSID: homeSID, Change: change,
-		JoinRequestID: joinRequestID, GuardSettled: guardSettled, Version: roster.CurrentVersion() + 1,
+		Version: roster.CurrentVersion() + 1,
 	}
 }

@@ -174,7 +174,7 @@ func (s *suite) redisCalls(command string) int64 {
 
 // TestAllianceE2EMirrorRevalidation：game 读公会走只读 Mirror（Monotonic）；推送正常时缓存的快照超过 cached_max_staleness
 // 才回 L2（Redis HGET）重新确认。两轮各起一套全栈，cached_max_staleness 分别 30s / 5s：20 个玩家在 game 1000 上每 250ms 读
-// 一次“我的公会”（守卫 + 联盟两个 Mirror），60s；回源量取 Redis 的 HGET 调用增量减去同长度无读取窗口的底噪。
+// 一次“我的公会”（玩家自己的副本 PlayerDao.GuildID + 联盟 Mirror；守卫不再同步给 game，snapshots=none），60s；回源量取 Redis 的 HGET 调用增量减去同长度无读取窗口的底噪。
 func TestAllianceE2EMirrorRevalidation(t *testing.T) {
 	perfOnly(t)
 	for _, staleness := range []string{"30s", "5s"} {
@@ -227,7 +227,7 @@ func TestAllianceE2EMirrorRevalidation(t *testing.T) {
 			wg.Wait()
 			busy := s.redisCalls("hget") - busy0
 			sort.Slice(lat, func(i, j int) bool { return lat[i] < lat[j] })
-			t.Logf("MIRROR cached_max_staleness=%s: %d guild_info reads (2 mirror keys each, 21 distinct keys) in %v; Redis HGET %d (idle window %d) → %.1f revalidations/s over the idle floor; guild_info %s",
+			t.Logf("MIRROR cached_max_staleness=%s: %d guild_info reads (1 mirror key each, 1 distinct key) in %v; Redis HGET %d (idle window %d) → %.1f revalidations/s over the idle floor; guild_info %s",
 				staleness, len(lat), window, busy, idle, float64(busy-idle)/window.Seconds(), durations(lat))
 		})
 	}

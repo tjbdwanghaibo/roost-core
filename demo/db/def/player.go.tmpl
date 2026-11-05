@@ -96,20 +96,24 @@ type PlayerDao struct {
 	//
 	// 当前 schema 为 2；框架只加载同版本文档，不自动转换历史数据。
 	PurchaseClaims map[string]int64 `dao:"persist,map=fast" store:"purchase_claims"`
-	// GuildID is the guild this player is shown in, or 0 — a display field,
-	// not a fact of the player's.
+	// GuildID is the guild this player is shown in, or 0 — the player's own
+	// copy of their membership, not the authority.
 	//
 	// Membership has one authority: the alliance's roster, owned and written
 	// by the alliance service (decision 1 of the alliance plan,
 	// docs/maintenance/FEATURE-2026-11-04-alliance-service.md in roost-core).
-	// A persisted copy here would be a second fact that a process on another
-	// machine cannot write in the same transaction, and the two would drift.
-	// So it is nopersist: filled at login from the player's guard mirror,
-	// changed by this player's own join / leave answers and by the alliance
-	// service's membership notices (internal/service/{{GAME_SERVICE}}/alliance_notice.go),
-	// and replicated (sync) so nearby players see the guild. No write decision
-	// reads it: the alliance service decides every guild write on its roster.
-	GuildID int64 `dao:"nopersist,sync" store:"guild_id"`
+	// This copy is written in the player's own transaction after the player's
+	// join / leave / founding succeeded, by the alliance service's membership
+	// notices while the player is online
+	// (internal/service/{{GAME_SERVICE}}/alliance_notice.go), and hidden at
+	// login when the guild's mirror no longer has the player. It is persisted
+	// because nothing else on the game side knows the player's guild: the
+	// membership guards are not mirrored to game servers (AllianceMember
+	// declares snapshots=none). It may drift from the roster (a lost notice);
+	// the game's guild endpoints use it only for advisory pre-checks and the
+	// alliance service decides every write on its roster. Replicated (sync)
+	// so nearby players see the guild.
+	GuildID int64 `dao:"persist,sync" store:"guild_id"`
 	// SagaReceipts is where the gift saga's native steps (debit and its
 	// refund) keep their receipts: operation (saga.Command.IdempotencyKey) ->
 	// the framework's encoding of saga.StepReceipt. The step writes it in the

@@ -17,8 +17,8 @@ const (
 	TimerTypeReservation int32 = 1
 )
 
-// reservationRetry is how soon a deadline whose effect could not be recorded
-// fires again.
+// reservationRetry is how soon a deadline whose notice could not be emitted
+// (registered on the transaction) fires again.
 const reservationRetry = 5 * time.Second
 
 func (component *TimerComponent) registerTimerHandlers(handlers *entitytimer.Handlers) {
@@ -46,12 +46,13 @@ func (component *TimerComponent) DisarmReservation(playerID int64, requestID str
 	return found != 0 && component.RemoveTimer(found)
 }
 
-// onReservationDue runs inside the shard's Nest lock: it only records the
-// effect; the consumer settles the request with the alliance.
+// onReservationDue runs inside the shard's Nest lock: it only emits the
+// best-effort notice; its consumer settles the request with the alliance. A
+// lost notice is made up by the next request that finds the guard held.
 func (component *TimerComponent) onReservationDue(fire entitytimer.Fire) time.Duration {
 	event := effects.AllianceReservationDue{PlayerID: fire.Param1, AllianceID: fire.Param2, RequestID: string(fire.Payload)}
 	if err := effects.EmitAllianceReservationDue(event); err != nil {
-		slog.Error("alliance shard: reservation deadline effect not recorded; retrying",
+		slog.Error("alliance shard: reservation deadline notice not emitted; retrying",
 			"player_id", event.PlayerID, "alliance_id", event.AllianceID, "request_id", event.RequestID, "retry_in", reservationRetry, "err", err)
 		return reservationRetry
 	}

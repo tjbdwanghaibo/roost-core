@@ -148,10 +148,15 @@ type Alliance interface {
 	// on the alliance target.
 	//roost:rpc route
 	AcknowledgeWar(ctx context.Context, requestID string, target int64, declarerID int64) (reply Reply, err error)
-	// Settle answers what requestID did on the alliance target and makes the
-	// answer final (a request never decided is recorded as alliance_expired).
+	// Settle answers what requestID did on the alliance target for playerID;
+	// Seated reports whether the player holds a seat under requestID now,
+	// Found whether the request has an answer. decide makes the answer final
+	// (a request never decided is recorded as alliance_expired, unless the
+	// player holds a seat under it); without it nothing is written. A guard
+	// held for (target, requestID) is confirmed, released or cleared by it
+	// (healGuard).
 	//roost:rpc route
-	Settle(ctx context.Context, target int64, requestID string) (reply ResultReply, err error)
+	Settle(ctx context.Context, target int64, requestID string, playerID int64, decide bool) (reply ResultReply, err error)
 }
 
 // Reply is an alliance call's answer. A redirect's target travels in the
@@ -190,11 +195,12 @@ type RewardReply struct {
 	ServedBySID int32                   `json:"served_by_sid"`
 }
 
-// ResultReply is a receipt lookup's answer.
+// ResultReply is a receipt lookup's answer. Seated: Settle only.
 type ResultReply struct {
 	Found       bool  `json:"found"`
 	Outcome     int32 `json:"outcome"`
 	Version     int64 `json:"version"`
 	Subject     int64 `json:"subject"`
+	Seated      bool  `json:"seated,omitempty"`
 	ServedBySID int32 `json:"served_by_sid"`
 }

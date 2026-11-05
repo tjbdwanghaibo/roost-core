@@ -1,8 +1,8 @@
 package e2e
 
 // 一人一盟（方案 §2.5、§5“一人一盟的两步”）：守卫与联盟分属两个实例时，同一玩家并发入会 / 被两个联盟批准，只有一个成功；
-// kill -9 守卫方或联盟方之后，按同一 RequestID 重发、期限到守卫方 Settle、effect 重投收尾，不出现一人两盟，也不出现
-// 永不释放的预约。
+// kill -9 守卫方或联盟方之后，按同一 RequestID 重发、期限到守卫方向联盟 Settle 自愈（尽力而为的期限通知，或下一个
+// 碰到守卫的请求），不出现一人两盟，不出现“在名单里但守卫空着”，也不出现永不释放的预约。
 
 import (
 	"context"
@@ -47,7 +47,9 @@ func (s *suite) foundPair(client *rpcalliance.BusClient, leader *int64, open boo
 	return p
 }
 
-// checkOneAlliance：每个玩家至多在一个联盟的成员表里，守卫记的就是那个联盟，且最终没有未决预约。返回各联盟的人数。
+// checkOneAlliance：每个玩家至多在一个联盟的成员表里；守卫是名单的缓存，只许“过时地占着”、绝不“过时地空着”——
+// 在 X 名单里的玩家，守卫必须是 joined X 或为 X 预约着（立即判错）；收尾丢了的过时占用（预约、或名单里已没有的
+// joined）在 settle 窗口内由期限自愈收敛，最终守卫记的就是名单里那个联盟、没有未决预约。返回各联盟的人数。
 func (s *suite) checkOneAlliance(client *rpcalliance.BusClient, alliances []int64, players []int64, settle time.Duration) map[int64]int {
 	t := s.t
 	var lastDetail string
@@ -70,7 +72,7 @@ func (s *suite) checkOneAlliance(client *rpcalliance.BusClient, alliances []int6
 				in[player] = append(in[player], id)
 			}
 		}
-		pending := 0
+		unsettled := 0
 		for _, player := range players {
 			if len(in[player]) > 1 {
 				t.Fatalf("ONE-ALLIANCE VIOLATED: player %d is a member of %v", player, in[player])
@@ -88,20 +90,19 @@ func (s *suite) checkOneAlliance(client *rpcalliance.BusClient, alliances []int6
 			if len(in[player]) == 1 {
 				want = in[player][0]
 			}
-			if g.State.PendingRequestID != "" {
-				pending++
-				lastDetail = fmt.Sprintf("player %d guard %+v", player, g.State)
-				continue
+			if want != 0 && g.State.AllianceID != want && g.State.PendingAllianceID != want {
+				t.Fatalf("STALE-EMPTY GUARD: player %d is a member of %d but the guard holds %+v", player, want, g.State)
 			}
-			if g.State.AllianceID != want {
-				t.Fatalf("player %d: guard says alliance %d, membership says %v", player, g.State.AllianceID, in[player])
+			if g.State.PendingRequestID != "" || g.State.AllianceID != want {
+				unsettled++
+				lastDetail = fmt.Sprintf("player %d guard %+v, membership %v", player, g.State, in[player])
 			}
 		}
-		if pending == 0 {
+		if unsettled == 0 {
 			return sizes
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("RESERVATION NEVER RELEASED: %d guards still pending %v after the settle window; e.g. %s", pending, settle, lastDetail)
+			t.Fatalf("GUARD NEVER HEALED: %d guards still pending or stale after the settle window %v; e.g. %s", unsettled, settle, lastDetail)
 		}
 		time.Sleep(time.Second)
 	}
@@ -209,7 +210,7 @@ func TestAllianceE2EOneAllianceUnderRace(t *testing.T) {
 		t.Fatalf("fresh guards: %d players got both joins, %d one, %d none; want exactly one each", both, one, none)
 	}
 
-	// ② 守卫在 3000：入 3000 的联盟走同实例事务，入 3001 的走两步（预约 → 加成员 → effect 确认）。
+	// ② 守卫在 3000：入 3000 的联盟走同实例事务，入 3001 的走两步（预约 → 加成员 → 直接确认，丢了由自愈补）。
 	p2 := s.foundPair(client, &leader, true)
 	ids = players(710_000)
 	guardOnA(ids, p2)

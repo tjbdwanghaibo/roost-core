@@ -572,9 +572,10 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 	})
 	action.MustRegisterCall[pb.JoinGuildRequest, pb.GuildResponse](actions, protocols, "join_guild", msgid.MsgJoinGuild, guildAnswered)
 	action.MustRegisterCall[pb.LeaveGuildRequest, pb.GuildResponse](actions, protocols, "leave_guild", msgid.MsgLeaveGuild, guildAnswered)
-	// guild_info with no id reads "the guild I am in": the robot's guard
-	// mirror, then the guild's. It has to agree with what the found saga
-	// reported, and a guild has at least its founder.
+	// guild_info with no id reads "the guild I am in": the robot's own copy
+	// (PlayerDao.GuildID, set when its found saga's status was read), then
+	// the guild's mirror. It has to agree with what the found saga reported,
+	// and a guild has at least its founder.
 	action.MustRegisterCall[pb.GuildInfoRequest, pb.GuildResponse](actions, protocols, "guild_info", msgid.MsgGuildInfo,
 		action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {

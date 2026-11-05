@@ -13,11 +13,16 @@ import (
 // instance: reserve the player's guard for (allianceID, requestID) and arm the
 // reservation's deadline on this instance's shard, in one transaction. The
 // receipt makes a redelivered reserve a replay, so a reserve that arrives
-// after the reservation was settled cannot re-open it.
+// after the reservation was settled cannot re-open it. deferHeld: as for
+// handlerAllianceAdmit — a guard held by something else answers Held and
+// records nothing, so the service can heal it first.
 //
 //roost:nest rollback=undo durability=strict
-func handlerGuardReserve(target alliance_member.IGuardEntity, shard alliance_shard.ITimerEntity, requestID string, allianceID int64, deadlineUnix int64, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
+func handlerGuardReserve(target alliance_member.IGuardEntity, shard alliance_shard.ITimerEntity, requestID string, allianceID int64, deadlineUnix int64, deferHeld bool, cooldownSeconds int64, retentionSeconds int64, nowUnix int64) (alliancerule.GuardAnswer, error) {
 	guard := target.GuardComp()
+	if _, decided := guard.Receipt(requestID); deferHeld && !decided && guard.HeldAgainst(requestID) {
+		return alliancerule.GuardAnswer{Held: true, State: guard.State(guard.CurrentVersion())}, nil
+	}
 	outcome, err := guard.Execute(requestID, nowUnix, time.Duration(retentionSeconds)*time.Second, func() (int64, error) {
 		if err := guard.CheckFree(requestID, nowUnix, time.Duration(cooldownSeconds)*time.Second); err != nil {
 			return allianceID, err
@@ -47,7 +52,8 @@ func handlerGuardResolve(target alliance_member.IGuardEntity, shard alliance_sha
 }
 
 // handlerGuardClear ends the membership that joinRequestID made in allianceID,
-// if it is still the current one (after the alliance unseated the player).
+// if it is still the current one (after the alliance unseated the player, or
+// after healing found the alliance holds no seat under joinRequestID).
 //
 //roost:nest rollback=undo durability=strict
 func handlerGuardClear(target alliance_member.IGuardEntity, allianceID int64, joinRequestID string, nowUnix int64) (alliancerule.GuardAnswer, error) {

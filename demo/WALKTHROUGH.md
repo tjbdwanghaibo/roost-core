@@ -239,15 +239,24 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
   公会步骤按 RPC 的四类答复回应：成功 → 下一步；业务拒绝（名字非法、已在联盟、不是成员、本周期已领）→ 不可重试的失败，
   协调器补偿已完成的步骤（建盟被拒即退费）；“没执行”“结果未知”→ 返回错误，步骤回滚重投、同一请求号再问一次，
   真执行过的由服务端回执答出，不会退了费又建成盟。
-- **读**——`guild_info`（10023）：先读自己的 `AllianceMemberMirror`（ID 由玩家 ID 算出）得到联盟号，再读 `AllianceMirror`
-  （`//roost:mirror` 只读 DTO，形状与 `alliancerule.View` 相同）。都用 Monotonic：缓存未命中时会回源加载（Cached 不加载）；
-  客户端带上写答复里的 `Version` 作 `MinVersion`，读到的不会比自己刚写的旧，镜像还没追上时答 `guild_busy`、稍后再查。
-  Mirror 只用于展示与预检（例如“已在公会”直接提示），写判断一律在服务里按权威做。
+- **读**——`guild_info`（10023）：“我的公会”取玩家自己的副本 `PlayerDao.GuildID`（`PlayerGuild` 读 handler，玩家锁内读），
+  再读 `AllianceMirror`（`//roost:mirror` 只读 DTO，形状与 `alliancerule.View` 相同），用 Monotonic：缓存未命中时会回源加载
+  （Cached 不加载）；客户端带上写答复里的 `Version` 作 `MinVersion`，读到的不会比自己刚写的旧，镜像还没追上时答 `guild_busy`、
+  稍后再查。副本与 Mirror 只用于展示与预检（例如“已在公会”直接提示），写判断一律在服务里按权威（名单）做。
 
-`PlayerDao.GuildID` 是 `nopersist,sync` 的显示字段（附近玩家头顶的公会），不落库：登录时从 Mirror 填（`EnterGame` 的
-`refreshGuild`），收到成员变化通知时更新。通知是 alliance 的 effect 消费者按成员的原服 sid 经 Bus 发来的 `alliance.member_notice`
-（`internal/service/<game>/alliance_notice.go`）：玩家在本进程在线才处理——改显示字段（离开只清“正显示这个公会”的，晚到的旧
-退盟不会盖掉新公会）并推 `GuildNoticePush`（10104）；尽力投递，丢了由下次登录补齐。
+守卫 `AllianceMember` 不同步给 game 进程（`snapshots=none`：它的提交只写守卫文档，没有 Remote 快照、L2 条目与广播）；game
+只镜像 `Alliance`。“玩家在哪个公会”是 `PlayerDao.GuildID`（`persist,sync`，附近玩家头顶也显示）：玩家自己的入会 / 退会 /
+建盟成功后在玩家事务里写（`ShowGuild`；建盟在 `guild_op_status` 看到 saga 完成时写），在线时收到成员变化通知更新，登录时
+（`EnterGame` 的 `refreshGuild`）对照该公会的 Mirror：公会不存在或名单里已没有这名玩家（离线时被踢 / 退出的通知没收到）就清掉。
+通知是 alliance 在变更持久之后以 **best_effort effect** 发出、消费者按成员的原服 sid 经 Bus 转来的 `alliance.member_notice`
+（`internal/service/<game>/alliance_notice.go`）：玩家在本进程在线才处理——改副本（离开只清“正显示这个公会”的，晚到的旧
+退盟不会盖掉新公会）并推 `GuildNoticePush`（10104）；至多一次，丢了不重发。离线时被批准入会这类“加入”的通知没人补：
+副本要到下一条通知或玩家自己的公会操作才会显示（[KNOWN-LIMITS](../docs/maintenance/KNOWN-LIMITS.md)）。
+
+alliance 服务内部也不再有可靠 effect：守卫是名单的缓存，只允许“过时地占着”、绝不“过时地空着”。跨实例两步写成功后服务直接调
+`ResolveGuard` / `ClearGuard` 收尾（尽力而为）；丢了，下一个碰到守卫被占的请求（Join / Found 的预约、`ClaimReward`）先向持有它的
+联盟问权威结论（`Settle`：预约过了期限才定论为过期，否则只问不写），再用条件守卫事务落下结论后照常判断；预约的期限由 `AllianceShard`
+的持久定时器发一条 best_effort 的 `alliance.reservation_due`，消费者做同样的自愈。
 
 多实例：`sh deploy/dev/second-alliance.sh start` 在同一台机器上起第二个 alliance（sid 1001、ops 9210）。建盟经队列组分到两个实例，
 每个联盟归接到它的实例；其余调用经路由登记找到 owner。缩容一台：在它的 ops 上 ① `alliance.stop_founding`（退出 `Found` 的队列组，

@@ -8,10 +8,13 @@
 // the alliance service and written only there; this process has no Remote
 // write runtime at all (no remote_entity Mod), so the only way it can change a
 // guild is the alliance RPC (internal/rpc/alliance). It reads guilds through
-// Remote mirrors (game/entities/alliance AllianceMirror,
-// game/entities/alliance_member AllianceMemberMirror), which are read-only and
-// eventually consistent: a mirror is shown, never trusted for a decision —
-// the service decides every write on its authoritative state.
+// the alliance's Remote mirror (game/entities/alliance AllianceMirror), which
+// is read-only and eventually consistent; the membership guards are not
+// mirrored to game servers at all (AllianceMember declares snapshots=none).
+// Which guild a player is in is the player's own copy (PlayerDao.GuildID),
+// written after their own join / leave / founding and by membership notices.
+// Neither is trusted for a decision — the service decides every write on its
+// authoritative state.
 //
 // Which path an operation takes (plan §2.6):
 //
@@ -72,7 +75,8 @@ type State struct {
 	Name     string `json:"name,omitempty"`
 	OpenJoin bool   `json:"open_join,omitempty"`
 	// AllianceID: donate — the alliance donated to (the endpoint read it
-	// from the player's guard mirror; the service checks membership again);
+	// from the player's own copy, PlayerDao.GuildID; the service checks
+	// membership again);
 	// found / reward — the alliance the service answered with.
 	AllianceID int64 `json:"alliance_id,omitempty"`
 	// Reward: the claim the compensation releases, and what the grant gives.

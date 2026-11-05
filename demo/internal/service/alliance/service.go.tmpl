@@ -67,8 +67,10 @@ func (s *Service) Init(registry *app.Registry) error {
 // Serve blocks until the App stops.
 func (*Service) Serve(ctx context.Context) error { <-ctx.Done(); return nil }
 
-// Shutdown drains the consumers: effects in flight finish or are redelivered
-// to the next process holding the durable.
+// Shutdown drains the consumers: effects in flight finish; a reliable one
+// that does not is redelivered to the next process holding the durable, a
+// best-effort one (membership notices, reservation deadlines) is gone — the
+// guard heals on the next request that finds it held.
 func (s *Service) Shutdown(context.Context) error { return s.drain() }
 
 func (s *Service) drain() error {
