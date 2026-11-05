@@ -217,10 +217,44 @@ effect outbox（同一批运行的 `/metrics`：暂存 = 成功的 `Join` / `Lea
 结论：
 
 1. **跨实例入会不再在一个 shard 上排成一条线**：p50 降到约十分之一；64 并发成功次数约 3 倍。修前 64 并发的失败是 `ReserveGuard` 在 shard 上排队超过 3 s。
-2. **修后跨实例的失败与 16 并发吞吐的抖动是 Remote outbox 代发的问题，不是本改动引入**：别的进程代发了写者的提交，写者进程的 tracker 停在 Applied，写等到 3 s 超时，延迟收尾持写门到 `finalize_projection_timeout`（30 s），同一联盟 / 守卫随后约 30 s 的写全部超时（[KNOWN-LIMITS](../../../maintenance/KNOWN-LIMITS.md) 对应条，含证据与可选修法）。修前同一现象出现在跨实例 `Leave`（3 轮里 2 轮有约 3 s 的请求，其中 1 轮 11 次失败），修后跨实例写不再被 shard 限速，`Join` 也碰到。（单实例的 t 轮里另有一种现象：修前 2 轮各有一次 128 个 `handlerAllianceRemove` 同时 3 s 超时，是全体一次、不是逐实体持续约 30 s，重试后成功，原因未查。）
+2. **修后跨实例的失败与 16 并发吞吐的抖动是 Remote outbox 代发的问题，不是本改动引入**（2026-11-06 已修，见[下节](#outbox-写者自己先发2026-11-06)）：别的进程代发了写者的提交，写者进程的 tracker 停在 Applied，写等到 3 s 超时，延迟收尾持写门到 `finalize_projection_timeout`（30 s），同一联盟 / 守卫随后约 30 s 的写全部超时（[KNOWN-LIMITS](../../../maintenance/KNOWN-LIMITS.md) 对应条，含证据与可选修法）。修前同一现象出现在跨实例 `Leave`（3 轮里 2 轮有约 3 s 的请求，其中 1 轮 11 次失败），修后跨实例写不再被 shard 限速，`Join` 也碰到。（单实例的 t 轮里另有一种现象：修前 2 轮各有一次 128 个 `handlerAllianceRemove` 同时 3 s 超时，是全体一次、不是逐实体持续约 30 s，重试后成功，原因未查。）
 3. **同实例命令数不变**（修前这条路径已不写 effect）。**同实例重试版吞吐修后偏低、未确认原因**：6 轮新玩家 `Join` 128 并发修前 296～435（中位约 374）、修后 238～410（中位约 296），`Leave` 128 并发约 380 → 约 300；但同实例路径的代码差别只有“写成功后发一条 core NATS 通知”替代“提交器发 best_effort effect”，Mongo 命令数相同，修后连纯 Mongo 的 `mark_published` 均值也慢约 12%（18.3 → 20.5 ms），更像同机负载差异；要在安静的机器上再比。
 
 证据（未提交）：`artifacts/perf/runs/{m,x,y,t}-{before,after}-<轮>/`、`artifacts/perf/runs/inv-1/`（延迟收尾日志）、`artifacts/perf/runs/q-after-1/`（goroutine 栈），探针 `artifacts/probe/`（`joincross_test.go.txt` 加了 `JOINCROSS_CONC`、`JOINCROSS_QUIT`）。
+
+## outbox 写者自己先发（2026-11-06）
+
+改动：Remote outbox 只立即发布本进程写的提交，别的进程写的提交过了宽限期（`remote_entity.outbox_takeover_grace`，缺省等于 `finalize_projection_timeout` 30 s）才代发（[REMOTE_ENTITY“outbox 发布归属”](../../../framework/REMOTE_ENTITY.md#outbox-发布归属)，[KNOWN-LIMITS](../../../maintenance/KNOWN-LIMITS.md) 原“跨实例写偶发 3 s 超时”条）。修前 = `f57cfb85`，修后 = 本改动；同机、同一私有 mirror-local 环境、同一探针（跨实例 `TestJoinCross`：两个 alliance 实例，守卫在 3000、联盟在 3001，每个 worker 24 次；同实例 `TestJoinScaleRetry` 128 并发 12 s，可重试时退避重试），每轮先修后、再修前，交替 3 轮。机器有长期后台负载、swap 已用约 14 GB，每轮记 1 分钟 load average（探针开始时）。
+
+跨实例（成功次/秒 · p50 · p99；失败 / 总数）：
+
+| 场景 | 轮 | 修后 | 修前 |
+| --- | --- | --- | --- |
+| `Join` 64 并发 | 1 | 157.8 · 374 ms · 662 ms；0 / 1536（load 8.3） | 35.7 · 371 ms · 3.19 s；122 / 1536（load 18.5） |
+| | 2 | 154.7 · 396 ms · 674 ms；0（load 12.2） | 41.3 · 355 ms · 3.05 s；48（load 4.1） |
+| | 3 | 167.9 · 357 ms · 582 ms；0（load 3.0） | 18.3 · 338 ms · 5.47 s；246（load 14.9） |
+| `Leave` 64 并发 | 1 | 234.0 · 262 ms · 372 ms；0 | 164.6 · 248 ms · 3.14 s；110 |
+| | 2 | 229.3 · 261 ms · 380 ms；0 | 193.0 · 258 ms · 361 ms；46 |
+| | 3 | 242.3 · 250 ms · 360 ms；0 | 35.6 · 230 ms · 3.00 s；257 |
+| `Join` 16 并发 | 1 | 56.3 · 272 ms · 366 ms；0 / 384 | 57.6 · 272 ms · 381 ms；0 / 384 |
+| | 2 | 59.9 · 253 ms · 386 ms；0 | 58.1 · 241 ms · 566 ms；0 |
+| | 3 | 53.6 · 277 ms · 405 ms；0 | 10.1 · 234 ms · 3.11 s；22 |
+| `Leave` 16 并发 | 1～3 | 88.0～95.1 · 153～161 ms；0 | 88.1～92.7 · 148～171 ms；0 / 0 / 20 |
+
+两个实例 `/metrics` 在每阶段前后的差值之和：
+
+| 指标 | 修后 3 轮 | 修前 3 轮（64 并发 `Join` / `Leave`、16 并发 `Join`） |
+| --- | --- | --- |
+| `remote_entity_write_gate_timeout_total` | 全部 0 | `Join` 64：134 / 23 / 270；`Leave` 64：0 / 2 / 54；`Join` 16：0 / 0 / 18 |
+| `remote_entity_finalize_status_read_total`（延迟收尾回源；修前即 30 s 计时器唤醒后回源） | 全部 0 | `Join` 64：18 / 21 / 44；`Leave` 64：25 / 16 / 13 |
+| `remote_entity_finalize_projection_timeout_total`（修后新增，期限到期才回源的次数） | 全部 0 | 修前没有此指标 |
+| `remote_entity_outbox_takeover_total`（修后新增，代发别的进程的提交） | 全部 0 | 修前没有此指标 |
+
+同实例新玩家 `Join` 128 并发（成功次/秒 · p50 · p99，失败全部 0）：修后 420.2 / 418.7 / 396.4（p50 282～302 ms，p99 472～549 ms），修前 364.6 / 421.7 / 437.9（p50 281～334 ms，p99 520～617 ms）。同实例路径的 outbox 行为不变（全部是本进程写的提交，扫描多一次按 sid 的比较），差别在同机负载波动之内，没有看到退化。
+
+结论：跨实例 64 并发 `Join` 成功次数约 4 倍（约 18～41 → 约 155～168 次/秒），失败、写门超时与延迟收尾回源都降到 0，p99 从 3～5.5 s 降到约 0.6 s；修前 16 并发也会碰到（第 3 轮）。修前的 p50 不高是因为卡住只落在部分实体上（同一联盟 / 守卫约 30 s 内的写全部超时），拖垮的是成功次数与 p99。
+
+证据（仓库外、未提交，维护者本机的证据目录 `outboxowner-20261106/`）：`perf/runs/{y,x,t}-{after,before}-{1,2,3}/`（`probe.log` 含 PERF 行与 load average，连接串已去掉；`metrics-*` 是各阶段前后的 `/metrics`）、`perf/summary.txt`（上面两张表的来源）、`red/`（回归的修前失败文本），探针 `probe/` 是 2026-11-05 证据目录 `probe/` 的副本（只改了环境路径与端口，另加汇总脚本 `report.py` 与轮次脚本 `series.sh`）。进程日志含连接串，未保留。
 
 ## 复跑
 
