@@ -152,15 +152,19 @@ func (projector *Projector) replayReadRecords() int {
 }
 
 // planReplayWindows 决定本轮是否并行：ProjectionWorkers > 1 且 Store 声明 ParallelProjectionStore 时按冲突键切窗口，
-// 否则整轮一个串行段（与改动前相同）。Remote 记录另需 Store 声明 Remote 适配器可并发调用，否则 Remote 记录之间串行。
+// 否则整轮一个串行段（与改动前相同）。Remote 记录另需 Store 声明 Remote 适配器可并发调用，否则 Remote 记录之间串行；
+// 带 effect 的记录之间的顺序范围取 EffectOrder。
 func (projector *Projector) planReplayWindows(records []coredata.CommitRecord) []replayWindow {
 	store, ok := projector.store.(ParallelProjectionStore)
 	if !ok || !store.SupportsParallelProjection() {
 		return []replayWindow{{start: 0, end: len(records)}}
 	}
 	remote, ok := projector.store.(RemoteParallelProjectionStore)
-	remoteParallel := ok && remote.SupportsRemoteParallelProjection()
-	return planReplayWindows(records, projector.opts.ProjectionWorkers, remoteParallel)
+	scope := conflictScope{
+		remoteParallel:    ok && remote.SupportsRemoteParallelProjection(),
+		effectsInWALOrder: projector.opts.EffectOrder == EffectOrderWAL,
+	}
+	return planReplayWindows(records, projector.opts.ProjectionWorkers, scope)
 }
 
 // readReplayBatch 按 WAL 物理顺序收集本轮可投影的连续记录：遇到仍持有实体锁的事务、

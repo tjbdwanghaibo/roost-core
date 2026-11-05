@@ -140,7 +140,8 @@ type config struct {
 		GroupCommitInterval time.Duration `config:"group_commit_interval" min:"0" example:"2ms"`
 	} `config:"dataengine.wal" help:"dir 不写取 data/wal/dataengine/<sid>（相对进程工作目录），每个 sid 一个目录；生成的开发配置因此不写 dir。\n显式写的 dir 只能给一个进程用（WAL 对目录加独占锁，第二个进程启动即失败），同一份配置用 --sid 起多个进程时不要写"`
 	Projection struct {
-		Workers            int           `config:"workers" min:"1" max:"64" help:"投影器按实体分片并行的通道数（同时在途的投影调用数）。不写取缺省 8；1 = 串行投影（含 Remote 记录）。\n冲突键（同一实体、回执、effect 顺序类）相交的记录保持 WAL 顺序，checkpoint 只确认连续成功前缀"`
+		Workers            int           `config:"workers" min:"1" max:"64" help:"投影器按实体分片并行的通道数（同时在途的投影调用数）。不写取缺省 8；1 = 串行投影（含 Remote 记录）。\n冲突键（同一实体、回执、effect；effect_order: wal 时再加全部带 effect 的记录）相交的记录保持 WAL 顺序，checkpoint 只确认连续成功前缀"`
+		EffectOrder        string        `config:"effect_order" default:"entity" enum:"entity|wal" help:"带 effect 的记录之间按什么范围保持 WAL 顺序（只在 workers > 1 时起作用）。entity（缺省）：写同一实体、同一回执、同一 effect 的记录之间按 WAL 顺序，\n不相干实体的带 effect 记录并行投影，effect 进 outbox 的先后可能与 WAL 不同（outbox 发布与 JetStream 消费本来不保证全局顺序）；\nwal：全部带 effect 的记录按 WAL 顺序逐条投影、按 WAL 顺序暂存（2026-11-05 前的行为），只给依赖“不同实体的 effect 按 WAL 顺序”的进程打开"`
 		BatchRecords       int           `config:"batch_records" min:"0" example:"256"`
 		BatchBytes         int           `config:"batch_bytes" min:"0"`
 		ReadBytes          int           `config:"read_bytes" min:"0"`
@@ -225,6 +226,7 @@ func (mod *Mod) Init(cfg *viper.Viper) error {
 	if projection.Workers > 0 {
 		projector.ProjectionWorkers = projection.Workers
 	}
+	projector.EffectOrder = engine.EffectOrder(projection.EffectOrder)
 	if projection.RetryMin > 0 {
 		projector.RetryMin = projection.RetryMin
 	}

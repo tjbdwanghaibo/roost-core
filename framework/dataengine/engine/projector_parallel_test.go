@@ -221,8 +221,8 @@ func hasEffect(a, b coredata.CommitRecord) bool {
 	return len(a.Effects) > 0 && len(b.Effects) > 0
 }
 
-// 缺省设计不放宽 effect 暂存顺序：带 effect 的记录之间（即使写的是不同实体）仍按 WAL 顺序投影，
-// 不带 effect 的记录与它们并行。去掉 effect 顺序类（选项 B）时这里变红。
+// 打开全局 effect 顺序（effect_order=wal，2026-11-05 前的唯一行为）时：带 effect 的记录之间（即使写的是不同实体）仍按
+// WAL 顺序投影，不带 effect 的记录与它们并行。去掉 effect 顺序类（变异 M5）时这里变红。
 func TestEntityParallelEffectRecordsKeepWALOrderAcrossEntities(t *testing.T) {
 	records := []coredata.CommitRecord{entityRecord(1, 401), entityRecord(2, 402), entityRecord(3, 403), entityRecord(4, 404), entityRecord(5, 405)}
 	for _, i := range []int{0, 2, 3} {
@@ -234,10 +234,77 @@ func TestEntityParallelEffectRecordsKeepWALOrderAcrossEntities(t *testing.T) {
 		return nil
 	}
 	p, w := stoppedProjectorWithRecords(t, store, records, 4<<20)
+	p.opts.EffectOrder = EffectOrderWAL
 	if n, err := p.ReplayPass(context.Background()); n != len(records) || err != nil {
 		t.Fatalf("n=%d err=%v", n, err)
 	}
 	assertConflictOrder(t, records, store.appliedIDs(), hasEffect)
+	assertWALReplayCount(t, w, 0)
+}
+
+// 缺省 effect_order=entity（维护者 2026-11-05）：带 effect、写不相干实体的两条记录分进不同通道，第一条的 Mongo 调用卡住时
+// 第二条照样完成并唤醒它的等待方。全局 effect 顺序下两条共享 effect 顺序类、排在同一通道里，第二条等第一条，这里超时变红。
+func TestEntityParallelEntityEffectOrderProjectsUnrelatedEffectRecordsConcurrently(t *testing.T) {
+	records := []coredata.CommitRecord{entityRecord(1, 801), entityRecord(2, 802)}
+	for i := range records {
+		records[i].Effects = []coredata.Effect{{ID: fmt.Sprintf("effect-80%d", i+1), Topic: "alliance.member_changed", Payload: []byte{byte(i)}}}
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	store := &entityParallelStore{}
+	store.hook = func(ctx context.Context, batch []coredata.CommitRecord) error {
+		if slices.ContainsFunc(batch, func(r coredata.CommitRecord) bool { return r.ID == records[0].ID }) {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		return nil
+	}
+	p, w := stoppedProjectorWithRecords(t, store, records, 4<<20)
+	ticket := &projectionTicket{done: make(chan struct{})}
+	p.tickets[records[1].ID] = ticket
+	done := make(chan struct{})
+	var n int
+	var err error
+	go func() { defer close(done); n, err = p.ReplayPass(context.Background()) }()
+	awaitChan(t, entered, "first effect record projection")
+	awaitChan(t, ticket.Done(), "unrelated entity's effect record projected while the first is blocked")
+	assertWALReplayCount(t, w, 2)
+	once.Do(func() { close(release) })
+	awaitChan(t, done, "parallel replay completion")
+	if err != nil || n != 2 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	assertWALReplayCount(t, w, 0)
+}
+
+// 缺省 effect_order=entity 只放宽不相干实体之间的顺序：同一实体上的带 effect 记录仍按 WAL 顺序投影（同实体的 effect 暂存顺序不变）。
+// 每次调用先等一会儿，看后面同实体的记录会不会抢先完成；放宽时连实体键一起丢掉（只留事务键）时这里变红。
+func TestEntityParallelEntityEffectOrderKeepsSameEntityEffectsInWALOrder(t *testing.T) {
+	records := []coredata.CommitRecord{
+		entityRecord(1, 901), entityRecord(2, 902), entityRecord(3, 901), entityRecord(4, 903),
+		entityRecord(5, 901), entityRecord(6, 902), entityRecord(7, 903),
+	}
+	for i := range records {
+		records[i].Effects = []coredata.Effect{{ID: fmt.Sprintf("effect-9%02d", i), Topic: "alliance.member_changed", Payload: []byte{byte(i)}}}
+	}
+	store := &entityParallelStore{}
+	store.hook = func(_ context.Context, batch []coredata.CommitRecord) error {
+		waitForLaterConflictingRecord(store, records, batch, sharesEntity, 150*time.Millisecond)
+		return nil
+	}
+	p, w := stoppedProjectorWithRecords(t, store, records, 4<<20)
+	if n, err := p.ReplayPass(context.Background()); n != len(records) || err != nil {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	assertConflictOrder(t, records, store.appliedIDs(), sharesEntity)
+	if p.Stats().ParallelWindows == 0 {
+		t.Fatal("effect records on three entities were projected serially")
+	}
 	assertWALReplayCount(t, w, 0)
 }
 
@@ -463,11 +530,12 @@ func TestPlanReplayWindowsGroupsRecordsByConflictKeys(t *testing.T) {
 		lanes      [][]byte
 	}
 	for _, tc := range []struct {
-		name           string
-		records        []coredata.CommitRecord
-		workers        int
-		remoteParallel bool
-		want           []window
+		name              string
+		records           []coredata.CommitRecord
+		workers           int
+		remoteParallel    bool
+		effectsInWALOrder bool
+		want              []window
 	}{
 		{name: "independent", records: []coredata.CommitRecord{entityRecord(1, 11), entityRecord(2, 12), entityRecord(3, 13)}, workers: 8,
 			want: []window{{0, 3, [][]byte{{1}, {2}, {3}}}}},
@@ -479,8 +547,14 @@ func TestPlanReplayWindowsGroupsRecordsByConflictKeys(t *testing.T) {
 			want: []window{{0, 3, [][]byte{{1, 3}, {2}}}}},
 		{name: "distinct receipts", records: []coredata.CommitRecord{receipt(entityRecord(1, 11), "a"), receipt(entityRecord(2, 12), "b")}, workers: 8,
 			want: []window{{0, 2, [][]byte{{1}, {2}}}}},
-		{name: "effects keep WAL order", records: []coredata.CommitRecord{effect(entityRecord(1, 11), "e1"), entityRecord(2, 12), effect(entityRecord(3, 13), "e3")}, workers: 8,
+		{name: "effects in WAL order when enabled", records: []coredata.CommitRecord{effect(entityRecord(1, 11), "e1"), entityRecord(2, 12), effect(entityRecord(3, 13), "e3")}, workers: 8, effectsInWALOrder: true,
 			want: []window{{0, 3, [][]byte{{1, 3}, {2}}}}},
+		{name: "effects by entity are per entity", records: []coredata.CommitRecord{effect(entityRecord(1, 11), "e1"), entityRecord(2, 12), effect(entityRecord(3, 13), "e3")}, workers: 8,
+			want: []window{{0, 3, [][]byte{{1}, {2}, {3}}}}},
+		{name: "effects by entity keep same entity order", records: []coredata.CommitRecord{effect(entityRecord(1, 11), "e1"), effect(entityRecord(2, 12), "e2"), effect(entityRecord(3, 11), "e3")}, workers: 8,
+			want: []window{{0, 3, [][]byte{{1, 3}, {2}}}}},
+		{name: "effects by entity keep same effect id order", records: []coredata.CommitRecord{effect(entityRecord(1, 11), "e1"), effect(entityRecord(2, 12), "e1")}, workers: 8,
+			want: []window{{0, 2, nil}}},
 		{name: "duplicate transaction id", records: func() []coredata.CommitRecord {
 			r := []coredata.CommitRecord{entityRecord(1, 11), entityRecord(2, 12), entityRecord(1, 13)}
 			return r
@@ -502,7 +576,7 @@ func TestPlanReplayWindowsGroupsRecordsByConflictKeys(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []window
-			for _, w := range planReplayWindows(tc.records, tc.workers, tc.remoteParallel) {
+			for _, w := range planReplayWindows(tc.records, tc.workers, conflictScope{remoteParallel: tc.remoteParallel, effectsInWALOrder: tc.effectsInWALOrder}) {
 				var lanes [][]byte
 				if w.lanes != nil {
 					lanes = lanesOf(tc.records, w)
@@ -519,7 +593,7 @@ func TestPlanReplayWindowsGroupsRecordsByConflictKeys(t *testing.T) {
 // 并行窗口里只有“本窗口里同键最后一条”的单 mutation 记录可以走快路；多 mutation 记录本来就不走快路。
 func TestPlanReplayWindowsAllowsFastPathOnlyForTheLastRecordOfItsKeys(t *testing.T) {
 	records := []coredata.CommitRecord{entityRecord(1, 11), entityRecord(2, 12), entityRecord(3, 11), entityRecord(4, 13, 14), entityRecord(5, 12)}
-	windows := planReplayWindows(records, 8, false)
+	windows := planReplayWindows(records, 8, conflictScope{})
 	if len(windows) != 1 || windows[0].lanes == nil {
 		t.Fatalf("windows=%+v", windows)
 	}
@@ -583,6 +657,31 @@ func TestNewProjectorRejectsOutOfRangeProjectionWorkers(t *testing.T) {
 		}
 		if _, err := NewProjector(wal, &entityParallelStore{}, ProjectorOptions{ProjectionWorkers: workers, ManualReplay: true}); err == nil {
 			t.Fatalf("workers=%d accepted", workers)
+		}
+		_ = wal.Close(context.Background())
+	}
+}
+
+// effect 顺序范围只认 entity / wal；空取 entity，拼错的取值在构造时拒绝，不静默退回缺省。
+func TestNewProjectorEffectOrder(t *testing.T) {
+	for _, tc := range []struct {
+		order EffectOrder
+		want  EffectOrder
+		ok    bool
+	}{{"", EffectOrderEntity, true}, {EffectOrderWAL, EffectOrderWAL, true}, {EffectOrderEntity, EffectOrderEntity, true}, {"per_entity", "", false}} {
+		wal, err := nestwal.Open(nestwal.DefaultOptions(t.TempDir()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := NewProjector(wal, &entityParallelStore{}, ProjectorOptions{EffectOrder: tc.order, ManualReplay: true})
+		if (err == nil) != tc.ok {
+			t.Fatalf("effect order %q: err=%v", tc.order, err)
+		}
+		if p != nil {
+			if p.opts.EffectOrder != tc.want {
+				t.Fatalf("effect order %q became %q, want %q", tc.order, p.opts.EffectOrder, tc.want)
+			}
+			_ = p.Close(context.Background())
 		}
 		_ = wal.Close(context.Background())
 	}

@@ -49,9 +49,39 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 
 [codec.go](../../../framework/nestwal/codec.go)的encodeRecord与decodeRecord固定codecVersion=7；unsupported version在解释record body前拒绝。格式校验不等于尾部截断安全，WAL的文件恢复、fsync与checkpoint分别有守卫。
 
-**按实体分片并行投影**（2026-10-27，[设计](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-27-projector-entity-parallel.md)）：[projector_parallel.go](../../../framework/dataengine/engine/projector_parallel.go)。`ProjectionWorkers`（`dataengine.projection.workers`，缺省 8，1 = 串行）> 1 且 Store 声明 `ParallelProjectionStore` 时，一轮回放最多读 `ReplayBatchRecords × ProjectionWorkers` 条（字节仍受 `ReplayReadBytes`），`planReplayWindows` 按冲突键（文档 `_id`；回执身份 Namespace/ID；effect ID；事务 ID；带 effect 的记录共享一个顺序类；Store 未声明 Remote 适配器并发安全时 Remote 记录共享一个顺序类）做并查集，分量数 ≥ 2 的段按首条位置把整分量分给记录数最少的通道（至多 `ProjectionWorkers` 条），通道内按 WAL 顺序用 `planProjectionSegments` 合批（普通记录 `ProjectBatch`，特殊记录单条 `Project`）；`Key.ID == 0` 的记录是屏障，独占串行段；整段互相冲突时走原串行路径（快路与立即确认不变）。不变量与强制点：①有交集的记录只在同一通道、按 WAL 顺序（`planParallelWindow`）；②单 mutation 快路不写标记，只给“本窗口里它的全部键都不再出现”的独占单条记录（`fastPath`），其余进 `ProjectBatch` 写标记；逐条退回让一条非末条快路记录成功时该通道就此停下（`truncated`），本轮只确认到前缀；③每条通道第一个单元总会发出，之后任一通道失败即停止补位，已发出的单元等它返回，每个失败单独 `isFatalProjection`；④窗口结束只 ack 连续成功前缀，前缀之后成功的记录靠事务标记在下一轮 / 重启后幂等重放；⑤成功单元的收尾（完成通知 / `OnEffectsStaged` / 计数）与串行路径共用 `finishProjectedUnit`，`OnEffectsStaged` 可能被多个通道并发调用。通道是静态分配（不做逐条补位），一个慢单元只拖住它所在的通道与本窗口的确认。effect 暂存顺序缺省不放宽（带 effect 的记录之间按 WAL 顺序），是否改成“按实体有序”待维护者决定。回归：[projector_parallel_test.go](../../../framework/dataengine/engine/projector_parallel_test.go)（同实体 / 多实体 / effect 顺序、失败前缀与重启幂等、fatal 停止全部通道、快路条件、逐条退回停通道、workers=1 串行、规划器表驱动）、[projector_remote_test.go](../../../framework/dataengine/engine/projector_remote_test.go)（Remote 记录走同一调度器）、真实副本集 `TestRealMongoParallelProjectionReplaysSuccessfulSuffixAfterRestart`（`-tags integration`）。
+**按实体分片并行投影**（2026-10-27，[设计](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-27-projector-entity-parallel.md)）：[projector_parallel.go](../../../framework/dataengine/engine/projector_parallel.go)。`ProjectionWorkers`（`dataengine.projection.workers`，缺省 8，1 = 串行）> 1 且 Store 声明 `ParallelProjectionStore` 时，一轮回放最多读 `ReplayBatchRecords × ProjectionWorkers` 条（字节仍受 `ReplayReadBytes`），`planReplayWindows` 按冲突键（文档 `_id`；回执身份 Namespace/ID；effect ID；事务 ID；带 effect 的记录在 `effect_order: wal` 时共享一个顺序类，缺省不共享，见下面“effect 顺序范围”；Store 未声明 Remote 适配器并发安全时 Remote 记录共享一个顺序类）做并查集，分量数 ≥ 2 的段按首条位置把整分量分给记录数最少的通道（至多 `ProjectionWorkers` 条），通道内按 WAL 顺序用 `planProjectionSegments` 合批（普通记录 `ProjectBatch`，特殊记录单条 `Project`）；`Key.ID == 0` 的记录是屏障，独占串行段；整段互相冲突时走原串行路径（快路与立即确认不变）。不变量与强制点：①有交集的记录只在同一通道、按 WAL 顺序（`planParallelWindow`）；②单 mutation 快路不写标记，只给“本窗口里它的全部键都不再出现”的独占单条记录（`fastPath`），其余进 `ProjectBatch` 写标记；逐条退回让一条非末条快路记录成功时该通道就此停下（`truncated`），本轮只确认到前缀；③每条通道第一个单元总会发出，之后任一通道失败即停止补位，已发出的单元等它返回，每个失败单独 `isFatalProjection`；④窗口结束只 ack 连续成功前缀，前缀之后成功的记录靠事务标记在下一轮 / 重启后幂等重放；⑤成功单元的收尾（完成通知 / `OnEffectsStaged` / 计数）与串行路径共用 `finishProjectedUnit`，`OnEffectsStaged` 可能被多个通道并发调用。通道是静态分配（不做逐条补位），一个慢单元只拖住它所在的通道与本窗口的确认。effect 暂存顺序缺省按实体有序（维护者 2026-11-05，见下面“effect 顺序范围”）。回归：[projector_parallel_test.go](../../../framework/dataengine/engine/projector_parallel_test.go)（同实体 / 多实体 / effect 顺序、失败前缀与重启幂等、fatal 停止全部通道、快路条件、逐条退回停通道、workers=1 串行、规划器表驱动）、[projector_remote_test.go](../../../framework/dataengine/engine/projector_remote_test.go)（Remote 记录走同一调度器）、真实副本集 `TestRealMongoParallelProjectionReplaysSuccessfulSuffixAfterRestart`（`-tags integration`）。
 
 **持久键与未知键（DESIGN-TODO D13）**：生成 DAO 的持久文档结构体 `<dao>PersistDoc` 是键的唯一声明（取自定义里必填的 `store` 键）。`RestorePersisted` 在 schema 校验之后、解码之前调用 [StoredKeySet.WarnUnknown](../../../framework/dataengine/stored_keys.go)：逐个读文档元素（不解码值），库里有、结构体没有的键按 DAO + 路径每进程一次 `slog.Warn`，计 `dataengine.dao.unknown_stored_key.total{dao}`，不拒绝加载；顶层 `_` 开头的元数据键与缺失键不报。这些键**不读入**（维护者 2026-10-19 撤销“整文档写回保留旧键”的方案 A）：持久文档结构体没有收未知键的字段，解码器忽略它们，DAO 内存里没有，整文档写回（存储层的 Put：`$replaceWith` / ReplaceOne，以及 Remote data 信封替换）就把它们从文档里去掉；单字段补丁只 `$set` 自己的键，旧键留在库里但不再被读取。版本条件、冲突分类、墓碑语义不变。框架不提供清理入口：改名 / 删字段前保留原 `store` 键或先离线迁移（[SCHEMA-MIGRATION](../SCHEMA-MIGRATION.md) §1），这是业务约束，框架只通知。
+
+### effect 顺序范围
+
+`ProjectorOptions.EffectOrder`（配置 `dataengine.projection.effect_order`，`entity` | `wal`，缺省 `entity`，`enum` 声明在加载配置时拒绝其它取值，`NewProjector` 对空值取 `entity`、对未知值报错）只决定**带 effect 的记录之间**的并行投影冲突键（`projectionConflictKeys` 的 `conflictScope.effectsInWALOrder`）：
+
+- **`entity`（缺省，维护者 2026-11-05）**：带 effect 的记录只靠它本来就有的实体键（文档 `_id`）、回执键、effect ID 键、事务键串行。写同一实体、共享回执、同一 effect ID 的记录仍按 WAL 顺序投影与暂存；写不相干实体的带 effect 记录分进不同通道并行投影，它们进 outbox 的先后（`available_at` 取暂存时刻）可能与 WAL 不同。一个窗口内的乱序范围 ≤ 一轮读到的记录数（`batch_records × workers`）。
+- **`wal`（可选，缺省关闭）**：全部带 effect 的记录共享 `effectOrderKey`，彼此按 WAL 顺序逐条投影，effect 暂存顺序与 WAL 相同；与 2026-11-05 之前的唯一行为逐字相同（变异核对 M5 守着它）。只给依赖“不同实体的 effect 按 WAL 顺序暂存”的进程打开。
+- 不变：checkpoint 只确认连续成功前缀；前缀之后已投影的记录靠事务标记幂等重放（`ProjectFenced` 先查标记，不重复暂存 effect）；`OnEffectsStaged` 只是唤醒提示。`workers: 1` 时全部串行，两种取值没有区别。
+
+改缺省之前核对过的 outbox 路径（2026-11-05，当前源码；codebase-memory 图谱本轮连不上，结论来自直接读源码与 `rg`）：
+
+| 路径 | 是否假设全局单调 | 放宽后 |
+| --- | --- | --- |
+| DataEngine effect outbox（[outbox_store.go](../../../framework/dataengine/engine/outbox_store.go)） | 否。没有序号与游标：每次 `Claim` 从头按 `available_at, _id` 查到期且无有效租约的文档，`Ack` 删除文档，`Nack` 改 `available_at` | 晚暂存、`available_at` 较早的文档下一次认领就会被查到，不漏；`_id` = effect ID，重放靠事务标记不重复暂存，发布侧以 effect ID 作 JetStream MsgID 去重 |
+| Remote 提交 outbox 恢复扫描（`MongoCommitter.PendingRemoteCommitPage`，游标 `created_at, _id`） | 游标只在一次扫描内用（`IRemoteCommitOutboxPager` 注释），下一次扫描从头开始；`created_at` 是写入时的墙钟，不是 WAL 位置 | 不受 effect 顺序影响：不带 effect 的 Remote 记录早已按实体并行投影；一次扫描里错过的提交在下一次扫描（补发循环的 dirty 重扫、启动恢复）里被看到 |
+| outbox 积压采样（`Backlog`：计数 + 最老 `created_at`） | 否 | 只影响 `OldestAge` 的读数先后，不影响正确性 |
+
+核对过的 effect 消费者（仓内全部：framework / wiring / service 内置、game-demo、genre 夹具与生成器骨架）——没有一个依赖“不同实体之间的 effect 按 WAL 顺序”，因此没有任何生成配置打开 `wal`：
+
+| 消费者 | 依据 |
+| --- | --- |
+| saga 启动中继 `SubscribeNestStarts`（`saga.start`，`framework/saga/nest_start_consumer.go`） | `Workers` 可并发、注释写明不保证回调顺序；`StartSaga` 按 saga 身份幂等、写按版本 CAS |
+| 通用订阅 `wiring/dataengine.SubscribeEffects` 与生成器骨架（`roost add effect`） | 共享 durable、`MaxAckPending` 缺省 256 并发在途、失败重投；Mongo inbox 按 EffectID 去重；框架从未承诺 effect 全局顺序（[NEST_TRANSACTION_WAL](../NEST_TRANSACTION_WAL.md) 只承诺至少一次与 `Effect.ID` 去重） |
+| game-demo `player.level_up` → 升级邮件（`level_up_mail.go`） | 每条 effect 独立发一封邮件、按 EffectID 幂等；同一玩家的 effect 同实体，仍按 WAL 顺序 |
+| game-demo `activity.phase_due` → `NotifyPhaseDue`（`activity.go`） | 只由 World 实体发出（同实体有序）；inbox 去重，`NotifyPhase` 按 game sid 幂等，迟到 / 重投答“已报告” |
+| alliance `alliance.member_changed` → `HandleMemberChanged`（`internal/rpc/alliance/guard.go`） | `ResolveGuard` / `ClearGuard` 只改 effect 指名的预留或成员关系，按请求号幂等；同一联盟、同一守卫的记录共享实体键仍有序；跨联盟的同一玩家先退后入由守卫预留在业务上串起（退出的 `ClearGuard` 完成前新的 `ReserveGuard` 被拒），不靠 effect 顺序；随后的 `MemberNotice` 尽力而为，注释写明“丢失或乱序只让显示过时到下次登录或下一条通知” |
+| alliance `alliance.reservation_due` → `HandleReservationDue` | 先向联盟 `Settle`（结论一旦给出即为终局），再按结论解守卫；与成员变化 effect 的先后无关 |
+| alliance `alliance.war_declared` → `HandleWarDeclared` | `AcknowledgeWar` 按请求号幂等，拒绝为终局 |
+| game 侧收联盟通知（`internal/service/game/alliance_notice.go`） | 走总线消息，不是 effect；尽力而为、容忍乱序（同上） |
+| genre 夹具（`scripts/testdata/*`）、`service/`、`gameplay/` | 没有 `nest.Emit` / effect 消费者 |
 
 ## 3. 并发、失败与恢复的修改检查
 

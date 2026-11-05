@@ -60,7 +60,9 @@ type ProjectorOptions struct {
 	ReplayReadBytes    int // 一轮回放保留的逻辑字节上限；首条超大记录允许独占。
 	// ProjectionWorkers 是按实体分片并行投影的通道数上限（同时在途的投影调用数），0 取缺省 8，1 = 串行（含 Remote）。
 	// 只在 Store 实现 ParallelProjectionStore 时生效。
-	ProjectionWorkers  int
+	ProjectionWorkers int
+	// EffectOrder 是带 effect 的记录之间的投影顺序范围（只在并行投影时起作用），空取 EffectOrderEntity。
+	EffectOrder        EffectOrder
 	CheckpointRecords  int           // 连续成功记录的 ack 阈值；1 保留逐单元确认。
 	CheckpointInterval time.Duration // 投影单元之间检查，阻塞的存储调用仍由其 context 控制。
 	MaxUnackedRecords  uint64        // 0 不限制；拒绝发生于 WAL 准入前。
@@ -87,6 +89,20 @@ func DefaultProjectorOptions() ProjectorOptions {
 		ProjectionWorkers: 8,
 	}
 }
+
+// EffectOrder 决定带 effect 的记录之间按什么范围保持 WAL 顺序（配置 dataengine.projection.effect_order）。
+// 它只影响并行投影的冲突键：同一实体（文档 _id）、同一回执、同一 effect ID、同一事务的记录在两种取值下都按 WAL 顺序投影。
+type EffectOrder string
+
+const (
+	// EffectOrderEntity（缺省，维护者 2026-11-05）：带 effect 的记录只靠实体 / 回执 / effect ID / 事务键串行；不相干实体的
+	// 带 effect 记录可以在不同通道并行投影，它们的 effect 暂存（以及随后被 outbox 认领）的先后可能与 WAL 不同。
+	// outbox 的发布（多个认领循环、失败 Nack 后继续发后面的）与 JetStream 消费（共享 durable、并发在途、重投）本来就不保证全局顺序。
+	EffectOrderEntity EffectOrder = "entity"
+	// EffectOrderWAL（可选，缺省关闭）：全部带 effect 的记录共享一个顺序类，彼此按 WAL 顺序逐条投影，effect 进 outbox 的
+	// 暂存顺序与 WAL 相同（2026-11-05 之前的唯一行为）。只给依赖“不同实体的 effect 按 WAL 顺序暂存”的进程打开。
+	EffectOrderWAL EffectOrder = "wal"
+)
 
 type ProjectorStats struct {
 	Committed                uint64
@@ -177,6 +193,13 @@ func NewProjector(wal *nestwal.WAL, store ProjectionStore, options ProjectorOpti
 	}
 	if options.ProjectionWorkers == 0 {
 		options.ProjectionWorkers = defaults.ProjectionWorkers
+	}
+	switch options.EffectOrder {
+	case "":
+		options.EffectOrder = EffectOrderEntity
+	case EffectOrderEntity, EffectOrderWAL:
+	default:
+		return nil, fmt.Errorf("dataengine projector: unknown effect order %q (want %q or %q)", options.EffectOrder, EffectOrderEntity, EffectOrderWAL)
 	}
 	if options.CheckpointRecords < 0 || options.CheckpointInterval < 0 ||
 		(options.MaxUnackedRecords > 0 && options.WarnUnackedRecords > options.MaxUnackedRecords) {

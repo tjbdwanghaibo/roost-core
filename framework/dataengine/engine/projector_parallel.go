@@ -38,15 +38,23 @@ type conflictKey struct {
 }
 
 var (
-	// effectOrderKey 让带 effect 的记录之间保持 WAL 顺序：outbox 暂存顺序与串行投影相同（设计 §5，放宽须维护者决定）。
+	// effectOrderKey 让带 effect 的记录之间保持 WAL 顺序：outbox 暂存顺序与串行投影相同（设计 §5）。只在 EffectOrderWAL 时加；
+	// 缺省 EffectOrderEntity 不加，带 effect 的记录只靠实体 / 回执 / effect ID / 事务键串行（维护者 2026-11-05）。
 	effectOrderKey = conflictKey{kind: conflictClass, name: "effects"}
 	// serialRemoteKey：Store 没有声明 Remote 适配器可并发调用时，所有 Remote 记录之间串行。
 	serialRemoteKey = conflictKey{kind: conflictClass, name: "remote"}
 )
 
+// conflictScope 是冲突键里随 Store 能力与配置变化的两项：Remote 适配器是否可并发调用（否则 Remote 记录共享 serialRemoteKey），
+// 带 effect 的记录之间是否保持全局 WAL 顺序（EffectOrderWAL：共享 effectOrderKey）。
+type conflictScope struct {
+	remoteParallel    bool
+	effectsInWALOrder bool
+}
+
 // projectionConflictKeys 返回记录的冲突键；ok 为假表示记录不能参与并行调度（屏障），交给串行路径按现有规则处理
 // （任一 mutation 的 Key.ID 为 0）。
-func projectionConflictKeys(record coredata.CommitRecord, remoteParallel bool) (keys []conflictKey, ok bool) {
+func projectionConflictKeys(record coredata.CommitRecord, scope conflictScope) (keys []conflictKey, ok bool) {
 	keys = make([]conflictKey, 0, len(record.Mutations)+len(record.Receipts)+len(record.Effects)+2)
 	keys = append(keys, conflictKey{kind: conflictTransaction, name: string(record.ID[:])})
 	for _, mutation := range record.Mutations {
@@ -56,7 +64,7 @@ func projectionConflictKeys(record coredata.CommitRecord, remoteParallel bool) (
 		// 按 _id 取键比按完整文档身份粗：同 ID 不同集合的文档也被串起来，只多串行、不会漏。
 		// Remote mutation 的 Key.ID 等于 Remote.EntityID（ValidateMutation），其 DAO、删除、快照都属于该实体（RemoteCommit.Validate）。
 		keys = append(keys, conflictKey{kind: conflictEntity, id: mutation.Key.ID})
-		if mutation.Remote != nil && !remoteParallel {
+		if mutation.Remote != nil && !scope.remoteParallel {
 			keys = append(keys, serialRemoteKey)
 		}
 	}
@@ -66,7 +74,7 @@ func projectionConflictKeys(record coredata.CommitRecord, remoteParallel bool) (
 	for _, effect := range record.Effects {
 		keys = append(keys, conflictKey{kind: conflictEffect, name: effect.ID})
 	}
-	if len(record.Effects) > 0 {
+	if len(record.Effects) > 0 && scope.effectsInWALOrder {
 		keys = append(keys, effectOrderKey)
 	}
 	return keys, true
@@ -82,7 +90,7 @@ type replayWindow struct {
 
 // planReplayWindows 把一轮回放的记录切成串行段与并行窗口。屏障记录独占串行段；一段内互相冲突（分量数 < 2）
 // 或 workers ≤ 1 时整段串行，行为与改动前相同。相邻的串行段合并，保持串行路径的合批。
-func planReplayWindows(records []coredata.CommitRecord, workers int, remoteParallel bool) []replayWindow {
+func planReplayWindows(records []coredata.CommitRecord, workers int, scope conflictScope) []replayWindow {
 	if workers <= 1 || len(records) < 2 {
 		return []replayWindow{{start: 0, end: len(records)}}
 	}
@@ -109,7 +117,7 @@ func planReplayWindows(records []coredata.CommitRecord, workers int, remoteParal
 	}
 	for i := range records {
 		var ok bool
-		keys[i], ok = projectionConflictKeys(records[i], remoteParallel)
+		keys[i], ok = projectionConflictKeys(records[i], scope)
 		if !ok {
 			flushRun(i)
 			appendSerial(i, i+1)

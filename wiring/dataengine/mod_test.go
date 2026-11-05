@@ -239,6 +239,28 @@ func TestDataEngineProjectionWorkerConfig(t *testing.T) {
 	}
 }
 
+// dataengine.projection.effect_order：不写取 entity，wal（打开全局 effect 顺序）原样交给投影器，拼错的取值在加载配置时拒绝（enum 声明）。
+func TestDataEngineProjectionEffectOrderConfig(t *testing.T) {
+	for _, tc := range []struct {
+		value any
+		want  engine.EffectOrder
+		ok    bool
+	}{{nil, engine.EffectOrderEntity, true}, {"wal", engine.EffectOrderWAL, true}, {"entity", engine.EffectOrderEntity, true}, {"per_entity", "", false}} {
+		cfg := viper.New()
+		if tc.value != nil {
+			cfg.Set("dataengine.projection.effect_order", tc.value)
+		}
+		mod := NewMod()
+		err := mod.Init(cfg)
+		if (err == nil) != tc.ok {
+			t.Fatalf("effect_order=%v err=%v", tc.value, err)
+		}
+		if tc.ok && mod.cfg.projector.EffectOrder != tc.want {
+			t.Fatalf("effect_order=%v configured=%q want %q", tc.value, mod.cfg.projector.EffectOrder, tc.want)
+		}
+	}
+}
+
 // 生成工程在闲置交还租约前，按接口从 ModDataEngine 取得实体投影屏障；未装配的 Mod 不能回答“已落库”。
 func TestModPublishesEntityProjectionBarrier(t *testing.T) {
 	var published any = NewMod()
