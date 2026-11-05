@@ -217,7 +217,7 @@ effect outbox（同一批运行的 `/metrics`：暂存 = 成功的 `Join` / `Lea
 结论：
 
 1. **跨实例入会不再在一个 shard 上排成一条线**：p50 降到约十分之一；64 并发成功次数约 3 倍。修前 64 并发的失败是 `ReserveGuard` 在 shard 上排队超过 3 s。
-2. **修后跨实例的失败与 16 并发吞吐的抖动是 Remote outbox 代发的问题，不是本改动引入**：别的进程代发了写者的提交，写者进程的 tracker 停在 Applied，写等到 3 s 超时，延迟收尾持写门到 `finalize_projection_timeout`（30 s），同一联盟 / 守卫随后约 30 s 的写全部超时（[KNOWN-LIMITS](../../../maintenance/KNOWN-LIMITS.md) 对应条，含证据与可选修法）。修前同一现象出现在跨实例 `Leave`（3 轮里 2 轮有约 3 s 的请求，其中 1 轮 11 次失败），修后跨实例写不再被 shard 限速，`Join` 也碰到。
+2. **修后跨实例的失败与 16 并发吞吐的抖动是 Remote outbox 代发的问题，不是本改动引入**：别的进程代发了写者的提交，写者进程的 tracker 停在 Applied，写等到 3 s 超时，延迟收尾持写门到 `finalize_projection_timeout`（30 s），同一联盟 / 守卫随后约 30 s 的写全部超时（[KNOWN-LIMITS](../../../maintenance/KNOWN-LIMITS.md) 对应条，含证据与可选修法）。修前同一现象出现在跨实例 `Leave`（3 轮里 2 轮有约 3 s 的请求，其中 1 轮 11 次失败），修后跨实例写不再被 shard 限速，`Join` 也碰到。（单实例的 t 轮里另有一种现象：修前 2 轮各有一次 128 个 `handlerAllianceRemove` 同时 3 s 超时，是全体一次、不是逐实体持续约 30 s，重试后成功，原因未查。）
 3. **同实例命令数不变**（修前这条路径已不写 effect）。**同实例重试版吞吐修后偏低、未确认原因**：6 轮新玩家 `Join` 128 并发修前 296～435（中位约 374）、修后 238～410（中位约 296），`Leave` 128 并发约 380 → 约 300；但同实例路径的代码差别只有“写成功后发一条 core NATS 通知”替代“提交器发 best_effort effect”，Mongo 命令数相同，修后连纯 Mongo 的 `mark_published` 均值也慢约 12%（18.3 → 20.5 ms），更像同机负载差异；要在安静的机器上再比。
 
 证据（未提交）：`artifacts/perf/runs/{m,x,y,t}-{before,after}-<轮>/`、`artifacts/perf/runs/inv-1/`（延迟收尾日志）、`artifacts/perf/runs/q-after-1/`（goroutine 栈），探针 `artifacts/probe/`（`joincross_test.go.txt` 加了 `JOINCROSS_CONC`、`JOINCROSS_QUIT`）。
