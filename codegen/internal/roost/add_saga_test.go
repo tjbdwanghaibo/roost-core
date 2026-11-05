@@ -533,9 +533,10 @@ func fillSagaNativeBusiness(t *testing.T, root string) {
 	notices := mongoClient.Database(databases.Physical(db.DatabaseMain)).Collection("level_up_notices")
 	consumer := kitdataengine.EffectConsumer{`)
 	consumer = replaceOnce(t, consumerRel, consumer, `		_ = event
-		// TODO: act on the effect. Until this is written the effect is redelivered
-		// with backoff instead of being acknowledged unhandled.
-		return fmt.Errorf("player.level_up consumer is not implemented; effect %s will be redelivered", envelope.EffectID)`, `		_, err := notices.InsertOne(ctx, bson.M{"_id": envelope.EffectID, "player_id": event.PlayerID, "level": event.Level})
+		// TODO: act on the effect. Until this is written a reliable effect is
+		// redelivered with backoff instead of being acknowledged unhandled (a best
+		// effort one is counted as failed).
+		return fmt.Errorf("player.level_up consumer is not implemented; effect %s is not handled", envelope.EffectID)`, `		_, err := notices.InsertOne(ctx, bson.M{"_id": envelope.EffectID, "player_id": event.PlayerID, "level": event.Level})
 		return err`)
 	writeProjectFile(t, root, consumerRel, consumer)
 }
