@@ -170,6 +170,124 @@ func TestMongoOutboxStoreClaimTakesLeaseByTokenCAS(t *testing.T) {
 	}
 }
 
+// outboxCalls 是 outbox 集合上全部方法的调用次数之和（每次一个 Mongo 往返）。
+func outboxCalls(outbox *mongotest.Collection) int {
+	total := 0
+	for _, n := range outbox.Calls {
+		total += n
+	}
+	return total
+}
+
+// 认领一批 effect 的往返次数与批大小无关：查候选、一次条件 UpdateMany、按本次认领标记读回。原先每个候选一次
+// FindOneAndUpdate（64 条 65 次往返），多个 worker 还在同一批候选上逐条撞车，outbox 的发布速率被单条往返时延封顶
+// （联盟 Join 实测 2 个与 8 个 worker 都约 40 条/s，2026-11-05）。租约语义不变：已有有效租约的候选不被改写，
+// token 逐文档前进，返回的租约就是库里的租约。
+func TestMongoOutboxStoreClaimsABatchInConstantRoundTrips(t *testing.T) {
+	store, outbox := newOutboxStoreTest(t)
+	now := time.Now().UTC()
+	const due = 64
+	for i := range due {
+		seedOutboxEffect(t, outbox, fmt.Sprintf("effect-%02d", i), now.Add(-time.Minute+time.Duration(i)*time.Millisecond), now.Add(-time.Minute), int64(i))
+	}
+	// 两条已被别的 worker 以有效租约认领：不能被这次认领改写。
+	for _, id := range []string{"effect-03", "effect-40"} {
+		if _, err := outbox.UpdateOne(context.Background(), bson.M{"_id": id}, bson.M{"$set": bson.M{"lease_owner": "worker-2", "lease_until": now.Add(time.Minute)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := outboxCalls(outbox)
+	items, err := store.Claim(context.Background(), "worker-1", now, due, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls := outboxCalls(outbox) - before; calls > 3 {
+		t.Fatalf("claiming %d effects took %d round trips (%v), want at most 3", len(items), calls, outbox.Calls)
+	}
+	if len(items) != due-2 {
+		t.Fatalf("claimed %d effects, want %d (two hold a live lease)", len(items), due-2)
+	}
+	for i, item := range items {
+		if item.Effect.ID == "effect-03" || item.Effect.ID == "effect-40" {
+			t.Fatalf("claimed %s under another worker's live lease", item.Effect.ID)
+		}
+		if i > 0 && items[i-1].Effect.ID >= item.Effect.ID {
+			t.Fatalf("claim order %s before %s, want available_at order", items[i-1].Effect.ID, item.Effect.ID)
+		}
+		var seeded int
+		if _, err := fmt.Sscanf(item.Effect.ID, "effect-%d", &seeded); err != nil {
+			t.Fatal(err)
+		}
+		stored, _ := outbox.Lookup(item.Effect.ID)
+		if item.Lease != (OutboxLease{Owner: "worker-1", Token: uint64(seeded) + 1}) || stored["lease_owner"] != "worker-1" {
+			t.Fatalf("%s lease=%+v stored owner=%v, want worker-1 token %d", item.Effect.ID, item.Lease, stored["lease_owner"], seeded+1)
+		}
+	}
+	if stored, _ := outbox.Lookup("effect-03"); stored["lease_owner"] != "worker-2" {
+		t.Fatalf("live lease of effect-03 rewritten: %v", stored)
+	}
+	again, err := store.Claim(context.Background(), "worker-2", now, due, time.Minute)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("second claim took %d leased effects, err=%v", len(again), err)
+	}
+}
+
+// 一批已投递的 effect 一次往返确认（每条仍按 _id + 租约 owner / token 删除）；租约已不属于本 worker 的那条不删，
+// 报 ErrOutboxLeaseConflict，其余照删。
+func TestMongoOutboxStoreAckManyDeletesByLeaseInOneRoundTrip(t *testing.T) {
+	store, outbox := newOutboxStoreTest(t)
+	now := time.Now().UTC()
+	for i := range 8 {
+		seedOutboxEffect(t, outbox, fmt.Sprintf("effect-%d", i), now.Add(-time.Second), now, 0)
+	}
+	items, err := store.Claim(context.Background(), "worker-1", now, 8, time.Minute)
+	if err != nil || len(items) != 8 {
+		t.Fatalf("claim items=%d err=%v", len(items), err)
+	}
+	acks := make([]OutboxAck, 0, len(items))
+	for _, item := range items {
+		acks = append(acks, OutboxAck{EffectID: item.Effect.ID, Lease: item.Lease})
+	}
+	acks[5].Lease.Token-- // 一条过期租约
+	before := outboxCalls(outbox)
+	deleted, err := store.AckMany(context.Background(), acks)
+	if calls := outboxCalls(outbox) - before; calls != 1 {
+		t.Fatalf("acking %d effects took %d round trips (%v), want 1", len(acks), calls, outbox.Calls)
+	}
+	if deleted != 7 || !errors.Is(err, ErrOutboxLeaseConflict) {
+		t.Fatalf("deleted=%d err=%v, want 7 and ErrOutboxLeaseConflict", deleted, err)
+	}
+	if _, ok := outbox.Lookup(acks[5].EffectID); !ok || outbox.Len() != 1 {
+		t.Fatalf("stale lease removed or others kept: len=%d", outbox.Len())
+	}
+}
+
+// worker 用 MongoOutboxStore 时一批只确认一次（AckMany），不逐条 DeleteOne。
+func TestOutboxWorkerAcknowledgesABatchInOneRoundTrip(t *testing.T) {
+	store, outbox := newOutboxStoreTest(t)
+	now := time.Now().UTC()
+	for i := range 16 {
+		seedOutboxEffect(t, outbox, fmt.Sprintf("effect-%02d", i), now.Add(-time.Second), now, 0)
+	}
+	publisher := &successfulOutboxPublisher{}
+	worker, err := NewOutboxWorker(store, publisher, OutboxWorkerOptions{Owner: "worker-1", BatchSize: 16, RetryMin: time.Millisecond, BacklogInterval: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker.now = func() time.Time { return now }
+	worker.backlogSampledAt.Store(now.UnixNano())
+	processed, err := worker.RunOnce(context.Background())
+	if err != nil || processed != 16 || len(publisher.ids) != 16 {
+		t.Fatalf("processed=%d published=%d err=%v", processed, len(publisher.ids), err)
+	}
+	if outbox.Len() != 0 || worker.Stats().Published != 16 {
+		t.Fatalf("left=%d stats=%+v", outbox.Len(), worker.Stats())
+	}
+	if outbox.Calls["DeleteOne"] != 0 || outbox.Calls["BulkWrite"] != 1 {
+		t.Fatalf("acks: %v, want one BulkWrite and no DeleteOne", outbox.Calls)
+	}
+}
+
 func TestMongoOutboxStoreSkipsEffectsNotYetAvailable(t *testing.T) {
 	store, outbox := newOutboxStoreTest(t)
 	now := time.Now().UTC()

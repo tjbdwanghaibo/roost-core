@@ -120,6 +120,10 @@ func NewOutboxWorker(store OutboxStore, publisher OutboxPublisher, options Outbo
 
 // RunOnce 认领并投递一批 effect。投递失败经 Nack 持久化退避时间，不让本次调用失败，
 // 也不阻挡实体写入；只有存储（Claim/Ack/Nack/积压采样）错误才返回。
+//
+// 一批内按认领顺序逐条同步投递（等 PubAck），顺序与原先相同；存储实现 OutboxBatchAcker 时投递成功的那些在整批投完后
+// 一次确认（AckMany），否则逐条 Ack。确认推迟到批尾只拉长“已投递、未删除”的窗口（远短于租约）：其间崩溃时这些
+// effect 在租约到期后重投，代理按 effect ID（MsgID）去重，与逐条确认之间崩溃的结果相同。
 func (worker *OutboxWorker) RunOnce(ctx context.Context) (int, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -131,6 +135,8 @@ func (worker *OutboxWorker) RunOnce(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	worker.claimed.Add(uint64(len(items)))
+	batchAcker, _ := worker.store.(OutboxBatchAcker)
+	var acks []OutboxAck
 	for i := range items {
 		item := items[i]
 		// 逐跳计时：投影暂存 effect → 本次发布开始（轮询 / 唤醒与认领），发布本身（同步等 PubAck），Ack 删除。
@@ -144,11 +150,15 @@ func (worker *OutboxWorker) RunOnce(ctx context.Context) (int, error) {
 			next := worker.now().UTC().Add(worker.retryDelay(item.Attempt))
 			if nackErr := worker.store.Nack(ctx, item.Effect.ID, item.Lease, next, err.Error()); nackErr != nil {
 				worker.storeFailures.Add(1)
-				return i, nackErr
+				return i, errors.Join(nackErr, worker.ackMany(ctx, batchAcker, acks))
 			}
 			continue
 		}
 		hoptrace.Mark("effect-published/", item.Effect.ID)
+		if batchAcker != nil {
+			acks = append(acks, OutboxAck{EffectID: item.Effect.ID, Lease: item.Lease})
+			continue
+		}
 		ackStart := hoptrace.Now()
 		if err := worker.store.Ack(ctx, item.Effect.ID, item.Lease); err != nil {
 			worker.storeFailures.Add(1)
@@ -157,11 +167,29 @@ func (worker *OutboxWorker) RunOnce(ctx context.Context) (int, error) {
 		hoptrace.Since("h10.de.outbox_ack", ackStart)
 		worker.published.Add(1)
 	}
+	if err := worker.ackMany(ctx, batchAcker, acks); err != nil {
+		return len(items), err
+	}
 	if err := worker.maybeRefreshBacklog(ctx, worker.now().UTC()); err != nil {
 		worker.storeFailures.Add(1)
 		return len(items), err
 	}
 	return len(items), nil
+}
+
+// ackMany 一次确认本批已投递的 effect（RunOnce 的批尾，或中途存储出错时先确认已投递的那些），按实际删除条数计已发布。
+func (worker *OutboxWorker) ackMany(ctx context.Context, acker OutboxBatchAcker, acks []OutboxAck) error {
+	if acker == nil || len(acks) == 0 {
+		return nil
+	}
+	ackStart := hoptrace.Now()
+	deleted, err := acker.AckMany(ctx, acks)
+	hoptrace.Since("h10.de.outbox_ack", ackStart)
+	worker.published.Add(uint64(max(deleted, 0)))
+	if err != nil {
+		worker.storeFailures.Add(1)
+	}
+	return err
 }
 
 // maybeRefreshBacklog 在全部 worker 之间限流积压采样：每个 BacklogInterval 一次足够
