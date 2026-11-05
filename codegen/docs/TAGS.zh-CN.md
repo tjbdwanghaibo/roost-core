@@ -157,6 +157,7 @@ type Player struct {
 | `subjectPacker` | packer 工厂表达式；只有 `sync=true` 时可写 |
 | `service` | 归属服务：只有这个服务写这个 kind（见下段）。不写时保持原行为，任何带 Nest 的服务都能写 |
 | `preload=startup` | 起服预加载：归属服务起服时加载持久 owner 是本 sid 的这个 kind 的全部实体并登记路由。只能写在 `remote=managed` 且声明了 `service=` 的实体上；不写就按需冷加载 |
+| `snapshots=none` | 不写、不发布 Remote 快照（缺省 `published`）：提交只写 DAO 文档，没有 `_remote_entity_snapshots` 文档、L2 条目与兴趣广播。只能写在 `remote=managed` 上；指向它的 `//roost:mirror` 在生成期被拒，运行期读它的 Mirror / RemoteViewRef 报 `entity.ErrRemoteSnapshotsDisabled`。owner 冷加载、接管、迁移、缩容都读 DAO 集合与所有权记录，不受影响；只给没有任何读方的 kind 用（game-demo 的联盟守卫 `AllianceMember`） |
 | `comp:"CompTypeProfile"` | 组件类型号表达式；可加 `,cold` 声明按需初始化 |
 | `dao:"players"` | DAO 装配名称；可加 `,cold` 声明按需初始化，不是 DAO 定义字段的能力选项 |
 

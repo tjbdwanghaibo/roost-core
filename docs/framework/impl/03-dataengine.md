@@ -79,8 +79,8 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 | 通用订阅 `wiring/dataengine.SubscribeEffects` 与生成器骨架（`roost add effect`） | 共享 durable、`MaxAckPending` 缺省 256 并发在途、失败重投；Mongo inbox 按 EffectID 去重；框架从未承诺 effect 全局顺序（[NEST_TRANSACTION_WAL](../NEST_TRANSACTION_WAL.md) 只承诺至少一次与 `Effect.ID` 去重） |
 | game-demo `player.level_up` → 升级邮件（`level_up_mail.go`） | 每条 effect 独立发一封邮件、按 EffectID 幂等；同一玩家的 effect 同实体，仍按 WAL 顺序 |
 | game-demo `activity.phase_due` → `NotifyPhaseDue`（`activity.go`） | 只由 World 实体发出（同实体有序）；inbox 去重，`NotifyPhase` 按 game sid 幂等，迟到 / 重投答“已报告” |
-| alliance `alliance.member_changed` → `HandleMemberChanged`（`internal/rpc/alliance/guard.go`） | `ResolveGuard` / `ClearGuard` 只改 effect 指名的预留或成员关系，按请求号幂等；同一联盟、同一守卫的记录共享实体键仍有序；跨联盟的同一玩家先退后入由守卫预留在业务上串起（退出的 `ClearGuard` 完成前新的 `ReserveGuard` 被拒），不靠 effect 顺序；随后的 `MemberNotice` 尽力而为，注释写明“丢失或乱序只让显示过时到下次登录或下一条通知” |
-| alliance `alliance.reservation_due` → `HandleReservationDue` | 先向联盟 `Settle`（结论一旦给出即为终局），再按结论解守卫；与成员变化 effect 的先后无关 |
+| alliance `alliance.member_changed` → `HandleMemberChanged`（`internal/rpc/alliance/guard.go`） | 2026-11-05 起是 best_effort（不进 WAL / outbox，本表的投影顺序与它无关）：只给玩家的 game 服发 `MemberNotice`，丢失或乱序只让显示过时到下一条通知或下次登录；守卫收尾不再经 effect（下节“effect 持久性”） |
+| alliance `alliance.reservation_due` → `HandleReservationDue` | 2026-11-05 起是 best_effort：向联盟 `Settle`（定论即终局）后按结论自愈守卫；丢了由下一个碰到守卫的请求自愈 |
 | alliance `alliance.war_declared` → `HandleWarDeclared` | `AcknowledgeWar` 按请求号幂等，拒绝为终局 |
 | game 侧收联盟通知（`internal/service/game/alliance_notice.go`） | 走总线消息，不是 effect；尽力而为、容忍乱序（同上） |
 | genre 夹具（`scripts/testdata/*`）、`service/`、`gameplay/` | 没有 `nest.Emit` / effect 消费者 |
@@ -102,12 +102,31 @@ readAggregate用`LoadSpec.IncludeDeleted`读到墓碑（MongoStore默认过滤`_
 | 消费者 | Key | 依据 |
 | --- | --- | --- |
 | game-demo `player.level_up` → 升级邮件（`level_up_mail.go`） | 玩家 ID | 每条独立发一封邮件、`RequestID` = EffectID 幂等；同一玩家仍按到达顺序 |
-| alliance `alliance.member_changed` → `HandleMemberChanged` | 玩家 ID | 只改这个玩家的守卫（`ResolveGuard` / `ClearGuard`，按请求号幂等）并给他发通知；不同玩家的守卫与通知互不相干。同一玩家的入会 / 退出 / 再入会同 Key、在本进程按到达顺序（比原来只靠守卫预留串起更强）；跨实例仍靠守卫预留 |
-| alliance `alliance.reservation_due` → `HandleReservationDue` | 玩家 ID | 先向联盟 `Settle`（结论终局，联盟侧按路由键有序），再按结论解这个玩家的守卫；同一联盟不同玩家的 `Settle` 并发到达联盟，由联盟实体串行裁决 |
+| alliance `alliance.member_changed` → `HandleMemberChanged`（best_effort，2026-11-05 起） | 玩家 ID | 只给这个玩家的 game 服发通知；同一玩家的通知同 Key、在本进程按到达顺序，乱序只让显示过时 |
+| alliance `alliance.reservation_due` → `HandleReservationDue`（best_effort，2026-11-05 起） | 玩家 ID | 向联盟 `Settle`（期限已过，定论即终局，联盟侧按路由键有序），再用条件守卫事务按结论自愈这个玩家的守卫；同一联盟不同玩家的 `Settle` 由联盟实体串行裁决 |
 | alliance `alliance.war_declared` → `HandleWarDeclared` | 敌方联盟 ID | `AcknowledgeWar` 按请求号幂等，拒绝为终局；同一敌方联盟仍有序 |
 | `roost add effect` 生成的骨架 | 业务传给 `Emit<Topic>(key, …)` 的 key | 骨架注释与 `roost help effect` 写明“同 Key 有序、不同 Key 并发、无 Key 不排序、跨副本不保证” |
 
 不经 `SubscribeEffects`、不受影响的：saga 启动中继 `SubscribeNestStarts`（自己的 `Workers`，本来就不保证顺序）；game-demo `activity.phase_due`（`nestwal.SubscribeJetStreamEffects` 直接订阅，仍在回调里逐条）。没有发现依赖跨实体顺序的消费者。
+
+### effect 持久性（reliable / best_effort）与消费顺序（entity / none）
+
+维护者 2026-11-05 方案一：联盟 Join 每次约 22 条 Mongo 命令里约 5 条花在一条只用来发尽力而为通知的可靠 effect 上（outbox 查重 + 插入、认领 / 删除、消费方 inbox 事务）。effect 因此分两个维度：
+
+**持久性由生产方声明**，在 `nest.Effect.Delivery`（= `dataengine.Effect.Delivery`，`EffectReliable` 是零值 / 缺省，`EffectBestEffort`）。放在 Effect 上而不是消费者配置里：`nest.Emit` 是唯一生产入口，回滚、提交被拒、结果未知都在事务里判定，只有生产方知道一次写什么时候“不会再丢”；生成器把它声明成 effect 文件里的 `Delivery<Topic>` 常量，`Emit<Topic>` 带上它，消费者骨架引用同一常量，两端只有一处声明。
+
+- **reliable**：逐字不变——effect 进 CommitRecord、投影事务暂存 outbox、发布到效果流、消费方 Mongo inbox 按 EffectID 去重，至少一次。
+- **best_effort**（[rollback.go](../../../framework/nest/rollback.go) `Emit` / `scheduleBestEffort`，[execution.go](../../../framework/nest/execution.go) `commitDurable` / `commitPipelined`）：
+  - 不进 CommitRecord（`ValidateCommitRecord` 拒绝记录里的非 reliable effect），没有 outbox、inbox、回执，零额外 Mongo 命令。
+  - **发送点 = 这次写的持久点**，与 `AfterCommit` 同一时刻、同一路径：strict 在 WAL fsync 成功、Guard 解锁之后；带 Remote 批次的事务在 Remote 持久结论之后（`remoteWriteBatch.Commit` 等到投影器的权威确认，与答复调用方同一时刻；不挂在本地 WAL fsync 上，因为被 fence 的旧 owner 的 WAL 写可能永远到不了权威）；pipelined 在票据持久（durable LSN 越过）之后。`async` 事务一旦 Emit best_effort 就升为 strict（async 的提交点早于 fsync，按它发出的通知可能对应一条丢掉的写）；`memory` 事务没有持久变更，Commit 成功即发。原则：绝不通知一个可能丢掉的改动。
+  - 回滚、提交被拒（`ErrCommitRejected`）、结果未知（indeterminate）都不发：回调只在 Commit 成功的路径上登记。提交器没有发送能力（不实现 `nest.BestEffortEffectPublisher`）时这次提交以 `ErrBestEffortPublisherRequired` 被拒，不静默丢。
+  - 发送：[wiring/dataengine](../../../wiring/dataengine/effects_best_effort.go) 的 Mod 实现 `PublishBestEffort`，**只入队**（容量 `dataengine.effects.best_effort_queue`，缺省 8192；回调可能在快池上，不能等），一个后台 goroutine 经 core NATS 发到 `<dataengine.effects.subject_prefix>_best_effort.<topic>`（必须在效果流的 `<prefix>.>` 之外，否则会被 JetStream 存下）。
+  - **至多一次**：持久之后、发出之前进程崩溃；停机开始后才入队的（`stopped`；停机前已入队的在停机 ctx 内发完，ctx 先到时剩下的随 NATS 连接关闭而失败）；队列满（`dropped`）；连接断开或发送失败（`failed`）；进程没装 NATS（`unavailable`，每次入队 WARN，不让事务失败）；此刻没有订阅者——都会丢；计数 `dataengine.effects.best_effort_total{result}`。只用于“丢了有别处补”的通知。
+- **消费**：`EffectConsumer.Delivery` 与生产方一致。best_effort 订阅是 core NATS 队列订阅（队列组 = `Durable`），没有 inbox、没有重投：handler 出错或 panic 只记日志与 `dataengine.effect_consumer.handled_total{consumer,result="failed"}`，信封解不开计 `poison`；生命周期与 `SubscribeEffects` 相同（登记成 App 输入、`Drain` 等在跑的结束）。
+- **消费顺序 `EffectConsumer.Order`**（两种持久性都适用）：`entity`（缺省）即上一节“同 Key 有序、不同 Key 并发”；`none` 不按 Key 排队（`KeyedDispatcher` 的空键），只受 Workers 上限。全局顺序仍只有生产端 `dataengine.projection.effect_order: wal`，不在消费者选。
+- 回归：[transaction_test.go](../../../framework/nest/transaction_test.go) `TestBestEffortEffectIsPublishedOnlyAfterTheCommitIsDurable`（async 升 strict、记录里没有 best_effort）、`TestBestEffortEffectIsNotPublishedWithoutACommit`（handler 失败 / 提交被拒 / 结果未知 / 没有发送能力）；[pipelined_commit_test.go](../../../framework/nest/pipelined_commit_test.go) `TestBestEffortEffectWaitsForThePipelinedTicket`；[effects_test.go](../../../wiring/dataengine/effects_test.go) `TestSubscribeEffectsWithOrderNoneDoesNotQueueByEntity`、`TestSubscribeEffectsBestEffortHasNoInboxAndNoRedelivery`、`TestBestEffortPublisherSendsAfterEnqueueAndDropsWhenFull`。变异核对（发送挪到持久提交之前）：strict / pipelined / 被拒 / 结果未知四条全红。
+
+仓内的 best_effort 生产方只有 game-demo 联盟的 `alliance.member_changed`（成员通知）与 `alliance.reservation_due`（预约期限通知）；联盟守卫的收尾不再经 effect，改为“守卫是名单的缓存、碰到时自愈”（[联盟服务方案](../../maintenance/FEATURE-2026-11-04-alliance-service.md)）。
 
 ## 3. 并发、失败与恢复的修改检查
 

@@ -195,17 +195,42 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 
 ### 2.5 成员关系与“一人一盟”（决定 1）
 
-- **权威**：联盟的成员表。Player 上不存 `GuildID`。
+- **权威**：联盟的成员表。Player 上的 `GuildID` 只是玩家自己的副本（2026-11-05 起持久，见下文），不是权威。
 - **一人一盟是跨联盟的约束**：两个联盟可能在不同实例，同一玩家同时被两个联盟批准时，单个联盟的事务挡不住。用 `AllianceMember` 做守卫，两步完成，执行方是处理批准的联盟所在实例：
   1. 在玩家的 `AllianceMember` 上预约“加入联盟 A，RequestID = r”（已在别的联盟或有别的未完成预约就拒绝）；
   2. 在联盟 A 的事务里加成员，写回执 r；同一事务 `Emit` 一个“成员已变化”effect；
   3. effect 消费者在玩家的 `AllianceMember` 上把预约确认成“在联盟 A”。第 2 步被明确拒绝时释放预约。
-  预约带期限；期限到了仍未确认，守卫方先向联盟 A 的权威问“玩家是否在成员表里”，按权威确认或释放，不按超时直接释放。两个实体在同一实例时三步合成一笔多实体事务。退盟、踢人反向：先改成员表，再由 effect 清 `AllianceMember`。
+  预约带期限；期限到了仍未确认，守卫方先向联盟 A 的权威问“玩家是否在成员表里”，按权威确认或释放，不按超时直接释放。两个实体在同一实例时三步合成一笔多实体事务。退盟、踢人反向：先改成员表，再由 effect 清 `AllianceMember`。（2026-11-05 起第 3 步与退盟的清除改为直接调用 + 惰性自愈，不再用 effect，见 2.5A。）
 - **跨实例照旧两步，新增的实例间调用一律走路由 RPC**（2026-11-04 路由决定）：`AllianceMember` 按玩家 ID，可能和联盟在不同实例，阶段 3 已实现的“预约 → 确认 → 期限到了按联盟权威收尾”保留。联盟实例对守卫的调用（预约、确认、释放、清除）与守卫方向联盟问权威，都按目标的完整 ID 走路由 RPC（2.3），不再按槽位表找实例。
 - **守卫还不存在时**（玩家从没入过盟）：由发起调用的联盟实例在本地新建并认领，入会预约与联盟在同一实例，常见情况就是一笔多实体事务。认领是原子 CAS：两个实例并发新建同一个守卫时只有一个成为 owner，输的一方在写准入被 fence，按改投改走路由 RPC。
-- **game 进程怎么知道“我在哪个盟”**：`AllianceMember` 的 ID 由玩家 ID 算出，直接读它的 Mirror，再按其中的联盟 ID 读联盟 Mirror；不需要查找服务。
-- **附近玩家头顶的公会**：`PlayerDao.GuildID` 改为 `dao:"nopersist,sync"` 的显示字段，登录时从 Mirror 填，收到成员变化通知时更新。它只用于显示与同步，任何写判断都不读它。
-- **在线通知**：成员变化 effect 的消费者按成员记录里的原服 sid 经 Bus 发给该 game 进程（尽力投递）；game 进程更新显示字段并推客户端。玩家不在线或消息丢失时，下次登录从 Mirror 补齐。
+- **game 进程怎么知道“我在哪个盟”**（2026-11-05 改，原为读守卫的 Mirror）：守卫不再同步给 game（`AllianceMember` 声明 `snapshots=none`），game 只镜像联盟。“在哪个盟”是玩家自己的副本 `PlayerDao.GuildID`（`persist,sync`）：玩家自己的入会 / 退会 / 建盟成功后在玩家事务里写（`ShowGuild`；建盟在 `guild_op_status` 看到 saga 完成时写），在线时收到成员通知更新，登录时对照该联盟的 Mirror 名单清掉已不在的。它只用于显示与建议性预检，任何写判断都在 alliance 服务按名单做。缺口：离线时被批准入会，通知没人收，副本要到下一条通知或玩家自己的公会操作才显示（KNOWN-LIMITS）。
+- **附近玩家头顶的公会**：同一个 `PlayerDao.GuildID`（sync）。
+- **在线通知**：成员变化以 best_effort effect 在变更持久之后发出，消费者按成员记录里的原服 sid 经 Bus 发给该 game 进程（尽力投递）；game 进程更新副本并推客户端。
+
+### 2.5A 守卫是名单的缓存：惰性自愈（2026-11-05）
+
+维护者 2026-11-05 决定：联盟服务里不用可靠 effect 收尾守卫（原第 2、3 步的“成员已变化”effect 与期限的可靠通知），跨实例的守卫收尾也做成自愈。框架层 effect 的 reliable / best_effort 与 entity / none 照做，reliable 仍是缺省（[impl/03](../framework/impl/03-dataengine.md#effect-持久性reliable--best_effort与消费顺序entity--none)）。
+
+**不变量**：守卫是名单（`Alliance.Members`，权威）的缓存，只允许“过时地占着”，绝不允许“过时地空着”。写成式子：玩家 P 在联盟 X 的名单里、座位的 `JoinRequestID` 是 J ⇒ P 的守卫是 joined(X, J) 或 pending(X, J)。反过来不要求：守卫可以占着一个名单里已经没有 P 的联盟（收尾丢了），由下一个碰到它的请求纠正。
+
+**怎么做**（`internal/rpc/alliance` 的 `healGuard`，在服务层的 I/O 段里，不在守卫 handler 里——问权威是 RPC，快池上的 Nest handler 不能等）：
+
+1. 同实例：名单与守卫在一个多实体事务里改，没有可丢的收尾（也不再产生任何可靠 effect）。
+2. 跨实例两步成功后服务直接调守卫的 `ResolveGuard` / `ClearGuard`（`finishGuard`，尽力而为；丢了计 `alliance.guard_finish_lost_total`）。
+3. Join / Found 的守卫检查（`deferHeld`：守卫被别的联盟或请求占着时 handler 不记回执、答 `GuardHeld`）、`ReserveGuard`、`ClaimReward`（`verifyGuard`）、迁移前的过期预约（`guardPending`）、预约期限的 best_effort 通知（`HandleReservationDue`）碰到守卫被 (X, R) 占着时：
+   - 向 X 问 `Settle(X, R, P, decide)`（一个联盟事务）：答 P 现在是否坐在 R 名下（`Seated`）、R 有没有结论（`Found`）。`decide` 在“守卫是 joined”或“预约已过期限”时为真：X 从没定论的 R 记成 `alliance_expired`（P 坐在 R 名下而回执已清理的，记成功），之后同一 R 的准入只回放结论；期限内的预约 `decide` 为假，只问不写——那次入会可能还在路上，截断它会把两个联盟并发批准变成“过期”。X 还没有所有权记录（建盟在途）时，不定论的问话直接答“没有结论”，不去认领。
+   - pending(X, R)：有结论或已坐下才 `ResolveGuard(R, joined=Seated)`；都没有就保持占着（照原判断答“已在入会中”）。joined(X, R) 而没坐下：`ClearGuard(X, R)`；坐着就不动。
+   - `ResolveGuard` / `ClearGuard` 是条件事务：守卫仍是观察到的 (X, R) 才改。之后照原判断重做一次（`deferHeld=false`）。
+4. 预约期限：`AllianceShard` 的持久定时器到期发一条 best_effort 的 `alliance.reservation_due`，消费者做第 3 步；丢了由下一个碰到守卫的请求做。
+
+**为什么清空 / 释放守卫之后不会“过时地空着”**（P 坐在 X 名下 ⇒ 守卫占着 X）：
+
+- 清 joined(X, R) 或释放 pending(X, R) 的前提是：在 X 的一个事务里读到“P 不坐在 R 名下”，且 R 在 X 上已有结论（deciding Settle 当场记下，或 X 早就定论；不定论的问话只在 R 已有回执时才释放）。有结论之后，X 上任何以 R 为请求号的准入都只回放这个结论，不会再让 P 坐到 R 名下。
+- P 要坐到 X 的另一个请求 R' 名下：同实例入会要在同一个事务里看到守卫空着；跨实例入会要守卫为 R' 预约着。守卫一直是 (X, R) 到条件事务改它为止，这两条都不可能，所以“读到没坐下”到“条件事务清守卫”之间 P 不会坐进 X。
+- 条件事务只在守卫仍是 (X, R) 时生效：两个实例并发自愈同一个守卫，后到的看到守卫已变（或已空、或被新的预约占着）就什么也不改；自愈与直接收尾并发同理。并发 Join：都要经过守卫（同实例事务或预约），守卫上的事务按实体锁串行，自愈只把 (X, R) 换成空，不会让两个入会同时看到空守卫后都成功——看到空守卫的那一个在自己的事务里占住它，另一个再看到的是它。
+- 唯一假设（自愈之前就有）：回执清理（`alliance.receipt_retention`）之后不再用同一个请求号重试。
+
+回归（`internal/rpc/alliance`）：`TestGuardHealsAfterALostCrossInstanceClear`（修前：`join after a lost clear: … player is already in an alliance or joining one`）、`TestGuardHealsALostReservationResolution`（坐下了确认丢失：下一次 Join 经 `Settle` 确认守卫，修前 `guard … PendingAllianceID:1 … want confirmed in 1`；没坐下：期限内的 Join 被拒、预约不被截断，过期限后 Join 经 `Settle` 定论为过期、释放并加入别的联盟，迟到的准入答 `alliance_expired`）、`TestGuardHealingNeverLeavesASeatedPlayerUnguarded`（两实例并发入退盟、三分之一的直接收尾被丢：一人至多一盟、在名单里则守卫占着该联盟；变异“自愈无条件清 joined”时红：`player 300 is a member of [1 2]`）、`TestOnePlayerOneAllianceAcrossInstances`（期限内不定论的约束：曾因自愈截断在途入会红过一次，答 `alliance_expired`）、`TestSameInstanceMembershipRecordsNoReliableEffect`（修前：`same-instance found / join / leave recorded reliable effects [alliance.member_changed ×3], want none`）；e2e 的一人一盟断言改为“在名单里 ⇒ 守卫占着该联盟”立即判错 + settle 窗口内收敛。
 
 ### 2.6 要改玩家数据的操作：Saga（决定 1）
 

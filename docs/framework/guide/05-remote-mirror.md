@@ -44,6 +44,8 @@ Mongo 是数据权威，L1 是进程缓存，Redis L2 是共享快照缓存及�
 
 推送丢失、L1/L2 缺失、重启、撤销兴趣均要依靠版本/代际与权威回源恢复。缓存 TTL 只表达寿命，不证明内容已经追到最新提交。正常读、强一致读、只读副本使用场景应分别配置。
 
+**没有读方的 kind 可以不发布快照**（维护者 2026-11-05）：`//roost:entity remote=managed snapshots=none` 的提交只写 DAO 文档——不写 `_remote_entity_snapshots`、不进 L2、不广播。快照只被 Mirror 读与 RemoteViewRef 解析读；owner 冷加载、接管（同 sid 拉起、所有权过期）、`TransferRemoteOwnership` 迁移与缩容枚举都读 DAO 集合与 `_remote_entity_meta`，不受影响。指向这种 kind 的 `//roost:mirror` 在生成期被拒，运行期读它报 `entity.ErrRemoteSnapshotsDisabled`。game-demo 的联盟守卫 `AllianceMember` 就是这样：game 进程只镜像联盟，玩家所在公会记在 Player 自己身上。
+
 ## 5. 兴趣协议
 
 发布与接收要求非零 Generation、完整 Key、ConsumerSID；无 payload Delete 拒绝。兴趣撤销水位保护乱序/旧代消息不能复活订阅。两端必须一起升级，不支持旧发布端回退。Mirror 只复制声明的数据视图，隐私由业务投影与 profile 控制。
