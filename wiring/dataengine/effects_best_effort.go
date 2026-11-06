@@ -245,6 +245,11 @@ func (s *bestEffortSubscription) deliver(message *fnats.Msg) {
 			return
 		}
 		defer func() { <-s.running }()
+		// 两个分支同时就绪时 select 随机选：Stop 之后排队的回调可能先拿到 running，这里再查一次，兑现“排队的不再处理”。
+		if s.ctx.Err() != nil {
+			metrics.IncCounter("dataengine.effect_consumer.handled_total", metrics.Labels{"consumer": s.durable, "result": "stopped"}, 1)
+			return
+		}
 		s.process(envelope)
 	}
 	if err := s.keyed.Dispatch(key, startEffectTask, run); err != nil {
