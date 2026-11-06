@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -828,11 +829,13 @@ func TestSharedModeWritersAlternateThroughNest(t *testing.T) {
 // 向权威对齐一次；稳定持有期间本进程是唯一写者，内存就是最新，读写都不再向 Mongo 取写许可。前提被打破时由投影的
 // 版本 / 代际条件兜底拒绝后到的写。
 
-// countingMongo 按“集合.方法”计数经过它的 Mongo 命令（含事务内的），断言每次请求发了哪些命令。
+// countingMongo 按“集合.方法”计数经过它的 Mongo 命令（含事务内的），断言每次请求发了哪些命令；order 按发出顺序
+// 记下同样的键，用来断言某条命令之后还有没有别的命令。
 type countingMongo struct {
 	fmongo.IMongo
 	mu    sync.Mutex
 	calls map[string]int
+	order []string
 }
 
 func newCountingMongo() *countingMongo {
@@ -850,7 +853,21 @@ func (m *countingMongo) DatabaseForSid(prefix string, sid int32) fmongo.IDatabas
 func (m *countingMongo) note(collection, method string) {
 	m.mu.Lock()
 	m.calls[collection+"."+method]++
+	m.order = append(m.order, collection+"."+method)
 	m.mu.Unlock()
+}
+
+// sequence 返回第 from 条之后按顺序发出的命令。
+func (m *countingMongo) sequence(from int) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.order[from:]...)
+}
+
+func (m *countingMongo) sequenceLen() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.order)
 }
 
 func (m *countingMongo) snapshot() map[string]int {
@@ -1357,5 +1374,88 @@ func TestRoutedColdLoadAlignsSoTheFirstRequestReadsNoAuthority(t *testing.T) {
 	got := db.since(before)
 	if got[remoteMetaCollection+".FindOne"] != 0 || got[remoteMetaCollection+".FindOneAndUpdate"] != 0 {
 		t.Fatalf("first write after the routed cold load read or granted on %s: %v, want only the commit", remoteMetaCollection, got)
+	}
+}
+
+// 新实体的第一次写：首写认领插入的所有权记录就是对齐所需的权威状态（版本是初始值、代际是这次认领的），认领之后不再读
+// 一次权威对齐（2026-11-06 起认领直接带回它）；认领本身也不先读一次再插入——准入刚读过“没有记录”，直接插入，撞上已有
+// 记录才读回。这次准入在 _remote_entity_meta 上只剩确认“没有记录”的那一次读与认领的一次插入。
+func TestExclusiveFirstWriteClaimNeedsNoAlignmentRead(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db := newCountingMongo()
+	a := newWriterNodesOn(t, db, 2325, nil, 1000)[0]
+	// 测试 loader 冷加载时自己读一次所有权记录取版本（正式 loader 读的是数据文档）；让它走不计数的同一份数据，
+	// 计数里只剩写准入发出的命令。
+	a.loader.store = newBoundMongoCommitter(db.IMongo, "control", a.sid, 0)
+	id := testRemoteFullIDWithKind(2325, 1, 125)
+	from, before := db.sequenceLen(), db.snapshot()
+	if base, err := a.write(t, ctx, id, "A1", "", 0x91); err != nil || base != 0 {
+		t.Fatalf("first write: base=%d err=%v", base, err)
+	}
+	var meta []string
+	for _, call := range db.sequence(from) {
+		if collection, _, _ := strings.Cut(call, "."); collection == remoteMetaCollection {
+			meta = append(meta, call)
+		}
+	}
+	claim := slices.Index(meta, remoteMetaCollection+".InsertOne")
+	if claim < 0 {
+		t.Fatalf("first write did not claim the ownership record; %s commands=%v", remoteMetaCollection, meta)
+	}
+	for _, call := range meta[claim+1:] {
+		if call == remoteMetaCollection+".FindOne" {
+			t.Fatalf("first write read the authority again after its own claim (alignment read); %s commands in order=%v", remoteMetaCollection, meta)
+		}
+	}
+	if n := db.since(before)[remoteMetaCollection+".FindOne"]; n != 1 {
+		t.Fatalf("first write read the ownership record %d times, want 1 (the lookup that found none); %s commands in order=%v", n, remoteMetaCollection, meta)
+	}
+	if base, err := a.write(t, ctx, id, "A2", "", 0x92); err != nil || base != 1 {
+		t.Fatalf("second write: base=%d err=%v", base, err)
+	}
+	if doc := a.loaderDocument(t, id); doc != "a=A2;b=" {
+		t.Fatalf("Mongo document=%q, want %q", doc, "a=A2;b=")
+	}
+}
+
+// 认领撞上已有的、本 sid 的记录，而且它的版本比本地实例新（这里：B 缓存了“没有记录”，同 sid 的 A 在此期间认领并写了
+// 两笔）：认领带回的是那条记录的权威版本，准入按对齐路径先把落后的本地实例卸载、从权威重载，再在最新版本上写，
+// 不在旧数据上写、不覆盖 A 的修改。
+func TestExclusiveClaimOfAnExistingNewerRecordReloadsBeforeWriting(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	nodes := newWriterNodesOn(t, newRemoteMongoFake(), 2326, nil, 1000, 1000)
+	a, b := nodes[0], nodes[1]
+	id := testRemoteFullIDWithKind(2326, 1, 125)
+	// B 先在本地有一份 v0 的实例，并缓存“没有所有权记录”（TTL 内准入不再读权威，直接认领）。
+	if _, err := b.loader.LoadEntity(ctx, id, 125); err != nil {
+		t.Fatal(err)
+	}
+	b.mgr.cfg.MarkerCacheTTL = time.Hour
+	meta := entity.ResolveEntityID(id)
+	wrapper := b.mgr.getOrCreate(meta.FullID, meta.Category, meta.Kind)
+	if err := wrapper.refreshMarked(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := wrapper.cachedOwnership(); found {
+		t.Fatal("B cached an ownership record before anyone claimed")
+	}
+	wrapper.release()
+	for i, value := range []string{"A1", "A2"} {
+		if _, err := a.write(t, ctx, id, value, "", byte(0x93+i)); err != nil {
+			t.Fatalf("A write %d: %v", i+1, err)
+		}
+	}
+	loads := b.loader.loads.Load()
+	base, err := b.write(t, ctx, id, "", "B1", 0x95)
+	if err != nil || base != 2 {
+		t.Fatalf("B write after claiming an existing record at v2: base=%d err=%v, want base 2", base, err)
+	}
+	if b.loader.loads.Load() != loads+1 {
+		t.Fatalf("B did not reload its v0 copy from the authority before writing (loads %d -> %d)", loads, b.loader.loads.Load())
+	}
+	if doc := b.loaderDocument(t, id); doc != "a=A2;b=B1" {
+		t.Fatalf("Mongo document=%q, want B's write on top of A's %q", doc, "a=A2;b=B1")
 	}
 }

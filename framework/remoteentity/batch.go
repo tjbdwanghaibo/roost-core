@@ -205,8 +205,8 @@ func (w *remoteEntityWrapper) beginWrite(parent context.Context) (*remoteWriteEn
 	return &remoteWriteEntry{wrapper: w, entity: remoteEntity, lease: lease, distLock: distLocked}, nil
 }
 
-// alignExclusive 是独占写的对齐：读一次权威（ReadAuthorityState，只读；本次准入刷新所有权缓存时已经读过就直接用
-// read），确认所有权仍是本 sid 独占，返回租约与权威版本，随后的 admitExclusive 按它换掉落后或 Fenced 的本地实例。
+// alignExclusive 是独占写的对齐：读一次权威（ReadAuthorityState，只读；本次准入刷新所有权缓存时已经读过、或刚认领
+// 带回了认领之后的权威状态，就直接用 read），确认所有权仍是本 sid 独占，返回租约与权威版本，随后的 admitExclusive 按它换掉落后或 Fenced 的本地实例。
 // 调用方持写门与所有权读锁，失败时由调用方归还。
 func (w *remoteEntityWrapper) alignExclusive(ctx context.Context, authority WriteAuthority, read *AuthorityState) (entity.RemoteEntityMarkerLease, int64, error) {
 	var state AuthorityState
@@ -314,7 +314,8 @@ func (w *remoteEntityWrapper) abortBeginWrite(ctx context.Context, distLocked bo
 
 // confirmWriteOwnership 刷新 marker（MarkerCacheTTL 内信任缓存），没有所有权记录时为本节点认领，返回实体是否处于
 // 共享模式。独占模式下只有本节点是所有者才允许写。持久权威（authority 非 nil）下缓存过期时用 ReadAuthorityState
-// 刷新，同一次读取顺带给出权威版本（state），独占写的对齐不必再读一次；认领之后 state 为 nil。
+// 刷新，同一次读取顺带给出权威版本（state），独占写的对齐不必再读一次；认领用 ClaimAuthorityState，认领带回的权威
+// 状态同样作为 state，取得归属之后的对齐也不再读。缓存未过期、没有认领时 state 为 nil，由对齐读一次。
 func (w *remoteEntityWrapper) confirmWriteOwnership(ctx context.Context, authority WriteAuthority) (marked bool, state *AuthorityState, err error) {
 	if authority != nil && w.markerExpired() {
 		read, found, err := authority.ReadAuthorityState(ctx, w.id)
@@ -329,18 +330,22 @@ func (w *remoteEntityWrapper) confirmWriteOwnership(ctx context.Context, authori
 		return false, nil, fmt.Errorf("remote_entity: refresh marker %d: %w", w.id, err)
 	}
 	if _, found := w.cachedOwnership(); !found {
-		lease, err := w.mgr.ownershipStore.ClaimOwnership(ctx, w.id, w.mgr.localSid)
+		claimed, err := w.claimOwnership(ctx, authority)
 		if err != nil {
 			// CAS 失败后刷新，让错误报告真正赢得认领的所有者，而不是把“没有记录”当作本地拥有。
 			_ = w.refreshMarked(ctx)
 			current, _ := w.cachedOwnership()
 			return false, nil, errors.Join(ownershipFenceError(w.id, current), err)
 		}
-		if !validOwnershipLease(lease) || lease.OwnerSid != w.mgr.localSid {
+		lease := claimed.Ownership
+		if !validOwnershipLease(lease) || lease.OwnerSid != w.mgr.localSid || claimed.Version < 0 {
 			return false, nil, fmt.Errorf("%w: invalid ownership claim for entity=%d", entity.ErrRemoteFenced, w.id)
 		}
 		w.applyOwnership(lease)
 		state = nil
+		if authority != nil {
+			state = &claimed
+		}
 	}
 	marked = w.isMarked()
 	if !marked && !w.isLocalOwner() {
@@ -349,6 +354,16 @@ func (w *remoteEntityWrapper) confirmWriteOwnership(ctx context.Context, authori
 		return false, nil, fmt.Errorf("%w: entity=%d owner=%d", entity.ErrRemoteFenced, w.id, w.leaseOwner())
 	}
 	return marked, state, nil
+}
+
+// claimOwnership 为本节点认领实体。持久权威下用 ClaimAuthorityState，带回认领之后的权威状态（版本与所有权）；
+// 否则（Redis marker 等非持久装配，不做版本对齐）只认领所有权，返回的版本没有意义。
+func (w *remoteEntityWrapper) claimOwnership(ctx context.Context, authority WriteAuthority) (AuthorityState, error) {
+	if authority != nil {
+		return authority.ClaimAuthorityState(ctx, w.id, w.mgr.localSid)
+	}
+	lease, err := w.mgr.ownershipStore.ClaimOwnership(ctx, w.id, w.mgr.localSid)
+	return AuthorityState{Ownership: lease}, err
 }
 
 // lockSharedWrite 为共享模式取得分布式锁与它分配的 fence，并确认实体仍在共享模式（持久权威从写许可确认，

@@ -17,10 +17,13 @@ import (
 // 保证），写准入只在加载、取得归属、退出共享这三个时刻用 ReadAuthorityState 向权威对齐一次版本，稳定持有期间不碰
 // 权威；兜底是投影元数据 CAS 上的 _ver == BaseVersion 与所有权代际（authorityCommitFilter）。
 //
+// ClaimAuthorityState 是带回权威状态的认领：认领之后的对齐直接用它，不再读一次（取得归属这个对齐时刻不另发命令）。
+//
 // GrantWrite 只用于共享模式（分布式锁之下），每次调用必须使用全新的 token；未知结果不能换 token 自动重试。
 type WriteAuthority interface {
 	entity.IRemoteEntityOwnershipStore
 	ReadAuthorityState(context.Context, int64) (AuthorityState, bool, error)
+	ClaimAuthorityState(ctx context.Context, id int64, owner int32) (AuthorityState, error)
 	GrantWrite(context.Context, int64, string) (WriteGrant, error)
 }
 
@@ -111,25 +114,32 @@ func (s *MongoCommitter) ReadAuthorityState(ctx context.Context, id int64) (Auth
 	return AuthorityState{Version: d.Version, Ownership: d.lease()}, true, nil
 }
 
+// ClaimOwnership 见 ClaimAuthorityState；只返回认领后的所有权。
 func (s *MongoCommitter) ClaimOwnership(ctx context.Context, id int64, owner int32) (entity.RemoteEntityMarkerLease, error) {
+	state, err := s.ClaimAuthorityState(ctx, id, owner)
+	return state.Ownership, err
+}
+
+// ClaimAuthorityState 为 owner 认领没有所有权记录的实体，返回认领之后的权威状态（所有权与版本）。
+//
+// 直接插入第一代记录（版本 0、两个代际都是 1），不先读：调用方（写准入）刚读到“没有记录”才来认领。插入成功，权威状态
+// 就是刚插入的这份，不必再读。插入失败——撞上已有记录（并发认领赢了，或记录早已存在），或结果未知——读回一次：
+// 记录的 owner 是别人返回 ErrRemoteFenced；是 owner（自己早先认领过，或这次插入其实已经成功）就返回读到的状态，
+// 版本可能比调用方的本地实例新，由对齐路径换掉落后的实例。
+func (s *MongoCommitter) ClaimAuthorityState(ctx context.Context, id int64, owner int32) (AuthorityState, error) {
 	if id == 0 || owner == 0 {
-		return entity.RemoteEntityMarkerLease{}, entity.ErrRemoteFenced
+		return AuthorityState{}, entity.ErrRemoteFenced
 	}
-	d, err := s.readAuthority(ctx, id)
-	if errors.Is(err, fmongo.ErrNotFound) {
-		d = mongoAuthority{ID: id, Enabled: true, Owner: owner, Marker: 1, Route: 1}
-		_, err = s.controlDB().Collection(remoteMetaCollection).InsertOne(ctx, d)
-		if err != nil {
-			d, err = s.readAuthority(ctx, id)
+	d := mongoAuthority{ID: id, Enabled: true, Owner: owner, Marker: 1, Route: 1}
+	if _, err := s.controlDB().Collection(remoteMetaCollection).InsertOne(ctx, d); err != nil {
+		if d, err = s.readAuthority(ctx, id); err != nil {
+			return AuthorityState{}, err
 		}
 	}
-	if err != nil {
-		return entity.RemoteEntityMarkerLease{}, err
-	}
 	if d.Owner != owner {
-		return entity.RemoteEntityMarkerLease{}, entity.ErrRemoteFenced
+		return AuthorityState{}, entity.ErrRemoteFenced
 	}
-	return d.lease(), nil
+	return AuthorityState{Version: d.Version, Ownership: d.lease()}, nil
 }
 
 func authorityFilter(id int64, lease entity.RemoteEntityMarkerLease) bson.M {
