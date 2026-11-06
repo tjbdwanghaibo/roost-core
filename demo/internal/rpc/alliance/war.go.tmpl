@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"{{MODULE}}/game/alliancerule"
@@ -141,8 +142,12 @@ func (s *Service) acknowledgeWar(ctx context.Context, declarerID, enemyID int64,
 // their enemies again: the alliance Mod runs it once at start, after the
 // startup preload loaded this instance's alliances and the handlers were
 // registered. It runs among the follow-ups (in the background, stopped with
-// them); a listing that fails is tried again later. Its cost is one Nest read
-// per alliance this instance owns, once per start.
+// them: it never holds up the start); a listing that fails is tried again
+// later. Its cost, once per start, is one Nest read per alliance this
+// instance owns — and each of those is a Remote write admission that takes a
+// write grant from the ownership record (one Mongo findAndModify), although
+// it writes nothing — plus one owner-listing query per transferListPage
+// alliances. The reads run scanConcurrency at a time (scanPage).
 func (s *Service) ScanWars() {
 	s.scanWars(0)
 }
@@ -168,23 +173,74 @@ func (s *Service) scanWarsOnce(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("list owned alliances: %w", err)
 		}
-		for _, id := range ids {
-			acks, err := s.warAcks(ctx, id)
-			if err != nil {
-				return fmt.Errorf("alliance %d: %w", id, err)
-			}
-			scanned++
-			waiting += len(acks)
-			for _, ack := range acks {
-				s.askEnemy(entity.GetUniqueIDFromEntityID(id), ack.EnemyID, ack.RequestID, 0)
-			}
+		found, err := s.scanPage(ctx, ids)
+		if err != nil {
+			return err
 		}
+		scanned += len(ids)
+		waiting += found
 		if next == 0 {
 			slog.Info("alliance: war scan done", "alliances", scanned, "waiting", waiting, "took", time.Since(started))
 			return nil
 		}
 		after = next
 	}
+}
+
+// scanConcurrency is how many alliances the start-up scan reads at once. One
+// at a time, the scan of N alliances was N write-grant round trips end to end
+// (about 12 s for 1000 alliances on a loaded machine, 2026-11-06), and a wait
+// near the end was asked again only after all of them; the bound keeps the
+// burst of grants a restart sends to Mongo, next to the requests the instance
+// serves at the same time, small.
+const scanConcurrency = 8
+
+// scanPage reads the waits of one page of alliances, scanConcurrency at a
+// time, and asks the enemy of every wait it finds. The first failed read
+// stops the page: the scan is tried again from the start (scanWars), and an
+// ask armed twice is armed once (followUps.arm by key).
+func (s *Service) scanPage(ctx context.Context, ids []int64) (waiting int, err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		mu       sync.Mutex
+		firstErr error
+		wg       sync.WaitGroup
+	)
+	next := make(chan int64)
+	for range min(scanConcurrency, len(ids)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for id := range next {
+				acks, err := s.warAcks(ctx, id)
+				mu.Lock()
+				if err != nil && firstErr == nil {
+					firstErr = fmt.Errorf("alliance %d: %w", id, err)
+					cancel()
+				}
+				waiting += len(acks)
+				mu.Unlock()
+				for _, ack := range acks {
+					s.askEnemy(entity.GetUniqueIDFromEntityID(id), ack.EnemyID, ack.RequestID, 0)
+				}
+			}
+		}()
+	}
+feed:
+	for _, id := range ids {
+		select {
+		case next <- id:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(next)
+	wg.Wait()
+	if firstErr == nil && ctx.Err() != nil {
+		firstErr = ctx.Err()
+	}
+	return waiting, firstErr
 }
 
 // warAcks reads the wars the alliance target (this instance's) still waits for.

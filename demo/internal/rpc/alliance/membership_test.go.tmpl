@@ -665,6 +665,42 @@ func TestLostWarAcknowledgmentIsMadeUp(t *testing.T) {
 	}
 }
 
+// The start-up scan reads several alliances at once. Each read is a Nest
+// transaction on an owned Remote entity, and its admission takes a write grant
+// from the ownership record — one Mongo round trip — although it writes
+// nothing; read one at a time, the scan of N alliances is N round trips
+// end to end (about 12 s for 1000 alliances on a loaded machine, 2026-11-06),
+// and the last wait found is asked again only after all of them. The fake
+// Remote holds every Alliance admission until the test releases it, so the
+// number waiting at once is the number of reads the scan has in flight: it
+// must reach scanConcurrency, and never exceed it.
+func TestStartupWarScanReadsAlliancesConcurrently(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000)
+	in := c.instances[3000]
+	for i := 0; i < 3*scanConcurrency; i++ {
+		found(t, c, 3000, fmt.Sprintf("found-scan-%d", i), int64(500+i), false)
+	}
+	release := in.remote.hold()
+	done := make(chan error, 1)
+	go func() { done <- in.svc.scanWarsOnce(ctx) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if now, _ := in.remote.waiting(); now >= scanConcurrency || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	now, _ := in.remote.waiting()
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	_, peak := in.remote.waiting()
+	if now < scanConcurrency || peak > scanConcurrency {
+		t.Fatalf("the start-up scan had %d alliance reads waiting for their write grant at once (at most %d), want %d", now, peak, scanConcurrency)
+	}
+}
+
 // Every guard write is a transaction on the guard alone: reservations of two
 // players on the same instance do not wait on each other. (Until 2026-11-05
 // both took the instance's one AllianceShard to arm or disarm the deadline,

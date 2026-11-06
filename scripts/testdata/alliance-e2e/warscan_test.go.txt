@@ -2,7 +2,7 @@ package e2e
 
 // 短测（ALLIANCE_E2E_PERF=1）：起服时的宣战补发扫描（ScanWars，方案 §2.5B“宣战”）随联盟数的代价。
 //
-// 3001 先起、建 8 个敌方联盟（此时只有它在 Found 队列组里），再起 3000 并让 3001 退出建盟（alliance.stop_founding），
+// 3001 先起、建敌方联盟（此时只有它在 Found 队列组里；每个敌方至多 8 场战争，按总标记数备足），再起 3000 并让 3001 退出建盟（alliance.stop_founding），
 // 之后建的联盟都在 3000 上。每一档 N（ALLIANCE_E2E_WARSCAN_COUNTS，缺省 1000,10000）：
 //  1. 补建到 3000 上有 N 个联盟；
 //  2. 停 3001，3000 上取 N 的千分之 ALLIANCE_E2E_WARSCAN_PENDING（缺省 10，即 1%，至少 1）个联盟向 3001 上的敌方宣战——
@@ -38,26 +38,24 @@ type mongoStats struct {
 }
 
 func (s *suite) mongoStats() mongoStats {
-	var status bson.M
+	var status struct {
+		Opcounters struct {
+			Query   int64 `bson:"query"`
+			Getmore int64 `bson:"getmore"`
+			Command int64 `bson:"command"`
+		} `bson:"opcounters"`
+		Metrics struct {
+			QueryExecutor struct {
+				Scanned        int64 `bson:"scanned"`
+				ScannedObjects int64 `bson:"scannedObjects"`
+			} `bson:"queryExecutor"`
+		} `bson:"metrics"`
+	}
 	if err := s.mongo.Database("admin").RunCommand(s.ctx, bson.D{{Key: "serverStatus", Value: 1}}).Decode(&status); err != nil {
 		s.t.Fatal(err)
 	}
-	num := func(v any) int64 {
-		switch n := v.(type) {
-		case int32:
-			return int64(n)
-		case int64:
-			return n
-		case float64:
-			return int64(n)
-		}
-		return 0
-	}
-	ops, _ := status["opcounters"].(bson.M)
-	metrics, _ := status["metrics"].(bson.M)
-	executor, _ := metrics["queryExecutor"].(bson.M)
-	return mongoStats{query: num(ops["query"]), getmore: num(ops["getmore"]), command: num(ops["command"]),
-		keys: num(executor["scanned"]), docs: num(executor["scannedObjects"])}
+	return mongoStats{query: status.Opcounters.Query, getmore: status.Opcounters.Getmore, command: status.Opcounters.Command,
+		keys: status.Metrics.QueryExecutor.Scanned, docs: status.Metrics.QueryExecutor.ScannedObjects}
 }
 
 func (m mongoStats) minus(o mongoStats) mongoStats {
@@ -120,7 +118,7 @@ func loadAverage() string {
 	return strings.Trim(strings.TrimSpace(string(out)), "{} ")
 }
 
-// explainOwnedPage 对 3000 的所有权列表查询（ListOwnedRemoteEntities 的同一过滤与排序）取执行计划。
+// explainOwnedPage 在 Remote 控制库（remote_entity.database，生成配置是 <工程名>_remote）上对 3000 的所有权列表查询（ListOwnedRemoteEntities 的同一过滤与排序）取执行计划。
 func (s *suite) explainOwnedPage(owner int32, after int64) (plan string, keys, docs, returned int64) {
 	tagSpan := int64(1) << entity.EntityIDTagBits
 	remainders := bson.A{}
@@ -128,25 +126,26 @@ func (s *suite) explainOwnedPage(owner int32, after int64) (plan string, keys, d
 		remainders = append(remainders, bson.M{"_id": bson.M{"$mod": bson.A{tagSpan, int64(allianceentity.EntityKindAlliance)<<entity.EntityKindShift | category}}})
 	}
 	filter := bson.M{"_owner_sid": owner, "_owner_shared": false, "_authority": true, "_id": bson.M{"$gt": after}, "$or": remainders}
-	var out bson.M
+	var out struct {
+		QueryPlanner struct {
+			WinningPlan bson.Raw `bson:"winningPlan"`
+		} `bson:"queryPlanner"`
+		ExecutionStats struct {
+			Keys     int64 `bson:"totalKeysExamined"`
+			Docs     int64 `bson:"totalDocsExamined"`
+			Returned int64 `bson:"nReturned"`
+		} `bson:"executionStats"`
+	}
 	cmd := bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "_remote_entity_meta"}, {Key: "filter", Value: filter},
 		{Key: "sort", Value: bson.D{{Key: "_id", Value: 1}}}, {Key: "limit", Value: 1000}}}, {Key: "verbosity", Value: "executionStats"}}
-	if err := s.mongo.Database(s.prefix).RunCommand(s.ctx, cmd).Decode(&out); err != nil {
+	if err := s.mongo.Database(s.prefix+"_remote").RunCommand(s.ctx, cmd).Decode(&out); err != nil {
 		s.t.Fatalf("explain: %v", err)
 	}
-	stats, _ := out["executionStats"].(bson.M)
-	num := func(v any) int64 {
-		switch n := v.(type) {
-		case int32:
-			return int64(n)
-		case int64:
-			return n
-		}
-		return 0
+	winning, err := bson.MarshalExtJSON(out.QueryPlanner.WinningPlan, false, false)
+	if err != nil {
+		return fmt.Sprintf("(plan of %d bytes: %v)", len(out.QueryPlanner.WinningPlan), err), out.ExecutionStats.Keys, out.ExecutionStats.Docs, out.ExecutionStats.Returned
 	}
-	planner, _ := out["queryPlanner"].(bson.M)
-	winning, _ := json.Marshal(planner["winningPlan"])
-	return summarizePlan(string(winning)), num(stats["totalKeysExamined"]), num(stats["totalDocsExamined"]), num(stats["nReturned"])
+	return summarizePlan(string(winning)), out.ExecutionStats.Keys, out.ExecutionStats.Docs, out.ExecutionStats.Returned
 }
 
 // summarizePlan 把执行计划压成 “SORT>FETCH>IXSCAN{_owner_sid}” 这样的一行。
@@ -154,6 +153,9 @@ func summarizePlan(raw string) string {
 	var node map[string]any
 	if json.Unmarshal([]byte(raw), &node) != nil {
 		return raw
+	}
+	if inner, ok := node["queryPlan"].(map[string]any); ok {
+		node = inner // SBE 计划把经典计划放在 queryPlan 下
 	}
 	var parts []string
 	for node != nil {
@@ -192,7 +194,12 @@ func TestAllianceE2EWarScanStartup(t *testing.T) {
 	s := newSuite(t, 3*time.Hour)
 	client := s.client(nil, 20*time.Second)
 	b := s.start("alliance-3001", "alliance", 3001, procOptions{})
-	enemies, _ := s.foundMany(client, 8, 4_000_000, 4)
+	// 一个联盟至多与 alliancerule.MaxWars（8）个联盟交战：敌方按每个 8 份备足，标记依次占满。
+	total := 0
+	for _, n := range counts {
+		total += max(1, n*perMille/1000)
+	}
+	enemies, _ := s.foundMany(client, (total+7)/8, 4_000_000, 8)
 	a := s.start("alliance-3000", "alliance", 3000, procOptions{})
 	s.admin(b, "alliance.stop_founding", nil)
 
@@ -201,6 +208,7 @@ func TestAllianceE2EWarScanStartup(t *testing.T) {
 	declared := map[int64][]int64{} // enemy → declarers
 	war := 0
 	for _, n := range counts {
+		fresh := founded // 本档新建的联盟从 ids[fresh] 起；标记只放在它们上（上一档的联盟已与敌方交战，再宣战会被拒）
 		if more := n - founded; more > 0 {
 			batch, took := s.foundMany(client, more, leaderBase+int64(founded), 24)
 			ids = append(ids, batch...)
@@ -210,11 +218,11 @@ func TestAllianceE2EWarScanStartup(t *testing.T) {
 		// 新的待确认标记：从本档新建的联盟里均匀取（已有标记的联盟上一档已补完）。
 		pending := max(1, n*perMille/1000)
 		s.stop(b, syscall.SIGINT)
-		step := max(1, len(ids)/pending)
+		step := max(1, (len(ids)-fresh)/pending)
 		for j := 0; j < pending; j++ {
-			index := (j*step + 1) % len(ids)
+			index := fresh + (j*step)%(len(ids)-fresh)
 			declarer, leader := ids[index], leaderBase+int64(index)+1
-			enemy := enemies[j%len(enemies)]
+			enemy := enemies[war/8]
 			war++
 			ctx, cancel := context.WithTimeout(s.ctx, 20*time.Second)
 			reply, err := client.DeclareWar(ctx, fmt.Sprintf("warscan-%d", war), leader, 1000, target(t, declarer), enemy)
@@ -230,6 +238,7 @@ func TestAllianceE2EWarScanStartup(t *testing.T) {
 		s.stop(a, syscall.SIGINT)
 		s.launch(b)
 		s.waitReady(b, 5*time.Minute)
+		s.admin(b, "alliance.stop_founding", nil) // 拉起后重新加入了 Found 队列组：下一档的联盟仍要都在 3000 上
 
 		loadBefore := loadAverage()
 		before := s.mongoStats()

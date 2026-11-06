@@ -651,6 +651,30 @@ type fakeRemote struct {
 	admitted map[int64]int // admissions attempted per entity, on this instance
 	capture  bool          // build and keep the Remote commits (fakeBatch)
 	commits  []entity.RemoteCommit
+	// holdAlliances, when set, keeps every write admission of an Alliance
+	// waiting until it is closed — as each one waits for its write grant from
+	// the ownership record in the real runtime — and counts how many wait at
+	// once (inFlight, peak).
+	holdAlliances  chan struct{}
+	inFlight, peak int
+}
+
+// hold starts holding Alliance admissions (holdAlliances) and returns the
+// release.
+func (r *fakeRemote) hold() (release func()) {
+	ch := make(chan struct{})
+	r.mu.Lock()
+	r.holdAlliances, r.peak = ch, 0
+	r.mu.Unlock()
+	return func() { close(ch) }
+}
+
+// waiting is how many Alliance admissions wait at the hold now, and the most
+// that ever waited at once.
+func (r *fakeRemote) waiting() (now, peak int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.inFlight, r.peak
 }
 
 // built returns the Remote commits this instance's writes built so far, as
@@ -684,7 +708,19 @@ func (r *fakeRemote) PrepareRemoteWriteBatch(_ context.Context, ids []int64) (en
 			return nil, err
 		}
 	}
+	hold := r.holdAlliances
+	held := hold != nil && slices.ContainsFunc(ids, func(id int64) bool { return entity.MatchEntityID(id, alliance.EntityKindAlliance) })
+	if held {
+		r.inFlight++
+		r.peak = max(r.peak, r.inFlight)
+	}
 	r.mu.Unlock()
+	if held {
+		<-hold
+		r.mu.Lock()
+		r.inFlight--
+		r.mu.Unlock()
+	}
 	r.c.await(ids)
 	r.c.mu.Lock()
 	defer r.c.mu.Unlock()
