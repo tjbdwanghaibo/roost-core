@@ -715,9 +715,12 @@ func TestRealOutboxTakeoverOfALiveStalledWriter(t *testing.T) {
 					"commit_after": ms(time.Duration(item.ev.At - item.ev.Start))}
 			}
 			first, marks := outboxDrillMarks(children, x1.TX)
+			// 慢发布转后台（outboxStragglerWait）之后，写者的协调者不再被 x0 的慢发布挡在页屏障上，可能也去发 x1；
+			// 但它的发布确认同样被拖慢，只能在接管方代发之后才标记，读到的是“已是 Committed”（Already）——这正是
+			// “写者被抢先后自己标记、tracker 照常结束”的路径。写者若抢在接管方之前标记了 x1，说明卡顿没有超过宽限期，场景没搭起来。
 			for _, mark := range marks {
-				if mark.SID == writer.sid {
-					t.Fatalf("the writer's coordinator reached x1 (marks=%+v): the stall did not outlast the grace, scenario not set up", marks)
+				if mark.SID == writer.sid && !mark.Already {
+					t.Fatalf("the writer published x1 itself before the takeover (marks=%+v): the stall did not outlast the grace, scenario not set up", marks)
 				}
 			}
 			if x1.Err == "" || !strings.Contains(x1.Err, entity.ErrRemotePersistenceIndeterminate.Error()) {
