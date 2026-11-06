@@ -185,7 +185,18 @@ var errOwnedEntityEmpty = fmt.Errorf("remote_entity: owned by this instance but 
 // owner 是本 sid、冷加载得到权威确认的“不存在”时返回 errOwnedEntityEmpty（空认领），得到“删过档”时返回满足
 // entity.ErrAuthorityEntityDeleted 的错误；两者都不登记路由。其余加载错误（权威读不了、数据坏）原样包装返回。
 func (m *Manager) routedOwnership(ctx context.Context, w *remoteEntityWrapper) (owner int32, found bool, err error) {
-	if err := w.refreshMarked(ctx); err != nil {
+	// 持久权威下用 ReadAuthorityState 读所有权（同一次 FindOne 顺带给出权威版本），供下面记下独占对齐。
+	authorityVersion := int64(-1)
+	if authority, durable := m.ownershipStore.(WriteAuthority); durable {
+		state, ok, err := authority.ReadAuthorityState(ctx, w.id)
+		if err != nil {
+			return 0, false, fmt.Errorf("remote_entity: read ownership %d: %w", w.id, err)
+		}
+		w.setOwnership(state.Ownership, ok)
+		if ok {
+			authorityVersion = state.Version
+		}
+	} else if err := w.refreshMarked(ctx); err != nil {
 		return 0, false, fmt.Errorf("remote_entity: read ownership %d: %w", w.id, err)
 	}
 	lease, found := w.cachedOwnership()
@@ -214,6 +225,13 @@ func (m *Manager) routedOwnership(ctx context.Context, w *remoteEntityWrapper) (
 			return lease.OwnerSid, true, fmt.Errorf("%w: entity %d has an ownership record but no data", entity.ErrRemoteRejected, w.id)
 		}
 		w.attachEntity(loaded)
+	}
+	// 起服预加载与前置检查的冷加载也是“加载”这一对齐时刻：实例与刚读到的权威版本一致、状态可写时记下对齐，之后的
+	// 第一次请求不再读权威。不一致时不动（交给写准入的对齐换掉它）。
+	if local := w.lookupLocalEntity(); local != nil && authorityVersion >= 0 && max(local.EntityVersion(), 0) == authorityVersion {
+		if state := local.RemoteOwnershipState(); state == entity.RemoteOwnershipUnknown || state == entity.RemoteOwnershipLocalOwned {
+			w.markAligned(local, lease)
+		}
 	}
 	m.registerRoute(ctx, w.id, w.kind, lease)
 	return lease.OwnerSid, true, nil

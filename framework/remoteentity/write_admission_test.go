@@ -7,12 +7,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
 )
 
@@ -139,7 +142,7 @@ type grantTestAuthority struct {
 	grant func() (WriteGrant, error)
 }
 
-func (a grantTestAuthority) GrantWrite(context.Context, int64, string, int32) (WriteGrant, error) {
+func (a grantTestAuthority) GrantWrite(context.Context, int64, string) (WriteGrant, error) {
 	return a.grant()
 }
 
@@ -436,9 +439,15 @@ type sharedWriterNode struct {
 // wrap 为 nil 时直接用 MongoCommitter 作存储；否则由它给指定进程包一层存储替身。
 func newSharedWriterNodes(t *testing.T, rawID int64, wrap func(int32, *MongoCommitter) StorageBackend, sids ...int32) []sharedWriterNode {
 	t.Helper()
+	return newWriterNodesOn(t, newRemoteMongoFake(), rawID, wrap, sids...)
+}
+
+// newWriterNodesOn 与 newSharedWriterNodes 相同，但各进程共用调用方给的 Mongo（例如计数包装）。sids 可以重复：同一个 sid
+// 的两个进程即“同 sid 崩溃重启的短暂重叠”，用来模拟单实例前提被打破。
+func newWriterNodesOn(t *testing.T, db fmongo.IMongo, rawID int64, wrap func(int32, *MongoCommitter) StorageBackend, sids ...int32) []sharedWriterNode {
+	t.Helper()
 	const kind entity.EntityKind = 125
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	db := newRemoteMongoFake()
 	redis := &authorityLockRedis{unlockEvalStub: newUnlockEvalStub()}
 	nodes := make([]sharedWriterNode, 0, len(sids))
 	for _, sid := range sids {
@@ -810,5 +819,543 @@ func TestSharedModeWritersAlternateThroughNest(t *testing.T) {
 	}
 	if got := nodes[0].manager.Get(id).(*reloadableFullDocEntity).EntityVersion(); got != 5 {
 		t.Fatalf("A's local copy version=%d after five writes, want 5", got)
+	}
+}
+
+// ---- 独占写准入：稳定持有期间不取写许可、只读请求不碰 Mongo（维护者 2026-11-06） ----
+//
+// 前提：一个实体同一时刻只有一个 owner（App 单实例与 fail-stop 保证）。独占实体只在加载、取得归属、退出共享这三个时刻
+// 向权威对齐一次；稳定持有期间本进程是唯一写者，内存就是最新，读写都不再向 Mongo 取写许可。前提被打破时由投影的
+// 版本 / 代际条件兜底拒绝后到的写。
+
+// countingMongo 按“集合.方法”计数经过它的 Mongo 命令（含事务内的），断言每次请求发了哪些命令。
+type countingMongo struct {
+	fmongo.IMongo
+	mu    sync.Mutex
+	calls map[string]int
+}
+
+func newCountingMongo() *countingMongo {
+	return &countingMongo{IMongo: newRemoteMongoFake(), calls: make(map[string]int)}
+}
+
+func (m *countingMongo) Database(name string) fmongo.IDatabase {
+	return countingDatabase{IDatabase: m.IMongo.Database(name), m: m}
+}
+
+func (m *countingMongo) DatabaseForSid(prefix string, sid int32) fmongo.IDatabase {
+	return countingDatabase{IDatabase: m.IMongo.DatabaseForSid(prefix, sid), m: m}
+}
+
+func (m *countingMongo) note(collection, method string) {
+	m.mu.Lock()
+	m.calls[collection+"."+method]++
+	m.mu.Unlock()
+}
+
+func (m *countingMongo) snapshot() map[string]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]int, len(m.calls))
+	for k, v := range m.calls {
+		out[k] = v
+	}
+	return out
+}
+
+// since 返回 before 之后新增的命令（只列非零项）。
+func (m *countingMongo) since(before map[string]int) map[string]int {
+	out := make(map[string]int)
+	for k, v := range m.snapshot() {
+		if d := v - before[k]; d != 0 {
+			out[k] = d
+		}
+	}
+	return out
+}
+
+// mongoWriteMethods 是会改数据的命令；读命令（FindOne / Find / CountDocuments / Aggregate）不在其中。
+var mongoWriteMethods = map[string]bool{
+	"InsertOne": true, "InsertMany": true, "UpdateOne": true, "UpdateMany": true, "ReplaceOne": true,
+	"DeleteOne": true, "DeleteMany": true, "FindOneAndUpdate": true, "FindOneAndDelete": true,
+	"FindOneAndReplace": true, "BulkWrite": true, "EnsureIndexes": true,
+}
+
+func mongoWrites(calls map[string]int) map[string]int {
+	out := make(map[string]int)
+	for k, v := range calls {
+		_, method, _ := strings.Cut(k, ".")
+		if mongoWriteMethods[method] {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+type countingDatabase struct {
+	fmongo.IDatabase
+	m *countingMongo
+}
+
+func (d countingDatabase) Collection(name string) fmongo.ICollection {
+	return countingCollection{ICollection: d.IDatabase.Collection(name), m: d.m, name: name}
+}
+
+type countingCollection struct {
+	fmongo.ICollection
+	m    *countingMongo
+	name string
+}
+
+func (c countingCollection) InsertOne(ctx context.Context, doc any) (string, error) {
+	c.m.note(c.name, "InsertOne")
+	return c.ICollection.InsertOne(ctx, doc)
+}
+func (c countingCollection) InsertMany(ctx context.Context, docs []any) ([]string, error) {
+	c.m.note(c.name, "InsertMany")
+	return c.ICollection.InsertMany(ctx, docs)
+}
+func (c countingCollection) FindOne(ctx context.Context, filter any, result any) error {
+	c.m.note(c.name, "FindOne")
+	return c.ICollection.FindOne(ctx, filter, result)
+}
+func (c countingCollection) Find(ctx context.Context, filter any, results any, opts ...fmongo.FindOption) error {
+	c.m.note(c.name, "Find")
+	return c.ICollection.Find(ctx, filter, results, opts...)
+}
+func (c countingCollection) UpdateOne(ctx context.Context, filter any, update any) (*fmongo.UpdateResult, error) {
+	c.m.note(c.name, "UpdateOne")
+	return c.ICollection.UpdateOne(ctx, filter, update)
+}
+func (c countingCollection) UpdateMany(ctx context.Context, filter any, update any) (*fmongo.UpdateResult, error) {
+	c.m.note(c.name, "UpdateMany")
+	return c.ICollection.UpdateMany(ctx, filter, update)
+}
+func (c countingCollection) ReplaceOne(ctx context.Context, filter any, replacement any) (*fmongo.UpdateResult, error) {
+	c.m.note(c.name, "ReplaceOne")
+	return c.ICollection.ReplaceOne(ctx, filter, replacement)
+}
+func (c countingCollection) DeleteOne(ctx context.Context, filter any) (int64, error) {
+	c.m.note(c.name, "DeleteOne")
+	return c.ICollection.DeleteOne(ctx, filter)
+}
+func (c countingCollection) DeleteMany(ctx context.Context, filter any) (int64, error) {
+	c.m.note(c.name, "DeleteMany")
+	return c.ICollection.DeleteMany(ctx, filter)
+}
+func (c countingCollection) FindOneAndUpdate(ctx context.Context, filter any, update any, result any, opts ...fmongo.FindOneAndUpdateOption) error {
+	c.m.note(c.name, "FindOneAndUpdate")
+	return c.ICollection.FindOneAndUpdate(ctx, filter, update, result, opts...)
+}
+func (c countingCollection) FindOneAndDelete(ctx context.Context, filter any, result any) error {
+	c.m.note(c.name, "FindOneAndDelete")
+	return c.ICollection.FindOneAndDelete(ctx, filter, result)
+}
+func (c countingCollection) FindOneAndReplace(ctx context.Context, filter any, replacement any, result any) error {
+	c.m.note(c.name, "FindOneAndReplace")
+	return c.ICollection.FindOneAndReplace(ctx, filter, replacement, result)
+}
+func (c countingCollection) CountDocuments(ctx context.Context, filter any) (int64, error) {
+	c.m.note(c.name, "CountDocuments")
+	return c.ICollection.CountDocuments(ctx, filter)
+}
+func (c countingCollection) Aggregate(ctx context.Context, pipeline any, results any) error {
+	c.m.note(c.name, "Aggregate")
+	return c.ICollection.Aggregate(ctx, pipeline, results)
+}
+func (c countingCollection) BulkWrite(ctx context.Context, models []fmongo.WriteModel) (*fmongo.BulkWriteResult, error) {
+	c.m.note(c.name, "BulkWrite")
+	return c.ICollection.BulkWrite(ctx, models)
+}
+func (c countingCollection) EnsureIndexes(ctx context.Context, indexes []fmongo.IndexModel) error {
+	c.m.note(c.name, "EnsureIndexes")
+	return c.ICollection.EnsureIndexes(ctx, indexes)
+}
+
+// 稳定持有的独占实体：第一次写（认领 + 对齐）之后，每次写只有提交本身的一次元数据 CAS（BulkWrite），
+// 不再有写许可（_remote_entity_meta 上的 findAndModify），也不再读所有权记录。
+func TestExclusiveOwnerWritesWithoutAWriteGrant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db := newCountingMongo()
+	a := newWriterNodesOn(t, db, 2311, nil, 1000)[0]
+	id := testRemoteFullIDWithKind(2311, 1, 125)
+	if _, err := a.write(t, ctx, id, "A1", "", 0x51); err != nil {
+		t.Fatalf("first write (claim and align): %v", err)
+	}
+	before := db.snapshot()
+	for i := range 5 {
+		base, err := a.write(t, ctx, id, fmt.Sprintf("A%d", i+2), "", byte(0x52+i))
+		if err != nil || base != uint64(i+1) {
+			t.Fatalf("write %d: base=%d err=%v, want base %d", i+2, base, err, i+1)
+		}
+	}
+	got := db.since(before)
+	if n := got[remoteMetaCollection+".FindOneAndUpdate"]; n != 0 {
+		t.Fatalf("5 writes on a stably held exclusive entity took %d write grants (findAndModify on %s), want 0; commands=%v", n, remoteMetaCollection, got)
+	}
+	if n := got[remoteMetaCollection+".FindOne"]; n != 0 {
+		t.Fatalf("5 writes on a stably held exclusive entity read the ownership record %d times, want 0; commands=%v", n, got)
+	}
+	if n := got[remoteMetaCollection+".BulkWrite"]; n != 5 {
+		t.Fatalf("metadata CAS commands=%d, want one per write (5); commands=%v", n, got)
+	}
+	if doc := a.loaderDocument(t, id); doc != "a=A6;b=" {
+		t.Fatalf("Mongo document=%q, want %q", doc, "a=A6;b=")
+	}
+}
+
+// exclusiveNestNode 是带 Nest 引擎的写者进程：write 改 a / b；read 不改任何持久字段，答“内容@版本”。
+type exclusiveNestNode struct {
+	sharedWriterNode
+	engine *nest.NestMgr
+}
+
+var (
+	exclusiveWriteHandler = nest.NewHandlerName("exclusive_owner_write")
+	exclusiveReadHandler  = nest.NewHandlerName("exclusive_owner_read")
+)
+
+func startExclusiveNest(t *testing.T, node sharedWriterNode) exclusiveNestNode {
+	t.Helper()
+	engine := nest.NewEngine(nest.NestOptionWithGetter(node.access), nest.NestOptionWithRemoteEntityManager(node.mgr),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 1, QueueCap: 16}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	meta := nest.HandlerMeta{Rollback: nest.RollbackNone, Durability: nest.DurabilityMemory}
+	engine.MustRegisterHandlerWithMeta(exclusiveWriteHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+		change := params[0].([2]string)
+		es[0].(*reloadableFullDocEntity).set(change[0], change[1])
+		return nil, nil
+	}, meta)
+	engine.MustRegisterHandlerWithMeta(exclusiveReadHandler, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
+		e := es[0].(*reloadableFullDocEntity)
+		e.readOnly.Store(true)
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return fmt.Sprintf("a=%s;b=%s@%d", e.a, e.b, e.EntityVersion()), nil
+	}, meta)
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Shutdown(context.Background()) })
+	return exclusiveNestNode{sharedWriterNode: node, engine: engine}
+}
+
+func (n exclusiveNestNode) writeNest(ctx context.Context, id int64, a, b string) error {
+	_, err := n.engine.Request(ctx, exclusiveWriteHandler, id, nest.NewParams([2]string{a, b}))
+	return err
+}
+
+func (n exclusiveNestNode) read(t *testing.T, ctx context.Context, id int64) string {
+	t.Helper()
+	got, err := n.engine.Request(ctx, exclusiveReadHandler, id, nest.NewParams())
+	if err != nil {
+		t.Fatalf("sid %d read: %v", n.sid, err)
+	}
+	return got.(string)
+}
+
+// 稳定持有期间的只读请求（handler 不改持久字段）：在本进程持实体锁读内存，不向 Mongo 发任何写，也不读所有权记录与数据文档。
+func TestExclusiveReadOnlyRequestTouchesNoMongo(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db := newCountingMongo()
+	node := startExclusiveNest(t, newWriterNodesOn(t, db, 2312, nil, 1000)[0])
+	id := testRemoteFullIDWithKind(2312, 1, 125)
+	if err := node.writeNest(ctx, id, "A1", ""); err != nil {
+		t.Fatal(err)
+	}
+	before := db.snapshot()
+	for range 5 {
+		if got := node.read(t, ctx, id); got != "a=A1;b=@1" {
+			t.Fatalf("read=%q, want %q", got, "a=A1;b=@1")
+		}
+	}
+	got := db.since(before)
+	if writes := mongoWrites(got); len(writes) != 0 {
+		t.Fatalf("5 read-only requests on a stably held exclusive entity wrote to Mongo %v, want none; all commands=%v", writes, got)
+	}
+	for _, key := range []string{remoteMetaCollection + ".FindOne", fullDocCollection + ".FindOne"} {
+		if got[key] != 0 {
+			t.Fatalf("5 read-only requests issued %s %d times, want 0; all commands=%v", key, got[key], got)
+		}
+	}
+}
+
+// 本地可能落后的三个时刻——转走又转回、从共享退回独占、冷加载（含同 sid 重启接管与淘汰后再访问）——之后的第一次请求，
+// 读和写都先向权威对齐：不用旧数据答复，也不在旧数据上写。
+func TestExclusiveOwnerAlignsBeforeServingAfterItMayHaveFallenBehind(t *testing.T) {
+	for i, path := range []string{"ownership transferred away and back", "leave shared mode", "restart with the same sid and eviction"} {
+		t.Run(path, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			rawID := int64(2313 + i)
+			sids := []int32{1000, 1004}
+			if path == "restart with the same sid and eviction" {
+				sids = []int32{1000, 1000}
+			}
+			raw := newWriterNodesOn(t, newRemoteMongoFake(), rawID, nil, sids...)
+			a, b := startExclusiveNest(t, raw[0]), startExclusiveNest(t, raw[1])
+			id := testRemoteFullIDWithKind(rawID, 1, 125)
+			want := "a=A1;b=B1@2"
+			switch path {
+			case "ownership transferred away and back":
+				if err := a.writeNest(ctx, id, "A1", ""); err != nil {
+					t.Fatal(err)
+				}
+				if got := a.read(t, ctx, id); got != "a=A1;b=@1" {
+					t.Fatalf("A read before the transfer=%q", got)
+				}
+				if _, err := a.mgr.TransferRemoteOwnership(ctx, id, b.sid); err != nil {
+					t.Fatal(err)
+				}
+				if err := b.writeNest(ctx, id, "", "B1"); err != nil {
+					t.Fatalf("B write after taking over: %v", err)
+				}
+				if _, err := b.mgr.TransferRemoteOwnership(ctx, id, a.sid); err != nil {
+					t.Fatal(err)
+				}
+			case "leave shared mode":
+				// A 先独占写过（已对齐、实例不变），进入共享后 B 写，A 退回独占：A 的实例仍是共享之前那份。
+				if err := a.writeNest(ctx, id, "A1", ""); err != nil {
+					t.Fatal(err)
+				}
+				if got := a.read(t, ctx, id); got != "a=A1;b=@1" {
+					t.Fatalf("A read before entering shared mode=%q", got)
+				}
+				if _, err := a.mgr.EnterRemoteSharedMode(ctx, id); err != nil {
+					t.Fatal(err)
+				}
+				if err := b.writeNest(ctx, id, "", "B1"); err != nil {
+					t.Fatalf("B shared write: %v", err)
+				}
+				if _, err := a.mgr.LeaveRemoteSharedMode(ctx, id); err != nil {
+					t.Fatal(err)
+				}
+				// 路由前置检查（与起服预加载同一步）读到的权威版本比 A 的实例新：不能把落后的实例记成已对齐。
+				if owner, found, err := a.mgr.ServeRoutedRequest(ctx, id); err != nil || !found || owner != a.sid {
+					t.Fatalf("route check after leaving shared mode: owner=%d found=%v err=%v", owner, found, err)
+				}
+			case "restart with the same sid and eviction":
+				// b 是同 sid 重启后的新进程：a 的内存里停着 v1，b 冷加载。
+				if err := a.writeNest(ctx, id, "A1", ""); err != nil {
+					t.Fatal(err)
+				}
+				if got := b.read(t, ctx, id); got != "a=A1;b=@1" {
+					t.Fatalf("restarted process cold read=%q, want %q", got, "a=A1;b=@1")
+				}
+				if err := b.writeNest(ctx, id, "", "B1"); err != nil {
+					t.Fatal(err)
+				}
+				// 淘汰后再访问：b 的实例被仅内存卸载，下一次请求从权威重新加载。
+				evicted := b.manager.Get(id).(*reloadableFullDocEntity)
+				if err := b.mgr.backend.(entity.IRemoteEntityUnloader).UnloadRemoteEntity(ctx, evicted); err != nil {
+					t.Fatal(err)
+				}
+				loads := b.loader.loads.Load()
+				if got := b.read(t, ctx, id); got != want {
+					t.Fatalf("read after eviction=%q, want %q", got, want)
+				}
+				if b.loader.loads.Load() != loads+1 {
+					t.Fatalf("read after eviction did not reload from the authority (loads %d -> %d)", loads, b.loader.loads.Load())
+				}
+				if err := b.writeNest(ctx, id, "A2", ""); err != nil {
+					t.Fatal(err)
+				}
+				if doc := b.loaderDocument(t, id); doc != "a=A2;b=B1" {
+					t.Fatalf("Mongo document=%q, want %q", doc, "a=A2;b=B1")
+				}
+				return
+			}
+			if got := a.read(t, ctx, id); got != want {
+				t.Fatalf("A answered %q after it may have fallen behind, want the authority's %q", got, want)
+			}
+			if err := a.writeNest(ctx, id, "A2", ""); err != nil {
+				t.Fatalf("A write: %v", err)
+			}
+			if doc := a.loaderDocument(t, id); doc != "a=A2;b=B1" {
+				t.Fatalf("Mongo document=%q, want A's write on top of B's %q", doc, "a=A2;b=B1")
+			}
+			if got := a.read(t, ctx, id); got != "a=A2;b=B1@3" {
+				t.Fatalf("A read after its write=%q", got)
+			}
+		})
+	}
+}
+
+// admitWithoutChange 走一次写准入但不提交（与只读请求同一准入），让实例在本进程加载并对齐。
+func (n sharedWriterNode) admitWithoutChange(t *testing.T, ctx context.Context, id int64) {
+	t.Helper()
+	batch, err := n.mgr.PrepareRemoteWriteBatch(ctx, []int64{id})
+	if err != nil {
+		t.Fatalf("sid %d admission: %v", n.sid, err)
+	}
+	_ = batch.Abort(ctx, errors.New("no change"))
+	if err := batch.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 兜底：单实例前提被打破时（同 sid 的两个进程都认为自己是 owner，或权威的所有权代际已被别处推进），后到的写在投影的
+// 元数据 CAS（_ver == BaseVersion、_owner_epoch、_owner_route）上被拒，权威数据不被覆盖；本进程的实例隔离、卸载，
+// 下一次访问重新向权威对齐。
+func TestExclusiveWriteFromABrokenPremiseIsRejectedAtProjection(t *testing.T) {
+	t.Run("two processes with the same sid", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		nodes := newWriterNodesOn(t, newRemoteMongoFake(), 2321, nil, 1000, 1000)
+		a1, a2 := nodes[0], nodes[1]
+		id := testRemoteFullIDWithKind(2321, 1, 125)
+		if _, err := a1.write(t, ctx, id, "A1", "", 0x61); err != nil {
+			t.Fatal(err)
+		}
+		a2.admitWithoutChange(t, ctx, id)
+		if _, err := a1.write(t, ctx, id, "A1b", "", 0x62); err != nil {
+			t.Fatal(err)
+		}
+		stale := a2.manager.Get(id).(*reloadableFullDocEntity)
+		base, err := a2.write(t, ctx, id, "", "A2", 0x63)
+		if err == nil {
+			t.Fatalf("the late process's write on base %d was accepted, want the projection to reject it; Mongo=%q", base, a2.loaderDocument(t, id))
+		}
+		if !errors.Is(err, entity.ErrRemoteVersionConflict) {
+			t.Fatalf("late write err=%v, want the version conflict from the projection CAS", err)
+		}
+		if doc := a1.loaderDocument(t, id); doc != "a=A1b;b=" {
+			t.Fatalf("Mongo document=%q after the rejected late write, want the first process's %q", doc, "a=A1b;b=")
+		}
+		if !stale.IsRemoved() {
+			t.Fatal("the late process kept serving its rejected local copy")
+		}
+		if base, err := a2.write(t, ctx, id, "", "A2", 0x64); err != nil || base != 2 {
+			t.Fatalf("late process write after realigning: base=%d err=%v, want base 2", base, err)
+		}
+		if doc := a1.loaderDocument(t, id); doc != "a=A1b;b=A2" {
+			t.Fatalf("Mongo document=%q, want %q", doc, "a=A1b;b=A2")
+		}
+	})
+	t.Run("ownership moved behind the owner", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		a := newWriterNodesOn(t, newRemoteMongoFake(), 2322, nil, 1000)[0]
+		id := testRemoteFullIDWithKind(2322, 1, 125)
+		if _, err := a.write(t, ctx, id, "A1", "", 0x65); err != nil {
+			t.Fatal(err)
+		}
+		owner, _, err := a.loader.store.GetOwnership(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.loader.store.TransferExpected(ctx, id, owner, 2000); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.write(t, ctx, id, "A2", "", 0x66); !errors.Is(err, entity.ErrRemoteVersionConflict) && !errors.Is(err, entity.ErrRemoteFenced) {
+			t.Fatalf("write after the ownership moved behind the owner: err=%v, want a rejection", err)
+		}
+		if doc := a.loaderDocument(t, id); doc != "a=A1;b=" {
+			t.Fatalf("Mongo document=%q, want the untouched %q", doc, "a=A1;b=")
+		}
+		if _, err := a.write(t, ctx, id, "A3", "", 0x67); !errors.Is(err, entity.ErrRemoteFenced) {
+			t.Fatalf("write after realigning: err=%v, want ErrRemoteFenced (the authority names sid 2000)", err)
+		}
+	})
+}
+
+// gatedPublishStorage 在 hold 打开时让本进程的 outbox 发布停在标记 Committed 之前（事务已 Applied、未发布）。
+type gatedPublishStorage struct {
+	*MongoCommitter
+	hold    atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *gatedPublishStorage) MarkRemoteCommitPublished(ctx context.Context, id entity.RemoteTransactionID) error {
+	if s.hold.Load() {
+		select {
+		case s.entered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.MongoCommitter.MarkRemoteCommitPublished(ctx, id)
+}
+
+// 独占写不再带每次递增的写许可 fence，确认（acknowledgeRemoteCommit）不能再靠 fence 认出写者：同 sid 的另一个进程
+// （outbox 归属按 sid 判定，它把这笔当作自己的立即发布）确认时，空闲的本地副本与这笔提交的 (BaseVersion, LockFence)
+// 恰好相同。若据此推进，那份没有这笔修改的副本就冒充最新，下一笔整文档写覆盖掉它。写者只认“正持有写门、定稿了这笔
+// 事务”的那个进程。
+func TestPublishingAnotherIncarnationsCommitDoesNotAdvanceAnIdleCopy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	gated := &gatedPublishStorage{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	first := true
+	nodes := newWriterNodesOn(t, newRemoteMongoFake(), 2323, func(_ int32, store *MongoCommitter) StorageBackend {
+		if !first {
+			return store
+		}
+		first = false
+		gated.MongoCommitter = store
+		return gated
+	}, 1000, 1000)
+	a1, a2 := nodes[0], nodes[1]
+	id := testRemoteFullIDWithKind(2323, 1, 125)
+	if _, err := a1.write(t, ctx, id, "A1", "", 0x71); err != nil {
+		t.Fatal(err)
+	}
+	a2.admitWithoutChange(t, ctx, id)
+	idle := a2.manager.Get(id).(*reloadableFullDocEntity)
+	gated.hold.Store(true)
+	done := make(chan error, 1)
+	go func() {
+		_, err := a1.write(t, ctx, id, "A1b", "", 0x72)
+		done <- err
+	}()
+	select {
+	case <-gated.entered:
+	case <-ctx.Done():
+		t.Fatal("the first process's commit never reached its outbox publish")
+	}
+	if err := a2.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatalf("the other incarnation publishing the shared outbox: %v", err)
+	}
+	if got := idle.EntityVersion(); got != 1 {
+		t.Fatalf("the idle copy (holding only v1's content) claims version %d after another incarnation's commit was acknowledged on it, want 1", got)
+	}
+	gated.hold.Store(false)
+	close(gated.release)
+	if err := <-done; err != nil {
+		t.Fatalf("first process write: %v", err)
+	}
+	_, _ = a2.write(t, ctx, id, "", "A2", 0x73)
+	if doc := a1.loaderDocument(t, id); !strings.HasPrefix(doc, "a=A1b;") {
+		t.Fatalf("Mongo document=%q: the idle copy's write overwrote the first process's a=A1b", doc)
+	}
+}
+
+// 起服预加载与路由前置检查的冷加载也是对齐时刻（同一步 routedOwnership）：它读到的权威版本与加载的实例一致时记下
+// 对齐，之后的第一次请求不再读权威、也不取写许可。
+func TestRoutedColdLoadAlignsSoTheFirstRequestReadsNoAuthority(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db := newCountingMongo()
+	nodes := newWriterNodesOn(t, db, 2324, nil, 1000, 1000)
+	old, restarted := nodes[0], nodes[1]
+	id := testRemoteFullIDWithKind(2324, 1, 125)
+	if _, err := old.write(t, ctx, id, "A1", "", 0x81); err != nil {
+		t.Fatal(err)
+	}
+	if owner, found, err := restarted.mgr.ServeRoutedRequest(ctx, id); err != nil || !found || owner != restarted.sid {
+		t.Fatalf("route check: owner=%d found=%v err=%v", owner, found, err)
+	}
+	before := db.snapshot()
+	if base, err := restarted.write(t, ctx, id, "", "B1", 0x82); err != nil || base != 1 {
+		t.Fatalf("first write after the routed cold load: base=%d err=%v", base, err)
+	}
+	got := db.since(before)
+	if got[remoteMetaCollection+".FindOne"] != 0 || got[remoteMetaCollection+".FindOneAndUpdate"] != 0 {
+		t.Fatalf("first write after the routed cold load read or granted on %s: %v, want only the commit", remoteMetaCollection, got)
 	}
 }

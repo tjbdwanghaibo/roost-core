@@ -186,14 +186,11 @@ func runRemotePublicationAndWALRecovery(t *testing.T, interruptSecondPublication
 			realPut(t, fx.database, "local_inventory", 9001, base, base+1, bson.M{"value": base + 1}),
 		})
 		for _, id := range ids {
+			// 独占实体不取写许可：认领之后直接按版本与所有权代际提交。
 			if _, err := remoteStore.ClaimOwnership(fx.context(), id, 901); err != nil {
 				t.Fatal(err)
 			}
-			grant, err := remoteStore.GrantWrite(fx.context(), id, fmt.Sprintf("%s/%d", r.ID, id), 901)
-			if err != nil {
-				t.Fatal(err)
-			}
-			commit := entity.RemoteCommit{TransactionID: entity.RemoteTransactionID(r.ID), EntityID: id, Kind: kind, BaseVersion: base, NextVersion: base + 1, MarkerEpoch: 1, RouteEpoch: 1, LockFence: grant.Fence, Schema: 1, Codec: 1}
+			commit := entity.RemoteCommit{TransactionID: entity.RemoteTransactionID(r.ID), EntityID: id, Kind: kind, BaseVersion: base, NextVersion: base + 1, MarkerEpoch: 1, RouteEpoch: 1, Schema: 1, Codec: 1}
 			for i, coll := range []string{"remote_wallet", "remote_inventory"} {
 				data := []byte(fmt.Sprintf("entity=%d collection=%s version=%d", id, coll, base+1))
 				commit.Mutations = append(commit.Mutations, entity.RemoteDataMutation{Database: fx.database, Collection: coll, ID: id, Version: base + 1, Data: data})

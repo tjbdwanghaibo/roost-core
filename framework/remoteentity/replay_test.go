@@ -299,7 +299,7 @@ func awaitSignal(t *testing.T, ctx context.Context, ch <-chan struct{}, what str
 }
 
 // 端到端：真实 nestwal WAL + engine.Projector/MongoStore + mongotest，Remote 走正式 Backend + MongoCommitter 权威。已提交事务
-// 首次发布失败 → finalizer 抢先发布并释放 gate → 同实体下一写者拿到更大的 fence → 投影器重放旧回执（再失败一次）后 ack；
+// 首次发布失败 → finalizer 抢先发布并释放 gate → 同实体下一写者准入（版本 1）→ 投影器重放旧回执（再失败一次）后 ack；
 // 新写者随后正常提交，没有无限重试。
 // 历史：RR-20260926-11。
 func TestCommittedReplayAfterFinalizerAndNewerFenceAcksWAL(t *testing.T) {
@@ -389,17 +389,17 @@ func TestCommittedReplayAfterFinalizerAndNewerFenceAcksWAL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// finalizer 回源得到 Applied，自行发布并释放 gate；下一写者拿到更大的 fence。
+	// finalizer 回源得到 Applied，自行发布并释放 gate；下一写者在版本 1 上准入（独占写不取写许可，fence 沿用实例的）。
 	batch2, err := mgr.PrepareRemoteWriteBatch(ctx, []int64{live.GUId()})
 	if err != nil {
 		t.Fatalf("next writer not admitted after finalizer: %v", err)
 	}
-	if got := live.RemoteVersionVector(); got.StateVersion != 1 || got.LockFence <= commits1[0].LockFence {
-		t.Fatalf("next writer vector=%+v, want version 1 with fence > %d", got, commits1[0].LockFence)
+	if got := live.RemoteVersionVector(); got.StateVersion != 1 || got.LockFence != commits1[0].LockFence {
+		t.Fatalf("next writer vector=%+v, want version 1 with the unchanged exclusive fence %d", got, commits1[0].LockFence)
 	}
 	newerFence := live.RemoteVersionVector().LockFence
 
-	// 投影器重放旧回执：不能被新 fence 拒绝；这次发布标记再失败一次。
+	// 投影器重放旧回执：不能被下一写者的准入拒绝，也不能回退它的版本向量；这次发布标记再失败一次。
 	close(storage.allowRetry)
 	awaitSignal(t, ctx, storage.thirdReached, "the projector's second replay")
 	if err = mgr.FlushRemoteTransaction(ctx, tx1); err != nil {
@@ -581,14 +581,14 @@ func TestParallelWindowReplaysSucceededSuffixUnderNewerFence(t *testing.T) {
 	if err = mgr.FlushRemoteTransaction(ctx, tx2); err != nil {
 		t.Fatalf("suffix tx2 before replay: %v", err)
 	}
-	// Y 的下一写者拿到更大的 fence，之后投影器才会重放 tx2。
+	// Y 的下一写者在版本 1 上准入（独占写不取写许可，fence 沿用实例的），之后投影器才会重放 tx2。
 	batch3, err := mgr.PrepareRemoteWriteBatch(ctx, []int64{y.GUId()})
 	if err != nil {
 		t.Fatalf("next writer on the suffix entity not admitted: %v", err)
 	}
 	newer := y.RemoteVersionVector()
-	if newer.StateVersion != 1 || newer.LockFence <= commits2[0].LockFence {
-		t.Fatalf("next writer vector=%+v, want version 1 with fence > %d", newer, commits2[0].LockFence)
+	if newer.StateVersion != 1 || newer.LockFence != commits2[0].LockFence {
+		t.Fatalf("next writer vector=%+v, want version 1 with the unchanged exclusive fence %d", newer, commits2[0].LockFence)
 	}
 	storage.allowPrefixFailure()
 

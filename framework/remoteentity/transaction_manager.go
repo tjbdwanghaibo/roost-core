@@ -598,6 +598,7 @@ func (m *Manager) releaseRemoteEntries(parent context.Context, entries []*remote
 				joined = errors.Join(joined, entity.ErrRemoteReleaseIncomplete, err)
 			}
 		}
+		entry.wrapper.clearWriting()
 		entry.wrapper.ownershipMu.RUnlock()
 		<-entry.wrapper.writeGate
 		entry.wrapper.release()
@@ -1172,9 +1173,20 @@ func thawAcknowledgedRemote(remote entity.IThreadSafeRemoteEntity, marked bool) 
 // 定稿用同一份租约填 BaseVersion 与 LockFence，所以写者的向量在确认前是 (BaseVersion, LockFence)，确认后（重复确认）
 // 是 (NextVersion, LockFence)。写者持有写门直到持久结论，期间向量不会被别的写入改动。
 // 更早提交的迟到确认由调用方先用 remoteReceiptObsolete 排除。
-func remoteCommitHeldBy(remote entity.IThreadSafeRemoteEntity, commit entity.RemoteCommit) bool {
+//
+// 向量相同还不够：独占写不取写许可，同一实体上各次独占写的 LockFence 相同，别的进程（同 sid 重叠的另一个进程、所有权
+// 转走期间的新 owner）的提交与一份空闲副本的 (BaseVersion, LockFence) 可能恰好一致。所以还要求这份实例的 wrapper 此刻
+// 正由这笔事务持有写门（writing，定稿时记下、写门释放时清除）；写门释放后的重复确认只在向量已经等于这笔的结果时放行
+// （幂等，不改变任何东西）。
+func remoteCommitHeldBy(wrapper *remoteEntityWrapper, remote entity.IThreadSafeRemoteEntity, commit entity.RemoteCommit) bool {
 	current := remote.RemoteVersionVector()
-	return current.LockFence == commit.LockFence && (current.StateVersion == commit.BaseVersion || current.StateVersion == commit.NextVersion)
+	if current.LockFence != commit.LockFence || (current.StateVersion != commit.BaseVersion && current.StateVersion != commit.NextVersion) {
+		return false
+	}
+	if wrapper.writing(commit.TransactionID) {
+		return true
+	}
+	return current == entity.RemoteVersionVector{StateVersion: commit.NextVersion, MarkerEpoch: commit.MarkerEpoch, LockFence: commit.LockFence, RouteEpoch: commit.RouteEpoch}
 }
 
 func remoteCommitAlreadyAcknowledged(remote entity.IThreadSafeRemoteEntity, vector entity.RemoteVersionVector) bool {
@@ -1200,7 +1212,7 @@ func (m *Manager) acknowledgeRemoteCommit(commit entity.RemoteCommit) error {
 		return nil
 	}
 	if remote, ok := live.(entity.IThreadSafeRemoteEntity); ok {
-		if !remoteCommitHeldBy(remote, commit) {
+		if !remoteCommitHeldBy(wrapper, remote, commit) {
 			// 这份内存实例不是这笔提交的写者：outbox 协调者扫描的是共享 outbox 里的全部未发布事务，会代发别的进程（共享
 			// 模式的另一个写者、转走所有权期间的新所有者）的提交，或重启后重放的、实例加载时还没带上的提交。实例里没有
 			// 这笔修改，把版本推进到 NextVersion 会让它冒充最新，下一笔整文档写就覆盖掉这笔修改。保持落后，写准入按

@@ -11,15 +11,26 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// WriteAuthority 将所有权、最新写许可与数据版本放在提交使用的同一个持久化域。
-// GrantWrite 每次调用必须使用全新的 token；未知结果不能换 token 自动重试。
-// ownerSID=0 表示共享锁写入，否则必须是当前独占所有者。
+// WriteAuthority 将所有权、共享模式的写许可与数据版本放在提交使用的同一个持久化域。
+//
+// 独占实体（所有权记录是单个 owner、非共享）不取写许可：一个实体同一时刻只有一个 owner（App 单实例与 fail-stop
+// 保证），写准入只在加载、取得归属、退出共享这三个时刻用 ReadAuthorityState 向权威对齐一次版本，稳定持有期间不碰
+// 权威；兜底是投影元数据 CAS 上的 _ver == BaseVersion 与所有权代际（authorityCommitFilter）。
+//
+// GrantWrite 只用于共享模式（分布式锁之下），每次调用必须使用全新的 token；未知结果不能换 token 自动重试。
 type WriteAuthority interface {
 	entity.IRemoteEntityOwnershipStore
-	GrantWrite(context.Context, int64, string, int32) (WriteGrant, error)
+	ReadAuthorityState(context.Context, int64) (AuthorityState, bool, error)
+	GrantWrite(context.Context, int64, string) (WriteGrant, error)
 }
 
-// WriteGrant 是一次持久写许可：权威版本、新分配的 fence 与当时的所有权。
+// AuthorityState 是一次只读的权威读取：所有权与数据版本。
+type AuthorityState struct {
+	Version   int64
+	Ownership entity.RemoteEntityMarkerLease
+}
+
+// WriteGrant 是一次共享模式的持久写许可：权威版本、新分配的 fence 与当时的所有权。
 type WriteGrant struct {
 	Version   int64
 	Fence     uint64
@@ -88,6 +99,18 @@ func (s *MongoCommitter) GetOwnership(ctx context.Context, id int64) (entity.Rem
 	return d.lease(), err == nil, err
 }
 
+// ReadAuthorityState 读一次所有权记录（一次 FindOne，不写）：所有权与权威版本。没有记录 found=false。
+func (s *MongoCommitter) ReadAuthorityState(ctx context.Context, id int64) (AuthorityState, bool, error) {
+	d, err := s.readAuthority(ctx, id)
+	if errors.Is(err, fmongo.ErrNotFound) {
+		return AuthorityState{}, false, nil
+	}
+	if err != nil {
+		return AuthorityState{}, false, err
+	}
+	return AuthorityState{Version: d.Version, Ownership: d.lease()}, true, nil
+}
+
 func (s *MongoCommitter) ClaimOwnership(ctx context.Context, id int64, owner int32) (entity.RemoteEntityMarkerLease, error) {
 	if id == 0 || owner == 0 {
 		return entity.RemoteEntityMarkerLease{}, entity.ErrRemoteFenced
@@ -113,16 +136,13 @@ func authorityFilter(id int64, lease entity.RemoteEntityMarkerLease) bson.M {
 	return bson.M{"_id": id, "_authority": true, "_owner_sid": lease.OwnerSid, "_owner_shared": lease.Shared, "_owner_epoch": lease.MarkerEpoch, "_owner_route": lease.RouteEpoch}
 }
 
-// GrantWrite 以 CAS 为实体分配新的写 fence 并记下令牌：owner 为 0 时要求实体处于共享模式，否则要求 owner 是当前
-// 独占所有者。不满足条件返回 ErrRemoteFenced。
-func (s *MongoCommitter) GrantWrite(ctx context.Context, id int64, token string, owner int32) (WriteGrant, error) {
+// GrantWrite 以 CAS 为共享模式的实体分配新的写 fence 并记下令牌（分布式锁取得之后调用）。实体不在共享模式返回
+// ErrRemoteFenced。独占实体不取许可（见 WriteAuthority）。
+func (s *MongoCommitter) GrantWrite(ctx context.Context, id int64, token string) (WriteGrant, error) {
 	if id == 0 || token == "" {
 		return WriteGrant{}, entity.ErrRemoteFenced
 	}
-	filter := bson.M{"_id": id, "_authority": true, "_grant_fence": bson.M{"$gte": 0, "$lt": int64(math.MaxInt64)}, "_ver": bson.M{"$gte": 0}, "_owner_shared": owner == 0}
-	if owner != 0 {
-		filter["_owner_sid"] = owner
-	}
+	filter := bson.M{"_id": id, "_authority": true, "_grant_fence": bson.M{"$gte": 0, "$lt": int64(math.MaxInt64)}, "_ver": bson.M{"$gte": 0}, "_owner_shared": true}
 	// 一次 FindAndModify 同时取得当前版本并递增许可，不先读后写；与提交争用同一文档。
 	var next mongoAuthority
 	err := s.controlDB().Collection(remoteMetaCollection).FindOneAndUpdate(ctx, filter, bson.M{"$inc": bson.M{"_grant_fence": int64(1)}, "$set": bson.M{"_grant_token": token}}, &next, fmongo.FindOneAndUpdateOption{ReturnAfter: true})
@@ -146,7 +166,8 @@ func (s *MongoCommitter) changeOwnership(ctx context.Context, id int64, old, nex
 	}
 	next.MarkerEpoch = old.MarkerEpoch + 1
 	filter := authorityFilter(id, old)
-	// 同一文档上的写与数据提交互斥；代际更新立即撤销旧许可。
+	// 同一文档上的写与数据提交互斥；代际更新立即撤销旧许可（共享模式的 _grant_token 清空，所有提交的 _owner_epoch
+	// 条件同时失配）。
 	var d mongoAuthority
 	err := s.controlDB().Collection(remoteMetaCollection).FindOneAndUpdate(ctx, filter, bson.M{"$set": bson.M{"_owner_sid": next.OwnerSid, "_owner_shared": next.Shared, "_owner_epoch": next.MarkerEpoch, "_owner_route": next.RouteEpoch, "_grant_token": ""}}, &d, fmongo.FindOneAndUpdateOption{ReturnAfter: true})
 	if err != nil {

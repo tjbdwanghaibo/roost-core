@@ -148,7 +148,7 @@ func (l *versionedLock) TryLock(ctx context.Context) error {
 	}
 
 	if l.authority != nil {
-		grant, grantErr := l.authority.GrantWrite(ctx, l.id, token, 0)
+		grant, grantErr := l.authority.GrantWrite(ctx, l.id, token)
 		if grantErr == nil {
 			refreshed, refreshErr := l.redis.Eval(ctx, versionedRefreshLua, []string{l.key}, token, ttlMs)
 			owned, parseErr := toInt(refreshed)

@@ -29,6 +29,9 @@ type fullDocRemoteEntity struct {
 	a, b string
 	// scope 是提交里 mutation 的 DatabaseScope（缺省 0 = global）；RR-20260927-32 的回归设成 sid，让 FinalizeLocked 按 RR-09 拒绝。
 	scope uint8
+	// readOnly 由只读 handler 置位：本次事务没有持久修改，HasRemoteCommitLocked 答 false（与生成代码按 PersistChange
+	// 判定一致）并清除标记。
+	readOnly atomic.Bool
 }
 
 const fullDocCollection = "remote_fulldoc"
@@ -48,7 +51,9 @@ func (e *fullDocRemoteEntity) set(a, b string) {
 	}
 }
 
-func (*fullDocRemoteEntity) HasRemoteCommitLocked(entity.RemoteTransactionOutcome) bool { return true }
+func (e *fullDocRemoteEntity) HasRemoteCommitLocked(entity.RemoteTransactionOutcome) bool {
+	return !e.readOnly.Swap(false)
+}
 
 func (e *fullDocRemoteEntity) BuildRemoteCommitLocked(lease entity.RemoteWriteLease, _ entity.RemoteTransactionOutcome) (entity.RemoteCommit, error) {
 	e.mu.Lock()

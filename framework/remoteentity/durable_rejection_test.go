@@ -341,7 +341,7 @@ func TestMongoRejectUnresolvedDefersToExistingTransaction(t *testing.T) {
 	}
 }
 
-// 守卫：WAL 级（Durability 1/2/3）正式链路不产生 Remote Rejected。投影时权威已被接管（_grant_fence 前进，CAS 不命中），
+// 守卫：WAL 级（Durability 1/2/3）正式链路不产生 Remote Rejected。投影时权威已被接管（所有权代际前进，CAS 不命中），
 // 真实 nestwal WAL + engine.Projector + engine.MongoStore + 正式 MongoCommitter 上：投影器以 ErrProjectionConflict fatal
 // （进程级 fail-stop），不写 Remote 事务记录；tracker 不变成 Rejected；strict / pipelined 的 Commit 只得到结果未知；
 // finalizer 投影期限到后回源读到 Unknown，只隔离重试，不为 WAL 事务写持久拒绝。
@@ -396,9 +396,9 @@ func TestWALRemoteAuthorityConflictNeverProducesRejected(t *testing.T) {
 				t.Fatal(err)
 			}
 			commits := batch.Commits()
-			// 另一进程接管了写权威：最新 grant 的 fence 前进，本批次携带的旧 fence 在投影时 CAS 不命中。
-			takeover := int64(commits[0].LockFence + 1)
-			if _, err = f.store.mongo.(*mongotest.Client).Collection("control", remoteMetaCollection).UpdateOne(ctx, bson.M{"_id": f.live.GUId()}, bson.M{"$set": bson.M{"_grant_fence": takeover}}); err != nil {
+			// 单实例前提被打破、所有权已在别处前进：所有权代际推进，本批次携带的旧代际在投影时 CAS 不命中。
+			takeover := int64(commits[0].MarkerEpoch + 1)
+			if _, err = f.store.mongo.(*mongotest.Client).Collection("control", remoteMetaCollection).UpdateOne(ctx, bson.M{"_id": f.live.GUId()}, bson.M{"$set": bson.M{"_owner_epoch": takeover}}); err != nil {
 				t.Fatal(err)
 			}
 			if err = projector.Commit(ctx, remoteCommitRecord(durability, commits)); err != nil {

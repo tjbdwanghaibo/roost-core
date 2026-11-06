@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync/atomic"
 	"time"
 
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -517,8 +519,8 @@ var _ entity.IRemoteCommitOutbox = (*MongoCommitter)(nil)
 var _ entity.IRemoteStorageInitializer = (*MongoCommitter)(nil)
 var _ AtomicCommitStore = (*MongoCommitter)(nil)
 
-// 准入必须先创建所有权并取得许可；在同一 Mongo 事务内一次校验多个实体。
-// MatchedCount 必须等于实体数；任一许可/版本失效都会使整个事务回滚。
+// 准入必须先创建所有权（共享模式还要取得许可）；在同一 Mongo 事务内一次校验多个实体。
+// MatchedCount 必须等于实体数；任一版本 / 代际 / 许可失效都会使整个事务回滚。
 func (s *MongoCommitter) applyCommitMetadata(ctx context.Context, commits []entity.RemoteCommit) ([]entity.RemoteCommitReceipt, error) {
 	receipts := make([]entity.RemoteCommitReceipt, 0, len(commits))
 
@@ -534,12 +536,47 @@ func (s *MongoCommitter) applyCommitMetadata(ctx context.Context, commits []enti
 		return nil, err
 	}
 	if result == nil || result.MatchedCount != int64(len(commits)) {
+		s.reportCommitConflict(ctx, commits)
 		return nil, fmongo.ErrVersionConflict
 	}
 	return receipts, nil
 }
+
+// authorityCommitFilter 是提交的元数据 CAS 条件（另加 _id 与 _ver == BaseVersion）。两种条件按提交所在所有权代际的
+// 模式区分：每次所有权变更（认领之后的转移、进入 / 退出共享）都推进 _owner_epoch，所以同一个 epoch 只对应一种模式。
+//
+//   - 独占：只要求代际（_owner_epoch、_owner_route）未变。独占写不取写许可（WriteAuthority），LockFence 只是实例
+//     版本向量里沿用的值，不参与校验。前提是一个实体同一时刻只有一个 owner；被打破时（例如同 sid 两个进程重叠），
+//     后到的那笔因 _ver 或代际不符在这里被拒，权威不被覆盖。
+//   - 共享：另外要求 _grant_fence 等于这次写许可的 fence、_grant_token 非空（所有权变更会清空它），与修改前相同。
 func authorityCommitFilter(commit entity.RemoteCommit) bson.M {
-	return bson.M{"_authority": true, "_owner_epoch": commit.MarkerEpoch, "_owner_route": commit.RouteEpoch, "_grant_fence": commit.LockFence, "_grant_token": bson.M{"$ne": ""}}
+	return bson.M{"_authority": true, "_owner_epoch": commit.MarkerEpoch, "_owner_route": commit.RouteEpoch,
+		"$or": bson.A{
+			bson.M{"_owner_shared": false},
+			bson.M{"_owner_shared": true, "_grant_fence": commit.LockFence, "_grant_token": bson.M{"$ne": ""}},
+		}}
+}
+
+// reportCommitConflict 在元数据 CAS 没有全部命中时记 ERROR 与 remote_entity.commit_conflict_total：逐个读回不满足条件的
+// 实体当前的权威记录，写明提交的基础版本与代际和权威的差别。独占实体出现它说明单实例前提被打破（两个进程都以为
+// 自己是 owner）；随后由调用方按现有路径收尾——Durability 0 明确拒绝、隔离并卸载实例（下一次访问重新对齐），
+// WAL 投影是 ErrProjectionConflict（投影器 fatal，进程 fail-stop）。只在失败路径上多读，不影响正常提交。
+func (s *MongoCommitter) reportCommitConflict(ctx context.Context, commits []entity.RemoteCommit) {
+	for _, commit := range commits {
+		var current mongoAuthority
+		err := s.controlDB().Collection(remoteMetaCollection).FindOne(ctx, bson.M{"_id": commit.EntityID}, &current)
+		if err == nil && current.Version == int64(commit.BaseVersion) && current.Marker == commit.MarkerEpoch && current.Route == commit.RouteEpoch &&
+			(!current.Shared || (current.Fence == commit.LockFence && current.Token != "")) {
+			continue
+		}
+		metrics.IncCounter("remote_entity.commit_conflict_total", nil, 1)
+		slog.Error("remote_entity: authority refused a commit (stored version or ownership epoch moved); "+
+			"for an exclusively owned entity this means another process also acted as its owner",
+			"entity", commit.EntityID, "transaction", commit.TransactionID.String(),
+			"base_version", commit.BaseVersion, "marker_epoch", commit.MarkerEpoch, "route_epoch", commit.RouteEpoch, "lock_fence", commit.LockFence,
+			"authority_version", current.Version, "authority_owner", current.Owner, "authority_shared", current.Shared,
+			"authority_marker_epoch", current.Marker, "authority_route_epoch", current.Route, "authority_grant_fence", current.Fence, "read_err", err)
+	}
 }
 func remoteMetadataUpdate(commit entity.RemoteCommit) bson.M {
 	return bson.M{"$set": bson.M{"_ver": commit.NextVersion, "_marker_epoch": commit.MarkerEpoch, "_route_epoch": commit.RouteEpoch, "_lock_fence": commit.LockFence, "_deleted": commit.Delete}}

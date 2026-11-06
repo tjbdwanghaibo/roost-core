@@ -39,6 +39,9 @@ func authorityCommit(t *testing.T, id int64, tx byte, grant WriteGrant) entity.R
 		BaseVersion: uint64(grant.Version), NextVersion: uint64(grant.Version) + 1, MarkerEpoch: grant.Ownership.MarkerEpoch, RouteEpoch: grant.Ownership.RouteEpoch, LockFence: grant.Fence, Schema: 1, Codec: 1,
 		Mutations: []entity.RemoteDataMutation{{Database: "game", Collection: "players", ID: id, Version: uint64(grant.Version) + 1, Data: []byte("new")}}}
 }
+
+// 共享模式的写许可：被更新许可取代的未提交写者在投影 CAS 上被拒，已提交事务可幂等重放，所有权变更之后旧许可失效，
+// 伪造代际的提交被拒。
 func TestMongoAuthorityFencesUncommittedWriterAndReplaysCommittedTransaction(t *testing.T) {
 	ctx := context.Background()
 	db := newRemoteMongoFake()
@@ -49,11 +52,15 @@ func TestMongoAuthorityFencesUncommittedWriterAndReplaysCommittedTransaction(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	old, err := s.GrantWrite(ctx, id, "old", 7)
+	shared, err := s.EnterSharedExpected(ctx, id, owner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newer, err := s.GrantWrite(ctx, id, "new", 7)
+	old, err := s.GrantWrite(ctx, id, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := s.GrantWrite(ctx, id, "new")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +75,7 @@ func TestMongoAuthorityFencesUncommittedWriterAndReplaysCommittedTransaction(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	grant, err := s.GrantWrite(ctx, id, "third", 7)
+	grant, err := s.GrantWrite(ctx, id, "third")
 	if err != nil || grant.Version != 1 {
 		t.Fatalf("grant=%+v err=%v", grant, err)
 	}
@@ -76,14 +83,14 @@ func TestMongoAuthorityFencesUncommittedWriterAndReplaysCommittedTransaction(t *
 	if err != nil || receipt != replay {
 		t.Fatalf("replay=%+v err=%v", replay, err)
 	}
-	if _, err = s.TransferExpected(ctx, id, owner, 8); err != nil {
+	if _, err = s.LeaveSharedExpected(ctx, id, shared); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.CommitRemote(ctx, authorityCommit(t, id, 3, grant)); !errors.Is(err, entity.ErrRemoteVersionConflict) {
-		t.Fatalf("transferred writer committed: %v", err)
+		t.Fatalf("a shared grant taken before leaving shared mode committed: %v", err)
 	}
-	if _, err = s.GrantWrite(ctx, id, "wrong-owner", 7); !errors.Is(err, entity.ErrRemoteFenced) {
-		t.Fatalf("old owner admitted: %v", err)
+	if _, err = s.GrantWrite(ctx, id, "exclusive"); !errors.Is(err, entity.ErrRemoteFenced) {
+		t.Fatalf("write grant issued for an exclusive entity: %v", err)
 	}
 	// 新创建的 committer 同样必须严格比较，无需调用开关。
 	another := newBoundMongoCommitter(db, "control", 7, 0)
@@ -101,31 +108,28 @@ func TestMongoAuthoritySharedTransitionsAndOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.GrantWrite(ctx, 101, "shared-before-enter", 0); !errors.Is(err, entity.ErrRemoteFenced) {
+	if _, err = s.GrantWrite(ctx, 101, "shared-before-enter"); !errors.Is(err, entity.ErrRemoteFenced) {
 		t.Fatal(err)
 	}
 	shared, err := s.EnterSharedExpected(ctx, 101, owner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.GrantWrite(ctx, 101, "owner-in-shared", 7); !errors.Is(err, entity.ErrRemoteFenced) {
-		t.Fatal(err)
-	}
-	grant, err := s.GrantWrite(ctx, 101, "shared", 0)
+	grant, err := s.GrantWrite(ctx, 101, "shared")
 	if err != nil || grant.Ownership != shared {
 		t.Fatalf("grant=%+v err=%v", grant, err)
+	}
+	if _, err := db.Collection("control", remoteMetaCollection).UpdateOne(ctx, bson.M{"_id": 101}, bson.M{"$set": bson.M{"_grant_fence": int64(math.MaxInt64)}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.GrantWrite(ctx, 101, "overflow"); !errors.Is(err, entity.ErrRemoteFenced) {
+		t.Fatalf("overflow=%v", err)
 	}
 	if _, err = s.LeaveSharedExpected(ctx, 101, owner); err == nil {
 		t.Fatal("stale transition succeeded")
 	}
 	if _, err = s.LeaveSharedExpected(ctx, 101, shared); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := db.Collection("control", remoteMetaCollection).UpdateOne(ctx, bson.M{"_id": 101}, bson.M{"$set": bson.M{"_grant_fence": int64(math.MaxInt64)}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.GrantWrite(ctx, 101, "overflow", 7); !errors.Is(err, entity.ErrRemoteFenced) {
-		t.Fatalf("overflow=%v", err)
 	}
 }
 func TestMongoAuthorityRejectsUnsupportedMetadata(t *testing.T) {
@@ -167,71 +171,27 @@ func (c authorityLostReplyCollection) FindOneAndUpdate(ctx context.Context, filt
 func TestMongoAuthorityLostGrantReplyDoesNotAllocateTwice(t *testing.T) {
 	ctx := context.Background()
 	db := newRemoteMongoFake()
-	s := newBoundMongoCommitter(authorityLostReplyMongo{db}, "control", 7, 0)
-	if _, err := s.ClaimOwnership(ctx, 101, 7); err != nil {
+	plain := newBoundMongoCommitter(db, "control", 7, 0)
+	owner, err := plain.ClaimOwnership(ctx, 101, 7)
+	if err != nil {
 		t.Fatal(err)
 	}
-	grant, err := s.GrantWrite(ctx, 101, "one-attempt", 7)
+	if _, err := plain.EnterSharedExpected(ctx, 101, owner); err != nil {
+		t.Fatal(err)
+	}
+	s := newBoundMongoCommitter(authorityLostReplyMongo{db}, "control", 7, 0)
+	before := db.Collection("control", remoteMetaCollection).Calls["FindOneAndUpdate"]
+	grant, err := s.GrantWrite(ctx, 101, "one-attempt")
 	if err != nil || grant.Fence != 1 {
 		t.Fatalf("grant=%+v err=%v", grant, err)
 	}
-	if got := db.Collection("control", remoteMetaCollection).Calls["FindOneAndUpdate"]; got != 1 {
+	if got := db.Collection("control", remoteMetaCollection).Calls["FindOneAndUpdate"] - before; got != 1 {
 		t.Fatalf("write attempts=%d", got)
 	}
 }
 
-func TestOwnerRoutedAdmissionRechecksDurableOwnerDespiteHotCache(t *testing.T) {
-	ctx := context.Background()
-	const kind entity.EntityKind = 198
-	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: kind, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
-	store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 1000, 0)
-	cfg := DefaultConfig()
-	cfg.MarkerCacheTTL = time.Minute
-	manager := NewManager(newMockVersionedLockFactory(), cfg, 1000)
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if err := manager.StopFinalizer(ctx); err != nil {
-			t.Error(err)
-		}
-	})
-	loader := newRemoteTestLoader()
-	live := newTestRemoteEntity(1003, 1, kind)
-	loader.add(live)
-	backend, err := NewBackend(loader, store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager.SetBackend(backend)
-	manager.SetOwnershipStore(store)
-	for want := uint64(1); want <= 2; want++ {
-		batch, err := manager.PrepareRemoteWriteBatch(ctx, []int64{live.GUId()})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := live.RemoteVersionVector().LockFence; got != want {
-			t.Fatalf("owner write fence=%d want %d", got, want)
-		}
-		if err := batch.Abort(ctx, errors.New("abort probe")); err != nil {
-			t.Fatal(err)
-		}
-		if err := batch.Close(ctx); err != nil {
-			t.Fatal(err)
-		}
-	}
-	owner, _, err := store.GetOwnership(ctx, live.GUId())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.TransferExpected(ctx, live.GUId(), owner, 2000); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := manager.PrepareRemoteWriteBatch(ctx, []int64{live.GUId()}); !errors.Is(err, entity.ErrRemoteFenced) {
-		t.Fatalf("cached old owner admitted: %v", err)
-	}
-}
-
-func TestMongoAuthorityBatchCASRollsBackEveryEntityOnOneStaleGrant(t *testing.T) {
+// 多实体批次的元数据 CAS 在一个 Mongo 事务里：一个实体的基础版本已落后，整批回滚，没有实体被部分提交。
+func TestMongoAuthorityBatchCASRollsBackEveryEntityOnOneStaleVersion(t *testing.T) {
 	ctx := context.Background()
 	db := newRemoteMongoFake()
 	store := newBoundMongoCommitter(db, "control", 7, 0)
@@ -239,18 +199,10 @@ func TestMongoAuthorityBatchCASRollsBackEveryEntityOnOneStaleGrant(t *testing.T)
 	var commits []entity.RemoteCommit
 	for i := range 2 {
 		id, _ := entity.BuildEntityID(int64(1004+i), 198)
-		if _, err := store.ClaimOwnership(ctx, id, 7); err != nil {
-			t.Fatal(err)
-		}
-		grant, err := store.GrantWrite(ctx, id, generateToken(), 7)
-		if err != nil {
-			t.Fatal(err)
-		}
-		commits = append(commits, authorityCommit(t, id, 5, grant))
+		commits = append(commits, authorityCommit(t, id, 5, testWriteGrant(t, store, id)))
 	}
 	second := commits[1].EntityID
-	newer, err := store.GrantWrite(ctx, second, generateToken(), 7)
-	if err != nil {
+	if _, err := store.CommitRemote(ctx, authorityCommit(t, second, 6, testWriteGrant(t, store, second))); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.CommitRemoteBatch(ctx, commits); !errors.Is(err, entity.ErrRemoteVersionConflict) {
@@ -260,7 +212,7 @@ func TestMongoAuthorityBatchCASRollsBackEveryEntityOnOneStaleGrant(t *testing.T)
 	if err != nil || first.Version != 0 {
 		t.Fatalf("first CAS was not rolled back: %+v %v", first, err)
 	}
-	commits[1] = authorityCommit(t, second, 5, newer)
+	commits[1] = authorityCommit(t, second, 5, testWriteGrant(t, store, second))
 	before := db.Collection("control", remoteMetaCollection).Calls["BulkWrite"]
 	if _, err := store.CommitRemoteBatch(ctx, commits); err != nil {
 		t.Fatal(err)
@@ -270,35 +222,36 @@ func TestMongoAuthorityBatchCASRollsBackEveryEntityOnOneStaleGrant(t *testing.T)
 	}
 	for _, commit := range commits {
 		current, err := store.readAuthority(ctx, commit.EntityID)
-		if err != nil || current.Version != 1 {
+		if err != nil || current.Version != int64(commit.NextVersion) {
 			t.Fatalf("entity not committed: %+v %v", current, err)
 		}
 	}
 }
 
-func TestMongoCommitterRejectsWriteWithoutGrantByDefault(t *testing.T) {
+func TestMongoCommitterRejectsWriteWithoutOwnershipRecord(t *testing.T) {
 	ctx := context.Background()
 	store := newBoundMongoCommitter(newRemoteMongoFake(), "control", 7, 0)
 	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 198, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
 	id, _ := entity.BuildEntityID(1099, 198)
 	commit := authorityCommit(t, id, 99, WriteGrant{Ownership: entity.RemoteEntityMarkerLease{OwnerSid: 7, MarkerEpoch: 1, RouteEpoch: 1}})
 	if _, err := store.CommitRemote(ctx, commit); !errors.Is(err, entity.ErrRemoteVersionConflict) {
-		t.Fatalf("write without ownership or grant accepted: %v", err)
+		t.Fatalf("write without an ownership record accepted: %v", err)
 	}
 }
 
-// 所有存储用例也走正式准入，不能靠 committer 的弱校验模式伪造许可。
+// testWriteGrant 给存储用例一份独占写的准入：认领（已是本 sid 时幂等）并读权威版本与所有权。独占写不取写许可，
+// 返回值的 Fence 为 0（与正式写准入沿用的实例 fence 一样不参与投影校验）。
 func testWriteGrant(t *testing.T, store *MongoCommitter, id int64) WriteGrant {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := store.ClaimOwnership(ctx, id, 7); err != nil {
 		t.Fatal(err)
 	}
-	grant, err := store.GrantWrite(ctx, id, generateToken(), 7)
-	if err != nil {
-		t.Fatal(err)
+	state, found, err := store.ReadAuthorityState(ctx, id)
+	if err != nil || !found {
+		t.Fatalf("authority state found=%v err=%v", found, err)
 	}
-	return grant
+	return WriteGrant{Version: state.Version, Ownership: state.Ownership}
 }
 
 func TestSharedAdmissionUsesOwnershipFromDurableGrant(t *testing.T) {
@@ -705,4 +658,45 @@ type remoteLoaderStub struct{}
 
 func (remoteLoaderStub) LoadRemoteEntity(context.Context, int64, entity.EntityKind) (entity.IThreadSafeRemoteEntity, error) {
 	return nil, nil
+}
+
+// 独占提交（LockFence 不来自写许可）在投影的元数据 CAS 上只校验 _ver == BaseVersion 与所有权代际
+// （_owner_epoch、_owner_route），不再要求 _grant_fence / _grant_token；版本落后或代际已变的仍被拒。
+func TestExclusiveCommitNeedsNoGrantButChecksVersionAndEpoch(t *testing.T) {
+	ctx := context.Background()
+	db := newRemoteMongoFake()
+	s := newBoundMongoCommitter(db, "control", 7, 0)
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: 198, Category: 1, RemotePolicy: entity.RemotePolicyManaged})
+	id, _ := entity.BuildEntityID(1201, 198)
+	owner, err := s.ClaimOwnership(ctx, id, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exclusive := func(tx byte, base int64, lease entity.RemoteEntityMarkerLease) entity.RemoteCommit {
+		return authorityCommit(t, id, tx, WriteGrant{Version: base, Ownership: lease})
+	}
+	if _, err := s.CommitRemote(ctx, exclusive(1, 0, owner)); err != nil {
+		t.Fatalf("exclusive commit without a write grant was rejected: %v", err)
+	}
+	if _, err := s.CommitRemote(ctx, exclusive(2, 0, owner)); !errors.Is(err, entity.ErrRemoteVersionConflict) {
+		t.Fatalf("exclusive commit on a stale base: %v, want a version conflict", err)
+	}
+	forged := owner
+	forged.MarkerEpoch = 100
+	if _, err := s.CommitRemote(ctx, exclusive(3, 1, forged)); !errors.Is(err, entity.ErrRemoteVersionConflict) {
+		t.Fatalf("exclusive commit under a forged epoch: %v, want a version conflict", err)
+	}
+	moved, err := s.TransferExpected(ctx, id, owner, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CommitRemote(ctx, exclusive(4, 1, owner)); !errors.Is(err, entity.ErrRemoteVersionConflict) {
+		t.Fatalf("the old owner's exclusive commit after the ownership moved: %v, want a version conflict", err)
+	}
+	if _, err := s.CommitRemote(ctx, exclusive(5, 1, moved)); err != nil {
+		t.Fatalf("the new owner's exclusive commit: %v", err)
+	}
+	if current, err := s.readAuthority(ctx, id); err != nil || current.Version != 2 {
+		t.Fatalf("authority=%+v err=%v, want version 2", current, err)
+	}
 }
