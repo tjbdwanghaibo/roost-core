@@ -47,6 +47,7 @@ done
 run_case lease-process go test -race -tags=integration ./framework/remoteentity -run '^TestRealRemote(ProcessKillRecoversLease|ProcessPartitionFencesOldOwner|ColdAdmissionDeadlineUnderLatency)$' -count=1 -timeout=90s -v
 run_case redis-cluster env ROOST_REMOTE_CLUSTER_IT=1 go test -race -tags=integration ./framework/remoteentity -run '^TestRealRemoteRedisClusterFailover$' -count=1 -timeout=150s -v
 run_case redis-unreplicated-fence env ROOST_REMOTE_CLUSTER_IT=1 go test -race -tags=integration ./framework/remoteentity -run '^TestRealRemoteRedisClusterUnreplicatedFence$' -count=1 -timeout=120s -v
+run_case outbox-takeover env ROOST_OUTBOX_DRILL=1 go test -race -tags=integration ./framework/remoteentity -run '^TestRealOutbox(TakeoverOfALiveStalledWriter|TakeoverAfterWriterCrashUnderClockSkew|FastTakerClockAgainstALiveWriter)$' -count=1 -timeout=300s -v
 run_case durable-process go test -race -tags=integration ./framework/remoteentity -run '^TestRealRemoteDurableAuthorityProcessPartition$' -count=1 -timeout=90s -v
 run_case ownership-counters go test -race -tags=integration ./framework/remoteentity -run '^TestReal(VersionedLock|RemoteOwnershipClaim)' -count=1 -timeout=90s -v
 run_case mongo-wal-recovery go test -race -tags=integration ./wiring/dataengine -run '^TestRealDataEngineRemotePublicationAndWALRecovery$' -count=1 -timeout=120s -v

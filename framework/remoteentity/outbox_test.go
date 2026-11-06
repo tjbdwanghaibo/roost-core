@@ -861,6 +861,51 @@ func TestOutboxForeignPredecessorOfAPublishedCommitIsTakenOverFirst(t *testing.T
 	}
 }
 
+// 时钟偏差下的同实体后继：outbox 页按写入时刻（各写者自己的时钟）排序。崩溃的写者时钟快，它留下的提交排到了同一实体
+// 上后来的提交后面，“后继立即代发”看不出它是前序：后来的提交照常先发，它等到宽限期（按它的写入时刻，即多等了偏差）
+// 才代发。两笔各发布一次，不重复；晚到的旧版本发布被版本比较丢弃（与跨页时相同，见 REMOTE_ENTITY“outbox 发布归属”）。
+func TestOutboxSuccessorRuleUnderWriterClockSkewFallsBackToTheGrace(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	mongo := newRemoteMongoFake()
+	cfg := DefaultConfig()
+	now := time.Now()
+	skew := 10 * time.Second
+	crashed, own := remoteTestTxID(210), remoteTestTxID(211)
+	insertAppliedOutboxCommit(t, mongo, crashed, 7405, 1, 1000, now.Add(skew)) // 写者时钟快 10 s
+	insertAppliedOutboxCommit(t, mongo, own, 7405, 2, 2000, now.Add(time.Millisecond))
+
+	other := newOutboxPeer(t, mongo, 2000, cfg, true)
+	clock := &outboxClock{}
+	other.mgr.remote.outboxNow = clock.now
+	clock.set(now.Add(2 * time.Millisecond))
+	if err := other.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if state := outboxCommitState(t, other, own); state != entity.RemoteCommitCommitted {
+		t.Fatalf("own commit state=%v, want published", state)
+	}
+	if state := outboxCommitState(t, other, crashed); state != entity.RemoteCommitApplied {
+		t.Fatalf("skewed predecessor state=%v, want it left for the grace (it sorts after its successor)", state)
+	}
+	other.mgr.remote.republishMu.Lock()
+	due := other.mgr.remote.takeoverDue
+	other.mgr.remote.republishMu.Unlock()
+	if want := now.Add(skew + other.mgr.outboxTakeoverGrace()); due.Sub(want).Abs() > time.Millisecond { // 存储只保留到毫秒
+		t.Fatalf("takeover due=%v, want the writer's created_at + grace %v", due, want)
+	}
+	clock.set(due)
+	if err := other.mgr.RecoverOutbox(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if state := outboxCommitState(t, other, crashed); state != entity.RemoteCommitCommitted {
+		t.Fatalf("skewed predecessor state=%v at its grace expiry", state)
+	}
+	if marks := other.storage.marks.Load(); marks != 2 {
+		t.Fatalf("marks=%d, want each commit published once", marks)
+	}
+}
+
 // 写者活着但慢：它的协调者已读到页、标记之前别的进程（宽限期已过）抢先代发。写者标记时发现权威里已是 Committed，
 // 当作完成，tracker 结束，strict 写照常得到确认。
 func TestOutboxWriterFindingItsCommitAlreadyPublishedCompletesItsTracker(t *testing.T) {
