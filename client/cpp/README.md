@@ -25,7 +25,7 @@ C++17 客户端覆盖当前 Core 的 TCP/RS v2、业务 PB、EntitySync、Lockst
 
 ## 请求与失败语义
 
-`roost_connect` 的成功返回只表示启动尝试；READY 才代表握手成功，CLOSED 携带失败原因。每次连接有独立 generation。默认由业务明确重连；也可启用 `game_client.configure_reconnect` 或创建 Unity `NativeReconnect`。首次连接失败由业务处理，成功连接后的断线才触发自动策略。默认最多 8 次、1 秒起至 30 秒封顶；每次使用业务异步准备的新 ticket/数值地址。provider 返回空表示等待准备，抛错算一次失败；provider 不能阻塞。提供尝试、成功、耗尽和错误回调。主动离线先停止策略；重新登录/订阅由业务完成，不自动重发请求。移动端进入后台时由引擎断开、恢复前台后重新取票连接，不承诺后台持续保活。
+`roost_connect` 的成功返回只表示启动尝试；READY 才代表握手成功，CLOSED 携带失败原因。每次连接有独立 generation（事件里的连接计数）。鉴权首包另外带**连接代号**信封 `0x00 'G' <8 字节大端代号> <票据>`（2026-11-06）：`roost_connect` 每次取进程内新代号 `max(上一个 + 1, 当前 UTC Unix 纳秒)`，全部 `roost_client` 共用一个递增序列。同一会话跨 Gate 重连时，Game 据此认出迟到完成的旧握手，不让它断开新连接；业务鉴权只看到票据原文。ABI 与托管绑定不变，替换 native 库即生效。票据为空或以 `0x00` 开头时原样发出，由服务端拒绝。布局与金样见[客户端说明](../README.md#鉴权首包的连接代号)，`native_client` 用 Go 金样 `auth_generation` 逐字节核对编码，并核对同一进程两次连接的代号递增。默认由业务明确重连；也可启用 `game_client.configure_reconnect` 或创建 Unity `NativeReconnect`。首次连接失败由业务处理，成功连接后的断线才触发自动策略。默认最多 8 次、1 秒起至 30 秒封顶；每次使用业务异步准备的新 ticket/数值地址。provider 返回空表示等待准备，抛错算一次失败；provider 不能阻塞。提供尝试、成功、耗尽和错误回调。主动离线先停止策略；重新登录/订阅由业务完成，不自动重发请求。移动端进入后台时由引擎断开、恢复前台后重新取票连接，不承诺后台持续保活。
 
 C ABI 请求返回 sequence=0 表示未准入（C++/C# 便利层准入失败抛异常）；已准入的请求以 RESPONSE 或 REQUEST_FAILED 完成，连接级 CLOSED 使所有未完成请求失效。REQUEST_FAILED 的 `status` 区分 `TIMEOUT_UNSENT/TIMEOUT_UNKNOWN/CANCELED_UNSENT/CANCELED_UNKNOWN`；C++ 业务解码失败另为 `INVALID_PAYLOAD`。`roost_cancel` 是尽力取消，响应与取消竞争时只消费一个终态。不能把超时当作服务器没有执行。队列容量包含等响应和已完成但未消费的请求。
 

@@ -120,7 +120,12 @@ bits3..7必须为0。PB请求/响应flags=0，PB推送=1，Sync推送=3；Lockst
 - 不带代号时payload就是票据原文，行为与以前相同（跨Gate时后完成的握手胜出）。票据原文因此不能以`0x00`开头；以`0x00`开头却不是完整信封（tag不是`G`、代号为0、没有票据）的首包按坏帧拒绝。服务端在鉴权前剥掉信封，业务authenticator只看到票据原文。
 - **每次连接（包括重连）取一个新代号**，同一客户端越晚发起的连接代号越大，而且**客户端重启后仍要更大**：推荐`max(上一个 + 1, 当前UTC Unix纳秒)`，上一个只存在内存里。进程内严格递增、不受时钟回拨影响；重启后从当时的时钟起算，自然大于旧进程发过的代号。不要用从1开始的纯内存计数器：重启后新连接会输给旧连接。精度只有毫秒的平台用`Unix毫秒 × 1000000`。
 - 时钟在重启前后被往回拨时，新连接的代号可能偏小；后果只是与旧进程仍在途的握手重叠时被拒一次，重连即恢复。服务端只在重叠的握手之间比较代号，一个异常大的代号挡不住之后的正常重连。
-- Go实现：`wire.EncodeAuth(ticket, generation)`；robot的`transport.AuthPacket(token)`每次调用自动取`transport.NextConnectionGeneration()`。C#/C++运行库当前仍发票据原文（未实现信封）。
+- Go实现：`wire.EncodeAuth(ticket, generation)`；robot的`transport.AuthPacket(token)`每次调用自动取`transport.NextConnectionGeneration()`。
+- C#运行库（`client/dotnet`，2026-11-06）：`TcpSession.ConnectAsync`每次连接取`AuthPayload.NextConnectionGeneration()`写成信封，`Connection` / `GameClient`的首次连接与自动重连、Unity托管适配`RoostConnection` / `RoostClientDriver`都经它，调用方API不变、没有新配置项。代号在发起连接时取，进程内所有连接共用一个递增序列。`AuthPayload.Encode` / `Decode`公开，供自建工具核对字节。票据上限由8192改为8182字节：服务端缺省的首包上限`MaxHandshakeBytes`是8 KiB，其中10字节是信封。以`0x00`开头的票据在连接前抛`ArgumentException`。
+- C++运行库（`client/cpp`，2026-11-06）：`roost_connect`每次连接取进程内新代号写成信封（全部`roost_client`共用一个递增序列）。C++ `roost::client::connect`、`game_client`重连、Unity的`NativeClient` / `NativeGameClient` / `NativeReconnect`，以及经C ABI的Unreal模块都经它。C ABI与`roost_abi_version()==2`不变，托管绑定不用改，替换native库即可。票据为空或以`0x00`开头时原样发出，由服务端拒绝（`CLOSED`），与以前的失败方式相同。这里的连接代号与事件里按`roost_client`计数的连接`generation`不是一回事。
+- Unity：正式网络核心是C++（`RoostNativeDriver` + `NativeGameClient`），托管适配走C# `TcpSession`，两条路线都已带代号。重新执行`scripts/client/build-unity.py`打包，新的native插件与`Roost.Client.dll`才生效。Unreal使用同一C++库。
+- 跨语言金样：`client/spec/packets.json`的`auth_generation`（票据`ticket`，代号最高位为1，检验按无符号64位大端写出）。Go（`TestClientProtocolGolden*`）、C#（`Roost.Client.Tests`）和C++（`native_client`）都用同一票据与代号编码，并与金样逐字节比对。
+- 混用：服务端对没带代号的一方仍按“后完成者胜出”处理，只要同一会话的两次握手有一次没带代号就退回这条规则。不是这三套运行库的自建客户端要自己按上面的布局与生成规则实现；自建接入服务若直接把首包载荷当票据读，需要先拆信封（Go用`wire.DecodeAuth`，C#用`AuthPayload.Decode`）。
 
 正式生成的player TCP要求客户端首包和后续包seq非零、单连接按线上发送顺序递增（允许uint32回绕）。C#在发送锁内分配seq；推送seq属于服务器独立空间，即使与请求相同也不能匹配待应答请求。正式TCP接收PB业务请求和显式注册的Lockstep Notify，客户端Sync请求在Dispatch前拒绝。类型不符在decoder/handler前拒绝，各类共用同一个message_id注册表。原始Sync推送复用既有frame v1 / SubjectUpdate v2 / 应用packer；内部版本未随外层改变。
 
@@ -281,7 +286,13 @@ go test ./codegen/internal/roost -run '^TestClientSDKAgainstGeneratedPlayerTCP$'
 ./scripts/test-client-dotnet.sh
 ```
 
-测试程序只接受 `<packets.json>` 或 `<packets.json> <host> <port>` 两种参数，其他个数打印用法并以 2 退出。pretag 跑金样与自测，CI 的 `client-dotnet` job 跑全部（缺 dotnet 即失败）；维护手册 §3 把它列为改协议 / Sync / Lockstep 时的验证。
+测试程序只接受三种参数：`<packets.json>`；`<packets.json> <host> <port>`；`<packets.json> cross-gate <gateAPort> <gateBPort> <requestId> <responseId>`。第三种只供 gateway 包的跨 Gate 用例驱动，见下文。其他参数打印用法并以 2 退出。`scripts/test-client-dotnet.sh` 在金样与自测之后跑 `infra/network/gateway` 的 `TestAcrossGatesTheCSharpClientThatAbandonsAHandshakeKeepsItsNewerConnection`：同一进程里起两个独立 Gate 和一个 Game（进程内 NATS 替身），用真实 C# 进程依次完成以下步骤，先后用标准输入输出做屏障：
+
+1. 在 Gate A 上发起握手，旧 Bind 停在 Game 的鉴权里；
+2. 放弃这次握手，转连 Gate B，完成握手并答完一个请求；
+3. 放行旧 Bind 后，断言新绑定仍在、新连接仍能应答。
+
+运行库不带代号时这条用例变红。pretag 跑金样与自测，CI 的 `client-dotnet` job 跑全部（缺 dotnet 即失败）；维护手册 §3 把它列为改协议 / Sync / Lockstep 时的验证。
 
 正式生成工程测试需要.NET 10 SDK（测试程序target net10.0，运行库仍netstandard2.1）；缺SDK时明确skip，不能当C#验收。测试在私有生成工程执行真实TCP鉴权→生成PB编解码→并发请求→raw Sync推送，以及Match→TCPSender→C#输入/Hash/主动制造缺口→可靠追帧，并运行现有TCP/Scene race场景，重生成托管目录必须字节不变。
 

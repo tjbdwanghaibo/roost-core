@@ -17,7 +17,7 @@ python3 scripts/client/build-unity.py --target macos --output /tmp/roost-unity-s
 
 ## 业务接线
 
-1. 在持续存在的 GameObject 上添加 `RoostNativeDriver`。业务先异步完成 DNS、账号取票，传入数值 IP 和当前票据。
+1. 在持续存在的 GameObject 上添加 `RoostNativeDriver`。业务先异步完成 DNS、账号取票，传入数值 IP 和当前票据。每次连接（包括重连）时，native 库自动在鉴权首包里加上新的连接代号（[鉴权首包的连接代号](../README.md#鉴权首包的连接代号)），业务不用处理。旧包要重新打包才带代号。
 2. 创建 `NativeGameClient`，注册 PB 回复/推送 parser，以及 EntityViews 的 DAO/profile/schema codec；使用生成的 `Parser.ParseFrom(payload).Apply(previous)` 合并增量。Full/Delta/Remove 通过 `EntityChanged` 通知，不能将 delta 当完整 DAO 覆盖。
 3. 可选创建 `NativeReconnect`，再 `driver.Attach(game, reconnect)`、`game.Connect(...)`。Attach 将所有权交给 Driver，不要另外调用 Pump/Tick。每帧回调预算默认 64，可在 Inspector 调整；回调在 Unity 主线程执行。
 4. 收到业务请求失败/超时按业务幂等规则处理；超时可能已经执行，重连不自动重发。重连票据 provider 只读取异步准备好的新票据，不能阻塞主线程。首次连接失败由业务处理。
