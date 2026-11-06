@@ -217,7 +217,7 @@ effect outbox（同一批运行的 `/metrics`：暂存 = 成功的 `Join` / `Lea
 结论：
 
 1. **跨实例入会不再在一个 shard 上排成一条线**：p50 降到约十分之一；64 并发成功次数约 3 倍。修前 64 并发的失败是 `ReserveGuard` 在 shard 上排队超过 3 s。
-2. **修后跨实例的失败与 16 并发吞吐的抖动是 Remote outbox 代发的问题，不是本改动引入**（2026-11-06 已修，见[下节](#outbox-写者自己先发2026-11-06)）：别的进程代发了写者的提交，写者进程的 tracker 停在 Applied，写等到 3 s 超时，延迟收尾持写门到 `finalize_projection_timeout`（30 s），同一联盟 / 守卫随后约 30 s 的写全部超时（[KNOWN-LIMITS](../../../maintenance/KNOWN-LIMITS.md) 对应条，含证据与可选修法）。修前同一现象出现在跨实例 `Leave`（3 轮里 2 轮有约 3 s 的请求，其中 1 轮 11 次失败），修后跨实例写不再被 shard 限速，`Join` 也碰到。（单实例的 t 轮里另有一种现象：修前 2 轮各有一次 128 个 `handlerAllianceRemove` 同时 3 s 超时，是全体一次、不是逐实体持续约 30 s，重试后成功，原因未查。）
+2. **修后跨实例的失败与 16 并发吞吐的抖动是 Remote outbox 代发的问题，不是本改动引入**（2026-11-06 已修，见[下节](#outbox-写者自己先发2026-11-06)）：别的进程代发了写者的提交，写者进程的 tracker 停在 Applied，写等到 3 s 超时，延迟收尾持写门到 `finalize_projection_timeout`（30 s），同一联盟 / 守卫随后约 30 s 的写全部超时（[KNOWN-LIMITS](../../../maintenance/KNOWN-LIMITS.md) 对应条，含证据与可选修法）。修前同一现象出现在跨实例 `Leave`（3 轮里 2 轮有约 3 s 的请求，其中 1 轮 11 次失败），修后跨实例写不再被 shard 限速，`Join` 也碰到。（单实例的 t 轮里另有一种现象：修前 2 轮各有一次 128 个 `handlerAllianceRemove` 同时 3 s 超时，是全体一次、不是逐实体持续约 30 s，重试后成功；2026-11-06 查明，见[单实例全体同时超时](#单实例全体同时超时2026-11-06)。）
 3. **同实例命令数不变**（修前这条路径已不写 effect）。**同实例重试版吞吐修后偏低、未确认原因**：6 轮新玩家 `Join` 128 并发修前 296～435（中位约 374）、修后 238～410（中位约 296），`Leave` 128 并发约 380 → 约 300；但同实例路径的代码差别只有“写成功后发一条 core NATS 通知”替代“提交器发 best_effort effect”，Mongo 命令数相同，修后连纯 Mongo 的 `mark_published` 均值也慢约 12%（18.3 → 20.5 ms），更像同机负载差异；要在安静的机器上再比。
 
 证据（未提交）：`artifacts/perf/runs/{m,x,y,t}-{before,after}-<轮>/`、`artifacts/perf/runs/inv-1/`（延迟收尾日志）、`artifacts/perf/runs/q-after-1/`（goroutine 栈），探针 `artifacts/probe/`（`joincross_test.go.txt` 加了 `JOINCROSS_CONC`、`JOINCROSS_QUIT`）。
@@ -255,6 +255,50 @@ effect outbox（同一批运行的 `/metrics`：暂存 = 成功的 `Join` / `Lea
 结论：跨实例 64 并发 `Join` 成功次数约 4 倍（约 18～41 → 约 155～168 次/秒），失败、写门超时与延迟收尾回源都降到 0，p99 从 3～5.5 s 降到约 0.6 s；修前 16 并发也会碰到（第 3 轮）。修前的 p50 不高是因为卡住只落在部分实体上（同一联盟 / 守卫约 30 s 内的写全部超时），拖垮的是成功次数与 p99。
 
 证据（仓库外、未提交，维护者本机的证据目录 `outboxowner-20261106/`）：`perf/runs/{y,x,t}-{after,before}-{1,2,3}/`（`probe.log` 含 PERF 行与 load average，连接串已去掉；`metrics-*` 是各阶段前后的 `/metrics`）、`perf/summary.txt`（上面两张表的来源）、`red/`（回归的修前失败文本），探针 `probe/` 是 2026-11-05 证据目录 `probe/` 的副本（只改了环境路径与端口，另加汇总脚本 `report.py` 与轮次脚本 `series.sh`）。进程日志含连接串，未保留。
+
+## 单实例全体同时超时（2026-11-06）
+
+现象（上节 t 轮）：单个 alliance 实例 128 / 256 并发时，偶发一批写在同一时刻以约 3 s 结束（Nest 请求期限）。当时的 `/metrics` 差值：那一段 `remote_entity_outbox_mark_published_max` 从约 0.2 s 跳到 1.7～2.5 s、`outbox_transaction` 有 4 笔落在 2～4 s 桶，而投影侧 `remote_apply_latency` 最大只有 0.43 s——少数几笔发布慢，却让全部等确认的写一起超时；一起超时的数目正好是写额度 `max_concurrent_writes`（128）。
+
+**探针**：同一私有 mirror-local 环境、上节的重试版 `TestJoinScaleRetry`（每段 12 s，级别 128、256、256），加了一个监视器：同一时刻有 ≥32 个尝试已超过 2 s 时，抓 alliance 进程的 goroutine 栈（`/debug/pprof/goroutine?debug=2`）与 `/metrics`；每段结束统计“全体超时簇”（1 s 内 ≥32 个尝试以 ≥2.5 s 结束）。栈按主因归类：页里空闲的发布 worker ≥8 或排在同一把 publish 分片锁上的发布 ≥8 记为“outbox 队头阻塞”，另有投影器的 Mongo 事务、outbox 的 Mongo 标记、WAL fsync、投影器 checkpoint 落盘几类。
+
+**根因**（两处，都在发布侧）：
+
+1. **后台发布循环一次发一页、等整页结束才读下一页**（`publishOutboxPage`）。一笔发布慢（Mongo 标记等多数派确认 1～2.5 s，见下）时，32 个 worker 里 15～31 个空闲，之后持久的提交都没人发布，strict 写全部停在“等确认”。修前栈里的典型样子：`publishOutboxPage.func1` 空闲 24～31 个、`MarkRemoteCommitPublished` 2～7 个、`waitTrackedRemoteTransaction` 89～122 个。
+2. **快照 publish 分片只取实体 ID 低 6 位**（`remoteSnapshotPublishShard`）。实体 ID 低 10 位是 kind 与 category，同一 kind 的实体全部相同，64 把分片锁退化成 1 把，且持锁做 L2（Redis）往返：修前栈里 13～30 个发布 goroutine 排在同一把锁上（被排的实体 ID 低字节全是 `0x19`），32 路发布实际串行。
+
+修复（[REMOTE_ENTITY“outbox 发布并发”](../../../framework/REMOTE_ENTITY.md#outbox-发布并发)）：页里已没有可派发的事务、在途的 100 ms 没有任何一项结束时转到后台，下一页跳过在途事务、同实体后继等它；publish 分片按整个 key 打散（`entity.EntityIDStripe`）。回归 `TestOutboxSlowPublicationDoesNotHoldUpLaterCommits`（修前 `commit timed out`、tracker=Applied）与 `TestRemoteSnapshotPublishShardSpreadsOneKind`（修前 64 个同 kind 实体落在 1 个分片）。
+
+**前后对照**：修前 = `54c23531`，修后 = 本改动；同机、同环境、同探针，交替 8 轮（奇数轮修后先跑）。**本机负载很重**：同机另有 3 个 agent 与一个 Unity 编辑器，`fseventsd` 占满一核、常驻约 9 GB，swap 用了 16～17 GB（共 17～18 GB），1 分钟 load average 11～57；单段吞吐的波动远大于前后差异，下面的吞吐只能看方向。成功次/秒 · p99：
+
+| 轮 | 侧 | load 起 / 止 | `Join` 128 | `Leave` 128 | `Join` 256 | 256 并发失败 | 全体超时簇 | 停顿栈（outbox 队头 / 全部） |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 修后 | 27.49 / 57.11 | 81 · 4.11819s | 100 · 2.75321s | 101 · 4.36761s | 1003 | 13 | 0 / 10 |
+| 1 | 修前 | 57.11 / 55.48 | 208 · 1.51833s | 231 · 1.47361s | 342 · 1.82614s | 1372 | 2 | 1 / 3 |
+| 2 | 修前 | 55.48 / 40.53 | 173 · 1.59181s | 149 · 2.91554s | 161 · 3.43421s | 1014 | 3 | 1 / 4 |
+| 2 | 修后 | 40.53 / 19.50 | 165 · 1.85051s | 222 · 1.27162s | 184 · 2.9725s | 355 | 1 | 0 / 1 |
+| 3 | 修后 | 19.50 / 33.60 | 353 · 667.63ms | 330 · 654.29ms | 272 · 2.20267s | 506 | 1 | 0 / 1 |
+| 3 | 修前 | 33.60 / 21.43 | 196 · 999.99ms | 250 · 999.04ms | 312 · 1.83803s | 559 | 1 | 0 / 3 |
+| 4 | 修前 | 21.43 / 30.32 | 254 · 942.86ms | 206 · 1.81582s | 192 · 2.79843s | 372 | 1 | 0 / 3 |
+| 4 | 修后 | 30.32 / 30.50 | 182 · 1.24251s | 183 · 2.53382s | 225 · 2.2671s | 603 | 0 | 0 / 3 |
+| 5 | 修后 | 11.43 / 23.09 | 288 · 967.35ms | 352 · 722.63ms | 356 · 1.89552s | 72 | 0 | 0 / 0 |
+| 5 | 修前 | 23.09 / 52.77 | 204 · 1.08616s | 183 · 1.29161s | 209 · 2.92218s | 859 | 5 | 3 / 5 |
+| 6 | 修前 | 52.77 / 30.57 | 207 · 1.13636s | 203 · 1.41991s | 198 · 2.74289s | 395 | 0 | 0 / 0 |
+| 6 | 修后 | 30.57 / 27.82 | 332 · 701.93ms | 262 · 1.40918s | 273 · 2.52305s | 207 | 0 | 0 / 1 |
+| 7 | 修后 | 27.82 / 24.25 | 273 · 1.91181s | 369 · 582.4ms | 203 · 2.36934s | 471 | 0 | 0 / 2 |
+| 7 | 修前 | 24.25 / 54.33 | 206 · 2.19864s | 185 · 1.85102s | 281 · 2.30294s | 697 | 3 | 2 / 2 |
+| 8 | 修前 | 54.33 / 29.27 | 139 · 1.78739s | 129 · 2.11449s | 175 · 3.15182s | 995 | 4 | 3 / 4 |
+| 8 | 修后 | 29.27 / 25.11 | 128 · 1.82217s | 109 · 2.9726s | 142 · 3.63645s | 883 | 5 | 0 / 6 |
+
+另有修前单侧 5 轮（`b1`，load 17～73）：全体超时簇 7 个，停顿栈 10 份里 6 份是 outbox 队头阻塞。
+
+结论：
+
+1. **outbox 队头阻塞修后没有再出现**：修前 13 轮 34 份停顿栈里 16 份是它（空闲 worker 或同一把 publish 锁），修后 8 轮 24 份里 0 份；`remote_entity_outbox_detached_total`（修后新增）每轮 37～858 笔（每轮约 3 分钟、全部写约 4～9 万次），说明确实有慢发布被转到后台。
+2. **全体超时没有消失**：修后 8 轮仍有 20 个簇（第 1 轮占 13 个，起跑后 load 升到 57），修前 8 轮 19 个。修后 24 份停顿栈都停在投影或 I/O 侧（其中 1 份是投影器在等并行窗口里不到 8 个的 Mongo 写，归类脚本没有计入）：投影器的 Mongo 事务（`ApplyRemoteCommitsInTransaction` 等多数派）、outbox 的 Mongo 标记、WAL `fsyncSegment`、投影器主循环里的 checkpoint 落盘（`storeCheckpoint` 的 rename / fsync）。mongod 慢日志（证据目录的 `perf/mongod-slow-summary.txt`）：主节点 ≥1 s 的操作 213 条，多数是带多数派写关注的 `commitTransaction` / `update` / `findAndModify`，集中在少数几秒；两个从节点同一时段有 ≥1 s 的 `Applied op`（三个节点同机，从节点应用 oplog 卡住时多数派写关注一起等）。strict 写本来就要等持久与发布，这类 I/O 停顿超过请求期限时，全部在途写仍会一起超时——记入 KNOWN-LIMITS，未处理。
+3. **吞吐**：128 并发新玩家 `Join` 8 轮中位数修前约 205、修后约 227 次/秒，`Leave` 约 194 → 242，区间大幅交叠（新玩家 `Join` 修前 139～254、修后 81～353），按本机噪声不下结论；256 并发失败合计修前 6316、修后 4100（同样受负载支配）。
+
+证据（仓库外、未提交，维护者本机的证据目录 `alltimeout-20261106/`）：`perf/runs/{b1-1..5,c-before-1..8,c-after-1..8}/`（`probe.log` 已去掉连接串，`metrics-*` 各段前后的 `/metrics`，`stall-*-goroutine.txt` / `stall-*-metrics.txt` 停顿现场）、`perf/rounds.md` 与 `perf/summary.txt`（上表与中位数）、`perf/mongod-slow-summary.txt`、`red/`（两条回归的修前失败文本与变异记录），探针 `probe/`（上一轮探针的副本，加了停顿监视器 `joinretry_test.go.txt`，归类脚本 `report.py` / `classify.py`，轮次脚本 `series-ab.sh`）。进程日志含连接串，未保留。
 
 ## 复跑
 

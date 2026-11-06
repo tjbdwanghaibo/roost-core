@@ -53,7 +53,13 @@ Mongo transaction首先标记`Applied`；唯一的`RecoverOutbox`协调者负责
 
 Durability 1/2/3（async / strict / 随 strict 路径提交的 pipelined）的 WAL 投影不产生 Rejected：投影器写权威遇到 fence / 版本冲突是 `ErrProjectionConflict` fatal（进程级 fail-stop，记录不 ack）。strict / pipelined 的 `Commit` 失败因此一律带 `entity.ErrRemotePersistenceIndeterminate`（回复判别表第 2 行），框架自带 remoteentity 只在 memory 下回复 `nest.ErrRemotePartRejected`；finalizer 对 WAL 事务读不到结论时只隔离重试，不写拒绝。维护者 2026-10-14 据此删除了只供测试注入 WAL 级拒绝的 `MongoCommitter` / `Backend.RejectRemoteCommitsInTransaction` 与 `Manager.RejectRemoteTransaction`；守卫用例 `TestWALRemoteAuthorityConflictNeverProducesRejected`、`TestRemoteWALCommitFailureNeverRepliesRemotePartRejected`。
 
-协调者共用启动恢复、显式恢复、重试和停止屏障，页内按完整事务有界并行；涉及任意同一Entity的事务按扫描顺序尝试，失败仍保留Applied。正式配置`remote_entity.outbox_publish_workers`默认32（0取32；2026-11-05 由8调大，strict 写等发布完成才答复，8 个并发在联盟 Join 约 330 次/秒时已占满约 86%），范围1～64；设1用于串行诊断，不随Nest io 池 worker数放大。带游标的正式Backend可越过失败页继续扫描，不删除失败记录。页间先排空；停止必须等已派发发布结束。
+### outbox 发布并发
+
+协调者共用启动恢复、显式恢复、重试和停止屏障，页内按完整事务有界并行；涉及任意同一Entity的事务按扫描顺序尝试，失败仍保留Applied。正式配置`remote_entity.outbox_publish_workers`默认32（0取32；2026-11-05 由8调大，strict 写等发布完成才答复，8 个并发在联盟 Join 约 330 次/秒时已占满约 86%），范围1～64；设1用于串行诊断，不随Nest io 池 worker数放大。带游标的正式Backend可越过失败页继续扫描，不删除失败记录。停止必须等已派发发布结束（含转到后台的）。
+
+**慢发布不挡后面的提交**（2026-11-06）：后台发布循环一页里已没有可派发的事务、在途的发布 100 ms 内没有任何一项结束时，在途的转到后台继续，循环去读下一页；修复前一次发一页、等整页结束，一笔慢发布（一次几秒的 Mongo 标记、一次慢的快照写）挡住之后全部提交，单实例 128 并发时全部写额度（`max_concurrent_writes`）停在等确认、到 Nest 请求期限同时超时。转到后台的仍占并发额度（`outbox_publish_workers` 由全部在途发布共用），下一页跳过它们，涉及同一实体的后继等它结束（结束时唤醒发布循环），同实体发布顺序不变；失败照常把 tracker 置为 Indeterminate，发布循环按失败退避后重试；停机等它们结束。显式 `RecoverOutbox`（启动恢复）仍等本次派发的全部结束。转后台的发布数计 `remote_entity.outbox.detached_total`，正常负载下应很少；持续增长说明 Mongo 标记或快照发布在变慢。回归 `TestOutboxSlowPublicationDoesNotHoldUpLaterCommits`（修前 strict 写 `commit timed out`、tracker 停在 Applied）、`TestOutboxDetachedPublicationKeepsSameEntityOrder`、`TestOutboxDetachedPublicationIsDrainedBeforeStop`、`TestOutboxDetachedPublicationFailureIsRetried`。
+
+**快照 publish 分片**（2026-11-06）：`RemoteSnapshotCache` 的 64 把 publish 分片锁（同一 key 的 L1 写与它的 L2 调用串行）改按整个 key 打散（`entity.EntityIDStripe`）。实体 ID 低 10 位是 kind 与 category，修复前分片只取低 6 位，同一 kind 的全部快照发布挤在一把锁上、按 L2 往返逐个串行，outbox 的并发发布退化成 1。快照客户端的兴趣条带锁同样改用它。回归 `TestRemoteSnapshotPublishShardSpreadsOneKind`（修前 64 个同 kind 实体落在 1 个分片）。
 
 未发布记录不设置TTL，只有完成发布的记录才进入过期回收。发布与ACK保持幂等。实体侧的`AcknowledgeRemoteCommit`必须并发安全：outbox和Committed回执的本地确认可能交错，生成实体经`Tracker.AdvanceVersion`原子CAS满足。阶段耗时见[指标](OBSERVABILITY.md)，功能验收不能当作新TPS结论。
 

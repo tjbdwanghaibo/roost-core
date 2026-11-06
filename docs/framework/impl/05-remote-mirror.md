@@ -25,11 +25,13 @@
 
 [outbox_publish.go](../../../framework/remoteentity/outbox_publish.go)的publishOutboxPage由持outboxSerial的唯一协调者调用。每页最多256项，worker缺省32、上限64；为事务全部Entity和重复TransactionID记录前序依赖。只有waiting归零的项才交给worker，等待热点链不占worker。
 
-每次尝试结束释放后继，失败项保留持久Applied供恢复；取消后不再补新任务，但必须收完已经派发的结果才交还生命周期。因此这里保证依赖顺序的尝试，不承诺失败前序一定成功才尝试后继；消费仍依赖版本/水位拒绝陈旧状态。跨页先排空，保持页扫描的所有权。
+每次尝试结束释放后继，失败项保留持久Applied供恢复；取消后不再补新任务。因此这里保证依赖顺序的尝试，不承诺失败前序一定成功才尝试后继；消费仍依赖版本/水位拒绝陈旧状态。
+
+慢项转后台（2026-11-06）：并发额度是 `remoteState.outboxSlots`（容量即 worker 数，首次发布时建立），全部在途发布共用，包括转到后台的。每笔发布由 `startOutboxPublication` 起一个 goroutine：先登记 `outboxInflight`（事务）与 `outboxBusy`（实体到在途次数）、为 goroutine 另登记一份 `retryWG`，结束时失败就把 tracker 置为 Indeterminate、撤销登记、交还额度，再把结果交给页（`finish`）。建页时在途事务、涉及在途实体的事务多计一个永远不会到来的前序，本页不派发，同实体后继经依赖一起留下。后台模式（只有 `runOutboxRepublish` 经 `recoverOutbox(ctx, true)`）下，页里没有可派发的事务、在途的 `outboxStragglerWait`（100 ms，`remoteState.stragglerWait` 是测试缝）内没有任何一项结束时，置 `detached` 后返回：之后结束的发布自己收尾——失败记入 `outboxDetachedErr`，并调 `scheduleOutboxRepublish` 让留下的后继与重试有人扫；发布循环下一轮先取走 `outboxDetachedErr`，有就按失败退避。后台模式每笔发布的 ctx 取 `finalizeCtx` 加 `OpTimeout`，不随页返回取消；显式 `RecoverOutbox` 仍等本页派发的全部结束，用调用方 ctx。计数 `remote_entity.outbox.detached_total`。
 
 发布前先经同文件的 `selectOutboxPage` 决定发布归属（[REMOTE_ENTITY“outbox 发布归属”](../REMOTE_ENTITY.md#outbox-发布归属)）：`RemoteCommitStatus.WriterSID` 等于本进程 sid、为 0 或没有 `CreatedAt` 的立即发；别的进程写的按 `CreatedAt + outboxTakeoverGrace()`（`Config.OutboxTakeoverGrace`，零值与下限取 `FinalizeProjectionTimeout`）判断到期；再从后往前把“同一实体上排在要发布的提交前面”的留存提交改为立即发（可连锁）。留下的提交里最早的到期时刻由 `RecoverOutbox` 收集，返回时（含出错返回）交 `armOutboxTakeover` 安排一次 `scheduleOutboxRepublish`（`remoteState.takeoverTimer`，只保留最早的一个，`StopFinalizer` 停掉）。不分页的自定义存储在一页有留存时结束本轮，不反复读同一页。`remoteState.outboxNow` 是只给测试用的时钟观察缝。写者 sid 由 [mongo_committer.go](../../../framework/remoteentity/mongo_committer.go) 的 `ApplyRemoteCommitsInTransaction` 写进事务记录（`writer_sid`），`remoteStatusFromMongoTransaction` 读回。
 
-[transaction_manager.go](../../../framework/remoteentity/transaction_manager.go)的RecoverOutbox/runOutboxRepublish负责恢复扫描，publishAppliedRemoteTransaction负责发布单事务。finalizer的等待、投影确认和写许可释放需另外追踪，不能把发布调度的完成误用为提交确认。
+[transaction_manager.go](../../../framework/remoteentity/transaction_manager.go)的RecoverOutbox（recoverOutbox）/runOutboxRepublish负责恢复扫描，publishAppliedRemoteTransaction负责发布单事务。finalizer的等待、投影确认和写许可释放需另外追踪，不能把发布调度的完成误用为提交确认。
 
 ## 2B. Rejected 收尾走读
 
