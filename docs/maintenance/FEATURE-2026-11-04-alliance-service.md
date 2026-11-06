@@ -47,7 +47,7 @@ game-demo 的 `Guild` 是 Remote 托管实体，但从不进入共享模式：�
 
 ### 1.2 Remote 写准入：独占模式本来就不经 Redis 锁
 
-- `framework/remoteentity/batch.go` 的 `beginWrite`：写门 → 所有权读锁 → 共享模式才取 Redis 分布式锁（`lockSharedWrite`）；独占模式走 `WriteAuthority.GrantWrite`。
+- `framework/remoteentity/batch.go` 的 `beginWrite`：写门 → 所有权读锁 → 共享模式才取 Redis 分布式锁（`lockSharedWrite`）；独占模式走 `WriteAuthority.GrantWrite`。（2026-11-06 起独占实体不再取写许可，只在加载、取得归属、退出共享时向权威对齐一次，见 [REMOTE_ENTITY“独占写准入”](../framework/REMOTE_ENTITY.md#独占写准入)；本节下面两条是当时的现状。）
 - `framework/remoteentity/mongo_authority.go` 的 `GrantWrite`：每笔写一次 Mongo `FindOneAndUpdate`，按 `_owner_sid` 过滤并递增 `_grant_fence`，回复丢失时按 token 回查。所有权已转走的进程在这一步被拒；同一个 sid 的新旧两代进程过滤条件相同，它们靠单实例锁分开（1.5），不靠这一步。
 - `confirmWriteOwnership`：实体没有所有权记录时，**第一个写它的进程**经 `ClaimOwnership` 认领。这就是 demo 跨进程写被拒的原因，也是第 2.10 节要加“实体归属服务”守卫的原因：别的服务的进程一旦先写到一个新实体，就会把它认领走。
 - `framework/remoteentity/ownership.go` 的 `TransferRemoteOwnership`：只能由**当前 owner** 发起（`expected.OwnerSid != m.localSid` 时 fence），先 Draining 排空本地写，再 CAS 转给新 sid、推进 marker 与 route 代际，旧实例置 Fenced。新 owner 第一次写时从权威冷加载（`e12e3dc8` 起落后副本先卸载再重载）。回归：`batch_test.go` 的 `TestTransferRemoteOwnershipFencesPreviousOwner`，真实依赖 `TestRealRemoteOwnershipClaimAndTransfer`、`TestRealRemoteProcessKillRecoversLease`（[实现篇 §5](../framework/impl/05-remote-mirror.md#5-回归入口)）。

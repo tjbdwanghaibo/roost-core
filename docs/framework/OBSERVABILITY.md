@@ -126,6 +126,8 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `remote_entity.deferred_outcome_not_run_total{outcome}` | Counter | Remote 结果未知的事务拿到持久结论时 Nest 已停机 / 已 fence，提交后工作（AfterCommit、Sync 放行）未执行（RR-20260926-61）；停机窗口外应为零 |
 | `remote_entity.stale_reload_total` | Counter | 写准入发现本进程的内存实例落后于权威（共享模式下别的进程写过、或所有权转走期间新所有者写过）或停在 Fenced，把它仅内存卸载、从权威重载的次数。共享模式多写者交替写时正常增长，独占模式下应接近零 |
 | `remote_entity.foreign_kind_rejected_total` | Counter | 实体归属守卫拒绝的写准入与所有权操作：kind 声明归属于别的服务（`ForeignKinds`），本进程不认领、不写。应为零；增长说明有代码在别的服务的进程里直接写这类实体，写应改走归属服务的 RPC |
+| `remote_entity.exclusive_admission_total{path}` | Counter | 独占实体的写准入（[REMOTE_ENTITY“独占写准入”](REMOTE_ENTITY.md#独占写准入)）：`path=held` 稳定持有、不做任何 Mongo 读写；`path=aligned` 在加载 / 取得归属 / 退出共享之后读了一次权威对齐。正常运行时几乎全是 `held`，`aligned` 约等于冷加载、所有权变更的次数 |
+| `remote_entity.commit_conflict_total` | Counter | Remote 提交的元数据 CAS 没有命中（权威的 `_ver` 或所有权代际已变，共享模式还有写许可 fence 被取代），同时记一条 ERROR 写明提交与权威的差别。应为 0；独占实体出现它说明单实例前提被打破（两个进程都以为自己是 owner）：memory 写被明确拒绝、实例重新对齐，WAL 写使投影器 fatal、进程 fail-stop |
 | `remote_entity.foreign_ack_skipped_total` | Counter | outbox 协调者代发的提交不是本进程内存实例写的（共享 outbox 里别的进程的事务、重启后重放到加载时还没带上它的实例），没有推进这份实例版本的次数；之后这份实例由写准入从权威重载 |
 | `remote_entity.outbox.takeover_total{reason}` | Counter | 本进程代发别的进程写的 Remote 提交（[REMOTE_ENTITY“outbox 发布归属”](REMOTE_ENTITY.md#outbox-发布归属)）：reason=grace（写入后超过 `outbox_takeover_grace` 仍未发布，写者多半已崩溃）/ successor（同一实体上排在它后面的提交要发布，前面的写者已失去这个实体）。稳定运行时应为零；增长对应进程崩溃或接管，或写者活着但发布慢过宽限期（到 NATS / Redis 的链路故障）、本进程时钟快出接近宽限期（见“时钟同步要求”） |
 | `remote_entity.outbox.detached_total` | Counter | 后台发布循环一页里只剩慢发布（100 ms 内在途的没有任何一项结束）、把它们转到后台继续的发布数（[REMOTE_ENTITY“慢发布不挡后面的提交”](REMOTE_ENTITY.md#outbox-发布并发)）。正常负载下应很少；持续增长说明 Mongo 标记或快照发布在变慢，修复前（2026-11-06）这种慢发布会挡住之后全部提交，单实例全部写额度同时超时 |
@@ -457,8 +459,10 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `player_tcp_session_closed_callback_panics_total` | Counter | `infra/network/gateway/tcp_runtime.go:IncCounter` |
 | `player_tcp_session_closed_dropped_total` | Counter | `infra/network/gateway/tcp_runtime.go:IncCounter` |
 | `player_tcp_write_error_total` | Counter | `infra/network/gateway/tcp_session.go:IncCounter` |
+| `remote_entity.commit_conflict_total` | Counter | `remoteentity/mongo_committer.go:IncCounter` |
 | `remote_entity.deferred_outcome_error_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.deferred_outcome_not_run_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
+| `remote_entity.exclusive_admission_total` | Counter | `remoteentity/batch.go:IncCounter` |
 | `remote_entity.finalize_projection_timeout_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.finalize_retry_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |
 | `remote_entity.finalize_status_read_total` | Counter | `remoteentity/transaction_manager.go:IncCounter` |

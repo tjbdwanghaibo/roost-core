@@ -24,9 +24,11 @@ Remote Entity 是具有权威写入与版本的共享实体。写仍通过 Nest 
 
 准备参与实体和写许可 → 业务池 handler 修改 DAO → 事务局部变更形成 Remote 批次 → 持久确认 → finalizer 收尾/释放。参与者必须判断本事务变化，不能用对象全局 dirty 推断。取消等待不撤销已经准入的持久写；结果未知保留 fence/恢复责任。
 
+独占实体（所有权记录是单个 owner sid）不取写许可：一个实体同一时刻只有一个 owner（App 单实例与 fail-stop 保证），owner 只在加载、取得归属、从共享退回独占之后读一次权威对齐版本，稳定持有期间读写请求都不向 Mongo 确认归属；handler 不改持久字段的请求不产生任何 Mongo 命令。前提被打破时后到的写在投影时因版本 / 代际不符被拒。只有共享模式每次写取分布式锁与写许可。见 [Remote Entity 契约“独占写准入”](../REMOTE_ENTITY.md#独占写准入)。
+
 持久拒绝（Rejected）只来自 memory（Durability 0）：直写权威被明确拒绝，或结果未知后由 finalizer 以同一事务 `_id` 写下持久拒绝。拒绝后实例回滚、隔离、释放写许可并仅内存卸载，下一次访问从权威重载，提交后工作得到 false。async / strict / pipelined 有 WAL，投影器写权威冲突是 fatal（fail-stop），不产生拒绝，所以它们的失败只会是“结果未知”，调用方不得把它当成 Remote 没写入。详见 [Remote Entity 契约](../REMOTE_ENTITY.md#持久拒绝rejected的来源与收尾)。
 
-多个进程写同一实体（共享模式，或所有权转走又转回）时，每个进程内存里的实例只随本进程的写推进。写准入取得写许可后发现本地实例落后于权威、或停在 `Fenced`，先把它仅内存卸载、再从权威重载，然后在最新版本上执行 handler；卸载没完成时返回可重试的 `entity.ErrRemoteEntityReloading`。outbox 代发别的进程的提交时不推进本进程实例。需要 loader 支持卸载（正式 `ManagerAccess` 支持），细节与边界见 [Remote Entity 契约](../REMOTE_ENTITY.md#多写者本地副本与权威)。
+多个进程写同一实体（共享模式，或所有权转走又转回）时，每个进程内存里的实例只随本进程的写推进。写准入取得写许可（共享）或在对齐时刻读到权威版本（独占）后发现本地实例落后于权威、或停在 `Fenced`，先把它仅内存卸载、再从权威重载，然后在最新版本上执行 handler；卸载没完成时返回可重试的 `entity.ErrRemoteEntityReloading`。outbox 代发别的进程的提交时不推进本进程实例。需要 loader 支持卸载（正式 `ManagerAccess` 支持），细节与边界见 [Remote Entity 契约](../REMOTE_ENTITY.md#多写者本地副本与权威)。
 
 删档（`Destroy(deletePersisted=true)`）物理删除 Remote 数据文档、在 Remote 元数据留墓碑（`_remote_entity_meta._deleted`）；之后该 ID 不能经 GetOrCreate 重建：DataEngine 冷加载据元数据墓碑返回删过档（`entity.ErrAuthorityEntityDeleted`）。直接 `Create` 不读存储，必须用 id-gen 新 ID（D10，见 [guide/03 §4](03-dataengine.md#4-冷加载与-schema)）。
 

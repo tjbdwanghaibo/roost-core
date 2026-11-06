@@ -4,13 +4,13 @@ Remote Entity 只保留一条写链路：Nest 声明目标 → 全局顺序获�
 
 ## 一致性向量
 
-每次提交同时校验四个互不混用的维度：`StateVersion`、`MarkerEpoch`、`LockFence`、`RouteEpoch`。StateVersion 必须严格 `base+1`；ownership/route 代际只能前进；shared write 必须带非零 LockFence。TransactionID 是幂等键。
+每次提交同时校验四个互不混用的维度：`StateVersion`、`MarkerEpoch`、`LockFence`、`RouteEpoch`。StateVersion 必须严格 `base+1`；ownership/route 代际只能前进；shared write 必须带非零 LockFence。TransactionID 是幂等键。LockFence 只在共享模式参与权威校验（每次写许可分配一个）；独占写不取写许可，提交里的 LockFence 是实例版本向量沿用的值，投影不校验它（[独占写准入](#独占写准入)）。
 
 ## 存储事务
 
 `framework/remoteentity` 的 `MongoCommitter`（接线入口是 `wiring/remoteentity` 的 `WithMongoStorage`）在同一 Mongo transaction 中完成：
 
-1. entity meta 的 StateVersion/fence CAS；
+1. entity meta 的 CAS：`_ver == BaseVersion` 与所有权代际（`_owner_epoch`、`_owner_route`）；共享模式另校验 `_grant_fence` 与 `_grant_token`（[独占写准入](#独占写准入)）；
 2. 全部 DAO full document mutation 或 delete target；
 3. 权威 snapshot；
 4. transaction receipt 与待发布 outbox。
@@ -63,13 +63,32 @@ Durability 1/2/3（async / strict / 随 strict 路径提交的 pipelined）的 W
 
 未发布记录不设置TTL，只有完成发布的记录才进入过期回收。发布与ACK保持幂等。实体侧的`AcknowledgeRemoteCommit`必须并发安全：outbox和Committed回执的本地确认可能交错，生成实体经`Tracker.AdvanceVersion`原子CAS满足。阶段耗时见[指标](OBSERVABILITY.md)，功能验收不能当作新TPS结论。
 
+## 独占写准入
+
+前提（维护者 2026-11-06）：**一个实体同一时刻只有一个 owner**。由 App 层统一的单实例锁与 fail-stop 保证（[App 生命周期](impl/01-app-lifecycle.md)）：失去归属的进程先停，新 owner 才接手；不考虑旧进程与新进程同时以 owner 身份写（脑裂）。所有权记录里是单个 owner sid、非共享的实体（独占）据此不再每次请求向 Mongo 确认归属；共享模式不变。
+
+- **稳定持有不碰权威**：所有权缓存是本 sid 独占、当前托管的实例就是在这份租约下对齐过的那份（`heldExclusively`）时，写准入（Nest 每个以它为声明目标的请求，读写都一样）不做任何 Mongo 读写：不取写许可（修改前每次 `GrantWrite`，`_remote_entity_meta` 上一次多数派 `findAndModify`），也不按 `marker_cache_ttl` 重读所有权记录。本进程是唯一写者，内存就是最新。缓存在这里不按 TTL 过期：独占实体的所有权只由 owner 进程自己改（认领、转移、进出共享都要求 `expected.OwnerSid == localSid`，持写门与所有权写锁串行），本进程的改动同步写进缓存，结果未知时置为未知。
+- **对齐时刻**：本地可能落后的入口只有三类，各在之后的第一次准入（或预加载 / 路由前置检查时）读一次权威（`ReadAuthorityState`，`_remote_entity_meta` 一次 `FindOne`，只读）：
+  1. **加载**：冷加载、仅内存卸载后再访问（淘汰、持久拒绝后的重载、落后副本换代）——实例是新指针，对齐记录失配；
+  2. **取得归属**：首写认领（`ClaimOwnership` 之后）、转入（别的 owner 转来，`MarkerEpoch` 前进）、崩溃接管（同 sid 重启，新进程里没有对齐记录）、起服预加载（`PreloadOwnedEntities`）与路由前置检查（`ServeRoutedRequest`）的冷加载——后两者读到的权威版本与加载的实例一致、状态可写时直接记下对齐，之后第一次请求不再读；
+  3. **从共享退回独占**：`LeaveRemoteSharedMode` 推进 `MarkerEpoch`，对齐记录失配。
+  所有权的任何变更都推进 `MarkerEpoch`，所以“租约变了”与“实例换了”两条就覆盖了全部入口。对齐时实例版本落后于权威或停在 `Fenced`，按下一节先卸载再从权威加载；一致就记下对齐（`markAligned`），此后回到稳定持有。
+- **只读请求**：handler 不改持久字段时，生成的 `HasRemoteCommitLocked` 答 false，批次没有 Remote 提交：不写 WAL、不投影、不发 Mongo 命令。它仍走写准入：占一个 `max_concurrent_writes` 名额、过实体写门，时长是 handler 本身（稳定持有时准入不做 I/O）。**没有新增只读声明**：写门让读请求排在同一实体上结论未定的写之后，读不到可能被回滚 / 结果未知的修改；绕开写门的只读声明会改变这条语义，并要同时改 codegen、Nest 与 Remote 三层。代价：同一实体上的读要等在途写拿到持久结论，写额度被在途写占满时读同样答 overloaded。
+- **兜底**：独占提交在投影元数据 CAS 上只校验 `_ver == BaseVersion`、`_owner_epoch`、`_owner_route`（`authorityCommitFilter`；共享提交另校验 `_grant_fence` 与非空 `_grant_token`。同一个 epoch 只对应一种模式，过滤条件按权威记录的 `_owner_shared` 选），与提交同一个 Mongo 事务，不增加往返。前提被打破（例如同 sid 两个进程重叠、都以为自己是 owner）时，后到的那笔因版本或代际不符被拒，权威不被覆盖；`MongoCommitter` 记 ERROR 与 `remote_entity.commit_conflict_total`。之后：
+  - **Durability 0**（memory）：明确拒绝（`ErrRemoteVersionConflict`），按[持久拒绝](#持久拒绝rejected的来源与收尾)回滚、隔离、仅内存卸载；下一次访问重新对齐（读到别的 owner 时答 `ErrRemoteFenced`）。
+  - **Durability 1/2/3**（WAL）：投影器 `ErrProjectionConflict` fatal，进程 fail-stop（DataEngine `OnFatal` → App 的 RuntimeFailure，与修改前写许可被取代时相同）。不另加实体级恢复：WAL 里这笔已持久、不能丢，也不能改写到新版本上；进程停下由运维与 App 单实例裁决谁是 owner，这正是前提要求的“失去归属的进程先停”。
+- **确认认写者**：独占写不再带每次递增的 fence，同一实体上各次独占写的 LockFence 相同，别的进程的提交可能与一份空闲副本的 `(BaseVersion, LockFence)` 恰好一致。`acknowledgeRemoteCommit` 因此另要求实例的 wrapper 此刻正由这笔事务持有写门（定稿时记下、写门释放时清除）；写门释放后的重复确认只在向量已经等于这笔的结果时放行（幂等）。否则不推进（`remote_entity.foreign_ack_skipped_total`）。
+- **共享模式不变**：分布式锁、每次 `GrantWrite`（现在只接受共享实体，去掉了 owner 参数）、`_grant_fence` / `_grant_token` 校验照旧。
+- **指标**：`remote_entity.exclusive_admission_total{path=held|aligned}`（稳定持有 / 对齐了一次的独占准入，正常时几乎全是 `held`）、`remote_entity.commit_conflict_total`（应为 0）。
+- **回归**：[write_admission_test.go](../../framework/remoteentity/write_admission_test.go) 的 `TestExclusiveOwnerWritesWithoutAWriteGrant`（5 次稳定写：修前 5 次 `findAndModify` 与 5 次所有权读，修后 0）、`TestExclusiveReadOnlyRequestTouchesNoMongo`（经 Nest 的 5 次只读请求：修前 5 次 `findAndModify`，修后没有任何 Mongo 写、不读元数据与数据文档）、`TestExclusiveOwnerAlignsBeforeServingAfterItMayHaveFallenBehind`（转走又转回、退出共享、同 sid 重启与淘汰后再访问：先对齐再答复 / 写入）、`TestRoutedColdLoadAlignsSoTheFirstRequestReadsNoAuthority`、`TestExclusiveWriteFromABrokenPremiseIsRejectedAtProjection`（同 sid 两个进程、所有权在 owner 背后被改）、`TestPublishingAnotherIncarnationsCommitDoesNotAdvanceAnIdleCopy`；[mongo_authority_test.go](../../framework/remoteentity/mongo_authority_test.go) 的 `TestExclusiveCommitNeedsNoGrantButChecksVersionAndEpoch`。
+
 ## 多写者：本地副本与权威
 
 共享模式下多个进程都能写同一实体，每个写者进程内存里各有一份实例；独占模式下所有权转走又转回、或退出共享回到独占，也会让本进程的实例错过别的进程的提交。内存实例只在本进程写入时随确认推进，别的进程的提交不会改它。规则（2026-11-04 修复，见 CHANGELOG）：
 
-- **写准入对齐权威**：取得写许可（独占的持久许可，或共享模式的分布式锁 + 许可）后，本地实例版本落后于权威版本、或停在 `Fenced`（转出时置入，状态表里不会自己恢复）时，先经 `Backend.UnloadRemoteEntity`（正式 loader 是 `ManagerAccess.Unload`，`DestroyReasonMemoryUnload`，不删持久数据）把它仅内存卸载，再加载：内存未命中才会经 loader 从权威重建。卸载经 ctx 的本地执行入口（Nest I/O 准备阶段注入的业务池续行）执行，等实体锁受 OpTimeout 约束；卸载没完成或重载撞上卸载收尾窗口返回可重试的 `entity.ErrRemoteEntityReloading`（包裹 `ErrRemoteFenced`）。Sync 与持久拒绝后的卸载同一规则：旧同步状态关闭、订阅保持，重载后全量。持久拒绝等待框架卸载的实例仍走拒绝收尾那条路径。
-- **outbox 确认只落到写者实例**：每个进程的 outbox 协调者扫描共享 outbox 里全部未发布事务，过了宽限期会代发别的进程的提交（[outbox 发布归属](#outbox-发布归属)）。确认（推进版本向量、生成实体的 `AcknowledgeRemoteCommit`）只在本地实例就是这笔提交的写者时执行：它的版本向量在确认前是 `(BaseVersion, LockFence)`、重复确认时是 `(NextVersion, LockFence)`。否则不动这份实例（计 `remote_entity.foreign_ack_skipped_total`），由下一次写准入从权威重载；发布与版本通知照常。修复前代发会把没有那笔修改的实例推进到新版本，下一笔整文档写覆盖掉别的进程的修改。
-- **边界**：loader 不支持卸载（自定义 loader 没实现 `IRemoteEntityUnloader`）时换不掉实例，落后时照旧报 `ErrRemoteVersionConflict`、`Fenced` 时报 `ErrRemoteFenced`；事务外独立删档（`Destroy(deletePersisted=true)` 不在 handler 内）在 `EntityManager.Destroy` 持实体锁时准备批次，带 `entity.WithRemoteWriteTargetHeld`，实例落后时不卸载、按版本冲突拒绝，下一次 Nest 写准入换掉它之后再删。非写入路径读本进程内存里的 Remote 实例（不经写准入）可能是旧的，跨进程读取用快照（下一节）。
+- **写准入对齐权威**：共享模式取得分布式锁与写许可后、独占模式在[对齐时刻](#独占写准入)读到权威版本后，本地实例版本落后于权威版本、或停在 `Fenced`（转出时置入，状态表里不会自己恢复）时，先经 `Backend.UnloadRemoteEntity`（正式 loader 是 `ManagerAccess.Unload`，`DestroyReasonMemoryUnload`，不删持久数据）把它仅内存卸载，再加载：内存未命中才会经 loader 从权威重建。卸载经 ctx 的本地执行入口（Nest I/O 准备阶段注入的业务池续行）执行，等实体锁受 OpTimeout 约束；卸载没完成或重载撞上卸载收尾窗口返回可重试的 `entity.ErrRemoteEntityReloading`（包裹 `ErrRemoteFenced`）。Sync 与持久拒绝后的卸载同一规则：旧同步状态关闭、订阅保持，重载后全量。持久拒绝等待框架卸载的实例仍走拒绝收尾那条路径。
+- **outbox 确认只落到写者实例**：每个进程的 outbox 协调者扫描共享 outbox 里全部未发布事务，过了宽限期会代发别的进程的提交（[outbox 发布归属](#outbox-发布归属)）。确认（推进版本向量、生成实体的 `AcknowledgeRemoteCommit`）只在本地实例就是这笔提交的写者时执行：它的版本向量在确认前是 `(BaseVersion, LockFence)`、重复确认时是 `(NextVersion, LockFence)`，并且它的 wrapper 正由这笔事务持有写门（写门释放后只放行已等于这笔结果的重复确认，见[独占写准入](#独占写准入)）。否则不动这份实例（计 `remote_entity.foreign_ack_skipped_total`），由下一次写准入从权威重载；发布与版本通知照常。修复前代发会把没有那笔修改的实例推进到新版本，下一笔整文档写覆盖掉别的进程的修改。
+- **边界**：loader 不支持卸载（自定义 loader 没实现 `IRemoteEntityUnloader`）时换不掉实例，落后时照旧报 `ErrRemoteVersionConflict`、`Fenced` 时报 `ErrRemoteFenced`；事务外独立删档（`Destroy(deletePersisted=true)` 不在 handler 内）在 `EntityManager.Destroy` 持实体锁时准备批次，带 `entity.WithRemoteWriteTargetHeld`，实例落后时不卸载、按版本冲突拒绝，下一次 Nest 写准入换掉它之后再删。非写入路径读本进程内存里的 Remote 实例（不经写准入）可能是旧的，跨进程读取用快照（下一节）。独占稳定持有期间不再向权威确认（[独占写准入](#独占写准入)）：前提被打破时，后到的进程在下一次写之前读到的是它自己的内存。
 
 ## 实体归属守卫
 
@@ -82,7 +101,7 @@ Durability 1/2/3（async / strict / 随 strict 路径提交的 pipelined）的 W
 
 ## 路由登记
 
-实体服务有多个实例时（[联盟服务方案 2.7](../maintenance/FEATURE-2026-11-04-alliance-service.md#27-分片接管与迁移决定-2)），owner 在 Redis 登记一份带过期的“实体 ID → owner sid + 所有权代际”，调用方的路由 RPC 按它找 owner（[guide/09“路由 RPC 与改投”](guide/09-services.md#2a-路由-rpc-与改投)）。它只是路由提示：写准入永远只看所有权记录与 fence，不读登记。实现：`framework/remoteentity` 的 `route_store.go`（键、值、三个脚本、查找）与 `route.go`（Manager 上的登记、续期、前置检查与预加载）。
+实体服务有多个实例时（[联盟服务方案 2.7](../maintenance/FEATURE-2026-11-04-alliance-service.md#27-分片接管与迁移决定-2)），owner 在 Redis 登记一份带过期的“实体 ID → owner sid + 所有权代际”，调用方的路由 RPC 按它找 owner（[guide/09“路由 RPC 与改投”](guide/09-services.md#2a-路由-rpc-与改投)）。它只是路由提示：写准入永远只看所有权记录（独占稳定持有时看本进程对它的缓存，见[独占写准入](#独占写准入)）与版本 / 代际，不读登记。实现：`framework/remoteentity` 的 `route_store.go`（键、值、三个脚本、查找）与 `route.go`（Manager 上的登记、续期、前置检查与预加载）。
 
 - **哪些 kind**：`coreremote.Config.RouteKinds`，wiring 经 `wiring/remoteentity.WithRouteKinds(kinds...)` 传入（生成工程是声明了 `service=<本服务>` 的 Remote 托管 kind），Mod Init 校验一次：已注册的 Remote 托管 kind、不在 `WithForeignKinds` 里。不写 YAML 键；不传时没有登记，行为与没有这项功能时逐字相同。
 - **键与值**：键 `<remote_entity.snapshot_l2_key_prefix>:remote_entity:route:<完整 Entity ID>`（前缀为空时没有前缀与冒号，与 L2 快照键同一规则，不带 hash tag，Redis Cluster 下按键分散）；值 `<owner sid>:<MarkerEpoch>`。MarkerEpoch 每次所有权变更加一，同 sid 崩溃重启时不变。
@@ -111,6 +130,6 @@ Interest 使用 TTL 软状态，本机在半 TTL 前不重复发布 renewal，�
 
 ## 启动约束
 
-RemoteEntityMod 缺少以下任一能力必须启动失败：Redis versioned lock（竞争协调；所有权的权威是 Mongo 的 ownership / grant / fence，正式装配不用 Redis marker，见[Remote实现篇](impl/05-remote-mirror.md)）、跨服 SyncBus、`IRemoteAtomicBatchCommitter`、`IRemoteSnapshotLoader`、`IRemoteCommitOutbox`。依赖在 Start 后封存，禁止运行期替换造成 data race。
+RemoteEntityMod 缺少以下任一能力必须启动失败：Redis versioned lock（共享模式的竞争协调；所有权的权威是 Mongo 的 ownership 记录、共享模式的 grant / fence，正式装配不用 Redis marker，见[Remote实现篇](impl/05-remote-mirror.md)）、跨服 SyncBus、`IRemoteAtomicBatchCommitter`、`IRemoteSnapshotLoader`、`IRemoteCommitOutbox`。依赖在 Start 后封存，禁止运行期替换造成 data race。
 
 Broadcast 和匿名 callback 不允许写 remote-managed entity，因为它们不具备一个明确的原子 transaction/rollback 边界。跨实体写使用声明目标的 Multi handler。
