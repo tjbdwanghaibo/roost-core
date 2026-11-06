@@ -28,8 +28,10 @@ def serve():
             previous = 0
             while True:
                 magic, version, flags, mid, seq, size = struct.unpack("!2sBBIII", exact(conn, 16))
-                assert magic == b"RS" and version == 2 and flags == 0 and size <= 1
+                assert magic == b"RS" and version == 2 and flags == 0 and size <= 11
                 body = exact(conn, size)
+                if seq == 1 and mid == 0 and len(body) == 11 and body[:2] == b"\x00G":
+                    body = body[10:]  # 鉴权首包的连接代号信封，票据原文在其后
                 assert seq > previous, (previous, mid, seq)
                 previous = seq
                 seen.append(mid)

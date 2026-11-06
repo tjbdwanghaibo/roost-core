@@ -1,4 +1,5 @@
 #include "roost/client.h"
+#include "auth_payload.hpp"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -397,12 +398,37 @@ void roost_destroy(roost_client *c) {
   roost_disconnect(c);
   delete c;
 }
+// 本进程最近一次发出的鉴权连接代号（与事件里按 roost_client 计数的连接 generation 不是一回事）。
+static std::atomic<uint64_t> last_auth_generation{0};
+// 新的鉴权连接代号：max(上一个 + 1, 当前 UTC Unix 纳秒)。进程内严格递增（所有 roost_client 共用），不受时钟
+// 回拨影响；进程重启后从当时的时钟起算，自然大于旧进程发过的代号。重启前后时钟被往回拨时可能偏小，后果只是与旧
+// 进程仍在途的握手重叠时被拒一次，重连即恢复。system_clock 精度不足纳秒的平台换算后仍是纳秒单位。
+static uint64_t next_auth_generation() {
+  const uint64_t now = uint64_t(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now().time_since_epoch())
+          .count());
+  uint64_t last = last_auth_generation.load();
+  uint64_t next;
+  do {
+    next = std::max(last + 1, now);
+  } while (!last_auth_generation.compare_exchange_weak(last, next));
+  return next;
+}
 int roost_connect(roost_client *c, const char *address, uint16_t port,
                   const uint8_t *ticket, size_t size) {
   if (!c || !address || !port || (!ticket && size) ||
       size > c->options.max_payload)
     return 0;
   try {
+    // 鉴权首包带本次连接的新代号（越晚发起的连接越大，每次 connect 包括重连都取新的）。票据为空或以 0x00 开头时
+    // 原样发出，由服务端拒绝（CLOSED），与以前的失败方式相同。
+    Bytes bytes;
+    if (!roost_detail::encode_auth(ticket, size, next_auth_generation(), bytes) &&
+        size)
+      bytes.assign(ticket, ticket + size);
+    if (bytes.size() > c->options.max_payload)
+      return 0;
     roost_disconnect(c);
     {
       std::lock_guard<std::mutex> lock(c->mutex);
@@ -414,9 +440,6 @@ int roost_connect(roost_client *c, const char *address, uint16_t port,
     c->stop = false;
     c->sequence = 1;
     ++c->generation;
-    Bytes bytes;
-    if (size)
-      bytes.assign(ticket, ticket + size);
     c->worker = std::thread([c, address = std::string(address), port,
                              bytes = std::move(bytes)]() mutable {
       c->run(address, port, std::move(bytes));

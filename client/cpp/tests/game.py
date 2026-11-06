@@ -16,6 +16,7 @@ golden = {
     for x in json.loads((repo / "client/spec/packets.json").read_text())
 }
 errors = []
+auth_generations = []
 listener = socket.socket()
 listener.bind(("127.0.0.1", 0))
 listener.listen()
@@ -61,7 +62,10 @@ def serve():
                             send(c, 0, seq, b"RCN1" + struct.pack("!qq", stamp, stamp))
                             continue
                         if seq == 1:
-                            assert body == b"ticket"
+                            # 鉴权首包：连接代号信封 + 票据原文；第二条连接（重连）的代号更大。
+                            assert len(body) > 10 and body[:2] == b"\x00G" and body[10:] == b"ticket", body
+                            auth_generations.append(struct.unpack("!Q", body[2:10])[0])
+                            assert auth_generations[0] != 0 and auth_generations == sorted(set(auth_generations)), auth_generations
                         send(c, 0, seq)
                         if seq == 1:
                             send(c, 9, 0, b"\x08\x03", 1)
@@ -124,4 +128,7 @@ try:
 finally:
     listener.close()
     t.join(timeout=6)
+    if errors:
+        print("server-side check failed:", errors, file=sys.stderr)
 assert not t.is_alive() and not errors, errors
+assert len(auth_generations) == 2, auth_generations

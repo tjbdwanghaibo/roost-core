@@ -35,7 +35,7 @@ def exact(c,n):
  return b
 with tempfile.TemporaryDirectory(prefix='review-native-seq-') as directory:
  d=pathlib.Path(directory);(d/'probe.cpp').write_text(source+driver)
- subprocess.run(['g++','-std=c++17','-pthread','-I'+str(root/'client/cpp/include'),str(d/'probe.cpp'),'-o',str(d/'probe')],check=True)
+ subprocess.run(['g++','-std=c++17','-pthread','-I'+str(root/'client/cpp/include'),'-I'+str(root/'client/cpp/src'),str(d/'probe.cpp'),'-o',str(d/'probe')],check=True)
  listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen();listener.settimeout(5)
  proc=subprocess.Popen([str(d/'probe'),str(listener.getsockname()[1])])
  observed=[]

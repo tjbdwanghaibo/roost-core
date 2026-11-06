@@ -1,3 +1,4 @@
+#include "../src/auth_payload.hpp"
 #include "roost/client.hpp"
 #include "roost/network_time.hpp"
 #include "roost/sync.hpp"
@@ -66,6 +67,66 @@ int main(int argc, char **argv) {
         throw std::runtime_error("full replacement removal missing");
       std::cout << "PASS native Sync Go "
                    "golden/full/delta/remove/duplicate/malformed/reset\n";
+      return 0;
+    }
+    if (std::string(argv[1]) == "auth" && argc == 4) {
+      // Go 金样 auth_generation：同一票据与代号写出的信封逐字节等于 Go 的载荷（argv[2] 为 hex，argv[3] 为十进制代号）。
+      const std::string want = argv[2];
+      const uint64_t generation = std::stoull(argv[3]);
+      const uint8_t ticket[] = {'t', 'i', 'c', 'k', 'e', 't'};
+      std::vector<uint8_t> payload;
+      if (!roost_detail::encode_auth(ticket, sizeof(ticket), generation, payload))
+        throw std::runtime_error("auth envelope refused");
+      static const char digits[] = "0123456789abcdef";
+      std::string got;
+      for (uint8_t b : payload) {
+        got += digits[b >> 4];
+        got += digits[b & 15];
+      }
+      if (got != want)
+        throw std::runtime_error("Go/C++ auth envelope " + got + " != " + want);
+      const uint8_t nul[] = {0, 't'};
+      std::vector<uint8_t> unchanged{1};
+      if (roost_detail::encode_auth(nul, sizeof(nul), 1, unchanged) ||
+          roost_detail::encode_auth(ticket, 0, 1, unchanged) ||
+          roost_detail::encode_auth(ticket, sizeof(ticket), 0, unchanged) ||
+          unchanged != std::vector<uint8_t>{1})
+        throw std::runtime_error("invalid auth envelope accepted");
+      std::cout << "PASS native auth envelope Go golden\n";
+      return 0;
+    }
+    if (std::string(argv[1]) == "reconnect" && argc == 3) {
+      // 同一进程先后两次连接（C ABI connect → READY → 再 connect）：对端 run.py 核对两次鉴权首包的连接代号递增。
+      auto *c = roost_create(roost_default_options());
+      if (!c)
+        throw std::runtime_error("create failed");
+      const uint8_t ticket[] = {'t', 'i', 'c', 'k', 'e', 't'};
+      for (int round = 0; round < 2; ++round) {
+        if (!roost_connect(c, "127.0.0.1", uint16_t(std::stoi(argv[2])), ticket,
+                           sizeof(ticket))) {
+          roost_destroy(c);
+          throw std::runtime_error("connect refused");
+        }
+        bool ready = false;
+        auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (!ready && std::chrono::steady_clock::now() < until) {
+          roost_event event{};
+          while (roost_poll(c, &event))
+            if (event.type == ROOST_READY)
+              ready = true;
+            else if (event.type == ROOST_CLOSED) {
+              roost_destroy(c);
+              throw std::runtime_error("closed before ready");
+            }
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (!ready) {
+          roost_destroy(c);
+          throw std::runtime_error("not ready");
+        }
+      }
+      roost_destroy(c);
+      std::cout << "PASS native reconnect\n";
       return 0;
     }
     auto options = roost_default_options();

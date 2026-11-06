@@ -68,9 +68,10 @@ if a.target in ("windows", "linux") and platform.machine().lower() not in (
     p.error("the Unity desktop importer currently supports x86_64 on this target")
 if not a.protoc:
     p.error("protoc required for the generated DAO sample")
-source_files = sorted((root / "client/cpp/src").glob("*.cpp")) + sorted(
-    (root / "client/cpp/include/roost").glob("*")
-)
+# src 下的 .hpp 是库内部头文件（如 auth_payload.hpp），改动同样改变插件行为，一并计入指纹。
+source_files = sorted(
+    f for f in (root / "client/cpp/src").glob("*") if f.suffix in (".cpp", ".hpp")
+) + sorted((root / "client/cpp/include/roost").glob("*"))
 fingerprint = hashlib.sha256(
     b"".join(str(f.relative_to(root)).encode() + f.read_bytes() for f in source_files)
 ).hexdigest()
