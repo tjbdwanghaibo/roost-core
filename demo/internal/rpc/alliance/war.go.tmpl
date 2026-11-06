@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"{{MODULE}}/game/alliancerule"
 	alliance "{{MODULE}}/game/entities/alliance"
@@ -159,7 +160,9 @@ func (s *Service) scanWars(attempt int) {
 }
 
 func (s *Service) scanWarsOnce(ctx context.Context) error {
+	started := time.Now()
 	after := int64(0)
+	scanned, waiting := 0, 0
 	for {
 		ids, next, err := s.deps.Owned.ListOwnedRemoteEntities(ctx, []entity.EntityKind{alliance.EntityKindAlliance}, after, transferListPage)
 		if err != nil {
@@ -170,11 +173,14 @@ func (s *Service) scanWarsOnce(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("alliance %d: %w", id, err)
 			}
+			scanned++
+			waiting += len(acks)
 			for _, ack := range acks {
 				s.askEnemy(entity.GetUniqueIDFromEntityID(id), ack.EnemyID, ack.RequestID, 0)
 			}
 		}
 		if next == 0 {
+			slog.Info("alliance: war scan done", "alliances", scanned, "waiting", waiting, "took", time.Since(started))
 			return nil
 		}
 		after = next

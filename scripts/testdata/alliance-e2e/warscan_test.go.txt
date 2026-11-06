@@ -1,0 +1,308 @@
+package e2e
+
+// 短测（ALLIANCE_E2E_PERF=1）：起服时的宣战补发扫描（ScanWars，方案 §2.5B“宣战”）随联盟数的代价。
+//
+// 3001 先起、建 8 个敌方联盟（此时只有它在 Found 队列组里），再起 3000 并让 3001 退出建盟（alliance.stop_founding），
+// 之后建的联盟都在 3000 上。每一档 N（ALLIANCE_E2E_WARSCAN_COUNTS，缺省 1000,10000）：
+//  1. 补建到 3000 上有 N 个联盟；
+//  2. 停 3001，3000 上取 N 的千分之 ALLIANCE_E2E_WARSCAN_PENDING（缺省 10，即 1%，至少 1）个联盟向 3001 上的敌方宣战——
+//     对方不可达，宣战方留下待确认标记（WarAcks）；
+//  3. 停 3000（运行中的重试随进程丢失），拉起 3001，再拉起 3000：只有起服扫描能补发；
+//  4. 量：拉起到 /readyz 的时间、预加载窗口、扫描本身（日志 "alliance: war scan done" 的 took）、拉起到全部敌方一侧
+//     记上（Info 读敌方的 Wars）的时间、常驻内存峰值（每 100ms 采 ps）、Mongo 的 query / getmore 与扫描的键 / 文档数
+//     （serverStatus 差值，整台私有 Mongo，含 3001 的底噪），以及列表查询本身的执行计划（explain：第一页与最后一页）。
+// 每档结束时扫描必须已完成、补发必须全部完成，否则失败。
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"go.mongodb.org/mongo-driver/v2/bson"
+
+	allianceentity "example.com/planet/game/entities/alliance"
+)
+
+type mongoStats struct {
+	query, getmore, command, keys, docs int64
+}
+
+func (s *suite) mongoStats() mongoStats {
+	var status bson.M
+	if err := s.mongo.Database("admin").RunCommand(s.ctx, bson.D{{Key: "serverStatus", Value: 1}}).Decode(&status); err != nil {
+		s.t.Fatal(err)
+	}
+	num := func(v any) int64 {
+		switch n := v.(type) {
+		case int32:
+			return int64(n)
+		case int64:
+			return n
+		case float64:
+			return int64(n)
+		}
+		return 0
+	}
+	ops, _ := status["opcounters"].(bson.M)
+	metrics, _ := status["metrics"].(bson.M)
+	executor, _ := metrics["queryExecutor"].(bson.M)
+	return mongoStats{query: num(ops["query"]), getmore: num(ops["getmore"]), command: num(ops["command"]),
+		keys: num(executor["scanned"]), docs: num(executor["scannedObjects"])}
+}
+
+func (m mongoStats) minus(o mongoStats) mongoStats {
+	return mongoStats{m.query - o.query, m.getmore - o.getmore, m.command - o.command, m.keys - o.keys, m.docs - o.docs}
+}
+
+// rssSampler 每 100ms 采一次进程常驻内存，stop 时返回峰值（MiB）。
+func rssSampler(p *proc) (stop func() float64) {
+	done := make(chan struct{})
+	var peak float64
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if p.cmd != nil && p.cmd.Process != nil {
+				if out, err := exec.Command("ps", "-o", "rss=", "-p", fmt.Sprint(p.cmd.Process.Pid)).Output(); err == nil {
+					kb, _ := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+					peak = max(peak, kb/1024)
+				}
+			}
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	return func() float64 { close(done); wg.Wait(); return peak }
+}
+
+// warScanLine 找日志里最后一次起服之后的 "alliance: war scan done"。
+func warScanLine(path string, since time.Time) (map[string]any, time.Time, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, time.Time{}, false
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1<<20), 1<<22)
+	var found map[string]any
+	var at time.Time
+	for scanner.Scan() {
+		var line map[string]any
+		if json.Unmarshal(scanner.Bytes(), &line) != nil || line["msg"] != "alliance: war scan done" {
+			continue
+		}
+		stamp, _ := time.Parse(time.RFC3339Nano, fmt.Sprint(line["time"]))
+		if stamp.After(since) {
+			found, at = line, stamp
+		}
+	}
+	return found, at, found != nil
+}
+
+func loadAverage() string {
+	out, _ := exec.Command("sysctl", "-n", "vm.loadavg").Output()
+	return strings.Trim(strings.TrimSpace(string(out)), "{} ")
+}
+
+// explainOwnedPage 对 3000 的所有权列表查询（ListOwnedRemoteEntities 的同一过滤与排序）取执行计划。
+func (s *suite) explainOwnedPage(owner int32, after int64) (plan string, keys, docs, returned int64) {
+	tagSpan := int64(1) << entity.EntityIDTagBits
+	remainders := bson.A{}
+	for category := int64(0); category < 1<<entity.EntityCategoryBits; category++ {
+		remainders = append(remainders, bson.M{"_id": bson.M{"$mod": bson.A{tagSpan, int64(allianceentity.EntityKindAlliance)<<entity.EntityKindShift | category}}})
+	}
+	filter := bson.M{"_owner_sid": owner, "_owner_shared": false, "_authority": true, "_id": bson.M{"$gt": after}, "$or": remainders}
+	var out bson.M
+	cmd := bson.D{{Key: "explain", Value: bson.D{{Key: "find", Value: "_remote_entity_meta"}, {Key: "filter", Value: filter},
+		{Key: "sort", Value: bson.D{{Key: "_id", Value: 1}}}, {Key: "limit", Value: 1000}}}, {Key: "verbosity", Value: "executionStats"}}
+	if err := s.mongo.Database(s.prefix).RunCommand(s.ctx, cmd).Decode(&out); err != nil {
+		s.t.Fatalf("explain: %v", err)
+	}
+	stats, _ := out["executionStats"].(bson.M)
+	num := func(v any) int64 {
+		switch n := v.(type) {
+		case int32:
+			return int64(n)
+		case int64:
+			return n
+		}
+		return 0
+	}
+	planner, _ := out["queryPlanner"].(bson.M)
+	winning, _ := json.Marshal(planner["winningPlan"])
+	return summarizePlan(string(winning)), num(stats["totalKeysExamined"]), num(stats["totalDocsExamined"]), num(stats["nReturned"])
+}
+
+// summarizePlan 把执行计划压成 “SORT>FETCH>IXSCAN{_owner_sid}” 这样的一行。
+func summarizePlan(raw string) string {
+	var node map[string]any
+	if json.Unmarshal([]byte(raw), &node) != nil {
+		return raw
+	}
+	var parts []string
+	for node != nil {
+		part := fmt.Sprint(node["stage"])
+		if key, ok := node["keyPattern"].(map[string]any); ok {
+			names := make([]string, 0, len(key))
+			for k := range key {
+				names = append(names, k)
+			}
+			part += "{" + strings.Join(names, ",") + "}"
+		}
+		parts = append(parts, part)
+		next, _ := node["inputStage"].(map[string]any)
+		node = next
+	}
+	return strings.Join(parts, ">")
+}
+
+func TestAllianceE2EWarScanStartup(t *testing.T) {
+	perfOnly(t)
+	counts := []int{1000, 10000}
+	if raw := os.Getenv("ALLIANCE_E2E_WARSCAN_COUNTS"); raw != "" {
+		counts = nil
+		for _, field := range strings.Split(raw, ",") {
+			n, err := strconv.Atoi(strings.TrimSpace(field))
+			if err != nil || n <= 0 {
+				t.Fatalf("ALLIANCE_E2E_WARSCAN_COUNTS %q", raw)
+			}
+			counts = append(counts, n)
+		}
+	}
+	perMille := 10
+	if raw := os.Getenv("ALLIANCE_E2E_WARSCAN_PENDING"); raw != "" {
+		perMille, _ = strconv.Atoi(raw)
+	}
+	s := newSuite(t, 3*time.Hour)
+	client := s.client(nil, 20*time.Second)
+	b := s.start("alliance-3001", "alliance", 3001, procOptions{})
+	enemies, _ := s.foundMany(client, 8, 4_000_000, 4)
+	a := s.start("alliance-3000", "alliance", 3000, procOptions{})
+	s.admin(b, "alliance.stop_founding", nil)
+
+	founded, leaderBase := 0, int64(5_000_000)
+	var ids []int64
+	declared := map[int64][]int64{} // enemy → declarers
+	war := 0
+	for _, n := range counts {
+		if more := n - founded; more > 0 {
+			batch, took := s.foundMany(client, more, leaderBase+int64(founded), 24)
+			ids = append(ids, batch...)
+			t.Logf("PERF warscan founded %d more alliances on 3000 in %v (%.0f/s, load %s)", more, took.Round(time.Second), float64(more)/took.Seconds(), loadAverage())
+			founded = n
+		}
+		// 新的待确认标记：从本档新建的联盟里均匀取（已有标记的联盟上一档已补完）。
+		pending := max(1, n*perMille/1000)
+		s.stop(b, syscall.SIGINT)
+		step := max(1, len(ids)/pending)
+		for j := 0; j < pending; j++ {
+			index := (j*step + 1) % len(ids)
+			declarer, leader := ids[index], leaderBase+int64(index)+1
+			enemy := enemies[j%len(enemies)]
+			war++
+			ctx, cancel := context.WithTimeout(s.ctx, 20*time.Second)
+			reply, err := client.DeclareWar(ctx, fmt.Sprintf("warscan-%d", war), leader, 1000, target(t, declarer), enemy)
+			cancel()
+			if err != nil {
+				t.Fatalf("declare war %d on %d (enemy instance down): %v", declarer, enemy, err)
+			}
+			if !containsID(reply.Alliance.Wars, enemy) {
+				t.Fatalf("declare war %d on %d: the declaring side was not recorded: %+v", declarer, enemy, reply.Alliance)
+			}
+			declared[enemy] = append(declared[enemy], declarer)
+		}
+		s.stop(a, syscall.SIGINT)
+		s.launch(b)
+		s.waitReady(b, 5*time.Minute)
+
+		loadBefore := loadAverage()
+		before := s.mongoStats()
+		launched := time.Now()
+		stopRSS := rssSampler(a)
+		s.launch(a)
+		s.waitReady(a, 15*time.Minute)
+		ready := time.Since(launched)
+		atReady := s.mongoStats()
+		var scan map[string]any
+		var scanAt time.Time
+		s.eventually("war scan done", 15*time.Minute, func() (bool, string) {
+			var ok bool
+			scan, scanAt, ok = warScanLine(a.log, launched)
+			return ok, "no scan line yet"
+		})
+		afterScan := s.mongoStats()
+		s.eventually("every enemy records its wars", 15*time.Minute, func() (bool, string) {
+			for enemy, declarers := range declared {
+				ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+				reply, err := client.Info(ctx, target(t, enemy))
+				cancel()
+				if err != nil {
+					return false, err.Error()
+				}
+				have := map[int64]bool{}
+				for _, id := range reply.Alliance.Wars {
+					have[id] = true
+				}
+				for _, declarer := range declarers {
+					if !have[declarer] {
+						return false, fmt.Sprintf("enemy %d lacks %d", enemy, declarer)
+					}
+				}
+			}
+			return true, ""
+		})
+		madeUp := time.Since(launched)
+		peak := stopRSS()
+		pStart, pDone, _, report := preloadWindow(t, a.log)
+		took, _ := scan["took"].(float64)
+		toReady, toScan := atReady.minus(before), afterScan.minus(atReady)
+		plan, keys, docs, returned := s.explainOwnedPage(3000, 0)
+		lastAfter := int64(0)
+		if len(ids) > 1000 {
+			lastAfter = entityIDOf(t, ids[len(ids)-1000])
+		}
+		planLast, keysLast, docsLast, returnedLast := s.explainOwnedPage(3000, lastAfter)
+		t.Logf("PERF warscan n=%d pending=%d (load before %s, after %s): start→ready %v; preload listed=%d loaded=%d took %v; "+
+			"scan alliances=%v waiting=%v took %v (done %v after launch); every enemy side recorded %v after launch; rss peak %.0f MiB (now %.0f)",
+			n, pending, loadBefore, loadAverage(), ready.Round(time.Millisecond), report.Listed, report.Loaded, pDone.Sub(pStart).Round(time.Millisecond),
+			scan["alliances"], scan["waiting"], time.Duration(took).Round(time.Millisecond), scanAt.Sub(launched).Round(time.Millisecond),
+			madeUp.Round(time.Millisecond), peak, rssMB(a))
+		t.Logf("PERF warscan n=%d mongo launch→ready query=%d getmore=%d command=%d keys=%d docs=%d; ready→scan done query=%d getmore=%d command=%d keys=%d docs=%d",
+			n, toReady.query, toReady.getmore, toReady.command, toReady.keys, toReady.docs, toScan.query, toScan.getmore, toScan.command, toScan.keys, toScan.docs)
+		t.Logf("PERF warscan n=%d owned-list page plan %s: first page keys=%d docs=%d returned=%d; last page keys=%d docs=%d returned=%d (%s)",
+			n, plan, keys, docs, returned, keysLast, docsLast, returnedLast, planLast)
+	}
+}
+
+func entityIDOf(t *testing.T, allianceID int64) int64 {
+	id, err := entity.BuildEntityID(allianceID, allianceentity.EntityKindAlliance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func containsID(ids []int64, id int64) bool {
+	for _, have := range ids {
+		if have == id {
+			return true
+		}
+	}
+	return false
+}

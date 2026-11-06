@@ -10,9 +10,12 @@
 #   - TestAllianceE2ERedisOutage               Redis（经 toxiproxy）断开期间路由回退所有权记录的点读放大、恢复后重新登记；
 #   - TestAllianceE2EGamePlayers               两个 game 进程上的玩家同一公会互相读到、通知跨进程、Saga 只扣一次只退一次；
 #   - TestAllianceE2ERejectedFoundingAfterRestart  建盟被拒留下的空认领：重启后预加载计 empty、不报错，Info 答确定的“不存在”；
+#   - TestAllianceE2ERobotOfflineJoin          生成工程的机器人跑 guild_offline_join：离线时被运维入会、再登录“我的公会”可读（决定 D）；
 #   - TestAllianceE2EShortPerf                 只在 ALLIANCE_E2E_PERF=1 时跑：续期量、预加载 1k / 10k、路由 RPC 延迟；
 #   - TestAllianceE2EMirrorRevalidation        只在 ALLIANCE_E2E_PERF=1 时跑：cached_max_staleness 30s / 5s 的 Mirror 回源量。
 #   - TestAllianceE2ERPCConcurrency            只在 ALLIANCE_E2E_PERF=1 时跑：一个实例上 Found / Info / Join 的吞吐随并发与顺序键的变化（约 2 分钟）。
+#   - TestAllianceE2EWarScanStartup            只在 ALLIANCE_E2E_PERF=1 时跑：起服宣战补发扫描（ScanWars）随联盟数的代价，
+#                                              ALLIANCE_E2E_WARSCAN_COUNTS（缺省 1000,10000）、ALLIANCE_E2E_WARSCAN_PENDING（千分比，缺省 10）。
 # 依赖：scripts/mirror-local.sh 起的私有环境（需要 toxiproxy；会断开它的 redis 代理，不要指向共享隔离环境），
 # 加上本脚本自起的私有 etcd（ALLIANCE_E2E_ETCD_PORT，缺省 34379）；进程端口从 ALLIANCE_E2E_PORT_BASE（缺省 35100）起
 # 约占 0..300。用例各用唯一前缀并在结束时删掉自己的库 / 流 / 键。耗时约 7 分钟（本机实测 400s，含生成与编译），不进 pretag。
@@ -49,7 +52,7 @@ etcd --name alliance-e2e --data-dir "$work_dir/etcd" \
 	--initial-cluster "alliance-e2e=http://127.0.0.1:$((etcd_port + 1))" >"$work_dir/etcd.log" 2>&1 &
 etcd_pid=$!
 
-default_run='^TestAllianceE2E(PreloadOrder|CrashTakeoverAndScaleIn|OneAllianceUnderRace|RedisOutage|GamePlayers|RejectedFoundingAfterRestart)$'
+default_run='^TestAllianceE2E(PreloadOrder|CrashTakeoverAndScaleIn|OneAllianceUnderRace|RedisOutage|GamePlayers|RejectedFoundingAfterRestart|RobotOfflineJoin)$'
 export GOWORK=off
 cd "$repo_dir"
 go run ./codegen/cmd/roost project new planet -module example.com/planet -out "$work_dir/planet" -template game-demo --skip-deps
@@ -62,7 +65,9 @@ done
 	cd "$work_dir/planet"
 	go build -mod=mod -o "$work_dir/bin/app" .
 	go build -mod=mod -o "$work_dir/bin/accountctl" ./cmd/accountctl
+	go build -mod=mod -o "$work_dir/bin/loadtest" ./cmd/loadtest
 	ALLIANCE_E2E_BINARY="$work_dir/bin/app" ALLIANCE_E2E_ACCOUNTCTL="$work_dir/bin/accountctl" ALLIANCE_E2E_ROOT="$work_dir/planet" \
+		ALLIANCE_E2E_LOADTEST="$work_dir/bin/loadtest" \
 		ALLIANCE_E2E_ETCD="127.0.0.1:$etcd_port" ALLIANCE_E2E_PORT_BASE="$port_base" \
 		go test -mod=mod -count=1 -timeout 60m -v -run "${ALLIANCE_E2E_RUN:-$default_run}" ./e2e/
 )
