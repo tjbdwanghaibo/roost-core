@@ -300,7 +300,7 @@ func (c *SnapshotClient) renewInterest(ctx context.Context, key entity.RemoteSna
 // err 是被拒的原因。广播由调用方在锁外做。
 func (c *SnapshotClient) admitInterestRenewal(key entity.RemoteSnapshotKey, refresh bool) (entity.RemoteSnapshotInterest, bool, error) {
 	ttl := c.cfg.SnapshotInterestTTL
-	stripe := &c.localInterestLocks[uint64(key.EntityID)%uint64(len(c.localInterestLocks))]
+	stripe := &c.localInterestLocks[entity.EntityIDStripe(key.EntityID, len(c.localInterestLocks))]
 	stripe.Lock()
 	defer stripe.Unlock()
 	// generation 在条带锁内分配：同一 key 的 renew / release 按锁的顺序拿到递增的代际，本机表与兴趣表按同一顺序
@@ -344,7 +344,7 @@ func (c *SnapshotClient) ReleaseInterest(ctx context.Context, key entity.RemoteS
 	if c == nil || !key.Valid() {
 		return entity.ErrRemoteRejected
 	}
-	stripe := &c.localInterestLocks[uint64(key.EntityID)%uint64(len(c.localInterestLocks))]
+	stripe := &c.localInterestLocks[entity.EntityIDStripe(key.EntityID, len(c.localInterestLocks))]
 	stripe.Lock()
 	interest := entity.RemoteSnapshotInterest{ConsumerSID: c.consumerSID, Key: key, ExpiresAt: time.Now().UnixNano(), Generation: c.nextInterestGeneration()}
 	c.localInterestMu.Lock()

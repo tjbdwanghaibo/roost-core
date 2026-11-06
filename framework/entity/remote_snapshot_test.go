@@ -1081,3 +1081,18 @@ func awaitSignal(t *testing.T, ch <-chan struct{}, what string) {
 		t.Fatalf("timed out waiting for %s", what)
 	}
 }
+
+// 同一 kind 的实体 ID 低 10 位（kind + category）都相同，publish 分片必须看唯一号部分：连续创建的 64 个实体要散到多数分片上。
+// 修复前分片只取 ID 的低 6 位，同一 kind 的全部快照发布落在同一把锁上、按 L2 往返逐个串行——单实例 outbox 的 32 个发布
+// 并发因此退化成 1，L2 稍慢时全部 strict 写一起等到超时（KNOWN-LIMITS“单实例全体同时 3 s 超时”）。
+func TestRemoteSnapshotPublishShardSpreadsOneKind(t *testing.T) {
+	const kind EntityKind = 6
+	shards := make(map[uint64]int)
+	for unique := int64(1); unique <= 64; unique++ {
+		id := makeEntityID(unique, 1, kind, true)
+		shards[remoteSnapshotPublishShard(RemoteSnapshotKey{EntityID: id, Kind: kind, Scope: 1, Policy: 1})]++
+	}
+	if len(shards) < 32 {
+		t.Fatalf("64 entities of one kind landed on %d publish shards, want at least 32: %v", len(shards), shards)
+	}
+}

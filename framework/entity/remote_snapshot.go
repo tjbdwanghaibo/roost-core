@@ -1002,10 +1002,12 @@ func (c *RemoteSnapshotCache) setL1Locked(ctx context.Context, entry remoteSnaps
 	}
 }
 
+// remoteSnapshotPublishShard 选 key 的 publish 分片锁。先合并 key 的各字段再整体打散（EntityIDStripe）：实体 ID 的低位是
+// kind 与 category，同一 kind 全部相同，只取低位会让同一 kind 的全部发布挤在一把锁上、按 L2 往返串行。
 func remoteSnapshotPublishShard(key RemoteSnapshotKey) uint64 {
 	h := uint64(key.EntityID) ^ uint64(key.Tenant)<<32 ^ uint64(key.Kind)<<48
 	h ^= uint64(key.Scope)*0x9e3779b185ebca87 ^ uint64(key.Policy)*0xc2b2ae3d27d4eb4f
-	return h & 63
+	return uint64(EntityIDStripe(int64(h), 64))
 }
 
 func (c *RemoteSnapshotCache) ApplyUpdate(ctx context.Context, update RemoteSnapshotRecord) error {

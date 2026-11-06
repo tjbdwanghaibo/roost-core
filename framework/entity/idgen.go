@@ -242,3 +242,13 @@ func setRemoteCapableBit(id int64) int64 {
 func clearRemoteCapableBit(id int64) int64 {
 	return int64(uint64(id) & ^(EntityRemoteMask << EntityRemoteShift))
 }
+
+// EntityIDStripe 把实体 ID 映射到 [0, stripes) 的条带，供分片锁、分片表使用。ID 的低 10 位是 kind 与 category，
+// 同一 kind 的实体全部相同，直接取模或取低位会让同一 kind 落进同一条带；这里先乘 64 位黄金比例常数把唯一号的位
+// 散到高位，再取高 32 位取模。
+func EntityIDStripe(id int64, stripes int) int {
+	if stripes <= 1 {
+		return 0
+	}
+	return int(((uint64(id) * 0x9e3779b97f4a7c15) >> 32) % uint64(stripes))
+}
