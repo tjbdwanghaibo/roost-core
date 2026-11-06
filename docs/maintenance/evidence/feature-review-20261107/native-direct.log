@@ -1,0 +1,4 @@
+PASS native Sync Go golden/full/delta/remove/duplicate/malformed/reset
+PASS native auth envelope Go golden
+PASS native TCP/auth/PB/push/heartbeat/timeout/bounded requests
+PASS native reconnect

@@ -1,0 +1,8 @@
+=== RUN   TestReviewFailedCreateBestEffortEscapes
+=== RUN   TestReviewFailedCreateBestEffortEscapes/reliable
+=== RUN   TestReviewFailedCreateBestEffortEscapes/best_effort
+--- PASS: TestReviewFailedCreateBestEffortEscapes (0.01s)
+    --- PASS: TestReviewFailedCreateBestEffortEscapes/reliable (0.00s)
+    --- PASS: TestReviewFailedCreateBestEffortEscapes/best_effort (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	1.023s

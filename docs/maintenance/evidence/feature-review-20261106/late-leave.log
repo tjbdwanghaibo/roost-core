@@ -1,0 +1,12 @@
+=== RUN   TestReviewOldLeaveMustNotDeleteReenteredActor
+    review_late_leave_test.go:33: old Leave deleted new actor: old epoch=1 new epoch=2 present=false role=
+--- FAIL: TestReviewOldLeaveMustNotDeleteReenteredActor (0.12s)
+=== RUN   TestReviewOldLeaveMustNotDeleteReenteredActor
+    review_late_leave_test.go:33: old Leave deleted new actor: old epoch=1 new epoch=2 present=false role=
+--- FAIL: TestReviewOldLeaveMustNotDeleteReenteredActor (0.12s)
+=== RUN   TestReviewOldLeaveMustNotDeleteReenteredActor
+    review_late_leave_test.go:33: old Leave deleted new actor: old epoch=1 new epoch=2 present=false role=
+--- FAIL: TestReviewOldLeaveMustNotDeleteReenteredActor (0.13s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	0.395s
+FAIL

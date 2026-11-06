@@ -4,6 +4,22 @@
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
+## 2026-11-07：新功能审查收尾
+
+新增 RV-20261107-01（P2）：联盟迁移检查后仍可提交宣战，迁移完成后补发责任没有自动接续；RV-20261107-02（P2）：best_effort 单 worker Stop 在 handler 返回前关闭 Closed。两项均连续三轮复现。之前三项确认缺陷仍未修复，Lockstep／cellworld 间歇失败仍未关闭。根模块与生成工程 race、客户端及联盟真实进程证据和验证边界见 [收尾报告](FEATURE-REVIEW-20261107.md)。
+
+## 2026-11-06 续审：cellworld 生命周期与编码
+
+新增 RV-20261106-03（P2）：旧 Leave 迟到副本删除同 ID 重新入场的新角色，三轮复现；RV-20261106-04（P3）：BaseState 重复 MsgPack 标签丢失 X/VX，影响直接编码该类型的接入方，未证明当前 demo 的字段映射受影响。源码、探针、控制组及范围见 [续审报告](FEATURE-REVIEW-20261106.md#续审跨区生命周期与状态编码)。前述 best_effort、边界抖动和 Lockstep 状态不变。
+
+## 最新新功能审查（2026-11-06，v1.42.0）
+
+新增 best_effort 未纳入失败创建守卫，可发布不存在实体的创建事件。cellworld 跨区抖动完整包有失败，独立复测通过，尚未闭环。见 [审查报告](FEATURE-REVIEW-20261106.md)；不据定向通过宣布上线验收完成。
+
+## 最新 Linux 复验（2026-11-03，v1.40.1）
+
+NATS 关闭表与 SLG 恢复夹具原问题已在 Linux 复验通过；etcd 停止屏障相关两用例各五轮通过。Lockstep 慢快照的深缓冲链路仍会断开，完整包及独立重复运行均有失败，不能关闭或据定向回归宣布上线验收完成。详见 [复验报告](FOLLOWUP-REVIEW-20261102.md)；下方历史结论不覆盖本节。
+
 ## Linux 功能与新功能复核（2026-11-02）
 
 [Linux 验收续报](LINUX-FUNCTIONAL-20261102.md)保留 Lockstep、etcd、NATS 与 SLG 的原始失败和环境限制；[v1.38～v1.40 功能复核](FEATURE-REVIEW-20261102.md)补充 DAO / Sync / Remote View 的 Linux 功能证据。两份报告不代表生产容量或完整上线验收。后续定位与修复见 [核心执行边界审查](CORE-REVIEW.md)。旧提交审查记录保留于[固定审查分支历史](https://github.com/tjbdwanghaibo/roost-core/blob/ed3b36473ff116e8010d590ae98fb8b77798e012/docs/maintenance/COMMIT-REVIEW.md)，不恢复已经归档的维护流水账。

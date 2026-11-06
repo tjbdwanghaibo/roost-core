@@ -1,0 +1,32 @@
+=== RUN   TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose
+2026/11/02 12:05:33 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/02 12:05:34 INFO nats: disconnected err=<nil>
+2026/11/02 12:05:34 INFO nats: connection closed
+    real_nats_integration_test.go:355: non-closing methods answered in 24ms while nats.go still reports IsConnected = true
+--- PASS: TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose (0.23s)
+=== RUN   TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose
+2026/11/02 12:05:34 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/02 12:05:34 INFO nats: disconnected err=<nil>
+2026/11/02 12:05:34 INFO nats: connection closed
+    real_nats_integration_test.go:355: non-closing methods answered in 23ms while nats.go still reports IsConnected = true
+--- PASS: TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose (0.23s)
+=== RUN   TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose
+2026/11/02 12:05:34 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/02 12:05:34 INFO nats: disconnected err=<nil>
+2026/11/02 12:05:34 INFO nats: connection closed
+    real_nats_integration_test.go:355: non-closing methods answered in 19ms while nats.go still reports IsConnected = true
+--- PASS: TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose (0.23s)
+=== RUN   TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose
+2026/11/02 12:05:34 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/02 12:05:34 INFO nats: disconnected err=<nil>
+2026/11/02 12:05:34 INFO nats: connection closed
+    real_nats_integration_test.go:355: non-closing methods answered in 20ms while nats.go still reports IsConnected = true
+--- PASS: TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose (0.23s)
+=== RUN   TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose
+2026/11/02 12:05:34 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/02 12:05:35 INFO nats: disconnected err=<nil>
+2026/11/02 12:05:35 INFO nats: connection closed
+    real_nats_integration_test.go:355: non-closing methods answered in 19ms while nats.go still reports IsConnected = true
+--- PASS: TestRealNatsEveryExportedMethodAnswersFromTheDriverStateAfterAnUndrainedClose (0.23s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver	2.165s

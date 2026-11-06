@@ -1,0 +1,26 @@
+=== RUN   TestReviewFullCaptureLateAckAndRollback
+=== RUN   TestReviewFullCaptureLateAckAndRollback/pointer
+=== RUN   TestReviewFullCaptureLateAckAndRollback/list
+=== RUN   TestReviewFullCaptureLateAckAndRollback/map
+--- PASS: TestReviewFullCaptureLateAckAndRollback (0.01s)
+    --- PASS: TestReviewFullCaptureLateAckAndRollback/pointer (0.00s)
+    --- PASS: TestReviewFullCaptureLateAckAndRollback/list (0.00s)
+    --- PASS: TestReviewFullCaptureLateAckAndRollback/map (0.00s)
+=== RUN   TestReviewFullCaptureLateAckAndRollback
+=== RUN   TestReviewFullCaptureLateAckAndRollback/pointer
+=== RUN   TestReviewFullCaptureLateAckAndRollback/list
+=== RUN   TestReviewFullCaptureLateAckAndRollback/map
+--- PASS: TestReviewFullCaptureLateAckAndRollback (0.00s)
+    --- PASS: TestReviewFullCaptureLateAckAndRollback/pointer (0.00s)
+    --- PASS: TestReviewFullCaptureLateAckAndRollback/list (0.00s)
+    --- PASS: TestReviewFullCaptureLateAckAndRollback/map (0.00s)
+=== RUN   TestReviewFullCaptureLateAckAndRollback
+=== RUN   TestReviewFullCaptureLateAckAndRollback/pointer
+=== RUN   TestReviewFullCaptureLateAckAndRollback/list
+=== RUN   TestReviewFullCaptureLateAckAndRollback/map
+--- PASS: TestReviewFullCaptureLateAckAndRollback (0.00s)
+    --- PASS: TestReviewFullCaptureLateAckAndRollback/pointer (0.00s)
+    --- PASS: TestReviewFullCaptureLateAckAndRollback/list (0.00s)
+    --- PASS: TestReviewFullCaptureLateAckAndRollback/map (0.00s)
+PASS
+ok  	daogoldenruntime/gen	1.030s

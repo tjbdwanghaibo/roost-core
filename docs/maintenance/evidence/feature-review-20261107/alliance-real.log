@@ -1,0 +1,870 @@
+created: .gitattributes
+created: .github/actionlint.yaml
+created: .github/dependabot.yml
+created: .github/workflows/ci.yml
+created: .github/workflows/dependency-update.yml
+created: .github/workflows/deploy-docker.yml
+created: .github/workflows/deploy-k8s.yml
+created: .github/workflows/deploy-shell.yml
+created: .github/workflows/release.yml
+created: .github/workflows/security.yml
+created: .gitignore
+created: Dockerfile
+created: Makefile
+created: README.md
+created: cmd/healthprobe/main.go
+created: configs/activity_groups.yaml
+created: configs/data/_manifest.json
+created: configs/generated/doc.go
+created: configs/schema/doc.go
+created: configs/service/config.account.prod.example.yaml
+created: configs/service/config.account.yaml
+created: configs/service/config.activity.prod.example.yaml
+created: configs/service/config.activity.yaml
+created: configs/service/config.chat.prod.example.yaml
+created: configs/service/config.chat.yaml
+created: configs/service/config.game.prod.example.yaml
+created: configs/service/config.game.yaml
+created: configs/service/config.global.prod.example.yaml
+created: configs/service/config.global.yaml
+created: configs/service/config.mail.prod.example.yaml
+created: configs/service/config.mail.yaml
+created: configs/service/config.match.prod.example.yaml
+created: configs/service/config.match.yaml
+created: configs/service/config.platform.prod.example.yaml
+created: configs/service/config.platform.yaml
+created: configs/service/config.rank.prod.example.yaml
+created: configs/service/config.rank.yaml
+created: configs/service/config.session.prod.example.yaml
+created: configs/service/config.session.yaml
+created: db/def/doc.go
+created: db/doc.go
+created: deploy/dev/docker-compose.yaml
+created: deploy/dev/run.sh
+created: deploy/dev/second-game.sh
+created: deploy/docker/README.md
+created: deploy/docker/compose_check_test.go
+created: deploy/docker/deploy.sh
+created: deploy/docker/docker-compose.prod.yaml
+created: deploy/docker/env.example
+created: deploy/docker/rollback.sh
+created: deploy/k8s/README.md
+created: deploy/k8s/base/account-pdb.yaml
+created: deploy/k8s/base/account.yaml
+created: deploy/k8s/base/activity-pdb.yaml
+created: deploy/k8s/base/activity.yaml
+created: deploy/k8s/base/chat-pdb.yaml
+created: deploy/k8s/base/chat.yaml
+created: deploy/k8s/base/game-pdb.yaml
+created: deploy/k8s/base/game.yaml
+created: deploy/k8s/base/global-pdb.yaml
+created: deploy/k8s/base/global.yaml
+created: deploy/k8s/base/kustomization.yaml
+created: deploy/k8s/base/mail-pdb.yaml
+created: deploy/k8s/base/mail.yaml
+created: deploy/k8s/base/match-pdb.yaml
+created: deploy/k8s/base/match.yaml
+created: deploy/k8s/base/namespace.yaml
+created: deploy/k8s/base/network-policy.yaml
+created: deploy/k8s/base/platform-pdb.yaml
+created: deploy/k8s/base/platform.yaml
+created: deploy/k8s/base/rank-pdb.yaml
+created: deploy/k8s/base/rank.yaml
+created: deploy/k8s/base/secret.account.example.yaml
+created: deploy/k8s/base/secret.activity.example.yaml
+created: deploy/k8s/base/secret.chat.example.yaml
+created: deploy/k8s/base/secret.game.example.yaml
+created: deploy/k8s/base/secret.global.example.yaml
+created: deploy/k8s/base/secret.mail.example.yaml
+created: deploy/k8s/base/secret.match.example.yaml
+created: deploy/k8s/base/secret.platform.example.yaml
+created: deploy/k8s/base/secret.rank.example.yaml
+created: deploy/k8s/base/secret.session.example.yaml
+created: deploy/k8s/base/service-account.yaml
+created: deploy/k8s/base/session-pdb.yaml
+created: deploy/k8s/base/session.yaml
+created: deploy/k8s/deploy.sh
+created: deploy/k8s/overlays/production/kustomization.yaml
+created: deploy/k8s/overlays/staging/kustomization.yaml
+created: deploy/shell/README.md
+created: deploy/shell/build.sh
+created: deploy/shell/healthcheck.sh
+created: deploy/shell/install.sh
+created: deploy/shell/rollback.sh
+created: docs/BEGINNER_WORKBOOK.zh-CN.md
+created: docs/DEPLOYMENT.zh-CN.md
+created: docs/ENTITY_COMPONENT.zh-CN.md
+created: docs/ENTITY_LIFECYCLE.zh-CN.md
+created: docs/FIRST_BUSINESS.zh-CN.md
+created: docs/IMPLEMENTATION.zh-CN.md
+created: docs/PLAYER_ACCESS_TCP.zh-CN.md
+created: docs/PROTOCOL_TO_NEST.zh-CN.md
+created: docs/QUICKSTART.zh-CN.md
+created: docs/ROOST_YAML.zh-CN.md
+created: docs/SERVICES.zh-CN.md
+created: docs/SKILL.zh-CN.md
+created: docs/TROUBLESHOOTING.zh-CN.md
+created: docs/USAGE.zh-CN.md
+created: game/entities/doc.go
+created: game/gameplay/attribute/doc.go
+created: game/gameplay/attribute/runtime.go
+created: game/handler/doc.go
+created: go.mod
+created: go.sum
+created: internal/bootstrap/generated.go
+created: internal/frameworkdeps/generated.go
+created: internal/service/account/collaborators.go
+created: internal/service/activity/collaborators.go
+created: internal/service/chat/collaborators.go
+created: internal/service/game/framework_clients_gen.go
+created: internal/service/game/managers.go
+created: internal/service/game/service.go
+created: internal/service/global/collaborators.go
+created: internal/service/mail/collaborators.go
+created: internal/service/match/collaborators.go
+created: internal/service/platform/collaborators.go
+created: internal/service/rank/collaborators.go
+created: internal/service/session/collaborators.go
+created: main.go
+created: protocol/def/doc.go
+created: game/entities/player/entity.go
+created: game/entities/world/entity.go
+created: game/lifecycle/player.go
+created: game/lifecycle/world.go
+created: internal/service/game/service.go
+created: game/lifecycle/world_singleton.go
+created: game/entities/player/profile_component.go
+created: game/entities/player/entity.go
+created: game/entities/player/bag_component.go
+created: game/entities/player/entity.go
+created: db/def/player.go
+created: game/entities/player/entity.go
+created: db/restore_test.go
+created: db/def/player.go
+created: db/migrations/player.go
+created: db/migrations/offline.go
+created: db/migrations/player_test.go
+created: cmd/schemamigrate/main.go
+created: game/entities/player/profile_component.go
+created: game/entities/player/bag_component.go
+created: game/entities/player/entity.go
+created: game/effects/level_up.go
+created: game/entities/world/stats_component.go
+created: game/entities/world/entity.go
+created: db/def/world.go
+created: game/entities/world/entity.go
+created: db/def/world.go
+created: game/entities/world/stats_component.go
+created: game/entities/world/entity.go
+created: game/matchmaking/queue.go
+created: configs/schema/item.go
+created: configs/schema/feature_flag.go
+created: configs/schema/feature_flag.go
+created: configs/table/feature_flag.csv
+created: game/flags/flags.go
+created: configs/schema/item.go
+created: configs/table/item.csv
+created: internal/errors/item_unknown.go
+created: internal/errors/item_count.go
+created: internal/errors/bag_full.go
+created: internal/errors/exp_amount.go
+created: internal/errors/name_empty.go
+created: internal/errors/item_short.go
+created: internal/errors/battle_not_found.go
+created: internal/errors/battle_not_seated.go
+created: internal/errors/battle_busy.go
+created: internal/errors/dungeon_run.go
+created: internal/errors/mail_claim.go
+created: internal/errors/item_unknown.go
+created: internal/errors/item_count.go
+created: internal/errors/bag_full.go
+created: internal/errors/exp_amount.go
+created: internal/errors/name_empty.go
+created: internal/errors/item_short.go
+created: internal/errors/battle_not_found.go
+created: internal/errors/battle_not_seated.go
+created: internal/errors/battle_busy.go
+created: internal/errors/dungeon_run.go
+created: internal/errors/mail_claim.go
+created: internal/errors/scene_position.go
+created: internal/errors/dungeon_claim_window.go
+created: internal/errors/purchase_grant.go
+created: internal/errors/player_elsewhere.go
+created: internal/errors/login_timeout.go
+created: game/gameplay/attribute/combat.go
+created: game/gameplay/attribute/combat_test.go
+created: game/equipment/equipment.go
+created: game/entities/player/equipment_component.go
+created: game/entities/player/equipment_component_test.go
+created: game/entities/player/map_component.go
+created: game/actor/actor.go
+created: game/actor/patrol.go
+created: game/actor/patrol_test.go
+created: game/entities/player/attribute_component.go
+created: game/entities/player/attribute_component_test.go
+created: game/clientsync/decode.go
+created: game/entities/player/sync_packer.go
+created: game/entities/scene/entity.go
+created: game/lifecycle/scene.go
+created: db/def/scene.go
+created: game/entities/scene/entity.go
+created: game/entities/monster/entity.go
+created: game/entities/monster/body_component.go
+created: game/entities/monster/entity.go
+created: game/entities/monster/actor_component.go
+created: game/entities/monster/entity.go
+created: db/def/monster.go
+created: game/entities/monster/entity.go
+created: game/lifecycle/monster.go
+created: db/def/monster.go
+created: game/entities/monster/entity.go
+created: game/entities/monster/body_component.go
+created: game/entities/monster/actor_component.go
+created: game/entities/monster/sync_packer.go
+created: game/entities/monster/body_component_test.go
+created: configs/schema/spawn.go
+created: configs/table/spawn.csv
+created: game/scene/scene.go
+created: game/scene/runtime/runtime.go
+created: game/scene/runtime/terrain.go
+created: game/scene/runtime/pathfind.go
+created: game/scene/runtime/runtime_test.go
+created: game/scene/runtime/refresh.go
+created: game/scene/runtime/refresh_test.go
+created: game/entities/scene/entity.go
+created: db/def/scene.go
+created: game/entities/scene/sync_packer.go
+created: game/lifecycle/scene_singleton.go
+created: game/settings/settings.go
+created: game/ranking/ranking.go
+created: game/dungeon/dungeon.go
+created: game/dungeon/dungeon_test.go
+created: game/battle/battle.go
+created: saga/gift_item/definition.go
+created: saga/gift_item/steps.go
+created: roost.yaml
+created: internal/bootstrap/generated.go
+created: configs/service/config.game.yaml
+created: configs/service/config.game.prod.example.yaml
+created: deploy/k8s/base/secret.game.example.yaml
+created: game/entities/player/saga_receipts.go
+created: saga/gift_item/steps.go
+created: game/gift/gift.go
+created: game/gift/gift_test.go
+created: game/handler/add_item.go
+created: game/handler/add_item.go
+created: game/handler/add_exp.go
+created: game/handler/add_exp.go
+created: game/handler/record_enter.go
+created: game/handler/record_enter.go
+created: game/handler/record_match.go
+created: game/handler/record_match.go
+created: game/handler/world_stats.go
+created: game/handler/world_stats.go
+created: game/handler/player_level.go
+created: game/handler/player_level.go
+created: game/handler/start_gift.go
+created: game/handler/start_gift.go
+created: game/handler/gift_debit.go
+created: game/handler/gift_debit.go
+created: game/handler/gift_refund.go
+created: game/handler/gift_refund.go
+created: game/handler/claim_dungeon.go
+created: game/handler/claim_dungeon.go
+created: game/handler/claim_mail_reward.go
+created: game/handler/equip_item.go
+created: game/handler/equip_item.go
+created: game/handler/claim_mail_reward.go
+created: game/handler/add_item_test.go
+created: game/handler/add_exp_test.go
+created: game/handler/claim_mail_reward_test.go
+created: game/handler/claim_mail_expiry_test.go
+created: game/handler/claim_dungeon_test.go
+created: game/handler/config_snapshot_test.go
+created: roost.yaml
+created: game/playeraccess/runtime_gen.go
+created: internal/access/player/mod_gen.go
+created: roost.yaml
+created: internal/access/player/tcp/server_gen.go
+created: internal/access/player/tcp/server_gen_test.go
+created: internal/access/player/tcp/auth.go
+created: cmd/playerprobe/main.go
+created: configs/examples/access.player.tcp.yaml
+created: configs/service/config.game.yaml
+created: configs/service/config.game.prod.example.yaml
+created: docs/PLAYER_ACCESS_TCP.zh-CN.md
+created: internal/bootstrap/generated.go
+created: Dockerfile
+created: deploy/docker/README.md
+created: deploy/k8s/base/network-policy.yaml
+created: deploy/k8s/base/game.yaml
+created: deploy/k8s/base/secret.game.example.yaml
+created: internal/access/player/tcp/auth.go
+created: internal/access/player/tcp/auth_test.go
+created: internal/access/player/required_gate_test.go
+created: protocol/def/add_item.go
+created: protocol/def/add_item.go
+created: game/controllers/player/controller.go
+created: game/controllers/player/add_item.go
+created: game/controllers/player/add_item.go
+created: protocol/def/add_exp.go
+created: protocol/def/add_exp.go
+created: game/controllers/player/add_exp.go
+created: protocol/def/enter_game.go
+created: protocol/def/enter_game.go
+created: game/controllers/player/controller.go
+created: game/controllers/player/enter_game.go
+created: protocol/def/join_queue.go
+created: protocol/def/join_queue.go
+created: game/controllers/player/join_queue.go
+created: protocol/def/poll_match.go
+created: protocol/def/poll_match.go
+created: game/controllers/player/poll_match.go
+created: protocol/def/world_stats.go
+created: protocol/def/world_stats.go
+created: game/controllers/player/world_stats.go
+created: protocol/def/match_found.go
+created: protocol/def/match_found.go
+created: game/chatroom/chatroom.go
+created: protocol/def/send_chat.go
+created: protocol/def/send_chat.go
+created: game/controllers/player/send_chat.go
+created: protocol/def/chat_history.go
+created: protocol/def/chat_history.go
+created: game/controllers/player/chat_history.go
+created: protocol/def/chat_message.go
+created: protocol/def/chat_message.go
+created: game/controllers/player/chat_push.go
+created: game/rewards/rewards_test.go
+created: game/rewards/rewards.go
+created: protocol/def/list_mail.go
+created: protocol/def/list_mail.go
+created: game/controllers/player/list_mail.go
+created: protocol/def/claim_mail.go
+created: protocol/def/claim_mail.go
+created: game/controllers/player/claim_mail.go
+created: protocol/def/enter_dungeon.go
+created: protocol/def/enter_dungeon.go
+created: game/controllers/player/enter_dungeon.go
+created: protocol/def/finish_dungeon.go
+created: protocol/def/finish_dungeon.go
+created: game/controllers/player/finish_dungeon.go
+created: game/handler/enter_scene.go
+created: game/handler/enter_scene.go
+created: game/handler/player_position.go
+created: game/handler/player_position.go
+created: game/handler/move_player.go
+created: game/handler/move_player.go
+created: game/handler/move_target.go
+created: game/handler/spawn_monster.go
+created: game/handler/root_monster.go
+created: game/handler/set_scene_time_rate.go
+created: protocol/def/move.go
+created: protocol/def/move.go
+created: game/controllers/player/move.go
+created: protocol/def/move_target.go
+created: protocol/def/move_target.go
+created: game/controllers/player/move_target.go
+created: protocol/def/equip.go
+created: protocol/def/equip.go
+created: game/controllers/player/equip.go
+created: game/activity/activity.go
+created: game/effects/activity_phase.go
+created: game/entities/world/timer_component.go
+created: game/entities/world/timer_component_test.go
+created: game/handler/tick_world_timers.go
+created: game/handler/tick_world_timers.go
+created: game/handler/tick_world_timers_test.go
+created: game/handler/arm_activity.go
+created: game/handler/arm_activity.go
+created: game/handler/settle_activity.go
+created: game/handler/settle_activity.go
+created: game/handler/activity_settled.go
+created: game/handler/activity_settled.go
+created: protocol/def/activity_standing.go
+created: protocol/def/activity_standing.go
+created: game/controllers/player/activity_standing.go
+created: game/purchase/purchase.go
+created: game/handler/grant_purchase.go
+created: game/handler/grant_purchase.go
+created: game/handler/grant_purchase_test.go
+created: internal/errors/guild_missing.go
+created: internal/errors/guild_busy.go
+created: internal/errors/guild_moved.go
+created: internal/errors/guild_pending.go
+created: game/controllers/player/enter_game_test.go
+created: game/entities/scene_actor/entity.go
+created: db/def/scene_actor.go
+created: game/entities/scene_actor/entity.go
+created: db/def/scene_actor.go
+created: game/entities/scene_actor/entity.go
+created: game/partition/partition.go
+created: game/partition/partition_test.go
+created: game/entities/monster/cell.go
+created: game/entities/player/cell_base.go
+created: game/entities/player/cell_group_test.go
+created: game/settings/partition_test.go
+created: game/settings/partition.go
+created: internal/errors/scene_partition.go
+created: protocol/def/move_intent.go
+created: game/controllers/player/partition.go
+created: game/controllers/player/move_intent.go
+created: protocol/def/attack_target.go
+created: game/controllers/player/attack_target.go
+created: protocol/def/attack_result.go
+created: game/entities/team/entity.go
+created: db/def/team.go
+created: game/entities/team/entity.go
+created: game/lifecycle/team.go
+created: game/entities/team/roster_component.go
+created: game/entities/team/roster_component_test.go
+created: internal/errors/team.go
+created: game/handler/team_group.go
+created: game/handler/team_invite.go
+created: game/handler/team_invite.go
+created: game/handler/team_accept.go
+created: game/handler/team_accept.go
+created: game/handler/team_leave.go
+created: game/handler/team_leave.go
+created: game/handler/team_disband.go
+created: game/handler/team_disband.go
+created: game/handler/team_sync.go
+created: game/handler/team_sync.go
+created: game/handler/player_team.go
+created: game/handler/player_team.go
+created: protocol/def/team.go
+created: game/controllers/player/team.go
+created: protocol/def/purchase.go
+created: protocol/def/purchase.go
+created: game/controllers/player/purchase.go
+created: protocol/def/rank_top.go
+created: protocol/def/rank_top.go
+created: game/controllers/player/rank_top.go
+created: game/controllers/player/finish_dungeon_test.go
+created: game/skills/fireball.json
+created: game/skills/catalog.go
+created: game/skills/catalog_test.go
+created: game/skills/fireball.json
+created: protocol/def/skill_catalog.go
+created: protocol/def/skill_catalog.go
+created: game/controllers/player/skill_catalog.go
+created: protocol/def/scene_ready.go
+created: game/controllers/player/scene_ready.go
+created: internal/errors/scene_view.go
+created: protocol/def/scene_view.go
+created: game/controllers/player/scene_view.go
+created: game/controllers/player/scene_view_test.go
+created: protocol/def/send_gift.go
+created: protocol/def/send_gift.go
+created: game/controllers/player/send_gift.go
+created: game/controllers/player/send_gift_test.go
+created: protocol/def/battle_input.go
+created: protocol/def/battle_input.go
+created: game/controllers/player/battle_input.go
+created: protocol/def/battle_frame.go
+created: protocol/def/battle_frame.go
+created: protocol/def/entity_sync.go
+created: protocol/def/gift_status.go
+created: protocol/def/gift_status.go
+created: game/controllers/player/gift_status.go
+created: loadtest/playertcp/conn.go
+created: loadtest/scenarios/demo.yaml
+created: cmd/loadtest/main.go
+created: cmd/loadtest/scene_watch_test.go
+created: deploy/dev/observability/docker-compose.yaml
+created: deploy/dev/observability/prometheus.yml
+created: deploy/dev/observability/grafana/provisioning/datasources/prometheus.yaml
+created: deploy/dev/observability/grafana/provisioning/dashboards/dashboards.yaml
+created: deploy/dev/observability/grafana/dashboards/roost-demo.json
+created: deploy/dev/observability/README.md
+created: internal/service/game/service.go
+created: internal/service/game/service_shutdown_test.go
+created: internal/service/game/syncbus_config_test.go
+created: internal/service/game/level_up_mail.go
+created: internal/service/game/matchmaker.go
+created: internal/service/game/battle_test.go
+created: internal/service/game/battle.go
+created: internal/service/game/scene.go
+created: internal/service/game/scene_test.go
+created: internal/service/game/scene_connections_test.go
+created: internal/service/game/gift_saga.go
+created: game/runtimeid/runtimeid.go
+created: game/runtimeid/runtimeid_test.go
+created: internal/service/game/spawner.go
+created: internal/service/game/partition_test.go
+created: internal/service/game/partition.go
+created: internal/service/game/heartbeat.go
+created: internal/service/game/scene_movement_test.go
+created: internal/service/game/spawner_test.go
+created: internal/service/game/gm.go
+created: cmd/accountctl/main.go
+created: cmd/sidmove/main.go
+created: cmd/sidmove/main_test.go
+created: cmd/sidmerge/main.go
+created: cmd/sidmerge/main_test.go
+created: internal/service/game/flags_test.go
+created: internal/service/game/flags.go
+created: internal/service/game/playerowner.go
+created: internal/service/game/playerowner_test.go
+created: internal/service/game/gift_saga_budget_test.go
+created: internal/service/game/gift_handoff_test.go
+created: internal/service/game/activity_test.go
+created: internal/service/game/gift_recipient_test.go
+created: internal/service/game/presence.go
+created: internal/service/game/activity.go
+created: internal/service/game/purchase_drain.go
+created: internal/service/platform/collaborators.go
+created: internal/service/platform/purchase_delivery_test.go
+created: internal/service/account/collaborators.go
+created: internal/service/account/collaborators_test.go
+created: internal/service/chat/collaborators.go
+created: internal/service/session/collaborators.go
+created: roost.yaml
+created: internal/service/alliance/service.go
+created: game/entities/alliance/entity.go
+created: game/entities/alliance_member/entity.go
+created: game/entities/alliance/roster_component.go
+created: game/entities/alliance/entity.go
+created: game/entities/alliance_member/guard_component.go
+created: game/entities/alliance_member/entity.go
+created: db/def/alliance.go
+created: game/entities/alliance/entity.go
+created: db/def/alliance_member.go
+created: game/entities/alliance_member/entity.go
+created: db/def/alliance.go
+created: db/def/alliance_member.go
+created: game/entities/alliance/entity.go
+created: game/entities/alliance/roster_component.go
+created: game/entities/alliance_member/entity.go
+created: game/entities/alliance_member/guard_component.go
+created: game/lifecycle/alliance.go
+created: game/lifecycle/alliance_member.go
+created: internal/errors/alliance.go
+created: game/alliancerule/alliancerule.go
+created: game/handler/alliance_found.go
+created: game/handler/alliance_found.go
+created: game/handler/alliance_apply.go
+created: game/handler/alliance_apply.go
+created: game/handler/alliance_reject.go
+created: game/handler/alliance_reject.go
+created: game/handler/alliance_admit.go
+created: game/handler/alliance_admit.go
+created: game/handler/alliance_admit_reserved.go
+created: game/handler/alliance_admit_reserved.go
+created: game/handler/alliance_remove.go
+created: game/handler/alliance_remove.go
+created: game/handler/alliance_transfer.go
+created: game/handler/alliance_transfer.go
+created: game/handler/alliance_donate.go
+created: game/handler/alliance_donate.go
+created: game/handler/alliance_settle.go
+created: game/handler/alliance_settle.go
+created: game/handler/alliance_info.go
+created: game/handler/alliance_info.go
+created: game/handler/alliance_war.go
+created: game/handler/alliance_war.go
+created: game/handler/alliance_guard.go
+created: game/handler/alliance_guard.go
+created: internal/rpc/alliance/alliance.go
+created: internal/rpc/alliance/service.go
+created: internal/rpc/alliance/mod.go
+created: internal/rpc/alliance/server_run.go
+created: internal/rpc/alliance/alliance_rpc_gen.go
+created: internal/rpc/alliance/alliance_rpc_assembly_gen.go
+created: roost.yaml
+created: internal/bootstrap/generated.go
+created: internal/rpc/alliance/alliance.go
+created: internal/rpc/alliance/service.go
+created: internal/rpc/alliance/membership.go
+created: internal/rpc/alliance/guard.go
+created: internal/rpc/alliance/war.go
+created: internal/rpc/alliance/background.go
+created: internal/rpc/alliance/settings.go
+created: internal/rpc/alliance/wiring.go
+created: internal/rpc/alliance/transfer.go
+created: internal/rpc/alliance/mod.go
+created: internal/rpc/alliance/harness_test.go
+created: internal/rpc/alliance/service_test.go
+created: internal/rpc/alliance/membership_test.go
+created: internal/service/alliance/service.go
+created: internal/service/alliance/admin.go
+created: internal/service/alliance/admin_test.go
+created: deploy/dev/second-alliance.sh
+created: game/entities/alliance/mirror.go
+created: game/guild/guild.go
+created: saga/alliance_found/definition.go
+created: saga/alliance_found/steps.go
+created: roost.yaml
+created: internal/bootstrap/generated.go
+created: saga/alliance_donate/definition.go
+created: saga/alliance_donate/steps.go
+created: roost.yaml
+created: internal/bootstrap/generated.go
+created: saga/alliance_reward/definition.go
+created: saga/alliance_reward/steps.go
+created: roost.yaml
+created: internal/bootstrap/generated.go
+created: saga/alliance_found/steps.go
+created: saga/alliance_donate/steps.go
+created: saga/alliance_reward/steps.go
+created: game/handler/show_guild.go
+created: game/handler/show_guild.go
+created: game/handler/player_guild.go
+created: game/handler/player_guild.go
+created: game/handler/start_guild_op.go
+created: game/handler/start_guild_op.go
+created: game/handler/guild_debit.go
+created: game/handler/guild_debit.go
+created: game/handler/guild_credit.go
+created: game/handler/guild_credit.go
+created: game/handler/guild_steps_test.go
+created: db/guild_display_test.go
+created: protocol/def/guild.go
+created: protocol/def/guild.go
+created: protocol/def/guild_notice.go
+created: protocol/def/guild_notice.go
+created: game/controllers/player/guild.go
+created: game/controllers/player/guild_test.go
+created: internal/service/game/alliance_saga.go
+created: internal/service/game/alliance_saga_test.go
+created: internal/service/game/alliance_notice.go
+created: internal/service/game/alliance_notice_test.go
+summary: created=631 updated=0 removed=0 unchanged=0
+project files ready: /workspace/.cloud-setup/tmp/roost-alliance-e2e.WeZxVA/planet
+new: --skip-deps, framework dependencies not resolved
+project ready: /workspace/.cloud-setup/tmp/roost-alliance-e2e.WeZxVA/planet
+=== RUN   TestAllianceE2EGamePlayers
+2026/11/06 16:49:59 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/06 16:49:59 INFO bus: subscribed subject=a5a785lf9h.srv.9100
+2026/11/06 16:49:59 INFO bus: subscribed subject=a5a785lf9h.svc.e2eclient.9100
+2026/11/06 16:49:59 INFO bus: subscribed subject=a5a785lf9h.svc.e2eclient.all
+2026/11/06 16:49:59 INFO bus: subscribed subject=a5a785lf9h.srv.all
+2026/11/06 16:49:59 INFO nats mod: started
+    harness_test.go:138: prefix a5a785lf9h, logs /workspace/review-complete-20261106/alliance-process-logs/TestAllianceE2EGamePlayers
+    harness_test.go:358: started account (account --sid 1000) pid 366018
+    harness_test.go:358: started activity (activity --sid 1000) pid 366021
+    harness_test.go:358: started chat (chat --sid 1000) pid 366022
+    harness_test.go:358: started global (global --sid 1000) pid 366023
+    harness_test.go:358: started mail (mail --sid 1000) pid 366038
+    harness_test.go:358: started match (match --sid 1000) pid 366044
+    harness_test.go:358: started platform (platform --sid 1000) pid 366047
+    harness_test.go:358: started rank (rank --sid 1000) pid 366048
+    harness_test.go:358: started session (session --sid 1000) pid 366057
+    harness_test.go:358: started alliance-3000 (alliance --sid 3000) pid 366111
+    harness_test.go:358: started alliance-3001 (alliance --sid 3001) pid 366146
+    harness_test.go:358: started game-1000 (game --sid 1000) pid 366182
+    harness_test.go:358: started game-1001 (game --sid 1001) pid 366220
+    game_test.go:324: GAMES guild 1 founded on game 1000 (owner alliance 3001), B joined from game 1001 at version 2; both read 2 members (versions 2 / 2)
+    game_test.go:344: GAMES A on game 1000 was pushed &{GuildID:1 Change:joined Version:1}
+    game_test.go:361: GAMES E joined guild 1 while offline and sees it after logging in again
+    game_test.go:419: GAMES concurrent join + found: map[refunded:6]
+    harness_test.go:411: stopped game-1001 with killed (signal: killed)
+    harness_test.go:411: stopped alliance-3001 with killed (signal: killed)
+    harness_test.go:358: started alliance-3001 (alliance --sid 3001) pid 366284
+    harness_test.go:358: started game-1001 (game --sid 1001) pid 366354
+    game_test.go:445: GAMES donate across kill -9 of game 1001 (after the debit) and of the frozen owner alliance-3001: funds +30, gold -30
+    harness_test.go:411: stopped alliance-3000 with killed (signal: killed)
+    harness_test.go:411: stopped alliance-3001 with killed (signal: killed)
+    harness_test.go:358: started alliance-3000 (alliance --sid 3000) pid 366402
+    harness_test.go:358: started alliance-3001 (alliance --sid 3001) pid 366403
+    game_test.go:479: GAMES found across kill -9 of both frozen alliance instances: guild 8, one alliance led by D, gold -100 once
+    harness_test.go:411: stopped game-1001 with interrupt (<nil>)
+    harness_test.go:411: stopped game-1000 with interrupt (<nil>)
+    harness_test.go:411: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:411: stopped alliance-3001 with interrupt (<nil>)
+    harness_test.go:411: stopped account with interrupt (<nil>)
+    harness_test.go:411: stopped activity with interrupt (<nil>)
+    harness_test.go:411: stopped chat with interrupt (<nil>)
+    harness_test.go:411: stopped global with interrupt (<nil>)
+    harness_test.go:411: stopped platform with interrupt (<nil>)
+    harness_test.go:411: stopped session with interrupt (<nil>)
+    harness_test.go:411: stopped mail with interrupt (<nil>)
+    harness_test.go:411: stopped match with interrupt (<nil>)
+    harness_test.go:411: stopped rank with interrupt (<nil>)
+    harness_test.go:457: all processes stopped; 29 ERROR log lines in total
+2026/11/06 16:50:40 INFO nats: disconnected err=<nil>
+2026/11/06 16:50:40 INFO nats: connection closed
+2026/11/06 16:50:40 INFO nats mod: stopped
+--- PASS: TestAllianceE2EGamePlayers (41.01s)
+=== RUN   TestAllianceE2EOneAllianceUnderRace
+2026/11/06 16:50:40 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/06 16:50:40 INFO bus: subscribed subject=a5aq2eqbjy.srv.9100
+2026/11/06 16:50:40 INFO bus: subscribed subject=a5aq2eqbjy.svc.e2eclient.9100
+2026/11/06 16:50:40 INFO bus: subscribed subject=a5aq2eqbjy.svc.e2eclient.all
+2026/11/06 16:50:40 INFO bus: subscribed subject=a5aq2eqbjy.srv.all
+2026/11/06 16:50:40 INFO nats mod: started
+    harness_test.go:138: prefix a5aq2eqbjy, logs /workspace/review-complete-20261106/alliance-process-logs/TestAllianceE2EOneAllianceUnderRace
+    harness_test.go:358: started alliance-3000 (alliance --sid 3000) pid 366603
+    harness_test.go:358: started alliance-3001 (alliance --sid 3001) pid 366637
+    membership_test.go:221: RACE fresh guards: both=0 one=24 none=0 sizes=map[1:14 4:12]
+    membership_test.go:232: RACE guards on 3000: both=0 one=24 none=0 sizes=map[5:14 7:12]
+    membership_test.go:260: RACE approvals: both=0 one=24 none=0 sizes=map[8:19 11:7]
+    harness_test.go:411: stopped alliance-3000 with killed (signal: killed)
+    harness_test.go:358: started alliance-3000 (alliance --sid 3000) pid 366686
+    membership_test.go:277: RACE kill -9 guard side: both=0 one=24 none=0 sizes=map[12:21 16:5]
+    harness_test.go:411: stopped alliance-3001 with killed (signal: killed)
+    harness_test.go:358: started alliance-3001 (alliance --sid 3001) pid 367048
+    membership_test.go:294: RACE kill -9 alliance side: both=0 one=24 none=0 sizes=map[17:7 20:19]
+    harness_test.go:411: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:411: stopped alliance-3001 with interrupt (<nil>)
+    harness_test.go:457: all processes stopped; 0 ERROR log lines in total
+2026/11/06 16:51:20 INFO nats: disconnected err=<nil>
+2026/11/06 16:51:20 INFO nats: connection closed
+2026/11/06 16:51:20 INFO nats mod: stopped
+--- PASS: TestAllianceE2EOneAllianceUnderRace (40.00s)
+=== RUN   TestAllianceE2ERedisOutage
+2026/11/06 16:51:20 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/06 16:51:20 INFO bus: subscribed subject=a5b8fxgbjn.srv.9100
+2026/11/06 16:51:20 INFO bus: subscribed subject=a5b8fxgbjn.svc.e2eclient.9100
+2026/11/06 16:51:20 INFO bus: subscribed subject=a5b8fxgbjn.svc.e2eclient.all
+2026/11/06 16:51:20 INFO bus: subscribed subject=a5b8fxgbjn.srv.all
+2026/11/06 16:51:20 INFO nats mod: started
+    harness_test.go:138: prefix a5b8fxgbjn, logs /workspace/review-complete-20261106/alliance-process-logs/TestAllianceE2ERedisOutage
+    harness_test.go:358: started alliance-3000 (alliance --sid 3000) pid 367119
+    harness_test.go:358: started alliance-3001 (alliance --sid 3001) pid 367152
+    redis_test.go:170: REDIS up: 3032 info calls (fresh route cache each), 0 failed, 0 ownership reads (0.00 per call), p50 869.805µs p99 3.15195ms
+redis: 2026/11/06 16:51:24 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:32379: connect: connection refused
+redis: 2026/11/06 16:51:24 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:32379: connect: connection refused
+redis: 2026/11/06 16:51:25 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:32379: connect: connection refused
+redis: 2026/11/06 16:51:25 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:32379: connect: connection refused
+redis: 2026/11/06 16:51:25 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:32379: connect: connection refused
+redis: 2026/11/06 16:51:25 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:32379: connect: connection refused
+redis: 2026/11/06 16:51:25 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:32379: connect: connection refused
+redis: 2026/11/06 16:51:25 pool.go:762: redis: connection pool: failed to dial after 5 attempts: dial tcp 127.0.0.1:32379: connect: connection refused
+    redis_test.go:185: REDIS down: 32 info calls, 0 failed, 32 ownership reads (1.00 per call), p50 101.962276ms p99 153.752812ms
+    redis_test.go:183: REDIS outage (short outage): 9.635s (limit 21s)
+    redis_test.go:219: REDIS registrations back 6.955s after Redis returned
+    redis_test.go:240: REDIS long outage: after 25s: alliance-3000 exited (exit status 1); alliance-3001 exited (exit status 1)
+    harness_test.go:358: started alliance-3000 (alliance --sid 3000) pid 367345
+    harness_test.go:358: started alliance-3001 (alliance --sid 3001) pid 367380
+    harness_test.go:411: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:411: stopped alliance-3001 with interrupt (<nil>)
+    harness_test.go:457: all processes stopped; 8 ERROR log lines in total
+2026/11/06 16:52:09 INFO nats: disconnected err=<nil>
+2026/11/06 16:52:09 INFO nats: connection closed
+2026/11/06 16:52:09 INFO nats mod: stopped
+--- PASS: TestAllianceE2ERedisOutage (48.97s)
+=== RUN   TestAllianceE2ERobotOfflineJoin
+2026/11/06 16:52:09 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/06 16:52:09 INFO bus: subscribed subject=a5buxqb8qb.srv.9100
+2026/11/06 16:52:09 INFO bus: subscribed subject=a5buxqb8qb.svc.e2eclient.9100
+2026/11/06 16:52:09 INFO bus: subscribed subject=a5buxqb8qb.svc.e2eclient.all
+2026/11/06 16:52:09 INFO bus: subscribed subject=a5buxqb8qb.srv.all
+2026/11/06 16:52:09 INFO nats mod: started
+    harness_test.go:138: prefix a5buxqb8qb, logs /workspace/review-complete-20261106/alliance-process-logs/TestAllianceE2ERobotOfflineJoin
+    harness_test.go:358: started account (account --sid 1000) pid 367421
+    harness_test.go:358: started activity (activity --sid 1000) pid 367428
+    harness_test.go:358: started chat (chat --sid 1000) pid 367429
+    harness_test.go:358: started global (global --sid 1000) pid 367440
+    harness_test.go:358: started mail (mail --sid 1000) pid 367450
+    harness_test.go:358: started match (match --sid 1000) pid 367457
+    harness_test.go:358: started platform (platform --sid 1000) pid 367461
+    harness_test.go:358: started rank (rank --sid 1000) pid 367468
+    harness_test.go:358: started session (session --sid 1000) pid 367476
+    harness_test.go:358: started alliance-3000 (alliance --sid 3000) pid 367510
+    harness_test.go:358: started alliance-3001 (alliance --sid 3001) pid 367545
+    harness_test.go:358: started game-1000 (game --sid 1000) pid 367579
+    harness_test.go:358: started game-1001 (game --sid 1001) pid 367614
+    harness_test.go:367: game-1001 exited before it was ready (exit status 1); log /workspace/review-complete-20261106/alliance-process-logs/TestAllianceE2ERobotOfflineJoin/game-1001.log:
+        {"time":"2026-11-06T16:52:10.243942679Z","level":"INFO","msg":"starting server","goId":1,"frame":0,"server_time_ms":1793983930243,"name":"planet","version":"dev commit=unknown built=unknown dirty=unknown","type":"game","sid":1001,"config":"/workspace/.cloud-setup/tmp/TestAllianceE2ERobotOfflineJoin1155050796/001/game-1001.yaml","config_includes":null,"business_timezone":"UTC","business_day_start":"00:00"}
+        {"time":"2026-11-06T16:52:10.245050995Z","level":"INFO","msg":"singleton: acquiring","goId":1,"frame":0,"server_time_ms":1793983930245,"key":"roost:a5buxqb8qb:singleton:game:1001"}
+        {"time":"2026-11-06T16:52:10.24530113Z","level":"INFO","msg":"singleton: acquired","goId":1,"frame":0,"server_time_ms":1793983930245,"key":"roost:a5buxqb8qb:singleton:game:1001","value":"e64cd5cfc3e87d87|8cf78752c8ef|367614|1793983930244"}
+        {"time":"2026-11-06T16:52:10.245636525Z","level":"INFO","msg":"business time: high-water mark checked","goId":1,"frame":0,"server_time_ms":1793983930245,"key":"roost:a5buxqb8qb:singleton:business_time","offset":0,"high_water":"2026-11-06T16:52:10.245Z"}
+        {"time":"2026-11-06T16:52:10.245670394Z","level":"INFO","msg":"mod init","goId":1,"frame":0,"server_time_ms":1793983930245,"mod":"lock"}
+        {"time":"2026-11-06T16:52:10.245688683Z","level":"INFO","msg":"mod init","goId":1,"frame":0,"server_time_ms":1793983930245,"mod":"ops"}
+        {"time":"2026-11-06T16:52:10.245782212Z","level":"INFO","msg":"mod init","goId":1,"frame":0,"server_time_ms":1793983930245,"mod":"stats_log"}
+        {"time":"2026-11-06T16:52:10.24588119Z","level":"INFO","msg":"mod start","goId":1,"frame":0,"server_time_ms":1793983930245,"mod":"lock"}
+        {"time":"2026-11-06T16:52:10.245893365Z","level":"INFO","msg":"mod start","goId":1,"frame":0,"server_time_ms":1793983930245,"mod":"ops"}
+        {"time":"2026-11-06T16:52:10.246106223Z","level":"INFO","msg":"mod stop","goId":1,"frame":0,"server_time_ms":1793983930246,"mod":"stats_log","budget":5000000000}
+        {"time":"2026-11-06T16:52:10.24614692Z","level":"INFO","msg":"mod stopped","goId":1,"frame":0,"server_time_ms":1793983930246,"mod":"stats_log","duration":41403}
+        {"time":"2026-11-06T16:52:10.246153637Z","level":"INFO","msg":"mod stop","goId":1,"frame":0,"server_time_ms":1793983930246,"mod":"ops","budget":5000000000}
+        {"time":"2026-11-06T16:52:10.246166719Z","level":"INFO","msg":"mod stopped","goId":1,"frame":0,"server_time_ms":1793983930246,"mod":"ops","duration":13182}
+        {"time":"2026-11-06T16:52:10.246171942Z","level":"INFO","msg":"mod stop","goId":1,"frame":0,"server_time_ms":1793983930246,"mod":"lock","budget":5000000000}
+        {"time":"2026-11-06T16:52:10.24618368Z","level":"INFO","msg":"mod stopped","goId":1,"frame":0,"server_time_ms":1793983930246,"mod":"lock","duration":11884}
+        {"time":"2026-11-06T16:52:10.246406057Z","level":"INFO","msg":"singleton: released","goId":1,"frame":0,"server_time_ms":1793983930246,"key":"roost:a5buxqb8qb:singleton:game:1001"}
+        {"time":"2026-11-06T16:52:10.246560369Z","level":"ERROR","msg":"app run failed","goId":1,"frame":0,"server_time_ms":1793983930246,"err":"mod ops start: ops: listen on ops.addr 127.0.0.1:35112: listen tcp 127.0.0.1:35112: bind: address already in use"}
+        {"time":"2026-11-06T16:52:10.246595962Z","level":"ERROR","msg":"server exit","goId":1,"frame":0,"server_time_ms":1793983930246,"err":"mod ops start: ops: listen on ops.addr 127.0.0.1:35112: listen tcp 127.0.0.1:35112: bind: address already in use"}
+    harness_test.go:411: stopped game-1000 with interrupt (<nil>)
+    harness_test.go:411: stopped alliance-3001 with interrupt (<nil>)
+    harness_test.go:411: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:411: stopped platform with interrupt (<nil>)
+    harness_test.go:411: stopped session with interrupt (<nil>)
+    harness_test.go:411: stopped rank with interrupt (<nil>)
+    harness_test.go:411: stopped chat with interrupt (<nil>)
+    harness_test.go:411: stopped account with interrupt (<nil>)
+    harness_test.go:411: stopped activity with interrupt (<nil>)
+    harness_test.go:411: stopped global with interrupt (<nil>)
+    harness_test.go:411: stopped match with interrupt (<nil>)
+    harness_test.go:411: stopped mail with interrupt (<nil>)
+    harness_test.go:457: all processes stopped; 2 ERROR log lines in total
+2026/11/06 16:52:11 INFO nats: disconnected err=<nil>
+2026/11/06 16:52:11 INFO nats: connection closed
+2026/11/06 16:52:11 INFO nats mod: stopped
+--- FAIL: TestAllianceE2ERobotOfflineJoin (1.80s)
+=== RUN   TestAllianceE2EPreloadOrder
+2026/11/06 16:52:11 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/06 16:52:11 INFO bus: subscribed subject=a5bvrgsy9v.srv.9100
+2026/11/06 16:52:11 INFO bus: subscribed subject=a5bvrgsy9v.svc.e2eclient.9100
+2026/11/06 16:52:11 INFO bus: subscribed subject=a5bvrgsy9v.svc.e2eclient.all
+2026/11/06 16:52:11 INFO bus: subscribed subject=a5bvrgsy9v.srv.all
+2026/11/06 16:52:11 INFO nats mod: started
+    harness_test.go:138: prefix a5bvrgsy9v, logs /workspace/review-complete-20261106/alliance-process-logs/TestAllianceE2EPreloadOrder
+    harness_test.go:358: started alliance-3000 (alliance --sid 3000) pid 367647
+    routing_test.go:130: founded 500 alliances in 4.71s (106/s); rss 57 MiB before, 102 MiB after
+    harness_test.go:411: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:358: started alliance-3000 (alliance --sid 3000) pid 367714
+    routing_test.go:186: PRELOAD n=500 listed=500 loaded=500 failed=0 preload=479ms start→ready=845ms rss_after_preload=81MiB; 78 requests during the preload got no responders; first answer +4ms after it
+    harness_test.go:411: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:457: all processes stopped; 0 ERROR log lines in total
+2026/11/06 16:52:17 INFO nats: disconnected err=<nil>
+2026/11/06 16:52:17 INFO nats: connection closed
+2026/11/06 16:52:17 INFO nats mod: stopped
+--- PASS: TestAllianceE2EPreloadOrder (6.01s)
+=== RUN   TestAllianceE2ECrashTakeoverAndScaleIn
+2026/11/06 16:52:17 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/06 16:52:17 INFO bus: subscribed subject=a5byitww87.srv.9100
+2026/11/06 16:52:17 INFO bus: subscribed subject=a5byitww87.svc.e2eclient.9100
+2026/11/06 16:52:17 INFO bus: subscribed subject=a5byitww87.svc.e2eclient.all
+2026/11/06 16:52:17 INFO bus: subscribed subject=a5byitww87.srv.all
+2026/11/06 16:52:17 INFO nats mod: started
+    harness_test.go:138: prefix a5byitww87, logs /workspace/review-complete-20261106/alliance-process-logs/TestAllianceE2ECrashTakeoverAndScaleIn
+    harness_test.go:358: started alliance-3000 (alliance --sid 3000) pid 367785
+    harness_test.go:358: started alliance-3001 (alliance --sid 3001) pid 367818
+    harness_test.go:411: stopped alliance-3001 with killed (signal: killed)
+    routing_test.go:240: KILL in-flight joins: ok=44 retryable=0 unknown=156
+    routing_test.go:254: KILL registrations of 3001 expired 29s after kill -9
+    harness_test.go:358: started alliance-3001 (alliance --sid 3001) pid 367880
+    routing_test.go:266: KILL 3001 ready 208ms after restart, registration "3001:1" restored by the preload
+    routing_test.go:301: KILL unanswered joins after restart: executed before the crash=8, not executed=148; all resent to a definite answer
+    routing_test.go:331: TRANSFER map[failed:map[] more:false moved:[4.611686018427405e+18] pending:<nil>]
+    routing_test.go:343: TRANSFER cached caller followed the redirect to 3001 (ownership reads during it: 0); registration now "3001:2"
+    routing_test.go:365: SCALE-IN transfer rounds: 2
+    harness_test.go:411: stopped alliance-3001 with interrupt (<nil>)
+    routing_test.go:385: SCALE-IN 3001 stopped; alliances 1,10,12,13,16,17,20,3,4,8 and 200 guards answered by 3000
+    harness_test.go:411: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:457: all processes stopped; 0 ERROR log lines in total
+2026/11/06 16:52:54 INFO nats: disconnected err=<nil>
+2026/11/06 16:52:54 INFO nats: connection closed
+2026/11/06 16:52:54 INFO nats mod: stopped
+--- PASS: TestAllianceE2ECrashTakeoverAndScaleIn (37.26s)
+=== RUN   TestAllianceE2ERejectedFoundingAfterRestart
+2026/11/06 16:52:54 INFO nats: connected url=nats://127.0.0.1:20222,nats://127.0.0.1:20223,nats://127.0.0.1:20224
+2026/11/06 16:52:54 INFO bus: subscribed subject=a5cfmyv8e3.srv.9100
+2026/11/06 16:52:54 INFO bus: subscribed subject=a5cfmyv8e3.svc.e2eclient.9100
+2026/11/06 16:52:54 INFO bus: subscribed subject=a5cfmyv8e3.svc.e2eclient.all
+2026/11/06 16:52:54 INFO bus: subscribed subject=a5cfmyv8e3.srv.all
+2026/11/06 16:52:54 INFO nats mod: started
+    harness_test.go:138: prefix a5cfmyv8e3, logs /workspace/review-complete-20261106/alliance-process-logs/TestAllianceE2ERejectedFoundingAfterRestart
+    harness_test.go:358: started alliance-3000 (alliance --sid 3000) pid 367949
+    harness_test.go:411: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:358: started alliance-3000 (alliance --sid 3000) pid 367984
+    routing_test.go:440: EMPTY-CLAIM alliance 2: before restart remote.100031: alliance or member not found; after restart preload listed=3 loaded=2 empty=1 failed=0, info answers entity_not_found
+    harness_test.go:411: stopped alliance-3000 with interrupt (<nil>)
+    harness_test.go:457: all processes stopped; 0 ERROR log lines in total
+2026/11/06 16:52:55 INFO nats: disconnected err=<nil>
+2026/11/06 16:52:55 INFO nats: connection closed
+2026/11/06 16:52:55 INFO nats mod: stopped
+--- PASS: TestAllianceE2ERejectedFoundingAfterRestart (0.97s)
+FAIL
+FAIL	example.com/planet/e2e	176.023s
+FAIL

@@ -1,0 +1,9 @@
+test-client-dotnet: golden + SDK self tests (10.0.402)
+System.IO.IOException: The system cannot open the device or file specified. : 'NuGet-Migrations'.
+   at System.Threading.Mutex.CreateMutexCore(Boolean initiallyOwned, String name, NamedWaitHandleOptionsInternal options, Boolean& createdNew)
+   at System.Threading.Mutex..ctor(Boolean initiallyOwned, String name)
+   at NuGet.Common.Migrations.MigrationRunner.Run(String migrationsDirectory, IEnvironmentVariableReader environmentVariableReader)
+   at Microsoft.DotNet.Configurer.DotnetFirstTimeUseConfigurer.Configure()
+   at Microsoft.DotNet.Cli.Program.ConfigureDotNetForFirstTimeUse(IFirstTimeUseNoticeSentinel firstTimeUseNoticeSentinel, IAspNetCertificateSentinel aspNetCertificateSentinel, IFileSentinel toolPathSentinel, Boolean isDotnetBeingInvokedFromNativeInstaller, DotnetFirstRunConfiguration dotnetFirstRunConfiguration, IEnvironmentProvider environmentProvider, Dictionary`2 performanceMeasurements, Boolean skipFirstTimeUseCheck)
+   at Microsoft.DotNet.Cli.Program.ProcessArgs(String[] args, TimeSpan startupTime)
+   at Microsoft.DotNet.Cli.Program.Main(String[] args)

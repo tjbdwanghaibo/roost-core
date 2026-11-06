@@ -1,0 +1,24 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	32.799s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	7.040s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine	1.034s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	5.289s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/entity	4.878s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	12.463s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/worker	1.075s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	5.183s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/dataengine	2.617s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/remoteentity	1.252s
+2026/11/06 08:47:46 WARN entitysync/policy: subscription refused repeatedly; still retried but no longer holds Drain observer=1 subject=2897 session=1 attempts=10 err="entitysync: subject is not registered"
+2026/11/06 08:47:58 WARN heartbeat: beats skipped (previous beat still in flight, admission refused, or presumed lost); the entity's worker is falling behind or a callback is slow driver=cell-102 since_last_warn=map[inflight:1] sample_entity=211797 sample_registration=cell.actor sample_reason=inflight
+2026/11/06 08:48:04 WARN async handler failed title=nest handler=cellworld_input type=Single key=1873 tid=1873 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+2026/11/06 08:48:08 WARN async handler failed title=nest handler=cellworld_input type=Single key=2897 tid=2897 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+2026/11/06 08:48:08 WARN async handler failed title=nest handler=cellworld_input type=Single key=1873 tid=1873 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+2026/11/06 08:48:14 WARN async handler failed title=nest handler=cellworld_actor type=Multi key=105294 tid=0 tids=2 groups=0 cost=false remote=false err="cellworld: start 1873: injected install failure"
+2026/11/06 08:48:14 WARN async handler failed title=nest handler=cellworld_input type=Single key=8017 tid=8017 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+--- FAIL: TestWorldJitterAtBoundary (4.62s)
+    world_test.go:421: views=91 worst miss=0 worst gap=75.442562ms final owner sid=101 epoch=13
+    world_test.go:426: entity 1873 is frozen in (1,0) (want Real only in (0,0))
+2026/11/06 08:48:53 WARN async handler failed title=nest handler=cellworld_input type=Single key=1873 tid=1873 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	100.167s
+FAIL

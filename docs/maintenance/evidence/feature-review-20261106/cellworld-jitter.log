@@ -1,0 +1,22 @@
+=== RUN   TestWorldJitterAtBoundary
+    world_test.go:421: views=87 worst miss=0 worst gap=77.420687ms final owner sid=101 epoch=13
+--- PASS: TestWorldJitterAtBoundary (4.43s)
+=== RUN   TestWorldJitterAtBoundary
+2026/11/06 08:51:54 WARN async handler failed title=nest handler=cellworld_input type=Single key=1873 tid=1873 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+    world_test.go:421: views=88 worst miss=0 worst gap=78.329006ms final owner sid=101 epoch=13
+--- PASS: TestWorldJitterAtBoundary (4.48s)
+=== RUN   TestWorldJitterAtBoundary
+    world_test.go:421: views=92 worst miss=0 worst gap=75.187493ms final owner sid=101 epoch=13
+--- PASS: TestWorldJitterAtBoundary (4.69s)
+=== RUN   TestWorldJitterAtBoundary
+2026/11/06 08:52:00 WARN async handler failed title=nest handler=cellworld_input type=Single key=1873 tid=1873 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+2026/11/06 08:52:02 WARN async handler failed title=nest handler=cellworld_input type=Single key=1873 tid=1873 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+    world_test.go:421: views=87 worst miss=0 worst gap=81.848693ms final owner sid=101 epoch=13
+--- PASS: TestWorldJitterAtBoundary (4.43s)
+=== RUN   TestWorldJitterAtBoundary
+2026/11/06 08:52:07 WARN async handler failed title=nest handler=cellworld_input type=Single key=1873 tid=1873 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+2026/11/06 08:52:08 WARN async handler failed title=nest handler=cellworld_input type=Single key=1873 tid=1873 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+    world_test.go:421: views=93 worst miss=0 worst gap=71.056205ms final owner sid=101 epoch=13
+--- PASS: TestWorldJitterAtBoundary (4.73s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	23.780s

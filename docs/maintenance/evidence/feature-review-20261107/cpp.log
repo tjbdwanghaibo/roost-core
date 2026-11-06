@@ -1,0 +1,3 @@
+/bin/bash: line 1: cmake: command not found
+/bin/bash: line 2: cmake: command not found
+/bin/bash: line 3: ctest: command not found

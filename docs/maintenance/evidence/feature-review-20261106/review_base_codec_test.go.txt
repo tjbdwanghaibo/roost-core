@@ -1,0 +1,9 @@
+package cellworld
+import("testing"; "github.com/vmihailenco/msgpack/v5")
+func TestReviewBaseStateMsgpackRoundTrip(t *testing.T){
+ want:=BaseState{X:1200,Y:3400,VX:100,VY:-200}
+ raw,err:=msgpack.Marshal(want);if err!=nil{t.Fatal(err)}
+ var got BaseState
+ if err=msgpack.Unmarshal(raw,&got);err!=nil{t.Fatal(err)}
+ if got!=want{t.Fatalf("round trip lost state: want=%+v got=%+v",want,got)}
+}

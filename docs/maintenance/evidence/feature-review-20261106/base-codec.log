@@ -1,0 +1,8 @@
+=== RUN   TestReviewBaseStateMsgpackRoundTrip
+2026/11/06 11:52:15 msgpack: cellworld.BaseState already has field=x
+2026/11/06 11:52:15 msgpack: cellworld.BaseState already has field=v
+    review_base_codec_test.go:8: round trip lost state: want={Actor:0 InWorld:false Cell:0 Epoch:0 X:1200 Y:3400 HP:0 SnapVer:{Epoch:0 Seq:0} IntentSeq:0 VX:100 VY:-200 AttackSeq:0 LastViewAt:0 LastEnterAt:0 LastLeaseAt:0 EnterHint:0 LostEpoch:0 LostAt:0 Shown:false Panel:{MaxHP:0 Attack:0 Power:0 Ver:0} PanelAcked:0 PanelSentAt:0 PanelSince:0 PanelUnknown:false GroupSentAt:0 GroupSyncAt:0 GroupViewID:0 GroupViewVer:0} got={Actor:0 InWorld:false Cell:0 Epoch:0 X:0 Y:3400 HP:0 SnapVer:{Epoch:0 Seq:0} IntentSeq:0 VX:0 VY:-200 AttackSeq:0 LastViewAt:0 LastEnterAt:0 LastLeaseAt:0 EnterHint:0 LostEpoch:0 LostAt:0 Shown:false Panel:{MaxHP:0 Attack:0 Power:0 Ver:0} PanelAcked:0 PanelSentAt:0 PanelSince:0 PanelUnknown:false GroupSentAt:0 GroupSyncAt:0 GroupViewID:0 GroupViewVer:0}
+--- FAIL: TestReviewBaseStateMsgpackRoundTrip (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	0.017s
+FAIL

@@ -1,0 +1,39 @@
+test-client-dotnet: golden + SDK self tests (10.0.402)
+PASS golden pb
+PASS golden sync
+PASS golden auth
+PASS golden lockstep
+PASS golden lockstep_input
+PASS golden lockstep_hash
+PASS golden lockstep_catchup
+PASS golden catchup_unservable
+PASS golden recovery_failed_snapshot_unavailable
+PASS golden snapshot_first_chunk
+PASS golden snapshot_next_chunk
+PASS golden auth_generation
+PASS malformed/limits/lockstep
+PASS auth payload envelope/generation
+PASS Lockstep limits/overflow/ordering/duplicates/atomic gap healing
+PASS Lockstep snapshot reassembly/duplicates/skip/supersede/digest/limits
+PASS Sync receiver gap/recovery/application/reset
+PASS EntityViews full/delta/remove/reset/subject gap/codec failure
+PASS generated DAO PB Go/C# full/delta/zero/empty/nil/precision
+PASS GameClient real PB callbacks/timeout/heartbeat/bounded admission
+PASS GameClient state/reset/failure disposal boundaries
+PASS GameClient reconnect/renewed ticket/generation/callback
+PASS GameClient reconnect/renewed ticket/generation/callback
+PASS GameClient reconnect/renewed ticket/generation/callback
+PASS GameClient TCP push/request disposal boundaries
+PASS bounded reconnect failure callbacks
+PASS scene time domain identity/anchor/2x/stop/monotonic/refused rate
+PASS network clock/interpolation/prediction/trace
+PASS heartbeat capacity and genuine timeout
+PASS Unity adapter source + real TCP: Sync gap/application failure closes stream
+PASS session push/correlation/cancellation/late response/close
+PASS pending limit/invalid budget/push overflow/fail pending
+PASS Lockstep catchup dedupe/stagnant retry/progress/healing
+PASS Lockstep client snapshot restore/resume/no catchup during transfer/terminal failures
+test-client-dotnet: cross-gate abandoned handshake with the C# client
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	0.299s
+test-client-dotnet: generated player TCP project
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	65.132s
