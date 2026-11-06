@@ -535,6 +535,7 @@ func (s *gatedOutboxStorage) MarkRemoteCommitPublished(ctx context.Context, id e
 type outboxProcess struct {
 	mgr       *Manager
 	storage   *gatedOutboxStorage
+	loader    *remoteTestLoader
 	live      *testRemoteEntity
 	projector *engine.Projector
 }
@@ -560,7 +561,7 @@ func newOutboxPeer(t *testing.T, mongo fmongo.IMongo, sid int32, cfg *Config, sc
 		defer cancel()
 		_ = mgr.StopFinalizer(stop)
 	})
-	process := &outboxProcess{mgr: mgr, storage: storage}
+	process := &outboxProcess{mgr: mgr, storage: storage, loader: loader}
 	process.live = newTestRemoteEntity(7300+int64(sid%100), 1, outboxOwnerKind)
 	loader.add(process.live)
 	return process
@@ -611,11 +612,17 @@ func newOutboxWriter(t *testing.T, mongo fmongo.IMongo, sid int32, cfg *Config, 
 // writeStrict 走 strict 写到“实体锁已释放、等确认”之前：WAL 追加、释放事务让投影器投影。返回的批次由调用方 Commit / Close。
 func (p *outboxProcess) writeStrict(t *testing.T, ctx context.Context, tx entity.RemoteTransactionID) entity.RemoteWriteBatch {
 	t.Helper()
-	batch, err := p.mgr.PrepareRemoteWriteBatch(ctx, []int64{p.live.GUId()})
+	return p.writeStrictOn(t, ctx, tx, p.live)
+}
+
+// writeStrictOn 同 writeStrict，写的是指定实体（由 addEntity 加入本进程）。
+func (p *outboxProcess) writeStrictOn(t *testing.T, ctx context.Context, tx entity.RemoteTransactionID, live *testRemoteEntity) entity.RemoteWriteBatch {
+	t.Helper()
+	batch, err := p.mgr.PrepareRemoteWriteBatch(ctx, []int64{live.GUId()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.live.dirty.set(true)
+	live.dirty.set(true)
 	if err = batch.FinalizeLocked(entity.NewRemoteTransactionOutcome(tx, "outbox-owner", "", true, uint8(nest.DurabilityStrict.Record()))); err != nil {
 		t.Fatal(err)
 	}
@@ -1003,5 +1010,219 @@ func TestOutboxTakeoverGraceFloorsAtTheProjectionTimeout(t *testing.T) {
 		if got := NewManager(newMockVersionedLockFactory(), cfg, 1000).outboxTakeoverGrace(); got != tc.want {
 			t.Fatalf("grace=%v projection=%v: got %v want %v", tc.grace, tc.projection, got, tc.want)
 		}
+	}
+}
+
+// ---- 慢发布不挡住别的事务：发布页只剩慢项且有新提交在等时，慢项转到后台 ----
+
+// addEntity 给进程加一个实体（与 live 不同的 id），用来在同一进程里做互不相关的写。
+func (p *outboxProcess) addEntity(id int64) *testRemoteEntity {
+	live := newTestRemoteEntity(id, 1, outboxOwnerKind)
+	p.loader.add(live)
+	return live
+}
+
+// 同一进程两笔无关实体上的 strict 写：第一笔发布时 Mongo 标记卡住（模拟一次几秒的慢写），第二笔必须在自己的请求期限内
+// 得到确认。修复前唯一发布协调者一次发一页、等整页结束才读下一页，慢的那一笔挡住之后全部提交的发布：单实例 128 并发时
+// 全部写额度（max_concurrent_writes 128）都停在“等确认”，到 Nest 请求期限（3 s）同时超时（KNOWN-LIMITS“单实例全体同时 3 s 超时”）。
+func TestOutboxSlowPublicationDoesNotHoldUpLaterCommits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	mongo := newRemoteMongoFake()
+	writer := newOutboxWriter(t, mongo, 1000, DefaultConfig(), true)
+	other := writer.addEntity(7501)
+	slow, fast := remoteTestTxID(221), remoteTestTxID(222)
+	slowStarted, slowRelease := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(slowRelease) }) }
+	t.Cleanup(release)
+	writer.storage.beforeMark = func(id entity.RemoteTransactionID) {
+		if id == slow {
+			close(slowStarted)
+			<-slowRelease
+		}
+	}
+	slowBatch := writer.writeStrict(t, ctx, slow)
+	defer slowBatch.Close(context.Background())
+	awaitSignal(t, ctx, slowStarted, "the slow publication")
+
+	fastBatch := writer.writeStrictOn(t, ctx, fast, other)
+	defer fastBatch.Close(context.Background())
+	commitCtx, cancelCommit := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelCommit()
+	_, err := fastBatch.Commit(commitCtx)
+	if state := writer.mgr.localRemoteCommitState(fast); err != nil || state != entity.RemoteCommitCommitted {
+		t.Fatalf("a strict write on another entity was not confirmed while one publication was slow: err=%v tracker=%v (slow tracker=%v)",
+			err, state, writer.mgr.localRemoteCommitState(slow))
+	}
+	if state := writer.mgr.localRemoteCommitState(slow); state != entity.RemoteCommitApplied {
+		t.Fatalf("slow tracker=%v while its mark is still held, want Applied", state)
+	}
+
+	release()
+	slowCtx, cancelSlow := context.WithTimeout(ctx, 2*time.Second)
+	defer cancelSlow()
+	if _, err := slowBatch.Commit(slowCtx); err != nil {
+		t.Fatalf("the slow write after its mark returned: %v", err)
+	}
+	if marks := writer.storage.marks.Load(); marks != 2 {
+		t.Fatalf("marks=%d, want each commit published once", marks)
+	}
+}
+
+// outboxLoopIdle 等后台发布循环退出（一页只剩慢项时它不再等，慢项转到后台）。
+func outboxLoopIdle(t *testing.T, manager *Manager, what string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		manager.remote.republishMu.Lock()
+		running := manager.remote.republishRunning
+		manager.remote.republishMu.Unlock()
+		if !running {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the outbox loop is still waiting: %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// 慢发布转到后台后，同一实体上排在它后面的提交仍要等它发布完才发布（发布顺序不变），无关实体的提交不等；慢项结束后
+// 不需要别的唤醒，后继由它结束时的那次扫描发布。
+func TestOutboxDetachedPublicationKeepsSameEntityOrder(t *testing.T) {
+	backend := newParallelOutboxBackend(t, [][]int64{{10}, {10, 30}, {20}})
+	backend.first, backend.follower = backend.statuses[0].TransactionID, backend.statuses[1].TransactionID
+	independent := backend.statuses[2].TransactionID
+	later := backend.statuses[1:]
+	backend.statuses = backend.statuses[:1]
+	manager := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	manager.remote.stragglerWait = 10 * time.Millisecond
+	manager.SetBackend(backend)
+	var release sync.Once
+	t.Cleanup(func() {
+		release.Do(func() { close(backend.release) })
+		_ = manager.StopFinalizer(context.Background())
+	})
+	next := func(what string) entity.RemoteTransactionID {
+		t.Helper()
+		select {
+		case id := <-backend.started:
+			return id
+		case <-time.After(2 * time.Second):
+			t.Fatalf("no publication started: %s", what)
+			return entity.RemoteTransactionID{}
+		}
+	}
+
+	manager.scheduleOutboxRepublish()
+	if id := next("the slow one"); id != backend.first {
+		t.Fatalf("started %v, want the slow transaction first", id)
+	}
+	outboxLoopIdle(t, manager, "only the slow publication is left")
+	backend.mu.Lock()
+	backend.statuses = append(backend.statuses, later...)
+	backend.mu.Unlock()
+	manager.scheduleOutboxRepublish()
+	if id := next("the unrelated commit"); id != independent {
+		t.Fatalf("started %v while the slow publication is held, want only the unrelated commit", id)
+	}
+	outboxLoopIdle(t, manager, "the unrelated commit is published")
+	select {
+	case id := <-backend.started:
+		t.Fatalf("started %v before the slow publication of the same entity finished", id)
+	default:
+	}
+
+	release.Do(func() { close(backend.release) })
+	if id := next("the same-entity successor after the slow one finished"); id != backend.follower {
+		t.Fatalf("started %v, want the same-entity successor", id)
+	}
+	outboxLoopIdle(t, manager, "everything is published")
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if len(backend.marked) != 3 {
+		t.Fatalf("marked=%d, want 3", len(backend.marked))
+	}
+	if detached := manager.remote.outboxInflight; len(detached) != 0 {
+		t.Fatalf("in-flight registry not cleared: %v", detached)
+	}
+}
+
+// heldMarkBackend 的标记不理会取消：转到后台的发布卡在这里时，停机必须等它结束才算停完。
+type heldMarkBackend struct {
+	*parallelOutboxBackend
+	failOnce atomic.Bool
+}
+
+func (b *heldMarkBackend) MarkRemoteCommitPublished(ctx context.Context, id entity.RemoteTransactionID) error {
+	b.started <- id
+	<-b.release
+	if b.failOnce.CompareAndSwap(true, false) {
+		return errors.New("injected slow mark failure")
+	}
+	b.mu.Lock()
+	b.marked[id] = true
+	b.mu.Unlock()
+	return nil
+}
+
+func TestOutboxDetachedPublicationIsDrainedBeforeStop(t *testing.T) {
+	backend := &heldMarkBackend{parallelOutboxBackend: newParallelOutboxBackend(t, [][]int64{{10}})}
+	manager := NewManager(newMockVersionedLockFactory(), DefaultConfig(), 1000)
+	manager.remote.stragglerWait = 10 * time.Millisecond
+	manager.SetBackend(backend)
+	stop, released := stopcontract.CallerReleases(manager.StopFinalizer)
+	stopcontract.Check(t, stopcontract.Hooks{
+		Block: func(t testing.TB) {
+			manager.scheduleOutboxRepublish()
+			select {
+			case <-backend.started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("the publication did not start")
+			}
+			outboxLoopIdle(t.(*testing.T), manager, "the slow publication was not moved to the background")
+		},
+		Stop:     stop,
+		Release:  func() { close(backend.release) },
+		Released: released,
+	})
+}
+
+// 转到后台的发布失败：tracker 置为 Indeterminate（同页内失败），发布循环先退避再重试，之后发布成功、tracker 得到 Committed。
+func TestOutboxDetachedPublicationFailureIsRetried(t *testing.T) {
+	backend := &heldMarkBackend{parallelOutboxBackend: newParallelOutboxBackend(t, [][]int64{{10}})}
+	backend.failOnce.Store(true)
+	tx := backend.statuses[0].TransactionID
+	cfg := DefaultConfig()
+	cfg.FinalizeRetryInterval = 20 * time.Millisecond
+	manager := NewManager(newMockVersionedLockFactory(), cfg, 1000)
+	manager.remote.stragglerWait = 10 * time.Millisecond
+	manager.SetBackend(backend)
+	t.Cleanup(func() { _ = manager.StopFinalizer(context.Background()) })
+	if err := manager.trackRemoteTransaction(tx); err != nil {
+		t.Fatal(err)
+	}
+	manager.completeRemoteTransaction(tx, entity.RemoteCommitStatus{TransactionID: tx, State: entity.RemoteCommitApplied, Receipts: backend.statuses[0].Receipts})
+	manager.scheduleOutboxRepublish()
+	select {
+	case <-backend.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the publication did not start")
+	}
+	outboxLoopIdle(t, manager, "the slow publication was not moved to the background")
+	failedAt := time.Now()
+	close(backend.release)
+	select {
+	case <-backend.started:
+	case <-time.After(3 * time.Second):
+		t.Fatalf("the failed background publication was never retried (tracker=%v)", manager.localRemoteCommitState(tx))
+	}
+	if elapsed := time.Since(failedAt); elapsed < cfg.FinalizeRetryInterval {
+		t.Fatalf("retried after %v, want a back-off of at least %v", elapsed, cfg.FinalizeRetryInterval)
+	}
+	outboxLoopIdle(t, manager, "the retry finished")
+	if state := manager.localRemoteCommitState(tx); state != entity.RemoteCommitCommitted {
+		t.Fatalf("tracker=%v after the retry, want Committed", state)
 	}
 }

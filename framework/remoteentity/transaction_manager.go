@@ -60,6 +60,17 @@ type remoteState struct {
 	takeoverDue   time.Time
 	// outboxNow 是发布归属判定用的时钟观察缝（宽限期是否已过）；生产为 nil 取 time.Now。只能在发布开始前设置。
 	outboxNow func() time.Time
+	// outboxMu 保护在途发布的登记（publishOutboxPage）：outboxSlots 是全部在途发布（含转到后台的慢项）共用的并发额度，
+	// 容量为 OutboxPublishWorkers，首次发布时按配置建立；outboxInflight 是正在发布的事务，outboxBusy 是它们涉及的实体
+	// 及在途次数。读页时跳过在途事务，同实体的后继留到它结束（结束时唤醒发布循环再扫）。
+	outboxMu       sync.Mutex
+	outboxSlots    chan struct{}
+	outboxInflight map[entity.RemoteTransactionID]struct{}
+	outboxBusy     map[int64]int
+	// outboxDetachedErr 是转到后台的发布的失败；后台发布循环取走后按失败退避（与页内失败相同）。由 outboxMu 保护。
+	outboxDetachedErr error
+	// stragglerWait 是转后台等待（outboxStragglerWait）的测试缝；0 取该常量。只能在发布开始前设置。
+	stragglerWait time.Duration
 	// finalizeTrace 是只读观察缝：每次处理完一个延迟收尾项后报告走了哪一步
 	// （released / retry / await_projection / abandoned），供回归按事件顺序同步，不参与决策。
 	// 生产装配为 nil；只能在 finalizer 启动前设置。
@@ -692,7 +703,15 @@ func (m *Manager) ApplyRemoteCommits(ctx context.Context, txID entity.RemoteTran
 // RecoverOutbox 是唯一发布入口，发布 outbox 里全部已持久（Applied）但还没发布的提交。启动时（Assembly.Start）与补发循环
 // （runOutboxRepublish）共用。正式存储以游标跨过失败项，继续尝试后续页；下一轮从头重试。
 // 旧自定义存储未实现分页时只保证当前页内互不阻塞，不能冒称覆盖后续页。
+//
+// 显式调用（启动恢复、测试）等本次派发的发布全部结束才返回；后台发布循环用 recoverOutbox(ctx, true)，慢项可以转到后台。
 func (m *Manager) RecoverOutbox(ctx context.Context) error {
+	return m.recoverOutbox(ctx, false)
+}
+
+// recoverOutbox 是 RecoverOutbox 的实现；background 为真时（只有 runOutboxRepublish）一页里只剩慢项时不再等它们，
+// 见 publishOutboxPage。
+func (m *Manager) recoverOutbox(ctx context.Context, background bool) error {
 	if m == nil || m.remote == nil || m.backend == nil {
 		return entity.ErrRemoteWriteCapabilityDisabled
 	}
@@ -742,7 +761,7 @@ func (m *Manager) RecoverOutbox(ctx context.Context) error {
 		if !due.IsZero() && (takeoverDue.IsZero() || due.Before(takeoverDue)) {
 			takeoverDue = due
 		}
-		failed = errors.Join(failed, m.publishOutboxPage(ctx, selected))
+		failed = errors.Join(failed, m.publishOutboxPage(ctx, selected, background))
 		if err := ctx.Err(); err != nil {
 			return errors.Join(failed, err)
 		}
@@ -812,9 +831,13 @@ func (m *Manager) runOutboxRepublish(state *remoteState) {
 		state.republishMu.Lock()
 		state.republishDirty = false
 		state.republishMu.Unlock()
-		ctx, cancel := context.WithTimeout(state.finalizeCtx, m.cfg.OpTimeout)
-		err := m.RecoverOutbox(ctx)
-		cancel()
+		// 转到后台的发布失败过：这一轮按失败退避，不立即重扫（与页内失败的退避相同）。
+		err := m.takeDetachedOutboxError()
+		if err == nil {
+			ctx, cancel := context.WithTimeout(state.finalizeCtx, m.cfg.OpTimeout)
+			err = m.recoverOutbox(ctx, true)
+			cancel()
+		}
 		state.republishMu.Lock()
 		if err == nil && !state.republishDirty {
 			state.republishRunning = false
