@@ -55,8 +55,10 @@ type Config struct {
 	// SnapshotReplicaBuffer 是一个 key 的权威加载在途时缓冲复制消息的条数（首载缓冲）。
 	// 零值取 64；溢出时丢弃缓冲、加载装入后再回源一次。
 	SnapshotReplicaBuffer int
-	MarkerCacheTTL        time.Duration
-	SnapshotLoadTimeout   time.Duration
+	// MarkerCacheTTL 是写准入信任本进程所有权缓存的时长（共享模式、owner 是别的 sid 或还没对齐的实体）。本 sid 独占、
+	// 已在当前租约下对齐的实体不按它过期：所有权只由 owner 自己改（REMOTE_ENTITY“独占写准入”）。
+	MarkerCacheTTL      time.Duration
+	SnapshotLoadTimeout time.Duration
 	// CachedMaxStaleness 是 Cached / Monotonic 读能交出的快照距最近一次被共享 L2 或权威确认的最长时间
 	// （kit：remote_entity.cached_max_staleness）。超过它的 L1 条目先重新确认（读 L2，必要时回源权威），
 	// 确认不了就不交出。零值取 SnapshotCacheTTL。不覆盖 L2 本身落后于权威的情形（owner 写 L2 失败或
