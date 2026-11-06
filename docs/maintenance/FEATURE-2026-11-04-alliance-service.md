@@ -263,7 +263,7 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 持久的重试驱动选的是“运行中重试 + 启动扫描”，不是“下次触达该联盟时惰性补发”——后者对一个没人再碰的联盟没有上界：
 
 - **运行中**：宣战方 owner 进程按 5s 起倍增、最多 1 分钟重试，直到对方给出最终答复；
-- **重启后**：联盟是 `preload=startup`，owner 起服时全部加载；alliance Mod 在注册 handler 之后跑一次 `ScanWars`（列出本实例拥有的联盟，逐个读 `WarAcks`），对每个未清的标记再问一次。代价：每次起服每个联盟一次 Nest 读；
+- **重启后**：联盟是 `preload=startup`，owner 起服时全部加载；alliance Mod 在注册 handler 之后跑一次 `ScanWars`（列出本实例拥有的联盟，逐个读 `WarAcks`），对每个未清的标记再问一次。扫描在后台（`followUps`），不挡起服。代价（2026-11-06 实测，[基准页](../performance/benchmarks/alliance-warscan-20261106/README.md)）：每次起服每个联盟一次 Nest 读，而这个读是 Remote 写准入、要向所有权记录取一次写许可（一次 Mongo `findAndModify`，只读 handler 也一样，见 [KNOWN-LIMITS](KNOWN-LIMITS.md) 对应条），外加每 1 000 个联盟一页所有权列表查询；原来逐个读，1 万个联盟约 2 分 50 s 后最后一个标记才被补问，改为每页 8 个并发读（`scanConcurrency`）后 1 万 26.5 s、5 万 2 分 4 s；
 - **重发宣战**：同一请求号的 `DeclareWar` 回放时标记仍在，也会再问；
 - **不迁移**：有未清标记的联盟 `alliance.transfer` 不搬（`TransferReport.Pending`），保证一直在问的就是持有标记的那个 owner；守卫不再因为有预约而不搬（它的期限在进程内、经路由 RPC 收尾，在哪个实例都能收）。
 
@@ -278,11 +278,13 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 回归（`internal/rpc/alliance` 与 `game/controllers/player`）：
 
 - `TestAllianceWritesRecordNoEffect`：两个实例上建盟、同 / 跨实例入退、批准、踢人、同 / 跨实例宣战、预约过期限，任何实例记下 effect（reliable 或 best_effort）即红；同时要求通知按顺序直接发出、敌方一侧与过期预约在没有 effect 的情况下收尾。修前（基线 4998e9d1 的生成工程，只加一个空的 `runFollowUps` 桩）：`instance 3000: alliance writes recorded effects [alliance.war_declared (reliable) alliance.member_changed (best_effort) ×6]`、`instance 3001: … [alliance.member_changed (best_effort) ×3]`、`the enemy's side of the cross-instance war was not recorded without an effect: b's wars []`、`the reservation past its deadline was not settled without an effect: guard {… PendingRequestID:reserve-205 …}`、`membership notices sent straight from the service: got []`。
+- `TestStartupWarScanReadsAlliancesConcurrently`（2026-11-06）：假 Remote 挡住每个 Alliance 写准入，同时在等的个数须达到 `scanConcurrency`（8）且不超过。修前（只在测试侧补常量）：`the start-up scan had 1 alliance reads waiting for their write grant at once (at most 1), want 8`。真实进程的量见 `TestAllianceE2EWarScanStartup`（`ALLIANCE_E2E_PERF=1`）。
 - `TestLostWarAcknowledgmentIsMadeUp`：第一次确认丢失后运行中重试补上；丢失后宣战方“重启”（已布置的全部丢掉）由 `ScanWars` 补上；重复宣战与重复确认是回放、敌方只记一次；有等待的联盟不迁移。修前不适用（基线靠可靠 effect）；变异验证：`ScanWars` 改成空函数时红（`after the restart scan: e's wars [], a's waits [{war-a-e 3}]`），去掉运行中重试时红（`after the retry: b's wars [], a's waits [{war-a-b 2}]`）。
 - `TestReservationsOfDifferentPlayersDoNotWaitOnEachOther`（决定 F，确定性：用写准入闸门把 301 的预约卡在它的事务里、锁已持有，302 的预约必须在此期间完成）。修前：`302's reservation waited for 301's: remote.1: server error`（基线的 `handlerGuardReserve` 是 `[守卫, AllianceShard]` 多实体事务，302 排在 shard 锁后 2s 超时）。
 - `TestReservationDeadlineIsSettledByTheAlliance`（改为进程内期限：到期前不跑、联盟不可达时不释放并重布、可达后释放、迟到的批准答 `alliance_expired`、已坐下的确认；期限随“重启”丢失后由下一次批准收尾）、`TestTransferOwnershipMovesWhatThisInstanceOwns`（原 `…KeepsReservedGuards`：有预约的守卫现在照常搬，搬走后旧实例上的期限仍经路由收尾）。
 - `TestMembershipAnswersTheRostersAlliance`：成员答联盟号、名单里已没有的 joined 被清并答 0、已坐下而确认丢失的预约被确认、没有守卫答“实体不存在”。
 - `TestLoginLooksUpAGuildJoinedWhileOffline`（game 端点）：副本为 0 时问一次（带上界）并写回；没有守卫、预约在途、服务不可达都保持 0；副本不为 0 不问。修前：`a guild joined while offline: 0 lookups, last call "handlerPlayerGuild" []`。
+- 机器人场景 `guild_offline_join`（2026-11-06）：机器人以自己的身份经建盟 Saga 建开放公会，第二个身份登录一次后断开；运维命令 `gm.player.join_guild`（game 进程，按玩家代发 `Join`）在 game 仍有该玩家会话时不入会、答 `joined=false`，机器人重试它——“已离线”由这一步保证，不靠等待；再登录后不带公会号读“我的公会”须是建盟者的公会且含本人。e2e `TestAllianceE2ERobotOfflineJoin` 在真实进程上跑 4 个机器人，`make dev-smoke` 跑第二轮。变异：`refreshGuild` 副本为 0 时不调 `lookupGuild`，4 轮全红（`my guild answers response code 100018: guild not found`），恢复后 3 轮全绿。
 - e2e：`TestAllianceE2EGamePlayers` 加 ①b（E 下线期间被拉进公会，再登录后“我的公会”直接可读）；`TestAllianceE2EOneAllianceUnderRace` 的收敛检查改为前半个窗口只等进程内期限，之后用 `Membership` 模拟“下一个碰到守卫的请求”，并记下需要碰的个数（kill -9 守卫方时期限随进程丢失）。
 
 **实测**（同机与 `4998e9d1` 交替 3 轮，[基准页“联盟不用 effect”](../performance/benchmarks/alliance-join-1000-20261105/README.md#联盟不用-effect2026-11-05-晚)）：同实例 `Join` / `Leave` 每次的 Mongo 命令数不变（这条路径修前已不写 effect）；跨实例 `Join` 少两次 shard 文档写，64 并发成功 9.3～11.2 → 29.0～32.8 次/秒、p50 4.1～4.7 s → 0.34～0.38 s，16 并发 p50 1.49～1.61 s → 0.26～0.28 s。修后跨实例仍有成批 3 s 超时、同一实体随后约 30 s 写不进：已定位为 Remote outbox 代发不通知写者进程（框架，未修，[KNOWN-LIMITS](KNOWN-LIMITS.md) 对应条给了 A / B / C），修前跨实例 `Leave` 偶发的 3 s 超时按同一原因理解。

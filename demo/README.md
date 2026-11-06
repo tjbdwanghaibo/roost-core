@@ -56,7 +56,8 @@ make dev-up      # deploy/dev/docker-compose.yaml：Mongo 副本集 rs0、NATS J
 make dev-run     # deploy/dev/run.sh start：编译 bin/app，先起九个托管服务（account → activity → chat → global → mail → match → platform → rank → session），
                  # 再起 alliance（联盟服务，game 的公会走它），最后起 game，共十一个进程，等每个 /readyz，
                  # 再用 cmd/accountctl 把 sid 1000 注册进 account（否则 CreateRole 拒绝）；日志与 pid 在 .dev/
-make dev-smoke   # 两个机器人走完整条链（登录 → 聊天 → 加道具 → 升级 → 匹配 → 世界计数 → 建盟 / 捐献 / 领奖 saga）
+make dev-smoke   # 两个机器人走完整条链（登录 → 聊天 → 加道具 → 升级 → 匹配 → 世界计数 → 建盟 / 捐献 / 领奖 saga），
+                 # 再跑一轮 guild_offline_join（离线时被运维入会、再登录看到公会；要能连 game 的 ops 9100）
 sh deploy/dev/second-alliance.sh start   # 可选：第二个 alliance 实例（sid 1001），建盟分到两个实例；缩容步骤见脚本头
 make loadtest LOADTEST_COUNT=20   # 更多机器人；偶数，duel 两人一组
 make dev-stop
