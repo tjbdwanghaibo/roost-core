@@ -11,7 +11,10 @@ import (
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/rewards"
+	"{{MODULE}}/game/settings"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	apperrors "{{MODULE}}/internal/errors"
+	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -42,6 +45,7 @@ import (
 const (
 	gmAddItem   = "gm.player.add_item"
 	gmAddExp    = "gm.player.add_exp"
+	gmJoinGuild = "gm.player.join_guild"
 	gmMailSend  = "gm.mail.send"
 	gmWorldStat = "gm.world.stats"
 	gmSagaGet   = "gm.saga.get"
@@ -117,6 +121,12 @@ type gmAddItemPayload struct {
 type gmAddExpPayload struct {
 	PlayerID int64 `json:"player_id"`
 	Amount   int64 `json:"amount"`
+}
+
+type gmJoinGuildPayload struct {
+	PlayerID  int64  `json:"player_id"`
+	GuildID   int64  `json:"guild_id"`
+	RequestID string `json:"request_id"`
 }
 
 type gmMailSendPayload struct {
@@ -214,6 +224,64 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 					return admin.Result{}, err
 				}
 				return admin.Result{Data: map[string]any{"player_id": playerID, "entity_id": entityID, "levels_gained": gained}}, nil
+			},
+		},
+		{
+			Name: gmJoinGuild,
+			Description: "put a player of this server who is offline here into a guild open to joining: {player_id, guild_id, request_id}. " +
+				"The alliance service's Join on the player's behalf (request_id makes a retry a replay); the membership notice finds " +
+				"nobody online, so the player sees the guild at the next login, which asks the alliance service (Membership). " +
+				"While the player has a session on this process nothing is joined: it answers joined=false with the session count, " +
+				"to be retried once they are gone",
+			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmJoinGuildPayload](cmd)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				playerID, _, err := playerIDs(payload.PlayerID)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				if payload.RequestID == "" {
+					return admin.Result{}, fmt.Errorf("%w: request_id is required", admin.ErrCommandInvalid)
+				}
+				target, err := rpcalliance.AllianceTarget(payload.GuildID)
+				if payload.GuildID <= 0 || err != nil {
+					return admin.Result{}, fmt.Errorf("%w: guild_id %d: %v", admin.ErrCommandInvalid, payload.GuildID, err)
+				}
+				// Looked up per call: the command is an operator's tool, and a
+				// registry without the player transport or the alliance client
+				// (a test's) still registers the rest.
+				transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
+				if !ok || transport == nil {
+					return admin.Result{}, fmt.Errorf("gm: player tcp runtime is unavailable")
+				}
+				alliances, ok := app.Lookup[rpcalliance.Alliance](registry, rpcalliance.CapabilityName)
+				if !ok || alliances == nil {
+					return admin.Result{}, fmt.Errorf("gm: capability %q is unavailable", rpcalliance.CapabilityName)
+				}
+				identity, err := settings.Identity(registry)
+				if err != nil {
+					return admin.Result{}, fmt.Errorf("gm: %w", err)
+				}
+				// "Offline" is what the membership notice checks (the same
+				// session count, alliance_notice.go): with no session here the
+				// notice changes nothing and the login lookup is what shows the
+				// guild. A session that is still closing counts as online.
+				if sessions := transport.ActiveSessions(playerID); sessions > 0 {
+					return admin.Result{
+						Message: "the player has a session on this process; nothing joined",
+						Data:    map[string]any{"player_id": playerID, "joined": false, "sessions": sessions},
+					}, nil
+				}
+				reply, err := alliances.Join(ctx, payload.RequestID, playerID, identity.Sid, target)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: map[string]any{
+					"player_id": playerID, "joined": true, "guild_id": reply.Alliance.AllianceID,
+					"members": len(reply.Alliance.Members), "version": reply.Alliance.Version, "served_by": reply.ServedBySID,
+				}}, nil
 			},
 		},
 		{

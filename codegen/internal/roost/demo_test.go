@@ -375,6 +375,16 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if scenario := read("loadtest/scenarios/demo.yaml"); !strings.Contains(scenario, "send_gift_self") || !strings.Contains(scenario, "status: compensated") || !strings.Contains(scenario, "to_player_id: 1") {
 		t.Errorf("the robot scenario does not exercise both gift saga paths")
 	}
+	// 离线入会再登录（联盟方案 §2.5B 决定 D）：机器人场景、它用的运维命令与 dev-smoke 的第二轮都在。
+	if scenario := read("loadtest/scenarios/demo.yaml"); !strings.Contains(scenario, "name: guild_offline_join") || !strings.Contains(scenario, "action: join_guild_offline") || !strings.Contains(scenario, "action: my_guild") {
+		t.Errorf("the robot scenarios lack guild_offline_join (a guild joined while offline, seen at the next login)")
+	}
+	if gm := read("internal/service/game/gm.go"); !strings.Contains(gm, `"gm.player.join_guild"`) {
+		t.Errorf("the game GM lacks gm.player.join_guild, the operator step guild_offline_join runs")
+	}
+	if makefile := read("Makefile"); !strings.Contains(makefile, "-scenario guild_offline_join") {
+		t.Errorf("make dev-smoke does not run the guild_offline_join scenario")
+	}
 	// 步骤消费者只有 wiring/saga Steps 一种写法（D12 方向 B 去掉了 definition.go 的 Subscribe* 辅助）；demo 的登记
 	// 在 gift_saga.go，生成的单进程 steps.go 被换成指向它的说明（送礼的扣款 / 退款要按 sid 准入与转交）。
 	if definition := read("saga/gift_item/definition.go"); strings.Contains(definition, "func Subscribe") || !strings.Contains(definition, "TopicDebitCompensation") {

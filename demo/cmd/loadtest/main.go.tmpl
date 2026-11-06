@@ -18,6 +18,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -79,6 +80,8 @@ func main() {
 	accountNATS := flag.String("account-nats", "nats://127.0.0.1:4222", "NATS url of the bus the account service answers on; robots log in for real (Login → CreateRole → SelectRole) and present session tickets")
 	natsPrefix := flag.String("nats-prefix", "{{PROJECT}}", "bus subject prefix (nats.prefix in the services' configs; generated from the project name)")
 	serverID := flag.Int("server-id", 1000, "the game server's sid, which roles are created on")
+	gameOps := flag.String("game-ops", "127.0.0.1:9100", "ops address of that game server (ops.addr in config.game.yaml); the guild_offline_join scenario runs its operator step there (gm.player.join_guild)")
+	adminToken := flag.String("admin-token", "dev-gm-token", "ops admin token for that operator step (ops.admin_token in config.game.yaml)")
 	flag.Parse()
 
 	if *metricsAddr != "" {
@@ -97,19 +100,21 @@ func main() {
   fmt.Fprintln(os.Stderr,"loadtest: looping/arrival-rate requires a positive -duration")
   os.Exit(2)
  }
- if err := run(cfg, *scenarioDir, *firstPlayerID, *maxErrorRate, *maxP95, *reportPath, login); err != nil {
+ ops := gameOpsClient{addr: *gameOps, token: *adminToken, http: &http.Client{Timeout: 15 * time.Second}}
+ if err := run(cfg, *scenarioDir, *firstPlayerID, *maxErrorRate, *maxP95, *reportPath, login, ops); err != nil {
 		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRate, maxP95 float64, reportPath string, login *accountLogin) error {
+func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRate, maxP95 float64, reportPath string, login *accountLogin, ops gameOpsClient) error {
 	playertcp.MustRegister()
 
 	protocols := protocol.NewRegistry(pbCodec{})
 	actions := action.NewRegistry()
 	scenarios := scenario.NewRegistry()
 	registerCalls(actions, protocols)
+	registerOfflineJoin(actions, protocols, ops)
 	registerPushes(protocols)
 	if err := loadScenarios(scenarios, scenarioDir); err != nil {
 		return err
@@ -206,26 +211,42 @@ func (login *accountLogin) Close() {
 func (login *accountLogin) authPacket(rb *robot.Context) (*transport.Packet, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// A robot may play more than one role: login_as names the identity the
+	// next connect logs in as ("" is the robot's own). Each identity is its
+	// own account whose role is created once; connecting again as the same
+	// identity logs in and selects the role it already has.
+	identity, _ := rb.Blackboard.Get(identityKey)
+	name, _ := identity.(string)
 	openID := fmt.Sprintf("robot-%s-%d", login.nonce, rb.ID)
+	roleName := "robot_" + login.nonce + "_" + strconv.Itoa(rb.ID)
+	if name != "" {
+		openID += "-" + name
+		roleName += "_" + name
+	}
 	account, err := login.accounts.Login(ctx, svcaccount.Identity{Channel: "demo", OpenID: openID, Credential: "demo:" + openID})
 	if err != nil {
 		return nil, fmt.Errorf("account login: %w", err)
 	}
-	role, err := login.accounts.CreateRole(ctx, account.ID, login.serverID, "robot_"+login.nonce+"_"+strconv.Itoa(rb.ID))
-	if err != nil {
-		return nil, fmt.Errorf("account create role: %w", err)
+	playerID, known := rb.Blackboard.Get("role:" + name)
+	if !known {
+		role, err := login.accounts.CreateRole(ctx, account.ID, login.serverID, roleName)
+		if err != nil {
+			return nil, fmt.Errorf("account create role: %w", err)
+		}
+		playerID = role.PlayerID
+		rb.Blackboard.Set("role:"+name, role.PlayerID)
 	}
-	session, err := login.accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	session, err := login.accounts.SelectRole(ctx, account.ID, playerID.(int64))
 	if err != nil {
 		return nil, fmt.Errorf("account select role: %w", err)
 	}
-	rb.PlayerID = role.PlayerID
-	rb.Blackboard.Set("player_id", role.PlayerID)
+	rb.PlayerID = playerID.(int64)
+	rb.Blackboard.Set("player_id", rb.PlayerID)
 	// Every robot founds its own guild, under a name of its own: names are not
 	// unique in the alliance service, but a per-robot name keeps a run's
 	// guilds apart when reading them back.
-	rb.Blackboard.Set("guild_name", fmt.Sprintf("robot guild %d", role.PlayerID))
-	return playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", role.PlayerID, session.Token)), nil
+	rb.Blackboard.Set("guild_name", fmt.Sprintf("robot guild %d", rb.PlayerID))
+	return playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", rb.PlayerID, session.Token)), nil
 }
 
 // serveMetrics exposes the robot-side registry — the only place the scenario
@@ -240,6 +261,116 @@ func serveMetrics(addr string) {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintf(os.Stderr, "loadtest: metrics endpoint: %v\n", err)
 	}
+}
+
+// identityKey is the blackboard key login_as sets and authPacket reads.
+const identityKey = "identity"
+
+// gameOpsClient runs operator commands on the game server's ops listener
+// (POST /admin/execute, the GM surface of internal/service/<game>/gm.go).
+type gameOpsClient struct {
+	addr, token string
+	http        *http.Client
+}
+
+func (ops gameOpsClient) execute(ctx context.Context, name string, payload any) (map[string]any, error) {
+	body, err := json.Marshal(map[string]any{"name": name, "payload": payload})
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+ops.addr+"/admin/execute", strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Admin-Token", ops.token)
+	response, err := ops.http.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("%s on the game's ops %s: %w", name, ops.addr, err)
+	}
+	defer response.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s on the game's ops %s: %s %s", name, ops.addr, response.Status, strings.TrimSpace(string(raw)))
+	}
+	var decoded struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, fmt.Errorf("%s: %w: %s", name, err, raw)
+	}
+	return decoded.Data, nil
+}
+
+// registerOfflineJoin is the guild_offline_join scenario's half (alliance
+// plan §2.5B, decision D): a player made a guild member while offline sees
+// the guild at the next login. Nobody tells the game process about it at the
+// time — the membership notice finds nobody online — so the login asks the
+// alliance service (refreshGuild → Membership) and writes the answer into the
+// player's copy. Without that question "my guild" stays empty until the next
+// notice, which may never come.
+//
+// One robot plays two roles: its own founds an open guild through the found
+// saga, then a second one (login_as member) logs in once and disconnects.
+// The operator step (gm.player.join_guild on the game's ops) joins the member
+// to the guild — and only once the game holds no session of the member: the
+// command refuses while one is there, so the retry around it is the barrier
+// that makes "offline" a fact, not a timing. Then the member logs in again
+// and reads "my guild" with no guild id and the version the join answered:
+// it must be the founder's guild with the member in it.
+func registerOfflineJoin(actions *action.Registry, protocols *protocol.Registry, ops gameOpsClient) {
+	// login_as {identity}: the identity the next connect logs in as.
+	actions.MustRegister(action.Func{ActionName: "login_as", Handle: func(_ context.Context, rb *robot.Context, param any) error {
+		rb.Blackboard.Set(identityKey, action.ParamsOf(rb, param).String("identity", ""))
+		return nil
+	}})
+	// disconnect closes the robot's connection; the server sees the socket
+	// close like any client going away.
+	actions.MustRegister(action.Func{ActionName: "disconnect", Handle: func(_ context.Context, rb *robot.Context, _ any) error {
+		rb.SetSession(nil)
+		return nil
+	}})
+	// join_guild_offline: the operator joins the current identity (offline)
+	// to the guild on the blackboard (the one the found saga reported).
+	actions.MustRegister(action.Func{ActionName: "join_guild_offline", Handle: func(ctx context.Context, rb *robot.Context, _ any) error {
+		raw, _ := rb.Blackboard.Get("guild_id")
+		guildID, _ := raw.(int64)
+		if guildID == 0 {
+			return fmt.Errorf("join_guild_offline: no guild on the blackboard; found one first")
+		}
+		data, err := ops.execute(ctx, "gm.player.join_guild", map[string]any{
+			"player_id": rb.PlayerID, "guild_id": guildID, "request_id": fmt.Sprintf("robot-offline-join-%d", rb.PlayerID),
+		})
+		if err != nil {
+			return err
+		}
+		if joined, _ := data["joined"].(bool); !joined {
+			return fmt.Errorf("player %d still has %v session(s) on the game; not joined yet", rb.PlayerID, data["sessions"])
+		}
+		version, _ := data["version"].(float64)
+		members, _ := data["members"].(float64)
+		rb.Blackboard.Set("min_version", int64(version))
+		rb.Blackboard.Set("offline_join_members", int64(members))
+		return nil
+	}})
+	// my_guild reads "the guild I am in" (no guild id: the player's own copy,
+	// then the guild's mirror at least as new as the join).
+	action.MustRegisterCall[pb.GuildInfoRequest, pb.GuildResponse](actions, protocols, "my_guild", msgid.MsgGuildInfo,
+		action.MapField[pb.GuildResponse]("GuildID", "my_guild_query_id"),
+		action.OnResp(func(rb *robot.Context, resp *pb.GuildResponse) error {
+			raw, _ := rb.Blackboard.Get("guild_id")
+			want, _ := raw.(int64)
+			if err := coded(resp.Code, resp.Reason); err != nil {
+				return fmt.Errorf("player %d joined guild %d while offline, then logged in: my guild answers %w", rb.PlayerID, want, err)
+			}
+			rawMembers, _ := rb.Blackboard.Get("offline_join_members")
+			members, _ := rawMembers.(int64)
+			if resp.GuildID != want || int64(resp.Members) < members {
+				return fmt.Errorf("player %d joined guild %d (%d members) while offline, then logged in: my guild is %d with %d members",
+					rb.PlayerID, want, members, resp.GuildID, resp.Members)
+			}
+			return nil
+		}))
 }
 
 // registerCalls turns the project's request/response pairs into actions a

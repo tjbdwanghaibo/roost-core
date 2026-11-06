@@ -339,3 +339,54 @@ scenarios:
         - action: scene_alive
           param:
             timeout: 10s
+  # A guild joined while offline (alliance plan §2.5B, decision D): run it on
+  # its own, `go run ./cmd/loadtest -scenario guild_offline_join -count 2`
+  # (make dev-smoke runs both). The game's ops listener must be reachable
+  # (-game-ops, -admin-token): the operator step runs there.
+  #
+  # The robot founds an open guild as itself, then plays a second role, the
+  # member: it logs in once (so it has a Player) and disconnects. The operator
+  # joins the member to the guild — gm.player.join_guild refuses while the
+  # game still holds a session of the member, so the retry around it is the
+  # barrier that makes "offline" a fact rather than a timing. The membership
+  # notice the join sends finds nobody online and changes nothing; at the
+  # next login the game asks the alliance service which guild the member is
+  # in (refreshGuild → Membership) and shows it. my_guild reads "the guild I
+  # am in" with no id: it must be the founder's guild, with the member in it.
+  - name: guild_offline_join
+    node:
+      sequence:
+        - action: connect
+        - action: enter_game
+        - action: add_item
+          param:
+            item_id: 9001
+            count: 200
+        - action: found_guild
+          param:
+            open_join: true
+        - retry:
+            times: 40
+            node:
+              sequence:
+                - wait: 250ms
+                - action: guild_op_status
+        - action: expect_guild_op
+          param:
+            status: completed
+        - action: disconnect
+        - action: login_as
+          param:
+            identity: member
+        - action: connect
+        - action: enter_game
+        - action: disconnect
+        - retry:
+            times: 100
+            node:
+              sequence:
+                - wait: 20ms
+                - action: join_guild_offline
+        - action: connect
+        - action: enter_game
+        - action: my_guild
