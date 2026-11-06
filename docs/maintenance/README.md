@@ -75,6 +75,8 @@ Gate 与标准 GameClient 的联合链路另跑 `bash scripts/test-gate-client.s
 | 玩家 TCP 断线伴随 `player_tcp_outbound_overflow_total` / `player_tcp_write_error_total` 增长 | 客户端是否停读或链路过慢、单帧大小、`write_timeout` | 嵌入 TCP 出站队列满或写超时即关闭该连接，属预期的慢连接处理，重连恢复全量；不要为留住慢客户端放大队列或 `write_timeout`（[GATEWAY §4](../framework/GATEWAY.md#嵌入-tcp-的出站)） |
 | `player_tcp_outbound_budget_exhausted_total` 增长（嵌入 TCP），Sync 延迟上升、`player.sync.push_refused.total{outcome="retried"}` 增长 | 是否很多连接同时停读（占着预算直到 `write_timeout`）、健康流量是否超过发送能力、`player_access.tcp.outbound.resident_bytes` 是否过小 | 全进程出站驻留预算耗尽：推送被拒、不断开连接，Sync 整轮重试；按内存余量调大预算，或排查停读连接来源（[GATEWAY §4](../framework/GATEWAY.md#嵌入-tcp-的出站)） |
 | Remote 已提交但快照旧 | outbox进度、确认、L2水位和读取策略 | 区分数据权威与快照水位；不把旧L1写回覆盖 |
+| Remote strict 写偶发“结果未知”（`commit timed out`），同一实体随后一个 `finalize_projection_timeout` 内的写在写门上超时；写者进程的 `remote_entity.finalize_projection_timeout_total`、`remote_entity_write_gate_timeout_total` 增长，同时别的进程的 `remote_entity.outbox.takeover_total{reason="grace"}` 增长 | 写者进程的发布是否变慢（`remote_entity.outbox.transaction` / `outbox.snapshots` 耗时、到 NATS / Redis 的链路、`remote.republish_total{result="error"}`）；写者发布并不慢时查各进程时钟偏差（代发方时钟快出接近 `outbox_takeover_grace`） | 写者超过宽限期没发布、被别的进程代发：每笔仍只发布一次，写门在一次 strict 等待剩余或一次收尾重试间隔内释放，只是时延与同实体可用性；修发布链路或校时（偏差 1 s 以内），不调小宽限期（[REMOTE_ENTITY“outbox 发布归属”](../framework/REMOTE_ENTITY.md#outbox-发布归属)） |
+| Remote 写者进程崩溃后，订阅方一段时间收不到它最后几笔写的推送 | 写者是否同 sid 拉起（拉起即发布）；别的进程在崩溃后是否有写（扫描由写触发，没有周期轮询）；接管方时钟是否慢 | 设计如此：别的进程在写入后 `outbox_takeover_grace`（缺省 30 s，接管方时钟慢 Δ 时再晚 Δ）代发，期间读取按 `cached_max_staleness` 回源仍是新版本；不要为此调小宽限期 |
 | 总线停止/重订失败 | consumer关闭、在途回调、ErrSubscriptionBusy | 等真实排空；有限MaxDeliver不保证永不丢 |
 | 停机超时 | Service与各Mod预算、仍在途操作 | 保留依赖并继续等待，禁止先释放连接/锁 |
 | readiness Degraded | 哪个checker降级、是否仍满足准入 | Degraded仍可ready；Fail才阻断 |
