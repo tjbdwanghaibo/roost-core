@@ -68,9 +68,9 @@ Durability 1/2/3（async / strict / 随 strict 路径提交的 pipelined）的 W
 前提（维护者 2026-11-06）：**一个实体同一时刻只有一个 owner**。由 App 层统一的单实例锁与 fail-stop 保证（[App 生命周期](impl/01-app-lifecycle.md)）：失去归属的进程先停，新 owner 才接手；不考虑旧进程与新进程同时以 owner 身份写（脑裂）。所有权记录里是单个 owner sid、非共享的实体（独占）据此不再每次请求向 Mongo 确认归属；共享模式不变。
 
 - **稳定持有不碰权威**：所有权缓存是本 sid 独占、当前托管的实例就是在这份租约下对齐过的那份（`heldExclusively`）时，写准入（Nest 每个以它为声明目标的请求，读写都一样）不做任何 Mongo 读写：不取写许可（修改前每次 `GrantWrite`，`_remote_entity_meta` 上一次多数派 `findAndModify`），也不按 `marker_cache_ttl` 重读所有权记录。本进程是唯一写者，内存就是最新。缓存在这里不按 TTL 过期：独占实体的所有权只由 owner 进程自己改（认领、转移、进出共享都要求 `expected.OwnerSid == localSid`，持写门与所有权写锁串行），本进程的改动同步写进缓存，结果未知时置为未知。
-- **对齐时刻**：本地可能落后的入口只有三类，各在之后的第一次准入（或预加载 / 路由前置检查时）读一次权威（`ReadAuthorityState`，`_remote_entity_meta` 一次 `FindOne`，只读）：
+- **对齐时刻**：本地可能落后的入口只有三类，各在之后的第一次准入（或预加载 / 路由前置检查时）向权威对齐一次版本（`ReadAuthorityState`，`_remote_entity_meta` 一次 `FindOne`，只读；首写认领直接用认领带回的状态，不另读，见第 2 条）：
   1. **加载**：冷加载、仅内存卸载后再访问（淘汰、持久拒绝后的重载、落后副本换代）——实例是新指针，对齐记录失配；
-  2. **取得归属**：首写认领（`ClaimOwnership` 之后）、转入（别的 owner 转来，`MarkerEpoch` 前进）、崩溃接管（同 sid 重启，新进程里没有对齐记录）、起服预加载（`PreloadOwnedEntities`）与路由前置检查（`ServeRoutedRequest`）的冷加载——后两者读到的权威版本与加载的实例一致、状态可写时直接记下对齐，之后第一次请求不再读；
+  2. **取得归属**：首写认领、转入（别的 owner 转来，`MarkerEpoch` 前进）、崩溃接管（同 sid 重启，新进程里没有对齐记录）、起服预加载（`PreloadOwnedEntities`）与路由前置检查（`ServeRoutedRequest`）的冷加载——后两者读到的权威版本与加载的实例一致、状态可写时直接记下对齐，之后第一次请求不再读。首写认领用 `WriteAuthority.ClaimAuthorityState`（2026-11-06）：准入只在所有权缓存是“没有记录”时认领（缓存过期时这次准入刚读过），直接插入第一代记录（版本 0），插入成功时这份记录就是对齐所需的权威状态；插入失败（撞上已有记录：并发认领赢了，或记录早已存在；或结果未知）读回一次，owner 是别人照旧按 fence 拒绝 / 改投，是本 sid 就用读到的版本对齐——比本地实例新时同样先卸载重载再执行。认领之后不再读权威，认领前也不再先读一次；`ClaimOwnership` 是它只返回所有权的形式（Redis marker 等非持久装配只有它，不做版本对齐）；
   3. **从共享退回独占**：`LeaveRemoteSharedMode` 推进 `MarkerEpoch`，对齐记录失配。
   所有权的任何变更都推进 `MarkerEpoch`，所以“租约变了”与“实例换了”两条就覆盖了全部入口。对齐时实例版本落后于权威或停在 `Fenced`，按下一节先卸载再从权威加载；一致就记下对齐（`markAligned`），此后回到稳定持有。
 - **只读请求**：handler 不改持久字段时，生成的 `HasRemoteCommitLocked` 答 false，批次没有 Remote 提交：不写 WAL、不投影、不发 Mongo 命令。它仍走写准入：占一个 `max_concurrent_writes` 名额、过实体写门，时长是 handler 本身（稳定持有时准入不做 I/O）。**没有新增只读声明**：写门让读请求排在同一实体上结论未定的写之后，读不到可能被回滚 / 结果未知的修改；绕开写门的只读声明会改变这条语义，并要同时改 codegen、Nest 与 Remote 三层。代价：同一实体上的读要等在途写拿到持久结论，写额度被在途写占满时读同样答 overloaded。
@@ -80,7 +80,7 @@ Durability 1/2/3（async / strict / 随 strict 路径提交的 pipelined）的 W
 - **确认认写者**：独占写不再带每次递增的 fence，同一实体上各次独占写的 LockFence 相同，别的进程的提交可能与一份空闲副本的 `(BaseVersion, LockFence)` 恰好一致。`acknowledgeRemoteCommit` 因此另要求实例的 wrapper 此刻正由这笔事务持有写门（定稿时记下、写门释放时清除）；写门释放后的重复确认只在向量已经等于这笔的结果时放行（幂等）。否则不推进（`remote_entity.foreign_ack_skipped_total`）。
 - **共享模式不变**：分布式锁、每次 `GrantWrite`（现在只接受共享实体，去掉了 owner 参数）、`_grant_fence` / `_grant_token` 校验照旧。
 - **指标**：`remote_entity.exclusive_admission_total{path=held|aligned}`（稳定持有 / 对齐了一次的独占准入，正常时几乎全是 `held`）、`remote_entity.commit_conflict_total`（应为 0）。
-- **回归**：[write_admission_test.go](../../framework/remoteentity/write_admission_test.go) 的 `TestExclusiveOwnerWritesWithoutAWriteGrant`（5 次稳定写：修前 5 次 `findAndModify` 与 5 次所有权读，修后 0）、`TestExclusiveReadOnlyRequestTouchesNoMongo`（经 Nest 的 5 次只读请求：修前 5 次 `findAndModify`，修后没有任何 Mongo 写、不读元数据与数据文档）、`TestExclusiveOwnerAlignsBeforeServingAfterItMayHaveFallenBehind`（转走又转回、退出共享、同 sid 重启与淘汰后再访问：先对齐再答复 / 写入）、`TestRoutedColdLoadAlignsSoTheFirstRequestReadsNoAuthority`、`TestExclusiveWriteFromABrokenPremiseIsRejectedAtProjection`（同 sid 两个进程、所有权在 owner 背后被改）、`TestPublishingAnotherIncarnationsCommitDoesNotAdvanceAnIdleCopy`；[mongo_authority_test.go](../../framework/remoteentity/mongo_authority_test.go) 的 `TestExclusiveCommitNeedsNoGrantButChecksVersionAndEpoch`。
+- **回归**：[write_admission_test.go](../../framework/remoteentity/write_admission_test.go) 的 `TestExclusiveOwnerWritesWithoutAWriteGrant`（5 次稳定写：修前 5 次 `findAndModify` 与 5 次所有权读，修后 0）、`TestExclusiveReadOnlyRequestTouchesNoMongo`（经 Nest 的 5 次只读请求：修前 5 次 `findAndModify`，修后没有任何 Mongo 写、不读元数据与数据文档）、`TestExclusiveOwnerAlignsBeforeServingAfterItMayHaveFallenBehind`（转走又转回、退出共享、同 sid 重启与淘汰后再访问：先对齐再答复 / 写入）、`TestRoutedColdLoadAlignsSoTheFirstRequestReadsNoAuthority`、`TestExclusiveFirstWriteClaimNeedsNoAlignmentRead`（新实体第一次写：修前认领前读一次、认领后再读一次对齐，修后 `_remote_entity_meta` 上只剩“没有记录”那一次读与认领的一次插入）、`TestExclusiveClaimOfAnExistingNewerRecordReloadsBeforeWriting`（认领撞上本 sid 已有的更新记录：先重载再写）、`TestExclusiveWriteFromABrokenPremiseIsRejectedAtProjection`（同 sid 两个进程、所有权在 owner 背后被改）、`TestPublishingAnotherIncarnationsCommitDoesNotAdvanceAnIdleCopy`；[mongo_authority_test.go](../../framework/remoteentity/mongo_authority_test.go) 的 `TestExclusiveCommitNeedsNoGrantButChecksVersionAndEpoch`。
 
 ## 多写者：本地副本与权威
 
@@ -92,7 +92,7 @@ Durability 1/2/3（async / strict / 随 strict 路径提交的 pipelined）的 W
 
 ## 实体归属守卫
 
-独占模式下没有所有权记录的实体由**第一个写它的进程**认领（写准入里的 `ClaimOwnership`）。实体归某个服务写（例如联盟服务独占全部 Alliance，见[联盟服务方案](../maintenance/FEATURE-2026-11-04-alliance-service.md#210-生成器最小增量决定-3)）时，别的服务的进程一旦先写到一个新实体就会把它认领走。守卫（2026-11-04）：
+独占模式下没有所有权记录的实体由**第一个写它的进程**认领（写准入里的 `ClaimAuthorityState`）。实体归某个服务写（例如联盟服务独占全部 Alliance，见[联盟服务方案](../maintenance/FEATURE-2026-11-04-alliance-service.md#210-生成器最小增量决定-3)）时，别的服务的进程一旦先写到一个新实体就会把它认领走。守卫（2026-11-04）：
 
 - **声明**：`coreremote.Config.ForeignKinds []entity.EntityKind` 列出“声明归属于别的服务”的 kind；wiring 经 `wiring/remoteentity.WithForeignKinds(kinds...)` 传入（生成工程由实体注解 `service=<name>` 推出，阶段 2），Mod Init 时校验一次：每个 kind 都必须是已注册的 Remote 托管 kind。不写 YAML 键，不在两处声明。
 - **拒绝点**：`PrepareRemoteWriteBatch` 在写额度、wrapper 与任何所有权读写之前整批检查，批里有一个 foreign kind 整批拒绝；`ClaimRemoteOwnership`、`EnterRemoteSharedMode`、`LeaveRemoteSharedMode`、`TransferRemoteOwnership` 在 `beginOwnershipTransition` 里同样先拒绝。返回 `entity.ErrRemoteKindNotOwned`（包裹 `ErrRemoteWriteCapabilityDisabled`，不可重试），计 `remote_entity.foreign_kind_rejected_total`。权威里不会留下这个进程的所有权记录。
