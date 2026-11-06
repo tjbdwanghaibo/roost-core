@@ -2,7 +2,10 @@ package cellworld
 
 import (
 	"context"
+	"fmt"
 	"math/rand/v2"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -287,6 +290,67 @@ func (w *world) assertSingleReal(id int64, want CellID) {
 	}
 }
 
+// waitSettled 等玩家的交接收尾：Base 记的 owner 格上恰好有一个 epoch 相同的 Real，其他格没有它的 Real / Frozen，最近
+// 一份 witness 来自 owner。只等这个完成条件，不放宽任何断言；超时打印 Base 状态、各格的区域记录、交接计数与出站队列长度。
+func (w *world) waitSettled(unique int64, timeout time.Duration) (int32, uint64) {
+	w.t.Helper()
+	id := actorID(unique)
+	settled := func() (int32, uint64, bool) {
+		st := w.baseState(unique)
+		owner, ok := w.grid.CellOf(st.Cell)
+		if !ok || st.Epoch == 0 {
+			return st.Cell, st.Epoch, false
+		}
+		for cid := range w.cells {
+			for _, s := range w.inspect(cid) {
+				if s.State.ID != id {
+					continue
+				}
+				switch {
+				case s.Role == "frozen":
+					return st.Cell, st.Epoch, false
+				case s.Role == "real" && (cid != owner || s.State.Ver.Epoch != st.Epoch):
+					return st.Cell, st.Epoch, false
+				}
+			}
+		}
+		if s, ok := w.roleOf(owner, id); !ok || s.Role != "real" {
+			return st.Cell, st.Epoch, false
+		}
+		last, ok := w.lastView(unique)
+		return st.Cell, st.Epoch, ok && last.Cell == st.Cell && last.Epoch == st.Epoch
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		sid, epoch, ok := settled()
+		if ok {
+			return sid, epoch
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	var diag strings.Builder
+	st := w.baseState(unique)
+	last, _ := w.lastView(unique)
+	fmt.Fprintf(&diag, "base: cell=%d epoch=%d inWorld=%v lostEpoch=%d enterHint=%d; last view from %d epoch %d\n",
+		st.Cell, st.Epoch, st.InWorld, st.LostEpoch, st.EnterHint, last.Cell, last.Epoch)
+	for cid, p := range w.cells {
+		for _, s := range w.inspect(cid) {
+			if s.State.ID == id {
+				fmt.Fprintf(&diag, "cell %v: role=%s epoch=%d seq=%d owner/target=%v\n", cid, s.Role, s.State.Ver.Epoch, s.State.Ver.Seq, s.Owner)
+			}
+		}
+		ns := p.node.Stats()
+		fmt.Fprintf(&diag, "cell %v stats: started=%d accepted=%d rejected=%d aborted=%d offerRetransmits=%d offersReceived=%d staleDrops=%d outboxDrops=%d dispatchErrors=%d outbox=%d\n",
+			cid, ns.HandoffsStarted, ns.HandoffsAccepted, ns.HandoffsRejected, ns.HandoffsAborted, ns.OfferRetransmits, ns.OffersReceived,
+			ns.StaleDrops, ns.OutboxDrops, ns.DispatchErrors, len(p.node.out))
+	}
+	w.t.Fatalf("handoff of player %d did not settle within %v:\n%s", unique, timeout, diag.String())
+	return 0, 0
+}
+
 // checkContinuity：静止 NPC 落在玩家 witness 半径内（按 witness 里玩家自己的位置算）时必须出现在 witness 里；连续缺失
 // 不超过 maxMiss 份。相邻两份 witness 的到达间隔不超过 maxGap（交接窗口里旧格已停发、新格还没发）。
 func checkContinuity(t *testing.T, views []View, npcs map[int64]spatial.Point, maxMiss int, maxGap time.Duration) (worstMiss int, worstGap time.Duration) {
@@ -395,7 +459,8 @@ func scenarioStraightCrossing(t *testing.T, w *world, maxMiss int, maxGap time.D
 }
 
 // 在边界来回抖动（幅度 > 迟滞，反复交接）：witness 与客户端视野连续，每次交接 epoch +1，任一时刻至多一个 Real。
-func scenarioJitter(t *testing.T, w *world, maxMiss int, maxGap time.Duration) {
+// lastLeg 非 nil 时在最后一段（第 12 次过界）开始前调用，用来给最后一次交接注入故障。
+func scenarioJitter(t *testing.T, w *world, maxMiss int, maxGap time.Duration, lastLeg func()) {
 	npcs := boundaryNPCs()
 	w.spawnAll(npcs)
 	w.enter(1, spatial.Point{X: 9990, Y: 5000})
@@ -404,6 +469,9 @@ func scenarioJitter(t *testing.T, w *world, maxMiss int, maxGap time.Duration) {
 		vx := int64(1000)
 		if i%2 == 1 {
 			vx = -1000
+		}
+		if i == 11 && lastLeg != nil {
+			lastLeg()
 		}
 		w.move(1, vx, 0)
 		w.waitView(1, 5*time.Second, "turn point", func(v View) bool {
@@ -414,10 +482,14 @@ func scenarioJitter(t *testing.T, w *world, maxMiss int, maxGap time.Duration) {
 		})
 	}
 	w.move(1, 0, 0)
-	time.Sleep(3 * worldPeriod)
+	// RV-20261106-02：停下时最后一次交接可能还没收尾（旧格等 OfferReply 或隐式确认、区域表等角色的报告），这些都是异步
+	// 的几跳，固定 sleep 在完整包高负载下不够。等到交接真的收尾（有期限、超时打印诊断），再做与原来相同的断言。
+	sid, epoch := w.waitSettled(1, 5*time.Second)
+	if aborted := w.sumStats(func(s NodeStats) uint64 { return s.HandoffsAborted }); aborted != 0 {
+		t.Fatalf("%d handoff(s) settled by abort, not by the target's answer", aborted) // 放弃也会让旧格的记录消失，不算收尾
+	}
 	miss, gap := checkContinuity(t, w.viewsOf(1), npcs, maxMiss, maxGap)
 	w.checkClient(1, npcs)
-	sid, epoch := w.owner(1)
 	t.Logf("views=%d worst miss=%d worst gap=%v final owner sid=%d epoch=%d", len(w.viewsOf(1)), miss, gap, sid, epoch)
 	if epoch < 12 {
 		t.Fatalf("epoch %d after 12 boundary crossings, want >= 12", epoch)
@@ -586,7 +658,29 @@ func mapValues[K comparable, V any](m map[K]V) []V {
 
 func TestWorldJitterAtBoundary(t *testing.T) {
 	spec, _ := loopbackSpec(t, 2, 1)
-	scenarioJitter(t, startWorld(t, spec), contMaxMiss, contMaxGap)
+	scenarioJitter(t, startWorld(t, spec), contMaxMiss, contMaxGap, nil)
+}
+
+// RV-20261106-02：最后一次交接（B → A）的收尾慢到达：A 发给 B 的 OfferReply 与带着玩家的 Ghost 更新（隐式确认）都晚
+// 1 秒，旧格 B 在玩家停下之后还冻结着一段时间。断言与上面相同，只是不能靠固定 sleep 恰好等过收尾。
+func TestWorldJitterAtBoundarySlowHandoffConclusion(t *testing.T) {
+	spec, lb := loopbackSpec(t, 2, 1)
+	w := startWorld(t, spec)
+	b := Subject("w", w.grid.SID(CellID{1, 0}))
+	scenarioJitter(t, w, contMaxMiss, contMaxGap, func() {
+		lb.setFault(func(subject string, m *wireMsg) (bool, bool, time.Duration) {
+			if subject != b {
+				return false, false, 0
+			}
+			if m.Kind == kindOfferReply {
+				return false, false, time.Second
+			}
+			if m.Kind == kindGhost && slices.ContainsFunc(m.Ghost.Updates, func(s EntityState) bool { return s.ID == actorID(1) }) {
+				return false, false, time.Second
+			}
+			return false, false, 0
+		})
+	})
 }
 
 func TestWorldDiagonalThroughFourCellCorner(t *testing.T) {

@@ -65,6 +65,9 @@ type MonsterDao struct {
 	CellAttack   int64  `dao:"nopersist,nosync" store:"cell_attack"`
 	CellPower    int64  `dao:"nopersist,nosync" store:"cell_power"`
 	CellPanelVer uint64 `dao:"nopersist,nosync" store:"cell_panel_ver"`
+	// The entry sequence (cellworld.ActorState.Entry), same name as
+	// SceneActorDao's; a monster never enters, so it stays 0.
+	CellEntry uint64 `dao:"nopersist,nosync" store:"cell_entry"`
 }
 
 // CellHit 是一条已结算伤害的去重记录（cellworld.AppliedHit）。

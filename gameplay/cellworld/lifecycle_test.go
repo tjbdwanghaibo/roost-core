@@ -3,10 +3,14 @@ package cellworld
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/vmihailenco/msgpack/v5"
 
 	fentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -91,6 +95,118 @@ func TestBaseGoneSceneActorExpires(t *testing.T) {
 	}
 }
 
+// capturedMsg 是 loopback 上截下的一条已编码消息：之后原样重放，模拟传输的重复 / 迟到副本。
+type capturedMsg struct {
+	subject string
+	data    []byte
+}
+
+// captureFirst 截下（并照常投递）第一条 kind 消息。
+func captureFirst(lb *loopback, kind msgKind) <-chan capturedMsg {
+	saved := make(chan capturedMsg, 1)
+	lb.setFault(func(subject string, m *wireMsg) (bool, bool, time.Duration) {
+		if m.Kind == kind {
+			if raw, err := encodeMsg(m); err == nil {
+				select {
+				case saved <- capturedMsg{subject: subject, data: raw}:
+				default:
+				}
+			}
+		}
+		return false, false, 0
+	})
+	return saved
+}
+
+// leaveAndCapture 让玩家离场，返回这次 Leave 的编码消息，并等 cell 上的角色被删。
+func (w *world) leaveAndCapture(lb *loopback, unique int64, cell CellID) capturedMsg {
+	w.t.Helper()
+	saved := captureFirst(lb, kindLeave)
+	ctx, cancel := w.ctx()
+	defer cancel()
+	if err := w.base.node.Leave(ctx, playerEntityID(unique)); err != nil {
+		w.t.Fatal(err)
+	}
+	var old capturedMsg
+	select {
+	case old = <-saved:
+	case <-time.After(3 * time.Second):
+		w.t.Fatal("leave not captured")
+	}
+	lb.setFault(nil)
+	waitFor(w.t, 3*time.Second, "actor removed by its own leave", func() bool { _, ok := w.roleOf(cell, actorID(unique)); return !ok })
+	return old
+}
+
+// requireStaysReal 断言角色在 d 内一直是 cell 的 Real（旧消息重放之后的观察窗口）。
+func (w *world) requireStaysReal(unique int64, cell CellID, d time.Duration, what string) {
+	w.t.Helper()
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); {
+		if s, ok := w.roleOf(cell, actorID(unique)); !ok || s.Role != "real" {
+			w.t.Fatalf("%s: present=%v role=%q in %v", what, ok, s.Role, cell)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// requireLeaveRemoves 让玩家离场，断言 cell 上的角色是被这次 Leave 删掉的（不是租约到期）。
+func (w *world) requireLeaveRemoves(unique int64, cell CellID) {
+	w.t.Helper()
+	ctx, cancel := w.ctx()
+	defer cancel()
+	if err := w.base.node.Leave(ctx, playerEntityID(unique)); err != nil {
+		w.t.Fatal(err)
+	}
+	waitFor(w.t, 2*time.Second, "actor removed by the current leave", func() bool { _, ok := w.roleOf(cell, actorID(unique)); return !ok })
+	if got := w.cells[cell].node.Stats().LeaseExpired; got != 0 {
+		w.t.Fatalf("actor in %v left by lease expiry (%d), not by the leave", cell, got)
+	}
+}
+
+// RV-20261106-03：Leave 只结束发出它的那一次入场。同一玩家离场后以同 ID 重新入场，传输把第一次的 Leave 重复 / 迟到
+// 送达（Transport 允许）：新角色必须留下；当前这次入场的 Leave 照常删除它。
+func TestLateLeaveDoesNotRemoveReenteredActor(t *testing.T) {
+	spec, lb := loopbackSpec(t, 1, 1)
+	w := startWorld(t, spec)
+	cell := CellID{0, 0}
+	first := w.enter(1, spatial.Point{X: 5000, Y: 5000})
+	old := w.leaveAndCapture(lb, 1, cell)
+	w.resetViews(1)
+	second := w.enter(1, spatial.Point{X: 5000, Y: 5000})
+	if second.Epoch <= first.Epoch {
+		t.Fatalf("epoch did not advance: %d -> %d", first.Epoch, second.Epoch)
+	}
+	if err := lb.Publish(old.subject, old.data); err != nil {
+		t.Fatal(err)
+	}
+	w.requireStaysReal(1, cell, 300*time.Millisecond,
+		fmt.Sprintf("old Leave deleted the re-entered actor (old epoch %d, new epoch %d)", first.Epoch, second.Epoch))
+	w.requireLeaveRemoves(1, cell)
+}
+
+// RV-20261106-03：入场身份随交接带走。第一次入场在 B 离场（Leave 发给 B）；第二次在 A 入场再走进 B（交接装出的 Real）。
+// 第一次的 Leave 迟到到达 B 不能删它；第二次的 Leave 能删——交接后的 Real 仍认得自己是哪一次入场。
+func TestLateLeaveAfterHandoffKeepsTheNewEntry(t *testing.T) {
+	spec, lb := loopbackSpec(t, 2, 1)
+	w := startWorld(t, spec)
+	b := CellID{1, 0}
+	w.enter(1, spatial.Point{X: 10500, Y: 5000})
+	old := w.leaveAndCapture(lb, 1, b)
+	if want := Subject("w", w.grid.SID(b)); old.subject != want {
+		t.Fatalf("old leave went to %s, want %s", old.subject, want)
+	}
+	w.resetViews(1)
+	w.enter(1, spatial.Point{X: 9500, Y: 5000})
+	w.move(1, 1000, 0)
+	w.waitView(1, 5*time.Second, "handed over to B", func(v View) bool { return v.Cell == w.grid.SID(b) && v.Self.X >= 10300 })
+	w.move(1, 0, 0)
+	if err := lb.Publish(old.subject, old.data); err != nil {
+		t.Fatal(err)
+	}
+	w.requireStaysReal(1, b, 300*time.Millisecond, "old Leave deleted the actor handed over to B")
+	w.requireLeaveRemoves(1, b)
+}
+
 // 回写按版本幂等：回写消息全部重复、随机延迟（乱序）到达，Base 接受的快照版本严格递增，没有旧快照覆盖新快照。
 func TestWritebackIsIdempotentAndOrdered(t *testing.T) {
 	spec, lb := loopbackSpec(t, 2, 1)
@@ -121,6 +237,48 @@ func TestWritebackIsIdempotentAndOrdered(t *testing.T) {
 	}
 	if final := w.baseState(1); final.SnapVer != got[len(got)-1].Ver {
 		t.Fatalf("base snapshot version %+v, want the last accepted %+v", final.SnapVer, got[len(got)-1].Ver)
+	}
+}
+
+// fillDistinct 给 v（指向结构体）的每个导出字段填互不相同的非零值（递归进嵌入与嵌套结构体），跳过切片与指针。
+// 往返测试用它：以后新增的字段自动被覆盖。
+func fillDistinct(v reflect.Value, next *int64) {
+	for i := range v.NumField() {
+		f, sf := v.Field(i), v.Type().Field(i)
+		if !sf.IsExported() {
+			continue
+		}
+		*next++
+		switch f.Kind() {
+		case reflect.Struct:
+			fillDistinct(f, next)
+		case reflect.Bool:
+			f.SetBool(true)
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			f.SetInt(*next)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			f.SetUint(uint64(*next))
+		}
+	}
+}
+
+// RV-20261106-04：BaseState / ActorState 是接入方会整份保存或传递的公开状态，MsgPack 往返必须保留每个字段（曾经 X/Y、
+// VX/VY 共用一个标签，编码丢了 X 与 VX）。
+func TestStateMsgpackRoundTrip(t *testing.T) {
+	for _, want := range []any{&BaseState{}, &ActorState{}} {
+		var next int64
+		fillDistinct(reflect.ValueOf(want).Elem(), &next)
+		raw, err := msgpack.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := reflect.New(reflect.TypeOf(want).Elem())
+		if err := msgpack.Unmarshal(raw, got.Interface()); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got.Interface(), want) {
+			t.Fatalf("%T round trip lost fields:\nwant %+v\ngot  %+v", want, want, got.Interface())
+		}
 	}
 }
 

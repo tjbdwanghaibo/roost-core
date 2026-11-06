@@ -49,4 +49,6 @@ type SceneActorDao struct {
 	CellAttack   int64  `dao:"nopersist,nosync" store:"cell_attack"`
 	CellPower    int64  `dao:"nopersist,nosync" store:"cell_power"`
 	CellPanelVer uint64 `dao:"nopersist,nosync" store:"cell_panel_ver"`
+	// CellEntry 是玩家这次入场的序号（cellworld.ActorState.Entry），随交接带走：Leave 只删同一次入场的角色（RV-20261106-03）。
+	CellEntry uint64 `dao:"nopersist,nosync" store:"cell_entry"`
 }

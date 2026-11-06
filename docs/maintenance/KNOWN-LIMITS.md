@@ -6,15 +6,19 @@
 
 ## 2026-11-07：新功能审查收尾
 
-新增 RV-20261107-01（P2）：联盟迁移检查后仍可提交宣战，迁移完成后补发责任没有自动接续；RV-20261107-02（P2）：best_effort 单 worker Stop 在 handler 返回前关闭 Closed。两项均连续三轮复现。**RV-20261107-02 已修复（未发版）**：`bestEffortSubscription` 每个回调在接纳锁下检查已停并记入在途（Workers ≤ 1 就地处理的也记），Stop 先关接纳再退订、等在途，Drain 排空后关接纳再等；回归 `TestBestEffortSubscriptionClosesAfterAcceptedHandlers`，见 CHANGELOG `[Unreleased]`。之前三项确认缺陷仍未修复，Lockstep／cellworld 间歇失败仍未关闭。根模块与生成工程 race、客户端及联盟真实进程证据和验证边界见 [收尾报告](FEATURE-REVIEW-20261107.md)。
+新增 RV-20261107-01（P2）：联盟迁移检查后仍可提交宣战，迁移完成后补发责任没有自动接续；RV-20261107-02（P2）：best_effort 单 worker Stop 在 handler 返回前关闭 Closed。两项均连续三轮复现。**RV-20261107-02 已修复（未发版）**：`bestEffortSubscription` 每个回调在接纳锁下检查已停并记入在途（Workers ≤ 1 就地处理的也记），Stop 先关接纳再退订、等在途，Drain 排空后关接纳再等；回归 `TestBestEffortSubscriptionClosesAfterAcceptedHandlers`，见 CHANGELOG `[Unreleased]`。之前三项确认缺陷仍未修复，Lockstep／cellworld 间歇失败仍未关闭。（后续：RV-20261106-01 与 cellworld 的 RV-20261106-02／03／04 已于 2026-11-07 修复、未发版，见下两节；Lockstep 状态不变。）根模块与生成工程 race、客户端及联盟真实进程证据和验证边界见 [收尾报告](FEATURE-REVIEW-20261107.md)。
 
 ## 2026-11-06 续审：cellworld 生命周期与编码
 
 新增 RV-20261106-03（P2）：旧 Leave 迟到副本删除同 ID 重新入场的新角色，三轮复现；RV-20261106-04（P3）：BaseState 重复 MsgPack 标签丢失 X/VX，影响直接编码该类型的接入方，未证明当前 demo 的字段映射受影响。源码、探针、控制组及范围见 [续审报告](FEATURE-REVIEW-20261106.md#续审跨区生命周期与状态编码)。前述 best_effort、边界抖动和 Lockstep 状态不变。
 
+**已修复（未发版，2026-11-07）**：RV-20261106-03 —— Base 每次 Enter 编入场序号 `BaseState.Entry`，随 Enter、Leave、交接 Offer 传递并存在 `ActorState.Entry`，Real 只接受同一次入场的 Leave；线上格式 v6、game-demo 新增不持久 `CellEntry`。探针改写为 `TestLateLeaveDoesNotRemoveReenteredActor`、`TestLateLeaveAfterHandoffKeepsTheNewEntry`，修前红、修后绿。剩余边界（原有，未变）：发给冻结中旧格的 Leave 不处理、离场后才到的旧 Enter 会重建无人续租的角色，均由租约兜底；入场序号取 Enter 时系统时间，跨 Base 重启唯一性依赖时钟不回拨。RV-20261106-04 —— `BaseState` 改为 `x` / `y` / `vx` / `vy` 独立标签，`TestStateMsgpackRoundTrip` 逐字段覆盖 `BaseState` 与 `ActorState`；旧格式数据不迁移（未上线）。见 [cellworld README](../../gameplay/cellworld/README.md)、CHANGELOG `[Unreleased]`。
+
 ## 最新新功能审查（2026-11-06，v1.42.0）
 
 新增 best_effort 未纳入失败创建守卫，可发布不存在实体的创建事件（RV-20261106-01）。**RV-20261106-01 已修复（未发版）**：失败创建标记 `createdBuildMark` 同时记录并比对 `tx.bestEffort` 长度，构建里 Emit 了 best_effort 的失败创建同 reliable 一样记 `ErrFailedCreateLeftEffects` 整条回滚、不发布；回归 `TestAFailedCreateDoesNotPublishItsEffects`，见 CHANGELOG `[Unreleased]`。cellworld 跨区抖动完整包有失败，独立复测通过，尚未闭环。见 [审查报告](FEATURE-REVIEW-20261106.md)；不据定向通过宣布上线验收完成。
+
+**RV-20261106-02 已修复（未发版，2026-11-07）**：读代码判断为夹具等待不足——停下时最后一次交接的旧格等 OfferReply / 隐式确认、区域表等角色报告，都是异步几跳，固定 sleep 3 拍不够。改为有期限的收尾条件（5s，超时打印各格记录、交接计数与出站队列）并断言没有交接靠放弃收尾，原断言不变；新增 `TestWorldJitterAtBoundarySlowHandoffConclusion` 让收尾消息晚 1s，旧等待下三轮复现审查的失败签名（owner sid=101 epoch=13、`(1,0)` frozen），新等待通过。本机（macOS）完整包 race 1 轮、非 race 5 轮通过；审查时的 Linux 原始失败样本未在本机复现，若收尾真的卡住会超时并带诊断失败，不会被掩盖。
 
 ## 最新 Linux 复验（2026-11-03，v1.40.1）
 

@@ -786,7 +786,7 @@ func (n *Node) handleActor(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 	case kindEnter:
 		err = n.onEnter(r, a, m.From, m.Enter, now, fx)
 	case kindLeave:
-		n.onLeave(r, a, now, fx)
+		n.onLeave(r, a, m.Leave, now, fx)
 	case kindPanel:
 		n.onPanel(r, a, m.From, m.Panel, now, fx)
 	}
@@ -898,7 +898,7 @@ func (n *Node) onOffer(r *Region, a Actor, from int32, o *handoffOffer, now time
 		}
 		created = true
 	}
-	n.install(r, a, ActorState{EntityState: st, Role: RoleReal, LastInput: o.LastInput, Applied: o.Applied}, now, fx)
+	n.install(r, a, ActorState{EntityState: st, Role: RoleReal, LastInput: o.LastInput, Applied: o.Applied, Entry: o.Entry}, now, fx)
 	if created {
 		if err := a.StartCell(); err != nil {
 			return fmt.Errorf("cellworld: start %d: %w", st.ID, err)
@@ -996,6 +996,9 @@ func (n *Node) onEnter(r *Region, a Actor, from int32, req *enterReq, now time.T
 		switch cs.Role {
 		case RoleReal:
 			// 幂等重进（Base 重启、看门狗误判）：Real 留着，Base 带来的面板更新就应用（与面板命令同一条规则）。
+			// 入场序号只前进：Base 重启后的新一次入场接管这个 Real（之后它的 Leave 能删），迟到的旧 Enter 不把序号改回去
+			// （否则上一次入场迟到的 Leave 又能删它，RV-20261106-03）。
+			cs.Entry = max(cs.Entry, req.Entry)
 			cs.Base = from
 			cs.LeaseUntil = now.Add(n.cfg.LeaseTimeout).UnixNano()
 			n.applyPanel(&cs, st.Panel, now, fx)
@@ -1030,16 +1033,22 @@ func (n *Node) onEnter(r *Region, a Actor, from int32, req *enterReq, now time.T
 	st.Kind, st.Base = KindPlayer, from
 	st.VX, st.VY = 0, 0
 	st.Ver = Version{Epoch: r.nextEpoch(st.ID, req.EpochHint), Seq: 1}
-	n.install(r, created, ActorState{EntityState: st, LastInput: req.LastInput}, now, fx)
+	n.install(r, created, ActorState{EntityState: st, LastInput: req.LastInput, Entry: req.Entry}, now, fx)
 	return created.StartCell()
 }
 
-func (n *Node) onLeave(r *Region, a Actor, now time.Time, fx *txEffects) {
+// onLeave：Base 让玩家离场。只删 Entry 与请求相同的 Real（RV-20261106-03）：上一次入场重复 / 迟到的 Leave 碰到同 ID
+// 重新入场的角色时丢弃。非 Real（冻结、等销毁）也不处理：交接中的离场由新 owner 的租约兜底。
+func (n *Node) onLeave(r *Region, a Actor, req *leaveReq, now time.Time, fx *txEffects) {
 	if a == nil {
 		return
 	}
 	cs := a.CellState()
 	if cs.Role != RoleReal {
+		return
+	}
+	if cs.Entry != req.Entry {
+		n.stats.staleDrops.Add(1)
 		return
 	}
 	var afx actorEffects

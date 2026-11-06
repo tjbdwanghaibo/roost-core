@@ -9,10 +9,14 @@
 | 状态 | 放在哪 | 谁推进 |
 | --- | --- | --- |
 | 格的区域表 `Region`：邻格 Ghost、交接 seen、墓碑、跨格伤害待决表、本格记录索引 | 该格的 **Scene 实体**（手写 DAO，写时登记逆操作） | Scene 的 `scene.cell` 心跳（`Node.RegionBeat`）与 Scene 上的 handler |
-| 角色 / NPC 的格内状态 `ActorState`：位置、速度、HP、**战斗面板 `Panel`**、去重表、交接进度、租约、回写时间 | **SceneActor / Monster 实体**的 DAO（`Actor.SetCellState` 经 DAO setter 写） | 实体自己的 `cell.actor` 心跳（`Node.ActorBeat`）与 handler |
-| 玩家的路由状态 `BaseState`：owner 格与 epoch、输入 / 攻击序号、快照（HP、位置、版本）、**待发面板与已确认序号**、看门狗 | **Player 实体**（快照与面板映射到持久字段） | Player 的 Base 心跳（`Node.BaseBeat`：看门狗 + 续租 + 面板重发） |
+| 角色 / NPC 的格内状态 `ActorState`：位置、速度、HP、**战斗面板 `Panel`**、去重表、交接进度、租约、回写时间、入场序号 `Entry` | **SceneActor / Monster 实体**的 DAO（`Actor.SetCellState` 经 DAO setter 写） | 实体自己的 `cell.actor` 心跳（`Node.ActorBeat`）与 handler |
+| 玩家的路由状态 `BaseState`：owner 格与 epoch、输入 / 攻击序号、快照（HP、位置、版本）、**待发面板与已确认序号**、看门狗、入场序号 `Entry` | **Player 实体**（快照与面板映射到持久字段） | Player 的 Base 心跳（`Node.BaseBeat`：看门狗 + 续租 + 面板重发） |
 | 客户端看到的格内对象 | Base 进程 entitysync Manager 里的 **Sync mirror**（`policy.Mirrors[EntityState]`） | witness 到达时在 Player handler 里 Apply；别的 Base 发来的队员快照在传输回调里 Apply |
 | 队伍成员表的缓存 `Group`（ID、版本、每名成员的 Player / SceneActor / Base sid） | **Player 实体**（game 映射到 DAO；权威在 game，demo 是 Remote 托管的 Team 实体） | game 改成员表的事务（`Node.SetGroup` / `NotifyGroup`）、成员表通知、重读 |
+
+**入场与离场（RV-20261106-03，线上格式 v6）**：每次 `Enter` 由 Base 编一个入场序号 `BaseState.Entry`（Enter 时的系统时间 UnixNano，同进程内至少比上一次大 1；不持久，跨 Base 重启的唯一性依赖系统时钟不回拨）。Enter、Leave 与交接 Offer 都带它，SceneActor 存在 `ActorState.Entry`；Real 只接受 Entry 相同的 Leave，上一次入场重复 / 迟到的 Leave 碰到同 ID 重新入场的角色时丢弃（计 `StaleDrops`）。看门狗重进、交接放弃后补回是同一次入场，序号不变；目标格已有 Real 时幂等的 Enter 只把序号往大改（Base 重启后的新入场接管旧 Real）。仍是尽力而为：发给冻结中旧格的 Leave 不处理、离场后才到的旧 Enter 会重建一个无人续租的角色，两者都由租约（`LeaseTimeout`）兜底。
+
+`BaseState` / `ActorState` 的 MsgPack 字段各有独立标签（RV-20261106-04 前 `BaseState` 的 X/Y、VX/VY 共用标签，编码丢 X 与 VX），往返由 `TestStateMsgpackRoundTrip` 逐字段覆盖。
 
 `Node` 是每进程一个的端点：传输回调只解码并把消息投成 Nest 请求（Scene、[Scene, 角色]、[Scene, 攻击者, 目标]、Player）；事务提交后的发送、给区域的报告、实体销毁、跟进投递排进一个有界出站队列，由一个 goroutine 执行（Nest 不允许提交后回调里再 Dispatch）。Node 自己没有锁、不持有格内状态。
 

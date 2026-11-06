@@ -54,6 +54,9 @@ type ActorState struct {
 	LeaseUntil int64 `msgpack:"lu,omitempty"`
 	// WritebackAt：下一次定时回写 Player 的时间；玩家才有。
 	WritebackAt int64 `msgpack:"wb,omitempty"`
+	// Entry 是玩家这次入场的序号（Base 编号，见 BaseState.Entry），Enter 时写入、交接时整份带走；Leave 只删 Entry 相同的
+	// Real（RV-20261106-03）。NPC 为 0。
+	Entry uint64 `msgpack:"en,omitempty"`
 }
 
 // Actor 是 game 的 SceneActor / Monster 实体为格内模拟提供的能力。三个方法都只在实体自己的 Nest 锁内调用：
@@ -158,7 +161,7 @@ func (n *Node) freeze(st *ActorState, target CellID, nowNano int64, fx *actorEff
 
 func (n *Node) offerTo(st *ActorState) outgoing {
 	return outgoing{sid: n.cfg.Grid.SID(st.Handoff.Target), msg: &wireMsg{Kind: kindOffer, Offer: &handoffOffer{
-		State: st.EntityState, From: n.cell, LastInput: st.LastInput, Applied: append([]AppliedHit(nil), st.Applied...),
+		State: st.EntityState, From: n.cell, LastInput: st.LastInput, Applied: append([]AppliedHit(nil), st.Applied...), Entry: st.Entry,
 	}}}
 }
 

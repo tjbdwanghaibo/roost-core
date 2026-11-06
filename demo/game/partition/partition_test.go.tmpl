@@ -32,7 +32,7 @@ func sampleState(id int64, kind cellworld.EntityKind, seq uint64) cellworld.Acto
 		Role: cellworld.RoleFrozen, LastInput: 9,
 		Applied:    []cellworld.AppliedHit{{Hit: cellworld.HitID{Attacker: 77, Seq: 1}, At: 100}, {Hit: cellworld.HitID{Attacker: 78, Seq: 4}, At: 200}},
 		Handoff:    &cellworld.HandoffState{Target: cellworld.CellID{Col: 1}, Epoch: 3, StartedAt: 300, LastSent: 400},
-		RetryAfter: 5, LeaseUntil: 6, WritebackAt: 7,
+		RetryAfter: 5, LeaseUntil: 6, WritebackAt: 7, Entry: 8,
 	}
 }
 
@@ -117,7 +117,7 @@ func TestBaseStateWritesTheSnapshotPositionOnlyOnAWriteBack(t *testing.T) {
 	}
 	st := cellworld.BaseState{Actor: 7, InWorld: true, Cell: 1001, Epoch: 2, X: 2900, Y: 1500, HP: 100, IntentSeq: 3, VX: 100, AttackSeq: 4, Shown: true,
 		Panel: cellworld.Panel{MaxHP: 110, Attack: 12, Power: 35, Ver: 2}, PanelAcked: 1, PanelSentAt: 50, PanelSince: 40, PanelUnknown: true,
-		GroupSentAt: 60, GroupSyncAt: 70, GroupViewID: 9001, GroupViewVer: 3}
+		GroupSentAt: 60, GroupSyncAt: 70, GroupViewID: 9001, GroupViewVer: 3, Entry: 80}
 	write(st)
 	if got := partition.ReadBase(dao, sceneID); !reflect.DeepEqual(got, st) {
 		t.Fatalf("read back\n got %+v\nwant %+v", got, st)

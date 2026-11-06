@@ -85,7 +85,7 @@ func TestNATSWorldStraightCrossing(t *testing.T) {
 }
 
 func TestNATSWorldJitterAtBoundary(t *testing.T) {
-	scenarioJitter(t, startWorld(t, natsSpec(t, 2, 1)), natsMaxMiss, natsMaxGap)
+	scenarioJitter(t, startWorld(t, natsSpec(t, 2, 1)), natsMaxMiss, natsMaxGap, nil)
 }
 
 func TestNATSWorldDiagonalThroughFourCellCorner(t *testing.T) {

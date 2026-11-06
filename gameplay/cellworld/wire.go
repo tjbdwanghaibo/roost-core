@@ -16,8 +16,9 @@ import (
 // WireVersion 是当前线上格式版本。v2：加版本号、witness 带每个对象的版本、写回消息。v3：EntityState 带心跳档位（Idle，D1）。
 // v4：EntityState 带战斗面板（Panel）；面板命令与结论（kindPanel / kindPanelResult）；伤害结论带实际伤害值；owner 通知带
 // Real 上的面板序号。v5：队伍面板的队员快照与成员表通知（kindGroupSnap / kindGroupNotice，group.go）。未上线，旧版本的
-// 消息按坏消息丢弃（升级须先停旧进程）。
-const WireVersion uint8 = 5
+// 消息按坏消息丢弃（升级须先停旧进程）。v6：入场序号（Entry，RV-20261106-03）随 Enter、Leave 与交接 Offer 传递，Leave
+// 只结束同一次入场的角色。
+const WireVersion uint8 = 6
 
 // EntityKind 区分玩家（有 BaseApp，接收视野）与 NPC（只在 Cell 里模拟）。
 type EntityKind uint8
@@ -171,6 +172,8 @@ type handoffOffer struct {
 	From      CellID       `msgpack:"f"`
 	LastInput uint64       `msgpack:"in,omitempty"`
 	Applied   []AppliedHit `msgpack:"a,omitempty"`
+	// Entry 是玩家这次入场的序号（ActorState.Entry），随交接带走：新格的 Real 才认得同一次入场的 Leave。NPC 为 0。
+	Entry uint64 `msgpack:"en,omitempty"`
 }
 
 type handoffReply struct {
@@ -203,10 +206,15 @@ type enterReq struct {
 	State     EntityState `msgpack:"s"`
 	EpochHint uint64      `msgpack:"e"`
 	LastInput uint64      `msgpack:"in,omitempty"`
+	// Entry 是 Base 给这次入场编的序号（BaseState.Entry）：看门狗重进、交接放弃后补回都带同一个序号，再次 Enter 才换新的。
+	Entry uint64 `msgpack:"en"`
 }
 
+// leaveReq：Base 让玩家离场。Entry 是要结束的那一次入场（RV-20261106-03）：传输允许重复、乱序，上一次入场的 Leave
+// 可能在玩家以同 ID 重新入场之后才到；只有 ID 时它会删掉新入场的角色。Real 只接受 Entry 与自己相同的 Leave。
 type leaveReq struct {
-	ID int64 `msgpack:"i"`
+	ID    int64  `msgpack:"i"`
+	Entry uint64 `msgpack:"en"`
 }
 
 // inputReq 是移动意图，同时是 Base 对 SceneActor 的租约续期：Base 每 LeasePeriod 重发一次最新意图（序号不变），

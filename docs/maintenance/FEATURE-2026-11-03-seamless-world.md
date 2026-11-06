@@ -378,7 +378,7 @@ macOS（Apple M5）本机。`GOWORK=off go test -race -count=1 ./gameplay/cellwo
 | v1-12 | 交接延迟随目标格每拍耗时增长 | **已改善**（见 8.3） | — |
 | v1-13 | 静态分区 | 未变 | 原型简化 |
 | v1-14 | 攻击只能打本格视野里的目标 | 未变 | 原型简化 |
-| v1-15 | Leave 尽力而为；配置不经 `app.LoadConfig` | Leave 有租约兜底；配置仍是 `NodeConfig` 结构体，没有 Mod 配置声明 | 原型简化（接 demo 时按 A4① 声明） |
+| v1-15 | Leave 尽力而为；配置不经 `app.LoadConfig` | Leave 有租约兜底；2026-11-07 起 Leave 带入场序号，只删同一次入场的 Real（RV-20261106-03，线上格式 v6，见 [cellworld README](../../gameplay/cellworld/README.md)）；配置仍是 `NodeConfig` 结构体，没有 Mod 配置声明 | 原型简化（接 demo 时按 A4① 声明） |
 | v1-16 | 单机、短窗口测量 | 未变 | 原型简化 |
 | v2-1 | **每实体每拍一笔 Nest 事务的 CPU 代价**（8.3：约 5 倍） | 新 | **上线前必须解决或接受**：见 8.6 D1 |
 | v2-2 | witness 的空间索引每拍从区域表现建（A1：索引不常驻），O(本格 + Ghost) | 新 | 原型简化（5k 时区域心跳 p99 ≤ 3.4ms） |

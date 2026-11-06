@@ -30,13 +30,20 @@ type BaseState struct {
 	Epoch uint64 `msgpack:"e"`
 	// X / Y / HP / SnapVer：Player 的最近快照（回写与 witness 里的自己），重建 SceneActor 用。SnapVer 是被接受的
 	// 最新回写版本：只接受更新的（幂等）。game 把这几项映射到持久字段。
-	X, Y    int64   `msgpack:"x"`
+	// X、Y、VX、VY 各用自己的标签（RV-20261106-04：曾经 `X, Y` 共用 x、`VX, VY` 共用 v，MsgPack 编码丢了 X 与 VX）。
+	X       int64   `msgpack:"x"`
+	Y       int64   `msgpack:"y"`
 	HP      int32   `msgpack:"hp"`
 	SnapVer Version `msgpack:"sv"`
 	// 移动意图（单调序号）与攻击序号。
 	IntentSeq uint64 `msgpack:"is"`
-	VX, VY    int64  `msgpack:"v"`
+	VX        int64  `msgpack:"vx"`
+	VY        int64  `msgpack:"vy"`
 	AttackSeq uint64 `msgpack:"as"`
+	// Entry 是这次入场的序号（RV-20261106-03）：每次 Enter 编一个新的，Enter / Leave 都带它，Real 只接受同一次入场的
+	// Leave。看门狗重进、交接放弃后补回仍是同一次入场，序号不变。不持久也要跨 Base 重启唯一：取 Enter 时的系统时间
+	// （UnixNano），同一进程里至少比上一次大 1；前提是系统时钟不回拨到上一次入场之前。
+	Entry uint64 `msgpack:"en"`
 	// 看门狗：最近一次 witness、Enter、续租的时间；Enter 被拒时的 owner 提示；交接放弃（Lost）的 epoch 与时间。
 	LastViewAt  int64  `msgpack:"lv"`
 	LastEnterAt int64  `msgpack:"le"`
@@ -252,7 +259,8 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 		// 重新进入（离开后再进、Base 重启后进）：保留快照与序号。回写过的玩家以 Player 的快照 HP 为准。
 		prev := st
 		st = BaseState{Actor: cmd.actor, InWorld: true, X: cmd.pos.X, Y: cmd.pos.Y, HP: cmd.hp,
-			SnapVer: prev.SnapVer, IntentSeq: prev.IntentSeq, AttackSeq: prev.AttackSeq, LostEpoch: prev.LostEpoch, Panel: prev.Panel, PanelAcked: prev.PanelAcked}
+			SnapVer: prev.SnapVer, IntentSeq: prev.IntentSeq, AttackSeq: prev.AttackSeq, LostEpoch: prev.LostEpoch, Panel: prev.Panel, PanelAcked: prev.PanelAcked,
+			Entry: max(prev.Entry+1, uint64(now.UnixNano()))}
 		if prev.SnapVer != (Version{}) {
 			st.HP = prev.HP
 		}
@@ -288,7 +296,7 @@ func (n *Node) handleBaseCmd(es []fentity.IThreadSafeEntity, params []any, _ ...
 			return nil, ErrNotInWorld
 		}
 		if st.Cell != 0 {
-			fx.send(st.Cell, &wireMsg{Kind: kindLeave, Leave: &leaveReq{ID: st.Actor}})
+			fx.send(st.Cell, &wireMsg{Kind: kindLeave, Leave: &leaveReq{ID: st.Actor, Entry: st.Entry}})
 		}
 		n.unshow(&st, now)
 		st.InWorld, st.Cell = false, 0
@@ -302,6 +310,7 @@ func (n *Node) enterMsg(st *BaseState, sid int32, hint uint64, now time.Time, fx
 	st.LastEnterAt = now.UnixNano()
 	fx.send(sid, &wireMsg{Kind: kindEnter, Enter: &enterReq{
 		State: EntityState{ID: st.Actor, Kind: KindPlayer, X: st.X, Y: st.Y, HP: st.HP, Panel: st.Panel}, EpochHint: hint, LastInput: 0,
+		Entry: st.Entry,
 	}})
 }
 

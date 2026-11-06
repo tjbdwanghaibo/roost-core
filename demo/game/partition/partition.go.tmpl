@@ -85,6 +85,8 @@ type CellDao interface {
 	SetCellPower(int64)
 	GetCellPanelVer() uint64
 	SetCellPanelVer(uint64)
+	GetCellEntry() uint64
+	SetCellEntry(uint64)
 }
 
 // ReadActor 从 DAO 读出一份 ActorState（新建的切片与指针：调用方改它不影响 DAO，cellworld 的值语义要求如此）。
@@ -106,6 +108,7 @@ func ReadActor(d CellDao, id int64, kind cellworld.EntityKind) cellworld.ActorSt
 		RetryAfter:  d.GetCellRetryAfter(),
 		LeaseUntil:  d.GetCellLeaseUntil(),
 		WritebackAt: d.GetCellWritebackAt(),
+		Entry:       d.GetCellEntry(),
 	}
 	if n := d.CellAppliedLen(); n > 0 {
 		st.Applied = make([]cellworld.AppliedHit, 0, n)
@@ -145,6 +148,7 @@ func WriteActor(d CellDao, st cellworld.ActorState) {
 	d.SetCellAttack(int64(st.Panel.Attack))
 	d.SetCellPower(int64(st.Panel.Power))
 	d.SetCellPanelVer(st.Panel.Ver)
+	d.SetCellEntry(st.Entry)
 	if !sameApplied(d, st.Applied) {
 		hits := make([]db.CellHit, len(st.Applied))
 		for i, a := range st.Applied {
@@ -210,7 +214,7 @@ func ReadBase(d *db.PlayerDao, sceneID int64) cellworld.BaseState {
 		AttackSeq:  d.GetCellAttackSeq(),
 		LastViewAt: d.GetCellViewAt(), LastEnterAt: d.GetCellEnterAt(), LastLeaseAt: d.GetCellLeaseAt(),
 		EnterHint: d.GetCellHint(), LostEpoch: d.GetCellLostEpoch(), LostAt: d.GetCellLostAt(),
-		Shown: d.GetCellShown(),
+		Shown: d.GetCellShown(), Entry: d.GetCellEntry(),
 		Panel: cellworld.Panel{
 			MaxHP: int32(d.GetCellMaxHP()), Attack: int32(d.GetCellAttack()), Power: int32(d.GetCellPower()), Ver: d.GetCellPanelVer(),
 		},
@@ -246,6 +250,7 @@ func WriteBase(d *db.PlayerDao, st cellworld.BaseState, sceneID int64) {
 	d.SetCellLostEpoch(st.LostEpoch)
 	d.SetCellLostAt(st.LostAt)
 	d.SetCellShown(st.Shown)
+	d.SetCellEntry(st.Entry)
 	d.SetCellMaxHP(int64(st.Panel.MaxHP))
 	d.SetCellAttack(int64(st.Panel.Attack))
 	d.SetCellPower(int64(st.Panel.Power))
