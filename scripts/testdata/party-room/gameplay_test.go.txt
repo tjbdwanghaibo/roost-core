@@ -887,6 +887,8 @@ func TestPartyGameFoulEliminationAndUndoRollback(t *testing.T) {
 		return err
 	})
 	f.setNow(f.snap(t, room).State.StarAt)
+	// 先等心跳把星亮出来：refuse 前后各取一次快照，心跳若恰好落在两次之间，记分板的 Star 会变，被误判成“被拒的命令改了房间”。
+	f.waitBoard(t, room, "heartbeat reveals the star", func(b party.Board) bool { return b.Star })
 	in := party.Input{Epoch: epochs[1], Seq: 1, Round: 1, Kind: "grab"}
 	refused := errors.New("after the grab was applied")
 	name := nest.NewHandlerName("party_room_undo_input")
