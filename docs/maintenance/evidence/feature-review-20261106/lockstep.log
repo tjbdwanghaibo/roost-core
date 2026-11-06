@@ -1,0 +1,22 @@
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/admission-only_control_overflows
+2026/11/06 08:52:05 INFO player tcp listener started addr=127.0.0.1:44283 max_connections=10000
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/written_lane_follows_the_link
+2026/11/06 08:52:05 INFO player tcp listener started addr=127.0.0.1:43929 max_connections=10000
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/admission-only_control_overflows
+2026/11/06 08:52:07 INFO player tcp listener started addr=127.0.0.1:45563 max_connections=10000
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link
+2026/11/06 08:52:07 INFO player tcp listener started addr=127.0.0.1:45827 max_connections=10000
+    tcp_test.go:921: snapshot over a slow TCP link closed the connection (closed=true) or failed (0 Tick errors, first: <nil>)
+--- FAIL: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive (69.82s)
+    --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket (1.86s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/admission-only_control_overflows (0.48s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/written_lane_follows_the_link (1.38s)
+    --- FAIL: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link (67.96s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/admission-only_control_overflows (0.61s)
+        --- FAIL: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link (67.35s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	69.850s
+FAIL

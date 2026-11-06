@@ -1,5 +1,9 @@
 # 新增提交审查
 
+## 2026-11-06：v1.41～v1.42 新功能审查
+
+确认失败创建的 best_effort 事件逃逸（P2）；cellworld 完整包跨区抖动失败一次，独立五轮通过，根因待定。具体基线、源码、复现与验证边界见 [新功能报告](FEATURE-REVIEW-20261106.md)。
+
 ## 2026-11-03：v1.40.1 Linux 修复复验收尾
 
 main 仍为 [b3e9ea69](https://github.com/tjbdwanghaibo/roost-core/commit/b3e9ea69)。NATS、SLG 原问题复验通过，etcd 停止屏障重复验证通过；Lockstep 原样完整包和独立五轮仍出现深缓冲连接断开。测试缓冲对照五轮通过但未作为正式修复。证据与上线判断见 [复验报告](FOLLOWUP-REVIEW-20261102.md)。

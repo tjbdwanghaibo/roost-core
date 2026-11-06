@@ -1,0 +1,10 @@
+=== RUN   TestReviewFailedCreateBestEffortEscapes
+=== RUN   TestReviewFailedCreateBestEffortEscapes/reliable
+=== RUN   TestReviewFailedCreateBestEffortEscapes/best_effort
+    review_failed_create_best_effort_test.go:16: failed creation escaped: error=<nil> published=[{ID:5bb63dcbb59c98850000000000000002:1 Topic:review.created Key:39701 Payload:[101 110 116 105 116 121 32 99 114 101 97 116 101 100] Headers:map[] AvailableAt:0 Delivery:best_effort}] entityVisible=false
+--- FAIL: TestReviewFailedCreateBestEffortEscapes (0.01s)
+    --- PASS: TestReviewFailedCreateBestEffortEscapes/reliable (0.00s)
+    --- FAIL: TestReviewFailedCreateBestEffortEscapes/best_effort (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/nest	0.018s
+FAIL

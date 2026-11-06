@@ -1,0 +1,18 @@
+package nest
+import("context";"errors";"testing";"github.com/tjbdwanghaibo/roost-core/framework/entity")
+func TestReviewFailedCreateBestEffortEscapes(t *testing.T){
+ for _,delivery:=range []EffectDelivery{EffectReliable,EffectBestEffort}{t.Run(delivery.String(),func(t *testing.T){
+ manager:=entity.NewEntityManager();pilot:=addPilots(t,manager,39700,1)[0];id:=mustBuildCastID(t,39701,1,failedCreateKind)
+ planFailedCreate(t,id,failedCreatePlan{stage:failedCreateInBuilder,sideEffect:func()error{return Emit(Effect{Topic:"review.created",Key:"39701",Delivery:delivery,Payload:[]byte("entity created")})}})
+ committer:=newBestEffortCommitter(false)
+ mgr:=NewEngine(NestOptionWithGetter(entity.NewManagerAccess(manager)),NestOptionWithTransactionCommitter(committer))
+ name:=NewHandlerName("review_failed_create_best_effort")
+ mgr.MustRegisterHandlerWithMeta(name,func([]entity.IThreadSafeEntity,[]any,...HandlerOption)(any,error){
+ _,err:=manager.Create(failedCreateParam(id));if !errors.Is(err,errFailedCreateRejected){return nil,errors.New("expected failed creation")};return "handled",nil
+ },HandlerMeta{Rollback:RollbackState,Durability:DurabilityStrict})
+ if err:=mgr.Start();err!=nil{t.Fatal(err)};defer mgr.Shutdown(context.Background())
+ _,err:=mgr.Request(context.Background(),name,pilot,nil)
+ var published []Effect;select{case published=<-committer.published:default:}
+ if !errors.Is(err,ErrFailedCreateLeftEffects)||len(published)!=0 {t.Fatalf("failed creation escaped: error=%v published=%+v entityVisible=%v",err,published,manager.Get(id)!=nil)}
+ })}
+}
