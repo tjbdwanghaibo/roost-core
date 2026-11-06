@@ -37,7 +37,8 @@ func TestKeyedDispatcherOrdersOneKeyAndBoundsPending(t *testing.T) {
 	if got := <-started; got != "a-1" {
 		t.Fatalf("first started %s", got)
 	}
-	if err := d.Dispatch("b", goStart, task("b-1", false)); err != nil {
+	// b-1 也挂在 release 上：它若能先结束，“在跑与排队合计”会在补满之后、派发 c 之前掉回 2，c 被接纳（-race 下偶发误红）。
+	if err := d.Dispatch("b", goStart, task("b-1", true)); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -48,7 +49,7 @@ func TestKeyedDispatcherOrdersOneKeyAndBoundsPending(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("b-1 did not run while key a was busy")
 	}
-	// a-1 在跑、a-2 排队，再接纳两个就超过上限 3（b-1 可能已结束，所以先补满）。
+	// a-1 与 b-1 在跑（都挂在 release 上）、a-2 排队，合计已到上限 3；循环只是兜底。
 	for d.Pending() < 3 {
 		if err := d.Dispatch("a", goStart, task("a-x", false)); err != nil {
 			t.Fatal(err)
