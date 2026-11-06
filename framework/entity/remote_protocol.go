@@ -498,6 +498,10 @@ type RemoteWriteBatchManager interface {
 }
 
 type RemoteOwnershipManager interface {
+	// GetRemoteOwnership 返回实体当前的所有权（没有所有权记录时 found=false）。框架 Manager 在本进程对实体是稳定的
+	// 独占持有（与独占写准入同一判据）时答本进程缓存的租约、不做 I/O，其余情况读一次持久所有权记录。前提是一个实体
+	// 同一时刻只有一个 owner（App 单实例与 fail-stop 保证）；被打破时本 owner 在写发现之前答本 sid，写准入与投影
+	// 照常 fence，调用方按改投收敛（docs/framework/REMOTE_ENTITY.md“独占写准入”）。可能做 I/O，只能在 I/O 段调用。
 	GetRemoteOwnership(context.Context, int64) (RemoteEntityMarkerLease, bool, error)
 	ClaimRemoteOwnership(context.Context, int64) (RemoteEntityMarkerLease, error)
 	EnterRemoteSharedMode(context.Context, int64) (RemoteEntityMarkerLease, error)
