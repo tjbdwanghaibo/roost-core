@@ -4,6 +4,15 @@
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
+## Saga 协调器偶发误判“被别的写者隔离”（2026-11-07 发版前压测，尚未确认根因）
+
+v1.42.1 发版前 Saga 整轮压测（`scripts/perf/saga-js-scan.sh`，main `4b6e5212`，本机私有三节点 NATS + 单节点副本集）15 档中 `mongo-forward` c128 一档失败：开压 11 秒后分区 1 fail-stop，`reason=fenced`，错误为 `partition 1 expected last event 11463: nats log: wrong last sequence (err_code=10164)`。该档 128 笔未观察到终态、余额读取 1 次失败；非期望终态、余额不符、发布结果未知均为 0，即按设计安全停下，没有错写。同一档单独重跑 5 轮全部通过（986～1053 笔/s）。
+
+- 测试里只有一个协调器进程，按 [SAGA.md 发布结果](../framework/SAGA.md) 的判定，期望序号不符时读分区最后一条（leader 读，不走 direct get）不是自己写的才判 fenced，单写者下不应出现。可能的方向（未验证）：服务端按在途提议判期望序号、而 leader 读只看到已落盘状态。
+- 与 v1.42.1 改动无关：`framework/saga` 与 `infra/network/nats/driver/jetstream_log.go` 自 v1.37.0 起未改，`mongo-forward` 场景没有 Nest 参与方。
+- 影响：生产单写者下偶发整进程 fail-stop（App 级重启后恢复），不影响正确性。频率按本次约为 c128 满载每 20 档 × 30 s 出现 1 次，样本太少，不作频率结论。
+- 证据在本机 `artifacts/perf/saga-js/v1421-saga/10-mongo-forward-128.log`（不随仓）；当时的 NATS 数据目录已随脚本清理，没有流状态可回查。下一步：加诊断（fenced 时记录 LastMsg 的序号与 MsgID、fence.LastSeq、本批是否有过结果未知）后长跑复现。
+
 ## 2026-11-07：新功能审查收尾
 
 新增 RV-20261107-01（P2）：联盟迁移检查后仍可提交宣战，迁移完成后补发责任没有自动接续；RV-20261107-02（P2）：best_effort 单 worker Stop 在 handler 返回前关闭 Closed。两项均连续三轮复现。**RV-20261107-02 已修复（未发版）**：`bestEffortSubscription` 每个回调在接纳锁下检查已停并记入在途（Workers ≤ 1 就地处理的也记），Stop 先关接纳再退订、等在途，Drain 排空后关接纳再等；回归 `TestBestEffortSubscriptionClosesAfterAcceptedHandlers`，见 CHANGELOG `[Unreleased]`。之前三项确认缺陷仍未修复，Lockstep／cellworld 间歇失败仍未关闭。（后续：RV-20261106-01 与 cellworld 的 RV-20261106-02／03／04 已于 2026-11-07 修复、未发版，见下两节；Lockstep 状态不变。）根模块与生成工程 race、客户端及联盟真实进程证据和验证边界见 [收尾报告](FEATURE-REVIEW-20261107.md)。
