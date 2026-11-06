@@ -288,6 +288,7 @@ func TestSharedAdmissionUsesOwnershipFromDurableGrant(t *testing.T) {
 	meta := db.Collection("control", remoteMetaCollection)
 	for i := range 2 {
 		before := meta.Calls["FindOne"]
+		grantsBefore := meta.Calls["FindOneAndUpdate"]
 		batch, err := mgr.PrepareRemoteWriteBatch(ctx, []int64{live.GUId()})
 		if err != nil {
 			t.Fatal(err)
@@ -302,6 +303,10 @@ func TestSharedAdmissionUsesOwnershipFromDurableGrant(t *testing.T) {
 		}
 		if reads := meta.Calls["FindOne"] - before; reads != wantReads {
 			t.Fatalf("ownership reads=%d want=%d", reads, wantReads)
+		}
+		// 共享模式不受独占写准入影响：每次写照旧取一次写许可（一次 findAndModify）。
+		if grants := meta.Calls["FindOneAndUpdate"] - grantsBefore; grants != 1 {
+			t.Fatalf("shared admission took %d write grants, want 1", grants)
 		}
 		lock := entry.wrapper.rMu.(*versionedLock)
 		if grant, ok := lock.writeGrant(); !ok || grant.Fence != entry.lease.LockFence {
