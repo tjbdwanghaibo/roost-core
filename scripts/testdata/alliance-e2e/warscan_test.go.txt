@@ -10,7 +10,9 @@ package e2e
 //  3. 停 3000（运行中的重试随进程丢失），拉起 3001，再拉起 3000：只有起服扫描能补发；
 //  4. 量：拉起到 /readyz 的时间、预加载窗口、扫描本身（日志 "alliance: war scan done" 的 took）、拉起到全部敌方一侧
 //     记上（Info 读敌方的 Wars）的时间、常驻内存峰值（每 100ms 采 ps）、Mongo 的 query / getmore 与扫描的键 / 文档数
-//     （serverStatus 差值，整台私有 Mongo，含 3001 的底噪），以及列表查询本身的执行计划（explain：第一页与最后一页）。
+//     （serverStatus 差值，整台私有 Mongo，含 3001 与后台轮询的底噪）、扫描期间 3000 的 Remote 写准入次数
+//     （remote_entity.remote.prepare_total{batch="single"}：每次取一次写许可，即一次 Mongo findAndModify），以及列表
+//     查询本身的执行计划（explain：第一页与最后一页）。
 // 每档结束时扫描必须已完成、补发必须全部完成，否则失败。
 
 import (
@@ -248,6 +250,7 @@ func TestAllianceE2EWarScanStartup(t *testing.T) {
 		s.waitReady(a, 15*time.Minute)
 		ready := time.Since(launched)
 		atReady := s.mongoStats()
+		grantsAtReady := s.metric(a, "remote_entity_remote_prepare_total", `batch="single"`)
 		var scan map[string]any
 		var scanAt time.Time
 		s.eventually("war scan done", 15*time.Minute, func() (bool, string) {
@@ -256,6 +259,7 @@ func TestAllianceE2EWarScanStartup(t *testing.T) {
 			return ok, "no scan line yet"
 		})
 		afterScan := s.mongoStats()
+		grants := s.metric(a, "remote_entity_remote_prepare_total", `batch="single"`) - grantsAtReady
 		s.eventually("every enemy records its wars", 15*time.Minute, func() (bool, string) {
 			for enemy, declarers := range declared {
 				ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
@@ -292,6 +296,7 @@ func TestAllianceE2EWarScanStartup(t *testing.T) {
 			n, pending, loadBefore, loadAverage(), ready.Round(time.Millisecond), report.Listed, report.Loaded, pDone.Sub(pStart).Round(time.Millisecond),
 			scan["alliances"], scan["waiting"], time.Duration(took).Round(time.Millisecond), scanAt.Sub(launched).Round(time.Millisecond),
 			madeUp.Round(time.Millisecond), peak, rssMB(a))
+		t.Logf("PERF warscan n=%d Remote write admissions (each takes a write grant: one Mongo findAndModify) ready→scan done: %.0f", n, grants)
 		t.Logf("PERF warscan n=%d mongo launch→ready query=%d getmore=%d command=%d keys=%d docs=%d; ready→scan done query=%d getmore=%d command=%d keys=%d docs=%d",
 			n, toReady.query, toReady.getmore, toReady.command, toReady.keys, toReady.docs, toScan.query, toScan.getmore, toScan.command, toScan.keys, toScan.docs)
 		t.Logf("PERF warscan n=%d owned-list page plan %s: first page keys=%d docs=%d returned=%d; last page keys=%d docs=%d returned=%d (%s)",
