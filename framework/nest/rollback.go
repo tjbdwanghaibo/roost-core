@@ -1073,6 +1073,7 @@ type createdBuildMark struct {
 	commitParticipants  int
 	mutations           int
 	effects             int
+	bestEffort          int // RV-20261106-01：best_effort 不进提交记录，但同为外部效果，见 abandonCreatedEntityBuild。
 	receipts            int
 	deleteIntents       int
 	created             int
@@ -1092,6 +1093,7 @@ func (tx *RollbackTx) createdBuildMark() createdBuildMark {
 		commitParticipants:  len(tx.participants),
 		mutations:           len(tx.mutations),
 		effects:             len(tx.effects),
+		bestEffort:          len(tx.bestEffort),
 		receipts:            len(tx.receipts),
 		deleteIntents:       len(tx.deleteIntents),
 		created:             len(tx.created),
@@ -1107,9 +1109,11 @@ func (tx *RollbackTx) createdBuildMark() createdBuildMark {
 //     其他 DAO）逐项撤销：这些 DAO 对象只属于这个没有发布的实体，构建之外没有人引用，撤销是精确的。它们的 tracker
 //     恢复与逆操作照旧留在回滚列表里，只作用于这些被丢弃的对象。构建开始前已登记的参与方不动。
 //   - 构建期间登记的提交后 / 准入后回调丢弃：它们属于一次没有发生的新建。
-//   - 构建期间还留下了这些 DAO 以外的持久登记（别的实体的修改、AddMutation、Emit、AddReceipt、删除意图、提交参与者、
+//   - 构建期间还留下了这些 DAO 以外的持久登记（别的实体的修改、AddMutation、Emit（reliable 与 best_effort）、AddReceipt、删除意图、提交参与者、
 //     构建中新建并已捕获的其他实体）时不能逐项撤销——它们可能与构建之外的状态交织。这时记下
-//     ErrFailedCreateLeftEffects 并返回，事务结束时整条回滚，业务吞掉错误也一样。
+//     ErrFailedCreateLeftEffects 并返回，事务结束时整条回滚，业务吞掉错误也一样。best_effort effect 不进提交记录，
+//     但提交后会经 publisher 发出，同样算外部效果（RV-20261106-01：原先只比 reliable 的 effects，失败新建吞错后
+//     仍会发布一个不存在实体的 best_effort 事件）。
 //
 // 不选“构建失败一律令事务失败”：只做校验、什么都没登记，或只写了自己 DAO 的构建失败，是业务可以处理的普通错误
 // （例如 GetOrCreate 撞上已有实例后改为读取）。
@@ -1146,7 +1150,7 @@ func (tx *RollbackTx) abandonCreatedEntityBuild(mark createdBuildMark, daos map[
 	}
 
 	if !existingChanged && tx.receiptRevision == mark.receiptRevision && len(tx.participantOrder) == mark.persistParticipants && len(tx.participants) == mark.commitParticipants &&
-		len(tx.mutations) == mark.mutations && len(tx.effects) == mark.effects && len(tx.receipts) == mark.receipts &&
+		len(tx.mutations) == mark.mutations && len(tx.effects) == mark.effects && len(tx.bestEffort) == mark.bestEffort && len(tx.receipts) == mark.receipts &&
 		len(tx.deleteIntents) == mark.deleteIntents && len(tx.created) == mark.created {
 		return nil
 	}

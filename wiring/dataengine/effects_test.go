@@ -887,3 +887,76 @@ func TestBestEffortPublisherSendsAfterEnqueueAndDropsWhenFull(t *testing.T) {
 		t.Fatalf("published %s %+v", client.published[0].Subject, envelope)
 	}
 }
+
+// RV-20261107-02：Stop / Drain 关闭 Closed 之前要等全部已接纳的回调返回，Workers 为 1（回调在 nats.go 的投递 goroutine
+// 上就地处理）时也一样；Stop 之后再到的消息不再交给 handler。原先 Workers ≤ 1 的回调不记入在途，Closed 在 handler
+// 还在跑时就关闭，Stop 之后到达的消息仍以已取消的 ctx 调 handler。
+func TestBestEffortSubscriptionClosesAfterAcceptedHandlers(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		workers int
+		drain   bool
+	}{
+		{"stop/workers_1", 1, false},
+		{"stop/workers_2", 2, false},
+		{"drain/workers_1", 1, true},
+		{"drain/workers_2", 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &bestEffortNATS{}
+			entered, release, delivered := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var calls, lateCalls atomic.Int64
+			var stopped atomic.Bool
+			handler := func(context.Context, nestwal.EffectEnvelope) error {
+				if stopped.Load() {
+					lateCalls.Add(1)
+					return nil
+				}
+				if calls.Add(1) == 1 {
+					close(entered)
+					<-release
+				}
+				return nil
+			}
+			consumer := EffectConsumer{MaxAckPending: 16, AckWait: time.Minute}
+			sub, err := subscribeBestEffort(client, "review.effect", "review", consumer, tc.workers, handler)
+			if err != nil {
+				t.Fatal(err)
+			}
+			go func() {
+				defer close(delivered)
+				client.deliver(t, "accepted-1", "1")
+			}()
+			<-entered
+			if tc.drain {
+				sub.Drain()
+			} else {
+				stopped.Store(true)
+				sub.Stop()
+				// Stop 已关接纳：此后到达的消息（nats.go 退订前已缓冲的）不能再调 handler。Workers 为 1 时 deliver 就地
+				// 执行，为 2 时派给 worker；两种都不能走到 handler。
+				for i := 0; i < 32; i++ {
+					client.deliver(t, "late", "2")
+				}
+			}
+			// 已接纳的 handler 还卡在 release 上：Closed 不能关闭。观察窗口只用来让错误实现暴露，修复后的实现在窗口内
+			// 不可能关闭 Closed（它在等这个 handler）。
+			select {
+			case <-sub.Closed():
+				close(release)
+				t.Fatal("Closed signaled while an accepted handler was still running")
+			case <-time.After(100 * time.Millisecond):
+			}
+			close(release)
+			<-delivered
+			select {
+			case <-sub.Closed():
+			case <-time.After(5 * time.Second):
+				t.Fatal("Closed never signaled after the accepted handler returned")
+			}
+			if late := lateCalls.Load(); late != 0 {
+				t.Fatalf("handler ran %d time(s) for messages delivered after Stop", late)
+			}
+		})
+	}
+}

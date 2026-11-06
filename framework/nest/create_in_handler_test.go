@@ -1087,3 +1087,97 @@ func TestAFailedCreateThatTouchedOtherStateRollsBackTheTransaction(t *testing.T)
 		})
 	}
 }
+
+// effectRecordingCommitter 是自动持久的 pipelined committer，同时实现 BestEffortEffectPublisher：strict / async 走
+// Commit，pipelined 走 Enqueue，三者都记进 records；交给 PublishBestEffort 的 effect 记进 published。
+type effectRecordingCommitter struct {
+	*pipelinedTestCommitter
+	publishMu sync.Mutex
+	published []Effect
+}
+
+func (c *effectRecordingCommitter) PublishBestEffort(_ TransactionID, effects []Effect) {
+	c.publishMu.Lock()
+	defer c.publishMu.Unlock()
+	c.published = append(c.published, effects...)
+}
+
+func (c *effectRecordingCommitter) snapshot() (records []CommitRecord, published []Effect) {
+	c.mu.Lock()
+	records = append(records, c.records...)
+	c.mu.Unlock()
+	c.publishMu.Lock()
+	published = append(published, c.published...)
+	c.publishMu.Unlock()
+	return records, published
+}
+
+// RV-20261106-01：失败新建在构建里 Emit 的 effect（reliable 与 best_effort 同样）属于一次没有发生的新建，不能逐项撤销，
+// 业务吞掉创建错误也整条回滚：回复带 ErrFailedCreateLeftEffects，不产生提交记录，也不经 publisher 发出
+// best_effort effect。覆盖三个失败阶段与 strict / async / pipelined；最后一组是构建成功的对照（effect 照常发出），
+// 证明这里能观察到发布。
+func TestAFailedCreateDoesNotPublishItsEffects(t *testing.T) {
+	stages := []failedCreateStage{failedCreateInBuilder, failedCreateInComponentInit, failedCreateInOnInitFinish, failedCreateNever}
+	durabilities := []DurabilityPolicy{DurabilityStrict, DurabilityAsync, DurabilityPipelined}
+	deliveries := []EffectDelivery{EffectReliable, EffectBestEffort}
+	n := int64(0)
+	for _, stage := range stages {
+		for _, durability := range durabilities {
+			for _, delivery := range deliveries {
+				n++
+				base := 39700 + 2*n
+				t.Run(fmt.Sprintf("%s/%s/%s", stage, durability, delivery), func(t *testing.T) {
+					manager := entity.NewEntityManager()
+					pilot := addPilots(t, manager, base, 1)[0]
+					pilotEntity := manager.Get(pilot).(*rollbackTestEntity)
+					id := mustBuildCastID(t, base+1, 1, failedCreateKind)
+					planFailedCreate(t, id, failedCreatePlan{stage: stage, sideEffect: func() error {
+						return Emit(Effect{Topic: "failed_create.created", Key: fmt.Sprint(id), Delivery: delivery, Payload: []byte("created")})
+					}})
+					committer := &effectRecordingCommitter{pipelinedTestCommitter: newPipelinedTestCommitter(true)}
+					mgr := NewEngine(NestOptionWithGetter(entity.NewManagerAccess(manager)), NestOptionWithTransactionCommitter(committer))
+					name := NewHandlerName(fmt.Sprintf("failed_create_effect_%d", n))
+					mgr.MustRegisterHandlerWithMeta(name, func([]entity.IThreadSafeEntity, []any, ...HandlerOption) (any, error) {
+						_, err := manager.Create(failedCreateParam(id))
+						if stage == failedCreateNever {
+							if err != nil {
+								return nil, err
+							}
+						} else if !errors.Is(err, errFailedCreateRejected) {
+							return nil, fmt.Errorf("fixture: create err=%v, want the initialization failure", err)
+						}
+						// 业务吞掉创建错误，继续改 pilot。
+						return "handled", writeFailedCreateDAO(pilotEntity.dao, 5)
+					}, HandlerMeta{Rollback: RollbackState, Durability: durability})
+					if err := mgr.Start(); err != nil {
+						t.Fatal(err)
+					}
+					defer mgr.Shutdown(context.Background())
+					_, err := mgr.Request(context.Background(), name, pilot, nil)
+					// 三种级别的提交后回调（含 best_effort 发布）都在回复之前执行：strict / async（有 best_effort 时升到
+					// strict）在锁内提交之后，pipelined 第一阶段在本 worker 等到票据持久之后。
+					records, published := committer.snapshot()
+					if stage == failedCreateNever {
+						if err != nil || manager.Get(id) == nil {
+							t.Fatalf("control: err=%v visible=%v", err, manager.Get(id) != nil)
+						}
+						if delivery == EffectBestEffort && len(published) != 1 {
+							t.Fatalf("control: published %+v, want the created entity's best_effort effect", published)
+						}
+						return
+					}
+					if !errors.Is(err, ErrFailedCreateLeftEffects) || !errors.Is(err, errFailedCreateRejected) {
+						t.Fatalf("request err=%v published=%+v records=%d entityVisible=%v; want ErrFailedCreateLeftEffects with the initialization failure",
+							err, published, len(records), manager.Get(id) != nil)
+					}
+					if len(published) != 0 || len(records) != 0 {
+						t.Fatalf("a failed creation's effect escaped: published=%+v records=%+v", published, records)
+					}
+					if manager.Get(id) != nil || pilotEntity.dao.Value != 1 {
+						t.Fatalf("visible=%v pilot value=%d, want the whole transaction rolled back", manager.Get(id) != nil, pilotEntity.dao.Value)
+					}
+				})
+			}
+		}
+	}
+}

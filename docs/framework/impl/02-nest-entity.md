@@ -34,7 +34,7 @@
 
 ## 3. 并发、失败与恢复的修改检查
 
-失败创建的 `createdBuildMark` 除了列表长度，还保存已有 DAO 的持久登记 revision；所有 MarkPersist 变体经 `persistChange` 增加 revision，重复写相同 mask 也能被检测。构建失败时发现其他已有 DAO 被再写，就记录 `ErrFailedCreateLeftEffects` 并整条回滚，不尝试局部猜测逆操作。仅创建时复制既有参与者代次，普通 setter 不新增 map 或历史列表。`AddReceipt` 同键同摘要直接返回、不替换旧 payload，新增回执由长度检测覆盖；`SetReceiptPayload` 增加事务内回执修改代次，包括同值替换，失败创建比对该代次，不增加保存点或局部恢复分支。
+失败创建的 `createdBuildMark` 除了列表长度，还保存已有 DAO 的持久登记 revision；所有 MarkPersist 变体经 `persistChange` 增加 revision，重复写相同 mask 也能被检测。构建失败时发现其他已有 DAO 被再写，就记录 `ErrFailedCreateLeftEffects` 并整条回滚，不尝试局部猜测逆操作。仅创建时复制既有参与者代次，普通 setter 不新增 map 或历史列表。`AddReceipt` 同键同摘要直接返回、不替换旧 payload，新增回执由长度检测覆盖；`SetReceiptPayload` 增加事务内回执修改代次，包括同值替换，失败创建比对该代次，不增加保存点或局部恢复分支。best_effort effect 存在独立的 `tx.bestEffort`、不进提交记录，但提交后会经 publisher 发出，标记同样保存并比对它的长度：构建里 Emit 了 best_effort 的失败创建同 reliable 一样整条回滚（RV-20261106-01，回归 `TestAFailedCreateDoesNotPublishItsEffects`，三个失败阶段 × strict / async / pipelined）。
 
 RV-20261101-05 补齐回执原位修改：v1.37.0 的正式 Nest 探针中，builder 改写既有回执后拒绝创建，外层吞错仍返回 `err=nil`，committer 收到 `failed-build`。修复后的 `TestFailedBuildReceiptPayload` 覆盖吞错、同值、传播、嵌套、成功创建及同摘要 AddReceipt 无操作六种场景；失败路径不提交回执或 mutation、不发布实体，成功路径保留新 payload。此问题与 RV-20261101-01 同源：追加集合检查边界，可原位修改的登记检查代次；以后新增持久登记更新 API 必须核对失败创建边界，不能只检查集合长度。验证使用记录型 committer，不代替真实 WAL/Mongo 恢复实验。
 

@@ -6,7 +6,7 @@
 
 ## 2026-11-07：新功能审查收尾
 
-新增 RV-20261107-01（P2）：联盟迁移检查后仍可提交宣战，迁移完成后补发责任没有自动接续；RV-20261107-02（P2）：best_effort 单 worker Stop 在 handler 返回前关闭 Closed。两项均连续三轮复现。之前三项确认缺陷仍未修复，Lockstep／cellworld 间歇失败仍未关闭。根模块与生成工程 race、客户端及联盟真实进程证据和验证边界见 [收尾报告](FEATURE-REVIEW-20261107.md)。
+新增 RV-20261107-01（P2）：联盟迁移检查后仍可提交宣战，迁移完成后补发责任没有自动接续；RV-20261107-02（P2）：best_effort 单 worker Stop 在 handler 返回前关闭 Closed。两项均连续三轮复现。**RV-20261107-02 已修复（未发版）**：`bestEffortSubscription` 每个回调在接纳锁下检查已停并记入在途（Workers ≤ 1 就地处理的也记），Stop 先关接纳再退订、等在途，Drain 排空后关接纳再等；回归 `TestBestEffortSubscriptionClosesAfterAcceptedHandlers`，见 CHANGELOG `[Unreleased]`。之前三项确认缺陷仍未修复，Lockstep／cellworld 间歇失败仍未关闭。根模块与生成工程 race、客户端及联盟真实进程证据和验证边界见 [收尾报告](FEATURE-REVIEW-20261107.md)。
 
 ## 2026-11-06 续审：cellworld 生命周期与编码
 
@@ -14,7 +14,7 @@
 
 ## 最新新功能审查（2026-11-06，v1.42.0）
 
-新增 best_effort 未纳入失败创建守卫，可发布不存在实体的创建事件。cellworld 跨区抖动完整包有失败，独立复测通过，尚未闭环。见 [审查报告](FEATURE-REVIEW-20261106.md)；不据定向通过宣布上线验收完成。
+新增 best_effort 未纳入失败创建守卫，可发布不存在实体的创建事件（RV-20261106-01）。**RV-20261106-01 已修复（未发版）**：失败创建标记 `createdBuildMark` 同时记录并比对 `tx.bestEffort` 长度，构建里 Emit 了 best_effort 的失败创建同 reliable 一样记 `ErrFailedCreateLeftEffects` 整条回滚、不发布；回归 `TestAFailedCreateDoesNotPublishItsEffects`，见 CHANGELOG `[Unreleased]`。cellworld 跨区抖动完整包有失败，独立复测通过，尚未闭环。见 [审查报告](FEATURE-REVIEW-20261106.md)；不据定向通过宣布上线验收完成。
 
 ## 最新 Linux 复验（2026-11-03，v1.40.1）
 

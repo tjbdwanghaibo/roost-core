@@ -192,6 +192,13 @@ type bestEffortSubscription struct {
 	inFlight chan struct{} // 已接纳、还没处理完的 effect，容量 MaxAckPending（满了回调等，nats.go 的待交付缓冲接着攒）
 	running  chan struct{} // 在跑的 handler，容量 Workers
 	keyed    *worker.KeyedDispatcher
+
+	// acceptMu 保证“先关接纳、再等在途”（RV-20261107-02）：每个回调在 acceptMu 下检查 stopped 并 tasks.Add，
+	// Stop / Drain 在 acceptMu 下置 stopped 之后才 tasks.Wait，所以 Wait 之后不会再有 Add，Closed 之前全部已接纳的
+	// 回调（含 Workers ≤ 1 时在投递 goroutine 上就地执行的）都已返回。原先就地执行的回调不记入 tasks，Closed 在
+	// handler 还在跑时就关闭；Stop 之后到达的消息也仍会调 handler。
+	acceptMu sync.Mutex
+	stopped  bool
 	tasks    sync.WaitGroup
 
 	closeOnce sync.Once
@@ -206,13 +213,19 @@ func (s *bestEffortSubscription) deliver(message *fnats.Msg) {
 		slog.Error("dataengine effects: dropping a best_effort effect that cannot be decoded", "consumer", s.durable, "err", err)
 		return
 	}
+	if !s.accept() {
+		metrics.IncCounter("dataengine.effect_consumer.handled_total", metrics.Labels{"consumer": s.durable, "result": "stopped"}, 1)
+		return
+	}
 	if s.workers <= 1 {
+		defer s.tasks.Done()
 		s.process(envelope)
 		return
 	}
 	select {
 	case s.inFlight <- struct{}{}:
 	case <-s.ctx.Done():
+		s.tasks.Done()
 		metrics.IncCounter("dataengine.effect_consumer.handled_total", metrics.Labels{"consumer": s.durable, "result": "stopped"}, 1)
 		return
 	}
@@ -220,7 +233,6 @@ func (s *bestEffortSubscription) deliver(message *fnats.Msg) {
 	if !s.ordered {
 		key = "" // order=none：不按 Key 排队，只受 Workers 上限
 	}
-	s.tasks.Add(1)
 	run := func() {
 		defer func() {
 			<-s.inFlight
@@ -241,6 +253,24 @@ func (s *bestEffortSubscription) deliver(message *fnats.Msg) {
 		s.tasks.Done()
 		metrics.IncCounter("dataengine.effect_consumer.handled_total", metrics.Labels{"consumer": s.durable, "result": "failed"}, 1)
 	}
+}
+
+// accept 接纳一条 effect：已停止接纳返回 false；否则记入在途（tasks），由调用方在处理结束时 Done。
+func (s *bestEffortSubscription) accept() bool {
+	s.acceptMu.Lock()
+	defer s.acceptMu.Unlock()
+	if s.stopped {
+		return false
+	}
+	s.tasks.Add(1)
+	return true
+}
+
+// stopAccepting 关闭接纳；此后 tasks.Wait 只等已接纳的回调。可重复调用。
+func (s *bestEffortSubscription) stopAccepting() {
+	s.acceptMu.Lock()
+	s.stopped = true
+	s.acceptMu.Unlock()
 }
 
 // process 运行 handler（ctx 以 AckWait 为截止）；错误与 panic 只记日志与计数，没有重投。
@@ -289,13 +319,17 @@ func (s *bestEffortSubscription) Drain() {
 		} else {
 			_ = s.subscription.Unsubscribe()
 		}
+		// 排空（或退订）之后才关接纳：排空期间 nats.go 交来的缓冲消息照常处理。
+		s.stopAccepting()
 		s.tasks.Wait()
 		s.close()
 	}()
 }
 
-// Stop 立刻退订、取消在跑 handler 的 ctx（排队的不再处理），等它们返回后关闭 Closed。不阻塞。
+// Stop 先关接纳（此后到达的消息不再处理），再退订、取消在跑 handler 的 ctx（排队的不再处理），等全部已接纳的回调
+// 返回后关闭 Closed。不阻塞。
 func (s *bestEffortSubscription) Stop() {
+	s.stopAccepting()
 	_ = s.subscription.Unsubscribe()
 	s.cancel()
 	go func() {
