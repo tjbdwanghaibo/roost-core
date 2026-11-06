@@ -809,3 +809,241 @@ func TestForeignKindIsRejectedBeforeOwnershipClaim(t *testing.T) {
 		t.Fatalf("undeclared kind lease=%+v found=%v err=%v", lease, found, err)
 	}
 }
+
+// 所有权查询（GetRemoteOwnership）：本进程稳定独占持有（与独占写准入同一判据 heldExclusively）时答缓存的租约，不向
+// Mongo 发任何命令；答出的租约与权威记录一致。
+func TestExclusiveOwnerAnswersOwnershipQueriesFromItsCache(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db := newCountingMongo()
+	a := newWriterNodesOn(t, db, 2331, nil, 1000)[0]
+	id := testRemoteFullIDWithKind(2331, 1, 125)
+	if _, err := a.write(t, ctx, id, "A1", "", 0x71); err != nil {
+		t.Fatalf("first write (claim and align): %v", err)
+	}
+	before := db.snapshot()
+	var got entity.RemoteEntityMarkerLease
+	for range 5 {
+		lease, found, err := a.mgr.GetRemoteOwnership(ctx, id)
+		if err != nil || !found {
+			t.Fatalf("ownership query: found=%v err=%v", found, err)
+		}
+		got = lease
+	}
+	if calls := db.since(before); len(calls) != 0 {
+		t.Fatalf("5 ownership queries on a stably held exclusive entity issued Mongo commands %v, want none", calls)
+	}
+	want, found, err := a.loader.store.GetOwnership(ctx, id)
+	if err != nil || !found {
+		t.Fatalf("authority: found=%v err=%v", found, err)
+	}
+	if got != want || got.OwnerSid != a.sid || got.Shared {
+		t.Fatalf("cached answer=%+v, want the authority's %+v (owner %d, exclusive)", got, want, a.sid)
+	}
+}
+
+// pausedTransferStore 让转移停在“权威已改、回复还没回到 Manager”这一刻：本地缓存与实例仍是转出之前的样子。
+type pausedTransferStore struct {
+	*MongoCommitter
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *pausedTransferStore) TransferExpected(ctx context.Context, id int64, old entity.RemoteEntityMarkerLease, owner int32) (entity.RemoteEntityMarkerLease, error) {
+	next, err := s.MongoCommitter.TransferExpected(ctx, id, old, owner)
+	close(s.entered)
+	<-s.release
+	return next, err
+}
+
+// queryOwnership 查一次所有权，返回答案与这次查询发出的 Mongo 命令。
+func queryOwnership(t *testing.T, ctx context.Context, db *countingMongo, n sharedWriterNode, id int64) (entity.RemoteEntityMarkerLease, map[string]int) {
+	t.Helper()
+	before := db.snapshot()
+	lease, found, err := n.mgr.GetRemoteOwnership(ctx, id)
+	if err != nil || !found {
+		t.Fatalf("sid %d ownership query: found=%v err=%v", n.sid, found, err)
+	}
+	return lease, db.since(before)
+}
+
+// 不是稳定独占持有时，所有权查询照旧读一次权威：别的 sid 持有、只认领未对齐、实例已淘汰、共享模式、实例已不可写
+// （Fenced）、所有权写锁被变更持有、所有权变更在途（转移停在权威已改、本地未收尾时）、已转出。转出之后两边查到的都是新 owner；新 owner
+// 写过（对齐）之后由它自己的缓存作答。
+func TestOwnershipQueryReadsTheAuthorityUnlessHeldExclusively(t *testing.T) {
+	const metaRead = remoteMetaCollection + ".FindOne"
+	expectAuthorityRead := func(t *testing.T, calls map[string]int) {
+		t.Helper()
+		if calls[metaRead] != 1 {
+			t.Fatalf("ownership query issued %v, want exactly one read of the ownership record", calls)
+		}
+	}
+	cases := []struct {
+		name  string
+		rawID int64
+		run   func(t *testing.T, ctx context.Context, db *countingMongo, a, b sharedWriterNode, id int64)
+	}{
+		{"owned by another sid", 2332, func(t *testing.T, ctx context.Context, db *countingMongo, a, b sharedWriterNode, id int64) {
+			if _, err := a.write(t, ctx, id, "A1", "", 0x72); err != nil {
+				t.Fatal(err)
+			}
+			lease, calls := queryOwnership(t, ctx, db, b, id)
+			expectAuthorityRead(t, calls)
+			if lease.OwnerSid != a.sid {
+				t.Fatalf("B's answer owner=%d, want %d", lease.OwnerSid, a.sid)
+			}
+		}},
+		{"claimed but not aligned", 2333, func(t *testing.T, ctx context.Context, db *countingMongo, a, _ sharedWriterNode, id int64) {
+			if _, err := a.mgr.ClaimRemoteOwnership(ctx, id); err != nil {
+				t.Fatal(err)
+			}
+			lease, calls := queryOwnership(t, ctx, db, a, id)
+			expectAuthorityRead(t, calls)
+			if lease.OwnerSid != a.sid {
+				t.Fatalf("answer owner=%d, want %d", lease.OwnerSid, a.sid)
+			}
+		}},
+		{"evicted", 2334, func(t *testing.T, ctx context.Context, db *countingMongo, a, _ sharedWriterNode, id int64) {
+			if _, err := a.write(t, ctx, id, "A1", "", 0x73); err != nil {
+				t.Fatal(err)
+			}
+			evicted := a.manager.Get(id).(*reloadableFullDocEntity)
+			if err := a.mgr.backend.(entity.IRemoteEntityUnloader).UnloadRemoteEntity(ctx, evicted); err != nil {
+				t.Fatal(err)
+			}
+			lease, calls := queryOwnership(t, ctx, db, a, id)
+			expectAuthorityRead(t, calls)
+			if lease.OwnerSid != a.sid {
+				t.Fatalf("answer owner=%d, want %d", lease.OwnerSid, a.sid)
+			}
+		}},
+		{"shared mode", 2335, func(t *testing.T, ctx context.Context, db *countingMongo, a, _ sharedWriterNode, id int64) {
+			if _, err := a.write(t, ctx, id, "A1", "", 0x74); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := a.mgr.EnterRemoteSharedMode(ctx, id); err != nil {
+				t.Fatal(err)
+			}
+			lease, calls := queryOwnership(t, ctx, db, a, id)
+			expectAuthorityRead(t, calls)
+			if lease.OwnerSid != a.sid || !lease.Shared {
+				t.Fatalf("answer=%+v, want owner %d in shared mode", lease, a.sid)
+			}
+		}},
+		{"hosted instance fenced", 2336, func(t *testing.T, ctx context.Context, db *countingMongo, a, _ sharedWriterNode, id int64) {
+			if _, err := a.write(t, ctx, id, "A1", "", 0x75); err != nil {
+				t.Fatal(err)
+			}
+			// 持久拒绝隔离到卸载之前、或被 fence 的实例：缓存与对齐记录还在，实例已不接受写入。
+			live := a.manager.Get(id).(*reloadableFullDocEntity)
+			if err := live.TransitionRemoteOwnership(entity.RemoteOwnershipFenced); err != nil {
+				t.Fatal(err)
+			}
+			_, calls := queryOwnership(t, ctx, db, a, id)
+			expectAuthorityRead(t, calls)
+		}},
+		{"ownership lock held", 2340, func(t *testing.T, ctx context.Context, db *countingMongo, a, _ sharedWriterNode, id int64) {
+			if _, err := a.write(t, ctx, id, "A1", "", 0x7b); err != nil {
+				t.Fatal(err)
+			}
+			// 所有权变更（认领、转移、进出共享）全程持所有权写锁；哪怕它还没动实例状态，查询也不答缓存。
+			w, _ := a.mgr.get(id)
+			w.ownershipMu.Lock()
+			_, calls := queryOwnership(t, ctx, db, a, id)
+			w.ownershipMu.Unlock()
+			expectAuthorityRead(t, calls)
+		}},
+		{"transition in flight", 2337, func(t *testing.T, ctx context.Context, db *countingMongo, a, b sharedWriterNode, id int64) {
+			if _, err := a.write(t, ctx, id, "A1", "", 0x76); err != nil {
+				t.Fatal(err)
+			}
+			paused := &pausedTransferStore{MongoCommitter: a.loader.store, entered: make(chan struct{}), release: make(chan struct{})}
+			a.mgr.SetOwnershipStore(paused)
+			done := make(chan error, 1)
+			go func() {
+				_, err := a.mgr.TransferRemoteOwnership(ctx, id, b.sid)
+				done <- err
+			}()
+			select {
+			case <-paused.entered:
+			case <-ctx.Done():
+				t.Fatal("transfer never reached the authority")
+			}
+			lease, calls := queryOwnership(t, ctx, db, a, id)
+			close(paused.release)
+			if err := <-done; err != nil {
+				t.Fatalf("transfer: %v", err)
+			}
+			expectAuthorityRead(t, calls)
+			if lease.OwnerSid != b.sid {
+				t.Fatalf("query during the transfer answered owner %d (the stale local cache), want the authority's %d", lease.OwnerSid, b.sid)
+			}
+		}},
+		{"transferred out", 2338, func(t *testing.T, ctx context.Context, db *countingMongo, a, b sharedWriterNode, id int64) {
+			if _, err := a.write(t, ctx, id, "A1", "", 0x77); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := a.mgr.TransferRemoteOwnership(ctx, id, b.sid); err != nil {
+				t.Fatal(err)
+			}
+			for _, n := range []sharedWriterNode{a, b} {
+				lease, calls := queryOwnership(t, ctx, db, n, id)
+				expectAuthorityRead(t, calls)
+				if lease.OwnerSid != b.sid {
+					t.Fatalf("sid %d answered owner %d after the transfer, want %d", n.sid, lease.OwnerSid, b.sid)
+				}
+			}
+			if _, err := b.write(t, ctx, id, "", "B1", 0x78); err != nil {
+				t.Fatalf("new owner's first write: %v", err)
+			}
+			if lease, calls := queryOwnership(t, ctx, db, a, id); lease.OwnerSid != b.sid || calls[metaRead] != 1 {
+				t.Fatalf("old owner answered %+v with %v, want owner %d from one authority read", lease, calls, b.sid)
+			}
+			want, _, err := b.loader.store.GetOwnership(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if lease, calls := queryOwnership(t, ctx, db, b, id); lease != want || len(calls) != 0 {
+				t.Fatalf("new owner after aligning answered %+v with %v, want the authority's %+v from its cache", lease, calls, want)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			db := newCountingMongo()
+			nodes := newWriterNodesOn(t, db, tc.rawID, nil, 1000, 1004)
+			tc.run(t, ctx, db, nodes[0], nodes[1], testRemoteFullIDWithKind(tc.rawID, 1, 125))
+		})
+	}
+}
+
+// 单实例前提被打破（所有权在 owner 背后被改到别的 sid）：写发现之前，查询仍答本 sid（与独占写准入同一前提，已接受的
+// 代价）；写在投影上被拒、实例隔离卸载之后，查询回到读权威，答出新 owner，业务据此改投。
+func TestOwnershipQueryFollowsTheAuthorityOnceABrokenPremiseIsCaught(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	db := newCountingMongo()
+	a := newWriterNodesOn(t, db, 2339, nil, 1000)[0]
+	id := testRemoteFullIDWithKind(2339, 1, 125)
+	if _, err := a.write(t, ctx, id, "A1", "", 0x79); err != nil {
+		t.Fatal(err)
+	}
+	owner, _, err := a.loader.store.GetOwnership(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.loader.store.TransferExpected(ctx, id, owner, 2000); err != nil {
+		t.Fatal(err)
+	}
+	if lease, calls := queryOwnership(t, ctx, db, a, id); lease.OwnerSid != a.sid || len(calls) != 0 {
+		t.Fatalf("before any write noticed: answered %+v with %v, want the cached owner %d without I/O", lease, calls, a.sid)
+	}
+	if _, err := a.write(t, ctx, id, "A2", "", 0x7a); !errors.Is(err, entity.ErrRemoteVersionConflict) && !errors.Is(err, entity.ErrRemoteFenced) {
+		t.Fatalf("write after the ownership moved behind the owner: err=%v, want a rejection", err)
+	}
+	if lease, calls := queryOwnership(t, ctx, db, a, id); lease.OwnerSid != 2000 || calls[remoteMetaCollection+".FindOne"] != 1 {
+		t.Fatalf("after the rejected write: answered %+v with %v, want owner 2000 from one authority read", lease, calls)
+	}
+}

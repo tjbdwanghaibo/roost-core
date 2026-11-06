@@ -10,7 +10,15 @@ import (
 
 var _ entity.RemoteOwnershipManager = (*Manager)(nil)
 
-// GetRemoteOwnership 读取实体在权威中的所有权记录。
+// GetRemoteOwnership 返回实体当前的所有权。
+//
+// 本进程对它是稳定的独占持有时（heldOwnership：与独占写准入同一判据 heldExclusively，且没有所有权变更在途、托管的
+// 实例可写），直接答本进程缓存的租约，不读权威；其余情况——别的 sid、共享模式、只认领未对齐、实例未托管或已淘汰、
+// 实例已 Fenced / Draining / Quarantined、认领 / 转移 / 进出共享在途、非持久权威——读一次持久所有权记录。
+//
+// 前提与独占写准入相同：一个实体同一时刻只有一个 owner，由 App 单实例与 fail-stop 保证；独占实体的所有权只由 owner
+// 进程自己改，改动都同步写进缓存。前提被打破（崩溃重启的短暂重叠）时这里可能仍答本 sid，但不会写坏数据：之后的写在
+// 投影的版本 / 代际条件上被拒、实例隔离卸载，此后的查询回到读权威，业务按 moved / 改投收敛。
 func (m *Manager) GetRemoteOwnership(ctx context.Context, id int64) (entity.RemoteEntityMarkerLease, bool, error) {
 	if m == nil || m.ownershipStore == nil {
 		return entity.RemoteEntityMarkerLease{}, false, entity.ErrRemoteWriteCapabilityDisabled
@@ -19,9 +27,51 @@ func (m *Manager) GetRemoteOwnership(ctx context.Context, id int64) (entity.Remo
 	if meta.FullID == 0 || !entity.IsEntityKindRemoteManaged(meta.Kind) {
 		return entity.RemoteEntityMarkerLease{}, false, fmt.Errorf("%w: invalid entity %d", entity.ErrRemoteRejected, id)
 	}
+	if lease, ok := m.heldOwnership(meta.FullID); ok {
+		return lease, true, nil
+	}
 	ctx, cancel := m.ownershipContext(ctx)
 	defer cancel()
 	return m.ownershipStore.GetOwnership(ctx, meta.FullID)
+}
+
+// heldOwnership 报告本进程是否稳定独占持有实体 id，是则返回缓存的租约。判据就是独占写准入的判据：
+//
+//   - 不阻塞地取得所有权读锁（写准入持同一把读锁）：认领、转移、进出共享持写锁，变更在途时取不到，答权威；
+//   - heldExclusively：持久权威下缓存是本 sid 独占，托管的实例就是在这份租约下对齐过的那份；
+//   - 实例的所有权状态可写（LocalOwned，或对齐后尚未写过的 Unknown）：Draining / Fenced / Recovering / Quarantined
+//     （转出中、已转出、结果未知、持久拒绝待重载）一律答权威。
+//
+// 只看已有的 wrapper，不为查询创建 wrapper、不加载实例。
+func (m *Manager) heldOwnership(id int64) (entity.RemoteEntityMarkerLease, bool) {
+	if _, durable := m.ownershipStore.(WriteAuthority); !durable {
+		return entity.RemoteEntityMarkerLease{}, false
+	}
+	m.mu.RLock()
+	w := m.wrappers[id]
+	if w != nil {
+		// 持有引用期间 wrapper 不会被淘汰（pruneWrappersLocked 只删 refs 为 0 的），读到的缓存不会是一份已被替换的旧 wrapper。
+		w.retain()
+	}
+	m.mu.RUnlock()
+	if w == nil {
+		return entity.RemoteEntityMarkerLease{}, false
+	}
+	defer w.release()
+	if !w.ownershipMu.TryRLock() {
+		return entity.RemoteEntityMarkerLease{}, false
+	}
+	defer w.ownershipMu.RUnlock()
+	held, lease, ok := w.heldExclusively(true)
+	if !ok {
+		return entity.RemoteEntityMarkerLease{}, false
+	}
+	switch held.RemoteOwnershipState() {
+	case entity.RemoteOwnershipLocalOwned, entity.RemoteOwnershipUnknown:
+		return lease, true
+	default:
+		return entity.RemoteEntityMarkerLease{}, false
+	}
 }
 
 // ClaimRemoteOwnership 原子地创建第一代本地所有权。对本服务幂等；别的服务赢得认领时按 fence 失败。
