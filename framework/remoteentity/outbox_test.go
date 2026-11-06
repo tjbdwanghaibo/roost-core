@@ -16,6 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/internal/stopcontract"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -1229,5 +1230,56 @@ func TestOutboxDetachedPublicationFailureIsRetried(t *testing.T) {
 	outboxLoopIdle(t, manager, "the retry finished")
 	if state := manager.localRemoteCommitState(tx); state != entity.RemoteCommitCommitted {
 		t.Fatalf("tracker=%v after the retry, want Committed", state)
+	}
+}
+
+// 慢发布转到后台后仍在途：之后每次扫描它在 outbox 里仍是 Applied、仍被判为“要代发”，但 publishOutboxPage 会跳过它，
+// 不能再计一次代发。修复前 selectOutboxPage 先计数、后由发布环节跳过在途项，后台慢发布期间每扫一次多计一次
+// takeover_total（2026-11-06 发版前真实进程演练 -race 下 taker_clock_3s 一格得 2、want 1）。
+func TestOutboxTakeoverIsCountedOnceWhileThePublicationIsInFlight(t *testing.T) {
+	previous := metrics.DefaultRegistry()
+	metrics.SetDefaultRegistry(metrics.NewRegistry())
+	t.Cleanup(func() { metrics.SetDefaultRegistry(previous) })
+	takeovers := func() int64 {
+		var total int64
+		for _, m := range metrics.Snapshot() {
+			if m.Name == "remote_entity.outbox.takeover_total" {
+				total += m.Value
+			}
+		}
+		return total
+	}
+
+	mongo := newRemoteMongoFake()
+	cfg := DefaultConfig()
+	cfg.FinalizeProjectionTimeout = time.Minute
+	other := newOutboxPeer(t, mongo, 2000, cfg, true)
+	clock := &outboxClock{}
+	other.mgr.remote.outboxNow = clock.now
+	created := time.Unix(1_800_000_000, 0)
+	tx := remoteTestTxID(209)
+	insertAppliedOutboxCommit(t, mongo, tx, 7409, 1, 1000, created)
+	clock.set(created.Add(time.Minute))
+	pending, err := other.storage.MongoCommitter.PendingRemoteCommits(context.Background(), 10)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending=%d err=%v", len(pending), err)
+	}
+
+	if selected, _ := other.mgr.selectOutboxPage(pending); len(selected) != 1 || takeovers() != 1 {
+		t.Fatalf("first scan past the grace: selected=%d takeover_total=%d, want 1 and 1", len(selected), takeovers())
+	}
+	state := other.mgr.remote
+	state.outboxMu.Lock()
+	if state.outboxInflight == nil {
+		state.outboxInflight = make(map[entity.RemoteTransactionID]struct{})
+		state.outboxBusy = make(map[int64]int)
+	}
+	state.outboxInflight[tx] = struct{}{} // 上一页把它转到了后台，仍在发布
+	state.outboxMu.Unlock()
+	for range 3 {
+		other.mgr.selectOutboxPage(pending)
+	}
+	if got := takeovers(); got != 1 {
+		t.Fatalf("takeover_total=%d after three scans while the publication was in flight, want 1", got)
 	}
 }

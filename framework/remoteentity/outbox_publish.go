@@ -273,6 +273,14 @@ func (m *Manager) selectOutboxPage(pending []entity.RemoteCommitStatus) ([]entit
 	at := now()
 	grace := m.outboxTakeoverGrace()
 	publish := make([]bool, len(pending))
+	// 已在途的（上一页转到后台的慢发布）这一轮仍判为要发布，由 publishOutboxPage 跳过；但不再计代发次数，
+	// 否则慢发布在后台期间每扫一次就多计一次 takeover_total（真实进程演练 -race 下见过 want 1 得 2）。
+	inflight := m.outboxInflightSet(pending)
+	takeover := func(i int, reason string) {
+		if !inflight[pending[i].TransactionID] {
+			metrics.IncCounter("remote_entity.outbox.takeover_total", metrics.Labels{"reason": reason}, 1)
+		}
+	}
 	deferred := 0
 	for i := range pending {
 		status := &pending[i]
@@ -281,7 +289,7 @@ func (m *Manager) selectOutboxPage(pending []entity.RemoteCommitStatus) ([]entit
 			publish[i] = true
 		case !at.Before(status.CreatedAt.Add(grace)):
 			publish[i] = true
-			metrics.IncCounter("remote_entity.outbox.takeover_total", metrics.Labels{"reason": "grace"}, 1)
+			takeover(i, "grace")
 		default:
 			deferred++
 		}
@@ -297,7 +305,7 @@ func (m *Manager) selectOutboxPage(pending []entity.RemoteCommitStatus) ([]entit
 				if _, found := later[commit.EntityID]; found {
 					publish[i] = true
 					deferred--
-					metrics.IncCounter("remote_entity.outbox.takeover_total", metrics.Labels{"reason": "successor"}, 1)
+					takeover(i, "successor")
 					break
 				}
 			}
@@ -369,4 +377,21 @@ func (m *Manager) armOutboxTakeover(due time.Time) {
 		m.scheduleOutboxRepublish()
 	})
 	state.takeoverTimer = timer
+}
+
+// outboxInflightSet 返回这一页里正在发布（在途登记里）的事务。
+func (m *Manager) outboxInflightSet(pending []entity.RemoteCommitStatus) map[entity.RemoteTransactionID]bool {
+	state := m.remote
+	state.outboxMu.Lock()
+	defer state.outboxMu.Unlock()
+	if len(state.outboxInflight) == 0 {
+		return nil
+	}
+	inflight := make(map[entity.RemoteTransactionID]bool)
+	for _, status := range pending {
+		if _, found := state.outboxInflight[status.TransactionID]; found {
+			inflight[status.TransactionID] = true
+		}
+	}
+	return inflight
 }

@@ -94,16 +94,17 @@ type outboxDrillEvent struct {
 	Counters    map[string]int64 `json:"counters,omitempty"`
 }
 
-// drillOutboxStorage 记下本进程每次标记已发布的时刻，以及标记前记录是否已被别的进程标记（Committed）。
+// drillOutboxStorage 记下本进程每次标记已发布的时刻，以及这次标记是否真的把记录由 Applied 改成了 Committed。
+// Already 取条件更新的结果，而不是标记前读一次状态：两个进程几乎同时标记时，先读后标记会让两边都读到 Applied、
+// 都被算成第一个发布者（2026-11-06 发版前全量验证在“接管方时钟快 2.7 s”一格出现过“x0 moved … 2 times”）。
 type drillOutboxStorage struct {
 	*MongoCommitter
 	emit func(outboxDrillEvent)
 }
 
 func (s *drillOutboxStorage) MarkRemoteCommitPublished(ctx context.Context, id entity.RemoteTransactionID) error {
-	before, _ := s.MongoCommitter.CommitStatus(ctx, id)
-	err := s.MongoCommitter.MarkRemoteCommitPublished(ctx, id)
-	event := outboxDrillEvent{Ev: "mark", TX: id.String(), At: time.Now().UnixNano(), Already: before.State == entity.RemoteCommitCommitted}
+	transitioned, err := s.MongoCommitter.markRemoteCommitPublished(ctx, id)
+	event := outboxDrillEvent{Ev: "mark", TX: id.String(), At: time.Now().UnixNano(), Already: err == nil && !transitioned}
 	if err != nil {
 		event.Err = err.Error()
 	}
@@ -825,8 +826,13 @@ func TestRealOutboxTakeoverAfterWriterCrashUnderClockSkew(t *testing.T) {
 			if delay < want-50*time.Millisecond || delay > want+time.Second {
 				t.Fatalf("taken over %v after the write, want about %v (grace %v, taker clock %+v)", delay, want, timing.grace, offset)
 			}
-			if got := tm.Counters["remote_entity.outbox.takeover_total{reason=grace}"]; got != 1 {
-				t.Fatalf("takeover_total{grace}=%d, want 1", got)
+			// 崩溃的那笔只被代发一次由上面的标记判断（first 是 T、不是 Already）。计数器还会计入 T 判为“要代发”的其他提交：
+			// 实际宽限期 grace − offset ≤ 0 时 T 对 W 留下的任何 Applied 提交都立即代发，包括 W 正在自己发布的准备写
+			// （T 标记时读到已是 Committed），这是文档写明的“代发方时钟快过宽限期即退化为立即代发”，不是重复发布。
+			takeovers := tm.Counters["remote_entity.outbox.takeover_total{reason=grace}"]
+			if takeovers < 1 || (timing.grace-offset > 0 && takeovers != 1) {
+				t.Fatalf("takeover_total{grace}=%d, want 1 (at least 1 when the effective grace %v is not positive; taker marks %+v; crash commit %s)",
+					takeovers, timing.grace-offset, taker.find(func(event outboxDrillEvent) bool { return event.Ev == "mark" }), tx)
 			}
 			report[offset.String()] = map[string]any{"created_to_takeover": ms(delay), "expected": ms(want), "kill_after_created": ms(killed.Sub(created)), "marks": marks, "taker_counters": tm.Counters}
 			t.Logf("taker clock %+v: taken over %v after the write (expected %v), once", offset, delay, want)

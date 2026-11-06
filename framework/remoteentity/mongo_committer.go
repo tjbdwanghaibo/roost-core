@@ -405,21 +405,30 @@ func (s *MongoCommitter) PendingRemoteCommitPage(ctx context.Context, after enti
 }
 
 func (s *MongoCommitter) MarkRemoteCommitPublished(ctx context.Context, id entity.RemoteTransactionID) error {
+	_, err := s.markRemoteCommitPublished(ctx, id)
+	return err
+}
+
+// markRemoteCommitPublished 以条件更新把事务由 Applied 改为 Committed：同一事务只有一次调用能匹配到 Applied，
+// transitioned 为 true 的就是那一次；已是 Committed（别的进程先标记了）返回 transitioned=false、err=nil。
+// 演练要按这个结果判断“谁是第一个发布者”——先读状态再标记的判断在两个进程几乎同时标记时会把两边都算成第一个。
+func (s *MongoCommitter) markRemoteCommitPublished(ctx context.Context, id entity.RemoteTransactionID) (transitioned bool, err error) {
 	now := time.Now().UTC()
 	result, err := s.controlDB().Collection(remoteTxCollection).UpdateOne(ctx, bson.M{"_id": id.String(), "state": uint8(entity.RemoteCommitApplied)}, bson.M{"$set": bson.M{"state": uint8(entity.RemoteCommitCommitted), "published_at": now.UnixNano(), "expires_at": now}})
 	if err != nil {
-		return err
+		return false, err
 	}
-	if result == nil || result.MatchedCount == 0 {
-		status, ok, err := s.loadStatus(ctx, id)
-		if err != nil {
-			return err
-		}
-		if !ok || status.State != entity.RemoteCommitCommitted {
-			return entity.ErrRemotePersistenceIndeterminate
-		}
+	if result != nil && result.MatchedCount > 0 {
+		return true, nil
 	}
-	return nil
+	status, ok, err := s.loadStatus(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	if !ok || status.State != entity.RemoteCommitCommitted {
+		return false, entity.ErrRemotePersistenceIndeterminate
+	}
+	return false, nil
 }
 
 func remoteTransactionTTLSeconds(ttl time.Duration) int32 {
