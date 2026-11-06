@@ -1,0 +1,36 @@
+package cellworld
+
+import (
+ "testing"
+ "time"
+ "github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+func TestReviewOldLeaveMustNotDeleteReenteredActor(t *testing.T) {
+ spec, lb := loopbackSpec(t, 1, 1)
+ w := startWorld(t, spec)
+ cell := CellID{0,0}
+ first := w.enter(1, spatial.Point{X:5000,Y:5000})
+ type captured struct { subject string; data []byte }
+ saved := make(chan captured,1)
+ lb.setFault(func(subject string,m *wireMsg)(bool,bool,time.Duration){
+  if m.Kind == kindLeave { raw,err:=encodeMsg(m); if err==nil { select {case saved<-captured{subject,raw}:default:} } }
+  return false,false,0
+ })
+ ctx,cancel:=w.ctx(); defer cancel()
+ if err:=w.base.node.Leave(ctx,w.base.player(1).ID());err!=nil {t.Fatal(err)}
+ var old captured
+ select {case old=<-saved:case <-time.After(3*time.Second):t.Fatal("leave not captured")}
+ waitFor(t,3*time.Second,"first actor removed",func()bool{_,ok:=w.roleOf(cell,actorID(1));return !ok})
+ w.resetViews(1)
+ second:=w.enter(1,spatial.Point{X:5000,Y:5000})
+ if second.Epoch<=first.Epoch { t.Fatalf("epoch did not advance: %d -> %d",first.Epoch,second.Epoch) }
+ lb.setFault(nil)
+ if err:=lb.Publish(old.subject,old.data);err!=nil{t.Fatal(err)}
+ deadline:=time.Now().Add(300*time.Millisecond)
+ for time.Now().Before(deadline) {
+  s,ok:=w.roleOf(cell,actorID(1))
+  if !ok || s.Role!="real" {t.Fatalf("old Leave deleted new actor: old epoch=%d new epoch=%d present=%v role=%s",first.Epoch,second.Epoch,ok,s.Role)}
+  time.Sleep(5*time.Millisecond)
+ }
+}

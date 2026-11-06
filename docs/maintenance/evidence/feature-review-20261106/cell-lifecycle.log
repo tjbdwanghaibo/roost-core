@@ -1,0 +1,17 @@
+=== RUN   TestCellCrashPlayerReentersFromSnapshot
+2026/11/06 11:52:48 WARN async handler failed title=nest handler=cellworld_input type=Single key=1873 tid=1873 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+--- PASS: TestCellCrashPlayerReentersFromSnapshot (2.36s)
+=== RUN   TestBaseGoneSceneActorExpires
+--- PASS: TestBaseGoneSceneActorExpires (2.27s)
+=== RUN   TestWritebackIsIdempotentAndOrdered
+--- PASS: TestWritebackIsIdempotentAndOrdered (2.16s)
+=== RUN   TestHandoffRollbackDoesNotHandOver
+2026/11/06 11:52:53 WARN async handler failed title=nest handler=cellworld_actor type=Multi key=105294 tid=0 tids=2 groups=0 cost=false remote=false err="cellworld: start 1873: injected install failure"
+--- PASS: TestHandoffRollbackDoesNotHandOver (0.56s)
+=== RUN   TestHandlersBindToExactlyOneNode
+--- PASS: TestHandlersBindToExactlyOneNode (0.00s)
+=== RUN   TestCloseIngressStopsTakingMessagesAndWaitsForTheOneInFlight
+2026/11/06 11:52:54 WARN async handler failed title=nest handler=cellworld_input type=Single key=8017 tid=8017 tids=0 groups=0 cost=false remote=false err="entity_not_found: entity not found: nest: entity not found"
+--- PASS: TestCloseIngressStopsTakingMessagesAndWaitsForTheOneInFlight (0.44s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	8.813s

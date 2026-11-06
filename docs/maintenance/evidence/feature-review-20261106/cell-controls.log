@@ -1,0 +1,14 @@
+=== RUN   TestReviewBaseStateMsgpackRoundTrip
+--- PASS: TestReviewBaseStateMsgpackRoundTrip (0.00s)
+=== RUN   TestReviewOldLeaveMustNotDeleteReenteredActor
+--- PASS: TestReviewOldLeaveMustNotDeleteReenteredActor (0.42s)
+=== RUN   TestReviewBaseStateMsgpackRoundTrip
+--- PASS: TestReviewBaseStateMsgpackRoundTrip (0.00s)
+=== RUN   TestReviewOldLeaveMustNotDeleteReenteredActor
+--- PASS: TestReviewOldLeaveMustNotDeleteReenteredActor (0.42s)
+=== RUN   TestReviewBaseStateMsgpackRoundTrip
+--- PASS: TestReviewBaseStateMsgpackRoundTrip (0.00s)
+=== RUN   TestReviewOldLeaveMustNotDeleteReenteredActor
+--- PASS: TestReviewOldLeaveMustNotDeleteReenteredActor (0.42s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	2.287s
