@@ -1036,9 +1036,10 @@ func TestOutboxSlowPublicationDoesNotHoldUpLaterCommits(t *testing.T) {
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(slowRelease) }) }
 	t.Cleanup(release)
+	var startedOnce sync.Once
 	writer.storage.beforeMark = func(id entity.RemoteTransactionID) {
 		if id == slow {
-			close(slowStarted)
+			startedOnce.Do(func() { close(slowStarted) })
 			<-slowRelease
 		}
 	}
@@ -1199,7 +1200,11 @@ func TestOutboxDetachedPublicationFailureIsRetried(t *testing.T) {
 	manager := NewManager(newMockVersionedLockFactory(), cfg, 1000)
 	manager.remote.stragglerWait = 10 * time.Millisecond
 	manager.SetBackend(backend)
-	t.Cleanup(func() { _ = manager.StopFinalizer(context.Background()) })
+	var release sync.Once
+	t.Cleanup(func() {
+		release.Do(func() { close(backend.release) }) // 标记不理会取消：先放行，停机才能等到它结束
+		_ = manager.StopFinalizer(context.Background())
+	})
 	if err := manager.trackRemoteTransaction(tx); err != nil {
 		t.Fatal(err)
 	}
@@ -1212,7 +1217,7 @@ func TestOutboxDetachedPublicationFailureIsRetried(t *testing.T) {
 	}
 	outboxLoopIdle(t, manager, "the slow publication was not moved to the background")
 	failedAt := time.Now()
-	close(backend.release)
+	release.Do(func() { close(backend.release) })
 	select {
 	case <-backend.started:
 	case <-time.After(3 * time.Second):
