@@ -107,16 +107,22 @@ internal static partial class Program
         var release = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var peer = Task.Run(async () =>
         {
+            (string Ticket, ulong Generation) firstAuth;
             using (var first = await listener.AcceptTcpClientAsync())
             {
                 var auth = await Read(first.GetStream());
+                firstAuth = ParseAuth(auth.Payload.Span);
                 await Send(first.GetStream(), new Packet(0, auth.Sequence, Array.Empty<byte>()));
                 await release.Task;
             }
             using var second = await listener.AcceptTcpClientAsync();
             var next = await Read(second.GetStream());
-            Check(System.Text.Encoding.UTF8.GetString(next.Payload.Span) == "ticket2", "reconnect renews credential");
+            var nextAuth = ParseAuth(next.Payload.Span);
+            Check(firstAuth.Ticket == "ticket1" && nextAuth.Ticket == "ticket2", "reconnect renews credential");
             await Send(second.GetStream(), new Packet(0, next.Sequence, Array.Empty<byte>()));
+            // 每次连接取新的连接代号，重连的更大（跨 Gate 时 Game 据此认出迟到的旧握手）。先应答再判，让失败落在这条承诺上。
+            Check(firstAuth.Generation != 0 && nextAuth.Generation > firstAuth.Generation,
+                $"reconnect carries a larger connection generation: first {firstAuth.Generation}, reconnect {nextAuth.Generation}");
             try { await Read(second.GetStream()); } catch (IOException) { }
         });
         try

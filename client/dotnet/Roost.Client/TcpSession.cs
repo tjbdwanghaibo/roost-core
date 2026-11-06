@@ -44,7 +44,12 @@ namespace Roost.Client
                 throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout and capacities must be positive.");
             ValidateTimeout(timeout);
             byte[] ticket = Encoding.UTF8.GetBytes(token ?? throw new ArgumentNullException(nameof(token)));
-            if (ticket.Length == 0 || ticket.Length > 8192) throw new ArgumentException("Ticket must be 1..8192 UTF-8 bytes.", nameof(token));
+            // 服务端缺省的鉴权首包上限是 8 KiB（gateway TCPConfig.MaxHandshakeBytes），其中 10 字节是连接代号信封。
+            if (ticket.Length == 0 || ticket.Length > 8182) throw new ArgumentException("Ticket must be 1..8182 UTF-8 bytes.", nameof(token));
+            if (ticket[0] == 0) throw new ArgumentException("Ticket must not start with a NUL byte.", nameof(token));
+            // 鉴权首包带本次连接的新代号（AuthPayload）：同一会话跨 Gate 重连时，Game 据此认出迟到完成的旧握手。
+            // 代号在发起连接时取，越晚发起的连接越大；每次 ConnectAsync（包括 Connection 的自动重连）都取新的。
+            byte[] auth = AuthPayload.Encode(ticket, AuthPayload.NextConnectionGeneration());
             var tcp = new TcpClient();
             TcpSession? session = null;
             using (var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
@@ -57,7 +62,7 @@ namespace Roost.Client
                     budget.Token.ThrowIfCancellationRequested();
                     tcp.NoDelay = true;
                     session = new TcpSession(tcp.GetStream(), maxPayload, maxPending, maxPushes);
-                    Packet ack = await session.RequestAsync(0, 0, ticket, timeout, budget.Token).ConfigureAwait(false);
+                    Packet ack = await session.RequestAsync(0, 0, auth, timeout, budget.Token).ConfigureAwait(false);
                     if (ack.Payload.Length != 0) throw new InvalidDataException("Authentication acknowledgement must be empty.");
                     return session;
                 }

@@ -16,11 +16,15 @@ internal static partial class Program
     private static ulong GoldenStateHash;
     private static async Task<int> Main(string[] args)
     {
-        // 只接受两种调用：金样路径（本地自测），或金样路径 + 生成工程 TCP 地址（TestClientSDKAgainstGeneratedPlayerTCP）。
+        // 只接受三种调用：金样路径（本地自测）；金样路径 + 生成工程 TCP 地址（TestClientSDKAgainstGeneratedPlayerTCP）；
+        // 金样路径 + cross-gate + 两个 Gate 端口 + 回显请求 / 应答编号（gateway 包的跨 Gate 放弃握手回归，只跑该场景）。
         // 其他参数个数打印用法并以 2 退出，不让缺参数变成 IndexOutOfRangeException。
+        if (args.Length == 6 && args[1] == "cross-gate")
+            return await CrossGate(int.Parse(args[2]), int.Parse(args[3]), uint.Parse(args[4]), uint.Parse(args[5]));
         if (args.Length != 1 && args.Length != 3)
         {
             Console.Error.WriteLine("usage: dotnet run --project client/dotnet/Roost.Client.Tests -- <packets.json> [<host> <port>]");
+            Console.Error.WriteLine("       ... -- <packets.json> cross-gate <gateAPort> <gateBPort> <requestId> <responseId>");
             Console.Error.WriteLine("  e.g. dotnet run --project client/dotnet/Roost.Client.Tests -- client/spec/packets.json");
             return 2;
         }
@@ -80,6 +84,7 @@ internal static partial class Program
                 var command = LockstepCommand.Decode(packet.Payload.Span);
                 Check(Convert.ToHexString(command.Encode()) == Convert.ToHexString(packet.Payload.Span), "Go/C# command");
             }
+            CheckAuthGolden(item.GetProperty("name").GetString()!, item, packet);
             Console.WriteLine("PASS golden " + item.GetProperty("name").GetString());
             foreach (byte flags in new byte[] { 6, 7, 8, 128 })
             {
@@ -92,6 +97,7 @@ internal static partial class Program
         Refuses(() => PacketCodec.Encode(new Packet(1, 1, new byte[0], (PayloadKind)3)), "reserved kind");
         Refuses(() => SyncFrame.Decode(RawSync.AsSpan(0, RawSync.Length - 1)), "truncated sync");
         Console.WriteLine("PASS malformed/limits/lockstep");
+        TestAuthPayload();
         TestLockstep();
         TestLockstepSnapshot();
         TestSyncReceiver();

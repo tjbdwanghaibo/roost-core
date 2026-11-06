@@ -1,12 +1,18 @@
 package gateway
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
+	"os/exec"
+	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -613,6 +619,162 @@ func TestAcrossGatesALateBindWithAnOlderConnectionGenerationDoesNotRetireTheNewe
 	}
 	if oldAcked {
 		t.Error("the old connection on gate A whose Bind finished late was acknowledged; the Gate must close it on the refused Bind")
+	}
+}
+
+// C# 运行库（client/dotnet，Unity 托管适配同用）跨 Gate 放弃握手：客户端在 Gate A 上发出认证帧，它的 Bind 停在
+// Game 的鉴权里；客户端放弃这次握手（取消 ConnectAsync，关掉连接），立即连到 Gate B 走完握手并答完一个请求；
+// 之后才放行 Gate A 上的旧 Bind。运行库在认证帧里带连接代号（越晚发起的连接代号越大），Game 认出迟到的旧 Bind
+// 并拒掉它，Gate B 上的新连接不被断开（GATEWAY §3、client/README“鉴权首包的连接代号”）。认证帧不带代号时 Game
+// 让后完成的旧 Bind 胜出、退役新绑定（修前行为，本用例对它变红）。
+//
+// 客户端是真实进程：ROOST_CLIENT_TEST_DLL 指向构建好的 Roost.Client.Tests.dll（scripts/test-client-dotnet.sh 构建后
+// 设置），没设时跳过。两边的先后用屏障控制：C# 发起旧握手后等标准输入的 abandon（Go 确认旧 Bind 已进入 Game 鉴权
+// 才发），新连接答完请求后打印 new-ready，Go 收到后才放行旧 Bind；绑定表定下结果后 Go 发 check，C# 在新连接上
+// 再请求一次。
+func TestAcrossGatesTheCSharpClientThatAbandonsAHandshakeKeepsItsNewerConnection(t *testing.T) {
+	dll := os.Getenv("ROOST_CLIENT_TEST_DLL")
+	if dll == "" {
+		t.Skip("ROOST_CLIENT_TEST_DLL not set (scripts/test-client-dotnet.sh builds the C# client and runs this test)")
+	}
+	if _, err := exec.LookPath("dotnet"); err != nil {
+		t.Skip(".NET SDK unavailable")
+	}
+	broker := newLoopbackBroker()
+	gateA := ProcessIdentity{ServerID: 11, Incarnation: "gate000000000001"}
+	gateB := ProcessIdentity{ServerID: 12, Incarnation: "gate000000000002"}
+	gameID := ProcessIdentity{ServerID: 22, Incarnation: "game000000000001"}
+	principal := Principal{PlayerID: 7, ServerID: gameID.ServerID, SessionID: "same"}
+	oldEntered, releaseOld := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseOld) }) })
+	gameAuth := AuthenticatorFunc(func(_ context.Context, ticket string, _ net.Addr) (Principal, error) {
+		if ticket == "old" {
+			close(oldEntered)
+			<-releaseOld
+		}
+		return principal, nil
+	})
+	activated := make(chan Binding, 4)
+	game := startStandaloneGame(t, broker, gameID, gameAuth, func(binding Binding) { activated <- binding })
+	gatePrincipal := AuthenticatorFunc(func(context.Context, string, net.Addr) (Principal, error) { return principal, nil })
+	serverA := startStandaloneGate(t, broker, gateA, gameID, gatePrincipal)
+	serverB := startStandaloneGate(t, broker, gateB, gameID, gatePrincipal)
+	port := func(server *TCPServer) string { return strconv.Itoa(server.Addr().(*net.TCPAddr).Port) }
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	client := exec.CommandContext(ctx, "dotnet", dll, "../../../client/spec/packets.json", "cross-gate", port(serverA), port(serverB),
+		strconv.FormatUint(uint64(stuckRequestID), 10), strconv.FormatUint(uint64(stuckResponseID), 10))
+	client.Env = append(os.Environ(), "DOTNET_CLI_TELEMETRY_OPTOUT=1")
+	stdin, err := client.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := client.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	client.Stderr = &stderr
+	if err := client.Start(); err != nil {
+		t.Fatal(err)
+	}
+	lines := make(chan string, 16)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			lines <- scanner.Text()
+		}
+	}()
+	var transcript []string
+	// fail 先结束 C# 进程并等它退出，再读 stderr（exec 的拷贝协程写完之后读，不与它竞争）。
+	fail := func(format string, args ...any) {
+		t.Helper()
+		_ = client.Process.Kill()
+		_ = client.Wait()
+		t.Fatalf(format+"\ntranscript: %s\nstderr: %s", append(args, strings.Join(transcript, " | "), stderr.String())...)
+	}
+	expect := func(want string) {
+		t.Helper()
+		for {
+			select {
+			case line, ok := <-lines:
+				if !ok {
+					fail("the C# client exited before %q", want)
+				}
+				transcript = append(transcript, line)
+				if line == want {
+					return
+				}
+			case <-time.After(10 * time.Second):
+				fail("the C# client never printed %q", want)
+			}
+		}
+	}
+	send := func(line string) {
+		t.Helper()
+		if _, err := io.WriteString(stdin, line+"\n"); err != nil {
+			fail("write %q to the C# client: %v", line, err)
+		}
+	}
+
+	select {
+	case <-oldEntered:
+	case <-time.After(10 * time.Second):
+		fail("the C# client's first Bind never reached the Game authenticator")
+	}
+	send("abandon")
+	expect("new-ready")
+	var newerBinding Binding
+	select {
+	case newerBinding = <-activated:
+	case <-time.After(2 * time.Second):
+		fail("the newer connection on gate B was never activated")
+	}
+	if newerBinding.Gate != gateB {
+		fail("the first activated binding is on %+v, want gate B", newerBinding.Gate)
+	}
+	releaseOnce.Do(func() { close(releaseOld) })
+	// 等 Game 定下旧 Bind 的结果（拒绝，或确认并退役新绑定）：gate A 上的记录离开 pending。
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		game.bindings.mu.Lock()
+		settled := false
+		for _, record := range game.bindings.byConnection {
+			if record.identity.Gate == gateA && record.state != bindingPending {
+				settled = true
+			}
+		}
+		current := game.bindings.bySession[principal.SessionID]
+		var currentBinding Binding
+		var currentState bindingState
+		if current != nil {
+			currentBinding, currentState = current.identity, current.state
+		}
+		game.bindings.mu.Unlock()
+		if settled {
+			if currentBinding != newerBinding || currentState != bindingActive {
+				t.Errorf("the newer binding on gate B was retired by the abandoned handshake's Bind on gate A that finished after it: current=%+v state=%d, want the newer %+v active", currentBinding, currentState, newerBinding)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			fail("the Game never settled the late Bind on gate A")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// 补充：Game 若退役了新绑定，Gate B 异步收到通知后才关掉连接，留出时间再让 C# 在新连接上请求。
+	time.Sleep(200 * time.Millisecond)
+	send("check")
+	_ = stdin.Close()
+	for line := range lines { // 读完标准输出（进程退出时关闭）再 Wait
+		transcript = append(transcript, line)
+	}
+	err = client.Wait()
+	if err != nil || !slices.Contains(transcript, "new-alive") {
+		t.Errorf("the C# client's newer connection on gate B did not survive: %v: %s\nstderr: %s", err, strings.Join(transcript, " | "), stderr.String())
 	}
 }
 

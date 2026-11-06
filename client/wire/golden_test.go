@@ -21,6 +21,9 @@ import (
 
 var updateGolden = flag.Bool("update", false, "rewrite shared Go/C# packet golden")
 
+// goldenAuthGeneration 是金样 auth_generation 的连接代号，票据为 "ticket"。
+const goldenAuthGeneration uint64 = 0x8102030405060708
+
 func TestClientProtocolGolden(t *testing.T) {
 	update, err := entitysync.EncodeSubjectUpdate(entity.SubjectSyncUpdate{
 		SubjectID: 9007199254740993, SubjectKind: 7, Version: 3, Full: true,
@@ -68,14 +71,21 @@ func TestClientProtocolGolden(t *testing.T) {
 	}
 	packets = append(packets, &wire.Packet{Flags: wire.FlagPush | wire.FlagLockstep, MsgID: 50002, Seq: 14, Payload: first},
 		&wire.Packet{Flags: wire.FlagPush | wire.FlagLockstep, MsgID: 50002, Seq: 15, Payload: next})
+	// 鉴权首包的连接代号信封（client/README“鉴权首包的连接代号”）：代号最高位为 1，检验各语言按无符号 64 位大端写出。
+	auth, err := wire.EncodeAuth("ticket", goldenAuthGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packets = append(packets, &wire.Packet{MsgID: 0, Seq: 1, Payload: auth})
 	type golden struct {
-		Name string `json:"name"`
-		Hex  string `json:"hex"`
-		Hash string `json:"hash,omitempty"`
+		Name       string `json:"name"`
+		Hex        string `json:"hex"`
+		Hash       string `json:"hash,omitempty"`
+		Generation string `json:"generation,omitempty"`
 	}
 	want := []golden{}
 	for i, name := range []string{"pb", "sync", "auth", "lockstep", "lockstep_input", "lockstep_hash", "lockstep_catchup", "catchup_unservable",
-		"recovery_failed_snapshot_unavailable", "snapshot_first_chunk", "snapshot_next_chunk"} {
+		"recovery_failed_snapshot_unavailable", "snapshot_first_chunk", "snapshot_next_chunk", "auth_generation"} {
 		raw, err := wire.Encode([]*wire.Packet{packets[i]}, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -86,6 +96,9 @@ func TestClientProtocolGolden(t *testing.T) {
 		}
 		if name == "snapshot_first_chunk" {
 			entry.Hash = strconv.FormatUint(1<<63|0x1234, 10) // 首块携带的状态 hash，C# 解码后核对
+		}
+		if name == "auth_generation" {
+			entry.Generation = strconv.FormatUint(goldenAuthGeneration, 10) // 信封里的连接代号，各语言用同一票据与代号编码后逐字节核对
 		}
 		want = append(want, entry)
 	}
@@ -120,15 +133,17 @@ func TestClientProtocolGoldenDecodesThroughTheGoClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	var entries []struct {
-		Name string `json:"name"`
-		Hex  string `json:"hex"`
-		Hash string `json:"hash"`
+		Name       string `json:"name"`
+		Hex        string `json:"hex"`
+		Hash       string `json:"hash"`
+		Generation string `json:"generation"`
 	}
 	if err := json.Unmarshal(content, &entries); err != nil {
 		t.Fatal(err)
 	}
 	payloads := map[string][]byte{}
 	hashes := map[string]string{}
+	generations := map[string]string{}
 	for _, entry := range entries {
 		raw, err := hex.DecodeString(entry.Hex)
 		if err != nil {
@@ -138,7 +153,15 @@ func TestClientProtocolGoldenDecodesThroughTheGoClient(t *testing.T) {
 		if err != nil || len(packets) != 1 {
 			t.Fatalf("%s: %d packets, %v", entry.Name, len(packets), err)
 		}
-		payloads[entry.Name], hashes[entry.Name] = packets[0].Payload, entry.Hash
+		payloads[entry.Name], hashes[entry.Name], generations[entry.Name] = packets[0].Payload, entry.Hash, entry.Generation
+	}
+	// 鉴权首包：信封解出票据原文与金样记录的代号；不带信封的旧写法仍是票据原文、代号 0。
+	if ticket, generation, err := wire.DecodeAuth(payloads["auth_generation"]); err != nil || string(ticket) != "ticket" ||
+		strconv.FormatUint(generation, 10) != generations["auth_generation"] {
+		t.Fatalf("auth_generation: ticket %q generation %d (golden %s): %v", ticket, generation, generations["auth_generation"], err)
+	}
+	if ticket, generation, err := wire.DecodeAuth(payloads["auth"]); err != nil || string(ticket) != "ticket" || generation != 0 {
+		t.Fatalf("auth: ticket %q generation %d: %v", ticket, generation, err)
 	}
 	for name, want := range map[string]lockstep.CatchupUnservableError{
 		"catchup_unservable":                   {Reason: lockstep.RecoveryHistoryTrimmed, From: 300, Start: 70000},
