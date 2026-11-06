@@ -1,0 +1,193 @@
+--- FAIL: TestTrackedGoFilesAreGofmtClean (26.38s)
+    gofmt_gate_test.go:64: 3 .go file(s) are not gofmt-clean; run gofmt -w on them:
+          framework/nest/review_failed_create_best_effort_test.go
+          gameplay/cellworld/review_base_codec_test.go
+          gameplay/cellworld/review_late_leave_test.go
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core	66.358s
+ok  	github.com/tjbdwanghaibo/roost-core/client/wire	1.017s
+ok  	github.com/tjbdwanghaibo/roost-core/cmd/glsvet	5.513s
+ok  	github.com/tjbdwanghaibo/roost-core/cmd/mongocheck	1.016s
+?   	github.com/tjbdwanghaibo/roost-core/cmd/walinspect	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/attribute	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/cfggen	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/dao	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/entity	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/errcode	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/nest	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/project	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/protocol	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/roost	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/servicerpc	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/tablegen	[no test files]
+?   	github.com/tjbdwanghaibo/roost-core/codegen/cmd/webroute	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/attribute	1.036s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/cfggen	2.074s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/dao	13.095s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/entity	1.458s
+?   	github.com/tjbdwanghaibo/roost-core/codegen/internal/entityowner	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/errcode	1.019s
+?   	github.com/tjbdwanghaibo/roost-core/codegen/internal/genutil	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/marker	3.064s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/nest	16.174s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/project	1.020s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/protocol	1.160s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/registry	1.099s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	469.762s
+?   	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost/cmd/attributeruntime	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/servicerpc	6.388s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/tablegen	1.417s
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/webroute	1.646s
+?   	github.com/tjbdwanghaibo/roost-core/demo	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/framework/app	16.371s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/app/buildinfo	1.035s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/cache	3.465s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/configdata	1.173s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/configdata/rules	1.012s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine	1.082s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine	5.894s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/entity	5.882s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/hotcode	2.964s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/hotcode/plugintest	1.794s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/manager	1.221s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	7.577s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	1.204s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nestwal	3.503s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/remoteentity	42.162s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/saga	3.581s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/statslog	1.084s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/chunksync	1.053s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	1.300s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	15.064s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/frame	1.035s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	18.046s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport	1.174s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus	1.240s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/driver	1.459s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/syncbus/mirror	1.119s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/syncstream	1.298s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/actionflow	1.357s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/ai	1.518s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/attribute	1.176s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	109.096s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	25.005s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench	29.759s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/level	1.286s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/movement	33.898s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/physics	1.253s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/skill	52.987s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat	1.051s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/skill/combatcomponent	3.812s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/skill/skillcompose	1.035s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/skill/skillsync	1.239s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/state	1.071s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/timedomain	1.480s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/clock	1.980s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/container	1.034s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/errcode	1.012s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/fctx	1.016s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/featureflag	1.020s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/goroutine	2.892s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/index	1.018s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/lifecycle	1.013s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/lock	1.188s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/misc	1.012s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/safemap	1.038s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/security	1.018s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/spatial	1.523s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/timer	1.027s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/base/worker	1.084s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/bus	2.235s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/etcd	1.020s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/etcd/driver	2.083s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/gateway	5.219s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/httpclient	1.032s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/httpserver	1.041s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/nats	1.013s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver	5.318s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/ownerroute	1.017s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc	1.062s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/webroute	1.056s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/admin	1.017s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/failurelog	1.012s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/health	1.066s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/log	1.018s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/metrics	1.016s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/ops	4.104s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics	1.014s
+?   	github.com/tjbdwanghaibo/roost-core/infra/physics/physx	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/migration	1.010s
+?   	github.com/tjbdwanghaibo/roost-core/infra/storage/mongo	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver	1.628s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest	1.040s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/redis	1.016s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver	3.694s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest	1.012s
+ok  	github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore	1.055s
+ok  	github.com/tjbdwanghaibo/roost-core/internal/configfile	1.030s
+ok  	github.com/tjbdwanghaibo/roost-core/internal/configschema	1.014s
+ok  	github.com/tjbdwanghaibo/roost-core/internal/hoptrace	1.018s
+ok  	github.com/tjbdwanghaibo/roost-core/internal/operation	1.062s
+?   	github.com/tjbdwanghaibo/roost-core/internal/rangecontract	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/internal/stopcontract	1.815s
+ok  	github.com/tjbdwanghaibo/roost-core/robot	1.740s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/action	1.018s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/loadtest	1.413s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/protocol	1.012s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/runner	2.076s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/scenario	1.071s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/session	1.103s
+ok  	github.com/tjbdwanghaibo/roost-core/robot/transport	1.418s
+?   	github.com/tjbdwanghaibo/roost-core/scripts/perf/mongo-ceiling	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/scripts/perf/nest-msg	4.910s
+ok  	github.com/tjbdwanghaibo/roost-core/scripts/perf/sync-aoi	1.645s
+?   	github.com/tjbdwanghaibo/roost-core/scripts/physics/comparison-host	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/service/account	1.050s
+ok  	github.com/tjbdwanghaibo/roost-core/service/activity	1.207s
+ok  	github.com/tjbdwanghaibo/roost-core/service/chat	1.042s
+ok  	github.com/tjbdwanghaibo/roost-core/service/directory	1.018s
+ok  	github.com/tjbdwanghaibo/roost-core/service/global	1.017s
+ok  	github.com/tjbdwanghaibo/roost-core/service/mail	1.315s
+ok  	github.com/tjbdwanghaibo/roost-core/service/match	1.283s
+ok  	github.com/tjbdwanghaibo/roost-core/service/physicsroom	1.015s
+ok  	github.com/tjbdwanghaibo/roost-core/service/platform	1.035s
+ok  	github.com/tjbdwanghaibo/roost-core/service/rank	1.415s
+ok  	github.com/tjbdwanghaibo/roost-core/service/session	1.029s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring	1.349s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/account	1.062s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/activity	1.047s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/chat	1.016s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/configdata	1.018s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/dataengine	2.632s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/directory	1.014s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/entitytimer	1.015s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/etcd	1.025s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/examples/split	1.022s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/gate	1.017s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/global	1.018s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/heartbeat	1.018s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/integration	1.015s
+?   	github.com/tjbdwanghaibo/roost-core/wiring/internal/configschemagen	[no test files]
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/lock	1.014s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/mail	1.020s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/manager	1.013s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/match	1.013s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/mods	1.017s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/mongo	1.029s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/nats	1.267s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/nest	1.380s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/ops	1.334s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/physicsroom	1.072s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/physicsroom/cmd/physicsroom-local	1.035s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/platform	1.019s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/rank	1.015s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/redis	1.032s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/remoteentity	1.249s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/saga	1.200s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/selfsync	1.949s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/session	1.020s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/sidmerge	1.052s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/statslog	1.017s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/syncbus	1.020s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/web	1.230s
+FAIL

@@ -1,0 +1,34 @@
+package alliance
+
+import (
+ "context"
+ "testing"
+ "github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+type reviewTransferHook struct {
+ entity.RemoteOwnershipManager
+ before func()
+}
+func (r reviewTransferHook) TransferRemoteOwnership(c context.Context,id int64,sid int32)(entity.RemoteEntityMarkerLease,error){
+ r.before()
+ return r.RemoteOwnershipManager.TransferRemoteOwnership(c,id,sid)
+}
+func TestReviewWarCommittedBetweenCheckAndTransfer(t *testing.T){
+ c:=newCluster(t,defaultRules(),3000,3001)
+ a:=found(t,c,3000,"review-found-a",100,false)
+ b:=found(t,c,3001,"review-found-b",102,false)
+ in:=c.instances[3000]
+ target:=mustAllianceTarget(t,a)
+ in.svc.deps.Owners=reviewTransferHook{RemoteOwnershipManager:in.remote,before:func(){
+  // Legal interleaving: the empty-war read finished, transfer has not fenced writes yet.
+  if _,err:=c.client().DeclareWar(ctx,"review-war",100,homeSID,target,b);err!=nil{t.Fatal(err)}
+  acks,err:=in.svc.warAcks(ctx,target);if err!=nil||len(acks)!=1{t.Fatalf("war did not commit: waits=%v err=%v",acks,err)}
+ }}
+ report,err:=in.svc.TransferOwnership(ctx,[]int64{target},0,3001)
+ if err!=nil{t.Fatal(err)}
+ c.runFollowUps()
+ if len(report.Moved)!=0 && !has(info(t,c,b).Wars,a){
+  t.Fatalf("transferred alliance with unacknowledged war; old owner stopped follow-up, enemy has no war: report=%+v",report)
+ }
+}

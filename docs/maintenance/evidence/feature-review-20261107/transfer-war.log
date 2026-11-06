@@ -1,0 +1,15 @@
+=== RUN   TestReviewWarCommittedBetweenCheckAndTransfer
+2026/11/06 16:46:09 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=review-war
+    review_transfer_war_test.go:32: transferred alliance with unacknowledged war; old owner stopped follow-up, enemy has no war: report={Moved:[4611686018427388953] Pending:[] Failed:map[] More:false}
+--- FAIL: TestReviewWarCommittedBetweenCheckAndTransfer (0.02s)
+=== RUN   TestReviewWarCommittedBetweenCheckAndTransfer
+2026/11/06 16:46:09 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=review-war
+    review_transfer_war_test.go:32: transferred alliance with unacknowledged war; old owner stopped follow-up, enemy has no war: report={Moved:[4611686018427388953] Pending:[] Failed:map[] More:false}
+--- FAIL: TestReviewWarCommittedBetweenCheckAndTransfer (0.02s)
+=== RUN   TestReviewWarCommittedBetweenCheckAndTransfer
+2026/11/06 16:46:09 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=review-war
+    review_transfer_war_test.go:32: transferred alliance with unacknowledged war; old owner stopped follow-up, enemy has no war: report={Moved:[4611686018427388953] Pending:[] Failed:map[] More:false}
+--- FAIL: TestReviewWarCommittedBetweenCheckAndTransfer (0.02s)
+FAIL
+FAIL	example.com/planet/internal/rpc/alliance	0.074s
+FAIL

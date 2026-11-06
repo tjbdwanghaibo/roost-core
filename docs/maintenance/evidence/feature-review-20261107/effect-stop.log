@@ -1,0 +1,24 @@
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler/1
+    review_best_effort_stop_test.go:37: Closed signaled while accepted handler was still running
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler/2
+--- FAIL: TestReviewBestEffortStopWaitsForRunningHandler (0.05s)
+    --- FAIL: TestReviewBestEffortStopWaitsForRunningHandler/1 (0.00s)
+    --- PASS: TestReviewBestEffortStopWaitsForRunningHandler/2 (0.05s)
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler/1
+    review_best_effort_stop_test.go:37: Closed signaled while accepted handler was still running
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler/2
+--- FAIL: TestReviewBestEffortStopWaitsForRunningHandler (0.05s)
+    --- FAIL: TestReviewBestEffortStopWaitsForRunningHandler/1 (0.00s)
+    --- PASS: TestReviewBestEffortStopWaitsForRunningHandler/2 (0.05s)
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler/1
+    review_best_effort_stop_test.go:37: Closed signaled while accepted handler was still running
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler/2
+--- FAIL: TestReviewBestEffortStopWaitsForRunningHandler (0.05s)
+    --- FAIL: TestReviewBestEffortStopWaitsForRunningHandler/1 (0.00s)
+    --- PASS: TestReviewBestEffortStopWaitsForRunningHandler/2 (0.05s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/dataengine	0.178s
+FAIL

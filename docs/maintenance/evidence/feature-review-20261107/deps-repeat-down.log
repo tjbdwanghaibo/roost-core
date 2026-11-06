@@ -1,0 +1,7 @@
+[roost-it] stopping redis (pid 369168)
+[roost-it] stopping nats-3 (pid 368917)
+[roost-it] stopping nats-2 (pid 368889)
+[roost-it] stopping nats-1 (pid 368858)
+[roost-it] stopping mongo-3 (pid 368574)
+[roost-it] stopping mongo-2 (pid 368451)
+[roost-it] stopping mongo-1 (pid 368324)
