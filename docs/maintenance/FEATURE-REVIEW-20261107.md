@@ -30,6 +30,8 @@ go test -mod=mod -race ./internal/rpc/alliance -run '^TestReviewWarCommittedBetw
 
 建议将宣战准入与迁移检查纳入同一迁移状态协议，或让新 owner 在取得/加载实体时可靠接管持久 follow-up。不要仅增加一次检查，也不要持有 Nest 实体锁跨所有权网络 I/O。修复验收需同时覆盖宣战在检查之前、检查之后但 fencing 之前，以及新 owner 已启动的迁入恢复。
 
+状态（2026-11-07）：已修复，未发版。新 owner 的宣战扫描在起服后周期运行、接手运行中迁入的联盟；回归 `TestWarDeclaredDuringTransferIsAskedByTheNewOwner` 覆盖上述三种时序，见 [KNOWN-LIMITS](KNOWN-LIMITS.md) 开头与 CHANGELOG `[Unreleased]`。以上原结论保留。
+
 ## RV-20261107-02 / P2：best_effort 单 worker 的 Stop 不等待在跑 handler
 
 位置：[deliver 单 worker 分支](https://github.com/tjbdwanghaibo/roost-core/blob/a6235227/wiring/dataengine/effects_best_effort.go#L209)、[Stop](https://github.com/tjbdwanghaibo/roost-core/blob/a6235227/wiring/dataengine/effects_best_effort.go#L297)。

@@ -14,6 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
@@ -35,7 +36,8 @@ import (
 //   - fakeRemote is the Remote runtime: one ownership table for the whole
 //     cluster (the persistent ownership records), whose first write claims
 //     an entity atomically and fences every other instance, plus fences a
-//     test injects; each instance keeps its own loaded entities;
+//     test injects; each instance keeps its own loaded entities, and a
+//     transfer hands the entity to the new owner (its load from the store);
 //   - the committer records the commit records' (reliable) effects and the
 //     best-effort effects sent after each durable commit — an alliance write
 //     records none, and runFollowUps fails the test if one did;
@@ -235,6 +237,24 @@ func (c *cluster) seedGuard(t *testing.T, sid int32, playerID int64) {
 	c.owners[mustGuardTarget(t, playerID)] = sid
 }
 
+// emptyClaim leaves an empty claim of allianceID on instance sid, as a
+// refused founding does: its ownership record names sid, and the store has
+// nothing for it.
+func (c *cluster) emptyClaim(t *testing.T, sid int32, allianceID int64) {
+	t.Helper()
+	target := mustAllianceTarget(t, allianceID)
+	store := c.instances[sid].store
+	store.mu.Lock()
+	if store.empty == nil {
+		store.empty = map[int64]bool{}
+	}
+	store.empty[target] = true
+	store.mu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.owners[target] = sid
+}
+
 // claimGate holds the admissions of one entity until want of them have
 // arrived, so that two instances that both found it unowned also claim it
 // at the same time.
@@ -321,8 +341,9 @@ func (c *cluster) runFollowUps() int {
 
 // restartFollowUps is the instance's process stopping and starting again as
 // far as the follow-ups go: what was armed is gone (nothing of it is
-// persistent). The entities stay — in production they are reloaded from the
-// store, the alliances by the startup preload.
+// persistent), and so is what the war scan had picked up. The entities
+// stay — in production they are reloaded from the store, the alliances by
+// the startup preload.
 func (c *cluster) restartFollowUps(sid int32) {
 	c.t.Helper()
 	in := c.instances[sid]
@@ -331,6 +352,7 @@ func (c *cluster) restartFollowUps(sid int32) {
 	}
 	in.due.clear()
 	in.svc.follow = newFollowUps(in.due.after)
+	in.svc.picked = newPickedUp()
 }
 
 // dueQueue is Deps.AfterFunc for the tests: armed work waits in the queue
@@ -488,12 +510,20 @@ func (b testBus) CallTo(ctx context.Context, _ string, sid int32, method string,
 type entityStore struct {
 	mu       sync.Mutex
 	entities map[int64]entity.IThreadSafeEntity
+	// empty is the empty claims (cluster.emptyClaim): owned here, nothing in
+	// the store.
+	empty map[int64]bool
 }
 
 func (s *entityStore) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	value, ok := s.entities[id]
+	if !ok && s.empty[id] {
+		// What the Remote load answers for an empty claim: the store has no
+		// aggregate for it (entity_not_found, a definite answer).
+		return nil, errcode.Wrap(errcode.ErrEntityNotFound, fmt.Errorf("store: no aggregate for entity %d (empty claim)", id))
+	}
 	if !ok {
 		// What the Remote write admission answers for an id this process
 		// cannot load (remoteentity batch.go).
@@ -530,6 +560,19 @@ func (s *entityStore) ensure(unique int64, kind entity.EntityKind) error {
 	}
 	s.entities[id] = built
 	return nil
+}
+
+func (s *entityStore) lookup(id int64) (entity.IThreadSafeEntity, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, ok := s.entities[id]
+	return value, ok
+}
+
+func (s *entityStore) put(id int64, value entity.IThreadSafeEntity) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.entities[id] = value
 }
 
 func (s *entityStore) has(id int64) bool {
@@ -766,6 +809,15 @@ func (r *fakeRemote) TransferRemoteOwnership(_ context.Context, id int64, to int
 		return entity.RemoteEntityMarkerLease{}, fmt.Errorf("%w: entity=%d owner=%d", entity.ErrRemoteFenced, id, owner)
 	}
 	r.c.owners[id] = to
+	// The new owner loads the entity from the store on its first access. The
+	// store here is the old owner's memory, which holds every write admitted
+	// before the transfer (the real transfer drains them before it moves the
+	// record); the old owner's later writes are fenced by the record.
+	if live, ok := r.c.instances[r.sid].store.lookup(id); ok {
+		if next := r.c.instances[to]; next != nil {
+			next.store.put(id, live)
+		}
+	}
 	return entity.RemoteEntityMarkerLease{OwnerSid: to, MarkerEpoch: 2, RouteEpoch: 2}, nil
 }
 

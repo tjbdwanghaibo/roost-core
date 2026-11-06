@@ -665,6 +665,142 @@ func TestLostWarAcknowledgmentIsMadeUp(t *testing.T) {
 	}
 }
 
+// transferHook runs before the ownership transfer it wraps: what commits
+// there has passed TransferOwnership's checks and still lands on the old
+// owner, because the transfer has not fenced it yet.
+type transferHook struct {
+	entity.RemoteOwnershipManager
+	before func(id int64)
+}
+
+func (h transferHook) TransferRemoteOwnership(ctx context.Context, id int64, to int32) (entity.RemoteEntityMarkerLease, error) {
+	h.before(id)
+	return h.RemoteOwnershipManager.TransferRemoteOwnership(ctx, id, to)
+}
+
+// A war's wait (WarAcks) is asked for by whichever instance owns the
+// declaring alliance, however the declaration and an alliance.transfer
+// interleave. TransferOwnership's Pending check is a read before the move: a
+// declaration committed after it and before the transfer fences the old
+// owner moves with the alliance, and the old owner's ask stops once it sees
+// the alliance gone. The new owner — running all along, not restarted — picks
+// the wait up from the store when its war scan finds the alliance among the
+// ones it owns (the scan runs at start and then every warScanInterval), and
+// asks until the enemy answers:
+//   - declared before the check: not moved (Pending), the old owner asks;
+//   - declared between the check and the fence: moved, the new owner asks;
+//   - the same, with the old owner's process gone right after the transfer
+//     and the new owner's first ask lost: the new owner asks again;
+//   - the same, back to an instance that owned the alliance before: it reads
+//     the alliance again (what it picked up then is dropped on the transfer).
+//
+// The declaration is made inside the transfer (transferHook), so the
+// interleaving is fixed, not raced.
+func TestWarDeclaredDuringTransferIsAskedByTheNewOwner(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	client := c.client()
+	for _, sid := range c.sids() {
+		c.instances[sid].svc.ScanWars() // Mod.Start: the instances are running
+	}
+	c.runFollowUps()
+	old := c.instances[3000]
+	enemy := found(t, c, 3001, "found-enemy", 102, false)
+	waits := func(allianceID int64) []alliancerule.WarAck {
+		t.Helper()
+		target := mustAllianceTarget(t, allianceID)
+		owner, _ := c.owner(target)
+		return must(c.instances[owner].svc.warAcks(ctx, target))
+	}
+	// declareDuringTransfer moves the alliance led by leader from the
+	// instance from to the instance to, with a war on enemyID declared under
+	// requestID after TransferOwnership's checks.
+	declareDuringTransfer := func(from *instance, to int32, allianceID, leader int64, requestID string, enemyID int64) {
+		t.Helper()
+		target := mustAllianceTarget(t, allianceID)
+		owners := from.svc.deps.Owners
+		from.svc.deps.Owners = transferHook{RemoteOwnershipManager: owners, before: func(int64) {
+			if _, err := client.DeclareWar(ctx, requestID, leader, homeSID, target, enemyID); err != nil {
+				t.Fatalf("declaration during the transfer: %v", err)
+			}
+			if len(waits(allianceID)) != 1 {
+				t.Fatalf("the declaration during the transfer left no wait: %v", waits(allianceID))
+			}
+		}}
+		defer func() { from.svc.deps.Owners = owners }()
+		report, err := from.svc.TransferOwnership(ctx, []int64{target}, 0, to)
+		if err != nil || len(report.Moved) != 1 {
+			t.Fatalf("transfer: report %+v err %v, want the alliance moved", report, err)
+		}
+	}
+
+	// Declared before the check: the alliance stays, its owner asks.
+	before := found(t, c, 3000, "found-before", 100, false)
+	c.lose(MethodAcknowledgeWar, 1)
+	if _, err := client.DeclareWar(ctx, "war-before", 100, homeSID, mustAllianceTarget(t, before), enemy); err != nil {
+		t.Fatal(err)
+	}
+	c.runFollowUps() // the first ask is lost
+	report, err := old.svc.TransferOwnership(ctx, []int64{mustAllianceTarget(t, before)}, 0, 3001)
+	if err != nil || len(report.Moved) != 0 || len(report.Pending) != 1 {
+		t.Fatalf("transfer of an alliance waiting for its enemy: report %+v err %v, want it pending", report, err)
+	}
+	c.now = c.now.Add(retryDelay(0))
+	c.runFollowUps()
+	if !has(info(t, c, enemy).Wars, before) || len(waits(before)) != 0 {
+		t.Fatalf("declared before the check: enemy's wars %v, waits %v; want the war recorded and no wait", info(t, c, enemy).Wars, waits(before))
+	}
+
+	// Declared between the check and the fence: the old owner's ask finds
+	// the alliance gone and stops; the new owner's scan asks.
+	between := found(t, c, 3000, "found-between", 104, false)
+	declareDuringTransfer(old, 3001, between, 104, "war-between", enemy)
+	c.runFollowUps()
+	c.now = c.now.Add(warScanInterval)
+	c.runFollowUps()
+	if !has(info(t, c, enemy).Wars, between) || len(waits(between)) != 0 {
+		t.Fatalf("declared between the check and the fence: enemy's wars %v, waits %v; want the war recorded by the new owner's ask and no wait",
+			info(t, c, enemy).Wars, waits(between))
+	}
+
+	// The same, and the old owner's process is gone before its ask ran; the
+	// new owner's first ask is lost too: it asks again, as for its own war.
+	gone := found(t, c, 3000, "found-gone", 106, false)
+	declareDuringTransfer(old, 3001, gone, 106, "war-gone", enemy)
+	c.restartFollowUps(3000)
+	old.svc.ScanWars() // the restarted process's Mod.Start
+	c.lose(MethodAcknowledgeWar, 1)
+	c.now = c.now.Add(warScanInterval)
+	c.runFollowUps() // the new owner's first ask is lost
+	if has(info(t, c, enemy).Wars, gone) || len(waits(gone)) != 1 {
+		t.Fatalf("after a lost ask: enemy's wars %v, waits %v; want no war yet and the wait kept", info(t, c, enemy).Wars, waits(gone))
+	}
+	c.now = c.now.Add(retryDelay(0))
+	c.runFollowUps()
+	if !has(info(t, c, enemy).Wars, gone) || len(waits(gone)) != 0 {
+		t.Fatalf("old owner gone after the transfer: enemy's wars %v, waits %v; want the war recorded by the new owner and no wait",
+			info(t, c, enemy).Wars, waits(gone))
+	}
+
+	// Back to an instance whose scan read the alliance before it left: that
+	// reading is no longer this alliance's waits, and the scan reads it again.
+	// (The war goes to an enemy on 3000, so it is cross-instance while the
+	// alliance is on 3001.)
+	back := found(t, c, 3000, "found-back", 108, false)
+	enemyOnOld := found(t, c, 3000, "found-enemy-old", 110, false)
+	c.now = c.now.Add(warScanInterval)
+	c.runFollowUps() // 3000's scan reads back
+	if _, err := old.svc.TransferOwnership(ctx, []int64{mustAllianceTarget(t, back)}, 0, 3001); err != nil {
+		t.Fatal(err)
+	}
+	declareDuringTransfer(c.instances[3001], 3000, back, 108, "war-back", enemyOnOld)
+	c.runFollowUps()
+	c.now = c.now.Add(warScanInterval)
+	c.runFollowUps()
+	if !has(info(t, c, enemyOnOld).Wars, back) || len(waits(back)) != 0 {
+		t.Fatalf("back on 3000: enemy's wars %v, waits %v; want the war recorded by 3000 and no wait", info(t, c, enemyOnOld).Wars, waits(back))
+	}
+}
+
 // The start-up scan reads several alliances at once. Each read is a Nest
 // transaction on an owned Remote entity, and its admission takes a write grant
 // from the ownership record — one Mongo round trip — although it writes
@@ -698,6 +834,51 @@ func TestStartupWarScanReadsAlliancesConcurrently(t *testing.T) {
 	_, peak := in.remote.waiting()
 	if now < scanConcurrency || peak > scanConcurrency {
 		t.Fatalf("the start-up scan had %d alliance reads waiting for their write grant at once (at most %d), want %d", now, peak, scanConcurrency)
+	}
+}
+
+// A scan's read of an alliance that the instance transfers away while the
+// read is in flight does not leave it picked up: should the alliance come
+// back, its waits are read again.
+func TestWarScanReadBeforeATransferDoesNotPickUp(t *testing.T) {
+	picked := newPickedUp()
+	mark := picked.mark(42) // the scan starts reading 42
+	picked.drop(42)         // TransferOwnership moves it away meanwhile
+	picked.add(42, mark)    // the read returns
+	if got := picked.without([]int64{42}); len(got) != 1 {
+		t.Fatalf("an alliance dropped during the read counts as picked up (%v left to read, want [42])", got)
+	}
+	picked.add(42, picked.mark(42))
+	if got := picked.without([]int64{42}); len(got) != 0 {
+		t.Fatalf("a read after the drop did not pick it up (%v left to read)", got)
+	}
+}
+
+// An empty claim — an alliance id whose founding was refused: its ownership
+// record names this instance, the store has nothing for it — has no war to
+// wait for. The war scan takes its read's definite "entity not found" as
+// nothing to ask, and goes on to the other alliances. (Until 2026-11-07 that
+// answer failed the scan, which was tried again with backoff and failed again
+// on every attempt, never reaching the alliances after the empty claim: seen
+// in the real process after a restart, TestAllianceE2ERejectedFoundingAfterRestart.)
+func TestWarScanPassesAnEmptyClaim(t *testing.T) {
+	c := newCluster(t, defaultRules(), 3000, 3001)
+	in := c.instances[3000]
+	empty := must(c.Next(ctx)) // minted before a: listed first
+	c.emptyClaim(t, 3000, empty)
+	a, b := found(t, c, 3000, "found-a", 100, false), found(t, c, 3001, "found-b", 102, false)
+	c.lose(MethodAcknowledgeWar, 1)
+	if _, err := c.client().DeclareWar(ctx, "war-a-b", 100, homeSID, mustAllianceTarget(t, a), b); err != nil {
+		t.Fatal(err)
+	}
+	c.runFollowUps()         // the first ask is lost
+	c.restartFollowUps(3000) // and the retry with the process
+	if err := in.svc.scanWarsOnce(ctx); err != nil {
+		t.Fatalf("war scan with an empty claim among the alliances: %v", err)
+	}
+	c.runFollowUps()
+	if !has(info(t, c, b).Wars, a) {
+		t.Fatalf("b's wars %v: the scan did not ask for a's war", info(t, c, b).Wars)
 	}
 }
 

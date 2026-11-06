@@ -8,6 +8,8 @@
 
 新增 RV-20261107-01（P2）：联盟迁移检查后仍可提交宣战，迁移完成后补发责任没有自动接续；RV-20261107-02（P2）：best_effort 单 worker Stop 在 handler 返回前关闭 Closed。两项均连续三轮复现。**RV-20261107-02 已修复（未发版）**：`bestEffortSubscription` 每个回调在接纳锁下检查已停并记入在途（Workers ≤ 1 就地处理的也记），Stop 先关接纳再退订、等在途，Drain 排空后关接纳再等；回归 `TestBestEffortSubscriptionClosesAfterAcceptedHandlers`，见 CHANGELOG `[Unreleased]`。之前三项确认缺陷仍未修复，Lockstep／cellworld 间歇失败仍未关闭。（后续：RV-20261106-01 与 cellworld 的 RV-20261106-02／03／04 已于 2026-11-07 修复、未发版，见下两节；Lockstep 状态不变。）根模块与生成工程 race、客户端及联盟真实进程证据和验证边界见 [收尾报告](FEATURE-REVIEW-20261107.md)。
 
+RV-20261107-01 已修复（未发版，见 CHANGELOG `[Unreleased]`）：原结论成立——迁移前对 `WarAcks` 的检查是一次读，挡不住检查之后、fence 之前提交的宣战，旧 owner 的补发在联盟迁走后退出，新 owner 只在起服扫描。修法是“谁拥有联盟，谁的扫描接手标记”：`ScanWars` 起服后每 1 分钟再跑，只读本进程还没接手的联盟（运行中迁入的、新建的），迁走前从“已接手”里去掉，不依赖检查与 fence 的先后；`Pending` 保留为让原 owner 先问完的顺序安排。顺带修掉扫描在空认领上整次失败、无限重试（真实进程复现）。剩下的边界：迁入后到新 owner 补问最多一个扫描间隔（1 分钟）再加一次读；扫描每分钟一次所有权列表查询。回归与红绿见 [联盟方案 §2.5B“宣战”](FEATURE-2026-11-04-alliance-service.md#25b-联盟不用-effect2026-11-05-晚)。真实进程端到端没有构造“检查与 fence 之间宣战”的时序（夹具用 ownership 钩子构造），只验证了空认领扫描与既有迁移 / 接管用例。
+
 ## 2026-11-06 续审：cellworld 生命周期与编码
 
 新增 RV-20261106-03（P2）：旧 Leave 迟到副本删除同 ID 重新入场的新角色，三轮复现；RV-20261106-04（P3）：BaseState 重复 MsgPack 标签丢失 X/VX，影响直接编码该类型的接入方，未证明当前 demo 的字段映射受影响。源码、探针、控制组及范围见 [续审报告](FEATURE-REVIEW-20261106.md#续审跨区生命周期与状态编码)。前述 best_effort、边界抖动和 Lockstep 状态不变。

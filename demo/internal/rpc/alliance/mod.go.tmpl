@@ -61,7 +61,8 @@ func (m *Mod) Provide(r *app.Registry) error {
 
 // Start binds the service to this process, registers the handlers, then
 // starts the scan for wars this instance's alliances still wait for
-// (ScanWars, in the background: the preload has loaded them).
+// (ScanWars, in the background: the preload has loaded them; it runs again
+// every warScanInterval for the alliances this instance comes to own).
 func (m *Mod) Start() error {
 	if err := m.service.BindRegistry(m.registry); err != nil {
 		return fmt.Errorf("alliance mod: %w", err)

@@ -388,7 +388,8 @@ func TestAllianceE2ECrashTakeoverAndScaleIn(t *testing.T) {
 // TestAllianceE2ERejectedFoundingAfterRestart：建盟被拒（发起者已在联盟）时，发出的联盟号在写准入里被首写认领、事务回滚，
 // 留下“所有权记录是本实例、权威里没有数据”的空认领。同 sid 重启后：预加载把它计为 empty（不算 failed、不记 ERROR、
 // 不登记路由）；对它的 Info 答确定的“不存在”（框架的 entity_not_found；重启前内存里还有业务新建的空实例，答业务的
-// 100031），而不是一直“可重试”（修前：remote.4）。
+// 100031），而不是一直“可重试”（修前：remote.4）。重启后的宣战补发扫描把空认领读到的“不存在”当作没有待确认宣战、
+// 走完全部联盟（2026-11-07 前每次扫描都在它上面失败、按退避重试，排在它后面的联盟永远扫不到）。
 func TestAllianceE2ERejectedFoundingAfterRestart(t *testing.T) {
 	s := newSuite(t, 10*time.Minute)
 	a := s.start("alliance-3000", "alliance", 3000, procOptions{})
@@ -414,6 +415,7 @@ func TestAllianceE2ERejectedFoundingAfterRestart(t *testing.T) {
 	}
 
 	s.stop(a, syscall.SIGINT)
+	relaunched := time.Now()
 	s.launch(a)
 	s.waitReady(a, 2*time.Minute)
 	time.Sleep(300 * time.Millisecond)
@@ -427,6 +429,13 @@ func TestAllianceE2ERejectedFoundingAfterRestart(t *testing.T) {
 	}
 	if value := s.routeValue(target(t, empty)); value != "" {
 		t.Fatalf("the empty claim got a route registration %q", value)
+	}
+	s.eventually("the war scan after the restart goes through", 30*time.Second, func() (bool, string) {
+		_, _, done := warScanLine(a.log, relaunched)
+		return done, "no war scan line after the restart:\n" + tail(a.log, 5)
+	})
+	if raw, err := os.ReadFile(a.log); err != nil || strings.Contains(string(raw), "scan for wars waiting for their enemy failed") {
+		t.Fatalf("the war scan failed on the empty claim (read err %v):\n%s", err, tail(a.log, 20))
 	}
 	for attempt := 0; attempt < 3; attempt++ {
 		_, after := client.Info(s.ctx, target(t, empty))

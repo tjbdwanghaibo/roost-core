@@ -260,14 +260,16 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 3. 对方给出**最终答复**（记下了、或按规则拒绝——拒绝时宣战方保留自己一侧，沿用第 6 节第 4 条 A 的“两步最终一致、不原子”）后，宣战方用条件事务 `handlerAllianceWarAcknowledged` 按请求号删掉标记（已删则什么也不改）。
 4. 答复不是最终（对方实例不可达、未执行、结果未知）或删标记失败：标记还在，由下面的驱动再问。
 
-持久的重试驱动选的是“运行中重试 + 启动扫描”，不是“下次触达该联盟时惰性补发”——后者对一个没人再碰的联盟没有上界：
+持久的重试驱动选的是“运行中重试 + 扫描”，不是“下次触达该联盟时惰性补发”——后者对一个没人再碰的联盟没有上界：
 
 - **运行中**：宣战方 owner 进程按 5s 起倍增、最多 1 分钟重试，直到对方给出最终答复；
 - **重启后**：联盟是 `preload=startup`，owner 起服时全部加载；alliance Mod 在注册 handler 之后跑一次 `ScanWars`（列出本实例拥有的联盟，逐个读 `WarAcks`），对每个未清的标记再问一次。扫描在后台（`followUps`），不挡起服。代价（2026-11-06 实测，[基准页](../performance/benchmarks/alliance-warscan-20261106/README.md)）：每次起服每个联盟一次 Nest 读，而这个读是 Remote 写准入、要向所有权记录取一次写许可（一次 Mongo `findAndModify`，只读 handler 也一样，见 [KNOWN-LIMITS](KNOWN-LIMITS.md) 对应条），外加每 1 000 个联盟一页所有权列表查询；原来逐个读，1 万个联盟约 2 分 50 s 后最后一个标记才被补问，改为每页 8 个并发读（`scanConcurrency`）后 1 万 26.5 s、5 万 2 分 4 s；
+- **运行中迁入（2026-11-07，RV-20261107-01）**：起服扫描之后每 `warScanInterval`（1 分钟）再扫一次，只读本进程还没接手（`pickedUp`）的联盟——运行中经 `alliance.transfer` 迁入的、本实例新建的；读到的标记照样再问。`TransferOwnership` 在调 `TransferRemoteOwnership` 前把联盟从本进程的“已接手”里去掉，迁回来时重新读。代价：每分钟一次所有权列表查询（每 1 000 个联盟一页），加上每个未接手联盟一次读（每个联盟在一个进程里只读一次）；“war scan done” 日志只在这次扫描读了联盟时打；
 - **重发宣战**：同一请求号的 `DeclareWar` 回放时标记仍在，也会再问；
-- **不迁移**：有未清标记的联盟 `alliance.transfer` 不搬（`TransferReport.Pending`），保证一直在问的就是持有标记的那个 owner；守卫不再因为有预约而不搬（它的期限在进程内、经路由 RPC 收尾，在哪个实例都能收）。
+- **迁移检查**：有未清标记的联盟 `alliance.transfer` 不搬（`TransferReport.Pending`），让一直在问的 owner 先问完；守卫不再因为有预约而不搬（它的期限在进程内、经路由 RPC 收尾，在哪个实例都能收）。这个检查是迁移前的一次读，挡不住检查之后、迁移 fence 之前提交的宣战：那条标记随联盟迁走，旧 owner 的补发看到联盟已不归自己就退出，由新 owner 的下一次扫描接手（上一条）。所以 Pending 只是“让原 owner 问完”的顺序安排，不是正确性条件；正确性靠“标记持久 + 谁拥有联盟谁的扫描接手”，不依赖检查与 fence 之间的先后。
+- **空认领**：建盟被拒留下的空认领（所有权记录是本实例、权威里没有聚合）读标记得到确定的“不存在”，扫描把它当作没有标记、继续扫后面的联盟。2026-11-07 前这个答复让每次扫描失败、按退避重试，重启后排在它后面的联盟永远扫不到（真实进程复现见 CHANGELOG）。
 
-最坏延迟：对方可达时是一次 RPC；对方实例不可达时，是它恢复后最多一个重试间隔（≤ 1 分钟）；宣战方 owner 崩溃时，是它同 sid 拉起、预加载完成之后的一次扫描。前提：标记所在的 sid 最终会再起来（App 单实例锁保证同一 sid 只有一个进程）。
+最坏延迟：对方可达时是一次 RPC；对方实例不可达时，是它恢复后最多一个重试间隔（≤ 1 分钟）；宣战方 owner 崩溃时，是它同 sid 拉起、预加载完成之后的一次扫描；宣战与迁移交错、标记随联盟迁走时，是新 owner 的下一次扫描（≤ 1 分钟）。前提：标记所在的 sid 最终会再起来（App 单实例锁保证同一 sid 只有一个进程）。
 
 **确认迟到 / 重复无害**：`AcknowledgeWar` 在敌方联盟上按请求号记回执，同一请求号再来只回放（`Replayed`），不会重复记 `Wars` 也不会改结论；回执清理（`alliance.receipt_retention`，缺省 168h）之后才到的重复确认会执行 `CheckWar`，因为已在交战而被拒、只写一条拒绝回执，同样不改状态（demo 没有“停战”操作；以后加停战时，停战与迟到确认的先后要另行约束）。删标记是按请求号的条件事务，重试、回放、扫描并发收尾同一条标记只删一次。同实例宣战仍是一笔两边事务，没有标记。
 
@@ -280,6 +282,9 @@ game-demo 拓扑：一个业务服务 `game`（第二个进程用 `deploy/dev/se
 - `TestAllianceWritesRecordNoEffect`：两个实例上建盟、同 / 跨实例入退、批准、踢人、同 / 跨实例宣战、预约过期限，任何实例记下 effect（reliable 或 best_effort）即红；同时要求通知按顺序直接发出、敌方一侧与过期预约在没有 effect 的情况下收尾。修前（基线 4998e9d1 的生成工程，只加一个空的 `runFollowUps` 桩）：`instance 3000: alliance writes recorded effects [alliance.war_declared (reliable) alliance.member_changed (best_effort) ×6]`、`instance 3001: … [alliance.member_changed (best_effort) ×3]`、`the enemy's side of the cross-instance war was not recorded without an effect: b's wars []`、`the reservation past its deadline was not settled without an effect: guard {… PendingRequestID:reserve-205 …}`、`membership notices sent straight from the service: got []`。
 - `TestStartupWarScanReadsAlliancesConcurrently`（2026-11-06）：假 Remote 挡住每个 Alliance 写准入，同时在等的个数须达到 `scanConcurrency`（8）且不超过。修前（只在测试侧补常量）：`the start-up scan had 1 alliance reads waiting for their write grant at once (at most 1), want 8`。真实进程的量见 `TestAllianceE2EWarScanStartup`（`ALLIANCE_E2E_PERF=1`）。
 - `TestLostWarAcknowledgmentIsMadeUp`：第一次确认丢失后运行中重试补上；丢失后宣战方“重启”（已布置的全部丢掉）由 `ScanWars` 补上；重复宣战与重复确认是回放、敌方只记一次；有等待的联盟不迁移。修前不适用（基线靠可靠 effect）；变异验证：`ScanWars` 改成空函数时红（`after the restart scan: e's wars [], a's waits [{war-a-e 3}]`），去掉运行中重试时红（`after the retry: b's wars [], a's waits [{war-a-b 2}]`）。
+- `TestWarDeclaredDuringTransferIsAskedByTheNewOwner`（2026-11-07，RV-20261107-01）：宣战在迁移检查之前（Pending、原 owner 补问）、检查与 fence 之间（用包装 `TransferRemoteOwnership` 的钩子在迁移里提交宣战，时序固定，不靠竞争）、同样交错且旧 owner 进程随即“重启”、新 owner 第一次补问丢失、以及迁回曾扫过它的实例四段，都要求敌方最终记下、标记清掉；新 owner 全程在运行，不靠重启扫描。夹具的 transfer 把实体交给新 owner 的 store（模拟它从持久层加载）。修前：`declared between the check and the fence: enemy's wars [2], waits [{war-between 1}]; want the war recorded by the new owner's ask and no wait`；变异：去掉 `TransferOwnership` 里的 `picked.drop` 时第四段红（`back on 3000: enemy's wars [], waits [{war-back 6}]`）。
+- `TestWarScanReadBeforeATransferDoesNotPickUp`（2026-11-07）：扫描读某联盟期间它被迁走，读完不算“已接手”，迁回时重读（`pickedUp` 的 mark / drop）；变异去掉 drop 计数即红。
+- `TestWarScanPassesAnEmptyClaim`（2026-11-07）：本实例有一个排在前面的空认领，扫描必须走完并补问后面联盟的宣战。修前：`war scan with an empty claim among the alliances: alliance …: entity_not_found: entity not found: store: no aggregate for entity … (empty claim)`；真实进程见 e2e `TestAllianceE2ERejectedFoundingAfterRestart` 新增的“重启后扫描走完”检查，修前 30s 内没有 `war scan done`、日志里每次重试都在空认领上失败（`entity aggregate not found`）。
 - `TestReservationsOfDifferentPlayersDoNotWaitOnEachOther`（决定 F，确定性：用写准入闸门把 301 的预约卡在它的事务里、锁已持有，302 的预约必须在此期间完成）。修前：`302's reservation waited for 301's: remote.1: server error`（基线的 `handlerGuardReserve` 是 `[守卫, AllianceShard]` 多实体事务，302 排在 shard 锁后 2s 超时）。
 - `TestReservationDeadlineIsSettledByTheAlliance`（改为进程内期限：到期前不跑、联盟不可达时不释放并重布、可达后释放、迟到的批准答 `alliance_expired`、已坐下的确认；期限随“重启”丢失后由下一次批准收尾）、`TestTransferOwnershipMovesWhatThisInstanceOwns`（原 `…KeepsReservedGuards`：有预约的守卫现在照常搬，搬走后旧实例上的期限仍经路由收尾）。
 - `TestMembershipAnswersTheRostersAlliance`：成员答联盟号、名单里已没有的 joined 被清并答 0、已坐下而确认丢失的预约被确认、没有守卫答“实体不存在”。

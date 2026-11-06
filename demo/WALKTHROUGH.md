@@ -264,7 +264,8 @@ alliance 服务不产生、不消费任何 effect（2026-11-05 晚起）：守�
 联盟问权威结论（`Settle`：预约过了期限才定论为过期，否则只问不写），再用条件守卫事务落下结论后照常判断。预约的期限由持有守卫的进程在内存里
 排一个到期回调（预约成功时排、收尾时撤），到点做同样的自愈；进程重启丢了它，就退回“下一个碰到守卫的请求自愈”。跨实例宣战：宣战方在
 自己的事务里记下“等对方确认”，答复后服务直接调对方的 `AcknowledgeWar`（按请求号幂等），拿到最终答复才条件清掉标记；没拿到按退避重试，
-进程重启时启动扫描补发（后台跑、不挡起服，每页 8 个联盟并发读：每个读都要向所有权记录取一次写许可，逐个读时 1 万个联盟约 3 分钟才扫完，[基准页](../docs/performance/benchmarks/alliance-warscan-20261106/README.md)；[联盟服务方案 §2.5B](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md#25b-联盟不用-effect2026-11-05-晚)）。
+进程重启时启动扫描补发（后台跑、不挡起服，每页 8 个联盟并发读：每个读都要向所有权记录取一次写许可，逐个读时 1 万个联盟约 3 分钟才扫完，[基准页](../docs/performance/benchmarks/alliance-warscan-20261106/README.md)）；
+扫描之后每分钟再跑一次，只读本进程还没接手的联盟（运行中迁入的、新建的），所以迁移检查与 fencing 之间提交的宣战随联盟迁走后由新 owner 接着问（[联盟服务方案 §2.5B](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md#25b-联盟不用-effect2026-11-05-晚)）。
 
 多实例：`sh deploy/dev/second-alliance.sh start` 在同一台机器上起第二个 alliance（sid 1001、ops 9210）。建盟经队列组分到两个实例，
 每个联盟归接到它的实例；其余调用经路由登记找到 owner。缩容一台：在它的 ops 上 ① `alliance.stop_founding`（退出 `Found` 的队列组，

@@ -17,14 +17,16 @@ func realAfterFunc(d time.Duration, f func()) func() bool { return time.AfterFun
 // process, on its own clock: the deadline of a guard reservation this
 // instance made (heal the guard from its alliance once it passes), asking an
 // enemy alliance again to record a war, the scan for wars still waiting for
-// their enemy after a start. No alliance write records an effect (plan
-// §2.5B); this is where the work an effect consumer did now runs.
+// their enemy (at start, then periodically for the alliances this instance
+// comes to own). No alliance write records an effect (plan §2.5B); this is
+// where the work an effect consumer did now runs.
 //
 // Nothing here is persistent, by design, and nothing here is needed for
 // correctness — each kind of work states what makes up for it when the
 // process stops with it armed: a reservation is healed by the next request
 // that finds the guard held, a war's wait (AllianceDao.WarAcks) is durable and
-// rescanned at the next start.
+// picked up by the war scan of the process that owns its alliance — the
+// restarted one, or the instance it was transferred to.
 //
 // Work runs in its own goroutine (time.AfterFunc), never on a Nest pool: it
 // makes RPCs and Nest calls and waits for them. One key is armed at most

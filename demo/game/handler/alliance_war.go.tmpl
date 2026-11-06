@@ -34,8 +34,9 @@ func handlerAllianceDeclareWar(target alliance.IRosterEntity, enemy alliance.IRo
 // enemy's acknowledgment (WarAcks), in one transaction — no effect. The
 // service then calls AcknowledgeWar on the enemy (same request id) and ends
 // the wait once the enemy answered; until then the wait is what makes the
-// service ask again (with backoff while it runs, after a restart from the
-// preloaded alliances). WarPending reports the wait, fresh or replayed, so a
+// service ask again (with backoff while it runs, and from the war scan of the
+// instance that owns the alliance: after a restart, or after a transfer to
+// it). WarPending reports the wait, fresh or replayed, so a
 // retried declaration asks the enemy again too.
 //
 //roost:nest rollback=undo durability=strict
@@ -65,7 +66,7 @@ func handlerAllianceWarAcknowledged(target alliance.IRosterEntity, requestID str
 }
 
 // handlerAllianceWarAcks lists the declarations still waiting for their enemy
-// (the service's scan after a restart).
+// (the service's war scan).
 //
 //roost:nest rollback=undo durability=strict
 func handlerAllianceWarAcks(target alliance.IRosterEntity) ([]alliancerule.WarAck, error) {

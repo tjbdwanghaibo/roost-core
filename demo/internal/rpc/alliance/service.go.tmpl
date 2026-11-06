@@ -98,10 +98,12 @@ type Deps struct {
 // What follows a write — the member's notice, finishing a guard on another
 // instance, the enemy's side of a war — is the service's too, after the
 // write answered: no alliance write records an effect (plan §2.5B). Work that
-// waits for a clock or a retry runs in follow (followUps).
+// waits for a clock or a retry runs in follow (followUps); picked is the
+// alliances whose wars' waits this process has taken over (ScanWars).
 type Service struct {
 	deps   Deps
 	follow *followUps
+	picked *pickedUp
 }
 
 // New builds an unbound service; the Mod binds it in Start (after Nest and
@@ -125,6 +127,7 @@ func (s *Service) Bind(deps Deps) error {
 	}
 	s.deps = deps
 	s.follow = newFollowUps(deps.AfterFunc)
+	s.picked = newPickedUp()
 	return nil
 }
 

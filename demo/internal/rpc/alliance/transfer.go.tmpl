@@ -25,9 +25,10 @@ type TransferReport struct {
 	Moved []int64 `json:"moved"`
 	// Pending: alliances with a cross-instance war their enemy has not
 	// acknowledged yet (AllianceDao.WarAcks), left in place — this instance
-	// is the one that keeps asking the enemy. Run the transfer again once the
-	// enemy answered (usually at once; while its instance is unreachable, as
-	// soon as it is back).
+	// is the one asking the enemy. Run the transfer again once the enemy
+	// answered (usually at once; while its instance is unreachable, as soon
+	// as it is back). Not a correctness condition: a wait that does move
+	// (declared after this check) is asked for by the new owner.
 	Pending []int64 `json:"pending,omitempty"`
 	// Failed: entity id -> why; nothing was moved for them.
 	Failed map[int64]string `json:"failed,omitempty"`
@@ -58,10 +59,14 @@ type TransferReport struct {
 // configuration change.
 //
 // An alliance whose cross-instance war still waits for the enemy is not moved
-// (Pending): the wait is asked again by its owner's follow-ups, which do not
-// move with it. A guard with an open reservation moves like any other: its
-// deadline, armed in this process, heals it through the route RPC wherever it
-// is, and a lost deadline is made up by the next request that finds it held.
+// (Pending): its owner, which has been asking, finishes the wait first. The
+// check is a read before the move and does not hold off a declaration: one
+// committed between the check and the fence moves with the alliance, the old
+// owner's ask stops once it sees the alliance gone, and the new owner's war
+// scan picks the wait up (ScanWars, within warScanInterval). A guard with an
+// open reservation moves like any other: its deadline, armed in this process,
+// heals it through the route RPC wherever it is, and a lost deadline is made
+// up by the next request that finds it held.
 func (s *Service) TransferOwnership(ctx context.Context, ids []int64, count int, toSID int32) (TransferReport, error) {
 	report := TransferReport{Failed: map[int64]string{}}
 	switch {
@@ -106,6 +111,11 @@ func (s *Service) TransferOwnership(ctx context.Context, ids []int64, count int,
 				report.Pending = append(report.Pending, id)
 				continue
 			}
+			// Whatever is declared from here until the transfer fences this
+			// instance moves with the alliance; the new owner's war scan
+			// picks it up. Should the transfer fail, this instance's next
+			// scan reads the alliance again.
+			s.picked.drop(id)
 		}
 		if _, err := s.deps.Owners.TransferRemoteOwnership(ctx, id, toSID); err != nil {
 			report.Failed[id] = err.Error()
