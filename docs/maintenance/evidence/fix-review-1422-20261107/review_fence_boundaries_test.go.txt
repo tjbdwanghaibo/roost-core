@@ -1,0 +1,31 @@
+package saga
+
+import (
+	"context"
+	"errors"
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+	"testing"
+	"time"
+)
+
+func TestReviewFenceBusyBoundaries(t *testing.T) {
+	t.Run("empty_filter", func(t *testing.T) {
+		u := newUnitPartition(t, func(o *Options) { o.PublishTimeout = time.Millisecond; o.PublishUnknownBudget = time.Second })
+		l := &fenceLog{busy: 2}
+		u.e.log = l
+		seq, err := u.p.publishChunk(context.Background(), []fnats.LogMsg{{Subject: "unit.saga.0.ev.done", MsgID: "first"}}, fnats.LogFence{Filter: u.e.layout.EventFilter(0)})
+		if err != nil || seq != 1 || u.e.Stats().FenceBusy != 2 {
+			t.Fatalf("seq=%d err=%v stats=%+v", seq, err, u.e.Stats())
+		}
+	})
+	t.Run("persistent_busy_bounded", func(t *testing.T) {
+		u := newUnitPartition(t, func(o *Options) { o.PublishTimeout = time.Millisecond; o.PublishUnknownBudget = 15 * time.Millisecond })
+		l := &fenceLog{busy: 100000, last: fnats.LogMsg{Seq: 7, MsgID: "previous"}}
+		u.e.log = l
+		began := time.Now()
+		_, err := u.p.publishChunk(context.Background(), []fnats.LogMsg{{Subject: "unit.saga.0.ev.done", MsgID: "next"}}, fnats.LogFence{Filter: u.e.layout.EventFilter(0), LastSeq: 7})
+		if err == nil || errors.Is(err, ErrPartitionFenced) || time.Since(began) > time.Second || l.last.Seq != 7 {
+			t.Fatalf("err=%v elapsed=%v seq=%d", err, time.Since(began), l.last.Seq)
+		}
+	})
+}

@@ -1,0 +1,59 @@
+package alliance
+
+import (
+	"testing"
+)
+
+func TestReviewScanBetweenDropAndTransfer(t *testing.T) {
+	for _, concurrentScan := range []bool{false, true} {
+		t.Run(map[bool]string{false: "control", true: "scan_after_drop"}[concurrentScan], func(t *testing.T) {
+			c := newCluster(t, defaultRules(), 3000, 3001)
+			a := found(t, c, 3000, "a", 100, false)
+			b := found(t, c, 3000, "b", 102, false)
+			target := mustAllianceTarget(t, a)
+			old := c.instances[3000]
+			other := c.instances[3001]
+			if err := old.svc.scanWarsOnce(ctx); err != nil {
+				t.Fatal(err)
+			}
+			owners := old.svc.deps.Owners
+			old.svc.deps.Owners = transferHook{RemoteOwnershipManager: owners, before: func(int64) {
+				if concurrentScan {
+					if err := old.svc.scanWarsOnce(ctx); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}}
+			report, err := old.svc.TransferOwnership(ctx, []int64{target}, 0, 3001)
+			old.svc.deps.Owners = owners
+			if err != nil || len(report.Moved) != 1 {
+				t.Fatalf("outward transfer: %+v %v", report, err)
+			}
+			owners2 := other.svc.deps.Owners
+			other.svc.deps.Owners = transferHook{RemoteOwnershipManager: owners2, before: func(int64) {
+				if _, err := c.client().DeclareWar(ctx, "war-return", 100, homeSID, target, b); err != nil {
+					t.Fatal(err)
+				}
+			}}
+			report, err = other.svc.TransferOwnership(ctx, []int64{target}, 0, 3000)
+			other.svc.deps.Owners = owners2
+			if err != nil || len(report.Moved) != 1 {
+				t.Fatalf("return transfer: %+v %v", report, err)
+			}
+			c.runFollowUps()
+			for i := 0; i < 3; i++ {
+				if err := old.svc.scanWarsOnce(ctx); err != nil {
+					t.Fatal(err)
+				}
+				c.runFollowUps()
+			}
+			waits, err := old.svc.warAcks(ctx, target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(waits) != 0 || !has(info(t, c, b).Wars, a) {
+				t.Fatalf("scan skipped returned alliance: waits=%v enemyWars=%v", waits, info(t, c, b).Wars)
+			}
+		})
+	}
+}

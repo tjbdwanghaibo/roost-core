@@ -1,0 +1,56 @@
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/admission-only_control_overflows
+2026/11/07 07:40:26 INFO player tcp listener started addr=127.0.0.1:41055 max_connections=10000
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/written_lane_follows_the_link
+2026/11/07 07:40:26 INFO player tcp listener started addr=127.0.0.1:37577 max_connections=10000
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/admission-only_control_overflows
+2026/11/07 07:40:27 INFO player tcp listener started addr=127.0.0.1:43845 max_connections=10000
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link
+2026/11/07 07:40:28 INFO player tcp listener started addr=127.0.0.1:35249 max_connections=10000
+--- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive (8.43s)
+    --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket (1.84s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/admission-only_control_overflows (0.50s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/written_lane_follows_the_link (1.34s)
+    --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link (6.59s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/admission-only_control_overflows (0.55s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link (6.04s)
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/admission-only_control_overflows
+2026/11/07 07:40:34 INFO player tcp listener started addr=127.0.0.1:43065 max_connections=10000
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/written_lane_follows_the_link
+2026/11/07 07:40:35 INFO player tcp listener started addr=127.0.0.1:43147 max_connections=10000
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/admission-only_control_overflows
+2026/11/07 07:40:36 INFO player tcp listener started addr=127.0.0.1:34331 max_connections=10000
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link
+2026/11/07 07:40:36 INFO player tcp listener started addr=127.0.0.1:38023 max_connections=10000
+--- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive (9.62s)
+    --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket (1.89s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/admission-only_control_overflows (0.56s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/written_lane_follows_the_link (1.33s)
+    --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link (7.73s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/admission-only_control_overflows (0.55s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link (7.18s)
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/admission-only_control_overflows
+2026/11/07 07:40:44 INFO player tcp listener started addr=127.0.0.1:35615 max_connections=10000
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/written_lane_follows_the_link
+2026/11/07 07:40:44 INFO player tcp listener started addr=127.0.0.1:40119 max_connections=10000
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/admission-only_control_overflows
+2026/11/07 07:40:45 INFO player tcp listener started addr=127.0.0.1:41203 max_connections=10000
+=== RUN   TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link
+2026/11/07 07:40:46 INFO player tcp listener started addr=127.0.0.1:42449 max_connections=10000
+--- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive (8.38s)
+    --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket (1.70s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/admission-only_control_overflows (0.44s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/loopback_socket/written_lane_follows_the_link (1.27s)
+    --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link (6.67s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/admission-only_control_overflows (0.54s)
+        --- PASS: TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link (6.13s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep	27.490s

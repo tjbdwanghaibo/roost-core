@@ -1,0 +1,425 @@
+=== RUN   TestOnePlayerOneAllianceOnOneInstance
+--- PASS: TestOnePlayerOneAllianceOnOneInstance (0.54s)
+=== RUN   TestOnePlayerOneAllianceAcrossInstances
+--- PASS: TestOnePlayerOneAllianceAcrossInstances (0.56s)
+=== RUN   TestConcurrentGuardCreationHasOneOwner
+--- PASS: TestConcurrentGuardCreationHasOneOwner (0.29s)
+=== RUN   TestReservationDeadlineIsSettledByTheAlliance
+2026/11/07 07:41:03 WARN alliance: reservation deadline not settled; trying again player_id=201 alliance_id=1 request_id=approve-lost attempt=0 err="retryable: not executed; retry with the same request id: alliance: ask alliance 1 about request approve-lost of player 201: remote.4: not executed; retry with the same request id"
+2026/11/07 07:41:03 WARN alliance: guard not finished; the next request that finds it held heals it player_id=205 alliance_id=1 request_id=approve-205 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+--- PASS: TestReservationDeadlineIsSettledByTheAlliance (0.05s)
+=== RUN   TestFoundRetriedOnAnotherInstanceFoundsNoSecondAlliance
+--- PASS: TestFoundRetriedOnAnotherInstanceFoundsNoSecondAlliance (0.04s)
+=== RUN   TestAllianceWarIsOneTransactionOnOneInstance
+--- PASS: TestAllianceWarIsOneTransactionOnOneInstance (0.06s)
+=== RUN   TestAllianceWarAcrossInstancesIsEventuallyBothSides
+--- PASS: TestAllianceWarAcrossInstancesIsEventuallyBothSides (0.02s)
+=== RUN   TestAllianceRouteCheckRedirectsBeforeNest
+--- PASS: TestAllianceRouteCheckRedirectsBeforeNest (0.01s)
+=== RUN   TestAllianceWriteErrorsMapToFourAnswers
+--- PASS: TestAllianceWriteErrorsMapToFourAnswers (0.01s)
+=== RUN   TestTransferOwnershipMovesWhatThisInstanceOwns
+--- PASS: TestTransferOwnershipMovesWhatThisInstanceOwns (0.02s)
+=== RUN   TestAllianceWritesRecordNoEffect
+--- PASS: TestAllianceWritesRecordNoEffect (0.05s)
+=== RUN   TestLostWarAcknowledgmentIsMadeUp
+2026/11/07 07:41:04 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=1 enemy_id=2 request_id=war-a-b attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:04 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=1 enemy_id=3 request_id=war-a-e attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=1 waiting=1 took=886.012µs
+2026/11/07 07:41:04 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=1 enemy_id=4 request_id=war-a-f attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+--- PASS: TestLostWarAcknowledgmentIsMadeUp (0.04s)
+=== RUN   TestWarDeclaredDuringTransferIsAskedByTheNewOwner
+2026/11/07 07:41:04 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=2 enemy_id=1 request_id=war-before attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:04 INFO alliance: war wait left to the declarer's new owner alliance_id=3 request_id=war-between
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=1 waiting=0 took=920.017µs
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=2 waiting=1 took=1.956846ms
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=1 waiting=0 took=836.709µs
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=1 waiting=1 took=823.37µs
+2026/11/07 07:41:04 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=4 enemy_id=1 request_id=war-gone attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=2 waiting=0 took=2.019256ms
+2026/11/07 07:41:04 INFO alliance: war wait left to the declarer's new owner alliance_id=5 request_id=war-back
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=1 waiting=1 took=1.01923ms
+--- PASS: TestWarDeclaredDuringTransferIsAskedByTheNewOwner (0.07s)
+=== RUN   TestStartupWarScanReadsAlliancesConcurrently
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=24 waiting=0 took=19.781078ms
+--- PASS: TestStartupWarScanReadsAlliancesConcurrently (0.10s)
+=== RUN   TestWarScanDuringATransferOutDoesNotSkipTheReturn
+=== RUN   TestWarScanDuringATransferOutDoesNotSkipTheReturn/control
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=2 waiting=0 took=2.173392ms
+2026/11/07 07:41:04 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-on-the-way-back
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=1 waiting=1 took=1.138663ms
+=== RUN   TestWarScanDuringATransferOutDoesNotSkipTheReturn/scan_before_the_move
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=2 waiting=0 took=2.344064ms
+2026/11/07 07:41:04 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-on-the-way-back
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=1 waiting=1 took=1.26993ms
+--- PASS: TestWarScanDuringATransferOutDoesNotSkipTheReturn (0.05s)
+    --- PASS: TestWarScanDuringATransferOutDoesNotSkipTheReturn/control (0.02s)
+    --- PASS: TestWarScanDuringATransferOutDoesNotSkipTheReturn/scan_before_the_move (0.02s)
+=== RUN   TestWarScanPassesAnEmptyClaim
+2026/11/07 07:41:04 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=2 enemy_id=3 request_id=war-a-b attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:04 INFO alliance: war scan done alliances=2 waiting=1 took=1.35462ms
+--- PASS: TestWarScanPassesAnEmptyClaim (0.02s)
+=== RUN   TestReservationsOfDifferentPlayersDoNotWaitOnEachOther
+--- PASS: TestReservationsOfDifferentPlayersDoNotWaitOnEachOther (0.01s)
+=== RUN   TestMembershipAnswersTheRostersAlliance
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=201 alliance_id=1 request_id=join-201 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=202 alliance_id=1 request_id=join-202 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+--- PASS: TestMembershipAnswersTheRostersAlliance (0.03s)
+=== RUN   TestGuardHealsAfterALostCrossInstanceClear
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=201 alliance_id=1 request_id=join-a change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+--- PASS: TestGuardHealsAfterALostCrossInstanceClear (0.03s)
+=== RUN   TestGuardHealsALostReservationResolution
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=201 alliance_id=1 request_id=join-a-201 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+--- PASS: TestGuardHealsALostReservationResolution (0.05s)
+=== RUN   TestGuardCommitsCarryNoRemoteSnapshot
+--- PASS: TestGuardCommitsCarryNoRemoteSnapshot (0.01s)
+=== RUN   TestGuardHealingNeverLeavesASeatedPlayerUnguarded
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=313 alliance_id=3 request_id=join-313-1-0 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=310 alliance_id=4 request_id=join-310-1-0 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=306 alliance_id=4 request_id=join-306-1-0 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=313 alliance_id=3 request_id=join-313-1-0 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=302 alliance_id=4 request_id=join-302-1-0 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=310 alliance_id=4 request_id=join-310-1-0 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=303 alliance_id=1 request_id=join-303-1-0 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=315 alliance_id=1 request_id=join-315-0-1 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=306 alliance_id=4 request_id=join-306-1-0 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=315 alliance_id=1 request_id=join-315-0-1 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:04 WARN alliance: guard not finished; the next request that finds it held heals it player_id=313 alliance_id=3 request_id=join-313-0-1 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=303 alliance_id=1 request_id=join-303-0-1 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=300 alliance_id=4 request_id=join-300-1-2 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=305 alliance_id=1 request_id=join-305-1-2 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=312 alliance_id=4 request_id=join-312-1-2 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=303 alliance_id=1 request_id=join-303-0-1 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=305 alliance_id=1 request_id=join-305-1-2 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=314 alliance_id=2 request_id=join-314-1-2 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=310 alliance_id=4 request_id=join-310-0-1 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=309 alliance_id=1 request_id=join-309-1-2 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=302 alliance_id=4 request_id=join-302-0-1 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=313 alliance_id=1 request_id=join-313-1-2 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=306 alliance_id=2 request_id=join-306-1-2 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=312 alliance_id=2 request_id=join-312-1-4 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=300 alliance_id=4 request_id=join-300-0-3 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=310 alliance_id=4 request_id=join-310-1-4 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=314 alliance_id=4 request_id=join-314-1-4 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=315 alliance_id=1 request_id=join-315-0-5 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=302 alliance_id=2 request_id=join-302-1-2 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=313 alliance_id=1 request_id=join-313-0-3 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=315 alliance_id=1 request_id=join-315-0-5 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=311 alliance_id=1 request_id=join-311-0-5 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=308 alliance_id=2 request_id=join-308-0-5 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=303 alliance_id=3 request_id=join-303-0-3 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=302 alliance_id=2 request_id=join-302-0-3 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=308 alliance_id=2 request_id=join-308-1-4 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=315 alliance_id=1 request_id=join-315-0-last change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=308 alliance_id=2 request_id=join-308-1-4 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=313 alliance_id=3 request_id=join-313-1-4 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:05 WARN alliance: guard not finished; the next request that finds it held heals it player_id=306 alliance_id=2 request_id=join-306-1-last change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:06 WARN alliance: guard not finished; the next request that finds it held heals it player_id=314 alliance_id=4 request_id=join-314-0-5 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:06 WARN alliance: guard not finished; the next request that finds it held heals it player_id=305 alliance_id=3 request_id=join-305-0-5 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:06 WARN alliance: guard not finished; the next request that finds it held heals it player_id=305 alliance_id=1 request_id=join-305-0-last change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+--- PASS: TestGuardHealingNeverLeavesASeatedPlayerUnguarded (1.60s)
+=== RUN   TestReviewScanBetweenDropAndTransfer
+=== RUN   TestReviewScanBetweenDropAndTransfer/control
+2026/11/07 07:41:06 INFO alliance: war scan done alliances=2 waiting=0 took=2.540413ms
+2026/11/07 07:41:06 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 07:41:06 INFO alliance: war scan done alliances=1 waiting=1 took=1.236073ms
+=== RUN   TestReviewScanBetweenDropAndTransfer/scan_after_drop
+2026/11/07 07:41:06 INFO alliance: war scan done alliances=2 waiting=0 took=2.558593ms
+2026/11/07 07:41:06 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 07:41:06 INFO alliance: war scan done alliances=1 waiting=1 took=939.928µs
+--- PASS: TestReviewScanBetweenDropAndTransfer (0.07s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/control (0.05s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/scan_after_drop (0.03s)
+=== RUN   TestAllianceWriteReplaysItsReceipt
+--- PASS: TestAllianceWriteReplaysItsReceipt (0.03s)
+=== RUN   TestAlliancePermissions
+--- PASS: TestAlliancePermissions (0.04s)
+=== RUN   TestAllianceWriteToAMissingAllianceIsRejected
+--- PASS: TestAllianceWriteToAMissingAllianceIsRejected (0.00s)
+=== RUN   TestAllianceRosterLimit
+--- PASS: TestAllianceRosterLimit (0.01s)
+=== RUN   TestAllianceSettingsEnforceTheHardMemberLimit
+--- PASS: TestAllianceSettingsEnforceTheHardMemberLimit (0.00s)
+=== RUN   TestAllianceRewardIsClaimedOncePerPeriodAndReleasedByItsClaim
+--- PASS: TestAllianceRewardIsClaimedOncePerPeriodAndReleasedByItsClaim (0.04s)
+=== RUN   TestOnePlayerOneAllianceOnOneInstance
+--- PASS: TestOnePlayerOneAllianceOnOneInstance (0.58s)
+=== RUN   TestOnePlayerOneAllianceAcrossInstances
+--- PASS: TestOnePlayerOneAllianceAcrossInstances (0.64s)
+=== RUN   TestConcurrentGuardCreationHasOneOwner
+--- PASS: TestConcurrentGuardCreationHasOneOwner (0.34s)
+=== RUN   TestReservationDeadlineIsSettledByTheAlliance
+2026/11/07 07:41:07 WARN alliance: reservation deadline not settled; trying again player_id=201 alliance_id=1 request_id=approve-lost attempt=0 err="retryable: not executed; retry with the same request id: alliance: ask alliance 1 about request approve-lost of player 201: remote.4: not executed; retry with the same request id"
+2026/11/07 07:41:07 WARN alliance: guard not finished; the next request that finds it held heals it player_id=205 alliance_id=1 request_id=approve-205 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+--- PASS: TestReservationDeadlineIsSettledByTheAlliance (0.06s)
+=== RUN   TestFoundRetriedOnAnotherInstanceFoundsNoSecondAlliance
+--- PASS: TestFoundRetriedOnAnotherInstanceFoundsNoSecondAlliance (0.04s)
+=== RUN   TestAllianceWarIsOneTransactionOnOneInstance
+--- PASS: TestAllianceWarIsOneTransactionOnOneInstance (0.06s)
+=== RUN   TestAllianceWarAcrossInstancesIsEventuallyBothSides
+--- PASS: TestAllianceWarAcrossInstancesIsEventuallyBothSides (0.02s)
+=== RUN   TestAllianceRouteCheckRedirectsBeforeNest
+--- PASS: TestAllianceRouteCheckRedirectsBeforeNest (0.01s)
+=== RUN   TestAllianceWriteErrorsMapToFourAnswers
+--- PASS: TestAllianceWriteErrorsMapToFourAnswers (0.01s)
+=== RUN   TestTransferOwnershipMovesWhatThisInstanceOwns
+--- PASS: TestTransferOwnershipMovesWhatThisInstanceOwns (0.03s)
+=== RUN   TestAllianceWritesRecordNoEffect
+--- PASS: TestAllianceWritesRecordNoEffect (0.05s)
+=== RUN   TestLostWarAcknowledgmentIsMadeUp
+2026/11/07 07:41:08 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=1 enemy_id=2 request_id=war-a-b attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:08 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=1 enemy_id=3 request_id=war-a-e attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=1 waiting=1 took=986.589µs
+2026/11/07 07:41:08 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=1 enemy_id=4 request_id=war-a-f attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+--- PASS: TestLostWarAcknowledgmentIsMadeUp (0.06s)
+=== RUN   TestWarDeclaredDuringTransferIsAskedByTheNewOwner
+2026/11/07 07:41:08 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=2 enemy_id=1 request_id=war-before attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:08 INFO alliance: war wait left to the declarer's new owner alliance_id=3 request_id=war-between
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=1 waiting=0 took=923.116µs
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=2 waiting=1 took=2.231231ms
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=1 waiting=0 took=817.091µs
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=1 waiting=1 took=920.705µs
+2026/11/07 07:41:08 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=4 enemy_id=1 request_id=war-gone attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=2 waiting=0 took=2.094716ms
+2026/11/07 07:41:08 INFO alliance: war wait left to the declarer's new owner alliance_id=5 request_id=war-back
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=1 waiting=1 took=1.28897ms
+--- PASS: TestWarDeclaredDuringTransferIsAskedByTheNewOwner (0.07s)
+=== RUN   TestStartupWarScanReadsAlliancesConcurrently
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=24 waiting=0 took=23.636868ms
+--- PASS: TestStartupWarScanReadsAlliancesConcurrently (0.11s)
+=== RUN   TestWarScanDuringATransferOutDoesNotSkipTheReturn
+=== RUN   TestWarScanDuringATransferOutDoesNotSkipTheReturn/control
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=2 waiting=0 took=1.858482ms
+2026/11/07 07:41:08 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-on-the-way-back
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=1 waiting=1 took=1.342665ms
+=== RUN   TestWarScanDuringATransferOutDoesNotSkipTheReturn/scan_before_the_move
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=2 waiting=0 took=2.269182ms
+2026/11/07 07:41:08 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-on-the-way-back
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=1 waiting=1 took=1.495182ms
+--- PASS: TestWarScanDuringATransferOutDoesNotSkipTheReturn (0.05s)
+    --- PASS: TestWarScanDuringATransferOutDoesNotSkipTheReturn/control (0.02s)
+    --- PASS: TestWarScanDuringATransferOutDoesNotSkipTheReturn/scan_before_the_move (0.02s)
+=== RUN   TestWarScanPassesAnEmptyClaim
+2026/11/07 07:41:08 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=2 enemy_id=3 request_id=war-a-b attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:08 INFO alliance: war scan done alliances=2 waiting=1 took=2.006183ms
+--- PASS: TestWarScanPassesAnEmptyClaim (0.02s)
+=== RUN   TestReservationsOfDifferentPlayersDoNotWaitOnEachOther
+--- PASS: TestReservationsOfDifferentPlayersDoNotWaitOnEachOther (0.01s)
+=== RUN   TestMembershipAnswersTheRostersAlliance
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=201 alliance_id=1 request_id=join-201 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=202 alliance_id=1 request_id=join-202 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+--- PASS: TestMembershipAnswersTheRostersAlliance (0.03s)
+=== RUN   TestGuardHealsAfterALostCrossInstanceClear
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=201 alliance_id=1 request_id=join-a change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+--- PASS: TestGuardHealsAfterALostCrossInstanceClear (0.03s)
+=== RUN   TestGuardHealsALostReservationResolution
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=201 alliance_id=1 request_id=join-a-201 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+--- PASS: TestGuardHealsALostReservationResolution (0.04s)
+=== RUN   TestGuardCommitsCarryNoRemoteSnapshot
+--- PASS: TestGuardCommitsCarryNoRemoteSnapshot (0.01s)
+=== RUN   TestGuardHealingNeverLeavesASeatedPlayerUnguarded
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=305 alliance_id=3 request_id=join-305-1-0 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=306 alliance_id=4 request_id=join-306-1-0 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=302 alliance_id=4 request_id=join-302-0-1 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=315 alliance_id=1 request_id=join-315-1-0 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=312 alliance_id=2 request_id=join-312-0-1 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=310 alliance_id=4 request_id=join-310-0-1 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=302 alliance_id=4 request_id=join-302-0-1 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=307 alliance_id=1 request_id=join-307-0-1 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=308 alliance_id=2 request_id=join-308-0-1 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:08 WARN alliance: guard not finished; the next request that finds it held heals it player_id=311 alliance_id=1 request_id=join-311-0-1 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=314 alliance_id=4 request_id=join-314-0-1 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=303 alliance_id=1 request_id=join-303-0-1 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=305 alliance_id=1 request_id=join-305-1-2 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=304 alliance_id=4 request_id=join-304-0-3 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=300 alliance_id=4 request_id=join-300-0-3 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=312 alliance_id=4 request_id=join-312-0-3 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=307 alliance_id=3 request_id=join-307-1-2 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=308 alliance_id=4 request_id=join-308-1-2 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=315 alliance_id=1 request_id=join-315-0-1 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=307 alliance_id=3 request_id=join-307-0-3 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=302 alliance_id=2 request_id=join-302-0-3 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=315 alliance_id=1 request_id=join-315-0-1 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=314 alliance_id=4 request_id=join-314-1-4 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=307 alliance_id=3 request_id=join-307-0-3 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=303 alliance_id=3 request_id=join-303-0-3 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=305 alliance_id=1 request_id=join-305-0-3 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=315 alliance_id=1 request_id=join-315-1-4 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=311 alliance_id=1 request_id=join-311-0-5 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=315 alliance_id=1 request_id=join-315-1-4 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=311 alliance_id=1 request_id=join-311-0-5 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=300 alliance_id=2 request_id=join-300-0-5 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=302 alliance_id=4 request_id=join-302-0-5 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=304 alliance_id=2 request_id=join-304-0-5 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:09 WARN alliance: guard not finished; the next request that finds it held heals it player_id=310 alliance_id=4 request_id=join-310-0-5 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:10 WARN alliance: guard not finished; the next request that finds it held heals it player_id=312 alliance_id=2 request_id=join-312-1-last change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:10 WARN alliance: guard not finished; the next request that finds it held heals it player_id=303 alliance_id=1 request_id=join-303-0-last change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:10 WARN alliance: guard not finished; the next request that finds it held heals it player_id=310 alliance_id=2 request_id=join-310-1-last change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+--- PASS: TestGuardHealingNeverLeavesASeatedPlayerUnguarded (1.55s)
+=== RUN   TestReviewScanBetweenDropAndTransfer
+=== RUN   TestReviewScanBetweenDropAndTransfer/control
+2026/11/07 07:41:10 INFO alliance: war scan done alliances=2 waiting=0 took=2.384896ms
+2026/11/07 07:41:10 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 07:41:10 INFO alliance: war scan done alliances=1 waiting=1 took=962.675µs
+=== RUN   TestReviewScanBetweenDropAndTransfer/scan_after_drop
+2026/11/07 07:41:10 INFO alliance: war scan done alliances=2 waiting=0 took=2.048909ms
+2026/11/07 07:41:10 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 07:41:10 INFO alliance: war scan done alliances=1 waiting=1 took=1.278074ms
+--- PASS: TestReviewScanBetweenDropAndTransfer (0.06s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/control (0.03s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/scan_after_drop (0.03s)
+=== RUN   TestAllianceWriteReplaysItsReceipt
+--- PASS: TestAllianceWriteReplaysItsReceipt (0.03s)
+=== RUN   TestAlliancePermissions
+--- PASS: TestAlliancePermissions (0.04s)
+=== RUN   TestAllianceWriteToAMissingAllianceIsRejected
+--- PASS: TestAllianceWriteToAMissingAllianceIsRejected (0.00s)
+=== RUN   TestAllianceRosterLimit
+--- PASS: TestAllianceRosterLimit (0.01s)
+=== RUN   TestAllianceSettingsEnforceTheHardMemberLimit
+--- PASS: TestAllianceSettingsEnforceTheHardMemberLimit (0.00s)
+=== RUN   TestAllianceRewardIsClaimedOncePerPeriodAndReleasedByItsClaim
+--- PASS: TestAllianceRewardIsClaimedOncePerPeriodAndReleasedByItsClaim (0.04s)
+=== RUN   TestOnePlayerOneAllianceOnOneInstance
+--- PASS: TestOnePlayerOneAllianceOnOneInstance (0.58s)
+=== RUN   TestOnePlayerOneAllianceAcrossInstances
+--- PASS: TestOnePlayerOneAllianceAcrossInstances (0.60s)
+=== RUN   TestConcurrentGuardCreationHasOneOwner
+--- PASS: TestConcurrentGuardCreationHasOneOwner (0.33s)
+=== RUN   TestReservationDeadlineIsSettledByTheAlliance
+2026/11/07 07:41:11 WARN alliance: reservation deadline not settled; trying again player_id=201 alliance_id=1 request_id=approve-lost attempt=0 err="retryable: not executed; retry with the same request id: alliance: ask alliance 1 about request approve-lost of player 201: remote.4: not executed; retry with the same request id"
+2026/11/07 07:41:11 WARN alliance: guard not finished; the next request that finds it held heals it player_id=205 alliance_id=1 request_id=approve-205 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+--- PASS: TestReservationDeadlineIsSettledByTheAlliance (0.06s)
+=== RUN   TestFoundRetriedOnAnotherInstanceFoundsNoSecondAlliance
+--- PASS: TestFoundRetriedOnAnotherInstanceFoundsNoSecondAlliance (0.04s)
+=== RUN   TestAllianceWarIsOneTransactionOnOneInstance
+--- PASS: TestAllianceWarIsOneTransactionOnOneInstance (0.06s)
+=== RUN   TestAllianceWarAcrossInstancesIsEventuallyBothSides
+--- PASS: TestAllianceWarAcrossInstancesIsEventuallyBothSides (0.02s)
+=== RUN   TestAllianceRouteCheckRedirectsBeforeNest
+--- PASS: TestAllianceRouteCheckRedirectsBeforeNest (0.01s)
+=== RUN   TestAllianceWriteErrorsMapToFourAnswers
+--- PASS: TestAllianceWriteErrorsMapToFourAnswers (0.01s)
+=== RUN   TestTransferOwnershipMovesWhatThisInstanceOwns
+--- PASS: TestTransferOwnershipMovesWhatThisInstanceOwns (0.03s)
+=== RUN   TestAllianceWritesRecordNoEffect
+--- PASS: TestAllianceWritesRecordNoEffect (0.06s)
+=== RUN   TestLostWarAcknowledgmentIsMadeUp
+2026/11/07 07:41:12 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=1 enemy_id=2 request_id=war-a-b attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:12 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=1 enemy_id=3 request_id=war-a-e attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=1 waiting=1 took=1.309013ms
+2026/11/07 07:41:12 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=1 enemy_id=4 request_id=war-a-f attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+--- PASS: TestLostWarAcknowledgmentIsMadeUp (0.05s)
+=== RUN   TestWarDeclaredDuringTransferIsAskedByTheNewOwner
+2026/11/07 07:41:12 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=2 enemy_id=1 request_id=war-before attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:12 INFO alliance: war wait left to the declarer's new owner alliance_id=3 request_id=war-between
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=1 waiting=0 took=968.218µs
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=2 waiting=1 took=2.146921ms
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=1 waiting=0 took=985.236µs
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=1 waiting=1 took=927.939µs
+2026/11/07 07:41:12 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=4 enemy_id=1 request_id=war-gone attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=2 waiting=0 took=2.070965ms
+2026/11/07 07:41:12 INFO alliance: war wait left to the declarer's new owner alliance_id=5 request_id=war-back
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=1 waiting=1 took=969.628µs
+--- PASS: TestWarDeclaredDuringTransferIsAskedByTheNewOwner (0.07s)
+=== RUN   TestStartupWarScanReadsAlliancesConcurrently
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=24 waiting=0 took=25.363286ms
+--- PASS: TestStartupWarScanReadsAlliancesConcurrently (0.11s)
+=== RUN   TestWarScanDuringATransferOutDoesNotSkipTheReturn
+=== RUN   TestWarScanDuringATransferOutDoesNotSkipTheReturn/control
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=2 waiting=0 took=3.849908ms
+2026/11/07 07:41:12 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-on-the-way-back
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=1 waiting=1 took=831.839µs
+=== RUN   TestWarScanDuringATransferOutDoesNotSkipTheReturn/scan_before_the_move
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=2 waiting=0 took=1.602384ms
+2026/11/07 07:41:12 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-on-the-way-back
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=1 waiting=1 took=1.01949ms
+--- PASS: TestWarScanDuringATransferOutDoesNotSkipTheReturn (0.05s)
+    --- PASS: TestWarScanDuringATransferOutDoesNotSkipTheReturn/control (0.03s)
+    --- PASS: TestWarScanDuringATransferOutDoesNotSkipTheReturn/scan_before_the_move (0.02s)
+=== RUN   TestWarScanPassesAnEmptyClaim
+2026/11/07 07:41:12 WARN alliance: the enemy's side of a war is not recorded yet; asking again alliance_id=2 enemy_id=3 request_id=war-a-b attempt=0 err="nats: no responders: alliance.AcknowledgeWar lost on the way to sid 3001"
+2026/11/07 07:41:12 INFO alliance: war scan done alliances=2 waiting=1 took=1.48758ms
+--- PASS: TestWarScanPassesAnEmptyClaim (0.02s)
+=== RUN   TestReservationsOfDifferentPlayersDoNotWaitOnEachOther
+--- PASS: TestReservationsOfDifferentPlayersDoNotWaitOnEachOther (0.01s)
+=== RUN   TestMembershipAnswersTheRostersAlliance
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=201 alliance_id=1 request_id=join-201 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=202 alliance_id=1 request_id=join-202 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+--- PASS: TestMembershipAnswersTheRostersAlliance (0.05s)
+=== RUN   TestGuardHealsAfterALostCrossInstanceClear
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=201 alliance_id=1 request_id=join-a change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+--- PASS: TestGuardHealsAfterALostCrossInstanceClear (0.04s)
+=== RUN   TestGuardHealsALostReservationResolution
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=201 alliance_id=1 request_id=join-a-201 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+--- PASS: TestGuardHealsALostReservationResolution (0.05s)
+=== RUN   TestGuardCommitsCarryNoRemoteSnapshot
+--- PASS: TestGuardCommitsCarryNoRemoteSnapshot (0.01s)
+=== RUN   TestGuardHealingNeverLeavesASeatedPlayerUnguarded
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=301 alliance_id=3 request_id=join-301-0-1 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=309 alliance_id=3 request_id=join-309-0-1 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=306 alliance_id=4 request_id=join-306-1-0 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=309 alliance_id=3 request_id=join-309-0-1 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=304 alliance_id=2 request_id=join-304-1-0 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=307 alliance_id=1 request_id=join-307-0-1 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=304 alliance_id=2 request_id=join-304-1-0 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=311 alliance_id=1 request_id=join-311-0-1 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:12 WARN alliance: guard not finished; the next request that finds it held heals it player_id=306 alliance_id=4 request_id=join-306-1-0 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=310 alliance_id=4 request_id=join-310-1-0 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=300 alliance_id=4 request_id=join-300-1-2 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=314 alliance_id=2 request_id=join-314-0-3 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=314 alliance_id=2 request_id=join-314-0-3 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=307 alliance_id=3 request_id=join-307-0-3 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=307 alliance_id=3 request_id=join-307-0-3 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=304 alliance_id=4 request_id=join-304-0-3 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=311 alliance_id=3 request_id=join-311-0-3 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=300 alliance_id=2 request_id=join-300-1-4 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=315 alliance_id=3 request_id=join-315-1-2 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=305 alliance_id=1 request_id=join-305-1-2 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=308 alliance_id=2 request_id=join-308-1-4 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=310 alliance_id=4 request_id=join-310-0-1 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=313 alliance_id=1 request_id=join-313-1-2 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=306 alliance_id=4 request_id=join-306-1-4 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=302 alliance_id=2 request_id=join-302-0-3 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=304 alliance_id=2 request_id=join-304-0-5 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=306 alliance_id=4 request_id=join-306-1-4 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=311 alliance_id=1 request_id=join-311-0-5 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=309 alliance_id=3 request_id=join-309-1-4 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=304 alliance_id=2 request_id=join-304-0-5 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=305 alliance_id=3 request_id=join-305-1-4 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=302 alliance_id=4 request_id=join-302-1-4 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3000"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=301 alliance_id=3 request_id=join-301-1-4 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=301 alliance_id=3 request_id=join-301-1-4 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=303 alliance_id=1 request_id=join-303-0-last change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:13 WARN alliance: guard not finished; the next request that finds it held heals it player_id=315 alliance_id=1 request_id=join-315-1-4 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:14 WARN alliance: guard not finished; the next request that finds it held heals it player_id=305 alliance_id=3 request_id=join-305-0-5 change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:14 WARN alliance: guard not finished; the next request that finds it held heals it player_id=307 alliance_id=1 request_id=join-307-0-last change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+2026/11/07 07:41:14 WARN alliance: guard not finished; the next request that finds it held heals it player_id=309 alliance_id=3 request_id=join-309-0-5 change=left err="nats: no responders: alliance.ClearGuard lost on the way to sid 3001"
+2026/11/07 07:41:14 WARN alliance: guard not finished; the next request that finds it held heals it player_id=301 alliance_id=1 request_id=join-301-0-last change=joined err="nats: no responders: alliance.ResolveGuard lost on the way to sid 3001"
+--- PASS: TestGuardHealingNeverLeavesASeatedPlayerUnguarded (1.59s)
+=== RUN   TestReviewScanBetweenDropAndTransfer
+=== RUN   TestReviewScanBetweenDropAndTransfer/control
+2026/11/07 07:41:14 INFO alliance: war scan done alliances=2 waiting=0 took=2.136774ms
+2026/11/07 07:41:14 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 07:41:14 INFO alliance: war scan done alliances=1 waiting=1 took=909.915µs
+=== RUN   TestReviewScanBetweenDropAndTransfer/scan_after_drop
+2026/11/07 07:41:14 INFO alliance: war scan done alliances=2 waiting=0 took=1.775136ms
+2026/11/07 07:41:14 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 07:41:14 INFO alliance: war scan done alliances=1 waiting=1 took=1.318011ms
+--- PASS: TestReviewScanBetweenDropAndTransfer (0.05s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/control (0.02s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/scan_after_drop (0.03s)
+=== RUN   TestAllianceWriteReplaysItsReceipt
+--- PASS: TestAllianceWriteReplaysItsReceipt (0.03s)
+=== RUN   TestAlliancePermissions
+--- PASS: TestAlliancePermissions (0.04s)
+=== RUN   TestAllianceWriteToAMissingAllianceIsRejected
+--- PASS: TestAllianceWriteToAMissingAllianceIsRejected (0.00s)
+=== RUN   TestAllianceRosterLimit
+--- PASS: TestAllianceRosterLimit (0.01s)
+=== RUN   TestAllianceSettingsEnforceTheHardMemberLimit
+--- PASS: TestAllianceSettingsEnforceTheHardMemberLimit (0.00s)
+=== RUN   TestAllianceRewardIsClaimedOncePerPeriodAndReleasedByItsClaim
+--- PASS: TestAllianceRewardIsClaimedOncePerPeriodAndReleasedByItsClaim (0.04s)
+PASS
+ok  	example.com/planet/internal/rpc/alliance	12.892s

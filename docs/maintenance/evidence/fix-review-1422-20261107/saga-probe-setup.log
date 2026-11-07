@@ -1,0 +1,83 @@
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter
+--- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter (0.00s)
+=== RUN   TestReviewFenceBusyBoundaries
+=== RUN   TestReviewFenceBusyBoundaries/empty_filter
+    review_fence_boundaries_test.go:13: saga: invalid definition: publish timeout 1s must be < publish unknown budget 1s
+=== RUN   TestReviewFenceBusyBoundaries/persistent_busy_bounded
+    review_fence_boundaries_test.go:22: saga: invalid definition: publish timeout 1s must be < publish unknown budget 15ms
+--- FAIL: TestReviewFenceBusyBoundaries (0.00s)
+    --- FAIL: TestReviewFenceBusyBoundaries/empty_filter (0.00s)
+    --- FAIL: TestReviewFenceBusyBoundaries/persistent_busy_bounded (0.00s)
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter
+--- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter (0.00s)
+=== RUN   TestReviewFenceBusyBoundaries
+=== RUN   TestReviewFenceBusyBoundaries/empty_filter
+    review_fence_boundaries_test.go:13: saga: invalid definition: publish timeout 1s must be < publish unknown budget 1s
+=== RUN   TestReviewFenceBusyBoundaries/persistent_busy_bounded
+    review_fence_boundaries_test.go:22: saga: invalid definition: publish timeout 1s must be < publish unknown budget 15ms
+--- FAIL: TestReviewFenceBusyBoundaries (0.00s)
+    --- FAIL: TestReviewFenceBusyBoundaries/empty_filter (0.00s)
+    --- FAIL: TestReviewFenceBusyBoundaries/persistent_busy_bounded (0.00s)
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter
+--- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter (0.00s)
+=== RUN   TestReviewFenceBusyBoundaries
+=== RUN   TestReviewFenceBusyBoundaries/empty_filter
+    review_fence_boundaries_test.go:13: saga: invalid definition: publish timeout 1s must be < publish unknown budget 1s
+=== RUN   TestReviewFenceBusyBoundaries/persistent_busy_bounded
+    review_fence_boundaries_test.go:22: saga: invalid definition: publish timeout 1s must be < publish unknown budget 15ms
+--- FAIL: TestReviewFenceBusyBoundaries (0.01s)
+    --- FAIL: TestReviewFenceBusyBoundaries/empty_filter (0.00s)
+    --- FAIL: TestReviewFenceBusyBoundaries/persistent_busy_bounded (0.00s)
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter
+--- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter (0.00s)
+=== RUN   TestReviewFenceBusyBoundaries
+=== RUN   TestReviewFenceBusyBoundaries/empty_filter
+    review_fence_boundaries_test.go:13: saga: invalid definition: publish timeout 1s must be < publish unknown budget 1s
+=== RUN   TestReviewFenceBusyBoundaries/persistent_busy_bounded
+    review_fence_boundaries_test.go:22: saga: invalid definition: publish timeout 1s must be < publish unknown budget 15ms
+--- FAIL: TestReviewFenceBusyBoundaries (0.00s)
+    --- FAIL: TestReviewFenceBusyBoundaries/empty_filter (0.00s)
+    --- FAIL: TestReviewFenceBusyBoundaries/persistent_busy_bounded (0.00s)
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter
+--- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter (0.00s)
+=== RUN   TestReviewFenceBusyBoundaries
+=== RUN   TestReviewFenceBusyBoundaries/empty_filter
+    review_fence_boundaries_test.go:13: saga: invalid definition: publish timeout 1s must be < publish unknown budget 1s
+=== RUN   TestReviewFenceBusyBoundaries/persistent_busy_bounded
+    review_fence_boundaries_test.go:22: saga: invalid definition: publish timeout 1s must be < publish unknown budget 15ms
+--- FAIL: TestReviewFenceBusyBoundaries (0.00s)
+    --- FAIL: TestReviewFenceBusyBoundaries/empty_filter (0.00s)
+    --- FAIL: TestReviewFenceBusyBoundaries/persistent_busy_bounded (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/saga	0.142s
+FAIL

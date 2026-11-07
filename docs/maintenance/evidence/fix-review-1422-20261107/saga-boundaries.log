@@ -1,0 +1,72 @@
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter
+--- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter (0.00s)
+=== RUN   TestReviewFenceBusyBoundaries
+=== RUN   TestReviewFenceBusyBoundaries/empty_filter
+=== RUN   TestReviewFenceBusyBoundaries/persistent_busy_bounded
+--- PASS: TestReviewFenceBusyBoundaries (0.02s)
+    --- PASS: TestReviewFenceBusyBoundaries/empty_filter (0.00s)
+    --- PASS: TestReviewFenceBusyBoundaries/persistent_busy_bounded (0.02s)
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter
+--- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter (0.00s)
+=== RUN   TestReviewFenceBusyBoundaries
+=== RUN   TestReviewFenceBusyBoundaries/empty_filter
+=== RUN   TestReviewFenceBusyBoundaries/persistent_busy_bounded
+--- PASS: TestReviewFenceBusyBoundaries (0.02s)
+    --- PASS: TestReviewFenceBusyBoundaries/empty_filter (0.00s)
+    --- PASS: TestReviewFenceBusyBoundaries/persistent_busy_bounded (0.02s)
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter
+--- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter (0.00s)
+=== RUN   TestReviewFenceBusyBoundaries
+=== RUN   TestReviewFenceBusyBoundaries/empty_filter
+=== RUN   TestReviewFenceBusyBoundaries/persistent_busy_bounded
+--- PASS: TestReviewFenceBusyBoundaries (0.02s)
+    --- PASS: TestReviewFenceBusyBoundaries/empty_filter (0.00s)
+    --- PASS: TestReviewFenceBusyBoundaries/persistent_busy_bounded (0.02s)
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter
+--- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter (0.00s)
+=== RUN   TestReviewFenceBusyBoundaries
+=== RUN   TestReviewFenceBusyBoundaries/empty_filter
+=== RUN   TestReviewFenceBusyBoundaries/persistent_busy_bounded
+--- PASS: TestReviewFenceBusyBoundaries (0.02s)
+    --- PASS: TestReviewFenceBusyBoundaries/empty_filter (0.00s)
+    --- PASS: TestReviewFenceBusyBoundaries/persistent_busy_bounded (0.02s)
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands
+=== RUN   TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter
+--- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands (0.00s)
+    --- PASS: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter (0.00s)
+=== RUN   TestReviewFenceBusyBoundaries
+=== RUN   TestReviewFenceBusyBoundaries/empty_filter
+=== RUN   TestReviewFenceBusyBoundaries/persistent_busy_bounded
+--- PASS: TestReviewFenceBusyBoundaries (0.02s)
+    --- PASS: TestReviewFenceBusyBoundaries/empty_filter (0.00s)
+    --- PASS: TestReviewFenceBusyBoundaries/persistent_busy_bounded (0.02s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/saga	1.191s
