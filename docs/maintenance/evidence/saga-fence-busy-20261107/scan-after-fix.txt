@@ -1,0 +1,34 @@
+# 修复后 Saga 整轮（main 70c32852，scripts/perf/saga-js-scan.sh 缺省 15 档，本机私有三节点 NATS + 私有 mongod）
+# fence_busy = 期望序号检查撞上服务端处理中而重发的次数；06 档出现 1 次，旧实现会在此 fail-stop
+level	per_second	p50_ms	p99_ms	unexpected	balance_mismatch	balance_read_errors	mongo_checked	unobserved	publish_unknown	backlog_peak	load_s
+01-native-forward-1	39.8	24.8	37.5	0	0	0	True	0	0	4	30.0
+02-native-forward-16	255.2	60.8	114.3	0	0	0	True	0	0	54	30.0
+03-native-forward-64	643.8	98.1	151.6	0	0	0	True	0	0	155	30.1
+04-native-forward-128	1055.4	118.5	198.9	0	0	0	True	0	0	270	30.1
+05-native-compensate-16	175.4	89.8	145.3	0	0	0	True	0	0	76	30.1
+06-native-compensate-128	695.6	179.0	340.8	0	0	0	True	0	0	309	30.1
+07-native-forward-128-strict4	257.8	481.3	891.4	0	0	0	True	0	0	68	30.4
+08-native-forward-128-strict64	967.7	129.1	228.1	0	0	0	True	0	0	243	30.1
+09-mongo-forward-16	540.8	27.7	56.4	0	0	0	True	0	0	0	30.0
+10-mongo-forward-128	1046.2	119.6	201.0	0	0	0	True	0	0	0	30.1
+11-admission-128	1273.4	63.7	1482.5	0	0	0	True	0	0	5557	30.1
+12-snapshot-64	646	97.0	158.3	0	0	0	True	0	0	222	30.1
+13-replay-10000	0	0	0	0	0	0	False	0	0	0	0
+14-replay-50000	0	0	0	0	0	0	False	0	0	0	0
+15-native-forward-128	1060.6	117.2	221.2	0	0	0	True	0	0	313	30.1
+
+01-native-forward-1 fence_busy=0
+02-native-forward-16 fence_busy=0
+03-native-forward-64 fence_busy=0
+04-native-forward-128 fence_busy=0
+05-native-compensate-16 fence_busy=0
+06-native-compensate-128 fence_busy=1
+07-native-forward-128-strict4 fence_busy=0
+08-native-forward-128-strict64 fence_busy=0
+09-mongo-forward-16 fence_busy=0
+10-mongo-forward-128 fence_busy=0
+11-admission-128 fence_busy=0
+12-snapshot-64 fence_busy=0
+13-replay-10000 fence_busy=0
+14-replay-50000 fence_busy=0
+15-native-forward-128 fence_busy=0

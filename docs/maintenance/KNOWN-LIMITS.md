@@ -15,7 +15,7 @@ v1.42.1 发版前 Saga 整轮压测（`scripts/perf/saga-js-scan.sh`，main `4b6
 
 **根因（2026-11-07 追加，以上原结论保留）**：错误码 10164 不是“序号真的不符”（那是 10071），而是 nats-server 2.14.5 在入站检查（`jetstream_batching.go` 的 `expectedPerSubjectInProcess`）发现同一个期望序号过滤还有提案在处理。服务端 apply 时先存消息、回 PubAck，之后才清这个标记（`jetstream_cluster.go`），协调器收到上一轮 ack 立刻发下一轮就可能撞上；这次没有写入，过滤上最后一条仍是自己上一轮的末条。旧实现只看“最后一条是不是这一块的”，于是判成被隔离。真实三节点集群探针：单写者背靠背 80 万次发布出现 2 次（[证据](evidence/saga-fence-busy-20261107/probe-results.txt)），与压测频率同量级。
 
-**修复**：期望序号被拒后，最后一条序号仍等于期望序号 = 还没有任何写入，原样重发（同一个 fence，别的写者落库后照样被隔离），计 `Stats.FenceBusy`；已前进且不是自己的才 `ErrPartitionFenced`，错误里带上过滤当前序号与 MsgID。回归 `TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter`（修前红文本与压测原样一致；把判据改成“一律重发”的变异让两条真隔离用例变红），真实集群 saga 用例与 `nofence` 变异照旧。见 CHANGELOG `[Unreleased]`。
+**修复**：期望序号被拒后，最后一条序号仍等于期望序号 = 还没有任何写入，原样重发（同一个 fence，别的写者落库后照样被隔离），计 `Stats.FenceBusy`；已前进且不是自己的才 `ErrPartitionFenced`，错误里带上过滤当前序号与 MsgID。回归 `TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter`（修前红文本与压测原样一致；把判据改成“一律重发”的变异让两条真隔离用例变红），真实集群 saga 用例与 `nofence` 变异照旧。见 CHANGELOG `[Unreleased]`。 修复后 Saga 整轮 15 档全部通过，其中 native-compensate c128 一档 `fence_busy=1`——真实负载下撞上了这个窗口并重发成功，旧实现会在此 fail-stop（[整轮结果](evidence/saga-fence-busy-20261107/scan-after-fix.txt)）。
 
 ## 2026-11-07：新功能审查收尾
 
