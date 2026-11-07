@@ -1,0 +1,51 @@
+=== RUN   TestLateLeaveDoesNotRemoveReenteredActor
+--- PASS: TestLateLeaveDoesNotRemoveReenteredActor (0.43s)
+=== RUN   TestLateLeaveAfterHandoffKeepsTheNewEntry
+--- PASS: TestLateLeaveAfterHandoffKeepsTheNewEntry (1.21s)
+=== RUN   TestStateMsgpackRoundTrip
+--- PASS: TestStateMsgpackRoundTrip (0.00s)
+=== RUN   TestReviewBaseStateMsgpackRoundTrip
+--- PASS: TestReviewBaseStateMsgpackRoundTrip (0.00s)
+=== RUN   TestReviewOldLeaveMustNotDeleteReenteredActor
+--- PASS: TestReviewOldLeaveMustNotDeleteReenteredActor (0.43s)
+=== RUN   TestWorldJitterAtBoundary
+    world_test.go:493: views=84 worst miss=0 worst gap=56.487019ms final owner sid=101 epoch=13
+--- PASS: TestWorldJitterAtBoundary (4.10s)
+=== RUN   TestWorldJitterAtBoundarySlowHandoffConclusion
+2026/11/07 01:35:02 WARN heartbeat: beats skipped (previous beat still in flight, admission refused, or presumed lost); the entity's worker is falling behind or a callback is slow driver=cell-102 since_last_warn=map[inflight:1] sample_entity=105294 sample_registration=scene.cell sample_reason=inflight
+    world_test.go:493: views=108 worst miss=0 worst gap=119.386927ms final owner sid=101 epoch=13
+--- PASS: TestWorldJitterAtBoundarySlowHandoffConclusion (5.52s)
+=== RUN   TestLateLeaveDoesNotRemoveReenteredActor
+--- PASS: TestLateLeaveDoesNotRemoveReenteredActor (0.42s)
+=== RUN   TestLateLeaveAfterHandoffKeepsTheNewEntry
+--- PASS: TestLateLeaveAfterHandoffKeepsTheNewEntry (1.15s)
+=== RUN   TestStateMsgpackRoundTrip
+--- PASS: TestStateMsgpackRoundTrip (0.00s)
+=== RUN   TestReviewBaseStateMsgpackRoundTrip
+--- PASS: TestReviewBaseStateMsgpackRoundTrip (0.00s)
+=== RUN   TestReviewOldLeaveMustNotDeleteReenteredActor
+--- PASS: TestReviewOldLeaveMustNotDeleteReenteredActor (0.42s)
+=== RUN   TestWorldJitterAtBoundary
+    world_test.go:493: views=84 worst miss=0 worst gap=77.483912ms final owner sid=101 epoch=13
+--- PASS: TestWorldJitterAtBoundary (4.28s)
+=== RUN   TestWorldJitterAtBoundarySlowHandoffConclusion
+    world_test.go:493: views=102 worst miss=0 worst gap=81.054758ms final owner sid=101 epoch=13
+--- PASS: TestWorldJitterAtBoundarySlowHandoffConclusion (5.18s)
+=== RUN   TestLateLeaveDoesNotRemoveReenteredActor
+--- PASS: TestLateLeaveDoesNotRemoveReenteredActor (0.43s)
+=== RUN   TestLateLeaveAfterHandoffKeepsTheNewEntry
+--- PASS: TestLateLeaveAfterHandoffKeepsTheNewEntry (1.16s)
+=== RUN   TestStateMsgpackRoundTrip
+--- PASS: TestStateMsgpackRoundTrip (0.00s)
+=== RUN   TestReviewBaseStateMsgpackRoundTrip
+--- PASS: TestReviewBaseStateMsgpackRoundTrip (0.00s)
+=== RUN   TestReviewOldLeaveMustNotDeleteReenteredActor
+--- PASS: TestReviewOldLeaveMustNotDeleteReenteredActor (0.42s)
+=== RUN   TestWorldJitterAtBoundary
+    world_test.go:493: views=84 worst miss=0 worst gap=76.671819ms final owner sid=101 epoch=13
+--- PASS: TestWorldJitterAtBoundary (4.29s)
+=== RUN   TestWorldJitterAtBoundarySlowHandoffConclusion
+    world_test.go:493: views=102 worst miss=0 worst gap=81.65279ms final owner sid=101 epoch=13
+--- PASS: TestWorldJitterAtBoundarySlowHandoffConclusion (5.18s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	35.682s

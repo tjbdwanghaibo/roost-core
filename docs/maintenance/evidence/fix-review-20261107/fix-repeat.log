@@ -1,0 +1,238 @@
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/strict/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/strict/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/async/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/async/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/pipelined/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/pipelined/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/strict/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/strict/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/async/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/async/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/pipelined/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/pipelined/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/strict/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/strict/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/async/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/async/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/pipelined/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/pipelined/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/strict/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/strict/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/async/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/async/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/pipelined/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/pipelined/best_effort
+--- PASS: TestAFailedCreateDoesNotPublishItsEffects (0.13s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/strict/reliable (0.02s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/strict/best_effort (0.01s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/async/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/async/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/pipelined/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/pipelined/best_effort (0.01s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/strict/reliable (0.02s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/strict/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/async/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/async/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/pipelined/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/pipelined/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/strict/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/strict/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/async/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/async/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/pipelined/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/pipelined/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/strict/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/strict/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/async/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/async/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/pipelined/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/pipelined/best_effort (0.00s)
+=== RUN   TestReviewFailedBuildModifiesAlreadyRegisteredDAO
+--- PASS: TestReviewFailedBuildModifiesAlreadyRegisteredDAO (0.00s)
+=== RUN   TestReviewFailedCreateBestEffortEscapes
+=== RUN   TestReviewFailedCreateBestEffortEscapes/reliable
+=== RUN   TestReviewFailedCreateBestEffortEscapes/best_effort
+--- PASS: TestReviewFailedCreateBestEffortEscapes (0.01s)
+    --- PASS: TestReviewFailedCreateBestEffortEscapes/reliable (0.00s)
+    --- PASS: TestReviewFailedCreateBestEffortEscapes/best_effort (0.00s)
+=== RUN   TestReviewFailedBuildModifiesAlreadyBoundReceipt
+--- PASS: TestReviewFailedBuildModifiesAlreadyBoundReceipt (0.00s)
+=== RUN   TestReviewFailedBuildReceiptPropagatedError
+--- PASS: TestReviewFailedBuildReceiptPropagatedError (0.00s)
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/strict/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/strict/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/async/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/async/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/pipelined/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/pipelined/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/strict/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/strict/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/async/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/async/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/pipelined/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/pipelined/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/strict/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/strict/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/async/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/async/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/pipelined/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/pipelined/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/strict/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/strict/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/async/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/async/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/pipelined/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/pipelined/best_effort
+--- PASS: TestAFailedCreateDoesNotPublishItsEffects (0.08s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/strict/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/strict/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/async/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/async/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/pipelined/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/pipelined/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/strict/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/strict/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/async/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/async/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/pipelined/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/pipelined/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/strict/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/strict/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/async/reliable (0.01s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/async/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/pipelined/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/pipelined/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/strict/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/strict/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/async/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/async/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/pipelined/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/pipelined/best_effort (0.00s)
+=== RUN   TestReviewFailedBuildModifiesAlreadyRegisteredDAO
+--- PASS: TestReviewFailedBuildModifiesAlreadyRegisteredDAO (0.00s)
+=== RUN   TestReviewFailedCreateBestEffortEscapes
+=== RUN   TestReviewFailedCreateBestEffortEscapes/reliable
+=== RUN   TestReviewFailedCreateBestEffortEscapes/best_effort
+--- PASS: TestReviewFailedCreateBestEffortEscapes (0.00s)
+    --- PASS: TestReviewFailedCreateBestEffortEscapes/reliable (0.00s)
+    --- PASS: TestReviewFailedCreateBestEffortEscapes/best_effort (0.00s)
+=== RUN   TestReviewFailedBuildModifiesAlreadyBoundReceipt
+--- PASS: TestReviewFailedBuildModifiesAlreadyBoundReceipt (0.01s)
+=== RUN   TestReviewFailedBuildReceiptPropagatedError
+--- PASS: TestReviewFailedBuildReceiptPropagatedError (0.00s)
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/strict/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/strict/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/async/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/async/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/pipelined/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/builder/pipelined/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/strict/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/strict/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/async/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/async/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/pipelined/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/component_Init/pipelined/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/strict/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/strict/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/async/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/async/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/pipelined/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/pipelined/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/strict/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/strict/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/async/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/async/best_effort
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/pipelined/reliable
+=== RUN   TestAFailedCreateDoesNotPublishItsEffects/none/pipelined/best_effort
+--- PASS: TestAFailedCreateDoesNotPublishItsEffects (0.08s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/strict/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/strict/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/async/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/async/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/pipelined/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/builder/pipelined/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/strict/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/strict/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/async/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/async/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/pipelined/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/component_Init/pipelined/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/strict/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/strict/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/async/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/async/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/pipelined/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/OnInitFinish/pipelined/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/strict/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/strict/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/async/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/async/best_effort (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/pipelined/reliable (0.00s)
+    --- PASS: TestAFailedCreateDoesNotPublishItsEffects/none/pipelined/best_effort (0.00s)
+=== RUN   TestReviewFailedBuildModifiesAlreadyRegisteredDAO
+--- PASS: TestReviewFailedBuildModifiesAlreadyRegisteredDAO (0.00s)
+=== RUN   TestReviewFailedCreateBestEffortEscapes
+=== RUN   TestReviewFailedCreateBestEffortEscapes/reliable
+=== RUN   TestReviewFailedCreateBestEffortEscapes/best_effort
+--- PASS: TestReviewFailedCreateBestEffortEscapes (0.01s)
+    --- PASS: TestReviewFailedCreateBestEffortEscapes/reliable (0.00s)
+    --- PASS: TestReviewFailedCreateBestEffortEscapes/best_effort (0.00s)
+=== RUN   TestReviewFailedBuildModifiesAlreadyBoundReceipt
+--- PASS: TestReviewFailedBuildModifiesAlreadyBoundReceipt (0.00s)
+=== RUN   TestReviewFailedBuildReceiptPropagatedError
+--- PASS: TestReviewFailedBuildReceiptPropagatedError (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest	1.510s
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers/stop/workers_1
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers/stop/workers_2
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers/drain/workers_1
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers/drain/workers_2
+--- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers (0.41s)
+    --- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers/stop/workers_1 (0.10s)
+    --- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers/stop/workers_2 (0.10s)
+    --- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers/drain/workers_1 (0.10s)
+    --- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers/drain/workers_2 (0.10s)
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler/1
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler/2
+--- PASS: TestReviewBestEffortStopWaitsForRunningHandler (0.10s)
+    --- PASS: TestReviewBestEffortStopWaitsForRunningHandler/1 (0.05s)
+    --- PASS: TestReviewBestEffortStopWaitsForRunningHandler/2 (0.05s)
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers/stop/workers_1
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers/stop/workers_2
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers/drain/workers_1
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers/drain/workers_2
+--- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers (0.41s)
+    --- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers/stop/workers_1 (0.10s)
+    --- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers/stop/workers_2 (0.10s)
+    --- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers/drain/workers_1 (0.10s)
+    --- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers/drain/workers_2 (0.10s)
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler/1
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler/2
+--- PASS: TestReviewBestEffortStopWaitsForRunningHandler (0.10s)
+    --- PASS: TestReviewBestEffortStopWaitsForRunningHandler/1 (0.05s)
+    --- PASS: TestReviewBestEffortStopWaitsForRunningHandler/2 (0.05s)
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers/stop/workers_1
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers/stop/workers_2
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers/drain/workers_1
+=== RUN   TestBestEffortSubscriptionClosesAfterAcceptedHandlers/drain/workers_2
+--- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers (0.41s)
+    --- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers/stop/workers_1 (0.10s)
+    --- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers/stop/workers_2 (0.10s)
+    --- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers/drain/workers_1 (0.10s)
+    --- PASS: TestBestEffortSubscriptionClosesAfterAcceptedHandlers/drain/workers_2 (0.10s)
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler/1
+=== RUN   TestReviewBestEffortStopWaitsForRunningHandler/2
+--- PASS: TestReviewBestEffortStopWaitsForRunningHandler (0.10s)
+    --- PASS: TestReviewBestEffortStopWaitsForRunningHandler/1 (0.05s)
+    --- PASS: TestReviewBestEffortStopWaitsForRunningHandler/2 (0.05s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/dataengine	2.590s

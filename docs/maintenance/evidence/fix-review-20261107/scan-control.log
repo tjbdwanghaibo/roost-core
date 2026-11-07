@@ -1,0 +1,41 @@
+=== RUN   TestReviewScanBetweenDropAndTransfer
+=== RUN   TestReviewScanBetweenDropAndTransfer/control
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=2 waiting=0 took=1.877041ms
+2026/11/07 01:34:05 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=1 waiting=1 took=1.661515ms
+=== RUN   TestReviewScanBetweenDropAndTransfer/scan_after_drop
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=2 waiting=0 took=2.717215ms
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=1 waiting=0 took=3.879858ms
+2026/11/07 01:34:05 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=1 waiting=1 took=1.048141ms
+--- PASS: TestReviewScanBetweenDropAndTransfer (0.07s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/control (0.04s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/scan_after_drop (0.03s)
+=== RUN   TestReviewScanBetweenDropAndTransfer
+=== RUN   TestReviewScanBetweenDropAndTransfer/control
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=2 waiting=0 took=2.305119ms
+2026/11/07 01:34:05 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=1 waiting=1 took=967.623µs
+=== RUN   TestReviewScanBetweenDropAndTransfer/scan_after_drop
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=2 waiting=0 took=2.271952ms
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=1 waiting=0 took=1.49261ms
+2026/11/07 01:34:05 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=1 waiting=1 took=789.654µs
+--- PASS: TestReviewScanBetweenDropAndTransfer (0.05s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/control (0.02s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/scan_after_drop (0.03s)
+=== RUN   TestReviewScanBetweenDropAndTransfer
+=== RUN   TestReviewScanBetweenDropAndTransfer/control
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=2 waiting=0 took=2.162359ms
+2026/11/07 01:34:05 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=1 waiting=1 took=1.327236ms
+=== RUN   TestReviewScanBetweenDropAndTransfer/scan_after_drop
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=2 waiting=0 took=2.150709ms
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=1 waiting=0 took=1.552624ms
+2026/11/07 01:34:05 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 01:34:05 INFO alliance: war scan done alliances=1 waiting=1 took=809.612µs
+--- PASS: TestReviewScanBetweenDropAndTransfer (0.05s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/control (0.02s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/scan_after_drop (0.03s)
+PASS
+ok  	example.com/planet/internal/rpc/alliance	1.191s

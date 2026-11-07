@@ -1,0 +1,42 @@
+=== RUN   TestReviewScanBetweenDropAndTransfer
+=== RUN   TestReviewScanBetweenDropAndTransfer/control
+2026/11/07 01:33:44 INFO alliance: war scan done alliances=2 waiting=0 took=2.400316ms
+2026/11/07 01:33:44 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 01:33:44 INFO alliance: war scan done alliances=1 waiting=1 took=1.018129ms
+=== RUN   TestReviewScanBetweenDropAndTransfer/scan_after_drop
+2026/11/07 01:33:44 INFO alliance: war scan done alliances=2 waiting=0 took=2.288111ms
+2026/11/07 01:33:44 INFO alliance: war scan done alliances=1 waiting=0 took=1.02648ms
+2026/11/07 01:33:44 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+    review_scan_transfer_test.go:55: scan skipped returned alliance: waits=[{war-return 2}] enemyWars=[]
+--- FAIL: TestReviewScanBetweenDropAndTransfer (0.05s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/control (0.03s)
+    --- FAIL: TestReviewScanBetweenDropAndTransfer/scan_after_drop (0.02s)
+=== RUN   TestReviewScanBetweenDropAndTransfer
+=== RUN   TestReviewScanBetweenDropAndTransfer/control
+2026/11/07 01:33:44 INFO alliance: war scan done alliances=2 waiting=0 took=2.140688ms
+2026/11/07 01:33:44 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 01:33:44 INFO alliance: war scan done alliances=1 waiting=1 took=1.242038ms
+=== RUN   TestReviewScanBetweenDropAndTransfer/scan_after_drop
+2026/11/07 01:33:44 INFO alliance: war scan done alliances=2 waiting=0 took=3.514855ms
+2026/11/07 01:33:44 INFO alliance: war scan done alliances=1 waiting=0 took=866.27µs
+2026/11/07 01:33:44 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+    review_scan_transfer_test.go:55: scan skipped returned alliance: waits=[{war-return 2}] enemyWars=[]
+--- FAIL: TestReviewScanBetweenDropAndTransfer (0.05s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/control (0.02s)
+    --- FAIL: TestReviewScanBetweenDropAndTransfer/scan_after_drop (0.02s)
+=== RUN   TestReviewScanBetweenDropAndTransfer
+=== RUN   TestReviewScanBetweenDropAndTransfer/control
+2026/11/07 01:33:44 INFO alliance: war scan done alliances=2 waiting=0 took=1.914822ms
+2026/11/07 01:33:44 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+2026/11/07 01:33:44 INFO alliance: war scan done alliances=1 waiting=1 took=1.208586ms
+=== RUN   TestReviewScanBetweenDropAndTransfer/scan_after_drop
+2026/11/07 01:33:44 INFO alliance: war scan done alliances=2 waiting=0 took=2.029773ms
+2026/11/07 01:33:44 INFO alliance: war scan done alliances=1 waiting=0 took=895.303µs
+2026/11/07 01:33:44 INFO alliance: war wait left to the declarer's new owner alliance_id=1 request_id=war-return
+    review_scan_transfer_test.go:55: scan skipped returned alliance: waits=[{war-return 2}] enemyWars=[]
+--- FAIL: TestReviewScanBetweenDropAndTransfer (0.04s)
+    --- PASS: TestReviewScanBetweenDropAndTransfer/control (0.02s)
+    --- FAIL: TestReviewScanBetweenDropAndTransfer/scan_after_drop (0.02s)
+FAIL
+FAIL	example.com/planet/internal/rpc/alliance	0.158s
+FAIL
