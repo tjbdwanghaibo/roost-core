@@ -1,0 +1,91 @@
+OK    manifest             roost.yaml
+OK    go                   available
+OK    git                  available
+OK    dependencies:go-mod-verify go mod verify passed
+OK    compile:go-list      all packages loaded with -mod=readonly
+OK    skills:catalog       every game/skills/*.json compiles (go test ./game/skills/)
+OK    compile:go-test      all packages and tests compiled
+OK    config:account       /workspace/review-1422/planet/configs/service/config.account.yaml
+OK    config:activity      /workspace/review-1422/planet/configs/service/config.activity.yaml
+OK    config:alliance      /workspace/review-1422/planet/configs/service/config.alliance.yaml
+OK    config:chat          /workspace/review-1422/planet/configs/service/config.chat.yaml
+OK    config:game          /workspace/review-1422/planet/configs/service/config.game.yaml
+OK    config:global        /workspace/review-1422/planet/configs/service/config.global.yaml
+OK    config:mail          /workspace/review-1422/planet/configs/service/config.mail.yaml
+OK    config:match         /workspace/review-1422/planet/configs/service/config.match.yaml
+OK    config:platform      /workspace/review-1422/planet/configs/service/config.platform.yaml
+OK    config:rank          /workspace/review-1422/planet/configs/service/config.rank.yaml
+OK    config:session       /workspace/review-1422/planet/configs/service/config.session.yaml
+OK    config-schema:account 3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:activity 3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:alliance 3 file(s) match the declarations of every mod and the service (7 business key(s))
+OK    config-schema:chat   3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:game   3 file(s) match the declarations of every mod and the service (39 business key(s))
+OK    config-schema:global 3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:mail   3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:match  3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:platform 3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:rank   3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-schema:session 3 file(s) match the declarations of every mod and the service (0 business key(s))
+OK    config-check:account configs/service/config.account.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)
+OK    config-check:activity configs/service/config.activity.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)
+OK    config-check:alliance configs/service/config.alliance.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)
+OK    config-check:chat    configs/service/config.chat.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)
+OK    config-check:game    configs/service/config.game.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)
+OK    config-check:global  configs/service/config.global.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)
+OK    config-check:mail    configs/service/config.mail.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)
+OK    config-check:match   configs/service/config.match.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)
+OK    config-check:platform configs/service/config.platform.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)
+OK    config-check:rank    configs/service/config.rank.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)
+OK    config-check:session configs/service/config.session.yaml passes the process's --check-config (declarations, cross-key and cross-mod rules)
+OK    config-sections:account 3 file(s) have a block for every mod of account
+OK    config-sections:activity 3 file(s) have a block for every mod of activity
+OK    config-sections:alliance 3 file(s) have a block for every mod of alliance
+OK    config-sections:chat 3 file(s) have a block for every mod of chat
+OK    config-sections:game 3 file(s) have a block for every mod of game
+OK    config-sections:global 3 file(s) have a block for every mod of global
+OK    config-sections:mail 3 file(s) have a block for every mod of mail
+OK    config-sections:match 3 file(s) have a block for every mod of match
+OK    config-sections:platform 3 file(s) have a block for every mod of platform
+OK    config-sections:rank 3 file(s) have a block for every mod of rank
+OK    config-sections:session 3 file(s) have a block for every mod of session
+OK    config-across-services shared resource names agree; development listeners and per-service addresses do not collide (development configs: 11 service(s); production examples: 11 service(s)); port blocks: game=0 (ops 9100, advertise 9000), account=1 (ops 9101, advertise 9001), activity=2 (ops 9102, advertise 9002), chat=3 (ops 9103, advertise 9003), global=4 (ops 9104, advertise 9004), mail=5 (ops 9105, advertise 9005), match=6 (ops 9106, advertise 9006), platform=7 (ops 9107, advertise 9007), rank=8 (ops 9108, advertise 9008), session=9 (ops 9109, advertise 9009), alliance=10 (ops 9110, advertise 9010)
+OK    config-reads         81 package(s) read config only through declarations
+OK    shutdown:account     total_timeout 23s, grace period 28s
+OK    shutdown:activity    total_timeout 26s, grace period 31s
+OK    shutdown:alliance    total_timeout 77s, grace period 82s
+OK    shutdown:chat        total_timeout 23s, grace period 28s
+OK    shutdown:game        total_timeout 126s, grace period 131s
+OK    shutdown:global      total_timeout 23s, grace period 28s
+OK    shutdown:mail        total_timeout 23s, grace period 28s
+OK    shutdown:match       total_timeout 26s, grace period 31s
+OK    shutdown:platform    total_timeout 23s, grace period 28s
+OK    shutdown:rank        total_timeout 23s, grace period 28s
+OK    shutdown:session     total_timeout 23s, grace period 28s
+OK    time:logic_offset    one offset per deployment: dev 0s, prod example 0s, k8s secret example 0s
+OK    merge-readiness      merging a server: dbscope=sid databases moved by sidmerge migrate: none; shared databases both deployments must map to the same place: main; persistent bus items addressed to a sid (confirm by hand): syncbus, remote entity snapshot interests; 7 business merges to plan. Full list: go run ./cmd/sidmerge checklist; runbook: docs/framework/PLAYER-MIGRATION.md §6
+OK    ids                  no conflicts
+OK    cicd:.github/workflows/ci.yml present
+OK    cicd:.github/workflows/dependency-update.yml present
+OK    cicd:.github/workflows/release.yml present
+OK    cicd:.github/workflows/deploy-shell.yml present
+OK    cicd:.github/workflows/deploy-docker.yml present
+OK    cicd:.github/workflows/deploy-k8s.yml present
+OK    cicd:deploy/shell/rollback.sh present
+OK    cicd:deploy/docker/docker-compose.prod.yaml present
+OK    cicd:deploy/k8s/overlays/staging/kustomization.yaml present
+OK    cicd:deploy/k8s/overlays/production/kustomization.yaml present
+OK    cicd:reproducible    ordinary CI uses committed go.mod/go.sum
+OK    collaborators:account internal/service/account/collaborators.go has no generated fail-closed stubs left
+OK    collaborators:activity internal/service/activity/collaborators.go has no generated fail-closed stubs left
+OK    collaborators:chat   internal/service/chat/collaborators.go has no generated fail-closed stubs left
+OK    collaborators:global internal/service/global/collaborators.go has no generated fail-closed stubs left
+OK    collaborators:mail   internal/service/mail/collaborators.go has no generated fail-closed stubs left
+OK    collaborators:match  internal/service/match/collaborators.go has no generated fail-closed stubs left
+OK    collaborators:platform internal/service/platform/collaborators.go has no generated fail-closed stubs left
+OK    collaborators:rank   internal/service/rank/collaborators.go has no generated fail-closed stubs left
+OK    collaborators:session internal/service/session/collaborators.go has no generated fail-closed stubs left
+OK    remote-runtime       every service running Nest has the remote_entity Mod for the remote=managed entities
+OK    entity-owner         3 owned entity kind(s); no other service sends to their handlers
+OK    generated            up to date
+OK    project-templates    up to date
