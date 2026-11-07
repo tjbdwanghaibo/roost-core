@@ -52,3 +52,5 @@ roost config check --service game --file /path/to/config.game.prod.yaml --produc
 本轮未修改运行时、未部署或启动压测。此前批准的基准文件保持不变。实际生产配置与硬件尚未提供，暂不指定机器台数，不签发上线容量结论。建议首个实施切片是联盟迟到成功业务闭环与 UGC 物理/Level/Unity 联合验收；同时建立可复跑的 10 万数据／3000 在线场景规格。
 
 本轮额外检查：在本机正式生成的 v1.42.2 game-demo 上补齐 `--skip-deps` 后的依赖，再运行 `project doctor`，退出 0，无 FAIL/WARN，生成物最新、全部包与测试可编译。见 [doctor 输出](evidence/launch-readiness-20261107/doctor.log)。此前首次 doctor 因局部测试只解析部分依赖、go.sum 缺项失败，`go mod tidy` 后通过，不记为框架缺陷。这是样板工程证据，不是用户生产工程验收。
+
+全部缺失项已拆为 L01–L15 的 [后续实施清单](LAUNCH-BACKLOG-3000-20261108.md)，含责任层、依赖与验收标准。用户后续自行实施，本次不修改运行时。
