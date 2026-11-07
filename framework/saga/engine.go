@@ -191,16 +191,17 @@ type Stats struct {
 	UnknownSaga uint64
 	// Events：已提交的事件数；PublishUnknown / PublishResolved：结果未知的发布次数与按 Duplicate / 最后一条判定为已提交的次数；
 	// BatchIncomplete：10176 立即重发次数；PublishRetried：确定没写入的其他错误重发次数。
-	Events, PublishUnknown, PublishResolved, BatchIncomplete, PublishRetried uint64
-	Snapshots, SnapshotConflicts, Purges, Pruned, Replayed, FailStops        uint64
+	// FenceBusy：期望序号检查被拒、但分区事件过滤上的最后一条仍是期望序号（没有别的写者写入）而重发的次数，见 partition.go publishChunk。
+	Events, PublishUnknown, PublishResolved, BatchIncomplete, PublishRetried, FenceBusy uint64
+	Snapshots, SnapshotConflicts, Purges, Pruned, Replayed, FailStops                   uint64
 }
 
 type engineCounters struct {
-	started, dispatched, completed, compensated, failed, manualRequired      atomic.Uint64
-	duplicates, lateAfterAbandon, staleIncarnation, staleAttempt, reopened   atomic.Uint64
-	rejectedInputs, admissionRejected, unknownSaga                           atomic.Uint64
-	events, publishUnknown, publishResolved, batchIncomplete, publishRetried atomic.Uint64
-	snapshots, snapshotConflicts, purges, pruned, replayed, failStops        atomic.Uint64
+	started, dispatched, completed, compensated, failed, manualRequired                 atomic.Uint64
+	duplicates, lateAfterAbandon, staleIncarnation, staleAttempt, reopened              atomic.Uint64
+	rejectedInputs, admissionRejected, unknownSaga                                      atomic.Uint64
+	events, publishUnknown, publishResolved, batchIncomplete, publishRetried, fenceBusy atomic.Uint64
+	snapshots, snapshotConflicts, purges, pruned, replayed, failStops                   atomic.Uint64
 }
 
 func (c *engineCounters) add(d partitionCounts) {
@@ -616,7 +617,7 @@ func (e *Engine) Stats() Stats {
 		LateAfterAbandon: c.lateAfterAbandon.Load(), StaleIncarnation: c.staleIncarnation.Load(), StaleAttempt: c.staleAttempt.Load(),
 		Reopened: c.reopened.Load(), RejectedInputs: c.rejectedInputs.Load(), AdmissionRejected: c.admissionRejected.Load(),
 		UnknownSaga: c.unknownSaga.Load(), Events: c.events.Load(), PublishUnknown: c.publishUnknown.Load(),
-		PublishResolved: c.publishResolved.Load(), BatchIncomplete: c.batchIncomplete.Load(), PublishRetried: c.publishRetried.Load(),
+		PublishResolved: c.publishResolved.Load(), BatchIncomplete: c.batchIncomplete.Load(), PublishRetried: c.publishRetried.Load(), FenceBusy: c.fenceBusy.Load(),
 		Snapshots: c.snapshots.Load(), SnapshotConflicts: c.snapshotConflicts.Load(), Purges: c.purges.Load(), Pruned: c.pruned.Load(),
 		Replayed: c.replayed.Load(), FailStops: c.failStops.Load(),
 	}

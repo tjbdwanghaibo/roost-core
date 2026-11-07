@@ -709,6 +709,7 @@ func (p *partition) publishChunk(ctx context.Context, msgs []fnats.LogMsg, fence
 		publishCtx, cancel := context.WithTimeout(ctx, p.e.opts.PublishTimeout)
 		ack, err := p.e.log.PublishFenced(publishCtx, msgs, fence)
 		cancel()
+		backoff := 50 * time.Millisecond
 		switch {
 		case err == nil:
 			if ack.Duplicate {
@@ -719,18 +720,28 @@ func (p *partition) publishChunk(ctx context.Context, msgs []fnats.LogMsg, fence
 			return 0, ctx.Err()
 		case errors.Is(err, fnats.ErrLogWrongLastSequence), errors.Is(err, fnats.ErrLogDuplicateBatch):
 			// 期望序号不符或批已在去重窗口内：看分区事件过滤上的最后一条是不是这一块的最后一条。
-			seq, mine, lerr := p.lastIsMine(ctx, lastID)
+			last, lerr := p.lastEvent(ctx)
 			if lerr != nil {
 				return 0, fmt.Errorf("saga: partition %d: resolve %v: %w", p.k, err, lerr)
 			}
-			if mine {
+			if last.MsgID == lastID {
 				p.e.stats.publishResolved.Add(1)
-				return seq, nil
+				return last.Seq, nil
 			}
 			if errors.Is(err, fnats.ErrLogDuplicateBatch) {
-				return 0, fmt.Errorf("%w: partition %d: batch reported duplicate but the last event is not ours (%v)", ErrPartitionFenced, p.k, err)
+				return 0, fmt.Errorf("%w: partition %d: batch reported duplicate but the last event is not ours (last %d %s; %v)", ErrPartitionFenced, p.k, last.Seq, last.MsgID, err)
 			}
-			return 0, fmt.Errorf("%w: partition %d expected last event %d: %v", ErrPartitionFenced, p.k, fence.LastSeq, err)
+			if last.Seq == fence.LastSeq {
+				// 期望序号被拒，但过滤上的最后一条仍是期望的那条：没有别的写者写进来，这次也没有写入。服务端在 apply 时先回
+				// PubAck、后清“这个期望序号过滤正在处理”的标记，收到上一轮 PubAck 立刻发下一轮会撞上这个窗口（10164）；
+				// 自己上一次结果未知的提交还在处理时同样如此。原样重发：同一个 fence 照旧挡住别的写者——它的提案落库后
+				// 最后一条前进，下一次就走到下面的隔离。之前把这种拒绝当成被隔离，单写者也会整进程 fail-stop
+				// （2026-11-07 Saga 整轮压测 mongo-forward c128）。
+				p.e.stats.fenceBusy.Add(1)
+				backoff = time.Millisecond
+				break
+			}
+			return 0, fmt.Errorf("%w: partition %d expected last event %d, filter is at %d (%s): %v", ErrPartitionFenced, p.k, fence.LastSeq, last.Seq, last.MsgID, err)
 		case errors.Is(err, fnats.ErrLogRejected), errors.Is(err, fnats.ErrLogBatchTooLarge):
 			return 0, fmt.Errorf("%w: partition %d: %v", ErrPartitionRejected, p.k, err)
 		case errors.Is(err, fnats.ErrLogOutcomeUnknown):
@@ -739,6 +750,7 @@ func (p *partition) publishChunk(ctx context.Context, msgs []fnats.LogMsg, fence
 		case errors.Is(err, fnats.ErrLogBatchIncomplete):
 			// 10176：服务端丢弃了这个批（同流同时打开的批超限、缺号、批超时），确定没写入，立即重发（驱动每次换批号）。
 			p.e.stats.batchIncomplete.Add(1)
+			backoff = 0
 		default:
 			// 其余错误（连接断开中、驱动已关闭等）：这一次确定没写入，在预算内重发。
 			p.e.stats.publishRetried.Add(1)
@@ -749,25 +761,25 @@ func (p *partition) publishChunk(ctx context.Context, msgs []fnats.LogMsg, fence
 			}
 			return 0, fmt.Errorf("saga: partition %d publish failed for %v: %w", p.k, p.e.opts.PublishUnknownBudget, err)
 		}
-		if !errors.Is(err, fnats.ErrLogBatchIncomplete) {
+		if backoff > 0 {
 			select {
 			case <-ctx.Done():
 				return 0, ctx.Err()
-			case <-time.After(50 * time.Millisecond):
+			case <-time.After(backoff):
 			}
 		}
 	}
 }
 
-// lastIsMine 读分区事件过滤上的最后一条（leader 读）：MsgID 是 lastID 就是这一块已经提交。
-func (p *partition) lastIsMine(ctx context.Context, lastID string) (uint64, bool, error) {
+// lastEvent 读分区事件过滤上的最后一条（leader 读，不走 direct get）；过滤上还没有事件时返回零值。
+func (p *partition) lastEvent(ctx context.Context) (fnats.LogMsg, error) {
 	readCtx, cancel := context.WithTimeout(ctx, p.e.opts.PublishTimeout)
 	defer cancel()
 	msg, err := p.e.log.LastMsg(readCtx, p.stream, p.e.layout.EventFilter(p.k))
-	if err != nil {
-		return 0, false, err
+	if errors.Is(err, fnats.ErrLogNotFound) {
+		return fnats.LogMsg{}, nil
 	}
-	return msg.Seq, msg.MsgID == lastID, nil
+	return msg, err
 }
 
 // fail 让分区停下（只一次）：记下原因，报告给 RuntimeFailure（整个进程 fail-stop），记 ERROR 与计数。可以从快照 goroutine 调用。

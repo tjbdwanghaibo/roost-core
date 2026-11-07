@@ -790,6 +790,7 @@ func TestRealSagaJSScanLevel(t *testing.T) {
 	}
 	stats := engine.Stats()
 	result.PublishUnknown, result.AdmissionRejected, result.StartRetries, result.BacklogPeak = stats.PublishUnknown, stats.AdmissionRejected, rejected.Load(), peak.Load()
+	result.FenceBusy = stats.FenceBusy
 	result.Snapshots, result.Purges = stats.Snapshots, stats.Purges
 	if options.Admission.Enabled {
 		result.AdmissionHigh, result.AdmissionClosures, result.AdmissionReopens = options.Admission.HighRecords, closures.Load(), reopens.Load()
@@ -881,6 +882,7 @@ type scanResult struct {
 	Unexpected        int               `json:"unexpected_terminals"`
 	BalanceMismatches int               `json:"balance_mismatches"`
 	PublishUnknown    uint64            `json:"publish_unknown"`
+	FenceBusy         uint64            `json:"fence_busy"` // 期望序号检查撞上服务端“上一个提案还在处理”的重发次数（单写者也会有）
 	AdmissionRejected uint64            `json:"admission_rejected"`
 	StartRetries      int64             `json:"start_retries"`
 	BacklogPeak       uint64            `json:"backlog_peak_records"`

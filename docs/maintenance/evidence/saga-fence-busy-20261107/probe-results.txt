@@ -1,0 +1,9 @@
+# nats-server v2.14.5，本机私有三节点 R3 文件存储，scripts/nats-cluster.sh；探针放进 infra/network/nats/driver 包、-tags integration 运行
+## 8 分区 × 3000 次
+    zz_fencebusy_probe_integration_test.go:89: PROBE writes=24000 busy10164_without_other_writer=0 real_mismatch=0 in 1.168s
+--- PASS: TestProbeFenceBusyBackToBack (1.28s)
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver	1.802s
+## 16 分区 × 50000 次（另 4 个 goroutine 写同流其他分区的输入）
+    zz_fencebusy_probe_integration_test.go:89: PROBE writes=800000 busy10164_without_other_writer=2 real_mismatch=0 in 26.529s
+--- PASS: TestProbeFenceBusyBackToBack (26.64s)
+ok  	github.com/tjbdwanghaibo/roost-core/infra/network/nats/driver	27.162s

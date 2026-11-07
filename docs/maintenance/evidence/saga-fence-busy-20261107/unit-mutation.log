@@ -1,0 +1,4 @@
+    --- FAIL: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer's_proposal_lands (2.00s)
+        fence_busy_test.go:96: publish = 0, saga: partition 0 publish failed for 2s: nats log: wrong last sequence (err_code=10071: wrong last sequence: 11464); want ErrPartitionFenced (another writer advanced the filter)
+    --- FAIL: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/another_writer_already_advanced_the_filter (2.00s)
+        fence_busy_test.go:96: publish = 0, saga: partition 0 publish failed for 2s: nats log: wrong last sequence (err_code=10071: wrong last sequence: 11466); want ErrPartitionFenced (another writer advanced the filter)

@@ -1,0 +1,90 @@
+//go:build integration
+
+package driver
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
+)
+
+// 临时探针（不提交）：单写者收到 ack 立刻发下一次带通配期望序号的发布，统计服务端在过滤上没有别的写入时回 10164 的次数。
+func TestProbeFenceBusyBackToBack(t *testing.T) {
+	log := logCluster(t)
+	name, _ := logStream(t, log)
+	ctx := testCtx(t, 10*time.Minute)
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for w := range 4 { // 其他分区的写入（不同过滤），模拟同流并发负载
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_, _ = log.PublishFenced(ctx, []fnats.LogMsg{ev(fmt.Sprintf("%s.%d.in.res", name, w+1), fmt.Sprintf("in.%d.%d", w, i))}, fnats.LogFence{})
+			}
+		}()
+	}
+	type result struct{ busy, real, ok int }
+	run := func(p int, n int) result {
+		var r result
+		filter := fmt.Sprintf("%s.%d.ev.>", name, p+10)
+		var last uint64
+		for i := 0; i < n; i++ {
+			size := 1 + i%4
+			msgs := make([]fnats.LogMsg, size)
+			for j := range msgs {
+				msgs[j] = ev(fmt.Sprintf("%s.%d.ev.none", name, p+10), fmt.Sprintf("w.%d.%d.%d", p, i, j))
+			}
+			for {
+				ack, err := log.PublishFenced(ctx, msgs, fnats.LogFence{Filter: filter, LastSeq: last})
+				if err == nil {
+					last = ack.Seq
+					r.ok++
+					break
+				}
+				if !errors.Is(err, fnats.ErrLogWrongLastSequence) {
+					t.Fatalf("partition %d publish %d: %v", p, i, err)
+				}
+				lm, lerr := log.LastMsg(ctx, name, filter)
+				if lerr != nil && !errors.Is(lerr, fnats.ErrLogNotFound) {
+					t.Fatal(lerr)
+				}
+				if lm.Seq == last && strings.Contains(err.Error(), "10164") {
+					r.busy++
+					continue
+				}
+				r.real++
+				t.Errorf("partition %d: real mismatch: fence %d, filter at %d (%s): %v", p, last, lm.Seq, lm.MsgID, err)
+				return r
+			}
+		}
+		return r
+	}
+	start := time.Now()
+	results := make([]result, 16)
+	var pw sync.WaitGroup
+	for p := range 16 {
+		pw.Add(1)
+		go func() { defer pw.Done(); results[p] = run(p, 50000) }()
+	}
+	pw.Wait()
+	close(stop)
+	wg.Wait()
+	total := result{}
+	for _, r := range results {
+		total.busy += r.busy
+		total.real += r.real
+		total.ok += r.ok
+	}
+	t.Logf("PROBE writes=%d busy10164_without_other_writer=%d real_mismatch=%d in %s", total.ok, total.busy, total.real, time.Since(start).Round(time.Millisecond))
+}

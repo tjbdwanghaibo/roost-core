@@ -4,7 +4,7 @@
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
-## Saga 协调器偶发误判“被别的写者隔离”（2026-11-07 发版前压测，尚未确认根因）
+## Saga 协调器偶发误判“被别的写者隔离”（2026-11-07 发版前压测；已定位并修复，未发版）
 
 v1.42.1 发版前 Saga 整轮压测（`scripts/perf/saga-js-scan.sh`，main `4b6e5212`，本机私有三节点 NATS + 单节点副本集）15 档中 `mongo-forward` c128 一档失败：开压 11 秒后分区 1 fail-stop，`reason=fenced`，错误为 `partition 1 expected last event 11463: nats log: wrong last sequence (err_code=10164)`。该档 128 笔未观察到终态、余额读取 1 次失败；非期望终态、余额不符、发布结果未知均为 0，即按设计安全停下，没有错写。同一档单独重跑 5 轮全部通过（986～1053 笔/s）。
 
@@ -12,6 +12,10 @@ v1.42.1 发版前 Saga 整轮压测（`scripts/perf/saga-js-scan.sh`，main `4b6
 - 与 v1.42.1 改动无关：`framework/saga` 与 `infra/network/nats/driver/jetstream_log.go` 自 v1.37.0 起未改，`mongo-forward` 场景没有 Nest 参与方。
 - 影响：生产单写者下偶发整进程 fail-stop（App 级重启后恢复），不影响正确性。频率按本次约为 c128 满载每 20 档 × 30 s 出现 1 次，样本太少，不作频率结论。
 - 证据在本机 `artifacts/perf/saga-js/v1421-saga/10-mongo-forward-128.log`（不随仓）；当时的 NATS 数据目录已随脚本清理，没有流状态可回查。下一步：加诊断（fenced 时记录 LastMsg 的序号与 MsgID、fence.LastSeq、本批是否有过结果未知）后长跑复现。
+
+**根因（2026-11-07 追加，以上原结论保留）**：错误码 10164 不是“序号真的不符”（那是 10071），而是 nats-server 2.14.5 在入站检查（`jetstream_batching.go` 的 `expectedPerSubjectInProcess`）发现同一个期望序号过滤还有提案在处理。服务端 apply 时先存消息、回 PubAck，之后才清这个标记（`jetstream_cluster.go`），协调器收到上一轮 ack 立刻发下一轮就可能撞上；这次没有写入，过滤上最后一条仍是自己上一轮的末条。旧实现只看“最后一条是不是这一块的”，于是判成被隔离。真实三节点集群探针：单写者背靠背 80 万次发布出现 2 次（[证据](evidence/saga-fence-busy-20261107/probe-results.txt)），与压测频率同量级。
+
+**修复**：期望序号被拒后，最后一条序号仍等于期望序号 = 还没有任何写入，原样重发（同一个 fence，别的写者落库后照样被隔离），计 `Stats.FenceBusy`；已前进且不是自己的才 `ErrPartitionFenced`，错误里带上过滤当前序号与 MsgID。回归 `TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter`（修前红文本与压测原样一致；把判据改成“一律重发”的变异让两条真隔离用例变红），真实集群 saga 用例与 `nofence` 变异照旧。见 CHANGELOG `[Unreleased]`。
 
 ## 2026-11-07：新功能审查收尾
 

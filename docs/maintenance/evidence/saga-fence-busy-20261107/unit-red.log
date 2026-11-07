@@ -1,0 +1,6 @@
+--- FAIL: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter (0.00s)
+    --- FAIL: TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter/own_previous_proposal_still_in_process (0.00s)
+        fence_busy_test.go:101: publish = 0, saga: partition fenced by another writer: partition 0 expected last event 11463: nats log: wrong last sequence (err_code=10164: wrong last sequence) after 1 call(s); want seq 11465: the fence check was rejected while no other writer had written (last event still 11463)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/saga	0.562s
+FAIL

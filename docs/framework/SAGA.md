@@ -67,7 +67,7 @@ App 单实例锁按“服务类型 + sid”取锁，两种服务类型的同号�
 
 **发布结果**：`nil` = 已持久；结果未知（没收到答复）→ 同 MsgID、同期望序号重发，按“Duplicate / 批重复 10201 / 分区过滤上最后一条是自己的
 = 已提交”判定，超过 `saga.publish_unknown_budget`（缺省 30s，**≥ 3 × 7s 选主停顿**）→ `ErrPublishUnknown` fail-stop；批不完整（10176）立即重发；
-服务端明确拒绝（流满等）→ `ErrPartitionRejected` fail-stop；期望序号不符且最后一条不是自己的 → `ErrPartitionFenced` fail-stop。去重窗口必须
+服务端明确拒绝（流满等）→ `ErrPartitionRejected` fail-stop；期望序号被拒时读分区事件过滤上的最后一条：是自己这一块的 = 已提交，序号仍等于期望序号 = 还没有任何写入、原样重发（计 `Stats.FenceBusy`），已前进且不是自己的 → `ErrPartitionFenced` fail-stop。第二种是 nats-server 先回 PubAck、后清“这个期望序号过滤正在处理”标记留下的窗口（10164），单写者收到 ack 立刻发下一轮也会撞上（实测约 40 万次 1 次），以前被当成隔离、整进程 fail-stop；重发带同一个期望序号，别的写者落库后照样被隔离。去重窗口必须
 ≥ 2 × 预算。选主期间（实测 5～7s）这条流上的分区不推进；步骤缺省 `Timeout` 5s 短于停顿，停顿后可能多一次重试（新尝试读到回执回放），不影响正确性。
 
 **快照、保留与清理**：每 `saga.snapshot_every_events`（2000）条事件或 `saga.snapshot_interval`（30s，期间有事件）做一次快照：循环里只浅拷贝已提交

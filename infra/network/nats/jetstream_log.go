@@ -19,7 +19,8 @@ import (
 //   - 返回 nil：已持久。单条可能是 Duplicate（同一 MsgID 在去重窗口内已存在，即之前那次已经落库）。
 //   - errors.Is(err, ErrLogOutcomeUnknown)：没收到服务端答复（超时、断连、选主），可能已经落库。用同样的消息（同 MsgID）
 //     与同一个 fence 重发即可判定：成功 / Duplicate = 已提交；ErrLogDuplicateBatch = 批之前已提交；
-//     ErrLogWrongLastSequence 时读 LastMsg(fence.Filter)，MsgID 是自己这次的最后一条 = 已提交，否则 = 被别的写者隔离。
+//     ErrLogWrongLastSequence 时读 LastMsg(fence.Filter)，MsgID 是自己这次的最后一条 = 已提交；序号仍等于 fence.LastSeq =
+//     还没有任何写入（服务端处理中，见 ErrLogWrongLastSequence），重发；否则 = 被别的写者隔离。
 //   - 其余错误：这一次调用确定没有写入（服务端明确拒绝，或发送前就失败）。
 type JetStreamLog interface {
 	// EnsureLogStream 建流或把已有流更新成 config，再核对服务端实际生效的配置：文件存储、AllowAtomicPublish、
@@ -83,7 +84,10 @@ const MinLogServerVersion = "2.12.1"
 const LogBatchMaxMessages = 1000
 
 var (
-	// ErrLogWrongLastSequence：期望序号对不上（JetStream 10071，R>1 并发提案时为 10164），这次没有写入。
+	// ErrLogWrongLastSequence：期望序号检查没通过，这次没有写入。10071 是序号真的不符；10164 是服务端在 R>1 下还有同一个
+	// 期望序号过滤的提案在处理——包括同一写者上一次已经回了 PubAck 的提案（服务端先回 ack、后清处理中标记，单写者背靠背发布
+	// 约 40 万次出现 1 次，见 docs/maintenance/evidence/saga-fence-busy-20261107）。调用方要读 LastMsg 区分：最后一条序号
+	// 仍等于 fence.LastSeq = 没有别的写入，可以原样重发；已前进且不是自己的 = 被别的写者隔离。
 	ErrLogWrongLastSequence = errors.New("nats log: wrong last sequence")
 	// ErrLogDuplicateBatch：原子批里的 MsgID 已在去重窗口内（10201）——之前某次发送已经整批落库，这次没有写入。
 	ErrLogDuplicateBatch = errors.New("nats log: atomic batch contains a duplicate message id")

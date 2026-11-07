@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 修复（Saga）：**单写者下协调器偶发误判“被别的写者隔离”、整进程 fail-stop**。nats-server 在 apply 时先回 PubAck、后清“这个期望序号过滤正在处理”的标记，协调器收到上一轮 ack 立刻发下一轮可能收到 10164（这次没有写入）；旧实现读过滤最后一条发现不是这一块的就判 `ErrPartitionFenced`。现在最后一条序号仍等于期望序号时原样重发（计 `Stats.FenceBusy`），已前进且不是自己的才判隔离。v1.42.1 发版前 Saga 整轮压测 `mongo-forward` c128 一档因此失败；真实集群探针单写者 80 万次发布出现 2 次。回归 `TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter`，见 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)、[SAGA 发布结果](docs/framework/SAGA.md)。
+
 ## [v1.42.1] - 2026-11-07
 
 - 验证：发版前在 main `4b6e5212` 上跑了全仓 build / vet / test 与相关包 `-race`，私有 Mongo / NATS / Redis 下的 DataEngine、Remote（含 outbox 演练）集成、game-demo / Remote 生成工程、联盟真实进程端到端 7 条、无缝大世界多进程演练、13 类玩法、Sync 双模式、C# / C++ 客户端。压测：Nest 重档 15 分钟（嵌入 TCP + 场景 Sync，业务 / 心跳 9999.9 / 99998.9 每秒，服务端 P99 1.45 / 0.70ms，门槛全过）、Remote 80 TPS × 15 分钟（72000 笔、0 错误、全量核验通过，P99 198ms）、联盟短测（Info 3.9～5.4 万次/s，起服扫 1 万联盟 317ms）均与基线同量级或更好；Saga 整轮 15 档中 `mongo-forward` c128 一档偶发 fenced fail-stop（与本版改动无关，单独重跑 5 轮通过），记入 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)，尚未确认根因。
