@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 测试（Lockstep）：**深缓冲链路子例的中转接收缓冲改为与直连慢客户端一致的 256 KiB，失败时打出 Gate 关连接计数与链路进度**。原 16 KiB 在 Linux 回环（MSS 约 64 KiB）上让这一跳进入持续定时器节流，链路从“慢”变成“停” 10 秒以上，Gate 写超时断开，偶发 `closed=true`。本机实验：均匀限速到 128 KiB/s 通过，整段停读 12 秒才失败。生产代码不变；Linux 未复跑，见 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)。
 - 修复（game-demo 联盟）：**联盟迁出时在迁移检查之后跑的宣战扫描会把它重新记成“已接手”，迁回后待确认的宣战被永久跳过**（RV-20261107-03，P2，上一条 RV-20261107-01 修复的遗漏）。扫描的“已接手”改为按所有权任期（`MarkerEpoch` / `RouteEpoch`）记，每次迁移都是新任期、一定重读；扫描先取任期再读标记，迁移夹在中间只会多读一次。每次扫描对每个拥有的联盟多一次 `GetRemoteOwnership`（稳定独占持有时答本地缓存）。回归 `TestWarScanDuringATransferOutDoesNotSkipTheReturn`，见 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)。
 - 修复（Saga）：**单写者下协调器偶发误判“被别的写者隔离”、整进程 fail-stop**。nats-server 在 apply 时先回 PubAck、后清“这个期望序号过滤正在处理”的标记，协调器收到上一轮 ack 立刻发下一轮可能收到 10164（这次没有写入）；旧实现读过滤最后一条发现不是这一块的就判 `ErrPartitionFenced`。现在最后一条序号仍等于期望序号时原样重发（计 `Stats.FenceBusy`），已前进且不是自己的才判隔离。v1.42.1 发版前 Saga 整轮压测 `mongo-forward` c128 一档因此失败；真实集群探针单写者 80 万次发布出现 2 次。回归 `TestPartitionPublishRetriesAFenceCheckRejectedWithoutAnotherWriter`，见 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)、[SAGA 发布结果](docs/framework/SAGA.md)。
 

@@ -1,0 +1,1 @@
+tcp_test.go:991: snapshot over a slow TCP link closed the connection (closed=false) or failed (1 Tick errors, first: catchup session 1: snapshot chunk at byte 1720320: context deadline exceeded); after 10.109s; Gate: no Gate close counter moved; link: relay read 1050038 bytes from the server (last 10.024s ago), delivered 1050038 to the client (last 9.528s ago)

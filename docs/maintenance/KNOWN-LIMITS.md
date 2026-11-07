@@ -4,6 +4,10 @@
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
+## Lockstep 深缓冲链路子例（2026-11-07 本机实验与夹具修正，Linux 未复跑）
+
+Linux 上 `TestASnapshotOverEmbeddedTCPFollowsTheLinkAndKeepsOtherSessionsLive/deep-buffered_link/written_lane_follows_the_link` 偶发 `closed=true`（约 67 秒，五轮一败）。本机实验（[记录](evidence/lockstep-deep-link-20261107/README.md)）：链路均匀变慢到 128 KiB/s 仍通过，只有中转那一跳完全停住 10 秒以上才失败（测试里 `write_timeout` / `CatchupSendTimeout` 都是 10 秒，按设计放弃）。Linux 回环上，夹具中转那一跳 16 KiB 的接收窗口小于回环 MSS，持续定时器退避会造成这种长停顿，真实网络不会；同文件直连路径早已因同一原因用 256 KiB。已把这一跳改成与直连一致（`deepLinkReadBuffer = slowReadBuffer`），只准入负对照照旧溢出；用例失败时打出 Gate 关连接计数增量与链路各跳进度。**判定为夹具问题，不是框架缺陷；修正后尚未在 Linux 复跑，复跑通过前不关闭。**
+
 ## 2026-11-07：v1.42.1 修复复验
 
 RV-20261106-01/03/04 与 RV-20261107-02 原缺陷复验通过，关闭；cellworld 边界抖动夹具修正经 Linux 完整包及三轮重复验证通过。联盟 RV-20261107-01 只部分修复：新增确认 RV-20261107-03（P2），迁出前 drop 后的扫描可重新写入 picked，导致再次迁回时永久跳过待确认宣战；三轮复现、控制组三轮通过。Lockstep 未闭环，main 新登记的 Saga 偶发 fenced 仍根因待查。详见 [修复复验与续审](FIX-REVIEW-20261107.md)。以下旧结论按其历史基线阅读。

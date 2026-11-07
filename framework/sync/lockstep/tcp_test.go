@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +22,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/lockstep"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/nettransport"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 	"github.com/tjbdwanghaibo/roost-core/robot"
 )
 
@@ -132,16 +135,40 @@ type deepLink struct {
 }
 
 // deepLinkReadBuffer 是中转连向服务器那一跳的接收缓冲：这一跳只多出它（内核加倍后）这点缓冲，链路深度由 depth 决定。
-const deepLinkReadBuffer = 16 << 10
+// 与 slowReadBuffer 同一个下限（回环 MSS 的两倍以上）。2026-11-07 前是 16 KiB：Linux 回环 MSS 约 64 KiB，中转缓冲
+// 攒满 depth 停读后接收窗口重开也小于一个 MSS，发送端的糊涂窗口规避只靠持续定时器探测，退避到 10 秒以上时服务器的
+// 一次写超过 write_timeout、Gate 关连接——Linux 上这个子例偶发 `closed=true` 失败（约 67 秒，五轮一败），链路
+// “慢”变成了链路“停”，测的不再是“随链路放慢”。真实网络的 MSS（约 1460 字节）远小于接收窗口，不进入这种状态。
+// 审查在 Linux 上只改这个值的对照五轮全过（docs/maintenance/evidence/linux-followup-20261102/buffer-control.log）；
+// 本机实验见 docs/maintenance/evidence/lockstep-deep-link-20261107。
+const deepLinkReadBuffer = slowReadBuffer
 
-// dial 经深缓冲链路连上服务器并完成握手，返回客户端一端。
-func (link deepLink) dial(t *testing.T, s *tcpLockstepServer, token string, playerID int64) net.Conn {
+// linkProgress 是深缓冲链路各跳的进度，失败时打出来区分“服务器写不出”（中转那一跳停住）与“客户端没读”。
+type linkProgress struct {
+	fromServer, toClient         atomic.Int64 // 中转从服务器读到的、交给客户端的字节
+	lastFromServer, lastToClient atomic.Int64 // 最后一次推进的时刻（UnixNano）
+}
+
+func (p *linkProgress) String() string {
+	ago := func(at int64) string {
+		if at == 0 {
+			return "never"
+		}
+		return time.Since(time.Unix(0, at)).Round(time.Millisecond).String() + " ago"
+	}
+	return fmt.Sprintf("relay read %d bytes from the server (last %s), delivered %d to the client (last %s)",
+		p.fromServer.Load(), ago(p.lastFromServer.Load()), p.toClient.Load(), ago(p.lastToClient.Load()))
+}
+
+// dial 经深缓冲链路连上服务器并完成握手，返回客户端一端与链路进度。
+func (link deepLink) dial(t *testing.T, s *tcpLockstepServer, token string, playerID int64) (net.Conn, *linkProgress) {
 	t.Helper()
 	upstream, err := net.Dial("tcp", s.server.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = upstream.(*net.TCPConn).SetReadBuffer(deepLinkReadBuffer)
+	progress := &linkProgress{}
 	client, relay := net.Pipe()
 	t.Cleanup(func() {
 		_ = client.Close()
@@ -178,6 +205,10 @@ func (link deepLink) dial(t *testing.T, s *tcpLockstepServer, token string, play
 				return
 			}
 			n, err := upstream.Read(buffer[:min(room, len(buffer))])
+			if n > 0 {
+				progress.fromServer.Add(int64(n))
+				progress.lastFromServer.Store(time.Now().UnixNano())
+			}
 			mu.Lock()
 			pending.Write(buffer[:n])
 			changed.Broadcast()
@@ -209,11 +240,13 @@ func (link deepLink) dial(t *testing.T, s *tcpLockstepServer, token string, play
 			if _, err := relay.Write(out); err != nil {
 				return
 			}
+			progress.toClient.Add(int64(len(out)))
+			progress.lastToClient.Store(time.Now().UnixNano())
 			time.Sleep(time.Duration(len(out)) * time.Second / time.Duration(link.rate))
 		}
 	}()
 	s.authenticate(t, client, token, playerID)
-	return client
+	return client, progress
 }
 
 // sessionClosed 报告这条会话是否已被服务端关闭（读掉已有的关闭事件，不等待）。
@@ -740,12 +773,41 @@ const slowReadBuffer = 256 << 10
 
 // dial 把慢客户端接到这条链路上，返回连接和链路能吞下的字节上界：服务器发送缓冲上限 + 沿途接收缓冲（内核加倍）
 // + 中转深度。停读期间服务器最多写出这么多，超出部分必须停在服务器上等链路。
-func (link snapshotLink) dial(t *testing.T, tcp *tcpLockstepServer, token string, playerID int64) (net.Conn, int) {
+func (link snapshotLink) dial(t *testing.T, tcp *tcpLockstepServer, token string, playerID int64) (net.Conn, int, *linkProgress) {
 	t.Helper()
 	if link.deep == nil {
-		return tcp.dial(t, token, playerID, slowReadBuffer), kernelSendBufferMax(t) + 2*slowReadBuffer
+		return tcp.dial(t, token, playerID, slowReadBuffer), kernelSendBufferMax(t) + 2*slowReadBuffer, nil
 	}
-	return link.deep.dial(t, tcp, token, playerID), kernelSendBufferMax(t) + 2*deepLinkReadBuffer + link.deep.depth
+	connection, progress := link.deep.dial(t, tcp, token, playerID)
+	return connection, kernelSendBufferMax(t) + 2*deepLinkReadBuffer + link.deep.depth, progress
+}
+
+// gateCloseCounters 是 Gate 关连接的几类原因的计数：写超过 write_timeout 或 socket 出错、读超过 idle_timeout 或坏帧、
+// 出站队列溢出、推送时发现已关闭。失败时打出用例期间的增量，判断连接是被哪一边关掉的。
+func gateCloseCounters() map[string]int64 {
+	out := map[string]int64{}
+	for _, m := range metrics.Snapshot() {
+		switch m.Name {
+		case "player_tcp_write_error_total", "player_tcp_frame_error_total", "player_tcp_outbound_overflow_total",
+			"player_tcp_outbound_budget_exhausted_total", "player_tcp_push_closed_total":
+			out[m.Name] += m.Value
+		}
+	}
+	return out
+}
+
+func gateCloseDelta(before map[string]int64) string {
+	var parts []string
+	for name, value := range gateCloseCounters() {
+		if delta := value - before[name]; delta != 0 {
+			parts = append(parts, fmt.Sprintf("%s +%d", name, delta))
+		}
+	}
+	slices.Sort(parts)
+	if len(parts) == 0 {
+		return "no Gate close counter moved"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // embeddedTCPOutboundQueueBytes 是嵌入 TCP 每连接出站队列的字节上限（gateway minOutboundQueueBytes；
@@ -816,7 +878,16 @@ func snapshotOverEmbeddedTCP(t *testing.T, link snapshotLink, written bool) bool
 	tcp := newTCPLockstepServerWith(t, 10*time.Second, map[string]int64{"slow": 1, "fast": 2}, func(config *gateway.TCPConfig) {
 		config.IdleTimeout = 2 * time.Second
 	})
-	slow, linkBytes := link.dial(t, tcp, "slow", 1)
+	countersBefore := gateCloseCounters()
+	began := time.Now()
+	slow, linkBytes, progress := link.dial(t, tcp, "slow", 1)
+	diagnose := func() string {
+		out := fmt.Sprintf("after %v; Gate: %s", time.Since(began).Round(time.Millisecond), gateCloseDelta(countersBefore))
+		if progress != nil {
+			out += "; link: " + progress.String()
+		}
+		return out
+	}
 	fast := tcp.dial(t, "fast", 2, 1<<20)
 	keepSnapshotClientAlive(t, slow)
 	keepSnapshotClientAlive(t, fast)
@@ -916,9 +987,9 @@ func snapshotOverEmbeddedTCP(t *testing.T, link snapshotLink, written bool) bool
 	close(start)
 
 	// 服务器写出：追帧结束即最后一块已交给 socket。写出由客户端读走驱动，客户端停止推进才算卡住。
-	waitWhileClientProgresses(t, "the server finishing the snapshot", reader, func() bool { return !match.CatchingUp(1) || overflowed() }, tickLive)
+	waitWhileClientProgresses(t, "the server finishing the snapshot", reader, func() bool { return !match.CatchingUp(1) || overflowed() }, tickLive, diagnose)
 	if overflowed() {
-		t.Fatalf("snapshot over a slow TCP link closed the connection (closed=%v) or failed (%d Tick errors, first: %v)", closed["slow"], len(tickErrs), errors.Join(tickErrs...))
+		t.Fatalf("snapshot over a slow TCP link closed the connection (closed=%v) or failed (%d Tick errors, first: %v); %s", closed["slow"], len(tickErrs), errors.Join(tickErrs...), diagnose())
 	}
 
 	// 客户端收齐：服务器写完时链路里最多还有 linkBytes 字节在途，按客户端是否仍在推进等它们到达。
@@ -927,10 +998,10 @@ func snapshotOverEmbeddedTCP(t *testing.T, link snapshotLink, written bool) bool
 		return reader.err() != nil || fastReader.err() != nil || (reader.next.Load() > head && fastReader.next.Load() > head)
 	}, func() {
 		if err := tick(); err != nil {
-			t.Fatalf("live Tick after the snapshot: %v", err)
+			t.Fatalf("live Tick after the snapshot: %v; %s", err, diagnose())
 		}
 		time.Sleep(time.Millisecond)
-	})
+	}, diagnose)
 	if err := reader.err(); err != nil {
 		t.Fatalf("recovering client: %v", err)
 	}
@@ -945,14 +1016,14 @@ func snapshotOverEmbeddedTCP(t *testing.T, link snapshotLink, written bool) bool
 		t.Fatalf("clients at %d / %d, head %d", reader.next.Load()-1, fastReader.next.Load()-1, head)
 	}
 	if tcp.sessionClosed("slow", closed) || tcp.runtime.ActiveSessions(1) != 1 {
-		t.Fatal("the recovering connection was closed")
+		t.Fatalf("the recovering connection was closed; %s", diagnose())
 	}
 	return false
 }
 
 // waitWhileClientProgresses 一边推进实时帧（step）一边等 done：客户端读到的字节 10 秒没有增长判为卡住，总时长另有
 // 2 分钟上限。慢链路上交付多久取决于平台与链路，固定预算会把“慢”误判成“丢”；停滞判定保留“丢”的失败。
-func waitWhileClientProgresses(t *testing.T, what string, reader *snapshotReader, done func() bool, step func()) {
+func waitWhileClientProgresses(t *testing.T, what string, reader *snapshotReader, done func() bool, step func(), diagnose func() string) {
 	t.Helper()
 	const stalledFor, ceiling = 10 * time.Second, 2 * time.Minute
 	began := time.Now()
@@ -963,10 +1034,10 @@ func waitWhileClientProgresses(t *testing.T, what string, reader *snapshotReader
 			last, moved = received, now
 		}
 		if now.Sub(moved) > stalledFor {
-			t.Fatalf("%s: the client received nothing for %v (%d bytes so far, next frame %d, err %v)", what, stalledFor, last, reader.next.Load(), reader.err())
+			t.Fatalf("%s: the client received nothing for %v (%d bytes so far, next frame %d, err %v); %s", what, stalledFor, last, reader.next.Load(), reader.err(), diagnose())
 		}
 		if now.Sub(began) > ceiling {
-			t.Fatalf("%s: still running after %v although the client keeps receiving (%d bytes so far)", what, ceiling, last)
+			t.Fatalf("%s: still running after %v although the client keeps receiving (%d bytes so far); %s", what, ceiling, last, diagnose())
 		}
 		step()
 	}
