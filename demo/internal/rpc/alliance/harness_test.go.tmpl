@@ -84,6 +84,9 @@ type cluster struct {
 	mu      sync.Mutex
 	seq     int64
 	owners  map[int64]int32 // the persistent ownership records
+	// transfers counts each record's transfers: like the real record's
+	// route epoch, every move gives the owner a new tenure.
+	transfers map[int64]uint64
 	hints   map[int64]int32 // stale route hints, in front of the records
 	gates   map[int64]*claimGate
 	notices []MemberNotice
@@ -117,7 +120,7 @@ func newCluster(t *testing.T, rules Rules, sids ...int32) *cluster {
 	registerAllianceEntities()
 	c := &cluster{
 		t: t, instances: map[int32]*instance{}, rules: rules, now: time.Unix(1_800_000_000, 0),
-		owners: map[int64]int32{}, hints: map[int64]int32{}, gates: map[int64]*claimGate{}, lost: map[string]int{},
+		owners: map[int64]int32{}, transfers: map[int64]uint64{}, hints: map[int64]int32{}, gates: map[int64]*claimGate{}, lost: map[string]int{},
 		dropEvery: map[string]int{}, calls: map[string]int{},
 	}
 	for _, sid := range sids {
@@ -780,8 +783,10 @@ func (r *fakeRemote) PrepareRemoteWriteBatch(_ context.Context, ids []int64) (en
 }
 
 func (r *fakeRemote) GetRemoteOwnership(_ context.Context, id int64) (entity.RemoteEntityMarkerLease, bool, error) {
-	sid, ok := r.c.owner(id)
-	return entity.RemoteEntityMarkerLease{OwnerSid: sid, MarkerEpoch: 1, RouteEpoch: 1}, ok, nil
+	r.c.mu.Lock()
+	defer r.c.mu.Unlock()
+	sid, ok := r.c.owners[id]
+	return entity.RemoteEntityMarkerLease{OwnerSid: sid, MarkerEpoch: 1, RouteEpoch: 1 + r.c.transfers[id]}, ok, nil
 }
 
 // ListOwnedRemoteEntities implements entity.RemoteOwnedEntityLister over the
@@ -809,6 +814,7 @@ func (r *fakeRemote) TransferRemoteOwnership(_ context.Context, id int64, to int
 		return entity.RemoteEntityMarkerLease{}, fmt.Errorf("%w: entity=%d owner=%d", entity.ErrRemoteFenced, id, owner)
 	}
 	r.c.owners[id] = to
+	r.c.transfers[id]++
 	// The new owner loads the entity from the store on its first access. The
 	// store here is the old owner's memory, which holds every write admitted
 	// before the transfer (the real transfer drains them before it moves the
@@ -818,7 +824,7 @@ func (r *fakeRemote) TransferRemoteOwnership(_ context.Context, id int64, to int
 			next.store.put(id, live)
 		}
 	}
-	return entity.RemoteEntityMarkerLease{OwnerSid: to, MarkerEpoch: 2, RouteEpoch: 2}, nil
+	return entity.RemoteEntityMarkerLease{OwnerSid: to, MarkerEpoch: 1, RouteEpoch: 1 + r.c.transfers[id]}, nil
 }
 
 // fakeBatch admits the write and commits nothing remotely: the entity's

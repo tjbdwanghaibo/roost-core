@@ -4,6 +4,15 @@
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。
 
+## 2026-11-07：v1.42.1 修复复验
+
+RV-20261106-01/03/04 与 RV-20261107-02 原缺陷复验通过，关闭；cellworld 边界抖动夹具修正经 Linux 完整包及三轮重复验证通过。联盟 RV-20261107-01 只部分修复：新增确认 RV-20261107-03（P2），迁出前 drop 后的扫描可重新写入 picked，导致再次迁回时永久跳过待确认宣战；三轮复现、控制组三轮通过。Lockstep 未闭环，main 新登记的 Saga 偶发 fenced 仍根因待查。详见 [修复复验与续审](FIX-REVIEW-20261107.md)。以下旧结论按其历史基线阅读。
+
+**后续（维护侧 2026-11-07，原结论保留）**：
+
+- RV-20261107-03 已修复（未发版）：扫描的“已接手”改为按所有权任期（`MarkerEpoch` / `RouteEpoch`，每次迁移前进）记，迁出再迁回是新任期、一定重读，不再依赖迁移前后哪一次失效；迁移不再删条目，完整扫描结束只放掉不再拥有的。回归 `TestWarScanDuringATransferOutDoesNotSkipTheReturn`（由审查探针改写，修前红文本 `waits [{war-on-the-way-back 2}], enemy's wars []`；变异成“只看有没有、不看任期”时实验组与对照组都红），测试替身的所有权记录改为每次迁移推进 `RouteEpoch`。见 [联盟方案“运行中迁入”](FEATURE-2026-11-04-alliance-service.md)、CHANGELOG `[Unreleased]`。
+- Saga 偶发 fenced：根因已定位并修复（未发版），见下一节。
+
 ## Saga 协调器偶发误判“被别的写者隔离”（2026-11-07 发版前压测；已定位并修复，未发版）
 
 v1.42.1 发版前 Saga 整轮压测（`scripts/perf/saga-js-scan.sh`，main `4b6e5212`，本机私有三节点 NATS + 单节点副本集）15 档中 `mongo-forward` c128 一档失败：开压 11 秒后分区 1 fail-stop，`reason=fenced`，错误为 `partition 1 expected last event 11463: nats log: wrong last sequence (err_code=10164)`。该档 128 笔未观察到终态、余额读取 1 次失败；非期望终态、余额不符、发布结果未知均为 0，即按设计安全停下，没有错写。同一档单独重跑 5 轮全部通过（986～1053 笔/s）。

@@ -113,9 +113,8 @@ func (s *Service) TransferOwnership(ctx context.Context, ids []int64, count int,
 			}
 			// Whatever is declared from here until the transfer fences this
 			// instance moves with the alliance; the new owner's war scan
-			// picks it up. Should the transfer fail, this instance's next
-			// scan reads the alliance again.
-			s.picked.drop(id)
+			// picks it up in its tenure, and so does this instance's if the
+			// alliance ever comes back (pickedUp).
 		}
 		if _, err := s.deps.Owners.TransferRemoteOwnership(ctx, id, toSID); err != nil {
 			report.Failed[id] = err.Error()

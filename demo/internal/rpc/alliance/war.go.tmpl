@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"slices"
+	"maps"
 	"sync"
 	"time"
 
@@ -202,19 +202,21 @@ func (s *Service) scanWarsOnce(ctx context.Context) error {
 	started := time.Now()
 	after := int64(0)
 	scanned, waiting := 0, 0
+	var owned []int64
 	for {
 		ids, next, err := s.deps.Owned.ListOwnedRemoteEntities(ctx, []entity.EntityKind{alliance.EntityKindAlliance}, after, transferListPage)
 		if err != nil {
 			return fmt.Errorf("list owned alliances: %w", err)
 		}
-		ids = s.picked.without(ids)
-		found, err := s.scanPage(ctx, ids)
+		owned = append(owned, ids...)
+		read, found, err := s.scanPage(ctx, ids)
 		if err != nil {
 			return err
 		}
-		scanned += len(ids)
+		scanned += read
 		waiting += found
 		if next == 0 {
+			s.picked.keepOnly(owned)
 			if scanned > 0 {
 				slog.Info("alliance: war scan done", "alliances", scanned, "waiting", waiting, "took", time.Since(started))
 			}
@@ -234,12 +236,14 @@ const scanConcurrency = 8
 
 // scanPage reads the waits of one page of alliances, scanConcurrency at a
 // time, asks the enemy of every wait it finds, and marks each alliance it
-// read picked up. A definite rejection of the read — the alliance does not
+// read picked up for the tenure it read it in; an alliance already picked up
+// in its current tenure is skipped, one no longer owned here is left to its
+// owner. read is how many alliances it read. A definite rejection of the read — the alliance does not
 // exist: an empty claim, whose founding was refused — means there is nothing
 // to wait for. The first other failed read stops the page: the scan is tried
 // again (scanWars), and reads only what it has not picked up; an ask armed
 // twice is armed once (followUps.arm by key).
-func (s *Service) scanPage(ctx context.Context, ids []int64) (waiting int, err error) {
+func (s *Service) scanPage(ctx context.Context, ids []int64) (read, waiting int, err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var (
@@ -253,8 +257,21 @@ func (s *Service) scanPage(ctx context.Context, ids []int64) (waiting int, err e
 		go func() {
 			defer wg.Done()
 			for id := range next {
-				mark := s.picked.mark(id)
-				acks, err := s.warAcks(ctx, id)
+				// The tenure first, the read after: should the alliance
+				// move between them, the tenure kept is the older one and
+				// the next scan reads it again, never the other way round.
+				lease, owned, err := s.deps.Owners.GetRemoteOwnership(ctx, id)
+				if err == nil && (!owned || lease.OwnerSid != s.deps.LocalSID) {
+					continue // moved away since the listing: its owner's scan reads it
+				}
+				at := tenureOf(lease)
+				if err == nil && s.picked.has(id, at) {
+					continue
+				}
+				var acks []alliancerule.WarAck
+				if err == nil {
+					acks, err = s.warAcks(ctx, id)
+				}
 				if err != nil && !final(err) {
 					mu.Lock()
 					if firstErr == nil {
@@ -265,12 +282,13 @@ func (s *Service) scanPage(ctx context.Context, ids []int64) (waiting int, err e
 					continue
 				}
 				mu.Lock()
+				read++
 				waiting += len(acks)
 				mu.Unlock()
 				for _, ack := range acks {
 					s.askEnemy(entity.GetUniqueIDFromEntityID(id), ack.EnemyID, ack.RequestID, 0)
 				}
-				s.picked.add(id, mark)
+				s.picked.add(id, at)
 			}
 		}()
 	}
@@ -287,59 +305,63 @@ feed:
 	if firstErr == nil && ctx.Err() != nil {
 		firstErr = ctx.Err()
 	}
-	return waiting, firstErr
+	return read, waiting, firstErr
 }
 
-// pickedUp is the alliances whose waits this process has taken over since it
-// came to own them: the war scan read them and armed an ask for every wait
-// (askEnemy, which goes on until the enemy answers), and a wait declared
-// since arms its own ask (DeclareWar). In memory only: a new process starts
-// with none, so its first scan reads every alliance it owns. An alliance this
-// instance transfers away is dropped first (TransferOwnership), so if it ever
-// comes back its waits are read again; a scan's read that began before the
-// drop does not mark it picked up afterwards (mark / add).
+// pickedUp is the alliances whose waits this process has taken over, each
+// with the tenure it took them over in: the war scan read them and armed an
+// ask for every wait (askEnemy, which goes on until the enemy answers), and a
+// wait declared since arms its own ask (DeclareWar). In memory only: a new
+// process starts with none, so its first scan reads every alliance it owns.
+//
+// The tenure is the ownership record's epochs, which every transfer moves on
+// (RV-20261107-03): an alliance that leaves and comes back is in a new tenure
+// and read again, whatever this process remembered about the old one and
+// whenever a scan of the old one finished. Until 2026-11-07 the entry was
+// dropped once, before the move; a scan between the drop and the move put it
+// back, and the alliance, back here with a war declared on the way, was
+// skipped for good. Nothing else invalidates an entry: a complete scan only
+// lets go of the alliances it did not list, to keep the map to what is owned.
 type pickedUp struct {
 	mu  sync.Mutex
-	ids map[int64]struct{}
-	// drops counts the drops of each alliance (only alliances ever
-	// transferred away have an entry).
-	drops map[int64]uint64
+	ids map[int64]tenure
+}
+
+// tenure identifies one stretch of ownership of an alliance.
+type tenure struct{ marker, route uint64 }
+
+func tenureOf(lease entity.RemoteEntityMarkerLease) tenure {
+	return tenure{marker: lease.MarkerEpoch, route: lease.RouteEpoch}
 }
 
 func newPickedUp() *pickedUp {
-	return &pickedUp{ids: map[int64]struct{}{}, drops: map[int64]uint64{}}
+	return &pickedUp{ids: map[int64]tenure{}}
 }
 
-// mark is taken before a scan reads id; add with it marks id picked up only
-// if id was not dropped in between.
-func (p *pickedUp) mark(id int64) uint64 {
+func (p *pickedUp) has(id int64, at tenure) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.drops[id]
+	got, ok := p.ids[id]
+	return ok && got == at
 }
 
-func (p *pickedUp) add(id int64, mark uint64) {
+func (p *pickedUp) add(id int64, at tenure) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.drops[id] == mark {
-		p.ids[id] = struct{}{}
+	p.ids[id] = at
+}
+
+// keepOnly lets go of every alliance not in owned (a complete listing).
+func (p *pickedUp) keepOnly(owned []int64) {
+	keep := make(map[int64]struct{}, len(owned))
+	for _, id := range owned {
+		keep[id] = struct{}{}
 	}
-}
-
-func (p *pickedUp) drop(id int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.ids, id)
-	p.drops[id]++
-}
-
-// without is ids less the ones picked up.
-func (p *pickedUp) without(ids []int64) []int64 {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return slices.DeleteFunc(ids, func(id int64) bool {
-		_, ok := p.ids[id]
-		return ok
+	maps.DeleteFunc(p.ids, func(id int64, _ tenure) bool {
+		_, ok := keep[id]
+		return !ok
 	})
 }
 

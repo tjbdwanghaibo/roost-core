@@ -837,20 +837,65 @@ func TestStartupWarScanReadsAlliancesConcurrently(t *testing.T) {
 	}
 }
 
-// A scan's read of an alliance that the instance transfers away while the
-// read is in flight does not leave it picked up: should the alliance come
-// back, its waits are read again.
-func TestWarScanReadBeforeATransferDoesNotPickUp(t *testing.T) {
-	picked := newPickedUp()
-	mark := picked.mark(42) // the scan starts reading 42
-	picked.drop(42)         // TransferOwnership moves it away meanwhile
-	picked.add(42, mark)    // the read returns
-	if got := picked.without([]int64{42}); len(got) != 1 {
-		t.Fatalf("an alliance dropped during the read counts as picked up (%v left to read, want [42])", got)
-	}
-	picked.add(42, picked.mark(42))
-	if got := picked.without([]int64{42}); len(got) != 0 {
-		t.Fatalf("a read after the drop did not pick it up (%v left to read)", got)
+// RV-20261107-03: what the war scan picked up belongs to one tenure of the
+// alliance. A scan that runs while the alliance is on its way out (after the
+// transfer's own check, before the move) reads it as still owned; it must not
+// keep the alliance picked up for when it comes back. Back on this instance
+// with a war declared on the way (after the other owner's check, before its
+// move), the waits are read again and the enemy is asked. Until 2026-11-07
+// the cache was dropped once before the move, the scan in between put the
+// alliance back, and every later scan skipped it: the war stayed one-sided.
+// The control runs the same moves without the scan in between.
+func TestWarScanDuringATransferOutDoesNotSkipTheReturn(t *testing.T) {
+	for _, scanInBetween := range []bool{false, true} {
+		t.Run(map[bool]string{false: "control", true: "scan before the move"}[scanInBetween], func(t *testing.T) {
+			c := newCluster(t, defaultRules(), 3000, 3001)
+			a := found(t, c, 3000, "a", 100, false)
+			b := found(t, c, 3000, "b", 102, false)
+			target := mustAllianceTarget(t, a)
+			home, other := c.instances[3000], c.instances[3001]
+			if err := home.svc.scanWarsOnce(ctx); err != nil {
+				t.Fatal(err)
+			}
+			owners := home.svc.deps.Owners
+			home.svc.deps.Owners = transferHook{RemoteOwnershipManager: owners, before: func(int64) {
+				if scanInBetween {
+					if err := home.svc.scanWarsOnce(ctx); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}}
+			report, err := home.svc.TransferOwnership(ctx, []int64{target}, 0, 3001)
+			home.svc.deps.Owners = owners
+			if err != nil || len(report.Moved) != 1 {
+				t.Fatalf("transfer to 3001: %+v %v", report, err)
+			}
+			owners = other.svc.deps.Owners
+			other.svc.deps.Owners = transferHook{RemoteOwnershipManager: owners, before: func(int64) {
+				if _, err := c.client().DeclareWar(ctx, "war-on-the-way-back", 100, homeSID, target, b); err != nil {
+					t.Fatal(err)
+				}
+			}}
+			report, err = other.svc.TransferOwnership(ctx, []int64{target}, 0, 3000)
+			other.svc.deps.Owners = owners
+			if err != nil || len(report.Moved) != 1 {
+				t.Fatalf("transfer back to 3000: %+v %v", report, err)
+			}
+			c.runFollowUps()
+			for range 3 {
+				if err := home.svc.scanWarsOnce(ctx); err != nil {
+					t.Fatal(err)
+				}
+				c.runFollowUps()
+			}
+			waits, err := home.svc.warAcks(ctx, target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(waits) != 0 || !has(info(t, c, b).Wars, a) {
+				t.Fatalf("back on 3000 after a scan during the move out: waits %v, enemy's wars %v; want the war asked by the new tenure's scan", waits, info(t, c, b).Wars)
+			}
+		})
 	}
 }
 
