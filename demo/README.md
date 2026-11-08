@@ -219,14 +219,19 @@ scene:
 - **幂等**：编辑 ID 由（玩家，请求 ID）混合得出，与改动在同一笔事务里记进每块的 `Applied`（最近 32 个）；重复或乱序重放的请求
   不再生效。结果未知（超时）时用同一个请求 ID 重试。
 - **事务**：覆盖到的块（至多 4 块）一笔 Nest 事务（handler `TerrainBrush`，`rollback=undo durability=strict`），第一次改的块
-  先 `GetOrCreate`；提交被接受后逐块装视图并登记同步，回滚时视图与同步都不动。一块改动超过 1000 个高度时整字段写。
+  先 `GetOrCreate`；提交被接受后逐块装视图并登记同步，回滚时视图与同步都不动。高度与材质都按下标写（DAO 里 `Materials` 是
+  `[]uint16`，取值 0～255，原始地形包与 `gameplay/terrain` 里仍是每点 1 字节；记录里出现 > 255 的材质按损坏处理、这块不装入）；
+  一块改动超过 1000 个高度（或 1000 个材质）时该字段整字段写，两个字段各自计数（方案 §15）。
 - **同步**：改过的块是 `terrain` 命名空间的同步对象（`Applied` 不下发）；场景另有一个地形 Interest（视野 200m、至多 64 块），
   玩家主视野是它的观察者。开地形时会话对象上限是 164（其他 100 + 地形 64），每会话每次 Flush 至多 4 个全量（对玩家、怪也生效）。
   客户端用生成的 `ApplySyncTerrainChunkDao` 应用，按 `Version` 重建 mesh（C# 见 `client/dotnet/Roost.Client/Terrain/`）。
   分区场景还没有地形同步（P3）。
 - **测试**：`terrain_test.go` 的 `TestTerrainBrush*`（重复 / 乱序只生效一次、拒绝零写入、限速、多块回滚、整字段守卫）；
   `terrain_sync_test.go` 走真实 TCP（客户端收到全量与增量、断线重连后逐点一致、视野满 64 块不断开会话）；
-  `ROOST_TERRAIN_MEASURE=1` 时跑字节与耗时测量（[实测](../docs/maintenance/evidence/terrain-p2-20261108/README.md)）。
+  `ROOST_TERRAIN_MEASURE=1` 时跑字节与耗时测量（[P2 实测](../docs/maintenance/evidence/terrain-p2-20261108/README.md)、
+  [材质改列表后重测](../docs/maintenance/evidence/terrain-materials-list-20261108/README.md)）。
+- **升级**：`TerrainChunkDao` 是 schema 2（`Materials` 从 `[]byte` 改成 `[]uint16`，store 键 4 不变）。项目未上线，不迁移：
+  schema 1 的记录按 `ErrSchemaMismatch` 拒绝（启动装入时这块按损坏不装入），升级前清空 `terrain_chunks`。
 
 ## 改这里的东西之后
 

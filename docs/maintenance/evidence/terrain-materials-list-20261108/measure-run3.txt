@@ -1,0 +1,31 @@
+MEASURE full snapshot (enter view)               payload= 12319 component= 12397 frame= 12611 wire= 12627 heights_delta=false height_updates=0 materials=true materials_delta=false material_updates=0
+MEASURE raise r=5m linear                        payload=   575 component=   653 frame=   703 wire=   719 heights_delta=true height_updates=69 materials=false materials_delta=false material_updates=0
+MEASURE raise r=5m constant (81 points)          payload=   671 component=   749 frame=   799 wire=   815 heights_delta=true height_updates=81 materials=false materials_delta=false material_updates=0
+MEASURE raise r=16m smooth                       payload=  5759 component=  5837 frame=  5887 wire=  5903 heights_delta=true height_updates=717 materials=false materials_delta=false material_updates=0
+MEASURE paint r=5m material 21                   payload=   590 component=   668 frame=   718 wire=   734 heights_delta=false height_updates=0 materials=true materials_delta=true material_updates=81
+MEASURE paint r=5m material 200                  payload=   671 component=   749 frame=   799 wire=   815 heights_delta=false height_updates=0 materials=true materials_delta=true material_updates=81
+MEASURE raise r=5m linear + paint r=5m (21)      payload=  1150 component=  1228 frame=  1278 wire=  1294 heights_delta=true height_updates=69 materials=true materials_delta=true material_updates=81
+MEASURE raise r=5m linear + paint r=5m (200)     payload=  1231 component=  1309 frame=  1359 wire=  1375 heights_delta=true height_updates=69 materials=true materials_delta=true material_updates=81
+MEASURE paint r=10m material 22                  payload=  2242 component=  2320 frame=  2370 wire=  2386 heights_delta=false height_updates=0 materials=true materials_delta=true material_updates=317
+MEASURE paint r=16m material 21 (player cap)     payload=  5280 component=  5358 frame=  5408 wire=  5424 heights_delta=false height_updates=0 materials=true materials_delta=true material_updates=751
+MEASURE paint r=16m material 200 (player cap)    payload=  6399 component=  6477 frame=  6527 wire=  6543 heights_delta=false height_updates=0 materials=true materials_delta=true material_updates=797
+MEASURE paint r=24m (guard, whole materials)     payload=  4117 component=  4195 frame=  4245 wire=  4261 heights_delta=false height_updates=0 materials=true materials_delta=false material_updates=0
+MEASURE flatten r=24m (guard, whole heights)     payload=  8213 component=  8291 frame=  8341 wire=  8357 heights_delta=false height_updates=0 materials=false materials_delta=false material_updates=0
+MEASURE stored document (whole BSON) bytes=79951
+--- PASS: TestTerrainMeasureUpdateBytes (0.06s)
+MEASURE hot spot, 20 editors x 1/s, 0% with material          19.2 KB/s on the wire (   15.8 KB/s DAO payload), 9 full + 524 delta chunk updates in 20 s
+MEASURE hot spot, 20 editors x 1/s, 50% with material         25.1 KB/s on the wire (   21.5 KB/s DAO payload), 9 full + 559 delta chunk updates in 20 s
+MEASURE hot spot, 20 editors x 1/s, 100% with material        30.6 KB/s on the wire (   27.0 KB/s DAO payload), 9 full + 565 delta chunk updates in 20 s
+MEASURE hot spot r=16m, 20 editors x 1/s, 0% with material   112.5 KB/s on the wire (  107.1 KB/s DAO payload), 9 full + 936 delta chunk updates in 20 s
+MEASURE hot spot r=16m, 20 editors x 1/s, 100% with material   227.5 KB/s on the wire (  221.8 KB/s DAO payload), 9 full + 1003 delta chunk updates in 20 s
+MEASURE running at 6 m/s, 100% of the chunks edited            8.1 KB/s on the wire (    8.0 KB/s DAO payload), 20 full + 0 delta chunk updates in 30 s
+MEASURE running at 6 m/s, 20% of the chunks edited             1.6 KB/s on the wire (    1.6 KB/s DAO payload), 4 full + 0 delta chunk updates in 30 s
+MEASURE running at 12 m/s, 100% of the chunks edited          16.6 KB/s on the wire (   16.4 KB/s DAO payload), 41 full + 0 delta chunk updates in 30 s
+MEASURE running at 12 m/s, 20% of the chunks edited            4.1 KB/s on the wire (    4.0 KB/s DAO payload), 10 full + 0 delta chunk updates in 30 s
+--- PASS: TestTerrainMeasureDownlinkScenarios (3.24s)
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=85.965µs p50=82.25µs p99=250.584µs max=468.292µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=610.473µs p50=590.834µs p99=1.4225ms max=1.591625ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=223.933µs p50=206.5µs p99=615.75µs max=736.292µs
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 45870 edits/s (offline committer, 4 short workers)
+--- PASS: TestTerrainMeasureBrushCost (1.08s)
+ok  	example.com/planet/internal/service/game	4.827s

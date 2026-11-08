@@ -109,7 +109,7 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 
 ## 给上层（TerrainChunk 实体接入）的接口说明
 
-- DAO 形状与 `Chunk` / `Overlay` 相同：`Heights []uint16`（4096）、`Materials []byte`（4096），`BaseRevision`、`Version`。
+- DAO 与 `Chunk` / `Overlay` 一一对应：`Heights []uint16`（4096）、`Materials`（4096）、`BaseRevision`、`Version`。本包与原始地形包里材质是每点 1 字节（`[]byte`）；game-demo 的 DAO 为让材质也按下标增量同步与持久化，用 `[]uint16`（方案 D11），在实体组件边界换算（值域 0～255，越界的记录按损坏拒绝）。本包的格式与公开类型不因此改变。
 - 第一次改一块时，用 `Pack.ReadChunk(key)`（或 `View.Chunk(key)`）取原始数据作初值建实体；这两个都返回调用方独占的新切片，可以直接交给 DAO。
 - 每次提交后把 DAO 的当前值 `SetOverlay` 给 View（View 复制，不与 DAO 共享内存）；版本必须单调（View 拒绝回退）。
 - 格进程启动：对本格（加 Ghost 带）`ChunksIn` 出的块，有持久记录的 `SetOverlay`，其余 `LoadBase`（I/O，放在 io / long 池或启动阶段）。实测 1w 地图装满一个格（2304 块）单线程约 120ms、8 路并行约 29ms，堆约 27MB。

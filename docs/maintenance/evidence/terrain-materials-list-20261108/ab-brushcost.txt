@@ -1,0 +1,83 @@
+# Map.Brush 端到端耗时 A/B（同机交替 4 轮；old = b20f439d 生成的 game-demo，Materials []byte；new = 本分支，Materials []uint16）
+== old round 1
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=78.886µs p50=74.167µs p99=231.375µs max=458.125µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=594.953µs p50=568.709µs p99=1.317ms max=3.816625ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=200.543µs p50=184.083µs p99=529.625µs max=905.667µs
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 43511 edits/s (offline committer, 4 short workers)
+== new round 1
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=83.451µs p50=80.375µs p99=208µs max=321.708µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=615.415µs p50=593.791µs p99=1.370125ms max=2.209042ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=226.039µs p50=212.542µs p99=560.459µs max=821.291µs
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 43319 edits/s (offline committer, 4 short workers)
+== old round 2
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=81.445µs p50=76.75µs p99=231µs max=343.958µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=584.268µs p50=559.416µs p99=1.305667ms max=1.469959ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=225.161µs p50=199.417µs p99=774.625µs max=894.542µs
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 31031 edits/s (offline committer, 4 short workers)
+== new round 2
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=94.068µs p50=83.833µs p99=299.084µs max=5.10875ms
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=755.586µs p50=610µs p99=3.565292ms max=16.736208ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=218.74µs p50=199.125µs p99=523.417µs max=720.5µs
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 42992 edits/s (offline committer, 4 short workers)
+== old round 3
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=80.091µs p50=75.417µs p99=230.125µs max=388.25µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=594.17µs p50=570.208µs p99=1.220375ms max=1.479292ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=212.035µs p50=192.084µs p99=558.5µs max=782.959µs
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 38872 edits/s (offline committer, 4 short workers)
+== new round 3
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=99.919µs p50=86.125µs p99=412.5µs max=864.541µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=665.798µs p50=596.708µs p99=1.560916ms max=11.405208ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=223.152µs p50=205.791µs p99=620.958µs max=755.875µs
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 41200 edits/s (offline committer, 4 short workers)
+== old round 4
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=85.01µs p50=80.417µs p99=298.917µs max=498.291µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=608.077µs p50=584.625µs p99=1.368625ms max=1.589916ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=207.564µs p50=186.083µs p99=650.125µs max=969.666µs
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 42794 edits/s (offline committer, 4 short workers)
+== new round 4
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=85.276µs p50=81.583µs p99=219.458µs max=345.625µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=616.059µs p50=599.916µs p99=1.271292ms max=1.783083ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=232.593µs p50=215.083µs p99=545.833µs max=624.042µs
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 44795 edits/s (offline committer, 4 short workers)
+
+# 附：最终代码（材质换算辅助函数整理后）再交替 4 轮。此时机器负载 14～18（并行任务），只用于确认没有新的回退，数值不与上面比较
+== old round 1 (final)
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=114.284µs p50=96.542µs p99=398.875µs max=1.30875ms
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=774.335µs p50=705.667µs p99=1.945791ms max=2.909875ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=236.999µs p50=208µs p99=739.458µs max=1.045834ms
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 32932 edits/s (offline committer, 4 short workers)
+== new round 1 (final)
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=109.447µs p50=97.166µs p99=346.459µs max=961.042µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=952.154µs p50=788.875µs p99=3.009667ms max=5.329375ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=476.601µs p50=295.5µs p99=3.50375ms max=7.160416ms
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 26622 edits/s (offline committer, 4 short workers)
+== old round 2 (final)
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=114.936µs p50=94.042µs p99=480.833µs max=2.684875ms
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=779.684µs p50=701.208µs p99=2.192708ms max=4.732292ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=253.933µs p50=219.25µs p99=822.583µs max=1.672541ms
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 34733 edits/s (offline committer, 4 short workers)
+== new round 2 (final)
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=112.961µs p50=98.875µs p99=386.583µs max=880.25µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=839.01µs p50=735.917µs p99=2.332167ms max=4.745041ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=305.55µs p50=254.708µs p99=1.093375ms max=1.597792ms
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 30187 edits/s (offline committer, 4 short workers)
+== old round 3 (final)
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=116.551µs p50=98.041µs p99=411.583µs max=775.917µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=792.924µs p50=700.125µs p99=2.4585ms max=4.078ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=245.17µs p50=214.25µs p99=793.125µs max=1.2485ms
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 29707 edits/s (offline committer, 4 short workers)
+== new round 3 (final)
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=96.927µs p50=90.209µs p99=264.625µs max=496.25µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=743.751µs p50=689.459µs p99=1.774334ms max=3.497292ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=295.991µs p50=251.917µs p99=1.000625ms max=1.670833ms
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 33567 edits/s (offline committer, 4 short workers)
+== old round 4 (final)
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=96.746µs p50=85.583µs p99=328.583µs max=658.916µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=736.088µs p50=658.917µs p99=1.890042ms max=3.830417ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=252.368µs p50=218.542µs p99=939.125µs max=1.218083ms
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 31366 edits/s (offline committer, 4 short workers)
+== new round 4 (final)
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=107.727µs p50=95.458µs p99=345.292µs max=719.542µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=741.426µs p50=693.709µs p99=1.568542ms max=2.415ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=265.346µs p50=236.291µs p99=764.834µs max=2.060166ms
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 36021 edits/s (offline committer, 4 short workers)

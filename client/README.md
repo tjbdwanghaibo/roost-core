@@ -275,7 +275,7 @@ Go客户端（`framework/sync/lockstep`与`robot`）对应接口：`FrameAssembl
 | 部分 | 入口 |
 | --- | --- |
 | 原始地形包 | `TerrainPack.Open(ReadOnlyMemory<byte>)`（Addressables / UnityWebRequest 读到的整份字节，不复制）、`TerrainPack.Open(Stream, leaveOpen)`（可随机读的 FileStream；Android 的 StreamingAssets 在 apk 里，不能用 FileStream，读成字节再打开）；打开时校验包头与索引的整体 SHA-256，`ReadChunk(key)` 每次校验该块的 SHA-256 再解压，`ChunkSha256(key)`、`Meta`、`Dispose` |
-| 地形视图 | `new TerrainView(pack)`；写入口 `LoadBase(key)`、`SetOverlay(key, baseRevision, version, heights, materials)`（`heights` 可以是 `ushort` span，也可以直接传生成 DAO 的 `RepeatedField<uint>`）、`Unload(key)`；`TryGetVersion`、`GetChunk`（只读、不复制）、`Count` |
+| 地形视图 | `new TerrainView(pack)`；写入口 `LoadBase(key)`、`SetOverlay(key, baseRevision, version, heights, materials)`（`ushort` / `byte` span；或直接传生成 DAO 的两个 `RepeatedField<uint>`，高度 > 65535、材质 > 255 时抛 `TerrainInvalidChunkException`，不截断）、`Unload(key)`；`TryGetVersion`、`GetChunk`（只读、不复制）、`Count` |
 | 查询 | `Height` / `Material` / `IsWater` / `Probe`（缺块、地图外抛异常）；每帧热路径用 `TryProbe(x, y, out ground, out missing)`，返回 `Ok` / `OutOfMap` / `NotLoaded`，不抛异常 |
 | mesh 钩子 | 事件 `ChunkChanged`（`Loaded` / `Updated` / `Unloaded`，带前后版本与 `MeshesToRebuild`）；`TryBuildHeightGrid(key, Span<int>, out missing)` 与纯函数 `TerrainMesh.TryBuildHeightGrid(meta, key, self, right, top, topRight, destination, out missing)` 输出 65 × 65 顶点的世界高度（厘米） |
 | 错误 | `TerrainBadPackException`、`TerrainPackVersionException`、`TerrainCorruptChunkException`（带块坐标，只影响这一块）、`TerrainOutOfMapException`、`TerrainNotLoadedException`（带缺的块）、`TerrainInvalidChunkException`、`TerrainStaleOverlayException`、`TerrainBaseRevisionException`，与 Go 的哨兵错误一一对应；不会用默认数据代替缺失或损坏的块 |
@@ -293,7 +293,7 @@ client.EntityChanged += change => {
     var key = ChunkKeyOfEntity(change.Identity.Update.SubjectId);   // 实体 ID → 块坐标是游戏工程的约定
     long version = dao.Version?.Value ?? 0;
     if (version == 0) return;                                        // 实体已建、还没提交过改动：按原始块看待
-    terrain.SetOverlay(key, dao.BaseRevision?.Value ?? 0, version, dao.Heights.Value, dao.Materials.Value.Span);
+    terrain.SetOverlay(key, dao.BaseRevision?.Value ?? 0, version, dao.Heights.Value, dao.Materials.Value);
 };
 
 // 每帧：重建脏块的 mesh（缺邻块时等它装入，ChunkChanged 会再把这一块列进来）。
@@ -309,7 +309,7 @@ dirtyMeshes.Clear();
 - 顶点网格：`destination[j·65 + i]` 是世界采样点 (key.X·64 + i, key.Y·64 + j) 的世界高度，最右一列与最上一行取右 / 上邻块的第 0 列 / 行（共享边），地图右 / 上边复制本块最后一列 / 行，邻块没装返回 false。每个顶点等于 `Height` 在该点的值，相邻块的接缝逐个相同；一块变了，左 / 下 / 左下邻块的接缝也变，所以 `MeshesToRebuild` 最多 4 块。网格三角形在 1m 格内是平面而 `Height` 是双线性插值，格内的点可能差几厘米：落地、站立高度等要与服务端一致的判定用查询，不用渲染网格。Unity 是 Y 轴向上：世界 X → Unity x、世界 Y → Unity z、高度 → Unity y，厘米换米除以 100。
 - 线程：查询与 `TryBuildHeightGrid` 不取锁，任意线程可并发调用，同一块内不会读到两个版本；写入口由一把锁串行，`LoadBase` 读包与解压在锁外。`ChunkChanged` 在写入口的调用线程、新数据已可查询之后触发，订阅者抛错交给 `Error`。`TerrainPack.ReadChunk` 可并发（Stream 来源在锁内定位 + 读取）。
 
-验证：`dotnet run --project client/dotnet/Roost.Client.Terrain.Tests -- client/spec`（`scripts/test-client-dotnet.sh` 与 pretag 也跑）。它核对 Go 写出的 [terrain-golden.pack](spec/terrain-golden.pack) 的整包与 6 块校验和、[terrain-queries.json](spec/terrain-queries.json) 全部 246 个位置的高度 / 材质 / 水；坏包头、索引、截断、坏块；覆盖块规则与通知；网格顶点与接缝；以及 Go 生成 DAO 写出的 `TerrainChunk` 全量、按下标的高度增量、材质整字段、高度整字段四步经 C# 生成 Apply 合并后与 Go 的合并结果相等、与 Go `View` 的 520 次查询逐点相等。这份同步夹具在 `dotnet/Roost.Client.Terrain.Tests/Fixtures/`，由 `regen.sh` 用正式 DAO 生成器从 demo 的 `TerrainChunkDao` 定义生成（`-update` 覆盖，缺省只核对，`scripts/test-client-dotnet.sh` 的完整模式会核对它与当前生成器一致）。没有在 Unity Editor、IL2CPP 或移动设备上运行过；没有经过真实 entitysync 链路（服务端 `TerrainChunk` 接 entitysync 是 P2 服务端部分）。C++ 客户端没有地形实现。
+验证：`dotnet run --project client/dotnet/Roost.Client.Terrain.Tests -- client/spec`（`scripts/test-client-dotnet.sh` 与 pretag 也跑）。它核对 Go 写出的 [terrain-golden.pack](spec/terrain-golden.pack) 的整包与 6 块校验和、[terrain-queries.json](spec/terrain-queries.json) 全部 246 个位置的高度 / 材质 / 水；坏包头、索引、截断、坏块；覆盖块规则与通知；网格顶点与接缝；以及 Go 生成 DAO 写出的 `TerrainChunk` 全量、按下标的高度增量、按下标的材质增量、材质整字段、高度整字段五步经 C# 生成 Apply 合并后与 Go 的合并结果相等、与 Go `View` 的 650 次查询逐点相等（材质在 DAO 里是 `[]uint16` / `repeated uint32`，取值 0～255，方案 D11）。这份同步夹具在 `dotnet/Roost.Client.Terrain.Tests/Fixtures/`，由 `regen.sh` 用正式 DAO 生成器从 demo 的 `TerrainChunkDao` 定义生成（`-update` 覆盖，缺省只核对，`scripts/test-client-dotnet.sh` 的完整模式会核对它与当前生成器一致）。没有在 Unity Editor、IL2CPP 或移动设备上运行过；没有经过真实 entitysync 链路（服务端 `TerrainChunk` 接 entitysync 是 P2 服务端部分）。C++ 客户端没有地形实现。
 
 ## Unity接入与其他引擎
 

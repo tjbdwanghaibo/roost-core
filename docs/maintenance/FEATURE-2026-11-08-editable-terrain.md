@@ -1,6 +1,6 @@
 # 可编辑地形大世界（定稿方案，2026-11-08）
 
-状态：**定稿方案；P1 已实施：框架部分（`gameplay/terrain`：坐标、原始地形包、地形视图与查询）见[第 11 节](#11-p1-框架部分实施结果2026-11-08)，实体接入（game-demo 的 `TerrainChunk` 实体、地形服务、改块重启后一致）见[第 12 节](#12-p1-实体接入实施结果2026-11-08)；P2（单格）已实施：C# 客户端部分（读包、查询、接 DAO 同步、mesh 钩子）见[第 13 节](#13-p2-客户端c实施结果2026-11-08)，服务端部分（笔刷、校验、幂等、多块事务、整字段守卫、地形同步，真实 TCP 实测）见[第 14 节](#14-p2-服务端单格实施结果2026-11-08)；P3 起未实施。** 维护者 2026-11-08 确认：材质层用 `[]byte`，其余按本文推荐整理为最终方案（第 8 节）。目标是在 cellworld 无缝大世界上支持玩家改地形（挖、填、抬高、整平、改材质）、由此形成湖泊和高地，并在地形上放置建筑。
+状态：**定稿方案；P1 已实施：框架部分（`gameplay/terrain`：坐标、原始地形包、地形视图与查询）见[第 11 节](#11-p1-框架部分实施结果2026-11-08)，实体接入（game-demo 的 `TerrainChunk` 实体、地形服务、改块重启后一致）见[第 12 节](#12-p1-实体接入实施结果2026-11-08)；P2（单格）已实施：C# 客户端部分（读包、查询、接 DAO 同步、mesh 钩子）见[第 13 节](#13-p2-客户端c实施结果2026-11-08)，服务端部分（笔刷、校验、幂等、多块事务、整字段守卫、地形同步，真实 TCP 实测）见[第 14 节](#14-p2-服务端单格实施结果2026-11-08)；材质改为列表按下标增量（D11 复议）见[第 15 节](#15-材质改为列表按下标增量实施结果2026-11-08)；P3 起未实施。** 维护者 2026-11-08 确认按本文推荐整理为最终方案（第 8 节）；材质层当日先定 `[]byte`，P2 实测后按客户端下行预算（< 50KB/s）复议为 `[]uint16`（D11）。目标是在 cellworld 无缝大世界上支持玩家改地形（挖、填、抬高、整平、改材质）、由此形成湖泊和高地，并在地形上放置建筑。
 
 数字的来源分两种：同步与持久化的单块字节、编码耗时来自离线微基准（[实验记录](evidence/terrain-sync-20261108/results.md)）；规模、带宽与参数初值是按假设推算，P2 / P5 实测后修正。
 
@@ -47,12 +47,12 @@
 **地形块实体 `TerrainChunk`**：Nest 实体，ID 由块坐标编码；只为被改过的块建持久记录。DAO 示意（store 键按仓库规则显式写数字短键）：
 
 ```go
-//roost:dao coll=terrain_chunks db=game
+//roost:dao coll=terrain_chunks db=game schema=2
 type TerrainChunkDao struct {
 	BaseRevision int64    `store:"1"` // 基于哪一版原始地形
 	Version      int64    `store:"2"` // 每次提交加一
 	Heights      []uint16 `store:"3"` // 4096 点，同步与持久化按下标增量
-	Materials    []byte   `store:"4"` // 4096 点，整字段替换
+	Materials    []uint16 `store:"4"` // 4096 点（值 0～255），同步与持久化按下标增量（D11 复议）
 	Applied      []uint64 `store:"5"` // 最近 N 个已应用的编辑 ID，有界，不下发客户端
 }
 ```
@@ -60,7 +60,7 @@ type TerrainChunkDao struct {
 | 字段 | 写法与代价（单块，实测） |
 | --- | --- |
 | `Heights` | 小笔刷逐点 setter：同步每个改动点约 8 字节，持久化按下标 `$set` 每点约 12 字节；单次改动超过 1000 点时业务改用 `SetHeightsAll` 整字段（同步约 8.2KB、持久化约 40KB）。BSON 中是 int32 数组，整文档约 44KB |
-| `Materials` | 整字段替换：同步与持久化每次约 4.1KB，不论改几个点 |
+| `Materials` | 与 `Heights` 同一写法（D11 复议，[第 15 节](#15-材质改为列表按下标增量实施结果2026-11-08)）：小笔刷逐点 setter，同步每点约 7.3 字节（编号 < 128）/ 8.3 字节（≥ 128）；单块改动超过 1000 点时 `SetMaterialsAll` 整字段（同步约 4.1KB，编号 ≥ 128 的点多时最多约 8.2KB）。原始地形包与 `gameplay/terrain` 里仍是每点 1 字节，DAO 为按下标增量取 `uint16`、值域 0～255，越界的记录按损坏处理。BSON 中也是 int32 数组：整文档约 80KB（`[]byte` 时约 44KB） |
 | `Applied` | 定长环（如 32 个），每次编辑整字段替换（约 256 字节）；用同步视图白名单排除，不下发 |
 
 加载 = 原始块 + 持久记录覆盖；从没改过的块不建实体、不读数据库，只读原始资源。BSON 更新小不等于 Mongo 磁盘写放大等比例下降（[增量持久化](../framework/DATAENGINE-INCREMENTAL-PERSISTENCE.md#持久安全边界)）；编辑频率高时再考虑“编辑日志 + 定期压实”（P5 实测后决定）。
@@ -119,34 +119,38 @@ type TerrainChunkDao struct {
 
 - **订阅：独立的地形 Interest。** 地形单独建一个 `policy.Interest`（独立订阅来源），玩家主视野作为它的 AOI 观察者，只把改过的块登记为 subject。从没改过的块不建实体、不订阅，客户端用本地原始资源（按 `BaseRevision` 与 SHA-256 校验）。视野 200m 约覆盖 31 块的中心（π·200² / 64²；P2 更正，原写 50～60），加上进出视野的滞回（220m）约 37 块，所以缺省视野到不了 `MaxVisible` 64，64 是放大视野或以后加大半径时的上限。
 - **对象上限。** `frame.Limits.MaxObjects` 缺省 100，同时是一个会话可持有的 subject 数；超出时 Manager 关闭整个会话（`object_limit`），不截断。地形块与玩家、NPC、建筑共用这个上限：地形 Interest 的 `AOIConfig.MaxVisible` 设 64，`MaxObjects` 调到“其他可见实体上限 + 64”。
-- **基线限流。** 改过的块进入视野时发全量（约 12.3KB：高度 8.2KB + 材质 4.1KB）。开启 `ManagerConfig.SnapshotBudget`，每会话每次 Flush 的全量对象数初值 4（50ms 一轮时峰值约 1MB/s，50 块约 0.65s 发完），P2 实测后调整；增量与 remove 不受限。
-- **增量。** 高度逐点补丁每点约 8 字节（r=5m 约 0.67KB）；大编辑走整字段守卫（8.2KB）；材质每次整字段 4.1KB。变化树每 DAO 最多 4096 个节点，4096 点的块在约 4093～4094 个不同下标时自动整字段回退；单块补丁最坏约 32.6KB，低于单组件上限 `MaxComponentBytes` 64KB。
+- **基线限流。** 改过的块进入视野时发全量（约 12.3KB：高度 8.2KB + 材质 4.1KB；材质编号 ≥ 128 的点多时最多约 16.4KB）。开启 `ManagerConfig.SnapshotBudget`，每会话每次 Flush 的全量对象数初值 4（50ms 一轮时峰值约 1MB/s，50 块约 0.65s 发完），P2 实测后调整；增量与 remove 不受限。
+- **增量。** 高度逐点补丁每点约 8 字节（r=5m 约 0.67KB），材质每点约 7.3～8.3 字节（r=5m 约 0.6～0.7KB）；大编辑走各自的整字段守卫（高度 8.2KB、材质约 4.1KB）。变化树每 DAO 最多 4096 个节点、由两个列表共享：单笔提交在两个守卫之内最多约 2004 个节点，不会提前回退；同一块在一次确认之前累积超过预算时整树回退（[第 15 节](#15-材质改为列表按下标增量实施结果2026-11-08)）。单块补丁最坏（两个字段各约 2000 个不同下标）约 32KB，低于单组件上限 `MaxComponentBytes` 64KB。
 - **继承的交付契约。** 持久化门槛（按 `CommitLSN` 挡整个 subject，编辑落 WAL 前不下发）、版本顺序与断档恢复（EntitySync 外层负责）、断线重连 / Hold-Ready 的新 epoch 全量都直接继承。
 - **客户端。** Go 用生成的 `ApplySync<Dao>`，C# / C++ 用同一份 `dao_sync.proto` 与生成 Apply；应用后按 `Version` 重建该块 mesh。
 - **没有客户端缓存。** entitysync 不记客户端已有哪个版本：块离开视野再回来会重发全量，版本没变也一样（AOI 的进出半径不同，只防边界抖动）。首版接受，按第 7.1 节的量评估；超出预算再做“客户端已有此版本则跳过全量”（第 8 节 D12）。
 
 **格边界**：邻格需要 Ghost 带（按 500m 配置即 `ghost_band` 50000；demo 缺省的 500 只有 5m）内的地形与建筑占位副本，用于视野、移动和交接判断。格进程之间像 Ghost 一样推送边界块的版本与变化，副本只读。
 
-### 7.1 同步数据量（推算）
+### 7.1 同步数据量（实测）
 
-单块下发量（实测，DAO 组件 payload，不含帧头与 TCP/IP 头；框架没有传输压缩）：
+数字是真实 TCP 实测（[第 15 节](#15-材质改为列表按下标增量实施结果2026-11-08)，[证据](evidence/terrain-materials-list-20261108/README.md)；方法同 P2）；全服出口一行仍是推算。客户端下行预算：**低于 50KB/s**（维护者 2026-11-08）。
+
+单块下发量（DAO 组件 payload，不含帧头与 TCP/IP 头；框架没有传输压缩）：
 
 | 内容 | 字节 |
 | --- | ---: |
-| 高度增量 r=5m（81 点） | 约 0.67KB |
-| 材质改动（整字段） | 约 4.1KB |
-| 改过的块进入视野（全量） | 约 12.3KB |
+| 高度增量 r=5m（69～81 点） | 575～671 |
+| 材质增量 r=5m（81 点） | 590（编号 < 128）～671（≥ 128） |
+| 高度 + 材质同一拍改同一处 r=5m | 1,150～1,231 |
+| 材质增量 r=16m（玩家上限，约 800 点） | 5,280～6,399 |
+| 守卫整字段：高度 / 材质 | 8,213 / 4,117 |
+| 改过的块进入视野（全量） | 12,319（材质编号 ≥ 128 的点多时最多约 16.4KB） |
 
-一次编辑（r=5m，平均影响 1.3 块）给每个观察者：只挖填约 0.9KB；挖填同时改材质约 6.2KB；只改材质约 5.3KB。
+| 场景（一个观察者） | 下行（线上，含帧头） | 对照 50KB/s |
+| --- | --- | --- |
+| 建造热点：附近 20 人各每秒 1 次 r=5m 编辑 | 只改高度 19.2KB/s；一半带材质 25.1KB/s；全部带材质 30.6KB/s（P2 材质整字段时 75.5 / 132.6） | 内 |
+| 同上，笔刷改为 r=16m（玩家上限） | 不带材质 112.5KB/s；全部带材质 227.5KB/s | **超**（见第 15 节可选措施） |
+| 跑图 6m/s / 骑乘 12m/s | 沿途全改过 8.1 / 16.6KB/s；沿途改过 20% 1.6 / 4.1KB/s | 内 |
+| 登录 / 传送 / 重连到全改过的区域 | 约 31 块 × 12.3KB ≈ 380KB，由快照预算分摊（每 Flush 4 个，约 0.4s 发完） | 一次性 |
+| 全服出口（推算）：3000 人在线，10% 每秒编辑 1 次、平均 10 个观察者；一半在跑图，沿途 30% 改过 | 编辑增量约 2.6～5.0MB/s（每次编辑每个观察者只改高度约 0.9KB、同时改材质约 1.65KB；材质整字段时上限 10.6MB/s）+ 跑图加载约 3.9MB/s，合计约 6.5～8.9MB/s；按 16 个格进程平摊每个不到 1MB/s | — |
 
-| 场景（假设） | 下行 |
-| --- | --- |
-| 建造热点的一个观察者：附近 20 人各每秒编辑 1 次 | 只改高度约 17KB/s；一半带材质约 70KB/s；全部带材质约 124KB/s |
-| 跑图（6m/s，每约 10.7s 进入一排 7～8 块） | 沿途全改过约 8.6KB/s，骑乘 15m/s 约 21KB/s；沿途改过 20% 约 1.7KB/s |
-| 登录 / 传送 / 重连到全改过的区域 | 约 31 块 × 12.3KB ≈ 380KB（P2 更正，原按 50 块算约 600KB），由快照预算分摊（每 Flush 4 个，约 0.4s 发完） |
-| 全服出口：3000 人在线，10% 每秒编辑 1 次、平均 10 个观察者；一半在跑图，沿途 30% 改过 | 编辑增量 2.6～10.6MB/s + 跑图加载约 3.9MB/s，合计约 6.5～14.5MB/s；按 16 个格进程平摊每个不到 1MB/s，热点集中在少数格 |
-
-读法：高度增量不是瓶颈；材质用 `[]byte` 时，热点下行取决于改材质的比例；改得多的区域，跑图加载比编辑本身更费流量。P2 用真实 TCP 实测热点与跑图两档，超过客户端下行预算时按 D11 / D12 复议。**P2 实测**（[证据](evidence/terrain-p2-20261108/README.md)，第 14 节）：热点 19.2 / 75.5 / 132.6 KB/s（线上字节，含帧头；DAO payload 15.8 / 71.9 / 128.9），跑图 6m/s 全改过 8.1KB/s、改过 20% 1.6KB/s，12m/s 全改过 16.6KB/s，与上表的推算相差在 15% 以内。
+读法：材质改为按下标增量后，热点下行由“改材质的比例”变为“每秒改动的点数”决定（每点约 7 字节）：r=5m 的三档都在预算内，玩家用最大半径 r=16m 连续编辑的热点超预算约 2～4.5 倍。按实测拟合，50KB/s 约等于观察者附近每秒 5,800 个改动点。跑图加载与材质无关，D12 维持不做。
 
 ## 8. 决策（定稿）
 
@@ -162,9 +166,9 @@ type TerrainChunkDao struct {
 | D8 | 高度字段形状 | `[]uint16` 列表按下标增量；单块改动超过 1000 点用 `SetHeightsAll` 整字段；玩家笔刷半径上限 16m。小笔刷每次 56～665 字节，是整字段 8.2KB 的 1/150～1/12（[实验](evidence/terrain-sync-20261108/results.md)） | `[]byte` 整字段（CPU 最低、文档 12KB）；生成器按字节量自动回退（要改生成器，守卫维护成本高时再议） |
 | D9 | 寻路 | 高度场上的格子 A*（坡度代价、按块版本失效） | 动态 navmesh（重建代价高） |
 | D10 | 地形物理碰撞 | 首版不做 | PhysX 高度场 + 每格物理世界（P6） |
-| D11 | 材质字段形状 | `[]byte` 整字段（维护者 2026-11-08 决定） | `[]uint16` 列表按下标增量（r=5m 约 0.6KB，推算）；P2 实测挖填多数带材质、热点下行超预算时换（未上线，换类型不需要兼容旧数据） |
+| D11 | 材质字段形状 | `[]uint16` 列表按下标增量；单块改动超过 1000 点用 `SetMaterialsAll` 整字段（维护者 2026-11-08 复议：客户端下行预算 **< 50KB/s**；P2 实测热点全部带材质 133KB/s，材质整字段每次 4.1KB 超预算）。原始地形包与 `gameplay/terrain` 仍是每点 1 字节，转换在 demo 组件边界（值域 0～255，越界拒绝）。热点全部带材质实测 30.6KB/s（[第 15 节](#15-材质改为列表按下标增量实施结果2026-11-08)） | `[]byte` 整字段（当日初定；CPU 与文档最省，改材质每次 4.1KB）；材质守卫降到约 500 点（字节持平点约 560 点，待决定，第 15 节） |
 | D12 | 客户端版本缓存 | 首版不做，离开再进入视野重发全量 | entitysync 支持“客户端已有此版本则跳过全量”；跑图加载流量超预算时做（框架功能） |
-| D13 | 原始地形换版后的旧编辑 | 丢弃（维护者 2026-11-08）：格进程启动时，本格基于旧 `BaseRevision` 的记录经正式实体 / DataEngine 路径处理后改用新原始块，计数并记日志；处理失败时这块不装入、拒绝编辑，绝不用原始块覆盖旧记录；邻格 Ghost 带里的旧记录只由它的格处理（实现见第 14 节） | 按差值重放到新原始块（要保留编辑日志或旧包）；保留旧记录覆盖新原始块（地形与新美术不衔接） |
+| D13 | 原始地形换版后的旧编辑 | 丢弃（维护者 2026-11-08）：格进程启动时，本格基于旧 `BaseRevision` 的记录经正式实体 / DataEngine 路径处理后改用新原始块，计数并记日志；处理失败时这块不装入、拒绝编辑，绝不用原始块覆盖旧记录；邻格 Ghost 带里的旧记录只由它的格处理（实现见第 14 节）。“丢弃”实现为把记录重置为 Version 0、不真删记录（确定性 ID 删档后不能再建），维护者 2026-11-08 接受 | 按差值重放到新原始块（要保留编辑日志或旧包）；保留旧记录覆盖新原始块（地形与新美术不衔接） |
 | D14 | Ghost 带地形副本的更新 | P3 把邻格的编辑推送到 Ghost 副本（维护者 2026-11-08 定为后续工作）；P3 之前 Ghost 副本只是启动时的快照，依赖邻格地形的判断（例如跨格移动的高度）可能读到旧数据 | — |
 
 ### 8.1 首版参数初值（P2 实测后修正）
@@ -173,7 +177,7 @@ type TerrainChunkDao struct {
 | --- | --- |
 | 块 / 采样 / 格 | 64m / 1m / `cell_size` 307200（48 块），`ghost_band` 50000（500m）。P1 更正：世界单位是厘米（cellworld 约定），原写 3072 / 500 是按米算的，块边长 6400 |
 | 高度 | `uint16`，10cm，相对地图基准 |
-| 整字段守卫阈值 | 单块 1000 点 |
+| 整字段守卫阈值 | 单块 1000 点，高度、材质各自计数（材质守卫是 D11 复议新增，阈值待决定见第 15 节） |
 | 玩家笔刷半径上限 / 单次最多块数 / 频率 | 16m / 4 块 / 每秒 2 次（P2：令牌桶，容量 2；参数合法的请求才占频率） |
 | 玩家单次最大高度增量 / 高度范围（P2 新增） | 强度 ≤ 50（5m）；基岩 0、上限 16383（1638.3m；原始值不超过 16383 时 varint 2 字节，增量每点仍约 8 字节） |
 | 地形视野半径 / `MaxVisible` | 200m（滞回 20m，视点每移动 8m 更新一次）/ 64 块；200m 实际约覆盖 31 块（第 7 节 P2 更正） |
@@ -341,14 +345,14 @@ type TerrainChunkDao struct {
 | 编辑入口 | `game/terrainmap`：`Map.Brush(ctx, playerID, requestID, brush)` | 顺序：参数与 `Policy`（半径 ≤ 1600、≤ 4 块、强度 ≤ 50、高度 `[0, 16383]`）→ 每玩家令牌桶（2/s）→ `Rules.AllowEdit`（领地 / 权限钩子，缺省放行）→ 第一次改的块 `GetOrCreate` → 一笔多块事务。前三步拒绝时零写入；`ErrBrush` / `ErrRateLimited` / `ErrDenied` / `ErrNotOwned` / `ErrUnloadable` / `ErrOccupied` 各自可 `errors.Is` |
 | 多块事务 | handler `TerrainBrush(targets []ISurfaceEntity, editID, brush)`（`rollback=undo durability=strict`） | 生成的 `MultiGroupSync_TerrainBrush`，Nest 排序取锁。`Map.ApplyBrush`：任一块已记过这个编辑 ID → 整笔按重复返回；核对目标正是 `brush.Chunks`、都归本进程写且可用；取编辑前数据（改过的块取 DAO，没改过的取原始块）→ `brush.Apply` → `Rules.Occupied`（建筑占位钩子，命中则整笔返回 `ErrOccupied`、回滚）→ 每块 `SurfaceComponent.Apply` → 每块 `RecordApplied`（锁住的每一块都记）。提交后装视图是可复用的一步 `Map.afterCommit`（P1 的 `ApplyEdit` 也改用它）：`nest.AfterCommit` 里 `SetOverlay` 并通知地形同步登记 subject |
 | 幂等 | `terrainmap.EditID(playerID, requestID)` | splitmix64 混合成 63 位（DAO 的 `[]uint64` 存成 BSON int64，最高位置位的值在持久化准备阶段被拒，整笔失败）。重复返回 `Duplicate = true` 与各块当前版本（不是第一次的结果），不再改 |
-| 整字段守卫 | `SurfaceComponent.Apply` | 本块改了值的高度点数 > `HeightsGuard`（1000）时 `SetHeightsAll`，否则对变了的下标 `SetHeightsAt`；材质有变化时整字段 `SetMaterialsAll`；写完 `PublishSyncDirty` |
+| 整字段守卫 | `SurfaceComponent.Apply` | 本块改了值的高度点数 > `HeightsGuard`（1000）时 `SetHeightsAll`，否则对变了的下标 `SetHeightsAt`；材质有变化时整字段 `SetMaterialsAll`（第 15 节起材质也逐点写，另有材质守卫）；写完 `PublishSyncDirty` |
 | 协议与错误码 | `protocol/def/terrain_edit.go`、`game/controllers/player/terrain_edit.go`、`internal/errors/terrain.go` | `TerrainEdit` msgid 10038；线上整数越出字段类型范围直接拒绝（不截断）。业务码 100052 `terrain_disabled`、100053 `terrain_brush`、100054 `terrain_not_owned`、100055 `terrain_unavailable`、100056 `terrain_rate`、100057 `terrain_denied`、100058 `terrain_occupied`；其余错误答 internal |
 | 同步对象 | `game/entities/terrain_chunk`：`sync=true syncNamespace="terrain" subjectPacker=NewTerrainChunkSyncPacker` | packer 只有缺省视图，字段是 DAO 上标了 sync 的四个（`Applied` 不在里面）；全量 `MarshalSync`，增量 `MarshalSyncChanges`（变化树：按下标的高度增量、整字段替换），实现 `SubjectSyncChangePacker`。demo 的 Nest 没有 EntitySync 观察者，提交不自己标 subject，所以与 Player / Monster 一样由 `PublishSyncDirty` 标脏（取客户端专用掩码 `TakeEntitySyncChanges`，不动服务间同步掩码） |
 | 地形 Interest | `internal/service/<game>/terrain_sync.go`、`scene.go` | 场景 Manager 上另注册一个 `policy.Interest`（独立订阅来源），玩家主视野是它的观察者：`Join` 时 `Watch`、移动提交后 `MoveView`（离上次报告 ≥ 8m 才报）、离开时 `Unwatch`；进入半径 200m、离开 220m、`MaxVisible` 64；只有改过的块是 subject（显示在块中心）。开地形时 `frame.Limits.MaxObjects` = 100 + 64，`SnapshotBudget.MaxSnapshotsPerSessionPerFlush` = 4。只在普通场景开（分区场景的地形同步随 P3） |
 | 启动时的 subject | `terrainSync.loadEdited`（`startTerrainSync`，`Map.Load` 之后） | P1 的 `Load` 只把记录读进视图、不装实体；同步要实体的 `SubjectSyncState`，所以本格改过的块（`Map.EditedOwned`）经 `GetOrCreate` 冷加载（8 路并行）并登记。之后第一次改的块在提交后登记（`Map.SetCommitted`）。Ghost 带里邻格的块不登记 |
 | 换版丢弃（D13） | `Map.Load` + handler `TerrainDiscard` + `SurfaceComponent.Discard` | 本格的块：记录 `BaseRevision` ≠ 包 → `GetOrCreate` + 一笔 strict 事务把 DAO 重置为 Version 0（`BaseRevision` 0、数据清空、`Applied` 保留）→ `LoadBase`，`LoadStats.Discarded` 计数、Warn 日志（块、旧 / 新版本、旧 Version）。事务失败：不装入、`markUnloadable`（查询 `ErrNotLoaded`、编辑 `ErrUnloadable`）、`StaleBase` 计数、Error 日志，记录不动。邻格 Ghost 带里的旧记录：不装入、不动，`StaleBase` 计数 |
 
-**为什么丢弃是“重置为 Version 0”而不是删档**：块的实体 ID 由坐标确定，DataEngine 删档会留下墓碑，删过档的 ID 不能再 `GetOrCreate`（答 entity_deleted），这块就永远不能再改。重置走的是同一条正式路径（Nest strict 事务 → WAL → 投影），P1 早已规定 Version 0 的记录按原始块看待，重启后也一样。代价：库里留一条约 300 字节的空记录（含 `Applied`）。
+**为什么丢弃是“重置为 Version 0”而不是删档**（维护者 2026-11-08 接受）：块的实体 ID 由坐标确定，DataEngine 删档会留下墓碑，删过档的 ID 不能再 `GetOrCreate`（答 entity_deleted），这块就永远不能再改。重置走的是同一条正式路径（Nest strict 事务 → WAL → 投影），P1 早已规定 Version 0 的记录按原始块看待，重启后也一样。代价：库里留一条约 300 字节的空记录（含 `Applied`）。
 
 **Ghost 带里邻格的旧记录怎么显示**：选“不装入”（查询答 `ErrNotLoaded`）。约束是不双写、不越权删：本进程既不能改它，也不能替它的格丢弃；按旧记录显示是已作废的数据，按原始块显示可能与它的格在丢弃前仍在服务的数据不一致。它的格丢弃后，本进程要到下次启动才读到（Ghost 副本是启动快照，D14）。
 
@@ -396,16 +400,16 @@ type TerrainChunkDao struct {
 6. 地形视野不跟玩家的 `maxVisible`（主视野的）走，固定 64；视点按 8m 节流。
 7. 没有给机器人（loadtest）加编辑动作：地形缺省关闭，压测配置里也没有地形包。
 
-**D11 / D12 复议建议**（不改决定）：
+**D11 / D12 复议建议**（不改决定；D11 已按预算复议为 `[]uint16`，见[第 15 节](#15-材质改为列表按下标增量实施结果2026-11-08)）：
 
 - **D11（材质整字段）**：实测证实热点下行几乎全由改材质决定：全部带材质时每观察者约 133KB/s，是只改高度的 7 倍；按下标增量的材质（每点约 8 字节，r=5m 约 0.65KB）能把这一档降到约 35KB/s。建议：先定客户端下行预算与“挖填是否总伴随改材质”的玩法前提；如果挖填默认改材质（例如挖开露出泥土）或预算低于约 100KB/s，就换成 `[]uint16` 列表（未上线，换类型不需要兼容）。如果改材质是低频的单独操作（刷路、铺地），保持 `[]byte`。
 - **D12（客户端版本缓存）**：跑图加载 6m/s 全改过 8KB/s、12m/s 17KB/s，登录 / 传送约 380KB 由快照预算在约 0.4s 内发完，都远小于热点里改材质的量。建议维持“不做”，到出现高速移动（> 20m/s）、频繁传送或加大视野半径时再做。
 
 **待维护者决定**：
 
-1. 换版丢弃用“重置为 Version 0”代替删档（上文理由）。如果要真删，需要 DataEngine 允许确定性 ID 删档后重建（框架改动），或块实体 ID 带上 `BaseRevision`（换版即换 ID，旧记录另行清理）。
+1. **（已决定：维护者 2026-11-08 接受）** 换版丢弃用“重置为 Version 0”代替删档（上文理由）。如果要真删，需要 DataEngine 允许确定性 ID 删档后重建（框架改动），或块实体 ID 带上 `BaseRevision`（换版即换 ID，旧记录另行清理）。
 2. 开地形后会话对象上限变成 164：客户端的帧解码上限须 ≥ 164（C# `SyncFrame` 缺省 `maxObjects = 100`，按 2 倍容差可解 200 个对象的帧，现在能过；建议客户端显式传 164）；`SnapshotBudget` 对玩家、怪同时生效，是否接受。
-3. 客户端下行预算（D11 复议的前提）。
+3. **（已决定：低于 50KB/s，维护者 2026-11-08；D11 据此改为列表，第 15 节）** 客户端下行预算（D11 复议的前提）。
 
 **给 P3 的接口说明**：
 
@@ -415,3 +419,63 @@ type TerrainChunkDao struct {
 - 移动 / 寻路：查询仍是 `Map.Height` / `Material` / `IsWater` / `Probe`（无锁、handler 里可调），P3 起改过的块按 `View.Chunk` 的版本失效寻路缓存。
 
 **未验证**：真实 WAL / Mongo 下的单笔编辑延迟与吞吐，以及持久门槛对地形块的实际挡住（测试场景没接 `DurableLSN`）；多观察者同时在热点时的服务端 CPU 与总出口；真实 game 进程实跑（配置地形包 + 客户端发 `TerrainEdit`）；C# 客户端的笔刷同算（金样已备好）与真实 entitysync 链路上的 C# 接收；四块交点编辑比单块慢约 7 倍的原因（CPU 剖析里 Nest 只占约 10%，疑为多实体请求的分派交接，没有细查）；启动时装实体的耗时与内存（第 4 条只是推算）；Linux。
+
+## 15. 材质改为列表按下标增量实施结果（2026-11-08）
+
+分支 `feat/terrain-materials-list`（基于 b20f439d）。D11 复议：维护者 2026-11-08 定客户端下行预算 **低于 50KB/s**；P2 实测热点每个观察者只改高度 19KB/s、一半带材质 76KB/s、全部带材质 133KB/s，材质整字段（每次 4.1KB）超预算，所以材质也按下标增量。`gameplay/terrain`（`Chunk.Materials []byte`、原始地形包格式）不变，只改 game-demo 与 C# 客户端。实测见[证据目录](evidence/terrain-materials-list-20261108/README.md)。
+
+**改动**：
+
+| 部分 | 位置（生成后路径） | 做法 |
+| --- | --- | --- |
+| DAO | `db/def/terrain_chunk.go` | `Materials []uint16`，store 键仍是 `4`；`schema=2`。生成期 WARN（`stored key "4" changes type []byte -> []uint16 ... schema= was raised from 1 to 2`）按 [TAGS 手册](../../codegen/docs/TAGS.zh-CN.md#必填的-store-键与变更告警v1400-起) 与 [schema 变更手册](../framework/SCHEMA-MIGRATION.md) 处理：项目未上线，不写迁移，提高 schema 让旧形状的文档以 `ErrSchemaMismatch` 被拒绝（而不是解码失败或读一半）；升级须清空 `terrain_chunks`。没有删生成基线、没有重编号 |
+| 组件边界 | `game/entities/terrain_chunk`：`SurfaceComponent.Apply` / `Data` / `Overlay`、`OverlayOf` | DAO ↔ terrain 的换算只在这里：写入时每点 1 字节放宽成 `uint16`；读出（`Data`、`Overlay`、`OverlayOf`）时换回 1 字节，有值 > 255 返回 `terrain.ErrInvalidChunk`，不截断。`Data` / `Overlay` / `OverlayOf` 多了 error 返回值；`Map.Load` 把这样的记录计入 `Corrupt`、不装入（查询 `ErrNotLoaded`、编辑 `ErrUnloadable`）；`Apply` 在写之前检查记录的材质值域 |
+| 整字段守卫 | `SurfaceComponent.Apply` | 高度、材质各自计数：本块改了值的材质点数 > `MaterialsGuard`（1000）时 `SetMaterialsAll`，否则对变了的下标 `SetMaterialsAt`，与高度守卫同一写法。`Apply` 改为只看改动涉及的点（去重、同一下标取最后一个），不再整块复制比较 |
+| 同步 / 协议 | 生成的 `dao_sync.proto` | `SyncTerrainChunkDaoMaterialsField` 从 `bytes value` 变为与高度相同的 `repeated uint32 value` + `delta` / `updates` / `length`。packer、地形 Interest、Manager 配置都没改 |
+| C# 客户端 | `Roost.Client.Terrain.TerrainView` | `SetOverlay(key, baseRevision, version, IReadOnlyList<uint> heights, IReadOnlyList<uint> materials)` 取代原来的 `(IReadOnlyList<uint>, ReadOnlySpan<byte>)` 重载（未上线，不保留旧重载）；高度 > 65535、材质 > 255 抛 `TerrainInvalidChunkException`，视图不变。`(ReadOnlySpan<ushort>, ReadOnlySpan<byte>)` 重载不变 |
+
+**节点预算（两个列表共享）的结论**：守卫按字段各自计数，不按两者合计。理由：
+
+- 变化树每 DAO 最多 4096 个节点，同步树跨事务累积到确认为止，持久化树每笔事务一棵。单笔提交在两个守卫之内最多约 2004 个节点（根、两个字段、各 1000 个下标、Version），不会因为共享预算提前整树回退。组件用例实测：一笔 1000 + 1000 两个字段都是增量；不确认时累计到第三笔（约 6000 个下标）才整树回退，两个字段都按整字段发出、数据正确。
+- 字节上每个字段整字段与逐点的取舍只取决于本字段改了几个点；按合计会把“各改 600 点”推成两个整字段（12.3KB，逐点约 9.4KB）。
+- 跨事务累积超过预算要一拍内同一块有 5 次以上最大半径、互不重叠的笔刷，结果是这块下一次增量等于全量，字节有界。
+
+**测试命令与结果**（2026-11-08，Apple M5，go1.27.3 / .NET SDK 10.0.302，生成工程 replace 到本分支）：
+
+| 用例 | 命令 | 结果 |
+| --- | --- | --- |
+| 组件 | `go test -race ./game/entities/terrain_chunk/` | P1 / P2 的用例全部改为新类型后通过；新增 `TestTerrainChunkMaterialsGoOutPerPointUnderTheGuard`（1000 点分两笔逐点、同步增量按下标且不带高度，1001 点整字段，两条路径数据相同，只改高度时增量不带材质）、`TestTerrainChunkHeightsAndMaterialsShareTheChangeBudget`（上面的预算结论）、`TestTerrainChunkMaterialOutsideAByteIsRefused`（记录里写 256：`Overlay` / `OverlayOf` / `Data` 报 `ErrInvalidChunk`，`Apply` 拒绝、不写） |
+| 编辑、幂等、回滚、重启、换版丢弃 | `go test -race -run Terrain ./internal/service/<game>/` | P1 / P2 用例全部通过；新增 `TestTerrainRecordWithAMaterialOutsideAByteIsNotLoaded`（库里一块的材质是 300：`Corrupt` 1、原因 `ErrInvalidChunk`、查询 `ErrNotLoaded`、编辑 `ErrUnloadable`，另一块照常装入） |
+| 真实 TCP | 同上，`terrain_sync_test.go` | 重连后客户端 4 块逐点一致（材质按 `[]uint16` 比较）；r=3m 改材质是按下标的材质增量（不带高度、< 1KB），新增守卫改材质 r=24m 是材质整字段（4～5KB） |
+| 真实 Mongo | `scripts/test-demo-generated.sh`（含 `TestTerrainRestartRealMongo`） | 见下文“验证” |
+| C# 客户端 | `bash scripts/test-client-dotnet.sh`（完整模式） | 夹具用 `regen.sh -update` 重新生成（DAO 变了：proto 的材质字段、生成 Apply、`terrain-chunk-sync.json`）；夹具增加“材质逐点”一步，共五步：全量 12,318 字节、高度逐点 390 字节、材质逐点（197 点）1,401 字节、材质整字段（半块编号 200）6,164 字节、高度整字段 8,212 字节，C# 生成 Apply 每步与 Go 合并结果相等、650 次查询与 Go `View` 逐点一致；覆盖块规则新增 uint32 材质 > 255 拒绝；材质增量缺基线时生成 Apply 拒绝。全部通过，regen 核对模式 up to date |
+| 测试能变红 | 在生成工程副本 / C# 源码上改坏后跑 | 材质改回总是整字段：组件用例报 `1000 changed materials went out as &{... Heights:<nil> Materials:0x…}, want one material update per point and no heights`，TCP 用例报 `an r=3m paint went out as {… payloadBytes:4117 heightsDelta:false heightUpdates:0 materials:true materialsDelta:false materialUpdates:0}, want per-index materials only`；去掉材质守卫：报 `1001 changed materials went out as … want the whole materials field and no heights` 与 `a guarded paint went out as {… payloadBytes:12574 … materialsDelta:true materialUpdates:1793}, want the whole materials field and no heights`；越界截断而不拒绝：报 `load with material 300 in chunk (0,0): {Chunks:6 Overlays:2 Base:4 Discarded:0 StaleBase:0 Corrupt:0}, want it corrupt`；C# 不查材质上限：报 `FAIL accepted uint32 material above 255` |
+
+**实测**（离线提交器、单观察者，方法同 P2，[证据](evidence/terrain-materials-list-20261108/README.md)）：
+
+| 项 | 结果 | P2（材质整字段） |
+| --- | --- | --- |
+| 改材质 r=5m 单块（81 点） | payload 590～671 字节，线上 734～815 字节 | 4,117 / 4,261 |
+| 抬高 + 改材质同一处同一拍 r=5m | payload 1,150～1,231 字节，线上 1,294～1,375 字节 | 约 4,980（线上） |
+| 改材质 r=16m（玩家上限，约 800 点） | payload 5,280～6,399 字节 | 4,117 |
+| 守卫整字段：材质 / 高度；全量 | 4,117 / 8,213；12,319 字节 | 4,117 / 8,213；12,319 |
+| 热点 r=5m（20 人各 1 次/秒）：材质 0 / 50% / 100% | **19.2 / 25.1 / 30.6 KB/s**（线上） | 19.2 / 75.5 / 132.6 |
+| 热点 r=16m：材质 0 / 100%（加测） | **112.5 / 227.5 KB/s** | — |
+| 跑图 6m/s：全改过 / 改过 20%；12m/s：全改过 / 20% | 8.1 / 1.6；16.6 / 4.1 KB/s | 相同 |
+| 持久整文档 | 约 80KB | 约 44KB |
+| `Map.Brush` r=5m 单块 P50（A/B 同机交替 4 轮） | 80～86µs | 74～80µs（+5～8%）；吞吐无可见差别 |
+
+对照 50KB/s：方案假设（r=5m）的三档热点与跑图都在预算内；**玩家用最大半径 r=16m 连续编辑的热点超预算**（不带材质 2.2 倍、全部带材质 4.5 倍）。下行与每秒改动的点数成正比（每点约 7 字节，另有约 9.5KB/s 全量与帧头），50KB/s 约等于观察者附近每秒 5,800 个改动点。另一个边：每玩家频率上限是每秒 2 次，20 人都按上限做 r=5m 抬高 + 改材质时按拟合约 52KB/s，正好在预算线上。
+
+**方案没覆盖、本轮先选的**：
+
+1. 提高 `schema=2`、不写迁移（未上线规则：旧版本拒绝，CHANGELOG 写“升级需清空 `terrain_chunks`”）。
+2. 材质值 > 255 的记录一律当作损坏：`Map.Load` 不装入、`Apply` 拒绝；提交后装视图时万一换算失败只记 Error 并计入 `CommitFailures`（`Apply` 已先查过，正常不会发生）。
+3. C# 删掉 `(IReadOnlyList<uint>, ReadOnlySpan<byte>)` 重载，换成两个 `IReadOnlyList<uint>`；手写 `ushort` / `byte` span 的重载保留。
+4. `Apply` 只看改动涉及的点（第一版整块复制比较三遍，r=5m 编辑 P50 慢约 28%，见证据“编辑耗时”）。行为不变：同一下标取最后一个、值没变的点不算改动。
+5. 测量加了“热点 r=16m”两档（超出原定的三档）：原定档位都在预算内，但玩家上限半径下的结论不同，需要维护者知道。
+
+**待维护者决定**：
+
+1. **材质守卫阈值**。材质整字段约 4.1KB（编号都 < 128 时），逐点每点约 7.3 字节，字节持平点约 560 点；阈值 1000 时 560～1000 点的改材质（r≈13～16m）逐点补丁比整字段大，r=16m 时 5.3～6.4KB 对 4.1～4.9KB（最多约 1.6 倍）。A：保持 1000（本轮实现，与高度一致，持久化每次写得少：逐点约 12 字节 / 点，整字段约 40KB）。B（推荐）：降到约 550，r≥13m 的改材质每个观察者省约 1.2～2.3KB，代价是这类编辑持久化多写约 28～33KB（整字段约 40KB 对逐点 7～12KB）、守卫附近 CPU 不变（整字段编码约 0.1ms，比 550 点逐点记账还省）。
+2. **玩家最大半径的热点超预算**（r=16m：112.5 / 227.5 KB/s）。可选措施：A：玩家笔刷半径上限从 16m 降到约 6.5m（全部带材质时 20 人各 1 次/秒在预算内；挖大坑要更多次编辑）；B（推荐）：每玩家频率改为按改动点数计的令牌桶（例如每人每秒约 300 点，r=5m 抬高 + 改材质一次约 150 点，r=16m 一次约 1,550 点要攒约 5 秒），半径上限不变，附近 20 人时合计约每秒 6,000 点 ≈ 预算；C：按区域（如以块为单位的邻域）限每秒改动点数，超出排队或拒绝——不依赖“附近 20 人”的假设，但要新机制和公平性规则；D：接受，50KB/s 按平均值看，20 人同时连续用最大半径是极端情况，等 P5 用机器人测真实编辑分布再定；E：框架层更紧凑的列表增量编码（笔刷改的是连续下标，按下标段编码可把每点约 7 字节降到约 2～3 字节），要改生成器与 C# / C++ Apply。
