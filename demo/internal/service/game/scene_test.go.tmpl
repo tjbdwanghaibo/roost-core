@@ -514,17 +514,16 @@ func TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen(t *testing.T) {
 	}
 }
 
-// The other side of the main view's cap: a crowd that overflows a
-// session (frame.ErrObjectLimit, here by taking the cap off) disconnects its
-// players instead of silently stopping their frames. The manager closes the
-// session without pushing anything, so no connection refused a frame; the
-// framework's selfsync.DisconnectLostPlayer, called from sessionLost, closes
-// the player's connections and counts it by reason. The client reconnects and
-// its Join starts over from a full snapshot; with the crowd still there it is
-// kicked again, which is the accepted cost. Leaving the connection up would
-// keep answering requests while the player received nothing until it logged
-// in again.
-func TestACrowdOverflowingASessionDisconnectsThePlayers(t *testing.T) {
+// The other side of the main view's cap: a crowd that overflows a session
+// (here by taking the cap off: each player would hold itself and the 100
+// others, 101 > 100) no longer closes sessions or disconnects anyone
+// (maintainer decision D17, over-limit degradation). The manager defers the
+// objects that do not fit and tells the scene's Interest, which tightens the
+// player's main view from the farthest end; the next flushes swap the nearest
+// in. Every player ends up holding exactly what a session may hold — itself
+// and the 99 nearest others — and whoever was dropped is at least as far as
+// everyone kept.
+func TestACrowdOverflowingASessionShrinksTheViewInsteadOfDisconnecting(t *testing.T) {
 	recorder := newSceneRecorder()
 	config := gamescene.DefaultConfig()
 	scene, err := newSceneWithMainView(sceneLane{transport: recorder}, recorder, nil, config, 0)
@@ -542,46 +541,98 @@ func TestACrowdOverflowingASessionDisconnectsThePlayers(t *testing.T) {
 		_ = scene.Close(closeCtx)
 	})
 	disconnectsBefore := sessionLostDisconnects()
-	// One more than a session may hold: each player would hold itself and
-	// the 100 others (101 > 100). In memory, a few hundredths of a second.
 	const players = 101
 	ids := make([]int64, 0, players)
+	subjects := make(map[int64]int64, players)
+	positions := make(map[int64]spatial.Point, players) // subject → where it stands
 	for i := range int64(players) {
 		playerID := 21000 + i
-		joinReady(t, scene, ctx, newScenePlayer(t, playerID), spatial.Point{X: config.Spawn.X + i%12, Y: config.Spawn.Y + i/12})
+		at := spatial.Point{X: config.Spawn.X + i%12, Y: config.Spawn.Y + i/12}
+		subject := newScenePlayer(t, playerID)
+		joinReady(t, scene, ctx, subject, at)
 		ids = append(ids, playerID)
+		subjects[playerID] = subject.ID()
+		positions[subject.ID()] = at
 	}
-	if err := scene.Flush(ctx); err != nil {
-		t.Fatalf("flush: %v", err)
-	}
+	flushOverCrowd(t, scene, ctx)
 	stats := scene.manager.Stats()
-	if stats.SessionsLost != players {
-		t.Fatalf("%d of %d sessions were lost to the overflowing crowd, want all of them (the test's premise)", stats.SessionsLost, players)
+	if stats.SessionsLost != 0 || stats.Sessions != players || stats.OverLimitWaiting != 0 {
+		t.Fatalf("after the crowd settled: %d sessions lost, %d open, %d objects still waiting for room", stats.SessionsLost, stats.Sessions, stats.OverLimitWaiting)
 	}
-	silent := 0
+	if stats.OverLimitDeferred == 0 {
+		t.Fatal("no object was ever deferred: the crowd did not overflow a session (the test's premise)")
+	}
+	if got := sessionLostDisconnects() - disconnectsBefore; got != 0 {
+		t.Fatalf("%d players were disconnected for a lost session", got)
+	}
+	limit := frame.DefaultLimits().MaxObjects
 	for _, playerID := range ids {
-		if recorder.closuresOf(playerID) != 1 {
-			silent++
+		if closed := recorder.closuresOf(playerID); closed != 0 {
+			t.Fatalf("player %d was disconnected %d times", playerID, closed)
+		}
+		self := subjects[playerID]
+		held := heldSubjects(t, recorder.take(playerID))
+		if !held[self] || len(held) != limit {
+			t.Fatalf("player %d holds %d objects (itself: %v), want itself among exactly %d", playerID, len(held), held[self], limit)
+		}
+		assertDroppedAreFarthest(t, playerID, positions[self], self, held, positions)
+	}
+}
+
+// flushOverCrowd runs the replication until no object waits for room for a
+// few flushes in a row (deferral notice, the view tightening, the removes and
+// the swapped-in creates take a few flushes).
+func flushOverCrowd(t *testing.T, scene *Scene, ctx context.Context) {
+	t.Helper()
+	quiet := 0
+	for flushes := 0; quiet < 3; flushes++ {
+		if flushes == 40 {
+			t.Fatalf("over-limit objects still waiting after %d flushes: %+v", flushes, scene.manager.Stats())
+		}
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+		if scene.manager.Stats().OverLimitWaiting == 0 {
+			quiet++
+		} else {
+			quiet = 0
 		}
 	}
-	if silent != 0 {
-		t.Fatalf("%d of %d players whose replication session was closed for holding too many objects were not disconnected: "+
-			"their connection stays up and receives nothing until they log in again", silent, players)
+}
+
+// assertDroppedAreFarthest checks that every subject the player does not hold
+// (of those in positions) stands at least as far from it as every subject it
+// holds through distance.
+func assertDroppedAreFarthest(t *testing.T, playerID int64, at spatial.Point, self int64, held map[int64]bool, positions map[int64]spatial.Point) {
+	t.Helper()
+	farthestHeld, nearestDropped := int64(-1), int64(-1)
+	for subject, where := range positions {
+		if subject == self {
+			continue
+		}
+		distance := spatial.DistanceSquared(at, where)
+		if held[subject] {
+			farthestHeld = max(farthestHeld, distance)
+		} else if nearestDropped < 0 || distance < nearestDropped {
+			nearestDropped = distance
+		}
 	}
-	if got := sessionLostDisconnects() - disconnectsBefore; got != players {
-		t.Fatalf("%s{reason=object_limit} grew by %d, want %d", selfsync.SessionLostDisconnectMetric, got, players)
+	if nearestDropped >= 0 && nearestDropped < farthestHeld {
+		t.Fatalf("player %d dropped a subject %d² away but keeps one %d² away: the farthest must go first", playerID, nearestDropped, farthestHeld)
 	}
 }
 
 // sessionLostDisconnects reads the framework's count of players disconnected
-// because their session was lost to too many objects.
+// because the manager lost their replication session for a reason other than
+// a refused push (any reason).
 func sessionLostDisconnects() int64 {
+	var total int64
 	for _, metric := range metrics.Snapshot() {
-		if metric.Name == selfsync.SessionLostDisconnectMetric && metric.Labels["reason"] == string(entitysync.SessionLossObjectLimit) {
-			return metric.Value
+		if metric.Name == selfsync.SessionLostDisconnectMetric {
+			total += metric.Value
 		}
 	}
-	return 0
+	return total
 }
 
 // heldSubjects replays what one client received and returns the subjects it

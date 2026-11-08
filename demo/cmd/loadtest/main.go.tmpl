@@ -1489,9 +1489,9 @@ func expectArrival(ctx context.Context, rb *robot.Context, param any) error {
 }
 
 // expectSceneAlive judges that the server still replicates to this client.
-// A replication session the server closed without disconnecting — one that
-// came to hold more objects than the manager allows (frame.ErrObjectLimit),
-// as a crowded spawn point does without the main view's cap — would not show
+// A replication session the server closed without disconnecting — one whose
+// frame could not be encoded (an entity over the frame limit; holding too many
+// objects no longer closes a session, it degrades it) — would not show
 // anywhere else if the connection stayed up: every request still answered,
 // only the frames stopped. The server disconnects a player whose session it
 // closed for such a cause, so that case also fails the robot's next request;

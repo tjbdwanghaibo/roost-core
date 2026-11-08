@@ -107,7 +107,7 @@ func syncFrame(t *testing.T, subjectID int64, document *db.SyncPlayerDao) []byte
 	return payload
 }
 
-// scene_alive 是冒烟里“复制会话没被关”的判据：服务端因对象数超限（frame.ErrObjectLimit）等原因关掉复制会话时
+// scene_alive 是冒烟里“复制会话没被关”的判据：服务端因编码失败（单个实体超过帧上限）等原因关掉复制会话时
 // 会断开连接，但不论原因，scene_alive 都是“帧还在来”的端到端判据。它自己 add_exp 1，等这次改动作为帧落到
 // 自己的 subject 上；帧不再来时必须失败，不能整轮判成功。
 func TestSceneAliveFailsWhenTheServerStopsReplicating(t *testing.T) {

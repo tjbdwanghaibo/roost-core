@@ -114,9 +114,10 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
   计入 `player_tcp_connection_rejected_total{reason}`（2026-10-22 登录风暴 200 人里 72 个即此，`reason="per_ip"` 72）；要压更大就调高这个配置，
   例如 `sed -i '' 's#max_connections_per_ip: 128#max_connections_per_ip: 512#' configs/service/config.game.yaml`。
 - **`scene_alive: … the server stopped replicating to it`，或机器人中途报连接被关**：这个机器人的复制会话被服务端关了。
-  game 日志 `scene: replication session was closed by the manager` 给出原因（`reason`）；编码失败（`reason=object_limit` / `too_large`）时服务端
+  game 日志 `scene: replication session was closed by the manager` 给出原因（`reason`）；编码失败（`reason=too_large` / `encode_failed`）时服务端
   还会断开这个玩家（2026-10-22 起，`selfsync: a player's sync session was lost …` 限频 Warn 与 `player.sync.session_lost_disconnect.total{reason}`），
-  机器人看到的是连接被关。`frame: object limit exceeded` 是它持有的对象超过了 Manager 的 `MaxObjects`（主视野上限见 `internal/service/game/scene.go` 的 `sceneMaxVisible`）。
+  机器人看到的是连接被关。持有的对象超过 Manager 的 `MaxObjects` 不再关会话（2026-11-08 起超额降级，方案 D17）：多出来的对象暂缓、视野从最远处收紧，
+  game 日志是限频 Warn `entitysync: a session is over its object limit …`，计 `entitysync_over_limit_deferred_total{namespace,reason}`（主视野上限见 `internal/service/game/scene.go` 的 `sceneMaxVisible`）。
 - **game 连本机 `127.0.0.1:2379` 的 etcd**：`configs/service/config.game.yaml` 的 `etcd.endpoints` 缺省指向本机，上面的 sed 不改它；
   game 用它做服务注册（`etcd.service_prefix`，键带工程名前缀 `/<工程名>/services/...`，租约 10 秒），与别的工程不冲突；
   2026-10-22 冒烟时本机恰好有一个在跑。本机没有、或要用隔离环境之外的 etcd 时改这一项。
@@ -223,11 +224,13 @@ scene:
   `[]uint16`，取值 0～255，原始地形包与 `gameplay/terrain` 里仍是每点 1 字节；记录里出现 > 255 的材质按损坏处理、这块不装入）；
   一块改动超过 1000 个高度（或 1000 个材质）时该字段整字段写，两个字段各自计数（方案 §16）。
 - **同步**：改过的块是 `terrain` 命名空间的同步对象（`Applied` 不下发）；场景另有一个地形 Interest（视野 200m、至多 64 块），
-  玩家主视野是它的观察者。开地形时会话对象上限是 164（其他 100 + 地形 64），每会话每次 Flush 至多 4 个全量（对玩家、怪也生效）。
+  玩家主视野是它的观察者。地形按命名空间单独计（方案 D15，`ManagerConfig.Namespaces`）：一个会话至多持有 64 块地形、地形的全量每会话每次
+  Flush 至多 4 个；玩家 / 怪 / 场景仍是 100、不限快照，与不开地形时逐字节相同（会话的引用表合起来 164，每帧对象数仍按 100 切）。
+  任一类超出上限不断开（超额降级，D17）：放不下的对象暂缓，对应的 Interest 从最远处收紧视野，有空位时逐步放宽。
   客户端用生成的 `ApplySyncTerrainChunkDao` 应用，按 `Version` 重建 mesh（C# 见 `client/dotnet/Roost.Client/Terrain/`）。
   分区场景还没有地形同步（P3）。
 - **测试**：`terrain_test.go` 的 `TestTerrainBrush*`（重复 / 乱序只生效一次、拒绝零写入、限速、多块回滚、整字段守卫）；
-  `terrain_sync_test.go` 走真实 TCP（客户端收到全量与增量、断线重连后逐点一致、视野满 64 块不断开会话）；
+  `terrain_sync_test.go` 走真实 TCP（客户端收到全量与增量、断线重连后逐点一致、视野满 64 块不断开会话、视野上限配大于 64 时收紧到最近的 64 块）；
   `ROOST_TERRAIN_MEASURE=1` 时跑字节与耗时测量（[P2 实测](../docs/maintenance/evidence/terrain-p2-20261108/README.md)、
   [材质改列表后重测](../docs/maintenance/evidence/terrain-materials-list-20261108/README.md)）。
 - **升级**：`TerrainChunkDao` 是 schema 2（`Materials` 从 `[]byte` 改成 `[]uint16`，store 键 4 不变）。项目未上线，不迁移：

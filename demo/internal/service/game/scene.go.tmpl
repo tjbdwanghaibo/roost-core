@@ -80,15 +80,15 @@ const (
 	// sceneMaxVisible caps how many subjects a player's main (spatial) view
 	// holds: when more are in range, the nearest ones win. Without it a
 	// crowded spot — every player starts at the same spawn point — puts
-	// everyone nearby into every view, and once a player's replication
-	// session holds more objects than the manager's Limits.MaxObjects
+	// everyone nearby into every view, and a player's replication session
+	// would hold more objects than the manager's Limits.MaxObjects
 	// (frame.DefaultLimits, 100: it is also how many objects one session may
-	// hold) the next frame cannot be encoded and the manager closes that
-	// session (frame.ErrObjectLimit): 100 robots logging in at the spawn point
-	// without the cap close all 100 sessions. A session closed that
-	// way also disconnects the player (sessionLost), so without the cap a
-	// crowd would keep kicking its players and they would keep reconnecting
-	// into the same crowd.
+	// hold). The manager no longer closes such a session (over-limit
+	// degradation, maintainer decision D17): it defers the objects that do not
+	// fit and the Interest tightens the view from the farthest end, so the
+	// player keeps receiving frames. The cap still matters: inside the session
+	// limit nothing is ever deferred, and the crowd does not keep the view
+	// probing at its edge.
 	//
 	// The session holds the main view's subjects plus what reaches the player
 	// outside it: its own entity (self), the scene's subject (the scene view)
@@ -370,7 +370,8 @@ func newScene(transport scenePusher, watermark func() uint64, config gamescene.C
 func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config) (*Scene, error) {
 	// A player's session holds its main view (at most sceneMaxVisible) plus
 	// sceneReservedObjects from outside it; together they must fit what the
-	// manager lets one session hold, or a crowd closes sessions again.
+	// manager lets one session hold, or a crowd keeps the session over its
+	// limit (objects deferred, the view tightened) instead of within it.
 	if limit := frame.DefaultLimits().MaxObjects; sceneMaxVisible+sceneReservedObjects > limit {
 		return nil, fmt.Errorf("scene: a main view of %d plus %d reserved objects exceeds the %d objects one replication session may hold", sceneMaxVisible, sceneReservedObjects, limit)
 	}
@@ -379,8 +380,7 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 
 // newSceneWithMainView is newSceneOn with the main view's cap given and not
 // checked against what a session may hold: a test oversizes it to have a
-// crowd overflow a session (frame.ErrObjectLimit) and see what the scene does
-// then. 0 means no cap.
+// crowd overflow a session and see the over-limit degradation. 0 means no cap.
 func newSceneWithMainView(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int) (*Scene, error) {
 	return newSceneWith(lane, transport, watermark, config, maxVisible, nil)
 }

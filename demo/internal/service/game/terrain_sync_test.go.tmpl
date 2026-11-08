@@ -464,7 +464,7 @@ func TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect(t *testing.
 	}
 }
 
-// 方案 §9 P2：视野里改过的块多于 MaxVisible（64）时，会话持有恰好 64 块、不因 object_limit 断开——即使主视野里
+// 方案 §9 P2：视野里改过的块多于 MaxVisible（64）时，会话持有恰好 64 块、没有对象被暂缓（OverLimitWaiting 0）——即使主视野里
 // 还有 40 个怪（40 + 自己 + 64 = 105，超过缺省上限 100；地形的 64 单独计，玩家 / 怪仍是 100）。地形的全量受地形自己的
 // 快照预算（每会话每 Flush 4 个）分摊；玩家与怪不占它，第一次 Flush 就全部到达（决策 D15）。不起复制循环，Flush 只由
 // 测试跑，次数可数。
@@ -520,8 +520,9 @@ func TestATerrainViewAtItsCapKeepsTheSession(t *testing.T) {
 	for range 5 {
 		_ = h.scene.Flush(h.ctx)
 	}
-	if lost := h.scene.manager.Stats().SessionsLost; lost != 0 {
-		t.Fatalf("%d replication sessions were lost (object limit %d)", lost, sceneTerrainMaxObjects)
+	if stats := h.scene.manager.Stats(); stats.SessionsLost != 0 || stats.OverLimitDeferred != 0 {
+		t.Fatalf("%d replication sessions lost, %d objects deferred over a limit (object limit %d): the view's cap keeps the session inside it",
+			stats.SessionsLost, stats.OverLimitDeferred, sceneTerrainMaxObjects)
 	}
 	if n := h.transport.ActiveSessions(playerID); n != 1 {
 		t.Fatalf("the player has %d connections, want 1", n)
@@ -651,8 +652,8 @@ func TestTerrainLeavesPlayerAndMonsterReplicationByteIdentical(t *testing.T) {
 }
 
 // 决策 D15 的另一半：地形的 64 不放宽玩家 / 怪的上限。开了地形，101 个玩家挤在一起（每人要持有自己与另外 100 人，
-// 101 > 100）照样关闭全部会话并断开（object_limit）——与 TestACrowdOverflowingASessionDisconnectsThePlayers 不开地形时
-// 相同；引用表合起来是 164 也不让玩家占地形的名额。
+// 101 > 100）：与 TestACrowdOverflowingASessionShrinksTheViewInsteadOfDisconnecting 不开地形时相同——不断开（超额降级，
+// D17），每人在玩家 / 怪这一类里恰好持有 100 个（自己 + 最近的 99 人），引用表合起来是 164 也不让玩家占地形的名额。
 func TestTerrainDoesNotWidenThePlayerObjectLimit(t *testing.T) {
 	recorder := newSceneRecorder()
 	config := gamescene.DefaultConfig()
@@ -670,53 +671,120 @@ func TestTerrainDoesNotWidenThePlayerObjectLimit(t *testing.T) {
 	ctx := context.Background()
 	disconnectsBefore := sessionLostDisconnects()
 	const players = 101
+	ids := make([]int64, 0, players)
+	subjects := make(map[int64]int64, players)
+	positions := make(map[int64]spatial.Point, players)
 	for i := range int64(players) {
-		joinReady(t, scene, ctx, newScenePlayer(t, 33000+i), spatial.Point{X: config.Spawn.X + i%12, Y: config.Spawn.Y + i/12})
+		playerID := 33000 + i
+		at := spatial.Point{X: config.Spawn.X + i%12, Y: config.Spawn.Y + i/12}
+		subject := newScenePlayer(t, playerID)
+		joinReady(t, scene, ctx, subject, at)
+		ids = append(ids, playerID)
+		subjects[playerID] = subject.ID()
+		positions[subject.ID()] = at
 	}
-	if err := scene.Flush(ctx); err != nil {
-		t.Fatal(err)
+	flushOverCrowd(t, scene, ctx)
+	if stats := scene.manager.Stats(); stats.SessionsLost != 0 || stats.OverLimitDeferred == 0 {
+		t.Fatalf("with terrain on: %d sessions lost, %d objects ever deferred (want 0 lost and the crowd overflowing)", stats.SessionsLost, stats.OverLimitDeferred)
 	}
-	if lost := scene.manager.Stats().SessionsLost; lost != players {
-		t.Fatalf("%d of %d sessions were lost to the overflowing crowd with terrain on; the player limit must stay 100", lost, players)
+	if got := sessionLostDisconnects() - disconnectsBefore; got != 0 {
+		t.Fatalf("%d players disconnected for a lost session", got)
 	}
-	if got := sessionLostDisconnects() - disconnectsBefore; got != players {
-		t.Fatalf("object_limit disconnects grew by %d, want %d", got, players)
+	for _, playerID := range ids {
+		held := heldSubjects(t, recorder.take(playerID))
+		if len(held) != frame.DefaultLimits().MaxObjects || !held[subjects[playerID]] {
+			t.Fatalf("player %d holds %d objects with terrain on, want itself among exactly the player limit %d", playerID, len(held), frame.DefaultLimits().MaxObjects)
+		}
+		assertDroppedAreFarthest(t, playerID, positions[subjects[playerID]], subjects[playerID], held, positions)
 	}
 }
 
-// 地形块超过它自己的上限（视野上限配成 80 > 64）：与玩家 / 怪超过 100 相同——不截断、关闭整个会话（object_limit），场景断开
-// 该玩家的连接，客户端重连从全量开始。持有量由地形视野的 MaxVisible（terrainMaxVisible = 64）保证。
-func TestTerrainChunksOverTheirLimitCloseTheSession(t *testing.T) {
+// 地形块超过它自己的上限（视野上限配成 80 > 64）：与玩家 / 怪超过 100 相同——不断开、不截断（超额降级，D17）。Manager
+// 暂缓放不下的块并通知地形的 Interest，视野收紧到 64、从最远的块开始退订；真实 TCP 下客户端最终恰好持有离它最近的
+// 64 块，与地形 Interest 要它持有的集合一致。之后玩家走到改过的块稀少的角落：视野里的块少于上限，不再有暂缓。
+func TestTerrainChunksOverTheirLimitShrinkTheView(t *testing.T) {
 	h := startTerrainSyncHarness(t, 12, 12, 50000, terrainMaxVisible+16, false)
 	h.scene.watchSessions(h.transport)
 	at := centreOf(terrain.ChunkKey{X: 6, Y: 6})
-	edited := 0
-	for y := int32(1); y < 11 && edited < 100; y++ {
-		for x := int32(1); x < 11 && edited < 100; x++ {
-			c := centreOf(terrain.ChunkKey{X: x, Y: y})
-			edited++
-			h.brush(t, terrainBuilder, uint64(edited), terrain.Brush{Op: terrain.BrushRaise, X: c.X, Y: c.Y, Radius: 200, Strength: 3})
+	edited := map[int64]spatial.Point{}
+	for y := int32(1); y < 11 && len(edited) < 100; y++ {
+		for x := int32(1); x < 11 && len(edited) < 100; x++ {
+			key := terrain.ChunkKey{X: x, Y: y}
+			c := centreOf(key)
+			h.brush(t, terrainBuilder, uint64(len(edited)+1), terrain.Brush{Op: terrain.BrushRaise, X: c.X, Y: c.Y, Radius: 200, Strength: 3})
+			edited[chunkID(t, key)] = c
 		}
 	}
 	disconnectsBefore := sessionLostDisconnects()
 	const playerID = int64(30003)
 	client := h.join(t, playerID, at)
-	flushes := h.flushUntil(t, "the session lost to the terrain limit", func() bool { return h.scene.manager.Stats().SessionsLost > 0 })
-	if got := sessionLostDisconnects() - disconnectsBefore; got != 1 {
-		t.Fatalf("object_limit disconnects grew by %d, want 1", got)
+	// 视野里改过的块（约 100 块）多于 64：收敛到“客户端持有 64 块、与 Interest 要的一致、没有暂缓”。
+	wanted := func() map[int64]bool {
+		seen := map[int64]bool{}
+		for _, id := range h.scene.terrain.interest.Seen(playerID) {
+			seen[id] = true
+		}
+		return seen
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for h.transport.ActiveSessions(playerID) != 0 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	converged := func() bool {
+		held := client.snapshot()
+		want := wanted()
+		if len(held) != terrainMaxVisible || len(want) != terrainMaxVisible || h.scene.manager.Stats().OverLimitWaiting != 0 {
+			return false
+		}
+		for id := range held {
+			if !want[id] {
+				return false
+			}
+		}
+		return true
 	}
-	if n := h.transport.ActiveSessions(playerID); n != 0 {
-		t.Fatalf("the player still has %d connections after its session was lost", n)
+	flushes := h.flushUntil(t, "the terrain view settling at its limit", converged)
+	stats := h.scene.manager.Stats()
+	if stats.SessionsLost != 0 || stats.OverLimitDeferred == 0 {
+		t.Fatalf("stats %+v: want no session lost and some chunks deferred (the test's premise)", stats)
 	}
-	held, _ := client.held()
-	if held > terrainMaxVisible {
-		t.Fatalf("the client was given %d chunks, more than the terrain limit %d", held, terrainMaxVisible)
+	if got := sessionLostDisconnects() - disconnectsBefore; got != 0 {
+		t.Fatalf("%d disconnects for a lost session", got)
 	}
-	t.Logf("session lost after %d flushes holding %d chunks", flushes, held)
+	if n := h.transport.ActiveSessions(playerID); n != 1 {
+		t.Fatalf("the player has %d connections, want 1", n)
+	}
+	held := map[int64]bool{}
+	for id := range client.snapshot() {
+		held[id] = true
+	}
+	assertDroppedAreFarthest(t, playerID, at, 0, held, edited)
+	// 客户端拿到的每一块都与服务端一致（全量完整、没有截断）。
+	var keys []terrain.ChunkKey
+	for y := int32(0); y < 12; y++ {
+		for x := int32(0); x < 12; x++ {
+			if held[chunkID(t, terrain.ChunkKey{X: x, Y: y})] {
+				keys = append(keys, terrain.ChunkKey{X: x, Y: y})
+			}
+		}
+	}
+	h.assertClientMatches(t, client, keys)
+	// 走到角落：视野里改过的块少于上限，原先被去掉的块里够得着的补上，不再有暂缓。
+	corner := centreOf(terrain.ChunkKey{X: 1, Y: 1})
+	h.scene.terrain.moved(playerID, corner)
+	h.flushUntil(t, "the corner view", func() bool {
+		held := client.snapshot()
+		want := wanted()
+		if len(want) == 0 || len(want) >= terrainMaxVisible || len(held) != len(want) || h.scene.manager.Stats().OverLimitWaiting != 0 {
+			return false
+		}
+		for id := range held {
+			if !want[id] {
+				return false
+			}
+		}
+		return true
+	})
+	if lost := h.scene.manager.Stats().SessionsLost; lost != 0 {
+		t.Fatalf("%d sessions lost", lost)
+	}
+	t.Logf("settled at %d chunks after %d flushes; %d chunks ever deferred", terrainMaxVisible, flushes, stats.OverLimitDeferred)
 }
 
 // ---- 测量（方案 §7.1 / §9 P2，材质改列表后重测）：ROOST_TERRAIN_MEASURE=1 时运行，数字写进证据目录 ----
