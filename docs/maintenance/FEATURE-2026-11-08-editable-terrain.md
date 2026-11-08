@@ -1,6 +1,6 @@
 # 可编辑地形大世界（定稿方案，2026-11-08）
 
-状态：**定稿方案；P1 的框架部分（`gameplay/terrain`：坐标、原始地形包、地形视图与查询）已实施，见[第 11 节](#11-p1-框架部分实施结果2026-11-08)，其余未实施。** 维护者 2026-11-08 确认：材质层用 `[]byte`，其余按本文推荐整理为最终方案（第 8 节）。目标是在 cellworld 无缝大世界上支持玩家改地形（挖、填、抬高、整平、改材质）、由此形成湖泊和高地，并在地形上放置建筑。
+状态：**定稿方案；P1 已实施：框架部分（`gameplay/terrain`：坐标、原始地形包、地形视图与查询）见[第 11 节](#11-p1-框架部分实施结果2026-11-08)，实体接入（game-demo 的 `TerrainChunk` 实体、地形服务、改块重启后一致）见[第 12 节](#12-p1-实体接入实施结果2026-11-08)；P2 起未实施。** 维护者 2026-11-08 确认：材质层用 `[]byte`，其余按本文推荐整理为最终方案（第 8 节）。目标是在 cellworld 无缝大世界上支持玩家改地形（挖、填、抬高、整平、改材质）、由此形成湖泊和高地，并在地形上放置建筑。
 
 数字的来源分两种：同步与持久化的单块字节、编码耗时来自离线微基准（[实验记录](evidence/terrain-sync-20261108/results.md)）；规模、带宽与参数初值是按假设推算，P2 / P5 实测后修正。
 
@@ -182,7 +182,7 @@ type TerrainChunkDao struct {
 
 | 期 | 内容 | 验收 |
 | --- | --- | --- |
-| P1 地形底座 | 原始地形资源格式与加载；`TerrainChunk` 实体、持久化与“原始 + 覆盖”加载；`Height(x, y)` / `Material` / `IsWater` 查询（单进程） | 1w × 1w 原始资源加载与按需装块；改块重启后一致；查询与客户端同算法结果一致 |
+| P1 地形底座 | 原始地形资源格式与加载；`TerrainChunk` 实体、持久化与“原始 + 覆盖”加载；`Height(x, y)` / `Material` / `IsWater` 查询（单进程） | 1w × 1w 原始资源加载与按需装块；改块重启后一致；查询与客户端同算法结果一致（实施结果：[§11](#11-p1-框架部分实施结果2026-11-08)、[§12](#12-p1-实体接入实施结果2026-11-08)；C# / C++ 客户端同算法留 P2） |
 | P2 编辑与同步（单格） | 笔刷操作、校验、幂等、多块事务、整字段守卫；地形 Interest、`MaxObjects` / `MaxVisible`、`SnapshotBudget`；C# 客户端 Apply 与重建 mesh | 重复 / 乱序请求不重复生效；断线重连后客户端与服务端块版本、数据一致；视野内改过的块达到 `MaxVisible` 时会话不因 `object_limit` 断开；真实 TCP 下 r=5m 单块增量约 0.7KB、材质约 4.1KB；第 7.1 节热点与跑图两档的下行实测，并据此复议 D11 / D12；单格编辑吞吐与 Nest 短池耗时实测 |
 | P3 接入 cellworld | 块与格对齐、边界块副本推送；移动加入高度查询与坡度 / 台阶上限、游泳；寻路改为高度场 A* | 跨格移动、交接与边界视野在改地形后正确；寻路随块版本失效；现有 cellworld 回归不退化 |
 | P4 水与建筑 | 水位线规则；`Building` 实体、放置校验、地基整平、占位推导 | 挖坑成湖、填平成陆的规则可复现；建筑占位重启后正确；不在水下 / 坡上违规放置 |
@@ -231,3 +231,56 @@ type TerrainChunkDao struct {
 - 覆盖块的 `BaseRevision` 与包不同时 `SetOverlay` 拒绝（`ErrBaseRevision`）。原始地形换版后旧编辑怎么办（保留 / 重放 / 丢弃）本文没写，留给维护者与产品决定。
 
 **客户端金样**：`client/spec/terrain-golden.pack`（3 × 2 块，含 0 / 65535 棋盘格与斜坡的边界情形块）与 `client/spec/terrain-queries.json`（块解码后的 SHA-256、246 个位置的期望高度 / 材质 / 水）。证据目录里一份只按文档写的独立实现（Python）全部一致；C# / C++ 留 P2。
+
+## 12. P1 实体接入实施结果（2026-11-08）
+
+分支 `feat/terrain-p1b`，全部在 game-demo 模板里（`demo/`，[demo README“可编辑地形”](../../demo/README.md#可编辑地形p1)），`gameplay/terrain` 未改。P1 验收“改块重启后一致”在离线替身与真实 Mongo（DataEngine 全链路）上各验证一次。
+
+**接法**：
+
+| 部分 | 位置（生成后路径） | 做法 |
+| --- | --- | --- |
+| DAO | `db/def/terrain_chunk.go` | 按 §3：`BaseRevision` / `Version` / `Heights []uint16` / `Materials []byte` / `Applied []uint64`，store 键 `1`～`5`，`coll=terrain_chunks db=main`。前四个 `persist,sync`，`Applied` 只 `persist`：同步视图的字段资格在 DAO 上一次定下，P2 接 entitysync 时 `Applied` 自然不下发 |
+| 实体 | `game/entities/terrain_chunk` | kind 11（不复用已删的 5 / 8），`EntityCategoryWorld`（与 Scene 同档），持久；实体唯一号 = `ChunkKey.ID() + 1`（unique 0 无效，块 (0,0) 的 `ID()` 正是 0；地图每边 ≤ 1024 块，`ID()` < 2^42，远小于 52 位 unique）。ID 确定、可能已有记录，所以只经 lifecycle 的 `GetOrCreate` 建，不直接 `Create` |
+| 组件 | `SurfaceComponent`（type 2011） | `Apply(baseRevision, base, edits)`：Version 0 时用原始块填满 DAO 再改，之后要求记录的 `BaseRevision` 等于当前包；高度只写变了的下标（`SetHeightsAt`），材质有变化时整字段（`SetMaterialsAll`）；每次成功 Version + 1；全部校验在第一次写之前。`Overlay()` / `OverlayOf(dao)` 给视图的副本；`RecordApplied` / `WasApplied` 是 `Applied` 的辅助（满 32 个丢最旧，整字段替换） |
+| 地形服务 | `game/terrainmap`（`Map`） | 持有 `*terrain.Pack`、`*terrain.View`、本进程范围 `Region{Own, Load}`；`Load` 装块、`Edit` 写入口、`ApplyEdit` 是 handler 的业务、`Height` / `Material` / `IsWater` / `Probe` 委托视图 |
+| 改块事务 | handler `TerrainEdit`（`rollback=undo durability=strict`） | 一块一笔；`ApplyEdit` 改 DAO 后 `nest.AfterCommit` 登记 `SetOverlay`（新数据的副本），提交被接受才进视图，回滚 / 提交被拒时不执行。handler 是包级函数，经 `terrainmap.Active()` 拿到本进程的 Map（与 `partition.Node()` 同一做法） |
+| 服务接线 | `internal/service/<game>/terrain.go` | `Init` 里（World、Scene 之后）`startTerrain`：读配置 → 打开包 → 算范围 → `Load` → `Install` → 发布能力 `<game>.terrain`；`Shutdown` 最后 `Close`（撤下发布、关包） |
+| 配置 | `game/settings/terrain.go` | `scene.terrain.pack`（可选，空 = 没有地形）；分区场景开着时 `Scene.ValidateConfig` 要求 `cell_size` 是 6400 的整数倍（加载配置时拒绝，doctor / `--check-config` 同一份） |
+| 原始地形包 | `cmd/terrainpack` | `terrain.Generated` 写确定性小地图，缺省 2 × 1 块（128m × 64m，`BaseRevision` 1、水位线 400m），覆盖普通场景（1000 × 1000）与两个 6400 格的分区场景 |
+
+**装入（启动阶段）**：`Region.Load` 里的块（不分区：整张图；分区且本 sid 托管格：本格外扩 `ghost_band`；只做 Base：空）。哪些块有持久记录：DataEngine 没有“按集合列 ID”的正式能力（`OwnedEntityLister` 只给 Remote 所有权记录），这里用 DataEngine 的 `Store.Load`（与实体冷加载同一个读入口：逻辑库到物理库映射、墓碑过滤都在里面）按 `_id ∈ 候选块的实体 ID` 分批（每批 256）查，候选集就是本区域的块（≤ 本格 + Ghost 带块数），走 `_id` 索引，不扫全表；读出的记录用生成 DAO 的 `RestorePersisted` 解码（只接受当前 schema）后 `SetOverlay`，**不装成实体**——本格的块第一次被改时再由 `GetOrCreate` 冷加载，Ghost 带里邻格的块从不装成实体（不能在本进程持有别的格的可写实体）。其余块 8 个 goroutine 并行 `LoadBase`。时机在 `Service.Init`（App 启动阶段，不在 Nest 业务池）：此时 DataEngine 的 `Runtime.Start` 已排空历史 WAL（恢复屏障），一个 sid 一个进程、块只归本格写，库里就是最新已提交状态。
+
+**BaseRevision 不一致**（保守做法，待维护者决定）：记录基于另一版原始地形的块不装入、`LoadStats.StaleBase` 计数、记 Error 日志，库里的记录不动；这些块查询返回 `ErrNotLoaded`，`Edit` 返回 `terrainmap.ErrUnloadable`（同时满足 `errors.Is(err, terrain.ErrNotLoaded)`）。记录损坏（解码失败、形状不对）与原始块损坏同样不装入，计入 `Corrupt`。
+
+**改块（P1 最小写入口）**：`Map.Edit(ctx, []SampleEdit{GX, GY, Height, Material})`，按块分组、块坐标升序，每块：检查归本进程写（整块在 `Region.Own` 里）与记录可用 → `GetOrCreate`（第一次改的块建出空实体，DataEngine 新建准入门补一笔 strict 事务落库）→ `Sync_TerrainEdit`。块之间不原子，中途失败返回已提交的部分与错误。会等 Mongo 与 WAL，只能在 Nest 业务 worker 之外调用（运维命令、测试、I/O 池）。`Version 0` 的记录（建了实体、第一笔改动失败）装入时按原始块看待。
+
+**测试命令与结果**（2026-11-08，Apple M5，Go 1.27，生成工程 replace 到本分支；生成步骤见 [demo README](../../demo/README.md#改这里的东西之后)）：
+
+| 用例 | 命令 | 结果 |
+| --- | --- | --- |
+| 组件规则 | `go test -race ./game/entities/terrain_chunk/` | 4 条通过：第一次改从原始块开始、ID 往返、拒绝不写、回滚还原 DAO、`Applied` 有界 |
+| 改块 / 回滚 / 重启（离线） | `go test -race -run Terrain ./internal/service/<game>/` | `TestTerrainEditsSurviveARestart`：跨四块交点的 64 点改动 + (0,0) 第二次改动后查询即新值；提交器拒绝的改动（已改块与未改块的第一笔各一次）视图与实体都不变；停下后新实体管理器、新视图从“库”装入（4 块覆盖、2 块原始，其中 1 块是 Version 0 的空记录），整张图每 37 单位一个点共 179,574 个点的高度 / 材质 / 水与 6 块版本与重启前逐点一致，重启后接着改 Version 从 2 到 3。`TestTerrainRecordOnAnotherBaseRevisionIsNotLoaded`：包换成 `BaseRevision` 2 后 1 块 StaleBase、查询 `ErrNotLoaded`、改块 `ErrUnloadable`、库里记录逐字节不变。`TestTerrainRegionFollowsThePartition`：格 (0,0) 装 4 块（本格 + 3 块 Ghost）、只写本格、邻格块可读不可写；只做 Base 的 sid 不装块；`cell_size` 3000 + 地形在加载配置时拒绝，不开地形不受影响 |
+| 重启（真实 Mongo） | `ROOST_TERRAIN_IT_MONGO_URI=… go test -race -run '^TestTerrainRestartRealMongo$' ./internal/service/<game>/`（`scripts/test-demo-generated.sh` 已挂入） | 私有 `scripts/mirror-local.sh` 副本集，唯一库名、结束删库。真实 MongoStore + 文件 WAL + Projector + Runtime（恢复屏障、冷加载、新建准入门）+ Nest：改 5 块后正常停机，库里恰好 5 条记录；同一 WAL 目录重启后 5 块覆盖 + 1 块原始，179,574 个点与 6 块版本逐点一致；重启后冷加载 (0,0) 接着改到 Version 3，停机后库里文档 Version 3、改过的点在 |
+| 测试能变红 | 在生成工程副本上改坏实现后跑上面两条 | 提交前就 `SetOverlay`：离线用例报 `a rolled-back edit changed the view`；装入时不用记录：离线与真实 Mongo 都报 `Overlays:0`；装入的覆盖块改一个点：报第 0 个点高度 72640 ≠ 72650 |
+
+**与本文不一致之处**：
+
+- §4“`cell_size` 是块边长的整数倍”在 demo 里是加载配置时的校验，不是缺省值：demo 缺省 `cell_size` 3000（现有分区 / cellworld 测试与 `scripts/test-seamless-demo.sh` 都按它写），不开地形不受影响；开地形的分区场景要把格改成 6400 的倍数（README 有 `cell_size: 6400` 的示例）。§8.1 的 307200 仍是 1w 地图的推荐值。
+- §3 `Applied`“定长环”实现为有界列表（满 32 个丢最旧、每次整字段替换），没有写游标字段；体积与写法与 §3 表格一致。
+- 新建实体不是“第一次改块时用原始数据建实体”一步完成：handler 只能锁已存在的实体，所以先 `GetOrCreate` 建空实体（Version 0，单独一笔 strict 事务），改块事务里再用原始块填满。代价是第一次改一块多一笔提交；中间失败会留下 Version 0 的空记录，装入时按原始块看待。
+
+**待维护者决定**：
+
+1. 原始地形换版（`BaseRevision` 变了）后旧编辑怎么办：P1 只做“不装入、计数、报错日志、不动记录”。可选：A 丢弃旧记录（玩家编辑丢失）；B 按旧编辑的差值重放到新原始块上（需要保留编辑日志或旧原始包）；C 保留旧记录覆盖新原始块（地形与新美术资源不衔接）。产品决定前，换版要求运维先处理这些记录。
+2. Ghost 带里邻格的块只在启动时读一次快照，之后邻格改了不更新（P3 的边界块推送）；P1 是否需要在 P3 之前就禁止依赖 Ghost 带块的查询结果（例如跨格移动的高度判断）。
+
+**给 P2 的接口说明**：
+
+- 多块事务：P2 的笔刷 handler 声明至多 4 个 `ISurfaceEntity` 目标（同为 World 档，按 ID 取锁），对每块调 `SurfaceComponent.Apply` 后逐块 `nest.AfterCommit` 交给 `Map`（`ApplyEdit` 里的提交后装视图要提成可复用的一步）。目标块第一次改时仍要先 `GetOrCreate`。
+- 幂等：`WasApplied(editID)` 判重、`RecordApplied(editID)` 与改动同一事务写；子 ID 派生规则（§4 跨格拆分）P2 定。
+- 整字段守卫：在 `Apply` 里按本块改动点数选 `SetHeightsAt` 或 `SetHeightsAll`（阈值 1000）。
+- 同步：实体加 `sync=true` 与地形 Interest；DAO 字段资格已定（`Applied` 不同步）。
+- 错误码：P1 的拒绝是包内哨兵（`terrainmap.ErrDisabled` / `ErrNotOwned` / `ErrUnloadable`、`terrain.ErrOutOfMap` / `ErrInvalidChunk` / `ErrBaseRevision` / `ErrNotLoaded`），客户端码 P2 接协议时定。
+
+**未验证**：崩溃重启（WAL 里有未投影记录时 `Load` 读到的是排空之后的库：由 DataEngine 的恢复屏障保证，本轮没有单独的 SIGKILL 演练）；真实 game 进程实跑（配置 + `cmd/terrainpack` + `make dev-run`）；1w 地图规模下按格装入的耗时与内存（§11 的数字是 `gameplay/terrain` 单独测的，没有经过 `Store` 读记录这一步）；Linux。

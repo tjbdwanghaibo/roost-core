@@ -39,6 +39,7 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `internal/service/<服务>/` | 各服务进程：game 的消费者、matchmaker、scene、battle、GM；account / chat / session 的 collaborators |
 | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/alliancerule/`、`game/entities/alliance*/` | 联盟服务（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：独立的 alliance 进程独占 Alliance / AllianceMember（Remote 托管、`service=alliance`），对已有实体的写走路由 RPC（发往实体的 owner；Alliance 起服预加载并登记路由），建盟走随机路由，请求回执与改动同事务；守卫是名单的缓存、跨实例收尾丢了由下一个请求自愈（联盟不产生任何 effect：成员通知由服务层写成功后直接发，预约期限是持有守卫的进程里的到期回调，跨实例宣战是宣战方事务里的持久“等确认”标记 + 直接调用对方 `AcknowledgeWar`），守卫 `snapshots=none` 不发 Remote 快照；运维命令 `alliance.info` / `alliance.guard` / `alliance.transfer` / `alliance.stop_founding` |
 | `game/guild/`、`saga/alliance_*/`、`internal/service/<game>/alliance_saga.go`、`alliance_notice.go` | game 侧的公会：game 只装联盟的只读 Mirror（`game/entities/alliance/mirror.go`），玩家所在公会是自己的副本 `PlayerDao.GuildID`，入会 / 退会一次 RPC，建盟扣费 / 捐献 / 领奖各一个 saga（Player 原生步骤 + 调 RPC 的 Mongo 步骤），接收成员变化通知推给在线玩家；见 [WALKTHROUGH](WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror) |
+| `game/terrainmap/`、`game/entities/terrain_chunk/`、`internal/service/<game>/terrain.go`、`cmd/terrainpack` | 可编辑地形（P1，缺省关闭）：地形包、被改过的块的实体、启动装入与内部写入口，见[可编辑地形](#可编辑地形p1) |
 | `internal/access/player/tcp/` | 玩家 TCP 接入的鉴权（`auth.go`） |
 | `configs/` | 配置表 schema、CSV、生成数据与各服务配置 |
 | `cmd/loadtest`、`loadtest/` | 机器人压测与场景脚本；`cmd/accountctl` 是操作员工具 |
@@ -169,6 +170,37 @@ scene:
 每 `snapshot_every` 把他的 SceneActor 状态发给其他队员的 Base，客户端在同一条同步流里收到队友的 SceneActor（`player`
 命名空间，位置与 `cell_hp`），不论距离；在视野里的队友就是同一个对象，不重复推。被邀请的人从别处得知队伍 ID（原型不推送邀请）。
 多进程端到端（两个 Cell、一个独立 Base、kill -9 后重建、跨 Base 的队伍面板、普通场景照常）：仓库的 `scripts/test-seamless-demo.sh`。
+
+## 可编辑地形（P1）
+
+缺省没有地形：不配 `scene.terrain.pack`，game 的其余功能一切照旧。配上之后，game 进程在启动时装入一张可编辑地形
+（[可编辑地形方案 §12](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#12-p1-实体接入实施结果2026-11-08)，
+框架部分是 [gameplay/terrain](../gameplay/terrain/README.md)）：原始地形来自一个只读的地形包，被改过的 64m 块各是一个持久的
+`TerrainChunk` 实体（`db/def/terrain_chunk.go`），装入时覆盖原始块；从没改过的块不建实体、不读库。
+
+```bash
+go run ./cmd/terrainpack -out configs/terrain/demo.pack     # 2 × 1 块（128m × 64m）的确定性程序化地形，BaseRevision 1
+```
+
+```yaml
+scene:
+  terrain:
+    pack: configs/terrain/demo.pack   # 相对进程工作目录；空 = 没有地形
+```
+
+- **装哪些块、写哪些块**：不分区时整张图都归本进程；分区场景（`scene.partition`）里本 sid 托管的格的块归本进程写，本格外扩
+  `ghost_band` 范围内的块也装入（邻格的块只读，启动时读一次快照）；只做 Base 的 sid 不装块。开地形的分区场景要求 `cell_size`
+  是 6400（一块）的整数倍，一块不跨两个格，加载配置时检查；demo 缺省的 3000 不满足，例如：
+  `cell_size: 6400`、`cols: 2`、`rows: 1`、`owners: ["1001", "1002"]`（世界 12800 × 6400，正好是缺省地形包的 2 × 1 块；
+  `spawn_x` / `spawns` 要落在新的世界里）。
+- **查询**：能力 `<game>.terrain`（`*terrainmap.Map`）的 `Height` / `Material` / `IsWater` / `Probe`，世界坐标是厘米；
+  不取锁，可以在 Nest handler 里调。块没装（不在本进程范围、或它的记录装不进来）答 `terrain.ErrNotLoaded`。
+- **改块**：P1 只有内部写入口 `Map.Edit`（一组采样点的高度与材质；一块一笔 strict 事务，handler `TerrainEdit`），提交后才进
+  视图；还没有协议、笔刷、校验与同步（P2）。它会等数据库与 WAL，不能在 Nest 的业务 worker 上调用。
+- **换了原始地形**：地形包的 `BaseRevision` 与某块的记录不同时，这一块不装入（查询答 not loaded、不能改），启动日志
+  `terrain: chunk record is based on another base revision` 点名块坐标，库里的记录不动；旧编辑怎么处理还没定（方案 §12）。
+- **测试**：`internal/service/<game>/terrain_test.go` 是改块、回滚与重启一致；`TestTerrainRestartRealMongo` 在
+  `ROOST_TERRAIN_IT_MONGO_URI` 指向副本集时用真实 DataEngine 再跑一遍重启（`scripts/test-demo-generated.sh` 挂入）。
 
 ## 改这里的东西之后
 
