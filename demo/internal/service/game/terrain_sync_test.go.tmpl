@@ -3,6 +3,7 @@ package {{GAME_SERVICE_PKG}}
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"net"
@@ -60,7 +61,7 @@ func startTerrainSyncHarness(t *testing.T, chunksX, chunksY int32, radius int64,
 	}
 	p := startTerrainProcessWith(t, pack, wholeMap, &memoryChunkStore{}, func(p *terrainProcess) {
 		policy := terrainmap.DefaultPolicy
-		policy.MaxRadius, policy.EditsPerSecond = 2500, 0
+		policy.MaxRadius, policy.EditPointsPerSecond = 2500, 0
 		p.m.SetPolicy(policy)
 	})
 	bounds := p.m.Meta().Bounds()
@@ -400,7 +401,7 @@ func TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect(t *testing.
 		}
 	}
 
-	// 增量：r=5m 抬高、r=3m 改材质、守卫整平、守卫改材质，各一次。
+	// 增量：r=5m 抬高、r=3m / r=12m 改材质、玩家上限 r=16m 改材质（材质守卫）、守卫整平、守卫改材质，各一次。
 	centre := chunkID(t, near[0])
 	step := func(requestID uint64, b terrain.Brush, check func(terrainUpdate)) {
 		t.Helper()
@@ -424,6 +425,18 @@ func TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect(t *testing.
 	step(6, terrain.Brush{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 300, Material: 33}, func(u terrainUpdate) {
 		if !u.materials || !u.materialsDelta || u.materialUpdates == 0 || u.materialUpdates > 30 || u.heightUpdates != 0 || u.payloadBytes > 1000 {
 			t.Fatalf("an r=3m paint went out as %+v, want per-index materials only", u)
+		}
+	})
+	// 材质守卫 500 点（维护者 2026-11-08）：r=12m 改材质（约 450 点）仍按下标；玩家上限 r=16m（约 800 点，在一块内）
+	// 走整字段，约 4.1KB（按下标时约 5.3～6.4KB）。
+	step(12, terrain.Brush{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 1200, Material: 34}, func(u terrainUpdate) {
+		if !u.materials || !u.materialsDelta || u.materialUpdates < 400 || u.materialUpdates > terrain_chunk.MaterialsGuard || u.heightUpdates != 0 {
+			t.Fatalf("an r=12m paint went out as %+v, want per-index materials under the guard", u)
+		}
+	})
+	step(13, terrain.Brush{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 1600, Material: 35}, func(u terrainUpdate) {
+		if !u.materials || u.materialsDelta || u.heightUpdates != 0 || u.payloadBytes < 4000 || u.payloadBytes > 5000 {
+			t.Fatalf("an r=16m paint went out as %+v, want the whole materials field (over the 500-point guard)", u)
 		}
 	})
 	step(7, terrain.Brush{Op: terrain.BrushFlatten, X: at.X, Y: at.Y, Radius: 2400, Target: 1900}, func(u terrainUpdate) {
@@ -719,12 +732,12 @@ func TestTerrainChunksOverTheirLimitCloseTheSession(t *testing.T) {
 	t.Logf("session lost after %d flushes holding %d chunks", flushes, held)
 }
 
-// ---- 测量（方案 §7.1 / §9 P2，材质改列表后重测）：ROOST_TERRAIN_MEASURE=1 时运行，数字写进证据目录 ----
+// ---- 测量（方案 §7.1 / §9 P2，材质改列表、编辑配额后重测）：ROOST_TERRAIN_MEASURE=1 时运行，数字写进证据目录 ----
 
 func measuring(t *testing.T) {
 	t.Helper()
 	if os.Getenv("ROOST_TERRAIN_MEASURE") == "" {
-		t.Skip("ROOST_TERRAIN_MEASURE not set (measurements, see docs/maintenance/evidence/terrain-materials-list-20261108)")
+		t.Skip("ROOST_TERRAIN_MEASURE not set (measurements, see docs/maintenance/evidence/terrain-quota-20261108)")
 	}
 }
 
@@ -794,7 +807,8 @@ func TestTerrainMeasureUpdateBytes(t *testing.T) {
 func TestTerrainMeasureDownlinkScenarios(t *testing.T) {
 	measuring(t)
 	const ticksPerSecond = 20
-	run := func(t *testing.T, name string, seconds int, setup func(h *terrainSyncHarness) spatial.Point, tick func(h *terrainSyncHarness, tick int, observer int64)) {
+	// warm 是不计入的预热拍数（tick 照常调用，拍号从 0 连续编号）：配额档用它跳过开头每人一满桶的突发。
+	runWarm := func(t *testing.T, name string, warm, seconds int, setup func(h *terrainSyncHarness) spatial.Point, tick func(h *terrainSyncHarness, tick int, observer int64)) {
 		h := startTerrainSyncHarness(t, 16, 16, terrainViewRadius, terrainMaxVisible, false)
 		at := setup(h)
 		const observer = int64(30020)
@@ -802,9 +816,15 @@ func TestTerrainMeasureDownlinkScenarios(t *testing.T) {
 		for range 60 { // 先把进入视野的全量发完，测的是之后的稳态
 			_ = h.scene.Flush(h.ctx)
 		}
+		for i := range warm {
+			tick(h, i, observer)
+			if err := h.scene.Flush(h.ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
 		time.Sleep(50 * time.Millisecond)
 		client.takeFrames()
-		for i := range seconds * ticksPerSecond {
+		for i := warm; i < warm+seconds*ticksPerSecond; i++ {
 			tick(h, i, observer)
 			if err := h.scene.Flush(h.ctx); err != nil {
 				t.Fatal(err)
@@ -836,6 +856,9 @@ func TestTerrainMeasureDownlinkScenarios(t *testing.T) {
 		t.Logf("MEASURE %-50s %7.1f KB/s on the wire (%7.1f KB/s DAO payload), %d full + %d delta chunk updates in %d s",
 			name, float64(wire)/1024/float64(seconds), float64(payload)/1024/float64(seconds), full, delta, seconds)
 	}
+	run := func(t *testing.T, name string, seconds int, setup func(h *terrainSyncHarness) spatial.Point, tick func(h *terrainSyncHarness, tick int, observer int64)) {
+		runWarm(t, name, 0, seconds, setup, tick)
+	}
 	// 建造热点：观察者站在块 (8,8) 中心，附近 20 人每人每秒一次编辑（落在观察者 ±40m 内，轮流：每拍一人），材质比例
 	// 0 / 50% / 100%（带材质的编辑 = 一次抬高 + 同一处一次改材质）。笔刷 r=5m（方案 §7.1 的假设）；另测玩家半径上限
 	// r=16m 两档，看笔刷大小对下行的影响。
@@ -862,6 +885,103 @@ func TestTerrainMeasureDownlinkScenarios(t *testing.T) {
 					h.brush(t, terrainBuilder+int64(editor), request, terrain.Brush{Op: terrain.BrushPaint, X: x, Y: y, Radius: int64(c.radius), Material: byte(tick)})
 				}
 			})
+		})
+	}
+	// 配额满速的建造热点（维护者 2026-11-08：每人每秒 300 个改动点，令牌桶容量 300、满桶可透支一次、每次至少 20 点）：
+	// 附近 20 人每拍（50ms）都尝试自己的下一笔，配额允许就做、同一拍里接着做下一笔，被拒（ErrRateLimited）就等下一拍。
+	// 一轮是在 ±40m 内随机一处的几笔（抬高，或抬高 + 同处改材质），做完换一处。热点里的 9 块先改过一次、全量在预热
+	// 里发完；每人在头 3 秒内的随机一拍开始编辑（真实玩家不会同一拍开工、步调一致），再预热 2 秒，跳过开头每人一满桶
+	// 加一次透支的突发，测的是稳态的增量下行。配额用模拟时钟（拍号 × 50ms）。
+	type quotaStroke struct {
+		op     terrain.BrushOp
+		radius int64
+	}
+	for _, c := range []struct {
+		name    string
+		label   string
+		rounds  [][]quotaStroke // 编辑者 i 用 rounds[i % len(rounds)]
+		seconds int
+	}{
+		{"quota_r5m_raise", "quota hot spot, 20 editors, r=5m raise", [][]quotaStroke{{{terrain.BrushRaise, 500}}}, 20},
+		{"quota_r5m_raise_paint", "quota hot spot, 20 editors, r=5m raise + paint", [][]quotaStroke{{{terrain.BrushRaise, 500}, {terrain.BrushPaint, 500}}}, 20},
+		{"quota_r16m_raise", "quota hot spot, 20 editors, r=16m raise", [][]quotaStroke{{{terrain.BrushRaise, 1600}}}, 20},
+		{"quota_r16m_raise_paint", "quota hot spot, 20 editors, r=16m raise + paint", [][]quotaStroke{{{terrain.BrushRaise, 1600}, {terrain.BrushPaint, 1600}}}, 20},
+		{"quota_mixed", "quota hot spot, 20 editors, mixed r=5m/r=16m (+paint)", [][]quotaStroke{
+			{{terrain.BrushRaise, 500}, {terrain.BrushPaint, 500}},
+			{{terrain.BrushRaise, 1600}},
+			{{terrain.BrushRaise, 1600}, {terrain.BrushPaint, 1600}},
+			{{terrain.BrushRaise, 500}},
+		}, 20},
+		{"quota_r5m_raise_paint_60s", "quota hot spot, 20 editors, r=5m raise + paint", [][]quotaStroke{{{terrain.BrushRaise, 500}, {terrain.BrushPaint, 500}}}, 60},
+		{"quota_r16m_raise_paint_60s", "quota hot spot, 20 editors, r=16m raise + paint", [][]quotaStroke{{{terrain.BrushRaise, 1600}, {terrain.BrushPaint, 1600}}}, 60},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rng := rand.New(rand.NewPCG(13, uint64(len(c.name))))
+			centre := centreOf(terrain.ChunkKey{X: 8, Y: 8})
+			start := time.Unix(1_800_000_000, 0)
+			clock := start
+			type editor struct {
+				x, y   int64
+				stroke int
+				begin  int // 开始编辑的拍号
+			}
+			editors := make([]editor, 20)
+			var request uint64
+			var points, edits, refused int
+			const warm = 100 // 5 秒
+			var counting bool
+			runWarm(t, c.label, warm, c.seconds, func(h *terrainSyncHarness) spatial.Point {
+				for y := int32(7); y <= 9; y++ {
+					for x := int32(7); x <= 9; x++ {
+						at := centreOf(terrain.ChunkKey{X: x, Y: y})
+						request++
+						h.brush(t, terrainBuilder, request, terrain.Brush{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: 300, Strength: 1})
+					}
+				}
+				h.process.m.SetPolicy(terrainmap.DefaultPolicy)
+				h.process.m.SetClock(func() time.Time { return clock })
+				for i := range editors {
+					editors[i] = editor{x: centre.X + rng.Int64N(8000) - 4000, y: centre.Y + rng.Int64N(8000) - 4000, begin: rng.IntN(60)}
+				}
+				return centre
+			}, func(h *terrainSyncHarness, tick int, _ int64) {
+				clock = start.Add(time.Duration(tick) * 50 * time.Millisecond)
+				counting = tick >= warm
+				for i := range editors {
+					e := &editors[i]
+					if tick < e.begin {
+						continue
+					}
+					round := c.rounds[i%len(c.rounds)]
+					for {
+						stroke := round[e.stroke]
+						b := terrain.Brush{Op: stroke.op, X: e.x, Y: e.y, Radius: stroke.radius, Falloff: terrain.FalloffLinear, Strength: 5, Material: byte(tick)}
+						heights, materials, err := h.process.m.View().BrushChanges(b, h.process.m.Policy().Limits)
+						if err != nil {
+							t.Fatal(err)
+						}
+						request++
+						if _, err := h.process.m.Brush(h.ctx, terrainBuilder+1+int64(i), request, b); errors.Is(err, terrainmap.ErrRateLimited) {
+							if counting {
+								refused++
+							}
+							break
+						} else if err != nil {
+							t.Fatalf("editor %d: %v", i, err)
+						}
+						if counting {
+							points += max(heights+materials, terrainmap.DefaultPolicy.MinEditPoints)
+							edits++
+						}
+						e.stroke++
+						if e.stroke == len(round) {
+							e.stroke, e.x, e.y = 0, centre.X+rng.Int64N(8000)-4000, centre.Y+rng.Int64N(8000)-4000
+						}
+					}
+				}
+			})
+			t.Logf("MEASURE   %-50s charged %.0f points/s (%.0f per editor), %.1f edits/s, %d attempts refused for quota",
+				c.label, float64(points)/float64(c.seconds), float64(points)/float64(c.seconds)/20, float64(edits)/float64(c.seconds), refused)
 		})
 	}
 	// 跑图进入改过的区域：观察者从块 (1,8) 中心向东匀速跑 30 秒（6 m/s 跑步、12 m/s 坐骑），沿途全部 / 20% 的块改过
@@ -903,7 +1023,7 @@ func TestTerrainMeasureBrushCost(t *testing.T) {
 	pack := writeTerrainPackSized(t, t.TempDir(), 16, 16)
 	p := startTerrainProcessWith(t, pack, wholeMap, &memoryChunkStore{}, func(p *terrainProcess) {
 		policy := terrainmap.DefaultPolicy
-		policy.MaxRadius, policy.EditsPerSecond = 2500, 0
+		policy.MaxRadius, policy.EditPointsPerSecond = 2500, 0
 		p.m.SetPolicy(policy)
 	})
 	// 先把要用到的块都建出来，测的是改块事务本身。
@@ -944,6 +1064,20 @@ func TestTerrainMeasureBrushCost(t *testing.T) {
 		c := centreOf(terrain.ChunkKey{X: int32(i % 16), Y: int32(i / 16 % 16)})
 		return terrain.Brush{Op: terrain.BrushFlatten, X: c.X, Y: c.Y, Radius: 2400, Target: uint16(1000 + i%7*50)}
 	})
+	// 配额开着（额度大到不拒）：多出来的是事务之前在视图上数改动点数（View.BrushChanges，不复制块数据）。
+	policy := p.m.Policy()
+	policy.EditPointsPerSecond = 1 << 30
+	p.m.SetPolicy(policy)
+	measure("brush r=5m linear, quota on", 2000, func(i int) terrain.Brush {
+		c := centreOf(terrain.ChunkKey{X: int32(i % 16), Y: int32(i / 16 % 16)})
+		return terrain.Brush{Op: terrain.BrushRaise, X: c.X, Y: c.Y, Radius: 500, Falloff: terrain.FalloffLinear, Strength: 1 + uint16(i%3)}
+	})
+	measure("brush r=16m smooth on a corner, quota on", 1000, func(i int) terrain.Brush {
+		k := terrain.ChunkKey{X: int32(1 + i%14), Y: int32(1 + i/14%14)}
+		return terrain.Brush{Op: terrain.BrushRaise, X: k.Origin().X, Y: k.Origin().Y, Radius: 1600, Falloff: terrain.FalloffSmooth, Strength: 1 + uint16(i%3)}
+	})
+	policy.EditPointsPerSecond = 0
+	p.m.SetPolicy(policy)
 	// 吞吐：8 个编辑者各改自己的一列块（互不争锁），每人 500 次。
 	started := time.Now()
 	var wg sync.WaitGroup

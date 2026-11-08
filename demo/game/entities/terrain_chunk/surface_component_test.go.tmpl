@@ -360,7 +360,7 @@ func TestTerrainChunkDiscardResetsOnlyAStaleRecord(t *testing.T) {
 }
 
 // 材质与高度一样按下标增量（D11，维护者 2026-11-08：下行预算低于 50KB/s）：一次提交在本块改动不超过 MaterialsGuard
-// （1000）个材质时逐点写，同步增量按下标；超过时整字段。只改材质的提交不带高度，只改高度的不带材质。两条路径的数据
+// （500，维护者 2026-11-08：字节持平点约 560 点）个材质时逐点写，同步增量按下标；超过时整字段。只改材质的提交不带高度，只改高度的不带材质。两条路径的数据
 // 相同。
 func TestTerrainChunkMaterialsGoOutPerPointUnderTheGuard(t *testing.T) {
 	base := testBase()
@@ -421,14 +421,20 @@ func TestTerrainChunkMaterialsGoOutPerPointUnderTheGuard(t *testing.T) {
 }
 
 // 两个列表共享每 DAO 4096 个节点的变化预算（framework/dataengine 的 maxSyncChangeNodes）。单笔提交在两个守卫之内
-// （各 1000 点）用到约 2004 个节点，两个字段都还是按下标的增量；同一块在确认之前累计更多这样的提交、超过预算时，
-// 框架整树回退，两个字段都按整字段发出（数据仍正确）。所以守卫按字段各自计数就够，不需要按两者合计。
+// （高度 1000 点、材质 500 点）用到约 1504 个节点，两个字段都还是按下标的增量；同一块在确认之前累计更多这样的提交、
+// 超过预算时，框架整树回退，两个字段都按整字段发出（数据仍正确）。所以守卫按字段各自计数就够，不需要按两者合计。
 func TestTerrainChunkHeightsAndMaterialsShareTheChangeBudget(t *testing.T) {
 	base := testBase()
+	// 每笔从 from 起 1000 个下标改高度，其中前 500 个同时改材质：两个字段各在自己的守卫上。
+	painted := func(i int) bool { return i%1000 < MaterialsGuard }
 	edits := func(from int) []PointEdit {
 		out := make([]PointEdit, 0, HeightsGuard)
 		for i := from; len(out) < HeightsGuard; i++ {
-			out = append(out, PointEdit{Index: int32(i), Height: base.Heights[i] + 3, Material: base.Materials[i] + 100})
+			material := base.Materials[i]
+			if painted(i) {
+				material += 100
+			}
+			out = append(out, PointEdit{Index: int32(i), Height: base.Heights[i] + 3, Material: material})
 		}
 		return out
 	}
@@ -440,10 +446,10 @@ func TestTerrainChunkHeightsAndMaterialsShareTheChangeBudget(t *testing.T) {
 	patch := syncPatch(t, e)
 	if patch == nil || patch.Heights == nil || !patch.Heights.Delta || len(patch.Heights.Updates) != HeightsGuard ||
 		patch.Materials == nil || !patch.Materials.Delta || len(patch.Materials.Updates) != MaterialsGuard {
-		t.Fatalf("1000 heights + 1000 materials in one commit went out as %+v, want two per-point deltas", patch)
+		t.Fatalf("1000 heights + 500 materials in one commit went out as %+v, want two per-point deltas", patch)
 	}
 
-	// 不确认：三笔各 1000 + 1000 个不同下标，第二笔后约 4005 个节点（还在预算内），第三笔超过预算。
+	// 不确认：三笔各 1000 + 500 个不同下标，第二笔后约 3005 个节点（还在预算内），第三笔约 4505 个超过预算。
 	tracker := e.Dao().DirtyTracker()
 	for _, from := range []int{1000, 2000, 3000} {
 		part := edits(from)
@@ -460,11 +466,15 @@ func TestTerrainChunkHeightsAndMaterialsShareTheChangeBudget(t *testing.T) {
 	}
 	if merged.Heights == nil || merged.Heights.Delta || len(merged.Heights.Value) != terrain.ChunkPoints ||
 		merged.Materials == nil || merged.Materials.Delta || len(merged.Materials.Value) != terrain.ChunkPoints {
-		t.Fatalf("three unacknowledged commits of 2000 changed points each went out as heights %+v materials %+v, want both whole fields", merged.Heights != nil && merged.Heights.Delta, merged.Materials != nil && merged.Materials.Delta)
+		t.Fatalf("three unacknowledged commits of 1500 changed points each went out as heights %+v materials %+v, want both whole fields", merged.Heights != nil && merged.Heights.Delta, merged.Materials != nil && merged.Materials.Delta)
 	}
 	got := overlayOf(t, e)
 	for i := range 4000 {
-		if got.Heights[i] != base.Heights[i]+3 || got.Materials[i] != base.Materials[i]+100 {
+		material := base.Materials[i]
+		if painted(i) {
+			material += 100
+		}
+		if got.Heights[i] != base.Heights[i]+3 || got.Materials[i] != material {
 			t.Fatalf("point %d is %d/%d after the edits", i, got.Heights[i], got.Materials[i])
 		}
 	}

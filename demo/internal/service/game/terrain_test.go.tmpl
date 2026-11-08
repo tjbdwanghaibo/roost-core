@@ -793,7 +793,7 @@ func brushProcess(t *testing.T, store *memoryChunkStore) *terrainProcess {
 	t.Helper()
 	return startTerrainProcessWith(t, writeTerrainPack(t, t.TempDir(), 1), wholeMap, store, func(p *terrainProcess) {
 		policy := terrainmap.DefaultPolicy
-		policy.EditsPerSecond = 0
+		policy.EditPointsPerSecond = 0
 		p.m.SetPolicy(policy)
 	})
 }
@@ -1022,35 +1022,207 @@ func (r *brushRules) AllowEdit(context.Context, int64, terrain.Brush, []terrain.
 
 func (r *brushRules) Occupied(terrain.ChunkKey, int32) bool { return r.occupied }
 
-// 每玩家频率（方案 §8.1：每秒 2 次）：同一秒里第三次被拒、不写；过了半秒补一次；别的玩家不受影响。
-func TestTerrainBrushRateLimit(t *testing.T) {
-	p := startTerrainProcess(t, writeTerrainPack(t, t.TempDir(), 1), wholeMap, &memoryChunkStore{})
+// ---- 每玩家改动点数配额（维护者 2026-11-08：每人每秒 300 点，取代每秒 2 次） ----
+
+// quotaProcess 是缺省 Policy（配额 300 点 / 秒、每次至少 20 点）、时钟由测试拨动的进程。
+func quotaProcess(t *testing.T, edit func(*terrainmap.Policy)) (*terrainProcess, *time.Time) {
+	t.Helper()
 	now := time.Unix(1_800_000_000, 0)
-	p.m.SetClock(func() time.Time { return now })
-	b := terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 300, Material: 1}
-	for id := uint64(1); id <= 2; id++ {
-		b.Material = byte(id)
-		if _, err := p.m.Brush(p.ctx, brushPlayer, id, b); err != nil {
-			t.Fatalf("edit %d: %v", id, err)
+	p := startTerrainProcessWith(t, writeTerrainPack(t, t.TempDir(), 1), wholeMap, &memoryChunkStore{}, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		if edit != nil {
+			edit(&policy)
+		}
+		p.m.SetPolicy(policy)
+		p.m.SetClock(func() time.Time { return now })
+	})
+	if got := p.m.Policy(); got.EditPointsPerSecond != 300 || got.MinEditPoints != 20 {
+		t.Fatalf("policy %+v, want 300 points a second and at least 20 an edit", got)
+	}
+	return p, &now
+}
+
+// changedPoints 是笔刷在视图当前数据上会改变的高度点数与材质点数，按 Apply 的结果逐点比较数出（与 Map 计配额用的
+// View.BrushChanges 是两条独立的路径）。
+func changedPoints(t *testing.T, m *terrainmap.Map, b terrain.Brush) (heights, materials int) {
+	t.Helper()
+	chunks := map[terrain.ChunkKey]terrain.Chunk{}
+	for _, key := range b.Chunks(m.Meta()) {
+		c, _, loaded := m.View().Chunk(key)
+		if !loaded {
+			t.Fatalf("chunk %v not loaded", key)
+		}
+		chunks[key] = c
+	}
+	changes, err := b.Apply(m.Meta(), m.Policy().Limits, chunks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range changes {
+		for _, pt := range change.Points {
+			if pt.Height != chunks[change.Key].Heights[pt.Index] {
+				heights++
+			}
+			if pt.Material != chunks[change.Key].Materials[pt.Index] {
+				materials++
+			}
 		}
 	}
+	return heights, materials
+}
+
+// refusedWithoutWriting 断言这次编辑因配额被拒、什么都没写：实体、Applied、视图、提交数都不变，覆盖到的没改过的块
+// 也没有建实体。
+func refusedWithoutWriting(t *testing.T, p *terrainProcess, request uint64, b terrain.Brush, what string) {
+	t.Helper()
+	before, commits := allStates(t, p), p.committer.commits.Load()
+	var absent []int64
+	for _, key := range b.Chunks(p.m.Meta()) {
+		if id := mustChunkID(t, key); p.entities.Get(id) == nil {
+			absent = append(absent, id)
+		}
+	}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, request, b); !errors.Is(err, terrainmap.ErrRateLimited) {
+		t.Fatalf("%s: %v, want ErrRateLimited", what, err)
+	}
+	if !sameStates(before, allStates(t, p)) || p.committer.commits.Load() != commits {
+		t.Fatalf("%s: an edit refused for its quota wrote something", what)
+	}
+	for _, id := range absent {
+		if p.entities.Get(id) != nil {
+			t.Fatalf("%s: an edit refused for its quota created chunk entity %d", what, id)
+		}
+	}
+}
+
+// admittedAfter 把时钟拨到“余额 left 补到 need”前 1ms：这次编辑被拒（差 0.3 点）；再拨 2ms：被接受（余额 need + 0.3）。
+// 用来按配额的边界逐点钉住之前扣了多少（时钟是测试的，补充按 300 点 / 秒精确）。need 是这次编辑的点数，透支时是 300。
+func admittedAfter(t *testing.T, p *terrainProcess, now *time.Time, left, need float64, request uint64, b terrain.Brush, what string) {
+	t.Helper()
+	wait := time.Duration((need - left) / 300 * float64(time.Second))
+	*now = now.Add(wait - time.Millisecond)
+	refusedWithoutWriting(t, p, request, b, what+" (0.3 points short)")
+	*now = now.Add(2 * time.Millisecond)
+	if r, err := p.m.Brush(p.ctx, brushPlayer, request, b); err != nil || r.Duplicate {
+		t.Fatalf("%s once the quota is back: %+v, %v", what, r, err)
+	}
+}
+
+// 计数口径：按字段计实际会改变的点（改材质只计材质、抬高只计高度，值没变的不计；四块交点的共享边点只计一次），每次
+// 至少 20 点。满桶 300：改材质 81 + 抬高 81 + 刷成同一种材质（0 点，按 20 计）后余 118；四块交点改材质 177 点不够、
+// 整笔拒绝零写入（交点上没改过的块也不建实体）；等补到差 0.3 点仍拒，补够即通过。别的玩家有自己的桶。
+func TestTerrainBrushQuotaCountsTheChangedPointsOfEachField(t *testing.T) {
+	p, now := quotaProcess(t, nil)
+	spot := terrain.ChunkKey{}.Origin()
+	spot.X, spot.Y = spot.X+3200, spot.Y+3200
+	paint := terrain.Brush{Op: terrain.BrushPaint, X: spot.X, Y: spot.Y, Radius: 500, Material: 201}
+	raise := terrain.Brush{Op: terrain.BrushRaise, X: spot.X, Y: spot.Y, Radius: 500, Strength: 10}
+	corner := terrain.Brush{Op: terrain.BrushPaint, X: terrain.ChunkSize, Y: terrain.ChunkSize, Radius: 750, Material: 202}
+
+	if h, m := changedPoints(t, p.m, paint); h != 0 || m != 81 {
+		t.Fatalf("an r=5m paint changes %d heights / %d materials, want 0 / 81", h, m)
+	}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, paint); err != nil {
+		t.Fatal(err)
+	}
+	if h, m := changedPoints(t, p.m, raise); h != 81 || m != 0 {
+		t.Fatalf("an r=5m constant raise changes %d heights / %d materials, want 81 / 0", h, m)
+	}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 2, raise); err != nil {
+		t.Fatal(err)
+	}
+	// 同一处再刷一遍同一种材质：没有点会变，按下限 20 计；提交了（Applied 记下请求），数据不变。
+	if h, m := changedPoints(t, p.m, paint); h != 0 || m != 0 {
+		t.Fatalf("painting the same material again changes %d / %d points, want none", h, m)
+	}
+	before, commits := stateOf(t, p, terrain.ChunkKey{}), p.committer.commits.Load()
+	if r, err := p.m.Brush(p.ctx, brushPlayer, 3, paint); err != nil || r.Duplicate {
+		t.Fatalf("a no-op paint: %+v, %v", r, err)
+	}
+	if after := stateOf(t, p, terrain.ChunkKey{}); p.committer.commits.Load() == commits || !slices.Equal(after.heights, before.heights) || !slices.Equal(after.materials, before.materials) {
+		t.Fatal("a no-op paint should commit (record its request) and change no point")
+	}
+	// 余 300 − 81 − 81 − 20 = 118。交点改材质：每个采样点只属于一块，177 点。
+	if h, m := changedPoints(t, p.m, corner); h != 0 || m != 177 {
+		t.Fatalf("a corner paint changes %d / %d points, want 0 / 177 (each sample point once)", h, m)
+	}
+	refusedWithoutWriting(t, p, 4, corner, "a 177-point edit with 118 left")
+	if _, err := p.m.Brush(p.ctx, brushPlayer+1, 1, corner); err != nil {
+		t.Fatalf("another player's full bucket: %v", err)
+	}
+	// 别的玩家刚把交点刷成了 202，换一种材质（仍是 177 点）。
+	corner.Material = 203
+	admittedAfter(t, p, now, 118, 177, 4, corner, "the corner paint")
+}
+
+// 单次超过桶上限：满桶时放行一次（透支成负数），之后要补回到满才能再透支、补够才能做小编辑。玩家 r=16m 抬高约 800
+// 点、运维放大半径后的整平 r=24m（守卫，约 1800 点）都适用；长期平均不超过每秒 300 点。
+func TestTerrainBrushQuotaLetsAFullBucketOverdrawOnce(t *testing.T) {
+	p, now := quotaProcess(t, func(policy *terrainmap.Policy) { policy.MaxRadius = 2500 })
+	big := terrain.Brush{Op: terrain.BrushRaise, X: terrain.ChunkSize + 3200, Y: 3200, Radius: 1600, Falloff: terrain.FalloffSmooth, Strength: 40}
+	small := terrain.Brush{Op: terrain.BrushPaint, X: 2 * terrain.ChunkSize + 3200, Y: 3200, Radius: 300, Material: 99}
+	bigCost, _ := changedPoints(t, p.m, big)
+	if bigCost <= 300 {
+		t.Fatalf("an r=16m raise changes %d points, want more than the 300 a bucket holds", bigCost)
+	}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, big); err != nil {
+		t.Fatalf("an r=16m raise (%d points) on a full bucket: %v", bigCost, err)
+	}
+	_, smallCost := changedPoints(t, p.m, small)
+	smallCost = max(smallCost, 20)
+	// 余额 300 − bigCost < 0：小编辑要等补到 smallCost。
+	admittedAfter(t, p, now, float64(300-bigCost), float64(smallCost), 2, small, "a small edit after the overdraft")
+	// 余 0.3。不满的桶不能透支：r=16m 要等补满 300。
+	big.Strength = 30
+	refusedWithoutWriting(t, p, 3, big, "a second big edit on a bucket that is not full")
+	admittedAfter(t, p, now, 0.3, 300, 3, big, "a second big edit once the bucket is full")
+	// 地基这类大操作（整平 r=24m，超过高度守卫）同样：满桶放行一次。
+	*now = now.Add(time.Hour)
+	flatten := terrain.Brush{Op: terrain.BrushFlatten, X: terrain.ChunkSize + 3200, Y: 3200, Radius: 2400, Target: 1500}
+	if h, _ := changedPoints(t, p.m, flatten); h <= 1000 {
+		t.Fatalf("an r=24m flatten changes %d heights, want more than the guard", h)
+	}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 4, flatten); err != nil {
+		t.Fatalf("an r=24m flatten on a full bucket: %v", err)
+	}
+	refusedWithoutWriting(t, p, 5, small, "a small edit right after the flatten")
+}
+
+// 重复请求与确定没改的拒绝只计下限 20 点：重放一次大编辑不被扣两遍；领地钩子拒绝、建筑占位（事务里回滚）也一样。
+// 用配额的边界钉住：满桶 300，抬高 81 后余 219；重放（−20）余 199；领地拒绝（−20）余 179；占位拒绝（−20）余 159；
+// 交点改材质 177 点不够，等补到 177 才通过。重放若按 81 计，这里会差 61 点。
+func TestTerrainBrushQuotaChargesRepeatsAndRefusalsTheMinimum(t *testing.T) {
+	p, now := quotaProcess(t, nil)
+	rules := &brushRules{}
+	p.m.SetRules(rules)
+	raise := terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 500, Strength: 10}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, raise); err != nil {
+		t.Fatal(err)
+	}
 	before := allStates(t, p)
-	if _, err := p.m.Brush(p.ctx, brushPlayer, 3, b); !errors.Is(err, terrainmap.ErrRateLimited) {
-		t.Fatalf("a third edit in the same second: %v, want ErrRateLimited", err)
+	if r, err := p.m.Brush(p.ctx, brushPlayer, 1, raise); err != nil || !r.Duplicate {
+		t.Fatalf("the same request again: %+v, %v; want Duplicate", r, err)
 	}
 	if !sameStates(before, allStates(t, p)) {
-		t.Fatal("a rate-limited edit wrote something")
+		t.Fatal("a duplicate request changed a chunk")
 	}
-	if _, err := p.m.Brush(p.ctx, brushPlayer+1, 1, b); err != nil {
-		t.Fatalf("another player: %v", err)
+	rules.deny = true
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 2, raise); !errors.Is(err, terrainmap.ErrDenied) {
+		t.Fatalf("territory hook: %v, want ErrDenied", err)
 	}
-	now = now.Add(500 * time.Millisecond)
-	if _, err := p.m.Brush(p.ctx, brushPlayer, 3, b); err != nil {
-		t.Fatalf("after half a second: %v", err)
+	rules.deny, rules.occupied = false, true
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 3, raise); !errors.Is(err, terrainmap.ErrOccupied) {
+		t.Fatalf("a building under the brush: %v, want ErrOccupied", err)
 	}
-	if _, err := p.m.Brush(p.ctx, brushPlayer, 4, b); !errors.Is(err, terrainmap.ErrRateLimited) {
-		t.Fatalf("a second edit within that half second: %v, want ErrRateLimited", err)
+	rules.occupied = false
+	if !sameStates(before, allStates(t, p)) {
+		t.Fatal("a refused edit changed a chunk")
 	}
+	corner := terrain.Brush{Op: terrain.BrushPaint, X: terrain.ChunkSize, Y: terrain.ChunkSize, Radius: 750, Material: 202}
+	if _, m := changedPoints(t, p.m, corner); m != 177 {
+		t.Fatalf("a corner paint changes %d materials, want 177", m)
+	}
+	admittedAfter(t, p, now, 159, 177, 4, corner, "the corner paint")
 }
 
 // 多块事务回滚（方案 §9 P2）：跨四块（两块改过、两块第一次改）的一笔编辑被提交器拒绝时，四块的实体（版本、数据、
@@ -1089,7 +1261,7 @@ func TestTerrainBrushOverTheGuardWritesTheWholeField(t *testing.T) {
 	pack := writeTerrainPack(t, t.TempDir(), 1)
 	p := startTerrainProcessWith(t, pack, wholeMap, &memoryChunkStore{}, func(p *terrainProcess) {
 		policy := terrainmap.DefaultPolicy
-		policy.MaxRadius, policy.EditsPerSecond = 2500, 0
+		policy.MaxRadius, policy.EditPointsPerSecond = 2500, 0
 		p.m.SetPolicy(policy)
 	})
 	big := terrain.Brush{Op: terrain.BrushFlatten, X: 3200, Y: 3200, Radius: 2400, Target: 1500}

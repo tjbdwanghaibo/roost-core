@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
 // globalRaw 把生成器的整张小地图展开成世界采样数组 [gy][gx]，作为查询的参照（不经过 View 的块表）。
@@ -412,5 +414,78 @@ func TestConcurrentQueriesAndUpdates(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Fatal(err)
+	}
+}
+
+// BrushChanges 是事务之前的改动量估算（上层的每玩家改动点数配额用它）：与在同一份数据上 Apply 的结果按字段逐个
+// 数出的点数相同；四块交点每个采样点只算一次；已在限外、材质相同等值不变的点不算；覆盖到没装的块报 ErrNotLoaded。
+func TestViewBrushChangesCountsWhatApplyWouldChange(t *testing.T) {
+	src := Generated(testMeta, testSeed)
+	p, _ := writeTestPack(t, testMeta, src)
+	v := NewView(p)
+	loadAll(t, v)
+	// (1,0) 是覆盖块：一半的点材质已是 9，高度都在 2000。
+	o := flatOverlay(testMeta, 3, 2000, 9)
+	for k := range len(o.Materials) / 2 {
+		o.Materials[k] = 4
+	}
+	if err := v.SetOverlay(ChunkKey{1, 0}, o); err != nil {
+		t.Fatal(err)
+	}
+	corner := spatial.Point{X: ChunkSize, Y: ChunkSize}
+	inOverlay := ChunkKey{1, 0}.Origin()
+	limits := Limits{Bedrock: 0, Ceiling: 2000} // 覆盖块的高度正在上限
+	for _, c := range []struct {
+		b      Brush
+		limits Limits
+	}{
+		{Brush{Op: BrushRaise, X: corner.X, Y: corner.Y, Radius: 1600, Falloff: FalloffSmooth, Strength: 40}, FullRange},
+		{Brush{Op: BrushLower, X: corner.X, Y: corner.Y, Radius: 750, Falloff: FalloffLinear, Strength: 3}, FullRange},
+		{Brush{Op: BrushFlatten, X: corner.X, Y: corner.Y, Radius: 1200, Target: 1500}, FullRange},
+		{Brush{Op: BrushPaint, X: corner.X, Y: corner.Y, Radius: 750, Material: 201}, FullRange},
+		{Brush{Op: BrushPaint, X: inOverlay.X + 3200, Y: inOverlay.Y + 3200, Radius: 1600, Material: 9}, limits},   // 一半已是 9
+		{Brush{Op: BrushRaise, X: inOverlay.X + 3200, Y: inOverlay.Y + 3200, Radius: 500, Strength: 5}, limits},    // 都在上限
+		{Brush{Op: BrushFlatten, X: inOverlay.X + 3200, Y: inOverlay.Y + 3200, Radius: 500, Target: 2000}, limits}, // 已是目标
+	} {
+		b, limits := c.b, c.limits
+		chunks := map[ChunkKey]Chunk{}
+		for _, key := range b.Chunks(testMeta) {
+			c, _, _ := v.Chunk(key)
+			chunks[key] = c
+		}
+		changes, err := b.Apply(testMeta, limits, chunks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantHeights, wantMaterials := 0, 0
+		for _, change := range changes {
+			before := chunks[change.Key]
+			for _, pt := range change.Points {
+				if pt.Height != before.Heights[pt.Index] {
+					wantHeights++
+				}
+				if pt.Material != before.Materials[pt.Index] {
+					wantMaterials++
+				}
+			}
+		}
+		heights, materials, err := v.BrushChanges(b, limits)
+		if err != nil || heights != wantHeights || materials != wantMaterials {
+			t.Fatalf("%v r=%d: BrushChanges %d heights / %d materials (%v), Apply changed %d / %d", b.Op, b.Radius, heights, materials, err, wantHeights, wantMaterials)
+		}
+		t.Logf("%v r=%d: %d heights / %d materials", b.Op, b.Radius, heights, materials)
+	}
+	if h, m, _ := v.BrushChanges(Brush{Op: BrushPaint, X: corner.X, Y: corner.Y, Radius: 750, Material: 201}, limits); h != 0 || m != 177 {
+		t.Fatalf("a corner paint counts %d heights / %d materials, want 0 / 177 (each sample point once)", h, m)
+	}
+	if h, m, _ := v.BrushChanges(Brush{Op: BrushRaise, X: inOverlay.X + 3200, Y: inOverlay.Y + 3200, Radius: 500, Strength: 5}, limits); h != 0 || m != 0 {
+		t.Fatalf("raising points at the ceiling counts %d / %d, want nothing", h, m)
+	}
+	v.Unload(ChunkKey{0, 1})
+	if _, _, err := v.BrushChanges(Brush{Op: BrushPaint, X: corner.X, Y: corner.Y, Radius: 750, Material: 1}, limits); !errors.Is(err, ErrNotLoaded) {
+		t.Fatalf("a brush over an unloaded chunk: %v, want ErrNotLoaded", err)
+	}
+	if _, _, err := v.BrushChanges(Brush{Op: BrushRaise, X: corner.X, Y: corner.Y, Radius: 750}, limits); !errors.Is(err, ErrInvalidBrush) {
+		t.Fatalf("a raise without strength: %v, want ErrInvalidBrush", err)
 	}
 }

@@ -180,6 +180,39 @@ func (v *View) Chunk(key ChunkKey) (c Chunk, version int64, loaded bool) {
 	return Chunk{Heights: append([]uint16(nil), vc.heights...), Materials: append([]byte(nil), vc.materials...)}, vc.version, true
 }
 
+// BrushChanges 返回把 b 用在视图当前数据上时会改变值的高度点数与材质点数（算法同 Brush.Apply）。口径：每个覆盖到的
+// 采样点只算一次（共享边归右 / 上的块，与 Apply 相同）；高度、材质各自计数，一个点两者都变了算 2，值没变的不算。
+// 上层按它在事务之前估算一次编辑的改动量（例如每玩家的改动点数配额）。
+//
+// 不复制块数据（装入的块不可变，直接读），只读，可以并发调用。参数先经 Validate；覆盖到的块没装着时返回 ErrNotLoaded。
+// 结果是读到时的快照：之后别的编辑提交了，锁内真正应用时改变的点数可能不同。
+func (v *View) BrushChanges(b Brush, limits Limits) (heights, materials int, err error) {
+	if err := b.Validate(v.meta, limits); err != nil {
+		return 0, 0, err
+	}
+	chunks := map[ChunkKey]*viewChunk{}
+	for _, key := range b.Chunks(v.meta) {
+		c := v.load(key)
+		if c == nil {
+			return 0, 0, fmt.Errorf("%w: brush needs chunk %v", ErrNotLoaded, key)
+		}
+		chunks[key] = c
+	}
+	b.covers(v.meta, func(gx, gy, d2 int64) {
+		c := chunks[ChunkKey{X: int32(gx / ChunkSamples), Y: int32(gy / ChunkSamples)}]
+		index := (gy%ChunkSamples)*ChunkSamples + gx%ChunkSamples
+		height, material := c.heights[index], c.materials[index]
+		nextHeight, nextMaterial := b.point(limits, height, material, d2)
+		if nextHeight != height {
+			heights++
+		}
+		if nextMaterial != material {
+			materials++
+		}
+	})
+	return heights, materials, nil
+}
+
 // load 读一块的槽位；不在地图内或没装着时返回 nil。
 func (v *View) load(key ChunkKey) *viewChunk {
 	if slot := v.slot(key); slot != nil {

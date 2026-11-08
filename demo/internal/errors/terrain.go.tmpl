@@ -17,8 +17,9 @@ var ErrTerrainNotOwned = errcode.Define(100054, "terrain_not_owned", "this groun
 // ErrTerrainUnavailable：块的记录装不进来（损坏，或基于旧原始地形且没能丢弃），等运维处理；不是玩家的错，也不是内部错误。
 var ErrTerrainUnavailable = errcode.Define(100055, "terrain_unavailable", "this ground cannot be edited right now")
 
-// ErrTerrainRate：编辑太频繁（每个玩家每秒至多 2 次）。可稍后重试。
-var ErrTerrainRate = errcode.Define(100056, "terrain_rate", "editing too often")
+// ErrTerrainRate：改动点数配额不够这次编辑（每个玩家每秒补 300 点，见 terrainmap.Policy.EditPointsPerSecond）。整笔没做，
+// 可稍后重试。
+var ErrTerrainRate = errcode.Define(100056, "terrain_rate", "terrain edit point quota used up")
 
 // ErrTerrainDenied：领地 / 权限规则不允许（业务钩子 terrainmap.Rules.AllowEdit）。
 var ErrTerrainDenied = errcode.Define(100057, "terrain_denied", "not allowed to edit here")
