@@ -1,0 +1,121 @@
+goos: darwin
+goarch: arm64
+pkg: terrainsync
+cpu: Apple M5
+BenchmarkTerrainEdit/A/r1-10       	  100208	     10028 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87813 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r1-10       	  122427	      9767 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87835 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r1-10       	  123280	      9732 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87815 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r1-10       	  124242	      9624 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87833 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r1-10       	  120079	      9662 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87831 B/op	      63 allocs/op
+BenchmarkTerrainEdit/B/r1-10       	  202710	      5915 ns/op	        76.00 bson-B/op	        58.00 sync-B/op	    9998 B/op	     170 allocs/op
+BenchmarkTerrainEdit/B/r1-10       	  202914	      5917 ns/op	        76.00 bson-B/op	        58.00 sync-B/op	    9998 B/op	     170 allocs/op
+BenchmarkTerrainEdit/B/r1-10       	  203341	      5919 ns/op	        76.00 bson-B/op	        58.00 sync-B/op	    9998 B/op	     170 allocs/op
+BenchmarkTerrainEdit/B/r1-10       	  203598	      5910 ns/op	        76.00 bson-B/op	        58.00 sync-B/op	    9998 B/op	     170 allocs/op
+BenchmarkTerrainEdit/B/r1-10       	  202509	      5924 ns/op	        76.00 bson-B/op	        58.00 sync-B/op	    9998 B/op	     170 allocs/op
+BenchmarkTerrainEdit/Bsetall/r1-10 	   10000	    110827 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291281 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r1-10 	   10000	    110924 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291452 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r1-10 	   10000	    110694 ns/op	     39874 bson-B/op	      8208 sync-B/op	  292051 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r1-10 	   10000	    110521 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291082 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r1-10 	   10000	    110984 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291122 B/op	      80 allocs/op
+BenchmarkTerrainEdit/A/r5-10       	  122175	      9759 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87858 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r5-10       	  123471	      9703 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87839 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r5-10       	  123645	      9721 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87856 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r5-10       	  122834	      9884 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87827 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r5-10       	  120920	      9721 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87790 B/op	      63 allocs/op
+BenchmarkTerrainEdit/B/r5-10       	   14715	     81214 ns/op	       988.0 bson-B/op	       666.0 sync-B/op	  146330 B/op	    1557 allocs/op
+BenchmarkTerrainEdit/B/r5-10       	   14870	     80734 ns/op	       988.0 bson-B/op	       666.0 sync-B/op	  146329 B/op	    1557 allocs/op
+BenchmarkTerrainEdit/B/r5-10       	   14902	     80546 ns/op	       988.0 bson-B/op	       666.0 sync-B/op	  146330 B/op	    1557 allocs/op
+BenchmarkTerrainEdit/B/r5-10       	   14912	     80370 ns/op	       988.0 bson-B/op	       666.0 sync-B/op	  146324 B/op	    1557 allocs/op
+BenchmarkTerrainEdit/B/r5-10       	   14877	     80619 ns/op	       988.0 bson-B/op	       666.0 sync-B/op	  146330 B/op	    1557 allocs/op
+BenchmarkTerrainEdit/Bsetall/r5-10 	   10000	    110469 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291591 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r5-10 	   10000	    110636 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291573 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r5-10 	   10000	    112193 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291735 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r5-10 	   10000	    110891 ns/op	     39874 bson-B/op	      8208 sync-B/op	  290532 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r5-10 	   10000	    112367 ns/op	     39874 bson-B/op	      8208 sync-B/op	  290595 B/op	      80 allocs/op
+BenchmarkTerrainEdit/A/r20-10      	  115857	     10544 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87882 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r20-10      	  112714	     10691 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87887 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r20-10      	  113593	     10634 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87882 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r20-10      	  112245	     10667 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87878 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r20-10      	  115682	     10376 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87880 B/op	      63 allocs/op
+BenchmarkTerrainEdit/B/r20-10      	     934	   1274095 ns/op	     15051 bson-B/op	     10074 sync-B/op	 2339654 B/op	   21688 allocs/op
+BenchmarkTerrainEdit/B/r20-10      	     948	   1277542 ns/op	     15051 bson-B/op	     10074 sync-B/op	 2338120 B/op	   21687 allocs/op
+BenchmarkTerrainEdit/B/r20-10      	     942	   1271161 ns/op	     15051 bson-B/op	     10074 sync-B/op	 2338382 B/op	   21687 allocs/op
+BenchmarkTerrainEdit/B/r20-10      	     946	   1271049 ns/op	     15051 bson-B/op	     10074 sync-B/op	 2337082 B/op	   21687 allocs/op
+BenchmarkTerrainEdit/B/r20-10      	     943	   1277497 ns/op	     15051 bson-B/op	     10074 sync-B/op	 2337384 B/op	   21687 allocs/op
+BenchmarkTerrainEdit/Bsetall/r20-10         	   10000	    111286 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291462 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r20-10         	   10000	    111281 ns/op	     39874 bson-B/op	      8208 sync-B/op	  292253 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r20-10         	   10000	    111877 ns/op	     39874 bson-B/op	      8208 sync-B/op	  292194 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r20-10         	   10000	    113070 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291703 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r20-10         	   10000	    110853 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291271 B/op	      80 allocs/op
+BenchmarkTerrainEdit/A/r32-10               	  107534	     11295 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87913 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r32-10               	  104475	     11422 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87910 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r32-10               	  105820	     11403 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87922 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r32-10               	  105831	     11503 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87933 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/r32-10               	  103879	     11613 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87916 B/op	      63 allocs/op
+BenchmarkTerrainEdit/B/r32-10               	     356	   3387130 ns/op	     37908 bson-B/op	     25659 sync-B/op	 5300717 B/op	   54856 allocs/op
+BenchmarkTerrainEdit/B/r32-10               	     361	   3332853 ns/op	     37908 bson-B/op	     25659 sync-B/op	 5300754 B/op	   54856 allocs/op
+BenchmarkTerrainEdit/B/r32-10               	     358	   3343476 ns/op	     37908 bson-B/op	     25659 sync-B/op	 5300724 B/op	   54856 allocs/op
+BenchmarkTerrainEdit/B/r32-10               	     357	   3359636 ns/op	     37908 bson-B/op	     25659 sync-B/op	 5300861 B/op	   54856 allocs/op
+BenchmarkTerrainEdit/B/r32-10               	     357	   3366437 ns/op	     37908 bson-B/op	     25659 sync-B/op	 5300614 B/op	   54855 allocs/op
+BenchmarkTerrainEdit/Bsetall/r32-10         	   10000	    111830 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291934 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r32-10         	   10000	    112214 ns/op	     39874 bson-B/op	      8208 sync-B/op	  292112 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r32-10         	   10000	    111982 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291790 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r32-10         	   10000	    112276 ns/op	     39874 bson-B/op	      8208 sync-B/op	  292720 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/r32-10         	   10000	    113279 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291346 B/op	      80 allocs/op
+BenchmarkTerrainEdit/A/flatten-10           	   99882	     12043 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87951 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/flatten-10           	   99045	     11935 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87962 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/flatten-10           	   99547	     12078 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87969 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/flatten-10           	   98680	     12095 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87947 B/op	      63 allocs/op
+BenchmarkTerrainEdit/A/flatten-10           	   98635	     11964 ns/op	      8216 bson-B/op	      8209 sync-B/op	   87950 B/op	      63 allocs/op
+BenchmarkTerrainEdit/B/flatten-10           	     694	   1721566 ns/op	     39874 bson-B/op	      8208 sync-B/op	 3580949 B/op	   24591 allocs/op
+BenchmarkTerrainEdit/B/flatten-10           	     699	   1748535 ns/op	     39874 bson-B/op	      8208 sync-B/op	 3579261 B/op	   24591 allocs/op
+BenchmarkTerrainEdit/B/flatten-10           	     690	   1726696 ns/op	     39874 bson-B/op	      8208 sync-B/op	 3578404 B/op	   24591 allocs/op
+BenchmarkTerrainEdit/B/flatten-10           	     702	   1723230 ns/op	     39874 bson-B/op	      8208 sync-B/op	 3577748 B/op	   24591 allocs/op
+BenchmarkTerrainEdit/B/flatten-10           	     690	   1720760 ns/op	     39874 bson-B/op	      8208 sync-B/op	 3575853 B/op	   24590 allocs/op
+BenchmarkTerrainEdit/Bsetall/flatten-10     	   10000	    113047 ns/op	     39874 bson-B/op	      8208 sync-B/op	  292174 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/flatten-10     	   10000	    112846 ns/op	     39874 bson-B/op	      8208 sync-B/op	  292210 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/flatten-10     	   10000	    112348 ns/op	     39874 bson-B/op	      8208 sync-B/op	  291952 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/flatten-10     	   10000	    112344 ns/op	     39874 bson-B/op	      8208 sync-B/op	  292059 B/op	      80 allocs/op
+BenchmarkTerrainEdit/Bsetall/flatten-10     	   10000	    112621 ns/op	     39874 bson-B/op	      8208 sync-B/op	  292128 B/op	      80 allocs/op
+BenchmarkTerrainFlate/compress/default-10   	   10000	    102939 ns/op	      6621 out-B/op	 1092020 B/op	      20 allocs/op
+BenchmarkTerrainFlate/compress/default-10   	   10000	    104735 ns/op	      6621 out-B/op	 1092020 B/op	      20 allocs/op
+BenchmarkTerrainFlate/compress/default-10   	   10000	    106237 ns/op	      6621 out-B/op	 1092019 B/op	      20 allocs/op
+BenchmarkTerrainFlate/compress/default-10   	   10000	    107036 ns/op	      6621 out-B/op	 1092019 B/op	      20 allocs/op
+BenchmarkTerrainFlate/compress/default-10   	   10000	    105645 ns/op	      6621 out-B/op	 1092019 B/op	      20 allocs/op
+BenchmarkTerrainFlate/compress/bestspeed-10 	   19748	     60911 ns/op	      8199 out-B/op	  823289 B/op	      16 allocs/op
+BenchmarkTerrainFlate/compress/bestspeed-10 	   18957	     61992 ns/op	      8199 out-B/op	  823291 B/op	      16 allocs/op
+BenchmarkTerrainFlate/compress/bestspeed-10 	   19658	     60779 ns/op	      8199 out-B/op	  823289 B/op	      16 allocs/op
+BenchmarkTerrainFlate/compress/bestspeed-10 	   19712	     61058 ns/op	      8199 out-B/op	  823290 B/op	      16 allocs/op
+BenchmarkTerrainFlate/compress/bestspeed-10 	   19472	     60995 ns/op	      8199 out-B/op	  823289 B/op	      16 allocs/op
+BenchmarkTerrainFlate/decompress-10         	   23734	     50403 ns/op	   58704 B/op	      32 allocs/op
+BenchmarkTerrainFlate/decompress-10         	   23784	     50548 ns/op	   58704 B/op	      32 allocs/op
+BenchmarkTerrainFlate/decompress-10         	   23768	     50493 ns/op	   58704 B/op	      32 allocs/op
+BenchmarkTerrainFlate/decompress-10         	   23745	     50549 ns/op	   58704 B/op	      32 allocs/op
+BenchmarkTerrainFlate/decompress-10         	   23662	     50516 ns/op	   58704 B/op	      32 allocs/op
+BenchmarkTerrainClientApplyB/r1-10          	 1000000	      1061 ns/op	    8592 B/op	       9 allocs/op
+BenchmarkTerrainClientApplyB/r1-10          	 1000000	      1062 ns/op	    8592 B/op	       9 allocs/op
+BenchmarkTerrainClientApplyB/r1-10          	 1000000	      1061 ns/op	    8592 B/op	       9 allocs/op
+BenchmarkTerrainClientApplyB/r1-10          	 1000000	      1062 ns/op	    8592 B/op	       9 allocs/op
+BenchmarkTerrainClientApplyB/r1-10          	 1000000	      1062 ns/op	    8592 B/op	       9 allocs/op
+BenchmarkTerrainClientApplyB/r5-10          	  278937	      4289 ns/op	   13048 B/op	      18 allocs/op
+BenchmarkTerrainClientApplyB/r5-10          	  280147	      4286 ns/op	   13048 B/op	      18 allocs/op
+BenchmarkTerrainClientApplyB/r5-10          	  282151	      4284 ns/op	   13048 B/op	      18 allocs/op
+BenchmarkTerrainClientApplyB/r5-10          	  281176	      4292 ns/op	   13048 B/op	      18 allocs/op
+BenchmarkTerrainClientApplyB/r5-10          	  280471	      4291 ns/op	   13048 B/op	      18 allocs/op
+BenchmarkTerrainClientApplyB/r20-10         	   21931	     54693 ns/op	   82856 B/op	      29 allocs/op
+BenchmarkTerrainClientApplyB/r20-10         	   21891	     54861 ns/op	   82856 B/op	      29 allocs/op
+BenchmarkTerrainClientApplyB/r20-10         	   21886	     54817 ns/op	   82856 B/op	      29 allocs/op
+BenchmarkTerrainClientApplyB/r20-10         	   21852	     54774 ns/op	   82856 B/op	      29 allocs/op
+BenchmarkTerrainClientApplyB/r20-10         	   22003	     54539 ns/op	   82856 B/op	      29 allocs/op
+BenchmarkTerrainClientApplyB/r32-10         	    9883	    121955 ns/op	  156745 B/op	      38 allocs/op
+BenchmarkTerrainClientApplyB/r32-10         	    9686	    122266 ns/op	  156745 B/op	      38 allocs/op
+BenchmarkTerrainClientApplyB/r32-10         	    9676	    121812 ns/op	  156745 B/op	      38 allocs/op
+BenchmarkTerrainClientApplyB/r32-10         	    9734	    124801 ns/op	  156745 B/op	      38 allocs/op
+BenchmarkTerrainClientApplyB/r32-10         	    9890	    122421 ns/op	  156745 B/op	      38 allocs/op
+BenchmarkTerrainClientApplyB/flatten-10     	  122212	      9798 ns/op	   25160 B/op	      19 allocs/op
+BenchmarkTerrainClientApplyB/flatten-10     	  122944	      9785 ns/op	   25160 B/op	      19 allocs/op
+BenchmarkTerrainClientApplyB/flatten-10     	  121376	      9809 ns/op	   25160 B/op	      19 allocs/op
+BenchmarkTerrainClientApplyB/flatten-10     	  122150	      9826 ns/op	   25160 B/op	      19 allocs/op
+BenchmarkTerrainClientApplyB/flatten-10     	  122851	      9797 ns/op	   25160 B/op	      19 allocs/op
+PASS
+ok  	terrainsync	134.644s

@@ -1,0 +1,134 @@
+goos: darwin
+goarch: arm64
+pkg: terrainsync
+cpu: Apple M5
+                                   │  bench.txt   │
+                                   │    sec/op    │
+TerrainEdit/A/r1-10                  9.732µ ± ∞ ¹
+TerrainEdit/B/r1-10                  5.917µ ± ∞ ¹
+TerrainEdit/Bsetall/r1-10            110.8µ ± ∞ ¹
+TerrainEdit/A/r5-10                  9.721µ ± ∞ ¹
+TerrainEdit/B/r5-10                  80.62µ ± ∞ ¹
+TerrainEdit/Bsetall/r5-10            110.9µ ± ∞ ¹
+TerrainEdit/A/r20-10                 10.63µ ± ∞ ¹
+TerrainEdit/B/r20-10                 1.274m ± ∞ ¹
+TerrainEdit/Bsetall/r20-10           111.3µ ± ∞ ¹
+TerrainEdit/A/r32-10                 11.42µ ± ∞ ¹
+TerrainEdit/B/r32-10                 3.360m ± ∞ ¹
+TerrainEdit/Bsetall/r32-10           112.2µ ± ∞ ¹
+TerrainEdit/A/flatten-10             12.04µ ± ∞ ¹
+TerrainEdit/B/flatten-10             1.723m ± ∞ ¹
+TerrainEdit/Bsetall/flatten-10       112.6µ ± ∞ ¹
+TerrainFlate/compress/default-10     105.6µ ± ∞ ¹
+TerrainFlate/compress/bestspeed-10   61.00µ ± ∞ ¹
+TerrainFlate/decompress-10           50.52µ ± ∞ ¹
+TerrainClientApplyB/r1-10            1.062µ ± ∞ ¹
+TerrainClientApplyB/r5-10            4.289µ ± ∞ ¹
+TerrainClientApplyB/r20-10           54.77µ ± ∞ ¹
+TerrainClientApplyB/r32-10           122.3µ ± ∞ ¹
+TerrainClientApplyB/flatten-10       9.798µ ± ∞ ¹
+geomean                              49.19µ
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                               │   bench.txt   │
+                               │   bson-B/op   │
+TerrainEdit/A/r1-10              8.023Ki ± ∞ ¹
+TerrainEdit/B/r1-10                76.00 ± ∞ ¹
+TerrainEdit/Bsetall/r1-10        38.94Ki ± ∞ ¹
+TerrainEdit/A/r5-10              8.023Ki ± ∞ ¹
+TerrainEdit/B/r5-10                988.0 ± ∞ ¹
+TerrainEdit/Bsetall/r5-10        38.94Ki ± ∞ ¹
+TerrainEdit/A/r20-10             8.023Ki ± ∞ ¹
+TerrainEdit/B/r20-10             14.70Ki ± ∞ ¹
+TerrainEdit/Bsetall/r20-10       38.94Ki ± ∞ ¹
+TerrainEdit/A/r32-10             8.023Ki ± ∞ ¹
+TerrainEdit/B/r32-10             37.02Ki ± ∞ ¹
+TerrainEdit/Bsetall/r32-10       38.94Ki ± ∞ ¹
+TerrainEdit/A/flatten-10         8.023Ki ± ∞ ¹
+TerrainEdit/B/flatten-10         38.94Ki ± ∞ ¹
+TerrainEdit/Bsetall/flatten-10   38.94Ki ± ∞ ¹
+geomean                          11.06Ki
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                               │   bench.txt   │
+                               │   sync-B/op   │
+TerrainEdit/A/r1-10              8.017Ki ± ∞ ¹
+TerrainEdit/B/r1-10                58.00 ± ∞ ¹
+TerrainEdit/Bsetall/r1-10        8.016Ki ± ∞ ¹
+TerrainEdit/A/r5-10              8.017Ki ± ∞ ¹
+TerrainEdit/B/r5-10                666.0 ± ∞ ¹
+TerrainEdit/Bsetall/r5-10        8.016Ki ± ∞ ¹
+TerrainEdit/A/r20-10             8.017Ki ± ∞ ¹
+TerrainEdit/B/r20-10             9.838Ki ± ∞ ¹
+TerrainEdit/Bsetall/r20-10       8.016Ki ± ∞ ¹
+TerrainEdit/A/r32-10             8.017Ki ± ∞ ¹
+TerrainEdit/B/r32-10             25.06Ki ± ∞ ¹
+TerrainEdit/Bsetall/r32-10       8.016Ki ± ∞ ¹
+TerrainEdit/A/flatten-10         8.017Ki ± ∞ ¹
+TerrainEdit/B/flatten-10         8.016Ki ± ∞ ¹
+TerrainEdit/Bsetall/flatten-10   8.016Ki ± ∞ ¹
+geomean                          5.331Ki
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                   │   bench.txt   │
+                                   │     B/op      │
+TerrainEdit/A/r1-10                  85.77Ki ± ∞ ¹
+TerrainEdit/B/r1-10                  9.764Ki ± ∞ ¹
+TerrainEdit/Bsetall/r1-10            284.5Ki ± ∞ ¹
+TerrainEdit/A/r5-10                  85.78Ki ± ∞ ¹
+TerrainEdit/B/r5-10                  142.9Ki ± ∞ ¹
+TerrainEdit/Bsetall/r5-10            284.7Ki ± ∞ ¹
+TerrainEdit/A/r20-10                 85.82Ki ± ∞ ¹
+TerrainEdit/B/r20-10                 2.230Mi ± ∞ ¹
+TerrainEdit/Bsetall/r20-10           284.9Ki ± ∞ ¹
+TerrainEdit/A/r32-10                 85.86Ki ± ∞ ¹
+TerrainEdit/B/r32-10                 5.055Mi ± ∞ ¹
+TerrainEdit/Bsetall/r32-10           285.1Ki ± ∞ ¹
+TerrainEdit/A/flatten-10             85.89Ki ± ∞ ¹
+TerrainEdit/B/flatten-10             3.413Mi ± ∞ ¹
+TerrainEdit/Bsetall/flatten-10       285.3Ki ± ∞ ¹
+TerrainFlate/compress/default-10     1.041Mi ± ∞ ¹
+TerrainFlate/compress/bestspeed-10   804.0Ki ± ∞ ¹
+TerrainFlate/decompress-10           57.33Ki ± ∞ ¹
+TerrainClientApplyB/r1-10            8.391Ki ± ∞ ¹
+TerrainClientApplyB/r5-10            12.74Ki ± ∞ ¹
+TerrainClientApplyB/r20-10           80.91Ki ± ∞ ¹
+TerrainClientApplyB/r32-10           153.1Ki ± ∞ ¹
+TerrainClientApplyB/flatten-10       24.57Ki ± ∞ ¹
+geomean                              163.4Ki
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                   │  bench.txt   │
+                                   │  allocs/op   │
+TerrainEdit/A/r1-10                   63.00 ± ∞ ¹
+TerrainEdit/B/r1-10                   170.0 ± ∞ ¹
+TerrainEdit/Bsetall/r1-10             80.00 ± ∞ ¹
+TerrainEdit/A/r5-10                   63.00 ± ∞ ¹
+TerrainEdit/B/r5-10                  1.557k ± ∞ ¹
+TerrainEdit/Bsetall/r5-10             80.00 ± ∞ ¹
+TerrainEdit/A/r20-10                  63.00 ± ∞ ¹
+TerrainEdit/B/r20-10                 21.69k ± ∞ ¹
+TerrainEdit/Bsetall/r20-10            80.00 ± ∞ ¹
+TerrainEdit/A/r32-10                  63.00 ± ∞ ¹
+TerrainEdit/B/r32-10                 54.86k ± ∞ ¹
+TerrainEdit/Bsetall/r32-10            80.00 ± ∞ ¹
+TerrainEdit/A/flatten-10              63.00 ± ∞ ¹
+TerrainEdit/B/flatten-10             24.59k ± ∞ ¹
+TerrainEdit/Bsetall/flatten-10        80.00 ± ∞ ¹
+TerrainFlate/compress/default-10      20.00 ± ∞ ¹
+TerrainFlate/compress/bestspeed-10    16.00 ± ∞ ¹
+TerrainFlate/decompress-10            32.00 ± ∞ ¹
+TerrainClientApplyB/r1-10             9.000 ± ∞ ¹
+TerrainClientApplyB/r5-10             18.00 ± ∞ ¹
+TerrainClientApplyB/r20-10            29.00 ± ∞ ¹
+TerrainClientApplyB/r32-10            38.00 ± ∞ ¹
+TerrainClientApplyB/flatten-10        19.00 ± ∞ ¹
+geomean                               121.5
+¹ need >= 6 samples for confidence interval at level 0.95
+
+                                   │   bench.txt   │
+                                   │   out-B/op    │
+TerrainFlate/compress/default-10     6.466Ki ± ∞ ¹
+TerrainFlate/compress/bestspeed-10   8.007Ki ± ∞ ¹
+geomean                              7.195Ki
+¹ need >= 6 samples for confidence interval at level 0.95
