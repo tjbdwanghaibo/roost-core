@@ -50,8 +50,8 @@ var (
 	// ErrBrush：笔刷参数不合法或超出玩家编辑的上限（Policy：半径、增量、块数），或请求 ID 为 0。同时满足
 	// errors.Is(err, terrain.ErrInvalidBrush) 的是参数本身不合法，满足 terrain.ErrOutOfMap 的是中心在地图外。
 	ErrBrush = errors.New("terrain: brush refused")
-	// ErrRateLimited：玩家编辑太频繁（Policy.EditsPerSecond）。
-	ErrRateLimited = errors.New("terrain: editing too often")
+	// ErrRateLimited：玩家的改动点数配额不够这次编辑（Policy.EditPointsPerSecond），整笔拒绝、不部分执行。
+	ErrRateLimited = errors.New("terrain: edit point quota used up")
 	// ErrDenied：领地 / 权限规则（Rules.AllowEdit）拒绝。
 	ErrDenied = errors.New("terrain: edit not allowed here")
 	// ErrOccupied：编辑会改到建筑占着的点（Rules.Occupied）。
@@ -88,8 +88,8 @@ type Editor interface {
 // Policy 是玩家编辑的上限（方案 §4 / §8.1 初值）。不做成配置：它们与客户端的笔刷 UI 一起定，改了要让客户端知道；
 // 测试与运维入口可以用 SetPolicy 换一份。
 type Policy struct {
-	// MaxRadius 是玩家笔刷的最大半径（世界单位）：1600（16m）。此时一次最多覆盖 4 块、单块最多约 800 点，低于整字段
-	// 守卫阈值（terrain_chunk.HeightsGuard）。
+	// MaxRadius 是玩家笔刷的最大半径（世界单位）：1600（16m）。此时一次最多覆盖 4 块、单块最多约 800 点：改高度低于
+	// 整字段守卫（terrain_chunk.HeightsGuard 1000），改材质超过 500 点时走材质守卫（MaterialsGuard）整字段写。
 	MaxRadius int64
 	// MaxChunks 是一次编辑最多覆盖的块数：4（一笔多块事务的目标组上限）。
 	MaxChunks int
@@ -98,12 +98,23 @@ type Policy struct {
 	// Limits 是编辑后的高度范围：基岩 0（地图基准高度）、上限 16383（基准之上 1638.3m：低于 16384 时同步全量每点
 	// 2 字节，方案 §2）。
 	Limits terrain.Limits
-	// EditsPerSecond 是每个玩家每秒最多的编辑次数（令牌桶，容量同值）：2。
-	EditsPerSecond int
+	// EditPointsPerSecond 是每个玩家每秒的改动点数配额（令牌桶：每秒补这么多、最多攒这么多）：300（维护者
+	// 2026-11-08）。一次编辑的点数是它会改变的高度点数 + 材质点数（View.BrushChanges：每个采样点只算一次，一个点
+	// 两者都改算 2），至少 MinEditPoints。依据是单个观察者的下行预算 < 50KB/s：每个改动点同步约 7.5 字节，附近 20 人
+	// 都按满配额编辑约 20 × 300 × 7.5 ≈ 45KB/s。实测稳态 r=16m 档约 48～49KB/s，r=5m 档约 53～54KB/s（每次块更新线上
+	// 另有约 110 字节，小笔刷摊得多；方案 §17）。0 表示不限（测试与运维入口）。规则见 Brush 的“配额”。
+	EditPointsPerSecond int
+	// MinEditPoints 是每次编辑至少计的点数：20。没改到值的编辑（已到上限再抬高、刷成同一种材质）与重复请求也要开一笔
+	// 事务、记 Applied；不设下限时它们不占配额，一个玩家每秒可以发任意多次。20 约等于一次块更新在线上的固定开销
+	// （帧头、组件头与包头约 110～144 字节 ÷ 每点约 7.5 字节），满配额时这类请求每秒至多 15 次。
+	MinEditPoints int
 }
 
 // DefaultPolicy 是方案 §8.1 的初值（MaxStrength 与 Limits 方案没给数，见各字段说明）。
-var DefaultPolicy = Policy{MaxRadius: 1600, MaxChunks: 4, MaxStrength: 50, Limits: terrain.Limits{Bedrock: 0, Ceiling: 16383}, EditsPerSecond: 2}
+var DefaultPolicy = Policy{
+	MaxRadius: 1600, MaxChunks: 4, MaxStrength: 50, Limits: terrain.Limits{Bedrock: 0, Ceiling: 16383},
+	EditPointsPerSecond: 300, MinEditPoints: 20,
+}
 
 // Rules 是业务给编辑的钩子（方案 §4“领地 / 权限规则由业务提供钩子”、“不能改有建筑占位的点”）。nil 表示都放行。
 type Rules interface {
@@ -160,8 +171,8 @@ type Map struct {
 	// policy、rules 在 Install 之前设定（SetPolicy / SetRules），之后只读。
 	policy Policy
 	rules  Rules
-	// limiter 是每个玩家的编辑频率（令牌桶，进程内存，与 scene_view 的限速同一做法：不持久、重启清零）。
-	limiter rateLimiter
+	// quota 是每个玩家的改动点数配额（令牌桶，进程内存，与 scene_view 的限速同一做法：不持久、重启清零）。
+	quota pointQuota
 	// committed 是提交后的通知（地形同步把第一次改过的块登记为 subject）；nil 时不通知。见 SetCommitted。
 	committed atomic.Pointer[func(*terrain_chunk.TerrainChunk)]
 }
@@ -187,7 +198,7 @@ func Open(path string, regionOf func(terrain.Meta) (Region, error), chunks Chunk
 	return &Map{
 		pack: pack, view: terrain.NewView(pack), meta: meta, region: region,
 		chunks: chunks, editor: editor, unloadable: map[terrain.ChunkKey]error{},
-		policy: DefaultPolicy, limiter: rateLimiter{now: time.Now},
+		policy: DefaultPolicy, quota: pointQuota{now: time.Now},
 	}, nil
 }
 
@@ -660,21 +671,34 @@ func splitmix64(x uint64) uint64 {
 	return x ^ (x >> 31)
 }
 
-// Brush 是玩家编辑的入口（协议 TerrainEdit 的端点调用）：校验 → 覆盖到的块第一次改的先建实体 → 一笔多块事务。
-// 返回本次锁住的每一块提交后的版本；重复的请求（同一玩家、同一请求 ID，在某一块的 Applied 里）返回 Duplicate，
-// 不再改一次。会等数据库与 WAL：只能在 Nest 业务 worker 之外调用（玩家端点、运维命令、测试）。
+// Brush 是玩家编辑的入口（协议 TerrainEdit 的端点调用）：校验 → 扣改动点数配额 → 权限 → 覆盖到的块第一次改的先建
+// 实体 → 一笔多块事务。返回本次锁住的每一块提交后的版本；重复的请求（同一玩家、同一请求 ID，在某一块的 Applied 里）
+// 返回 Duplicate，不再改一次。会等数据库与 WAL：只能在 Nest 业务 worker 之外调用（玩家端点、运维命令、测试）。
 //
 // 拒绝（全部在写任何东西之前，拒绝时零写入）：
 //   - ErrDisabled：本进程没有地形；
 //   - ErrBrush：请求 ID 为 0、笔刷参数不合法（terrain.ErrInvalidBrush）、中心在地图外（terrain.ErrOutOfMap）、超出
 //     Policy（半径、增量、块数）；
-//   - ErrRateLimited：超过 Policy.EditsPerSecond（参数合法的请求才占频率，重复请求也占）；
 //   - ErrNotOwned / ErrUnloadable：覆盖到的块不归本进程写（P2 单格；跨格转发是 P3）或装不进来；
+//   - ErrRateLimited：改动点数配额不够（见下）；
 //   - ErrDenied：Rules.AllowEdit 拒绝；
 //   - ErrOccupied：改到建筑占位（事务里判断，整笔回滚）。
 //
+// 配额（Policy.EditPointsPerSecond，维护者 2026-11-08 取代“每秒 2 次”；0 表示不限）：
+//   - 点数：参数校验通过后，在视图当前数据上算这次会改变的高度点数 + 材质点数（View.BrushChanges：共享边上的点只算
+//     一次，一个点两者都改算 2），至少 MinEditPoints。是锁外的估算：别人的编辑在估算与上锁之间提交了，实际改变的
+//     点数可能不同，按估算计、不事后对账。
+//   - 扣：桶里够这次的点数就扣；桶是满的也放行一次（透支，扣成负数），之后要等补回到满才能再透支、补到够才能做小编辑。
+//     所以单次超过桶上限的编辑（玩家 r=16m 笔刷约 650～800 点、整平 / 地基这类大操作）照样可以做，只是做完要等：长期平均
+//     仍是每秒 EditPointsPerSecond 点，一次最多多出一个编辑的量。不够时整笔拒绝（ErrRateLimited），不部分执行。
+//   - 退：确定什么都没改时退回到 MinEditPoints（重复请求、AllowEdit 拒绝、建实体失败、事务里的地形拒绝如
+//     ErrOccupied）——没有同步下行，只花了一次请求的开销，按最低点数计（重复请求也占配额，但重试一次大编辑不被扣
+//     两遍）。提交失败、结果未知（WAL 超时等）不退：可能已经生效。
+//   - 拒绝发生在扣之前的（参数、归属、配额本身）不计。
+//
 // 失败语义：GetOrCreate 成功、事务失败时，第一次改的块留下 Version 0 的空实体（P1 同样），装入时按原始块看待。
-// 事务结果未知（WAL 超时等）时调用方用同一请求 ID 重试：已提交则得到 Duplicate，没提交则这次生效。
+// 事务结果未知（WAL 超时等）时调用方用同一请求 ID 重试：已提交则得到 Duplicate，没提交则这次生效；刚做完一次透支的
+// 大编辑时，重试要等配额补满（ErrRateLimited 之后退避再试）。
 func (m *Map) Brush(ctx context.Context, playerID int64, requestID uint64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
 	if m == nil {
 		return terrain_chunk.BrushResult{}, ErrDisabled
@@ -683,11 +707,20 @@ func (m *Map) Brush(ctx context.Context, playerID int64, requestID uint64, brush
 	if err != nil {
 		return terrain_chunk.BrushResult{}, err
 	}
-	if !m.limiter.allow(playerID, m.policy.EditsPerSecond) {
-		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: player %d", ErrRateLimited, playerID)
+	refund := func() {}
+	if rate := m.policy.EditPointsPerSecond; rate > 0 {
+		points, err := m.editPoints(brush)
+		if err != nil {
+			return terrain_chunk.BrushResult{}, err
+		}
+		if !m.quota.take(playerID, points, rate) {
+			return terrain_chunk.BrushResult{}, fmt.Errorf("%w: player %d: the edit changes %d points", ErrRateLimited, playerID, points)
+		}
+		refund = func() { m.quota.refund(playerID, points-m.policy.MinEditPoints, rate) }
 	}
 	if m.rules != nil {
 		if err := m.rules.AllowEdit(ctx, playerID, brush, keys); err != nil {
+			refund()
 			return terrain_chunk.BrushResult{}, fmt.Errorf("%w: %w", ErrDenied, err)
 		}
 	}
@@ -695,19 +728,41 @@ func (m *Map) Brush(ctx context.Context, playerID int64, requestID uint64, brush
 	for _, key := range keys {
 		unique, err := terrain_chunk.UniqueID(key)
 		if err != nil {
+			refund()
 			return terrain_chunk.BrushResult{}, err
 		}
 		chunk, _, err := m.chunks.GetOrCreate(ctx, unique)
 		if err != nil {
+			refund()
 			return terrain_chunk.BrushResult{}, fmt.Errorf("terrain: chunk %v: %w", key, err)
 		}
 		ids = append(ids, chunk.ID())
 	}
 	result, err := m.editor.MultiGroupSync_TerrainBrush(ctx, ids, EditID(playerID, requestID), brush)
 	if err != nil {
+		if refusedBeforeWriting(err) {
+			refund()
+		}
 		return terrain_chunk.BrushResult{}, fmt.Errorf("terrain: brush: %w", err)
 	}
+	if result.Duplicate {
+		refund()
+	}
 	return result, nil
+}
+
+// editPoints 是一次编辑计入配额的点数：视图当前数据上会改变的高度点数 + 材质点数，至少 Policy.MinEditPoints。
+func (m *Map) editPoints(brush terrain.Brush) (int, error) {
+	heights, materials, err := m.view.BrushChanges(brush, m.policy.Limits)
+	if err != nil {
+		return 0, fmt.Errorf("terrain: count the points the brush changes: %w", err)
+	}
+	return max(heights+materials, m.policy.MinEditPoints), nil
+}
+
+// refusedBeforeWriting 报告事务的错误是不是 ApplyBrush 在第一次写之前的拒绝（整笔回滚，确定什么都没改）。
+func refusedBeforeWriting(err error) bool {
+	return errors.Is(err, ErrOccupied) || errors.Is(err, ErrBrush) || errors.Is(err, ErrNotOwned) || errors.Is(err, ErrUnloadable)
 }
 
 // checkBrush 是事务之前的校验（只读内存），返回覆盖到的块。
@@ -832,56 +887,77 @@ func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editID uint64, 
 	return terrain_chunk.BrushResult{Chunks: versions()}, nil
 }
 
-// rateLimiter 是每个玩家的令牌桶：每秒补 rate 个、最多攒 rate 个。只在进程内存（与 scene_view 的主视野限速同一
-// 做法）：重启或玩家换进程后从满桶开始。
-type rateLimiter struct {
+// pointQuota 是每个玩家的改动点数令牌桶：每秒补 rate 个、最多攒 rate 个，满桶时可以透支一次（见 Brush 的“配额”）。
+// 只在进程内存（与 scene_view 的主视野限速同一做法）：重启或玩家换进程后从满桶开始。
+type pointQuota struct {
 	now     func() time.Time
 	mu      sync.Mutex
 	buckets map[int64]bucket
 }
 
+// bucket 是一个玩家的桶：tokens 是 at 时刻的余额，透支后为负。
 type bucket struct {
 	tokens float64
 	at     time.Time
 }
 
-// rateLimiterPrune 是桶表超过多少个时顺手清掉已经攒满的桶（满桶与没有桶等价）。
-const rateLimiterPrune = 4096
+// pointQuotaPrune 是桶表超过多少个时顺手清掉已经攒满的桶（满桶与没有桶等价）。
+const pointQuotaPrune = 4096
 
-func (l *rateLimiter) allow(playerID int64, rate int) bool {
-	if rate <= 0 {
-		return true
-	}
-	now := l.now()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.buckets == nil {
-		l.buckets = map[int64]bucket{}
-	}
-	if len(l.buckets) > rateLimiterPrune {
-		for id, b := range l.buckets {
-			if b.tokens+now.Sub(b.at).Seconds()*float64(rate) >= float64(rate) {
-				delete(l.buckets, id)
-			}
-		}
-	}
-	b, ok := l.buckets[playerID]
+// refill 返回补到 now 的桶（没有桶时是满桶）。调用方持有 mu。
+func (q *pointQuota) refill(playerID int64, now time.Time, rate int) bucket {
+	b, ok := q.buckets[playerID]
 	if !ok {
-		b = bucket{tokens: float64(rate), at: now}
+		return bucket{tokens: float64(rate), at: now}
 	}
 	b.tokens = min(float64(rate), b.tokens+now.Sub(b.at).Seconds()*float64(rate))
 	b.at = now
-	if b.tokens < 1 {
-		l.buckets[playerID] = b
+	return b
+}
+
+// take 扣 points 个点：余额够、或桶是满的（透支一次）就扣下并返回 true；否则不扣、返回 false。
+func (q *pointQuota) take(playerID int64, points, rate int) bool {
+	now := q.now()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.buckets == nil {
+		q.buckets = map[int64]bucket{}
+	}
+	if len(q.buckets) > pointQuotaPrune {
+		for id, b := range q.buckets {
+			if b.tokens+now.Sub(b.at).Seconds()*float64(rate) >= float64(rate) {
+				delete(q.buckets, id)
+			}
+		}
+	}
+	b := q.refill(playerID, now, rate)
+	if b.tokens < float64(points) && b.tokens < float64(rate) {
+		q.buckets[playerID] = b
 		return false
 	}
-	b.tokens--
-	l.buckets[playerID] = b
+	b.tokens -= float64(points)
+	q.buckets[playerID] = b
 	return true
 }
 
-// SetClock 换限速用的时钟（测试用）。Install 之前调用。
-func (m *Map) SetClock(now func() time.Time) { m.limiter.now = now }
+// refund 退回 points 个点（补完不超过上限）。points ≤ 0 时什么都不做。
+func (q *pointQuota) refund(playerID int64, points, rate int) {
+	if points <= 0 {
+		return
+	}
+	now := q.now()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if _, ok := q.buckets[playerID]; !ok {
+		return // 已被清掉：是满桶
+	}
+	b := q.refill(playerID, now, rate)
+	b.tokens = min(float64(rate), b.tokens+float64(points))
+	q.buckets[playerID] = b
+}
+
+// SetClock 换配额用的时钟（测试用）。Install 之前调用。
+func (m *Map) SetClock(now func() time.Time) { m.quota.now = now }
 
 // Height / Material / IsWater / Probe 委托视图（算法与错误见 gameplay/terrain 的 View）。
 func (m *Map) Height(x, y int64) (int32, error)         { return m.view.Height(x, y) }

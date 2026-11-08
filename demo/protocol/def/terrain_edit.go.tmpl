@@ -36,7 +36,7 @@ type TerrainChunkVersion struct {
 
 // TerrainEditResponse 答复一次编辑：Code 0 时 Chunks 是笔刷覆盖到的每一块提交后的版本，Duplicate 表示这个 RequestID
 // 已经生效过、这次什么都没改。拒绝时什么都没写。Codes: terrain_disabled, terrain_brush（参数不合法或超出上限）,
-// terrain_not_owned（这块地归别的格进程写）, terrain_unavailable（这块暂时不能改）, terrain_rate（每秒至多 2 次）,
+// terrain_not_owned（这块地归别的格进程写）, terrain_unavailable（这块暂时不能改）, terrain_rate（改动点数配额用完：每人每秒 300 点）,
 // terrain_denied（领地 / 权限）, terrain_occupied（有建筑）。
 type TerrainEditResponse struct {
 	Code      int32                 `pb:"1"`
