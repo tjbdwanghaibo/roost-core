@@ -268,6 +268,49 @@ Go客户端（`framework/sync/lockstep`与`robot`）对应接口：`FrameAssembl
 
 实例从帧1开始，一实例一场比赛。原C7不含match/epoch；应用须在握手/订阅/路由生命周期隔离比赛，跨比赛复用同一路由且仍有旧包时不能仅新建Assembler。没有`restore`时重连不提供游戏快照或自动跳帧；业务恢复/重放准备后再消费。游戏定点计算、随机种子、配置一致性和作弊裁决仍由业务实现，FrameHasher不证明游戏状态一致。[本轮方案与验收](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/IMPLEMENTATION-2026-10-08-CLIENT-LOCKSTEP.md)。
 
+## 地形（可编辑地形客户端）
+
+[可编辑地形方案](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md)的 C# 客户端部分，在 `Roost.Client` 的 `Roost.Client.Terrain` 命名空间（源码 `dotnet/Roost.Client/Terrain/`），随 `Roost.Client.dll` 进 Unity 包，纯 C#、`netstandard2.1`，只用 BCL 的 `DeflateStream` 与 `SHA256`。规则与服务端 [gameplay/terrain](../gameplay/terrain/README.md) 相同，查询结果与 Go 逐位一致。世界单位厘米：块 6400（64m）、采样间隔 100（1m）、每块 64 × 64 点、高度原始值 1 = 10cm。
+
+| 部分 | 入口 |
+| --- | --- |
+| 原始地形包 | `TerrainPack.Open(ReadOnlyMemory<byte>)`（Addressables / UnityWebRequest 读到的整份字节，不复制）、`TerrainPack.Open(Stream, leaveOpen)`（可随机读的 FileStream；Android 的 StreamingAssets 在 apk 里，不能用 FileStream，读成字节再打开）；打开时校验包头与索引的整体 SHA-256，`ReadChunk(key)` 每次校验该块的 SHA-256 再解压，`ChunkSha256(key)`、`Meta`、`Dispose` |
+| 地形视图 | `new TerrainView(pack)`；写入口 `LoadBase(key)`、`SetOverlay(key, baseRevision, version, heights, materials)`（`heights` 可以是 `ushort` span，也可以直接传生成 DAO 的 `RepeatedField<uint>`）、`Unload(key)`；`TryGetVersion`、`GetChunk`（只读、不复制）、`Count` |
+| 查询 | `Height` / `Material` / `IsWater` / `Probe`（缺块、地图外抛异常）；每帧热路径用 `TryProbe(x, y, out ground, out missing)`，返回 `Ok` / `OutOfMap` / `NotLoaded`，不抛异常 |
+| mesh 钩子 | 事件 `ChunkChanged`（`Loaded` / `Updated` / `Unloaded`，带前后版本与 `MeshesToRebuild`）；`TryBuildHeightGrid(key, Span<int>, out missing)` 与纯函数 `TerrainMesh.TryBuildHeightGrid(meta, key, self, right, top, topRight, destination, out missing)` 输出 65 × 65 顶点的世界高度（厘米） |
+| 错误 | `TerrainBadPackException`、`TerrainPackVersionException`、`TerrainCorruptChunkException`（带块坐标，只影响这一块）、`TerrainOutOfMapException`、`TerrainNotLoadedException`（带缺的块）、`TerrainInvalidChunkException`、`TerrainStaleOverlayException`、`TerrainBaseRevisionException`，与 Go 的哨兵错误一一对应；不会用默认数据代替缺失或损坏的块 |
+
+**接 EntitySync。** 改过的块是 `TerrainChunk` 实体，用 entitysync 同步（方案 §7）。客户端用项目生成的 `dao_sync.proto` 与 `dao_sync_apply.cs` 注册 DAO（见上文“EntitySync 变化回调”），收到 Full / Delta 后 `change.Current.Value` 已是生成 Apply 合并好的完整 `SyncTerrainChunkDao`，取四个字段交给视图：
+
+```csharp
+// Unity 主线程：启动时打开包、按视距 LoadBase 原始块（读包 + 解压，成批时放到后台线程）。
+var pack = TerrainPack.Open(packBytes);
+var terrain = new TerrainView(pack);
+terrain.ChunkChanged += change => { foreach (var key in change.MeshesToRebuild) dirtyMeshes.Add(key); };
+
+client.EntityChanged += change => {
+    if (change.Kind == EntityChangeKind.Remove || !(change.Current!.Value is SyncTerrainChunkDao dao)) return;
+    var key = ChunkKeyOfEntity(change.Identity.Update.SubjectId);   // 实体 ID → 块坐标是游戏工程的约定
+    long version = dao.Version?.Value ?? 0;
+    if (version == 0) return;                                        // 实体已建、还没提交过改动：按原始块看待
+    terrain.SetOverlay(key, dao.BaseRevision?.Value ?? 0, version, dao.Heights.Value, dao.Materials.Value.Span);
+};
+
+// 每帧：重建脏块的 mesh（缺邻块时等它装入，ChunkChanged 会再把这一块列进来）。
+var heights = new int[TerrainMesh.VertexCount];
+foreach (var key in dirtyMeshes)
+    if (terrain.TryBuildHeightGrid(key, heights, out _)) RebuildUnityMesh(key, heights);  // 业务渲染代码
+dirtyMeshes.Clear();
+```
+
+- `ChunkKeyOfEntity` 由游戏工程提供：game-demo 的实体唯一号是 `ChunkKey.Id + 1`（`game/entities/terrain_chunk.KeyOf`），实体 ID 的位布局见 `framework/entity`。SDK 只提供与 Go 相同的 `ChunkKey.Id` / `ChunkKey.FromId`。
+- 版本单调：比视图里已有覆盖块旧的版本抛 `TerrainStaleOverlayException`（迟到的旧全量不会把地形改回去），版本相同则替换；同版本同数据（重连、重新进入视野时的重复全量）不发 `ChunkChanged`。`BaseRevision` 与包头不同抛 `TerrainBaseRevisionException`：客户端的原始地形资源过期，应更新资源。
+- `Remove`（块离开地形 Interest）时示例保留已装的覆盖块：这一块的最新已知数据比原始块更接近服务端；再次进入视野时服务端重发全量（方案 §7“没有客户端缓存”）。按视距 `Unload` 之后再 `LoadBase` 得到的是原始块，直到这一块再次进入地形 Interest、收到全量为止——显示上会先是原始地形、再跳到改过的样子。需要避免时由业务自己保留“块 → 最后一份覆盖块”的缓存，在 `LoadBase` 之后补 `SetOverlay`。
+- 顶点网格：`destination[j·65 + i]` 是世界采样点 (key.X·64 + i, key.Y·64 + j) 的世界高度，最右一列与最上一行取右 / 上邻块的第 0 列 / 行（共享边），地图右 / 上边复制本块最后一列 / 行，邻块没装返回 false。每个顶点等于 `Height` 在该点的值，相邻块的接缝逐个相同；一块变了，左 / 下 / 左下邻块的接缝也变，所以 `MeshesToRebuild` 最多 4 块。网格三角形在 1m 格内是平面而 `Height` 是双线性插值，格内的点可能差几厘米：落地、站立高度等要与服务端一致的判定用查询，不用渲染网格。Unity 是 Y 轴向上：世界 X → Unity x、世界 Y → Unity z、高度 → Unity y，厘米换米除以 100。
+- 线程：查询与 `TryBuildHeightGrid` 不取锁，任意线程可并发调用，同一块内不会读到两个版本；写入口由一把锁串行，`LoadBase` 读包与解压在锁外。`ChunkChanged` 在写入口的调用线程、新数据已可查询之后触发，订阅者抛错交给 `Error`。`TerrainPack.ReadChunk` 可并发（Stream 来源在锁内定位 + 读取）。
+
+验证：`dotnet run --project client/dotnet/Roost.Client.Terrain.Tests -- client/spec`（`scripts/test-client-dotnet.sh` 与 pretag 也跑）。它核对 Go 写出的 [terrain-golden.pack](spec/terrain-golden.pack) 的整包与 6 块校验和、[terrain-queries.json](spec/terrain-queries.json) 全部 246 个位置的高度 / 材质 / 水；坏包头、索引、截断、坏块；覆盖块规则与通知；网格顶点与接缝；以及 Go 生成 DAO 写出的 `TerrainChunk` 全量、按下标的高度增量、材质整字段、高度整字段四步经 C# 生成 Apply 合并后与 Go 的合并结果相等、与 Go `View` 的 520 次查询逐点相等。这份同步夹具在 `dotnet/Roost.Client.Terrain.Tests/Fixtures/`，由 `regen.sh` 用正式 DAO 生成器从 demo 的 `TerrainChunkDao` 定义生成（`-update` 覆盖，缺省只核对，`scripts/test-client-dotnet.sh` 的完整模式会核对它与当前生成器一致）。没有在 Unity Editor、IL2CPP 或移动设备上运行过；没有经过真实 entitysync 链路（服务端 `TerrainChunk` 接 entitysync 是 P2 服务端部分）。C++ 客户端没有地形实现。
+
 ## Unity接入与其他引擎
 
 按 [Unity 构建入口](unity/README.md) 生成完整 UPM 包，再从输出目录导入 `package.json`；不要直接导入未构建的 `client/unity`，也不要重复放置 `Roost.Client.dll`。Unity 项目选择支持 .NET Standard 2.1 的兼容级别。C# 业务 PB 类型及 Google.Protobuf 依赖由游戏工程管理。包内保留纯 C# 适配，同时提供复用 native 网络线程的 `RoostNativeDriver`；同一连接选择一种路径。

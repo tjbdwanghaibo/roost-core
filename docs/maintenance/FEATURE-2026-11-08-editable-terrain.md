@@ -1,6 +1,6 @@
 # 可编辑地形大世界（定稿方案，2026-11-08）
 
-状态：**定稿方案；P1 已实施：框架部分（`gameplay/terrain`：坐标、原始地形包、地形视图与查询）见[第 11 节](#11-p1-框架部分实施结果2026-11-08)，实体接入（game-demo 的 `TerrainChunk` 实体、地形服务、改块重启后一致）见[第 12 节](#12-p1-实体接入实施结果2026-11-08)；P2 起未实施。** 维护者 2026-11-08 确认：材质层用 `[]byte`，其余按本文推荐整理为最终方案（第 8 节）。目标是在 cellworld 无缝大世界上支持玩家改地形（挖、填、抬高、整平、改材质）、由此形成湖泊和高地，并在地形上放置建筑。
+状态：**定稿方案；P1 已实施：框架部分（`gameplay/terrain`：坐标、原始地形包、地形视图与查询）见[第 11 节](#11-p1-框架部分实施结果2026-11-08)，实体接入（game-demo 的 `TerrainChunk` 实体、地形服务、改块重启后一致）见[第 12 节](#12-p1-实体接入实施结果2026-11-08)；P2 的 C# 客户端部分（读包、查询、接 DAO 同步、mesh 钩子）见[第 13 节](#13-p2-客户端c实施结果2026-11-08)，P2 其余部分未实施。** 维护者 2026-11-08 确认：材质层用 `[]byte`，其余按本文推荐整理为最终方案（第 8 节）。目标是在 cellworld 无缝大世界上支持玩家改地形（挖、填、抬高、整平、改材质）、由此形成湖泊和高地，并在地形上放置建筑。
 
 数字的来源分两种：同步与持久化的单块字节、编码耗时来自离线微基准（[实验记录](evidence/terrain-sync-20261108/results.md)）；规模、带宽与参数初值是按假设推算，P2 / P5 实测后修正。
 
@@ -284,3 +284,44 @@ type TerrainChunkDao struct {
 - 错误码：P1 的拒绝是包内哨兵（`terrainmap.ErrDisabled` / `ErrNotOwned` / `ErrUnloadable`、`terrain.ErrOutOfMap` / `ErrInvalidChunk` / `ErrBaseRevision` / `ErrNotLoaded`），客户端码 P2 接协议时定。
 
 **未验证**：崩溃重启（WAL 里有未投影记录时 `Load` 读到的是排空之后的库：由 DataEngine 的恢复屏障保证，本轮没有单独的 SIGKILL 演练）；真实 game 进程实跑（配置 + `cmd/terrainpack` + `make dev-run`）；1w 地图规模下按格装入的耗时与内存（§11 的数字是 `gameplay/terrain` 单独测的，没有经过 `Store` 读记录这一步）；Linux。
+
+## 13. P2 客户端（C#）实施结果（2026-11-08）
+
+分支 `feat/terrain-p2-client`，只做 C# 客户端：读原始地形包、地形视图与查询、接 DAO 同步、mesh 重建钩子。服务端的笔刷、校验、多块事务与 entitysync 接入是 P2 的另一部分，本轮没有改 `gameplay/`、`demo/`、`codegen/`。用法见[客户端手册“地形”](../../client/README.md#地形可编辑地形客户端)。
+
+**位置**：`client/dotnet/Roost.Client/Terrain/`，命名空间 `Roost.Client.Terrain`，随 `Roost.Client.dll`（`netstandard2.1`、C# 8）进 Unity 包，不新增程序集与依赖，只用 BCL 的 `DeflateStream`（raw DEFLATE）与 `SHA256`。测试是独立项目 `client/dotnet/Roost.Client.Terrain.Tests`（TerrainChunk 的生成物与 `Roost.Client.Tests` 里 codegen 金样的生成物同一 proto 包、同名静态类，不能编进同一个程序集），已挂进 `scripts/test-client-dotnet.sh`（pretag 的金样模式也跑）。
+
+**API 摘要**：
+
+| 部分 | 入口 | 与 Go 的对应 |
+| --- | --- | --- |
+| 几何 | `TerrainGeometry`（常量、`ChunkOf`、`PointIndex`）、`ChunkKey`（`Id` / `FromId`）、`TerrainMeta` | `coord.go` 同名常量与函数，负坐标向负无穷取整、远处饱和 |
+| 原始地形包 | `TerrainPack.Open(ReadOnlyMemory<byte>)` / `Open(Stream, leaveOpen)`、`ReadChunk`、`ChunkSha256`、`Meta`、`Dispose` | `OpenPack` / `ReadChunk` / `ChunkSum`；包头字段的检查顺序与 `parseHeader` 相同，同一个坏包报同一类错误 |
+| 地形视图 | `TerrainView`：`LoadBase`、`SetOverlay(key, baseRevision, version, heights, materials)`（`ushort` span 或 DAO 的 `IReadOnlyList<uint>`）、`Unload`、`TryGetVersion`、`GetChunk`（不可变、不复制）、`Count` | `View` 的写入口与拒绝规则（形状、`Version ≥ 1`、`BaseRevision`、版本单调、相同则替换） |
+| 查询 | `Height` / `Material` / `IsWater` / `Probe`；`TryProbe` 返回 `Ok` / `OutOfMap` / `NotLoaded`，不抛异常 | `probe` 逐行移植：64 位整数、权重为 0 不读、边缘复制、缺块报第一个缺的块（读取次序相同） |
+| mesh 钩子 | `ChunkChanged`（`Loaded` / `Updated` / `Unloaded`，前后版本，`MeshesToRebuild`）、`TryBuildHeightGrid`、纯函数 `TerrainMesh.TryBuildHeightGrid` / `AffectedChunks` | 顶点 = 采样点上的 `Height`；邻块规则同查询 |
+
+**与 Go 的一致性证据**（2026-11-08，Apple M5，.NET SDK 10.0.302，测试程序 `net10.0`、运行库 `netstandard2.1`）：
+
+| 用例 | 结果 |
+| --- | --- |
+| 金样 `client/spec/terrain-golden.pack` + `terrain-queries.json` | 整包 SHA-256、6 块存储字节与解码后高度 / 材质的 SHA-256 全部一致；246 个位置（含块边界、四块交点、地图边缘、地图外）的高度 / 材质 / 水全部一致；字节与 Stream 两种打开方式各跑一遍 |
+| DAO 同步夹具（`Fixtures/terrain-chunk-sync.json`） | `regen.sh` 用正式生成器从 `demo/db/def/terrain_chunk.go.tmpl` 生成 Go DAO、`dao_sync.proto`、`dao_sync_apply.cs`，Go 侧在 Nest 隔离事务里改块并取 entitysync 会下发的字节：全量（12,318 字节）、块左边 r=5m 逐点 `SetHeightsAt`（list delta，390 字节）、`SetMaterialsAll`（4,116 字节）、`SetHeightsAll`（整字段，8,212 字节）。C# 生成 Apply 每步合并结果与 Go 的合并结果 `Equals`，交给 `TerrainView` 后 4 × 130 = 520 个位置与 Go `View` 的查询逐点一致，每步收到对应版本的 `ChunkChanged`、`MeshesToRebuild` 含左邻块 |
+| 网格 | 6 块的 65 × 65 网格里 25,026 个地图内顶点逐个等于 `Height`；相邻块共享边逐个相同；编辑块 (1,0) 的第 0 列后按 `MeshesToRebuild` 重建，块 (0,0) 的右边跟着变、接缝仍连续 |
+| 坏包 / 坏块 | magic、版本、几何常量、codec、索引位置、块数、`HeightBase` 溢出、保留字节与索引被改（整体校验和）、索引项越界（重新封口后）、6 种截断；块数据翻转一位（只坏这一块，其他块照常可读）、Stream 读不满、明文多 / 少一字节、高度越界、varint 越界或不完整、明文超长、非 DEFLATE、截断的 DEFLATE、空 DEFLATE |
+| 覆盖块与并发 | 拒绝规则逐条、拒绝后视图不变、入参被复制、同版本同数据不通知、订阅者抛错交给 `Error`；4 个查询线程在约 2000 次版本切换中读 3 万次左右，没有读到混用两个版本的结果 |
+| 测试能变红 | 逐个改坏实现后跑：去掉四舍五入报 `query (50, 50): got 60472, Go 60473`；去掉边缘复制或读权重为 0 的邻点报 `chunk not loaded`；不校验块 / 整体 SHA-256、接受多余材质字节、不查 `BaseRevision`、不查 uint32 上限各自报 `accepted …`；同版本也拒绝报 `stale overlay`；总是通知报 `repeated full`；网格不读右邻块报 `vertex (0,0) [64,0] equals Height`；上边不复制报 `top map edge replicated` |
+
+**生成器 / SDK**：当前 C# 生成 Apply 对 `repeated uint32`（来自 `[]uint16`）的 list delta 合并正确，上面的夹具实际走过 `Delta = true`、`Updates` 按下标、`Length = 4096` 的路径，没有发现问题。代价是每个增量都克隆一次整份视图并逐个重建 4096 个元素的列表（生成 Apply 的通用做法），耗时没有测。夹具的 proto / C# Apply 取自 demo 的 DAO 定义，P2 服务端若改 `TerrainChunkDao` 或生成器，`regen.sh`（核对模式）会报漂移，需要 `-update` 后复跑 C# 测试。
+
+**方案没覆盖、本轮先选的**：
+
+1. 放进 `Roost.Client` 而不是新程序集：Unity 打包脚本只构建 `Roost.Client.dll`，不用改打包与 asmdef。
+2. 实体 ID → 块坐标的映射不进 SDK（是游戏工程的约定，game-demo 是唯一号 = `ChunkKey.Id + 1`），SDK 只给 `ChunkKey.Id` / `FromId`。
+3. `Version 0` 的记录（服务端建了实体、第一笔改动还没提交，数据为空）在接线示例里跳过、保持原始块，与服务端装入规则一致；`SetOverlay` 本身仍按 Go 拒绝 `Version < 1`。
+4. 块离开地形 Interest（`Remove`）时示例保留已装的覆盖块，不改回原始块；按视距卸下后再装入时是原始块，直到再次收到全量（方案 D12“没有客户端缓存”的显示代价，客户端手册已写）。
+5. `ChunkChanged` 只在数据或版本真的变了时发（同版本同数据的重复全量不发，免得重连 / 重新进入视野时整片重建 mesh）；在写入口的调用线程、锁外、新数据可查询之后触发；订阅者抛错交给 `Error`（与 `GameClient` 的做法相同）。
+6. 网格输出世界高度（`int` 厘米），65 × 65，缺邻块返回 false 不猜；网格三角形在格内是平面、查询是双线性，格内可能差几厘米，判定类逻辑用查询。
+7. 增加不抛异常的 `TryProbe` / `TryBuildHeightGrid`，给每帧热路径用；抛异常的入口与 Go 的错误一一对应。
+
+**未验证**：Unity Editor、Mono / IL2CPP Player 与移动设备（`DeflateStream`、`SHA256` 在 IL2CPP 上的行为与耗时）；真实 entitysync 链路（服务端 `TerrainChunk` 还没接 entitysync，本轮用 Go 生成 DAO 写出的字节代替）；Linux 上的 .NET；1w 地图规模下 C# 的装块耗时、查询耗时与内存；C++ 客户端（不在本轮）。

@@ -46,7 +46,7 @@ git diff --exit-code
 改协议（`client/wire`、生成 PB）、Sync 帧（`framework/sync/frame`、entitysync）、Lockstep 编码或 `client/dotnet` 时，另跑 C# 客户端 SDK 的验证：
 
 ~~~sh
-./scripts/test-client-dotnet.sh   # 金样 + SDK 自测 + 生成工程真实 TCP；缺 dotnet 打印 SKIP 并以 0 退出（不是通过）
+./scripts/test-client-dotnet.sh   # 金样 + SDK 自测（含地形 SDK 与其 DAO 夹具漂移核对）+ 生成工程真实 TCP；缺 dotnet 打印 SKIP 并以 0 退出（不是通过）
 ~~~
 
 Gate 与标准 GameClient 的联合链路另跑 `bash scripts/test-gate-client.sh`，需要本机 nats-server，脚本使用自己的临时实例；不允许用离线金样代替这条验证。
