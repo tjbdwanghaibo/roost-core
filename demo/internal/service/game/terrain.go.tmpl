@@ -18,7 +18,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
-// TerrainCapability 发布本进程的地形（*terrainmap.Map）：查询 Height / Material / IsWater，内部写入口 Edit。
+// TerrainCapability 发布本进程的地形（*terrainmap.Map）：查询 Height / Material / IsWater，玩家编辑 Brush，内部写入口 Edit。
 // 没配 scene.terrain.pack 时不发布，查不到就是本进程没有地形。
 const TerrainCapability app.ModName = "{{GAME_SERVICE}}.terrain"
 
@@ -72,10 +72,14 @@ func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
 	meta := m.Meta()
 	slog.Info("terrain loaded", "pack", config.Pack, "base_revision", meta.BaseRevision,
 		"map_chunks", fmt.Sprintf("%dx%d", meta.ChunksX, meta.ChunksY), "own", m.Region().Own, "load", m.Region().Load,
-		"chunks", stats.Chunks, "overlays", stats.Overlays, "base", stats.Base, "stale_base", stats.StaleBase, "corrupt", stats.Corrupt,
+		"chunks", stats.Chunks, "overlays", stats.Overlays, "base", stats.Base, "discarded", stats.Discarded, "stale_base", stats.StaleBase, "corrupt", stats.Corrupt,
 		"took", time.Since(started))
+	if stats.Discarded > 0 {
+		slog.Warn("terrain: the base pack changed revision; the edits of chunks built on the old one were discarded and those chunks are back to the base pack",
+			"discarded", stats.Discarded, "base_revision", meta.BaseRevision)
+	}
 	if stats.StaleBase > 0 || stats.Corrupt > 0 {
-		slog.Error("terrain: some chunks were not loaded (records on another base revision, or corrupt); their queries answer not loaded and their records are kept as they are",
+		slog.Error("terrain: some chunks were not loaded (a neighbouring cell's records on another base revision, a discard that failed, or corrupt records); their queries answer not loaded and their records are kept as they are",
 			"stale_base", stats.StaleBase, "corrupt", stats.Corrupt)
 	}
 	terrainmap.Install(m)
@@ -84,6 +88,25 @@ func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
 		return nil, fmt.Errorf("terrain: publish: %w", err)
 	}
 	return m, nil
+}
+
+// startTerrainSync 把本进程写的、改过的块装成实体并登记为场景同步的 subject（terrain_sync.go 的 loadEdited）。在 Init
+// 里、场景启动之后、玩家能进来之前运行（启动阶段的 Mongo 读，不在 Nest 业务 worker 上）。
+func startTerrainSync(registry *app.Registry, scene *Scene, m *terrainmap.Map) error {
+	chunks, err := lifecycle.TerrainChunkFromRegistry(registry)
+	if err != nil {
+		return fmt.Errorf("terrain sync: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), terrainLoadTimeout)
+	defer cancel()
+	started := time.Now()
+	loaded, err := scene.terrain.loadEdited(ctx, m, chunks)
+	if err != nil {
+		return err
+	}
+	slog.Info("terrain sync started", "edited_chunks", loaded, "view_radius", terrainViewRadius, "max_visible", terrainMaxVisible,
+		"max_objects", sceneTerrainMaxObjects, "snapshots_per_flush", terrainSnapshotsPerFlush, "took", time.Since(started))
+	return nil
 }
 
 // terrainRegion 是本进程写与装入的地形范围：

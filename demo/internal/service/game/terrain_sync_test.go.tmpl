@@ -1,0 +1,718 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+	"math/rand/v2"
+	"net"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	db "{{MODULE}}/db"
+	monster "{{MODULE}}/game/entities/monster"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	gamescene "{{MODULE}}/game/scene"
+	"{{MODULE}}/game/terrainmap"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	"{{MODULE}}/protocol/msgid"
+	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// 地形同步（terrain_sync.go，可编辑地形方案 §7 / §9 P2）在生成的真实玩家 TCP 接入上：客户端是一个 Go 实现的接收端
+// （frame.Receiver + 生成的 ApplySyncTerrainChunkDao，与 C# / C++ 客户端同一协议），从回环 socket 读帧、应用改过的块，
+// 断言它与服务端的实体 / 视图逐点相同。存储是 terrain_test.go 的离线替身（提交器只收下记录），同步、编码、传输、
+// 解码都是正式代码。
+
+// terrainSyncHarness 是一个 game 进程里与地形同步有关的部分：玩家 TCP 接入、地形（Map + Nest + 实体）与开了地形
+// 同步的场景。
+type terrainSyncHarness struct {
+	ctx       context.Context
+	transport *accessplayertcp.Runtime
+	addr      string
+	process   *terrainProcess
+	scene     *Scene
+	pack      string
+}
+
+// startTerrainSyncHarness 起一张 chunksX × chunksY 的地图；场景的世界与地形图一样大（玩家站在哪都在地形图上）。
+// radius / maxVisible 是地形视野；policy 是玩家编辑的上限（测量与守卫用例放大半径、关掉限速）。started 为假时不起
+// 复制循环，只有测试自己的 Flush（测量按“一次 Flush = 50ms”数）。
+func startTerrainSyncHarness(t *testing.T, chunksX, chunksY int32, radius int64, maxVisible int, started bool) *terrainSyncHarness {
+	t.Helper()
+	transport, addr := startScenePlayerTransport(t)
+	dir := t.TempDir()
+	pack := filepath.Join(dir, "sync.pack")
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: chunksX, ChunksY: chunksY, WaterLevel: 40000}
+	if err := terrain.WritePackFile(pack, meta, terrain.Generated(meta, terrainSeed)); err != nil {
+		t.Fatal(err)
+	}
+	p := startTerrainProcessWith(t, pack, wholeMap, &memoryChunkStore{}, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.MaxRadius, policy.EditsPerSecond = 2500, 0
+		p.m.SetPolicy(policy)
+	})
+	bounds := p.m.Meta().Bounds()
+	config := gamescene.Config{Width: bounds.Max.X, Height: bounds.Max.Y, BlockSize: 300, Spawn: spatial.Point{X: bounds.Max.X / 2, Y: bounds.Max.Y / 2}}
+	scene, err := newSceneWith(sceneLane{transport: transport}, transport, nil, config, sceneMaxVisible,
+		&terrainSyncConfig{bounds: bounds, radius: radius, maxVisible: maxVisible})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.terrain.attach(p.m)
+	scene.watchSessions(transport)
+	h := &terrainSyncHarness{ctx: context.Background(), transport: transport, addr: addr, process: p, scene: scene, pack: pack}
+	if started {
+		if err := scene.Start(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	return h
+}
+
+// brush 是一个玩家的一次编辑，必须成功。
+func (h *terrainSyncHarness) brush(t *testing.T, playerID int64, requestID uint64, b terrain.Brush) terrain_chunk.BrushResult {
+	t.Helper()
+	result, err := h.process.m.Brush(h.ctx, playerID, requestID, b)
+	if err != nil {
+		t.Fatalf("brush %d/%d %+v: %v", playerID, requestID, b, err)
+	}
+	return result
+}
+
+// join 是登录链路的场景一半：连上、鉴权、Join（会话 held）、scene_ready。
+func (h *terrainSyncHarness) join(t *testing.T, playerID int64, at spatial.Point) *terrainClient {
+	t.Helper()
+	client := dialTerrainClient(t, h.addr, playerID)
+	waitActiveSessions(t, h.transport, playerID, 1)
+	joinReady(t, h.scene, h.ctx, newScenePlayer(t, playerID), at)
+	return client
+}
+
+// flushUntil 跑复制直到 cond 成立（最多 10 秒）；返回用了几次 Flush。
+func (h *terrainSyncHarness) flushUntil(t *testing.T, what string, cond func() bool) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for flushes := 1; ; flushes++ {
+		if err := h.scene.Flush(h.ctx); err != nil {
+			t.Fatalf("flush: %v", err)
+		}
+		if cond() {
+			return flushes
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// chunkID 是块的实体 ID。
+func chunkID(t *testing.T, key terrain.ChunkKey) int64 {
+	t.Helper()
+	return mustChunkID(t, key)
+}
+
+// assertClientMatches 断言客户端持有的每一块与服务端的视图（提交后的数据）与实体版本逐点相同，并且正是 want 这些块。
+func (h *terrainSyncHarness) assertClientMatches(t *testing.T, client *terrainClient, want []terrain.ChunkKey) {
+	t.Helper()
+	held := client.snapshot()
+	if len(held) != len(want) {
+		t.Fatalf("the client holds %d terrain chunks, want %d (%v)", len(held), len(want), want)
+	}
+	for _, key := range want {
+		id := chunkID(t, key)
+		got, ok := held[id]
+		if !ok {
+			t.Fatalf("the client does not hold chunk %v", key)
+		}
+		chunk, version, _ := h.process.m.View().Chunk(key)
+		e, _ := h.process.entities.Get(id).(*terrain_chunk.TerrainChunk)
+		if e == nil || e.Dao().GetVersion() != version {
+			t.Fatalf("chunk %v: the entity and the view disagree", key)
+		}
+		if got.Version == nil || got.Version.Value != version || got.BaseRevision == nil || got.BaseRevision.Value != h.process.m.Meta().BaseRevision {
+			t.Fatalf("chunk %v: the client has version %v / base revision %v, the server %d / %d", key, got.Version, got.BaseRevision, version, h.process.m.Meta().BaseRevision)
+		}
+		if got.Heights == nil || !slices.Equal(got.Heights.Value, chunk.Heights) {
+			t.Fatalf("chunk %v version %d: the client's heights differ from the server's", key, version)
+		}
+		if got.Materials == nil || !slices.Equal(got.Materials.Value, chunk.Materials) {
+			t.Fatalf("chunk %v version %d: the client's materials differ from the server's", key, version)
+		}
+	}
+}
+
+// terrainClient 是一个读帧、应用地形块的客户端。别的命名空间（玩家、怪）只记个数。
+type terrainClient struct {
+	connection net.Conn
+	mu         sync.Mutex
+	receiver   *frame.Receiver
+	refs       map[frame.ObjectRef]int64 // 对象引用 → subject（实体 ID）
+	namespaces map[int64]string
+	chunks     map[int64]*db.SyncTerrainChunkDao
+	frames     []receivedFrame
+	err        error
+}
+
+// receivedFrame 是收到的一帧：线上字节（16 字节包头 + 帧）、帧本身的字节，以及其中每个地形更新。
+type receivedFrame struct {
+	wireBytes, frameBytes int
+	full                  bool
+	terrain               []terrainUpdate
+	others                int
+}
+
+// terrainUpdate 是一帧里的一个地形块更新：componentBytes 是 EntitySync 组件（subject 头 + 载荷），payloadBytes 是
+// DAO 同步 PB（方案 §7.1 的“DAO 组件 payload”口径）。
+type terrainUpdate struct {
+	subject                      int64
+	full                         bool
+	componentBytes, payloadBytes int
+	heightsDelta                 bool
+	heightUpdates                int
+	materials                    bool
+}
+
+func dialTerrainClient(t *testing.T, addr string, playerID int64) *terrainClient {
+	t.Helper()
+	connection, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	if err := writeSceneFrame(connection, 0, 1, []byte("session:"+strconv.FormatInt(playerID, 10)+":ticket")); err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, _, err := readSceneFrame(connection); err != nil {
+		t.Fatalf("player %d authentication: %v", playerID, err)
+	}
+	_ = connection.SetReadDeadline(time.Time{})
+	client := &terrainClient{connection: connection, receiver: frame.NewReceiver(terrainManagerLimits()),
+		refs: map[frame.ObjectRef]int64{}, namespaces: map[int64]string{}, chunks: map[int64]*db.SyncTerrainChunkDao{}}
+	go client.read()
+	return client
+}
+
+func (client *terrainClient) read() {
+	for {
+		packet, err := wire.Read(client.connection, 16<<20)
+		if err != nil {
+			return
+		}
+		if packet.MsgID != msgid.MsgEntitySync {
+			continue
+		}
+		client.mu.Lock()
+		received := receivedFrame{wireBytes: wire.HeaderSize + len(packet.Payload), frameBytes: len(packet.Payload)}
+		_, err = client.receiver.Receive(packet.Payload, func(f frame.Frame) error { return client.apply(f, &received) })
+		if err != nil && client.err == nil {
+			client.err = err
+		}
+		client.frames = append(client.frames, received)
+		client.mu.Unlock()
+	}
+}
+
+// apply 应用一帧（持 mu）：Full 先清空旧对象；地形块用生成的 ApplySyncTerrainChunkDao（全量时基线为 nil）。
+func (client *terrainClient) apply(f frame.Frame, received *receivedFrame) error {
+	if f.Kind == frame.Full {
+		received.full = true
+		clear(client.refs)
+		clear(client.namespaces)
+		clear(client.chunks)
+	}
+	for _, object := range f.Objects {
+		if object.Operation == frame.ObjectRemove {
+			subject := client.refs[object.Ref]
+			delete(client.refs, object.Ref)
+			delete(client.namespaces, subject)
+			delete(client.chunks, subject)
+			continue
+		}
+		for _, component := range object.Components {
+			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
+			if err != nil {
+				return err
+			}
+			client.refs[object.Ref] = update.SubjectID
+			client.namespaces[update.SubjectID] = update.Namespace
+			if update.Namespace != "terrain" {
+				received.others++
+				continue
+			}
+			raw := update.Payload.BytesCopy()
+			patch, err := db.UnmarshalSyncTerrainChunkDao(raw)
+			if err != nil {
+				return err
+			}
+			previous := client.chunks[update.SubjectID]
+			if update.Full {
+				previous = nil
+			}
+			next, err := db.ApplySyncTerrainChunkDao(patch, previous)
+			if err != nil {
+				return fmt.Errorf("apply terrain chunk %d: %w", update.SubjectID, err)
+			}
+			client.chunks[update.SubjectID] = next
+			u := terrainUpdate{subject: update.SubjectID, full: update.Full, componentBytes: len(component.Data), payloadBytes: len(raw), materials: patch.Materials != nil}
+			if patch.Heights != nil {
+				u.heightsDelta, u.heightUpdates = patch.Heights.Delta, len(patch.Heights.Updates)
+			}
+			received.terrain = append(received.terrain, u)
+		}
+	}
+	return nil
+}
+
+// snapshot 是客户端当前持有的地形块（Apply 返回的视图只读，这里只给引用）。
+func (client *terrainClient) snapshot() map[int64]*db.SyncTerrainChunkDao {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.err != nil {
+		panic(fmt.Sprintf("the terrain client failed: %v", client.err))
+	}
+	out := make(map[int64]*db.SyncTerrainChunkDao, len(client.chunks))
+	for id, c := range client.chunks {
+		out[id] = c
+	}
+	return out
+}
+
+func (client *terrainClient) failure() error {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.err
+}
+
+// held 是客户端持有的对象数：地形块与别的命名空间。
+func (client *terrainClient) held() (terrainObjects, others int) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	for _, ns := range client.namespaces {
+		if ns == "terrain" {
+			terrainObjects++
+		} else {
+			others++
+		}
+	}
+	return terrainObjects, others
+}
+
+func (client *terrainClient) version(id int64) int64 {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if c := client.chunks[id]; c != nil && c.Version != nil {
+		return c.Version.Value
+	}
+	return -1
+}
+
+// takeFrames 返回并清掉到目前为止收到的帧。
+func (client *terrainClient) takeFrames() []receivedFrame {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	out := client.frames
+	client.frames = nil
+	return out
+}
+
+// lastUpdate 是 frames 里 subject 的最后一个地形更新及其所在帧。
+func lastUpdate(frames []receivedFrame, subject int64) (terrainUpdate, receivedFrame, bool) {
+	for i := len(frames) - 1; i >= 0; i-- {
+		for j := len(frames[i].terrain) - 1; j >= 0; j-- {
+			if frames[i].terrain[j].subject == subject {
+				return frames[i].terrain[j], frames[i], true
+			}
+		}
+	}
+	return terrainUpdate{}, receivedFrame{}, false
+}
+
+func centreOf(key terrain.ChunkKey) spatial.Point {
+	b := key.Bounds()
+	return spatial.Point{X: (b.Min.X + b.Max.X) / 2, Y: (b.Min.Y + b.Max.Y) / 2}
+}
+
+const terrainBuilder = int64(31000) // 改地形的另一个玩家（不连接）
+
+// 方案 §9 P2：客户端收到改过的块的全量（进入视野）与增量（之后的编辑），断线重连后与服务端块版本、数据逐点一致。
+// 顺带核对增量的形状：r=5m 的高度编辑是按下标的增量、材质是整字段、守卫（>1000 点）是整字段高度。
+func TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect(t *testing.T) {
+	h := startTerrainSyncHarness(t, 8, 8, terrainViewRadius, terrainMaxVisible, true)
+	at := centreOf(terrain.ChunkKey{X: 4, Y: 4})
+	near := []terrain.ChunkKey{{X: 4, Y: 4}, {X: 5, Y: 4}, {X: 3, Y: 3}}
+	far := terrain.ChunkKey{X: 0, Y: 7} // 远在 200m 视野外
+	h.brush(t, terrainBuilder, 1, terrain.Brush{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: 800, Falloff: terrain.FalloffSmooth, Strength: 30})
+	h.brush(t, terrainBuilder, 2, terrain.Brush{Op: terrain.BrushPaint, X: centreOf(near[1]).X, Y: centreOf(near[1]).Y, Radius: 600, Material: 9})
+	h.brush(t, terrainBuilder, 3, terrain.Brush{Op: terrain.BrushFlatten, X: centreOf(near[2]).X, Y: centreOf(near[2]).Y, Radius: 900, Falloff: terrain.FalloffLinear, Target: 2000})
+	h.brush(t, terrainBuilder, 4, terrain.Brush{Op: terrain.BrushRaise, X: centreOf(far).X, Y: centreOf(far).Y, Radius: 500, Strength: 10})
+	if n := h.scene.terrain.shownCount(); n != 4 {
+		t.Fatalf("%d edited chunks are subjects, want 4", n)
+	}
+
+	const playerID = int64(30001)
+	client := h.join(t, playerID, at)
+	h.flushUntil(t, "the edited chunks in view", func() bool { n, _ := client.held(); return n == len(near) })
+	h.assertClientMatches(t, client, near)
+	for _, f := range client.takeFrames() {
+		for _, u := range f.terrain {
+			if !u.full {
+				t.Fatalf("a chunk entering view arrived as a delta")
+			}
+		}
+	}
+
+	// 增量：r=5m 抬高、改材质、守卫整平，各一次。
+	centre := chunkID(t, near[0])
+	step := func(requestID uint64, b terrain.Brush, check func(terrainUpdate)) {
+		t.Helper()
+		version := h.brush(t, terrainBuilder, requestID, b).Chunks[0].Version
+		h.flushUntil(t, "the delta", func() bool { return client.failure() != nil || client.version(centre) == version })
+		if err := client.failure(); err != nil {
+			t.Fatalf("request %d: %v", requestID, err)
+		}
+		update, _, ok := lastUpdate(client.takeFrames(), centre)
+		if !ok || update.full {
+			t.Fatalf("request %d: no delta for the edited chunk (%+v)", requestID, update)
+		}
+		check(update)
+		h.assertClientMatches(t, client, near)
+	}
+	step(5, terrain.Brush{Op: terrain.BrushRaise, X: at.X + 100, Y: at.Y + 50, Radius: 500, Falloff: terrain.FalloffLinear, Strength: 20}, func(u terrainUpdate) {
+		if !u.heightsDelta || u.heightUpdates == 0 || u.materials {
+			t.Fatalf("an r=5m raise went out as %+v, want per-index heights only", u)
+		}
+	})
+	step(6, terrain.Brush{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 300, Material: 33}, func(u terrainUpdate) {
+		if !u.materials || u.heightUpdates != 0 {
+			t.Fatalf("a paint went out as %+v, want the whole materials field and no heights", u)
+		}
+	})
+	step(7, terrain.Brush{Op: terrain.BrushFlatten, X: at.X, Y: at.Y, Radius: 2400, Target: 1900}, func(u terrainUpdate) {
+		if u.heightsDelta || u.payloadBytes < 8000 {
+			t.Fatalf("a guarded flatten went out as %+v, want the whole heights field", u)
+		}
+	})
+
+	// 断线：连接关掉，场景把玩家移出；不在线时改两块、新改一块。
+	_ = client.connection.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for h.scene.Members() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if h.scene.Members() != 0 {
+		t.Fatal("the disconnected player is still in the scene")
+	}
+	h.brush(t, terrainBuilder, 8, terrain.Brush{Op: terrain.BrushLower, X: at.X - 200, Y: at.Y, Radius: 700, Falloff: terrain.FalloffSmooth, Strength: 15})
+	h.brush(t, terrainBuilder, 9, terrain.Brush{Op: terrain.BrushPaint, X: centreOf(near[1]).X, Y: centreOf(near[1]).Y, Radius: 1000, Material: 44})
+	newly := terrain.ChunkKey{X: 4, Y: 5}
+	h.brush(t, terrainBuilder, 10, terrain.Brush{Op: terrain.BrushRaise, X: centreOf(newly).X, Y: centreOf(newly).Y, Radius: 400, Strength: 5})
+	_ = h.scene.Flush(h.ctx)
+
+	again := h.join(t, playerID, at)
+	want := append(slices.Clone(near), newly)
+	h.flushUntil(t, "the edited chunks after the reconnect", func() bool { n, _ := again.held(); return n == len(want) })
+	h.assertClientMatches(t, again, want)
+	if err := again.failure(); err != nil {
+		t.Fatal(err)
+	}
+	if lost := h.scene.manager.Stats().SessionsLost; lost != 0 {
+		t.Fatalf("%d replication sessions were lost", lost)
+	}
+}
+
+// 方案 §9 P2：视野里改过的块多于 MaxVisible（64）时，会话持有恰好 64 块、不因 object_limit 断开——即使主视野里
+// 还有 40 个怪（40 + 自己 + 64 = 105，超过缺省上限 100；开了地形后上限是 164）。全量受快照预算（每会话每 Flush 4 个）
+// 分摊。不起复制循环，Flush 只由测试跑，次数可数。
+func TestATerrainViewAtItsCapKeepsTheSession(t *testing.T) {
+	// 视野 500m：12 × 12 块（768m）的中心看得见约 190 块的中心，改其中 100 块。
+	h := startTerrainSyncHarness(t, 12, 12, 50000, terrainMaxVisible, false)
+	at := centreOf(terrain.ChunkKey{X: 6, Y: 6})
+	edited := 0
+	for y := int32(1); y < 11 && edited < 100; y++ {
+		for x := int32(1); x < 11 && edited < 100; x++ {
+			c := centreOf(terrain.ChunkKey{X: x, Y: y})
+			edited++
+			h.brush(t, terrainBuilder, uint64(edited), terrain.Brush{Op: terrain.BrushRaise, X: c.X, Y: c.Y, Radius: 200, Strength: 3})
+		}
+	}
+	monster.RegisterEntity()
+	for i := range int64(40) {
+		id, err := entity.BuildEntityID(7300+i, monster.EntityKindMonster)
+		if err != nil {
+			t.Fatal(err)
+		}
+		built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: monster.EntityKindMonster, Id: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := built.(*monster.Monster)
+		if err := h.scene.ShowSubject(h.ctx, m.Sync(), m.ID(), spatial.Point{X: at.X + 10 + i, Y: at.Y + 5}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const playerID = int64(30002)
+	client := h.join(t, playerID, at)
+	started := time.Now()
+	flushes := h.flushUntil(t, "the full terrain view and the monsters", func() bool {
+		terrainHeld, others := client.held()
+		return terrainHeld == terrainMaxVisible && others == 41
+	})
+	took := time.Since(started)
+	for range 5 {
+		_ = h.scene.Flush(h.ctx)
+	}
+	if lost := h.scene.manager.Stats().SessionsLost; lost != 0 {
+		t.Fatalf("%d replication sessions were lost (object limit %d)", lost, sceneTerrainMaxObjects)
+	}
+	if n := h.transport.ActiveSessions(playerID); n != 1 {
+		t.Fatalf("the player has %d connections, want 1", n)
+	}
+	terrainHeld, others := client.held()
+	if terrainHeld != terrainMaxVisible || others != 41 {
+		t.Fatalf("the client holds %d chunks and %d other objects, want %d and 41", terrainHeld, others, terrainMaxVisible)
+	}
+	// 快照预算：105 个对象每次 Flush 至多 4 个全量，至少 27 次 Flush。
+	if flushes < (terrainMaxVisible+41+terrainSnapshotsPerFlush-1)/terrainSnapshotsPerFlush {
+		t.Fatalf("the whole view arrived in %d flushes; the snapshot budget of %d per flush was not applied", flushes, terrainSnapshotsPerFlush)
+	}
+	t.Logf("edited chunks %d, chunks held %d, other objects %d, flushes to the full view %d (%v)", edited, terrainHeld, others, flushes, took)
+}
+
+// ---- 测量（方案 §7.1 / §9 P2）：ROOST_TERRAIN_MEASURE=1 时运行，数字写进证据目录 ----
+
+func measuring(t *testing.T) {
+	t.Helper()
+	if os.Getenv("ROOST_TERRAIN_MEASURE") == "" {
+		t.Skip("ROOST_TERRAIN_MEASURE not set (measurements, see docs/maintenance/evidence/terrain-p2-20261108)")
+	}
+}
+
+// 单块增量的实际字节：r=5m 高度增量、材质改动、守卫整字段、进入视野的全量。
+func TestTerrainMeasureUpdateBytes(t *testing.T) {
+	measuring(t)
+	h := startTerrainSyncHarness(t, 8, 8, terrainViewRadius, terrainMaxVisible, false)
+	key := terrain.ChunkKey{X: 4, Y: 4}
+	at := centreOf(key)
+	h.brush(t, terrainBuilder, 1, terrain.Brush{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: 300, Strength: 1})
+	client := h.join(t, 30010, at)
+	h.flushUntil(t, "the chunk", func() bool { n, _ := client.held(); return n == 1 })
+	id := chunkID(t, key)
+	report := func(name string) {
+		update, f, ok := lastUpdate(client.takeFrames(), id)
+		if !ok {
+			t.Fatalf("%s: no update", name)
+		}
+		t.Logf("MEASURE %-34s payload=%6d component=%6d frame=%6d wire=%6d heights_delta=%v height_updates=%d materials=%v",
+			name, update.payloadBytes, update.componentBytes, f.frameBytes, f.wireBytes, update.heightsDelta, update.heightUpdates, update.materials)
+	}
+	report("full snapshot (enter view)")
+	for i, tc := range []struct {
+		name string
+		b    terrain.Brush
+	}{
+		{"raise r=5m linear", terrain.Brush{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: 500, Falloff: terrain.FalloffLinear, Strength: 20}},
+		{"raise r=5m constant (81 points)", terrain.Brush{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: 500, Strength: 20}},
+		{"raise r=16m smooth", terrain.Brush{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: 1600, Falloff: terrain.FalloffSmooth, Strength: 40}},
+		{"paint r=5m (materials whole field)", terrain.Brush{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 500, Material: 21}},
+		{"flatten r=24m (guard, whole heights)", terrain.Brush{Op: terrain.BrushFlatten, X: at.X, Y: at.Y, Radius: 2400, Target: 777}},
+	} {
+		version := h.brush(t, terrainBuilder, uint64(10+i), tc.b).Chunks[0].Version
+		h.flushUntil(t, tc.name, func() bool { return client.version(id) == version })
+		report(tc.name)
+	}
+}
+
+// 下行字节 / 秒的模拟（方案 §7.1 两档）。单进程、离线存储，复制循环不起：模拟时间按“拍”走，一拍 = 50ms = 一次
+// Flush，每拍之前做这一拍的编辑 / 移动；客户端是同一进程里的真实 TCP 接收端。测的是一个观察者收到的下行字节，
+// 不是时延；同一块在同一拍里的多次编辑合成一个增量（与真实的 50ms 合批相同）。
+func TestTerrainMeasureDownlinkScenarios(t *testing.T) {
+	measuring(t)
+	const ticksPerSecond = 20
+	run := func(t *testing.T, name string, seconds int, setup func(h *terrainSyncHarness) spatial.Point, tick func(h *terrainSyncHarness, tick int, observer int64)) {
+		h := startTerrainSyncHarness(t, 16, 16, terrainViewRadius, terrainMaxVisible, false)
+		at := setup(h)
+		const observer = int64(30020)
+		client := h.join(t, observer, at)
+		for range 60 { // 先把进入视野的全量发完，测的是之后的稳态
+			_ = h.scene.Flush(h.ctx)
+		}
+		time.Sleep(50 * time.Millisecond)
+		client.takeFrames()
+		for i := range seconds * ticksPerSecond {
+			tick(h, i, observer)
+			if err := h.scene.Flush(h.ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+		frames := client.takeFrames()
+		var wire, payload, full, delta int
+		for _, f := range frames {
+			if len(f.terrain) == 0 {
+				continue
+			}
+			wire += f.wireBytes
+			for _, u := range f.terrain {
+				payload += u.payloadBytes
+				if u.full {
+					full++
+				} else {
+					delta++
+				}
+			}
+		}
+		if err := client.failure(); err != nil {
+			t.Fatal(err)
+		}
+		if lost := h.scene.manager.Stats().SessionsLost; lost != 0 {
+			t.Fatalf("%d sessions lost", lost)
+		}
+		t.Logf("MEASURE %-50s %7.1f KB/s on the wire (%7.1f KB/s DAO payload), %d full + %d delta chunk updates in %d s",
+			name, float64(wire)/1024/float64(seconds), float64(payload)/1024/float64(seconds), full, delta, seconds)
+	}
+	// 建造热点：观察者站在块 (8,8) 中心，附近 20 人每人每秒一次 r=5m 编辑（落在观察者 ±40m 内，轮流：每拍一人），
+	// 材质比例 0 / 50% / 100%（带材质的编辑 = 一次抬高 + 同一处一次改材质）。
+	for _, share := range []int{0, 50, 100} {
+		t.Run(fmt.Sprintf("hotspot_material_%d", share), func(t *testing.T) {
+			rng := rand.New(rand.NewPCG(7, uint64(share)))
+			var request uint64
+			centre := centreOf(terrain.ChunkKey{X: 8, Y: 8})
+			run(t, fmt.Sprintf("hot spot, 20 editors x 1/s, %d%% with material", share), 20, func(h *terrainSyncHarness) spatial.Point {
+				return centre
+			}, func(h *terrainSyncHarness, tick int, _ int64) {
+				editor := tick % 20
+				x, y := centre.X+rng.Int64N(8000)-4000, centre.Y+rng.Int64N(8000)-4000
+				request++
+				h.brush(t, terrainBuilder+int64(editor), request, terrain.Brush{Op: terrain.BrushRaise, X: x, Y: y, Radius: 500, Falloff: terrain.FalloffLinear, Strength: 5})
+				if editor*100/20 < share {
+					request++
+					h.brush(t, terrainBuilder+int64(editor), request, terrain.Brush{Op: terrain.BrushPaint, X: x, Y: y, Radius: 500, Material: byte(tick)})
+				}
+			})
+		})
+	}
+	// 跑图进入改过的区域：观察者从块 (1,8) 中心向东匀速跑 30 秒（6 m/s 跑步、12 m/s 坐骑），沿途全部 / 20% 的块改过
+	// （每块一次小编辑）。
+	for _, c := range []struct{ speed, share int }{{6, 100}, {6, 20}, {12, 100}, {12, 20}} {
+		t.Run(fmt.Sprintf("run_%dmps_edited_%d", c.speed, c.share), func(t *testing.T) {
+			rng := rand.New(rand.NewPCG(11, uint64(c.share)))
+			var at spatial.Point
+			run(t, fmt.Sprintf("running at %d m/s, %d%% of the chunks edited", c.speed, c.share), 30, func(h *terrainSyncHarness) spatial.Point {
+				request := uint64(0)
+				for y := int32(0); y < 16; y++ {
+					for x := int32(0); x < 16; x++ {
+						if rng.IntN(100) >= c.share {
+							continue
+						}
+						centre := centreOf(terrain.ChunkKey{X: x, Y: y})
+						request++
+						h.brush(t, terrainBuilder, request, terrain.Brush{Op: terrain.BrushRaise, X: centre.X, Y: centre.Y, Radius: 300, Strength: 2})
+					}
+				}
+				at = centreOf(terrain.ChunkKey{X: 1, Y: 8})
+				return at
+			}, func(h *terrainSyncHarness, _ int, observer int64) {
+				at.X += int64(c.speed) * 100 / ticksPerSecond
+				// 直接移动地形视点（场景的移动链路在提交后做同一件事，按 terrainViewStep 节流，见 terrainMoves；这里省掉
+				// 玩家实体的移动事务）。
+				if err := h.scene.terrain.interest.MoveView(observer, at); err != nil {
+					t.Fatal(err)
+				}
+			})
+		})
+	}
+}
+
+// 单次编辑在 Nest short 池的耗时与单格吞吐：Map.Brush 端到端（Nest 准入 → 锁 4 块以内 → handler → 提交（离线提交器，
+// 不含 WAL / Mongo）→ 提交后装视图 → 回复）。handler 本身的计算另见 gameplay/terrain 的 BenchmarkBrushApplyPlayerRadius。
+func TestTerrainMeasureBrushCost(t *testing.T) {
+	measuring(t)
+	pack := writeTerrainPackSized(t, t.TempDir(), 16, 16)
+	p := startTerrainProcessWith(t, pack, wholeMap, &memoryChunkStore{}, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.MaxRadius, policy.EditsPerSecond = 2500, 0
+		p.m.SetPolicy(policy)
+	})
+	// 先把要用到的块都建出来，测的是改块事务本身。
+	for y := int32(0); y < 16; y++ {
+		for x := int32(0); x < 16; x++ {
+			c := centreOf(terrain.ChunkKey{X: x, Y: y})
+			if _, err := p.m.Brush(p.ctx, 1, uint64(y*16+x+1), terrain.Brush{Op: terrain.BrushPaint, X: c.X, Y: c.Y, Radius: 100, Material: 1}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	measure := func(name string, n int, brushOf func(i int) terrain.Brush) {
+		durations := make([]time.Duration, n)
+		for i := range n {
+			b := brushOf(i)
+			started := time.Now()
+			if _, err := p.m.Brush(p.ctx, 2, uint64(1000000+i)+uint64(len(name))<<32, b); err != nil {
+				t.Fatal(err)
+			}
+			durations[i] = time.Since(started)
+		}
+		sort.Slice(durations, func(a, b int) bool { return durations[a] < durations[b] })
+		var total time.Duration
+		for _, d := range durations {
+			total += d
+		}
+		t.Logf("MEASURE %-40s n=%d mean=%v p50=%v p99=%v max=%v", name, n, total/time.Duration(n), durations[n/2], durations[n*99/100], durations[n-1])
+	}
+	measure("brush r=5m linear (points, 1 chunk)", 2000, func(i int) terrain.Brush {
+		c := centreOf(terrain.ChunkKey{X: int32(i % 16), Y: int32(i / 16 % 16)})
+		return terrain.Brush{Op: terrain.BrushRaise, X: c.X, Y: c.Y, Radius: 500, Falloff: terrain.FalloffLinear, Strength: 1 + uint16(i%3)}
+	})
+	measure("brush r=16m smooth on a corner (4 chunks)", 1000, func(i int) terrain.Brush {
+		k := terrain.ChunkKey{X: int32(1 + i%14), Y: int32(1 + i/14%14)}
+		return terrain.Brush{Op: terrain.BrushRaise, X: k.Origin().X, Y: k.Origin().Y, Radius: 1600, Falloff: terrain.FalloffSmooth, Strength: 1 + uint16(i%3)}
+	})
+	measure("flatten r=24m (whole-field guard)", 500, func(i int) terrain.Brush {
+		c := centreOf(terrain.ChunkKey{X: int32(i % 16), Y: int32(i / 16 % 16)})
+		return terrain.Brush{Op: terrain.BrushFlatten, X: c.X, Y: c.Y, Radius: 2400, Target: uint16(1000 + i%7*50)}
+	})
+	// 吞吐：8 个编辑者各改自己的一列块（互不争锁），每人 500 次。
+	started := time.Now()
+	var wg sync.WaitGroup
+	for editor := range 8 {
+		wg.Go(func() {
+			for i := range 500 {
+				c := centreOf(terrain.ChunkKey{X: int32(editor * 2), Y: int32(i % 16)})
+				if _, err := p.m.Brush(p.ctx, int64(100+editor), uint64(i+1), terrain.Brush{Op: terrain.BrushRaise, X: c.X, Y: c.Y, Radius: 500, Falloff: terrain.FalloffLinear, Strength: 1}); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+	t.Logf("MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = %.0f edits/s (offline committer, 4 short workers)", 4000/time.Since(started).Seconds())
+}
+
+func writeTerrainPackSized(t *testing.T, dir string, chunksX, chunksY int32) string {
+	t.Helper()
+	path := filepath.Join(dir, fmt.Sprintf("terrain-%dx%d.pack", chunksX, chunksY))
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: chunksX, ChunksY: chunksY, WaterLevel: 40000}
+	if err := terrain.WritePackFile(path, meta, terrain.Generated(meta, terrainSeed)); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}

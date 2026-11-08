@@ -3,12 +3,15 @@ package handler
 import (
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	"{{MODULE}}/game/terrainmap"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 )
 
-// handlerTerrainEdit 在一块地形上应用一组采样点改动（可编辑地形 P1 的最小内部写入口，地形服务的 Map.Edit 发起）。
-// 第一次改的块由调用方先经 lifecycle 的 GetOrCreate 建出空实体（handler 只能锁已存在的实体）；这里在块的锁与事务里
-// 用原始块填满它、写入改动、Version + 1，返回新 Version。新数据在提交被接受后才进地形视图（terrainmap.ApplyEdit 的
-// nest.AfterCommit），事务回滚时视图不变。strict：回复与视图更新都在 WAL 持久之后。
+// 地形块的三个改块事务（可编辑地形，game/terrainmap 发起）。都是 rollback=undo durability=strict：回复与视图更新
+// 都在 WAL 持久之后，回滚的事务由生成 setter 的逆操作还原 DAO、不改变视图。第一次改的块由调用方先经 lifecycle 的
+// GetOrCreate 建出空实体（handler 只能锁已存在的实体）。handler 是包级函数，前两个经 terrainmap.Active() 拿到本进程的 Map。
+
+// handlerTerrainEdit 在一块地形上应用一组采样点改动（P1 的内部写入口，Map.Edit 发起）：用原始块填满第一次改的块、
+// 写入改动、Version + 1，返回新 Version。
 //
 //roost:nest rollback=undo durability=strict
 func handlerTerrainEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chunk.PointEdit) (int64, error) {
@@ -17,4 +20,25 @@ func handlerTerrainEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chu
 		return 0, terrainmap.ErrDisabled
 	}
 	return m.ApplyEdit(target, edits)
+}
+
+// handlerTerrainBrush 是玩家的一次笔刷编辑（P2，Map.Brush 发起）：targets 是笔刷覆盖到的全部块（至多 4 块，Nest 按
+// ID 排序一起锁住），一笔事务里判重、算笔刷、逐块写、请求 ID 记进每一块（terrainmap.Map.ApplyBrush）。
+//
+//roost:nest rollback=undo durability=strict
+func handlerTerrainBrush(targets []terrain_chunk.ISurfaceEntity, editID uint64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+	m := terrainmap.Active()
+	if m == nil {
+		return terrain_chunk.BrushResult{}, terrainmap.ErrDisabled
+	}
+	return m.ApplyBrush(targets, editID, brush)
+}
+
+// handlerTerrainDiscard 丢弃一块基于旧原始地形的改动（维护者 2026-11-08：原始地形换版后改过的块丢弃改动；Map.Load
+// 在启动时、发布 Map 之前发起，所以不经 terrainmap.Active()）：记录仍基于 staleRevision、且它不是当前包的
+// currentRevision 时重置为 Version 0 的空记录，返回是否重置（SurfaceComponent.Discard）。
+//
+//roost:nest rollback=undo durability=strict
+func handlerTerrainDiscard(target terrain_chunk.ISurfaceEntity, staleRevision int64, currentRevision int64) (bool, error) {
+	return target.SurfaceComp().Discard(staleRevision, currentRevision), nil
 }

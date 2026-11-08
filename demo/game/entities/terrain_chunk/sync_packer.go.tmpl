@@ -1,0 +1,82 @@
+package terrain_chunk
+
+import (
+	"fmt"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// TerrainChunkSyncCodec 是地形块同步载荷的编码号：载荷是 TerrainChunkDao 的同步 PB（MarshalSync / MarshalSyncChanges），
+// 客户端交给生成的 ApplySyncTerrainChunkDao（C# / C++ 用同一份 dao_sync.proto 的生成 Apply）。
+const TerrainChunkSyncCodec uint16 = 2
+
+// terrainChunkViews 只有一个视图：缺省视图（地形 Interest 的 0 档，terrain_sync.go 不配分档），字段是 DAO 上全部标了
+// sync 的字段——BaseRevision、Version、Heights、Materials。Applied 只标了 persist，不在任何视图里（方案 §3：编辑去重
+// 是服务端的事）。
+var terrainChunkViews, terrainChunkViewsErr = dataengine.NewSyncViewSet(db.TerrainChunkDaoSyncFields(),
+	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}},
+)
+
+// NewTerrainChunkSyncPacker 是实体标记 subjectPacker= 指名的工厂。
+//
+// 增量走 DAO 的变化树（MarshalSyncChanges）：小笔刷只发改了的高度下标（每点约 8 字节），整字段守卫（SetHeightsAll）
+// 与材质（[]byte）发整字段；进入视野、重连、恢复发全量（MarshalSync）。所以本 packer 同时实现
+// entity.SubjectSyncChangePacker，把捕获版本与确认委托给同一个 DAO（docs/framework/DAO-SYNC-PROTOBUF.md“业务写法”）。
+func NewTerrainChunkSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+	owner, _ := value.(*TerrainChunk)
+	return terrainChunkSyncPacker{chunk: owner}
+}
+
+type terrainChunkSyncPacker struct{ chunk *TerrainChunk }
+
+func (packer terrainChunkSyncPacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+	return packer.pack(profile, dataengine.AllFields, false)
+}
+
+func (packer terrainChunkSyncPacker) PackSubjectDelta(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	return packer.pack(profile, mask, true)
+}
+
+// SubjectSyncChangeVersion 与 AcknowledgeSubjectSyncChanges 是变化树的捕获版本与确认（在实体锁内由框架调用）。
+func (packer terrainChunkSyncPacker) SubjectSyncChangeVersion() uint64 {
+	if packer.chunk == nil {
+		return 0
+	}
+	return packer.chunk.Dao().DirtyTracker().SyncChangeVersion()
+}
+
+func (packer terrainChunkSyncPacker) AcknowledgeSubjectSyncChanges(version uint64) {
+	if packer.chunk != nil {
+		packer.chunk.Dao().DirtyTracker().AcknowledgeSyncChanges(version)
+	}
+}
+
+// pack 只交出视图允许的字段；未知视图返回 entity.ErrSyncViewUnknown，不扩大字段权限。
+func (packer terrainChunkSyncPacker) pack(profile entity.SyncProfile, mask uint64, changes bool) (entity.FrozenSyncPayload, error) {
+	if terrainChunkViewsErr != nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("terrain chunk sync packer: %w", terrainChunkViewsErr)
+	}
+	if packer.chunk == nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("terrain chunk sync packer: the entity is not a *TerrainChunk")
+	}
+	view, ok := terrainChunkViews.Lookup(profile)
+	if !ok {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("%w: %+v", entity.ErrSyncViewUnknown, profile)
+	}
+	if mask &= view.Fields; mask == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	dao := packer.chunk.Dao()
+	var raw []byte
+	if changes {
+		raw = dao.MarshalSyncChanges(mask)
+	} else {
+		raw = dao.MarshalSync(mask)
+	}
+	if len(raw) == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	return entity.TakeFrozenSyncPayload(TerrainChunkSyncCodec, raw), nil
+}

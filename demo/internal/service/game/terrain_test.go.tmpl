@@ -126,6 +126,13 @@ type terrainProcess struct {
 // startTerrainProcess 照 startTerrain 的顺序：打开包、按 store 里的记录装入、发布。
 func startTerrainProcess(t *testing.T, pack string, region func(terrain.Meta) (terrainmap.Region, error), store coredata.Store) *terrainProcess {
 	t.Helper()
+	return startTerrainProcessWith(t, pack, region, store, nil)
+}
+
+// startTerrainProcessWith 是 startTerrainProcess，beforeLoad 在 Nest 启动之后、Map.Load 之前调用（例如让提交器拒绝
+// Load 里的第一笔丢弃事务）。
+func startTerrainProcessWith(t *testing.T, pack string, region func(terrain.Meta) (terrainmap.Region, error), store coredata.Store, beforeLoad func(*terrainProcess)) *terrainProcess {
+	t.Helper()
 	handler.RegisterTerrainEditNestHandlers()
 	terrain_chunk.RegisterEntity()
 	p := &terrainProcess{t: t, ctx: context.Background(), entities: entity.NewEntityManager(), committer: &terrainCommitter{}}
@@ -148,6 +155,9 @@ func startTerrainProcess(t *testing.T, pack string, region func(terrain.Meta) (t
 	p.m, err = terrainmap.Open(pack, region, chunks, syncsender.NewTerrainEditSender(p.engine))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if beforeLoad != nil {
+		beforeLoad(p)
 	}
 	if p.stats, err = p.m.Load(p.ctx, store); err != nil {
 		t.Fatal(err)
@@ -372,41 +382,99 @@ func TestTerrainEditsSurviveARestart(t *testing.T) {
 	}
 }
 
-// 记录基于另一版原始地形（包换成 BaseRevision 2）的块不装入：计入 StaleBase、查询答 ErrNotLoaded、改块答
-// ErrUnloadable，库里的记录不动；别的块照常从包装入。
-func TestTerrainRecordOnAnotherBaseRevisionIsNotLoaded(t *testing.T) {
+// 原始地形换了版本（包换成 BaseRevision 2）：本进程写的块丢弃改动（维护者 2026-11-08）——记录经正式写路径（handler
+// TerrainDiscard 的事务）重置为 Version 0 的空记录、这块回到新包的原始数据，重启后不再出现；丢弃事务失败时这块不装入
+// （查询 ErrNotLoaded、改块 ErrUnloadable、库里记录不动），不用原始块盖住旧记录；邻格（Ghost 带）的旧记录不越权丢弃、
+// 不装入。
+func TestTerrainRecordOnAnotherBaseRevisionIsDiscarded(t *testing.T) {
 	dir := t.TempDir()
 	store := &memoryChunkStore{}
 	first := startTerrainProcess(t, writeTerrainPack(t, dir, 1), wholeMap, store)
-	if _, err := first.m.Edit(first.ctx, []terrainmap.SampleEdit{{GX: 5, GY: 5, Height: 1234, Material: 3}}); err != nil {
-		t.Fatal(err)
+	for _, edit := range []terrainmap.SampleEdit{{GX: 5, GY: 5, Height: 1234, Material: 3}, {GX: 70, GY: 5, Height: 4321, Material: 4}} {
+		if _, err := first.m.Edit(first.ctx, []terrainmap.SampleEdit{edit}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	first.stop()
 	first.persist(store)
-	stored := slices.Clone(store.docs[mustChunkID(t, terrain.ChunkKey{})].Data)
-
-	second := startTerrainProcess(t, writeTerrainPack(t, dir, 2), wholeMap, store)
-	if second.stats.StaleBase != 1 || second.stats.Overlays != 0 || second.stats.Base != 5 {
-		t.Fatalf("load on revision 2: %+v, want 1 stale chunk and 5 from the pack", second.stats)
+	k00, k10 := terrain.ChunkKey{}, terrain.ChunkKey{X: 1}
+	stored00 := slices.Clone(store.docs[mustChunkID(t, k00)].Data)
+	pack2 := writeTerrainPack(t, dir, 2)
+	fresh, err := terrain.OpenPack(pack2)
+	if err != nil {
+		t.Fatal(err)
 	}
-	stale := terrain.ChunkKey{}
-	if cause, ok := second.m.Unloadable()[stale]; !ok || !errors.Is(cause, terrain.ErrBaseRevision) {
+	defer fresh.Close()
+
+	// 邻格：sid 1001 托管格 (0,0)、Ghost 带里装着格 (1,0) 的块。它丢弃自己的块，邻格的旧记录不碰、不装入。
+	partition := settings.ScenePartition{Enabled: true, CellSize: terrain.ChunkSize, Cols: 3, Rows: 2, Owners: []string{"1001", "1002", "1003", "1004", "1005", "1006"}, GhostBand: 500, Hysteresis: 50}
+	ghostStore := &memoryChunkStore{docs: maps.Clone(store.docs)}
+	ghost := startTerrainProcess(t, pack2, func(meta terrain.Meta) (terrainmap.Region, error) { return terrainRegion(meta, partition, 1001) }, ghostStore)
+	if ghost.stats.Discarded != 1 || ghost.stats.StaleBase != 1 {
+		t.Fatalf("cell (0,0) on revision 2: %+v, want its own chunk discarded and the neighbour's not loaded", ghost.stats)
+	}
+	if _, loaded := ghost.m.View().Version(k10); loaded {
+		t.Fatal("a neighbouring cell's stale chunk was loaded")
+	}
+	ghostID := mustChunkID(t, k10)
+	if e, _ := ghost.entities.Get(ghostID).(*terrain_chunk.TerrainChunk); e == nil || e.Dao().GetVersion() != 1 || e.Dao().GetBaseRevision() != 1 {
+		t.Fatal("the neighbouring cell's record was touched")
+	}
+	ghost.stop()
+
+	// 丢弃事务被拒（第一笔：块 (0,0)）：这块不装入、库里的记录不动；块 (1,0) 照常丢弃。
+	second := startTerrainProcessWith(t, pack2, wholeMap, store, func(p *terrainProcess) { p.committer.reject.Store(true) })
+	if second.stats.StaleBase != 1 || second.stats.Discarded != 1 || second.stats.Overlays != 0 || second.stats.Base != 5 {
+		t.Fatalf("load on revision 2 with the first discard refused: %+v, want 1 not loaded, 1 discarded, 5 from the pack", second.stats)
+	}
+	if cause, ok := second.m.Unloadable()[k00]; !ok || !errors.Is(cause, terrain.ErrBaseRevision) || !errors.Is(cause, errInjectedRejection) {
 		t.Fatalf("chunk (0,0) unloadable reason: %v", cause)
 	}
 	if _, err := second.m.Height(5*terrain.SampleSpacing, 5*terrain.SampleSpacing); !errors.Is(err, terrain.ErrNotLoaded) {
-		t.Fatalf("query in the stale chunk: %v, want ErrNotLoaded", err)
+		t.Fatalf("query in the chunk whose discard failed: %v, want ErrNotLoaded", err)
 	}
-	if _, err := second.m.Height(70*terrain.SampleSpacing+1, 5*terrain.SampleSpacing); err != nil {
-		t.Fatalf("query in a chunk from the pack: %v", err)
+	if _, err := second.m.Edit(second.ctx, []terrainmap.SampleEdit{{GX: 5, GY: 5, Height: 1, Material: 1}}); !errors.Is(err, terrainmap.ErrUnloadable) {
+		t.Fatalf("edit in the chunk whose discard failed: %v, want ErrUnloadable", err)
 	}
-	if _, err := second.m.Edit(second.ctx, []terrainmap.SampleEdit{{GX: 5, GY: 5, Height: 1, Material: 1}}); !errors.Is(err, terrainmap.ErrUnloadable) || !errors.Is(err, terrain.ErrNotLoaded) {
-		t.Fatalf("edit in the stale chunk: %v, want ErrUnloadable", err)
+	baseOf := func(key terrain.ChunkKey) terrain.Chunk {
+		c, err := fresh.ReadChunk(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
 	}
-	if second.committer.commits.Load() != 0 {
-		t.Fatal("something was committed on the stale chunk")
+	if got, v, _ := second.m.View().Chunk(k10); v != 0 || !slices.Equal(got.Heights, baseOf(k10).Heights) {
+		t.Fatalf("the discarded chunk (1,0) is at version %d and not the new base data", v)
 	}
-	if !slices.Equal(store.docs[mustChunkID(t, stale)].Data, stored) {
-		t.Fatal("the stale record was rewritten")
+	second.stop()
+	second.persist(store)
+	if !slices.Equal(store.docs[mustChunkID(t, k00)].Data, stored00) {
+		t.Fatal("the record whose discard failed was rewritten")
+	}
+
+	// 重启：(0,0) 这次丢弃成功；(1,0) 已是 Version 0 的空记录，按原始块装入，不再算丢弃。
+	third := startTerrainProcess(t, pack2, wholeMap, store)
+	if third.stats.Discarded != 1 || third.stats.StaleBase != 0 || third.stats.Overlays != 0 || third.stats.Base != 6 {
+		t.Fatalf("restart on revision 2: %+v, want (0,0) discarded now and every chunk from the pack", third.stats)
+	}
+	for _, key := range third.m.Keys() {
+		got, v, loaded := third.m.View().Chunk(key)
+		if want := baseOf(key); !loaded || v != 0 || !slices.Equal(got.Heights, want.Heights) || !slices.Equal(got.Materials, want.Materials) {
+			t.Fatalf("chunk %v after the discards: loaded %v version %d, not the new base data", key, loaded, v)
+		}
+	}
+	// 丢弃之后照常改：从新包的原始块开始，记录基于版本 2。
+	if versions, err := third.m.Edit(third.ctx, []terrainmap.SampleEdit{{GX: 5, GY: 5, Height: 77, Material: 7}}); err != nil || versions[k00] != 1 {
+		t.Fatalf("edit after the discard: %v, %v (want version 1)", versions, err)
+	}
+	third.stop()
+	third.persist(store)
+	fourth := startTerrainProcess(t, pack2, wholeMap, store)
+	if fourth.stats.Discarded != 0 || fourth.stats.StaleBase != 0 || fourth.stats.Overlays != 1 || fourth.stats.Base != 5 {
+		t.Fatalf("second restart: %+v, want no discard and the one new edit as an overlay", fourth.stats)
+	}
+	if h := sampleHeight(t, fourth.m, 5, 5); h != fourth.m.Meta().WorldHeight(77) {
+		t.Fatalf("the edit after the discard reads %d after a restart", h)
 	}
 }
 
@@ -652,4 +720,343 @@ func TestTerrainRestartRealMongo(t *testing.T) {
 	if stored.Version != 3 || len(stored.Heights) != terrain.ChunkPoints || stored.Heights[1*terrain.ChunkSamples+1] != 9 {
 		t.Fatalf("stored chunk (0,0): version %d, %d heights, height at (1,1) %v", stored.Version, len(stored.Heights), stored.Heights[1*terrain.ChunkSamples+1])
 	}
+
+	// 原始地形换版（包换成 BaseRevision 2）：5 块的改动经真实 DataEngine 丢弃（冷加载 + strict 事务 → WAL → 投影），
+	// 库里留下 Version 0 的空记录，重启后全部按新包的原始块装入、不再丢弃。
+	pack2 := writeTerrainPack(t, dir, 2)
+	third := startRealTerrainProcess(t, ctx, client, databases, physical, walDir, pack2)
+	if third.stats.Discarded != 5 || third.stats.StaleBase != 0 || third.stats.Overlays != 0 || third.stats.Base != 6 {
+		t.Fatalf("start on revision 2: %+v, want the 5 edited chunks discarded and every chunk from the pack", third.stats)
+	}
+	third.stop(t)
+	stored.Version, stored.Heights = -1, nil
+	if err := client.Database(physical).Collection(db.TerrainChunkDaoCollection).FindOne(ctx, map[string]any{"_id": mustChunkID(t, terrain.ChunkKey{})}, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Version != 0 || len(stored.Heights) != 0 {
+		t.Fatalf("stored chunk (0,0) after the discard: version %d, %d heights; want an empty version-0 record", stored.Version, len(stored.Heights))
+	}
+	fourth := startRealTerrainProcess(t, ctx, client, databases, physical, walDir, pack2)
+	if fourth.stats.Discarded != 0 || fourth.stats.StaleBase != 0 || fourth.stats.Base != 6 {
+		t.Fatalf("restart on revision 2 after the discard: %+v", fourth.stats)
+	}
+	fourth.stop(t)
 }
+
+// ---- 玩家编辑（P2：笔刷、校验、幂等、多块事务） ----
+
+// brushProcess 是只有地形的一个进程，玩家编辑不限频（限速另有用例），时钟固定。
+func brushProcess(t *testing.T, store *memoryChunkStore) *terrainProcess {
+	t.Helper()
+	return startTerrainProcessWith(t, writeTerrainPack(t, t.TempDir(), 1), wholeMap, store, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.EditsPerSecond = 0
+		p.m.SetPolicy(policy)
+	})
+}
+
+// chunkState 是一块在实体与视图里的全部状态：DAO 的版本、高度、材质与 Applied，视图的版本与数据。
+type chunkState struct {
+	daoVersion   int64
+	heights      []uint16
+	materials    []byte
+	applied      []uint64
+	viewVersion  int64
+	viewHeights  []uint16
+	viewMaterial []byte
+}
+
+func stateOf(t *testing.T, p *terrainProcess, key terrain.ChunkKey) chunkState {
+	t.Helper()
+	var s chunkState
+	if e, _ := p.entities.Get(mustChunkID(t, key)).(*terrain_chunk.TerrainChunk); e != nil {
+		dao := e.Dao()
+		s.daoVersion = dao.GetVersion()
+		dao.RangeHeights(func(_ int, v uint16) bool { s.heights = append(s.heights, v); return true })
+		s.materials = dao.GetMaterialsAll()
+		dao.RangeApplied(func(_ int, v uint64) bool { s.applied = append(s.applied, v); return true })
+	}
+	// 没有实体与 Version 0 的空实体等价：第一次改的块在事务之前 GetOrCreate，事务回滚后留下的空实体仍按原始块看待。
+	c, v, _ := p.m.View().Chunk(key)
+	s.viewVersion, s.viewHeights, s.viewMaterial = v, c.Heights, c.Materials
+	return s
+}
+
+func sameState(a, b chunkState) bool {
+	return a.daoVersion == b.daoVersion && slices.Equal(a.heights, b.heights) && slices.Equal(a.materials, b.materials) &&
+		slices.Equal(a.applied, b.applied) && a.viewVersion == b.viewVersion && slices.Equal(a.viewHeights, b.viewHeights) &&
+		slices.Equal(a.viewMaterial, b.viewMaterial)
+}
+
+func allStates(t *testing.T, p *terrainProcess) map[terrain.ChunkKey]chunkState {
+	t.Helper()
+	out := map[terrain.ChunkKey]chunkState{}
+	for _, key := range p.m.Keys() {
+		out[key] = stateOf(t, p, key)
+	}
+	return out
+}
+
+func sameStates(a, b map[terrain.ChunkKey]chunkState) bool {
+	return maps.EqualFunc(a, b, sameState)
+}
+
+// expectBrushes 是在原始块上依次应用笔刷（纯函数，限值同 DefaultPolicy）后每块的期望数据。
+func expectBrushes(t *testing.T, m *terrainmap.Map, pack string, brushes ...terrain.Brush) map[terrain.ChunkKey]terrain.Chunk {
+	t.Helper()
+	p, err := terrain.OpenPack(pack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	chunks := map[terrain.ChunkKey]terrain.Chunk{}
+	for _, key := range m.Keys() {
+		if chunks[key], err = p.ReadChunk(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, b := range brushes {
+		changes, err := b.Apply(m.Meta(), m.Policy().Limits, chunks)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, change := range changes {
+			for _, pt := range change.Points {
+				chunks[change.Key].Heights[pt.Index], chunks[change.Key].Materials[pt.Index] = pt.Height, pt.Material
+			}
+		}
+	}
+	return chunks
+}
+
+func viewMatches(t *testing.T, m *terrainmap.Map, want map[terrain.ChunkKey]terrain.Chunk) {
+	t.Helper()
+	for key, chunk := range want {
+		got, _, _ := m.View().Chunk(key)
+		if !slices.Equal(got.Heights, chunk.Heights) || !slices.Equal(got.Materials, chunk.Materials) {
+			t.Fatalf("chunk %v in the view differs from the brushes applied once each in order", key)
+		}
+	}
+}
+
+const brushPlayer = int64(4242)
+
+// 重复与乱序（方案 §9 P2）：同一请求重发得到 Duplicate、什么都不写；先到的请求 3、后到的请求 2 各生效一次（按到达
+// 顺序），之后两者的重放都是 Duplicate；结果与“按到达顺序各应用一次”的纯计算逐点相同。四块交点上的笔刷在一笔事务
+// 里改 4 块，请求 ID 记进每一块。
+func TestTerrainBrushRepeatsAndReordersApplyOnce(t *testing.T) {
+	store := &memoryChunkStore{}
+	p := brushProcess(t, store)
+	pack := writeTerrainPack(t, t.TempDir(), 1)
+	corner := terrain.Brush{Op: terrain.BrushRaise, X: terrain.ChunkSize, Y: terrain.ChunkSize, Radius: 1200, Falloff: terrain.FalloffLinear, Strength: 40}
+	paint := terrain.Brush{Op: terrain.BrushPaint, X: terrain.ChunkSize + 300, Y: terrain.ChunkSize - 200, Radius: 500, Material: 77}
+	lower := terrain.Brush{Op: terrain.BrushLower, X: 3000, Y: 3000, Radius: 800, Falloff: terrain.FalloffSmooth, Strength: 20}
+
+	result, err := p.m.Brush(p.ctx, brushPlayer, 1, corner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Duplicate || len(result.Chunks) != 4 {
+		t.Fatalf("corner brush: %+v, want 4 chunks", result)
+	}
+	for _, c := range result.Chunks {
+		if c.Version != 1 {
+			t.Fatalf("corner brush left %v at version %d", c.Key, c.Version)
+		}
+	}
+	commits := p.committer.commits.Load()
+	before := allStates(t, p)
+	again, err := p.m.Brush(p.ctx, brushPlayer, 1, corner)
+	if err != nil || !again.Duplicate || !slices.Equal(again.Chunks, result.Chunks) {
+		t.Fatalf("the same request again: %+v, %v; want Duplicate with the same versions", again, err)
+	}
+	if !sameStates(before, allStates(t, p)) {
+		t.Fatal("a duplicate request changed a chunk")
+	}
+	// 不同玩家的同一个请求 ID 是另一次编辑。
+	if other, err := p.m.Brush(p.ctx, brushPlayer+1, 1, paint); err != nil || other.Duplicate {
+		t.Fatalf("another player's request 1: %+v, %v", other, err)
+	}
+	// 乱序：3 先到、2 后到，各生效一次；重放都不再生效。
+	if r, err := p.m.Brush(p.ctx, brushPlayer, 3, lower); err != nil || r.Duplicate {
+		t.Fatalf("request 3: %+v, %v", r, err)
+	}
+	if r, err := p.m.Brush(p.ctx, brushPlayer, 2, corner); err != nil || r.Duplicate {
+		t.Fatalf("request 2 after 3: %+v, %v", r, err)
+	}
+	settled := allStates(t, p)
+	for _, id := range []uint64{3, 2, 1} {
+		brush := map[uint64]terrain.Brush{1: corner, 2: corner, 3: lower}[id]
+		if r, err := p.m.Brush(p.ctx, brushPlayer, id, brush); err != nil || !r.Duplicate {
+			t.Fatalf("replay of request %d: %+v, %v; want Duplicate", id, r, err)
+		}
+	}
+	if !sameStates(settled, allStates(t, p)) {
+		t.Fatal("a replay changed a chunk")
+	}
+	viewMatches(t, p.m, expectBrushes(t, p.m, pack, corner, paint, lower, corner))
+	if commits == 0 || p.m.CommitFailures() != 0 {
+		t.Fatalf("commits %d, commit failures %d", commits, p.m.CommitFailures())
+	}
+	// 请求 ID 在一笔事务里记进它锁住的每一块（包括交点那四块）。
+	id := terrainmap.EditID(brushPlayer, 1)
+	for _, key := range []terrain.ChunkKey{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 0, Y: 1}, {X: 1, Y: 1}} {
+		if !slices.Contains(stateOf(t, p, key).applied, id) {
+			t.Fatalf("chunk %v does not record the corner edit", key)
+		}
+	}
+
+	// 重启之后重放仍然是 Duplicate（Applied 持久）。
+	p.stop()
+	p.persist(store)
+	restarted := startTerrainProcessWith(t, pack, wholeMap, store, func(q *terrainProcess) { q.m.SetPolicy(p.m.Policy()) })
+	if r, err := restarted.m.Brush(restarted.ctx, brushPlayer, 2, corner); err != nil || !r.Duplicate {
+		t.Fatalf("replay of request 2 after a restart: %+v, %v; want Duplicate", r, err)
+	}
+	viewMatches(t, restarted.m, expectBrushes(t, restarted.m, pack, corner, paint, lower, corner))
+}
+
+// 拒绝时零写入：每种拒绝之后实体、Applied、视图与提交数都不变。
+func TestTerrainBrushRefusalsWriteNothing(t *testing.T) {
+	p := brushProcess(t, &memoryChunkStore{})
+	ok := terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 500, Strength: 10}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, ok); err != nil {
+		t.Fatal(err)
+	}
+	rules := &brushRules{}
+	p.m.SetRules(rules)
+	cases := []struct {
+		name  string
+		setup func()
+		req   uint64
+		b     terrain.Brush
+		want  error
+	}{
+		{"request id 0", nil, 0, ok, terrainmap.ErrBrush},
+		{"no op", nil, 10, terrain.Brush{X: 3200, Y: 3200, Radius: 500}, terrain.ErrInvalidBrush},
+		{"radius over 16m", nil, 11, terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 1601}, terrainmap.ErrBrush},
+		{"strength over 5m", nil, 12, terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 500, Strength: 51}, terrainmap.ErrBrush},
+		{"flatten above the ceiling", nil, 13, terrain.Brush{Op: terrain.BrushFlatten, X: 3200, Y: 3200, Radius: 500, Target: 16384}, terrain.ErrInvalidBrush},
+		{"centre off the map", nil, 14, terrain.Brush{Op: terrain.BrushPaint, X: -5, Y: 3200, Radius: 500}, terrain.ErrOutOfMap},
+		{"no sample covered", nil, 15, terrain.Brush{Op: terrain.BrushPaint, X: 150, Y: 150, Radius: 10}, terrainmap.ErrBrush},
+		{"territory hook", func() { rules.deny = true }, 16, ok, terrainmap.ErrDenied},
+		{"a building under the brush", func() { rules.deny, rules.occupied = false, true }, 17, ok, terrainmap.ErrOccupied},
+	}
+	for _, tc := range cases {
+		if tc.setup != nil {
+			tc.setup()
+		}
+		before, commits := allStates(t, p), p.committer.commits.Load()
+		if _, err := p.m.Brush(p.ctx, brushPlayer, tc.req, tc.b); !errors.Is(err, tc.want) {
+			t.Fatalf("%s: %v, want %v", tc.name, err, tc.want)
+		}
+		if !sameStates(before, allStates(t, p)) || p.committer.commits.Load() != commits {
+			t.Fatalf("%s: a refused brush wrote something", tc.name)
+		}
+	}
+	rules.occupied = false
+	// 不归本进程写的块：只写块 (0,0) 的进程上，跨到 (1,0) 的笔刷整笔拒绝。
+	own00 := startTerrainProcess(t, writeTerrainPack(t, t.TempDir(), 1), func(meta terrain.Meta) (terrainmap.Region, error) {
+		return terrainmap.Region{Own: terrain.ChunkKey{}.Bounds(), Load: meta.Bounds()}, nil
+	}, &memoryChunkStore{})
+	before := allStates(t, own00)
+	if _, err := own00.m.Brush(own00.ctx, brushPlayer, 1, terrain.Brush{Op: terrain.BrushPaint, X: terrain.ChunkSize - 100, Y: 3200, Radius: 500}); !errors.Is(err, terrainmap.ErrNotOwned) {
+		t.Fatalf("a brush across into another cell's chunk: %v, want ErrNotOwned", err)
+	}
+	if !sameStates(before, allStates(t, own00)) {
+		t.Fatal("a brush refused for ownership wrote something")
+	}
+}
+
+type brushRules struct{ deny, occupied bool }
+
+func (r *brushRules) AllowEdit(context.Context, int64, terrain.Brush, []terrain.ChunkKey) error {
+	if r.deny {
+		return errors.New("not your land")
+	}
+	return nil
+}
+
+func (r *brushRules) Occupied(terrain.ChunkKey, int32) bool { return r.occupied }
+
+// 每玩家频率（方案 §8.1：每秒 2 次）：同一秒里第三次被拒、不写；过了半秒补一次；别的玩家不受影响。
+func TestTerrainBrushRateLimit(t *testing.T) {
+	p := startTerrainProcess(t, writeTerrainPack(t, t.TempDir(), 1), wholeMap, &memoryChunkStore{})
+	now := time.Unix(1_800_000_000, 0)
+	p.m.SetClock(func() time.Time { return now })
+	b := terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 300, Material: 1}
+	for id := uint64(1); id <= 2; id++ {
+		b.Material = byte(id)
+		if _, err := p.m.Brush(p.ctx, brushPlayer, id, b); err != nil {
+			t.Fatalf("edit %d: %v", id, err)
+		}
+	}
+	before := allStates(t, p)
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 3, b); !errors.Is(err, terrainmap.ErrRateLimited) {
+		t.Fatalf("a third edit in the same second: %v, want ErrRateLimited", err)
+	}
+	if !sameStates(before, allStates(t, p)) {
+		t.Fatal("a rate-limited edit wrote something")
+	}
+	if _, err := p.m.Brush(p.ctx, brushPlayer+1, 1, b); err != nil {
+		t.Fatalf("another player: %v", err)
+	}
+	now = now.Add(500 * time.Millisecond)
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 3, b); err != nil {
+		t.Fatalf("after half a second: %v", err)
+	}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 4, b); !errors.Is(err, terrainmap.ErrRateLimited) {
+		t.Fatalf("a second edit within that half second: %v, want ErrRateLimited", err)
+	}
+}
+
+// 多块事务回滚（方案 §9 P2）：跨四块（两块改过、两块第一次改）的一笔编辑被提交器拒绝时，四块的实体（版本、数据、
+// Applied）与视图全都不变；用同一请求 ID 重试则生效（Applied 也随回滚撤销了，不会被当成重复）。
+func TestTerrainBrushRollbackLeavesEveryChunkAndTheView(t *testing.T) {
+	p := brushProcess(t, &memoryChunkStore{})
+	// 先改 (0,0) 与 (1,0)，(0,1)、(1,1) 还是原始块。
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, terrain.Brush{Op: terrain.BrushPaint, X: terrain.ChunkSize, Y: 3200, Radius: 400, Material: 5}); err != nil {
+		t.Fatal(err)
+	}
+	before := allStates(t, p)
+	corner := terrain.Brush{Op: terrain.BrushFlatten, X: terrain.ChunkSize, Y: terrain.ChunkSize, Radius: 1500, Falloff: terrain.FalloffSmooth, Target: 2000}
+	p.committer.reject.Store(true)
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 2, corner); !errors.Is(err, nest.ErrCommitRejected) || !errors.Is(err, errInjectedRejection) {
+		t.Fatalf("rejected corner brush: %v, want ErrCommitRejected", err)
+	}
+	after := allStates(t, p)
+	for key, state := range before {
+		if !sameState(state, after[key]) {
+			t.Fatalf("chunk %v changed after a rolled-back brush (dao version %d → %d, view version %d → %d)",
+				key, state.daoVersion, after[key].daoVersion, state.viewVersion, after[key].viewVersion)
+		}
+	}
+	result, err := p.m.Brush(p.ctx, brushPlayer, 2, corner)
+	if err != nil || result.Duplicate || len(result.Chunks) != 4 {
+		t.Fatalf("the same request after the rollback: %+v, %v", result, err)
+	}
+	if p.m.CommitFailures() != 0 {
+		t.Fatalf("%d commits did not reach the view", p.m.CommitFailures())
+	}
+}
+
+// 整字段守卫经玩家编辑入口（Policy 放大半径的运维 / 地基编辑；玩家 16m 笔刷单块至多约 800 点，到不了阈值）：一块里
+// 改动超过 1000 点时整字段写，结果与纯计算逐点相同。
+func TestTerrainBrushOverTheGuardWritesTheWholeField(t *testing.T) {
+	pack := writeTerrainPack(t, t.TempDir(), 1)
+	p := startTerrainProcessWith(t, pack, wholeMap, &memoryChunkStore{}, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.MaxRadius, policy.EditsPerSecond = 2500, 0
+		p.m.SetPolicy(policy)
+	})
+	big := terrain.Brush{Op: terrain.BrushFlatten, X: 3200, Y: 3200, Radius: 2400, Target: 1500}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, big); err != nil {
+		t.Fatal(err)
+	}
+	want := expectBrushes(t, p.m, pack, big)
+	viewMatches(t, p.m, want)
+	if s := stateOf(t, p, terrain.ChunkKey{}); !slices.Equal(s.heights, want[terrain.ChunkKey{}].Heights) {
+		t.Fatal("the chunk's DAO differs from the brush applied once")
+	}
+}
+

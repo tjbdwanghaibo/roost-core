@@ -157,6 +157,14 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err := scene.ShowScene(area); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
+	// The edited terrain chunks this process writes become replication
+	// subjects (terrain_sync.go): the load read their records into the
+	// view only, the subjects need the entities. Before any player can join.
+	if scene.terrain != nil {
+		if err := startTerrainSync(registry, scene, s.terrain); err != nil {
+			return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+		}
+	}
  // Scene 自己拥有 Manager；Nest Mod 没有这个句柄，健康检查由此登记。
  if checks,ok:=app.Lookup[*health.Registry](registry,mods.ModHealth);ok && checks!=nil {checks.Register("entitysync.scene",scene)}
 	// A partitioned scene (scene.partition, partition.go) instead of the

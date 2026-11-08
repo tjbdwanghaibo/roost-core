@@ -1,0 +1,2199 @@
+{
+  "description": "Terrain brush golden for client prediction (gameplay/terrain/brush.go, README). Each case applies one brush to the base chunks of terrain-golden.pack (not to the previous case's result). World units are centimetres, heights raw (1 = 10cm). covered_chunks are the chunks holding a sample point with d2 \u003c= radius^2; changes lists only chunks whose points changed, sha256 is over each changed point as index (u16 LE), height (u16 LE), material (u8), in index order.",
+  "pack": "terrain-golden.pack",
+  "weight_scale": 65536,
+  "isqrt": [
+    [
+      0,
+      0
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      2,
+      1
+    ],
+    [
+      3,
+      1
+    ],
+    [
+      4,
+      2
+    ],
+    [
+      15,
+      3
+    ],
+    [
+      16,
+      4
+    ],
+    [
+      17,
+      4
+    ],
+    [
+      99,
+      9
+    ],
+    [
+      100,
+      10
+    ],
+    [
+      101,
+      10
+    ],
+    [
+      10000,
+      100
+    ],
+    [
+      2559999,
+      1599
+    ],
+    [
+      2560000,
+      1600
+    ],
+    [
+      2560001,
+      1600
+    ],
+    [
+      1099511627776,
+      1048576
+    ],
+    [
+      9223372036854775807,
+      3037000499
+    ]
+  ],
+  "weights": [
+    {
+      "falloff": "constant",
+      "radius": 1,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 1,
+      "d2": 1,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 1,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 1,
+      "d2": 7,
+      "weight": 0
+    },
+    {
+      "falloff": "constant",
+      "radius": 1,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 1,
+      "d2": 1,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 1,
+      "d2": 2,
+      "weight": 0
+    },
+    {
+      "falloff": "constant",
+      "radius": 333,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 333,
+      "d2": 1,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 333,
+      "d2": 27722,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 333,
+      "d2": 55451,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 333,
+      "d2": 110888,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 333,
+      "d2": 110889,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 333,
+      "d2": 110890,
+      "weight": 0
+    },
+    {
+      "falloff": "constant",
+      "radius": 1600,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 1600,
+      "d2": 1,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 1600,
+      "d2": 640000,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 1600,
+      "d2": 1280007,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 1600,
+      "d2": 2559999,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 1600,
+      "d2": 2560000,
+      "weight": 65536
+    },
+    {
+      "falloff": "constant",
+      "radius": 1600,
+      "d2": 2560001,
+      "weight": 0
+    },
+    {
+      "falloff": "linear",
+      "radius": 1,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "linear",
+      "radius": 1,
+      "d2": 1,
+      "weight": 0
+    },
+    {
+      "falloff": "linear",
+      "radius": 1,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "linear",
+      "radius": 1,
+      "d2": 7,
+      "weight": 0
+    },
+    {
+      "falloff": "linear",
+      "radius": 1,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "linear",
+      "radius": 1,
+      "d2": 1,
+      "weight": 0
+    },
+    {
+      "falloff": "linear",
+      "radius": 1,
+      "d2": 2,
+      "weight": 0
+    },
+    {
+      "falloff": "linear",
+      "radius": 333,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "linear",
+      "radius": 333,
+      "d2": 1,
+      "weight": 65339
+    },
+    {
+      "falloff": "linear",
+      "radius": 333,
+      "d2": 27722,
+      "weight": 32866
+    },
+    {
+      "falloff": "linear",
+      "radius": 333,
+      "d2": 55451,
+      "weight": 19286
+    },
+    {
+      "falloff": "linear",
+      "radius": 333,
+      "d2": 110888,
+      "weight": 196
+    },
+    {
+      "falloff": "linear",
+      "radius": 333,
+      "d2": 110889,
+      "weight": 0
+    },
+    {
+      "falloff": "linear",
+      "radius": 333,
+      "d2": 110890,
+      "weight": 0
+    },
+    {
+      "falloff": "linear",
+      "radius": 1600,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "linear",
+      "radius": 1600,
+      "d2": 1,
+      "weight": 65495
+    },
+    {
+      "falloff": "linear",
+      "radius": 1600,
+      "d2": 640000,
+      "weight": 32768
+    },
+    {
+      "falloff": "linear",
+      "radius": 1600,
+      "d2": 1280007,
+      "weight": 19210
+    },
+    {
+      "falloff": "linear",
+      "radius": 1600,
+      "d2": 2559999,
+      "weight": 40
+    },
+    {
+      "falloff": "linear",
+      "radius": 1600,
+      "d2": 2560000,
+      "weight": 0
+    },
+    {
+      "falloff": "linear",
+      "radius": 1600,
+      "d2": 2560001,
+      "weight": 0
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1,
+      "d2": 1,
+      "weight": 0
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1,
+      "d2": 7,
+      "weight": 0
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1,
+      "d2": 1,
+      "weight": 0
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1,
+      "d2": 2,
+      "weight": 0
+    },
+    {
+      "falloff": "smooth",
+      "radius": 333,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "smooth",
+      "radius": 333,
+      "d2": 1,
+      "weight": 65534
+    },
+    {
+      "falloff": "smooth",
+      "radius": 333,
+      "d2": 27722,
+      "weight": 36864
+    },
+    {
+      "falloff": "smooth",
+      "radius": 333,
+      "d2": 55451,
+      "weight": 16380
+    },
+    {
+      "falloff": "smooth",
+      "radius": 333,
+      "d2": 110888,
+      "weight": 0
+    },
+    {
+      "falloff": "smooth",
+      "radius": 333,
+      "d2": 110889,
+      "weight": 0
+    },
+    {
+      "falloff": "smooth",
+      "radius": 333,
+      "d2": 110890,
+      "weight": 0
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1600,
+      "d2": 0,
+      "weight": 65536
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1600,
+      "d2": 1,
+      "weight": 65534
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1600,
+      "d2": 640000,
+      "weight": 36864
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1600,
+      "d2": 1280007,
+      "weight": 16383
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1600,
+      "d2": 2559999,
+      "weight": 0
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1600,
+      "d2": 2560000,
+      "weight": 0
+    },
+    {
+      "falloff": "smooth",
+      "radius": 1600,
+      "d2": 2560001,
+      "weight": 0
+    }
+  ],
+  "cases": [
+    {
+      "name": "raise_constant_inside_a_chunk",
+      "op": "raise",
+      "x": 3200,
+      "y": 3200,
+      "radius": 250,
+      "falloff": "constant",
+      "strength": 37,
+      "target": 0,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          0,
+          0
+        ]
+      ],
+      "changes": [
+        {
+          "x": 0,
+          "y": 0,
+          "points": 21,
+          "height_changes": 21,
+          "sha256": "f419a05bd4e4060932b30e4d7b51d4e9e639ab9dd0ed419e4f8d121a23d4927a",
+          "list": [
+            {
+              "index": 1951,
+              "height": 8231,
+              "material": 4
+            },
+            {
+              "index": 1952,
+              "height": 8227,
+              "material": 4
+            },
+            {
+              "index": 1953,
+              "height": 8228,
+              "material": 4
+            },
+            {
+              "index": 2014,
+              "height": 8238,
+              "material": 4
+            },
+            {
+              "index": 2015,
+              "height": 8225,
+              "material": 4
+            },
+            {
+              "index": 2016,
+              "height": 8222,
+              "material": 4
+            },
+            {
+              "index": 2017,
+              "height": 8222,
+              "material": 4
+            },
+            {
+              "index": 2018,
+              "height": 8223,
+              "material": 4
+            },
+            {
+              "index": 2078,
+              "height": 8241,
+              "material": 4
+            },
+            {
+              "index": 2079,
+              "height": 8228,
+              "material": 4
+            },
+            {
+              "index": 2080,
+              "height": 8222,
+              "material": 4
+            },
+            {
+              "index": 2081,
+              "height": 8223,
+              "material": 4
+            },
+            {
+              "index": 2082,
+              "height": 8228,
+              "material": 4
+            },
+            {
+              "index": 2142,
+              "height": 8241,
+              "material": 4
+            },
+            {
+              "index": 2143,
+              "height": 8226,
+              "material": 4
+            },
+            {
+              "index": 2144,
+              "height": 8218,
+              "material": 4
+            },
+            {
+              "index": 2145,
+              "height": 8221,
+              "material": 4
+            },
+            {
+              "index": 2146,
+              "height": 8225,
+              "material": 4
+            },
+            {
+              "index": 2207,
+              "height": 8208,
+              "material": 4
+            },
+            {
+              "index": 2208,
+              "height": 8203,
+              "material": 4
+            },
+            {
+              "index": 2209,
+              "height": 8207,
+              "material": 4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "raise_linear_on_a_four_chunk_corner",
+      "op": "raise",
+      "x": 6400,
+      "y": 6400,
+      "radius": 500,
+      "falloff": "linear",
+      "strength": 300,
+      "target": 0,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          1
+        ]
+      ],
+      "changes": [
+        {
+          "x": 0,
+          "y": 0,
+          "points": 13,
+          "height_changes": 13,
+          "sha256": "3923598980cf536e5bb106832147252e60cc48ae6b3bd31c1e057994c1f2e7a6",
+          "list": [
+            {
+              "index": 3902,
+              "height": 8920,
+              "material": 3
+            },
+            {
+              "index": 3903,
+              "height": 8915,
+              "material": 3
+            },
+            {
+              "index": 3965,
+              "height": 8995,
+              "material": 3
+            },
+            {
+              "index": 3966,
+              "height": 9009,
+              "material": 3
+            },
+            {
+              "index": 3967,
+              "height": 9020,
+              "material": 3
+            },
+            {
+              "index": 4028,
+              "height": 9025,
+              "material": 3
+            },
+            {
+              "index": 4029,
+              "height": 9063,
+              "material": 3
+            },
+            {
+              "index": 4030,
+              "height": 9093,
+              "material": 3
+            },
+            {
+              "index": 4031,
+              "height": 9117,
+              "material": 3
+            },
+            {
+              "index": 4092,
+              "height": 9059,
+              "material": 3
+            },
+            {
+              "index": 4093,
+              "height": 9109,
+              "material": 3
+            },
+            {
+              "index": 4094,
+              "height": 9152,
+              "material": 3
+            },
+            {
+              "index": 4095,
+              "height": 9195,
+              "material": 3
+            }
+          ]
+        },
+        {
+          "x": 1,
+          "y": 0,
+          "points": 17,
+          "height_changes": 17,
+          "sha256": "4375a975f2b84c10ac593296934887acc427f04647da448d320c5cea641a4639",
+          "list": [
+            {
+              "index": 3840,
+              "height": 8918,
+              "material": 3
+            },
+            {
+              "index": 3841,
+              "height": 8915,
+              "material": 3
+            },
+            {
+              "index": 3842,
+              "height": 8913,
+              "material": 3
+            },
+            {
+              "index": 3904,
+              "height": 9026,
+              "material": 3
+            },
+            {
+              "index": 3905,
+              "height": 9022,
+              "material": 3
+            },
+            {
+              "index": 3906,
+              "height": 9023,
+              "material": 3
+            },
+            {
+              "index": 3907,
+              "height": 9013,
+              "material": 3
+            },
+            {
+              "index": 3968,
+              "height": 9126,
+              "material": 3
+            },
+            {
+              "index": 3969,
+              "height": 9123,
+              "material": 3
+            },
+            {
+              "index": 3970,
+              "height": 9117,
+              "material": 3
+            },
+            {
+              "index": 3971,
+              "height": 9107,
+              "material": 3
+            },
+            {
+              "index": 3972,
+              "height": 9101,
+              "material": 3
+            },
+            {
+              "index": 4032,
+              "height": 9217,
+              "material": 3
+            },
+            {
+              "index": 4033,
+              "height": 9206,
+              "material": 3
+            },
+            {
+              "index": 4034,
+              "height": 9184,
+              "material": 3
+            },
+            {
+              "index": 4035,
+              "height": 9176,
+              "material": 3
+            },
+            {
+              "index": 4036,
+              "height": 9166,
+              "material": 3
+            }
+          ]
+        },
+        {
+          "x": 0,
+          "y": 1,
+          "points": 17,
+          "height_changes": 17,
+          "sha256": "cc6241dac5dc7f469e3295b756221bd490b469260458f90d4420db18a5ef40f8",
+          "list": [
+            {
+              "index": 60,
+              "height": 9077,
+              "material": 3
+            },
+            {
+              "index": 61,
+              "height": 9129,
+              "material": 3
+            },
+            {
+              "index": 62,
+              "height": 9183,
+              "material": 3
+            },
+            {
+              "index": 63,
+              "height": 9236,
+              "material": 3
+            },
+            {
+              "index": 124,
+              "height": 9074,
+              "material": 3
+            },
+            {
+              "index": 125,
+              "height": 9125,
+              "material": 3
+            },
+            {
+              "index": 126,
+              "height": 9167,
+              "material": 3
+            },
+            {
+              "index": 127,
+              "height": 9210,
+              "material": 3
+            },
+            {
+              "index": 188,
+              "height": 9064,
+              "material": 3
+            },
+            {
+              "index": 189,
+              "height": 9101,
+              "material": 3
+            },
+            {
+              "index": 190,
+              "height": 9132,
+              "material": 3
+            },
+            {
+              "index": 191,
+              "height": 9152,
+              "material": 3
+            },
+            {
+              "index": 253,
+              "height": 9061,
+              "material": 3
+            },
+            {
+              "index": 254,
+              "height": 9077,
+              "material": 3
+            },
+            {
+              "index": 255,
+              "height": 9082,
+              "material": 3
+            },
+            {
+              "index": 318,
+              "height": 9008,
+              "material": 3
+            },
+            {
+              "index": 319,
+              "height": 9005,
+              "material": 3
+            }
+          ]
+        },
+        {
+          "x": 1,
+          "y": 1,
+          "points": 22,
+          "height_changes": 22,
+          "sha256": "b8e4b502807521954bece1e74940b24bfc638c9d8e7e597020136fc1d86ce424",
+          "list": [
+            {
+              "index": 0,
+              "height": 9291,
+              "material": 3
+            },
+            {
+              "index": 1,
+              "height": 9247,
+              "material": 3
+            },
+            {
+              "index": 2,
+              "height": 9217,
+              "material": 3
+            },
+            {
+              "index": 3,
+              "height": 9202,
+              "material": 3
+            },
+            {
+              "index": 4,
+              "height": 9192,
+              "material": 3
+            },
+            {
+              "index": 64,
+              "height": 9234,
+              "material": 3
+            },
+            {
+              "index": 65,
+              "height": 9220,
+              "material": 3
+            },
+            {
+              "index": 66,
+              "height": 9202,
+              "material": 3
+            },
+            {
+              "index": 67,
+              "height": 9195,
+              "material": 3
+            },
+            {
+              "index": 68,
+              "height": 9186,
+              "material": 3
+            },
+            {
+              "index": 128,
+              "height": 9163,
+              "material": 3
+            },
+            {
+              "index": 129,
+              "height": 9160,
+              "material": 3
+            },
+            {
+              "index": 130,
+              "height": 9162,
+              "material": 3
+            },
+            {
+              "index": 131,
+              "height": 9159,
+              "material": 3
+            },
+            {
+              "index": 132,
+              "height": 9163,
+              "material": 3
+            },
+            {
+              "index": 192,
+              "height": 9084,
+              "material": 3
+            },
+            {
+              "index": 193,
+              "height": 9086,
+              "material": 3
+            },
+            {
+              "index": 194,
+              "height": 9099,
+              "material": 3
+            },
+            {
+              "index": 195,
+              "height": 9107,
+              "material": 3
+            },
+            {
+              "index": 256,
+              "height": 9001,
+              "material": 3
+            },
+            {
+              "index": 257,
+              "height": 9006,
+              "material": 3
+            },
+            {
+              "index": 258,
+              "height": 9022,
+              "material": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "raise_smooth_player_max_radius",
+      "op": "raise",
+      "x": 6400,
+      "y": 3200,
+      "radius": 1600,
+      "falloff": "smooth",
+      "strength": 120,
+      "target": 0,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          0
+        ]
+      ],
+      "changes": [
+        {
+          "x": 0,
+          "y": 0,
+          "points": 359,
+          "height_changes": 359,
+          "sha256": "61c733c89f25f5ace7c9656d220e8fa154e5f0c6a0f567c17d55e2bc0c95b28f"
+        },
+        {
+          "x": 1,
+          "y": 0,
+          "points": 390,
+          "height_changes": 390,
+          "sha256": "531c5afd101b734fafb7f95ad81bbc1cf746ff08c5fab46f90adc130ac5a1407"
+        }
+      ]
+    },
+    {
+      "name": "lower_linear_on_a_four_chunk_corner",
+      "op": "lower",
+      "x": 12750,
+      "y": 6400,
+      "radius": 1600,
+      "falloff": "linear",
+      "strength": 900,
+      "target": 0,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          1,
+          0
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          1
+        ]
+      ],
+      "changes": [
+        {
+          "x": 1,
+          "y": 0,
+          "points": 192,
+          "height_changes": 192,
+          "sha256": "70b6fd02c09bbc22bda7c4b661c48789d266197bfa6e82ac2b1dbfa7badd33db"
+        },
+        {
+          "x": 2,
+          "y": 0,
+          "points": 192,
+          "height_changes": 192,
+          "sha256": "12cfa675e365804a973058f36a11ed569821eb522a37d93e4cfa468c74b81d1c"
+        },
+        {
+          "x": 1,
+          "y": 1,
+          "points": 208,
+          "height_changes": 208,
+          "sha256": "cde6c1ce7477f03a630caa0dd20112348926d191a4abe74f484d0b3bc8beafb2"
+        },
+        {
+          "x": 2,
+          "y": 1,
+          "points": 104,
+          "height_changes": 104,
+          "sha256": "3ec6a40c9cbb4bab31f5bedd6f1bf56c70da2b70dcdb042600369ed7481f36e9"
+        }
+      ]
+    },
+    {
+      "name": "lower_clamped_at_bedrock",
+      "op": "lower",
+      "x": 4000,
+      "y": 9000,
+      "radius": 900,
+      "falloff": "constant",
+      "strength": 60000,
+      "target": 0,
+      "material": 0,
+      "bedrock": 2000,
+      "ceiling": 60000,
+      "covered_chunks": [
+        [
+          0,
+          1
+        ]
+      ],
+      "changes": [
+        {
+          "x": 0,
+          "y": 1,
+          "points": 253,
+          "height_changes": 253,
+          "sha256": "5af44733cb60d233427f36b8ce89a56769d6157d17f4bf98c4530f215434a8f5"
+        }
+      ]
+    },
+    {
+      "name": "raise_clamped_at_ceiling",
+      "op": "raise",
+      "x": 4000,
+      "y": 9000,
+      "radius": 900,
+      "falloff": "smooth",
+      "strength": 60000,
+      "target": 0,
+      "material": 0,
+      "bedrock": 2000,
+      "ceiling": 30000,
+      "covered_chunks": [
+        [
+          0,
+          1
+        ]
+      ],
+      "changes": [
+        {
+          "x": 0,
+          "y": 1,
+          "points": 249,
+          "height_changes": 249,
+          "sha256": "5f35f082365a140f81f145fe22d019a8126d38f0a310d69f94fde0b9650ec9e2"
+        }
+      ]
+    },
+    {
+      "name": "flatten_constant",
+      "op": "flatten",
+      "x": 8888,
+      "y": 2222,
+      "radius": 800,
+      "falloff": "constant",
+      "strength": 0,
+      "target": 3456,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          1,
+          0
+        ]
+      ],
+      "changes": [
+        {
+          "x": 1,
+          "y": 0,
+          "points": 200,
+          "height_changes": 200,
+          "sha256": "0a7c423d5f879064927072029ea183edcd1c985da68d1f380402481a9fd9b933"
+        }
+      ]
+    },
+    {
+      "name": "flatten_smooth",
+      "op": "flatten",
+      "x": 8888,
+      "y": 2222,
+      "radius": 1200,
+      "falloff": "smooth",
+      "strength": 0,
+      "target": 3456,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          1,
+          0
+        ]
+      ],
+      "changes": [
+        {
+          "x": 1,
+          "y": 0,
+          "points": 447,
+          "height_changes": 447,
+          "sha256": "8971832705e175a97a40c230857e9248977b9a5faee135dc3658fe74f822d666"
+        }
+      ]
+    },
+    {
+      "name": "flatten_linear_across_a_shared_edge",
+      "op": "flatten",
+      "x": 6430,
+      "y": 5000,
+      "radius": 1000,
+      "falloff": "linear",
+      "strength": 0,
+      "target": 100,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          0
+        ]
+      ],
+      "changes": [
+        {
+          "x": 0,
+          "y": 0,
+          "points": 139,
+          "height_changes": 139,
+          "sha256": "59f7e5f40cb1581c921e7eaa6984148cdade88c446f444136179ea1ebde3551a"
+        },
+        {
+          "x": 1,
+          "y": 0,
+          "points": 171,
+          "height_changes": 171,
+          "sha256": "a7b68d95460259f50025bbb5e2aebd7e0b4c72588e161ccea73763154799d5be"
+        }
+      ]
+    },
+    {
+      "name": "paint_on_a_corner",
+      "op": "paint",
+      "x": 6400,
+      "y": 6400,
+      "radius": 500,
+      "falloff": "constant",
+      "strength": 0,
+      "target": 0,
+      "material": 222,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          0,
+          1
+        ],
+        [
+          1,
+          1
+        ]
+      ],
+      "changes": [
+        {
+          "x": 0,
+          "y": 0,
+          "points": 15,
+          "height_changes": 0,
+          "sha256": "29123aa4e68e6eb425cf507c947335f1d3022587f6845432273897bcd9c24c0f",
+          "list": [
+            {
+              "index": 3901,
+              "height": 8917,
+              "material": 222
+            },
+            {
+              "index": 3902,
+              "height": 8888,
+              "material": 222
+            },
+            {
+              "index": 3903,
+              "height": 8862,
+              "material": 222
+            },
+            {
+              "index": 3964,
+              "height": 8975,
+              "material": 222
+            },
+            {
+              "index": 3965,
+              "height": 8949,
+              "material": 222
+            },
+            {
+              "index": 3966,
+              "height": 8925,
+              "material": 222
+            },
+            {
+              "index": 3967,
+              "height": 8910,
+              "material": 222
+            },
+            {
+              "index": 4028,
+              "height": 8993,
+              "material": 222
+            },
+            {
+              "index": 4029,
+              "height": 8979,
+              "material": 222
+            },
+            {
+              "index": 4030,
+              "height": 8962,
+              "material": 222
+            },
+            {
+              "index": 4031,
+              "height": 8951,
+              "material": 222
+            },
+            {
+              "index": 4092,
+              "height": 9006,
+              "material": 222
+            },
+            {
+              "index": 4093,
+              "height": 8999,
+              "material": 222
+            },
+            {
+              "index": 4094,
+              "height": 8986,
+              "material": 222
+            },
+            {
+              "index": 4095,
+              "height": 8980,
+              "material": 222
+            }
+          ]
+        },
+        {
+          "x": 1,
+          "y": 0,
+          "points": 20,
+          "height_changes": 0,
+          "sha256": "618db51e8dc339c1b0a53af17a4c52f8deb37787917ddbf936c11f5795c4b169",
+          "list": [
+            {
+              "index": 3776,
+              "height": 8800,
+              "material": 222
+            },
+            {
+              "index": 3840,
+              "height": 8858,
+              "material": 222
+            },
+            {
+              "index": 3841,
+              "height": 8862,
+              "material": 222
+            },
+            {
+              "index": 3842,
+              "height": 8881,
+              "material": 222
+            },
+            {
+              "index": 3843,
+              "height": 8901,
+              "material": 222
+            },
+            {
+              "index": 3904,
+              "height": 8906,
+              "material": 222
+            },
+            {
+              "index": 3905,
+              "height": 8912,
+              "material": 222
+            },
+            {
+              "index": 3906,
+              "height": 8939,
+              "material": 222
+            },
+            {
+              "index": 3907,
+              "height": 8967,
+              "material": 222
+            },
+            {
+              "index": 3908,
+              "height": 9000,
+              "material": 222
+            },
+            {
+              "index": 3968,
+              "height": 8946,
+              "material": 222
+            },
+            {
+              "index": 3969,
+              "height": 8957,
+              "material": 222
+            },
+            {
+              "index": 3970,
+              "height": 8986,
+              "material": 222
+            },
+            {
+              "index": 3971,
+              "height": 9023,
+              "material": 222
+            },
+            {
+              "index": 3972,
+              "height": 9069,
+              "material": 222
+            },
+            {
+              "index": 4032,
+              "height": 8977,
+              "material": 222
+            },
+            {
+              "index": 4033,
+              "height": 8991,
+              "material": 222
+            },
+            {
+              "index": 4034,
+              "height": 9018,
+              "material": 222
+            },
+            {
+              "index": 4035,
+              "height": 9066,
+              "material": 222
+            },
+            {
+              "index": 4036,
+              "height": 9113,
+              "material": 222
+            }
+          ]
+        },
+        {
+          "x": 0,
+          "y": 1,
+          "points": 20,
+          "height_changes": 0,
+          "sha256": "27d2f536148750887a34e9e91d0d751776da00136da5c2a0d7e5a3c2356edd4f",
+          "list": [
+            {
+              "index": 59,
+              "height": 9023,
+              "material": 222
+            },
+            {
+              "index": 60,
+              "height": 9017,
+              "material": 222
+            },
+            {
+              "index": 61,
+              "height": 9009,
+              "material": 222
+            },
+            {
+              "index": 62,
+              "height": 9003,
+              "material": 222
+            },
+            {
+              "index": 63,
+              "height": 8996,
+              "material": 222
+            },
+            {
+              "index": 124,
+              "height": 9021,
+              "material": 222
+            },
+            {
+              "index": 125,
+              "height": 9015,
+              "material": 222
+            },
+            {
+              "index": 126,
+              "height": 9001,
+              "material": 222
+            },
+            {
+              "index": 127,
+              "height": 8995,
+              "material": 222
+            },
+            {
+              "index": 188,
+              "height": 9032,
+              "material": 222
+            },
+            {
+              "index": 189,
+              "height": 9017,
+              "material": 222
+            },
+            {
+              "index": 190,
+              "height": 9001,
+              "material": 222
+            },
+            {
+              "index": 191,
+              "height": 8986,
+              "material": 222
+            },
+            {
+              "index": 252,
+              "height": 9045,
+              "material": 222
+            },
+            {
+              "index": 253,
+              "height": 9015,
+              "material": 222
+            },
+            {
+              "index": 254,
+              "height": 8993,
+              "material": 222
+            },
+            {
+              "index": 255,
+              "height": 8972,
+              "material": 222
+            },
+            {
+              "index": 317,
+              "height": 9013,
+              "material": 222
+            },
+            {
+              "index": 318,
+              "height": 8976,
+              "material": 222
+            },
+            {
+              "index": 319,
+              "height": 8952,
+              "material": 222
+            }
+          ]
+        },
+        {
+          "x": 1,
+          "y": 1,
+          "points": 26,
+          "height_changes": 0,
+          "sha256": "7378ab0935d6f617518cb180507717285f68bba038eeb83f34c96769f9e4f2b0",
+          "list": [
+            {
+              "index": 0,
+              "height": 8991,
+              "material": 222
+            },
+            {
+              "index": 1,
+              "height": 9007,
+              "material": 222
+            },
+            {
+              "index": 2,
+              "height": 9037,
+              "material": 222
+            },
+            {
+              "index": 3,
+              "height": 9082,
+              "material": 222
+            },
+            {
+              "index": 4,
+              "height": 9132,
+              "material": 222
+            },
+            {
+              "index": 5,
+              "height": 9184,
+              "material": 222
+            },
+            {
+              "index": 64,
+              "height": 8994,
+              "material": 222
+            },
+            {
+              "index": 65,
+              "height": 9005,
+              "material": 222
+            },
+            {
+              "index": 66,
+              "height": 9036,
+              "material": 222
+            },
+            {
+              "index": 67,
+              "height": 9085,
+              "material": 222
+            },
+            {
+              "index": 68,
+              "height": 9133,
+              "material": 222
+            },
+            {
+              "index": 128,
+              "height": 8983,
+              "material": 222
+            },
+            {
+              "index": 129,
+              "height": 8994,
+              "material": 222
+            },
+            {
+              "index": 130,
+              "height": 9031,
+              "material": 222
+            },
+            {
+              "index": 131,
+              "height": 9075,
+              "material": 222
+            },
+            {
+              "index": 132,
+              "height": 9131,
+              "material": 222
+            },
+            {
+              "index": 192,
+              "height": 8964,
+              "material": 222
+            },
+            {
+              "index": 193,
+              "height": 8976,
+              "material": 222
+            },
+            {
+              "index": 194,
+              "height": 9015,
+              "material": 222
+            },
+            {
+              "index": 195,
+              "height": 9061,
+              "material": 222
+            },
+            {
+              "index": 196,
+              "height": 9117,
+              "material": 222
+            },
+            {
+              "index": 256,
+              "height": 8941,
+              "material": 222
+            },
+            {
+              "index": 257,
+              "height": 8953,
+              "material": 222
+            },
+            {
+              "index": 258,
+              "height": 8990,
+              "material": 222
+            },
+            {
+              "index": 259,
+              "height": 9043,
+              "material": 222
+            },
+            {
+              "index": 320,
+              "height": 8911,
+              "material": 222
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "edge_chunk_raise_checkerboard",
+      "op": "raise",
+      "x": 13600,
+      "y": 7600,
+      "radius": 1000,
+      "falloff": "linear",
+      "strength": 40000,
+      "target": 0,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          1
+        ]
+      ],
+      "changes": [
+        {
+          "x": 1,
+          "y": 1,
+          "points": 9,
+          "height_changes": 9,
+          "sha256": "515198b99b2bafde4f3233a380fb9c94e1d47fa00235277553e29adda5c3902b",
+          "list": [
+            {
+              "index": 575,
+              "height": 9141,
+              "material": 4
+            },
+            {
+              "index": 639,
+              "height": 10594,
+              "material": 4
+            },
+            {
+              "index": 703,
+              "height": 11691,
+              "material": 4
+            },
+            {
+              "index": 767,
+              "height": 12348,
+              "material": 4
+            },
+            {
+              "index": 831,
+              "height": 12566,
+              "material": 4
+            },
+            {
+              "index": 895,
+              "height": 12385,
+              "material": 4
+            },
+            {
+              "index": 959,
+              "height": 11761,
+              "material": 4
+            },
+            {
+              "index": 1023,
+              "height": 10697,
+              "material": 4
+            },
+            {
+              "index": 1087,
+              "height": 9275,
+              "material": 4
+            }
+          ]
+        },
+        {
+          "x": 2,
+          "y": 1,
+          "points": 160,
+          "height_changes": 160,
+          "sha256": "45213e5b3d713438b4f04876360ac59228fcec4a9600b0927bfa30cfb57fbdbc"
+        }
+      ]
+    },
+    {
+      "name": "edge_chunk_lower_checkerboard",
+      "op": "lower",
+      "x": 13600,
+      "y": 7600,
+      "radius": 1000,
+      "falloff": "smooth",
+      "strength": 40000,
+      "target": 0,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          1,
+          1
+        ],
+        [
+          2,
+          1
+        ]
+      ],
+      "changes": [
+        {
+          "x": 1,
+          "y": 1,
+          "points": 9,
+          "height_changes": 9,
+          "sha256": "ed692b7bad818fc852d3d1d9702f494eae5c4331da176ce5c6b87298febc1260",
+          "list": [
+            {
+              "index": 575,
+              "height": 8466,
+              "material": 4
+            },
+            {
+              "index": 639,
+              "height": 8115,
+              "material": 4
+            },
+            {
+              "index": 703,
+              "height": 7631,
+              "material": 4
+            },
+            {
+              "index": 767,
+              "height": 7253,
+              "material": 4
+            },
+            {
+              "index": 831,
+              "height": 7123,
+              "material": 4
+            },
+            {
+              "index": 895,
+              "height": 7290,
+              "material": 4
+            },
+            {
+              "index": 959,
+              "height": 7701,
+              "material": 4
+            },
+            {
+              "index": 1023,
+              "height": 8218,
+              "material": 4
+            },
+            {
+              "index": 1087,
+              "height": 8600,
+              "material": 4
+            }
+          ]
+        },
+        {
+          "x": 2,
+          "y": 1,
+          "points": 156,
+          "height_changes": 156,
+          "sha256": "baa4879bf00c4bd4858c222649ced23cae87304b21ac9d016301724dc0baa78a"
+        }
+      ]
+    },
+    {
+      "name": "edge_chunk_flatten_slope",
+      "op": "flatten",
+      "x": 15200,
+      "y": 9400,
+      "radius": 700,
+      "falloff": "linear",
+      "strength": 0,
+      "target": 30000,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          2,
+          1
+        ]
+      ],
+      "changes": [
+        {
+          "x": 2,
+          "y": 1,
+          "points": 145,
+          "height_changes": 145,
+          "sha256": "2eff8371f29cc0330e69239de6394d85c9fac24f9c0a1cba79b10a87bcdcb96d"
+        }
+      ]
+    },
+    {
+      "name": "map_corner_clipped",
+      "op": "raise",
+      "x": 50,
+      "y": 50,
+      "radius": 700,
+      "falloff": "linear",
+      "strength": 1000,
+      "target": 0,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          0,
+          0
+        ]
+      ],
+      "changes": [
+        {
+          "x": 0,
+          "y": 0,
+          "points": 54,
+          "height_changes": 54,
+          "sha256": "10687348c29ae947e75fac52511bd7b739d1cc8cedaccb158502b3e91f220b81"
+        }
+      ]
+    },
+    {
+      "name": "centre_between_samples",
+      "op": "raise",
+      "x": 3333,
+      "y": 4447,
+      "radius": 333,
+      "falloff": "smooth",
+      "strength": 777,
+      "target": 0,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          0,
+          0
+        ]
+      ],
+      "changes": [
+        {
+          "x": 0,
+          "y": 0,
+          "points": 32,
+          "height_changes": 32,
+          "sha256": "0cc4e7cc9f377175241aa2b3643804faaa4d0b2929be335fe6609e853572f00c",
+          "list": [
+            {
+              "index": 2720,
+              "height": 8207,
+              "material": 4
+            },
+            {
+              "index": 2721,
+              "height": 8297,
+              "material": 4
+            },
+            {
+              "index": 2722,
+              "height": 8296,
+              "material": 4
+            },
+            {
+              "index": 2723,
+              "height": 8225,
+              "material": 4
+            },
+            {
+              "index": 2783,
+              "height": 8274,
+              "material": 4
+            },
+            {
+              "index": 2784,
+              "height": 8512,
+              "material": 4
+            },
+            {
+              "index": 2785,
+              "height": 8683,
+              "material": 4
+            },
+            {
+              "index": 2786,
+              "height": 8664,
+              "material": 4
+            },
+            {
+              "index": 2787,
+              "height": 8468,
+              "material": 4
+            },
+            {
+              "index": 2788,
+              "height": 8276,
+              "material": 4
+            },
+            {
+              "index": 2847,
+              "height": 8429,
+              "material": 4
+            },
+            {
+              "index": 2848,
+              "height": 8762,
+              "material": 4
+            },
+            {
+              "index": 2849,
+              "height": 8972,
+              "material": 4
+            },
+            {
+              "index": 2850,
+              "height": 8940,
+              "material": 4
+            },
+            {
+              "index": 2851,
+              "height": 8682,
+              "material": 4
+            },
+            {
+              "index": 2852,
+              "height": 8376,
+              "material": 4
+            },
+            {
+              "index": 2911,
+              "height": 8474,
+              "material": 4
+            },
+            {
+              "index": 2912,
+              "height": 8804,
+              "material": 4
+            },
+            {
+              "index": 2913,
+              "height": 9017,
+              "material": 4
+            },
+            {
+              "index": 2914,
+              "height": 8977,
+              "material": 4
+            },
+            {
+              "index": 2915,
+              "height": 8717,
+              "material": 4
+            },
+            {
+              "index": 2916,
+              "height": 8411,
+              "material": 4
+            },
+            {
+              "index": 2975,
+              "height": 8407,
+              "material": 4
+            },
+            {
+              "index": 2976,
+              "height": 8648,
+              "material": 4
+            },
+            {
+              "index": 2977,
+              "height": 8812,
+              "material": 4
+            },
+            {
+              "index": 2978,
+              "height": 8779,
+              "material": 4
+            },
+            {
+              "index": 2979,
+              "height": 8577,
+              "material": 4
+            },
+            {
+              "index": 2980,
+              "height": 8379,
+              "material": 4
+            },
+            {
+              "index": 3040,
+              "height": 8435,
+              "material": 4
+            },
+            {
+              "index": 3041,
+              "height": 8516,
+              "material": 4
+            },
+            {
+              "index": 3042,
+              "height": 8500,
+              "material": 4
+            },
+            {
+              "index": 3043,
+              "height": 8412,
+              "material": 4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "radius_one_on_a_sample",
+      "op": "raise",
+      "x": 1200,
+      "y": 1300,
+      "radius": 1,
+      "falloff": "constant",
+      "strength": 5,
+      "target": 0,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [
+        [
+          0,
+          0
+        ]
+      ],
+      "changes": [
+        {
+          "x": 0,
+          "y": 0,
+          "points": 1,
+          "height_changes": 1,
+          "sha256": "b801560e0d40e6488b5e1397724d4539fa1f4b9442d01f3ec811db2241b62f11",
+          "list": [
+            {
+              "index": 844,
+              "height": 7781,
+              "material": 4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "radius_one_between_samples",
+      "op": "raise",
+      "x": 1250,
+      "y": 1300,
+      "radius": 1,
+      "falloff": "constant",
+      "strength": 5,
+      "target": 0,
+      "material": 0,
+      "bedrock": 0,
+      "ceiling": 65535,
+      "covered_chunks": [],
+      "changes": []
+    }
+  ]
+}

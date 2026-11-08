@@ -1,0 +1,27 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 可编辑地形的玩家编辑（TerrainEdit，可编辑地形方案 P2）答复的业务码；每个码对应 game/terrainmap 的一个拒绝，
+// 拒绝时什么都没写。
+
+// ErrTerrainDisabled：本服没有可编辑地形（没配 scene.terrain.pack）。
+var ErrTerrainDisabled = errcode.Define(100052, "terrain_disabled", "this server has no editable terrain")
+
+// ErrTerrainBrush：笔刷参数不合法（操作、衰减、半径、强度、目标高度、请求 ID 为 0、中心在地图外）或超出玩家编辑的上限。
+var ErrTerrainBrush = errcode.Define(100053, "terrain_brush", "brush refused")
+
+// ErrTerrainNotOwned：笔刷覆盖到的块归别的格进程写（P2 只做单格；跨格转发是 P3）。
+var ErrTerrainNotOwned = errcode.Define(100054, "terrain_not_owned", "this ground is edited by another cell")
+
+// ErrTerrainUnavailable：块的记录装不进来（损坏，或基于旧原始地形且没能丢弃），等运维处理；不是玩家的错，也不是内部错误。
+var ErrTerrainUnavailable = errcode.Define(100055, "terrain_unavailable", "this ground cannot be edited right now")
+
+// ErrTerrainRate：编辑太频繁（每个玩家每秒至多 2 次）。可稍后重试。
+var ErrTerrainRate = errcode.Define(100056, "terrain_rate", "editing too often")
+
+// ErrTerrainDenied：领地 / 权限规则不允许（业务钩子 terrainmap.Rules.AllowEdit）。
+var ErrTerrainDenied = errcode.Define(100057, "terrain_denied", "not allowed to edit here")
+
+// ErrTerrainOccupied：编辑会改到建筑占着的点（P4 的建筑；钩子 terrainmap.Rules.Occupied）。
+var ErrTerrainOccupied = errcode.Define(100058, "terrain_occupied", "a building stands here")

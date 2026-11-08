@@ -1,0 +1,52 @@
+//go:build protocoldef
+
+package protocoldef
+
+// 可编辑地形的玩家编辑（可编辑地形方案 P2，单格）：一次笔刷。玩家所在进程就是写这块地的格进程（跨格转发是 P3）；
+// 改动不从答复里来，而是从同一条同步流：改过的块是 terrain 命名空间的同步对象（TerrainChunkDao 的 BaseRevision /
+// Version / Heights / Materials），客户端用生成的 ApplySyncTerrainChunkDao 应用、按 Version 重建 mesh。客户端可以用
+// 同一笔刷算法（gameplay/terrain 的 Brush，金样 client/spec/terrain-brush.json）先在本地预测。
+
+// TerrainEditRequest 是一次笔刷。坐标是世界坐标（厘米），高度是原始值（1 = 10cm）。
+//
+//   - RequestID：客户端为这次编辑取的 ID，同一玩家内唯一、非 0。结果未知（超时、断线）时用同一个 ID 重发：已经生效
+//     的答 Duplicate，不会再改一次。
+//   - Op：1 抬高、2 降低、3 整平、4 改材质。
+//   - X、Y：中心；Radius：半径，1 ～ 1600（16m）。
+//   - Falloff：0 常数、1 线性、2 平滑（改材质不看它）。
+//   - Strength：抬高 / 降低在中心处的增量，1 ～ 50（5m）。Target：整平的目标高度，0 ～ 16383。Material：改材质的编号，0 ～ 255。
+type TerrainEditRequest struct {
+	RequestID uint64 `pb:"1"`
+	Op        int32  `pb:"2"`
+	X         int64  `pb:"3"`
+	Y         int64  `pb:"4"`
+	Radius    int64  `pb:"5"`
+	Falloff   int32  `pb:"6"`
+	Strength  int32  `pb:"7"`
+	Target    int32  `pb:"8"`
+	Material  int32  `pb:"9"`
+}
+
+// TerrainChunkVersion 是一块（块坐标）在这次编辑之后的版本；0 表示仍是原始块。
+type TerrainChunkVersion struct {
+	ChunkX  int32 `pb:"1"`
+	ChunkY  int32 `pb:"2"`
+	Version int64 `pb:"3"`
+}
+
+// TerrainEditResponse 答复一次编辑：Code 0 时 Chunks 是笔刷覆盖到的每一块提交后的版本，Duplicate 表示这个 RequestID
+// 已经生效过、这次什么都没改。拒绝时什么都没写。Codes: terrain_disabled, terrain_brush（参数不合法或超出上限）,
+// terrain_not_owned（这块地归别的格进程写）, terrain_unavailable（这块暂时不能改）, terrain_rate（每秒至多 2 次）,
+// terrain_denied（领地 / 权限）, terrain_occupied（有建筑）。
+type TerrainEditResponse struct {
+	Code      int32                 `pb:"1"`
+	Reason    string                `pb:"2"`
+	Duplicate bool                  `pb:"3"`
+	Chunks    []TerrainChunkVersion `pb:"4"`
+}
+
+//roost:protocol group=game handler=player
+type TerrainEditProtocol interface {
+	//roost:msg id=10038
+	TerrainEdit(TerrainEditRequest) TerrainEditResponse
+}

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	db "{{MODULE}}/db"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
@@ -211,5 +212,130 @@ func TestTerrainChunkAppliedIsBounded(t *testing.T) {
 		if !e.SurfaceComp().WasApplied(id) {
 			t.Fatalf("edit %d is missing", id)
 		}
+	}
+}
+
+// heightsPatch 是 DAO 自上次确认以来的同步增量里的 Heights 字段（packer 的 PackSubjectDelta 发的就是它），并确认掉
+// 这些变化（像一次成功的同步）。没有高度变化时返回 nil。
+func heightsPatch(t *testing.T, e *TerrainChunk) *db.SyncTerrainChunkDaoHeightsField {
+	t.Helper()
+	// 与同步管理器取增量的方式相同：字段掩码是这段时间 setter 标脏的字段，变化树给出字段内改了哪些下标。
+	tracker := e.Dao().DirtyTracker()
+	version := tracker.SyncChangeVersion()
+	mask := tracker.TakeSyncDirty()
+	raw := e.Dao().MarshalSyncChanges(mask)
+	tracker.AcknowledgeSyncChanges(version)
+	if mask == 0 {
+		return nil
+	}
+	patch, err := db.UnmarshalSyncTerrainChunkDao(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return patch.Heights // nil：这段增量没有改高度
+}
+
+// 整字段守卫（方案 §4）：一次提交在本块改动超过 HeightsGuard（1000）个高度时整字段写，同步增量是整字段替换；
+// 不超过时逐点写，同步增量按下标。两条路径写出的数据相同（同一组改动分别走守卫与逐点，结果逐点相等）。
+func TestTerrainChunkWholeFieldGuard(t *testing.T) {
+	base := testBase()
+	edits := func(n int) []PointEdit {
+		out := make([]PointEdit, n)
+		for i := range out {
+			index := int32(i * 3)
+			out[i] = PointEdit{Index: index, Height: base.Heights[index] + 7, Material: base.Materials[index]}
+		}
+		return out
+	}
+	start := func(key terrain.ChunkKey) *TerrainChunk {
+		e := newTestChunk(t, key)
+		if err := in(e, func(s *SurfaceComponent) error { _, err := s.Apply(1, base, nil); return err }); err != nil {
+			t.Fatal(err)
+		}
+		heightsPatch(t, e) // 第一次改的整块数据算作已同步
+		return e
+	}
+
+	guarded := start(terrain.ChunkKey{X: 4, Y: 4})
+	if err := in(guarded, func(s *SurfaceComponent) error { _, err := s.Apply(1, terrain.Chunk{}, edits(HeightsGuard+1)); return err }); err != nil {
+		t.Fatal(err)
+	}
+	if patch := heightsPatch(t, guarded); patch == nil || patch.Delta || len(patch.Value) != terrain.ChunkPoints {
+		t.Fatalf("%d changed heights went out as delta=%v with %d values, want the whole field", HeightsGuard+1, patch.Delta, len(patch.Value))
+	}
+
+	// 同一组改动分两笔逐点写（各不超过阈值）。
+	pointwise := start(terrain.ChunkKey{X: 5, Y: 4})
+	all := edits(HeightsGuard + 1)
+	for _, part := range [][]PointEdit{all[:HeightsGuard], all[HeightsGuard:]} {
+		if err := in(pointwise, func(s *SurfaceComponent) error { _, err := s.Apply(1, terrain.Chunk{}, part); return err }); err != nil {
+			t.Fatal(err)
+		}
+		if patch := heightsPatch(t, pointwise); patch == nil || !patch.Delta || len(patch.Updates) != len(part) {
+			t.Fatalf("%d changed heights went out as %v, want one update per point", len(part), patch)
+		}
+	}
+	if g, p := overlayOf(t, guarded), overlayOf(t, pointwise); !slices.Equal(g.Heights, p.Heights) || !slices.Equal(g.Materials, p.Materials) {
+		t.Fatal("the whole-field guard and point writes left different data")
+	}
+	// 值没变的点不算改动：1001 个“改成原值”的点不触发守卫，也不写。
+	same := make([]PointEdit, HeightsGuard+1)
+	for i := range same {
+		h, _ := guarded.Dao().GetHeights(i)
+		m := guarded.Dao().GetMaterialsAll()[i]
+		same[i] = PointEdit{Index: int32(i), Height: h, Material: m}
+	}
+	if err := in(guarded, func(s *SurfaceComponent) error { _, err := s.Apply(1, terrain.Chunk{}, same); return err }); err != nil {
+		t.Fatal(err)
+	}
+	if patch := heightsPatch(t, guarded); patch != nil {
+		t.Fatalf("unchanged heights produced a heights patch %+v", patch)
+	}
+}
+
+// Discard（原始地形换版后丢弃改动）只重置仍基于旧版本的记录；重置后是 Version 0 的空记录，下一次改动从当前原始块
+// 重新开始；Applied 保留。
+func TestTerrainChunkDiscardResetsOnlyAStaleRecord(t *testing.T) {
+	e := newTestChunk(t, terrain.ChunkKey{X: 2, Y: 2})
+	base := testBase()
+	if err := in(e, func(s *SurfaceComponent) error {
+		_, err := s.Apply(1, base, []PointEdit{{Index: 9, Height: 9, Material: 9}})
+		s.RecordApplied(77)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	discard := func(stale, current int64) (reset bool) {
+		t.Helper()
+		if err := in(e, func(s *SurfaceComponent) error { reset = s.Discard(stale, current); return nil }); err != nil {
+			t.Fatal(err)
+		}
+		return reset
+	}
+	if discard(1, 1) || discard(3, 2) {
+		t.Fatal("a record on the current revision, or on another stale revision, was reset")
+	}
+	if v := e.SurfaceComp().Version(); v != 1 {
+		t.Fatalf("a refused discard changed the version to %d", v)
+	}
+	if !discard(1, 2) {
+		t.Fatal("a record on the old revision was not reset")
+	}
+	if _, ok := e.SurfaceComp().Overlay(); ok || e.Dao().HeightsLen() != 0 || e.Dao().MaterialsLen() != 0 || e.SurfaceComp().BaseRevision() != 0 {
+		t.Fatal("a discarded record still has data")
+	}
+	if !e.SurfaceComp().WasApplied(77) {
+		t.Fatal("the discard dropped the applied ids")
+	}
+	if discard(1, 2) {
+		t.Fatal("a second discard reset again")
+	}
+	next := base.Clone()
+	next.Heights[0] = 500 // 新一版原始地形
+	if err := in(e, func(s *SurfaceComponent) error { _, err := s.Apply(2, next, []PointEdit{{Index: 1, Height: 1, Material: 1}}); return err }); err != nil {
+		t.Fatal(err)
+	}
+	if got := overlayOf(t, e); got.BaseRevision != 2 || got.Version != 1 || got.Heights[0] != 500 || got.Heights[9] != base.Heights[9] {
+		t.Fatalf("the edit after a discard: revision %d version %d, h[0]=%d h[9]=%d", got.BaseRevision, got.Version, got.Heights[0], got.Heights[9])
 	}
 }

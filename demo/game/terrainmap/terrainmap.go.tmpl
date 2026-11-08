@@ -1,17 +1,20 @@
-// Package terrainmap 是格进程内的可编辑地形（可编辑地形方案 P1 的实体接入）：原始地形包（gameplay/terrain 的 Pack）、
-// 本进程装入的块（terrain.View）与被改过的块的持久记录（TerrainChunk 实体，game/entities/terrain_chunk）之间的接线。
+// Package terrainmap 是格进程内的可编辑地形（可编辑地形方案 P1 的实体接入、P2 的编辑与同步）：原始地形包（gameplay/terrain
+// 的 Pack）、本进程装入的块（terrain.View）与被改过的块的持久记录（TerrainChunk 实体，game/entities/terrain_chunk）之间的接线。
 //
 // 一个进程一张 Map，由 game 服务在 Init 里按 scene.terrain 打开、装入、发布（internal/service/<game>/terrain.go）；
 // 不配 scene.terrain.pack 就没有 Map，其余功能不受影响。
 //
 // 装入（Load，启动阶段，做 I/O）：本进程负责的区域（Region.Load：分区场景里是本格外扩 Ghost 带，不分区是整张图）
 // 里的每一块，有持久记录（Version ≥ 1）的用记录 SetOverlay，其余从包里 LoadBase。哪些块有记录：用 DataEngine 的
-// Store 按 `_id ∈ 本区域候选块的实体 ID` 分批查（ID 由块坐标确定，候选集有界），不全表扫描。
+// Store 按 `_id ∈ 本区域候选块的实体 ID` 分批查（ID 由块坐标确定，候选集有界），不全表扫描。记录基于另一版原始
+// 地形的块（原始地形换了版本）：本进程写的块丢弃改动（维护者 2026-11-08，见 Map.Load），邻格的块不装入。
 //
-// 改块（Edit，内部写入口，P1 最小版）：一块一笔 Nest 事务（handler TerrainEdit，rollback=undo durability=strict）：
-// 第一次改的块先经 lifecycle 的 GetOrCreate 建出空实体，事务里用视图里的原始块填满它再应用改动、Version + 1；
-// 提交被接受后（nest.AfterCommit）才把新数据 SetOverlay 给视图，回滚的事务不改变视图。笔刷、校验、幂等、多块事务、
-// 整字段守卫是 P2。
+// 玩家编辑（Brush，P2）：校验（笔刷参数、半径 / 块数 / 增量上限、频率、领地 / 权限钩子）→ 覆盖到的块（至多 4 块）
+// 第一次改的先 GetOrCreate → 一笔多块 Nest 事务（handler TerrainBrush，目标组 = 这些块）：判重（Applied）、在锁内
+// 从当前数据算笔刷（gameplay/terrain 的 Brush.Apply）、建筑占位钩子、逐块写（整字段守卫）、请求 ID 记进每一块；
+// 提交被接受后才逐块装进视图并通知同步（afterCommit），回滚的事务不改变视图。
+//
+// 内部写入口（Edit，P1）：一块一笔事务写一组采样点，运维命令与测试用。
 //
 // 查询（Height / Material / IsWater / Probe）委托视图：不取锁、只读内存，任何 goroutine（含 Nest short 池）可调。
 package terrainmap
@@ -26,6 +29,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	db "{{MODULE}}/db"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
@@ -43,6 +47,15 @@ var (
 	// ErrUnloadable：块的持久记录装不进视图（基于另一版原始地形，或记录损坏），这一块不可查也不可改，等运维处理。
 	// 同时满足 errors.Is(err, terrain.ErrNotLoaded)。
 	ErrUnloadable = fmt.Errorf("terrain: chunk record could not be loaded: %w", terrain.ErrNotLoaded)
+	// ErrBrush：笔刷参数不合法或超出玩家编辑的上限（Policy：半径、增量、块数），或请求 ID 为 0。同时满足
+	// errors.Is(err, terrain.ErrInvalidBrush) 的是参数本身不合法，满足 terrain.ErrOutOfMap 的是中心在地图外。
+	ErrBrush = errors.New("terrain: brush refused")
+	// ErrRateLimited：玩家编辑太频繁（Policy.EditsPerSecond）。
+	ErrRateLimited = errors.New("terrain: editing too often")
+	// ErrDenied：领地 / 权限规则（Rules.AllowEdit）拒绝。
+	ErrDenied = errors.New("terrain: edit not allowed here")
+	// ErrOccupied：编辑会改到建筑占着的点（Rules.Occupied）。
+	ErrOccupied = errors.New("terrain: the edit touches ground a building stands on")
 )
 
 // loadWorkers 是启动时并行 LoadBase 的 goroutine 数。实测 1w 地图装满一个格（2304 块）单线程约 120ms、8 路约 29ms
@@ -65,9 +78,41 @@ type Chunks interface {
 	GetOrCreate(ctx context.Context, uniqueID int64) (*terrain_chunk.TerrainChunk, bool, error)
 }
 
-// Editor 是改块事务的 Sender（生成的 syncsender.TerrainEditSender）。
+// Editor 是改块事务的 Sender（生成的 syncsender.TerrainEditSender：handler 文件 game/handler/terrain_edit.go 里的三个 handler）。
 type Editor interface {
 	Sync_TerrainEdit(ctx context.Context, id int64, edits []terrain_chunk.PointEdit) (int64, error)
+	MultiGroupSync_TerrainBrush(ctx context.Context, targets []int64, editID uint64, brush terrain.Brush) (terrain_chunk.BrushResult, error)
+	Sync_TerrainDiscard(ctx context.Context, id int64, staleRevision int64, currentRevision int64) (bool, error)
+}
+
+// Policy 是玩家编辑的上限（方案 §4 / §8.1 初值）。不做成配置：它们与客户端的笔刷 UI 一起定，改了要让客户端知道；
+// 测试与运维入口可以用 SetPolicy 换一份。
+type Policy struct {
+	// MaxRadius 是玩家笔刷的最大半径（世界单位）：1600（16m）。此时一次最多覆盖 4 块、单块最多约 800 点，低于整字段
+	// 守卫阈值（terrain_chunk.HeightsGuard）。
+	MaxRadius int64
+	// MaxChunks 是一次编辑最多覆盖的块数：4（一笔多块事务的目标组上限）。
+	MaxChunks int
+	// MaxStrength 是抬高 / 降低在中心处的最大增量（高度原始值，1 = 10cm）：50（5m）。
+	MaxStrength uint16
+	// Limits 是编辑后的高度范围：基岩 0（地图基准高度）、上限 16383（基准之上 1638.3m：低于 16384 时同步全量每点
+	// 2 字节，方案 §2）。
+	Limits terrain.Limits
+	// EditsPerSecond 是每个玩家每秒最多的编辑次数（令牌桶，容量同值）：2。
+	EditsPerSecond int
+}
+
+// DefaultPolicy 是方案 §8.1 的初值（MaxStrength 与 Limits 方案没给数，见各字段说明）。
+var DefaultPolicy = Policy{MaxRadius: 1600, MaxChunks: 4, MaxStrength: 50, Limits: terrain.Limits{Bedrock: 0, Ceiling: 16383}, EditsPerSecond: 2}
+
+// Rules 是业务给编辑的钩子（方案 §4“领地 / 权限规则由业务提供钩子”、“不能改有建筑占位的点”）。nil 表示都放行。
+type Rules interface {
+	// AllowEdit 是领地 / 权限：玩家能不能在这些块上用这个笔刷。在 Nest 之外、事务之前调用（可以读别的服务），返回
+	// 非 nil 即拒绝，Brush 把它包成 ErrDenied。
+	AllowEdit(ctx context.Context, playerID int64, brush terrain.Brush, chunks []terrain.ChunkKey) error
+	// Occupied 报告块内下标是否被建筑占着（P4 由本格的 Building 实体推出）。在改块事务里、块的锁内调用（Nest short 池）：
+	// 只能读内存，不能阻塞、不能 I/O。
+	Occupied(key terrain.ChunkKey, index int32) bool
 }
 
 // SampleEdit 是对一个世界采样点的改动：(GX, GY) 是 1m 采样网格上的坐标（世界坐标 = G × terrain.SampleSpacing），
@@ -84,7 +129,9 @@ type LoadStats struct {
 	Chunks int
 	// Overlays 是用持久记录装入的块，Base 是从包装入的块。
 	Overlays, Base int
-	// StaleBase 是持久记录基于另一版原始地形、没有装入的块（ErrBaseRevision）。
+	// Discarded 是持久记录基于另一版原始地形、本进程写这块、已丢弃改动并按原始块装入的块（维护者 2026-11-08）。
+	Discarded int
+	// StaleBase 是持久记录基于另一版原始地形、没有装入的块：邻格的块（不归本进程写，不越权丢弃），或丢弃失败的块。
 	StaleBase int
 	// Corrupt 是记录或原始块损坏、没有装入的块。
 	Corrupt int
@@ -109,6 +156,14 @@ type Map struct {
 	// commitFailures 是提交后装入视图失败的次数（正常不会发生：Apply 已校验形状与版本；发生即视图落后于数据库，
 	// 直到重启重新装入）。
 	commitFailures atomic.Int64
+
+	// policy、rules 在 Install 之前设定（SetPolicy / SetRules），之后只读。
+	policy Policy
+	rules  Rules
+	// limiter 是每个玩家的编辑频率（令牌桶，进程内存，与 scene_view 的限速同一做法：不持久、重启清零）。
+	limiter rateLimiter
+	// committed 是提交后的通知（地形同步把第一次改过的块登记为 subject）；nil 时不通知。见 SetCommitted。
+	committed atomic.Pointer[func(*terrain_chunk.TerrainChunk)]
 }
 
 // Open 打开原始地形包、建空视图。region 由 regionOf 按包的地图参数算出（调用方据此把分区格裁到地图里）。
@@ -132,6 +187,7 @@ func Open(path string, regionOf func(terrain.Meta) (Region, error), chunks Chunk
 	return &Map{
 		pack: pack, view: terrain.NewView(pack), meta: meta, region: region,
 		chunks: chunks, editor: editor, unloadable: map[terrain.ChunkKey]error{},
+		policy: DefaultPolicy, limiter: rateLimiter{now: time.Now},
 	}, nil
 }
 
@@ -208,12 +264,19 @@ func (m *Map) markUnloadable(key terrain.ChunkKey, cause error) {
 func (m *Map) CommitFailures() int64 { return m.commitFailures.Load() }
 
 // Load 装入 Region.Load 里的全部块：有持久记录（Version ≥ 1）的用记录 SetOverlay，其余（没有记录、或记录是还没
-// 提交过改动的空实体）从包里 LoadBase。只在启动阶段、发布之前调用一次：做 Mongo 读与文件 I/O，不能在 Nest 业务
-// worker 上调用。
+// 提交过改动的空实体）从包里 LoadBase。只在启动阶段、发布之前调用一次：做 Mongo 读、文件 I/O 与 Nest 事务，不能在
+// Nest 业务 worker 上调用。
 //
-// 失败语义：记录基于另一版原始地形（BaseRevision 与包不同）的块不装入、记 Error 日志、计入 StaleBase，数据库里
-// 的记录不动；记录或原始块损坏的块不装入、计入 Corrupt；这些块之后查询返回 ErrNotLoaded。其余错误（读库失败、
-// 读包 I/O 失败）返回错误，调用方不应发布这张 Map。
+// 记录基于另一版原始地形（BaseRevision 与包不同，原始地形换了版本）：
+//   - 本进程写的块：丢弃改动（维护者 2026-11-08）——经正式写路径（GetOrCreate 冷加载 + handler TerrainDiscard 的
+//     strict 事务）把记录重置为 Version 0 的空记录，然后按原始块装入、计入 Discarded、记 Warn。为什么是重置而不是
+//     删档见 terrain_chunk.SurfaceComponent.Discard。丢弃失败时不装入、计入 StaleBase、记 Error：不用原始块盖住还在
+//     库里的旧记录（否则查询与库不一致，下一次改动还会被 BaseRevision 校验拒绝）。
+//   - 邻格 Ghost 带里的块（不归本进程写）：不越权丢弃，不装入、计入 StaleBase；它的格进程启动时会丢弃，本进程重启后
+//     读到的是 Version 0 的记录、按原始块装入（P3 之前 Ghost 带只在启动时读一次快照）。
+//
+// 记录或原始块损坏的块不装入、计入 Corrupt。不装入的块之后查询返回 ErrNotLoaded、改块返回 ErrUnloadable。其余
+// 错误（读库失败、读包 I/O 失败）返回错误，调用方不应发布这张 Map。
 func (m *Map) Load(ctx context.Context, store coredata.Store) (LoadStats, error) {
 	keys := m.Keys()
 	stats := LoadStats{Chunks: len(keys)}
@@ -234,19 +297,34 @@ func (m *Map) Load(ctx context.Context, store coredata.Store) (LoadStats, error)
 		case !record.edited:
 			base = append(base, key) // 空实体：建了、还没提交过改动
 		default:
-			if err := m.view.SetOverlay(key, record.overlay); err != nil {
-				m.markUnloadable(key, err)
-				if errors.Is(err, terrain.ErrBaseRevision) {
+			err := m.view.SetOverlay(key, record.overlay)
+			switch {
+			case err == nil:
+				stats.Overlays++
+			case errors.Is(err, terrain.ErrBaseRevision) && m.Owns(key):
+				// 原始地形换了版本：丢弃这块的改动（维护者 2026-11-08），成功后按原始块装入。
+				if derr := m.discard(ctx, key, record.overlay.BaseRevision); derr != nil {
+					m.markUnloadable(key, errors.Join(err, derr))
 					stats.StaleBase++
-					slog.Error("terrain: chunk record is based on another base revision; the chunk is not loaded and its record is left as it is",
-						"chunk", key.String(), "record_base_revision", record.overlay.BaseRevision, "pack_base_revision", m.meta.BaseRevision, "version", record.overlay.Version)
-				} else {
-					stats.Corrupt++
-					slog.Error("terrain: chunk record does not fit the view; the chunk is not loaded", "chunk", key.String(), "err", err)
+					slog.Error("terrain: chunk record is based on another base revision and discarding its edits failed; the chunk is not loaded and its record is left as it is",
+						"chunk", key.String(), "record_base_revision", record.overlay.BaseRevision, "pack_base_revision", m.meta.BaseRevision, "version", record.overlay.Version, "err", derr)
+					continue
 				}
-				continue
+				stats.Discarded++
+				slog.Warn("terrain: chunk record was based on another base revision; its edits were discarded and the chunk is back to the base pack",
+					"chunk", key.String(), "record_base_revision", record.overlay.BaseRevision, "pack_base_revision", m.meta.BaseRevision, "version", record.overlay.Version)
+				base = append(base, key)
+			case errors.Is(err, terrain.ErrBaseRevision):
+				// 邻格的块：只有写它的格进程能丢弃（不越权写），这里不装入，直到它的格进程处理、本进程重启再读。
+				m.markUnloadable(key, err)
+				stats.StaleBase++
+				slog.Error("terrain: a neighbouring cell's chunk record is based on another base revision; the chunk is not loaded until its cell discards the edits",
+					"chunk", key.String(), "record_base_revision", record.overlay.BaseRevision, "pack_base_revision", m.meta.BaseRevision, "version", record.overlay.Version)
+			default:
+				m.markUnloadable(key, err)
+				stats.Corrupt++
+				slog.Error("terrain: chunk record does not fit the view; the chunk is not loaded", "chunk", key.String(), "err", err)
 			}
-			stats.Overlays++
 		}
 	}
 	loaded, corrupt, err := m.loadBase(ctx, base)
@@ -383,7 +461,7 @@ func decodeRecord(doc coredata.RawDocument) Record {
 //
 // 每一块：检查归本进程写、记录可用 → lifecycle 的 GetOrCreate（第一次改这块时建出空实体：DataEngine 补一笔 strict
 // 事务落库）→ 改块事务（handler TerrainEdit）。块之间不是原子的：中途失败时前面的块已经提交，返回已提交的部分与
-// 错误（P2 做多块事务）。会等数据库与 WAL：只能在 Nest 业务 worker 之外调用（启动、运维命令、测试、I/O 池）。
+// 错误（多块原子的玩家编辑见 Brush）。会等数据库与 WAL：只能在 Nest 业务 worker 之外调用（启动、运维命令、测试、I/O 池）。
 func (m *Map) Edit(ctx context.Context, edits []SampleEdit) (map[terrain.ChunkKey]int64, error) {
 	if m == nil {
 		return nil, ErrDisabled
@@ -427,8 +505,8 @@ func (m *Map) Edit(ctx context.Context, edits []SampleEdit) (map[terrain.ChunkKe
 // ApplyEdit 是改块 handler 的业务：在本块的 Nest 锁与 rollback=undo 事务内运行（handler TerrainEdit），只读内存，
 // 可以在 short 池里执行。
 //
-// Version 0（第一次改这块）时从视图取原始块（必须装着、且是原始块）作初值。改动写进 DAO 后，把新数据的副本登记为
-// 提交后回调：提交被接受才 SetOverlay 给视图；事务回滚（handler 之后的步骤失败、提交被拒）时回调不执行，视图不变。
+// Version 0（第一次改这块）时从视图取原始块（必须装着、且是原始块）作初值。改动写进 DAO 后由 afterCommit 登记
+// 提交后装视图：提交被接受才 SetOverlay 给视图；事务回滚（handler 之后的步骤失败、提交被拒）时回调不执行，视图不变。
 func (m *Map) ApplyEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chunk.PointEdit) (int64, error) {
 	surface := target.SurfaceComp()
 	key := surface.Owner().Key()
@@ -440,13 +518,9 @@ func (m *Map) ApplyEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chu
 	}
 	var base terrain.Chunk
 	if surface.Version() == 0 {
-		chunk, version, loaded := m.view.Chunk(key)
-		if !loaded {
-			return 0, fmt.Errorf("%w: chunk %v", terrain.ErrNotLoaded, key)
-		}
-		if version != 0 {
-			// 视图里有覆盖块、实体却没有提交过改动：两边不一致，不能拿覆盖块当原始数据，也不能用原始数据覆盖它。
-			return 0, fmt.Errorf("terrain: chunk %v: view holds overlay version %d but the entity has none", key, version)
+		chunk, _, err := m.baseFor(surface)
+		if err != nil {
+			return 0, err
 		}
 		base = chunk
 	}
@@ -454,12 +528,46 @@ func (m *Map) ApplyEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chu
 	if err != nil {
 		return 0, err
 	}
-	overlay, _ := surface.Overlay()
-	commit := func() { m.commit(key, overlay) }
+	m.afterCommit(surface.Owner())
+	return version, nil
+}
+
+// baseFor 是一块编辑前的数据：记录有数据（Version ≥ 1）时是记录，否则是视图里的原始块（必须装着、且是原始块）。
+// 在块的锁内调用（handler），只读内存。
+func (m *Map) baseFor(surface *terrain_chunk.SurfaceComponent) (data terrain.Chunk, fromRecord bool, err error) {
+	key := surface.Owner().Key()
+	if data, ok := surface.Data(); ok {
+		return data, true, nil
+	}
+	chunk, version, loaded := m.view.Chunk(key)
+	if !loaded {
+		return terrain.Chunk{}, false, fmt.Errorf("%w: chunk %v", terrain.ErrNotLoaded, key)
+	}
+	if version != 0 {
+		// 视图里有覆盖块、实体却没有提交过改动：两边不一致，不能拿覆盖块当原始数据，也不能用原始数据覆盖它。
+		return terrain.Chunk{}, false, fmt.Errorf("terrain: chunk %v: view holds overlay version %d but the entity has none", key, version)
+	}
+	return chunk, false, nil
+}
+
+// afterCommit 是改块事务“提交后装视图”的一步（P1 的 ApplyEdit 与 P2 的 ApplyBrush 共用）：在 handler 里、DAO 写完
+// 之后调用，取这块新数据的副本，登记为提交后回调——提交被接受才 SetOverlay 给视图并通知同步（SetCommitted），事务
+// 回滚（handler 之后的步骤失败、提交被拒）时回调不执行，视图与同步都不变。不在事务里时立即执行。
+func (m *Map) afterCommit(chunk *terrain_chunk.TerrainChunk) {
+	overlay, ok := chunk.SurfaceComp().Overlay()
+	if !ok {
+		return // Version 0（丢弃后的空记录）：没有可覆盖的数据
+	}
+	key := chunk.Key()
+	commit := func() {
+		m.commit(key, overlay)
+		if notify := m.committed.Load(); notify != nil {
+			(*notify)(chunk)
+		}
+	}
 	if !nest.AfterCommit(commit) {
 		commit()
 	}
-	return version, nil
 }
 
 // commit 把提交后的块装进视图。两笔改同一块的事务的提交后回调可能乱序到达：旧版本被视图拒绝（ErrStaleOverlay），
@@ -472,6 +580,298 @@ func (m *Map) commit(key terrain.ChunkKey, overlay terrain.Overlay) {
 	m.commitFailures.Add(1)
 	slog.Error("terrain: a committed chunk could not be put into the view; queries see the previous data until a restart", "chunk", key.String(), "version", overlay.Version, "err", err)
 }
+
+// SetPolicy 换玩家编辑的上限（缺省 DefaultPolicy）。Install 之前调用。
+func (m *Map) SetPolicy(p Policy) { m.policy = p }
+
+// Policy 是当前的玩家编辑上限。
+func (m *Map) Policy() Policy { return m.policy }
+
+// SetRules 装上业务的领地 / 权限与建筑占位钩子（nil 表示都放行）。Install 之前调用。
+func (m *Map) SetRules(r Rules) { m.rules = r }
+
+// SetCommitted 登记改块提交后的通知（地形同步用它把改过的块登记为 subject）：在提交后回调里调用，参数是刚提交的块
+// 实体；不得阻塞。nil 取消。
+func (m *Map) SetCommitted(notify func(*terrain_chunk.TerrainChunk)) {
+	if notify == nil {
+		m.committed.Store(nil)
+		return
+	}
+	m.committed.Store(&notify)
+}
+
+// EditedOwned 是本进程写的、视图里是覆盖块（被改过、Version ≥ 1）的块（行优先）。地形同步启动时把它们装成实体、
+// 登记为 subject。
+func (m *Map) EditedOwned() []terrain.ChunkKey {
+	var keys []terrain.ChunkKey
+	for _, key := range m.Keys() {
+		if version, loaded := m.view.Version(key); loaded && version > 0 && m.Owns(key) {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// discard 丢弃一块基于旧原始地形（staleRevision）的改动：冷加载实体（GetOrCreate：记录在库里，读出来）、一笔 strict
+// 事务把记录重置为 Version 0（handler TerrainDiscard）。只在 Load 里、对本进程写的块调用（启动阶段，会等 Mongo 与 WAL）。
+func (m *Map) discard(ctx context.Context, key terrain.ChunkKey, staleRevision int64) error {
+	unique, err := terrain_chunk.UniqueID(key)
+	if err != nil {
+		return err
+	}
+	chunk, _, err := m.chunks.GetOrCreate(ctx, unique)
+	if err != nil {
+		return fmt.Errorf("terrain: load chunk %v to discard its edits: %w", key, err)
+	}
+	reset, err := m.editor.Sync_TerrainDiscard(ctx, chunk.ID(), staleRevision, m.meta.BaseRevision)
+	if err != nil {
+		return fmt.Errorf("terrain: discard chunk %v: %w", key, err)
+	}
+	if !reset {
+		// 读记录之后它变了（一个 sid 一个进程、块只归本格写，正常不会发生）：不知道库里现在是什么，不按原始块装入。
+		return fmt.Errorf("terrain: chunk %v: the record is no longer based on revision %d; not discarded", key, staleRevision)
+	}
+	return nil
+}
+
+// EditID 是玩家请求的编辑 ID：玩家 ID 与客户端请求 ID（同一玩家内唯一、非 0）混合成的 63 位值，记进 Applied 判重。
+// 不同玩家的同一个请求 ID 得到不同的编辑 ID；两个不同请求撞上同一编辑 ID 的概率在每块 32 个的环里可以忽略
+// （splitmix64，见 Brush 的说明）。跨格拆分（P5）的子 ID 由同一函数对（玩家, 请求 ID ⊕ 格号）派生。
+//
+// 只取 63 位：DAO 的 []uint64 存成 BSON int64，超过 MaxInt64 的值在提交的持久化准备阶段被拒绝（整笔事务失败）。
+func EditID(playerID int64, requestID uint64) uint64 {
+	return splitmix64(uint64(playerID)^splitmix64(requestID)) &^ (1 << 63)
+}
+
+func splitmix64(x uint64) uint64 {
+	x += 0x9E3779B97F4A7C15
+	x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9
+	x = (x ^ (x >> 27)) * 0x94D049BB133111EB
+	return x ^ (x >> 31)
+}
+
+// Brush 是玩家编辑的入口（协议 TerrainEdit 的端点调用）：校验 → 覆盖到的块第一次改的先建实体 → 一笔多块事务。
+// 返回本次锁住的每一块提交后的版本；重复的请求（同一玩家、同一请求 ID，在某一块的 Applied 里）返回 Duplicate，
+// 不再改一次。会等数据库与 WAL：只能在 Nest 业务 worker 之外调用（玩家端点、运维命令、测试）。
+//
+// 拒绝（全部在写任何东西之前，拒绝时零写入）：
+//   - ErrDisabled：本进程没有地形；
+//   - ErrBrush：请求 ID 为 0、笔刷参数不合法（terrain.ErrInvalidBrush）、中心在地图外（terrain.ErrOutOfMap）、超出
+//     Policy（半径、增量、块数）；
+//   - ErrRateLimited：超过 Policy.EditsPerSecond（参数合法的请求才占频率，重复请求也占）；
+//   - ErrNotOwned / ErrUnloadable：覆盖到的块不归本进程写（P2 单格；跨格转发是 P3）或装不进来；
+//   - ErrDenied：Rules.AllowEdit 拒绝；
+//   - ErrOccupied：改到建筑占位（事务里判断，整笔回滚）。
+//
+// 失败语义：GetOrCreate 成功、事务失败时，第一次改的块留下 Version 0 的空实体（P1 同样），装入时按原始块看待。
+// 事务结果未知（WAL 超时等）时调用方用同一请求 ID 重试：已提交则得到 Duplicate，没提交则这次生效。
+func (m *Map) Brush(ctx context.Context, playerID int64, requestID uint64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+	if m == nil {
+		return terrain_chunk.BrushResult{}, ErrDisabled
+	}
+	keys, err := m.checkBrush(playerID, requestID, brush)
+	if err != nil {
+		return terrain_chunk.BrushResult{}, err
+	}
+	if !m.limiter.allow(playerID, m.policy.EditsPerSecond) {
+		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: player %d", ErrRateLimited, playerID)
+	}
+	if m.rules != nil {
+		if err := m.rules.AllowEdit(ctx, playerID, brush, keys); err != nil {
+			return terrain_chunk.BrushResult{}, fmt.Errorf("%w: %w", ErrDenied, err)
+		}
+	}
+	ids := make([]int64, 0, len(keys))
+	for _, key := range keys {
+		unique, err := terrain_chunk.UniqueID(key)
+		if err != nil {
+			return terrain_chunk.BrushResult{}, err
+		}
+		chunk, _, err := m.chunks.GetOrCreate(ctx, unique)
+		if err != nil {
+			return terrain_chunk.BrushResult{}, fmt.Errorf("terrain: chunk %v: %w", key, err)
+		}
+		ids = append(ids, chunk.ID())
+	}
+	result, err := m.editor.MultiGroupSync_TerrainBrush(ctx, ids, EditID(playerID, requestID), brush)
+	if err != nil {
+		return terrain_chunk.BrushResult{}, fmt.Errorf("terrain: brush: %w", err)
+	}
+	return result, nil
+}
+
+// checkBrush 是事务之前的校验（只读内存），返回覆盖到的块。
+func (m *Map) checkBrush(playerID int64, requestID uint64, brush terrain.Brush) ([]terrain.ChunkKey, error) {
+	p := m.policy
+	if requestID == 0 || playerID == 0 {
+		return nil, fmt.Errorf("%w: player %d request %d: both must be non-zero", ErrBrush, playerID, requestID)
+	}
+	if err := brush.Validate(m.meta, p.Limits); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBrush, err)
+	}
+	if brush.Radius > p.MaxRadius {
+		return nil, fmt.Errorf("%w: radius %d over the limit %d", ErrBrush, brush.Radius, p.MaxRadius)
+	}
+	if (brush.Op == terrain.BrushRaise || brush.Op == terrain.BrushLower) && brush.Strength > p.MaxStrength {
+		return nil, fmt.Errorf("%w: strength %d over the limit %d", ErrBrush, brush.Strength, p.MaxStrength)
+	}
+	keys := brush.Chunks(m.meta)
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("%w: the brush covers no sample point", ErrBrush)
+	}
+	if len(keys) > p.MaxChunks {
+		return nil, fmt.Errorf("%w: the brush covers %d chunks, at most %d", ErrBrush, len(keys), p.MaxChunks)
+	}
+	for _, key := range keys {
+		if !m.Owns(key) {
+			return nil, fmt.Errorf("%w: chunk %v", ErrNotOwned, key)
+		}
+		if cause := m.unloadableErr(key); cause != nil {
+			return nil, fmt.Errorf("%w: chunk %v: %v", ErrUnloadable, key, cause)
+		}
+	}
+	return keys, nil
+}
+
+// ApplyBrush 是 handler TerrainBrush 的业务：在目标组（笔刷覆盖到的块，Nest 已按 ID 排序全部锁住）的 rollback=undo
+// 事务里运行，只读内存、整数运算，可以在 short 池里执行（r=16m 四块约十几微秒，见方案 P2 实施结果）。
+//
+//  1. 判重：任何一块的 Applied 里有 editID → Duplicate，什么都不写。一次编辑的 ID 同一事务写进它锁住的每一块，
+//     所以要么都有、要么都没有（除非某块之后又被改了 32 次以上、ID 被挤出环）。
+//  2. 校验：每块归本进程写、可用；目标组正是笔刷覆盖到的块（防止调用方给错目标）。
+//  3. 在锁内从当前数据算笔刷（Version 0 的块用视图里的原始块），建筑占位钩子查每个改动点。
+//  4. 写：有改动的块 SurfaceComponent.Apply（整字段守卫、Version + 1），每块 RecordApplied(editID)（没改动的块也记，
+//     重放才认得出），提交后逐块装视图并通知同步（afterCommit）。
+//
+// 1～3 的拒绝在第一次写之前；4 之后不会失败。事务回滚（提交被拒）时 DAO 由 setter 的逆操作还原，提交后回调不执行。
+func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editID uint64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+	surfaces := make([]*terrain_chunk.SurfaceComponent, len(targets))
+	for i, target := range targets {
+		surfaces[i] = target.SurfaceComp()
+	}
+	slices.SortFunc(surfaces, func(a, b *terrain_chunk.SurfaceComponent) int {
+		ka, kb := a.Owner().Key(), b.Owner().Key()
+		return cmp.Or(cmp.Compare(ka.Y, kb.Y), cmp.Compare(ka.X, kb.X))
+	})
+	versions := func() []terrain_chunk.ChunkVersion {
+		out := make([]terrain_chunk.ChunkVersion, len(surfaces))
+		for i, surface := range surfaces {
+			out[i] = terrain_chunk.ChunkVersion{Key: surface.Owner().Key(), Version: surface.Version()}
+		}
+		return out
+	}
+	for _, surface := range surfaces {
+		if surface.WasApplied(editID) {
+			return terrain_chunk.BrushResult{Duplicate: true, Chunks: versions()}, nil
+		}
+	}
+	want := brush.Chunks(m.meta)
+	if len(want) != len(surfaces) {
+		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: the brush covers %d chunks, the transaction holds %d", ErrBrush, len(want), len(surfaces))
+	}
+	before := make(map[terrain.ChunkKey]terrain.Chunk, len(surfaces))
+	fresh := make(map[terrain.ChunkKey]bool, len(surfaces))
+	for i, surface := range surfaces {
+		key := surface.Owner().Key()
+		if key != want[i] {
+			return terrain_chunk.BrushResult{}, fmt.Errorf("%w: the transaction holds chunk %v, the brush covers %v", ErrBrush, key, want[i])
+		}
+		if !m.Owns(key) {
+			return terrain_chunk.BrushResult{}, fmt.Errorf("%w: chunk %v", ErrNotOwned, key)
+		}
+		if cause := m.unloadableErr(key); cause != nil {
+			return terrain_chunk.BrushResult{}, fmt.Errorf("%w: chunk %v: %v", ErrUnloadable, key, cause)
+		}
+		data, fromRecord, err := m.baseFor(surface)
+		if err != nil {
+			return terrain_chunk.BrushResult{}, err
+		}
+		before[key], fresh[key] = data, !fromRecord
+	}
+	changes, err := brush.Apply(m.meta, m.policy.Limits, before)
+	if err != nil {
+		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: %w", ErrBrush, err)
+	}
+	byKey := make(map[terrain.ChunkKey][]terrain_chunk.PointEdit, len(changes))
+	for _, change := range changes {
+		edits := make([]terrain_chunk.PointEdit, len(change.Points))
+		for i, p := range change.Points {
+			if m.rules != nil && m.rules.Occupied(change.Key, p.Index) {
+				return terrain_chunk.BrushResult{}, fmt.Errorf("%w: chunk %v point %d", ErrOccupied, change.Key, p.Index)
+			}
+			edits[i] = terrain_chunk.PointEdit{Index: p.Index, Height: p.Height, Material: p.Material}
+		}
+		byKey[change.Key] = edits
+	}
+	// 校验完毕，开始写。
+	for _, surface := range surfaces {
+		key := surface.Owner().Key()
+		if edits, ok := byKey[key]; ok {
+			var base terrain.Chunk
+			if fresh[key] {
+				base = before[key]
+			}
+			if _, err := surface.Apply(m.meta.BaseRevision, base, edits); err != nil {
+				// Apply 的校验与上面相同，这里不会失败；万一失败，返回错误让整笔事务回滚。
+				return terrain_chunk.BrushResult{}, err
+			}
+			m.afterCommit(surface.Owner())
+		}
+		surface.RecordApplied(editID)
+	}
+	return terrain_chunk.BrushResult{Chunks: versions()}, nil
+}
+
+// rateLimiter 是每个玩家的令牌桶：每秒补 rate 个、最多攒 rate 个。只在进程内存（与 scene_view 的主视野限速同一
+// 做法）：重启或玩家换进程后从满桶开始。
+type rateLimiter struct {
+	now     func() time.Time
+	mu      sync.Mutex
+	buckets map[int64]bucket
+}
+
+type bucket struct {
+	tokens float64
+	at     time.Time
+}
+
+// rateLimiterPrune 是桶表超过多少个时顺手清掉已经攒满的桶（满桶与没有桶等价）。
+const rateLimiterPrune = 4096
+
+func (l *rateLimiter) allow(playerID int64, rate int) bool {
+	if rate <= 0 {
+		return true
+	}
+	now := l.now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.buckets == nil {
+		l.buckets = map[int64]bucket{}
+	}
+	if len(l.buckets) > rateLimiterPrune {
+		for id, b := range l.buckets {
+			if b.tokens+now.Sub(b.at).Seconds()*float64(rate) >= float64(rate) {
+				delete(l.buckets, id)
+			}
+		}
+	}
+	b, ok := l.buckets[playerID]
+	if !ok {
+		b = bucket{tokens: float64(rate), at: now}
+	}
+	b.tokens = min(float64(rate), b.tokens+now.Sub(b.at).Seconds()*float64(rate))
+	b.at = now
+	if b.tokens < 1 {
+		l.buckets[playerID] = b
+		return false
+	}
+	b.tokens--
+	l.buckets[playerID] = b
+	return true
+}
+
+// SetClock 换限速用的时钟（测试用）。Install 之前调用。
+func (m *Map) SetClock(now func() time.Time) { m.limiter.now = now }
 
 // Height / Material / IsWater / Probe 委托视图（算法与错误见 gameplay/terrain 的 View）。
 func (m *Map) Height(x, y int64) (int32, error)         { return m.view.Height(x, y) }

@@ -1,0 +1,275 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"sync/atomic"
+
+	player "{{MODULE}}/game/entities/player"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	"{{MODULE}}/game/terrainmap"
+	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// 地形同步（可编辑地形方案 §7，P2）：被改过的块（TerrainChunk 实体，sync=true）经场景的同一个 entitysync Manager
+// 下发——同一条玩家连接、同一个推送编号、同一个 epoch，客户端按命名空间 "terrain" 分流。
+//
+// 订阅是地形自己的一个 policy.Interest（独立订阅来源，与场景的 Interest 互不干扰）：
+//   - 观察者：每个进了场景的玩家（Join）以 Watch 登记一个主视野（只看不被看），视点跟着玩家的位置走（terrainMoves：
+//     玩家移动提交之后 MoveView，移动不到 terrainViewStep 不报，省掉每一步的 AOI 重评）。
+//   - subject：只有被改过的块（Version ≥ 1）。启动时本进程写的改过的块装成实体登记（loadEdited），之后第一次改的块在
+//     提交后登记（terrainmap.Map.SetCommitted）。从没改过的块不建实体、不订阅，客户端用本地原始地形包。
+//   - 视野 200m（terrainViewRadius）、MaxVisible 64；块的位置取块中心，所以视野圆里约 30 块（π·200² / 64²），64 是
+//     拉远视野或人为放大半径时的上限。
+//
+// 容量（方案 §7“对象上限”）：会话可持有的对象数 = 场景原来的 100（主视野 64 + 自身 / 场景 / 队友 3 + 留给关系视野
+// 的 33）+ 地形 64 = 164（sceneTerrainMaxObjects）。快照预算：每会话每次 Flush 至多 4 个全量对象（方案 §7“基线
+// 限流”）；它是 Manager 级的配置，开了地形之后玩家与怪的进入视野也按它排队（增量与 remove 不受限），见方案 P2 实施结果。
+//
+// 只在不分区的场景里接：分区场景的玩家位置归格进程（cellworld），Base 进程上没有可跟随的位置；跨格的地形同步是 P3。
+const (
+	// terrainViewRadius 是地形视野的进入半径（世界单位，200m），离开半径多 terrainViewHysteresis（20m）。
+	terrainViewRadius     = 20000
+	terrainViewHysteresis = 2000
+	// terrainMaxVisible 是一个玩家的地形视野最多同时持有的块数（方案 §8.1）。
+	terrainMaxVisible = 64
+	// terrainSnapshotsPerFlush 是每会话每次 Flush 至多发出的全量对象数（方案 §8.1 初值 4）。
+	terrainSnapshotsPerFlush = 4
+	// terrainViewStep 是玩家离上次报告的视点多远才移动地形视野（8m）：远小于离开滞回 20m，不会漏掉进出。
+	terrainViewStep = 800
+	// sceneTerrainMaxObjects 是开了地形的场景里一个会话可持有的对象数：场景原有的上限加地形视野的上限。
+	sceneTerrainMaxObjects = 100 + terrainMaxVisible
+)
+
+// terrainSyncConfig 是地形同步的参数：地图范围（AOI 的边界）与视野。测试用更大的半径制造“视野里的改过的块超过
+// MaxVisible”。
+type terrainSyncConfig struct {
+	bounds     spatial.Rect
+	radius     int64
+	maxVisible int
+}
+
+func defaultTerrainSync(bounds spatial.Rect) *terrainSyncConfig {
+	return &terrainSyncConfig{bounds: bounds, radius: terrainViewRadius, maxVisible: terrainMaxVisible}
+}
+
+// terrainSync 是地形的订阅组织：一个 Interest（玩家是观察者、改过的块是 subject）加启动 / 提交后的登记。
+//
+// 锁：mu 保护 shown 与 reported；Interest 与 Manager 的调用只取它们自己的短锁、不等待，可以在 Nest worker 与提交后
+// 回调里调用。shown 只增不减：块实体常驻（World 档、不卸载），从没改过的块从不出现在这里。
+type terrainSync struct {
+	manager  *entitysync.Manager
+	interest *policy.Interest
+	bounds   spatial.Rect
+
+	mu       sync.Mutex
+	shown    map[int64]struct{}     // 已登记、已放进 Interest 的块实体 ID
+	reported map[int64]spatial.Point // 玩家 ID → 上次报告给 Interest 的视点
+	closed   atomic.Bool
+}
+
+func newTerrainSync(manager *entitysync.Manager, config terrainSyncConfig) (*terrainSync, error) {
+	interest, err := policy.NewInterest(policy.InterestConfig{
+		Manager:   manager,
+		ApplyMode: policy.ApplySync,
+		OnRefusal: logRefusal,
+		AOI: policy.AOIConfig{
+			Bounds:      config.bounds,
+			BlockSize:   terrain.ChunkSize,
+			EnterRadius: config.radius,
+			LeaveRadius: config.radius + terrainViewHysteresis,
+			MaxVisible:  config.maxVisible,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("terrain sync: interest policy: %w", err)
+	}
+	return &terrainSync{manager: manager, interest: interest, bounds: config.bounds, shown: map[int64]struct{}{}, reported: map[int64]spatial.Point{}}, nil
+}
+
+// clamp 把场景里的位置夹进地形图（场景比地形图大时，图外的玩家从最近的图边看）。
+func (s *terrainSync) clamp(at spatial.Point) spatial.Point {
+	return spatial.Point{X: min(max(at.X, s.bounds.Min.X), s.bounds.Max.X-1), Y: min(max(at.Y, s.bounds.Min.Y), s.bounds.Max.Y-1)}
+}
+
+// watch 让玩家的地形视野从 at 开始（Join：首次与重连都调用；重连按新位置重新登记）。
+func (s *terrainSync) watch(playerID int64, at spatial.Point) {
+	if s == nil || s.closed.Load() {
+		return
+	}
+	at = s.clamp(at)
+	s.mu.Lock()
+	s.reported[playerID] = at
+	s.mu.Unlock()
+	if err := s.interest.Watch(playerID, at, policy.ObserverView{}); err != nil {
+		slog.Warn("terrain sync: player not watching the terrain", "player_id", playerID, "err", err)
+	}
+}
+
+// moved 是玩家移动提交之后的视点更新：离上次报告不到 terrainViewStep 时不报。
+func (s *terrainSync) moved(playerID int64, at spatial.Point) {
+	if s == nil || s.closed.Load() {
+		return
+	}
+	at = s.clamp(at)
+	s.mu.Lock()
+	last, watching := s.reported[playerID]
+	if !watching || spatial.DistanceSquared(last, at) < terrainViewStep*terrainViewStep {
+		s.mu.Unlock()
+		return
+	}
+	s.reported[playerID] = at
+	s.mu.Unlock()
+	if err := s.interest.MoveView(playerID, at); err != nil && !errors.Is(err, policy.ErrInterestUnknown) {
+		slog.Debug("terrain sync: view not moved", "player_id", playerID, "err", err)
+	}
+}
+
+// unwatch 撤掉玩家的地形视野（Leave）。会话随场景的 Leave 关闭，订阅一起删掉。
+func (s *terrainSync) unwatch(playerID int64) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	delete(s.reported, playerID)
+	s.mu.Unlock()
+	if err := s.interest.Unwatch(playerID); err != nil && !errors.Is(err, policy.ErrInterestUnknown) {
+		slog.Debug("terrain sync: player not released", "player_id", playerID, "err", err)
+	}
+}
+
+// show 把一块改过的块登记为 subject、放在块中心（Map 的提交后通知与 loadEdited 调用）；已登记的什么都不做。
+// 不阻塞：Manager.Register 与 Interest.Show 只取短锁。
+func (s *terrainSync) show(chunk *terrain_chunk.TerrainChunk) {
+	if s == nil || chunk == nil || s.closed.Load() {
+		return
+	}
+	id := chunk.ID()
+	s.mu.Lock()
+	if _, done := s.shown[id]; done {
+		s.mu.Unlock()
+		return
+	}
+	s.shown[id] = struct{}{}
+	s.mu.Unlock()
+	if err := s.manager.Register(chunk.Sync()); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
+		s.forget(id)
+		slog.Error("terrain sync: an edited chunk was not registered; players will not receive it until a restart", "chunk", chunk.Key().String(), "err", err)
+		return
+	}
+	b := chunk.Key().Bounds()
+	centre := spatial.Point{X: (b.Min.X + b.Max.X) / 2, Y: (b.Min.Y + b.Max.Y) / 2}
+	if err := s.interest.Show(id, centre); err != nil {
+		s.forget(id)
+		slog.Error("terrain sync: an edited chunk was not shown; players will not receive it until a restart", "chunk", chunk.Key().String(), "err", err)
+	}
+}
+
+func (s *terrainSync) forget(id int64) {
+	s.mu.Lock()
+	delete(s.shown, id)
+	s.mu.Unlock()
+}
+
+// shownCount 是已登记的改过的块数（测试与诊断）。
+func (s *terrainSync) shownCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.shown)
+}
+
+// attach 把地形同步接到 Map 上：之后提交的改块（第一次改的块）在提交后登记为 subject。
+func (s *terrainSync) attach(m *terrainmap.Map) {
+	if s == nil || m == nil {
+		return
+	}
+	m.SetCommitted(s.show)
+}
+
+// loadEdited 把本进程写的、改过的块装成实体并登记为 subject（启动阶段，Map.Load 之后、玩家进来之前）。Map.Load 只把
+// 记录读进了视图，没有装成实体；同步要的是实体的 SubjectSyncState，所以这里经 lifecycle 的 GetOrCreate 冷加载
+// （每块一次按 _id 的读，8 路并行）。代价按块数线性：内存每块约多一份 DAO（高度 8KB + 材质 4KB + 变化树，与视图里的
+// 副本分开），启动多 N 次读；1w 地图一个格全改过（2304 块）约多 30MB、按实测的单块读耗时估几百毫秒（方案 P2 实施结果）。
+// 邻格 Ghost 带里的块不装（不能在本进程持有别的格的可写实体，P3 推送）。
+func (s *terrainSync) loadEdited(ctx context.Context, m *terrainmap.Map, chunks terrainmap.Chunks) (int, error) {
+	if s == nil || m == nil {
+		return 0, nil
+	}
+	keys := m.EditedOwned()
+	var (
+		next    atomic.Int64
+		loaded  atomic.Int64
+		errOnce sync.Once
+		first   error
+		workers sync.WaitGroup
+	)
+	for range min(8, len(keys)) {
+		workers.Go(func() {
+			for {
+				i := int(next.Add(1) - 1)
+				if i >= len(keys) {
+					return
+				}
+				unique, err := terrain_chunk.UniqueID(keys[i])
+				if err == nil {
+					var chunk *terrain_chunk.TerrainChunk
+					if chunk, _, err = chunks.GetOrCreate(ctx, unique); err == nil {
+						s.show(chunk)
+						loaded.Add(1)
+						continue
+					}
+				}
+				errOnce.Do(func() { first = fmt.Errorf("terrain sync: load edited chunk %v: %w", keys[i], err) })
+				return
+			}
+		})
+	}
+	workers.Wait()
+	return int(loaded.Load()), first
+}
+
+func (s *terrainSync) close() {
+	if s == nil || !s.closed.CompareAndSwap(false, true) {
+		return
+	}
+	s.interest.Close()
+}
+
+// terrainMoves 是开了地形同步的场景给玩家与怪的 movement.Space：在场景原来的 Space（actor.InterestMoves）之外，
+// 玩家的移动在提交之后报给地形视野（回滚的一步不报）。怪不看地形，不报。
+type terrainMoves struct {
+	movement.Space
+	terrain *terrainSync
+}
+
+func (moves terrainMoves) QueueMove(e coreentity.IThreadSafeEntity, at spatial.Point) error {
+	if err := moves.Space.QueueMove(e, at); err != nil {
+		return err
+	}
+	if e == nil || coreentity.GetEntityKindFromID(e.ID()) != player.EntityKindPlayer {
+		return nil
+	}
+	playerID := playerOf(e.ID())
+	follow := func() { moves.terrain.moved(playerID, at) }
+	if !nest.AfterCommit(follow) {
+		follow()
+	}
+	return nil
+}
+
+// terrainManagerLimits 是开了地形的场景 Manager 的帧上限：只调大对象数（会话可持有的 subject 数同此），其余取缺省。
+func terrainManagerLimits() frame.Limits {
+	limits := frame.DefaultLimits()
+	limits.MaxObjects = sceneTerrainMaxObjects
+	return limits
+}

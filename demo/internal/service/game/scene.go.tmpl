@@ -16,6 +16,7 @@ import (
 	"{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/settings"
 	gamescene "{{MODULE}}/game/scene"
+	"{{MODULE}}/game/terrainmap"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	"{{MODULE}}/protocol/msgid"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -193,6 +194,12 @@ type Scene struct {
 	// time.AfterFunc; a test sets it to decide when a retry runs.
 	after func(time.Duration, func())
 
+	// terrain is the editable terrain's replication (terrain_sync.go): its
+	// own interest policy on this manager, the players' views following them
+	// and the edited chunks as subjects. Nil without terrain, and in a
+	// partitioned scene (P3). Set before Start, never changed.
+	terrain *terrainSync
+
 	// partition is this process's part of a partitioned scene
 	// (partition.go), installed once by Init before any player can join; nil
 	// for an ordinary scene. In a partitioned scene a member is not its
@@ -312,10 +319,20 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 			BlockSize: partitionBlockSize, Spawn: spatial.Point{X: partitioned.SpawnX, Y: partitioned.SpawnY},
 		}
 	}
-	scene, err := newScene(transport, watermark, config)
+	// The editable terrain (terrain.go, already loaded and published by
+	// startTerrain) replicates through this manager: its own interest policy,
+	// a bigger object limit and the snapshot budget (terrain_sync.go). Only on
+	// an ordinary scene: a partitioned one's positions belong to the cells (P3).
+	var terrainConfig *terrainSyncConfig
+	terrainMap := terrainmap.Active()
+	if terrainMap != nil && !partitioned.Enabled {
+		terrainConfig = defaultTerrainSync(terrainMap.Meta().Bounds())
+	}
+	scene, err := newSceneWith(sceneLane{transport: transport}, transport, watermark, config, sceneMaxVisible, terrainConfig)
 	if err != nil {
 		return nil, err
 	}
+	scene.terrain.attach(terrainMap)
 	scene.unloads, scene.loads = access, loads
 	// The connection telling us it is gone beats waiting to fail a push to
 	// it: a player who logs off while nothing is happening used to stay in
@@ -365,7 +382,22 @@ func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func
 // crowd overflow a session (frame.ErrObjectLimit) and see what the scene does
 // then. 0 means no cap.
 func newSceneWithMainView(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int) (*Scene, error) {
+	return newSceneWith(lane, transport, watermark, config, maxVisible, nil)
+}
+
+// newSceneWith builds the scene, with the editable terrain's replication
+// when terrainConfig is not nil: the session's object limit grows by the
+// terrain view's cap (sceneTerrainMaxObjects) and snapshots are budgeted per
+// session and flush (terrainSnapshotsPerFlush) — both manager-wide, so they
+// apply to players and monsters too (terrain_sync.go).
+func newSceneWith(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int, terrainConfig *terrainSyncConfig) (*Scene, error) {
 	config = config.Normalize()
+	var limits frame.Limits
+	var snapshots entitysync.SnapshotBudget
+	if terrainConfig != nil {
+		limits = terrainManagerLimits()
+		snapshots = entitysync.SnapshotBudget{PerSessionObjects: terrainSnapshotsPerFlush}
+	}
 	scene := &Scene{members: make(map[int64]sceneMember), teams: make(map[int64]policy.ViewID), sessions: transport}
 	// The durability gate: a pipelined deployment acknowledges a transaction
 	// before its WAL record is durable, so content can be newer than what
@@ -380,6 +412,8 @@ func newSceneWithMainView(lane entitysync.Transport, transport scenePusher, wate
 		Interval:         sceneReplicationInterval,
 		DurableWatermark: watermark,
 		SessionLost:      scene.sessionLost,
+		Limits:           limits,
+		SnapshotBudget:   snapshots,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("scene: replication manager: %w", err)
@@ -436,6 +470,13 @@ func newSceneWithMainView(lane entitysync.Transport, transport scenePusher, wate
 		return nil, fmt.Errorf("scene: self binding: %w", err)
 	}
 	scene.manager, scene.interest, scene.self = manager, interest, self
+	if terrainConfig != nil {
+		if scene.terrain, err = newTerrainSync(manager, *terrainConfig); err != nil {
+			interest.Close()
+			_ = manager.Close(context.Background())
+			return nil, fmt.Errorf("scene: %w", err)
+		}
+	}
 	return scene, nil
 }
 
@@ -608,6 +649,7 @@ func (bridge *Scene) Close(ctx context.Context) error {
 	// running, and a load it publishes from here on is not rebound.
 	resyncErr := bridge.stopUnloadResync(ctx)
 	bridge.unhookEntityLoads()
+	bridge.terrain.close()
 	bridge.interest.Close()
 	return errors.Join(resyncErr, bridge.manager.Close(ctx))
 }
@@ -702,6 +744,8 @@ func (bridge *Scene) Join(ctx context.Context, subject *player.Player, at spatia
 	if err := bridge.interest.Enter(playerID, subjectID, at, view); err != nil {
 		return fmt.Errorf("scene: enter interest %d: %w", subjectID, err)
 	}
+	// The terrain view starts where the player stands (nil without terrain).
+	bridge.terrain.watch(playerID, at)
 	// The scene's own subject (its time domain), wherever the player stands.
 	// Leave detaches every view of the player, so a rejoin attaches again.
 	// A scene that was never shown (a test without one) has no view: the
@@ -845,6 +889,9 @@ func (bridge *Scene) MoveSpace() movement.Space {
 	if bridge == nil || bridge.interest == nil {
 		return actor.Nowhere{}
 	}
+	if bridge.terrain != nil {
+		return terrainMoves{Space: actor.InterestMoves{Interest: bridge.interest}, terrain: bridge.terrain}
+	}
 	return actor.InterestMoves{Interest: bridge.interest}
 }
 
@@ -943,6 +990,7 @@ func (bridge *Scene) leaveLocked(subjectID int64) {
 	if err := bridge.interest.Leave(playerOf(subjectID), subjectID); err != nil {
 		slog.Debug("scene: interest did not release a leaver", "subject_id", subjectID, "err", err)
 	}
+	bridge.terrain.unwatch(playerOf(subjectID))
 	// Leave detached the player from its team view and took its entity out of
 	// the view's members; the scene only forgets which team it was in.
 	bridge.teamMu.Lock()
