@@ -15,7 +15,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
@@ -32,9 +31,12 @@ import (
 //   - 视野 200m（terrainViewRadius）、MaxVisible 64；块的位置取块中心，所以视野圆里约 30 块（π·200² / 64²），64 是
 //     拉远视野或人为放大半径时的上限。
 //
-// 容量（方案 §7“对象上限”）：会话可持有的对象数 = 场景原来的 100（主视野 64 + 自身 / 场景 / 队友 3 + 留给关系视野
-// 的 33）+ 地形 64 = 164（sceneTerrainMaxObjects）。快照预算：每会话每次 Flush 至多 4 个全量对象（方案 §7“基线
-// 限流”）；它是 Manager 级的配置，开了地形之后玩家与怪的进入视野也按它排队（增量与 remove 不受限），见方案 P2 实施结果。
+// 容量与快照预算（方案 §7“对象上限”“基线限流”，决策 D15）：地形是 Manager 的一个单独计的命名空间
+// （entitysync.ManagerConfig.Namespaces，terrainNamespaceLimits）——一个会话最多持有 64 块地形（terrainMaxVisible），
+// 地形的全量每会话每次 Flush 至多 4 个（terrainSnapshotsPerFlush）。玩家 / 怪 / 场景不在其中，仍是场景原来的上限 100
+// （主视野 64 + 自身 / 场景 / 队友 3 + 留给关系视野的 33）、不限快照，交付与不开地形时逐字节相同。会话的对象引用表合起来
+// 可持有 164 个（sceneTerrainMaxObjects），每帧对象数仍按 100 切，所以客户端的帧上限不用改。地形块超过 64（视野上限
+// 配错）与玩家 / 怪超过 100 一样：关闭整个会话（object_limit），场景断开该玩家，客户端重连从全量开始。
 //
 // 只在不分区的场景里接：分区场景的玩家位置归格进程（cellworld），Base 进程上没有可跟随的位置；跨格的地形同步是 P3。
 const (
@@ -43,11 +45,12 @@ const (
 	terrainViewHysteresis = 2000
 	// terrainMaxVisible 是一个玩家的地形视野最多同时持有的块数（方案 §8.1）。
 	terrainMaxVisible = 64
-	// terrainSnapshotsPerFlush 是每会话每次 Flush 至多发出的全量对象数（方案 §8.1 初值 4）。
+	// terrainSnapshotsPerFlush 是每会话每次 Flush 至多发出的地形全量块数（方案 §8.1 初值 4；只计地形）。
 	terrainSnapshotsPerFlush = 4
 	// terrainViewStep 是玩家离上次报告的视点多远才移动地形视野（8m）：远小于离开滞回 20m，不会漏掉进出。
 	terrainViewStep = 800
-	// sceneTerrainMaxObjects 是开了地形的场景里一个会话可持有的对象数：场景原有的上限加地形视野的上限。
+	// sceneTerrainMaxObjects 是开了地形的场景里一个会话的对象引用表上限：场景原有的上限（玩家 / 怪 / 场景，单独计）
+	// 加地形的上限（单独计）。客户端若显式设对象表容量（C# EntityViews 的 maxObjects），不得小于它。
 	sceneTerrainMaxObjects = 100 + terrainMaxVisible
 )
 
@@ -267,9 +270,12 @@ func (moves terrainMoves) QueueMove(e coreentity.IThreadSafeEntity, at spatial.P
 	return nil
 }
 
-// terrainManagerLimits 是开了地形的场景 Manager 的帧上限：只调大对象数（会话可持有的 subject 数同此），其余取缺省。
-func terrainManagerLimits() frame.Limits {
-	limits := frame.DefaultLimits()
-	limits.MaxObjects = sceneTerrainMaxObjects
-	return limits
+// terrainNamespaceLimits 是开了地形的场景 Manager 的按命名空间配置：只有 "terrain" 一项，单独计上限与快照预算。
+func terrainNamespaceLimits() map[string]entitysync.NamespaceLimits {
+	return map[string]entitysync.NamespaceLimits{
+		terrainNamespace: {MaxObjects: terrainMaxVisible, SnapshotBudget: entitysync.SnapshotBudget{PerSessionObjects: terrainSnapshotsPerFlush}},
+	}
 }
+
+// terrainNamespace 是 TerrainChunk 实体的同步命名空间（实体标记 syncNamespace="terrain"），客户端按它分流。
+const terrainNamespace = "terrain"

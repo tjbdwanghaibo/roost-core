@@ -221,7 +221,7 @@ scene:
 - **事务**：覆盖到的块（至多 4 块）一笔 Nest 事务（handler `TerrainBrush`，`rollback=undo durability=strict`），第一次改的块
   先 `GetOrCreate`；提交被接受后逐块装视图并登记同步，回滚时视图与同步都不动。高度与材质都按下标写（DAO 里 `Materials` 是
   `[]uint16`，取值 0～255，原始地形包与 `gameplay/terrain` 里仍是每点 1 字节；记录里出现 > 255 的材质按损坏处理、这块不装入）；
-  一块改动超过 1000 个高度（或 1000 个材质）时该字段整字段写，两个字段各自计数（方案 §15）。
+  一块改动超过 1000 个高度（或 1000 个材质）时该字段整字段写，两个字段各自计数（方案 §16）。
 - **同步**：改过的块是 `terrain` 命名空间的同步对象（`Applied` 不下发）；场景另有一个地形 Interest（视野 200m、至多 64 块），
   玩家主视野是它的观察者。开地形时会话对象上限是 164（其他 100 + 地形 64），每会话每次 Flush 至多 4 个全量（对玩家、怪也生效）。
   客户端用生成的 `ApplySyncTerrainChunkDao` 应用，按 `Version` 重建 mesh（C# 见 `client/dotnet/Roost.Client/Terrain/`）。

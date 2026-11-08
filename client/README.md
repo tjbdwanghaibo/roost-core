@@ -304,6 +304,7 @@ dirtyMeshes.Clear();
 ```
 
 - `ChunkKeyOfEntity` 由游戏工程提供：game-demo 的实体唯一号是 `ChunkKey.Id + 1`（`game/entities/terrain_chunk.KeyOf`），实体 ID 的位布局见 `framework/entity`。SDK 只提供与 Go 相同的 `ChunkKey.Id` / `ChunkKey.FromId`。
+- 对象上限（方案 D15）：开了地形的场景里，地形块单独计 64 个、玩家 / 怪 / 场景仍是 100，会话的对象引用表合起来 164；服务端每帧对象数仍按 100 切，所以 `SyncFrame.Decode` 的 `maxObjects` 保持缺省 100（即服务端的 `Limits.MaxObjects`），**不需要传 164**。`EntityViews` 若显式设容量，不得小于 164（缺省 10000）。玩家 / 怪的帧与不开地形时逐字节相同。
 - 版本单调：比视图里已有覆盖块旧的版本抛 `TerrainStaleOverlayException`（迟到的旧全量不会把地形改回去），版本相同则替换；同版本同数据（重连、重新进入视野时的重复全量）不发 `ChunkChanged`。`BaseRevision` 与包头不同抛 `TerrainBaseRevisionException`：客户端的原始地形资源过期，应更新资源。
 - `Remove`（块离开地形 Interest）时示例保留已装的覆盖块：这一块的最新已知数据比原始块更接近服务端；再次进入视野时服务端重发全量（方案 §7“没有客户端缓存”）。按视距 `Unload` 之后再 `LoadBase` 得到的是原始块，直到这一块再次进入地形 Interest、收到全量为止——显示上会先是原始地形、再跳到改过的样子。需要避免时由业务自己保留“块 → 最后一份覆盖块”的缓存，在 `LoadBase` 之后补 `SetOverlay`。
 - 顶点网格：`destination[j·65 + i]` 是世界采样点 (key.X·64 + i, key.Y·64 + j) 的世界高度，最右一列与最上一行取右 / 上邻块的第 0 列 / 行（共享边），地图右 / 上边复制本块最后一列 / 行，邻块没装返回 false。每个顶点等于 `Height` 在该点的值，相邻块的接缝逐个相同；一块变了，左 / 下 / 左下邻块的接缝也变，所以 `MeshesToRebuild` 最多 4 块。网格三角形在 1m 格内是平面而 `Height` 是双线性插值，格内的点可能差几厘米：落地、站立高度等要与服务端一致的判定用查询，不用渲染网格。Unity 是 Y 轴向上：世界 X → Unity x、世界 Y → Unity z、高度 → Unity y，厘米换米除以 100。

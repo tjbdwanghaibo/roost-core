@@ -1,6 +1,7 @@
 package {{GAME_SERVICE_PKG}}
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math/rand/v2"
@@ -219,7 +220,8 @@ func dialTerrainClient(t *testing.T, addr string, playerID int64) *terrainClient
 		t.Fatalf("player %d authentication: %v", playerID, err)
 	}
 	_ = connection.SetReadDeadline(time.Time{})
-	client := &terrainClient{connection: connection, receiver: frame.NewReceiver(terrainManagerLimits()),
+	// 缺省帧上限就够：会话的引用表合起来可持有 164 个，但每帧对象数仍按场景的 Limits.MaxObjects（100）切分。
+	client := &terrainClient{connection: connection, receiver: frame.NewReceiver(frame.DefaultLimits()),
 		refs: map[frame.ObjectRef]int64{}, namespaces: map[int64]string{}, chunks: map[int64]*db.SyncTerrainChunkDao{}}
 	go client.read()
 	return client
@@ -463,8 +465,9 @@ func TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect(t *testing.
 }
 
 // 方案 §9 P2：视野里改过的块多于 MaxVisible（64）时，会话持有恰好 64 块、不因 object_limit 断开——即使主视野里
-// 还有 40 个怪（40 + 自己 + 64 = 105，超过缺省上限 100；开了地形后上限是 164）。全量受快照预算（每会话每 Flush 4 个）
-// 分摊。不起复制循环，Flush 只由测试跑，次数可数。
+// 还有 40 个怪（40 + 自己 + 64 = 105，超过缺省上限 100；地形的 64 单独计，玩家 / 怪仍是 100）。地形的全量受地形自己的
+// 快照预算（每会话每 Flush 4 个）分摊；玩家与怪不占它，第一次 Flush 就全部到达（决策 D15）。不起复制循环，Flush 只由
+// 测试跑，次数可数。
 func TestATerrainViewAtItsCapKeepsTheSession(t *testing.T) {
 	// 视野 500m：12 × 12 块（768m）的中心看得见约 190 块的中心，改其中 100 块。
 	h := startTerrainSyncHarness(t, 12, 12, 50000, terrainMaxVisible, false)
@@ -495,7 +498,21 @@ func TestATerrainViewAtItsCapKeepsTheSession(t *testing.T) {
 	const playerID = int64(30002)
 	client := h.join(t, playerID, at)
 	started := time.Now()
+	firstFlush := true
+	var othersAfterFirst, terrainAfterFirst int
 	flushes := h.flushUntil(t, "the full terrain view and the monsters", func() bool {
+		if firstFlush {
+			// 第一次 Flush 的帧已经推到回环 socket；等客户端读完再数。
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				terrainAfterFirst, othersAfterFirst = client.held()
+				if othersAfterFirst == 41 || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			firstFlush = false
+		}
 		terrainHeld, others := client.held()
 		return terrainHeld == terrainMaxVisible && others == 41
 	})
@@ -513,11 +530,193 @@ func TestATerrainViewAtItsCapKeepsTheSession(t *testing.T) {
 	if terrainHeld != terrainMaxVisible || others != 41 {
 		t.Fatalf("the client holds %d chunks and %d other objects, want %d and 41", terrainHeld, others, terrainMaxVisible)
 	}
-	// 快照预算：105 个对象每次 Flush 至多 4 个全量，至少 27 次 Flush。
-	if flushes < (terrainMaxVisible+41+terrainSnapshotsPerFlush-1)/terrainSnapshotsPerFlush {
-		t.Fatalf("the whole view arrived in %d flushes; the snapshot budget of %d per flush was not applied", flushes, terrainSnapshotsPerFlush)
+	// 快照预算只管地形：怪与自己（41 个）第一次 Flush 全部到达，地形第一次只到 4 块；64 块地形每次 Flush 至多 4 个全量，
+	// 至少 16 次 Flush。
+	if othersAfterFirst != 41 || terrainAfterFirst > terrainSnapshotsPerFlush {
+		t.Fatalf("after the first flush the client holds %d other objects and %d chunks, want all 41 others (no budget) and at most %d chunks",
+			othersAfterFirst, terrainAfterFirst, terrainSnapshotsPerFlush)
+	}
+	if flushes < (terrainMaxVisible+terrainSnapshotsPerFlush-1)/terrainSnapshotsPerFlush {
+		t.Fatalf("the whole view arrived in %d flushes; the terrain snapshot budget of %d per flush was not applied", flushes, terrainSnapshotsPerFlush)
 	}
 	t.Logf("edited chunks %d, chunks held %d, other objects %d, flushes to the full view %d (%v)", edited, terrainHeld, others, flushes, took)
+}
+
+// 决策 D15：地形的对象上限与快照预算不影响玩家和怪。开了地形（视野里一块改过的块都没有）时，玩家与怪收到的每一帧
+// 与不开地形时逐字节相同：进入视野不按地形的每会话 4 个延后，离开视野照常 remove，Hold / Ready 后的全量也一样。
+func TestTerrainLeavesPlayerAndMonsterReplicationByteIdentical(t *testing.T) {
+	run := func(withTerrain bool) [][]byte {
+		recorder := newSceneRecorder()
+		config := gamescene.DefaultConfig()
+		var terrainConfig *terrainSyncConfig
+		if withTerrain {
+			terrainConfig = defaultTerrainSync(spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}})
+		}
+		scene, err := newSceneWith(sceneLane{transport: recorder}, recorder, nil, config, sceneMaxVisible, terrainConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = scene.Close(closeCtx)
+		})
+		if (scene.terrain != nil) != withTerrain {
+			t.Fatalf("terrain sync on=%v, want %v", scene.terrain != nil, withTerrain)
+		}
+		ctx := context.Background()
+		monster.RegisterEntity()
+		monsters := make([]*monster.Monster, 0, 12)
+		for i := range int64(12) {
+			id, err := entity.BuildEntityID(7500+i, monster.EntityKindMonster)
+			if err != nil {
+				t.Fatal(err)
+			}
+			built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: monster.EntityKindMonster, Id: id})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := built.(*monster.Monster)
+			monsters = append(monsters, m)
+			if err := scene.ShowSubject(ctx, m.Sync(), m.ID(), spatial.Point{X: config.Spawn.X + 30 + i, Y: config.Spawn.Y}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		const observer = int64(32001)
+		var joined []int64
+		for i := range int64(3) {
+			subject := newScenePlayer(t, observer+i)
+			joinReady(t, scene, ctx, subject, spatial.Point{X: config.Spawn.X + i, Y: config.Spawn.Y})
+			joined = append(joined, subject.ID())
+		}
+		var frames [][]byte
+		flush := func() {
+			if err := scene.Flush(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for _, push := range recorder.take(observer) {
+				frames = append(frames, push.Payload)
+			}
+			frames = append(frames, nil) // Flush 的分界
+		}
+		flush()
+		flush()
+		// 怪离开视野（remove）、一个玩家离场、观察者 Hold / Ready 重新开始。
+		scene.HideSubject(ctx, monsters[0].ID())
+		scene.Leave(ctx, joined[2])
+		flush()
+		if err := scene.manager.HoldSession(entitysync.SessionID(observer)); err != nil {
+			t.Fatal(err)
+		}
+		if err := scene.manager.ReadySession(entitysync.SessionID(observer)); err != nil {
+			t.Fatal(err)
+		}
+		flush()
+		flush()
+		if lost := scene.manager.Stats().SessionsLost; lost != 0 {
+			t.Fatalf("%d sessions lost", lost)
+		}
+		return frames
+	}
+	plain, withTerrain := run(false), run(true)
+	// 前提：第一次 Flush 就送达 12 个怪、两个玩家与观察者自己——超过地形每会话 4 个的预算，所以如果预算套在玩家 / 怪
+	// 身上，这里的帧就会不同。
+	created := 0
+	for _, raw := range plain {
+		if raw == nil {
+			break
+		}
+		decoded, err := entitysync.DecodeFrame(raw, frame.DefaultLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, object := range decoded.Objects {
+			if object.Operation == frame.ObjectCreate {
+				created++
+			}
+		}
+	}
+	if created <= terrainSnapshotsPerFlush {
+		t.Fatalf("the first flush created %d objects; the premise needs more than the terrain budget of %d", created, terrainSnapshotsPerFlush)
+	}
+	if len(plain) != len(withTerrain) {
+		t.Fatalf("the observer got %d frames (with flush marks) without terrain, %d with terrain", len(plain), len(withTerrain))
+	}
+	for i := range plain {
+		if !bytes.Equal(plain[i], withTerrain[i]) {
+			t.Fatalf("frame %d differs once terrain sync is on: players and monsters must replicate exactly as without terrain", i)
+		}
+	}
+	t.Logf("%d frames byte-identical; first flush created %d objects", len(plain), created)
+}
+
+// 决策 D15 的另一半：地形的 64 不放宽玩家 / 怪的上限。开了地形，101 个玩家挤在一起（每人要持有自己与另外 100 人，
+// 101 > 100）照样关闭全部会话并断开（object_limit）——与 TestACrowdOverflowingASessionDisconnectsThePlayers 不开地形时
+// 相同；引用表合起来是 164 也不让玩家占地形的名额。
+func TestTerrainDoesNotWidenThePlayerObjectLimit(t *testing.T) {
+	recorder := newSceneRecorder()
+	config := gamescene.DefaultConfig()
+	scene, err := newSceneWith(sceneLane{transport: recorder}, recorder, nil, config, 0,
+		defaultTerrainSync(spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.watchSessions(recorder)
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+	ctx := context.Background()
+	disconnectsBefore := sessionLostDisconnects()
+	const players = 101
+	for i := range int64(players) {
+		joinReady(t, scene, ctx, newScenePlayer(t, 33000+i), spatial.Point{X: config.Spawn.X + i%12, Y: config.Spawn.Y + i/12})
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if lost := scene.manager.Stats().SessionsLost; lost != players {
+		t.Fatalf("%d of %d sessions were lost to the overflowing crowd with terrain on; the player limit must stay 100", lost, players)
+	}
+	if got := sessionLostDisconnects() - disconnectsBefore; got != players {
+		t.Fatalf("object_limit disconnects grew by %d, want %d", got, players)
+	}
+}
+
+// 地形块超过它自己的上限（视野上限配成 80 > 64）：与玩家 / 怪超过 100 相同——不截断、关闭整个会话（object_limit），场景断开
+// 该玩家的连接，客户端重连从全量开始。持有量由地形视野的 MaxVisible（terrainMaxVisible = 64）保证。
+func TestTerrainChunksOverTheirLimitCloseTheSession(t *testing.T) {
+	h := startTerrainSyncHarness(t, 12, 12, 50000, terrainMaxVisible+16, false)
+	h.scene.watchSessions(h.transport)
+	at := centreOf(terrain.ChunkKey{X: 6, Y: 6})
+	edited := 0
+	for y := int32(1); y < 11 && edited < 100; y++ {
+		for x := int32(1); x < 11 && edited < 100; x++ {
+			c := centreOf(terrain.ChunkKey{X: x, Y: y})
+			edited++
+			h.brush(t, terrainBuilder, uint64(edited), terrain.Brush{Op: terrain.BrushRaise, X: c.X, Y: c.Y, Radius: 200, Strength: 3})
+		}
+	}
+	disconnectsBefore := sessionLostDisconnects()
+	const playerID = int64(30003)
+	client := h.join(t, playerID, at)
+	flushes := h.flushUntil(t, "the session lost to the terrain limit", func() bool { return h.scene.manager.Stats().SessionsLost > 0 })
+	if got := sessionLostDisconnects() - disconnectsBefore; got != 1 {
+		t.Fatalf("object_limit disconnects grew by %d, want 1", got)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for h.transport.ActiveSessions(playerID) != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := h.transport.ActiveSessions(playerID); n != 0 {
+		t.Fatalf("the player still has %d connections after its session was lost", n)
+	}
+	held, _ := client.held()
+	if held > terrainMaxVisible {
+		t.Fatalf("the client was given %d chunks, more than the terrain limit %d", held, terrainMaxVisible)
+	}
+	t.Logf("session lost after %d flushes holding %d chunks", flushes, held)
 }
 
 // ---- 测量（方案 §7.1 / §9 P2，材质改列表后重测）：ROOST_TERRAIN_MEASURE=1 时运行，数字写进证据目录 ----

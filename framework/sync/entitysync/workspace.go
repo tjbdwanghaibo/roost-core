@@ -36,7 +36,7 @@ func (m *Manager) recycleFlush(work map[SessionID]*flushSession) {
 		if cap(batch.settlements) > 256 {
 			batch.settlements = nil
 		}
-		batch.session, batch.snapshotAfter = nil, [2]int64{}
+		batch.session, batch.snapshotAfter = nil, snapshotMarks{}
 		batch.snapshotAttempted = false
 		if len(m.flushPool) < 2048 {
 			m.flushPool = append(m.flushPool, batch)

@@ -1,0 +1,80 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   64636	     19097 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2772	    446703 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870314 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2458	    488066 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967850 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     696	   1702714 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376102 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     704	   1711718 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473643 B/op	    1894 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   60399	     18612 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2672	    455773 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870315 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2491	    484578 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967850 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     744	   1681358 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376101 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     694	   1737117 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473644 B/op	    1894 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   61234	     19241 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2732	    457421 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870313 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2427	    505601 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967850 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     715	   1795462 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376102 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     630	   1900133 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473645 B/op	    1894 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   62217	     19006 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2644	    450890 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870311 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2470	    481415 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967853 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     716	   1734355 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376100 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     610	   1893054 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473645 B/op	    1894 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   57074	     21477 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2419	    485959 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870316 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2318	    514837 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967851 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     739	   1691015 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376101 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     621	   1951358 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473645 B/op	    1894 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   59629	     21666 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2212	    535144 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870312 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2124	    620655 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967851 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     528	   2202272 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376115 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     580	   2987448 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473648 B/op	    1894 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   58489	     20970 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2503	    515105 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870314 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2293	    689401 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967852 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     136	   7828926 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376123 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     428	   3209590 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473650 B/op	    1894 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   56323	     77505 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48353 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	     954	   1092780 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870315 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    1170	   3009232 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967869 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     244	   4176215 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376139 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     438	   3866850 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473656 B/op	    1894 allocs/op
+PASS

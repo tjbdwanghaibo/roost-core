@@ -1,4 +1,4 @@
-// 快照预算：整实体分帧、预算按窗口轮转且不延误增量、只对实际尝试的会话计费、游标不越过未尝试者、已有对象刷新不占冷额度。
+// 快照预算：整实体分帧、预算按窗口轮转且不延误增量、只对实际尝试的会话计费、游标不越过未尝试者、已有对象刷新不占冷额度、按命名空间分路互不占额度。
 
 package entitysync
 
@@ -879,5 +879,182 @@ func TestSnapshotClassesRotateAcrossSessions(t *testing.T) {
 	}
 	if len(seen) != 4 || m.Stats().Pending != 0 {
 		t.Fatal("class session rotation did not converge")
+	}
+}
+
+// ---- 按命名空间分路的快照预算（ManagerConfig.Namespaces） ----
+
+// countCreates 取走会话本轮收到的帧，按命名空间数新建对象（ObjectCreate），并数增量。
+func countCreates(t *testing.T, r *recordingTransport, sid SessionID) (creates map[string]int, deltas int) {
+	t.Helper()
+	creates = make(map[string]int)
+	for _, raw := range r.take(sid) {
+		f := decodeFrame(t, raw)
+		for id, op := range f.objects {
+			if op == frame.ObjectCreate {
+				creates[f.updates[id].Namespace]++
+			} else if op == frame.ObjectUpdate && !f.updates[id].Full {
+				deltas++
+			}
+		}
+	}
+	return creates, deltas
+}
+
+// 两路预算互不占额度：一路设限只延后自己的冷创建，另一路不设限时照常一次发完；两路都设限时各用各的额度。
+// 已持有对象的增量不受任何一路影响。
+func TestNamespaceSnapshotBudgetsAreSeparate(t *testing.T) {
+	type want struct{ player, terrain int }
+	for _, tc := range []struct {
+		name    string
+		manager SnapshotBudget
+		terrain SnapshotBudget
+		ticks   []want
+	}{
+		{"terrain_only", SnapshotBudget{}, SnapshotBudget{PerSessionObjects: 1}, []want{{3, 1}, {0, 1}, {0, 1}}},
+		{"manager_only", SnapshotBudget{PerSessionObjects: 1}, SnapshotBudget{}, []want{{1, 3}, {1, 0}, {1, 0}}},
+		{"both", SnapshotBudget{PerSessionObjects: 1}, SnapshotBudget{PerSessionObjects: 2}, []want{{1, 2}, {1, 1}, {1, 0}}},
+		{"both_objects", SnapshotBudget{MaxObjects: 2}, SnapshotBudget{MaxObjects: 1}, []want{{2, 1}, {1, 1}, {0, 1}}},
+	} {
+		for _, mode := range []SyncMode{ModePeriodic, ModeOnChange} {
+			t.Run(fmt.Sprintf("%s/mode%d", tc.name, mode), func(t *testing.T) {
+				r := newRecordingTransport()
+				m := newTestManager(t, r, ManagerConfig{
+					Mode: mode, Interval: time.Hour, SnapshotBudget: tc.manager,
+					Namespaces: map[string]NamespaceLimits{"terrain": {MaxObjects: 8, SnapshotBudget: tc.terrain}},
+				})
+				live := nsSubject(1, "player")
+				mustRegister(t, m, live)
+				open(t, m, 1)
+				mustSubscribe(t, m, 1, 1, entity.SyncProfile{})
+				mustFlush(t, m)
+				r.take(1)
+				for id := int64(2); id <= 4; id++ {
+					mustRegister(t, m, nsSubject(id, "player"), nsSubject(100+id, "terrain"))
+					mustSubscribe(t, m, 1, id, entity.SyncProfile{})
+					mustSubscribe(t, m, 1, 100+id, entity.SyncProfile{})
+				}
+				for tick, w := range tc.ticks {
+					m.budgetWindow = time.Now().Add(-2 * time.Hour) // on_change：进入下一窗口
+					live.MarkDirty(1)
+					mustFlush(t, m)
+					creates, deltas := countCreates(t, r, 1)
+					if creates["player"] != w.player || creates["terrain"] != w.terrain || deltas != 1 {
+						t.Fatalf("tick %d: creates %v deltas %d, want player=%d terrain=%d and the live delta", tick, creates, deltas, w.player, w.terrain)
+					}
+					if mode == ModeOnChange {
+						// 同一窗口再 Flush 不能再花任何一路的额度。
+						mustFlush(t, m)
+						if again, _ := countCreates(t, r, 1); len(again) != 0 {
+							t.Fatalf("tick %d: same window spent again: %v", tick, again)
+						}
+					}
+				}
+				if m.Stats().PendingSnapshots != 0 || len(m.session(1).objects) != 7 {
+					t.Fatalf("did not converge: %+v objects=%d", m.Stats(), len(m.session(1).objects))
+				}
+				checkClassHeld(t, m, 1)
+			})
+		}
+	}
+}
+
+// 每一路各自按会话轮转：两路的游标互不推动。字节软预算也按路计——一路被大对象挡住只挡它自己的后缀。
+func TestNamespaceSnapshotLanesRotateAndBlockIndependently(t *testing.T) {
+	t.Run("rotation", func(t *testing.T) {
+		r := newRecordingTransport()
+		m := newTestManager(t, r, ManagerConfig{
+			SnapshotBudget: SnapshotBudget{MaxObjects: 1},
+			Namespaces:     map[string]NamespaceLimits{"terrain": {MaxObjects: 8, SnapshotBudget: SnapshotBudget{MaxObjects: 1}}},
+		})
+		open(t, m, 1, 2, 3)
+		mustRegister(t, m, nsSubject(1, "player"), nsSubject(101, "terrain"))
+		for _, sid := range []SessionID{1, 2, 3} {
+			mustSubscribe(t, m, sid, 1, entity.SyncProfile{})
+		}
+		// 地形只有会话 3 订阅：地形一路第一次就给会话 3，不必等玩家一路轮到它。
+		mustSubscribe(t, m, 3, 101, entity.SyncProfile{})
+		var order [][2]SessionID // 每轮 {玩家给了谁, 地形给了谁}
+		for range 3 {
+			mustFlush(t, m)
+			var got [2]SessionID
+			for sid := SessionID(1); sid <= 3; sid++ {
+				creates, _ := countCreates(t, r, sid)
+				if creates["player"] == 1 {
+					got[0] = sid
+				}
+				if creates["terrain"] == 1 {
+					got[1] = sid
+				}
+			}
+			order = append(order, got)
+		}
+		if !slices.Equal(order, [][2]SessionID{{1, 3}, {2, 0}, {3, 0}}) {
+			t.Fatalf("per-lane rotation: %v", order)
+		}
+	})
+	t.Run("byte_block", func(t *testing.T) {
+		r := newRecordingTransport()
+		m := newTestManager(t, r, ManagerConfig{
+			Mode: ModeOnChange, Interval: time.Hour,
+			SnapshotBudget: SnapshotBudget{MaxBytes: 1},
+			Namespaces:     map[string]NamespaceLimits{"terrain": {MaxObjects: 8, SnapshotBudget: SnapshotBudget{MaxBytes: 1}}},
+		})
+		open(t, m, 1)
+		for id := int64(1); id <= 2; id++ {
+			mustRegister(t, m, nsSubject(id, "player"), nsSubject(100+id, "terrain"))
+			mustSubscribe(t, m, 1, id, entity.SyncProfile{})
+			mustSubscribe(t, m, 1, 100+id, entity.SyncProfile{})
+		}
+		for tick := range 2 {
+			m.budgetWindow = time.Now().Add(-2 * time.Hour)
+			mustFlush(t, m)
+			// 每路第一个对象独占软预算，第二个被挡；两路各一个。
+			if creates, _ := countCreates(t, r, 1); creates["player"] != 1 || creates["terrain"] != 1 {
+				t.Fatalf("tick %d: %v", tick, creates)
+			}
+			if !m.windowByteBlocked && tick == 0 || !m.lanes[1].windowByteBlocked && tick == 0 {
+				t.Fatalf("tick %d: lanes not marked byte-blocked: %v %v", tick, m.windowByteBlocked, m.lanes[1].windowByteBlocked)
+			}
+			mustFlush(t, m)
+			if creates, _ := countCreates(t, r, 1); len(creates) != 0 {
+				t.Fatalf("tick %d: blocked window admitted %v", tick, creates)
+			}
+		}
+	})
+}
+
+// RetryLater 中断准入时，每一路只给实际尝试过的会话计费，游标不越过该路计划里未尝试的会话——
+// 即使两路计划的会话顺序不同（玩家一路先轮到会话 1，地形一路只有会话 3）。
+func TestNamespaceSnapshotRetryChargesEachLaneByAttempt(t *testing.T) {
+	r := newRecordingTransport()
+	m := newTestManager(t, r, ManagerConfig{
+		Mode: ModeOnChange, Interval: time.Hour,
+		SnapshotBudget: SnapshotBudget{MaxObjects: 1},
+		Namespaces:     map[string]NamespaceLimits{"terrain": {MaxObjects: 8, SnapshotBudget: SnapshotBudget{MaxObjects: 1}}},
+	})
+	open(t, m, 1, 2, 3)
+	mustRegister(t, m, nsSubject(1, "player"), nsSubject(101, "terrain"))
+	mustSubscribe(t, m, 1, 1, entity.SyncProfile{})
+	mustSubscribe(t, m, 3, 101, entity.SyncProfile{})
+	r.setRetry(ErrRetryLater)
+	if err := m.Flush(t.Context()); !errors.Is(err, ErrRetryLater) {
+		t.Fatalf("err=%v", err)
+	}
+	r.setRetry(nil)
+	terrain := m.lanes[1]
+	t.Logf("after RetryLater: player lane %+v %v cursor=%v; terrain lane %+v %v cursor=%v",
+		m.windowAllowance, m.windowSessions, m.snapshotCursor, terrain.windowAllowance, terrain.windowSessions, terrain.snapshotCursor)
+	// 准入顺序：会话 1（玩家一路的计费）先于会话 3（地形一路），第一次 Push 就 RetryLater：只有会话 1 被尝试。
+	if m.windowAllowance.objects != 1 || m.snapshotCursor[snapshotArrival] != 1 {
+		t.Fatalf("player lane not charged for the attempted session: %+v cursor=%v", m.windowAllowance, m.snapshotCursor)
+	}
+	if terrain.windowAllowance.objects != 0 || len(terrain.windowSessions) != 0 || terrain.snapshotCursor[snapshotArrival] != 0 {
+		t.Fatalf("terrain lane charged for a session never attempted: %+v %v cursor=%v", terrain.windowAllowance, terrain.windowSessions, terrain.snapshotCursor)
+	}
+	r.take(1)
+	mustFlush(t, m) // 同一窗口：玩家一路已用完，地形一路仍有额度给会话 3。
+	if creates, _ := countCreates(t, r, 3); creates["terrain"] != 1 {
+		t.Fatalf("terrain lane lost its window after the other lane's retry: %v", creates)
 	}
 }

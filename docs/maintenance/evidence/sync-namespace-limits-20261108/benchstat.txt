@@ -1,0 +1,83 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+                                                                │   base.txt    │               new.txt               │
+                                                                │    sec/op     │    sec/op      vs base              │
+ManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10     17.80µ ±   4%   18.86µ ± 903%       ~ (p=0.093 n=6)
+ManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10    438.7µ ±   4%   441.1µ ± 231%       ~ (p=0.699 n=6)
+ManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10    468.9µ ±   3%   473.5µ ±  99%       ~ (p=0.394 n=6)
+ManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10   1.546m ±   5%   1.579m ± 145%  +2.14% (p=0.041 n=6)
+ManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10   1.664m ±   7%   1.682m ± 151%       ~ (p=1.000 n=6)
+ByteBudgetRecoveryDrain-10                                        144.1m ±   2%   144.9m ±  32%       ~ (p=0.818 n=6)
+SessionRecovery/entities=1000/players=1000/visible=50-10          3.626m ±   2%   3.750m ±  69%       ~ (p=0.132 n=6)
+SessionRecovery/entities=10000/players=1000/visible=50-10         2.610m ±  17%   3.043m ±  62%       ~ (p=0.065 n=6)
+ExhaustedSnapshotWindow-10                                        231.4n ± 274%   232.3n ±  14%       ~ (p=0.937 n=6)
+geomean                                                           523.9µ          541.7µ         +3.41%
+
+                                                                │  base.txt  │              new.txt               │
+                                                                │ frames/op  │ frames/op   vs base                │
+ManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10     1.000 ± 0%   1.000 ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10    64.00 ± 0%   64.00 ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10    64.00 ± 0%   64.00 ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10   256.0 ± 0%   256.0 ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10   256.0 ± 0%   256.0 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                           48.50        48.50       +0.00%
+¹ all samples are equal
+
+                                                                │  base.txt  │              new.txt               │
+                                                                │  packs/op  │  packs/op   vs base                │
+ManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10     32.00 ± 0%   32.00 ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10    32.00 ± 0%   32.00 ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10    128.0 ± 0%   128.0 ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10   32.00 ± 0%   32.00 ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10   128.0 ± 0%   128.0 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                           55.72        55.72       +0.00%
+¹ all samples are equal
+
+                                                                │   base.txt   │               new.txt                │
+                                                                │  wire-B/op   │  wire-B/op    vs base                │
+ManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10     10.81Ki ± 0%   10.81Ki ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10    692.0Ki ± 0%   692.0Ki ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10    692.0Ki ± 0%   692.0Ki ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10   2.703Mi ± 0%   2.703Mi ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10   2.703Mi ± 0%   2.703Mi ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                           524.4Ki        524.4Ki       +0.00%
+¹ all samples are equal
+
+                                                                │   base.txt   │               new.txt                │
+                                                                │     B/op     │     B/op      vs base                │
+ManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10     47.22Ki ± 0%   47.22Ki ± 0%       ~ (p=1.000 n=6)
+ManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10    849.9Ki ± 0%   849.9Ki ± 0%       ~ (p=0.359 n=6)
+ManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10    945.2Ki ± 0%   945.2Ki ± 0%       ~ (p=0.366 n=6)
+ManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10   3.220Mi ± 0%   3.220Mi ± 0%       ~ (p=0.108 n=6)
+ManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10   3.313Mi ± 0%   3.313Mi ± 0%       ~ (p=0.307 n=6)
+ByteBudgetRecoveryDrain-10                                        83.62Mi ± 0%   84.74Mi ± 0%  +1.34% (p=0.002 n=6)
+SessionRecovery/entities=1000/players=1000/visible=50-10          1.210Mi ± 0%   1.215Mi ± 1%  +0.44% (p=0.002 n=6)
+SessionRecovery/entities=10000/players=1000/visible=50-10         1.204Mi ± 0%   1.210Mi ± 1%  +0.46% (p=0.002 n=6)
+ExhaustedSnapshotWindow-10                                          64.00 ± 0%     64.00 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                           532.9Ki        534.3Ki       +0.25%
+¹ all samples are equal
+
+                                                                │  base.txt   │               new.txt               │
+                                                                │  allocs/op  │  allocs/op   vs base                │
+ManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10      244.0 ± 0%    244.0 ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10     638.0 ± 0%    638.0 ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10     736.0 ± 0%    736.0 ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10   1.796k ± 0%   1.796k ± 0%       ~ (p=1.000 n=6) ¹
+ManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10   1.894k ± 0%   1.894k ± 0%       ~ (p=1.000 n=6) ¹
+ByteBudgetRecoveryDrain-10                                        216.7k ± 0%   217.1k ± 0%  +0.17% (p=0.002 n=6)
+SessionRecovery/entities=1000/players=1000/visible=50-10          8.031k ± 0%   8.033k ± 0%       ~ (p=0.403 n=6)
+SessionRecovery/entities=10000/players=1000/visible=50-10         8.022k ± 0%   8.025k ± 0%  +0.04% (p=0.028 n=6)
+ExhaustedSnapshotWindow-10                                         3.000 ± 0%    3.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                           1.364k        1.364k       +0.03%
+¹ all samples are equal
+
+                           │  base.txt   │           new.txt            │
+                           │ captures/op │ captures/op  vs base         │
+ByteBudgetRecoveryDrain-10   17.21k ± 0%   17.21k ± 0%  ~ (p=1.000 n=6)
+
+                           │  base.txt  │            new.txt            │
+                           │ windows/op │ windows/op  vs base           │
+ByteBudgetRecoveryDrain-10   182.0 ± 0%   182.0 ± 0%  ~ (p=1.000 n=6) ¹
+¹ all samples are equal

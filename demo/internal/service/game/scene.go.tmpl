@@ -386,17 +386,17 @@ func newSceneWithMainView(lane entitysync.Transport, transport scenePusher, wate
 }
 
 // newSceneWith builds the scene, with the editable terrain's replication
-// when terrainConfig is not nil: the session's object limit grows by the
-// terrain view's cap (sceneTerrainMaxObjects) and snapshots are budgeted per
-// session and flush (terrainSnapshotsPerFlush) — both manager-wide, so they
-// apply to players and monsters too (terrain_sync.go).
+// when terrainConfig is not nil. The terrain namespace then has its own object
+// limit (terrainMaxVisible) and its own snapshot budget
+// (terrainSnapshotsPerFlush per session and flush) — counted apart from
+// players and monsters, whose limit stays the default 100 with no snapshot
+// budget, so they replicate exactly as without terrain (terrain_sync.go,
+// terrainNamespaceLimits; maintainer decision D15).
 func newSceneWith(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int, terrainConfig *terrainSyncConfig) (*Scene, error) {
 	config = config.Normalize()
-	var limits frame.Limits
-	var snapshots entitysync.SnapshotBudget
+	var namespaces map[string]entitysync.NamespaceLimits
 	if terrainConfig != nil {
-		limits = terrainManagerLimits()
-		snapshots = entitysync.SnapshotBudget{PerSessionObjects: terrainSnapshotsPerFlush}
+		namespaces = terrainNamespaceLimits()
 	}
 	scene := &Scene{members: make(map[int64]sceneMember), teams: make(map[int64]policy.ViewID), sessions: transport}
 	// The durability gate: a pipelined deployment acknowledges a transaction
@@ -412,8 +412,7 @@ func newSceneWith(lane entitysync.Transport, transport scenePusher, watermark fu
 		Interval:         sceneReplicationInterval,
 		DurableWatermark: watermark,
 		SessionLost:      scene.sessionLost,
-		Limits:           limits,
-		SnapshotBudget:   snapshots,
+		Namespaces:       namespaces,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("scene: replication manager: %w", err)

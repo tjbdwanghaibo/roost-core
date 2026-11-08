@@ -98,13 +98,26 @@ Epoch 在一个 Manager 内单调递增、跨会话 ID 共享：每次 `OpenSess
 
 组帧以**完整 EntitySync 更新包**为最小单元，一个外层帧可装多个完整实体包。对象数量或字节上限不足时，将下一个实体包整体放入下一帧；不会截断 payload。单包超过硬上限明确失败。Transport 可选实现 `FrameSizeLimiter` 声明最大帧大小，AsyncTransport 适配器自动转发单消息限制；自定义包装需扣除自身头部开销并转发能力。
 
-`ManagerConfig.SnapshotBudget` 可设置每 Flush 的全量对象数、实体包字节数和每会话全量对象数。只延后尚待建立/恢复基线的快照，增量（包括 full-dirty 更新）和 remove 不限流；未发快照不结算订阅，下次捕获最新内容。会话和实体均轮转。字节预算不计外层帧头，单实体超软预算允许独占一次额度以保证进度，硬上限始终有效。数量额度先于捕获筛选；字节额度在捕获后按实际包长检查。这是快照调度与准入预算，不是严格 CPU 时间上限；默认关闭。
+`ManagerConfig.SnapshotBudget` 可设置每 Flush 的全量对象数、实体包字节数和每会话全量对象数。只延后尚待建立/恢复基线的快照，增量（包括 full-dirty 更新）和 remove 不限流；未发快照不结算订阅，下次捕获最新内容。会话和实体均轮转。字节预算不计外层帧头，单实体超软预算允许独占一次额度以保证进度，硬上限始终有效。数量额度先于捕获筛选；字节额度在捕获后按实际包长检查。这是快照调度与准入预算，不是严格 CPU 时间上限；默认关闭。配置了 `ManagerConfig.Namespaces`（见下“按命名空间分开计”）时，它只管没列出的命名空间。
 
 `AsyncTransportConfig.MaxResidentReliableBytes` 限制全会话排队与在途字节总和，`MaxReliableAge` 从入队开始限制总年龄，默认均关闭。超限拒绝属于会话背压；过期终止该会话发送并清理剩余队列，通过 OnError 通知业务。异步失败应与业务的会话关闭/重建流程对接。不能丢弃旧增量后直接发送新增量。[完整实施记录](https://github.com/tjbdwanghaibo/roost-core/blob/9d955fb0df35f082dfc9be24c2f3a4524d437067/docs/feature/REFACTOR-2026-09-24-sync-six-items.md)。
 
+## 按命名空间分开计（Namespaces）
+
+2026-11-08 起（维护者决定，可编辑地形方案 D15：“地形的对象上限与快照预算不影响玩家和怪”）。`ManagerConfig.Namespaces map[string]NamespaceLimits` 给列出的同步命名空间单独计两样东西，没列出的命名空间沿用 `Limits.MaxObjects` 与 Manager 级 `SnapshotBudget`：
+
+- `NamespaceLimits.MaxObjects`（必须为正）：一个会话可同时持有的该命名空间对象数。每一类各自计：没列出的那一类仍是 `Limits.MaxObjects`，不因加了一类而放宽；会话的对象引用表合起来可持有 `Limits.MaxObjects + Σ MaxObjects`（不超过 65535）。
+- `NamespaceLimits.SnapshotBudget`：该命名空间单独的冷创建预算，与 Manager 级预算、其他命名空间互不占额度；每一路各自轮转会话与实体（游标、两类来源交替）、各自计字节软上限与窗口，RetryLater 中断准入时每一路只给实际尝试过的会话计费、游标不越过该路计划里未尝试的会话。零值表示该命名空间不限快照（不继承 Manager 级预算）。
+- 分类键是 subject 的 `Namespace`（codegen `syncNamespace`），不是订阅来源：命名空间是对象自己的属性，一个对象经几个来源订阅也只占一个引用、只属于一类；它也是客户端的分流键。类别在登记时按状态的命名空间确定，`Rebind` 不改变。
+- **超出一类的上限**与既有契约相同：不截断、不只拒该类的新对象，下一次 Flush 为新对象分配引用时关闭整个会话（`SessionLost`，原因 `object_limit`，错误里点名命名空间或“Limits.MaxObjects”）。只拒该类新对象会让订阅停在“要全量”却永远发不出去，等于静默截断；持有量照旧由政策的上限保证（该命名空间所用 Interest 的 `AOIConfig.MaxVisible` 不大于它的 `MaxObjects`）。同一 tick 先 remove 再 create，满额的类里换对象不超限；Hold/Ready、关闭重开从零计；退役（remove-before-create）先归还名额。
+- **帧与客户端**：每帧对象数仍按 `Limits.MaxObjects` 切分，只有引用表上限变成各类之和，所以接收端（Go `frame.Receiver`、C# `SyncFrame.Decode` 的 `maxObjects`）照旧按 `Limits.MaxObjects` 配置，不需要知道总数；客户端若显式设对象表容量（C# `EntityViews` 的 `maxObjects`，缺省 10000），不得小于各类之和。
+- **默认不变**：不配置（nil）时与没有这一项逐字节相同（既有用例不改断言即通过）；列出某个命名空间也不改变其他命名空间的任何字节（`TestNamespaceLimitsLeaveUnlistedNamespacesByteIdentical`）。实现：`framework/sync/entitysync/namespaces.go`（类别与持有计数）、`snapshot_budget.go`（`snapshotLane`，每路一份额度、游标与待快照索引）。
+
+game-demo 的场景：玩家 / 怪 / 场景沿用 100、不限快照，`terrain` 命名空间上限 64、每会话每次 Flush 至多 4 个全量（`demo/internal/service/game/terrain_sync.go.tmpl` 的 `terrainNamespaceLimits`）。
+
 ## 容量与观测
 
-`ManagerConfig.MaxSubjects / MaxSessions / MaxSubscribersPerSubject`，`Limits.MaxObjects` 同时是一个会话可持有的 subject 数；
+`ManagerConfig.MaxSubjects / MaxSessions / MaxSubscribersPerSubject`，`Limits.MaxObjects` 同时是一个会话可持有的 subject 数（配置了 `Namespaces` 时是没列出的那一类的数，列出的命名空间各按自己的 `MaxObjects`）；
 `Subscribe` 不按它拒绝，超出发生在下一次 Flush 给该会话编码、为新对象分配引用时（`frame.ErrObjectLimit`）：Manager 不截断、不只丢超出的那几个，
 而是关闭整个会话（`SessionsLost` +1、回调 `SessionLost`），之后政策对它的订阅以会话不存在被拒、进重试表，直到业务重新打开会话；
 `SessionLost` 的原因总是 `*SessionLoss`：`LossReason(cause)` 是低基数分类——`push_refused`（传输拒收这一帧）、`object_limit`（`frame.ErrObjectLimit`）、

@@ -1,4 +1,4 @@
-// entitysync 基准：Flush、字节预算恢复、预算耗尽窗口与 profile 需求。
+// entitysync 基准：Flush（含按命名空间分路）、字节预算恢复、预算耗尽窗口与 profile 需求。
 
 package entitysync
 
@@ -75,6 +75,64 @@ func BenchmarkManagerFlush(b *testing.B) {
 				b.ReportMetric(float64(bytes)/float64(b.N), "wire-B/op")
 			})
 		}
+	}
+}
+
+// BenchmarkManagerFlushWithNamespaces 与 BenchmarkManagerFlush 同一稳定脏更新 tick，但配置了一个单独计上限与快照预算的
+// 命名空间（地形式：32 个默认命名空间 subject + 16 个 terrain subject，每会话都订阅）；对照分路后稳定 tick 的开销。
+func BenchmarkManagerFlushWithNamespaces(b *testing.B) {
+	for _, sessions := range []int{1, 64} {
+		b.Run(fmt.Sprintf("sessions=%d/subjects=32+16/payload=256", sessions), func(b *testing.B) {
+			ctx := context.Background()
+			manager, err := NewManager(ManagerConfig{
+				Transport:  TransportFunc(func(context.Context, SessionID, []byte) error { return nil }),
+				Namespaces: map[string]NamespaceLimits{"terrain": {MaxObjects: 64, SnapshotBudget: SnapshotBudget{PerSessionObjects: 4}}},
+			})
+			if err != nil {
+				b.Fatal(err)
+			}
+			b.Cleanup(func() { _ = manager.Close(ctx) })
+			payload := entity.CopyFrozenSyncPayload(1, make([]byte, 256))
+			packer := entity.SubjectSyncPackFunc{
+				Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) { return payload, nil },
+				Delta:    func(entity.SyncProfile, uint64) (entity.FrozenSyncPayload, error) { return payload, nil },
+			}
+			states := make([]*entity.SubjectSyncState, 48)
+			for i := range states {
+				namespace := "bench"
+				if i >= 32 {
+					namespace = "terrain"
+				}
+				states[i] = entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled: true, SubjectID: int64(i + 1), Namespace: namespace, Packer: packer})
+				if err := manager.Register(states[i]); err != nil {
+					b.Fatal(err)
+				}
+			}
+			for sid := 1; sid <= sessions; sid++ {
+				if err := manager.OpenSession(SessionID(sid)); err != nil {
+					b.Fatal(err)
+				}
+				for _, state := range states {
+					if err := manager.Subscribe(SessionID(sid), state.SubjectID(), entity.SyncProfile{}); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+			for manager.Stats().PendingSnapshots > 0 {
+				if err := manager.Flush(ctx); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				for _, state := range states {
+					state.MarkDirty(1)
+				}
+				if err := manager.Flush(ctx); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
