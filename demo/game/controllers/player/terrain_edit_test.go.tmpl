@@ -1,0 +1,95 @@
+package player
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"testing"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/game/terrainmap"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// 端点只做两件事：线上整数换成笔刷（越界拒绝、不截断），terrainmap 的拒绝换成业务码。校验、去重、事务与同步见
+// internal/service/<game>/terrain_test.go 与 terrain_sync_test.go。
+
+func codeOf(err error) int32 {
+	code, _ := errcode.ClientError(err)
+	return code
+}
+
+// 没配地形的服务器答 terrain_disabled，不是内部错误。
+func TestTerrainEditWithoutTerrainAnswersDisabled(t *testing.T) {
+	if terrainmap.Active() != nil {
+		t.Skip("a terrain map is installed in this process")
+	}
+	controller := &Controller{registry: app.NewRegistry(viper.New())}
+	response, err := controller.HandleTerrainEdit(&playeraccess.Context{BaseCtx: context.Background(), PlayerID: 7, MsgID: msgid.MsgTerrainEdit, Seq: 1},
+		&pb.TerrainEditRequest{RequestID: 1, Op: int32(terrain.BrushRaise), Radius: 500, Strength: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != codeOf(apperrors.ErrTerrainDisabled) {
+		t.Fatalf("code %d (%s), want terrain_disabled", response.Code, response.Reason)
+	}
+}
+
+// 越出字段类型范围的值拒绝：截断会把一个非法请求变成另一个合法请求（例如强度 65537 变成 1）。
+func TestTerrainEditRefusesWireValuesOutsideTheirFields(t *testing.T) {
+	valid := pb.TerrainEditRequest{RequestID: 1, Op: int32(terrain.BrushFlatten), X: 300, Y: 400, Radius: 500, Falloff: int32(terrain.FalloffSmooth), Strength: 20, Target: 1500, Material: 7}
+	brush, ok := brushOf(&valid)
+	want := terrain.Brush{Op: terrain.BrushFlatten, X: 300, Y: 400, Radius: 500, Falloff: terrain.FalloffSmooth, Strength: 20, Target: 1500, Material: 7}
+	if !ok || brush != want {
+		t.Fatalf("brushOf(valid) = %+v, %v; want %+v", brush, ok, want)
+	}
+	for name, mutate := range map[string]func(*pb.TerrainEditRequest){
+		"op over a byte":        func(r *pb.TerrainEditRequest) { r.Op = 256 },
+		"negative op":           func(r *pb.TerrainEditRequest) { r.Op = -1 },
+		"falloff over a byte":   func(r *pb.TerrainEditRequest) { r.Falloff = 256 },
+		"strength over uint16":  func(r *pb.TerrainEditRequest) { r.Strength = math.MaxUint16 + 2 },
+		"negative strength":     func(r *pb.TerrainEditRequest) { r.Strength = -1 },
+		"target over uint16":    func(r *pb.TerrainEditRequest) { r.Target = math.MaxUint16 + 1 },
+		"material over a byte":  func(r *pb.TerrainEditRequest) { r.Material = 256 },
+		"negative material":     func(r *pb.TerrainEditRequest) { r.Material = -3 },
+	} {
+		request := valid
+		mutate(&request)
+		if _, ok := brushOf(&request); ok {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// 每个拒绝对应一个业务码（包在别的错误里也认得出）；别的错误原样返回，答 internal。
+func TestTerrainRefusalsMapToTheirCodes(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want error
+	}{
+		{terrainmap.ErrDisabled, apperrors.ErrTerrainDisabled},
+		{terrainmap.ErrBrush, apperrors.ErrTerrainBrush},
+		{terrainmap.ErrNotOwned, apperrors.ErrTerrainNotOwned},
+		{terrainmap.ErrUnloadable, apperrors.ErrTerrainUnavailable},
+		{terrain.ErrNotLoaded, apperrors.ErrTerrainUnavailable},
+		{terrainmap.ErrRateLimited, apperrors.ErrTerrainRate},
+		{terrainmap.ErrDenied, apperrors.ErrTerrainDenied},
+		{terrainmap.ErrOccupied, apperrors.ErrTerrainOccupied},
+	} {
+		wrapped := fmt.Errorf("terrain: brush at (1, 2): %w", c.err)
+		if got := terrainError(wrapped); !errors.Is(got, c.want) || codeOf(got) == errcode.CodeInternal {
+			t.Errorf("%v mapped to %v (code %d), want %v", c.err, got, codeOf(got), c.want)
+		}
+	}
+	other := errors.New("wal: disk full")
+	if got := terrainError(other); got != other || codeOf(got) != errcode.CodeInternal {
+		t.Fatalf("an infrastructure error mapped to %v (code %d)", got, codeOf(got))
+	}
+}

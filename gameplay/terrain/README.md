@@ -1,6 +1,6 @@
-# terrain：可编辑地形的底座（P1 框架部分）
+# terrain：可编辑地形的底座（P1 框架部分 + P2 笔刷）
 
-[可编辑地形方案](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md) P1 的框架部分：块坐标、原始地形包（base pack）的读写、内存中的地形视图与整数定点查询。纯逻辑加文件 I/O，不依赖 Nest / DataEngine / entitysync。被玩家改过的块（`TerrainChunk` 实体、持久化、同步、重启一致）由上层接入，本包只接收它们的数据作为覆盖块。实测数字见[证据目录](../../docs/maintenance/evidence/terrain-p1-20261108/README.md)。
+[可编辑地形方案](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md) P1 的框架部分：块坐标、原始地形包（base pack）的读写、内存中的地形视图与整数定点查询。纯逻辑加文件 I/O，不依赖 Nest / DataEngine / entitysync。P2 加了笔刷（`brush.go`：抬高 / 降低 / 整平 / 改材质的纯整数计算，见下文“笔刷”）。被玩家改过的块（`TerrainChunk` 实体、持久化、同步、重启一致）由上层接入，本包只接收它们的数据作为覆盖块。实测数字见证据目录：[P1](../../docs/maintenance/evidence/terrain-p1-20261108/README.md)、[P2](../../docs/maintenance/evidence/terrain-p2-20261108/README.md)。
 
 ## 坐标与块
 
@@ -92,7 +92,20 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 - `Material(x, y)` = 采样点 (gx, gy) 的材质（所在 1m 格左下角，总在本块）。
 - `IsWater(x, y)` = `Height(x, y) < WaterLevel`（全局水位线，方案 §5；等于水位线不算水）。
 
-**金样**：[client/spec/terrain-golden.pack](../../client/spec/terrain-golden.pack)（3 × 2 块：程序化地形加一块 0 / 65535 棋盘格与斜坡的边界情形块）与 [terrain-queries.json](../../client/spec/terrain-queries.json)（包与每块解码后的 SHA-256，246 个位置的期望高度 / 材质 / 水，含块边界、四块交点、地图边缘、地图外）。客户端实现读这个包、逐块核对、全部装入后逐点核对。`TestClientTerrainGolden` 检查提交的包能解出金样数据、从它重新算出的 JSON 与提交的逐字节相同（不要求包与重新压缩的逐字节相同，Go 版本升级不会让它变红）；改格式或算法时 `go test ./gameplay/terrain -run TestClientTerrainGolden -update`。证据目录里的 `check_golden.py` 是只按本文与 pack.go 写的独立实现，246 个位置全部一致。C# / C++ 实现留 P2。
+**金样**：[client/spec/terrain-golden.pack](../../client/spec/terrain-golden.pack)（3 × 2 块：程序化地形加一块 0 / 65535 棋盘格与斜坡的边界情形块）与 [terrain-queries.json](../../client/spec/terrain-queries.json)（包与每块解码后的 SHA-256，246 个位置的期望高度 / 材质 / 水，含块边界、四块交点、地图边缘、地图外）。客户端实现读这个包、逐块核对、全部装入后逐点核对。`TestClientTerrainGolden` 检查提交的包能解出金样数据、从它重新算出的 JSON 与提交的逐字节相同（不要求包与重新压缩的逐字节相同，Go 版本升级不会让它变红）；改格式或算法时 `go test ./gameplay/terrain -run TestClientTerrainGolden -update`。证据目录里的 `check_golden.py` 是只按本文与 pack.go 写的独立实现，246 个位置全部一致。C# 已在 `client/dotnet/Roost.Client/Terrain/`，C++ 未做。
+
+## 笔刷（P2，`brush.go`，客户端须逐位相同）
+
+`Brush{Op, X, Y, Radius, Falloff, Strength, Target, Material}`：中心是世界坐标（厘米），半径厘米（`[1, MaxBrushRadius]`，玩家上限由上层的 Policy 定，demo 是 1600）。只用整数，同一输入在任何平台得到同一输出，客户端可以同算做预测。
+
+- **覆盖的点**：采样点 `(gx·100, gy·100)` 与中心的距离平方 `d² ≤ R²`。每个采样点只属于一块（共享边归右 / 上的块，见“坐标与块”）；`Chunks(meta)` 是覆盖点所在的块，按 (Y, X) 排序。
+- **权重** `w ∈ [0, 65536]`（`WeightScale`）：`FalloffConstant` 在 `d ≤ R` 时为 65536；`FalloffLinear` 取 `d = ISqrt(d²)`（向下取整的整数平方根），`d < R` 时 `w = ⌊65536·(R − d)/R⌋`；`FalloffSmooth` 在 `d² < R²` 时 `t = ⌊65536·(R² − d²)/R²⌋`、`w = ⌊t²/65536⌋`；其余为 0。
+- **抬高 / 降低**：`δ = ⌊(Strength·w + 32768)/65536⌋`；抬高 `max(cur, min(cur + δ, Ceiling))`、降低 `min(cur, max(cur − δ, Bedrock))`——已经在限外的点不往外推。
+- **整平**：`diff = Target − cur`，`step = sign(diff)·⌊(|diff|·w + 32768)/65536⌋`，新高度 `cur + step`（不越过 `Target`；`Target` 必须在 `[Bedrock, Ceiling]` 内）。常数衰减即整块压到 `Target`，同一个常数整平做两次，第二次没有变化。
+- **改材质**：覆盖的点材质改成 `Material`，不看衰减；不动高度。
+- **输出**：`Apply` 返回每块改了值的点（`PointChange{Index, Height, Material}`，下标按升序），值没变的点不出现；`ChunkChange.HeightChanges` 是这块改了高度的点数（上层的整字段守卫按它判断）。
+
+**金样**：[client/spec/terrain-brush.json](../../client/spec/terrain-brush.json)——`ISqrt` 表、三种衰减的权重表、17 个笔刷（四种操作 × 三种衰减、块边界、四块交点、夹到基岩 / 上限、整平幂等、地图边缘）在 `terrain-golden.pack` 原始块上的结果：每例覆盖的块、每块改了的点数与 SHA-256（逐点 `index u16 LE, height u16 LE, material u8` 按下标升序），点数不超过 40 时列出全部点。`TestClientBrushGolden` 核对；改算法时 `go test ./gameplay/terrain -run TestClientBrushGolden -update`（不重写包）。
 
 ## 给上层（TerrainChunk 实体接入）的接口说明
 
@@ -100,7 +113,8 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 - 第一次改一块时，用 `Pack.ReadChunk(key)`（或 `View.Chunk(key)`）取原始数据作初值建实体；这两个都返回调用方独占的新切片，可以直接交给 DAO。
 - 每次提交后把 DAO 的当前值 `SetOverlay` 给 View（View 复制，不与 DAO 共享内存）；版本必须单调（View 拒绝回退）。
 - 格进程启动：对本格（加 Ghost 带）`ChunksIn` 出的块，有持久记录的 `SetOverlay`，其余 `LoadBase`（I/O，放在 io / long 池或启动阶段）。实测 1w 地图装满一个格（2304 块）单线程约 120ms、8 路并行约 29ms，堆约 27MB。
-- 原始地形换版（`BaseRevision` 变了）时旧覆盖块会被 `ErrBaseRevision` 拒绝：保留、重放还是丢弃旧编辑，是上层与产品的决定。
+- 原始地形换版（`BaseRevision` 变了）时旧覆盖块会被 `ErrBaseRevision` 拒绝。维护者 2026-11-08 决定丢弃旧编辑：game-demo 的地形服务在启动时把本格基于旧版本的记录经正式事务重置为空（Version 0）、改用原始块，邻格的不动（方案第 14 节）。
+- 笔刷：上层在锁住 `Chunks(meta)` 的全部块之后，用块的当前数据（改过的块取 DAO，没改过的取原始块）调 `Apply`，把每块的 `PointChange` 写进 DAO；`Validate` 只检查笔刷本身，频率、权限、建筑占位等由上层做。
 
 ## 限制
 

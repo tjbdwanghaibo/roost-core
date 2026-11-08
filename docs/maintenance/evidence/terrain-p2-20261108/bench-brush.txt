@@ -1,0 +1,12 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/terrain
+cpu: Apple M5
+BenchmarkBrushApplyPlayerRadius/r5m_linear_1chunk-10         	  438674	      2676 ns/op	    2216 B/op	      17 allocs/op
+BenchmarkBrushApplyPlayerRadius/r5m_linear_1chunk-10         	  463430	      2620 ns/op	    2216 B/op	      17 allocs/op
+BenchmarkBrushApplyPlayerRadius/r5m_linear_1chunk-10         	  449990	      2613 ns/op	    2216 B/op	      17 allocs/op
+BenchmarkBrushApplyPlayerRadius/r16m_smooth_4chunks-10       	   76674	     15716 ns/op	   16720 B/op	      49 allocs/op
+BenchmarkBrushApplyPlayerRadius/r16m_smooth_4chunks-10       	   76388	     15669 ns/op	   16720 B/op	      49 allocs/op
+BenchmarkBrushApplyPlayerRadius/r16m_smooth_4chunks-10       	   76598	     15729 ns/op	   16720 B/op	      49 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	7.820s

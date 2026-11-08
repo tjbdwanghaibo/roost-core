@@ -1,0 +1,21 @@
+MEASURE full snapshot (enter view)         payload= 12319 component= 12397 frame= 12611 wire= 12627 heights_delta=false height_updates=0 materials=true
+MEASURE raise r=5m linear                  payload=   575 component=   653 frame=   703 wire=   719 heights_delta=true height_updates=69 materials=false
+MEASURE raise r=5m constant (81 points)    payload=   671 component=   749 frame=   799 wire=   815 heights_delta=true height_updates=81 materials=false
+MEASURE raise r=16m smooth                 payload=  5759 component=  5837 frame=  5887 wire=  5903 heights_delta=true height_updates=717 materials=false
+MEASURE paint r=5m (materials whole field) payload=  4117 component=  4195 frame=  4245 wire=  4261 heights_delta=false height_updates=0 materials=true
+MEASURE flatten r=24m (guard, whole heights) payload=  8213 component=  8291 frame=  8341 wire=  8357 heights_delta=false height_updates=0 materials=false
+--- PASS: TestTerrainMeasureUpdateBytes (0.04s)
+MEASURE hot spot, 20 editors x 1/s, 0% with material          19.2 KB/s on the wire (   15.8 KB/s DAO payload), 9 full + 524 delta chunk updates in 20 s
+MEASURE hot spot, 20 editors x 1/s, 50% with material         75.5 KB/s on the wire (   71.9 KB/s DAO payload), 9 full + 559 delta chunk updates in 20 s
+MEASURE hot spot, 20 editors x 1/s, 100% with material       132.6 KB/s on the wire (  128.9 KB/s DAO payload), 9 full + 565 delta chunk updates in 20 s
+MEASURE running at 6 m/s, 100% of the chunks edited            8.1 KB/s on the wire (    8.0 KB/s DAO payload), 20 full + 0 delta chunk updates in 30 s
+MEASURE running at 6 m/s, 20% of the chunks edited             1.6 KB/s on the wire (    1.6 KB/s DAO payload), 4 full + 0 delta chunk updates in 30 s
+MEASURE running at 12 m/s, 100% of the chunks edited          16.6 KB/s on the wire (   16.4 KB/s DAO payload), 41 full + 0 delta chunk updates in 30 s
+MEASURE running at 12 m/s, 20% of the chunks edited            4.1 KB/s on the wire (    4.0 KB/s DAO payload), 10 full + 0 delta chunk updates in 30 s
+--- PASS: TestTerrainMeasureDownlinkScenarios (1.76s)
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=75.903µs p50=73.083µs p99=231.083µs max=345µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=573.703µs p50=554.417µs p99=1.282958ms max=1.44725ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=196.081µs p50=179.542µs p99=506.333µs max=769.458µs
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 44787 edits/s (offline committer, 4 short workers)
+--- PASS: TestTerrainMeasureBrushCost (0.99s)
+ok  	example.com/planet/internal/service/game	3.237s

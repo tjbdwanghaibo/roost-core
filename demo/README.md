@@ -39,7 +39,7 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `internal/service/<服务>/` | 各服务进程：game 的消费者、matchmaker、scene、battle、GM；account / chat / session 的 collaborators |
 | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/alliancerule/`、`game/entities/alliance*/` | 联盟服务（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：独立的 alliance 进程独占 Alliance / AllianceMember（Remote 托管、`service=alliance`），对已有实体的写走路由 RPC（发往实体的 owner；Alliance 起服预加载并登记路由），建盟走随机路由，请求回执与改动同事务；守卫是名单的缓存、跨实例收尾丢了由下一个请求自愈（联盟不产生任何 effect：成员通知由服务层写成功后直接发，预约期限是持有守卫的进程里的到期回调，跨实例宣战是宣战方事务里的持久“等确认”标记 + 直接调用对方 `AcknowledgeWar`），守卫 `snapshots=none` 不发 Remote 快照；运维命令 `alliance.info` / `alliance.guard` / `alliance.transfer` / `alliance.stop_founding` |
 | `game/guild/`、`saga/alliance_*/`、`internal/service/<game>/alliance_saga.go`、`alliance_notice.go` | game 侧的公会：game 只装联盟的只读 Mirror（`game/entities/alliance/mirror.go`），玩家所在公会是自己的副本 `PlayerDao.GuildID`，入会 / 退会一次 RPC，建盟扣费 / 捐献 / 领奖各一个 saga（Player 原生步骤 + 调 RPC 的 Mongo 步骤），接收成员变化通知推给在线玩家；见 [WALKTHROUGH](WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror) |
-| `game/terrainmap/`、`game/entities/terrain_chunk/`、`internal/service/<game>/terrain.go`、`cmd/terrainpack` | 可编辑地形（P1，缺省关闭）：地形包、被改过的块的实体、启动装入与内部写入口，见[可编辑地形](#可编辑地形p1) |
+| `game/terrainmap/`、`game/entities/terrain_chunk/`、`internal/service/<game>/terrain.go`、`terrain_sync.go`、`game/controllers/player/terrain_edit.go`、`cmd/terrainpack` | 可编辑地形（P1 / P2 单格，缺省关闭）：地形包、被改过的块的实体、启动装入、玩家笔刷编辑与地形同步，见[可编辑地形](#可编辑地形p1)、[玩家编辑与同步](#玩家编辑与同步p2) |
 | `internal/access/player/tcp/` | 玩家 TCP 接入的鉴权（`auth.go`） |
 | `configs/` | 配置表 schema、CSV、生成数据与各服务配置 |
 | `cmd/loadtest`、`loadtest/` | 机器人压测与场景脚本；`cmd/accountctl` 是操作员工具 |
@@ -195,12 +195,38 @@ scene:
   `spawn_x` / `spawns` 要落在新的世界里）。
 - **查询**：能力 `<game>.terrain`（`*terrainmap.Map`）的 `Height` / `Material` / `IsWater` / `Probe`，世界坐标是厘米；
   不取锁，可以在 Nest handler 里调。块没装（不在本进程范围、或它的记录装不进来）答 `terrain.ErrNotLoaded`。
-- **改块**：P1 只有内部写入口 `Map.Edit`（一组采样点的高度与材质；一块一笔 strict 事务，handler `TerrainEdit`），提交后才进
-  视图；还没有协议、笔刷、校验与同步（P2）。它会等数据库与 WAL，不能在 Nest 的业务 worker 上调用。
-- **换了原始地形**：地形包的 `BaseRevision` 与某块的记录不同时，这一块不装入（查询答 not loaded、不能改），启动日志
-  `terrain: chunk record is based on another base revision` 点名块坐标，库里的记录不动；旧编辑怎么处理还没定（方案 §12）。
-- **测试**：`internal/service/<game>/terrain_test.go` 是改块、回滚与重启一致；`TestTerrainRestartRealMongo` 在
-  `ROOST_TERRAIN_IT_MONGO_URI` 指向副本集时用真实 DataEngine 再跑一遍重启（`scripts/test-demo-generated.sh` 挂入）。
+- **改块**：内部写入口 `Map.Edit`（一组采样点的高度与材质；一块一笔 strict 事务，handler `TerrainEdit`），提交后才进视图；
+  玩家的笔刷编辑见下面的 P2。两者都会等数据库与 WAL，不能在 Nest 的业务 worker 上调用。
+- **换了原始地形**（维护者 2026-11-08 决定丢弃旧编辑）：地形包的 `BaseRevision` 与本进程写的某块记录不同时，启动时经一笔正式
+  的 strict 事务把这块重置为“建了、还没改过”（Version 0、数据清空，`Applied` 保留），改用新的原始块，启动日志 Warn
+  `its edits were discarded` 点名块坐标与新旧版本，`discarded` 计数；重置失败时这块不装入（查询答 not loaded、不能改）、
+  记录不动，日志 Error。邻格 Ghost 带里的旧记录只由它的格丢弃，本进程不装入、不动它（方案 §14）。
+- **测试**：`internal/service/<game>/terrain_test.go` 是改块、回滚、重启一致、换版丢弃与笔刷；`TestTerrainRestartRealMongo` 在
+  `ROOST_TERRAIN_IT_MONGO_URI` 指向副本集时用真实 DataEngine 再跑一遍重启与换版丢弃（`scripts/test-demo-generated.sh` 挂入）。
+
+### 玩家编辑与同步（P2）
+
+单格（[方案 §14](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#14-p2-服务端单格实施结果2026-11-08)）：玩家连在
+自己所在格的 game 进程上，跨格编辑（转发给目标格）是 P3。
+
+- **协议**：`TerrainEdit`（msgid 10038，`protocol/def/terrain_edit.go`）：请求 ID（同一玩家内唯一、非 0）、操作（1 抬高 /
+  2 降低 / 3 整平 / 4 改材质）、中心（厘米）、半径（厘米）、衰减（0 常数 / 1 线性 / 2 平滑）、强度（高度原始值，1 = 10cm）、
+  整平目标、材质；答复是各块的新版本与 `duplicate`（这个请求 ID 已经生效过，这次没有再改）。改动本身经同步流到达。
+  笔刷的整数算法见 [gameplay/terrain“笔刷”](../gameplay/terrain/README.md#笔刷p2brushgo客户端须逐位相同)，客户端可同算做预测。
+- **校验**（`terrainmap.DefaultPolicy`，`Map.SetPolicy` 可换）：半径 ≤ 16m、至多 4 块、强度 ≤ 50（5m）、高度夹在 `[0, 16383]`、
+  每玩家每秒 2 次（令牌桶）；领地 / 权限与建筑占位是钩子 `terrainmap.Rules`（缺省都放行，`Map.SetRules` 装）。拒绝时什么都不写，
+  业务码 100052～100058（`internal/errors/terrain.go`）。
+- **幂等**：编辑 ID 由（玩家，请求 ID）混合得出，与改动在同一笔事务里记进每块的 `Applied`（最近 32 个）；重复或乱序重放的请求
+  不再生效。结果未知（超时）时用同一个请求 ID 重试。
+- **事务**：覆盖到的块（至多 4 块）一笔 Nest 事务（handler `TerrainBrush`，`rollback=undo durability=strict`），第一次改的块
+  先 `GetOrCreate`；提交被接受后逐块装视图并登记同步，回滚时视图与同步都不动。一块改动超过 1000 个高度时整字段写。
+- **同步**：改过的块是 `terrain` 命名空间的同步对象（`Applied` 不下发）；场景另有一个地形 Interest（视野 200m、至多 64 块），
+  玩家主视野是它的观察者。开地形时会话对象上限是 164（其他 100 + 地形 64），每会话每次 Flush 至多 4 个全量（对玩家、怪也生效）。
+  客户端用生成的 `ApplySyncTerrainChunkDao` 应用，按 `Version` 重建 mesh（C# 见 `client/dotnet/Roost.Client/Terrain/`）。
+  分区场景还没有地形同步（P3）。
+- **测试**：`terrain_test.go` 的 `TestTerrainBrush*`（重复 / 乱序只生效一次、拒绝零写入、限速、多块回滚、整字段守卫）；
+  `terrain_sync_test.go` 走真实 TCP（客户端收到全量与增量、断线重连后逐点一致、视野满 64 块不断开会话）；
+  `ROOST_TERRAIN_MEASURE=1` 时跑字节与耗时测量（[实测](../docs/maintenance/evidence/terrain-p2-20261108/README.md)）。
 
 ## 改这里的东西之后
 
