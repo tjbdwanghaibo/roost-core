@@ -1,6 +1,6 @@
 # 可编辑地形大世界（定稿方案，2026-11-08）
 
-状态：**定稿方案，未实施。** 维护者 2026-11-08 确认：材质层用 `[]byte`，其余按本文推荐整理为最终方案（第 8 节）。目标是在 cellworld 无缝大世界上支持玩家改地形（挖、填、抬高、整平、改材质）、由此形成湖泊和高地，并在地形上放置建筑。
+状态：**定稿方案；P1 的框架部分（`gameplay/terrain`：坐标、原始地形包、地形视图与查询）已实施，见[第 11 节](#11-p1-框架部分实施结果2026-11-08)，其余未实施。** 维护者 2026-11-08 确认：材质层用 `[]byte`，其余按本文推荐整理为最终方案（第 8 节）。目标是在 cellworld 无缝大世界上支持玩家改地形（挖、填、抬高、整平、改材质）、由此形成湖泊和高地，并在地形上放置建筑。
 
 数字的来源分两种：同步与持久化的单块字节、编码耗时来自离线微基准（[实验记录](evidence/terrain-sync-20261108/results.md)）；规模、带宽与参数初值是按假设推算，P2 / P5 实测后修正。
 
@@ -38,7 +38,7 @@
 | 128m | 79 | 约 6,200 | 约 48KB |
 | 256m | 40 | 1,600 | 约 192KB |
 
-整图 1 亿个采样点，原始约 300MB（高度 200MB + 材质 100MB）。原始地形是静态资源，不进数据库；数据库只存被改过的块；服务端内存只装有玩家附近的块。`cell_size` 取 3072（48 块），1w 地图约 4 × 4 个格，每格约 2,300 块，全部装入约 27MB 原始数据。
+整图 1 亿个采样点，原始约 300MB（高度 200MB + 材质 100MB）。原始地形是静态资源，不进数据库；数据库只存被改过的块；服务端内存只装有玩家附近的块。格边长取 48 块（`cell_size` 307200：cellworld 的世界单位是厘米，原写 3072 是按米算的，P1 更正），1w 地图约 4 × 4 个格，每格约 2,300 块，全部装入约 27MB 原始数据。
 
 ## 3. 数据模型与持久化
 
@@ -125,7 +125,7 @@ type TerrainChunkDao struct {
 - **客户端。** Go 用生成的 `ApplySync<Dao>`，C# / C++ 用同一份 `dao_sync.proto` 与生成 Apply；应用后按 `Version` 重建该块 mesh。
 - **没有客户端缓存。** entitysync 不记客户端已有哪个版本：块离开视野再回来会重发全量，版本没变也一样（AOI 的进出半径不同，只防边界抖动）。首版接受，按第 7.1 节的量评估；超出预算再做“客户端已有此版本则跳过全量”（第 8 节 D12）。
 
-**格边界**：邻格需要 Ghost 带（缺省 500m）内的地形与建筑占位副本，用于视野、移动和交接判断。格进程之间像 Ghost 一样推送边界块的版本与变化，副本只读。
+**格边界**：邻格需要 Ghost 带（按 500m 配置即 `ghost_band` 50000；demo 缺省的 500 只有 5m）内的地形与建筑占位副本，用于视野、移动和交接判断。格进程之间像 Ghost 一样推送边界块的版本与变化，副本只读。
 
 ### 7.1 同步数据量（推算）
 
@@ -155,7 +155,7 @@ type TerrainChunkDao struct {
 | D1 | 地形表示 | 2.5D 高度场 | 体素（可做洞穴，数据与同步量大一个量级）；不做 |
 | D2 | 采样与高度精度 | 1m 采样；高度 `uint16`、10cm 精度、相对基准存储 | 0.5m / 2m 采样；1cm 精度（655m 高差） |
 | D3 | 水 | 全局 / 区域水位线 | 盆地水位（P4 之后按需）；流体模拟不做 |
-| D4 | 块与格对齐 | 块 64m，`cell_size` 3072（48 块） | 块 128m；块跨格不做 |
+| D4 | 块与格对齐 | 块 64m，格 48 块（`cell_size` 307200，世界单位厘米；P1 更正，原写 3072） | 块 128m；块跨格不做 |
 | D5 | 跨格编辑 | 拆分为各格独立提交，接缝最终一致 | Remote / Saga 原子编辑（有玩法需要时再议） |
 | D6 | 编辑扣资源 | Base 预扣 + 按请求 ID 对账 | Saga |
 | D7 | 跨格建筑 | 首版禁止 | 锚点格拥有 + 邻格只读副本 |
@@ -169,7 +169,7 @@ type TerrainChunkDao struct {
 
 | 参数 | 初值 |
 | --- | --- |
-| 块 / 采样 / 格 | 64m / 1m / `cell_size` 3072，`ghost_band` 500 |
+| 块 / 采样 / 格 | 64m / 1m / `cell_size` 307200（48 块），`ghost_band` 50000（500m）。P1 更正：世界单位是厘米（cellworld 约定），原写 3072 / 500 是按米算的，块边长 6400 |
 | 高度 | `uint16`，10cm，相对地图基准 |
 | 整字段守卫阈值 | 单块 1000 点 |
 | 玩家笔刷半径上限 / 单次最多块数 / 频率 | 16m / 4 块 / 每秒 2 次 |
@@ -192,3 +192,42 @@ type TerrainChunkDao struct {
 ## 10. 不在范围
 
 洞穴与隧道（体素）、流体模拟、地形的跨机物理世界迁移、客户端地形渲染与 LOD 的具体实现（只约定数据格式与版本）。cellworld 自身的生产化（崩溃恢复、交接验收、时钟前提）按首发清单 L04 另行推进。
+
+## 11. P1 框架部分实施结果（2026-11-08）
+
+分支 `feat/terrain-p1`，新包 `gameplay/terrain`（[包说明](../../gameplay/terrain/README.md)），纯逻辑加文件 I/O，不依赖 Nest / DataEngine / entitysync。P1 剩下的 `TerrainChunk` 实体、持久化与“改块重启后一致”由下一轮在 demo 里接。实测数字与复跑命令见[证据目录](evidence/terrain-p1-20261108/README.md)。
+
+**坐标**：世界单位按 cellworld 的约定是厘米（`grid.go`：测试与测量里 1 单位 = 1 厘米），块边长 6400、采样间隔 100、高度步长 10（10cm）。这三个值与每块 64 × 64 采样都是常量（决定 DAO 形状和客户端算法），包头记录、读包核对。块键 `ChunkKey{X, Y}`，`ID()` 编码为高 32 位 X、低 32 位 Y；`ChunkOf` / `PointIndex` 向负无穷取整，远处坐标饱和不回绕。由此第 2.1、7、8 节的 `cell_size` / `ghost_band` 已改成厘米值。
+
+**API 摘要**：
+
+| 部分 | 入口 |
+| --- | --- |
+| 块数据 | `Chunk{Heights []uint16; Materials []byte}`（各 4096，行优先），与 DAO 同形；返回 `Chunk` 的函数都给新切片，接收的函数都复制 |
+| 原始地形包 | `WritePack(io.WriterAt, Meta, ChunkSource)`、`WritePackFile`（临时文件 + fsync + 改名）；`OpenPack`、`Pack.ReadChunk`（可并发）、`Pack.ChunkSum`、`Close` |
+| 数据来源 | `RAWImport{Heights, Materials, Width, Height, BigEndian, FlipY, MaxHeight}.Source(meta)`；确定性程序化生成 `Generated(meta, seed)` |
+| 地形视图 | `NewView(pack)`；写入口 `LoadBase` / `SetOverlay(key, Overlay{BaseRevision, Version, Heights, Materials})` / `Unload`；`Version` / `Chunk` / `Len` |
+| 查询 | `Height`（双线性插值、整数定点、四舍五入到厘米）、`Material`（所在 1m 格左下角采样点）、`IsWater`（低于全局水位线）、`Probe`（三者一次取） |
+| 错误 | `ErrOutOfMap`、`ErrNotLoaded`（邻块没装，带块坐标，不猜）、`ErrCorruptChunk`（单块坏，不给默认值）、`ErrBadPack`、`ErrPackVersion`、`ErrStaleOverlay`、`ErrBaseRevision`、`ErrInvalidChunk` |
+
+**包格式（版本 1）**：128 字节包头（magic、格式版本、`BaseRevision`、块数、几何常量、`HeightBase`、`WaterLevel`、codec、对包头与索引表的整体 SHA-256）+ 每块一项的索引表（偏移、长度、存储字节的 SHA-256）+ 每块独立压缩的数据。块编码是“平面预测差分 zigzag varint + raw DEFLATE”。打开只读包头与索引（1w 地图约 1MB），读块时校验该块的 SHA-256。
+
+**实测（1w × 1w，157 × 157 块，Apple M5，程序化地形，页缓存热）**：
+
+| 项 | 结果 |
+| --- | --- |
+| 包大小 | 66.8 MiB，平均每块 2.8KB |
+| 生成 + 写包 | 约 2.4s |
+| 打开（只读索引） | 约 0.5ms |
+| 单块加载 P50 / P99 | 约 39µs / 约 163µs |
+| 装满一个格（48 × 48 = 2304 块） | 单线程约 120ms，8 路并行约 29ms；堆约 27MB |
+| 查询 | 单 goroutine 9ns（块在缓存里）～25ns（满格随机）；10 路并行无锁竞争 |
+
+**与本文不一致之处**：
+
+- `cell_size` / `ghost_band` 初值的单位（上面已述），第 2.1、7、8、8.1 节已改。
+- 块编码：第 3 节没定编码，实验记录推荐的“行差分 varint + flate”约 4KB / 块；P1 实测平面预测（左 + 下 − 左下）约 2.7KB，采用后者（程序化地形，真实地形待测）。
+- 每块 SHA-256 取的是存储（压缩后）字节：读块先校验再解压；客户端用同一份包，按 `BaseRevision` 与这个值核对。实测翻转块数据中间一个比特，DEFLATE 仍能“成功”解出数据，只有 SHA-256 能发现。
+- 覆盖块的 `BaseRevision` 与包不同时 `SetOverlay` 拒绝（`ErrBaseRevision`）。原始地形换版后旧编辑怎么办（保留 / 重放 / 丢弃）本文没写，留给维护者与产品决定。
+
+**客户端金样**：`client/spec/terrain-golden.pack`（3 × 2 块，含 0 / 65535 棋盘格与斜坡的边界情形块）与 `client/spec/terrain-queries.json`（块解码后的 SHA-256、246 个位置的期望高度 / 材质 / 水）。证据目录里一份只按文档写的独立实现（Python）全部一致；C# / C++ 留 P2。

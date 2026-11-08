@@ -1,0 +1,13 @@
+=== RUN   TestScale10k
+    scale_test.go:34: env: darwin/arm64, GOMAXPROCS 10, go1.27.3
+    scale_test.go:40: generate + write: 2.359s (24649 chunks)
+    scale_test.go:45: pack size: 70061217 bytes (66.8 MiB), 2842 bytes/chunk including header and index
+    scale_test.go:65: open (header + 24649-entry index, SHA-256 over it): median 524µs, min 476µs, max 589µs (7 opens)
+    scale_test.go:82: single chunk ReadChunk (ReadAt + SHA-256 + inflate + decode, page cache warm), 5000 random chunks: P50 39.9µs, P99 164.9µs, max 212µs
+    scale_test.go:115: fill one cell (48 × 48 = 2304 chunks, LoadBase, 1 workers): 119ms, heap +27.3 MiB (12441 bytes/chunk)
+    scale_test.go:115: fill one cell (48 × 48 = 2304 chunks, LoadBase, 8 workers): 28ms, heap +27.3 MiB (12442 bytes/chunk)
+    scale_test.go:148: Height on a full cell, 1000000 random points, one goroutine: 23 ns/op
+    scale_test.go:148: Probe on a full cell, 1000000 random points, one goroutine: 20 ns/op
+--- PASS: TestScale10k (2.79s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	3.026s

@@ -103,6 +103,8 @@ DataEngine 更新粒度与验证：[递归增量持久化](DATAENGINE-INCREMENTA
 
 [物理房间 service](PHYSICS-ROOM-SERVICE.md)：固定 owner 的瞬态房间、Nest 提交、Chunk 与 Gate 接线及容量/生命周期边界。
 
+[可编辑地形底座（gameplay/terrain）](../../gameplay/terrain/README.md)：2.5D 高度场的块坐标（世界单位厘米）、原始地形包格式与读写、地形视图（原始块 + 覆盖块）的并发契约与整数定点查询；P1 框架部分，`TerrainChunk` 实体接入未做（[方案](../maintenance/FEATURE-2026-11-08-editable-terrain.md)）。
+
 三类新增玩法：[回合 PvP、合作 Roguelike、异步社交经营](SESSION-GENRES.md)，各有正式生成工程，可运行场景分别为 9、10、9 个（含公共 Robot 网络用例）；边界与命令见手册。
 
 Robot 的统一接入、13 类生成验收、负载与报告口径见 [Robot](ROBOT.md)。

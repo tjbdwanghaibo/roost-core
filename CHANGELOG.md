@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 新增（gameplay/terrain）：**可编辑地形 P1 的框架部分**（[方案 §11](docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#11-p1-框架部分实施结果2026-11-08)、[包说明](gameplay/terrain/README.md)）。64m 块 / 1m 采样 / 10cm 高度的块坐标（世界单位厘米，与 cellworld 一致）；原始地形包格式版本 1（包头与索引整体 SHA-256、每块 SHA-256、平面预测差分 + raw DEFLATE），`WritePack` / `WritePackFile`、RAW16 + RAW8 导入、确定性程序化生成器，`OpenPack` 只读索引、`ReadChunk` 按需并发读块、坏块返回 `ErrCorruptChunk`；`View` 装原始块与覆盖块（无锁查询，写入口串行），`Height`（双线性整数定点）/ `Material` / `IsWater` / `Probe`，邻块未装返回 `ErrNotLoaded`。客户端金样 `client/spec/terrain-golden.pack` + `terrain-queries.json`。1w × 1w 实测：包 66.8 MiB、打开约 0.5ms、单块加载 P50 约 39µs / P99 约 163µs、装满一个格（2304 块）8 路并行约 29ms、约 27MB（[证据](docs/maintenance/evidence/terrain-p1-20261108/README.md)）。方案里 `cell_size` 3072 / `ghost_band` 500 是按米写的，已更正为厘米值 307200 / 50000。`TerrainChunk` 实体、持久化与重启一致未做。
+
 ## [v1.42.2] - 2026-11-07
 
 - 测试（Lockstep）：**深缓冲链路子例的中转接收缓冲改为与直连慢客户端一致的 256 KiB，失败时打出 Gate 关连接计数与链路进度**。原 16 KiB 在 Linux 回环（MSS 约 64 KiB）上让这一跳进入持续定时器节流，链路从“慢”变成“停” 10 秒以上，Gate 写超时断开，偶发 `closed=true`。本机实验：均匀限速到 128 KiB/s 通过，整段停读 12 秒才失败。生产代码不变；Linux 未复跑，见 [KNOWN-LIMITS](docs/maintenance/KNOWN-LIMITS.md)。

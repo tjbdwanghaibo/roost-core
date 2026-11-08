@@ -1,0 +1,14 @@
+=== RUN   TestScaleCodecChoice
+    scale_test.go:187: down + DEFLATE best                       4010 bytes/chunk (heights + materials unless noted)
+    scale_test.go:187: down + DEFLATE default                    4164 bytes/chunk (heights + materials unless noted)
+    scale_test.go:187: down varint heights only, no DEFLATE      4448 bytes/chunk (heights + materials unless noted)
+    scale_test.go:187: left + DEFLATE best                       4078 bytes/chunk (heights + materials unless noted)
+    scale_test.go:187: left + DEFLATE default                    4208 bytes/chunk (heights + materials unless noted)
+    scale_test.go:187: left varint heights only, no DEFLATE      4445 bytes/chunk (heights + materials unless noted)
+    scale_test.go:187: plane + DEFLATE best                      2733 bytes/chunk (heights + materials unless noted)
+    scale_test.go:187: plane + DEFLATE default                   2817 bytes/chunk (heights + materials unless noted)
+    scale_test.go:187: plane varint heights only, no DEFLATE     4111 bytes/chunk (heights + materials unless noted)
+    scale_test.go:187: raw little-endian, DEFLATE default        6554 bytes/chunk (heights + materials unless noted)
+--- PASS: TestScaleCodecChoice (0.02s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	0.582s

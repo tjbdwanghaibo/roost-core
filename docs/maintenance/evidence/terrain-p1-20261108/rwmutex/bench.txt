@@ -1,0 +1,10 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/terrain
+cpu: Apple M5
+BenchmarkEncodeChunk-10       	   10513	    226270 ns/op	 1162932 B/op	      21 allocs/op
+BenchmarkReadChunk-10         	   59365	     40615 ns/op	   75781 B/op	      35 allocs/op
+BenchmarkHeight-10            	95457643	        24.82 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHeightParallel-10    	19495749	       109.8 ns/op	       4 B/op	       0 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	9.798s
