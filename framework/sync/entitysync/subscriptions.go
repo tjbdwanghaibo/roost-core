@@ -423,7 +423,7 @@ func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subje
 		kind: kindSnapshot, revision: 1, lifetime: sess.lifetime,
 	}
 	subj.profilesValid = false
-	m.snapshotRequests.update(subj, session, subj.subscribers[session])
+	m.lanes[subj.class].snapshotRequests.update(subj, session, subj.subscribers[session])
 	m.subscriptionCount.Add(1)
 	sess.lifetime.subjects[subjectID] = subj
 	m.traceSnapshotRequest(subj, m.sessions[session])

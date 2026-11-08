@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-// snapshotRequests 仅索引未结算的快照意图，不保存实体内容。subject 仍是订阅真相。
+// snapshotRequests 仅索引一路预算（snapshotLane）未结算的快照意图，不保存实体内容。subject 仍是订阅真相。
 // 更新时持有 subject.mu；计划只读索引和不可变 session，绝不反向获取 subject 锁。
 type snapshotRequests struct {
 	mu       sync.Mutex
@@ -59,7 +59,7 @@ func (r *snapshotRequests) update(subj *subject, sid SessionID, sub *subscriptio
 		r.sessions[class] = nil
 	}
 	r.sequence++
-	candidate := snapshotCandidate{subj.id, sid, sub, class, r.sequence}
+	candidate := snapshotCandidate{subj.id, sid, sub, class, r.sequence, subj.class}
 	r.entries[sub], group.entries[sub] = candidate, candidate
 	group.ordered = nil
 }
@@ -112,6 +112,8 @@ func (g *snapshotRequestGroup) order() []snapshotCandidate {
 // snapshotIterator 按已有游标访问本轮所需候选；不会复制和展平全部冷恢复队列。
 // 整个计划持有 Manager.mu.RLock 与 requests.mu，迭代结束后不保留缓存引用。
 type snapshotIterator struct {
+	lane                   *snapshotLane
+	laneIndex              uint8
 	sessions               []SessionID
 	start, visited         int
 	items                  []snapshotCandidate
@@ -144,9 +146,10 @@ func (it *snapshotIterator) next(m *Manager, class snapshotClass, pending map[in
 		if it.session == nil || it.session.held {
 			continue
 		}
-		it.items = m.snapshotRequests.groups[class][sid].order()
-		it.itemStart, _ = slices.BinarySearchFunc(it.items, it.session.snapshotAfter[class], func(a snapshotCandidate, sequence int64) int { return cmp.Compare(a.sequence, sequence) })
-		for it.itemStart < len(it.items) && it.items[it.itemStart].sequence <= it.session.snapshotAfter[class] {
+		it.items = it.lane.snapshotRequests.groups[class][sid].order()
+		after := it.session.snapshotAfter.get(it.laneIndex, class)
+		it.itemStart, _ = slices.BinarySearchFunc(it.items, after, func(a snapshotCandidate, sequence int64) int { return cmp.Compare(a.sequence, sequence) })
+		for it.itemStart < len(it.items) && it.items[it.itemStart].sequence <= after {
 			it.itemStart++
 		}
 		it.itemVisited = 0
@@ -159,5 +162,5 @@ func (m *Manager) changeSubscriptionKindLocked(subj *subject, sid SessionID, sub
 		subj.profilesValid = false
 	}
 	sub.kind = kind
-	m.snapshotRequests.update(subj, sid, sub)
+	m.lanes[subj.class].snapshotRequests.update(subj, sid, sub)
 }

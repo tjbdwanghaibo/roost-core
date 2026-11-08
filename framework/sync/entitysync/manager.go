@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,11 +39,18 @@ type ManagerConfig struct {
 	// 只在已授权来源之间选一个视图，不合并字段或扩大授权。
 	ProfilePriorities map[entity.SyncProfile]int
 	// SnapshotBudget 只限制客户端尚未持有对象的创建；现有对象全量刷新不占额度，零值不限制。
+	// 只管 Namespaces 没有列出的命名空间；列出的命名空间用自己的预算。
 	SnapshotBudget SnapshotBudget
+	// Namespaces 给列出的同步命名空间（subject 的 Namespace）单独计“一个会话可持有的对象数”与快照预算，
+	// 没列出的命名空间沿用 Limits.MaxObjects 与 SnapshotBudget。零值（nil）时行为与没有这一项完全相同。
+	// 会话的对象引用表上限是 Limits.MaxObjects 加各命名空间的 MaxObjects；每帧对象数仍按 Limits.MaxObjects 切分。
+	// 构造时复制。见 NamespaceLimits。
+	Namespaces map[string]NamespaceLimits
 	// SendBudget 是每个连接的状态软预算；零值关闭，删除不受限。
 	SendBudget SendBudget
 	// Limits bound a frame. Zero fields take frame.DefaultLimits.
-	// MaxObjects is also how many subjects one session may hold.
+	// MaxObjects is also how many subjects one session may hold —
+	// of the namespaces Namespaces does not list.
 	Limits frame.Limits
 	// DurableWatermark, when set, is the pipelined-commit watermark
 	// (typically the Data Engine's DurableLSN). A subject whose newest
@@ -136,7 +144,6 @@ type Manager struct {
 	// 新 lifetime 必须从更大的 epoch 开始，它的全量才不会被当成旧包丢掉。
 	lastEpoch         uint32
 	subscriptionCount atomic.Int64
-	snapshotRequests  snapshotRequests
 	heldSessions      int // mu
 	frozenPeakBytes   atomic.Int64
 	policyMu          sync.Mutex
@@ -147,10 +154,14 @@ type Manager struct {
 	frozenBytes       atomic.Int64
 	frozenDeferred    atomic.Uint64
 	budgetWindow      time.Time
-	windowAllowance   snapshotAllowance
-	windowSessions    map[SessionID]int
 	config            ManagerConfig
 	wire              wireConfig
+
+	// snapshotLane 是第 0 路快照预算（没有列出的命名空间）；lanes 按类别（subject.class）列出全部各路，
+	// lanes[0] 指向它。classes 是 ManagerConfig.Namespaces 展开后的类别。构造后只读（各路字段见 snapshotLane）。
+	snapshotLane
+	lanes   []*snapshotLane
+	classes syncClasses
 
 	mu       sync.RWMutex
 	subjects map[int64]*subject
@@ -199,9 +210,6 @@ type Manager struct {
 	flushWork         map[SessionID]*flushSession
 	flushPool         []*flushSession
 	encodeWork        encodeWorkspace // flushGate 独占，只有临时结构，不保存发送字节。
-	snapshotCursor    [2]SessionID    // flushGate；两类分别保留会话轮转位置
-	windowByteBlocked bool            // 本窗口已遇到放不下的冷对象，留到下一窗口首位竞争
-	snapshotNextClass snapshotClass   // 小额度跨窗口仍轮流服务两类
 	snapshotsDeferred atomic.Uint64
 	sendDeferred      atomic.Uint64
 
@@ -228,7 +236,7 @@ type Manager struct {
 	retractLookedUp func(subjectID int64)
 }
 
-// NewManager 校验配置（模式、合批窗口、快照预算、帧上限）并补默认值；传输声明了帧上限时取二者较小值。
+// NewManager 校验配置（模式、合批窗口、快照预算、帧上限、按命名空间的上限与预算）并补默认值；传输声明了帧上限时取二者较小值。
 func NewManager(config ManagerConfig) (*Manager, error) {
 	if config.Mode != ModePeriodic && config.Mode != ModeOnChange {
 		return nil, fmt.Errorf("entitysync: invalid sync mode %d", config.Mode)
@@ -266,12 +274,19 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 	if config.Limits.MaxFrameBytes < 32 {
 		return nil, fmt.Errorf("entitysync: frame limit smaller than protocol header")
 	}
-	return &Manager{
-		config: config,
-		wake:   make(chan struct{}, 1),
+	classes, err := newSyncClasses(config.Namespaces, config.Limits.MaxObjects, config.SnapshotBudget)
+	if err != nil {
+		return nil, err
+	}
+	config.Namespaces = maps.Clone(config.Namespaces)
+	m := &Manager{
+		config:  config,
+		classes: classes,
+		wake:    make(chan struct{}, 1),
 		wire: wireConfig{
 			limits: config.Limits, schemaVersion: config.FrameSchemaVersion, archetype: config.Archetype,
 			componentType: config.ComponentTypeID, componentSchema: config.ComponentSchemaVersion,
+			maxHeld: classes.total, classLimits: classes.limits, classNames: classes.names,
 		},
 		subjects:         make(map[int64]*subject),
 		sessions:         make(map[SessionID]*session),
@@ -280,7 +295,13 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 		resets:           make(map[SessionID]struct{}),
 		waitingSnapshots: make(map[int64]snapshotWait),
 		flushGate:        make(chan struct{}, 1),
-	}, nil
+	}
+	m.snapshotLane.budget = config.SnapshotBudget
+	m.lanes = append(make([]*snapshotLane, 0, len(classes.budgets)), &m.snapshotLane)
+	for _, budget := range classes.budgets[1:] {
+		m.lanes = append(m.lanes, &snapshotLane{budget: budget})
+	}
+	return m, nil
 }
 
 // ---- subjects ----
@@ -306,6 +327,7 @@ func (m *Manager) register(state *entity.SubjectSyncState, done func(error)) (qu
 		return false, ErrSubjectInvalid
 	}
 	id := state.SubjectID()
+	class := m.classOf(state) // 读状态锁，放在 m.mu 之外
 	m.mu.Lock()
 	if m.closed || m.closing {
 		m.mu.Unlock()
@@ -327,6 +349,7 @@ func (m *Manager) register(state *entity.SubjectSyncState, done func(error)) (qu
 		return false, registeredElsewhere(state, holder)
 	}
 	created := newSubject(state)
+	created.class = class
 	m.subjects[id] = created
 	m.mu.Unlock()
 	m.installDirtyNotifier(id, state)
@@ -1032,9 +1055,12 @@ func (m *Manager) Stats() ManagerStats {
 	subjects, sessions, heldSessions := len(m.subjects), len(m.sessions), m.heldSessions
 	m.mu.RUnlock()
 	subscriptions := int(m.subscriptionCount.Load())
-	m.snapshotRequests.mu.Lock()
-	snapshots := len(m.snapshotRequests.entries)
-	m.snapshotRequests.mu.Unlock()
+	snapshots := 0
+	for _, lane := range m.lanes {
+		lane.snapshotRequests.mu.Lock()
+		snapshots += len(lane.snapshotRequests.entries)
+		lane.snapshotRequests.mu.Unlock()
+	}
 	m.pendingMu.Lock()
 	pending := len(m.pending) + len(m.waitingSnapshots) - m.pendingOverlap
 	waiting := len(m.waitingSnapshots)

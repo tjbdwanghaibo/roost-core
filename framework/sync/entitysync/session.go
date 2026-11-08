@@ -23,6 +23,7 @@ const (
 type frameEntry struct {
 	subjectID int64
 	kind      entryKind
+	class     uint8 // subject.class：create 按它检查持有上限，remove 按它归还
 	update    *capturedUpdate
 }
 
@@ -41,6 +42,19 @@ type wireConfig struct {
 	archetype       uint16
 	componentType   uint16
 	componentSchema uint16
+	// maxHeld 是会话引用表上限（Limits.MaxObjects 加各命名空间的上限）；每帧对象数仍按 limits.MaxObjects 切分。
+	maxHeld int
+	// classLimits / classNames 按类别给出持有上限与命名空间名；没有配置 Namespaces 时为 nil。
+	classLimits []int
+	classNames  []string
+}
+
+// heldLimit 是会话引用表上限；没有设 maxHeld 时就是 limits.MaxObjects。
+func (cfg wireConfig) heldLimit() int {
+	if cfg.maxHeld > 0 {
+		return cfg.maxHeld
+	}
+	return cfg.limits.MaxObjects
 }
 
 // sessionLifetime 是一个会话打开期间共享的身份：编码副本与已发布的 session 指向同一个，
@@ -68,17 +82,22 @@ type session struct {
 	generations map[uint16]uint16
 	free        []uint16
 	next        uint16
-
+	// held / referencesOwned 与 next 挤在同一个字长里：session 每次编码与 Hold/Ready 都整份复制，
+	// 保持在原来的分配尺寸内。
+	//
 	// held: open, subscribing, but not yet receiving. Nothing is encoded for
 	// a held session; the policy says ReadySession when the client can take
 	// frames (it has installed its decoder), and the first frame after that
 	// is a FrameFull in a fresh epoch.
 	held bool
-
-	framesSent    uint64
-	snapshotAfter [2]int64 // 两类分别记录请求序号；新请求不能按 Entity ID 插到旧请求前
 	// 仅编码副本可写；已发布的引用表始终只读。
 	referencesOwned bool
+	// classHeld 是按类别（ManagerConfig.Namespaces）计的持有数，只在配置了命名空间时非 nil；与 objects 同一写时
+	// 复制规则（copyReferences）。用指针而不是切片头，session 只多 8 字节。
+	classHeld *[]int
+
+	framesSent    uint64
+	snapshotAfter snapshotMarks // 每路预算、两类分别记录请求序号；新请求不能按 Entity ID 插到旧请求前
 }
 
 // owesEmptyFull 报告会话是否欠接收端一个空 Full：HoldSession 换了 epoch（tick 回到 0），而这一 lifetime
@@ -104,6 +123,10 @@ func (s *session) copyReferences() {
 	s.objects = maps.Clone(s.objects)
 	s.generations = maps.Clone(s.generations)
 	s.free = append([]uint16(nil), s.free...)
+	if s.classHeld != nil {
+		held := slices.Clone(*s.classHeld)
+		s.classHeld = &held
+	}
 	s.referencesOwned = true
 }
 
@@ -156,7 +179,7 @@ func (s *session) release(subjectID int64) {
 // 编码失败可能是引用表不一致或单实体包超硬上限；关闭受影响会话，
 // 由业务修正配置/数据并重新订阅，不能截断内容继续发送。
 func (s *session) encode(entries []frameEntry, cfg wireConfig, work *encodeWorkspace) ([]encodedFrame, error) {
-	// 先释放退出视野的对象，再为新对象分配引用。MaxObjects 限制持有量，
+	// 先释放退出视野的对象，再为新对象分配引用。MaxObjects（及按命名空间的上限）限制持有量，
 	// 不能让同一 tick 的合法替换因为新对象 ID 更小而暂时超额。
 	slices.SortFunc(entries, func(a, b frameEntry) int {
 		if (a.kind == entryRemove) != (b.kind == entryRemove) {
@@ -285,11 +308,15 @@ func (s *session) objectFor(entry frameEntry, cfg wireConfig, component []frame.
 	case entryCreate:
 		operation := frame.ObjectUpdate
 		if !exists {
+			if err := s.admitClass(entry.class, cfg); err != nil {
+				return frame.ObjectDelta{}, false, err
+			}
 			var err error
-			ref, err = s.allocate(entry.subjectID, cfg.limits.MaxObjects)
+			ref, err = s.allocate(entry.subjectID, cfg.heldLimit())
 			if err != nil {
 				return frame.ObjectDelta{}, false, err
 			}
+			s.countClass(entry.class, cfg, 1)
 			operation = frame.ObjectCreate
 		}
 		data, err := entry.update.encode(cfg.limits.MaxComponentBytes)
@@ -313,6 +340,7 @@ func (s *session) objectFor(entry frameEntry, cfg wireConfig, component []frame.
 			return frame.ObjectDelta{}, false, nil
 		}
 		s.release(entry.subjectID)
+		s.countClass(entry.class, cfg, -1)
 		return frame.ObjectDelta{Operation: frame.ObjectRemove, Ref: ref}, true, nil
 	}
 	return frame.ObjectDelta{}, false, fmt.Errorf("%w: unknown entry kind %d", ErrWireFrame, entry.kind)

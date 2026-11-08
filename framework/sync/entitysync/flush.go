@@ -92,7 +92,7 @@ type flushSession struct {
 	session           *session
 	entries           []frameEntry
 	settlements       []settlement
-	snapshotAfter     [2]int64
+	snapshotAfter     snapshotMarks
 	snapshotAttempted bool
 }
 
@@ -164,10 +164,6 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 
 	captureStarted := time.Now()
 	plan := m.planSnapshotCaptures(ids)
-	var selectedSnapshots map[*subscription]bool
-	if plan != nil {
-		selectedSnapshots = plan.selected
-	}
 	// 捕获：按 subject 获取同一版本的快照与增量，归入各会话待交付内容。
 	// 修订快照只服务当前 subject；同轮复用，不按每个 subject 重建哈希表。
 	revisions := make(map[*subscription]uint64)
@@ -178,6 +174,8 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 		}
 		subj.mu.Lock()
 		held := m.prepareSubscribersLocked(subj, work)
+		// 本 subject 所在那一路的入选集合；该路不设预算时为 nil，全部快照照常捕获。
+		selectedSnapshots := plan.selectedFor(m, subj.class)
 		if selectedSnapshots != nil {
 			m.deferUnselectedSnapshotsLocked(subj, held, work, selectedSnapshots)
 		}
@@ -246,7 +244,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 							continue
 						}
 						if update, ok := updateFor(snapshots, sub.profile); ok {
-							work[sid].entries = append(work[sid].entries, frameEntry{subjectID: id, kind: entryCreate, update: update})
+							work[sid].entries = append(work[sid].entries, frameEntry{subjectID: id, kind: entryCreate, class: subj.class, update: update})
 							work[sid].settlements = append(work[sid].settlements, captureSettlement(subj, sub, item.Version(), false))
 						}
 					case kindLive:
@@ -254,7 +252,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 							continue
 						}
 						if update, ok := updateFor(deltas, sub.profile); ok {
-							work[sid].entries = append(work[sid].entries, frameEntry{subjectID: id, kind: entryUpdate, update: update})
+							work[sid].entries = append(work[sid].entries, frameEntry{subjectID: id, kind: entryUpdate, class: subj.class, update: update})
 							work[sid].settlements = append(work[sid].settlements, captureSettlement(subj, sub, item.Version(), false))
 						}
 					}
@@ -263,7 +261,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 		}
 		for sid, sub := range subj.subscribers {
 			if sub.kind == kindLeaving && !held[sid] && work[sid] != nil {
-				work[sid].entries = append(work[sid].entries, frameEntry{subjectID: id, kind: entryRemove})
+				work[sid].entries = append(work[sid].entries, frameEntry{subjectID: id, kind: entryRemove, class: subj.class})
 				work[sid].settlements = append(work[sid].settlements, captureSettlement(subj, sub, 0, true))
 			}
 		}

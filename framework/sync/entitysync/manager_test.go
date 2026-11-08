@@ -1,4 +1,4 @@
-// Manager 交付契约与包内共用夹具：每会话先全量后增量、失败会话单独关闭、持久水位门、profile 切换、帧上限、编码缓存与工作区所有权。
+// Manager 交付契约与包内共用夹具：每会话先全量后增量、失败会话单独关闭、持久水位门、profile 切换、帧上限（含按命名空间的持有上限）、编码缓存与工作区所有权。
 
 package entitysync
 
@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -911,5 +913,340 @@ func TestUnionProfilePriorityIsItsBestLayer(t *testing.T) {
 	view, _ := views.Lookup(union)
 	if err := m.ValidateViewPriority(view); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// ---- 按命名空间计的会话持有上限（ManagerConfig.Namespaces） ----
+
+// nsSubject 是命名空间为 namespace 的测试 subject：快照与增量载荷带上 ID，便于逐字节对照。
+func nsSubject(id int64, namespace string) *entity.SubjectSyncState {
+	return entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{
+		Enabled: true, SubjectID: id, Namespace: namespace,
+		Packer: entity.SubjectSyncPackFunc{
+			Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+				return entity.TakeFrozenSyncPayload(1, fmt.Appendf(nil, "snapshot:%d", id)), nil
+			},
+			Delta: func(entity.SyncProfile, uint64) (entity.FrozenSyncPayload, error) {
+				return entity.TakeFrozenSyncPayload(1, fmt.Appendf(nil, "delta:%d", id)), nil
+			},
+		},
+	})
+}
+
+func mustRegister(t *testing.T, manager *Manager, states ...*entity.SubjectSyncState) {
+	t.Helper()
+	for _, state := range states {
+		if err := manager.Register(state); err != nil {
+			t.Fatalf("register %d: %v", state.SubjectID(), err)
+		}
+	}
+}
+
+// checkClassHeld 核对会话按类别的持有数与它已交付的引用表一致（每次 Flush 后都应成立）。
+func checkClassHeld(t *testing.T, manager *Manager, sid SessionID) {
+	t.Helper()
+	manager.mu.RLock()
+	sess := manager.sessions[sid]
+	var objects []int64
+	var held []int
+	if sess != nil {
+		for id := range sess.objects {
+			objects = append(objects, id)
+		}
+		if sess.classHeld != nil {
+			held = slices.Clone(*sess.classHeld)
+		}
+	}
+	manager.mu.RUnlock()
+	if sess == nil || manager.classes.limits == nil {
+		return
+	}
+	want := make([]int, len(manager.classes.limits))
+	for _, id := range objects {
+		subj := manager.subject(id)
+		if subj == nil {
+			t.Fatalf("session %d holds forgotten subject %d", sid, id)
+		}
+		want[subj.class]++
+	}
+	if held == nil {
+		held = make([]int, len(want))
+	}
+	if !slices.Equal(held, want) {
+		t.Fatalf("session %d class counts %v, its reference table says %v", sid, held, want)
+	}
+}
+
+// 列出的命名空间不改变没列出的命名空间的任何字节：同样的订阅与变化，配不配 Namespaces 帧逐字节相同，
+// 包括一次 tick 里 remove + create 超过 Limits.MaxObjects 时的分帧（每帧仍按 Limits.MaxObjects 切）。
+func TestNamespaceLimitsLeaveUnlistedNamespacesByteIdentical(t *testing.T) {
+	run := func(namespaces map[string]NamespaceLimits) [][]byte {
+		transport := newRecordingTransport()
+		manager := newTestManager(t, transport, ManagerConfig{Limits: frame.Limits{MaxObjects: 3}, Namespaces: namespaces})
+		var states []*entity.SubjectSyncState
+		for id := int64(1); id <= 6; id++ {
+			states = append(states, nsSubject(id, "player"))
+		}
+		mustRegister(t, manager, states...)
+		open(t, manager, 1)
+		var frames [][]byte
+		step := func() {
+			mustFlush(t, manager)
+			frames = append(frames, transport.take(1)...)
+		}
+		for id := int64(1); id <= 3; id++ {
+			mustSubscribe(t, manager, 1, id, entity.SyncProfile{})
+		}
+		step()
+		states[0].MarkDirty(1)
+		step()
+		// 整体换一遍：3 个 remove + 3 个 create = 6 项，按 MaxObjects=3 分两帧。
+		for id := int64(1); id <= 3; id++ {
+			if err := manager.Unsubscribe(1, id); err != nil {
+				t.Fatal(err)
+			}
+			mustSubscribe(t, manager, 1, id+3, entity.SyncProfile{})
+		}
+		step()
+		if err := manager.HoldSession(1); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.ReadySession(1); err != nil {
+			t.Fatal(err)
+		}
+		step()
+		if manager.Stats().SessionsLost != 0 {
+			t.Fatalf("session lost: %+v", manager.Stats())
+		}
+		return frames
+	}
+	plain := run(nil)
+	listed := run(map[string]NamespaceLimits{"terrain": {MaxObjects: 64, SnapshotBudget: SnapshotBudget{PerSessionObjects: 1, MaxObjects: 1, MaxBytes: 1}}})
+	if len(plain) < 5 {
+		t.Fatalf("scenario too small: %d frames", len(plain))
+	}
+	if len(plain) != len(listed) {
+		t.Fatalf("frame count %d without Namespaces, %d with", len(plain), len(listed))
+	}
+	for i := range plain {
+		if !bytes.Equal(plain[i], listed[i]) {
+			t.Fatalf("frame %d differs once an unrelated namespace is listed", i)
+		}
+	}
+}
+
+// 每一类各自计上限：没列出的命名空间仍是 Limits.MaxObjects（不因加了一类而放宽），列出的命名空间是自己的上限；
+// 引用表合起来可持有各类之和。任一类超出都与既有契约相同——不截断，关闭整个会话（object_limit），错误点名该类。
+func TestNamespaceObjectLimitsAreCountedPerClass(t *testing.T) {
+	setup := func(t *testing.T) (*Manager, *recordingTransport, *error) {
+		transport := newRecordingTransport()
+		var cause error
+		manager := newTestManager(t, transport, ManagerConfig{
+			Limits:      frame.Limits{MaxObjects: 2},
+			Namespaces:  map[string]NamespaceLimits{"terrain": {MaxObjects: 2}},
+			SessionLost: func(_ SessionID, err error) { cause = err },
+		})
+		mustRegister(t, manager, nsSubject(1, "player"), nsSubject(2, "monster"), nsSubject(3, "player"),
+			nsSubject(11, "terrain"), nsSubject(12, "terrain"), nsSubject(13, "terrain"))
+		open(t, manager, 1)
+		for _, id := range []int64{1, 2, 11, 12} {
+			mustSubscribe(t, manager, 1, id, entity.SyncProfile{})
+		}
+		mustFlush(t, manager)
+		frames := transport.take(1)
+		// 4 个对象按每帧 Limits.MaxObjects=2 分成两帧，会话持有 2+2。
+		if len(frames) != 2 || manager.Stats().SessionsLost != 0 {
+			t.Fatalf("frames=%d stats=%+v cause=%v", len(frames), manager.Stats(), cause)
+		}
+		for _, data := range frames {
+			if n := len(decodeFrame(t, data).wire.Objects); n > 2 {
+				t.Fatalf("a frame carries %d objects, more than Limits.MaxObjects", n)
+			}
+		}
+		checkClassHeld(t, manager, 1)
+		return manager, transport, &cause
+	}
+	for _, tc := range []struct {
+		name    string
+		extra   int64
+		mention string
+	}{
+		{"unlisted_over_its_own_limit", 3, "Limits.MaxObjects"},
+		{"listed_over_its_own_limit", 13, `"terrain"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			manager, transport, cause := setup(t)
+			mustSubscribe(t, manager, 1, tc.extra, entity.SyncProfile{})
+			mustFlush(t, manager)
+			if manager.Stats().Sessions != 0 || manager.Stats().SessionsLost != 1 {
+				t.Fatalf("a session over a class limit was not closed: %+v", manager.Stats())
+			}
+			if LossReason(*cause) != SessionLossObjectLimit || !errors.Is(*cause, frame.ErrObjectLimit) || !strings.Contains((*cause).Error(), tc.mention) || len(transport.take(1)) != 0 {
+				t.Fatalf("cause %v (reason %q), want object_limit naming %s and no frame pushed", *cause, LossReason(*cause), tc.mention)
+			}
+		})
+	}
+	// 同一 tick 里先 remove 再 create：满额的类里换一个对象不超限。
+	t.Run("swap_within_a_full_class", func(t *testing.T) {
+		manager, transport, cause := setup(t)
+		if err := manager.Unsubscribe(1, 12); err != nil {
+			t.Fatal(err)
+		}
+		mustSubscribe(t, manager, 1, 13, entity.SyncProfile{})
+		mustFlush(t, manager)
+		if manager.Stats().SessionsLost != 0 || len(transport.take(1)) != 1 {
+			t.Fatalf("swap inside a full class: stats=%+v cause=%v", manager.Stats(), *cause)
+		}
+		checkClassHeld(t, manager, 1)
+	})
+}
+
+// 持有数随会话 lifetime 走：Hold/Ready 与关闭重开都从零计；卸载撤回（remove-before-create）先归还名额再登记新对象。
+func TestNamespaceObjectLimitsFollowSessionLifetimeAndRetirement(t *testing.T) {
+	transport := newRecordingTransport()
+	manager := newTestManager(t, transport, ManagerConfig{
+		Limits:     frame.Limits{MaxObjects: 1},
+		Namespaces: map[string]NamespaceLimits{"terrain": {MaxObjects: 2}},
+	})
+	terrainA, terrainB := nsSubject(11, "terrain"), nsSubject(12, "terrain")
+	mustRegister(t, manager, nsSubject(1, "player"), terrainA, terrainB)
+	open(t, manager, 1)
+	subscribeAll := func() {
+		for _, id := range []int64{1, 11, 12} {
+			mustSubscribe(t, manager, 1, id, entity.SyncProfile{})
+		}
+	}
+	subscribeAll()
+	mustFlush(t, manager)
+	transport.take(1)
+	checkClassHeld(t, manager, 1)
+
+	// Hold → Ready：新 epoch 的 Full 重发全部三个对象，名额从零开始计，不会把旧 epoch 的持有数算两遍。
+	if err := manager.HoldSession(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.ReadySession(1); err != nil {
+		t.Fatal(err)
+	}
+	mustFlush(t, manager)
+	// 每帧按 Limits.MaxObjects=1 切：Full 带第一个对象，其余两个跟在同一 tick 的后续 Delta 里。
+	if frames := transport.take(1); len(frames) != 3 || decodeFrame(t, frames[0]).wire.Kind != frame.Full {
+		t.Fatalf("after hold/ready got %d frame(s), want a Full and two Deltas", len(frames))
+	}
+	if manager.Stats().SessionsLost != 0 {
+		t.Fatalf("hold/ready lost the session: %+v", manager.Stats())
+	}
+	checkClassHeld(t, manager, 1)
+
+	// 关闭重开：新 lifetime 从零计。
+	manager.CloseSession(1)
+	open(t, manager, 1)
+	subscribeAll()
+	mustFlush(t, manager)
+	transport.take(1)
+	if manager.Stats().SessionsLost != 0 {
+		t.Fatalf("reopen lost the session: %+v", manager.Stats())
+	}
+	checkClassHeld(t, manager, 1)
+
+	// 满额时注销一块地形再排队同 ID 新状态登记：remove 先交付、名额归还，登记完成后重新订阅不超限。
+	if err := manager.Unregister(11); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := nsSubject(11, "terrain")
+	var registered error = errors.New("not yet")
+	if queued, err := manager.RegisterAfterRetirement(reloaded, func(err error) { registered = err }); err != nil || !queued {
+		t.Fatalf("queue registration: queued=%v err=%v", queued, err)
+	}
+	mustFlush(t, manager)
+	if registered != nil {
+		t.Fatalf("queued registration: %v", registered)
+	}
+	checkClassHeld(t, manager, 1)
+	mustSubscribe(t, manager, 1, 11, entity.SyncProfile{})
+	mustFlush(t, manager)
+	if manager.Stats().SessionsLost != 0 {
+		t.Fatalf("re-registration after retirement lost the session: %+v", manager.Stats())
+	}
+	checkClassHeld(t, manager, 1)
+}
+
+func TestNamespaceLimitsConfigurationIsValidated(t *testing.T) {
+	for name, namespaces := range map[string]map[string]NamespaceLimits{
+		"empty_name":        {"": {MaxObjects: 1}},
+		"no_object_limit":   {"terrain": {}},
+		"negative_budget":   {"terrain": {MaxObjects: 1, SnapshotBudget: SnapshotBudget{PerSessionObjects: -1}}},
+		"too_many_refs":     {"a": {MaxObjects: 40000}, "b": {MaxObjects: 40000}},
+		"negative_capacity": {"terrain": {MaxObjects: -3}},
+	} {
+		if _, err := NewManager(ManagerConfig{Transport: newRecordingTransport(), Namespaces: namespaces}); err == nil {
+			t.Errorf("%s: accepted %+v", name, namespaces)
+		}
+	}
+	// 构造时复制：之后改调用方的 map 不影响 Manager。
+	namespaces := map[string]NamespaceLimits{"terrain": {MaxObjects: 2}}
+	manager := newTestManager(t, newRecordingTransport(), ManagerConfig{Namespaces: namespaces})
+	namespaces["terrain"] = NamespaceLimits{MaxObjects: 99}
+	if manager.wire.classLimits[1] != 2 || manager.wire.heldLimit() != frame.DefaultLimits().MaxObjects+2 {
+		t.Fatalf("limits changed with the caller's map: %v total %d", manager.wire.classLimits, manager.wire.heldLimit())
+	}
+}
+
+// 并发订阅 / 退订 / Hold-Ready 与 Flush 交错（-race）：每类持有数始终与引用表一致，不超限、不丢会话。
+func TestNamespaceObjectLimitsUnderConcurrentChurn(t *testing.T) {
+	transport := newRecordingTransport()
+	manager := newTestManager(t, transport, ManagerConfig{
+		Limits:     frame.Limits{MaxObjects: 4},
+		Namespaces: map[string]NamespaceLimits{"terrain": {MaxObjects: 4, SnapshotBudget: SnapshotBudget{PerSessionObjects: 1}}},
+	})
+	for id := int64(1); id <= 4; id++ {
+		mustRegister(t, manager, nsSubject(id, "player"), nsSubject(100+id, "terrain"))
+	}
+	open(t, manager, 1, 2)
+	var workers sync.WaitGroup
+	stop := make(chan struct{})
+	for _, sid := range []SessionID{1, 2} {
+		workers.Go(func() {
+			for round := 0; ; round++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				id := int64(round%4 + 1)
+				if round%3 == 0 {
+					id += 100
+				}
+				if round%2 == 0 {
+					_ = manager.Subscribe(sid, id, entity.SyncProfile{})
+				} else {
+					_ = manager.Unsubscribe(sid, id)
+				}
+				if round%17 == 0 {
+					_ = manager.HoldSession(sid)
+					_ = manager.ReadySession(sid)
+				}
+			}
+		})
+	}
+	for range 300 {
+		if err := manager.Flush(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		transport.take(1)
+		transport.take(2)
+		// 只有 Flush 与 Hold 改会话引用表；Hold 换上的是空表，两者在这里都已结束或尚未开始，读到的一定自洽。
+		checkClassHeld(t, manager, 1)
+		checkClassHeld(t, manager, 2)
+	}
+	close(stop)
+	workers.Wait()
+	for range 10 {
+		mustFlush(t, manager)
+	}
+	checkClassHeld(t, manager, 1)
+	checkClassHeld(t, manager, 2)
+	if manager.Stats().SessionsLost != 0 {
+		t.Fatalf("churn within the limits lost a session: %+v", manager.Stats())
 	}
 }

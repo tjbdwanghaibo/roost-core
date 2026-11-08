@@ -50,6 +50,9 @@ type subject struct {
 	// state 是实体的内容状态；实体卸载后重新加载时由 Rebind 在 mu 下替换，读者在 mu 下取用。
 	state       *entity.SubjectSyncState
 	subscribers map[SessionID]*subscription
+	// class 是 subject 的类别（ManagerConfig.Namespaces）：决定会话持有上限按哪一类计、快照走哪一路预算。
+	// 登记时按命名空间确定，之后不变（Rebind 换状态也不变），无锁读。
+	class uint8
 	// retiring: Unregister was called; every subscriber is leaving and the
 	// subject is forgotten once the last remove has gone out.
 	retiring bool
