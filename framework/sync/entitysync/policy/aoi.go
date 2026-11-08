@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
@@ -265,11 +266,12 @@ type interestObserver struct {
 	refusedMin int64
 	// farthest*：可见集里最远的成员（同距取较小 ID）的缓存，供 evictFarther 与 evaluateMoved 共用；
 	// 可见集变化或成员移动后失效（evaluatePair 一律失效，evaluateMoved 见到移动过的成员时重算）。
-	farthestKnown, farthestOK         bool
-	farthestSubject, farthestDistance int64
+	farthestKnown, farthestOK bool
 	// limited / limit：SetObserverLimit 给这个观察者的可见上限，覆盖 AOIConfig.MaxVisible（limit 可以为 0：什么都不看）。
-	limited bool
-	limit   int
+	// 与上面两个 bool 挤在同一个字里，不加大观察者结构体（AOI 并行重评对它的大小敏感）。
+	limited                           bool
+	limit                             int32
+	farthestSubject, farthestDistance int64
 }
 
 // AOI is the incremental interest (AOI) layer over spatial.BlockIndex:
@@ -902,7 +904,7 @@ func (m *AOI) evictFarthest(observer *interestObserver) {
 // visibleLimit 是观察者此刻的可见上限：SetObserverLimit 给的优先，否则 AOIConfig.MaxVisible；bounded 为假表示不限。
 func (m *AOI) visibleLimit(observer *interestObserver) (limit int, bounded bool) {
 	if observer.limited {
-		return observer.limit, true
+		return int(observer.limit), true
 	}
 	return m.config.MaxVisible, m.config.MaxVisible > 0
 }
@@ -921,10 +923,11 @@ func (m *AOI) SetObserverLimit(id int64, limit int, limited bool) error {
 	if !limited {
 		limit = 0
 	}
-	if observer.limited == limited && observer.limit == limit {
+	narrow := int32(min(limit, math.MaxInt32))
+	if observer.limited == limited && observer.limit == narrow {
 		return nil
 	}
-	observer.limited, observer.limit = limited, limit
+	observer.limited, observer.limit = limited, narrow
 	m.refreshObserver(observer, dirtySpatial)
 	return nil
 }

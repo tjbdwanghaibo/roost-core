@@ -155,18 +155,29 @@ func (m *Manager) markOverLimitLocked(subj *subject, sid SessionID, sub *subscri
 	sub.lifetime.overLimit[subj.id] = subj
 	m.mu.Unlock()
 	m.overLimitWaiting[subj.class].Add(1)
-	sub.overLimitNoticed = time.Now()
+	sub.overLimitNoticed = overLimitClock()
 	m.queueDeferralsLocked(sub, DeferredSubscription{Session: sid, Subject: subj.id, Namespace: m.namespaceOf(subj.class), Evicted: evicted})
 }
 
+// overLimitEpoch 是 overLimitClock 的起点；time.Since 用单调时钟，不受墙钟调整影响。
+var overLimitEpoch = time.Now()
+
+// overLimitClock 返回单调时钟上的纳秒数，用于 subscription.overLimitNoticed。
+func overLimitClock() int64 { return int64(time.Since(overLimitEpoch)) }
+
 // renotifyOverLimit 在 Flush 的政策阶段之后调用：有暂缓的订阅、且到了扫描时刻时，为暂缓超过 overLimitRenotifyInterval 的订阅
 // 再通知一次来源（见文件开头第 2 条）。调用方持有 flushGate。
-func (m *Manager) renotifyOverLimit(now time.Time) {
+func (m *Manager) renotifyOverLimit() {
+	if m.overLimitWaitingTotal() == 0 {
+		return // 常态：不取时钟
+	}
 	gate := &m.overLimitWarn
-	if m.overLimitWaitingTotal() == 0 || now.Before(gate.renotifyAt) {
+	now := time.Now()
+	if now.Before(gate.renotifyAt) {
 		return
 	}
 	gate.renotifyAt = now.Add(overLimitRenotifyInterval)
+	clock := overLimitClock()
 	type waiting struct {
 		sid  SessionID
 		life *sessionLifetime
@@ -188,8 +199,8 @@ func (m *Manager) renotifyOverLimit(now time.Time) {
 	})
 	for _, item := range items {
 		item.subj.mu.Lock()
-		if sub := item.subj.subscribers[item.sid]; sub != nil && sub.lifetime == item.life && sub.waitsForRoom() && now.Sub(sub.overLimitNoticed) >= overLimitRenotifyInterval {
-			sub.overLimitNoticed = now
+		if sub := item.subj.subscribers[item.sid]; sub != nil && sub.lifetime == item.life && sub.waitsForRoom() && time.Duration(clock-sub.overLimitNoticed) >= overLimitRenotifyInterval {
+			sub.overLimitNoticed = clock
 			m.queueDeferralsLocked(sub, DeferredSubscription{Session: item.sid, Subject: item.subj.id, Namespace: m.namespaceOf(item.subj.class)})
 		}
 		item.subj.mu.Unlock()

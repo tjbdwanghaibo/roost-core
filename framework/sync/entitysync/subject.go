@@ -30,21 +30,23 @@ type subscription struct {
 	// revision 标识订阅意图；inFlight 防止首次快照在途时丢掉待删除记录。
 	revision uint64
 	inFlight bool
-	lifetime *sessionLifetime
-	sources  map[*SubscriptionSource]entity.SyncProfile
-	profile  entity.SyncProfile
-	kind     subscriptionKind
+	// overLimit：超额暂缓（over_limit.go）。只对 kindSnapshot 且会话未持有对象的订阅有意义：会话里这一类已满，
+	// 这个新对象本轮没有创建，在会话出现空位之前不参与捕获、不进快照预算索引、不让 Drain 等待；
+	// 空位出现时由 releaseOverLimit 清除并重新排进 pending。离开 kindSnapshot 时随之清除（changeSubscriptionKindLocked）。
+	// 放在 inFlight 旁边占它的填充字节，不加大结构体。
+	overLimit bool
+	lifetime  *sessionLifetime
+	sources   map[*SubscriptionSource]entity.SyncProfile
+	profile   entity.SyncProfile
+	kind      subscriptionKind
 	// snapshotClass 只决定冷对象创建的调度；有效 Profile 和线协议语义不变。
 	snapshotClass snapshotClass
 	baseVersion   uint64
 	// sendWaiting 只在成功结算后清除，新脏数据不能刷新等待年龄。
 	sendWaiting time.Time
-	// overLimit：超额暂缓（over_limit.go）。只对 kindSnapshot 且会话未持有对象的订阅有意义：会话里这一类已满，
-	// 这个新对象本轮没有创建，在会话出现空位之前不参与捕获、不进快照预算索引、不让 Drain 等待；
-	// 空位出现时由 releaseOverLimit 清除并重新排进 pending。离开 kindSnapshot 时随之清除（changeSubscriptionKindLocked）。
-	overLimit bool
-	// overLimitNoticed 是最近一次为这个暂缓的订阅通知来源的时刻（renotifyOverLimit 据此隔 overLimitRenotifyInterval 再通知）。
-	overLimitNoticed time.Time
+	// overLimitNoticed 是最近一次为这个暂缓的订阅通知来源的时刻（overLimitClock，单调时钟纳秒；renotifyOverLimit 据此隔
+	// overLimitRenotifyInterval 再通知）。用 int64 而不是 time.Time：每个订阅都带这个字段，省 16 字节。
+	overLimitNoticed int64
 	// pinnedBy 是以 SubscribePinned 订阅它的来源（通常只有自身视图）；非空即“钉住”：超额时永不暂缓，
 	// 必要时挤掉同类里优先级最低的未钉住对象。nil 表示没有来源钉住，常见路径不分配。
 	pinnedBy map[*SubscriptionSource]struct{}

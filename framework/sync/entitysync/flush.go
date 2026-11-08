@@ -142,7 +142,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 	}
 	m.refreshSnapshotWindow()
 	// 仍在暂缓的订阅隔一段时间再通知政策（over_limit.go）；没有 pending 的空 Flush 也要做，所以放在这里。
-	m.renotifyOverLimit(time.Now())
+	m.renotifyOverLimit()
 	ids, resets := m.takePending()
 	if len(ids) == 0 && len(resets) == 0 {
 		m.emptyFlushes.Add(1)
