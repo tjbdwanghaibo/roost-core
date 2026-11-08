@@ -1,0 +1,27 @@
+=== RUN   TestReviewTerrainDistinctRequests
+    review_terrain_replay_test.go:47: distinct nonzero requests 1 and 1959905738347866660 treated as duplicates
+--- FAIL: TestReviewTerrainDistinctRequests (0.11s)
+=== RUN   TestReviewTerrainReplayAfterOtherEdits
+    review_terrain_replay_test.go:68: old request applied twice after ring rollover: duplicate=false height=82330 -> 82340
+--- FAIL: TestReviewTerrainReplayAfterOtherEdits (0.14s)
+=== RUN   TestReviewTerrainRecentReplayControl
+--- PASS: TestReviewTerrainRecentReplayControl (0.14s)
+=== RUN   TestReviewTerrainDistinctRequests
+    review_terrain_replay_test.go:47: distinct nonzero requests 1 and 1959905738347866660 treated as duplicates
+--- FAIL: TestReviewTerrainDistinctRequests (0.10s)
+=== RUN   TestReviewTerrainReplayAfterOtherEdits
+    review_terrain_replay_test.go:68: old request applied twice after ring rollover: duplicate=false height=82330 -> 82340
+--- FAIL: TestReviewTerrainReplayAfterOtherEdits (0.16s)
+=== RUN   TestReviewTerrainRecentReplayControl
+--- PASS: TestReviewTerrainRecentReplayControl (0.14s)
+=== RUN   TestReviewTerrainDistinctRequests
+    review_terrain_replay_test.go:47: distinct nonzero requests 1 and 1959905738347866660 treated as duplicates
+--- FAIL: TestReviewTerrainDistinctRequests (0.11s)
+=== RUN   TestReviewTerrainReplayAfterOtherEdits
+    review_terrain_replay_test.go:68: old request applied twice after ring rollover: duplicate=false height=82330 -> 82340
+--- FAIL: TestReviewTerrainReplayAfterOtherEdits (0.16s)
+=== RUN   TestReviewTerrainRecentReplayControl
+--- PASS: TestReviewTerrainRecentReplayControl (0.15s)
+FAIL
+FAIL	example.com/planet/internal/service/game	1.240s
+FAIL

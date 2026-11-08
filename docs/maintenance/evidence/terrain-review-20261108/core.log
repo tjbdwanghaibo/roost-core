@@ -1,0 +1,4 @@
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	5.298s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	1.898s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	13.244s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/selfsync	1.565s

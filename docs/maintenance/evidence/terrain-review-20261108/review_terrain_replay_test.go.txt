@@ -1,0 +1,86 @@
+package game
+
+import (
+	"example.com/planet/game/terrainmap"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"testing"
+)
+
+func reviewUnxor(x uint64, s uint) uint64 {
+	y := x
+	for n := s; n < 64; n += s {
+		y ^= x >> n
+	}
+	return y
+}
+func reviewUnmix(x uint64) uint64 {
+	x = reviewUnxor(x, 31)
+	x *= 0x319642b2d24d8ec3
+	x = reviewUnxor(x, 27)
+	x *= 0x96de1b173f119089
+	x = reviewUnxor(x, 30)
+	return x - 0x9E3779B97F4A7C15
+}
+func reviewMix(x uint64) uint64 {
+	x += 0x9E3779B97F4A7C15
+	x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9
+	x = (x ^ (x >> 27)) * 0x94D049BB133111EB
+	return x ^ (x >> 31)
+}
+func TestReviewTerrainDistinctRequests(t *testing.T) {
+	p := brushProcess(t, &memoryChunkStore{})
+	b := terrain.Brush{Op: terrain.BrushRaise, X: 3000, Y: 3000, Radius: 100, Strength: 1}
+	const first uint64 = 1
+	full := reviewMix(uint64(brushPlayer) ^ reviewMix(first))
+	second := reviewUnmix(uint64(brushPlayer) ^ reviewUnmix(full^(uint64(1)<<63)))
+	if second == 0 || second == first || terrainmap.EditID(brushPlayer, first) != terrainmap.EditID(brushPlayer, second) {
+		t.Fatal("probe construction failed")
+	}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, first, b); err != nil {
+		t.Fatal(err)
+	}
+	r, err := p.m.Brush(p.ctx, brushPlayer, second, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Duplicate {
+		t.Fatalf("distinct nonzero requests %d and %d treated as duplicates", first, second)
+	}
+}
+func TestReviewTerrainReplayAfterOtherEdits(t *testing.T) {
+	p := brushProcess(t, &memoryChunkStore{})
+	b := terrain.Brush{Op: terrain.BrushRaise, X: 3000, Y: 3000, Radius: 100, Strength: 1}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, b); err != nil {
+		t.Fatal(err)
+	}
+	for request := uint64(2); request <= 33; request++ {
+		if _, err := p.m.Brush(p.ctx, brushPlayer, request, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := sampleHeight(t, p.m, 30, 30)
+	r, err := p.m.Brush(p.ctx, brushPlayer, 1, b)
+	if err != nil {
+		return
+	} // explicit expiration rejection is safe
+	after := sampleHeight(t, p.m, 30, 30)
+	if !r.Duplicate || after != before {
+		t.Fatalf("old request applied twice after ring rollover: duplicate=%v height=%d -> %d", r.Duplicate, before, after)
+	}
+}
+
+func TestReviewTerrainRecentReplayControl(t *testing.T) {
+	p := brushProcess(t, &memoryChunkStore{})
+	b := terrain.Brush{Op: terrain.BrushRaise, X: 3000, Y: 3000, Radius: 100, Strength: 1}
+	for request := uint64(1); request <= 32; request++ {
+		r, err := p.m.Brush(p.ctx, brushPlayer, request, b)
+		if err != nil || r.Duplicate {
+			t.Fatalf("fresh request %d: %+v %v", request, r, err)
+		}
+	}
+	before := sampleHeight(t, p.m, 30, 30)
+	r, err := p.m.Brush(p.ctx, brushPlayer, 1, b)
+	if err != nil || !r.Duplicate || sampleHeight(t, p.m, 30, 30) != before {
+		t.Fatalf("recent replay: %+v %v", r, err)
+	}
+}

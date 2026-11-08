@@ -1,0 +1,9 @@
+PASS terrain golden: pack SHA-256, 6 chunks decoded, 246 queries equal Go (bytes and Stream)
+PASS terrain neighbour rules: zero weight, map edge, not loaded, out of map
+PASS terrain bad pack: magic, version, geometry, sizes, checksum, index range, truncation
+PASS terrain corrupt chunk: SHA-256, short read, malformed plain text, isolation
+PASS terrain overlay rules: shape, version, base revision, monotonic, copy, notifications
+PASS terrain concurrent queries: 499673 reads during 1998 overlay swaps, none mixed versions
+PASS terrain mesh: 25026 vertices equal Height, seams continuous before and after an edge edit, map edge, missing chunks
+PASS terrain DAO sync: Go full + heights / materials list delta + whole materials + whole heights through the generated C# Apply, 650 queries equal Go View
+PASS terrain

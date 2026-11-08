@@ -1,0 +1,3 @@
+ok  	example.com/planet/internal/service/game	17.562s
+ok  	example.com/planet/game/entities/terrain_chunk	1.519s
+ok  	example.com/planet/game/controllers/player	1.021s
