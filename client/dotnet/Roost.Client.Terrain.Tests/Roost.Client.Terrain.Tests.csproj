@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- 地形 SDK（Roost.Client/Terrain）的金样与自测。独立成项目：TerrainChunk 的生成物（dao_sync.proto、DaoSyncApply）
+       与 Roost.Client.Tests 里 codegen 金样的同名生成物（同一 proto 包与静态类）不能编进同一个程序集。 -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Roost.Client/Roost.Client.csproj" />
+    <ProjectReference Include="../Roost.Client.Codecs/Roost.Client.Codecs.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Grpc.Tools" Version="2.72.0" PrivateAssets="all" />
+    <!-- Fixtures/regen.sh 用正式 DAO 生成器从 demo 的 TerrainChunkDao 生成，不手写。 -->
+    <Protobuf Include="Fixtures/dao_sync.proto" GrpcServices="None" />
+    <!-- Fixtures/dao_sync_apply.cs（同一生成器的 C# Apply）按默认通配编入。 -->
+    <None Update="Fixtures/terrain-chunk-sync.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
