@@ -79,15 +79,17 @@ func SessionOpenRetryable(err error) bool {
 //   - SessionLossPushRefused：传输拒收了这一帧（Transport.Push 返回非 ErrRetryLater 的错误）。玩家接入层的
 //     传输在拒收时已经关闭了该玩家的连接，或玩家本来就没有连接（wiring/selfsync.PushPlayerFrame）。
 //   - 其余都是“连接没有拒收任何东西”的原因——Manager 在编码这一轮的帧时就失败了，帧没有交给传输：
-//     SessionLossObjectLimit（会话持有的对象超过 Limits.MaxObjects，frame.ErrObjectLimit）、
 //     SessionLossTooLarge（单个实体包超过 MaxFrameBytes / MaxComponentBytes）、SessionLossEncodeFailed（其他编码错误）。
 //     连接仍然活着，同步会话已经没了，所以接入层断开该玩家（wiring/selfsync.DisconnectLostPlayer），
 //     客户端重连、重开会话、从新 epoch 的全量开始。
+//
+// 会话持有的对象超过上限（Limits.MaxObjects、NamespaceLimits.MaxObjects）不是丢会话的原因：2026-11-08 起
+// （维护者决定，可编辑地形方案 D17“超额降级：减少同步对象，不断开”）多出来的新对象暂缓创建、通知政策收紧视野，
+// 会话照常收帧（见 over_limit.go）。原先的 object_limit 分类随之删除。
 type SessionLossReason string
 
 const (
 	SessionLossPushRefused  SessionLossReason = "push_refused"
-	SessionLossObjectLimit  SessionLossReason = "object_limit"
 	SessionLossTooLarge     SessionLossReason = "too_large"
 	SessionLossEncodeFailed SessionLossReason = "encode_failed"
 )
@@ -117,13 +119,11 @@ func LossReason(cause error) SessionLossReason {
 	return ""
 }
 
-// encodeLoss 把一次编码失败归类：分类只看 frame 包的哨兵错误，不看错误文本。
+// encodeLoss 把一次编码失败归类：分类只看 frame 包的哨兵错误，不看错误文本。编码时的持有上限错误
+// （frame.ErrObjectLimit）只可能来自内部不一致——超额的新对象在编码之前已被暂缓——归 encode_failed。
 func encodeLoss(err error) *SessionLoss {
 	reason := SessionLossEncodeFailed
-	switch {
-	case errors.Is(err, frame.ErrObjectLimit):
-		reason = SessionLossObjectLimit
-	case errors.Is(err, frame.ErrFrameTooLarge), errors.Is(err, frame.ErrComponentTooLarge):
+	if errors.Is(err, frame.ErrFrameTooLarge) || errors.Is(err, frame.ErrComponentTooLarge) {
 		reason = SessionLossTooLarge
 	}
 	return &SessionLoss{Reason: reason, Err: err}

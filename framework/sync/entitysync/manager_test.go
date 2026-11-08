@@ -14,6 +14,7 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // ARCH-10 · M-13：实体同步是一个机制。subject 持有自己的订阅者；一个 Manager 拥有
@@ -461,6 +462,7 @@ func TestChangingTheProfileResendsAFullSnapshotOnTheSameObject(t *testing.T) {
 }
 
 // 一个会话一 tick 一帧，帧里装它订阅的所有变化；超过对象上限才分成多帧。
+// 会话持有的对象数也受 MaxObjects 约束：放不下的新对象不创建、会话不关（超额降级，D17），有空位时补上。
 func TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit(t *testing.T) {
 	transport := newRecordingTransport()
 	var cause error
@@ -487,14 +489,33 @@ func TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit(t *testing.T) {
 	}
 	mustFlush(t, manager)
 	// The third object does not fit the session's object budget (MaxObjects
-	// is also how many subjects a session may hold): the session is closed
-	// rather than sent a frame it could not apply.
-	if manager.Stats().Sessions != 0 || manager.Stats().SessionsLost != 1 {
-		t.Fatalf("a session over its object budget was not closed: %+v", manager.Stats())
+	// is also how many subjects a session may hold): it is not created, and
+	// the session stays open — no frame carries a partial object.
+	stats := manager.Stats()
+	if stats.Sessions != 1 || stats.SessionsLost != 0 || cause != nil {
+		t.Fatalf("a session over its object budget was closed: %+v cause=%v", stats, cause)
 	}
-	// 没有帧交给传输：原因是 object_limit，不是推送拒收（接入层据此断开仍活着的连接）。
-	if LossReason(cause) != SessionLossObjectLimit || !errors.Is(cause, frame.ErrObjectLimit) || len(transport.take(1)) != 0 {
-		t.Fatalf("SessionLost cause %v (reason %q), want an object_limit loss wrapping frame.ErrObjectLimit and no frame pushed", cause, LossReason(cause))
+	if frames := transport.take(1); len(frames) != 0 {
+		t.Fatalf("the object over the budget went out in %d frame(s)", len(frames))
+	}
+	if stats.OverLimitWaiting != 1 || stats.OverLimitDeferred != 1 {
+		t.Fatalf("over-limit counts %+v, want one subscription waiting for room", stats)
+	}
+	// 空位出现（退订一个已持有的对象）：remove 先发，下一次 Flush 补上暂缓的对象。
+	if err := manager.Unsubscribe(1, 2001); err != nil {
+		t.Fatal(err)
+	}
+	mustFlush(t, manager)
+	if removed := oneFrame(t, transport, 1); len(removed.wire.Objects) != 1 || removed.wire.Objects[0].Operation != frame.ObjectRemove ||
+		removed.wire.Objects[0].Ref != got.wire.Objects[0].Ref {
+		t.Fatalf("frame after the unsubscribe: %+v, want only the remove of 2001 (%v)", removed.wire.Objects, got.wire.Objects[0].Ref)
+	}
+	mustFlush(t, manager)
+	if created := oneFrame(t, transport, 1); created.objects[2003] != frame.ObjectCreate || len(created.objects) != 1 {
+		t.Fatalf("frame after room appeared: %v, want the create of 2003", created.objects)
+	}
+	if stats := manager.Stats(); stats.OverLimitWaiting != 0 || stats.SessionsLost != 0 {
+		t.Fatalf("after recovery: %+v", stats)
 	}
 }
 
@@ -1036,7 +1057,8 @@ func TestNamespaceLimitsLeaveUnlistedNamespacesByteIdentical(t *testing.T) {
 }
 
 // 每一类各自计上限：没列出的命名空间仍是 Limits.MaxObjects（不因加了一类而放宽），列出的命名空间是自己的上限；
-// 引用表合起来可持有各类之和。任一类超出都与既有契约相同——不截断，关闭整个会话（object_limit），错误点名该类。
+// 引用表合起来可持有各类之和。任一类超出时只暂缓该类放不下的新对象（超额降级，D17）：不截断、不关会话，
+// 另一类照常，计数按类别（命名空间）记。
 func TestNamespaceObjectLimitsAreCountedPerClass(t *testing.T) {
 	setup := func(t *testing.T) (*Manager, *recordingTransport, *error) {
 		transport := newRecordingTransport()
@@ -1067,23 +1089,30 @@ func TestNamespaceObjectLimitsAreCountedPerClass(t *testing.T) {
 		return manager, transport, &cause
 	}
 	for _, tc := range []struct {
-		name    string
-		extra   int64
-		mention string
+		name      string
+		extra     int64
+		other     int64 // 另一类里没满时照常创建的对象
+		namespace string
 	}{
-		{"unlisted_over_its_own_limit", 3, "Limits.MaxObjects"},
-		{"listed_over_its_own_limit", 13, `"terrain"`},
+		{"unlisted_over_its_own_limit", 3, 0, "*"},
+		{"listed_over_its_own_limit", 13, 0, "terrain"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			manager, transport, cause := setup(t)
+			before := counterValue(overLimitDeferredMetric, metrics.Labels{"namespace": tc.namespace, "reason": "deferred"})
 			mustSubscribe(t, manager, 1, tc.extra, entity.SyncProfile{})
 			mustFlush(t, manager)
-			if manager.Stats().Sessions != 0 || manager.Stats().SessionsLost != 1 {
-				t.Fatalf("a session over a class limit was not closed: %+v", manager.Stats())
+			stats := manager.Stats()
+			if stats.Sessions != 1 || stats.SessionsLost != 0 || *cause != nil {
+				t.Fatalf("a session over a class limit was closed: %+v cause=%v", stats, *cause)
 			}
-			if LossReason(*cause) != SessionLossObjectLimit || !errors.Is(*cause, frame.ErrObjectLimit) || !strings.Contains((*cause).Error(), tc.mention) || len(transport.take(1)) != 0 {
-				t.Fatalf("cause %v (reason %q), want object_limit naming %s and no frame pushed", *cause, LossReason(*cause), tc.mention)
+			if frames := transport.take(1); len(frames) != 0 || stats.OverLimitWaiting != 1 {
+				t.Fatalf("frames=%d waiting=%d, want the extra object deferred and nothing sent", len(frames), stats.OverLimitWaiting)
 			}
+			if got := counterValue(overLimitDeferredMetric, metrics.Labels{"namespace": tc.namespace, "reason": "deferred"}); got != before+1 {
+				t.Fatalf("%s{namespace=%s,reason=deferred} %d → %d, want +1", overLimitDeferredMetric, tc.namespace, before, got)
+			}
+			checkClassHeld(t, manager, 1)
 		})
 	}
 	// 同一 tick 里先 remove 再 create：满额的类里换一个对象不超限。

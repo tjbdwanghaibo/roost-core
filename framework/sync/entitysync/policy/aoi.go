@@ -93,6 +93,7 @@ type AOIConfig struct {
 	// ignored. This is a broadcast-storm gate with approximate semantics —
 	// an ignored subject re-qualifies on its next movement, not the moment
 	// capacity frees up.
+	// 单个观察者可以被 SetObserverLimit 临时收紧（Interest 收到 Manager 的超额暂缓通知时，见 interest_over_limit.go）。
 	MaxVisible int
 }
 
@@ -266,6 +267,9 @@ type interestObserver struct {
 	// 可见集变化或成员移动后失效（evaluatePair 一律失效，evaluateMoved 见到移动过的成员时重算）。
 	farthestKnown, farthestOK         bool
 	farthestSubject, farthestDistance int64
+	// limited / limit：SetObserverLimit 给这个观察者的可见上限，覆盖 AOIConfig.MaxVisible（limit 可以为 0：什么都不看）。
+	limited bool
+	limit   int
 }
 
 // AOI is the incremental interest (AOI) layer over spatial.BlockIndex:
@@ -684,6 +688,12 @@ func (m *AOI) evaluateObserver(observer *interestObserver, work *aoiWorkspace, r
 		at, exists := m.subjects[subject]
 		m.evaluatePair(observer, subject, at, !exists)
 	}
+	// 上限被收紧（SetObserverLimit）后成员可能多于上限：从最远的开始离开，直到不超出。
+	if limit, bounded := m.visibleLimit(observer); bounded {
+		for len(observer.visible) > limit {
+			m.evictFarthest(observer)
+		}
+	}
 	blocks := work.blocks[:0]
 	for block := range observer.blocks {
 		blocks = append(blocks, block)
@@ -732,8 +742,9 @@ func (m *AOI) admitNearest(observer *interestObserver, candidates []entryCandida
 		}
 		return cmp.Compare(a.subject, b.subject)
 	})
+	limit, bounded := m.visibleLimit(observer)
 	for _, candidate := range candidates {
-		if m.config.MaxVisible > 0 && len(observer.visible) >= m.config.MaxVisible && !m.evictFarther(observer, candidate.at) {
+		if bounded && len(observer.visible) >= limit && !m.evictFarther(observer, candidate.at) {
 			noteRefused(observer, candidate.distance)
 			break
 		}
@@ -774,7 +785,7 @@ func (m *AOI) evaluateMoved(observer *interestObserver, work *aoiWorkspace, move
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
 	work.visible = ids
-	if limit := m.config.MaxVisible; limit > 0 && observer.refused {
+	if limit, bounded := m.visibleLimit(observer); bounded && observer.refused {
 		// 本批之后（成员重评之后）可见集的人数与最远距离。没有成员移动时成员都仍在离开半径内，
 		// 直接用最远成员缓存；有成员移动时按新位置数一遍。
 		count, farthest := len(observer.visible), int64(-1)
@@ -844,7 +855,7 @@ func (m *AOI) evaluatePair(observer *interestObserver, subject int64, at spatial
 	if !spatial.WithinDistance(observer.at, at, observer.enter) {
 		return
 	}
-	if m.config.MaxVisible > 0 && len(observer.visible) >= m.config.MaxVisible {
+	if limit, bounded := m.visibleLimit(observer); bounded && len(observer.visible) >= limit {
 		if !m.evictFarther(observer, at) {
 			return
 		}
@@ -868,6 +879,72 @@ func (m *AOI) evictFarther(observer *interestObserver, at spatial.Point) bool {
 	observer.farthestKnown = false
 	m.emit(observer.id, farthestSubject, InterestLeave, -1)
 	return true
+}
+
+// evictFarthest 让可见集里最远的成员（同距取较小 ID）离开，计入未入选下界；可见集为空时什么都不做。
+func (m *AOI) evictFarthest(observer *interestObserver) {
+	subject, distance, ok := m.farthestMember(observer)
+	if !ok {
+		// 成员都已不在索引里：evaluatePair 已按离开处理过，这里不会走到；防御性地清空。
+		for member := range observer.visible {
+			delete(observer.visible, member)
+			m.emit(observer.id, member, InterestLeave, -1)
+		}
+		observer.farthestKnown = false
+		return
+	}
+	noteRefused(observer, distance)
+	delete(observer.visible, subject)
+	observer.farthestKnown = false
+	m.emit(observer.id, subject, InterestLeave, -1)
+}
+
+// visibleLimit 是观察者此刻的可见上限：SetObserverLimit 给的优先，否则 AOIConfig.MaxVisible；bounded 为假表示不限。
+func (m *AOI) visibleLimit(observer *interestObserver) (limit int, bounded bool) {
+	if observer.limited {
+		return observer.limit, true
+	}
+	return m.config.MaxVisible, m.config.MaxVisible > 0
+}
+
+// SetObserverLimit 给一个观察者单独的可见上限（limited 为真，limit ≥ 0），或撤掉它回到 AOIConfig.MaxVisible
+// （limited 为假），然后完整重评：收紧时从最远的成员开始离开，放宽时按距离从近到远补入进入半径内的目标。
+// 观察者重新放置（移动、换视野）时上限保留，RemoveObserver 时随之删除。
+func (m *AOI) SetObserverLimit(id int64, limit int, limited bool) error {
+	observer, exists := m.observers[id]
+	if !exists {
+		return ErrInterestUnknown
+	}
+	if limit < 0 {
+		return ErrInterestConfig
+	}
+	if !limited {
+		limit = 0
+	}
+	if observer.limited == limited && observer.limit == limit {
+		return nil
+	}
+	observer.limited, observer.limit = limited, limit
+	m.refreshObserver(observer, dirtySpatial)
+	return nil
+}
+
+// observerCrowded 报告观察者的上限此刻是否起作用：可见集已满。可见集未满、却记着可能有未入选目标时（refused 是
+// 保守下界，成员离开不会清掉它）先完整重评一次补位——补进来的目标本来就会在下一次重评时进入——再看满没满。
+// 不受限的观察者恒为假。Interest 据此判断收紧的上限还能不能直接撤掉。
+func (m *AOI) observerCrowded(id int64) bool {
+	observer, exists := m.observers[id]
+	if !exists {
+		return false
+	}
+	limit, bounded := m.visibleLimit(observer)
+	if !bounded {
+		return false
+	}
+	if len(observer.visible) < limit && observer.refused {
+		m.refreshObserver(observer, dirtySpatial)
+	}
+	return len(observer.visible) >= limit
 }
 
 // farthestMember 返回可见集里仍存在的最远成员（同距取较小 ID）及其距离平方；没有成员时 ok 为 false。

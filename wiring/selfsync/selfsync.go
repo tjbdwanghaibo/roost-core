@@ -344,8 +344,8 @@ var ErrSyncSessionLost = errors.New("selfsync: the player's sync session was los
 
 // SessionLostDisconnectMetric 计 DisconnectLostPlayer 因同步会话丢失而断开玩家的次数（Counter，每名玩家每次丢会话
 // 至多一次，只计确实关掉了连接的）。标签 reason 取 entitysync.SessionLossReason 中推送拒收以外的值：
-// object_limit / too_large / encode_failed，原因不是 Manager 给出的计 unknown。推送拒收的断开计在
-// SyncPushRefusedMetric{outcome="closed"}。
+// too_large / encode_failed，原因不是 Manager 给出的计 unknown。推送拒收的断开计在
+// SyncPushRefusedMetric{outcome="closed"}。持有对象超过上限不丢会话（超额降级，entitysync/over_limit.go），不在这里计。
 const SessionLostDisconnectMetric = "player.sync.session_lost_disconnect.total"
 
 // sessionLostWarnInterval 是“因丢会话断开玩家”Warn 的间隔：间隔内只累计，下一条带上被省略的次数。
@@ -378,7 +378,7 @@ func takeSessionLostWarn(now time.Time) (bool, uint64) {
 //
 //   - 原因是推送拒收（entitysync.SessionLossPushRefused）：什么都不做。PushPlayerFrame 在拒收时已经关闭了该玩家
 //     的全部连接，或玩家本来就没有连接（之后来的连接是新登录，自己会打开会话）。
-//   - 其余原因（编码失败：对象超过 MaxObjects、单个实体超过帧上限等；以及不是 Manager 给出的原因）：连接没有拒收
+//   - 其余原因（编码失败：单个实体超过帧上限等；以及不是 Manager 给出的原因）：连接没有拒收
 //     任何东西、还活着，Manager 却再也不会往这个会话推帧，政策也不在原连接上重开，所以
 //     关闭这名玩家的全部连接（CloseSessions，原因是 ErrSyncSessionLost 包着 cause），客户端照常重连、重开会话、
 //     从新 epoch 的全量开始。代价：玩家被踢一次；原因一直存在（例如一个实体始终超过帧上限）时会反复断开、重连，

@@ -18,9 +18,9 @@ import (
 // 用法例：场景里玩家 / 怪沿用 Limits.MaxObjects（100）且不限快照，地形单独 64 个、每会话每次 Flush 至多 4 个全量——
 // 两类互不占额度，玩家 / 怪的交付与没有地形时相同。
 type NamespaceLimits struct {
-	// MaxObjects 是一个会话可同时持有的该命名空间对象数，必须为正。超出时与 Limits.MaxObjects 相同：
-	// 不截断、不只拒超出的那几个，在为新对象分配引用时关闭整个会话（SessionLost，原因 object_limit，
-	// 错误里点名命名空间）。持有量由政策的上限保证（例如该命名空间所用 Interest 的 AOIConfig.MaxVisible）。
+	// MaxObjects 是一个会话可同时持有的该命名空间对象数，必须为正。超出时与 Limits.MaxObjects 相同：不截断、不关会话，
+	// 只暂缓该命名空间放不下的新对象并通知政策（超额降级，over_limit.go；计数与告警点名命名空间）。政策的上限（该命名空间
+	// 所用 Interest 的 AOIConfig.MaxVisible）应不大于它，否则会一直在边界上暂缓、收紧。
 	MaxObjects int
 	// SnapshotBudget 是该命名空间单独的冷创建预算：与 Manager 级 SnapshotBudget、其他命名空间互不占额度，
 	// 各自轮转会话与实体、各自计字节软上限。零值表示该命名空间不限快照（不继承 Manager 级预算）。
@@ -86,6 +86,7 @@ func (m *Manager) classOf(state *entity.SubjectSyncState) uint8 {
 }
 
 // admitClass 在为新对象分配引用之前检查该类的持有上限；没有配置 Namespaces 时只有 allocate 的总数检查（与以前相同）。
+// 超额的新对象在编码之前已被 admitWithinLimits 移出，这里失败只说明内部不一致（编码失败，关会话）。
 func (s *session) admitClass(class uint8, cfg wireConfig) error {
 	if cfg.classLimits == nil || s.classHeld == nil {
 		return nil

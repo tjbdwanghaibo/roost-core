@@ -39,7 +39,22 @@ type subscription struct {
 	baseVersion   uint64
 	// sendWaiting 只在成功结算后清除，新脏数据不能刷新等待年龄。
 	sendWaiting time.Time
+	// overLimit：超额暂缓（over_limit.go）。只对 kindSnapshot 且会话未持有对象的订阅有意义：会话里这一类已满，
+	// 这个新对象本轮没有创建，在会话出现空位之前不参与捕获、不进快照预算索引、不让 Drain 等待；
+	// 空位出现时由 releaseOverLimit 清除并重新排进 pending。离开 kindSnapshot 时随之清除（changeSubscriptionKindLocked）。
+	overLimit bool
+	// overLimitNoticed 是最近一次为这个暂缓的订阅通知来源的时刻（renotifyOverLimit 据此隔 overLimitRenotifyInterval 再通知）。
+	overLimitNoticed time.Time
+	// pinnedBy 是以 SubscribePinned 订阅它的来源（通常只有自身视图）；非空即“钉住”：超额时永不暂缓，
+	// 必要时挤掉同类里优先级最低的未钉住对象。nil 表示没有来源钉住，常见路径不分配。
+	pinnedBy map[*SubscriptionSource]struct{}
 }
+
+// pinned 报告订阅是否被某个来源钉住；调用方持有 subject.mu。
+func (s *subscription) pinned() bool { return len(s.pinnedBy) > 0 }
+
+// waitsForRoom 报告订阅是否处于超额暂缓；调用方持有 subject.mu。
+func (s *subscription) waitsForRoom() bool { return s.kind == kindSnapshot && s.overLimit }
 
 // subject is an entity's sync state plus its subscribers. The subscribers
 // live HERE, not in an index somewhere else: the subject is the truth about
@@ -107,8 +122,8 @@ func (s *subject) collectProfilesLocked(selected map[*subscription]bool) (delta,
 				delta = append(delta, sub.profile)
 			}
 		case kindSnapshot:
-			if selected != nil && !selected[sub] {
-				continue
+			if sub.overLimit || selected != nil && !selected[sub] {
+				continue // 超额暂缓的订阅等会话有空位再捕获
 			}
 			if !slices.Contains(snapshot, sub.profile) {
 				snapshot = append(snapshot, sub.profile)

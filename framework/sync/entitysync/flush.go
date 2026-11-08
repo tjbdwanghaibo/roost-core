@@ -79,11 +79,13 @@ func (m *Manager) prepareResets(resets []SessionID, work map[SessionID]*flushSes
 // settlement is what becomes true for one (session, subject) once the
 // session's frame has been admitted.
 type settlement struct {
-	sub           *subscription
-	revision      uint64
-	subj          *subject
-	version       uint64
-	remove        bool
+	sub      *subscription
+	revision uint64
+	subj     *subject
+	version  uint64
+	remove   bool
+	// evict：本批这一项是为钉住的订阅让位而发的 remove（evictForPinned）；结算时订阅不删除，转为超额暂缓。
+	evict         bool
 	snapshotClass snapshotClass
 }
 
@@ -139,6 +141,8 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 		return fmt.Errorf("sync policy: %w", err)
 	}
 	m.refreshSnapshotWindow()
+	// 仍在暂缓的订阅隔一段时间再通知政策（over_limit.go）；没有 pending 的空 Flush 也要做，所以放在这里。
+	m.renotifyOverLimit(time.Now())
 	ids, resets := m.takePending()
 	if len(ids) == 0 && len(resets) == 0 {
 		m.emptyFlushes.Add(1)
@@ -159,6 +163,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 	}
 	defer m.recycleFlush(work)
 	defer releaseInFlight(work)
+	defer m.publishOverLimitGauge()
 	var retry []deferredSubject
 	var failures []error
 
@@ -240,8 +245,8 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 					}
 					switch sub.kind {
 					case kindSnapshot:
-						if selectedSnapshots != nil && !selectedSnapshots[sub] {
-							continue
+						if sub.overLimit || selectedSnapshots != nil && !selectedSnapshots[sub] {
+							continue // 超额暂缓的订阅等会话有空位（over_limit.go），同 profile 的快照是别的会话要的
 						}
 						if update, ok := updateFor(snapshots, sub.profile); ok {
 							work[sid].entries = append(work[sid].entries, frameEntry{subjectID: id, kind: entryCreate, class: subj.class, update: update})
@@ -273,6 +278,8 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 	emptyFulls := m.prepareResets(resets, work)
 	// 准入：会话有序处理（冷创建计费会话按计划顺序在前，其余按 ID），
 	// 每帧成功后推进线协议状态，该会话全部帧成功后结算订阅。
+	// 超额准入先于两种预算：只有放得下的新对象才去争发送与快照额度（over_limit.go）。
+	m.admitWithinLimits(work)
 	sessionIDs := make([]SessionID, 0, len(work))
 	for sid, batch := range work {
 		if len(batch.entries) == 0 && !emptyFulls[sid] {
@@ -378,6 +385,9 @@ func (m *Manager) prepareSubscribersLocked(subj *subject, work map[SessionID]*fl
 // 引用的视图替换仍是一次对象更新，补选进 selected；其余未入选的全量排到下一窗口。调用方持有 subj.mu。
 func (m *Manager) deferUnselectedSnapshotsLocked(subj *subject, held map[SessionID]bool, work map[SessionID]*flushSession, selected map[*subscription]bool) {
 	for sid, sub := range subj.subscribers {
+		if sub.waitsForRoom() {
+			continue // 超额暂缓的订阅不进快照预算，也不排进等待表
+		}
 		if sub.kind == kindSnapshot && !held[sid] && work[sid] != nil {
 			// 已有引用的视图替换仍是一次对象更新，不能等待冷恢复预算。
 			if _, exists := work[sid].session.objects[subj.id]; exists {
@@ -476,6 +486,7 @@ func (m *Manager) pushSessionFrames(ctx context.Context, sid SessionID, batch *f
 	}
 	if !stale {
 		m.settleSubscriptions(sid, batch.settlements)
+		m.releaseOverLimit(sid, sess)
 	}
 	return delivered, nil
 }
@@ -535,6 +546,13 @@ func (m *Manager) settleSubscriptions(sid SessionID, settlements []settlement) {
 		if sub := settle.subj.subscribers[sid]; sub == settle.sub && sub.revision == settle.revision {
 			if settle.remove {
 				m.removeSubscriptionLocked(settle.subj, sid)
+			} else if settle.evict {
+				// 为钉住的订阅让位：对象已从客户端移除，订阅保持，转为超额暂缓等空位（over_limit.go）。
+				sub.baseVersion = 0
+				sub.sendWaiting = time.Time{}
+				sub.snapshotClass = snapshotArrival
+				m.changeSubscriptionKindLocked(settle.subj, sid, sub, kindSnapshot)
+				m.markOverLimitLocked(settle.subj, sid, sub, true)
 			} else {
 				if sub.kind != kindLive {
 					settle.subj.profilesValid = false

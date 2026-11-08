@@ -86,7 +86,7 @@ func (m *Manager) clearSnapshotWaitLocked(subj *subject) {
 		return
 	}
 	for sid, sub := range subj.subscribers {
-		if sub.kind == kindSnapshot {
+		if sub.kind == kindSnapshot && !sub.overLimit {
 			if sess := m.session(sid); sess != nil && !sess.held && sess.lifetime == sub.lifetime {
 				return
 			}

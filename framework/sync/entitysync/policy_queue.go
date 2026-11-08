@@ -55,8 +55,10 @@ func (m *Manager) policyHooks() []policyHook {
 // applyPolicies 是 Flush 的政策阶段：先交付框架的释放通知与重新提交，再按登记顺序执行政策处理器。
 func (m *Manager) applyPolicies() error {
 	// 释放通知先于重新提交：会话已关闭的 pair 先从政策侧删掉，同一阶段的重新提交就不会把它说回去。
+	// 超额暂缓通知最后交付：政策据此收紧视野，紧接着的 Apply 处理器在同一阶段结算退订。
 	m.deliverReleases()
 	m.deliverResubmits()
+	m.deliverDeferrals()
 	var err error
 	for _, hook := range m.policyHooks() {
 		err = errors.Join(err, hook.apply())
@@ -65,7 +67,7 @@ func (m *Manager) applyPolicies() error {
 }
 
 func (m *Manager) policiesPending() bool {
-	if m.releaseEntries.Load() > 0 || m.resubmitsPending() {
+	if m.releaseEntries.Load() > 0 || m.overLimitNoticeEntries.Load() > 0 || m.resubmitsPending() {
 		return true
 	}
 	for _, hook := range m.policyHooks() {
@@ -123,6 +125,11 @@ type SubscriptionSourceHooks struct {
 	// 可能已在重开的会话或重新登记的 subject 上重新订阅，新订阅随后还可能被卸载撤销：政策只应删除 SubscribeStamped 戳小于
 	// ReleasedSubscription.Stamp 的簿记。不要用 Holds 判定：被撤销、等待重新提交的新订阅此刻 Holds 为假。
 	Released func([]ReleasedSubscription)
+	// Deferred 报告本来源的订阅因会话这一类对象已满而被暂缓（超额降级，见 over_limit.go 与 DeferredSubscription）：
+	// 对象没有同步给会话，订阅保持，等会话有空位时按优先级恢复。会话不会因此关闭。订阅进入暂缓时报告一次，仍在暂缓里
+	// 每隔约一秒再报告一次（政策上次让出的位置不够时继续收紧）；恢复后再次暂缓再报告。有距离概念的政策（Interest）据此收紧该玩家的可见上限、从最远的
+	// 开始退订；没有距离概念的政策可以不登记（订阅照样暂缓、计数、告警）。
+	Deferred func([]DeferredSubscription)
 }
 
 // ReleasedSubscription 是一条被框架丢掉的来源订阅（SubscriptionSourceHooks.Released）。
@@ -149,7 +156,7 @@ type queuedRelease struct {
 // NewSubscriptionSourceWithHooks 与 NewSubscriptionSource 相同，另外登记政策的回调（见 SubscriptionSourceHooks）。
 // 零值 hooks 等同 NewSubscriptionSource。
 func (m *Manager) NewSubscriptionSourceWithHooks(hooks SubscriptionSourceHooks) *SubscriptionSource {
-	return &SubscriptionSource{manager: m, resubmit: hooks.Resubmit, released: hooks.Released}
+	return &SubscriptionSource{manager: m, resubmit: hooks.Resubmit, released: hooks.Released, deferred: hooks.Deferred}
 }
 
 // NewSubscriptionSourceWithResubmit 与 NewSubscriptionSource 相同，另外登记政策的重新提交入口：
@@ -424,6 +431,58 @@ func (m *Manager) dropRetractedSubject(subjectID int64, out []queuedRelease, sta
 	return out
 }
 
+// ---- 超额暂缓通知 ----
+//
+// admitWithinLimits / 让位结算把订阅标成超额暂缓时（持 subj.mu），带 Deferred 回调的来源各记一条，排进 overLimitNotices，
+// 由下一次政策阶段按来源分批交付。条数不超过上一次 Flush 里进入暂缓的订阅数（留在暂缓里的不重复通知），
+// 与 releases 共用叶子锁 resubmitMu；overLimitNoticeEntries 让政策阶段在没有通知时不加锁。
+
+type queuedDeferral struct {
+	source       *SubscriptionSource
+	subscription DeferredSubscription
+}
+
+// queueDeferralsLocked 为订阅的每个带 Deferred 回调的来源排一条通知。调用方持有 subj.mu。
+func (m *Manager) queueDeferralsLocked(sub *subscription, item DeferredSubscription) {
+	var queued []queuedDeferral
+	for source := range sub.sources {
+		if source != nil && source.deferred != nil {
+			queued = append(queued, queuedDeferral{source: source, subscription: item})
+		}
+	}
+	if len(queued) == 0 {
+		return
+	}
+	m.resubmitMu.Lock()
+	m.overLimitNotices = append(m.overLimitNotices, queued...)
+	m.overLimitNoticeEntries.Add(int64(len(queued)))
+	m.resubmitMu.Unlock()
+	m.WakeSync()
+}
+
+// deliverDeferrals 在政策阶段按来源分批交付超额暂缓通知，批次顺序为各来源首次出现的顺序，批内保持排队顺序。
+func (m *Manager) deliverDeferrals() {
+	if m.overLimitNoticeEntries.Load() == 0 {
+		return
+	}
+	m.resubmitMu.Lock()
+	queued := m.overLimitNotices
+	m.overLimitNotices = nil
+	m.overLimitNoticeEntries.Add(-int64(len(queued)))
+	m.resubmitMu.Unlock()
+	var order []*SubscriptionSource
+	batches := make(map[*SubscriptionSource][]DeferredSubscription)
+	for _, item := range queued {
+		if _, seen := batches[item.source]; !seen {
+			order = append(order, item.source)
+		}
+		batches[item.source] = append(batches[item.source], item.subscription)
+	}
+	for _, source := range order {
+		source.deferred(batches[source])
+	}
+}
+
 func (m *Manager) clearRetracted() {
 	m.resubmitMu.Lock()
 	clear(m.retracted)
@@ -432,5 +491,7 @@ func (m *Manager) clearRetracted() {
 	m.resubmitEntries.Store(0)
 	m.releases = nil
 	m.releaseEntries.Store(0)
+	m.overLimitNotices = nil
+	m.overLimitNoticeEntries.Store(0)
 	m.resubmitMu.Unlock()
 }

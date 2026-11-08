@@ -120,7 +120,7 @@ func NewSelfView(config SelfViewConfig) (*SelfView, error) {
 		players: make(map[int64]*selfFacts), bySubject: make(map[int64]int64), pending: make(map[int64]struct{}),
 		bindings: make(map[int64]*selfBinding), waiting: make(map[int64]struct{}), unopened: make(map[int64]time.Time),
 	}
-	direct, err := newDirect(config.Manager, nil, view.forgotten)
+	direct, err := newDirect(config.Manager, nil, view.forgotten, true) // 玩家看自己：钉住，超额时永不暂缓
 	if err != nil {
 		return nil, err
 	}

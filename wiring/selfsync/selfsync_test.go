@@ -848,8 +848,9 @@ func TestSelfSyncReportsPlayersOnlineWithoutASession(t *testing.T) {
 }
 
 // 会话 ID 就是玩家 ID 的 Manager（自身视图、game-demo 场景）丢会话之后不留下“连接活着、同步会话已死”的玩家：
-// 会话持有的对象超过 Limits.MaxObjects（frame.ErrObjectLimit）时帧编不出来、没有交给传输，连接没拒收任何东西；
-// DisconnectLostPlayer 断开该玩家（计 reason=object_limit）。客户端重连、重开会话，收到新 epoch 的全量。
+// 单个实体超过帧上限（frame.ErrFrameTooLarge）时帧编不出来、没有交给传输，连接没拒收任何东西；
+// DisconnectLostPlayer 断开该玩家（计 reason=too_large）。客户端重连、重开会话，收到新 epoch 的全量。
+// 会话持有的对象超过 Limits.MaxObjects 不再丢会话（超额降级，D17）：多出来的对象暂缓，连接不动、不计断开。
 // 推送拒收的旧路径不变：PushPlayerFrame 关连接（计 push_refused closed），SessionLost 不再关第二次。
 func TestALostSessionDisconnectsThePlayerUnlessThePushWasRefused(t *testing.T) {
 	playerKind(t)
@@ -859,7 +860,7 @@ func TestALostSessionDisconnectsThePlayerUnlessThePushWasRefused(t *testing.T) {
 	manager, err := entitysync.NewManager(entitysync.ManagerConfig{
 		Name:     "lane",
 		Interval: time.Hour,
-		Limits:   frame.Limits{MaxObjects: 2},
+		Limits:   frame.Limits{MaxObjects: 2, MaxFrameBytes: 1024},
 		Transport: entitysync.TransportFunc(func(ctx context.Context, session entitysync.SessionID, payload []byte) error {
 			return PushPlayerFrame(ctx, players, int64(session), testMessageID, payload)
 		}),
@@ -916,27 +917,43 @@ func TestALostSessionDisconnectsThePlayerUnlessThePushWasRefused(t *testing.T) {
 	epoch := firstEpoch()
 	players.frames = nil
 
-	// 2. 第三个对象超过 MaxObjects：编码失败，会话被丢，连接被断开。
-	disconnectsBefore := labeledCounter(SessionLostDisconnectMetric, "reason", "object_limit")
-	refusedBefore := counterValue(SyncPushRefusedMetric, "closed")
+	// 2a. 第三个对象超过 MaxObjects：暂缓，不丢会话、不断开、什么都不发。
+	limitDisconnects := labeledCounter(SessionLostDisconnectMetric, "reason", "object_limit")
 	subscribe(wallets[2])
 	flush()
-	if len(lost) != 1 || entitysync.LossReason(lost[0]) != entitysync.SessionLossObjectLimit || !errors.Is(lost[0], frame.ErrObjectLimit) {
-		t.Fatalf("SessionLost causes %v, want one object_limit loss wrapping frame.ErrObjectLimit", lost)
+	if len(lost) != 0 || len(players.closed) != 0 || len(players.frames) != 0 {
+		t.Fatalf("an object over MaxObjects: lost %v, closed %v, frames %d; want it deferred with the connection untouched", lost, players.closed, len(players.frames))
+	}
+	if stats := manager.Stats(); stats.OverLimitWaiting != 1 || stats.Sessions != 1 {
+		t.Fatalf("stats %+v, want the third wallet waiting for room", stats)
+	}
+	if got := labeledCounter(SessionLostDisconnectMetric, "reason", "object_limit"); got != limitDisconnects {
+		t.Fatalf("%s{reason=object_limit} %d → %d", SessionLostDisconnectMetric, limitDisconnects, got)
+	}
+
+	// 2b. 一个实体超过帧上限：编码失败，会话被丢，连接被断开。
+	disconnectsBefore := labeledCounter(SessionLostDisconnectMetric, "reason", "too_large")
+	refusedBefore := counterValue(SyncPushRefusedMetric, "closed")
+	wallets[0].pad.Store(4096)
+	wallets[0].setGold(2)
+	flush()
+	if len(lost) != 1 || entitysync.LossReason(lost[0]) != entitysync.SessionLossTooLarge || !errors.Is(lost[0], frame.ErrFrameTooLarge) {
+		t.Fatalf("SessionLost causes %v, want one too_large loss wrapping frame.ErrFrameTooLarge", lost)
 	}
 	if len(players.closed) != 1 || players.closed[0] != playerID {
 		t.Fatalf("connections closed for %v after the session was lost to %v, want player %d once: "+
 			"its connection stays up and receives nothing until the player logs in again", players.closed, lost[0], playerID)
 	}
-	if !errors.Is(players.cause, ErrSyncSessionLost) || !errors.Is(players.cause, frame.ErrObjectLimit) {
-		t.Fatalf("close cause %v, want ErrSyncSessionLost carrying frame.ErrObjectLimit", players.cause)
+	if !errors.Is(players.cause, ErrSyncSessionLost) || !errors.Is(players.cause, frame.ErrFrameTooLarge) {
+		t.Fatalf("close cause %v, want ErrSyncSessionLost carrying frame.ErrFrameTooLarge", players.cause)
 	}
-	if got := labeledCounter(SessionLostDisconnectMetric, "reason", "object_limit"); got != disconnectsBefore+1 {
-		t.Fatalf("%s{reason=object_limit} %d → %d, want +1", SessionLostDisconnectMetric, disconnectsBefore, got)
+	if got := labeledCounter(SessionLostDisconnectMetric, "reason", "too_large"); got != disconnectsBefore+1 {
+		t.Fatalf("%s{reason=too_large} %d → %d, want +1", SessionLostDisconnectMetric, disconnectsBefore, got)
 	}
 	if got := counterValue(SyncPushRefusedMetric, "closed"); got != refusedBefore {
 		t.Fatalf("%s{outcome=closed} %d → %d: an encode failure is not a refused push", SyncPushRefusedMetric, refusedBefore, got)
 	}
+	wallets[0].pad.Store(0)
 
 	// 3. 客户端重连、重开会话（视野回到两个对象之内）：新 epoch 的全量。
 	players.connections = 1

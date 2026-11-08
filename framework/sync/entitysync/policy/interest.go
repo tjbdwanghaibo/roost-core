@@ -245,7 +245,11 @@ type Interest struct {
 	// refusal's time and the last error, for Drain diagnostics); a pair at
 	// retryStallAfter no longer holds Drain open.
 	refused map[pair]refusal
-	closed  bool
+	// limits 是因 Manager 的超额暂缓通知而收紧了可见上限的空间视野（AOI 观察者编号 → 收紧状态），见 interest_over_limit.go。
+	limits map[int64]*viewLimit
+	// limitsReported 是本 Interest 最近一次计入进程级 limitedViews 的视野数（持 mu）。
+	limitsReported int
+	closed         bool
 }
 
 type pair struct{ observer, subject int64 }
@@ -262,6 +266,8 @@ type hold struct {
 	layers     map[contribution]entity.SyncProfile
 	subscribed bool
 	profile    entity.SyncProfile
+	// pinned：告知 Manager 时钉住了（pair 含 self 贡献，玩家看自己，SubscribePinned）。
+	pinned bool
 }
 
 func NewInterest(config InterestConfig) (*Interest, error) {
@@ -312,13 +318,14 @@ func NewInterest(config InterestConfig) (*Interest, error) {
 		placed:          make(map[int64]uint64),
 		departedPlayers: make(map[int64]struct{}), departedSubjects: make(map[int64]struct{}),
 		covers:       make(map[[2]entity.SyncProfile]bool),
+		limits:       make(map[int64]*viewLimit),
 		viewInterval: viewInterval, now: time.Now,
 		onRefusal: config.OnRefusal,
 	}
 	in.registry.init(maxViews, maxPlayers, cmp.Or(config.MaxSpatialViews, DefaultMaxSpatialViews))
 	in.blockLayer = config.BlockLayer.Normalize()
 	in.blockFollows = config.BlockLayer == (entity.SyncProfile{})
-	in.subscriptions = config.Manager.NewSubscriptionSourceWithResubmit(in.resubmit)
+	in.subscriptions = config.Manager.NewSubscriptionSourceWithHooks(entitysync.SubscriptionSourceHooks{Resubmit: in.resubmit, Deferred: in.deferred})
 	in.compareProfiles = config.Manager.CompareProfiles
 	in.validatePriority = config.Manager.ValidateViewPriority
 	in.viewSets = make(map[string]*entity.SyncViewSet, len(config.ViewSets))
@@ -874,6 +881,8 @@ func (in *Interest) applyLocked() []Refusal {
 	in.retry = nil
 	in.unsettled = false
 	in.unsettledUnits = 0
+	// 到期的收紧视野逐步放宽（interest_over_limit.go）；产生的 AOI 事件在下面一并结算。
+	in.relaxLimitsLocked(in.now())
 	in.drainAOILocked()
 	keys := make([]pair, 0, len(in.touched))
 	for key := range in.touched {
@@ -968,12 +977,19 @@ func (in *Interest) departedLocked(key pair) bool {
 // subscribe says one pair to the manager. The pair counts as subscribed from
 // here — that is what makes the view counting work — and a refusal puts it
 // on the retry list instead.
+//
+// pair 含 self 贡献（玩家看自己）时钉住（SubscribePinned）：会话里同类对象已满时 Manager 永不暂缓它。
 func (in *Interest) subscribe(key pair, current *hold, retry bool, refusals *[]Refusal) {
 	current.profile = in.selectedProfile(current)
+	current.pinned = selfHeld(current)
 	current.subscribed = true
 	err := in.validateProfile(current.profile)
 	if err == nil {
-		err = in.subscriptions.Subscribe(sessionOf(key.observer), key.subject, current.profile)
+		if current.pinned {
+			_, err = in.subscriptions.SubscribePinned(sessionOf(key.observer), key.subject, current.profile)
+		} else {
+			err = in.subscriptions.Subscribe(sessionOf(key.observer), key.subject, current.profile)
+		}
 	}
 	if err == nil {
 		delete(in.refused, key)
@@ -986,10 +1002,16 @@ func (in *Interest) subscribe(key pair, current *hold, retry bool, refusals *[]R
 }
 
 func (in *Interest) reband(key pair, current *hold, refusals *[]Refusal) {
-	if !current.subscribed || in.selectedProfile(current) == current.profile {
+	if !current.subscribed || in.selectedProfile(current) == current.profile && selfHeld(current) == current.pinned {
 		return
 	}
 	in.subscribe(key, current, false, refusals)
+}
+
+// selfHeld 报告 pair 是否含 self 贡献（玩家经 self 看自己）。
+func selfHeld(current *hold) bool {
+	_, self := current.layers[contribution{}]
+	return self
 }
 
 // Close 释放本 Interest 持有的订阅；其他政策、会话和实体注册继续存在。之后的视野操作返回错误。
@@ -1035,4 +1057,6 @@ func (in *Interest) Close() {
 	in.touched = nil
 	in.retry = nil
 	in.refused = nil
+	in.limits = nil
+	in.publishLimitedViewsLocked()
 }

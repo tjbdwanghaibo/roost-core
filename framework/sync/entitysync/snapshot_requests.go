@@ -28,7 +28,9 @@ func (r *snapshotRequests) update(subj *subject, sid SessionID, sub *subscriptio
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	old, found := r.entries[sub]
-	if found && sub.kind == kindSnapshot && old.class == sub.snapshotClass {
+	// 超额暂缓的订阅不进索引：会话没有空位，不值得为它占快照预算；releaseOverLimit 清除标记时重新加入（排到队尾）。
+	wanted := sub.kind == kindSnapshot && !sub.overLimit
+	if found && wanted && old.class == sub.snapshotClass {
 		return
 	}
 	if found {
@@ -41,7 +43,7 @@ func (r *snapshotRequests) update(subj *subject, sid SessionID, sub *subscriptio
 		}
 		delete(r.entries, sub)
 	}
-	if sub.kind != kindSnapshot {
+	if !wanted {
 		delete(r.estimates, sub)
 		return
 	}
@@ -157,9 +159,14 @@ func (it *snapshotIterator) next(m *Manager, class snapshotClass, pending map[in
 }
 
 // changeSubscriptionKindLocked 集中维护快照索引；调用方持有 subject.mu。
+// 离开 kindSnapshot 时清掉超额暂缓标记（计数随之减；会话索引里的项由 releaseOverLimit / 关会话时顺手清理）。
 func (m *Manager) changeSubscriptionKindLocked(subj *subject, sid SessionID, sub *subscription, kind subscriptionKind) {
 	if sub.kind != kind {
 		subj.profilesValid = false
+	}
+	if kind != kindSnapshot && sub.overLimit {
+		sub.overLimit = false
+		m.overLimitWaiting[subj.class].Add(-1)
 	}
 	sub.kind = kind
 	m.lanes[subj.class].snapshotRequests.update(subj, sid, sub)

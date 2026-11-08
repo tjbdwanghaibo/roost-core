@@ -50,7 +50,7 @@ type ManagerConfig struct {
 	SendBudget SendBudget
 	// Limits bound a frame. Zero fields take frame.DefaultLimits.
 	// MaxObjects is also how many subjects one session may hold —
-	// of the namespaces Namespaces does not list.
+	// of the namespaces Namespaces does not list. 超出时不关会话：多出来的新对象暂缓创建并通知政策（over_limit.go）。
 	Limits frame.Limits
 	// DurableWatermark, when set, is the pipelined-commit watermark
 	// (typically the Data Engine's DurableLSN). A subject whose newest
@@ -72,10 +72,10 @@ type ManagerConfig struct {
 
 	// SessionLost is told when a session was closed by the manager itself
 	// (not on CloseSession): its transport refused a frame, or the session's
-	// frame could not be encoded (too many objects, an entity over the frame
-	// limit). The policy that subscribed the session uses it to forget the
-	// session on its side — the manager's subscription index does not own
-	// policy-layer membership.
+	// frame could not be encoded (an entity over the frame limit). The policy
+	// that subscribed the session uses it to forget the session on its side —
+	// the manager's subscription index does not own policy-layer membership.
+	// 持有对象超过上限不关会话（超额降级，见 over_limit.go），所以不会出现在这里。
 	//
 	// cause 总是 *SessionLoss：Reason 区分推送拒收与编码失败（LossReason），Err 是原错误。会话 ID 就是玩家 ID 的
 	// Manager 在原因不是推送拒收时要断开该玩家的连接（wiring/selfsync.DisconnectLostPlayer），否则连接活着
@@ -213,15 +213,24 @@ type Manager struct {
 	snapshotsDeferred atomic.Uint64
 	sendDeferred      atomic.Uint64
 
+	// 超额降级（over_limit.go）：overLimitWaiting 按类别计此刻处于超额暂缓的订阅数；overLimitDeferred /
+	// overLimitEvicted 是累计进入暂缓的新对象数与为钉住订阅让位的已持有对象数；overLimitWarn 是限频 Warn 的闸门。
+	overLimitWaiting  []atomic.Int64
+	overLimitDeferred atomic.Uint64
+	overLimitEvicted  atomic.Uint64
+	overLimitWarn     overLimitWarnGate
+
 	// resubmitMu 保护框架撤销的订阅记录（见 policy_queue.go）；叶子锁。
-	resubmitMu      sync.Mutex
-	retracted       map[int64][]retractedSubscription // 撤销时记下，等同 ID 重新登记
-	resubmits       []queuedResubmit                  // 已重新登记，等下一次政策阶段交付
-	delivering      []queuedResubmit                  // 政策阶段已取出、回调尚未返回
-	resubmitEntries atomic.Int64                      // 三者的条数；退订热路径据此跳过加锁
-	releases        []queuedRelease                   // 框架丢掉的来源订阅，等下一次政策阶段通知
-	releaseEntries  atomic.Int64                      // releases 的条数；政策阶段据此跳过加锁
-	stampClock      atomic.Uint64                     // 订阅戳与释放戳共用的逻辑时钟（SubscriptionStamp）
+	resubmitMu             sync.Mutex
+	retracted              map[int64][]retractedSubscription // 撤销时记下，等同 ID 重新登记
+	resubmits              []queuedResubmit                  // 已重新登记，等下一次政策阶段交付
+	delivering             []queuedResubmit                  // 政策阶段已取出、回调尚未返回
+	resubmitEntries        atomic.Int64                      // 三者的条数；退订热路径据此跳过加锁
+	releases               []queuedRelease                   // 框架丢掉的来源订阅，等下一次政策阶段通知
+	releaseEntries         atomic.Int64                      // releases 的条数；政策阶段据此跳过加锁
+	overLimitNotices       []queuedDeferral                  // 超额暂缓通知，等下一次政策阶段交付
+	overLimitNoticeEntries atomic.Int64                      // overLimitNotices 的条数；政策阶段据此跳过加锁
+	stampClock             atomic.Uint64                     // 订阅戳与释放戳共用的逻辑时钟（SubscriptionStamp）
 
 	// 以下是测试缝，生产中恒为 nil，只用来确定性地进入某个并发窗口：
 	// forgetUnlinked：forget 把 subject 从表里摘下并放开 m.mu 之后（“已离表、退役收尾未完成”）。
@@ -296,6 +305,7 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 		waitingSnapshots: make(map[int64]snapshotWait),
 		flushGate:        make(chan struct{}, 1),
 	}
+	m.overLimitWaiting = make([]atomic.Int64, len(classes.budgets))
 	m.snapshotLane.budget = config.SnapshotBudget
 	m.lanes = append(make([]*snapshotLane, 0, len(classes.budgets)), &m.snapshotLane)
 	for _, budget := range classes.budgets[1:] {
@@ -964,6 +974,7 @@ func (m *Manager) Close(ctx context.Context) error {
 	m.waitingOrder.Init()
 	m.pendingOverlap = 0
 	m.pendingMu.Unlock()
+	m.publishOverLimitGauge() // 暂缓的订阅随会话一起移除，进程级加总里扣掉本 Manager 的份额
 	if lifecycle, ok := m.config.Transport.(SessionLifecycle); ok {
 		for id := range sessions {
 			lifecycle.SessionClosed(id)
@@ -1043,6 +1054,11 @@ type ManagerStats struct {
 	FlushFailures           uint64
 	MaxSubjects             int
 	MaxSessions             int
+	// OverLimitWaiting 是此刻处于超额暂缓的订阅数（各类之和）；正常为 0，持续不为 0 说明政策的上限与
+	// 会话持有上限不匹配。OverLimitDeferred / OverLimitEvicted 是累计进入暂缓的新对象数、为钉住订阅让位的已持有对象数。
+	OverLimitWaiting  int
+	OverLimitDeferred uint64
+	OverLimitEvicted  uint64
 }
 
 // Stats 读取增量维护的计数，不遍历订阅；需要逐项核对时用 AuditStats。
@@ -1080,6 +1096,7 @@ func (m *Manager) Stats() ManagerStats {
 		FramesAdmitted: m.framesAdmitted.Load(), SessionsLost: m.sessionsLost.Load(),
 		DurabilityDeferred: m.deferred.Load(), FlushFailures: m.flushFailures.Load(),
 		MaxSubjects: m.config.MaxSubjects, MaxSessions: m.config.MaxSessions,
+		OverLimitWaiting: m.overLimitWaitingTotal(), OverLimitDeferred: m.overLimitDeferred.Load(), OverLimitEvicted: m.overLimitEvicted.Load(),
 	}
 }
 
@@ -1102,12 +1119,15 @@ func (m *Manager) AuditStats() ManagerStats {
 		}
 	}
 	m.mu.RUnlock()
-	stats.Subscriptions, stats.PendingSnapshots = 0, 0
+	stats.Subscriptions, stats.PendingSnapshots, stats.OverLimitWaiting = 0, 0, 0
 	for _, subj := range subjects {
 		subj.mu.Lock()
 		stats.Subscriptions += len(subj.subscribers)
 		for _, sub := range subj.subscribers {
-			if sub.kind == kindSnapshot {
+			switch {
+			case sub.waitsForRoom():
+				stats.OverLimitWaiting++ // 不在快照预算索引里，与 Stats 的 PendingSnapshots 同一口径
+			case sub.kind == kindSnapshot:
 				stats.PendingSnapshots++
 			}
 		}
@@ -1135,21 +1155,22 @@ func (m *Manager) AuditStats() ManagerStats {
 
 // CheckHealth degrades at 80% of either capacity and fails when full or
 // closed; the message carries the counts an operator would ask for next.
+// 有订阅处于超额暂缓（OverLimitWaiting > 0）时同样降级：会话照常收帧，但有对象因持有上限没有同步给它。
 func (m *Manager) CheckHealth(context.Context) health.Result {
 	if m == nil {
 		return health.Result{Status: health.StatusFail, Message: "entitysync manager is nil"}
 	}
 	stats := m.Stats()
-	message := fmt.Sprintf("subjects=%d/%d sessions=%d/%d subscriptions=%d pending=%d frames=%d sessions_lost=%d deferred=%d flush_failures=%d",
+	message := fmt.Sprintf("subjects=%d/%d sessions=%d/%d subscriptions=%d pending=%d frames=%d sessions_lost=%d deferred=%d flush_failures=%d over_limit_waiting=%d",
 		stats.Subjects, stats.MaxSubjects, stats.Sessions, stats.MaxSessions, stats.Subscriptions, stats.Pending,
-		stats.FramesAdmitted, stats.SessionsLost, stats.DurabilityDeferred, stats.FlushFailures)
+		stats.FramesAdmitted, stats.SessionsLost, stats.DurabilityDeferred, stats.FlushFailures, stats.OverLimitWaiting)
 	if m.isClosed() {
 		return health.Result{Status: health.StatusFail, Message: "closed: " + message}
 	}
 	if stats.Subjects >= stats.MaxSubjects || stats.Sessions >= stats.MaxSessions {
 		return health.Result{Status: health.StatusFail, Message: message}
 	}
-	if stats.Subjects*10 >= stats.MaxSubjects*8 || stats.Sessions*10 >= stats.MaxSessions*8 {
+	if stats.Subjects*10 >= stats.MaxSubjects*8 || stats.Sessions*10 >= stats.MaxSessions*8 || stats.OverLimitWaiting > 0 {
 		return health.Result{Status: health.StatusDegraded, Message: message}
 	}
 	return health.Result{Status: health.StatusOK, Message: message}

@@ -134,6 +134,8 @@ func (m *Manager) HoldSession(id SessionID) error {
 		m.config.Trace.Record(SyncTraceEvent{Stage: "session_reset", Session: id, Lifetime: fresh.lifetime.traceID, Epoch: fresh.epoch})
 	}
 	subjects := sessionSubjectsLocked(sess)
+	// 新 epoch 从零计持有数：超额暂缓的订阅全部回到普通的待快照，Ready 后按优先级重新准入。
+	clear(sess.lifetime.overLimit)
 	m.mu.Unlock()
 	for _, subj := range subjects {
 		subj.mu.Lock()
@@ -143,6 +145,9 @@ func (m *Manager) HoldSession(id SessionID) error {
 				// It was owed a remove; with its state gone there is nothing to remove.
 				m.removeSubscriptionLocked(subj, id)
 			default:
+				if sub.overLimit {
+					m.unmarkOverLimitLocked(subj, id, sub)
+				}
 				sub.baseVersion = 0
 				sub.snapshotClass = snapshotRecovery
 				m.changeSubscriptionKindLocked(subj, id, sub, kindSnapshot)
@@ -299,6 +304,8 @@ type SubscriptionSource struct {
 	resubmit func([]RetractedSubscription)
 	// released 非 nil 时，框架因会话关闭或业务注销丢掉本来源的订阅后通知它（NewSubscriptionSourceWithHooks）。
 	released func([]ReleasedSubscription)
+	// deferred 非 nil 时，本来源的订阅因会话这一类已满被暂缓后通知它（SubscriptionSourceHooks.Deferred）。
+	deferred func([]DeferredSubscription)
 }
 
 // NewSubscriptionSource 为一个独立所有者创建可复用的来源令牌。
@@ -320,7 +327,17 @@ func (s *SubscriptionSource) SubscribeStamped(session SessionID, subjectID int64
 	if s == nil {
 		return 0, ErrManagerClosed
 	}
-	return s.manager.subscribe(s, session, subjectID, profile)
+	return s.manager.subscribe(s, session, subjectID, profile, false)
+}
+
+// SubscribePinned 与 SubscribeStamped 相同，另外把这对订阅“钉住”：会话里这一类对象已满时它永不暂缓，必要时挤掉
+// 同类里优先级最低的未钉住对象（超额降级，见 over_limit.go）。只给玩家看自己这类必须永远在客户端的视图用（SelfView、
+// Interest 的 self）；同一来源之后用 Subscribe / SubscribeStamped 再说一次就取消钉住，Unsubscribe 一并取消。
+func (s *SubscriptionSource) SubscribePinned(session SessionID, subjectID int64, profile entity.SyncProfile) (SubscriptionStamp, error) {
+	if s == nil {
+		return 0, ErrManagerClosed
+	}
+	return s.manager.subscribe(s, session, subjectID, profile, true)
 }
 
 // Unsubscribe 释放本来源对 (session, subject) 的订阅；其他来源仍持有时不发 remove。
@@ -360,12 +377,13 @@ func (s *SubscriptionSource) Holds(session SessionID, subjectID int64) bool {
 // Subscribe 使用默认来源订阅。重复调用幂等，改变 profile 时替换默认来源的视图。
 // 与其他来源重叠时，只发送按 LOD、Key、SchemaVersion 升序选出的一个视图。
 func (m *Manager) Subscribe(session SessionID, subjectID int64, profile entity.SyncProfile) error {
-	_, err := m.subscribe(nil, session, subjectID, profile)
+	_, err := m.subscribe(nil, session, subjectID, profile, false)
 	return err
 }
 
 // subscribe 成功时返回订阅戳（SubscribeStamped），在持有 subj.mu 与 m.mu、生命期与退役检查通过之后取得。
-func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subjectID int64, profile entity.SyncProfile) (SubscriptionStamp, error) {
+// pinned 记下或取消本来源的钉住（SubscribePinned）。
+func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subjectID int64, profile entity.SyncProfile, pinned bool) (SubscriptionStamp, error) {
 	if m == nil {
 		return 0, ErrManagerClosed
 	}
@@ -394,6 +412,14 @@ func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subje
 	}
 	if existing := subj.subscribers[session]; existing != nil && existing.lifetime == sess.lifetime {
 		existing.sources[source] = profile
+		setPinned(existing, source, pinned)
+		if existing.pinned() && existing.waitsForRoom() {
+			// 钉住的订阅永不暂缓：放回 pending，下一次准入排在最前、必要时挤掉同类里优先级最低的对象。
+			m.unmarkOverLimitLocked(subj, session, existing)
+			delete(existing.lifetime.overLimit, subjectID)
+			m.markPending(subjectID)
+			m.WakeSync()
+		}
 		active := m.bestProfile(existing.sources)
 		if existing.kind != kindLeaving && existing.profile == active {
 			return m.nextStamp(), nil
@@ -418,10 +444,12 @@ func (m *Manager) subscribe(source *SubscriptionSource, session SessionID, subje
 		m.changeSubscriptionKindLocked(subj, session, old, kindLeaving)
 		m.subscriptionCount.Add(-1)
 	}
-	subj.subscribers[session] = &subscription{
+	created := &subscription{
 		profile: profile, sources: map[*SubscriptionSource]entity.SyncProfile{source: profile},
 		kind: kindSnapshot, revision: 1, lifetime: sess.lifetime,
 	}
+	setPinned(created, source, pinned)
+	subj.subscribers[session] = created
 	subj.profilesValid = false
 	m.lanes[subj.class].snapshotRequests.update(subj, session, subj.subscribers[session])
 	m.subscriptionCount.Add(1)
@@ -466,6 +494,7 @@ func (m *Manager) unsubscribe(source *SubscriptionSource, session SessionID, sub
 		return ErrSubscriptionNotFound
 	}
 	delete(existing.sources, source)
+	delete(existing.pinnedBy, source)
 	if len(existing.sources) > 0 {
 		active := m.bestProfile(existing.sources)
 		if active != existing.profile {
@@ -529,6 +558,7 @@ func (m *Manager) removeSubscriptionLocked(subj *subject, sid SessionID) {
 	}
 	m.mu.Lock()
 	delete(sub.lifetime.subjects, subj.id)
+	delete(sub.lifetime.overLimit, subj.id)
 	delete(subj.subscribers, sid)
 	m.changeSubscriptionKindLocked(subj, sid, sub, kindLeaving)
 	m.subscriptionCount.Add(-1)
@@ -541,6 +571,18 @@ func (m *Manager) removeSubscriptionLocked(subj *subject, sid SessionID) {
 	if owes {
 		m.markReset(sid)
 		m.WakeSync()
+	}
+}
+
+// setPinned 记下（pinned）或取消 source 对订阅的钉住；调用方持有 subject.mu。
+func setPinned(sub *subscription, source *SubscriptionSource, pinned bool) {
+	if pinned {
+		if sub.pinnedBy == nil {
+			sub.pinnedBy = make(map[*SubscriptionSource]struct{}, 1)
+		}
+		sub.pinnedBy[source] = struct{}{}
+	} else {
+		delete(sub.pinnedBy, source)
 	}
 }
 

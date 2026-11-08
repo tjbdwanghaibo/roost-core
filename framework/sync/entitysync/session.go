@@ -49,6 +49,25 @@ type wireConfig struct {
 	classNames  []string
 }
 
+// classLimit 是一类对象在一个会话里的持有上限；没有配置 Namespaces 时只有类别 0，上限是 Limits.MaxObjects。
+func (cfg wireConfig) classLimit(class uint8) int {
+	if cfg.classLimits == nil {
+		return cfg.limits.MaxObjects
+	}
+	return cfg.classLimits[class]
+}
+
+// heldIn 是会话此刻持有的这一类对象数（与 classLimit 同一口径）。
+func (s *session) heldIn(class uint8, cfg wireConfig) int {
+	if cfg.classLimits == nil {
+		return len(s.objects)
+	}
+	if s.classHeld == nil {
+		return 0
+	}
+	return (*s.classHeld)[class]
+}
+
 // heldLimit 是会话引用表上限；没有设 maxHeld 时就是 limits.MaxObjects。
 func (cfg wireConfig) heldLimit() int {
 	if cfg.maxHeld > 0 {
@@ -67,6 +86,10 @@ type sessionLifetime struct {
 	// subjects 是订阅意图的反向索引，包含待快照与待删除项。
 	// 仅 Manager.mu 保护；编码副本共享生命周期，但不能读写此表。
 	subjects map[int64]*subject
+	// overLimit 是这一次打开里处于超额暂缓的订阅（subscription.overLimit）所属的 subject，等会话有空位时由
+	// releaseOverLimit 按优先级放回 pending。Manager.mu 保护；可能含已失效的项（订阅已离开 kindSnapshot），
+	// 使用时在 subject.mu 下复核。没有超额时为 nil。
+	overLimit map[int64]*subject
 }
 
 // session is everything the manager knows about one receiver: its wire clock
@@ -177,7 +200,8 @@ func (s *session) release(subjectID int64) {
 // work 是 Flush 串行借用的临时切片，返回的帧字节与逐帧会话状态不引用它。
 //
 // 编码失败可能是引用表不一致或单实体包超硬上限；关闭受影响会话，
-// 由业务修正配置/数据并重新订阅，不能截断内容继续发送。
+// 由业务修正配置/数据并重新订阅，不能截断内容继续发送。持有上限在编码之前已由 admitWithinLimits
+// 处理（超额的新对象不进 entries），这里的上限检查只是内部一致性兜底。
 func (s *session) encode(entries []frameEntry, cfg wireConfig, work *encodeWorkspace) ([]encodedFrame, error) {
 	// 先释放退出视野的对象，再为新对象分配引用。MaxObjects（及按命名空间的上限）限制持有量，
 	// 不能让同一 tick 的合法替换因为新对象 ID 更小而暂时超额。

@@ -73,9 +73,10 @@ func (m *Manager) scheduleSends(work map[SessionID]*flushSession, now time.Time)
 			}
 			items = append(items, candidate{entry, settle, since, priority})
 		}
+		// 让位的 remove（settle.evict，over_limit.go）与普通 remove 一样先排、不限：它腾出的位置本批已经算给钉住的对象。
 		slices.SortStableFunc(items, func(a, b candidate) int {
-			if a.settle.remove != b.settle.remove {
-				if a.settle.remove {
+			if removeA, removeB := a.settle.remove || a.settle.evict, b.settle.remove || b.settle.evict; removeA != removeB {
+				if removeA {
 					return -1
 				}
 				return 1
@@ -100,7 +101,7 @@ func (m *Manager) scheduleSends(work map[SessionID]*flushSession, now time.Time)
 			if item.entry.update != nil {
 				bytes = snapshotObjectOverhead + subjectUpdateBytes(item.entry.update.update)
 			}
-			if !item.settle.remove && (blocked || (used > 0 && bytes > limit.MaxBytes-used)) {
+			if !item.settle.remove && !item.settle.evict && (blocked || (used > 0 && bytes > limit.MaxBytes-used)) {
 				blocked = true // 不让后面小包反复越过首个被挡对象。
 				settle := item.settle
 				settle.subj.mu.Lock()

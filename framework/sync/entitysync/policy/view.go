@@ -808,6 +808,7 @@ func (in *Interest) removeSpatialLocked(handle int64) {
 	}
 	// 撤出后的离开事件找不到挂接玩家，drainAOILocked 会跳过它们；内部编号不复用。
 	_ = in.aoi.RemoveObserver(handle)
+	in.forgetLimitLocked(handle)
 }
 
 // drainAOILocked 把 AOI 积攒的可见性变化按空间视野扇出给已生效的挂接玩家。

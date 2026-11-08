@@ -29,6 +29,9 @@ type Direct struct {
 	// forgotten 非 nil 时，released 删掉的每条绑定在放开 mu 之后逐条告诉它（同包的 SelfView 用它得知
 	// “框架丢掉了绑定、需要重新 Bind”）。在政策阶段（Flush 的 deliverReleases）调用，不得阻塞、不得调用 Flush。
 	forgotten func(session entitysync.SessionID, subject int64)
+	// pinned：本来源的绑定都钉住（SubscriptionSource.SubscribePinned）——会话里同类对象已满时永不暂缓（超额降级）。
+	// 只有同包的 SelfView（玩家看自己）这样用；NewDirect 不钉住。
+	pinned bool
 }
 
 type directBinding struct {
@@ -41,19 +44,21 @@ type directBound struct {
 	stamp   entitysync.SubscriptionStamp // 本来源最近一次成功订阅这对 pair 的戳（Bind 或 resubmit）
 }
 
+// 会话里同类对象已满时 Direct 的绑定与其他未钉住的订阅一样被 Manager 暂缓（超额降级）：Direct 没有距离概念，不收紧、
+// 不登记 Deferred 回调，绑定保持，会话有空位时按 Profile 优先级、实体 ID 恢复；暂缓计数与告警在 Manager。
 func NewDirect(manager *entitysync.Manager, session func(observer int64) entitysync.SessionID) (*Direct, error) {
-	return newDirect(manager, session, nil)
+	return newDirect(manager, session, nil, false)
 }
 
-// newDirect 是 NewDirect 加上 forgotten 观察者（见 Direct.forgotten）。
-func newDirect(manager *entitysync.Manager, session func(observer int64) entitysync.SessionID, forgotten func(entitysync.SessionID, int64)) (*Direct, error) {
+// newDirect 是 NewDirect 加上 forgotten 观察者（见 Direct.forgotten）与钉住（见 Direct.pinned）。
+func newDirect(manager *entitysync.Manager, session func(observer int64) entitysync.SessionID, forgotten func(entitysync.SessionID, int64), pinned bool) (*Direct, error) {
 	if manager == nil {
 		return nil, entitysync.ErrManagerClosed
 	}
 	if session == nil {
 		session = func(observer int64) entitysync.SessionID { return entitysync.SessionID(observer) }
 	}
-	d := &Direct{session: session, bound: make(map[directBinding]directBound), forgotten: forgotten}
+	d := &Direct{session: session, bound: make(map[directBinding]directBound), forgotten: forgotten, pinned: pinned}
 	d.subscriptions = manager.NewSubscriptionSourceWithHooks(entitysync.SubscriptionSourceHooks{Resubmit: d.resubmit, Released: d.released})
 	return d, nil
 }
@@ -64,12 +69,20 @@ func (d *Direct) Bind(observer, subject int64, profile entity.SyncProfile) error
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	session := d.session(observer)
-	stamp, err := d.subscriptions.SubscribeStamped(session, subject, profile)
+	stamp, err := d.subscribe(session, subject, profile)
 	if err != nil {
 		return err
 	}
 	d.bound[directBinding{session: session, subject: subject}] = directBound{profile: profile, stamp: stamp}
 	return nil
+}
+
+// subscribe 以本来源订阅一对 pair，钉住的 Direct 用 SubscribePinned。调用方持有 d.mu。
+func (d *Direct) subscribe(session entitysync.SessionID, subject int64, profile entity.SyncProfile) (entitysync.SubscriptionStamp, error) {
+	if d.pinned {
+		return d.subscriptions.SubscribePinned(session, subject, profile)
+	}
+	return d.subscriptions.SubscribeStamped(session, subject, profile)
 }
 
 // Unbind ends it.
@@ -92,7 +105,7 @@ func (d *Direct) resubmit(retracted []entitysync.RetractedSubscription) {
 		if !bound {
 			continue
 		}
-		stamp, err := d.subscriptions.SubscribeStamped(subscription.Session, subscription.Subject, binding.profile)
+		stamp, err := d.subscribe(subscription.Session, subscription.Subject, binding.profile)
 		if err != nil {
 			flog.Warn("policy: direct binding could not be resubmitted after the framework retracted it", "session", subscription.Session, "subject", subscription.Subject, "err", err)
 			continue
