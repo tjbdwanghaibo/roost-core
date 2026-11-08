@@ -10,6 +10,7 @@ import (
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/skills"
+	"{{MODULE}}/game/terrainmap"
 	accessplayer "{{MODULE}}/internal/access/player"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -37,6 +38,8 @@ type Service struct {
 	stopSpawner    func()
 	spawner        *spawner
 	partition      *partitionRuntime
+	// terrain 是可编辑地形（terrain.go）；没配 scene.terrain.pack 时为 nil。
+	terrain        *terrainmap.Map
 	// cellHandlers 是分区场景 cellworld.Node 的 handler 名单：引擎启动前由 InstallNestHandlers 注册（partition.go），
 	// Init 里建 Node 时接上。不分区的进程也注册，只是永远不会被投递。
 	cellHandlers   *cellworld.Handlers
@@ -109,6 +112,15 @@ func (s *Service) Init(registry *app.Registry) error {
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
+	// The editable terrain (terrain.go), before anything that could stand on
+	// it: the chunks of this process's cell are loaded — edited ones from
+	// their records, the rest from the base pack — and published. Without
+	// scene.terrain.pack there is none and nothing else changes.
+	terrainMap, err := startTerrain(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.terrain = terrainMap
 	subscription, err := startLevelUpMailer(context.Background(), registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
@@ -401,6 +413,15 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			slog.Warn("scene did not close cleanly", "err", err)
 		}
 		s.scene = nil
+	}
+	// The terrain last: it is unpublished (an edit transaction still in
+	// Nest answers ErrDisabled) and its base pack closed. Nothing of it needs
+	// draining: an edit is durable when its transaction commits.
+	if s.terrain != nil {
+		if err := s.terrain.Close(); err != nil {
+			slog.Warn("terrain base pack did not close cleanly", "err", err)
+		}
+		s.terrain = nil
 	}
 	return nil
 }

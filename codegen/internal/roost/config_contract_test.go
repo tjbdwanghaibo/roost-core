@@ -358,9 +358,10 @@ func TestDoctorReadsBusinessDeclarationsFromTheProcess(t *testing.T) {
 		}
 		// 7 个工程自己的键：game/settings 的 activity.key_prefix、activity.groups_file、platform.key_prefix、
 		// platform.payment_secret、guild.found_cost 与联盟 RPC 客户端的 alliance.service_type、alliance.call_timeout；
-		// 加分区场景原型 scene.partition.* 的 32 个（game/settings/partition.go；其中 team.* 4 个是组队与队伍面板）。
-		if item.Name == "config-schema:game" && !strings.Contains(item.Detail, "(39 business key(s))") {
-			t.Errorf("config-schema:game = %q; want the 39 keys the project's own code declares beyond the framework's: game/settings (activity.*, platform.*, guild.found_cost, scene.partition.*) and the alliance RPC client (alliance.service_type, alliance.call_timeout)", item.Detail)
+		// 加分区场景原型 scene.partition.* 的 32 个（game/settings/partition.go；其中 team.* 4 个是组队与队伍面板）；
+		// 加可编辑地形的 scene.terrain.pack 1 个（game/settings/terrain.go）。
+		if item.Name == "config-schema:game" && !strings.Contains(item.Detail, "(40 business key(s))") {
+			t.Errorf("config-schema:game = %q; want the 40 keys the project's own code declares beyond the framework's: game/settings (activity.*, platform.*, guild.found_cost, scene.partition.*, scene.terrain.pack) and the alliance RPC client (alliance.service_type, alliance.call_timeout)", item.Detail)
 		}
 	}
 

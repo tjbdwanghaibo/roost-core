@@ -1,0 +1,20 @@
+package handler
+
+import (
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	"{{MODULE}}/game/terrainmap"
+)
+
+// handlerTerrainEdit 在一块地形上应用一组采样点改动（可编辑地形 P1 的最小内部写入口，地形服务的 Map.Edit 发起）。
+// 第一次改的块由调用方先经 lifecycle 的 GetOrCreate 建出空实体（handler 只能锁已存在的实体）；这里在块的锁与事务里
+// 用原始块填满它、写入改动、Version + 1，返回新 Version。新数据在提交被接受后才进地形视图（terrainmap.ApplyEdit 的
+// nest.AfterCommit），事务回滚时视图不变。strict：回复与视图更新都在 WAL 持久之后。
+//
+//roost:nest rollback=undo durability=strict
+func handlerTerrainEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chunk.PointEdit) (int64, error) {
+	m := terrainmap.Active()
+	if m == nil {
+		return 0, terrainmap.ErrDisabled
+	}
+	return m.ApplyEdit(target, edits)
+}

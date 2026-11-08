@@ -1,0 +1,63 @@
+package terrain_chunk
+
+import (
+	"fmt"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+// EntityKindTerrainChunk 不复用已删实体的号（5 是旧 Guild、8 是旧 AllianceShard）。
+const EntityKindTerrainChunk entity.EntityKind = 11
+
+// ITerrainChunkEntity is the lock-safe business view used by Nest handlers.
+type ITerrainChunkEntity interface{ entity.IThreadSafeEntity }
+
+// TerrainChunk 是一块被玩家改过的地形（可编辑地形方案 §3）：数据在 TerrainChunkDao，覆盖原始地形包里的同一块。
+// 从没改过的块没有实体；第一次改一块时由地形服务（game/terrainmap）经 lifecycle 的 GetOrCreate 建出（数据为空、
+// Version 0），随后的改块事务用原始块数据填满它（SurfaceComponent.Apply）。
+//
+// 一块只归包含它的格的进程写（格到进程静态映射、块不跨格，方案 §4）；邻格 Ghost 带里的块在本进程只读，不建、不装
+// 实体，只把持久记录装进地形视图。
+//
+// 实体 ID：UniqueID(key) = key.ID() + 1（unique 0 是无效 ID，块 (0,0) 的 key.ID() 正是 0）。地图每边至多 1024 块，
+// key.ID() < 2^42，远小于 52 位的 unique 范围。ID 是确定性的、可能已有持久记录，所以只能经 GetOrCreate 建，不能直接
+// Create（见 docs/framework/guide/03-dataengine.md 的“删档后该 ID 不可再用”）。
+//
+// Category：rank 2（World，与 Scene 同档）：块是被许多玩家争用的世界对象；P2 的一次编辑锁住至多 4 块，同档内按 ID
+// 排序取锁。
+//
+//roost:entity id=11 entityKind=EntityKindTerrainChunk category=entity.EntityCategoryWorld
+type TerrainChunk struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	surface *SurfaceComponent   `comp:"CompTypeSurface"`
+	dao     *db.TerrainChunkDao `dao:"terrain_chunk"`
+}
+
+// UniqueID 返回块的实体唯一号（BuildEntityID 的第一个参数）。块必须在地图内（坐标非负）。
+func UniqueID(key terrain.ChunkKey) (int64, error) {
+	if key.X < 0 || key.Y < 0 || key.X >= terrain.MaxChunksPerSide || key.Y >= terrain.MaxChunksPerSide {
+		return 0, fmt.Errorf("terrain chunk: %v is outside any map", key)
+	}
+	return int64(key.ID()) + 1, nil
+}
+
+// EntityID 返回块的完整实体 ID。
+func EntityID(key terrain.ChunkKey) (int64, error) {
+	unique, err := UniqueID(key)
+	if err != nil {
+		return 0, err
+	}
+	return entity.BuildEntityID(unique, EntityKindTerrainChunk)
+}
+
+// KeyOf 从完整实体 ID 还原块坐标（UniqueID 的逆）。
+func KeyOf(entityID int64) terrain.ChunkKey {
+	return terrain.KeyFromID(uint64(entity.GetUniqueIDFromEntityID(entityID) - 1))
+}
+
+// Key 是这个实体代表的块。
+func (c *TerrainChunk) Key() terrain.ChunkKey { return KeyOf(c.ID()) }

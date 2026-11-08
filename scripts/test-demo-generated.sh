@@ -6,6 +6,9 @@
 #   - internal/service/alliance 的 TestStopFoundingSendsNewAlliancesToTheOtherInstances（ROOST_DATAENGINE_IT_NATS_URL：
 #     两个真实 Bus 上的 alliance 实例，运维命令 alliance.stop_founding 让一个退出 Found 队列组后，新建联盟全部落到另一个，
 #     路由到它的已有联盟照常服务）；
+#   - internal/service/game 的 TestTerrainRestartRealMongo（ROOST_TERRAIN_IT_MONGO_URI：可编辑地形改块重启后一致——真实
+#     DataEngine（文件 WAL、投影、冷加载、新建准入门）上改块、正常停机、同一 WAL 目录重启后按 _id 读回覆盖块，整张图逐点
+#     与重启前一致；唯一库名、结束删库）；
 #   - db/migrations 的 TestPlayerMigrationRealMongo（ROOST_MIGRATION_IT_MONGO_URI：Player schema 离线迁移的
 #     plan / apply / verify / rollback 在真实副本集上跑一遍，唯一库名、结束删库）；
 #   - internal/service/platform 的 TestPurchaseDeliveryDurableWinner（ROOST_REVIEW_REDIS；ROOST_REVIEW_CLUSTER
@@ -40,6 +43,7 @@ printf '\nreplace github.com/tjbdwanghaibo/roost-core => %s\n' "$repo_dir" >> "$
 	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestActivityBoardKeepsTheLatestCumulativeScore$' ./internal/service/game
 	ROOST_REVIEW_REDIS="$ROOST_DATAENGINE_IT_REDIS_ADDR" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestDungeonClearsBoardCountsEachRunOnceRealRedis$' ./game/controllers/player
 	ROOST_MIGRATION_IT_MONGO_URI="$ROOST_DATAENGINE_IT_MONGO_URI" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestPlayerMigrationRealMongo$' ./db/migrations
+	ROOST_TERRAIN_IT_MONGO_URI="$ROOST_DATAENGINE_IT_MONGO_URI" go test -mod=mod -race -count=1 -timeout 5m -v -run '^TestTerrainRestartRealMongo$' ./internal/service/game
 )
 ROOST_GATE_REAL=1 go test -count=1 -timeout 10m -v -run '^TestGateGeneratedBusinessConsumer$' ./codegen/internal/roost
 go test -count=1 -timeout 20m -v -run '^TestGeneratedSagaNativeStepsAndEffectConsumer$' ./codegen/internal/roost

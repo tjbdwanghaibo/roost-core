@@ -1,0 +1,30 @@
+package dbdef
+
+// TerrainChunkDao 是一块被玩家改过的地形（64m × 64m，4096 个采样点；可编辑地形方案 §3）。从没改过的块不建实体、
+// 不读数据库，数据只在原始地形包里（gameplay/terrain 的 Pack）；改过的块以本 DAO 覆盖原始块（terrain.Overlay）。
+//
+// 字段形状与 gameplay/terrain 的 Chunk / Overlay 相同：Heights、Materials 各 4096 个，行优先（下标 = j·64 + i）。
+// 实体 ID 由块坐标得出（game/entities/terrain_chunk 的 UniqueID），一块一个实体、只归包含它的格的进程写。
+//
+// 同步视图（P2 用 entitysync 下发时）的字段资格在这里一次定下：Heights / Materials / BaseRevision / Version 可同步
+// （客户端按 BaseRevision 核对本地原始资源、按 Version 重建 mesh）；Applied 只持久、不进任何同步视图（方案 §3：
+// 编辑去重是服务端的事，不下发客户端）。本轮实体还没有 sync=true，P2 接 entitysync 时不必再改字段标记。
+//
+// store 键按仓库规则写数字短键，改动须按 codegen/docs/TAGS.zh-CN.md 处理。
+//
+//roost:dao coll=terrain_chunks db=main
+type TerrainChunkDao struct {
+	// BaseRevision 是这块基于的原始地形版本（包头的 BaseRevision）。与当前包不同的记录不装入（ErrBaseRevision）。
+	BaseRevision int64 `dao:"persist,sync" store:"1"`
+	// Version 是块的提交版本：0 表示实体已建、还没提交过改动（数据为空，按原始块看待）；每次改块的提交加一。
+	Version int64 `dao:"persist,sync" store:"2"`
+	// Heights 是 4096 个高度原始值（1 = 10cm，世界高度 = 包头 HeightBase + 原始值 × 10）。小改动按下标写，同步与持久化
+	// 都按下标增量；P2 的整字段守卫在单块改动超过 1000 点时用 SetHeightsAll。
+	Heights []uint16 `dao:"persist,sync" store:"3"`
+	// Materials 是 4096 个材质编号，整字段替换（D11）。
+	Materials []byte `dao:"persist,sync" store:"4"`
+	// Applied 是最近应用过的编辑 ID，有界（最多 terrain_chunk.AppliedRing 个，旧在前、新在后，满了丢最旧的），每次
+	// 记录整字段替换（方案 §3，约 256 字节）；见 terrain_chunk 的 RecordApplied / WasApplied，P2 用它给玩家请求去重。
+	// 只持久，不同步。
+	Applied []uint64 `dao:"persist" store:"5"`
+}

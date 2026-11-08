@@ -1,0 +1,498 @@
+// Package terrainmap 是格进程内的可编辑地形（可编辑地形方案 P1 的实体接入）：原始地形包（gameplay/terrain 的 Pack）、
+// 本进程装入的块（terrain.View）与被改过的块的持久记录（TerrainChunk 实体，game/entities/terrain_chunk）之间的接线。
+//
+// 一个进程一张 Map，由 game 服务在 Init 里按 scene.terrain 打开、装入、发布（internal/service/<game>/terrain.go）；
+// 不配 scene.terrain.pack 就没有 Map，其余功能不受影响。
+//
+// 装入（Load，启动阶段，做 I/O）：本进程负责的区域（Region.Load：分区场景里是本格外扩 Ghost 带，不分区是整张图）
+// 里的每一块，有持久记录（Version ≥ 1）的用记录 SetOverlay，其余从包里 LoadBase。哪些块有记录：用 DataEngine 的
+// Store 按 `_id ∈ 本区域候选块的实体 ID` 分批查（ID 由块坐标确定，候选集有界），不全表扫描。
+//
+// 改块（Edit，内部写入口，P1 最小版）：一块一笔 Nest 事务（handler TerrainEdit，rollback=undo durability=strict）：
+// 第一次改的块先经 lifecycle 的 GetOrCreate 建出空实体，事务里用视图里的原始块填满它再应用改动、Version + 1；
+// 提交被接受后（nest.AfterCommit）才把新数据 SetOverlay 给视图，回滚的事务不改变视图。笔刷、校验、幂等、多块事务、
+// 整字段守卫是 P2。
+//
+// 查询（Height / Material / IsWater / Probe）委托视图：不取锁、只读内存，任何 goroutine（含 Nest short 池）可调。
+package terrainmap
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
+	"slices"
+	"sync"
+	"sync/atomic"
+
+	db "{{MODULE}}/db"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+var (
+	// ErrDisabled：本进程没有地形（没配 scene.terrain.pack）。
+	ErrDisabled = errors.New("terrain: this process runs no terrain")
+	// ErrNotOwned：块不归本进程写（不在本格里：邻格 Ghost 带里的块在这里只读，地图外或别的格的块根本没装）。
+	ErrNotOwned = errors.New("terrain: chunk is not written by this process")
+	// ErrUnloadable：块的持久记录装不进视图（基于另一版原始地形，或记录损坏），这一块不可查也不可改，等运维处理。
+	// 同时满足 errors.Is(err, terrain.ErrNotLoaded)。
+	ErrUnloadable = fmt.Errorf("terrain: chunk record could not be loaded: %w", terrain.ErrNotLoaded)
+)
+
+// loadWorkers 是启动时并行 LoadBase 的 goroutine 数。实测 1w 地图装满一个格（2304 块）单线程约 120ms、8 路约 29ms
+// （gameplay/terrain 证据目录）；不做成配置。
+const loadWorkers = 8
+
+// recordBatch 是一次 Store 查询带的候选实体 ID 个数（`_id $in` 的数组长度）。
+const recordBatch = 256
+
+// Region 是本进程在地图上的范围（世界坐标，半开矩形）。Own 是本进程写的块所在的区域（分区场景里是本格），
+// 必须对齐块边界（原点与边长都是 terrain.ChunkSize 的整数倍：块不跨格）；Load 是要装入视图的区域（Own 外扩
+// Ghost 带），不必对齐，与它相交的块都装。两者都会被裁到地图范围内。
+type Region struct {
+	Own  spatial.Rect
+	Load spatial.Rect
+}
+
+// Chunks 是 TerrainChunk 的 lifecycle（生成的 *lifecycle.TerrainChunkLifecycle）。
+type Chunks interface {
+	GetOrCreate(ctx context.Context, uniqueID int64) (*terrain_chunk.TerrainChunk, bool, error)
+}
+
+// Editor 是改块事务的 Sender（生成的 syncsender.TerrainEditSender）。
+type Editor interface {
+	Sync_TerrainEdit(ctx context.Context, id int64, edits []terrain_chunk.PointEdit) (int64, error)
+}
+
+// SampleEdit 是对一个世界采样点的改动：(GX, GY) 是 1m 采样网格上的坐标（世界坐标 = G × terrain.SampleSpacing），
+// Height 是高度原始值（1 = 10cm），Material 是材质编号。
+type SampleEdit struct {
+	GX, GY   int64
+	Height   uint16
+	Material byte
+}
+
+// LoadStats 是一次 Load 的结果。
+type LoadStats struct {
+	// Chunks 是 Region.Load 里的块数（地图内）。
+	Chunks int
+	// Overlays 是用持久记录装入的块，Base 是从包装入的块。
+	Overlays, Base int
+	// StaleBase 是持久记录基于另一版原始地形、没有装入的块（ErrBaseRevision）。
+	StaleBase int
+	// Corrupt 是记录或原始块损坏、没有装入的块。
+	Corrupt int
+}
+
+// Map 是本进程的地形。
+//
+// 锁与所有权：pack、view、meta、region、chunks、editor 在 Open 之后不变；view 自己保证并发（查询无锁）。unloadable
+// 只在 Load 里写（启动阶段，发布之前），之后只读，仍由 mu 保护。Map 拥有 pack：Close 关闭它。
+type Map struct {
+	pack   *terrain.Pack
+	view   *terrain.View
+	meta   terrain.Meta
+	region Region
+	chunks Chunks
+	editor Editor
+
+	mu sync.Mutex
+	// unloadable 是装不进视图的块及原因（基于旧原始地形的记录、损坏的记录或原始块）。不自动丢弃或改写数据库里的
+	// 记录：这些块查询返回 ErrNotLoaded、改块返回 ErrUnloadable，换版后的旧编辑怎么处理由维护者 / 产品决定。
+	unloadable map[terrain.ChunkKey]error
+	// commitFailures 是提交后装入视图失败的次数（正常不会发生：Apply 已校验形状与版本；发生即视图落后于数据库，
+	// 直到重启重新装入）。
+	commitFailures atomic.Int64
+}
+
+// Open 打开原始地形包、建空视图。region 由 regionOf 按包的地图参数算出（调用方据此把分区格裁到地图里）。
+func Open(path string, regionOf func(terrain.Meta) (Region, error), chunks Chunks, editor Editor) (*Map, error) {
+	if regionOf == nil || chunks == nil || editor == nil {
+		return nil, errors.New("terrain: region, chunk lifecycle and edit sender are required")
+	}
+	pack, err := terrain.OpenPack(path)
+	if err != nil {
+		return nil, err
+	}
+	meta := pack.Meta()
+	region, err := regionOf(meta)
+	if err == nil {
+		region, err = clipRegion(region, meta)
+	}
+	if err != nil {
+		_ = pack.Close()
+		return nil, err
+	}
+	return &Map{
+		pack: pack, view: terrain.NewView(pack), meta: meta, region: region,
+		chunks: chunks, editor: editor, unloadable: map[terrain.ChunkKey]error{},
+	}, nil
+}
+
+// clipRegion 把区域裁到地图里，并检查 Own 对齐块边界。
+func clipRegion(r Region, meta terrain.Meta) (Region, error) {
+	own := spatial.NormalizeRect(r.Own)
+	if !own.Empty() && (own.Min.X%terrain.ChunkSize != 0 || own.Min.Y%terrain.ChunkSize != 0 || own.Max.X%terrain.ChunkSize != 0 || own.Max.Y%terrain.ChunkSize != 0) {
+		return Region{}, fmt.Errorf("terrain: the area this process writes %v is not aligned to chunks of %d: a chunk would straddle two cells", own, terrain.ChunkSize)
+	}
+	bounds := meta.Bounds()
+	return Region{Own: intersect(own, bounds), Load: intersect(spatial.NormalizeRect(r.Load), bounds)}, nil
+}
+
+func intersect(a, b spatial.Rect) spatial.Rect {
+	r := spatial.Rect{
+		Min: spatial.Point{X: max(a.Min.X, b.Min.X), Y: max(a.Min.Y, b.Min.Y)},
+		Max: spatial.Point{X: min(a.Max.X, b.Max.X), Y: min(a.Max.Y, b.Max.Y)},
+	}
+	if r.Empty() {
+		return spatial.Rect{}
+	}
+	return r
+}
+
+// Meta 是地图参数（包头）。
+func (m *Map) Meta() terrain.Meta { return m.meta }
+
+// Region 是本进程写与装入的范围（已裁到地图里）。
+func (m *Map) Region() Region { return m.region }
+
+// View 是本进程的地形视图（只读用途：查询、取块数据）。写入只经 Load 与改块事务。
+func (m *Map) View() *terrain.View { return m.view }
+
+// Owns 报告块是否归本进程写（整块在 Region.Own 里）。
+func (m *Map) Owns(key terrain.ChunkKey) bool {
+	if !m.meta.Contains(key) {
+		return false
+	}
+	b, own := key.Bounds(), m.region.Own
+	return b.Min.X >= own.Min.X && b.Min.Y >= own.Min.Y && b.Max.X <= own.Max.X && b.Max.Y <= own.Max.Y
+}
+
+// Keys 是 Region.Load 里地图内的块（行优先）。
+func (m *Map) Keys() []terrain.ChunkKey {
+	var keys []terrain.ChunkKey
+	for key := range terrain.ChunksIn(m.region.Load) {
+		if m.meta.Contains(key) {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// Unloadable 返回装不进视图的块及原因（副本）。
+func (m *Map) Unloadable() map[terrain.ChunkKey]error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.unloadable)
+}
+
+func (m *Map) unloadableErr(key terrain.ChunkKey) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.unloadable[key]
+}
+
+func (m *Map) markUnloadable(key terrain.ChunkKey, cause error) {
+	m.mu.Lock()
+	m.unloadable[key] = cause
+	m.mu.Unlock()
+}
+
+// CommitFailures 是提交后装入视图失败的次数（见 Map.commitFailures）。
+func (m *Map) CommitFailures() int64 { return m.commitFailures.Load() }
+
+// Load 装入 Region.Load 里的全部块：有持久记录（Version ≥ 1）的用记录 SetOverlay，其余（没有记录、或记录是还没
+// 提交过改动的空实体）从包里 LoadBase。只在启动阶段、发布之前调用一次：做 Mongo 读与文件 I/O，不能在 Nest 业务
+// worker 上调用。
+//
+// 失败语义：记录基于另一版原始地形（BaseRevision 与包不同）的块不装入、记 Error 日志、计入 StaleBase，数据库里
+// 的记录不动；记录或原始块损坏的块不装入、计入 Corrupt；这些块之后查询返回 ErrNotLoaded。其余错误（读库失败、
+// 读包 I/O 失败）返回错误，调用方不应发布这张 Map。
+func (m *Map) Load(ctx context.Context, store coredata.Store) (LoadStats, error) {
+	keys := m.Keys()
+	stats := LoadStats{Chunks: len(keys)}
+	records, err := ReadRecords(ctx, store, keys)
+	if err != nil {
+		return stats, err
+	}
+	var base []terrain.ChunkKey
+	for _, key := range keys {
+		record, ok := records[key]
+		switch {
+		case !ok:
+			base = append(base, key)
+		case record.err != nil:
+			m.markUnloadable(key, record.err)
+			stats.Corrupt++
+			slog.Error("terrain: chunk record is corrupt; the chunk is not loaded", "chunk", key.String(), "err", record.err)
+		case !record.edited:
+			base = append(base, key) // 空实体：建了、还没提交过改动
+		default:
+			if err := m.view.SetOverlay(key, record.overlay); err != nil {
+				m.markUnloadable(key, err)
+				if errors.Is(err, terrain.ErrBaseRevision) {
+					stats.StaleBase++
+					slog.Error("terrain: chunk record is based on another base revision; the chunk is not loaded and its record is left as it is",
+						"chunk", key.String(), "record_base_revision", record.overlay.BaseRevision, "pack_base_revision", m.meta.BaseRevision, "version", record.overlay.Version)
+				} else {
+					stats.Corrupt++
+					slog.Error("terrain: chunk record does not fit the view; the chunk is not loaded", "chunk", key.String(), "err", err)
+				}
+				continue
+			}
+			stats.Overlays++
+		}
+	}
+	loaded, corrupt, err := m.loadBase(ctx, base)
+	stats.Base, stats.Corrupt = loaded, stats.Corrupt+corrupt
+	return stats, err
+}
+
+// loadBase 用 loadWorkers 个 goroutine 从包里装入 keys。坏块（ErrCorruptChunk）记入 unloadable 并跳过，别的错误
+// 停止派发、等已开始的读完后返回第一个错误。
+func (m *Map) loadBase(ctx context.Context, keys []terrain.ChunkKey) (loaded, corrupt int, err error) {
+	var (
+		next     atomic.Int64
+		nLoaded  atomic.Int64
+		nCorrupt atomic.Int64
+		firstErr error
+		errOnce  sync.Once
+		failed   atomic.Bool
+		workers  sync.WaitGroup
+	)
+	for range min(loadWorkers, len(keys)) {
+		workers.Go(func() {
+			for !failed.Load() {
+				i := int(next.Add(1) - 1)
+				if i >= len(keys) {
+					return
+				}
+				if err := ctx.Err(); err != nil {
+					errOnce.Do(func() { firstErr = err })
+					failed.Store(true)
+					return
+				}
+				key := keys[i]
+				switch err := m.view.LoadBase(key); {
+				case err == nil:
+					nLoaded.Add(1)
+				case errors.Is(err, terrain.ErrCorruptChunk):
+					m.markUnloadable(key, err)
+					nCorrupt.Add(1)
+					slog.Error("terrain: base chunk is corrupt; the chunk is not loaded", "chunk", key.String(), "err", err)
+				default:
+					errOnce.Do(func() { firstErr = fmt.Errorf("terrain: load base chunk %v: %w", key, err) })
+					failed.Store(true)
+					return
+				}
+			}
+		})
+	}
+	workers.Wait()
+	return int(nLoaded.Load()), int(nCorrupt.Load()), firstErr
+}
+
+// Record 是一块的持久记录读出来的结果（ReadRecords）。
+type Record struct {
+	overlay terrain.Overlay
+	edited  bool  // Version ≥ 1
+	err     error // 记录解不开（schema 不符、损坏）
+}
+
+// Overlay 是记录的数据；Edited 为 false（Version 0 的空实体）时为零值。
+func (r Record) Overlay() (terrain.Overlay, bool) { return r.overlay, r.edited }
+
+// Err 是这条记录解不开的原因；nil 表示可用。
+func (r Record) Err() error { return r.err }
+
+// ReadRecords 读 keys 里有持久记录的块：经 DataEngine 的 Store（与实体冷加载同一个读入口：逻辑库到物理库的映射、
+// 墓碑过滤都在那里），每批 recordBatch 个候选实体 ID 一次 `_id $in` 查询，只返回存在的记录；没有记录的块不在结果里。
+// 每条记录按生成 DAO 的 RestorePersisted 解码（只接受当前 schema）。单条记录解不开不影响别的记录，放进 Record.err；
+// 读库本身失败返回错误。
+//
+// 调用时机：启动阶段 DataEngine 已排空历史 WAL（Runtime.Start 的恢复屏障），且一个 sid 只有一个进程、块只归本格
+// 的进程写，所以库里就是这些块的最新已提交状态；邻格 Ghost 带的块读到的是读那一刻的快照（之后的变化由 P3 推送）。
+func ReadRecords(ctx context.Context, store coredata.Store, keys []terrain.ChunkKey) (map[terrain.ChunkKey]Record, error) {
+	if store == nil {
+		return nil, coredata.ErrStoreRequired
+	}
+	proto := db.NewTerrainChunkDao()
+	ids := make([]int64, 0, recordBatch)
+	byID := make(map[int64]terrain.ChunkKey, len(keys))
+	out := map[terrain.ChunkKey]Record{}
+	flush := func() error {
+		if len(ids) == 0 {
+			return nil
+		}
+		docs, err := store.Load(ctx, coredata.LoadSpec{
+			Database: proto.DbName(), Scope: coredata.ResolveDatabaseScope(proto), Resource: proto.CollName(),
+			Filter: map[string]any{"_id": map[string]any{"$in": ids}}, BatchSize: 64,
+		})
+		if err != nil {
+			return fmt.Errorf("terrain: read chunk records: %w", err)
+		}
+		for _, doc := range docs {
+			key, ok := byID[doc.Key.ID]
+			if !ok {
+				return fmt.Errorf("terrain: store answered entity %d, which was not asked for", doc.Key.ID)
+			}
+			out[key] = decodeRecord(doc)
+		}
+		ids = ids[:0]
+		return nil
+	}
+	for _, key := range keys {
+		id, err := terrain_chunk.EntityID(key)
+		if err != nil {
+			return nil, err
+		}
+		byID[id] = key
+		ids = append(ids, id)
+		if len(ids) == recordBatch {
+			if err := flush(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func decodeRecord(doc coredata.RawDocument) Record {
+	if doc.Enveloped {
+		return Record{err: fmt.Errorf("terrain: entity %d record is a Remote envelope; TerrainChunk is not remote", doc.Key.ID)}
+	}
+	dao := db.NewTerrainChunkDao()
+	dao.SetId(doc.Key.ID)
+	if err := dao.RestorePersisted(doc.Data, doc.Schema, doc.Version); err != nil {
+		return Record{err: fmt.Errorf("terrain: entity %d record: %w", doc.Key.ID, err)}
+	}
+	overlay, edited := terrain_chunk.OverlayOf(dao)
+	return Record{overlay: overlay, edited: edited}
+}
+
+// Edit 是 P1 的内部写入口：把 edits 按块分组，每块一笔改块事务（块坐标升序），返回每块提交后的 Version。
+//
+// 每一块：检查归本进程写、记录可用 → lifecycle 的 GetOrCreate（第一次改这块时建出空实体：DataEngine 补一笔 strict
+// 事务落库）→ 改块事务（handler TerrainEdit）。块之间不是原子的：中途失败时前面的块已经提交，返回已提交的部分与
+// 错误（P2 做多块事务）。会等数据库与 WAL：只能在 Nest 业务 worker 之外调用（启动、运维命令、测试、I/O 池）。
+func (m *Map) Edit(ctx context.Context, edits []SampleEdit) (map[terrain.ChunkKey]int64, error) {
+	if m == nil {
+		return nil, ErrDisabled
+	}
+	byChunk := map[terrain.ChunkKey][]terrain_chunk.PointEdit{}
+	for _, edit := range edits {
+		key, index := terrain.PointIndex(edit.GX*terrain.SampleSpacing, edit.GY*terrain.SampleSpacing)
+		if !m.meta.Contains(key) {
+			return nil, fmt.Errorf("%w: sample (%d, %d)", terrain.ErrOutOfMap, edit.GX, edit.GY)
+		}
+		if !m.Owns(key) {
+			return nil, fmt.Errorf("%w: chunk %v (sample (%d, %d))", ErrNotOwned, key, edit.GX, edit.GY)
+		}
+		if cause := m.unloadableErr(key); cause != nil {
+			return nil, fmt.Errorf("%w: chunk %v: %v", ErrUnloadable, key, cause)
+		}
+		byChunk[key] = append(byChunk[key], terrain_chunk.PointEdit{Index: int32(index), Height: edit.Height, Material: edit.Material})
+	}
+	keys := slices.SortedFunc(maps.Keys(byChunk), func(a, b terrain.ChunkKey) int {
+		return cmp.Or(cmp.Compare(a.Y, b.Y), cmp.Compare(a.X, b.X))
+	})
+	versions := make(map[terrain.ChunkKey]int64, len(keys))
+	for _, key := range keys {
+		unique, err := terrain_chunk.UniqueID(key)
+		if err != nil {
+			return versions, err
+		}
+		chunk, _, err := m.chunks.GetOrCreate(ctx, unique)
+		if err != nil {
+			return versions, fmt.Errorf("terrain: chunk %v: %w", key, err)
+		}
+		version, err := m.editor.Sync_TerrainEdit(ctx, chunk.ID(), byChunk[key])
+		if err != nil {
+			return versions, fmt.Errorf("terrain: edit chunk %v: %w", key, err)
+		}
+		versions[key] = version
+	}
+	return versions, nil
+}
+
+// ApplyEdit 是改块 handler 的业务：在本块的 Nest 锁与 rollback=undo 事务内运行（handler TerrainEdit），只读内存，
+// 可以在 short 池里执行。
+//
+// Version 0（第一次改这块）时从视图取原始块（必须装着、且是原始块）作初值。改动写进 DAO 后，把新数据的副本登记为
+// 提交后回调：提交被接受才 SetOverlay 给视图；事务回滚（handler 之后的步骤失败、提交被拒）时回调不执行，视图不变。
+func (m *Map) ApplyEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chunk.PointEdit) (int64, error) {
+	surface := target.SurfaceComp()
+	key := surface.Owner().Key()
+	if !m.Owns(key) {
+		return 0, fmt.Errorf("%w: chunk %v", ErrNotOwned, key)
+	}
+	if cause := m.unloadableErr(key); cause != nil {
+		return 0, fmt.Errorf("%w: chunk %v: %v", ErrUnloadable, key, cause)
+	}
+	var base terrain.Chunk
+	if surface.Version() == 0 {
+		chunk, version, loaded := m.view.Chunk(key)
+		if !loaded {
+			return 0, fmt.Errorf("%w: chunk %v", terrain.ErrNotLoaded, key)
+		}
+		if version != 0 {
+			// 视图里有覆盖块、实体却没有提交过改动：两边不一致，不能拿覆盖块当原始数据，也不能用原始数据覆盖它。
+			return 0, fmt.Errorf("terrain: chunk %v: view holds overlay version %d but the entity has none", key, version)
+		}
+		base = chunk
+	}
+	version, err := surface.Apply(m.meta.BaseRevision, base, edits)
+	if err != nil {
+		return 0, err
+	}
+	overlay, _ := surface.Overlay()
+	commit := func() { m.commit(key, overlay) }
+	if !nest.AfterCommit(commit) {
+		commit()
+	}
+	return version, nil
+}
+
+// commit 把提交后的块装进视图。两笔改同一块的事务的提交后回调可能乱序到达：旧版本被视图拒绝（ErrStaleOverlay），
+// 视图里已是更新的那份，忽略即可；别的错误说明视图与数据库不一致，记 Error 并计数（重启后按数据库重新装入）。
+func (m *Map) commit(key terrain.ChunkKey, overlay terrain.Overlay) {
+	err := m.view.SetOverlay(key, overlay)
+	if err == nil || errors.Is(err, terrain.ErrStaleOverlay) {
+		return
+	}
+	m.commitFailures.Add(1)
+	slog.Error("terrain: a committed chunk could not be put into the view; queries see the previous data until a restart", "chunk", key.String(), "version", overlay.Version, "err", err)
+}
+
+// Height / Material / IsWater / Probe 委托视图（算法与错误见 gameplay/terrain 的 View）。
+func (m *Map) Height(x, y int64) (int32, error)         { return m.view.Height(x, y) }
+func (m *Map) Material(x, y int64) (byte, error)        { return m.view.Material(x, y) }
+func (m *Map) IsWater(x, y int64) (bool, error)         { return m.view.IsWater(x, y) }
+func (m *Map) Probe(x, y int64) (terrain.Ground, error) { return m.view.Probe(x, y) }
+
+// Close 撤下发布（若本 Map 是当前的）并关闭原始地形包。之后不能再装块；已装入的块仍可查询。
+func (m *Map) Close() error {
+	if m == nil {
+		return nil
+	}
+	active.CompareAndSwap(m, nil)
+	return m.pack.Close()
+}
+
+// active 是本进程当前的 Map，给改块 handler 用（handler 是包级函数，拿不到服务对象；与 game/partition 的 Node 同一做法）。
+var active atomic.Pointer[Map]
+
+// Install 发布本进程的 Map；Load 完成之后、服务开始接请求之前调用。
+func Install(m *Map) { active.Store(m) }
+
+// Active 返回本进程当前的 Map；没有地形时为 nil。
+func Active() *Map { return active.Load() }

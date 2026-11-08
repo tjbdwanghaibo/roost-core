@@ -1,0 +1,65 @@
+// Command terrainpack writes the demo's terrain base pack (gameplay/terrain
+// format): a small deterministic procedural map, the same bytes on every
+// machine for the same flags, so the game service and a client can load one
+// pack and agree on every height.
+//
+//	go run ./cmd/terrainpack -out configs/terrain/demo.pack
+//	go run ./cmd/terrainpack -out configs/terrain/demo.pack -chunks-x 2 -chunks-y 1 -seed 1 -base-revision 1
+//
+// Then point the game at it (configs/service/config.<game>.yaml):
+//
+//	scene:
+//	  terrain:
+//	    pack: configs/terrain/demo.pack
+//
+// One chunk is 64m × 64m (6400 world units, centimetres); the map starts at
+// the world origin. The defaults (2 × 1 chunks, 128m × 64m) cover the
+// ordinary scene (1000 × 1000) and a partitioned scene of two 6400 cells
+// (cell_size: 6400, cols: 2, rows: 1). A real game's pack comes from its
+// artists' height and material maps (terrain.RAWImport), not from here.
+//
+// Bump -base-revision whenever the base terrain changes: an edited chunk
+// whose record is based on another revision is not loaded (the game logs it
+// and leaves the record alone; what happens to old edits is a product
+// decision, see the editable terrain plan).
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+func main() {
+	out := flag.String("out", "configs/terrain/demo.pack", "where to write the pack (written to a temporary file, synced, then renamed)")
+	chunksX := flag.Int("chunks-x", 2, "chunks along X (64m each)")
+	chunksY := flag.Int("chunks-y", 1, "chunks along Y (64m each)")
+	seed := flag.Uint64("seed", 1, "seed of the procedural terrain")
+	revision := flag.Int64("base-revision", 1, "the base terrain's revision, recorded in the pack header and in every edited chunk")
+	heightBase := flag.Int("height-base", 0, "world height of raw height 0, in centimetres")
+	waterLevel := flag.Int("water-level", 40000, "global water level, in centimetres (the procedural terrain is about 200m to 1100m high)")
+	flag.Parse()
+
+	meta := terrain.Meta{
+		BaseRevision: *revision, ChunksX: int32(*chunksX), ChunksY: int32(*chunksY),
+		HeightBase: int32(*heightBase), WaterLevel: int32(*waterLevel),
+	}
+	if err := meta.Validate(); err != nil {
+		fail(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
+		fail(err)
+	}
+	if err := terrain.WritePackFile(*out, meta, terrain.Generated(meta, *seed)); err != nil {
+		fail(err)
+	}
+	fmt.Printf("terrainpack: wrote %s: %d x %d chunks, base revision %d, water level %d\n", *out, meta.ChunksX, meta.ChunksY, meta.BaseRevision, meta.WaterLevel)
+}
+
+func fail(err error) {
+	fmt.Fprintln(os.Stderr, "terrainpack:", err)
+	os.Exit(1)
+}

@@ -1,0 +1,46 @@
+package settings
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+// SceneTerrain 声明可编辑地形（可编辑地形方案 P1；gameplay/terrain + game/terrainmap）。pack 为空（缺省）时本进程
+// 没有地形，其余功能不受影响。
+//
+// 本进程装入与写哪些块由分区场景决定（Scene.ValidateConfig 检查二者的对齐）：
+//   - 不分区：整张地形图都归本进程，全部装入。
+//   - 分区且本 sid 托管一个格：写本格里的块，装入本格外扩 ghost_band 范围内的块（邻格的块只读）。
+//   - 分区但本 sid 不托管格（只做 Base）：不装块。
+type SceneTerrain struct {
+	// Pack 是原始地形包（gameplay/terrain 格式，例如 cmd/terrainpack 写出的）的路径，相对进程工作目录。服务端与客户端
+	// 用同一份包；包头的 BaseRevision 与被改过的块的记录不同时，那一块不装入（见 game/terrainmap）。
+	Pack string `config:"pack" help:"path of the terrain base pack (gameplay/terrain format, e.g. written by cmd/terrainpack), relative to the working directory; empty turns editable terrain off"`
+}
+
+// Enabled 报告本进程有没有地形。
+func (t SceneTerrain) Enabled() bool { return t.Pack != "" }
+
+// ValidateConfig 检查 tag 管不到的规则。
+func (t SceneTerrain) ValidateConfig(bool) error {
+	if t.Pack != "" && strings.TrimSpace(t.Pack) != t.Pack {
+		return fmt.Errorf("scene.terrain.pack %q: leading or trailing whitespace", t.Pack)
+	}
+	return nil
+}
+
+// ValidateConfig 检查分区场景与地形之间的规则：开了地形的分区场景里，一块地形必须整块落在一个格里（块只归包含它的
+// 格的进程写，方案 §4），即 cell_size 是地形块边长（terrain.ChunkSize = 6400，64m）的整数倍（网格原点是 (0, 0)，
+// 也是块的边界）。demo 缺省的 cell_size 3000 不满足：开地形时要把格改成 6400 的倍数（README 有示例）；不开地形的
+// 分区场景不受影响。
+func (s Scene) ValidateConfig(bool) error {
+	if !s.Terrain.Enabled() || !s.Partition.Enabled {
+		return nil
+	}
+	if s.Partition.CellSize%terrain.ChunkSize != 0 {
+		return fmt.Errorf("scene.terrain: scene.partition.cell_size %d must be a multiple of the terrain chunk side %d, so that no chunk straddles two cells", s.Partition.CellSize, terrain.ChunkSize)
+	}
+	return nil
+}

@@ -34,10 +34,12 @@ type Config struct {
 	Scene    Scene    `config:"scene"`
 }
 
-// Scene is the game's map settings. Only the partitioned mode has keys of its
-// own today; without them every process runs the ordinary scene.
+// Scene is the game's map settings: the partitioned mode and the editable
+// terrain. Without their keys every process runs the ordinary scene and has no
+// terrain.
 type Scene struct {
 	Partition ScenePartition `config:"partition"`
+	Terrain   SceneTerrain   `config:"terrain"`
 }
 
 // Activity is where the activity coordinator keeps its keys and which group
@@ -115,6 +117,18 @@ func LoadPartition(registry *app.Registry) (ScenePartition, error) {
 		return ScenePartition{}, err
 	}
 	return config.Scene.Partition, nil
+}
+
+// LoadTerrain reads the editable-terrain keys together with the partition
+// keys: which chunks this process loads and writes follows from its cell.
+func LoadTerrain(registry *app.Registry) (SceneTerrain, ScenePartition, error) {
+	var config struct {
+		Scene Scene `config:"scene"`
+	}
+	if err := load(registry, &config); err != nil {
+		return SceneTerrain{}, ScenePartition{}, err
+	}
+	return config.Scene.Terrain, config.Scene.Partition, nil
 }
 
 // LoadPlatform reads only the platform keys.

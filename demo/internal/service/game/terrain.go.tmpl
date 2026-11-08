@@ -1,0 +1,118 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"time"
+
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/settings"
+	"{{MODULE}}/game/terrainmap"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// TerrainCapability 发布本进程的地形（*terrainmap.Map）：查询 Height / Material / IsWater，内部写入口 Edit。
+// 没配 scene.terrain.pack 时不发布，查不到就是本进程没有地形。
+const TerrainCapability app.ModName = "{{GAME_SERVICE}}.terrain"
+
+// terrainLoadTimeout 是启动时装入地形（读改过的块的记录 + 读包）的上限。
+const terrainLoadTimeout = 2 * time.Minute
+
+// startTerrain 打开 scene.terrain.pack、按本进程的格装入块、发布 Map（可编辑地形 P1 的实体接入）。没配 pack 时
+// 返回 nil、什么都不做。
+//
+// 在 Init 里、DataEngine 启动之后运行（Mod 都已 Start：历史 WAL 已投影进库，库里就是最新已提交状态），是启动阶段
+// 的 I/O（读 Mongo、读包文件），不在 Nest 的业务 worker 上。装入失败（打不开包、读库失败）让进程启动失败；单块的
+// 记录基于另一版原始地形或损坏时只是那一块不装入（见 terrainmap.Map.Load）。
+func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
+	config, partition, err := settings.LoadTerrain(registry)
+	if err != nil {
+		return nil, err
+	}
+	if !config.Enabled() {
+		return nil, nil
+	}
+	identity, err := settings.Identity(registry)
+	if err != nil {
+		return nil, err
+	}
+	chunks, err := lifecycle.TerrainChunkFromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("terrain: %w", err)
+	}
+	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || nestClient == nil {
+		return nil, fmt.Errorf("terrain: nest client is unavailable")
+	}
+	dataEngine, ok := app.Lookup[*kitdataengine.Mod](registry, mods.ModDataEngine)
+	if !ok || dataEngine == nil || dataEngine.Runtime() == nil {
+		return nil, fmt.Errorf("terrain: the %q Mod is not running; the chunk records cannot be read", mods.ModDataEngine)
+	}
+	m, err := terrainmap.Open(config.Pack, func(meta terrain.Meta) (terrainmap.Region, error) {
+		return terrainRegion(meta, partition, identity.Sid)
+	}, chunks, syncsender.NewTerrainEditSender(nestClient))
+	if err != nil {
+		return nil, fmt.Errorf("terrain: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), terrainLoadTimeout)
+	defer cancel()
+	started := time.Now()
+	stats, err := m.Load(ctx, dataEngine.Runtime().Store)
+	if err != nil {
+		_ = m.Close()
+		return nil, fmt.Errorf("terrain: %w", err)
+	}
+	meta := m.Meta()
+	slog.Info("terrain loaded", "pack", config.Pack, "base_revision", meta.BaseRevision,
+		"map_chunks", fmt.Sprintf("%dx%d", meta.ChunksX, meta.ChunksY), "own", m.Region().Own, "load", m.Region().Load,
+		"chunks", stats.Chunks, "overlays", stats.Overlays, "base", stats.Base, "stale_base", stats.StaleBase, "corrupt", stats.Corrupt,
+		"took", time.Since(started))
+	if stats.StaleBase > 0 || stats.Corrupt > 0 {
+		slog.Error("terrain: some chunks were not loaded (records on another base revision, or corrupt); their queries answer not loaded and their records are kept as they are",
+			"stale_base", stats.StaleBase, "corrupt", stats.Corrupt)
+	}
+	terrainmap.Install(m)
+	if err := registry.Register(TerrainCapability, m); err != nil {
+		_ = m.Close()
+		return nil, fmt.Errorf("terrain: publish: %w", err)
+	}
+	return m, nil
+}
+
+// terrainRegion 是本进程写与装入的地形范围：
+//   - 不分区：整张地形图；
+//   - 分区且本 sid 托管一个格：写本格（cell_size 是块边长的整数倍，Scene.ValidateConfig 已查），装入本格外扩
+//     ghost_band（邻格 Ghost 带里的块只读）；
+//   - 分区但本 sid 不托管格：空（只做 Base 的进程不装块）。
+//
+// 网格大于地形图时，图外的部分没有块（Open 把范围裁到图里）；本格整个在图外时记 Warn。
+func terrainRegion(meta terrain.Meta, partition settings.ScenePartition, sid int32) (terrainmap.Region, error) {
+	if !partition.Enabled {
+		return terrainmap.Region{Own: meta.Bounds(), Load: meta.Bounds()}, nil
+	}
+	grid, err := partition.Grid()
+	if err != nil {
+		return terrainmap.Region{}, err
+	}
+	cell, ok := grid.CellOf(sid)
+	if !ok {
+		return terrainmap.Region{}, nil
+	}
+	own := grid.Rect(cell)
+	band := grid.GhostBand()
+	load := spatial.Rect{
+		Min: spatial.Point{X: spatial.SaturatingSub(own.Min.X, band), Y: spatial.SaturatingSub(own.Min.Y, band)},
+		Max: spatial.Point{X: spatial.SaturatingAdd(own.Max.X, band), Y: spatial.SaturatingAdd(own.Max.Y, band)},
+	}
+	if b := meta.Bounds(); own.Min.X >= b.Max.X || own.Min.Y >= b.Max.Y {
+		slog.Warn("terrain: this process's cell is outside the terrain map; it writes no chunk", "cell", cell.String(), "cell_rect", own, "map", b)
+	}
+	return terrainmap.Region{Own: own, Load: load}, nil
+}

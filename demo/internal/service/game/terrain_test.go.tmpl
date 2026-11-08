@@ -1,0 +1,655 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	db "{{MODULE}}/db"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/settings"
+	"{{MODULE}}/game/terrainmap"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+)
+
+// 可编辑地形 P1 的实体接入（terrain.go、game/terrainmap、handler TerrainEdit）端到端：真实 Nest 引擎与生成的 handler /
+// Sender / lifecycle、真实地形包与视图。
+//
+// 离线用例的持久层是替身：提交器只收下记录（可注入一次拒绝），“库”是重启时从上一进程每个 TerrainChunk 实体的 DAO
+// 编出来的文档（与 world 的 timer 测试 restartWorld 同一做法：内存里的 DAO 就是已提交的状态，回滚由生成 setter 的
+// 逆操作还原）。真实 Mongo 上的同一条重启流程（DataEngine 的 WAL → 投影 → 冷加载 / 新建准入门 → 重启后按 _id 读
+// 记录）见 TestTerrainRestartRealMongo，门变量 ROOST_TERRAIN_IT_MONGO_URI（scripts/test-demo-generated.sh 设置）。
+
+// terrainSeed 与 terrainMeta 是测试地图：3 × 2 块（192m × 128m），程序化地形，水位线 400m。
+const terrainSeed = 20261108
+
+func terrainMeta(revision int64) terrain.Meta {
+	return terrain.Meta{BaseRevision: revision, ChunksX: 3, ChunksY: 2, WaterLevel: 40000}
+}
+
+func writeTerrainPack(t *testing.T, dir string, revision int64) string {
+	t.Helper()
+	path := filepath.Join(dir, fmt.Sprintf("terrain-r%d.pack", revision))
+	meta := terrainMeta(revision)
+	if err := terrain.WritePackFile(path, meta, terrain.Generated(meta, terrainSeed)); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func wholeMap(meta terrain.Meta) (terrainmap.Region, error) {
+	return terrainmap.Region{Own: meta.Bounds(), Load: meta.Bounds()}, nil
+}
+
+// errInjectedRejection 是提交器注入的一次明确拒绝（不是结果未知：引擎不 fence，事务整条回滚）。
+var errInjectedRejection = errors.New("injected commit rejection")
+
+type terrainCommitter struct {
+	reject  atomic.Bool
+	commits atomic.Int64
+}
+
+func (c *terrainCommitter) Commit(context.Context, nest.CommitRecord) error {
+	if c.reject.CompareAndSwap(true, false) {
+		return errInjectedRejection
+	}
+	c.commits.Add(1)
+	return nil
+}
+
+// memoryChunkStore 是 coredata.Store 的替身：只答 terrainmap.ReadRecords 发的 `_id $in` 查询。
+type memoryChunkStore struct {
+	mu   sync.Mutex
+	docs map[int64]coredata.RawDocument
+}
+
+func (s *memoryChunkStore) ReadConsistent(ctx context.Context, read func(context.Context) error) error {
+	return read(ctx)
+}
+
+func (s *memoryChunkStore) Load(ctx context.Context, spec coredata.LoadSpec) ([]coredata.RawDocument, error) {
+	var out []coredata.RawDocument
+	err := s.StreamLoad(ctx, spec, func(doc coredata.RawDocument) error { out = append(out, doc); return nil })
+	return out, err
+}
+
+func (s *memoryChunkStore) StreamLoad(_ context.Context, spec coredata.LoadSpec, consume func(coredata.RawDocument) error) error {
+	if spec.Resource != db.TerrainChunkDaoCollection {
+		return fmt.Errorf("unexpected resource %q", spec.Resource)
+	}
+	in, ok := spec.Filter["_id"].(map[string]any)["$in"].([]int64)
+	if !ok {
+		return fmt.Errorf("unexpected filter %v", spec.Filter)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, id := range in {
+		if doc, ok := s.docs[id]; ok {
+			if err := consume(doc); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// terrainProcess 是一个 game 进程里与地形有关的部分：实体管理器、Nest 引擎、TerrainChunk 的 lifecycle 与 Map。
+type terrainProcess struct {
+	t         *testing.T
+	ctx       context.Context
+	entities  *entity.EntityManager
+	engine    *nest.NestMgr
+	committer *terrainCommitter
+	m         *terrainmap.Map
+	stats     terrainmap.LoadStats
+}
+
+// startTerrainProcess 照 startTerrain 的顺序：打开包、按 store 里的记录装入、发布。
+func startTerrainProcess(t *testing.T, pack string, region func(terrain.Meta) (terrainmap.Region, error), store coredata.Store) *terrainProcess {
+	t.Helper()
+	handler.RegisterTerrainEditNestHandlers()
+	terrain_chunk.RegisterEntity()
+	p := &terrainProcess{t: t, ctx: context.Background(), entities: entity.NewEntityManager(), committer: &terrainCommitter{}}
+	if memory, ok := store.(*memoryChunkStore); ok {
+		p.restoreEntities(memory)
+	}
+	access := entity.NewManagerAccess(p.entities)
+	p.engine = nest.NewEngine(
+		nest.NestOptionWithGetter(access),
+		nest.NestOptionWithTransactionCommitter(p.committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 256}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 64}, nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}),
+	)
+	if err := p.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	chunks, err := lifecycle.NewTerrainChunkLifecycle(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.m, err = terrainmap.Open(pack, region, chunks, syncsender.NewTerrainEditSender(p.engine))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.stats, err = p.m.Load(p.ctx, store); err != nil {
+		t.Fatal(err)
+	}
+	terrainmap.Install(p.m)
+	t.Cleanup(p.stop)
+	return p
+}
+
+// restoreEntities 替身 DataEngine 的冷加载：离线进程没有加载器，GetOrCreate 找不到实体就会新建一个空的；真实进程
+// 里它从库里冷加载已有记录（TestTerrainRestartRealMongo 走的就是那条路）。这里在启动时把“库”里的每条记录建成实体
+// 放进管理器，效果与改块前冷加载相同。
+func (p *terrainProcess) restoreEntities(store *memoryChunkStore) {
+	p.t.Helper()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for id, doc := range store.docs {
+		dao := db.NewTerrainChunkDao()
+		dao.SetId(id)
+		if err := dao.RestorePersisted(doc.Data, doc.Schema, doc.Version); err != nil {
+			p.t.Fatalf("restore chunk entity %d: %v", id, err)
+		}
+		built, err := entity.BuildEntity(&entity.EntityCreateParam{
+			Kind: terrain_chunk.EntityKindTerrainChunk, Id: id,
+			Dao: map[string]entity.DaoInterface{db.TerrainChunkDaoCollection: dao},
+		})
+		if err != nil {
+			p.t.Fatalf("rebuild chunk entity %d: %v", id, err)
+		}
+		p.entities.Add(built)
+	}
+}
+
+// stop 是进程停下：Nest 先停（不再有改块事务），再撤下 Map。可重复调用。
+func (p *terrainProcess) stop() {
+	if p.engine != nil {
+		_ = p.engine.Shutdown(context.Background())
+		p.engine = nil
+	}
+	if p.m != nil {
+		_ = p.m.Close()
+		terrainmap.Install(nil)
+	}
+}
+
+// persist 把本进程每个 TerrainChunk 实体的 DAO 编成“库里的文档”（进程停下之后调用：没有并发访问）。
+func (p *terrainProcess) persist(store *memoryChunkStore) {
+	p.t.Helper()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.docs == nil {
+		store.docs = map[int64]coredata.RawDocument{}
+	}
+	for _, key := range p.m.Keys() {
+		id, err := terrain_chunk.EntityID(key)
+		if err != nil {
+			p.t.Fatal(err)
+		}
+		value, ok := p.entities.Get(id).(*terrain_chunk.TerrainChunk)
+		if !ok || value == nil {
+			continue
+		}
+		store.docs[id] = coredata.RawDocument{
+			Key:  coredata.DocumentKey{Database: db.TerrainChunkDaoDBName, Resource: db.TerrainChunkDaoCollection, ID: id},
+			Data: value.Dao().Marshal(), Schema: db.TerrainChunkDaoSchemaVersion, Version: 1,
+		}
+	}
+}
+
+// cornerEdits 是跨四块交点的一组改动：采样点 (60..67, 60..67) 落在块 (0,0)、(1,0)、(0,1)、(1,1) 里。
+func cornerEdits() []terrainmap.SampleEdit {
+	var edits []terrainmap.SampleEdit
+	for gy := int64(60); gy < 68; gy++ {
+		for gx := int64(60); gx < 68; gx++ {
+			edits = append(edits, terrainmap.SampleEdit{GX: gx, GY: gy, Height: uint16(100 + gx + gy), Material: 7})
+		}
+	}
+	return edits
+}
+
+// terrainSnapshot 是整张图上每隔 37 单位一个点的查询结果（含块边界与采样点之间的插值位置），以及每块的版本。
+type terrainSnapshot struct {
+	ground   []terrain.Ground
+	errs     []string
+	versions map[terrain.ChunkKey]int64
+}
+
+func snapshotTerrain(m *terrainmap.Map) terrainSnapshot {
+	s := terrainSnapshot{versions: map[terrain.ChunkKey]int64{}}
+	b := m.Meta().Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y += 37 {
+		for x := b.Min.X; x < b.Max.X; x += 37 {
+			g, err := m.Probe(x, y)
+			s.ground = append(s.ground, g)
+			if err != nil {
+				s.errs = append(s.errs, err.Error())
+			} else {
+				s.errs = append(s.errs, "")
+			}
+		}
+	}
+	for _, key := range m.Keys() {
+		if v, ok := m.View().Version(key); ok {
+			s.versions[key] = v
+		} else {
+			s.versions[key] = -1
+		}
+	}
+	return s
+}
+
+func sampleHeight(t *testing.T, m *terrainmap.Map, gx, gy int64) int32 {
+	t.Helper()
+	h, err := m.Height(gx*terrain.SampleSpacing, gy*terrain.SampleSpacing)
+	if err != nil {
+		t.Fatalf("height at sample (%d, %d): %v", gx, gy, err)
+	}
+	return h
+}
+
+// 改块 → 提交 → 查询返回新值；被拒绝（回滚）的事务不改变视图与实体；停下、重新启动（新的实体管理器、新视图、从
+// “库”装覆盖块）后整张图逐点与重启前一致、每块 Version 一致。
+func TestTerrainEditsSurviveARestart(t *testing.T) {
+	dir := t.TempDir()
+	pack := writeTerrainPack(t, dir, 1)
+	store := &memoryChunkStore{}
+	first := startTerrainProcess(t, pack, wholeMap, store)
+	if first.stats.Chunks != 6 || first.stats.Base != 6 || first.stats.Overlays != 0 {
+		t.Fatalf("first start: %+v, want 6 chunks all from the pack", first.stats)
+	}
+	m := first.m
+	baseHeight := sampleHeight(t, m, 61, 61)
+
+	versions, err := m.Edit(first.ctx, cornerEdits())
+	if err != nil {
+		t.Fatalf("corner edit: %v", err)
+	}
+	want := map[terrain.ChunkKey]int64{{X: 0, Y: 0}: 1, {X: 1, Y: 0}: 1, {X: 0, Y: 1}: 1, {X: 1, Y: 1}: 1}
+	if len(versions) != len(want) {
+		t.Fatalf("corner edit committed %v, want %v", versions, want)
+	}
+	for key, v := range want {
+		if versions[key] != v {
+			t.Fatalf("corner edit committed %v, want %v", versions, want)
+		}
+	}
+	// 提交之后（回复在 AfterCommit 之后）查询就是新值：四块交点两侧的采样点都改了。
+	for _, p := range [][2]int64{{60, 60}, {63, 63}, {64, 64}, {67, 67}, {63, 64}, {64, 63}} {
+		if got, want := sampleHeight(t, m, p[0], p[1]), m.Meta().WorldHeight(uint16(100+p[0]+p[1])); got != want {
+			t.Fatalf("sample %v after the edit: height %d, want %d", p, got, want)
+		}
+	}
+	if got := sampleHeight(t, m, 61, 61); got == baseHeight {
+		t.Fatalf("sample (61, 61) still has its base height %d", got)
+	}
+	if mat, err := m.Material(65*terrain.SampleSpacing+50, 65*terrain.SampleSpacing+50); err != nil || mat != 7 {
+		t.Fatalf("material inside the edit: %d, %v", mat, err)
+	}
+	if _, err := m.Edit(first.ctx, []terrainmap.SampleEdit{{GX: 10, GY: 10, Height: 5000, Material: 2}, {GX: 11, GY: 10, Height: 5001, Material: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := m.View().Version(terrain.ChunkKey{X: 0, Y: 0}); v != 2 {
+		t.Fatalf("chunk (0,0) is at version %d after its second edit, want 2", v)
+	}
+
+	// 回滚：已改过的块 (1,0) 上一笔被提交器拒绝的改动，视图与实体都不变。
+	before10, beforeVersion, _ := m.View().Chunk(terrain.ChunkKey{X: 1, Y: 0})
+	first.committer.reject.Store(true)
+	if _, err := m.Edit(first.ctx, []terrainmap.SampleEdit{{GX: 70, GY: 5, Height: 1, Material: 1}}); !errors.Is(err, nest.ErrCommitRejected) || !errors.Is(err, errInjectedRejection) {
+		t.Fatalf("rejected edit: %v, want ErrCommitRejected", err)
+	}
+	after10, afterVersion, _ := m.View().Chunk(terrain.ChunkKey{X: 1, Y: 0})
+	if afterVersion != beforeVersion || !slices.Equal(after10.Heights, before10.Heights) || !slices.Equal(after10.Materials, before10.Materials) {
+		t.Fatal("a rolled-back edit changed the view")
+	}
+	id10, _ := terrain_chunk.EntityID(terrain.ChunkKey{X: 1, Y: 0})
+	if v := first.entities.Get(id10).(*terrain_chunk.TerrainChunk).Dao().GetVersion(); v != 1 {
+		t.Fatalf("a rolled-back edit left chunk (1,0) at version %d, want 1", v)
+	}
+	// 没改过的块 (2,1) 的第一笔改动被拒绝：GetOrCreate 已建出空实体（Version 0），视图里仍是原始块。重启后这条空记录
+	// 按原始块装入。
+	base21, _, _ := m.View().Chunk(terrain.ChunkKey{X: 2, Y: 1})
+	first.committer.reject.Store(true)
+	if _, err := m.Edit(first.ctx, []terrainmap.SampleEdit{{GX: 150, GY: 70, Height: 1, Material: 1}}); !errors.Is(err, nest.ErrCommitRejected) {
+		t.Fatalf("rejected first edit: %v, want ErrCommitRejected", err)
+	}
+	if got, v, _ := m.View().Chunk(terrain.ChunkKey{X: 2, Y: 1}); v != 0 || !slices.Equal(got.Heights, base21.Heights) {
+		t.Fatalf("a rolled-back first edit changed the view (version %d)", v)
+	}
+	if m.CommitFailures() != 0 {
+		t.Fatalf("%d committed chunks did not reach the view", m.CommitFailures())
+	}
+
+	before := snapshotTerrain(m)
+	first.stop()
+	first.persist(store)
+	if n := len(store.docs); n != 5 {
+		t.Fatalf("%d chunk records stored, want 5 (four edited chunks and one empty entity)", n)
+	}
+
+	second := startTerrainProcess(t, pack, wholeMap, store)
+	if second.stats.Overlays != 4 || second.stats.Base != 2 || second.stats.StaleBase != 0 || second.stats.Corrupt != 0 {
+		t.Fatalf("restart: %+v, want 4 overlays (the edited chunks) and 2 from the pack (one never touched, one empty entity)", second.stats)
+	}
+	after := snapshotTerrain(second.m)
+	if !maps.Equal(before.versions, after.versions) {
+		t.Fatalf("versions before the restart %v, after %v", before.versions, after.versions)
+	}
+	if len(before.ground) != len(after.ground) {
+		t.Fatalf("probed %d points before the restart and %d after", len(before.ground), len(after.ground))
+	}
+	for i := range before.ground {
+		if before.ground[i] != after.ground[i] || before.errs[i] != after.errs[i] {
+			t.Fatalf("point %d: before the restart %+v (%q), after %+v (%q)", i, before.ground[i], before.errs[i], after.ground[i], after.errs[i])
+		}
+	}
+	t.Logf("restart: %d points and %d chunk versions identical; versions %v; load %+v", len(after.ground), len(after.versions), after.versions, second.stats)
+
+	// 重启之后接着改，版本从库里的值继续加。
+	if versions, err := second.m.Edit(second.ctx, []terrainmap.SampleEdit{{GX: 1, GY: 1, Height: 9, Material: 9}}); err != nil || versions[terrain.ChunkKey{X: 0, Y: 0}] != 3 {
+		t.Fatalf("edit after the restart: %v, %v (want version 3)", versions, err)
+	}
+}
+
+// 记录基于另一版原始地形（包换成 BaseRevision 2）的块不装入：计入 StaleBase、查询答 ErrNotLoaded、改块答
+// ErrUnloadable，库里的记录不动；别的块照常从包装入。
+func TestTerrainRecordOnAnotherBaseRevisionIsNotLoaded(t *testing.T) {
+	dir := t.TempDir()
+	store := &memoryChunkStore{}
+	first := startTerrainProcess(t, writeTerrainPack(t, dir, 1), wholeMap, store)
+	if _, err := first.m.Edit(first.ctx, []terrainmap.SampleEdit{{GX: 5, GY: 5, Height: 1234, Material: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	first.stop()
+	first.persist(store)
+	stored := slices.Clone(store.docs[mustChunkID(t, terrain.ChunkKey{})].Data)
+
+	second := startTerrainProcess(t, writeTerrainPack(t, dir, 2), wholeMap, store)
+	if second.stats.StaleBase != 1 || second.stats.Overlays != 0 || second.stats.Base != 5 {
+		t.Fatalf("load on revision 2: %+v, want 1 stale chunk and 5 from the pack", second.stats)
+	}
+	stale := terrain.ChunkKey{}
+	if cause, ok := second.m.Unloadable()[stale]; !ok || !errors.Is(cause, terrain.ErrBaseRevision) {
+		t.Fatalf("chunk (0,0) unloadable reason: %v", cause)
+	}
+	if _, err := second.m.Height(5*terrain.SampleSpacing, 5*terrain.SampleSpacing); !errors.Is(err, terrain.ErrNotLoaded) {
+		t.Fatalf("query in the stale chunk: %v, want ErrNotLoaded", err)
+	}
+	if _, err := second.m.Height(70*terrain.SampleSpacing+1, 5*terrain.SampleSpacing); err != nil {
+		t.Fatalf("query in a chunk from the pack: %v", err)
+	}
+	if _, err := second.m.Edit(second.ctx, []terrainmap.SampleEdit{{GX: 5, GY: 5, Height: 1, Material: 1}}); !errors.Is(err, terrainmap.ErrUnloadable) || !errors.Is(err, terrain.ErrNotLoaded) {
+		t.Fatalf("edit in the stale chunk: %v, want ErrUnloadable", err)
+	}
+	if second.committer.commits.Load() != 0 {
+		t.Fatal("something was committed on the stale chunk")
+	}
+	if !slices.Equal(store.docs[mustChunkID(t, stale)].Data, stored) {
+		t.Fatal("the stale record was rewritten")
+	}
+}
+
+// 分区场景里本 sid 托管格 (0,0)（cell_size 6400 = 一块）：写本格的块，装入本格外扩 ghost_band 的块；邻格的块只读。
+// 只做 Base 的 sid 不装块。
+func TestTerrainRegionFollowsThePartition(t *testing.T) {
+	partition := settings.ScenePartition{Enabled: true, CellSize: terrain.ChunkSize, Cols: 2, Rows: 2, Owners: []string{"1001", "1002", "1003", "1004"}, GhostBand: 500, Hysteresis: 50}
+	meta := terrainMeta(1)
+	region, err := terrainRegion(meta, partition, 1001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (spatial.Rect{Max: spatial.Point{X: terrain.ChunkSize, Y: terrain.ChunkSize}}); region.Own != want {
+		t.Fatalf("own %v, want %v", region.Own, want)
+	}
+	p := startTerrainProcess(t, writeTerrainPack(t, t.TempDir(), 1), func(meta terrain.Meta) (terrainmap.Region, error) {
+		return terrainRegion(meta, partition, 1001)
+	}, &memoryChunkStore{})
+	if p.stats.Chunks != 4 {
+		t.Fatalf("cell (0,0) with its ghost band loads %d chunks, want 4 (its own and three neighbours')", p.stats.Chunks)
+	}
+	if !p.m.Owns(terrain.ChunkKey{}) || p.m.Owns(terrain.ChunkKey{X: 1}) || p.m.Owns(terrain.ChunkKey{Y: 1}) {
+		t.Fatal("ownership does not follow the cell")
+	}
+	if _, err := p.m.Height(terrain.ChunkSize+10, 10); err != nil {
+		t.Fatalf("a ghost-band chunk is not readable: %v", err)
+	}
+	if _, err := p.m.Edit(p.ctx, []terrainmap.SampleEdit{{GX: 64, GY: 0, Height: 1}}); !errors.Is(err, terrainmap.ErrNotOwned) {
+		t.Fatalf("edit in the neighbour's chunk: %v, want ErrNotOwned", err)
+	}
+	if _, err := p.m.Edit(p.ctx, []terrainmap.SampleEdit{{GX: 63, GY: 63, Height: 1}}); err != nil {
+		t.Fatalf("edit in the own chunk: %v", err)
+	}
+	baseOnly, err := terrainRegion(meta, settings.ScenePartition{Enabled: true, CellSize: terrain.ChunkSize, Cols: 2, Rows: 2, Owners: []string{"1001", "1002", "1003", "1004"}, GhostBand: 500, Hysteresis: 50}, 2000)
+	if err != nil || !baseOnly.Own.Empty() || !baseOnly.Load.Empty() {
+		t.Fatalf("a Base-only sid: %+v, %v", baseOnly, err)
+	}
+	// 块跨格（格边长不是 6400 的倍数）在加载配置时拒绝；不开地形的分区场景不受影响。
+	scene := settings.Scene{Partition: partition, Terrain: settings.SceneTerrain{Pack: "terrain.pack"}}
+	scene.Partition.CellSize = 3000
+	if err := scene.ValidateConfig(false); err == nil {
+		t.Fatal("cell_size 3000 with terrain was accepted")
+	}
+	scene.Terrain.Pack = ""
+	if err := scene.ValidateConfig(false); err != nil {
+		t.Fatalf("cell_size 3000 without terrain: %v", err)
+	}
+}
+
+func mustChunkID(t *testing.T, key terrain.ChunkKey) int64 {
+	t.Helper()
+	id, err := terrain_chunk.EntityID(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// ---- 真实 Mongo ----
+
+type terrainNoEffects struct{}
+
+func (terrainNoEffects) Publish(context.Context, engine.OutboxItem) error {
+	return errors.New("terrain edits emit no effect")
+}
+
+// realTerrainProcess 是带真实 DataEngine 的进程：MongoStore、文件 WAL、Projector、Outbox、Runtime（恢复屏障、冷加载、
+// 新建准入门）与它的提交器上的 Nest。
+type realTerrainProcess struct {
+	runtime *engine.Runtime
+	engine  *nest.NestMgr
+	m       *terrainmap.Map
+	stats   terrainmap.LoadStats
+	fatal   chan error
+}
+
+func startRealTerrainProcess(t *testing.T, ctx context.Context, client fmongo.IMongo, databases *coredata.DatabaseMap, physical, walDir, pack string) *realTerrainProcess {
+	t.Helper()
+	handler.RegisterTerrainEditNestHandlers()
+	terrain_chunk.RegisterEntity()
+	p := &realTerrainProcess{fatal: make(chan error, 1)}
+	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: physical, Databases: databases})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureInfrastructure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	wal, err := nestwal.Open(nestwal.DefaultOptions(walDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	onFatal := func(err error) {
+		select {
+		case p.fatal <- err:
+		default:
+		}
+	}
+	projector, err := engine.NewProjector(wal, store, engine.ProjectorOptions{OnFatal: onFatal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outboxStore, err := engine.NewMongoOutboxStore(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := engine.NewOutboxWorker(outboxStore, terrainNoEffects{}, engine.OutboxWorkerOptions{Owner: "terrain-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	if p.runtime, err = engine.NewRuntime(store, wal, projector, outbox, access, nil, onFatal, engine.PipelinedRuntimeConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.runtime.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	p.engine = nest.NewEngine(append(p.runtime.NestOptions(), nest.NestOptionWithGetter(access),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 256}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 64}, nest.WorkerPoolConfig{Workers: 8, QueueCap: 64}))...)
+	if err := p.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	chunks, err := lifecycle.NewTerrainChunkLifecycle(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.m, err = terrainmap.Open(pack, wholeMap, chunks, syncsender.NewTerrainEditSender(p.engine)); err != nil {
+		t.Fatal(err)
+	}
+	if p.stats, err = p.m.Load(ctx, p.runtime.Store); err != nil {
+		t.Fatal(err)
+	}
+	terrainmap.Install(p.m)
+	t.Cleanup(func() { p.stop(t) })
+	return p
+}
+
+// stop 是正常停机的顺序：Nest 先停，DataEngine 排空投影、关 WAL，最后撤下 Map。可重复调用。
+func (p *realTerrainProcess) stop(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if p.engine != nil {
+		if err := p.engine.Shutdown(ctx); err != nil {
+			t.Errorf("nest shutdown: %v", err)
+		}
+		p.engine = nil
+	}
+	if p.runtime != nil {
+		if err := p.runtime.Shutdown(ctx); err != nil {
+			t.Errorf("dataengine shutdown: %v", err)
+		}
+		p.runtime = nil
+	}
+	if p.m != nil {
+		_ = p.m.Close()
+		p.m = nil
+		terrainmap.Install(nil)
+	}
+	select {
+	case err := <-p.fatal:
+		t.Errorf("dataengine fatal: %v", err)
+	default:
+	}
+}
+
+// 真实 Mongo 上改块重启一致：第一次改块经新建准入门落库空实体、改块事务 strict 提交进 WAL 并投影；正常停机后用同一个
+// WAL 目录重新启动，Map 按 _id 从库里读回覆盖块，整张图逐点与重启前一致、每块 Version 一致；重启后冷加载已有实体继续
+// 改。门变量 ROOST_TERRAIN_IT_MONGO_URI 指向副本集；用唯一库名，结束时删除。
+func TestTerrainRestartRealMongo(t *testing.T) {
+	uri := os.Getenv("ROOST_TERRAIN_IT_MONGO_URI")
+	if uri == "" {
+		t.Skip("ROOST_TERRAIN_IT_MONGO_URI not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 清理登记在进程之前：t.Cleanup 后进先出，库在两个进程都停下（投影排空）之后才删。
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
+	physical := fmt.Sprintf("terrain_it_%d", time.Now().UnixNano())
+	t.Cleanup(func() { _ = client.Database(physical).Drop(context.Background()) })
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
+		Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.TerrainChunkDaoDBName: physical},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	pack := writeTerrainPack(t, dir, 1)
+	walDir := filepath.Join(dir, "wal")
+
+	first := startRealTerrainProcess(t, ctx, client, databases, physical, walDir, pack)
+	if first.stats.Base != 6 || first.stats.Overlays != 0 {
+		t.Fatalf("first start on an empty database: %+v", first.stats)
+	}
+	if _, err := first.m.Edit(ctx, cornerEdits()); err != nil {
+		t.Fatalf("corner edit: %v", err)
+	}
+	if _, err := first.m.Edit(ctx, []terrainmap.SampleEdit{{GX: 10, GY: 10, Height: 5000, Material: 2}, {GX: 140, GY: 100, Height: 6000, Material: 4}}); err != nil {
+		t.Fatalf("second edit: %v", err)
+	}
+	before := snapshotTerrain(first.m)
+	first.stop(t)
+
+	// 库里就是改过的那 5 块（(0,0) 两次、(2,1) 一次、另外三块各一次），没有别的块。
+	count, err := client.Database(physical).Collection(db.TerrainChunkDaoCollection).CountDocuments(ctx, map[string]any{})
+	if err != nil || count != 5 {
+		t.Fatalf("%d chunk documents in Mongo (%v), want 5", count, err)
+	}
+
+	second := startRealTerrainProcess(t, ctx, client, databases, physical, walDir, pack)
+	if second.stats.Overlays != 5 || second.stats.Base != 1 || second.stats.StaleBase != 0 || second.stats.Corrupt != 0 {
+		t.Fatalf("restart: %+v, want 5 overlays and 1 chunk from the pack", second.stats)
+	}
+	after := snapshotTerrain(second.m)
+	if !maps.Equal(before.versions, after.versions) {
+		t.Fatalf("versions before the restart %v, after %v", before.versions, after.versions)
+	}
+	for i := range before.ground {
+		if before.ground[i] != after.ground[i] || before.errs[i] != after.errs[i] {
+			t.Fatalf("point %d: before the restart %+v (%q), after %+v (%q)", i, before.ground[i], before.errs[i], after.ground[i], after.errs[i])
+		}
+	}
+	t.Logf("real Mongo restart: %d points and %d chunk versions identical; versions %v; load %+v", len(after.ground), len(after.versions), after.versions, second.stats)
+	versions, err := second.m.Edit(ctx, []terrainmap.SampleEdit{{GX: 1, GY: 1, Height: 9, Material: 9}})
+	if err != nil || versions[terrain.ChunkKey{}] != 3 {
+		t.Fatalf("edit after the restart: %v, %v (want version 3)", versions, err)
+	}
+	if h := sampleHeight(t, second.m, 1, 1); h != second.m.Meta().WorldHeight(9) {
+		t.Fatalf("height after the post-restart edit: %d", h)
+	}
+	// 停机排空投影后，库里 (0,0) 的记录就是重启后那一笔：Version 3、改过的点在。
+	second.stop(t)
+	var stored struct {
+		Version int64   `bson:"2"`
+		Heights []int32 `bson:"3"`
+	}
+	if err := client.Database(physical).Collection(db.TerrainChunkDaoCollection).FindOne(ctx, map[string]any{"_id": mustChunkID(t, terrain.ChunkKey{})}, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Version != 3 || len(stored.Heights) != terrain.ChunkPoints || stored.Heights[1*terrain.ChunkSamples+1] != 9 {
+		t.Fatalf("stored chunk (0,0): version %d, %d heights, height at (1,1) %v", stored.Version, len(stored.Heights), stored.Heights[1*terrain.ChunkSamples+1])
+	}
+}

@@ -1,0 +1,163 @@
+package terrain_chunk
+
+import (
+	"fmt"
+	"slices"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+//roost:component type=2011
+const CompTypeSurface entity.ComponentType = 2011
+
+// AppliedRing 是 TerrainChunkDao.Applied 最多记住的编辑 ID 个数（方案 §8.1 初值 32）。
+const AppliedRing = 32
+
+// PointEdit 是对块内一个采样点的改动：Index 是块内下标（行优先，j·64 + i），Height 是高度原始值（1 = 10cm），
+// Material 是材质编号。它是改块 handler 的参数（越过 Nest 边界的值），放在实体包里，生成的 Sender 只依赖这里。
+type PointEdit struct {
+	Index    int32
+	Height   uint16
+	Material byte
+}
+
+// SurfaceComponent 是一块地形的数据：高度、材质、版本与最近的编辑 ID，全部在 TerrainChunkDao 里（回滚统一走 DAO，
+// 组件不持有需要回滚的内存状态）。方法只在本块的 Nest 锁内调用。
+type SurfaceComponent struct {
+	entity.ComponentBase
+	owner *TerrainChunk
+}
+
+// ISurfaceEntity is the narrow lock-safe view for Nest handlers.
+type ISurfaceEntity interface {
+	entity.IThreadSafeEntity
+	SurfaceComp() *SurfaceComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeSurface, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*TerrainChunk)
+		if !ok {
+			return nil, fmt.Errorf("terrain chunk surface component: owner %T is not *TerrainChunk", owner)
+		}
+		return &SurfaceComponent{owner: typed}, nil
+	})
+}
+
+func (component *SurfaceComponent) Name() string { return "terrain_surface" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (component *SurfaceComponent) Owner() *TerrainChunk { return component.owner }
+
+// Version 是块的提交版本；0 表示还没提交过改动（实体刚由 GetOrCreate 建出，数据为空）。
+func (component *SurfaceComponent) Version() int64 { return component.Owner().Dao().GetVersion() }
+
+// BaseRevision 是块基于的原始地形版本（Version 0 时没有意义）。
+func (component *SurfaceComponent) BaseRevision() int64 {
+	return component.Owner().Dao().GetBaseRevision()
+}
+
+// Apply 在一笔事务里把 edits 写进本块，返回新的 Version。
+//
+// Version 0（第一次改这块）时先用 base（原始块数据，调用方从地形视图取）与 baseRevision 填满 DAO，再应用改动；
+// 之后的改动要求记录的 BaseRevision 等于 baseRevision（当前包），不同就拒绝（terrain.ErrBaseRevision），不覆盖
+// 基于旧原始地形的记录。高度只写变化了的下标（同步与持久化按下标增量），材质有变化时整字段替换（D11）。不论改没改
+// 到值，每次成功都 Version + 1（一次提交一个版本）。
+//
+// 失败语义：全部校验（下标范围、base 形状、记录形状、BaseRevision）在第一次写 DAO 之前完成，拒绝时什么都不写；
+// 写入之后不会再失败。调用方在 rollback=undo 的事务里调用：事务回滚时生成 setter 登记的逆操作把 DAO 还原。
+func (component *SurfaceComponent) Apply(baseRevision int64, base terrain.Chunk, edits []PointEdit) (int64, error) {
+	for _, edit := range edits {
+		if edit.Index < 0 || edit.Index >= terrain.ChunkPoints {
+			return 0, fmt.Errorf("%w: chunk %v point index %d outside [0, %d)", terrain.ErrInvalidChunk, component.Owner().Key(), edit.Index, terrain.ChunkPoints)
+		}
+	}
+	dao := component.Owner().Dao()
+	fresh := dao.GetVersion() == 0
+	if fresh {
+		if err := base.Validate(); err != nil {
+			return 0, fmt.Errorf("chunk %v base data: %w", component.Owner().Key(), err)
+		}
+	} else {
+		if got := dao.GetBaseRevision(); got != baseRevision {
+			return 0, fmt.Errorf("%w: chunk %v record is based on revision %d, pack is %d", terrain.ErrBaseRevision, component.Owner().Key(), got, baseRevision)
+		}
+		if dao.HeightsLen() != terrain.ChunkPoints || dao.MaterialsLen() != terrain.ChunkPoints {
+			return 0, fmt.Errorf("%w: chunk %v record has %d heights and %d materials", terrain.ErrInvalidChunk, component.Owner().Key(), dao.HeightsLen(), dao.MaterialsLen())
+		}
+	}
+	// 校验完毕，开始写。
+	if fresh {
+		dao.SetBaseRevision(baseRevision)
+		dao.SetHeightsAll(base.Heights)
+		dao.SetMaterialsAll(base.Materials)
+	}
+	materials := dao.GetMaterialsAll() // 副本：改完整字段写回
+	materialsChanged := false
+	for _, edit := range edits {
+		if current, _ := dao.GetHeights(int(edit.Index)); current != edit.Height {
+			dao.SetHeightsAt(int(edit.Index), edit.Height)
+		}
+		if materials[edit.Index] != edit.Material {
+			materials[edit.Index] = edit.Material
+			materialsChanged = true
+		}
+	}
+	if materialsChanged {
+		dao.SetMaterialsAll(materials)
+	}
+	next := dao.GetVersion() + 1
+	dao.SetVersion(next)
+	return next, nil
+}
+
+// Overlay 返回本块当前数据的副本（交给地形视图的 SetOverlay，不与 DAO 共享内存）；Version 0 时 ok 为 false：
+// 还没有可覆盖的数据，按原始块看待。
+func (component *SurfaceComponent) Overlay() (overlay terrain.Overlay, ok bool) {
+	return OverlayOf(component.Owner().Dao())
+}
+
+// OverlayOf 是 dao 当前数据的副本，规则同 SurfaceComponent.Overlay。地形服务启动时用它把读出来的持久记录（没有
+// 装成实体的 DAO）交给视图。
+func OverlayOf(dao *db.TerrainChunkDao) (overlay terrain.Overlay, ok bool) {
+	if dao.GetVersion() == 0 {
+		return terrain.Overlay{}, false
+	}
+	heights := make([]uint16, 0, dao.HeightsLen())
+	dao.RangeHeights(func(_ int, v uint16) bool {
+		heights = append(heights, v)
+		return true
+	})
+	return terrain.Overlay{
+		BaseRevision: dao.GetBaseRevision(), Version: dao.GetVersion(),
+		Heights: heights, Materials: dao.GetMaterialsAll(),
+	}, true
+}
+
+// WasApplied 报告编辑 ID 是否在最近 AppliedRing 个已应用的编辑里（P2 的幂等判重）。
+func (component *SurfaceComponent) WasApplied(editID uint64) bool {
+	found := false
+	component.Owner().Dao().RangeApplied(func(_ int, v uint64) bool {
+		found = v == editID
+		return !found
+	})
+	return found
+}
+
+// RecordApplied 记下一个已应用的编辑 ID：追加到最后，超过 AppliedRing 个时丢掉最旧的；整字段替换（约 256 字节）。
+// 与改块写在同一笔事务里，回滚时一起撤销。
+func (component *SurfaceComponent) RecordApplied(editID uint64) {
+	dao := component.Owner().Dao()
+	next := make([]uint64, 0, AppliedRing)
+	dao.RangeApplied(func(_ int, v uint64) bool {
+		next = append(next, v)
+		return true
+	})
+	next = append(next, editID)
+	if over := len(next) - AppliedRing; over > 0 {
+		next = slices.Delete(next, 0, over)
+	}
+	dao.SetAppliedAll(next)
+}

@@ -1,0 +1,215 @@
+package terrain_chunk
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+// 改块的规则在 SurfaceComponent 上：第一次改用原始块填满、之后要求同一版原始地形；全部校验在第一次写之前；每次提交
+// Version + 1；失败或回滚的事务把 DAO 原样还原（rollback=undo 的生成 setter 逆操作）；Applied 有界。这里直接在一笔
+// 本地事务里调（handler 里就是这样被调用的），提交器只收下记录。
+
+type nullCommitter struct{}
+
+func (nullCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
+
+var errAfterWrite = errors.New("a later step of the transaction failed")
+
+func newTestChunk(t *testing.T, key terrain.ChunkKey) *TerrainChunk {
+	t.Helper()
+	RegisterEntity()
+	unique, err := UniqueID(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := NewTerrainChunk(&entity.EntityCreateParam{IsCreate: true, UniqueID: unique, Kind: EntityKindTerrainChunk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// in 在一笔独立事务（rollback=undo）里跑 f；f 返回错误时事务回滚。
+func in(e *TerrainChunk, f func(*SurfaceComponent) error) error {
+	_, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "terrain_surface", func() (any, error) {
+		return nil, f(e.SurfaceComp())
+	})
+	return err
+}
+
+func testBase() terrain.Chunk {
+	c := terrain.NewChunk()
+	for i := range c.Heights {
+		c.Heights[i] = uint16(3000 + i%97)
+		c.Materials[i] = byte(i % 5)
+	}
+	return c
+}
+
+func overlayOf(t *testing.T, e *TerrainChunk) terrain.Overlay {
+	t.Helper()
+	o, ok := e.SurfaceComp().Overlay()
+	if !ok {
+		t.Fatal("the chunk has no overlay")
+	}
+	return o
+}
+
+func TestTerrainChunkIDRoundTrip(t *testing.T) {
+	RegisterEntity()
+	for _, key := range []terrain.ChunkKey{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 0, Y: 1}, {X: 156, Y: 156}, {X: terrain.MaxChunksPerSide - 1, Y: terrain.MaxChunksPerSide - 1}} {
+		id, err := EntityID(key)
+		if err != nil {
+			t.Fatalf("%v: %v", key, err)
+		}
+		if id <= 0 || KeyOf(id) != key {
+			t.Fatalf("%v: entity id %d decodes to %v", key, id, KeyOf(id))
+		}
+	}
+	for _, key := range []terrain.ChunkKey{{X: -1, Y: 0}, {X: 0, Y: terrain.MaxChunksPerSide}} {
+		if _, err := UniqueID(key); err == nil {
+			t.Fatalf("%v: an id for a chunk outside any map", key)
+		}
+	}
+}
+
+func TestTerrainChunkFirstEditStartsFromTheBase(t *testing.T) {
+	e := newTestChunk(t, terrain.ChunkKey{X: 1, Y: 2})
+	base := testBase()
+	if _, ok := e.SurfaceComp().Overlay(); ok {
+		t.Fatal("a new chunk already has an overlay")
+	}
+	var version int64
+	if err := in(e, func(s *SurfaceComponent) (err error) {
+		version, err = s.Apply(7, base, []PointEdit{{Index: 0, Height: 1, Material: 9}, {Index: 4095, Height: 65535, Material: base.Materials[4095]}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if version != 1 {
+		t.Fatalf("first edit made version %d, want 1", version)
+	}
+	got := overlayOf(t, e)
+	want := base.Clone()
+	want.Heights[0], want.Materials[0], want.Heights[4095] = 1, 9, 65535
+	if got.BaseRevision != 7 || got.Version != 1 || !slices.Equal(got.Heights, want.Heights) || !slices.Equal(got.Materials, want.Materials) {
+		t.Fatalf("after the first edit: revision %d version %d, heights/materials equal to base+edits: %v/%v",
+			got.BaseRevision, got.Version, slices.Equal(got.Heights, want.Heights), slices.Equal(got.Materials, want.Materials))
+	}
+	// 之后的改动不再需要原始块；同一版原始地形照常改，Version 继续加。
+	if err := in(e, func(s *SurfaceComponent) (err error) {
+		version, err = s.Apply(7, terrain.Chunk{}, []PointEdit{{Index: 64, Height: 42, Material: 3}})
+		return err
+	}); err != nil || version != 2 {
+		t.Fatalf("second edit: version %d, err %v", version, err)
+	}
+	if h, _ := e.Dao().GetHeights(64); h != 42 {
+		t.Fatalf("height at 64 is %d, want 42", h)
+	}
+	// Overlay 是副本：改它不影响 DAO。
+	got = overlayOf(t, e)
+	got.Heights[64] = 0
+	if h, _ := e.Dao().GetHeights(64); h != 42 {
+		t.Fatal("the overlay shares memory with the DAO")
+	}
+}
+
+func TestTerrainChunkRefusalsWriteNothing(t *testing.T) {
+	e := newTestChunk(t, terrain.ChunkKey{X: 0, Y: 0})
+	base := testBase()
+	short := terrain.Chunk{Heights: base.Heights[:10], Materials: base.Materials}
+	if err := in(e, func(s *SurfaceComponent) error { _, err := s.Apply(1, short, nil); return err }); !errors.Is(err, terrain.ErrInvalidChunk) {
+		t.Fatalf("a short base: %v, want ErrInvalidChunk", err)
+	}
+	if err := in(e, func(s *SurfaceComponent) error {
+		_, err := s.Apply(1, base, []PointEdit{{Index: terrain.ChunkPoints, Height: 1}})
+		return err
+	}); !errors.Is(err, terrain.ErrInvalidChunk) {
+		t.Fatalf("an index past the chunk: %v, want ErrInvalidChunk", err)
+	}
+	if v := e.SurfaceComp().Version(); v != 0 || e.Dao().HeightsLen() != 0 {
+		t.Fatalf("a refused first edit wrote: version %d, %d heights", v, e.Dao().HeightsLen())
+	}
+	if err := in(e, func(s *SurfaceComponent) error {
+		_, err := s.Apply(1, base, []PointEdit{{Index: 5, Height: 5}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := overlayOf(t, e)
+	// 记录基于版本 1，包已是版本 2：拒绝，不覆盖旧记录。
+	if err := in(e, func(s *SurfaceComponent) error {
+		_, err := s.Apply(2, base, []PointEdit{{Index: 5, Height: 6}})
+		return err
+	}); !errors.Is(err, terrain.ErrBaseRevision) {
+		t.Fatalf("an edit on another base revision: %v, want ErrBaseRevision", err)
+	}
+	if after := overlayOf(t, e); after.Version != before.Version || !slices.Equal(after.Heights, before.Heights) {
+		t.Fatal("a refused edit changed the chunk")
+	}
+}
+
+func TestTerrainChunkRolledBackEditRestoresTheDAO(t *testing.T) {
+	e := newTestChunk(t, terrain.ChunkKey{X: 3, Y: 3})
+	base := testBase()
+	// 第一次改就回滚：DAO 回到空实体（Version 0、没有数据）。
+	if err := in(e, func(s *SurfaceComponent) error {
+		if _, err := s.Apply(1, base, []PointEdit{{Index: 1, Height: 1, Material: 1}}); err != nil {
+			return err
+		}
+		return errAfterWrite
+	}); !errors.Is(err, errAfterWrite) {
+		t.Fatalf("rolled-back first edit: %v", err)
+	}
+	if v := e.SurfaceComp().Version(); v != 0 || e.Dao().HeightsLen() != 0 || e.Dao().MaterialsLen() != 0 {
+		t.Fatalf("after a rolled-back first edit: version %d, %d heights, %d materials", v, e.Dao().HeightsLen(), e.Dao().MaterialsLen())
+	}
+	if err := in(e, func(s *SurfaceComponent) error {
+		_, err := s.Apply(1, base, []PointEdit{{Index: 1, Height: 11, Material: 4}})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := overlayOf(t, e)
+	if err := in(e, func(s *SurfaceComponent) error {
+		if _, err := s.Apply(1, terrain.Chunk{}, []PointEdit{{Index: 1, Height: 12, Material: 0}, {Index: 2, Height: 13, Material: 0}}); err != nil {
+			return err
+		}
+		s.RecordApplied(99)
+		return errAfterWrite
+	}); !errors.Is(err, errAfterWrite) {
+		t.Fatalf("rolled-back edit: %v", err)
+	}
+	after := overlayOf(t, e)
+	if after.Version != before.Version || !slices.Equal(after.Heights, before.Heights) || !slices.Equal(after.Materials, before.Materials) || e.SurfaceComp().WasApplied(99) {
+		t.Fatal("a rolled-back edit left changes in the DAO")
+	}
+}
+
+func TestTerrainChunkAppliedIsBounded(t *testing.T) {
+	e := newTestChunk(t, terrain.ChunkKey{X: 0, Y: 1})
+	for id := uint64(1); id <= AppliedRing+5; id++ {
+		if err := in(e, func(s *SurfaceComponent) error { s.RecordApplied(id); return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := e.Dao().AppliedLen(); n != AppliedRing {
+		t.Fatalf("applied holds %d ids, want %d", n, AppliedRing)
+	}
+	for id := uint64(1); id <= 5; id++ {
+		if e.SurfaceComp().WasApplied(id) {
+			t.Fatalf("edit %d should have been dropped as the oldest", id)
+		}
+	}
+	for id := uint64(6); id <= AppliedRing+5; id++ {
+		if !e.SurfaceComp().WasApplied(id) {
+			t.Fatalf("edit %d is missing", id)
+		}
+	}
+}
