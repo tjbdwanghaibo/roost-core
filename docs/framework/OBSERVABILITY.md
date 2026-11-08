@@ -84,9 +84,13 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitysync_durability_gate_deferred_total` | Counter | 被 durable watermark 推迟的 subject 捕获次数（整个 subject 本 tick 不发） |
 | `entitysync_frames_admitted_total` | Counter | 传输层接受的会话帧数 |
 | `entitysync_sessions_lost_total` | Counter | 被 Manager 自己关闭的会话数（推送被拒或编码失败，`SessionLost` 回调政策；原因分类见 `entitysync.LossReason`） |
+| `entitysync_over_limit_deferred_total{namespace,reason}` | Counter | 会话的一类对象已满时被暂缓的订阅数（超额降级，D17，见 [ENTITY_SYNC](ENTITY_SYNC.md#超额降级会话持有对象超过上限)）：`reason` = `deferred`（新对象放不下，本轮不创建）/ `evicted`（为钉住的订阅——玩家自己——让位而 remove 的已持有对象）/ `pinned_blocked`（同类全是钉住的对象，钉住的也只能等，配置错误）；`namespace` 是 `ManagerConfig.Namespaces` 里的名字，没列出的那一类为 `*`。会话不关、不断开。**正常为 0**；持续增长 = 政策的上限（各视野 `MaxVisible` 之和 + 关系视野 + 自身）大于会话上限，看限频 Warn `entitysync: a session is over its object limit …` 里的 `manager`、`session`、`namespace`、`limit`、`held` |
+| `entitysync_over_limit_waiting{namespace}` | Gauge | 此刻处于超额暂缓的订阅数（进程内所有 Manager 按命名空间加总，每次 Flush 末尾与 Close 时更新）；大于 0 时对应 Manager 的 `CheckHealth` 为 degraded（消息带 `over_limit_waiting=N`）。用了 Interest 时通常在约 1 秒内回到 0（Interest 收紧视野后被暂缓的对象离开）；Group / Direct 这类没有距离的政策不收紧，暂缓会一直留到有空位 |
+| `entitysync_interest_over_limit_total{action}` | Counter | Interest 对超额暂缓通知的反应：`tighten`（收紧一个空间视野的可见上限，从最远的开始退订）、`raise`（冷却到期上调一档）、`lift`（撤掉收紧，回到 `MaxVisible`）、`untightened`（通知里的 pair 不来自任何空间视野、玩家也没有主视野，没有可收紧的） |
+| `entitysync_interest_limited_views` | Gauge | 此刻收紧着可见上限的空间视野数（进程内所有 Interest 之和）。拥挤时不为 0 是正常的降级；拥挤散去后应在冷却（1～32 秒）内回到 0 |
 | `entitysync.self_view.stranded_players` | Gauge | 自身视图里在线（至少一条连接）却超过 3 个同步周期没有打开的同步会话的玩家数，每个政策阶段由 `wiring/selfsync` 写入（`SelfView.Stranded`）。**正常为 0**；持续不为 0 = 有连接活着却收不到自己的状态：传输没有关闭拒收的连接，或会话打开被持续拒绝（会话数上限）。玩家实体的帧编码失败 2026-10-22 起断开该玩家（见 `player.sync.session_lost_disconnect.total`），不再滞留 |
 | `player.sync.push_refused.total{outcome}` | Counter | `wiring/selfsync.PushPlayerFrame`（自身视图与 game-demo 场景共用）处理的 Sync 推送拒收：`closed` = 活着的连接拒收、关闭了该玩家的全部连接；`retried` = 整个进程的驻留预算耗尽、整轮重试。接入层未就绪与玩家没有连接不计 |
-| `player.sync.session_lost_disconnect.total{reason}` | Counter | `wiring/selfsync.DisconnectLostPlayer`（自身视图与 game-demo 场景共用）因同步会话被 Manager 丢掉、而原因不是推送拒收（连接仍活着）断开玩家的次数，只计确实关掉了连接的（维护者 2026-10-22 决定 A）。`reason`：`object_limit`（持有对象超过 `MaxObjects`）、`too_large`（单实体超过帧 / 组件上限）、`encode_failed`（其他编码错误）、`unknown`（原因不是 Manager 给出的）。**正常为 0**；持续增长 = 同一原因让玩家反复被踢、重连，看限频 Warn `selfsync: a player's sync session was lost …` 里的 `player_id` 与 `reason`，查 `MaxVisible` 与实体大小 |
+| `player.sync.session_lost_disconnect.total{reason}` | Counter | `wiring/selfsync.DisconnectLostPlayer`（自身视图与 game-demo 场景共用）因同步会话被 Manager 丢掉、而原因不是推送拒收（连接仍活着）断开玩家的次数，只计确实关掉了连接的（维护者 2026-10-22 决定 A）。`reason`：`too_large`（单实体超过帧 / 组件上限）、`encode_failed`（其他编码错误）、`unknown`（原因不是 Manager 给出的）；持有对象超过 `MaxObjects` 自 2026-11-08 起不再丢会话（超额降级，见 `entitysync_over_limit_*`），原先的 `object_limit` 不再出现。**正常为 0**；持续增长 = 同一原因让玩家反复被踢、重连，看限频 Warn `selfsync: a player's sync session was lost …` 里的 `player_id` 与 `reason`，查 `MaxVisible` 与实体大小 |
 | `entitysync_drain_timeout_total` | Counter | `Manager.Drain` 因 ctx 超时 / 取消而未排空的次数（停机预算不够或有条目卡住；卡住条目见返回的 `*DrainStalledError`） |
 | `entitysync_drain_remaining_entries` | Gauge | 最近一次 Drain 结束时仍未排空的条目数（成功排空为 0） |
 | `entitysync_interest_fact_backlog` | Gauge | Interest 排队事实的积压：排队 + 应用中 + 已应用未结算（同一进程多个 Interest 时是最近写入者的值）。持续逼近 `MaxQueuedFacts`（缺省 65536）= 应用线程跟不上（ApplyAsync）或 Flush 停摆，`Queue*` 将返回 `ErrInterestQueueFull` |
@@ -361,10 +365,14 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `entitysync_full_captures_total` | Counter | `sync/entitysync/flush.go:IncCounter` |
 | `entitysync_interest_apply_duration` | Histogram | `sync/entitysync/policy/interest_queue.go:ObserveHistogram` |
 | `entitysync_interest_fact_backlog` | Gauge | `sync/entitysync/policy/interest_queue.go:SetGauge` |
+| `entitysync_interest_limited_views` | Gauge | `sync/entitysync/policy/interest_over_limit.go:SetGauge` |
+| `entitysync_interest_over_limit_total` | Counter | `sync/entitysync/policy/interest_over_limit.go:IncCounter` |
 | `entitysync_interest_retry_stalled_total` | Counter | `sync/entitysync/policy/interest_queue.go:IncCounter` |
 | `entitysync_interest_settle_delay` | Histogram | `sync/entitysync/policy/interest_queue.go:ObserveHistogram` |
 | `entitysync_interest_view_limit_rejected_total` | Counter | `sync/entitysync/policy/view.go:IncCounter` |
 | `entitysync_interest_view_rejected_total` | Counter | `sync/entitysync/policy/interest.go:IncCounter` |
+| `entitysync_over_limit_deferred_total` | Counter | `sync/entitysync/over_limit.go:IncCounter` |
+| `entitysync_over_limit_waiting` | Gauge | `sync/entitysync/over_limit.go:SetGauge` |
 | `entitysync_sessions_lost_total` | Counter | `sync/entitysync/subscriptions.go:IncCounter` |
 | `entitytimer.deliver_failed_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
 | `entitytimer.delivered_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
@@ -649,6 +657,7 @@ Wiring `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册
 12. `heartbeat.skipped_total` 或 `heartbeat.stalled_total` 持续增长 —— 关注：实体心跳跟不上（快池 worker 饱和、回调慢，或 Remote 写准入反复被拒）；按 Warn `heartbeat: beats skipped` 里的样本实体与原因排查。
 13. `saga.partition.fail_stop_total` 非零 —— 立即告警：协调器进程 fail-stop（`fenced` = 出现第二个写者，崩溃重启的短暂重叠或部署错误；`publish_unknown` = 一条流的发布结果未知超过预算；`rejected` = 流满等明确拒绝），按 ERROR 日志点名的分区与流核对；同 sid 进程重启后从快照 + 日志重放恢复。
 14. `saga.log.purge_blocked_seconds` 超过 `saga.purge_stall_alarm` 或 `saga.partition.snapshot_failures_total` 持续增长 —— 告警：日志清理停了（下线步骤的 durable 没删、或快照桶不可写），流会一直涨到 `saga.stream_max_bytes` 后 fail-stop。`saga.step.mongo_txn_lifetime_exceeds_budget` 非零 —— 部署违约（Mongo `transactionLifetimeLimitSeconds` 应为 20s）。
+15. `entitysync_over_limit_waiting > 0` 持续数分钟 —— 关注：有会话的一类对象一直放不下（超额降级，玩家少看了一些对象但没有断开）。用了 Interest 时正常会在约 1 秒内收敛；持续不为 0 = 政策的上限与会话上限不匹配（`MaxVisible` 之和 + 关系视野 + 自身 > `MaxObjects`）或 Group / Direct 订阅的对象超过上限，按限频 Warn 里的 `manager` / `namespace` 调大 `MaxObjects` 或调小 `MaxVisible`
 
 Grafana 总览面板见 [observability/grafana-roost-overview.json](../../observability/grafana-roost-overview.json)（按上述四组布局，导入后选择 Prometheus 数据源即可）。
 

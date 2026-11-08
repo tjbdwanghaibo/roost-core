@@ -109,24 +109,38 @@ Epoch 在一个 Manager 内单调递增、跨会话 ID 共享：每次 `OpenSess
 - `NamespaceLimits.MaxObjects`（必须为正）：一个会话可同时持有的该命名空间对象数。每一类各自计：没列出的那一类仍是 `Limits.MaxObjects`，不因加了一类而放宽；会话的对象引用表合起来可持有 `Limits.MaxObjects + Σ MaxObjects`（不超过 65535）。
 - `NamespaceLimits.SnapshotBudget`：该命名空间单独的冷创建预算，与 Manager 级预算、其他命名空间互不占额度；每一路各自轮转会话与实体（游标、两类来源交替）、各自计字节软上限与窗口，RetryLater 中断准入时每一路只给实际尝试过的会话计费、游标不越过该路计划里未尝试的会话。零值表示该命名空间不限快照（不继承 Manager 级预算）。
 - 分类键是 subject 的 `Namespace`（codegen `syncNamespace`），不是订阅来源：命名空间是对象自己的属性，一个对象经几个来源订阅也只占一个引用、只属于一类；它也是客户端的分流键。类别在登记时按状态的命名空间确定，`Rebind` 不改变。
-- **超出一类的上限**与既有契约相同：不截断、不只拒该类的新对象，下一次 Flush 为新对象分配引用时关闭整个会话（`SessionLost`，原因 `object_limit`，错误里点名命名空间或“Limits.MaxObjects”）。只拒该类新对象会让订阅停在“要全量”却永远发不出去，等于静默截断；持有量照旧由政策的上限保证（该命名空间所用 Interest 的 `AOIConfig.MaxVisible` 不大于它的 `MaxObjects`）。同一 tick 先 remove 再 create，满额的类里换对象不超限；Hold/Ready、关闭重开从零计；退役（remove-before-create）先归还名额。
+- **超出一类的上限**按下面[超额降级](#超额降级会话持有对象超过上限)处理（2026-11-08 起，D17）：只暂缓该类放不下的新对象、不关会话，计数与告警点名命名空间（没列出的那一类标签为 `*`）；另一类照常。政策的上限（该命名空间所用 Interest 的 `AOIConfig.MaxVisible`）应不大于它的 `MaxObjects`，否则会一直在边界上暂缓、收紧。同一 tick 先 remove 再 create，满额的类里换对象不超限；Hold/Ready、关闭重开从零计；退役（remove-before-create）先归还名额。
 - **帧与客户端**：每帧对象数仍按 `Limits.MaxObjects` 切分，只有引用表上限变成各类之和，所以接收端（Go `frame.Receiver`、C# `SyncFrame.Decode` 的 `maxObjects`）照旧按 `Limits.MaxObjects` 配置，不需要知道总数；客户端若显式设对象表容量（C# `EntityViews` 的 `maxObjects`，缺省 10000），不得小于各类之和。
 - **默认不变**：不配置（nil）时与没有这一项逐字节相同（既有用例不改断言即通过）；列出某个命名空间也不改变其他命名空间的任何字节（`TestNamespaceLimitsLeaveUnlistedNamespacesByteIdentical`）。实现：`framework/sync/entitysync/namespaces.go`（类别与持有计数）、`snapshot_budget.go`（`snapshotLane`，每路一份额度、游标与待快照索引）。
 
 game-demo 的场景：玩家 / 怪 / 场景沿用 100、不限快照，`terrain` 命名空间上限 64、每会话每次 Flush 至多 4 个全量（`demo/internal/service/game/terrain_sync.go.tmpl` 的 `terrainNamespaceLimits`）。
 
+## 超额降级（会话持有对象超过上限）
+
+2026-11-08 起（维护者决定，可编辑地形方案 D17：“超额降级：减少同步对象，不断开”）。会话持有的对象超过上限（`Limits.MaxObjects`，或按命名空间的 `NamespaceLimits.MaxObjects`）时**不关会话**，减少同步给它的对象。实现在 `framework/sync/entitysync/over_limit.go`（Manager）与 `policy/interest_over_limit.go`（Interest）。
+
+- **准入**（`admitWithinLimits`，捕获之后、发送 / 快照预算与组帧之前）：按会话、按类别数“已持有 − 本轮 remove + 本轮新对象”。不超出时什么都不做——未超额的会话帧逐字节不变（`TestUnderTheLimitFramesAreByteIdentical`，对照 b4699758 的 SHA-256）。超出的类里，新对象按**钉住在前、Profile 优先级小的在前（`ProfilePriorities`，未配置按 LOD；Interest 的距离档即 LOD）、实体 ID 小的在前**排序，前“空位”个照常创建，其余本轮不创建：对象要么完整持有、要么完全不在客户端，不截断。没创建的订阅保持“待创建”并标为**超额暂缓**。remove 先于 create 的规则照旧，同一 tick 里先腾出的位置算作空位。只比较本轮捕获到的新对象：被快照预算、发送预算、持久化门槛挡下的不占位，之后到来时按当时的空位准入。
+- **已持有的对象 Manager 不挤掉**：它不知道距离，挤掉还会在线上产生 remove / create 往返；新旧之间的取舍由政策收到通知后退订完成。唯一例外是**钉住**的订阅（`SubscriptionSource.SubscribePinned`；`SelfView` 与 Interest 的 self——玩家看自己——都钉住）：放不下时挤掉同类里优先级最低（Profile 优先级最大、同级取实体 ID 最大）的未钉住对象，同一帧先 remove 再 create，被挤掉的订阅转为暂缓并通知（`Evicted`）。同类全是钉住的对象时钉住的订阅也只能暂缓（`pinned_blocked`，配置错误）。
+- **通知政策**：`SubscriptionSourceHooks.Deferred func([]DeferredSubscription)`（`Session`、`Subject`、`Namespace`、`Evicted`），在下一次政策阶段按来源分批交付（释放、重新提交之后，各政策 Apply 之前）。订阅进入暂缓时通知一次，仍在暂缓里每隔约 1 秒（`overLimitRenotifyInterval`）再通知一次：政策让出的位置可能被别的占了，或它退订的是还没捕获的订阅（快照预算下常见），只通知一次会停在“想要的比放得下的多”上。
+- **暂缓的订阅**不参与捕获、不进快照预算索引（`PendingSnapshots` 不计）、不让 `Drain` 等待。会话的这一类出现空位时（本会话的帧准入后持有数低于上限）`releaseOverLimit` 按同一排序放回前“空位”个，下一次 Flush 重新准入；`HoldSession` 从零计，全部放回，Ready 后按排序重新准入（钉住的排最前）。暂缓的订阅都是政策持有的订阅，政策不收紧也不会无界增长。
+- **各政策的行为**：
+  - **Interest**（有距离）：收到通知后收紧该玩家视野的可见上限、从最远的开始退订，腾出的位置由 Manager 换成最近的暂缓对象，所以最终可见集是它按距离选出的最近 N 个（`TestInterestShrinksAFullSessionToTheNearest`）。每条通知让一个空间视野的上限减一：优先这对 pair 所在、只挂给这名玩家的空间视野，其次玩家的主视野，再次 pair 所在的共享空间视野（会让挂接它的玩家一起少看）；关系视野、块覆盖、self 没有距离，只来自它们的 pair 由主视野让位（`TestInterestRelationPairMakesTheMainViewGiveWay`）。放宽：每次结算先在当前上限内补位；收紧后冷却 1 秒，到期时上限已不起作用（补位后仍不满）就撤掉、回到 `MaxVisible`，否则上调一档（`MaxVisible` 的 1/8，至少 1）。滞回：上调后冷却期内又被通知，冷却加倍（至多 32 秒）；安然度过则减半。失败的试探只是 Manager 内部的一次暂缓（新进入的目标还没创建就被退订），不上线。`AOICluster` 不接这条回馈。
+  - **Group / Direct / GroupView**（无距离）：不收紧，不登记回调；订阅暂缓、会话照旧，有空位时按（Profile 优先级、实体 ID）恢复（`TestGroupOverLimitWaitsForRoom`）。
+  - **SelfView** 与 Interest 的 self：钉住，永不暂缓（`TestInterestSelfIsNeverDeferred`、`TestOverLimitPinnedSubscriptionEvictsTheLowestPriority`）。
+- **可观测**：`entitysync_over_limit_deferred_total{namespace, reason}`（`deferred` 新对象暂缓 / `evicted` 为钉住让位 / `pinned_blocked`）、`entitysync_over_limit_waiting{namespace}`、`ManagerStats.OverLimitWaiting / OverLimitDeferred / OverLimitEvicted`（`AuditStats` 逐项核对）、`CheckHealth` 在 `OverLimitWaiting > 0` 时降级（消息带 `over_limit_waiting=N`）、限频 Warn `entitysync: a session is over its object limit …`（每个 Manager 10 秒至多一条，带被省略的次数）；Interest 侧 `entitysync_interest_over_limit_total{action}`（`tighten` / `raise` / `lift` / `untightened`）、`entitysync_interest_limited_views`。正常都为 0；持续不为 0 说明政策的上限（`MaxVisible` 之和 + 关系视野 + 自身）与会话上限不匹配。
+- **契约变化**：`SessionLost` 不再出现 `object_limit`（`SessionLossObjectLimit` 删除；编码时的持有上限错误只可能来自内部不一致，归 `encode_failed`）；`too_large`、`encode_failed`、`push_refused` 不变；客户端与帧格式不变。
+
 ## 容量与观测
 
 `ManagerConfig.MaxSubjects / MaxSessions / MaxSubscribersPerSubject`，`Limits.MaxObjects` 同时是一个会话可持有的 subject 数（配置了 `Namespaces` 时是没列出的那一类的数，列出的命名空间各按自己的 `MaxObjects`）；
-`Subscribe` 不按它拒绝，超出发生在下一次 Flush 给该会话编码、为新对象分配引用时（`frame.ErrObjectLimit`）：Manager 不截断、不只丢超出的那几个，
-而是关闭整个会话（`SessionsLost` +1、回调 `SessionLost`），之后政策对它的订阅以会话不存在被拒、进重试表，直到业务重新打开会话；
-`SessionLost` 的原因总是 `*SessionLoss`：`LossReason(cause)` 是低基数分类——`push_refused`（传输拒收这一帧）、`object_limit`（`frame.ErrObjectLimit`）、
-`too_large`（单实体包超过 `MaxFrameBytes` / `MaxComponentBytes`）、`encode_failed`（其他编码错误），`Err` 是原错误。后三种没有帧交给传输，连接没有拒收任何东西：
+`Subscribe` 不按它拒绝，超出时按上节“超额降级”暂缓放不下的新对象，会话不关；
+`SessionLost` 的原因总是 `*SessionLoss`：`LossReason(cause)` 是低基数分类——`push_refused`（传输拒收这一帧）、
+`too_large`（单实体包超过 `MaxFrameBytes` / `MaxComponentBytes`）、`encode_failed`（其他编码错误），`Err` 是原错误。后两种没有帧交给传输，连接没有拒收任何东西：
 会话 ID 就是玩家 ID 的 Manager 用 `wiring/selfsync.DisconnectLostPlayer` 断开该玩家（自身视图自动接上，game-demo 场景同样调用；维护者 2026-10-22 决定 A），
 客户端重连、从新 epoch 的全量开始，计 `player.sync.session_lost_disconnect.total{reason}`；推送拒收时 `PushPlayerFrame` 已在传输里断开过，不再断第二次；
-持有量由业务用政策的上限（`AOIConfig.MaxVisible` 等）保证（`TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit`）；
-`Stats()` 与 `CheckHealth()`（80% 降级、满或关闭为 Fail）；指标 `entitysync_frames_admitted_total`、`entitysync_sessions_lost_total`、
-`entitysync_durability_gate_deferred_total`。
+持有量仍应由业务用政策的上限（`AOIConfig.MaxVisible` 等）压在会话上限以内，超额降级只是兜底（`TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit`）；
+`Stats()` 与 `CheckHealth()`（80% 降级、满或关闭为 Fail；有超额暂缓时降级）；指标 `entitysync_frames_admitted_total`、`entitysync_sessions_lost_total`、
+`entitysync_durability_gate_deferred_total`、`entitysync_over_limit_*`。
 
 ## 停止与关闭
 
