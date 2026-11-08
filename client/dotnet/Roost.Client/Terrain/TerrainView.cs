@@ -121,21 +121,27 @@ namespace Roost.Client.Terrain
             Install(slot, key, baseRevision, version, heights.ToArray(), materials.ToArray());
         }
 
-        // 同上，高度取自生成的 DAO 视图（SyncTerrainChunkDao.Heights.Value 是 RepeatedField<uint>，protobuf 用 uint32
-        // 承载 Go 的 uint16）。任何一个值超过 65535 都按形状不对拒绝。
-        public void SetOverlay(ChunkKey key, long baseRevision, long version, IReadOnlyList<uint> heights, ReadOnlySpan<byte> materials)
+        // 同上，高度与材质取自生成的 DAO 视图（SyncTerrainChunkDao.Heights.Value / Materials.Value 都是 RepeatedField<uint>：
+        // protobuf 用 uint32 承载 Go DAO 的 []uint16；材质在 DAO 里为按下标增量而取 uint16，取值仍是 0～255）。
+        // 任何一个高度超过 65535、材质超过 255 都按形状不对拒绝（TerrainInvalidChunkException），不截断。
+        public void SetOverlay(ChunkKey key, long baseRevision, long version, IReadOnlyList<uint> heights, IReadOnlyList<uint> materials)
         {
             if (heights == null) throw new ArgumentNullException(nameof(heights));
+            if (materials == null) throw new ArgumentNullException(nameof(materials));
             int slot = Slot(key);
-            CheckShape(key, heights.Count, materials.Length);
-            var copy = new ushort[TerrainGeometry.ChunkPoints];
-            for (int i = 0; i < copy.Length; i++)
+            CheckShape(key, heights.Count, materials.Count);
+            var heightCopy = new ushort[TerrainGeometry.ChunkPoints];
+            var materialCopy = new byte[TerrainGeometry.ChunkPoints];
+            for (int i = 0; i < heightCopy.Length; i++)
             {
-                uint v = heights[i];
-                if (v > ushort.MaxValue) throw new TerrainInvalidChunkException($"overlay {key}: height {i} is {v}, above {ushort.MaxValue}");
-                copy[i] = (ushort)v;
+                uint h = heights[i];
+                if (h > ushort.MaxValue) throw new TerrainInvalidChunkException($"overlay {key}: height {i} is {h}, above {ushort.MaxValue}");
+                heightCopy[i] = (ushort)h;
+                uint m = materials[i];
+                if (m > byte.MaxValue) throw new TerrainInvalidChunkException($"overlay {key}: material {i} is {m}, above {byte.MaxValue}");
+                materialCopy[i] = (byte)m;
             }
-            Install(slot, key, baseRevision, version, copy, materials.ToArray());
+            Install(slot, key, baseRevision, version, heightCopy, materialCopy);
         }
 
         private static void CheckShape(ChunkKey key, int heights, int materials)

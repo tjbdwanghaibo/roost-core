@@ -1,7 +1,9 @@
 package terrain_chunk
 
 import (
+	"cmp"
 	"fmt"
+	"math"
 	"slices"
 
 	db "{{MODULE}}/db"
@@ -73,21 +75,32 @@ func (component *SurfaceComponent) BaseRevision() int64 {
 	return component.Owner().Dao().GetBaseRevision()
 }
 
-// HeightsGuard 是整字段守卫的阈值（方案 §4 / §8.1）：一次提交在本块改动的高度点数超过它时，Heights 整字段写
-// （SetHeightsAll），否则逐点写（SetHeightsAt）。逐点补丁同步每点约 8 字节，约 1020 点以上比整字段（约 8.2KB）大，
-// 阈值附近逐点补丁最多是整字段的 4 倍（实验 evidence/terrain-sync-20261108 §1）。
-const HeightsGuard = 1000
+// HeightsGuard 与 MaterialsGuard 是整字段守卫的阈值（方案 §4 / §8.1）：一次提交在本块改动的高度（材质）点数超过它
+// 时，该字段整字段写（SetHeightsAll / SetMaterialsAll），否则逐点写（SetHeightsAt / SetMaterialsAt）。逐点补丁同步
+// 每点约 8 字节，高度约 1020 点以上比整字段（约 8.2KB）大，阈值附近逐点补丁最多是整字段的 4 倍（实验
+// evidence/terrain-sync-20261108 §1）；材质整字段约 4.1KB（编号 < 128 时每点 1 字节），逐点每点约 7.3 字节，按字节约 560 点就
+// 持平，阈值仍取 1000（维护者 2026-11-08：与高度守卫一致；字节对照见 evidence/terrain-materials-list-20261108）。
+//
+// 两个守卫各管各的字段，不按两者合计：DAO 的变化树（同步与持久化各一棵）每 DAO 最多 4096 个节点、由两个列表共享，
+// 但单笔提交在两个守卫之内最多 1000 + 1000 个下标节点，加上根、两个字段与 Version 约 2004 个，到不了预算；整字段与
+// 逐点的字节取舍也只取决于本字段改了几个点（另一字段怎么写不改变它的整字段大小）。按合计算反而会把“各改 600 点”
+// 这类编辑两个字段都推成整字段（12.3KB，逐点约 9.4KB）。同一块在一次确认（ack）之前累积的多笔提交可能超过预算，
+// 那时框架整树回退为整字段（数据正确，字节等于全量），实测见 evidence/terrain-materials-list-20261108。
+const (
+	HeightsGuard   = 1000
+	MaterialsGuard = 1000
+)
 
 // Apply 在一笔事务里把 edits 写进本块，返回新的 Version。
 //
 // Version 0（第一次改这块）时先用 base（原始块数据，调用方从地形视图取）与 baseRevision 填满 DAO，再应用改动；
 // 之后的改动要求记录的 BaseRevision 等于 baseRevision（当前包），不同就拒绝（terrain.ErrBaseRevision），不覆盖
-// 基于旧原始地形的记录。高度按整字段守卫写：改动的点数（同一下标出现多次时以最后一个为准，值没变的不算）超过
-// HeightsGuard 时 SetHeightsAll，否则只对变了的下标 SetHeightsAt（同步与持久化按下标增量）；材质有变化时整字段
-// 替换（D11）。不论改没改到值，每次成功都 Version + 1（一次提交一个版本）。
+// 基于旧原始地形的记录。高度与材质各按自己的整字段守卫写：改动的点数（同一下标出现多次时以最后一个为准，值没变的
+// 不算）超过守卫时整字段，否则只对变了的下标逐点写（同步与持久化按下标增量）。不论改没改到值，每次成功都
+// Version + 1（一次提交一个版本）。
 //
-// 失败语义：全部校验（下标范围、base 形状、记录形状、BaseRevision）在第一次写 DAO 之前完成，拒绝时什么都不写；
-// 写入之后不会再失败。调用方在 rollback=undo 的事务里调用：事务回滚时生成 setter 登记的逆操作把 DAO 还原。
+// 失败语义：全部校验（下标范围、base 形状、记录形状与材质值域、BaseRevision）在第一次写 DAO 之前完成，拒绝时什么都
+// 不写；写入之后不会再失败。调用方在 rollback=undo 的事务里调用：事务回滚时生成 setter 登记的逆操作把 DAO 还原。
 func (component *SurfaceComponent) Apply(baseRevision int64, base terrain.Chunk, edits []PointEdit) (int64, error) {
 	for _, edit := range edits {
 		if edit.Index < 0 || edit.Index >= terrain.ChunkPoints {
@@ -107,39 +120,52 @@ func (component *SurfaceComponent) Apply(baseRevision int64, base terrain.Chunk,
 		if dao.HeightsLen() != terrain.ChunkPoints || dao.MaterialsLen() != terrain.ChunkPoints {
 			return 0, fmt.Errorf("%w: chunk %v record has %d heights and %d materials", terrain.ErrInvalidChunk, component.Owner().Key(), dao.HeightsLen(), dao.MaterialsLen())
 		}
+		if err := checkMaterials(dao); err != nil {
+			return 0, fmt.Errorf("chunk %v record: %w", component.Owner().Key(), err)
+		}
 	}
 	// 校验完毕，开始写。
 	if fresh {
 		dao.SetBaseRevision(baseRevision)
 		dao.SetHeightsAll(base.Heights)
-		dao.SetMaterialsAll(base.Materials)
+		dao.SetMaterialsAll(widen(base.Materials))
 	}
-	before := component.heights()
-	heights := slices.Clone(before)
-	materials := dao.GetMaterialsAll() // 副本：改完整字段写回
-	materialsChanged := false
-	for _, edit := range edits {
-		heights[edit.Index] = edit.Height
-		if materials[edit.Index] != edit.Material {
-			materials[edit.Index] = edit.Material
-			materialsChanged = true
+	// 只看改动涉及的点（笔刷一次几十到几百点），不逐个比较整块 4096 点：DAO 此时就是编辑前的数据（第一次改时已用
+	// 原始块填满）。值真的变了的点才算改动。
+	var heightPoints, materialPoints []PointEdit
+	for _, edit := range lastEdits(edits) {
+		if h, _ := dao.GetHeights(int(edit.Index)); h != edit.Height {
+			heightPoints = append(heightPoints, edit)
+		}
+		if m, _ := dao.GetMaterials(int(edit.Index)); m != uint16(edit.Material) {
+			materialPoints = append(materialPoints, edit)
 		}
 	}
-	var changed []int
-	for i := range heights {
-		if heights[i] != before[i] {
-			changed = append(changed, i)
+	if len(heightPoints) > HeightsGuard {
+		heights := heightsOf(dao)
+		for _, p := range heightPoints {
+			heights[p.Index] = p.Height
 		}
-	}
-	if len(changed) > HeightsGuard {
 		dao.SetHeightsAll(heights)
 	} else {
-		for _, i := range changed {
-			dao.SetHeightsAt(i, heights[i])
+		for _, p := range heightPoints {
+			dao.SetHeightsAt(int(p.Index), p.Height)
 		}
 	}
-	if materialsChanged {
+	if len(materialPoints) > MaterialsGuard {
+		materials := make([]uint16, 0, terrain.ChunkPoints)
+		dao.RangeMaterials(func(_ int, v uint16) bool {
+			materials = append(materials, v)
+			return true
+		})
+		for _, p := range materialPoints {
+			materials[p.Index] = uint16(p.Material)
+		}
 		dao.SetMaterialsAll(materials)
+	} else {
+		for _, p := range materialPoints {
+			dao.SetMaterialsAt(int(p.Index), uint16(p.Material))
+		}
 	}
 	next := dao.GetVersion() + 1
 	dao.SetVersion(next)
@@ -147,9 +173,24 @@ func (component *SurfaceComponent) Apply(baseRevision int64, base terrain.Chunk,
 	return next, nil
 }
 
-// heights 返回 DAO 当前高度的副本。
-func (component *SurfaceComponent) heights() []uint16 {
-	dao := component.Owner().Dao()
+// lastEdits 是 edits 去重后的结果：同一下标只留最后一个，按下标升序（写入顺序确定）。下标须已校验在块内。
+// 笔刷给的点本来就不重复、升序；P1 的 Edit 可能给同一下标多次。
+func lastEdits(edits []PointEdit) []PointEdit {
+	var seen [terrain.ChunkPoints / 64]uint64
+	out := make([]PointEdit, 0, len(edits))
+	for i := len(edits) - 1; i >= 0; i-- {
+		index := edits[i].Index
+		if word, bit := index/64, uint64(1)<<(index%64); seen[word]&bit == 0 {
+			seen[word] |= bit
+			out = append(out, edits[i])
+		}
+	}
+	slices.SortFunc(out, func(a, b PointEdit) int { return cmp.Compare(a.Index, b.Index) })
+	return out
+}
+
+// heightsOf 返回 dao 当前高度的副本。
+func heightsOf(dao *db.TerrainChunkDao) []uint16 {
 	out := make([]uint16, 0, dao.HeightsLen())
 	dao.RangeHeights(func(_ int, v uint16) bool {
 		out = append(out, v)
@@ -158,13 +199,66 @@ func (component *SurfaceComponent) heights() []uint16 {
 	return out
 }
 
-// Data 返回本块当前数据的副本；Version 0（还没提交过改动）时 ok 为 false，调用方用原始块。笔刷在锁内用它取编辑前的数据。
-func (component *SurfaceComponent) Data() (terrain.Chunk, bool) {
+// materialsOf 把 dao 的材质（[]uint16，DAO 为按下标增量而取的宽度）换回 terrain 的每点 1 字节。值超过 255 的记录
+// 不是本程序写出来的（写入口只接受 byte），按损坏拒绝（terrain.ErrInvalidChunk），不截断。
+func materialsOf(dao *db.TerrainChunkDao) ([]byte, error) {
+	out := make([]byte, 0, dao.MaterialsLen())
+	var bad error
+	dao.RangeMaterials(func(i int, v uint16) bool {
+		if v > math.MaxUint8 {
+			bad = materialOutsideAByte(i, v)
+			return false
+		}
+		out = append(out, byte(v))
+		return true
+	})
+	if bad != nil {
+		return nil, bad
+	}
+	return out, nil
+}
+
+// checkMaterials 只检查 dao 的材质都在 0～255（规则同 materialsOf），不复制。
+func checkMaterials(dao *db.TerrainChunkDao) error {
+	var bad error
+	dao.RangeMaterials(func(i int, v uint16) bool {
+		if v > math.MaxUint8 {
+			bad = materialOutsideAByte(i, v)
+			return false
+		}
+		return true
+	})
+	return bad
+}
+
+func materialOutsideAByte(index int, v uint16) error {
+	return fmt.Errorf("%w: material %d at point %d is outside [0, 255]", terrain.ErrInvalidChunk, v, index)
+}
+
+// widen 是 materialsOf 的反方向：terrain 的每点 1 字节换成 DAO 的 []uint16（新切片）。
+func widen(materials []byte) []uint16 {
+	if materials == nil {
+		return nil
+	}
+	out := make([]uint16, len(materials))
+	for i, v := range materials {
+		out[i] = uint16(v)
+	}
+	return out
+}
+
+// Data 返回本块当前数据的副本；Version 0（还没提交过改动）时 ok 为 false，调用方用原始块。笔刷在锁内用它取编辑前
+// 的数据。记录的材质越界（> 255）时返回 terrain.ErrInvalidChunk。
+func (component *SurfaceComponent) Data() (terrain.Chunk, bool, error) {
 	dao := component.Owner().Dao()
 	if dao.GetVersion() == 0 {
-		return terrain.Chunk{}, false
+		return terrain.Chunk{}, false, nil
 	}
-	return terrain.Chunk{Heights: component.heights(), Materials: dao.GetMaterialsAll()}, true
+	materials, err := materialsOf(dao)
+	if err != nil {
+		return terrain.Chunk{}, false, fmt.Errorf("chunk %v record: %w", component.Owner().Key(), err)
+	}
+	return terrain.Chunk{Heights: heightsOf(dao), Materials: materials}, true, nil
 }
 
 // Discard 丢弃基于旧原始地形的改动（维护者 2026-11-08：原始地形换版后，玩家改过的块丢弃改动）：记录仍基于
@@ -190,26 +284,26 @@ func (component *SurfaceComponent) Discard(staleRevision, currentRevision int64)
 }
 
 // Overlay 返回本块当前数据的副本（交给地形视图的 SetOverlay，不与 DAO 共享内存）；Version 0 时 ok 为 false：
-// 还没有可覆盖的数据，按原始块看待。
-func (component *SurfaceComponent) Overlay() (overlay terrain.Overlay, ok bool) {
+// 还没有可覆盖的数据，按原始块看待。材质越界时返回错误（规则同 OverlayOf）。
+func (component *SurfaceComponent) Overlay() (overlay terrain.Overlay, ok bool, err error) {
 	return OverlayOf(component.Owner().Dao())
 }
 
 // OverlayOf 是 dao 当前数据的副本，规则同 SurfaceComponent.Overlay。地形服务启动时用它把读出来的持久记录（没有
-// 装成实体的 DAO）交给视图。
-func OverlayOf(dao *db.TerrainChunkDao) (overlay terrain.Overlay, ok bool) {
+// 装成实体的 DAO）交给视图。DAO 的材质是 []uint16，这里换回每点 1 字节；有值超过 255 时返回 terrain.ErrInvalidChunk
+// （调用方按损坏的记录处理，不装入）。
+func OverlayOf(dao *db.TerrainChunkDao) (overlay terrain.Overlay, ok bool, err error) {
 	if dao.GetVersion() == 0 {
-		return terrain.Overlay{}, false
+		return terrain.Overlay{}, false, nil
 	}
-	heights := make([]uint16, 0, dao.HeightsLen())
-	dao.RangeHeights(func(_ int, v uint16) bool {
-		heights = append(heights, v)
-		return true
-	})
+	materials, err := materialsOf(dao)
+	if err != nil {
+		return terrain.Overlay{}, false, err
+	}
 	return terrain.Overlay{
 		BaseRevision: dao.GetBaseRevision(), Version: dao.GetVersion(),
-		Heights: heights, Materials: dao.GetMaterialsAll(),
-	}, true
+		Heights: heightsOf(dao), Materials: materials,
+	}, true, nil
 }
 
 // WasApplied 报告编辑 ID 是否在最近 AppliedRing 个已应用的编辑里（P2 的幂等判重）。

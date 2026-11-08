@@ -152,7 +152,7 @@ func (h *terrainSyncHarness) assertClientMatches(t *testing.T, client *terrainCl
 		if got.Heights == nil || !slices.Equal(got.Heights.Value, chunk.Heights) {
 			t.Fatalf("chunk %v version %d: the client's heights differ from the server's", key, version)
 		}
-		if got.Materials == nil || !slices.Equal(got.Materials.Value, chunk.Materials) {
+		if got.Materials == nil || !sameMaterials(got.Materials.Value, chunk.Materials) {
 			t.Fatalf("chunk %v version %d: the client's materials differ from the server's", key, version)
 		}
 	}
@@ -178,6 +178,19 @@ type receivedFrame struct {
 	others                int
 }
 
+// sameMaterials 比较客户端收到的材质（DAO 同步的 repeated uint32，Go 侧 []uint16）与服务端视图的每点 1 字节。
+func sameMaterials(got []uint16, want []byte) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i, v := range got {
+		if v != uint16(want[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // terrainUpdate 是一帧里的一个地形块更新：componentBytes 是 EntitySync 组件（subject 头 + 载荷），payloadBytes 是
 // DAO 同步 PB（方案 §7.1 的“DAO 组件 payload”口径）。
 type terrainUpdate struct {
@@ -186,7 +199,9 @@ type terrainUpdate struct {
 	componentBytes, payloadBytes int
 	heightsDelta                 bool
 	heightUpdates                int
-	materials                    bool
+	materials                    bool // 带了材质字段（按下标增量或整字段）
+	materialsDelta               bool
+	materialUpdates              int
 }
 
 func dialTerrainClient(t *testing.T, addr string, playerID int64) *terrainClient {
@@ -275,6 +290,9 @@ func (client *terrainClient) apply(f frame.Frame, received *receivedFrame) error
 			if patch.Heights != nil {
 				u.heightsDelta, u.heightUpdates = patch.Heights.Delta, len(patch.Heights.Updates)
 			}
+			if patch.Materials != nil {
+				u.materialsDelta, u.materialUpdates = patch.Materials.Delta, len(patch.Materials.Updates)
+			}
 			received.terrain = append(received.terrain, u)
 		}
 	}
@@ -353,7 +371,8 @@ func centreOf(key terrain.ChunkKey) spatial.Point {
 const terrainBuilder = int64(31000) // 改地形的另一个玩家（不连接）
 
 // 方案 §9 P2：客户端收到改过的块的全量（进入视野）与增量（之后的编辑），断线重连后与服务端块版本、数据逐点一致。
-// 顺带核对增量的形状：r=5m 的高度编辑是按下标的增量、材质是整字段、守卫（>1000 点）是整字段高度。
+// 顺带核对增量的形状：r=5m 的高度编辑与 r=3m 的改材质都是按下标的增量，守卫（>1000 点）的整平是整字段高度、
+// 大面积改材质是整字段材质（D11：材质也按下标增量，维护者 2026-11-08）。
 func TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect(t *testing.T) {
 	h := startTerrainSyncHarness(t, 8, 8, terrainViewRadius, terrainMaxVisible, true)
 	at := centreOf(terrain.ChunkKey{X: 4, Y: 4})
@@ -379,7 +398,7 @@ func TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect(t *testing.
 		}
 	}
 
-	// 增量：r=5m 抬高、改材质、守卫整平，各一次。
+	// 增量：r=5m 抬高、r=3m 改材质、守卫整平、守卫改材质，各一次。
 	centre := chunkID(t, near[0])
 	step := func(requestID uint64, b terrain.Brush, check func(terrainUpdate)) {
 		t.Helper()
@@ -401,13 +420,18 @@ func TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect(t *testing.
 		}
 	})
 	step(6, terrain.Brush{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 300, Material: 33}, func(u terrainUpdate) {
-		if !u.materials || u.heightUpdates != 0 {
-			t.Fatalf("a paint went out as %+v, want the whole materials field and no heights", u)
+		if !u.materials || !u.materialsDelta || u.materialUpdates == 0 || u.materialUpdates > 30 || u.heightUpdates != 0 || u.payloadBytes > 1000 {
+			t.Fatalf("an r=3m paint went out as %+v, want per-index materials only", u)
 		}
 	})
 	step(7, terrain.Brush{Op: terrain.BrushFlatten, X: at.X, Y: at.Y, Radius: 2400, Target: 1900}, func(u terrainUpdate) {
 		if u.heightsDelta || u.payloadBytes < 8000 {
 			t.Fatalf("a guarded flatten went out as %+v, want the whole heights field", u)
+		}
+	})
+	step(11, terrain.Brush{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 2400, Material: 66}, func(u terrainUpdate) {
+		if !u.materials || u.materialsDelta || u.heightUpdates != 0 || u.payloadBytes < 4000 || u.payloadBytes > 5000 {
+			t.Fatalf("a guarded paint went out as %+v, want the whole materials field and no heights", u)
 		}
 	})
 
@@ -496,16 +520,17 @@ func TestATerrainViewAtItsCapKeepsTheSession(t *testing.T) {
 	t.Logf("edited chunks %d, chunks held %d, other objects %d, flushes to the full view %d (%v)", edited, terrainHeld, others, flushes, took)
 }
 
-// ---- 测量（方案 §7.1 / §9 P2）：ROOST_TERRAIN_MEASURE=1 时运行，数字写进证据目录 ----
+// ---- 测量（方案 §7.1 / §9 P2，材质改列表后重测）：ROOST_TERRAIN_MEASURE=1 时运行，数字写进证据目录 ----
 
 func measuring(t *testing.T) {
 	t.Helper()
 	if os.Getenv("ROOST_TERRAIN_MEASURE") == "" {
-		t.Skip("ROOST_TERRAIN_MEASURE not set (measurements, see docs/maintenance/evidence/terrain-p2-20261108)")
+		t.Skip("ROOST_TERRAIN_MEASURE not set (measurements, see docs/maintenance/evidence/terrain-materials-list-20261108)")
 	}
 }
 
-// 单块增量的实际字节：r=5m 高度增量、材质改动、守卫整字段、进入视野的全量。
+// 单块增量的实际字节：r=5m 高度增量、材质按下标增量（单独与同时改高度；同时改的两项各在没改过材质的地方）、
+// 守卫整字段、进入视野的全量。
 func TestTerrainMeasureUpdateBytes(t *testing.T) {
 	measuring(t)
 	h := startTerrainSyncHarness(t, 8, 8, terrainViewRadius, terrainMaxVisible, false)
@@ -520,23 +545,47 @@ func TestTerrainMeasureUpdateBytes(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: no update", name)
 		}
-		t.Logf("MEASURE %-34s payload=%6d component=%6d frame=%6d wire=%6d heights_delta=%v height_updates=%d materials=%v",
-			name, update.payloadBytes, update.componentBytes, f.frameBytes, f.wireBytes, update.heightsDelta, update.heightUpdates, update.materials)
+		t.Logf("MEASURE %-40s payload=%6d component=%6d frame=%6d wire=%6d heights_delta=%v height_updates=%d materials=%v materials_delta=%v material_updates=%d",
+			name, update.payloadBytes, update.componentBytes, f.frameBytes, f.wireBytes, update.heightsDelta, update.heightUpdates, update.materials, update.materialsDelta, update.materialUpdates)
 	}
 	report("full snapshot (enter view)")
-	for i, tc := range []struct {
-		name string
-		b    terrain.Brush
+	// 每项的笔刷在同一次 Flush 之前做完（同一块的多次编辑合成一个增量，与真实的 50ms 合批相同）。材质编号 < 128 时
+	// 值是 1 字节 varint，≥ 128 时 2 字节，两种都测。
+	request := uint64(10)
+	for _, tc := range []struct {
+		name    string
+		brushes []terrain.Brush
 	}{
-		{"raise r=5m linear", terrain.Brush{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: 500, Falloff: terrain.FalloffLinear, Strength: 20}},
-		{"raise r=5m constant (81 points)", terrain.Brush{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: 500, Strength: 20}},
-		{"raise r=16m smooth", terrain.Brush{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: 1600, Falloff: terrain.FalloffSmooth, Strength: 40}},
-		{"paint r=5m (materials whole field)", terrain.Brush{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 500, Material: 21}},
-		{"flatten r=24m (guard, whole heights)", terrain.Brush{Op: terrain.BrushFlatten, X: at.X, Y: at.Y, Radius: 2400, Target: 777}},
+		{"raise r=5m linear", []terrain.Brush{{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: 500, Falloff: terrain.FalloffLinear, Strength: 20}}},
+		{"raise r=5m constant (81 points)", []terrain.Brush{{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: 500, Strength: 20}}},
+		{"raise r=16m smooth", []terrain.Brush{{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: 1600, Falloff: terrain.FalloffSmooth, Strength: 40}}},
+		{"paint r=5m material 21", []terrain.Brush{{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 500, Material: 21}}},
+		{"paint r=5m material 200", []terrain.Brush{{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 500, Material: 200}}},
+		{"raise r=5m linear + paint r=5m (21)", []terrain.Brush{
+			{Op: terrain.BrushRaise, X: at.X, Y: at.Y + 1500, Radius: 500, Falloff: terrain.FalloffLinear, Strength: 20},
+			{Op: terrain.BrushPaint, X: at.X, Y: at.Y + 1500, Radius: 500, Material: 21},
+		}},
+		{"raise r=5m linear + paint r=5m (200)", []terrain.Brush{
+			{Op: terrain.BrushRaise, X: at.X, Y: at.Y - 1500, Radius: 500, Falloff: terrain.FalloffLinear, Strength: 20},
+			{Op: terrain.BrushPaint, X: at.X, Y: at.Y - 1500, Radius: 500, Material: 200},
+		}},
+		{"paint r=10m material 22", []terrain.Brush{{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 1000, Material: 22}}},
+		{"paint r=16m material 21 (player cap)", []terrain.Brush{{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 1600, Material: 21}}},
+		{"paint r=16m material 200 (player cap)", []terrain.Brush{{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 1600, Material: 200}}},
+		{"paint r=24m (guard, whole materials)", []terrain.Brush{{Op: terrain.BrushPaint, X: at.X, Y: at.Y, Radius: 2400, Material: 23}}},
+		{"flatten r=24m (guard, whole heights)", []terrain.Brush{{Op: terrain.BrushFlatten, X: at.X, Y: at.Y, Radius: 2400, Target: 777}}},
 	} {
-		version := h.brush(t, terrainBuilder, uint64(10+i), tc.b).Chunks[0].Version
+		var version int64
+		for _, b := range tc.brushes {
+			request++
+			version = h.brush(t, terrainBuilder, request, b).Chunks[0].Version
+		}
 		h.flushUntil(t, tc.name, func() bool { return client.version(id) == version })
 		report(tc.name)
+	}
+	// 持久文档大小（整文档 BSON，Marshal 即投影整文档写入的内容）：Heights 与 Materials 都是 BSON int32 数组。
+	if e, _ := h.process.entities.Get(id).(*terrain_chunk.TerrainChunk); e != nil {
+		t.Logf("MEASURE stored document (whole BSON) bytes=%d", len(e.Dao().Marshal()))
 	}
 }
 
@@ -588,23 +637,30 @@ func TestTerrainMeasureDownlinkScenarios(t *testing.T) {
 		t.Logf("MEASURE %-50s %7.1f KB/s on the wire (%7.1f KB/s DAO payload), %d full + %d delta chunk updates in %d s",
 			name, float64(wire)/1024/float64(seconds), float64(payload)/1024/float64(seconds), full, delta, seconds)
 	}
-	// 建造热点：观察者站在块 (8,8) 中心，附近 20 人每人每秒一次 r=5m 编辑（落在观察者 ±40m 内，轮流：每拍一人），
-	// 材质比例 0 / 50% / 100%（带材质的编辑 = 一次抬高 + 同一处一次改材质）。
-	for _, share := range []int{0, 50, 100} {
-		t.Run(fmt.Sprintf("hotspot_material_%d", share), func(t *testing.T) {
-			rng := rand.New(rand.NewPCG(7, uint64(share)))
+	// 建造热点：观察者站在块 (8,8) 中心，附近 20 人每人每秒一次编辑（落在观察者 ±40m 内，轮流：每拍一人），材质比例
+	// 0 / 50% / 100%（带材质的编辑 = 一次抬高 + 同一处一次改材质）。笔刷 r=5m（方案 §7.1 的假设）；另测玩家半径上限
+	// r=16m 两档，看笔刷大小对下行的影响。
+	for _, c := range []struct{ radius, share int }{{500, 0}, {500, 50}, {500, 100}, {1600, 0}, {1600, 100}} {
+		name := fmt.Sprintf("hotspot_material_%d", c.share)
+		label := fmt.Sprintf("hot spot, 20 editors x 1/s, %d%% with material", c.share)
+		if c.radius != 500 {
+			name = fmt.Sprintf("hotspot_r%dm_material_%d", c.radius/100, c.share)
+			label = fmt.Sprintf("hot spot r=%dm, 20 editors x 1/s, %d%% with material", c.radius/100, c.share)
+		}
+		t.Run(name, func(t *testing.T) {
+			rng := rand.New(rand.NewPCG(7, uint64(c.share)))
 			var request uint64
 			centre := centreOf(terrain.ChunkKey{X: 8, Y: 8})
-			run(t, fmt.Sprintf("hot spot, 20 editors x 1/s, %d%% with material", share), 20, func(h *terrainSyncHarness) spatial.Point {
+			run(t, label, 20, func(h *terrainSyncHarness) spatial.Point {
 				return centre
 			}, func(h *terrainSyncHarness, tick int, _ int64) {
 				editor := tick % 20
 				x, y := centre.X+rng.Int64N(8000)-4000, centre.Y+rng.Int64N(8000)-4000
 				request++
-				h.brush(t, terrainBuilder+int64(editor), request, terrain.Brush{Op: terrain.BrushRaise, X: x, Y: y, Radius: 500, Falloff: terrain.FalloffLinear, Strength: 5})
-				if editor*100/20 < share {
+				h.brush(t, terrainBuilder+int64(editor), request, terrain.Brush{Op: terrain.BrushRaise, X: x, Y: y, Radius: int64(c.radius), Falloff: terrain.FalloffLinear, Strength: 5})
+				if editor*100/20 < c.share {
 					request++
-					h.brush(t, terrainBuilder+int64(editor), request, terrain.Brush{Op: terrain.BrushPaint, X: x, Y: y, Radius: 500, Material: byte(tick)})
+					h.brush(t, terrainBuilder+int64(editor), request, terrain.Brush{Op: terrain.BrushPaint, X: x, Y: y, Radius: int64(c.radius), Material: byte(tick)})
 				}
 			})
 		})

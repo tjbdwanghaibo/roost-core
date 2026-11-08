@@ -23,7 +23,10 @@ message SyncTerrainChunkDaoHeightsField {
 
 // roost:source=go_def
 message SyncTerrainChunkDaoMaterialsField {
-  bytes value = 1;
+  repeated uint32 value = 1;
+  bool delta = 2;
+  map<uint64, uint32> updates = 3;
+  uint64 length = 4;
 }
 
 // roost:source=go_def

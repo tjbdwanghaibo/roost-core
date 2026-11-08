@@ -31,13 +31,15 @@ type fixtureQuery struct {
 }
 
 type fixtureStep struct {
-	Name         string         `json:"name"`
-	Payload      string         `json:"payload"`
-	Want         string         `json:"want"`
-	Version      int64          `json:"version"`
-	HeightsDelta bool           `json:"heights_delta"`
-	HeightsSent  bool           `json:"heights_sent"`
-	Queries      []fixtureQuery `json:"queries"`
+	Name           string         `json:"name"`
+	Payload        string         `json:"payload"`
+	Want           string         `json:"want"`
+	Version        int64          `json:"version"`
+	HeightsDelta   bool           `json:"heights_delta"`
+	HeightsSent    bool           `json:"heights_sent"`
+	MaterialsDelta bool           `json:"materials_delta"`
+	MaterialsSent  bool           `json:"materials_sent"`
+	Queries        []fixtureQuery `json:"queries"`
 }
 
 type fixture struct {
@@ -69,6 +71,27 @@ func disk(cx, cy, r int) []int {
 }
 
 func shift(v uint16, d int) uint16 { return uint16(min(max(int(v)+d, 0), 65535)) }
+
+// widen / narrow 是 DAO 材质（[]uint16，为按下标增量而取的宽度）与 gameplay/terrain 每点 1 字节之间的换算
+// （game-demo 在 terrain_chunk 组件边界做同样的事，值域 0～255）。
+func widen(m []byte) []uint16 {
+	out := make([]uint16, len(m))
+	for i, v := range m {
+		out[i] = uint16(v)
+	}
+	return out
+}
+
+func narrow(t *testing.T, m []uint16) []byte {
+	out := make([]byte, len(m))
+	for i, v := range m {
+		if v > 255 {
+			t.Fatalf("material %d at %d is outside a byte", v, i)
+		}
+		out[i] = byte(v)
+	}
+	return out
+}
 
 func TestWriteTerrainChunkSyncFixture(t *testing.T) {
 	spec, out := os.Getenv("TERRAIN_SPEC"), os.Getenv("TERRAIN_FIXTURE_OUT")
@@ -103,7 +126,7 @@ func TestWriteTerrainChunkSyncFixture(t *testing.T) {
 	for _, i := range disk(10, 10, 5) {
 		d.heights[i] = shift(d.heights[i], 30)
 	}
-	d.materials = slices.Clone(base.Materials)
+	d.materials = widen(base.Materials)
 	d.Init()
 
 	// 查询点：块 (1,0) 左边界两侧（块 (0,0) 右边一排的插值要读块 (1,0) 的第 0 列）、各次改动的范围、块内与右上角。
@@ -128,12 +151,15 @@ func TestWriteTerrainChunkSyncFixture(t *testing.T) {
 			t.Fatalf("%s: Go apply did not reconstruct the DAO", name)
 		}
 		if err := view.SetOverlay(key, terrain.Overlay{BaseRevision: d.GetBaseRevision(), Version: d.GetVersion(),
-			Heights: slices.Clone(d.heights), Materials: d.GetMaterialsAll()}); err != nil {
+			Heights: slices.Clone(d.heights), Materials: narrow(t, d.materials)}); err != nil {
 			t.Fatal(err)
 		}
 		step := fixtureStep{Name: name, Payload: hex.EncodeToString(payload), Want: hex.EncodeToString(want), Version: d.GetVersion()}
 		if patch.Heights != nil {
 			step.HeightsSent, step.HeightsDelta = true, patch.Heights.Delta
+		}
+		if patch.Materials != nil {
+			step.MaterialsSent, step.MaterialsDelta = true, patch.Materials.Delta
 		}
 		for _, p := range points {
 			g, err := view.Probe(p[0], p[1])
@@ -165,11 +191,18 @@ func TestWriteTerrainChunkSyncFixture(t *testing.T) {
 		}
 		d.SetVersion(d.GetVersion() + 1)
 	})
-	// 改材质：整字段替换，高度不在补丁里。
+	// 改材质（小范围）：逐点 SetMaterialsAt，同步是 list delta（按下标），高度不在补丁里（D11：材质也按下标增量）。
 	edit("materials", func() {
-		m := d.GetMaterialsAll()
 		for _, i := range disk(30, 30, 8) {
-			m[i] = 9
+			d.SetMaterialsAt(i, 9)
+		}
+		d.SetVersion(d.GetVersion() + 1)
+	})
+	// 改材质（大范围，整字段守卫）：SetMaterialsAll，同步是整字段替换；编号 ≥ 128 时 varint 两字节。
+	edit("materials_whole", func() {
+		m := slices.Clone(d.materials)
+		for i := range terrain.ChunkPoints / 2 {
+			m[i] = 200
 		}
 		d.SetMaterialsAll(m)
 		d.SetVersion(d.GetVersion() + 1)
@@ -183,9 +216,17 @@ func TestWriteTerrainChunkSyncFixture(t *testing.T) {
 		d.SetHeightsAll(h)
 		d.SetVersion(d.GetVersion() + 1)
 	})
-	if !steps[1].HeightsDelta || steps[2].HeightsSent || steps[3].HeightsDelta || !steps[3].HeightsSent {
-		t.Fatalf("unexpected patch shapes: %+v", steps)
+	shape := func(i int, heightsSent, heightsDelta, materialsSent, materialsDelta bool) {
+		s := steps[i]
+		if s.HeightsSent != heightsSent || s.HeightsDelta != heightsDelta || s.MaterialsSent != materialsSent || s.MaterialsDelta != materialsDelta {
+			t.Fatalf("step %s: heights sent/delta %v/%v materials sent/delta %v/%v, want %v/%v %v/%v", s.Name,
+				s.HeightsSent, s.HeightsDelta, s.MaterialsSent, s.MaterialsDelta, heightsSent, heightsDelta, materialsSent, materialsDelta)
+		}
 	}
+	shape(1, true, true, false, false)  // edge_brush：高度按下标
+	shape(2, false, false, true, true)  // materials：材质按下标
+	shape(3, false, false, true, false) // materials_whole：材质整字段
+	shape(4, true, false, false, false) // whole_field：高度整字段
 
 	raw, err := json.MarshalIndent(fixture{
 		Description: "TerrainChunk DAO sync payloads written by the generated Go DAO (codegen/cmd/dao on demo/db/def/terrain_chunk.go.tmpl) " +

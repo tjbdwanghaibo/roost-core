@@ -24,9 +24,15 @@ internal static partial class Program
         Throws<TerrainInvalidChunkException>(() => view.SetOverlay(key, rev, 1, heights, materials.AsSpan(1)), "4095 materials");
         Throws<TerrainInvalidChunkException>(() => view.SetOverlay(key, rev, 0, heights, materials), "version 0");
         Throws<TerrainBaseRevisionException>(() => view.SetOverlay(key, rev + 1, 1, heights, materials), "other base revision");
+        // DAO 形状（RepeatedField<uint>）：高度 > 65535、材质 > 255 都拒绝，不截断。
         var wide = heights.Select(h => (uint)h).ToList();
+        var wideMaterials = materials.Select(m => (uint)m).ToList();
         wide[100] = 65536;
-        Throws<TerrainInvalidChunkException>(() => view.SetOverlay(key, rev, 1, wide, materials), "uint32 height above 65535");
+        Throws<TerrainInvalidChunkException>(() => view.SetOverlay(key, rev, 1, wide, wideMaterials), "uint32 height above 65535");
+        wide[100] = heights[100];
+        wideMaterials[200] = 256;
+        Throws<TerrainInvalidChunkException>(() => view.SetOverlay(key, rev, 1, wide, wideMaterials), "uint32 material above 255");
+        Throws<TerrainInvalidChunkException>(() => view.SetOverlay(key, rev, 1, wide, wideMaterials.Take(4095).ToList()), "4095 uint32 materials");
         Check(view.TryGetVersion(key, out long v0) && v0 == 0 && changes.Count == 0, "rejected overlays leave the base chunk");
 
         view.SetOverlay(key, rev, 2, heights, materials);
@@ -44,8 +50,8 @@ internal static partial class Program
         Check(changes.Count == 1, "same version and data: no notification (repeated full)");
         view.SetOverlay(key, rev, 2, Ramp(), Materials(6));
         Check(changes.Count == 2 && changes[1].PreviousVersion == 2 && changes[1].Version == 2 && view.Material(x, y) == 6, "same version, new data replaces and notifies");
-        view.SetOverlay(key, rev, 3, Ramp().Select(h => (uint)h).ToList(), Materials(6));
-        Check(changes.Count == 3 && changes[2].Version == 3, "DAO-shaped overlay (uint32 list)");
+        view.SetOverlay(key, rev, 3, Ramp().Select(h => (uint)h).ToList(), Materials(6).Select(m => (uint)m).ToList());
+        Check(changes.Count == 3 && changes[2].Version == 3 && view.Material(x, y) == 6, "DAO-shaped overlay (uint32 lists)");
         view.LoadBase(key);
         Check(view.TryGetVersion(key, out long v3) && v3 == 3 && changes.Count == 3, "LoadBase never replaces an overlay");
         var data = view.GetChunk(key)!;

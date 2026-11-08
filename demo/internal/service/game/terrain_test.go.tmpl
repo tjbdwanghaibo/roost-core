@@ -478,6 +478,49 @@ func TestTerrainRecordOnAnotherBaseRevisionIsDiscarded(t *testing.T) {
 	}
 }
 
+// DAO 的材质是 []uint16（D11），terrain 与原始地形包里是每点 1 字节：库里出现 > 255 的材质（不是本程序写出的）
+// 按损坏的记录处理——这块不装入、计入 Corrupt，查询 ErrNotLoaded、改块 ErrUnloadable，不截断成别的材质。
+func TestTerrainRecordWithAMaterialOutsideAByteIsNotLoaded(t *testing.T) {
+	dir := t.TempDir()
+	store := &memoryChunkStore{}
+	pack := writeTerrainPack(t, dir, 1)
+	first := startTerrainProcess(t, pack, wholeMap, store)
+	if _, err := first.m.Edit(first.ctx, []terrainmap.SampleEdit{{GX: 5, GY: 5, Height: 1234, Material: 3}, {GX: 70, GY: 5, Height: 4321, Material: 4}}); err != nil {
+		t.Fatal(err)
+	}
+	first.stop()
+	// 改坏 (0,0)：在一笔本地事务里把一个材质写成 300（生成 setter 只能在事务里调；写入口只接受 byte，正常路径写不出来），
+	// 再编成“库里的文档”。
+	k00 := terrain.ChunkKey{}
+	e, _ := first.entities.Get(mustChunkID(t, k00)).(*terrain_chunk.TerrainChunk)
+	if e == nil {
+		t.Fatal("chunk (0,0) has no entity")
+	}
+	if _, err := nest.RunIsolatedTransaction(context.Background(), &terrainCommitter{}, "corrupt_material", func() (any, error) {
+		return e.Dao().SetMaterialsAt(5*terrain.ChunkSamples+5, 300), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first.persist(store)
+
+	second := startTerrainProcess(t, pack, wholeMap, store)
+	if second.stats.Corrupt != 1 || second.stats.Overlays != 1 || second.stats.Base != 4 {
+		t.Fatalf("load with material 300 in chunk (0,0): %+v, want it corrupt, (1,0) as an overlay, 4 from the pack", second.stats)
+	}
+	if cause, ok := second.m.Unloadable()[k00]; !ok || !errors.Is(cause, terrain.ErrInvalidChunk) {
+		t.Fatalf("chunk (0,0) unloadable reason: %v (listed %v), want ErrInvalidChunk", cause, ok)
+	}
+	if _, err := second.m.Material(5*terrain.SampleSpacing, 5*terrain.SampleSpacing); !errors.Is(err, terrain.ErrNotLoaded) {
+		t.Fatalf("query in the corrupt chunk: %v, want ErrNotLoaded", err)
+	}
+	if _, err := second.m.Edit(second.ctx, []terrainmap.SampleEdit{{GX: 5, GY: 5, Height: 1, Material: 1}}); !errors.Is(err, terrainmap.ErrUnloadable) {
+		t.Fatalf("edit in the corrupt chunk: %v, want ErrUnloadable", err)
+	}
+	if mat, err := second.m.Material(70*terrain.SampleSpacing, 5*terrain.SampleSpacing); err != nil || mat != 4 {
+		t.Fatalf("the healthy overlay (1,0) reads material %d, %v", mat, err)
+	}
+}
+
 // 分区场景里本 sid 托管格 (0,0)（cell_size 6400 = 一块）：写本格的块，装入本格外扩 ghost_band 的块；邻格的块只读。
 // 只做 Base 的 sid 不装块。
 func TestTerrainRegionFollowsThePartition(t *testing.T) {
@@ -759,7 +802,7 @@ func brushProcess(t *testing.T, store *memoryChunkStore) *terrainProcess {
 type chunkState struct {
 	daoVersion   int64
 	heights      []uint16
-	materials    []byte
+	materials    []uint16
 	applied      []uint64
 	viewVersion  int64
 	viewHeights  []uint16
@@ -773,7 +816,7 @@ func stateOf(t *testing.T, p *terrainProcess, key terrain.ChunkKey) chunkState {
 		dao := e.Dao()
 		s.daoVersion = dao.GetVersion()
 		dao.RangeHeights(func(_ int, v uint16) bool { s.heights = append(s.heights, v); return true })
-		s.materials = dao.GetMaterialsAll()
+		dao.RangeMaterials(func(_ int, v uint16) bool { s.materials = append(s.materials, v); return true })
 		dao.RangeApplied(func(_ int, v uint64) bool { s.applied = append(s.applied, v); return true })
 	}
 	// 没有实体与 Version 0 的空实体等价：第一次改的块在事务之前 GetOrCreate，事务回滚后留下的空实体仍按原始块看待。
@@ -1059,4 +1102,3 @@ func TestTerrainBrushOverTheGuardWritesTheWholeField(t *testing.T) {
 		t.Fatal("the chunk's DAO differs from the brush applied once")
 	}
 }
-

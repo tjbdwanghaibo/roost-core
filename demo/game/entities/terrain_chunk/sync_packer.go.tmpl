@@ -21,8 +21,8 @@ var terrainChunkViews, terrainChunkViewsErr = dataengine.NewSyncViewSet(db.Terra
 
 // NewTerrainChunkSyncPacker 是实体标记 subjectPacker= 指名的工厂。
 //
-// 增量走 DAO 的变化树（MarshalSyncChanges）：小笔刷只发改了的高度下标（每点约 8 字节），整字段守卫（SetHeightsAll）
-// 与材质（[]byte）发整字段；进入视野、重连、恢复发全量（MarshalSync）。所以本 packer 同时实现
+// 增量走 DAO 的变化树（MarshalSyncChanges）：小笔刷只发改了的高度 / 材质下标（每点约 7～8 字节），整字段守卫
+// （SetHeightsAll / SetMaterialsAll）发整字段；进入视野、重连、恢复发全量（MarshalSync）。所以本 packer 同时实现
 // entity.SubjectSyncChangePacker，把捕获版本与确认委托给同一个 DAO（docs/framework/DAO-SYNC-PROTOBUF.md“业务写法”）。
 func NewTerrainChunkSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
 	owner, _ := value.(*TerrainChunk)

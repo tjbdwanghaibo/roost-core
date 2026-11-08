@@ -453,7 +453,10 @@ func decodeRecord(doc coredata.RawDocument) Record {
 	if err := dao.RestorePersisted(doc.Data, doc.Schema, doc.Version); err != nil {
 		return Record{err: fmt.Errorf("terrain: entity %d record: %w", doc.Key.ID, err)}
 	}
-	overlay, edited := terrain_chunk.OverlayOf(dao)
+	overlay, edited, err := terrain_chunk.OverlayOf(dao)
+	if err != nil {
+		return Record{err: fmt.Errorf("terrain: entity %d record: %w", doc.Key.ID, err)}
+	}
 	return Record{overlay: overlay, edited: edited}
 }
 
@@ -536,8 +539,8 @@ func (m *Map) ApplyEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chu
 // 在块的锁内调用（handler），只读内存。
 func (m *Map) baseFor(surface *terrain_chunk.SurfaceComponent) (data terrain.Chunk, fromRecord bool, err error) {
 	key := surface.Owner().Key()
-	if data, ok := surface.Data(); ok {
-		return data, true, nil
+	if data, ok, err := surface.Data(); err != nil || ok {
+		return data, ok, err
 	}
 	chunk, version, loaded := m.view.Chunk(key)
 	if !loaded {
@@ -554,7 +557,14 @@ func (m *Map) baseFor(surface *terrain_chunk.SurfaceComponent) (data terrain.Chu
 // 之后调用，取这块新数据的副本，登记为提交后回调——提交被接受才 SetOverlay 给视图并通知同步（SetCommitted），事务
 // 回滚（handler 之后的步骤失败、提交被拒）时回调不执行，视图与同步都不变。不在事务里时立即执行。
 func (m *Map) afterCommit(chunk *terrain_chunk.TerrainChunk) {
-	overlay, ok := chunk.SurfaceComp().Overlay()
+	overlay, ok, err := chunk.SurfaceComp().Overlay()
+	if err != nil {
+		// Apply 写之前已校验记录的材质值域、写入口只接受 byte，这里不会失败；万一失败，视图保留旧数据（与 commit
+		// 失败同样计数、记 Error，重启后按数据库重新装入）。
+		m.commitFailures.Add(1)
+		slog.Error("terrain: a committed chunk has data the view cannot take", "chunk", chunk.Key().String(), "err", err)
+		return
+	}
 	if !ok {
 		return // Version 0（丢弃后的空记录）：没有可覆盖的数据
 	}

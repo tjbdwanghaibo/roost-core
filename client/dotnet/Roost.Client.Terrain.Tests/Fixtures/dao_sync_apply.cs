@@ -34,6 +34,14 @@ return next;
 }
 private static SyncTerrainChunkDaoMaterialsField ApplyField(SyncTerrainChunkDaoMaterialsField patch,SyncTerrainChunkDaoMaterialsField previous){
 var update=patch.Clone();
-return update;
+if(!update.Delta){if(update.Length!=0||update.Updates.Count!=0)throw new System.IO.InvalidDataException("Operations on replacement.");return update;}
+if(previous==null||update.Length>(ulong)previous.Value.Count+(ulong)update.Updates.Count||update.Length>int.MaxValue)throw new System.IO.InvalidDataException("Invalid list length or missing baseline.");
+foreach(var pair in update.Updates)if(pair.Key>=update.Length)throw new System.IO.InvalidDataException("List index out of bounds.");
+var baseline=previous.Clone();var next=new SyncTerrainChunkDaoMaterialsField();
+for(ulong index=0;index<update.Length;index++){
+if(update.Updates.TryGetValue(index,out var value))next.Value.Add(value);
+else if(index<(ulong)baseline.Value.Count)next.Value.Add(baseline.Value[(int)index]);
+else throw new System.IO.InvalidDataException("List append has a hole.");}
+return next;
 }
 }}
