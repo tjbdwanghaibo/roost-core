@@ -1,0 +1,14 @@
+=== RUN   TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen
+--- PASS: TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen (0.03s)
+=== RUN   TestACrowdOverflowingASessionShrinksTheViewInsteadOfDisconnecting
+--- PASS: TestACrowdOverflowingASessionShrinksTheViewInsteadOfDisconnecting (0.02s)
+=== RUN   TestATerrainViewAtItsCapKeepsTheSession
+    terrain_sync_test.go:556: edited chunks 100, chunks held 64, other objects 41, flushes to the full view 17 (43.124625ms)
+--- PASS: TestATerrainViewAtItsCapKeepsTheSession (0.10s)
+=== RUN   TestTerrainDoesNotWidenThePlayerObjectLimit
+--- PASS: TestTerrainDoesNotWidenThePlayerObjectLimit (0.02s)
+=== RUN   TestTerrainChunksOverTheirLimitShrinkTheView
+    terrain_sync_test.go:800: settled at 64 chunks after 825 flushes; 9 chunks ever deferred
+--- PASS: TestTerrainChunksOverTheirLimitShrinkTheView (2.12s)
+PASS
+ok  	example.com/planet/internal/service/game	2.787s

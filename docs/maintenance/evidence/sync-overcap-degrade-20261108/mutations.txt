@@ -1,0 +1,38 @@
+### M1 admitWithinLimits 什么都不做
+--- FAIL: TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit (0.00s)
+    manager_test.go:496: a session over its object budget was closed: {FlushCalls:2 EmptyFlushes:0 FlushDuration:187.25µs LastFlushDuration:9.625µs DirtyCaptured:0 SnapshotsCaptured:3 SnapshotsDeferred:0 CaptureDuration:15.042µs EncodeDuration:125.458µs AdmissionDuration:833ns CreatesAdmitted:2 UpdatesAdmitted:0 RemovesAdmitted:0 Subjects:3 Sessions:0 HeldSessions:0 Subscriptions:0 Pending:0 PendingSnapshots:0 WaitingSnapshotSubjects:0 OldestSnapshotWait:0s FramesAdmitted:1 SessionsLost:1 DurabilityDeferred:0 FlushFailures:0 MaxSubjects:65536 MaxSessions:65536 OverLimitWaiting:0 OverLimitDeferred:0 OverLimitEvicted:0} cause=entitysync: session lost (encode_failed): frame: object limit exceeded
+--- FAIL: TestNamespaceObjectLimitsAreCountedPerClass (0.00s)
+        manager_test.go:1107: a session over a class limit was closed: {FlushCalls:2 EmptyFlushes:0 FlushDuration:102.5µs LastFlushDuration:11.5µs DirtyCaptured:0 SnapshotsCaptured:5 SnapshotsDeferred:0 CaptureDuration:81.624µs EncodeDuration:7.918µs AdmissionDuration:417ns CreatesAdmitted:4 UpdatesAdmitted:0 RemovesAdmitted:0 Subjects:6 Sessions:0 HeldSessions:0 Subscriptions:0 Pending:0 PendingSnapshots:0 WaitingSnapshotSubjects:0 OldestSnapshotWait:0s FramesAdmitted:2 SessionsLost:1 DurabilityDeferred:0 FlushFailures:0 MaxSubjects:65536 MaxSessions:65536 OverLimitWaiting:0 OverLimitDeferred:0 OverLimitEvicted:0} cause=entitysync: session lost (encode_failed): frame: object limit exceeded: session 1 holds 2 objects of the namespaces Namespaces does not list (Limits.MaxObjects)
+        manager_test.go:1107: a session over a class limit was closed: {FlushCalls:2 EmptyFlushes:0 FlushDuration:22.625µs LastFlushDuration:6.333µs DirtyCaptured:0 SnapshotsCaptured:5 SnapshotsDeferred:0 CaptureDuration:12.791µs EncodeDuration:3µs AdmissionDuration:292ns CreatesAdmitted:4 UpdatesAdmitted:0 RemovesAdmitted:0 Subjects:6 Sessions:0 HeldSessions:0 Subscriptions:0 Pending:0 PendingSnapshots:0 WaitingSnapshotSubjects:0 OldestSnapshotWait:0s FramesAdmitted:2 SessionsLost:1 DurabilityDeferred:0 FlushFailures:0 MaxSubjects:65536 MaxSessions:65536 OverLimitWaiting:0 OverLimitDeferred:0 OverLimitEvicted:0} cause=entitysync: session lost (encode_failed): frame: object limit exceeded: session 1 holds 2 objects of namespace "terrain"
+--- FAIL: TestOverLimitDefersTheLowestPriorityNewObjectsAndKeepsTheSession (0.00s)
+    over_limit_test.go:248: session lost over its limit: entitysync: session lost (encode_failed): frame: object limit exceeded
+--- FAIL: TestOverLimitPinnedSubscriptionEvictsTheLowestPriority (0.00s)
+    over_limit_test.go:327: eviction took 0 frames, want one frame with remove then create
+--- FAIL: TestOverLimitPinningAWaitingSubscriptionAdmitsIt (0.00s)
+    over_limit_test.go:393: client holds []
+--- FAIL: TestOverLimitHoldReadyStartsOverFromZero (0.00s)
+### M2 Interest 收到通知不收紧
+--- FAIL: TestInterestShrinksAFullSessionToTheNearest (0.10s)
+        interest_over_limit_test.go:191: client holds [1 2 3 4 1001], want itself and the four nearest [5 6 7 8]
+        interest_over_limit_test.go:191: client holds [1 2 3 4 1001], want itself and the four nearest [5 6 7 8]
+--- FAIL: TestInterestWithMaxVisibleAboveTheSessionLimitSettlesAtTheLimit (0.00s)
+    interest_over_limit_test.go:270: client holds [3 4 5 1001], want itself and the three nearest
+--- FAIL: TestInterestRelationPairMakesTheMainViewGiveWay (0.00s)
+    interest_over_limit_test.go:404: client holds [1 2 3 1001], want the farthest spatial target (3) to give way to the teammate
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	0.778s
+FAIL
+### M3 不再周期再通知
+--- FAIL: TestOverLimitRenotifiesWhileStillWaiting (0.06s)
+    over_limit_test.go:754: notices after the interval [], want subject 2 again
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.568s
+FAIL
+### M4 钉住的订阅不挤已持有的
+--- FAIL: TestOverLimitPinnedSubscriptionEvictsTheLowestPriority (0.00s)
+    over_limit_test.go:331: eviction frame map[3:2], want remove then the pinned create
+--- FAIL: TestOverLimitChurnKeepsTablesConsistent (0.40s)
+    over_limit_test.go:674: the churn never went over a limit (deferred 41993, evicted 0); it proves nothing
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.920s
+FAIL

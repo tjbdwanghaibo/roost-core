@@ -85,7 +85,7 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `entitysync_frames_admitted_total` | Counter | 传输层接受的会话帧数 |
 | `entitysync_sessions_lost_total` | Counter | 被 Manager 自己关闭的会话数（推送被拒或编码失败，`SessionLost` 回调政策；原因分类见 `entitysync.LossReason`） |
 | `entitysync_over_limit_deferred_total{namespace,reason}` | Counter | 会话的一类对象已满时被暂缓的订阅数（超额降级，D17，见 [ENTITY_SYNC](ENTITY_SYNC.md#超额降级会话持有对象超过上限)）：`reason` = `deferred`（新对象放不下，本轮不创建）/ `evicted`（为钉住的订阅——玩家自己——让位而 remove 的已持有对象）/ `pinned_blocked`（同类全是钉住的对象，钉住的也只能等，配置错误）；`namespace` 是 `ManagerConfig.Namespaces` 里的名字，没列出的那一类为 `*`。会话不关、不断开。**正常为 0**；持续增长 = 政策的上限（各视野 `MaxVisible` 之和 + 关系视野 + 自身）大于会话上限，看限频 Warn `entitysync: a session is over its object limit …` 里的 `manager`、`session`、`namespace`、`limit`、`held` |
-| `entitysync_over_limit_waiting{namespace}` | Gauge | 此刻处于超额暂缓的订阅数（进程内所有 Manager 按命名空间加总，每次 Flush 末尾与 Close 时更新）；大于 0 时对应 Manager 的 `CheckHealth` 为 degraded（消息带 `over_limit_waiting=N`）。用了 Interest 时通常在约 1 秒内回到 0（Interest 收紧视野后被暂缓的对象离开）；Group / Direct 这类没有距离的政策不收紧，暂缓会一直留到有空位 |
+| `entitysync_over_limit_waiting{namespace}` | Gauge | 此刻处于超额暂缓的订阅数（进程内所有 Manager 按命名空间加总，每次 Flush 末尾与 Close 时更新）；大于 0 时对应 Manager 的 `CheckHealth` 为 degraded（消息带 `over_limit_waiting=N`）。用了 Interest 时通常在秒级回到 0（Interest 收紧视野后被暂缓的对象离开；地形用例约 2 秒）；Group / Direct 这类没有距离的政策不收紧，暂缓会一直留到有空位 |
 | `entitysync_interest_over_limit_total{action}` | Counter | Interest 对超额暂缓通知的反应：`tighten`（收紧一个空间视野的可见上限，从最远的开始退订）、`raise`（冷却到期上调一档）、`lift`（撤掉收紧，回到 `MaxVisible`）、`untightened`（通知里的 pair 不来自任何空间视野、玩家也没有主视野，没有可收紧的） |
 | `entitysync_interest_limited_views` | Gauge | 此刻收紧着可见上限的空间视野数（进程内所有 Interest 之和）。拥挤时不为 0 是正常的降级；拥挤散去后应在冷却（1～32 秒）内回到 0 |
 | `entitysync.self_view.stranded_players` | Gauge | 自身视图里在线（至少一条连接）却超过 3 个同步周期没有打开的同步会话的玩家数，每个政策阶段由 `wiring/selfsync` 写入（`SelfView.Stranded`）。**正常为 0**；持续不为 0 = 有连接活着却收不到自己的状态：传输没有关闭拒收的连接，或会话打开被持续拒绝（会话数上限）。玩家实体的帧编码失败 2026-10-22 起断开该玩家（见 `player.sync.session_lost_disconnect.total`），不再滞留 |
@@ -657,7 +657,7 @@ Wiring `ops` Mod 提供两个探针端点，checker 经 `health.Registry` 注册
 12. `heartbeat.skipped_total` 或 `heartbeat.stalled_total` 持续增长 —— 关注：实体心跳跟不上（快池 worker 饱和、回调慢，或 Remote 写准入反复被拒）；按 Warn `heartbeat: beats skipped` 里的样本实体与原因排查。
 13. `saga.partition.fail_stop_total` 非零 —— 立即告警：协调器进程 fail-stop（`fenced` = 出现第二个写者，崩溃重启的短暂重叠或部署错误；`publish_unknown` = 一条流的发布结果未知超过预算；`rejected` = 流满等明确拒绝），按 ERROR 日志点名的分区与流核对；同 sid 进程重启后从快照 + 日志重放恢复。
 14. `saga.log.purge_blocked_seconds` 超过 `saga.purge_stall_alarm` 或 `saga.partition.snapshot_failures_total` 持续增长 —— 告警：日志清理停了（下线步骤的 durable 没删、或快照桶不可写），流会一直涨到 `saga.stream_max_bytes` 后 fail-stop。`saga.step.mongo_txn_lifetime_exceeds_budget` 非零 —— 部署违约（Mongo `transactionLifetimeLimitSeconds` 应为 20s）。
-15. `entitysync_over_limit_waiting > 0` 持续数分钟 —— 关注：有会话的一类对象一直放不下（超额降级，玩家少看了一些对象但没有断开）。用了 Interest 时正常会在约 1 秒内收敛；持续不为 0 = 政策的上限与会话上限不匹配（`MaxVisible` 之和 + 关系视野 + 自身 > `MaxObjects`）或 Group / Direct 订阅的对象超过上限，按限频 Warn 里的 `manager` / `namespace` 调大 `MaxObjects` 或调小 `MaxVisible`
+15. `entitysync_over_limit_waiting > 0` 持续数分钟 —— 关注：有会话的一类对象一直放不下（超额降级，玩家少看了一些对象但没有断开）。用了 Interest 时正常在秒级收敛；持续不为 0 = 政策的上限与会话上限不匹配（`MaxVisible` 之和 + 关系视野 + 自身 > `MaxObjects`）或 Group / Direct 订阅的对象超过上限，按限频 Warn 里的 `manager` / `namespace` 调大 `MaxObjects` 或调小 `MaxVisible`
 
 Grafana 总览面板见 [observability/grafana-roost-overview.json](../../observability/grafana-roost-overview.json)（按上述四组布局，导入后选择 Prometheus 数据源即可）。
 

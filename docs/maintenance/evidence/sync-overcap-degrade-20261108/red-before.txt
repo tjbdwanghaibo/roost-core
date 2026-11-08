@@ -1,0 +1,11 @@
+--- FAIL: TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit (0.00s)
+    manager_test.go:494: a session over its object budget was closed: {FlushCalls:2 EmptyFlushes:0 FlushDuration:115.042µs LastFlushDuration:6.334µs DirtyCaptured:0 SnapshotsCaptured:3 SnapshotsDeferred:0 CaptureDuration:28.583µs EncodeDuration:35.542µs AdmissionDuration:22.625µs CreatesAdmitted:2 UpdatesAdmitted:0 RemovesAdmitted:0 Subjects:3 Sessions:0 HeldSessions:0 Subscriptions:0 Pending:0 PendingSnapshots:0 WaitingSnapshotSubjects:0 OldestSnapshotWait:0s FramesAdmitted:1 SessionsLost:1 DurabilityDeferred:0 FlushFailures:0 MaxSubjects:65536 MaxSessions:65536} cause=entitysync: session lost (object_limit): frame: object limit exceeded
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.654s
+FAIL
+2026/11/08 21:15:46 WARN selfsync: a player's sync session was lost without a refused push; disconnected the player so the client reconnects with a full snapshot player_id=7 reason=object_limit connections=1 suppressed_since_last_warn=0 err="entitysync: session lost (object_limit): frame: object limit exceeded"
+--- FAIL: TestALostSessionDisconnectsThePlayerUnlessThePushWasRefused (0.00s)
+    selfsync_test.go:925: an object over MaxObjects: lost [entitysync: session lost (object_limit): frame: object limit exceeded], closed [7], frames 0; want it deferred with the connection untouched
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/selfsync	0.575s
+FAIL

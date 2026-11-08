@@ -172,10 +172,11 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
     - **只断开“会话 ID 就是玩家 ID”的 Manager**：业务自建、会话 ID 是别的东西（连接 ID、机器人）的 Manager 要在自己的 `SessionLost` 里按 `LossReason` 处理，框架不替它判断连接归属。
   - **挤满时看见的是最近的 64 个**：近的进来挤掉最远的；没入选的目标要等它（或观察者）下一次移动才重新参评（AOI `MaxVisible` 的近似语义）。挤在出生点时最近的 64 个可能全是玩家，旁边的怪看不见，`scene_expect subjects: 2` 由自身 + 任一其他目标满足，不会因此失败。
   - **超额降级（D17，2026-11-08）的剩余边界**（契约见 [ENTITY_SYNC“超额降级”](../framework/ENTITY_SYNC.md#超额降级会话持有对象超过上限)）：
-    - **收敛要几轮 Flush、最长约 1 秒**：Manager 暂缓 → 通知 Interest → 收紧、退订最远的 → 下一次 Flush 放回最近的暂缓对象。快照预算挡着、政策退订的是还没捕获的订阅时，要等每秒一次的再通知（`overLimitRenotifyInterval`）；地形用例（视野 80 > 上限 64）从开始到客户端持有 64 块约 1 秒。期间客户端持有的永远不超过上限，只是“哪 64 个”还没换成最近的。
+    - **收敛要几轮 Flush、秒级**：Manager 暂缓 → 通知 Interest → 收紧、退订最远的 → 下一次 Flush 放回最近的暂缓对象。快照预算挡着、政策退订的是还没捕获的订阅时，要等每秒一次的再通知（`overLimitRenotifyInterval`）；地形用例（视野 80 > 上限 64）825 次 Flush 后稳定在 64 块，用例耗时约 2 秒；没有证明收敛时间的上界。期间客户端持有的永远不超过上限，只是“哪 64 个”还没换成最近的。
     - **放宽是试探式的**：冷却 1 秒起，上调后又超额就加倍（至多 32 秒）。拥挤边界附近每次试探在 Manager 内部多一次暂缓，不上线；人群散去时上限不再起作用就直接撤掉。上限停在边界上时，新进入范围的更近目标要等成员离开或下一次试探才换入（AOI `MaxVisible` 的近似语义照旧）。
     - **只有 Interest 收紧**：Group / Direct / GroupView 没有距离，超额时订阅一直暂缓到有空位，按（Profile 优先级、实体 ID）放回；`AOICluster` 没有接这条回馈，超额时同样只暂缓。共享空间视野被收紧时，挂接它的其他玩家一起少看。
     - **Manager 只为钉住的订阅挤已持有的对象**：钉住的只有自身视图与 Interest 的 self；业务自建政策要“必须可见”的对象时用 `SubscriptionSource.SubscribePinned`。同类全是钉住的对象时钉住的也只能暂缓（`pinned_blocked`）。
+    - **`BenchmarkAOIBatchRecompute/dense=false/coverage=false/workers=4` 慢 7～11%，原因尚未确认**：三次同机交替对照（count 6）都显著，约 9µs 一档；同一路径 workers=1 与其余七个组合无差异，AOI 观察者结构已收回原大小，改动在这条路径上只多两次分支判断。可能是 4 worker 小批量下的调度或代码布局噪声，没有定位到代码原因（[证据](evidence/sync-overcap-degrade-20261108/README.md#基准对照同机交替)）。
     - **配置错误只降级、不报错**：`MaxVisible` 之和大于会话上限不会在启动时拒绝，运行期表现为持续的 `entitysync_over_limit_*` 与 `CheckHealth` degraded（告警基线第 15 项）。game-demo 启动期的 64 + 3 ≤ 100 核对仍在。
   - **单 IP 连接上限**：机器人全从 127.0.0.1 来，`player_access.tcp.max_connections_per_ip` 缺省 128，超出的连接在握手前被关（2026-10-22 200 人风暴里 72 个 `connect` 失败即此，`player_tcp_connection_rejected_total{reason="per_ip"}`）；压 128 个以上要调高该配置。
 

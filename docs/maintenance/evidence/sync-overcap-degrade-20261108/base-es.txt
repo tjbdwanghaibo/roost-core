@@ -1,0 +1,114 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   66878	     17682 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2750	    447430 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870315 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2454	    483750 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967850 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     763	   1559860 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376099 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     727	   1684269 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473643 B/op	    1894 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=1/subjects=32+16/payload=256-10   	   43882	     27351 ns/op	   73144 B/op	     362 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=64/subjects=32+16/payload=256-10  	    1947	    618512 ns/op	 1282237 B/op	     756 allocs/op
+BenchmarkByteBudgetRecoveryDrain-10                                            	       8	 140880521 ns/op	     17210 captures/op	       182.0 windows/op	88854650 B/op	  217046 allocs/op
+BenchmarkSessionRecovery/entities=1000/players=1000/visible=50-10              	     322	   3619460 ns/op	 1272554 B/op	    8031 allocs/op
+BenchmarkSessionRecovery/entities=10000/players=1000/visible=50-10             	     453	   2598717 ns/op	 1265453 B/op	    8022 allocs/op
+BenchmarkExhaustedSnapshotWindow-10                                            	 5178102	       230.7 ns/op	      64 B/op	       3 allocs/op
+BenchmarkProfileDemand/profiles=1-10                                           	728133981	         1.657 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileDemand/profiles=2-10                                           	722576161	         1.651 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileDemand/profiles=8-10                                           	734713558	         1.649 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   65668	     18270 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2617	    449213 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870315 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2496	    489156 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967851 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     728	   1612203 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376100 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     710	   1695649 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473643 B/op	    1894 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=1/subjects=32+16/payload=256-10   	   43322	     27526 ns/op	   73144 B/op	     362 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=64/subjects=32+16/payload=256-10  	    1918	    624495 ns/op	 1282236 B/op	     756 allocs/op
+BenchmarkByteBudgetRecoveryDrain-10                                            	       7	 142981298 ns/op	     17210 captures/op	       182.0 windows/op	88850466 B/op	  217056 allocs/op
+BenchmarkSessionRecovery/entities=1000/players=1000/visible=50-10              	     325	   3590660 ns/op	 1272327 B/op	    8030 allocs/op
+BenchmarkSessionRecovery/entities=10000/players=1000/visible=50-10             	     451	   2573158 ns/op	 1265531 B/op	    8022 allocs/op
+BenchmarkExhaustedSnapshotWindow-10                                            	 5170861	       230.1 ns/op	      64 B/op	       3 allocs/op
+BenchmarkProfileDemand/profiles=1-10                                           	730299415	         1.639 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileDemand/profiles=2-10                                           	729612460	         1.654 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileDemand/profiles=8-10                                           	722732290	         1.662 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   66634	     18067 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2674	    448194 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870317 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2529	    468950 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967851 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     769	   1559011 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376099 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     734	   1640348 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473642 B/op	    1894 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=1/subjects=32+16/payload=256-10   	   43944	     27376 ns/op	   73144 B/op	     362 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=64/subjects=32+16/payload=256-10  	    1904	    633314 ns/op	 1282239 B/op	     756 allocs/op
+BenchmarkByteBudgetRecoveryDrain-10                                            	       7	 145095179 ns/op	     17210 captures/op	       182.0 windows/op	88859286 B/op	  217037 allocs/op
+BenchmarkSessionRecovery/entities=1000/players=1000/visible=50-10              	     328	   3652852 ns/op	 1272105 B/op	    8030 allocs/op
+BenchmarkSessionRecovery/entities=10000/players=1000/visible=50-10             	     432	   2701401 ns/op	 1266302 B/op	    8023 allocs/op
+BenchmarkExhaustedSnapshotWindow-10                                            	 5155647	       233.2 ns/op	      64 B/op	       3 allocs/op
+BenchmarkProfileDemand/profiles=1-10                                           	720912132	         1.662 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileDemand/profiles=2-10                                           	699969157	         1.666 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileDemand/profiles=8-10                                           	721852815	         1.644 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   67870	     17575 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2769	    432854 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870316 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2600	    471480 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967851 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     518	   2350855 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376101 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     734	   1628107 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473644 B/op	    1894 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=1/subjects=32+16/payload=256-10   	   43678	     28207 ns/op	   73144 B/op	     362 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=64/subjects=32+16/payload=256-10  	    1831	    629982 ns/op	 1282241 B/op	     756 allocs/op
+BenchmarkByteBudgetRecoveryDrain-10                                            	       8	 142342672 ns/op	     17210 captures/op	       182.0 windows/op	88855581 B/op	  217047 allocs/op
+BenchmarkSessionRecovery/entities=1000/players=1000/visible=50-10              	     327	   3581631 ns/op	 1272178 B/op	    8030 allocs/op
+BenchmarkSessionRecovery/entities=10000/players=1000/visible=50-10             	     454	   2550662 ns/op	 1265415 B/op	    8022 allocs/op
+BenchmarkExhaustedSnapshotWindow-10                                            	 5185656	       230.6 ns/op	      64 B/op	       3 allocs/op
+BenchmarkProfileDemand/profiles=1-10                                           	723243746	         1.707 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileDemand/profiles=2-10                                           	730166473	         1.641 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileDemand/profiles=8-10                                           	731153008	         1.635 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   66952	     17824 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2802	    440598 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870313 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2478	    473503 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967851 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     772	   1547618 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376100 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     720	   1698388 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473643 B/op	    1894 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=1/subjects=32+16/payload=256-10   	   41413	     28444 ns/op	   73144 B/op	     362 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=64/subjects=32+16/payload=256-10  	    1872	    646180 ns/op	 1282239 B/op	     756 allocs/op
+BenchmarkByteBudgetRecoveryDrain-10                                            	       7	 147612304 ns/op	     17210 captures/op	       182.0 windows/op	88884485 B/op	  217060 allocs/op
+BenchmarkSessionRecovery/entities=1000/players=1000/visible=50-10              	     262	   4204058 ns/op	 1278177 B/op	    8038 allocs/op
+BenchmarkSessionRecovery/entities=10000/players=1000/visible=50-10             	     397	   2779219 ns/op	 1267915 B/op	    8025 allocs/op
+BenchmarkExhaustedSnapshotWindow-10                                            	 5194362	       229.8 ns/op	      64 B/op	       3 allocs/op
+BenchmarkProfileDemand/profiles=1-10                                           	733090986	         1.644 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileDemand/profiles=2-10                                           	728751390	         1.640 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileDemand/profiles=8-10                                           	734423338	         1.634 ns/op	       0 B/op	       0 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlush/sessions=1/subjects=32/profiles=1/payload=256-10         	   62973	     18530 ns/op	         1.000 frames/op	        32.00 packs/op	     11072 wire-B/op	   48352 B/op	     244 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=1/payload=256-10        	    2670	    434862 ns/op	        64.00 frames/op	        32.00 packs/op	    708608 wire-B/op	  870316 B/op	     638 allocs/op
+BenchmarkManagerFlush/sessions=64/subjects=32/profiles=4/payload=256-10        	    2550	    474874 ns/op	        64.00 frames/op	       128.0 packs/op	    708608 wire-B/op	  967851 B/op	     736 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=1/payload=256-10       	     740	   1605180 ns/op	       256.0 frames/op	        32.00 packs/op	   2834432 wire-B/op	 3376101 B/op	    1796 allocs/op
+BenchmarkManagerFlush/sessions=256/subjects=32/profiles=4/payload=256-10       	     703	   1752404 ns/op	       256.0 frames/op	       128.0 packs/op	   2834432 wire-B/op	 3473645 B/op	    1894 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=1/subjects=32+16/payload=256-10   	   42230	     28205 ns/op	   73144 B/op	     362 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=64/subjects=32+16/payload=256-10  	    1869	    635711 ns/op	 1282239 B/op	     756 allocs/op
+BenchmarkByteBudgetRecoveryDrain-10                                            	       8	 141068656 ns/op	     17211 captures/op	       182.0 windows/op	88853918 B/op	  217067 allocs/op
+BenchmarkSessionRecovery/entities=1000/players=1000/visible=50-10              	     326	   3676181 ns/op	 1272252 B/op	    8030 allocs/op
+BenchmarkSessionRecovery/entities=10000/players=1000/visible=50-10             	     457	   2535918 ns/op	 1265301 B/op	    8021 allocs/op
+BenchmarkExhaustedSnapshotWindow-10                                            	 5191412	       228.3 ns/op	      64 B/op	       3 allocs/op
+BenchmarkProfileDemand/profiles=1-10                                           	734404987	         1.639 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileDemand/profiles=2-10                                           	730888040	         1.655 ns/op	       0 B/op	       0 allocs/op
+BenchmarkProfileDemand/profiles=8-10                                           	722258502	         1.668 ns/op	       0 B/op	       0 allocs/op
+PASS
