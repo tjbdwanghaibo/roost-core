@@ -1,0 +1,47 @@
+MEASURE full snapshot (enter view)               payload= 12319 component= 12397 frame= 12611 wire= 12627 heights_delta=false height_updates=0 materials=true materials_delta=false material_updates=0
+MEASURE raise r=5m linear                        payload=   575 component=   653 frame=   703 wire=   719 heights_delta=true height_updates=69 materials=false materials_delta=false material_updates=0
+MEASURE raise r=5m constant (81 points)          payload=   671 component=   749 frame=   799 wire=   815 heights_delta=true height_updates=81 materials=false materials_delta=false material_updates=0
+MEASURE raise r=16m smooth                       payload=  5759 component=  5837 frame=  5887 wire=  5903 heights_delta=true height_updates=717 materials=false materials_delta=false material_updates=0
+MEASURE paint r=5m material 21                   payload=   590 component=   668 frame=   718 wire=   734 heights_delta=false height_updates=0 materials=true materials_delta=true material_updates=81
+MEASURE paint r=5m material 200                  payload=   671 component=   749 frame=   799 wire=   815 heights_delta=false height_updates=0 materials=true materials_delta=true material_updates=81
+MEASURE raise r=5m linear + paint r=5m (21)      payload=  1150 component=  1228 frame=  1278 wire=  1294 heights_delta=true height_updates=69 materials=true materials_delta=true material_updates=81
+MEASURE raise r=5m linear + paint r=5m (200)     payload=  1231 component=  1309 frame=  1359 wire=  1375 heights_delta=true height_updates=69 materials=true materials_delta=true material_updates=81
+MEASURE paint r=10m material 22                  payload=  2242 component=  2320 frame=  2370 wire=  2386 heights_delta=false height_updates=0 materials=true materials_delta=true material_updates=317
+MEASURE paint r=16m material 21 (player cap)     payload=  4151 component=  4229 frame=  4279 wire=  4295 heights_delta=false height_updates=0 materials=true materials_delta=false material_updates=0
+MEASURE paint r=16m material 200 (player cap)    payload=  4948 component=  5026 frame=  5076 wire=  5092 heights_delta=false height_updates=0 materials=true materials_delta=false material_updates=0
+MEASURE paint r=24m (guard, whole materials)     payload=  4117 component=  4195 frame=  4245 wire=  4261 heights_delta=false height_updates=0 materials=true materials_delta=false material_updates=0
+MEASURE flatten r=24m (guard, whole heights)     payload=  8213 component=  8291 frame=  8341 wire=  8357 heights_delta=false height_updates=0 materials=false materials_delta=false material_updates=0
+MEASURE stored document (whole BSON) bytes=79951
+--- PASS: TestTerrainMeasureUpdateBytes (0.07s)
+MEASURE hot spot, 20 editors x 1/s, 0% with material          19.2 KB/s on the wire (   15.8 KB/s DAO payload), 9 full + 524 delta chunk updates in 20 s
+MEASURE hot spot, 20 editors x 1/s, 50% with material         25.1 KB/s on the wire (   21.5 KB/s DAO payload), 9 full + 559 delta chunk updates in 20 s
+MEASURE hot spot, 20 editors x 1/s, 100% with material        30.6 KB/s on the wire (   27.0 KB/s DAO payload), 9 full + 565 delta chunk updates in 20 s
+MEASURE hot spot r=16m, 20 editors x 1/s, 0% with material   112.5 KB/s on the wire (  107.1 KB/s DAO payload), 9 full + 936 delta chunk updates in 20 s
+MEASURE hot spot r=16m, 20 editors x 1/s, 100% with material   231.4 KB/s on the wire (  225.7 KB/s DAO payload), 9 full + 1003 delta chunk updates in 20 s
+MEASURE quota hot spot, 20 editors, r=5m raise                54.1 KB/s on the wire (   47.0 KB/s DAO payload), 0 full + 1317 delta chunk updates in 20 s
+MEASURE   quota hot spot, 20 editors, r=5m raise             charged 5996 points/s (300 per editor), 94.3 edits/s, 8000 attempts refused for quota
+MEASURE quota hot spot, 20 editors, r=5m raise + paint        53.4 KB/s on the wire (   46.8 KB/s DAO payload), 0 full + 1216 delta chunk updates in 20 s
+MEASURE   quota hot spot, 20 editors, r=5m raise + paint     charged 6019 points/s (301 per editor), 86.0 edits/s, 8000 attempts refused for quota
+MEASURE quota hot spot, 20 editors, r=16m raise               47.9 KB/s on the wire (   45.8 KB/s DAO payload), 0 full + 373 delta chunk updates in 20 s
+MEASURE   quota hot spot, 20 editors, r=16m raise            charged 5991 points/s (300 per editor), 9.2 edits/s, 8000 attempts refused for quota
+MEASURE quota hot spot, 20 editors, r=16m raise + paint       48.8 KB/s on the wire (   46.4 KB/s DAO payload), 0 full + 435 delta chunk updates in 20 s
+MEASURE   quota hot spot, 20 editors, r=16m raise + paint    charged 5929 points/s (296 per editor), 8.3 edits/s, 8000 attempts refused for quota
+MEASURE quota hot spot, 20 editors, mixed r=5m/r=16m (+paint)    52.3 KB/s on the wire (   47.0 KB/s DAO payload), 0 full + 944 delta chunk updates in 20 s
+MEASURE   quota hot spot, 20 editors, mixed r=5m/r=16m (+paint) charged 6018 points/s (301 per editor), 49.2 edits/s, 8000 attempts refused for quota
+MEASURE quota hot spot, 20 editors, r=5m raise + paint        53.1 KB/s on the wire (   46.4 KB/s DAO payload), 0 full + 3697 delta chunk updates in 60 s
+MEASURE   quota hot spot, 20 editors, r=5m raise + paint     charged 6001 points/s (300 per editor), 86.2 edits/s, 24000 attempts refused for quota
+MEASURE quota hot spot, 20 editors, r=16m raise + paint       49.4 KB/s on the wire (   47.2 KB/s DAO payload), 0 full + 1158 delta chunk updates in 60 s
+MEASURE   quota hot spot, 20 editors, r=16m raise + paint    charged 5965 points/s (298 per editor), 8.3 edits/s, 24000 attempts refused for quota
+MEASURE running at 6 m/s, 100% of the chunks edited            8.1 KB/s on the wire (    8.0 KB/s DAO payload), 20 full + 0 delta chunk updates in 30 s
+MEASURE running at 6 m/s, 20% of the chunks edited             1.6 KB/s on the wire (    1.6 KB/s DAO payload), 4 full + 0 delta chunk updates in 30 s
+MEASURE running at 12 m/s, 100% of the chunks edited          16.6 KB/s on the wire (   16.4 KB/s DAO payload), 41 full + 0 delta chunk updates in 30 s
+MEASURE running at 12 m/s, 20% of the chunks edited            4.1 KB/s on the wire (    4.0 KB/s DAO payload), 10 full + 0 delta chunk updates in 30 s
+--- PASS: TestTerrainMeasureDownlinkScenarios (9.19s)
+MEASURE brush r=5m linear (points, 1 chunk)      n=2000 mean=84.069µs p50=80.791µs p99=217.75µs max=350µs
+MEASURE brush r=16m smooth on a corner (4 chunks) n=1000 mean=656.006µs p50=607.166µs p99=1.659167ms max=2.665292ms
+MEASURE flatten r=24m (whole-field guard)        n=500 mean=235.871µs p50=214µs p99=658.75µs max=985.5µs
+MEASURE brush r=5m linear, quota on              n=2000 mean=91.128µs p50=86.834µs p99=277.917µs max=546.75µs
+MEASURE brush r=16m smooth on a corner, quota on n=1000 mean=644.209µs p50=618.542µs p99=1.457042ms max=1.885ms
+MEASURE throughput: 8 editors x 500 r=5m edits on distinct chunks = 26092 edits/s (offline committer, 4 short workers)
+--- PASS: TestTerrainMeasureBrushCost (2.03s)
+ok  	example.com/planet/internal/service/game	11.759s

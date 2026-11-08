@@ -213,23 +213,30 @@ scene:
   2 降低 / 3 整平 / 4 改材质）、中心（厘米）、半径（厘米）、衰减（0 常数 / 1 线性 / 2 平滑）、强度（高度原始值，1 = 10cm）、
   整平目标、材质；答复是各块的新版本与 `duplicate`（这个请求 ID 已经生效过，这次没有再改）。改动本身经同步流到达。
   笔刷的整数算法见 [gameplay/terrain“笔刷”](../gameplay/terrain/README.md#笔刷p2brushgo客户端须逐位相同)，客户端可同算做预测。
-- **校验**（`terrainmap.DefaultPolicy`，`Map.SetPolicy` 可换）：半径 ≤ 16m、至多 4 块、强度 ≤ 50（5m）、高度夹在 `[0, 16383]`、
-  每玩家每秒 2 次（令牌桶）；领地 / 权限与建筑占位是钩子 `terrainmap.Rules`（缺省都放行，`Map.SetRules` 装）。拒绝时什么都不写，
-  业务码 100052～100058（`internal/errors/terrain.go`）。
+- **校验**（`terrainmap.DefaultPolicy`，`Map.SetPolicy` 可换；不是配置键，与客户端笔刷 UI 一起定）：半径 ≤ 16m、至多 4 块、
+  强度 ≤ 50（5m）、高度夹在 `[0, 16383]`；领地 / 权限与建筑占位是钩子 `terrainmap.Rules`（缺省都放行，`Map.SetRules` 装）。拒绝时
+  什么都不写，业务码 100052～100058（`internal/errors/terrain.go`）。
+- **编辑配额**（维护者 2026-11-08，取代每秒 2 次；[方案 §17](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#17-编辑配额与材质守卫-500-实施结果2026-11-08)）：
+  每人每秒 300 个改动点（`Policy.EditPointsPerSecond`）。一次编辑的点数是它会改变的高度点数 + 材质点数（事务之前在视图上算，
+  共享边点只算一次，一个点两者都改算 2），至少 20（`MinEditPoints`）；令牌桶容量 300，桶满时可以透支一次，所以 r=16m 笔刷
+  （约 650～800 点）、整平 / 地基照样能做，做完等补满（r=16m 约 2～3 秒一笔）。不够时整笔拒绝（`terrain_rate`），不部分执行。
+  重复请求、被领地 / 建筑占位拒绝的只计 20 点。实测附近 20 人都满速编辑时，r=16m 档每个观察者约 48～49KB/s，r=5m 档约
+  53～54KB/s（超 50KB/s 预算 6～8%，待决定）。
 - **幂等**：编辑 ID 由（玩家，请求 ID）混合得出，与改动在同一笔事务里记进每块的 `Applied`（最近 32 个）；重复或乱序重放的请求
   不再生效。结果未知（超时）时用同一个请求 ID 重试。
 - **事务**：覆盖到的块（至多 4 块）一笔 Nest 事务（handler `TerrainBrush`，`rollback=undo durability=strict`），第一次改的块
   先 `GetOrCreate`；提交被接受后逐块装视图并登记同步，回滚时视图与同步都不动。高度与材质都按下标写（DAO 里 `Materials` 是
   `[]uint16`，取值 0～255，原始地形包与 `gameplay/terrain` 里仍是每点 1 字节；记录里出现 > 255 的材质按损坏处理、这块不装入）；
-  一块改动超过 1000 个高度（或 1000 个材质）时该字段整字段写，两个字段各自计数（方案 §16）。
+  一块改动超过 1000 个高度（或 500 个材质，方案 §17）时该字段整字段写，两个字段各自计数（方案 §16）。
 - **同步**：改过的块是 `terrain` 命名空间的同步对象（`Applied` 不下发）；场景另有一个地形 Interest（视野 200m、至多 64 块），
   玩家主视野是它的观察者。开地形时会话对象上限是 164（其他 100 + 地形 64），每会话每次 Flush 至多 4 个全量（对玩家、怪也生效）。
   客户端用生成的 `ApplySyncTerrainChunkDao` 应用，按 `Version` 重建 mesh（C# 见 `client/dotnet/Roost.Client/Terrain/`）。
   分区场景还没有地形同步（P3）。
-- **测试**：`terrain_test.go` 的 `TestTerrainBrush*`（重复 / 乱序只生效一次、拒绝零写入、限速、多块回滚、整字段守卫）；
+- **测试**：`terrain_test.go` 的 `TestTerrainBrush*`（重复 / 乱序只生效一次、拒绝零写入、改动点数配额、多块回滚、整字段守卫）；
   `terrain_sync_test.go` 走真实 TCP（客户端收到全量与增量、断线重连后逐点一致、视野满 64 块不断开会话）；
   `ROOST_TERRAIN_MEASURE=1` 时跑字节与耗时测量（[P2 实测](../docs/maintenance/evidence/terrain-p2-20261108/README.md)、
-  [材质改列表后重测](../docs/maintenance/evidence/terrain-materials-list-20261108/README.md)）。
+  [材质改列表后重测](../docs/maintenance/evidence/terrain-materials-list-20261108/README.md)、
+  [编辑配额与材质守卫 500](../docs/maintenance/evidence/terrain-quota-20261108/README.md)）。
 - **升级**：`TerrainChunkDao` 是 schema 2（`Materials` 从 `[]byte` 改成 `[]uint16`，store 键 4 不变）。项目未上线，不迁移：
   schema 1 的记录按 `ErrSchemaMismatch` 拒绝（启动装入时这块按损坏不装入），升级前清空 `terrain_chunks`。
 
