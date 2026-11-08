@@ -1,0 +1,17 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync
+cpu: Apple M5
+BenchmarkManagerFlushWithNamespaces/sessions=1/subjects=32+16/payload=256-10         	   41905	     28954 ns/op	   73145 B/op	     362 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=1/subjects=32+16/payload=256-10         	   41161	     28505 ns/op	   73144 B/op	     362 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=1/subjects=32+16/payload=256-10         	   40977	     48773 ns/op	   73144 B/op	     362 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=1/subjects=32+16/payload=256-10         	   36351	     31161 ns/op	   73144 B/op	     362 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=1/subjects=32+16/payload=256-10         	   41544	     28906 ns/op	   73144 B/op	     362 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=1/subjects=32+16/payload=256-10         	   41775	     28266 ns/op	   73144 B/op	     362 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=64/subjects=32+16/payload=256-10        	    1756	    637661 ns/op	 1282245 B/op	     756 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=64/subjects=32+16/payload=256-10        	    1932	    628680 ns/op	 1282236 B/op	     756 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=64/subjects=32+16/payload=256-10        	    1934	    627664 ns/op	 1282234 B/op	     756 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=64/subjects=32+16/payload=256-10        	    1734	    652610 ns/op	 1282241 B/op	     756 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=64/subjects=32+16/payload=256-10        	    1836	    648045 ns/op	 1282237 B/op	     756 allocs/op
+BenchmarkManagerFlushWithNamespaces/sessions=64/subjects=32+16/payload=256-10        	    1839	    666098 ns/op	 1282237 B/op	     756 allocs/op
+PASS

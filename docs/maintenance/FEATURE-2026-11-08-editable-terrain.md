@@ -118,8 +118,8 @@ type TerrainChunkDao struct {
 **载体：改过的块作为实体，用 entitysync 同步。** 生成 DAO 的变化由框架收集、按字段同步；不新增地形消息，不复用 chunksync（它是物理对象的按区域增量，不是数据补丁），也不做“下发编辑操作、客户端重放”。
 
 - **订阅：独立的地形 Interest。** 地形单独建一个 `policy.Interest`（独立订阅来源），玩家主视野作为它的 AOI 观察者，只把改过的块登记为 subject。从没改过的块不建实体、不订阅，客户端用本地原始资源（按 `BaseRevision` 与 SHA-256 校验）。视野 200m 约覆盖 31 块的中心（π·200² / 64²；P2 更正，原写 50～60），加上进出视野的滞回（220m）约 37 块，所以缺省视野到不了 `MaxVisible` 64，64 是放大视野或以后加大半径时的上限。
-- **对象上限。** `frame.Limits.MaxObjects` 缺省 100，同时是一个会话可持有的 subject 数；超出时 Manager 关闭整个会话（`object_limit`），不截断。地形块与玩家、NPC、建筑共用这个上限：地形 Interest 的 `AOIConfig.MaxVisible` 设 64，`MaxObjects` 调到“其他可见实体上限 + 64”。
-- **基线限流。** 改过的块进入视野时发全量（约 12.3KB：高度 8.2KB + 材质 4.1KB）。开启 `ManagerConfig.SnapshotBudget`，每会话每次 Flush 的全量对象数初值 4（50ms 一轮时峰值约 1MB/s，50 块约 0.65s 发完），P2 实测后调整；增量与 remove 不受限。
+- **对象上限。** `frame.Limits.MaxObjects` 缺省 100，同时是一个会话可持有的 subject 数；超出时 Manager 关闭整个会话（`object_limit`），不截断。地形块单独计（D15，2026-11-08 起）：场景 Manager 的 `ManagerConfig.Namespaces` 列出 `terrain` 命名空间，上限 64（等于地形 Interest 的 `AOIConfig.MaxVisible`）；玩家、NPC、建筑仍按 `Limits.MaxObjects`（demo 100），不被放宽。会话的对象引用表合起来 164，每帧对象数仍按 100 切。地形块超过 64 与玩家超过 100 一样关闭整个会话。（P2 原做法是把整个 Manager 的 `MaxObjects` 调到“其他可见实体上限 + 64”，玩家的上限也跟着放宽，已按 D15 改掉。）
+- **基线限流。** 改过的块进入视野时发全量（约 12.3KB：高度 8.2KB + 材质 4.1KB）。地形命名空间单独的快照预算（`NamespaceLimits.SnapshotBudget`），每会话每次 Flush 的地形全量块数初值 4（50ms 一轮时峰值约 1MB/s，31 块约 0.4s 发完）；只计地形，玩家与怪不占它、也不受它限（D15；P2 原先开的是 Manager 级 `SnapshotBudget`，对玩家、怪也生效）；增量与 remove 不受限。
 - **增量。** 高度逐点补丁每点约 8 字节（r=5m 约 0.67KB）；大编辑走整字段守卫（8.2KB）；材质每次整字段 4.1KB。变化树每 DAO 最多 4096 个节点，4096 点的块在约 4093～4094 个不同下标时自动整字段回退；单块补丁最坏约 32.6KB，低于单组件上限 `MaxComponentBytes` 64KB。
 - **继承的交付契约。** 持久化门槛（按 `CommitLSN` 挡整个 subject，编辑落 WAL 前不下发）、版本顺序与断档恢复（EntitySync 外层负责）、断线重连 / Hold-Ready 的新 epoch 全量都直接继承。
 - **客户端。** Go 用生成的 `ApplySync<Dao>`，C# / C++ 用同一份 `dao_sync.proto` 与生成 Apply；应用后按 `Version` 重建该块 mesh。
@@ -166,6 +166,7 @@ type TerrainChunkDao struct {
 | D12 | 客户端版本缓存 | 首版不做，离开再进入视野重发全量 | entitysync 支持“客户端已有此版本则跳过全量”；跑图加载流量超预算时做（框架功能） |
 | D13 | 原始地形换版后的旧编辑 | 丢弃（维护者 2026-11-08）：格进程启动时，本格基于旧 `BaseRevision` 的记录经正式实体 / DataEngine 路径处理后改用新原始块，计数并记日志；处理失败时这块不装入、拒绝编辑，绝不用原始块覆盖旧记录；邻格 Ghost 带里的旧记录只由它的格处理（实现见第 14 节） | 按差值重放到新原始块（要保留编辑日志或旧包）；保留旧记录覆盖新原始块（地形与新美术不衔接） |
 | D14 | Ghost 带地形副本的更新 | P3 把邻格的编辑推送到 Ghost 副本（维护者 2026-11-08 定为后续工作）；P3 之前 Ghost 副本只是启动时的快照，依赖邻格地形的判断（例如跨格移动的高度）可能读到旧数据 | — |
+| D15 | 地形的对象上限与快照预算 | 不影响玩家和怪（维护者 2026-11-08：“会话对象上限 164 和全量分摊这两个设置，不能影响玩家和怪的同步”）：entitysync 按 subject 命名空间单独计（`ManagerConfig.Namespaces`），场景里 `terrain` 上限 64、快照预算每会话每 Flush 4 个；玩家 / 怪沿用 100、不限快照，交付与不开地形时逐字节相同（实现见第 15 节） | P2 原做法：Manager 级 `MaxObjects` 164 + Manager 级 `SnapshotBudget`（玩家 / 怪也被限流、上限也被放宽）；按订阅来源分类（一个对象可经几个来源订阅，归类取决于订阅顺序） |
 
 ### 8.1 首版参数初值（P2 实测后修正）
 
@@ -177,8 +178,8 @@ type TerrainChunkDao struct {
 | 玩家笔刷半径上限 / 单次最多块数 / 频率 | 16m / 4 块 / 每秒 2 次（P2：令牌桶，容量 2；参数合法的请求才占频率） |
 | 玩家单次最大高度增量 / 高度范围（P2 新增） | 强度 ≤ 50（5m）；基岩 0、上限 16383（1638.3m；原始值不超过 16383 时 varint 2 字节，增量每点仍约 8 字节） |
 | 地形视野半径 / `MaxVisible` | 200m（滞回 20m，视点每移动 8m 更新一次）/ 64 块；200m 实际约覆盖 31 块（第 7 节 P2 更正） |
-| `MaxObjects` | 其他可见实体上限 + 64（demo：100 + 64 = 164，只在开地形的普通场景） |
-| `SnapshotBudget` 每会话每 Flush 全量对象数 | 4（Manager 级，对玩家、怪也生效；视野满 64 块 + 40 个其他对象时 28 次 Flush 发完） |
+| 对象上限 | 地形单独 64（`Namespaces["terrain"].MaxObjects`）；玩家 / 怪 / 场景仍是 `Limits.MaxObjects` 100；会话引用表合起来 164（只在开地形的普通场景；D15） |
+| 地形快照预算：每会话每 Flush 全量块数 | 4（`Namespaces["terrain"].SnapshotBudget`，只计地形，D15；视野满 64 块时至少 16 次 Flush 发完，40 个其他对象第一次 Flush 全部到达） |
 | `Applied` 环长 | 32 |
 
 ## 9. 分期与验收
@@ -360,7 +361,7 @@ type TerrainChunkDao struct {
 | 组件 | `go test -race ./game/entities/terrain_chunk/` | 新增：整字段守卫（1001 点整字段、两笔各 ≤ 1000 点逐点，两条路径数据相同，值没变的点不写）、`Discard` 只重置仍基于旧版本的记录 |
 | 编辑、幂等、回滚 | `go test -race -run Terrain ./internal/service/<game>/` | `TestTerrainBrushRepeatsAndReordersApplyOnce`（四块交点的编辑：同一请求重放、与后一个请求乱序到达、另一个玩家的同一请求 ID，各只生效一次，重放不改任何块，每块都记了编辑 ID，重启后重放仍是重复，最终视图等于纯计算按生效顺序叠加的结果）；`TestTerrainBrushRefusalsWriteNothing`（请求 ID 为 0、参数、半径 / 强度 / 高度上限、地图外、没覆盖到采样点、不归本格、权限钩子、建筑占位钩子，每种拒绝后所有块的实体、`Applied` 与视图逐点不变、没有提交）；`TestTerrainBrushRateLimit`；`TestTerrainBrushRollbackLeavesEveryChunkAndTheView`（提交器拒绝的四块编辑后，已改与未改的块、视图都不变，同一请求再来一次生效）；`TestTerrainBrushOverTheGuardWritesTheWholeField` |
 | 换版丢弃 | 同上 | `TestTerrainRecordOnAnotherBaseRevisionIsDiscarded`（替换 P1 的 `…IsNotLoaded`）：分区 3 × 2 格的格 (0,0)：本格旧记录丢弃（`Discarded` 1），邻格的不装入（`StaleBase` 1）、库里不动；注入事务拒绝时这块不装入、查询 `ErrNotLoaded`、编辑 `ErrUnloadable`、库里记录逐字节不变；重启后这块是新原始块、再改从 Version 1 开始，再重启是覆盖块 |
-| 真实 TCP | 同上，`terrain_sync_test.go` | `TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect`：视野内 3 块改过的块以全量到达、视野外的不到；r=5m 抬高是按下标的高度增量、改材质是材质整字段、守卫整平是高度整字段；断线后改两块、新改一块，重连后客户端持有恰好这 4 块，版本与 4096 点高度 / 材质逐点等于服务端，`SessionsLost` 0。`TestATerrainViewAtItsCapKeepsTheSession`：视野 500m 内改过 100 块、另有 40 个怪，客户端持有恰好 64 块 + 41 个其他对象，连接仍在、`SessionsLost` 0，28 次 Flush 发完（快照预算生效） |
+| 真实 TCP | 同上，`terrain_sync_test.go` | `TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect`：视野内 3 块改过的块以全量到达、视野外的不到；r=5m 抬高是按下标的高度增量、改材质是材质整字段、守卫整平是高度整字段；断线后改两块、新改一块，重连后客户端持有恰好这 4 块，版本与 4096 点高度 / 材质逐点等于服务端，`SessionsLost` 0。`TestATerrainViewAtItsCapKeepsTheSession`：视野 500m 内改过 100 块、另有 40 个怪，客户端持有恰好 64 块 + 41 个其他对象，连接仍在、`SessionsLost` 0，28 次 Flush 发完（快照预算生效；D15 之后：41 个其他对象第一次 Flush 全部到达，17 次 Flush 发完，见第 15 节） |
 | 真实 Mongo | `ROOST_TERRAIN_IT_MONGO_URI=… go test -race -run '^TestTerrainRestartRealMongo$' ./internal/service/<game>/` | 私有 `scripts/mirror-local.sh` 副本集：P1 的重启一致之外，换成 `BaseRevision` 2 的包重启：5 块丢弃，库里 (0,0) 是 Version 0、没有高度；再重启 `Discarded` 0、6 块全是原始块 |
 | 端点 | `go test -race -run Terrain ./game/controllers/player/` | 没配地形答 `terrain_disabled`；越界的线上值拒绝；每种拒绝对应业务码，基础设施错误答 internal |
 | 测试能变红 | 在生成工程副本上改坏实现后跑 | 不查 `WasApplied`：重放得到 `Duplicate:false`、各块 Version 2；去掉整字段守卫：组件用例报 `delta=true`，TCP 用例报守卫整平以 1793 点的增量（14,367 字节）发出；提交前就装视图：回滚用例报 `view version 1 → 2`；不丢弃：报 `Discarded:0 StaleBase:2`；不 `PublishSyncDirty`：增量不到达（`DirtyCaptured` 0）；`MaxObjects` 留在 100：会话以 `object_limit` 断开 |
@@ -383,7 +384,7 @@ type TerrainChunkDao struct {
 - §7“视野 200m 约覆盖 50～60 块”算错了：π·200² / 64² ≈ 31 块（已在 §7、§7.1、§8.1 更正）。缺省视野里改过的块到不了 `MaxVisible` 64，验收用例放大视野到 500m 才测到上限；登录到全改过区域约 380KB 而不是 600KB。
 - §4“提交并持久确认后由 entitysync 下发”：demo 的 Nest 没有装 EntitySync 观察者，脏标记由业务 `PublishSyncDirty` 交给 subject（Player / Monster 同一做法）；持久化门槛仍由场景 Manager 的 `DurableLSN` 水位按 `CommitLSN` 挡（生产路径与 P1 相同），但本轮的测试场景没有接水位，持久门槛没有在地形上单独验证。事务回滚时 subject 仍是脏的，下一次 Flush 多发一个按当前数据的增量（安全方向）。
 - §3 删档：换版丢弃不删档，重置为 Version 0（理由见上）。
-- `SnapshotBudget` 是 Manager 级配置，开地形后对同一场景的玩家、怪的进入视野全量也生效（每会话每 Flush 4 个）；不开地形的场景不变。
+- `SnapshotBudget` 是 Manager 级配置，开地形后对同一场景的玩家、怪的进入视野全量也生效（每会话每 Flush 4 个）；不开地形的场景不变。（已按 D15 改为地形单独计，见第 15 节。）
 - 去重的回复是“重复 + 当前版本”，不是第一次的结果（第一次的结果没有存）。
 
 **方案没覆盖、本轮先选的**：
@@ -404,7 +405,7 @@ type TerrainChunkDao struct {
 **待维护者决定**：
 
 1. 换版丢弃用“重置为 Version 0”代替删档（上文理由）。如果要真删，需要 DataEngine 允许确定性 ID 删档后重建（框架改动），或块实体 ID 带上 `BaseRevision`（换版即换 ID，旧记录另行清理）。
-2. 开地形后会话对象上限变成 164：客户端的帧解码上限须 ≥ 164（C# `SyncFrame` 缺省 `maxObjects = 100`，按 2 倍容差可解 200 个对象的帧，现在能过；建议客户端显式传 164）；`SnapshotBudget` 对玩家、怪同时生效，是否接受。
+2. 开地形后会话对象上限变成 164：客户端的帧解码上限须 ≥ 164（C# `SyncFrame` 缺省 `maxObjects = 100`，按 2 倍容差可解 200 个对象的帧，现在能过；建议客户端显式传 164）；`SnapshotBudget` 对玩家、怪同时生效，是否接受。（已决定，D15：不接受；地形单独计上限与预算，帧仍按 100 切，客户端帧解码上限不用改，见第 15 节。）
 3. 客户端下行预算（D11 复议的前提）。
 
 **给 P3 的接口说明**：
@@ -415,3 +416,19 @@ type TerrainChunkDao struct {
 - 移动 / 寻路：查询仍是 `Map.Height` / `Material` / `IsWater` / `Probe`（无锁、handler 里可调），P3 起改过的块按 `View.Chunk` 的版本失效寻路缓存。
 
 **未验证**：真实 WAL / Mongo 下的单笔编辑延迟与吞吐，以及持久门槛对地形块的实际挡住（测试场景没接 `DurableLSN`）；多观察者同时在热点时的服务端 CPU 与总出口；真实 game 进程实跑（配置地形包 + 客户端发 `TerrainEdit`）；C# 客户端的笔刷同算（金样已备好）与真实 entitysync 链路上的 C# 接收；四块交点编辑比单块慢约 7 倍的原因（CPU 剖析里 Nest 只占约 10%，疑为多实体请求的分派交接，没有细查）；启动时装实体的耗时与内存（第 4 条只是推算）；Linux。
+
+## 15. 地形单独计对象上限与快照预算（D15，2026-11-08）
+
+维护者决定：“会话对象上限 164 和全量分摊这两个设置，不能影响玩家和怪的同步。”P2 为了地形把场景 Manager 的 `frame.Limits.MaxObjects` 调到 164、打开 Manager 级 `SnapshotBudget{PerSessionObjects: 4}`，两者都作用于整个 Manager。
+
+**框架**（`framework/sync/entitysync`，契约见 [ENTITY_SYNC“按命名空间分开计”](../framework/ENTITY_SYNC.md#按命名空间分开计namespaces)）：`ManagerConfig.Namespaces map[string]NamespaceLimits{MaxObjects, SnapshotBudget}` 按 subject 的命名空间单独计会话持有上限与快照预算，没列出的命名空间沿用 `Limits.MaxObjects` 与 Manager 级 `SnapshotBudget`；不配置时逐字节不变。
+
+- 分类键选命名空间而不是订阅来源：命名空间是对象自己的属性、随每个组件下发、是客户端分流键；一个对象可经几个来源订阅，按来源分会让“它算哪一类”取决于订阅顺序。
+- 超出一类的上限：与既有契约相同，关闭整个会话（`object_limit`，错误点名命名空间），不只拒该类的新对象（那样订阅会停在“要全量”却永远发不出，等于静默截断）。持有量由地形 Interest 的 `MaxVisible`（64）保证。
+- 帧：每帧对象数仍按 `Limits.MaxObjects`（100）切分，只有引用表上限是各类之和（164）。客户端（Go `frame.Receiver`、C# `SyncFrame.Decode`）的帧上限不用改；显式设对象表容量（C# `EntityViews` 的 `maxObjects`，缺省 10000）的不得小于 164。
+- 预算：每个列出的命名空间一路（`snapshotLane`：额度、窗口内计数、会话 / 来源游标、待快照索引、字节阻挡各一份），窗口起点共用；会话里每路一份实体轮转序号。
+
+**demo**：场景 Manager 的 `Limits` 与 `SnapshotBudget` 回到零值（100、不限），`Namespaces: terrainNamespaceLimits()`（`terrain`：64、每会话每 Flush 4 个）。
+
+**验证**：entitysync 新增 8 个用例（`manager_test.go` 5 个：不相关命名空间逐字节不变、每类各自计与超限关会话、Hold/Ready / 关闭重开 / 退役后重登记、配置校验、并发 churn（-race）；`snapshot_budget_test.go` 3 个：两路互不占额度（periodic / on_change × 四种组合）、每路各自轮转与字节阻挡、RetryLater 下每路按实际尝试计费）；变异（把所有命名空间归到类别 0）后 8 个全红。生成工程新增 3 个用例并改 1 个：`TestTerrainLeavesPlayerAndMonsterReplicationByteIdentical`（开 / 不开地形时观察者的帧逐字节相同：第一次 Flush 15 个对象、remove、Hold/Ready 全量）、`TestTerrainDoesNotWidenThePlayerObjectLimit`（开地形时 101 人挤一起仍全部 `object_limit` 断开）、`TestTerrainChunksOverTheirLimitCloseTheSession`（地形视野配成 80 > 64：第 65 块时关会话、断开连接）；`TestATerrainViewAtItsCapKeepsTheSession` 的预算断言按 D15 改为“41 个其他对象第一次 Flush 全部到达、地形至多 4 块，至少 16 次 Flush”（原断言“105 个对象至少 27 次 Flush”钉的是被否决的 Manager 级预算）。这 4 个用例在 P2 代码（b20f439d）上全红、在本实现上全绿，原文与基准对照见 [evidence/sync-namespace-limits-20261108](evidence/sync-namespace-limits-20261108/README.md)。
+

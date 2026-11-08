@@ -1,0 +1,15 @@
+=== RUN   TestATerrainViewAtItsCapKeepsTheSession
+    terrain_sync_test.go:512: after the first flush the client holds 4 other objects and 0 chunks, want all 41 others (no budget) and at most 4 chunks
+--- FAIL: TestATerrainViewAtItsCapKeepsTheSession (2.12s)
+=== RUN   TestTerrainLeavesPlayerAndMonsterReplicationByteIdentical
+    terrain_sync_test.go:619: the observer got 8 frames (with flush marks) without terrain, 10 with terrain
+--- FAIL: TestTerrainLeavesPlayerAndMonsterReplicationByteIdentical (0.00s)
+=== RUN   TestTerrainDoesNotWidenThePlayerObjectLimit
+    terrain_sync_test.go:656: 0 of 101 sessions were lost to the overflowing crowd with terrain on; the player limit must stay 100
+--- FAIL: TestTerrainDoesNotWidenThePlayerObjectLimit (0.02s)
+=== RUN   TestTerrainChunksOverTheirLimitCloseTheSession
+    terrain_sync_test.go:680: timed out waiting for the session lost to the terrain limit
+--- FAIL: TestTerrainChunksOverTheirLimitCloseTheSession (10.04s)
+FAIL
+FAIL	example.com/planet/internal/service/game	12.655s
+FAIL

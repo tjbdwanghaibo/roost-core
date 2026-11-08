@@ -1,0 +1,13 @@
+=== RUN   TestATerrainViewAtItsCapKeepsTheSession
+    terrain_sync_test.go:518: edited chunks 100, chunks held 64, other objects 41, flushes to the full view 17 (42.454209ms)
+--- PASS: TestATerrainViewAtItsCapKeepsTheSession (0.10s)
+=== RUN   TestTerrainLeavesPlayerAndMonsterReplicationByteIdentical
+    terrain_sync_test.go:626: 8 frames byte-identical; first flush created 15 objects
+--- PASS: TestTerrainLeavesPlayerAndMonsterReplicationByteIdentical (0.00s)
+=== RUN   TestTerrainDoesNotWidenThePlayerObjectLimit
+--- PASS: TestTerrainDoesNotWidenThePlayerObjectLimit (0.02s)
+=== RUN   TestTerrainChunksOverTheirLimitCloseTheSession
+    terrain_sync_test.go:695: session lost after 17 flushes holding 64 chunks
+--- PASS: TestTerrainChunksOverTheirLimitCloseTheSession (0.08s)
+PASS
+ok  	example.com/planet/internal/service/game	0.670s
