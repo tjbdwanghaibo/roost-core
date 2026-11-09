@@ -100,7 +100,7 @@ func (component *MapComponent) OnInitFinish(*entity.EntityCreateParam, bool) err
 	if err != nil {
 		return fmt.Errorf("map component: %w", err)
 	}
-	if component.move, err = movement.NewMove(component.mb, movement.MoveConfig{Terrain: actor.Ground{}, Locate: actor.Locate}); err != nil {
+	if component.move, err = movement.NewMove(component.mb, movement.MoveConfig{Terrain: actor.Ground{}, Surface: actor.Surface, Locate: actor.Locate}); err != nil {
 		return fmt.Errorf("map component: %w", err)
 	}
 	component.behavior, err = actionflow.NewBehavior(owner, actionflow.BehaviorConfig{
@@ -232,8 +232,9 @@ func (component *MapComponent) Teleport(terrain gamescene.Terrain, to spatial.Po
 	// two of them may share a point and nothing has to be released when a
 	// connection drops. Occupancy is for things that really do block — a wall
 	// from the map, a monster a game decides is solid — and the Terrain
-	// interface keeps it for them.
-	if !terrain.Walkable(to) {
+	// interface keeps it for them. Standable rather than Walkable: on a
+	// height field the point must also be a ground node one may stand on.
+	if !terrain.Standable(to) {
 		return errcode.Wrap(apperrors.ErrScenePosition, nil, "from_x", from.X, "from_y", from.Y, "to_x", to.X, "to_y", to.Y)
 	}
 	if err := component.mb.SetPos(to); err != nil {

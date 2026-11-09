@@ -98,7 +98,7 @@ func (component *ActorComponent) OnInitFinish(param *entity.EntityCreateParam, i
 	if component.mb, err = movement.NewMapBasic(owner, component.host, movement.MapConfig{Fields: monsterFields{owner: owner}}); err != nil {
 		return fmt.Errorf("actor component: %w", err)
 	}
-	if component.move, err = movement.NewMove(component.mb, movement.MoveConfig{Terrain: actor.Ground{}, Locate: actor.Locate}); err != nil {
+	if component.move, err = movement.NewMove(component.mb, movement.MoveConfig{Terrain: actor.Ground{}, Surface: actor.Surface, Locate: actor.Locate}); err != nil {
 		return fmt.Errorf("actor component: %w", err)
 	}
 	domain := actor.WorldTime()

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	db "{{MODULE}}/db"
+	"{{MODULE}}/game/clientsync"
  "{{MODULE}}/game/handler"
  syncsender "{{MODULE}}/game/handler/syncsender"
 	monster "{{MODULE}}/game/entities/monster"
@@ -177,6 +178,11 @@ type terrainClient struct {
 	chunks     map[int64]*db.SyncTerrainChunkDao
 	frames     []receivedFrame
 	err        error
+	// positions 是别的命名空间里带 pos_x / pos_y 的 subject（玩家、怪）最近收到的位置，movedAt 是收到它的时刻；
+	// chunkAt 是每块最近一次地形更新收到的时刻（移动纠偏用例比较两者的先后，terrain_move_test.go）。
+	positions map[int64]spatial.Point
+	movedAt   map[int64]time.Time
+	chunkAt   map[int64]time.Time
 }
 
 // receivedFrame 是收到的一帧：线上字节（16 字节包头 + 帧）、帧本身的字节，以及其中每个地形更新。
@@ -231,7 +237,8 @@ func dialTerrainClient(t *testing.T, addr string, playerID int64) *terrainClient
 	_ = connection.SetReadDeadline(time.Time{})
 	// 缺省帧上限就够：会话的引用表合起来可持有 164 个，但每帧对象数仍按场景的 Limits.MaxObjects（100）切分。
 	client := &terrainClient{connection: connection, receiver: frame.NewReceiver(frame.DefaultLimits()),
-		refs: map[frame.ObjectRef]int64{}, namespaces: map[int64]string{}, chunks: map[int64]*db.SyncTerrainChunkDao{}}
+		refs: map[frame.ObjectRef]int64{}, namespaces: map[int64]string{}, chunks: map[int64]*db.SyncTerrainChunkDao{},
+		positions: map[int64]spatial.Point{}, movedAt: map[int64]time.Time{}, chunkAt: map[int64]time.Time{}}
 	go client.read()
 	return client
 }
@@ -282,6 +289,25 @@ func (client *terrainClient) apply(f frame.Frame, received *receivedFrame) error
 			if update.Namespace != "terrain" {
 				received.others++
  received.otherIDs=append(received.otherIDs,update.SubjectID)
+				if (update.Namespace == "player" || update.Namespace == "monster") && update.Payload.Len() > 0 {
+					fields, err := clientsync.DecodeFields(update)
+					if err != nil {
+						return fmt.Errorf("decode %s subject %d: %w", update.Namespace, update.SubjectID, err)
+					}
+					x, movedX := fields["pos_x"]
+					y, movedY := fields["pos_y"]
+					if movedX || movedY {
+						at := client.positions[update.SubjectID]
+						if movedX {
+							at.X = asInt64(x)
+						}
+						if movedY {
+							at.Y = asInt64(y)
+						}
+						client.positions[update.SubjectID] = at
+						client.movedAt[update.SubjectID] = time.Now()
+					}
+				}
 				continue
 			}
 			raw := update.Payload.BytesCopy()
@@ -298,6 +324,7 @@ func (client *terrainClient) apply(f frame.Frame, received *receivedFrame) error
 				return fmt.Errorf("apply terrain chunk %d: %w", update.SubjectID, err)
 			}
 			client.chunks[update.SubjectID] = next
+			client.chunkAt[update.SubjectID] = time.Now()
 			u := terrainUpdate{subject: update.SubjectID, full: update.Full, componentBytes: len(component.Data), payloadBytes: len(raw), materials: patch.Materials != nil}
 			if patch.Heights != nil {
 				u.heightsDelta, u.heightUpdates = patch.Heights.Delta, len(patch.Heights.Updates)

@@ -3,9 +3,11 @@ package sceneruntime
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"{{MODULE}}/game/scene"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -18,9 +20,16 @@ import (
 // "can I stand here" is one mutex around a grid read — not an entity-wide
 // serialization that would make the map a bottleneck for everything else the
 // scene does.
+//
+// The height field (editable terrain, Surface) is not under that lock: the
+// walker reads the terrain view, which is lock-free by design (atomic chunk
+// slots, immutable chunk data), so a walk's step check and a route search on
+// the Nest short pool take no lock at all. The pointer is atomic because the
+// game service installs it after the scene is built.
 type TerrainSystem struct {
-	mu   sync.RWMutex
-	grid *spatial.GridTerrain
+	mu      sync.RWMutex
+	grid    *spatial.GridTerrain
+	surface atomic.Pointer[terrain.Walker]
 }
 
 func (t *TerrainSystem) Name() string { return SystemNameTerrain }
@@ -45,6 +54,7 @@ func (t *TerrainSystem) Stop(entity.EntityDestroyReason) {
 	}
 	t.grid = nil
 	t.mu.Unlock()
+	t.surface.Store(nil)
 }
 
 func (t *TerrainSystem) Bounds() spatial.Rect {
@@ -63,6 +73,32 @@ func (t *TerrainSystem) Walkable(point spatial.Point) bool {
 		return false
 	}
 	return t.grid.InBounds(point) && !t.grid.Blocked(point)
+}
+
+// Surface is the height field, nil without one.
+func (t *TerrainSystem) Surface() *terrain.Walker { return t.surface.Load() }
+
+// SetSurface installs a copy of the walker bounded to this map: a route never
+// leaves the scene, and a node outside it cannot be entered. Nil takes it
+// down.
+func (t *TerrainSystem) SetSurface(walker *terrain.Walker) {
+	if walker == nil {
+		t.surface.Store(nil)
+		return
+	}
+	bounded := *walker
+	bounded.Bounds = t.Bounds()
+	t.surface.Store(&bounded)
+}
+
+func (t *TerrainSystem) Standable(point spatial.Point) bool {
+	if !t.Walkable(point) {
+		return false
+	}
+	if surface := t.surface.Load(); surface != nil {
+		return surface.Standable(point)
+	}
+	return true
 }
 
 func (t *TerrainSystem) Occupy(point spatial.Point) error {

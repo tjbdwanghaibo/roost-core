@@ -166,6 +166,12 @@ func (s *Service) Init(registry *app.Registry) error {
 		if err := startTerrainSync(registry, scene, s.terrain); err != nil {
 			return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 		}
+		// Walks, routes and placements on this map follow the height field
+		// (slopes, steps, drops, swimming; P3) — on the ordinary scene only,
+		// like the terrain's replication: a partitioned scene's positions are
+		// integrated by the cells (gameplay/cellworld), which have no ground
+		// hook yet. Before any player can join, so no walk starts flat.
+		installSurface(area.Terrain(), s.terrain)
 	}
  // Scene 自己拥有 Manager；Nest Mod 没有这个句柄，健康检查由此登记。
  if checks,ok:=app.Lookup[*health.Registry](registry,mods.ModHealth);ok && checks!=nil {checks.Register("entitysync.scene",scene)}

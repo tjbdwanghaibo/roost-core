@@ -1,0 +1,564 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"{{MODULE}}/game/actor"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/lifecycle"
+	gamescene "{{MODULE}}/game/scene"
+	"{{MODULE}}/game/terrainmap"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// 可编辑地形 P3 的移动与寻路，端到端（方案 §20）：开了地形的普通场景里，玩家的服务端行走（MoveTarget → MoveTo 动作 →
+// 自己的移动心跳）、寻路（场景 PathFind）、瞬移与落点按高度场判定；地形块经混合同步（TerrainChunk periodic 1 秒、
+// 玩家 on_change）到真实 TCP 客户端。
+//
+// 除持久层（terrain_test.go 的离线替身）外都是正式代码：同一个 Nest 引擎跑改块事务、进场景与移动 handler；游戏的
+// 心跳驱动绑在它上面；场景实体按 EnsureWorldScene 的方式建（1000 × 1000 世界单位，即 10m × 10m，节点 0～9）；
+// 服务 Init 里的 installSurface 把 terrainmap 的 Walker 装到场景上。业务时钟像 scene_movement_test.go 一样手动拨：
+// 每拨一次，下一拍恰好走这么多时间；同步周期用真实时间（混合同步的 1 秒窗口）。
+//
+// 地图是一块（64m）平地，高度基准 −100 米、原始值 1000 = 世界高度 0；水位按用例给。
+
+// terrainMoveWorld 是 moveWorld（Nest、心跳、场景实体、场景同步）加上地形、玩家 TCP 接入与原始包路径。
+type terrainMoveWorld struct {
+	*moveWorld
+	process   *terrainProcess
+	addr      string
+	pack      string
+	transport *accessplayertcp.Runtime
+}
+
+const terrainMoveBuilder = int64(32000) // 改地形的玩家（不进场景）
+
+func newTerrainMoveWorld(t *testing.T, waterLevel int32) *terrainMoveWorld {
+	t.Helper()
+	ctx := context.Background()
+	w := &moveWorld{t: t, ctx: ctx, clock: &businessTime{}}
+	w.clock.nanos.Store(time.Date(2027, 1, 15, 8, 0, 0, 0, time.UTC).UnixNano())
+	clock.SetSource(w.clock.now)
+	t.Cleanup(func() { clock.SetSource(nil) })
+	for _, register := range []func(){
+		handler.RegisterEnterSceneNestHandlers, handler.RegisterMoveTargetNestHandlers, handler.RegisterMovePlayerNestHandlers,
+		handler.RegisterPlayerPositionNestHandlers,
+	} {
+		register()
+	}
+	player.RegisterEntity()
+	sceneentity.RegisterEntity()
+
+	pack := filepath.Join(t.TempDir(), "move.pack")
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: 1, ChunksY: 1, HeightBase: -10000, WaterLevel: waterLevel}
+	flat := func(terrain.ChunkKey) (terrain.Chunk, error) {
+		c := terrain.NewChunk()
+		for i := range c.Heights {
+			c.Heights[i] = 1000
+		}
+		return c, nil
+	}
+	if err := terrain.WritePackFile(pack, meta, flat); err != nil {
+		t.Fatal(err)
+	}
+	observer := &sceneSyncObserver{}
+	p := startTerrainProcessWith(t, pack, wholeMap, &memoryChunkStore{}, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.EditPointsPerSecond = 0
+		p.m.SetPolicy(policy)
+	}, nest.NestOptionWithEntitySync(observer))
+	w.entities, w.engine = p.entities, p.engine
+
+	transport, addr := startScenePlayerTransport(t)
+	bridge, err := newSceneWithObserver(sceneLane{transport: transport}, transport, nil, gamescene.DefaultConfig(), sceneMaxVisible,
+		&terrainSyncConfig{bounds: meta.Bounds(), radius: terrainViewRadius, maxVisible: terrainMaxVisible}, observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge.terrain.attach(p.m)
+	bridge.watchSessions(transport)
+	if err := bridge.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = bridge.Close(closeCtx)
+	})
+	w.bridge = bridge
+
+	lookup := func(id int64) entity.IThreadSafeEntity { return w.entities.Get(id) }
+	if err := actor.Heartbeat.Bind(w.engine, lookup); err != nil {
+		t.Fatal(err)
+	}
+	actor.SetLookup(lookup)
+	if err := actor.Heartbeat.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = actor.Heartbeat.Stop(context.Background())
+		actor.SetLookup(nil)
+	})
+
+	scenes, err := lifecycle.NewSceneLifecycle(entity.NewManagerAccess(w.entities))
+	if err != nil {
+		t.Fatal(err)
+	}
+	area, _, err := scenes.GetOrCreate(ctx, lifecycle.WorldSceneUniqueID)
+	if err != nil {
+		t.Fatalf("scene: %v", err)
+	}
+	t.Cleanup(func() { _ = scenes.Destroy(context.Background(), area, entity.DestroyReasonCommon, false) })
+	w.area = area
+	area.SetSpace(bridge.MoveSpace())
+	if err := bridge.ShowScene(area); err != nil {
+		t.Fatal(err)
+	}
+	// 服务 Init 的同一步（service.go：场景同步与地形同步就绪之后）。
+	installSurface(area.Terrain(), p.m)
+	if area.Terrain().Surface() == nil || actor.Surface() == nil {
+		t.Fatal("the scene has no height field after installSurface")
+	}
+	return &terrainMoveWorld{moveWorld: w, process: p, addr: addr, pack: pack, transport: transport}
+}
+
+// join 连上 TCP、进场景（EnterScene，落点经 PathFind.Place）、Join 场景同步并 scene_ready。
+func (w *terrainMoveWorld) join(uniqueID int64, at spatial.Point) (*player.Player, *terrainClient) {
+	w.t.Helper()
+	client := dialTerrainClient(w.t, w.addr, uniqueID)
+	waitActiveSessions(w.t, w.transport, uniqueID, 1)
+	value := newScenePlayer(w.t, uniqueID)
+	w.entities.Add(value)
+	placed, err := syncsender.NewEnterSceneSender(w.engine).MultiSync_EnterScene(w.ctx, value.ID(), w.area.ID(), at.X, at.Y)
+	if err != nil || placed != at {
+		w.t.Fatalf("enter scene %d at %v: placed %v err %v", uniqueID, at, placed, err)
+	}
+	joinReady(w.t, w.bridge, w.ctx, value, placed)
+	return value, client
+}
+
+// moveTarget 是客户端的 MoveTarget（寻路 + 开始行走）。
+func (w *terrainMoveWorld) moveTarget(p *player.Player, goal spatial.Point) error {
+	_, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, p.ID(), w.area.ID(), goal.X, goal.Y, 0)
+	return err
+}
+
+// walkStraight 不寻路、直接沿直线走向 goal（寻路预算用尽时 handler 的退路，也是“客户端以为能走”的那条线）。
+func (w *terrainMoveWorld) walkStraight(p *player.Player, goal spatial.Point) {
+	w.t.Helper()
+	if err := locked(w.moveWorld, p.ID(), func() error {
+		_, err := p.MapComp().WalkTo([]spatial.Point{goal})
+		return err
+	}); err != nil {
+		w.t.Fatalf("walk to %v: %v", goal, err)
+	}
+}
+
+// beat 拨业务时钟 d，等这一拍走完（位置变了，或移动结束），返回之后的位置。
+func (w *terrainMoveWorld) beat(p *player.Player, d time.Duration) spatial.Point {
+	w.t.Helper()
+	before := p.MapBasic().Published().Pos
+	w.clock.advance(d)
+	eventually(w.t, fmt.Sprintf("a beat of %v", d), func() (bool, string) {
+		at := p.MapBasic().Published().Pos
+		return at != before || !locked(w.moveWorld, p.ID(), p.MapComp().Walking), fmt.Sprint(at)
+	})
+	w.settle(p.ID())
+	return p.MapBasic().Published().Pos
+}
+
+// walkUntilStopped 每拍 1 秒地走，直到移动结束；返回每拍之后的位置。
+func (w *terrainMoveWorld) walkUntilStopped(p *player.Player) []spatial.Point {
+	w.t.Helper()
+	var trail []spatial.Point
+	for range 60 {
+		if !locked(w.moveWorld, p.ID(), p.MapComp().Walking) {
+			return trail
+		}
+		trail = append(trail, w.beat(p, time.Second))
+	}
+	w.t.Fatalf("still walking after 60 beats: %v", trail)
+	return nil
+}
+
+// edit 用内部写入口把一组采样点改成给定的高度原始值（一块一笔事务），等视图装上新版本。
+func (w *terrainMoveWorld) edit(samples map[[2]int64]uint16) int64 {
+	w.t.Helper()
+	edits := make([]terrainmap.SampleEdit, 0, len(samples))
+	for g, raw := range samples {
+		edits = append(edits, terrainmap.SampleEdit{GX: g[0], GY: g[1], Height: raw})
+	}
+	versions, err := w.process.m.Edit(w.ctx, edits)
+	if err != nil {
+		w.t.Fatalf("edit: %v", err)
+	}
+	return w.waitView(versions[terrain.ChunkKey{}])
+}
+
+// brush 是另一个玩家的一次笔刷编辑（正式的玩家编辑路径），等视图装上新版本。
+func (w *terrainMoveWorld) brush(request uint64, b terrain.Brush) int64 {
+	w.t.Helper()
+	result, err := w.process.m.Brush(w.ctx, terrainMoveBuilder, request, b)
+	if err != nil || len(result.Chunks) != 1 {
+		w.t.Fatalf("brush %+v: %+v %v", b, result, err)
+	}
+	return w.waitView(result.Chunks[0].Version)
+}
+
+func (w *terrainMoveWorld) waitView(version int64) int64 {
+	w.t.Helper()
+	eventually(w.t, fmt.Sprintf("the view takes version %d", version), func() (bool, string) {
+		got, _ := w.process.m.View().Version(terrain.ChunkKey{})
+		return got == version, fmt.Sprint(got)
+	})
+	return version
+}
+
+// server 是服务端场景上的地面（场景范围内的 Walker）。
+func (w *terrainMoveWorld) server() *terrain.Walker { return w.area.Terrain().Surface() }
+
+// clientWalker 是客户端按自己收到的数据算的地面：同一份原始包，加上它持有的改过的块（生成的 DAO Apply 的结果），
+// 同一套行走规则与场景范围（客户端预测与服务端同算法，方案 §20）。
+func (w *terrainMoveWorld) clientWalker(client *terrainClient) *terrain.Walker {
+	w.t.Helper()
+	pack, err := terrain.OpenPack(w.pack)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	w.t.Cleanup(func() { _ = pack.Close() })
+	view := terrain.NewView(pack)
+	if err := view.LoadBase(terrain.ChunkKey{}); err != nil {
+		w.t.Fatal(err)
+	}
+	for id, chunk := range client.snapshot() {
+		materials := make([]byte, len(chunk.Materials.Value))
+		for i, m := range chunk.Materials.Value {
+			materials[i] = byte(m)
+		}
+		key := terrain_chunk.KeyOf(id)
+		if err := view.SetOverlay(key, terrain.Overlay{BaseRevision: chunk.BaseRevision.Value, Version: chunk.Version.Value, Heights: chunk.Heights.Value, Materials: materials}); err != nil {
+			w.t.Fatal(err)
+		}
+	}
+	return &terrain.Walker{View: view, Rules: terrain.DefaultWalkRules, Bounds: w.area.Terrain().Bounds()}
+}
+
+// predict 是客户端的本地预测：从 from 沿直线朝 goal 走 distance（世界单位），每 0.5 单位采样、四舍五入归节点，节点变了
+// 问 Step（与服务端 movement.Move 的做法相同），被挡就停在上一个采样点；返回停下的位置（四舍五入）。
+func predict(w *terrain.Walker, from, goal spatial.Point, distance float64) spatial.Point {
+	dx, dy := float64(goal.X-from.X), float64(goal.Y-from.Y)
+	length := math.Hypot(dx, dy)
+	if length == 0 {
+		return from
+	}
+	ux, uy := dx/length, dy/length
+	x, y := float64(from.X), float64(from.Y)
+	cell := w.Cell(from)
+	speed, ok := w.Step(cell, cell)
+	if !ok {
+		return from
+	}
+	for walked, left := 0.0, distance; length-walked > 1e-9 && left > 0; {
+		seg := min(0.5, length-walked)
+		cost := seg * 1000 / float64(speed)
+		if cost > left {
+			seg, cost = left*float64(speed)/1000, left
+		}
+		px, py := float64(from.X)+ux*(walked+seg), float64(from.Y)+uy*(walked+seg)
+		if next := w.Cell(spatial.Point{X: int64(math.Round(px)), Y: int64(math.Round(py))}); next != cell {
+			nextSpeed, ok := w.Step(cell, next)
+			if !ok {
+				break
+			}
+			cell, speed = next, nextSpeed
+		}
+		x, y = px, py
+		walked, left = walked+seg, left-cost
+	}
+	return spatial.Point{X: int64(math.Round(x)), Y: int64(math.Round(y))}
+}
+
+// clientPos 是客户端收到的某个玩家的位置与收到的时刻。
+func clientPos(client *terrainClient, id int64) (spatial.Point, time.Time, bool) {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	at, ok := client.positions[id]
+	return at, client.movedAt[id], ok
+}
+
+func maxY(trail []spatial.Point) int64 {
+	var y int64
+	for _, p := range trail {
+		y = max(y, p.Y)
+	}
+	return y
+}
+
+// walksAlong 报告沿 points 逐段走（同 predict 的采样）是否每一步都被 w 放行。
+func walksAlong(w *terrain.Walker, points []spatial.Point) bool {
+	for i := 1; i < len(points); i++ {
+		a, b := points[i-1], points[i]
+		length := math.Hypot(float64(b.X-a.X), float64(b.Y-a.Y))
+		if got := predict(w, a, b, length); got != b {
+			return false
+		}
+	}
+	return true
+}
+
+// 被坡度挡住、开口后绕行、挖沟后重算（方案 §20 / D9）：一道 2 米高的墙（每米 200 厘米，陡于 45°）横穿场景，
+// MoveTarget 答“没有路”；不寻路直接走的那一步停在墙前一个节点的边上（449）。墙上开一个口子后寻路从口子过、走到；
+// 再挖一条 4 米深的沟（落差超过 MaxDrop 3 米），挖之前算出的路线在新地形上走不通，新的请求重新寻路、绕过沟到达。
+func TestTerrainWalkIsHeldBySlopesAndRoutesAroundEdits(t *testing.T) {
+	w := newTerrainMoveWorld(t, math.MinInt32)
+	walker, _ := w.join(33001, spatial.Point{X: 150, Y: 450})
+	wall := map[[2]int64]uint16{}
+	for gy := int64(0); gy <= 9; gy++ {
+		wall[[2]int64{5, gy}] = 1020
+	}
+	w.edit(wall)
+	goal := spatial.Point{X: 850, Y: 450}
+	if err := w.moveTarget(walker, goal); err == nil {
+		t.Fatal("a goal behind a wall across the whole map was routed")
+	}
+	w.walkStraight(walker, goal)
+	w.walkUntilStopped(walker)
+	if at := walker.MapBasic().Published().Pos; at != (spatial.Point{X: 449, Y: 450}) {
+		t.Fatalf("the straight walk into the wall stopped at %v, want (449, 450): the last point of node 4", at)
+	}
+	if z, err := w.server().StandZ(spatial.Point{X: 500, Y: 450}); err != nil || z != 200 {
+		t.Fatalf("the wall top stands at %d %v, want 200 (2m above the baseline 0)", z, err)
+	}
+
+	w.edit(map[[2]int64]uint16{{5, 8}: 1000})
+	if err := w.moveTarget(walker, goal); err != nil {
+		t.Fatalf("a goal behind a wall with a gap: %v", err)
+	}
+	trail := w.walkUntilStopped(walker)
+	if at := walker.MapBasic().Published().Pos; at != goal || maxY(trail) < 700 {
+		t.Fatalf("through the gap: ended at %v via %v, want %v by the gap at y 800", at, trail, goal)
+	}
+
+	home := spatial.Point{X: 150, Y: 450}
+	stale, err := w.area.PathFind().Path(goal, home)
+	if err != nil || !walksAlong(w.server(), stale) {
+		t.Fatalf("the route home before the ditch: %v %v", stale, err)
+	}
+	ditch := map[[2]int64]uint16{}
+	for gy := int64(0); gy <= 7; gy++ {
+		ditch[[2]int64{7, gy}] = 960
+	}
+	w.edit(ditch)
+	if walksAlong(w.server(), stale) {
+		t.Fatalf("the route found before the ditch still walks: %v", stale)
+	}
+	if err := w.moveTarget(walker, home); err != nil {
+		t.Fatalf("routing home around the ditch: %v", err)
+	}
+	trail = w.walkUntilStopped(walker)
+	if at := walker.MapBasic().Published().Pos; at != home || maxY(trail) < 700 {
+		t.Fatalf("around the ditch: ended at %v via %v, want %v", at, trail, home)
+	}
+}
+
+// 挖坑成湖后游泳（方案 §5 水位线、§20 游泳）：水位 −0.5 米，挖出一条 3 米深、横穿场景的沟就是湖（水深 2.5 米 >
+// 涉水 50 厘米）。寻路穿过湖；在湖里 1 秒走 60 × 60% = 36 个单位，上岸后 1 秒 60 个；站立高度是水面。客户端收到
+// 改过的块后按同一规则算出同样的“在游泳”和高度。瞬移可以落在水里（能游泳时深水可站）。
+func TestTerrainALakeDugAcrossTheWayIsSwum(t *testing.T) {
+	w := newTerrainMoveWorld(t, -50)
+	swimmer, client := w.join(33101, spatial.Point{X: 150, Y: 450})
+	lake := map[[2]int64]uint16{}
+	for gx := int64(4); gx <= 6; gx++ {
+		for gy := int64(0); gy <= 9; gy++ {
+			lake[[2]int64{gx, gy}] = 970
+		}
+	}
+	version := w.edit(lake)
+	in := spatial.Point{X: 500, Y: 450}
+	if swim, err := w.server().Swimming(in); err != nil || !swim {
+		t.Fatalf("the dug lake is not deep water: %v %v", swim, err)
+	}
+	if err := w.moveTarget(swimmer, spatial.Point{X: 850, Y: 450}); err != nil {
+		t.Fatalf("routing across the lake: %v", err)
+	}
+	if trail := w.walkUntilStopped(swimmer); swimmer.MapBasic().Published().Pos != (spatial.Point{X: 850, Y: 450}) {
+		t.Fatalf("crossing the lake stopped at %v (%v)", swimmer.MapBasic().Published().Pos, trail)
+	}
+
+	if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, swimmer.ID(), w.area.ID(), in.X, in.Y); err != nil {
+		t.Fatalf("teleport into the lake: %v", err)
+	}
+	w.settle(swimmer.ID())
+	w.walkStraight(swimmer, spatial.Point{X: 640, Y: 450})
+	if at := w.beat(swimmer, time.Second); at != (spatial.Point{X: 536, Y: 450}) {
+		t.Fatalf("one second of swimming: at %v, want (536, 450) at 60%% of 60/s", at)
+	}
+	if err := syncsender.NewMovePlayerSender(w.engine).MultiSync_MovePlayer(w.ctx, swimmer.ID(), w.area.ID(), 700, 450); err != nil {
+		t.Fatal(err)
+	}
+	w.settle(swimmer.ID())
+	w.walkStraight(swimmer, spatial.Point{X: 900, Y: 450})
+	if at := w.beat(swimmer, time.Second); at != (spatial.Point{X: 760, Y: 450}) {
+		t.Fatalf("one second on land: at %v, want (760, 450)", at)
+	}
+	if z, err := w.server().StandZ(in); err != nil || z != -50 {
+		t.Fatalf("standing in the lake at %d %v, want the water level -50", z, err)
+	}
+
+	id := mustChunkID(t, terrain.ChunkKey{})
+	eventually(t, "the client holds the lake", func() (bool, string) { return client.version(id) == version, fmt.Sprint(client.version(id)) })
+	mine := w.clientWalker(client)
+	if swim, err := mine.Swimming(in); err != nil || !swim {
+		t.Fatalf("the client does not see deep water: %v %v", swim, err)
+	}
+	if z, err := mine.StandZ(in); err != nil || z != -50 {
+		t.Fatalf("the client stands at %d %v in the lake, want -50", z, err)
+	}
+}
+
+// 1 秒同步窗口里的纠偏（TERRAIN-STATUS T06 完成判据）：TerrainChunk 每秒同步一次、玩家位置变化即发，所以地形改动后
+// 客户端最多晚 1 秒看到；服务端移动永远按最新地形判定。
+//
+//  1. 挖在前方：玩家朝东走的同时，别人在前方挖出 5 米深的坑（落差超过 MaxDrop）。服务端这一拍停在坑边（549）；
+//     客户端先收到停下的位置——此时它的地形还是旧版本，按旧地形预测能走到 560——以服务端位置为准（纠偏）；
+//     约 1 秒后收到新块，按新地形从 549 再预测也被挡，与服务端一致。
+//  2. 挖在脚下：缓坡的坑（线性衰减，2 米）挖在脚下，服务端的站立高度立刻变成坑底（XY 不变、不发位置），客户端在新块到达
+//     前还是旧高度，到达后相同；坑沿缓于 45°，可以走出来。随后抬地（3 米）同理。
+//  3. 陡坑困住：5 米深的直壁坑挖在脚下，寻路答“没有路”、直线走一步也不动（服务端不替玩家选出路，见方案 §20 待决定项）；
+//     把坑填平后照常走。
+func TestTerrainEditsDuringTheSyncWindowAreCorrected(t *testing.T) {
+	w := newTerrainMoveWorld(t, math.MinInt32)
+	start := spatial.Point{X: 500, Y: 500} // 节点 (5, 5) 的中心：路线从这里直接向东，不先回节点中心
+	mover, client := w.join(33201, start)
+	id := mustChunkID(t, terrain.ChunkKey{})
+	// 先让块成为改过的块（订阅、首个全量是即时路径），之后的改动才走 1 秒周期。
+	first := w.edit(map[[2]int64]uint16{{60, 60}: 1001})
+	eventually(t, "the client holds the edited chunk", func() (bool, string) { return client.version(id) == first, fmt.Sprint(client.version(id)) })
+	eventually(t, "the client knows where the mover is", func() (bool, string) {
+		at, _, ok := clientPos(client, mover.ID())
+		return ok && at == start, fmt.Sprint(at, ok)
+	})
+	// 让这块此前可能开着的周期窗口过去：下面的改动从自己的首次变脏起算 1 秒。
+	time.Sleep(1200 * time.Millisecond)
+
+	// 1. 前方被挖。
+	east := spatial.Point{X: 850, Y: 500}
+	if err := w.moveTarget(mover, east); err != nil {
+		t.Fatal(err)
+	}
+	dug := time.Now()
+	pit := w.brush(1, terrain.Brush{Op: terrain.BrushLower, X: 700, Y: 450, Radius: 150, Strength: 50})
+	if at := w.beat(mover, time.Second); at != (spatial.Point{X: 549, Y: 500}) || locked(w.moveWorld, mover.ID(), mover.MapComp().Walking) {
+		t.Fatalf("walking into the pit's edge: at %v, want stopped at (549, 500)", at)
+	}
+	eventually(t, "the client is told where the walk stopped", func() (bool, string) {
+		at, _, _ := clientPos(client, mover.ID())
+		return at == spatial.Point{X: 549, Y: 500}, fmt.Sprint(at)
+	})
+	_, told, _ := clientPos(client, mover.ID())
+	if told.Sub(dug) >= 900*time.Millisecond {
+		t.Fatalf("fixture too slow: the position reached the client %v after the edit, cannot check the window before the terrain", told.Sub(dug))
+	}
+	if got := client.version(id); got != first {
+		t.Fatalf("the client already holds version %d when the stop reached it; the terrain is periodic (1s)", got)
+	}
+	stale := w.clientWalker(client)
+	if guess := predict(stale, start, east, 60); guess != (spatial.Point{X: 560, Y: 500}) {
+		t.Fatalf("on the old terrain the client predicts %v, want (560, 500) (it cannot know about the pit yet)", guess)
+	}
+	eventually(t, "the pit reaches the client", func() (bool, string) { return client.version(id) == pit, fmt.Sprint(client.version(id)) })
+	client.mu.Lock()
+	arrived := client.chunkAt[id]
+	client.mu.Unlock()
+	if arrived.Sub(dug) < 900*time.Millisecond {
+		t.Fatalf("the pit reached the client %v after the edit, before the 1s window", arrived.Sub(dug))
+	}
+	fresh := w.clientWalker(client)
+	if guess := predict(fresh, spatial.Point{X: 549, Y: 500}, east, 60); guess != (spatial.Point{X: 549, Y: 500}) {
+		t.Fatalf("on the new terrain the client predicts %v from the corrected position, want it to agree with the server (549, 500)", guess)
+	}
+
+	// 2. 脚下被挖（缓坡）与抬地：先走回平地上（坑在东边 6～8 号节点）。
+	here := spatial.Point{X: 250, Y: 450}
+	if err := w.moveTarget(mover, here); err != nil {
+		t.Fatal(err)
+	}
+	if w.walkUntilStopped(mover); mover.MapBasic().Published().Pos != here {
+		t.Fatalf("walking back to flat ground stopped at %v", mover.MapBasic().Published().Pos)
+	}
+	time.Sleep(1200 * time.Millisecond)
+	before := mustStandZ(t, w.server(), here)
+	scoop := w.brush(2, terrain.Brush{Op: terrain.BrushLower, X: here.X, Y: here.Y, Radius: 300, Falloff: terrain.FalloffLinear, Strength: 20})
+	after := mustStandZ(t, w.server(), here)
+	if before != 0 || after > before-100 {
+		t.Fatalf("digging under the feet: the server stands at %d, before %d", after, before)
+	}
+	if z := mustStandZ(t, w.clientWalker(client), here); z != before {
+		t.Fatalf("within the window the client should still stand at the old height %d, got %d", before, z)
+	}
+	eventually(t, "the scoop reaches the client", func() (bool, string) { return client.version(id) == scoop, fmt.Sprint(client.version(id)) })
+	if z := mustStandZ(t, w.clientWalker(client), here); z != after {
+		t.Fatalf("after the window the client stands at %d, the server at %d", z, after)
+	}
+	west := spatial.Point{X: 100, Y: 450}
+	if err := w.moveTarget(mover, west); err != nil {
+		t.Fatalf("walking out of a gentle scoop: %v", err)
+	}
+	if w.walkUntilStopped(mover); mover.MapBasic().Published().Pos != west {
+		t.Fatalf("walking out of a gentle scoop stopped at %v", mover.MapBasic().Published().Pos)
+	}
+	low := mustStandZ(t, w.server(), west)
+	lift := w.brush(3, terrain.Brush{Op: terrain.BrushRaise, X: west.X, Y: west.Y, Radius: 300, Falloff: terrain.FalloffLinear, Strength: 30})
+	if high := mustStandZ(t, w.server(), west); high < low+200 {
+		t.Fatalf("raising the ground under the feet: %d → %d, want at least +200", low, high)
+	}
+	eventually(t, "the lift reaches the client", func() (bool, string) { return client.version(id) == lift, fmt.Sprint(client.version(id)) })
+	if mine, theirs := mustStandZ(t, w.clientWalker(client), west), mustStandZ(t, w.server(), west); mine != theirs {
+		t.Fatalf("after the lift the client stands at %d, the server at %d", mine, theirs)
+	}
+
+	// 3. 直壁的深坑困住。
+	trap := west
+	w.brush(4, terrain.Brush{Op: terrain.BrushLower, X: trap.X, Y: trap.Y, Radius: 150, Strength: 50})
+	if err := w.moveTarget(mover, spatial.Point{X: 450, Y: 450}); err == nil {
+		t.Fatal("a route out of a 5m pit with sheer walls")
+	}
+	w.walkStraight(mover, spatial.Point{X: 450, Y: 450})
+	w.walkUntilStopped(mover)
+	if at := mover.MapBasic().Published().Pos; at.X > 249 {
+		t.Fatalf("walked out of a sheer 5m pit to %v", at)
+	}
+	w.brush(5, terrain.Brush{Op: terrain.BrushFlatten, X: trap.X, Y: trap.Y, Radius: 300, Target: 1000})
+	if err := w.moveTarget(mover, spatial.Point{X: 450, Y: 450}); err != nil {
+		t.Fatalf("after filling the pit: %v", err)
+	}
+	if w.walkUntilStopped(mover); mover.MapBasic().Published().Pos != (spatial.Point{X: 450, Y: 450}) {
+		t.Fatalf("after filling the pit the walk stopped at %v", mover.MapBasic().Published().Pos)
+	}
+	if failure := client.failure(); failure != nil {
+		t.Fatal(failure)
+	}
+}
+
+func mustStandZ(t *testing.T, w *terrain.Walker, p spatial.Point) int32 {
+	t.Helper()
+	z, err := w.StandZ(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return z
+}

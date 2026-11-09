@@ -39,7 +39,7 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `internal/service/<服务>/` | 各服务进程：game 的消费者、matchmaker、scene、battle、GM；account / chat / session 的 collaborators |
 | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/alliancerule/`、`game/entities/alliance*/` | 联盟服务（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：独立的 alliance 进程独占 Alliance / AllianceMember（Remote 托管、`service=alliance`），对已有实体的写走路由 RPC（发往实体的 owner；Alliance 起服预加载并登记路由），建盟走随机路由，请求回执与改动同事务；守卫是名单的缓存、跨实例收尾丢了由下一个请求自愈（联盟不产生任何 effect：成员通知由服务层写成功后直接发，预约期限是持有守卫的进程里的到期回调，跨实例宣战是宣战方事务里的持久“等确认”标记 + 直接调用对方 `AcknowledgeWar`），守卫 `snapshots=none` 不发 Remote 快照；运维命令 `alliance.info` / `alliance.guard` / `alliance.transfer` / `alliance.stop_founding` |
 | `game/guild/`、`saga/alliance_*/`、`internal/service/<game>/alliance_saga.go`、`alliance_notice.go` | game 侧的公会：game 只装联盟的只读 Mirror（`game/entities/alliance/mirror.go`），玩家所在公会是自己的副本 `PlayerDao.GuildID`，入会 / 退会一次 RPC，建盟扣费 / 捐献 / 领奖各一个 saga（Player 原生步骤 + 调 RPC 的 Mongo 步骤），接收成员变化通知推给在线玩家；见 [WALKTHROUGH](WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror) |
-| `game/terrainmap/`、`game/entities/terrain_chunk/`、`internal/service/<game>/terrain.go`、`terrain_sync.go`、`game/controllers/player/terrain_edit.go`、`cmd/terrainpack` | 可编辑地形（P1 / P2 单格，缺省关闭）：地形包、被改过的块的实体、启动装入、玩家笔刷编辑与地形同步，见[可编辑地形](#可编辑地形p1)、[玩家编辑与同步](#玩家编辑与同步p2) |
+| `game/terrainmap/`、`game/entities/terrain_chunk/`、`internal/service/<game>/terrain.go`、`terrain_sync.go`、`game/controllers/player/terrain_edit.go`、`cmd/terrainpack` | 可编辑地形（P1 / P2 单格、P3 普通场景的移动与寻路，缺省关闭）：地形包、被改过的块的实体、启动装入、玩家笔刷编辑与地形同步、高度场上的行走与寻路，见[可编辑地形](#可编辑地形p1)、[玩家编辑与同步](#玩家编辑与同步p2)、[移动与寻路](#移动与寻路p3) |
 | `internal/access/player/tcp/` | 玩家 TCP 接入的鉴权（`auth.go`） |
 | `configs/` | 配置表 schema、CSV、生成数据与各服务配置 |
 | `cmd/loadtest`、`loadtest/` | 机器人压测与场景脚本；`cmd/accountctl` 是操作员工具 |
@@ -251,6 +251,27 @@ scene:
   [编辑配额与材质守卫 500](../docs/maintenance/evidence/terrain-quota-20261108/README.md)）。
 - **升级**：`TerrainChunkDao` 是 schema 2（`Materials` 从 `[]byte` 改成 `[]uint16`，store 键 4 不变）。项目未上线，不迁移：
   schema 1 的记录按 `ErrSchemaMismatch` 拒绝（启动装入时这块按损坏不装入），升级前清空 `terrain_chunks`。
+
+### 移动与寻路（P3）
+
+开了地形的**普通场景**（不分区）上，玩家与怪的服务端行走、寻路和落点按高度场判定（[方案 §20](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#20-p3-移动与寻路实施结果2026-11-09)）；
+不开地形、或分区场景，一切与之前相同（`TestWithoutASurfaceTheMapIsTheFlatGrid` 与原有移动用例）。
+
+- **接线**：服务 Init 在地形同步就绪后调 `installSurface`，把 `terrainmap.Map.Walker()`（`terrain.DefaultWalkRules`，建筑占位取
+  `Rules.Occupied`）装到场景的 `Terrain().SetSurface`，范围夹到场景的世界。`actor.Surface` 是每个 `Move` 的 `MoveConfig.Surface`：
+  每拍读一次，地形改动后的下一步就按新地形判定。
+- **规则**：1m 地面节点之间坡度 ≤ 45°、陡降 ≤ 3 米可走；水深 > 50 厘米是游泳（速度 60%，站立高度是水面）；地图外、块没装的节点
+  不可进入。服务端位置只有 X / Y，高度按 `Walker.StandZ` 推出，客户端同算；不加 Z 字段，cellworld 线上格式不变。
+- **寻路**：`PathFind.Path` 走 `Walker.FindPath`（八方向、距离 + 爬升代价、加权 1.5、上限 4096 节点）；路线经过节点中心，
+  每段只跨一个节点边界。不缓存：每次 `MoveTarget` 算一次，地形在路上被改时行走在被挡的那一步停下（`Blocked`），下一个请求重新寻路。
+  预算用尽时仍按原来的做法走直线、逐节点挡住。
+- **落点**：`Terrain().Standable` = `Walkable` 且是能站的节点；瞬移、`MoveTarget` 的终点、出生、刷怪按它判；`Place` 有地形时按
+  1m 节点向外找。
+- **同步窗口与纠偏**：TerrainChunk 每秒同步一次、玩家位置变化即发，客户端最多晚约 1 秒看到地形改动；服务端行走总按最新地形，
+  客户端预测与服务端不同时以收到的位置为准，新块到达后两边按同一规则一致（`terrain_move_test.go`：挖在前方、挖在脚下、抬地、
+  陡坑困住后填平）。
+- **限制**：分区场景（cellworld 积分）没有地面钩子，跨格移动 / 交接不按高度；普通场景的世界仍是 `gamescene.DefaultConfig`
+  （1000 × 1000，即 10m 见方），比地形图小；陡壁深坑会困住玩家（服务端不替玩家找出路）；路线开头可能先折回起点节点中心（≤ 约 0.7m）。
 
 ## 改这里的东西之后
 

@@ -958,6 +958,17 @@ func (q *pointQuota) refund(playerID int64, points, rate int) {
 // SetClock 换配额用的时钟（测试用）。Install 之前调用。
 func (m *Map) SetClock(now func() time.Time) { m.quota.now = now }
 
+// Walker 是本进程地形上的行走规则（可编辑地形方案 §20，P3 移动与寻路）：视图、首版规则 terrain.DefaultWalkRules，
+// 建筑占位钩子取 Rules.Occupied（没装 Rules 时没有占位；P4 由 Building 推出）。Bounds 留空，由场景按自己的世界范围
+// 填。查询只读视图、不取锁，可以在 Nest short 池里调用；SetRules 之后再取。
+func (m *Map) Walker() terrain.Walker {
+	w := terrain.Walker{View: m.view, Rules: terrain.DefaultWalkRules}
+	if rules := m.rules; rules != nil {
+		w.Occupied = rules.Occupied
+	}
+	return w
+}
+
 // Height / Material / IsWater / Probe 委托视图（算法与错误见 gameplay/terrain 的 View）。
 func (m *Map) Height(x, y int64) (int32, error)         { return m.view.Height(x, y) }
 func (m *Map) Material(x, y int64) (byte, error)        { return m.view.Material(x, y) }

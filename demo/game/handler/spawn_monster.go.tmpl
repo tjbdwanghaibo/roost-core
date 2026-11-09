@@ -21,7 +21,7 @@ import (
 func handlerSpawnMonster(target monster.IActorEntity, area sceneentity.ISceneEntity, x int64, y int64) error {
 	var walkable func(spatial.Point) bool
 	if terrain := area.Terrain(); terrain != nil {
-		walkable = terrain.Walkable
+		walkable = terrain.Standable
 	}
 	return target.ActorComp().Spawn(area.ID(), area.Space(), spatial.Point{X: x, Y: y}, walkable)
 }

@@ -3,6 +3,7 @@ package scene
 import (
 	"time"
 
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -64,6 +65,24 @@ type Terrain interface {
 	// MoveOccupied is Occupy(to) + Release(from) as one step, so a failed
 	// move cannot lose the object's own point.
 	MoveOccupied(from, to spatial.Point) error
+
+	// Surface is the map's height field (editable terrain, P3 movement and
+	// pathfinding: slopes, steps, drops and swimming by gameplay/terrain's
+	// Walker), nil when there is none — no scene.terrain.pack, or a
+	// partitioned scene whose positions belong to the cells. Without it every
+	// walk, route and placement is exactly the flat grid's.
+	Surface() *terrain.Walker
+	// SetSurface installs the height field (the game service, once, after the
+	// terrain is loaded and before a player can join); the walker is bounded
+	// to this map. Nil takes it down.
+	SetSurface(walker *terrain.Walker)
+	// Standable reports whether something may be put at the point: Walkable,
+	// and on a height field a ground node that can be entered (loaded, not
+	// occupied, not deep water without swimming). It is the check for a
+	// teleport, a spawn or a route's goal; a walk already under way is
+	// checked step by step instead (movement.Surface), so it can leave a node
+	// it could not have been put on.
+	Standable(point spatial.Point) bool
 }
 
 // PathFind answers "can I get there" and "where can I stand".
