@@ -1,0 +1,96 @@
+vm.swapusage: total = 17408.00M  used = 15801.69M  free = 1606.31M  (encrypted)
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+                                                  │ bench-interleaved.txt │
+                                                  │        sec/op         │
+AOIWorldSize/new/1000x1000/block100-10                       1.140µ ± 72%
+AOIWorldSize/new/terrain2x1/block100-10                      79.85µ ± 37%
+AOIWorldSize/new/terrain16x16/block100-10                    12.00m ± 13%
+AOIWorldSize/new/terrain1w/block1000-10                      11.45m ± 18%
+AOIWorldSize/new/terrain1w/block6400-10                      266.5µ ±  5%
+AOIWorldSize/gc/1000x1000/block100-10                        206.8µ ± 26%
+AOIWorldSize/gc/terrain2x1/block100-10                       244.9µ ± 10%
+AOIWorldSize/gc/terrain16x16/block100-10                     3.212m ± 13%
+AOIWorldSize/gc/terrain1w/block1000-10                       3.022m ± 65%
+AOIWorldSize/gc/terrain1w/block6400-10                       333.3µ ± 48%
+AOIWorldSize/move/spread/1000x1000/block100-10               254.0µ ±  7%
+AOIWorldSize/move/dense/1000x1000/block100-10                4.051m ±  4%
+AOIWorldSize/move/spread/terrain2x1/block100-10              251.3µ ±  9%
+AOIWorldSize/move/dense/terrain2x1/block100-10               4.169m ± 20%
+AOIWorldSize/move/spread/terrain16x16/block100-10            255.2µ ± 79%
+AOIWorldSize/move/dense/terrain16x16/block100-10             4.528m ± 35%
+AOIWorldSize/move/spread/terrain1w/block1000-10              670.1µ ± 45%
+AOIWorldSize/move/dense/terrain1w/block1000-10               4.879m ± 11%
+AOIWorldSize/move/spread/terrain1w/block6400-10              639.5µ ±  7%
+AOIWorldSize/move/dense/terrain1w/block6400-10               4.905m ± 15%
+geomean                                                      780.1µ
+
+                                          │ bench-interleaved.txt │
+                                          │        blocks         │
+AOIWorldSize/new/1000x1000/block100-10                 100.0 ± 0%
+AOIWorldSize/new/terrain2x1/block100-10               8.192k ± 0%
+AOIWorldSize/new/terrain16x16/block100-10             1.049M ± 0%
+AOIWorldSize/new/terrain1w/block1000-10               1.010M ± 0%
+AOIWorldSize/new/terrain1w/block6400-10               24.65k ± 0%
+geomean                                               29.24k
+
+                                          │ bench-interleaved.txt │
+                                          │    observer-blocks    │
+AOIWorldSize/new/1000x1000/block100-10                 64.00 ± 0%
+AOIWorldSize/new/terrain2x1/block100-10                64.00 ± 0%
+AOIWorldSize/new/terrain16x16/block100-10              64.00 ± 0%
+AOIWorldSize/new/terrain1w/block1000-10                4.000 ± 0%
+AOIWorldSize/new/terrain1w/block6400-10                4.000 ± 0%
+geomean                                                21.11
+
+                                                  │ bench-interleaved.txt │
+                                                  │         B/op          │
+AOIWorldSize/new/1000x1000/block100-10                    6.281Ki ±  0%
+AOIWorldSize/new/terrain2x1/block100-10                   448.7Ki ±  0%
+AOIWorldSize/new/terrain16x16/block100-10                 56.00Mi ±  0%
+AOIWorldSize/new/terrain1w/block1000-10                   53.95Mi ±  0%
+AOIWorldSize/new/terrain1w/block6400-10                   1.324Mi ±  0%
+AOIWorldSize/gc/1000x1000/block100-10                       7.500 ± 47%
+AOIWorldSize/gc/terrain2x1/block100-10                      5.500 ± 27%
+AOIWorldSize/gc/terrain16x16/block100-10                    0.000 ±  0%
+AOIWorldSize/gc/terrain1w/block1000-10                      0.000 ±   ?
+AOIWorldSize/gc/terrain1w/block6400-10                      0.000 ±   ?
+AOIWorldSize/move/spread/1000x1000/block100-10            44.53Ki ±  0%
+AOIWorldSize/move/dense/1000x1000/block100-10             247.4Ki ±  0%
+AOIWorldSize/move/spread/terrain2x1/block100-10           45.21Ki ±  0%
+AOIWorldSize/move/dense/terrain2x1/block100-10            247.4Ki ±  0%
+AOIWorldSize/move/spread/terrain16x16/block100-10         45.21Ki ±  0%
+AOIWorldSize/move/dense/terrain16x16/block100-10          247.4Ki ±  0%
+AOIWorldSize/move/spread/terrain1w/block1000-10           36.37Ki ±  0%
+AOIWorldSize/move/dense/terrain1w/block1000-10            238.2Ki ±  0%
+AOIWorldSize/move/spread/terrain1w/block6400-10           36.32Ki ±  0%
+AOIWorldSize/move/dense/terrain1w/block6400-10            238.2Ki ±  0%
+geomean                                                                 ¹
+¹ summaries must be >0 to compute geomean
+
+                                                  │ bench-interleaved.txt │
+                                                  │       allocs/op       │
+AOIWorldSize/new/1000x1000/block100-10                       108.0 ± 0%
+AOIWorldSize/new/terrain2x1/block100-10                     8.200k ± 0%
+AOIWorldSize/new/terrain16x16/block100-10                   1.049M ± 0%
+AOIWorldSize/new/terrain1w/block1000-10                     1.010M ± 0%
+AOIWorldSize/new/terrain1w/block6400-10                     24.66k ± 0%
+AOIWorldSize/gc/1000x1000/block100-10                        0.000 ± 0%
+AOIWorldSize/gc/terrain2x1/block100-10                       0.000 ± 0%
+AOIWorldSize/gc/terrain16x16/block100-10                     0.000 ± 0%
+AOIWorldSize/gc/terrain1w/block1000-10                       0.000 ± 0%
+AOIWorldSize/gc/terrain1w/block6400-10                       0.000 ± 0%
+AOIWorldSize/move/spread/1000x1000/block100-10               53.00 ± 0%
+AOIWorldSize/move/dense/1000x1000/block100-10                59.00 ± 2%
+AOIWorldSize/move/spread/terrain2x1/block100-10              53.00 ± 0%
+AOIWorldSize/move/dense/terrain2x1/block100-10               59.00 ± 2%
+AOIWorldSize/move/spread/terrain16x16/block100-10            53.00 ± 0%
+AOIWorldSize/move/dense/terrain16x16/block100-10             58.00 ± 3%
+AOIWorldSize/move/spread/terrain1w/block1000-10              30.00 ± 0%
+AOIWorldSize/move/dense/terrain1w/block1000-10               36.00 ± 0%
+AOIWorldSize/move/spread/terrain1w/block6400-10              29.00 ± 0%
+AOIWorldSize/move/dense/terrain1w/block6400-10               36.00 ± 0%
+geomean                                                                 ¹
+¹ summaries must be >0 to compute geomean

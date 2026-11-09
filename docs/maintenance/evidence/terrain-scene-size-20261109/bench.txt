@@ -1,0 +1,154 @@
+vm.swapusage: total = 17408.00M  used = 15801.69M  free = 1606.31M  (encrypted)
+Mon Nov  9 23:24:04 CST 2026
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIWorldSize/new/1000x1000/block100-10         	  999261	      1169 ns/op	       100.0 blocks	        64.00 observer-blocks	    6432 B/op	     108 allocs/op
+BenchmarkAOIWorldSize/new/terrain2x1/block100-10        	   14979	     79321 ns/op	      8192 blocks	        64.00 observer-blocks	  459489 B/op	    8200 allocs/op
+BenchmarkAOIWorldSize/new/terrain16x16/block100-10      	     111	  10662190 ns/op	   1048576 blocks	        64.00 observer-blocks	58721094 B/op	 1048584 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block1000-10        	     100	  10005785 ns/op	   1010025 blocks	         4.000 observer-blocks	56567499 B/op	 1010033 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block6400-10        	    4768	    255208 ns/op	     24649 blocks	         4.000 observer-blocks	 1388693 B/op	   24657 allocs/op
+BenchmarkAOIWorldSize/gc/1000x1000/block100-10          	    7327	    172761 ns/op	       7 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain2x1/block100-10         	    4527	    250886 ns/op	       4 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain16x16/block100-10       	     392	   2795425 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block1000-10         	     393	   3088094 ns/op	       1 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block6400-10         	    3679	    332533 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/move/spread/1000x1000/block100-10 	    4761	    239447 ns/op	   45596 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/1000x1000/block100-10  	     304	   3951148 ns/op	  253369 B/op	      58 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain2x1/block100-10         	    4898	    246050 ns/op	   46299 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain2x1/block100-10          	     306	   3912403 ns/op	  253372 B/op	      58 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain16x16/block100-10       	    4831	    240862 ns/op	   46299 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain16x16/block100-10        	     297	   3955118 ns/op	  253359 B/op	      58 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block1000-10         	    1928	    618375 ns/op	   37233 B/op	      30 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block1000-10          	     253	   4769408 ns/op	  243949 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block6400-10         	    1956	    637463 ns/op	   37184 B/op	      29 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block6400-10          	     254	   4738991 ns/op	  243953 B/op	      36 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIWorldSize/new/1000x1000/block100-10         	 1000000	      1060 ns/op	       100.0 blocks	        64.00 observer-blocks	    6432 B/op	     108 allocs/op
+BenchmarkAOIWorldSize/new/terrain2x1/block100-10        	   15636	     76521 ns/op	      8192 blocks	        64.00 observer-blocks	  459489 B/op	    8200 allocs/op
+BenchmarkAOIWorldSize/new/terrain16x16/block100-10      	     110	  10822172 ns/op	   1048576 blocks	        64.00 observer-blocks	58721101 B/op	 1048584 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block1000-10        	     121	  10022060 ns/op	   1010025 blocks	         4.000 observer-blocks	56567447 B/op	 1010033 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block6400-10        	    4599	    254090 ns/op	     24649 blocks	         4.000 observer-blocks	 1388694 B/op	   24657 allocs/op
+BenchmarkAOIWorldSize/gc/1000x1000/block100-10          	    5664	    245402 ns/op	      11 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain2x1/block100-10         	    5168	    238961 ns/op	       7 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain16x16/block100-10       	     327	   3445741 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block1000-10         	     393	   2921802 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block6400-10         	    3771	    321573 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/move/spread/1000x1000/block100-10 	    4789	    246191 ns/op	   45595 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/1000x1000/block100-10  	     292	   4097375 ns/op	  253354 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain2x1/block100-10         	    4598	    256845 ns/op	   46301 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain2x1/block100-10          	     290	   4150893 ns/op	  253352 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain16x16/block100-10       	    4826	    244254 ns/op	   46299 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain16x16/block100-10        	     301	   4023424 ns/op	  253364 B/op	      58 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block1000-10         	    1804	    655252 ns/op	   37237 B/op	      30 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block1000-10          	     247	   4816329 ns/op	  243934 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block6400-10         	    1868	    641629 ns/op	   37187 B/op	      29 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block6400-10          	     244	   4937863 ns/op	  243927 B/op	      36 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIWorldSize/new/1000x1000/block100-10         	 1076263	      1111 ns/op	       100.0 blocks	        64.00 observer-blocks	    6432 B/op	     108 allocs/op
+BenchmarkAOIWorldSize/new/terrain2x1/block100-10        	   15363	     77670 ns/op	      8192 blocks	        64.00 observer-blocks	  459489 B/op	    8200 allocs/op
+BenchmarkAOIWorldSize/new/terrain16x16/block100-10      	     103	  11831568 ns/op	   1048576 blocks	        64.00 observer-blocks	58721106 B/op	 1048584 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block1000-10        	      97	  11736271 ns/op	   1010025 blocks	         4.000 observer-blocks	56567451 B/op	 1010033 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block6400-10        	    4462	    267881 ns/op	     24649 blocks	         4.000 observer-blocks	 1388693 B/op	   24657 allocs/op
+BenchmarkAOIWorldSize/gc/1000x1000/block100-10          	    6511	    191989 ns/op	       7 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain2x1/block100-10         	    4111	    270101 ns/op	       7 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain16x16/block100-10       	     358	   3282192 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block1000-10         	     405	   2955111 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block6400-10         	    3718	    334107 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/move/spread/1000x1000/block100-10 	    4293	    250249 ns/op	   45599 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/1000x1000/block100-10  	     300	   4004812 ns/op	  253364 B/op	      58 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain2x1/block100-10         	    4790	    249605 ns/op	   46300 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain2x1/block100-10          	     289	   4187934 ns/op	  253352 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain16x16/block100-10       	    4534	    455679 ns/op	   46301 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain16x16/block100-10        	     202	   6111886 ns/op	  253192 B/op	      60 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block1000-10         	    1422	    862762 ns/op	   37256 B/op	      30 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block1000-10          	     212	   5396306 ns/op	  243822 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block6400-10         	    1666	    686017 ns/op	   37195 B/op	      29 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block6400-10          	     235	   5643725 ns/op	  243900 B/op	      36 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIWorldSize/new/1000x1000/block100-10         	  657147	      1957 ns/op	       100.0 blocks	        64.00 observer-blocks	    6432 B/op	     108 allocs/op
+BenchmarkAOIWorldSize/new/terrain2x1/block100-10        	   12018	     96666 ns/op	      8192 blocks	        64.00 observer-blocks	  459489 B/op	    8200 allocs/op
+BenchmarkAOIWorldSize/new/terrain16x16/block100-10      	      94	  12166523 ns/op	   1048576 blocks	        64.00 observer-blocks	58721118 B/op	 1048584 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block1000-10        	     100	  11250832 ns/op	   1010025 blocks	         4.000 observer-blocks	56567448 B/op	 1010033 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block6400-10        	    4574	    265153 ns/op	     24649 blocks	         4.000 observer-blocks	 1388693 B/op	   24657 allocs/op
+BenchmarkAOIWorldSize/gc/1000x1000/block100-10          	    7492	    168282 ns/op	       6 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain2x1/block100-10         	    5180	    220550 ns/op	       5 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain16x16/block100-10       	     396	   2995975 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block1000-10         	     393	   2881722 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block6400-10         	    3666	    320653 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/move/spread/1000x1000/block100-10 	    4784	    260132 ns/op	   45596 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/1000x1000/block100-10  	     273	   4226823 ns/op	  253329 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain2x1/block100-10         	    4746	    251101 ns/op	   46300 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain2x1/block100-10          	     304	   3894673 ns/op	  253369 B/op	      58 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain16x16/block100-10       	    4896	    250449 ns/op	   46299 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain16x16/block100-10        	     298	   4805882 ns/op	  253360 B/op	      58 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block1000-10         	    1816	    973504 ns/op	   37237 B/op	      30 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block1000-10          	     224	   5230325 ns/op	  243864 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block6400-10         	    1858	    629554 ns/op	   37188 B/op	      29 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block6400-10          	     249	   5131206 ns/op	  243940 B/op	      36 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIWorldSize/new/1000x1000/block100-10         	  963703	      1878 ns/op	       100.0 blocks	        64.00 observer-blocks	    6432 B/op	     108 allocs/op
+BenchmarkAOIWorldSize/new/terrain2x1/block100-10        	   10412	    109534 ns/op	      8192 blocks	        64.00 observer-blocks	  459489 B/op	    8200 allocs/op
+BenchmarkAOIWorldSize/new/terrain16x16/block100-10      	      80	  12718995 ns/op	   1048576 blocks	        64.00 observer-blocks	58720999 B/op	 1048584 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block1000-10        	     100	  13464743 ns/op	   1010025 blocks	         4.000 observer-blocks	56567513 B/op	 1010033 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block6400-10        	    4660	    270065 ns/op	     24649 blocks	         4.000 observer-blocks	 1388693 B/op	   24657 allocs/op
+BenchmarkAOIWorldSize/gc/1000x1000/block100-10          	    6931	    259604 ns/op	       8 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain2x1/block100-10         	    5505	    260875 ns/op	       6 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain16x16/block100-10       	     400	   3141306 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block1000-10         	     246	   4970834 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block6400-10         	    2667	    428917 ns/op	       1 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/move/spread/1000x1000/block100-10 	    4410	    257751 ns/op	   45598 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/1000x1000/block100-10  	     292	   4064074 ns/op	  253354 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain2x1/block100-10         	    4798	    272751 ns/op	   46300 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain2x1/block100-10          	     278	   5004807 ns/op	  253339 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain16x16/block100-10       	    4257	    259873 ns/op	   46303 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain16x16/block100-10        	     282	   5062296 ns/op	  253340 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block1000-10         	    1738	    684933 ns/op	   37240 B/op	      30 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block1000-10          	     252	   4758117 ns/op	  243947 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block6400-10         	    1910	    628611 ns/op	   37186 B/op	      29 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block6400-10          	     243	   4871157 ns/op	  243923 B/op	      36 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIWorldSize/new/1000x1000/block100-10         	 1000000	      1072 ns/op	       100.0 blocks	        64.00 observer-blocks	    6432 B/op	     108 allocs/op
+BenchmarkAOIWorldSize/new/terrain2x1/block100-10        	   15031	     80370 ns/op	      8192 blocks	        64.00 observer-blocks	  459489 B/op	    8200 allocs/op
+BenchmarkAOIWorldSize/new/terrain16x16/block100-10      	      79	  13612789 ns/op	   1048576 blocks	        64.00 observer-blocks	58721066 B/op	 1048584 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block1000-10        	      97	  11642060 ns/op	   1010025 blocks	         4.000 observer-blocks	56567508 B/op	 1010033 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block6400-10        	    4755	    271361 ns/op	     24649 blocks	         4.000 observer-blocks	 1388693 B/op	   24657 allocs/op
+BenchmarkAOIWorldSize/gc/1000x1000/block100-10          	    6934	    221629 ns/op	       8 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain2x1/block100-10         	    5355	    235302 ns/op	       5 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain16x16/block100-10       	     355	   3359510 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block1000-10         	     346	   3861901 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block6400-10         	    2139	    494471 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/move/spread/1000x1000/block100-10 	    4155	    270974 ns/op	   45600 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/1000x1000/block100-10  	     295	   4037644 ns/op	  253360 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain2x1/block100-10         	    4842	    251552 ns/op	   46299 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain2x1/block100-10          	     283	   4365257 ns/op	  253343 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain16x16/block100-10       	    4392	    272704 ns/op	   46302 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain16x16/block100-10        	     309	   4250786 ns/op	  253372 B/op	      58 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block1000-10         	    1696	    633196 ns/op	   37242 B/op	      30 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block1000-10          	     236	   4941867 ns/op	  243902 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block6400-10         	    1824	    645889 ns/op	   37189 B/op	      29 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block6400-10          	     244	   4869302 ns/op	  243925 B/op	      36 allocs/op
+PASS
+Mon Nov  9 23:26:31 CST 2026
+vm.swapusage: total = 17408.00M  used = 15767.44M  free = 1640.56M  (encrypted)

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"{{MODULE}}/game/scene"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -274,5 +275,66 @@ func TestASurfaceRoutesAndPlacesOnTheHeightField(t *testing.T) {
 	ground.SetSurface(nil)
 	if ground.Surface() != nil || !ground.Standable(spatial.Point{X: 200, Y: 200}) {
 		t.Fatal("taking the height field down did not restore the flat grid")
+	}
+}
+
+// A scene built on the terrain map (scene.TerrainConfig, an ordinary scene
+// with editable terrain) is the terrain map: the ground, the walker and the
+// spawns cover all of it — far beyond the default 1000 × 1000 — and nothing
+// outside it. The spawn table's points (inside the default map) still spawn
+// on standable ground.
+func TestASceneOnTheTerrainMapCoversAllOfIt(t *testing.T) {
+	view := terrain.NewView(writeFlatPack(t, nil))
+	if err := view.LoadBase(terrain.ChunkKey{}); err != nil {
+		t.Fatal(err)
+	}
+	bounds := view.Meta().Bounds()
+	config, err := scene.TerrainConfig(bounds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loadSpawnTable(t)
+	runtime, err := New(testScene{id: 1}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { runtime.Stop(entity.DestroyReasonCommon) })
+	ground, pathFind := runtime.Terrain(), runtime.PathFind()
+	ground.SetSurface(&terrain.Walker{View: view, Rules: terrain.DefaultWalkRules})
+	if ground.Bounds() != bounds || ground.Surface().Bounds != bounds {
+		t.Fatalf("the scene is %v and its walker %v, want the terrain map %v", ground.Bounds(), ground.Surface().Bounds, bounds)
+	}
+	edge := bounds.Max.X
+	for _, p := range []spatial.Point{{X: edge - 1, Y: edge - 1}, {X: 5000, Y: 100}, {X: 100, Y: 5000}} {
+		if !ground.Standable(p) {
+			t.Fatalf("%v inside the terrain map is not standable", p)
+		}
+	}
+	for _, p := range []spatial.Point{{X: edge, Y: 100}, {X: 100, Y: edge}, {X: -1, Y: 100}} {
+		if ground.Standable(p) || ground.Walkable(p) {
+			t.Fatalf("%v outside the terrain map is standable", p)
+		}
+	}
+	route, err := pathFind.Path(spatial.Point{X: 5900, Y: 5900}, spatial.Point{X: edge - 50, Y: edge - 50})
+	if err != nil || route[len(route)-1] != (spatial.Point{X: edge - 50, Y: edge - 50}) {
+		t.Fatalf("a route to the far corner: %v %v", route, err)
+	}
+	if _, err := pathFind.Path(spatial.Point{X: 5900, Y: 5900}, spatial.Point{X: edge + 50, Y: 5900}); err == nil {
+		t.Fatal("a route out of the terrain map")
+	}
+	if got, err := pathFind.Place(spatial.Point{X: edge + 50, Y: 3000}); err != nil || !bounds.Contains(got) || !ground.Standable(got) {
+		t.Fatalf("Place just outside the map = %v %v, want a standable node inside it", got, err)
+	}
+	requests := runtime.Refresh().Due(time.Now())
+	if len(requests) == 0 {
+		t.Fatal("no spawns on the terrain map")
+	}
+	for _, request := range requests {
+		if !ground.Standable(request.At) {
+			t.Fatalf("spawn %+v is not standable", request)
+		}
 	}
 }

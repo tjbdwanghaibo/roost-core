@@ -2,7 +2,9 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"runtime"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -320,5 +322,141 @@ func BenchmarkSharedSpatialView(b *testing.B) {
 				settleViews(in)
 			}
 		})
+	}
+}
+
+// aoiWorld 是世界大小基准的一档：边界与块边长。视野参数取 demo 普通场景（scene.go：进入 120、离开 150、视野上限 300、
+// 主视野 64），世界大小与块边长之外都不变。
+type aoiWorld struct {
+	name          string
+	width, height int64
+	blockSize     int64
+}
+
+// aoiWorlds：现有普通场景 1000×1000；开了地形时取地形图大小（厘米）——demo 缺省包 2×1 块（128m×64m）、块边长 100
+// 下急切块表能容下的最大方图 16×16 块（1024m）、1w 方图（157×157 块，1,004,800 单位）。1w 在块边长 100 下超出
+// spatial.MaxBlockCount（TestAOIWorldSizeBlockLimit），只能放大块边长：1000（约 2^20 块，上限内最小的整百）与地形块
+// 边长 6400（与地形同步的 Interest 同一块）。
+var aoiWorlds = []aoiWorld{
+	{"1000x1000/block100", 1000, 1000, 100},
+	{"terrain2x1/block100", 12_800, 6_400, 100},
+	{"terrain16x16/block100", 102_400, 102_400, 100},
+	{"terrain1w/block1000", 1_004_800, 1_004_800, 1000},
+	{"terrain1w/block6400", 1_004_800, 1_004_800, 6400},
+}
+
+func (w aoiWorld) config() AOIConfig {
+	return AOIConfig{
+		Bounds: spatial.Rect{Max: spatial.Point{X: w.width, Y: w.height}}, BlockSize: w.blockSize,
+		EnterRadius: 120, LeaveRadius: 150, MinViewRadius: 60, MaxLeaveRadius: 300, ViewRadiusStep: 30, MaxVisible: 64,
+	}
+}
+
+// populate 在世界中央放 512 个目标（32×16 网格，间距 spacing；最小的 1000×1000 也放得下，移动 80 不出界）与跟随前 128 个目标的观察者，与世界大小无关：
+// 同样的人群放进不同的世界，比的是世界（块表）本身的成本。
+func (w aoiWorld) populate(tb testing.TB, a *AOI, spacing int64) []spatial.Point {
+	tb.Helper()
+	origin := spatial.Point{X: w.width/2 - 16*spacing, Y: w.height/2 - 8*spacing}
+	positions := make([]spatial.Point, 512)
+	for i := range positions {
+		positions[i] = spatial.Point{X: origin.X + int64(i%32)*spacing, Y: origin.Y + int64(i/32)*spacing}
+		if err := a.AddSubject(int64(i+1), positions[i]); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	for i := range 128 {
+		if err := a.AddObserver(int64(i+1000), int64(i+1), positions[i], ObserverView{}); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	a.Flush()
+	a.FlushBlocks()
+	return positions
+}
+
+// 块边长 100 时 1w 地图的块数超出急切块表的上限，构造被拒（不会悄悄分配上亿个块）；同一张图放大块边长后可以构造。
+// 观察者的块预算按 MaxLeaveRadius / BlockSize 算、与世界大小无关（世界只会把它截小），所以每一档都在缺省预算内。
+func TestAOIWorldSizeBlockLimit(t *testing.T) {
+	big := aoiWorld{"terrain1w/block100", 1_004_800, 1_004_800, 100}
+	if _, err := NewAOI(big.config()); !errors.Is(err, spatial.ErrTooManyBlocks) {
+		t.Fatalf("1w map on 100-unit blocks: err = %v, want spatial.ErrTooManyBlocks", err)
+	}
+	for _, w := range aoiWorlds {
+		if _, err := NewAOI(w.config()); err != nil {
+			t.Fatalf("%s: %v", w.name, err)
+		}
+		if worst := w.config().withViewDefaults().worstObserverBlocks(); worst > DefaultMaxObserverBlocks {
+			t.Fatalf("%s: worst observer covers %d blocks, over the default budget %d", w.name, worst, DefaultMaxObserverBlocks)
+		}
+	}
+}
+
+// 世界大小对 AOI 的成本（地形场景取地形图大小之前的测量，见可编辑地形方案 §23）：
+//   - new：构造（块表按块数急切分配，B/op 就是常驻内存）；blocks、observer-blocks 是块数与单个观察者最坏订阅块数；
+//   - gc：AOI 常驻、人群已放入时一次完整 GC 的耗时（块表的指针要逐个标记）；
+//   - move/spread|dense：同一群人（间距 25 / 10）每批 32 个目标与其中 8 个观察者移动 80，批量重评 + 收集事件。
+func BenchmarkAOIWorldSize(b *testing.B) {
+	for _, w := range aoiWorlds {
+		b.Run("new/"+w.name, func(b *testing.B) {
+			config := w.config()
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := NewAOI(config); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(spatial.DivideCeil(w.width, w.blockSize)*spatial.DivideCeil(w.height, w.blockSize)), "blocks")
+			b.ReportMetric(float64(config.withViewDefaults().worstObserverBlocks()), "observer-blocks")
+		})
+	}
+	for _, w := range aoiWorlds {
+		b.Run("gc/"+w.name, func(b *testing.B) {
+			a, err := NewAOI(w.config())
+			if err != nil {
+				b.Fatal(err)
+			}
+			w.populate(b, a, 25)
+			runtime.GC()
+			for b.Loop() {
+				runtime.GC()
+			}
+			runtime.KeepAlive(a)
+		})
+	}
+	for _, w := range aoiWorlds {
+		for _, spacing := range []int64{25, 10} {
+			layout := "spread"
+			if spacing == 10 {
+				layout = "dense"
+			}
+			b.Run(fmt.Sprintf("move/%s/%s", layout, w.name), func(b *testing.B) {
+				a, err := NewAOI(w.config())
+				if err != nil {
+					b.Fatal(err)
+				}
+				positions := w.populate(b, a, spacing)
+				step := int64(0)
+				b.ReportAllocs()
+				for b.Loop() {
+					a.beginBatch()
+					for i := range 32 {
+						at := positions[i]
+						at.X += (step % 2) * 80
+						if err := a.MoveSubject(int64(i+1), at); err != nil {
+							b.Fatal(err)
+						}
+						if i%4 == 0 {
+							if err := a.MoveObserver(int64(i+1000), at); err != nil {
+								b.Fatal(err)
+							}
+						}
+					}
+					a.endBatch(1)
+					a.Flush()
+					a.FlushBlocks()
+					step++
+				}
+			})
+		}
 	}
 }

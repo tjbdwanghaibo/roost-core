@@ -1,0 +1,94 @@
+$ go build ./... && go vet ./...
+BUILD_VET_OK
+$ roost id check
+IDs are valid
+$ roost generate --check
+generated files are up to date
+$ go test ./...
+?   	example.com/planet	[no test files]
+?   	example.com/planet/cmd/accountctl	[no test files]
+?   	example.com/planet/cmd/healthprobe	[no test files]
+ok  	example.com/planet/cmd/loadtest	0.963s
+?   	example.com/planet/cmd/playerprobe	[no test files]
+?   	example.com/planet/cmd/schemamigrate	[no test files]
+ok  	example.com/planet/cmd/sidmerge	1.247s
+ok  	example.com/planet/cmd/sidmove	1.943s
+ok  	example.com/planet/cmd/terrainpack	2.386s
+?   	example.com/planet/configs/generated	[no test files]
+?   	example.com/planet/configs/schema	[no test files]
+ok  	example.com/planet/db	2.046s
+?   	example.com/planet/db/def	[no test files]
+ok  	example.com/planet/db/migrations	2.607s
+ok  	example.com/planet/deploy/docker	3.033s
+?   	example.com/planet/game/activity	[no test files]
+ok  	example.com/planet/game/actor	3.442s
+?   	example.com/planet/game/alliancerule	[no test files]
+?   	example.com/planet/game/battle	[no test files]
+?   	example.com/planet/game/chatroom	[no test files]
+?   	example.com/planet/game/clientsync	[no test files]
+ok  	example.com/planet/game/controllers/player	4.615s
+ok  	example.com/planet/game/dungeon	4.260s
+?   	example.com/planet/game/effects	[no test files]
+?   	example.com/planet/game/entities	[no test files]
+ok  	example.com/planet/game/entities/alliance	4.512s
+ok  	example.com/planet/game/entities/alliance_member	4.806s
+ok  	example.com/planet/game/entities/monster	5.248s
+ok  	example.com/planet/game/entities/player	5.445s
+?   	example.com/planet/game/entities/scene	[no test files]
+?   	example.com/planet/game/entities/scene_actor	[no test files]
+ok  	example.com/planet/game/entities/team	5.656s
+ok  	example.com/planet/game/entities/terrain_chunk	5.594s
+ok  	example.com/planet/game/entities/terrain_editor	5.703s
+ok  	example.com/planet/game/entities/world	5.628s
+?   	example.com/planet/game/equipment	[no test files]
+?   	example.com/planet/game/flags	[no test files]
+ok  	example.com/planet/game/gameplay/attribute	4.825s
+ok  	example.com/planet/game/gift	5.127s
+?   	example.com/planet/game/guild	[no test files]
+ok  	example.com/planet/game/handler	5.464s
+ok  	example.com/planet/game/handler/sender	5.673s
+?   	example.com/planet/game/handler/syncsender	[no test files]
+?   	example.com/planet/game/lifecycle	[no test files]
+?   	example.com/planet/game/matchmaking	[no test files]
+ok  	example.com/planet/game/partition	5.743s
+?   	example.com/planet/game/playeraccess	[no test files]
+?   	example.com/planet/game/protocol_bootstrap	[no test files]
+?   	example.com/planet/game/protocol_handlers/player	[no test files]
+?   	example.com/planet/game/purchase	[no test files]
+?   	example.com/planet/game/ranking	[no test files]
+ok  	example.com/planet/game/rewards	5.577s
+ok  	example.com/planet/game/runtimeid	5.082s
+?   	example.com/planet/game/scene	[no test files]
+ok  	example.com/planet/game/scene/runtime	5.213s
+ok  	example.com/planet/game/settings	3.042s
+ok  	example.com/planet/game/skills	3.461s
+?   	example.com/planet/game/terrainmap	[no test files]
+ok  	example.com/planet/internal/access/player	2.253s
+ok  	example.com/planet/internal/access/player/tcp	3.021s
+?   	example.com/planet/internal/bootstrap	[no test files]
+?   	example.com/planet/internal/errors	[no test files]
+?   	example.com/planet/internal/frameworkdeps	[no test files]
+?   	example.com/planet/internal/registry	[no test files]
+ok  	example.com/planet/internal/rpc/alliance	2.911s
+ok  	example.com/planet/internal/service/account	3.329s
+?   	example.com/planet/internal/service/activity	[no test files]
+ok  	example.com/planet/internal/service/alliance	2.198s
+?   	example.com/planet/internal/service/chat	[no test files]
+ok  	example.com/planet/internal/service/game	53.517s
+?   	example.com/planet/internal/service/global	[no test files]
+?   	example.com/planet/internal/service/mail	[no test files]
+?   	example.com/planet/internal/service/match	[no test files]
+ok  	example.com/planet/internal/service/platform	1.437s
+?   	example.com/planet/internal/service/rank	[no test files]
+?   	example.com/planet/internal/service/session	[no test files]
+?   	example.com/planet/loadtest/playertcp	[no test files]
+?   	example.com/planet/loadtest/protocol	[no test files]
+?   	example.com/planet/protocol/def	[no test files]
+?   	example.com/planet/protocol/msgid	[no test files]
+?   	example.com/planet/protocol/pb	[no test files]
+?   	example.com/planet/protocol/player_bind	[no test files]
+?   	example.com/planet/saga/alliance_donate	[no test files]
+?   	example.com/planet/saga/alliance_found	[no test files]
+?   	example.com/planet/saga/alliance_reward	[no test files]
+?   	example.com/planet/saga/gift_item	[no test files]
+exit=0

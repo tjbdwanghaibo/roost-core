@@ -1,0 +1,11 @@
+$ go test -race -count=1 -run 'TestTerrain|TestAPlayer|TestATwice|TestTheScenes|TestARooted' ./internal/service/game/
+ok  	example.com/planet/internal/service/game	42.506s
+$ go test -race -count=3 -run 'TestTerrainScene|TestTerrainWalkIsHeld|TestTerrainALake|TestTerrainEditsDuring' ./internal/service/game/
+ok  	example.com/planet/internal/service/game	75.422s
+$ go test -race -count=1 ./game/scene/runtime/ ./game/actor/ ./game/entities/player/ ./game/entities/scene/ ./game/handler/ ./game/lifecycle/
+ok  	example.com/planet/game/scene/runtime	1.747s
+ok  	example.com/planet/game/actor	1.556s
+ok  	example.com/planet/game/entities/player	2.345s
+?   	example.com/planet/game/entities/scene	[no test files]
+ok  	example.com/planet/game/handler	2.869s
+?   	example.com/planet/game/lifecycle	[no test files]
