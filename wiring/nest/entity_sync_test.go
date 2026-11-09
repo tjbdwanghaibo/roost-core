@@ -406,3 +406,51 @@ func TestEntitySyncModRefusesASecondEntitySyncObserver(t *testing.T) {
 		t.Fatal("the only EntitySync observer was not bound")
 	}
 }
+
+type serviceSyncProvider struct{ observer entity.SyncCommitObserver }
+
+func (s serviceSyncProvider) NestSyncObserver() entity.SyncCommitObserver { return s.observer }
+
+func TestServiceSyncObserverBindingAndConflicts(t *testing.T) {
+	for _, kind := range []string{"plain", "option", "owned", "nil"} {
+		t.Run(kind, func(t *testing.T) {
+			observer := &boundObserver{}
+			var supplied entity.SyncCommitObserver = observer
+			if kind == "nil" {
+				supplied = nil
+			}
+			cfg := viper.New()
+			registry := app.NewRegistry(cfg)
+			if err := registry.Register(app.ModService, serviceSyncProvider{supplied}); err != nil {
+				t.Fatal(err)
+			}
+			if err := registry.Register(mods.ModDataEngine, dataEngineNestProvider{committer: noOpCommitter{}}); err != nil {
+				t.Fatal(err)
+			}
+			mod := NewMod(emptyGetter{})
+			if kind == "option" {
+				mod = NewMod(emptyGetter{}, corenest.NestOptionWithEntitySync(&boundObserver{}))
+			}
+			if kind == "owned" {
+				mod = NewModWithEntitySync(emptyGetter{}, EntitySyncSetup{Config: entitysync.ManagerConfig{Transport: entitysync.TransportFunc(func(context.Context, entitysync.SessionID, []byte) error { return nil })}})
+			}
+			if err := mod.Init(cfg); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { mod.Stop() })
+			err := mod.Provide(registry)
+			if kind == "plain" {
+				if err != nil || !observer.bound.Load() {
+					t.Fatalf("service observer was not bound: %v", err)
+				}
+			} else {
+				if err == nil || observer.bound.Load() {
+					t.Fatalf("conflicting/absent observer accepted: %v", err)
+				}
+				if kind != "nil" && !errors.Is(err, ErrEntitySyncObserverConflict) {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}

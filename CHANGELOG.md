@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- game-demo 正式启用混合同步：服务在 Nest 构造前通过新增 `wiring/nest.NestSyncObserverProvider` 提供观察者，Init 后接 Scene；Player/Monster on_change、TerrainChunk 1 秒脏增量。观察者与 EntitySyncSetup/self_sync 或显式选项冲突时拒绝启动。新增真实 TCP 玩家/地形混合、即时新订阅、观察者捕获/唤醒/撤回测试；历史 periodic 测量夹具保留，新模式容量未测。
+
 - EntitySync 新增 `ManagerConfig.TypeSchedules`：按 SubjectKind 覆盖同步节奏，周期类型跳过提交冻结、按首次变脏固定窗口合并；即时全量/remove 不等待周期，Drain/Stop 可强制处理。独立快照保留待发变化，下一次周期更新必要时回退 Full。配置/代价见 [类型调度](docs/framework/ENTITY_SYNC.md#按实体类型的同步节奏2026-11-09)；game-demo 生产者接线尚未切换。
 
 - Heartbeat 每次 ticker 通知只推进一格，驱动停顿后顺延、不集中补格；在途重投改按系统单调时间判断，在下一到期格检查。业务按实际经过时间计算，`Beat.Elapsed` 上限保持；见 [时间实现说明](docs/framework/impl/10-time.md)。

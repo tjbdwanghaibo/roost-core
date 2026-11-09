@@ -1,6 +1,6 @@
 # 核心：Sync、Lockstep 与客户端：设计与使用
 
-按实体类型混合 on_change / periodic 的配置、首次全量例外与接线边界见 [Entity Sync 类型调度契约](../ENTITY_SYNC.md#按实体类型的同步节奏2026-11-09)。框架已支持，game-demo 的 Scene 尚未自动切换。
+按实体类型混合 on_change / periodic 的配置、首次全量例外与接线边界见 [Entity Sync 类型调度契约](../ENTITY_SYNC.md#按实体类型的同步节奏2026-11-09)。框架与 game-demo 生产接线已完成：Player/Monster 按变化，TerrainChunk 每 1 秒合并脏增量；旧测量夹具保留原周期基线。
 
 适用版本：当前 main 与最新发布版本（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/04-sync.md) · [模块总目录](../README.md)
 

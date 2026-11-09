@@ -1,0 +1,113 @@
+=== RUN   TestAPlayerWhoseEveryConnectionStallsLeavesTheScene
+2026/11/09 08:04:33 INFO player tcp listener started addr=127.0.0.1:41865 max_connections=10000
+    scene_connections_test.go:397: members=1 connections=0 removes seen by the mover=1
+--- PASS: TestAPlayerWhoseEveryConnectionStallsLeavesTheScene (0.30s)
+=== RUN   TestASecondLiveConnectionKeepsThePlayerInTheSceneWhenTheFirstCloses
+2026/11/09 08:04:33 INFO player tcp listener started addr=127.0.0.1:41383 max_connections=10000
+    scene_connections_test.go:463: both connections live: first full=0 delta=4, second full=0 delta=4, removes seen by the mover=0, members=2
+    scene_connections_test.go:480: after the first connection closed: second full=0 delta=4, removes seen by the mover=0, members=2 connections=1
+--- PASS: TestASecondLiveConnectionKeepsThePlayerInTheSceneWhenTheFirstCloses (0.76s)
+=== RUN   TestATwiceAsFastSceneWalksTwiceAsFarAndTellsItsMembers
+--- PASS: TestATwiceAsFastSceneWalksTwiceAsFarAndTellsItsMembers (0.27s)
+=== RUN   TestTheScenesBeatRefillsThePopulationAndEachMonsterPatrols
+2026/11/09 08:04:34 INFO config reload applied op=reload reason=manual version=1 live=1 elapsed=2.838297ms changed=0 added=3 removed=0 unchanged=0 members="[featureflag item spawn]"
+--- PASS: TestTheScenesBeatRefillsThePopulationAndEachMonsterPatrols (3.78s)
+=== RUN   TestSceneSyncObserverRequiresRealProducerAndOneManager
+--- PASS: TestSceneSyncObserverRequiresRealProducerAndOneManager (0.00s)
+=== RUN   TestSceneSyncObserverForwardsCommitWakeAndRetraction
+--- PASS: TestSceneSyncObserverForwardsCommitWakeAndRetraction (0.00s)
+=== RUN   TestSceneReplicatesOnePlayersChangeToAnother
+--- PASS: TestSceneReplicatesOnePlayersChangeToAnother (0.01s)
+=== RUN   TestSceneRetiresASubjectOnLeave
+--- PASS: TestSceneRetiresASubjectOnLeave (0.00s)
+=== RUN   TestAClosedSessionLeavesTheSceneWithoutAnyTraffic
+--- PASS: TestAClosedSessionLeavesTheSceneWithoutAnyTraffic (0.01s)
+=== RUN   TestSceneViewRequestWidensClampsAndIsRateLimited
+--- PASS: TestSceneViewRequestWidensClampsAndIsRateLimited (0.00s)
+=== RUN   TestSceneRetriesASubscribeTheRoomRefused
+--- PASS: TestSceneRetriesASubscribeTheRoomRefused (0.00s)
+=== RUN   TestAQuickReconnectAfterTheSettleJoinsTheScene
+2026/11/09 08:04:38 INFO scene: rejoin waits for the previous leave's removes to go out subject_id=10006532
+    scene_test.go:1349: removes seen by the watcher=1 watcher sees the player again=true player sees the watcher=true
+--- PASS: TestAQuickReconnectAfterTheSettleJoinsTheScene (0.01s)
+=== RUN   TestAnUnloadedPlayerIsReloadedForTheSceneObservers
+--- PASS: TestAnUnloadedPlayerIsReloadedForTheSceneObservers (0.01s)
+=== RUN   TestTheSceneStopsTheReloadOfUnloadedPlayersWhenItCloses
+--- PASS: TestTheSceneStopsTheReloadOfUnloadedPlayersWhenItCloses (0.00s)
+=== RUN   TestTheSceneHooksEntityLoadsOnlyWhileItRuns
+=== RUN   TestTheSceneHooksEntityLoadsOnlyWhileItRuns/start_and_close
+=== RUN   TestTheSceneHooksEntityLoadsOnlyWhileItRuns/a_start_that_fails
+--- PASS: TestTheSceneHooksEntityLoadsOnlyWhileItRuns (0.00s)
+    --- PASS: TestTheSceneHooksEntityLoadsOnlyWhileItRuns/start_and_close (0.00s)
+    --- PASS: TestTheSceneHooksEntityLoadsOnlyWhileItRuns/a_start_that_fails (0.00s)
+=== RUN   TestShutdownClosesTheSceneUnderTheAppsStopDeadline
+--- PASS: TestShutdownClosesTheSceneUnderTheAppsStopDeadline (0.00s)
+=== RUN   TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect
+2026/11/09 08:04:38 INFO player tcp listener started addr=127.0.0.1:33209 max_connections=10000
+2026/11/09 08:04:39 INFO scene: replication session was closed by the manager player_id=30001 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 30001"
+--- PASS: TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect (1.31s)
+=== RUN   TestATerrainViewAtItsCapKeepsTheSession
+2026/11/09 08:04:39 INFO player tcp listener started addr=127.0.0.1:44523 max_connections=10000
+    terrain_sync_test.go:568: edited chunks 100, chunks held 64, other objects 41, flushes to the full view 17 (118.95392ms)
+2026/11/09 08:04:43 INFO scene: replication session was closed by the manager player_id=30002 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 30002"
+--- PASS: TestATerrainViewAtItsCapKeepsTheSession (3.54s)
+=== RUN   TestTerrainLeavesPlayerAndMonsterReplicationByteIdentical
+    terrain_sync_test.go:676: 8 frames byte-identical; first flush created 15 objects
+--- PASS: TestTerrainLeavesPlayerAndMonsterReplicationByteIdentical (0.01s)
+=== RUN   TestTerrainDoesNotWidenThePlayerObjectLimit
+2026/11/09 08:04:43 WARN entitysync: a session is over its object limit; the extra objects are not synced to it until there is room (the session stays open). Keep the policy limits (AOIConfig.MaxVisible etc.) within the session limit manager="entity sync manager \"scene\"" session=33000 namespace=* limit=100 held=0 deferred=1 evicted=0 pinned_blocked=0 suppressed_since_last_warn=0
+--- PASS: TestTerrainDoesNotWidenThePlayerObjectLimit (0.43s)
+=== RUN   TestTerrainChunksOverTheirLimitShrinkTheView
+2026/11/09 08:04:43 INFO player tcp listener started addr=127.0.0.1:35897 max_connections=10000
+2026/11/09 08:04:47 WARN entitysync: a session is over its object limit; the extra objects are not synced to it until there is room (the session stays open). Keep the policy limits (AOIConfig.MaxVisible etc.) within the session limit manager="entity sync manager \"scene\"" session=30003 namespace=terrain limit=64 held=64 deferred=4 evicted=0 pinned_blocked=0 suppressed_since_last_warn=0
+    terrain_sync_test.go:812: settled at 64 chunks after 1645 flushes; 14 chunks ever deferred
+--- PASS: TestTerrainChunksOverTheirLimitShrinkTheView (7.55s)
+=== RUN   TestTerrainMeasureUpdateBytes
+    terrain_sync_test.go:827: ROOST_TERRAIN_MEASURE not set (measurements, see docs/maintenance/evidence/terrain-quota-20261108)
+--- SKIP: TestTerrainMeasureUpdateBytes (0.00s)
+=== RUN   TestTerrainMeasureDownlinkScenarios
+    terrain_sync_test.go:888: ROOST_TERRAIN_MEASURE not set (measurements, see docs/maintenance/evidence/terrain-quota-20261108)
+--- SKIP: TestTerrainMeasureDownlinkScenarios (0.00s)
+=== RUN   TestTerrainMeasureBrushCost
+    terrain_sync_test.go:1102: ROOST_TERRAIN_MEASURE not set (measurements, see docs/maintenance/evidence/terrain-quota-20261108)
+--- SKIP: TestTerrainMeasureBrushCost (0.00s)
+=== RUN   TestTerrainMixedCadenceOverTCP
+2026/11/09 08:04:51 INFO player tcp listener started addr=127.0.0.1:40311 max_connections=10000
+2026/11/09 08:04:53 INFO scene: replication session was closed by the manager player_id=30101 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 30101"
+2026/11/09 08:04:53 INFO scene: replication session was closed by the manager player_id=30102 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 30102"
+2026/11/09 08:04:53 INFO scene: replication session was closed by the manager player_id=30103 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 30103"
+--- PASS: TestTerrainMixedCadenceOverTCP (2.09s)
+=== RUN   TestTerrainEditsSurviveARestart
+    terrain_test.go:377: restart: 179574 points and 6 chunk versions identical; versions map[(0,0):2 (0,1):1 (1,0):1 (1,1):1 (2,0):0 (2,1):0]; load {Chunks:6 Overlays:4 Base:2 Discarded:0 StaleBase:0 Corrupt:0}
+--- PASS: TestTerrainEditsSurviveARestart (0.47s)
+=== RUN   TestTerrainRecordOnAnotherBaseRevisionIsDiscarded
+2026/11/09 08:04:54 WARN terrain: chunk record was based on another base revision; its edits were discarded and the chunk is back to the base pack chunk=(0,0) record_base_revision=1 pack_base_revision=2 version=1
+2026/11/09 08:04:54 ERROR terrain: a neighbouring cell's chunk record is based on another base revision; the chunk is not loaded until its cell discards the edits chunk=(1,0) record_base_revision=1 pack_base_revision=2 version=1
+2026/11/09 08:04:54 ERROR terrain: chunk record is based on another base revision and discarding its edits failed; the chunk is not loaded and its record is left as it is chunk=(0,0) record_base_revision=1 pack_base_revision=2 version=1 err="terrain: discard chunk (0,0): nest: transaction commit rejected\ninjected commit rejection"
+2026/11/09 08:04:54 WARN terrain: chunk record was based on another base revision; its edits were discarded and the chunk is back to the base pack chunk=(1,0) record_base_revision=1 pack_base_revision=2 version=1
+2026/11/09 08:04:54 WARN terrain: chunk record was based on another base revision; its edits were discarded and the chunk is back to the base pack chunk=(0,0) record_base_revision=1 pack_base_revision=2 version=1
+--- PASS: TestTerrainRecordOnAnotherBaseRevisionIsDiscarded (0.35s)
+=== RUN   TestTerrainRecordWithAMaterialOutsideAByteIsNotLoaded
+2026/11/09 08:04:54 ERROR terrain: chunk record is corrupt; the chunk is not loaded chunk=(0,0) err="terrain: entity 1070 record: terrain: invalid chunk data: material 300 at point 325 is outside [0, 255]"
+--- PASS: TestTerrainRecordWithAMaterialOutsideAByteIsNotLoaded (0.16s)
+=== RUN   TestTerrainRegionFollowsThePartition
+--- PASS: TestTerrainRegionFollowsThePartition (0.09s)
+=== RUN   TestTerrainRestartRealMongo
+    terrain_test.go:692: ROOST_TERRAIN_IT_MONGO_URI not set
+--- SKIP: TestTerrainRestartRealMongo (0.00s)
+=== RUN   TestTerrainBrushRepeatsAndReordersApplyOnce
+--- PASS: TestTerrainBrushRepeatsAndReordersApplyOnce (0.40s)
+=== RUN   TestTerrainBrushRefusalsWriteNothing
+--- PASS: TestTerrainBrushRefusalsWriteNothing (0.25s)
+=== RUN   TestTerrainBrushQuotaCountsTheChangedPointsOfEachField
+--- PASS: TestTerrainBrushQuotaCountsTheChangedPointsOfEachField (0.16s)
+=== RUN   TestTerrainBrushQuotaLetsAFullBucketOverdrawOnce
+--- PASS: TestTerrainBrushQuotaLetsAFullBucketOverdrawOnce (0.21s)
+=== RUN   TestTerrainBrushQuotaChargesRepeatsAndRefusalsTheMinimum
+--- PASS: TestTerrainBrushQuotaChargesRepeatsAndRefusalsTheMinimum (0.13s)
+=== RUN   TestTerrainBrushRollbackLeavesEveryChunkAndTheView
+--- PASS: TestTerrainBrushRollbackLeavesEveryChunkAndTheView (0.24s)
+=== RUN   TestTerrainBrushOverTheGuardWritesTheWholeField
+--- PASS: TestTerrainBrushOverTheGuardWritesTheWholeField (0.11s)
+PASS
+ok  	example.com/planet/internal/service/game	23.715s

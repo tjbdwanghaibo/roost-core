@@ -1,0 +1,71 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+ "context"
+ "testing"
+ "testing/synctest"
+ "sync/atomic"
+ "time"
+ "github.com/tjbdwanghaibo/roost-core/framework/entity"
+ "github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+
+ "github.com/tjbdwanghaibo/roost-core/framework/nest"
+ "github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+)
+
+func TestSceneSyncObserverRequiresRealProducerAndOneManager(t *testing.T) {
+ var observer sceneSyncObserver
+ manager, err := entitysync.NewManager(entitysync.ManagerConfig{Mode:entitysync.ModeOnChange,Transport:entitysync.TransportFunc(func(context.Context,entitysync.SessionID,[]byte)error{return nil})})
+ if err != nil {t.Fatal(err)}
+ defer manager.Close(context.Background())
+ if err:=observer.attach(manager);err==nil{t.Fatal("attached before Nest bound the observer")}
+ engine:=nest.NewEngine(nest.NestOptionWithEntitySync(&observer))
+ defer engine.Shutdown(context.Background())
+ if err:=observer.attach(manager);err!=nil{t.Fatal(err)}
+ if err:=observer.attach(manager);err==nil{t.Fatal("attached twice")}
+ if err:=manager.Start(context.Background());err!=nil{t.Fatal(err)}
+}
+
+type observerTestEntity struct { *entity.EntityBase }
+func (e *observerTestEntity) Base() *entity.EntityBase {return e.EntityBase}
+
+// 一小时兜底周期：只有真正转发 Release 后的 WakeSync 才能立即交付；同时核对锁内冻结与回滚撤回。
+func TestSceneSyncObserverForwardsCommitWakeAndRetraction(t *testing.T) {
+ synctest.Test(t,func(t *testing.T){
+  var observer sceneSyncObserver
+  var packs atomic.Int32
+  frames:=make(chan []byte,8)
+  manager,err:=entitysync.NewManager(entitysync.ManagerConfig{Mode:entitysync.ModeOnChange,Interval:time.Hour,Transport:entitysync.TransportFunc(func(_ context.Context,_ entitysync.SessionID,b []byte)error{frames<-append([]byte(nil),b...);return nil})})
+  if err!=nil{t.Fatal(err)}
+  defer manager.Close(context.Background())
+  engine:=nest.NewEngine(nest.NestOptionWithEntitySync(&observer))
+  defer engine.Shutdown(context.Background())
+  if err:=observer.attach(manager);err!=nil{t.Fatal(err)}
+  pack:=func(entity.SyncProfile)(entity.FrozenSyncPayload,error){packs.Add(1);return entity.CopyFrozenSyncPayload(1,[]byte{1}),nil}
+  state:=entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{Enabled:true,SubjectID:42,Namespace:"test",Packer:entity.SubjectSyncPackFunc{Snapshot:pack,Delta:func(p entity.SyncProfile,_ uint64)(entity.FrozenSyncPayload,error){return pack(p)}}})
+  e:=&observerTestEntity{entity.NewEntityBase(42,entity.EntityCategoryWorld,true)}
+  e.SetSyncState(state)
+  if err:=manager.Register(state);err!=nil{t.Fatal(err)}
+  if err:=manager.OpenSession(1);err!=nil{t.Fatal(err)}
+  if err:=manager.Subscribe(1,42,entity.SyncProfile{});err!=nil{t.Fatal(err)}
+  if err:=manager.Flush(context.Background());err!=nil{t.Fatal(err)}
+  <-frames;packs.Store(0)
+  if err:=manager.Start(context.Background());err!=nil{t.Fatal(err)}
+  var mutation *entity.SyncMutation
+  if err:=entity.WithGuardScope("observer test",func(scope *entity.GuardScope)error{
+   if !scope.Guard().RequireEntity(e){t.Fatal("lock")}
+   mutation=entity.BeginSyncMutation([]entity.IThreadSafeEntity{e},&observer)
+   state.MarkDirty(1);mutation.Admit();mutation.Confirm()
+   if packs.Load()!=1{t.Fatal("capture was not forwarded while locked")}
+   return nil
+  });err!=nil{t.Fatal(err)}
+  mutation.Release();synctest.Wait()
+  select{case <-frames: default:t.Fatal("release wake did not reach the manager")}
+  observer.RetractSyncSubject(state)
+  if err:=manager.Flush(context.Background());err!=nil{t.Fatal(err)}
+  select{case raw:=<-frames:
+   f,err:=entitysync.DecodeFrame(raw,frame.DefaultLimits())
+   if err!=nil||len(f.Objects)!=1||f.Objects[0].Operation!=frame.ObjectRemove{t.Fatalf("retract: %+v %v",f,err)}
+  default:t.Fatal("retraction was not forwarded")}
+ })
+}

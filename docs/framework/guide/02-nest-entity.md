@@ -1,5 +1,7 @@
 # 核心：Nest 调度与实体：设计与使用
 
+服务需要自建同步 Manager、但 Manager 要到 Service.Init 才能创建时，可实现 `wiring/nest.NestSyncObserverProvider` 的 `NestSyncObserver() entity.SyncCommitObserver`。Nest Mod 在 Provide 期间取出并绑定该观察者，服务稍后接入实际 Manager；观察者必须转发 CaptureSync、WakeSync，以及支持时的 RetractSyncSubject。该入口与 EntitySyncSetup/self_sync、显式 NestOptionWithEntitySync 互斥，冲突时返回 ErrEntitySyncObserverConflict，不静默覆盖。game-demo 的 scene_sync_observer.go 是参考实现；不能只把 Manager 标为 bound 而不接提交链路。
+
 适用版本：当前 main 与最新发布版本（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）。[实现与维护入口](../impl/02-nest-entity.md) · [模块总目录](../README.md)
 
 ## 先理解这一块

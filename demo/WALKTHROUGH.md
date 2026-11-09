@@ -394,7 +394,7 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 - **仅内存卸载后重载**：运维 `entity.unload`（DataEngine 排空投影后卸载）或 Remote 事务被持久拒绝时，Player 会被仅内存卸载
   （`ManagerAccess.Unload`）。scene 的 Manager 是自建的，wiring 的 Nest Mod 不替它接线，所以 `Scene.Start` 自己调
   `ConfigureUnloadResync`：仍有人看着这个玩家时框架在 Nest 业务池（short / long）之外从 Mongo 重载并 `Rebind`，观察者收到权威全量、之后照常收增量；重载不了收到 remove。
-  `Scene.Close` 先停重载再关 Manager（服务先于 Nest Mod 停止）。一个实体运行时只能接一处，工程若另用 `NewModWithEntitySync`，scene 启动会明确失败。
+  `Scene.Close` 先停重载再关 Manager（服务先于 Nest Mod 停止）。一个实体运行时只能接一处。scene 的提交观察者通过 Service.NestSyncObserver 在 Nest 构造前绑定；工程若另用 `NewModWithEntitySync`/self_sync，Nest Provide 阶段会明确报告观察者冲突。
   卸载时没人看着（自己的复制会话已丢、附近没人）框架不重载；之后业务再访问它、DataEngine 从 Mongo 加载出来时，`Scene.Start` 挂在 DataEngine
   `OnEntityLoaded` 上的钩子把场景的 subject `Rebind` 到新实例，稍后进入视野的观察者照常收到它；`Scene.Close` 停重载后解钩。
 - 机器人 `scene_watch` / `scene_expect` 是真客户端：解码、合并、断言。场景帧走 `PushSyncPlayer`：RS v2 Sync 标志、原始帧字节、

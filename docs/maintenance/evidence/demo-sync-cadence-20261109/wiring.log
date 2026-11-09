@@ -1,0 +1,7 @@
+# github.com/tjbdwanghaibo/roost-core/wiring/nest [github.com/tjbdwanghaibo/roost-core/wiring/nest.test]
+wiring/nest/entity_sync_test.go:440:27: mod.Stop(context.Background()) (no value) used as value
+wiring/nest/entity_sync_test.go:440:36: too many arguments in call to mod.Stop
+	have (context.Context)
+	want ()
+FAIL	github.com/tjbdwanghaibo/roost-core/wiring/nest [build failed]
+FAIL

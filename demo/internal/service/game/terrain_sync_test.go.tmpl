@@ -17,6 +17,8 @@ import (
 	"time"
 
 	db "{{MODULE}}/db"
+ "{{MODULE}}/game/handler"
+ syncsender "{{MODULE}}/game/handler/syncsender"
 	monster "{{MODULE}}/game/entities/monster"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	gamescene "{{MODULE}}/game/scene"
@@ -25,6 +27,7 @@ import (
 	"{{MODULE}}/protocol/msgid"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+ "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
@@ -45,12 +48,13 @@ type terrainSyncHarness struct {
 	process   *terrainProcess
 	scene     *Scene
 	pack      string
+ observer *sceneSyncObserver
 }
 
 // startTerrainSyncHarness 起一张 chunksX × chunksY 的地图；场景的世界与地形图一样大（玩家站在哪都在地形图上）。
 // radius / maxVisible 是地形视野；policy 是玩家编辑的上限（测量与守卫用例放大半径、关掉限速）。started 为假时不起
 // 复制循环，只有测试自己的 Flush（测量按“一次 Flush = 50ms”数）。
-func startTerrainSyncHarness(t *testing.T, chunksX, chunksY int32, radius int64, maxVisible int, started bool) *terrainSyncHarness {
+func startTerrainSyncHarness(t *testing.T, chunksX, chunksY int32, radius int64, maxVisible int, started bool, mixed ...bool) *terrainSyncHarness {
 	t.Helper()
 	transport, addr := startScenePlayerTransport(t)
 	dir := t.TempDir()
@@ -59,21 +63,24 @@ func startTerrainSyncHarness(t *testing.T, chunksX, chunksY int32, radius int64,
 	if err := terrain.WritePackFile(pack, meta, terrain.Generated(meta, terrainSeed)); err != nil {
 		t.Fatal(err)
 	}
-	p := startTerrainProcessWith(t, pack, wholeMap, &memoryChunkStore{}, func(p *terrainProcess) {
+	var observer *sceneSyncObserver
+ var options []nest.NestOption
+ if len(mixed)>0 && mixed[0] { observer=&sceneSyncObserver{}; options=append(options,nest.NestOptionWithEntitySync(observer)) }
+ p := startTerrainProcessWith(t, pack, wholeMap, &memoryChunkStore{}, func(p *terrainProcess) {
 		policy := terrainmap.DefaultPolicy
 		policy.MaxRadius, policy.EditPointsPerSecond = 2500, 0
 		p.m.SetPolicy(policy)
-	})
+	}, options...)
 	bounds := p.m.Meta().Bounds()
 	config := gamescene.Config{Width: bounds.Max.X, Height: bounds.Max.Y, BlockSize: 300, Spawn: spatial.Point{X: bounds.Max.X / 2, Y: bounds.Max.Y / 2}}
-	scene, err := newSceneWith(sceneLane{transport: transport}, transport, nil, config, sceneMaxVisible,
-		&terrainSyncConfig{bounds: bounds, radius: radius, maxVisible: maxVisible})
+	scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, nil, config, sceneMaxVisible,
+		&terrainSyncConfig{bounds: bounds, radius: radius, maxVisible: maxVisible}, observer)
 	if err != nil {
 		t.Fatal(err)
 	}
 	scene.terrain.attach(p.m)
 	scene.watchSessions(transport)
-	h := &terrainSyncHarness{ctx: context.Background(), transport: transport, addr: addr, process: p, scene: scene, pack: pack}
+	h := &terrainSyncHarness{ctx: context.Background(), transport: transport, addr: addr, process: p, scene: scene, pack: pack, observer:observer}
 	if started {
 		if err := scene.Start(h.ctx); err != nil {
 			t.Fatal(err)
@@ -178,6 +185,7 @@ type receivedFrame struct {
 	full                  bool
 	terrain               []terrainUpdate
 	others                int
+ otherIDs []int64
 }
 
 // sameMaterials 比较客户端收到的材质（DAO 同步的 repeated uint32，Go 侧 []uint16）与服务端视图的每点 1 字节。
@@ -273,6 +281,7 @@ func (client *terrainClient) apply(f frame.Frame, received *receivedFrame) error
 			client.namespaces[update.SubjectID] = update.Namespace
 			if update.Namespace != "terrain" {
 				received.others++
+ received.otherIDs=append(received.otherIDs,update.SubjectID)
 				continue
 			}
 			raw := update.Payload.BytesCopy()
@@ -1172,4 +1181,55 @@ func writeTerrainPackSized(t *testing.T, dir string, chunksX, chunksY int32) str
 		t.Fatal(err)
 	}
 	return path
+}
+
+// 与生产共用 observer 构造路径：正式 Nest 编辑 → 提交门 → scene 类型调度 → TCP → DAO Apply。
+// 不运行后台循环，用 Flush 控制检查点；最终到期由真实单调时间驱动，虚拟 999/1000ms 边界另在框架测试。
+func TestTerrainMixedCadenceOverTCP(t *testing.T) {
+ h:=startTerrainSyncHarness(t,2,1,20000,64,false,true)
+ if h.scene.manager.Mode()!=entitysync.ModeOnChange {t.Fatal("production scene did not select on_change")}
+ key:=terrain.ChunkKey{}
+ at:=centreOf(key)
+ brush:=terrain.Brush{Op:terrain.BrushRaise,X:at.X,Y:at.Y,Radius:300,Strength:1}
+ first:=h.brush(t,terrainBuilder,1,brush).Chunks[0].Version
+ if err:=h.scene.manager.Drain(h.ctx);err!=nil{t.Fatal(err)}
+ client:=h.join(t,30101,at)
+ id:=chunkID(t,key)
+ h.flushUntil(t,"initial snapshot",func()bool{return client.version(id)==first})
+ // 同一正式 Nest 引擎也驱动玩家事务，验证没有被地形的周期一起延迟。
+ mover:=newScenePlayer(t,30103)
+ moverClient:=dialTerrainClient(t,h.addr,30103)
+ _ = moverClient
+ waitActiveSessions(t,h.transport,30103,1)
+ joinReady(t,h.scene,h.ctx,mover,at)
+ h.process.entities.Add(mover)
+ counters:=newSceneWorld(t)
+ h.process.entities.Add(counters)
+ handler.RegisterAddExpNestHandlers()
+ hasMover:=func()bool{client.mu.Lock();defer client.mu.Unlock();_,ok:=client.namespaces[mover.ID()];return ok}
+ h.flushUntil(t,"visible player",hasMover)
+ client.takeFrames()
+ started:=time.Now()
+ var final int64
+ for request:=uint64(2);request<=4;request++ {final=h.brush(t,terrainBuilder,request,brush).Chunks[0].Version}
+ if gained,err:=syncsender.NewAddExpSender(h.process.engine).MultiSync_AddExp(h.ctx,mover.ID(),counters.ID(),250);err!=nil||gained==0{t.Fatalf("player transaction: %d %v",gained,err)}
+ hasPlayerUpdate:=func()bool{client.mu.Lock();defer client.mu.Unlock();for _,f:=range client.frames{for _,id:=range f.otherIDs{if id==mover.ID(){return true}}};return false}
+ h.flushUntil(t,"on_change player while terrain waits",hasPlayerUpdate)
+ if time.Since(started)>500*time.Millisecond {t.Fatal("fixture too slow to check pre-deadline window")}
+ if client.version(id)!=first{t.Fatal("terrain changed before its 1s deadline")}
+ h.flushUntil(t,"merged terrain delta",func()bool{return client.version(id)==final})
+ if elapsed:=time.Since(started);elapsed<900*time.Millisecond{t.Fatalf("terrain sent too early: %v",elapsed)}
+ updates:=0
+ for _,f:=range client.takeFrames(){for _,u:=range f.terrain{if u.subject==id{updates++}}}
+ if updates!=1 {t.Fatalf("got %d terrain updates, want one merged update",updates)}
+ h.assertClientMatches(t,client,[]terrain.ChunkKey{key})
+ // 新订阅不能消费旧订阅的待发变化。
+ next:=h.brush(t,terrainBuilder,5,brush).Chunks[0].Version
+ newcomer:=h.join(t,30102,at)
+ h.flushUntil(t,"new observer snapshot",func()bool{return newcomer.version(id)==next})
+ if client.version(id)!=final{t.Fatal("new observer advanced old observer early")}
+ last:=h.brush(t,terrainBuilder,6,brush).Chunks[0].Version
+ h.flushUntil(t,"both observers converge",func()bool{return client.version(id)==last&&newcomer.version(id)==last})
+ h.assertClientMatches(t,client,[]terrain.ChunkKey{key})
+ h.assertClientMatches(t,newcomer,[]terrain.ChunkKey{key})
 }

@@ -1,0 +1,10 @@
+=== RUN   TestSceneSyncObserverRequiresRealProducerAndOneManager
+--- PASS: TestSceneSyncObserverRequiresRealProducerAndOneManager (0.00s)
+=== RUN   TestTerrainMixedCadenceOverTCP
+2026/11/09 08:02:31 INFO player tcp listener started addr=127.0.0.1:44559 max_connections=10000
+2026/11/09 08:02:33 INFO scene: replication session was closed by the manager player_id=30101 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 30101"
+2026/11/09 08:02:33 INFO scene: replication session was closed by the manager player_id=30102 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 30102"
+2026/11/09 08:02:33 INFO scene: replication session was closed by the manager player_id=30103 reason=push_refused err="entitysync: session lost (push_refused): player tcp: session not found: player 30103"
+--- PASS: TestTerrainMixedCadenceOverTCP (2.08s)
+PASS
+ok  	example.com/planet/internal/service/game	3.109s

@@ -756,6 +756,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/matchmaker.go", why: "Candidates → Grouping → Commit on a ticker, then the World records the match and the players are pushed MatchFound"},
 		{write: "internal/service/game/battle_test.go", why: "the room's start grace and lifetime, asserted against the real lockstep room with a recording push lane"},
 		{write: "internal/service/game/battle.go", why: "the lockstep rooms: one goroutine owns each room, the player TCP push is its broadcast lane, the matchmaker opens one per match"},
+		{write: "internal/service/game/scene_sync_observer.go", why: "bind the Nest commit observer before the scene exists, then attach its mixed-mode manager"},
+		{write: "internal/service/game/scene_sync_observer_test.go", why: "verify real producer binding and prevent an unbound or duplicate scene observer"},
 		{write: "internal/service/game/scene.go", why: "the other half of sync=true: a room that holds every online player as a subject and pushes their deltas to the others, gated on the Data Engine's durable watermark"},
 		{write: "internal/service/game/scene_test.go", why: "the replication claim end to end: one player's DAO change decodes as a delta on another player's wire"},
 		{write: "internal/service/game/scene_connections_test.go", why: "the scene on the real player TCP transport: a stalled old connection is closed without resetting the live client, a player none of whose connections takes a frame leaves; a second live connection keeps the player when the first closes; a disconnect and reconnect inside one tick ends with the new connection replicated"},

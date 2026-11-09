@@ -12,6 +12,7 @@ import (
 
 	"{{MODULE}}/game/actor"
 	player "{{MODULE}}/game/entities/player"
+ terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	"{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/settings"
@@ -328,7 +329,9 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	if terrainMap != nil && !partitioned.Enabled {
 		terrainConfig = defaultTerrainSync(terrainMap.Meta().Bounds())
 	}
-	scene, err := newSceneWith(sceneLane{transport: transport}, transport, watermark, config, sceneMaxVisible, terrainConfig)
+	service, ok := app.Lookup[*Service](registry, app.ModService)
+ if !ok || service == nil { return nil, errors.New("scene: service sync observer is unavailable") }
+ scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, watermark, config, sceneMaxVisible, terrainConfig, &service.sceneSync)
 	if err != nil {
 		return nil, err
 	}
@@ -393,6 +396,11 @@ func newSceneWithMainView(lane entitysync.Transport, transport scenePusher, wate
 // budget, so they replicate exactly as without terrain (terrain_sync.go,
 // terrainNamespaceLimits; maintainer decision D15).
 func newSceneWith(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int, terrainConfig *terrainSyncConfig) (*Scene, error) {
+ // 原周期构造器保留给历史功能/测量夹具；生产 NewScene 必须通过有提交观察者的构造路径。
+ return newSceneWithObserver(lane, transport, watermark, config, maxVisible, terrainConfig, nil)
+}
+
+func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int, terrainConfig *terrainSyncConfig, observer *sceneSyncObserver) (*Scene, error) {
 	config = config.Normalize()
 	var namespaces map[string]entitysync.NamespaceLimits
 	if terrainConfig != nil {
@@ -403,7 +411,15 @@ func newSceneWith(lane entitysync.Transport, transport scenePusher, watermark fu
 	// before its WAL record is durable, so content can be newer than what
 	// survives a crash. The Data Engine names the watermark and the manager
 	// holds a subject back until it reaches the commit that produced it.
-	manager, err := entitysync.NewManager(entitysync.ManagerConfig{
+	mode := entitysync.ModePeriodic
+ var schedules map[uint32]entitysync.TypeSchedule
+ if observer != nil {
+  mode = entitysync.ModeOnChange
+  schedules = map[uint32]entitysync.TypeSchedule{uint32(terrain_chunk.EntityKindTerrainChunk): {Mode:entitysync.ModePeriodic, Interval:time.Second}}
+ }
+ manager, err := entitysync.NewManager(entitysync.ManagerConfig{
+        Mode: mode,
+        TypeSchedules: schedules,
 		// The name the framework's refusals use for this manager: a Player
 		// state feeds one manager, so with access.player.self_sync also on,
 		// whichever registers the player second is refused naming the first.
@@ -476,6 +492,12 @@ func newSceneWith(lane entitysync.Transport, transport scenePusher, watermark fu
 			return nil, fmt.Errorf("scene: %w", err)
 		}
 	}
+ if observer != nil {
+  if err := observer.attach(manager); err != nil {
+   _ = scene.Close(context.Background())
+   return nil, err
+  }
+ }
 	return scene, nil
 }
 

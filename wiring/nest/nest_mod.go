@@ -75,6 +75,13 @@ type engineConfig struct {
 	unloadResync entity.UnloadResyncConfig
 }
 
+// NestSyncObserverProvider 让 Service 在 Nest 构造前提供唯一的同步提交观察者。
+// 观察者必须在 Provide 时可用；服务可在 Init 后将其接到实际 Manager，但不能丢弃已登记实体的提交。
+// 与 EntitySyncSetup 或显式 NestOptionWithEntitySync 互斥，避免后写选项静默覆盖。
+type NestSyncObserverProvider interface {
+	NestSyncObserver() entity.SyncCommitObserver
+}
+
 // NestHandlerInstaller 是 Service 的可选钩子：Nest Mod 在引擎启动之前调用它，服务把只属于本引擎实例的 handler 注册
 // 上去（RegisterHandlerWithMeta 只在 Start 之前接受）。Service.Init 在全部 Mod 启动之后才执行，服务在 Init 里才建好
 // 的对象（例如分区场景的 cellworld.Node）由服务先给出 handler、Init 里再接上它们的实现（cellworld.Handlers）。
@@ -225,6 +232,19 @@ func (m *Mod) Provide(registry *app.Registry) error {
 		opts = append(opts, corenest.NestOptionWithRemoteSnapshotResolver(corenest.MirrorSnapshotResolver(mirror)))
 	}
 	opts = append(opts, m.opts...)
+	if service, exists := registry.Get(app.ModService); exists {
+		if provider, ok := service.(NestSyncObserverProvider); ok {
+			observer := provider.NestSyncObserver()
+			if observer == nil {
+				return fmt.Errorf("nest mod: service returned nil sync observer")
+			}
+			if m.entitySync != nil || businessObserver(opts) != nil {
+				return fmt.Errorf("%w: service NestSyncObserver competes with a configured observer", ErrEntitySyncObserverConflict)
+			}
+			opts = append(opts, corenest.NestOptionWithEntitySync(observer))
+		}
+	}
+
 	if m.entitySync != nil {
 		// Nest 只有一个 EntitySync 观察者位置（选项后写者覆盖前者）。业务选项里另给一个观察者时，那个观察者会被这里
 		// 静默覆盖：收不到提交捕获与回滚撤回，periodic 下毫无报错。拒绝启动；政策应装到本 Mod 的 Manager 上

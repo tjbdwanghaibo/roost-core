@@ -1,0 +1,51 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+ "errors"
+ "sync"
+ "sync/atomic"
+
+ "github.com/tjbdwanghaibo/roost-core/framework/entity"
+ "github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+)
+
+// NestSyncObserver 由 wiring/nest 在引擎构造前取得，不能在 Scene.Start 时伪造绑定。
+func (s *Service) NestSyncObserver() entity.SyncCommitObserver { return &s.sceneSync }
+
+// sceneSyncObserver 的生命周期与 Service 相同；Init 之前没有 Scene，实体的脏状态仍由内容层保存，
+// 之后 Register 会补排已有脏数据。捕获/唤醒/回滚撤回全转给同一 Manager，不能只转唤醒。
+// 目标只接一次，不在运行中换 Manager；关闭由 Scene 完成，避免在途事务被移交另一套会话。
+type sceneSyncObserver struct {
+ mu sync.Mutex
+ bound bool
+ target atomic.Pointer[entitysync.Manager]
+}
+
+func (o *sceneSyncObserver) BindSyncProducer() {
+ o.mu.Lock()
+ defer o.mu.Unlock()
+ o.bound = true
+}
+
+func (o *sceneSyncObserver) attach(manager *entitysync.Manager) error {
+ o.mu.Lock()
+ defer o.mu.Unlock()
+ if manager == nil { return errors.New("scene: nil sync manager") }
+ if !o.bound { return errors.New("scene: Nest did not bind the service sync observer") }
+ if o.target.Load() != nil { return errors.New("scene: sync observer already attached") }
+ // 只有实际 Nest 构造时 BindSyncProducer 到过此观察者才允许转交该绑定事实。
+ manager.BindSyncProducer()
+ o.target.Store(manager)
+ return nil
+}
+
+func (o *sceneSyncObserver) CaptureSync(state *entity.SubjectSyncState) error {
+ if target := o.target.Load(); target != nil { return target.CaptureSync(state) }
+ return nil
+}
+func (o *sceneSyncObserver) WakeSync() {
+ if target := o.target.Load(); target != nil { target.WakeSync() }
+}
+func (o *sceneSyncObserver) RetractSyncSubject(state *entity.SubjectSyncState) {
+ if target := o.target.Load(); target != nil { target.RetractSyncSubject(state) }
+}

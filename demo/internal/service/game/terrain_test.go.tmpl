@@ -131,7 +131,7 @@ func startTerrainProcess(t *testing.T, pack string, region func(terrain.Meta) (t
 
 // startTerrainProcessWith 是 startTerrainProcess，beforeLoad 在 Nest 启动之后、Map.Load 之前调用（例如让提交器拒绝
 // Load 里的第一笔丢弃事务）。
-func startTerrainProcessWith(t *testing.T, pack string, region func(terrain.Meta) (terrainmap.Region, error), store coredata.Store, beforeLoad func(*terrainProcess)) *terrainProcess {
+func startTerrainProcessWith(t *testing.T, pack string, region func(terrain.Meta) (terrainmap.Region, error), store coredata.Store, beforeLoad func(*terrainProcess), options ...nest.NestOption) *terrainProcess {
 	t.Helper()
 	handler.RegisterTerrainEditNestHandlers()
 	terrain_chunk.RegisterEntity()
@@ -140,11 +140,11 @@ func startTerrainProcessWith(t *testing.T, pack string, region func(terrain.Meta
 		p.restoreEntities(memory)
 	}
 	access := entity.NewManagerAccess(p.entities)
-	p.engine = nest.NewEngine(
+	p.engine = nest.NewEngine(append([]nest.NestOption{
 		nest.NestOptionWithGetter(access),
 		nest.NestOptionWithTransactionCommitter(p.committer),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 4, QueueCap: 256}, nest.WorkerPoolConfig{Workers: 1, QueueCap: 64}, nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}),
-	)
+	}, options...)...)
 	if err := p.engine.Start(); err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,5 @@
+# example.com/planet/internal/service/game [example.com/planet/internal/service/game.test]
+internal/service/game/terrain_sync_test.go:23:2: "example.com/planet/game/handler/syncsender" imported as handler_syncsender and not used
+internal/service/game/terrain_sync_test.go:1229:20: undefined: syncsender
+FAIL	example.com/planet/internal/service/game [build failed]
+FAIL

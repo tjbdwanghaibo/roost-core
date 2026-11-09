@@ -28,6 +28,8 @@ import (
 // matchmaker that turns waiting tickets into matches, the gift saga's step
 // consumers, and the lockstep rooms those matches play in.
 type Service struct {
+ // sceneSync 先由 Nest 绑定，Init 建好 Scene 后再接上目标 Manager。
+ sceneSync sceneSyncObserver
 	world          *world.World
 	levelUpMail    fnats.IJetStreamSubscription
 	stopMatchmaker func()
