@@ -1139,12 +1139,14 @@ func TestTerrainMeasureBrushCost(t *testing.T) {
 			}
 		}
 	}
+	var seq uint64 // 玩家 2 的编辑序号：按玩家单调递增（D18）
 	measure := func(name string, n int, brushOf func(i int) terrain.Brush) {
 		durations := make([]time.Duration, n)
 		for i := range n {
 			b := brushOf(i)
+			seq++
 			started := time.Now()
-			if _, err := p.m.Brush(p.ctx, 2, uint64(1000000+i)+uint64(len(name))<<32, b); err != nil {
+			if _, err := p.m.Brush(p.ctx, 2, seq, b); err != nil {
 				t.Fatal(err)
 			}
 			durations[i] = time.Since(started)

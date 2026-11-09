@@ -2,7 +2,7 @@
 
 当前完成、未完成与待验收清单统一见 [地形进度总表](TERRAIN-STATUS.md)。
 
-**2026-11-09 更新**：编辑配额 270 点/秒与 terrainpack 默认高度基准 −100 米已落地；同步按类型调度的框架机制及 game-demo 生产接线已实现；客户端圆滑岸线已确认、尚未实现，见 [后续决策及实施状态](TERRAIN-DECISIONS-20261109.md)。P3 移动与寻路（坡度 / 台阶 / 下落 / 游泳、高度场 A*、demo 普通场景接入）在本地分支 `feat/terrain-p3-move` 实施，未合入 main，见[第 20 节](#20-p3-移动与寻路实施结果2026-11-09)。下文 §11～19 的测量与暂停记录保留为历史证据，不能当作当前状态。
+**2026-11-09 更新**：编辑配额 270 点/秒与 terrainpack 默认高度基准 −100 米已落地；同步按类型调度的框架机制及 game-demo 生产接线已实现；客户端圆滑岸线已确认、尚未实现，见 [后续决策及实施状态](TERRAIN-DECISIONS-20261109.md)。P3 移动与寻路（坡度 / 台阶 / 下落 / 游泳、高度场 A*、demo 普通场景接入）在本地分支 `feat/terrain-p3-move` 实施，未合入 main，见[第 22 节](#22-p3-移动与寻路实施结果2026-11-09)。下文 §11～19 的测量与暂停记录保留为历史证据，不能当作当前状态。
 
 状态：**定稿方案；P1 已实施：框架部分（`gameplay/terrain`：坐标、原始地形包、地形视图与查询）见[第 11 节](#11-p1-框架部分实施结果2026-11-08)，实体接入（game-demo 的 `TerrainChunk` 实体、地形服务、改块重启后一致）见[第 12 节](#12-p1-实体接入实施结果2026-11-08)；P2（单格）已实施：C# 客户端部分（读包、查询、接 DAO 同步、mesh 钩子）见[第 13 节](#13-p2-客户端c实施结果2026-11-08)，服务端部分（笔刷、校验、幂等、多块事务、整字段守卫、地形同步，真实 TCP 实测）见[第 14 节](#14-p2-服务端单格实施结果2026-11-08)；材质改为列表按下标增量（D11 复议）见[第 16 节](#16-材质改为列表按下标增量实施结果2026-11-08)；P3 开工后暂停（额度用尽），交接见[第 19 节](#19-暂停点2026-11-08额度用尽)。** 维护者 2026-11-08 确认按本文推荐整理为最终方案（第 8 节）；材质层当日先定 `[]byte`，P2 实测后按客户端下行预算（< 50KB/s）复议为 `[]uint16`（D11）。目标是在 cellworld 无缝大世界上支持玩家改地形（挖、填、抬高、整平、改材质）、由此形成湖泊和高地，并在地形上放置建筑。
 
@@ -14,8 +14,8 @@
 | --- | --- | --- |
 | 大世界坐标 | cellworld 的 `EntityState` 只有 `X, Y`（int64）与速度，没有高度 | `gameplay/cellworld/wire.go` |
 | 地图 | `spatial.GridTerrain`：二维稀疏阻挡格，每格只有“挡 / 不挡”；边界建时固定，只在内存，不持久化；没有高度、水、材质 | `infra/base/spatial/terrain.go`，demo `game/scene/runtime/terrain.go.tmpl` |
-| 移动 | 逐格推进，每进一格问 `InBounds` / `Blocked`。P3 起（第 20 节）：`MoveConfig.Surface` 可接高度场，另外每进一个 1m 地面节点按坡度 / 台阶 / 下落 / 水判定，不接时逐位不变 | `gameplay/movement/move.go`、`gameplay/terrain/walk.go` |
-| 寻路 | 格子 A*，单次最多 4096 个节点；分区模式下每个格进程整张图加载，跨格寻路只算到本格边界。P3 起（第 20 节）：开地形的普通场景走高度场 1m 节点八方向 A*（同一套通行规则、距离 + 爬升代价、上限仍 4096）；分区场景未接 | demo `pathfind.go.tmpl`、`gameplay/terrain/walk.go`，[无缝大世界方案](FEATURE-2026-11-03-seamless-world.md) 管理器分类表 |
+| 移动 | 逐格推进，每进一格问 `InBounds` / `Blocked`。P3 起（第 22 节）：`MoveConfig.Surface` 可接高度场，另外每进一个 1m 地面节点按坡度 / 台阶 / 下落 / 水判定，不接时逐位不变 | `gameplay/movement/move.go`、`gameplay/terrain/walk.go` |
+| 寻路 | 格子 A*，单次最多 4096 个节点；分区模式下每个格进程整张图加载，跨格寻路只算到本格边界。P3 起（第 22 节）：开地形的普通场景走高度场 1m 节点八方向 A*（同一套通行规则、距离 + 爬升代价、上限仍 4096）；分区场景未接 | demo `pathfind.go.tmpl`、`gameplay/terrain/walk.go`，[无缝大世界方案](FEATURE-2026-11-03-seamless-world.md) 管理器分类表 |
 | 物理 | 只在独立物理房间（约 20 人），形状只有 Box / Capsule / Sphere，世界开房时静态建好；没有高度场、三角网格、运行中增删体、射线 | `infra/physics/physx/types.go`，[CHUNK-PHYSICS](../framework/CHUNK-PHYSICS.md) |
 | 分格 | 缺省 `cell_size` 3000、`ghost_band` 500，格到进程静态映射 | demo `game/settings/partition.go.tmpl` |
 | 同步 | entitysync 按 DAO 字段同步；`[]byte` 整字段替换，列表可按下标增量；会话可持有对象数缺省 100，超出关闭会话；没有传输压缩 | [Entity Sync 契约](../framework/ENTITY_SYNC.md)、[DAO 同步 PB](../framework/DAO-SYNC-PROTOBUF.md)、`framework/sync/frame/frame_limits.go` |
@@ -81,7 +81,7 @@ type TerrainChunkDao struct {
 | 整平 | 中心、半径、目标高度 |
 | 改材质 | 中心、半径、材质 |
 
-每个操作带玩家请求 ID，块内 `Applied` 环判重（幂等）。
+每个操作带（玩家 ID, 编辑序号），按玩家的编辑账本判重：同一请求至多执行一次（D18，[第 20 节](#20-编辑请求身份与判重t01t02d182026-11-09)；原“块内 `Applied` 环”有 T01/T02 两个缺陷，已取代）。
 
 **链路**：客户端 → 玩家所在的 Base 进程（鉴权、领地 / 权限、频率）→ 按落点转发给目标格的 Real 所在进程（与 cellworld 跨格攻击“转发给目标 Real 结算”同一模式）→ Nest 多实体请求锁住受影响的块 → 校验 → 写 DAO → 提交；提交并持久确认后由 entitysync 下发（第 7 节）。
 
@@ -169,7 +169,7 @@ type TerrainChunkDao struct {
 | D6 | 编辑扣资源 | Base 预扣 + 按请求 ID 对账 | Saga |
 | D7 | 跨格建筑 | 首版禁止 | 锚点格拥有 + 邻格只读副本 |
 | D8 | 高度字段形状 | `[]uint16` 列表按下标增量；单块改动超过 1000 点用 `SetHeightsAll` 整字段；玩家笔刷半径上限 16m。小笔刷每次 56～665 字节，是整字段 8.2KB 的 1/150～1/12（[实验](evidence/terrain-sync-20261108/results.md)） | `[]byte` 整字段（CPU 最低、文档 12KB）；生成器按字节量自动回退（要改生成器，守卫维护成本高时再议） |
-| D9 | 寻路 | 高度场上的格子 A*（坡度代价、按块版本失效）。P3 实施（第 20 节）：节点 = 1m 采样点、八方向不切角，边与移动逐节点判定同一规则（`terrain.Walker`）；代价 = 水平距离 + 爬升 × 2（下坡不加）÷ 游泳速度；估价放大 1.5 倍（加权 A*，代价至多是最优的 1.5 倍；实施方先定，见第 20 节）；单次最多展开 4096 个节点（沿用 demo）；不缓存路线（一次请求算一次，移动逐节点按最新地形判定），路线带所经块的版本（`Route.Chunks` / `Fresh`）供持有方判断失效 | 动态 navmesh（重建代价高）；按块版本失效的有界路线缓存（同一路线被高频重复请求、实测寻路成为瓶颈时再做） |
+| D9 | 寻路 | 高度场上的格子 A*（坡度代价、按块版本失效）。P3 实施（第 22 节）：节点 = 1m 采样点、八方向不切角，边与移动逐节点判定同一规则（`terrain.Walker`）；代价 = 水平距离 + 爬升 × 2（下坡不加）÷ 游泳速度；估价放大 1.5 倍（加权 A*，代价至多是最优的 1.5 倍；实施方先定，见第 22 节）；单次最多展开 4096 个节点（沿用 demo）；不缓存路线（一次请求算一次，移动逐节点按最新地形判定），路线带所经块的版本（`Route.Chunks` / `Fresh`）供持有方判断失效 | 动态 navmesh（重建代价高）；按块版本失效的有界路线缓存（同一路线被高频重复请求、实测寻路成为瓶颈时再做） |
 | D10 | 地形物理碰撞 | 首版不做 | PhysX 高度场 + 每格物理世界（P6） |
 | D11 | 材质字段形状 | `[]uint16` 列表按下标增量；单块改动超过 500 点用 `SetMaterialsAll` 整字段（守卫阈值维护者 2026-11-08 定为 500，原 1000，[第 17 节](#17-编辑配额与材质守卫-500-实施结果2026-11-08)；维护者 2026-11-08 复议：客户端下行预算 **< 50KB/s**；P2 实测热点全部带材质 133KB/s，材质整字段每次 4.1KB 超预算）。原始地形包与 `gameplay/terrain` 仍是每点 1 字节，转换在 demo 组件边界（值域 0～255，越界拒绝）。热点全部带材质实测 30.6KB/s（[第 16 节](#16-材质改为列表按下标增量实施结果2026-11-08)） | `[]byte` 整字段（当日初定；CPU 与文档最省，改材质每次 4.1KB）；材质守卫 1000（与高度一致，第 16 节初版；560～1000 点的改材质逐点比整字段大，最多约 1.6 倍） |
 | D12 | 客户端版本缓存 | 首版不做，离开再进入视野重发全量 | entitysync 支持“客户端已有此版本则跳过全量”；跑图加载流量超预算时做（框架功能） |
@@ -178,6 +178,7 @@ type TerrainChunkDao struct {
 | D15 | 地形的对象上限与快照预算 | 不影响玩家和怪（维护者 2026-11-08：“会话对象上限 164 和全量分摊这两个设置，不能影响玩家和怪的同步”）：entitysync 按 subject 命名空间单独计（`ManagerConfig.Namespaces`），场景里 `terrain` 上限 64、快照预算每会话每 Flush 4 个；玩家 / 怪沿用 100、不限快照，交付与不开地形时逐字节相同（实现见第 15 节） | P2 原做法：Manager 级 `MaxObjects` 164 + Manager 级 `SnapshotBudget`（玩家 / 怪也被限流、上限也被放宽）；按订阅来源分类（一个对象可经几个来源订阅，归类取决于订阅顺序） |
 | D16 | 玩家编辑限流 | 每人每秒 270 个改动点、桶容量 270、每次至少 20 点、满桶允许一次透支；事务前按视图估算，配额不足整笔拒绝。维护者 2026-11-08 选定，2026-11-09 实施 | 300 档及 270 临时测量见 §17（历史证据）；本次未重跑带宽压测，区域兜底仍待 P5 |
 | D17 | 超额降级：减少同步对象，不断开 | 会话持有对象超过上限（`Limits.MaxObjects` 或按命名空间的 `MaxObjects`）时不关会话、不断开（维护者 2026-11-08）：Manager 暂缓放不下的新对象（钉住在前、Profile 优先级、实体 ID 排序，不截断），通知订阅来源；Interest 收紧该玩家视野的可见上限、从最远的开始退订，最终留下最近的 N 个，拥挤散去后带滞回逐档放宽；自身永远优先、不暂缓；地形命名空间同样适用。`SessionLost` 不再有 `object_limit`。未超额时帧逐字节不变（实现见[第 18 节](#18-超额降级减少同步对象不断开d172026-11-08)） | 超出即关会话并断开玩家（D15 及以前的契约；重连回同一人堆会反复断开）；只拒该类新对象、不通知政策（订阅停在“要全量”却永远发不出，等于静默截断）；Manager 按 ID 挤掉已持有的对象（不知道距离、线上 remove / create 往返） |
+| D18 | 编辑请求的身份与判重 | 身份 =（玩家 ID, 编辑序号），原样比较；序号由客户端按玩家单调递增地取。判重在玩家的编辑账本 `TerrainEditor`（每玩家一份：最大已应用序号 + 其下 64 位窗口），与改块同一笔事务；窗口内应用过的答重复、没应用过的照常执行，低于窗口的答过期（`terrain_seq`）、不执行。块上的 `Applied` 删除（`TerrainChunkDao` schema 3）。实施方 2026-11-09 选定，待维护者确认（[第 20 节](#20-编辑请求身份与判重t01t02d182026-11-09)） | 扩大块上的 `Applied` 环（只推迟 T01）；账本放在块上按玩家记（随改过它的玩家数无界增长）；放在 Player 实体（P3 玩家与块分属两个进程时不能同事务）；带内容指纹判“序号被重用”（多存储，不解决同内容重用） |
 
 ### 8.1 首版参数初值（P2 实测后修正）
 
@@ -191,8 +192,8 @@ type TerrainChunkDao struct {
 | 地形视野半径 / `MaxVisible` | 200m（滞回 20m，视点每移动 8m 更新一次）/ 64 块；200m 实际约覆盖 31 块（第 7 节 P2 更正） |
 | 对象上限 | 地形单独 64（`Namespaces["terrain"].MaxObjects`）；玩家 / 怪 / 场景仍是 `Limits.MaxObjects` 100；会话引用表合起来 164（只在开地形的普通场景；D15）。超出任一类时超额降级、不断开（D17） |
 | 地形快照预算：每会话每 Flush 全量块数 | 4（`Namespaces["terrain"].SnapshotBudget`，只计地形，D15；视野满 64 块时至少 16 次 Flush 发完，40 个其他对象第一次 Flush 全部到达） |
-| `Applied` 环长 | 32 |
-| 行走规则（P3，`terrain.DefaultWalkRules`，第 20 节） | 坡度上限 45°（千分比 1000：相邻节点正交 100 厘米、对角 141 厘米）；台阶 50 厘米（只在调低坡度时起作用）；陡于坡度的下行落差 ≤ 3 米；水深 ≤ 50 厘米涉水、更深游泳（站立高度取水面）；游泳速度 60%；寻路上坡代价 2（爬 1 米折 2 米平路）、下坡 0、估价放大 1.5 倍。demo 不做成配置，与客户端预测同一组数 |
+| 编辑账本窗口（原 `Applied` 环长 32，D18 取代） | 已应用的最大序号之下 64 个；序号最多超前 2^20（[第 20 节](#20-编辑请求身份与判重t01t02d182026-11-09)） |
+| 行走规则（P3，`terrain.DefaultWalkRules`，第 22 节） | 坡度上限 45°（千分比 1000：相邻节点正交 100 厘米、对角 141 厘米）；台阶 50 厘米（只在调低坡度时起作用）；陡于坡度的下行落差 ≤ 3 米；水深 ≤ 50 厘米涉水、更深游泳（站立高度取水面）；游泳速度 60%；寻路上坡代价 2（爬 1 米折 2 米平路）、下坡 0、估价放大 1.5 倍。demo 不做成配置，与客户端预测同一组数 |
 | 寻路节点上限 | 4096（沿用 demo 网格寻路）。实测：平地 200m 展开 201 个节点；起伏地面 50m / 200m 展开 378 / 683 个（不加权时 1795 / 约 1.4 万，200m 超限） |
 
 ## 9. 分期与验收
@@ -354,7 +355,7 @@ type TerrainChunkDao struct {
 | 笔刷 | `gameplay/terrain/brush.go` | `Brush{Op, X, Y, Radius, Falloff, Strength, Target, Material}`，抬高 / 降低 / 整平 / 改材质，衰减常数 / 线性 / 平滑，全整数（权重刻度 65536、`ISqrt`）；`Chunks(meta)` 是覆盖到的块（按 (Y, X)），`Apply` 返回每块改了值的点（下标升序）；夹在 `[Bedrock, Ceiling]`，已在限外的点不往外推；共享边按 §2 归右 / 上的块，每个采样点只改一次。客户端金样 `client/spec/terrain-brush.json`（17 例） |
 | 编辑入口 | `game/terrainmap`：`Map.Brush(ctx, playerID, requestID, brush)` | 顺序：参数与 `Policy`（半径 ≤ 1600、≤ 4 块、强度 ≤ 50、高度 `[0, 16383]`）→ 每玩家令牌桶（2/s；第 17 节起改为改动点数配额，放在权限钩子之前）→ `Rules.AllowEdit`（领地 / 权限钩子，缺省放行）→ 第一次改的块 `GetOrCreate` → 一笔多块事务。前三步拒绝时零写入；`ErrBrush` / `ErrRateLimited` / `ErrDenied` / `ErrNotOwned` / `ErrUnloadable` / `ErrOccupied` 各自可 `errors.Is` |
 | 多块事务 | handler `TerrainBrush(targets []ISurfaceEntity, editID, brush)`（`rollback=undo durability=strict`） | 生成的 `MultiGroupSync_TerrainBrush`，Nest 排序取锁。`Map.ApplyBrush`：任一块已记过这个编辑 ID → 整笔按重复返回；核对目标正是 `brush.Chunks`、都归本进程写且可用；取编辑前数据（改过的块取 DAO，没改过的取原始块）→ `brush.Apply` → `Rules.Occupied`（建筑占位钩子，命中则整笔返回 `ErrOccupied`、回滚）→ 每块 `SurfaceComponent.Apply` → 每块 `RecordApplied`（锁住的每一块都记）。提交后装视图是可复用的一步 `Map.afterCommit`（P1 的 `ApplyEdit` 也改用它）：`nest.AfterCommit` 里 `SetOverlay` 并通知地形同步登记 subject |
-| 幂等 | `terrainmap.EditID(playerID, requestID)` | splitmix64 混合成 63 位（DAO 的 `[]uint64` 存成 BSON int64，最高位置位的值在持久化准备阶段被拒，整笔失败）。重复返回 `Duplicate = true` 与各块当前版本（不是第一次的结果），不再改 |
+| 幂等（D18 已取代，见第 20 节） | `terrainmap.EditID(playerID, requestID)` | splitmix64 混合成 63 位（DAO 的 `[]uint64` 存成 BSON int64，最高位置位的值在持久化准备阶段被拒，整笔失败）。重复返回 `Duplicate = true` 与各块当前版本（不是第一次的结果），不再改 |
 | 整字段守卫 | `SurfaceComponent.Apply` | 本块改了值的高度点数 > `HeightsGuard`（1000）时 `SetHeightsAll`，否则对变了的下标 `SetHeightsAt`；材质有变化时整字段 `SetMaterialsAll`（第 16 节起材质也逐点写，另有材质守卫，第 17 节起阈值 500）；写完 `PublishSyncDirty` |
 | 协议与错误码 | `protocol/def/terrain_edit.go`、`game/controllers/player/terrain_edit.go`、`internal/errors/terrain.go` | `TerrainEdit` msgid 10038；线上整数越出字段类型范围直接拒绝（不截断）。业务码 100052 `terrain_disabled`、100053 `terrain_brush`、100054 `terrain_not_owned`、100055 `terrain_unavailable`、100056 `terrain_rate`、100057 `terrain_denied`、100058 `terrain_occupied`；其余错误答 internal |
 | 同步对象 | `game/entities/terrain_chunk`：`sync=true syncNamespace="terrain" subjectPacker=NewTerrainChunkSyncPacker` | packer 只有缺省视图，字段是 DAO 上标了 sync 的四个（`Applied` 不在里面）；全量 `MarshalSync`，增量 `MarshalSyncChanges`（变化树：按下标的高度增量、整字段替换），实现 `SubjectSyncChangePacker`。demo 的 Nest 没有 EntitySync 观察者，提交不自己标 subject，所以与 Player / Monster 一样由 `PublishSyncDirty` 标脏（取客户端专用掩码 `TakeEntitySyncChanges`，不动服务间同步掩码） |
@@ -423,7 +424,7 @@ type TerrainChunkDao struct {
 
 **给 P3 的接口说明**：
 
-- 跨格：`Map.Brush` 现在要求覆盖到的块全归本进程（否则 `ErrNotOwned`）；P3 在 Base 侧按块的归属拆成每格一个子请求（子 ID 用 `EditID` 同一函数派生），各格独立走 `Brush` 的事务部分（`ApplyBrush`），频率与权限在 Base 侧做一次。
+- 跨格：`Map.Brush` 现在要求覆盖到的块全归本进程（否则 `ErrNotOwned`）；P3 在 Base 侧按块的归属拆成每格一个子请求（子 ID 用 `EditID` 同一函数派生），各格独立走 `Brush` 的事务部分（`ApplyBrush`），频率与权限在 Base 侧做一次。（D18 起编辑身份改为（玩家, 序号）、`EditID` 已删除，跨格的账本安排见[第 20 节](#20-编辑请求身份与判重t01t02d182026-11-09)“剩余边界”。）
 - Ghost 推送（D14）：本格提交后的通知入口是 `Map.SetCommitted`（目前只接了地形同步）；推送可以挂在同一处，邻格收到后 `View.SetOverlay`（版本单调）。邻格换版丢弃后的空记录（Version 0）需要一条“回到原始块”的推送（视图目前没有“撤下覆盖块”的写入口，要加）。
 - 分区场景的地形同步：`terrainSync` 现在只挂在普通场景的 Manager 上；分区场景要在每个格的复制管理器上各挂一个，并接上 Ghost 带块的 subject。
 - 移动 / 寻路：查询仍是 `Map.Height` / `Material` / `IsWater` / `Probe`（无锁、handler 里可调），P3 起改过的块按 `View.Chunk` 的版本失效寻路缓存。
@@ -612,7 +613,7 @@ type TerrainChunkDao struct {
 | 分支（本地 worktree） | 内容 | 状态 |
 | --- | --- | --- |
 | `feat/terrain-p3-ghost` | P3 跨格：Ghost 带地形副本推送、乱序 / 丢失 / 重启补齐、D13 重置后邻格撤回原始块、分区场景接入地形同步、邻格玩家可见 | 中途停止，一笔 WIP 提交（cellworld 线上消息扩展、`gameplay/terrain` 只读副本），未验证；停止时正在修一个仅测试代码里的数据竞争 |
-| `feat/terrain-p3-move` | P3 移动与寻路：坡度 / 台阶 / 下落上限、游泳、高度场 A*（坡度代价、按块版本失效），不开地形时行为不变 | 2026-11-09 接续完成单格部分（[第 20 节](#20-p3-移动与寻路实施结果2026-11-09)），仍在本地分支、未合入；跨格依赖 T05 |
+| `feat/terrain-p3-move` | P3 移动与寻路：坡度 / 台阶 / 下落上限、游泳、高度场 A*（坡度代价、按块版本失效），不开地形时行为不变 | 2026-11-09 接续完成单格部分（[第 22 节](#22-p3-移动与寻路实施结果2026-11-09)），仍在本地分支、未合入；跨格依赖 T05 |
 
 两支的原始任务要求（范围、验收、测量、文档小节编号）以维护者重新下达为准；恢复时先 `git merge origin/main`，WIP 提交可以改写或丢弃。
 
@@ -623,13 +624,86 @@ type TerrainChunkDao struct {
 
 **之后**：P3 收尾后是 P4（水位线规则、建筑实体与占位）、P5（跨格编辑转发与扣资源对账、按区域限流兜底、1w 地图容量测试）、P6（可选物理）。
 
-## 20. P3 移动与寻路实施结果（2026-11-09）
+## 20. 编辑请求身份与判重（T01/T02，D18，2026-11-09）
 
-本地分支 `feat/terrain-p3-move`（基于 main `93c00538`，未推送、未合入）。接续 §19 记录的 WIP 提交（已改写为本节的四笔提交，原 WIP 不保留）：审查后保留其行走规则与 `movement.Surface` 接入，改为 int64 高差、加负高度与加权寻路，补齐 demo 接入、端到端与纠偏验证。完成判据对照 [进度总表 T06](TERRAIN-STATUS.md)；证据与复跑命令见 [证据目录](evidence/terrain-p3-move-20261109/README.md)。
+分支 `fix/terrain-edit-identity`（基于 `23247c38`，合入 `93c00538`）。修 [进度总表](TERRAIN-STATUS.md) 的 T01、T02。证据见 [evidence/terrain-edit-identity-20261109](evidence/terrain-edit-identity-20261109/README.md)。
+
+**原缺陷**（P2 的做法：`EditID = splitmix64(玩家 ⊕ splitmix64(请求 ID))` 取 63 位，记进锁住的每一块的 `Applied`，每块最近 32 个）：
+
+- T01：同一块之后又被改 32 次以上，旧编辑 ID 被挤出环，旧请求重放被当成新请求再执行一次（修前红：40 次后续编辑后重放序号 1，块 Version 41 → 42；重启后同样）。
+- T02：两个不同请求的 64 位混合值只差最高位时截断后相同，后到的被当成重复、不执行（修前红：构造同一玩家两个请求 ID、以及两个合法玩家各自的请求 1，第二个都答 `Duplicate`）。
+
+**身份**：一次编辑是（玩家 ID, 编辑序号 `Seq`），两者原样比较，不混合、不截断。玩家 ID 是 unique ID（1～2^52−1），`Seq` 取 1～2^63−1（协议是 `uint64`，超出的拒绝为 `terrain_brush`，不截断）。
+
+**账本**：每个玩家一份 `TerrainEditor` 实体（kind 12、PlayerScoped，实体 unique = 玩家 unique，集合 `terrain_editors`，`db=main`，schema 1）：
+
+| 字段 | store 键 | 含义 |
+| --- | --- | --- |
+| `LastSeq int64` | 1 | 已应用的最大序号，0 = 还没有 |
+| `Window int64` | 2 | 位图：第 i 位 = 序号 `LastSeq−1−i` 已应用（按位使用，第 63 位为 1 时数值为负；BSON int64 原样保存全部 64 位） |
+
+判定（`terrain_editor.SeqWindow.Check`，纯函数）：
+
+| 序号 s | 结论 | 处理 |
+| --- | --- | --- |
+| `s > LastSeq` 且 `s − LastSeq ≤ 2^20` | 新 | 执行，`Record`：窗口左移，旧 `LastSeq` 落入位图 |
+| `s > LastSeq + 2^20` | 超前 `ErrSeqAhead` | 不执行、不记（防止一个巨大的序号把 `LastSeq` 推到顶，此后再没有新号） |
+| `LastSeq − 64 ≤ s ≤ LastSeq`，已应用 | 重复 | 不写，答 `Duplicate` 与各块当前版本 |
+| 同上，未应用 | 新（乱序到达） | 执行，置位 |
+| `s < LastSeq − 64` | 过期 `ErrStale` | 不执行、不写，答 `terrain_seq` 与 `LastSeq` |
+
+**为什么是对的**：被记下的序号 s 此后只可能是 `s == LastSeq`、在窗口内且位为 1、或低于窗口；三种情况 `Check` 都不答“新”。所以同一（玩家, 序号）至多执行一次，不依赖窗口外的记录是否还在——窗口大小只决定“答重复”还是“答过期”，不决定会不会再执行。账本大小固定（两个 int64），不随时间、块数或改过同一块的玩家数增长。单元测试把 `SeqWindow` 与“记住全部已应用序号的无界模型”在 200 × 2000 步随机流（顺序、跳号、窗口内乱序、任意旧序号、越界）上逐步对照。
+
+**一致性**：笔刷事务（handler `TerrainBrush`，`rollback=undo durability=strict`）的目标是覆盖到的块（World）+ 玩家账本（PlayerScoped），Nest 一起取锁。判重、校验、算笔刷、写块、`Record` 在同一笔事务里：拒绝（过期、超前、占位、参数）在第一次写之前，整笔回滚；提交被拒时块与账本都由 setter 逆操作还原，同一序号重试照常执行。跨块编辑（至多 4 块）只有一份账本，不存在“某块记了、某块没记”。
+
+**重启**：账本是持久实体，`GetOrCreate` 冷加载，与块同一条 WAL → 投影路径；离线替身与真实 Mongo 各验证一次（见下）。
+
+**客户端取号**：新编辑 = 上一次的序号 + 1（被拒绝的序号没有记下，可以跳号也可以复用）；结果未知（超时、断线）时用同一序号重发。客户端不知道上一次用到哪里时（会话开始、重装、换设备）先发 `Seq = 0` 的查询（`Map.LastSeq`：只读，计 `MinEditPoints` 20 点配额），从 `LastSeq + 1` 开始；答复里也总带 `LastSeq`。收到 `terrain_seq` 时：`Seq ≤ LastSeq` 是太旧（这一笔当时是否生效已无法确认——看同步流里的地形，不要换新号把同一笔再发一遍），`Seq > LastSeq` 是跳得太远（从 `LastSeq + 1` 续号再发）。
+
+**配额**：规则不变（第 17 节），过期、超前与重复、占位一样属于“确定什么都没改”，退回到下限 20 点。
+
+**存储与协议变化**（未上线，不兼容旧数据 / 旧客户端）：
+
+- `TerrainChunkDao` schema 2 → 3：删掉 `Applied []uint64`（store 键 5 弃用、不复用）。旧记录按 `ErrSchemaMismatch` 拒绝，**升级须清空 `terrain_chunks`**（同时清空 `terrain_editors`，新集合本来为空）。
+- 新集合 `terrain_editors`（`TerrainEditorDao` schema 1）、实体 kind 12、组件类型 2012。
+- 协议 `TerrainEdit`（msgid 10038）：请求字段 1 由 `RequestID` 改名 `Seq`（类型仍 `uint64`，语义改为按玩家单调递增，`0` 为查询）；答复新增字段 5 `LastSeq int64`。新业务码 100059 `terrain_seq`。同步视图（`TerrainChunkDao` 的四个同步字段）不变，C# 同步夹具 `regen.sh` 核对无变化。
+- `terrainmap`：删掉 `EditID`；`Open` 多一个账本 lifecycle 参数；新增 `Map.LastSeq`、`ErrStale`、`ErrSeqAhead`、`*SeqError`；`BrushResult` 多 `LastSeq`；`terrain_chunk` 删掉 `AppliedRing` / `WasApplied` / `RecordApplied`。
+
+**方案没覆盖、本轮先选的**（待维护者确认）：
+
+1. 账本放在单独的 `TerrainEditor` 实体，不放在块上（按块记会随玩家数无界增长，有界又回到 T01），也不放在 Player 实体（P3 玩家在 Base、块在 Real 时不能与块同一笔事务；单独实体也不让地形事务去锁玩家）。
+2. 窗口 64（一个 int64 位图）；超前上限 2^20。
+3. 续号查询复用 `TerrainEdit` 的 `Seq = 0`，不新增消息号；查询计 20 点配额；第一次查询会建出空账本（`GetOrCreate`）。备选：登录 / 进场答复带 `LastSeq`。
+4. 过期与超前用同一个业务码 `terrain_seq`，客户端按 `Seq` 与 `LastSeq` 的大小区分。
+5. 账本 `db=main`、全局作用域（与块相同），不按 sid 分库：P2 里一个玩家的编辑只在他所在、且写这些块的进程执行。
+
+**剩余边界**：
+
+- 窗口外的旧请求得到“过期”而不是原来的结果：结果未知的重试必须在之后的 64 个新序号之前发出，否则只能确认“这次没做”，确认不了“当时做没做”。答复不保存第一次的结果（重复请求答当前版本，与 P2 相同）。
+- 客户端不先查询就从 1 重新计数时，窗口内的旧序号会被当成重复（新编辑不执行）——客户端须遵守“会话开始先查”。
+- P3 跨格转发（玩家在 Base、块在 Real）时，账本要跟着写块的进程按（玩家, 格）分开，Base 侧再保留面向客户端的序号；ID 方案到时定。玩家迁服（sidmove）沿用玩家迁移的停写与排空，本轮没有单独验证账本在迁服中的投影滞后。
+
+**验证**（2026-11-09，Apple M5，go1.27.3，生成工程 `--skip-deps` + replace 到本分支）：
+
+| 用例 | 结果 |
+| --- | --- |
+| 修前红（基线 `23247c38` 的生成工程，临时用例） | T01：40 次后续编辑后重放序号 1 被再执行（Version 41 → 42），重启后同样；T02：同一玩家请求 `2830626994681676340` 与 `6709829656160145507`、玩家 `2676` 与 `1249291350150932` 的请求 1，编辑 ID 相同，第二个答 `Duplicate` 未执行 |
+| `TestSeqWindowAgreesWithTheUnboundedModel`、`TestSeqWindowEdges`、`TestLedgerPersistsAllSixtyFourBitsAndRollsBack` | 通过（`-race`） |
+| `TestTerrainBrushReplayBelowTheWindowIsStale` | 序号 1 之后又编辑 100 次：重放 1、36 答 `ErrStale`（`LastSeq` 101），37、100、101 答 `Duplicate`，块 / 视图 / 账本 / 提交数不变；重启后同样；新序号 102 生效 |
+| `TestTerrainBrushRequestsThatSharedATruncatedIDBothApply` | 玩家 `2676` 与 `1249291350150932`（旧算法下请求 1 的编辑 ID 都是 `8307342279125212343`）编辑同一块，两次都执行（Version 1、2），各自重试只得 `Duplicate`、不写 |
+| `TestTerrainBrushRollbackLeavesEveryChunkAndTheView` | 四块事务被提交器拒绝：块、视图与账本都不变，同一序号重试执行 |
+| `TestTerrainBrushRefusalsWriteNothing` | 新增序号 0、超过 2^63−1、超前 2^20 三种拒绝；每种拒绝后块、视图、账本、提交数不变；拒绝过的序号之后照常可用 |
+| `TestTerrainBrushRepeatsAndReordersApplyOnce`、`TestTerrainLastSeqTellsAClientWhereToContinue`、配额三条 | 通过；乱序 1、3、2 后账本 `LastSeq 3`、位图 `0b11`；超前拒绝只计 20 点 |
+| 测试能变红 | 把过期当成新请求：`TestTerrainBrushReplayBelowTheWindowIsStale` 报重放 1 被执行（Version 102）；不 `Record`：重复与碰撞两条用例报重放未答 `Duplicate` |
+| `TestTerrainEditLedgerRealMongo`（`scripts/test-demo-generated.sh`，私有 `scripts/mirror-local.sh` 副本集） | 通过（`-race`）：序号 1～70 经 strict 事务 → WAL → 投影，停机后库里恰一份账本 `{LastSeq 70, Window −1}`（64 位全 1）；重启冷加载后重放 1、5 答 `ErrStale`，6、70 答 `Duplicate`，块 Version 仍 70；新序号 71 生效，库里账本 `{71, −1}`。同一脚本里 `TestTerrainRestartRealMongo` 与其余真实依赖用例也通过（[原始输出](evidence/terrain-edit-identity-20261109/real-dependencies.txt)） |
+
+## 22. P3 移动与寻路实施结果（2026-11-09）
+
+本地分支 `feat/terrain-p3-move`（基于 main `93c00538`，已合并 main `3fb089d9`（T01/T02），未推送、未合入）。接续 §19 记录的 WIP 提交（已改写为本节的四笔提交，原 WIP 不保留）：审查后保留其行走规则与 `movement.Surface` 接入，改为 int64 高差、加负高度与加权寻路，补齐 demo 接入、端到端与纠偏验证。完成判据对照 [进度总表 T06](TERRAIN-STATUS.md)；证据与复跑命令见 [证据目录](evidence/terrain-p3-move-20261109/README.md)。
 
 **范围**：单格（不分区的普通场景，或分区场景里一个格的进程内部）。分区场景的位置由 cellworld 按速度积分（`gameplay/cellworld/actor.go` `integrate`，没有地面钩子），本轮不改 cellworld，跨格移动与交接未按高度判定，依赖 T05（Ghost 实时副本）后再接。
 
-### 20.1 行走规则（`gameplay/terrain/walk.go`）
+### 22.1 行走规则（`gameplay/terrain/walk.go`）
 
 - **节点粒度 1m**：节点 = 采样点，世界坐标归最近的采样点（四舍五入）；节点高度就是采样点高度（只读本块，不插值）。取舍：高度场本身 1m 采样，坡度在采样之间是线性的，按节点判定已是地形能表达的全部精度；按位置连续判定要选基线，基线随心跳步长变（5Hz、60 单位 / 秒一拍只走 12 厘米，厘米取整的高差会把缓坡算成陡坡），按节点则与心跳、速度无关，移动与寻路天然一致。代价：一个采样间距内的陡崖与 1m 宽的坡判定相同；没有角色体积。
 - **相邻一步**（八邻域，水平距离正交 100、对角 141 厘米）：上行坡度 ≤ `MaxSlope` 或高差 ≤ `MaxStep`；下行坡度 ≤ `MaxSlope` 或落差 ≤ max(`MaxStep`, `MaxDrop`)；对角两条正交拐角路线也要走得通（不切角）。高差按 int64 计算，与 `HeightBase` 正负无关（基准 −100 米与 +500 米同一组用例结果相同）。
@@ -638,11 +712,11 @@ type TerrainChunkDao struct {
 - **参数初值**（§8.1）：坡度 45°、台阶 50 厘米（缺省坡度下不起作用，留给调低坡度的玩法）、陡降 3 米、涉水 50 厘米、游泳 60%、上坡代价 2、下坡 0、寻路估价 1.5 倍。按常见 MMO / 开放世界取值（Unreal 44.8° / 45 厘米、Unity 45° / 30 厘米），没有玩法实测。
 - **高度不进位置**：服务端位置仍只有 X / Y（cellworld `EntityState`、DAO 都不加 Z，线上格式不变）；站立高度由 `Walker.StandZ(p)` 推出（游泳节点是水面，否则 `View.Height` 插值），客户端用同一算法与同一份地形算出。
 
-### 20.2 权威移动（`gameplay/movement`）
+### 22.2 权威移动（`gameplay/movement`）
 
 `MoveConfig.Surface func() Surface` 可选：每拍开始取一次；返回 nil 时推进与不设时逐位相同（`TestANilSurfaceWalksExactlyLikeNoSurface`）。有地面时按 0.5 单位采样，每进一个新地面节点问 `Step(上一节点, 新节点)`，不放行就以 `Blocked` 停在上一个采样点；速度千分比折算路程预算（游泳一秒走 60%）；站立节点没有定义时一步不走。`Walker` 只读视图的原子槽位，不取锁、`Step` 不分配，满足 short 池只做无锁内存查询的要求。每拍读视图当前版本：编辑提交并装进视图后，下一步就按新地形判定，不等同步。
 
-### 20.3 寻路
+### 22.3 寻路
 
 `Walker.FindPath`：1m 节点上的八方向 A*，边与 `Step` 同一规则；代价 = (水平距离 × 1000 + 爬升 × `UphillCost` + 下降 × `DownhillCost`) × 1000 ÷ 目标节点速度千分比；单次最多展开 4096 个节点（沿用 demo，`DefaultMaxVisited`）。每块在一次搜索里只读一次槽位，并发提交不会混用同一块的两个版本；同一视图状态结果确定。
 
@@ -651,7 +725,7 @@ type TerrainChunkDao struct {
 - **失效与缓存**：`Route.Chunks` 记判定读过的块与版本，`Route.Fresh(view)` 判断是否仍有效（改块、卸块即失效；不判断出现更短的路）。不做路线缓存（roost-coding：不引入无证据的缓存）：每次请求算一次，移动逐节点按最新地形判定，所以“路线失效”的效果是行走在被改处停下（`Blocked`），下一个请求按新地形重算。改块后旧路线走不通、重算绕行由 `TestFindPathGoesAroundAWallAndADitchAfterTheChunksChange`（库）与 `TestTerrainWalkIsHeldBySlopesAndRoutesAroundEdits`（demo）覆盖。
 - **无地形**：demo 的 `PathFind` 不装地形时仍是 `spatial.FindPath` 的四方向格子 A*，结果与之逐一相同（`TestWithoutASurfaceTheMapIsTheFlatGrid`，400 组随机起终点 + 随机障碍）。
 
-### 20.4 demo 接法
+### 22.4 demo 接法
 
 - `scene.Terrain` 增加 `Surface()` / `SetSurface(*terrain.Walker)` / `Standable(p)`；`TerrainSystem` 用原子指针存 Walker（地形在场景建好之后才装入），`SetSurface` 把它夹到场景世界。
 - 服务 Init 在地形同步就绪之后（`scene.terrain != nil`，即开地形且不分区）调 `installSurface(area.Terrain(), terrainMap)`；`terrainmap.Map.Walker()` 给出缺省规则与建筑占位钩子（`Rules.Occupied`）。
@@ -659,7 +733,7 @@ type TerrainChunkDao struct {
 - `PathFind.Path` 有地形时走 `Walker.FindPath`；`Place` 有地形时按 1m 节点向外找能站的点；`MoveTarget` 终点、瞬移、刷怪用 `Standable`。场景格子的占位（`Occupy`，demo 没有生产用户）不进节点图，行走仍逐点问格子。
 - 不开地形、分区场景：`Surface()` 为 nil，所有入口与之前相同。
 
-### 20.5 1 秒同步窗口与纠偏
+### 22.5 1 秒同步窗口与纠偏
 
 TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走按最新地形。`TestTerrainEditsDuringTheSyncWindowAreCorrected`（真实 Nest、心跳、混合同步、TCP 客户端）：
 
@@ -669,13 +743,13 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 
 客户端预测与本地地形重建在测试里用同一份原始包加客户端经生成的 `ApplySyncTerrainChunkDao` 收到的块；Unity 侧的预测与纠偏表现未做（T03 / T04 与客户端验收）。
 
-### 20.6 验证与测量
+### 22.6 验证与测量
 
 - `gameplay/terrain`：坡度 / 台阶 / 下落边界（正交 100 / 110、对角 140 / 150、落差 300 / 310）、跨块与未装入、地图边缘、水（涉水 / 游泳 / 上岸 / 不能游泳）、负高度与平移不变、对角不切角、占位与 `Bounds`、平地直线与确定性、随机起伏地形上路线逐步可走、改块后重算、坡度代价、预算 / 无路、并发改块中寻路、加权代价上界。`gameplay/movement`：Surface 停步、游泳减速、未定义节点、nil Surface 逐位相同、真实 Walker 上改块后下一拍按新数据。demo：上面三组端到端 + 场景运行时的有 / 无地形对照。
 - 变异 11 项（规则边界、不切角、游泳站立高度、未装入块猜平地、最优搜索、移动忽略 Step / 游泳速度、玩家移动不接 Surface、寻路不走高度场、Standable 不看地形、无地形时寻路改道）都有用例变红，原文在证据目录。
 - 同机基准（Apple M5，机器有后台负载与约 14GB 交换占用，波动大，取 6 轮中位数）：`Walker.Step` 约 10ns、0 分配；寻路 50m / 200m（起伏）约 73µs / 170µs，平地 200m 约 62µs，扫满 4096 节点约 1.2ms；对照现有格子 A*（四方向、单位代价）50m / 200m / 扫满约 271µs / 250µs / 1.28ms。一拍移动（5Hz、一拍 12 单位）格子 + Walker 约 288ns，只有格子约 233ns。最坏 1.2ms 的寻路与原来的格子 A* 同量级，都在 `MoveTarget` 的 Nest handler 里同步执行。
 
-### 20.7 未完成与待维护者决定
+### 22.7 未完成与待维护者决定
 
 | 项 | 现状 | 选项（推荐标★） |
 | --- | --- | --- |

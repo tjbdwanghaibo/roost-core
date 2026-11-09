@@ -203,7 +203,7 @@ scene:
 - **改块**：内部写入口 `Map.Edit`（一组采样点的高度与材质；一块一笔 strict 事务，handler `TerrainEdit`），提交后才进视图；
   玩家的笔刷编辑见下面的 P2。两者都会等数据库与 WAL，不能在 Nest 的业务 worker 上调用。
 - **换了原始地形**（维护者 2026-11-08 决定丢弃旧编辑）：地形包的 `BaseRevision` 与本进程写的某块记录不同时，启动时经一笔正式
-  的 strict 事务把这块重置为“建了、还没改过”（Version 0、数据清空，`Applied` 保留），改用新的原始块，启动日志 Warn
+  的 strict 事务把这块重置为“建了、还没改过”（Version 0、数据清空；玩家编辑的判重在玩家的编辑账本里，不受影响），改用新的原始块，启动日志 Warn
   `its edits were discarded` 点名块坐标与新旧版本，`discarded` 计数；重置失败时这块不装入（查询答 not loaded、不能改）、
   记录不动，日志 Error。邻格 Ghost 带里的旧记录只由它的格丢弃，本进程不装入、不动它（方案 §14）。
 - **测试**：`internal/service/<game>/terrain_test.go` 是改块、回滚、重启一致、换版丢弃与笔刷；`TestTerrainRestartRealMongo` 在
@@ -214,23 +214,29 @@ scene:
 单格（[方案 §14](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#14-p2-服务端单格实施结果2026-11-08)）：玩家连在
 自己所在格的 game 进程上，跨格编辑（转发给目标格）是 P3。
 
-- **协议**：`TerrainEdit`（msgid 10038，`protocol/def/terrain_edit.go`）：请求 ID（同一玩家内唯一、非 0）、操作（1 抬高 /
+- **协议**：`TerrainEdit`（msgid 10038，`protocol/def/terrain_edit.go`）：编辑序号 `Seq`（见下面“幂等”）、操作（1 抬高 /
   2 降低 / 3 整平 / 4 改材质）、中心（厘米）、半径（厘米）、衰减（0 常数 / 1 线性 / 2 平滑）、强度（高度原始值，1 = 10cm）、
-  整平目标、材质；答复是各块的新版本与 `duplicate`（这个请求 ID 已经生效过，这次没有再改）。改动本身经同步流到达。
+  整平目标、材质；答复是各块的新版本、`duplicate`（这个序号已经生效过，这次没有再改）与 `last_seq`（服务端已应用的最大序号）。
+  `Seq = 0` 是续号查询：只答 `last_seq`，不编辑。改动本身经同步流到达。
   笔刷的整数算法见 [gameplay/terrain“笔刷”](../gameplay/terrain/README.md#笔刷p2brushgo客户端须逐位相同)，客户端可同算做预测。
 - **校验**（`terrainmap.DefaultPolicy`，`Map.SetPolicy` 可换；不是配置键，与客户端笔刷 UI 一起定）：半径 ≤ 16m、至多 4 块、
   强度 ≤ 50（5m）、高度夹在 `[0, 16383]`；领地 / 权限与建筑占位是钩子 `terrainmap.Rules`（缺省都放行，`Map.SetRules` 装）。拒绝时
-  什么都不写，业务码 100052～100058（`internal/errors/terrain.go`）。
+  什么都不写，业务码 100052～100059（`internal/errors/terrain.go`）。
 - **编辑配额**（维护者 2026-11-08，取代每秒 2 次；[方案 §17](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#17-编辑配额与材质守卫-500-实施结果2026-11-08)）：
   每人每秒 270 个改动点（`Policy.EditPointsPerSecond`）。一次编辑的点数是它会改变的高度点数 + 材质点数（事务之前在视图上算，
   共享边点只算一次，一个点两者都改算 2），至少 20（`MinEditPoints`）；令牌桶容量 270，桶满时可以透支一次，所以 r=16m 笔刷
   （约 650～800 点）、整平 / 地基照样能做，做完等补满（r=16m 约 2～3 秒一笔）。不够时整笔拒绝（`terrain_rate`），不部分执行。
-  重复请求、被领地 / 建筑占位拒绝的只计 20 点。270 档已按维护者决定落地；方案 §17 的 300 档带宽数字是历史结果，
+  重复请求、续号查询、被领地 / 建筑占位 / 序号窗口拒绝的只计 20 点。270 档已按维护者决定落地；方案 §17 的 300 档带宽数字是历史结果，
   270 档临时测量也是历史证据，本次没有重跑压测，不把它视为最终容量验收。
-- **幂等**：编辑 ID 由（玩家，请求 ID）混合得出，与改动在同一笔事务里记进每块的 `Applied`（最近 32 个）；重复或乱序重放的请求
-  只在记录仍保留且身份未碰撞时判重。32 条窗口淘汰后的旧请求重放与截断 EditID 碰撞仍是已登记未修问题，不能据此承诺无限期安全重试。
+- **幂等**（T01/T02，[方案 §20](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#20-编辑请求身份与判重t01t02d182026-11-09)）：
+  一次编辑的身份是（玩家 ID, 编辑序号），原样比较、不混合不截断。客户端按玩家单调递增地取序号（新编辑 = 上一次 + 1，可以跳号），
+  结果未知时用同一序号重发；不知道上一次用到哪里时（会话开始、重装、换设备）先发 `Seq = 0` 查 `last_seq`，从 `last_seq + 1` 开始。
+  判重在玩家的编辑账本 `TerrainEditor`（kind 12，集合 `terrain_editors`：已应用的最大序号 + 它下面 64 个序号的位图）里，
+  与改块同一笔事务锁住、一起提交或回滚，重启后从库里读回。窗口内应用过的答 `duplicate`，没应用过的照常执行（乱序到达）；低于窗口的
+  答 `terrain_seq`（100059，带 `last_seq`：已无法确认当时是否生效，这次不执行——同一序号至多执行一次，不依赖窗口外的记录）；
+  比 `last_seq` 大出 2^20 以上也答 `terrain_seq`（从 `last_seq + 1` 续号）。
 - **事务**：覆盖到的块（至多 4 块）一笔 Nest 事务（handler `TerrainBrush`，`rollback=undo durability=strict`），第一次改的块
-  先 `GetOrCreate`；提交被接受后逐块装视图并登记同步，回滚时视图与同步都不动。高度与材质都按下标写（DAO 里 `Materials` 是
+  与玩家第一次用的编辑账本先 `GetOrCreate`，账本与块在同一笔事务里锁住；提交被接受后逐块装视图并登记同步，回滚时视图与同步都不动。高度与材质都按下标写（DAO 里 `Materials` 是
   `[]uint16`，取值 0～255，原始地形包与 `gameplay/terrain` 里仍是每点 1 字节；记录里出现 > 255 的材质按损坏处理、这块不装入）；
   一块改动超过 1000 个高度（或 500 个材质，方案 §17）时该字段整字段写，两个字段各自计数（方案 §16）。
 - **生产同步节奏**（2026-11-09）：Service 的 `NestSyncObserver()` 在 Nest 构造前绑定，Init 创建 Scene 后接入同一个观察者。
@@ -238,13 +244,15 @@ scene:
   仍受提交确认/持久水位与预算约束。周期内新观察者取得即时快照时，下一次周期更新回退 Full 以保证已有观察者不丢变化。
   服务自建的观察者与 `self_sync`/`EntitySyncSetup` 或显式第二观察者冲突时在 Provide 阶段拒绝启动；不要手工伪造绑定。
   新生成工程需与包含本接线的同一 main/tag core 配套使用。旧功能/测量夹具保留 periodic 构造器，不代表生产默认；新模式未做容量压测。
-- **同步**：改过的块是 `terrain` 命名空间的同步对象（`Applied` 不下发）；场景另有一个地形 Interest（视野 200m、至多 64 块），
+- **同步**：改过的块是 `terrain` 命名空间的同步对象（编辑账本不下发）；场景另有一个地形 Interest（视野 200m、至多 64 块），
   玩家主视野是它的观察者。地形按命名空间单独计（方案 D15，`ManagerConfig.Namespaces`）：一个会话至多持有 64 块地形、地形的全量每会话每次
   Flush 至多 4 个；玩家 / 怪 / 场景仍是 100、不限快照，与不开地形时逐字节相同（会话的引用表合起来 164，每帧对象数仍按 100 切）。
   任一类超出上限不断开（超额降级，D17）：放不下的对象暂缓，对应的 Interest 从最远处收紧视野，有空位时逐步放宽。
   客户端用生成的 `ApplySyncTerrainChunkDao` 应用，按 `Version` 重建 mesh（C# 见 `client/dotnet/Roost.Client/Terrain/`）。
   分区场景还没有地形同步（P3）。
-- **测试**：`terrain_test.go` 的 `TestTerrainBrush*`（重复 / 乱序只生效一次、拒绝零写入、改动点数配额、多块回滚、整字段守卫）；
+- **测试**：`terrain_test.go` 的 `TestTerrainBrush*`（重复 / 乱序只生效一次、窗口外与重启后的旧请求重放答过期且不写、旧算法下编辑 ID
+  相同的两个请求都执行、拒绝零写入、改动点数配额、多块回滚连同账本不变、整字段守卫）与 `TestTerrainLastSeqTellsAClientWhereToContinue`；
+  `TestTerrainEditLedgerRealMongo` 在真实 Mongo 上验证账本落库与重启后的重放；
   `terrain_sync_test.go` 走真实 TCP（客户端收到全量与增量、断线重连后逐点一致、视野满 64 块不断开会话、视野上限配大于 64 时收紧到最近的 64 块）；
   `ROOST_TERRAIN_MEASURE=1` 时跑字节与耗时测量（[P2 实测](../docs/maintenance/evidence/terrain-p2-20261108/README.md)、
   [材质改列表后重测](../docs/maintenance/evidence/terrain-materials-list-20261108/README.md)、
@@ -254,7 +262,7 @@ scene:
 
 ### 移动与寻路（P3）
 
-开了地形的**普通场景**（不分区）上，玩家与怪的服务端行走、寻路和落点按高度场判定（[方案 §20](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#20-p3-移动与寻路实施结果2026-11-09)）；
+开了地形的**普通场景**（不分区）上，玩家与怪的服务端行走、寻路和落点按高度场判定（[方案 §22](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#22-p3-移动与寻路实施结果2026-11-09)）；
 不开地形、或分区场景，一切与之前相同（`TestWithoutASurfaceTheMapIsTheFlatGrid` 与原有移动用例）。
 
 - **接线**：服务 Init 在地形同步就绪后调 `installSurface`，把 `terrainmap.Map.Walker()`（`terrain.DefaultWalkRules`，建筑占位取

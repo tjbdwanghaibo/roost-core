@@ -48,6 +48,10 @@ func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
 	if err != nil {
 		return nil, fmt.Errorf("terrain: %w", err)
 	}
+	editors, err := lifecycle.TerrainEditorFromRegistry(registry)
+	if err != nil {
+		return nil, fmt.Errorf("terrain: %w", err)
+	}
 	nestClient, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
 	if !ok || nestClient == nil {
 		return nil, fmt.Errorf("terrain: nest client is unavailable")
@@ -58,7 +62,7 @@ func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
 	}
 	m, err := terrainmap.Open(config.Pack, func(meta terrain.Meta) (terrainmap.Region, error) {
 		return terrainRegion(meta, partition, identity.Sid)
-	}, chunks, syncsender.NewTerrainEditSender(nestClient))
+	}, chunks, editors, syncsender.NewTerrainEditSender(nestClient))
 	if err != nil {
 		return nil, fmt.Errorf("terrain: %w", err)
 	}

@@ -13,8 +13,8 @@ import (
 const TerrainChunkSyncCodec uint16 = 2
 
 // terrainChunkViews 只有一个视图：缺省视图（地形 Interest 的 0 档，terrain_sync.go 不配分档），字段是 DAO 上全部标了
-// sync 的字段——BaseRevision、Version、Heights、Materials。Applied 只标了 persist，不在任何视图里（方案 §3：编辑去重
-// 是服务端的事）。
+// sync 的字段——BaseRevision、Version、Heights、Materials（编辑去重是服务端的事，在玩家的编辑账本 terrain_editor，
+// 不在块上，也不下发）。
 var terrainChunkViews, terrainChunkViewsErr = dataengine.NewSyncViewSet(db.TerrainChunkDaoSyncFields(),
 	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}},
 )

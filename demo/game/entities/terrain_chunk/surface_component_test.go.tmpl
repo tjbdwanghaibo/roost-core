@@ -13,7 +13,8 @@ import (
 )
 
 // 改块的规则在 SurfaceComponent 上：第一次改用原始块填满、之后要求同一版原始地形；全部校验在第一次写之前；每次提交
-// Version + 1；失败或回滚的事务把 DAO 原样还原（rollback=undo 的生成 setter 逆操作）；Applied 有界。这里直接在一笔
+// Version + 1；失败或回滚的事务把 DAO 原样还原（rollback=undo 的生成 setter 逆操作）。玩家请求的判重不在块上（见
+// game/entities/terrain_editor）。这里直接在一笔
 // 本地事务里调（handler 里就是这样被调用的），提交器只收下记录。
 
 type nullCommitter struct{}
@@ -182,36 +183,13 @@ func TestTerrainChunkRolledBackEditRestoresTheDAO(t *testing.T) {
 		if _, err := s.Apply(1, terrain.Chunk{}, []PointEdit{{Index: 1, Height: 12, Material: 0}, {Index: 2, Height: 13, Material: 0}}); err != nil {
 			return err
 		}
-		s.RecordApplied(99)
 		return errAfterWrite
 	}); !errors.Is(err, errAfterWrite) {
 		t.Fatalf("rolled-back edit: %v", err)
 	}
 	after := overlayOf(t, e)
-	if after.Version != before.Version || !slices.Equal(after.Heights, before.Heights) || !slices.Equal(after.Materials, before.Materials) || e.SurfaceComp().WasApplied(99) {
+	if after.Version != before.Version || !slices.Equal(after.Heights, before.Heights) || !slices.Equal(after.Materials, before.Materials) {
 		t.Fatal("a rolled-back edit left changes in the DAO")
-	}
-}
-
-func TestTerrainChunkAppliedIsBounded(t *testing.T) {
-	e := newTestChunk(t, terrain.ChunkKey{X: 0, Y: 1})
-	for id := uint64(1); id <= AppliedRing+5; id++ {
-		if err := in(e, func(s *SurfaceComponent) error { s.RecordApplied(id); return nil }); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if n := e.Dao().AppliedLen(); n != AppliedRing {
-		t.Fatalf("applied holds %d ids, want %d", n, AppliedRing)
-	}
-	for id := uint64(1); id <= 5; id++ {
-		if e.SurfaceComp().WasApplied(id) {
-			t.Fatalf("edit %d should have been dropped as the oldest", id)
-		}
-	}
-	for id := uint64(6); id <= AppliedRing+5; id++ {
-		if !e.SurfaceComp().WasApplied(id) {
-			t.Fatalf("edit %d is missing", id)
-		}
 	}
 }
 
@@ -310,13 +288,12 @@ func TestTerrainChunkWholeFieldGuard(t *testing.T) {
 }
 
 // Discard（原始地形换版后丢弃改动）只重置仍基于旧版本的记录；重置后是 Version 0 的空记录，下一次改动从当前原始块
-// 重新开始；Applied 保留。
+// 重新开始。
 func TestTerrainChunkDiscardResetsOnlyAStaleRecord(t *testing.T) {
 	e := newTestChunk(t, terrain.ChunkKey{X: 2, Y: 2})
 	base := testBase()
 	if err := in(e, func(s *SurfaceComponent) error {
 		_, err := s.Apply(1, base, []PointEdit{{Index: 9, Height: 9, Material: 9}})
-		s.RecordApplied(77)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -339,9 +316,6 @@ func TestTerrainChunkDiscardResetsOnlyAStaleRecord(t *testing.T) {
 	}
 	if _, ok, _ := e.SurfaceComp().Overlay(); ok || e.Dao().HeightsLen() != 0 || e.Dao().MaterialsLen() != 0 || e.SurfaceComp().BaseRevision() != 0 {
 		t.Fatal("a discarded record still has data")
-	}
-	if !e.SurfaceComp().WasApplied(77) {
-		t.Fatal("the discard dropped the applied ids")
 	}
 	if discard(1, 2) {
 		t.Fatal("a second discard reset again")

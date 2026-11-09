@@ -25,7 +25,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// 可编辑地形 P3 的移动与寻路，端到端（方案 §20）：开了地形的普通场景里，玩家的服务端行走（MoveTarget → MoveTo 动作 →
+// 可编辑地形 P3 的移动与寻路，端到端（方案 §22）：开了地形的普通场景里，玩家的服务端行走（MoveTarget → MoveTo 动作 →
 // 自己的移动心跳）、寻路（场景 PathFind）、瞬移与落点按高度场判定；地形块经混合同步（TerrainChunk periodic 1 秒、
 // 玩家 on_change）到真实 TCP 客户端。
 //
@@ -232,7 +232,7 @@ func (w *terrainMoveWorld) waitView(version int64) int64 {
 func (w *terrainMoveWorld) server() *terrain.Walker { return w.area.Terrain().Surface() }
 
 // clientWalker 是客户端按自己收到的数据算的地面：同一份原始包，加上它持有的改过的块（生成的 DAO Apply 的结果），
-// 同一套行走规则与场景范围（客户端预测与服务端同算法，方案 §20）。
+// 同一套行走规则与场景范围（客户端预测与服务端同算法，方案 §22）。
 func (w *terrainMoveWorld) clientWalker(client *terrainClient) *terrain.Walker {
 	w.t.Helper()
 	pack, err := terrain.OpenPack(w.pack)
@@ -320,7 +320,7 @@ func walksAlong(w *terrain.Walker, points []spatial.Point) bool {
 	return true
 }
 
-// 被坡度挡住、开口后绕行、挖沟后重算（方案 §20 / D9）：一道 2 米高的墙（每米 200 厘米，陡于 45°）横穿场景，
+// 被坡度挡住、开口后绕行、挖沟后重算（方案 §22 / D9）：一道 2 米高的墙（每米 200 厘米，陡于 45°）横穿场景，
 // MoveTarget 答“没有路”；不寻路直接走的那一步停在墙前一个节点的边上（449）。墙上开一个口子后寻路从口子过、走到；
 // 再挖一条 4 米深的沟（落差超过 MaxDrop 3 米），挖之前算出的路线在新地形上走不通，新的请求重新寻路、绕过沟到达。
 func TestTerrainWalkIsHeldBySlopesAndRoutesAroundEdits(t *testing.T) {
@@ -375,7 +375,7 @@ func TestTerrainWalkIsHeldBySlopesAndRoutesAroundEdits(t *testing.T) {
 	}
 }
 
-// 挖坑成湖后游泳（方案 §5 水位线、§20 游泳）：水位 −0.5 米，挖出一条 3 米深、横穿场景的沟就是湖（水深 2.5 米 >
+// 挖坑成湖后游泳（方案 §5 水位线、§22 游泳）：水位 −0.5 米，挖出一条 3 米深、横穿场景的沟就是湖（水深 2.5 米 >
 // 涉水 50 厘米）。寻路穿过湖；在湖里 1 秒走 60 × 60% = 36 个单位，上岸后 1 秒 60 个；站立高度是水面。客户端收到
 // 改过的块后按同一规则算出同样的“在游泳”和高度。瞬移可以落在水里（能游泳时深水可站）。
 func TestTerrainALakeDugAcrossTheWayIsSwum(t *testing.T) {
@@ -438,7 +438,7 @@ func TestTerrainALakeDugAcrossTheWayIsSwum(t *testing.T) {
 //     约 1 秒后收到新块，按新地形从 549 再预测也被挡，与服务端一致。
 //  2. 挖在脚下：缓坡的坑（线性衰减，2 米）挖在脚下，服务端的站立高度立刻变成坑底（XY 不变、不发位置），客户端在新块到达
 //     前还是旧高度，到达后相同；坑沿缓于 45°，可以走出来。随后抬地（3 米）同理。
-//  3. 陡坑困住：5 米深的直壁坑挖在脚下，寻路答“没有路”、直线走一步也不动（服务端不替玩家选出路，见方案 §20 待决定项）；
+//  3. 陡坑困住：5 米深的直壁坑挖在脚下，寻路答“没有路”、直线走一步也不动（服务端不替玩家选出路，见方案 §22 待决定项）；
 //     把坑填平后照常走。
 func TestTerrainEditsDuringTheSyncWindowAreCorrected(t *testing.T) {
 	w := newTerrainMoveWorld(t, math.MinInt32)

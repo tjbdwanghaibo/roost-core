@@ -1,0 +1,17 @@
+=== RUN   TestTerrainBrushRepeatsAndReordersApplyOnce
+--- PASS: TestTerrainBrushRepeatsAndReordersApplyOnce (0.18s)
+=== RUN   TestTerrainBrushReplayBelowTheWindowIsStale
+--- PASS: TestTerrainBrushReplayBelowTheWindowIsStale (0.25s)
+=== RUN   TestTerrainBrushRequestsThatSharedATruncatedIDBothApply
+    terrain_test.go:1141: players 2676 and 1249291350150932: sequence 1 had the same truncated edit id 8307342279125212343
+--- PASS: TestTerrainBrushRequestsThatSharedATruncatedIDBothApply (0.05s)
+=== RUN   TestTerrainLastSeqTellsAClientWhereToContinue
+--- PASS: TestTerrainLastSeqTellsAClientWhereToContinue (0.07s)
+=== RUN   TestTerrainBrushRefusalsWriteNothing
+--- PASS: TestTerrainBrushRefusalsWriteNothing (0.07s)
+=== RUN   TestTerrainBrushQuotaChargesRepeatsAndRefusalsTheMinimum
+--- PASS: TestTerrainBrushQuotaChargesRepeatsAndRefusalsTheMinimum (0.05s)
+=== RUN   TestTerrainBrushRollbackLeavesEveryChunkAndTheView
+--- PASS: TestTerrainBrushRollbackLeavesEveryChunkAndTheView (0.10s)
+PASS
+ok  	example.com/planet/internal/service/game	2.576s

@@ -1,0 +1,16 @@
+--- FAIL: TestRedT01ReplayAfterTheRingIsAppliedAgain (0.03s)
+    terrain_identity_red_test.go:77: replay of request 1 after 40 later edits on the same chunk: {Duplicate:false Chunks:[{Key:(0,0) Version:42}]}, <nil>; chunk (0,0) dao version 41 -> 42, commits 41 -> 42: the old request was applied again
+--- FAIL: TestRedT01ReplayAfterTheRingIsAppliedAgainAfterARestart (0.02s)
+    terrain_identity_red_test.go:100: replay of request 1 after a restart: {Duplicate:false Chunks:[{Key:(0,0) Version:42}]}, <nil>; chunk (0,0) dao version 41 -> 42: the old request was applied again
+--- FAIL: TestRedT02CollidingRequestIsTakenForADuplicate (0.01s)
+    terrain_identity_red_test.go:108: player 4242: request 2830626994681676340 and request 6709829656160145507 share edit id 3
+    terrain_identity_red_test.go:115: a different request 6709829656160145507 of the same player: {Duplicate:true Chunks:[{Key:(0,0) Version:1}]}, <nil>; chunk (0,0) version 1 -> 1: a new request was taken for a duplicate and not applied
+FAIL
+FAIL	example.com/planet/internal/service/game	0.760s
+FAIL
+--- FAIL: TestRedT02CollidingPlayers (0.02s)
+    terrain_identity_red_test.go:131: players 2676 and 1249291350150932: edit ids 8307342279125212343 / 8307342279125212343
+    terrain_identity_red_test.go:137: player 1249291350150932 sequence 1: {Duplicate:true Chunks:[{Key:(0,0) Version:1}]}, <nil>; a different player's request was taken for a duplicate
+FAIL
+FAIL	example.com/planet/internal/service/game	0.705s
+FAIL

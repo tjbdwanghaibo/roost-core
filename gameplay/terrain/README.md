@@ -110,7 +110,7 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 
 ## 行走与寻路（P3，`walk.go`，客户端预测须同算）
 
-移动与寻路共用一套判定（[方案 §20](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#20-p3-移动与寻路实施结果2026-11-09)），全是整数、只读视图、不取锁、不分配（`Step`），可以在 Nest short 池里调用。
+移动与寻路共用一套判定（[方案 §22](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#22-p3-移动与寻路实施结果2026-11-09)），全是整数、只读视图、不取锁、不分配（`Step`），可以在 Nest short 池里调用。
 
 - **节点**：1m 采样点 `(gx, gy)`；世界坐标 `p` 属于最近的采样点（`Walker.Cell`，四舍五入；在地图 / `Bounds` 里时夹到可用节点范围）。节点的地面高度就是采样点高度（只读本块，没有插值）。
 - **站立高度**：普通节点是地面；水深（`WaterLevel − 地面`）超过 `WadeDepth` 的是游泳节点，站立高度取水面，速度 `SwimSpeed`‰（0 = 不能游泳：深水不可进入，站在里面的可以走出来）。
