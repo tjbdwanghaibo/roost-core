@@ -24,7 +24,7 @@ import (
 //
 // 档位存在 NPC 的 DAO（EntityState.Idle），随事务回滚，随 Ghost 与交接传出：
 //
-//   - 慢档一拍按 Period 分步积分、每步判交接（advance）：越界就停在那一步冻结，冻结点离本格至多 H + 一个 Period 的
+//   - 慢档一拍（与快档一样按这一拍实际经过的时间）按 Period 分步积分、每步判交接（advance）：越界就停在那一步冻结，冻结点离本格至多 H + 一个 Period 的
 //     位移，与快档相同，不会一步跨过边界带（交接与旧格留 Ghost 的几何不因降档改变）。
 //   - 冻结中一律快档（按 OfferRetry 重传、到 HandoffAbort 放弃都按快档计时），Idle 标记保留：Offer 带着它，新格以慢档
 //     装入（不因交接回到快档再等一次 IdleAfter）；新格的区域在下一拍按自己的观察者决定要不要升档。被拒恢复为 Real 时
@@ -57,21 +57,23 @@ func (n *Node) setState(a Actor, before, after ActorState) {
 	}
 }
 
-// advance 积分 Real 的一拍：把当前档位的周期按 Period 分步，每步之后判交接；某一步越界（且不在被拒后的退避期内）就在
-// 那一步冻结、返回 true，剩下的位移不再走（冻结后不积分）。静止的角色只判一次。
-func (n *Node) advance(st *ActorState, nowNano int64, fx *actorEffects) bool {
-	steps := 1
-	if st.VX != 0 || st.VY != 0 {
-		steps = int(n.beatPeriod(*st) / n.cfg.Period)
-	}
-	for range steps {
-		n.integrate(st)
+// advance 积分 Real 的一拍：把这一拍实际经过的时间 elapsed（Beat.Elapsed，慢档约一个 IdlePeriod，驱动变慢或跳拍时更长，
+// 心跳已按上限夹过）按 Period 分步，每步之后判交接；某一步越界（且不在被拒后的退避期内）就在那一步冻结、返回 true，
+// 剩下的位移不再走（冻结后不积分）。每步至多一个 Period 的位移，所以冻结点离本格至多 H + 一步，与快档相同。静止的角色
+// 只判一次；elapsed 为 0 时不移动、只判一次。
+func (n *Node) advance(st *ActorState, nowNano int64, elapsed time.Duration, fx *actorEffects) bool {
+	for {
+		dt := min(elapsed, n.cfg.Period)
+		n.integrate(st, dt)
+		elapsed -= dt
 		if target, ok := n.cfg.Grid.ShouldHandoff(n.cell, st.Pos()); ok && nowNano >= st.RetryAfter {
 			n.freeze(st, target, nowNano, fx)
 			return true
 		}
+		if elapsed <= 0 || st.VX == 0 && st.VY == 0 {
+			return false
+		}
 	}
-	return false
 }
 
 // drift 是 NPC 在当前档位一个周期里最多走多远（|VX| + |VY| 是欧氏位移的上界）。

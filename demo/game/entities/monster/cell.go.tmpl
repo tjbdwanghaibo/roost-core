@@ -33,9 +33,9 @@ func (component *ActorComponent) registerCell() error {
 		return errors.New("this process runs no partitioned scene")
 	}
 	owner := component.owner
-	reg, err := component.host.Register("cell.actor", node.Config().Period, func(heartbeat.Beat) error {
+	reg, err := component.host.Register("cell.actor", node.Config().Period, func(beat heartbeat.Beat) error {
 		if n := partition.Node(); n != nil {
-			return n.ActorBeat(owner, time.Now())
+			return n.ActorBeat(owner, time.Now(), beat.Elapsed)
 		}
 		return nil
 	})

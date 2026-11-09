@@ -103,8 +103,8 @@ func buildTestActor(p *fentity.EntityCreateParam) (fentity.IThreadSafeEntity, er
 	}
 	a := &testActor{EntityBase: fentity.NewEntityBaseWithMutex(p.Id, p.Category, true, p.Mutex, p.Kind), dao: &undoCell[ActorState]{}}
 	a.host = proc.driver.NewHost(a)
-	reg, err := a.host.Register("cell.actor", proc.node.Config().Period, func(heartbeat.Beat) error {
-		return proc.node.ActorBeat(a, time.Now())
+	reg, err := a.host.Register("cell.actor", proc.node.Config().Period, func(beat heartbeat.Beat) error {
+		return proc.node.ActorBeat(a, time.Now(), beat.Elapsed)
 	})
 	if err != nil {
 		return nil, err

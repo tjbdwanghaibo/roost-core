@@ -1119,7 +1119,9 @@ func (n *Node) handleSpawn(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 // ---- 心跳 ----
 
 // ActorBeat 是角色 / NPC 的格内心跳回调：只锁角色本身，结果在提交后报给区域、发出 Offer / 回写 / Lost、销毁实体。
-func (n *Node) ActorBeat(a Actor, now time.Time) error {
+// elapsed 是距上一拍的实际经过时间（heartbeat.Beat.Elapsed：首拍从启动起算，已按上限夹过）：位置按它积分，不按回调
+// 次数——驱动变慢、跳拍时角色照样按设定速度走完这段时间（docs/framework/impl/10-time.md“不以回调次数推算经过时间”）。
+func (n *Node) ActorBeat(a Actor, now time.Time, elapsed time.Duration) error {
 	n.stats.actorBeats.Add(1)
 	st := a.CellState()
 	if st.Role == RoleNone || st.Role == RoleGone {
@@ -1127,7 +1129,7 @@ func (n *Node) ActorBeat(a Actor, now time.Time) error {
 	}
 	before := st.Role
 	prev := st
-	afx := n.stepActor(&st, now)
+	afx := n.stepActor(&st, now, elapsed)
 	n.setState(a, prev, st)
 	fx := &txEffects{sends: afx.sends}
 	if afx.report != nil {
