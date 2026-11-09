@@ -1,0 +1,2 @@
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	9.639s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/heartbeat	1.645s

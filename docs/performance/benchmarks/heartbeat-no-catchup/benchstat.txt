@@ -1,0 +1,28 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+                                                         │ /tmp/roost-heartbeat-tick/before-alternating.txt │ /tmp/roost-heartbeat-tick/after-alternating.txt │
+                                                         │                      sec/op                      │            sec/op              vs base          │
+DriverDispatch/delivery=batch/regs=50000/period=100ms-10                                        2.126µ ± 3%                     2.107µ ± 3%  ~ (p=0.516 n=10)
+
+                                                         │ /tmp/roost-heartbeat-tick/before-alternating.txt │ /tmp/roost-heartbeat-tick/after-alternating.txt │
+                                                         │                     beats/s                      │            beats/s             vs base          │
+DriverDispatch/delivery=batch/regs=50000/period=100ms-10                                        486.7k ± 3%                     499.8k ± 2%  ~ (p=0.123 n=10)
+
+                                                         │ /tmp/roost-heartbeat-tick/before-alternating.txt │ /tmp/roost-heartbeat-tick/after-alternating.txt │
+                                                         │                   cpu-sec/beat                   │         cpu-sec/beat           vs base          │
+DriverDispatch/delivery=batch/regs=50000/period=100ms-10                                       571.3n ± 66%                    510.7n ± 87%  ~ (p=0.796 n=10)
+
+                                                         │ /tmp/roost-heartbeat-tick/before-alternating.txt │ /tmp/roost-heartbeat-tick/after-alternating.txt │
+                                                         │                   driver-cores                   │         driver-cores           vs base          │
+DriverDispatch/delivery=batch/regs=50000/period=100ms-10                                       271.3m ± 75%                    252.4m ± 89%  ~ (p=0.912 n=10)
+
+                                                         │ /tmp/roost-heartbeat-tick/before-alternating.txt │ /tmp/roost-heartbeat-tick/after-alternating.txt │
+                                                         │                       B/op                       │             B/op               vs base          │
+DriverDispatch/delivery=batch/regs=50000/period=100ms-10                                         99.00 ± 2%                      99.50 ± 4%  ~ (p=0.397 n=10)
+
+                                                         │ /tmp/roost-heartbeat-tick/before-alternating.txt │ /tmp/roost-heartbeat-tick/after-alternating.txt │
+                                                         │                    allocs/op                     │          allocs/op           vs base            │
+DriverDispatch/delivery=batch/regs=50000/period=100ms-10                                         3.000 ± 0%                    3.000 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal

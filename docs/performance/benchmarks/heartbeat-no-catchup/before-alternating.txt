@@ -1,0 +1,70 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10         	   60320	      2167 ns/op	    464051 beats/s	       620.6 cpu-ns/beat	         0.2880 driver-cores	      99 B/op	       3 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench	1.040s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10         	   55762	      2127 ns/op	    479666 beats/s	       506.0 cpu-ns/beat	         0.2427 driver-cores	      99 B/op	       3 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench	1.222s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10         	   56002	      2135 ns/op	    485722 beats/s	       400.0 cpu-ns/beat	         0.1943 driver-cores	     100 B/op	       3 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench	1.194s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10         	   53541	      2052 ns/op	    500511 beats/s	       946.5 cpu-ns/beat	         0.4738 driver-cores	      98 B/op	       3 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench	1.189s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10         	   57085	      2125 ns/op	    477176 beats/s	       713.5 cpu-ns/beat	         0.3405 driver-cores	      98 B/op	       3 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench	1.225s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10         	   59233	      2004 ns/op	    501080 beats/s	       958.2 cpu-ns/beat	         0.4801 driver-cores	      96 B/op	       3 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench	1.242s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10         	   50956	      2144 ns/op	    487683 beats/s	       522.0 cpu-ns/beat	         0.2546 driver-cores	     101 B/op	       3 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench	1.210s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10         	   52292	      2099 ns/op	    500887 beats/s	       500.2 cpu-ns/beat	         0.2505 driver-cores	     101 B/op	       3 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench	1.204s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10         	   56359	      2135 ns/op	    475646 beats/s	       801.3 cpu-ns/beat	         0.3811 driver-cores	      99 B/op	       3 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench	1.202s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench
+cpu: Apple M5
+BenchmarkDriverDispatch/delivery=batch/regs=50000/period=100ms-10         	   53125	      2054 ns/op	    495963 beats/s	       391.3 cpu-ns/beat	         0.1941 driver-cores	      98 B/op	       3 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench	1.223s

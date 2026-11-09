@@ -216,9 +216,9 @@ type Reg struct {
 	delivery atomic.Uint64
 
 	// 只由驱动 goroutine 读写。
-	issued         uint64 // 最近分配的代际
-	deliveredFrame int64  // 最近一次投出（含重投）的格
-	stalls         uint   // 当前这一代连续重投的次数，决定下次的卡住阈值；分配新一代时清零
+	issued      uint64    // 最近分配的代际
+	deliveredAt time.Time // 最近一次投出（含重投）的系统单调时间
+	stalls      uint      // 当前这一代连续重投的次数，决定下次的卡住阈值；分配新一代时清零
 }
 
 // Name 返回登记名。

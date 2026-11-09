@@ -47,7 +47,7 @@ const (
 	maxStallBackoff = 3
 	// DefaultWarnInterval 是跳拍 / 卡住 Warn 日志的最小间隔：间隔内的跳拍只计数，下一条 Warn 汇总。
 	DefaultWarnInterval = 10 * time.Second
-	// flushFrames 是驱动把内部计数刷到 metrics 注册表的间隔（100 格 = 1 秒）。
+	// flushFrames 是驱动把内部计数刷到 metrics 注册表的间隔（100 次 tick；无停顿时约 1 秒）。
 	flushFrames = int64(time.Second / Resolution)
 )
 
@@ -75,7 +75,7 @@ type Lookup func(id int64) entity.IThreadSafeEntity
 // Driver 是一个 Nest 引擎上的心跳驱动（进程里每个引擎一个），由 wiring/heartbeat 装配。
 type Driver struct {
 	config     Config
-	stallAfter int64 // 帧
+	stallAfter time.Duration // 实际经过时间，不随业务时钟或时间格变化
 	now        atomic.Pointer[func() time.Time]
 
 	mu      sync.Mutex
@@ -129,7 +129,7 @@ func NewDriver(config Config) *Driver {
 	}
 	config.Delivery = delivery
 	d := &Driver{config: config, ring: newTierRing()}
-	d.stallAfter = max(int64(config.StallAfter/Resolution), 1)
+	d.stallAfter = max(config.StallAfter, Resolution)
 	now := fctx.Now
 	d.now.Store(&now)
 	return d
@@ -256,7 +256,6 @@ func (d *Driver) loop(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	ticker := time.NewTicker(Resolution)
 	defer ticker.Stop()
-	origin := time.Now()
 	var stepped int64
 	defer func() { d.flush(time.Now()) }()
 	for {
@@ -265,14 +264,11 @@ func (d *Driver) loop(ctx context.Context, done chan struct{}) {
 			return
 		case <-ticker.C:
 		}
-		// 按单调时间追到应到的格：驱动被拖慢时逐格补走，每格照常核对在途，所以不会给同一登记连投多拍。
-		target := int64(time.Since(origin) / Resolution)
-		for stepped < target && ctx.Err() == nil {
-			stepped++
-			d.step(ctx)
-			if stepped%flushFrames == 0 {
-				d.flush(time.Now())
-			}
+		// ticker 只触发一格：停顿后顺延，不补走错过的格，避免恢复时集中投递。
+		d.step(ctx)
+		stepped++
+		if stepped%flushFrames == 0 {
+			d.flush(time.Now())
 		}
 	}
 }
@@ -288,9 +284,13 @@ func (d *Driver) loop(ctx context.Context, done chan struct{}) {
 //   - 上一拍在途（投递槽不空闲，见 delivery.go）：跳拍（计数、限频 Warn）；在途超过 StallAfter（连续卡住时翻倍）：
 //     视为丢失，按同一代际重投一次（计 stalled）。槽空闲时分配新一代投出。
 func (d *Driver) step(ctx context.Context) {
+	d.stepAt(ctx, time.Now())
+}
+
+// stepAt 的 now 是系统单调时间；与 Beat 使用的可偏移业务时钟分开。
+func (d *Driver) stepAt(ctx context.Context, now time.Time) {
 	d.mu.Lock()
 	d.due = d.ring.step(d.due[:0])
-	frame := d.ring.frame
 	deliver, lookup := d.deliver, d.lookup
 	d.mu.Unlock()
 
@@ -327,7 +327,7 @@ func (d *Driver) step(ctx context.Context) {
 			r.stalls = 0
 			ticket = r.issue()
 		} else {
-			if frame-r.deliveredFrame < d.stallAfter<<r.stalls {
+			if now.Sub(r.deliveredAt) < d.stallAfter<<r.stalls {
 				r.skipped.Add(1)
 				d.stats.skipInflight.add(h.id)
 				d.warn.note(r, "inflight")
@@ -338,7 +338,7 @@ func (d *Driver) step(ctx context.Context) {
 			r.stalls = min(r.stalls+1, maxStallBackoff)
 			ticket = newBeatTicket(r, gen) // 重投：同一代，与原拍至多一份执行
 		}
-		r.deliveredFrame = frame
+		r.deliveredAt = now
 		d.batch = append(d.batch, ticket)
 	}
 	if len(d.batch) == 0 || deliver == nil {

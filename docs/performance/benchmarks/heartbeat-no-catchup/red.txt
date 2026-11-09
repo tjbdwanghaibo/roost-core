@@ -1,0 +1,5 @@
+--- FAIL: TestDriverDoesNotCatchUpAfterPause (0.00s)
+    driver_test.go:923: pause advanced 100 frames; want at most the pending tick
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	0.492s
+FAIL

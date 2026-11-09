@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -19,7 +20,7 @@ var discard = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 func stepN(d *Driver, n int64) {
 	for range n {
-		d.step(context.Background())
+		d.stepAt(context.Background(), time.Unix(0, (d.frame()+1)*int64(Resolution)))
 	}
 }
 
@@ -884,6 +885,73 @@ func TestARemovedInstanceLeavesTheDriver(t *testing.T) {
 		}
 		if _, err := e.host.Register("late", time.Second, func(Beat) error { return nil }); !errors.Is(err, ErrHostClosed) {
 			t.Fatalf("register on a removed instance = %v, want ErrHostClosed", err)
+		}
+	})
+}
+
+// 驱动被阻塞后只消费 ticker 通知，不将停顿时间补成连续的调度格。
+func TestDriverDoesNotCatchUpAfterPause(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d, _, _, live := newTestDriver(t, discard)
+		e := newHBEntity(t, d, 1, kindShort)
+		live.Store(e.ID(), e)
+		r, _ := e.host.Register("pause", 50*time.Millisecond, func(Beat) error { return nil })
+		r.Start()
+		entered, resume := make(chan struct{}), make(chan struct{})
+		lookup := d.lookup
+		first := true
+		d.lookup = func(id int64) entity.IThreadSafeEntity {
+			if first {
+				first = false
+				close(entered)
+				<-resume
+			}
+			return lookup(id)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go d.loop(ctx, done)
+		<-entered
+		before := d.frame()
+		time.Sleep(time.Second)
+		close(resume)
+		synctest.Wait()
+		frame := d.frame()
+		cancel()
+		<-done
+		if frame-before > 1 {
+			t.Fatalf("pause advanced %d frames; want at most the pending tick", frame-before)
+		}
+	})
+}
+
+func TestStallTimeoutUsesElapsedTimeNotFrames(t *testing.T) {
+	forEachDelivery(t, func(t *testing.T) {
+		d, client, _, live := newTestDriver(t, discard)
+		e := newHBEntity(t, d, 1, kindShort)
+		live.Store(e.ID(), e)
+		r, _ := e.host.Register("timeout", 50*time.Millisecond, func(Beat) error { return nil })
+		r.Start()
+		start := time.Now()
+		for range 5 {
+			d.stepAt(context.Background(), start)
+		}
+		if len(client.take()) != 1 {
+			t.Fatal("expected initial delivery")
+		}
+		// 即使推进很多格，没有经过实际时间也不应重投。
+		for range 1100 {
+			d.stepAt(context.Background(), start)
+		}
+		if len(client.take()) != 0 {
+			t.Fatal("frames alone triggered a retry")
+		}
+		// 停顿十秒后，只走到下一个到期格即可重投，不必补一千格。
+		for range 5 {
+			d.stepAt(context.Background(), start.Add(DefaultStallAfter))
+		}
+		if len(client.take()) != 1 {
+			t.Fatal("elapsed timeout did not trigger a retry")
 		}
 	})
 }
