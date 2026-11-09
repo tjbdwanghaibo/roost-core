@@ -285,7 +285,7 @@ scene:
 ### 移动与寻路（P3）
 
 开了地形的**普通场景**（不分区）上，玩家与怪的服务端行走、寻路和落点按高度场判定（[方案 §22](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#22-p3-移动与寻路实施结果2026-11-09)）；
-不开地形、或分区场景，一切与之前相同（`TestWithoutASurfaceTheMapIsTheFlatGrid` 与原有移动用例）。
+分区场景的格内积分按同一套规则判定（见下面“分区场景”）。不开地形时一切与之前相同（`TestWithoutASurfaceTheMapIsTheFlatGrid` 与原有移动用例）。
 
 - **接线**：服务 Init 在地形同步就绪后调 `installSurface`，把 `terrainmap.Map.Walker()`（`terrain.DefaultWalkRules`，建筑占位取
   `Rules.Occupied`）装到场景的 `Terrain().SetSurface`，范围夹到场景的世界。`actor.Surface` 是每个 `Move` 的 `MoveConfig.Surface`：
@@ -300,7 +300,13 @@ scene:
 - **同步窗口与纠偏**：TerrainChunk 每秒同步一次、玩家位置变化即发，客户端最多晚约 1 秒看到地形改动；服务端行走总按最新地形，
   客户端预测与服务端不同时以收到的位置为准，新块到达后两边按同一规则一致（`terrain_move_test.go`：挖在前方、挖在脚下、抬地、
   陡坑困住后填平）。
-- **限制**：分区场景（cellworld 积分）没有地面钩子，跨格移动 / 交接不按高度；普通场景的世界仍是 `gamescene.DefaultConfig`
+- **分区场景**（跨格移动，[方案 §24](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#24-p3-跨格移动按地形判定t06-剩余2026-11-09)）：托管格的进程把
+  `partitionSurface`（同一个 `Map.Walker()`，范围夹到分区世界）装成 cellworld 的地面钩子 `NodeConfig.Surface`：角色每拍沿位移逐点
+  走，进入新的 1m 节点问 `Step`，被挡时玩家停下（速度清零，等下一个移动输入）、怪原路折回；交接之前走出本格的那一段读本进程视图里
+  邻格块的 Ghost 副本，块没装入时停下、不猜平地；交接之后由新格按自己的视图判定。只做 Base、不开地形的进程不装。分区场景的刷怪点、
+  进场位置不按 `Standable` 检查（站在不可走的节点上的角色一步不动）。测试：`terrain_partition_test.go` 的
+  `TestTerrainPartitionWalkAcrossCellsFollowsTheEdits`（真实 Map、改块事务与副本，真实 cellworld Node 积分替身 NPC）。
+- **限制**：普通场景的世界仍是 `gamescene.DefaultConfig`
   （1000 × 1000，即 10m 见方），比地形图小；陡壁深坑会困住玩家（服务端不替玩家找出路）；路线开头可能先折回起点节点中心（≤ 约 0.7m）。
 
 ## 改这里的东西之后

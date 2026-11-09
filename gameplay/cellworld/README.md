@@ -82,6 +82,20 @@ Team 实体，组队协议是分区场景专用的邀请 / 接受 / 离队 / 解
 | 换格 | 快照跟着队友自己 Base 的 witness 走：交接后的 epoch 更大，收件方按版本更新同一个对象，不删不重建 |
 | 信任 | 收件方不核对快照的发送者是否真是本进程某个玩家的队友（原型：集群内互信）；不相干的快照只进 mirror、没有视野订阅，过期即删 |
 
+## 地面钩子（可编辑地形 P3，跨格移动）
+
+`NodeConfig.Surface func() Surface`（可选，2026-11-09，[地形方案 §24](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#24-p3-跨格移动按地形判定t06-剩余2026-11-09)）：角色每拍开始取一次地面，`integrate` 沿这一步（已按世界边缘夹过）的直线逐个整数点走，进入新的地面格问 `Step(上一格, 新格)`。`Surface` 与 `movement.Surface` 同形，`gameplay/terrain` 的 `Walker` 实现它；方法在角色的 Nest 锁内、short 池上调用，只读内存、不阻塞。
+
+| 项 | 规则 |
+| --- | --- |
+| 被挡 | 停在上一个整数点；玩家速度清零（与停在世界边缘相同，等 Base 的下一个移动输入）；NPC 两个分量都反向、原路返回（与碰世界边缘反弹相同；地形的挡没有“哪条轴碰了边”）。同一拍剩下的子步照常积分（NPC 往回走）。计 `SurfaceBlocks` |
+| 减速 | 速度千分比 s < 1000（游泳）时路程按 s / 1000 折算：预算是这一步未被世界边缘夹过的位移的 max(\|dx\|, \|dy\|) × 1000，每走一个点花 ⌈10⁶ / s⌉；路程用完停在那里，速度不变。只有走到终点，世界边缘的速度规则才生效 |
+| 没有定义 | 站立的地面格没有定义（块没装入、地图外）时一步不走，按被挡处理；不猜平地 |
+| 跨格 | 交接之前角色可能走出本格（至多 H + 一步），地面要覆盖本格外扩 GhostBand：分区进程的地形视图本来就装着这个范围，邻格写的块是 `terrain.Replicator` 推来的 Ghost 副本（已提交版本，丢失时至多一个续期周期补齐）。交接之后由目标格的 Node 按它自己的地面判定 |
+| nil | `Surface` 为 nil 或返回 nil 时与没有钩子逐位相同（`TestANilSurfaceIntegratesExactlyLikeNoSurface`，随机位置 / 速度 / 拍长，含世界边缘与交接）。返回值不能是带类型的 nil |
+
+成本（Apple M5，`BenchmarkIntegrateOnSurface`，一个 Period 的一拍）：平地 Walker 上全速玩家（2000 / 秒，一拍 100 个点）约 0.8～1.7µs、慢 NPC（200 / 秒）约 85～155ns，0 分配；没有地面约 15～30ns。每个点问一次 `Cell`（地面格对 cellworld 不透明，不按格边界解析求交）。
+
 ## 交接以事务为边界
 
 旧格：角色心跳越界 → 同一笔事务里冻结（epoch+1）→ 提交后发 Offer；超时只删不恢复、告诉 Base。新格：Offer handler（锁 Scene + 该角色）在同一笔事务里经 `NodeConfig.CreateActor`（`EntityManager.Create`，handler 内即 `CreateInScope`，由事务捕获）建出实体、写成 Real、登记 seen，提交后才回“已接受”；回滚即撤销新建与区域表，不回复（旧格重传）。v1 的协议不变量（先冻结后 Offer、一个 epoch 一个目标、幂等回复、隐式确认）不变。
@@ -133,11 +147,11 @@ Cell 进程是普通 roost App：`app.New(...).Singleton(kitredis.SingletonStore
 | `grid_test.go` | 分区映射、边界带、迟滞、版本序 |
 | `world_test.go` | 进程内多“进程”（另有 strict getter 版：不在内存的实体答错误，同 DataEngine）（各自的 EntityManager、Nest 引擎、心跳驱动、Node）：直线、抖动、斜穿四格、跨界攻击、慢交接、丢包；witness 连续与客户端（Base 的 Manager 推出的帧）连续 |
 | `handoff_test.go`、`combat_test.go` | v1 细粒度用例按新模型改写：丢失 / 重复 / 隐式确认 / 超时只删不恢复 / 被拒恢复 / 回复扣住时来回 / 交接链 / Enter 幂等与拒绝 / 墓碑；伤害只结算一次、距离与可见性、去重随交接、结果未知、去重表满；战斗面板（v2.4）：伤害按攻击者面板、上限夹血不回血、命令丢失重发、重复与乱序只应用一次、交接中改投新 owner、结果未知只报一次 |
-| `tier_test.go` | D1：无人时降档、邻格玩家（Ghost）靠近升档、W 边上来回不抖动、慢档 Ghost 不过期、慢档一拍冲过边界仍在边界带内交接并以慢档装入、慢档 NPC 被跨界攻击只结算一次、`advance` 分步积分单元 |
+| `tier_test.go` | D1：无人时降档、邻格玩家（Ghost）靠近升档、W 边上来回不抖动、慢档 Ghost 不过期、慢档一拍冲过边界仍在边界带内交接并以慢档装入、慢档 NPC 被跨界攻击只结算一次、`advance` 分步积分单元；地面钩子：nil 逐位相同、被挡停在上一个点（玩家停、NPC 折回）、对角只跨相邻格、减速与世界边缘、没有定义的格不走、挡在边界前不交接 |
 | `group_test.go` | 队伍面板（v2.5）：两个 Base 上彼此不在视野里的队员互相看见位置 / HP、同 Base 队友不经快照、一个周期一份；对方 Base 停了 3 个周期后移除、重启后重读恢复；队员换格时面板不删不重建；离队 / 迟到的旧通知 / 再入队 / 解散；通知丢了由重读收敛；视野内的队友只有一个对象，走出视野不闪 |
 | `lifecycle_test.go` | Cell 崩溃后按 Player 快照重建（含客户端重新持有自己、面板随 Enter 回到新 SceneActor）、Base 消失后租约离场、回写按版本幂等、交接事务回滚不移交 |
 | `nats_test.go` | 同一组场景跑在真实 nats-server 上（测试自起私有端口） |
-| `ext_test.go` | 扩展消息（v7）：按命名空间交给处理器、提交后回调里可发、`CloseIngress` 之后不再调用、旧版本与空内容按坏消息丢弃；地形边界块副本在回环与真实 nats-server 上推到邻格（`ROOST_TERRAIN_REPLICA_PERF=1` 记延迟与字节） |
+| `ext_test.go` | 扩展消息（v7）：按命名空间交给处理器、提交后回调里可发、`CloseIngress` 之后不再调用、旧版本与空内容按坏消息丢弃；地形边界块副本在回环与真实 nats-server 上推到邻格（`ROOST_TERRAIN_REPLICA_PERF=1` 记延迟与字节）；跨格移动按地形：副本缺块时停下、副本到了再走，真实 Node + 回环 + 两格各自的视图与 Replicator 上玩家在邻格块的墙前停住（交接之前）、墙挖平后交接、新格按自己的视图在坑前停住；`BenchmarkIntegrateOnSurface` |
 | `process_test.go` | 每个 Cell 是一个带单实例锁的 App 子进程（私有 redis-server）：跨进程至多一个 Real 与伤害只结算一次、kill -9 后按快照恢复、同 sid 第二个进程被拒、Base 进程消失后 SceneActor 清理 |
 | `measure_test.go` | 原型测量：`ROOST_CELLWORLD_PERF=1 GOWORK=off go test -run TestCellWorldMeasure -v ./gameplay/cellworld/`（档位 `ROOST_CELLWORLD_PERF_NPCS=1000,5000`，窗口 `ROOST_CELLWORLD_PERF_SECONDS=20`；D1：`ROOST_CELLWORLD_PERF_IDLE_MS=1000`，玩家分布 `ROOST_CELLWORLD_PERF_PLAYERS=spread|cell`） |
 

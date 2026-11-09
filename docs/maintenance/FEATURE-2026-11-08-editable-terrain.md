@@ -820,8 +820,60 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 
 | 项 | 现状 | 选项（推荐标★） |
 | --- | --- | --- |
-| 跨格移动 / 交接（T06 剩余） | 分区场景 cellworld 积分没有地面钩子；本轮按要求不改 cellworld | ★ T05（Ghost 实时副本）合入后给 cellworld `NodeConfig` 加地面判定钩子（积分时按 `Walker.Step` 截停），交接用目标格的 Ghost 副本；或分区场景首版不判高度（只做水平移动） |
+| 跨格移动 / 交接（T06 剩余） | 分区场景 cellworld 积分没有地面钩子；本轮按要求不改 cellworld（按★实施，见 [§24](#24-p3-跨格移动按地形判定t06-剩余2026-11-09)） | ★ T05（Ghost 实时副本）合入后给 cellworld `NodeConfig` 加地面判定钩子（积分时按 `Walker.Step` 截停），交接用目标格的 Ghost 副本；或分区场景首版不判高度（只做水平移动） |
 | 加权寻路（实施方先定） | 估价 1.5 倍：代价至多比最优多 50%（实测 2.9%） | ★ 保持 1.5；或最优（1000，起伏地面 200m 超出 4096 退回直线走）；或降上坡代价 |
 | 陡坑困住 | 直壁深坑挖在脚下时玩家走不出来，服务端不替玩家找出路 | ★ 保持（玩家可填平 / 挖台阶，编辑者需对后果负责）；或检测被困后 `Place` 到最近可站节点；或编辑校验禁止在有人站的节点下挖超过 `MaxDrop` |
 | 普通场景大小 | 开地形的普通场景仍是 `DefaultConfig` 1000 × 1000（10m 见方），比地形图小；行走、寻路都夹在场景里 | ★ 开地形时场景世界取地形图大小（要先测 AOI 索引在大世界上的成本）；或保持，大地图走分区场景 |
 | 路线开头折回节点中心 | ≤ 约 0.7m，换来“每段只跨一个节点边界” | ★ 保持；或去掉起点节点中心（要证明第一段只经过相邻节点） |
+
+## 24. P3 跨格移动按地形判定（T06 剩余，2026-11-09）
+
+本地分支 `feat/terrain-cross-cell`（基于 main `58b9d9f9`，T05 已在其中）。按 §22.7 维护者确认的推荐（★）实施：cellworld 的 `NodeConfig` 加地面判定钩子，积分时按 `terrain.Walker.Step` 截停；交接之前读本格视图里邻格块的 Ghost 副本（T05 的 `Replicator` 推来的已提交版本）。完成判据对照[进度总表 T06](TERRAIN-STATUS.md)；证据、命令与红文本见 [evidence/terrain-p3-xcell-20261109](evidence/terrain-p3-xcell-20261109/README.md)。本节编号接在 §22 之后（§23 是同期另一轮“普通场景取地形图大小”）。
+
+### 24.1 cellworld 的地面钩子
+
+- **接口**：`cellworld.Surface`（`Cell` / `Step`，与 `movement.Surface` 同形；`terrain.Walker` 两者都实现）。`NodeConfig.Surface func() Surface`：角色每拍开始取一次（`advance`），各子步共用；为 nil 或返回 nil 时积分与没有钩子逐位相同。cellworld 不引用 `gameplay/terrain`（依赖方向不变）。
+- **走法**（`actor.go` `integrate` / `walkOn`）：先按原规则算出这一子步的终点并夹到世界内，再沿直线逐个整数点走：第 i 点 = 起点 + 位移 × i / n（n = max(|dx|, |dy|)），相邻两点每个分量至多差 1，所以地面格每次至多变到相邻的一格，对角的不切角由 `Step` 判断。每点问一次 `Cell`，进入新格问一次 `Step`。与 movement 的 0.5 单位采样相比：cellworld 的位置是整数，按整数点走停下的点精确到 1 单位；地面格对 cellworld 不透明，不按格边界解析求交。
+- **被挡**：停在上一个整数点。玩家速度清零——与停在世界边缘相同，等 Base 的下一个移动输入；NPC 两个分量都反向原路返回——与碰世界边缘反弹相同，地形的挡没有“哪条轴碰了边”，原路一定走得通（除非这期间又被改了）。同一拍剩下的子步照常积分。计 `NodeStats.SurfaceBlocks`。被挡的角色不会越过冻结线，也就不交接。
+- **减速**（游泳 60%）：预算 = 这一步**未被世界边缘夹过**的位移的 max(|dx|, |dy|) × 1000，每点花 ⌈10⁶ / 速度千分比⌉；用完停下、速度不变。世界边缘的速度规则只在走到终点时生效（减速后没到边缘不反弹）。度量是 Chebyshev：不夹边时与按欧氏距离折算完全相同（同一条直线上的比例），夹边时是近似。
+- **没有定义**：站立的地面格没有定义（块没装入、地图外）时一步不走，按被挡处理（§22.1“块没装入不猜”）。
+- **跨格与交接**：分区进程的地形视图装着本格外扩 `ghost_band` 的块，角色交接之前至多走出本格 H + 一步，`ghost_band ≥ R + H` 保证这段在视图里。邻格写的块由副本推送更新（提交到副本约 0.2ms～12ms，推送丢了至多一个续期 1s 补齐），所以交接之前按邻格最新已提交的地形判定；副本装不进来（换版前后包不同、记录损坏）时那一块不在视图里，角色停在它前面。交接之后角色在目标格由目标格的 Node 积分，按目标格自己的视图判定——两个格的视图独立，不需要协议改动，线上格式不变（v7）。
+
+### 24.2 game-demo 接法
+
+- `terrain_partition.go` 新增 `partitionSurface(m, grid)`：`m.Walker()`（缺省规则 + 建筑占位钩子），`Bounds` 夹到分区世界；分区世界比地形图大时启动记 Warn（图外不可走）。
+- `partition.go` 的 `startPartition`：开了地形（`terrainmap.Active() != nil`）且本进程托管格时装到 `NodeConfig.Surface`；只做 Base、不开地形的进程不装，行为与之前相同。
+- 不改 SceneActor / Monster / Player 的 DAO 与 cellworld 的线上格式；服务端位置仍只有 X / Y（站立高度由 `Walker.StandZ` 推出，§22.1）。
+
+### 24.3 验证
+
+| 用例 | 内容 |
+| --- | --- |
+| `cellworld` `TestANilSurfaceIntegratesExactlyLikeNoSurface` | 2000 组随机位置 / 速度 / 拍长（含世界边缘反弹、越界冻结），NPC 与玩家，每组 4 拍：不设、返回 nil、处处放行三种逐位相同 |
+| `TestSurfaceStopsTheWalkAtTheLastPointBeforeARefusedCell` | 玩家停在 1149（被挡格从 1150 起）、速度 0、下一拍不动；NPC 折回、下一拍走回 1049；对角走 Step 从没被问到不相邻的格 |
+| `TestSurfaceSlowsTheWalkAndAnUndefinedCellHoldsIt` | 速度 500‰ 的格里一拍走一半；朝世界边缘游时没到边缘不反弹、到了才反弹；站在没有定义的格上一步不走 |
+| `TestSurfaceBlockBeforeTheBoundaryKeepsTheActorReal` | 挡在边界前一格的 NPC 一直是本格 Real；不挡时同一拍冻结交出 |
+| `TestCrossCellWalkDoesNotGuessAMissingGhostChunk` | 真实 `terrain.Walker`：邻格块没装入时玩家停在 12749（块从 12750 起）、NPC 折回、站在没装入的块上不动；块装入后走进去 |
+| `TestCrossCellWalkFollowsTheNeighboursTerrain` | 真实 Node、回环传输、两个格进程各自的视图与 `Replicator`、Base 与玩家：邻格在它写的块上立墙、推到副本，玩家越过边界后在墙前 13249 停住、一直是旧格的 Real（冻结线 13800）；墙挖平后交接到新格；新格在只有它装着的块上挖坑，玩家停在 19449（旧格的视图里没有那块，若旧格在判定会停在 19149） |
+| demo `TestTerrainPartitionWalkAcrossCellsFollowsTheEdits` | 两个格进程：正式 `terrainmap.Map`、改块 Nest 事务（`Brush`）、`partitionTerrain` 副本；各起一个真实 cellworld Node（替身 Scene / NPC 实体、自己的 Nest 与心跳），地面钩子就是 `partitionSurface`。B 紧挨分界线抬起 5 米的台、推到 A 的副本，A 的 NPC 越过边界后在台前折回、从没交给 B；台降回后 NPC 交到 B；B 挖 5 米深的坑，NPC 在坑前折回 |
+| 变异（证据目录） | 钩子不生效（= main）：上面 cellworld 五条与 demo 用例全红（例：“player walking into the refused cell: at (1400, 5000) v (2000, 0) real, want stopped at (1149, 5000) with v 0”；demo NPC 走到 13786 交给 B）；只看终点、玩家不停、NPC 不折回、忽略速度、站立格没定义也走、没走到终点也套用边缘规则、预算按夹过的终点算——各有用例变红 |
+
+成本见 cellworld README“地面钩子”：全速玩家一拍约 0.8～1.7µs、慢 NPC 约 85～155ns，0 分配（同机后台负载下 3 轮，波动大）。
+
+### 24.4 未覆盖与限制
+
+- demo 用例里的 NPC 是替身实体：demo 的 SceneActor / Monster 经进程级的 `partition.Node()` 找 Node，一个测试进程里装不下两个格；`startPartition` 里装钩子的三行只有真实进程演练（`scripts/test-seamless-demo.sh` 开地形的配置）覆盖，本轮没跑（真实依赖由维护者跑）。现有演练配置的 `cell_size` 3000 不满足开地形的要求（§21），要另配。
+- 玩家端没有新的 TCP 用例：玩家停下后客户端看到的是 witness 里的位置（与停在世界边缘相同的路径），cellworld 的 `TestCrossCellWalkFollowsTheNeighboursTerrain` 用 Base 收到的 witness 断言。
+- 副本的新旧：判定用本进程当时持有的副本版本。拥有者刚提交、副本还没到的那几毫秒（推送丢了时至多 1 秒）里，旧格可能让角色走过邻格刚抬起的地方，或在刚挖平的地方停下；交接后新格按最新数据判定。T09 规模下副本延迟未测。
+- 刷怪点与进场位置不按 `Standable` 检查：站在不可走节点上的角色一步不走（不猜），不会被挪到附近能站的点。
+- 每拍按整数点问 `Cell`，成本与速度成正比；T09 规模（单格数千玩家）的 CPU 未测。
+
+### 24.5 待维护者确认（实施方先按推荐做了）
+
+| 项 | 现状 | 选项（推荐标★） |
+| --- | --- | --- |
+| NPC 被地形挡住 | 两个分量反向，原路返回 | ★ 原路返回（与世界边缘反弹同类，一定走得通）；或停住（速度清零，NPC 要靠 AI 另给速度，现在分区 NPC 没有 AI，会永远站着）；或只反向“碰到的”轴（地形没有这个概念，要按被挡的格相对方向猜） |
+| 玩家被地形挡住 | 速度清零，等下一个移动输入 | ★ 清零（与停在世界边缘一致，被挡后不再每拍问 `Step`）；或保持速度一直“推着墙”（地形改开后自动继续走，每拍多一次 `Step`，客户端要区分“走不动”与“停下”） |
+| 分区世界比地形图大 | 图外不可走（Walker 规则），启动记 Warn | ★ 不可走（不猜，与“块没装入”一致）；或图外不判高度（只按世界边缘走）；或启动拒绝（配置校验要求地形图覆盖分区世界） |
+| 刷怪点 / 进场位置 | 不检查 `Standable` | ★ 先不查（demo 原型，站不住的角色只是不动）；或刷怪 / 进场时按 `Standable` 跳过或挪到最近能站的节点（同普通场景的 `Place`） |
+| 每点问 `Cell` 的成本 | 全速玩家每拍约 1µs | ★ 先保持，T09 实测后再定；或 `Surface` 增加节点边长，按格边界解析求交（每拍只问跨过的边界，接口变化） |
