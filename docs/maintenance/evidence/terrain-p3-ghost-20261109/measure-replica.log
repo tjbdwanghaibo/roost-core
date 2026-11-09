@@ -1,0 +1,11 @@
+    ext_test.go:404: loopback: commit → neighbour replica applied (r=5m raise on a generated chunk): n=300 p50=181.959µs p90=221.167µs p99=833.542µs max=1.354958ms; push bytes per chunk 3677 (chunk messages 300, bytes 1103214)
+    ext_test.go:404: nats: commit → neighbour replica applied (r=5m raise on a generated chunk): n=300 p50=227.416µs p90=370.834µs p99=945.875µs max=1.340208ms; push bytes per chunk 3674 (chunk messages 301, bytes 1105998)
+--- PASS: TestTerrainReplicaOverNodes (0.62s)
+    --- PASS: TestTerrainReplicaOverNodes/loopback (0.30s)
+    --- PASS: TestTerrainReplicaOverNodes/nats (0.32s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	1.702s
+    replica_test.go:634: commit → replica applied over the in-process net: n=300 p50=380.916µs p90=454.709µs p99=538.125µs max=585.625µs; push bytes per chunk 2908 (heights + materials raw 12288)
+--- PASS: TestReplicaMeasure (0.12s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	0.594s

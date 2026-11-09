@@ -95,7 +95,7 @@ type ActorReport struct {
 
 // stepActor 推进一个角色一拍：积分（慢档按 Period 分步，见 advance）→ 判交接（冻结）→ 冻结中的重传 / 放弃 → 租约到期离场 → 定时回写。
 // 纯函数：只改 st、返回提交后要做的事，不碰网络与实体管理器（单元测试直接调用）。
-func (n *Node) stepActor(st *ActorState, now time.Time) actorEffects {
+func (n *Node) stepActor(st *ActorState, now time.Time, elapsed time.Duration) actorEffects {
 	var fx actorEffects
 	nowNano := now.UnixNano()
 	switch st.Role {
@@ -106,7 +106,7 @@ func (n *Node) stepActor(st *ActorState, now time.Time) actorEffects {
 			n.stats.leaseExpired.Add(1)
 			return fx
 		}
-		if n.advance(st, nowNano, &fx) {
+		if n.advance(st, nowNano, elapsed, &fx) {
 			return fx
 		}
 		st.Ver.Seq++
@@ -176,12 +176,11 @@ func (n *Node) leave(st *ActorState, fx *actorEffects, nowNano int64) {
 	fx.report = &ActorReport{State: st.EntityState, Role: RoleGone, Removed: true, Tomb: true}
 }
 
-// integrate 按固定步长积分位置，夹在世界内；NPC 碰到世界边缘反弹，玩家停在边缘。
-func (n *Node) integrate(st *ActorState) {
-	if st.VX == 0 && st.VY == 0 {
+// integrate 把位置积分 dt（advance 保证 dt 不超过 Period），夹在世界内；NPC 碰到世界边缘反弹，玩家停在边缘。
+func (n *Node) integrate(st *ActorState, dt time.Duration) {
+	if st.VX == 0 && st.VY == 0 || dt <= 0 {
 		return
 	}
-	dt := n.cfg.Period
 	bounds := n.cfg.Grid.Bounds()
 	nx := st.X + st.VX*int64(dt)/int64(time.Second)
 	ny := st.Y + st.VY*int64(dt)/int64(time.Second)

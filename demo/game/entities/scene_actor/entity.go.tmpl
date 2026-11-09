@@ -55,9 +55,9 @@ func (a *SceneActor) OnInitFinish(param *entity.EntityCreateParam) error {
 		return fmt.Errorf("scene actor %d: this process runs no partitioned scene", a.ID())
 	}
 	a.host = actor.Heartbeat.NewHost(a)
-	reg, err := a.host.Register("cell.actor", node.Config().Period, func(heartbeat.Beat) error {
+	reg, err := a.host.Register("cell.actor", node.Config().Period, func(beat heartbeat.Beat) error {
 		if n := partition.Node(); n != nil {
-			return n.ActorBeat(a, time.Now())
+			return n.ActorBeat(a, time.Now(), beat.Elapsed)
 		}
 		return nil
 	})

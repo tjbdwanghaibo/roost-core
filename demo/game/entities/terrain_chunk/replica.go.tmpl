@@ -1,0 +1,220 @@
+package terrain_chunk
+
+import (
+	"fmt"
+	"sync"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+// SyncNamespaceTerrain 是地形块的同步命名空间（实体标记 syncNamespace="terrain"），客户端按它分流。
+const SyncNamespaceTerrain = "terrain"
+
+// Replica 是别的进程写的一块在本进程的只读副本，给本进程的客户端看（分区场景，可编辑地形方案 P3）：块的实体只在写它
+// 的格进程里，玩家却连在自己的 Base 进程上、可能站在任何一个格里，所以 Base 进程把玩家附近的、别的格写的改过的块
+// 按拥有者推来的状态（gameplay/terrain 的 Replicator）放在这里，作为同一个 entitysync Manager 的 subject 下发——与
+// 实体同一个 ID、命名空间、kind 与同步编码（TerrainChunkDao 的同步 PB），客户端看不出区别。
+//
+// 不绑实体、没有 DAO：生成 DAO 的 setter 只能在 Nest 事务里调用（要登记持久化变化），这里不是事务状态。增量由本类型
+// 按“每个点最后一次改变的序号”自己算出，形状与 DAO 变化树的增量相同：改了的高度 / 材质下标各发一个绝对值，超过整字段
+// 守卫（HeightsGuard / MaterialsGuard）时发整字段；Version、BaseRevision 每次都带。所以拥有者一次改 r=5m，邻格玩家
+// 收到的也是约 0.7KB 的按下标增量，不是 12KB 的整块。
+//
+// 增量为什么正确：Manager 在一次捕获里可能打包不止一次（给老订阅者的增量、给新订阅者的全量），之间副本可能又变了；
+// 所以增量总是包含“序号大于已确认序号 acked 的全部点”、取打包那一刻的最新值，确认（AcknowledgeSubjectSyncChanges）
+// 只推进到这次捕获里第一次打包时的序号。任何订阅者持有的内容都不早于 acked，它与之后任何内容的差别都落在序号大于
+// acked 的点里，所以每个增量都能把它带到打包时的内容；确认推进得保守只会多发几个点。
+//
+// 锁：mu 保护内容与序号；Set 在 Replicator 的 goroutine 上调用，打包在 Manager 的捕获路径上调用，两边只取 mu，
+// MarkDirty 在放开 mu 之后调用（不与 SubjectSyncState 的锁嵌套）。
+type Replica struct {
+	id    int64
+	key   terrain.ChunkKey
+	state *entity.SubjectSyncState
+
+	mu           sync.Mutex
+	baseRevision int64
+	version      int64
+	heights      []uint16
+	materials    []byte
+	seq          uint64   // 每次 Set 加一；创建时的内容是 1
+	acked        uint64   // 已确认交付到的序号
+	firstPack    uint64   // 上次报捕获版本之后第一次打包时的序号；0 表示还没打包
+	heightSeq    []uint64 // 每个高度点最后一次改变时的序号
+	materialSeq  []uint64
+}
+
+// NewReplica 用拥有者的一份覆盖块（Version ≥ 1）建副本。返回的副本还没登记到任何 Manager。
+func NewReplica(key terrain.ChunkKey, o terrain.Overlay) (*Replica, error) {
+	if o.Version < 1 || len(o.Heights) != terrain.ChunkPoints || len(o.Materials) != terrain.ChunkPoints {
+		return nil, fmt.Errorf("%w: replica of %v needs an overlay (version %d, %d heights, %d materials)", terrain.ErrInvalidChunk, key, o.Version, len(o.Heights), len(o.Materials))
+	}
+	id, err := EntityID(key)
+	if err != nil {
+		return nil, err
+	}
+	r := &Replica{
+		id: id, key: key, baseRevision: o.BaseRevision, version: o.Version,
+		heights: append([]uint16(nil), o.Heights...), materials: append([]byte(nil), o.Materials...),
+		seq: 1, acked: 1, heightSeq: make([]uint64, terrain.ChunkPoints), materialSeq: make([]uint64, terrain.ChunkPoints),
+	}
+	r.state = entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{
+		Enabled: true, SubjectID: id, Namespace: SyncNamespaceTerrain, SubjectKind: uint32(EntityKindTerrainChunk),
+		Packer: replicaPacker{r},
+	})
+	return r, nil
+}
+
+// ID 是块的实体 ID（与写它的格进程里的 TerrainChunk 实体相同）。Key 是块坐标。
+func (r *Replica) ID() int64              { return r.id }
+func (r *Replica) Key() terrain.ChunkKey  { return r.key }
+func (r *Replica) Sync() *entity.SubjectSyncState { return r.state }
+
+// Version 是副本当前的版本。
+func (r *Replica) Version() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.version
+}
+
+// Set 换成拥有者更新的状态：o.Version 不新于当前版本时答 terrain.ErrStaleOverlay、什么都不改；BaseRevision 不同答
+// terrain.ErrBaseRevision（换版前后的消息由 Replicator 丢弃，到这里说明调用方用错了）。改了的点按序号记下，标脏。
+func (r *Replica) Set(o terrain.Overlay) error {
+	if len(o.Heights) != terrain.ChunkPoints || len(o.Materials) != terrain.ChunkPoints {
+		return fmt.Errorf("%w: replica of %v: %d heights, %d materials", terrain.ErrInvalidChunk, r.key, len(o.Heights), len(o.Materials))
+	}
+	r.mu.Lock()
+	switch {
+	case o.BaseRevision != r.baseRevision:
+		r.mu.Unlock()
+		return fmt.Errorf("%w: replica of %v is on %d, the update on %d", terrain.ErrBaseRevision, r.key, r.baseRevision, o.BaseRevision)
+	case o.Version <= r.version:
+		r.mu.Unlock()
+		return fmt.Errorf("%w: replica of %v holds version %d, the update is %d", terrain.ErrStaleOverlay, r.key, r.version, o.Version)
+	}
+	r.seq++
+	for i, h := range o.Heights {
+		if r.heights[i] != h {
+			r.heights[i], r.heightSeq[i] = h, r.seq
+		}
+	}
+	for i, m := range o.Materials {
+		if r.materials[i] != m {
+			r.materials[i], r.materialSeq[i] = m, r.seq
+		}
+	}
+	r.version = o.Version
+	r.mu.Unlock()
+	r.state.MarkDirty(dataengine.AllFields)
+	return nil
+}
+
+// Close 关闭同步状态（先从 Manager 退役）。
+func (r *Replica) Close() { r.state.Close() }
+
+// replicaPacker 是 Replica 的打包器（同时实现 entity.SubjectSyncChangePacker：捕获版本与确认）。
+type replicaPacker struct{ r *Replica }
+
+func (p replicaPacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+	return p.r.pack(profile, false)
+}
+
+func (p replicaPacker) PackSubjectDelta(profile entity.SyncProfile, _ uint64) (entity.FrozenSyncPayload, error) {
+	return p.r.pack(profile, true)
+}
+
+// SubjectSyncChangeVersion 报这次捕获里第一次打包时的序号（见类型说明），并为下一次捕获清零。
+func (p replicaPacker) SubjectSyncChangeVersion() uint64 {
+	r := p.r
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	version := r.firstPack
+	if version == 0 {
+		version = r.acked // 这次捕获没有打包（框架复用了冻结的载荷）：不推进
+	}
+	r.firstPack = 0
+	return version
+}
+
+func (p replicaPacker) AcknowledgeSubjectSyncChanges(version uint64) {
+	r := p.r
+	r.mu.Lock()
+	r.acked = max(r.acked, version)
+	r.mu.Unlock()
+}
+
+func (r *Replica) pack(profile entity.SyncProfile, delta bool) (entity.FrozenSyncPayload, error) {
+	if terrainChunkViewsErr != nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("terrain chunk replica: %w", terrainChunkViewsErr)
+	}
+	if _, ok := terrainChunkViews.Lookup(profile); !ok {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("%w: %+v", entity.ErrSyncViewUnknown, profile)
+	}
+	r.mu.Lock()
+	if r.firstPack == 0 {
+		r.firstPack = r.seq
+	}
+	patch := &db.SyncTerrainChunkDao{
+		EntityID: r.id, SyncFormat: terrainChunkSyncFormat,
+		BaseRevision: &db.SyncTerrainChunkDaoBaseRevisionField{Value: r.baseRevision},
+		Version:      &db.SyncTerrainChunkDaoVersionField{Value: r.version},
+	}
+	if delta {
+		patch.Heights = r.heightsDelta()
+		patch.Materials = r.materialsDelta()
+	} else {
+		patch.Heights = &db.SyncTerrainChunkDaoHeightsField{Value: append([]uint16(nil), r.heights...)}
+		patch.Materials = &db.SyncTerrainChunkDaoMaterialsField{Value: widen(r.materials)}
+	}
+	r.mu.Unlock()
+	raw, err := db.MarshalSyncTerrainChunkDao(patch)
+	if err != nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("terrain chunk replica %v: %w", r.key, err)
+	}
+	return entity.TakeFrozenSyncPayload(TerrainChunkSyncCodec, raw), nil
+}
+
+// heightsDelta / materialsDelta 是序号大于 acked 的点（持 mu）：没有就不带这个字段，超过守卫发整字段。
+func (r *Replica) heightsDelta() *db.SyncTerrainChunkDaoHeightsField {
+	updates := map[uint64]uint16{}
+	for i, s := range r.heightSeq {
+		if s > r.acked {
+			updates[uint64(i)] = r.heights[i]
+		}
+	}
+	switch {
+	case len(updates) == 0:
+		return nil
+	case len(updates) > HeightsGuard:
+		return &db.SyncTerrainChunkDaoHeightsField{Value: append([]uint16(nil), r.heights...)}
+	}
+	return &db.SyncTerrainChunkDaoHeightsField{Delta: true, Length: uint64(len(r.heights)), Updates: updates}
+}
+
+func (r *Replica) materialsDelta() *db.SyncTerrainChunkDaoMaterialsField {
+	updates := map[uint64]uint16{}
+	for i, s := range r.materialSeq {
+		if s > r.acked {
+			updates[uint64(i)] = uint16(r.materials[i])
+		}
+	}
+	switch {
+	case len(updates) == 0:
+		return nil
+	case len(updates) > MaterialsGuard:
+		return &db.SyncTerrainChunkDaoMaterialsField{Value: widen(r.materials)}
+	}
+	return &db.SyncTerrainChunkDaoMaterialsField{Delta: true, Length: uint64(len(r.materials)), Updates: updates}
+}
+
+// terrainChunkSyncFormat 是生成同步编码的格式号，从一份空 DAO 的编码里读出（不在这里写死生成器的常量）。
+var terrainChunkSyncFormat = func() uint32 {
+	patch, err := db.UnmarshalSyncTerrainChunkDao(db.NewTerrainChunkDao().MarshalSync(dataengine.AllFields))
+	if err != nil {
+		panic(fmt.Sprintf("terrain chunk replica: sync format: %v", err))
+	}
+	return patch.SyncFormat
+}()

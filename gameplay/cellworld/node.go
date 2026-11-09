@@ -116,6 +116,14 @@ type NodeConfig struct {
 	GroupResync      func(ctx context.Context, group, playerEntity int64) error
 	GroupResyncEvery time.Duration
 
+	// ---- 扩展消息（v7，ext.go）----
+
+	// Ext 是本进程收扩展消息的处理器，键是命名空间（只允许字母、数字、'-'、'_'，至多 64 个字符）。别的进程经 SendExt
+	// 发来、命名空间在这里的消息交给对应的处理器；没有处理器的计 ExtDrops 丢弃。处理器在传输回调上调用（与 Node 自己的
+	// 收件同一个准入门：CloseIngress 之后不再调用），必须快速返回、不能阻塞、不能做 I/O——要做重活就投给自己的
+	// goroutine。body 只在调用期间有效。
+	Ext map[string]ExtHandler
+
 	// OutboxSize：出站队列容量（提交后的发送、报告、销毁）；满了丢弃并计数。零值 65536。
 	OutboxSize int
 	// ReportBatch：一次投给 Scene 的角色报告上限；零值 512。
@@ -216,6 +224,11 @@ func (cfg NodeConfig) validate() error {
 		return bad("node hosts neither a cell nor players")
 	case cfg.OutboxSize < 0 || cfg.ReportBatch < 0:
 		return bad("negative queue size")
+	}
+	for space, handler := range cfg.Ext {
+		if !validWorld(space) || handler == nil {
+			return bad("ext space %q needs a name of letters, digits, '-' or '_' and a handler", space)
+		}
 	}
 	if cfg.Cell != nil {
 		switch {
@@ -390,11 +403,13 @@ type outgoing struct {
 	msg *wireMsg
 }
 
-func (n *Node) enqueue(j job) {
+func (n *Node) enqueue(j job) bool {
 	select {
 	case n.out <- j:
+		return true
 	default:
 		n.stats.outboxDrops.Add(1)
+		return false
 	}
 }
 
@@ -564,6 +579,8 @@ func (n *Node) receive(data []byte) {
 		}
 	case kindGroupSnap:
 		n.onGroupSnap(m.GroupSnap)
+	case kindExt:
+		n.onExt(m.From, m.Ext)
 	case kindGroupNotice:
 		if n.cfg.PlayerEntity == nil {
 			n.stats.decodeErrors.Add(1)
@@ -1102,7 +1119,9 @@ func (n *Node) handleSpawn(es []fentity.IThreadSafeEntity, params []any, _ ...ne
 // ---- 心跳 ----
 
 // ActorBeat 是角色 / NPC 的格内心跳回调：只锁角色本身，结果在提交后报给区域、发出 Offer / 回写 / Lost、销毁实体。
-func (n *Node) ActorBeat(a Actor, now time.Time) error {
+// elapsed 是距上一拍的实际经过时间（heartbeat.Beat.Elapsed：首拍从启动起算，已按上限夹过）：位置按它积分，不按回调
+// 次数——驱动变慢、跳拍时角色照样按设定速度走完这段时间（docs/framework/impl/10-time.md“不以回调次数推算经过时间”）。
+func (n *Node) ActorBeat(a Actor, now time.Time, elapsed time.Duration) error {
 	n.stats.actorBeats.Add(1)
 	st := a.CellState()
 	if st.Role == RoleNone || st.Role == RoleGone {
@@ -1110,7 +1129,7 @@ func (n *Node) ActorBeat(a Actor, now time.Time) error {
 	}
 	before := st.Role
 	prev := st
-	afx := n.stepActor(&st, now)
+	afx := n.stepActor(&st, now, elapsed)
 	n.setState(a, prev, st)
 	fx := &txEffects{sends: afx.sends}
 	if afx.report != nil {

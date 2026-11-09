@@ -275,13 +275,13 @@ func TestIdleBeatIntegratesWholePeriodAndFreezesInsideBand(t *testing.T) {
 	now := time.Now()
 
 	st := ActorState{EntityState: EntityState{ID: npcID(26), Kind: KindNPC, X: 5000, Y: 5000, VX: 1000, HP: 100, Idle: true, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
-	n.stepActor(&st, now)
+	n.stepActor(&st, now, testIdlePeriod)
 	if st.X != 6000 || st.Role != RoleReal {
 		t.Fatalf("idle beat moved npc to x=%d role %v, want x=6000 (one %v at 1000/s) and still real", st.X, st.Role, testIdlePeriod)
 	}
 
 	st = ActorState{EntityState: EntityState{ID: npcID(27), Kind: KindNPC, X: 9500, Y: 5000, VX: 1500, HP: 100, Idle: true, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
-	fx := n.stepActor(&st, now)
+	fx := n.stepActor(&st, now, testIdlePeriod)
 	limit := 10000 + grid.Hysteresis() + 1500*int64(worldPeriod)/int64(time.Second)
 	if st.Role != RoleFrozen || st.Handoff == nil || st.Handoff.Target != (CellID{1, 0}) {
 		t.Fatalf("idle beat across the boundary: role %v handoff %+v, want frozen towards (1,0)", st.Role, st.Handoff)
@@ -291,5 +291,35 @@ func TestIdleBeatIntegratesWholePeriodAndFreezesInsideBand(t *testing.T) {
 	}
 	if len(fx.sends) != 1 || fx.sends[0].msg.Kind != kindOffer || !fx.sends[0].msg.Offer.State.Idle {
 		t.Fatalf("offer %+v, want one offer carrying the idle tier", fx.sends)
+	}
+}
+
+// 积分按经过时间，不按回调次数（docs/framework/impl/10-time.md）：心跳驱动变慢、跳拍时（Beat.Elapsed 是三个周期），
+// 快档角色一拍走完三个周期的位移；中途越界时仍在走到边界带的那一步冻结（离本格至多 H + 一个 Period 的位移）。
+// Elapsed 为 0（同一刻的重复拍）不移动。
+func TestActorIntegratesTheElapsedTimeNotTheBeatCount(t *testing.T) {
+	grid := worldGrid(t, 2, 1)
+	cell := CellID{0, 0}
+	n := &Node{cfg: NodeConfig{Grid: grid, Cell: &cell, ViewRadius: worldViewRadius}.withDefaults(), cell: cell, hostsCell: true}
+	n.rect = grid.Rect(cell)
+	period := n.cfg.Period
+	now := time.Now()
+
+	st := ActorState{EntityState: EntityState{ID: npcID(30), Kind: KindNPC, X: 2000, Y: 5000, VX: 1000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	n.stepActor(&st, now, 3*period)
+	if want := 2000 + 3*1000*int64(period)/int64(time.Second); st.X != want {
+		t.Fatalf("a beat that covered %v moved the npc to x=%d, want x=%d (1000/s for the whole time, not one %v step)", 3*period, st.X, want, period)
+	}
+	x := st.X
+	n.stepActor(&st, now, 0)
+	if st.X != x {
+		t.Fatalf("a beat with no elapsed time moved the npc from %d to %d", x, st.X)
+	}
+
+	st = ActorState{EntityState: EntityState{ID: npcID(31), Kind: KindNPC, X: 9950, Y: 5000, VX: 2000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	n.stepActor(&st, now, 10*period)
+	limit := 10000 + grid.Hysteresis() + 2000*int64(period)/int64(time.Second)
+	if st.Role != RoleFrozen || st.X < 10000+grid.Hysteresis() || st.X > limit {
+		t.Fatalf("a long beat across the boundary: role %v at x=%d, want frozen in [%d, %d]", st.Role, st.X, 10000+grid.Hysteresis(), limit)
 	}
 }

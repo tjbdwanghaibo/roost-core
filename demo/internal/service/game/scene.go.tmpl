@@ -196,8 +196,9 @@ type Scene struct {
 
 	// terrain is the editable terrain's replication (terrain_sync.go): its
 	// own interest policy on this manager, the players' views following them
-	// and the edited chunks as subjects. Nil without terrain, and in a
-	// partitioned scene (P3). Set before Start, never changed.
+	// and the edited chunks as subjects (in a partitioned scene also the
+	// replicas of the chunks other cells write, terrain_partition.go). Nil
+	// without terrain. Set before Start, never changed.
 	terrain *terrainSync
 
 	// partition is this process's part of a partitioned scene
@@ -317,10 +318,12 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	}
 	// The editable terrain (terrain.go, already loaded and published by
 	// startTerrain) replicates through this manager: its own interest policy,
-	// a bigger object limit and the snapshot budget (terrain_sync.go). Only on
-	// an ordinary scene: a partitioned one's positions belong to the cells (P3).
+	// a bigger object limit and the snapshot budget (terrain_sync.go). In a
+	// partitioned scene the same: the players' viewpoints come from the cells'
+	// witnesses and the chunks other cells write arrive as replicas
+	// (terrain_partition.go, P3).
 	var terrainConfig *terrainSyncConfig
-	if terrainMap != nil && !partitioned.Enabled {
+	if terrainMap != nil {
 		terrainConfig = defaultTerrainSync(terrainMap.Meta().Bounds())
 	}
 	service, ok := app.Lookup[*Service](registry, app.ModService)
@@ -807,6 +810,13 @@ func (bridge *Scene) joinPartition(ctx context.Context, rt *partitionRuntime, su
 	subjectID := subject.ID()
 	playerID := playerOf(subjectID)
 	session := entitysync.SessionID(playerID)
+	// The terrain view starts where the player is (a Nest read of the
+	// Player, before transitions is taken) and then follows the cell's
+	// witnesses (terrain_partition.go).
+	var terrainAt spatial.Point
+	if bridge.terrain != nil {
+		terrainAt = rt.terrainViewpoint(ctx, subjectID)
+	}
 	err := func() error {
 		bridge.transitions.Lock()
 		defer bridge.transitions.Unlock()
@@ -831,6 +841,7 @@ func (bridge *Scene) joinPartition(ctx context.Context, rt *partitionRuntime, su
 		bridge.mu.Lock()
 		bridge.members[subjectID] = sceneMember{generation: generation, opening: opening, own: subject}
 		bridge.mu.Unlock()
+		bridge.terrain.watch(playerID, terrainAt)
 		if reopened {
 			bridge.interest.Resubscribe(playerID)
 		}
@@ -1013,6 +1024,7 @@ func (bridge *Scene) leaveLocked(subjectID int64) {
 		// are told by the next witnesses) and its own mirror and interest
 		// entry go with it (cellworld unshow); then the session closes.
 		rt.leave(context.Background(), subjectID)
+		bridge.terrain.unwatch(playerOf(subjectID))
 		bridge.unbindPartitionSelf(subjectID)
 		bridge.manager.CloseSession(entitysync.SessionID(playerOf(subjectID)))
 		return

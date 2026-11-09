@@ -1,0 +1,444 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"path/filepath"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	player "{{MODULE}}/game/entities/player"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	gamescene "{{MODULE}}/game/scene"
+	"{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/terrainmap"
+	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// 分区场景的地形副本（terrain_partition.go，可编辑地形方案 P3）：两个格进程与一个只做 Base 的进程，各自有正式的
+// Map + Nest + 实体、开了地形同步的场景（真实玩家 TCP，生产的混合同步：TerrainChunk periodic 1s）与 partitionTerrain；
+// 进程之间是一张进程内的网（代替 cellworld Node 的扩展消息，可以丢消息、录下重放）。地图 8 × 2 块，格边长 4 块：
+// 块 x 0～3 归 sid 101（格 (0,0)），4～7 归 sid 102（格 (1,0)），Ghost 带 1 块；sid 103 不托管格。
+//
+// 注意 terrainmap.Active 是进程级的：改块 handler 经它找 Map。测试里同一时刻只有一个进程改块，改之前 install。
+
+const (
+	partitionSidA int32 = 101
+	partitionSidB int32 = 102
+	partitionSidC int32 = 103
+)
+
+func partitionTerrainGrid(t *testing.T) *cellworld.Grid {
+	t.Helper()
+	g, err := cellworld.NewGrid(cellworld.GridConfig{CellSize: 4 * terrain.ChunkSize, Cols: 2, Rows: 1, GhostBand: terrain.ChunkSize, Hysteresis: 100,
+		Owners: map[cellworld.CellID]int32{{Col: 0, Row: 0}: partitionSidA, {Col: 1, Row: 0}: partitionSidB}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
+func writePartitionPack(t *testing.T, dir string, revision int64) string {
+	t.Helper()
+	path := filepath.Join(dir, "partition-r"+string(rune('0'+revision))+".pack")
+	meta := terrain.Meta{BaseRevision: revision, ChunksX: 8, ChunksY: 2, WaterLevel: 40000}
+	if err := terrain.WritePackFile(path, meta, terrain.Generated(meta, terrainSeed+uint64(revision))); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// partitionNet 是进程之间的网：投给对方 partitionTerrain 的 deliver；drop 为真的消息丢掉；录下发给每个进程的全部消息。
+type partitionNet struct {
+	mu    sync.Mutex
+	nodes map[int32]*partitionTerrain
+	drop  func(from, to int32) bool
+	sent  map[int32][][2]any // to → [from, body]
+}
+
+func newPartitionNet() *partitionNet {
+	return &partitionNet{nodes: map[int32]*partitionTerrain{}, sent: map[int32][][2]any{}}
+}
+
+func (n *partitionNet) sender(from int32) func(int32, []byte) bool {
+	return func(to int32, body []byte) bool {
+		n.mu.Lock()
+		target, drop := n.nodes[to], n.drop != nil && n.drop(from, to)
+		n.sent[to] = append(n.sent[to], [2]any{from, slices.Clone(body)})
+		n.mu.Unlock()
+		if target != nil && !drop {
+			target.deliver(from, body)
+		}
+		return true
+	}
+}
+
+func (n *partitionNet) attach(sid int32, p *partitionTerrain) {
+	n.mu.Lock()
+	n.nodes[sid] = p
+	n.mu.Unlock()
+}
+
+func (n *partitionNet) setDrop(drop func(from, to int32) bool) {
+	n.mu.Lock()
+	n.drop = drop
+	n.mu.Unlock()
+}
+
+// recorded 是到目前为止发给 to 的消息。
+func (n *partitionNet) recorded(to int32) [][2]any {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.sent[to])
+}
+
+// partitionProc 是一个分区进程里与地形有关的部分。
+type partitionProc struct {
+	sid       int32
+	process   *terrainProcess
+	transport *accessplayertcp.Runtime
+	addr      string
+	scene   *Scene
+	pt      *partitionTerrain
+	net       *partitionNet
+	stopped   bool
+	lastBrush terrain_chunk.BrushResult
+}
+
+func startPartitionProc(t *testing.T, net *partitionNet, grid *cellworld.Grid, sid int32, pack string, store *memoryChunkStore) *partitionProc {
+	t.Helper()
+	region := func(meta terrain.Meta) (terrainmap.Region, error) {
+		cell, ok := grid.CellOf(sid)
+		if !ok {
+			return terrainmap.Region{}, nil
+		}
+		own, band := grid.Rect(cell), grid.GhostBand()
+		return terrainmap.Region{Own: own, Load: spatial.Rect{
+			Min: spatial.Point{X: own.Min.X - band, Y: own.Min.Y - band}, Max: spatial.Point{X: own.Max.X + band, Y: own.Max.Y + band}}}, nil
+	}
+	observer := &sceneSyncObserver{}
+	process := startTerrainProcessWith(t, pack, region, store, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.EditPointsPerSecond = 0
+		p.m.SetPolicy(policy)
+	}, nest.NestOptionWithEntitySync(observer))
+	transport, addr := startScenePlayerTransport(t)
+	bounds := process.m.Meta().Bounds()
+	config := gamescene.Config{Width: bounds.Max.X, Height: bounds.Max.Y, BlockSize: 300, Spawn: spatial.Point{X: bounds.Max.X / 2, Y: bounds.Max.Y / 2}}
+	scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, nil, config, sceneMaxVisible, defaultTerrainSync(bounds), observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.terrain.attach(process.m)
+	scene.watchSessions(transport)
+	if err := scene.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	chunks, err := lifecycle.NewTerrainChunkLifecycle(entity.NewManagerAccess(process.entities))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scene.terrain.loadEdited(context.Background(), process.m, chunks); err != nil {
+		t.Fatal(err)
+	}
+	pt, err := newPartitionTerrain(process.m, scene.terrain, grid, sid, net.sender(sid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	net.attach(sid, pt)
+	pt.start()
+	p := &partitionProc{sid: sid, process: process, transport: transport, addr: addr, scene: scene, pt: pt, net: net}
+	t.Cleanup(p.stop)
+	return p
+}
+
+// stop 是进程停下：副本端点、场景、Nest 与 Map。可重复调用。
+func (p *partitionProc) stop() {
+	if p.stopped {
+		return
+	}
+	p.stopped = true
+	p.net.attach(p.sid, nil)
+	p.pt.stop()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = p.scene.Close(ctx)
+	p.process.stop()
+}
+
+// brush 是本进程玩家的一次编辑（改块 handler 经 terrainmap.Active 找 Map：先 install 本进程的）。
+func (p *partitionProc) brush(t *testing.T, requestID uint64, b terrain.Brush) {
+	t.Helper()
+	terrainmap.Install(p.process.m)
+	result, err := p.process.m.Brush(context.Background(), terrainBuilder, requestID, b)
+	p.lastBrush = result
+	if err != nil || result.Duplicate {
+		t.Fatalf("sid %d brush %d: %+v %v", p.sid, requestID, result, err)
+	}
+}
+
+// join 让一个玩家连上本进程、站在 at（地形视点）。
+func (p *partitionProc) join(t *testing.T, playerID int64, at spatial.Point) *terrainClient {
+	t.Helper()
+	client := dialTerrainClient(t, p.addr, playerID)
+	waitActiveSessions(t, p.transport, playerID, 1)
+	joinReady(t, p.scene, context.Background(), newScenePlayer(t, playerID), at)
+	return client
+}
+
+// waitFor 有界地等 cond（5 秒），返回用时。
+func waitFor(t *testing.T, what string, cond func() bool) time.Duration {
+	t.Helper()
+	start := time.Now()
+	for !cond() {
+		if time.Since(start) > 5*time.Second {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return time.Since(start)
+}
+
+// sameChunk 报告两张 Map 视图里 key 的版本与数据是否相同（都装着）。
+func sameChunk(a, b *terrainmap.Map, key terrain.ChunkKey) bool {
+	ca, va, la := a.View().Chunk(key)
+	cb, vb, lb := b.View().Chunk(key)
+	return la && lb && va == vb && slices.Equal(ca.Heights, cb.Heights) && slices.Equal(ca.Materials, cb.Materials)
+}
+
+// clientMatches 报告客户端持有的地形块是否正是 want 这些块、且每块与写它的格进程视图里的版本、数据逐点相同。
+func clientMatches(t *testing.T, client *terrainClient, want map[terrain.ChunkKey]*terrainmap.Map) bool {
+	t.Helper()
+	held := client.snapshot()
+	if len(held) != len(want) {
+		return false
+	}
+	for key, owner := range want {
+		got := held[chunkID(t, key)]
+		chunk, version, _ := owner.View().Chunk(key)
+		if got == nil || got.Version == nil || got.Version.Value != version || got.BaseRevision == nil || got.BaseRevision.Value != owner.Meta().BaseRevision ||
+			got.Heights == nil || !slices.Equal(got.Heights.Value, chunk.Heights) || got.Materials == nil || !sameMaterials(got.Materials.Value, chunk.Materials) {
+			return false
+		}
+	}
+	return true
+}
+
+// playerEntityOf 是玩家的实体 ID（witness 的 Player 是 SceneActor 的 ID，与 Player 同一个唯一号；地形视点只看唯一号）。
+func playerEntityOf(t *testing.T, playerID int64) int64 {
+	t.Helper()
+	id, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func raiseAt(key terrain.ChunkKey, radius int64, strength uint16) terrain.Brush {
+	at := centreOf(key)
+	return terrain.Brush{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: radius, Falloff: terrain.FalloffSmooth, Strength: strength}
+}
+
+// 方案 §9 P3 / D14：格 (0,0) 改它边上的块 (3,0)，格 (1,0) 的 Ghost 带副本在有界时间内到同一版本、逐点相同，查询一致；
+// 只做 Base 的进程上站在格 (1,0) 里的玩家，客户端收到两个格写的改过的块（别的格写的块是副本：先全量，之后的小笔刷是
+// 按下标的增量），与写它们的格进程逐点一致；格 (1,0) 上的玩家看到本格的块（实体）与邻格的块（副本）。玩家走远（witness
+// 里的位置），远处的块进入他的订阅。推送全丢时由续期补齐；录下的旧消息倒序重放不回退。
+func TestTerrainPartitionGhostAndNeighbourClients(t *testing.T) {
+	dir := t.TempDir()
+	pack := writePartitionPack(t, dir, 1)
+	grid := partitionTerrainGrid(t)
+	store := &memoryChunkStore{}
+	net := newPartitionNet()
+	a := startPartitionProc(t, net, grid, partitionSidA, pack, store)
+	b := startPartitionProc(t, net, grid, partitionSidB, pack, store)
+	c := startPartitionProc(t, net, grid, partitionSidC, pack, store)
+	border, far, ownB := terrain.ChunkKey{X: 3, Y: 0}, terrain.ChunkKey{X: 0, Y: 1}, terrain.ChunkKey{X: 4, Y: 1}
+	if !slices.Contains(b.process.m.GhostKeys(), border) || slices.Contains(b.process.m.GhostKeys(), far) {
+		t.Fatalf("sid %d ghost band %v", partitionSidB, b.process.m.GhostKeys())
+	}
+
+	// 玩家：p1 在 C（只做 Base），站在格 (1,0) 靠近分界线；p2 在 B，也在分界线旁。远处的块 (0,1) 离他们超过订阅半径。
+	at := centreOf(terrain.ChunkKey{X: 5, Y: 0})
+	p1 := c.join(t, 41001, at)
+	p2 := b.join(t, 41002, at)
+
+	start := time.Now()
+	a.brush(t, 1, raiseAt(border, 800, 20))
+	ghost := waitFor(t, "the neighbour's ghost band takes the border edit", func() bool { return sameChunk(a.process.m, b.process.m, border) })
+	if ghost > 700*time.Millisecond {
+		t.Fatalf("the border edit reached the neighbour after %v: by the subscription renewal (1s), not pushed after the commit", ghost)
+	}
+	for x := border.Bounds().Min.X; x < border.Bounds().Max.X; x += 53 {
+		ha, errA := a.process.m.Height(x, 3000)
+		hb, errB := b.process.m.Height(x, 3000)
+		if errA != nil || errB != nil || ha != hb {
+			t.Fatalf("height at (%d, 3000): owner %d %v, neighbour %d %v", x, ha, errA, hb, errB)
+		}
+	}
+	a.brush(t, 2, raiseAt(far, 600, 10))
+	b.brush(t, 3, raiseAt(ownB, 600, 10))
+	want := map[terrain.ChunkKey]*terrainmap.Map{border: a.process.m, ownB: b.process.m}
+	waitFor(t, "the base-only process's client holds both cells' chunks near it", func() bool { return clientMatches(t, p1, want) })
+	waitFor(t, "a client on the neighbouring cell holds its own and the ghost chunk", func() bool { return clientMatches(t, p2, want) })
+	t.Logf("border edit → neighbour ghost band %v; → clients of other processes within %v of the edit (periodic terrain sync 1s)", ghost, time.Since(start))
+
+	// 下一次小笔刷：邻格玩家收到的是按下标的增量，不是整块。
+	p1.takeFrames()
+	a.brush(t, 4, raiseAt(border, 300, 5))
+	waitFor(t, "the small edit reaches the base-only process's client", func() bool { return clientMatches(t, p1, want) })
+	update, _, ok := lastUpdate(p1.takeFrames(), chunkID(t, border))
+	if !ok || update.full || !update.heightsDelta || update.heightUpdates == 0 || update.heightUpdates > 50 || update.materials || update.payloadBytes > 1000 {
+		t.Fatalf("a small edit of another cell's chunk went out as %+v, want a per-index height delta", update)
+	}
+	t.Logf("an r=3m raise of another cell's chunk reached a client as %d height updates, payload %d bytes, component %d bytes",
+		update.heightUpdates, update.payloadBytes, update.componentBytes)
+
+	// 玩家走到地图另一头（witness 里他自己的位置）：远处的块进入订阅，客户端收到它。
+	to := centreOf(terrain.ChunkKey{X: 1, Y: 1}) // far (0,1) 64m、border 143m、ownB 192m：都在视野里
+	c.pt.witness(cellworld.View{Player: playerEntityOf(t, 41001), Self: cellworld.EntityState{X: to.X, Y: to.Y}})
+	want[far] = a.process.m
+	waitFor(t, "the far chunk once the player is near it", func() bool { return clientMatches(t, p1, want) })
+
+	// 丢失：A 发出的块消息全丢，副本停在旧版本；恢复之后一个续期周期内补齐。
+	net.setDrop(func(from, _ int32) bool { return from == partitionSidA })
+	a.brush(t, 5, raiseAt(border, 500, 7))
+	time.Sleep(300 * time.Millisecond)
+	if sameChunk(a.process.m, b.process.m, border) {
+		t.Fatal("the ghost band took an edit whose messages were all dropped")
+	}
+	net.setDrop(nil)
+	healed := waitFor(t, "catch-up after the loss", func() bool { return sameChunk(a.process.m, b.process.m, border) })
+	if healed > 2*time.Second {
+		t.Fatalf("catch-up took %v, more than about one renew (1s)", healed)
+	}
+	waitFor(t, "the client catches up after the loss", func() bool { return clientMatches(t, p1, want) })
+
+	// 重复与乱序：发给 B、C 的全部旧消息倒序重放，什么都不回退。
+	for _, to := range []*partitionProc{b, c} {
+		old := net.recorded(to.sid)
+		for i := len(old) - 1; i >= 0; i-- {
+			to.pt.deliver(old[i][0].(int32), old[i][1].([]byte))
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	if !sameChunk(a.process.m, b.process.m, border) {
+		t.Fatal("replaying old messages moved the ghost band back")
+	}
+	waitFor(t, "the client after the replay", func() bool { return clientMatches(t, p1, want) })
+	if s := c.pt.rep.Stats(); s.Stale == 0 || s.ApplyErrors != 0 || s.DecodeErrors != 0 || s.WrongOwner != 0 {
+		t.Fatalf("sid %d replicator stats %+v", partitionSidC, s)
+	}
+	// 视图一侧的规则：拥有者说“原始块”不能撤掉更新的覆盖块；本格自己写的块不接受副本。
+	if err := b.process.m.ApplyReplica(border, terrain.Overlay{BaseRevision: 1}); !errors.Is(err, terrain.ErrStaleOverlay) || !sameChunk(a.process.m, b.process.m, border) {
+		t.Fatalf("a base message over a newer overlay: %v", err)
+	}
+	if err := b.process.m.ApplyReplica(ownB, terrain.Overlay{BaseRevision: 1}); !errors.Is(err, terrainmap.ErrNotOwned) {
+		t.Fatalf("a replica of the process's own chunk: %v", err)
+	}
+	// 跨格编辑仍然拒绝（P5 / T08）：Ghost 带里的块有了实时副本，也只归写它的格；B 的玩家改它整笔拒绝、什么都不写。
+	terrainmap.Install(b.process.m)
+	_, beforeVersion, _ := b.process.m.View().Chunk(border)
+	if _, err := b.process.m.Brush(context.Background(), terrainBuilder, 1, raiseAt(border, 300, 10)); !errors.Is(err, terrainmap.ErrNotOwned) {
+		t.Fatalf("sid %d edited a ghost chunk of another cell: %v", partitionSidB, err)
+	}
+	if _, v, _ := b.process.m.View().Chunk(border); v != beforeVersion || !sameChunk(a.process.m, b.process.m, border) {
+		t.Fatalf("a refused cross-cell edit changed the ghost chunk: version %d → %d", beforeVersion, v)
+	}
+}
+
+// 重启：B 停下期间 A 接着改，B 重启时按库里的记录装入（这里库里没有这块的记录：启动快照是原始块），订阅一到就补齐；
+// A 重启（订阅表丢了）之后，B 与 C 的续期在一个周期内重新订上，之后的改动照常推到，客户端与 A 一致。
+func TestTerrainPartitionReplicasCatchUpAfterRestarts(t *testing.T) {
+	dir := t.TempDir()
+	pack := writePartitionPack(t, dir, 1)
+	grid := partitionTerrainGrid(t)
+	store := &memoryChunkStore{}
+	net := newPartitionNet()
+	a := startPartitionProc(t, net, grid, partitionSidA, pack, store)
+	b := startPartitionProc(t, net, grid, partitionSidB, pack, store)
+	c := startPartitionProc(t, net, grid, partitionSidC, pack, store)
+	border := terrain.ChunkKey{X: 3, Y: 1}
+	p1 := c.join(t, 41011, centreOf(terrain.ChunkKey{X: 4, Y: 1}))
+	a.brush(t, 1, raiseAt(border, 800, 20))
+	waitFor(t, "the first edit at the neighbour", func() bool { return sameChunk(a.process.m, b.process.m, border) })
+
+	b.stop()
+	a.brush(t, 2, raiseAt(border, 500, 9))
+	a.brush(t, 3, raiseAt(border, 400, 6))
+	b = startPartitionProc(t, net, grid, partitionSidB, pack, store)
+	if version, _ := b.process.m.View().Version(border); version != 0 {
+		t.Fatalf("the restarted neighbour's snapshot holds version %d, want the base chunk", version)
+	}
+	took := waitFor(t, "the restarted neighbour catches up", func() bool { return sameChunk(a.process.m, b.process.m, border) })
+	t.Logf("restarted neighbour caught up %v after its start", took)
+
+	a.stop()
+	a.process.persist(store)
+	a = startPartitionProc(t, net, grid, partitionSidA, pack, store)
+	if version, _ := a.process.m.View().Version(border); version != 3 {
+		t.Fatalf("the restarted owner loaded version %d, want 3", version)
+	}
+	waitFor(t, "the replicas subscribe again to the restarted owner", func() bool { return a.pt.rep.Stats().Subscribers == 2 })
+	a.brush(t, 4, raiseAt(border, 300, 4))
+	waitFor(t, "an edit after the owner's restart reaches the neighbour", func() bool { return sameChunk(a.process.m, b.process.m, border) })
+	waitFor(t, "and the base-only process's client", func() bool {
+		return clientMatches(t, p1, map[terrain.ChunkKey]*terrainmap.Map{border: a.process.m})
+	})
+}
+
+// D13：原始地形换版（BaseRevision 1 → 2）。B 先在新包上起来，邻格 A 写的块 (3,0) 的记录还基于旧版本：不装入、查询
+// ErrNotLoaded（启动快照）。A 在新包上起来时把这块重置为 Version 0（丢弃），B 的订阅得到“原始块”、撤回到新包的原始块，
+// 查询与 A 一致、不再是 unloadable；换版前录下的旧推送（BaseRevision 1、版本更大）重放给 B 一律丢弃，不会把丢弃掉的
+// 覆盖块装回来；A 在新包上改出版本 1 后照常推到。
+func TestTerrainPartitionDiscardWithdrawsTheOverlay(t *testing.T) {
+	dir := t.TempDir()
+	oldPack, newPack := writePartitionPack(t, dir, 1), writePartitionPack(t, dir, 2)
+	grid := partitionTerrainGrid(t)
+	store := &memoryChunkStore{}
+	net := newPartitionNet()
+	border := terrain.ChunkKey{X: 3, Y: 0}
+	a := startPartitionProc(t, net, grid, partitionSidA, oldPack, store)
+	b := startPartitionProc(t, net, grid, partitionSidB, oldPack, store)
+	a.brush(t, 1, raiseAt(border, 800, 20))
+	a.brush(t, 2, raiseAt(border, 800, 20))
+	waitFor(t, "the old revision's edit at the neighbour", func() bool { return sameChunk(a.process.m, b.process.m, border) })
+	stale := net.recorded(partitionSidB)
+	b.stop()
+	a.stop()
+	a.process.persist(store)
+
+	b = startPartitionProc(t, net, grid, partitionSidB, newPack, store)
+	if held := b.process.m.ReplicaHeld(border); held != -1 || b.process.stats.StaleBase != 1 {
+		t.Fatalf("before the owner discards: held %d, load stats %+v", held, b.process.stats)
+	}
+	a = startPartitionProc(t, net, grid, partitionSidA, newPack, store)
+	if a.process.stats.Discarded != 1 {
+		t.Fatalf("the owner's load %+v, want the stale record discarded", a.process.stats)
+	}
+	waitFor(t, "the neighbour withdraws to the new base chunk", func() bool { return b.process.m.ReplicaHeld(border) == 0 })
+	if !sameChunk(a.process.m, b.process.m, border) || len(b.process.m.Unloadable()) != 0 {
+		t.Fatalf("after the discard: same %v, unloadable %v", sameChunk(a.process.m, b.process.m, border), b.process.m.Unloadable())
+	}
+	drops := b.pt.rep.Stats().BaseRevisionDrops
+	for _, m := range stale {
+		b.pt.deliver(m[0].(int32), m[1].([]byte))
+	}
+	waitFor(t, "the old revision's pushes are dropped", func() bool { return b.pt.rep.Stats().BaseRevisionDrops > drops })
+	time.Sleep(100 * time.Millisecond)
+	if held := b.process.m.ReplicaHeld(border); held != 0 {
+		t.Fatalf("an old revision's push brought the discarded overlay back: held %d", held)
+	}
+	at := centreOf(border)
+	a.brush(t, 3, terrain.Brush{Op: terrain.BrushFlatten, X: at.X, Y: at.Y, Radius: 500, Falloff: terrain.FalloffLinear, Target: 2000})
+	waitFor(t, "the first edit on the new pack reaches the neighbour", func() bool { return sameChunk(a.process.m, b.process.m, border) })
+	if version, _ := a.process.m.View().Version(border); version != 1 {
+		t.Fatalf("the owner's first edit on the new pack is version %d, want 1 (brush %+v, commit failures %d)", version, a.lastBrush, a.process.m.CommitFailures())
+	}
+}

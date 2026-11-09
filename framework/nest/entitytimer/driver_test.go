@@ -8,10 +8,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/metrics"
 )
 
 // fakeClock 是可控的业务时钟：测试推进它，再显式调用 DeliverDue，事件顺序由测试决定。
@@ -129,6 +131,7 @@ func newTestDriver(t *testing.T) (*Driver, *fakeClock, *recordingClient, *liveSe
 	d := NewDriver(Config{Name: "test.timer", Handler: nest.NewHandlerName("handlerTickTestTimer"), Redeliver: 10 * time.Second})
 	clk := newFakeClock()
 	d.SetClock(clk.Now)
+	d.systemNow = clk.Now
 	client := &recordingClient{}
 	live := &liveSet{}
 	if err := d.Bind(client, live.lookup); err != nil {
@@ -396,4 +399,208 @@ func TestDriverConcurrentReportsClosesAndDeliveries(t *testing.T) {
 	if client.calls.Load() != before {
 		t.Fatal("delivered after every owner closed")
 	}
+}
+
+func TestDueBacklogIsBoundedAndRetained(t *testing.T) {
+	d, clk, client, live := newTestDriver(t)
+	for id := int64(1); id <= 300; id++ {
+		owner := newOwner(id)
+		live.set(owner)
+		d.report(d.newSlot(owner), 1, clk.Now())
+	}
+	if got := d.DeliverDue(context.Background()); got != 128 {
+		t.Fatalf("first batch delivered %d, want 128", got)
+	}
+	if got := len(client.take()); got != 128 {
+		t.Fatalf("admitted %d", got)
+	}
+	if d.Pending() != 300 {
+		t.Fatal("backlog lost")
+	}
+	if got := d.DeliverDue(context.Background()); got != 0 {
+		t.Fatalf("immediate catch-up delivered %d", got)
+	}
+	for _, want := range []struct {
+		count int
+		first int64
+	}{{128, 129}, {44, 257}} {
+		clk.Advance(10 * time.Millisecond)
+		if got := d.DeliverDue(context.Background()); got != want.count {
+			t.Fatalf("next batch %d, want %d", got, want.count)
+		}
+		for i, sent := range client.take() {
+			if sent.id != want.first+int64(i) {
+				t.Fatalf("out of order: %+v", sent)
+			}
+		}
+	}
+	if got := d.DeliverDue(context.Background()); got != 0 {
+		t.Fatalf("replayed %d admitted timers", got)
+	}
+}
+
+func TestFullQueueStopsBeforeReservingRemainingTimers(t *testing.T) {
+	d, clk, client, live := newTestDriver(t)
+	var slots []*slot
+	for id := int64(1); id <= 5; id++ {
+		owner := newOwner(id)
+		live.set(owner)
+		s := d.newSlot(owner)
+		slots = append(slots, s)
+		d.report(s, 1, clk.Now())
+	}
+	client.fail = nest.ErrQueueFull
+	d.DeliverDue(context.Background())
+	if got := client.calls.Load(); got != 1 {
+		t.Fatalf("queue full made %d attempts, want 1", got)
+	}
+	for _, s := range slots[1:] {
+		if s.inflight || s.gen != 1 || !s.wake.Equal(clk.Now()) {
+			t.Fatalf("unattempted timer changed: %+v", s)
+		}
+	}
+	client.fail = nil
+	if d.DeliverDue(context.Background()) != 0 {
+		t.Fatal("backpressure cooldown bypassed")
+	}
+	clk.Advance(time.Second)
+	if got := d.DeliverDue(context.Background()); got != 5 {
+		t.Fatalf("recovered %d timers, want all 5", got)
+	}
+	if got := fmt.Sprint(ids(client.take())); got != "[2 3 4 5 1]" {
+		t.Fatalf("recovery order %s", got)
+	}
+
+}
+
+func TestCancelledDeliveryDoesNotReserveTimers(t *testing.T) {
+	d, clk, client, live := newTestDriver(t)
+	owner := newOwner(1)
+	live.set(owner)
+	s := d.newSlot(owner)
+	d.report(s, 1, clk.Now())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	d.DeliverDue(ctx)
+	if client.calls.Load() != 0 || s.inflight {
+		t.Fatal("cancelled delivery attempted or reserved a timer")
+	}
+}
+
+func TestDriverKickCannotBypassBatchCooldown(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		d, _, client, live := newTestDriver(t)
+		d.SetClock(time.Now)
+		d.systemNow = time.Now
+		for id := int64(1); id <= 300; id++ {
+			o := newOwner(id)
+			live.set(o)
+			d.report(d.newSlot(o), 1, d.Now())
+		}
+		if err := d.Start(); err != nil {
+			t.Fatal(err)
+		}
+		defer d.Stop(context.Background())
+		synctest.Wait()
+		if got := client.calls.Load(); got != 128 {
+			t.Fatalf("initial calls %d", got)
+		}
+		for range 5 {
+			d.wake()
+			synctest.Wait()
+		}
+		if got := client.calls.Load(); got != 128 {
+			t.Fatalf("kick bypassed cooldown: %d", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+		synctest.Wait()
+		if got := client.calls.Load(); got != 256 {
+			t.Fatalf("second batch %d", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+		synctest.Wait()
+		if got := client.calls.Load(); got != 300 {
+			t.Fatalf("last batch %d", got)
+		}
+	})
+}
+
+// 准入返回之前允许提交报告到达；失败只能结算它自己的预占代际。
+type callbackClient struct {
+	*recordingClient
+	dispatch func() error
+}
+
+func (c callbackClient) Dispatch(context.Context, nest.HandlerName, int64, nest.Params, ...nest.SendOpt) error {
+	return c.dispatch()
+}
+
+func TestRejectedDeliveryPreservesANewerReport(t *testing.T) {
+	d, clk, client, live := newTestDriver(t)
+	owner := newOwner(1)
+	live.set(owner)
+	s := d.newSlot(owner)
+	d.report(s, 1, clk.Now())
+	future := clk.Now().Add(time.Hour)
+	d.Bind(callbackClient{client, func() error { d.report(s, 2, future); return nest.ErrQueueFull }}, live.lookup)
+	d.DeliverDue(context.Background())
+	due, ok := d.DueOf(owner)
+	if !ok || !due.Equal(future) || !s.wake.Equal(future) {
+		t.Fatalf("newer report replaced: due=%v wake=%v", due, s.wake)
+	}
+}
+
+func TestDiscardedEntriesConsumeTheScanBudget(t *testing.T) {
+	d, clk, client, live := newTestDriver(t)
+	for id := int64(1); id <= 300; id++ {
+		old := newOwner(id)
+		d.report(d.newSlot(old), 1, clk.Now())
+		live.set(newOwner(id))
+	}
+	d.DeliverDue(context.Background())
+	if got := d.Pending(); got != 172 {
+		t.Fatalf("pending=%d; expected only 128 stale entries examined", got)
+	}
+	if client.calls.Load() != 0 {
+		t.Fatal("stale instances were delivered")
+	}
+}
+
+// 准入失败（队列满以外，例如引擎停止中）同样结束本轮：换下一个实体不会成功，逐条重试只会刷 Warn。
+// 投递一轮之后报告堆顶超期多久（OverdueMetric），积压超过单 Driver 预算时可以报警。
+func TestAdmissionFailureEndsTheRoundAndOverdueIsReported(t *testing.T) {
+	d, clk, client, live := newTestDriver(t)
+	for id := int64(1); id <= 5; id++ {
+		owner := newOwner(id)
+		live.set(owner)
+		d.report(d.newSlot(owner), 1, clk.Now())
+	}
+	clk.Advance(3 * time.Second)
+	client.fail = errors.New("nest: engine stopping")
+	d.DeliverDue(context.Background())
+	if got := client.calls.Load(); got != 1 {
+		t.Fatalf("an admission failure made %d attempts in one round, want 1", got)
+	}
+	if got := overdueGauge(t, "test.timer"); got != 3000 {
+		t.Fatalf("overdue after a refused round = %dms, want 3000", got)
+	}
+	client.fail = nil
+	clk.Advance(time.Second)
+	if got := d.DeliverDue(context.Background()); got != 5 {
+		t.Fatalf("recovered %d timers, want 5", got)
+	}
+	if got := overdueGauge(t, "test.timer"); got != 0 {
+		t.Fatalf("overdue after draining = %dms, want 0", got)
+	}
+}
+
+func overdueGauge(t *testing.T, driver string) int64 {
+	t.Helper()
+	for _, m := range metrics.Snapshot() {
+		if m.Name == OverdueMetric && m.Labels["driver"] == driver {
+			return m.Value
+		}
+	}
+	t.Fatalf("no %s gauge for driver %s", OverdueMetric, driver)
+	return 0
 }

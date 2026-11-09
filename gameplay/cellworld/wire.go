@@ -17,8 +17,9 @@ import (
 // v4：EntityState 带战斗面板（Panel）；面板命令与结论（kindPanel / kindPanelResult）；伤害结论带实际伤害值；owner 通知带
 // Real 上的面板序号。v5：队伍面板的队员快照与成员表通知（kindGroupSnap / kindGroupNotice，group.go）。未上线，旧版本的
 // 消息按坏消息丢弃（升级须先停旧进程）。v6：入场序号（Entry，RV-20261106-03）随 Enter、Leave 与交接 Offer 传递，Leave
-// 只结束同一次入场的角色。
-const WireVersion uint8 = 6
+// 只结束同一次入场的角色。v7：扩展消息（kindExt：按命名空间交给 NodeConfig.Ext 的处理器，内容由处理器自己编码；
+// 第一个用户是可编辑地形的边界块副本，gameplay/terrain 的 Replicator）。
+const WireVersion uint8 = 7
 
 // EntityKind 区分玩家（有 BaseApp，接收视野）与 NPC（只在 Cell 里模拟）。
 type EntityKind uint8
@@ -152,6 +153,7 @@ const (
 	kindPanelResult
 	kindGroupSnap
 	kindGroupNotice
+	kindExt
 )
 
 // ghostBatch：Real 的 owner 每拍发给一个邻格的 Ghost 更新（完整状态）与删除。
@@ -300,6 +302,12 @@ type groupNotice struct {
 	To    []int64 `msgpack:"to"`
 }
 
+// extMsg 是扩展消息（v7）：Space 选处理器（NodeConfig.Ext 的键），Body 是处理器自己的编码，cellworld 不解释。
+type extMsg struct {
+	Space string `msgpack:"sp"`
+	Body  []byte `msgpack:"b"`
+}
+
 type lostNotice struct {
 	State EntityState `msgpack:"s"`
 }
@@ -335,6 +343,7 @@ type wireMsg struct {
 	PanelResult  *panelResult     `msgpack:"pr,omitempty"`
 	GroupSnap    *groupSnap       `msgpack:"gs,omitempty"`
 	GroupNotice  *groupNotice     `msgpack:"gn,omitempty"`
+	Ext          *extMsg          `msgpack:"ex,omitempty"`
 }
 
 var errBadMessage = errors.New("cellworld: malformed message")
@@ -393,6 +402,8 @@ func decodeMsg(data []byte) (*wireMsg, error) {
 		present = m.GroupSnap != nil
 	case kindGroupNotice:
 		present = m.GroupNotice != nil
+	case kindExt:
+		present = m.Ext != nil
 	}
 	if !present {
 		return nil, fmt.Errorf("%w: kind %d without body", errBadMessage, m.Kind)

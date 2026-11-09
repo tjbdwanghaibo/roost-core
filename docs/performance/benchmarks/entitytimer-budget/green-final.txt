@@ -1,0 +1,2 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	1.593s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/entitytimer	1.661s

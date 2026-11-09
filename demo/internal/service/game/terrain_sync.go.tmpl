@@ -39,7 +39,10 @@ import (
 // 配错）与玩家 / 怪超过 100 一样不断开（超额降级，D17）：Manager 暂缓放不下的块并通知地形的 Interest，视野收紧到放得下、
 // 从最远的块开始退订，有空位时逐步放宽；计 entitysync_over_limit_deferred_total{namespace="terrain"}。
 //
-// 只在不分区的场景里接：分区场景的玩家位置归格进程（cellworld），Base 进程上没有可跟随的位置；跨格的地形同步是 P3。
+// 分区场景（P3，terrain_partition.go）用同一套：玩家的视点不来自本进程的移动，而是格进程发来的 witness 里玩家自己的
+// 位置（cellworld 的 Hooks.Witness → moved）；subject 除了本进程写的改过的块（实体），还有玩家附近别的格写的改过的块
+// （terrain_chunk.Replica，拥有者推来的只读副本，showReplica / hideReplica）。follow 把视点的变化告诉分区一侧，
+// 它据此决定要订阅哪些块的副本。
 const (
 	// terrainViewRadius 是地形视野的进入半径（世界单位，200m），离开半径多 terrainViewHysteresis（20m）。
 	terrainViewRadius     = 20000
@@ -80,6 +83,22 @@ type terrainSync struct {
 	shown    map[int64]struct{}     // 已登记、已放进 Interest 的块实体 ID
 	reported map[int64]spatial.Point // 玩家 ID → 上次报告给 Interest 的视点
 	closed   atomic.Bool
+	// follow 是视点变化的通知（分区场景，terrain_partition.go）：watching 为假表示玩家不再看地形。在报告视点的同一
+	// goroutine 上、放开 mu 之后调用，不得阻塞。nil 时不通知。
+	follow atomic.Pointer[func(playerID int64, at spatial.Point, watching bool)]
+}
+
+// setFollow 登记视点变化的通知（见 follow）。玩家能进来之前调用。
+func (s *terrainSync) setFollow(notify func(playerID int64, at spatial.Point, watching bool)) {
+	if s != nil {
+		s.follow.Store(&notify)
+	}
+}
+
+func (s *terrainSync) notify(playerID int64, at spatial.Point, watching bool) {
+	if notify := s.follow.Load(); notify != nil {
+		(*notify)(playerID, at, watching)
+	}
 }
 
 func newTerrainSync(manager *entitysync.Manager, config terrainSyncConfig) (*terrainSync, error) {
@@ -118,6 +137,7 @@ func (s *terrainSync) watch(playerID int64, at spatial.Point) {
 	if err := s.interest.Watch(playerID, at, policy.ObserverView{}); err != nil {
 		slog.Warn("terrain sync: player not watching the terrain", "player_id", playerID, "err", err)
 	}
+	s.notify(playerID, at, true)
 }
 
 // moved 是玩家移动提交之后的视点更新：离上次报告不到 terrainViewStep 时不报。
@@ -137,6 +157,7 @@ func (s *terrainSync) moved(playerID int64, at spatial.Point) {
 	if err := s.interest.MoveView(playerID, at); err != nil && !errors.Is(err, policy.ErrInterestUnknown) {
 		slog.Debug("terrain sync: view not moved", "player_id", playerID, "err", err)
 	}
+	s.notify(playerID, at, true)
 }
 
 // unwatch 撤掉玩家的地形视野（Leave）。会话随场景的 Leave 关闭，订阅一起删掉。
@@ -150,6 +171,7 @@ func (s *terrainSync) unwatch(playerID int64) {
 	if err := s.interest.Unwatch(playerID); err != nil && !errors.Is(err, policy.ErrInterestUnknown) {
 		slog.Debug("terrain sync: player not released", "player_id", playerID, "err", err)
 	}
+	s.notify(playerID, spatial.Point{}, false)
 }
 
 // show 把一块改过的块登记为 subject、放在块中心（Map 的提交后通知与 loadEdited 调用）；已登记的什么都不做。
@@ -177,6 +199,31 @@ func (s *terrainSync) show(chunk *terrain_chunk.TerrainChunk) {
 		s.forget(id)
 		slog.Error("terrain sync: an edited chunk was not shown; players will not receive it until a restart", "chunk", chunk.Key().String(), "err", err)
 	}
+}
+
+// showReplica 把别的格写的一块的只读副本登记为 subject、放在块中心（分区场景，terrain_partition.go）。同一 ID 上一次
+// hideReplica 的退役还没发完时排在它之后登记（remove 先于 create）；这期间 Interest 的订阅被拒、按它的重试表再说。
+// 不阻塞：Manager 与 Interest 的调用只取短锁。
+func (s *terrainSync) showReplica(r *terrain_chunk.Replica) error {
+	if s.closed.Load() {
+		return errors.New("terrain sync: closed")
+	}
+	if _, err := s.manager.RegisterAfterRetirement(r.Sync(), nil); err != nil {
+		return fmt.Errorf("terrain sync: register replica %v: %w", r.Key(), err)
+	}
+	b := r.Key().Bounds()
+	if err := s.interest.Show(r.ID(), spatial.Point{X: (b.Min.X + b.Max.X) / 2, Y: (b.Min.Y + b.Max.Y) / 2}); err != nil {
+		_ = s.manager.Unregister(r.ID())
+		return fmt.Errorf("terrain sync: show replica %v: %w", r.Key(), err)
+	}
+	return nil
+}
+
+// hideReplica 撤下一份副本：先从 AOI 撤（政策释放订阅），再退役 subject（订阅者下一帧收到 remove），最后关闭状态。
+func (s *terrainSync) hideReplica(r *terrain_chunk.Replica) {
+	_ = s.interest.Hide(r.ID())
+	_ = s.manager.Unregister(r.ID())
+	r.Close()
 }
 
 func (s *terrainSync) forget(id int64) {
@@ -278,5 +325,5 @@ func terrainNamespaceLimits() map[string]entitysync.NamespaceLimits {
 	}
 }
 
-// terrainNamespace 是 TerrainChunk 实体的同步命名空间（实体标记 syncNamespace="terrain"），客户端按它分流。
-const terrainNamespace = "terrain"
+// terrainNamespace 是 TerrainChunk 实体（与别的格写的块的副本）的同步命名空间，客户端按它分流。
+const terrainNamespace = terrain_chunk.SyncNamespaceTerrain

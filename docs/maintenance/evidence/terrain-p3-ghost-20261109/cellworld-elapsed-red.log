@@ -1,0 +1,5 @@
+--- FAIL: TestActorIntegratesTheElapsedTimeNotTheBeatCount (0.00s)
+    tier_test.go:311: a beat that covered 150ms moved the npc to x=2050, want x=2150 (1000/s for the whole time, not one 50ms step)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	0.631s
+FAIL

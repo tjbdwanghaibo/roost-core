@@ -18,6 +18,7 @@ import (
 	"{{MODULE}}/game/partition"
 	"{{MODULE}}/game/runtimeid"
 	"{{MODULE}}/game/settings"
+	"{{MODULE}}/game/terrainmap"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	apperrors "{{MODULE}}/internal/errors"
 	pb "{{MODULE}}/protocol/pb"
@@ -73,6 +74,8 @@ type partitionRuntime struct {
 	access *coreentity.ManagerAccess
 
 	mirrors *policy.Mirrors[cellworld.EntityState]
+	// terrain 是可编辑地形的副本端点（terrain_partition.go：Ghost 带推送、邻格玩家可见）；没有地形时为 nil。
+	terrain *partitionTerrain
 	// push 是玩家连接的推送（player TCP Runtime.PushPlayer）：攻击结论推给攻击方。没有接入层时为 nil。
 	push    func(ctx context.Context, playerID int64, msgID uint32, message any) error
 	cancel  context.CancelFunc
@@ -174,6 +177,18 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 		rt.cell = &cell
 		cfg.Cell = &cell
 	}
+	// 可编辑地形（P3）：块的副本经本 Node 的扩展消息收发；玩家的地形视点跟着 witness 里他自己的位置走。
+	if m := terrainmap.Active(); m != nil && bridge.terrain != nil {
+		rt.terrain, err = newPartitionTerrain(m, bridge.terrain, grid, identity.Sid, func(to int32, body []byte) bool {
+			return rt.node.SendExt(to, terrainReplicaSpace, body)
+		})
+		if err != nil {
+			rt.mirrors.Close()
+			return nil, fmt.Errorf("partition: %w", err)
+		}
+		cfg.Ext = map[string]cellworld.ExtHandler{terrainReplicaSpace: rt.terrain.deliver}
+		cfg.Hooks.Witness = rt.terrain.witness
+	}
 	node, err := cellworld.NewNode(cfg)
 	if err != nil {
 		rt.mirrors.Close()
@@ -200,6 +215,9 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 	case <-rt.done:
 		partition.Uninstall(node)
 		return nil, errors.New("partition: node did not start")
+	}
+	if rt.terrain != nil {
+		rt.terrain.start()
 	}
 	// 别的进程经传输发来的消息（Enter、攻击、交接、witness、队伍快照与成员通知）是本进程的外部输入：登记给 App，停机第一步
 	// 关掉收件并等在途的回调（App 生命周期方案），之后 Service.Shutdown 才停 Node 的出站（stop）、Nest 才停。
@@ -229,6 +247,8 @@ func (rt *partitionRuntime) stop() {
 	if rt == nil {
 		return
 	}
+	// 地形副本先停：它经 Node 发消息、往场景的 Manager 登记副本。
+	rt.terrain.stop()
 	if rt.cancel != nil {
 		rt.cancel()
 		<-rt.done
@@ -472,11 +492,24 @@ func (rt *partitionRuntime) enter(ctx context.Context, playerEntity int64) error
 	if err != nil {
 		return err
 	}
-	at := spatial.Point{X: rt.config.SpawnX, Y: rt.config.SpawnY}
+	return rt.node.Enter(ctx, playerEntity, actor, rt.entryPoint(st), rt.config.PlayerHP)
+}
+
+// entryPoint 是玩家此刻在分区场景里的位置：已在世界里（重连）或有保存的位置时取 Base 记下的位置，否则取出生点。
+func (rt *partitionRuntime) entryPoint(st cellworld.BaseState) spatial.Point {
 	if pos := st.Pos(); pos != (spatial.Point{}) && rt.grid.Bounds().Contains(pos) {
-		at = pos
+		return pos
 	}
-	return rt.node.Enter(ctx, playerEntity, actor, at, rt.config.PlayerHP)
+	return spatial.Point{X: rt.config.SpawnX, Y: rt.config.SpawnY}
+}
+
+// terrainViewpoint 是玩家进场时的地形视点（之后跟着 witness 走）；读不到 Base 状态时用出生点。
+func (rt *partitionRuntime) terrainViewpoint(ctx context.Context, playerEntity int64) spatial.Point {
+	st, err := rt.node.BaseStateOf(ctx, playerEntity)
+	if err != nil {
+		return spatial.Point{X: rt.config.SpawnX, Y: rt.config.SpawnY}
+	}
+	return rt.entryPoint(st)
 }
 
 // leave 让玩家离开分区场景（尽力而为：消息丢了由 SceneActor 的租约兜底离场）。
@@ -498,6 +531,9 @@ func (rt *partitionRuntime) stats(ctx context.Context) (map[string]any, error) {
 			"applied": rt.panelsApplied.Load(), "duplicate": rt.panelsDuplicate.Load(), "unknown": rt.panelsUnknown.Load(),
 		},
 		"spawned": rt.spawned.Load(),
+	}
+	if rt.terrain != nil {
+		out["terrain"] = rt.terrain.stats()
 	}
 	if rt.cell != nil {
 		out["cell"] = rt.cell.String()

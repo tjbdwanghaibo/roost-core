@@ -1,4 +1,4 @@
-# terrain：可编辑地形的底座（P1 框架部分 + P2 笔刷 + P3 行走与寻路）
+# terrain：可编辑地形的底座（P1 框架部分 + P2 笔刷 + P3 行走与寻路、块副本）
 
 [可编辑地形方案](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md) P1 的框架部分：块坐标、原始地形包（base pack）的读写、内存中的地形视图与整数定点查询。纯逻辑加文件 I/O，不依赖 Nest / DataEngine / entitysync。P2 加了笔刷（`brush.go`：抬高 / 降低 / 整平 / 改材质的纯整数计算，见下文“笔刷”）。P3 加了行走规则与寻路（`walk.go`：坡度 / 台阶 / 下落 / 游泳的判定与高度场 A*，见下文“行走与寻路”）。被玩家改过的块（`TerrainChunk` 实体、持久化、同步、重启一致）由上层接入，本包只接收它们的数据作为覆盖块。实测数字见证据目录：[P1](../../docs/maintenance/evidence/terrain-p1-20261108/README.md)、[P2](../../docs/maintenance/evidence/terrain-p2-20261108/README.md)。
 
@@ -128,6 +128,19 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 - 格进程启动：对本格（加 Ghost 带）`ChunksIn` 出的块，有持久记录的 `SetOverlay`，其余 `LoadBase`（I/O，放在 io / long 池或启动阶段）。实测 1w 地图装满一个格（2304 块）单线程约 120ms、8 路并行约 29ms，堆约 27MB。
 - 原始地形换版（`BaseRevision` 变了）时旧覆盖块会被 `ErrBaseRevision` 拒绝。维护者 2026-11-08 决定丢弃旧编辑：game-demo 的地形服务在启动时把本格基于旧版本的记录经正式事务重置为空（Version 0）、改用原始块，邻格的不动（方案第 14 节）。
 - 笔刷：上层在锁住 `Chunks(meta)` 的全部块之后，用块的当前数据（改过的块取 DAO，没改过的取原始块）调 `Apply`，把每块的 `PointChange` 写进 DAO；`Validate` 只检查笔刷本身，频率 / 配额、权限、建筑占位等由上层做（配额的点数可以先用 `View.BrushChanges` 在锁外估算）。
+
+## 块副本（P3，`replica.go`）
+
+块只归包含它的格的进程（拥有者）写；别的进程要看它（邻格的 Ghost 带、把玩家附近的块同步给本进程的客户端）时放一份只读副本，由 `Replicator` 维护（[方案 §21](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#21-p3-ghost-副本t05d192026-11-09)）。与传输无关：`ReplicatorConfig.Send` 是“非阻塞地把一段字节发给某个 sid”，至多一次、可能丢失 / 重复 / 乱序（game-demo 用 cellworld 的扩展消息，线上格式 v7）。
+
+- **订阅兼补齐**：副本按拥有者（`OwnerOf`）分组，把想要的块（`Want`）连同本地持有的版本（`ReplicaStore.Held`：0 原始块、≥ 1 覆盖块版本、−1 显示不了）发给拥有者，每 `Renew`（缺省 1s）重发一次；拥有者记下订阅（租约 `Lease`，缺省 3 × Renew），只答版本不同的块（覆盖块发整块，原始块发“原始块”）。推送丢了、任一边重启（拥有者的订阅表丢了），至多一个 Renew 后对齐。本进程自己写的块不订阅。
+- **推送**：拥有者在块提交之后调 `Changed(key)`（可在 Nest 的提交后回调里调：只登记、叫醒），Run 的 goroutine 把这块的当前状态发给订阅了它的副本；发出之前又提交了几次只发最新一份。整块 raw DEFLATE，r=5m 一次编辑约 2.9～3.7KB / 块 / 订阅进程。
+- **顺序**：副本只认比本地新的版本（`Apply` 对旧版本答 `ErrStaleOverlay`，计 `Stale`）；每条状态都是整块，丢中间版本也没关系。
+- **代际**：每条消息带发件进程原始地形包的 `BaseRevision`，与本进程不同的整条丢弃（计 `BaseRevisionDrops`；拥有者不答，副本不收）。版本只在同一 `BaseRevision` 内比较：换版时拥有者把旧记录重置为 Version 0（D13），换版前的推送带旧 `BaseRevision`、到换版后的进程一律丢弃，不会把丢弃的覆盖块装回来。同一 `BaseRevision` 内“同一个版本只对应一份内容”的前提是拥有者只推送持久的版本（改块事务 strict，提交后回调在 WAL 落盘之后）。
+- **只认拥有者**：一块的状态只接受 `OwnerOf(块)` 发来的（计 `WrongOwner`），拥有者只答自己 `Owns` 的块。
+- **并发**：订阅表、想要的块只在 `Run` 的 goroutine 上读写；`Want` / `Changed` / `Deliver` 只是短锁 + 非阻塞信号，任何 goroutine 可调；`ReplicaStore` 的三个方法都在 Run 的 goroutine 上调用（解压、读包在这里做）。
+- **限制**：拥有者数据倒退（从备份恢复数据库）不在保证内，副本持有的更新版本不会被拉回（计 `Ahead`），要重启副本进程；各进程原始地形包版本不同（只换了一部分进程）时两边之间不复制，换版要整组进程换包重启。
+- **测试**：`replica_test.go`（进程内网络：推送、丢失 / 重复 / 乱序、任一边重启补齐、D13 换版后撤回且旧包的拥有者不答新包的订阅、只认拥有者、线上格式；`ROOST_TERRAIN_REPLICA_PERF=1` 记延迟与字节），经真实 cellworld Node（回环与 nats-server）的用例在 `gameplay/cellworld/ext_test.go`。
 
 ## 限制
 

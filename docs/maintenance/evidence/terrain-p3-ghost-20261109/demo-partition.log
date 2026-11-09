@@ -1,0 +1,19 @@
+    terrain_partition_test.go:290: border edit → neighbour ghost band 12.24775ms; → clients of other processes within 47.920084ms of the edit (periodic terrain sync 1s)
+    terrain_partition_test.go:300: an r=3m raise of another cell's chunk reached a client as 21 height updates, payload 195 bytes, component 273 bytes
+--- PASS: TestTerrainPartitionGhostAndNeighbourClients (3.53s)
+    terrain_partition_test.go:371: restarted neighbour caught up 7.382958ms after its start
+--- PASS: TestTerrainPartitionReplicasCatchUpAfterRestarts (2.21s)
+--- PASS: TestTerrainPartitionDiscardWithdrawsTheOverlay (1.24s)
+    terrain_partition_test.go:290: border edit → neighbour ghost band 11.904125ms; → clients of other processes within 47.083208ms of the edit (periodic terrain sync 1s)
+    terrain_partition_test.go:300: an r=3m raise of another cell's chunk reached a client as 21 height updates, payload 195 bytes, component 273 bytes
+--- PASS: TestTerrainPartitionGhostAndNeighbourClients (3.51s)
+    terrain_partition_test.go:371: restarted neighbour caught up 9.622958ms after its start
+--- PASS: TestTerrainPartitionReplicasCatchUpAfterRestarts (2.20s)
+--- PASS: TestTerrainPartitionDiscardWithdrawsTheOverlay (1.22s)
+    terrain_partition_test.go:290: border edit → neighbour ghost band 12.13125ms; → clients of other processes within 42.353583ms of the edit (periodic terrain sync 1s)
+    terrain_partition_test.go:300: an r=3m raise of another cell's chunk reached a client as 21 height updates, payload 195 bytes, component 273 bytes
+--- PASS: TestTerrainPartitionGhostAndNeighbourClients (3.49s)
+    terrain_partition_test.go:371: restarted neighbour caught up 7.445042ms after its start
+--- PASS: TestTerrainPartitionReplicasCatchUpAfterRestarts (2.20s)
+--- PASS: TestTerrainPartitionDiscardWithdrawsTheOverlay (1.23s)
+ok  	example.com/planet/internal/service/game	22.622s
