@@ -1,6 +1,6 @@
 # 可编辑地形 P3 移动与寻路（单格）验证证据（2026-11-09）
 
-实现与设计见 [方案 §22](../../FEATURE-2026-11-08-editable-terrain.md#22-p3-移动与寻路实施结果2026-11-09)；进度见 [TERRAIN-STATUS T06](../../TERRAIN-STATUS.md)。分支 `feat/terrain-p3-move`（本地），不是已发布状态。基准、变异与首轮测试在 main `23247c38` 基础上取得；变基到 `93c00538`、再合并 main `3fb089d9`（T01/T02 编辑身份）后，生成 demo 的 build / vet / 全部测试与新增端到端 race 重跑通过（`demo-test-merged.log`、`demo-race-merged.log`），库代码在两次变动中没有改。
+实现与设计见 [方案 §22](../../FEATURE-2026-11-08-editable-terrain.md#22-p3-移动与寻路实施结果2026-11-09)；进度见 [TERRAIN-STATUS T06](../../TERRAIN-STATUS.md)。分支 `feat/terrain-p3-move`（本地），不是已发布状态。基准、变异与首轮测试在 main `23247c38` 基础上取得；变基到 `93c00538`、再合并 main `3fb089d9`（T01/T02 编辑身份）后，生成 demo 的 build / vet / 全部测试与新增端到端 race 重跑通过（`demo-test-merged.log`、`demo-race-merged.log`），仓库侧 build / vet / race / codegen / 根包 / 文档锚点也重跑通过（`core-merged.log`）；库代码在两次变动中没有改。
 
 ## 环境
 

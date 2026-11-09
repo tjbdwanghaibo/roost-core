@@ -1,0 +1,14 @@
+$ GOWORK=off go build ./...
+ok
+$ GOWORK=off go vet ./gameplay/terrain ./gameplay/movement ./codegen/internal/roost/
+ok
+$ GOWORK=off go test -race -count=1 ./gameplay/terrain ./gameplay/movement
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	3.918s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/movement	32.916s
+$ GOWORK=off go test -count=1 ./codegen/internal/roost/
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	305.390s
+$ GOWORK=off go test -count=1 .
+ok  	github.com/tjbdwanghaibo/roost-core	9.794s
+$ python3 scripts/check-doc-anchors.py
+checked 253 files, 0 broken
+$ gofmt -l gameplay

@@ -1,0 +1,7 @@
+$ GOWORK=off go test -race -count=3 -run 'TestTerrainWalkIsHeld|TestTerrainALake|TestTerrainEditsDuring' ./internal/service/game/
+ok  	example.com/planet/internal/service/game	70.061s
+$ GOWORK=off go test -race -count=1 ./game/scene/runtime/ ./game/actor/ ./game/entities/player/ ./game/handler/
+ok  	example.com/planet/game/scene/runtime	1.735s
+ok  	example.com/planet/game/actor	1.885s
+ok  	example.com/planet/game/entities/player	2.360s
+ok  	example.com/planet/game/handler	2.890s
