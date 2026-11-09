@@ -300,3 +300,46 @@ func TestTypeScheduleHeldSessionRecoversWithoutWaitingForDeadline(t *testing.T) 
 		t.Fatal("post-recovery change was lost")
 	}
 }
+
+// 周期窗口内唯一需要快照的会话被 Hold（入场后等客户端 Ready）时，本轮没有快照接收方：
+// 不能每次 Flush 都重新打包快照、推进版本，也不能因此把老观察者到期的增量降成全量。
+func TestTypeScheduleHeldSnapshotDoesNotRepackWhileWaiting(t *testing.T) {
+	m, tr, now := cadenceManager(t)
+	var value byte
+	packs := 0
+	s := cadenceSubject(102, 2, &value, &packs)
+	if err := m.Register(s); err != nil {
+		t.Fatal(err)
+	}
+	open(t, m, 1)
+	mustSubscribe(t, m, 1, 102, entity.SyncProfile{})
+	mustFlush(t, m)
+	tr.take(1)
+	if err := m.OpenHeldSession(2); err != nil {
+		t.Fatal(err)
+	}
+	mustSubscribe(t, m, 2, 102, entity.SyncProfile{})
+	packs = 0
+	baseVersion := s.Version()
+	value = 1
+	s.MarkDirty(1)
+	for range 5 {
+		*now = now.Add(100 * time.Millisecond)
+		mustFlush(t, m)
+	}
+	if packs != 0 || s.Version() != baseVersion || len(tr.take(1)) != 0 || len(tr.take(2)) != 0 {
+		t.Fatalf("held-only snapshot while waiting: packs=%d version=%d (base %d); want 0 packs and no version change", packs, s.Version(), baseVersion)
+	}
+	*now = now.Add(500 * time.Millisecond)
+	mustFlush(t, m)
+	if u := oneFrame(t, tr, 1).updates[102]; u.Full || u.Payload.BytesCopy()[0] != 1 {
+		t.Fatalf("due update for the live observer: %+v; want a delta carrying the change", u)
+	}
+	if err := m.ReadySession(2); err != nil {
+		t.Fatal(err)
+	}
+	mustFlush(t, m)
+	if u := oneFrame(t, tr, 2).updates[102]; !u.Full || u.Payload.BytesCopy()[0] != 1 {
+		t.Fatalf("ready session snapshot: %+v", u)
+	}
+}

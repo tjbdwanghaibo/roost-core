@@ -197,6 +197,9 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 		waiting := dirty && !force && subj.cadence != nil && subj.cadence.waiting(m.cadenceTime())
 		if waiting {
 			m.markPending(id)
+			// 窗口内只为本轮能交付的快照捕获：每次 Flush 都会重排 waiting subject，
+			// 若把 Hold 会话的需求也算进来，就会每轮重打包、推进版本，并让老观察者到期时退成全量。
+			snapshotProfiles = subj.deliverableSnapshotProfilesLocked(selectedSnapshots, held)
 		}
 		wantsCapture := len(snapshotProfiles) > 0 || dirty && !waiting
 		if wantsCapture {

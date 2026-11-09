@@ -3,6 +3,7 @@ package entitysync
 import (
 	"fmt"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -50,6 +51,22 @@ func (m *Manager) hasOnChange() bool {
 		}
 	}
 	return false
+}
+
+// deliverableSnapshotProfilesLocked 是周期窗口内的快照需求：只收本轮能拿到快照的订阅
+// （未被 Hold、未超额暂缓、冷创建预算已入选）。窗口内的快照不消费脏数据，但会推进版本并让下一次周期交付回退全量，
+// 所以没有接收方时不能捕获（PrepareSnapshotViews 的“无接收方不反复推进版本”）。调用方持有 s.mu。
+func (s *subject) deliverableSnapshotProfilesLocked(selected map[*subscription]bool, held map[SessionID]bool) []entity.SyncProfile {
+	var profiles []entity.SyncProfile
+	for sid, sub := range s.subscribers {
+		if sub.kind != kindSnapshot || sub.overLimit || held[sid] || selected != nil && !selected[sub] {
+			continue
+		}
+		if !slices.Contains(profiles, sub.profile) {
+			profiles = append(profiles, sub.profile)
+		}
+	}
+	return profiles
 }
 
 // 每个显式周期类型的状态独立计时。通知器不取 subject 锁，避免实体提交与捕获锁序反转。

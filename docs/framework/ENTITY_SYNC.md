@@ -42,7 +42,7 @@ entitysync.ManagerConfig{
 显式 periodic 要求 Interval > 0；显式 on_change 要求 Interval = 0 且 Manager 本身为 on_change，避免混用全局发送预算时钟。启动仍需要正式 `NestOptionWithEntitySync` 绑定生产者，不能只调用 BindSyncProducer 冒充提交接入。**game-demo 的生产 NewScene 已启用：Player/Monster 等类型 on_change，TerrainChunk 的脏增量周期 1 秒。** 服务通过 `wiring/nest.NestSyncObserverProvider` 在 Nest 构造前提供观察者，Scene 创建后接入；禁止与 EntitySyncSetup/self_sync 或显式观察者同时配置。历史功能/测量夹具的无观察者构造器仍保留原 periodic 行为，其历史带宽结果不代表新生产模式。
 
 - 周期类型提交时不冻结内容。首次变脏起计时，连续修改不续期；常规 Flush 在到期前不捕获/发送 live 增量。仅脏对象保留在 pending 中，由现有 Manager tick 检查，不遍历空闲实体。实际交付还受 tick 粒度、持久门槛、预算和网络影响，不是硬实时期限。
-- 首次全量、恢复/profile 变更的全量及 remove 不受该周期等待。快照仍受既有预算与提交/持久门槛。周期内即时快照使用 `SubjectSyncState.PrepareSnapshotViews`，只向需要快照的订阅交付，不清除待发变化、不确认 DAO 变化树。
+- 首次全量、恢复/profile 变更的全量及 remove 不受该周期等待。快照仍受既有预算与提交/持久门槛。周期内即时快照使用 `SubjectSyncState.PrepareSnapshotViews`，只向需要快照的订阅交付，不清除待发变化、不确认 DAO 变化树；窗口内只为本轮能拿到快照的订阅捕获（未 Hold、未超额暂缓、冷创建预算已入选），只剩 Hold 会话（入场后等 Ready）需要快照时不捕获，避免每次 Flush 重打包、推进版本并让老观察者到期改发 Full（2026-11-09 审查修复，`TestTypeScheduleHeldSnapshotDoesNotRepackWhileWaiting`）。
 - **即时快照的代价**：若它捕获了待发变化并成功提交，会推进内容版本；下一次普通周期捕获改发 Full，保证旧订阅和新订阅都收到正确状态，避免把快照之前的列表操作再当作新增量应用。新玩家频繁进入编辑热点可能增加全量量，应单独测量，不保证所有场景带宽下降。
 - 普通显式 Flush 遵守类型周期；Drain / Stop 绕过周期等待，仍保留持久水位、发送预算、重试和 context 规则，不承诺客户端必达。失败不重设本批到期时间；正常捕获完成后若仍有捕获期间的新写入，则保留脏数据并从结算时启动下一批窗口。
 - 每次首次变脏的时间不同，自然分散检查；同拍大批变脏仍可能集中到期。第一版未引入时间轮：脏集合在每次 Flush 被检查，事务观察者也可能发出合并唤醒，但周期对象不因此冻结/编码。后续优化该扫描与唤醒前先测量，不能宣称已经消除全部调度成本。
