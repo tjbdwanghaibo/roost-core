@@ -1,6 +1,7 @@
 package cellworld
 
 import (
+	"math/rand/v2"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -321,5 +322,195 @@ func TestActorIntegratesTheElapsedTimeNotTheBeatCount(t *testing.T) {
 	limit := 10000 + grid.Hysteresis() + 2000*int64(period)/int64(time.Second)
 	if st.Role != RoleFrozen || st.X < 10000+grid.Hysteresis() || st.X > limit {
 		t.Fatalf("a long beat across the boundary: role %v at x=%d, want frozen in [%d, %d]", st.Role, st.X, 10000+grid.Hysteresis(), limit)
+	}
+}
+
+// ---- 地面钩子（NodeConfig.Surface，可编辑地形 P3 的跨格移动）----
+
+// stripeGround 是测试用的带高度地面：地面格 100 单位一格（四舍五入归格，与 terrain.Walker 的 1m 节点同形），
+// blocked 里的格不可进入，speed 里的格是减速格（千分比），undefined 里的格没有定义（块没装入）。Step 不相邻时答 false，
+// 用来证明积分每次至多跨到相邻的格。
+type stripeGround struct {
+	blocked, undefined map[spatial.Point]bool
+	speed              map[spatial.Point]int32
+	steps              atomic.Int64
+	jumps              atomic.Int64
+}
+
+func (g *stripeGround) Cell(p spatial.Point) spatial.Point {
+	floor := func(v int64) int64 {
+		q := (v + 50) / 100
+		if (v+50)%100 < 0 {
+			q--
+		}
+		return q
+	}
+	return spatial.Point{X: floor(p.X), Y: floor(p.Y)}
+}
+
+func (g *stripeGround) Step(from, to spatial.Point) (int32, bool) {
+	g.steps.Add(1)
+	if g.undefined[from] {
+		return 0, false
+	}
+	if dx, dy := to.X-from.X, to.Y-from.Y; dx < -1 || dx > 1 || dy < -1 || dy > 1 {
+		g.jumps.Add(1)
+		return 0, false
+	}
+	if g.blocked[to] || g.undefined[to] {
+		return 0, false
+	}
+	if s, ok := g.speed[to]; ok {
+		return s, true
+	}
+	return 1000, true
+}
+
+// openGround 处处放行、速度 1000。
+type openGround struct{}
+
+func (openGround) Cell(p spatial.Point) spatial.Point    { return p }
+func (openGround) Step(_, _ spatial.Point) (int32, bool) { return 1000, true }
+
+func surfaceNode(t testing.TB, ground func() Surface) *Node {
+	grid := worldGrid(t, 2, 1)
+	cell := CellID{0, 0}
+	n := &Node{cfg: NodeConfig{Grid: grid, Cell: &cell, ViewRadius: worldViewRadius, Surface: ground}.withDefaults(), cell: cell, hostsCell: true}
+	n.rect = grid.Rect(cell)
+	return n
+}
+
+// 没有地面（Surface 不设、Surface 返回 nil）时积分与之前逐位相同；处处放行、速度 1000 的地面也走到同一个点（按整数点
+// 走的终点就是原来的终点，世界边缘的速度规则照旧）。随机的位置、速度（含碰世界边缘、越过格边界冻结）与拍长，NPC 与玩家。
+func TestANilSurfaceIntegratesExactlyLikeNoSurface(t *testing.T) {
+	plain := surfaceNode(t, nil)
+	viaNil := surfaceNode(t, func() Surface { return nil })
+	open := surfaceNode(t, func() Surface { return openGround{} })
+	rng := rand.New(rand.NewPCG(11, 17))
+	now := time.Now()
+	for i := range 2000 {
+		kind := KindNPC
+		if i%2 == 1 {
+			kind = KindPlayer
+		}
+		st := ActorState{EntityState: EntityState{ID: npcID(int64(100 + i)), Kind: kind, X: rng.Int64N(10400), Y: rng.Int64N(10000),
+			VX: rng.Int64N(4001) - 2000, VY: rng.Int64N(4001) - 2000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+		elapsed := time.Duration(rng.Int64N(int64(8 * worldPeriod)))
+		a, b, c := st, st, st
+		for beat := range 4 {
+			plain.stepActor(&a, now, elapsed)
+			viaNil.stepActor(&b, now, elapsed)
+			open.stepActor(&c, now, elapsed)
+			if a.EntityState != b.EntityState || a.Role != b.Role || a.EntityState != c.EntityState || a.Role != c.Role {
+				t.Fatalf("case %d beat %d (elapsed %v): no surface %+v %v, nil surface %+v %v, open surface %+v %v",
+					i, beat, elapsed, a.EntityState, a.Role, b.EntityState, b.Role, c.EntityState, c.Role)
+			}
+		}
+	}
+	if s := plain.Stats().SurfaceBlocks + viaNil.Stats().SurfaceBlocks + open.Stats().SurfaceBlocks; s != 0 {
+		t.Fatalf("surface blocks %d without a refusing surface", s)
+	}
+}
+
+// 地面不放行下一格时停在上一个整数点：玩家速度清零（与停在世界边缘相同），NPC 原路反向（与碰世界边缘反弹相同）、
+// 下一拍往回走；对角走时每次至多跨到相邻的格（Step 从不被问到不相邻的格）。
+func TestSurfaceStopsTheWalkAtTheLastPointBeforeARefusedCell(t *testing.T) {
+	ground := &stripeGround{blocked: map[spatial.Point]bool{}}
+	for y := int64(-5); y <= 105; y++ {
+		ground.blocked[spatial.Point{X: 12, Y: y}] = true // x ∈ [1150, 1250)
+	}
+	n := surfaceNode(t, func() Surface { return ground })
+	now := time.Now()
+
+	player := ActorState{EntityState: EntityState{ID: actorID(1), Kind: KindPlayer, X: 1000, Y: 5000, VX: 2000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	n.stepActor(&player, now, 4*worldPeriod)
+	if player.X != 1149 || player.Y != 5000 || player.VX != 0 || player.VY != 0 || player.Role != RoleReal {
+		t.Fatalf("player walking into the refused cell: at (%d, %d) v (%d, %d) %v, want stopped at (1149, 5000) with v 0", player.X, player.Y, player.VX, player.VY, player.Role)
+	}
+	n.stepActor(&player, now, 4*worldPeriod)
+	if player.X != 1149 {
+		t.Fatalf("a stopped player moved on to x=%d", player.X)
+	}
+
+	npc := ActorState{EntityState: EntityState{ID: npcID(2), Kind: KindNPC, X: 1000, Y: 5000, VX: 2000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	n.stepActor(&npc, now, worldPeriod)
+	n.stepActor(&npc, now, worldPeriod)
+	if npc.X != 1149 || npc.VX != -2000 {
+		t.Fatalf("npc walking into the refused cell: at x=%d vx %d, want stopped at 1149 and turned back (vx -2000)", npc.X, npc.VX)
+	}
+	n.stepActor(&npc, now, worldPeriod)
+	if npc.X != 1049 || npc.VX != -2000 {
+		t.Fatalf("npc after turning back: at x=%d vx %d, want 1049 walking west", npc.X, npc.VX)
+	}
+
+	diag := ActorState{EntityState: EntityState{ID: actorID(3), Kind: KindPlayer, X: 1000, Y: 1000, VX: 1500, VY: 1100, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	n.stepActor(&diag, now, 6*worldPeriod)
+	if diag.X != 1149 || diag.VX != 0 {
+		t.Fatalf("diagonal walk into the refused column: at (%d, %d) v (%d, %d), want stopped at x 1149", diag.X, diag.Y, diag.VX, diag.VY)
+	}
+	if j := ground.jumps.Load(); j != 0 {
+		t.Fatalf("the walk asked Step about %d non-adjacent cells", j)
+	}
+	if n.Stats().SurfaceBlocks == 0 {
+		t.Fatal("blocks are not counted")
+	}
+}
+
+// 减速格（游泳）里同样的时间走得近：速度 500 的格里一拍走一半的路，速度不变；站立的格没有定义（块没装入）时一步
+// 不走（不猜平地），玩家速度清零。
+func TestSurfaceSlowsTheWalkAndAnUndefinedCellHoldsIt(t *testing.T) {
+	water := map[spatial.Point]int32{}
+	for x := int64(20); x <= 40; x++ {
+		water[spatial.Point{X: x, Y: 50}] = 500
+	}
+	ground := &stripeGround{speed: water, undefined: map[spatial.Point]bool{{X: 60, Y: 50}: true}}
+	n := surfaceNode(t, func() Surface { return ground })
+	now := time.Now()
+	swim := ActorState{EntityState: EntityState{ID: actorID(4), Kind: KindPlayer, X: 3000, Y: 5000, VX: 1000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	n.stepActor(&swim, now, 4*worldPeriod)
+	if swim.X != 3100 || swim.VX != 1000 {
+		t.Fatalf("swimming 200ms at 1000/s with speed 500‰: at x=%d vx %d, want 3100 (half the way) and the speed kept", swim.X, swim.VX)
+	}
+	// 朝世界边缘（y 0）游：一拍的位移本会被夹到边缘、NPC 反弹，但减速后没走到边缘——速度不变，世界边缘的规则只在走到
+	// 终点时生效；路程按没夹过的位移算，够走到边缘的那一拍才反弹。
+	for y := int64(0); y <= 2; y++ {
+		water[spatial.Point{X: 30, Y: y}] = 500
+	}
+	edge := ActorState{EntityState: EntityState{ID: npcID(7), Kind: KindNPC, X: 3000, Y: 140, VY: -2000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	for i, want := range []struct{ y, vy int64 }{{90, -2000}, {40, -2000}, {0, 2000}} {
+		n.stepActor(&edge, now, worldPeriod)
+		if edge.Y != want.y || edge.VY != want.vy {
+			t.Fatalf("npc swimming towards the world edge, beat %d: at y=%d vy %d, want y=%d vy %d", i, edge.Y, edge.VY, want.y, want.vy)
+		}
+	}
+	stuck := ActorState{EntityState: EntityState{ID: actorID(5), Kind: KindPlayer, X: 6000, Y: 5000, VX: 1000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	n.stepActor(&stuck, now, 4*worldPeriod)
+	if stuck.X != 6000 || stuck.VX != 0 {
+		t.Fatalf("standing on an undefined cell: at x=%d vx %d, want not moved and stopped", stuck.X, stuck.VX)
+	}
+}
+
+// 越过格边界之前被地面挡住就不交接：NPC 朝东走向边界（x 10000，冻结线 10100），挡在边界前一格时原路折回，一直是
+// 本格的 Real；不挡时同样的拍冻结、交给 (1,0)。
+func TestSurfaceBlockBeforeTheBoundaryKeepsTheActorReal(t *testing.T) {
+	ground := &stripeGround{blocked: map[spatial.Point]bool{}}
+	for y := int64(0); y <= 100; y++ {
+		ground.blocked[spatial.Point{X: 100, Y: y}] = true // x ∈ [9950, 10050)
+	}
+	now := time.Now()
+	for _, tc := range []struct {
+		name   string
+		ground func() Surface
+		frozen bool
+	}{{"blocked", func() Surface { return ground }, false}, {"open", func() Surface { return openGround{} }, true}} {
+		n := surfaceNode(t, tc.ground)
+		st := ActorState{EntityState: EntityState{ID: npcID(6), Kind: KindNPC, X: 9800, Y: 5000, VX: 2000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+		n.stepActor(&st, now, 10*worldPeriod)
+		if frozen := st.Role == RoleFrozen; frozen != tc.frozen {
+			t.Fatalf("%s: role %v at x=%d, want frozen %v", tc.name, st.Role, st.X, tc.frozen)
+		}
+		if !tc.frozen && (st.X >= 9950 || st.VX != -2000) {
+			t.Fatalf("%s: at x=%d vx %d, want turned back before 9950", tc.name, st.X, st.VX)
+		}
 	}
 }

@@ -60,11 +60,16 @@ func (n *Node) setState(a Actor, before, after ActorState) {
 // advance 积分 Real 的一拍：把这一拍实际经过的时间 elapsed（Beat.Elapsed，慢档约一个 IdlePeriod，驱动变慢或跳拍时更长，
 // 心跳已按上限夹过）按 Period 分步，每步之后判交接；某一步越界（且不在被拒后的退避期内）就在那一步冻结、返回 true，
 // 剩下的位移不再走（冻结后不积分）。每步至多一个 Period 的位移，所以冻结点离本格至多 H + 一步，与快档相同。静止的角色
-// 只判一次；elapsed 为 0 时不移动、只判一次。
+// 只判一次；elapsed 为 0 时不移动、只判一次。地面钩子（NodeConfig.Surface）每拍开始取一次，各子步用同一个地面；
+// 被地面挡住的玩家速度清零，后面的子步不再走（见 integrate）。
 func (n *Node) advance(st *ActorState, nowNano int64, elapsed time.Duration, fx *actorEffects) bool {
+	var ground Surface
+	if n.cfg.Surface != nil {
+		ground = n.cfg.Surface()
+	}
 	for {
 		dt := min(elapsed, n.cfg.Period)
-		n.integrate(st, dt)
+		n.integrate(st, dt, ground)
 		elapsed -= dt
 		if target, ok := n.cfg.Grid.ShouldHandoff(n.cell, st.Pos()); ok && nowNano >= st.RetryAfter {
 			n.freeze(st, target, nowNano, fx)
