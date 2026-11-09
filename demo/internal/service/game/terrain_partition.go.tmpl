@@ -64,6 +64,21 @@ type partitionTerrain struct {
 	done   chan struct{}
 }
 
+// partitionSurface 是托管格的进程给 cellworld 积分用的地面（NodeConfig.Surface，可编辑地形 P3 跨格移动）：本进程地形
+// 视图上的行走规则（terrainmap.Map.Walker：缺省规则与建筑占位钩子），限在分区世界里。视图装着本格外扩 Ghost 带的块，
+// 邻格写的块由 partitionTerrain 的副本推送更新，所以角色交接之前走出本格的那一段按邻格最新已提交的地形判定；块没装入
+// （副本装不进来、地图外）时 Walker 答不能走，角色停下，不猜平地。查询只读视图的原子槽位，在 Nest short 池上调用。
+//
+// 分区世界大于地形图时，图外不可走（Walker 的规则：地图外不可进入）；启动时记 Warn。
+func partitionSurface(m *terrainmap.Map, grid *cellworld.Grid) func() cellworld.Surface {
+	walker := m.Walker()
+	walker.Bounds = grid.Bounds()
+	if world, area := grid.Bounds(), m.Meta().Bounds(); !area.Contains(world.Min) || !area.Contains(spatial.Point{X: world.Max.X - 1, Y: world.Max.Y - 1}) {
+		slog.Warn("terrain: the partitioned world is larger than the terrain map; nothing can walk outside the map", "world", world, "map", area)
+	}
+	return func() cellworld.Surface { return &walker }
+}
+
 // newPartitionTerrain 建本进程的副本端点；send 是经 cellworld Node 的扩展消息发出（Node 建好之后才会被调用）。
 func newPartitionTerrain(m *terrainmap.Map, sync *terrainSync, grid *cellworld.Grid, sid int32, send func(int32, []byte) bool) (*partitionTerrain, error) {
 	if m == nil || sync == nil {
