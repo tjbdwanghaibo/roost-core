@@ -241,9 +241,10 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `timer.unhandled_dropped_total{kind}` | Counter | 到期时因类型（`kind` = 类型号）没有注册 handler 而被删除的定时器节点（维护者决定 D-L2）。**基线应为零**；非零说明存储里还有某种已下线 / 漏注册类型的节点，它们在到期时被丢弃。每次删除另有 Warn `timer: dropped a due timer with no handler registered for its type`；宿主加载时对这类存量类型每种告警一次（`timer: stored timers have no handler registered for their type`）。宿主事务回滚后重试同一次 Tick 会再计一次 |
 | `entitytimer.delivered_total{driver}` | Counter | 按实体持久定时器的驱动（`framework/nest/entitytimer`，D11）投递出去的 Tick 消息；`driver` 是生成组件的驱动名（如 `player.timer`）。只有已加载实例的最早期限到了才投，不随在线人数增长 |
 | `entitytimer.redelivered_total{driver}` | Counter | 其中因上一次投递之后没有收到实例的提交报告而重投的（缺省 10s）。**基线应接近零**；持续增长说明 Tick handler 在报错 / 回滚或提交被拒 |
-| `entitytimer.deliver_failed_total{driver}` | Counter | Tick 准入失败（队列满、引擎停止中），1s 后重试 |
+| `entitytimer.deliver_failed_total{driver}` | Counter | Tick 准入失败（队列满、引擎停止中）：结束本轮，整个 Driver 1s 后重试 |
 | `entitytimer.dropped_total{driver}` | Counter | 到期时发现实例已卸载 / 删档或已被同 ID 的新实例取代而丢弃、不投递的条目（驱动不唤醒不在内存的实体） |
 | `entitytimer.pending{driver}` | Gauge | 索引里等待到期（含已投递待报告）的实例数 |
+| `entitytimer.overdue_ms{driver}` | Gauge | 每轮投递之后堆顶条目超过期限多久（毫秒，未到期为 0）。单 Driver 上限 `BatchLimit / BatchInterval`（缺省每秒 12,800 条），驱动不补跑：**持续上升说明到期速率超过预算或 Nest 准入跟不上，应告警**，调大预算或分到更多 Driver |
 
 ### 实体心跳（gameplay/heartbeat）
 
@@ -375,6 +376,7 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `entitysync_over_limit_waiting` | Gauge | `sync/entitysync/over_limit.go:SetGauge` |
 | `entitysync_sessions_lost_total` | Counter | `sync/entitysync/subscriptions.go:IncCounter` |
 | `entitytimer.deliver_failed_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
+| `entitytimer.overdue_ms` | Gauge | `nest/entitytimer/driver.go:SetGauge` |
 | `entitytimer.delivered_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
 | `entitytimer.dropped_total` | Counter | `nest/entitytimer/driver.go:IncCounter` |
 | `entitytimer.pending` | Gauge | `nest/entitytimer/driver.go:SetGauge` |

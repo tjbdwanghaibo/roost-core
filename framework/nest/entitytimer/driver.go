@@ -1,4 +1,4 @@
-// Package entitytimer 是按实体的持久定时器（DESIGN-TODO D11，维护者 2026-10-17 决定方案 B）。
+// Package entitytimer 是按实体的持久定时器。
 //
 // 三件事分在三处：
 //
@@ -40,6 +40,10 @@ const (
 	// DefaultMaxWait 是驱动循环最长的一次睡眠。业务时钟的偏移可以在运行中调整，睡眠按系统时间计，
 	// 所以每隔这么久重新读一次业务时钟；它是每个驱动一次唤醒，不是每个实体一次。
 	DefaultMaxWait = time.Second
+	// DefaultBatchLimit 限制一轮检查的到期实例数，失效实例也占预算，避免长时间占用索引锁和投递循环。
+	DefaultBatchLimit = 128
+	// DefaultBatchInterval 是积压批次之间的最短系统时间间隔，不按停顿时长补批。
+	DefaultBatchInterval = 10 * time.Millisecond
 	// dispatchRetry 是准入失败（队列满、引擎停止中）之后的重试间隔。
 	dispatchRetry = time.Second
 )
@@ -55,6 +59,10 @@ const (
 	DroppedMetric = "entitytimer.dropped_total"
 	// PendingMetric 是索引里等待到期（含已投递待报告）的实例数（Gauge）。
 	PendingMetric = "entitytimer.pending"
+	// OverdueMetric 是投递一轮之后堆顶条目超过期限多久（毫秒，未到期为 0）。持续增长说明到期速率超过
+	// BatchLimit / BatchInterval 这个单 Driver 上限（缺省 128 / 10ms = 每秒 12,800 条）或 Nest 准入跟不上：
+	// 驱动不补跑，积压不会自己追回，要调大预算或分到更多 Driver。
+	OverdueMetric = "entitytimer.overdue_ms"
 )
 
 // ErrNotBound 表示驱动还没有接上 Nest（Bind）就被要求投递或启动。
@@ -70,6 +78,10 @@ type Config struct {
 	Redeliver time.Duration
 	// MaxWait 见 DefaultMaxWait；0 取缺省。
 	MaxWait time.Duration
+	// BatchLimit 是一轮最多检查的到期实例数；0 取缺省。
+	BatchLimit int
+	// BatchInterval 是耗尽预算后的最短等待；0 取缺省。队列满时仍至少退让 dispatchRetry。
+	BatchInterval time.Duration
 }
 
 // Lookup 只读内存里已发布的实体：不加载、不等待、不 Touch（ManagerAccess.Manager().Get）。
@@ -90,6 +102,10 @@ type Driver struct {
 	// cancel / done 属于正在运行的循环；未启动时为 nil。
 	cancel context.CancelFunc
 	done   chan struct{}
+	// 投递轮次只允许一个调用者推进；并发调用直接返回，不等待正在投递的调用者。
+	delivering  bool
+	nextBatchAt time.Time        // 系统单调时间，不随业务时间偏移
+	systemNow   func() time.Time // 生产使用 time.Now；测试可在启动前替换
 }
 
 // NewDriver 校验配置并返回一个未接线的驱动；配置是生成代码里的常量，错了就是生成物不一致，所以 panic。
@@ -106,7 +122,16 @@ func NewDriver(config Config) *Driver {
 	if config.MaxWait <= 0 {
 		config.MaxWait = DefaultMaxWait
 	}
-	return &Driver{config: config, now: fctx.Now, kick: make(chan struct{}, 1)}
+	if config.BatchLimit < 0 || config.BatchInterval < 0 {
+		panic("entitytimer: batch limit and interval must not be negative")
+	}
+	if config.BatchLimit == 0 {
+		config.BatchLimit = DefaultBatchLimit
+	}
+	if config.BatchInterval == 0 {
+		config.BatchInterval = DefaultBatchInterval
+	}
+	return &Driver{config: config, now: fctx.Now, systemNow: time.Now, kick: make(chan struct{}, 1)}
 }
 
 // Name 返回 Config.Name。
@@ -213,7 +238,7 @@ func (d *Driver) nextWait() time.Duration {
 	if wait < 0 {
 		wait = 0
 	}
-	return min(wait, d.config.MaxWait)
+	return min(max(wait, d.nextBatchAt.Sub(d.systemNow())), d.config.MaxWait)
 }
 
 func (d *Driver) wake() {
@@ -225,12 +250,14 @@ func (d *Driver) wake() {
 
 // delivery 是一次投递：出锁之后才调用 Dispatch，回来按 gen 判断这期间实例有没有报告过新状态。
 type delivery struct {
-	slot *slot
-	gen  uint64
-	id   int64
+	slot        *slot
+	gen         uint64
+	id          int64
+	redelivered bool
 }
 
-// DeliverDue 把此刻（业务时间）已到期的实例各投递一次 Tick，返回投递成功的条数。循环按期限调用它；
+// DeliverDue 在单轮预算内给已到期实例投递 Tick，返回成功条数；剩余任务保持到期状态，后续轮次继续。
+// 满额轮次与准入失败（队列满、引擎停止中等）分别退让 BatchInterval 与 dispatchRetry，直接调用也受此限制。循环按期限调用它；
 // 测试可以不启动循环、推进可控时钟后直接调用，事件顺序由测试决定。
 //
 // 每个到期条目先核对实例：已卸载 / 已删除（IsRemoved）或已被同 ID 的另一个实例取代时丢弃，不投递——
@@ -238,74 +265,122 @@ type delivery struct {
 // 会等这次加载完成再执行 Tick）。投递后条目转为“待报告”，期限换成 Redeliver 之后；Tick handler 提交时
 // 实例的报告把它换回新的最早期限。
 func (d *Driver) DeliverDue(ctx context.Context) int {
+	if ctx.Err() != nil {
+		return 0
+	}
 	now := d.Now()
 	d.mu.Lock()
 	client, lookup := d.client, d.lookup
-	if client == nil || lookup == nil {
+	if client == nil || lookup == nil || d.delivering || d.systemNow().Before(d.nextBatchAt) {
 		d.mu.Unlock()
 		return 0
 	}
-	var batch []delivery
-	dropped, redelivered := 0, 0
-	for len(d.pend) > 0 && !d.pend[0].wake.After(now) {
-		s := d.pend[0]
-		if s.owner.IsRemoved() {
-			d.unqueue(s)
-			dropped++
-			continue
-		}
-		if live := lookup(s.id); live != nil && live != s.owner {
-			d.unqueue(s)
-			dropped++
-			continue
-		}
-		if s.inflight {
-			redelivered++
-		}
-		s.inflight = true
-		s.gen++
-		s.wake = now.Add(d.config.Redeliver)
-		heap.Fix(&d.pend, s.index)
-		batch = append(batch, delivery{slot: s, gen: s.gen, id: s.id})
-	}
-	pending := len(d.pend)
+	d.delivering = true
 	d.mu.Unlock()
 
 	labels := metrics.Labels{"driver": d.config.Name}
-	if dropped > 0 {
-		metrics.IncCounter(DroppedMetric, labels, int64(dropped))
-	}
-	if redelivered > 0 {
-		metrics.IncCounter(RedeliveredMetric, labels, int64(redelivered))
-	}
-	metrics.SetGauge(PendingMetric, labels, int64(pending))
-
-	delivered := 0
-	// Tick 消息不带时间：handler 执行时按这条消息冻结的业务时间触发（Host.Tick），排队的时间不算进“之前”。
-	for _, item := range batch {
-		err := client.Dispatch(ctx, d.config.Handler, item.id, nil)
+	delivered, dropped, redelivered := 0, 0, 0
+	defer func() {
+		d.mu.Lock()
+		d.delivering = false
+		pending := len(d.pend)
+		var overdue time.Duration
+		if pending > 0 {
+			overdue = max(now.Sub(d.pend[0].wake), 0)
+		}
+		d.mu.Unlock()
+		metrics.SetGauge(PendingMetric, labels, int64(pending))
+		metrics.SetGauge(OverdueMetric, labels, overdue.Milliseconds())
+		if delivered > 0 {
+			metrics.IncCounter(DeliveredMetric, labels, int64(delivered))
+		}
+		if dropped > 0 {
+			metrics.IncCounter(DroppedMetric, labels, int64(dropped))
+		}
+		if redelivered > 0 {
+			metrics.IncCounter(RedeliveredMetric, labels, int64(redelivered))
+		}
+	}()
+	for range d.config.BatchLimit {
+		if ctx.Err() != nil {
+			return delivered
+		}
+		item, found := d.takeDue(now, lookup)
+		if !found {
+			return delivered
+		}
+		if item.slot == nil {
+			dropped++
+			continue
+		}
+		// 逐条取得投递资格，队列满之后不再预占剩余任务；消息仍由 Nest 在实体锁和事务内执行。
+		err := ctx.Err()
+		if err == nil {
+			if item.redelivered {
+				redelivered++
+			}
+			err = client.Dispatch(ctx, d.config.Handler, item.id, nil)
+		}
 		if err == nil {
 			delivered++
 			continue
 		}
+		d.retry(item, now)
+		if ctx.Err() != nil {
+			return delivered
+		}
+		// 准入失败是引擎层面的（队列满、引擎停止中），换下一个实体不会成功：结束本轮、整个 Driver 退让
+		// dispatchRetry，一轮至多一条 Warn，不对剩余任务逐条重试刷日志。
 		metrics.IncCounter(DeliverFailedMetric, labels, 1)
-		if ctx.Err() == nil {
-			slog.Warn("entitytimer: tick delivery not admitted; retrying",
-				"driver", d.config.Name, "entity_id", item.id, "retry_in", dispatchRetry, "err", err)
-		}
-		d.mu.Lock()
-		if s := item.slot; s.gen == item.gen && s.index >= 0 {
-			// 这期间没有新报告：按准入重试间隔再投，而不是等满 Redeliver。
-			s.inflight = false
-			s.wake = now.Add(dispatchRetry)
-			heap.Fix(&d.pend, s.index)
-		}
-		d.mu.Unlock()
+		slog.Warn("entitytimer: tick delivery not admitted; pausing this driver",
+			"driver", d.config.Name, "entity_id", item.id, "retry_in", dispatchRetry, "err", err)
+		d.deferBatch(dispatchRetry)
+		return delivered
 	}
-	if delivered > 0 {
-		metrics.IncCounter(DeliveredMetric, labels, int64(delivered))
-	}
+	d.deferBatch(d.config.BatchInterval)
 	return delivered
+}
+
+// takeDue 只预占下一条到期任务。失效条目返回空 delivery，但仍消耗一次扫描预算。
+func (d *Driver) takeDue(now time.Time, lookup Lookup) (delivery, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.pend) == 0 || d.pend[0].wake.After(now) {
+		return delivery{}, false
+	}
+	s := d.pend[0]
+	if s.owner.IsRemoved() {
+		d.unqueue(s)
+		return delivery{}, true
+	}
+	if live := lookup(s.id); live != nil && live != s.owner {
+		d.unqueue(s)
+		return delivery{}, true
+	}
+	item := delivery{slot: s, id: s.id, redelivered: s.inflight}
+	s.inflight = true
+	s.gen++
+	item.gen = s.gen
+	s.wake = now.Add(d.config.Redeliver)
+	heap.Fix(&d.pend, s.index)
+	return item, true
+}
+
+// retry 只修改本次预占的代际；投递期间的新报告、撤销或新实例不能被失败结果覆盖。
+func (d *Driver) retry(item delivery, now time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if s := item.slot; s.gen == item.gen && s.index >= 0 {
+		s.inflight = false
+		s.wake = now.Add(dispatchRetry)
+		heap.Fix(&d.pend, s.index)
+	}
+}
+
+func (d *Driver) deferBatch(delay time.Duration) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.nextBatchAt = d.systemNow().Add(delay)
 }
 
 // Pending 返回索引里的条目数（等待到期或已投递待报告）。

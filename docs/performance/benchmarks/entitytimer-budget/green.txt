@@ -1,0 +1,4 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	1.573s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/entitytimer	1.692s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat	10.344s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/heartbeat	2.660s
