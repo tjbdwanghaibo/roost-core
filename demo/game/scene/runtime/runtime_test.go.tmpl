@@ -1,11 +1,16 @@
 package sceneruntime
 
 import (
+	"errors"
+	"math/rand/v2"
+	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 
 	"{{MODULE}}/game/scene"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -150,5 +155,124 @@ func TestPathFindingWhileTheSceneStopsIsSafe(t *testing.T) {
 	<-done
 	if _, err := pathFind.Place(spatial.Point{X: 1, Y: 1}); err == nil {
 		t.Error("a stopped pathfinder answered")
+	}
+}
+
+// Without a height field (no scene.terrain.pack, or a partitioned scene) the
+// map is exactly the flat grid it always was: Standable is Walkable, a route
+// is spatial.FindPath's over the same grid, and Place answers the same point.
+// Checked over random points and obstacles, not a hand-picked few.
+func TestWithoutASurfaceTheMapIsTheFlatGrid(t *testing.T) {
+	runtime := newTestRuntime(t)
+	terrain, pathFind := runtime.Terrain(), runtime.PathFind()
+	if terrain.Surface() != nil {
+		t.Fatal("a new scene has a height field")
+	}
+	rng := rand.New(rand.NewPCG(7, 11))
+	reference, err := spatial.NewGridTerrain(20, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 60 {
+		wall := spatial.Point{X: rng.Int64N(20), Y: rng.Int64N(20)}
+		if terrain.Occupy(wall) == nil {
+			_ = reference.SetBlocked(wall, true)
+		}
+	}
+	for range 400 {
+		a := spatial.Point{X: rng.Int64N(24) - 2, Y: rng.Int64N(24) - 2}
+		b := spatial.Point{X: rng.Int64N(24) - 2, Y: rng.Int64N(24) - 2}
+		if terrain.Standable(a) != terrain.Walkable(a) {
+			t.Fatalf("Standable(%v) differs from Walkable without a height field", a)
+		}
+		got, gotErr := pathFind.Path(a, b)
+		want, wantErr := spatial.FindPath(reference, a, b, spatial.PathOptions{MaxVisited: maxPathVisited})
+		if !slices.Equal(got, want) || !errors.Is(gotErr, wantErr) && (gotErr != nil || wantErr != nil) {
+			t.Fatalf("Path(%v, %v) = %v %v, the flat grid says %v %v", a, b, got, gotErr, want, wantErr)
+		}
+	}
+}
+
+// writeFlatPack writes a one-chunk pack at world height 0 (raw 1000 over a
+// −100m base), with the given samples raised or lowered.
+func writeFlatPack(t *testing.T, raw map[[2]int64]uint16) *terrain.Pack {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "flat.pack")
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: 1, ChunksY: 1, HeightBase: -10000, WaterLevel: -50}
+	err := terrain.WritePackFile(path, meta, func(terrain.ChunkKey) (terrain.Chunk, error) {
+		c := terrain.NewChunk()
+		for i := range c.Heights {
+			c.Heights[i] = 1000
+		}
+		for g, h := range raw {
+			c.Heights[g[1]*terrain.ChunkSamples+g[0]] = h
+		}
+		return c, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pack, err := terrain.OpenPack(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pack.Close() })
+	return pack
+}
+
+// With a height field the scene's map follows it: routes go around what is
+// too steep, a deep pond without swimming is not a place to stand, Place
+// steps by ground nodes to the nearest standable one, and the walker is
+// bounded to the scene (a route never leaves it). Taking it down restores the
+// flat grid.
+func TestASurfaceRoutesAndPlacesOnTheHeightField(t *testing.T) {
+	runtime, err := New(testScene{id: 1}, scene.Config{Width: 1000, Height: 1000, BlockSize: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { runtime.Stop(entity.DestroyReasonCommon) })
+	raw := map[[2]int64]uint16{}
+	for gy := int64(0); gy <= 8; gy++ {
+		raw[[2]int64{5, gy}] = 1020 // a 2m wall with a gap at the top row
+	}
+	raw[[2]int64{2, 2}] = 970 // a 3m-deep pond sample
+	view := terrain.NewView(writeFlatPack(t, raw))
+	if err := view.LoadBase(terrain.ChunkKey{}); err != nil {
+		t.Fatal(err)
+	}
+	dry := terrain.DefaultWalkRules
+	dry.SwimSpeed = 0
+	ground, pathFind := runtime.Terrain(), runtime.PathFind()
+	ground.SetSurface(&terrain.Walker{View: view, Rules: dry})
+	if got := ground.Surface().Bounds; got != ground.Bounds() {
+		t.Fatalf("the installed walker is bounded to %v, want the scene %v", got, ground.Bounds())
+	}
+
+	route, err := pathFind.Path(spatial.Point{X: 100, Y: 100}, spatial.Point{X: 900, Y: 100})
+	if err != nil {
+		t.Fatalf("a route around the wall: %v", err)
+	}
+	if !slices.ContainsFunc(route, func(p spatial.Point) bool { return p.X == 500 && p.Y == 900 }) {
+		t.Fatalf("the route %v does not go through the gap at (500, 900)", route)
+	}
+	if ground.Standable(spatial.Point{X: 200, Y: 200}) {
+		t.Fatal("a deep pond without swimming is standable")
+	}
+	if got, err := pathFind.Place(spatial.Point{X: 210, Y: 190}); err != nil || got == (spatial.Point{X: 210, Y: 190}) || !ground.Standable(got) {
+		t.Fatalf("Place next to the pond = %v %v, want the nearest standable node", got, err)
+	}
+	if _, err := pathFind.Path(spatial.Point{X: 100, Y: 100}, spatial.Point{X: 200, Y: 200}); !errors.Is(err, spatial.ErrNoPath) {
+		t.Fatalf("a route into the pond: %v, want no path", err)
+	}
+	if _, err := pathFind.Path(spatial.Point{X: 100, Y: 100}, spatial.Point{X: 1500, Y: 100}); err == nil {
+		t.Fatal("a route out of the scene")
+	}
+
+	ground.SetSurface(nil)
+	if ground.Surface() != nil || !ground.Standable(spatial.Point{X: 200, Y: 200}) {
+		t.Fatal("taking the height field down did not restore the flat grid")
 	}
 }

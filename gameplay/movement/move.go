@@ -77,8 +77,24 @@ type Locator func(id int64) (Snapshot, bool)
 type MoveConfig struct {
 	// Terrain 非 nil 时每走进一个新格都问它：越界或被挡就以 Blocked 停下。
 	Terrain spatial.Terrain
+	// Surface 非 nil 时每拍开始调用一次，取这一拍的带高度地面（可编辑地形，见 Surface）；返回 nil 表示这一拍没有
+	// 高度规则，推进与不设 Surface 时逐位相同。用函数而不是值：地面可能在实体建好之后才装上（游戏服务启动顺序），
+	// 也可能随场景卸下。Terrain 与 Surface 可以同时设，两者都要放行才走。
+	Surface func() Surface
 	// Locate 是 Follow 读目标位置的入口；nil 时 Follow 返回错误。
 	Locate Locator
+}
+
+// Surface 是带高度的地面（可编辑地形方案 P3，gameplay/terrain 的 Walker 实现它）。Move 把位置按 Cell 归到地面格，
+// 每进入一个新的地面格问一次 Step(上一格, 新格)：不放行就以 Blocked 停在上一个采样点；放行时 speed 是新格里的速度
+// 千分比（游泳 < 1000），这一格里每走 1 单位消耗 1000 / speed 单位的路程预算。方法在实体锁内调用，只能读内存、
+// 不能阻塞（Nest short 池）。
+type Surface interface {
+	// Cell 返回世界坐标所在的地面格（不透明的格坐标，只拿来比较与传回 Step）。
+	Cell(p spatial.Point) spatial.Point
+	// Step 报告能否从地面格 from 走进相邻的地面格 to，以及在 to 里的速度千分比；from == to 表示站在 from，
+	// ok 为 false 时 from 本身没有定义（地图外、块没装入），当作被挡。
+	Step(from, to spatial.Point) (speed int32, ok bool)
 }
 
 // MoveOwner 由带 Move 的实体实现，MoveTo / Follow 动作据此找到组件。
@@ -118,7 +134,10 @@ type moveState struct {
 type Move struct {
 	mb      *MapBasic
 	terrain spatial.Terrain
+	surface func() Surface
 	locate  Locator
+	// ground 是本次 Advance 的地面（只在 Advance 内有效；nil 表示这一拍没有高度规则）。
+	ground Surface
 
 	st        moveState
 	nextToken uint64 // 只增，不随回滚恢复：被回滚的移动用过的号不再发
@@ -134,7 +153,7 @@ func NewMove(mb *MapBasic, config MoveConfig) (*Move, error) {
 	if mb == nil {
 		return nil, errors.New("movement: move needs a map basic")
 	}
-	return &Move{mb: mb, terrain: config.Terrain, locate: config.Locate}, nil
+	return &Move{mb: mb, terrain: config.Terrain, surface: config.Surface, locate: config.Locate}, nil
 }
 
 // MapBasic 返回移动写入的位置组件。
@@ -224,7 +243,10 @@ func (m *Move) Advance(token uint64, elapsed time.Duration) Result {
 	}
 	m.guard()
 	m.result = Result{}
-	defer func() { m.result, m.beatStart = Result{}, moveState{} }()
+	if m.surface != nil {
+		m.ground = m.surface()
+	}
+	defer func() { m.result, m.beatStart, m.ground = Result{}, moveState{}, nil }()
 	if !m.mb.InScene() || m.mb.SceneID() != m.st.sceneID {
 		m.finish(Result{Reason: LeftScene, At: m.mb.Pos()})
 		return m.result
@@ -306,6 +328,9 @@ func (m *Move) follow(budget float64) {
 // advance 从 (x, y) 朝 (gx, gy) 走至多 budget 格，停在距目标 stopShort 处；返回用掉的距离、是否到了（停止点）、是否
 // 被挡。Terrain 按 0.5 格的步长采样：每进入一个新格问一次，被挡就停在上一个采样点。
 func (m *Move) advance(gx, gy, budget, stopShort float64) (used float64, reached, blocked bool) {
+	if m.ground != nil {
+		return m.advanceOn(m.ground, gx, gy, budget, stopShort)
+	}
 	dx, dy := gx-m.st.x, gy-m.st.y
 	dist := math.Hypot(dx, dy) - stopShort
 	if dist <= 0 {
@@ -335,6 +360,53 @@ func (m *Move) advance(gx, gy, budget, stopShort float64) (used float64, reached
 		m.st.x, m.st.y = px, py
 	}
 	return step, reached, false
+}
+
+// advanceOn 是有带高度地面时的 advance：同样按 0.5 格的步长采样（Terrain 照旧每进入一个新格问一次），另外每进入一个
+// 新的地面格问 ground.Step；地面格的速度千分比折算路程预算（游泳时同样的预算走得更近）。被挡时停在上一个采样点。
+// 站立的地面格本身没有定义（地图外、块没装入）时一步也不走，当作被挡（不猜）。
+func (m *Move) advanceOn(ground Surface, gx, gy, budget, stopShort float64) (used float64, reached, blocked bool) {
+	dx, dy := gx-m.st.x, gy-m.st.y
+	dist := math.Hypot(dx, dy) - stopShort
+	if dist <= 0 {
+		return 0, true, false
+	}
+	ux, uy := dx/(dist+stopShort), dy/(dist+stopShort)
+	last := roundPoint(m.st.x, m.st.y)
+	cell := ground.Cell(last)
+	speed, ok := ground.Step(cell, cell)
+	if !ok || speed <= 0 {
+		return 0, false, true
+	}
+	sx, sy := m.st.x, m.st.y
+	left := budget
+	var walked float64
+	// 1e-9 的余量：walked 是逐段累加的浮点数，最后一段 walked + (dist − walked) 可能差一个 ulp 到不了 dist。
+	for dist-walked > 1e-9 && left > 0 {
+		seg := min(0.5, dist-walked)
+		cost := seg * 1000 / float64(speed)
+		if cost > left {
+			seg, cost = left*float64(speed)/1000, left
+		}
+		d := walked + seg
+		px, py := sx+ux*d, sy+uy*d
+		if at := roundPoint(px, py); at != last {
+			if m.terrain != nil && (!m.terrain.InBounds(at) || m.terrain.Blocked(at)) {
+				return budget - left, false, true
+			}
+			if next := ground.Cell(at); next != cell {
+				nextSpeed, ok := ground.Step(cell, next)
+				if !ok || nextSpeed <= 0 {
+					return budget - left, false, true
+				}
+				cell, speed = next, nextSpeed
+			}
+			last = at
+		}
+		m.st.x, m.st.y = px, py
+		walked, left = d, left-cost
+	}
+	return budget - left, dist-walked <= 1e-9, false
 }
 
 // commitStep 把这一拍走到的格写进 MapBasic（朝向取本拍的位移方向）；result 有结论时随后结束。写被拒时：AOI 排队满

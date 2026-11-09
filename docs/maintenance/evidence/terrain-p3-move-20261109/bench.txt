@@ -1,0 +1,139 @@
+vm.swapusage: total = 15360.00M  used = 14241.62M  free = 1118.38M  (encrypted)
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/terrain
+cpu: Apple M5
+BenchmarkWalkerStep-10        	121489875	         9.830 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWalkerFindPath/50m-10         	   14349	     73677 ns/op	        37.00 points	       378.0 visited	  120272 B/op	      15 allocs/op
+BenchmarkWalkerFindPath/50m-optimal-10 	    2637	    428483 ns/op	        37.00 points	      1795 visited	  374385 B/op	      26 allocs/op
+BenchmarkWalkerFindPath/200m-10        	    6798	    170044 ns/op	       201.0 points	       683.0 visited	  198401 B/op	      18 allocs/op
+BenchmarkWalkerFindPath/200m-flat-10   	   19106	     63393 ns/op	       201.0 points	       201.0 visited	  124672 B/op	      17 allocs/op
+BenchmarkWalkerFindPath/exhausted4096-10         	     980	   1247782 ns/op	 1127268 B/op	      41 allocs/op
+BenchmarkGridFindPath/50m-10                     	    4575	    275988 ns/op	  434313 B/op	    1450 allocs/op
+BenchmarkGridFindPath/200m-10                    	    5044	    241272 ns/op	  383514 B/op	    1437 allocs/op
+BenchmarkGridFindPath/exhausted4096-10           	     938	   1289306 ns/op	 1667165 B/op	    4472 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/movement
+cpu: Apple M5
+BenchmarkMoveAdvance/none-10         	   20000	       112.3 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/walker-10       	   20000	       292.7 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/grid-10         	   20000	       312.3 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/grid+walker-10  	   20000	       361.7 ns/op	     137 B/op	       3 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/terrain
+cpu: Apple M5
+BenchmarkWalkerStep-10        	123644546	         9.844 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWalkerFindPath/50m-10         	   16243	     73183 ns/op	        37.00 points	       378.0 visited	  120272 B/op	      15 allocs/op
+BenchmarkWalkerFindPath/50m-optimal-10 	    2682	    420797 ns/op	        37.00 points	      1795 visited	  374385 B/op	      26 allocs/op
+BenchmarkWalkerFindPath/200m-10        	    6897	    163047 ns/op	       201.0 points	       683.0 visited	  198400 B/op	      18 allocs/op
+BenchmarkWalkerFindPath/200m-flat-10   	   19698	     60016 ns/op	       201.0 points	       201.0 visited	  124672 B/op	      17 allocs/op
+BenchmarkWalkerFindPath/exhausted4096-10         	     980	   1148398 ns/op	 1127268 B/op	      41 allocs/op
+BenchmarkGridFindPath/50m-10                     	    4435	    263246 ns/op	  434313 B/op	    1450 allocs/op
+BenchmarkGridFindPath/200m-10                    	    4821	    249010 ns/op	  383513 B/op	    1437 allocs/op
+BenchmarkGridFindPath/exhausted4096-10           	    1029	   1150423 ns/op	 1667164 B/op	    4472 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/movement
+cpu: Apple M5
+BenchmarkMoveAdvance/none-10         	   20000	       131.4 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/walker-10       	   20000	       260.2 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/grid-10         	   20000	       216.9 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/grid+walker-10  	   20000	       280.8 ns/op	     137 B/op	       3 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/terrain
+cpu: Apple M5
+BenchmarkWalkerStep-10        	124006600	         9.831 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWalkerFindPath/50m-10         	   16351	     82924 ns/op	        37.00 points	       378.0 visited	  120272 B/op	      15 allocs/op
+BenchmarkWalkerFindPath/50m-optimal-10 	    2726	    422350 ns/op	        37.00 points	      1795 visited	  374386 B/op	      26 allocs/op
+BenchmarkWalkerFindPath/200m-10        	    6777	    167349 ns/op	       201.0 points	       683.0 visited	  198401 B/op	      18 allocs/op
+BenchmarkWalkerFindPath/200m-flat-10   	   19347	     61711 ns/op	       201.0 points	       201.0 visited	  124673 B/op	      17 allocs/op
+BenchmarkWalkerFindPath/exhausted4096-10         	     914	   1166245 ns/op	 1127267 B/op	      41 allocs/op
+BenchmarkGridFindPath/50m-10                     	    4537	    263893 ns/op	  434313 B/op	    1450 allocs/op
+BenchmarkGridFindPath/200m-10                    	    4632	    250037 ns/op	  383513 B/op	    1437 allocs/op
+BenchmarkGridFindPath/exhausted4096-10           	     884	   1319626 ns/op	 1667165 B/op	    4472 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/movement
+cpu: Apple M5
+BenchmarkMoveAdvance/none-10         	   20000	       116.2 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/walker-10       	   20000	       247.5 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/grid-10         	   20000	       237.8 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/grid+walker-10  	   20000	       275.3 ns/op	     137 B/op	       3 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/terrain
+cpu: Apple M5
+BenchmarkWalkerStep-10        	120699513	        11.42 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWalkerFindPath/50m-10         	   16497	     72390 ns/op	        37.00 points	       378.0 visited	  120272 B/op	      15 allocs/op
+BenchmarkWalkerFindPath/50m-optimal-10 	    2623	    444641 ns/op	        37.00 points	      1795 visited	  374385 B/op	      26 allocs/op
+BenchmarkWalkerFindPath/200m-10        	    6398	    170900 ns/op	       201.0 points	       683.0 visited	  198400 B/op	      18 allocs/op
+BenchmarkWalkerFindPath/200m-flat-10   	   19273	     61847 ns/op	       201.0 points	       201.0 visited	  124672 B/op	      17 allocs/op
+BenchmarkWalkerFindPath/exhausted4096-10         	     984	   1278953 ns/op	 1127268 B/op	      41 allocs/op
+BenchmarkGridFindPath/50m-10                     	    4212	    266319 ns/op	  434313 B/op	    1450 allocs/op
+BenchmarkGridFindPath/200m-10                    	    4740	    246365 ns/op	  383514 B/op	    1437 allocs/op
+BenchmarkGridFindPath/exhausted4096-10           	     985	   1279302 ns/op	 1667166 B/op	    4472 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/movement
+cpu: Apple M5
+BenchmarkMoveAdvance/none-10         	   20000	       112.3 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/walker-10       	   20000	       241.4 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/grid-10         	   20000	       214.1 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/grid+walker-10  	   20000	       272.2 ns/op	     137 B/op	       3 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/terrain
+cpu: Apple M5
+BenchmarkWalkerStep-10        	120300680	        10.02 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWalkerFindPath/50m-10         	   16210	     75394 ns/op	        37.00 points	       378.0 visited	  120272 B/op	      15 allocs/op
+BenchmarkWalkerFindPath/50m-optimal-10 	    2635	    423065 ns/op	        37.00 points	      1795 visited	  374386 B/op	      26 allocs/op
+BenchmarkWalkerFindPath/200m-10        	    6247	    170497 ns/op	       201.0 points	       683.0 visited	  198401 B/op	      18 allocs/op
+BenchmarkWalkerFindPath/200m-flat-10   	   17910	     64659 ns/op	       201.0 points	       201.0 visited	  124672 B/op	      17 allocs/op
+BenchmarkWalkerFindPath/exhausted4096-10         	     604	   2578792 ns/op	 1127283 B/op	      41 allocs/op
+BenchmarkGridFindPath/50m-10                     	    4130	    288061 ns/op	  434314 B/op	    1450 allocs/op
+BenchmarkGridFindPath/200m-10                    	    4674	    260306 ns/op	  383514 B/op	    1437 allocs/op
+BenchmarkGridFindPath/exhausted4096-10           	     970	   1240412 ns/op	 1667166 B/op	    4472 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/movement
+cpu: Apple M5
+BenchmarkMoveAdvance/none-10         	   20000	       106.4 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/walker-10       	   20000	       234.3 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/grid-10         	   20000	       227.4 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/grid+walker-10  	   20000	       295.2 ns/op	     137 B/op	       3 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/terrain
+cpu: Apple M5
+BenchmarkWalkerStep-10        	100000000	        10.21 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWalkerFindPath/50m-10         	   16152	     71723 ns/op	        37.00 points	       378.0 visited	  120272 B/op	      15 allocs/op
+BenchmarkWalkerFindPath/50m-optimal-10 	    2684	    418420 ns/op	        37.00 points	      1795 visited	  374385 B/op	      26 allocs/op
+BenchmarkWalkerFindPath/200m-10        	    6493	    174669 ns/op	       201.0 points	       683.0 visited	  198401 B/op	      18 allocs/op
+BenchmarkWalkerFindPath/200m-flat-10   	   19717	     59560 ns/op	       201.0 points	       201.0 visited	  124672 B/op	      17 allocs/op
+BenchmarkWalkerFindPath/exhausted4096-10         	     990	   1158639 ns/op	 1127266 B/op	      41 allocs/op
+BenchmarkGridFindPath/50m-10                     	    4467	    593370 ns/op	  434317 B/op	    1450 allocs/op
+BenchmarkGridFindPath/200m-10                    	    3775	    325406 ns/op	  383514 B/op	    1437 allocs/op
+BenchmarkGridFindPath/exhausted4096-10           	     744	   1604961 ns/op	 1667164 B/op	    4472 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/movement
+cpu: Apple M5
+BenchmarkMoveAdvance/none-10         	   20000	       262.8 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/walker-10       	   20000	       252.5 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/grid-10         	   20000	       458.0 ns/op	     137 B/op	       3 allocs/op
+BenchmarkMoveAdvance/grid+walker-10  	   20000	       763.5 ns/op	     137 B/op	       3 allocs/op
+PASS

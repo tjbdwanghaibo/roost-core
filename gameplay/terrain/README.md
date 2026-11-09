@@ -1,6 +1,6 @@
-# terrain：可编辑地形的底座（P1 框架部分 + P2 笔刷 + P3 块副本）
+# terrain：可编辑地形的底座（P1 框架部分 + P2 笔刷 + P3 行走与寻路、块副本）
 
-[可编辑地形方案](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md) P1 的框架部分：块坐标、原始地形包（base pack）的读写、内存中的地形视图与整数定点查询。纯逻辑加文件 I/O，不依赖 Nest / DataEngine / entitysync。P2 加了笔刷（`brush.go`：抬高 / 降低 / 整平 / 改材质的纯整数计算，见下文“笔刷”）。被玩家改过的块（`TerrainChunk` 实体、持久化、同步、重启一致）由上层接入，本包只接收它们的数据作为覆盖块。实测数字见证据目录：[P1](../../docs/maintenance/evidence/terrain-p1-20261108/README.md)、[P2](../../docs/maintenance/evidence/terrain-p2-20261108/README.md)。
+[可编辑地形方案](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md) P1 的框架部分：块坐标、原始地形包（base pack）的读写、内存中的地形视图与整数定点查询。纯逻辑加文件 I/O，不依赖 Nest / DataEngine / entitysync。P2 加了笔刷（`brush.go`：抬高 / 降低 / 整平 / 改材质的纯整数计算，见下文“笔刷”）。P3 加了行走规则与寻路（`walk.go`：坡度 / 台阶 / 下落 / 游泳的判定与高度场 A*，见下文“行走与寻路”）。被玩家改过的块（`TerrainChunk` 实体、持久化、同步、重启一致）由上层接入，本包只接收它们的数据作为覆盖块。实测数字见证据目录：[P1](../../docs/maintenance/evidence/terrain-p1-20261108/README.md)、[P2](../../docs/maintenance/evidence/terrain-p2-20261108/README.md)。
 
 ## 坐标与块
 
@@ -108,6 +108,18 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 
 **金样**：[client/spec/terrain-brush.json](../../client/spec/terrain-brush.json)——`ISqrt` 表、三种衰减的权重表、17 个笔刷（四种操作 × 三种衰减、块边界、四块交点、夹到基岩 / 上限、整平幂等、地图边缘）在 `terrain-golden.pack` 原始块上的结果：每例覆盖的块、每块改了的点数与 SHA-256（逐点 `index u16 LE, height u16 LE, material u8` 按下标升序），点数不超过 40 时列出全部点。`TestClientBrushGolden` 核对；改算法时 `go test ./gameplay/terrain -run TestClientBrushGolden -update`（不重写包）。
 
+## 行走与寻路（P3，`walk.go`，客户端预测须同算）
+
+移动与寻路共用一套判定（[方案 §22](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#22-p3-移动与寻路实施结果2026-11-09)），全是整数、只读视图、不取锁、不分配（`Step`），可以在 Nest short 池里调用。
+
+- **节点**：1m 采样点 `(gx, gy)`；世界坐标 `p` 属于最近的采样点（`Walker.Cell`，四舍五入；在地图 / `Bounds` 里时夹到可用节点范围）。节点的地面高度就是采样点高度（只读本块，没有插值）。
+- **站立高度**：普通节点是地面；水深（`WaterLevel − 地面`）超过 `WadeDepth` 的是游泳节点，站立高度取水面，速度 `SwimSpeed`‰（0 = 不能游泳：深水不可进入，站在里面的可以走出来）。
+- **相邻一步** `a → b`（八邻域，`run` 正交 100、对角 141 厘米，`dh` = 站立高度差）：上行 `dh·1000 ≤ MaxSlope·run` 或 `dh ≤ MaxStep`；下行 `|dh|·1000 ≤ MaxSlope·run` 或 `|dh| ≤ max(MaxStep, MaxDrop)`；对角还要两条正交拐角路线都走得通（不切角）。地图外、`Bounds` 外、块没装入（不猜）、`Occupied` 钩子（建筑占位，P4）为真的节点不可进入。
+- **缺省规则** `DefaultWalkRules`：坡度 45°（1000‰）、台阶 50 厘米、陡降 3 米、涉水 50 厘米、游泳 60%、上坡代价 2（爬 1 米折 2 米平路）、下坡代价 0、寻路估价放大 1.5 倍（`SearchWeight` 1500）。判定只看高度差，与 `HeightBase` 正负无关。
+- **`Step(from, to)`**：移动逐节点问（实现 `movement.Surface`）；`from == to` 表示站着，只要求节点有定义。**`Standable(p)`**：能否放在这里（瞬移、出生点、寻路终点）。**`StandZ(p)`**：站立高度（游泳节点是水面，否则 `View.Height` 的插值高度）——服务端位置只有 X / Y，高度由它推出，客户端同算。**`Swimming(p)`**。
+- **`FindPath(from, to, maxVisited)`**：节点图上八方向 A*，边与 `Step` 同一规则；代价 `(run·1000 + 上升·UphillCost + 下降·DownhillCost)·1000 / 目标节点速度‰`，估价八方向距离 × `SearchWeight`（加权 A*：1000 是最优；缺省 1500，路线代价至多是最优的 1.5 倍——估价不含爬升，起伏地面上最优搜索为证明最优要展开的节点随坡度代价暴涨，200m 路线约 1.4 万个，加权后约 700 个）；同代价按“估价小、先发现”展开，同一视图状态结果确定。每块只读一次槽位（并发提交不会让一次搜索读到同一块的两个版本）。上限缺省 `DefaultMaxVisited` 4096，超过答 `spatial.ErrPathBudgetExhausted`（可能有路）；走不到 / 终点不可站答 `spatial.ErrNoPath`；地图外 `ErrOutOfMap`；起点 / 终点块没装 `ErrNotLoaded`。
+- **`Route`**：`Points` 是起点、起点所在节点、途经节点、终点所在节点、终点（相邻重复去掉）——每段只跨一个节点边界，移动逐节点检查时判定的正是寻路用过的相邻节点；代价是开头可能先折回起点节点的中心（≤ 约 0.7m）。`Chunks` 是判定读过的块与版本，`Fresh(view)` 报告这些块是否仍是同一版本（改块、卸块即失效）；不判断有没有出现更短的路。
+
 ## 给上层（TerrainChunk 实体接入）的接口说明
 
 - DAO 与 `Chunk` / `Overlay` 一一对应：`Heights []uint16`（4096）、`Materials`（4096）、`BaseRevision`、`Version`。本包与原始地形包里材质是每点 1 字节（`[]byte`）；game-demo 的 DAO 为让材质也按下标增量同步与持久化，用 `[]uint16`（方案 D11），在实体组件边界换算（值域 0～255，越界的记录按损坏拒绝）。本包的格式与公开类型不因此改变。
@@ -134,6 +146,7 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 
 - 只有 2.5D 高度场；洞穴、隧道、悬空不在范围（方案 D1）。
 - 盆地水位、区域水位线没做，只有包头里的一条全局水位线。
+- 行走按 1m 节点判定：一个采样间距内的陡崖与 1m 宽的坡判定相同；没有角色体积（只看节点本身）、没有跳跃与攀爬；路线不缓存、不平滑（拐点在节点上）。
 - 包要整份放在本地文件里（`os.File.ReadAt`），没有从对象存储按范围读的实现。
 - 规模测量里的读块耗时是页缓存热的；冷盘读、Linux 与其他 CPU 没有测。
 - 压缩率来自程序化地形，真实高度图未测。

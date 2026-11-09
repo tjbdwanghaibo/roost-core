@@ -228,6 +228,25 @@ func (Ground) Blocked(p spatial.Point) bool {
 	return box != nil && !box.terrain.Walkable(p)
 }
 
+// Surface is the height field every Move is built with
+// (movement.MoveConfig.Surface; editable terrain, P3): called at the start of
+// each beat, it answers the published map's walker, or nil when the map has
+// none — then the walk is exactly the flat one. Each ground node the walk
+// enters is checked against the live terrain (slope, step, drop, water,
+// loaded), so an edit committed a moment ago is what the next step is judged
+// by, whatever the client was shown yet.
+func Surface() movement.Surface {
+	box := ground.Load()
+	if box == nil {
+		return nil
+	}
+	// A typed nil in the interface would look like a surface to Move.
+	if walker := box.terrain.Surface(); walker != nil {
+		return walker
+	}
+	return nil
+}
+
 // InterestMoves is the movement.Space every Player and Monster is entered
 // with. It reports MOVES and nothing else:
 //

@@ -8,6 +8,7 @@ import (
 
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/lifecycle"
+	gamescene "{{MODULE}}/game/scene"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
@@ -142,4 +143,16 @@ func terrainRegion(meta terrain.Meta, partition settings.ScenePartition, sid int
 		slog.Warn("terrain: this process's cell is outside the terrain map; it writes no chunk", "cell", cell.String(), "cell_rect", own, "map", b)
 	}
 	return terrainmap.Region{Own: own, Load: load}, nil
+}
+
+// installSurface puts the editable terrain's height field under the scene's
+// movement and pathfinding (terrainmap.Map.Walker, bounded to the scene by
+// SetSurface). Without a map, or without the scene's terrain, nothing changes.
+func installSurface(sceneTerrain gamescene.Terrain, m *terrainmap.Map) {
+	if sceneTerrain == nil || m == nil {
+		return
+	}
+	walker := m.Walker()
+	sceneTerrain.SetSurface(&walker)
+	slog.Info("terrain movement installed", "rules", fmt.Sprintf("%+v", walker.Rules), "bounds", sceneTerrain.Bounds())
 }

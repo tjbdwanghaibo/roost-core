@@ -6,6 +6,7 @@ import (
 
 	"{{MODULE}}/game/scene"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -54,6 +55,9 @@ func (p *PathFindSystem) Path(from, to spatial.Point) ([]spatial.Point, error) {
 	if p.stopped.Load() || p.terrain == nil {
 		return nil, fmt.Errorf("scene pathfind: stopped")
 	}
+	if surface := p.terrain.Surface(); surface != nil {
+		return p.pathOn(surface, from, to)
+	}
 	var path []spatial.Point
 	err := p.terrain.withSearchView(func(view spatial.Terrain) error {
 		found, err := spatial.FindPath(view, from, to, spatial.PathOptions{MaxVisited: maxPathVisited})
@@ -66,6 +70,33 @@ func (p *PathFindSystem) Path(from, to spatial.Point) ([]spatial.Point, error) {
 	return path, err
 }
 
+// pathOn is Path over the height field (editable terrain, P3): an
+// eight-direction A* over the 1m ground nodes with the same slope / step /
+// drop / water rules a walk is checked by, distance plus climb as the cost,
+// within the same maxPathVisited (terrain.Walker.FindPath). The route goes
+// through node positions, so every leg crosses one node boundary — exactly
+// the steps the walk will check. It reads the terrain view without a lock;
+// an edit committed during the search is either seen whole or not at all
+// per chunk.
+//
+// No route is cached: a request computes its route once and the walk checks
+// the live ground at every node, so an edit after the search (a ditch dug
+// across the route) stops the walk where the ground refuses it (Blocked),
+// and the next request routes around it. The grid's occupancy (Occupy) is
+// not part of the node graph — the demo occupies nothing; a walk still asks
+// the grid at every point it enters.
+//
+// Errors keep their meaning for the caller: out of the map or a chunk not
+// loaded is "no route" here (terrain.ErrOutOfMap / ErrNotLoaded under
+// ErrNoPath's handling), the budget is spatial.ErrPathBudgetExhausted.
+func (p *PathFindSystem) pathOn(surface *terrain.Walker, from, to spatial.Point) ([]spatial.Point, error) {
+	route, err := surface.FindPath(from, to, maxPathVisited)
+	if err != nil {
+		return nil, err
+	}
+	return route.Points, nil
+}
+
 // Place searches outward in square rings from preferred and returns the first
 // walkable point. Rings rather than a scan: the nearest free point is what a
 // caller means by "put me near here", and a scan would answer with whatever
@@ -74,8 +105,15 @@ func (p *PathFindSystem) Place(preferred spatial.Point) (spatial.Point, error) {
 	if p.stopped.Load() || p.terrain == nil {
 		return spatial.Point{}, fmt.Errorf("scene pathfind: stopped")
 	}
-	if p.terrain.Walkable(preferred) {
+	if p.terrain.Standable(preferred) {
 		return preferred, nil
+	}
+	// On a height field a step of one world unit stays on the same 1m
+	// ground node, so the rings step by nodes instead: the nearest standable
+	// node within maxPlaceRings metres.
+	step := int64(1)
+	if p.terrain.Surface() != nil {
+		step = terrain.SampleSpacing
 	}
 	for ring := int64(1); ring <= maxPlaceRings; ring++ {
 		for dx := -ring; dx <= ring; dx++ {
@@ -85,14 +123,14 @@ func (p *PathFindSystem) Place(preferred spatial.Point) (spatial.Point, error) {
 				if dx != -ring && dx != ring && dy != -ring && dy != ring {
 					continue
 				}
-				candidate := spatial.Point{X: preferred.X + dx, Y: preferred.Y + dy}
-				if p.terrain.Walkable(candidate) {
+				candidate := spatial.Point{X: preferred.X + dx*step, Y: preferred.Y + dy*step}
+				if p.terrain.Standable(candidate) {
 					return candidate, nil
 				}
 			}
 		}
 	}
-	return spatial.Point{}, fmt.Errorf("scene pathfind: no free point within %d of (%d,%d)", maxPlaceRings, preferred.X, preferred.Y)
+	return spatial.Point{}, fmt.Errorf("scene pathfind: no free point within %d of (%d,%d)", maxPlaceRings*step, preferred.X, preferred.Y)
 }
 
 var _ scene.PathFind = (*PathFindSystem)(nil)

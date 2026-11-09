@@ -53,7 +53,10 @@ func handlerMoveTarget(target player.IMapEntity, area sceneentity.ISceneEntity, 
 	if terrain == nil || pathFind == nil {
 		return 0, errcode.Wrap(apperrors.ErrScenePosition, nil, "reason", "no terrain")
 	}
-	if !terrain.Walkable(to) {
+	// Standable: on a height field the goal must also be a ground node that
+	// can be entered (loaded, not deep water without swimming); without one
+	// it is Walkable.
+	if !terrain.Standable(to) {
 		from := component.Pos()
 		return 0, errcode.Wrap(apperrors.ErrScenePosition, nil, "from_x", from.X, "from_y", from.Y, "to_x", to.X, "to_y", to.Y)
 	}

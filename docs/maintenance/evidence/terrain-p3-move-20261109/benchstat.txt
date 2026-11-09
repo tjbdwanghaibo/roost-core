@@ -1,0 +1,86 @@
+vm.swapusage: total = 15360.00M  used = 14241.62M  free = 1118.38M  (encrypted)
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/movement
+cpu: Apple M5
+                           │ docs/maintenance/evidence/terrain-p3-move-20261109/bench.txt │
+                           │                            sec/op                            │
+MoveAdvance/none-10                                                         114.2n ± 130%
+MoveAdvance/walker-10                                                       250.0n ±  17%
+MoveAdvance/grid-10                                                         232.6n ±  97%
+MoveAdvance/grid+walker-10                                                  288.0n ± 165%
+geomean                                                                     209.1n
+
+                           │ docs/maintenance/evidence/terrain-p3-move-20261109/bench.txt │
+                           │                             B/op                             │
+MoveAdvance/none-10                                                            137.0 ± 0%
+MoveAdvance/walker-10                                                          137.0 ± 0%
+MoveAdvance/grid-10                                                            137.0 ± 0%
+MoveAdvance/grid+walker-10                                                     137.0 ± 0%
+geomean                                                                        137.0
+
+                           │ docs/maintenance/evidence/terrain-p3-move-20261109/bench.txt │
+                           │                          allocs/op                           │
+MoveAdvance/none-10                                                            3.000 ± 0%
+MoveAdvance/walker-10                                                          3.000 ± 0%
+MoveAdvance/grid-10                                                            3.000 ± 0%
+MoveAdvance/grid+walker-10                                                     3.000 ± 0%
+geomean                                                                        3.000
+
+pkg: github.com/tjbdwanghaibo/roost-core/gameplay/terrain
+                                │ docs/maintenance/evidence/terrain-p3-move-20261109/bench.txt │
+                                │                            sec/op                            │
+WalkerStep-10                                                                    9.932n ±  15%
+WalkerFindPath/50m-10                                                            73.43µ ±  13%
+WalkerFindPath/50m-optimal-10                                                    422.7µ ±   5%
+WalkerFindPath/200m-10                                                           170.3µ ±   4%
+WalkerFindPath/200m-flat-10                                                      61.78µ ±   5%
+WalkerFindPath/exhausted4096-10                                                  1.207m ± 114%
+GridFindPath/50m-10                                                              271.2µ ± 119%
+GridFindPath/200m-10                                                             249.5µ ±  30%
+GridFindPath/exhausted4096-10                                                    1.284m ±  25%
+geomean                                                                          88.71µ
+
+                                │ docs/maintenance/evidence/terrain-p3-move-20261109/bench.txt │
+                                │                             B/op                             │
+WalkerStep-10                                                                     0.000 ± 0%
+WalkerFindPath/50m-10                                                           117.5Ki ± 0%
+WalkerFindPath/50m-optimal-10                                                   365.6Ki ± 0%
+WalkerFindPath/200m-10                                                          193.8Ki ± 0%
+WalkerFindPath/200m-flat-10                                                     121.8Ki ± 0%
+WalkerFindPath/exhausted4096-10                                                 1.075Mi ± 0%
+GridFindPath/50m-10                                                             424.1Ki ± 0%
+GridFindPath/200m-10                                                            374.5Ki ± 0%
+GridFindPath/exhausted4096-10                                                   1.590Mi ± 0%
+geomean                                                                                      ¹
+¹ summaries must be >0 to compute geomean
+
+                                │ docs/maintenance/evidence/terrain-p3-move-20261109/bench.txt │
+                                │                          allocs/op                           │
+WalkerStep-10                                                                     0.000 ± 0%
+WalkerFindPath/50m-10                                                             15.00 ± 0%
+WalkerFindPath/50m-optimal-10                                                     26.00 ± 0%
+WalkerFindPath/200m-10                                                            18.00 ± 0%
+WalkerFindPath/200m-flat-10                                                       17.00 ± 0%
+WalkerFindPath/exhausted4096-10                                                   41.00 ± 0%
+GridFindPath/50m-10                                                              1.450k ± 0%
+GridFindPath/200m-10                                                             1.437k ± 0%
+GridFindPath/exhausted4096-10                                                    4.472k ± 0%
+geomean                                                                                      ¹
+¹ summaries must be >0 to compute geomean
+
+                              │ docs/maintenance/evidence/terrain-p3-move-20261109/bench.txt │
+                              │                            points                            │
+WalkerFindPath/50m-10                                                             37.00 ± 0%
+WalkerFindPath/50m-optimal-10                                                     37.00 ± 0%
+WalkerFindPath/200m-10                                                            201.0 ± 0%
+WalkerFindPath/200m-flat-10                                                       201.0 ± 0%
+geomean                                                                           86.24
+
+                              │ docs/maintenance/evidence/terrain-p3-move-20261109/bench.txt │
+                              │                           visited                            │
+WalkerFindPath/50m-10                                                             378.0 ± 0%
+WalkerFindPath/50m-optimal-10                                                    1.795k ± 0%
+WalkerFindPath/200m-10                                                            683.0 ± 0%
+WalkerFindPath/200m-flat-10                                                       201.0 ± 0%
+geomean                                                                           552.5
