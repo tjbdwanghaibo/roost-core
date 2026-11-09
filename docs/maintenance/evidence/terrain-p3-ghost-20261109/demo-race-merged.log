@@ -1,0 +1,3 @@
+ok  	example.com/planet/internal/service/game	60.275s
+ok  	example.com/planet/game/entities/terrain_chunk	2.417s
+ok  	example.com/planet/game/scene/runtime	1.781s

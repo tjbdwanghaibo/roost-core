@@ -700,7 +700,7 @@ type TerrainChunkDao struct {
 
 ## 21. P3 Ghost 副本（T05，D19，2026-11-09）
 
-分支 `feat/terrain-p3-ghost`（接续第 19 节记录的 WIP `c23cf766`，合入 main `3fb089d9`）。完成[进度总表](TERRAIN-STATUS.md)的 T05：邻格的编辑推到 Ghost 副本、丢失 / 乱序 / 重启补齐、D13 重置后邻格撤回原始块、分区场景接入地形同步、邻格玩家看到别的格改过的块。跨格编辑仍拒绝（P5 / T08）。证据见 [evidence/terrain-p3-ghost-20261109](evidence/terrain-p3-ghost-20261109/README.md)。
+分支 `feat/terrain-p3-ghost`（接续第 19 节记录的 WIP 提交，WIP 已在本分支改写、不在历史里；合入 main `3fb089d9` 与 `ebd0ecc3`）。完成[进度总表](TERRAIN-STATUS.md)的 T05：邻格的编辑推到 Ghost 副本、丢失 / 乱序 / 重启补齐、D13 重置后邻格撤回原始块、分区场景接入地形同步、邻格玩家看到别的格改过的块。跨格编辑仍拒绝（P5 / T08）。证据见 [evidence/terrain-p3-ghost-20261109](evidence/terrain-p3-ghost-20261109/README.md)。
 
 **WIP 审查结论**：
 
@@ -743,7 +743,7 @@ type TerrainChunkDao struct {
 **限制与未覆盖**：
 
 - 订阅重算按玩家数 × 视点周围块数（292m 半径约 100 块）算，T09 规模（单格数千玩家）未测；拥有者的订阅表、推送扇出没有上限测量。
-- 客户端第一次看到别的进程写的块是新订阅的即时全量（实测约 42～48ms），之后的更新按 TerrainChunk 的 1 秒周期合并；Ghost 带不受这个周期影响。
+- 客户端第一次看到别的进程写的块是新订阅的即时全量（实测约 7～48ms），之后的更新按 TerrainChunk 的 1 秒周期合并；Ghost 带不受这个周期影响。
 - 真实 Mongo / WAL 下的崩溃重启（“只推持久版本”的前提）只靠 strict 契约推出，本轮没有真实依赖的崩溃演练；`scripts/test-seamless-demo.sh` 的分区配置 `cell_size` 3000 不满足开地形的要求，演练没有覆盖地形。
 
 **验证**（2026-11-09，Apple M5，go1.27.3，`GOWORK=off`；生成工程 `--skip-deps` + replace 到本分支）：
@@ -751,9 +751,9 @@ type TerrainChunkDao struct {
 | 用例 | 结果 |
 | --- | --- |
 | `gameplay/terrain` `replica_test.go` 七条（推送、丢失 / 重复 / 乱序、任一边重启补齐、D13 换版撤回且旧包拥有者不答、只认拥有者、线上格式） | 通过（`-race`） |
-| `gameplay/cellworld` `ext_test.go`（扩展消息）与 `TestTerrainReplicaOverNodes`（回环与真实 nats-server） | 通过；全包 `-race` 通过 |
-| `TestTerrainPartitionGhostAndNeighbourClients`（三个进程：格 A、格 B、只做 Base 的 C；真实 TCP 客户端） | 边界编辑到邻格 Ghost 带约 12ms、到别的进程的客户端约 42～48ms；C 上站在格 B 的玩家与 B 上的玩家各自持有的块与写它们的格逐点一致；小编辑到邻格客户端是按下标增量；玩家走远后远处的块进入订阅；推送全丢由续期补齐（< 2s）；录下的旧消息倒序重放不回退；跨格编辑 Ghost 带的块答 `ErrNotOwned`、零写入 |
-| `TestTerrainPartitionReplicasCatchUpAfterRestarts` | B 停机期间 A 继续改，B 重启后约 7～10ms 对齐；A 重启后 B、C 的续期重新订上，之后的改动照常推到 |
+| `gameplay/cellworld` `ext_test.go`（扩展消息）与 `TestTerrainReplicaOverNodes`（回环与真实 nats-server） | 通过；全包 `-race` 通过。合并 `ebd0ecc3` 后第一次全包 `-race`（与生成工程测试同时跑、机器负载高）失败一次，当时只留了末尾几行、没有用例名；随后同一提交连跑 4 次全部通过。原因尚未确认，与 KNOWN-LIMITS 里既有的 cellworld 间歇失败是否同一问题也未确认 |
+| `TestTerrainPartitionGhostAndNeighbourClients`（三个进程：格 A、格 B、只做 Base 的 C；真实 TCP 客户端） | 边界编辑到邻格 Ghost 带约 2～12ms、到别的进程的客户端约 7～48ms；C 上站在格 B 的玩家与 B 上的玩家各自持有的块与写它们的格逐点一致；小编辑到邻格客户端是按下标增量；玩家走远后远处的块进入订阅；推送全丢由续期补齐（< 2s）；录下的旧消息倒序重放不回退；跨格编辑 Ghost 带的块答 `ErrNotOwned`、零写入 |
+| `TestTerrainPartitionReplicasCatchUpAfterRestarts` | B 停机期间 A 继续改，B 重启后约 3～10ms 对齐；A 重启后 B、C 的续期重新订上，之后的改动照常推到 |
 | `TestTerrainPartitionDiscardWithdrawsTheOverlay` | 新包启动的 A 按 D13 重置，B 撤回到新的原始块；旧包的推送重放不恢复覆盖；新包上的编辑照常推到 |
 | `TestReplicaDeltasBringEverySubscriberToTheLatest`（`terrain_chunk`） | 同一次捕获里先增量、`Set`、再全量，老订阅者与新订阅者都到最新；超过守卫发整字段；旧版本 / 别的包版本拒绝 |
 | 测试能变红（变异，均在本分支上临时改代码） | 拥有者不查 `BaseRevision`：旧包拥有者答 47 份订阅；不跳过自己的块：订阅了自己；不在提交后推送：Ghost 1.10s 才到（续期补齐）；不接 witness：远处的块等不到；副本不比版本：`Stale` 为 0；确认推进到当前序号：老订阅者 `heights[20]` 停在旧值；“原始块”压过更新的覆盖块：`ApplyReplica` 答 nil；装不进来的块不删：撤回超时 |

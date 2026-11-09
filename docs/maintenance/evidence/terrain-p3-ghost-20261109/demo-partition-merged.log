@@ -1,0 +1,7 @@
+    terrain_partition_test.go:290: border edit → neighbour ghost band 2.440333ms; → clients of other processes within 6.609917ms of the edit (periodic terrain sync 1s)
+    terrain_partition_test.go:300: an r=3m raise of another cell's chunk reached a client as 21 height updates, payload 195 bytes, component 273 bytes
+--- PASS: TestTerrainPartitionGhostAndNeighbourClients (3.42s)
+    terrain_partition_test.go:380: restarted neighbour caught up 2.561291ms after its start
+--- PASS: TestTerrainPartitionReplicasCatchUpAfterRestarts (2.17s)
+--- PASS: TestTerrainPartitionDiscardWithdrawsTheOverlay (1.14s)
+ok  	example.com/planet/internal/service/game	7.158s
