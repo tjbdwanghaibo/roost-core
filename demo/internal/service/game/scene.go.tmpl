@@ -14,7 +14,6 @@ import (
 	player "{{MODULE}}/game/entities/player"
  terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	sceneentity "{{MODULE}}/game/entities/scene"
-	"{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/settings"
 	gamescene "{{MODULE}}/game/scene"
 	"{{MODULE}}/game/terrainmap"
@@ -307,25 +306,20 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	if !ok || loads == nil {
 		return nil, errors.New("scene: the data engine does not report entity loads, so a player loaded again after an unload would stay unbound from the scene")
 	}
-	// A partitioned scene's world is the grid's, much larger than the
-	// ordinary map: the interest policy indexes the mirrors over all of it.
-	config := lifecycle.WorldSceneConfig()
 	partitioned, err := settings.LoadPartition(registry)
 	if err != nil {
 		return nil, fmt.Errorf("scene: %w", err)
 	}
-	if partitioned.Enabled {
-		config = gamescene.Config{
-			Width: int64(partitioned.Cols) * partitioned.CellSize, Height: int64(partitioned.Rows) * partitioned.CellSize,
-			BlockSize: partitionBlockSize, Spawn: spatial.Point{X: partitioned.SpawnX, Y: partitioned.SpawnY},
-		}
+	terrainMap := terrainmap.Active()
+	config, err := replicatedWorld(partitioned, terrainMap)
+	if err != nil {
+		return nil, fmt.Errorf("scene: %w", err)
 	}
 	// The editable terrain (terrain.go, already loaded and published by
 	// startTerrain) replicates through this manager: its own interest policy,
 	// a bigger object limit and the snapshot budget (terrain_sync.go). Only on
 	// an ordinary scene: a partitioned one's positions belong to the cells (P3).
 	var terrainConfig *terrainSyncConfig
-	terrainMap := terrainmap.Active()
 	if terrainMap != nil && !partitioned.Enabled {
 		terrainConfig = defaultTerrainSync(terrainMap.Meta().Bounds())
 	}
@@ -342,6 +336,21 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	// the scene until somebody else's frame tried to reach them.
 	scene.watchSessions(transport)
 	return scene, nil
+}
+
+// replicatedWorld is the world the scene's interest policy indexes. On an
+// ordinary scene it is the Scene Entity's map (sceneWorld: the default field,
+// or the editable terrain's map), so every point a member can stand on can be
+// seen. A partitioned scene's world is the grid's, much larger than the
+// ordinary map: the interest policy indexes the mirrors over all of it.
+func replicatedWorld(partitioned settings.ScenePartition, m *terrainmap.Map) (gamescene.Config, error) {
+	if partitioned.Enabled {
+		return gamescene.Config{
+			Width: int64(partitioned.Cols) * partitioned.CellSize, Height: int64(partitioned.Rows) * partitioned.CellSize,
+			BlockSize: partitionBlockSize, Spawn: spatial.Point{X: partitioned.SpawnX, Y: partitioned.SpawnY},
+		}, nil
+	}
+	return sceneWorld(partitioned, m)
 }
 
 // watchSessions subscribes to connection closes. The handler does the least

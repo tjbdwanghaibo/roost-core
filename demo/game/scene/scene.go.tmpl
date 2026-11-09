@@ -1,6 +1,8 @@
 package scene
 
 import (
+	"fmt"
+	"math"
 	"time"
 
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
@@ -34,6 +36,42 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{Width: 1000, Height: 1000, BlockSize: 100, Spawn: spatial.Point{X: 500, Y: 500}}
 }
+
+// TerrainConfig is an ordinary scene's map with editable terrain: the terrain
+// map itself (terrain.Meta.Bounds — origin (0, 0), one world unit is a
+// centimetre), so every place of the map can be walked to and nothing outside
+// it can. Everything else is the default map's: the same AOI grid, the same
+// view radii, the same spawn point (a terrain map is at least one chunk, 64m,
+// so it always contains it).
+//
+// The AOI grid is what limits the size: the interest policy's block index
+// (roost-core spatial.BlockIndex) allocates every block up front and refuses
+// more than spatial.MaxBlockCount of them. On the 100-unit grid that is a
+// 1024m × 1024m map (16 × 16 terrain chunks: 56MiB of index built in about
+// 12ms, and about 3ms more marking per GC cycle; the demo's 2 × 1 pack is
+// 0.4MiB — measured in editable terrain plan §23). Moving and re-evaluating
+// observers costs the same on any map size; only the block table grows. A
+// larger map is refused here, with a reason, rather than by the AOI later: a
+// world that size is a partitioned scene's (scene.partition), not one
+// process's.
+func TerrainConfig(bounds spatial.Rect) (Config, error) {
+	config := DefaultConfig()
+	bounds = spatial.NormalizeRect(bounds)
+	if bounds.Min != (spatial.Point{}) || bounds.Empty() {
+		return Config{}, fmt.Errorf("scene: terrain map %v must start at (0, 0) and not be empty", bounds)
+	}
+	cols, rows := spatial.DivideCeil(bounds.Max.X, config.BlockSize), spatial.DivideCeil(bounds.Max.Y, config.BlockSize)
+	if cols > spatial.MaxBlockCount/rows {
+		return Config{}, fmt.Errorf("scene: terrain map %d × %d is too large for an ordinary scene: %d × %d AOI blocks of %d, at most %d (about %dm × %dm); use a partitioned scene (scene.partition) for a map this size",
+			bounds.Max.X, bounds.Max.Y, cols, rows, config.BlockSize, spatial.MaxBlockCount, maxTerrainSide/100, maxTerrainSide/100)
+	}
+	config.Width, config.Height = bounds.Max.X, bounds.Max.Y
+	return config, nil
+}
+
+// maxTerrainSide is the side of the largest square map TerrainConfig accepts
+// (world units), for the refusal's message.
+var maxTerrainSide = int64(math.Sqrt(float64(spatial.MaxBlockCount))) * DefaultConfig().BlockSize
 
 func (c Config) Normalize() Config {
 	if c.Width <= 0 {
