@@ -1,0 +1,85 @@
+?   	example.com/planet	[no test files]
+?   	example.com/planet/cmd/accountctl	[no test files]
+?   	example.com/planet/cmd/healthprobe	[no test files]
+ok  	example.com/planet/cmd/loadtest	0.987s
+?   	example.com/planet/cmd/playerprobe	[no test files]
+?   	example.com/planet/cmd/schemamigrate	[no test files]
+ok  	example.com/planet/cmd/sidmerge	1.230s
+ok  	example.com/planet/cmd/sidmove	1.950s
+ok  	example.com/planet/cmd/terrainpack	2.404s
+?   	example.com/planet/configs/generated	[no test files]
+?   	example.com/planet/configs/schema	[no test files]
+ok  	example.com/planet/db	2.732s
+?   	example.com/planet/db/def	[no test files]
+ok  	example.com/planet/db/migrations	3.243s
+ok  	example.com/planet/deploy/docker	3.422s
+?   	example.com/planet/game/activity	[no test files]
+ok  	example.com/planet/game/actor	3.379s
+?   	example.com/planet/game/alliancerule	[no test files]
+?   	example.com/planet/game/battle	[no test files]
+?   	example.com/planet/game/chatroom	[no test files]
+?   	example.com/planet/game/clientsync	[no test files]
+ok  	example.com/planet/game/controllers/player	4.654s
+ok  	example.com/planet/game/dungeon	3.928s
+?   	example.com/planet/game/effects	[no test files]
+?   	example.com/planet/game/entities	[no test files]
+ok  	example.com/planet/game/entities/alliance	4.400s
+ok  	example.com/planet/game/entities/alliance_member	4.726s
+ok  	example.com/planet/game/entities/monster	5.036s
+ok  	example.com/planet/game/entities/player	5.190s
+?   	example.com/planet/game/entities/scene	[no test files]
+?   	example.com/planet/game/entities/scene_actor	[no test files]
+ok  	example.com/planet/game/entities/team	5.248s
+ok  	example.com/planet/game/entities/terrain_chunk	5.198s
+ok  	example.com/planet/game/entities/world	4.347s
+?   	example.com/planet/game/equipment	[no test files]
+?   	example.com/planet/game/flags	[no test files]
+ok  	example.com/planet/game/gameplay/attribute	4.602s
+ok  	example.com/planet/game/gift	4.668s
+?   	example.com/planet/game/guild	[no test files]
+ok  	example.com/planet/game/handler	4.273s
+ok  	example.com/planet/game/handler/sender	2.728s
+?   	example.com/planet/game/handler/syncsender	[no test files]
+?   	example.com/planet/game/lifecycle	[no test files]
+?   	example.com/planet/game/matchmaking	[no test files]
+ok  	example.com/planet/game/partition	3.201s
+?   	example.com/planet/game/playeraccess	[no test files]
+?   	example.com/planet/game/protocol_bootstrap	[no test files]
+?   	example.com/planet/game/protocol_handlers/player	[no test files]
+?   	example.com/planet/game/purchase	[no test files]
+?   	example.com/planet/game/ranking	[no test files]
+ok  	example.com/planet/game/rewards	3.661s
+ok  	example.com/planet/game/runtimeid	4.105s
+?   	example.com/planet/game/scene	[no test files]
+ok  	example.com/planet/game/scene/runtime	4.334s
+ok  	example.com/planet/game/settings	4.300s
+ok  	example.com/planet/game/skills	4.711s
+?   	example.com/planet/game/terrainmap	[no test files]
+ok  	example.com/planet/internal/access/player	3.719s
+ok  	example.com/planet/internal/access/player/tcp	3.022s
+?   	example.com/planet/internal/bootstrap	[no test files]
+?   	example.com/planet/internal/errors	[no test files]
+?   	example.com/planet/internal/frameworkdeps	[no test files]
+?   	example.com/planet/internal/registry	[no test files]
+ok  	example.com/planet/internal/rpc/alliance	1.357s
+ok  	example.com/planet/internal/service/account	0.724s
+?   	example.com/planet/internal/service/activity	[no test files]
+ok  	example.com/planet/internal/service/alliance	1.728s
+?   	example.com/planet/internal/service/chat	[no test files]
+ok  	example.com/planet/internal/service/game	33.528s
+?   	example.com/planet/internal/service/global	[no test files]
+?   	example.com/planet/internal/service/mail	[no test files]
+?   	example.com/planet/internal/service/match	[no test files]
+ok  	example.com/planet/internal/service/platform	0.573s
+?   	example.com/planet/internal/service/rank	[no test files]
+?   	example.com/planet/internal/service/session	[no test files]
+?   	example.com/planet/loadtest/playertcp	[no test files]
+?   	example.com/planet/loadtest/protocol	[no test files]
+?   	example.com/planet/protocol/def	[no test files]
+?   	example.com/planet/protocol/msgid	[no test files]
+?   	example.com/planet/protocol/pb	[no test files]
+?   	example.com/planet/protocol/player_bind	[no test files]
+?   	example.com/planet/saga/alliance_donate	[no test files]
+?   	example.com/planet/saga/alliance_found	[no test files]
+?   	example.com/planet/saga/alliance_reward	[no test files]
+?   	example.com/planet/saga/gift_item	[no test files]

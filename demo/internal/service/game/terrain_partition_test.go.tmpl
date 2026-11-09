@@ -342,6 +342,15 @@ func TestTerrainPartitionGhostAndNeighbourClients(t *testing.T) {
 	if err := b.process.m.ApplyReplica(ownB, terrain.Overlay{BaseRevision: 1}); !errors.Is(err, terrainmap.ErrNotOwned) {
 		t.Fatalf("a replica of the process's own chunk: %v", err)
 	}
+	// 跨格编辑仍然拒绝（P5 / T08）：Ghost 带里的块有了实时副本，也只归写它的格；B 的玩家改它整笔拒绝、什么都不写。
+	terrainmap.Install(b.process.m)
+	_, beforeVersion, _ := b.process.m.View().Chunk(border)
+	if _, err := b.process.m.Brush(context.Background(), terrainBuilder, 1, raiseAt(border, 300, 10)); !errors.Is(err, terrainmap.ErrNotOwned) {
+		t.Fatalf("sid %d edited a ghost chunk of another cell: %v", partitionSidB, err)
+	}
+	if _, v, _ := b.process.m.View().Chunk(border); v != beforeVersion || !sameChunk(a.process.m, b.process.m, border) {
+		t.Fatalf("a refused cross-cell edit changed the ghost chunk: version %d → %d", beforeVersion, v)
+	}
 }
 
 // 重启：B 停下期间 A 接着改，B 重启时按库里的记录装入（这里库里没有这块的记录：启动快照是原始块），订阅一到就补齐；

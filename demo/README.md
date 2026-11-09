@@ -194,7 +194,7 @@ scene:
 ```
 
 - **装哪些块、写哪些块**：不分区时整张图都归本进程；分区场景（`scene.partition`）里本 sid 托管的格的块归本进程写，本格外扩
-  `ghost_band` 范围内的块也装入（邻格的块只读，启动时读一次快照）；只做 Base 的 sid 不装块。开地形的分区场景要求 `cell_size`
+  `ghost_band` 范围内的块也装入（邻格的块只读：启动时按库里的记录装入，之后由写它的格推送，见下面的 P3）；只做 Base 的 sid 不装块。开地形的分区场景要求 `cell_size`
   是 6400（一块）的整数倍，一块不跨两个格，加载配置时检查；demo 缺省的 3000 不满足，例如：
   `cell_size: 6400`、`cols: 2`、`rows: 1`、`owners: ["1001", "1002"]`（世界 12800 × 6400，正好是缺省地形包的 2 × 1 块；
   `spawn_x` / `spawns` 要落在新的世界里）。
@@ -249,7 +249,7 @@ scene:
   Flush 至多 4 个；玩家 / 怪 / 场景仍是 100、不限快照，与不开地形时逐字节相同（会话的引用表合起来 164，每帧对象数仍按 100 切）。
   任一类超出上限不断开（超额降级，D17）：放不下的对象暂缓，对应的 Interest 从最远处收紧视野，有空位时逐步放宽。
   客户端用生成的 `ApplySyncTerrainChunkDao` 应用，按 `Version` 重建 mesh（C# 见 `client/dotnet/Roost.Client/Terrain/`）。
-  分区场景还没有地形同步（P3）。
+  分区场景的地形同步见下面的 P3。
 - **测试**：`terrain_test.go` 的 `TestTerrainBrush*`（重复 / 乱序只生效一次、窗口外与重启后的旧请求重放答过期且不写、旧算法下编辑 ID
   相同的两个请求都执行、拒绝零写入、改动点数配额、多块回滚连同账本不变、整字段守卫）与 `TestTerrainLastSeqTellsAClientWhereToContinue`；
   `TestTerrainEditLedgerRealMongo` 在真实 Mongo 上验证账本落库与重启后的重放；
@@ -259,6 +259,28 @@ scene:
   [编辑配额与材质守卫 500](../docs/maintenance/evidence/terrain-quota-20261108/README.md)）。
 - **升级**：`TerrainChunkDao` 是 schema 2（`Materials` 从 `[]byte` 改成 `[]uint16`，store 键 4 不变）。项目未上线，不迁移：
   schema 1 的记录按 `ErrSchemaMismatch` 拒绝（启动装入时这块按损坏不装入），升级前清空 `terrain_chunks`。
+
+### 分区场景：Ghost 副本与邻格可见（P3）
+
+[方案 §21](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#21-p3-ghost-副本t05d192026-11-09)；实现在
+`internal/service/<game>/terrain_partition.go`，协议是 `gameplay/terrain` 的 `Replicator`（[包说明“块副本”](../gameplay/terrain/README.md#块副本p3replicago)）。
+开地形的分区场景（`scene.partition` + `scene.terrain.pack`，`cell_size` 是 6400 的整数倍）自动接上，没有新的配置键。
+
+- **Ghost 带跟随邻格**：一块只归包含它的格的进程写。邻格改了本格 Ghost 带里的块，写它的进程在改块事务提交之后经 cellworld
+  扩展消息（命名空间 `terrain`，线上格式 v7）推整块，本进程装进地形视图（`Map.ApplyReplica`），`Height` / `Probe` 读到邻格
+  最新的已提交数据。订阅每秒续期兼补齐：推送丢了、任一边重启，至多 1 秒后对齐；旧的、重复的、倒序的消息按版本丢弃。
+- **换版（D13）**：邻格换了原始地形包、把旧编辑重置之后，本进程（同样换包重启）撤回到新的原始块；换版前的推送带旧
+  `BaseRevision`，一律丢弃，不会把旧编辑装回来。换版要整组进程换包重启：包版本不同的两个进程之间不复制。
+- **邻格玩家看到别的格改过的块**：玩家连在自己的 Base 进程上。Base 进程按本进程玩家的地形视点（进场位置，之后是 cellworld
+  witness 里玩家自己的位置）订阅周围 292m 内别的进程写的块，改过的块作为只读副本（`terrain_chunk.Replica`）进场景的同一个
+  同步 Manager 与地形 Interest：对象 ID、命名空间、编码、按下标的增量、1 秒周期与 64 块上限都与本格的块相同，客户端不用区分。
+- **编辑**：玩家的编辑在他连着的进程上执行，仍只能改这个进程写的块；改 Ghost 带或别的格的块答 `terrain_not_owned`（100054，`terrainmap.ErrNotOwned`），整笔不写，
+  跨格编辑是 P5。
+- **观测**：`gm.scene.partition` 多一栏 `terrain`（副本计数：订阅、推送、应用、旧版本、包版本不同丢弃、错拥有者等；Ghost 带块数、
+  客户端想要的块与副本数）。
+- **测试**：`terrain_partition_test.go`（三个进程：两个格 + 一个只做 Base，真实 TCP 客户端）：边界编辑到邻格 Ghost 与别的进程的
+  客户端、小编辑是增量、玩家走远订阅跟着走、推送全丢由续期补齐、旧消息倒序重放不回退、重启补齐、D13 撤回、跨格编辑仍拒绝。
+- **升级**：cellworld 线上格式 v7，v6 及更早的消息按坏消息丢弃；未上线，先停旧进程再起新进程。存储不变。
 
 ## 改这里的东西之后
 

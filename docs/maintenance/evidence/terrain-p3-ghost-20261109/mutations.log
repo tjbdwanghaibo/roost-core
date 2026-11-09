@@ -1,0 +1,49 @@
+== mutation-ack-current.log
+--- FAIL: TestReplicaDeltasBringEverySubscriberToTheLatest (0.00s)
+    replica_test.go:91: the old subscriber holds version 3 heights[10]=7 heights[20]=1020 materials[30]=0, want version 3 with 7, 8 and 200
+FAIL
+FAIL	example.com/planet/game/entities/terrain_chunk	0.564s
+FAIL
+== mutation-no-clear-unloadable.log
+2026/11/09 22:21:04 ERROR terrain: a neighbouring cell's chunk record is based on another base revision; the chunk is not loaded until its cell discards the edits chunk=(3,0) record_base_revision=1 pack_base_revision=2 version=2
+2026/11/09 22:21:04 WARN terrain: chunk record was based on another base revision; its edits were discarded and the chunk is back to the base pack chunk=(3,0) record_base_revision=1 pack_base_revision=2 version=2
+--- FAIL: TestTerrainPartitionDiscardWithdrawsTheOverlay (5.24s)
+    terrain_partition_test.go:406: timed out waiting for the neighbour withdraws to the new base chunk
+FAIL
+FAIL	example.com/planet/internal/service/game	5.969s
+FAIL
+== mutation-no-push.log
+--- FAIL: TestTerrainPartitionGhostAndNeighbourClients (1.12s)
+    terrain_partition_test.go:275: the border edit reached the neighbour after 1.102351583s: by the subscription renewal (1s), not pushed after the commit
+FAIL
+FAIL	example.com/planet/internal/service/game	1.778s
+FAIL
+== mutation-no-witness.log
+--- FAIL: TestTerrainPartitionGhostAndNeighbourClients (6.09s)
+    terrain_partition_test.go:289: border edit → neighbour ghost band 2.499416ms; → clients of other processes within 6.384625ms of the edit (periodic terrain sync 1s)
+    terrain_partition_test.go:304: timed out waiting for the far chunk once the player is near it
+FAIL
+FAIL	example.com/planet/internal/service/game	6.760s
+FAIL
+== mutation-replica-no-version.log
+--- FAIL: TestTerrainPartitionGhostAndNeighbourClients (3.36s)
+    terrain_partition_test.go:289: border edit → neighbour ghost band 2.271667ms; → clients of other processes within 7.579833ms of the edit (periodic terrain sync 1s)
+    terrain_partition_test.go:333: sid 103 replicator stats {SubscribesOut:8 SubscribesIn:0 Subscribers:0 ChunksOut:0 PushedOut:0 ChunkBytesOut:0 ChunksIn:13 Applied:13 Stale:0 BaseRevisionDrops:0 WrongOwner:0 Unwanted:0 NotOwned:0 Unloaded:0 Ahead:0 DecodeErrors:0 ApplyErrors:0 InboxDrops:0 SendDrops:0}
+FAIL
+FAIL	example.com/planet/internal/service/game	4.078s
+FAIL
+== mutation-replica.log
+--- FAIL: TestReplicaPushesCommitsToTheSubscriber (0.02s)
+    replica_test.go:335: replica stats {SubscribesOut:2 SubscribesIn:1 Subscribers:1 ChunksOut:0 PushedOut:0 ChunkBytesOut:0 ChunksIn:4 Applied:4 Stale:0 BaseRevisionDrops:0 WrongOwner:0 Unwanted:0 NotOwned:0 Unloaded:0 Ahead:0 DecodeErrors:0 ApplyErrors:0 InboxDrops:0 SendDrops:0}: B subscribed its own chunk
+--- FAIL: TestReplicaFollowsADiscardOnANewBaseRevision (2.02s)
+    replica_test.go:464: the old owner took a subscription from another base revision: {SubscribesOut:0 SubscribesIn:47 Subscribers:1 ChunksOut:47 PushedOut:0 ChunkBytesOut:252813 ChunksIn:0 Applied:0 Stale:0 BaseRevisionDrops:0 WrongOwner:0 Unwanted:0 NotOwned:0 Unloaded:0 Ahead:0 DecodeErrors:0 ApplyErrors:0 InboxDrops:0 SendDrops:0}
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	2.537s
+FAIL
+== mutation-v0-overrides.log
+--- FAIL: TestTerrainPartitionGhostAndNeighbourClients (3.43s)
+    terrain_partition_test.go:290: border edit → neighbour ghost band 2.086042ms; → clients of other processes within 12.497334ms of the edit (periodic terrain sync 1s)
+    terrain_partition_test.go:338: a base message over a newer overlay: <nil>
+FAIL
+FAIL	example.com/planet/internal/service/game	4.196s
+FAIL

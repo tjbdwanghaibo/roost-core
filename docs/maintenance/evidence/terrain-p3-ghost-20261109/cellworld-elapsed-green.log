@@ -1,0 +1,3 @@
+--- PASS: TestIdleBeatIntegratesWholePeriodAndFreezesInsideBand (0.00s)
+--- PASS: TestActorIntegratesTheElapsedTimeNotTheBeatCount (0.00s)
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	0.639s

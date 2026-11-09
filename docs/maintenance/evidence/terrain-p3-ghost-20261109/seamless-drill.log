@@ -1,0 +1,41 @@
+# 分支 feat/terrain-p3-ghost（dcd0a0c4）
+seamless: work dir <tmp>, evidence <scratch>/seamless
+STEP enter ok {"monsters_near_p1":[2323454557566665745,2323454557566666769,2323454557566667793,2323472149752710161],"move_refused":"scene_partitioned","p1":100001,"p1_at":{"X":2900,"Y":1500},"p1_hp":100,"p2":100002,"p3":100003}
+STEP own_state ok {"exp_after":7,"exp_before":0}
+STEP straight ok {"creates_p2":2,"nearby_removed":0,"owner_changes":2,"self_gap_ms":58}
+STEP jitter ok {"owner_changes":8,"self_gap_ms":58}
+STEP diagonal ok {"self_gap_ms":58}
+STEP attack_across_0 ok {"applied":10,"damage":10,"damage_forwarded_by_cells":10,"damage_retries_total":0,"duplicate":0,"end_hp":0,"pushed_results":10,"start_hp":100,"target":2323472149752712209}
+STEP attack_across_1 ok {"applied":10,"damage":10,"damage_forwarded_by_cells":10,"damage_retries_total":0,"duplicate":0,"end_hp":0,"pushed_results":10,"start_hp":100,"target":2323454557566665745}
+STEP panel_level_up ok {"base_panel":{"actor":102401061,"attack":12,"attack_seq":20,"enter_age_ms":23905,"enter_hint":0,"epoch":14,"hp":100,"in_world":true,"intent_seq":23,"lease_age_ms":11,"lost_epoch":0,"max_hp":110,"owner_sid":1002,"panel_acked":2,"panel_unknown":false,"panel_ver":2,"power":35,"shown":true,"snapshot_epoch":14,"snapshot_seq":484,"view_age_ms":11,"x":3078,"y":1512},"cell_attack_after":12,"cell_attack_before":10,"cell_hp":100,"cell_max_hp_after":110,"cell_max_hp_before":100,"hit_damage":12,"hit_target":2323454557566666769,"target_hp":[100,88]}
+STEP monster_cross ok {"creates_on_p2":1,"from_sid":1002,"handoffs_accepted_cell_a":8,"handoffs_accepted_cell_b":7,"walker":2323454557566668817}
+STEP cell_crash ok {"base_reenters":5,"cell_b_monsters_respawned":3,"epoch_after":3,"epoch_before":2,"owner_after":1002,"p2_hp_after":76,"p2_hp_before":76,"restart_seconds":5.343704458}
+STEP base_restart ok {"entered_at":{"X":1188,"Y":1500},"p5":100004,"saved":{"X":1188,"Y":1500},"spawn":{"X":2900,"Y":1500}}
+STEP team_panel ok {"apart":2483,"p1":100001,"p1_sees_p6":{"_id":102405157,"cell_attack":10,"cell_hp":100,"cell_max_hp":100,"cell_power":30,"pos_x":5419,"pos_y":1500},"p6":100005,"panel_after_ms":100,"removed_after_kill_ms":2977,"removed_after_leave_ms":84,"restored_after_restart":true,"restored_members":[100001,100005],"team":4611686018427388969}
+STEP team_roster_cross_base ok {"disband_ver":4,"members_after_leave":[100001]}
+STEP ordinary_scene ok {"move":"ok","move_intent":"scene_not_partitioned","p4":100006}
+seamless: the demo robots failed on the ordinary scene (sid 1003); see <scratch>/seamless/loadtest-1003.log
+exit=1
+loadtest: run robot-demo-20261109-224702-001 ended failed (threshold): threshold violated: p95 = 16.449463791s > max 16s (2 samples)
+
+# 对照 main 3fb089d9（同机、紧接其后）
+seamless: work dir <tmp>, evidence <scratch>/seamless-main
+STEP enter ok {"monsters_near_p1":[2323454557581739025,2323454557581740049,2323454557581741073,2323472149767848977],"move_refused":"scene_partitioned","p1":100009,"p1_at":{"X":2900,"Y":1500},"p1_hp":100,"p2":100010,"p3":100011}
+STEP own_state ok {"exp_after":7,"exp_before":0}
+STEP straight ok {"creates_p2":2,"nearby_removed":0,"owner_changes":2,"self_gap_ms":73}
+STEP jitter ok {"owner_changes":8,"self_gap_ms":74}
+STEP diagonal ok {"self_gap_ms":73}
+STEP attack_across_0 ok {"applied":10,"damage":10,"damage_forwarded_by_cells":10,"damage_retries_total":0,"duplicate":0,"end_hp":0,"pushed_results":10,"start_hp":100,"target":2323472149767850001}
+STEP attack_across_1 ok {"applied":10,"damage":10,"damage_forwarded_by_cells":10,"damage_retries_total":0,"duplicate":0,"end_hp":0,"pushed_results":10,"start_hp":100,"target":2323454557581740049}
+STEP panel_level_up ok {"base_panel":{"actor":102409253,"attack":12,"attack_seq":20,"enter_age_ms":22816,"enter_hint":0,"epoch":14,"hp":100,"in_world":true,"intent_seq":23,"lease_age_ms":26,"lost_epoch":0,"max_hp":110,"owner_sid":1002,"panel_acked":2,"panel_unknown":false,"panel_ver":2,"power":35,"shown":true,"snapshot_epoch":13,"snapshot_seq":438,"view_age_ms":26,"x":3071,"y":1504},"cell_attack_after":12,"cell_attack_before":10,"cell_hp":100,"cell_max_hp_after":110,"cell_max_hp_before":100,"hit_damage":12,"hit_target":2323472149767851025,"target_hp":[100,88]}
+STEP monster_cross ok {"creates_on_p2":1,"from_sid":1002,"handoffs_accepted_cell_a":8,"handoffs_accepted_cell_b":7,"walker":2323454557581742097}
+STEP cell_crash ok {"base_reenters":6,"cell_b_monsters_respawned":3,"epoch_after":3,"epoch_before":2,"owner_after":1002,"p2_hp_after":76,"p2_hp_before":76,"restart_seconds":6.259725292}
+STEP base_restart ok {"entered_at":{"X":1190,"Y":1500},"p5":100012,"saved":{"X":1190,"Y":1500},"spawn":{"X":2900,"Y":1500}}
+STEP team_panel ok {"apart":2478,"p1":100009,"p1_sees_p6":{"_id":102413349,"cell_attack":10,"cell_hp":100,"cell_max_hp":100,"cell_power":30,"pos_x":5420,"pos_y":1500},"p6":100013,"panel_after_ms":50,"removed_after_kill_ms":2992,"removed_after_leave_ms":131,"restored_after_restart":true,"restored_members":[100009,100013],"team":4611686018427388969}
+STEP team_roster_cross_base ok {"disband_ver":4,"members_after_leave":[100009]}
+STEP ordinary_scene ok {"move":"ok","move_intent":"scene_not_partitioned","p4":100014}
+seamless: the demo robots failed on the ordinary scene (sid 1003); see <scratch>/seamless-main/loadtest-1003.log
+exit=1
+2026/11/09 22:51:07 WARN robot runner: scenario failed robot=1 player=900001 scenario=demo err="robot action guild_op_status: guild saga still waiting (step 1)"
+2026/11/09 22:51:15 WARN robot runner: scenario failed robot=2 player=900002 scenario=demo err="robot action guild_op_status: guild saga still waiting (step 1)"
+loadtest: run robot-demo-20261109-225052-001 ended failed (threshold): threshold violated: error_rate = 1 > max 0 (2 samples); p95: no samples to judge (max 16s)
