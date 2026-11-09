@@ -1,5 +1,9 @@
 # 当前已知限制与验证边界
 
+## 2026-11-09：按实体类型同步策略已采用，待 main 实施
+
+用户确认将 Player/Monster on_change、TerrainChunk 每 1 秒合并脏增量写入实施决策。明确首次变脏起算、不续期、恢复与 remove 不受该延迟、普通 Flush 遵守到期及 Drain/Stop 的处理边界；实现仍待 main 接入。见 [已采用策略与 main 接入清单](TERRAIN-PLAN-FOLLOWUP-20261109.md)。以下较早的“建议”状态已由此决策更新。
+
 ## 2026-11-09：剩余地形方案与按类型同步
 
 main 仍为 f0ff1727，原两项去重问题未修。补充 P3/P4/P5 的副本恢复、数据就绪、建筑并发、部分成功对账及换版联动设计边界；纳入 Player/Monster on_change、TerrainChunk 1 秒脏增量的建议。当前 Mode/Interval 是 Manager 级，尚无同 Manager 按类型混用。见 [续审与验收建议](TERRAIN-PLAN-FOLLOWUP-20261109.md)。本轮未改运行时、未执行压测。
