@@ -91,5 +91,10 @@ pre : x after each cycle [5790 5790 5790 5790 5790 5790 5790 5790 5790 5790]; lo
 | `gofmt -l gameplay/cellworld` | 空 |
 | `GOWORK=off go vet ./gameplay/cellworld` | 通过 |
 | `GOWORK=off go test -race -count=1 ./gameplay/cellworld` 连续 5 遍 | 5 / 5 通过，每遍 156～158s（合并 main 前；平均负载 3～5） |
+| 合并 main（`b28859c3`，跨格移动地面钩子）后：`gofmt -l`、`go build ./gameplay/...`、`go vet ./gameplay/cellworld` | 通过 |
+| 合并后 `GOWORK=off go test -race -count=1 ./gameplay/cellworld` 连续 5 遍 | 5 / 5 通过，每遍 161～162s（平均负载 2～4） |
+| 合并后 `GOWORK=off go test -count=1 .` | 通过 |
 | `python3 scripts/check-doc-anchors.py` | 0 broken |
+
+加压下的修后批次只有 8 次，不作“已消除偶发”的频率结论；子步截断与旧格 frozen 超时两项未关闭。
 
