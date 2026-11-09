@@ -1,0 +1,39 @@
+== M1 sceneWorld 永远取缺省地图 (internal/service/game/terrain.go)
+  --- FAIL: TestTerrainSceneIsTheTerrainMap (0.01s)
+  terrain_move_test.go:590: the scene's ground is {{0 0} {1000 1000}}, want the terrain map {{0 0} {6400 6400}}
+  --- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+  terrain_move_test.go:670: ordinary with terrain: sceneWorld = {Width:1000 Height:1000 BlockSize:100 Spawn:{X:500 Y:500}} <nil>, want {Width:12800 Height:6400 BlockSize:100 Spawn:{X:500 Y:500}}
+  FAIL
+  FAIL	example.com/planet/internal/service/game	2.183s
+  FAIL
+  ok  	example.com/planet/game/scene/runtime	0.244s
+== M2 TerrainConfig 不设上限 (game/scene/scene.go)
+  --- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+  terrain_move_test.go:695: 17 × 16 chunks on an ordinary scene: config <nil>, region <nil>; want both refused, pointing at a partitioned scene
+  FAIL
+  FAIL	example.com/planet/internal/service/game	2.486s
+  FAIL
+  ok  	example.com/planet/game/scene/runtime	0.529s
+== M3 场景实体忽略建造参数（旧 GetOrCreate 行为） (game/entities/scene/entity.go)
+  --- FAIL: TestTerrainSceneIsTheTerrainMap (0.02s)
+  terrain_move_test.go:586: scene: scene: singleton 1 already exists on the map {{0 0} {1000 1000}}, not {{0 0} {6400 6400}}
+  FAIL
+  FAIL	example.com/planet/internal/service/game	0.763s
+  FAIL
+  ok  	example.com/planet/game/scene/runtime	0.260s
+== M4 terrainRegion 不查普通场景上限 (internal/service/game/terrain.go)
+  --- FAIL: TestTerrainSceneWorldAndItsLimit (0.02s)
+  terrain_move_test.go:695: 17 × 16 chunks on an ordinary scene: config scene: terrain map 108800 × 102400 is too large for an ordinary scene: 1088 × 1024 AOI blocks of 100, at most 1048576 (about 1024m × 1024m); use a partitioned scene (scene.partition) for a map this size, region <nil>; want both refused, pointing at a partitioned scene
+  FAIL
+  FAIL	example.com/planet/internal/service/game	2.470s
+  FAIL
+  ok  	example.com/planet/game/scene/runtime	0.265s
+== M5 场景同步 AOI 仍取缺省地图 (internal/service/game/scene.go)
+  --- FAIL: TestTerrainSceneIsTheTerrainMap (0.01s)
+  terrain_move_test.go:598: join 34100228: scene: enter interest 34100228: spatial: invalid terrain bounds
+  --- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+  terrain_move_test.go:674: ordinary with terrain: replicatedWorld = {Width:1000 Height:1000 BlockSize:100 Spawn:{X:500 Y:500}} <nil>, want {Width:12800 Height:6400 BlockSize:100 Spawn:{X:500 Y:500}}
+  FAIL
+  FAIL	example.com/planet/internal/service/game	0.695s
+  FAIL
+  ok  	example.com/planet/game/scene/runtime	0.250s

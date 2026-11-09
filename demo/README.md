@@ -266,7 +266,7 @@ scene:
 不开地形、或分区场景，一切与之前相同（`TestWithoutASurfaceTheMapIsTheFlatGrid` 与原有移动用例）。
 
 - **接线**：服务 Init 在地形同步就绪后调 `installSurface`，把 `terrainmap.Map.Walker()`（`terrain.DefaultWalkRules`，建筑占位取
-  `Rules.Occupied`）装到场景的 `Terrain().SetSurface`，范围夹到场景的世界。`actor.Surface` 是每个 `Move` 的 `MoveConfig.Surface`：
+  `Rules.Occupied`）装到场景的 `Terrain().SetSurface`，范围夹到场景的世界（即地形图，见下面“场景大小”）。`actor.Surface` 是每个 `Move` 的 `MoveConfig.Surface`：
   每拍读一次，地形改动后的下一步就按新地形判定。
 - **规则**：1m 地面节点之间坡度 ≤ 45°、陡降 ≤ 3 米可走；水深 > 50 厘米是游泳（速度 60%，站立高度是水面）；地图外、块没装的节点
   不可进入。服务端位置只有 X / Y，高度按 `Walker.StandZ` 推出，客户端同算；不加 Z 字段，cellworld 线上格式不变。
@@ -278,8 +278,14 @@ scene:
 - **同步窗口与纠偏**：TerrainChunk 每秒同步一次、玩家位置变化即发，客户端最多晚约 1 秒看到地形改动；服务端行走总按最新地形，
   客户端预测与服务端不同时以收到的位置为准，新块到达后两边按同一规则一致（`terrain_move_test.go`：挖在前方、挖在脚下、抬地、
   陡坑困住后填平）。
-- **限制**：分区场景（cellworld 积分）没有地面钩子，跨格移动 / 交接不按高度；普通场景的世界仍是 `gamescene.DefaultConfig`
-  （1000 × 1000，即 10m 见方），比地形图小；陡壁深坑会困住玩家（服务端不替玩家找出路）；路线开头可能先折回起点节点中心（≤ 约 0.7m）。
+- **场景大小**（[方案 §23](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#23-普通场景取地形图大小实施结果2026-11-09)）：开了地形的普通场景，世界就是
+  地形图（`gamescene.TerrainConfig(meta.Bounds())`）：场景实体的地面、场景同步的 AOI 与行走边界都是整张图，地图外的目标、瞬移、落点一律拒绝；
+  AOI 块边长、视野半径与出生点 (500, 500) 不变。服务 Init 先装地形、再按 `sceneWorld` 建场景（`lifecycle.EnsureWorldScene` 带上地图）。
+  AOI 的块表按块数预先分配，普通场景能放下的地形图至多 2^20 个 1m 的块（1024m 见方，如 16 × 16 块；块表约 56MiB、每次 GC 多约 3ms），
+  更大的图（如 1w 方图）在打开地形包后、装入任何块前拒绝，进程启动失败——大地图用分区场景。demo 缺省的 2 × 1 块只多约 0.4MiB。
+  不开地形、分区场景的场景实体仍是 `gamescene.DefaultConfig`（1000 × 1000）。
+- **限制**：分区场景（cellworld 积分）没有地面钩子，跨格移动 / 交接不按高度；陡壁深坑会困住玩家（服务端不替玩家找出路）；路线开头可能先折回
+  起点节点中心（≤ 约 0.7m）。
 
 ## 改这里的东西之后
 
