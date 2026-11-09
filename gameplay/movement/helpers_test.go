@@ -84,6 +84,7 @@ func (e *mover) OnDestroy(entity.EntityDestroyReason) {
 
 type moverOptions struct {
 	terrain spatial.Terrain
+	surface func() Surface
 	locate  Locator
 	save    func(int64, spatial.Point, Facing) error
 	every   time.Duration
@@ -109,7 +110,7 @@ func newMover(t testing.TB, d *heartbeat.Driver, unique int64, registry *actionf
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.move, err = NewMove(e.mb, MoveConfig{Terrain: o.terrain, Locate: o.locate})
+	e.move, err = NewMove(e.mb, MoveConfig{Terrain: o.terrain, Surface: o.surface, Locate: o.locate})
 	if err != nil {
 		t.Fatal(err)
 	}

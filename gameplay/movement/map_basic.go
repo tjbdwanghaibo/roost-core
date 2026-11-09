@@ -3,7 +3,9 @@
 //   - MapBasic：所在场景、位置、朝向，以及与 AOI 的接线——进场景 Enter，位置变化 QueueMove（事务内入队、走提交门，
 //     回滚的移动不生效），离开 Leave；落库由业务选（周期 / 离开场景时，经 MapConfig.Save）。
 //   - Move：速度、路径或跟随目标、状态；被动组件，只提供设定与推进接口（MoveTo / Follow / Advance / Stop），
-//     自己不挂心跳。
+//     自己不挂心跳。地面有两层可选判定：MoveConfig.Terrain（二维格子，每进一格问一次能不能站）与
+//     MoveConfig.Surface（带高度的地面，可编辑地形 P3：每进一个地面节点按坡度 / 台阶 / 下落 / 水判定，水里按速度
+//     千分比减速；gameplay/terrain 的 Walker 实现它）。Surface 每拍取一次，返回 nil 时推进与不设时逐位相同。
 //   - MoveTo / Follow 两个 actionflow 动作：移动由动作驱动（参考 ssr：action 挂心跳、在心跳里调 move）。动作所在组
 //     由实体的 actionflow.BeatRunner 挂心跳（周期取动作的 TickInterval，缺省 DefaultMovePeriod），每拍 Tick 调
 //     Move.Advance(Beat.Elapsed)（不追帧），到达、被打断、被阻挡、目标消失由 actionflow 收尾（RegisterActions）。
