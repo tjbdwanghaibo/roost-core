@@ -2,13 +2,15 @@ package handler
 
 import (
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"{{MODULE}}/game/terrainmap"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 )
 
-// 地形块的三个改块事务（可编辑地形，game/terrainmap 发起）。都是 rollback=undo durability=strict：回复与视图更新
-// 都在 WAL 持久之后，回滚的事务由生成 setter 的逆操作还原 DAO、不改变视图。第一次改的块由调用方先经 lifecycle 的
-// GetOrCreate 建出空实体（handler 只能锁已存在的实体）。handler 是包级函数，前两个经 terrainmap.Active() 拿到本进程的 Map。
+// 地形块的三个改块事务与一个账本读取（可编辑地形，game/terrainmap 发起）。改块事务都是 rollback=undo durability=strict：
+// 回复与视图更新都在 WAL 持久之后，回滚的事务由生成 setter 的逆操作还原 DAO、不改变视图。第一次改的块、第一次编辑的
+// 玩家账本由调用方先经 lifecycle 的 GetOrCreate 建出空实体（handler 只能锁已存在的实体）。handler 是包级函数，前两个
+// 经 terrainmap.Active() 拿到本进程的 Map。
 
 // handlerTerrainEdit 在一块地形上应用一组采样点改动（P1 的内部写入口，Map.Edit 发起）：用原始块填满第一次改的块、
 // 写入改动、Version + 1，返回新 Version。
@@ -22,16 +24,25 @@ func handlerTerrainEdit(target terrain_chunk.ISurfaceEntity, edits []terrain_chu
 	return m.ApplyEdit(target, edits)
 }
 
-// handlerTerrainBrush 是玩家的一次笔刷编辑（P2，Map.Brush 发起）：targets 是笔刷覆盖到的全部块（至多 4 块，Nest 按
-// ID 排序一起锁住），一笔事务里判重、算笔刷、逐块写、请求 ID 记进每一块（terrainmap.Map.ApplyBrush）。
+// handlerTerrainBrush 是玩家的一次笔刷编辑（P2，Map.Brush 发起）：targets 是笔刷覆盖到的全部块（至多 4 块），editor 是
+// 这个玩家的编辑账本（T01/T02），Nest 按锁序（块 World 在前、账本 PlayerScoped 在后）一起锁住；一笔事务里按（玩家, seq）
+// 判重、算笔刷、逐块写、序号记进账本（terrainmap.Map.ApplyBrush）。
 //
 //roost:nest rollback=undo durability=strict
-func handlerTerrainBrush(targets []terrain_chunk.ISurfaceEntity, editID uint64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+func handlerTerrainBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
 	m := terrainmap.Active()
 	if m == nil {
 		return terrain_chunk.BrushResult{}, terrainmap.ErrDisabled
 	}
-	return m.ApplyBrush(targets, editID, brush)
+	return m.ApplyBrush(targets, editor, seq, brush)
+}
+
+// handlerTerrainEditSeq 读玩家编辑账本已应用的最大序号（Map.LastSeq 发起：客户端不知道上一次用到哪里时续号用）。只读，
+// 在账本的锁内读，看到的是已提交的值。
+//
+//roost:nest
+func handlerTerrainEditSeq(editor terrain_editor.ILedgerEntity) (int64, error) {
+	return editor.LedgerComp().LastSeq(), nil
 }
 
 // handlerTerrainDiscard 丢弃一块基于旧原始地形的改动（维护者 2026-11-08：原始地形换版后改过的块丢弃改动；Map.Load

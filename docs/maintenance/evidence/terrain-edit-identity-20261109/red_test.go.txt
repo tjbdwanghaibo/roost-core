@@ -1,0 +1,139 @@
+package game
+
+import (
+	"math"
+	"testing"
+
+	"example.com/planet/game/terrainmap"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+// 修前红证据（T01 / T02），只在临时生成工程里跑，不提交。
+
+func redMix(x uint64) uint64 {
+	x += 0x9E3779B97F4A7C15
+	x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9
+	x = (x ^ (x >> 27)) * 0x94D049BB133111EB
+	return x ^ (x >> 31)
+}
+
+func redInvMul(a uint64) uint64 {
+	x := a
+	for range 6 {
+		x *= 2 - a*x
+	}
+	return x
+}
+
+func redUnshift(x uint64, s uint) uint64 {
+	out := x
+	for shift := s; shift < 64; shift += s {
+		out ^= x >> shift
+	}
+	return out
+}
+
+func redUnmix(x uint64) uint64 {
+	x = redUnshift(x, 31)
+	x *= redInvMul(0x94D049BB133111EB)
+	x = redUnshift(x, 27)
+	x *= redInvMul(0xBF58476D1CE4E5B9)
+	x = redUnshift(x, 30)
+	return x - 0x9E3779B97F4A7C15
+}
+
+// collidingRequests 找同一玩家的两个请求 ID（都在 1..MaxInt64），splitmix64 全值只差最高位，截成 63 位后相同。
+func collidingRequests(t *testing.T, player int64) (uint64, uint64) {
+	for x := uint64(1); x < 1<<20; x++ {
+		y1, y2 := redUnmix(x), redUnmix(x|1<<63)
+		r1, r2 := redUnmix(y1^uint64(player)), redUnmix(y2^uint64(player))
+		if r1 == 0 || r2 == 0 || r1 > math.MaxInt64 || r2 > math.MaxInt64 {
+			continue
+		}
+		if terrainmap.EditID(player, r1) != terrainmap.EditID(player, r2) {
+			t.Fatalf("construction: %d and %d do not collide", r1, r2)
+		}
+		return r1, r2
+	}
+	t.Fatal("no colliding pair")
+	return 0, 0
+}
+
+func TestRedT01ReplayAfterTheRingIsAppliedAgain(t *testing.T) {
+	store := &memoryChunkStore{}
+	p := brushProcess(t, store)
+	first := terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 500, Strength: 10}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, first); err != nil {
+		t.Fatal(err)
+	}
+	for id := uint64(2); id <= 41; id++ {
+		if _, err := p.m.Brush(p.ctx, brushPlayer, id, terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 300, Material: byte(id)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, commits := allStates(t, p), p.committer.commits.Load()
+	r, err := p.m.Brush(p.ctx, brushPlayer, 1, first)
+	if err == nil && !r.Duplicate || !sameStates(before, allStates(t, p)) || p.committer.commits.Load() != commits {
+		t.Fatalf("replay of request 1 after 40 later edits on the same chunk: %+v, %v; chunk (0,0) dao version %d -> %d, commits %d -> %d: the old request was applied again",
+			r, err, before[terrain.ChunkKey{}].daoVersion, stateOf(t, p, terrain.ChunkKey{}).daoVersion, commits, p.committer.commits.Load())
+	}
+}
+
+func TestRedT01ReplayAfterTheRingIsAppliedAgainAfterARestart(t *testing.T) {
+	store := &memoryChunkStore{}
+	p := brushProcess(t, store)
+	first := terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 500, Strength: 10}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, first); err != nil {
+		t.Fatal(err)
+	}
+	for id := uint64(2); id <= 41; id++ {
+		if _, err := p.m.Brush(p.ctx, brushPlayer, id, terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 300, Material: byte(id)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.stop()
+	p.persist(store)
+	q := brushProcess(t, store)
+	before, commits := allStates(t, q), q.committer.commits.Load()
+	r, err := q.m.Brush(q.ctx, brushPlayer, 1, first)
+	if err == nil && !r.Duplicate || !sameStates(before, allStates(t, q)) || q.committer.commits.Load() != commits {
+		t.Fatalf("replay of request 1 after a restart: %+v, %v; chunk (0,0) dao version %d -> %d: the old request was applied again",
+			r, err, before[terrain.ChunkKey{}].daoVersion, stateOf(t, q, terrain.ChunkKey{}).daoVersion)
+	}
+}
+
+func TestRedT02CollidingRequestIsTakenForADuplicate(t *testing.T) {
+	p := brushProcess(t, &memoryChunkStore{})
+	r1, r2 := collidingRequests(t, brushPlayer)
+	t.Logf("player %d: request %d and request %d share edit id %d", brushPlayer, r1, r2, terrainmap.EditID(brushPlayer, r1))
+	if _, err := p.m.Brush(p.ctx, brushPlayer, r1, terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 500, Strength: 10}); err != nil {
+		t.Fatal(err)
+	}
+	before := stateOf(t, p, terrain.ChunkKey{})
+	r, err := p.m.Brush(p.ctx, brushPlayer, r2, terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 500, Material: 99})
+	if err != nil || r.Duplicate || stateOf(t, p, terrain.ChunkKey{}).daoVersion == before.daoVersion {
+		t.Fatalf("a different request %d of the same player: %+v, %v; chunk (0,0) version %d -> %d: a new request was taken for a duplicate and not applied",
+			r2, r, err, before.daoVersion, stateOf(t, p, terrain.ChunkKey{}).daoVersion)
+	}
+}
+
+func TestRedT02CollidingPlayers(t *testing.T) {
+	p := brushProcess(t, &memoryChunkStore{})
+	inner := redMix(1)
+	var p1, p2 int64
+	for c := int64(1); c < 1<<24; c++ {
+		q := int64(redUnmix(redMix(uint64(c)^inner)^(1<<63)) ^ inner)
+		if q > 0 && q < 1<<52 {
+			p1, p2 = c, q
+			break
+		}
+	}
+	t.Logf("players %d and %d: edit ids %d / %d", p1, p2, terrainmap.EditID(p1, 1), terrainmap.EditID(p2, 1))
+	if _, err := p.m.Brush(p.ctx, p1, 1, terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 500, Strength: 10}); err != nil {
+		t.Fatal(err)
+	}
+	r, err := p.m.Brush(p.ctx, p2, 1, terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 500, Material: 99})
+	if err != nil || r.Duplicate {
+		t.Fatalf("player %d sequence 1: %+v, %v; a different player's request was taken for a duplicate", p2, r, err)
+	}
+}

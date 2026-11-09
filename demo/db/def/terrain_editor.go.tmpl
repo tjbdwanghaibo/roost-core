@@ -1,0 +1,20 @@
+package dbdef
+
+// TerrainEditorDao 是一个玩家在本进程的地形编辑账本（可编辑地形 T01/T02）：玩家编辑请求的身份是（玩家 ID, 编辑序号），
+// 序号由客户端按玩家单调递增地取；这里记着已应用的最大序号与它下面 64 个序号各自是否已应用。判重只看这份账本，
+// 地形块上不再记编辑 ID。
+//
+// 实体 ID 由玩家 ID 得出（game/entities/terrain_editor 的 UniqueID：unique = 玩家的 unique ID），一个玩家一个账本，
+// 第一次编辑时经 GetOrCreate 建出；与笔刷覆盖到的块在同一笔 Nest 事务里锁住、一起提交或一起回滚，所以“改了块”与
+// “记下序号”要么都发生、要么都没发生，重启后从库里原样读回。
+//
+// 只持久、不同步（编辑去重是服务端的事）。store 键按仓库规则写数字短键，改动须按 codegen/docs/TAGS.zh-CN.md 处理。
+//
+//roost:dao coll=terrain_editors db=main schema=1
+type TerrainEditorDao struct {
+	// LastSeq 是这个玩家在本进程已应用的最大编辑序号；0 表示还没有应用过任何编辑。序号范围 1～MaxInt64。
+	LastSeq int64 `dao:"persist" store:"1"`
+	// Window 是 LastSeq 下面 64 个序号的应用位图：第 i 位（0～63）为 1 表示序号 LastSeq−1−i 已应用。按位使用，
+	// 第 63 位为 1 时数值为负（int64 是为了按 BSON int64 原样存 64 位，不做任何截断）。
+	Window int64 `dao:"persist" store:"2"`
+}

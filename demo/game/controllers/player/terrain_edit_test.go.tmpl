@@ -7,6 +7,7 @@ import (
 	"math"
 	"testing"
 
+	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/game/terrainmap"
 	apperrors "{{MODULE}}/internal/errors"
@@ -33,7 +34,7 @@ func TestTerrainEditWithoutTerrainAnswersDisabled(t *testing.T) {
 	}
 	controller := &Controller{registry: app.NewRegistry(viper.New())}
 	response, err := controller.HandleTerrainEdit(&playeraccess.Context{BaseCtx: context.Background(), PlayerID: 7, MsgID: msgid.MsgTerrainEdit, Seq: 1},
-		&pb.TerrainEditRequest{RequestID: 1, Op: int32(terrain.BrushRaise), Radius: 500, Strength: 1})
+		&pb.TerrainEditRequest{Seq: 1, Op: int32(terrain.BrushRaise), Radius: 500, Strength: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +45,7 @@ func TestTerrainEditWithoutTerrainAnswersDisabled(t *testing.T) {
 
 // 越出字段类型范围的值拒绝：截断会把一个非法请求变成另一个合法请求（例如强度 65537 变成 1）。
 func TestTerrainEditRefusesWireValuesOutsideTheirFields(t *testing.T) {
-	valid := pb.TerrainEditRequest{RequestID: 1, Op: int32(terrain.BrushFlatten), X: 300, Y: 400, Radius: 500, Falloff: int32(terrain.FalloffSmooth), Strength: 20, Target: 1500, Material: 7}
+	valid := pb.TerrainEditRequest{Seq: 1, Op: int32(terrain.BrushFlatten), X: 300, Y: 400, Radius: 500, Falloff: int32(terrain.FalloffSmooth), Strength: 20, Target: 1500, Material: 7}
 	brush, ok := brushOf(&valid)
 	want := terrain.Brush{Op: terrain.BrushFlatten, X: 300, Y: 400, Radius: 500, Falloff: terrain.FalloffSmooth, Strength: 20, Target: 1500, Material: 7}
 	if !ok || brush != want {
@@ -82,6 +83,10 @@ func TestTerrainRefusalsMapToTheirCodes(t *testing.T) {
 		{terrainmap.ErrRateLimited, apperrors.ErrTerrainRate},
 		{terrainmap.ErrDenied, apperrors.ErrTerrainDenied},
 		{terrainmap.ErrOccupied, apperrors.ErrTerrainOccupied},
+		{terrainmap.ErrStale, apperrors.ErrTerrainSeq},
+		{terrainmap.ErrSeqAhead, apperrors.ErrTerrainSeq},
+		{&terrainmap.SeqError{Seq: 3, LastSeq: 900, Verdict: terrain_editor.Stale}, apperrors.ErrTerrainSeq},
+		{&terrainmap.SeqError{Seq: 9_000_000, LastSeq: 900, Verdict: terrain_editor.Ahead}, apperrors.ErrTerrainSeq},
 	} {
 		wrapped := fmt.Errorf("terrain: brush at (1, 2): %w", c.err)
 		if got := terrainError(wrapped); !errors.Is(got, c.want) || codeOf(got) == errcode.CodeInternal {
@@ -91,5 +96,19 @@ func TestTerrainRefusalsMapToTheirCodes(t *testing.T) {
 	other := errors.New("wal: disk full")
 	if got := terrainError(other); got != other || codeOf(got) != errcode.CodeInternal {
 		t.Fatalf("an infrastructure error mapped to %v (code %d)", got, codeOf(got))
+	}
+}
+
+// 序号不在窗口里的拒绝（*SeqError）答 terrain_seq 并带上 LastSeq，客户端据此判断“太旧”还是“跳太远”并续号；别的拒绝
+// 不带 LastSeq。
+func TestTerrainSeqRefusalCarriesTheLastSeq(t *testing.T) {
+	access := &playeraccess.Context{BaseCtx: context.Background(), PlayerID: 7, MsgID: msgid.MsgTerrainEdit, Seq: 1}
+	request := &pb.TerrainEditRequest{Seq: 3}
+	stale := fmt.Errorf("terrain: brush: %w", &terrainmap.SeqError{PlayerID: 7, Seq: 3, LastSeq: 900, Verdict: terrain_editor.Stale})
+	if r := terrainRefusal(access, request, stale); r.Code != codeOf(apperrors.ErrTerrainSeq) || r.LastSeq != 900 {
+		t.Fatalf("a stale sequence: %+v, want terrain_seq with LastSeq 900", r)
+	}
+	if r := terrainRefusal(access, request, terrainmap.ErrOccupied); r.Code != codeOf(apperrors.ErrTerrainOccupied) || r.LastSeq != 0 {
+		t.Fatalf("an occupied refusal: %+v, want terrain_occupied without LastSeq", r)
 	}
 }

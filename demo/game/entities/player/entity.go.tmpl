@@ -71,11 +71,12 @@ type Player struct {
 //   - TakeSyncDirty CONSUMES the mask. In this demo the client is the only
 //     consumer; a project that also mirrors the Entity to another process has
 //     a second reader and must not let one of them steal the other's mask.
-//   - Called inside a transaction that later rolls back, the subject stays
-//     marked while the DAO's own mark is restored. That is safe in the
-//     direction that matters: the next flush packs current state, so the
-//     client gets the truth — just one redundant delta. Marking too little
-//     would be the unsafe direction.
+//   - Called inside a Nest transaction, the mark joins that transaction's
+//     sync entry (the scene's Nest commit observer tracks the mutation): it
+//     is published when the commit is admitted, merged with the observer's
+//     own mark rather than sent twice, and dropped together with the entry
+//     if the transaction rolls back. Called outside a transaction it marks
+//     the subject at once.
 func (player *Player) PublishSyncDirty() {
 	if player == nil {
 		return

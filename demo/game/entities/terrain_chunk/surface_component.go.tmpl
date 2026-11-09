@@ -14,15 +14,16 @@ import (
 //roost:component type=2011
 const CompTypeSurface entity.ComponentType = 2011
 
-// AppliedRing 是 TerrainChunkDao.Applied 最多记住的编辑 ID 个数（方案 §8.1 初值 32）。
-const AppliedRing = 32
-
 // BrushResult 是一次笔刷编辑（handler TerrainBrush）的结果：本次锁住的每一块提交后的版本（没有改到的块是原版本，
-// Version 0 表示仍是原始块）。Duplicate 表示这个编辑 ID 已经应用过（某一块的 Applied 里有它）：这次什么都没写，
-// Chunks 是各块当前的版本——重复请求得到明确的“已应用”，而不是再改一次。
+// Version 0 表示仍是原始块），以及玩家编辑账本此后的 LastSeq（已应用的最大编辑序号，客户端据此续号）。
+//
+// Duplicate 表示这个（玩家, 序号）已经应用过：这次什么都没写，Chunks 是各块当前的版本——重复请求得到明确的“已应用”，
+// 而不是再改一次。序号低于账本窗口（过期）或大出太多时不是结果而是错误（terrainmap.ErrStale / ErrSeqAhead），这时
+// 只有 LastSeq 有意义。判重见 game/entities/terrain_editor。
 type BrushResult struct {
 	Duplicate bool
 	Chunks    []ChunkVersion
+	LastSeq   int64
 }
 
 // ChunkVersion 是一块与它的版本。
@@ -39,7 +40,7 @@ type PointEdit struct {
 	Material byte
 }
 
-// SurfaceComponent 是一块地形的数据：高度、材质、版本与最近的编辑 ID，全部在 TerrainChunkDao 里（回滚统一走 DAO，
+// SurfaceComponent 是一块地形的数据：高度、材质与版本，全部在 TerrainChunkDao 里（回滚统一走 DAO，
 // 组件不持有需要回滚的内存状态）。方法只在本块的 Nest 锁内调用。
 type SurfaceComponent struct {
 	entity.ComponentBase
@@ -266,8 +267,8 @@ func (component *SurfaceComponent) Data() (terrain.Chunk, bool, error) {
 // Discard 丢弃基于旧原始地形的改动（维护者 2026-11-08：原始地形换版后，玩家改过的块丢弃改动）：记录仍基于
 // staleRevision、且它不等于当前包的 currentRevision 时，把 DAO 重置为“建了、还没改过”（Version 0、BaseRevision 0、
 // 高度与材质清空），返回 true；之后这块按原始块看待，下一次改动从当前原始块重新开始（Apply 的 Version 0 路径）。
-// Applied 保留：旧请求的重放仍被认出来。记录已经不是 staleRevision（别的进程或上一次启动已处理、或已按新包改过）
-// 时什么都不写，返回 false。
+// 玩家请求的判重不在块上（在玩家的编辑账本 terrain_editor），丢弃不影响旧请求的重放被认出来。记录已经不是
+// staleRevision（别的进程或上一次启动已处理、或已按新包改过）时什么都不写，返回 false。
 //
 // 为什么是“重置”而不是删档：TerrainChunk 的 ID 由块坐标确定，DataEngine 删档会留下墓碑，删过档的 ID 不能再用
 // （docs/framework/guide/03-dataengine.md“删档后该 ID 不可再用”），这一块就再也改不了了。重置走同一条正式写路径
@@ -306,30 +307,4 @@ func OverlayOf(dao *db.TerrainChunkDao) (overlay terrain.Overlay, ok bool, err e
 		BaseRevision: dao.GetBaseRevision(), Version: dao.GetVersion(),
 		Heights: heightsOf(dao), Materials: materials,
 	}, true, nil
-}
-
-// WasApplied 报告编辑 ID 是否在最近 AppliedRing 个已应用的编辑里（P2 的幂等判重）。
-func (component *SurfaceComponent) WasApplied(editID uint64) bool {
-	found := false
-	component.Owner().Dao().RangeApplied(func(_ int, v uint64) bool {
-		found = v == editID
-		return !found
-	})
-	return found
-}
-
-// RecordApplied 记下一个已应用的编辑 ID：追加到最后，超过 AppliedRing 个时丢掉最旧的；整字段替换（约 256 字节）。
-// 与改块写在同一笔事务里，回滚时一起撤销。
-func (component *SurfaceComponent) RecordApplied(editID uint64) {
-	dao := component.Owner().Dao()
-	next := make([]uint64, 0, AppliedRing)
-	dao.RangeApplied(func(_ int, v uint64) bool {
-		next = append(next, v)
-		return true
-	})
-	next = append(next, editID)
-	if over := len(next) - AppliedRing; over > 0 {
-		next = slices.Delete(next, 0, over)
-	}
-	dao.SetAppliedAll(next)
 }

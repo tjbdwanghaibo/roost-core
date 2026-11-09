@@ -28,7 +28,7 @@ type ITerrainChunkEntity interface{ entity.IThreadSafeEntity }
 // Category：rank 2（World，与 Scene 同档）：块是被许多玩家争用的世界对象；P2 的一次笔刷编辑锁住至多 4 块（handler
 // TerrainBrush 的目标组），同档内按 ID 排序取锁。
 //
-// 同步（P2）：sync=true，命名空间 "terrain"，packer 见 sync_packer.go（Applied 不在任何视图里）。改过的块由
+// 同步（P2）：sync=true，命名空间 "terrain"，packer 见 sync_packer.go。改过的块由
 // game 服务的地形同步（internal/service/<game>/terrain_sync.go）登记为 subject、放进地形 Interest；客户端用生成的
 // ApplySyncTerrainChunkDao 应用，按 Version 重建这块的 mesh。
 //
@@ -66,12 +66,13 @@ func KeyOf(entityID int64) terrain.ChunkKey {
 // Key 是这个实体代表的块。
 func (c *TerrainChunk) Key() terrain.ChunkKey { return KeyOf(c.ID()) }
 
-// PublishSyncDirty 把这次改动标脏的同步字段交给本块的 subject（与 Player / Monster 的 PublishSyncDirty 同一做法：
-// demo 的 Nest 没有装 EntitySync 观察者，提交不会自己标 subject）。SurfaceComponent 每次写完 DAO 调一次。
+// PublishSyncDirty 把这次改动标脏的同步字段交给本块的 subject（与 Player / Monster 的 PublishSyncDirty 同一做法）。
+// SurfaceComponent 每次写完 DAO 调一次。demo 的 Nest 已经装了提交观察者（场景的生产者），提交准入时也会按事务条目
+// 标脏；在 Nest 事务里调用时，这里的标记并入同一事务条目（SubjectSyncState 的 mutation），不会双发。
 //
 // 取的是客户端同步专用的掩码（生成的 TakeEntitySyncChanges，读 TakeEntitySyncDirty），不动服务间同步的掩码。
-// 没登记为 subject 的块（第一次改的块在提交后才登记）标了也不记，登记后进入视野发全量。事务回滚时 subject 仍是脏的，
-// 下一次 Flush 按当前（已还原的）数据多发一个增量——多发是安全的方向。
+// 没登记为 subject 的块（第一次改的块在提交后才登记）标了也不记，登记后进入视野发全量。事务回滚时标记随未准入的
+// 事务条目一起丢掉，subject 不会因回滚变脏。
 func (c *TerrainChunk) PublishSyncDirty() {
 	if c == nil {
 		return
