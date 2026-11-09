@@ -429,6 +429,27 @@ func (s *SubjectSyncState) PrepareViews(deltaProfiles, snapshotProfiles []SyncPr
 	return s.prepareProfiles(NormalizeSyncProfiles(deltaProfiles), NormalizeSyncProfiles(snapshotProfiles))
 }
 
+// PrepareSnapshotViews 捕获供新订阅/恢复使用的全量，但不消费尚待周期交付的变化。
+// 与 PrepareViews 共用实体锁、提交门、CommitLSN 和在途批次规则。Commit 成功时推进内容版本，
+// 不确认 DAO 变化、不清脏；若捕获含脏数据，下次普通捕获必须发全量，避免已有订阅者拿跨版本增量。
+// 代价：脏周期内发生即时快照会让下一次周期交付回退全量；不重复重放列表操作。
+// 调用方仍需检查持久水位并交付后 Commit，失败则 Abort；此 API 本身不调度、不发送。
+// 空 profiles 拒绝，不允许无接收方的“保留脏快照”反复推进版本。
+func (s *SubjectSyncState) PrepareSnapshotViews(profiles []SyncProfile) (*PreparedSubjectSync, error) {
+	if s == nil {
+		return nil, ErrSubjectSyncClosed
+	}
+	if len(profiles) == 0 {
+		return nil, fmt.Errorf("entity: snapshot views require at least one profile")
+	}
+	item, err := s.PrepareViews(nil, profiles)
+	if err != nil {
+		return nil, err
+	}
+	item.preserveDirty = true
+	return item, nil
+}
+
 func (s *SubjectSyncState) prepareProfiles(deltaProfiles, snapshotProfiles []SyncProfile) (*PreparedSubjectSync, error) {
 	var prepared *PreparedSubjectSync
 	err := s.withEntityLock(func() error {
@@ -631,6 +652,8 @@ func (s *SubjectSyncState) Close() {
 }
 
 type PreparedSubjectSync struct {
+	// preserveDirty 只由 PrepareSnapshotViews 设置：交付新订阅的快照不消费周期积累。
+	preserveDirty bool
 	commitLSN     uint64
 	state         *SubjectSyncState
 	token         uint64
@@ -782,13 +805,22 @@ func (b *PreparedSubjectSyncBatch) Commit() error {
 	for _, item := range b.items {
 		state := item.state
 		state.version = item.version
-		if item.changePacker != nil {
-			item.changePacker.AcknowledgeSubjectSyncChanges(item.changeVersion)
-		}
-		if state.dirtyGeneration == item.generation {
-			state.dirtyMask = 0
-			state.fullDirty = false
-			state.fullReason = SyncFullReasonNone
+		if item.preserveDirty {
+			if item.version != item.baseVersion {
+				// 新快照已经推进内容版本，老订阅者尚未消费这些变化；只能用全量追上，
+				// 不能把累积的列表操作当作从新快照版本开始的增量重放。
+				state.fullDirty = true
+				state.fullReason = SyncFullReasonResync
+			}
+		} else {
+			if item.changePacker != nil {
+				item.changePacker.AcknowledgeSubjectSyncChanges(item.changeVersion)
+			}
+			if state.dirtyGeneration == item.generation {
+				state.dirtyMask = 0
+				state.fullDirty = false
+				state.fullReason = SyncFullReasonNone
+			}
 		}
 		state.inflightToken = 0
 		state.inflightSince = time.Time{}

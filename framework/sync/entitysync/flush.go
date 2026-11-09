@@ -107,7 +107,9 @@ type flushSession struct {
 // ErrRetryLater 会中止本轮内容提交并保留脏状态；已准入的会话时钟和引用继续有效，
 // 相关订阅在下次用全量恢复基线。其他交付错误只关闭失败会话。
 // flushGate 串行化整个过程，避免同一内容同时参与两次捕获。
-func (m *Manager) Flush(ctx context.Context) (result error) {
+func (m *Manager) Flush(ctx context.Context) error { return m.flush(ctx, false) }
+
+func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 	if m == nil {
 		return ErrManagerClosed
 	}
@@ -166,6 +168,11 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 	defer m.publishOverLimitGauge()
 	var retry []deferredSubject
 	var failures []error
+	type cadenceSettlement struct {
+		cadence *subjectCadence
+		state   *entity.SubjectSyncState
+	}
+	var cadenceSettlements []cadenceSettlement
 
 	captureStarted := time.Now()
 	plan := m.planSnapshotCaptures(ids)
@@ -187,7 +194,11 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 		deltaProfiles, snapshotProfiles := subj.profilesLocked(selectedSnapshots)
 		state := subj.state
 		dirty := state.PendingDirty()
-		wantsCapture := len(snapshotProfiles) > 0 || dirty
+		waiting := dirty && !force && subj.cadence != nil && subj.cadence.waiting(m.cadenceTime())
+		if waiting {
+			m.markPending(id)
+		}
+		wantsCapture := len(snapshotProfiles) > 0 || dirty && !waiting
 		if wantsCapture {
 			// 无接收者也捕获并提交脏版本，但不为无人需要的默认视图打包。
 			clear(revisions)
@@ -195,7 +206,13 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 				revisions[sub] = sub.revision
 			}
 			subj.mu.Unlock()
-			item, err := state.PrepareViews(deltaProfiles, snapshotProfiles)
+			var item *entity.PreparedSubjectSync
+			var err error
+			if waiting {
+				item, err = state.PrepareSnapshotViews(snapshotProfiles)
+			} else {
+				item, err = state.PrepareViews(deltaProfiles, snapshotProfiles)
+			}
 			subj.mu.Lock()
 			switch {
 			case errors.Is(err, entity.ErrSubjectSyncNotDirty):
@@ -227,6 +244,9 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 					m.config.Trace.Record(SyncTraceEvent{Stage: "prepared", SubjectID: id, Version: item.Version(), BaseVersion: item.BaseVersion(), CommitLSN: item.CommitLSN()})
 				}
 				prepared = append(prepared, item)
+				if !waiting && subj.cadence != nil {
+					cadenceSettlements = append(cadenceSettlements, cadenceSettlement{subj.cadence, state})
+				}
 				if dirty {
 					m.dirtyCaptured.Add(1)
 				}
@@ -253,7 +273,7 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 							work[sid].settlements = append(work[sid].settlements, captureSettlement(subj, sub, item.Version(), false))
 						}
 					case kindLive:
-						if !dirty {
+						if !dirty || waiting {
 							continue
 						}
 						if update, ok := updateFor(deltas, sub.profile); ok {
@@ -331,6 +351,9 @@ func (m *Manager) Flush(ctx context.Context) (result error) {
 			retryCaptured(err)
 			return errors.Join(append(failures, fmt.Errorf("sync commit: %w", err))...)
 		}
+	}
+	for _, settle := range cadenceSettlements {
+		settle.cadence.settled(settle.state, m.cadenceTime())
 	}
 	for _, id := range ids {
 		subj := m.subject(id)

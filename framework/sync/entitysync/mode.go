@@ -47,7 +47,7 @@ func (m *Manager) BindSyncProducer() { m.producerBound.Store(true) }
 
 // WakeSync 合并唤醒；pending 是事实来源，通知只负责降低延迟。
 func (m *Manager) WakeSync() {
-	if m == nil || m.config.Mode != ModeOnChange {
+	if m == nil || !m.hasOnChange() {
 		return
 	}
 	select {
@@ -57,7 +57,7 @@ func (m *Manager) WakeSync() {
 }
 
 func (m *Manager) CaptureSync(state *entity.SubjectSyncState) error {
-	if m == nil || m.config.Mode != ModeOnChange {
+	if m == nil || state == nil || m.typeMode(state) != ModeOnChange {
 		return nil
 	}
 	subj := m.subject(state.SubjectID())

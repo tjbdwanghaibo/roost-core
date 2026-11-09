@@ -1,0 +1,24 @@
+=== RUN   TestSnapshotViewsPreserveChangesUntilPeriodicCapture
+--- PASS: TestSnapshotViewsPreserveChangesUntilPeriodicCapture (0.00s)
+=== RUN   TestSnapshotViewsAbortDoesNotForceFullOrConsumeChanges
+--- PASS: TestSnapshotViewsAbortDoesNotForceFullOrConsumeChanges (0.00s)
+=== RUN   TestCleanSnapshotViewsDoNotCreateDirtyWork
+--- PASS: TestCleanSnapshotViewsDoNotCreateDirtyWork (0.00s)
+=== RUN   TestSnapshotViewsPreserveLaterWritesAndFrozenOwnership
+--- PASS: TestSnapshotViewsPreserveLaterWritesAndFrozenOwnership (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/entity	1.033s
+=== RUN   TestTypeScheduleMixedTypesMergeWithoutSliding
+--- PASS: TestTypeScheduleMixedTypesMergeWithoutSliding (0.00s)
+=== RUN   TestTypeScheduleJoiningSnapshotDoesNotConsumeOldObserverChanges
+--- PASS: TestTypeScheduleJoiningSnapshotDoesNotConsumeOldObserverChanges (0.00s)
+=== RUN   TestTypeScheduleRemoveAndDrainBypassDelay
+    type_schedule_test.go:150: remove delayed
+--- FAIL: TestTypeScheduleRemoveAndDrainBypassDelay (0.00s)
+=== RUN   TestTypeScheduleDurabilityAndRetryRetainDueWork
+--- PASS: TestTypeScheduleDurabilityAndRetryRetainDueWork (0.00s)
+=== RUN   TestTypeScheduleConfigurationIsCopiedAndValidated
+--- PASS: TestTypeScheduleConfigurationIsCopiedAndValidated (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	0.023s
+FAIL

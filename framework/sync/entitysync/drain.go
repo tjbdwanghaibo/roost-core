@@ -26,7 +26,7 @@ func (m *Manager) Drain(ctx context.Context) error {
 	}
 	started := time.Now()
 	for {
-		if err := m.Flush(ctx); err != nil {
+		if err := m.flush(ctx, true); err != nil {
 			if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 				return m.drainStalled(err, started)
 			}

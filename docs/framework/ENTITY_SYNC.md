@@ -20,6 +20,34 @@ Entity Sync 只有一套实现，四层（ARCH-10 / M-13 / M-14，2026-09-22）�
 - packer 总是在 Entity mutex 内执行（周期捕获或准入冻结），返回 `FrozenSyncPayload`；返回后业务不得再持有可变 payload 引用。
 - Entity 不保存 player/session/observer/history；订阅者表在 Manager 的 subject 对象里，Entity 只有内容。
 
+## 按实体类型的同步节奏（2026-11-09）
+
+`ManagerConfig.TypeSchedules` 以 `SubjectSyncState.SubjectKind()`（正式实体的 EntityKind）匹配，不按 namespace 或订阅来源匹配；同一 namespace 内不同实体类型可以采用不同节奏。构造时复制配置，未配置的类型保留 Manager 原有行为。
+
+例如在正确接入 Nest 提交观察者的 Manager 中：
+
+```go
+entitysync.ManagerConfig{
+    Mode: entitysync.ModeOnChange, // Player / Monster 等未覆盖类型
+    Interval: 50 * time.Millisecond, // Manager 到期检查及其他兜底的粒度
+    TypeSchedules: map[uint32]entitysync.TypeSchedule{
+        uint32(terrain_chunk.EntityKindTerrainChunk): {
+            Mode: entitysync.ModePeriodic, Interval: time.Second,
+        },
+    },
+    // Transport、DurableWatermark 等仍按原接入设置。
+}
+```
+
+显式 periodic 要求 Interval > 0；显式 on_change 要求 Interval = 0 且 Manager 本身为 on_change，避免混用全局发送预算时钟。启动仍需要正式 `NestOptionWithEntitySync` 绑定生产者，不能只调用 BindSyncProducer 冒充提交接入。**当前 game-demo 的 Scene 仍沿用原周期接线；本批提供框架机制，尚未自动切换 demo。**
+
+- 周期类型提交时不冻结内容。首次变脏起计时，连续修改不续期；常规 Flush 在到期前不捕获/发送 live 增量。仅脏对象保留在 pending 中，由现有 Manager tick 检查，不遍历空闲实体。实际交付还受 tick 粒度、持久门槛、预算和网络影响，不是硬实时期限。
+- 首次全量、恢复/profile 变更的全量及 remove 不受该周期等待。快照仍受既有预算与提交/持久门槛。周期内即时快照使用 `SubjectSyncState.PrepareSnapshotViews`，只向需要快照的订阅交付，不清除待发变化、不确认 DAO 变化树。
+- **即时快照的代价**：若它捕获了待发变化并成功提交，会推进内容版本；下一次普通周期捕获改发 Full，保证旧订阅和新订阅都收到正确状态，避免把快照之前的列表操作再当作新增量应用。新玩家频繁进入编辑热点可能增加全量量，应单独测量，不保证所有场景带宽下降。
+- 普通显式 Flush 遵守类型周期；Drain / Stop 绕过周期等待，仍保留持久水位、发送预算、重试和 context 规则，不承诺客户端必达。失败不重设本批到期时间；正常捕获完成后若仍有捕获期间的新写入，则保留脏数据并从结算时启动下一批窗口。
+- 每次首次变脏的时间不同，自然分散检查；同拍大批变脏仍可能集中到期。第一版未引入时间轮：脏集合在每次 Flush 被检查，事务观察者也可能发出合并唤醒，但周期对象不因此冻结/编码。后续优化该扫描与唤醒前先测量，不能宣称已经消除全部调度成本。
+- 原有 DAO 变化树预算不变，1 秒积累可能触发整树回退；状态同步合并最终值，不提供逐操作事件交付。
+
 ## tick
 
 - `Manager.Flush` 是一次交付调度：为每个 pending subject（脏、订阅变更、退役）调用 `PrepareViews`，复用有效冻结内容或在 Entity 锁内重新捕获。
@@ -32,7 +60,7 @@ Entity Sync 只有一套实现，四层（ARCH-10 / M-13 / M-14，2026-09-22）�
 - 调用方 context 取消时整轮中止并保留重试，不视为会话故障。传输失败分两类：`ErrRetryLater`（整体不可用）→ 全部 prepared abort、全部重新 pending、无人受罚；已准入帧不能撤销，
   本 tick 有帧准入的会话保留其时钟，受影响且仍订阅的内容下次改发 Full 恢复基线；其他 → 该会话 `loseSession`
   （关闭、遍历 subject 删订阅、`SessionLost` 回调政策）。
-- 所有会话处理完后整批 `Commit`（脏位按代际清）；退役且无订阅者的 subject 被遗忘。
+- 所有会话处理完后整批 `Commit`（普通捕获的脏位按代际清，即时独立快照保留脏位）；退役且无订阅者的 subject 被遗忘。
 
 ## 订阅
 

@@ -1,0 +1,5 @@
+ok  	github.com/tjbdwanghaibo/roost-core/framework/entity	6.107s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	1.923s
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	13.664s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/selfsync	1.733s
+ok  	github.com/tjbdwanghaibo/roost-core/wiring/nest	1.382s

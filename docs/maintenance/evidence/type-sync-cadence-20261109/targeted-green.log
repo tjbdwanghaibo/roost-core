@@ -1,0 +1,38 @@
+=== RUN   TestTypeScheduleMixedTypesMergeWithoutSliding
+--- PASS: TestTypeScheduleMixedTypesMergeWithoutSliding (0.00s)
+=== RUN   TestTypeScheduleJoiningSnapshotDoesNotConsumeOldObserverChanges
+--- PASS: TestTypeScheduleJoiningSnapshotDoesNotConsumeOldObserverChanges (0.00s)
+=== RUN   TestTypeScheduleRemoveAndDrainBypassDelay
+--- PASS: TestTypeScheduleRemoveAndDrainBypassDelay (0.00s)
+=== RUN   TestTypeScheduleDurabilityAndRetryRetainDueWork
+--- PASS: TestTypeScheduleDurabilityAndRetryRetainDueWork (0.00s)
+=== RUN   TestTypeScheduleConfigurationIsCopiedAndValidated
+--- PASS: TestTypeScheduleConfigurationIsCopiedAndValidated (0.00s)
+=== RUN   TestTypeScheduleProducerLoopAndStop
+--- PASS: TestTypeScheduleProducerLoopAndStop (0.00s)
+=== RUN   TestTypeScheduleMixedTypesMergeWithoutSliding
+--- PASS: TestTypeScheduleMixedTypesMergeWithoutSliding (0.00s)
+=== RUN   TestTypeScheduleJoiningSnapshotDoesNotConsumeOldObserverChanges
+--- PASS: TestTypeScheduleJoiningSnapshotDoesNotConsumeOldObserverChanges (0.00s)
+=== RUN   TestTypeScheduleRemoveAndDrainBypassDelay
+--- PASS: TestTypeScheduleRemoveAndDrainBypassDelay (0.00s)
+=== RUN   TestTypeScheduleDurabilityAndRetryRetainDueWork
+--- PASS: TestTypeScheduleDurabilityAndRetryRetainDueWork (0.00s)
+=== RUN   TestTypeScheduleConfigurationIsCopiedAndValidated
+--- PASS: TestTypeScheduleConfigurationIsCopiedAndValidated (0.00s)
+=== RUN   TestTypeScheduleProducerLoopAndStop
+--- PASS: TestTypeScheduleProducerLoopAndStop (0.00s)
+=== RUN   TestTypeScheduleMixedTypesMergeWithoutSliding
+--- PASS: TestTypeScheduleMixedTypesMergeWithoutSliding (0.00s)
+=== RUN   TestTypeScheduleJoiningSnapshotDoesNotConsumeOldObserverChanges
+--- PASS: TestTypeScheduleJoiningSnapshotDoesNotConsumeOldObserverChanges (0.00s)
+=== RUN   TestTypeScheduleRemoveAndDrainBypassDelay
+--- PASS: TestTypeScheduleRemoveAndDrainBypassDelay (0.00s)
+=== RUN   TestTypeScheduleDurabilityAndRetryRetainDueWork
+--- PASS: TestTypeScheduleDurabilityAndRetryRetainDueWork (0.00s)
+=== RUN   TestTypeScheduleConfigurationIsCopiedAndValidated
+--- PASS: TestTypeScheduleConfigurationIsCopiedAndValidated (0.00s)
+=== RUN   TestTypeScheduleProducerLoopAndStop
+--- PASS: TestTypeScheduleProducerLoopAndStop (0.00s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync	1.035s
