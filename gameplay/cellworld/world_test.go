@@ -29,13 +29,19 @@ const (
 
 func worldGrid(t testing.TB, cols, rows int32) *Grid {
 	t.Helper()
+	return worldGridBand(t, cols, rows, 1000, 100)
+}
+
+// worldGridBand 与 worldGrid 相同（格大小、owner），只换边界带 G 与迟滞 H（用例需要更宽的迟滞时用）。
+func worldGridBand(t testing.TB, cols, rows int32, band, hysteresis int64) *Grid {
+	t.Helper()
 	owners := map[CellID]int32{}
 	for c := range cols {
 		for r := range rows {
 			owners[CellID{c, r}] = 101 + r*cols + c
 		}
 	}
-	g, err := NewGrid(GridConfig{CellSize: 10000, Cols: cols, Rows: rows, GhostBand: 1000, Hysteresis: 100, Owners: owners})
+	g, err := NewGrid(GridConfig{CellSize: 10000, Cols: cols, Rows: rows, GhostBand: band, Hysteresis: hysteresis, Owners: owners})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,18 +278,33 @@ func (w *world) inspect(id CellID) []EntitySnapshot {
 	return snap
 }
 
-// assertSingleReal 在静止后检查：实体恰好在 want 格是 Real，其他格没有 Real / Frozen；也没有格观察到冲突的 Real 状态。
+// assertSingleReal 检查静止后的结论：实体恰好在 want 格是 Real，其他格没有 Real / Frozen；也没有格观察到冲突的 Real 状态。
+// 旧格收到 OfferReply（或新格 Ghost 的隐式确认）才从 frozen 转为 Ghost，这是交接之后另外几跳异步事务，停下的那一刻可能
+// 还没走完（完整包高负载下见过 1s 以上）：等到结论成立，超时按最后一次检查报错并打出各格诊断。期限 5s 长于缺省
+// HandoffAbort（3s）：过了期限旧格还是 frozen，说明既没收到结论也没按超时放弃，不再是正常窗口。“任一时刻至多一个 Real”
+// 由 realChecker 在每次提交后检查，不靠这里。
 func (w *world) assertSingleReal(id int64, want CellID) {
 	w.t.Helper()
-	for cid, p := range w.cells {
-		for _, s := range w.inspect(cid) {
-			if s.State.ID != id {
-				continue
-			}
-			if (s.Role == "real") != (cid == want) || s.Role == "frozen" {
-				w.t.Errorf("entity %d is %s in %v (want Real only in %v)", id, s.Role, cid, want)
+	var problems []string
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		problems = problems[:0]
+		for cid := range w.cells {
+			for _, s := range w.inspect(cid) {
+				if s.State.ID == id && ((s.Role == "real") != (cid == want) || s.Role == "frozen") {
+					problems = append(problems, fmt.Sprintf("entity %d is %s in %v (want Real only in %v)", id, s.Role, cid, want))
+				}
 			}
 		}
+		if len(problems) == 0 || time.Now().After(deadline) {
+			break
+		}
+	}
+	if len(problems) > 0 {
+		var diag strings.Builder
+		w.cellDiag(&diag, id)
+		w.t.Errorf("%s\n%s", strings.Join(problems, "\n"), diag.String())
+	}
+	for cid, p := range w.cells {
 		if st := p.node.Stats(); st.Conflicts != 0 {
 			w.t.Errorf("cell %v saw %d conflicting Real states", cid, st.Conflicts)
 		}
@@ -336,19 +357,24 @@ func (w *world) waitSettled(unique int64, timeout time.Duration) (int32, uint64)
 	last, _ := w.lastView(unique)
 	fmt.Fprintf(&diag, "base: cell=%d epoch=%d inWorld=%v lostEpoch=%d enterHint=%d; last view from %d epoch %d\n",
 		st.Cell, st.Epoch, st.InWorld, st.LostEpoch, st.EnterHint, last.Cell, last.Epoch)
+	w.cellDiag(&diag, id)
+	w.t.Fatalf("handoff of player %d did not settle within %v:\n%s", unique, timeout, diag.String())
+	return 0, 0
+}
+
+// cellDiag 写出各格区域表里 id 的记录、交接计数与出站队列长度（交接没收尾时的诊断）。
+func (w *world) cellDiag(diag *strings.Builder, id int64) {
 	for cid, p := range w.cells {
 		for _, s := range w.inspect(cid) {
 			if s.State.ID == id {
-				fmt.Fprintf(&diag, "cell %v: role=%s epoch=%d seq=%d owner/target=%v\n", cid, s.Role, s.State.Ver.Epoch, s.State.Ver.Seq, s.Owner)
+				fmt.Fprintf(diag, "cell %v: role=%s epoch=%d seq=%d x=%d owner/target=%v\n", cid, s.Role, s.State.Ver.Epoch, s.State.Ver.Seq, s.State.X, s.Owner)
 			}
 		}
 		ns := p.node.Stats()
-		fmt.Fprintf(&diag, "cell %v stats: started=%d accepted=%d rejected=%d aborted=%d offerRetransmits=%d offersReceived=%d staleDrops=%d outboxDrops=%d dispatchErrors=%d outbox=%d\n",
+		fmt.Fprintf(diag, "cell %v stats: started=%d accepted=%d rejected=%d aborted=%d offerRetransmits=%d offersReceived=%d staleDrops=%d outboxDrops=%d dispatchErrors=%d actorBeats=%d outbox=%d\n",
 			cid, ns.HandoffsStarted, ns.HandoffsAccepted, ns.HandoffsRejected, ns.HandoffsAborted, ns.OfferRetransmits, ns.OffersReceived,
-			ns.StaleDrops, ns.OutboxDrops, ns.DispatchErrors, len(p.node.out))
+			ns.StaleDrops, ns.OutboxDrops, ns.DispatchErrors, ns.ActorBeats, len(p.node.out))
 	}
-	w.t.Fatalf("handoff of player %d did not settle within %v:\n%s", unique, timeout, diag.String())
-	return 0, 0
 }
 
 // checkContinuity：静止 NPC 落在玩家 witness 半径内（按 witness 里玩家自己的位置算）时必须出现在 witness 里；连续缺失

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -224,9 +225,12 @@ func TestWritebackIsIdempotentAndOrdered(t *testing.T) {
 	w.waitView(1, 5*time.Second, "crossed", func(v View) bool { return v.Self.X >= 10600 })
 	w.move(1, 0, 0)
 	time.Sleep(time.Second)
-	w.mu.Lock()
-	got := append([]EntityState(nil), w.writebacks[actorID(1)]...)
-	w.mu.Unlock()
+	accepted := func() []EntityState {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		return append([]EntityState(nil), w.writebacks[actorID(1)]...)
+	}
+	got := accepted()
 	if len(got) < 5 {
 		t.Fatalf("only %d writebacks accepted", len(got))
 	}
@@ -235,9 +239,16 @@ func TestWritebackIsIdempotentAndOrdered(t *testing.T) {
 			t.Fatalf("writeback %d version %+v not newer than %+v", i, got[i].Ver, got[i-1].Ver)
 		}
 	}
-	if final := w.baseState(1); final.SnapVer != got[len(got)-1].Ver {
-		t.Fatalf("base snapshot version %+v, want the last accepted %+v", final.SnapVer, got[len(got)-1].Ver)
+	// 角色停下后仍按 WritebackEvery 定时回写，Hooks.Writeback 在 Base 的事务提交之后才调用：读 Base 状态与读 hook 记录之间
+	// 可能又接受了新的回写。所以断言 Base 当前的快照版本不旧于此前接受的最后一份，且就是 hook 记下的某一份（等 hook 跟上）。
+	last := got[len(got)-1].Ver
+	final := w.baseState(1)
+	if last.Newer(final.SnapVer) {
+		t.Fatalf("base snapshot version %+v went back behind the last accepted %+v", final.SnapVer, last)
 	}
+	waitFor(t, 2*time.Second, "the hook for the base snapshot", func() bool {
+		return slices.ContainsFunc(accepted(), func(s EntityState) bool { return s.Ver == final.SnapVer })
+	})
 }
 
 // fillDistinct 给 v（指向结构体）的每个导出字段填互不相同的非零值（递归进嵌入与嵌套结构体），跳过切片与指针。

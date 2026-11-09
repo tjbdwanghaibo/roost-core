@@ -56,16 +56,18 @@ func TestIdleTierWithoutPlayersAndWakeOnApproach(t *testing.T) {
 	w := startWorld(t, spec)
 	a, b := CellID{0, 0}, CellID{1, 0}
 	npc := npcID(21)
-	w.spawn(a, EntityState{ID: npc, X: 9500, Y: 5000, HP: 100})
+	w.spawn(a, EntityState{ID: npc, X: 9800, Y: 5000, HP: 100})
 	w.waitIdle(a, npc, true, 3*time.Second)
 	if beats := w.beatsOver(a, 2*time.Second); beats > 4 {
 		t.Fatalf("idle npc beat %d times in 2s, want <= 4 (period %v)", beats, testIdlePeriod)
 	}
 
-	// 玩家在 B（离边界 1000），走到离 NPC 700：仍是 B 的 Real，A 只有他的 Ghost。
+	// 玩家在 B（离边界 1000），走到离 NPC 700 左右：仍是 B 的 Real，A 只有他的 Ghost。看到 witness 才停，停之前玩家按
+	// 实际经过的时间照常走（控制延迟，负载下可能赶上一拍被夹到 1s 的经过时间），所以停点离 B 交给 A 的线（9900）留 600，
+	// 400/s 下约 1.5s。
 	w.enter(1, spatial.Point{X: 11000, Y: 5000})
-	w.move(1, -1000, 0)
-	w.waitView(1, 5*time.Second, "player near the npc", func(v View) bool { return v.Self.X <= 10200 })
+	w.move(1, -400, 0)
+	w.waitView(1, 5*time.Second, "player near the npc", func(v View) bool { return v.Self.X <= 10500 })
 	w.move(1, 0, 0)
 	near := time.Now()
 	if sid, _ := w.owner(1); sid != w.grid.SID(b) {
@@ -79,45 +81,92 @@ func TestIdleTierWithoutPlayersAndWakeOnApproach(t *testing.T) {
 
 	// 玩家走远（离 NPC 2000）：滞后 IdleAfter 之后降档。
 	w.move(1, 1000, 0)
-	w.waitView(1, 5*time.Second, "player far away", func(v View) bool { return v.Self.X >= 11500 })
+	w.waitView(1, 5*time.Second, "player far away", func(v View) bool { return v.Self.X >= 11800 })
 	w.move(1, 0, 0)
 	w.waitIdle(a, npc, true, testIdleAfter+3*time.Second)
 }
 
-// 玩家在 W 边上来回（每 200ms 换向，一半时间在 W 内）：NPC 升档一次后保持快档，不来回换档；玩家离开后只降一次。
+// 玩家在 W 边上来回（W-30 与 W+50 之间，一部分时间在 W 外）：NPC 升档一次后保持快档，不来回换档；玩家离开后只降一次。
+//
+// 承诺是“在 W 外连续不到 IdleAfter 就回来，不降档”。换向看 witness 里玩家自己的位置（闭环）：按 sleep 定时换向是开环，
+// 每段的实际时长差（输入一跳的延迟抖动）会累积成位置漂移，漂出 W 后玩家就真的连续在外面了。闭环时每次在 W 外的时长约
+// 是走 50 再回来（250ms）加两倍控制延迟（witness 一跳、测试轮询、输入一跳；位置按心跳实际经过的时间积分，负载下还可能
+// 赶上一拍被夹到 1s 的经过时间），所以本用例的 IdleAfter 取生产默认 2s，与这段延迟相称；300ms 的用例滞后只够 50ms 的
+// 余量（见 docs/maintenance/evidence/cellworld-realclock-flakes-20261110）。滞后的另一面（连续 IdleAfter 没人才降）由
+// 用例结尾的降档与 TestIdleTierWithoutPlayersAndWakeOnApproach 覆盖。
 func TestIdleTierNoFlappingAtWakeEdge(t *testing.T) {
+	const idleAfter = 2 * time.Second
 	spec, _ := idleSpec(t, 1, 1)
+	idleMod := spec.cellMod
+	spec.cellMod = func(cfg *NodeConfig) {
+		idleMod(cfg)
+		cfg.IdleAfter = idleAfter
+	}
 	w := startWorld(t, spec)
 	a := CellID{0, 0}
 	npc := npcID(22)
-	w.spawn(a, EntityState{ID: npc, X: 5000, Y: 5000, HP: 100})
-	w.waitIdle(a, npc, true, 3*time.Second)
+	npcAt := spatial.Point{X: 5000, Y: 5000}
+	w.spawn(a, EntityState{ID: npc, X: npcAt.X, Y: npcAt.Y, HP: 100})
+	w.waitIdle(a, npc, true, idleAfter+3*time.Second)
 	node := w.cells[a].node
 	start := node.Stats()
 
-	w.enter(1, spatial.Point{X: 5000 + worldViewRadius - 30, Y: 5000})
+	edge := npcAt.X + worldViewRadius // W 取缺省 = ViewRadius；NPC 静止，没有漂移余量
+	w.enter(1, spatial.Point{X: edge - 30, Y: 5000})
 	w.waitIdle(a, npc, false, 2*time.Second)
+	w.resetViews(1)
 	for i := range 20 {
 		vx := int64(400)
 		if i%2 == 1 {
 			vx = -400
 		}
-		w.move(1, vx, 0) // ±80：在 W-30 与 W+50 之间来回
-		time.Sleep(200 * time.Millisecond)
+		w.move(1, vx, 0)
+		w.waitView(1, 5*time.Second, "turn at the wake edge", func(v View) bool {
+			if vx > 0 {
+				return v.Self.X >= edge+50
+			}
+			return v.Self.X <= edge-30
+		})
 	}
 	mid := node.Stats()
 	if up, down := mid.TierFast-start.TierFast, mid.TierIdle-start.TierIdle; up != 1 || down != 0 {
-		t.Fatalf("while the player hovered at the wake edge: %d promotions, %d demotions; want 1 and 0", up, down)
+		// 在 W 外连续够 IdleAfter 时降档是正确行为：用 witness 估计玩家最长一次在 W 外待了多久，区分“用例失去控制”与“抖动”。
+		outside := longestOutside(w.viewsOf(1), npcAt, worldViewRadius)
+		if outside >= idleAfter {
+			t.Fatalf("while the player hovered at the wake edge: %d promotions, %d demotions, but the witness shows it outside W for %v >= IdleAfter %v: control latency kept it out", up, down, outside, idleAfter)
+		}
+		t.Fatalf("while the player hovered at the wake edge: %d promotions, %d demotions; want 1 and 0 (longest stretch outside W in the witness %v < IdleAfter %v)", up, down, outside, idleAfter)
 	}
 	w.move(1, 1000, 0)
 	w.waitView(1, 5*time.Second, "player far away", func(v View) bool { return v.Self.X >= 7500 })
 	w.move(1, 0, 0)
-	w.waitIdle(a, npc, true, testIdleAfter+3*time.Second)
+	w.waitIdle(a, npc, true, idleAfter+3*time.Second)
 	time.Sleep(2 * testIdlePeriod)
 	end := node.Stats()
 	if up, down := end.TierFast-start.TierFast, end.TierIdle-start.TierIdle; up != 1 || down != 1 {
 		t.Fatalf("after the player left: %d promotions, %d demotions; want 1 and 1", up, down)
 	}
+}
+
+// longestOutside 按 witness 估计玩家最长一次连续离 p 超过 r 的时长：从第一份在外面的 witness 到下一份回到里面的 witness
+// （到最后一份仍在外面时算到最后一份）。witness 一拍一份，估计误差约一拍。
+func longestOutside(views []View, p spatial.Point, r int64) time.Duration {
+	var longest time.Duration
+	var since time.Time
+	for _, v := range views {
+		out := !spatial.WithinDistance(v.Self.Pos(), p, r)
+		switch {
+		case out && since.IsZero():
+			since = v.At
+		case !out && !since.IsZero():
+			longest = max(longest, v.At.Sub(since))
+			since = time.Time{}
+		}
+	}
+	if !since.IsZero() && len(views) > 0 {
+		longest = max(longest, views[len(views)-1].At.Sub(since))
+	}
+	return longest
 }
 
 // 慢档 NPC 的 Ghost 一个慢拍才更新一次：邻格不能在两次更新之间把它当过期删掉（GhostTTL 400ms < 慢档 1s）。

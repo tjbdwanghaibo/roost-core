@@ -49,6 +49,9 @@ func TestHandoffMovesRealAndLeavesGhost(t *testing.T) {
 	id := npcID(11)
 	w.spawn(a, EntityState{ID: id, X: 9950, Y: 5000, VX: 300, HP: 100})
 	waitFor(t, 5*time.Second, "npc real in B", func() bool { s, ok := w.roleOf(b, id); return ok && s.Role == "real" })
+	// B 装入 Real 与 A 收到 OfferReply、由冻结转为 Ghost 是两个格上的两笔事务：B 刚成为 Real 时 A 可能仍是 frozen（协议内
+	// 的正常窗口，至多一个 Real 由 realChecker 全程检查）。等 A 收尾，再断言它留下的是 owner = B 的 Ghost。
+	waitFor(t, 2*time.Second, "A leaves its frozen state", func() bool { s, ok := w.roleOf(a, id); return !ok || s.Role != "frozen" })
 	s, ok := w.roleOf(a, id)
 	if !ok || s.Role != "ghost" || s.Owner != b {
 		t.Fatalf("A holds %+v (known %v), want a ghost owned by B", s, ok)
@@ -58,11 +61,19 @@ func TestHandoffMovesRealAndLeavesGhost(t *testing.T) {
 	}
 }
 
-// 迟滞：在边界两侧 ±80（< H=100）来回，不交接。
+// 迟滞：在边界两侧来回（越过边界 60，远小于 H），不交接。
+//
+// 换向看 witness：看到玩家到了换向点才发下一条移动意图，从那一刻到新速度在格里生效（witness 一跳、测试轮询、输入一跳）
+// 玩家照常走；位置按心跳实际经过的时间积分，负载下还可能赶上一拍被夹到上限（max(1s, Period)）的经过时间。所以本用例的
+// H 取 900（G 相应取 2000，满足 R + H ≤ G）：换向点离交接线 840，400/s 下约 2.1s，盖过一拍上限（400）加上控制延迟。
+// 承诺与 H 的取值无关——越界不超过 H 就不交接；H=100 时换向余量只有 40（100ms），控制延迟一长玩家就真的走出了迟滞带
+// （此时交接是正确行为），见 docs/maintenance/evidence/cellworld-realclock-flakes-20261110。
 func TestHandoffHysteresisAbsorbsJitter(t *testing.T) {
 	spec, _ := loopbackSpec(t, 2, 1)
+	spec.grid = worldGridBand(t, 2, 1, 2000, 900)
 	w := startWorld(t, spec)
 	w.enter(1, spatial.Point{X: 9960, Y: 5000})
+	w.resetViews(1)
 	for i := range 6 {
 		vx := int64(400)
 		if i%2 == 1 {
@@ -78,7 +89,16 @@ func TestHandoffHysteresisAbsorbsJitter(t *testing.T) {
 	}
 	w.move(1, 0, 0)
 	if started := w.sumStats(func(s NodeStats) uint64 { return s.HandoffsStarted }); started != 0 {
-		t.Fatalf("%d handoffs inside the hysteresis band", started)
+		// 越过交接线后交接是正确行为：先用 witness 里玩家走到的最远处区分“用例失去控制”与“迟滞带内交接”。
+		edge := int64(10000) + w.grid.Hysteresis()
+		var peak int64
+		for _, v := range w.viewsOf(1) {
+			peak = max(peak, v.Self.X)
+		}
+		if peak >= edge {
+			t.Fatalf("%d handoffs, but the player reached x=%d past the hysteresis edge %d: control latency carried it out of the band", started, peak, edge)
+		}
+		t.Fatalf("%d handoffs inside the hysteresis band (player peaked at x=%d, edge %d)", started, peak, edge)
 	}
 	if sid, epoch := w.owner(1); sid != w.grid.SID(CellID{0, 0}) || epoch != 1 {
 		t.Fatalf("owner sid %d epoch %d, want A epoch 1", sid, epoch)
