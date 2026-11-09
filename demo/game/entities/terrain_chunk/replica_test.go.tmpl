@@ -1,0 +1,127 @@
+package terrain_chunk
+
+import (
+	"slices"
+	"testing"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+// replicaClient 按载荷把客户端的一块推进一步（生成的 ApplySyncTerrainChunkDao，全量时基线为 nil）。
+func replicaClient(t *testing.T, previous *db.SyncTerrainChunkDao, payload entity.FrozenSyncPayload, full bool) *db.SyncTerrainChunkDao {
+	t.Helper()
+	patch, err := db.UnmarshalSyncTerrainChunkDao(payload.BytesCopy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full {
+		previous = nil
+	}
+	next, err := db.ApplySyncTerrainChunkDao(patch, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return next
+}
+
+func replicaOverlay(version int64, edit func(c terrain.Chunk)) terrain.Overlay {
+	c := terrain.NewChunk()
+	for i := range c.Heights {
+		c.Heights[i] = uint16(1000 + i%37)
+		c.Materials[i] = byte(i % 5)
+	}
+	if edit != nil {
+		edit(c)
+	}
+	return terrain.Overlay{BaseRevision: 2, Version: version, Heights: c.Heights, Materials: c.Materials}
+}
+
+// 副本的增量（replica.go）：Manager 在一次捕获里先给老订阅者打增量、副本又被更新、再给新订阅者打全量，确认只推进到
+// 这次捕获里第一次打包时的序号；下一次增量把两类订阅者都带到最新内容。增量是按下标的绝对值、超过守卫发整字段，
+// 版本只进不退，换了 BaseRevision 的更新被拒。同一 ID、命名空间、kind 与实体相同。
+func TestReplicaDeltasBringEverySubscriberToTheLatest(t *testing.T) {
+	RegisterEntity()
+	key := terrain.ChunkKey{X: 2, Y: 1}
+	r, err := NewReplica(key, replicaOverlay(1, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if id, _ := EntityID(key); r.ID() != id || r.Sync().Namespace() != SyncNamespaceTerrain || r.Sync().SubjectKind() != uint32(EntityKindTerrainChunk) {
+		t.Fatalf("replica subject %d %q %d, want the entity's", r.ID(), r.Sync().Namespace(), r.Sync().SubjectKind())
+	}
+	packer := replicaPacker{r}
+	profile := entity.SyncProfile{}
+	pack := func(delta bool) entity.FrozenSyncPayload {
+		t.Helper()
+		var p entity.FrozenSyncPayload
+		if delta {
+			p, err = packer.PackSubjectDelta(profile, ^uint64(0))
+		} else {
+			p, err = packer.PackSubjectSnapshot(profile)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	capture := func() { packer.AcknowledgeSubjectSyncChanges(packer.SubjectSyncChangeVersion()) }
+
+	old := replicaClient(t, nil, pack(false), true)
+	capture()
+	if err := r.Set(replicaOverlay(2, func(c terrain.Chunk) { c.Heights[10] = 7 })); err != nil {
+		t.Fatal(err)
+	}
+	delta := pack(true) // 这次捕获的第一次打包：给老订阅者
+	if err := r.Set(replicaOverlay(3, func(c terrain.Chunk) { c.Heights[10] = 7; c.Heights[20] = 8; c.Materials[30] = 200 })); err != nil {
+		t.Fatal(err)
+	}
+	full := pack(false) // 同一次捕获里给新订阅者的全量（已经是版本 3）
+	capture()
+	old = replicaClient(t, old, delta, false)
+	newcomer := replicaClient(t, nil, full, true)
+	next := pack(true)
+	capture()
+	old = replicaClient(t, old, next, false)
+	newcomer = replicaClient(t, newcomer, next, false)
+	for name, got := range map[string]*db.SyncTerrainChunkDao{"old": old, "newcomer": newcomer} {
+		if got.Version.Value != 3 || got.Heights.Value[10] != 7 || got.Heights.Value[20] != 8 || got.Materials.Value[30] != 200 {
+			t.Fatalf("the %s subscriber holds version %d heights[10]=%d heights[20]=%d materials[30]=%d, want version 3 with 7, 8 and 200",
+				name, got.Version.Value, got.Heights.Value[10], got.Heights.Value[20], got.Materials.Value[30])
+		}
+	}
+	patch, _ := db.UnmarshalSyncTerrainChunkDao(next.BytesCopy())
+	if !patch.Heights.Delta || len(patch.Heights.Updates) != 1 || !patch.Materials.Delta || len(patch.Materials.Updates) != 1 {
+		t.Fatalf("the catch-up delta is %+v / %+v, want one height and one material update", patch.Heights, patch.Materials)
+	}
+
+	// 守卫：一次改了 1001 个高度点，增量是整字段。
+	if err := r.Set(replicaOverlay(4, func(c terrain.Chunk) {
+		for i := range HeightsGuard + 1 {
+			c.Heights[i] = 9000
+		}
+		c.Heights[10], c.Heights[20], c.Materials[30] = 9000, 9000, 200
+	})); err != nil {
+		t.Fatal(err)
+	}
+	patch, _ = db.UnmarshalSyncTerrainChunkDao(pack(true).BytesCopy())
+	capture()
+	if patch.Heights == nil || patch.Heights.Delta || len(patch.Heights.Value) != terrain.ChunkPoints || patch.Materials != nil {
+		t.Fatalf("1001 changed heights went out as %+v / %+v, want the whole heights field and no materials", patch.Heights, patch.Materials)
+	}
+
+	// 版本只进不退；BaseRevision 不同的更新被拒。
+	if err := r.Set(replicaOverlay(4, nil)); err == nil || r.Version() != 4 {
+		t.Fatalf("the same version was taken again: %v, version %d", err, r.Version())
+	}
+	other := replicaOverlay(5, nil)
+	other.BaseRevision = 3
+	if err := r.Set(other); err == nil || r.Version() != 4 {
+		t.Fatalf("an update on another base revision was taken: %v", err)
+	}
+	if got := slices.Index(old.Heights.Value, 7); got != 10 {
+		t.Fatalf("unexpected client heights (index of 7 is %d)", got)
+	}
+}

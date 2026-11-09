@@ -1,0 +1,338 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	"{{MODULE}}/game/terrainmap"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// 分区场景的可编辑地形（可编辑地形方案 P3，D14）：块只归包含它的格的进程写，别的进程要看它的两种场合都由这里接上：
+//
+//   - Ghost 带：格进程的地形视图装着本格外扩 ghost_band 的块（terrainmap.Region.Load），其中邻格写的块启动时按库里的
+//     记录装入，之后由写它的格进程推送（terrainmap.Map.ApplyReplica），跨格的高度查询、移动、交接判断读到的是邻格
+//     最新的已提交数据，不再是启动快照。
+//   - 邻格玩家可见：玩家连在自己的 Base 进程上、可能站在任何一个格里。Base 进程按本进程玩家的视点（witness 里玩家自己
+//     的位置）订阅附近别的格写的块，改过的块作为只读副本（terrain_chunk.Replica）登记进场景的同一个 Manager、同一个
+//     地形 Interest；本进程自己写的块仍是实体 subject（terrain_sync.go）。客户端收到的对象、编码与增量形状与本格的块
+//     相同，TerrainChunk 的类型调度（periodic 1s）与 terrain 命名空间的上限、快照预算一样适用。
+//
+// 传输是本进程的 cellworld Node 的扩展消息（命名空间 terrainReplicaSpace）：发件排进 Node 的出站队列，所以拥有者在改块
+// 事务的提交后回调里登记推送（Replicator.Changed）也不 Dispatch、不做 I/O。可靠性是 gameplay/terrain 的 Replicator 的
+// 协议：订阅每秒续期兼补齐，乱序 / 重复 / 迟到按版本丢弃，任一边重启后至多一个续期周期对齐，换版前后的消息按
+// BaseRevision 丢弃（D13 的重置不会被旧推送撤销）。
+//
+// 并发：Replicator 的 Run 与本文件的 loop 各一个 goroutine。mu 保护副本表与“客户端想要的块”，Replicator 调 store
+// 的三个方法（Held / Apply / Forget）都在它自己的 goroutine 上；视点的变化来自 cellworld 的 witness 观察点（Nest 提交后
+// 回调，不能等），只在 viewsMu 下记一笔、非阻塞地叫醒 loop，订阅的重算在 loop 上做。
+const (
+	// terrainReplicaSpace 是地形副本在 cellworld 扩展消息里的命名空间。
+	terrainReplicaSpace = "terrain"
+	// terrainReplicaChannel 是本进程唯一的一路副本（Ghost 带与给本进程客户端看的块共用：同一块只订阅一次）。
+	terrainReplicaChannel terrain.ReplicaChannel = 1
+	// terrainWantRadius 是玩家视点周围要订阅副本的范围：地形视野 200m + 离开滞回 20m + 视点上报步长 8m + 一块的余量，
+	// 视野里会出现的块在它进入视野之前就已订阅。
+	terrainWantRadius = terrainViewRadius + terrainViewHysteresis + terrainViewStep + terrain.ChunkSize
+	// terrainWantEvery 是重算订阅的最短间隔（视点频繁变化时合并）。
+	terrainWantEvery = 100 * time.Millisecond
+)
+
+// partitionTerrain 是一个分区进程的地形副本端点（terrain.ReplicaStore 由它实现）。
+type partitionTerrain struct {
+	m     *terrainmap.Map
+	sync  *terrainSync
+	rep   *terrain.Replicator
+	ghost map[terrain.ChunkKey]struct{} // 本格的 Ghost 带里邻格写的块（启动后不变）
+
+	viewsMu sync.Mutex
+	views   map[int64]spatial.Point // 玩家 ID → 地形视点（只有在看地形的玩家）
+	wake    chan struct{}
+
+	mu       sync.Mutex
+	clients  map[terrain.ChunkKey]struct{}                     // 本进程玩家附近、别的进程写的块
+	replicas map[terrain.ChunkKey]*terrain_chunk.Replica // clients 里改过的块的副本（已登记为 subject）
+
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+// newPartitionTerrain 建本进程的副本端点；send 是经 cellworld Node 的扩展消息发出（Node 建好之后才会被调用）。
+func newPartitionTerrain(m *terrainmap.Map, sync *terrainSync, grid *cellworld.Grid, sid int32, send func(int32, []byte) bool) (*partitionTerrain, error) {
+	if m == nil || sync == nil {
+		return nil, errors.New("partition terrain: map and terrain sync are required")
+	}
+	p := &partitionTerrain{
+		m: m, sync: sync, ghost: map[terrain.ChunkKey]struct{}{}, views: map[int64]spatial.Point{}, wake: make(chan struct{}, 1),
+		clients: map[terrain.ChunkKey]struct{}{}, replicas: map[terrain.ChunkKey]*terrain_chunk.Replica{},
+	}
+	for _, key := range m.GhostKeys() {
+		p.ghost[key] = struct{}{}
+	}
+	meta := m.Meta()
+	cfg := terrain.ReplicatorConfig{
+		Self: sid, Meta: meta, Send: send,
+		// 写一块的是它所在的格的进程（cell_size 是块边长的整数倍，块不跨格：settings 的 Scene.ValidateConfig 已查）。
+		OwnerOf: func(key terrain.ChunkKey) (int32, bool) {
+			if !meta.Contains(key) {
+				return 0, false
+			}
+			cell, ok := grid.CellAt(key.Bounds().Min)
+			if !ok {
+				return 0, false
+			}
+			owner := grid.SID(cell)
+			return owner, owner != 0
+		},
+	}
+	if !m.Region().Own.Empty() {
+		cfg.Source, cfg.Owns = m.View(), m.Owns
+	}
+	rep, err := terrain.NewReplicator(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("partition terrain: %w", err)
+	}
+	if err := rep.AddChannel(terrainReplicaChannel, p); err != nil {
+		return nil, fmt.Errorf("partition terrain: %w", err)
+	}
+	p.rep = rep
+	return p, nil
+}
+
+// deliver 是 cellworld 扩展消息的处理器（传输回调）：只复制、入队。
+func (p *partitionTerrain) deliver(from int32, body []byte) { p.rep.Deliver(from, body) }
+
+// start 接上提交后的推送与视点的通知，起 Replicator 与订阅重算。Node 已就绪、玩家能进来之前调用。
+func (p *partitionTerrain) start() {
+	// 本进程写的块提交之后：第一次改的块登记为实体 subject（与普通场景相同），并推给订阅了它的副本。
+	p.m.SetCommitted(func(chunk *terrain_chunk.TerrainChunk) {
+		p.sync.show(chunk)
+		p.rep.Changed(chunk.Key())
+	})
+	p.sync.setFollow(p.follow)
+	ctx, cancel := context.WithCancel(context.Background())
+	p.cancel, p.done = cancel, make(chan struct{})
+	var workers sync.WaitGroup
+	workers.Go(func() {
+		if err := p.rep.Run(ctx); err != nil {
+			slog.Error("partition terrain: replicator stopped", "err", err)
+		}
+	})
+	workers.Go(func() { p.loop(ctx) })
+	go func() { workers.Wait(); close(p.done) }()
+	p.rep.Want(terrainReplicaChannel, p.wanted())
+}
+
+// stop 停下推送与订阅（其他进程的订阅随租约过期），撤下全部副本 subject。可重复调用。
+func (p *partitionTerrain) stop() {
+	if p == nil || p.cancel == nil {
+		return
+	}
+	p.cancel()
+	<-p.done
+	p.cancel = nil
+	p.m.SetCommitted(p.sync.show)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key, r := range p.replicas {
+		p.sync.hideReplica(r)
+		delete(p.replicas, key)
+	}
+	clear(p.clients)
+}
+
+// witness 是 cellworld 的 witness 观察点（Base 接受了一份 witness，在提交后回调上）：玩家自己的位置就是地形视点。
+// terrainSync.moved 不到一个上报步长不动；玩家不在看地形（没进场或已离开）时什么都不做。
+func (p *partitionTerrain) witness(view cellworld.View) {
+	p.sync.moved(playerOf(view.Player), view.Self.Pos())
+}
+
+// follow 是地形视点变化的通知（terrainSync.follow）：记一笔，叫醒 loop。不阻塞。
+func (p *partitionTerrain) follow(playerID int64, at spatial.Point, watching bool) {
+	p.viewsMu.Lock()
+	if watching {
+		p.views[playerID] = at
+	} else {
+		delete(p.views, playerID)
+	}
+	p.viewsMu.Unlock()
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
+// loop 在视点变化之后重算订阅，两次之间至少 terrainWantEvery。
+func (p *partitionTerrain) loop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-p.wake:
+		}
+		p.rep.Want(terrainReplicaChannel, p.recompute())
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(terrainWantEvery):
+		}
+	}
+}
+
+// recompute 按当前视点重算“客户端想要的块”：撤下不再想要的副本，新想要的 Ghost 带块按视图里的数据立即建副本（视图
+// 本来就是最新的），其余等拥有者答复。返回交给 Replicator 的整份订阅（Ghost 带 ∪ 客户端想要的块）。
+func (p *partitionTerrain) recompute() []terrain.ChunkKey {
+	p.viewsMu.Lock()
+	points := make([]spatial.Point, 0, len(p.views))
+	for _, at := range p.views {
+		points = append(points, at)
+	}
+	p.viewsMu.Unlock()
+	bounds := p.m.Meta().Bounds()
+	next := map[terrain.ChunkKey]struct{}{}
+	for _, at := range points {
+		around := spatial.Rect{
+			Min: spatial.Point{X: max(at.X-terrainWantRadius, bounds.Min.X), Y: max(at.Y-terrainWantRadius, bounds.Min.Y)},
+			Max: spatial.Point{X: min(at.X+terrainWantRadius, bounds.Max.X), Y: min(at.Y+terrainWantRadius, bounds.Max.Y)},
+		}
+		if around.Empty() {
+			continue
+		}
+		for key := range terrain.ChunksIn(around) {
+			if p.m.Meta().Contains(key) && !p.m.Owns(key) {
+				next[key] = struct{}{}
+			}
+		}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for key := range p.clients {
+		if _, keep := next[key]; keep {
+			continue
+		}
+		if r := p.replicas[key]; r != nil {
+			p.sync.hideReplica(r)
+			delete(p.replicas, key)
+		}
+	}
+	for key := range next {
+		if _, had := p.clients[key]; had {
+			continue
+		}
+		if _, ghost := p.ghost[key]; !ghost {
+			continue
+		}
+		chunk, version, loaded := p.m.View().Chunk(key)
+		if !loaded || version < 1 {
+			continue
+		}
+		o := terrain.Overlay{BaseRevision: p.m.Meta().BaseRevision, Version: version, Heights: chunk.Heights, Materials: chunk.Materials}
+		if err := p.showLocked(key, o); err != nil {
+			slog.Warn("partition terrain: a ghost chunk's replica was not shown", "chunk", key.String(), "err", err)
+		}
+	}
+	p.clients = next
+	return p.wantedLocked()
+}
+
+// wanted / wantedLocked 是交给 Replicator 的整份订阅：Ghost 带 ∪ 客户端想要的块。
+func (p *partitionTerrain) wanted() []terrain.ChunkKey {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.wantedLocked()
+}
+
+func (p *partitionTerrain) wantedLocked() []terrain.ChunkKey {
+	keys := make([]terrain.ChunkKey, 0, len(p.ghost)+len(p.clients))
+	for key := range p.ghost {
+		keys = append(keys, key)
+	}
+	for key := range p.clients {
+		if _, ghost := p.ghost[key]; !ghost {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// showLocked 让客户端想要的一块跟上拥有者的状态（持 mu）：覆盖块建副本或更新它；“原始块”不建（客户端用本地原始
+// 地形包），已有更新的副本时答 ErrStaleOverlay。
+func (p *partitionTerrain) showLocked(key terrain.ChunkKey, o terrain.Overlay) error {
+	r := p.replicas[key]
+	switch {
+	case o.Version < 1 && r != nil:
+		return fmt.Errorf("%w: the owner says base, the replica holds version %d", terrain.ErrStaleOverlay, r.Version())
+	case o.Version < 1:
+		return nil
+	case r != nil:
+		return r.Set(o)
+	}
+	r, err := terrain_chunk.NewReplica(key, o)
+	if err != nil {
+		return err
+	}
+	if err := p.sync.showReplica(r); err != nil {
+		r.Close()
+		return err
+	}
+	p.replicas[key] = r
+	return nil
+}
+
+// ---- terrain.ReplicaStore（Replicator 的 goroutine 上）----
+
+// Held：Ghost 带的块报视图里的版本（-1 是装不进视图）；只给客户端看的块报副本的版本，没有副本是原始块（0）。
+func (p *partitionTerrain) Held(key terrain.ChunkKey) int64 {
+	if _, ghost := p.ghost[key]; ghost {
+		return p.m.ReplicaHeld(key)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if r := p.replicas[key]; r != nil {
+		return r.Version()
+	}
+	return 0
+}
+
+// Apply：Ghost 带的块先进视图（版本只进不退，原始块撤回覆盖），客户端也想要时同步更新副本；只给客户端看的块更新
+// 副本。客户端已经不想要的块不建副本（订阅随后撤销）。
+func (p *partitionTerrain) Apply(key terrain.ChunkKey, o terrain.Overlay) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ghost := p.ghost[key]; ghost {
+		if err := p.m.ApplyReplica(key, o); err != nil {
+			return err
+		}
+	}
+	if _, wanted := p.clients[key]; !wanted {
+		return nil
+	}
+	return p.showLocked(key, o)
+}
+
+// Forget：不再订阅的块（只给客户端看的块离开了全部玩家的视点范围）撤下副本。
+func (p *partitionTerrain) Forget(key terrain.ChunkKey) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, wanted := p.clients[key]; wanted {
+		return
+	}
+	if r := p.replicas[key]; r != nil {
+		p.sync.hideReplica(r)
+		delete(p.replicas, key)
+	}
+}
+
+// stats 是 gm.scene.partition 的地形一栏：副本端点的计数、Ghost 带块数、客户端想要的块与已登记的副本数。
+func (p *partitionTerrain) stats() map[string]any {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return map[string]any{"replicator": p.rep.Stats(), "ghost_chunks": len(p.ghost), "client_chunks": len(p.clients), "replicas": len(p.replicas)}
+}

@@ -150,7 +150,8 @@ type LoadStats struct {
 // Map 是本进程的地形。
 //
 // 锁与所有权：pack、view、meta、region、chunks、editor 在 Open 之后不变；view 自己保证并发（查询无锁）。unloadable
-// 只在 Load 里写（启动阶段，发布之前），之后只读，仍由 mu 保护。Map 拥有 pack：Close 关闭它。
+// 由 mu 保护：Load 里写（启动阶段，发布之前），之后只有邻格的副本（ApplyReplica，P3）把 Ghost 带里的块从中移出。
+// Map 拥有 pack：Close 关闭它。
 type Map struct {
 	pack   *terrain.Pack
 	view   *terrain.View
@@ -268,6 +269,63 @@ func (m *Map) markUnloadable(key terrain.ChunkKey, cause error) {
 	m.mu.Lock()
 	m.unloadable[key] = cause
 	m.mu.Unlock()
+}
+
+// ---- Ghost 带副本（可编辑地形方案 P3，D14）----
+//
+// 分区场景里 Region.Load 比 Region.Own 多出的一圈（Ghost 带）是邻格写的块：启动时按库里的记录装入（快照），之后由
+// 写它的格进程推送（gameplay/terrain 的 Replicator，demo 的接线在 internal/service/<game>/terrain_partition.go）。这里
+// 只是视图一侧的规则：版本只进不退，拥有者说“原始块”时按原始块装入，装入成功的块不再是 unloadable。
+
+// GhostKeys 是 Region.Load 里不归本进程写的块（行优先）：分区场景里邻格的 Ghost 带，不分区时为空。
+func (m *Map) GhostKeys() []terrain.ChunkKey {
+	var keys []terrain.ChunkKey
+	for _, key := range m.Keys() {
+		if !m.Owns(key) {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// ReplicaHeld 是 Ghost 带里一块在本进程视图里的版本（副本订阅时报给拥有者）：0 是原始块，≥ 1 是覆盖块，-1 是装不进
+// 视图（启动时记录基于另一版原始地形、损坏）或没装着——拥有者据此把当前状态（含“原始块”）发来。
+func (m *Map) ReplicaHeld(key terrain.ChunkKey) int64 {
+	if m.unloadableErr(key) != nil {
+		return -1
+	}
+	version, loaded := m.view.Version(key)
+	if !loaded {
+		return -1
+	}
+	return version
+}
+
+// ApplyReplica 把拥有者推来的一块的当前状态装进视图（只接受 Ghost 带里、不归本进程写的块）：o.Version ≥ 1 是覆盖块，
+// 比视图里旧的答 terrain.ErrStaleOverlay；o.Version == 0 表示拥有者那里是原始块（从没改过，或原始地形换版后丢弃了改动，
+// D13），视图里已有覆盖块时同样答 ErrStaleOverlay（同一原始地形版本内拥有者的版本不回退；换版前后的消息由
+// Replicator 按 BaseRevision 丢弃），否则按原始块装入。装入成功后这块不再是 unloadable（例如启动时读到邻格还没丢弃的
+// 旧记录，拥有者丢弃之后这里撤回到原始块）。调用方是 Replicator 的 goroutine：读包、解压在那里做。
+func (m *Map) ApplyReplica(key terrain.ChunkKey, o terrain.Overlay) error {
+	if !m.meta.Contains(key) || m.Owns(key) || intersect(m.region.Load, key.Bounds()).Empty() {
+		return fmt.Errorf("%w: chunk %v is not in this process's ghost band", ErrNotOwned, key)
+	}
+	if o.Version >= 1 {
+		if err := m.view.SetOverlay(key, o); err != nil {
+			return err
+		}
+	} else {
+		if version, loaded := m.view.Version(key); loaded && version >= 1 {
+			return fmt.Errorf("%w: the owner says base, this view holds version %d", terrain.ErrStaleOverlay, version)
+		}
+		if err := m.view.LoadBase(key); err != nil {
+			return err
+		}
+	}
+	m.mu.Lock()
+	delete(m.unloadable, key)
+	m.mu.Unlock()
+	return nil
 }
 
 // CommitFailures 是提交后装入视图失败的次数（见 Map.commitFailures）。
