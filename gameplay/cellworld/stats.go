@@ -30,6 +30,9 @@ type NodeStats struct {
 	GroupSnapsSent, GroupSnapsIn               uint64
 	GroupNoticesSent, GroupAdopted, GroupStale uint64
 	GroupResyncs, GroupViewErrors              uint64
+	// 扩展消息（v7，ext.go）：ExtOut 是 SendExt 入队成功的条数，ExtIn 是交给处理器的条数，ExtDrops 是命名空间没有处理器
+	// 而丢弃的条数。
+	ExtOut, ExtIn, ExtDrops uint64
 }
 
 type nodeCounters struct {
@@ -52,6 +55,7 @@ type nodeCounters struct {
 	groupSnapsSent, groupSnapsIn                    atomic.Uint64
 	groupNoticesSent, groupAdopted, groupStale      atomic.Uint64
 	groupResyncs, groupViewErrors                   atomic.Uint64
+	extOut, extIn, extDrops                         atomic.Uint64
 }
 
 // Stats 返回计数快照，任何 goroutine 可调用。
@@ -77,5 +81,6 @@ func (n *Node) Stats() NodeStats {
 		GroupSnapsSent: s.groupSnapsSent.Load(), GroupSnapsIn: s.groupSnapsIn.Load(),
 		GroupNoticesSent: s.groupNoticesSent.Load(), GroupAdopted: s.groupAdopted.Load(), GroupStale: s.groupStale.Load(),
 		GroupResyncs: s.groupResyncs.Load(), GroupViewErrors: s.groupViewErrors.Load(),
+		ExtOut: s.extOut.Load(), ExtIn: s.extIn.Load(), ExtDrops: s.extDrops.Load(),
 	}
 }

@@ -16,6 +16,8 @@
 
 **入场与离场（RV-20261106-03，线上格式 v6）**：每次 `Enter` 由 Base 编一个入场序号 `BaseState.Entry`（Enter 时的系统时间 UnixNano，同进程内至少比上一次大 1；不持久，跨 Base 重启的唯一性依赖系统时钟不回拨）。Enter、Leave 与交接 Offer 都带它，SceneActor 存在 `ActorState.Entry`；Real 只接受 Entry 相同的 Leave，上一次入场重复 / 迟到的 Leave 碰到同 ID 重新入场的角色时丢弃（计 `StaleDrops`）。看门狗重进、交接放弃后补回是同一次入场，序号不变；目标格已有 Real 时幂等的 Enter 只把序号往大改（Base 重启后的新入场接管旧 Real）。仍是尽力而为：发给冻结中旧格的 Leave 不处理、离场后才到的旧 Enter 会重建一个无人续租的角色，两者都由租约（`LeaseTimeout`）兜底。
 
+**扩展消息（线上格式 v7，`ext.go`）**：别的模块借本进程 Node 的通道收发自己的消息，不另起连接与主题。收件方在 `NodeConfig.Ext` 里按命名空间（字母、数字、`-`、`_`，至多 64 个字符）登记处理器；发件方调 `Node.SendExt(sid, space, body)`：只非阻塞地排进出站队列（队列满丢弃计 `OutboxDrops` 并返回 false），由出站 goroutine 编码发出，所以可以在 Nest 的提交后回调里调用（那里不能 Dispatch、不做 I/O）。收件在传输回调上、与 Node 自己的消息同一个准入门（`CloseIngress` 之后不再调用处理器），处理器必须快速返回；没有处理器的命名空间计 `ExtDrops`。语义与其余消息相同：至多一次，可能丢失、重复、乱序，可靠性由使用方的协议负责。计数 `ExtOut` / `ExtIn` / `ExtDrops`。v6 及更早的消息按坏消息丢弃（未上线，升级须先停旧进程）。第一个使用方是可编辑地形的边界块副本（`gameplay/terrain` 的 `Replicator`，命名空间 `terrain`；game-demo 接线见 `internal/service/<game>/terrain_partition.go`），在回环与真实 nats-server 上的用例是 `ext_test.go` 的 `TestTerrainReplicaOverNodes`。
+
 `BaseState` / `ActorState` 的 MsgPack 字段各有独立标签（RV-20261106-04 前 `BaseState` 的 X/Y、VX/VY 共用标签，编码丢 X 与 VX），往返由 `TestStateMsgpackRoundTrip` 逐字段覆盖。
 
 `Node` 是每进程一个的端点：传输回调只解码并把消息投成 Nest 请求（Scene、[Scene, 角色]、[Scene, 攻击者, 目标]、Player）；事务提交后的发送、给区域的报告、实体销毁、跟进投递排进一个有界出站队列，由一个 goroutine 执行（Nest 不允许提交后回调里再 Dispatch）。Node 自己没有锁、不持有格内状态。
@@ -134,6 +136,7 @@ Cell 进程是普通 roost App：`app.New(...).Singleton(kitredis.SingletonStore
 | `group_test.go` | 队伍面板（v2.5）：两个 Base 上彼此不在视野里的队员互相看见位置 / HP、同 Base 队友不经快照、一个周期一份；对方 Base 停了 3 个周期后移除、重启后重读恢复；队员换格时面板不删不重建；离队 / 迟到的旧通知 / 再入队 / 解散；通知丢了由重读收敛；视野内的队友只有一个对象，走出视野不闪 |
 | `lifecycle_test.go` | Cell 崩溃后按 Player 快照重建（含客户端重新持有自己、面板随 Enter 回到新 SceneActor）、Base 消失后租约离场、回写按版本幂等、交接事务回滚不移交 |
 | `nats_test.go` | 同一组场景跑在真实 nats-server 上（测试自起私有端口） |
+| `ext_test.go` | 扩展消息（v7）：按命名空间交给处理器、提交后回调里可发、`CloseIngress` 之后不再调用、旧版本与空内容按坏消息丢弃；地形边界块副本在回环与真实 nats-server 上推到邻格（`ROOST_TERRAIN_REPLICA_PERF=1` 记延迟与字节） |
 | `process_test.go` | 每个 Cell 是一个带单实例锁的 App 子进程（私有 redis-server）：跨进程至多一个 Real 与伤害只结算一次、kill -9 后按快照恢复、同 sid 第二个进程被拒、Base 进程消失后 SceneActor 清理 |
 | `measure_test.go` | 原型测量：`ROOST_CELLWORLD_PERF=1 GOWORK=off go test -run TestCellWorldMeasure -v ./gameplay/cellworld/`（档位 `ROOST_CELLWORLD_PERF_NPCS=1000,5000`，窗口 `ROOST_CELLWORLD_PERF_SECONDS=20`；D1：`ROOST_CELLWORLD_PERF_IDLE_MS=1000`，玩家分布 `ROOST_CELLWORLD_PERF_PLAYERS=spread|cell`） |
 
