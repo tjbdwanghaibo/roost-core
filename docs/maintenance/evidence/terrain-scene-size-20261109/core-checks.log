@@ -1,0 +1,19 @@
+$ gofmt -l framework/sync/entitysync/policy
+gofmt done
+$ go vet ./framework/sync/entitysync/policy/
+VET_OK
+$ go test -race -count=1 ./framework/sync/entitysync/policy/
+ok  	github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy	9.618s
+$ go build ./...
+BUILD_OK
+$ go test -count=1 ./codegen/internal/roost/
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	370.135s
+$ go test -count=1 .
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core	10.648s
+FAIL
+（首跑时证据目录 README 还没写，TestTrackedMarkdownRelativeLinksResolve 报方案与 CHANGELOG 里指向它的 2 个链接不存在；写好后复跑：）
+$ go test -count=1 .
+ok  	github.com/tjbdwanghaibo/roost-core	9.515s
+$ python3 scripts/check-doc-anchors.py
+checked 253 files, 0 broken

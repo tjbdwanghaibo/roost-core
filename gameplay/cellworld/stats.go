@@ -33,6 +33,8 @@ type NodeStats struct {
 	// 扩展消息（v7，ext.go）：ExtOut 是 SendExt 入队成功的条数，ExtIn 是交给处理器的条数，ExtDrops 是命名空间没有处理器
 	// 而丢弃的条数。
 	ExtOut, ExtIn, ExtDrops uint64
+	// SurfaceBlocks：积分时被地面钩子（NodeConfig.Surface）挡住的次数（含站立的地面格没有定义）。诊断计数，事务回滚不撤回。
+	SurfaceBlocks uint64
 }
 
 type nodeCounters struct {
@@ -56,6 +58,7 @@ type nodeCounters struct {
 	groupNoticesSent, groupAdopted, groupStale      atomic.Uint64
 	groupResyncs, groupViewErrors                   atomic.Uint64
 	extOut, extIn, extDrops                         atomic.Uint64
+	surfaceBlocks                                   atomic.Uint64
 }
 
 // Stats 返回计数快照，任何 goroutine 可调用。
@@ -82,5 +85,6 @@ func (n *Node) Stats() NodeStats {
 		GroupNoticesSent: s.groupNoticesSent.Load(), GroupAdopted: s.groupAdopted.Load(), GroupStale: s.groupStale.Load(),
 		GroupResyncs: s.groupResyncs.Load(), GroupViewErrors: s.groupViewErrors.Load(),
 		ExtOut: s.extOut.Load(), ExtIn: s.extIn.Load(), ExtDrops: s.extDrops.Load(),
+		SurfaceBlocks: s.surfaceBlocks.Load(),
 	}
 }

@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -406,5 +409,248 @@ func TestTerrainReplicaOverNodes(t *testing.T) {
 				float64(after.ChunkBytesOut-before.ChunkBytesOut)/float64(after.ChunksOut-before.ChunksOut),
 				after.ChunksOut-before.ChunksOut, after.ChunkBytesOut-before.ChunkBytesOut)
 		})
+	}
+}
+
+// ---- 跨格移动按高度判定（NodeConfig.Surface 接 gameplay/terrain 的 Walker，可编辑地形 P3 / T06）----
+
+// flatPack 写一张平地（高度原始值 1000 = 100 米、没有水）的 chunksX × 1 块地图。
+func flatPack(t testing.TB, chunksX int32) *terrain.Pack {
+	t.Helper()
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: chunksX, ChunksY: 1, WaterLevel: math.MinInt32}
+	path := filepath.Join(t.TempDir(), "flat.pack")
+	if err := terrain.WritePackFile(path, meta, func(terrain.ChunkKey) (terrain.Chunk, error) {
+		c := terrain.NewChunk()
+		for i := range c.Heights {
+			c.Heights[i] = 1000
+		}
+		return c, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pack, err := terrain.OpenPack(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pack.Close() })
+	return pack
+}
+
+// setColumns 把视图里 key 块上世界采样列 gx ∈ cols 的整列（gy 0～63）改成高度原始值 raw，装成版本 + 1 的覆盖块
+// （拥有者一次改块的提交），返回新版本。
+func setColumns(t testing.TB, view *terrain.View, key terrain.ChunkKey, cols []int64, raw uint16) int64 {
+	t.Helper()
+	c, version, loaded := view.Chunk(key)
+	if !loaded {
+		t.Fatalf("chunk %v not loaded", key)
+	}
+	for _, gx := range cols {
+		for gy := range int64(terrain.ChunkSamples) {
+			c.Heights[gy*terrain.ChunkSamples+gx-int64(key.X)*terrain.ChunkSamples] = raw
+		}
+	}
+	if err := view.SetOverlay(key, terrain.Overlay{BaseRevision: view.Meta().BaseRevision, Version: version + 1, Heights: c.Heights, Materials: c.Materials}); err != nil {
+		t.Fatal(err)
+	}
+	return version + 1
+}
+
+// surfaceCellGrid：2 × 1 个格，格边长 2 块（12800），Ghost 带 1 块，滞回 1000（冻结线离边界 10 米，交接前在邻格的块上
+// 走得足够远）。地图 4 × 1 块：块 0、1 归格 (0,0)（sid 101），2、3 归格 (1,0)（sid 102）。格 (0,0) 的视图装块 0～2
+// （块 2 是 Ghost 带里邻格写的块，副本），格 (1,0) 装块 1～3。
+func surfaceCellGrid(t testing.TB) *Grid {
+	t.Helper()
+	g, err := NewGrid(GridConfig{CellSize: 2 * terrain.ChunkSize, Cols: 2, Rows: 1, GhostBand: terrain.ChunkSize, Hysteresis: 1000,
+		Owners: map[CellID]int32{{0, 0}: 101, {1, 0}: 102}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
+// 副本缺块不猜平地：格 (0,0) 的视图里邻格写的块 2 没装入（副本装不进来）时，朝东走的玩家停在块 2 前最后一个点
+// （节点 127 的最后一个点 12749，节点 128 从 12750 起就在块 2 里），NPC 原路折回；块 2 的副本装入后同样的走法走进去；
+// 站在没装入的块上的角色一步不走。用真实的 terrain.Walker 与视图，Node 只积分（不起传输）。
+func TestCrossCellWalkDoesNotGuessAMissingGhostChunk(t *testing.T) {
+	grid := surfaceCellGrid(t)
+	pack := flatPack(t, 4)
+	view := terrain.NewView(pack)
+	for _, key := range []terrain.ChunkKey{{X: 0}, {X: 1}} {
+		if err := view.LoadBase(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	walker := &terrain.Walker{View: view, Rules: terrain.DefaultWalkRules}
+	cell := CellID{0, 0}
+	n := &Node{cfg: NodeConfig{Grid: grid, Cell: &cell, ViewRadius: worldViewRadius, Surface: func() Surface { return walker }}.withDefaults(), cell: cell, hostsCell: true}
+	n.rect = grid.Rect(cell)
+	now := time.Now()
+
+	player := ActorState{EntityState: EntityState{ID: actorID(1), Kind: KindPlayer, X: 12500, Y: 3000, VX: 2000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	n.stepActor(&player, now, 4*worldPeriod)
+	if player.X != 12749 || player.VX != 0 || player.Role != RoleReal {
+		t.Fatalf("walking towards the missing ghost chunk: at x=%d vx %d %v, want stopped at 12749", player.X, player.VX, player.Role)
+	}
+	// NPC 在第二个子步碰上、原路折回；同一拍剩下的子步往回走（与碰世界边缘反弹相同）。
+	npc := ActorState{EntityState: EntityState{ID: npcID(2), Kind: KindNPC, X: 12600, Y: 3000, VX: 2000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	n.stepActor(&npc, now, 2*worldPeriod)
+	if npc.X != 12749 || npc.VX != -2000 {
+		t.Fatalf("npc towards the missing ghost chunk: at x=%d vx %d, want turned back at 12749", npc.X, npc.VX)
+	}
+	n.stepActor(&npc, now, worldPeriod)
+	if npc.X != 12649 {
+		t.Fatalf("npc after turning back: at x=%d, want 12649", npc.X)
+	}
+	inside := ActorState{EntityState: EntityState{ID: actorID(3), Kind: KindPlayer, X: 13000, Y: 3000, VX: 2000, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	n.stepActor(&inside, now, worldPeriod)
+	if inside.X != 13000 || inside.VX != 0 {
+		t.Fatalf("standing on the missing ghost chunk: at x=%d vx %d, want held", inside.X, inside.VX)
+	}
+
+	if err := view.LoadBase(terrain.ChunkKey{X: 2}); err != nil { // 副本到了（拥有者答“原始块”）
+		t.Fatal(err)
+	}
+	player.VX = 2000
+	n.stepActor(&player, now, 4*worldPeriod)
+	if player.X != 13149 || player.VX != 2000 {
+		t.Fatalf("after the ghost chunk arrived: at x=%d vx %d, want walked on to 13149", player.X, player.VX)
+	}
+}
+
+// 跨格移动按邻格的地形（真实 Node、回环传输、两个格进程各自的视图与 terrain.Replicator、Base 与玩家）：
+//
+//  1. 格 (1,0) 在它写的块 2 上立一道 10 米的墙（节点 133～134），推到格 (0,0) 的 Ghost 副本；格 (0,0) 的玩家朝东走，
+//     越过格边界（12800）后在墙前停下（13249），还没到冻结线（13800），一直是格 (0,0) 的 Real：交接之前格 (0,0) 按
+//     副本判定。
+//  2. 格 (1,0) 把墙挖平（新版本推到副本），玩家再走：越过冻结线交给格 (1,0)。
+//  3. 格 (1,0) 在只有它装着的块 3 上挖一个 10 米深的坑（节点 195 起），玩家停在坑前（19449）：交接之后按新格自己的
+//     视图判定（格 (0,0) 的视图里没有块 3，要是它在判定会停在 19149）。
+func TestCrossCellWalkFollowsTheNeighboursTerrain(t *testing.T) {
+	grid := surfaceCellGrid(t)
+	pack := flatPack(t, 4)
+	lb := newLoopback()
+	type surfaceCell struct {
+		view *terrain.View
+		rep  *terrain.Replicator
+		node atomic.Pointer[Node]
+	}
+	cells := map[CellID]*surfaceCell{}
+	owner := chunkOwner(grid)
+	for _, id := range grid.Cells() {
+		sid := grid.SID(id)
+		sc := &surfaceCell{view: terrain.NewView(pack)}
+		r := grid.Rect(id)
+		load := spatial.Rect{Min: spatial.Point{X: r.Min.X - grid.GhostBand(), Y: r.Min.Y - grid.GhostBand()},
+			Max: spatial.Point{X: r.Max.X + grid.GhostBand(), Y: r.Max.Y + grid.GhostBand()}}
+		var ghost []terrain.ChunkKey
+		for key := range terrain.ChunksIn(load) {
+			if !pack.Meta().Contains(key) {
+				continue
+			}
+			if err := sc.view.LoadBase(key); err != nil {
+				t.Fatal(err)
+			}
+			if o, _ := owner(key); o != sid {
+				ghost = append(ghost, key)
+			}
+		}
+		rep, err := terrain.NewReplicator(terrain.ReplicatorConfig{
+			Self: sid, Meta: pack.Meta(), OwnerOf: owner, Source: sc.view,
+			Owns:  func(key terrain.ChunkKey) bool { o, ok := owner(key); return ok && o == sid },
+			Send:  func(to int32, body []byte) bool { return sc.node.Load().SendExt(to, "terrain", body) },
+			Renew: 200 * time.Millisecond,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rep.AddChannel(1, &replicaViewStore{view: sc.view}); err != nil {
+			t.Fatal(err)
+		}
+		rep.Want(1, ghost)
+		sc.rep = rep
+		cells[id] = sc
+	}
+	spec := worldSpec{grid: grid, transport: func(testing.TB, string) Transport { return lb }, cellMod: func(cfg *NodeConfig) {
+		sc := cells[*cfg.Cell]
+		walker := &terrain.Walker{View: sc.view, Rules: terrain.DefaultWalkRules}
+		cfg.Surface = func() Surface { return walker }
+		cfg.Ext = map[string]ExtHandler{"terrain": func(from int32, body []byte) { sc.rep.Deliver(from, body) }}
+	}}
+	w := startWorld(t, spec)
+	ctx, cancel := context.WithCancel(context.Background())
+	var reps sync.WaitGroup
+	for id, sc := range cells {
+		sc.node.Store(w.cells[id].node)
+		reps.Go(func() { _ = sc.rep.Run(ctx) })
+	}
+	t.Cleanup(func() { cancel(); reps.Wait() })
+	a, b := cells[CellID{0, 0}], cells[CellID{1, 0}]
+	waitFor(t, 5*time.Second, "the ghost subscriptions", func() bool { return a.rep.Stats().Subscribers == 1 && b.rep.Stats().Subscribers == 1 })
+
+	ghostChunk, farChunk := terrain.ChunkKey{X: 2}, terrain.ChunkKey{X: 3}
+	wall := setColumns(t, b.view, ghostChunk, []int64{133, 134}, 1100)
+	commit(func() { b.rep.Changed(ghostChunk) })
+	waitFor(t, 5*time.Second, "the wall on the ghost replica", func() bool { v, _ := a.view.Version(ghostChunk); return v == wall })
+
+	const player = 61
+	w.enter(player, spatial.Point{X: 12500, Y: 3000})
+	w.move(player, 2000, 0)
+	v := w.waitView(player, 5*time.Second, "stopped at the wall", func(v View) bool { return v.Self.X == 13249 && v.Self.VX == 0 })
+	if v.Cell != 101 {
+		t.Fatalf("stopped at the wall on cell sid %d, want 101 (before the freeze line, on the ghost replica)", v.Cell)
+	}
+	if s := w.cells[CellID{0, 0}].node.Stats(); s.SurfaceBlocks == 0 || s.HandoffsStarted != 0 {
+		t.Fatalf("cell (0,0) stats %+v: want a surface block and no handoff", s)
+	}
+
+	flat := setColumns(t, b.view, ghostChunk, []int64{133, 134}, 1000)
+	commit(func() { b.rep.Changed(ghostChunk) })
+	waitFor(t, 5*time.Second, "the levelled wall on the ghost replica", func() bool { v, _ := a.view.Version(ghostChunk); return v == flat })
+	pit := setColumns(t, b.view, farChunk, []int64{195, 196}, 900)
+	commit(func() { b.rep.Changed(farChunk) })
+	if _, loaded := a.view.Version(farChunk); loaded {
+		t.Fatal("cell (0,0) holds chunk 3; the last leg cannot tell whose view judged it")
+	}
+	w.move(player, 2000, 0)
+	v = w.waitView(player, 10*time.Second, "stopped at the pit", func(v View) bool { return v.Self.X == 19449 && v.Self.VX == 0 })
+	if v.Cell != 102 {
+		t.Fatalf("stopped at the pit on cell sid %d, want 102 (handed off)", v.Cell)
+	}
+	if got, _ := b.view.Version(farChunk); got != pit {
+		t.Fatalf("chunk 3 on cell (1,0) at version %d, want %d", got, pit)
+	}
+	w.assertSingleReal(actorID(player), CellID{1, 0})
+}
+
+// 一拍积分的成本（一个 Period、无交接）：没有地面、平地上的 terrain.Walker；玩家全速（2000 / 秒，一拍 100 个点）
+// 与慢 NPC（200 / 秒，一拍 10 个点）。
+func BenchmarkIntegrateOnSurface(b *testing.B) {
+	grid := surfaceCellGrid(b)
+	view := terrain.NewView(flatPack(b, 4))
+	for key := range terrain.ChunksIn(view.Meta().Bounds()) {
+		if err := view.LoadBase(key); err != nil {
+			b.Fatal(err)
+		}
+	}
+	walker := &terrain.Walker{View: view, Rules: terrain.DefaultWalkRules}
+	cell := CellID{0, 0}
+	for _, ground := range []struct {
+		name    string
+		surface func() Surface
+	}{{"none", nil}, {"walker", func() Surface { return walker }}} {
+		n := &Node{cfg: NodeConfig{Grid: grid, Cell: &cell, ViewRadius: worldViewRadius, Surface: ground.surface}.withDefaults(), cell: cell, hostsCell: true}
+		n.rect = grid.Rect(cell)
+		for _, speed := range []int64{2000, 200} {
+			b.Run(fmt.Sprintf("%s/speed%d", ground.name, speed), func(b *testing.B) {
+				st := ActorState{EntityState: EntityState{ID: npcID(1), Kind: KindNPC, X: 1000, Y: 3000, VX: speed, HP: 100}, Role: RoleReal}
+				var fx actorEffects
+				for b.Loop() {
+					if st.X > 11000 {
+						st.X = 1000
+					}
+					n.advance(&st, 0, worldPeriod, &fx)
+				}
+			})
+		}
 	}
 }

@@ -189,6 +189,11 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 		cfg.Ext = map[string]cellworld.ExtHandler{terrainReplicaSpace: rt.terrain.deliver}
 		cfg.Hooks.Witness = rt.terrain.witness
 	}
+	// 跨格移动按地形判定（P3 / T06）：托管格的进程积分时问本进程地形视图上的行走规则，交接之前走出本格的那一段读
+	// Ghost 带里邻格块的副本。不开地形、只做 Base 的进程不装，积分与之前相同。
+	if m := terrainmap.Active(); m != nil && rt.cell != nil {
+		cfg.Surface = partitionSurface(m, grid)
+	}
 	node, err := cellworld.NewNode(cfg)
 	if err != nil {
 		rt.mirrors.Close()

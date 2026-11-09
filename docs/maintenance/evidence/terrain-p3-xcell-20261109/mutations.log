@@ -1,0 +1,40 @@
+== M0 hook ignored (= main)
+    ext_test.go:491: walking towards the missing ghost chunk: at x=12900 vx 2000 real, want stopped at 12749
+    ext_test.go:597: player 61: timed out waiting for stopped at the wall; last view cell=102 epoch=2 self=(22396,3000)
+    tier_test.go:428: player walking into the refused cell: at (1400, 5000) v (2000, 0) real, want stopped at (1149, 5000) with v 0
+    tier_test.go:472: swimming 200ms at 1000/s with speed 500‰: at x=3200 vx 1000, want 3100 (half the way) and the speed kept
+    tier_test.go:510: blocked: role frozen at x=10100, want frozen false
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	5.823s
+== M1
+    ext_test.go:491: walking towards the missing ghost chunk: at x=12700 vx 0 real, want stopped at 12749
+    ext_test.go:597: player 61: timed out waiting for stopped at the wall; last view cell=101 epoch=1 self=(13196,3000)
+    tier_test.go:428: player walking into the refused cell: at (1100, 5000) v (0, 0) real, want stopped at (1149, 5000) with v 0
+    tier_test.go:472: swimming 200ms at 1000/s with speed 500‰: at x=3200 vx 1000, want 3100 (half the way) and the speed kept
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	5.784s
+== M2
+    ext_test.go:491: walking towards the missing ghost chunk: at x=12749 vx 2000 real, want stopped at 12749
+    ext_test.go:597: player 61: timed out waiting for stopped at the wall; last view cell=101 epoch=1 self=(13249,3000)
+    tier_test.go:428: player walking into the refused cell: at (1149, 5000) v (2000, 0) real, want stopped at (1149, 5000) with v 0
+    tier_test.go:489: standing on an undefined cell: at x=6000 vx 1000, want not moved and stopped
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	5.761s
+== M3
+    ext_test.go:497: npc towards the missing ghost chunk: at x=12749 vx 2000, want turned back at 12749
+    tier_test.go:439: npc walking into the refused cell: at x=1149 vx 2000, want stopped at 1149 and turned back (vx -2000)
+    tier_test.go:513: blocked: at x=9949 vx 2000, want turned back before 9950
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	4.437s
+== M4
+    tier_test.go:472: swimming 200ms at 1000/s with speed 500‰: at x=3200 vx 1000, want 3100 (half the way) and the speed kept
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	4.445s
+== M5
+    ext_test.go:506: standing on the missing ghost chunk: at x=13049 vx 0, want held
+    tier_test.go:472: swimming 200ms at 1000/s with speed 500‰: at x=3200 vx 1000, want 3100 (half the way) and the speed kept
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	4.474s
+== M6
+    tier_test.go:483: npc swimming towards the world edge, beat 1: at y=40 vy 2000, want y=40 vy -2000
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	4.152s
+== M7
+    tier_test.go:483: npc swimming towards the world edge, beat 1: at y=45 vy -2000, want y=40 vy -2000
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	4.138s
+== demo: partitionSurface 返回 nil 的地面（= main，生成工程里改 internal/service/game/terrain_partition.go）
+    terrain_partition_test.go:767: timed out waiting for the npc turns back at the step on B's chunk on sid 101: real here true, last (13786, 3000) v (1000, 0), max x 13786
+FAIL	example.com/gd/internal/service/game	6.718s

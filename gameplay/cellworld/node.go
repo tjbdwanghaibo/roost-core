@@ -77,6 +77,10 @@ type NodeConfig struct {
 	WakeRadius int64
 	// IdleAfter：NPC 连续这么久附近没有玩家才降档（滞后，玩家在 W 边上来回时不抖动）；零值 2s。升档不等待。
 	IdleAfter time.Duration
+	// Surface 是带高度的地面钩子（可编辑地形 P3 跨格移动，见 Surface 与 integrate）：非 nil 时角色每拍开始调用一次，
+	// 取这一拍的地面；返回 nil 表示这一拍没有高度规则。为 nil 或返回 nil 时积分与不设逐位相同。用函数而不是值：
+	// 地面可能在 Node 建好之后才装上。返回值不能是带类型的 nil（*T(nil) 装进接口不等于 nil）。
+	Surface func() Surface
 
 	// ---- Base 侧（PlayerEntity 为 nil 时本进程不托管玩家）----
 

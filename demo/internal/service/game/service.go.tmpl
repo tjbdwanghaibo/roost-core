@@ -107,22 +107,31 @@ func (s *Service) Init(registry *app.Registry) error {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.world = value
-	// The map, before anything can put a player on it. A scene is built from
-	// configuration on every start (noPersist), so this is a build, not a
-	// load.
-	area, err := lifecycle.EnsureWorldScene(context.Background(), registry)
-	if err != nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
-	}
 	// The editable terrain (terrain.go), before anything that could stand on
-	// it: the chunks of this process's cell are loaded — edited ones from
-	// their records, the rest from the base pack — and published. Without
+	// it — and before the map, which is the terrain's on an ordinary scene:
+	// the chunks of this process's cell are loaded — edited ones from their
+	// records, the rest from the base pack — and published. Without
 	// scene.terrain.pack there is none and nothing else changes.
 	terrainMap, err := startTerrain(registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 	}
 	s.terrain = terrainMap
+	partitioned, err := settings.LoadPartition(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	// The map, before anything can put a player on it. A scene is built from
+	// configuration on every start (noPersist), so this is a build, not a
+	// load.
+	world, err := sceneWorld(partitioned, terrainMap)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	area, err := lifecycle.EnsureWorldScene(context.Background(), registry, world)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
 	subscription, err := startLevelUpMailer(context.Background(), registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
@@ -167,10 +176,10 @@ func (s *Service) Init(registry *app.Registry) error {
 			return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
 		}
 		// Walks, routes and placements on this map follow the height field
-		// (slopes, steps, drops, swimming; P3) — on the ordinary scene only,
-		// like the terrain's replication: a partitioned scene's positions are
-		// integrated by the cells (gameplay/cellworld), which have no ground
-		// hook yet. Before any player can join, so no walk starts flat.
+		// (slopes, steps, drops, swimming; P3) — on the ordinary scene here;
+		// a partitioned scene's positions are integrated by the cells
+		// (gameplay/cellworld), whose ground hook startPartition installs
+		// (partitionSurface). Before any player can join, so no walk starts flat.
 		installSurface(area.Terrain(), s.terrain)
 	}
  // Scene 自己拥有 Manager；Nest Mod 没有这个句柄，健康检查由此登记。
@@ -181,10 +190,6 @@ func (s *Service) Init(registry *app.Registry) error {
 	// players. Before the player owners are published, so no login can join
 	// before it is in place. Without scene.partition.enabled nothing of it
 	// exists and the scene is the ordinary one.
-	partitioned, err := settings.LoadPartition(registry)
-	if err != nil {
-		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
-	}
 	if partitioned.Enabled {
 		runtime, err := startPartition(registry, partitioned, area, scene, s.cellHandlers)
 		if err != nil {

@@ -3,6 +3,8 @@ package {{GAME_SERVICE_PKG}}
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -15,9 +17,11 @@ import (
 	"{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/terrainmap"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
@@ -440,5 +444,346 @@ func TestTerrainPartitionDiscardWithdrawsTheOverlay(t *testing.T) {
 	waitFor(t, "the first edit on the new pack reaches the neighbour", func() bool { return sameChunk(a.process.m, b.process.m, border) })
 	if version, _ := a.process.m.View().Version(border); version != 1 {
 		t.Fatalf("the owner's first edit on the new pack is version %d, want 1 (brush %+v, commit failures %d)", version, a.lastBrush, a.process.m.CommitFailures())
+	}
+}
+
+// ---- 跨格移动按地形判定（partitionSurface 接进 cellworld 的地面钩子，可编辑地形 P3 / T06）----
+//
+// 每个格进程除了上面的地形部分（Map、改块事务、partitionTerrain 的副本），再起一个 cellworld Node 积分 NPC，地面钩子就是
+// 生产接线用的 partitionSurface(Map, grid)。Node 用自己的 Nest 引擎、心跳驱动与替身 Scene / NPC 实体：demo 的 SceneActor /
+// Monster 经进程级的 partition.Node() 找 Node，一个测试进程里装不下两个格；替身的状态写法与它们相同（事务内登记逆操作）。
+// 格之间的 cellworld 消息走进程内的 walkTransport。
+
+const (
+	walkKindScene entity.EntityKind = 250
+	walkKindNPC   entity.EntityKind = 251
+)
+
+func init() {
+	entity.MustRegisterEntityKindDefs(entity.EntityKindDef{Kind: walkKindScene, Category: entity.EntityCategoryWorld, BusinessPool: entity.BusinessPoolShort})
+	entity.RegisterEntityBuilder(&entity.EntityBuilderParam{
+		Category: entity.EntityCategoryOther, Kind: walkKindNPC, NoPersist: true, BusinessPool: entity.BusinessPoolShort,
+		Builder: buildWalkNPC,
+	})
+}
+
+// walkTransport 是 cellworld 的进程内传输：Publish 在发件 goroutine 上同步调订阅者（回调只解码、投 Nest 请求）。
+type walkTransport struct {
+	mu   sync.Mutex
+	subs map[string][]*func([]byte)
+}
+
+func (w *walkTransport) Publish(subject string, data []byte) error {
+	w.mu.Lock()
+	handlers := slices.Clone(w.subs[subject])
+	w.mu.Unlock()
+	for _, h := range handlers {
+		(*h)(data)
+	}
+	return nil
+}
+
+func (w *walkTransport) Subscribe(subject string, handler func([]byte)) (func() error, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.subs == nil {
+		w.subs = map[string][]*func([]byte){}
+	}
+	h := &handler
+	w.subs[subject] = append(w.subs[subject], h)
+	return func() error {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		w.subs[subject] = slices.DeleteFunc(w.subs[subject], func(x *func([]byte)) bool { return x == h })
+		return nil
+	}, nil
+}
+
+type walkCommitter struct{}
+
+func (walkCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+// walkState 是只有一个字段的手写 DAO：事务内写时登记“还原成事务开始时的值”（与生成 setter 同形）。
+type walkState struct{ v cellworld.ActorState }
+
+func (d *walkState) set(v cellworld.ActorState) {
+	old := d.v
+	nest.RecordUndo(d, 1, func() error { d.v = old; return nil })
+	d.v = v
+}
+
+// walkNPC 是 Monster 在格里的替身（cellworld.Actor）。
+type walkNPC struct {
+	*entity.EntityBase
+	dao  *walkState
+	host *heartbeat.Host
+	reg  *heartbeat.Reg
+}
+
+func (a *walkNPC) Base() *entity.EntityBase                 { return a.EntityBase }
+func (a *walkNPC) CellState() cellworld.ActorState          { return a.dao.v }
+func (a *walkNPC) SetCellState(st cellworld.ActorState)     { a.dao.set(st) }
+func (a *walkNPC) StartCell() error                         { return a.reg.Start() }
+func (a *walkNPC) SetCellPeriod(d time.Duration) error      { return a.reg.SetPeriod(d) }
+func (a *walkNPC) OnDestroy(entity.EntityDestroyReason)     { a.host.OnDestroy() }
+
+func buildWalkNPC(p *entity.EntityCreateParam) (entity.IThreadSafeEntity, error) {
+	cell, ok := p.Param.(*walkCell)
+	if !ok {
+		return nil, errors.New("walk npc: no cell process")
+	}
+	a := &walkNPC{EntityBase: entity.NewEntityBaseWithMutex(p.Id, p.Category, true, p.Mutex, p.Kind), dao: &walkState{}}
+	a.host = cell.driver.NewHost(a)
+	reg, err := a.host.Register("cell.actor", cell.node.Config().Period, func(beat heartbeat.Beat) error {
+		return cell.node.ActorBeat(a, time.Now(), beat.Elapsed)
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.reg = reg
+	return a, nil
+}
+
+type walkScene struct {
+	*entity.EntityBase
+	region *cellworld.Region
+	host   *heartbeat.Host
+}
+
+func (s *walkScene) Base() *entity.EntityBase             { return s.EntityBase }
+func (s *walkScene) CellRegion() *cellworld.Region        { return s.region }
+func (s *walkScene) OnDestroy(entity.EntityDestroyReason) { s.host.OnDestroy() }
+
+// walkCell 是一个格进程里积分角色的那一半：Nest 引擎、心跳、Scene（区域表）与 Node，地面钩子是 partitionSurface。
+type walkCell struct {
+	sid      int32
+	manager  *entity.EntityManager
+	engine   *nest.NestMgr
+	driver   *heartbeat.Driver
+	node     *cellworld.Node
+	acquired sync.Map // NPC ID → 本格取得过 Real
+	cancel   context.CancelFunc
+	done     chan struct{}
+}
+
+func startWalkCell(t *testing.T, grid *cellworld.Grid, transport cellworld.Transport, sid int32, m *terrainmap.Map) *walkCell {
+	t.Helper()
+	cellID, ok := grid.CellOf(sid)
+	if !ok {
+		t.Fatalf("sid %d hosts no cell", sid)
+	}
+	c := &walkCell{sid: sid, manager: entity.NewEntityManager()}
+	access := entity.NewManagerAccess(c.manager)
+	c.engine = nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithTransactionCommitter(walkCommitter{}))
+	handlers := cellworld.NewHandlers()
+	if err := handlers.Register(c.engine); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	sceneID, err := entity.BuildEntityID(int64(sid), walkKindScene)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := cellworld.NewNode(cellworld.NodeConfig{
+		World: "walk", SID: sid, Grid: grid, Transport: transport, Nest: c.engine, Handlers: handlers,
+		Destroy: func(ctx context.Context, e entity.IThreadSafeEntity) error {
+			return c.manager.Destroy(ctx, e, entity.DestroyReasonCommon, false)
+		},
+		Cell: &cellID, Scene: sceneID, ViewRadius: 800,
+		CreateActor: func(id int64, _ cellworld.EntityKind) (cellworld.Actor, error) {
+			e, err := access.Create(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: walkKindNPC, Category: entity.EntityCategoryOther, Param: c})
+			if err != nil {
+				return nil, err
+			}
+			return e.(*walkNPC), nil
+		},
+		Surface: partitionSurface(m, grid),
+		Hooks: cellworld.Hooks{RealChanged: func(_ cellworld.CellID, id int64, _ uint64, acquired bool) {
+			if acquired {
+				c.acquired.Store(id, true)
+			}
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.node = node
+	c.driver = heartbeat.NewDriver(heartbeat.Config{Name: fmt.Sprintf("walk-%d", sid)})
+	if err := c.driver.Bind(c.engine, func(id int64) entity.IThreadSafeEntity { return c.manager.Get(id) }); err != nil {
+		t.Fatal(err)
+	}
+	scene := &walkScene{EntityBase: entity.NewEntityBase(sceneID, entity.EntityCategoryWorld, true, walkKindScene), region: cellworld.NewRegion()}
+	scene.host = c.driver.NewHost(scene)
+	reg, err := scene.host.Register("scene.cell", node.Config().Period, func(heartbeat.Beat) error { return node.RegionBeat(scene, time.Now()) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.manager.Add(scene)
+	if err := reg.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.driver.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.cancel, c.done = cancel, make(chan struct{})
+	go func() { defer close(c.done); _ = node.Run(ctx) }()
+	<-node.Ready()
+	t.Cleanup(c.stop)
+	return c
+}
+
+func (c *walkCell) stop() {
+	if c.cancel == nil {
+		return
+	}
+	c.cancel()
+	<-c.done
+	c.cancel = nil
+	_ = c.driver.Stop(context.Background())
+	_ = c.engine.Shutdown(context.Background())
+}
+
+func (c *walkCell) spawn(t *testing.T, unique int64, at spatial.Point, vx int64) int64 {
+	t.Helper()
+	id, err := entity.BuildEntityID(unique, walkKindNPC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := c.node.Spawn(ctx, cellworld.EntityState{ID: id, X: at.X, Y: at.Y, VX: vx, HP: 100}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// real 是本格区域表里 id 的 Real 快照。
+func (c *walkCell) real(t *testing.T, id int64) (cellworld.EntityState, bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	snaps, err := c.node.Inspect(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range snaps {
+		if s.State.ID == id && s.Role == "real" {
+			return s.State, true
+		}
+	}
+	return cellworld.EntityState{}, false
+}
+
+// walkUntilTurned 等 NPC 在 c 上作为 Real 折回（速度变成 −vx），返回期间看到的最大 X；5 秒内没折回就失败并报最后看到的状态。
+func (c *walkCell) walkUntilTurned(t *testing.T, id, vx int64, what string) int64 {
+	t.Helper()
+	var maxX int64
+	var last cellworld.EntityState
+	seen := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(2 * time.Millisecond) {
+		st, ok := c.real(t, id)
+		if !ok {
+			continue
+		}
+		seen, last, maxX = true, st, max(maxX, st.X)
+		if st.VX == -vx {
+			return maxX
+		}
+	}
+	t.Fatalf("timed out waiting for %s on sid %d: real here %v, last (%d, %d) v (%d, %d), max x %d", what, c.sid, seen, last.X, last.Y, last.VX, last.VY, maxX)
+	return 0
+}
+
+// writeFlatPartitionPack 写 4 × 2 块的平地（高度原始值 1000、没有水）。
+func writeFlatPartitionPack(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "flat.pack")
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: 4, ChunksY: 2, WaterLevel: math.MinInt32}
+	if err := terrain.WritePackFile(path, meta, func(terrain.ChunkKey) (terrain.Chunk, error) {
+		c := terrain.NewChunk()
+		for i := range c.Heights {
+			c.Heights[i] = 1000
+		}
+		return c, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// firstRefusal 是沿 y 从 x0 朝东逐点走、地图的行走规则第一次不放行之前的最后一个点（与 cellworld 的积分同一走法）。
+func firstRefusal(t *testing.T, m *terrainmap.Map, x0, y, limit int64) int64 {
+	t.Helper()
+	ground := m.Walker()
+	cell := ground.Cell(spatial.Point{X: x0, Y: y})
+	for x := x0 + 1; x <= limit; x++ {
+		next := ground.Cell(spatial.Point{X: x, Y: y})
+		if next == cell {
+			continue
+		}
+		if _, ok := ground.Step(cell, next); !ok {
+			return x - 1
+		}
+		cell = next
+	}
+	t.Fatalf("nothing refuses the walk east of %d up to %d", x0, limit)
+	return 0
+}
+
+// 分区场景的跨格移动按地形判定：格 A（sid 101，块 0、1）与格 B（sid 102，块 2、3），格边长 2 块（分界线 x 12800）、
+// Ghost 带 1 块、滞回 10 米（冻结线 13800）。
+//
+//  1. B 的玩家在 B 写的块 2 上、紧挨分界线抬起一块 5 米的台（改块事务），推到 A 的 Ghost 副本；A 里朝东走的 NPC 越过
+//     分界线、在台前折回，从没交给 B：交接之前 A 按副本判定。
+//  2. B 把台降回去，A 的副本跟上；再从 A 走过去的 NPC 交给了 B。
+//  3. B 在自己的块里挖一个 5 米深的坑，交接过来的 NPC 在坑前折回（B 按自己的视图判定）。
+func TestTerrainPartitionWalkAcrossCellsFollowsTheEdits(t *testing.T) {
+	pack := writeFlatPartitionPack(t, t.TempDir())
+	grid, err := cellworld.NewGrid(cellworld.GridConfig{CellSize: 2 * terrain.ChunkSize, Cols: 2, Rows: 1, GhostBand: terrain.ChunkSize, Hysteresis: 1000,
+		Owners: map[cellworld.CellID]int32{{Col: 0, Row: 0}: partitionSidA, {Col: 1, Row: 0}: partitionSidB}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &memoryChunkStore{}
+	net := newPartitionNet()
+	a := startPartitionProc(t, net, grid, partitionSidA, pack, store)
+	b := startPartitionProc(t, net, grid, partitionSidB, pack, store)
+	transport := &walkTransport{}
+	cellA := startWalkCell(t, grid, transport, partitionSidA, a.process.m)
+	cellB := startWalkCell(t, grid, transport, partitionSidB, b.process.m)
+	edge := terrain.ChunkKey{X: 2}
+
+	step := terrain.Brush{Op: terrain.BrushRaise, X: 13300, Y: 3000, Radius: 300, Falloff: terrain.FalloffConstant, Strength: 50}
+	b.brush(t, 1, step)
+	waitFor(t, "the step reaches A's ghost replica", func() bool { return sameChunk(a.process.m, b.process.m, edge) })
+	stop := firstRefusal(t, a.process.m, 12400, 3000, 13400)
+	if stop < 12800 || stop >= 13300 {
+		t.Fatalf("on A's replica the walk east is refused after x=%d, want past the boundary 12800 and before the step's centre", stop)
+	}
+	first := cellA.spawn(t, 1, spatial.Point{X: 12400, Y: 3000}, 1000)
+	if maxX := cellA.walkUntilTurned(t, first, 1000, "the npc turns back at the step on B's chunk"); maxX > stop || maxX < 12800 {
+		t.Fatalf("the npc got to x=%d before turning back, want past the boundary 12800 and not past %d (the last point before the step)", maxX, stop)
+	}
+	if _, handed := cellB.acquired.Load(first); handed || cellA.node.Stats().HandoffsStarted != 0 || cellA.node.Stats().SurfaceBlocks == 0 {
+		t.Fatalf("handed to B %v, A stats %+v: want turned back on A by the terrain", handed, cellA.node.Stats())
+	}
+
+	level := step
+	level.Op = terrain.BrushLower
+	b.brush(t, 2, level)
+	pit := terrain.Brush{Op: terrain.BrushLower, X: 16000, Y: 3200, Radius: 300, Falloff: terrain.FalloffConstant, Strength: 50}
+	b.brush(t, 3, pit)
+	waitFor(t, "the levelled step reaches A's ghost replica", func() bool { return sameChunk(a.process.m, b.process.m, edge) })
+	if h, err := a.process.m.Height(13300, 3000); err != nil || h != 10000 {
+		t.Fatalf("A's replica at the step's centre: %d %v, want 10000 (flat again)", h, err)
+	}
+	pitStop := firstRefusal(t, b.process.m, 14000, 3200, 16100)
+	second := cellA.spawn(t, 2, spatial.Point{X: 12400, Y: 3200}, 1000)
+	waitFor(t, "the npc crosses into B", func() bool { _, ok := cellB.acquired.Load(second); return ok })
+	if maxX := cellB.walkUntilTurned(t, second, 1000, "the npc turns back at the pit on B"); maxX > pitStop || maxX < pitStop-200 {
+		t.Fatalf("on B the npc got to x=%d before turning back, want just before the pit (%d)", maxX, pitStop)
 	}
 }

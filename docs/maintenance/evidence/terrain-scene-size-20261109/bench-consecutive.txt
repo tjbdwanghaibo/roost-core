@@ -1,0 +1,127 @@
+vm.swapusage: total = 18432.00M  used = 16914.88M  free = 1517.12M  (encrypted)
+Mon Nov  9 23:16:09 CST 2026
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy
+cpu: Apple M5
+BenchmarkAOIWorldSize/new/1000x1000/block100-10         	  556208	      2202 ns/op	       100.0 blocks	        64.00 observer-blocks	    6432 B/op	     108 allocs/op
+BenchmarkAOIWorldSize/new/1000x1000/block100-10         	  614280	      1904 ns/op	       100.0 blocks	        64.00 observer-blocks	    6432 B/op	     108 allocs/op
+BenchmarkAOIWorldSize/new/1000x1000/block100-10         	  735760	      3394 ns/op	       100.0 blocks	        64.00 observer-blocks	    6432 B/op	     108 allocs/op
+BenchmarkAOIWorldSize/new/1000x1000/block100-10         	  336841	      3279 ns/op	       100.0 blocks	        64.00 observer-blocks	    6432 B/op	     108 allocs/op
+BenchmarkAOIWorldSize/new/1000x1000/block100-10         	  640146	      1713 ns/op	       100.0 blocks	        64.00 observer-blocks	    6432 B/op	     108 allocs/op
+BenchmarkAOIWorldSize/new/1000x1000/block100-10         	  231708	     17201 ns/op	       100.0 blocks	        64.00 observer-blocks	    6432 B/op	     108 allocs/op
+BenchmarkAOIWorldSize/new/terrain2x1/block100-10        	     922	   1205466 ns/op	      8192 blocks	        64.00 observer-blocks	  459500 B/op	    8200 allocs/op
+BenchmarkAOIWorldSize/new/terrain2x1/block100-10        	    2061	    735525 ns/op	      8192 blocks	        64.00 observer-blocks	  459498 B/op	    8200 allocs/op
+BenchmarkAOIWorldSize/new/terrain2x1/block100-10        	    2036	    530090 ns/op	      8192 blocks	        64.00 observer-blocks	  459496 B/op	    8200 allocs/op
+BenchmarkAOIWorldSize/new/terrain2x1/block100-10        	    3991	    764567 ns/op	      8192 blocks	        64.00 observer-blocks	  459497 B/op	    8200 allocs/op
+BenchmarkAOIWorldSize/new/terrain2x1/block100-10        	    6597	    605744 ns/op	      8192 blocks	        64.00 observer-blocks	  459495 B/op	    8200 allocs/op
+BenchmarkAOIWorldSize/new/terrain2x1/block100-10        	    4810	    428316 ns/op	      8192 blocks	        64.00 observer-blocks	  459497 B/op	    8200 allocs/op
+BenchmarkAOIWorldSize/new/terrain16x16/block100-10      	      48	  38304086 ns/op	   1048576 blocks	        64.00 observer-blocks	58721024 B/op	 1048584 allocs/op
+BenchmarkAOIWorldSize/new/terrain16x16/block100-10      	      24	  53055832 ns/op	   1048576 blocks	        64.00 observer-blocks	58721076 B/op	 1048584 allocs/op
+BenchmarkAOIWorldSize/new/terrain16x16/block100-10      	      52	  35284265 ns/op	   1048576 blocks	        64.00 observer-blocks	58721017 B/op	 1048584 allocs/op
+BenchmarkAOIWorldSize/new/terrain16x16/block100-10      	      20	  53962865 ns/op	   1048576 blocks	        64.00 observer-blocks	58721031 B/op	 1048584 allocs/op
+BenchmarkAOIWorldSize/new/terrain16x16/block100-10      	      36	  35978940 ns/op	   1048576 blocks	        64.00 observer-blocks	58721023 B/op	 1048584 allocs/op
+BenchmarkAOIWorldSize/new/terrain16x16/block100-10      	      37	  30680508 ns/op	   1048576 blocks	        64.00 observer-blocks	58721028 B/op	 1048584 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block1000-10        	      42	  35816580 ns/op	   1010025 blocks	         4.000 observer-blocks	56567474 B/op	 1010033 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block1000-10        	      27	  44310823 ns/op	   1010025 blocks	         4.000 observer-blocks	56567477 B/op	 1010033 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block1000-10        	      34	  57491714 ns/op	   1010025 blocks	         4.000 observer-blocks	56567492 B/op	 1010033 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block1000-10        	      58	  20162918 ns/op	   1010025 blocks	         4.000 observer-blocks	56567451 B/op	 1010033 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block1000-10        	      56	  20920720 ns/op	   1010025 blocks	         4.000 observer-blocks	56567452 B/op	 1010033 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block1000-10        	      48	  32552920 ns/op	   1010025 blocks	         4.000 observer-blocks	56567526 B/op	 1010033 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block6400-10        	    2386	    572729 ns/op	     24649 blocks	         4.000 observer-blocks	 1388697 B/op	   24657 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block6400-10        	    2533	    454661 ns/op	     24649 blocks	         4.000 observer-blocks	 1388695 B/op	   24657 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block6400-10        	    2686	    472772 ns/op	     24649 blocks	         4.000 observer-blocks	 1388697 B/op	   24657 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block6400-10        	    3709	    407459 ns/op	     24649 blocks	         4.000 observer-blocks	 1388694 B/op	   24657 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block6400-10        	    3339	    322286 ns/op	     24649 blocks	         4.000 observer-blocks	 1388692 B/op	   24657 allocs/op
+BenchmarkAOIWorldSize/new/terrain1w/block6400-10        	    3231	    319320 ns/op	     24649 blocks	         4.000 observer-blocks	 1388693 B/op	   24657 allocs/op
+BenchmarkAOIWorldSize/gc/1000x1000/block100-10          	    6834	    274306 ns/op	       8 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/1000x1000/block100-10          	    5391	    373339 ns/op	      12 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/1000x1000/block100-10          	    6478	    301249 ns/op	       8 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/1000x1000/block100-10          	    4477	    350510 ns/op	      11 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/1000x1000/block100-10          	    4851	    243668 ns/op	       6 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/1000x1000/block100-10          	    3562	    285521 ns/op	       9 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain2x1/block100-10         	    4323	    435782 ns/op	      10 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain2x1/block100-10         	    2730	    511582 ns/op	      13 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain2x1/block100-10         	    3370	    350120 ns/op	       7 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain2x1/block100-10         	    3585	    304196 ns/op	       7 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain2x1/block100-10         	    5214	    300078 ns/op	       7 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain2x1/block100-10         	    4989	    245815 ns/op	       7 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain16x16/block100-10       	     285	   4089821 ns/op	      18 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain16x16/block100-10       	     295	   4273546 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain16x16/block100-10       	     261	   4470088 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain16x16/block100-10       	     254	   4172595 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain16x16/block100-10       	     291	   4324203 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain16x16/block100-10       	     333	   3597382 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block1000-10         	     356	   3800782 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block1000-10         	     196	   6277530 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block1000-10         	     232	   4937060 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block1000-10         	     264	   4465614 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block1000-10         	     285	   3926442 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block1000-10         	     337	   3952723 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block6400-10         	    3511	    433397 ns/op	       1 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block6400-10         	    2376	    608415 ns/op	       3 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block6400-10         	    2900	    708556 ns/op	       3 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block6400-10         	    2571	    424354 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block6400-10         	    3470	    437084 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/gc/terrain1w/block6400-10         	    2680	    413127 ns/op	       0 B/op	       0 allocs/op
+BenchmarkAOIWorldSize/move/spread/1000x1000/block100-10 	    4504	    316287 ns/op	   45597 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/1000x1000/block100-10 	    3511	    327589 ns/op	   45606 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/1000x1000/block100-10 	    4389	    268985 ns/op	   45598 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/1000x1000/block100-10 	    4574	    286891 ns/op	   45597 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/1000x1000/block100-10 	    4441	    304520 ns/op	   45598 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/1000x1000/block100-10 	    4543	    275892 ns/op	   45597 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/1000x1000/block100-10  	     276	   4327370 ns/op	  253333 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/dense/1000x1000/block100-10  	     240	   4578522 ns/op	  253276 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/dense/1000x1000/block100-10  	     268	   4183377 ns/op	  253322 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/dense/1000x1000/block100-10  	     270	   4598955 ns/op	  253326 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/dense/1000x1000/block100-10  	     301	   4049825 ns/op	  253364 B/op	      58 allocs/op
+BenchmarkAOIWorldSize/move/dense/1000x1000/block100-10  	     266	   4261691 ns/op	  253319 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain2x1/block100-10         	    4616	    263118 ns/op	   46301 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain2x1/block100-10         	    4003	    256935 ns/op	   46305 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain2x1/block100-10         	    4494	    353719 ns/op	   46302 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain2x1/block100-10         	    3573	    395775 ns/op	   46309 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain2x1/block100-10         	    2575	    484891 ns/op	   46324 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain2x1/block100-10         	    4047	    342715 ns/op	   46305 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain2x1/block100-10          	     279	   4249393 ns/op	  253338 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain2x1/block100-10          	     288	   4259998 ns/op	  253351 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain2x1/block100-10          	     276	   4731473 ns/op	  253336 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain2x1/block100-10          	     288	   4096455 ns/op	  253351 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain2x1/block100-10          	     296	   4047079 ns/op	  253361 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain2x1/block100-10          	     295	   4235048 ns/op	  253358 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain16x16/block100-10       	    4166	    254802 ns/op	   46303 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain16x16/block100-10       	    4705	    283094 ns/op	   46300 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain16x16/block100-10       	    4510	    255493 ns/op	   46301 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain16x16/block100-10       	    4401	    258406 ns/op	   46302 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain16x16/block100-10       	    4731	    246201 ns/op	   46300 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain16x16/block100-10       	    4767	    296289 ns/op	   46299 B/op	      53 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain16x16/block100-10        	     279	   4247040 ns/op	  253336 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain16x16/block100-10        	     295	   4078030 ns/op	  253356 B/op	      58 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain16x16/block100-10        	     300	   4027840 ns/op	  253362 B/op	      58 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain16x16/block100-10        	     283	   4281406 ns/op	  253341 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain16x16/block100-10        	     289	   4132386 ns/op	  253349 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain16x16/block100-10        	     284	   4190290 ns/op	  253343 B/op	      59 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block1000-10         	    1756	    741130 ns/op	   37239 B/op	      30 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block1000-10         	    1722	    758798 ns/op	   37240 B/op	      30 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block1000-10         	    1437	   4202868 ns/op	   37255 B/op	      30 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block1000-10         	    1149	   2000357 ns/op	   37277 B/op	      30 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block1000-10         	     908	   1257509 ns/op	   37306 B/op	      30 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block1000-10         	    1212	    938564 ns/op	   37271 B/op	      30 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block1000-10          	     193	   5868882 ns/op	  243744 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block1000-10          	     241	   5208311 ns/op	  243916 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block1000-10          	     222	   5161620 ns/op	  243858 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block1000-10          	     100	  17020309 ns/op	  242942 B/op	      40 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block1000-10          	     100	  10156483 ns/op	  242942 B/op	      40 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block1000-10          	     247	   4983990 ns/op	  243934 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block6400-10         	    1818	    653163 ns/op	   37189 B/op	      29 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block6400-10         	    1879	    640366 ns/op	   37187 B/op	      29 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block6400-10         	    1899	    990705 ns/op	   37186 B/op	      29 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block6400-10         	    1563	    840262 ns/op	   37200 B/op	      29 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block6400-10         	    1822	    682640 ns/op	   37189 B/op	      29 allocs/op
+BenchmarkAOIWorldSize/move/spread/terrain1w/block6400-10         	    1756	    715573 ns/op	   37191 B/op	      29 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block6400-10          	     244	   4938538 ns/op	  243927 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block6400-10          	     241	   4985284 ns/op	  243920 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block6400-10          	     241	   5146937 ns/op	  243919 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block6400-10          	     235	   5021634 ns/op	  243899 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block6400-10          	     244	   4858517 ns/op	  243927 B/op	      36 allocs/op
+BenchmarkAOIWorldSize/move/dense/terrain1w/block6400-10          	     198	   6049193 ns/op	  243769 B/op	      36 allocs/op
+PASS

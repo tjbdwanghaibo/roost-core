@@ -4,6 +4,7 @@ import (
 	"time"
 
 	fentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
 // Role 是一个角色 / NPC 在它所在格里的身份，存在 SceneActor / Monster 的 DAO 里。
@@ -176,14 +177,47 @@ func (n *Node) leave(st *ActorState, fx *actorEffects, nowNano int64) {
 	fx.report = &ActorReport{State: st.EntityState, Role: RoleGone, Removed: true, Tomb: true}
 }
 
+// Surface 是带高度的地面（可编辑地形方案 P3 的跨格移动；gameplay/terrain 的 Walker 实现它，与 movement.Surface 同形）。
+// 积分时把位置按 Cell 归到地面格，每进入一个新的地面格问一次 Step(上一格, 新格)：不放行就停在上一个点；放行时 speed
+// 是新格里的速度千分比（游泳 < 1000），这一格里每走 1 单位消耗 1000 / speed 单位的路程。方法在角色的 Nest 锁内、
+// short 池上调用：只能读内存、不取锁、不阻塞。
+//
+// 跨格：角色在交接之前可能走出本格（至多 Hysteresis + 一步），所以地面要覆盖本格外扩 GhostBand 的范围——分区进程的
+// 地形视图本来就装着这个范围，邻格写的块是 Ghost 副本（gameplay/terrain 的 Replicator 推来的已提交版本）。块没装入
+// （副本装不进来、换版前后包版本不同、地图外）时 Step 答 false：当作被挡，不猜平地。交接之后角色在目标格由目标格的
+// Node 积分，按目标格自己的地面判定。
+type Surface interface {
+	// Cell 返回世界坐标所在的地面格（不透明的格坐标，只拿来比较与传回 Step）。
+	Cell(p spatial.Point) spatial.Point
+	// Step 报告能否从地面格 from 走进相邻的地面格 to，以及在 to 里的速度千分比；from == to 表示站在 from，
+	// ok 为 false 时 from 本身没有定义（地图外、块没装入），当作被挡。
+	Step(from, to spatial.Point) (speed int32, ok bool)
+}
+
+// walkResult 是一步沿地面走的结果。
+type walkResult uint8
+
+const (
+	walkReached walkResult = iota // 走到了这一步的终点
+	walkSlowed                    // 路程用完了（在减速的地面格里），没走到终点
+	walkBlocked                   // 被挡：下一个地面格不放行，或站立的地面格本身没有定义
+)
+
 // integrate 把位置积分 dt（advance 保证 dt 不超过 Period），夹在世界内；NPC 碰到世界边缘反弹，玩家停在边缘。
-func (n *Node) integrate(st *ActorState, dt time.Duration) {
+//
+// ground 非 nil 时（地面钩子，NodeConfig.Surface）沿这一步的直线逐个整数点走（walkOn）：被地面挡住时停在上一个
+// 合法点，玩家速度清零（与停在世界边缘相同：等 Base 的下一个移动输入），NPC 速度反向（与碰到世界边缘反弹相同，
+// 但两个分量都反向：地形的挡没有“哪条轴碰了边”，原路返回一定走得通——它刚从那里来，除非这期间地形又被改了）。
+// 在游泳等减速的地面格里路程用完时停在用完的点，速度不变。只有走到了终点，世界边缘的速度规则才生效。
+// ground 为 nil 时与没有地面钩子之前逐位相同。
+func (n *Node) integrate(st *ActorState, dt time.Duration, ground Surface) {
 	if st.VX == 0 && st.VY == 0 || dt <= 0 {
 		return
 	}
 	bounds := n.cfg.Grid.Bounds()
 	nx := st.X + st.VX*int64(dt)/int64(time.Second)
 	ny := st.Y + st.VY*int64(dt)/int64(time.Second)
+	vx, vy := st.VX, st.VY
 	clamp := func(v, lo, hi int64, vel *int64) int64 {
 		switch {
 		case v < lo:
@@ -200,8 +234,65 @@ func (n *Node) integrate(st *ActorState, dt time.Duration) {
 		}
 		return v
 	}
-	st.X = clamp(nx, bounds.Min.X, bounds.Max.X-1, &st.VX)
-	st.Y = clamp(ny, bounds.Min.Y, bounds.Max.Y-1, &st.VY)
+	tx := clamp(nx, bounds.Min.X, bounds.Max.X-1, &vx)
+	ty := clamp(ny, bounds.Min.Y, bounds.Max.Y-1, &vy)
+	if ground == nil {
+		st.X, st.Y, st.VX, st.VY = tx, ty, vx, vy
+		return
+	}
+	x, y, result := walkOn(ground, st.X, st.Y, tx, ty, max(abs64(nx-st.X), abs64(ny-st.Y)))
+	st.X, st.Y = x, y
+	switch result {
+	case walkReached:
+		st.VX, st.VY = vx, vy
+	case walkBlocked:
+		n.stats.surfaceBlocks.Add(1)
+		if st.Kind == KindNPC {
+			st.VX, st.VY = -st.VX, -st.VY
+		} else {
+			st.VX, st.VY = 0, 0
+		}
+	}
+}
+
+// walkOn 沿 (x0, y0) → (tx, ty) 的直线逐个整数点走：第 i 个点是 (x0 + dx·i/n, y0 + dy·i/n)，n = max(|dx|, |dy|)，
+// 相邻两点每个分量至多差 1，所以地面格每次至多变到相邻的一格（对角由 Step 自己判断不切角）。按整数点走而不是按地面格
+// 的边界解析求交：地面格对这里不透明（Surface 只给 Cell / Step），停下的点精确到 1 单位。每个点问一次 Cell，进入新
+// 地面格时问一次 Step。
+//
+// 路程按千分比计：reach 是这一步没被世界边缘夹过的位移的 max(|dx|, |dy|)（与点数同一度量），预算 reach × 1000，在速度
+// 千分比 s 的地面格里每走一个点花 ⌈10⁶ / s⌉（s = 1000 时恰好 1000，reach ≥ n，正常行走一定走到终点）。预算按没夹过的
+// 位移算：游泳时夹到世界边缘之前的那段照样按全速的 s / 1000 走，不因终点被夹近而少走。站立的地面格没有定义时一步
+// 不走（被挡）。
+func walkOn(ground Surface, x0, y0, tx, ty, reach int64) (x, y int64, result walkResult) {
+	dx, dy := tx-x0, ty-y0
+	steps := max(abs64(dx), abs64(dy))
+	if steps == 0 {
+		return x0, y0, walkReached
+	}
+	cell := ground.Cell(spatial.Point{X: x0, Y: y0})
+	speed, ok := ground.Step(cell, cell)
+	if !ok || speed <= 0 {
+		return x0, y0, walkBlocked
+	}
+	x, y = x0, y0
+	left := reach * 1000
+	for i := int64(1); i <= steps; i++ {
+		cost := (1_000_000 + int64(speed) - 1) / int64(speed)
+		if cost > left {
+			return x, y, walkSlowed
+		}
+		px, py := x0+dx*i/steps, y0+dy*i/steps
+		if next := ground.Cell(spatial.Point{X: px, Y: py}); next != cell {
+			nextSpeed, ok := ground.Step(cell, next)
+			if !ok || nextSpeed <= 0 {
+				return x, y, walkBlocked
+			}
+			cell, speed = next, nextSpeed
+		}
+		x, y, left = px, py, left-cost
+	}
+	return x, y, walkReached
 }
 
 // pruneApplied 删掉超出去重窗口的记录（返回新切片，不改传入的底层数组：它可能还被回滚前像引用）。
