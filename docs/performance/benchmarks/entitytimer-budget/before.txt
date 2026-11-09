@@ -1,0 +1,70 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: Apple M5
+BenchmarkDriverDueBatch-10    	    8214	     16423 ns/op	    7680 B/op	      10 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	0.694s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: Apple M5
+BenchmarkDriverDueBatch-10    	    7276	     13876 ns/op	    7680 B/op	      10 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	0.424s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: Apple M5
+BenchmarkDriverDueBatch-10    	    8204	     13816 ns/op	    7680 B/op	      10 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	0.411s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: Apple M5
+BenchmarkDriverDueBatch-10    	    6138	     18944 ns/op	    7679 B/op	      10 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	0.457s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: Apple M5
+BenchmarkDriverDueBatch-10    	    8787	     13886 ns/op	    7680 B/op	      10 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	0.565s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: Apple M5
+BenchmarkDriverDueBatch-10    	    8269	     13906 ns/op	    7681 B/op	      10 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	0.379s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: Apple M5
+BenchmarkDriverDueBatch-10    	    8904	     13404 ns/op	    7679 B/op	      10 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	0.559s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: Apple M5
+BenchmarkDriverDueBatch-10    	    8076	     13571 ns/op	    7680 B/op	      10 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	0.442s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: Apple M5
+BenchmarkDriverDueBatch-10    	    8828	     13409 ns/op	    7680 B/op	      10 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	0.549s
+goos: darwin
+goarch: arm64
+pkg: github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer
+cpu: Apple M5
+BenchmarkDriverDueBatch-10    	    8323	     13400 ns/op	    7679 B/op	      10 allocs/op
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/framework/nest/entitytimer	0.407s
