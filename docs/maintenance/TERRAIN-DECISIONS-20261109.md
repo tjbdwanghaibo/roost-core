@@ -8,7 +8,7 @@
 | --- | --- |
 | D16 编辑配额降为 270 点/秒，桶容量同步下降 | 已实现；最小 20 点、满桶透支及拒绝不写入契约不变 |
 | HeightBase 默认 −100 米 | 已实现于正式 game-demo 的 terrainpack；独立水位保持原默认值 |
-| Player/Monster on_change，TerrainChunk 1 秒脏增量 | 已采用，尚未实现；不能用当前 Manager 全局 Interval 冒充按类型调度 |
+| Player/Monster on_change，TerrainChunk 1 秒脏增量 | 框架 TypeSchedules 已实现；game-demo Scene 的生产者接线与实际启用仍待下一批 |
 | 客户端圆滑岸线与跨块重建 | 已采用，尚未实现；Unity 真实场景验收待补 |
 | 原两项幂等问题与 P3～P6 | 本批未修复/未完成，继续独立推进 |
 
@@ -18,11 +18,13 @@
 
 ## 已采用：按实体类型区分同步频率（2026-11-09）
 
-状态：**用户已确认采用，待 main 实施。** 以下为实施契约，不再是候选建议；具体 API 名称与内部数据结构由 main 实施时确定。
+本批框架实现及 [Linux 功能验证](evidence/type-sync-cadence-20261109/README.md) 已完成；game-demo 尚未切换。
+
+状态：**框架机制已实现；正式 game-demo 接线待补。** API 与当前实现边界见 [Entity Sync 类型调度契约](../framework/ENTITY_SYNC.md#按实体类型的同步节奏2026-11-09)。下文保留决策目标；“当前代码”小节描述决策时基线，不代表此后实现仍缺失。
 
 Player/Monster 使用 on_change；TerrainChunk 的常规脏增量每 1 秒合并一次，干净块不发送。这里的 chunk 指持久地形实体，不是物理房间实时运动对象；物理状态不能一起降到 1Hz。
 
-### 当前代码并未直接支持同 Manager 混用
+### 决策时基线 f0ff1727 未直接支持同 Manager 混用
 
 [ManagerConfig](https://github.com/tjbdwanghaibo/roost-core/blob/f0ff1727/framework/sync/entitysync/manager.go#L25) 的 Mode、Interval、OnChangeBatchWindow 是 Manager 级；[NamespaceLimits](https://github.com/tjbdwanghaibo/roost-core/blob/f0ff1727/framework/sync/entitysync/namespaces.go#L19) 只区分对象容量和快照预算，尚无按类型频率。将现有 Manager.Interval 直接改成 1 秒或设置全局合批窗口，不能实现用户要求的隔离。
 
@@ -59,7 +61,7 @@ Player/Monster 使用 on_change；TerrainChunk 的常规脏增量每 1 秒合并
 
 P3/P4/P5 的副本恢复、建筑占位并发、跨格部分成功对账及建筑换版仍需补齐；具体业务处置不在本批自动决定。原两项去重问题（32 条窗口淘汰后重放、截断 EditID 碰撞）仍未修复，周期同步不会修复它们。
 
-本节只落实同步策略的文档交接，尚未增加调度 API；本批运行时修改仅为前述配额和地形包默认值。
+后续进展：已增加 TypeSchedules 与独立快照捕获。周期内即时快照会导致下一次周期更新回退 Full；第一版沿用 pending 脏集合检查而非时间轮，捕获期间的新写入从结算后开始下一批窗口。game-demo 尚未启用此配置，岸线实现也未开始。
 
 
 ## 已采用：客户端圆滑岸线与跨块边界（2026-11-09）

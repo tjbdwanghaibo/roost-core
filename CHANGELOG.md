@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- EntitySync 新增 `ManagerConfig.TypeSchedules`：按 SubjectKind 覆盖同步节奏，周期类型跳过提交冻结、按首次变脏固定窗口合并；即时全量/remove 不等待周期，Drain/Stop 可强制处理。独立快照保留待发变化，下一次周期更新必要时回退 Full。配置/代价见 [类型调度](docs/framework/ENTITY_SYNC.md#按实体类型的同步节奏2026-11-09)；game-demo 生产者接线尚未切换。
+
 - Heartbeat 每次 ticker 通知只推进一格，驱动停顿后顺延、不集中补格；在途重投改按系统单调时间判断，在下一到期格检查。业务按实际经过时间计算，`Beat.Elapsed` 上限保持；见 [时间实现说明](docs/framework/impl/10-time.md)。
 
 - game-demo 地形首批参数落地：编辑配额与桶容量从 300 改为 270 点/秒；`cmd/terrainpack` 默认 `HeightBase=-10000` 厘米（−100 米），水位独立、旧包不自动修改，换基准须换 BaseRevision。CLI 拒绝 int32 范围外的高度/尺寸，避免转换回绕；新增包默认值、覆盖与查询测试。按类型同步及圆滑岸线策略已纳入[后续方案](docs/maintenance/TERRAIN-DECISIONS-20261109.md)，尚未实现。

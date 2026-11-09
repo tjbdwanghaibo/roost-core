@@ -26,6 +26,8 @@ type ManagerConfig struct {
 	// Trace 是可选的有界阶段诊断，nil 时不记录。
 	Trace *SyncTrace
 	Mode  SyncMode
+	// TypeSchedules 按实体类型覆盖内容捕获节奏；与 namespace 的容量/快照预算独立。
+	TypeSchedules map[uint32]TypeSchedule
 	// MaxFrozenBytes 限制变化触发模式保留的内容字节；零值为 64MiB。
 	MaxFrozenBytes int64
 	// Transport receives each encoded frame; a session may need multiple frames per tick. Required.
@@ -155,6 +157,7 @@ type Manager struct {
 	frozenDeferred    atomic.Uint64
 	budgetWindow      time.Time
 	config            ManagerConfig
+	cadenceClock      func() time.Time // 测试用单调时钟；生产默认 time.Now
 	wire              wireConfig
 
 	// snapshotLane 是第 0 路快照预算（没有列出的命名空间）；lanes 按类别（subject.class）列出全部各路，
@@ -247,6 +250,9 @@ type Manager struct {
 
 // NewManager 校验配置（模式、合批窗口、快照预算、帧上限、按命名空间的上限与预算）并补默认值；传输声明了帧上限时取二者较小值。
 func NewManager(config ManagerConfig) (*Manager, error) {
+	if err := copyTypeSchedules(&config); err != nil {
+		return nil, err
+	}
 	if config.Mode != ModePeriodic && config.Mode != ModeOnChange {
 		return nil, fmt.Errorf("entitysync: invalid sync mode %d", config.Mode)
 	}
@@ -392,13 +398,27 @@ func (m *Manager) String() string {
 // installDirtyNotifier also fires the notifier when the state is already
 // dirty, so a subject that changed before it was registered is not forgotten.
 func (m *Manager) installDirtyNotifier(id int64, state *entity.SubjectSyncState) {
+	cadence := m.makeCadence(state)
+	if subj := m.subject(id); subj != nil {
+		subj.mu.Lock()
+		if subj.state == state {
+			subj.cadence = cadence
+		}
+		subj.mu.Unlock()
+	}
+	mode := m.typeMode(state)
 	state.SetDirtyNotifier(func(*entity.SubjectSyncState) {
+		if cadence != nil {
+			cadence.dirty(m.cadenceTime())
+		}
 		m.markPending(id)
 		if state.SyncCommitReady() {
 			if m.config.Trace != nil {
 				m.config.Trace.Record(SyncTraceEvent{Stage: "commit_ready", SubjectID: id})
 			}
-			m.WakeSync()
+			if mode == ModeOnChange {
+				m.WakeSync()
+			}
 		}
 	})
 }
@@ -784,7 +804,7 @@ type managerStop struct {
 // Start 启动周期同步；父 context 取消或 Stop 都会取消在途 Push。
 // 旧循环与最后一次 Flush 尚未退出时，拒绝启动新循环。
 func (m *Manager) Start(ctx context.Context) error {
-	if m != nil && m.config.Mode == ModeOnChange && !m.producerBound.Load() {
+	if m != nil && m.hasOnChange() && !m.producerBound.Load() {
 		return fmt.Errorf("entitysync: on_change requires a bound sync commit producer")
 	}
 	if m == nil {
@@ -900,7 +920,7 @@ func (m *Manager) finishStop(ctx context.Context, state *managerStop, running *m
 	if running != nil {
 		<-running.done
 	}
-	err := m.Flush(ctx)
+	err := m.flush(ctx, true)
 	if errors.Is(err, ErrManagerClosed) {
 		err = nil
 	}

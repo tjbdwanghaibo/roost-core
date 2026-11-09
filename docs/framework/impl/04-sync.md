@@ -1,5 +1,7 @@
 # 核心：Sync、Lockstep 与客户端：实现与维护
 
+类型调度实现：`framework/sync/entitysync/type_schedule.go` 保存周期类型的独立到期时间，`mode.go` 跳过周期类型的提交冻结，`flush.go` 区分普通周期捕获与即时快照，Drain/Stop 强制处理到期前的状态。`framework/entity/subject_sync.go` 的 PrepareSnapshotViews 在内容提交时保留变化并要求后续 Full，避免新订阅消费老订阅的待发增量。契约和成本见 [类型调度](../ENTITY_SYNC.md#按实体类型的同步节奏2026-11-09)。
+
 适用版本：当前 main 与最新发布版本（之后未发版变化见 [CHANGELOG](../../../CHANGELOG.md)）；源码目录最初按 v1.24.0 提取、之后随改动维护，链接由根包文档门禁保证存在，缺漏以源码为准。[设计与使用](../guide/04-sync.md)
 
 
