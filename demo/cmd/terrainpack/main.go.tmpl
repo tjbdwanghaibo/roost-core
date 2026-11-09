@@ -18,15 +18,17 @@
 // (cell_size: 6400, cols: 2, rows: 1). A real game's pack comes from its
 // artists' height and material maps (terrain.RAWImport), not from here.
 //
-// Bump -base-revision whenever the base terrain changes: an edited chunk
-// whose record is based on another revision is not loaded (the game logs it
-// and leaves the record alone; what happens to old edits is a product
-// decision, see the editable terrain plan).
+// Bump -base-revision whenever the base terrain changes, including HeightBase.
+// Owned old-revision edits are reset through the entity/DataEngine path (D13);
+// never silently reinterpret an existing pack or edited samples at a new base.
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 
@@ -34,29 +36,50 @@ import (
 )
 
 func main() {
-	out := flag.String("out", "configs/terrain/demo.pack", "where to write the pack (written to a temporary file, synced, then renamed)")
-	chunksX := flag.Int("chunks-x", 2, "chunks along X (64m each)")
-	chunksY := flag.Int("chunks-y", 1, "chunks along Y (64m each)")
-	seed := flag.Uint64("seed", 1, "seed of the procedural terrain")
-	revision := flag.Int64("base-revision", 1, "the base terrain's revision, recorded in the pack header and in every edited chunk")
-	heightBase := flag.Int("height-base", 0, "world height of raw height 0, in centimetres")
-	waterLevel := flag.Int("water-level", 40000, "global water level, in centimetres (the procedural terrain is about 200m to 1100m high)")
-	flag.Parse()
+	if err := run(os.Args[1:], os.Stdout); err != nil && !errors.Is(err, flag.ErrHelp) {
+		fail(err)
+	}
+}
+
+// run 使用独立 FlagSet，校验收窄前的数值；高度基准与水位都是厘米、互相独立。
+func run(args []string, output io.Writer) error {
+	flags := flag.NewFlagSet("terrainpack", flag.ContinueOnError)
+	flags.SetOutput(output)
+	out := flags.String("out", "configs/terrain/demo.pack", "where to write the pack (written to a temporary file, synced, then renamed)")
+	chunksX := flags.Int64("chunks-x", 2, "chunks along X (64m each)")
+	chunksY := flags.Int64("chunks-y", 1, "chunks along Y (64m each)")
+	seed := flags.Uint64("seed", 1, "seed of the procedural terrain")
+	revision := flags.Int64("base-revision", 1, "the base terrain's revision, recorded in the pack header and in every edited chunk")
+	heightBase := flags.Int64("height-base", -10000, "world height of raw height 0, in centimetres (default -100m)")
+	waterLevel := flags.Int64("water-level", 40000, "global water level, in world centimetres; independent of height-base")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected positional arguments: %v", flags.Args())
+	}
+	if *chunksX < 1 || *chunksX > math.MaxInt32 || *chunksY < 1 || *chunksY > math.MaxInt32 {
+		return fmt.Errorf("chunk dimensions must be in [1, %d]", int64(math.MaxInt32))
+	}
+	if *heightBase < math.MinInt32 || *heightBase > math.MaxInt32 || *waterLevel < math.MinInt32 || *waterLevel > math.MaxInt32 {
+		return fmt.Errorf("height-base and water-level must fit int32 centimetres")
+	}
 
 	meta := terrain.Meta{
 		BaseRevision: *revision, ChunksX: int32(*chunksX), ChunksY: int32(*chunksY),
 		HeightBase: int32(*heightBase), WaterLevel: int32(*waterLevel),
 	}
 	if err := meta.Validate(); err != nil {
-		fail(err)
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
-		fail(err)
+		return err
 	}
 	if err := terrain.WritePackFile(*out, meta, terrain.Generated(meta, *seed)); err != nil {
-		fail(err)
+		return err
 	}
-	fmt.Printf("terrainpack: wrote %s: %d x %d chunks, base revision %d, water level %d\n", *out, meta.ChunksX, meta.ChunksY, meta.BaseRevision, meta.WaterLevel)
+	_, err := fmt.Fprintf(output, "terrainpack: wrote %s: %d x %d chunks, base revision %d, height base %d, water level %d\n", *out, meta.ChunksX, meta.ChunksY, meta.BaseRevision, meta.HeightBase, meta.WaterLevel)
+	return err
 }
 
 func fail(err error) {

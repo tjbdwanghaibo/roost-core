@@ -1,0 +1,97 @@
+package main
+
+import (
+	"bytes"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+// 走实际 CLI 参数解析、写包、读包和 View 查询，避免只测一个默认常量。
+func TestTerrainPackDefaultsAndHeightQueries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "base.pack")
+	var output bytes.Buffer
+	if err := run([]string{"-out", path}, &output); err != nil {
+		t.Fatal(err)
+	}
+	pack, err := terrain.OpenPack(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pack.Close()
+	meta := pack.Meta()
+	if meta.HeightBase != -10000 || meta.WaterLevel != 40000 || meta.ChunksX != 2 || meta.ChunksY != 1 {
+		t.Fatalf("unexpected defaults: %+v", meta)
+	}
+	if !strings.Contains(output.String(), "height base -10000") {
+		t.Fatal(output.String())
+	}
+	// 以同一基准构造平面，验证原始值不是世界高度，并验证负高度不自动等同于水。
+	meta.WaterLevel = -200
+	flatPath := filepath.Join(t.TempDir(), "flat.pack")
+	if err := terrain.WritePackFile(flatPath, meta, func(terrain.ChunkKey) (terrain.Chunk, error) { return terrain.NewChunk(), nil }); err != nil {
+		t.Fatal(err)
+	}
+	flat, err := terrain.OpenPack(flatPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer flat.Close()
+	view := terrain.NewView(flat)
+	for i, tc := range []struct {
+		raw    uint16
+		height int32
+		water  bool
+	}{
+		{0, -10000, true}, {1000, 0, false}, {950, -500, true}, {990, -100, false}, {980, -200, false},
+	} {
+		chunk := terrain.NewChunk()
+		for j := range chunk.Heights {
+			chunk.Heights[j] = tc.raw
+		}
+		if err := view.SetOverlay(terrain.ChunkKey{}, terrain.Overlay{BaseRevision: meta.BaseRevision, Version: int64(i + 1), Heights: chunk.Heights, Materials: chunk.Materials}); err != nil {
+			t.Fatal(err)
+		}
+		ground, err := view.Probe(150, 150)
+		if err != nil || ground.Height != tc.height || ground.Water != tc.water {
+			t.Fatalf("raw %d: %+v, %v", tc.raw, ground, err)
+		}
+	}
+}
+
+func TestTerrainPackExplicitBaseAndWaterRemainIndependent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "override.pack")
+	if err := run([]string{"-out", path, "-height-base", "0", "-water-level", "-500", "-base-revision", "2"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	pack, err := terrain.OpenPack(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pack.Close()
+	if meta := pack.Meta(); meta.HeightBase != 0 || meta.WaterLevel != -500 || meta.BaseRevision != 2 {
+		t.Fatalf("override: %+v", meta)
+	}
+}
+
+func TestTerrainPackRejectsArgumentsBeforeWriting(t *testing.T) {
+	for _, args := range [][]string{
+		{"-height-base", "4294967296"}, {"-water-level", "-4294967296"},
+		{"-chunks-x", "4294967298"}, {"-chunks-y", "0"},
+		{"-height-base", "2147483647"}, {"-height-base", "not-a-number"}, {"unexpected"},
+	} {
+		t.Run(strings.Join(args, "_"), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "base.pack")
+			if err := run(append([]string{"-out", path}, args...), io.Discard); err == nil {
+				t.Fatal("accepted invalid arguments")
+			}
+			if _, err := os.Stat(path); !os.IsNotExist(err) {
+				t.Fatalf("invalid arguments created output: %v", err)
+			}
+		})
+	}
+}

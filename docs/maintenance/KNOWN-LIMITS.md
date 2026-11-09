@@ -1,5 +1,9 @@
 # 当前已知限制与验证边界
 
+## 2026-11-09：地形首批参数实施边界
+
+默认编辑配额与桶容量已降至 270，terrainpack 默认 HeightBase 已设为 −100 米（−10000 厘米）；不重写既有资源。按类型同步和圆滑岸线仍只完成决策，原地形去重两项问题及 P3～P6 本批未修。功能测试、修正记录与预期跳过见 [实施状态](TERRAIN-DECISIONS-20261109.md)；未新增压测，历史 270 档临时数据不代替容量验收。
+
 适用版本：最新发布版本（见 [CHANGELOG](../../CHANGELOG.md) 最上面的已归档段）与 main 上未发版的改动（CHANGELOG `[Unreleased]`）。本文件只记**当前仍有效**的限制、维护者已接受的代价和验证边界；已修复问题的现象、根因、红绿证据与修法见 [CHANGELOG](../../CHANGELOG.md)、[docs/release](../release/) 与 Git 历史。审查发现的问题以 `RV-*` 登记在本文件开头（2026-10-22、10-28、10-30、10-31 四轮及 RV-20261101-01/02/03 已修复，对应发布状态以 CHANGELOG 为准；修复后剩下的边界写在对应专题条目里，进度见 [COMMIT-REVIEW](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/COMMIT-REVIEW.md)）。拿不准是否仍有效的条目标“尚未确认”；历史压测留下、要等更合适环境的补测项汇总在文末[待补测](#待补测历史压测遗留)。
 
 需要维护者做设计选择的事项与下一阶段优化项汇总在 [DESIGN-TODO](DESIGN-TODO.md)；[外部验证细则](EXTERNAL-VERIFICATION.md)保留具体环境、步骤和判据；[性能基线](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/STABLE-v1.24.0.md)保留失败样本、统计和参数。本文件是静态文档整理和明确契约复核，不宣称全仓所有组合已审计、零 bug 或 100% 行为覆盖；不确定的能力不写成已经支持。

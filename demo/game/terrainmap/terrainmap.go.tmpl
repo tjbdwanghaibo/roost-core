@@ -31,12 +31,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	db "{{MODULE}}/db"
-	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	db "{{MODULE}}/db"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 )
 
 var (
@@ -98,22 +98,21 @@ type Policy struct {
 	// Limits 是编辑后的高度范围：基岩 0（地图基准高度）、上限 16383（基准之上 1638.3m：低于 16384 时同步全量每点
 	// 2 字节，方案 §2）。
 	Limits terrain.Limits
-	// EditPointsPerSecond 是每个玩家每秒的改动点数配额（令牌桶：每秒补这么多、最多攒这么多）：300（维护者
-	// 2026-11-08）。一次编辑的点数是它会改变的高度点数 + 材质点数（View.BrushChanges：每个采样点只算一次，一个点
-	// 两者都改算 2），至少 MinEditPoints。依据是单个观察者的下行预算 < 50KB/s：每个改动点同步约 7.5 字节，附近 20 人
-	// 都按满配额编辑约 20 × 300 × 7.5 ≈ 45KB/s。实测稳态 r=16m 档约 48～49KB/s，r=5m 档约 53～54KB/s（每次块更新线上
-	// 另有约 110 字节，小笔刷摊得多；方案 §17）。0 表示不限（测试与运维入口）。规则见 Brush 的“配额”。
+	// EditPointsPerSecond 是每个玩家每秒的改动点数配额（令牌桶：每秒补这么多、最多攒这么多）：270。
+	// 维护者 2026-11-08 选定，2026-11-09 落地。按事务前 View.BrushChanges 估算，高度、材质分别计点，
+	// 至少 MinEditPoints；满桶允许一次透支。此前 300 点档的小笔刷热点超出 50KB/s 目标，270 的历史临时测量
+	// 见方案 §17；不是任意人数/分布下的硬带宽上限。0 表示不限（测试与运维入口）。规则见 Brush 的“配额”。
 	EditPointsPerSecond int
 	// MinEditPoints 是每次编辑至少计的点数：20。没改到值的编辑（已到上限再抬高、刷成同一种材质）与重复请求也要开一笔
 	// 事务、记 Applied；不设下限时它们不占配额，一个玩家每秒可以发任意多次。20 约等于一次块更新在线上的固定开销
-	// （帧头、组件头与包头约 110～144 字节 ÷ 每点约 7.5 字节），满配额时这类请求每秒至多 15 次。
+	// （帧头、组件头与包头约 110～144 字节 ÷ 每点约 7.5 字节），稳态平均配额相当于每秒 13.5 次此类请求（初始桶另有突发额度）。
 	MinEditPoints int
 }
 
 // DefaultPolicy 是方案 §8.1 的初值（MaxStrength 与 Limits 方案没给数，见各字段说明）。
 var DefaultPolicy = Policy{
 	MaxRadius: 1600, MaxChunks: 4, MaxStrength: 50, Limits: terrain.Limits{Bedrock: 0, Ceiling: 16383},
-	EditPointsPerSecond: 300, MinEditPoints: 20,
+	EditPointsPerSecond: 270, MinEditPoints: 20,
 }
 
 // Rules 是业务给编辑的钩子（方案 §4“领地 / 权限规则由业务提供钩子”、“不能改有建筑占位的点”）。nil 表示都放行。

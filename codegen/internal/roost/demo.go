@@ -706,6 +706,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/terrain_test.go", why: "edits read back after the commit and not after a rollback, the same heights and versions after a restart, a record on another base revision discarded by its cell, a record with a material outside a byte not loaded; brushes: duplicates and reordering apply once, refusals write nothing, a rolled-back multi-chunk edit changes neither chunks nor view; the restart again on real Mongo when ROOST_TERRAIN_IT_MONGO_URI is set"},
 		{write: "internal/service/game/terrain_sync_test.go", why: "over real TCP: a client applying the terrain chunks gets full and delta updates, matches the server point by point after a reconnect, keeps its session with the terrain view at its cap; the measured frame bytes"},
 		{write: "cmd/terrainpack/main.go", why: "write the demo's small deterministic terrain base pack"},
+		{write: "cmd/terrainpack/main_test.go", why: "terrain base defaults, explicit overrides and safe CLI ranges"},
 		{add: &AddOptions{Kind: "protocol", Name: "Purchase", Group: "game", Handler: "player"}, why: "buying: the demo plays the payment provider, everything around that is real"},
 		{write: "protocol/def/purchase.go", why: "a product id in; the order, the receipt's replay flag and the bag count out"},
 		{write: "game/controllers/player/purchase.go", why: "sign a callback, let the platform service record and deliver it, then drain the grant into the bag"},

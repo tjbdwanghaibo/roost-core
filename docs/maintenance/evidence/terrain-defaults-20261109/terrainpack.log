@@ -1,0 +1,22 @@
+=== RUN   TestTerrainPackDefaultsAndHeightQueries
+--- PASS: TestTerrainPackDefaultsAndHeightQueries (0.07s)
+=== RUN   TestTerrainPackExplicitBaseAndWaterRemainIndependent
+--- PASS: TestTerrainPackExplicitBaseAndWaterRemainIndependent (0.03s)
+=== RUN   TestTerrainPackRejectsArgumentsBeforeWriting
+=== RUN   TestTerrainPackRejectsArgumentsBeforeWriting/-height-base_4294967296
+=== RUN   TestTerrainPackRejectsArgumentsBeforeWriting/-water-level_-4294967296
+=== RUN   TestTerrainPackRejectsArgumentsBeforeWriting/-chunks-x_4294967298
+=== RUN   TestTerrainPackRejectsArgumentsBeforeWriting/-chunks-y_0
+=== RUN   TestTerrainPackRejectsArgumentsBeforeWriting/-height-base_2147483647
+=== RUN   TestTerrainPackRejectsArgumentsBeforeWriting/-height-base_not-a-number
+=== RUN   TestTerrainPackRejectsArgumentsBeforeWriting/unexpected
+--- PASS: TestTerrainPackRejectsArgumentsBeforeWriting (0.00s)
+    --- PASS: TestTerrainPackRejectsArgumentsBeforeWriting/-height-base_4294967296 (0.00s)
+    --- PASS: TestTerrainPackRejectsArgumentsBeforeWriting/-water-level_-4294967296 (0.00s)
+    --- PASS: TestTerrainPackRejectsArgumentsBeforeWriting/-chunks-x_4294967298 (0.00s)
+    --- PASS: TestTerrainPackRejectsArgumentsBeforeWriting/-chunks-y_0 (0.00s)
+    --- PASS: TestTerrainPackRejectsArgumentsBeforeWriting/-height-base_2147483647 (0.00s)
+    --- PASS: TestTerrainPackRejectsArgumentsBeforeWriting/-height-base_not-a-number (0.00s)
+    --- PASS: TestTerrainPackRejectsArgumentsBeforeWriting/unexpected (0.00s)
+PASS
+ok  	example.com/planet/cmd/terrainpack	1.122s
