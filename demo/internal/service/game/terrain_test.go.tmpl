@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +16,7 @@ import (
 
 	db "{{MODULE}}/db"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"{{MODULE}}/game/handler"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	"{{MODULE}}/game/lifecycle"
@@ -76,7 +78,8 @@ func (c *terrainCommitter) Commit(context.Context, nest.CommitRecord) error {
 	return nil
 }
 
-// memoryChunkStore 是 coredata.Store 的替身：只答 terrainmap.ReadRecords 发的 `_id $in` 查询。
+// memoryChunkStore 是 coredata.Store 的替身：只答 terrainmap.ReadRecords 发的 `_id $in` 查询。docs 里也有玩家编辑
+// 账本（TerrainEditor）的文档：实体 ID 的 kind 不同，与块的 ID 不会相同；查询按集合过滤。
 type memoryChunkStore struct {
 	mu   sync.Mutex
 	docs map[int64]coredata.RawDocument
@@ -103,7 +106,7 @@ func (s *memoryChunkStore) StreamLoad(_ context.Context, spec coredata.LoadSpec,
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, id := range in {
-		if doc, ok := s.docs[id]; ok {
+		if doc, ok := s.docs[id]; ok && doc.Key.Resource == spec.Resource {
 			if err := consume(doc); err != nil {
 				return err
 			}
@@ -135,6 +138,7 @@ func startTerrainProcessWith(t *testing.T, pack string, region func(terrain.Meta
 	t.Helper()
 	handler.RegisterTerrainEditNestHandlers()
 	terrain_chunk.RegisterEntity()
+	terrain_editor.RegisterEntity()
 	p := &terrainProcess{t: t, ctx: context.Background(), entities: entity.NewEntityManager(), committer: &terrainCommitter{}}
 	if memory, ok := store.(*memoryChunkStore); ok {
 		p.restoreEntities(memory)
@@ -152,7 +156,11 @@ func startTerrainProcessWith(t *testing.T, pack string, region func(terrain.Meta
 	if err != nil {
 		t.Fatal(err)
 	}
-	p.m, err = terrainmap.Open(pack, region, chunks, syncsender.NewTerrainEditSender(p.engine))
+	editors, err := lifecycle.NewTerrainEditorLifecycle(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.m, err = terrainmap.Open(pack, region, chunks, editors, syncsender.NewTerrainEditSender(p.engine))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,24 +176,37 @@ func startTerrainProcessWith(t *testing.T, pack string, region func(terrain.Meta
 }
 
 // restoreEntities 替身 DataEngine 的冷加载：离线进程没有加载器，GetOrCreate 找不到实体就会新建一个空的；真实进程
-// 里它从库里冷加载已有记录（TestTerrainRestartRealMongo 走的就是那条路）。这里在启动时把“库”里的每条记录建成实体
-// 放进管理器，效果与改块前冷加载相同。
+// 里它从库里冷加载已有记录（TestTerrainRestartRealMongo 走的就是那条路）。这里在启动时把“库”里的每条记录（块与玩家
+// 编辑账本）建成实体放进管理器，效果与改块前冷加载相同。
 func (p *terrainProcess) restoreEntities(store *memoryChunkStore) {
 	p.t.Helper()
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	for id, doc := range store.docs {
-		dao := db.NewTerrainChunkDao()
-		dao.SetId(id)
-		if err := dao.RestorePersisted(doc.Data, doc.Schema, doc.Version); err != nil {
-			p.t.Fatalf("restore chunk entity %d: %v", id, err)
+		var param *entity.EntityCreateParam
+		switch doc.Key.Resource {
+		case db.TerrainChunkDaoCollection:
+			dao := db.NewTerrainChunkDao()
+			dao.SetId(id)
+			if err := dao.RestorePersisted(doc.Data, doc.Schema, doc.Version); err != nil {
+				p.t.Fatalf("restore chunk entity %d: %v", id, err)
+			}
+			param = &entity.EntityCreateParam{Kind: terrain_chunk.EntityKindTerrainChunk, Id: id,
+				Dao: map[string]entity.DaoInterface{db.TerrainChunkDaoCollection: dao}}
+		case db.TerrainEditorDaoCollection:
+			dao := db.NewTerrainEditorDao()
+			dao.SetId(id)
+			if err := dao.RestorePersisted(doc.Data, doc.Schema, doc.Version); err != nil {
+				p.t.Fatalf("restore edit ledger %d: %v", id, err)
+			}
+			param = &entity.EntityCreateParam{Kind: terrain_editor.EntityKindTerrainEditor, Id: id,
+				Dao: map[string]entity.DaoInterface{db.TerrainEditorDaoCollection: dao}}
+		default:
+			p.t.Fatalf("document %d in an unknown collection %q", id, doc.Key.Resource)
 		}
-		built, err := entity.BuildEntity(&entity.EntityCreateParam{
-			Kind: terrain_chunk.EntityKindTerrainChunk, Id: id,
-			Dao: map[string]entity.DaoInterface{db.TerrainChunkDaoCollection: dao},
-		})
+		built, err := entity.BuildEntity(param)
 		if err != nil {
-			p.t.Fatalf("rebuild chunk entity %d: %v", id, err)
+			p.t.Fatalf("rebuild entity %d: %v", id, err)
 		}
 		p.entities.Add(built)
 	}
@@ -203,7 +224,8 @@ func (p *terrainProcess) stop() {
 	}
 }
 
-// persist 把本进程每个 TerrainChunk 实体的 DAO 编成“库里的文档”（进程停下之后调用：没有并发访问）。
+// persist 把本进程每个 TerrainChunk 实体与 editorPlayers 里玩家的编辑账本的 DAO 编成“库里的文档”（进程停下之后
+// 调用：没有并发访问）。
 func (p *terrainProcess) persist(store *memoryChunkStore) {
 	p.t.Helper()
 	store.mu.Lock()
@@ -223,6 +245,20 @@ func (p *terrainProcess) persist(store *memoryChunkStore) {
 		store.docs[id] = coredata.RawDocument{
 			Key:  coredata.DocumentKey{Database: db.TerrainChunkDaoDBName, Resource: db.TerrainChunkDaoCollection, ID: id},
 			Data: value.Dao().Marshal(), Schema: db.TerrainChunkDaoSchemaVersion, Version: 1,
+		}
+	}
+	for _, player := range editorPlayers {
+		id, err := terrain_editor.EntityID(player)
+		if err != nil {
+			p.t.Fatal(err)
+		}
+		value, ok := p.entities.Get(id).(*terrain_editor.TerrainEditor)
+		if !ok || value == nil {
+			continue
+		}
+		store.docs[id] = coredata.RawDocument{
+			Key:  coredata.DocumentKey{Database: db.TerrainEditorDaoDBName, Resource: db.TerrainEditorDaoCollection, ID: id},
+			Data: value.Dao().Marshal(), Schema: db.TerrainEditorDaoSchemaVersion, Version: 1,
 		}
 	}
 }
@@ -598,6 +634,7 @@ func startRealTerrainProcess(t *testing.T, ctx context.Context, client fmongo.IM
 	t.Helper()
 	handler.RegisterTerrainEditNestHandlers()
 	terrain_chunk.RegisterEntity()
+	terrain_editor.RegisterEntity()
 	p := &realTerrainProcess{fatal: make(chan error, 1)}
 	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: physical, Databases: databases})
 	if err != nil {
@@ -644,7 +681,11 @@ func startRealTerrainProcess(t *testing.T, ctx context.Context, client fmongo.IM
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.m, err = terrainmap.Open(pack, wholeMap, chunks, syncsender.NewTerrainEditSender(p.engine)); err != nil {
+	editors, err := lifecycle.NewTerrainEditorLifecycle(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.m, err = terrainmap.Open(pack, wholeMap, chunks, editors, syncsender.NewTerrainEditSender(p.engine)); err != nil {
 		t.Fatal(err)
 	}
 	if p.stats, err = p.m.Load(ctx, p.runtime.Store); err != nil {
@@ -786,6 +827,101 @@ func TestTerrainRestartRealMongo(t *testing.T) {
 	fourth.stop(t)
 }
 
+// 真实 Mongo 上的编辑账本（T01/T02）：序号 1～70 在块 (0,0) 上各执行一次（strict 事务 → WAL → 投影），正常停机后库里
+// 恰有这个玩家的一份账本（LastSeq 70、下面 64 位全为 1）；重启后（账本冷加载）重放 1 与 5 答 ErrStale、6 与 70 答
+// Duplicate，块的版本不变、库里的账本不变；新序号 71 照常生效。门变量同 TestTerrainRestartRealMongo。
+func TestTerrainEditLedgerRealMongo(t *testing.T) {
+	uri := os.Getenv("ROOST_TERRAIN_IT_MONGO_URI")
+	if uri == "" {
+		t.Skip("ROOST_TERRAIN_IT_MONGO_URI not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
+	physical := fmt.Sprintf("terrain_ledger_it_%d", time.Now().UnixNano())
+	t.Cleanup(func() { _ = client.Database(physical).Drop(context.Background()) })
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
+		Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.TerrainChunkDaoDBName: physical},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	pack := writeTerrainPack(t, dir, 1)
+	walDir := filepath.Join(dir, "wal")
+	unlimited := func(p *realTerrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.EditPointsPerSecond = 0
+		p.m.SetPolicy(policy)
+	}
+	paint := func(seq uint64) terrain.Brush {
+		return terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 300, Material: byte(seq)}
+	}
+
+	first := startRealTerrainProcess(t, ctx, client, databases, physical, walDir, pack)
+	unlimited(first)
+	for seq := uint64(1); seq <= 70; seq++ {
+		if r, err := first.m.Brush(ctx, brushPlayer, seq, paint(seq)); err != nil || r.Duplicate || r.LastSeq != int64(seq) {
+			t.Fatalf("sequence %d: %+v, %v", seq, r, err)
+		}
+	}
+	first.stop(t)
+	type storedLedger struct {
+		LastSeq int64 `bson:"1"`
+		Window  int64 `bson:"2"`
+	}
+	ledgerID, err := terrain_editor.EntityID(brushPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readLedger := func() storedLedger {
+		t.Helper()
+		var stored storedLedger
+		if err := client.Database(physical).Collection(db.TerrainEditorDaoCollection).FindOne(ctx, map[string]any{"_id": ledgerID}, &stored); err != nil {
+			t.Fatal(err)
+		}
+		return stored
+	}
+	count, err := client.Database(physical).Collection(db.TerrainEditorDaoCollection).CountDocuments(ctx, map[string]any{})
+	if err != nil || count != 1 {
+		t.Fatalf("%d ledger documents in Mongo (%v), want 1", count, err)
+	}
+	want := storedLedger{LastSeq: 70, Window: -1}
+	if got := readLedger(); got != want {
+		t.Fatalf("stored ledger %+v, want %+v (all 64 bits below 70 set)", got, want)
+	}
+
+	second := startRealTerrainProcess(t, ctx, client, databases, physical, walDir, pack)
+	unlimited(second)
+	version, _ := second.m.View().Version(terrain.ChunkKey{})
+	if version != 70 {
+		t.Fatalf("chunk (0,0) version %d after the restart, want 70", version)
+	}
+	for _, c := range []struct {
+		seq   uint64
+		stale bool
+	}{{1, true}, {5, true}, {6, false}, {70, false}} {
+		r, err := second.m.Brush(ctx, brushPlayer, c.seq, paint(c.seq))
+		if c.stale && !errors.Is(err, terrainmap.ErrStale) || !c.stale && (err != nil || !r.Duplicate || r.LastSeq != 70) {
+			t.Fatalf("replay of %d after a restart on real Mongo: %+v, %v (stale expected: %v)", c.seq, r, err, c.stale)
+		}
+	}
+	if v, _ := second.m.View().Version(terrain.ChunkKey{}); v != 70 {
+		t.Fatalf("chunk (0,0) version %d after the replays, want 70", v)
+	}
+	if r, err := second.m.Brush(ctx, brushPlayer, 71, paint(71)); err != nil || r.Duplicate || r.LastSeq != 71 || r.Chunks[0].Version != 71 {
+		t.Fatalf("a new sequence after the restart: %+v, %v", r, err)
+	}
+	second.stop(t)
+	if got := readLedger(); got != (storedLedger{LastSeq: 71, Window: -1}) {
+		t.Fatalf("stored ledger after sequence 71: %+v", got)
+	}
+}
+
 // ---- 玩家编辑（P2：笔刷、校验、幂等、多块事务） ----
 
 // brushProcess 是只有地形的一个进程，玩家编辑不限频（限速另有用例），时钟固定。
@@ -798,12 +934,11 @@ func brushProcess(t *testing.T, store *memoryChunkStore) *terrainProcess {
 	})
 }
 
-// chunkState 是一块在实体与视图里的全部状态：DAO 的版本、高度、材质与 Applied，视图的版本与数据。
+// chunkState 是一块在实体与视图里的全部状态：DAO 的版本、高度与材质，视图的版本与数据。
 type chunkState struct {
 	daoVersion   int64
 	heights      []uint16
 	materials    []uint16
-	applied      []uint64
 	viewVersion  int64
 	viewHeights  []uint16
 	viewMaterial []byte
@@ -817,7 +952,6 @@ func stateOf(t *testing.T, p *terrainProcess, key terrain.ChunkKey) chunkState {
 		s.daoVersion = dao.GetVersion()
 		dao.RangeHeights(func(_ int, v uint16) bool { s.heights = append(s.heights, v); return true })
 		dao.RangeMaterials(func(_ int, v uint16) bool { s.materials = append(s.materials, v); return true })
-		dao.RangeApplied(func(_ int, v uint64) bool { s.applied = append(s.applied, v); return true })
 	}
 	// 没有实体与 Version 0 的空实体等价：第一次改的块在事务之前 GetOrCreate，事务回滚后留下的空实体仍按原始块看待。
 	c, v, _ := p.m.View().Chunk(key)
@@ -827,7 +961,7 @@ func stateOf(t *testing.T, p *terrainProcess, key terrain.ChunkKey) chunkState {
 
 func sameState(a, b chunkState) bool {
 	return a.daoVersion == b.daoVersion && slices.Equal(a.heights, b.heights) && slices.Equal(a.materials, b.materials) &&
-		slices.Equal(a.applied, b.applied) && a.viewVersion == b.viewVersion && slices.Equal(a.viewHeights, b.viewHeights) &&
+		a.viewVersion == b.viewVersion && slices.Equal(a.viewHeights, b.viewHeights) &&
 		slices.Equal(a.viewMaterial, b.viewMaterial)
 }
 
@@ -842,6 +976,22 @@ func allStates(t *testing.T, p *terrainProcess) map[terrain.ChunkKey]chunkState 
 
 func sameStates(a, b map[terrain.ChunkKey]chunkState) bool {
 	return maps.EqualFunc(a, b, sameState)
+}
+
+// editorPlayers 是这些测试里会编辑的玩家：persist 为他们的编辑账本编文档。
+var editorPlayers = []int64{brushPlayer, brushPlayer + 1}
+
+// ledgerOf 是玩家编辑账本的当前值；没有账本实体（从没编辑过）时是零值。
+func ledgerOf(t *testing.T, p *terrainProcess, player int64) terrain_editor.SeqWindow {
+	t.Helper()
+	id, err := terrain_editor.EntityID(player)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := p.entities.Get(id).(*terrain_editor.TerrainEditor); e != nil {
+		return e.LedgerComp().Window()
+	}
+	return terrain_editor.SeqWindow{}
 }
 
 // expectBrushes 是在原始块上依次应用笔刷（纯函数，限值同 DefaultPolicy）后每块的期望数据。
@@ -884,9 +1034,9 @@ func viewMatches(t *testing.T, m *terrainmap.Map, want map[terrain.ChunkKey]terr
 
 const brushPlayer = int64(4242)
 
-// 重复与乱序（方案 §9 P2）：同一请求重发得到 Duplicate、什么都不写；先到的请求 3、后到的请求 2 各生效一次（按到达
-// 顺序），之后两者的重放都是 Duplicate；结果与“按到达顺序各应用一次”的纯计算逐点相同。四块交点上的笔刷在一笔事务
-// 里改 4 块，请求 ID 记进每一块。
+// 重复与乱序（方案 §9 P2）：同一请求重发得到 Duplicate、什么都不写；先到的序号 3、后到的序号 2 各生效一次（按到达
+// 顺序，窗口内的乱序），之后两者的重放都是 Duplicate；结果与“按到达顺序各应用一次”的纯计算逐点相同。四块交点上的
+// 笔刷在一笔事务里改 4 块，序号记进玩家的账本。
 func TestTerrainBrushRepeatsAndReordersApplyOnce(t *testing.T) {
 	store := &memoryChunkStore{}
 	p := brushProcess(t, store)
@@ -941,15 +1091,15 @@ func TestTerrainBrushRepeatsAndReordersApplyOnce(t *testing.T) {
 	if commits == 0 || p.m.CommitFailures() != 0 {
 		t.Fatalf("commits %d, commit failures %d", commits, p.m.CommitFailures())
 	}
-	// 请求 ID 在一笔事务里记进它锁住的每一块（包括交点那四块）。
-	id := terrainmap.EditID(brushPlayer, 1)
-	for _, key := range []terrain.ChunkKey{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 0, Y: 1}, {X: 1, Y: 1}} {
-		if !slices.Contains(stateOf(t, p, key).applied, id) {
-			t.Fatalf("chunk %v does not record the corner edit", key)
-		}
+	// 序号记在玩家的账本里（与改块同一笔事务）：最大 3，下面 1、2 都已应用；另一个玩家有自己的账本。
+	if got := ledgerOf(t, p, brushPlayer); got != (terrain_editor.SeqWindow{Last: 3, Bits: 0b11}) {
+		t.Fatalf("ledger of player %d: %+v, want last 3 with 2 and 1 applied", brushPlayer, got)
+	}
+	if got := ledgerOf(t, p, brushPlayer+1); got != (terrain_editor.SeqWindow{Last: 1}) {
+		t.Fatalf("ledger of player %d: %+v, want last 1", brushPlayer+1, got)
 	}
 
-	// 重启之后重放仍然是 Duplicate（Applied 持久）。
+	// 重启之后重放仍然是 Duplicate（账本持久）。
 	p.stop()
 	p.persist(store)
 	restarted := startTerrainProcessWith(t, pack, wholeMap, store, func(q *terrainProcess) { q.m.SetPolicy(p.m.Policy()) })
@@ -959,7 +1109,186 @@ func TestTerrainBrushRepeatsAndReordersApplyOnce(t *testing.T) {
 	viewMatches(t, restarted.m, expectBrushes(t, restarted.m, pack, corner, paint, lower, corner))
 }
 
-// 拒绝时零写入：每种拒绝之后实体、Applied、视图与提交数都不变。
+// T01：窗口之外的旧请求重放不再执行。序号 1 抬高之后同一块上又做了 100 次编辑（2～101），重放 1：账本只记得
+// [37, 101]，1 低于窗口，答 ErrStale（带 LastSeq 101），块、视图、账本、提交数都不变；窗口两端（37 在内、36 在外）按
+// 规则答 Duplicate / ErrStale。重启后（账本从库里读回）同样：重放 1 与 36 是 ErrStale、37 与 101 是 Duplicate，什么都
+// 不写；新序号 102 照常生效。修复前（块上 32 个编辑 ID 的环）重放 1 会被再执行一次（Version 41 → 42）。
+func TestTerrainBrushReplayBelowTheWindowIsStale(t *testing.T) {
+	store := &memoryChunkStore{}
+	p := brushProcess(t, store)
+	first := terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 500, Strength: 10}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, first); err != nil {
+		t.Fatal(err)
+	}
+	later := func(seq uint64) terrain.Brush {
+		return terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 300, Material: byte(seq)}
+	}
+	for seq := uint64(2); seq <= 101; seq++ {
+		if _, err := p.m.Brush(p.ctx, brushPlayer, seq, later(seq)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replays := func(p *terrainProcess, when string) {
+		t.Helper()
+		before, ledger, commits := allStates(t, p), ledgerOf(t, p, brushPlayer), p.committer.commits.Load()
+		for _, c := range []struct {
+			seq   uint64
+			stale bool
+		}{{1, true}, {36, true}, {37, false}, {100, false}, {101, false}} {
+			b := later(c.seq)
+			if c.seq == 1 {
+				b = first
+			}
+			r, err := p.m.Brush(p.ctx, brushPlayer, c.seq, b)
+			var seqErr *terrainmap.SeqError
+			switch {
+			case c.stale && (!errors.Is(err, terrainmap.ErrStale) || !errors.As(err, &seqErr) || seqErr.LastSeq != 101):
+				t.Fatalf("%s: replay of %d: %+v, %v; want ErrStale with LastSeq 101", when, c.seq, r, err)
+			case !c.stale && (err != nil || !r.Duplicate || r.LastSeq != 101):
+				t.Fatalf("%s: replay of %d: %+v, %v; want Duplicate with LastSeq 101", when, c.seq, r, err)
+			}
+		}
+		if !sameStates(before, allStates(t, p)) || ledgerOf(t, p, brushPlayer) != ledger || p.committer.commits.Load() != commits {
+			t.Fatalf("%s: a replay wrote something (ledger %+v → %+v, commits %d → %d)", when, ledger, ledgerOf(t, p, brushPlayer), commits, p.committer.commits.Load())
+		}
+	}
+	replays(p, "before the restart")
+	want := ledgerOf(t, p, brushPlayer)
+	if want.Last != 101 || want.Bits != ^uint64(0) {
+		t.Fatalf("ledger after 101 edits in order: %+v, want last 101 with all 64 below applied", want)
+	}
+
+	p.stop()
+	p.persist(store)
+	q := brushProcess(t, store)
+	if got := ledgerOf(t, q, brushPlayer); got != want {
+		t.Fatalf("ledger after a restart: %+v, want %+v", got, want)
+	}
+	replays(q, "after a restart")
+	if r, err := q.m.Brush(q.ctx, brushPlayer, 102, later(102)); err != nil || r.Duplicate || r.LastSeq != 102 {
+		t.Fatalf("a new sequence after the restart: %+v, %v", r, err)
+	}
+}
+
+// legacyEditID 是修复前的编辑 ID（T02）：splitmix64(playerID ⊕ splitmix64(requestID)) 截成 63 位。只用来构造当时会碰撞
+// 的两个请求。
+func legacyEditID(playerID int64, requestID uint64) uint64 {
+	return legacyMix(uint64(playerID)^legacyMix(requestID)) &^ (1 << 63)
+}
+
+func legacyMix(x uint64) uint64 {
+	x += 0x9E3779B97F4A7C15
+	x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9
+	x = (x ^ (x >> 27)) * 0x94D049BB133111EB
+	return x ^ (x >> 31)
+}
+
+// legacyUnmix 是 legacyMix 的逆（splitmix64 是 2^64 上的双射）：xorshift 的逆与奇数乘子的模逆。
+func legacyUnmix(x uint64) uint64 {
+	unshift := func(x uint64, s uint) uint64 {
+		out := x
+		for shift := s; shift < 64; shift += s {
+			out ^= x >> shift
+		}
+		return out
+	}
+	inverse := func(a uint64) uint64 {
+		x := a
+		for range 6 {
+			x *= 2 - a*x
+		}
+		return x
+	}
+	x = unshift(x, 31)
+	x *= inverse(0x94D049BB133111EB)
+	x = unshift(x, 27)
+	x *= inverse(0xBF58476D1CE4E5B9)
+	x = unshift(x, 30)
+	return x - 0x9E3779B97F4A7C15
+}
+
+// collidingPlayers 构造两个合法玩家（1～entity.UniqueIDMask），他们各自的序号 1 在修复前得到同一个编辑 ID：选 p1，
+// 让 p2 的 splitmix64 全值只与 p1 的差最高位（截成 63 位后相同），逆推出 p2；p2 落在合法范围的概率约 2^-12，逐个试 p1。
+func collidingPlayers(t *testing.T) (int64, int64) {
+	t.Helper()
+	inner := legacyMix(1)
+	for p1 := int64(1); p1 < 1<<24; p1++ {
+		full := legacyMix(uint64(p1) ^ inner)
+		p2 := int64(legacyUnmix(full^(1<<63)) ^ inner)
+		if p2 <= 0 || uint64(p2) > entity.UniqueIDMask {
+			continue
+		}
+		if legacyEditID(p1, 1) != legacyEditID(p2, 1) {
+			t.Fatalf("construction: players %d and %d do not share an edit id", p1, p2)
+		}
+		return p1, p2
+	}
+	t.Fatal("no colliding pair of players")
+	return 0, 0
+}
+
+// T02：修复前截成 63 位的编辑 ID 会碰撞，后到的那个合法请求被当成重复、不执行。构造两个合法玩家，他们的序号 1 在
+// 旧算法下编辑 ID 相同、编辑同一块：现在身份是（玩家, 序号）原样比较，两次都执行（各自 Version + 1），各自的重试只得到
+// Duplicate、不再写；两人的账本各记各的。
+func TestTerrainBrushRequestsThatSharedATruncatedIDBothApply(t *testing.T) {
+	p := brushProcess(t, &memoryChunkStore{})
+	p1, p2 := collidingPlayers(t)
+	t.Logf("players %d and %d: sequence 1 had the same truncated edit id %d", p1, p2, legacyEditID(p1, 1))
+	raise := terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 500, Strength: 10}
+	paint := terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 500, Material: 99}
+	if r, err := p.m.Brush(p.ctx, p1, 1, raise); err != nil || r.Duplicate || r.Chunks[0].Version != 1 {
+		t.Fatalf("player %d sequence 1: %+v, %v", p1, r, err)
+	}
+	if r, err := p.m.Brush(p.ctx, p2, 1, paint); err != nil || r.Duplicate || r.Chunks[0].Version != 2 {
+		t.Fatalf("player %d sequence 1 (shared the old edit id): %+v, %v; want it applied (version 2)", p2, r, err)
+	}
+	before, commits := allStates(t, p), p.committer.commits.Load()
+	for _, c := range []struct {
+		player int64
+		b      terrain.Brush
+	}{{p1, raise}, {p2, paint}, {p1, raise}} {
+		if r, err := p.m.Brush(p.ctx, c.player, 1, c.b); err != nil || !r.Duplicate || r.Chunks[0].Version != 2 {
+			t.Fatalf("player %d retries sequence 1: %+v, %v; want Duplicate at version 2", c.player, r, err)
+		}
+	}
+	if !sameStates(before, allStates(t, p)) || p.committer.commits.Load() != commits {
+		t.Fatal("a retry changed a chunk")
+	}
+	viewMatches(t, p.m, expectBrushes(t, p.m, writeTerrainPack(t, t.TempDir(), 1), raise, paint))
+	for _, player := range []int64{p1, p2} {
+		if got := ledgerOf(t, p, player); got != (terrain_editor.SeqWindow{Last: 1}) {
+			t.Fatalf("ledger of player %d: %+v", player, got)
+		}
+	}
+}
+
+// 续号查询（协议 Seq = 0）：没编辑过的玩家是 0；编辑后是已应用的最大序号（乱序时也是最大的那个）；重启后从库里读回。
+func TestTerrainLastSeqTellsAClientWhereToContinue(t *testing.T) {
+	store := &memoryChunkStore{}
+	p := brushProcess(t, store)
+	if last, err := p.m.LastSeq(p.ctx, brushPlayer); err != nil || last != 0 {
+		t.Fatalf("a player who never edited: %d, %v", last, err)
+	}
+	for _, seq := range []uint64{1, 5, 3} {
+		if _, err := p.m.Brush(p.ctx, brushPlayer, seq, terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 300, Material: byte(seq)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if last, err := p.m.LastSeq(p.ctx, brushPlayer); err != nil || last != 5 {
+		t.Fatalf("after 1, 5, 3: %d, %v; want 5", last, err)
+	}
+	if _, err := p.m.LastSeq(p.ctx, 0); !errors.Is(err, terrainmap.ErrBrush) {
+		t.Fatalf("player 0: %v, want ErrBrush", err)
+	}
+	p.stop()
+	p.persist(store)
+	q := brushProcess(t, store)
+	if last, err := q.m.LastSeq(q.ctx, brushPlayer); err != nil || last != 5 {
+		t.Fatalf("after a restart: %d, %v; want 5", last, err)
+	}
+}
+
+// 拒绝时零写入：每种拒绝之后实体、视图、玩家的编辑账本与提交数都不变（拒绝的请求不记序号，同一序号之后仍可用）。
 func TestTerrainBrushRefusalsWriteNothing(t *testing.T) {
 	p := brushProcess(t, &memoryChunkStore{})
 	ok := terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 500, Strength: 10}
@@ -975,7 +1304,9 @@ func TestTerrainBrushRefusalsWriteNothing(t *testing.T) {
 		b     terrain.Brush
 		want  error
 	}{
-		{"request id 0", nil, 0, ok, terrainmap.ErrBrush},
+		{"sequence 0", nil, 0, ok, terrainmap.ErrBrush},
+		{"sequence over 2^63-1", nil, math.MaxInt64 + 1, ok, terrainmap.ErrBrush},
+		{"sequence too far ahead of the ledger", nil, 1 + terrain_editor.MaxSeqAhead + 1, ok, terrainmap.ErrSeqAhead},
 		{"no op", nil, 10, terrain.Brush{X: 3200, Y: 3200, Radius: 500}, terrain.ErrInvalidBrush},
 		{"radius over 16m", nil, 11, terrain.Brush{Op: terrain.BrushPaint, X: 3200, Y: 3200, Radius: 1601}, terrainmap.ErrBrush},
 		{"strength over 5m", nil, 12, terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 500, Strength: 51}, terrainmap.ErrBrush},
@@ -989,15 +1320,19 @@ func TestTerrainBrushRefusalsWriteNothing(t *testing.T) {
 		if tc.setup != nil {
 			tc.setup()
 		}
-		before, commits := allStates(t, p), p.committer.commits.Load()
+		before, ledger, commits := allStates(t, p), ledgerOf(t, p, brushPlayer), p.committer.commits.Load()
 		if _, err := p.m.Brush(p.ctx, brushPlayer, tc.req, tc.b); !errors.Is(err, tc.want) {
 			t.Fatalf("%s: %v, want %v", tc.name, err, tc.want)
 		}
-		if !sameStates(before, allStates(t, p)) || p.committer.commits.Load() != commits {
+		if !sameStates(before, allStates(t, p)) || ledgerOf(t, p, brushPlayer) != ledger || p.committer.commits.Load() != commits {
 			t.Fatalf("%s: a refused brush wrote something", tc.name)
 		}
 	}
 	rules.occupied = false
+	// 拒绝过的序号没有记下：用其中一个做下一次编辑照常生效。
+	if r, err := p.m.Brush(p.ctx, brushPlayer, 17, ok); err != nil || r.Duplicate || r.LastSeq != 17 {
+		t.Fatalf("sequence 17 after its refusal: %+v, %v", r, err)
+	}
 	// 不归本进程写的块：只写块 (0,0) 的进程上，跨到 (1,0) 的笔刷整笔拒绝。
 	own00 := startTerrainProcess(t, writeTerrainPack(t, t.TempDir(), 1), func(meta terrain.Meta) (terrainmap.Region, error) {
 		return terrainmap.Region{Own: terrain.ChunkKey{}.Bounds(), Load: meta.Bounds()}, nil
@@ -1188,9 +1523,10 @@ func TestTerrainBrushQuotaLetsAFullBucketOverdrawOnce(t *testing.T) {
 	refusedWithoutWriting(t, p, 5, small, "a small edit right after the flatten")
 }
 
-// 重复请求与确定没改的拒绝只计下限 20 点：重放一次大编辑不被扣两遍；领地钩子拒绝、建筑占位（事务里回滚）也一样。
-// 用配额的边界钉住：满桶 270，抬高 81 后余 189；重放（−20）余 169；领地拒绝（−20）余 149；占位拒绝（−20）余 129；
-// 交点改材质 177 点不够，等补到 177 才通过。重放若按 81 计，这里会差 61 点。
+// 重复请求与确定没改的拒绝只计下限 20 点：重放一次大编辑不被扣两遍；领地钩子拒绝、建筑占位（事务里回滚）、序号跳得
+// 太远（账本在事务里拒绝）也一样。用配额的边界钉住：满桶 270，抬高 81 后余 189；重放（−20）余 169；领地拒绝（−20）
+// 余 149；占位拒绝（−20）余 129；序号越界（−20）余 109；交点改材质 177 点不够，等补到 177 才通过。重放若按 81 计，
+// 这里会差 61 点。
 func TestTerrainBrushQuotaChargesRepeatsAndRefusalsTheMinimum(t *testing.T) {
 	p, now := quotaProcess(t, nil)
 	rules := &brushRules{}
@@ -1215,6 +1551,9 @@ func TestTerrainBrushQuotaChargesRepeatsAndRefusalsTheMinimum(t *testing.T) {
 		t.Fatalf("a building under the brush: %v, want ErrOccupied", err)
 	}
 	rules.occupied = false
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 2+terrain_editor.MaxSeqAhead, raise); !errors.Is(err, terrainmap.ErrSeqAhead) {
+		t.Fatalf("a sequence far ahead: %v, want ErrSeqAhead", err)
+	}
 	if !sameStates(before, allStates(t, p)) {
 		t.Fatal("a refused edit changed a chunk")
 	}
@@ -1222,18 +1561,18 @@ func TestTerrainBrushQuotaChargesRepeatsAndRefusalsTheMinimum(t *testing.T) {
 	if _, m := changedPoints(t, p.m, corner); m != 177 {
 		t.Fatalf("a corner paint changes %d materials, want 177", m)
 	}
-	admittedAfter(t, p, now, 129, 177, 4, corner, "the corner paint")
+	admittedAfter(t, p, now, 109, 177, 4, corner, "the corner paint")
 }
 
-// 多块事务回滚（方案 §9 P2）：跨四块（两块改过、两块第一次改）的一笔编辑被提交器拒绝时，四块的实体（版本、数据、
-// Applied）与视图全都不变；用同一请求 ID 重试则生效（Applied 也随回滚撤销了，不会被当成重复）。
+// 多块事务回滚（方案 §9 P2）：跨四块（两块改过、两块第一次改）的一笔编辑被提交器拒绝时，四块的实体（版本、数据）、
+// 视图与玩家的编辑账本全都不变；用同一序号重试则生效（序号也随回滚撤销了，不会被当成重复）。
 func TestTerrainBrushRollbackLeavesEveryChunkAndTheView(t *testing.T) {
 	p := brushProcess(t, &memoryChunkStore{})
 	// 先改 (0,0) 与 (1,0)，(0,1)、(1,1) 还是原始块。
 	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, terrain.Brush{Op: terrain.BrushPaint, X: terrain.ChunkSize, Y: 3200, Radius: 400, Material: 5}); err != nil {
 		t.Fatal(err)
 	}
-	before := allStates(t, p)
+	before, ledger := allStates(t, p), ledgerOf(t, p, brushPlayer)
 	corner := terrain.Brush{Op: terrain.BrushFlatten, X: terrain.ChunkSize, Y: terrain.ChunkSize, Radius: 1500, Falloff: terrain.FalloffSmooth, Target: 2000}
 	p.committer.reject.Store(true)
 	if _, err := p.m.Brush(p.ctx, brushPlayer, 2, corner); !errors.Is(err, nest.ErrCommitRejected) || !errors.Is(err, errInjectedRejection) {
@@ -1246,8 +1585,11 @@ func TestTerrainBrushRollbackLeavesEveryChunkAndTheView(t *testing.T) {
 				key, state.daoVersion, after[key].daoVersion, state.viewVersion, after[key].viewVersion)
 		}
 	}
+	if got := ledgerOf(t, p, brushPlayer); got != ledger || got.Check(2) != terrain_editor.Fresh {
+		t.Fatalf("the ledger after a rolled-back brush: %+v (before %+v); sequence 2 is %v", got, ledger, got.Check(2))
+	}
 	result, err := p.m.Brush(p.ctx, brushPlayer, 2, corner)
-	if err != nil || result.Duplicate || len(result.Chunks) != 4 {
+	if err != nil || result.Duplicate || len(result.Chunks) != 4 || result.LastSeq != 2 {
 		t.Fatalf("the same request after the rollback: %+v, %v", result, err)
 	}
 	if p.m.CommitFailures() != 0 {

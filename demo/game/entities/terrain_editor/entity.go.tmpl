@@ -1,0 +1,61 @@
+package terrain_editor
+
+import (
+	"fmt"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// EntityKindTerrainEditor 是玩家地形编辑账本的 kind（不复用已删实体的号：5 是旧 Guild、8 是旧 AllianceShard）。
+const EntityKindTerrainEditor entity.EntityKind = 12
+
+// ITerrainEditorEntity is the lock-safe business view used by Nest handlers.
+type ITerrainEditorEntity interface{ entity.IThreadSafeEntity }
+
+// TerrainEditor 是一个玩家在本进程的地形编辑账本（可编辑地形 T01/T02）：玩家编辑请求的身份是（玩家 ID, 编辑序号），
+// 账本记着已应用的最大序号与它下面 64 个序号的应用位图（LedgerComponent，数据在 TerrainEditorDao）。玩家第一次编辑时
+// 由 game/terrainmap 经 lifecycle 的 GetOrCreate 建出，之后每次笔刷编辑都和笔刷覆盖到的块在同一笔 Nest 事务里锁住：
+// 判重、改块、记序号一起提交或一起回滚。
+//
+// 实体 ID：UniqueID(playerID) = 玩家的 unique ID（与 Player 实体的 unique 相同，kind 不同所以是另一个实体）。
+// ID 是确定性的、可能已有持久记录，所以只能经 GetOrCreate 建，不能直接 Create。
+//
+// 为什么账本按玩家、不放在块上：块上的有界列表被挤出后，旧请求的重放会被当成新请求再执行一次（T01）；按块无界记录
+// 又会随改过它的玩家数无限增长。按玩家记“最大序号 + 窗口”，大小固定（两个 int64），序号低于窗口的请求一律答过期，
+// 永远不会再执行一次。为什么不放在 Player 实体上：编辑由写这些块的格进程执行，P3 起玩家（Base）与块（Real）可能
+// 不在同一进程，账本要与块在同一进程、同一笔事务里；单独的实体也不让地形事务去锁玩家实体。
+//
+// 只归本进程写：P2 的玩家编辑只在玩家所在进程执行、且只改本进程写的块，一个玩家同一时刻只有一个进程处理他的请求
+// （app 级单实例保证）。P3 跨格转发后要按（玩家, 格）分账本，见可编辑地形方案的 T01/T02 一节。
+//
+// Category：PlayerScoped（玩家的对外表示，排在 World 之后取锁）：一笔笔刷事务先锁块（World）再锁账本。
+//
+//roost:entity id=12 entityKind=EntityKindTerrainEditor category=entity.EntityCategoryPlayerScoped
+type TerrainEditor struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	ledger *LedgerComponent     `comp:"CompTypeLedger"`
+	dao    *db.TerrainEditorDao `dao:"terrain_editor"`
+}
+
+// UniqueID 返回玩家账本的实体唯一号（BuildEntityID 的第一个参数）：就是玩家的 unique ID，须在 1～entity.UniqueIDMask。
+func UniqueID(playerID int64) (int64, error) {
+	if playerID <= 0 || uint64(playerID) > entity.UniqueIDMask {
+		return 0, fmt.Errorf("terrain editor: player id %d is outside 1..%d", playerID, entity.UniqueIDMask)
+	}
+	return playerID, nil
+}
+
+// EntityID 返回玩家账本的完整实体 ID。
+func EntityID(playerID int64) (int64, error) {
+	unique, err := UniqueID(playerID)
+	if err != nil {
+		return 0, err
+	}
+	return entity.BuildEntityID(unique, EntityKindTerrainEditor)
+}
+
+// PlayerID 是这个账本所属的玩家（UniqueID 的逆）。
+func (e *TerrainEditor) PlayerID() int64 { return entity.GetUniqueIDFromEntityID(e.ID()) }

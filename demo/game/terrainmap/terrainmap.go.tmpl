@@ -9,10 +9,11 @@
 // Store 按 `_id ∈ 本区域候选块的实体 ID` 分批查（ID 由块坐标确定，候选集有界），不全表扫描。记录基于另一版原始
 // 地形的块（原始地形换了版本）：本进程写的块丢弃改动（维护者 2026-11-08，见 Map.Load），邻格的块不装入。
 //
-// 玩家编辑（Brush，P2）：校验（笔刷参数、半径 / 块数 / 增量上限、频率、领地 / 权限钩子）→ 覆盖到的块（至多 4 块）
-// 第一次改的先 GetOrCreate → 一笔多块 Nest 事务（handler TerrainBrush，目标组 = 这些块）：判重（Applied）、在锁内
-// 从当前数据算笔刷（gameplay/terrain 的 Brush.Apply）、建筑占位钩子、逐块写（整字段守卫）、请求 ID 记进每一块；
-// 提交被接受后才逐块装进视图并通知同步（afterCommit），回滚的事务不改变视图。
+// 玩家编辑（Brush，P2）：校验（笔刷参数、半径 / 块数 / 增量上限、频率、领地 / 权限钩子）→ 玩家的编辑账本与覆盖到的块
+// （至多 4 块）第一次用的先 GetOrCreate → 一笔多实体 Nest 事务（handler TerrainBrush，目标 = 这些块 + 账本）：按
+// （玩家, 编辑序号）判重（账本，game/entities/terrain_editor）、在锁内从当前数据算笔刷（gameplay/terrain 的
+// Brush.Apply）、建筑占位钩子、逐块写（整字段守卫）、序号记进账本；提交被接受后才逐块装进视图并通知同步
+// （afterCommit），回滚的事务不改变视图，也不留下序号。
 //
 // 内部写入口（Edit，P1）：一块一笔事务写一组采样点，运维命令与测试用。
 //
@@ -26,6 +27,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -37,6 +39,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	db "{{MODULE}}/db"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 )
 
 var (
@@ -47,7 +50,8 @@ var (
 	// ErrUnloadable：块的持久记录装不进视图（基于另一版原始地形，或记录损坏），这一块不可查也不可改，等运维处理。
 	// 同时满足 errors.Is(err, terrain.ErrNotLoaded)。
 	ErrUnloadable = fmt.Errorf("terrain: chunk record could not be loaded: %w", terrain.ErrNotLoaded)
-	// ErrBrush：笔刷参数不合法或超出玩家编辑的上限（Policy：半径、增量、块数），或请求 ID 为 0。同时满足
+	// ErrBrush：笔刷参数不合法或超出玩家编辑的上限（Policy：半径、增量、块数），或玩家 ID / 编辑序号不在范围内（序号
+	// 1～MaxInt64，玩家 ID 1～entity.UniqueIDMask）。同时满足
 	// errors.Is(err, terrain.ErrInvalidBrush) 的是参数本身不合法，满足 terrain.ErrOutOfMap 的是中心在地图外。
 	ErrBrush = errors.New("terrain: brush refused")
 	// ErrRateLimited：玩家的改动点数配额不够这次编辑（Policy.EditPointsPerSecond），整笔拒绝、不部分执行。
@@ -56,7 +60,31 @@ var (
 	ErrDenied = errors.New("terrain: edit not allowed here")
 	// ErrOccupied：编辑会改到建筑占着的点（Rules.Occupied）。
 	ErrOccupied = errors.New("terrain: the edit touches ground a building stands on")
+	// ErrStale：编辑序号低于玩家账本的窗口（LastSeq − 64 以下）：已无法确定它当时是否应用过，这次不执行、不写。
+	// 错误值是 *SeqError（带 LastSeq）。
+	ErrStale = errors.New("terrain: edit sequence is older than the ledger window")
+	// ErrSeqAhead：编辑序号比玩家账本的 LastSeq 大出 terrain_editor.MaxSeqAhead 以上（客户端的计数器坏了）：不执行、
+	// 不写。错误值是 *SeqError（带 LastSeq）。
+	ErrSeqAhead = errors.New("terrain: edit sequence is too far ahead of the ledger")
 )
+
+// SeqError 是账本拒绝一个编辑序号（ErrStale 或 ErrSeqAhead）：LastSeq 是玩家账本此刻已应用的最大序号，客户端据此
+// 续号（新编辑用 LastSeq + 1 起）。errors.Is 对 ErrStale / ErrSeqAhead 按 Verdict 成立。
+type SeqError struct {
+	PlayerID int64
+	Seq      int64
+	LastSeq  int64
+	Verdict  terrain_editor.Verdict
+}
+
+func (e *SeqError) Error() string {
+	return fmt.Sprintf("terrain: player %d edit sequence %d is %v (ledger last %d)", e.PlayerID, e.Seq, e.Verdict, e.LastSeq)
+}
+
+// Is 让 errors.Is(err, ErrStale) / errors.Is(err, ErrSeqAhead) 按判定成立。
+func (e *SeqError) Is(target error) bool {
+	return target == ErrStale && e.Verdict == terrain_editor.Stale || target == ErrSeqAhead && e.Verdict == terrain_editor.Ahead
+}
 
 // loadWorkers 是启动时并行 LoadBase 的 goroutine 数。实测 1w 地图装满一个格（2304 块）单线程约 120ms、8 路约 29ms
 // （gameplay/terrain 证据目录）；不做成配置。
@@ -78,11 +106,17 @@ type Chunks interface {
 	GetOrCreate(ctx context.Context, uniqueID int64) (*terrain_chunk.TerrainChunk, bool, error)
 }
 
-// Editor 是改块事务的 Sender（生成的 syncsender.TerrainEditSender：handler 文件 game/handler/terrain_edit.go 里的三个 handler）。
+// Editors 是玩家编辑账本的 lifecycle（生成的 *lifecycle.TerrainEditorLifecycle）。
+type Editors interface {
+	GetOrCreate(ctx context.Context, uniqueID int64) (*terrain_editor.TerrainEditor, bool, error)
+}
+
+// Editor 是改块事务的 Sender（生成的 syncsender.TerrainEditSender：handler 文件 game/handler/terrain_edit.go 里的四个 handler）。
 type Editor interface {
 	Sync_TerrainEdit(ctx context.Context, id int64, edits []terrain_chunk.PointEdit) (int64, error)
-	MultiGroupSync_TerrainBrush(ctx context.Context, targets []int64, editID uint64, brush terrain.Brush) (terrain_chunk.BrushResult, error)
+	MultiGroupSync_TerrainBrush(ctx context.Context, targets []int64, editor int64, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error)
 	Sync_TerrainDiscard(ctx context.Context, id int64, staleRevision int64, currentRevision int64) (bool, error)
+	Sync_TerrainEditSeq(ctx context.Context, editor int64) (int64, error)
 }
 
 // Policy 是玩家编辑的上限（方案 §4 / §8.1 初值）。不做成配置：它们与客户端的笔刷 UI 一起定，改了要让客户端知道；
@@ -104,7 +138,7 @@ type Policy struct {
 	// 见方案 §17；不是任意人数/分布下的硬带宽上限。0 表示不限（测试与运维入口）。规则见 Brush 的“配额”。
 	EditPointsPerSecond int
 	// MinEditPoints 是每次编辑至少计的点数：20。没改到值的编辑（已到上限再抬高、刷成同一种材质）与重复请求也要开一笔
-	// 事务、记 Applied；不设下限时它们不占配额，一个玩家每秒可以发任意多次。20 约等于一次块更新在线上的固定开销
+	// 事务、记序号；不设下限时它们不占配额，一个玩家每秒可以发任意多次。20 约等于一次块更新在线上的固定开销
 	// （帧头、组件头与包头约 110～144 字节 ÷ 每点约 7.5 字节），稳态平均配额相当于每秒 13.5 次此类请求（初始桶另有突发额度）。
 	MinEditPoints int
 }
@@ -149,16 +183,17 @@ type LoadStats struct {
 
 // Map 是本进程的地形。
 //
-// 锁与所有权：pack、view、meta、region、chunks、editor 在 Open 之后不变；view 自己保证并发（查询无锁）。unloadable
+// 锁与所有权：pack、view、meta、region、chunks、editors、editor 在 Open 之后不变；view 自己保证并发（查询无锁）。unloadable
 // 由 mu 保护：Load 里写（启动阶段，发布之前），之后只有邻格的副本（ApplyReplica，P3）把 Ghost 带里的块从中移出。
 // Map 拥有 pack：Close 关闭它。
 type Map struct {
-	pack   *terrain.Pack
-	view   *terrain.View
-	meta   terrain.Meta
-	region Region
-	chunks Chunks
-	editor Editor
+	pack    *terrain.Pack
+	view    *terrain.View
+	meta    terrain.Meta
+	region  Region
+	chunks  Chunks
+	editors Editors
+	editor  Editor
 
 	mu sync.Mutex
 	// unloadable 是装不进视图的块及原因（基于旧原始地形的记录、损坏的记录或原始块）。不自动丢弃或改写数据库里的
@@ -178,9 +213,9 @@ type Map struct {
 }
 
 // Open 打开原始地形包、建空视图。region 由 regionOf 按包的地图参数算出（调用方据此把分区格裁到地图里）。
-func Open(path string, regionOf func(terrain.Meta) (Region, error), chunks Chunks, editor Editor) (*Map, error) {
-	if regionOf == nil || chunks == nil || editor == nil {
-		return nil, errors.New("terrain: region, chunk lifecycle and edit sender are required")
+func Open(path string, regionOf func(terrain.Meta) (Region, error), chunks Chunks, editors Editors, editor Editor) (*Map, error) {
+	if regionOf == nil || chunks == nil || editors == nil || editor == nil {
+		return nil, errors.New("terrain: region, chunk and editor lifecycles and edit sender are required")
 	}
 	pack, err := terrain.OpenPack(path)
 	if err != nil {
@@ -197,7 +232,7 @@ func Open(path string, regionOf func(terrain.Meta) (Region, error), chunks Chunk
 	}
 	return &Map{
 		pack: pack, view: terrain.NewView(pack), meta: meta, region: region,
-		chunks: chunks, editor: editor, unloadable: map[terrain.ChunkKey]error{},
+		chunks: chunks, editors: editors, editor: editor, unloadable: map[terrain.ChunkKey]error{},
 		policy: DefaultPolicy, quota: pointQuota{now: time.Now},
 	}, nil
 }
@@ -712,34 +747,30 @@ func (m *Map) discard(ctx context.Context, key terrain.ChunkKey, staleRevision i
 	return nil
 }
 
-// EditID 是玩家请求的编辑 ID：玩家 ID 与客户端请求 ID（同一玩家内唯一、非 0）混合成的 63 位值，记进 Applied 判重。
-// 不同玩家的同一个请求 ID 得到不同的编辑 ID；两个不同请求撞上同一编辑 ID 的概率在每块 32 个的环里可以忽略
-// （splitmix64，见 Brush 的说明）。跨格拆分（P5）的子 ID 由同一函数对（玩家, 请求 ID ⊕ 格号）派生。
-//
-// 只取 63 位：DAO 的 []uint64 存成 BSON int64，超过 MaxInt64 的值在提交的持久化准备阶段被拒绝（整笔事务失败）。
-func EditID(playerID int64, requestID uint64) uint64 {
-	return splitmix64(uint64(playerID)^splitmix64(requestID)) &^ (1 << 63)
-}
-
-func splitmix64(x uint64) uint64 {
-	x += 0x9E3779B97F4A7C15
-	x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9
-	x = (x ^ (x >> 27)) * 0x94D049BB133111EB
-	return x ^ (x >> 31)
-}
-
-// Brush 是玩家编辑的入口（协议 TerrainEdit 的端点调用）：校验 → 扣改动点数配额 → 权限 → 覆盖到的块第一次改的先建
-// 实体 → 一笔多块事务。返回本次锁住的每一块提交后的版本；重复的请求（同一玩家、同一请求 ID，在某一块的 Applied 里）
+// Brush 是玩家编辑的入口（协议 TerrainEdit 的端点调用）：校验 → 扣改动点数配额 → 权限 → 玩家的编辑账本与覆盖到的块
+// 第一次用的先建实体 → 一笔多实体事务。返回本次锁住的每一块提交后的版本与账本的 LastSeq；已经应用过的（玩家, 序号）
 // 返回 Duplicate，不再改一次。会等数据库与 WAL：只能在 Nest 业务 worker 之外调用（玩家端点、运维命令、测试）。
+//
+// 编辑身份与判重（T01/T02，方案 D18）：
+//   - 一次编辑的身份是（玩家 ID, 编辑序号 seq），两者原样比较，不混合、不截断。seq 由客户端按玩家单调递增地取：新编辑
+//     用上一次的序号 + 1（跳号可以），结果未知（超时、断线）时用同一个 seq 重发。客户端不知道上一次用到哪里时（会话开始、
+//     重装、换设备）先用 LastSeq 查询，从 LastSeq + 1 开始。
+//   - 判重在玩家的编辑账本（game/entities/terrain_editor）里、与改块同一笔事务：账本记已应用的最大序号 LastSeq 与它
+//     下面 64 个序号的应用位图。seq > LastSeq 是新编辑；[LastSeq−64, LastSeq] 里应用过的答 Duplicate、没应用过的照常
+//     执行（乱序到达）；更小的答 ErrStale（已无法确定当时是否应用过，宁可不做）；比 LastSeq 大出
+//     terrain_editor.MaxSeqAhead 以上答 ErrSeqAhead。后两者是 *SeqError，带 LastSeq。
+//   - 同一（玩家, 序号）至多执行一次，不依赖窗口外的记录还在：窗口只决定答 Duplicate 还是 ErrStale，不会让旧请求再执行。
+//     账本持久、重启后原样读回；事务回滚时序号一起撤销（同一序号重试会执行）；拒绝的请求不记序号。
 //
 // 拒绝（全部在写任何东西之前，拒绝时零写入）：
 //   - ErrDisabled：本进程没有地形；
-//   - ErrBrush：请求 ID 为 0、笔刷参数不合法（terrain.ErrInvalidBrush）、中心在地图外（terrain.ErrOutOfMap）、超出
-//     Policy（半径、增量、块数）；
+//   - ErrBrush：玩家 ID 或序号不在范围内（序号 1～MaxInt64）、笔刷参数不合法（terrain.ErrInvalidBrush）、中心在地图外
+//     （terrain.ErrOutOfMap）、超出 Policy（半径、增量、块数）；
 //   - ErrNotOwned / ErrUnloadable：覆盖到的块不归本进程写（P2 单格；跨格转发是 P3）或装不进来；
 //   - ErrRateLimited：改动点数配额不够（见下）；
 //   - ErrDenied：Rules.AllowEdit 拒绝；
-//   - ErrOccupied：改到建筑占位（事务里判断，整笔回滚）。
+//   - ErrOccupied：改到建筑占位（事务里判断，整笔回滚）；
+//   - ErrStale / ErrSeqAhead：序号在账本窗口之外（事务里判断，整笔回滚）。
 //
 // 配额（Policy.EditPointsPerSecond，维护者 2026-11-08 取代“每秒 2 次”；0 表示不限）：
 //   - 点数：参数校验通过后，在视图当前数据上算这次会改变的高度点数 + 材质点数（View.BrushChanges：共享边上的点只算
@@ -748,19 +779,20 @@ func splitmix64(x uint64) uint64 {
 //   - 扣：桶里够这次的点数就扣；桶是满的也放行一次（透支，扣成负数），之后要等补回到满才能再透支、补到够才能做小编辑。
 //     所以单次超过桶上限的编辑（玩家 r=16m 笔刷约 650～800 点、整平 / 地基这类大操作）照样可以做，只是做完要等：长期平均
 //     仍是每秒 EditPointsPerSecond 点，一次最多多出一个编辑的量。不够时整笔拒绝（ErrRateLimited），不部分执行。
-//   - 退：确定什么都没改时退回到 MinEditPoints（重复请求、AllowEdit 拒绝、建实体失败、事务里的地形拒绝如
-//     ErrOccupied）——没有同步下行，只花了一次请求的开销，按最低点数计（重复请求也占配额，但重试一次大编辑不被扣
+//   - 退：确定什么都没改时退回到 MinEditPoints（重复请求、AllowEdit 拒绝、建实体失败、事务里的拒绝如
+//     ErrOccupied / ErrStale / ErrSeqAhead）——没有同步下行，只花了一次请求的开销，按最低点数计（重复请求也占配额，但重试一次大编辑不被扣
 //     两遍）。提交失败、结果未知（WAL 超时等）不退：可能已经生效。
 //   - 拒绝发生在扣之前的（参数、归属、配额本身）不计。
 //
-// 失败语义：GetOrCreate 成功、事务失败时，第一次改的块留下 Version 0 的空实体（P1 同样），装入时按原始块看待。
-// 事务结果未知（WAL 超时等）时调用方用同一请求 ID 重试：已提交则得到 Duplicate，没提交则这次生效；刚做完一次透支的
-// 大编辑时，重试要等配额补满（ErrRateLimited 之后退避再试）。
-func (m *Map) Brush(ctx context.Context, playerID int64, requestID uint64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+// 失败语义：GetOrCreate 成功、事务失败时，第一次改的块留下 Version 0 的空实体（P1 同样），装入时按原始块看待；第一次
+// 编辑的玩家留下 LastSeq 0 的空账本。事务结果未知（WAL 超时等）时调用方用同一序号重试：已提交则得到 Duplicate，没提交
+// 则这次生效（重试须在之后的新编辑把它挤出窗口之前，否则答 ErrStale——不会执行第二次，但也确认不了第一次）；刚做完
+// 一次透支的大编辑时，重试要等配额补满（ErrRateLimited 之后退避再试）。
+func (m *Map) Brush(ctx context.Context, playerID int64, seq uint64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
 	if m == nil {
 		return terrain_chunk.BrushResult{}, ErrDisabled
 	}
-	keys, err := m.checkBrush(playerID, requestID, brush)
+	keys, err := m.checkBrush(playerID, seq, brush)
 	if err != nil {
 		return terrain_chunk.BrushResult{}, err
 	}
@@ -781,6 +813,11 @@ func (m *Map) Brush(ctx context.Context, playerID int64, requestID uint64, brush
 			return terrain_chunk.BrushResult{}, fmt.Errorf("%w: %w", ErrDenied, err)
 		}
 	}
+	ledger, err := m.ledgerFor(ctx, playerID)
+	if err != nil {
+		refund()
+		return terrain_chunk.BrushResult{}, err
+	}
 	ids := make([]int64, 0, len(keys))
 	for _, key := range keys {
 		unique, err := terrain_chunk.UniqueID(key)
@@ -795,7 +832,7 @@ func (m *Map) Brush(ctx context.Context, playerID int64, requestID uint64, brush
 		}
 		ids = append(ids, chunk.ID())
 	}
-	result, err := m.editor.MultiGroupSync_TerrainBrush(ctx, ids, EditID(playerID, requestID), brush)
+	result, err := m.editor.MultiGroupSync_TerrainBrush(ctx, ids, ledger, int64(seq), brush)
 	if err != nil {
 		if refusedBeforeWriting(err) {
 			refund()
@@ -819,14 +856,53 @@ func (m *Map) editPoints(brush terrain.Brush) (int, error) {
 
 // refusedBeforeWriting 报告事务的错误是不是 ApplyBrush 在第一次写之前的拒绝（整笔回滚，确定什么都没改）。
 func refusedBeforeWriting(err error) bool {
-	return errors.Is(err, ErrOccupied) || errors.Is(err, ErrBrush) || errors.Is(err, ErrNotOwned) || errors.Is(err, ErrUnloadable)
+	return errors.Is(err, ErrOccupied) || errors.Is(err, ErrBrush) || errors.Is(err, ErrNotOwned) || errors.Is(err, ErrUnloadable) ||
+		errors.Is(err, ErrStale) || errors.Is(err, ErrSeqAhead)
+}
+
+// ledgerFor 返回玩家编辑账本的实体 ID，第一次用时建出（GetOrCreate：库里有就冷加载）。
+func (m *Map) ledgerFor(ctx context.Context, playerID int64) (int64, error) {
+	unique, err := terrain_editor.UniqueID(playerID)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", ErrBrush, err)
+	}
+	ledger, _, err := m.editors.GetOrCreate(ctx, unique)
+	if err != nil {
+		return 0, fmt.Errorf("terrain: player %d edit ledger: %w", playerID, err)
+	}
+	return ledger.ID(), nil
+}
+
+// LastSeq 是玩家编辑账本已应用的最大序号（0 = 还没有编辑过）：客户端不知道上一次用到哪里时（会话开始、重装、换设备）
+// 先查它，新编辑从 LastSeq + 1 开始（协议 TerrainEdit 的 Seq = 0）。一笔只读的锁内读取；计 MinEditPoints 点配额（与
+// 重复请求同价，防止刷），配额不够答 ErrRateLimited。第一次查询的玩家建出空账本（GetOrCreate）。会等数据库：只能在
+// Nest 业务 worker 之外调用。
+func (m *Map) LastSeq(ctx context.Context, playerID int64) (int64, error) {
+	if m == nil {
+		return 0, ErrDisabled
+	}
+	if rate := m.policy.EditPointsPerSecond; rate > 0 && !m.quota.take(playerID, m.policy.MinEditPoints, rate) {
+		return 0, fmt.Errorf("%w: player %d: asking for the last edit sequence", ErrRateLimited, playerID)
+	}
+	ledger, err := m.ledgerFor(ctx, playerID)
+	if err != nil {
+		return 0, err
+	}
+	last, err := m.editor.Sync_TerrainEditSeq(ctx, ledger)
+	if err != nil {
+		return 0, fmt.Errorf("terrain: player %d edit ledger: %w", playerID, err)
+	}
+	return last, nil
 }
 
 // checkBrush 是事务之前的校验（只读内存），返回覆盖到的块。
-func (m *Map) checkBrush(playerID int64, requestID uint64, brush terrain.Brush) ([]terrain.ChunkKey, error) {
+func (m *Map) checkBrush(playerID int64, seq uint64, brush terrain.Brush) ([]terrain.ChunkKey, error) {
 	p := m.policy
-	if requestID == 0 || playerID == 0 {
-		return nil, fmt.Errorf("%w: player %d request %d: both must be non-zero", ErrBrush, playerID, requestID)
+	if seq == 0 || seq > math.MaxInt64 {
+		return nil, fmt.Errorf("%w: player %d edit sequence %d outside 1..%d", ErrBrush, playerID, seq, int64(math.MaxInt64))
+	}
+	if _, err := terrain_editor.UniqueID(playerID); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBrush, err)
 	}
 	if err := brush.Validate(m.meta, p.Limits); err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrBrush, err)
@@ -855,18 +931,21 @@ func (m *Map) checkBrush(playerID int64, requestID uint64, brush terrain.Brush) 
 	return keys, nil
 }
 
-// ApplyBrush 是 handler TerrainBrush 的业务：在目标组（笔刷覆盖到的块，Nest 已按 ID 排序全部锁住）的 rollback=undo
-// 事务里运行，只读内存、整数运算，可以在 short 池里执行（r=16m 四块约十几微秒，见方案 P2 实施结果）。
+// ApplyBrush 是 handler TerrainBrush 的业务：在目标组（笔刷覆盖到的块）与玩家编辑账本一起锁住（Nest 已排序全部取锁）
+// 的 rollback=undo 事务里运行，只读内存、整数运算，可以在 short 池里执行（r=16m 四块约十几微秒，见方案 P2 实施结果）。
 //
-//  1. 判重：任何一块的 Applied 里有 editID → Duplicate，什么都不写。一次编辑的 ID 同一事务写进它锁住的每一块，
-//     所以要么都有、要么都没有（除非某块之后又被改了 32 次以上、ID 被挤出环）。
+//  1. 判重：账本对 seq 答 Duplicate → 返回 Duplicate，什么都不写；答 Stale / Ahead → *SeqError（整笔回滚，什么都不写）。
 //  2. 校验：每块归本进程写、可用；目标组正是笔刷覆盖到的块（防止调用方给错目标）。
 //  3. 在锁内从当前数据算笔刷（Version 0 的块用视图里的原始块），建筑占位钩子查每个改动点。
-//  4. 写：有改动的块 SurfaceComponent.Apply（整字段守卫、Version + 1），每块 RecordApplied(editID)（没改动的块也记，
-//     重放才认得出），提交后逐块装视图并通知同步（afterCommit）。
+//  4. 写：有改动的块 SurfaceComponent.Apply（整字段守卫、Version + 1），账本 Record(seq)（没有一块改到值也记：这次
+//     编辑已经“执行过”，重放应答 Duplicate），提交后逐块装视图并通知同步（afterCommit）。
 //
-// 1～3 的拒绝在第一次写之前；4 之后不会失败。事务回滚（提交被拒）时 DAO 由 setter 的逆操作还原，提交后回调不执行。
-func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editID uint64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+// 1～3 的拒绝在第一次写之前；4 之后不会失败。事务回滚（提交被拒）时块与账本都由 setter 的逆操作还原，提交后回调不执行。
+func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+	if seq < 1 {
+		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: edit sequence %d", ErrBrush, seq)
+	}
+	ledger := editor.LedgerComp()
 	surfaces := make([]*terrain_chunk.SurfaceComponent, len(targets))
 	for i, target := range targets {
 		surfaces[i] = target.SurfaceComp()
@@ -882,10 +961,11 @@ func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editID uint64, 
 		}
 		return out
 	}
-	for _, surface := range surfaces {
-		if surface.WasApplied(editID) {
-			return terrain_chunk.BrushResult{Duplicate: true, Chunks: versions()}, nil
-		}
+	switch verdict := ledger.Check(seq); verdict {
+	case terrain_editor.Duplicate:
+		return terrain_chunk.BrushResult{Duplicate: true, Chunks: versions(), LastSeq: ledger.LastSeq()}, nil
+	case terrain_editor.Stale, terrain_editor.Ahead:
+		return terrain_chunk.BrushResult{}, &SeqError{PlayerID: ledger.Owner().PlayerID(), Seq: seq, LastSeq: ledger.LastSeq(), Verdict: verdict}
 	}
 	want := brush.Chunks(m.meta)
 	if len(want) != len(surfaces) {
@@ -939,9 +1019,9 @@ func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editID uint64, 
 			}
 			m.afterCommit(surface.Owner())
 		}
-		surface.RecordApplied(editID)
 	}
-	return terrain_chunk.BrushResult{Chunks: versions()}, nil
+	ledger.Record(seq)
+	return terrain_chunk.BrushResult{Chunks: versions(), LastSeq: ledger.LastSeq()}, nil
 }
 
 // pointQuota 是每个玩家的改动点数令牌桶：每秒补 rate 个、最多攒 rate 个，满桶时可以透支一次（见 Brush 的“配额”）。

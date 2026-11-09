@@ -9,22 +9,24 @@ package protocoldef
 
 // TerrainEditRequest 是一次笔刷。坐标是世界坐标（厘米），高度是原始值（1 = 10cm）。
 //
-//   - RequestID：客户端为这次编辑取的 ID，同一玩家内唯一、非 0。结果未知（超时、断线）时用同一个 ID 重发：已经生效
-//     的答 Duplicate，不会再改一次。
+//   - Seq：这次编辑的序号，与玩家 ID 一起是编辑的身份（T01/T02，可编辑地形方案 D18）。客户端按玩家单调递增地取：
+//     新编辑用上一次的序号 + 1（跳号可以），取值 1～2^63−1；结果未知（超时、断线）时用同一个 Seq 重发：已经生效的答
+//     Duplicate，不会再改一次。客户端不知道上一次用到哪里时（会话开始、重装、换设备）先发 Seq = 0 的查询（其余字段
+//     不看、什么都不改），按答复的 LastSeq 从 LastSeq + 1 开始。
 //   - Op：1 抬高、2 降低、3 整平、4 改材质。
 //   - X、Y：中心；Radius：半径，1 ～ 1600（16m）。
 //   - Falloff：0 常数、1 线性、2 平滑（改材质不看它）。
 //   - Strength：抬高 / 降低在中心处的增量，1 ～ 50（5m）。Target：整平的目标高度，0 ～ 16383。Material：改材质的编号，0 ～ 255。
 type TerrainEditRequest struct {
-	RequestID uint64 `pb:"1"`
-	Op        int32  `pb:"2"`
-	X         int64  `pb:"3"`
-	Y         int64  `pb:"4"`
-	Radius    int64  `pb:"5"`
-	Falloff   int32  `pb:"6"`
-	Strength  int32  `pb:"7"`
-	Target    int32  `pb:"8"`
-	Material  int32  `pb:"9"`
+	Seq      uint64 `pb:"1"`
+	Op       int32  `pb:"2"`
+	X        int64  `pb:"3"`
+	Y        int64  `pb:"4"`
+	Radius   int64  `pb:"5"`
+	Falloff  int32  `pb:"6"`
+	Strength int32  `pb:"7"`
+	Target   int32  `pb:"8"`
+	Material int32  `pb:"9"`
 }
 
 // TerrainChunkVersion 是一块（块坐标）在这次编辑之后的版本；0 表示仍是原始块。
@@ -34,15 +36,18 @@ type TerrainChunkVersion struct {
 	Version int64 `pb:"3"`
 }
 
-// TerrainEditResponse 答复一次编辑：Code 0 时 Chunks 是笔刷覆盖到的每一块提交后的版本，Duplicate 表示这个 RequestID
-// 已经生效过、这次什么都没改。拒绝时什么都没写。Codes: terrain_disabled, terrain_brush（参数不合法或超出上限）,
-// terrain_not_owned（这块地归别的格进程写）, terrain_unavailable（这块暂时不能改）, terrain_rate（改动点数配额用完：每人每秒 300 点）,
-// terrain_denied（领地 / 权限）, terrain_occupied（有建筑）。
+// TerrainEditResponse 答复一次编辑：Code 0 时 Chunks 是笔刷覆盖到的每一块提交后的版本，Duplicate 表示这个 Seq 已经
+// 生效过、这次什么都没改。LastSeq 是服务端此刻已应用的最大序号，在 Code 0（含 Seq = 0 的查询）与 terrain_seq 时给出。
+// 拒绝时什么都没写。Codes: terrain_disabled, terrain_brush（参数不合法或超出上限）, terrain_not_owned（这块地归别的格进程写）,
+// terrain_unavailable（这块暂时不能改）, terrain_rate（改动点数配额用完：每人每秒 270 点）, terrain_denied（领地 / 权限）,
+// terrain_occupied（有建筑）, terrain_seq（Seq 不在服务端的窗口里：Seq ≤ LastSeq 表示太旧——已无法确认当时是否生效，
+// 这次没做，也不要换新号重发同一笔；Seq > LastSeq 表示跳得太远——这次没做，从 LastSeq + 1 续号再发）。
 type TerrainEditResponse struct {
 	Code      int32                 `pb:"1"`
 	Reason    string                `pb:"2"`
 	Duplicate bool                  `pb:"3"`
 	Chunks    []TerrainChunkVersion `pb:"4"`
+	LastSeq   int64                 `pb:"5"`
 }
 
 //roost:protocol group=game handler=player

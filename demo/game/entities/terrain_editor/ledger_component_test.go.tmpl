@@ -1,0 +1,177 @@
+package terrain_editor
+
+import (
+	"context"
+	"errors"
+	"math"
+	"math/rand/v2"
+	"testing"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 账本的判定规则（SeqWindow）与它在 DAO 上的读写（LedgerComponent）。
+
+// 与参考模型逐步对照：参考模型记住全部已应用的序号（无界集合）。随机生成的请求流（顺序、乱序、重放、远古重放、
+// 大跳跃）里，账本每一步的结论都必须与它相容：
+//   - 已应用过的序号绝不答 Fresh（同一序号至多执行一次，不论窗口外的记录是否还在）；
+//   - 答 Duplicate 的确实应用过；
+//   - 窗口内（Last−64 ≤ s ≤ Last）没应用过的序号答 Fresh（乱序请求照常执行），窗口外更小的答 Stale，
+//     大出 MaxSeqAhead 的答 Ahead。
+func TestSeqWindowAgreesWithTheUnboundedModel(t *testing.T) {
+	rng := rand.New(rand.NewPCG(20261109, 1))
+	for round := range 200 {
+		var w SeqWindow
+		applied := map[int64]bool{}
+		var last int64
+		for step := range 2000 {
+			var seq int64
+			switch r := rng.IntN(100); {
+			case r < 40 || last == 0:
+				seq = last + 1 + rng.Int64N(3) // 顺序、偶尔跳号
+			case r < 70:
+				seq = max(1, last-rng.Int64N(WindowSize+2)) // 窗口附近：乱序与重放
+			case r < 85:
+				seq = 1 + rng.Int64N(last) // 任意旧序号
+			case r < 95:
+				seq = last + 1 + rng.Int64N(200) // 跳过一段
+			default:
+				seq = last + MaxSeqAhead + rng.Int64N(3) // 边界与越界
+			}
+			got := w.Check(seq)
+			var want Verdict
+			switch {
+			case seq-last > MaxSeqAhead:
+				want = Ahead
+			case applied[seq]:
+				want = Duplicate
+			case seq > last || last-seq <= WindowSize:
+				want = Fresh
+			default:
+				want = Stale
+			}
+			// 窗口外、确实应用过的序号答 Stale 也正确（不执行）；其余必须与模型一致。
+			if got != want && !(want == Duplicate && got == Stale && last-seq > WindowSize) {
+				t.Fatalf("round %d step %d: seq %d with last %d (bits %064b): %v, want %v", round, step, seq, w.Last, w.Bits, got, want)
+			}
+			if got == Fresh {
+				if applied[seq] {
+					t.Fatalf("round %d step %d: seq %d answered fresh a second time", round, step, seq)
+				}
+				applied[seq] = true
+				last = max(last, seq)
+				w = w.Record(seq)
+				if w.Last != last {
+					t.Fatalf("round %d step %d: last %d, want %d", round, step, w.Last, last)
+				}
+			}
+		}
+	}
+}
+
+// 边界逐个钉住：窗口两端、第 63 位、整窗移出、从 0 起步、MaxInt64。
+func TestSeqWindowEdges(t *testing.T) {
+	var w SeqWindow
+	if w.Check(1) != Fresh || w.Check(MaxSeqAhead) != Fresh || w.Check(MaxSeqAhead+1) != Ahead {
+		t.Fatal("an empty ledger: 1 and MaxSeqAhead are fresh, MaxSeqAhead+1 is ahead")
+	}
+	w = w.Record(1)
+	if w != (SeqWindow{Last: 1}) {
+		t.Fatalf("after 1: %+v (no bit for a sequence 0 that never existed)", w)
+	}
+	w = w.Record(100) // 1 落在第 98 位，超出 64 位：整窗移出
+	if w != (SeqWindow{Last: 100}) {
+		t.Fatalf("after 1, 100: %+v", w)
+	}
+	// 100 − 1 = 99 > 64：1 已移出窗口，按过期处理；36 在窗口内、没应用过。
+	if w.Check(1) != Stale || w.Check(35) != Stale || w.Check(36) != Fresh || w.Check(99) != Fresh || w.Check(100) != Duplicate {
+		t.Fatalf("after 1, 100: 1 %v, 35 %v, 36 %v, 99 %v, 100 %v", w.Check(1), w.Check(35), w.Check(36), w.Check(99), w.Check(100))
+	}
+	w = w.Record(36) // 第 63 位
+	if w.Bits != 1<<63 || w.Check(36) != Duplicate {
+		t.Fatalf("after 36: %+v, 36 %v", w, w.Check(36))
+	}
+	w = w.Record(101) // 36 移出
+	if w.Check(36) != Stale || w.Check(100) != Duplicate || w.Bits != 1 {
+		t.Fatalf("after 101: %+v", w)
+	}
+	w = w.Record(math.MaxInt64 - 1) // 测试里直接构造（真实请求受 MaxSeqAhead 限制）
+	w = w.Record(math.MaxInt64)
+	if w.Check(math.MaxInt64) != Duplicate || w.Check(math.MaxInt64-1) != Duplicate || w.Check(math.MaxInt64-2) != Fresh || w.Check(101) != Stale {
+		t.Fatalf("at MaxInt64: %+v", w)
+	}
+}
+
+type nullCommitter struct{}
+
+func (nullCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
+
+func newTestEditor(t *testing.T, playerID int64) *TerrainEditor {
+	t.Helper()
+	RegisterEntity()
+	unique, err := UniqueID(playerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := NewTerrainEditor(&entity.EntityCreateParam{IsCreate: true, UniqueID: unique, Kind: EntityKindTerrainEditor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// in 在一笔独立事务（rollback=undo）里跑 f；f 返回错误时事务回滚。
+func in(e *TerrainEditor, f func(*LedgerComponent) error) error {
+	_, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "terrain_editor_ledger", func() (any, error) {
+		return nil, f(e.LedgerComp())
+	})
+	return err
+}
+
+// 账本在 DAO 上：第 63 位置位（int64 为负）也原样持久、原样读回；回滚的事务撤销 Record。
+func TestLedgerPersistsAllSixtyFourBitsAndRollsBack(t *testing.T) {
+	e := newTestEditor(t, 4242)
+	if e.PlayerID() != 4242 {
+		t.Fatalf("player id %d", e.PlayerID())
+	}
+	for _, seq := range []int64{1, 65, 2} {
+		if err := in(e, func(l *LedgerComponent) error {
+			if v := l.Check(seq); v != Fresh {
+				t.Fatalf("seq %d: %v", seq, v)
+			}
+			l.Record(seq)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := SeqWindow{Last: 65, Bits: 1<<63 | 1<<62}
+	if got := e.LedgerComp().Window(); got != want {
+		t.Fatalf("window %+v, want %+v", got, want)
+	}
+	if e.Dao().GetWindow() >= 0 {
+		t.Fatalf("bit 63 is set, the stored int64 should be negative: %d", e.Dao().GetWindow())
+	}
+	restored := db.NewTerrainEditorDao()
+	restored.SetId(e.ID())
+	if err := restored.RestorePersisted(e.Dao().Marshal(), db.TerrainEditorDaoSchemaVersion, 1); err != nil {
+		t.Fatal(err)
+	}
+	if restored.GetLastSeq() != 65 || uint64(restored.GetWindow()) != want.Bits {
+		t.Fatalf("restored last %d window %064b", restored.GetLastSeq(), uint64(restored.GetWindow()))
+	}
+	rollback := errors.New("a later step of the transaction failed")
+	if err := in(e, func(l *LedgerComponent) error { l.Record(66); return rollback }); !errors.Is(err, rollback) {
+		t.Fatalf("rolled-back record: %v", err)
+	}
+	if got := e.LedgerComp().Window(); got != want || e.LedgerComp().Check(66) != Fresh {
+		t.Fatalf("after a rolled-back record: %+v, 66 %v", got, e.LedgerComp().Check(66))
+	}
+	for _, bad := range []int64{0, -1, int64(entity.UniqueIDMask) + 1} {
+		if _, err := UniqueID(bad); err == nil {
+			t.Fatalf("player %d: an editor id for an invalid player", bad)
+		}
+	}
+}

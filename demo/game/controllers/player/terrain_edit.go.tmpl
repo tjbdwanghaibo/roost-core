@@ -14,9 +14,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
-// HandleTerrainEdit 是玩家的一次笔刷编辑（可编辑地形 P2，单格）。校验、频率、领地钩子、建块与一笔多块事务都在
+// HandleTerrainEdit 是玩家的一次笔刷编辑（可编辑地形 P2，单格）。校验、频率、领地钩子、建块与一笔多实体事务都在
 // terrainmap.Map.Brush 里（这里只把线上的整数换成笔刷参数、把拒绝换成业务码）；它会等数据库与 WAL，端点本来就在
-// Nest 业务 worker 之外。改动经同步流下发（改过的块是 terrain 命名空间的同步对象），答复只带各块的新版本。
+// Nest 业务 worker 之外。改动经同步流下发（改过的块是 terrain 命名空间的同步对象），答复只带各块的新版本与 LastSeq。
+// Seq = 0 是查询：只答 LastSeq（Map.LastSeq），不看其余字段、不编辑。
 func (controller *Controller) HandleTerrainEdit(context *playeraccess.Context, request *pb.TerrainEditRequest) (*pb.TerrainEditResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("terrain_edit endpoint: context and request are required")
@@ -26,24 +27,41 @@ func (controller *Controller) HandleTerrainEdit(context *playeraccess.Context, r
 		code, reason := errcode.ClientError(apperrors.ErrTerrainDisabled)
 		return &pb.TerrainEditResponse{Code: code, Reason: reason}, nil
 	}
+	if request.Seq == 0 {
+		last, err := m.LastSeq(context.Context(), context.PlayerID)
+		if err != nil {
+			return terrainRefusal(context, request, err), nil
+		}
+		return &pb.TerrainEditResponse{LastSeq: last}, nil
+	}
 	brush, ok := brushOf(request)
 	if !ok {
 		code, reason := errcode.ClientError(apperrors.ErrTerrainBrush)
 		return &pb.TerrainEditResponse{Code: code, Reason: reason}, nil
 	}
-	result, err := m.Brush(context.Context(), context.PlayerID, request.RequestID, brush)
+	result, err := m.Brush(context.Context(), context.PlayerID, request.Seq, brush)
 	if err != nil {
-		code, reason := errcode.ClientError(terrainError(err))
-		if code == errcode.CodeInternal {
-			slog.Error("terrain_edit failed", "player_id", context.PlayerID, "request_id", request.RequestID, "err", err)
-		}
-		return &pb.TerrainEditResponse{Code: code, Reason: reason}, nil
+		return terrainRefusal(context, request, err), nil
 	}
-	response := &pb.TerrainEditResponse{Duplicate: result.Duplicate}
+	response := &pb.TerrainEditResponse{Duplicate: result.Duplicate, LastSeq: result.LastSeq}
 	for _, chunk := range result.Chunks {
 		response.Chunks = append(response.Chunks, pb.TerrainChunkVersion{ChunkX: chunk.Key.X, ChunkY: chunk.Key.Y, Version: chunk.Version})
 	}
 	return response, nil
+}
+
+// terrainRefusal 是一次拒绝的答复：业务码（基础设施错误答 internal 并记日志）；序号不在窗口里时带上 LastSeq。
+func terrainRefusal(context *playeraccess.Context, request *pb.TerrainEditRequest, err error) *pb.TerrainEditResponse {
+	code, reason := errcode.ClientError(terrainError(err))
+	if code == errcode.CodeInternal {
+		slog.Error("terrain_edit failed", "player_id", context.PlayerID, "seq", request.Seq, "err", err)
+	}
+	response := &pb.TerrainEditResponse{Code: code, Reason: reason}
+	var seqErr *terrainmap.SeqError
+	if errors.As(err, &seqErr) {
+		response.LastSeq = seqErr.LastSeq
+	}
+	return response
 }
 
 // brushOf 把线上的整数换成笔刷参数；越出字段类型范围的值不合法（不截断：截断会把一个非法请求变成另一个合法请求）。
@@ -77,6 +95,8 @@ func terrainError(err error) error {
 		return apperrors.ErrTerrainDenied
 	case errors.Is(err, terrainmap.ErrOccupied):
 		return apperrors.ErrTerrainOccupied
+	case errors.Is(err, terrainmap.ErrStale), errors.Is(err, terrainmap.ErrSeqAhead):
+		return apperrors.ErrTerrainSeq
 	}
 	return err
 }

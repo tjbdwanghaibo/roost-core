@@ -1,0 +1,42 @@
+=== RUN   TestStopFoundingSendsNewAlliancesToTheOtherInstances
+--- PASS: TestStopFoundingSendsNewAlliancesToTheOtherInstances (0.05s)
+ok  	example.com/planet/internal/service/alliance	1.707s
+=== RUN   TestPurchaseDeliveryDurableWinner
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/lost_reply_restart
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/changed_catalog
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/retired_product
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/concurrent_winner
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/concurrent_retries
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/read_unknown
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/unknown_product_absent
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/preserve_order
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/preserve_player
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/preserve_product
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/preserve_paid_at
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/preserve_empty
+=== RUN   TestPurchaseDeliveryDurableWinner/standalone/preserve_malformed
+=== RUN   TestPurchaseDeliveryDurableWinner/cluster
+--- PASS: TestPurchaseDeliveryDurableWinner (0.01s)
+ok  	example.com/planet/internal/service/platform	1.544s
+=== RUN   TestActivityBoardKeepsTheLatestCumulativeScore
+--- PASS: TestActivityBoardKeepsTheLatestCumulativeScore (0.00s)
+ok  	example.com/planet/internal/service/game	1.778s
+=== RUN   TestDungeonClearsBoardCountsEachRunOnceRealRedis
+--- PASS: TestDungeonClearsBoardCountsEachRunOnceRealRedis (0.03s)
+ok  	example.com/planet/game/controllers/player	1.757s
+=== RUN   TestPlayerMigrationRealMongo
+--- PASS: TestPlayerMigrationRealMongo (0.31s)
+ok  	example.com/planet/db/migrations	1.928s
+=== RUN   TestTerrainRestartRealMongo
+--- PASS: TestTerrainRestartRealMongo (0.92s)
+=== RUN   TestTerrainEditLedgerRealMongo
+--- PASS: TestTerrainEditLedgerRealMongo (1.14s)
+ok  	example.com/planet/internal/service/game	3.656s
+=== RUN   TestGateGeneratedBusinessConsumer
+--- PASS: TestGateGeneratedBusinessConsumer (43.89s)
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	44.515s
+=== RUN   TestGeneratedSagaNativeStepsAndEffectConsumer
+--- PASS: TestGeneratedSagaNativeStepsAndEffectConsumer (20.40s)
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	20.787s
+exit=0

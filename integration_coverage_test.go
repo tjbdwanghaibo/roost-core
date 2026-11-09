@@ -538,7 +538,7 @@ var generatedRealDependencyEntries = []struct {
 	{"demo/internal/service/game/activity_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestActivityBoardKeepsTheLatestCumulativeScore$"},
 	{"demo/game/controllers/player/finish_dungeon_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestDungeonClearsBoardCountsEachRunOnceRealRedis$"},
 	{"demo/db/migrations/player_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestPlayerMigrationRealMongo$"},
-	{"demo/internal/service/game/terrain_test.go.tmpl", "scripts/test-demo-generated.sh", "^TestTerrainRestartRealMongo$"},
+	{"demo/internal/service/game/terrain_test.go.tmpl", "scripts/test-demo-generated.sh", "^(TestTerrainRestartRealMongo|TestTerrainEditLedgerRealMongo)$"},
 	{"codegen/internal/roost", "scripts/test-demo-generated.sh", "^TestGateGeneratedBusinessConsumer$"},
 	{"codegen/internal/roost", "scripts/test-demo-generated.sh", "^TestGeneratedSagaNativeStepsAndEffectConsumer$"},
 	{"codegen/internal/dao/testdata/runtime", "codegen/scripts/dao-golden-runtime.sh", "^Test"},
