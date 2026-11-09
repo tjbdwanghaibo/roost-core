@@ -1,0 +1,6 @@
+$ GOWORK=off go test -count=1 ./codegen/internal/roost/
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	440.312s
+$ GOWORK=off go test -count=1 .
+ok  	github.com/tjbdwanghaibo/roost-core	16.274s
+$ python3 scripts/check-doc-anchors.py
+checked 251 files, 0 broken

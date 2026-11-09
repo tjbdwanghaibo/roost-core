@@ -1,0 +1,4 @@
+$ GOWORK=off go test -race -count=1 ./gameplay/terrain ./gameplay/movement
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	4.174s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/movement	32.832s
+exit=0

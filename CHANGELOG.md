@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- 可编辑地形 P3 移动与寻路（单格）：`gameplay/terrain` 新增 `Walker` / `WalkRules`（1m 节点间坡度 45°、台阶 50 厘米、陡降 3 米、涉水 50 厘米、游泳 60% 且站在水面；地图外、块未装入、占位钩子不可进入）与高度场八方向加权 A*（距离 + 爬升代价，估价放大 1.5 倍、代价至多比最优多 50%，上限 4096，路线带所经块版本 `Route.Fresh`，不缓存）。`gameplay/movement` 新增可选 `MoveConfig.Surface`：每进一个地面节点判定、游泳减速，返回 nil 时逐位不变。game-demo 普通场景开地形后玩家/怪行走、`PathFind`、瞬移与落点（`scene.Terrain` 新增 `Surface` / `SetSurface` / `Standable`）走高度场；不开地形与分区场景不变。服务端位置不加 Z（`Walker.StandZ` 推出）。新增 1 秒同步窗口内挖前方/挖脚下/抬地的纠偏端到端测试。跨格（cellworld）未接，见[方案 §20](docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#20-p3-移动与寻路实施结果2026-11-09)。
+
 - EntitySync 类型调度修复（2026-11-09 审查）：周期类型在窗口内只为本轮能拿到快照的订阅做即时快照。修前入场后尚未 Ready 的 Hold 会话订阅脏地形块时，每次 Flush（含其他类型的唤醒）都重打包一次全量、推进一次版本，老观察者到期时也被迫改收 Full（`TestTypeScheduleHeldSnapshotDoesNotRepackWhileWaiting`，修前 5 次 Flush 打包 5 次、版本 0→5）。
 
 - game-demo 正式启用混合同步：服务在 Nest 构造前通过新增 `wiring/nest.NestSyncObserverProvider` 提供观察者，Init 后接 Scene；Player/Monster on_change、TerrainChunk 1 秒脏增量。观察者与 EntitySyncSetup/self_sync 或显式选项冲突时拒绝启动。新增真实 TCP 玩家/地形混合、即时新订阅、观察者捕获/唤醒/撤回测试；历史 periodic 测量夹具保留，新模式容量未测。

@@ -1,0 +1,107 @@
+=== M1-slope-boundary
+file: gameplay/terrain/walk.go  old: if d*1000 <= int64(r.MaxSlope)*run {  new: if d*1000 < int64(r.MaxSlope)*run {
+--- FAIL: TestWalkSlopeStepAndDropBoundaries (0.03s)
+    walk_test.go:87: {MaxSlope:1000 MaxStep:50 MaxDrop:300 WadeDepth:50 SwimSpeed:600 UphillCost:2000 DownhillCost:0 SearchWeight:1500} climb(100 over 100) = false, want true
+    walk_test.go:100: Step((10,10) → {9 10}) = false, want true
+--- FAIL: TestWalkWaterWadeSwimAndClimbOut (0.03s)
+    walk_test.go:195: could not climb out onto a bank 1m above the water surface
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	1.624s
+FAIL
+=== M2-no-corner-check
+file: gameplay/terrain/walk.go  old: 	if dx != 0 && dy != 0 {
+		// 不切角  new: 	if false && dx != 0 && dy != 0 {
+		// 不切角
+--- FAIL: TestWalkCornersOccupancyAndBounds (0.04s)
+    walk_test.go:305: a diagonal step cut the corner of a wall
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	1.085s
+FAIL
+=== M3-swim-stands-on-floor
+file: gameplay/terrain/walk.go  old: 		f.stand = w.View.meta.WaterLevel  new: 		f.stand = ground
+--- FAIL: TestWalkWaterWadeSwimAndClimbOut (0.01s)
+    walk_test.go:182: into deep water: speed 0 ok false, want 600 true
+--- FAIL: TestWalkBelowTheBaselineIsTheSameAsAbove (0.03s)
+    walk_test.go:277: below: Step({30 10} → {31 10}) = 0 false, want 1000 true
+    walk_test.go:277: above: Step({30 10} → {31 10}) = 0 false, want 1000 true
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	0.818s
+FAIL
+=== M4-unloaded-chunk-guessed-flat
+file: gameplay/terrain/walk.go  old: 	if c == nil {
+		return footing{}
+	}  new: 	if c == nil {
+		return footing{stand: 0, speed: 1000, known: true, enter: true}
+	}
+--- FAIL: TestWalkAcrossChunksTheMapEdgeAndUnloadedChunks (0.05s)
+    walk_test.go:138: standing in an unloaded chunk is defined
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	1.281s
+FAIL
+=== M5-optimal-search
+file: gameplay/terrain/walk.go  old: SwimSpeed: 600, UphillCost: 2000, SearchWeight: 1500}  new: SwimSpeed: 600, UphillCost: 2000, SearchWeight: 1000}
+--- FAIL: TestFindPathSearchWeightBoundsTheCostAndTheSearch (0.08s)
+    walk_test.go:676: 50m: weighted search expanded 1795 nodes, optimal 1795
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	1.181s
+FAIL
+=== M6-move-ignores-step
+file: gameplay/movement/move.go  old: 				nextSpeed, ok := ground.Step(cell, next)
+				if !ok || nextSpeed <= 0 {  new: 				nextSpeed, ok := ground.Step(cell, next)
+				if false && (!ok || nextSpeed <= 0) {
+--- FAIL: TestMoveToStopsWhereTheSurfaceRefusesAStep (0.00s)
+    move_test.go:191: surface-blocked move: moving 25,0 moving true
+--- FAIL: TestMoveOnATerrainWalkerFollowsTheLatestChunk (0.04s)
+    move_test.go:443: into a 2m wall: moving 450,200, want blocked at 449 (node 4's last point)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/movement	0.598s
+FAIL
+=== M7-move-ignores-swim-speed
+file: gameplay/movement/move.go  old: 		cost := seg * 1000 / float64(speed)  new: 		cost := seg
+--- FAIL: TestSurfaceSpeedScalesTheWalkAndAnUndefinedCellBlocks (0.00s)
+    move_test.go:209: one second in water at 10/s and 500‰: moving 60,0, want 55,0 still moving
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/movement	0.545s
+FAIL
+=== M8-player-move-without-surface
+file: game/entities/player/map_component.go  old: Surface: actor.Surface,   new: 
+--- FAIL: TestTerrainWalkIsHeldBySlopesAndRoutesAroundEdits (2.43s)
+    terrain_move_test.go:341: the straight walk into the wall stopped at {850 450}, want (449, 450): the last point of node 4
+--- FAIL: TestTerrainALakeDugAcrossTheWayIsSwum (3.05s)
+    terrain_move_test.go:408: one second of swimming: at {560 450}, want (536, 450) at 60% of 60/s
+--- FAIL: TestTerrainEditsDuringTheSyncWindowAreCorrected (1.35s)
+    terrain_move_test.go:466: walking into the pit's edge: at {560 500}, want stopped at (549, 500)
+FAIL
+FAIL	example.com/planet/internal/service/game	7.979s
+FAIL
+=== M9-pathfind-ignores-surface
+file: game/scene/runtime/pathfind.go  old: if surface := p.terrain.Surface(); surface != nil {  new: if surface := p.terrain.Surface(); surface != nil && false {
+--- FAIL: TestTerrainWalkIsHeldBySlopesAndRoutesAroundEdits (0.01s)
+    terrain_move_test.go:336: a goal behind a wall across the whole map was routed
+--- FAIL: TestTerrainEditsDuringTheSyncWindowAreCorrected (7.18s)
+    terrain_move_test.go:538: a route out of a 5m pit with sheer walls
+FAIL
+FAIL	example.com/planet/internal/service/game	11.149s
+FAIL
+=== M10-standable-ignores-surface
+file: game/scene/runtime/terrain.go  old: 		return surface.Standable(point)  new: 		return true
+--- FAIL: TestASurfaceRoutesAndPlacesOnTheHeightField (0.01s)
+    runtime_test.go:262: a deep pond without swimming is standable
+FAIL
+FAIL	example.com/planet/game/scene/runtime	0.492s
+FAIL
+=== M11-surface-on-without-terrain
+file: game/scene/runtime/pathfind.go  old: 	if surface := p.terrain.Surface(); surface != nil {
+		return p.pathOn(surface, from, to)
+	}  new: 	if surface := p.terrain.Surface(); surface != nil {
+		return p.pathOn(surface, from, to)
+	}
+	if true {
+		return nil, spatial.ErrNoPath
+	}
+--- FAIL: TestWithoutASurfaceTheMapIsTheFlatGrid (0.00s)
+    runtime_test.go:191: Path({-2 9}, {-2 -1}) = [] spatial: no path, the flat grid says [] spatial: point is outside terrain bounds
+FAIL
+FAIL	example.com/planet/game/scene/runtime	0.501s
+FAIL
+done
