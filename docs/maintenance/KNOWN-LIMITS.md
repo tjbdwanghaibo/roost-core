@@ -4,9 +4,11 @@
 
 TypeSchedules 支持同 Manager 内按 SubjectKind 配置周期脏增量；即时快照独立交付并保留待发变化。代价：脏周期内的即时快照使下一次周期更新回退 Full；仍按 tick 检查 pending 脏集合，提交观察者可能合并唤醒，不宣称消除全部调度成本。game-demo 生产 Scene 已改成 on_change/地形 1 秒；历史功能/测量夹具仍保留原周期构造器，本批未跑新性能验收；原两项去重问题和岸线仍待实施。见 [类型调度契约](../framework/ENTITY_SYNC.md#按实体类型的同步节奏2026-11-09)。
 
-## 2026-11-10：cellworld 按经过时间积分的子步截断（已证实；维护者 2026-11-10 选定按千分位整数累计零头，实施中）
+## 2026-11-10：cellworld 按经过时间积分的子步截断（已证实；维护者 2026-11-10 选定按千分位整数累计零头，实施中；已修复，未发版）
 
 `gameplay/cellworld` `integrate` 每个子步按 `VX*dt/1s` 向零截断。按 `Beat.Elapsed` 积分（`dcd0a0c4`）之后 dt 不再恒为 `Period`，每拍平均少走约 0.5 个单位：400/s 实测 389～391/s（约 2.5%），速度越低比例越大；`VX*Period` 本来就不是整数的低速（如 10/s、50ms 档每拍 0.5）在修改前后都会被截成 0、不动。只影响位置精度，不影响交接几何（冻结点仍在 H + 一步以内）。可选：A. 在角色状态里带一个不足一个单位的余量（DAO 字段，随事务回滚；推荐，精确但加一个字段）；B. 接受并在 cellworld README 写明“速度按整数单位每子步截断”。证据见 [cellworld 整包偶发失败](evidence/cellworld-realclock-flakes-20261110/README.md)。
+
+**已修复（未发版，2026-11-10）**：按 A 实施。每子步位移按千分位整数算，不足 1 单位的零头存在 `ActorState.FracX` / `FracY`（随 DAO 回滚、随交接 Offer 带走，线上格式 v8），位置仍是整数单位；400/s 与 10/s 在不规则拍长下与 速度 × 时间 相差不到 1 单位（`TestIntegrationKeepsTheSubUnitRemainder` 修前红、修后绿）。剩下的边界：每个子步仍在千分位上截断，丢不到 1 千分位（400/s、50ms 档平均约十万分之二点五）；游泳进出速度不同的地面格时缩放剩下的位移，再截断一次千分位。各情形的零头规则见 [cellworld README“位置零头”](../../gameplay/cellworld/README.md)，修复记录见 [证据](evidence/cellworld-subunit-20261110/README.md)、CHANGELOG `[Unreleased]`。
 
 ## 2026-11-09：地形首批参数实施边界
 

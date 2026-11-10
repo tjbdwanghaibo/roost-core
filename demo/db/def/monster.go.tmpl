@@ -68,6 +68,10 @@ type MonsterDao struct {
 	// The entry sequence (cellworld.ActorState.Entry), same name as
 	// SceneActorDao's; a monster never enters, so it stays 0.
 	CellEntry uint64 `dao:"nopersist,nosync" store:"cell_entry"`
+	// The sub-unit position remainder (cellworld.ActorState.FracX / FracY,
+	// thousandths of a unit), same names as SceneActorDao's.
+	CellFracX int32 `dao:"nopersist,nosync" store:"cell_frac_x"`
+	CellFracY int32 `dao:"nopersist,nosync" store:"cell_frac_y"`
 }
 
 // CellHit 是一条已结算伤害的去重记录（cellworld.AppliedHit）。

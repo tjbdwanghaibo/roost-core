@@ -919,7 +919,8 @@ func (n *Node) onOffer(r *Region, a Actor, from int32, o *handoffOffer, now time
 		}
 		created = true
 	}
-	n.install(r, a, ActorState{EntityState: st, Role: RoleReal, LastInput: o.LastInput, Applied: o.Applied, Entry: o.Entry}, now, fx)
+	n.install(r, a, ActorState{EntityState: st, Role: RoleReal, LastInput: o.LastInput, Applied: o.Applied, Entry: o.Entry,
+		FracX: validFrac(o.FracX), FracY: validFrac(o.FracY)}, now, fx)
 	if created {
 		if err := a.StartCell(); err != nil {
 			return fmt.Errorf("cellworld: start %d: %w", st.ID, err)

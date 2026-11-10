@@ -9,7 +9,7 @@
 | 状态 | 放在哪 | 谁推进 |
 | --- | --- | --- |
 | 格的区域表 `Region`：邻格 Ghost、交接 seen、墓碑、跨格伤害待决表、本格记录索引 | 该格的 **Scene 实体**（手写 DAO，写时登记逆操作） | Scene 的 `scene.cell` 心跳（`Node.RegionBeat`）与 Scene 上的 handler |
-| 角色 / NPC 的格内状态 `ActorState`：位置、速度、HP、**战斗面板 `Panel`**、去重表、交接进度、租约、回写时间、入场序号 `Entry` | **SceneActor / Monster 实体**的 DAO（`Actor.SetCellState` 经 DAO setter 写） | 实体自己的 `cell.actor` 心跳（`Node.ActorBeat`）与 handler |
+| 角色 / NPC 的格内状态 `ActorState`：位置、速度、HP、**战斗面板 `Panel`**、去重表、交接进度、租约、回写时间、入场序号 `Entry`、位置零头 `FracX` / `FracY` | **SceneActor / Monster 实体**的 DAO（`Actor.SetCellState` 经 DAO setter 写） | 实体自己的 `cell.actor` 心跳（`Node.ActorBeat`）与 handler |
 | 玩家的路由状态 `BaseState`：owner 格与 epoch、输入 / 攻击序号、快照（HP、位置、版本）、**待发面板与已确认序号**、看门狗、入场序号 `Entry` | **Player 实体**（快照与面板映射到持久字段） | Player 的 Base 心跳（`Node.BaseBeat`：看门狗 + 续租 + 面板重发） |
 | 客户端看到的格内对象 | Base 进程 entitysync Manager 里的 **Sync mirror**（`policy.Mirrors[EntityState]`） | witness 到达时在 Player handler 里 Apply；别的 Base 发来的队员快照在传输回调里 Apply |
 | 队伍成员表的缓存 `Group`（ID、版本、每名成员的 Player / SceneActor / Base sid） | **Player 实体**（game 映射到 DAO；权威在 game，demo 是 Remote 托管的 Team 实体） | game 改成员表的事务（`Node.SetGroup` / `NotifyGroup`）、成员表通知、重读 |
@@ -17,6 +17,21 @@
 **入场与离场（RV-20261106-03，线上格式 v6）**：每次 `Enter` 由 Base 编一个入场序号 `BaseState.Entry`（Enter 时的系统时间 UnixNano，同进程内至少比上一次大 1；不持久，跨 Base 重启的唯一性依赖系统时钟不回拨）。Enter、Leave 与交接 Offer 都带它，SceneActor 存在 `ActorState.Entry`；Real 只接受 Entry 相同的 Leave，上一次入场重复 / 迟到的 Leave 碰到同 ID 重新入场的角色时丢弃（计 `StaleDrops`）。看门狗重进、交接放弃后补回是同一次入场，序号不变；目标格已有 Real 时幂等的 Enter 只把序号往大改（Base 重启后的新入场接管旧 Real）。仍是尽力而为：发给冻结中旧格的 Leave 不处理、离场后才到的旧 Enter 会重建一个无人续租的角色，两者都由租约（`LeaseTimeout`）兜底。
 
 **扩展消息（线上格式 v7，`ext.go`）**：别的模块借本进程 Node 的通道收发自己的消息，不另起连接与主题。收件方在 `NodeConfig.Ext` 里按命名空间（字母、数字、`-`、`_`，至多 64 个字符）登记处理器；发件方调 `Node.SendExt(sid, space, body)`：只非阻塞地排进出站队列（队列满丢弃计 `OutboxDrops` 并返回 false），由出站 goroutine 编码发出，所以可以在 Nest 的提交后回调里调用（那里不能 Dispatch、不做 I/O）。收件在传输回调上、与 Node 自己的消息同一个准入门（`CloseIngress` 之后不再调用处理器），处理器必须快速返回；没有处理器的命名空间计 `ExtDrops`。语义与其余消息相同：至多一次，可能丢失、重复、乱序，可靠性由使用方的协议负责。计数 `ExtOut` / `ExtIn` / `ExtDrops`。v6 及更早的消息按坏消息丢弃（未上线，升级须先停旧进程）。第一个使用方是可编辑地形的边界块副本（`gameplay/terrain` 的 `Replicator`，命名空间 `terrain`；game-demo 接线见 `internal/service/<game>/terrain_partition.go`），在回环与真实 nats-server 上的用例是 `ext_test.go` 的 `TestTerrainReplicaOverNodes`。
+
+**位置零头（线上格式 v8，2026-11-10）**：积分按千分位整数计（维护者 2026-11-10：“截断按照现在的浮点数*1000作为整型数处理”）。每个子步的位移 = 速度 × dt / 1ms 千分位（向零截断，每子步丢不到 1 千分位），加上 `ActorState.FracX` / `FracY` 里留下的零头，整数部分加到位置、余数留作零头，范围 (-1000, 1000)，真实位置 = X + FracX / 1000。位置字段、witness、Ghost 与回写里的位置仍是整数单位。此前每个子步按 `VX·dt/1s` 向零截断：按经过时间积分后 400/s 实测只走约 390/s，每拍不足 1 单位的低速（如 10/s、50ms 一拍）不动。零头在各情形下的规则（`integrate` 注释）：
+
+| 情形 | 零头 |
+| --- | --- |
+| 符号 | 与“零头 + 位移”同号（Go 整除、取余向零截断）；往负方向走时整数位置在真实位置的正侧，走满 1 单位才变 |
+| 世界边缘 | 真实位置出了 [Min, Max−1]（整数越界，或恰在边上而零头指向界外）：停在边上、这条轴零头清零，这条轴速度按原规则（玩家清零、NPC 反向）；另一条轴照旧 |
+| 地面挡住 / 站立格没有定义 | 停在上一个合法整数点，两条轴零头清零 |
+| 游泳等减速 | 位移按速度千分比缩短，零头照常累计（见下文地面钩子“减速”） |
+| 新输入改速度、换档、交接被拒恢复 Real | 不动（零头是位置的一部分） |
+| 交接 | 随 Offer 带到目标格（`handoffOffer.FracX` / `FracY`，v8），目标格接着累加；冻结中不积分、零头不变；线上收到不在 (-1000, 1000) 里的零头当作 0 |
+| 进场（Enter，含放弃后 Base 按最后位置重进）、生成（Spawn） | 从整数位置开始，零头 0；本格已是 Real 的幂等 Enter 不动零头 |
+| 事务回滚 | 与位置一起在 DAO 里还原（game-demo 的 `CellFracX` / `CellFracY`，不持久、不同步） |
+
+v7 及更早的消息按坏消息丢弃（未上线，升级须先停旧进程）。用例：`TestIntegrationKeepsTheSubUnitRemainder`（修前红）、`TestIntegrationLosesLessThanAThousandthPerSubStep`、`TestTheRemainderKeepsItsSignAndSurvivesASpeedChange`、`TestTheRemainderStopsAtTheWorldEdge`、`TestASurfaceBlockClearsTheRemainder`、`TestSwimmingAcrossASpeedChangeKeepsTheRemainder`、`TestHandoffCarriesTheSubUnitRemainder`。
 
 `BaseState` / `ActorState` 的 MsgPack 字段各有独立标签（RV-20261106-04 前 `BaseState` 的 X/Y、VX/VY 共用标签，编码丢 X 与 VX），往返由 `TestStateMsgpackRoundTrip` 逐字段覆盖。
 
@@ -89,12 +104,12 @@ Team 实体，组队协议是分区场景专用的邀请 / 接受 / 离队 / 解
 | 项 | 规则 |
 | --- | --- |
 | 被挡 | 停在上一个整数点；玩家速度清零（与停在世界边缘相同，等 Base 的下一个移动输入）；NPC 两个分量都反向、原路返回（与碰世界边缘反弹相同；地形的挡没有“哪条轴碰了边”）。同一拍剩下的子步照常积分（NPC 往回走）。计 `SurfaceBlocks` |
-| 减速 | 速度千分比 s < 1000（游泳）时路程按 s / 1000 折算：预算是这一步未被世界边缘夹过的位移的 max(\|dx\|, \|dy\|) × 1000，每走一个点花 ⌈10⁶ / s⌉；路程用完停在那里，速度不变。只有走到终点，世界边缘的速度规则才生效 |
+| 减速 | 速度千分比 s < 1000（游泳）时位移按站立格的 s / 1000 缩短（千分位，零头照常累计）；走到速度不同的地面格的第一个整数点时，把剩下的位移（没被世界边缘夹过的真实终点 − 这个点）按新旧速度之比缩放再走——进入新格的那一步按旧格的速度算，与 2026-11-10 之前按路程预算（每点花 ⌈10⁶ / s⌉）的规则相同，但不再按整点丢余数。速度不变；世界边缘的速度规则按缩短后的终点判断（游泳时夹到边缘之前的那段照样按全速的 s / 1000 走） |
 | 没有定义 | 站立的地面格没有定义（块没装入、地图外）时一步不走，按被挡处理；不猜平地 |
 | 跨格 | 交接之前角色可能走出本格（至多 H + 一步），地面要覆盖本格外扩 GhostBand：分区进程的地形视图本来就装着这个范围，邻格写的块是 `terrain.Replicator` 推来的 Ghost 副本（已提交版本，丢失时至多一个续期周期补齐）。交接之后由目标格的 Node 按它自己的地面判定 |
-| nil | `Surface` 为 nil 或返回 nil 时与没有钩子逐位相同（`TestANilSurfaceIntegratesExactlyLikeNoSurface`，随机位置 / 速度 / 拍长，含世界边缘与交接）。返回值不能是带类型的 nil |
+| nil | `Surface` 为 nil 或返回 nil 时与没有钩子、与处处放行且速度 1000 的地面逐位相同，含零头（`TestANilSurfaceIntegratesExactlyLikeNoSurface`，随机位置 / 速度 / 拍长，含世界边缘与交接）。返回值不能是带类型的 nil |
 
-成本（Apple M5，`BenchmarkIntegrateOnSurface`，一个 Period 的一拍）：平地 Walker 上全速玩家（2000 / 秒，一拍 100 个点）约 0.8～1.7µs、慢 NPC（200 / 秒）约 85～155ns，0 分配；没有地面约 15～30ns。每个点问一次 `Cell`（地面格对 cellworld 不透明，不按格边界解析求交）。
+成本（Apple M5，`BenchmarkIntegrateOnSurface`，一个 Period 的一拍）：平地 Walker 上全速玩家（2000 / 秒，一拍 100 个点）约 0.8～1.7µs、慢 NPC（200 / 秒）约 85～155ns，0 分配；没有地面约 15～30ns。2026-11-10 改为千分位累计零头后同机交替对照：没有地面 8～9ns → 约 13ns（多两次常数除法与边缘判断），平地 Walker 上看不出差别（[证据](../../docs/maintenance/evidence/cellworld-subunit-20261110/README.md#基准)）。每个点问一次 `Cell`（地面格对 cellworld 不透明，不按格边界解析求交）。
 
 ## 交接以事务为边界
 
@@ -146,8 +161,8 @@ Cell 进程是普通 roost App：`app.New(...).Singleton(kitredis.SingletonStore
 | --- | --- |
 | `grid_test.go` | 分区映射、边界带、迟滞、版本序 |
 | `world_test.go` | 进程内多“进程”（另有 strict getter 版：不在内存的实体答错误，同 DataEngine）（各自的 EntityManager、Nest 引擎、心跳驱动、Node）：直线、抖动、斜穿四格、跨界攻击、慢交接、丢包；witness 连续与客户端（Base 的 Manager 推出的帧）连续 |
-| `handoff_test.go`、`combat_test.go` | v1 细粒度用例按新模型改写：丢失 / 重复 / 隐式确认 / 超时只删不恢复 / 被拒恢复 / 回复扣住时来回 / 交接链 / Enter 幂等与拒绝 / 墓碑；伤害只结算一次、距离与可见性、去重随交接、结果未知、去重表满；战斗面板（v2.4）：伤害按攻击者面板、上限夹血不回血、命令丢失重发、重复与乱序只应用一次、交接中改投新 owner、结果未知只报一次 |
-| `tier_test.go` | D1：无人时降档、邻格玩家（Ghost）靠近升档、W 边上来回不抖动、慢档 Ghost 不过期、慢档一拍冲过边界仍在边界带内交接并以慢档装入、慢档 NPC 被跨界攻击只结算一次、`advance` 分步积分单元；地面钩子：nil 逐位相同、被挡停在上一个点（玩家停、NPC 折回）、对角只跨相邻格、减速与世界边缘、没有定义的格不走、挡在边界前不交接 |
+| `handoff_test.go`、`combat_test.go` | v1 细粒度用例按新模型改写：丢失 / 重复 / 隐式确认 / 超时只删不恢复 / 被拒恢复 / 回复扣住时来回 / 交接链 / Enter 幂等与拒绝 / 墓碑 / 位置零头随交接带走（v8）；伤害只结算一次、距离与可见性、去重随交接、结果未知、去重表满；战斗面板（v2.4）：伤害按攻击者面板、上限夹血不回血、命令丢失重发、重复与乱序只应用一次、交接中改投新 owner、结果未知只报一次 |
+| `tier_test.go` | D1：无人时降档、邻格玩家（Ghost）靠近升档、W 边上来回不抖动、慢档 Ghost 不过期、慢档一拍冲过边界仍在边界带内交接并以慢档装入、慢档 NPC 被跨界攻击只结算一次、`advance` 分步积分单元；位置零头（千分位累计、符号、速度改变、世界边缘、被挡清零、进出减速格）；地面钩子：nil 逐位相同、被挡停在上一个点（玩家停、NPC 折回）、对角只跨相邻格、减速与世界边缘、没有定义的格不走、挡在边界前不交接 |
 | `group_test.go` | 队伍面板（v2.5）：两个 Base 上彼此不在视野里的队员互相看见位置 / HP、同 Base 队友不经快照、一个周期一份；对方 Base 停了 3 个周期后移除、重启后重读恢复；队员换格时面板不删不重建；离队 / 迟到的旧通知 / 再入队 / 解散；通知丢了由重读收敛；视野内的队友只有一个对象，走出视野不闪 |
 | `lifecycle_test.go` | Cell 崩溃后按 Player 快照重建（含客户端重新持有自己、面板随 Enter 回到新 SceneActor）、Base 消失后租约离场、回写按版本幂等、交接事务回滚不移交 |
 | `nats_test.go` | 同一组场景跑在真实 nats-server 上（测试自起私有端口） |

@@ -58,6 +58,11 @@ type ActorState struct {
 	// Entry 是玩家这次入场的序号（Base 编号，见 BaseState.Entry），Enter 时写入、交接时整份带走；Leave 只删 Entry 相同的
 	// Real（RV-20261106-03）。NPC 为 0。
 	Entry uint64 `msgpack:"en,omitempty"`
+	// FracX / FracY 是位置不足 1 单位的零头，千分位整数，范围 (-1000, 1000)：真实位置 = X + FracX / 1000。积分（integrate）
+	// 每子步把零头与新位移相加，整数部分加到位置、余数留在这里，所以拍长不是 Period 的整数倍、每拍不足 1 单位的低速都不丢
+	// 位移。与位置一起在 DAO 里（事务回滚一起还原），随交接带走；进场、生成为 0。各情形的规则见 integrate。
+	FracX int32 `msgpack:"fx,omitempty"`
+	FracY int32 `msgpack:"fy,omitempty"`
 }
 
 // Actor 是 game 的 SceneActor / Monster 实体为格内模拟提供的能力。三个方法都只在实体自己的 Nest 锁内调用：
@@ -147,7 +152,7 @@ func (n *Node) stepActor(st *ActorState, now time.Time, elapsed time.Duration) a
 	return fx
 }
 
-// freeze 冻结 Real 并准备 Offer：epoch 在这里 +1，交接后的状态、去重表与输入序号整份带走（含档位 Idle：冻结中按快档
+// freeze 冻结 Real 并准备 Offer：epoch 在这里 +1，交接后的状态、去重表、输入序号与位置零头整份带走（含档位 Idle：冻结中按快档
 // 跳，新格按它装入）。提交之后才发 Offer（事务回滚 = 没冻结 = 没交接）。
 func (n *Node) freeze(st *ActorState, target CellID, nowNano int64, fx *actorEffects) {
 	st.Ver = Version{Epoch: st.Ver.Epoch + 1, Seq: st.Ver.Seq + 1}
@@ -163,6 +168,7 @@ func (n *Node) freeze(st *ActorState, target CellID, nowNano int64, fx *actorEff
 func (n *Node) offerTo(st *ActorState) outgoing {
 	return outgoing{sid: n.cfg.Grid.SID(st.Handoff.Target), msg: &wireMsg{Kind: kindOffer, Offer: &handoffOffer{
 		State: st.EntityState, From: n.cell, LastInput: st.LastInput, Applied: append([]AppliedHit(nil), st.Applied...), Entry: st.Entry,
+		FracX: st.FracX, FracY: st.FracY,
 	}}}
 }
 
@@ -194,105 +200,154 @@ type Surface interface {
 	Step(from, to spatial.Point) (speed int32, ok bool)
 }
 
-// walkResult 是一步沿地面走的结果。
-type walkResult uint8
-
-const (
-	walkReached walkResult = iota // 走到了这一步的终点
-	walkSlowed                    // 路程用完了（在减速的地面格里），没走到终点
-	walkBlocked                   // 被挡：下一个地面格不放行，或站立的地面格本身没有定义
-)
+// milli 是积分的计算单位：1 单位 = 1000 千分位。位移全程按千分位整数算（维护者 2026-11-10：“截断按照现在的浮点数*1000
+// 作为整型数处理”）；位置字段与线上的位置仍是整数单位，不足 1 单位的零头存在 ActorState.FracX / FracY。
+const milli = 1000
 
 // integrate 把位置积分 dt（advance 保证 dt 不超过 Period），夹在世界内；NPC 碰到世界边缘反弹，玩家停在边缘。
+//
+// 位移按千分位整数计：这一子步的位移 = 速度（单位 / 秒）× dt / 1ms 千分位（向零截断，每子步丢掉不到 1 千分位），加上
+// 上次留下的零头，整数部分加到位置、余数留作零头（settle）。真实位置 = 位置 + 零头 / 1000。零头的规则：
+//
+//   - 符号与范围：零头与“零头 + 位移”同号（Go 的整除、取余都向零截断），范围 (-1000, 1000)。整数位置是真实位置朝来路
+//     截到整数：往负方向走时零头为负、整数位置在真实位置的正侧，走满 1 单位整数位置才变。
+//   - 世界边缘：真实位置出了 [Min, Max-1]（整数位置越界，或恰在边上而零头指向界外）就停在边上、这条轴的零头清零，
+//     并按原规则改这条轴的速度（玩家清零、NPC 反向）。
+//   - 地面挡住：停在上一个合法整数点，两条轴的零头都清零（零头指向被挡的方向）。
+//   - 游泳等减速：位移按地面格的速度千分比缩短，零头照常累计（见 walkOn），不按整点丢余数。
+//   - 速度改变（新输入）、换档、交接被拒恢复 Real：零头不动——它是位置的一部分，与速度无关。
+//   - 交接：零头随 Offer 带到目标格（handoffOffer.FracX / FracY），目标格接着累加；冻结中不积分，零头不变。
+//   - 进场（Enter，含交接放弃后 Base 按最后位置重新进入）与生成（Spawn）：从整数位置开始，零头为 0。
 //
 // ground 非 nil 时（地面钩子，NodeConfig.Surface）沿这一步的直线逐个整数点走（walkOn）：被地面挡住时停在上一个
 // 合法点，玩家速度清零（与停在世界边缘相同：等 Base 的下一个移动输入），NPC 速度反向（与碰到世界边缘反弹相同，
 // 但两个分量都反向：地形的挡没有“哪条轴碰了边”，原路返回一定走得通——它刚从那里来，除非这期间地形又被改了）。
-// 在游泳等减速的地面格里路程用完时停在用完的点，速度不变。只有走到了终点，世界边缘的速度规则才生效。
-// ground 为 nil 时与没有地面钩子之前逐位相同。
+// 在游泳等减速的地面格里位移按速度千分比缩短，速度不变；世界边缘的速度规则按缩短后的终点判断。
+// ground 为 nil 时与处处放行、速度 1000 的地面逐位相同。
 func (n *Node) integrate(st *ActorState, dt time.Duration, ground Surface) {
 	if st.VX == 0 && st.VY == 0 || dt <= 0 {
 		return
 	}
+	// 单位 / 秒 × 纳秒 / 10⁶ = 千分位（× 1000 / 10⁹），溢出范围与原来的 V·dt / 1s 相同。
+	dx := st.VX * int64(dt) / int64(time.Millisecond)
+	dy := st.VY * int64(dt) / int64(time.Millisecond)
 	bounds := n.cfg.Grid.Bounds()
-	nx := st.X + st.VX*int64(dt)/int64(time.Second)
-	ny := st.Y + st.VY*int64(dt)/int64(time.Second)
-	vx, vy := st.VX, st.VY
-	clamp := func(v, lo, hi int64, vel *int64) int64 {
-		switch {
-		case v < lo:
-			v = lo
-		case v > hi:
-			v = hi
-		default:
-			return v
-		}
-		if st.Kind == KindNPC {
-			*vel = -*vel
-		} else {
-			*vel = 0
-		}
-		return v
-	}
-	tx := clamp(nx, bounds.Min.X, bounds.Max.X-1, &vx)
-	ty := clamp(ny, bounds.Min.Y, bounds.Max.Y-1, &vy)
+	area := walkArea{lo: bounds.Min, hi: spatial.Point{X: bounds.Max.X - 1, Y: bounds.Max.Y - 1}}
+	var w walkStop
 	if ground == nil {
-		st.X, st.Y, st.VX, st.VY = tx, ty, vx, vy
-		return
+		w = area.settle(st.X, st.Y, int64(st.FracX)+dx, int64(st.FracY)+dy)
+	} else {
+		w = walkOn(ground, area, st.X, st.Y, int64(st.FracX), int64(st.FracY), dx, dy)
 	}
-	x, y, result := walkOn(ground, st.X, st.Y, tx, ty, max(abs64(nx-st.X), abs64(ny-st.Y)))
-	st.X, st.Y = x, y
-	switch result {
-	case walkReached:
-		st.VX, st.VY = vx, vy
-	case walkBlocked:
+	st.X, st.Y, st.FracX, st.FracY = w.x, w.y, int32(w.fx), int32(w.fy)
+	if w.blocked {
 		n.stats.surfaceBlocks.Add(1)
 		if st.Kind == KindNPC {
 			st.VX, st.VY = -st.VX, -st.VY
 		} else {
 			st.VX, st.VY = 0, 0
 		}
+		return
+	}
+	turn := func(v int64) int64 {
+		if st.Kind == KindNPC {
+			return -v
+		}
+		return 0
+	}
+	if w.edgeX {
+		st.VX = turn(st.VX)
+	}
+	if w.edgeY {
+		st.VY = turn(st.VY)
 	}
 }
 
-// walkOn 沿 (x0, y0) → (tx, ty) 的直线逐个整数点走：第 i 个点是 (x0 + dx·i/n, y0 + dy·i/n)，n = max(|dx|, |dy|)，
-// 相邻两点每个分量至多差 1，所以地面格每次至多变到相邻的一格（对角由 Step 自己判断不切角）。按整数点走而不是按地面格
-// 的边界解析求交：地面格对这里不透明（Surface 只给 Cell / Step），停下的点精确到 1 单位。每个点问一次 Cell，进入新
-// 地面格时问一次 Step。
-//
-// 路程按千分比计：reach 是这一步没被世界边缘夹过的位移的 max(|dx|, |dy|)（与点数同一度量），预算 reach × 1000，在速度
-// 千分比 s 的地面格里每走一个点花 ⌈10⁶ / s⌉（s = 1000 时恰好 1000，reach ≥ n，正常行走一定走到终点）。预算按没夹过的
-// 位移算：游泳时夹到世界边缘之前的那段照样按全速的 s / 1000 走，不因终点被夹近而少走。站立的地面格没有定义时一步
-// 不走（被挡）。
-func walkOn(ground Surface, x0, y0, tx, ty, reach int64) (x, y int64, result walkResult) {
-	dx, dy := tx-x0, ty-y0
-	steps := max(abs64(dx), abs64(dy))
-	if steps == 0 {
-		return x0, y0, walkReached
+// walkArea 是位置的合法范围：世界内的整数点 [lo, hi]（闭区间）。
+type walkArea struct{ lo, hi spatial.Point }
+
+// walkStop 是一子步积分的落点：整数位置、零头（千分位），被世界边缘夹住的轴，是否被地面挡住。
+type walkStop struct {
+	x, y, fx, fy int64
+	edgeX, edgeY bool
+	blocked      bool
+}
+
+// settle 从整数点 (x, y) 走 (mx, my) 千分位（已含零头），按 integrate 的零头规则落到世界内。
+func (a walkArea) settle(x, y, mx, my int64) walkStop {
+	var w walkStop
+	w.x, w.fx, w.edgeX = settleAxis(x, mx, a.lo.X, a.hi.X)
+	w.y, w.fy, w.edgeY = settleAxis(y, my, a.lo.Y, a.hi.Y)
+	return w
+}
+
+// settleAxis：整数部分加到位置、余数留作零头（都向零截断，零头与 m 同号）；真实位置出了 [lo, hi] 就停在边上、零头清零。
+func settleAxis(p, m, lo, hi int64) (pos, frac int64, edge bool) {
+	pos, frac = p+m/milli, m%milli
+	switch {
+	case pos < lo || pos == lo && frac < 0:
+		return lo, 0, true
+	case pos > hi || pos == hi && frac > 0:
+		return hi, 0, true
 	}
+	return pos, frac, false
+}
+
+// validFrac 是从线上收下的零头：不在 (-1000, 1000) 里的（坏消息）当作 0，不让一个子步把位置挪出好几个单位。
+func validFrac(f int32) int32 {
+	if f <= -milli || f >= milli {
+		return 0
+	}
+	return f
+}
+
+// walkOn 沿地面从整数点 (x0, y0)（零头 fx0, fy0）走全速位移 (dx, dy) 千分位。
+//
+// 先按站立的地面格的速度千分比 s 把位移缩成 dx·s/1000，按 settle 算出终点（含世界边缘），再沿 (x0, y0) → 终点的直线
+// 逐个整数点走：第 i 个点是 (x0 + DX·i/N, y0 + DY·i/N)，N = max(|DX|, |DY|)，相邻两点每个分量至多差 1，所以地面格每次
+// 至多变到相邻的一格（对角由 Step 自己判断不切角）。每个点问一次 Cell，进入新地面格时问一次 Step：不放行就停在上一个点
+// （blocked，零头清零）；放行且速度不同时，从这个点起把剩下的位移（没被世界边缘夹过的真实终点 − 这个点）按新旧速度之比
+// 缩放、重新算终点接着走。所以进入新格的那一步按旧格的速度算（与原来按路程预算、每点花 ⌈10⁶ / s⌉ 的规则一致），但没有
+// 按整点丢掉的余数，减速格里零头照常累计。位移按没夹过的终点缩放：游泳时夹到世界边缘之前的那段照样按全速的 s / 1000 走，
+// 不因终点被夹近而少走。
+//
+// 按整数点走而不是按地面格的边界解析求交：地面格对这里不透明（Surface 只给 Cell / Step），停下的点精确到 1 单位。站立的
+// 地面格没有定义时一步不走（被挡）。速度 1000 处处放行的地面与没有地面（settle）逐位相同。
+func walkOn(ground Surface, area walkArea, x0, y0, fx0, fy0, dx, dy int64) walkStop {
 	cell := ground.Cell(spatial.Point{X: x0, Y: y0})
 	speed, ok := ground.Step(cell, cell)
 	if !ok || speed <= 0 {
-		return x0, y0, walkBlocked
+		return walkStop{x: x0, y: y0, blocked: true}
 	}
-	x, y = x0, y0
-	left := reach * 1000
-	for i := int64(1); i <= steps; i++ {
-		cost := (1_000_000 + int64(speed) - 1) / int64(speed)
-		if cost > left {
-			return x, y, walkSlowed
-		}
-		px, py := x0+dx*i/steps, y0+dy*i/steps
-		if next := ground.Cell(spatial.Point{X: px, Y: py}); next != cell {
-			nextSpeed, ok := ground.Step(cell, next)
-			if !ok || nextSpeed <= 0 {
-				return x, y, walkBlocked
+	// (mx, my)：没夹过的真实终点相对整数点 (x0, y0) 的千分位位移。
+	mx, my := fx0+dx*int64(speed)/1000, fy0+dy*int64(speed)/1000
+	for {
+		end := area.settle(x0, y0, mx, my)
+		ex, ey := end.x-x0, end.y-y0
+		steps := max(abs64(ex), abs64(ey))
+		x, y := x0, y0
+		rescaled := false
+		for i := int64(1); i <= steps; i++ {
+			px, py := x0+ex*i/steps, y0+ey*i/steps
+			if next := ground.Cell(spatial.Point{X: px, Y: py}); next != cell {
+				nextSpeed, ok := ground.Step(cell, next)
+				if !ok || nextSpeed <= 0 {
+					return walkStop{x: x, y: y, blocked: true}
+				}
+				cell = next
+				if nextSpeed != speed {
+					mx = (mx - (px-x0)*milli) * int64(nextSpeed) / int64(speed)
+					my = (my - (py-y0)*milli) * int64(nextSpeed) / int64(speed)
+					x0, y0, speed, rescaled = px, py, nextSpeed, true
+					break
+				}
 			}
-			cell, speed = next, nextSpeed
+			x, y = px, py
 		}
-		x, y, left = px, py, left-cost
+		if !rescaled {
+			return end
+		}
 	}
-	return x, y, walkReached
 }
 
 // pruneApplied 删掉超出去重窗口的记录（返回新切片，不改传入的底层数组：它可能还被回滚前像引用）。

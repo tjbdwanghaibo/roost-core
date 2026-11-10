@@ -32,7 +32,7 @@ func sampleState(id int64, kind cellworld.EntityKind, seq uint64) cellworld.Acto
 		Role: cellworld.RoleFrozen, LastInput: 9,
 		Applied:    []cellworld.AppliedHit{{Hit: cellworld.HitID{Attacker: 77, Seq: 1}, At: 100}, {Hit: cellworld.HitID{Attacker: 78, Seq: 4}, At: 200}},
 		Handoff:    &cellworld.HandoffState{Target: cellworld.CellID{Col: 1}, Epoch: 3, StartedAt: 300, LastSent: 400},
-		RetryAfter: 5, LeaseUntil: 6, WritebackAt: 7, Entry: 8,
+		RetryAfter: 5, LeaseUntil: 6, WritebackAt: 7, Entry: 8, FracX: 640, FracY: -250,
 	}
 }
 
@@ -79,6 +79,7 @@ func TestCellStateRollsBackWithTheTransaction(t *testing.T) {
 	_, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "cell_state_rollback", func() (any, error) {
 		next := sampleState(42, cellworld.KindPlayer, 11)
 		next.X, next.HP, next.Role = 3100, 50, cellworld.RoleReal
+		next.FracX, next.FracY = -999, 1
 		next.Applied = append(next.Applied, cellworld.AppliedHit{Hit: cellworld.HitID{Attacker: 79, Seq: 1}, At: 500})
 		next.Handoff = nil
 		partition.WriteActor(dao, next)

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	fentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -298,5 +299,124 @@ func TestGhostDropsStaleAndHonoursTombstones(t *testing.T) {
 	}
 	if n.stats.staleDrops.Load() != 2 {
 		t.Fatalf("stale drops %d, want 2", n.stats.staleDrops.Load())
+	}
+}
+
+// plainActor 是不在 Nest 事务里、没有心跳的角色替身：直接调用 Node 的 handler 逻辑（onOffer / onEnter）的单元用例用。
+type plainActor struct {
+	*fentity.EntityBase
+	st ActorState
+}
+
+func (a *plainActor) Base() *fentity.EntityBase             { return a.EntityBase }
+func (a *plainActor) CellState() ActorState                 { return a.st }
+func (a *plainActor) SetCellState(st ActorState)            { a.st = st }
+func (a *plainActor) StartCell() error                      { return nil }
+func (a *plainActor) SetCellPeriod(time.Duration) error     { return nil }
+func (a *plainActor) OnDestroy(fentity.EntityDestroyReason) {}
+
+// plainNode 是 cell 格的 Node（不运行：只直接调用积分与 handler 逻辑），CreateActor 建 plainActor 并记在 created 里。
+func plainNode(t testing.TB, grid *Grid, cell CellID, created map[int64]*plainActor) *Node {
+	n := &Node{cfg: NodeConfig{Grid: grid, Cell: &cell, ViewRadius: worldViewRadius}.withDefaults(), cell: cell, hostsCell: true}
+	n.rect = grid.Rect(cell)
+	n.cfg.CreateActor = func(id int64, kind EntityKind) (Actor, error) {
+		a := &plainActor{EntityBase: fentity.NewEntityBase(id, fentity.EntityCategoryOther, true, kindTActor)}
+		created[id] = a
+		return a, nil
+	}
+	return n
+}
+
+// 位置零头随交接带走（线上格式 v8）：旧格在越界的那一步冻结，零头写进 Offer，经编码 / 解码到目标格装入时接着用；交接前后
+// 合起来的位移与 速度 × 积分时间逐千分位相同（冻结中不积分）。被拒恢复 Real 时零头不动；进场（Enter）从整数位置开始、
+// 零头为 0，幂等重进不动已有的零头；线上的坏零头当作 0。
+func TestHandoffCarriesTheSubUnitRemainder(t *testing.T) {
+	grid := worldGrid(t, 2, 1)
+	a, b := CellID{0, 0}, CellID{1, 0}
+	created := map[int64]*plainActor{}
+	na, nb := plainNode(t, grid, a, created), plainNode(t, grid, b, created)
+	now := time.Now()
+	const start = 10090
+	st := ActorState{EntityState: EntityState{ID: npcID(50), Kind: KindNPC, X: start, Y: 5000, VX: 7, VY: 3, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	var ms int64
+	var fx actorEffects
+	for st.Role == RoleReal {
+		fx = na.stepActor(&st, now, 37*time.Millisecond)
+		ms += 37
+	}
+	if st.Role != RoleFrozen || len(fx.sends) != 1 || fx.sends[0].msg.Kind != kindOffer {
+		t.Fatalf("crossing the freeze line: %v, sends %+v", st.Role, fx.sends)
+	}
+	if st.FracX == 0 || st.FracY == 0 {
+		t.Fatalf("froze with remainder (%d, %d); pick a case that leaves one on both axes", st.FracX, st.FracY)
+	}
+	raw, err := encodeMsg(fx.sends[0].msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := decodeMsg(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Offer.FracX != st.FracX || m.Offer.FracY != st.FracY {
+		t.Fatalf("offer carries remainder (%d, %d), want (%d, %d)", m.Offer.FracX, m.Offer.FracY, st.FracX, st.FracY)
+	}
+
+	// 被拒：同一 epoch 恢复为 Real，零头不动。
+	frozen := &plainActor{EntityBase: fentity.NewEntityBase(st.ID, fentity.EntityCategoryOther, true, kindTActor), st: st}
+	na.onOfferReply(NewRegion(), frozen, grid.SID(b), &handoffReply{ID: st.ID, Epoch: st.Handoff.Epoch, Accepted: false}, now, &txEffects{})
+	if frozen.st.Role != RoleReal || frozen.st.FracX != st.FracX || frozen.st.FracY != st.FracY {
+		t.Fatalf("after a refused offer: %v remainder (%d, %d), want real with (%d, %d)", frozen.st.Role, frozen.st.FracX, frozen.st.FracY, st.FracX, st.FracY)
+	}
+
+	// 接受：目标格装入，接着积分。
+	if err := nb.onOffer(NewRegion(), nil, grid.SID(a), m.Offer, now, &txEffects{}); err != nil {
+		t.Fatal(err)
+	}
+	moved := created[st.ID]
+	if moved == nil || moved.st.Role != RoleReal || moved.st.FracX != st.FracX || moved.st.FracY != st.FracY {
+		t.Fatalf("installed on (1,0): %+v, want real with remainder (%d, %d)", moved, st.FracX, st.FracY)
+	}
+	for range 20 {
+		nb.stepActor(&moved.st, now, 37*time.Millisecond)
+		ms += 37
+	}
+	if got, want := (moved.st.X-start)*milli+int64(moved.st.FracX), 7*ms; got != want {
+		t.Fatalf("x walked %d thousandths across the handoff, want %d (7/s for %dms)", got, want, ms)
+	}
+	if got, want := (moved.st.Y-5000)*milli+int64(moved.st.FracY), 3*ms; got != want {
+		t.Fatalf("y walked %d thousandths across the handoff, want %d", got, want)
+	}
+
+	// 坏零头（不在 (-1000, 1000) 里）当作 0。
+	bad := *m.Offer
+	bad.State.ID, bad.State.Ver.Epoch, bad.FracX, bad.FracY = npcID(51), 2, 1000, -1500
+	if err := nb.onOffer(NewRegion(), nil, grid.SID(a), &bad, now, &txEffects{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := created[npcID(51)]; got == nil || got.st.FracX != 0 || got.st.FracY != 0 {
+		t.Fatalf("an offer with remainder (1000, -1500) installed %+v, want (0, 0)", got)
+	}
+
+	// 进场：从整数位置开始；幂等重进（本格已是 Real）不动零头。
+	r := NewRegion()
+	enter := &enterReq{State: EntityState{ID: actorID(52), X: 3000, Y: 4000, HP: 100}, Entry: 1}
+	if err := na.onEnter(r, nil, 1001, enter, now, &txEffects{}); err != nil {
+		t.Fatal(err)
+	}
+	entered := created[actorID(52)]
+	if entered == nil || entered.st.Role != RoleReal || entered.st.FracX != 0 || entered.st.FracY != 0 {
+		t.Fatalf("entered: %+v, want real with no remainder", entered)
+	}
+	entered.st.VX = 10
+	na.stepActor(&entered.st, now, 30*time.Millisecond)
+	if entered.st.FracX != 300 {
+		t.Fatalf("remainder %d after 30ms at 10/s, want 300", entered.st.FracX)
+	}
+	if err := na.onEnter(r, entered, 1001, enter, now, &txEffects{}); err != nil {
+		t.Fatal(err)
+	}
+	if entered.st.FracX != 300 || entered.st.X != 3000 {
+		t.Fatalf("an idempotent enter changed the position to %d %+d", entered.st.X, entered.st.FracX)
 	}
 }

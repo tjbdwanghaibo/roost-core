@@ -18,8 +18,9 @@ import (
 // Real 上的面板序号。v5：队伍面板的队员快照与成员表通知（kindGroupSnap / kindGroupNotice，group.go）。未上线，旧版本的
 // 消息按坏消息丢弃（升级须先停旧进程）。v6：入场序号（Entry，RV-20261106-03）随 Enter、Leave 与交接 Offer 传递，Leave
 // 只结束同一次入场的角色。v7：扩展消息（kindExt：按命名空间交给 NodeConfig.Ext 的处理器，内容由处理器自己编码；
-// 第一个用户是可编辑地形的边界块副本，gameplay/terrain 的 Replicator）。
-const WireVersion uint8 = 7
+// 第一个用户是可编辑地形的边界块副本，gameplay/terrain 的 Replicator）。v8：交接 Offer 带位置不足 1 单位的零头
+// （FracX / FracY，千分位，积分按千分位整数累计）。
+const WireVersion uint8 = 8
 
 // EntityKind 区分玩家（有 BaseApp，接收视野）与 NPC（只在 Cell 里模拟）。
 type EntityKind uint8
@@ -176,6 +177,9 @@ type handoffOffer struct {
 	Applied   []AppliedHit `msgpack:"a,omitempty"`
 	// Entry 是玩家这次入场的序号（ActorState.Entry），随交接带走：新格的 Real 才认得同一次入场的 Leave。NPC 为 0。
 	Entry uint64 `msgpack:"en,omitempty"`
+	// FracX / FracY 是位置不足 1 单位的零头（ActorState.FracX / FracY，千分位），随交接带走：目标格接着累加，跨格不丢位移。
+	FracX int32 `msgpack:"fx,omitempty"`
+	FracY int32 `msgpack:"fy,omitempty"`
 }
 
 type handoffReply struct {

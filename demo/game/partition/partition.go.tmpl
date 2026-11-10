@@ -87,6 +87,10 @@ type CellDao interface {
 	SetCellPanelVer(uint64)
 	GetCellEntry() uint64
 	SetCellEntry(uint64)
+	GetCellFracX() int32
+	SetCellFracX(int32)
+	GetCellFracY() int32
+	SetCellFracY(int32)
 }
 
 // ReadActor 从 DAO 读出一份 ActorState（新建的切片与指针：调用方改它不影响 DAO，cellworld 的值语义要求如此）。
@@ -109,6 +113,8 @@ func ReadActor(d CellDao, id int64, kind cellworld.EntityKind) cellworld.ActorSt
 		LeaseUntil:  d.GetCellLeaseUntil(),
 		WritebackAt: d.GetCellWritebackAt(),
 		Entry:       d.GetCellEntry(),
+		FracX:       d.GetCellFracX(),
+		FracY:       d.GetCellFracY(),
 	}
 	if n := d.CellAppliedLen(); n > 0 {
 		st.Applied = make([]cellworld.AppliedHit, 0, n)
@@ -149,6 +155,8 @@ func WriteActor(d CellDao, st cellworld.ActorState) {
 	d.SetCellPower(int64(st.Panel.Power))
 	d.SetCellPanelVer(st.Panel.Ver)
 	d.SetCellEntry(st.Entry)
+	d.SetCellFracX(st.FracX)
+	d.SetCellFracY(st.FracY)
 	if !sameApplied(d, st.Applied) {
 		hits := make([]db.CellHit, len(st.Applied))
 		for i, a := range st.Applied {

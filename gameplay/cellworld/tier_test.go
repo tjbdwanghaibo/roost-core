@@ -429,8 +429,10 @@ func surfaceNode(t testing.TB, ground func() Surface) *Node {
 	return n
 }
 
-// 没有地面（Surface 不设、Surface 返回 nil）时积分与之前逐位相同；处处放行、速度 1000 的地面也走到同一个点（按整数点
-// 走的终点就是原来的终点，世界边缘的速度规则照旧）。随机的位置、速度（含碰世界边缘、越过格边界冻结）与拍长，NPC 与玩家。
+// 没有地面（Surface 不设）、Surface 返回 nil、处处放行且速度 1000 的地面三者逐位相同：位置、零头（FracX / FracY）、
+// 速度与身份（按整数点走的终点就是没有地面时的终点，世界边缘的速度规则照旧）。随机的位置、速度（含碰世界边缘、越过格
+// 边界冻结）与拍长，NPC 与玩家。承诺没有变：地面钩子只在被挡、减速时改变结果；与引入千分位零头之前相比，三者一起多了
+// 不丢截断余数这一处变化（由 TestIntegrationKeepsTheSubUnitRemainder 断言），彼此仍逐位相同。
 func TestANilSurfaceIntegratesExactlyLikeNoSurface(t *testing.T) {
 	plain := surfaceNode(t, nil)
 	viaNil := surfaceNode(t, func() Surface { return nil })
@@ -450,9 +452,12 @@ func TestANilSurfaceIntegratesExactlyLikeNoSurface(t *testing.T) {
 			plain.stepActor(&a, now, elapsed)
 			viaNil.stepActor(&b, now, elapsed)
 			open.stepActor(&c, now, elapsed)
-			if a.EntityState != b.EntityState || a.Role != b.Role || a.EntityState != c.EntityState || a.Role != c.Role {
-				t.Fatalf("case %d beat %d (elapsed %v): no surface %+v %v, nil surface %+v %v, open surface %+v %v",
-					i, beat, elapsed, a.EntityState, a.Role, b.EntityState, b.Role, c.EntityState, c.Role)
+			same := func(p, q ActorState) bool {
+				return p.EntityState == q.EntityState && p.Role == q.Role && p.FracX == q.FracX && p.FracY == q.FracY
+			}
+			if !same(a, b) || !same(a, c) {
+				t.Fatalf("case %d beat %d (elapsed %v): no surface %+v %v frac (%d, %d), nil surface %+v %v frac (%d, %d), open surface %+v %v frac (%d, %d)",
+					i, beat, elapsed, a.EntityState, a.Role, a.FracX, a.FracY, b.EntityState, b.Role, b.FracX, b.FracY, c.EntityState, c.Role, c.FracX, c.FracY)
 			}
 		}
 	}
@@ -560,6 +565,241 @@ func TestSurfaceBlockBeforeTheBoundaryKeepsTheActorReal(t *testing.T) {
 		}
 		if !tc.frozen && (st.X >= 9950 || st.VX != -2000) {
 			t.Fatalf("%s: at x=%d vx %d, want turned back before 9950", tc.name, st.X, st.VX)
+		}
+	}
+}
+
+// uniformGround 处处放行、速度都是 speed 千分比（地面格就是整数点本身）。
+type uniformGround struct{ speed int32 }
+
+func (g uniformGround) Cell(p spatial.Point) spatial.Point    { return p }
+func (g uniformGround) Step(_, _ spatial.Point) (int32, bool) { return g.speed, true }
+
+// 积分不丢不足 1 单位的零头（维护者 2026-11-10：位移按千分位整数计，零头留在角色状态里、下一子步接着累加）：速度固定、
+// 拍长不是 Period 的整数倍时，总位移与 速度 × 总时间（减速的地面再乘速度千分比）相差不到 1 单位；每拍不足 1 单位的
+// 低速同样走；负速度、对角，没有地面、平地与游泳都一样。拍长取整毫秒，千分位的位移没有截断，误差只剩零头本身（< 1）。
+func TestIntegrationKeepsTheSubUnitRemainder(t *testing.T) {
+	rng := rand.New(rand.NewPCG(3, 5))
+	irregular := make([]time.Duration, 40)
+	for i := range irregular {
+		irregular[i] = time.Duration(31+rng.IntN(100)) * time.Millisecond // 31～130ms：多数不是 50ms 的整数倍
+	}
+	steady := make([]time.Duration, 200)
+	for i := range steady {
+		steady[i] = worldPeriod
+	}
+	grounds := []struct {
+		name    string
+		surface func() Surface
+		permil  int64
+	}{
+		{"none", nil, 1000},
+		{"open", func() Surface { return openGround{} }, 1000},
+		{"swim", func() Surface { return uniformGround{speed: 500} }, 500},
+	}
+	cases := []struct {
+		name   string
+		vx, vy int64
+		beats  []time.Duration
+	}{
+		{"400/s irregular beats", 400, 0, irregular},
+		{"diagonal backwards irregular beats", -400, 130, irregular},
+		{"10/s irregular beats", 10, 0, irregular},
+		{"10/s for 10s in period beats", 0, -10, steady},
+		{"slow diagonal backwards", -6, 4, irregular},
+	}
+	now := time.Now()
+	for _, g := range grounds {
+		n := surfaceNode(t, g.surface)
+		for _, tc := range cases {
+			kinds := []EntityKind{KindPlayer, KindNPC}
+			for _, kind := range kinds {
+				st := ActorState{EntityState: EntityState{ID: npcID(40), Kind: kind, X: 5000, Y: 5000, VX: tc.vx, VY: tc.vy, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+				var total time.Duration
+				for _, e := range tc.beats {
+					n.stepActor(&st, now, e)
+					total += e
+				}
+				ms := int64(total / time.Millisecond)
+				// 千分位：速度 × 毫秒 = 千分之一单位；减速地面再乘千分比。
+				wantX, wantY := tc.vx*ms*g.permil/1000, tc.vy*ms*g.permil/1000
+				gotX, gotY := (st.X-5000)*1000, (st.Y-5000)*1000
+				if st.Role != RoleReal || abs64(gotX-wantX) >= 1000 || abs64(gotY-wantY) >= 1000 {
+					t.Errorf("%s / %s / kind %d: v (%d, %d) for %v moved (%d, %d), want (%.3f, %.3f) within 1 unit (role %v)",
+						g.name, tc.name, kind, tc.vx, tc.vy, total, st.X-5000, st.Y-5000, float64(wantX)/1000, float64(wantY)/1000, st.Role)
+				}
+			}
+		}
+	}
+}
+
+// 拍长带纳秒抖动时（真实心跳的 Beat.Elapsed），每个子步只在千分位上截断，丢掉不到 1 千分位：长时间积分后，位置加零头
+// 与 速度 × 时间 相差不到子步数个千分位；整数位置与之相差不到 1 单位加这一点。
+func TestIntegrationLosesLessThanAThousandthPerSubStep(t *testing.T) {
+	rng := rand.New(rand.NewPCG(7, 9))
+	n := surfaceNode(t, nil)
+	now := time.Now()
+	for _, v := range []struct{ vx, vy int64 }{{400, 0}, {-400, 37}, {3, -11}} {
+		st := ActorState{EntityState: EntityState{ID: npcID(41), Kind: KindNPC, X: 5000, Y: 5000, VX: v.vx, VY: v.vy, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+		var total time.Duration
+		var subSteps int64
+		for range 200 {
+			e := worldPeriod - 3*time.Millisecond + time.Duration(rng.Int64N(int64(6*time.Millisecond)))
+			n.stepActor(&st, now, e)
+			total += e
+			subSteps += int64((e + worldPeriod - 1) / worldPeriod)
+		}
+		if st.Role != RoleReal {
+			t.Fatalf("v (%d, %d): %v at (%d, %d); the case must stay inside the cell", v.vx, v.vy, st.Role, st.X, st.Y)
+		}
+		for _, axis := range []struct {
+			name      string
+			pos, frac int64
+			v         int64
+		}{{"x", st.X, int64(st.FracX), v.vx}, {"y", st.Y, int64(st.FracY), v.vy}} {
+			want := axis.v * int64(total) / int64(time.Millisecond) // 千分位
+			got := (axis.pos-5000)*milli + axis.frac
+			if d := abs64(got - want); d >= subSteps {
+				t.Errorf("v (%d, %d) for %v, axis %s: position + remainder %d thousandths, want %d within %d sub-steps", v.vx, v.vy, total, axis.name, got, want, subSteps)
+			}
+			if d := abs64((axis.pos-5000)*milli - want); d >= milli+subSteps {
+				t.Errorf("v (%d, %d) for %v, axis %s: integer position off by %d thousandths", v.vx, v.vy, total, axis.name, d)
+			}
+		}
+	}
+}
+
+// 零头的符号与速度改变：零头与累计的位移同号，往负方向走时整数位置在真实位置的正侧、走满 1 单位才变；新输入改了速度
+// （含反向）零头不动，接着从真实位置累加。
+func TestTheRemainderKeepsItsSignAndSurvivesASpeedChange(t *testing.T) {
+	n := surfaceNode(t, nil)
+	now := time.Now()
+	st := ActorState{EntityState: EntityState{ID: actorID(42), Kind: KindPlayer, X: 5000, Y: 5000, VX: -10, VY: 4, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+	n.stepActor(&st, now, 30*time.Millisecond) // x 真实 4999.7，y 5000.12
+	if st.X != 5000 || st.FracX != -300 || st.Y != 5000 || st.FracY != 120 {
+		t.Fatalf("after 30ms at (-10, 4)/s: (%d %+d, %d %+d), want (5000 -300, 5000 +120)", st.X, st.FracX, st.Y, st.FracY)
+	}
+	n.stepActor(&st, now, 80*time.Millisecond) // x 真实 4998.9
+	if st.X != 4999 || st.FracX != -100 {
+		t.Fatalf("after 110ms at -10/s: x %d %+d, want 4999 -100 (a whole unit walked moves the integer position)", st.X, st.FracX)
+	}
+	st.VX, st.VY = 10, 0                       // 新的移动输入：反向
+	n.stepActor(&st, now, 50*time.Millisecond) // x 真实 4999.4
+	if st.X != 4999 || st.FracX != 400 || st.Y != 5000 || st.FracY != 440 {
+		t.Fatalf("after turning round for 50ms: (%d %+d, %d %+d), want (4999 +400, 5000 +440): the remainder is position, not speed", st.X, st.FracX, st.Y, st.FracY)
+	}
+	n.stepActor(&st, now, 60*time.Millisecond) // x 真实 5000.0
+	if st.X != 5000 || st.FracX != 0 {
+		t.Fatalf("x %d %+d, want exactly 5000", st.X, st.FracX)
+	}
+}
+
+// 世界边缘：真实位置出了 [Min, Max-1]（整数位置越界，或恰在边上而零头指向界外）就停在边上、这条轴的零头清零；玩家这条
+// 轴的速度清零、NPC 反向，另一条轴的零头照旧。真实位置恰好落在边上不算越界。没有地面与平地相同。
+func TestTheRemainderStopsAtTheWorldEdge(t *testing.T) {
+	now := time.Now()
+	for _, g := range []struct {
+		name    string
+		surface func() Surface
+	}{{"none", nil}, {"open", func() Surface { return openGround{} }}} {
+		n := surfaceNode(t, g.surface)
+		hi := n.cfg.Grid.Bounds().Max.X - 1
+		for _, kind := range []EntityKind{KindPlayer, KindNPC} {
+			wantV := func(v int64) int64 {
+				if kind == KindNPC {
+					return -v
+				}
+				return 0
+			}
+			st := ActorState{EntityState: EntityState{ID: npcID(43), Kind: kind, X: 1, Y: 5000, VX: -10, VY: 6, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+			n.stepActor(&st, now, 100*time.Millisecond) // 真实 x 正好 0
+			if st.X != 0 || st.FracX != 0 || st.VX != -10 {
+				t.Fatalf("%s kind %d: reaching x 0 exactly: x %d %+d vx %d, want 0 +0 still -10", g.name, kind, st.X, st.FracX, st.VX)
+			}
+			n.stepActor(&st, now, 50*time.Millisecond) // 真实 x -0.5：越界
+			if st.X != 0 || st.FracX != 0 || st.VX != wantV(-10) || st.Y != 5000 || st.FracY != 900 || st.VY != 6 {
+				t.Fatalf("%s kind %d: past the low edge: (%d %+d, %d %+d) v (%d, %d), want (0 +0, 5000 +900) v (%d, 6)",
+					g.name, kind, st.X, st.FracX, st.Y, st.FracY, st.VX, st.VY, wantV(-10))
+			}
+			st = ActorState{EntityState: EntityState{ID: npcID(44), Kind: kind, X: hi, Y: 5000, VX: 10, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+			n.stepActor(&st, now, 50*time.Millisecond) // 真实 x hi + 0.5：越界
+			if st.X != hi || st.FracX != 0 || st.VX != wantV(10) {
+				t.Fatalf("%s kind %d: past the high edge: x %d %+d vx %d, want %d +0 vx %d", g.name, kind, st.X, st.FracX, st.VX, hi, wantV(10))
+			}
+		}
+	}
+}
+
+// 地面挡住：停在上一个合法整数点，两条轴的零头都清零（玩家速度清零、NPC 原路反向）；站立的地面格没有定义时同样不动、
+// 零头清零。
+func TestASurfaceBlockClearsTheRemainder(t *testing.T) {
+	ground := &stripeGround{blocked: map[spatial.Point]bool{}, undefined: map[spatial.Point]bool{{X: 60, Y: 50}: true}}
+	for y := int64(-5); y <= 105; y++ {
+		ground.blocked[spatial.Point{X: 12, Y: y}] = true // x ∈ [1150, 1250)
+	}
+	n := surfaceNode(t, func() Surface { return ground })
+	now := time.Now()
+	for _, kind := range []EntityKind{KindPlayer, KindNPC} {
+		st := ActorState{EntityState: EntityState{ID: npcID(45), Kind: kind, X: 1149, Y: 5000, VX: 10, VY: 4, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal, FracX: 600, FracY: 300}
+		n.stepActor(&st, now, 50*time.Millisecond) // 真实 x 1149.6 → 1150.1：进入被挡的格
+		wantVX, wantVY := int64(0), int64(0)
+		if kind == KindNPC {
+			wantVX, wantVY = -10, -4
+		}
+		if st.X != 1149 || st.Y != 5000 || st.FracX != 0 || st.FracY != 0 || st.VX != wantVX || st.VY != wantVY {
+			t.Fatalf("kind %d into the refused cell: (%d %+d, %d %+d) v (%d, %d), want (1149 +0, 5000 +0) v (%d, %d)",
+				kind, st.X, st.FracX, st.Y, st.FracY, st.VX, st.VY, wantVX, wantVY)
+		}
+	}
+	stuck := ActorState{EntityState: EntityState{ID: actorID(46), Kind: KindPlayer, X: 6000, Y: 5000, VX: 10, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal, FracX: 700}
+	n.stepActor(&stuck, now, 50*time.Millisecond)
+	if stuck.X != 6000 || stuck.FracX != 0 || stuck.VX != 0 {
+		t.Fatalf("standing on an undefined cell: x %d %+d vx %d, want 6000 +0 and stopped", stuck.X, stuck.FracX, stuck.VX)
+	}
+}
+
+// 游泳：减速格里位移按速度千分比缩短、零头照常累计，进出减速格时从进入新格的那个整数点起把剩下的位移按新旧速度之比
+// 缩放（进入新格的那一步按旧格的速度算）：从陆地游进水里、从水里走上陆地，位置都与分段的 速度 × 时间 相差不到 1 千分位。
+func TestSwimmingAcrossASpeedChangeKeepsTheRemainder(t *testing.T) {
+	water := map[spatial.Point]int32{}
+	for x := int64(20); x <= 40; x++ {
+		water[spatial.Point{X: x, Y: 50}] = 500 // x ∈ [1950, 4050)
+	}
+	n := surfaceNode(t, func() Surface { return &stripeGround{speed: water} })
+	rng := rand.New(rand.NewPCG(13, 21))
+	now := time.Now()
+	for _, tc := range []struct {
+		name  string
+		start int64
+		// want 是走了 ms 毫秒后的真实位置（千分位）。
+		want func(ms int64) int64
+	}{
+		{"land into water", 1000, func(ms int64) int64 {
+			if d := 400 * ms; d <= 950_000 {
+				return 1_000_000 + d
+			}
+			return 1_950_000 + (400*ms-950_000)/2
+		}},
+		{"water onto land", 4000, func(ms int64) int64 {
+			if d := 200 * ms; d <= 50_000 {
+				return 4_000_000 + d
+			}
+			return 4_050_000 + 400*(ms-250)
+		}},
+	} {
+		st := ActorState{EntityState: EntityState{ID: actorID(47), Kind: KindPlayer, X: tc.start, Y: 5000, VX: 400, HP: 100, Ver: Version{Epoch: 1, Seq: 1}}, Role: RoleReal}
+		var ms int64
+		for range 60 {
+			e := int64(31 + rng.IntN(70))
+			n.stepActor(&st, now, time.Duration(e)*time.Millisecond)
+			ms += e
+			got, want := st.X*milli+int64(st.FracX), tc.want(ms)
+			if st.Role != RoleReal || st.VX != 400 || abs64(got-want) > 1 {
+				t.Fatalf("%s after %dms: at %d thousandths (x %d %+d) vx %d %v, want %d", tc.name, ms, got, st.X, st.FracX, st.VX, st.Role, want)
+			}
+			if st.X >= 9000 {
+				break
+			}
 		}
 	}
 }

@@ -274,9 +274,9 @@ func fillDistinct(v reflect.Value, next *int64) {
 }
 
 // RV-20261106-04：BaseState / ActorState 是接入方会整份保存或传递的公开状态，MsgPack 往返必须保留每个字段（曾经 X/Y、
-// VX/VY 共用一个标签，编码丢了 X 与 VX）。
+// VX/VY 共用一个标签，编码丢了 X 与 VX）。交接 Offer 带走 ActorState 的一部分（含位置零头），同样逐字段往返。
 func TestStateMsgpackRoundTrip(t *testing.T) {
-	for _, want := range []any{&BaseState{}, &ActorState{}} {
+	for _, want := range []any{&BaseState{}, &ActorState{}, &handoffOffer{}} {
 		var next int64
 		fillDistinct(reflect.ValueOf(want).Elem(), &next)
 		raw, err := msgpack.Marshal(want)
