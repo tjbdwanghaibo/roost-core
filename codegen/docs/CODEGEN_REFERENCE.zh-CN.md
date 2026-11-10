@@ -410,6 +410,41 @@ timedomain 字段、拒绝的输入逐字节不变、清单校验、`roost add m
 （`roost project new --skip-deps` + 本地 replace，三个 add 命令后 build / vet / `test -race` 全过，`TestGeneratedHeartbeatBehaviorEndToEnd`：
 示例动作被主组心跳推进到结束、组空闲后心跳停、示例策略经 AI 心跳反复发起动作、场景示例心跳执行、时间域改倍率后发布与越界拒绝）。
 
+### 业务模块：roost module
+
+`roost add` 生成的是空骨架。业务模块是另一回事：一个提前写好并验收过的业务单元（状态结构体、组件、Nest handler、协议、错误码、场景测试），源码在仓库 [modules](../../modules/README.md)，由 `roost module add` 写进工程。写进去之后归工程所有，`project sync` / `upgrade` 不改写——它不是生成器输出，只是不用自己从头写。
+
+```bash
+roost module list                 # 内置模块；在工程里执行时标出已安装的（*）
+roost module plan checkin         # 只预览，不改动工程
+roost module add checkin          # 安装（连同依赖 wallet）并运行生成器
+roost module verify               # 模块自带场景 + build / vet / id check / generate --check
+```
+
+四个命令都支持 `--json`（给 agent 用）与 `--root <dir>`；`plan`、`add` 另有 `--service <service>`，工程里有多个运行 Nest 的业务服务时指定装进哪一个。
+
+| 命令 | 做什么 | 不做什么 |
+| --- | --- | --- |
+| `list` | 列出模块、依赖与它追加的状态字段 | 不需要在工程里执行 |
+| `plan <name…>` | 算出安装顺序（依赖在前）、会先执行的 `roost add`、追加的 DAO 字段、分配的号、写入的文件 | 不改动工程 |
+| `add <name…>` | 按同一份计划安装，运行全部生成器 | 已安装的模块不再处理；不覆盖业务文件 |
+| `verify [name…]` | 每个已装模块跑自带场景，要求通过数等于清单里的数、零跳过；再跑 `go build`、`go vet`、`roost id check`、`roost generate --check` | 场景用替身提交器，不连真实依赖 |
+
+安装的步骤与契约：
+
+1. **前置骨架**：实体没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程没有玩家接入时执行 `roost add access player --service <service>`。它们各自是完整的工程状态，后面失败时不回退。
+2. **状态**：模块的状态字段追加到实体主 DAO 的**末尾**，类型是模块自带的嵌套结构体。追加在末尾是因为同步的 PB 字段号按定义顺序排。同名字段已按同样的类型与标签存在时跳过；类型或标签不同、存储键已被占用时拒绝。
+3. **组件与文件**：组件接到实体上，模板渲染后写进工程。落点已有内容不同的文件时拒绝（`already exists and is not this module's file`），不覆盖。
+4. **号**：协议号、错误码、组件号从 `roost.yaml` 的 `ids` 段分配；一次安装多个模块时不会相撞，已装模块记录里的号即使文件被删也不再发出。
+5. **记录**：`roost.yaml` 的 `modules.<name>` 记下摘要、号、状态字段与文件。
+6. **生成**：运行全部生成器（暂存区里生成，成功才提交）。
+
+第 2～6 步任何一步失败，模块写过的业务文件与 `roost.yaml` 恢复到第 2 步之前。重复执行 `add` 没有变化。没有卸载命令。
+
+模块的状态为什么是“主 DAO 下的嵌套结构体”而不是独立 DAO：嵌套结构体的子字段变化已按路径增量同步与落库，默认的自身视图打包照常工作，玩家仍是一份文档；独立 DAO 在同步上要改生成器与客户端。同步与否按顶层字段决定，所以既有客户端可见状态又有服务端账本的模块写两个字段。一个 DAO 最多 64 个顶层字段（脏位与同步掩码是 `uint64`），第 65 个在生成期拒绝；每个模块只占一到两个。
+
+怎么写一个模块、清单字段与模板占位见 [modules/README](../../modules/README.md)；设计与分期见[业务模块方案](../../docs/maintenance/FEATURE-2026-11-10-business-modules.md)。回归：`go test ./codegen/internal/roost -run 'TestModule|TestAppendDaoFields|TestTenModuleStructs'`、`scripts/test-modules-generated.sh`（在发版门禁里）。
+
 ## 4. DAO 生成器
 
 命令（`roost generate` 的 dao 步骤等价于它；`roost add dao <name> --entity <entity>` 生成初始骨架）：

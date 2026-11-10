@@ -4,7 +4,7 @@
 
 | 位置 | 权威内容 |
 | --- | --- |
-| [framework](../framework/README.md) | 当前架构、模块契约；guide 面向使用，impl 面向维护；十种玩法手册包含接入与验收边界 |
+| [framework](../framework/README.md) | 当前架构、模块契约；guide 面向使用，impl 面向维护；十种玩法手册包含接入与验收边界；[能力清单](../framework/CAPABILITIES.md)按需求条目索引全部能力 |
 | [performance](../performance/README.md) | 每类负载最新有效基线与必要样本；被替代的报告固定到 Git 历史 |
 | [maintenance](README.md) | 维护、发布、升级与故障处置 |
 | [KNOWN-LIMITS](KNOWN-LIMITS.md) | 当前能力限制、未验证范围与尚未确认问题 |
@@ -39,6 +39,6 @@
 
 删除的原文、早期文档清理索引和精确红绿记录均可从[整理前完整快照](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/)追溯；原有引用已固定到该快照。无观察者暂停 AI 尚未实施，其[设计稿](FEATURE-2026-10-22-ai-idle-without-observers.md)保留，不能当作当前能力。多进程无缝大世界同样只有[思路稿](FEATURE-2026-11-03-seamless-world.md)，没有实现。联盟 / 公会服务的[方案](FEATURE-2026-11-04-alliance-service.md)已定、未实施，现行公会行为仍以 KNOWN-LIMITS 为准。
 
-业务模块与配方的[方案](FEATURE-2026-11-10-business-modules.md)（2026-11-10）已定、未实施：按玩法生成与按需求组合的现行做法仍以 [AGENTS](../../AGENTS.md#游戏接入-skill) 与 [roost-genre skill](../agent-skills/roost-genre/SKILL.md) 为准，不能把方案当作当前能力。
+业务模块与配方的[方案](FEATURE-2026-11-10-business-modules.md)（2026-11-10）：第 2 期（安装器与两个模块）已实施，现行说明以 [modules/README](../../modules/README.md)、[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module) 与 [KNOWN-LIMITS“业务模块”](KNOWN-LIMITS.md#业务模块roost-module) 为准；配方与现有玩法、game-demo 的迁移未实施，那部分仍以 [AGENTS](../../AGENTS.md#游戏接入-skill) 与 [roost-genre skill](../agent-skills/roost-genre/SKILL.md) 为准，不能把方案后几期当作当前能力。
 
 App 生命周期“停机先关外部输入”的[方案](FEATURE-2026-11-04-app-lifecycle.md)（2026-11-04）：现行契约以 [App 生命周期设计篇](../framework/guide/01-app-lifecycle.md) 为准，方案保留盘点、决定与实施记录。

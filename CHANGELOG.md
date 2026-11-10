@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+- **新增**（codegen + modules）：**业务模块安装器 `roost module` 与首批两个模块**（维护者 2026-11-10：roost-core“既有底层框架也有业务模版”，要能按需求描述组合出服务逻辑；[方案](docs/maintenance/FEATURE-2026-11-10-business-modules.md)第 2 期，[实施记录](docs/maintenance/FEATURE-2026-11-10-business-modules.md#17-第-2-期实施记录2026-11-10)）。业务模块是提前写好并验收过的业务单元（状态结构体、组件、Nest handler、协议、错误码、场景测试），源码在 [modules](modules/README.md)，安装后归工程所有，不是生成器输出。
+  - 命令：`roost module list` / `plan <name…>`（只预览）/ `add <name…>`（连同依赖安装并生成，重复执行无变化，失败时恢复）/ `verify`（模块自带场景的通过数与零跳过，加 build、vet、ID 检查、生成物漂移检查）；都支持 `--json`。说明见[命令参考“业务模块”](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)、`roost help module`。
+  - 约定：模块状态是嵌套结构体，追加在所挂实体主 DAO 的末尾，同步与否按顶层字段决定；协议号、错误码、组件号从 `roost.yaml` 的 `ids` 段分配，归属记在新的 `roost.yaml` `modules` 段。没有卸载。
+  - 模块：`wallet`（余额、按业务键幂等的加减、消费协议，7 条场景）、`checkin`（每日签到，依赖 wallet，奖励在同一笔事务里发放，5 条场景）。
+  - 文档：新增[能力清单](docs/framework/CAPABILITIES.md)（按需求条目查 core 的能力、接入方式与现成参考）；roost-genre skill 新增“按需求组合”流程。
+  - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：只有两个模块，13 类玩法与 game-demo 尚未迁移，没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
+  - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
+
+- **修复**（codegen/dao）：**嵌套类型的识别不再取决于定义文件的文件名顺序；DAO 超过 64 个顶层字段在生成期拒绝**。嵌套类型定义在排在 DAO 文件之前的文件里时识别不到，生成时报 `unsupported sync type`；现在全部定义文件解析完再认一遍，同时认得出跨文件互相引用的嵌套类型，已有工程的生成物不变。脏位与同步掩码是 `uint64`、每个顶层字段一位：第 65 个字段原先生成成功、生成物编译失败（`constant overflows uint64`），现在解析阶段拒绝并给出改法（收进嵌套结构体）。回归 `TestNestedTypesAreFoundWhateverFileDefinesThem`、`TestDaoWithMoreThan64FieldsIsRefused`（修前都失败）。
+
 - **行为变化 / 新码**（game-demo + scripts）：**分区场景里跨两个地图进程的地形笔刷直接拒绝，不再拆分转发**（维护者 2026-11-10：“跨格是指跨两个地图进程吗，如果是的话就直接拒绝”“玩家也不能刷地形，会在地形基础上设计这个限制”；[方案 §30.10](docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#3010-跨格笔刷直接拒绝维护者-2026-11-10撤回-301-的拆分)、[证据](docs/maintenance/evidence/terrain-brush-single-cell-20261110/README.md)）。笔刷覆盖的块归两个及以上的格时，`terrainmap.Map.RelayBrush` 在预扣配额与发号之前答 `ErrBrushCrossCell`，业务码新增 `terrain_cross_cell`（100070）：什么都没写、不扣配额、不占序号（同一个 `Seq` 可用在下一笔上）；规则与建筑占地的 `building_cross_cell` 相同。覆盖块都归一个格时照旧：本格直接执行，远端整份转发。删除只为多格服务的部分：按格拆分（`splitByOwner` → `ownerOfAll`）、并行转发、多份汇总与部分成功（`RelayResult.Parts` 改为单个 `RelayResult.Part`，`Err` / `Duplicate` 只看这一份）、多格的配额退还、格只执行自己那一部分（`Map.ownedPart`：格现在要求笔刷覆盖的块都归本格，否则答 `terrain_not_owned`）。保留单格转发、发号、格账本、逐块 `Outcome`、`terrain_pending`、重启对账；协议字段与 `terrain-edit` 线上格式不变。回归 `TestTerrainRelayRefusesABrushAcrossCells`（修前红：`a brush across two cells: <nil>, want ErrBrushCrossCell before anything is charged or issued`）；原“跨格两块都执行 / 部分成功”的两条用例改为新契约。`ROOST_SEAMLESS_TERRAIN=1` 演练的 (a) 步改为：跨格笔刷答 `terrain_cross_cell` 且两块与 `LastSeq` 不变，再由 B 发起整份落在 A 格的笔刷转发执行、改回（只编译与 vet，未运行）。
   - **升级要求**：客户端处理 `terrain_cross_cell`（把笔刷挪进一个格里再发）；分区场景答复的 `Chunks` 不再出现部分成功。业务工程重新生成（`RelayResult` 形状变了）。未部署，不做兼容。
 

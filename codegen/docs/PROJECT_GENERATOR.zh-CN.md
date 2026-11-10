@@ -154,6 +154,8 @@ collaborators.go 为准），生成器重写 `framework_clients_gen.go` 时跟�
 新项目内的 `docs/ROOST_YAML.zh-CN.md` 是随 codegen 版本生成的字段级权威说明。
 下面给出仓库级总览；未知字段会在严格 YAML 解码阶段直接报错。
 
+`modules` 段是 `roost module add` 写下的归属清单（每个已装业务模块的文件、主 DAO 字段与分配到的号），由安装器维护、不手工增删，见[命令参考“业务模块”](CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)。
+
 示例：
 
     schema: 1

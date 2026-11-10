@@ -8,7 +8,7 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 ## 0. 先读这几条
 
 - 本 skill 随 roost-core 版本发布，权威源在 `docs/agent-skills/roost-genre/`，提供流程、限制摘要和指针。**权威内容在 roost-core 仓库**：各篇 `docs/framework/<GENRE>-INTEGRATION.md`、`scripts/test-<genre>-generated.sh`、`scripts/testdata/<genre>/`、`docs/maintenance/KNOWN-LIMITS.md`。下文链接都是**相对 roost-core 根目录**的路径；读手册时以本机检出或 module cache 里对应版本的 `docs/` 为准，不以本文转述为准。
-- **`game` 模板只出框架骨架，各类型玩法来自夹具或业务代码**。已有 `game-demo` 是内置的完整参考应用；不要虚构 `project new -template slg` 一类不存在的模板。
+- **`game` 模板只出框架骨架，各类型玩法来自夹具或业务代码**。已有 `game-demo` 是内置的完整参考应用；不要虚构 `project new -template slg` 一类不存在的模板。现成的业务单元另有业务模块（`roost module add`，目前只有 wallet 与 checkin，见 [references/compose.md](references/compose.md)）；13 类玩法还不是模块，不能用它安装。
 - 夹具里的数值（金币、时长、上限）都是样例；玩法规则缺少默认实现不算框架缺陷（KNOWN-LIMITS“游戏接入验收”首段）。
 - 生成 demo 前先确认目标 roost 版本。本 skill 随 tag 发布，命令按同一检出的脚本写：**v1.40.0 起** `dao_add` 写必填的 `store` 键（更早的 tag 写 `bson`）；**v1.35.0 起**每篇在最终 `roost generate` 前多一步公共 Robot 安装（`scripts/testdata/robot-common/install.py`），九类状态玩法的场景数因此各 +1（MOBA 改为扩展 KCP 用例，仍 28 条）。目标是更早的 tag 时，读该 tag 检出里的本 skill 与脚本，不把这里的命令套上去。各篇最早可用版本：card-rpg、mmorpg、merge-casual 三个夹具 **v1.33.1 起可用**（2026-10-31 在 v1.33.1 检出实测 16 / 13 / 15 条 PASS），**最低版本 v1.33.1**：v1.33.0 上仍编译失败（见 §7）。实时派对房间（`party-room`）**v1.33.2 起有纵切（12 条）；弹性成局与组同步正式入口 v1.34.0 起（13 条）；业务层补位 v1.34.1 起（18 条，2026-10-31 在对应代码实测通过）**。三档夹具与命令不同，references/party-room.md 的命令序列是当前检出的 19 条版（18 条业务 + 1 条 Robot）；v1.33.1 及更早没有这条纵切。
 - 业务时间（v1.33.2 起全部十个夹具一致，guide/10-time.md §1A）：Nest handler 的最后一个参数是约定名 `nowUnixMilli`，由生成的分发包装从 fctx 填本条消息冻结的业务时间，**Sender 签名里没有时间、调用方不传 `now`**；测试拨时钟用 `clock.SetSource`（与驱动 `SetClock` 接同一个原子时钟，`t.Cleanup` 恢复）。v1.33.1 上 auto-chess / card-rpg / idle-sim / merge-casual / mmorpg / survival-extraction / tower-defense 七个夹具的 handler 仍收调用方传入的 `now int64`（Sender 带时间参数），按旧版手册写的调用代码升级后要去掉这个参数（CHANGELOG v1.33.2“变更”）。
@@ -17,10 +17,14 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 
 | 用户要的 | 做法 |
 | --- | --- |
+| “按这段需求用 roost 做一个服务 / 加这几个功能”（不是照某类玩法） | [references/compose.md](references/compose.md)：查能力清单 → `roost module` 装现成模块 → 其余手写 → 验收 → 分栏报告 |
+| “在已有的 roost 工程上再加功能” | 同上；先读工程的 `roost.yaml`（`modules` 段是已装的模块） |
 | “用 roost 做一个 X 类游戏的 demo / 起步工程” | §2 选型 → §3 公共骨架 → 对应 reference 的命令序列 → §3.4 验证 |
 | “X 类玩法在 roost 上有什么限制 / 能不能做” | §5 公共限制 + reference 的“业务限制清单”；不在已成篇七类（首批六类 + 派对房间）的看 §6 |
 | “只想先看一个跑通的纵切” | §3.5 一键脚本（需 roost-core 检出） |
 | 改框架 / 修 bug / 发版 | 不用本 skill，用 roost-coding / roost-bugfix |
+
+**先查能力清单**：用户问“roost 有没有某项能力、怎么接入”时查 [docs/framework/CAPABILITIES.md](../../framework/CAPABILITIES.md)（按需求条目索引全部能力、接入方式、状态与现成参考），不要凭本文的摘要回答。
 
 ## 2. 玩法选型
 

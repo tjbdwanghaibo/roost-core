@@ -1,6 +1,6 @@
 # 功能设计：业务模块与配方（2026-11-10）
 
-**状态：方案已定、未实施（维护者 2026-11-10 确认下表四项决定）。** 本文只描述将要做什么；现行能力仍是 [roost-genre skill](../agent-skills/roost-genre/SKILL.md) 加 `scripts/testdata/<genre>/` 夹具与 `-template game-demo`，以 [AGENTS](../../AGENTS.md#游戏接入-skill) 和 [KNOWN-LIMITS“游戏接入验收”](KNOWN-LIMITS.md#游戏接入验收) 为准。实施落地后，现行契约写进对应 guide / impl，本文只保留盘点、决定与实施记录。
+**状态：第 2 期（最小闭环）已实施，第 3～6 期未开始（维护者 2026-11-10 确认下表四项决定，同日“你直接做之前的文档的逻辑”）。** 已有的：`roost module list / plan / add / verify` 与两个模块（wallet、checkin），现行说明在 [modules/README](../../modules/README.md)、[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module) 与[能力清单](../framework/CAPABILITIES.md)，限制在 [KNOWN-LIMITS“业务模块”](KNOWN-LIMITS.md#业务模块roost-module)。还没有的：配方、现有 13 类玩法与 game-demo 的迁移——它们仍是 [roost-genre skill](../agent-skills/roost-genre/SKILL.md) 加 `scripts/testdata/<genre>/` 夹具与 `-template game-demo`。实施结果与方案的出入见[第 17 节](#17-第-2-期实施记录2026-11-10)。
 
 **文档分两部分**：第 0～9 节是设计（做什么、为什么）；第 10 节起是实施方案（改哪些文件、怎么改、怎么验收），供实施者按期执行。实施者先读[第 10 节](#10-实施者须知)。
 
@@ -74,33 +74,23 @@ demo 有 371 个模板文件、约 5.9 万行（含测试）。三个包汇集�
 
 ```yaml
 name: wallet
-summary: 玩家货币：余额、加减、幂等回执
+summary: 玩家货币：余额、按业务键幂等的加减、消费协议
 requires: []                        # 依赖的其他模块，安装时先装
 conflicts: []                       # 不能同装的模块
-needs: {mods: [nest], features: [protocol, entity, dao, errcode], uses: []}
-entity: Player                      # 状态挂在哪个实体上；自带实体的模块写在 entities 里
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+entity: Player                      # 状态与组件挂在哪个实体上
 state:                              # 追加到该实体主 DAO 末尾的字段
-  - {field: Wallet,       type: WalletState,  dao: "persist,sync"}
-  - {field: WalletLedger, type: WalletLedger, dao: "persist"}
-component: Wallet                   # 挂在 entity 上的组件
-controller: wallet                  # 自己的 controller 域，不共用别的模块的
-protocols: [WalletBalance, WalletSpend]          # 名字；号由 roost.yaml 分配
-errcodes: [wallet_short, wallet_overflow]
-tables: []
-timers: []                          # 需要的定时器类型名；类型号安装时分配
-provides: [wallet]                  # 发布到 Registry 的能力名
-files:                              # 模板 -> 工程内路径；归业务，只写一次
-  - db/def/wallet.go
-  - game/wallet/wallet.go
-  - game/entities/player/wallet_component.go
-  - game/handler/wallet.go
-  - game/handler/wallet_test.go
-  - game/controllers/wallet/wallet_spend.go
-  - loadtest/wallet_steps.go
-verify: {packages: [./game/handler], run: '^TestWallet', pass: 6}
+  - {field: Wallet,       type: WalletState,  store: wallet,        dao: "persist,sync"}
+  - {field: WalletLedger, type: WalletLedger, store: wallet_ledger, dao: "persist"}
+component: Wallet                   # 挂在 entity 上的组件；组件号安装时分配
+protocols: [WalletSpend]            # 模板里 {{ID:protocol:<name>}} 的名字；号安装时分配
+errcodes: [wallet_short, wallet_invalid, wallet_conflict, wallet_ledger_full, wallet_overflow]
+verify: {packages: [./game/handler], run: '^TestWallet', pass: 7}
 ```
 
-模块源码在仓库里的位置、是否像 demo 一样嵌入 CLI，在第 2 期按“少分包”定，倾向沿用 `demo/embed.go` 的嵌入方式。
+写入的文件不列在清单里，由模块的 `files/` 目录读出。这是第 2 期落地的格式（`modules/wallet/module.yaml`）；模块源码在仓库 `modules/`，与 demo 一样嵌入 CLI。
 
 ### 2.3 命令
 
@@ -202,8 +192,9 @@ verify: {packages: [./game/handler], run: '^TestWallet', pass: 6}
 
 | 期 | 状态 |
 | --- | --- |
-| 1 | 本文已写（设计与第 10～16 节的实施方案），四项决定已确认（2026-11-10）。清单格式的字段名在第 2 期实现时定稿 |
-| 2～6 | 未开始 |
+| 1 | 本文已写（设计与第 10～16 节的实施方案），四项决定已确认（2026-11-10） |
+| 2 | 已实施（2026-11-10，分支 `feat/business-modules`）：安装器与四个命令、wallet 与 checkin 两个模块、自动化测试与发版门禁脚本、十个模块结构体的验证、能力清单。结果与推后的项见第 17 节 |
+| 3～6 | 未开始 |
 
 ---
 
@@ -245,6 +236,8 @@ python3 scripts/check-doc-anchors.py                           # 改了文档
 每期结束再跑一次 `GOWORK=off go test -timeout 30m ./...` 和该期表里列的脚本。
 
 ## 11. 第 2 期：最小闭环
+
+> 本节是实施前写的计划。已实施；实际做法与本节的出入、三项核对的结果、推后的工作项见[第 17 节](#17-第-2-期实施记录2026-11-10)，以第 17 节为准。
 
 目标：在一个 `-template game` 的新工程上，用 `roost module add wallet chat` 装两个模块，重复执行无变化，工程通过全部检查。这一期不迁移任何现有玩法，也不动 demo。
 
@@ -518,3 +511,47 @@ python3 scripts/check-doc-anchors.py                           # 改了文档
 - 不在第 5 期之前改 demo 的业务逻辑；不为了让模块机制好做而改三大块的运行时。
 - 不为了通过验收降低场景数、放宽断言或把 SKIP 当通过。
 - 不新建“完整 demo 的第二份拷贝”；参考工程只有 game-demo 一个。
+
+## 17. 第 2 期实施记录（2026-11-10）
+
+基线 `6e03e925`（main），分支 `feat/business-modules`。codebase-memory 本轮连不上，全部按源码与 `rg` 核对。
+
+### 17.1 三项核对的结果（第 11.1 节）
+
+| 核对 | 结果 |
+| --- | --- |
+| 嵌套结构体的同步粒度 | 符合预期。`dao:"persist,sync"` 的结构体进同步字段表，`dao:"persist"` 的不进；改子字段时同步补丁是子字段补丁（不是整体替换），持久补丁按路径。回归 `TestTenModuleStructsUnderOneDAO`、模块 wallet 的 `TestWalletOnlyTheVisibleStateIsSynced` |
+| 嵌套类型内部能否单独声明不同步 | 不能按 `persist,nosync` 用：写在嵌套字段上生成器接受，但这个字段照样出现在同步补丁的 PB 里（在临时工程上实测）。`nopersist,nosync` 的嵌套字段另有既有用例（`codegen/internal/dao/testdata/remoteviews`），语义没有逐项核对。所以维持第 2.4 节的规则：同步与否按顶层字段决定，要拆就拆成两个结构体。这条登记在 KNOWN-LIMITS“尚未确认” |
+| 顶层字段数上限 | 属实，且报错不清楚：65 个字段时生成成功、生成物编译失败（`constant overflows uint64`）。已改为解析阶段拒绝并说明（`TestDaoWithMoreThan64FieldsIsRefused`） |
+
+核对中另发现一处生成器缺陷并已修：**嵌套类型的识别取决于文件名顺序**。嵌套类型定义在排在 DAO 文件之前的文件里时识别不到，生成时报 `unsupported sync type`（模块的 `db/def/checkin.go` 排在 `player.go` 之前，正好撞上）。现在全部文件解析完再认一遍，生成物里嵌套类型的排列不变（`TestNestedTypesAreFoundWhateverFileDefinesThem`，修前红）。
+
+### 17.2 落地的做法与第 11 节的出入
+
+| 第 11 节的计划 | 实际 | 原因 |
+| --- | --- | --- |
+| 11.2 模块目录 `modules/`，嵌入 CLI | 按计划。嵌入用通配（`*/module.yaml`、`*/files`），不逐个列目录；`TestModuleCatalogEmbedsEveryTemplateAndValidates` 核对磁盘与嵌入一致、模板里没有具体的 module 路径 | — |
+| 11.3 清单与 `roost.yaml` 记录 | 按计划。`files` 不写在清单里，由 `files/` 目录读出；`roost.yaml` 的 `modules.<name>` 记摘要、号、状态字段、文件 | 少一处要对齐的清单 |
+| 11.4 三个结构化改写原语 | 做了“往主 DAO 末尾追加字段”（`daoStructSource.appendFields`，`roost add timer` 改用同一个定位函数）。`roost.yaml` 的合并只有写 `modules` 记录一处，没有做通用合并 | 两个模块不需要改 `uses` / `sagas` 等列表；等有模块需要时再做 |
+| 11.5 ID 分配 | 协议号、错误码、组件号按计划（一次计划内不相撞，已装记录里的号不再发）。**定时器类型没有做** | 两个模块都不用定时器；第 3 期第一次需要时做 |
+| 11.6 运行期接线点（`modules_gen.go`、`initModules`） | **没有做** | 两个模块都不需要 Init / Shutdown：组件挂在实体上，controller 用自己的 `FromRegistry` 取依赖。等出现需要后台循环或发布能力的模块时再加，避免先造一层没人用的接口 |
+| 11.7 安装器 | 事务性用“先记下会动到的文件、失败时原样恢复”，不是整工程的临时副本；生成这一步仍是 `GenerateTransactional`（暂存区里生成）。组件不经 `roost add component`，直接接到实体上（组件文件由模板提供、组件号是分配的占位）。没有给 `AddOptions` 加复用选项：前置骨架只在缺失时才调用现有的 `roost add` | 模块写的文件集合是确定的，记录并恢复比复制整个工程简单；回滚有变异验证（去掉恢复后用例失败） |
+| 11.8 Robot 的多模块共存 | **没有做** | 两个模块的验收只到 Nest 场景；Robot 步骤与真实 TCP 留给第 3 期（会话型玩法本来就带 Robot） |
+| 11.9 两个验证模块 wallet、chat | wallet 按计划；**chat 换成 checkin**（每日签到，依赖 wallet） | chat 托管服务的 collaborators 在新工程里是拒绝桩，模块要覆盖一个已存在的业务文件才能用；checkin 更能验证依赖顺序、两个模块共用一个 DAO、同一笔事务里跨模块调用、业务时间 |
+| 11.10 十个模块结构体 | 按计划。全量 3536 字节、增量 43 字节；持久补丁 4 条路径 67 字节（本机一次运行，只说明量级） | — |
+| 11.11 文档 | 命令参考、项目生成器、guide/12、`modules/README.md`、CHANGELOG、KNOWN-LIMITS；另加[能力清单](../framework/CAPABILITIES.md)（维护者 2026-11-10：“是不是把 core 的能力都记录下”）与 skill 的“按需求组合”流程。AGENTS 加了模块的指引，玩法的口径仍在第 4 期改 | — |
+| 11.12 验收 | `scripts/test-modules-generated.sh`（进 pretag）：全新工程自定义 module 名、依赖安装、重复安装无变化、wallet 7 + checkin 5、增量安装。“已手工加过别的组件和字段的工程上安装”“落点被占用时拒绝”“生成失败时回滚”在 Go 用例里（`TestModulesInstallOntoAProjectWithBusinessCodeAndRollBackOnFailure`）。`project doctor` 没有新增检查项 | 没有接线点，就没有 `modules:wiring` 可查 |
+
+### 17.3 组合时暴露的一条规则
+
+第一次把两个模块装在一起时，wallet 的一条用例失败：它断言“同步字段恰好是 `[Wallet]`”，而 checkin 也往同一个 DAO 加了同步字段。**模块的测试只能断言自己的事实。** 已改为断言“我的字段同步、我的账本不同步”，并写进 `modules/README.md` 的约定。这类问题只有组合验收能发现，所以第 3 期起每个新模块都要和已有模块一起装一遍。
+
+### 17.4 验证
+
+```sh
+GOWORK=off go test -count=1 -timeout 30m ./codegen/...     # 全部通过
+GOWORK=off go test -count=1 .                               # 仓库级门禁通过
+bash scripts/test-modules-generated.sh                      # modules: ok
+```
+
+平台：macOS。模块场景用替身提交器，没有连真实 Mongo / NATS / Redis，也没有经过真实 TCP。

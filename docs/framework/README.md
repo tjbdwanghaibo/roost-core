@@ -4,7 +4,7 @@ DataEngine 更新粒度与验证：[递归增量持久化](DATAENGINE-INCREMENTA
 
 本目录描述当前 main；最新发布版本与之后未发版的变化见 [CHANGELOG](../../CHANGELOG.md)，各功能版本的升级要求见 [docs/release](../release/README.md)。设计篇写职责、使用、状态与限制；实现篇给出契约、逐包源码和回归入口。
 
-第一次接触框架，请先读 [入门手册](../GETTING-STARTED.md)。下面每组先读“设计与使用”；只有需要定位或修改代码时才打开实现篇的源码/测试目录。
+第一次接触框架，请先读 [入门手册](../GETTING-STARTED.md)。要按需求找“core 有没有这项能力、怎么接入、有没有现成参考”，查[能力清单](CAPABILITIES.md)。下面每组先读“设计与使用”；只有需要定位或修改代码时才打开实现篇的源码/测试目录。
 
 [Roost 标记与字段 tag 手册](../../codegen/docs/TAGS.zh-CN.md)：按声明位置查询生成器标记、字段选项、默认值与组合限制。
 
@@ -87,6 +87,7 @@ DataEngine 更新粒度与验证：[递归增量持久化](DATAENGINE-INCREMENTA
 - [客户端接入](../../client/README.md)
 - [Codegen 入口与快速上手](../../codegen/README.md) · [命令与标记参考](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md) · [项目生成器](../../codegen/docs/PROJECT_GENERATOR.zh-CN.md)
 - [game-demo 模板](../../demo/README.md) · [功能逐项说明](../../demo/WALKTHROUGH.md)
+- [业务模块](../../modules/README.md)：`roost module add` 安装的现成业务单元（货币、签到……）与写法约定
 
 ## 专项契约参考
 

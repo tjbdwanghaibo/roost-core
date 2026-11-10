@@ -506,6 +506,19 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **mmorpg 玩法生成工程的 `TestMMORPGRobotBusiness` 偶发失败（2026-11-04，已定位并修复）**：根因在嵌入 TCP 接入，不在夹具——同一 SessionID 的旧连接迟到完成的登录把已经在服务的新连接关掉（见 [CHANGELOG](../../CHANGELOG.md) `[Unreleased]` 与本文[同一 SessionID 的重连](#同一-sessionid-的重连)）。失败的是第 4 次 robot，它的第 0 步就是 `Reconnect`：Robot 的 `connect` 发出认证帧不等 ack，紧接着重连并关闭旧连接，旧连接的握手在服务端照常走完、晚于新连接登记。按这个顺序直接打 `TCPServer` 的探针修前 3000 轮 31 次新连接被关、修后 0 次；生成工程同一用例（8 路并行、修前 / 修后二进制交替各 5 轮）修前 1600 次失败 15 次、全部是 `step 0: robot session: closed`，修后 1600 次 0 失败。同一次报告里的 `scripts/perf/sync-aoi` `TestHeartbeatPatrolReachesClientsAndTheAOI` 跳拍失败（inflight 4）是用例的时序假设，不是缺陷，见本文“压测工具的心跳驱动”一节。
 - **文档提交号门禁**（`TestDocumentedCommitsAreReachableFromHEAD`）：浅克隆（CI 默认 depth=1）整条跳过，只在本地完整检出与 release 工作流（fetch-depth: 0）生效；纯数字短 SHA 与不带反引号的提交号不检查；只查“在 HEAD 历史里”，不查是不是文档所说的改动。分支上的文档引用本分支提交时 rebase 后会红：引用本轮改动优先写测试名 / CHANGELOG 条目，或合入后改成 main 上的提交号。
 
+### 业务模块（roost module）
+
+2026-11-10，[方案](FEATURE-2026-11-10-business-modules.md)第 2 期，现行说明见 [modules/README](../../modules/README.md) 与[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)。
+
+- **只有两个模块**：wallet（货币）与 checkin（每日签到）。13 类玩法与 game-demo 的业务还没有做成模块，仍是 `scripts/testdata/<玩法>/` 夹具与 `-template game-demo`；按玩法一条命令出工程的配方（`-recipe`）没有做。
+- **没有卸载与升级**：安装只加不减，分配过的号与存储键不回收；内置模块之后变了，已装的模块不会跟着变，安装器只报告“装的是另一版”（`installed_other_version`），不给差异、不合并。
+- **模块绑定具体的实体名与工程形状**：两个模块都挂在名为 `Player` 的实体上，按 `-template game` 的目录约定写文件（`game/entities/player/`、`game/handler/`、`game/controllers/<module>/`）。实体叫别的名字的工程装不了。
+- **没有运行期接线点**：模块不能声明 Init / Shutdown、后台循环或向 Registry 发布能力；现有两个模块不需要（组件挂在实体上，controller 用自己的 `FromRegistry`）。需要这些的模块（匹配清扫、effect 消费者）出现时再加。
+- **没有定时器类型分配、Robot 步骤**：模块不能带实体定时器类型，也不带压测步骤；两者留给方案第 3 期。
+- **验收只到 Nest 场景**：`roost module verify` 的场景用替身提交器，不连 Mongo / NATS / Redis，不经过真实 TCP 与客户端。协议端点由生成器的既有用例覆盖，模块自己的端点没有网络用例。
+- **前置骨架不回退**：安装会先执行缺失的 `roost add dao` / `roost add access player`；之后模块安装失败时这两步的结果保留（它们是完整的工程状态）。
+- **嵌套字段的 `persist,nosync` 不生效（尚未确认是缺陷还是既定形状）**：在嵌套类型的字段上写 `dao:"persist,nosync"`，生成器接受，但这个字段照样出现在同步补丁的 PB 里（2026-11-10 在临时生成工程上实测）。`nopersist,nosync` 的嵌套字段另有既有用例（`codegen/internal/dao/testdata/remoteviews`），两者的语义没有逐项核对。现行规则：同步与否按 DAO 顶层字段决定，要让一部分状态不同步就放进另一个顶层字段的嵌套类型里。下一步：读 `codegen/internal/dao/sync_proto.go` 与 `template_nested.go` 里嵌套字段对 `Tag.Sync` / `Tag.Persist` 的处理，确认是该拒绝还是该生效。
+
 ### 业务 HTTP 路由与配置检查
 
 **业务 HTTP 路由（`wiring/web`）**：

@@ -345,6 +345,7 @@ make generate。未知字段会直接报错，避免拼写错误被静默忽略�
 | timers | 否 | 按实体的持久定时器（roost add timer）：组件名、组件类型号、服务、节点所在 DAO | sync 重写组件 / 节点类型 / Tick handler，bootstrap 装驱动 |
 | heartbeats | 否 | 按实体的心跳宿主与行为组件（roost add heartbeat / behavior）：组件类型号、服务、行为选项（ai / state） | sync 重写宿主 / 行为组件与心跳驱动，服务装 heartbeat Mod |
 | time_domains | 否 | 场景时间域（roost add timedomain）：组件类型号、存三个字段的 DAO | sync 重写时间域组件 |
+| modules | 否 | 已安装的业务模块（roost module add）：每个模块拥有的文件、主 DAO 字段与分配到的号 | 归属清单；安装器用它判断“已安装”，分配过的号不再发出 |
 | services.<name>.rpcs / uses_rpcs | 否 | 本工程自己的跨进程服务：拥有者 / 调用者 | 拥有者进程装配 owner Mod（注册 bus handler），调用者装配生成的 ClientMod；用 roost add rpc 创建 |
 | services.<name>.port_block | 是（生成器写） | 端口块号 0～99，各服务不同，一经分配不再改变 | 开发配置的按服务端口由它派生：ops 9100+N、etcd.advertise_addr 9000+N、second-game.sh 的 ops 9200+N / advertise 8900+N；新服务取当前最大块号 + 1，手改 roost.yaml 加服务时不写、由 roost project sync 分配；删除服务不回收 |
 | ids | 否 | protocol/entity/component/errcode 编号空间 | add、id next 和 id check 使用 |
@@ -531,6 +532,27 @@ heartbeats 是 roost add heartbeat / roost add behavior 写下的按实体心跳
 
 不要只手工添加条目；使用 add 命令，让实体组件字段、DAO 字段、服务的 heartbeat Mod 与生成部分一起更新。动作、
 策略、状态、心跳登记与倍率范围写在各自的业务文件里（只建一次）。去掉条目后生成部分不会自动删除。
+
+## 8.3 modules
+
+modules 是 roost module add 写下的归属清单，键为模块名：
+
+    modules:
+      wallet:
+        digest: 0933c0c21c59    # 安装时内置模块的摘要：看得出装的是不是当前这一版
+        ids:                    # 分配到的号，按种类和名字
+          component: {Wallet: 2000}
+          errcode: {wallet_short: 100004}
+          protocol: {WalletSpend: 10000}
+        state:                  # 追加到主 DAO 末尾的字段
+          - PlayerDao.Wallet
+          - PlayerDao.WalletLedger
+        files:                  # 写入的业务文件：归工程所有，可以直接改
+          - game/handler/wallet_spend.go
+
+由安装器写入，不要手工增删：删掉一条记录不会删掉工程里的文件，安装器却会把这个模块当成没装过。模块没有
+卸载命令，分配过的号与存储键不回收；要去掉一个模块时按这份清单手工删文件和 DAO 字段。roost module list 看
+有哪些模块，roost module plan <name> 预览安装会做什么，roost help module 有完整说明。
 
 ## 9. ids
 
