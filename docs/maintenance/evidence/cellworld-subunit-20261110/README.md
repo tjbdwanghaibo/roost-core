@@ -96,7 +96,18 @@ FAIL
 | 整包，3 轮同时跑（负载 11～27） | 1 轮失败：`TestDamageAcrossBoundaryAppliedOnce`（`9 distinct hits applied, want 10`） | 1 轮失败：`TestDamageAcrossBoundaryAppliedOnce`（`want hp 80`）、`TestWorldDiagonalThroughFourCellCorner`（view gap 254ms） |
 | 5 个视野连续性用例 × 6 次，2 轮同时跑（负载 20～33） | 60 次中 4 次失败，全是 view gap | 60 次中 5 次失败，全是 view gap |
 
-失败的都是同一类时序断言，修前修后同负载下频率相当；本次改动只改积分算术，不涉及消息与心跳时序。整包 `-race` 共跑 7 遍（`go test -race -count=1`）：第 3、5、6 遍通过，第 1、2、4、7 遍失败，失败全部是上述 view gap（第 1 遍另有 `TestNATSWorldJitterAtBoundary` 在 5s 内没看到换向点、最后视野停在 x=9941，与视野停发同一时段；`TestSecondCellProcessForSameSIDIsRefused` 子进程单实例锁丢失），均出现在平均负载 22～50 时。**没有在低负载下拿到连续 3 遍整包 -race 通过**（见下文“待维护者确认”）；没有 `DATA RACE`。
+失败的都是同一类时序断言，修前修后同负载下频率相当；本次改动只改积分算术，不涉及消息与心跳时序。
+
+合并 main 之前（`8d3c3789`）整包 `-race`（`go test -race -count=1`）共跑 10 遍：第 3、5、6、8、10 遍通过；第 1、2、4、7、9 遍失败，失败全部是上述 view gap（第 1 遍另有 `TestNATSWorldJitterAtBoundary` 在 5s 内没看到换向点、最后视野停在 x=9941，与视野停发同一时段；`TestSecondCellProcessForSameSIDIsRefused` 子进程单实例锁丢失），出现在平均负载 10～50 时。没有 `DATA RACE`。
+
+合并 main（`2709660f`：分区地形演练、P4 水与建筑、缺省平地地形；cellworld 积分代码未变）之后（`171b5b3d`）：
+
+| 检查 | 结果 |
+| --- | --- |
+| `gofmt -l gameplay demo`、`go build ./...`、`go vet ./gameplay/cellworld`、`check-doc-anchors` | 通过（261 个文件 0 broken） |
+| 整包 `-race` | 共 6 遍：第 1、2 遍通过，第 3 遍 `TestWorldOnALoaderBackedGetter` view gap 206ms > 200ms（负载 15），**第 4、5、6 遍连续通过**（负载 6～12） |
+| `go test -count=1 .` | 通过 |
+| 重新生成 game-demo（合并后的模板）：`go mod tidy`、`go build ./...`、`go vet ./...`、`go test -count=1 ./...` | 全部通过（35 个包 ok，含 `game/partition`、`game/entities/monster`）；`go generate ./...` 后工作树干净 |
 
 ## 待维护者确认
 
