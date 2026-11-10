@@ -39,7 +39,7 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `internal/service/<服务>/` | 各服务进程：game 的消费者、matchmaker、scene、battle、GM；account / chat / session 的 collaborators |
 | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/alliancerule/`、`game/entities/alliance*/` | 联盟服务（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：独立的 alliance 进程独占 Alliance / AllianceMember（Remote 托管、`service=alliance`），对已有实体的写走路由 RPC（发往实体的 owner；Alliance 起服预加载并登记路由），建盟走随机路由，请求回执与改动同事务；守卫是名单的缓存、跨实例收尾丢了由下一个请求自愈（联盟不产生任何 effect：成员通知由服务层写成功后直接发，预约期限是持有守卫的进程里的到期回调，跨实例宣战是宣战方事务里的持久“等确认”标记 + 直接调用对方 `AcknowledgeWar`），守卫 `snapshots=none` 不发 Remote 快照；运维命令 `alliance.info` / `alliance.guard` / `alliance.transfer` / `alliance.stop_founding` |
 | `game/guild/`、`saga/alliance_*/`、`internal/service/<game>/alliance_saga.go`、`alliance_notice.go` | game 侧的公会：game 只装联盟的只读 Mirror（`game/entities/alliance/mirror.go`），玩家所在公会是自己的副本 `PlayerDao.GuildID`，入会 / 退会一次 RPC，建盟扣费 / 捐献 / 领奖各一个 saga（Player 原生步骤 + 调 RPC 的 Mongo 步骤），接收成员变化通知推给在线玩家；见 [WALKTHROUGH](WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror) |
-| `game/terrainmap/`、`game/entities/terrain_chunk/`、`game/entities/building/`、`internal/service/<game>/terrain.go`、`terrain_sync.go`、`game/controllers/player/terrain_edit.go`、`cmd/terrainpack` | 可编辑地形（P1 / P2 单格、P3 普通场景的移动与寻路，缺省关闭）：地形包、被改过的块的实体、启动装入、玩家笔刷编辑与地形同步、高度场上的行走与寻路、P4 水位区域与普通场景的建筑，见[可编辑地形](#可编辑地形p1)、[玩家编辑与同步](#玩家编辑与同步p2)、[移动与寻路](#移动与寻路p3)、[水与建筑](#水与建筑p4) |
+| `game/terrainmap/`、`game/entities/terrain_chunk/`、`game/entities/building/`、`configs/schema/building*.go`、`internal/service/<game>/terrain.go`、`terrain_sync.go`、`building_sync.go`、`building_config.go`、`game/controllers/player/terrain_edit.go`、`cmd/terrainpack` | 可编辑地形（P1 / P2 单格、P3 普通场景的移动与寻路，缺省关闭）：地形包、被改过的块的实体、启动装入、玩家笔刷编辑与地形同步、高度场上的行走与寻路、P4 水位区域与普通场景的建筑，见[可编辑地形](#可编辑地形p1)、[玩家编辑与同步](#玩家编辑与同步p2)、[移动与寻路](#移动与寻路p3)、[水与建筑](#水与建筑p4) |
 | `internal/access/player/tcp/` | 玩家 TCP 接入的鉴权（`auth.go`） |
 | `configs/` | 配置表 schema、CSV、生成数据与各服务配置 |
 | `cmd/loadtest`、`loadtest/` | 机器人压测与场景脚本；`cmd/accountctl` 是操作员工具 |
@@ -328,33 +328,51 @@ scene:
 
 ### 水与建筑（P4）
 
-[方案 §25](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#25-p4-水与建筑实施结果2026-11-10)。
+[方案 §25](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#25-p4-水与建筑实施结果2026-11-10)；建筑的数据模型、配置表与同步见
+[方案 §27](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#27-建筑实体化与同步2026-11-10)。
 
 - **水位**：地形包（格式版本 2）里除了全局水位线 `WaterLevel`，还可以按块对齐的矩形区域配水位（`terrain.Meta.WaterRegions`，
   `terrainpack -water-region minX,minY,maxX,maxY,level` 可重复，块坐标、半开区间）。一个块只有一个水位：在区域里取区域的，否则取全局的。
   `IsWater` / `Probe` / 行走 / 放置都按地面高度与所在块的水位比较（同一个来源，客户端 C# 也按它），所以挖到水位以下就是水、填回水位
   以上就是陆地，规则确定、可以复现。区域水位不随原始地形之外的东西变（换水位 = 换包，走 D13）。
-- **协议**：`Building`（msgid 10039，`protocol/def/building.go`）：`op` 1 放置（类型、锚点节点、朝向、是否整平）/ 2 拆除（锚点），
-  编辑序号 `Seq` 与 `TerrainEdit` 同一个（玩家, 序号）空间、同一份账本：重发答 `duplicate`，续号用 `TerrainEdit` 的 `Seq = 0`。
-  demo 的类型（`game/entities/building` 的 `Catalog`）：1 hut 4×4、2 hall 8×6、3 tower 3×3，朝向 1、3 时宽高互换。
-- **放置校验**（拒绝时零写入，业务码 100060～100065）：占地在地图里、块归本进程且装着；锚点与占地上没有别的建筑；玩家站着的建筑数
-  未到上限（`Policy.MaxBuildings`，缺省 16）；占地内地面高差不超过类型的上限（不整平 `MaxRise`，整平 `MaxCut`）；每个节点（整平
+- **数据**：建筑是一种预制的整体加修改参数：`BuildingDao`（schema 2）记配置 ID（`ConfigID`，配置表 `building`）、修改参数值
+  （`Params []int32`，下标是配置表 `building_param` 的槽）、属主、锚点（`GX` / `GY`）、朝向、地基高度，以及只持久的占地宽高与
+  `BaseRevision`。配置表（`configs/schema/building.go`、`building_param.go`，CSV 在 `configs/table/`）：每种建筑的模型标识
+  （`Model`，客户端预制体）、占地宽高、放置规则（`MaxRise` / `MaxCut` / `MustLevel`）与参数槽（名字、最小、最大、缺省）。demo：
+  1 hut 4×4（1 槽）、2 hall 8×6（2 槽）、3 tower 3×3（3 槽）、4 keep 12×12（无槽，必须整平），朝向 1、3 时宽高互换。**占地只由
+  配置的宽高与朝向决定，参数不改变占地。** 跨行规则（槽从 0 连续、名字不重复、`Min ≤ Default ≤ Max`、至多 8 槽、宽高 ≤ 64）在
+  启动与每次热更新时检查（`internal/service/<game>/building_config.go`），热更新不许删已有配置 ID、不许改已有配置的宽高。
+- **协议**：`Building`（msgid 10039，`protocol/def/building.go`）：`op` 1 放置（配置 ID、参数、锚点节点、朝向、是否整平）/ 2 拆除
+  （锚点）/ 3 改参数（锚点、参数，只有属主），编辑序号 `Seq` 与 `TerrainEdit` 同一个（玩家, 序号）空间、同一份账本：重发答
+  `duplicate`，续号用 `TerrainEdit` 的 `Seq = 0`。参数个数不能多于槽数，没给的（从末尾起）取缺省值，每个值在槽的范围里（放置与
+  改参数同一规则）。
+- **放置校验**（拒绝时零写入，业务码 100060～100067）：配置 ID 在配置表里（`building_config`）、参数个数与范围（`building_params`）、
+  必须整平的整平了；占地在地图里、块归本进程且装着；锚点与占地上没有别的建筑；玩家站着的建筑数
+  未到上限（`Policy.MaxBuildings`，缺省 16）；占地内地面高差不超过配置的上限（不整平 `MaxRise`，整平 `MaxCut`）；每个节点（整平
   时按整平之后的高度）不低于所在块的水位。整平把占地压到占地各节点高度的平均（四舍五入），是同一笔事务里的一次地形编辑，计改动点数
   配额（每次至少 20 点，整平再加改动节点数）。
 - **事务与串行化点**：一次放置 / 拆除是一笔 strict 事务，锁住占地覆盖的块（至多 4 块）、建筑实体（ID 由锚点节点决定）与玩家的
-  编辑账本。建筑占着哪些节点的权威记录在块上（`TerrainChunkDao.Lots`，schema 4，只持久不同步），重叠检查在块的锁里读它——两份占地
-  只要有一个公共节点就有一块共同的块，Nest 按块串行，并发放置不会重叠。笔刷也在块的锁里读它，改到建筑脚下答 `terrain_occupied`。
+  编辑账本；改参数不改变占地，只锁建筑与账本。块上的 `TerrainChunkDao.Lots`（schema 4，只持久不同步）是服务端的串行化索引：重叠
+  检查在块的锁里读它——两份占地只要有一个公共节点就有一块共同的块，Nest 按块串行，并发放置不会重叠。笔刷也在块的锁里读它，改到建筑
+  脚下答 `terrain_occupied`。客户端不收 `Lots`，它的占位由建筑实体 + 配置推出。
 - **占位**：行走与寻路（`Map.Walker()`）读进程内的占位表：每块一个原子槽位，启动时按块的记录建好，放置 / 拆除提交之后换新；
   `Rules.Occupied` 仍是业务另外的占位钩子。
 - **拆除**：只有属主能拆；建筑记录清空（确定性 ID 不删档，同一锚点以后还能放），地形不复原；锚点上没有建筑答 `building_missing`
   （重发已生效的拆除也答这个，不是 `duplicate`）。
+- **同步**：建筑与玩家、怪走同一条 entitysync 链路（`sync=true`，命名空间 `building`，生成的同步字段与 packer），登记为场景
+  Manager 的 subject，放进建筑自己的 Interest（视野 200m、上限 128，视点就是玩家的地形视点），Manager 的 `Namespaces` 里单独计
+  128 个（会话引用表合起来 292）；按变化发（`TypeSchedules` 里 on_change）。放置提交后登记并放进视野，拆除提交后撤出视野（客户端收到
+  remove），改参数是普通的 DAO 写、发只带 `Params` 的增量。客户端用生成的 `ApplySyncBuildingDao`，按 `ConfigID` 查配置表实例化预制体，
+  按 `Params` 设参数，按 `GX` / `GY` / `Facing` / `Foundation` 摆放。整平改的地形照常走地形块的同步。
 - **重启与换版**：建筑（集合 `buildings`）、块的占地、账本的建筑数（`terrain_editors` schema 2）都随 DataEngine 落库，重启后
-  原样读回，启动时对账（`ReconcileBuildings`）核对建筑与块的占地。原始地形换版（D13）时块的地形改动照旧丢弃，建筑与占地保留：
+  原样读回，启动时对账（`ReconcileBuildings`）核对建筑与块的占地，并核对配置（配置 ID 没了或宽高变了计 `misconfigured`、保留不改）；
+  核对通过的建筑在场景启动后登记为同步 subject。原始地形换版（D13）时块的地形改动照旧丢弃，建筑与占地保留：
   整平过地基的按原来的地基世界高度在新地形上重新整平，然后按放置规则检查，不合规的保留并计 `unfit`、记 Warn（推荐做法，待维护者确认）。
-- **范围**：只在不分区的普通场景（分区场景不接建筑，答 `building_disabled`，跨格建筑是 P5）；建筑本身本轮不同步给别的玩家
-  （放置者按答复显示，同步方式待确认），整平改的地形照常走地形块的同步。
+- **范围**：只在不分区的普通场景（分区场景不接建筑，答 `building_disabled`，跨格建筑是 P5）。
 - **测试**：`internal/service/<game>/terrain_building_test.go`（校验、整平、判重、拆除、笔刷、绕行、并发、重启、换版、对账）；
-  `TestBuildingRestartRealMongo` 在 `ROOST_TERRAIN_IT_MONGO_URI` 指向副本集时用真实 DataEngine 跑重启与换版。
+  `building_sync_test.go`（真实 TCP 上另一个客户端看到出现 / 改参数 / 拆除、离开视野消失回来再出现，重启后同步与库一致，迟到的提交后
+  通知不倒序，改参数的属主与判重，配置的跨行规则与热更新，配置漂移的对账）；`TestBuildingRestartRealMongo` 在
+  `ROOST_TERRAIN_IT_MONGO_URI` 指向副本集时用真实 DataEngine 跑重启（含改过的参数）与换版。
 
 ## 改这里的东西之后
 

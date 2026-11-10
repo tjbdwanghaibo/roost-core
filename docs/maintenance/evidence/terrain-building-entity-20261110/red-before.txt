@@ -1,0 +1,5 @@
+# 修前（2709660f 生成的 game-demo，旧 API：Placement{Kind}）
+$ go test -count=1 -run TestRedAnotherClientSeesAPlacedBuilding ./internal/service/game/
+--- FAIL: TestRedAnotherClientSeesAPlacedBuilding (10.03s)
+    zz_building_red_test.go:19: timed out waiting for the building on the watcher's client
+FAIL
