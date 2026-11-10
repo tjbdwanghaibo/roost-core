@@ -1,0 +1,87 @@
+package player
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+
+	building "{{MODULE}}/game/entities/building"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/game/terrainmap"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleBuilding 是玩家放置 / 拆除一座建筑（可编辑地形 P4，普通场景）。校验、配额、权限、建实体与一笔多实体事务都在
+// terrainmap.Map.Place / Remove 里（这里只把线上的值换成请求、把拒绝换成业务码）；它会等数据库与 WAL，端点本来就在
+// Nest 业务 worker 之外。
+func (controller *Controller) HandleBuilding(context *playeraccess.Context, request *pb.BuildingRequest) (*pb.BuildingResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("building endpoint: context and request are required")
+	}
+	m := terrainmap.Active()
+	if m == nil {
+		code, reason := errcode.ClientError(apperrors.ErrTerrainDisabled)
+		return &pb.BuildingResponse{Code: code, Reason: reason}, nil
+	}
+	var (
+		result building.Result
+		err    error
+	)
+	switch request.Op {
+	case 1:
+		result, err = m.Place(context.Context(), context.PlayerID, request.Seq, building.Placement{
+			Kind: request.Kind, GX: request.GX, GY: request.GY, Facing: request.Facing, Level: request.Level,
+		})
+	case 2:
+		result, err = m.Remove(context.Context(), context.PlayerID, request.Seq, request.GX, request.GY)
+	default:
+		code, reason := errcode.ClientError(apperrors.ErrBuildingBad)
+		return &pb.BuildingResponse{Code: code, Reason: reason}, nil
+	}
+	if err != nil {
+		return buildingRefusal(context, request, err), nil
+	}
+	response := &pb.BuildingResponse{
+		Duplicate: result.Duplicate, Standing: result.Building.Standing, BuildingID: result.Building.ID,
+		Foundation: result.Building.Foundation, Leveled: result.Building.Leveled, LastSeq: result.LastSeq,
+	}
+	for _, chunk := range result.Chunks {
+		response.Chunks = append(response.Chunks, pb.TerrainChunkVersion{ChunkX: chunk.Key.X, ChunkY: chunk.Key.Y, Version: chunk.Version})
+	}
+	return response, nil
+}
+
+// buildingRefusal 是一次拒绝的答复：业务码（基础设施错误答 internal 并记日志）；序号不在窗口里时带上 LastSeq。
+func buildingRefusal(context *playeraccess.Context, request *pb.BuildingRequest, err error) *pb.BuildingResponse {
+	code, reason := errcode.ClientError(buildingError(err))
+	if code == errcode.CodeInternal {
+		slog.Error("building failed", "player_id", context.PlayerID, "seq", request.Seq, "op", request.Op, "err", err)
+	}
+	response := &pb.BuildingResponse{Code: code, Reason: reason}
+	var seqErr *terrainmap.SeqError
+	if errors.As(err, &seqErr) {
+		response.LastSeq = seqErr.LastSeq
+	}
+	return response
+}
+
+// buildingError 把 terrainmap 的拒绝换成业务码；建筑自己的拒绝在前，其余与地形编辑共用（terrainError）。
+func buildingError(err error) error {
+	switch {
+	case errors.Is(err, terrainmap.ErrBuildingsDisabled):
+		return apperrors.ErrBuildingDisabled
+	case errors.Is(err, terrainmap.ErrBuild):
+		return apperrors.ErrBuildingBad
+	case errors.Is(err, terrainmap.ErrSlope):
+		return apperrors.ErrBuildingSlope
+	case errors.Is(err, terrainmap.ErrUnderwater):
+		return apperrors.ErrBuildingUnderwater
+	case errors.Is(err, terrainmap.ErrBuildingLimit):
+		return apperrors.ErrBuildingLimit
+	case errors.Is(err, terrainmap.ErrNoBuilding):
+		return apperrors.ErrBuildingMissing
+	}
+	return terrainError(err)
+}

@@ -66,6 +66,15 @@ func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
 	if err != nil {
 		return nil, fmt.Errorf("terrain: %w", err)
 	}
+	// 建筑（P4）只在不分区的普通场景：分区场景邻格的 Ghost 带还没有建筑占位的副本（方案 §25），放置答 building_disabled。
+	if !partition.Enabled {
+		buildings, err := lifecycle.BuildingFromRegistry(registry)
+		if err != nil {
+			_ = m.Close()
+			return nil, fmt.Errorf("terrain: %w", err)
+		}
+		m.EnableBuildings(buildings, syncsender.NewBuildingSender(nestClient))
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), terrainLoadTimeout)
 	defer cancel()
 	started := time.Now()
@@ -88,6 +97,20 @@ func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
 			"stale_base", stats.StaleBase, "corrupt", stats.Corrupt)
 	}
 	terrainmap.Install(m)
+	// 建筑对账在 Install 之后（handler 经 terrainmap.Active() 找到本 Map）、玩家能进来之前：核对建筑与块上的占地记录，
+	// 原始地形换版时按新版本处置（见 terrainmap.Map.ReconcileBuildings）。
+	buildingStats, err := m.ReconcileBuildings(ctx)
+	if err != nil {
+		_ = m.Close()
+		return nil, fmt.Errorf("terrain: %w", err)
+	}
+	if buildingStats.Standing > 0 {
+		slog.Info("terrain buildings reconciled", "standing", buildingStats.Standing, "rebased", buildingStats.Rebased,
+			"unfit", buildingStats.Unfit, "mismatched", buildingStats.Mismatched)
+	}
+	if buildingStats.Mismatched > 0 {
+		slog.Error("terrain: some buildings disagree with their chunk lot records; they were left as they are", "mismatched", buildingStats.Mismatched)
+	}
 	if err := registry.Register(TerrainCapability, m); err != nil {
 		_ = m.Close()
 		return nil, fmt.Errorf("terrain: publish: %w", err)

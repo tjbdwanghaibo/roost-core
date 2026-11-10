@@ -141,12 +141,15 @@ type Policy struct {
 	// 事务、记序号；不设下限时它们不占配额，一个玩家每秒可以发任意多次。20 约等于一次块更新在线上的固定开销
 	// （帧头、组件头与包头约 110～144 字节 ÷ 每点约 7.5 字节），稳态平均配额相当于每秒 13.5 次此类请求（初始桶另有突发额度）。
 	MinEditPoints int
+	// MaxBuildings 是每个玩家同时站着的建筑数上限（可编辑地形 P4）：16。按玩家编辑账本的建筑数在放置事务里判断；0 表示
+	// 不限（测试与运维入口）。demo 取值，没有玩法实测。
+	MaxBuildings int
 }
 
 // DefaultPolicy 是方案 §8.1 的初值（MaxStrength 与 Limits 方案没给数，见各字段说明）。
 var DefaultPolicy = Policy{
 	MaxRadius: 1600, MaxChunks: 4, MaxStrength: 50, Limits: terrain.Limits{Bedrock: 0, Ceiling: 16383},
-	EditPointsPerSecond: 270, MinEditPoints: 20,
+	EditPointsPerSecond: 270, MinEditPoints: 20, MaxBuildings: 16,
 }
 
 // Rules 是业务给编辑的钩子（方案 §4“领地 / 权限规则由业务提供钩子”、“不能改有建筑占位的点”）。nil 表示都放行。
@@ -154,8 +157,9 @@ type Rules interface {
 	// AllowEdit 是领地 / 权限：玩家能不能在这些块上用这个笔刷。在 Nest 之外、事务之前调用（可以读别的服务），返回
 	// 非 nil 即拒绝，Brush 把它包成 ErrDenied。
 	AllowEdit(ctx context.Context, playerID int64, brush terrain.Brush, chunks []terrain.ChunkKey) error
-	// Occupied 报告块内下标是否被建筑占着（P4 由本格的 Building 实体推出）。在改块事务里、块的锁内调用（Nest short 池）：
-	// 只能读内存，不能阻塞、不能 I/O。
+	// Occupied 是业务另外的占位（地形块上的建筑占地之外：例如任务道具、临时禁区），返回 true 的点不能改、不能放建筑、
+	// 不能走。建筑本身的占位不经这里（块的 Lots，P4，见 building.go）。在改块事务里、块的锁内调用（Nest short 池），也被
+	// 行走判定调用：只能读内存，不能阻塞、不能 I/O。
 	Occupied(key terrain.ChunkKey, index int32) bool
 }
 
@@ -210,6 +214,12 @@ type Map struct {
 	quota pointQuota
 	// committed 是提交后的通知（地形同步把第一次改过的块登记为 subject）；nil 时不通知。见 SetCommitted。
 	committed atomic.Pointer[func(*terrain_chunk.TerrainChunk)]
+
+	// occupancy 是进程内给行走判定的建筑占位表（building.go）：Load 时按块记录建好，建筑事务提交后按修订号换新。
+	occupancy occupancyTable
+	// buildings、buildingSender 在 EnableBuildings 之后非 nil（只在不分区的普通场景）；Install 之前设定，之后只读。
+	buildings      Buildings
+	buildingSender BuildingSender
 }
 
 // Open 打开原始地形包、建空视图。region 由 regionOf 按包的地图参数算出（调用方据此把分区格裁到地图里）。
@@ -233,7 +243,7 @@ func Open(path string, regionOf func(terrain.Meta) (Region, error), chunks Chunk
 	return &Map{
 		pack: pack, view: terrain.NewView(pack), meta: meta, region: region,
 		chunks: chunks, editors: editors, editor: editor, unloadable: map[terrain.ChunkKey]error{},
-		policy: DefaultPolicy, quota: pointQuota{now: time.Now},
+		policy: DefaultPolicy, quota: pointQuota{now: time.Now}, occupancy: newOccupancyTable(meta),
 	}, nil
 }
 
@@ -390,6 +400,11 @@ func (m *Map) Load(ctx context.Context, store coredata.Store) (LoadStats, error)
 	var base []terrain.ChunkKey
 	for _, key := range keys {
 		record, ok := records[key]
+		if ok && record.err == nil && len(record.lots) > 0 && m.Owns(key) {
+			// 建筑占地（P4）：不论这块有没有地形改动（Version 0 的记录也可以有占地），也不论下面是否丢弃地形改动（丢弃不动
+			// 占地，换版后的建筑由 ReconcileBuildings 处置），按记录发布给行走判定。
+			m.occupancy.publish(key, record.lotRevision, record.lots)
+		}
 		switch {
 		case !ok:
 			base = append(base, key)
@@ -484,7 +499,13 @@ type Record struct {
 	overlay terrain.Overlay
 	edited  bool  // Version ≥ 1
 	err     error // 记录解不开（schema 不符、损坏）
+	// lots、lotRevision 是站在这块上的建筑占地（P4）。
+	lots        []terrain_chunk.Lot
+	lotRevision int64
 }
+
+// Lots 是记录里站在这块上的建筑占地。
+func (r Record) Lots() []terrain_chunk.Lot { return r.lots }
 
 // Overlay 是记录的数据；Edited 为 false（Version 0 的空实体）时为零值。
 func (r Record) Overlay() (terrain.Overlay, bool) { return r.overlay, r.edited }
@@ -560,7 +581,11 @@ func decodeRecord(doc coredata.RawDocument) Record {
 	if err != nil {
 		return Record{err: fmt.Errorf("terrain: entity %d record: %w", doc.Key.ID, err)}
 	}
-	return Record{overlay: overlay, edited: edited}
+	lots, err := terrain_chunk.LotsOf(dao)
+	if err != nil {
+		return Record{err: fmt.Errorf("terrain: entity %d record: %w", doc.Key.ID, err)}
+	}
+	return Record{overlay: overlay, edited: edited, lots: lots, lotRevision: dao.GetLotRevision()}
 }
 
 // Edit 是 P1 的内部写入口：把 edits 按块分组，每块一笔改块事务（块坐标升序），返回每块提交后的 Version。
@@ -857,7 +882,9 @@ func (m *Map) editPoints(brush terrain.Brush) (int, error) {
 // refusedBeforeWriting 报告事务的错误是不是 ApplyBrush 在第一次写之前的拒绝（整笔回滚，确定什么都没改）。
 func refusedBeforeWriting(err error) bool {
 	return errors.Is(err, ErrOccupied) || errors.Is(err, ErrBrush) || errors.Is(err, ErrNotOwned) || errors.Is(err, ErrUnloadable) ||
-		errors.Is(err, ErrStale) || errors.Is(err, ErrSeqAhead)
+		errors.Is(err, ErrStale) || errors.Is(err, ErrSeqAhead) ||
+		errors.Is(err, ErrBuild) || errors.Is(err, ErrSlope) || errors.Is(err, ErrUnderwater) || errors.Is(err, ErrBuildingLimit) ||
+		errors.Is(err, ErrNoBuilding) || errors.Is(err, ErrDenied) || errors.Is(err, ErrLotMismatch)
 }
 
 // ledgerFor 返回玩家编辑账本的实体 ID，第一次用时建出（GetOrCreate：库里有就冷加载）。
@@ -973,6 +1000,7 @@ func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_
 	}
 	before := make(map[terrain.ChunkKey]terrain.Chunk, len(surfaces))
 	fresh := make(map[terrain.ChunkKey]bool, len(surfaces))
+	occupancy := make(map[terrain.ChunkKey]terrain_chunk.Occupancy, len(surfaces))
 	for i, surface := range surfaces {
 		key := surface.Owner().Key()
 		if key != want[i] {
@@ -988,6 +1016,9 @@ func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_
 		if err != nil {
 			return terrain_chunk.BrushResult{}, err
 		}
+		if occupancy[key], err = surface.Occupancy(); err != nil {
+			return terrain_chunk.BrushResult{}, err
+		}
 		before[key], fresh[key] = data, !fromRecord
 	}
 	changes, err := brush.Apply(m.meta, m.policy.Limits, before)
@@ -997,8 +1028,10 @@ func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_
 	byKey := make(map[terrain.ChunkKey][]terrain_chunk.PointEdit, len(changes))
 	for _, change := range changes {
 		edits := make([]terrain_chunk.PointEdit, len(change.Points))
+		occupied := occupancy[change.Key]
 		for i, p := range change.Points {
-			if m.rules != nil && m.rules.Occupied(change.Key, p.Index) {
+			// 建筑占地在块的锁里读（块的 Lots，与放置同一把锁）；业务另外的占位经钩子。
+			if occupied.Has(p.Index) || m.rules != nil && m.rules.Occupied(change.Key, p.Index) {
 				return terrain_chunk.BrushResult{}, fmt.Errorf("%w: chunk %v point %d", ErrOccupied, change.Key, p.Index)
 			}
 			edits[i] = terrain_chunk.PointEdit{Index: p.Index, Height: p.Height, Material: p.Material}
@@ -1097,14 +1130,16 @@ func (q *pointQuota) refund(playerID int64, points, rate int) {
 func (m *Map) SetClock(now func() time.Time) { m.quota.now = now }
 
 // Walker 是本进程地形上的行走规则（可编辑地形方案 §22，P3 移动与寻路）：视图、首版规则 terrain.DefaultWalkRules，
-// 建筑占位钩子取 Rules.Occupied（没装 Rules 时没有占位；P4 由 Building 推出）。Bounds 留空，由场景按自己的世界范围
-// 填。查询只读视图、不取锁，可以在 Nest short 池里调用；SetRules 之后再取。
+// 占位钩子 = 建筑占位表（P4，提交后发布，见 building.go）或 Rules.Occupied（业务另外的占位）。Bounds 留空，由场景按
+// 自己的世界范围填。查询只读视图与占位表、不取锁，可以在 Nest short 池里调用；SetRules 之后再取。
+//
+// 建筑放下之后，行走与寻路在占位表发布（提交后回调）之后才绕开它：WAL 落盘到回调执行之间的几毫秒里，已经在走的角色
+// 可能还会走进刚放的占地（与地形改动的视图更新同一个窗口）。
 func (m *Map) Walker() terrain.Walker {
-	w := terrain.Walker{View: m.view, Rules: terrain.DefaultWalkRules}
-	if rules := m.rules; rules != nil {
-		w.Occupied = rules.Occupied
-	}
-	return w
+	rules := m.rules
+	return terrain.Walker{View: m.view, Rules: terrain.DefaultWalkRules, Occupied: func(key terrain.ChunkKey, index int32) bool {
+		return m.occupancy.occupied(key, index) || rules != nil && rules.Occupied(key, index)
+	}}
 }
 
 // Height / Material / IsWater / Probe 委托视图（算法与错误见 gameplay/terrain 的 View）。

@@ -30,3 +30,25 @@ var ErrTerrainOccupied = errcode.Define(100058, "terrain_occupied", "a building 
 // ErrTerrainSeq：编辑序号不在玩家编辑账本的窗口里（terrainmap.ErrStale / ErrSeqAhead，可编辑地形 T01/T02）。这次没做；
 // 答复带 LastSeq：Seq ≤ LastSeq 是太旧的请求（已无法确认当时是否生效），Seq > LastSeq 是跳得太远（从 LastSeq + 1 续号）。
 var ErrTerrainSeq = errcode.Define(100059, "terrain_seq", "terrain edit sequence outside the server's window")
+
+// 建筑（可编辑地形 P4，协议 Building）的拒绝。放置 / 拆除与地形编辑共用 terrain_disabled、terrain_not_owned、
+// terrain_unavailable、terrain_rate、terrain_denied（领地 / 权限，或拆除别人的建筑）、terrain_occupied（锚点或占地有建筑）、
+// terrain_seq（序号不在玩家编辑账本的窗口里）。
+
+// ErrBuildingDisabled：这个场景不接建筑（分区场景，方案 §25：邻格还看不到建筑占位）。
+var ErrBuildingDisabled = errcode.Define(100060, "building_disabled", "buildings cannot be placed in this scene")
+
+// ErrBuildingBad：请求不合法（类型、朝向、锚点不在地图里、操作、编辑序号）。
+var ErrBuildingBad = errcode.Define(100061, "building_bad", "building request refused")
+
+// ErrBuildingSlope：占地的地面高差超过这种建筑的上限（不整平时 MaxRise，整平时 MaxCut）。
+var ErrBuildingSlope = errcode.Define(100062, "building_slope", "the ground is too uneven for this building")
+
+// ErrBuildingUnderwater：占地有节点（整平之后）低于所在块的水位线。
+var ErrBuildingUnderwater = errcode.Define(100063, "building_underwater", "the building would stand in water")
+
+// ErrBuildingLimit：玩家的建筑数已到上限（terrainmap.Policy.MaxBuildings）。
+var ErrBuildingLimit = errcode.Define(100064, "building_limit", "building limit reached")
+
+// ErrBuildingMissing：拆除的锚点上没有建筑。
+var ErrBuildingMissing = errcode.Define(100065, "building_missing", "no building stands here")

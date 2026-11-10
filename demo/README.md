@@ -288,7 +288,7 @@ scene:
 分区场景的格内积分按同一套规则判定（见下面“分区场景”）。不开地形时一切与之前相同（`TestWithoutASurfaceTheMapIsTheFlatGrid` 与原有移动用例）。
 
 - **接线**：服务 Init 在地形同步就绪后调 `installSurface`，把 `terrainmap.Map.Walker()`（`terrain.DefaultWalkRules`，建筑占位取
-  `Rules.Occupied`）装到场景的 `Terrain().SetSurface`，范围夹到场景的世界（即地形图，见下面“场景大小”）。`actor.Surface` 是每个 `Move` 的 `MoveConfig.Surface`：
+  进程内的建筑占位表或 `Rules.Occupied`，见下面 P4）装到场景的 `Terrain().SetSurface`，范围夹到场景的世界（即地形图，见下面“场景大小”）。`actor.Surface` 是每个 `Move` 的 `MoveConfig.Surface`：
   每拍读一次，地形改动后的下一步就按新地形判定。
 - **规则**：1m 地面节点之间坡度 ≤ 45°、陡降 ≤ 3 米可走；水深 > 50 厘米是游泳（速度 60%，站立高度是水面）；地图外、块没装的节点
   不可进入。服务端位置只有 X / Y，高度按 `Walker.StandZ` 推出，客户端同算；不加 Z 字段，cellworld 线上格式不变。
@@ -313,6 +313,36 @@ scene:
   进场位置不按 `Standable` 检查（站在不可走的节点上的角色一步不动）。测试：`terrain_partition_test.go` 的
   `TestTerrainPartitionWalkAcrossCellsFollowsTheEdits`（真实 Map、改块事务与副本，真实 cellworld Node 积分替身 NPC）。
 - **限制**：陡壁深坑会困住玩家（服务端不替玩家找出路）；路线开头可能先折回起点节点中心（≤ 约 0.7m）。
+
+### 水与建筑（P4）
+
+[方案 §25](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#25-p4-水与建筑实施结果2026-11-10)。
+
+- **水位**：地形包（格式版本 2）里除了全局水位线 `WaterLevel`，还可以按块对齐的矩形区域配水位（`terrain.Meta.WaterRegions`，
+  `terrainpack -water-region minX,minY,maxX,maxY,level` 可重复，块坐标、半开区间）。一个块只有一个水位：在区域里取区域的，否则取全局的。
+  `IsWater` / `Probe` / 行走 / 放置都按地面高度与所在块的水位比较（同一个来源，客户端 C# 也按它），所以挖到水位以下就是水、填回水位
+  以上就是陆地，规则确定、可以复现。区域水位不随原始地形之外的东西变（换水位 = 换包，走 D13）。
+- **协议**：`Building`（msgid 10039，`protocol/def/building.go`）：`op` 1 放置（类型、锚点节点、朝向、是否整平）/ 2 拆除（锚点），
+  编辑序号 `Seq` 与 `TerrainEdit` 同一个（玩家, 序号）空间、同一份账本：重发答 `duplicate`，续号用 `TerrainEdit` 的 `Seq = 0`。
+  demo 的类型（`game/entities/building` 的 `Catalog`）：1 hut 4×4、2 hall 8×6、3 tower 3×3，朝向 1、3 时宽高互换。
+- **放置校验**（拒绝时零写入，业务码 100060～100065）：占地在地图里、块归本进程且装着；锚点与占地上没有别的建筑；玩家站着的建筑数
+  未到上限（`Policy.MaxBuildings`，缺省 16）；占地内地面高差不超过类型的上限（不整平 `MaxRise`，整平 `MaxCut`）；每个节点（整平
+  时按整平之后的高度）不低于所在块的水位。整平把占地压到占地各节点高度的平均（四舍五入），是同一笔事务里的一次地形编辑，计改动点数
+  配额（每次至少 20 点，整平再加改动节点数）。
+- **事务与串行化点**：一次放置 / 拆除是一笔 strict 事务，锁住占地覆盖的块（至多 4 块）、建筑实体（ID 由锚点节点决定）与玩家的
+  编辑账本。建筑占着哪些节点的权威记录在块上（`TerrainChunkDao.Lots`，schema 4，只持久不同步），重叠检查在块的锁里读它——两份占地
+  只要有一个公共节点就有一块共同的块，Nest 按块串行，并发放置不会重叠。笔刷也在块的锁里读它，改到建筑脚下答 `terrain_occupied`。
+- **占位**：行走与寻路（`Map.Walker()`）读进程内的占位表：每块一个原子槽位，启动时按块的记录建好，放置 / 拆除提交之后换新；
+  `Rules.Occupied` 仍是业务另外的占位钩子。
+- **拆除**：只有属主能拆；建筑记录清空（确定性 ID 不删档，同一锚点以后还能放），地形不复原；锚点上没有建筑答 `building_missing`
+  （重发已生效的拆除也答这个，不是 `duplicate`）。
+- **重启与换版**：建筑（集合 `buildings`）、块的占地、账本的建筑数（`terrain_editors` schema 2）都随 DataEngine 落库，重启后
+  原样读回，启动时对账（`ReconcileBuildings`）核对建筑与块的占地。原始地形换版（D13）时块的地形改动照旧丢弃，建筑与占地保留：
+  整平过地基的按原来的地基世界高度在新地形上重新整平，然后按放置规则检查，不合规的保留并计 `unfit`、记 Warn（推荐做法，待维护者确认）。
+- **范围**：只在不分区的普通场景（分区场景不接建筑，答 `building_disabled`，跨格建筑是 P5）；建筑本身本轮不同步给别的玩家
+  （放置者按答复显示，同步方式待确认），整平改的地形照常走地形块的同步。
+- **测试**：`internal/service/<game>/terrain_building_test.go`（校验、整平、判重、拆除、笔刷、绕行、并发、重启、换版、对账）；
+  `TestBuildingRestartRealMongo` 在 `ROOST_TERRAIN_IT_MONGO_URI` 指向副本集时用真实 DataEngine 跑重启与换版。
 
 ## 改这里的东西之后
 

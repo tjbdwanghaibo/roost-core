@@ -1,0 +1,106 @@
+package terrain_chunk
+
+import (
+	"cmp"
+	"fmt"
+	"slices"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+// Lot 是一座建筑的占地（可编辑地形 P4）：1m 节点（世界采样点）的矩形 [GX, GX+W) × [GY, GY+H)，(GX, GY) 是锚点
+// （左下角节点）。节点 (gx, gy) 属于块 (⌊gx/64⌋, ⌊gy/64⌋)（共享边归右 / 上的块，与地形数据相同），占地跨几块就在每一块的
+// TerrainChunkDao.Lots 里各记一份。
+//
+// 打包成一个 int64 存进 DAO：低 16 位 GX、再 16 位 GY、再 8 位 W、再 8 位 H（共 48 位）。地图每边至多 1024 块 × 64 =
+// 65536 个节点，坐标放得下 16 位；边长至多 MaxLotSide。
+type Lot struct {
+	GX, GY int64
+	W, H   int32
+}
+
+// MaxLotSide 是占地一边最多的节点数：64（一块的边长）。占地因此至多跨 2 × 2 块，放置事务至多锁 4 块（与笔刷相同）。
+const MaxLotSide = terrain.ChunkSamples
+
+// MaxLots 是一块上至多记多少份占地（一块 4096 个节点，最小的建筑 3 × 3 时约 455 座；64 足够，也让一块的 DAO 有界）。
+const MaxLots = 64
+
+// lotNodeLimit 是节点坐标的上限（不含）：16 位。
+const lotNodeLimit = 1 << 16
+
+// Valid 检查占地在地图里、边长在 [1, MaxLotSide]。
+func (l Lot) Valid(meta terrain.Meta) error {
+	maxX, maxY := int64(meta.ChunksX)*terrain.ChunkSamples, int64(meta.ChunksY)*terrain.ChunkSamples
+	if l.W < 1 || l.H < 1 || l.W > MaxLotSide || l.H > MaxLotSide {
+		return fmt.Errorf("%w: lot %v: sides must be in [1, %d]", terrain.ErrOutOfMap, l, MaxLotSide)
+	}
+	if l.GX < 0 || l.GY < 0 || l.GX+int64(l.W) > maxX || l.GY+int64(l.H) > maxY {
+		return fmt.Errorf("%w: lot %v outside the %d × %d nodes of the map", terrain.ErrOutOfMap, l, maxX, maxY)
+	}
+	return nil
+}
+
+func (l Lot) String() string { return fmt.Sprintf("[%d,%d)×[%d,%d)", l.GX, l.GX+int64(l.W), l.GY, l.GY+int64(l.H)) }
+
+// Pack 是存进 DAO 的值（Valid 的占地才能打包）。
+func (l Lot) Pack() int64 {
+	return l.GX | l.GY<<16 | int64(l.W)<<32 | int64(l.H)<<40
+}
+
+// UnpackLot 是 Pack 的逆；不是本程序写出的值（高位不为 0、边长为 0）返回错误。
+func UnpackLot(v int64) (Lot, error) {
+	l := Lot{GX: v & 0xFFFF, GY: v >> 16 & 0xFFFF, W: int32(v >> 32 & 0xFF), H: int32(v >> 40 & 0xFF)}
+	if v < 0 || v>>48 != 0 || l.W < 1 || l.H < 1 || l.W > MaxLotSide || l.H > MaxLotSide {
+		return Lot{}, fmt.Errorf("%w: lot value %#x", terrain.ErrInvalidChunk, v)
+	}
+	return l, nil
+}
+
+// Contains 报告节点 (gx, gy) 是否在占地里。
+func (l Lot) Contains(gx, gy int64) bool {
+	return gx >= l.GX && gy >= l.GY && gx < l.GX+int64(l.W) && gy < l.GY+int64(l.H)
+}
+
+// Overlaps 报告两份占地是否有公共节点。
+func (l Lot) Overlaps(o Lot) bool {
+	return l.GX < o.GX+int64(o.W) && o.GX < l.GX+int64(l.W) && l.GY < o.GY+int64(o.H) && o.GY < l.GY+int64(l.H)
+}
+
+// Chunks 是占地的节点所在的块，按 (Y, X) 排序（与笔刷的 Chunks、Nest 的取锁次序无关，只是确定的次序）。
+func (l Lot) Chunks() []terrain.ChunkKey {
+	var keys []terrain.ChunkKey
+	for cy := l.GY / terrain.ChunkSamples; cy <= (l.GY+int64(l.H)-1)/terrain.ChunkSamples; cy++ {
+		for cx := l.GX / terrain.ChunkSamples; cx <= (l.GX+int64(l.W)-1)/terrain.ChunkSamples; cx++ {
+			keys = append(keys, terrain.ChunkKey{X: int32(cx), Y: int32(cy)})
+		}
+	}
+	slices.SortFunc(keys, func(a, b terrain.ChunkKey) int { return cmp.Or(cmp.Compare(a.Y, b.Y), cmp.Compare(a.X, b.X)) })
+	return keys
+}
+
+// Nodes 依次给出占地在块 key 里的节点：块内下标（行优先，j·64 + i）。
+func (l Lot) Nodes(key terrain.ChunkKey, yield func(index int32)) {
+	ox, oy := int64(key.X)*terrain.ChunkSamples, int64(key.Y)*terrain.ChunkSamples
+	for gy := max(l.GY, oy); gy < min(l.GY+int64(l.H), oy+terrain.ChunkSamples); gy++ {
+		for gx := max(l.GX, ox); gx < min(l.GX+int64(l.W), ox+terrain.ChunkSamples); gx++ {
+			yield(int32((gy-oy)*terrain.ChunkSamples + gx - ox))
+		}
+	}
+}
+
+// Occupancy 是一块的占位：块内 4096 个节点各一位（第 index 位 = 下标 index 的节点被占着）。
+type Occupancy [terrain.ChunkPoints / 64]uint64
+
+// Has 报告块内下标 index 的节点是否被占着。
+func (o *Occupancy) Has(index int32) bool { return o[index/64]&(1<<(index%64)) != 0 }
+
+func (o *Occupancy) set(index int32) { o[index/64] |= 1 << (index % 64) }
+
+// OccupancyOf 是块 key 上这些占地推出的占位（每次调用现算，不常驻：回滚统一走 DAO，组件不持有派生的内存状态）。
+func OccupancyOf(key terrain.ChunkKey, lots []Lot) Occupancy {
+	var o Occupancy
+	for _, l := range lots {
+		l.Nodes(key, o.set)
+	}
+	return o
+}

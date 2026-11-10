@@ -1,0 +1,48 @@
+package handler
+
+import (
+	building "{{MODULE}}/game/entities/building"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
+	"{{MODULE}}/game/terrainmap"
+)
+
+// 建筑的三个事务（可编辑地形 P4，game/terrainmap 发起）：都是 rollback=undo durability=strict——回复与占位表的发布都在
+// WAL 持久之后，回滚的事务由生成 setter 的逆操作还原块、建筑与账本。目标组是建筑占地覆盖的全部地形块（至多 2 × 2 块），
+// 加建筑实体（与块同在 World 档，按 ID 排序取锁）与玩家的编辑账本（PlayerScoped，最后取锁）。块、建筑实体与账本由调用方
+// 先经 lifecycle 的 GetOrCreate 建出（handler 只能锁已存在的实体）。业务都在 terrainmap.Map，经 terrainmap.Active() 找到。
+
+// handlerBuildingPlace 是玩家放置一座建筑（Map.Place 发起）：判重、重叠 / 高差 / 水位 / 建筑数检查、可选的地基整平、
+// 建筑实体、每块记占地、账本记序号（terrainmap.Map.ApplyPlace）。
+//
+//roost:nest rollback=undo durability=strict
+func handlerBuildingPlace(targets []terrain_chunk.ISurfaceEntity, site building.ISiteEntity, editor terrain_editor.ILedgerEntity, seq int64, placement building.Placement) (building.Result, error) {
+	m := terrainmap.Active()
+	if m == nil {
+		return building.Result{}, terrainmap.ErrDisabled
+	}
+	return m.ApplyPlace(targets, site, editor, seq, placement)
+}
+
+// handlerBuildingRemove 是属主拆除一座建筑（Map.Remove 发起，terrainmap.Map.ApplyRemove）。
+//
+//roost:nest rollback=undo durability=strict
+func handlerBuildingRemove(targets []terrain_chunk.ISurfaceEntity, site building.ISiteEntity, editor terrain_editor.ILedgerEntity, seq int64) (building.Result, error) {
+	m := terrainmap.Active()
+	if m == nil {
+		return building.Result{}, terrainmap.ErrDisabled
+	}
+	return m.ApplyRemove(targets, site, editor, seq)
+}
+
+// handlerBuildingRebase 是启动对账里的一座建筑（Map.ReconcileBuildings 发起，Install 之后）：核对建筑与块上的占地记录
+// 一致，原始地形换版时按新版本处置（terrainmap.Map.ApplyRebase）。lot 是块记录里的占地（terrain_chunk.Lot 的打包值）。
+//
+//roost:nest rollback=undo durability=strict
+func handlerBuildingRebase(targets []terrain_chunk.ISurfaceEntity, site building.ISiteEntity, lot int64) (building.Rebase, error) {
+	m := terrainmap.Active()
+	if m == nil {
+		return building.Rebase{}, terrainmap.ErrDisabled
+	}
+	return m.ApplyRebase(targets, site, lot)
+}

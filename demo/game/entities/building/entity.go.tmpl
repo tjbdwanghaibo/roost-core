@@ -1,0 +1,66 @@
+package building
+
+import (
+	"fmt"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+// EntityKindBuilding 是建筑的 kind（不复用已删实体的号：5 是旧 Guild、8 是旧 AllianceShard）。
+const EntityKindBuilding entity.EntityKind = 13
+
+// IBuildingEntity is the lock-safe business view used by Nest handlers.
+type IBuildingEntity interface{ entity.IThreadSafeEntity }
+
+// Building 是放在地形上的一座建筑（可编辑地形 P4，方案 §6）：类型、属主、朝向、占地、地基高度，数据在 BuildingDao
+// （SiteComponent）。放置、拆除由地形服务（game/terrainmap 的 Place / Remove）发起：建筑与它占地覆盖的地形块、玩家的
+// 编辑账本在同一笔 Nest 事务里锁住、一起提交或回滚。
+//
+// 实体 ID：UniqueID(gx, gy) 由占地的锚点节点（左下角的 1m 采样点）确定。占地互不重叠，一个锚点至多一座站着的建筑；拆除
+// 不删档（State 0），同一锚点之后可以再放。ID 是确定性的、可能已有持久记录，所以只能经 GetOrCreate 建，不能直接 Create。
+//
+// Category：rank 2（World，与地形块同档）：放置事务锁住它与占地覆盖的块（同档内按 ID 排序取锁），再锁玩家的编辑账本
+// （PlayerScoped）。
+//
+// 只归锚点所在格的进程写；首版只在不分区的普通场景放置（分区场景拒绝，方案 §25）。
+//
+//roost:entity id=13 entityKind=EntityKindBuilding category=entity.EntityCategoryWorld
+type Building struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	site *SiteComponent `comp:"CompTypeSite"`
+	dao  *db.BuildingDao `dao:"building"`
+}
+
+// anchorSide 是锚点编号的行宽：地图每边至多 terrain.MaxChunksPerSide × 64 = 65536 个节点。
+const anchorSide = terrain.MaxChunksPerSide * terrain.ChunkSamples
+
+// UniqueID 返回锚点在节点 (gx, gy) 的建筑的实体唯一号：1 + gy·65536 + gx（unique 0 是无效 ID）。节点须在地图可能的
+// 范围里（0 ≤ gx, gy < 65536），结果小于 2^32，远在 52 位 unique 范围之内。
+func UniqueID(gx, gy int64) (int64, error) {
+	if gx < 0 || gy < 0 || gx >= anchorSide || gy >= anchorSide {
+		return 0, fmt.Errorf("building: anchor node (%d, %d) is outside any map", gx, gy)
+	}
+	return 1 + gy*anchorSide + gx, nil
+}
+
+// EntityID 返回锚点在节点 (gx, gy) 的建筑的完整实体 ID。
+func EntityID(gx, gy int64) (int64, error) {
+	unique, err := UniqueID(gx, gy)
+	if err != nil {
+		return 0, err
+	}
+	return entity.BuildEntityID(unique, EntityKindBuilding)
+}
+
+// AnchorOf 从完整实体 ID 还原锚点节点（UniqueID 的逆）。
+func AnchorOf(entityID int64) (gx, gy int64) {
+	unique := entity.GetUniqueIDFromEntityID(entityID) - 1
+	return unique % anchorSide, unique / anchorSide
+}
+
+// Anchor 是这座建筑的锚点节点。
+func (b *Building) Anchor() (gx, gy int64) { return AnchorOf(b.ID()) }

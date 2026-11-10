@@ -1,0 +1,31 @@
+package dbdef
+
+// BuildingDao 是一座建筑（可编辑地形 P4）：放在一块地形上的持久实体。实体 ID 由占地的锚点节点（占地矩形左下角的 1m
+// 采样点）确定（game/entities/building 的 UniqueID），占地互不重叠，所以一个锚点至多一座站着的建筑。
+//
+// 拆除不删档：State 置 0（空地），字段清空，记录留着——确定性 ID 删档后不能再建（DataEngine 的墓碑），同一锚点以后
+// 还要能放新建筑。建筑占着哪些节点的权威记录在它占地覆盖的每一块地形上（TerrainChunkDao.Lots），放置 / 拆除与这里在
+// 同一笔 Nest 事务里写。
+//
+// 本轮只持久、不同步：放置者从答复（BuildingResponse）拿到建筑状态；别的玩家看到建筑的同步方式（建筑自己的同步命名空间，
+// 还是挂在地形块的同步上）待维护者确认（可编辑地形方案 §25）。整平地基改的地形照常走地形块的同步。store 键按仓库规则
+// 写数字短键，改动须按 codegen/docs/TAGS.zh-CN.md 处理。
+//
+//roost:dao coll=buildings db=main schema=1
+type BuildingDao struct {
+	// State：0 = 空地（从没放过或已拆除），1 = 站着。
+	State int32 `dao:"persist" store:"1"`
+	// Owner 是放置它的玩家 ID（拆除只允许属主；属主的编辑账本记着他的建筑数）。
+	Owner int64 `dao:"persist" store:"2"`
+	// Kind 是建筑类型（game/entities/building 的 Catalog）。
+	Kind int32 `dao:"persist" store:"3"`
+	// Facing 是朝向 0～3（每档 90°）；1、3 时占地的宽高与类型的宽高互换。
+	Facing int32 `dao:"persist" store:"4"`
+	// W、H 是占地的宽（沿 X）与高（沿 Y），单位是 1m 节点；占地 = 节点 [锚点X, 锚点X+W) × [锚点Y, 锚点Y+H)。
+	W int32 `dao:"persist" store:"5"`
+	H int32 `dao:"persist" store:"6"`
+	// Foundation 是整平地基的世界高度（厘米，与 HeightBase 无关，原始地形换版后仍有意义）；-2147483648 表示没有整平。
+	Foundation int32 `dao:"persist" store:"7"`
+	// BaseRevision 是放置时原始地形包的版本。原始地形换版（D13）之后与包不同的建筑由地形服务启动时按规则处置。
+	BaseRevision int64 `dao:"persist" store:"8"`
+}
