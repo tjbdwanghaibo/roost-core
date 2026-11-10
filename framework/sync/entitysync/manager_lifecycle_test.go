@@ -306,11 +306,13 @@ func TestFrozenContentCoalescesAndRetainsBudgetUntilSettlement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := next.Updates()[0]; !got.Full || got.Payload.BytesCopy()[0] != 3 || got.BaseVersion != 1 {
+	// 在途捕获期间冻下的增量从版本 0 起；在途捕获提交到版本 1 后它的基线过时，按当前基线重新捕获一份增量（第 4 次打包），
+	// 不升级为全量（2026-11-10 起；之前这里冻成 Full 以免重新打包，见 TestAChangeCommittedDuringAnInFlightCaptureGoesOutAsADelta）。
+	if got := next.Updates()[0]; got.Full || got.Payload.BytesCopy()[0] != 3 || got.BaseVersion != 1 || got.Version != 2 {
 		t.Fatalf("bad coalesced content %+v", got)
 	}
-	if packs != 3 {
-		t.Fatalf("frozen content repacked %d", packs)
+	if packs != 4 {
+		t.Fatalf("packed %d time(s), want 3 freezes and one recapture on the new base", packs)
 	}
 	if err = next.Commit(); err != nil {
 		t.Fatal(err)
@@ -358,6 +360,158 @@ func TestFrozenNewProfileRecapturesOneConsistentVersion(t *testing.T) {
 	}
 	if m.Counters().FrozenBytes != 0 {
 		t.Fatal("discarded profile cache retained bytes")
+	}
+}
+
+// pushHookTransport 在下一次 Push 之前（Flush 已捕获、尚未提交内容版本）运行一次 hook：在这里提交业务变化，
+// 就是“提交落在一次在途捕获里”的确定次序，不靠计时。hook 返回错误时这次 Push 以它失败。
+type pushHookTransport struct {
+	*recordingTransport
+	hookMu sync.Mutex
+	hook   func() error
+}
+
+func (t *pushHookTransport) beforeNextPush(hook func() error) {
+	t.hookMu.Lock()
+	t.hook = hook
+	t.hookMu.Unlock()
+}
+
+func (t *pushHookTransport) Push(ctx context.Context, session SessionID, frame []byte) error {
+	t.hookMu.Lock()
+	hook := t.hook
+	t.hook = nil
+	t.hookMu.Unlock()
+	if hook != nil {
+		if err := hook(); err != nil {
+			return err
+		}
+	}
+	return t.recordingTransport.Push(ctx, session, frame)
+}
+
+// onChangeViewer 起一个 on_change Manager、一个 subject（载荷是 *value）与一个已拿到快照（版本 0）的会话 1。
+func onChangeViewer(t *testing.T, value *byte, packs *int) (*Manager, *pushHookTransport, *entity.SubjectSyncState) {
+	t.Helper()
+	tr := &pushHookTransport{recordingTransport: newRecordingTransport()}
+	m := newTestManager(t, tr, ManagerConfig{Mode: ModeOnChange})
+	s := cadenceSubject(7, 1, value, packs)
+	if err := m.Register(s); err != nil {
+		t.Fatal(err)
+	}
+	open(t, m, 1)
+	mustSubscribe(t, m, 1, 7, entity.SyncProfile{})
+	mustFlush(t, m)
+	if got := oneFrame(t, tr.recordingTransport, 1).updates[7]; !got.Full || got.Version != 0 {
+		t.Fatalf("the first frame is not the snapshot at version 0: %+v", got)
+	}
+	return m, tr, s
+}
+
+// commitChange 模拟一次成功准入的提交（SyncMutation.Admit）：有同步变化时标脏，脏着就在锁内冻结。
+// mask 为 0 是没有改同步字段、但实体仍脏着的提交（例如判重后什么都不写的事务）。
+func commitChange(t *testing.T, m *Manager, s *entity.SubjectSyncState, mask uint64) {
+	t.Helper()
+	if mask != 0 {
+		s.MarkDirty(mask)
+	}
+	if s.PendingDirty() {
+		if err := m.CaptureSync(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func wantDelta(t *testing.T, what string, got entity.SubjectSyncUpdate, base, version uint64, payload byte) {
+	t.Helper()
+	if got.Full || got.BaseVersion != base || got.Version != version || got.Payload.Len() != 1 || got.Payload.BytesCopy()[0] != payload {
+		t.Fatalf("%s went out as full=%v reason=%d %d→%d payload %v, want a delta %d→%d carrying %d",
+			what, got.Full, got.Reason, got.BaseVersion, got.Version, got.Payload.BytesCopy(), base, version, payload)
+	}
+}
+
+// 已有基线的观察者收增量：一笔不改同步字段的提交落在上一次变化的在途捕获里（生成 game-demo 的
+// TestBuildingsReachAnotherClientOverRealTCP 里，判重的第二次 SetParams 落在后台复制循环推送第一次改动、尚未提交版本的
+// 窗口里），之后的变化仍是增量；那次在途捕获提交之后，这笔提交留下的冻结内容已经过时，不能再占冻结字节。
+func TestACommitDuringAnInFlightCaptureLeavesTheNextChangeADelta(t *testing.T) {
+	var value byte
+	packs := 0
+	m, tr, s := onChangeViewer(t, &value, &packs)
+	value = 1
+	commitChange(t, m, s, 1)
+	tr.beforeNextPush(func() error { commitChange(t, m, s, 0); return nil })
+	mustFlush(t, m)
+	wantDelta(t, "the first change", oneFrame(t, tr.recordingTransport, 1).updates[7], 0, 1, 1)
+	if s.PendingDirty() {
+		t.Fatal("the subject is still dirty after its only change was delivered")
+	}
+	if got := m.Counters().FrozenBytes; got != 0 {
+		t.Errorf("%d frozen byte(s) still held after the change they froze was delivered", got)
+	}
+	value = 2
+	commitChange(t, m, s, 2)
+	mustFlush(t, m)
+	wantDelta(t, "the second change", oneFrame(t, tr.recordingTransport, 1).updates[7], 1, 2, 2)
+}
+
+// 一次改动提交在上一次改动的在途捕获里：在途捕获提交后，这次改动以增量（从在途捕获的新版本起）发出；在途捕获被整轮
+// 重试作废时，同一份冻结内容就是从原基线起的增量。两种结局都不需要全量。
+func TestAChangeCommittedDuringAnInFlightCaptureGoesOutAsADelta(t *testing.T) {
+	t.Run("the in-flight capture commits", func(t *testing.T) {
+		var value byte
+		packs := 0
+		m, tr, s := onChangeViewer(t, &value, &packs)
+		value = 1
+		commitChange(t, m, s, 1)
+		tr.beforeNextPush(func() error { value = 2; commitChange(t, m, s, 2); return nil })
+		mustFlush(t, m)
+		wantDelta(t, "the first change", oneFrame(t, tr.recordingTransport, 1).updates[7], 0, 1, 1)
+		if !s.PendingDirty() {
+			t.Fatal("the change committed during the capture was consumed by it")
+		}
+		mustFlush(t, m)
+		wantDelta(t, "the change committed during the capture", oneFrame(t, tr.recordingTransport, 1).updates[7], 1, 2, 2)
+		if s.PendingDirty() || m.Counters().FrozenBytes != 0 {
+			t.Fatalf("after delivery: dirty=%v frozen bytes=%d", s.PendingDirty(), m.Counters().FrozenBytes)
+		}
+	})
+	t.Run("the in-flight capture is retried", func(t *testing.T) {
+		var value byte
+		packs := 0
+		m, tr, s := onChangeViewer(t, &value, &packs)
+		value = 1
+		commitChange(t, m, s, 1)
+		tr.beforeNextPush(func() error { value = 2; commitChange(t, m, s, 2); return ErrRetryLater })
+		if err := m.Flush(context.Background()); !errors.Is(err, ErrRetryLater) {
+			t.Fatalf("flush: %v, want the retry", err)
+		}
+		if frames := tr.take(1); len(frames) != 0 {
+			t.Fatalf("the retried tick delivered %d frame(s)", len(frames))
+		}
+		packs = 0
+		mustFlush(t, m)
+		wantDelta(t, "both changes after the retry", oneFrame(t, tr.recordingTransport, 1).updates[7], 0, 1, 2)
+		if packs != 0 {
+			t.Fatalf("the retry repacked %d time(s); the content frozen at commit was still valid", packs)
+		}
+	})
+}
+
+// 两次提交之间没有 Flush：冻结槽里换成最新内容，仍是从同一基线起的一份增量，Flush 直接用它、不重新打包。
+func TestTwoCommitsBeforeAFlushCoalesceIntoOneDelta(t *testing.T) {
+	var value byte
+	packs := 0
+	m, tr, s := onChangeViewer(t, &value, &packs)
+	value = 1
+	commitChange(t, m, s, 1)
+	value = 2
+	commitChange(t, m, s, 2)
+	packs = 0
+	mustFlush(t, m)
+	got := oneFrame(t, tr.recordingTransport, 1).updates[7]
+	wantDelta(t, "two coalesced changes", got, 0, 1, 2)
+	if got.Mask != 3 || packs != 0 {
+		t.Fatalf("coalesced delta mask %#x after %d repack(s), want both changes' bits from the frozen content", got.Mask, packs)
 	}
 }
 

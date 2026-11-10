@@ -820,6 +820,12 @@ func (b *PreparedSubjectSyncBatch) Commit() error {
 				state.dirtyMask = 0
 				state.fullDirty = false
 				state.fullReason = SyncFullReasonNone
+				// 本次捕获在途时，没有改同步字段的提交（实体仍脏着）会再冻结一份同代际的内容；这里已交付到同一代际，
+				// 那份冻结不再有用，归还它占的冻结字节，不留到这个 subject 下一次变化。
+				if state.frozen != nil && state.frozen.item.generation == item.generation {
+					state.frozen.release()
+					state.frozen = nil
+				}
 			}
 		}
 		state.inflightToken = 0

@@ -327,11 +327,11 @@ func TestBuildingsReachAnotherClientOverRealTCP(t *testing.T) {
 		t.Fatalf("the same change again: %+v, %v", again, err)
 	}
 	h.flushUntil(t, "the parameter change on the viewer's client", func() bool { return buildingMatches(client.building(hallID), state(hallID)) })
-	// 第一次改动可能以全量（重同步）到达：放置事务的脏位在登记之前就记在实体的同步状态上，按 on_change 的合并窗口，新订阅
-	// 先只拿快照、保留脏位，于是下一次捕获只能用全量追上（entitysync 的通用规则，玩家、怪同样，方案 §27 记录）。之后的
-	// 改动是只带 Params 的增量。
-	if ups := buildingUpdatesOf(client.takeFrames(), hallID); len(ups) != 1 || !ups[0].params {
-		t.Fatalf("the first parameter change went out as %+v, want one update carrying the parameters", ups)
+	// 两次改参数都是只带 Params 的增量。判重的那次 SetParams 不改同步字段，但可能正落在复制循环推送第一次改动、尚未提交
+	// 版本的窗口里，或第一次改动的冻结内容还没被取走时；entitysync 在这两种时序下都仍发增量（2026-11-10 之前那笔提交会把
+	// 冻结内容升成全量并留下过时的一份，让第一次或第二次改动偶发以全量发出）。
+	if ups := buildingUpdatesOf(client.takeFrames(), hallID); len(ups) != 1 || ups[0].full || !ups[0].params {
+		t.Fatalf("the first parameter change went out as %+v, want one delta carrying the parameters", ups)
 	}
 	if _, err := m.SetParams(h.ctx, buildingBuilder, 4, 110, 100, []int32{6}); err != nil {
 		t.Fatal(err)

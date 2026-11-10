@@ -101,6 +101,8 @@ building_sync_test.go:345: the second parameter change went out as [{subject:671
 
 没有定位到是哪一次快照让脏位保留（entitysync 的 `preserveDirty`：快照推进了版本、而老订阅者还没消费的变化只能用全量追上）；可能与主视野那个 Interest 的结算时机有关。断言没有放宽，登记在 KNOWN-LIMITS（尚未确认）。
 
+**结论（2026-11-10 追加）**：已定位并修复，不是主视野的结算时机，也不是 `preserveDirty`：on_change 冻结在同一 subject 的捕获在途时一律升成全量，并在在途捕获提交后留下一份过时冻结，下一次改动因“已有冻结”再升成全量。见 [entitysync 冻结升全量](../entitysync-resync-flake-20261110/README.md)。
+
 ## 4. 未覆盖
 
 - 真实 Mongo、真实进程演练、Unity 表现（同方案 §27.8）。

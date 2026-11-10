@@ -52,6 +52,7 @@ entitysync.ManagerConfig{
 
 - `Manager.Flush` 是一次交付调度：为每个 pending subject（脏、订阅变更、退役）调用 `PrepareViews`，复用有效冻结内容或在 Entity 锁内重新捕获。
   给在线者的 delta 与给新订阅者的快照同一版本、同一 CommitLSN；同次捕获内每个不同 profile 只 pack 一次。
+- on_change 的冻结槽每个 subject 一份，新冻结整份替换旧的；冻下的就是此刻一次普通捕获会得到的内容（增量从当前版本起，带全部未确认的变化），**已有冻结或同一 subject 的捕获在途时也不升成全量**（2026-11-10 起，修前一律升成 Full/Resync，见 CHANGELOG）。在途捕获提交后版本前进，这份增量的基线过时：Flush 校验基线后不复用，在 Entity 锁内按新基线重新捕获，只带确认之后的变化（列表操作不重放）；在途捕获被作废时它原样可用。在途捕获已交付到与冻结相同的内容代际时，过时冻结随提交归还字节。所以已有基线的观察者只在状态本身要求时收全量（`fullDirty`、换 profile、恢复），不因提交与交付的时序收全量；代价是交付在途时提交的变化要多一次锁内捕获。
 - 同 tick 的 `(subject, profile, full/delta)` 组件只编码一次，各会话外层帧仍独立编码；编码缓存不跨 tick、重试或版本复用。on_change 可跨调度保存有界的冻结内容，复用前校验内容代际、基线与 Profile，和组件编码缓存分开。
 - 持久化门槛按 `CommitLSN` 挡**整个 subject**：任一捕获高于 `DurableWatermark()` 则本 tick 不发、脏位与待发快照保留、下 tick 重试。
 - 捕获按会话聚合成帧（快照 = ObjectCreate，或已持有对象则 ObjectUpdate 带 Full；delta = ObjectUpdate；离开 = ObjectRemove），

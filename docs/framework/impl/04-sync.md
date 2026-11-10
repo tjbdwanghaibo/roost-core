@@ -27,7 +27,7 @@
 
 ## 2A. 冻结、发送和客户端权限实现走读
 
-[mode.go](../../../framework/sync/entitysync/mode.go)的CaptureSync先取得当前subject及授权profiles，确认对象仍有效，调用SubjectSyncState.FreezeSyncViews；替换后的旧state不能留下可发送冻结物。reserveFrozen以CAS计入总字节，返回一次性释放函数，避免重试/取消双重释放。WakeSync合并通知，丢一个唤醒不等于丢pending事实。
+[mode.go](../../../framework/sync/entitysync/mode.go)的CaptureSync先取得当前subject及授权profiles，确认对象仍有效，调用SubjectSyncState.FreezeSyncViews；替换后的旧state不能留下可发送冻结物。reserveFrozen以CAS计入总字节，返回一次性释放函数，避免重试/取消双重释放。WakeSync合并通知，丢一个唤醒不等于丢pending事实。[sync_frozen.go](../../../framework/entity/sync_frozen.go)的FreezeSyncViews按此刻的版本与累积脏位冻结（与一次普通捕获相同），不因已有冻结或在途token升成Full（2026-11-10起）；正确性靠frozenSubjectSync.prepare的三项校验——内容代际、CommitLSN、增量的基线版本——任一不符就释放并在Entity锁内重新捕获，所以不能去掉基线校验（去掉后在途捕获提交时冻下的增量会把已交付的列表操作重放一次，`TestAFreezeDuringAnInFlightCaptureNeverReplaysTheCapturedOperations`）。[subject_sync.go](../../../framework/entity/subject_sync.go)的批次Commit清脏位时一并释放同代际的过时冻结。回归见entitysync的`TestACommitDuringAnInFlightCaptureLeavesTheNextChangeADelta`、`TestAChangeCommittedDuringAnInFlightCaptureGoesOutAsADelta`、`TestTwoCommitsBeforeAFlushCoalesceIntoOneDelta`。
 
 [flush.go](../../../framework/sync/entitysync/flush.go)负责取pending、准备subject视图（prepareSubscribersLocked整理订阅者与跳过的会话）、按会话构建帧并逐帧交付（pushSessionFrames）、传输准入后结算；capturedAbove检查CommitLSN水位，requireSnapshotsAfterRetry处理部分会话已经接纳后的恢复。必须在实际Push结果之后结算基线，不能先标clean再尝试发送。
 

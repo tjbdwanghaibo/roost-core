@@ -47,7 +47,7 @@ building full: component 132 bytes (payload 53); parameter delta: component 94 b
 
 用例断言全量不超过 160、增量不超过 112。每观察者预算的推算见方案 §27.3：视野满 128 座约 17KB、走过密集街区约 5.3KB/s，远低于 50KB/s。
 
-注意：放置之后的**第一次**改参数可能以全量（原因 Resync）发出——放置事务的脏位在登记前已被捕获（entitysync 的 preserveDirty），之后的改动都是增量。用例只要求第二次改动是增量；见方案 §27.3 / §27.8。
+注意：放置之后的**第一次**改参数可能以全量（原因 Resync）发出——放置事务的脏位在登记前已被捕获（entitysync 的 preserveDirty），之后的改动都是增量。用例只要求第二次改动是增量；见方案 §27.3 / §27.8。（更正 2026-11-10：原因是 on_change 冻结的“忙时升全量”，不是 preserveDirty；已修复，用例改为两次都要求增量，见 [entitysync 冻结升全量](../entitysync-resync-flake-20261110/README.md)。）
 
 ## 3. 验证命令与结果
 
