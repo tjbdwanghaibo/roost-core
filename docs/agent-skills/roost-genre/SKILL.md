@@ -1,6 +1,6 @@
 ---
 name: roost-genre
-description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正式 CLI 骨架 + 仓库 scripts/testdata 业务夹具 + go test 验收），并说明该玩法在 roost 上框架能做什么、不能做什么、容量/延迟/一致性边界与业务要自己补的部分。支持回合制 PvP、合作 Roguelike、异步社交经营，以及：SLG、MOBA 帧同步、MMORPG、卡牌/回合制 RPG、房间合作 PvE（塔防 / 生存撤离 / 自走棋）、放置 / 合成休闲。触发词：用 roost 生成 SLG/MOBA/MMO/卡牌/塔防/自走棋/放置/合成 demo、roost 做某类游戏、某类玩法在 roost 上的限制、roost 能不能做 FPS/开放世界/RTS、roost-genre、$roost-genre。
+description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正式 CLI 骨架 + 仓库 scripts/testdata 业务夹具 + go test 验收），并说明该玩法在 roost 上框架能做什么、不能做什么、容量/延迟/一致性边界与业务要自己补的部分。支持回合制 PvP、合作 Roguelike、异步社交经营，以及：SLG、MOBA 帧同步、MMORPG、卡牌/回合制 RPG、房间合作 PvE（塔防 / 生存撤离 / 自走棋）、放置 / 合成休闲。也用于按一段需求描述用 roost-core 定制服务逻辑、在已有 roost 工程上加功能（references/compose.md：查能力清单、`roost module` 装现成模块、其余手写、验收）。触发词：用 roost 生成 SLG/MOBA/MMO/卡牌/塔防/自走棋/放置/合成 demo、roost 做某类游戏、按需求用 roost 做一个服务、给 roost 工程加功能、某类玩法在 roost 上的限制、roost 能不能做 FPS/开放世界/RTS、roost-genre、$roost-genre。
 ---
 
 # roost-genre：按玩法生成 demo 与说明边界

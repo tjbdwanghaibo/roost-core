@@ -556,7 +556,7 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 
 平台：macOS。模块场景用替身提交器，没有连真实 Mongo / NATS / Redis，也没有经过真实 TCP。
 
-`./codegen/...` 在 v1.43.0 发版后的那次全量运行里，`codegen/internal/roost` 有 5 条用例失败（`TestEntityOwnerScopesHandlersLifecycleAndDoctor` 等，都是会联网解析 `roost-core@latest` 的生成工程用例），报错是校验库查不到刚发布的版本（`verifying module … v1.43.0 … 404 Not Found … temporarily unavailable`）。单独重跑时 4 条通过、1 条仍是同一个报错。它们不经过本轮改动的代码，发版前同一棵树上的全量运行全部通过；校验库收录新版本后需要再跑一遍确认，本轮没有等。
+合入 v1.43.0 之后又跑了一遍 `GOWORK=off go test -count=1 -timeout 40m ./...`（全仓），没有失败。中间有一次 `./codegen/...` 的运行正好撞上 v1.43.0 刚发布：`codegen/internal/roost` 里 5 条会联网解析 `roost-core@latest` 的生成工程用例失败，报错是校验库还查不到新版本（`verifying module … v1.43.0 … 404 Not Found … temporarily unavailable`）；约半小时后重跑这 5 条全部通过。它们不经过本轮改动的代码。
 
 ### 17.5 只凭 skill 的实测（2026-11-10）
 
@@ -575,6 +575,26 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | checkin 的测试借用 wallet 测试文件里的替身类型 | 改为自带一份 |
 | skill 入口太长，按需求组合只占开头一句 | SKILL.md 开头加一条：这类任务直接读 compose.md |
 
-这一轮的局限：compose.md 里手写功能的示例恰好就是“每日任务”，与实测的需求重合，对“手写一个文档里没出现过的功能”的检验偏弱。修完后换一个不重合的需求再测一轮，结果见 17.6。
+这一轮的局限：compose.md 里手写功能的示例恰好就是“每日任务”，与实测的需求重合，对“手写一个文档里没出现过的功能”的检验偏弱。修完后换了一个不重合的需求再测一轮，见 17.6。
 
 没有做的（实测报告指出、属于现状）：端点层（错误转成回包的 `Code`）没有模块用例覆盖；没有 Robot 与网络验收；真实客户端连上还差 `auth.go` 与 `config enable player-tcp`。
+
+### 17.6 第二轮实测：不与示例重合的需求（2026-11-10）
+
+另一个同样没有上下文的 agent，在 17.5 的修复之后只凭 skill 起步。需求：闯关小游戏，金币与体力（上限 20、每 6 分钟恢复 1 点），开局扣 5 点，花 30 金币补满（每天 2 次、已满不能买），结算赢了给 20 金币且同一局重复上报不重复给，新玩家送 100 金币和满体力，客户端看得到金币与体力。
+
+结果：约 13 分钟做完，没有打开 `framework/`、`infra/`、`codegen/` 的源码。装了 wallet，手写了体力、对局、进入游戏三个功能共 19 条场景，`roost module verify`、手写场景、`go test ./...` 全部通过，自身视图接上，doctor 只剩四项 collaborators。它做了 15 条变异全部被杀，并指出自己交付物的十条上线风险（开局重发多扣体力、胜负由客户端说了算、客户端要按“下一点时刻”推算体力等）。17.5 修掉的问题这一轮没有再出现：它没有用按天递增的键去占钱包的去重窗口，日界用的是业务日。
+
+这一轮暴露并已补进 compose.md 的缺口：
+
+| 缺口 | 处理 |
+| --- | --- |
+| 没写 Player 是怎么被创建的：没有“进入游戏”端点时离线场景全绿，真实进程里所有请求答 `entity_not_found` | 新增第 4B 步：`add protocol` + `add endpoint --lifecycle Player`，并写明不加的后果 |
+| “新玩家初始发放”没有写法 | 第 4B 步：发放写成不对客户端开放的 Nest handler，“发过没有”记在自己的状态里，每次进入都调；不按“是否新建”判断 |
+| 一个模块都不装时第 4 步走不通（没有 `PlayerDao`、没有玩家接入） | 第 4 步开头给出两条前置命令 |
+| 拨时间的例子指向只在装了 checkin 时才有的文件 | 把夹具代码贴进文档 |
+| 随时间恢复的数值没有写法 | 新增一段：存“结算值 + 下一点时刻”，写入时结算，客户端推算 |
+| `clock.BusinessDay` 的返回类型、多功能的 `-run`、空请求的 handler 形状、同实体组件互调、错误码文件布局、测试里不要引用被测常量、手写功能之间可以共用夹具、模块自带的客户端协议要不要保留 | 逐条补进 compose.md |
+| skill 的 description 只讲按玩法出 demo | frontmatter 的说明与触发词加上“按需求定制” |
+
+仍然成立的局限（两轮都指出）：入口里的手写串接（进入游戏之后调初始发放）没有离线测法；端点层、自身视图首帧、真实进程下的建档都没有跑；这一档不含登录鉴权、Robot 与网络验收。也就是说，现在能做到的是“凭一段需求得到一个业务逻辑写完、离线场景通过的工程”，还不是“可以直接上线的服务”。
