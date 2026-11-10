@@ -46,6 +46,15 @@
 
 ## 没有运行的
 
-- 真实 Mongo / WAL / NATS；`ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh`（配置与 (a) 步已改，只编译了演练程序）。
+- ~~真实 Mongo / WAL / NATS；`ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh`~~ 合入前协调方已在私有 mirror-local 依赖上跑过（2026-11-10，见文末“合入前的真实依赖验证”）。
 - C# / dotnet：没有改 C# 代码与 `client/spec`，没有跑。
 - 性能：游戏尺度分区视野的成本没有测。
+
+## 合入前的真实依赖验证（协调方，2026-11-10）
+
+在合入 main 之前的分支 HEAD 上，用私有 mirror-local 依赖（真实 Mongo / Redis / NATS，跑完即清理）执行：
+
+- `scripts/test-demo-generated.sh`：10 项真实依赖用例全部 PASS（含 `TestTerrainRestartRealMongo`、`TestTerrainEditLedgerRealMongo`、`TestBuildingRestartRealMongo`）。
+- `ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh`：`terrain_start`、`terrain_ghost_edit`（B 发起的跨格笔刷，往返 82.9ms / 19.7ms）、`terrain_player_step`、`terrain_monster_step`、`terrain_cell_restart`、`terrain_consistent` 六步全部 ok。
+- 普通（不开地形）无缝演练：前 14 步 ok，最后一步压测阈值仍不过（p95 30.4s > 16s，2 个样本），与合入前 main 上的已知现象相同，KNOWN-LIMITS 里仍记“尚未确认”。
+- 同一轮还跑了：`framework/sync`、`framework/entity` 的 `-race`；根包、`gameplay/...`、`codegen/...`；生成 game-demo 全测（36 个包）及 `-race`；`test-sync-modes-generated.sh`；C# 两组测试。全部通过。
