@@ -17,6 +17,7 @@ import (
 	handlersender "{{MODULE}}/game/handler/sender"
 	"{{MODULE}}/game/partition"
 	"{{MODULE}}/game/runtimeid"
+	gamescene "{{MODULE}}/game/scene"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
@@ -61,7 +62,7 @@ const partitionTeamViews policy.ViewID = 1 << 53
 const partitionBlockSize = 200
 
 // Base 的最大离开半径必须与 settings 声明里检查的那个数一致：view_radius 的下限按它校验。
-const _ = uint(sceneMaxLeaveRadius-settings.PartitionMaxBaseLeaveRadius) + uint(settings.PartitionMaxBaseLeaveRadius-sceneMaxLeaveRadius)
+const _ = uint(gamescene.DefaultMaxLeaveRadius-settings.PartitionMaxBaseLeaveRadius) + uint(settings.PartitionMaxBaseLeaveRadius-gamescene.DefaultMaxLeaveRadius)
 
 type partitionRuntime struct {
 	config settings.ScenePartition

@@ -1,0 +1,5 @@
+--- FAIL: TestBuildingsAtTheTerrainMainViewScale (10.04s)
+    building_sync_test.go:657: timed out waiting for hut 4×4 seen from the node next to it
+FAIL
+FAIL	example.com/gd/internal/service/game	10.808s
+FAIL

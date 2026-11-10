@@ -1,0 +1,18 @@
+    building_sync_test.go:506: main view full: 4 buildings, 60 monsters, neighbour held false (objects held 65: itself + 64 in the main view)
+    building_sync_test.go:512: a tower removed, nobody moved: neighbour held false
+    building_sync_test.go:551: ten monsters gone, the viewer standing still: 0 of 4 towers held (free places 10)
+--- PASS: TestBuildingsTakeMainViewPlacesLikeAnyoneElse (0.06s)
+    building_sync_test.go:601: over the limit: deferred 2, evicted 0; held 100 objects, 2 buildings, 97 monsters
+--- PASS: TestManyBuildingsDegradeWithTheCrowd (0.03s)
+    building_sync_test.go:653: hut 4×4: centre 2.5m from the node next to it, seen
+    building_sync_test.go:653: tower 3×3: centre 2.0m from the node next to it, seen
+    building_sync_test.go:653: hall 8×6: centre 3.5m from the node next to it, seen
+    building_sync_test.go:653: keep 12×12: centre 6.5m from the node next to it, seen
+--- PASS: TestBuildingsAtTheTerrainMainViewScale (0.03s)
+    scene_view_scale_test.go:53: terrain view on the terrain blocks: block 3200, worst observer blocks 16 (default view) / 25 (widest view), budget 1024: <nil>
+    scene_view_scale_test.go:53: terrain view on 1m blocks: block 100, worst observer blocks 4624 (default view) / 16384 (widest view), budget 1024: scene: interest policy: policy: one observer would subscribe to more blocks than the budget allows: max leave radius 6300 over block size 100 covers 16384 blocks, budget is 1024
+    scene_view_scale_test.go:53: demo view on 1m blocks (no terrain): block 100, worst observer blocks 25 (default view) / 64 (widest view), budget 1024: <nil>
+--- PASS: TestTerrainMainViewFitsTheBlockBudget (0.00s)
+    scene_view_scale_test.go:123: player: entering view [205] bytes, one step [140 140 140] bytes (frame payloads); four steps in one tick [464] bytes
+    scene_view_scale_test.go:153: monster: entering view (3 in one frame) [443] bytes, one patrol step [464 146] bytes (frame payloads; other monsters' steps may share the frame)
+--- PASS: TestMainViewMeasureSyncBytes (1.25s)

@@ -80,8 +80,9 @@ type PartitionTeam struct {
 // 队伍快照按它的节拍发出，snapshot_every 不能比它短，且须是它的整数倍。
 const PartitionBaseWatchPeriod = 100 * time.Millisecond
 
-// PartitionMaxBaseLeaveRadius 是 Base 进程 Interest 能有的最大离开半径（internal/service/game/scene.go 的
-// sceneMaxLeaveRadius，那里有编译期断言二者一致）。客户端视野由 Base 的 Interest 按 mirror 位置决定，mirror 的位置
+// PartitionMaxBaseLeaveRadius 是 Base 进程 Interest 能有的最大离开半径（Base 的主视野是 demo 原尺度 game/scene 的
+// DefaultView，它的离开上限 DefaultMaxLeaveRadius；internal/service/game/partition.go 有编译期断言二者一致。开地形的
+// 普通场景放大了主视野，分区场景没有跟着放大：要放大须同时放大 witness 的 view_radius / ghost_band，见可编辑地形方案 §28）。客户端视野由 Base 的 Interest 按 mirror 位置决定，mirror 的位置
 // 只来自 witness：离开半径超过 witness 半径时，视野边上的对象会停在最后位置直到过期（FEATURE §8.4 v2-4）。
 const PartitionMaxBaseLeaveRadius = 300
 

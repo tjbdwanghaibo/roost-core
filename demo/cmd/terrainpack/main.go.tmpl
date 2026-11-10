@@ -23,11 +23,11 @@
 //
 // One chunk is 64m × 64m (6400 world units, centimetres); the map starts at
 // the world origin. The defaults (16 × 16 chunks, 1024m × 1024m) are the
-// largest map an ordinary scene takes (2^20 AOI blocks of 1m; the block table
-// costs about 56MiB and about 3ms more marking per GC, editable terrain plan
-// §23), and a partitioned scene of four 51200 cells covers it exactly
-// (cell_size: 51200, cols: 2, rows: 2). A real game's pack comes from its
-// artists' height and material maps (terrain.RAWImport), not from here.
+// largest map an ordinary scene takes (gamescene.TerrainConfig's area limit,
+// editable terrain plan §23 and §28), and a partitioned scene of four 51200
+// cells covers it exactly (cell_size: 51200, cols: 2, rows: 2). A real game's
+// pack comes from its artists' height and material maps (terrain.RAWImport),
+// not from here.
 //
 // Regional water levels (editable terrain D3, pack format 2) are repeatable
 // -water-region flags of chunk rectangles, half-open, that must not overlap:
