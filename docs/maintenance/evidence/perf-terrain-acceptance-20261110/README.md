@@ -81,6 +81,23 @@ ROOST_TERRAIN_MEASURE=1 go test -count=1 -run '^(TestTerrainMeasureUpdateBytes|T
 
 读数注意：这个夹具的业务写只有 AddExp（`exp` / `level`），移动只登记 AOI 索引（`QueueMove`），不改 DAO 的 `pos_x` / `pos_y`。所以其余 63 个观察者每 tick 收到的是 7 个空载荷增量（只推进版本），`sync_bytes` 衡量的是“别人看不到的字段在变”这种负载，不是移动的下行；移动的下行看下一节的 `TestMainViewMeasureMovingCrowdBytes`。正式档位由维护者统一跑。
 
+### sync-business 正式档位（协调方，2026-11-10 22:56–22:59）
+
+命令（每档单样本，200 tick @ 20Hz，hotspot 布局）：`ROOST_PERF_COUNT=1 ROOST_SYNC_CASE=custom ROOST_SYNC_PLAYERS=<N> ROOST_SYNC_DIRTY_PERCENT=<P> ROOST_SYNC_LAYOUT=hotspot ROOST_SYNC_TICKS=200 scripts/perf/sync-business.sh`。三档墙钟合计约 3 分钟（含生成与编译）。宿主：swap 5.5 / 7.2GB，loadavg 2.8～4.4，fseventsd 空闲。
+
+| 档 | 每 tick 脏玩家 | tick_work_ms p50 / p95 / p99 / max | flush_ms p50 / p95 / p99 | scheduled_to_client_ms p50 / p95 / p99 | deadline_misses | 分配 / GC 次数 / GC 停顿合计 | sync_bytes（200 tick） |
+| --- | ---: | --- | --- | --- | ---: | --- | ---: |
+| 64 × 100% | 64 | 7.38 / 10.89 / 13.12 / 14.12 | 4.29 / 5.82 / 7.54 | 6.79 / 10.50 / 12.54 | 0 / 200 | 1.54GB / 99 / 11.4ms | 10.47MB |
+| 128 × 100% | 128 | 9.87 / 11.90 / 13.32 / 21.34 | 6.15 / 7.93 / 8.47 | 8.98 / 11.43 / 12.58 | 0 / 200 | 3.11GB / 99 / 9.6ms | 21.27MB |
+| 128 × 10% | 13 | 6.25 / 10.32 / 12.39 / 14.07 | 5.21 / 9.20 / 11.46 | 5.82 / 9.90 / 12.53 | 0 / 200 | 0.49GB / 20 / 6.8ms | 3.34MB |
+
+读法：
+
+- 三档都没有错过 tick（50ms 预算），128 人全脏 p99 13.3ms，约占预算的 27%。
+- `sync_bytes` 是这个夹具的 AddExp（`exp` / `level`）负载，不是移动下行（见上一小节的读数注意）；移动下行以下一节的实测为准。
+- 分配量偏大（128 人全脏每 tick 约 15.5MB），包含夹具自己的解码与核对；没有拆分框架与夹具各自的份额，也没有与旧基线同机对照，只作量级参考。
+- 单样本、单机，未做交替对照。
+
 ### 同步字节：与方案估算对照
 
 帧 payload（含帧头，不含 16 字节线上消息头），KB = 1024 字节，5 拍 / 秒（移动心跳 200ms）。
@@ -194,7 +211,7 @@ scripts/mirror-local.sh clean
 
 **尚未确认**
 
-- ~~sync-business 业务负载（每 tick 开销、分配、10% 常态下行）：夹具与当前 core 不兼容，没有数字。~~ 夹具已重写，冒烟能出数字（见上）；正式档位的数字由维护者统一跑，仍没有。
+- ~~sync-business 业务负载（每 tick 开销、分配、10% 常态下行）：夹具与当前 core 不兼容，没有数字。~~ 夹具已重写，正式三档已测（见“sync-business 正式档位”）；分配量中框架与夹具各自的份额没有拆分。
 - ~~64 人进视野合计比上一轮多 10B（分帧不同）。~~ 已确认：多一帧的增量帧头 10B，内容相同（见上）。
 - 时过时不过取决于 sid 1003 在投递轮转中的位置；公会 saga 步骤走同一机制。
 - bisect 与开地形无缝演练的延迟基线（按新预算没有做）。
