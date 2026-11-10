@@ -368,7 +368,7 @@ move_target(x, y | follow) ─▶ handlerMoveTarget（Scene + Player 两实体�
 Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶ 主体标脏 ─▶ Manager 记 pending
                                                                              │  每 50ms 一 tick
 主体 ─ PrepareViews(packer：delta 给在线者、快照给新订阅者) ─▶ 按会话聚合成一帧 ─▶ sceneLane.Push ─▶ TCP 推送 10103
-客户端：scene_watch 装解码器 → scene_ready（服务端此前 held，不出帧）→ entitysync.DecodeFrame → DecodeSubjectUpdate → 合并进本地视图
+客户端：scene_watch 装解码器 → scene_ready（服务端此前 held，不出帧）→ entitysync.Decoder（每连接一个，增量从基线继承身份）→ 合并进本地视图
 ```
 
 - **写入侧不是自动的**。把 DAO 标脏和把**主体**标脏是两件事：`PublishSyncDirty()` 在一次变更的末尾调一次，

@@ -186,7 +186,8 @@ func TestSyncProfilesFilterGeneratedDAOPayload(t *testing.T) {
 	}
 	doc, err = patch.Values()
  if err != nil { t.Fatal(err) }
-	if len(doc) != 2 {
+	// 增量补丁只有改了的位置：实体 ID 只在全量里（增量沿用基线的）。
+	if _, moved := doc["pos_x"]; !moved || len(doc) != 1 {
 		t.Fatalf("delta sent unchanged fields: %v", doc)
 	}
 	gold, ok := dataengine.SyncFieldByName(subject.Dao().SyncFields(), "Gold")
