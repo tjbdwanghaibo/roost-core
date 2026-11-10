@@ -14,7 +14,6 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	gamescene "{{MODULE}}/game/scene"
-	"{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/terrainmap"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
@@ -145,13 +144,8 @@ func startPartitionProc(t *testing.T, net *partitionNet, grid *cellworld.Grid, s
 	if err := scene.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	chunks, err := lifecycle.NewTerrainChunkLifecycle(entity.NewManagerAccess(process.entities))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := scene.terrain.loadEdited(context.Background(), process.m, chunks); err != nil {
-		t.Fatal(err)
-	}
+	// 服务启动时的地形同步一步（startTerrainSync：改过的块装成实体、本进程写的其余块登记就绪标记）。
+	startTerrainSubjects(t, scene, process)
 	pt, err := newPartitionTerrain(process.m, scene.terrain, grid, sid, net.sender(sid))
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +242,78 @@ func playerEntityOf(t *testing.T, playerID int64) int64 {
 func raiseAt(key terrain.ChunkKey, radius int64, strength uint16) terrain.Brush {
 	at := centreOf(key)
 	return terrain.Brush{Op: terrain.BrushRaise, X: at.X, Y: at.Y, Radius: radius, Falloff: terrain.FalloffSmooth, Strength: strength}
+}
+
+// 方案 §31.9：分区场景里客户端同样要对视野里的每一块有服务端的说法。只做 Base 的进程（sid 103）不写任何块，视野里两个
+// 格写的没改过的块要由拥有者答“原始块”才登记就绪标记——所以本进程没有任何说法的块订阅时报 Held = -1；格进程（sid 102）
+// 自己写的块启动时登记标记，Ghost 带里的块按视图登记，别的格写的块同样等拥有者答复。之后拥有者第一次改其中一块：两个
+// 客户端都看到同一个对象从标记换成副本 / 实体的全量，中间没有 remove。
+func TestTerrainPartitionEveryChunkInViewReachesTheClient(t *testing.T) {
+	dir := t.TempDir()
+	pack := writePartitionPack(t, dir, 1)
+	grid := partitionTerrainGrid(t)
+	store := &memoryChunkStore{}
+	net := newPartitionNet()
+	a := startPartitionProc(t, net, grid, partitionSidA, pack, store)
+	b := startPartitionProc(t, net, grid, partitionSidB, pack, store)
+	c := startPartitionProc(t, net, grid, partitionSidC, pack, store)
+	at := centreOf(terrain.ChunkKey{X: 5, Y: 0})
+	want := chunksWithin(a.process.m.Meta(), at, terrainViewRadius)
+	if len(want) != 11 {
+		t.Fatalf("the premise: %d chunk centres within %dm, want 11 (x 2～7 on row 0, 3～7 on row 1)", len(want), terrainViewRadius/100)
+	}
+	p1 := c.join(t, 41011, at)
+	p2 := b.join(t, 41012, at)
+	allMarkers := func(client *terrainClient) bool {
+		held := client.terrainObjects()
+		if len(held) != len(want) {
+			return false
+		}
+		for id := range want {
+			if got := held[id]; got == nil || got.Version == nil || got.Version.Value != 0 || got.BaseRevision == nil || got.BaseRevision.Value != 1 {
+				return false
+			}
+		}
+		return true
+	}
+	describe := func(client *terrainClient) string {
+		var keys []string
+		for id := range client.terrainObjects() {
+			keys = append(keys, terrain_chunk.KeyOf(id).String())
+		}
+		slices.Sort(keys)
+		return fmt.Sprint(len(keys), keys)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !(allMarkers(p1) && allMarkers(p2)) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !allMarkers(p1) || !allMarkers(p2) {
+		t.Fatalf("want a base marker for each of the %d chunks in view: the base-only process's client holds %s, the cell's client %s", len(want), describe(p1), describe(p2))
+	}
+
+	// 格 (0,0) 第一次改 (2,0)：只做 Base 的进程上标记换成副本，格 (1,0) 上同样（那里它不在 Ghost 带里，也是副本）。
+	first := terrain.ChunkKey{X: 2, Y: 0}
+	firstID := chunkID(t, first)
+	p1.takeFrames()
+	p2.takeFrames()
+	a.brush(t, 1, raiseAt(first, 400, 10))
+	edited := map[terrain.ChunkKey]*terrainmap.Map{first: a.process.m}
+	waitFor(t, "both clients hold the first edit", func() bool { return clientMatches(t, p1, edited) && clientMatches(t, p2, edited) })
+	for name, client := range map[string]*terrainClient{"base-only": p1, "cell": p2} {
+		frames := client.takeFrames()
+		for _, f := range frames {
+			if slices.Contains(f.removed, firstID) {
+				t.Fatalf("%s client: the first edit of %v removed the marker before the replica's full", name, first)
+			}
+		}
+		if u, _, ok := lastUpdate(frames, firstID); !ok || !u.full {
+			t.Fatalf("%s client: the first edit of %v arrived as %+v, want a full over the marker", name, first, u)
+		}
+		if n := len(client.terrainObjects()); n != len(want) {
+			t.Fatalf("%s client holds %d terrain objects after the first edit, want %d", name, n, len(want))
+		}
+	}
 }
 
 // 方案 §9 P3 / D14：格 (0,0) 改它边上的块 (3,0)，格 (1,0) 的 Ghost 带副本在有界时间内到同一版本、逐点相同，查询一致；

@@ -23,7 +23,9 @@ import (
 //   - 邻格玩家可见：玩家连在自己的 Base 进程上、可能站在任何一个格里。Base 进程按本进程玩家的视点（witness 里玩家自己
 //     的位置）订阅附近别的格写的块，改过的块作为只读副本（terrain_chunk.Replica）登记进场景的同一个 Manager、同一个
 //     地形 Interest；本进程自己写的块仍是实体 subject（terrain_sync.go）。客户端收到的对象、编码与增量形状与本格的块
-//     相同，TerrainChunk 的类型调度（periodic 1s）与 terrain 命名空间的上限、快照预算一样适用。
+//     相同，TerrainChunk 的类型调度（periodic 1s）与 terrain 命名空间的上限、快照预算一样适用。拥有者答“原始块”的
+//     块登记就绪标记（terrain_chunk.Base，方案 §31.9），客户端据此确认；为了拿到这个答复，客户端想要、本进程还没有
+//     任何说法的块 Held 报 -1（Replicator 协议里“要拥有者把当前状态（含原始块）发来”），有了标记之后报 0。
 //
 // 传输是本进程的 cellworld Node 的扩展消息（命名空间 terrainReplicaSpace）：发件排进 Node 的出站队列，所以拥有者在改块
 // 事务的提交后回调里登记推送（Replicator.Changed）也不 Dispatch、不做 I/O。可靠性是 gameplay/terrain 的 Replicator 的
@@ -156,11 +158,24 @@ func (p *partitionTerrain) stop() {
 	p.m.SetCommitted(p.sync.show)
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	for key := range p.clients {
+		p.hideLocked(key)
+	}
 	for key, r := range p.replicas {
 		p.sync.hideReplica(r)
 		delete(p.replicas, key)
 	}
 	clear(p.clients)
+}
+
+// hideLocked 撤下客户端不再想要的一块（持 mu）：副本或就绪标记，二者至多有一个。
+func (p *partitionTerrain) hideLocked(key terrain.ChunkKey) {
+	if r := p.replicas[key]; r != nil {
+		p.sync.hideReplica(r)
+		delete(p.replicas, key)
+		return
+	}
+	p.sync.hideBase(key)
 }
 
 // witness 是 cellworld 的 witness 观察点（Base 接受了一份 witness，在提交后回调上）：玩家自己的位置就是地形视点。
@@ -232,10 +247,7 @@ func (p *partitionTerrain) recompute() []terrain.ChunkKey {
 		if _, keep := next[key]; keep {
 			continue
 		}
-		if r := p.replicas[key]; r != nil {
-			p.sync.hideReplica(r)
-			delete(p.replicas, key)
-		}
+		p.hideLocked(key)
 	}
 	for key := range next {
 		if _, had := p.clients[key]; had {
@@ -245,7 +257,14 @@ func (p *partitionTerrain) recompute() []terrain.ChunkKey {
 			continue
 		}
 		chunk, version, loaded := p.m.View().Chunk(key)
-		if !loaded || version < 1 {
+		if !loaded {
+			continue
+		}
+		if version < 1 {
+			// Ghost 带里视图说是原始块：与覆盖块一样按视图（本来就是最新的）立即登记就绪标记。
+			if err := p.sync.showBase(key, p.m.Meta().BaseRevision); err != nil {
+				slog.Warn("partition terrain: a ghost chunk's base marker was not shown", "chunk", key.String(), "err", err)
+			}
 			continue
 		}
 		o := terrain.Overlay{BaseRevision: p.m.Meta().BaseRevision, Version: version, Heights: chunk.Heights, Materials: chunk.Materials}
@@ -277,15 +296,15 @@ func (p *partitionTerrain) wantedLocked() []terrain.ChunkKey {
 	return keys
 }
 
-// showLocked 让客户端想要的一块跟上拥有者的状态（持 mu）：覆盖块建副本或更新它；“原始块”不建（客户端用本地原始
-// 地形包），已有更新的副本时答 ErrStaleOverlay。
+// showLocked 让客户端想要的一块跟上拥有者的状态（持 mu）：覆盖块建副本或更新它（已有就绪标记时由 showReplica 把标记
+// 转成副本）；“原始块”登记就绪标记（方案 §31.9，客户端据此确认、用本地原始地形包），已有更新的副本时答 ErrStaleOverlay。
 func (p *partitionTerrain) showLocked(key terrain.ChunkKey, o terrain.Overlay) error {
 	r := p.replicas[key]
 	switch {
 	case o.Version < 1 && r != nil:
 		return fmt.Errorf("%w: the owner says base, the replica holds version %d", terrain.ErrStaleOverlay, r.Version())
 	case o.Version < 1:
-		return nil
+		return p.sync.showBase(key, p.m.Meta().BaseRevision)
 	case r != nil:
 		return r.Set(o)
 	}
@@ -303,7 +322,8 @@ func (p *partitionTerrain) showLocked(key terrain.ChunkKey, o terrain.Overlay) e
 
 // ---- terrain.ReplicaStore（Replicator 的 goroutine 上）----
 
-// Held：Ghost 带的块报视图里的版本（-1 是装不进视图）；只给客户端看的块报副本的版本，没有副本是原始块（0）。
+// Held：Ghost 带的块报视图里的版本（-1 是装不进视图）；只给客户端看的块报副本的版本，有就绪标记是原始块（0），
+// 两样都没有报 -1——拥有者把当前状态（含“原始块”）发来，客户端才有可据以确认的说法（方案 §31.9）。
 func (p *partitionTerrain) Held(key terrain.ChunkKey) int64 {
 	if _, ghost := p.ghost[key]; ghost {
 		return p.m.ReplicaHeld(key)
@@ -313,7 +333,10 @@ func (p *partitionTerrain) Held(key terrain.ChunkKey) int64 {
 	if r := p.replicas[key]; r != nil {
 		return r.Version()
 	}
-	return 0
+	if p.sync.hasBase(key) {
+		return 0
+	}
+	return -1
 }
 
 // Apply：Ghost 带的块先进视图（版本只进不退，原始块撤回覆盖），客户端也想要时同步更新副本；只给客户端看的块更新
@@ -339,10 +362,7 @@ func (p *partitionTerrain) Forget(key terrain.ChunkKey) {
 	if _, wanted := p.clients[key]; wanted {
 		return
 	}
-	if r := p.replicas[key]; r != nil {
-		p.sync.hideReplica(r)
-		delete(p.replicas, key)
-	}
+	p.hideLocked(key)
 }
 
 // stats 是 gm.scene.partition 的地形一栏：副本端点的计数、Ghost 带块数、客户端想要的块与已登记的副本数。

@@ -27,10 +27,15 @@ import (
 // 订阅是地形自己的一个 policy.Interest（独立订阅来源，与场景的 Interest 互不干扰）：
 //   - 观察者：每个进了场景的玩家（Join）以 Watch 登记一个主视野（只看不被看），视点跟着玩家的位置走（terrainMoves：
 //     玩家移动提交之后 MoveView，移动不到 terrainViewStep 不报，省掉每一步的 AOI 重评）。
-//   - subject：只有被改过的块（Version ≥ 1）。启动时本进程写的改过的块装成实体登记（loadEdited），之后第一次改的块在
-//     提交后登记（terrainmap.Map.SetCommitted）。从没改过的块不建实体、不订阅，客户端用本地原始地形包。
-//   - 视野 200m（terrainViewRadius）、MaxVisible 64；块的位置取块中心，所以视野圆里约 30 块（π·200² / 64²），64 是
-//     拉远视野或人为放大半径时的上限。
+//   - subject：地图上每一块（方案 §31.9）。被改过的块（Version ≥ 1）是实体：启动时本进程写的改过的块装成实体登记
+//     （loadEdited），之后第一次改的块在提交后登记（terrainmap.Map.SetCommitted）。从没改过的块不建实体，登记一个就绪
+//     标记（terrain_chunk.Base：同一 ID / 命名空间 / 编码，全量只有 BaseRevision 与 Version 0；showBases），客户端收到
+//     它就知道“这块没改过、用本地原始地形包”，可以确认（C# TerrainChunkSync → TerrainRebuildScheduler.Confirm）。块第一次
+//     被改时标记关掉、同一 ID 重新绑定到实体（Manager 的 rebind：订阅不断、改发实体的全量），客户端看到同一个对象从
+//     Version 0 跳到改过的版本，中间没有 remove。
+//   - 视野 200m（terrainViewRadius）、MaxVisible 64；块的位置取块中心，所以视野圆里约 30 块（π·200² / 64²，离开半径
+//     220m 时至多约 37 块），64 是拉远视野或人为放大半径时的上限。每一块都有 subject 之后，视野里的块数不再随改过的块
+//     多少变化：进场时每会话约 30～37 个地形全量（标记每个约 20 字节），按快照预算每次 Flush 4 个、约 8～10 次 Flush。
 //
 // 容量与快照预算（方案 §7“对象上限”“基线限流”，决策 D15）：地形是 Manager 的一个单独计的命名空间
 // （entitysync.ManagerConfig.Namespaces，terrainNamespaceLimits）——一个会话最多持有 64 块地形（terrainMaxVisible），
@@ -80,16 +85,19 @@ func defaultTerrainSync(bounds spatial.Rect) *terrainSyncConfig {
 
 // terrainSync 是地形的订阅组织：一个 Interest（玩家是观察者、改过的块是 subject）加启动 / 提交后的登记。
 //
-// 锁：mu 保护 shown 与 reported；Interest 与 Manager 的调用只取它们自己的短锁、不等待，可以在 Nest worker 与提交后
-// 回调里调用。shown 只增不减：块实体常驻（World 档、不卸载），从没改过的块从不出现在这里。
+// 锁：mu 保护 shown、bases 与 reported；Interest 与 Manager 的调用只取它们自己的短锁、不等待，可以在 Nest worker 与提交后
+// 回调里调用。shown 只增不减：块实体常驻（World 档、不卸载），从没改过的块从不出现在这里。bases 里的标记与 shown 不相交：
+// 标记的登记、撤下与转成实体 / 副本都持 mu 完成（Manager / Interest 的短锁在 mu 之内取，它们不回调本类型），所以“这一块
+// 现在是标记还是实体”在 mu 下只有一个答案。
 type terrainSync struct {
 	manager  *entitysync.Manager
 	interest *policy.Interest
 	bounds   spatial.Rect
 
 	mu       sync.Mutex
-	shown    map[int64]struct{}     // 已登记、已放进 Interest 的块实体 ID
-	reported map[int64]spatial.Point // 玩家 ID → 上次报告给 Interest 的视点
+	shown    map[int64]struct{}              // 已登记、已放进 Interest 的块实体 ID
+	bases    map[int64]*terrain_chunk.Base // 没改过的块的就绪标记（已登记、已放进 Interest）
+	reported map[int64]spatial.Point         // 玩家 ID → 上次报告给 Interest 的视点
 	closed   atomic.Bool
 	// follow 是视点变化的通知（分区场景，terrain_partition.go）：watching 为假表示玩家不再看地形。在报告视点的同一
 	// goroutine 上、放开 mu 之后调用，不得阻塞。nil 时不通知。
@@ -125,7 +133,7 @@ func newTerrainSync(manager *entitysync.Manager, config terrainSyncConfig) (*ter
 	if err != nil {
 		return nil, fmt.Errorf("terrain sync: interest policy: %w", err)
 	}
-	return &terrainSync{manager: manager, interest: interest, bounds: config.bounds, shown: map[int64]struct{}{}, reported: map[int64]spatial.Point{}}, nil
+	return &terrainSync{manager: manager, interest: interest, bounds: config.bounds, shown: map[int64]struct{}{}, bases: map[int64]*terrain_chunk.Base{}, reported: map[int64]spatial.Point{}}, nil
 }
 
 // clamp 把场景里的位置夹进地形图（场景比地形图大时，图外的玩家从最近的图边看）。
@@ -195,6 +203,17 @@ func (s *terrainSync) show(chunk *terrain_chunk.TerrainChunk) {
 		return
 	}
 	s.shown[id] = struct{}{}
+	if base := s.bases[id]; base != nil {
+		// 第一次改：标记转成实体（持 mu，见类型说明）。Interest 里同一 ID 已在块中心，不再 Show。
+		delete(s.bases, id)
+		err := s.promoteLocked(base, chunk.Sync())
+		s.mu.Unlock()
+		if err != nil {
+			s.forget(id)
+			slog.Error("terrain sync: an edited chunk did not replace its base marker; players will not receive it until a restart", "chunk", chunk.Key().String(), "err", err)
+		}
+		return
+	}
 	s.mu.Unlock()
 	if err := s.manager.Register(chunk.Sync()); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
 		s.forget(id)
@@ -216,6 +235,18 @@ func (s *terrainSync) showReplica(r *terrain_chunk.Replica) error {
 	if s.closed.Load() {
 		return errors.New("terrain sync: closed")
 	}
+	s.mu.Lock()
+	if base := s.bases[r.ID()]; base != nil {
+		// 拥有者第一次说“改过了”：标记转成副本（持 mu，见类型说明），Interest 里同一 ID 已在块中心。
+		delete(s.bases, r.ID())
+		err := s.promoteLocked(base, r.Sync())
+		s.mu.Unlock()
+		if err != nil {
+			return fmt.Errorf("terrain sync: replica %v replacing its base marker: %w", r.Key(), err)
+		}
+		return nil
+	}
+	s.mu.Unlock()
 	if _, err := s.manager.RegisterAfterRetirement(r.Sync(), nil); err != nil {
 		return fmt.Errorf("terrain sync: register replica %v: %w", r.Key(), err)
 	}
@@ -238,6 +269,116 @@ func (s *terrainSync) forget(id int64) {
 	s.mu.Lock()
 	delete(s.shown, id)
 	s.mu.Unlock()
+}
+
+// ---- 没改过的块的就绪标记（方案 §31.9）----
+
+// showBase 给一块没改过的块登记就绪标记（terrain_chunk.Base）并放在块中心。这一块已有实体或标记时什么都不做（答 nil）；
+// 同一 ID 已有活着的副本登记时 Manager 拒绝（ErrSubjectRegistered，调用方只在没有副本时调用）。同一 ID 上一次撤下（hideBase / hideReplica）的退役还没发完时排在它之后登记（remove 先于 create）。
+// 不阻塞：持 mu 调 Manager 与 Interest 的短锁。
+func (s *terrainSync) showBase(key terrain.ChunkKey, baseRevision int64) error {
+	if s == nil || s.closed.Load() {
+		return nil
+	}
+	id, err := terrain_chunk.EntityID(key)
+	if err != nil {
+		return err
+	}
+	b := key.Bounds()
+	centre := spatial.Point{X: (b.Min.X + b.Max.X) / 2, Y: (b.Min.Y + b.Max.Y) / 2}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, edited := s.shown[id]; edited || s.bases[id] != nil {
+		return nil
+	}
+	base, err := terrain_chunk.NewBase(key, baseRevision)
+	if err != nil {
+		return err
+	}
+	if _, err := s.manager.RegisterAfterRetirement(base.Sync(), nil); err != nil {
+		base.Close()
+		return fmt.Errorf("terrain sync: register base marker %v: %w", key, err)
+	}
+	if err := s.interest.Show(id, centre); err != nil {
+		_ = s.manager.Unregister(id)
+		base.Close()
+		return fmt.Errorf("terrain sync: show base marker %v: %w", key, err)
+	}
+	s.bases[id] = base
+	return nil
+}
+
+// hideBase 撤下一块的就绪标记（分区场景：这块离开了本进程全部玩家的视点范围）：先从 AOI 撤，再退役（订阅者下一帧收到
+// remove），最后关闭状态。没有标记时什么都不做。
+func (s *terrainSync) hideBase(key terrain.ChunkKey) {
+	if s == nil {
+		return
+	}
+	id, err := terrain_chunk.EntityID(key)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	base := s.bases[id]
+	if base == nil {
+		return
+	}
+	delete(s.bases, id)
+	_ = s.interest.Hide(id)
+	_ = s.manager.Unregister(id)
+	base.Close()
+}
+
+// hasBase 报告这一块现在是不是就绪标记（分区场景的 Held：标记 = 持有原始块）。
+func (s *terrainSync) hasBase(key terrain.ChunkKey) bool {
+	id, err := terrain_chunk.EntityID(key)
+	if err != nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bases[id] != nil
+}
+
+// promoteLocked 把一块的标记换成实体或副本的状态（持 mu）：先关掉标记，再以新状态 Register——Manager 看到同 ID 的旧状态
+// 已关闭，把订阅接到新状态上并强制全量（rebind：旧状态关闭到重新绑定之间不捕获、不发送）。失败时退役这个 ID（订阅者
+// 收到 remove、撤销确认），不留一个停在 Version 0 的标记让客户端把改过的块当成没改过。
+func (s *terrainSync) promoteLocked(base *terrain_chunk.Base, state *coreentity.SubjectSyncState) error {
+	base.Close()
+	if err := s.manager.Register(state); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
+		_ = s.interest.Hide(base.ID())
+		_ = s.manager.Unregister(base.ID())
+		return err
+	}
+	return nil
+}
+
+// showBases 给本进程写的、视图里是原始块（Version 0）的块登记就绪标记（启动阶段，loadEdited 之后、玩家进来之前）。
+// 装不进视图的块（原始地形包里这块坏了）不登记：服务端自己也查不了它，客户端不会被告知“没改过”。返回登记的个数。
+func (s *terrainSync) showBases(m *terrainmap.Map) (int, error) {
+	if s == nil || m == nil {
+		return 0, nil
+	}
+	rev := m.Meta().BaseRevision
+	shown := 0
+	for _, key := range m.Keys() {
+		if version, loaded := m.View().Version(key); !loaded || version != 0 || !m.Owns(key) {
+			continue
+		}
+		if err := s.showBase(key, rev); err != nil {
+			return shown, err
+		}
+		shown++
+	}
+	return shown, nil
+}
+
+// baseCount 是已登记的就绪标记数（测试与诊断）。
+func (s *terrainSync) baseCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.bases)
 }
 
 // shownCount 是已登记的改过的块数（测试与诊断）。

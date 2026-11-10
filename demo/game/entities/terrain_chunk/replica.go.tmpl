@@ -218,3 +218,66 @@ var terrainChunkSyncFormat = func() uint32 {
 	}
 	return patch.SyncFormat
 }()
+
+// Base 是一块没改过的块的就绪标记（可编辑地形方案 §31.9，§31.7 ③ A）：客户端只有收到服务端对一块的说法才能确认它，
+// 而从没改过的块没有实体、没有同步对象，客户端分不清“这块没改过”与“全量还没到”。所以地形 Interest 里每一块都有一个
+// subject：改过的块是实体（或别的格写的块的副本 Replica），没改过的块是这个标记——同一个 ID、命名空间、kind 与同步编码
+// （TerrainChunkDao 的同步 PB），全量只有 BaseRevision 与 Version 0，没有高度与材质。客户端收到 Version 0 的
+// TerrainChunk 就是“这块在当前原始地形包上没改过”，用本地原始地形包、可以确认；离开视野（remove）撤销确认。
+//
+// 不绑实体、没有 DAO、从不变脏：块第一次被改时，地形同步关掉标记、把同一 ID 重新绑定到实体（或副本）的状态上
+// （entitysync Manager 的 rebind：已订阅的会话不收 remove、直接改为等待新状态的全量），所以客户端看到的是同一个对象从
+// Version 0 跳到改过的版本。标记只有一个 SubjectSyncState 和几个字段，一张 2048m 的图（1024 块）全部登记也只是几百 KB。
+type Base struct {
+	id           int64
+	key          terrain.ChunkKey
+	baseRevision int64
+	state        *entity.SubjectSyncState
+}
+
+// NewBase 建一块在 baseRevision 这一版原始地形包上的就绪标记。返回的标记还没登记到任何 Manager。
+func NewBase(key terrain.ChunkKey, baseRevision int64) (*Base, error) {
+	id, err := EntityID(key)
+	if err != nil {
+		return nil, err
+	}
+	b := &Base{id: id, key: key, baseRevision: baseRevision}
+	b.state = entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{
+		Enabled: true, SubjectID: id, Namespace: SyncNamespaceTerrain, SubjectKind: uint32(EntityKindTerrainChunk),
+		Packer: basePacker{b},
+	})
+	return b, nil
+}
+
+// ID 是块的实体 ID（与改过之后的 TerrainChunk 实体相同）。Key 是块坐标。
+func (b *Base) ID() int64                      { return b.id }
+func (b *Base) Key() terrain.ChunkKey          { return b.key }
+func (b *Base) Sync() *entity.SubjectSyncState { return b.state }
+
+// Close 关闭同步状态：从 Manager 退役之后调用，或在把同一 ID 重新绑定到实体 / 副本之前调用（见类型说明）。
+func (b *Base) Close() { b.state.Close() }
+
+// basePacker 是标记的打包器：全量是 BaseRevision + Version 0；标记从不变脏，增量为空。
+type basePacker struct{ b *Base }
+
+func (p basePacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+	if terrainChunkViewsErr != nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("terrain chunk base: %w", terrainChunkViewsErr)
+	}
+	if _, ok := terrainChunkViews.Lookup(profile); !ok {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("%w: %+v", entity.ErrSyncViewUnknown, profile)
+	}
+	raw, err := db.MarshalSyncTerrainChunkDao(&db.SyncTerrainChunkDao{
+		EntityID: p.b.id, SyncFormat: terrainChunkSyncFormat,
+		BaseRevision: &db.SyncTerrainChunkDaoBaseRevisionField{Value: p.b.baseRevision},
+		Version:      &db.SyncTerrainChunkDaoVersionField{Value: 0},
+	})
+	if err != nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("terrain chunk base %v: %w", p.b.key, err)
+	}
+	return entity.TakeFrozenSyncPayload(TerrainChunkSyncCodec, raw), nil
+}
+
+func (p basePacker) PackSubjectDelta(entity.SyncProfile, uint64) (entity.FrozenSyncPayload, error) {
+	return entity.FrozenSyncPayload{}, nil
+}

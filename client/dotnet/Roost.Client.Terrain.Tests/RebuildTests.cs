@@ -328,4 +328,127 @@ internal static partial class Program
                 $"unload/reload, reconnect, LOD stitching, drop, base/water switch; random {ops} ops: dispatched {mid.Dispatched}, published {mid.Published} in {randomBatches} batches, discarded {mid.Discarded}, executor backlog ≤ 2, then settled current");
         }
     }
+
+    // 服务端的确认来源接到调度器（方案 §31.9，TerrainChunkSync）：地形视野里每一块都是一个 TerrainChunk 对象，没改过的块是
+    // Version 0 的就绪标记。按 EntityChanged 的顺序喂说法（Apply / Remove / BeginSession / SwitchTerrain），核对“只有收到
+    // 服务端说法的块才就绪”，以及移动中新进入视距、重连、换包、业务卸载重装、标记换成实体这几种时序。
+    private static void TestChunkSyncConfirm(byte[] packBytes)
+    {
+        using var pack = TerrainPack.Open(packBytes);
+        var meta = pack.Meta;
+        var all = AllKeys(meta);
+        long rev = meta.BaseRevision;
+        var k00 = new ChunkKey(0, 0); var k10 = new ChunkKey(1, 0); var k20 = new ChunkKey(2, 0);
+        var k01 = new ChunkKey(0, 1); var k11 = new ChunkKey(1, 1); var k21 = new ChunkKey(2, 1);
+        // 一份覆盖块说法（生成 Apply 的 RepeatedField<uint> 形状）：原始块的高度加上 lift（接近上限的点减去），材质不变。
+        IReadOnlyList<uint> Heights(ChunkKey key, int lift) => pack.ReadChunk(key).Heights.Select(h => (uint)(h > ushort.MaxValue - lift ? h - lift : h + lift)).ToList();
+        IReadOnlyList<uint> Materials(ChunkKey key) => pack.ReadChunk(key).Materials.Select(m => (uint)m).ToList();
+        bool Depends(ChunkKey key, ChunkKey dep) => TerrainChunkBuilder.Dependencies(meta, key).Contains(dep);
+
+        var rig = new Rig(ViewOf(pack, all));
+        var sync = new TerrainChunkSync(rig.Scheduler);
+        foreach (var k in all) rig.Want(k, 0);
+        rig.Settle();
+        Check(rig.Batches.Count == 0, "confirm source: nothing is ready before the server has said anything");
+
+        // 1. 进场：除 k20 外每块都收到说法（k10 是改过的实体，其余是标记）。依赖 k20 的块不就绪，其余（k00、k01）发布。
+        Check(sync.Apply(k10, rev, 3, Heights(k10, 30), Materials(k10)), "enter: the edited chunk is confirmed");
+        foreach (var k in all.Where(k => k != k10 && k != k20)) Check(sync.Apply(k, rev, 0, null, null), $"enter: base marker {k} confirmed");
+        rig.Settle();
+        foreach (var k in all)
+            Check(rig.Shown(k, out _, out _) == !(Depends(k, k20) || k == k20), $"enter: {k} shown only when none of its dependencies waits for the server (k20 has not arrived)");
+        Check(rig.Shown(k00, out _, out _) && rig.Shown(k01, out _, out _), "enter: the chunks that do not read k20 are published");
+        Check(rig.View.TryGetVersion(k10, out long v10) && v10 == 3, "enter: the edited chunk's overlay is in the view");
+        Check(sync.Apply(k20, rev, 0, null, null), "enter: the last marker arrives");
+        rig.Settle();
+        rig.CheckAllCurrent();
+
+        // 2. 第一次改一块：服务端把同一个对象从 Version 0 换成实体的全量（没有 Remove），确认不中断，按新数据重建。
+        Check(sync.Apply(k01, rev, 1, Heights(k01, 12), Materials(k01)) && rig.Scheduler.IsConfirmed(k01), "first edit: marker to entity stays confirmed");
+        rig.Settle();
+        rig.CheckAllCurrent();
+        Check(rig.Shown(k01, out var b01, out _) && b01!.Input.ChunkAt(0, 0)!.Version == 1, "first edit: rebuilt from the entity's data");
+
+        // 3. 离开视野（Remove）：撤销确认，依赖它的网格报过期；再次进入（同一份说法）恢复，数据没变不重建。
+        Check(sync.Remove(k21) && !rig.Scheduler.IsConfirmed(k21), "leave: unconfirmed");
+        foreach (var k in all.Where(k => Depends(k, k21) || k == k21))
+            Check(rig.Shown(k, out _, out bool cur) && !cur, $"leave: {k} reads k21 and is reported expired");
+        long dispatched = rig.Scheduler.Stats.Dispatched;
+        Check(sync.Apply(k21, rev, 0, null, null), "re-enter: confirmed again");
+        rig.Settle();
+        Check(rig.Scheduler.Stats.Dispatched == dispatched, "re-enter: unchanged data needs no rebuild");
+        rig.CheckAllCurrent();
+
+        // 4. 移动中新进入视距：业务还没装这块时说法先到。标记等 LoadBase 之后自动确认；覆盖块直接装入。
+        rig.View.Unload(k20);
+        sync.Remove(k20);
+        Check(!sync.Apply(k20, rev, 0, null, null) && !rig.Scheduler.IsConfirmed(k20), "enter while moving: a marker for a chunk not loaded yet waits");
+        rig.Settle();
+        Check(rig.Shown(k20, out _, out bool c20) && !c20, "enter while moving: the old mesh is not current until the chunk is loaded and confirmed");
+        rig.View.LoadBase(k20);
+        Check(rig.Scheduler.IsConfirmed(k20), "enter while moving: confirmed once the business loads the base chunk");
+        rig.Settle();
+        rig.CheckAllCurrent();
+        rig.View.Unload(k21);
+        sync.Remove(k21);
+        Check(sync.Apply(k21, rev, 2, Heights(k21, 7), Materials(k21)) && rig.View.TryGetVersion(k21, out long v21) && v21 == 2, "enter while moving: an edited chunk is loaded by its full");
+        rig.Settle();
+        rig.CheckAllCurrent();
+
+        // 5. 业务按视距卸载、重装一块改过的块：LoadBase 得到原始块，这里按留着的说法补回覆盖块并确认。
+        rig.View.Unload(k10);
+        Check(!rig.Scheduler.IsConfirmed(k10), "reload: unloading revokes");
+        rig.View.LoadBase(k10);
+        Check(rig.View.TryGetVersion(k10, out v10) && v10 == 3 && rig.Scheduler.IsConfirmed(k10), "reload: the overlay comes back from the kept record and is confirmed");
+        rig.Settle();
+        rig.CheckAllCurrent();
+
+        // 6. 视图里留着旧覆盖块（缓存）而服务端说没改过：换回原始块再确认。
+        EditChunk(rig.View, k00, h => h[5] += 9);
+        Check(!rig.Scheduler.IsConfirmed(k00), "cache: an overlay the server did not send is not confirmed");
+        Check(sync.Apply(k00, rev, 0, null, null) && rig.View.TryGetVersion(k00, out long v00) && v00 == 0, "cache: the server's base marker puts the base chunk back");
+        rig.Settle();
+        rig.CheckAllCurrent();
+
+        // 7. 重连：全部说法作废、会话代际加一；Full 帧重新带来每一块之前什么都不就绪，带来之后按新会话重建。
+        sync.BeginSession();
+        Check(sync.Count == 0 && all.All(k => !rig.Scheduler.IsConfirmed(k)), "reconnect: nothing confirmed");
+        rig.Settle();
+        foreach (var k in all) Check(rig.Shown(k, out _, out bool cur) && !cur, $"reconnect: {k} reported expired");
+        foreach (var k in all)
+        {
+            rig.View.TryGetVersion(k, out long v);
+            if (v == 0) sync.Apply(k, rev, 0, null, null);
+            else sync.Apply(k, rev, v, rig.View.GetChunk(k)!.Heights.ToArray().Select(h => (uint)h).ToList(), rig.View.GetChunk(k)!.Materials.ToArray().Select(m => (uint)m).ToList());
+        }
+        rig.Settle();
+        rig.CheckAllCurrent();
+        Check(all.All(k => rig.Shown(k, out var bb, out _) && bb!.Session == rig.Scheduler.Session), "reconnect: everything rebuilt for the new session");
+
+        // 8. 形状不对、别的包版本：不确认。
+        Throws<TerrainInvalidChunkException>(() => sync.Apply(k00, rev, 4, null, null), "an overlay record without heights");
+        Check(!rig.Scheduler.IsConfirmed(k00) && !sync.TryGetVersion(k00, out _), "a bad record is dropped and not confirmed");
+        Throws<TerrainBaseRevisionException>(() => sync.Apply(k00, rev + 1, 0, null, null), "a marker on another base revision");
+        Check(!rig.Scheduler.IsConfirmed(k00) && sync.TryGetVersion(k00, out _), "a marker on another base revision is kept, not confirmed");
+        Throws<TerrainOutOfMapException>(() => sync.Apply(new ChunkKey(3, 0), rev, 0, null, null), "a chunk outside the map");
+
+        // 9. 换包：服务端已换到新包（说法带新 BaseRevision，客户端此刻还拿旧包，被拒但留着）；客户端换包后用留着的说法确认。
+        //    旧包的说法（k21 的覆盖块还在旧版本上）换包后不确认，等新包上的说法。
+        var stored = all.Select(k => { var c = pack.ReadChunk(k); return Deflate(Plain(c.Heights, c.Materials)); }).ToArray();
+        using var next = TerrainPack.Open(BuildPack(rev + 1, meta.ChunksX, meta.ChunksY, meta.HeightBase, meta.WaterLevel + 200, stored));
+        foreach (var k in all.Where(k => k != k21))
+            Throws<TerrainBaseRevisionException>(() => sync.Apply(k, rev + 1, 0, null, null), $"switch: {k} on the new pack before the client switched");
+        var nextView = ViewOf(next, all);
+        var failures = sync.SwitchTerrain(nextView);
+        rig.Current = nextView;
+        Check(failures.Count == 0, "switch: kept records re-installed without errors");
+        Check(all.All(k => rig.Scheduler.IsConfirmed(k) == (k != k21)), "switch: the records on the new pack are confirmed, the old-pack record is not");
+        Check(sync.Apply(k21, rev + 1, 0, null, null), "switch: k21's marker on the new pack");
+        rig.Settle();
+        rig.CheckAllCurrent();
+        Check(all.All(k => rig.Shown(k, out var bb, out _) && bb!.Terrain == rig.Scheduler.Terrain), "switch: everything rebuilt for the new terrain");
+        sync.Dispose();
+        Console.WriteLine("PASS terrain confirm source: markers and edited fulls confirm, a missing one blocks its dependents, marker to entity without a gap, " +
+            "leave / re-enter without a rebuild, enter while moving before and after LoadBase, unload and reload keep the overlay, a stale cached overlay reverts, reconnect, bad records, base pack switch");
+    }
 }

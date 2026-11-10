@@ -121,7 +121,8 @@ func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
 	return m, nil
 }
 
-// startTerrainSync 把本进程写的、改过的块装成实体并登记为场景同步的 subject（terrain_sync.go 的 loadEdited），接建筑时
+// startTerrainSync 把本进程写的、改过的块装成实体并登记为场景同步的 subject（terrain_sync.go 的 loadEdited），其余本进程
+// 写的块登记就绪标记（showBases，方案 §31.9），接建筑时
 // 再把站着的建筑放进场景主视野（与怪相同的 ShowSubject，building_sync.go 的 loadStanding）。在 Init
 // 里、场景启动之后、玩家能进来之前运行（启动阶段的 Mongo 读，不在 Nest 业务 worker 上）。
 func startTerrainSync(registry *app.Registry, scene *Scene, m *terrainmap.Map) error {
@@ -136,9 +137,15 @@ func startTerrainSync(registry *app.Registry, scene *Scene, m *terrainmap.Map) e
 	if err != nil {
 		return err
 	}
+	// 其余本进程写的块是原始块：各登记一个就绪标记（方案 §31.9），客户端据此确认“没改过”。分区场景里别的格写的块由
+	// terrain_partition.go 按拥有者的答复登记。
+	bases, err := scene.terrain.showBases(m)
+	if err != nil {
+		return err
+	}
 	// 站着的建筑（启动对账核对通过的）进场景主视野（building_sync.go，方案 §27.10）；不接建筑的场景没有建筑。
 	buildings := scene.buildings.loadStanding(m)
-	slog.Info("terrain sync started", "edited_chunks", loaded, "view_radius", terrainViewRadius, "max_visible", terrainMaxVisible,
+	slog.Info("terrain sync started", "edited_chunks", loaded, "base_markers", bases, "view_radius", terrainViewRadius, "max_visible", terrainMaxVisible,
 		"max_objects", scene.sessionObjects+terrainMaxVisible, "snapshots_per_flush", terrainSnapshotsPerFlush,
 		"buildings", buildings, "building_sync", scene.buildings != nil, "took", time.Since(started))
 	return nil

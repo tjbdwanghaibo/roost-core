@@ -48,6 +48,7 @@ internal static partial class Program
         TestLod();
         TestChunkBuild(pack);
         TestRebuildScheduler(pack);
+        TestChunkSyncConfirm(pack);
         Console.WriteLine("PASS terrain");
         return 0;
     }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -27,12 +28,14 @@ import (
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	"{{MODULE}}/protocol/msgid"
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
  "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 )
 
 // 地形同步（terrain_sync.go，可编辑地形方案 §7 / §9 P2）在生成的真实玩家 TCP 接入上：客户端是一个 Go 实现的接收端
@@ -93,6 +96,25 @@ func startTerrainSyncHarness(t *testing.T, chunksX, chunksY int32, radius int64,
 		_ = scene.Close(closeCtx)
 	})
 	return h
+}
+
+// startSubjects 是服务启动时地形同步的那一步（startTerrainSync，service.go 在场景启动之后、玩家能进来之前调用）：
+// 本进程写的改过的块装成实体登记，其余块登记就绪标记（方案 §31.9）。不调它的用例只有提交后登记的改过的块。
+func (h *terrainSyncHarness) startSubjects(t *testing.T) {
+	t.Helper()
+	startTerrainSubjects(t, h.scene, h.process)
+}
+
+// startTerrainSubjects 是 startSubjects 的进程级写法（分区用例的每个进程同样调用）。
+func startTerrainSubjects(t *testing.T, scene *Scene, p *terrainProcess) {
+	t.Helper()
+	registry := app.NewRegistry(nil)
+	if err := registry.Register(mods.ModEntityRuntime, entity.NewManagerAccess(p.entities)); err != nil {
+		t.Fatal(err)
+	}
+	if err := startTerrainSync(registry, scene, p.m); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // brush 是一个玩家的一次编辑，必须成功。
@@ -192,6 +214,8 @@ type receivedFrame struct {
 	wireBytes, frameBytes int
 	full                  bool
 	terrain               []terrainUpdate
+	// removed 是这一帧里被 remove 的地形块（subject）。
+	removed []int64
 	others                int
  otherIDs []int64
 	// buildings 是这一帧里的建筑更新（building_sync_test.go）。
@@ -292,6 +316,9 @@ func (client *terrainClient) apply(f entitysync.ReceivedFrame, received *receive
 	for _, object := range f.Objects {
 		if object.Operation == frame.ObjectRemove {
 			subject := client.refs[object.Ref]
+			if client.namespaces[subject] == "terrain" {
+				received.removed = append(received.removed, subject)
+			}
 			delete(client.refs, object.Ref)
 			delete(client.namespaces, subject)
 			delete(client.chunks, subject)
@@ -373,7 +400,8 @@ func (client *terrainClient) apply(f entitysync.ReceivedFrame, received *receive
 	return nil
 }
 
-// snapshot 是客户端当前持有的地形块（Apply 返回的视图只读，这里只给引用）。
+// snapshot 是客户端当前持有的改过的地形块（Version ≥ 1；Apply 返回的视图只读，这里只给引用）。没改过的块的就绪标记
+// （Version 0，方案 §31.9）不在其中，见 terrainObjects。
 func (client *terrainClient) snapshot() map[int64]*db.SyncTerrainChunkDao {
 	client.mu.Lock()
 	defer client.mu.Unlock()
@@ -382,9 +410,21 @@ func (client *terrainClient) snapshot() map[int64]*db.SyncTerrainChunkDao {
 	}
 	out := make(map[int64]*db.SyncTerrainChunkDao, len(client.chunks))
 	for id, c := range client.chunks {
-		out[id] = c
+		if c.Version != nil && c.Version.Value >= 1 {
+			out[id] = c
+		}
 	}
 	return out
+}
+
+// terrainObjects 是客户端当前持有的全部地形对象：改过的块与就绪标记（Version 0）。
+func (client *terrainClient) terrainObjects() map[int64]*db.SyncTerrainChunkDao {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.err != nil {
+		panic(fmt.Sprintf("the terrain client failed: %v", client.err))
+	}
+	return maps.Clone(client.chunks)
 }
 
 func (client *terrainClient) failure() error {
@@ -393,14 +433,16 @@ func (client *terrainClient) failure() error {
 	return client.err
 }
 
-// held 是客户端持有的对象数：地形块与别的命名空间。
+// held 是客户端持有的对象数：改过的地形块（就绪标记不算，见 terrainObjects）与别的命名空间。
 func (client *terrainClient) held() (terrainObjects, others int) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	for _, ns := range client.namespaces {
+	for id, ns := range client.namespaces {
 		switch ns {
 		case "terrain":
-			terrainObjects++
+			if c := client.chunks[id]; c != nil && c.Version != nil && c.Version.Value >= 1 {
+				terrainObjects++
+			}
 		case "building":
 		default:
 			others++
@@ -547,6 +589,163 @@ func TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect(t *testing.
 	}
 	if lost := h.scene.manager.Stats().SessionsLost; lost != 0 {
 		t.Fatalf("%d replication sessions were lost", lost)
+	}
+}
+
+// chunksWithin 是中心离 at 不超过 radius 的块（地形 Interest 按块中心进视野，方案 §7；与 AOI 的实现无关地独立算出）。
+func chunksWithin(meta terrain.Meta, at spatial.Point, radius int64) map[int64]terrain.ChunkKey {
+	out := map[int64]terrain.ChunkKey{}
+	for y := int32(0); y < meta.ChunksY; y++ {
+		for x := int32(0); x < meta.ChunksX; x++ {
+			key := terrain.ChunkKey{X: x, Y: y}
+			if spatial.DistanceSquared(centreOf(key), at) <= radius*radius {
+				id, _ := terrain_chunk.EntityID(key)
+				out[id] = key
+			}
+		}
+	}
+	return out
+}
+
+// assertTerrainObjects 断言客户端持有的地形对象恰好覆盖 want（within 为 nil 时）或在 want 与 within 之间（离开滞回），
+// 且每个对象都是服务端此刻对这块的说法：改过的块与服务端视图逐点相同，没改过的块是就绪标记（Version 0、当前
+// BaseRevision、不带高度与材质）。
+func (h *terrainSyncHarness) assertTerrainObjects(t *testing.T, client *terrainClient, want, within map[int64]terrain.ChunkKey) {
+	t.Helper()
+	held := client.terrainObjects()
+	rev := h.process.m.Meta().BaseRevision
+	for id, key := range want {
+		if held[id] == nil {
+			t.Fatalf("the client holds %d terrain objects, want every one of the %d chunks in view: no object for %v, so it cannot be confirmed", len(held), len(want), key)
+		}
+	}
+	var edited []terrain.ChunkKey
+	for id, got := range held {
+		key, inView := want[id]
+		if !inView && within != nil {
+			key, inView = within[id]
+		}
+		if !inView {
+			t.Fatalf("the client holds chunk %v outside the view", terrain_chunk.KeyOf(id))
+		}
+		_, version, _ := h.process.m.View().Chunk(key)
+		if version >= 1 {
+			edited = append(edited, key)
+			continue
+		}
+		if got.Version == nil || got.Version.Value != 0 || got.BaseRevision == nil || got.BaseRevision.Value != rev || (got.Heights != nil && len(got.Heights.Value) != 0) || (got.Materials != nil && len(got.Materials.Value) != 0) {
+			t.Fatalf("chunk %v was never edited: the client has %+v, want the base marker (version 0, base revision %d, no data)", key, got, rev)
+		}
+	}
+	h.assertClientMatches(t, client, edited)
+}
+
+// 方案 §31.9（§31.7 ③ A，维护者 2026-11-10）：客户端的重建调度缺省要求依赖块“已确认”，确认要有服务端的说法。地形视野里
+// 的每一块都下发一个 TerrainChunk 对象——改过的块是实体，没改过的块是就绪标记（Version 0）——所以客户端能把“这块没改过”
+// 与“全量还没到”分开。核对：进场时视野里每一块都到；第一次改一块时同一个对象从标记换成实体的全量（没有 remove，确认
+// 不中断）；移动中新进入视野的块同样到、离开的被 remove；断线重连后重新得到视野里的每一块。真实 TCP 与生产的启动步骤
+// （startTerrainSync）。
+func TestTerrainEveryChunkInViewReachesTheClient(t *testing.T) {
+	h := startTerrainSyncHarness(t, 8, 8, terrainViewRadius, terrainMaxVisible, false)
+	meta := h.process.m.Meta()
+	at := centreOf(terrain.ChunkKey{X: 4, Y: 4})
+	// 启动前改过 (4,4)：启动时它装成实体，其余块登记标记。
+	h.brush(t, terrainBuilder, 1, terrain.Brush{Op: terrain.BrushRaise, X: at.X + 500, Y: at.Y, Radius: 400, Falloff: terrain.FalloffSmooth, Strength: 20})
+	h.startSubjects(t)
+
+	const playerID = int64(30011)
+	client := h.join(t, playerID, at)
+	// 块中心到视点的距离是 64m 的 √(dx² + dy²) 倍，200m 视野正好不落在任何块中心上：29 块。
+	want := chunksWithin(meta, at, terrainViewRadius)
+	if len(want) != 29 {
+		t.Fatalf("the premise: %d chunk centres within %dm, want 29", len(want), terrainViewRadius/100)
+	}
+	settle := func(what string, done func() bool) int {
+		t.Helper()
+		for flushes := 1; flushes <= 64; flushes++ {
+			if err := h.scene.Flush(h.ctx); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(200 * time.Millisecond)
+			for !done() && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if done() {
+				return flushes
+			}
+		}
+		return -1
+	}
+	holdsAll := func(set map[int64]terrain.ChunkKey) func() bool {
+		return func() bool {
+			held := client.terrainObjects()
+			for id := range set {
+				if held[id] == nil {
+					return false
+				}
+			}
+			return true
+		}
+	}
+	flushes := settle("every chunk in view", holdsAll(want))
+	h.assertTerrainObjects(t, client, want, nil)
+	t.Logf("entering: %d terrain objects (1 edited, %d base markers) in %d flushes (snapshot budget %d per flush)", len(want), len(want)-1, flushes, terrainSnapshotsPerFlush)
+
+	// 第一次改视野里一块没改过的块：同一个对象从 Version 0 换成实体的全量，不 remove。
+	first := terrain.ChunkKey{X: 5, Y: 4}
+	firstID := chunkID(t, first)
+	client.takeFrames()
+	version := h.brush(t, terrainBuilder, 2, terrain.Brush{Op: terrain.BrushRaise, X: centreOf(first).X, Y: centreOf(first).Y, Radius: 300, Strength: 10}).Chunks[0].Version
+	if settle("the first edit", func() bool { return client.version(firstID) == version }) < 0 {
+		t.Fatalf("the first edit of %v did not reach the client (holds version %d)", first, client.version(firstID))
+	}
+	frames := client.takeFrames()
+	for _, f := range frames {
+		if slices.Contains(f.removed, firstID) {
+			t.Fatalf("the first edit of %v removed its object before the entity's full: the client would unconfirm it for a frame", first)
+		}
+	}
+	if u, _, ok := lastUpdate(frames, firstID); !ok || !u.full {
+		t.Fatalf("the first edit of %v reached the client as %+v, want the entity's full over the marker", first, u)
+	}
+	h.assertTerrainObjects(t, client, want, nil)
+
+	// 移动：视点移到 (2,4) 的中心（128m）。新进入视野的块都到；还在的不动；离开半径（220m）以外的被 remove。
+	moved := centreOf(terrain.ChunkKey{X: 2, Y: 4})
+	h.scene.terrain.moved(playerID, moved)
+	nowWant := chunksWithin(meta, moved, terrainViewRadius)
+	stay := chunksWithin(meta, moved, terrainViewRadius+terrainViewHysteresis)
+	if settle("the chunks entering view", func() bool {
+		if !holdsAll(nowWant)() {
+			return false
+		}
+		for id := range client.terrainObjects() {
+			if _, ok := stay[id]; !ok {
+				return false
+			}
+		}
+		return true
+	}) < 0 {
+		t.Fatalf("after the move the client holds %d terrain objects; want the %d in view, none beyond %dm", len(client.terrainObjects()), len(nowWant), (terrainViewRadius+terrainViewHysteresis)/100)
+	}
+	h.assertTerrainObjects(t, client, nowWant, stay)
+
+	// 断线重连：新会话重新得到视野里的每一块（标记没有变化，也要重发）。
+	_ = client.connection.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for h.scene.Members() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if h.scene.Members() != 0 {
+		t.Fatal("the disconnected player is still in the scene")
+	}
+	client = h.join(t, playerID, moved)
+	if settle("every chunk in view after the reconnect", holdsAll(nowWant)) < 0 {
+		t.Fatalf("after the reconnect the client holds %d terrain objects, want the %d in view", len(client.terrainObjects()), len(nowWant))
+	}
+	h.assertTerrainObjects(t, client, nowWant, nil)
+	if stats := h.scene.manager.Stats(); stats.SessionsLost != 0 || stats.OverLimitDeferred != 0 {
+		t.Fatalf("%d sessions lost, %d objects deferred over a limit", stats.SessionsLost, stats.OverLimitDeferred)
 	}
 }
 
