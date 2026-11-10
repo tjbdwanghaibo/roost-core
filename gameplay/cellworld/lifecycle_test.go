@@ -36,19 +36,20 @@ func TestCellCrashPlayerReentersFromSnapshot(t *testing.T) {
 	panel := Panel{MaxHP: 150, Attack: 4, Power: 23, Ver: 1}
 	w.base.player(1).setCellPanel(panel)
 	w.enter(1, spatial.Point{X: 12000, Y: 5000})
-	w.enter(2, spatial.Point{X: 12200, Y: 5000})
-	time.Sleep(3 * worldPeriod)
+	w.enter(2, spatial.Point{X: 12200, Y: 5000}) // 同在 B，enter 已等到第一份 witness：同格攻击没有别的前提
 	for range 5 {
 		w.attack(2, actorID(1), 2)
 	}
-	w.waitResults(5, 3*time.Second)
-	waitFor(t, 3*time.Second, "writeback of hp 90", func() bool { return w.baseState(1).HP == 90 })
+	w.waitResults(5, settleWithin)
+	waitFor(t, settleWithin, "writeback of hp 90", func() bool { return w.baseState(1).HP == 90 })
 	_, before := w.owner(1)
+	reenters := w.base.node.Stats().Reenters
 	w.stopCell(b)
 	w.real.forget(b)
-	time.Sleep(1500 * time.Millisecond) // 超过 SilenceTimeout：第一次重进发给已停的 B，丢失
+	// 超过 SilenceTimeout 后 Base 的第一次重进发给已停的 B、丢失；等它真的发出（原来 sleep 1.5s），再重启 B。
+	waitFor(t, settleWithin, "the first re-enter to the stopped cell", func() bool { return w.base.node.Stats().Reenters > reenters })
 	w.startCell(b)
-	v := w.waitView(1, 5*time.Second, "view after restart", func(v View) bool { return v.Epoch > before })
+	v := w.waitView(1, settleWithin, "view after restart", func(v View) bool { return v.Epoch > before })
 	if v.Cell != w.grid.SID(b) || v.Self.X != 12000 || v.Self.HP != 90 {
 		t.Fatalf("after restart: view from %d at (%d,%d) hp %d, want B at (12000,5000) hp 90", v.Cell, v.Self.X, v.Self.Y, v.Self.HP)
 	}
@@ -62,18 +63,11 @@ func TestCellCrashPlayerReentersFromSnapshot(t *testing.T) {
 	w.assertSingleReal(actorID(1), b)
 	// 客户端：崩溃期间自己的 mirror 过期删除（witness 停了），重进后它以新版本回来，客户端又持有自己（HP 是快照的 90）。
 	// 2026-11-03 接 demo 端到端时发现：mirror 重新出现只 Show 进空间索引，玩家对自己的订阅（Enter 时建立）不会恢复。
-	deadline := time.Now().Add(3 * time.Second)
-	for {
+	eventually(t, settleWithin, "the client to hold its own scene actor again", func() (bool, string) {
 		self, ok := w.base.client.held(1)[actorID(1)]
-		if ok && self.HP == 90 && self.Ver.Epoch > before {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the client does not hold its own scene actor again: held %v (present %v), removes %v, creates %d, mirror stats %+v",
-				self, ok, w.base.client.removed(1), w.base.client.createCount(1, actorID(1)), w.base.mirrors.Stats())
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return ok && self.HP == 90 && self.Ver.Epoch > before, fmt.Sprintf("held %v (present %v), removes %v, creates %d, mirror stats %+v",
+			self, ok, w.base.client.removed(1), w.base.client.createCount(1, actorID(1)), w.base.mirrors.Stats())
+	})
 }
 
 // Base 进程消失：SceneActor 收不到输入 / 续租，LeaseTimeout 后自行离场，邻格的 Ghost 随删除消息消失。
@@ -83,14 +77,14 @@ func TestBaseGoneSceneActorExpires(t *testing.T) {
 	w := startWorld(t, spec)
 	a, b := CellID{0, 0}, CellID{1, 0}
 	w.enter(1, spatial.Point{X: 9800, Y: 5000})
-	waitFor(t, 2*time.Second, "ghost in B", func() bool { _, ok := w.roleOf(b, actorID(1)); return ok })
-	time.Sleep(1500 * time.Millisecond)
+	waitFor(t, settleWithin, "ghost in B", func() bool { _, ok := w.roleOf(b, actorID(1)); return ok })
+	time.Sleep(1500 * time.Millisecond) // 负向窗口（长于 LeaseTimeout 1s）：Base 在续租，角色不该离场
 	if s, ok := w.roleOf(a, actorID(1)); !ok || s.Role != "real" {
 		t.Fatalf("SceneActor %+v (known %v) did not stay while the base renews its lease", s, ok)
 	}
 	w.base.stop()
-	waitFor(t, 3*time.Second, "lease expiry", func() bool { _, ok := w.roleOf(a, actorID(1)); return !ok })
-	waitFor(t, 2*time.Second, "ghost removed in B", func() bool { _, ok := w.roleOf(b, actorID(1)); return !ok })
+	waitFor(t, settleWithin, "lease expiry", func() bool { _, ok := w.roleOf(a, actorID(1)); return !ok })
+	waitFor(t, settleWithin, "ghost removed in B", func() bool { _, ok := w.roleOf(b, actorID(1)); return !ok })
 	if got := w.cells[a].node.Stats().LeaseExpired; got != 1 {
 		t.Fatalf("lease expirations %d, want 1", got)
 	}
@@ -131,23 +125,30 @@ func (w *world) leaveAndCapture(lb *loopback, unique int64, cell CellID) capture
 	var old capturedMsg
 	select {
 	case old = <-saved:
-	case <-time.After(3 * time.Second):
+	case <-time.After(settleWithin):
 		w.t.Fatal("leave not captured")
 	}
 	lb.setFault(nil)
-	waitFor(w.t, 3*time.Second, "actor removed by its own leave", func() bool { _, ok := w.roleOf(cell, actorID(unique)); return !ok })
+	waitFor(w.t, settleWithin, "actor removed by its own leave", func() bool { _, ok := w.roleOf(cell, actorID(unique)); return !ok })
 	return old
 }
 
-// requireStaysReal 断言角色在 d 内一直是 cell 的 Real（旧消息重放之后的观察窗口）。
-func (w *world) requireStaysReal(unique int64, cell CellID, d time.Duration, what string) {
+// requireStaysReal 重放 old，断言角色一直是 cell 的 Real，直到 cell 真的把它当作过期丢掉（StaleDrops 增加）且至少过了
+// d。原来只看固定的 d：负载下重放的消息可能在窗口之后才被处理，窗口就什么也没看到；现在等到“处理过了”的证据。
+func (w *world) requireStaysReal(lb *loopback, old capturedMsg, unique int64, cell CellID, d time.Duration, what string) {
 	w.t.Helper()
-	for deadline := time.Now().Add(d); time.Now().Before(deadline); {
+	stale := w.cells[cell].node.Stats().StaleDrops
+	if err := lb.Publish(old.subject, old.data); err != nil {
+		w.t.Fatal(err)
+	}
+	start := time.Now()
+	eventually(w.t, settleWithin, "the replayed message to be dropped as stale", func() (bool, string) {
 		if s, ok := w.roleOf(cell, actorID(unique)); !ok || s.Role != "real" {
 			w.t.Fatalf("%s: present=%v role=%q in %v", what, ok, s.Role, cell)
 		}
-		time.Sleep(5 * time.Millisecond)
-	}
+		got := w.cells[cell].node.Stats().StaleDrops
+		return got > stale && time.Since(start) >= d, fmt.Sprintf("stale drops in %v %d -> %d", cell, stale, got)
+	})
 }
 
 // requireLeaveRemoves 让玩家离场，断言 cell 上的角色是被这次 Leave 删掉的（不是租约到期）。
@@ -158,7 +159,7 @@ func (w *world) requireLeaveRemoves(unique int64, cell CellID) {
 	if err := w.base.node.Leave(ctx, playerEntityID(unique)); err != nil {
 		w.t.Fatal(err)
 	}
-	waitFor(w.t, 2*time.Second, "actor removed by the current leave", func() bool { _, ok := w.roleOf(cell, actorID(unique)); return !ok })
+	waitFor(w.t, settleWithin, "actor removed by the current leave", func() bool { _, ok := w.roleOf(cell, actorID(unique)); return !ok })
 	if got := w.cells[cell].node.Stats().LeaseExpired; got != 0 {
 		w.t.Fatalf("actor in %v left by lease expiry (%d), not by the leave", cell, got)
 	}
@@ -177,10 +178,7 @@ func TestLateLeaveDoesNotRemoveReenteredActor(t *testing.T) {
 	if second.Epoch <= first.Epoch {
 		t.Fatalf("epoch did not advance: %d -> %d", first.Epoch, second.Epoch)
 	}
-	if err := lb.Publish(old.subject, old.data); err != nil {
-		t.Fatal(err)
-	}
-	w.requireStaysReal(1, cell, 300*time.Millisecond,
+	w.requireStaysReal(lb, old, 1, cell, 300*time.Millisecond,
 		fmt.Sprintf("old Leave deleted the re-entered actor (old epoch %d, new epoch %d)", first.Epoch, second.Epoch))
 	w.requireLeaveRemoves(1, cell)
 }
@@ -199,12 +197,9 @@ func TestLateLeaveAfterHandoffKeepsTheNewEntry(t *testing.T) {
 	w.resetViews(1)
 	w.enter(1, spatial.Point{X: 9500, Y: 5000})
 	w.move(1, 1000, 0)
-	w.waitView(1, 5*time.Second, "handed over to B", func(v View) bool { return v.Cell == w.grid.SID(b) && v.Self.X >= 10300 })
+	w.waitView(1, settleWithin, "handed over to B", func(v View) bool { return v.Cell == w.grid.SID(b) && v.Self.X >= 10300 })
 	w.move(1, 0, 0)
-	if err := lb.Publish(old.subject, old.data); err != nil {
-		t.Fatal(err)
-	}
-	w.requireStaysReal(1, b, 300*time.Millisecond, "old Leave deleted the actor handed over to B")
+	w.requireStaysReal(lb, old, 1, b, 300*time.Millisecond, "old Leave deleted the actor handed over to B")
 	w.requireLeaveRemoves(1, b)
 }
 
@@ -222,18 +217,21 @@ func TestWritebackIsIdempotentAndOrdered(t *testing.T) {
 	w := startWorld(t, spec)
 	w.enter(1, spatial.Point{X: 9500, Y: 5000})
 	w.move(1, 1000, 0) // 跨一次边界：回写的版本跨 epoch 也单调
-	w.waitView(1, 5*time.Second, "crossed", func(v View) bool { return v.Self.X >= 10600 })
+	w.waitView(1, settleWithin, "crossed", func(v View) bool { return v.Self.X >= 10600 })
 	w.move(1, 0, 0)
-	time.Sleep(time.Second)
 	accepted := func() []EntityState {
 		w.mu.Lock()
 		defer w.mu.Unlock()
 		return append([]EntityState(nil), w.writebacks[actorID(1)]...)
 	}
+	// 原来 sleep 1s 后要求至少 5 份：等到有 5 份，再让 Base 跑 5 拍（≥ 0.5s，盖过注入的最多 120ms 延迟），让晚到的重复
+	// 副本都到达，再查整段的版本单调。
+	eventually(t, settleWithin, "5 accepted writebacks", func() (bool, string) {
+		n := len(accepted())
+		return n >= 5, fmt.Sprintf("only %d writebacks accepted", n)
+	})
+	w.base.waitBaseBeats(5)
 	got := accepted()
-	if len(got) < 5 {
-		t.Fatalf("only %d writebacks accepted", len(got))
-	}
 	for i := 1; i < len(got); i++ {
 		if !got[i].Ver.Newer(got[i-1].Ver) {
 			t.Fatalf("writeback %d version %+v not newer than %+v", i, got[i].Ver, got[i-1].Ver)
@@ -246,7 +244,7 @@ func TestWritebackIsIdempotentAndOrdered(t *testing.T) {
 	if last.Newer(final.SnapVer) {
 		t.Fatalf("base snapshot version %+v went back behind the last accepted %+v", final.SnapVer, last)
 	}
-	waitFor(t, 2*time.Second, "the hook for the base snapshot", func() bool {
+	waitFor(t, settleWithin, "the hook for the base snapshot", func() bool {
 		return slices.ContainsFunc(accepted(), func(s EntityState) bool { return s.Ver == final.SnapVer })
 	})
 }
@@ -316,7 +314,7 @@ func TestHandoffRollbackDoesNotHandOver(t *testing.T) {
 	b := CellID{1, 0}
 	w.enter(1, spatial.Point{X: 9950, Y: 5000})
 	w.move(1, 1000, 0)
-	w.waitView(1, 5*time.Second, "view from B", func(v View) bool { return v.Cell == w.grid.SID(b) })
+	w.waitView(1, settleWithin, "view from B", func(v View) bool { return v.Cell == w.grid.SID(b) })
 	w.move(1, 0, 0)
 	if failures.Load() < 2 {
 		t.Fatalf("install attempted %d times, want the failed one and a retry", failures.Load())
@@ -327,8 +325,7 @@ func TestHandoffRollbackDoesNotHandOver(t *testing.T) {
 	if aborted := w.sumStats(func(s NodeStats) uint64 { return s.HandoffsAborted }); aborted != 0 {
 		t.Fatalf("%d aborted handoffs", aborted)
 	}
-	time.Sleep(3 * worldPeriod)
-	w.assertSingleReal(actorID(1), b)
+	w.assertSingleReal(actorID(1), b) // 等到结论成立（有期限）
 }
 
 // E3：handler 名单先于 Node 注册（服务在引擎启动前经 NestHandlerInstaller 注册），同一引擎上不能注册两遍；
@@ -436,7 +433,7 @@ func TestCloseIngressStopsTakingMessagesAndWaitsForTheOneInFlight(t *testing.T) 
 	in := p.node.Stats().MsgsIn
 	send(2)
 	send(3)
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond) // 负向窗口：CloseIngress 之后到达的消息不再投递（回环同步投递，窗口只防异步漏网）
 	if got := gate.dispatched.Load(); got != 1 {
 		t.Fatalf("inputs dispatched after CloseIngress: %d in all, want only the first one", got)
 	}

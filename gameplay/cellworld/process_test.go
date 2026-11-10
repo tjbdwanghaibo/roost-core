@@ -312,6 +312,11 @@ func (s *cellService) Serve(ctx context.Context) error {
 			cfg.Hooks.DamageApplied = func(_ CellID, target int64, hit HitID, hp int32) {
 				out.emit(childEvent{Ev: "hit", ID: target, Hit: hit, HP: hp})
 			}
+			// 每拍区域心跳一行：父进程按它数子进程的拍数（视野间隔、租约等以拍数为尺子的断言）。
+			cfg.Hooks.TickDone = func(_ CellID, d time.Duration, _, _ int) {
+				ticks.add(ms(d))
+				out.emit(childEvent{Ev: "tick"})
+			}
 		}
 	}})
 	defer p.stop()
@@ -694,6 +699,53 @@ func startMPWorld(t *testing.T, cols, rows int32, mod func(*childSpec)) *mpWorld
 	return mp
 }
 
+// beatsUpTo / realAt 是子进程版的 timeline：按子进程报告的 tick / real 事件（系统时间，同机可比）。
+func (mp *mpWorld) beatsUpTo(sid int32, at time.Time) int {
+	return mp.regionBeats(sid, time.Unix(0, 0), at)
+}
+
+func (mp *mpWorld) beatTimes(sid int32) []time.Time {
+	cell, ok := mp.grid.CellOf(sid)
+	if !ok || mp.procs[cell] == nil {
+		return nil
+	}
+	var out []time.Time
+	for _, e := range mp.procs[cell].eventsSnapshot() {
+		if e.Ev == "tick" {
+			out = append(out, time.Unix(0, e.T))
+		}
+	}
+	return out
+}
+
+func (mp *mpWorld) realAt(sid int32, id int64, epoch uint64, acquired bool) (time.Time, bool) {
+	cell, ok := mp.grid.CellOf(sid)
+	if !ok || mp.procs[cell] == nil {
+		return time.Time{}, false
+	}
+	for _, e := range mp.procs[cell].eventsSnapshot() {
+		if e.Ev == "real" && e.ID == id && e.Epoch == epoch && e.Acq == acquired {
+			return time.Unix(0, e.T), true
+		}
+	}
+	return time.Time{}, false
+}
+
+// regionBeats 按子进程报告的 tick 事件数格 sid 在 (from, to] 内的拍数。
+func (mp *mpWorld) regionBeats(sid int32, from, to time.Time) int {
+	cell, ok := mp.grid.CellOf(sid)
+	if !ok || mp.procs[cell] == nil {
+		return 0
+	}
+	n := 0
+	for _, e := range mp.procs[cell].eventsSnapshot() {
+		if e.Ev == "tick" && e.T > from.UnixNano() && e.T <= to.UnixNano() {
+			n++
+		}
+	}
+	return n
+}
+
 func (mp *mpWorld) cellSpec(id CellID, npcs map[int64]spatial.Point) childSpec {
 	spec := mp.spec
 	spec.Col, spec.Row = id.Col, id.Row
@@ -733,23 +785,36 @@ func TestCellsInSeparateProcesses(t *testing.T) {
 	w.enter(1, spatial.Point{X: 8800, Y: 5000})
 	w.resetViews(1)
 	w.move(1, 1000, 0)
-	w.waitView(1, 10*time.Second, "east of boundary", func(v View) bool { return v.Self.X >= 11000 })
+	w.waitView(1, travelWithin, "east of boundary", func(v View) bool { return v.Self.X >= 11000 })
 	w.move(1, -1000, 0)
-	w.waitView(1, 10*time.Second, "back west", func(v View) bool { return v.Self.X <= 9600 })
+	w.waitView(1, travelWithin, "back west", func(v View) bool { return v.Self.X <= 9600 })
 	w.move(1, 0, 0)
-	time.Sleep(3 * worldPeriod)
+	// 等交接收尾（Cell 在子进程里，只能从 Base 看）：Base 的 owner 是 A、epoch 3，且最近的 witness 来自它。
+	eventually(t, settleWithin, "the there-and-back to settle in A", func() (bool, string) {
+		st := w.baseState(1)
+		last, _ := w.lastView(1)
+		return st.Cell == w.grid.SID(CellID{0, 0}) && st.Epoch == 3 && last.Cell == st.Cell && last.Epoch == st.Epoch,
+			fmt.Sprintf("base owner sid %d epoch %d, last view from %d epoch %d; want A epoch 3", st.Cell, st.Epoch, last.Cell, last.Epoch)
+	})
 	crossing := w.viewsOf(1)
-	miss, gap := checkContinuity(t, crossing, npcs, natsMaxMiss, natsMaxGap)
+	cont := checkContinuity(t, crossing, npcs, natsMaxMiss, natsGap, mp)
 	w.checkClient(1, npcs)
-	if sid, epoch := w.owner(1); sid != w.grid.SID(CellID{0, 0}) || epoch != 3 {
-		t.Fatalf("owner after there-and-back = sid %d epoch %d, want A epoch 3", sid, epoch)
-	}
+	// 前提：攻击者停在攻击距离内、A 看得见目标。“回到 9600 以西”是看到 witness 才停，负载下控制延迟可能让玩家多走
+	// 几百单位，离目标（10200, 5200）超出攻击距离 800（加压时 10 刀全按 OutOfRange 被拒）。所以先以 200/s 闭环走回
+	// x ≥ 9650（多走也到不了 B 的交接线 10100），停稳，再等 A 的 witness 里有目标（Cell 在子进程里，只能从 witness 看）。
+	w.move(1, 200, 0)
+	w.waitView(1, travelWithin, "back within attack range", func(v View) bool { return v.Self.X >= 9650 })
+	w.move(1, 0, 0)
+	w.waitView(1, settleWithin, "stopped in A with the target in view", func(v View) bool {
+		return v.Cell == w.grid.SID(CellID{0, 0}) && v.Self.VX == 0 &&
+			slices.ContainsFunc(v.Entities, func(e EntityState) bool { return e.ID == target })
+	})
 	var hits []HitID
 	for range 10 {
 		hits = append(hits, w.attack(1, target, 3))
-		time.Sleep(60 * time.Millisecond)
+		time.Sleep(60 * time.Millisecond) // 节奏，不是断言
 	}
-	results := w.waitResults(len(hits), 5*time.Second)
+	results := w.waitResults(len(hits), settleWithin)
 	all := mp.stopAll()
 	pids := map[int]bool{}
 	for _, e := range all {
@@ -775,14 +840,14 @@ func TestCellsInSeparateProcesses(t *testing.T) {
 	}
 	for _, r := range results {
 		if r.Outcome != OutcomeApplied || applied[r.Hit] != 1 {
-			t.Errorf("hit %v: outcome %v, applied %d times across processes", r.Hit, r.Outcome, applied[r.Hit])
+			t.Errorf("hit %v: outcome %v (reason %v), applied %d times across processes", r.Hit, r.Outcome, r.Reason, applied[r.Hit])
 		}
 	}
 	if final := results[len(results)-1].HP; final != 100-3*int32(len(hits)) {
 		t.Errorf("final hp %d", final)
 	}
-	t.Logf("cell pids %v, parent %d; views %d, worst miss %d, worst gap %v; %d hits applied once each",
-		pids, os.Getpid(), len(crossing), miss, gap, len(applied))
+	t.Logf("cell pids %v, parent %d; views %d, %v; %d hits applied once each",
+		pids, os.Getpid(), len(crossing), cont, len(applied))
 }
 
 // Cell 进程 kill -9：玩家在 B 挨打并回写（HP 90），B 进程被 SIGKILL（不释放单实例锁、内存全丢）；新起的 B' 进程等旧锁过期
@@ -793,13 +858,12 @@ func TestCellProcessKill9PlayerRestoredFromSnapshot(t *testing.T) {
 	w := mp.world
 	b := CellID{1, 0}
 	w.enter(1, spatial.Point{X: 12000, Y: 5000})
-	w.enter(2, spatial.Point{X: 12200, Y: 5000})
-	time.Sleep(3 * worldPeriod)
+	w.enter(2, spatial.Point{X: 12200, Y: 5000}) // 两人都在 B、enter 已等到各自第一份 witness：同格攻击没有别的前提
 	for range 5 {
 		w.attack(2, actorID(1), 2)
 	}
-	w.waitResults(5, 3*time.Second)
-	waitFor(t, 3*time.Second, "writeback of hp 90", func() bool { return w.baseState(1).HP == 90 })
+	w.waitResults(5, settleWithin)
+	waitFor(t, settleWithin, "writeback of hp 90", func() bool { return w.baseState(1).HP == 90 })
 	_, before := w.owner(1)
 	old := mp.procs[b]
 	oldPID := old.cmd.Process.Pid
@@ -840,7 +904,7 @@ func TestSecondCellProcessForSameSIDIsRefused(t *testing.T) {
 		t.Fatalf("second process: err %v, stderr %q; want a refusal naming %q", err, second.stderrText(), app.ErrSingletonHeld)
 	}
 	w.resetViews(1)
-	w.waitView(1, 3*time.Second, "first process still serving", func(v View) bool { return v.Cell == w.grid.SID(a) })
+	w.waitView(1, settleWithin, "first process still serving", func(v View) bool { return v.Cell == w.grid.SID(a) })
 	mp.stopAll()
 }
 
@@ -852,10 +916,10 @@ func TestBaseProcessGoneSceneActorCleanedUp(t *testing.T) {
 	spec.BasePlayer, spec.BaseAt = 5, spatial.Point{X: 5000, Y: 5000}
 	base := startCellProcess(t, spec)
 	a := mp.procs[CellID{0, 0}]
-	waitFor(t, 5*time.Second, "witness at the base child", func() bool {
+	waitFor(t, settleWithin, "witness at the base child", func() bool {
 		return slices.ContainsFunc(base.eventsSnapshot(), func(e childEvent) bool { return e.Ev == "witness" })
 	})
-	time.Sleep(1500 * time.Millisecond) // 超过租约：Base 在续租，SceneActor 必须还在
+	time.Sleep(1500 * time.Millisecond) // 负向窗口（长于 1s 租约）：Base 在续租，SceneActor 必须还在；负载下只会更弱，不会误报
 	released := func() bool {
 		return slices.ContainsFunc(a.eventsSnapshot(), func(e childEvent) bool { return e.Ev == "real" && e.ID == actorID(5) && !e.Acq })
 	}
@@ -864,17 +928,22 @@ func TestBaseProcessGoneSceneActorCleanedUp(t *testing.T) {
 	}
 	killedAt := time.Now()
 	base.kill()
-	waitFor(t, 4*time.Second, "SceneActor released after the base died", released)
+	waitFor(t, settleWithin, "SceneActor released after the base died", released)
 	var at int64
 	for _, e := range a.eventsSnapshot() {
 		if e.Ev == "real" && e.ID == actorID(5) && !e.Acq {
 			at = e.T
 		}
 	}
-	if gone := time.Unix(0, at).Sub(killedAt); gone > 2500*time.Millisecond {
-		t.Errorf("SceneActor left %v after the base died, want within the 1s lease plus a beat", gone)
+	// 多快离场以 A 在 kill 之后执行的拍数计（原来是墙钟 2.5s，负载下子进程的心跳被推迟时会误报）：租约 1s = 20 拍，
+	// 最后一次续租在 kill 之前，离场发生在过期后的第一拍角色心跳，留 4 拍余量。实现忽略租约时等不到离场；把租约算长
+	// （比如按 3 倍）时拍数远超上限，照样失败。
+	gone := time.Unix(0, at).Sub(killedAt)
+	beats := mp.regionBeats(mp.grid.SID(CellID{0, 0}), killedAt, time.Unix(0, at))
+	if limit := int(time.Second/worldPeriod) + 4; beats > limit {
+		t.Errorf("SceneActor left %d beats (%v) after the base died, want within the 1s lease (%d beats) plus a few", beats, gone, limit)
 	} else {
-		t.Logf("SceneActor left %v after the base process was killed", gone)
+		t.Logf("SceneActor left %d beats (%v) after the base process was killed", beats, gone)
 	}
 	var leases uint64
 	for _, e := range mp.stopAll() {

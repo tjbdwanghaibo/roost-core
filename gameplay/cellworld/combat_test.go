@@ -1,6 +1,7 @@
 package cellworld
 
 import (
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,29 +37,34 @@ func (w *world) applications() map[HitID]int {
 }
 
 // 全部消息重复（含攻击本身）：10 次攻击各只结算一次，HP 100 → 80。
+//
+// 前提是 A 已经看得见 B 的目标（Ghost）：原来 sleep 3 拍，负载下 Ghost 还没到，第一刀按“看不见”拒绝，于是只结算 9 次
+// （整包 -race 加压时的 “9 distinct hits applied” / “want hp 80”）。现在等 A 知道目标再攻击；10 个结论都到了之后再过
+// 3 拍（B 实际执行的拍数），让与原件同时投递的重复消息都处理完，再断言每刀只结算一次、HP 80。
 func TestDamageAcrossBoundaryAppliedOnce(t *testing.T) {
 	spec, lb := loopbackSpec(t, 2, 1)
 	lb.setFault(func(string, *wireMsg) (bool, bool, time.Duration) { return false, true, 0 })
 	w := startWorld(t, spec)
+	a, b := CellID{0, 0}, CellID{1, 0}
 	target := npcID(21)
-	w.spawn(CellID{1, 0}, EntityState{ID: target, X: 10300, Y: 5000, HP: 100})
+	w.spawn(b, EntityState{ID: target, X: 10300, Y: 5000, HP: 100})
 	w.enter(1, spatial.Point{X: 9700, Y: 5000})
-	time.Sleep(3 * worldPeriod)
+	w.waitKnown(a, target)
 	for range 10 {
 		w.attack(1, target, 2)
 	}
-	results := w.waitResults(10, 5*time.Second)
-	time.Sleep(3 * worldPeriod)
+	results := w.waitResults(10, settleWithin)
+	w.waitBeats(b, 3)
 	apps := w.applications()
 	if len(apps) != 10 {
-		t.Fatalf("%d distinct hits applied, want 10 (results %d)", len(apps), len(results))
+		t.Fatalf("%d distinct hits applied, want 10 (results %+v)", len(apps), results)
 	}
 	for hit, n := range apps {
 		if n != 1 {
 			t.Errorf("hit %v applied %d times", hit, n)
 		}
 	}
-	if s, ok := w.roleOf(CellID{1, 0}, target); !ok || s.State.HP != 80 {
+	if s, ok := w.roleOf(b, target); !ok || s.State.HP != 80 {
 		t.Fatalf("target %+v, want hp 80", s)
 	}
 }
@@ -71,10 +77,10 @@ func TestDamageRejectedOutOfRangeOrInvisible(t *testing.T) {
 	w.spawn(CellID{0, 0}, EntityState{ID: far, X: 7000, Y: 5000, HP: 100})
 	w.spawn(CellID{1, 0}, EntityState{ID: invisible, X: 15000, Y: 5000, HP: 100})
 	w.enter(1, spatial.Point{X: 9700, Y: 5000})
-	time.Sleep(3 * worldPeriod)
+	w.waitKnown(CellID{0, 0}, far) // 两个目标都直接生成在各自的格里：超距的那个 A 本来就知道，看不见的那个永远不会有 Ghost
 	w.attack(1, far, 5)
 	w.attack(1, invisible, 5)
-	results := w.waitResults(2, 3*time.Second)
+	results := w.waitResults(2, settleWithin)
 	reasons := map[int64]RejectReason{}
 	for _, r := range results {
 		if r.Outcome != OutcomeRejected {
@@ -105,10 +111,10 @@ func TestDamageDedupTravelsWithHandoff(t *testing.T) {
 	target := npcID(41)
 	w.enter(1, spatial.Point{X: 9500, Y: 5000})
 	w.spawn(CellID{1, 0}, EntityState{ID: target, X: 10150, Y: 5000, VX: -300, HP: 100})
-	time.Sleep(2 * worldPeriod)
+	w.waitKnown(CellID{0, 0}, target)
 	start.Store(time.Now().UnixNano())
 	hit := w.attack(1, target, 7)
-	results := w.waitResults(1, 4*time.Second)
+	results := w.waitResults(1, settleWithin)
 	if len(results) != 1 || results[0].Hit != hit || results[0].Outcome != OutcomeApplied {
 		t.Fatalf("results %+v, want one applied result for %v", results, hit)
 	}
@@ -118,7 +124,7 @@ func TestDamageDedupTravelsWithHandoff(t *testing.T) {
 	if !results[0].Duplicate {
 		t.Logf("result was not a duplicate (the reply got through before the handoff): %+v", results[0])
 	}
-	waitFor(t, 3*time.Second, "target real in A", func() bool { s, ok := w.roleOf(CellID{0, 0}, target); return ok && s.Role == "real" })
+	waitFor(t, settleWithin, "target real in A", func() bool { s, ok := w.roleOf(CellID{0, 0}, target); return ok && s.Role == "real" })
 	if s, _ := w.roleOf(CellID{0, 0}, target); s.State.HP != 93 {
 		t.Fatalf("target hp %d in A, want 93", s.State.HP)
 	}
@@ -133,9 +139,9 @@ func TestDamageUnknownAfterDeadline(t *testing.T) {
 	target := npcID(51)
 	w.spawn(CellID{1, 0}, EntityState{ID: target, X: 10300, Y: 5000, HP: 100})
 	w.enter(1, spatial.Point{X: 9700, Y: 5000})
-	time.Sleep(3 * worldPeriod)
+	w.waitKnown(CellID{0, 0}, target)
 	hit := w.attack(1, target, 3)
-	results := w.waitResults(1, 3*time.Second)
+	results := w.waitResults(1, settleWithin)
 	if len(results) != 1 || results[0].Outcome != OutcomeUnknown {
 		t.Fatalf("results %+v, want unknown", results)
 	}
@@ -151,13 +157,12 @@ func TestDamageBusyWhenDedupTableFull(t *testing.T) {
 	w := startWorld(t, spec)
 	target := npcID(61)
 	w.spawn(CellID{0, 0}, EntityState{ID: target, X: 9800, Y: 5000, HP: 100})
-	w.enter(1, spatial.Point{X: 9700, Y: 5000})
-	time.Sleep(3 * worldPeriod)
+	w.enter(1, spatial.Point{X: 9700, Y: 5000}) // 目标与攻击者同在 A：没有 Ghost 前提
 	for range 4 {
 		w.attack(1, target, 1)
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond) // 节奏，不是断言：同一窗口里先后到达
 	}
-	results := w.waitResults(4, 3*time.Second)
+	results := w.waitResults(4, settleWithin)
 	busy := 0
 	for _, r := range results {
 		if r.Outcome == OutcomeRejected && r.Reason == ReasonBusy {
@@ -190,7 +195,7 @@ func (w *world) refreshPanel(unique int64, p Panel) {
 func (w *world) waitPanel(cell CellID, id int64, ver uint64, what string) EntitySnapshot {
 	w.t.Helper()
 	var last EntitySnapshot
-	deadline := time.Now().Add(4 * time.Second)
+	deadline := time.Now().Add(settleWithin)
 	for time.Now().Before(deadline) {
 		if s, ok := w.roleOf(cell, id); ok && s.Role == "real" {
 			last = s
@@ -227,11 +232,11 @@ func TestDamageUsesTheAttackersPanel(t *testing.T) {
 	w.base.player(1).setCellPanel(Panel{MaxHP: 200, Attack: 17, Power: 54})
 	w.enter(1, spatial.Point{X: 9700, Y: 5000})
 	w.enter(2, spatial.Point{X: 9650, Y: 5000}) // 没有面板来源
-	time.Sleep(3 * worldPeriod)
+	w.waitKnown(a, across)
 	w.attack(1, near, 2)
 	w.attack(1, across, 2)
 	w.attack(2, across, 3)
-	results := w.waitResults(3, 3*time.Second)
+	results := w.waitResults(3, settleWithin)
 	got := map[[2]int64]int32{}
 	for _, r := range results {
 		if r.Outcome != OutcomeApplied || r.Duplicate {
@@ -245,7 +250,7 @@ func TestDamageUsesTheAttackersPanel(t *testing.T) {
 			t.Errorf("attacker %d on %d: damage %d, want %d (results %+v)", k[0], k[1], got[k], d, results)
 		}
 	}
-	waitFor(t, 2*time.Second, "hp settles", func() bool {
+	waitFor(t, settleWithin, "hp settles", func() bool {
 		sn, _ := w.roleOf(a, near)
 		sa, _ := w.roleOf(b, across)
 		return sn.State.HP == 83 && sa.State.HP == 80
@@ -273,25 +278,18 @@ func TestPanelCapsCurrentHPWithoutHealing(t *testing.T) {
 		t.Fatalf("max hp 40 -> 200: hp %d panel %+v, want hp 40 (no heal) under 200", s.State.HP, s.State.Panel)
 	}
 	w.base.player(2).setCellPanel(Panel{Attack: 9})
-	w.enter(2, spatial.Point{X: 12200, Y: 5000})
-	time.Sleep(3 * worldPeriod)
+	w.enter(2, spatial.Point{X: 12200, Y: 5000}) // 同在 B，enter 已等到第一份 witness
 	w.attack(2, actorID(1), 1)
-	w.waitResults(1, 3*time.Second)
-	waitFor(t, 3*time.Second, "writeback of hp 31 under panel 3", func() bool {
+	w.waitResults(1, settleWithin)
+	waitFor(t, settleWithin, "writeback of hp 31 under panel 3", func() bool {
 		st := w.baseState(1)
 		return st.HP == 31 && st.PanelAcked == 3
 	})
-	deadline := time.Now().Add(3 * time.Second)
-	for {
+	eventually(t, settleWithin, "the client's own scene actor with the new panel", func() (bool, string) {
 		self, ok := w.base.client.held(1)[actorID(1)]
-		if ok && self.Panel.MaxHP == 200 && self.Panel.Ver == 3 && self.HP == 31 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("client's own scene actor %+v (held %v), want panel ver 3 max hp 200 hp 31", self, ok)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return ok && self.Panel.MaxHP == 200 && self.Panel.Ver == 3 && self.HP == 31,
+			fmt.Sprintf("client's own scene actor %+v (held %v), want panel ver 3 max hp 200 hp 31", self, ok)
+	})
 }
 
 // 面板命令丢失：Real 一直是旧面板、Base 没有确认；网络恢复后 Base 按重发间隔重发，Real 应用一次。
@@ -307,8 +305,14 @@ func TestPanelCommandLostIsResent(t *testing.T) {
 	w.enter(1, spatial.Point{X: 12000, Y: 5000})
 	w.waitPanel(b, actorID(1), 1, "enter")
 	dropping.Store(true)
+	sent := w.base.node.Stats().PanelsSent
 	w.refreshPanel(1, Panel{MaxHP: 150, Attack: 11})
-	time.Sleep(1200 * time.Millisecond)
+	// 观察窗口以 Base 实际发出的次数计（原来 sleep 1.2s，约是首发加两次按 LeasePeriod 500ms 的重发）：首发与两次重发都被
+	// 丢掉之后，Real 仍是旧面板、Base 仍未确认。Base 不重发时等不到，按超时失败。
+	eventually(t, settleWithin, "the first panel command and two resends", func() (bool, string) {
+		got := w.base.node.Stats().PanelsSent - sent
+		return got >= 3, fmt.Sprintf("base sent %d panel commands since the refresh", got)
+	})
 	if s, _ := w.roleOf(b, actorID(1)); s.State.Panel.Ver != 1 {
 		t.Fatalf("panel reached the real while every panel command was dropped: %+v", s.State.Panel)
 	}
@@ -319,7 +323,7 @@ func TestPanelCommandLostIsResent(t *testing.T) {
 	if s := w.waitPanel(b, actorID(1), 2, "resent panel"); s.State.Panel.Attack != 11 {
 		t.Fatalf("resent panel %+v, want attack 11", s.State.Panel)
 	}
-	waitFor(t, 2*time.Second, "base acknowledges ver 2", func() bool { return w.baseState(1).PanelAcked == 2 })
+	waitFor(t, settleWithin, "base acknowledges ver 2", func() bool { return w.baseState(1).PanelAcked == 2 })
 	if got := w.appliedPanels(actorID(1)); len(got) != 1 || got[0].Ver != 2 {
 		t.Fatalf("panels applied on the real %+v, want ver 2 exactly once", got)
 	}
@@ -349,7 +353,7 @@ func TestPanelCommandDuplicatedOrReorderedAppliesOnce(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	w.refreshPanel(1, Panel{MaxHP: 100, Attack: 8})
 	w.waitPanel(b, actorID(1), 3, "latest panel")
-	time.Sleep(700 * time.Millisecond) // 晚到的 ver 2（两份）已经到了
+	time.Sleep(700 * time.Millisecond) // 负向窗口：晚到的 ver 2（两份，注入延迟 300ms）已经到了；负载下只会更弱（处理慢于窗口时没看到），不会误报
 	if s, _ := w.roleOf(b, actorID(1)); s.State.Panel.Ver != 3 || s.State.Panel.Attack != 8 {
 		t.Fatalf("real panel %+v after the late ver 2 arrived, want ver 3 attack 8", s.State.Panel)
 	}
@@ -372,7 +376,7 @@ func TestPanelCommandDuplicatedOrReorderedAppliesOnce(t *testing.T) {
 	if s := w.cells[b].node.Stats(); s.PanelsDuplicate == 0 {
 		t.Fatalf("cell stats %+v: the duplicated / late commands were not answered as duplicates", s)
 	}
-	waitFor(t, 2*time.Second, "base acknowledges ver 3", func() bool { return w.baseState(1).PanelAcked == 3 })
+	waitFor(t, settleWithin, "base acknowledges ver 3", func() bool { return w.baseState(1).PanelAcked == 3 })
 }
 
 // 交接中改面板：命令发到正冻结的旧格（答“重试”），Base 看到新 owner 后改投，新格的 Real 应用它；之后的伤害用新攻击。
@@ -391,17 +395,17 @@ func TestPanelChangeDuringHandoff(t *testing.T) {
 	w.base.player(1).setCellPanel(Panel{MaxHP: 100, Attack: 4})
 	w.enter(1, spatial.Point{X: 9950, Y: 5000})
 	w.move(1, 400, 0)
-	waitFor(t, 3*time.Second, "frozen in A", func() bool { s, ok := w.roleOf(a, actorID(1)); return ok && s.Role == "frozen" })
+	waitFor(t, settleWithin, "frozen in A", func() bool { s, ok := w.roleOf(a, actorID(1)); return ok && s.Role == "frozen" })
 	w.refreshPanel(1, Panel{MaxHP: 100, Attack: 13})
 	w.move(1, 0, 0)
 	if s := w.waitPanel(b, actorID(1), 2, "panel after the handoff"); s.State.Panel.Attack != 13 {
 		t.Fatalf("panel in B %+v, want attack 13", s.State.Panel)
 	}
-	waitFor(t, 2*time.Second, "base acknowledges ver 2", func() bool { return w.baseState(1).PanelAcked == 2 })
+	waitFor(t, settleWithin, "base acknowledges ver 2", func() bool { return w.baseState(1).PanelAcked == 2 })
 	w.assertSingleReal(actorID(1), b)
 	t.Logf("retries answered by the frozen cell: %d", w.cells[a].node.Stats().PanelRetries)
 	w.attack(1, target, 1)
-	results := w.waitResults(1, 3*time.Second)
+	results := w.waitResults(1, settleWithin)
 	if len(results) != 1 || results[0].Damage != 13 {
 		t.Fatalf("results %+v, want one hit of 13", results)
 	}
@@ -441,14 +445,19 @@ func TestPanelUnknownWhenUnconfirmed(t *testing.T) {
 	w.waitPanel(b, actorID(1), 1, "enter")
 	mode.Store(1)
 	w.refreshPanel(1, Panel{MaxHP: 100, Attack: 6})
-	waitFor(t, 2*time.Second, "base acknowledges ver 2 from the witness", func() bool { return w.baseState(1).PanelAcked == 2 })
-	time.Sleep(900 * time.Millisecond)
+	waitFor(t, settleWithin, "base acknowledges ver 2 from the witness", func() bool { return w.baseState(1).PanelAcked == 2 })
+	time.Sleep(900 * time.Millisecond) // 负向窗口（长于 PanelDeadline 600ms）：witness 已确认的版本不报未知
 	if n := unknown(2); n != 0 {
 		t.Fatalf("ver 2 reported unknown %d times although the witness confirmed it", n)
 	}
 	mode.Store(2)
 	w.refreshPanel(1, Panel{MaxHP: 100, Attack: 9})
-	time.Sleep(1500 * time.Millisecond)
+	// 原来 sleep 1.5s 后要求恰好报了一次：负载下 Base 的心跳被推迟时期限后的那一拍可能还没跑。改为等到报了，再让 Base
+	// 跑 9 拍（约 0.9s，多于一个 PanelDeadline 600ms）看不报第二次。
+	eventually(t, settleWithin, "ver 3 reported unknown past the deadline", func() (bool, string) {
+		return unknown(3) >= 1, fmt.Sprintf("results %+v", w.panelResults())
+	})
+	w.base.waitBaseBeats(9)
 	if n := unknown(3); n != 1 {
 		t.Fatalf("ver 3 unconfirmed past the deadline: reported unknown %d times, want once (results %+v)", n, w.panelResults())
 	}
@@ -457,7 +466,7 @@ func TestPanelUnknownWhenUnconfirmed(t *testing.T) {
 	}
 	mode.Store(0)
 	w.waitPanel(b, actorID(1), 3, "panel after the network healed")
-	waitFor(t, 2*time.Second, "base acknowledges ver 3", func() bool { return w.baseState(1).PanelAcked == 3 })
+	waitFor(t, settleWithin, "base acknowledges ver 3", func() bool { return w.baseState(1).PanelAcked == 3 })
 	if n := unknown(3); n != 1 {
 		t.Fatalf("ver 3 reported unknown %d times in total, want once", n)
 	}

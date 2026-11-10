@@ -153,6 +153,13 @@ func (n *Node) applyReports(r *Region, reports []ActorReport, now time.Time, out
 	for _, rep := range reports {
 		id := rep.State.ID
 		prev, known := r.locals.get(id)
+		if !known && !rep.Removed {
+			// 本地记录只由装入（install，在锁 Scene 的事务里直接写区域表）建立；经出站队列异步到达的报告找不到记录，说明
+			// 交接结论 / 离场已在锁 Scene 的事务里直接删掉了它（报告晚于结论到达）。丢弃：重建出的记录没有实体、不会再被
+			// 清掉（例如冻结报告晚到会留下一条永久的 frozen，挡住新 owner 的 Ghost）。
+			n.stats.staleDrops.Add(1)
+			continue
+		}
 		if known {
 			// 同一角色的两次提交后回调可能乱序到达：旧一代（已交出又交回来之前）的、版本与身份都没变的报告丢弃。
 			if rep.State.Ver.Epoch < prev.St.Ver.Epoch {
