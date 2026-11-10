@@ -131,6 +131,10 @@ func TestHandoffSurvivesLostAndDuplicatedMessages(t *testing.T) {
 func TestHandoffAckLossResolvedByGhostUpdate(t *testing.T) {
 	spec, lb := loopbackSpec(t, 2, 1)
 	lb.setFault(func(_ string, m *wireMsg) (bool, bool, time.Duration) { return m.Kind == kindOfferReply, false, 0 })
+	// 承诺是“回复全丢时靠新格的 Ghost 收尾、不放弃”，与放弃期限多长无关。隐式确认要走 Ghost → 旧格区域事务 → 出站队列
+	// → 角色事务好几跳，平均负载 45 时（整份 witness 只 11 份）这条流水线被缺省 HandoffAbort 3s 追上过一次，放弃是按配置
+	// 的正确行为。所以本用例把放弃期限放到 10s（长于 settleWithin）：隐式确认失效时旧格一直冻结，assertSingleReal 照样超时。
+	spec.cellMod = func(cfg *NodeConfig) { cfg.HandoffAbort = 2 * settleWithin }
 	w := startWorld(t, spec)
 	scenarioStraightCrossing(t, w, 2, contGap) // 回复丢失不影响新格装入，间隔与无故障时相同
 	if aborted := w.sumStats(func(s NodeStats) uint64 { return s.HandoffsAborted }); aborted != 0 {
