@@ -38,8 +38,9 @@ func handlerTerrainBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_
 	return m.ApplyBrush(targets, editor, seq, brush)
 }
 
-// handlerTerrainBrushPart 是分区场景里格执行一次跨格编辑的本格部分（P5，Map.Exec 发起：Base 经 cellworld 扩展消息转发来的
-// 子请求，或 Base 就是本进程时直接调用）：targets 是笔刷覆盖到的块里归本进程写的那几块，editor 是玩家在本格的账本
+// handlerTerrainBrushPart 是分区场景里格执行 Base 转发来的一次笔刷（P5，Map.Exec 发起：经 cellworld 扩展消息转发来的
+// 请求，或 Base 就是本进程时直接调用；名字沿用拆分设计，维护者 2026-11-10 撤回跨格笔刷后格执行整笔）：targets 是笔刷覆盖
+// 到的全部块（都归本进程写），editor 是玩家在本格的账本
 // （TerrainCellEditor）；判重、算笔刷、写块、记序号同 TerrainBrush（terrainmap.Map.ApplyBrushPart）。
 //
 //roost:nest rollback=undo durability=strict

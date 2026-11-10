@@ -1,47 +1,42 @@
 package terrainmap
 
-// 分区场景的跨格编辑与建筑（可编辑地形 P5，T08；方案 §30）。
+// 分区场景的转发编辑与建筑（可编辑地形 P5，T08；方案 §30，单格规则见 §30.10）。
 //
-// 玩家连在自己的 Base 进程上，块只归包含它的格的进程写。一次编辑（笔刷 / 放置 / 拆除 / 改参数）由 Base 拆成“每个格一份”
-// 的子请求，转发给写这些块的格进程（Forwarder：本进程的那一份直接执行，别的经 cellworld 扩展消息，接线在
-// internal/service/<game>/terrain_relay.go），各格各自一笔 strict 事务。跨格不是原子的（D5）：各格独立提交，接缝靠各格
-// 的副本推送最终一致（T05）。
+// 玩家连在自己的 Base 进程上，块只归包含它的格的进程写。一次编辑（笔刷 / 放置 / 拆除 / 改参数）覆盖的块必须都归同一个格
+// （维护者 2026-11-10：“跨格是指跨两个地图进程吗，如果是的话就直接拒绝”；笔刷 ErrBrushCrossCell、建筑 ErrBuildCrossCell，
+// 在预扣配额与发号之前拒绝，什么都不写）。玩法层靠地形设计避开跨格的编辑，没有拆分、也没有跨格的部分成功。Base 把整份
+// 请求转发给写这些块的那个格（Forwarder：本进程托管的那个格直接执行，别的经 cellworld 扩展消息，接线在
+// internal/service/<game>/terrain_relay.go），格一笔 strict 事务。接缝由各格的副本推送最终一致（T05）。
 //
 // 身份与判重（D18 的延伸）：
 //   - 客户端的身份仍是（玩家, 序号）。Base 先在玩家面向客户端的账本（TerrainEditor，全局库，只有玩家的 Base 写）里“发号”
 //     （handler TerrainEditIssue，strict）：过期 / 超前照旧拒绝（terrain_seq）；新的记下；发过的（客户端的重试）答 Again、
-//     照样再转发。记下在转发之前落盘，所以 LastSeq 查询答的数覆盖每一个可能已在某个格执行了的序号，客户端从 LastSeq + 1
-//     续号不会撞上任何格里已用过的序号。
-//   - 子请求的身份是（玩家, 序号, 格）：每个格有玩家的一份账本（TerrainCellEditor，dbscope=sid：每个格进程写自己的库），
+//     照样再转发。记下在转发之前落盘，所以 LastSeq 查询答的数覆盖每一个可能已在格里执行了的序号，客户端从 LastSeq + 1
+//     续号不会撞上格里已用过的序号。
+//   - 格上的身份是（玩家, 序号, 格）：每个格有玩家的一份账本（TerrainCellEditor，dbscope=sid：每个格进程写自己的库），
 //     与这个格的块同一笔事务，同一（玩家, 序号）在一个格至多执行一次。重发、重试、格重启后的重放都只答 Duplicate，
-//     不会双写。格的账本不判超前（Base 判过）。
+//     不会双写。格的账本不判超前（Base 判过；玩家在别的格编辑很久之后第一次来本格，序号大很多是正常的）。
 //
-// 结论（每个格一份，Outcome）：Applied（这次执行了）/ Duplicate（以前执行过）/ Refused（确定什么都没写，带原因）/
-// Unknown（期限内没拿到结论，或格的事务结果未知：可能已经生效）。汇总（RelayResult.Err）：都 Applied / Duplicate 是成功；
-// 有 Unknown 答 ErrPending（不论别的格）；否则答第一个拒绝的原因——已执行的格保留（部分成功，答复逐块列出结论）。
+// 结论（Outcome）：Applied（这次执行了）/ Duplicate（以前执行过）/ Refused（确定什么都没写，带原因）/ Unknown（期限内
+// 没拿到结论，或格的事务结果未知：可能已经生效）。RelayResult.Err：Applied / Duplicate 是成功；Unknown 答 ErrPending；
+// Refused 答格给的原因。答复逐块带结论（客户端按 Outcome 知道这几块做没做）。
 //
 // 责任方：
-//   - 部分格拒绝：不补、不回滚（D5）；答复让客户端知道哪些块做了。
 //   - 期限内没有结论：Base 在期限内按同一身份重发（Forwarder），格的账本去重；期限到了答 ErrPending，由客户端用同一个
-//     序号重发（与单格“结果未知”的规则相同）；重发时 Base 的账本答 Again，再转发一遍，已执行的格答 Duplicate、没执行的
-//     格这次执行。
+//     序号重发（与单格“结果未知”的规则相同）；重发时 Base 的账本答 Again，再转发一遍，执行过答 Duplicate、没执行这次执行。
 //   - 格重启：块、格账本都是 strict 持久，重启后的重发得到 Duplicate 或执行；Base 重启：面向客户端的账本是 strict 持久，
-//     客户端重发同上。Base 不持久“没完成的编辑”——客户端不再重发时，结果未知的那一部分停在它实际的状态（执行了或没有）。
+//     客户端重发同上。Base 不持久“没完成的编辑”——客户端不再重发时，结果未知的编辑停在它实际的状态（执行了或没有）。
 //
-// 配额（D16，Base 扣）：Base 没有装这些块，按 Footprint（每块覆盖的采样点数，几何上限）预扣；格答回实际改动的点数，
-// 按结论多退：Applied 计实际点数、Unknown 计它的 Footprint（可能已生效，不退）、Refused / Duplicate 计 0；合计至少
-// MinEditPoints。建筑：放置预扣 MinEditPoints + 占地面积（整平时），Applied 计 MinEditPoints + 实际整平点数；拆除、改参数
-// 计 MinEditPoints。配额只在 Base 的进程内存（重启从满桶开始，与普通场景相同）。
-//
-// 建筑：占地覆盖的块必须都归同一个格（ErrBuildCrossCell）：一座建筑是一个实体，放置要在一笔事务里锁住占地覆盖的全部
-// 块，跨格占地要跨进程事务，首版拒绝（方案 D7，§30 待确认）。
+// 配额（D16，Base 扣）：Base 没有装这些块，按 Footprint（覆盖的采样点数，几何上限）预扣；格答回实际改动的点数，按结论
+// 多退：Applied 计实际点数、Unknown 计 Footprint（可能已生效，不退）、Refused / Duplicate 计 0；至少 MinEditPoints。建筑：
+// 放置预扣 MinEditPoints + 占地面积（整平时），Applied 计 MinEditPoints + 实际整平点数；拆除、改参数计 MinEditPoints。
+// 跨格的拒绝在预扣之前，不扣。配额只在 Base 的进程内存（重启从满桶开始，与普通场景相同）。
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"slices"
-	"sync"
 
 	building "{{MODULE}}/game/entities/building"
 	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
@@ -56,6 +51,8 @@ var (
 	ErrPending = errors.New("terrain: the edit's result in some cell is not known yet; send it again with the same sequence")
 	// ErrBuildCrossCell：建筑的占地覆盖了两个格的块（分区场景首版拒绝，方案 §30）。
 	ErrBuildCrossCell = errors.New("terrain: the building's lot straddles two cells")
+	// ErrBrushCrossCell：笔刷覆盖的块归两个及以上的格（维护者 2026-11-10：与建筑一样直接拒绝，不拆分转发）。
+	ErrBrushCrossCell = errors.New("terrain: the brush covers chunks of two cells")
 	// ErrCellFailed：格答复了一个没有归类的失败（读库、建实体出错之类，确定没有执行）。答 internal。
 	ErrCellFailed = errors.New("terrain: the cell could not run the edit")
 )
@@ -70,8 +67,9 @@ const (
 	PartParams PartOp = 4
 )
 
-// PartRequest 是 Base 转发给一个格的子请求：身份（PlayerID, Seq）与客户端的请求相同，格的账本按（玩家, 序号）判本格的
-// 那一部分。笔刷整笔转发，格自己算出覆盖到的块里归它写的那几块（各格按同一几何拆分，不需要 Base 说是哪几块）。
+// PartRequest 是 Base 转发给格的请求（名字沿用 P5 的拆分设计；维护者 2026-11-10 撤回拆分之后，一次编辑只转发给一个格、
+// 整份执行）：身份（PlayerID, Seq）与客户端的请求相同，格的账本按（玩家, 序号）判重。笔刷覆盖的块必须都归收到它的格写，
+// 否则格答 ErrNotOwned（格到进程的映射在途中变了），不执行其中一部分。
 type PartRequest struct {
 	Op       PartOp
 	PlayerID int64
@@ -137,59 +135,47 @@ type Forwarder interface {
 	Forward(ctx context.Context, sid int32, req PartRequest) PartAnswer
 }
 
-// RelayPart 是一次转发编辑里一个格的那一部分：格的 sid、这一部分的块（笔刷：覆盖到的块里归这个格的；建筑：占地覆盖的块，
-// 拆除 / 改参数：锚点所在的块）与它的结论。
+// RelayPart 是一次转发编辑交给的那个格：格的 sid、编辑覆盖的块（笔刷：覆盖到的块；建筑：占地覆盖的块，拆除 / 改参数：
+// 锚点所在的块）与它的结论。
 type RelayPart struct {
 	SID    int32
 	Chunks []terrain.ChunkKey
 	Answer PartAnswer
 }
 
-// RelayResult 是 Base 上一次转发编辑的结果：各部分（按 sid 升序）、玩家面向客户端的账本此后的 LastSeq，与这个序号是否
-// 以前发过（Again：客户端的重试）。
+// RelayResult 是 Base 上一次转发编辑的结果：执行它的格（Part）、玩家面向客户端的账本此后的 LastSeq，与这个序号是否以前
+// 发过（Again：客户端的重试）。一次编辑只交给一个格（跨格在转发之前拒绝），没有多份汇总、没有部分成功。
 type RelayResult struct {
-	Parts   []RelayPart
+	Part    RelayPart
 	LastSeq int64
 	Again   bool
 }
 
-// Err 汇总各部分（见包说明“结论”）：都 Applied / Duplicate 时为 nil；有 Unknown 时是 ErrPending；否则是第一个拒绝的原因
-// （按 sid 升序；部分格可能已执行）。
+// Err 是这次编辑的结论（见包说明“结论”）：Applied / Duplicate 时为 nil；Unknown 时是 ErrPending；Refused 时是格的原因。
 func (r RelayResult) Err() error {
-	var refused error
-	for _, part := range r.Parts {
-		switch part.Answer.Outcome {
-		case OutcomeUnknown:
-			return fmt.Errorf("%w: cell %d", ErrPending, part.SID)
-		case OutcomeRefused:
-			if refused == nil {
-				refused = fmt.Errorf("cell %d: %w", part.SID, part.Answer.Refusal)
-			}
-		case OutcomeApplied, OutcomeDuplicate:
-		default:
-			return fmt.Errorf("%w: cell %d answered %v", ErrPending, part.SID, part.Answer.Outcome)
-		}
+	switch answer := r.Part.Answer; answer.Outcome {
+	case OutcomeApplied, OutcomeDuplicate:
+		return nil
+	case OutcomeRefused:
+		return fmt.Errorf("cell %d: %w", r.Part.SID, answer.Refusal)
+	case OutcomeUnknown:
+		return fmt.Errorf("%w: cell %d", ErrPending, r.Part.SID)
+	default:
+		return fmt.Errorf("%w: cell %d answered %v", ErrPending, r.Part.SID, answer.Outcome)
 	}
-	return refused
 }
 
-// Duplicate 报告每一部分都答 Duplicate（这次什么都没写，整笔以前已执行过）。
-func (r RelayResult) Duplicate() bool {
-	for _, part := range r.Parts {
-		if part.Answer.Outcome != OutcomeDuplicate {
-			return false
-		}
-	}
-	return len(r.Parts) > 0
-}
+// Duplicate 报告格答 Duplicate（这次什么都没写，以前已执行过）。
+func (r RelayResult) Duplicate() bool { return r.Part.Answer.Outcome == OutcomeDuplicate }
 
 // ---- Base 一侧 ----
 
-// RelayBrush 是分区场景的 Base 上玩家的一次笔刷（协议 TerrainEdit 的端点调用）：校验参数与 Policy → 按 Footprint 预扣配额
-// → 权限钩子 → 面向客户端的账本发号（过期 / 超前在这里拒绝）→ 按格拆分、并行转发 → 按结论退配额。返回的错误只有转发之前
-// 的拒绝（同 Brush：ErrBrush / ErrNotOwned（覆盖到没有格写的块）/ ErrRateLimited / ErrDenied / ErrStale / ErrSeqAhead 与
-// 基础设施错误）；转发之后的结论在 RelayResult 里（RelayResult.Err 汇总）。会等数据库、WAL 与别的进程：只能在 Nest 业务
-// worker 之外调用。
+// RelayBrush 是分区场景的 Base 上玩家的一次笔刷（协议 TerrainEdit 的端点调用）：校验参数与 Policy → 覆盖的块必须都归同一个
+// 格（ErrBrushCrossCell，在预扣配额与发号之前：不扣配额、不占序号、什么都不写）→ 按 Footprint 预扣配额 → 权限钩子 → 面向
+// 客户端的账本发号（过期 / 超前在这里拒绝）→ 整份转发给那个格 → 按结论退配额。返回的错误只有转发之前的拒绝（同 Brush：
+// ErrBrush / ErrNotOwned（覆盖到没有格写的块）/ ErrBrushCrossCell / ErrRateLimited / ErrDenied / ErrStale / ErrSeqAhead 与
+// 基础设施错误）；转发之后的结论在 RelayResult 里（RelayResult.Err）。会等数据库、WAL 与别的进程：只能在 Nest 业务 worker
+// 之外调用。
 func (m *Map) RelayBrush(ctx context.Context, playerID int64, seq uint64, brush terrain.Brush, fw Forwarder) (RelayResult, error) {
 	if m == nil {
 		return RelayResult{}, ErrDisabled
@@ -198,16 +184,18 @@ func (m *Map) RelayBrush(ctx context.Context, playerID int64, seq uint64, brush 
 	if err != nil {
 		return RelayResult{}, err
 	}
-	parts, err := splitByOwner(keys, fw)
+	sid, cells, err := ownerOfAll(keys, fw)
 	if err != nil {
 		return RelayResult{}, err
 	}
-	footprint := brush.Footprint(m.meta)
-	total := 0
-	for _, n := range footprint {
-		total += n
+	if cells > 1 {
+		return RelayResult{}, fmt.Errorf("%w: the brush covers chunks of %d cells", ErrBrushCrossCell, cells)
 	}
-	charge := m.charge(playerID, max(total, m.policy.MinEditPoints))
+	footprint := 0
+	for _, n := range brush.Footprint(m.meta) {
+		footprint += n
+	}
+	charge := m.charge(playerID, max(footprint, m.policy.MinEditPoints))
 	if !charge.ok {
 		return RelayResult{}, fmt.Errorf("%w: player %d: the edit may change %d points", ErrRateLimited, playerID, charge.points)
 	}
@@ -217,21 +205,18 @@ func (m *Map) RelayBrush(ctx context.Context, playerID int64, seq uint64, brush 
 			return RelayResult{}, fmt.Errorf("%w: %w", ErrDenied, err)
 		}
 	}
-	result, err := m.issueAndForward(ctx, playerID, int64(seq), parts, fw, PartRequest{Op: PartBrush, PlayerID: playerID, Seq: int64(seq), Brush: brush})
+	part := RelayPart{SID: sid, Chunks: keys}
+	result, err := m.issueAndForward(ctx, playerID, int64(seq), part, fw, PartRequest{Op: PartBrush, PlayerID: playerID, Seq: int64(seq), Brush: brush})
 	if err != nil {
 		charge.refundUnlessUnknown(err, m.policy.MinEditPoints)
 		return RelayResult{}, err
 	}
 	used := 0
-	for _, part := range result.Parts {
-		switch part.Answer.Outcome {
-		case OutcomeApplied:
-			used += part.Answer.Points
-		case OutcomeUnknown:
-			for _, key := range part.Chunks {
-				used += footprint[key]
-			}
-		}
+	switch answer := result.Part.Answer; answer.Outcome {
+	case OutcomeApplied:
+		used = answer.Points
+	case OutcomeUnknown:
+		used = footprint // 可能已生效，不退
 	}
 	charge.settle(max(used, m.policy.MinEditPoints))
 	return result, nil
@@ -252,12 +237,12 @@ func (m *Map) RelayPlace(ctx context.Context, playerID int64, seq uint64, p buil
 		return RelayResult{}, err
 	}
 	keys := lot.Chunks()
-	parts, err := splitByOwner(keys, fw)
+	sid, cells, err := ownerOfAll(keys, fw)
 	if err != nil {
 		return RelayResult{}, err
 	}
-	if len(parts) != 1 {
-		return RelayResult{}, fmt.Errorf("%w: lot %v covers chunks of %d cells", ErrBuildCrossCell, lot, len(parts))
+	if cells > 1 {
+		return RelayResult{}, fmt.Errorf("%w: lot %v covers chunks of %d cells", ErrBuildCrossCell, lot, cells)
 	}
 	p.Params = slices.Clone(p.Params)
 	points := m.policy.MinEditPoints
@@ -274,12 +259,12 @@ func (m *Map) RelayPlace(ctx context.Context, playerID int64, seq uint64, p buil
 			return RelayResult{}, fmt.Errorf("%w: %w", ErrDenied, err)
 		}
 	}
-	result, err := m.issueAndForward(ctx, playerID, int64(seq), parts, fw, PartRequest{Op: PartPlace, PlayerID: playerID, Seq: int64(seq), Placement: p})
+	result, err := m.issueAndForward(ctx, playerID, int64(seq), RelayPart{SID: sid, Chunks: keys}, fw, PartRequest{Op: PartPlace, PlayerID: playerID, Seq: int64(seq), Placement: p})
 	if err != nil {
 		charge.refundUnlessUnknown(err, m.policy.MinEditPoints)
 		return RelayResult{}, err
 	}
-	switch answer := result.Parts[0].Answer; answer.Outcome {
+	switch answer := result.Part.Answer; answer.Outcome {
 	case OutcomeApplied:
 		charge.settle(m.policy.MinEditPoints + answer.Points)
 	case OutcomeRefused, OutcomeDuplicate:
@@ -318,7 +303,7 @@ func (m *Map) relayAnchored(ctx context.Context, req PartRequest, seq uint64, fw
 	if !m.meta.Contains(key) {
 		return RelayResult{}, fmt.Errorf("%w: anchor (%d, %d) is outside the map", ErrBuild, req.GX, req.GY)
 	}
-	parts, err := splitByOwner([]terrain.ChunkKey{key}, fw)
+	sid, _, err := ownerOfAll([]terrain.ChunkKey{key}, fw)
 	if err != nil {
 		return RelayResult{}, err
 	}
@@ -326,39 +311,36 @@ func (m *Map) relayAnchored(ctx context.Context, req PartRequest, seq uint64, fw
 	if !charge.ok {
 		return RelayResult{}, fmt.Errorf("%w: player %d: a building operation", ErrRateLimited, req.PlayerID)
 	}
-	return m.issueAndForward(ctx, req.PlayerID, int64(seq), parts, fw, req)
+	return m.issueAndForward(ctx, req.PlayerID, int64(seq), RelayPart{SID: sid, Chunks: []terrain.ChunkKey{key}}, fw, req)
 }
 
-// splitByOwner 把块按写它们的格分组（按 sid 升序，块按 (Y, X) 升序）；有块没有格写时答 ErrNotOwned。
-func splitByOwner(keys []terrain.ChunkKey, fw Forwarder) ([]RelayPart, error) {
-	bySID := map[int32][]terrain.ChunkKey{}
+// ownerOfAll 是写这些块的格：sid 是第一块的格，cells 是不同的格数（> 1 时调用方按跨格拒绝，sid 没有意义）；有块没有格写时
+// 答 ErrNotOwned。
+func ownerOfAll(keys []terrain.ChunkKey, fw Forwarder) (sid int32, cells int, err error) {
+	seen := make([]int32, 0, 2)
 	for _, key := range keys {
-		sid, ok := fw.OwnerOf(key)
-		if !ok || sid == 0 {
-			return nil, fmt.Errorf("%w: no cell writes chunk %v", ErrNotOwned, key)
+		owner, ok := fw.OwnerOf(key)
+		if !ok || owner == 0 {
+			return 0, 0, fmt.Errorf("%w: no cell writes chunk %v", ErrNotOwned, key)
 		}
-		bySID[sid] = append(bySID[sid], key)
+		if !slices.Contains(seen, owner) {
+			seen = append(seen, owner)
+		}
 	}
-	parts := make([]RelayPart, 0, len(bySID))
-	for sid, chunks := range bySID {
-		parts = append(parts, RelayPart{SID: sid, Chunks: chunks})
+	if len(seen) == 0 {
+		return 0, 0, fmt.Errorf("%w: the edit covers no chunk", ErrNotOwned)
 	}
-	slices.SortFunc(parts, func(a, b RelayPart) int { return int(a.SID) - int(b.SID) })
-	return parts, nil
+	return seen[0], len(seen), nil
 }
 
-// issueAndForward 在面向客户端的账本里发号，然后把 req 并行转发给每一部分的格、等齐结论。
-func (m *Map) issueAndForward(ctx context.Context, playerID, seq int64, parts []RelayPart, fw Forwarder, req PartRequest) (RelayResult, error) {
+// issueAndForward 在面向客户端的账本里发号，然后把 req 交给 part 的格、等它的结论。
+func (m *Map) issueAndForward(ctx context.Context, playerID, seq int64, part RelayPart, fw Forwarder, req PartRequest) (RelayResult, error) {
 	issue, err := m.issue(ctx, playerID, seq)
 	if err != nil {
 		return RelayResult{}, err
 	}
-	var wg sync.WaitGroup
-	for i := range parts {
-		wg.Go(func() { parts[i].Answer = fw.Forward(ctx, parts[i].SID, req) })
-	}
-	wg.Wait()
-	return RelayResult{Parts: parts, LastSeq: issue.LastSeq, Again: issue.Again}, nil
+	part.Answer = fw.Forward(ctx, part.SID, req)
+	return RelayResult{Part: part, LastSeq: issue.LastSeq, Again: issue.Again}, nil
 }
 
 // issue 是 Base 的发号：玩家面向客户端的账本（TerrainEditor）第一次用时建出，一笔 strict 事务（handler TerrainEditIssue）。
@@ -460,24 +442,18 @@ func answerOf(err error, inTransaction bool) PartAnswer {
 	return PartAnswer{Outcome: OutcomeUnknown, Refusal: err}
 }
 
+// execBrush 执行转发来的一次笔刷：覆盖的块必须都归本格写、都装得进来（checkBrush，与普通场景的 Brush 相同；Base 已拒绝
+// 跨格的笔刷，这里再查一次：格到进程的映射在途中变了时答 ErrNotOwned，不执行其中一部分）。
 func (m *Map) execBrush(ctx context.Context, req PartRequest) PartAnswer {
-	if _, err := m.checkBrushParams(req.PlayerID, uint64(req.Seq), req.Brush); err != nil {
+	keys, err := m.checkBrush(req.PlayerID, uint64(req.Seq), req.Brush)
+	if err != nil {
 		return refusedAnswer(err)
-	}
-	part := m.ownedPart(req.Brush)
-	if len(part) == 0 {
-		return refusedAnswer(fmt.Errorf("%w: the brush covers no chunk written here", ErrNotOwned))
-	}
-	for _, key := range part {
-		if cause := m.unloadableErr(key); cause != nil {
-			return refusedAnswer(fmt.Errorf("%w: chunk %v: %v", ErrUnloadable, key, cause))
-		}
 	}
 	ledger, err := m.cellLedgerFor(ctx, req.PlayerID)
 	if err != nil {
 		return answerOf(err, false)
 	}
-	ids, err := m.chunkIDs(ctx, part)
+	ids, err := m.chunkIDs(ctx, keys)
 	if err != nil {
 		return answerOf(err, false)
 	}

@@ -217,8 +217,8 @@ func (v *View) BrushChanges(b Brush, limits Limits) (heights, materials int, err
 	return v.BrushChangesIn(b, limits, nil)
 }
 
-// BrushChangesIn 是只数 part 里那几块的 BrushChanges（part 为 nil 时是覆盖到的全部块；口径同 Brush.ApplyIn）：分区场景
-// 里执行跨格编辑一部分的格进程只装着、也只写自己的块。只有 part 里覆盖到的块需要装着。
+// BrushChangesIn 是只数 part 里那几块的 BrushChanges（part 为 nil 时是覆盖到的全部块；口径同 Brush.ApplyIn）。为跨格编辑
+// 拆给各格而加（P5；跨格笔刷 2026-11-10 撤回后 game-demo 没有调用，保留为通用能力）。只有 part 里覆盖到的块需要装着。
 func (v *View) BrushChangesIn(b Brush, limits Limits, part []ChunkKey) (heights, materials int, err error) {
 	if err := b.Validate(v.meta, limits); err != nil {
 		return 0, 0, err

@@ -7,7 +7,7 @@
 //     70m 的 Ghost 带比一块宽：A、B 的地形视图都装着整张图（邻格的块只读）；sid 1000、1004 只做 Base，不装块；
 //   - 刷怪：格 A 里一只沿 X 往返的怪（y = 9000，600 单位 / 秒）；玩家进场点 (11800, 3000)，也在格 A。
 //
-// 玩家：pA 连 A（改 A 的块）、pB 与 pB2 连 B（改 B 的块；(a) 里 pB 有一笔跨格笔刷，P5）、pW 连只做 Base 的 sid 1004（跨格走的玩家，也是“别的进程上
+// 玩家：pA 连 A（改 A 的块）、pB 与 pB2 连 B（改 B 的块；(a) 里 pB 有一笔被拒绝的跨格笔刷与一笔转发给 A 的笔刷，P5）、pW 连只做 Base 的 sid 1004（跨格走的玩家，也是“别的进程上
 // 的客户端”）。每一步打印 “STEP <名字> ok …”，失败以非零退出；evidence.json 记下各步的数字。
 package main
 
@@ -46,9 +46,10 @@ const (
 	tPlayerY  = 3000            // 玩家走的线（进场点的 y）
 	tMonsterY = 9000            // 怪走的线
 	tStepRaw  = 50              // 高坎：原始值 + 50 = 5 米（DefaultWalkRules：1 米内超过 1 米、台阶超过 0.5 米都走不上去）
-	// 业务码（internal/errors/terrain.go）：terrain_rate。
-	codeTerrainRate = 100056
-	// 跨格编辑（P5）每块的结论（TerrainChunkVersion.Outcome）：1 = 这次执行了。
+	// 业务码（internal/errors/terrain.go）：terrain_rate；terrain_cross_cell（笔刷覆盖两个格的块，维护者 2026-11-10 直接拒绝）。
+	codeTerrainRate      = 100056
+	codeTerrainCrossCell = 100070
+	// 转发编辑（P5）每块的结论（TerrainChunkVersion.Outcome）：1 = 这次执行了。
 	outcomeApplied = 1
 )
 
@@ -502,8 +503,8 @@ func runTerrain(ctx context.Context) error {
 
 	// (a) 格 A 在边界块 (1,0)（B 的 Ghost 带里）编辑：B 的视图（Ghost 带）与 B 上、只做 Base 的 1004 上的客户端都看到；A 的
 	//     块 (0,0) 同样在 B 的 Ghost 带里（70m 的带盖住了 A 的两列块），B 的视图与客户端都跟上。B 上的玩家在分界线上的一笔
-	//     跨格笔刷（P5）：B 把它拆给 A（块 (1,0)）与自己（块 (2,0)），两块都执行；再用反向的笔刷改回平地（后面的步骤要
-	//     块 (2,0) 是平地）。
+	//     跨格笔刷（覆盖块 (1,0) 与 (2,0)）：直接拒绝（terrain_cross_cell，维护者 2026-11-10），两块都不变、LastSeq 不前进；
+	//     再在 A 的块 (1,0)（B 的 Ghost 带里）上一笔整份落在 A 格的笔刷：B 转发给 A、执行，再用反向的笔刷改回（P5）。
 	boundaryKey, farKey := terrain.ChunkKey{X: 1}, terrain.ChunkKey{}
 	sent := time.Now()
 	v, err := pA.mustEdit(ctx, nextA(), raise(12000, 1000, 200, 10), boundaryKey)
@@ -548,38 +549,63 @@ func runTerrain(ctx context.Context) error {
 	}
 	cross := raise(tBoundary, 1200, 200, 10)
 	crossKeys := []terrain.ChunkKey{{X: 1}, {X: 2}}
-	crossSent := time.Now()
-	var crossRTT []float64
-	for _, b := range []brush{cross, lower(cross)} {
-		r, err := pB.edit(ctx, nextB(), b)
-		if err != nil || r.Code != 0 || len(r.Chunks) != 2 {
-			return fmt.Errorf("(a) B's cross-cell brush %+v: %v %+v, want both chunks done", b, err, r)
-		}
-		crossRTT = append(crossRTT, ms(time.Since(crossSent)))
-		for i, chunk := range r.Chunks {
-			if chunk.ChunkX != crossKeys[i].X || chunk.ChunkY != crossKeys[i].Y || chunk.Outcome != outcomeApplied {
-				return fmt.Errorf("(a) B's cross-cell brush: chunk %d of the answer %+v, want %v applied", i, chunk, crossKeys[i])
-			}
-			owner := int32(1001)
-			if crossKeys[i].X >= 2 {
-				owner = 1002
-			}
-			if _, err := ownerAt(ctx, owner, crossKeys[i], chunk.Version); err != nil {
-				return fmt.Errorf("(a) %w", err)
-			}
-		}
-		crossSent = time.Now()
-	}
+	before := map[terrain.ChunkKey]chunkProbe{}
 	for i, key := range crossKeys {
-		owner := int32(1001 + i)
-		got, err := probeOne(ctx, owner, key)
-		if err != nil || got.Digest != base && key.X == 2 {
-			return fmt.Errorf("(a) chunk %v after the cross-cell brush and its reverse: %v %v, want the flat base", key, got, err)
+		got, err := probeOne(ctx, int32(1001+i), key)
+		if err != nil {
+			return fmt.Errorf("(a) %w", err)
 		}
+		before[key] = got
+	}
+	lastBefore, err := pB.lastSeq(ctx)
+	if err != nil {
+		return fmt.Errorf("(a) %w", err)
+	}
+	crossSent := time.Now()
+	r, err := pB.edit(ctx, uint64(lastBefore)+1, cross)
+	if err != nil || r.Code != codeTerrainCrossCell || len(r.Chunks) != 0 {
+		return fmt.Errorf("(a) B's cross-cell brush %+v: %v %+v, want terrain_cross_cell with no chunks", cross, err, r)
+	}
+	crossRefusedRTT := ms(time.Since(crossSent))
+	for i, key := range crossKeys {
+		got, err := probeOne(ctx, int32(1001+i), key)
+		if err != nil || got.Version != before[key].Version || got.Digest != before[key].Digest {
+			return fmt.Errorf("(a) chunk %v after the refused cross-cell brush: %v %v, want %v", key, got, err, before[key])
+		}
+	}
+	if last, err := pB.lastSeq(ctx); err != nil || last != lastBefore {
+		return fmt.Errorf("(a) B's last sequence after the refused cross-cell brush: %d %v, want %d", last, err, lastBefore)
+	}
+	seqB = uint64(lastBefore) // 拒绝不占序号：下一笔接着用 lastBefore + 1
+	// 整份落在 A 格的块 (1,0) 里（离 A 前面那笔 (12000, 1000) 足够远，两笔不重叠）。
+	forward := raise(11000, 1200, 200, 10)
+	forwardKey := terrain.ChunkKey{X: 1}
+	forwardSent := time.Now()
+	var forwardRTT []float64
+	for _, b := range []brush{forward, lower(forward)} {
+		r, err := pB.edit(ctx, nextB(), b)
+		if err != nil || r.Code != 0 || len(r.Chunks) != 1 {
+			return fmt.Errorf("(a) B's brush on A's ground %+v: %v %+v, want one chunk done", b, err, r)
+		}
+		forwardRTT = append(forwardRTT, ms(time.Since(forwardSent)))
+		chunk := r.Chunks[0]
+		if chunk.ChunkX != forwardKey.X || chunk.ChunkY != forwardKey.Y || chunk.Outcome != outcomeApplied {
+			return fmt.Errorf("(a) B's brush on A's ground: the answer %+v, want %v applied", chunk, forwardKey)
+		}
+		if _, err := ownerAt(ctx, 1001, forwardKey, chunk.Version); err != nil {
+			return fmt.Errorf("(a) %w", err)
+		}
+		forwardSent = time.Now()
+	}
+	if h, ok, err := heightAt(ctx, 1001, 11000, 1200); err != nil || !ok || h != 0 {
+		return fmt.Errorf("(a) A's height under B's brush and its reverse: %d %v %v, want 0", h, ok, err)
+	}
+	if got, err := probeOne(ctx, 1002, terrain.ChunkKey{X: 2}); err != nil || got.Digest != base {
+		return fmt.Errorf("(a) chunk (2,0) after (a): %v %v, want the flat base", got, err)
 	}
 	step("terrain_ghost_edit", map[string]any{"edit_rtt_ms": ms(answered.Sub(sent)), "far_edit_rtt_ms": ms(farAnswered.Sub(farSent)),
 		"owner_version": ownerBoundary.Version, "b_ghost_after_answer_ms": ms(ghostTook), "clients_after_request_ms": clientTook,
-		"b_view_far_chunk_loaded": true, "b_cross_cell_brush_rtt_ms": crossRTT})
+		"b_view_far_chunk_loaded": true, "b_cross_cell_refused_rtt_ms": crossRefusedRTT, "b_forward_to_a_rtt_ms": forwardRTT})
 
 	// (b1) 真实 SceneActor：B 紧挨分界线（x 13000～13600、y 3000 那一行）抬起 5 米的坎，推到 A 的 Ghost 带；pW（Base 是只做
 	//      Base 的 1004，SceneActor 在格 A）朝东走：越过分界线、停在坎前最后一个整数点 12949（坎的第一个节点从 12950 起），

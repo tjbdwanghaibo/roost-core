@@ -1,0 +1,20 @@
+# 变异（生成的 game-demo 上逐项只改一处、跑相关用例、还原；每项第一条失败原文）
+
+== 不拒绝跨格笔刷: RED
+   terrain_relay_test.go:383: a brush across two cells: <nil>, want ErrBrushCrossCell before anything is charged or issued
+== 跨格拒绝放到预扣配额之后: RED
+   terrain_relay_test.go:398: the same sequence on a brush inside one cell: {Part:{SID:0 Chunks:[] Answer:{Outcome:outcome(0) Refusal:<nil> Chunks:[] Points:0 LastSeq:0 Building:{ID:0 Standing:false Owner:0 ConfigID:0 Params:[] Facing:0 Lot:[0,0)×[0,0) Foundation:0 Leveled:false BaseRevision:0}}} LastSeq:0 Again:false} terrain: edit point quota used up: player 4242: the edit may change 797 points terrain: the edit's result in some cell is not known yet; send it again with the same sequence: cell 0 answered outcome(0), want a fresh sequence on a full bucket
+== 跨格拒绝放到发号之后: RED
+   terrain_relay_test.go:398: the same sequence on a brush inside one cell: {Part:{SID:101 Chunks:[(1,0)] Answer:{Outcome:applied Refusal:<nil> Chunks:[{Key:(1,0) Version:0}] Points:0 LastSeq:1 Building:{ID:0 Standing:false Owner:0 ConfigID:0 Params:[] Facing:0 Lot:[0,0)×[0,0) Foundation:0 Leveled:false BaseRevision:0}}} LastSeq:1 Again:true} <nil> <nil>, want a fresh sequence on a full bucket
+== Unknown 的点数退回: RED
+   terrain_relay_test.go:656: the unknown brush's points came back to the bucket: <nil>
+== 格不查笔刷覆盖的块都归本格: NOT KILLED
+   
+== ErrBrushCrossCell 不映射业务码: RED
+   terrain_edit_test.go:97: terrain: the brush covers chunks of two cells mapped to terrain: brush at (1, 2): terrain: the brush covers chunks of two cells (code 1), want terrain_cross_cell: the brush covers ground of two cells
+== 拒绝 / 未知时不列块: RED
+   terrain_edit_test.go:152: refused: code 100058 chunks [], want 100058 [{ChunkX:3 ChunkY:0 Version:0 Outcome:3} {ChunkX:4 ChunkY:0 Version:0 Outcome:3}]
+== 结论 Refused 当成功: RED
+   terrain_relay_test.go:435: the cell refuses: {SID:102 Chunks:[(4,0)] Answer:{Outcome:refused Refusal:terrain: the edit touches ground a building stands on (cell: terrain: the edit touches ground a building stands on: chunk (4,0) point 1180) Chunks:[] Points:0 LastSeq:0 Building:{ID:0 Standing:false Owner:0 ConfigID:0 Params:[] Facing:0 Lot:[0,0)×[0,0) Foundation:0 Leveled:false BaseRevision:0}}} <nil>, want the cell's reason
+== 格前置检查与锁内归属检查都去掉: RED
+   terrain_relay_test.go:413: a cell given a brush that also covers its neighbour's ground: {Outcome:applied ... Chunks:[{Key:(3,0) Version:1} {Key:(4,0) Version:1}] Points:673 LastSeq:9 ...}, want refused as not owned

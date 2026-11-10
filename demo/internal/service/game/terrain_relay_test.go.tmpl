@@ -24,7 +24,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// 分区场景的跨格编辑（terrain_relay.go 与 game/terrainmap/relay.go，可编辑地形 P5，方案 §30）：两个格进程（sid 101 写块
+// 分区场景的转发编辑（terrain_relay.go 与 game/terrainmap/relay.go，可编辑地形 P5，方案 §30；跨格的编辑在转发之前拒绝，
+// §30.10）：两个格进程（sid 101 写块
 // x 0～3，sid 102 写块 x 4～7）与一个只做 Base 的进程（sid 103），各自有正式的 Map + Nest + 实体与 terrainRelay；进程之间
 // 是一张进程内的网（代替 cellworld Node 的扩展消息，可以丢掉某一类消息、每条投两次、录下重放）。地图 8 × 2 块平地。
 //
@@ -290,28 +291,6 @@ func (p *relayProc) cellLedger(t *testing.T) terrain_editor.SeqWindow {
 	return terrain_editor.SeqWindow{}
 }
 
-// outcomes 是各部分的结论（按 sid 升序）。
-func outcomes(r terrainmap.RelayResult) map[int32]terrainmap.Outcome {
-	out := map[int32]terrainmap.Outcome{}
-	for _, part := range r.Parts {
-		out[part.SID] = part.Answer.Outcome
-	}
-	return out
-}
-
-func wantOutcomes(t *testing.T, what string, r terrainmap.RelayResult, want map[int32]terrainmap.Outcome) {
-	t.Helper()
-	got := outcomes(r)
-	if len(got) != len(want) {
-		t.Fatalf("%s: parts %v, want %v", what, got, want)
-	}
-	for sid, o := range want {
-		if got[sid] != o {
-			t.Fatalf("%s: parts %v, want %v (%+v)", what, got, want, r.Parts)
-		}
-	}
-}
-
 var (
 	relayLeft  = terrain.ChunkKey{X: 3, Y: 0} // sid 101 写
 	relayRight = terrain.ChunkKey{X: 4, Y: 0} // sid 102 写
@@ -322,51 +301,119 @@ func borderBrush(op terrain.BrushOp, material byte) terrain.Brush {
 	return terrain.Brush{Op: op, X: 4 * terrain.ChunkSize, Y: terrain.ChunkSize / 2, Radius: 1600, Falloff: terrain.FalloffSmooth, Strength: 20, Material: material}
 }
 
-// 拆分（方案 §30）：只做 Base 的进程上的玩家一次跨格笔刷，拆成两个格各一份、各自一笔事务；两块的结果与“在一张整图上
-// 应用一次”的纯计算逐点相同，各块版本 1，两个格的账本各记下这个序号，Base 的账本发了这个号。玩家在格进程上时，本格
-// 那一份直接执行、不经网络。
-func TestTerrainRelaySplitsABrushAcrossCells(t *testing.T) {
+// cellBrush 是只覆盖块 key 的笔刷：中心在块中心，16m 的圆整个在这块里（块边长 64m）。
+func cellBrush(key terrain.ChunkKey, op terrain.BrushOp, material byte) terrain.Brush {
+	return terrain.Brush{Op: op, X: int64(key.X)*terrain.ChunkSize + terrain.ChunkSize/2, Y: int64(key.Y)*terrain.ChunkSize + terrain.ChunkSize/2,
+		Radius: 1600, Falloff: terrain.FalloffSmooth, Strength: 20, Material: material}
+}
+
+// 转发（方案 §30）：只做 Base 的进程上的玩家一次笔刷，整个落在格 102 的块里：整份转发给 102、一笔事务；块的结果与“在
+// 一张整图上应用一次”的纯计算逐点相同，版本 1，102 的账本记下这个序号、101 什么都没收到，Base 的账本发了这个号。玩家在
+// 格进程上时：落在本格的笔刷直接执行、不经网络，落在邻格的整份经网络转发。
+func TestTerrainRelayForwardsABrushToTheCellThatWritesIt(t *testing.T) {
 	w := newRelayWorld(t)
 	a := w.start(t, partitionSidA, relayOptions{})
 	b := w.start(t, partitionSidB, relayOptions{})
 	c := w.start(t, partitionSidC, relayOptions{})
-	raise := borderBrush(terrain.BrushRaise, 0)
+	raise := cellBrush(relayRight, terrain.BrushRaise, 0)
+	if keys := raise.Chunks(c.process.m.Meta()); len(keys) != 1 || keys[0] != relayRight {
+		t.Fatalf("the brush covers %v, want only %v", keys, relayRight)
+	}
 	result, err := c.brush(1, raise)
 	if err != nil || result.Err() != nil {
-		t.Fatalf("cross-cell brush: %+v %v %v", result, err, result.Err())
+		t.Fatalf("forwarded brush: %+v %v %v", result, err, result.Err())
 	}
-	wantOutcomes(t, "cross-cell brush", result, map[int32]terrainmap.Outcome{partitionSidA: terrainmap.OutcomeApplied, partitionSidB: terrainmap.OutcomeApplied})
+	if result.Part.SID != partitionSidB || result.Part.Answer.Outcome != terrainmap.OutcomeApplied {
+		t.Fatalf("forwarded brush went to %d with %v, want cell %d applied", result.Part.SID, result.Part.Answer.Outcome, partitionSidB)
+	}
 	if result.Again || result.LastSeq != 1 {
 		t.Fatalf("base ledger: again %v last %d", result.Again, result.LastSeq)
 	}
-	for _, part := range result.Parts {
-		if part.Answer.Points <= 0 || len(part.Answer.Chunks) != 1 || part.Answer.Chunks[0].Version != 1 {
-			t.Fatalf("part of cell %d: %+v", part.SID, part.Answer)
-		}
+	if answer := result.Part.Answer; answer.Points <= 0 || len(answer.Chunks) != 1 || answer.Chunks[0].Version != 1 {
+		t.Fatalf("the cell's answer: %+v", answer)
 	}
-	want := expectBrushes(t, a.process.m, w.pack, raise)
-	viewMatches(t, a.process.m, map[terrain.ChunkKey]terrain.Chunk{relayLeft: want[relayLeft]})
+	want := expectBrushes(t, b.process.m, w.pack, raise)
 	viewMatches(t, b.process.m, map[terrain.ChunkKey]terrain.Chunk{relayRight: want[relayRight]})
-	if a.version(t, relayLeft) != 1 || b.version(t, relayRight) != 1 {
+	if b.version(t, relayRight) != 1 || b.cellLedger(t).Last != 1 {
+		t.Fatalf("cell %d: version %d ledger %+v", b.sid, b.version(t, relayRight), b.cellLedger(t))
+	}
+	if a.relay.requestsIn.Load() != 0 || a.cellLedger(t).Last != 0 {
+		t.Fatalf("the other cell took part: %d requests, ledger %+v", a.relay.requestsIn.Load(), a.cellLedger(t))
+	}
+	// 玩家在格 101 上：落在邻格的笔刷整份走网络。
+	sentBefore := a.relay.requestsOut.Load()
+	result, err = a.brush(2, cellBrush(relayRight, terrain.BrushLower, 0))
+	if err != nil || result.Err() != nil || result.Part.SID != partitionSidB {
+		t.Fatalf("from a cell into the neighbour: %+v %v %v", result, err, result.Err())
+	}
+	if sent := a.relay.requestsOut.Load() - sentBefore; sent != 1 {
+		t.Fatalf("%d requests went over the net, want the one to the neighbour", sent)
+	}
+	// 落在本格的笔刷直接执行。
+	sentBefore = a.relay.requestsOut.Load()
+	result, err = a.brush(3, cellBrush(relayLeft, terrain.BrushRaise, 0))
+	if err != nil || result.Err() != nil || result.Part.SID != partitionSidA {
+		t.Fatalf("from a cell into itself: %+v %v %v", result, err, result.Err())
+	}
+	if sent := a.relay.requestsOut.Load() - sentBefore; sent != 0 {
+		t.Fatalf("%d requests went over the net for the cell's own ground", sent)
+	}
+	if a.version(t, relayLeft) != 1 || b.version(t, relayRight) != 2 {
 		t.Fatalf("versions %d %d", a.version(t, relayLeft), b.version(t, relayRight))
 	}
-	for _, cell := range []*relayProc{a, b} {
-		if l := cell.cellLedger(t); l.Last != 1 {
-			t.Fatalf("cell %d ledger %+v", cell.sid, l)
-		}
+}
+
+// 跨格笔刷直接拒绝（维护者 2026-11-10：“跨格是指跨两个地图进程吗，如果是的话就直接拒绝”，与建筑占地同一规则）：覆盖的块
+// 归两个格时，Base 在预扣配额与发号之前答 ErrBrushCrossCell——两个格都没写（块版本、格账本），配额不扣（时钟冻结：满桶时
+// 一份大于每秒点数的笔刷能透支一次，扣过任何一点就过不去），序号不前进（同一个序号接着用在格内的笔刷上，Base 账本答新号
+// 而不是 Again，之后 LastSeq 是 1）。玩家在格进程上时同样拒绝，本格那一部分也不执行、什么都不发。
+func TestTerrainRelayRefusesABrushAcrossCells(t *testing.T) {
+	w := newRelayWorld(t)
+	now := time.Unix(1_800_000_000, 0)
+	clock := func() time.Time { return now }
+	a := w.start(t, partitionSidA, relayOptions{})
+	b := w.start(t, partitionSidB, relayOptions{})
+	c := w.start(t, partitionSidC, relayOptions{
+		policy: func(p *terrainmap.Policy) { p.EditPointsPerSecond = 270 },
+		setup:  func(p *terrainProcess) { p.m.SetClock(clock) },
+	})
+	meta, rate := c.process.m.Meta(), 270
+	cross := borderBrush(terrain.BrushRaise, 0)
+	if _, err := c.brush(1, cross); !errors.Is(err, terrainmap.ErrBrushCrossCell) {
+		t.Fatalf("a brush across two cells: %v, want ErrBrushCrossCell before anything is charged or issued", err)
 	}
-	// 玩家在格 101 上：本格那一份直接执行，只有 102 那一份走网络。
-	sentBefore := a.relay.requestsOut.Load()
-	result, err = a.brush(2, borderBrush(terrain.BrushLower, 0))
-	if err != nil || result.Err() != nil {
-		t.Fatalf("from a cell: %+v %v %v", result, err, result.Err())
+	if a.version(t, relayLeft) != 0 || b.version(t, relayRight) != 0 || a.cellLedger(t).Last != 0 || b.cellLedger(t).Last != 0 {
+		t.Fatalf("the refused brush wrote: versions %d %d, cell ledgers %+v %+v", a.version(t, relayLeft), b.version(t, relayRight), a.cellLedger(t), b.cellLedger(t))
 	}
-	wantOutcomes(t, "from a cell", result, map[int32]terrainmap.Outcome{partitionSidA: terrainmap.OutcomeApplied, partitionSidB: terrainmap.OutcomeApplied})
-	if sent := a.relay.requestsOut.Load() - sentBefore; sent != 1 {
-		t.Fatalf("%d requests went over the net, want only the other cell's", sent)
+	if got := a.relay.requestsIn.Load() + b.relay.requestsIn.Load() + c.relay.requestsOut.Load(); got != 0 {
+		t.Fatalf("the refused brush was forwarded: %d messages", got)
 	}
-	if a.version(t, relayLeft) != 2 || b.version(t, relayRight) != 2 {
-		t.Fatalf("versions after the second brush %d %d", a.version(t, relayLeft), b.version(t, relayRight))
+	// 格 101 内部、什么都不改的大笔刷（材质与地面相同）：覆盖的点数超过每秒点数，只有满桶才过得去。
+	inside := terrain.Brush{Op: terrain.BrushPaint, X: terrain.ChunkSize + terrain.ChunkSize/2, Y: terrain.ChunkSize / 2, Radius: 1600, Material: 3}
+	if total, _ := footprintOf(inside, meta); total <= rate {
+		t.Fatalf("the probe covers %d points; it must need a full bucket for the test to mean anything", total)
+	}
+	result, err := c.brush(1, inside)
+	if err != nil || result.Err() != nil || result.Again {
+		t.Fatalf("the same sequence on a brush inside one cell: %+v %v %v, want a fresh sequence on a full bucket", result, err, result.Err())
+	}
+	if last, err := c.process.m.LastSeq(context.Background(), relayPlayer); err != nil || last != 1 {
+		t.Fatalf("last sequence %d %v, want 1", last, err)
+	}
+	// 玩家在格 101 上：同样拒绝，本格那一部分也不执行。
+	if _, err := a.brush(1, cross); !errors.Is(err, terrainmap.ErrBrushCrossCell) {
+		t.Fatalf("a brush across two cells from a cell: %v", err)
+	}
+	if a.version(t, relayLeft) != 0 || a.relay.requestsOut.Load() != 0 {
+		t.Fatalf("the cell ran its part of a refused brush: version %d, %d requests out", a.version(t, relayLeft), a.relay.requestsOut.Load())
+	}
+	// 格一侧：转发来的笔刷覆盖了别的格的块（Base 与格对映射的看法不同，§30.8 ⑥）：答 ErrNotOwned，本格那一部分也不执行。
+	answer := lockedExec(a.process.m)(context.Background(), terrainmap.PartRequest{Op: terrainmap.PartBrush, PlayerID: relayPlayer, Seq: 9, Brush: cross})
+	if answer.Outcome != terrainmap.OutcomeRefused || !errors.Is(answer.Refusal, terrainmap.ErrNotOwned) {
+		t.Fatalf("a cell given a brush that also covers its neighbour's ground: %+v, want refused as not owned", answer)
+	}
+	if a.version(t, relayLeft) != 0 || a.cellLedger(t).Last != 1 {
+		t.Fatalf("the cell ran its part: version %d, ledger %+v", a.version(t, relayLeft), a.cellLedger(t))
 	}
 }
 
@@ -376,63 +423,58 @@ type occupiedRules struct{ on atomic.Bool }
 func (r *occupiedRules) AllowEdit(context.Context, int64, terrain.Brush, []terrain.ChunkKey) error { return nil }
 func (r *occupiedRules) Occupied(terrain.ChunkKey, int32) bool                                    { return r.on.Load() }
 
-// 部分成功（D5）：一个格拒绝（占位），另一个格照常提交、不回滚；答复的汇总是那个格的原因，结论逐格给出。被拒绝的格
-// 什么都没写（块、账本）。用同一个序号重发：Base 的账本答 Again，已执行的格答 Duplicate（不写第二次），拒绝过的格这次
-// 执行。
-func TestTerrainRelayPartialRefusalKeepsTheOtherCell(t *testing.T) {
+// 格拒绝（占位）：什么都没写（块、账本），Base 的结论是格的原因。用同一个序号重发：Base 的账本答 Again，格这次执行。
+// （P5 原来的“跨格笔刷一个格拒绝、另一个格照常提交”的部分成功随跨格笔刷撤回，见 TestTerrainRelayRefusesABrushAcrossCells。）
+func TestTerrainRelayRefusalWritesNothingAndRetries(t *testing.T) {
 	w := newRelayWorld(t)
 	rules := &occupiedRules{}
 	rules.on.Store(true)
-	a := w.start(t, partitionSidA, relayOptions{})
+	w.start(t, partitionSidA, relayOptions{})
 	b := w.start(t, partitionSidB, relayOptions{setup: func(p *terrainProcess) { p.m.SetRules(rules) }})
 	c := w.start(t, partitionSidC, relayOptions{})
-	raise := borderBrush(terrain.BrushRaise, 0)
+	raise := cellBrush(relayRight, terrain.BrushRaise, 0)
 	result, err := c.brush(1, raise)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !errors.Is(result.Err(), terrainmap.ErrOccupied) {
-		t.Fatalf("summary %v, want the refusing cell's reason", result.Err())
+	if !errors.Is(result.Err(), terrainmap.ErrOccupied) || result.Part.Answer.Outcome != terrainmap.OutcomeRefused {
+		t.Fatalf("the cell refuses: %+v %v, want the cell's reason", result.Part, result.Err())
 	}
-	wantOutcomes(t, "one cell refuses", result, map[int32]terrainmap.Outcome{partitionSidA: terrainmap.OutcomeApplied, partitionSidB: terrainmap.OutcomeRefused})
-	if a.version(t, relayLeft) != 1 || b.version(t, relayRight) != 0 || b.cellLedger(t).Last != 0 {
-		t.Fatalf("after a partial refusal: versions %d %d, refusing ledger %+v", a.version(t, relayLeft), b.version(t, relayRight), b.cellLedger(t))
+	if b.version(t, relayRight) != 0 || b.cellLedger(t).Last != 0 {
+		t.Fatalf("after a refusal: version %d, ledger %+v", b.version(t, relayRight), b.cellLedger(t))
 	}
 	rules.on.Store(false)
 	result, err = c.brush(1, raise)
 	if err != nil || result.Err() != nil {
 		t.Fatalf("the same sequence again: %+v %v %v", result, err, result.Err())
 	}
-	if !result.Again {
-		t.Fatal("the base ledger did not see the retry")
+	if !result.Again || result.Part.Answer.Outcome != terrainmap.OutcomeApplied {
+		t.Fatalf("the same sequence again: again %v outcome %v, want a retry that runs", result.Again, result.Part.Answer.Outcome)
 	}
-	wantOutcomes(t, "the same sequence again", result, map[int32]terrainmap.Outcome{partitionSidA: terrainmap.OutcomeDuplicate, partitionSidB: terrainmap.OutcomeApplied})
-	if a.version(t, relayLeft) != 1 || b.version(t, relayRight) != 1 {
-		t.Fatalf("after the retry: versions %d %d", a.version(t, relayLeft), b.version(t, relayRight))
+	if b.version(t, relayRight) != 1 {
+		t.Fatalf("after the retry: version %d", b.version(t, relayRight))
 	}
-	want := expectBrushes(t, a.process.m, w.pack, raise)
-	viewMatches(t, a.process.m, map[terrain.ChunkKey]terrain.Chunk{relayLeft: want[relayLeft]})
+	want := expectBrushes(t, b.process.m, w.pack, raise)
 	viewMatches(t, b.process.m, map[terrain.ChunkKey]terrain.Chunk{relayRight: want[relayRight]})
 }
 
-// 结果未知：格的答复全丢时 Base 在期限内反复重发（格只执行一次：执行完的答复按身份缓存），期限到了这一份是 Unknown，
-// 汇总是 ErrPending——而格其实已经执行了。网好了之后客户端用同一个序号重发：两个格都答 Duplicate，块只改过一次。
-// 请求全丢时格没有执行；重发之后执行一次。
+// 结果未知：格的答复全丢时 Base 在期限内反复重发（格只执行一次：执行完的答复按身份缓存），期限到了结论是 Unknown、
+// ErrPending——而格其实已经执行了。网好了之后客户端用同一个序号重发：格答 Duplicate，块只改过一次。请求全丢时格没有执行；
+// 重发之后执行一次。
 func TestTerrainRelayUnknownResultsAreRetriedOnce(t *testing.T) {
 	w := newRelayWorld(t)
-	a := w.start(t, partitionSidA, relayOptions{})
+	w.start(t, partitionSidA, relayOptions{})
 	b := w.start(t, partitionSidB, relayOptions{})
 	c := w.start(t, partitionSidC, relayOptions{})
 	w.net.setDrop(func(from, _ int32, kind byte) bool { return from == partitionSidB && kind == relayKindAnswer })
-	result, err := c.brush(1, borderBrush(terrain.BrushRaise, 0))
+	result, err := c.brush(1, cellBrush(relayRight, terrain.BrushRaise, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !errors.Is(result.Err(), terrainmap.ErrPending) {
-		t.Fatalf("summary %v, want pending", result.Err())
+	if !errors.Is(result.Err(), terrainmap.ErrPending) || result.Part.Answer.Outcome != terrainmap.OutcomeUnknown {
+		t.Fatalf("answers lost: %+v %v, want unknown / pending", result.Part, result.Err())
 	}
-	wantOutcomes(t, "answers lost", result, map[int32]terrainmap.Outcome{partitionSidA: terrainmap.OutcomeApplied, partitionSidB: terrainmap.OutcomeUnknown})
-	waitFor(t, "the cell whose answers were lost has executed its part", func() bool { return b.relay.executed.Load() >= 1 })
+	waitFor(t, "the cell whose answers were lost has executed the brush", func() bool { return b.relay.executed.Load() >= 1 })
 	if b.version(t, relayRight) != 1 {
 		t.Fatalf("the cell whose answers were lost: version %d, want it executed once", b.version(t, relayRight))
 	}
@@ -440,33 +482,32 @@ func TestTerrainRelayUnknownResultsAreRetriedOnce(t *testing.T) {
 		t.Fatalf("no resend reached the cell: %v / %v", c.relay.stats(), b.relay.stats())
 	}
 	w.net.setDrop(nil)
-	result, err = c.brush(1, borderBrush(terrain.BrushRaise, 0))
+	result, err = c.brush(1, cellBrush(relayRight, terrain.BrushRaise, 0))
 	if err != nil || result.Err() != nil || !result.Again || !result.Duplicate() {
 		t.Fatalf("the same sequence after the loss: %+v %v %v", result, err, result.Err())
 	}
-	if a.version(t, relayLeft) != 1 || b.version(t, relayRight) != 1 {
-		t.Fatalf("written twice: versions %d %d", a.version(t, relayLeft), b.version(t, relayRight))
+	if b.version(t, relayRight) != 1 {
+		t.Fatalf("written twice: version %d", b.version(t, relayRight))
 	}
 	// 请求全丢：格没有执行，期限后 Unknown；重发之后执行一次。
 	w.net.setDrop(func(_, to int32, kind byte) bool { return to == partitionSidB && kind == relayKindRequest })
 	received := b.relay.requestsIn.Load()
-	result, err = c.brush(2, borderBrush(terrain.BrushLower, 0))
+	result, err = c.brush(2, cellBrush(relayRight, terrain.BrushLower, 0))
 	if err != nil || !errors.Is(result.Err(), terrainmap.ErrPending) || b.relay.requestsIn.Load() != received || b.version(t, relayRight) != 1 {
 		t.Fatalf("requests lost: %+v %v %v, cell version %d", result, err, result.Err(), b.version(t, relayRight))
 	}
 	w.net.setDrop(nil)
-	result, err = c.brush(2, borderBrush(terrain.BrushLower, 0))
-	if err != nil || result.Err() != nil {
+	result, err = c.brush(2, cellBrush(relayRight, terrain.BrushLower, 0))
+	if err != nil || result.Err() != nil || result.Part.Answer.Outcome != terrainmap.OutcomeApplied {
 		t.Fatalf("the same sequence after the requests were lost: %+v %v %v", result, err, result.Err())
 	}
-	wantOutcomes(t, "requests lost, then sent again", result, map[int32]terrainmap.Outcome{partitionSidA: terrainmap.OutcomeDuplicate, partitionSidB: terrainmap.OutcomeApplied})
-	if a.version(t, relayLeft) != 2 || b.version(t, relayRight) != 2 {
-		t.Fatalf("versions %d %d", a.version(t, relayLeft), b.version(t, relayRight))
+	if b.version(t, relayRight) != 2 {
+		t.Fatalf("version %d", b.version(t, relayRight))
 	}
 }
 
 // 重复与迟到：每条消息都投两次，事后把录下的全部消息再投一遍——格对同一身份至多执行一次（缓存答复或账本 Duplicate），
-// 迟到的答复没有人在等、被忽略；块版本与账本都不变。
+// 迟到的答复没有人在等、被忽略；块版本与账本都不变。两个格各收三笔。
 func TestTerrainRelayDuplicatedAndLateMessagesWriteOnce(t *testing.T) {
 	w := newRelayWorld(t)
 	a := w.start(t, partitionSidA, relayOptions{})
@@ -475,8 +516,12 @@ func TestTerrainRelayDuplicatedAndLateMessagesWriteOnce(t *testing.T) {
 	w.net.mu.Lock()
 	w.net.dup = true
 	w.net.mu.Unlock()
-	for seq := uint64(1); seq <= 3; seq++ {
-		result, err := c.brush(seq, borderBrush(terrain.BrushRaise, 0))
+	for seq := uint64(1); seq <= 6; seq++ {
+		key := relayRight
+		if seq > 3 {
+			key = relayLeft
+		}
+		result, err := c.brush(seq, cellBrush(key, terrain.BrushRaise, 0))
 		if err != nil || result.Err() != nil {
 			t.Fatalf("seq %d: %+v %v %v", seq, result, err, result.Err())
 		}
@@ -484,7 +529,7 @@ func TestTerrainRelayDuplicatedAndLateMessagesWriteOnce(t *testing.T) {
 	before := []int64{a.version(t, relayLeft), b.version(t, relayRight)}
 	ledgers := []terrain_editor.SeqWindow{a.cellLedger(t), b.cellLedger(t)}
 	if before[0] != 3 || before[1] != 3 {
-		t.Fatalf("versions %v after three brushes", before)
+		t.Fatalf("versions %v after three brushes on each cell", before)
 	}
 	w.net.replay()
 	waitFor(t, "the replayed requests are answered", func() bool {
@@ -499,15 +544,15 @@ func TestTerrainRelayDuplicatedAndLateMessagesWriteOnce(t *testing.T) {
 	waitFor(t, "late answers are ignored", func() bool { return c.relay.strayAnswers.Load() > 0 })
 }
 
-// 重启之后的对账：答复丢了的那一份在格上已执行；格重启（块与格账本从“库”冷加载）后，同一个序号重发答 Duplicate、不写
-// 第二次。Base 重启（玩家面向客户端的账本从“库”冷加载）后，同一个序号是 Again、各格 Duplicate，新序号照常执行。
+// 重启之后的对账：答复丢了的那一笔在格上已执行；格重启（块与格账本从“库”冷加载）后，同一个序号重发答 Duplicate、不写
+// 第二次。Base 重启（玩家面向客户端的账本从“库”冷加载）后，同一个序号是 Again、格答 Duplicate，新序号照常执行。
 func TestTerrainRelayReconcilesAfterRestarts(t *testing.T) {
 	w := newRelayWorld(t)
 	a := w.start(t, partitionSidA, relayOptions{})
 	b := w.start(t, partitionSidB, relayOptions{})
 	c := w.start(t, partitionSidC, relayOptions{})
 	w.net.setDrop(func(from, _ int32, kind byte) bool { return from == partitionSidB && kind == relayKindAnswer })
-	raise := borderBrush(terrain.BrushRaise, 0)
+	raise := cellBrush(relayRight, terrain.BrushRaise, 0)
 	if result, err := c.brush(1, raise); err != nil || !errors.Is(result.Err(), terrainmap.ErrPending) {
 		t.Fatalf("answers lost: %+v %v", result, err)
 	}
@@ -534,11 +579,15 @@ func TestTerrainRelayReconcilesAfterRestarts(t *testing.T) {
 	if err != nil || last != 1 {
 		t.Fatalf("last sequence after the base restarted: %d %v", last, err)
 	}
-	result, err = c.brush(2, borderBrush(terrain.BrushLower, 0))
+	result, err = c.brush(2, cellBrush(relayRight, terrain.BrushLower, 0))
 	if err != nil || result.Err() != nil || result.Again {
 		t.Fatalf("a new sequence after the restarts: %+v %v %v", result, err, result.Err())
 	}
-	if a.version(t, relayLeft) != 2 || b.version(t, relayRight) != 2 {
+	result, err = c.brush(3, cellBrush(relayLeft, terrain.BrushRaise, 0))
+	if err != nil || result.Err() != nil {
+		t.Fatalf("a new sequence on the other cell after the restarts: %+v %v %v", result, err, result.Err())
+	}
+	if a.version(t, relayLeft) != 1 || b.version(t, relayRight) != 2 {
 		t.Fatalf("versions %d %d", a.version(t, relayLeft), b.version(t, relayRight))
 	}
 }
@@ -568,8 +617,8 @@ func footprintOf(b terrain.Brush, meta terrain.Meta) (total int, byKey map[terra
 	return total, byKey
 }
 
-// 配额（D16，Base 扣）：Base 按 Footprint 预扣，按各格的结论多退——Applied 计实际改动的点数，Unknown 计它的 Footprint（可能
-// 已生效，不退），合计至少 MinEditPoints。时钟冻结，用“下一份笔刷能不能过”读余额。
+// 配额（D16，Base 扣）：Base 按 Footprint 预扣，按格的结论多退——Applied 计实际改动的点数，Unknown 计 Footprint（可能已
+// 生效，不退），至少 MinEditPoints。时钟冻结，用“下一份笔刷能不能过”读余额。
 func TestTerrainRelayChargesTheBaseByWhatWasApplied(t *testing.T) {
 	w := newRelayWorld(t)
 	now := time.Unix(1_800_000_000, 0)
@@ -583,8 +632,8 @@ func TestTerrainRelayChargesTheBaseByWhatWasApplied(t *testing.T) {
 		setup:  func(p *terrainProcess) { p.m.SetClock(clock) },
 	})
 	meta, rate, minimum := c.process.m.Meta(), 270, terrainmap.DefaultPolicy.MinEditPoints
-	// 1. 跨格、什么都不改的笔刷（材质与地面相同）：预扣 Footprint（满桶透支），两格都答实际 0 点 → 只计 MinEditPoints。
-	noop := borderBrush(terrain.BrushPaint, 3)
+	// 1. 转发给格 102、什么都不改的笔刷（材质与地面相同）：预扣 Footprint（满桶透支），格答实际 0 点 → 只计 MinEditPoints。
+	noop := cellBrush(relayRight, terrain.BrushPaint, 3)
 	if total, _ := footprintOf(noop, meta); total <= rate {
 		t.Fatalf("the no-op brush covers %d points; it must overdraw a full bucket for the test to mean anything", total)
 	}
@@ -595,31 +644,22 @@ func TestTerrainRelayChargesTheBaseByWhatWasApplied(t *testing.T) {
 	if _, err := c.brush(2, probeBrush(t, meta, left-60, left)); err != nil {
 		t.Fatalf("a brush within what should be left (%d points) after the refund: %v", left, err)
 	}
-	// 2. 跨格、真改材质的笔刷，格 102 的答复丢了：101 计实际点数，102 计 Footprint，余额 = rate − 两者之和（为负）。
+	// 2. 真改材质的笔刷，格 102 的答复丢了：计 Footprint，余额 = rate − Footprint（为负）。
 	advance(10 * time.Second)
 	w.net.setDrop(func(from, _ int32, kind byte) bool { return from == partitionSidB && kind == relayKindAnswer })
-	paint := borderBrush(terrain.BrushPaint, 5)
-	_, byKey := footprintOf(paint, meta)
+	paint := cellBrush(relayRight, terrain.BrushPaint, 5)
+	total, _ := footprintOf(paint, meta)
 	result, err := c.brush(3, paint)
 	if err != nil || !errors.Is(result.Err(), terrainmap.ErrPending) {
 		t.Fatalf("paint with lost answers: %+v %v", result, err)
 	}
-	applied := 0
-	for _, part := range result.Parts {
-		if part.SID == partitionSidA {
-			applied = part.Answer.Points
-		}
-	}
-	if applied <= 0 {
-		t.Fatalf("the applied part reports %d points", applied)
-	}
 	w.net.setDrop(nil)
-	balance := float64(rate - applied - byKey[relayRight])
-	// 补到余额刚好比 MinEditPoints 少一点：一份最小的笔刷还过不去；Unknown 那一份若被退回，余额会多出它的 Footprint。
+	balance := float64(rate - total)
+	// 补到余额刚好比 MinEditPoints 少一点：一份最小的笔刷还过不去；Unknown 若被退回，余额会多出它的 Footprint。
 	wait := (float64(minimum) - 1 - balance) / float64(rate)
 	advance(time.Duration(wait * float64(time.Second)))
 	if _, err := c.brush(4, probeBrush(t, meta, 0, minimum)); !errors.Is(err, terrainmap.ErrRateLimited) {
-		t.Fatalf("the unknown part's points came back to the bucket: %v", err)
+		t.Fatalf("the unknown brush's points came back to the bucket: %v", err)
 	}
 	advance(time.Second / 10)
 	if _, err := c.brush(4, probeBrush(t, meta, 0, minimum)); err != nil {
@@ -629,7 +669,7 @@ func TestTerrainRelayChargesTheBaseByWhatWasApplied(t *testing.T) {
 
 // 分区场景的建筑（方案 §30）：只做 Base 的进程上的玩家把建筑放进一个格（转发给写占地的格，那个格一笔事务：块、建筑、
 // 玩家在本格的账本），重发答 Duplicate；改参数、拆除同样转发。占地跨两个格的放置在转发之前拒绝（ErrBuildCrossCell），
-// 什么都没写、没发号。
+// 什么都没写、没发号。笔刷改到格里建筑占着的点：那个格在自己的锁里查占位、拒绝。
 func TestTerrainRelayBuildingsStayInOneCell(t *testing.T) {
 	w := newRelayWorld(t)
 	a := w.start(t, partitionSidA, relayOptions{})
@@ -640,8 +680,10 @@ func TestTerrainRelayBuildingsStayInOneCell(t *testing.T) {
 	if err != nil || place.Err() != nil {
 		t.Fatalf("place: %+v %v %v", place, err, place.Err())
 	}
-	wantOutcomes(t, "place", place, map[int32]terrainmap.Outcome{partitionSidA: terrainmap.OutcomeApplied})
-	if state := place.Parts[0].Answer.Building; !state.Standing || state.Owner != relayPlayer || state.ConfigID != 1 {
+	if place.Part.SID != partitionSidA || place.Part.Answer.Outcome != terrainmap.OutcomeApplied {
+		t.Fatalf("place went to %d with %v, want cell %d applied", place.Part.SID, place.Part.Answer.Outcome, partitionSidA)
+	}
+	if state := place.Part.Answer.Building; !state.Standing || state.Owner != relayPlayer || state.ConfigID != 1 {
 		t.Fatalf("placed building %+v", state)
 	}
 	if !buildingAt(t, a.process, 240, 20).Standing || buildingAt(t, c.process, 240, 20).ID != 0 {
@@ -655,7 +697,7 @@ func TestTerrainRelayBuildingsStayInOneCell(t *testing.T) {
 		t.Fatalf("the same placement again: %+v %v %v", again, err, again.Err())
 	}
 	params, err := c.process.m.RelayParams(ctx, relayPlayer, 2, 240, 20, []int32{5}, c.relay)
-	if err != nil || params.Err() != nil || !slices.Equal(params.Parts[0].Answer.Building.Params, []int32{5}) {
+	if err != nil || params.Err() != nil || !slices.Equal(params.Part.Answer.Building.Params, []int32{5}) {
 		t.Fatalf("parameters: %+v %v %v", params, err, params.Err())
 	}
 	if !slices.Equal(buildingAt(t, a.process, 240, 20).Params, []int32{5}) {
@@ -663,7 +705,7 @@ func TestTerrainRelayBuildingsStayInOneCell(t *testing.T) {
 	}
 	// 占地跨块 (3,0) / (4,0)，也就跨了两个格：拒绝，什么都没写，没发号。
 	cross, err := c.process.m.RelayPlace(ctx, relayPlayer, 3, hut(254, 20), c.relay)
-	if !errors.Is(err, terrainmap.ErrBuildCrossCell) || len(cross.Parts) != 0 {
+	if !errors.Is(err, terrainmap.ErrBuildCrossCell) || cross.Part.SID != 0 {
 		t.Fatalf("a lot across two cells: %+v %v", cross, err)
 	}
 	if buildingAt(t, a.process, 254, 20).ID != 0 || buildingAt(t, b.process, 254, 20).ID != 0 {
@@ -673,21 +715,24 @@ func TestTerrainRelayBuildingsStayInOneCell(t *testing.T) {
 		t.Fatalf("the refused placement issued a sequence: last %d", last)
 	}
 	removed, err := c.process.m.RelayRemove(ctx, relayPlayer, 3, 240, 20, c.relay)
-	if err != nil || removed.Err() != nil || removed.Parts[0].Answer.Building.Standing {
+	if err != nil || removed.Err() != nil || removed.Part.Answer.Building.Standing {
 		t.Fatalf("remove: %+v %v %v", removed, err, removed.Err())
 	}
 	if buildingAt(t, a.process, 240, 20).Standing || a.process.m.Occupied(relayLeft, (240-3*terrain.ChunkSamples)+21*terrain.ChunkSamples) {
 		t.Fatal("the building still stands on the cell")
 	}
-	// 跨格的笔刷不能改到建筑占着的点：格在自己的锁里查自己的占位。
+	// 转发的笔刷不能改到建筑占着的点：格在自己的锁里查自己的占位（笔刷整个在块 (3,0) 里，盖住锚点 (250, 30) 的 hut）。
 	if _, err := c.process.m.RelayPlace(ctx, relayPlayer, 4, hut(250, 30), c.relay); err != nil {
 		t.Fatal(err)
 	}
-	brushed, err := c.brush(5, terrain.Brush{Op: terrain.BrushRaise, X: 4 * terrain.ChunkSize, Y: 3200, Radius: 1600, Falloff: terrain.FalloffConstant, Strength: 10})
-	if err != nil || !errors.Is(brushed.Err(), terrainmap.ErrOccupied) {
-		t.Fatalf("a cross-cell brush over a building: %+v %v", brushed, err)
+	over := terrain.Brush{Op: terrain.BrushRaise, X: 25100, Y: 3100, Radius: 400, Falloff: terrain.FalloffConstant, Strength: 10}
+	if keys := over.Chunks(c.process.m.Meta()); len(keys) != 1 || keys[0] != relayLeft {
+		t.Fatalf("the brush over the building covers %v, want only %v", keys, relayLeft)
 	}
-	wantOutcomes(t, "a cross-cell brush over a building", brushed, map[int32]terrainmap.Outcome{partitionSidA: terrainmap.OutcomeRefused, partitionSidB: terrainmap.OutcomeApplied})
+	brushed, err := c.brush(5, over)
+	if err != nil || !errors.Is(brushed.Err(), terrainmap.ErrOccupied) || brushed.Part.Answer.Outcome != terrainmap.OutcomeRefused {
+		t.Fatalf("a brush over a building: %+v %v", brushed, err)
+	}
 }
 
 // Ghost 带里邻格的建筑（方案 §30）：格 101 在它与 102 交界的块 (3,0) 上放了建筑，102 的 Ghost 带经地形副本收到这块的

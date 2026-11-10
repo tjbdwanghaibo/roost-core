@@ -143,7 +143,7 @@ func (component *LedgerComponent) Record(seq int64) {
 }
 
 // Issue 是分区场景里 Base 给一次编辑“发号”的结果（handler TerrainEditIssue，可编辑地形 P5）：Again 表示这个序号以前已经
-// 发出过（这次是客户端的重试：照样再转发给各格，由各格的账本判断自己那一部分是否已执行）；LastSeq 是此后的最大序号。
+// 发出过（这次是客户端的重试：照样再转发给那个格，由格的账本判断是否已执行）；LastSeq 是此后的最大序号。
 type Issue struct {
 	Again   bool
 	LastSeq int64

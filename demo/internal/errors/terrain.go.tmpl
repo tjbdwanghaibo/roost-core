@@ -12,7 +12,8 @@ var ErrTerrainDisabled = errcode.Define(100052, "terrain_disabled", "this server
 var ErrTerrainBrush = errcode.Define(100053, "terrain_brush", "brush refused")
 
 // ErrTerrainNotOwned：笔刷 / 占地覆盖到的块没有进程写（在分区网格外，或它的格没有托管进程），或收到转发的格不写这块
-// （格到进程的映射在途中变了）。分区场景里跨格的编辑由玩家的 Base 转发给写这些块的格（可编辑地形 P5），不因为跨格答这个码。
+// （格到进程的映射在途中变了）。分区场景里编辑由玩家的 Base 转发给写这些块的格（可编辑地形 P5），覆盖两个格的笔刷答
+// terrain_cross_cell、占地答 building_cross_cell，不答这个码。
 var ErrTerrainNotOwned = errcode.Define(100054, "terrain_not_owned", "this ground is edited by another cell")
 
 // ErrTerrainUnavailable：块的记录装不进来（损坏，或基于旧原始地形且没能丢弃），等运维处理；不是玩家的错，也不是内部错误。
@@ -68,3 +69,8 @@ var ErrTerrainPending = errcode.Define(100068, "terrain_pending", "the edit's re
 // ErrBuildingCrossCell：分区场景里建筑的占地跨了两个格（可编辑地形 P5 首版不支持：一座建筑的放置要在一笔事务里锁住
 // 占地覆盖的全部块）。换个位置，让占地落在一个格里。
 var ErrBuildingCrossCell = errcode.Define(100069, "building_cross_cell", "the building's lot straddles two cells")
+
+// ErrTerrainCrossCell：分区场景里笔刷覆盖的块归两个及以上的格（地图进程）。维护者 2026-11-10：与建筑占地
+// （building_cross_cell）一样直接拒绝，不拆分转发——什么都没写、不扣配额、不占序号（同一个 Seq 可以用在下一笔上）。
+// 玩法层靠地形设计避开；客户端把笔刷挪进一个格里再发。
+var ErrTerrainCrossCell = errcode.Define(100070, "terrain_cross_cell", "the brush covers ground of two cells")

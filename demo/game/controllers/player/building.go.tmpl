@@ -84,12 +84,10 @@ func (controller *Controller) relayBuilding(context *playeraccess.Context, reque
 	}
 	response := &pb.BuildingResponse{Duplicate: result.Duplicate(), LastSeq: result.LastSeq, Chunks: relayChunks(result)}
 	response.Code, response.Reason = relayCode(context, request.Seq, result, buildingError)
-	if len(result.Parts) == 1 {
-		if answer := result.Parts[0].Answer; answer.Outcome == terrainmap.OutcomeApplied || answer.Outcome == terrainmap.OutcomeDuplicate {
-			state := answer.Building
-			response.Standing, response.BuildingID, response.Foundation, response.Leveled = state.Standing, state.ID, state.Foundation, state.Leveled
-			response.ConfigID, response.Params = state.ConfigID, state.Params
-		}
+	if answer := result.Part.Answer; answer.Outcome == terrainmap.OutcomeApplied || answer.Outcome == terrainmap.OutcomeDuplicate {
+		state := answer.Building
+		response.Standing, response.BuildingID, response.Foundation, response.Leveled = state.Standing, state.ID, state.Foundation, state.Leveled
+		response.ConfigID, response.Params = state.ConfigID, state.Params
 	}
 	return response
 }

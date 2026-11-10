@@ -1,0 +1,16 @@
+# 修前红（main 49de7c98 + 只加 ErrBrushCrossCell 声明，生成的 game-demo）
+
+$ go test -count=1 -run TestTerrainRelayRefusesABrushAcrossCells ./internal/service/game
+--- FAIL: TestTerrainRelayRefusesABrushAcrossCells (0.02s)
+    terrain_relay_test.go:390: a brush across two cells: <nil>, want ErrBrushCrossCell before anything is charged or issued
+FAIL
+FAIL	example.com/planet/internal/service/game	0.486s
+FAIL
+
+# 格一侧（同一检出；临时用例，只含新用例末段的 Exec 断言）
+
+--- FAIL: 格一侧的临时用例 (0.01s)
+    terrain_relay_test.go（新用例末段）: a cell given a brush that also covers its neighbour's ground: {Outcome:applied Refusal:<nil> Chunks:[{Key:(3,0) Version:1}] Points:322 LastSeq:9 Building:{ID:0 Standing:false Owner:0 ConfigID:0 Params:[] Facing:0 Lot:[0,0)×[0,0) Foundation:0 Leveled:false BaseRevision:0}}, want refused as not owned
+FAIL
+FAIL	example.com/planet/internal/service/game	0.677s
+FAIL

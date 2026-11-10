@@ -261,9 +261,9 @@ func (b Brush) Apply(meta Meta, limits Limits, chunks map[ChunkKey]Chunk) ([]Chu
 	return b.ApplyIn(meta, limits, chunks, nil)
 }
 
-// ApplyIn 是只算 part 里那几块的 Apply（part 为 nil 时是覆盖到的全部块）。跨格编辑拆给各格执行时（可编辑地形 P5），
-// 每个格只有、也只写自己的块，各自按同一笔刷算自己的那一部分：每个采样点的结果只取决于它自己编辑前的值与到中心的
-// 距离，不读别的点，所以把各部分的结果合起来，与在全部块上 Apply 逐点相同（同一份编辑前数据时）。
+// ApplyIn 是只算 part 里那几块的 Apply（part 为 nil 时是覆盖到的全部块）。为跨格编辑拆给各格执行而加（可编辑地形 P5）；
+// 维护者 2026-11-10 撤回跨格笔刷之后 game-demo 不再按部分调用，这里保留为通用能力：每个采样点的结果只取决于它自己编辑前
+// 的值与到中心的距离，不读别的点，所以把各部分的结果合起来，与在全部块上 Apply 逐点相同（同一份编辑前数据时）。
 //
 // part 里笔刷没覆盖到的块不贡献任何点；chunks 只需要 part 与覆盖到的块的交集。规则与错误同 Apply。
 func (b Brush) ApplyIn(meta Meta, limits Limits, chunks map[ChunkKey]Chunk, part []ChunkKey) ([]ChunkChange, error) {

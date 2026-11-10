@@ -1441,9 +1441,13 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 
 ## 30. P5 跨格编辑、分区场景的建筑与游戏尺度的分区视野（T08，2026-11-10）
 
+> **2026-11-10 更新（维护者）：跨格笔刷改为直接拒绝，拆分设计已撤回**，见 [§30.10](#3010-跨格笔刷直接拒绝维护者-2026-11-10撤回-301-的拆分)。下面 §30.1～§30.3、§30.7 里关于“按格拆分 / 多份汇总 / 部分成功 / 多格配额退还”的原文保留，标“已撤回（维护者 11-10）”；单格转发、发号、格账本、逐块 `Outcome`、`terrain_pending`、重启对账照旧有效。
+
 维护者 2026-11-10：未完成的代码先完成，验收后置。本节是 T08 的代码部分：跨格编辑（拆分、转发、各格一笔事务、配额、部分成功与结果未知的对账）、分区场景的建筑（单格可放、Ghost 带的占位、跨格占地）、分区场景的主视野放大到游戏尺度（§29.8 ⑦）。真实依赖与真实多进程演练由维护者跑（`ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh` 已按本节更新）。[证据](evidence/terrain-p5-20261110/README.md)。
 
 ### 30.1 拆分与转发
+
+> **已撤回（维护者 11-10）**：下面第 1 步的“按写它的格分组”、第 4 步的“每个格一份、并行发出、等齐”与第 6 步的“汇总”只为跨格笔刷服务，已删除；现在覆盖块的格多于一个就在第 2 步之前拒绝（`terrain_cross_cell`），一次编辑只整份转发给一个格，见 [§30.10](#3010-跨格笔刷直接拒绝维护者-2026-11-10撤回-301-的拆分)。第 3、5 步与进程间消息不变。
 
 玩家连在自己的 Base 进程上；块只归包含它的格的进程写（§4）。一次编辑由玩家的 Base 拆成“每个格一份”（`terrainmap.Map.RelayBrush` / `RelayPlace` / `RelayRemove` / `RelayParams`，`game/terrainmap/relay.go`）：
 
@@ -1460,7 +1464,7 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 
 | 情形 | 谁负责、怎么收敛 |
 | --- | --- |
-| 部分格拒绝（占位、权限之外的拒绝、块装不进来） | 不补、不回滚（D5）：已执行的格保留，答复逐块列出结论，汇总码是第一个拒绝的原因。客户端可以用同一序号重发：已执行的格答 Duplicate，拒绝过的格再判一次（与单格“拒绝不记序号”的语义相同） |
+| ~~部分格拒绝（占位、权限之外的拒绝、块装不进来）~~ **已撤回（维护者 11-10）：一次编辑只有一个格，没有部分成功；格拒绝即整笔没写，客户端可用同一序号重发** | 不补、不回滚（D5）：已执行的格保留，答复逐块列出结论，汇总码是第一个拒绝的原因。客户端可以用同一序号重发：已执行的格答 Duplicate，拒绝过的格再判一次（与单格“拒绝不记序号”的语义相同） |
 | 期限内没有结论（丢包、格忙、格的事务结果未知） | Base 在期限内按同一身份重发，格去重；期限到了这一份是 Unknown、汇总 `terrain_pending`，**由客户端用同一个序号重发**（与单格“结果未知”的规则相同）：Base 账本答 Again 再转发，执行过的格答 Duplicate，没执行的这次执行 |
 | 重发、重复、迟到的消息 | 格：同一身份在途忽略、确定结论按缓存答；跨身份由持久的格账本答 Duplicate。Base：只认自己这次启动、正在等、发给那个 sid 的答复。不会双写 |
 | 格进程重启 | 块与格账本是 strict 持久；重启后同一序号再来，账本答 Duplicate 或执行一次 |
@@ -1470,6 +1474,8 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 **编辑日志压实：不需要。** 判重是两份定长账本（每玩家 2 个 int64 + 建筑数，Base 一份、每个格一份），不随编辑次数增长；块上没有编辑记录（T02 起），副本按整块推最新已提交状态（§21），没有要回放的日志。
 
 ### 30.3 配额（D16，Base 扣）
+
+> 多格的退还（按各格结论逐份相加、Unknown 那几份计各自的 Footprint）**已撤回（维护者 11-10）**：现在只有一个格，Applied 计实际点数、Unknown 计整笔的 Footprint、Refused / Duplicate 计 0，至少 `MinEditPoints`；跨格的拒绝在预扣之前，不扣（[§30.10](#3010-跨格笔刷直接拒绝维护者-2026-11-10撤回-301-的拆分)）。
 
 Base 没装这些块（只做 Base 的进程不装块），按 `Brush.Footprint`（每块覆盖的采样点数；一次笔刷只改高度或只改材质，所以它是实际改动点数的上限，见待确认 ③）预扣，至少 `MinEditPoints`；格答回实际改动的点数，Base 按结论多退：Applied 计实际点数、Unknown 计它的 Footprint（可能已生效，不退）、Refused / Duplicate 计 0，合计至少 `MinEditPoints`。转发之前的拒绝（权限、账本过期 / 超前）退到 `MinEditPoints`。建筑：放置预扣 `MinEditPoints` + 占地面积（整平时），Applied 计 `MinEditPoints` + 实际整平点数；拆除、改参数 `MinEditPoints`。配额只在 Base 的进程内存（重启从满桶开始，与单格相同）。
 
@@ -1498,8 +1504,8 @@ Base 没装这些块（只做 Base 的进程不装块），按 `Brush.Footprint`
 
 | 用例 | 内容 |
 | --- | --- |
-| `terrain_relay_test.go` `TestTerrainRelaySplitsABrushAcrossCells` | 两个格 + 只做 Base 的进程（进程内网，正式 Map / Nest / 生成代码）：跨格笔刷拆成两份、各一笔事务，两块与整图上应用一次逐点相同，版本 1，两个格账本与 Base 账本各记一次；玩家在格上时本格那一份不经网络 |
-| `TestTerrainRelayPartialRefusalKeepsTheOtherCell` | 一个格拒绝（占位钩子），另一个格提交、不回滚，汇总是拒绝原因、拒绝的格什么都没写；同一序号重发：Again，已执行的 Duplicate、拒绝过的执行 |
+| ~~`terrain_relay_test.go` `TestTerrainRelaySplitsABrushAcrossCells`~~ 已撤回（维护者 11-10），改为 `TestTerrainRelayForwardsABrushToTheCellThatWritesIt` 与 `TestTerrainRelayRefusesABrushAcrossCells`（§30.10） | 两个格 + 只做 Base 的进程（进程内网，正式 Map / Nest / 生成代码）：跨格笔刷拆成两份、各一笔事务，两块与整图上应用一次逐点相同，版本 1，两个格账本与 Base 账本各记一次；玩家在格上时本格那一份不经网络 |
+| ~~`TestTerrainRelayPartialRefusalKeepsTheOtherCell`~~ 已撤回（维护者 11-10），改为 `TestTerrainRelayRefusalWritesNothingAndRetries`（单格拒绝、同序号重发执行） | 一个格拒绝（占位钩子），另一个格提交、不回滚，汇总是拒绝原因、拒绝的格什么都没写；同一序号重发：Again，已执行的 Duplicate、拒绝过的执行 |
 | `TestTerrainRelayUnknownResultsAreRetriedOnce` | 格的答复全丢：重发被缓存 / 在途去重吸收，期限后 Unknown、`ErrPending`，格只执行一次；网好后同一序号全是 Duplicate、版本不变；请求全丢：格没执行，重发后执行一次 |
 | `TestTerrainRelayDuplicatedAndLateMessagesWriteOnce` | 每条消息投两次、事后全部重放：版本与格账本不变，迟到的答复被忽略 |
 | `TestTerrainRelayReconcilesAfterRestarts` | 答复丢了的那一份在格上已执行；格重启后同一序号 Duplicate、不写第二次；Base 重启后 Again、各格 Duplicate，`LastSeq` 是 1，新序号照常 |
@@ -1516,11 +1522,11 @@ Base 没装这些块（只做 Base 的进程不装块），按 `Brush.Footprint`
 
 ### 30.8 实施方先定的取舍（维护者 2026-11-10 确认：全部按推荐★）
 
-维护者 2026-11-10：① “跨格”即占地落在两个地图进程（两个分区格的拥有者）上，这种放置直接拒绝，不做跨进程事务；其余各项按推荐。注意 ① 只针对建筑占地；地形笔刷跨格仍按 §30 拆分转发给各格执行（P5 的本体）。
+维护者 2026-11-10：① “跨格”即占地落在两个地图进程（两个分区格的拥有者）上，这种放置直接拒绝，不做跨进程事务；其余各项按推荐。~~注意 ① 只针对建筑占地；地形笔刷跨格仍按 §30 拆分转发给各格执行（P5 的本体）。~~ **笔刷同样拒绝**（维护者 2026-11-10 稍后：“跨格是指跨两个地图进程吗，如果是的话就直接拒绝”“玩家也不能刷地形，会在地形基础上设计这个限制”；`terrain_cross_cell`，[§30.10](#3010-跨格笔刷直接拒绝维护者-2026-11-10撤回-301-的拆分)）。
 
 | 项 | 现状 | 选项与代价 |
 | --- | --- | --- |
-| ① 跨格占地 | ★ 拒绝（`building_cross_cell`） | 或实现：两格的块锁在一笔跨进程事务里（Remote / saga 两阶段），代价是放置延迟与故障面；或把建筑交给锚点所在格、邻格只读占位（会出现两格同时放的重叠，需要另一条串行化） |
+| ① 跨格占地 | ★ 拒绝（`building_cross_cell`）；笔刷同样拒绝（`terrain_cross_cell`，§30.10） | 或实现：两格的块锁在一笔跨进程事务里（Remote / saga 两阶段），代价是放置延迟与故障面；或把建筑交给锚点所在格、邻格只读占位（会出现两格同时放的重叠，需要另一条串行化） |
 | ② 建筑数上限 | ★ 按格计（每格的账本只数本格的建筑） | 或全局计：Base 的账本记数，放置结果未知时 Base 计数与实际不一致，需要对账 |
 | ③ 配额口径 | ★ 预扣 Footprint（覆盖点数），格答回实际改动的点数（高度、材质各计一次，与单格同一口径）多退 | 现在的笔刷一次只改其一，实际 ≤ Footprint；以后有同时改两样的笔刷时预扣要计两倍 |
 | ④ 期限与重发 | ★ 250ms 重发、2s 期限、格缓存 4096 条确定结论、并发 64 | 期限短则 `terrain_pending` 多、客户端重发多；长则玩家等得久 |
@@ -1531,13 +1537,53 @@ Base 没装这些块（只做 Base 的进程不装块），按 `Brush.Footprint`
 
 ### 30.9 未覆盖
 
-- 真实依赖（Mongo / WAL / NATS）与真实多进程演练：演练配置与 (a) 步已更新（跨格笔刷由 B 拆给 A 与自己、两块都执行，再反向改回）；合入前协调方已在私有真实依赖上跑通（[证据](evidence/terrain-p5-20261110/README.md#合入前的真实依赖验证协调方2026-11-10)）；`TestTerrainEditLedgerRealMongo` 等真实 Mongo 用例没有为格账本另写。
+- 真实依赖（Mongo / WAL / NATS）与真实多进程演练：演练配置与 (a) 步已更新（~~跨格笔刷由 B 拆给 A 与自己、两块都执行，再反向改回~~ 11-10 改为：跨格笔刷被拒绝、B 发起整份落在 A 格的笔刷转发执行再改回，§30.10）；合入前协调方已在私有真实依赖上跑通（[证据](evidence/terrain-p5-20261110/README.md#合入前的真实依赖验证协调方2026-11-10)）；`TestTerrainEditLedgerRealMongo` 等真实 Mongo 用例没有为格账本另写。
 - 客户端看见别的 Base 上的建筑（建筑副本，§27.6）。
-- 跨格占地的建筑；跨格寻路。
+- 跨格占地的建筑、跨格的笔刷（都按决定拒绝，§30.10）；跨格寻路。
 - 游戏尺度分区视野的成本（witness 列表、Ghost 数、副本订阅），T09 规模。
 - Unity 端对 `Outcome` / `terrain_pending` 的处理（C# SDK 没有改：答复是生成的协议类型）。
 - 玩家换 Base 进程之后旧进程里的 `TerrainEditor` 副本（尚未确认，[KNOWN-LIMITS](KNOWN-LIMITS.md)）；分区场景里建筑进 Base 场景主视野的接线只有编译与单元覆盖。
 - 变异未杀死三项（立即推送占位、格的在途去重、答复的 incarnation 核对），原因见证据。
+
+### 30.10 跨格笔刷直接拒绝（维护者 2026-11-10，撤回 §30.1 的拆分）
+
+维护者 2026-11-10：“跨格是指跨两个地图进程吗，如果是的话就直接拒绝”；“玩家也不能刷地形，会在地形基础上设计这个限制”。地形笔刷与建筑占地同一规则：覆盖的块归两个及以上地图进程（分区格的拥有者）时直接拒绝，不拆分转发；玩法层靠地形设计避开这种情况。证据见 [evidence/terrain-brush-single-cell-20261110](evidence/terrain-brush-single-cell-20261110/README.md)。
+
+**契约**
+
+- `terrainmap.ErrBrushCrossCell` / 业务码 `terrain_cross_cell`（100070）。`Map.RelayBrush` 校验参数与 Policy（`checkBrushParams`）之后、**预扣配额与发号之前**拒绝：不扣配额、不占序号（客户端可以把同一个 `Seq` 用在下一笔上）、不转发、什么都不写。判定口径与建筑相同：覆盖的块按 `Forwarder.OwnerOf` 数出不同的格（`ownerOfAll`），多于一个即拒绝；有块没有格写仍答 `terrain_not_owned`。
+- 覆盖块全归一个格时照旧：那个格是本进程就直接执行（不经网络），是远端就整份转发给它；结论、`terrain_pending`、逐块 `Outcome`、格账本判重、重发与重启的责任方同 §30.1～§30.2。
+- 格一侧再查一次：转发来的笔刷覆盖的块必须都归本格写（`execBrush` 改用与普通场景相同的 `checkBrush`，事务里 `applyBrush` 以笔刷覆盖的全部块为目标组），否则答 `terrain_not_owned`（格到进程的映射在途中变了，§30.8 ⑥），不再执行其中一部分。
+
+**删了什么（多格才用、单格路径上用不到）**
+
+| 删除 / 收窄 | 原来做什么 | 单格路径上是否用到 |
+| --- | --- | --- |
+| `splitByOwner`（按 sid 分组排序）→ `ownerOfAll`（只数格、取那一个 sid） | 把覆盖块拆成每格一份 | 只用到“查每块有没有格写”，保留在 `ownerOfAll` 里 |
+| `issueAndForward` 的并行转发、等齐（`sync.WaitGroup`） | 多份并行发出 | 否；改为发号后转发一次 |
+| `RelayResult.Parts []RelayPart` → `RelayResult.Part RelayPart` | 多份结论 | 只用到一份 |
+| `RelayResult.Err` 的多份汇总（Unknown 优先、按 sid 取第一个拒绝） | 部分成功的汇总码 | 否；改为直接按这一份的结论 |
+| `RelayResult.Duplicate` 的“每一份都 Duplicate” | 多份判断 | 改为这一份是否 Duplicate |
+| `RelayBrush` 按每份块的 Footprint 相加计 Unknown | 多格配额退还 | 否；Unknown 计整笔 Footprint |
+| `Map.ownedPart`（覆盖块里归本进程的那几块） | 格只执行自己的那部分 | 否；单格时就是全部覆盖块，改用 `brush.Chunks` / `checkBrush` |
+| 控制器 `relayChunks` 的多份循环；建筑控制器的 `len(Parts) == 1` 判断 | 多份逐块结论 | 只剩一份 |
+| 用例 `TestTerrainRelaySplitsABrushAcrossCells`、`TestTerrainRelayPartialRefusalKeepsTheOtherCell`、辅助 `outcomes` / `wantOutcomes` | 断言拆分与部分成功 | 改为新契约的用例（下表） |
+
+**保留了什么（单格也用）**：单格转发与本格直接执行（`Forwarder` / `terrainRelay`、线上格式 v1 不变）；Base 发号（`TerrainEditIssue`、`TerrainEditor`）；格账本 `TerrainCellEditor` 与判重；`terrain_pending` 与逐块 `Outcome`（协议字段不变）；格的确定结论缓存、在途去重、重发与 incarnation；Base 与格重启后的对账；配额的 Footprint 预扣与按结论多退。`PartRequest` / `PartAnswer` / `RelayPart` / handler `TerrainBrushPart` 的名字沿用（改名要动生成代码与线上格式的命名，没有行为收益）。`gameplay/terrain` 的 `Brush.ApplyIn` / `View.BrushChangesIn` 不再有调用方，作为通用能力保留（是否删除待确认，见下）；`Brush.Footprint` 仍用于 Base 预扣。
+
+**用例**
+
+| 用例 | 内容 |
+| --- | --- |
+| `TestTerrainRelayRefusesABrushAcrossCells`（新，修前红） | 只做 Base 的进程上跨两个格的笔刷：`ErrBrushCrossCell`，两格块版本与格账本为 0、没有消息发出；配额不变（冻结时钟，满桶才过得去的大笔刷照样过）；序号不前进（同一序号用在格内的笔刷上答新号、不是 Again，之后 `LastSeq` = 1）。玩家在格上时同样拒绝、本格那一部分不执行 |
+| `TestTerrainRelayForwardsABrushToTheCellThatWritesIt`（原拆分用例改写） | 整份落在 102 的笔刷：转发给 102、与整图逐点相同、版本 1、102 的账本记下、101 什么都没收到；玩家在 101 上：落在邻格的一条消息，落在本格的不经网络 |
+| `TestTerrainRelayRefusalWritesNothingAndRetries`（原部分拒绝用例改写） | 格拒绝（占位）：什么都没写、结论是格的原因；同一序号重发 Again、执行 |
+| `TestTerrainRelayUnknownResultsAreRetriedOnce` / `DuplicatedAndLateMessagesWriteOnce` / `ReconcilesAfterRestarts` / `ChargesTheBaseByWhatWasApplied` | 原断言不变，笔刷改为整个落在一个格里（`cellBrush`）；重复与迟到改为两个格各三笔 |
+| `TestTerrainRelayBuildingsStayInOneCell` | 末尾“跨格笔刷改到建筑占着的点：一格拒绝、另一格执行”改为“格内笔刷改到建筑占着的点：那个格拒绝” |
+| 控制器 `TestTerrainRelayAnswerCarriesTheCellsOutcome`、`TestTerrainRefusalsMapToTheirCodes` | 一份结论的五种答复与码；`ErrBrushCrossCell` → `terrain_cross_cell` |
+| 无缝演练 (a) 步 | B 上的跨格笔刷答 `terrain_cross_cell`、两块版本与摘要不变、`LastSeq` 不变；B 发起、整份落在 A 格块 (1,0)（B 的 Ghost 带里）的笔刷转发、Applied，再反向改回（记 `b_cross_cell_refused_rtt_ms` 与 `b_forward_to_a_rtt_ms`）。只编译与 vet，真实运行在合入时 |
+
+**待确认**：`Brush.ApplyIn` / `View.BrushChangesIn`（`gameplay/terrain`，本轮未发版的新增）现在没有调用方：A（推荐）保留为通用能力，代价是多两个公开入口与一条测试；B 删除，回到 P5 之前的 `Apply` / `BrushChanges`，以后若恢复拆分再加。
 
 ## 31. 客户端岸线与重建调度（T03 / T04 算法层，2026-11-10）
 

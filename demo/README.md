@@ -418,7 +418,7 @@ scene:
   原样读回，启动时对账（`ReconcileBuildings`）核对建筑与块的占地，并核对配置（配置 ID 没了或宽高变了计 `misconfigured`、保留不改）；
   核对通过的建筑在场景启动后进场景主视野。原始地形换版（D13）时块的地形改动照旧丢弃，建筑与占地保留：
   整平过地基的按原来的地基世界高度在新地形上重新整平，然后按放置规则检查，不合规的保留并计 `unfit`、记 Warn（推荐做法，待维护者确认）。
-- **范围**：普通场景与分区场景（P5：放置 / 拆除 / 改参数由玩家的 Base 转发给写占地的格；占地跨两个格答 `building_cross_cell`；
+- **范围**：普通场景与分区场景（P5：放置 / 拆除 / 改参数由玩家的 Base 转发给写占地的格；占地跨两个格答 `building_cross_cell`（笔刷跨格同样拒绝，`terrain_cross_cell`）；
   邻格 Ghost 带里的建筑经地形副本对行走判定可见；别的 Base 上的客户端还看不见建筑，见下面“跨格编辑”）。
 - **测试**：`internal/service/<game>/terrain_building_test.go`（校验、整平、判重、拆除、笔刷、绕行、并发、重启、换版、对账）；
   `building_sync_test.go`（真实 TCP 上另一个客户端在主视野里看到出现 / 改参数 / 拆除、走出主视野消失回来再出现、拆除欠着 remove 时再放，
@@ -431,19 +431,21 @@ scene:
 [方案 §30](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#30-p5-跨格编辑分区场景的建筑与游戏尺度的分区视野t082026-11-10)。
 分区场景里玩家连在自己的 Base 上，块只归包含它的格写：
 
-- **拆分与转发**：Base 校验参数、按笔刷覆盖的点数（`Brush.Footprint`）预扣配额、调权限钩子，在玩家面向客户端的账本（`TerrainEditor`）里
-  发号（handler `TerrainEditIssue`：过期 / 超前答 `terrain_seq`），再按格拆成几份（`terrainmap.Map.RelayBrush` 等），本进程托管的那一份直接执行，
-  别的经 cellworld 扩展消息（`terrain-edit`，`internal/service/<game>/terrain_relay.go`）送给那个格。格一笔 strict 事务执行自己那一份（`Map.Exec`），
+- **跨格拒绝**（维护者 2026-11-10，[方案 §30.10](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#3010-跨格笔刷直接拒绝维护者-2026-11-10撤回-301-的拆分)）：笔刷覆盖的块归两个及以上的格时答
+  `terrain_cross_cell`（100070），占地跨格答 `building_cross_cell`（100069），都在预扣配额与发号之前：什么都没写、不扣配额、不占序号。玩法层靠地形设计避开。
+- **转发**：Base 校验参数、按笔刷覆盖的点数（`Brush.Footprint`）预扣配额、调权限钩子，在玩家面向客户端的账本（`TerrainEditor`）里
+  发号（handler `TerrainEditIssue`：过期 / 超前答 `terrain_seq`），再整份交给写这些块的那个格（`terrainmap.Map.RelayBrush` 等）：本进程托管的格直接执行，
+  别的经 cellworld 扩展消息（`terrain-edit`，`internal/service/<game>/terrain_relay.go`）送过去。格一笔 strict 事务执行（`Map.Exec`），
   判重用玩家在本格的账本 `TerrainCellEditor`（kind 14，集合 `terrain_cell_editors`，按 sid 分库）。
-- **结论**：答复逐块带 `Outcome`（1 执行了、2 以前执行过、3 拒绝、4 结果未知）；各格独立提交（D5），部分格拒绝时其余照常、答第一个拒绝的码；
-  有格期限内（2s）没有结论答 `terrain_pending`（100068）——客户端用同一个 `Seq` 重发：执行过的格答 Duplicate，不会改第二次。
-- **配额**：Base 扣，按结论多退：执行了的计实际改动点数、结果未知的计它覆盖的点数、拒绝 / 重复的不计，至少 `MinEditPoints`。
+- **结论**：答复逐块带那个格的 `Outcome`（1 执行了、2 以前执行过、3 拒绝、4 结果未知），一次编辑只有一个格、没有部分成功；
+  期限内（2s）没有结论答 `terrain_pending`（100068）——客户端用同一个 `Seq` 重发：执行过的答 Duplicate，不会改第二次。
+- **配额**：Base 扣，按结论多退：执行了的计实际改动点数、结果未知的计覆盖的点数、拒绝 / 重复的不计，至少 `MinEditPoints`；跨格的拒绝不扣。
 - **建筑**：占地在一个格里的放置 / 拆除 / 改参数转发给那个格；跨格答 `building_cross_cell`（100069）；建筑数上限按格计。块上的占地随地形副本推给
   邻格，Ghost 带里的建筑行走判定看得见（启动时也按库里的记录装入）。
 - **观测**：`gm.scene.partition` 多一栏 `terrain_relay`（发出、重发、答复、超时、迟到答复；收到、在途重复、缓存答复、忙时丢弃、执行次数、坏消息）。
-- **测试**：`terrain_relay_test.go`（两个格 + 只做 Base 的进程，进程内网：拆分、部分拒绝、答复 / 请求丢失、重复与迟到、格与 Base 重启、配额、建筑、
-  Ghost 带占位、线上格式）。真实多进程：`ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh` 的 (a) 步有一笔跨格笔刷（本轮未运行）。
-- **限制**：跨格占地的建筑、别的 Base 上的客户端看见建筑、跨格寻路未做；改 `scene.partition.owners`（格换进程）要先停机，格账本不跟着搬。
+- **测试**：`terrain_relay_test.go`（两个格 + 只做 Base 的进程，进程内网：跨格拒绝、转发、格拒绝与重发、答复 / 请求丢失、重复与迟到、格与 Base 重启、配额、建筑、
+  Ghost 带占位、线上格式）。真实多进程：`ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh` 的 (a) 步有一笔被拒绝的跨格笔刷与一笔 B 转发给 A 的笔刷（本轮未运行）。
+- **限制**：跨格的笔刷与占地按决定拒绝；别的 Base 上的客户端看见建筑、跨格寻路未做；改 `scene.partition.owners`（格换进程）要先停机，格账本不跟着搬。
 - **升级**：副本线上格式 v2、跨格编辑线上格式 v1，旧进程不互通，先停旧进程再起新进程；新集合 `terrain_cell_editors`。
 
 ## 改这里的东西之后

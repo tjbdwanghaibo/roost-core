@@ -90,6 +90,7 @@ func TestTerrainRefusalsMapToTheirCodes(t *testing.T) {
 		{&terrainmap.SeqError{Seq: 3, LastSeq: 900, Verdict: terrain_editor.Stale}, apperrors.ErrTerrainSeq},
 		{&terrainmap.SeqError{Seq: 9_000_000, LastSeq: 900, Verdict: terrain_editor.Ahead}, apperrors.ErrTerrainSeq},
 		{terrainmap.ErrPending, apperrors.ErrTerrainPending},
+		{terrainmap.ErrBrushCrossCell, apperrors.ErrTerrainCrossCell},
 	} {
 		wrapped := fmt.Errorf("terrain: brush at (1, 2): %w", c.err)
 		if got := terrainError(wrapped); !errors.Is(got, c.want) || codeOf(got) == errcode.CodeInternal {
@@ -116,15 +117,18 @@ func TestTerrainSeqRefusalCarriesTheLastSeq(t *testing.T) {
 	}
 }
 
-// 分区场景的转发编辑（P5）：答复逐块带结论——执行了 / 以前执行过的格列出它答回的块与版本，拒绝 / 结果未知的格列出
-// 它那一部分的块（版本 0）；汇总码：有结果未知的答 terrain_pending（不论别的格），否则第一个拒绝的原因；格答回的
-// 没有归类的失败答 internal。
-func TestTerrainRelayAnswerCarriesEachCellsOutcome(t *testing.T) {
+// 分区场景的转发编辑（P5）：一次编辑只交给一个格（维护者 2026-11-10：跨格的笔刷在转发之前拒绝，答 terrain_cross_cell），
+// 答复逐块带那个格的结论——执行了 / 以前执行过时列出它答回的块与版本，拒绝 / 结果未知时列出编辑覆盖的块（版本 0）；
+// 业务码：结果未知答 terrain_pending，拒绝答格给的原因，格答回的没有归类的失败答 internal。
+func TestTerrainRelayAnswerCarriesTheCellsOutcome(t *testing.T) {
 	access := &playeraccess.Context{BaseCtx: context.Background(), PlayerID: 7, MsgID: msgid.MsgTerrainEdit, Seq: 1}
 	left, right := terrain.ChunkKey{X: 3}, terrain.ChunkKey{X: 4}
-	applied := terrainmap.RelayPart{SID: 101, Chunks: []terrain.ChunkKey{left}, Answer: terrainmap.PartAnswer{
-		Outcome: terrainmap.OutcomeApplied, Chunks: []terrain_chunk.ChunkVersion{{Key: left, Version: 5}}}}
-	refused := terrainmap.RelayPart{SID: 102, Chunks: []terrain.ChunkKey{right}, Answer: terrainmap.PartAnswer{
+	chunks := []terrain.ChunkKey{left, right}
+	applied := terrainmap.RelayPart{SID: 101, Chunks: chunks, Answer: terrainmap.PartAnswer{
+		Outcome: terrainmap.OutcomeApplied, Chunks: []terrain_chunk.ChunkVersion{{Key: left, Version: 5}, {Key: right, Version: 2}}}}
+	duplicate := applied
+	duplicate.Answer.Outcome = terrainmap.OutcomeDuplicate
+	refused := terrainmap.RelayPart{SID: 101, Chunks: chunks, Answer: terrainmap.PartAnswer{
 		Outcome: terrainmap.OutcomeRefused, Refusal: terrainmap.RefusalErr(terrainmap.RefusalCode(terrainmap.ErrOccupied), "point 9")}}
 	unknown := refused
 	unknown.Answer = terrainmap.PartAnswer{Outcome: terrainmap.OutcomeUnknown, Refusal: errors.New("no answer")}
@@ -132,22 +136,23 @@ func TestTerrainRelayAnswerCarriesEachCellsOutcome(t *testing.T) {
 	failed.Answer = terrainmap.PartAnswer{Outcome: terrainmap.OutcomeRefused, Refusal: terrainmap.RefusalErr(0, "disk")}
 	for _, c := range []struct {
 		name   string
-		parts  []terrainmap.RelayPart
+		part   terrainmap.RelayPart
 		code   int32
 		chunks []pb.TerrainChunkVersion
 	}{
-		{"both done", []terrainmap.RelayPart{applied}, 0, []pb.TerrainChunkVersion{{ChunkX: 3, Version: 5, Outcome: 1}}},
-		{"one refused", []terrainmap.RelayPart{applied, refused}, codeOf(apperrors.ErrTerrainOccupied),
-			[]pb.TerrainChunkVersion{{ChunkX: 3, Version: 5, Outcome: 1}, {ChunkX: 4, Outcome: 3}}},
-		{"one unknown", []terrainmap.RelayPart{applied, unknown}, codeOf(apperrors.ErrTerrainPending),
-			[]pb.TerrainChunkVersion{{ChunkX: 3, Version: 5, Outcome: 1}, {ChunkX: 4, Outcome: 4}}},
-		{"an unclassified failure", []terrainmap.RelayPart{applied, failed}, errcode.CodeInternal,
-			[]pb.TerrainChunkVersion{{ChunkX: 3, Version: 5, Outcome: 1}, {ChunkX: 4, Outcome: 3}}},
+		{"applied", applied, 0, []pb.TerrainChunkVersion{{ChunkX: 3, Version: 5, Outcome: 1}, {ChunkX: 4, Version: 2, Outcome: 1}}},
+		{"duplicate", duplicate, 0, []pb.TerrainChunkVersion{{ChunkX: 3, Version: 5, Outcome: 2}, {ChunkX: 4, Version: 2, Outcome: 2}}},
+		{"refused", refused, codeOf(apperrors.ErrTerrainOccupied), []pb.TerrainChunkVersion{{ChunkX: 3, Outcome: 3}, {ChunkX: 4, Outcome: 3}}},
+		{"unknown", unknown, codeOf(apperrors.ErrTerrainPending), []pb.TerrainChunkVersion{{ChunkX: 3, Outcome: 4}, {ChunkX: 4, Outcome: 4}}},
+		{"an unclassified failure", failed, errcode.CodeInternal, []pb.TerrainChunkVersion{{ChunkX: 3, Outcome: 3}, {ChunkX: 4, Outcome: 3}}},
 	} {
-		result := terrainmap.RelayResult{Parts: c.parts, LastSeq: 9}
+		result := terrainmap.RelayResult{Part: c.part, LastSeq: 9}
 		code, _ := relayCode(access, 9, result, terrainError)
 		if code != c.code || !slices.Equal(relayChunks(result), c.chunks) {
 			t.Errorf("%s: code %d chunks %+v, want %d %+v", c.name, code, relayChunks(result), c.code, c.chunks)
+		}
+		if result.Duplicate() != (c.part.Answer.Outcome == terrainmap.OutcomeDuplicate) {
+			t.Errorf("%s: duplicate %v", c.name, result.Duplicate())
 		}
 	}
 }

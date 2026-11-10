@@ -25,7 +25,7 @@ package terrainmap
 // 执行一次，重放答 Duplicate，窗口外答 ErrStale。账本还记玩家现有的建筑数，按 Policy.MaxBuildings 限制。
 //
 // 分区场景（P5，方案 §30）：玩家的 Base 校验、扣配额、发号之后把放置 / 拆除 / 改参数转发给写占地的格（relay.go），格在
-// 自己的事务里执行（账本是玩家在本格的 TerrainCellEditor）；占地跨两个格的放置首版拒绝（ErrBuildCrossCell）。块上的
+// 自己的事务里执行（账本是玩家在本格的 TerrainCellEditor）；占地跨两个格的放置拒绝（ErrBuildCrossCell，笔刷同样拒绝）。块上的
 // 占地随地形副本推给邻格（ReplicaLots / ApplyReplicaLots），邻格的行走判定看得见 Ghost 带里的建筑。
 
 import (

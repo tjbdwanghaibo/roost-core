@@ -17,8 +17,9 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 )
 
-// 分区场景的跨格编辑的进程间部分（可编辑地形 P5，方案 §30）：玩家的 Base 把一次编辑的每个格那一份（terrainmap.PartRequest）
-// 发给写这些块的格进程，格执行完答回结论（terrainmap.PartAnswer）。拆分、配额、发号与汇总在 game/terrainmap/relay.go；
+// 分区场景的转发编辑的进程间部分（可编辑地形 P5，方案 §30）：玩家的 Base 把一次编辑（terrainmap.PartRequest）发给写这些块
+// 的那个格进程（跨格的编辑在 Base 上就拒绝了），格执行完答回结论（terrainmap.PartAnswer）。配额、发号与结论在
+// game/terrainmap/relay.go；
 // 这里只是“送到、等回、去重”。
 //
 // 传输是本进程 cellworld Node 的扩展消息（命名空间 terrainEditSpace），至多一次，可能丢失、重复、乱序。协议：

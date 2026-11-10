@@ -1,9 +1,11 @@
 # 当前已知限制与验证边界
 
-## 2026-11-10：P5 跨格编辑与分区场景建筑的剩余项（代码已实现，分支 `feat/terrain-p5-crosscell`，验收后置）
+## 2026-11-10：P5 转发编辑与分区场景建筑的剩余项（代码已在 main；跨格笔刷 11-10 改为拒绝，验收后置）
 
 [地形方案 §30](FEATURE-2026-11-08-editable-terrain.md#30-p5-跨格编辑分区场景的建筑与游戏尺度的分区视野t082026-11-10)、[证据](evidence/terrain-p5-20261110/README.md)。
 
+- **跨格笔刷与跨格占地直接拒绝（维护者 2026-11-10，[方案 §30.10](FEATURE-2026-11-08-editable-terrain.md#3010-跨格笔刷直接拒绝维护者-2026-11-10撤回-301-的拆分)）**：覆盖块归两个及以上地图进程的笔刷答 `terrain_cross_cell`（100070）、占地答 `building_cross_cell`（100069），都在预扣配额与发号之前，不做拆分、跨进程事务或部分成功。代价：格边上半径以内（笔刷至多 16m）不能一次刷过分界线，玩法层靠地形设计避开；客户端要能处理这个码（挪进一个格里再发，可用同一个 `Seq`）。真实多进程演练的 (a) 步已按此改写，未运行。`gameplay/terrain` 的 `Brush.ApplyIn` / `View.BrushChangesIn` 因此没有调用方，是否删除待确认。
+- **转发编辑用例在重负载下的一次 `-race` 失败（尚未确认）**：`TestTerrainRelayForwardsABrushToTheCellThatWritesIt` 在与仓库其余测试并发运行时失败一次，原文没有保存，之后单独、并发与 `-count=40` 的压力运行都没有复现；疑似进程内网转发超过用例配的 300ms 期限（结论 Unknown）。见[证据](evidence/terrain-brush-single-cell-20261110/README.md#尚未确认一次--race-失败没有复现)。
 - **玩家换 Base 进程之后旧进程里的 `TerrainEditor`（尚未确认）**：分区场景的“发号”账本是全局库里的普通实体，只由玩家当前的 Base 写；demo 没有在玩家离开时卸载它的机制（`EntityCategoryPlayerScoped` 只决定取锁次序）。玩家从 Base 1 换到 Base 2 编辑、再回到 Base 1 时，Base 1 内存里若还是旧副本，会按旧的 `LastSeq` 判号并在下一次提交时把库里较新的账本写回旧值（`LastSeq` 回退）。各格的账本是持久的、不受影响，所以块不会被写两次；受影响的是答给客户端的 `LastSeq` 与“过期 / 超前”判断。普通场景单进程时没有这个问题。没有构造用例；需要确认 demo 的玩家实体在换进程时的统一处理（App 级的单写者保证）后再定。
 - **分区场景里建筑进本进程场景主视野的接线只有编译与单元覆盖**：`EnableBuildings` 现在也在分区场景调用，`attachBuildings` / `loadStanding` 随之在分区的 Base 场景上执行；连在别的 Base 上的玩家看不见建筑（需要建筑副本，§27.6）。真实多进程演练没有放建筑的步骤。
 - **游戏尺度分区视野（`view_radius` 68m、`ghost_band` 70m）的成本没有实测**：witness 列表、Ghost 数、副本订阅的块数都随之增加（T09）。

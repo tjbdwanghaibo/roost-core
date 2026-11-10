@@ -128,7 +128,7 @@ type Editor interface {
 }
 
 // seqLedger 是事务里判重的编辑账本：不分区时是玩家的 TerrainEditor（判重与面向客户端的序号是同一份），分区场景的格上是
-// 玩家在本格的 TerrainCellEditor（P5：只判本格那一部分，不判超前）。只在账本实体的 Nest 锁内调用。
+// 玩家在本格的 TerrainCellEditor（P5：判 Base 转发来的编辑，不判超前）。只在账本实体的 Nest 锁内调用。
 type seqLedger interface {
 	Check(seq int64) terrain_editor.Verdict
 	Record(seq int64)
@@ -245,7 +245,7 @@ type Map struct {
 	// reconciled 是启动对账核对通过的站着的建筑（ReconcileBuildings 写一次，之后只读）：建筑同步启动时按它登记 subject。
 	reconciled []BuildingCommit
 
-	// cellEditors 在 EnableCell 之后非 nil（分区场景里托管格的进程，P5）：本格执行跨格编辑的一部分时用的账本。Install 之前
+	// cellEditors 在 EnableCell 之后非 nil（分区场景里托管格的进程，P5）：本格执行 Base 转发来的编辑时用的账本。Install 之前
 	// 设定，之后只读。
 	cellEditors CellEditors
 	// lotsCommitted 是块上的占地（Lots）提交并发布之后的通知（分区场景：把占位推给邻格的 Ghost 带，P5）；nil 时不通知。
@@ -1014,23 +1014,11 @@ func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_
 	return m.applyBrush(targets, editor.LedgerComp(), seq, brush)
 }
 
-// ApplyBrushPart 是 handler TerrainBrushPart 的业务（分区场景的格执行跨格编辑的本格部分，P5）：同 ApplyBrush，账本是玩家在
-// 本格的 TerrainCellEditor，目标组是笔刷覆盖到的块里归本进程写的那几块（Map.ownedPart）。
+// ApplyBrushPart 是 handler TerrainBrushPart 的业务（分区场景的格执行 Base 转发来的笔刷，P5；名字沿用拆分设计，维护者
+// 2026-11-10 撤回跨格笔刷之后格执行整笔）：同 ApplyBrush，账本是玩家在本格的 TerrainCellEditor，目标组同样是笔刷覆盖到的
+// 全部块、都归本进程写。
 func (m *Map) ApplyBrushPart(targets []terrain_chunk.ISurfaceEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
 	return m.applyBrush(targets, editor.LedgerComp(), seq, brush)
-}
-
-// ownedPart 是笔刷覆盖到的块里归本进程写的那几块（按 (Y, X) 升序）。不分区时覆盖到的块必须都归本进程（Brush 事前已查），
-// 就是全部；分区场景的格只执行这一部分。
-func (m *Map) ownedPart(brush terrain.Brush) []terrain.ChunkKey {
-	covered := brush.Chunks(m.meta)
-	part := covered[:0:0]
-	for _, key := range covered {
-		if m.Owns(key) {
-			part = append(part, key)
-		}
-	}
-	return part
 }
 
 // applyBrush 是 ApplyBrush / ApplyBrushPart 的共同部分（步骤见 ApplyBrush）。
@@ -1059,9 +1047,9 @@ func (m *Map) applyBrush(targets []terrain_chunk.ISurfaceEntity, ledger seqLedge
 	case terrain_editor.Stale, terrain_editor.Ahead:
 		return terrain_chunk.BrushResult{}, &SeqError{PlayerID: ledger.PlayerID(), Seq: seq, LastSeq: ledger.LastSeq(), Verdict: verdict}
 	}
-	want := m.ownedPart(brush)
+	want := brush.Chunks(m.meta)
 	if len(want) == 0 || len(want) != len(surfaces) {
-		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: the brush covers %d chunks written here, the transaction holds %d", ErrBrush, len(want), len(surfaces))
+		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: the brush covers %d chunks, the transaction holds %d", ErrBrush, len(want), len(surfaces))
 	}
 	before := make(map[terrain.ChunkKey]terrain.Chunk, len(surfaces))
 	fresh := make(map[terrain.ChunkKey]bool, len(surfaces))
@@ -1086,7 +1074,7 @@ func (m *Map) applyBrush(targets []terrain_chunk.ISurfaceEntity, ledger seqLedge
 		}
 		before[key], fresh[key] = data, !fromRecord
 	}
-	changes, err := brush.ApplyIn(m.meta, m.policy.Limits, before, want)
+	changes, err := brush.Apply(m.meta, m.policy.Limits, before)
 	if err != nil {
 		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: %w", ErrBrush, err)
 	}

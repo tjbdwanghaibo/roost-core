@@ -3,7 +3,8 @@
 package protocoldef
 
 // 可编辑地形的玩家编辑（可编辑地形方案 P2）：一次笔刷。普通场景里玩家所在进程写整张图；分区场景（P5）里玩家所在的
-// Base 把笔刷拆给写这些块的格进程，各格独立提交（不是原子的，D5），答复逐块带结论（TerrainChunkVersion.Outcome）。
+// Base 把笔刷整份转发给写这些块的格进程，那个格一笔事务，答复逐块带结论（TerrainChunkVersion.Outcome）。覆盖的块归两个
+// 格（地图进程）的笔刷直接拒绝（terrain_cross_cell，维护者 2026-11-10），不拆分。
 // 改动不从答复里来，而是从同一条同步流：改过的块是 terrain 命名空间的同步对象（TerrainChunkDao 的 BaseRevision /
 // Version / Heights / Materials），客户端用生成的 ApplySyncTerrainChunkDao 应用、按 Version 重建 mesh。客户端可以用
 // 同一笔刷算法（gameplay/terrain 的 Brush，金样 client/spec/terrain-brush.json）先在本地预测。
@@ -47,10 +48,10 @@ type TerrainChunkVersion struct {
 // terrain_unavailable（这块暂时不能改）, terrain_rate（改动点数配额用完：每人每秒 270 点）, terrain_denied（领地 / 权限）,
 // terrain_occupied（有建筑）, terrain_seq（Seq 不在服务端的窗口里：Seq ≤ LastSeq 表示太旧——已无法确认当时是否生效，
 // 这次没做，也不要换新号重发同一笔；Seq > LastSeq 表示跳得太远——这次没做，从 LastSeq + 1 续号再发），
-// terrain_pending（分区场景：有格期限内没有结论，可能已生效；用同一个 Seq 重发）。
+// terrain_pending（分区场景：格期限内没有结论，可能已生效；用同一个 Seq 重发）,
+// terrain_cross_cell（分区场景：笔刷覆盖的块归两个格；什么都没写、不扣配额、不占序号，同一个 Seq 可以用在下一笔上）。
 //
-// 分区场景（P5）的部分成功：Code 是第一个拒绝的格的原因，Chunks 里 Outcome 为 1 / 2 的块已经生效（不回滚，D5）。
-// 用同一个 Seq 重发是安全的：已生效的块答 2，拒绝过的块再判一次。
+// 分区场景（P5）里一次笔刷只由一个格执行，没有部分成功：Chunks 的 Outcome 全部相同。
 type TerrainEditResponse struct {
 	Code      int32                 `pb:"1"`
 	Reason    string                `pb:"2"`

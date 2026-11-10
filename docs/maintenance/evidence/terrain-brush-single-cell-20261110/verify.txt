@@ -1,0 +1,26 @@
+# 验证（分支 feat/terrain-brush-single-cell，基于 main 49de7c98；origin/main 提交前未前进；全部 GOWORK=off、离线）
+
+## 仓库
+gofmt -l gameplay/terrain                                  -> 空
+go build ./...                                             -> ok
+go vet ./...                                               -> ok
+go test -count=1 .                                         -> ok（证据文件纳入跟踪之后；之前红在文档链接门禁：证据 README 尚未写）
+go test -count=1 ./gameplay/...                            -> 全部 ok（gameplay/terrain 只改注释）
+go test -count=1 -timeout 60m ./codegen/internal/roost      -> ok  336.8s
+python3 scripts/check-doc-anchors.py CHANGELOG.md client/README.md demo/README.md docs/maintenance gameplay/terrain/README.md -> 零断链
+sh client/dotnet/Roost.Client.Terrain.Tests/Fixtures/regen.sh（核对模式） -> terrain fixture: up to date（DAO 定义未改，-update 不需要）
+
+## 生成的 game-demo（roost project new -template game-demo --skip-deps，replace 指向本检出）
+gofmt -l .                                                 -> 空
+go build ./... && go vet ./...                             -> ok
+go test -count=1 ./...                                     -> 36 个包全部 ok
+go test -race -count=1 ./internal/service/game             -> 第一次：FAIL TestTerrainRelayForwardsABrushToTheCellThatWritesIt（与 go vet ./...、gameplay、codegen/internal/roost 同时运行；输出过滤只留了 FAIL 行，失败原文没有留下）
+                                                              之后单独 3 次 ok（84.5～89.0s）；3 份并发 3 次 ok（89.6s）；
+                                                              -race -count=40 -run TestTerrainRelay 四份并发 ok（每份 72s）
+                                                              -> 原因尚未确认（见 README 与 KNOWN-LIMITS）
+roost id check                                             -> IDs are valid
+roost generate --check                                     -> generated files are up to date
+
+## 演练程序（scripts/testdata/seamless/drill.go.txt + terrain.go.txt，按脚本的方式替换模块名后在生成工程里）
+go build / go vet                                          -> ok；terrain.go gofmt 干净（drill.go 的 gofmt 差异是原有的，本轮未改）
+真实多进程演练                                             -> 未运行（合入时由维护者跑）
