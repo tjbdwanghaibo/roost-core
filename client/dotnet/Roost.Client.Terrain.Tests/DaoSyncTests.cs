@@ -39,7 +39,8 @@ internal static partial class Program
             string name = step.GetProperty("name").GetString()!;
             var patch = SyncTerrainChunkDao.Parser.ParseFrom(Convert.FromHexString(step.GetProperty("payload").GetString()!));
             var want = SyncTerrainChunkDao.Parser.ParseFrom(Convert.FromHexString(step.GetProperty("want").GetString()!));
-            Check(patch.EntityId == entityId && patch.SyncFormat == 3, name + ": identity");
+            // 全量带实体 ID；增量补丁不带（0），Apply 沿用基线的（MarshalSyncDelta / MarshalSyncChanges，578fa31f）。
+            Check(patch.EntityId == (previous == null ? entityId : 0) && patch.SyncFormat == 3, name + ": identity");
             // 补丁形状与 Go 记录一致：确认 list delta（按下标的高度 / 材质补丁）真的经过了 C# 的生成 Apply。
             Check((patch.Heights != null) == step.GetProperty("heights_sent").GetBoolean() &&
                   (patch.Heights?.Delta ?? false) == step.GetProperty("heights_delta").GetBoolean(), name + ": heights patch shape");
@@ -51,7 +52,7 @@ internal static partial class Program
                 Check(patch.Materials.Value.Count == 0 && patch.Materials.Updates.Count > 0 && patch.Materials.Length == 4096, name + ": sparse materials");
             var before = previous?.Clone();
             var next = patch.Apply(previous);
-            Check(next.Equals(want), name + ": C# Apply equals the Go DAO");
+            Check(next.Equals(want) && next.EntityId == entityId, name + ": C# Apply equals the Go DAO");
             Check(previous == null || previous.Equals(before), name + ": baseline not mutated");
             Check(next.Heights.Value.Count == 4096 && next.Materials.Value.Count == 4096, name + ": full chunk after apply");
 
