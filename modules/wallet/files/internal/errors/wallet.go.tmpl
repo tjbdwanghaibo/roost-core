@@ -7,6 +7,5 @@ var (
 	ErrWalletShort      = errcode.Define({{ID:errcode:wallet_short}}, "wallet_short", "not enough coins")
 	ErrWalletInvalid    = errcode.Define({{ID:errcode:wallet_invalid}}, "wallet_invalid", "empty key or zero amount")
 	ErrWalletConflict   = errcode.Define({{ID:errcode:wallet_conflict}}, "wallet_conflict", "the key was used with another amount")
-	ErrWalletLedgerFull = errcode.Define({{ID:errcode:wallet_ledger_full}}, "wallet_ledger_full", "the receipt ledger is full")
 	ErrWalletOverflow   = errcode.Define({{ID:errcode:wallet_overflow}}, "wallet_overflow", "balance overflow")
 )

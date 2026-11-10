@@ -5,13 +5,19 @@ type WalletState struct {
 	Coins int64 `store:"1"`
 }
 
-// WalletLedger 记录每个业务键的结果，重复请求返回第一次的结果。
+// WalletLedger 是带业务键的加减的去重窗口：最近若干次的结果，重复请求返回第一次的结果。
+// 它不是永久账本：超出窗口的旧回执按先后顺序淘汰（见 WalletComponent.Apply）。
 type WalletLedger struct {
+	// Receipts 是业务键 -> 那一次的结果。
 	Receipts map[string]*WalletReceipt `store:"1"`
+	// NextSeq 是下一条回执的序号；只增不减，用来找最旧的回执。
+	NextSeq int64 `store:"2"`
 }
 
-// WalletReceipt 是一次加减的结果。
+// WalletReceipt 是一次带业务键的加减的结果。
 type WalletReceipt struct {
 	Delta   int64 `store:"1"`
 	Balance int64 `store:"2"`
+	// Seq 是这条回执写入时的序号，越小越旧。
+	Seq int64 `store:"3"`
 }

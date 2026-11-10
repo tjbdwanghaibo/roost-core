@@ -7,6 +7,8 @@ description: 用 roost-core 按玩法生成可运行的最小 demo 工程（正�
 
 ## 0. 先读这几条
 
+- **任务是“按一段需求定制服务逻辑”或“在已有工程上加功能”时，直接读 [references/compose.md](references/compose.md)**，本文其余部分是按玩法出 demo 的流程与版本细节，不必读完；需要查某项能力时看[能力清单](../../framework/CAPABILITIES.md)。
+
 - 本 skill 随 roost-core 版本发布，权威源在 `docs/agent-skills/roost-genre/`，提供流程、限制摘要和指针。**权威内容在 roost-core 仓库**：各篇 `docs/framework/<GENRE>-INTEGRATION.md`、`scripts/test-<genre>-generated.sh`、`scripts/testdata/<genre>/`、`docs/maintenance/KNOWN-LIMITS.md`。下文链接都是**相对 roost-core 根目录**的路径；读手册时以本机检出或 module cache 里对应版本的 `docs/` 为准，不以本文转述为准。
 - **`game` 模板只出框架骨架，各类型玩法来自夹具或业务代码**。已有 `game-demo` 是内置的完整参考应用；不要虚构 `project new -template slg` 一类不存在的模板。现成的业务单元另有业务模块（`roost module add`，目前只有 wallet 与 checkin，见 [references/compose.md](references/compose.md)）；13 类玩法还不是模块，不能用它安装。
 - 夹具里的数值（金币、时长、上限）都是样例；玩法规则缺少默认实现不算框架缺陷（KNOWN-LIMITS“游戏接入验收”首段）。

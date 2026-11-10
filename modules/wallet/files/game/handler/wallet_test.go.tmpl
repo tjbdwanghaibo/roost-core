@@ -196,6 +196,30 @@ func TestWalletRejectedCommitRollsBackCoinsAndReceipt(t *testing.T) {
 	}
 }
 
+// 去重窗口只留最近 WalletReceiptWindow 条回执：再多的请求照常成功，最旧的回执被淘汰。
+// 修前：回执满了之后每一次带业务键的加减都被拒绝，钱包从此不能用。
+func TestWalletOldReceiptsLeaveTheWindow(t *testing.T) {
+	f := newWalletFixture(t)
+	const extra = 5
+	for i := 0; i < playerentity.WalletReceiptWindow+extra; i++ {
+		if got := f.grant(t, fmt.Sprintf("g%d", i), 1); got != int64(i+1) {
+			t.Fatalf("grant %d: balance = %d", i, got)
+		}
+	}
+	coins, receipts := f.snapshot(t)
+	if coins != playerentity.WalletReceiptWindow+extra || receipts != playerentity.WalletReceiptWindow {
+		t.Fatalf("coins=%d receipts=%d, want %d coins and a full window of %d", coins, receipts, playerentity.WalletReceiptWindow+extra, playerentity.WalletReceiptWindow)
+	}
+	// 窗口内的键仍然去重：最后一次发放重发，余额不变。
+	if got := f.grant(t, fmt.Sprintf("g%d", playerentity.WalletReceiptWindow+extra-1), 1); got != coins {
+		t.Fatalf("a key inside the window applied again: balance = %d, want %d", got, coins)
+	}
+	// 被淘汰的键不再去重：这是窗口的边界，长期“只发一次”由调用方自己的状态保证。
+	if got := f.grant(t, "g0", 1); got != coins+1 {
+		t.Fatalf("a key that left the window: balance = %d, want %d", got, coins+1)
+	}
+}
+
 // Wallet 下发给客户端，回执账本只落库。只断言货币模块自己的两个字段：
 // 同一个 DAO 上还有别的模块的字段，它们同不同步与本模块无关。
 func TestWalletOnlyTheVisibleStateIsSynced(t *testing.T) {

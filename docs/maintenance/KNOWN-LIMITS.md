@@ -517,6 +517,9 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **模块绑定具体的实体名与工程形状**：两个模块都挂在名为 `Player` 的实体上，按 `-template game` 的目录约定写文件（`game/entities/player/`、`game/handler/`、`game/controllers/<module>/`）。实体叫别的名字的工程装不了。
 - **没有运行期接线点**：模块不能声明 Init / Shutdown、后台循环或向 Registry 发布能力；现有两个模块不需要（组件挂在实体上，controller 用自己的 `FromRegistry`）。需要这些的模块（匹配清扫、effect 消费者）出现时再加。
 - **没有定时器类型分配、Robot 步骤**：模块不能带实体定时器类型，也不带压测步骤；两者留给方案第 3 期。
+- **安装不打开客户端同步**：模块把状态字段标成 `sync`，但不改 `access.player`。要让客户端收到，需另外 `roost add transport tcp`、在 `roost.yaml` 加 `access.player.self_sync: true`、`roost project sync`（skill 的[按需求组合 §4A](../agent-skills/roost-genre/references/compose.md#4a-让客户端看到状态)）；`roost module verify` 不检查这一项。真实客户端连上还要实现 `auth.go` 并 `roost config enable player-tcp`。
+- **wallet 的去重窗口不是永久账本**：`Apply(key, delta)` 只在最近 128 次带业务键的加减内去重，更早的键被淘汰后再用会重新执行。长期“只发一次”由调用方在自己的状态里记事实并调 `Add`（checkin 这样做）。首版曾是“回执满了拒绝、不淘汰”，连续签到到第 129 天起签到与消费全部被拒，由只凭 skill 的实测发现并修掉（回归 `TestCheckinKeepsPayingPastTheWalletReceiptWindow`、`TestWalletOldReceiptsLeaveTheWindow`）。
+- **惰性清零对客户端可见**：签到进度（以及照它写的每日功能）在当天第一次写入时才更新；跨天后没有新写入时，客户端经自身视图看到的仍是上一次的记录，要自己按业务日字段比对。协议里没有带服务器当前的业务日。
 - **验收只到 Nest 场景**：`roost module verify` 的场景用替身提交器，不连 Mongo / NATS / Redis，不经过真实 TCP 与客户端。协议端点由生成器的既有用例覆盖，模块自己的端点没有网络用例。
 - **前置骨架不回退**：安装会先执行缺失的 `roost add dao` / `roost add access player`；之后模块安装失败时这两步的结果保留（它们是完整的工程状态）。
 - **嵌套字段的 `persist,nosync` 不生效（尚未确认是缺陷还是既定形状）**：在嵌套类型的字段上写 `dao:"persist,nosync"`，生成器接受，但这个字段照样出现在同步补丁的 PB 里（2026-11-10 在临时生成工程上实测）。`nopersist,nosync` 的嵌套字段另有既有用例（`codegen/internal/dao/testdata/remoteviews`），两者的语义没有逐项核对。现行规则：同步与否按 DAO 顶层字段决定，要让一部分状态不同步就放进另一个顶层字段的嵌套类型里。下一步：读 `codegen/internal/dao/sync_proto.go` 与 `template_nested.go` 里嵌套字段对 `Tag.Sync` / `Tag.Persist` 的处理，确认是该拒绝还是该生效。

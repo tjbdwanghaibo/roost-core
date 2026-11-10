@@ -223,8 +223,8 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
-| 货币 wallet | 余额、按业务键幂等的加减（重复请求返回第一次的结果）、客户端消费协议；服务端发放走 handler | `roost module add wallet`；别的业务在自己的组件里调 `WalletComp().Apply(key, delta)` | 现成模块。单一货币；回执账本有上限（满了拒绝新键，不淘汰旧回执） | [modules](../../modules/README.md) |
-| 每日签到 checkin | 按业务时间的 UTC 日切分，连续天数加成，奖励经货币模块在同一笔事务里发放 | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。日界固定为 UTC；奖励规则是样例，在组件里改 | 同上 |
+| 货币 wallet | 余额；两个入口：`Add`（调用方自己记着“做过没有”的发放与扣除，不留回执）、`Apply`（带业务键，同一个键在去重窗口内只生效一次）；客户端消费协议；服务端发放 handler | `roost module add wallet`；别的业务在自己的组件里调 `WalletComp().Add(delta)` 或 `WalletComp().Apply(key, delta)` | 现成模块。单一货币；去重窗口只留最近 128 次带业务键的加减，是短期防重发不是永久账本，周期性发放用 `Add` | [modules](../../modules/README.md) |
+| 每日签到 checkin | 按业务日（业务时区与每日重置时刻）切分，连续天数加成，奖励经货币模块在同一笔事务里发放 | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。奖励规则是样例，在组件里改；跨天后没有新写入时客户端看到的仍是上一次的记录，按 `LastDay` 比对 | 同上 |
 
 ### 13 类玩法纵切
 

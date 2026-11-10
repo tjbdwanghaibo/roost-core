@@ -86,8 +86,8 @@ state:                              # 追加到该实体主 DAO 末尾的字段
   - {field: WalletLedger, type: WalletLedger, store: wallet_ledger, dao: "persist"}
 component: Wallet                   # 挂在 entity 上的组件；组件号安装时分配
 protocols: [WalletSpend]            # 模板里 {{ID:protocol:<name>}} 的名字；号安装时分配
-errcodes: [wallet_short, wallet_invalid, wallet_conflict, wallet_ledger_full, wallet_overflow]
-verify: {packages: [./game/handler], run: '^TestWallet', pass: 7}
+errcodes: [wallet_short, wallet_invalid, wallet_conflict, wallet_overflow]
+verify: {packages: [./game/handler], run: '^TestWallet', pass: 8}
 ```
 
 写入的文件不列在清单里，由模块的 `files/` 目录读出。这是第 2 期落地的格式（`modules/wallet/module.yaml`）；模块源码在仓库 `modules/`，与 demo 一样嵌入 CLI。
@@ -540,7 +540,7 @@ python3 scripts/check-doc-anchors.py                           # 改了文档
 | 11.9 两个验证模块 wallet、chat | wallet 按计划；**chat 换成 checkin**（每日签到，依赖 wallet） | chat 托管服务的 collaborators 在新工程里是拒绝桩，模块要覆盖一个已存在的业务文件才能用；checkin 更能验证依赖顺序、两个模块共用一个 DAO、同一笔事务里跨模块调用、业务时间 |
 | 11.10 十个模块结构体 | 按计划。全量 3536 字节、增量 43 字节；持久补丁 4 条路径 67 字节（本机一次运行，只说明量级） | — |
 | 11.11 文档 | 命令参考、项目生成器、guide/12、`modules/README.md`、CHANGELOG、KNOWN-LIMITS；另加[能力清单](../framework/CAPABILITIES.md)（维护者 2026-11-10：“是不是把 core 的能力都记录下”）与 skill 的“按需求组合”流程。AGENTS 加了模块的指引，玩法的口径仍在第 4 期改 | — |
-| 11.12 验收 | `scripts/test-modules-generated.sh`（进 pretag）：全新工程自定义 module 名、依赖安装、重复安装无变化、wallet 7 + checkin 5、增量安装。“已手工加过别的组件和字段的工程上安装”“落点被占用时拒绝”“生成失败时回滚”在 Go 用例里（`TestModulesInstallOntoAProjectWithBusinessCodeAndRollBackOnFailure`）。`project doctor` 没有新增检查项 | 没有接线点，就没有 `modules:wiring` 可查 |
+| 11.12 验收 | `scripts/test-modules-generated.sh`（进 pretag）：全新工程自定义 module 名、依赖安装、重复安装无变化、wallet 8 + checkin 6、增量安装。“已手工加过别的组件和字段的工程上安装”“落点被占用时拒绝”“生成失败时回滚”在 Go 用例里（`TestModulesInstallOntoAProjectWithBusinessCodeAndRollBackOnFailure`）。`project doctor` 没有新增检查项 | 没有接线点，就没有 `modules:wiring` 可查 |
 
 ### 17.3 组合时暴露的一条规则
 
@@ -549,9 +549,32 @@ python3 scripts/check-doc-anchors.py                           # 改了文档
 ### 17.4 验证
 
 ```sh
-GOWORK=off go test -count=1 -timeout 30m ./codegen/...     # 全部通过
+GOWORK=off go test -count=1 -timeout 30m ./codegen/...     # 模块、DAO 生成器与其余用例通过；见下面的一条环境性失败
 GOWORK=off go test -count=1 .                               # 仓库级门禁通过
-bash scripts/test-modules-generated.sh                      # modules: ok
+bash scripts/test-modules-generated.sh                      # modules: ok（wallet=8、checkin=6）
 ```
 
 平台：macOS。模块场景用替身提交器，没有连真实 Mongo / NATS / Redis，也没有经过真实 TCP。
+
+`./codegen/...` 在 v1.43.0 发版后的那次全量运行里，`codegen/internal/roost` 有 5 条用例失败（`TestEntityOwnerScopesHandlersLifecycleAndDoctor` 等，都是会联网解析 `roost-core@latest` 的生成工程用例），报错是校验库查不到刚发布的版本（`verifying module … v1.43.0 … 404 Not Found … temporarily unavailable`）。单独重跑时 4 条通过、1 条仍是同一个报错。它们不经过本轮改动的代码，发版前同一棵树上的全量运行全部通过；校验库收录新版本后需要再跑一遍确认，本轮没有等。
+
+### 17.5 只凭 skill 的实测（2026-11-10）
+
+为了回答“做完之后能不能凭一段提示词用 core 定制服务逻辑”，让一个没有本轮上下文的 agent 只读 `docs/agent-skills/roost-genre/SKILL.md` 起步，按一段需求做工程：玩家金币、每日签到、每日任务（每天最多记 3 次进度，记满领 50 金币，一天一次，跨天清零），客户端要能看到三者。
+
+结果：约 10 分钟做完，没有读 roost-core 的源码。装了 wallet 与 checkin，手写了每日任务（状态、组件、两条协议、两个 handler、端点、11 条场景），`roost module verify` 与手写场景全部通过，doctor 只剩四项托管服务 collaborators。它自己做了 4 个变异确认断言有效。
+
+暴露并已修的问题：
+
+| 问题 | 处理 |
+| --- | --- |
+| **模块缺陷**：wallet 的回执账本满了就拒绝、不淘汰；checkin 每天占一条，手写的每日任务照文档也每天占一条，第 65 天起（只装 checkin 是第 129 天）签到、领奖、消费全部被拒 | wallet 改成两个入口：`Add`（调用方自己判重，不留回执）与 `Apply`（带业务键，最近 128 次的去重窗口，最旧的淘汰）；checkin 改用 `Add`。修前红：`day 129: wallet_ledger_full` |
+| 文档没写“客户端怎么看到”：模块安装不打开自身视图，`module verify` 也不报 | compose.md 新增第 4A 步（`add transport tcp`、`self_sync: true`、`project sync`），KNOWN-LIMITS 登记；PLAYER-ACCESS §7 补一句 `transports` 由哪条命令写入 |
+| 日界两种说法：模块用 `毫秒 / 86400000`（固定 UTC），框架的约定是业务日 | checkin 改用 `clock.BusinessDay`；compose.md 写明日界与惰性清零的做法，以及跨天后客户端看到的是旧记录 |
+| compose.md 的含糊处：`add protocol` 后的入口桩会被 `add endpoint` 替换；handler 返回带码错误即可；测试替身自己写一份；`clock.SetSource` 是进程级的；没有天然幂等键的写入怎么办；手写功能的号不在 `roost.yaml` 里；验收没含 `go test ./...`；这一档是否包含网络验收 | 逐条补进 compose.md |
+| checkin 的测试借用 wallet 测试文件里的替身类型 | 改为自带一份 |
+| skill 入口太长，按需求组合只占开头一句 | SKILL.md 开头加一条：这类任务直接读 compose.md |
+
+这一轮的局限：compose.md 里手写功能的示例恰好就是“每日任务”，与实测的需求重合，对“手写一个文档里没出现过的功能”的检验偏弱。修完后换一个不重合的需求再测一轮，结果见 17.6。
+
+没有做的（实测报告指出、属于现状）：端点层（错误转成回包的 `Code`）没有模块用例覆盖；没有 Robot 与网络验收；真实客户端连上还差 `auth.go` 与 `config enable player-tcp`。

@@ -16,11 +16,11 @@ state:
     type: WalletLedger
     store: wallet_ledger
     dao: persist
-    comment: WalletLedger 是货币模块的幂等回执，只落库、不下发。
+    comment: WalletLedger 是货币模块的去重窗口（最近若干次带业务键的加减的结果），只落库、不下发。
 component: Wallet
 protocols: [WalletSpend]
-errcodes: [wallet_short, wallet_invalid, wallet_conflict, wallet_ledger_full, wallet_overflow]
+errcodes: [wallet_short, wallet_invalid, wallet_conflict, wallet_overflow]
 verify:
   packages: [./game/handler]
   run: ^TestWallet
-  pass: 7
+  pass: 8

@@ -8,8 +8,8 @@
 
 | 模块 | 做什么 | 依赖 | 状态字段 | 场景数 |
 | --- | --- | --- | --- | --- |
-| [wallet](wallet/module.yaml) | 玩家货币：余额、按业务键幂等的加减、消费协议 `WalletSpend`；服务端发放走 `WalletGrant` handler | 无 | `PlayerDao.Wallet`（同步）、`PlayerDao.WalletLedger`（只落库） | 7 |
-| [checkin](checkin/module.yaml) | 每日签到：按业务时间的 UTC 日切分，连续天数加成，奖励经货币模块在同一笔事务里发放 | wallet | `PlayerDao.Checkin`（同步） | 5 |
+| [wallet](wallet/module.yaml) | 玩家货币：余额；`Add`（调用方自己判重的发放与扣除）；`Apply`（带业务键、在最近 128 次的去重窗口内只生效一次）；消费协议 `WalletSpend`；服务端发放 handler `WalletGrant` | 无 | `PlayerDao.Wallet`（同步）、`PlayerDao.WalletLedger`（只落库） | 8 |
+| [checkin](checkin/module.yaml) | 每日签到：按业务日（`clock.BusinessDay`）切分，连续天数加成，奖励经货币模块在同一笔事务里发放 | wallet | `PlayerDao.Checkin`（同步） | 6 |
 
 以 `roost module list` 的输出为准。
 
@@ -25,6 +25,8 @@ roost module verify                # 模块自带场景 + build / vet / id check
 ```
 
 agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `add` 输出同一个结构，`applied` 区分是否已执行。
+
+装完之后标了同步的状态还要打开玩家自身视图客户端才收得到（`roost add transport tcp`，`roost.yaml` 加 `access.player.self_sync: true`，`roost project sync`），步骤见 skill 的[按需求组合 §4A](../docs/agent-skills/roost-genre/references/compose.md#4a-让客户端看到状态)。
 
 安装之后直接改工程里的文件（例如在 `game/entities/player/checkin_component.go` 里改奖励规则），改完再跑 `roost module verify`。模块库里没有的需求用 `roost add entity / component / dao / handler / protocol / endpoint` 手写，可以照着已装模块的文件写。
 
@@ -73,7 +75,7 @@ errcodes: [wallet_short]     # 模板里 {{ID:errcode:<name>}} 用到的名字
 verify:
   packages: [./game/handler]
   run: ^TestWallet
-  pass: 7                    # 恰好这么多条通过、零跳过
+  pass: 8                    # 恰好这么多条通过、零跳过
 ```
 
 `files` 不写在清单里，由 `files/` 目录读出。清单与模板必须对得上：模板用到的每个 `{{ID:...}}` 都要声明，声明的每个名字都要用到。
@@ -95,7 +97,9 @@ verify:
 - **文件名带模块名**：`db/def/<module>.go`、`internal/errors/<module>.go`、`game/handler/<module>_<handler>.go`、`protocol/def/<module>_<protocol>.go`、`game/controllers/<module>/`。协议与 Nest handler 一个一个文件（`roost generate` 按文件名找它们）。
 - **自己的 controller 域**：`//roost:protocol ... handler=<module>`，不往别的模块的 controller 里加方法。
 - **跨模块协作**：依赖的模块的组件在同一个实体上时，在自己的组件里直接调用它（同一把实体锁、同一笔事务，见 checkin 调 wallet）；不在同一个实体上时用多实体 Nest handler。不用进程级全局变量。
-- **测试只断言自己的事实**：同一个 DAO 上还有别的模块的字段。例如断言“我的字段同步、我的账本不同步”，不要断言“同步字段恰好是这几个”。
+- **测试只断言自己的事实**：同一个 DAO 上还有别的模块的字段。例如断言“我的字段同步、我的账本不同步”，不要断言“同步字段恰好是这几个”。测试替身（getter、提交器）自己带一份，不借用别的模块的测试文件——那些文件归工程所有，可能被改。
+- **长期“只做一次”记在自己的状态里**：每日、每局、每个订单这类周期性发放，先判自己的状态再调 `WalletComp().Add`；不要拿递增的键去占货币的去重窗口（它只留最近 128 次）。
+- **日界用业务日**：`clock.BusinessDay(time.UnixMilli(nowUnixMilli))`，不自己除以一天的毫秒数。
 - **回滚统一走 DAO**：组件不保存事务会改的状态，不登记 undo。
 - **业务时间**：handler 的最后一个参数写 `nowUnixMilli int64`，由 Nest 填这条消息冻结的业务时间；测试用 `clock.SetSource` 拨。
 

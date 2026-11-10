@@ -70,7 +70,7 @@ commit_all modules
 grep -q 'module wallet: already installed' "$review_root/add-again.log"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
 # 3. 模块自带场景与工程级检查。
-expect_verify wallet=7 checkin=5
+expect_verify wallet=8 checkin=6
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "roost module verify changed the project" >&2; exit 1; }
 
 # 4. 增量：先只装 wallet，之后在已有模块的工程上再装 checkin。
@@ -78,11 +78,11 @@ project="$(new_project bazaar example.com/studio/bazaar)"
 cd "$project"
 "$roost" module add wallet > "$review_root/add-wallet.log"
 commit_all wallet
-expect_verify wallet=7
+expect_verify wallet=8
 "$roost" module add checkin > "$review_root/add-checkin.log"
 grep -q 'module wallet: already installed' "$review_root/add-checkin.log"
 grep -q 'module checkin: installed' "$review_root/add-checkin.log"
-expect_verify wallet=7 checkin=5
+expect_verify wallet=8 checkin=6
 
 succeeded=1
 echo "modules: ok"

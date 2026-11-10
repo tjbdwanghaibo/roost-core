@@ -44,40 +44,73 @@ func (component *WalletComponent) Owner() *Player { return component.owner }
 
 // 下面是业务方法。不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
 
-// WalletLedgerLimit 是回执账本的上限：满了拒绝新的业务键，不淘汰旧回执。
-const WalletLedgerLimit = 128
+// WalletReceiptWindow 是去重窗口的大小：保留最近这么多次带业务键的加减的结果。
+const WalletReceiptWindow = 128
 
-// Apply 按业务键 key 给余额加 delta（负数为扣）。同一个 key 重复调用返回第一次的结果，
-// delta 不同则拒绝；余额不足、溢出、账本已满都不写任何字段。
+// Apply 按业务键 key 给余额加 delta（负数为扣），用于调用方没有别的办法判断“这一次做过没有”的请求，
+// 例如客户端带请求号的消费。同一个 key 在窗口内重复调用返回第一次的结果，不再改余额；delta 不同则拒绝。
+// 余额不足、溢出时不写任何字段。
+//
+// 去重只在窗口内成立：之后又发生了 WalletReceiptWindow 次带业务键的加减，这个 key 的回执就被淘汰，
+// 再用它会当成新的一次执行。所以它只防短期重发；要长期“只发一次”的发放（签到、任务奖励、订单到账）
+// 由调用方在自己的状态里记下这个事实，并改用 Add——事实与余额在同一笔事务里提交或回滚。
 func (component *WalletComponent) Apply(key string, delta int64) (int64, error) {
 	if key == "" || delta == 0 {
 		return 0, apperrors.ErrWalletInvalid
 	}
-	dao := component.owner.Dao()
-	ledger := dao.GetWalletLedger()
+	ledger := component.owner.Dao().GetWalletLedger()
 	if receipt, ok := ledger.GetReceipts(key); ok {
 		if receipt.GetDelta() != delta {
 			return 0, apperrors.ErrWalletConflict
 		}
 		return receipt.GetBalance(), nil
 	}
-	if ledger.ReceiptsLen() >= WalletLedgerLimit {
-		return 0, apperrors.ErrWalletLedgerFull
+	balance, err := component.Add(delta)
+	if err != nil {
+		return 0, err
 	}
-	coins := dao.GetWallet().GetCoins()
+	if ledger.ReceiptsLen() >= WalletReceiptWindow {
+		ledger.DelReceiptsKey(oldestWalletReceipt(ledger))
+	}
+	seq := ledger.GetNextSeq() + 1
+	ledger.SetNextSeq(seq)
+	receipt := &db.WalletReceipt{}
+	receipt.SetDelta(delta)
+	receipt.SetBalance(balance)
+	receipt.SetSeq(seq)
+	ledger.SetReceiptsKey(key, receipt)
+	return balance, nil
+}
+
+// Add 给余额加 delta（负数为扣），不留回执。给自己记着“这一次做过没有”的调用方用：
+// 先在自己的状态里判重，再在同一笔事务里调它。余额不足、溢出时不写任何字段。
+func (component *WalletComponent) Add(delta int64) (int64, error) {
+	if delta == 0 {
+		return 0, apperrors.ErrWalletInvalid
+	}
+	wallet := component.owner.Dao().GetWallet()
+	coins := wallet.GetCoins()
 	if delta < 0 && coins < -delta {
 		return 0, apperrors.ErrWalletShort
 	}
 	if delta > 0 && coins > math.MaxInt64-delta {
 		return 0, apperrors.ErrWalletOverflow
 	}
-	balance := coins + delta
-	dao.GetWallet().SetCoins(balance)
-	receipt := &db.WalletReceipt{}
-	receipt.SetDelta(delta)
-	receipt.SetBalance(balance)
-	ledger.SetReceiptsKey(key, receipt)
-	return balance, nil
+	wallet.SetCoins(coins + delta)
+	return coins + delta, nil
+}
+
+// oldestWalletReceipt 返回序号最小的回执的业务键。窗口不大，逐个比较即可。
+func oldestWalletReceipt(ledger *db.WalletLedger) string {
+	var oldestKey string
+	var oldestSeq int64
+	ledger.RangeReceipts(func(key string, receipt *db.WalletReceipt) bool {
+		if oldestKey == "" || receipt.GetSeq() < oldestSeq {
+			oldestKey, oldestSeq = key, receipt.GetSeq()
+		}
+		return true
+	})
+	return oldestKey
 }
 
 // Balance 返回当前余额。

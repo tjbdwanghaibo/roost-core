@@ -2,10 +2,12 @@ package player
 
 import (
 	"fmt"
+	"time"
 
 	apperrors "{{MODULE}}/internal/errors"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
 )
 
 //roost:component type={{ID:component:Checkin}}
@@ -42,8 +44,6 @@ func (component *CheckinComponent) Owner() *Player { return component.owner }
 // 下面是业务方法。不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
 
 const (
-	// checkinDayMillis 是一个签到日的长度：按业务时间的 UTC 日切分。
-	checkinDayMillis = 24 * 60 * 60 * 1000
 	// CheckinBaseReward 是第 1 天的奖励；连续第 n 天给 n 倍，封顶 CheckinStreakCap 倍。
 	CheckinBaseReward = 10
 	CheckinStreakCap  = 7
@@ -57,16 +57,21 @@ type CheckinResult struct {
 }
 
 // Claim 领今天的签到奖励。nowUnixMilli 是这条消息冻结的业务时间。
-// 同一天第二次领返回 checkin_done，不写任何字段；奖励经货币组件发放，业务键是 checkin:<日序号>，
-// 与签到进度在同一笔事务里：货币被拒绝（例如回执账本已满）时签到进度随事务回滚。
+//
+// “今天”是业务日（clock.BusinessDay：业务时区与每日重置时刻由部署配置决定，缺省 UTC 零点）。
+// 同一个业务日第二次领返回 checkin_done，不写任何字段。“领过没有”记在签到自己的进度里（LastDay），
+// 所以发奖用货币组件的 Add、不占货币的去重窗口；进度与余额在同一笔事务里，任何一步被拒绝都一起回滚。
 func (component *CheckinComponent) Claim(nowUnixMilli int64) (CheckinResult, error) {
-	day := nowUnixMilli / checkinDayMillis
+	now := time.UnixMilli(nowUnixMilli)
+	today := int64(clock.BusinessDay(now))
 	state := component.owner.Dao().GetCheckin()
-	if state.GetLastDay() >= day && state.GetTotal() > 0 {
+	if state.GetLastDay() >= today {
 		return CheckinResult{}, apperrors.ErrCheckinDone
 	}
+	// 昨天 = 今天这个业务日起点之前的那一刻所在的业务日；不按固定 24 小时推（夏令时那天不是 24 小时）。
+	yesterday := int64(clock.BusinessDay(clock.DayStart(now).Add(-time.Nanosecond)))
 	streak := int32(1)
-	if state.GetTotal() > 0 && state.GetLastDay() == day-1 {
+	if state.GetLastDay() == yesterday {
 		streak = state.GetStreak() + 1
 	}
 	multiplier := int64(streak)
@@ -74,11 +79,11 @@ func (component *CheckinComponent) Claim(nowUnixMilli int64) (CheckinResult, err
 		multiplier = CheckinStreakCap
 	}
 	reward := CheckinBaseReward * multiplier
-	balance, err := component.owner.WalletComp().Apply(fmt.Sprintf("checkin:%d", day), reward)
+	balance, err := component.owner.WalletComp().Add(reward)
 	if err != nil {
 		return CheckinResult{}, err
 	}
-	state.SetLastDay(day)
+	state.SetLastDay(today)
 	state.SetStreak(streak)
 	state.SetTotal(state.GetTotal() + 1)
 	return CheckinResult{Streak: streak, Reward: reward, Balance: balance}, nil

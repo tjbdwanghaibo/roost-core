@@ -1,8 +1,9 @@
 package dbdef
 
-// CheckinState 是每日签到的进度。日期按业务时间的 UTC 日序号（Unix 毫秒 / 一天）记。
+// CheckinState 是每日签到的进度。“哪一天”按业务日算（业务时区与每日重置时刻是部署配置，
+// time.business_timezone / time.business_day_start），存成 YYYYMMDD 的十进制数。
 type CheckinState struct {
-	// LastDay 是最近一次签到的日序号；0 表示从未签到。
+	// LastDay 是最近一次签到的业务日（如 20261110）；0 表示从未签到。
 	LastDay int64 `store:"1"`
 	// Streak 是连续签到天数；断签后从 1 重新计。
 	Streak int32 `store:"2"`

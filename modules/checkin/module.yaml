@@ -1,5 +1,5 @@
 name: checkin
-summary: 每日签到：按业务时间的 UTC 日切分，连续天数加成，奖励经货币模块发放
+summary: 每日签到：按业务日切分，连续天数加成，奖励经货币模块在同一笔事务里发放
 requires: [wallet]
 conflicts: []
 needs:
@@ -18,4 +18,4 @@ errcodes: [checkin_done]
 verify:
   packages: [./game/handler]
   run: ^TestCheckin
-  pass: 5
+  pass: 6

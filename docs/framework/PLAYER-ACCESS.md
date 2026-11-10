@@ -157,6 +157,8 @@ access:
         self_sync: true   # 默认关
 ```
 
+`transports: [tcp]` 这一行由 `roost add transport tcp` 写入（它同时生成 TCP 接入与 `auth.go`），不要手工添加；`self_sync: true` 手工加在它下面。
+
 打开后只需要一步：**客户端要看的 DAO 字段写 `dao:"persist,sync"`**，只经生成的 setter 在 Nest handler 里改，然后 `roost project sync`（或 `roost generate`）。不需要手动标脏：handler 提交时 Nest 自动取走生成实体记下的客户端同步变化（`TakeEntitySyncChanges`），一次提交一帧增量。不要照 game-demo 场景的写法调 `MarkSyncDirty(dao.DirtyTracker().TakeSyncDirty())`：那是自建 Manager 才需要的，`TakeSyncDirty` 取走的是服务间同步的独立掩码，会偷走那一侧的读者；对客户端只会多标一次、帧数不变。
 
 Player 的 `//roost:entity` 标记不用改，也不用写 packer（维护者 2026-10-17 决定）：

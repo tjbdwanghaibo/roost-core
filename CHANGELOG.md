@@ -7,8 +7,8 @@
 - **新增**（codegen + modules）：**业务模块安装器 `roost module` 与首批两个模块**（维护者 2026-11-10：roost-core“既有底层框架也有业务模版”，要能按需求描述组合出服务逻辑；[方案](docs/maintenance/FEATURE-2026-11-10-business-modules.md)第 2 期，[实施记录](docs/maintenance/FEATURE-2026-11-10-business-modules.md#17-第-2-期实施记录2026-11-10)）。业务模块是提前写好并验收过的业务单元（状态结构体、组件、Nest handler、协议、错误码、场景测试），源码在 [modules](modules/README.md)，安装后归工程所有，不是生成器输出。
   - 命令：`roost module list` / `plan <name…>`（只预览）/ `add <name…>`（连同依赖安装并生成，重复执行无变化，失败时恢复）/ `verify`（模块自带场景的通过数与零跳过，加 build、vet、ID 检查、生成物漂移检查）；都支持 `--json`。说明见[命令参考“业务模块”](codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)、`roost help module`。
   - 约定：模块状态是嵌套结构体，追加在所挂实体主 DAO 的末尾，同步与否按顶层字段决定；协议号、错误码、组件号从 `roost.yaml` 的 `ids` 段分配，归属记在新的 `roost.yaml` `modules` 段。没有卸载。
-  - 模块：`wallet`（余额、按业务键幂等的加减、消费协议，7 条场景）、`checkin`（每日签到，依赖 wallet，奖励在同一笔事务里发放，5 条场景）。
-  - 文档：新增[能力清单](docs/framework/CAPABILITIES.md)（按需求条目查 core 的能力、接入方式与现成参考）；roost-genre skill 新增“按需求组合”流程。
+  - 模块：`wallet`（余额；`Add` 给自己判重的调用方、`Apply` 带业务键并在最近 128 次的去重窗口内只生效一次；消费协议；8 条场景）、`checkin`（每日签到，按业务日切分，依赖 wallet，奖励在同一笔事务里发放，6 条场景）。
+  - 文档：新增[能力清单](docs/framework/CAPABILITIES.md)（按需求条目查 core 的能力、接入方式与现成参考）；roost-genre skill 新增“按需求组合”流程（[compose.md](docs/agent-skills/roost-genre/references/compose.md)），由一个只凭文档的 agent 按一段需求实测过一轮，暴露的模块缺陷与文档缺口已修（[实施记录 §17.5](docs/maintenance/FEATURE-2026-11-10-business-modules.md#175-只凭-skill-的实测2026-11-10)）。
   - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：只有两个模块，13 类玩法与 game-demo 尚未迁移，没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
   - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
 

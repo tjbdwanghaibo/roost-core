@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 	"{{MODULE}}/protocol/pb"
 
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
@@ -19,20 +21,53 @@ import (
 
 const checkinDay = 24 * time.Hour
 
+// 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。
+type checkinGetter map[int64]entity.IThreadSafeEntity
+
+func (g checkinGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+
+func (g checkinGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// checkinCommitter 是替身提交器：不落盘，reject 打开时拒绝提交，用来验证回滚。
+type checkinCommitter struct{ reject atomic.Bool }
+
+func (c *checkinCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	return nil
+}
+
 type checkinFixture struct {
 	engine    *nest.NestMgr
 	player    *playerentity.Player
 	claims    *sender.CheckinClaimSender
-	committer *walletCommitter
+	committer *checkinCommitter
 	now       atomic.Int64
 }
 
-// newCheckinFixture 用替身提交器起一个 Nest，业务时钟由用例拨：签到按业务时间的 UTC 日切分。
+// newCheckinFixture 用替身提交器起一个 Nest，业务时钟由用例拨：签到按业务日切分（测试里是缺省的 UTC 零点）。
+// clock.SetSource 是进程级的：一个用例里只建一个 fixture，后建的会顶掉前一个的时钟。
 func newCheckinFixture(t *testing.T) *checkinFixture {
 	t.Helper()
 	playerentity.RegisterEntity()
 	RegisterCheckinClaimNestHandlers()
-	f := &checkinFixture{committer: &walletCommitter{}}
+	f := &checkinFixture{committer: &checkinCommitter{}}
 	f.now.Store(time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC).UnixMilli())
 	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
 	t.Cleanup(func() { clock.SetSource(nil) })
@@ -45,7 +80,7 @@ func newCheckinFixture(t *testing.T) *checkinFixture {
 		t.Fatal(err)
 	}
 	f.player = built.(*playerentity.Player)
-	f.engine = nest.NewEngine(nest.NestOptionWithGetter(walletGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(checkinGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
 		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
 	if err := f.engine.Start(); err != nil {
 		t.Fatal(err)
@@ -155,5 +190,29 @@ func TestCheckinRejectedCommitRollsBackProgressAndCoins(t *testing.T) {
 	}
 	if response := f.mustClaim(t); response.Streak != 1 || response.Balance != playerentity.CheckinBaseReward {
 		t.Fatalf("claim after rollback = %+v", response)
+	}
+}
+
+// 连续签到多久都能领：“今天领过没有”记在签到自己的进度里，发奖不占货币的去重窗口。
+// 修前：每次签到占一条货币回执，回执满了不淘汰，第 129 天起签到与消费全部被拒（wallet_ledger_full）。
+func TestCheckinKeepsPayingPastTheWalletReceiptWindow(t *testing.T) {
+	f := newCheckinFixture(t)
+	const days = playerentity.WalletReceiptWindow + 72
+	for day := 1; day <= days; day++ {
+		if _, err := f.claim(); err != nil {
+			t.Fatalf("day %d: %v", day, err)
+		}
+		f.now.Add(int64(checkinDay / time.Millisecond))
+	}
+	var receipts int
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		receipts = f.player.Dao().GetWalletLedger().ReceiptsLen()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, total, _ := f.snapshot(t); total != days || receipts != 0 {
+		t.Fatalf("total = %d (want %d), wallet receipts = %d (want 0: check-in keeps its own fact)", total, days, receipts)
 	}
 }
