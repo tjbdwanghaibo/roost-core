@@ -1,0 +1,166 @@
+package game
+
+import (
+	"encoding/binary"
+	"fmt"
+	"math"
+	"os"
+	"sort"
+	"strings"
+	"testing"
+
+	player "example.com/syncperf/game/entities/player"
+	syncsender "example.com/syncperf/game/handler/syncsender"
+	gamescene "example.com/syncperf/game/scene"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+func probeUvarint(v uint64) int { return len(binary.AppendUvarint(nil, v)) }
+
+// 与 TestMainViewMeasureMovingCrowdBytes 的 64 movers 进入视野同一段准备；forceAt>0 时在第 forceAt 个 walker 之后插一次 Flush。
+func probeEntering(t *testing.T, forceAt int) (frames []string, perSubject map[int64]int, headers []int, total int) {
+	loadSpawnData(t)
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: 2, ChunksY: 2}
+	config, err := gamescene.TerrainConfig(meta.Bounds())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const movers = 64
+	w := newMoveWorldOn(t, config)
+	centre := spatial.Point{X: terrain.ChunkSize, Y: terrain.ChunkSize}
+	const watcherID = int64(36000)
+	w.join(watcherID, centre)
+	walkers := make([]*player.Player, 0, movers)
+	for i := range movers {
+		r := 1000 + float64(15*i)
+		angle := 2 * math.Pi * float64(i) / float64(movers)
+		at := spatial.Point{X: centre.X + int64(r*math.Cos(angle)), Y: centre.Y + int64(r*math.Sin(angle))}
+		walker := w.join(36001+int64(i), at)
+		walkers = append(walkers, walker)
+		goal := spatial.Point{X: at.X - int64(2000*math.Sin(angle)), Y: at.Y + int64(2000*math.Cos(angle))}
+		if _, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, walker.ID(), w.area.ID(), goal.X, goal.Y, 0); err != nil {
+			t.Fatal(err)
+		}
+		if forceAt > 0 && i+1 == forceAt {
+			if err := w.bridge.Flush(w.ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for range 3 {
+		if err := w.bridge.Flush(w.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pushes := w.recorder.take(watcherID)
+	decoder := entitysync.NewDecoder(frame.DefaultLimits())
+	perSubject = map[int64]int{}
+	for _, push := range pushes {
+		raw, err := frame.Decode(push.Payload, frame.DefaultLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := decoder.Decode(push.Payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		objectBytes := 0
+		var kinds []string
+		for i, object := range raw.Objects {
+			n := 1 + probeUvarint(uint64(object.Ref.ID)) + probeUvarint(uint64(object.Ref.Generation))
+			if object.Operation == frame.ObjectCreate {
+				n += probeUvarint(uint64(object.Archetype))
+			}
+			if object.Operation != frame.ObjectRemove {
+				n += probeUvarint(uint64(len(object.Components)))
+				for _, c := range object.Components {
+					n += 1 + probeUvarint(uint64(c.TypeID))
+					if c.Operation == frame.ComponentSet {
+						n += probeUvarint(uint64(c.SchemaVersion)) + probeUvarint(uint64(len(c.Data))) + len(c.Data)
+					}
+				}
+			}
+			objectBytes += n
+			subject := got.Objects[i].SubjectID
+			if _, dup := perSubject[subject]; dup {
+				t.Errorf("subject %d appears twice in the entering frames", subject)
+			}
+			perSubject[subject] += n
+			op := map[frame.ObjectOperation]string{frame.ObjectCreate: "C", frame.ObjectUpdate: "U", frame.ObjectRemove: "R"}[object.Operation]
+			ns := ""
+			if len(got.Objects[i].Components) > 0 {
+				ns = got.Objects[i].Components[0].Update.Namespace
+			}
+			kinds = append(kinds, op+ns)
+		}
+		header := len(push.Payload) - objectBytes
+		headers = append(headers, header)
+		total += len(push.Payload)
+		sort.Strings(kinds)
+		frames = append(frames, fmt.Sprintf("kind=%v epoch=%d base=%d tick=%d schema=%d objects=%d payload=%d header=%d objectBytes=%d ops=%s",
+			raw.Kind, raw.Epoch, raw.BaseTick, raw.Tick, raw.SchemaVersion, len(raw.Objects), len(push.Payload), header, objectBytes, compress(kinds)))
+	}
+	return frames, perSubject, headers, total
+}
+
+func compress(kinds []string) string {
+	counts := map[string]int{}
+	for _, k := range kinds {
+		counts[k]++
+	}
+	var out []string
+	for k, n := range counts {
+		out = append(out, fmt.Sprintf("%s×%d", k, n))
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
+}
+
+func TestProbeEnteringSplit(t *testing.T) {
+	if os.Getenv("PROBE") != "1" {
+		t.Skip()
+	}
+	var reference map[int64]int
+	for run, forceAt := range []int{0, 0, 0, 0, 0, 0, 20, 40, 10} {
+		frames, perSubject, headers, total := probeEntering(t, forceAt)
+		sum := 0
+		for _, n := range perSubject {
+			sum += n
+		}
+		hsum := 0
+		for _, h := range headers {
+			hsum += h
+		}
+		t.Logf("run %d forceAt=%d frames=%d total=%d objects=%d objectBytes=%d headers=%v (Σ%d)", run, forceAt, len(frames), total, len(perSubject), sum, headers, hsum)
+		for _, f := range frames {
+			t.Logf("  %s", f)
+		}
+		if reference == nil {
+			reference = perSubject
+			var ids []int64
+			for id := range perSubject {
+				ids = append(ids, id)
+			}
+			sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+			var parts []string
+			for _, id := range ids {
+				parts = append(parts, fmt.Sprintf("%d:%d", id, perSubject[id]))
+			}
+			t.Logf("  per subject (object header + component header + envelope + payload): %s", strings.Join(parts, " "))
+			continue
+		}
+		diff := 0
+		for id, n := range perSubject {
+			if reference[id] != n {
+				diff++
+				t.Logf("  subject %d: %d bytes, reference %d", id, n, reference[id])
+			}
+		}
+		if len(perSubject) != len(reference) || diff > 0 {
+			t.Errorf("run %d: per-subject bytes differ from run 0 (%d subjects vs %d, %d differ)", run, len(perSubject), len(reference), diff)
+		}
+	}
+}

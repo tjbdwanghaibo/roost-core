@@ -63,9 +63,11 @@ TypeSchedules 支持同 Manager 内按 SubjectKind 配置周期脏增量；即�
 
 **处置（2026-11-10，维护者定方案 A，已实施）**：只改演练脚本——这一步的 `cmd/loadtest` 传 `-max-p95 40`（缺省 16s 按一两个游戏进程定；5 进程拓扑下 saga 步骤被非属主进程各拒一次、按 250ms 倍增重投，约多出 22s；40s = 健康上沿 10s + 22.5s 再留约 25% 余量），理由写在 `scripts/test-seamless-demo.sh` 注释里。复跑（私有真实依赖）：14 个演练步骤 ok，最后一步 p95 29.05s，通过。产品侧的路由重投加速（方案 B）没做。
 
-## 2026-11-10：`scripts/perf/sync-business.sh` 夹具与当前 core 不兼容（已定位，未修）
+## 2026-11-10：`scripts/perf/sync-business.sh` 夹具与当前 core 不兼容（已修复，未发版）
 
-夹具 `scripts/perf/fixtures/sync_business_test.go.tmpl` 在 main `bc883581` 上直接失败：① 在已 `Start` 的 Nest 引擎上调实例级 `MustRegisterHandlerWithMeta`（只允许 Start 之前），panic；② 绕过 ① 之后，增量信封 v3 不带 Codec，经 `clientsync.DecodeFields` 按 `Codec() != 2` 拒绝；③ 再绕过 ② 之后，增量字节压缩后的载荷不是 `DecodeFields` 能解的字段替换（`unsupported DAO sync format`），夹具需要按 subject 记全量、用生成的 Apply 接增量。因此业务负载下的每 tick 开销、分配与 10% 常态下行没有当前数字；同步字节改由 `TestMainViewMeasure*` 用例测得，与估算相符（[证据](evidence/perf-terrain-acceptance-20261110/README.md#sync-business-没有测出数字夹具与当前-core-不兼容已定位未修)）。
+夹具 `scripts/perf/fixtures/sync_business_test.go.tmpl` 在 main `bc883581` 上直接失败：① 在已 `Start` 的 Nest 引擎上调实例级 `MustRegisterHandlerWithMeta`（只允许 Start 之前），panic；② 绕过 ① 之后，增量信封 v3 不带 Codec，经 `clientsync.DecodeFields` 按 `Codec() != 2` 拒绝；③ 再绕过 ② 之后，增量字节压缩后的载荷不是 `DecodeFields` 能解的字段替换（`unsupported DAO sync format`），夹具需要按 subject 记全量、用生成的 Apply 接增量。因此业务负载下的每 tick 开销、分配与 10% 常态下行没有当前数字；同步字节改由 `TestMainViewMeasure*` 用例测得，与估算相符（[证据](evidence/perf-terrain-acceptance-20261110/README.md#sync-business夹具与当前-core-不兼容已修复夹具已重写)）。
+
+**已修复（2026-11-10，未发版）**：原因 ③ 的判断更正为与 ② 相同：都是别人 `near` 视图上的**空载荷增量**（AddExp 只改 `exp`，`exp` 不在 `near` 里，增量只推进版本，`Decoder` 给出 Codec 0 的空载荷），不是字节压缩的格式。夹具按当前契约重写，没有放宽框架校验：移动处理器在 `init()` 里包级注册；接收端每条连接一个 `entitysync.Decoder`，按 subject 记生成的 `db.SyncPlayerDao` 全量，增量经 `db.ApplySyncPlayerDao` 合并，空载荷增量跳过，合并后的 `level` / `exp`（视图里有时）与本 tick 提交后的 DAO 核对；三处变异各自变红。64 人、10% 脏、40 tick 冒烟通过并出数字（脚本墙钟 50 秒），正式档位由维护者统一跑，本条不提供容量结论。剩下的边界：夹具的移动只登记 AOI 索引、不改 DAO 位置，`sync_bytes` 不含移动的下行（移动看 `TestMainViewMeasureMovingCrowdBytes`）。见[证据“夹具重写”](evidence/perf-terrain-acceptance-20261110/README.md#夹具重写2026-11-10-追加已修复)。
 
 ## 2026-11-09：地形首批参数实施边界
 

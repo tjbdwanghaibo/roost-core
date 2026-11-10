@@ -45,15 +45,41 @@ go test -count=1 -run '^(TestMainViewMeasureSyncBytes|TestMainViewMeasureMovingC
 ROOST_TERRAIN_MEASURE=1 go test -count=1 -run '^(TestTerrainMeasureUpdateBytes|TestTerrainMeasureDownlinkScenarios)$' -v ./internal/service/game
 ```
 
-### sync-business 没有测出数字：夹具与当前 core 不兼容（已定位，未修）
+### sync-business：夹具与当前 core 不兼容（已修复，夹具已重写）
 
 `scripts/perf/sync-business.sh` 在当前 main 上直接失败，三处不兼容依次出现：
 
 1. `panic: nest: handler "sync_perf_move" registered after engine start`：夹具在 `newSceneNest` 已 `Start` 的引擎上调 `(*NestMgr).MustRegisterHandlerWithMeta`，实例表只允许 Start 之前注册（`framework/nest/handler.go` `RegisterHandlerWithMeta`）。
-2. 只在本次的临时工程里把它改成包级 `nest.MustRegisterHandlerWithMeta` 之后：`unsupported DAO sync codec 0`。增量信封 v3 不带 Codec（接收端沿用全量的），夹具经生成的 `clientsync.DecodeFields` 按每条更新的 `Codec() != 2` 拒绝。
-3. 再在临时工程里放过 Codec 0 之后：`unsupported DAO sync format`。增量载荷是增量字节压缩之后的格式，`DecodeFields` 这条只认字段替换的动态解码路径解不了；夹具需要改成按 subject 记全量、用生成的 Apply 接增量，不是两行补丁能修的。
+2. 只在本次的临时工程里把它改成包级 `nest.MustRegisterHandlerWithMeta` 之后：`unsupported DAO sync codec 0`。~~增量信封 v3 不带 Codec（接收端沿用全量的），夹具经生成的 `clientsync.DecodeFields` 按每条更新的 `Codec() != 2` 拒绝。~~
+3. 再在临时工程里放过 Codec 0 之后：`unsupported DAO sync format`。~~增量载荷是增量字节压缩之后的格式，`DecodeFields` 这条只认字段替换的动态解码路径解不了；夹具需要改成按 subject 记全量、用生成的 Apply 接增量，不是两行补丁能修的。~~
 
-结论：sync-business 的“每 tick 开销 / 分配 / 业务负载下的下行字节”这一轮没有数字；下行字节改由已有的测量用例在同一个生成工程上取（下一节）。夹具要随帧协议 2 / 信封 v3 更新（[KNOWN-LIMITS](../../KNOWN-LIMITS.md) 已记）。两处本地补丁只在临时工程里，没有提交。
+**更正（2026-11-10 追加，已确认）**：② 和 ③ 是同一个原因，不是字节压缩。在出错处打出那条更新（同一生成工程，旧夹具加两处本地补丁）：两次都是 `full=false ns=player profile="near" codec=0 len=0`，即**空载荷的增量**。AddExp 只改 `exp`，`exp` 不在别人看到的 `near` 视图里，这些观察者收到的增量只推进版本、没有载荷（契约见 [ENTITY_SYNC 线格式](../../../framework/ENTITY_SYNC.md#线格式帧协议-2--信封-v3)：空载荷增量不改基线 Codec）。`entitysync.Decoder` 对空载荷的增量给出零值载荷（Codec 0）；旧夹具把它交给 `clientsync.DecodeFields`，先被 Codec 检查拒绝，放过之后又因为空字节解出的补丁 `sync_format` 是 0 被拒绝。
+
+结论（原文）：sync-business 的“每 tick 开销 / 分配 / 业务负载下的下行字节”这一轮没有数字；下行字节改由已有的测量用例在同一个生成工程上取（下一节）。夹具要随帧协议 2 / 信封 v3 更新（[KNOWN-LIMITS](../../KNOWN-LIMITS.md) 已记）。两处本地补丁只在临时工程里，没有提交。
+
+#### 夹具重写（2026-11-10 追加，已修复）
+
+`scripts/perf/fixtures/sync_business_test.go.tmpl` 按当前契约重写，没有放宽框架或生成代码的校验：
+
+- **处理器注册**：移动处理器 `sync_perf_move` 改在 `init()` 里经包级 `nest.MustRegisterHandlerWithMeta` 注册（引擎 Start 之前），场景随请求参数传入，不再在已 Start 的实例上注册。
+- **接收端**：每条连接一个 `entitysync.Decoder`（帧基线、对象表、增量继承身份与 Codec、BaseVersion 核对都由它做），夹具另按 subject 记当前全量（生成的 `db.SyncPlayerDao`）：全量替换；增量经生成的 `db.ApplySyncPlayerDao` 合到全量上（集合字段的差分也只能这样接）；空载荷的增量只推进版本，跳过；全量帧清空记下的状态，对象 / 组件 remove 删掉对应 subject。玩家载荷的 Codec 必须是 `player.PlayerSyncCodec`。
+- **核对**：每帧里有载荷的玩家，合并后的 `level` 必须等于本 tick 提交后的 DAO，`exp` 出现在视图里时（本人的 default 视图）也必须相等；别人的 near 视图没有 `exp`，不比。去掉了与 `Decoder` 重复的手写版本 / 时钟复核，也不再用只认字段替换的 `clientsync.DecodeFields`。
+- **变异**（生成工程副本上每次只改一处，确认变红后还原）：比较时把期望 `exp` 加 1 → `tick 0 subject 9217028 exp: got 0 want 0`（变异只改比较式，打印的仍是原期望）；把期望 `level` 加 1 → `tick 0 subject 9242628 level: got 0 want 0`；增量不合到全量、单独当全量用 → `tick -1 subject 9217028: the held state has no level`（说明预热阶段就有带载荷的增量走 Apply 这条路）。
+
+冒烟（只验证入口能跑、能出数字，不是容量结论）：`ROOST_PERF_COUNT=1 ROOST_SYNC_CASE=custom ROOST_SYNC_PLAYERS=64 ROOST_SYNC_DIRTY_PERCENT=10 ROOST_SYNC_LAYOUT=hotspot ROOST_SYNC_TICKS=40 scripts/perf/sync-business.sh`，脚本整体墙钟 50 秒（含生成工程、`go mod tidy` 与编译），测量段 2.0 秒，通过：
+
+| 项 | 值 |
+| --- | --- |
+| 每 tick 脏玩家 | 7（64 × 10%） |
+| tick_work_ms p50 / p95 / max | 1.25 / 2.01 / 2.48 |
+| flush_ms p50 / p95 / max | 0.88 / 1.45 / 1.77 |
+| scheduled_to_client_ms p50 / p95 / p99 | 2.04 / 6.77 / 9.25 |
+| deadline_misses | 0 / 40 |
+| sent_frames / sync_bytes | 2560 / 242640（平均每帧 94.8B） |
+| decoded_updates（有载荷的玩家更新） | 280 = 40 × 7，都是本人的 default 视图 |
+| process_alloc_bytes / GC 次数 | 39.6MB / 4 |
+
+读数注意：这个夹具的业务写只有 AddExp（`exp` / `level`），移动只登记 AOI 索引（`QueueMove`），不改 DAO 的 `pos_x` / `pos_y`。所以其余 63 个观察者每 tick 收到的是 7 个空载荷增量（只推进版本），`sync_bytes` 衡量的是“别人看不到的字段在变”这种负载，不是移动的下行；移动的下行看下一节的 `TestMainViewMeasureMovingCrowdBytes`。正式档位由维护者统一跑。
 
 ### 同步字节：与方案估算对照
 
@@ -66,10 +92,17 @@ ROOST_TERRAIN_MEASURE=1 go test -count=1 -run '^(TestTerrainMeasureUpdateBytes|T
 | 一名玩家进入视野（全量，near 视图） | 85B | 85B | 相符 |
 | 三只怪同帧进入视野 | 235B | 235B | 相符 |
 | 128 名玩家进入视野合计 | 9787B（四帧） | 2704 + 3010 + 3160 + 913 = 9787B | 相符 |
-| 64 名玩家进入视野合计 | 4964B（两帧） | 1804 + 2635 + 535 = 4974B（三帧） | 多 10B，分帧不同（多一帧的帧头，推断，尚未确认） |
+| 64 名玩家进入视野合计 | 4964B（两帧） | 1804 + 2635 + 535 = 4974B（三帧） | ~~多 10B，分帧不同（多一帧的帧头，推断，尚未确认）~~ **已确认**：内容逐字节相同，多的 10B 正是多出来那一帧的增量帧头（见表下） |
 | 64 个同时动，每观察者 | 9.5KB/s | 中位数 1934B / 拍 = 30.2B / 对象，**9.4KB/s** | 相符 |
 | 128 个同时动，每观察者 | 18.6KB/s | 中位数 3807B / 拍 = 29.7B / 对象，**18.6KB/s** | 相符，预算 50KB/s 的 37% |
 | 128 个中 10% 在动（常态） | — | 未测（sync-business 失败）；按每对象 29.7B 线性推算约 1.9KB/s | 只是推算 |
+
+**64 人进视野多 10B 的拆解（2026-11-10 追加，已确认）**：同一生成工程、同一段准备（`TestMainViewMeasureMovingCrowdBytes` 64 movers 进入视野那一段），临时探针逐帧解码（[探针源码](entering-split-probe_test.go.txt)，[输出](entering-split-probe.txt)），六次自然运行加三次在第 10 / 20 / 40 个人之后插一次 Flush：
+
+- **每个 subject 的全量（对象头 + 组件头 + 信封 + 载荷）在所有拆法下逐个相同**：场景对象 38B、看的人自己（default 视图）107B、64 名玩家（near 视图）各 75B，合计 38 + 107 + 64 × 75 = **4945B**；66 个 subject 每个只出现一次。
+- **帧头**：第一帧是全量帧 9B（magic 2、协议 1、kind 1，StreamID、Epoch、Tick、SchemaVersion、对象数各 1 字节 varint），之后每帧是增量帧 10B（多 `Tick−BaseTick` 1 字节）。两帧 4945 + 9 + 10 = 4964B，三帧 4945 + 9 + 10 + 10 = 4974B，四帧 4984B（插 Flush 的那次）。上一轮的 1804 / 2635 / 535 正好是 9 + 38 + 107 + 22 × 75、10 + 35 × 75、10 + 7 × 75。
+- **为什么有时两帧、有时三帧**：每次 Flush 给每个会话至多一帧（这一段 66 个对象远小于每帧对象上限 164，帧字节上限 4MiB 也够不着；场景的 Manager 级没有设快照预算，进视野不分批）。帧数等于这些人被几次 Flush 分着带出去：除了用例最后显式的 3 次 Flush，`bridge.Start` 启动的复制循环每 50ms 自己 Flush 一次，64 个人逐个 Join 的这段时间跨过一次还是两次后台 Flush 取决于机器当时快慢，所以是两帧或三帧（本机复跑也出现过 1804 + 2485 + 685、1954 + 2935 + 85 这样的三帧，合计都是 4974B）。“估算 4964B（两帧）”是 [sync-views-codec 证据](../sync-views-codec-20261110/README.md) 那一次运行的分帧，不是按预算推出的帧数；128 人两次都是四帧，所以合计相同、分帧不同（本次复跑 2329 + 2860 + 3010 + 1588 = 9787B）。
+- 结论：同样内容、分帧不同造成的帧头差，没有字节多发，不登记 KNOWN-LIMITS。
 
 地形下行（`ROOST_TERRAIN_MEASURE=1`，与 [terrain-quota 证据](../terrain-quota-20261108/README.md) 同一用例）：块全量 12476B（线上）、r=5m 抬地增量 606B、r=16m 平滑 5790B；热点 20 人每秒一笔 r=5m 时 16.5～27.7KB/s，r=16m 时 107.9～226.5KB/s，配额生效后约 42～44KB/s；6m/s 跑过全改过的块 8.1KB/s、12m/s 16.5KB/s。
 
@@ -161,8 +194,8 @@ scripts/mirror-local.sh clean
 
 **尚未确认**
 
-- sync-business 业务负载（每 tick 开销、分配、10% 常态下行）：夹具与当前 core 不兼容，没有数字。
-- 64 人进视野合计比上一轮多 10B（分帧不同）。
+- ~~sync-business 业务负载（每 tick 开销、分配、10% 常态下行）：夹具与当前 core 不兼容，没有数字。~~ 夹具已重写，冒烟能出数字（见上）；正式档位的数字由维护者统一跑，仍没有。
+- ~~64 人进视野合计比上一轮多 10B（分帧不同）。~~ 已确认：多一帧的增量帧头 10B，内容相同（见上）。
 - 时过时不过取决于 sid 1003 在投递轮转中的位置；公会 saga 步骤走同一机制。
 - bisect 与开地形无缝演练的延迟基线（按新预算没有做）。
 
@@ -172,4 +205,4 @@ scripts/mirror-local.sh clean
 
 ## 原始输出
 
-原始输出（演练日志、loadtest 报告、saga 终态记录、基准原文、本地补丁 diff）保存在仓库外的证据目录 `perf-terrain-acceptance-20261110/`，不提交。
+进视野分帧的探针源码与输出随本证据提交（`entering-split-probe_test.go.txt`、`entering-split-probe.txt`；探针只在临时生成工程里跑，不进 demo 模板）。其余原始输出（演练日志、loadtest 报告、saga 终态记录、基准原文、本地补丁 diff）保存在仓库外的证据目录 `perf-terrain-acceptance-20261110/`，不提交。

@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"example.com/syncperf/game/clientsync"
+	db "example.com/syncperf/db"
 	player "example.com/syncperf/game/entities/player"
 	syncsender "example.com/syncperf/game/handler/syncsender"
 	gamescene "example.com/syncperf/game/scene"
@@ -165,13 +165,82 @@ func (lane *businessTCP) fail(err error) {
 		lane.failure = err
 	}
 }
+
+// businessClient 是测量客户端对一条连接的接收状态：每个 subject 记下当前全量（生成的 SyncPlayerDao），增量用生成的
+// ApplySyncPlayerDao 合进去，与真实客户端的做法相同（帧协议 2 / 信封 v3）：
+//   - 增量信封不带身份与 Codec，由 entitysync.Decoder 从同一对象引用上的基线继承；
+//   - 增量载荷是只带变化字段的 DAO 补丁（不带实体 ID），集合字段可能是差分，只能经 Apply 合到全量上，不能单独读；
+//   - 视图里没有任何变化字段时增量载荷为空（只推进版本），没有 Codec，跳过即可。
+type businessClient struct {
+	decoder *entitysync.Decoder
+	players map[int64]*db.SyncPlayerDao
+}
+
+func newBusinessClient() *businessClient {
+	return &businessClient{decoder: entitysync.NewDecoder(frame.DefaultLimits()), players: make(map[int64]*db.SyncPlayerDao)}
+}
+
+// apply 解一帧并把其中玩家的状态合进 players；返回本帧带载荷的玩家更新（subject → 合并后的全量），供核对。
+func (client *businessClient) apply(payload []byte) (map[int64]*db.SyncPlayerDao, error) {
+	decoded, err := client.decoder.Decode(payload)
+	if err != nil {
+		return nil, err
+	}
+	if decoded.Kind == frame.Full {
+		// 全量帧替换整个对象表（Decoder 同样清空），旧的 subject 状态不能留着。
+		clear(client.players)
+	}
+	changed := make(map[int64]*db.SyncPlayerDao)
+	for _, object := range decoded.Objects {
+		if object.Operation == frame.ObjectRemove {
+			delete(client.players, object.SubjectID)
+			delete(changed, object.SubjectID)
+			continue
+		}
+		for _, component := range object.Components {
+			update := component.Update
+			if update.Namespace != "player" {
+				continue // 场景对象等：Decoder 已核对信封与版本，本夹具只核对玩家字段
+			}
+			if component.Operation == frame.ComponentRemove {
+				delete(client.players, update.SubjectID)
+				delete(changed, update.SubjectID)
+				continue
+			}
+			if update.Payload.Len() == 0 {
+				if update.Full {
+					return nil, fmt.Errorf("subject %d: empty full payload", update.SubjectID)
+				}
+				continue
+			}
+			if codec := update.Payload.Codec(); codec != player.PlayerSyncCodec {
+				return nil, fmt.Errorf("subject %d: player sync codec %d, want %d", update.SubjectID, codec, player.PlayerSyncCodec)
+			}
+			patch, err := db.UnmarshalSyncPlayerDao(update.Payload.BytesCopy())
+			if err != nil {
+				return nil, fmt.Errorf("subject %d: %w", update.SubjectID, err)
+			}
+			previous := client.players[update.SubjectID]
+			switch {
+			case update.Full:
+				previous = nil // 全量自带全部字段，替换基线
+			case previous == nil:
+				return nil, fmt.Errorf("subject %d: delta without a held full state", update.SubjectID)
+			}
+			merged, err := db.ApplySyncPlayerDao(patch, previous)
+			if err != nil {
+				return nil, fmt.Errorf("subject %d: %w", update.SubjectID, err)
+			}
+			client.players[update.SubjectID] = merged
+			changed[update.SubjectID] = merged
+		}
+	}
+	return changed, nil
+}
+
 func (lane *businessTCP) consume(conn net.Conn) {
 	defer lane.wg.Done()
-	versions := make(map[int64]uint64)
-	var epoch uint64
-	var clock uint64
-	// decoder 是这条连接的接收端（增量的 subject 身份从基线继承，按顺序解）；下面的时钟与版本是测量客户端自己的复核。
-	decoder := entitysync.NewDecoder(frame.DefaultLimits())
+	client := newBusinessClient()
 	for {
 		var header [20]byte
 		if _, err := io.ReadFull(conn, header[:]); err != nil {
@@ -189,53 +258,39 @@ func (lane *businessTCP) consume(conn net.Conn) {
 		}
 		received := time.Now()
 		tick := int(binary.LittleEndian.Uint64(header[12:]))
-		decoded, err := decoder.Decode(payload)
+		changed, err := client.apply(payload)
 		if err != nil {
 			lane.fail(err)
 			return
 		}
-		if uint64(decoded.Epoch) != epoch {
-			clear(versions)
-			epoch = uint64(decoded.Epoch)
-			clock = 0
-		}
-		if uint64(decoded.BaseTick) != clock {
-			lane.fail(fmt.Errorf("frame base %d, client %d", decoded.BaseTick, clock))
+		lane.mu.Lock()
+		expected, exists := lane.expected[tick]
+		lane.mu.Unlock()
+		if !exists {
+			lane.fail(fmt.Errorf("no expectation for tick %d", tick))
 			return
 		}
-		clock = uint64(decoded.Tick)
-		var updates int64
-		for _, object := range decoded.Objects {
-			for _, component := range object.Components {
-				update := component.Update
-				if !update.Full && versions[update.SubjectID] != update.BaseVersion {
-					lane.fail(fmt.Errorf("subject %d base %d, client %d", update.SubjectID, update.BaseVersion, versions[update.SubjectID]))
-					return
-				}
-				versions[update.SubjectID] = update.Version
-				document, err := clientsync.DecodeFields(update)
-				if err != nil {
-					lane.fail(err)
-					return
-				}
-				lane.mu.Lock()
-				expected, exists := lane.expected[tick][update.SubjectID]
-				lane.mu.Unlock()
-				if !exists {
-					lane.fail(fmt.Errorf("no expectation tick=%d subject=%d", tick, update.SubjectID))
-					return
-				}
-				if exp, ok := document["exp"]; ok && exp != expected.Exp {
-					lane.fail(fmt.Errorf("exp: got %v want %d", exp, expected.Exp))
-					return
-				}
-				if level, ok := document["level"]; ok && level != expected.Level {
-					lane.fail(fmt.Errorf("level: got %v want %d", level, expected.Level))
-					return
-				}
-				updates++
+		// 合并后的全量与本 tick 业务提交后的 DAO 一致；视图不含的字段（别人看不到的 exp）不出现在全量里，不比。
+		for id, state := range changed {
+			want, ok := expected[id]
+			if !ok {
+				lane.fail(fmt.Errorf("no expectation tick=%d subject=%d", tick, id))
+				return
+			}
+			if state.Level == nil {
+				lane.fail(fmt.Errorf("tick %d subject %d: the held state has no level", tick, id))
+				return
+			}
+			if state.Level.Value != want.Level {
+				lane.fail(fmt.Errorf("tick %d subject %d level: got %d want %d", tick, id, state.Level.Value, want.Level))
+				return
+			}
+			if state.Exp != nil && state.Exp.Value != want.Exp {
+				lane.fail(fmt.Errorf("tick %d subject %d exp: got %d want %d", tick, id, state.Exp.Value, want.Exp))
+				return
 			}
 		}
+		updates := int64(len(changed))
 		latency := float64(time.Now().UnixNano()-int64(binary.LittleEndian.Uint64(header[4:12]))) / 1e6
 		checked := time.Now()
 		lane.mu.Lock()
@@ -301,6 +356,16 @@ func businessEnvInt(t *testing.T, name string, fallback int) int {
 		return n
 	}
 	return fallback
+}
+
+// businessMoveHandler 把 AOI 移动事实与正式业务一样在 Nest Guard 内登记，经提交门生效。Nest 只允许在引擎 Start 之前
+// 注册处理器（包级注册表在 init 里填，见 framework/nest/handler.go），所以这里不在测试里的实例上注册；场景随参数传入。
+var businessMoveHandler = nest.NewHandlerName("sync_perf_move")
+
+func init() {
+	nest.MustRegisterHandlerWithMeta(businessMoveHandler, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, args[0].(*Scene).MoveSpace().QueueMove(es[0], args[1].(spatial.Point))
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
 }
 
 // An absolute schedule preserves overdue work: no ticker drops missed ticks,
@@ -385,11 +450,6 @@ func TestSyncBusinessLoad(t *testing.T) {
 				joinReady(t, scene, ctx, p, at)
 			}
 			client := newSceneNest(t, entities)
-			// AOI 移动事实与正式业务一样在 Nest Guard 内登记，经提交门生效。
-			moveName := nest.NewHandlerName("sync_perf_move")
-			client.(*nest.NestMgr).MustRegisterHandlerWithMeta(moveName, func(es []entity.IThreadSafeEntity, args []any, _ ...nest.HandlerOption) (any, error) {
-				return nil, scene.MoveSpace().QueueMove(es[0], args[0].(spatial.Point))
-			}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityMemory})
 			sender := syncsender.NewAddExpSender(client)
 			capture := func(tick int) {
 				states := make(map[int64]businessState, len(players))
@@ -450,7 +510,7 @@ func TestSyncBusinessLoad(t *testing.T) {
 					// cross AOI edges; clustered cases keep the same dense audience.
 					at := positions[i]
 					at.X += int64(tick%5) * 3
-					if _, err := client.Request(ctx, moveName, players[i].ID(), nest.Params{at}); err != nil {
+					if _, err := client.Request(ctx, businessMoveHandler, players[i].ID(), nest.Params{scene, at}); err != nil {
 						t.Fatal(err)
 					}
 				}

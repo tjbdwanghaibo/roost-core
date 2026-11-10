@@ -1,0 +1,35 @@
+=== RUN   TestProbeEnteringSplit
+    zz_entering_split_probe_test.go:137: run 0 forceAt=0 frames=2 total=4964 objects=66 objectBytes=4945 headers=[9 10] (Σ19)
+    zz_entering_split_probe_test.go:139:   kind=1 epoch=2 base=0 tick=1 schema=1 objects=32 payload=2404 header=9 objectBytes=2395 ops=Cplayer×31,Cscene×1
+    zz_entering_split_probe_test.go:139:   kind=2 epoch=2 base=1 tick=2 schema=1 objects=34 payload=2560 header=10 objectBytes=2550 ops=Cplayer×34
+    zz_entering_split_probe_test.go:152:   per subject (object header + component header + envelope + payload): 1038:38 36864004:107 36865028:75 36866052:75 36867076:75 36868100:75 36869124:75 36870148:75 36871172:75 36872196:75 36873220:75 36874244:75 36875268:75 36876292:75 36877316:75 36878340:75 36879364:75 36880388:75 36881412:75 36882436:75 36883460:75 36884484:75 36885508:75 36886532:75 36887556:75 36888580:75 36889604:75 36890628:75 36891652:75 36892676:75 36893700:75 36894724:75 36895748:75 36896772:75 36897796:75 36898820:75 36899844:75 36900868:75 36901892:75 36902916:75 36903940:75 36904964:75 36905988:75 36907012:75 36908036:75 36909060:75 36910084:75 36911108:75 36912132:75 36913156:75 36914180:75 36915204:75 36916228:75 36917252:75 36918276:75 36919300:75 36920324:75 36921348:75 36922372:75 36923396:75 36924420:75 36925444:75 36926468:75 36927492:75 36928516:75 36929540:75
+    zz_entering_split_probe_test.go:137: run 1 forceAt=0 frames=2 total=4964 objects=66 objectBytes=4945 headers=[9 10] (Σ19)
+    zz_entering_split_probe_test.go:139:   kind=1 epoch=2 base=0 tick=1 schema=1 objects=43 payload=3229 header=9 objectBytes=3220 ops=Cplayer×42,Cscene×1
+    zz_entering_split_probe_test.go:139:   kind=2 epoch=2 base=1 tick=2 schema=1 objects=23 payload=1735 header=10 objectBytes=1725 ops=Cplayer×23
+    zz_entering_split_probe_test.go:137: run 2 forceAt=0 frames=2 total=4964 objects=66 objectBytes=4945 headers=[9 10] (Σ19)
+    zz_entering_split_probe_test.go:139:   kind=1 epoch=2 base=0 tick=1 schema=1 objects=44 payload=3304 header=9 objectBytes=3295 ops=Cplayer×43,Cscene×1
+    zz_entering_split_probe_test.go:139:   kind=2 epoch=2 base=1 tick=2 schema=1 objects=22 payload=1660 header=10 objectBytes=1650 ops=Cplayer×22
+    zz_entering_split_probe_test.go:137: run 3 forceAt=0 frames=2 total=4964 objects=66 objectBytes=4945 headers=[9 10] (Σ19)
+    zz_entering_split_probe_test.go:139:   kind=1 epoch=2 base=0 tick=1 schema=1 objects=44 payload=3304 header=9 objectBytes=3295 ops=Cplayer×43,Cscene×1
+    zz_entering_split_probe_test.go:139:   kind=2 epoch=2 base=1 tick=2 schema=1 objects=22 payload=1660 header=10 objectBytes=1650 ops=Cplayer×22
+    zz_entering_split_probe_test.go:137: run 4 forceAt=0 frames=2 total=4964 objects=66 objectBytes=4945 headers=[9 10] (Σ19)
+    zz_entering_split_probe_test.go:139:   kind=1 epoch=2 base=0 tick=1 schema=1 objects=42 payload=3154 header=9 objectBytes=3145 ops=Cplayer×41,Cscene×1
+    zz_entering_split_probe_test.go:139:   kind=2 epoch=2 base=1 tick=2 schema=1 objects=24 payload=1810 header=10 objectBytes=1800 ops=Cplayer×24
+    zz_entering_split_probe_test.go:137: run 5 forceAt=0 frames=3 total=4974 objects=66 objectBytes=4945 headers=[9 10 10] (Σ29)
+    zz_entering_split_probe_test.go:139:   kind=1 epoch=2 base=0 tick=1 schema=1 objects=31 payload=2329 header=9 objectBytes=2320 ops=Cplayer×30,Cscene×1
+    zz_entering_split_probe_test.go:139:   kind=2 epoch=2 base=1 tick=2 schema=1 objects=34 payload=2560 header=10 objectBytes=2550 ops=Cplayer×34
+    zz_entering_split_probe_test.go:139:   kind=2 epoch=2 base=2 tick=3 schema=1 objects=1 payload=85 header=10 objectBytes=75 ops=Cplayer×1
+    zz_entering_split_probe_test.go:137: run 6 forceAt=20 frames=3 total=4974 objects=66 objectBytes=4945 headers=[9 10 10] (Σ29)
+    zz_entering_split_probe_test.go:139:   kind=1 epoch=2 base=0 tick=1 schema=1 objects=22 payload=1654 header=9 objectBytes=1645 ops=Cplayer×21,Cscene×1
+    zz_entering_split_probe_test.go:139:   kind=2 epoch=2 base=1 tick=2 schema=1 objects=19 payload=1435 header=10 objectBytes=1425 ops=Cplayer×19
+    zz_entering_split_probe_test.go:139:   kind=2 epoch=2 base=2 tick=3 schema=1 objects=25 payload=1885 header=10 objectBytes=1875 ops=Cplayer×25
+    zz_entering_split_probe_test.go:137: run 7 forceAt=40 frames=2 total=4964 objects=66 objectBytes=4945 headers=[9 10] (Σ19)
+    zz_entering_split_probe_test.go:139:   kind=1 epoch=2 base=0 tick=1 schema=1 objects=42 payload=3154 header=9 objectBytes=3145 ops=Cplayer×41,Cscene×1
+    zz_entering_split_probe_test.go:139:   kind=2 epoch=2 base=1 tick=2 schema=1 objects=24 payload=1810 header=10 objectBytes=1800 ops=Cplayer×24
+    zz_entering_split_probe_test.go:137: run 8 forceAt=10 frames=3 total=4974 objects=66 objectBytes=4945 headers=[9 10 10] (Σ29)
+    zz_entering_split_probe_test.go:139:   kind=1 epoch=2 base=0 tick=1 schema=1 objects=12 payload=904 header=9 objectBytes=895 ops=Cplayer×11,Cscene×1
+    zz_entering_split_probe_test.go:139:   kind=2 epoch=2 base=1 tick=2 schema=1 objects=32 payload=2410 header=10 objectBytes=2400 ops=Cplayer×32
+    zz_entering_split_probe_test.go:139:   kind=2 epoch=2 base=2 tick=3 schema=1 objects=22 payload=1660 header=10 objectBytes=1650 ops=Cplayer×22
+--- PASS: TestProbeEnteringSplit (0.84s)
+PASS
+ok  	example.com/syncperf/internal/service/game	1.869s

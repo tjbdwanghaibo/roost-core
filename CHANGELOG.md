@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **修复**（scripts/perf）：`sync-business.sh` 的业务夹具在当前 core 上跑不起来（Start 之后在引擎实例上注册处理器 panic；别人 `near` 视图上的空载荷增量被 `clientsync.DecodeFields` 按 Codec 0 / `sync_format` 0 拒绝），按帧协议 2 / 信封 v3 的契约重写：处理器在 `init()` 里包级注册；接收端用 `entitysync.Decoder`，按 subject 记生成的全量、增量经 `ApplySyncPlayerDao` 合并、空载荷增量跳过，合并后与本 tick 提交后的 DAO 核对。只改夹具与文档，生产代码不变。见[证据](docs/maintenance/evidence/perf-terrain-acceptance-20261110/README.md#夹具重写2026-11-10-追加已修复)。
+
 - **行为变化 / 新码**（game-demo + scripts）：**分区场景里跨两个地图进程的地形笔刷直接拒绝，不再拆分转发**（维护者 2026-11-10：“跨格是指跨两个地图进程吗，如果是的话就直接拒绝”“玩家也不能刷地形，会在地形基础上设计这个限制”；[方案 §30.10](docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#3010-跨格笔刷直接拒绝维护者-2026-11-10撤回-301-的拆分)、[证据](docs/maintenance/evidence/terrain-brush-single-cell-20261110/README.md)）。笔刷覆盖的块归两个及以上的格时，`terrainmap.Map.RelayBrush` 在预扣配额与发号之前答 `ErrBrushCrossCell`，业务码新增 `terrain_cross_cell`（100070）：什么都没写、不扣配额、不占序号（同一个 `Seq` 可用在下一笔上）；规则与建筑占地的 `building_cross_cell` 相同。覆盖块都归一个格时照旧：本格直接执行，远端整份转发。删除只为多格服务的部分：按格拆分（`splitByOwner` → `ownerOfAll`）、并行转发、多份汇总与部分成功（`RelayResult.Parts` 改为单个 `RelayResult.Part`，`Err` / `Duplicate` 只看这一份）、多格的配额退还、格只执行自己那一部分（`Map.ownedPart`：格现在要求笔刷覆盖的块都归本格，否则答 `terrain_not_owned`）。保留单格转发、发号、格账本、逐块 `Outcome`、`terrain_pending`、重启对账；协议字段与 `terrain-edit` 线上格式不变。回归 `TestTerrainRelayRefusesABrushAcrossCells`（修前红：`a brush across two cells: <nil>, want ErrBrushCrossCell before anything is charged or issued`）；原“跨格两块都执行 / 部分成功”的两条用例改为新契约。`ROOST_SEAMLESS_TERRAIN=1` 演练的 (a) 步改为：跨格笔刷答 `terrain_cross_cell` 且两块与 `LastSeq` 不变，再由 B 发起整份落在 A 格的笔刷转发执行、改回（只编译与 vet，未运行）。
   - **升级要求**：客户端处理 `terrain_cross_cell`（把笔刷挪进一个格里再发）；分区场景答复的 `Chunks` 不再出现部分成功。业务工程重新生成（`RelayResult` 形状变了）。未部署，不做兼容。
 
