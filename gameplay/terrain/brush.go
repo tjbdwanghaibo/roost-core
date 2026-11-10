@@ -258,10 +258,23 @@ func ISqrt(n int64) int64 {
 //
 // 参数先经 Validate；覆盖到的块缺数据或形状不对时返回错误（ErrNotLoaded / ErrInvalidChunk），不给部分结果。
 func (b Brush) Apply(meta Meta, limits Limits, chunks map[ChunkKey]Chunk) ([]ChunkChange, error) {
+	return b.ApplyIn(meta, limits, chunks, nil)
+}
+
+// ApplyIn 是只算 part 里那几块的 Apply（part 为 nil 时是覆盖到的全部块）。跨格编辑拆给各格执行时（可编辑地形 P5），
+// 每个格只有、也只写自己的块，各自按同一笔刷算自己的那一部分：每个采样点的结果只取决于它自己编辑前的值与到中心的
+// 距离，不读别的点，所以把各部分的结果合起来，与在全部块上 Apply 逐点相同（同一份编辑前数据时）。
+//
+// part 里笔刷没覆盖到的块不贡献任何点；chunks 只需要 part 与覆盖到的块的交集。规则与错误同 Apply。
+func (b Brush) ApplyIn(meta Meta, limits Limits, chunks map[ChunkKey]Chunk, part []ChunkKey) ([]ChunkChange, error) {
 	if err := b.Validate(meta, limits); err != nil {
 		return nil, err
 	}
+	in := partSet(part)
 	for _, key := range b.Chunks(meta) {
+		if !in.has(key) {
+			continue
+		}
 		c, ok := chunks[key]
 		if !ok {
 			return nil, fmt.Errorf("%w: brush needs chunk %v", ErrNotLoaded, key)
@@ -273,6 +286,9 @@ func (b Brush) Apply(meta Meta, limits Limits, chunks map[ChunkKey]Chunk) ([]Chu
 	byChunk := map[ChunkKey][]PointChange{}
 	b.covers(meta, func(gx, gy, d2 int64) {
 		key := ChunkKey{X: int32(gx / ChunkSamples), Y: int32(gy / ChunkSamples)}
+		if !in.has(key) {
+			return
+		}
 		index := int32((gy%ChunkSamples)*ChunkSamples + gx%ChunkSamples)
 		c := chunks[key]
 		height, material := c.Heights[index], c.Materials[index]
@@ -288,6 +304,40 @@ func (b Brush) Apply(meta Meta, limits Limits, chunks map[ChunkKey]Chunk) ([]Chu
 		out = append(out, ChunkChange{Key: key, Points: points})
 	}
 	return out, nil
+}
+
+// Footprint 返回每块被覆盖的采样点数（d² ≤ R²，每个采样点只算在它所属的块里：共享边归右 / 上块），只看几何、不读
+// 块数据。一次笔刷只改一个字段（抬高 / 降低 / 整平改高度，改材质改材质），所以一块的 Footprint 是 View.BrushChanges
+// 在这块上（高度点数 + 材质点数）的上限：没有装入这些块的进程（分区场景转发编辑的 Base，P5）按它预扣配额，执行的格
+// 答回实际改动的点数后多退。参数先经 Validate。
+func (b Brush) Footprint(meta Meta) map[ChunkKey]int {
+	out := map[ChunkKey]int{}
+	b.covers(meta, func(gx, gy, _ int64) {
+		out[ChunkKey{X: int32(gx / ChunkSamples), Y: int32(gy / ChunkSamples)}]++
+	})
+	return out
+}
+
+// chunkSet 是 ApplyIn / BrushChangesIn 的块筛选：nil 表示全部。
+type chunkSet map[ChunkKey]struct{}
+
+func partSet(part []ChunkKey) chunkSet {
+	if part == nil {
+		return nil
+	}
+	set := make(chunkSet, len(part))
+	for _, key := range part {
+		set[key] = struct{}{}
+	}
+	return set
+}
+
+func (s chunkSet) has(key ChunkKey) bool {
+	if s == nil {
+		return true
+	}
+	_, ok := s[key]
+	return ok
 }
 
 // point 是一个采样点的编辑结果（公式见 Apply）。

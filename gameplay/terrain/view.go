@@ -214,11 +214,21 @@ func (v *View) Chunk(key ChunkKey) (c Chunk, version int64, loaded bool) {
 // 不复制块数据（装入的块不可变，直接读），只读，可以并发调用。参数先经 Validate；覆盖到的块没装着时返回 ErrNotLoaded。
 // 结果是读到时的快照：之后别的编辑提交了，锁内真正应用时改变的点数可能不同。
 func (v *View) BrushChanges(b Brush, limits Limits) (heights, materials int, err error) {
+	return v.BrushChangesIn(b, limits, nil)
+}
+
+// BrushChangesIn 是只数 part 里那几块的 BrushChanges（part 为 nil 时是覆盖到的全部块；口径同 Brush.ApplyIn）：分区场景
+// 里执行跨格编辑一部分的格进程只装着、也只写自己的块。只有 part 里覆盖到的块需要装着。
+func (v *View) BrushChangesIn(b Brush, limits Limits, part []ChunkKey) (heights, materials int, err error) {
 	if err := b.Validate(v.meta, limits); err != nil {
 		return 0, 0, err
 	}
+	in := partSet(part)
 	chunks := map[ChunkKey]*viewChunk{}
 	for _, key := range b.Chunks(v.meta) {
+		if !in.has(key) {
+			continue
+		}
 		c := v.load(key)
 		if c == nil {
 			return 0, 0, fmt.Errorf("%w: brush needs chunk %v", ErrNotLoaded, key)
@@ -227,6 +237,9 @@ func (v *View) BrushChanges(b Brush, limits Limits) (heights, materials int, err
 	}
 	b.covers(v.meta, func(gx, gy, d2 int64) {
 		c := chunks[ChunkKey{X: int32(gx / ChunkSamples), Y: int32(gy / ChunkSamples)}]
+		if c == nil {
+			return
+		}
 		index := (gy%ChunkSamples)*ChunkSamples + gx%ChunkSamples
 		height, material := c.heights[index], c.materials[index]
 		nextHeight, nextMaterial := b.point(limits, height, material, d2)

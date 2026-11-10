@@ -200,6 +200,17 @@ func startReplicaProc(t *testing.T, net *replicaNet, sid int32, pack *Pack, unlo
 
 func (p *replicaProc) startReplicator(t *testing.T, net *replicaNet, want []ChunkKey, mod func(*ReplicatorConfig)) {
 	t.Helper()
+	p.startReplicatorStore(t, net, want, mod, p.store)
+}
+
+// startReplicatorWith 是 startReplicator，副本那一路换成 store（例如要占位记录的存放处）。
+func (p *replicaProc) startReplicatorWith(t *testing.T, net *replicaNet, want []ChunkKey, store ReplicaStore) {
+	t.Helper()
+	p.startReplicatorStore(t, net, want, nil, store)
+}
+
+func (p *replicaProc) startReplicatorStore(t *testing.T, net *replicaNet, want []ChunkKey, mod func(*ReplicatorConfig), store ReplicaStore) {
+	t.Helper()
 	cfg := ReplicatorConfig{
 		Self: p.sid, Meta: p.view.Meta(), Send: net.sender(p.sid), OwnerOf: ownerByColumn,
 		Source: p.view, Owns: func(key ChunkKey) bool { owner, _ := ownerByColumn(key); return owner == p.sid },
@@ -212,7 +223,7 @@ func (p *replicaProc) startReplicator(t *testing.T, net *replicaNet, want []Chun
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.AddChannel(replicaTestCh, p.store); err != nil {
+	if err := r.AddChannel(replicaTestCh, store); err != nil {
 		t.Fatal(err)
 	}
 	p.r = r
@@ -554,7 +565,7 @@ func TestReplicaTrustsOnlyTheOwnerAndLetsGo(t *testing.T) {
 // 线上格式：往返、版本不同、截断、尾部多余字节、键不升序、计数越界都按坏消息拒绝。
 func TestReplicaWireFormat(t *testing.T) {
 	keys := []ChunkKey{{X: 0, Y: 0}, {X: 0, Y: 5}, {X: 3, Y: 1}}
-	sub := encodeSubscribe(9, -4, keys, []int64{0, -1, 42})
+	sub := encodeSubscribe(9, -4, keys, []int64{0, -1, 42}, nil)
 	m, err := decodeReplicaMsg(sub)
 	if err != nil {
 		t.Fatal(err)
@@ -570,21 +581,204 @@ func TestReplicaWireFormat(t *testing.T) {
 	if got := m.(chunksMsg); got.channel != 2 || got.rev != 3 || got.sentAt != 123 || len(got.entries) != 2 || got.entries[1].version != 8 || string(got.entries[1].data) != "\x01\x02\x03" || got.entries[0].data != nil {
 		t.Fatalf("chunks round trip: %+v", got)
 	}
+	withLots := encodeSubscribe(9, 1, keys, []int64{0, 0, 3}, []int64{-1, 0, 7})
+	m, err = decodeReplicaMsg(withLots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.(subscribeMsg); !slices.Equal(got.heldLots, []int64{-1, 0, 7}) {
+		t.Fatalf("subscribe with lots round trip: %+v", got)
+	}
+	lotEntries := []chunkEntry{
+		{key: keys[0], version: 4, noData: true, hasLots: true, lotRev: 9, lots: []int64{-5, 1 << 40}},
+		{key: keys[1], version: 0, hasLots: true, lotRev: 0},
+		{key: keys[2], version: 2, data: []byte{7}, hasLots: true, lotRev: 1, lots: []int64{3}},
+	}
+	m, err = decodeReplicaMsg(encodeChunks(1, 1, 0, lotEntries))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.(chunksMsg).entries; !slices.EqualFunc(got, lotEntries, func(a, b chunkEntry) bool {
+		return a.key == b.key && a.version == b.version && a.noData == b.noData && a.hasLots == b.hasLots && a.lotRev == b.lotRev &&
+			slices.Equal(a.lots, b.lots) && slices.Equal(a.data, b.data)
+	}) {
+		t.Fatalf("chunks with lots round trip: %+v", got)
+	}
+	badFlags := encodeChunks(1, 1, 0, []chunkEntry{{key: keys[0], version: 0}})
+	badFlags[len(badFlags)-1] = 0x80
+	tooManyLots := encodeChunks(1, 1, 0, []chunkEntry{{key: keys[0], version: 0, hasLots: true, lotRev: 1, lots: make([]int64, replicaMaxLots+1)}})
+	badLotsFlag := slices.Clone(sub)
+	badLotsFlag[len(badLotsFlag)-1] = 2
 	bad := map[string][]byte{
-		"empty":        nil,
-		"version":      append([]byte{2}, sub[1:]...),
-		"type":         {replicaWireVersion, 9, 0, 2},
-		"truncated":    chunks[:len(chunks)-1],
-		"trailing":     append(slices.Clone(sub), 0),
-		"not sorted":   encodeSubscribe(1, 1, []ChunkKey{{X: 0, Y: 1}, {X: 0, Y: 1}}, []int64{0, 0}),
-		"too many":     {replicaWireVersion, replicaSubscribe, 0, 2, 0xff, 0xff, 0xff, 0x7f},
-		"no revision":  {replicaWireVersion, replicaSubscribe, 0},
-		"data too big": encodeChunks(1, 1, 0, []chunkEntry{{key: keys[0], version: 1, data: make([]byte, replicaMaxData+1)}}),
+		"empty":         nil,
+		"version":       append([]byte{1}, sub[1:]...),
+		"entry flags":   badFlags,
+		"too many lots": tooManyLots,
+		"lots flag":     badLotsFlag,
+		"type":          {replicaWireVersion, 9, 0, 2},
+		"truncated":     chunks[:len(chunks)-1],
+		"trailing":      append(slices.Clone(sub), 0),
+		"not sorted":    encodeSubscribe(1, 1, []ChunkKey{{X: 0, Y: 1}, {X: 0, Y: 1}}, []int64{0, 0}, nil),
+		"too many":      {replicaWireVersion, replicaSubscribe, 0, 2, 0xff, 0xff, 0xff, 0x7f},
+		"no revision":   {replicaWireVersion, replicaSubscribe, 0},
+		"data too big":  encodeChunks(1, 1, 0, []chunkEntry{{key: keys[0], version: 1, data: make([]byte, replicaMaxData+1)}}),
 	}
 	for name, body := range bad {
 		if _, err := decodeReplicaMsg(body); !errors.Is(err, errReplicaMessage) {
 			t.Fatalf("%s: decoded (%v)", name, err)
 		}
+	}
+}
+
+// lotStore 是想要占位记录的存放处（ReplicaLotStore）：块数据照 viewStore，占位记录按修订号只进不退（与 game-demo 的
+// Map.ApplyReplicaLots 同一规则）。
+type lotStore struct {
+	*viewStore
+	lmu  sync.Mutex
+	lots map[ChunkKey]heldLots
+}
+
+type heldLots struct {
+	rev  int64
+	lots []int64
+}
+
+func (s *lotStore) HeldLots(key ChunkKey) int64 {
+	s.lmu.Lock()
+	defer s.lmu.Unlock()
+	return s.lots[key].rev
+}
+
+func (s *lotStore) ApplyLots(key ChunkKey, rev int64, lots []int64) error {
+	s.lmu.Lock()
+	defer s.lmu.Unlock()
+	if rev <= s.lots[key].rev {
+		return fmt.Errorf("%w: lots revision %d, holding %d", ErrStaleOverlay, rev, s.lots[key].rev)
+	}
+	s.lots[key] = heldLots{rev: rev, lots: slices.Clone(lots)}
+	return nil
+}
+
+func (s *lotStore) held(key ChunkKey) heldLots {
+	s.lmu.Lock()
+	defer s.lmu.Unlock()
+	return s.lots[key]
+}
+
+// ownerLots 是拥有者一侧的占位记录（ReplicatorConfig.Lots）：测试直接改、再 Changed。
+type ownerLots struct {
+	mu   sync.Mutex
+	lots map[ChunkKey]heldLots
+}
+
+func (o *ownerLots) get(key ChunkKey) (int64, []int64) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	l := o.lots[key]
+	return l.rev, l.lots
+}
+
+func (o *ownerLots) set(key ChunkKey, rev int64, lots ...int64) {
+	o.mu.Lock()
+	o.lots[key] = heldLots{rev: rev, lots: lots}
+	o.mu.Unlock()
+}
+
+func waitLots(t *testing.T, p *replicaProc, store *lotStore, key ChunkKey, rev int64, want []int64, what string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if got := store.held(key); got.rev == rev && slices.Equal(got.lots, want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: chunk %v holds lots %+v after 2s, want revision %d %v (stats %+v)", what, key, store.held(key), rev, want, p.r.Stats())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// 占位记录（P5：分区场景邻格的建筑占地进 Ghost 带）：拥有者改了占位（块数据不变）之后推到想要它的副本；推送全丢时
+// 续期的答复补齐，且只差占位时答复不带块数据；录下的旧消息倒序重放不回退；之后的块提交照常到、不动占位；不要占位记录
+// 的一路（存放处没实现 ReplicaLotStore）订阅里没有修订号，收到的块状态也不带占位记录。
+func TestReplicaCarriesTheOwnersLots(t *testing.T) {
+	pack, _ := writeTestPack(t, testMeta, Generated(testMeta, testSeed))
+	net := newReplicaNet()
+	owner := &ownerLots{lots: map[ChunkKey]heldLots{}}
+	a := startReplicaProc(t, net, sidA, pack, nil, nil, func(cfg *ReplicatorConfig) { cfg.Lots = owner.get })
+	b := &replicaProc{sid: sidB, view: NewView(pack)}
+	lots := &lotStore{viewStore: &viewStore{view: b.view, unloadable: map[ChunkKey]bool{}}, lots: map[ChunkKey]heldLots{}}
+	b.store = lots.viewStore
+	for key := range ChunksIn(pack.Meta().Bounds()) {
+		if err := b.view.LoadBase(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.startReplicatorWith(t, net, column0, lots)
+	const sidC int32 = 3
+	c := startReplicaProc(t, net, sidC, pack, nil, column0, nil) // 不要占位记录的一路
+	waitSubscribers(t, a, 2)
+
+	owner.set(column0[0], 1, 11, -22)
+	a.r.Changed(column0[0])
+	waitLots(t, b, lots, column0[0], 1, []int64{11, -22}, "first push")
+
+	// 推送全丢：续期的答复补上（块数据没变，答复不带它）。
+	net.setFault(func(from, to int32, body []byte) (bool, bool, time.Duration) {
+		return from == sidA && to == sidB && body[1] == replicaChunks, false, 0
+	})
+	owner.set(column0[0], 2, 33)
+	a.r.Changed(column0[0])
+	time.Sleep(testRenew / 2)
+	net.setFault(nil)
+	waitLots(t, b, lots, column0[0], 2, []int64{33}, "renewal after a lost push")
+	toB := net.recordedTo(sidB)
+	last, err := decodeReplicaMsg(toB[len(toB)-1].body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := last.(chunksMsg).entries[0]; !e.hasLots || !e.noData || e.data != nil {
+		t.Fatalf("the renewal's answer %+v: want lots only, no chunk data", e)
+	}
+
+	// 倒序重放录下的旧消息：占位不回退。
+	for i := len(toB) - 1; i >= 0; i-- {
+		b.r.Deliver(toB[i].from, toB[i].body)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for b.r.Stats().LotsStale == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("replayed lots never reached the store: %+v", b.r.Stats())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := lots.held(column0[0]); got.rev != 2 {
+		t.Fatalf("replayed old messages moved the lots back to %+v", got)
+	}
+
+	// 块提交照常推到，占位记录不变。
+	a.commit(t, column0[0], 1, 5)
+	waitVersion(t, b, column0[0], 1, "a commit after the lots")
+	sameData(t, a.view, b.view, column0[0])
+	if got := lots.held(column0[0]); got.rev != 2 || !slices.Equal(got.lots, []int64{33}) {
+		t.Fatalf("lots after a data commit: %+v", got)
+	}
+
+	// 不要占位记录的一路：块数据照常，收到的块状态没有一条带占位记录。
+	waitVersion(t, c, column0[0], 1, "the replica without lots")
+	for _, m := range net.recordedTo(sidC) {
+		decoded, err := decodeReplicaMsg(m.body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range decoded.(chunksMsg).entries {
+			if e.hasLots {
+				t.Fatalf("a replica that wants no lots got them: %+v", e)
+			}
+		}
+	}
+	if s := b.r.Stats(); s.DecodeErrors != 0 || s.ApplyErrors != 0 || s.LotsApplied < 2 {
+		t.Fatalf("replica stats %+v", s)
 	}
 }
 

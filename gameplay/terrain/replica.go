@@ -35,6 +35,12 @@ import (
 //   - 只认拥有者：一块的状态只接受 OwnerOf(块) 发来的（计 WrongOwner）；拥有者只答自己 Owns 的块。本进程自己写的块
 //     不订阅（视图里就是权威数据）。
 //
+//   - 占位记录（可编辑地形 P5，可选）：拥有者可以给每块附一份不透明的占位记录（ReplicatorConfig.Lots：修订号 + 若干
+//     int64，game-demo 是块上的建筑占地——服务端的串行化索引，不同步给客户端），想要它的那一路（存放处实现
+//     ReplicaLotStore）订阅时附上本地持有的占位修订号，拥有者答复、推送时带上当前记录。它与块数据各有各的版本：占位变了
+//     块的 Version 不变，只差占位时答复不带块数据。邻格的 Ghost 带用它让行走判定看见邻格的建筑。占位记录的修订号同样
+//     只进不退（ApplyLots 对旧的答 ErrStaleOverlay），与块数据同一个代际（BaseRevision）。
+//
 // 限制：拥有者的数据倒退（例如从备份恢复数据库）不在保证内——副本持有的更新版本不会被拉回（计 Ahead），要重启副本
 // 进程。各进程的原始地形包版本不同（换版只换了一部分进程）时，两边之间不复制（计 BaseRevisionDrops），副本停在换包前
 // 的数据；换版要整组进程换包重启。
@@ -59,6 +65,16 @@ type ReplicaStore interface {
 	Forget(key ChunkKey)
 }
 
+// ReplicaLotStore 是想要占位记录的存放处（ReplicaStore 同时实现它时，这一路的订阅附带占位修订号，拥有者的答复与推送
+// 带上占位记录；见包说明“占位记录”）。与 ReplicaStore 的方法一样只在 Run 的 goroutine 上调用。
+type ReplicaLotStore interface {
+	// HeldLots 返回本地持有的占位修订号：0 是“没有占位”（拥有者那边也没有时不用答），≥ 1 是持有的修订号，-1 表示要
+	// 拥有者把当前记录发来。
+	HeldLots(key ChunkKey) int64
+	// ApplyLots 应用拥有者的占位记录（rev ≥ 0；lots 只在调用期间有效）。比本地旧或相同的修订号返回 ErrStaleOverlay。
+	ApplyLots(key ChunkKey, rev int64, lots []int64) error
+}
+
 // ReplicatorConfig 配置一个进程的 Replicator。
 type ReplicatorConfig struct {
 	// Self 是本进程的 sid。Meta 是本进程打开的原始地形包的包头（BaseRevision 与地图范围）。
@@ -73,6 +89,10 @@ type ReplicatorConfig struct {
 	// 时 Source 为 nil。
 	Source *View
 	Owns   func(ChunkKey) bool
+	// Lots 是拥有者一侧可选的占位记录（包说明“占位记录”）：rev 是这块占位记录的修订号（0 = 没有；之后每次增删单调
+	// 增加，与块的 Version 无关），lots 是使用方编码的不透明 int64（至多 replicaMaxLots 个）。在 Run 的 goroutine 上调用，
+	// 只读、不阻塞；返回的切片 Replicator 不保留也不修改。nil 表示本进程没有占位记录（答复与推送都带 rev 0）。
+	Lots func(ChunkKey) (rev int64, lots []int64)
 	// Renew 是订阅的重发间隔（也是补齐的上限）；零值 1s。Lease 是拥有者保留一份订阅的时间，必须长于 Renew；零值
 	// 3 × Renew。Tick 是 Run 检查重发与过期的粒度；零值 Renew / 10（至少 1ms）。
 	Renew, Lease, Tick time.Duration
@@ -93,8 +113,9 @@ type ReplicaStats struct {
 	SubscribesOut, SubscribesIn, Subscribers uint64
 	// ChunksOut：拥有者发出的块状态条数（推送与补齐），其中 PushedOut 是推送。ChunkBytesOut 是块消息的字节。
 	ChunksOut, PushedOut, ChunkBytesOut uint64
-	// ChunksIn：副本收到的块状态条数；Applied 是应用了的，Stale 是比本地旧（或相同）而忽略的。
-	ChunksIn, Applied, Stale uint64
+	// ChunksIn：副本收到的块状态条数；Applied 是应用了的，Stale 是比本地旧（或相同）而忽略的。LotsApplied 是应用了的
+	// 占位记录（LotsStale 是比本地旧或相同而忽略的）。
+	ChunksIn, Applied, Stale, LotsApplied, LotsStale uint64
 	// BaseRevisionDrops：对方的原始地形包版本与本进程的不同而丢弃（订阅计 1，块状态按条数）。WrongOwner：发件的不是这块的拥有者。Unwanted：
 	// 本进程这一路没有订阅这块（订阅刚变）。NotOwned：订阅里有不归本进程写的块（不答）。Unloaded：拥有者自己这块没装入
 	// （记录装不进来，不答）。Ahead：副本持有的版本比拥有者的新（拥有者数据倒退，见包说明的限制）。
@@ -107,7 +128,7 @@ type ReplicaStats struct {
 type replicaCounters struct {
 	subscribesOut, subscribesIn, subscribers               atomic.Uint64
 	chunksOut, pushedOut, chunkBytesOut                    atomic.Uint64
-	chunksIn, applied, stale                               atomic.Uint64
+	chunksIn, applied, stale, lotsApplied, lotsStale       atomic.Uint64
 	revDrops, wrongOwner, unwanted, notOwned, unloaded     atomic.Uint64
 	ahead, decodeErrors, applyErrors, inboxDrops, sendDrop atomic.Uint64
 }
@@ -146,9 +167,10 @@ type replicaSubKey struct {
 	ch  ReplicaChannel
 }
 
-// replicaSub 是拥有者记下的一份订阅。
+// replicaSub 是拥有者记下的一份订阅；lots 为真时答复与推送带占位记录。
 type replicaSub struct {
 	keys  map[ChunkKey]struct{}
+	lots  bool
 	until time.Time
 }
 
@@ -262,7 +284,7 @@ func (r *Replicator) Stats() ReplicaStats {
 	return ReplicaStats{
 		SubscribesOut: s.subscribesOut.Load(), SubscribesIn: s.subscribesIn.Load(), Subscribers: s.subscribers.Load(),
 		ChunksOut: s.chunksOut.Load(), PushedOut: s.pushedOut.Load(), ChunkBytesOut: s.chunkBytesOut.Load(),
-		ChunksIn: s.chunksIn.Load(), Applied: s.applied.Load(), Stale: s.stale.Load(),
+		ChunksIn: s.chunksIn.Load(), Applied: s.applied.Load(), Stale: s.stale.Load(), LotsApplied: s.lotsApplied.Load(), LotsStale: s.lotsStale.Load(),
 		BaseRevisionDrops: s.revDrops.Load(), WrongOwner: s.wrongOwner.Load(), Unwanted: s.unwanted.Load(),
 		NotOwned: s.notOwned.Load(), Unloaded: s.unloaded.Load(), Ahead: s.ahead.Load(),
 		DecodeErrors: s.decodeErrors.Load(), ApplyErrors: s.applyErrors.Load(), InboxDrops: s.inboxDrops.Load(), SendDrops: s.sendDrop.Load(),
@@ -387,7 +409,14 @@ func (r *Replicator) subscribe(ch ReplicaChannel, c *replicaChannel, owner int32
 	for i, key := range keys {
 		held[i] = c.store.Held(key)
 	}
-	r.send(owner, encodeSubscribe(ch, r.cfg.Meta.BaseRevision, keys, held))
+	var heldLots []int64
+	if lots, ok := c.store.(ReplicaLotStore); ok {
+		heldLots = make([]int64, len(keys))
+		for i, key := range keys {
+			heldLots[i] = lots.HeldLots(key)
+		}
+	}
+	r.send(owner, encodeSubscribe(ch, r.cfg.Meta.BaseRevision, keys, held, heldLots))
 	r.stats.subscribesOut.Add(1)
 }
 
@@ -414,26 +443,43 @@ func (r *Replicator) applyChunks(from int32, m chunksMsg) {
 			r.stats.unwanted.Add(1)
 			continue
 		}
-		o := Overlay{BaseRevision: m.rev, Version: e.version}
-		if e.version >= 1 {
-			chunk, err := decodeChunk(e.data)
-			if err != nil {
-				r.stats.decodeErrors.Add(1)
-				continue
-			}
-			o.Heights, o.Materials = chunk.Heights, chunk.Materials
+		if !e.noData {
+			r.applyData(c, m, e, now)
 		}
-		switch err := c.store.Apply(e.key, o); {
-		case err == nil:
-			r.stats.applied.Add(1)
-			if hook := r.cfg.Applied; hook != nil {
-				hook(m.channel, e.key, e.version, now.Sub(time.Unix(0, m.sentAt)))
+		if lots, ok := c.store.(ReplicaLotStore); ok && e.hasLots {
+			switch err := lots.ApplyLots(e.key, e.lotRev, e.lots); {
+			case err == nil:
+				r.stats.lotsApplied.Add(1)
+			case errors.Is(err, ErrStaleOverlay):
+				r.stats.lotsStale.Add(1)
+			default:
+				r.stats.applyErrors.Add(1)
 			}
-		case errors.Is(err, ErrStaleOverlay):
-			r.stats.stale.Add(1)
-		default:
-			r.stats.applyErrors.Add(1)
 		}
+	}
+}
+
+// applyData 应用一条块状态里的块数据。
+func (r *Replicator) applyData(c *replicaChannel, m chunksMsg, e chunkEntry, now time.Time) {
+	o := Overlay{BaseRevision: m.rev, Version: e.version}
+	if e.version >= 1 {
+		chunk, err := decodeChunk(e.data)
+		if err != nil {
+			r.stats.decodeErrors.Add(1)
+			return
+		}
+		o.Heights, o.Materials = chunk.Heights, chunk.Materials
+	}
+	switch err := c.store.Apply(e.key, o); {
+	case err == nil:
+		r.stats.applied.Add(1)
+		if hook := r.cfg.Applied; hook != nil {
+			hook(m.channel, e.key, e.version, now.Sub(time.Unix(0, m.sentAt)))
+		}
+	case errors.Is(err, ErrStaleOverlay):
+		r.stats.stale.Add(1)
+	default:
+		r.stats.applyErrors.Add(1)
 	}
 }
 
@@ -457,6 +503,7 @@ func (r *Replicator) answer(from int32, m subscribeMsg) {
 		return
 	}
 	keys := make(map[ChunkKey]struct{}, len(m.keys))
+	wantsLots := m.heldLots != nil
 	var batch chunkBatch
 	for i, key := range m.keys {
 		if !r.cfg.Owns(key) {
@@ -465,19 +512,29 @@ func (r *Replicator) answer(from int32, m subscribeMsg) {
 		}
 		keys[key] = struct{}{}
 		version, loaded := r.cfg.Source.Version(key)
+		var lotsDiffer bool
+		if wantsLots {
+			rev, _ := r.lotsOf(key)
+			lotsDiffer = m.heldLots[i] != rev
+		}
 		switch held := m.held[i]; {
 		case !loaded:
 			r.stats.unloaded.Add(1)
 		case held > version:
 			r.stats.ahead.Add(1)
-		case held != version:
+		case held != version || lotsDiffer:
 			if e, ok := r.entry(key, version); ok {
-				batch.add(r, from, m.channel, e, false)
+				// 只差占位记录时不带块数据（副本的块已是这个版本，原始块也不用重新装）。
+				e.noData = held == version
+				if e.noData {
+					e.data = nil
+				}
+				batch.add(r, from, m.channel, r.withLots(e, wantsLots), false)
 			}
 		}
 	}
 	batch.flush(r)
-	r.subs[subKey] = &replicaSub{keys: keys, until: r.cfg.Now().Add(r.cfg.Lease)}
+	r.subs[subKey] = &replicaSub{keys: keys, lots: wantsLots, until: r.cfg.Now().Add(r.cfg.Lease)}
 	r.stats.subscribers.Store(uint64(len(r.subs)))
 }
 
@@ -513,7 +570,7 @@ func (r *Replicator) push(changed map[ChunkKey]struct{}) {
 				continue
 			}
 			if e, ok := r.entry(key, version); ok {
-				batch.add(r, sk.sid, sk.ch, e, true)
+				batch.add(r, sk.sid, sk.ch, r.withLots(e, sub.lots), true)
 			}
 		}
 		batch.flush(r)
@@ -548,6 +605,28 @@ func (r *Replicator) entry(key ChunkKey, version int64) (chunkEntry, bool) {
 	return e, true
 }
 
+// lotsOf 是拥有者一侧一块的占位记录（没有 Lots 时修订号 0）。
+func (r *Replicator) lotsOf(key ChunkKey) (int64, []int64) {
+	if r.cfg.Lots == nil {
+		return 0, nil
+	}
+	rev, lots := r.cfg.Lots(key)
+	if len(lots) > replicaMaxLots {
+		lots = lots[:replicaMaxLots] // 使用方的上限远小于它（game-demo 每块至多 64 份占地）；超出的截掉，不让整条消息坏掉
+	}
+	return rev, lots
+}
+
+// withLots 给要发给想要占位记录的订阅的一条块状态带上当前的占位记录。
+func (r *Replicator) withLots(e chunkEntry, wanted bool) chunkEntry {
+	if !wanted {
+		return e
+	}
+	e.hasLots = true
+	e.lotRev, e.lots = r.lotsOf(e.key)
+	return e
+}
+
 // chunkBatch 把发给同一个（sid, channel）的块状态攒成不超过 MaxMessage 的消息。
 type chunkBatch struct {
 	sid     int32
@@ -563,7 +642,7 @@ func (b *chunkBatch) add(r *Replicator, sid int32, ch ReplicaChannel, e chunkEnt
 		b.flush(r)
 	}
 	b.entries = append(b.entries, e)
-	b.size += len(e.data) + 24
+	b.size += len(e.data) + 24 + 10*len(e.lots)
 	if pushed {
 		b.pushed++
 	}
@@ -611,20 +690,28 @@ func (r *Replicator) handle(d replicaDelivery) {
 // BaseRevision，然后：
 //
 //	订阅（replicaSubscribe）：uvarint 块数 n；n 个块 ID（ChunkKey.ID，升序，与前一个的差 uvarint）；n 个持有版本（zigzag
-//	                         varint：-1 显示不了、0 原始块、≥ 1 覆盖块）。
-//	块状态（replicaChunks）：varint 发出时间（UnixNano，只用于测量）；uvarint 条数；每条 uvarint 块 ID、uvarint Version，
-//	                         Version ≥ 1 时再跟 uvarint 长度与整块数据（原始地形包的块编码：平面预测 + DEFLATE，见 codec.go）。
+//	                         varint：-1 显示不了、0 原始块、≥ 1 覆盖块）；1 字节“要占位记录”（0 / 1），为 1 时再跟 n 个
+//	                         持有的占位修订号（zigzag varint）。
+//	块状态（replicaChunks）：varint 发出时间（UnixNano，只用于测量）；uvarint 条数；每条 uvarint 块 ID、uvarint Version、
+//	                         1 字节标志（第 0 位：带占位记录；第 1 位：不带块数据——只差占位记录），Version ≥ 1 且带块数据
+//	                         时再跟 uvarint 长度与整块数据（原始地形包的块编码：平面预测 + DEFLATE，见 codec.go），带占位
+//	                         记录时再跟 uvarint 修订号、uvarint 个数与每个 zigzag varint。
 //
-// 版本不同的消息按坏消息丢弃（未上线，不做跨版本兼容）。
+// 版本不同的消息按坏消息丢弃（未上线，不做跨版本兼容）。v2（可编辑地形 P5）：订阅与块状态加占位记录。
 
 const (
-	replicaWireVersion = 1
+	replicaWireVersion = 2
 	replicaSubscribe   = 1
 	replicaChunks      = 2
 	// replicaMaxKeys / replicaMaxData 是解码的上限：一份订阅至多这么多块（一个格 48 × 48 块的 10 倍余量），一块数据至多
 	// 这么多字节（明文上限 16KB，DEFLATE 不会把它放大到 64KB）。
 	replicaMaxKeys = 1 << 15
 	replicaMaxData = 64 << 10
+	// replicaMaxLots 是一块占位记录的个数上限（game-demo 每块至多 64 份占地）。
+	replicaMaxLots = 1024
+	// 块状态每条的标志位。
+	entryHasLots = 1 << 0
+	entryNoData  = 1 << 1
 )
 
 var errReplicaMessage = errors.New("terrain: malformed replica message")
@@ -634,6 +721,8 @@ type subscribeMsg struct {
 	rev     int64
 	keys    []ChunkKey
 	held    []int64
+	// heldLots 非 nil 表示这一路要占位记录（与 keys 一一对应）。
+	heldLots []int64
 }
 
 type chunksMsg struct {
@@ -647,6 +736,12 @@ type chunkEntry struct {
 	key     ChunkKey
 	version int64
 	data    []byte
+	// noData：只差占位记录，不带块数据（副本的块已是这个版本）。
+	noData bool
+	// hasLots 时 lotRev / lots 是拥有者这块的占位记录。
+	hasLots bool
+	lotRev  int64
+	lots    []int64
 }
 
 func appendReplicaHeader(b []byte, kind byte, ch ReplicaChannel, rev int64) []byte {
@@ -654,8 +749,8 @@ func appendReplicaHeader(b []byte, kind byte, ch ReplicaChannel, rev int64) []by
 	return binary.AppendVarint(b, rev)
 }
 
-// encodeSubscribe 编码订阅；keys 已按 ID 升序，held 与它一一对应。
-func encodeSubscribe(ch ReplicaChannel, rev int64, keys []ChunkKey, held []int64) []byte {
+// encodeSubscribe 编码订阅；keys 已按 ID 升序，held 与它一一对应；heldLots 为 nil 表示不要占位记录，否则也一一对应。
+func encodeSubscribe(ch ReplicaChannel, rev int64, keys []ChunkKey, held, heldLots []int64) []byte {
 	b := make([]byte, 0, 3+2*binary.MaxVarintLen64+len(keys)*4)
 	b = appendReplicaHeader(b, replicaSubscribe, ch, rev)
 	b = binary.AppendUvarint(b, uint64(len(keys)))
@@ -668,13 +763,20 @@ func encodeSubscribe(ch ReplicaChannel, rev int64, keys []ChunkKey, held []int64
 	for _, h := range held {
 		b = binary.AppendVarint(b, h)
 	}
+	if heldLots == nil {
+		return append(b, 0)
+	}
+	b = append(b, 1)
+	for _, h := range heldLots {
+		b = binary.AppendVarint(b, h)
+	}
 	return b
 }
 
 func encodeChunks(ch ReplicaChannel, rev, sentAt int64, entries []chunkEntry) []byte {
 	size := 3 + 3*binary.MaxVarintLen64
 	for _, e := range entries {
-		size += 3*binary.MaxVarintLen64 + len(e.data)
+		size += 5*binary.MaxVarintLen64 + len(e.data) + len(e.lots)*binary.MaxVarintLen64
 	}
 	b := make([]byte, 0, size)
 	b = appendReplicaHeader(b, replicaChunks, ch, rev)
@@ -683,9 +785,24 @@ func encodeChunks(ch ReplicaChannel, rev, sentAt int64, entries []chunkEntry) []
 	for _, e := range entries {
 		b = binary.AppendUvarint(b, e.key.ID())
 		b = binary.AppendUvarint(b, uint64(e.version))
-		if e.version >= 1 {
+		var flags byte
+		if e.hasLots {
+			flags |= entryHasLots
+		}
+		if e.noData {
+			flags |= entryNoData
+		}
+		b = append(b, flags)
+		if e.version >= 1 && !e.noData {
 			b = binary.AppendUvarint(b, uint64(len(e.data)))
 			b = append(b, e.data...)
+		}
+		if e.hasLots {
+			b = binary.AppendUvarint(b, uint64(e.lotRev))
+			b = binary.AppendUvarint(b, uint64(len(e.lots)))
+			for _, v := range e.lots {
+				b = binary.AppendVarint(b, v)
+			}
 		}
 	}
 	return b
@@ -726,6 +843,19 @@ func (rd *replicaReader) varint(what string) int64 {
 		return 0
 	}
 	rd.b = rd.b[n:]
+	return v
+}
+
+func (rd *replicaReader) byte1(what string) byte {
+	if rd.err != nil {
+		return 0
+	}
+	if len(rd.b) == 0 {
+		rd.fail(what)
+		return 0
+	}
+	v := rd.b[0]
+	rd.b = rd.b[1:]
 	return v
 }
 
@@ -773,6 +903,16 @@ func decodeReplicaMsg(body []byte) (any, error) {
 		for range n {
 			m.held = append(m.held, rd.varint("held version"))
 		}
+		switch rd.byte1("lots flag") {
+		case 0:
+		case 1:
+			m.heldLots = make([]int64, 0, n)
+			for range n {
+				m.heldLots = append(m.heldLots, rd.varint("held lots revision"))
+			}
+		default:
+			rd.fail("lots flag")
+		}
 		out = m
 	case replicaChunks:
 		m := chunksMsg{channel: ch, rev: rev, sentAt: rd.varint("sent at")}
@@ -787,12 +927,32 @@ func decodeReplicaMsg(body []byte) (any, error) {
 				rd.fail("version")
 			}
 			e.version = int64(version)
-			if e.version >= 1 {
+			flags := rd.byte1("entry flags")
+			if flags&^(entryHasLots|entryNoData) != 0 {
+				rd.fail("entry flags")
+			}
+			e.hasLots, e.noData = flags&entryHasLots != 0, flags&entryNoData != 0
+			if e.version >= 1 && !e.noData {
 				size := rd.uvarint("data length")
 				if size > replicaMaxData {
 					rd.fail("data length")
 				}
 				e.data = rd.bytes(size, "data")
+			}
+			if e.hasLots {
+				rev := rd.uvarint("lots revision")
+				if rev > 1<<62 {
+					rd.fail("lots revision")
+				}
+				e.lotRev = int64(rev)
+				count := rd.uvarint("lots count")
+				if count > replicaMaxLots {
+					rd.fail("lots count")
+					count = 0
+				}
+				for range count {
+					e.lots = append(e.lots, rd.varint("lot"))
+				}
 			}
 			m.entries = append(m.entries, e)
 		}

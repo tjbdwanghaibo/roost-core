@@ -108,6 +108,7 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 - **改材质**：覆盖的点材质改成 `Material`，不看衰减；不动高度。
 - **输出**：`Apply` 返回每块改了值的点（`PointChange{Index, Height, Material}`，下标按升序），值没变的点不出现；`ChunkChange.HeightChanges` 是这块改了高度的点数（上层的整字段守卫按它判断）。
 - **只数不改**：`View.BrushChanges(b, limits)` 返回把 `b` 用在视图当前数据上会改变值的高度点数与材质点数（算法同 `Apply`，每个采样点只算一次，一个点两者都变算 2）。不复制块数据（装入的块不可变）、只读、可并发；覆盖到没装的块报 `ErrNotLoaded`。结果是读到时的快照，上层拿它在事务之前估算改动量（game-demo 的每玩家改动点数配额，[方案 §17](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#17-编辑配额与材质守卫-500-实施结果2026-11-08)）。
+- **拆成几部分（P5 跨格编辑）**：`ApplyIn(meta, limits, chunks, part)` / `View.BrushChangesIn(b, limits, part)` 只算 `part` 里的块（nil 是全部）。每个采样点的结果只取决于它自己编辑前的值与到中心的距离，所以各格只算自己写的块、合起来与整笔 `Apply` 逐点相同（`TestABrushSplitIntoPartsAddsUpToTheWholeBrush`）；只有 part 里覆盖到的块需要数据。`Footprint(meta)` 是每块被覆盖的采样点数，只看几何：一次笔刷只改一个字段，所以它是这块改动点数的上限，没装这些块的进程（分区场景转发编辑的 Base）按它预扣配额。
 
 **金样**：[client/spec/terrain-brush.json](../../client/spec/terrain-brush.json)——`ISqrt` 表、三种衰减的权重表、17 个笔刷（四种操作 × 三种衰减、块边界、四块交点、夹到基岩 / 上限、整平幂等、地图边缘）在 `terrain-golden.pack` 原始块上的结果：每例覆盖的块、每块改了的点数与 SHA-256（逐点 `index u16 LE, height u16 LE, material u8` 按下标升序），点数不超过 40 时列出全部点。`TestClientBrushGolden` 核对；改算法时 `go test ./gameplay/terrain -run TestClientBrushGolden -update`（不重写包）。
 
@@ -142,8 +143,10 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 - **代际**：每条消息带发件进程原始地形包的 `BaseRevision`，与本进程不同的整条丢弃（计 `BaseRevisionDrops`；拥有者不答，副本不收）。版本只在同一 `BaseRevision` 内比较：换版时拥有者把旧记录重置为 Version 0（D13），换版前的推送带旧 `BaseRevision`、到换版后的进程一律丢弃，不会把丢弃的覆盖块装回来。同一 `BaseRevision` 内“同一个版本只对应一份内容”的前提是拥有者只推送持久的版本（改块事务 strict，提交后回调在 WAL 落盘之后）。
 - **只认拥有者**：一块的状态只接受 `OwnerOf(块)` 发来的（计 `WrongOwner`），拥有者只答自己 `Owns` 的块。
 - **并发**：订阅表、想要的块只在 `Run` 的 goroutine 上读写；`Want` / `Changed` / `Deliver` 只是短锁 + 非阻塞信号，任何 goroutine 可调；`ReplicaStore` 的三个方法都在 Run 的 goroutine 上调用（解压、读包在这里做）。
+- **占位记录（P5，可选）**：拥有者可以给每块附一份不透明的占位记录（`ReplicatorConfig.Lots`：修订号 + 至多 1024 个 int64；game-demo 是块上的建筑占地，服务端索引、不同步给客户端）。存放处同时实现 `ReplicaLotStore`（`HeldLots` / `ApplyLots`）的那一路订阅时附上持有的占位修订号，拥有者的答复与推送带上当前记录；占位与块数据各有版本，只差占位时答复不带块数据。占位修订号同样只进不退（`ApplyLots` 对旧的答 `ErrStaleOverlay`，计 `LotsStale`）。不实现它的那一路与 v1 行为相同（不带占位记录）。邻格的 Ghost 带用它让行走判定看见邻格的建筑。
+- **线上格式 v2**（P5）：订阅加“要占位记录”与持有的占位修订号，块状态每条加标志字节（带占位记录 / 不带块数据）与占位记录。v1 的消息按坏消息丢弃（未上线不兼容，升级须先停旧进程）。
 - **限制**：拥有者数据倒退（从备份恢复数据库）不在保证内，副本持有的更新版本不会被拉回（计 `Ahead`），要重启副本进程；各进程原始地形包版本不同（只换了一部分进程）时两边之间不复制，换版要整组进程换包重启。
-- **测试**：`replica_test.go`（进程内网络：推送、丢失 / 重复 / 乱序、任一边重启补齐、D13 换版后撤回且旧包的拥有者不答新包的订阅、只认拥有者、线上格式；`ROOST_TERRAIN_REPLICA_PERF=1` 记延迟与字节），经真实 cellworld Node（回环与 nats-server）的用例在 `gameplay/cellworld/ext_test.go`。
+- **测试**：`replica_test.go`（进程内网络：推送、丢失 / 重复 / 乱序、任一边重启补齐、D13 换版后撤回且旧包的拥有者不答新包的订阅、只认拥有者、占位记录的推送 / 续期补齐 / 倒序不回退 / 不要的一路不带、线上格式；`ROOST_TERRAIN_REPLICA_PERF=1` 记延迟与字节），经真实 cellworld Node（回环与 nats-server）的用例在 `gameplay/cellworld/ext_test.go`。
 
 ## 限制
 
