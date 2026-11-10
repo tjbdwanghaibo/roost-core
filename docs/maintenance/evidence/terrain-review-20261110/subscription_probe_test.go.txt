@@ -1,0 +1,24 @@
+package terrain
+
+import "testing"
+
+type reviewEmptyStore struct{}
+func (reviewEmptyStore) Held(ChunkKey) int64 { return 0 }
+func (reviewEmptyStore) Apply(ChunkKey, Overlay) error { return nil }
+func (reviewEmptyStore) Forget(ChunkKey) {}
+
+func TestReviewLargeSubscriptionProducesDecodableMessages(t *testing.T) {
+ for _, count := range []int{32768,32769} {
+  t.Run(string(rune('A'+count-32768)),func(t *testing.T){
+   var bodies [][]byte
+   r,err:=NewReplicator(ReplicatorConfig{Self:2,Meta:Meta{BaseRevision:1,ChunksX:256,ChunksY:256},OwnerOf:func(ChunkKey)(int32,bool){return 1,true},Send:func(_ int32,b []byte)bool{bodies=append(bodies,b);return true}})
+   if err!=nil {t.Fatal(err)}
+   if err=r.AddChannel(1,reviewEmptyStore{});err!=nil {t.Fatal(err)}
+   keys:=make([]ChunkKey,count)
+   for i:=range keys {keys[i]=ChunkKey{X:int32(i/256),Y:int32(i%256)}}
+   r.Want(1,keys);r.takeInput()
+   if len(bodies)==0 {t.Fatal("no subscription")}
+   for _,body:=range bodies {if _,err:=decodeReplicaMsg(body);err!=nil {t.Fatalf("%d legal wanted chunks produce an undecodable subscription: %v",count,err)}}
+  })
+ }
+}

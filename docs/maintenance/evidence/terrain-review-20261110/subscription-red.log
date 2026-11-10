@@ -1,0 +1,12 @@
+--- FAIL: TestReviewLargeSubscriptionProducesDecodableMessages (0.01s)
+    --- FAIL: TestReviewLargeSubscriptionProducesDecodableMessages/B (0.00s)
+        review_1110_test.go:21: 32769 legal wanted chunks produce an undecodable subscription: terrain: malformed replica message: 32769 keys
+--- FAIL: TestReviewLargeSubscriptionProducesDecodableMessages (0.01s)
+    --- FAIL: TestReviewLargeSubscriptionProducesDecodableMessages/B (0.00s)
+        review_1110_test.go:21: 32769 legal wanted chunks produce an undecodable subscription: terrain: malformed replica message: 32769 keys
+--- FAIL: TestReviewLargeSubscriptionProducesDecodableMessages (0.01s)
+    --- FAIL: TestReviewLargeSubscriptionProducesDecodableMessages/B (0.00s)
+        review_1110_test.go:21: 32769 legal wanted chunks produce an undecodable subscription: terrain: malformed replica message: 32769 keys
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	0.031s
+FAIL
