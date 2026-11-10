@@ -684,9 +684,23 @@ func TestTerrainSceneWorldAndItsLimit(t *testing.T) {
 		View: gamescene.View{EnterRadius: 120, LeaveRadius: 150, MinRadius: 60, MaxLeaveRadius: 300, RadiusStep: 30, MaxVisible: 64}}) {
 		t.Fatalf("the map without terrain changed: %+v", lifecycle.WorldSceneConfig())
 	}
-	// 分区场景的 Base 世界（网格）保持 demo 原尺度的主视野。
-	if world, err := replicatedWorld(settings.ScenePartition{Enabled: true, Cols: 2, Rows: 2, CellSize: 1000}, m); err != nil || world.View != gamescene.DefaultView() || world.Normalize().View != gamescene.DefaultView() {
-		t.Fatalf("the partitioned scene's main view: %+v, %v", world.View, err)
+	// 不开地形的分区场景的 Base 世界（网格）保持 demo 原尺度的主视野；开地形的是游戏尺度（P5，方案 §29.8 ⑦：与普通
+	// 地形场景同一份视野、32m 的块），witness 半径盖不住它的离开上限时拒绝。
+	if world, err := replicatedWorld(settings.ScenePartition{Enabled: true, Cols: 2, Rows: 2, CellSize: 1000}, nil); err != nil || world.View != gamescene.DefaultView() || world.Normalize().View != gamescene.DefaultView() || world.BlockSize != partitionBlockSize {
+		t.Fatalf("the partitioned scene's main view without terrain: %+v, %v", world, err)
+	}
+	gameScale := settings.ScenePartition{Enabled: true, Cols: 2, Rows: 1, CellSize: 4 * terrain.ChunkSize, ViewRadius: 6800, Hysteresis: 200, GhostBand: 7000}
+	if world, err := replicatedWorld(gameScale, m); err != nil || world.View != gamescene.TerrainView() || world.BlockSize != gamescene.TerrainBlockSize ||
+		world.View.MaxVisible != 128 || world.View.EnterRadius != 3200 {
+		t.Fatalf("the partitioned terrain scene's main view: %+v, %v", world, err)
+	}
+	if settings.PartitionTerrainMaxBaseLeaveRadius != gamescene.TerrainView().MaxLeaveRadius {
+		t.Fatalf("settings checks view_radius against %d, the terrain view leaves at %d", settings.PartitionTerrainMaxBaseLeaveRadius, gamescene.TerrainView().MaxLeaveRadius)
+	}
+	short := gameScale
+	short.ViewRadius = 400
+	if _, err := replicatedWorld(short, m); err == nil {
+		t.Fatal("a witness radius of 4m under the game-scale main view was accepted")
 	}
 	// 手写的 Config 没给视野：取 demo 原尺度。
 	if got := (gamescene.Config{Width: 10, Height: 10, BlockSize: 5}).Normalize().View; got != gamescene.DefaultView() {

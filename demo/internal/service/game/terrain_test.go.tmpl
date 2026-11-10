@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -632,6 +633,17 @@ func TestTerrainRegionFollowsThePartition(t *testing.T) {
 	scene.Terrain.Pack = ""
 	if err := scene.ValidateConfig(false); err != nil {
 		t.Fatalf("cell_size 3000 without terrain: %v", err)
+	}
+	// 开地形的分区场景的主视野是游戏尺度（P5，方案 §29.8 ⑦）：witness 半径至少是它的离开上限 6720；README / 演练用的一组数
+	// （格 128m、view_radius 68m、hysteresis 2m、ghost_band 70m）通过，demo 原尺度的 view_radius 400 拒绝。
+	scene.Terrain.Pack = "terrain.pack"
+	scene.Partition.CellSize, scene.Partition.ViewRadius, scene.Partition.Hysteresis, scene.Partition.GhostBand = 2*terrain.ChunkSize, 6800, 200, 7000
+	if err := scene.ValidateConfig(false); err != nil {
+		t.Fatalf("the game-scale partition with terrain: %v", err)
+	}
+	scene.Partition.ViewRadius = 400
+	if err := scene.ValidateConfig(false); err == nil || !strings.Contains(err.Error(), "view_radius 400 must cover") {
+		t.Fatalf("view_radius 400 with terrain: %v", err)
 	}
 }
 

@@ -356,15 +356,29 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 // or the editable terrain's map), so every point a member can stand on can be
 // seen. A partitioned scene's world is the grid's, much larger than the
 // ordinary map: the interest policy indexes the mirrors over all of it.
+//
+// The partitioned scene's main view: without terrain it keeps the demo's
+// scale (DefaultView on 2m blocks); with terrain it is the game's scale like
+// the ordinary terrain scene (TerrainView on 32m blocks, editable terrain P5,
+// plan §29.8 ⑦). What a client sees comes only from the witness, so the
+// witness radius (scene.partition.view_radius) must cover the view's largest
+// leave radius — settings checks it at load (PartitionMaxBaseLeaveRadius /
+// PartitionTerrainMaxBaseLeaveRadius), and this refuses a mismatch should the
+// view and the settings constant drift apart.
 func replicatedWorld(partitioned settings.ScenePartition, m *terrainmap.Map) (gamescene.Config, error) {
 	if partitioned.Enabled {
-		return gamescene.Config{
+		config := gamescene.Config{
 			Width: int64(partitioned.Cols) * partitioned.CellSize, Height: int64(partitioned.Rows) * partitioned.CellSize,
 			BlockSize: partitionBlockSize, Spawn: spatial.Point{X: partitioned.SpawnX, Y: partitioned.SpawnY},
-			// 分区场景的主视野保持 demo 原尺度：客户端看到的只来自 witness，witness 半径按这个尺度的离开上限校验
-			// （settings.PartitionMaxBaseLeaveRadius）；放大要连同 witness / Ghost 带一起改（可编辑地形方案 §28）。
 			View: gamescene.DefaultView(),
-		}, nil
+		}
+		if m != nil {
+			config.BlockSize, config.View = gamescene.TerrainBlockSize, gamescene.TerrainView()
+		}
+		if partitioned.ViewRadius != 0 && partitioned.ViewRadius < config.View.MaxLeaveRadius {
+			return gamescene.Config{}, fmt.Errorf("scene: scene.partition.view_radius %d does not cover the main view's largest leave radius %d", partitioned.ViewRadius, config.View.MaxLeaveRadius)
+		}
+		return config, nil
 	}
 	return sceneWorld(partitioned, m)
 }

@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -35,12 +36,24 @@ func (t SceneTerrain) ValidateConfig(bool) error {
 // 格的进程写，方案 §4），即 cell_size 是地形块边长（terrain.ChunkSize = 6400，64m）的整数倍（网格原点是 (0, 0)，
 // 也是块的边界）。demo 缺省的 cell_size 3000 不满足：开地形时要把格改成 6400 的倍数（README 有示例）；不开地形的
 // 分区场景不受影响。
+//
+// 开了地形的分区场景，Base 的主视野是游戏尺度（与开地形的普通场景同一份 game/scene.TerrainView，可编辑地形 P5 / 方案
+// §29.8 ⑦）：witness 的 view_radius 至少是它的离开上限 PartitionTerrainMaxBaseLeaveRadius（6720，67.2m），于是 ghost_band
+// ≥ view_radius + hysteresis（ScenePartition.ValidateConfig 查），cell_size > ghost_band（网格查）。README 有一组可用的数。
 func (s Scene) ValidateConfig(bool) error {
 	if !s.Terrain.Enabled() || !s.Partition.Enabled {
 		return nil
 	}
+	var errs []error
 	if s.Partition.CellSize%terrain.ChunkSize != 0 {
-		return fmt.Errorf("scene.terrain: scene.partition.cell_size %d must be a multiple of the terrain chunk side %d, so that no chunk straddles two cells", s.Partition.CellSize, terrain.ChunkSize)
+		errs = append(errs, fmt.Errorf("scene.terrain: scene.partition.cell_size %d must be a multiple of the terrain chunk side %d, so that no chunk straddles two cells", s.Partition.CellSize, terrain.ChunkSize))
 	}
-	return nil
+	if s.Partition.ViewRadius < PartitionTerrainMaxBaseLeaveRadius {
+		errs = append(errs, fmt.Errorf("scene.terrain: scene.partition.view_radius %d must cover the terrain scene's largest leave radius %d (the main view at the game's scale); ghost_band then needs at least view_radius + hysteresis", s.Partition.ViewRadius, PartitionTerrainMaxBaseLeaveRadius))
+	}
+	return errors.Join(errs...)
 }
+
+// PartitionTerrainMaxBaseLeaveRadius 是开了地形的分区场景里 Base 的主视野的离开上限：game/scene.TerrainView 的
+// MaxLeaveRadius（67.2m；internal/service/<game> 的 replicatedWorld 运行期再核对一次，测试断言二者相等）。
+const PartitionTerrainMaxBaseLeaveRadius = 6720

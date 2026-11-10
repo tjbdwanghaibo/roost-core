@@ -15,9 +15,10 @@
 #   ROOST_DATAENGINE_IT_MONGO_URI=… ROOST_DATAENGINE_IT_NATS_URL=… ROOST_DATAENGINE_IT_REDIS_ADDR=… \
 #   ROOST_SEAMLESS_ETCD_PORT=58379 ROOST_SEAMLESS_OUT=/abs/dir scripts/test-seamless-demo.sh
 #
-# ROOST_SEAMLESS_TERRAIN=1：开地形的分区演练（可编辑地形 T05 / T06 的真实多进程验收，客户端步骤在
-# scripts/testdata/seamless/terrain.go.txt）。分区换成 2 × 1 个 12800（两块地形）见方的格、ghost_band 600 =
-# view_radius 400 + hysteresis 200，所有 game 进程配同一个 4 × 2 块的平地地形包（演练程序写出）；起 sid 1001（格 A）、
+# ROOST_SEAMLESS_TERRAIN=1：开地形的分区演练（可编辑地形 T05 / T06 / T08 的真实多进程验收，客户端步骤在
+# scripts/testdata/seamless/terrain.go.txt）。分区换成 2 × 1 个 12800（两块地形）见方的格；主视野是游戏尺度（P5：Base 用
+# TerrainView，离开上限 67.2m），所以 view_radius 6800、hysteresis 200、ghost_band 7000 = view_radius + hysteresis；所有
+# game 进程配同一个 4 × 2 块的平地地形包（演练程序写出，70m 的带让每个格装下整张图）；起 sid 1001（格 A）、
 # 1002（格 B）、1004（只做 Base），不起普通场景 sid 1003、不跑它的机器人。不设（缺省）时是原来的演练，行为不变。
 # ROOST_SEAMLESS_PROJECT_HOOK：生成工程之后、编译之前在工程目录里执行的一条 shell 命令（变异验证用：例如删掉装地面
 # 钩子的那一行，确认演练会变红）。
@@ -117,7 +118,8 @@ grep -q 'game_sids: \[1000, 1001, 1002, 1003, 1004\]' configs/activity_groups.ya
 cp configs/service/config.game.yaml "$work_dir/config.game.ordinary.yaml"
 if [[ "$terrain" == 1 ]]; then
 	# 开地形的分区场景：4 × 2 块（256m × 128m）的平地包，2 × 1 个 12800 的格（每格 2 × 2 块，块不跨格），世界正好是地图。
-	# ghost_band 600 = view_radius 400 + hysteresis 200（越过分界线 200 才交接，演练在这 200 里放邻格的坎）；idle_period 0：
+	# 游戏尺度的主视野（P5）：view_radius 6800 ≥ 离开上限 6720，ghost_band 7000 = view_radius 6800 + hysteresis 200（越过
+	# 分界线 200 才交接，演练在这 200 里放邻格的坎）；idle_period 0：
 	# 怪一直 50ms 一拍（演练按 GM 观察它的折回点）。格 A 里一只沿 y = 9000 往返的怪；玩家进场点 (11800, 3000) 在格 A。
 	mkdir -p configs/terrain
 	"$work_dir/drill" -write-flat-pack configs/terrain/drill-flat.pack
@@ -132,9 +134,9 @@ scene:
     cols: 2
     rows: 1
     owners: ["1001", "1002"]
-    ghost_band: 600
+    ghost_band: 7000
     hysteresis: 200
-    view_radius: 400
+    view_radius: 6800
     idle_period: 0s
     writeback_every: 1s
     lease_timeout: 3s
