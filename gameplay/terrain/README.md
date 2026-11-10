@@ -39,7 +39,7 @@
 - **打开**（`OpenPack`）只读包头与索引表（1w 地图约 1MB），整体校验 `metaSHA256`、每项偏移在数据区内；包头或索引坏了返回 `ErrBadPack`，版本或几何常量不符返回 `ErrPackVersion`。
 - **读块**（`Pack.ReadChunk`）：一次 `ReadAt`、校验这块的 SHA-256、解码，返回新分配的 `Chunk`。坏块返回 `ErrCorruptChunk`（带块坐标），其他块照常可读；不返回默认数据。实测翻转块数据中间一个比特，DEFLATE 解码仍然“成功”，只有 SHA-256 能发现。可被任意多个 goroutine 并发调用。
 - **写**（`WritePack(io.WriterAt, …)` / `WritePackFile(path, …)`）：`ChunkSource` 逐块给数据，按批（256 块）并行取块与压缩、按索引顺序写出，输出与并行度无关、逐字节确定。`WritePackFile` 写同目录临时文件、fsync 后改名，失败时原文件不变。
-- **数据来源**：`RAWImport{…}.Source(meta)` 读美术导出的 RAW16 高度图 + RAW8 材质图（大小端、Y 翻转、按 `MaxHeight` 换算可选；图不必是块的整数倍，图外采样复制图边）；`Generated(meta, seed)` 是只用整数运算的确定性程序化地形，供测试、压测与金样。没有做命令行工具，游戏工具链直接调库函数。
+- **数据来源**：`RAWImport{…}.Source(meta)` 读美术导出的 RAW16 高度图 + RAW8 材质图（大小端、Y 翻转、按 `MaxHeight` 换算可选；图不必是块的整数倍，图外采样复制图边）；`Generated(meta, seed)` 是只用整数运算的确定性程序化地形，供测试、压测与金样。`Flat(meta, raw, material)` 是一张平地（每点同一高度与材质），game-demo 的 `terrainpack` 缺省用它（起伏的 `Generated` 在 45° 行走规则下大半的边走不通，不适合演示）。没有做命令行工具，游戏工具链直接调库函数。
 
 ### 块编码（codec 1）
 

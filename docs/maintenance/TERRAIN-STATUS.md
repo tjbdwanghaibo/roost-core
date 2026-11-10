@@ -15,6 +15,7 @@
 | C# 地形 SDK | 读包、查询、DAO Apply 接入、块变更与网格重建钩子、共享边高度网格 | 定稿方案 §13；是算法与接线能力，未完成 Unity 圆滑岸线渲染与设备验收 |
 | 编辑配额 270 点/秒 | 默认令牌桶配额及桶容量调整，保留最小扣点和拒绝不写契约 | `3bd3f694`；[参数验证](evidence/terrain-defaults-20261109/README.md)，没有新增容量实测 |
 | HeightBase = −100 米 | terrainpack 默认 `-10000` 厘米；世界高度 = HeightBase + raw × 10 厘米；水位独立配置 | 同上；raw=1000 对应世界高度 0，可表达基线以下池塘；已有资源包不自动迁移 |
+| demo 缺省地形为平地（维护者 2026-11-10） | `terrainpack` 缺省 `-shape flat`：16 × 16 块（1024m 见方，普通场景上限，AOI 块表约 56MiB）、401m（水位之上 1m）、草，`BaseRevision` 2；起伏地形改为 `-shape generated -seed N`（版本 1，与原缺省包同一份）；`gameplay/terrain` 新增 `Flat`，`Generated` 不变 | 分支 `feat/terrain-p4`；[方案 §25.6](FEATURE-2026-11-08-editable-terrain.md#256-demo-缺省地形改为平地维护者-2026-11-10)；原缺省包向东一步只有 45.5% 走得通，平地 100%；挖 2m 成 1m 深的水、填回成陆 |
 | 框架按实体类型调度 | `ManagerConfig.TypeSchedules`：首次变脏起算固定窗口；周期类型跳过逐次提交冻结；即时快照不清除老观察者待发变化 | `5ae1b3d7`；[类型调度验证](evidence/type-sync-cadence-20261109/README.md)；契约见 [ENTITY_SYNC](../framework/ENTITY_SYNC.md) |
 | 正式 demo 混合同步接线 | Service 提供真实 Nest 提交观察者，转发 Capture/Wake/Retract；重复观察者拒绝启动；Player/Monster 默认 on_change，TerrainChunk periodic 1 秒 | `382da1be`；[接线及 TCP 验证](evidence/demo-sync-cadence-20261109/README.md)；历史测试构造器仍可使用旧周期模式 |
 

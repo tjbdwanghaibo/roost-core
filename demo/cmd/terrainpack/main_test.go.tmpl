@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
 // 走实际 CLI 参数解析、写包、读包和 View 查询，避免只测一个默认常量。
@@ -26,11 +27,63 @@ func TestTerrainPackDefaultsAndHeightQueries(t *testing.T) {
 	}
 	defer pack.Close()
 	meta := pack.Meta()
-	if meta.HeightBase != -10000 || meta.WaterLevel != 40000 || meta.ChunksX != 2 || meta.ChunksY != 1 {
+	if meta.HeightBase != -10000 || meta.WaterLevel != 40000 || meta.ChunksX != 16 || meta.ChunksY != 16 || meta.BaseRevision != 2 {
 		t.Fatalf("unexpected defaults: %+v", meta)
 	}
-	if !strings.Contains(output.String(), "height base -10000") {
+	if !strings.Contains(output.String(), "height base -10000") || !strings.Contains(output.String(), "flat ground at 40100") {
 		t.Fatal(output.String())
+	}
+	// 缺省是 1024m 见方的平地：整张图 401m（水位 400m 之上 1m），全是草，45° 规则下每一步（东、东北）都走得通。
+	if b := meta.Bounds(); b.Max.X != 102400 || b.Max.Y != 102400 {
+		t.Fatalf("default map bounds %v, want 1024m square", b)
+	}
+	defaultView := terrain.NewView(pack)
+	for key := range terrain.ChunksIn(meta.Bounds()) {
+		if err := defaultView.LoadBase(key); err != nil {
+			t.Fatal(err)
+		}
+		c, _, _ := defaultView.Chunk(key)
+		for i := range c.Heights {
+			if meta.WorldHeight(c.Heights[i]) != 40100 || c.Materials[i] != terrain.GenGrass {
+				t.Fatalf("chunk %v point %d: raw %d material %d", key, i, c.Heights[i], c.Materials[i])
+			}
+		}
+	}
+	walker := terrain.Walker{View: defaultView, Rules: terrain.DefaultWalkRules}
+	side := int64(meta.ChunksX) * terrain.ChunkSamples
+	for gy := int64(0); gy < side; gy++ {
+		for gx := int64(0); gx+1 < side; gx++ {
+			for _, to := range []spatial.Point{{X: gx + 1, Y: gy}, {X: gx + 1, Y: gy + 1}} {
+				if to.Y >= side {
+					continue
+				}
+				if _, ok := walker.Step(spatial.Point{X: gx, Y: gy}, to); !ok {
+					t.Fatalf("default pack: no step from (%d, %d) to %v", gx, gy, to)
+				}
+			}
+		}
+	}
+	// 挖坑成湖、填平成陆：挖 2m 是 1m 深的水（要游泳），填回原高度又是陆地。
+	dig := func(version int64, world int32) terrain.Ground {
+		t.Helper()
+		c, _, _ := defaultView.Chunk(terrain.ChunkKey{})
+		for j := range c.Heights {
+			c.Heights[j] = uint16((world - meta.HeightBase) / terrain.HeightStep)
+		}
+		if err := defaultView.SetOverlay(terrain.ChunkKey{}, terrain.Overlay{BaseRevision: meta.BaseRevision, Version: version, Heights: c.Heights, Materials: c.Materials}); err != nil {
+			t.Fatal(err)
+		}
+		g, err := defaultView.Probe(3000, 3000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return g
+	}
+	if g := dig(1, 39900); !g.Water || g.Depth() != 100 {
+		t.Fatalf("dug 2m into the default pack: %+v, want 1m of water", g)
+	}
+	if g := dig(2, 40100); g.Water {
+		t.Fatalf("filled back: %+v, want land", g)
 	}
 	// 以同一基准构造平面，验证原始值不是世界高度，并验证负高度不自动等同于水。
 	meta.WaterLevel = -200
@@ -67,7 +120,7 @@ func TestTerrainPackDefaultsAndHeightQueries(t *testing.T) {
 
 func TestTerrainPackExplicitBaseAndWaterRemainIndependent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "override.pack")
-	if err := run([]string{"-out", path, "-height-base", "0", "-water-level", "-500", "-base-revision", "2"}, io.Discard); err != nil {
+	if err := run([]string{"-out", path, "-height-base", "0", "-water-level", "-500", "-base-revision", "3", "-ground", "0"}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	pack, err := terrain.OpenPack(path)
@@ -75,7 +128,7 @@ func TestTerrainPackExplicitBaseAndWaterRemainIndependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pack.Close()
-	if meta := pack.Meta(); meta.HeightBase != 0 || meta.WaterLevel != -500 || meta.BaseRevision != 2 {
+	if meta := pack.Meta(); meta.HeightBase != 0 || meta.WaterLevel != -500 || meta.BaseRevision != 3 {
 		t.Fatalf("override: %+v", meta)
 	}
 }
@@ -119,6 +172,8 @@ func TestTerrainPackRejectsArgumentsBeforeWriting(t *testing.T) {
 		{"-height-base", "4294967296"}, {"-water-level", "-4294967296"},
 		{"-chunks-x", "4294967298"}, {"-chunks-y", "0"},
 		{"-height-base", "2147483647"}, {"-height-base", "not-a-number"}, {"unexpected"},
+		{"-shape", "hills"}, {"-seed", "7"}, {"-shape", "generated", "-ground", "40000"},
+		{"-ground", "40105"}, {"-ground", "-10010"}, {"-ground", "700000"},
 	} {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "base.pack")
@@ -129,5 +184,50 @@ func TestTerrainPackRejectsArgumentsBeforeWriting(t *testing.T) {
 				t.Fatalf("invalid arguments created output: %v", err)
 			}
 		})
+	}
+}
+
+// -shape generated -chunks-x 2 -chunks-y 1 是原来的缺省包：同一 seed 逐块与 terrain.Generated 相同，缺省 BaseRevision 仍是 1（D13：同一个
+// 版本号只对应一份原始地形；平地是新的一份，取 2）。显式 -base-revision 照用。
+func TestTerrainPackGeneratedShapeIsTheOldDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "generated.pack")
+	if err := run([]string{"-out", path, "-shape", "generated", "-seed", "1", "-chunks-x", "2", "-chunks-y", "1"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	pack, err := terrain.OpenPack(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pack.Close()
+	meta := pack.Meta()
+	if meta.BaseRevision != 1 {
+		t.Fatalf("generated terrain revision %d, want 1", meta.BaseRevision)
+	}
+	src := terrain.Generated(meta, 1)
+	for _, key := range []terrain.ChunkKey{{X: 0}, {X: 1}} {
+		got, err := pack.ReadChunk(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := src(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got.Heights, want.Heights) || !slices.Equal(got.Materials, want.Materials) {
+			t.Fatalf("chunk %v differs from terrain.Generated", key)
+		}
+	}
+	explicit := filepath.Join(t.TempDir(), "flat-r7.pack")
+	if err := run([]string{"-out", explicit, "-base-revision", "7", "-ground", "0"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	flat, err := terrain.OpenPack(explicit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer flat.Close()
+	c, err := flat.ReadChunk(terrain.ChunkKey{})
+	if err != nil || flat.Meta().BaseRevision != 7 || c.Heights[0] != 1000 {
+		t.Fatalf("explicit revision and ground: %+v, raw %d, %v", flat.Meta(), c.Heights[0], err)
 	}
 }

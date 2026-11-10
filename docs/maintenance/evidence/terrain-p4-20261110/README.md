@@ -58,7 +58,11 @@ B2 / B14 第一次的写法没编译过（变量未使用），重写后的结�
 | `roost id check` / `roost generate --check` | `IDs are valid` / `generated files are up to date` |
 | `TestBuildingRestartRealMongo`、`TestTerrainRestartRealMongo`、`TestTerrainEditLedgerRealMongo` | SKIP（`ROOST_TERRAIN_IT_MONGO_URI` 未设置；本轮不连真实库） |
 
-## 3. 未覆盖
+## 3. demo 缺省地形改为平地（方案 §25.6）
+
+[default-flat.txt](default-flat.txt)：新的 `cmd/terrainpack` 用例跑在改动前的 `main.go` 上的失败原文（缺省 `BaseRevision:1`、没有 `-ground` / `-shape`、新的参数拒绝没拒绝），以及 2 × 1 块缺省地图上向东一步走得通的边：原缺省（`-shape generated -seed 1`）3700 / 8128 = 45.5%，新缺省平地 8128 / 8128。第 3 部分是维护者补充把缺省尺寸改成 16 × 16 块之后的包大小（18,560 字节）、写包与装入时间、视图内存。改动后 `go test -count=1 ./cmd/terrainpack`（生成工程）与 `go test -count=1 ./gameplay/terrain`（含 `TestFlatIsTheSameEverywhereAndWalkable`）通过。
+
+## 4. 未覆盖
 
 - 真实 Mongo / WAL 上的建筑重启与换版（用例已写、已挂进 `scripts/test-demo-generated.sh`，没有运行）。
 - 真实进程演练（`startTerrain` 的新接线：普通场景接建筑、分区场景不接）。

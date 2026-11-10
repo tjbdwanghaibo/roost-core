@@ -266,7 +266,7 @@ type TerrainChunkDao struct {
 | 改块事务 | handler `TerrainEdit`（`rollback=undo durability=strict`） | 一块一笔；`ApplyEdit` 改 DAO 后 `nest.AfterCommit` 登记 `SetOverlay`（新数据的副本），提交被接受才进视图，回滚 / 提交被拒时不执行。handler 是包级函数，经 `terrainmap.Active()` 拿到本进程的 Map（与 `partition.Node()` 同一做法） |
 | 服务接线 | `internal/service/<game>/terrain.go` | `Init` 里（World、Scene 之后）`startTerrain`：读配置 → 打开包 → 算范围 → `Load` → `Install` → 发布能力 `<game>.terrain`；`Shutdown` 最后 `Close`（撤下发布、关包） |
 | 配置 | `game/settings/terrain.go` | `scene.terrain.pack`（可选，空 = 没有地形）；分区场景开着时 `Scene.ValidateConfig` 要求 `cell_size` 是 6400 的整数倍（加载配置时拒绝，doctor / `--check-config` 同一份） |
-| 原始地形包 | `cmd/terrainpack` | `terrain.Generated` 写确定性小地图，缺省 2 × 1 块（128m × 64m，`BaseRevision` 1、水位线 400m），覆盖普通场景（1000 × 1000）与两个 6400 格的分区场景 |
+| 原始地形包 | `cmd/terrainpack` | `terrain.Generated` 写确定性小地图，缺省 2 × 1 块（128m × 64m，`BaseRevision` 1、水位线 400m），覆盖普通场景（1000 × 1000）与两个 6400 格的分区场景（P1 当时；2026-11-10 起缺省是 16 × 16 块的平地、`BaseRevision` 2，起伏地形要 `-shape generated`，见[第 25.6 节](#256-demo-缺省地形改为平地维护者-2026-11-10)） |
 
 **装入（启动阶段）**：`Region.Load` 里的块（不分区：整张图；分区且本 sid 托管格：本格外扩 `ghost_band`；只做 Base：空）。哪些块有持久记录：DataEngine 没有“按集合列 ID”的正式能力（`OwnedEntityLister` 只给 Remote 所有权记录），这里用 DataEngine 的 `Store.Load`（与实体冷加载同一个读入口：逻辑库到物理库映射、墓碑过滤都在里面）按 `_id ∈ 候选块的实体 ID` 分批（每批 256）查，候选集就是本区域的块（≤ 本格 + Ghost 带块数），走 `_id` 索引，不扫全表；读出的记录用生成 DAO 的 `RestorePersisted` 解码（只接受当前 schema）后 `SetOverlay`，**不装成实体**——本格的块第一次被改时再由 `GetOrCreate` 冷加载，Ghost 带里邻格的块从不装成实体（不能在本进程持有别的格的可写实体）。其余块 8 个 goroutine 并行 `LoadBase`。时机在 `Service.Init`（App 启动阶段，不在 Nest 业务池）：此时 DataEngine 的 `Runtime.Start` 已排空历史 WAL（恢复屏障），一个 sid 一个进程、块只归本格写，库里就是最新已提交状态。
 
@@ -1004,3 +1004,15 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 | 拆除的重发 | 锚点上没有建筑答 `building_missing` | ★ 照现在（不为找不到的建筑建实体、开事务）；或先查账本，已应用过的答 `duplicate`（多一次账本冷加载与事务） |
 | 拆除时的地形 | 不复原 | ★ 不复原（与玩家挖的坑一样留着）；或按放置前的高度复原（要在建筑上存一份原地形） |
 | 每人建筑上限 | `Policy.MaxBuildings` 16，demo 常量 | ★ 16（demo 原型）；正式值随玩法定 |
+
+### 25.6 demo 缺省地形改为平地（维护者 2026-11-10）
+
+背景：分区演练发现 `terrainpack` 的缺省包（`terrain.Generated`，seed 1）在 45° 行走规则下向东一步只有 45.5% 的边走得通（3700 / 8128，实测原文见[证据](evidence/terrain-p4-20261110/README.md)），缺省地图基本走不动。
+
+- **平地源**：`gameplay/terrain` 新增 `Flat(meta, raw, material)`（每点同一高度与材质，图外的块报 `ErrOutOfMap`）。放在库里而不是 `terrainpack` 里：一行规则、两端（服务端与客户端工具）和别的测试都能用，且与 `Generated` 并列，`Generated` 本身逐位不变（测试、压测、客户端金样、压缩率仍用它）。
+- **terrainpack**：`-shape flat`（缺省）/ `generated`；`-ground` 平地的世界高度（厘米，须落在 10cm 一档、在包能表示的范围里，不四舍五入）；`-seed` 只对 `generated`、`-ground` 只对 `flat`，给错报错。
+- **尺寸**（维护者 2026-11-10 补充）：缺省 `-chunks-x 16 -chunks-y 16`，1024m × 1024m，正好是普通场景的上限 2^20 个 AOI 块（§23）。已知代价：开地形的普通场景 AOI 块表约 56MiB、构造约 12ms、每次 GC 多约 3ms 标记（§23.1 的实测）。包与视图本身很小：平地包 18,560 字节，写包约 110～160ms，打开并装入 256 块约 20～60ms、视图约 3MiB（同机 3 次，证据 `default-flat.txt`）。分区配置的示例改为 `cell_size: 51200`、`cols: 2`、`rows: 2`（四个 512m 的格正好盖住 16 × 16 块）。生成工程的测试都自己造图，不经缺省包，所以测试时间不变；`terrainpack` 自己的缺省用例在整张图上逐步检查东 / 东北两个方向（约 200 万次 `Step`），0.1 秒内结束（`-race` 约 4 秒）。没有在真实进程里用缺省包起普通场景量内存与启动时间（只有 §23 的基准）。
+- **高度与水位**：缺省 `-ground` = `-water-level` + 1m（缺省水位 40000 → 地面 40100，原始值 5010；没有水时取 0）。水位缺省不变（40000，`HeightBase` 决策时维护者要求水位独立、保持原值，`-shape generated` 也因此与原缺省包同一份地形）。1m 的理由：按 25.1 的规则“地面 < 所在块水位就是水”，挖下去超过 1m 就成水域，超过 1.5m 要游泳（涉水上限 50cm），一笔笔刷（强度至多 5m）就能演示；填回 1m 以上又是陆地；平地本身离水面 1m，不会因为微小的笔刷误差变水。建筑的“不在水下”在平地上处处满足，坡度为 0。
+- **BaseRevision**：D13 用“记录的 `BaseRevision` ≠ 包”判断原始地形换了，前提是同一个版本号只对应一份原始地形。缺省包的内容变了，所以平地缺省取 2；`-shape generated` 缺省仍是 1——与原缺省包同一份地形（`TestTerrainPackGeneratedShapeIsTheOldDefault` 逐块比对 `terrain.Generated`）。这样用旧缺省包改过的块，换上新缺省包时按 D13 丢弃，而不会被当成新平地上的改动叠上去。本轮还有包格式版本 2 与 chunk schema 4，升级本来就要清空数据重新生成包；版本号的改动是让 D13 语义自洽，不是迁移手段。
+- **依赖缺省起伏的用例**：没有。demo 的服务测试都用 `terrain.Generated` 或自己的源造图（不经 `terrainpack`）；`terrainpack` 自己的用例改为断言平地缺省，原来覆盖“显式基准与水位”的用例加了 `-ground 0`（新规则下缺省地面 = 水位 + 1m 落在 `-height-base 0` 之下）。
+- **验证**：`TestTerrainPackDefaultsAndHeightQueries`（缺省 16 × 16、1024m 见方、版本 2、每点 40100 与草、整张图每一步东 / 东北都走得通、挖 2m 是 1m 深的水、填回是陆地）、`TestTerrainPackGeneratedShapeIsTheOldDefault`（`-shape generated -seed 1 -chunks-x 2 -chunks-y 1` 就是原缺省包）、参数拒绝（未知形状、平地给 `-seed`、起伏给 `-ground`、不在 10cm 档上、低于基准、超出范围）、`gameplay/terrain` `TestFlatIsTheSameEverywhereAndWalkable`。新用例在改动前的 `terrainpack` 上的失败原文见证据。
