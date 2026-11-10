@@ -285,9 +285,13 @@ scene:
 - **编辑**：玩家的编辑在他连着的进程上执行，仍只能改这个进程写的块；改 Ghost 带或别的格的块答 `terrain_not_owned`（100054，`terrainmap.ErrNotOwned`），整笔不写，
   跨格编辑是 P5。
 - **观测**：`gm.scene.partition` 多一栏 `terrain`（副本计数：订阅、推送、应用、旧版本、包版本不同丢弃、错拥有者等；Ghost 带块数、
-  客户端想要的块与副本数）。
+  客户端想要的块与副本数）。只读 GM `gm.terrain.probe`（`{"chunks": [[x, y], ...], "points": [[x, y], ...]}`，至多 64 块、256 点）报本进程
+  地形视图里每块是否本进程写、是否装着、版本、副本订阅报的版本与数据摘要（FNV-1a 64：高度小端 2 字节、再材质 1 字节），每点的世界
+  高度；不开分区的进程同样可用。比较各进程（拥有者、Ghost 带）与客户端按同一规则算的摘要，就知道是不是同一份数据。
 - **测试**：`terrain_partition_test.go`（三个进程：两个格 + 一个只做 Base，真实 TCP 客户端）：边界编辑到邻格 Ghost 与别的进程的
   客户端、小编辑是增量、玩家走远订阅跟着走、推送全丢由续期补齐、旧消息倒序重放不回退、重启补齐、D13 撤回、跨格编辑仍拒绝。
+  真实多进程（真实 NATS / Mongo / Redis，kill -9 格进程）：仓库的 `ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh`
+  （[演练证据](../docs/maintenance/evidence/terrain-partition-drill-20261110/README.md)）。
 - **升级**：cellworld 线上格式 v7，v6 及更早的消息按坏消息丢弃；未上线，先停旧进程再起新进程。存储不变。
 
 ### 移动与寻路（P3）

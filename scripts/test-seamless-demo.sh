@@ -14,6 +14,13 @@
 #
 #   ROOST_DATAENGINE_IT_MONGO_URI=… ROOST_DATAENGINE_IT_NATS_URL=… ROOST_DATAENGINE_IT_REDIS_ADDR=… \
 #   ROOST_SEAMLESS_ETCD_PORT=58379 ROOST_SEAMLESS_OUT=/abs/dir scripts/test-seamless-demo.sh
+#
+# ROOST_SEAMLESS_TERRAIN=1：开地形的分区演练（可编辑地形 T05 / T06 的真实多进程验收，客户端步骤在
+# scripts/testdata/seamless/terrain.go.txt）。分区换成 2 × 1 个 12800（两块地形）见方的格、ghost_band 600 =
+# view_radius 400 + hysteresis 200，所有 game 进程配同一个 4 × 2 块的平地地形包（演练程序写出）；起 sid 1001（格 A）、
+# 1002（格 B）、1004（只做 Base），不起普通场景 sid 1003、不跑它的机器人。不设（缺省）时是原来的演练，行为不变。
+# ROOST_SEAMLESS_PROJECT_HOOK：生成工程之后、编译之前在工程目录里执行的一条 shell 命令（变异验证用：例如删掉装地面
+# 钩子的那一行，确认演练会变红）。
 set -euo pipefail
 : "${ROOST_DATAENGINE_IT_MONGO_URI:?private Mongo replica-set URI required}"
 : "${ROOST_DATAENGINE_IT_NATS_URL:?private NATS required}"
@@ -27,7 +34,9 @@ out="$ROOST_SEAMLESS_OUT"
 mkdir -p "$out"
 export GOWORK=off
 nats_url="${ROOST_DATAENGINE_IT_NATS_URL%%,*}"
+terrain="${ROOST_SEAMLESS_TERRAIN:-0}"
 extra_sids="1001 1002 1003 1004"
+[[ "$terrain" == 1 ]] && extra_sids="1001 1002 1004"
 
 # 固定端口（demo 生成配置）都要空着：别人的 demo 正在用时不跑。
 for port in 7000 7001 7002 7003 7004 9000 9010 9100 9101 9102 9103 9104 9105 9106 9107 9108 9109 9110 9201 9202 9203 9204 8901 8902 8903 8904 "$etcd_port" "$((etcd_port + 1))"; do
@@ -78,10 +87,17 @@ go run ./codegen/cmd/roost project new cwdemo -module example.com/cwdemo -out "$
 cd "$project"
 go mod edit -replace "github.com/tjbdwanghaibo/roost-core=$repo_dir"
 go mod tidy >/dev/null 2>&1 || true
+if [[ -n "${ROOST_SEAMLESS_PROJECT_HOOK:-}" ]]; then
+	echo "seamless: project hook: $ROOST_SEAMLESS_PROJECT_HOOK"
+	sh -c "$ROOST_SEAMLESS_PROJECT_HOOK"
+fi
 mkdir -p bin
 go build -mod=mod -o bin/app .
-sed "s|MMO_MODULE|example.com/cwdemo|g" "$repo_dir/scripts/testdata/seamless/drill.go.txt" >"$work_dir/drill.go"
-go build -mod=mod -o "$work_dir/drill" "$work_dir/drill.go"
+mkdir -p "$work_dir/drillsrc"
+for f in drill terrain; do
+	sed "s|MMO_MODULE|example.com/cwdemo|g" "$repo_dir/scripts/testdata/seamless/$f.go.txt" >"$work_dir/drillsrc/$f.go"
+done
+go build -mod=mod -o "$work_dir/drill" "$work_dir/drillsrc/drill.go" "$work_dir/drillsrc/terrain.go"
 
 # 全部配置指向私有依赖；JetStream 流缩到 64MB；单实例锁缩短（kill -9 后的重启只等 ttl）。
 for f in configs/service/config.*.yaml; do
@@ -98,9 +114,41 @@ done
 sed -i '' -E 's#game_sids: \[[0-9, ]*\]#game_sids: [1000, 1001, 1002, 1003, 1004]#' configs/activity_groups.yaml
 grep -q 'game_sids: \[1000, 1001, 1002, 1003, 1004\]' configs/activity_groups.yaml
 
+cp configs/service/config.game.yaml "$work_dir/config.game.ordinary.yaml"
+if [[ "$terrain" == 1 ]]; then
+	# 开地形的分区场景：4 × 2 块（256m × 128m）的平地包，2 × 1 个 12800 的格（每格 2 × 2 块，块不跨格），世界正好是地图。
+	# ghost_band 600 = view_radius 400 + hysteresis 200（越过分界线 200 才交接，演练在这 200 里放邻格的坎）；idle_period 0：
+	# 怪一直 50ms 一拍（演练按 GM 观察它的折回点）。格 A 里一只沿 y = 9000 往返的怪；玩家进场点 (11800, 3000) 在格 A。
+	mkdir -p configs/terrain
+	"$work_dir/drill" -write-flat-pack configs/terrain/drill-flat.pack
+	cat >>configs/service/config.game.yaml <<'YAML'
+scene:
+  terrain:
+    pack: configs/terrain/drill-flat.pack
+  partition:
+    enabled: true
+    world: cwdemo
+    cell_size: 12800
+    cols: 2
+    rows: 1
+    owners: ["1001", "1002"]
+    ghost_band: 600
+    hysteresis: 200
+    view_radius: 400
+    idle_period: 0s
+    writeback_every: 1s
+    lease_timeout: 3s
+    max_speed: 600
+    attack_damage: 10
+    spawn_x: 11800
+    spawn_y: 3000
+    player_hp: 100
+    spawns:
+      walker: {x: 6000, y: 9000, count: 1, vx: 600}
+YAML
+else
 # 分区场景：2 × 1 个 3000 × 3000 的格；格 (0,0) 归 sid 1001、格 (1,0) 归 sid 1002。四组怪：分界线两侧各三只静止的
 # （视野连续与跨界攻击），一只沿 X 往返的（约每 40s 过一次分界线：Monster 跨界）。回写 1s：崩溃前的 HP 很快进快照。
-cp configs/service/config.game.yaml "$work_dir/config.game.ordinary.yaml"
 cat >>configs/service/config.game.yaml <<'YAML'
 scene:
   partition:
@@ -126,6 +174,7 @@ scene:
       near_b: {x: 3010, y: 1500, count: 3, spread: 15}
       walker: {x: 1500, y: 1700, count: 1, vx: 150}
 YAML
+fi
 
 derive() { # sid ops client advertise source
 	sed -e "s/^\(  *\)sid: .*/\1sid: $1/" -e "s/^sid: .*/sid: $1/" \
@@ -137,12 +186,14 @@ derive() { # sid ops client advertise source
 derive 1001 9201 7001 8901 configs/service/config.game.yaml
 derive 1002 9202 7002 8902 configs/service/config.game.yaml
 derive 1004 9204 7004 8904 configs/service/config.game.yaml
-# sid 1003 没有 scene.partition：普通场景。
-derive 1003 9203 7003 8903 "$work_dir/config.game.ordinary.yaml"
+# sid 1003 没有 scene.partition：普通场景（开地形的演练不起它）。
+[[ "$terrain" == 1 ]] || derive 1003 9203 7003 8903 "$work_dir/config.game.ordinary.yaml"
 
 READY_TIMEOUT=120 sh deploy/dev/run.sh start >"$out/run-start.log" 2>&1 || { tail -40 "$out/run-start.log"; exit 1; }
 prefix="$(awk '/^account:/{a=1;next} a&&/^  key_prefix:/{print $2;exit} a&&/^[^ ]/{a=0}' configs/service/config.account.yaml | tr -d '"')"
-for sid in 1001 1003 1004; do
+account_sids="1001 1003 1004"
+[[ "$terrain" == 1 ]] && account_sids="1001 1002 1004" # 开地形的演练有玩家连格 B（改格 B 的块）
+for sid in $account_sids; do
 	go run -mod=mod ./cmd/accountctl -redis "$ROOST_DATAENGINE_IT_REDIS_ADDR" -prefix "${prefix:-roost:account}" upsert-server -sid "$sid" >/dev/null
 done
 
@@ -159,7 +210,7 @@ start_game() { # sid ops
 }
 start_game 1001 9201
 start_game 1002 9202
-start_game 1003 9203
+[[ "$terrain" == 1 ]] || start_game 1003 9203
 start_game 1004 9204
 
 cat >"$work_dir/restart-1002.sh" <<EOF
@@ -180,9 +231,15 @@ echo \$! > .dev/game1004.pid
 i=0
 until curl -fsS -o /dev/null http://127.0.0.1:9204/readyz 2>/dev/null; do i=\$((i+1)); [ \$i -lt 240 ] || exit 1; sleep 0.5; done
 EOF
+drill_mode=()
+endpoints=1000=127.0.0.1:7000,1001=127.0.0.1:7001,1003=127.0.0.1:7003,1004=127.0.0.1:7004
+if [[ "$terrain" == 1 ]]; then
+	drill_mode=(-terrain)
+	endpoints=1000=127.0.0.1:7000,1001=127.0.0.1:7001,1002=127.0.0.1:7002,1004=127.0.0.1:7004
+fi
 set +e
-"$work_dir/drill" -account-nats "$nats_url" -prefix cwdemo \
-	-endpoints 1000=127.0.0.1:7000,1001=127.0.0.1:7001,1003=127.0.0.1:7003,1004=127.0.0.1:7004 \
+"$work_dir/drill" ${drill_mode[@]+"${drill_mode[@]}"} -account-nats "$nats_url" -prefix cwdemo \
+	-endpoints "$endpoints" \
 	-ops 1000=127.0.0.1:9100,1001=127.0.0.1:9201,1002=127.0.0.1:9202,1003=127.0.0.1:9203,1004=127.0.0.1:9204 \
 	-kill "kill -9 \$(cat $project/.dev/game1002.pid)" -restart "sh $work_dir/restart-1002.sh" \
 	-kill-base "kill -9 \$(cat $project/.dev/game1004.pid)" -restart-base "sh $work_dir/restart-1004.sh" \
@@ -190,9 +247,17 @@ set +e
 status=${PIPESTATUS[0]}
 set -e
 grep -h "partition:" .dev/game*.log | head -40 >"$out/partition-log-lines.txt" || true
+grep -h "terrain" .dev/game*.log | head -80 >"$out/terrain-log-lines.txt" || true
 if [[ "$status" != 0 ]]; then
 	echo "seamless: drill failed (status $status); logs in $out" >&2
 	exit "$status"
+fi
+if [[ "$terrain" == 1 ]]; then
+	for name in terrain_start terrain_ghost_edit terrain_player_step terrain_monster_step terrain_cell_restart terrain_consistent; do
+		grep -q "^STEP $name ok" "$out/drill.log" || { echo "seamless: step $name did not pass" >&2; exit 1; }
+	done
+	echo "seamless: all terrain steps passed; evidence in $out"
+	exit 0
 fi
 for name in enter own_state straight jitter diagonal attack_across_0 attack_across_1 panel_level_up monster_cross cell_crash base_restart team_panel team_roster_cross_base ordinary_scene; do
 	grep -q "^STEP $name ok" "$out/drill.log" || { echo "seamless: step $name did not pass" >&2; exit 1; }

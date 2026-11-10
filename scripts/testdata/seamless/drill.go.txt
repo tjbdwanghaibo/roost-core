@@ -6,6 +6,7 @@
 //	  -kill 'kill -9 $(cat .dev/game1002.pid)' -restart 'sh restart-1002.sh' -out evidence.json
 //
 // 每一步打印一行 “STEP <名字> ok …” 或以非零退出并说明哪条断言失败；evidence.json 是各步的计数与观测。
+// -terrain 换成开地形的分区演练（terrain.go，与本文件一起编译）；-write-flat-pack 写那套演练用的地形包后退出。
 package main
 
 import (
@@ -142,6 +143,8 @@ type client struct {
 	closed   bool
 	// results 是收到的攻击结论推送（AttackResultPush，按到达顺序）。
 	results []*pb.AttackResultPush
+	// terrain 是收到的地形块（terrain 命名空间，只在开地形的演练里出现，terrain.go）。
+	terrain *terrainHeld
 }
 
 func (c *client) start() {
@@ -205,6 +208,13 @@ func (c *client) consume(payload []byte) {
 			if len(update.Payload.BytesCopy()) == 0 {
 				continue
 			}
+			if ns == "terrain" {
+				if err := c.applyTerrain(update, now); err != nil {
+					c.failure = fmt.Errorf("%s: %w", c.name, err)
+					return
+				}
+				continue
+			}
 			doc, err := clientsync.DecodeFields(update)
 			if err != nil {
 				c.failure = fmt.Errorf("%s: decode fields: %w", c.name, err)
@@ -245,6 +255,7 @@ func (c *client) consume(payload []byte) {
 			c.removes = append(c.removes, r)
 			delete(c.refs, obj.Ref)
 			delete(c.held, subject)
+			c.forgetTerrain(subject)
 		}
 		if subject == c.actorID && (obj.Operation == frame.ObjectCreate || obj.Operation == frame.ObjectUpdate) {
 			c.selfSeen = append(c.selfSeen, now)
@@ -624,9 +635,20 @@ func shell(command string) error {
 func main() {
 	playertcp.MustRegister()
 	flag.Parse()
+	if *writeFlatPack != "" {
+		if err := writeFlatTerrainPack(*writeFlatPack); err != nil {
+			fmt.Fprintf(os.Stderr, "seamlessdrill: write the flat terrain pack: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	err := run(ctx)
+	drill := run
+	if *terrainMode {
+		drill = runTerrain
+	}
+	err := drill(ctx)
 	if *outPath != "" {
 		raw, _ := json.MarshalIndent(evidence, "", "  ")
 		_ = os.WriteFile(*outPath, append(raw, '\n'), 0o644)

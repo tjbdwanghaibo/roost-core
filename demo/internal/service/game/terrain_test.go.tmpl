@@ -30,6 +30,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 )
@@ -630,6 +631,70 @@ func TestTerrainRegionFollowsThePartition(t *testing.T) {
 	scene.Terrain.Pack = ""
 	if err := scene.ValidateConfig(false); err != nil {
 		t.Fatalf("cell_size 3000 without terrain: %v", err)
+	}
+}
+
+// gm.terrain.probe（terrainProbe）：报告的版本与摘要跟着视图走（编辑之后变、与按定义重算的摘要相同），点的高度是视图
+// 里的原始值；不归本进程写、没装着的块与点如实报告；超过上限、地图外的块拒绝。
+func TestTerrainProbeReportsTheView(t *testing.T) {
+	partition := settings.ScenePartition{Enabled: true, CellSize: terrain.ChunkSize, Cols: 3, Rows: 2, Owners: []string{"1001", "1002", "1003", "1004", "1005", "1006"}, GhostBand: 500, Hysteresis: 50}
+	p := startTerrainProcessWith(t, writeTerrainPack(t, t.TempDir(), 1), func(meta terrain.Meta) (terrainmap.Region, error) {
+		return terrainRegion(meta, partition, 1001)
+	}, &memoryChunkStore{}, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.EditPointsPerSecond = 0
+		p.m.SetPolicy(policy)
+	})
+	probe := func() map[string]any {
+		t.Helper()
+		data, err := terrainProbe(p.m, gmTerrainProbePayload{Chunks: [][2]int32{{0, 0}, {1, 0}, {2, 0}}, Points: [][2]int64{{3200, 3200}, {13000, 100}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	chunk := func(data map[string]any, i int) map[string]any { return data["chunks"].([]map[string]any)[i] }
+	point := func(data map[string]any, i int) map[string]any { return data["points"].([]map[string]any)[i] }
+	digestOf := func(key terrain.ChunkKey) string {
+		c, _, _ := p.m.View().Chunk(key)
+		return terrainChunkDigest(c.Heights, c.Materials)
+	}
+	before := probe()
+	own, ghost, outside := chunk(before, 0), chunk(before, 1), chunk(before, 2)
+	if own["owned"] != true || own["loaded"] != true || own["version"] != int64(0) || own["held"] != int64(0) || own["digest"] != digestOf(terrain.ChunkKey{}) {
+		t.Fatalf("own chunk before any edit: %v", own)
+	}
+	if ghost["owned"] != false || ghost["loaded"] != true || ghost["version"] != int64(0) {
+		t.Fatalf("ghost-band chunk: %v", ghost)
+	}
+	if outside["owned"] != false || outside["loaded"] != false || outside["held"] != int64(-1) || outside["digest"] != nil {
+		t.Fatalf("a chunk outside this process's region: %v", outside)
+	}
+	if h, err := p.m.Height(3200, 3200); err != nil || point(before, 0)["height"] != h {
+		t.Fatalf("point (3200, 3200): %v, view %d %v", point(before, 0), h, err)
+	}
+	if point(before, 1)["err"] == nil {
+		t.Fatalf("a point on an unloaded chunk: %v", point(before, 1))
+	}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 300, Falloff: terrain.FalloffConstant, Strength: 50}); err != nil {
+		t.Fatal(err)
+	}
+	after := probe()
+	if c := chunk(after, 0); c["version"] != int64(1) || c["digest"] == own["digest"] || c["digest"] != digestOf(terrain.ChunkKey{}) {
+		t.Fatalf("own chunk after a raise: %v (before %v)", c, own)
+	}
+	// 高度是世界高度（厘米）：原始值 + 50 是 + 500 厘米（夹在原始值上限 16383 以内）。
+	if got, was := point(after, 0)["height"].(int32), point(before, 0)["height"].(int32); got != min(was+500, p.m.Meta().WorldHeight(16383)) {
+		t.Fatalf("the raised point: %d, want %d + 500", got, was)
+	}
+	for _, bad := range []gmTerrainProbePayload{
+		{Chunks: make([][2]int32, terrainProbeMaxChunks+1)},
+		{Points: make([][2]int64, terrainProbeMaxPoints+1)},
+		{Chunks: [][2]int32{{3, 0}}},
+	} {
+		if _, err := terrainProbe(p.m, bad); !errors.Is(err, admin.ErrCommandInvalid) {
+			t.Fatalf("probe %d chunks / %d points %v: %v, want ErrCommandInvalid", len(bad.Chunks), len(bad.Points), bad.Chunks, err)
+		}
 	}
 }
 

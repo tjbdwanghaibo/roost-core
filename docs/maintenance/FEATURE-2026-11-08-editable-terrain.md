@@ -179,7 +179,7 @@ type TerrainChunkDao struct {
 | D16 | 玩家编辑限流 | 每人每秒 270 个改动点、桶容量 270、每次至少 20 点、满桶允许一次透支；事务前按视图估算，配额不足整笔拒绝。维护者 2026-11-08 选定，2026-11-09 实施 | 300 档及 270 临时测量见 §17（历史证据）；本次未重跑带宽压测，区域兜底仍待 P5 |
 | D17 | 超额降级：减少同步对象，不断开 | 会话持有对象超过上限（`Limits.MaxObjects` 或按命名空间的 `MaxObjects`）时不关会话、不断开（维护者 2026-11-08）：Manager 暂缓放不下的新对象（钉住在前、Profile 优先级、实体 ID 排序，不截断），通知订阅来源；Interest 收紧该玩家视野的可见上限、从最远的开始退订，最终留下最近的 N 个，拥挤散去后带滞回逐档放宽；自身永远优先、不暂缓；地形命名空间同样适用。`SessionLost` 不再有 `object_limit`。未超额时帧逐字节不变（实现见[第 18 节](#18-超额降级减少同步对象不断开d172026-11-08)） | 超出即关会话并断开玩家（D15 及以前的契约；重连回同一人堆会反复断开）；只拒该类新对象、不通知政策（订阅停在“要全量”却永远发不出，等于静默截断）；Manager 按 ID 挤掉已持有的对象（不知道距离、线上 remove / create 往返） |
 | D18 | 编辑请求的身份与判重 | 身份 =（玩家 ID, 编辑序号），原样比较；序号由客户端按玩家单调递增地取。判重在玩家的编辑账本 `TerrainEditor`（每玩家一份：最大已应用序号 + 其下 64 位窗口），与改块同一笔事务；窗口内应用过的答重复、没应用过的照常执行，低于窗口的答过期（`terrain_seq`）、不执行。块上的 `Applied` 删除（`TerrainChunkDao` schema 3）。实施方 2026-11-09 选定，维护者 2026-11-09 确认按推荐：独立账本实体、窗口 64、超前上限 2^20、客户端续号用 Seq=0 查询（[第 20 节](#20-编辑请求身份与判重t01t02d182026-11-09)） | 扩大块上的 `Applied` 环（只推迟 T01）；账本放在块上按玩家记（随改过它的玩家数无界增长）；放在 Player 实体（P3 玩家与块分属两个进程时不能同事务）；带内容指纹判“序号被重用”（多存储，不解决同内容重用） |
-| D19 | Ghost 副本的版本与代际（P3） | 代际 = 原始地形包的 `BaseRevision`，每条副本消息带它、两个方向不同即整条丢弃；同一 `BaseRevision` 内按 `Version` 只进不退；拥有者只推持久版本（改块 strict、提交后回调里登记推送）；进程间推整块，订阅每秒续期兼补齐（租约 3 秒）。实施方 2026-11-09 先定，待维护者确认（[第 21 节](#21-p3-ghost-副本t05d192026-11-09)） | 另设 epoch（改块不再 strict 时需要）；进程间推增量（省带宽，丢一条就要补全量） |
+| D19 | Ghost 副本的版本与代际（P3） | 代际 = 原始地形包的 `BaseRevision`，每条副本消息带它、两个方向不同即整条丢弃；同一 `BaseRevision` 内按 `Version` 只进不退；拥有者只推持久版本（改块 strict、提交后回调里登记推送）；进程间推整块，订阅每秒续期兼补齐（租约 3 秒）。实施方 2026-11-09 先定，维护者 2026-11-10 确认按推荐。 | 另设 epoch（改块不再 strict 时需要）；进程间推增量（省带宽，丢一条就要补全量） |
 
 ### 8.1 首版参数初值（P2 实测后修正）
 
@@ -730,7 +730,7 @@ type TerrainChunkDao struct {
 
 **线上格式与升级**：cellworld 线上格式 v6 → v7（新增扩展消息），v6 及更早的消息按坏消息丢弃；副本消息自身也带版本号。未上线，不兼容：**升级须先停旧进程再起新进程**。存储不变。
 
-**方案没覆盖、本轮先选的**（D19，待维护者确认）：
+**方案没覆盖、本轮先选的**（D19，维护者 2026-11-10 确认按推荐）：
 
 1. 代际用 `BaseRevision`，不另设 epoch（论证见上第 4 条）；前提是地形改块保持 strict。将来改块若改成非 strict，要加代际。
 2. 进程间推整块（压缩后约 2.9～3.7KB / 块 / 订阅进程），不推进程间增量；客户端方向的增量由副本自己算。一个热点块被 k 个进程订阅时，拥有者每次提交发 k 份。
@@ -744,7 +744,7 @@ type TerrainChunkDao struct {
 
 - 订阅重算按玩家数 × 视点周围块数（292m 半径约 100 块）算，T09 规模（单格数千玩家）未测；拥有者的订阅表、推送扇出没有上限测量。
 - 客户端第一次看到别的进程写的块是新订阅的即时全量（实测约 7～48ms），之后的更新按 TerrainChunk 的 1 秒周期合并；Ghost 带不受这个周期影响。
-- 真实 Mongo / WAL 下的崩溃重启（“只推持久版本”的前提）只靠 strict 契约推出，本轮没有真实依赖的崩溃演练；`scripts/test-seamless-demo.sh` 的分区配置 `cell_size` 3000 不满足开地形的要求，演练没有覆盖地形。
+- 真实 Mongo / WAL 下的崩溃重启（“只推持久版本”的前提）只靠 strict 契约推出，本轮没有真实依赖的崩溃演练；`scripts/test-seamless-demo.sh` 的分区配置 `cell_size` 3000 不满足开地形的要求，演练没有覆盖地形。（2026-11-10 补：开地形的分区场景真实多进程演练，含 kill -9 格进程后重启、真实 Mongo / WAL，见 [§26](#26-开地形的分区场景真实多进程演练t05t062026-11-10)；“提交了但答复没到”的在途编辑仍没有稳定构造出来。）
 
 **验证**（2026-11-09，Apple M5，go1.27.3，`GOWORK=off`；生成工程 `--skip-deps` + replace 到本分支）：
 
@@ -764,7 +764,7 @@ type TerrainChunkDao struct {
 
 ## 22. P3 移动与寻路实施结果（2026-11-09）
 
-本地分支 `feat/terrain-p3-move`（基于 main `93c00538`，已合并 main `3fb089d9`（T01/T02），未推送、未合入）。接续 §19 记录的 WIP 提交（已改写为本节的四笔提交，原 WIP 不保留）：审查后保留其行走规则与 `movement.Surface` 接入，改为 int64 高差、加负高度与加权寻路，补齐 demo 接入、端到端与纠偏验证。完成判据对照 [进度总表 T06](TERRAIN-STATUS.md)；证据与复跑命令见 [证据目录](evidence/terrain-p3-move-20261109/README.md)。
+已合入 main（分支 `feat/terrain-p3-move`，基于 `93c00538`，合并过 `3fb089d9`（T01/T02））。接续 §19 记录的 WIP 提交（已改写为本节的四笔提交，原 WIP 不保留）：审查后保留其行走规则与 `movement.Surface` 接入，改为 int64 高差、加负高度与加权寻路，补齐 demo 接入、端到端与纠偏验证。完成判据对照 [进度总表 T06](TERRAIN-STATUS.md)；证据与复跑命令见 [证据目录](evidence/terrain-p3-move-20261109/README.md)。
 
 **范围**：单格（不分区的普通场景，或分区场景里一个格的进程内部）。分区场景的位置由 cellworld 按速度积分（`gameplay/cellworld/actor.go` `integrate`，没有地面钩子），本轮不改 cellworld，跨格移动与交接未按高度判定，依赖 T05（Ghost 实时副本）后再接。
 
@@ -858,7 +858,7 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 - **接线**：服务 Init 改为先 `startTerrain` 再建场景实体：`sceneWorld(partition, terrainMap)`（没有地形或分区场景取 `lifecycle.WorldSceneConfig()`，即原来的缺省地图）交给 `lifecycle.EnsureWorldScene(ctx, registry, world)`；生成的 `SceneLifecycle.GetOrCreate` 不能带建造参数，场景单例改用手写的 `GetOrCreateOn`（同一 Get → Create → 已存在再 Get 的顺序，`EntityCreateParam.Param` 带 `gamescene.Config`，场景实体 `OnInitFinish` 本来就读它）；已存在的场景不在这张图上时报错，不静默用错地图。`NewScene` 用 `replicatedWorld`（普通场景 = `sceneWorld`，分区场景仍是网格），与场景实体同一来源。
 - **不开地形时不变**：`sceneWorld` 返回 `lifecycle.WorldSceneConfig()`（= `DefaultConfig()`，`TestTerrainSceneWorldAndItsLimit` 逐字段比较），场景实体、场景同步 AOI 与之前相同；其余既有用例不改。
 
-**实施方先定**（方案未覆盖，待维护者确认）：
+**实施方先定**（方案未覆盖；维护者 2026-11-10 确认按推荐）：
 
 1. 上限取框架块表的上限（16 × 16 块、56MiB），没有另设更低的 demo 预算；
 2. 出生点仍是 (500, 500)，没有改到地图中央；
@@ -907,13 +907,13 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 
 ### 24.4 未覆盖与限制
 
-- demo 用例里的 NPC 是替身实体：demo 的 SceneActor / Monster 经进程级的 `partition.Node()` 找 Node，一个测试进程里装不下两个格；`startPartition` 里装钩子的三行只有真实进程演练（`scripts/test-seamless-demo.sh` 开地形的配置）覆盖，本轮没跑（真实依赖由维护者跑）。现有演练配置的 `cell_size` 3000 不满足开地形的要求（§21），要另配。
+- demo 用例里的 NPC 是替身实体：demo 的 SceneActor / Monster 经进程级的 `partition.Node()` 找 Node，一个测试进程里装不下两个格；`startPartition` 里装钩子的三行只有真实进程演练（`scripts/test-seamless-demo.sh` 开地形的配置）覆盖，本轮没跑（真实依赖由维护者跑）。**2026-11-10 已补**：`ROOST_SEAMLESS_TERRAIN=1` 的演练覆盖这几行，去掉装钩子的那一行演练变红（[§26](#26-开地形的分区场景真实多进程演练t05t062026-11-10)）。现有演练配置的 `cell_size` 3000 不满足开地形的要求（§21），要另配。
 - 玩家端没有新的 TCP 用例：玩家停下后客户端看到的是 witness 里的位置（与停在世界边缘相同的路径），cellworld 的 `TestCrossCellWalkFollowsTheNeighboursTerrain` 用 Base 收到的 witness 断言。
 - 副本的新旧：判定用本进程当时持有的副本版本。拥有者刚提交、副本还没到的那几毫秒（推送丢了时至多 1 秒）里，旧格可能让角色走过邻格刚抬起的地方，或在刚挖平的地方停下；交接后新格按最新数据判定。T09 规模下副本延迟未测。
 - 刷怪点与进场位置不按 `Standable` 检查：站在不可走节点上的角色一步不走（不猜），不会被挪到附近能站的点。
 - 每拍按整数点问 `Cell`，成本与速度成正比；T09 规模（单格数千玩家）的 CPU 未测。
 
-### 24.5 待维护者确认（实施方先按推荐做了）
+### 24.5 实施方先定的取舍（维护者 2026-11-10 确认按推荐）
 
 | 项 | 现状 | 选项（推荐标★） |
 | --- | --- | --- |
@@ -925,7 +925,7 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 
 ## 25. P4 水与建筑实施结果（2026-11-10）
 
-分支 `feat/terrain-p4`（基于 main `960e485c`）。完成[进度总表](TERRAIN-STATUS.md) T07 的服务端部分：区域水位线（D3）与普通场景的建筑（放置校验、地基整平、拆除、占位、并发、重启与换版处置）。证据、命令与变异红文本见 [evidence/terrain-p4-20261110](evidence/terrain-p4-20261110/README.md)。§26 留给同期另一轮。
+已合入 main（分支 `feat/terrain-p4`，基于 `960e485c`）。完成[进度总表](TERRAIN-STATUS.md) T07 的服务端部分：区域水位线（D3）与普通场景的建筑（放置校验、地基整平、拆除、占位、并发、重启与换版处置）。证据、命令与变异红文本见 [evidence/terrain-p4-20261110](evidence/terrain-p4-20261110/README.md)。§26 留给同期另一轮。
 
 ### 25.1 水位线（D3：全局 / 区域）
 
@@ -1016,3 +1016,31 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 - **BaseRevision**：D13 用“记录的 `BaseRevision` ≠ 包”判断原始地形换了，前提是同一个版本号只对应一份原始地形。缺省包的内容变了，所以平地缺省取 2；`-shape generated` 缺省仍是 1——与原缺省包同一份地形（`TestTerrainPackGeneratedShapeIsTheOldDefault` 逐块比对 `terrain.Generated`）。这样用旧缺省包改过的块，换上新缺省包时按 D13 丢弃，而不会被当成新平地上的改动叠上去。本轮还有包格式版本 2 与 chunk schema 4，升级本来就要清空数据重新生成包；版本号的改动是让 D13 语义自洽，不是迁移手段。
 - **依赖缺省起伏的用例**：没有。demo 的服务测试都用 `terrain.Generated` 或自己的源造图（不经 `terrainpack`）；`terrainpack` 自己的用例改为断言平地缺省，原来覆盖“显式基准与水位”的用例加了 `-ground 0`（新规则下缺省地面 = 水位 + 1m 落在 `-height-base 0` 之下）。
 - **验证**：`TestTerrainPackDefaultsAndHeightQueries`（缺省 16 × 16、1024m 见方、版本 2、每点 40100 与草、整张图每一步东 / 东北都走得通、挖 2m 是 1m 深的水、填回是陆地）、`TestTerrainPackGeneratedShapeIsTheOldDefault`（`-shape generated -seed 1 -chunks-x 2 -chunks-y 1` 就是原缺省包）、参数拒绝（未知形状、平地给 `-seed`、起伏给 `-ground`、不在 10cm 档上、低于基准、超出范围）、`gameplay/terrain` `TestFlatIsTheSameEverywhereAndWalkable`。新用例在改动前的 `terrainpack` 上的失败原文见证据。
+
+## 26. 开地形的分区场景真实多进程演练（T05、T06，2026-11-10）
+
+已合入 main（分支 `feat/terrain-partition-drill`，基于 `960e485c`）。补 §21 与 §24.4 留下的“开地形的无缝演练、真实 Mongo / WAL 崩溃演练、`startPartition` 装钩子的几行”。§25 留给同期 P4 那一轮。证据、命令与每步数字见 [evidence/terrain-partition-drill-20261110](evidence/terrain-partition-drill-20261110/README.md)。
+
+**入口**：`scripts/test-seamless-demo.sh` 加 `ROOST_SEAMLESS_TERRAIN=1` 模式，复用依赖准备、生成工程、端口检查与清理；客户端步骤在 `scripts/testdata/seamless/terrain.go.txt`（与原 `drill.go.txt` 编成同一程序，`-terrain` 选步骤）。不设时原演练逐字不变（客户端只多认 `terrain` 命名空间，原演练不会收到）。另加 `ROOST_SEAMLESS_PROJECT_HOOK`（生成之后、编译之前在工程里执行一条命令）供变异验证。
+
+**配置**：4 × 2 块平地包（演练程序写出），`cell_size` 12800（两块）、2 × 1 格（A = sid 1001、B = sid 1002），`ghost_band` 600 = `view_radius` 400 + `hysteresis` 200；1000、1004 只做 Base。演练用平地，是因为 demo 缺省程序化包上向东一步只有 45.5% 走得通，角色会被天然坡随机挡住。
+
+**读视图**：生成 demo 新增只读 GM `gm.terrain.probe`（`internal/service/<game>/terrain.go` 的 `terrainProbe`）：每块报是否本进程写、是否装着、视图版本、副本订阅报的版本（`Map.ReplicaHeld`）与数据摘要（FNV-1a 64：高度小端 2 字节、再材质 1 字节），每点报世界高度；至多 64 块、256 点。客户端按同一规则算自己收到的块，所以“拥有者、Ghost 带、各进程客户端是同一份数据”可以逐块判定。用例 `TestTerrainProbeReportsTheView`。
+
+**步骤与结论**（两次完整运行都通过）：
+
+| 步骤 | 结论 |
+| --- | --- |
+| (a) A 改边界块与远处块 | B 的 Ghost 带在答复后一次轮询（约 3～4ms）内对齐；B、1004、A 上的客户端在答复之后 1ms 内拿到、摘要相同；远处块不进 B 的视图、只作为客户端副本；B 改 A 的块答 `terrain_not_owned` |
+| (b) 真实 SceneActor | B 紧挨分界线抬 5m 的坎，坎到 A 的 Ghost 带 10～16ms；Base 在 1004 的玩家越过分界线、**停在 12949**（坎的第一个节点从 12950 起），2 秒内一直是 A 的 Real；挖平后再走 109～114ms 交给 B |
+| (b) 真实 Monster | 怪困在 A 的墙与 B 的坎之间连续折回 4 次（东侧折回点 12933～12942 ≤ 12949，从没交给 B）；坎挖平后约 3.3s 交给 B |
+| (c) kill -9 格 B 后重启 | 答复过的编辑重启后版本、摘要不变；A 的 Ghost 带与 B 对齐、B 的 Ghost 带补上停机期间 A 的编辑，都在 readyz 之前完成；连续编辑的账本 LastSeq = 最后答复的序号 = 块版本（在途的一笔没有生效），重发答 Duplicate；重新登录的客户端 52～88ms 内拿到 |
+| 收尾 | 8 块在每个装着它的进程与三个客户端里都与拥有者一致 |
+| 变异：去掉 `cfg.Surface = partitionSurface(m, grid)` | (b) 变红：玩家走过坎、交给 B、走到 x 20673 |
+| 不开地形的原演练 | 14 步通过；最后的普通场景机器人压测同机一次通过（p95 13.54s）、一次失败（19.48s），与本项无关，登记 KNOWN-LIMITS“尚未确认” |
+
+**没有发现框架或 demo 的缺陷**；演练程序自己的两处错误（没登记实体种类时 `BuildEntityID` 报错、业务码按文本比较）已改，记在证据里。
+
+**未覆盖**：跨格寻路（没有入口）；“提交了但答复没到”的在途编辑；格 A、只做 Base 进程的崩溃与换版（D13）的真实进程演练；消息丢失 / 延迟注入、跨机、T09 规模；起伏地形上的真实进程移动。演练要真实依赖，不进 pretag。
+
+**待维护者确认**（实施方先按推荐做了）：① `gm.terrain.probe` 留作 demo 的运维 / 诊断命令（★）还是只给演练用；② 演练用平地包（★），还是给 `cmd/terrainpack` 加平地 / 平缓选项、或改缓 `terrain.Generated`（包字节变化须换 BaseRevision）；③ 演练保持手动（★）还是进 pretag（多约 2 分钟、要求真实依赖）。
