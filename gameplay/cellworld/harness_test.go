@@ -44,6 +44,41 @@ func init() {
 	}
 }
 
+// ---- 真实时钟下的等待（2026-11-10 统一整治，见 docs/maintenance/evidence/cellworld-clock-cleanup-20261110）----
+//
+// 本包的集成用例跑在真实时钟上：心跳驱动按系统时间醒来、迟到的拍不补跑，消息经真实 goroutine 投递。所以用例里
+//   - 等异步结论一律“等结论成立、有期限、超时打诊断”（eventually / waitFor / waitView / waitSettled），不写“sleep 固定
+//     时长后立即断言”；
+//   - 需要“过几拍”的窗口（看一件事在这段时间里没有发生），以格实际执行的心跳拍数计（world.waitBeats），不以墙钟计；
+//   - 断言间隔 / 频率的，以实际执行的心跳拍数为尺子（checkContinuity 的视野间隔、升档后的拍数），不以墙钟毫秒为尺子：
+//     负载下心跳本身被推迟时墙钟间隔变长、拍数不变；实现真的漏发、迟发时拍数变大。
+//
+// 期限集中在下面两个常量；个别用例自己的配置期限更长时另取，写明理由。
+const (
+	// settleWithin：等一个异步结论（交接收尾、伤害 / 面板结论、角色 / Ghost 出现或消失、客户端帧到达）的统一期限。长于
+	// 缺省 HandoffAbort（3s）、LeaseTimeout（3s）、AttackDeadline（2s）、PanelDeadline（2s）：协议在这些期限内一定给出
+	// 结论（成功或放弃），过了 settleWithin 还没有就是真的卡住，按诊断失败，不是“负载下慢了一点”。
+	settleWithin = 5 * time.Second
+	// travelWithin：等玩家走到某处（最长一段约 2600 单位、1000/s 约 2.6s，途中交接）的期限。
+	travelWithin = 10 * time.Second
+)
+
+// eventually 轮询 check 直到成立；超过 within 按最后一次检查的 diag 失败。只等结论，不断言耗时。
+func eventually(t testing.TB, within time.Duration, what string, check func() (ok bool, diag string)) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for {
+		ok, diag := check()
+		if ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %v waiting for %s: %s", within, what, diag)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 type nullCommitter struct{}
 
 func (nullCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
@@ -187,6 +222,8 @@ type testProc struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	stopped bool
+	// baseBeats：本进程执行过的 cell.base 心跳数（各玩家合计）：Base 侧“过几拍”的尺子。
+	baseBeats atomic.Uint64
 }
 
 // procSpec 描述要起的进程。
@@ -362,6 +399,16 @@ func (p *testProc) stop() {
 	}
 }
 
+// waitBaseBeats 等本进程再执行 n 拍 cell.base 心跳（各玩家合计）：Base 侧“过几拍再看”的窗口，以拍数计。
+func (p *testProc) waitBaseBeats(n int) {
+	p.t.Helper()
+	target := p.baseBeats.Load() + uint64(n)
+	eventually(p.t, settleWithin+time.Duration(n)*p.node.Config().WatchPeriod, fmt.Sprintf("%d base beats on sid %d", n, p.sid), func() (bool, string) {
+		got := p.baseBeats.Load()
+		return got >= target, fmt.Sprintf("%d beats short", target-min(got, target))
+	})
+}
+
 // player 返回（必要时新建）Base 进程上的 Player 实体，并打开它的同步会话。
 func (p *testProc) player(unique int64) *testPlayer {
 	id := playerEntityID(unique)
@@ -370,7 +417,10 @@ func (p *testProc) player(unique int64) *testPlayer {
 	}
 	pl := &testPlayer{EntityBase: fentity.NewEntityBase(id, fentity.EntityCategoryPlayer, true, kindTPlayer), dao: &undoCell[BaseState]{}, group: &undoCell[Group]{}}
 	pl.host = p.driver.NewHost(pl)
-	reg, err := pl.host.Register("cell.base", p.node.Config().WatchPeriod, func(heartbeat.Beat) error { return p.node.BaseBeat(pl, time.Now()) })
+	reg, err := pl.host.Register("cell.base", p.node.Config().WatchPeriod, func(heartbeat.Beat) error {
+		p.baseBeats.Add(1)
+		return p.node.BaseBeat(pl, time.Now())
+	})
 	if err != nil {
 		p.t.Fatal(err)
 	}

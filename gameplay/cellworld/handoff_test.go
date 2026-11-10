@@ -1,11 +1,15 @@
 package cellworld
 
 import (
+	"context"
+	"fmt"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	fentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -13,16 +17,10 @@ import (
 // 断言含义不变——同一实体同一时刻至多一个 Real、同一 (实体, epoch) 只取得一次、epoch 严格递增（realChecker 在每次
 // 提交后的身份变化时检查），消息丢失 / 重复 / 扣住只推迟结论、不双写。
 
-// waitFor 轮询条件（只用于等异步执行完成，不断言耗时）。
+// waitFor 轮询条件（只用于等异步执行完成，不断言耗时）；超时没有诊断，需要诊断的用 eventually。
 func waitFor(t testing.TB, timeout time.Duration, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	eventually(t, timeout, what, func() (bool, string) { return cond(), "" })
 }
 
 func (w *world) roleOf(cell CellID, id int64) (EntitySnapshot, bool) {
@@ -49,10 +47,10 @@ func TestHandoffMovesRealAndLeavesGhost(t *testing.T) {
 	a, b := CellID{0, 0}, CellID{1, 0}
 	id := npcID(11)
 	w.spawn(a, EntityState{ID: id, X: 9950, Y: 5000, VX: 300, HP: 100})
-	waitFor(t, 5*time.Second, "npc real in B", func() bool { s, ok := w.roleOf(b, id); return ok && s.Role == "real" })
+	waitFor(t, settleWithin, "npc real in B", func() bool { s, ok := w.roleOf(b, id); return ok && s.Role == "real" })
 	// B 装入 Real 与 A 收到 OfferReply、由冻结转为 Ghost 是两个格上的两笔事务：B 刚成为 Real 时 A 可能仍是 frozen（协议内
 	// 的正常窗口，至多一个 Real 由 realChecker 全程检查）。等 A 收尾，再断言它留下的是 owner = B 的 Ghost。
-	waitFor(t, 2*time.Second, "A leaves its frozen state", func() bool { s, ok := w.roleOf(a, id); return !ok || s.Role != "frozen" })
+	waitFor(t, settleWithin, "A leaves its frozen state", func() bool { s, ok := w.roleOf(a, id); return !ok || s.Role != "frozen" })
 	s, ok := w.roleOf(a, id)
 	if !ok || s.Role != "ghost" || s.Owner != b {
 		t.Fatalf("A holds %+v (known %v), want a ghost owned by B", s, ok)
@@ -81,7 +79,7 @@ func TestHandoffHysteresisAbsorbsJitter(t *testing.T) {
 			vx = -400
 		}
 		w.move(1, vx, 0)
-		w.waitView(1, 5*time.Second, "turn", func(v View) bool {
+		w.waitView(1, settleWithin, "turn", func(v View) bool {
 			if vx > 0 {
 				return v.Self.X >= 10060
 			}
@@ -122,8 +120,8 @@ func TestHandoffSurvivesLostAndDuplicatedMessages(t *testing.T) {
 		return false, false, 0
 	})
 	w := startWorld(t, spec)
-	// 丢 3 个 Offer = 冻结期间多等 3 个 OfferRetry（100ms）：witness 间隔的上界随之放宽。
-	scenarioStraightCrossing(t, w, 2, 3*100*time.Millisecond+contMaxGap)
+	// 丢 3 个 Offer = 冻结期间多等 3 个 OfferRetry（100ms）：消息段的上界随之加 300ms。
+	scenarioStraightCrossing(t, w, 2, gapRule{beats: contGap.beats, edge: contGap.edge, transit: transitCap + 3*100*time.Millisecond})
 	if got := w.sumStats(func(s NodeStats) uint64 { return s.OfferRetransmits }); got < 3 {
 		t.Fatalf("offer retransmits %d, want >= 3", got)
 	}
@@ -133,8 +131,12 @@ func TestHandoffSurvivesLostAndDuplicatedMessages(t *testing.T) {
 func TestHandoffAckLossResolvedByGhostUpdate(t *testing.T) {
 	spec, lb := loopbackSpec(t, 2, 1)
 	lb.setFault(func(_ string, m *wireMsg) (bool, bool, time.Duration) { return m.Kind == kindOfferReply, false, 0 })
+	// 承诺是“回复全丢时靠新格的 Ghost 收尾、不放弃”，与放弃期限多长无关。隐式确认要走 Ghost → 旧格区域事务 → 出站队列
+	// → 角色事务好几跳，平均负载 45 时（整份 witness 只 11 份）这条流水线被缺省 HandoffAbort 3s 追上过一次，放弃是按配置
+	// 的正确行为。所以本用例把放弃期限放到 10s（长于 settleWithin）：隐式确认失效时旧格一直冻结，assertSingleReal 照样超时。
+	spec.cellMod = func(cfg *NodeConfig) { cfg.HandoffAbort = 2 * settleWithin }
 	w := startWorld(t, spec)
-	scenarioStraightCrossing(t, w, 2, 300*time.Millisecond)
+	scenarioStraightCrossing(t, w, 2, contGap) // 回复丢失不影响新格装入，间隔与无故障时相同
 	if aborted := w.sumStats(func(s NodeStats) uint64 { return s.HandoffsAborted }); aborted != 0 {
 		t.Fatalf("%d handoffs aborted although ghosts confirm them", aborted)
 	}
@@ -143,23 +145,29 @@ func TestHandoffAckLossResolvedByGhostUpdate(t *testing.T) {
 	}
 }
 
-// 超时只删不恢复：目标格收不到 Offer（前 1.2s 全部丢掉）时旧格在 HandoffAbort 后删除记录、告诉 Base；之后 Base 按最后
-// 位置重进（新格按快照建出 SceneActor，epoch 更大）；全程至多一个 Real。
+// 超时只删不恢复：目标格收不到 Offer（第一次放弃之前全部丢掉）时旧格在 HandoffAbort 后删除记录、告诉 Base；之后 Base
+// 按最后位置重进（新格按快照建出 SceneActor，epoch 更大）；全程至多一个 Real。
+//
+// 丢 Offer 的窗口按状态而不是墙钟划定（原来是“前 1.2s”）：负载下冻结 + HandoffAbort 走完可能超过 1.2s，重传的 Offer
+// 就会送达、交接成功，用例等不到放弃。现在丢到旧格真的放弃为止，之后的消息（重进）照常。
 func TestHandoffAbortDeletesWithoutResuming(t *testing.T) {
 	spec, lb := loopbackSpec(t, 2, 1)
-	var start atomic.Int64
-	start.Store(time.Now().UnixNano())
+	var started atomic.Pointer[world]
+	aborted := func() bool {
+		w := started.Load()
+		return w != nil && w.sumStats(func(s NodeStats) uint64 { return s.HandoffsAborted }) > 0
+	}
 	lb.setFault(func(_ string, m *wireMsg) (bool, bool, time.Duration) {
-		return m.Kind == kindOffer && time.Since(time.Unix(0, start.Load())) < 1200*time.Millisecond, false, 0
+		return m.Kind == kindOffer && !aborted(), false, 0
 	})
 	spec.cellMod = func(cfg *NodeConfig) { cfg.HandoffAbort = 600 * time.Millisecond }
 	w := startWorld(t, spec)
+	started.Store(w)
 	b := CellID{1, 0}
 	w.enter(1, spatial.Point{X: 9950, Y: 5000})
-	start.Store(time.Now().UnixNano())
 	w.move(1, 1000, 0)
-	waitFor(t, 3*time.Second, "abort", func() bool { return w.sumStats(func(s NodeStats) uint64 { return s.HandoffsAborted }) > 0 })
-	w.waitView(1, 5*time.Second, "view from B after re-enter", func(v View) bool { return v.Cell == w.grid.SID(b) })
+	waitFor(t, settleWithin, "abort", aborted)
+	w.waitView(1, settleWithin, "view from B after re-enter", func(v View) bool { return v.Cell == w.grid.SID(b) })
 	st := w.baseState(1)
 	if st.LostEpoch == 0 || st.Epoch <= st.LostEpoch {
 		t.Fatalf("base state %+v: want a lost epoch and a later owner epoch", st)
@@ -168,8 +176,7 @@ func TestHandoffAbortDeletesWithoutResuming(t *testing.T) {
 		t.Fatalf("base stats %+v, want lost and re-enter", s)
 	}
 	w.move(1, 0, 0)
-	time.Sleep(3 * worldPeriod)
-	w.assertSingleReal(actorID(1), b)
+	w.assertSingleReal(actorID(1), b) // 等到结论成立（有期限）
 }
 
 // 被拒恢复并用下一个 epoch 重试：B 满员（MaxReals 1，已有一个 NPC）时拒绝交接，A 以原 epoch 恢复为 Real，退避后用更大的
@@ -187,13 +194,13 @@ func TestHandoffRejectedResumesAndRetriesWithNextEpoch(t *testing.T) {
 	w.spawn(CellID{1, 0}, EntityState{ID: npcID(99), X: 15000, Y: 5000, HP: 100})
 	w.enter(1, spatial.Point{X: 9950, Y: 5000})
 	w.move(1, 1000, 0)
-	waitFor(t, 5*time.Second, "two rejections", func() bool { return w.cells[a].node.Stats().HandoffsRejected >= 2 })
+	waitFor(t, settleWithin, "two rejections", func() bool { return w.cells[a].node.Stats().HandoffsRejected >= 2 })
 	w.move(1, 0, 0)
-	time.Sleep(4 * worldPeriod)
-	s, ok := w.roleOf(a, actorID(1))
-	if !ok || s.Role != "real" || s.State.Ver.Epoch < 3 {
-		t.Fatalf("A holds %+v (known %v), want Real at epoch >= 3 after retries", s, ok)
-	}
+	// 停下时可能还有一次重试在路上（冻结中）：等 A 以更大的 epoch 恢复为 Real。
+	eventually(t, settleWithin, "A real again after the retries", func() (bool, string) {
+		s, ok := w.roleOf(a, actorID(1))
+		return ok && s.Role == "real" && s.State.Ver.Epoch >= 3, fmt.Sprintf("A holds %+v (known %v), want Real at epoch >= 3 after retries", s, ok)
+	})
 	w.assertSingleReal(actorID(1), a)
 }
 
@@ -214,7 +221,7 @@ func TestHandoffConcurrentCrossingBack(t *testing.T) {
 			vx = -2000
 		}
 		w.move(1, vx, 0)
-		w.waitView(1, 5*time.Second, "turn", func(v View) bool {
+		w.waitView(1, settleWithin, "turn", func(v View) bool {
 			if vx > 0 {
 				return v.Self.X >= 10250
 			}
@@ -222,10 +229,72 @@ func TestHandoffConcurrentCrossingBack(t *testing.T) {
 		})
 	}
 	w.move(1, 0, 0)
-	time.Sleep(time.Second)
-	sid, _ := w.owner(1)
+	sid, _ := w.waitSettled(1, settleWithin) // 回复扣住 400ms：停下时最后一次交接还没收尾
 	cell, _ := w.grid.CellOf(sid)
 	w.assertSingleReal(actorID(1), cell)
+}
+
+// holdFreezeReport 把含 id 冻结报告的那一批区域报告的投递挡住，直到 release 成立（期限 settleWithin）；其余照常交给引擎。
+// 报告由出站 goroutine 攒批投给 Scene，挡住它就是“报告晚到”。
+type holdFreezeReport struct {
+	nest.Client
+	id      int64
+	release func() bool
+	held    atomic.Bool // 挡过一次
+	passed  atomic.Bool // 挡住的那一批已经交给引擎
+}
+
+func (h *holdFreezeReport) Dispatch(ctx context.Context, handler nest.HandlerName, id int64, p nest.Params, opts ...nest.SendOpt) error {
+	if handler != hReports || h.held.Load() {
+		return h.Client.Dispatch(ctx, handler, id, p, opts...)
+	}
+	batch, _ := p[0].([]ActorReport)
+	if !slices.ContainsFunc(batch, func(r ActorReport) bool { return r.State.ID == h.id && r.Role == RoleFrozen }) {
+		return h.Client.Dispatch(ctx, handler, id, p, opts...)
+	}
+	h.held.Store(true)
+	for deadline := time.Now().Add(settleWithin); !h.release() && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	err := h.Client.Dispatch(ctx, handler, id, p, opts...)
+	h.passed.Store(true)
+	return err
+}
+
+// 冻结的报告晚于交接结论到达区域表：角色心跳里冻结、提交后先发 Offer 再把冻结报告交给出站 goroutine 攒批投给 Scene；
+// 交接结论（OfferReply / 新格 Ghost 的隐式确认）在锁 Scene + 角色的事务里直接改区域表（删本地记录、留 owner = 新格的
+// Ghost）。报告那一批晚到时不能再建出一条冻结记录：角色已交出、实体已销毁，没有任何东西会再清掉它——旧格的 Inspect
+// 一直报 frozen，区域表把它当本地实体给别的玩家的 witness（停在冻结点），新 owner 发来的 Ghost 更新被它挡住。
+// 整包 -race 加压时 TestNATSWorldDiagonalThroughFourCellCorner 收尾超时的现场就是这样：旧格 accepted=1、aborted=0，
+// 区域表里仍是 frozen（2026-11-10 的诊断；此前 TestWorldStraightCrossing“frozen 4.4s”记为尚未确认）。这里把含冻结报告
+// 的那一批挡到旧格收到 OfferReply 之后，确定性地造出这个顺序。
+func TestLateFreezeReportDoesNotResurrectTheRecord(t *testing.T) {
+	spec, _ := loopbackSpec(t, 2, 1)
+	a, b := CellID{0, 0}, CellID{1, 0}
+	var started atomic.Pointer[world]
+	hold := &holdFreezeReport{id: actorID(1), release: func() bool {
+		w := started.Load()
+		return w != nil && w.cells[a].node.Stats().HandoffsAccepted > 0
+	}}
+	spec.cellMod = func(cfg *NodeConfig) {
+		if cfg.SID == 101 {
+			hold.Client, cfg.Nest = cfg.Nest, hold
+		}
+	}
+	w := startWorld(t, spec)
+	started.Store(w)
+	w.enter(1, spatial.Point{X: 9950, Y: 5000})
+	w.move(1, 1000, 0)
+	w.waitView(1, settleWithin, "view from B", func(v View) bool { return v.Cell == w.grid.SID(b) })
+	w.move(1, 0, 0)
+	waitFor(t, settleWithin, "the held freeze report to be handed to the engine", hold.passed.Load)
+	if !hold.held.Load() || w.cells[a].node.Stats().HandoffsAccepted == 0 {
+		t.Fatalf("the freeze report was not held until the conclusion (held %v, accepted %d)", hold.held.Load(), w.cells[a].node.Stats().HandoffsAccepted)
+	}
+	w.assertSingleReal(actorID(1), b)
+	if s, ok := w.roleOf(a, actorID(1)); ok && (s.Role != "ghost" || s.Owner != b) {
+		t.Fatalf("A holds %+v after the handoff, want nothing or a ghost owned by B", s)
+	}
 }
 
 // 斜穿四格的交接链 A → B → D：先沿 +x 进 B，再沿 +y 进 D；epoch 3，D 是唯一 Real。
@@ -235,12 +304,13 @@ func TestHandoffChainAcrossCorner(t *testing.T) {
 	d := CellID{1, 1}
 	w.enter(1, spatial.Point{X: 9500, Y: 9000})
 	w.move(1, 1000, 0)
-	w.waitView(1, 5*time.Second, "in B", func(v View) bool { return v.Self.X >= 10500 })
+	w.waitView(1, settleWithin, "in B", func(v View) bool { return v.Self.X >= 10500 })
 	w.move(1, 0, 1000)
-	w.waitView(1, 5*time.Second, "in D", func(v View) bool { return v.Self.Y >= 10500 })
+	w.waitView(1, settleWithin, "in D", func(v View) bool { return v.Self.Y >= 10500 })
 	w.move(1, 0, 0)
-	time.Sleep(3 * worldPeriod)
-	if sid, epoch := w.owner(1); sid != w.grid.SID(d) || epoch != 3 {
+	// 原来 sleep 3 拍后读 Base 的 owner：Base 换 owner 靠 D 的 witness，负载下 3 拍不一定够。等交接收尾（Base 的 owner、
+	// 各格角色与最近的 witness 一致），再断言 owner 是 D、epoch 3。
+	if sid, epoch := w.waitSettled(1, settleWithin); sid != w.grid.SID(d) || epoch != 3 {
 		t.Fatalf("owner sid %d epoch %d, want D epoch 3", sid, epoch)
 	}
 	w.assertSingleReal(actorID(1), d)
@@ -253,7 +323,7 @@ func TestEnterIsIdempotentAndRefusesWhenRealElsewhere(t *testing.T) {
 	w := startWorld(t, spec)
 	a, b := CellID{0, 0}, CellID{1, 0}
 	w.enter(1, spatial.Point{X: 9800, Y: 5000})
-	time.Sleep(4 * worldPeriod)
+	w.waitBeats(a, 4) // 重复的 Enter 与原件同时投递：再过 4 拍（按 A 实际执行的拍数），它若造出第二个实例或换了 epoch 就看得见
 	if sid, epoch := w.owner(1); sid != w.grid.SID(a) || epoch != 1 {
 		t.Fatalf("owner sid %d epoch %d after a duplicated enter, want A epoch 1", sid, epoch)
 	}
@@ -262,8 +332,8 @@ func TestEnterIsIdempotentAndRefusesWhenRealElsewhere(t *testing.T) {
 	w.base.node.enqueue(job{kind: jobSend, send: outgoing{sid: w.grid.SID(b), msg: &wireMsg{Kind: kindEnter, Enter: &enterReq{
 		State: EntityState{ID: actorID(1), Kind: KindPlayer, X: 10500, Y: 5000, HP: 100}, EpochHint: 5,
 	}}}})
-	waitFor(t, 3*time.Second, "refusal", func() bool { return w.base.node.Stats().EnterRefusals > before })
-	time.Sleep(2 * worldPeriod)
+	waitFor(t, settleWithin, "refusal", func() bool { return w.base.node.Stats().EnterRefusals > before })
+	w.waitBeats(b, 2) // 拒绝之后 B 若仍错误地装入，2 拍内会在区域表里出现（realChecker 也在每次提交后检查）
 	w.assertSingleReal(actorID(1), a)
 }
 
