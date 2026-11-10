@@ -1,0 +1,179 @@
+                                        │ bench-old.txt │
+                                        │    sec/op     │
+SceneMainViewScale/view30m/block3200-10    3.016m ± 25%
+
+                                        │ bench-old.txt │
+                                        │  blocks/obs   │
+SceneMainViewScale/view30m/block3200-10      9.132 ± 0%
+
+                                        │ bench-old.txt │
+                                        │ buildings/obs │
+SceneMainViewScale/view30m/block3200-10      15.36 ± 0%
+
+                                        │ bench-old.txt │
+                                        │ enter-B/s/obs │
+SceneMainViewScale/view30m/block3200-10      388.6 ± 0%
+
+                                        │ bench-old.txt │
+                                        │   heap-MiB    │
+SceneMainViewScale/view30m/block3200-10      67.33 ± 0%
+
+                                        │  bench-old.txt  │
+                                        │ missed/town-obs │
+SceneMainViewScale/view30m/block3200-10       4.000m ± 0%
+
+                                        │ bench-old.txt │
+                                        │  visible/obs  │
+SceneMainViewScale/view30m/block3200-10      30.29 ± 0%
+
+                                        │ bench-old.txt │
+                                        │     B/op      │
+SceneMainViewScale/view30m/block3200-10    1.050Mi ± 0%
+
+                                        │ bench-old.txt │
+                                        │   allocs/op   │
+SceneMainViewScale/view30m/block3200-10     7.769k ± 0%
+                                                       │ bench-new.txt │
+                                                       │    sec/op     │
+SceneMainViewScale/map1024/old-view30m-64/block3200-10   3.075m ±  13%
+SceneMainViewScale/map1024/view32m-128/block3200-10      3.656m ± 272%
+SceneMainViewScale/map2048/view32m-128/block1600-10      14.90m ±  36%
+SceneMainViewScale/map2048/view32m-128/block3200-10      19.91m ±  25%
+SceneMainViewScale/map2048/view32m-128/block6400-10      22.49m ±  18%
+SceneMainViewScale/map2048/view64m-128/block3200-10      42.68m ±  17%
+geomean                                                  12.14m
+
+                                                       │ bench-new.txt │
+                                                       │  blocks/obs   │
+SceneMainViewScale/map1024/old-view30m-64/block3200-10      9.132 ± 0%
+SceneMainViewScale/map1024/view32m-128/block3200-10         10.01 ± 0%
+SceneMainViewScale/map2048/view32m-128/block1600-10         28.86 ± 0%
+SceneMainViewScale/map2048/view32m-128/block3200-10         10.13 ± 0%
+SceneMainViewScale/map2048/view32m-128/block6400-10         4.329 ± 0%
+SceneMainViewScale/map2048/view64m-128/block3200-10         26.50 ± 0%
+geomean                                                     12.05
+
+                                                       │ bench-new.txt │
+                                                       │ buildings/obs │
+SceneMainViewScale/map1024/old-view30m-64/block3200-10      15.36 ± 0%
+SceneMainViewScale/map1024/view32m-128/block3200-10         17.43 ± 0%
+SceneMainViewScale/map2048/view32m-128/block1600-10         17.22 ± 0%
+SceneMainViewScale/map2048/view32m-128/block3200-10         17.22 ± 0%
+SceneMainViewScale/map2048/view32m-128/block6400-10         17.22 ± 0%
+SceneMainViewScale/map2048/view64m-128/block3200-10         39.90 ± 0%
+geomean                                                     19.47
+
+                                                       │ bench-new.txt │
+                                                       │ enter-B/s/obs │
+SceneMainViewScale/map1024/old-view30m-64/block3200-10     388.6 ±  0%
+SceneMainViewScale/map1024/view32m-128/block3200-10        408.7 ±  0%
+SceneMainViewScale/map2048/view32m-128/block1600-10        407.6 ±  0%
+SceneMainViewScale/map2048/view32m-128/block3200-10        407.6 ±  0%
+SceneMainViewScale/map2048/view32m-128/block6400-10        407.6 ±  0%
+SceneMainViewScale/map2048/view64m-128/block3200-10        343.8 ± 43%
+geomean                                                    393.2
+
+                                                       │ bench-new.txt │
+                                                       │   heap-MiB    │
+SceneMainViewScale/map1024/old-view30m-64/block3200-10      67.23 ± 0%
+SceneMainViewScale/map1024/view32m-128/block3200-10         72.02 ± 0%
+SceneMainViewScale/map2048/view32m-128/block1600-10         290.2 ± 0%
+SceneMainViewScale/map2048/view32m-128/block3200-10         281.8 ± 0%
+SceneMainViewScale/map2048/view32m-128/block6400-10         279.2 ± 0%
+SceneMainViewScale/map2048/view64m-128/block3200-10         536.9 ± 0%
+geomean                                                     197.5
+
+                                                       │  bench-new.txt  │
+                                                       │ missed/town-obs │
+SceneMainViewScale/map1024/old-view30m-64/block3200-10     4.000m ± 0%
+SceneMainViewScale/map1024/view32m-128/block3200-10         0.000 ± 0%
+SceneMainViewScale/map2048/view32m-128/block1600-10         0.000 ± 0%
+SceneMainViewScale/map2048/view32m-128/block3200-10         0.000 ± 0%
+SceneMainViewScale/map2048/view32m-128/block6400-10         0.000 ± 0%
+SceneMainViewScale/map2048/view64m-128/block3200-10         66.51 ± 0%
+geomean                                                                ¹
+¹ summaries must be >0 to compute geomean
+
+                                                       │ bench-new.txt │
+                                                       │  visible/obs  │
+SceneMainViewScale/map1024/old-view30m-64/block3200-10      30.29 ± 0%
+SceneMainViewScale/map1024/view32m-128/block3200-10         34.32 ± 0%
+SceneMainViewScale/map2048/view32m-128/block1600-10         34.16 ± 0%
+SceneMainViewScale/map2048/view32m-128/block3200-10         34.16 ± 0%
+SceneMainViewScale/map2048/view32m-128/block6400-10         34.16 ± 0%
+SceneMainViewScale/map2048/view64m-128/block3200-10         85.81 ± 0%
+geomean                                                     39.07
+
+                                                       │ bench-new.txt │
+                                                       │     B/op      │
+SceneMainViewScale/map1024/old-view30m-64/block3200-10   1.051Mi ±  0%
+SceneMainViewScale/map1024/view32m-128/block3200-10      1.149Mi ±  1%
+SceneMainViewScale/map2048/view32m-128/block1600-10      5.151Mi ±  0%
+SceneMainViewScale/map2048/view32m-128/block3200-10      4.830Mi ±  4%
+SceneMainViewScale/map2048/view32m-128/block6400-10      5.308Mi ±  9%
+SceneMainViewScale/map2048/view64m-128/block3200-10      42.81Mi ± 38%
+geomean                                                  4.355Mi
+
+                                                       │ bench-new.txt │
+                                                       │   allocs/op   │
+SceneMainViewScale/map1024/old-view30m-64/block3200-10    7.769k ±  0%
+SceneMainViewScale/map1024/view32m-128/block3200-10       8.095k ±  0%
+SceneMainViewScale/map2048/view32m-128/block1600-10       33.08k ±  0%
+SceneMainViewScale/map2048/view32m-128/block3200-10       33.51k ±  0%
+SceneMainViewScale/map2048/view32m-128/block6400-10       33.72k ±  0%
+SceneMainViewScale/map2048/view64m-128/block3200-10       25.95k ± 42%
+geomean                                                   19.84k
+                                                    │ bench-block.txt │
+                                                    │     sec/op      │
+SceneMainViewScale/map2048/view32m-128/block1600-10      20.45m ± 27%
+SceneMainViewScale/map2048/view32m-128/block3200-10      19.41m ± 18%
+geomean                                                  19.92m
+
+                                                    │ bench-block.txt │
+                                                    │   blocks/obs    │
+SceneMainViewScale/map2048/view32m-128/block1600-10        28.86 ± 0%
+SceneMainViewScale/map2048/view32m-128/block3200-10        10.13 ± 0%
+geomean                                                    17.10
+
+                                                    │ bench-block.txt │
+                                                    │  buildings/obs  │
+SceneMainViewScale/map2048/view32m-128/block1600-10        17.22 ± 0%
+SceneMainViewScale/map2048/view32m-128/block3200-10        17.22 ± 0%
+geomean                                                    17.22
+
+                                                    │ bench-block.txt │
+                                                    │  enter-B/s/obs  │
+SceneMainViewScale/map2048/view32m-128/block1600-10        407.6 ± 0%
+SceneMainViewScale/map2048/view32m-128/block3200-10        407.6 ± 0%
+geomean                                                    407.6
+
+                                                    │ bench-block.txt │
+                                                    │    heap-MiB     │
+SceneMainViewScale/map2048/view32m-128/block1600-10        290.2 ± 0%
+SceneMainViewScale/map2048/view32m-128/block3200-10        281.8 ± 0%
+geomean                                                    285.9
+
+                                                    │ bench-block.txt │
+                                                    │ missed/town-obs │
+SceneMainViewScale/map2048/view32m-128/block1600-10      0.000 ± 0%
+SceneMainViewScale/map2048/view32m-128/block3200-10      0.000 ± 0%
+geomean                                                             ¹
+¹ summaries must be >0 to compute geomean
+
+                                                    │ bench-block.txt │
+                                                    │   visible/obs   │
+SceneMainViewScale/map2048/view32m-128/block1600-10        34.16 ± 0%
+SceneMainViewScale/map2048/view32m-128/block3200-10        34.16 ± 0%
+geomean                                                    34.16
+
+                                                    │ bench-block.txt │
+                                                    │      B/op       │
+SceneMainViewScale/map2048/view32m-128/block1600-10      5.174Mi ± 2%
+SceneMainViewScale/map2048/view32m-128/block3200-10      4.825Mi ± 0%
+geomean                                                  4.996Mi
+
+                                                    │ bench-block.txt │
+                                                    │    allocs/op    │
+SceneMainViewScale/map2048/view32m-128/block1600-10       33.06k ± 0%
+SceneMainViewScale/map2048/view32m-128/block3200-10       33.51k ± 0%
+geomean                                                   33.28k

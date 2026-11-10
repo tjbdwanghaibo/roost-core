@@ -10,6 +10,7 @@ import (
 
 	player "{{MODULE}}/game/entities/player"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	gamescene "{{MODULE}}/game/scene"
 	"{{MODULE}}/game/terrainmap"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -33,12 +34,13 @@ import (
 //
 // 容量与快照预算（方案 §7“对象上限”“基线限流”，决策 D15）：地形是 Manager 的一个单独计的命名空间
 // （entitysync.ManagerConfig.Namespaces，terrainNamespaceLimits）——一个会话最多持有 64 块地形（terrainMaxVisible），
-// 地形的全量每会话每次 Flush 至多 4 个（terrainSnapshotsPerFlush）。玩家 / 怪 / 场景不在其中，仍是场景原来的上限 100
-// （主视野 64 + 自身 / 场景 / 队友 3 + 留给关系视野的 33）、不限快照，交付与不开地形时逐字节相同。会话的对象引用表合起来
-// 可持有 164 个（sceneTerrainMaxObjects；建筑与玩家、怪同在 100 那一类，不另计，方案 §27.10），每帧对象数仍按 100 切，
-// 所以客户端的帧上限不用改。可编辑地形里只有地形块是这样单独的一类、单独的订阅来源。地形块超过 64（视野上限
-// 配错）与玩家 / 怪超过 100 一样不断开（超额降级，D17）：Manager 暂缓放不下的块并通知地形的 Interest，视野收紧到放得下、
-// 从最远的块开始退订，有空位时逐步放宽；计 entitysync_over_limit_deferred_total{namespace="terrain"}。
+// 地形的全量每会话每次 Flush 至多 4 个（terrainSnapshotsPerFlush）。玩家 / 怪 / 场景 / 建筑不在其中，是场景按主视野
+// 名额定的上限（sceneSessionObjects：名额 + 自身 / 场景 / 队友 3 + 留给关系视野的 33）、不限快照，交付与不开地形时逐字节
+// 相同：开地形的普通场景是游戏尺度的 128 → 164（方案 §29），分区场景仍是 demo 原尺度的 64 → 100。会话的对象引用表合起来
+// 可持有 164 + 64 = 228（普通场景）或 100 + 64 = 164（分区场景）个（sceneTerrainMaxObjects），每帧对象数按前一类的上限切。
+// 可编辑地形里只有地形块是这样单独的一类、单独的订阅来源。地形块超过 64（视野上限配错）与玩家 / 怪超过会话上限一样不断开
+// （超额降级，D17）：Manager 暂缓放不下的块并通知地形的 Interest，视野收紧到放得下、从最远的块开始退订，有空位时逐步放宽；
+// 计 entitysync_over_limit_deferred_total{namespace="terrain"}。
 //
 // 分区场景（P3，terrain_partition.go）用同一套：玩家的视点不来自本进程的移动，而是格进程发来的 witness 里玩家自己的
 // 位置（cellworld 的 Hooks.Witness → moved）；subject 除了本进程写的改过的块（实体），还有玩家附近别的格写的改过的块
@@ -54,10 +56,15 @@ const (
 	terrainSnapshotsPerFlush = 4
 	// terrainViewStep 是玩家离上次报告的视点多远才移动地形视野（8m）：远小于离开滞回 20m，不会漏掉进出。
 	terrainViewStep = 800
-	// sceneTerrainMaxObjects 是开了地形的场景里一个会话的对象引用表上限：场景原有的上限（玩家 / 怪 / 建筑 / 场景，一类）
-	// 加地形的上限（单独计）。客户端若显式设对象表容量（C# EntityViews 的 maxObjects），不得小于它。
-	sceneTerrainMaxObjects = 100 + terrainMaxVisible
 )
+
+
+// sceneTerrainMaxObjects 是开了地形的场景里一个会话的对象引用表上限：场景的上限（玩家 / 怪 / 建筑 / 场景，一类，
+// sceneSessionObjects）加地形的上限（单独计）。开地形的普通场景 164 + 64 = 228，分区场景 100 + 64 = 164。客户端若显式设
+// 对象表容量（C# EntityViews 的 maxObjects），不得小于它。
+func sceneTerrainMaxObjects(view gamescene.View) int {
+	return sceneSessionObjects(view.MaxVisible) + terrainMaxVisible
+}
 
 // terrainSyncConfig 是地形同步的参数：地图范围（AOI 的边界）与视野。测试用更大的半径制造“视野里的改过的块超过
 // MaxVisible”。
@@ -321,7 +328,8 @@ func (moves terrainMoves) QueueMove(e coreentity.IThreadSafeEntity, at spatial.P
 }
 
 // terrainNamespaceLimits 是开了地形的场景 Manager 的按命名空间配置：只有 "terrain" 单独计上限与快照预算。玩家、怪、
-// 场景、建筑都不在其中，同在 Limits.MaxObjects（100）那一类、不限快照（方案 D15、§27.10）。
+// 场景、建筑都不在其中，同在 Limits.MaxObjects（sceneSessionObjects：普通场景 164、分区场景 100）那一类、不限快照
+// （方案 D15、§27.10、§29）。
 func terrainNamespaceLimits() map[string]entitysync.NamespaceLimits {
 	return map[string]entitysync.NamespaceLimits{
 		terrainNamespace: {MaxObjects: terrainMaxVisible, SnapshotBudget: entitysync.SnapshotBudget{PerSessionObjects: terrainSnapshotsPerFlush}},

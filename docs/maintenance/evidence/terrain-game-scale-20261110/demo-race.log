@@ -1,0 +1,8 @@
+ok  	example.com/gd/internal/service/game	82.662s
+?   	example.com/gd/game/scene	[no test files]
+ok  	example.com/gd/game/scene/runtime	1.619s
+?   	example.com/gd/game/lifecycle	[no test files]
+ok  	example.com/gd/game/settings	2.959s
+?   	example.com/gd/game/terrainmap	[no test files]
+ok  	example.com/gd/internal/service/game	46.366s
+exit=0

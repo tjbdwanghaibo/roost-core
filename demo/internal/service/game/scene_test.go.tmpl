@@ -437,8 +437,9 @@ func TestSceneRetiresASubjectOnLeave(t *testing.T) {
 // Every player starts at the same spawn point, and the spawn table puts the
 // first monsters right next to it. With more players and monsters in range
 // than one replication session may hold (the manager's Limits.MaxObjects,
-// 100), the main view's cap (sceneMaxVisible) is what keeps the session open:
-// each player is sent the nearest sceneMaxVisible subjects, not everyone, and
+// 100), the main view's cap (View.MaxVisible: 64 at the demo's scale, the
+// scene without terrain) is what keeps the session open: each player is sent
+// the nearest 64 subjects, not everyone, and
 // no session is closed for holding too many objects. Without the cap, 100
 // robots at the spawn point would have all 100 sessions closed with
 // "frame: object limit exceeded".
@@ -508,8 +509,10 @@ func TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen(t *testing.T) {
 		// Everything but itself came through the main view (no team, no
 		// scene view in this harness): exactly the cap, since more than that
 		// stand in range.
-		if seen := len(held) - 1; seen != sceneMaxVisible {
-			t.Fatalf("player %d holds %d other subjects, want the main view's cap %d", playerID, seen, sceneMaxVisible)
+		// 64 as a literal: the scene without terrain keeps the demo's cap
+		// (editable terrain plan §29 raises it on terrain scenes only).
+		if seen := len(held) - 1; seen != 64 {
+			t.Fatalf("player %d holds %d other subjects, want the main view's cap 64", playerID, seen)
 		}
 	}
 }

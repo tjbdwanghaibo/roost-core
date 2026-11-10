@@ -1,5 +1,11 @@
 # 当前已知限制与验证边界
 
+## 2026-11-10：开地形场景同步 128 个对象时每观察者下行超过 50KB/s（已实测；待增量字节压缩合入后重算）
+
+维护者 2026-11-10 口径“同步的 entity 数量一般是 128 左右”实施后（[地形方案 §29](FEATURE-2026-11-08-editable-terrain.md#29-游戏尺度参数视野-32m单进程-2048m同步-128-个2026-11-10)，分支 `feat/terrain-game-scale`），开地形的普通场景主视野“最近 128 个”。按现有增量字节实测（`TestMainViewMeasureMovingCrowdBytes`，帧 payload、不含线上消息头）：每个移动对象一拍（200ms）约 118 字节，64 个同时动约 37KB/s，**128 个同时动约 73.5KB/s，超过每观察者 50KB/s 的预算**；同时在动的可见对象超过约 87 个就超。常见情形（缺省视野可见约 34 个、其中约一半是静止的建筑）约 8～10KB/s。
+
+处理：维护者认为移动只应同步位置、一步约 108～146 字节偏大，增量编码的逐字节压缩在另一轮（分支 `perf/sync-delta-bytes`：framework/sync、codegen 的 sync packer、C#）进行；**带宽结论待其合入后按同一用例重算**，本轮不设计、不实现降频 / LOD。重算后仍超预算再向维护者提方向。
+
 ## 2026-11-10：建筑进场景主视野后的 demo 尺度（维护者 2026-11-10：主视野已按推荐放大，见地形方案 §28；偶发已定位修复，见本条末段）
 
 建筑的订阅改为与怪相同的场景主视野之后（[方案 §27.10](FEATURE-2026-11-08-editable-terrain.md#2710-订阅改为场景主视野维护者-2026-11-10)），demo 主视野的尺度（进入 1.2m、离开 1.5m、客户端最大 2.7m，按占地中心）对 3～12m 的建筑明显太小：站在建筑旁边紧挨着的节点上，缺省视野四种建筑都看不见，最大视野只看得见 hut 与 tower，keep 要走进占地里才看得见。另外 `policy.AOI` 的 `MaxVisible` 是近似语义，被上限忽略的目标在它下一次移动时才重新参选——建筑从不移动，视野满时后放的建筑要等看的人移动才进来（会话级超额降级 D17 的放回不受影响）。主视野尺度、按类型名额、按占地范围、静止目标重新参选四项待维护者确认，本轮未改主视野参数；测量见[证据](evidence/building-main-interest-20261110/README.md)。
@@ -195,7 +201,7 @@ game-demo 手写接入心跳、移动、行为、状态与场景时间域（[DES
 - **刷怪一次一批**：上一批还在建时交来的批次丢弃，等下一拍；建一只要一次 `lifecycle.Create`、一次 `ShowSubject` 与一条场景 + 怪物的两实体 Nest 消息（场景实体是这一步的串行点，玩家的 `move_target` / `move` 也锁场景）。
 - **场景视野的扇出上限 65536**：每个成员都挂在场景视野上（`MaxPlayersPerView` 由缺省 4096 调到 `sceneMaxMembers`）；超过时 `AttachView` 失败、只打 Warn，那个玩家收不到场景时间。
 - **机器人负载：100 / 200 人同秒起跑不通过**（2026-10-22 晚，[压测清单 §3 结果](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/V1310-PRERELEASE-20261022.md#3-game-demo-loadtest-100--200-人)）：`make dev-smoke`（2 / 2）与 20 人 loadtest 通过；100 / 200 人（单 IP 上限调到 512）connect 全部成功、`object limit exceeded` 0，但成功 24 / 100、30 / 200：gift saga 步骤排队超时、公会目录实体慢派发，200 人时 `enter_game` 写全服 World 实体与上单场景实体在请求期限内没轮到（110 个复制会话没打开）。按现有证据是 demo 场景的共享热点与同秒突发，不判为框架缺陷，**尚未确认**（没有按秒爬坡的对照）。
-- **主视野只留最近 64 个**（维护者 2026-10-22 按推荐）：所有玩家从同一出生点进场，`sceneMaxVisible = 64`、会话另持有自身、场景实体、队友共 3 个（`sceneReservedObjects`），`newSceneOn` 启动时核对 64 + 3 ≤ Manager `Limits.MaxObjects`（100）；以后加的关系视野要在剩下的 33 个里。超出 `MaxObjects` 时不关会话、不断开（2026-11-08 起超额降级，D17）：放不下的新对象暂缓，Interest 收紧这名玩家的视野、留下最近的；见下“超额降级”。剩余边界：
+- **主视野只留最近 64 个**（维护者 2026-10-22 按推荐）：所有玩家从同一出生点进场，名额 64（2026-11-10 起是场景配置 `gamescene.View.MaxVisible`；开地形的普通场景是游戏尺度的 128，地形方案 §29）、会话另持有自身、场景实体、队友共 3 个（`sceneReservedObjects`），会话上限由名额推出（`sceneSessionObjects` = 名额 + 3 + 33：100 / 164）；以后加的关系视野要在剩下的 33 个里。超出 `MaxObjects` 时不关会话、不断开（2026-11-08 起超额降级，D17）：放不下的新对象暂缓，Interest 收紧这名玩家的视野、留下最近的；见下“超额降级”。剩余边界：
   - **同步会话因编码失败被丢时断开该玩家，原因持续时会反复重连**（维护者 2026-10-22：编码失败就关闭连接）：Manager 交给 `SessionLost` 的原因带分类（`entitysync.SessionLoss` / `LossReason`：`push_refused` / `too_large` / `encode_failed`；`object_limit` 随超额降级删除），原因不是推送拒收时 `wiring/selfsync.DisconnectLostPlayer` 断开该玩家的全部连接（自身视图经 `EntitySyncSetup` 自动接上，game-demo 场景在 `sessionLost` 里调用），计 `player.sync.session_lost_disconnect.total{reason}`，打限频 Warn（每 10 秒至多一条）。客户端重连、`Join` 从新 epoch 的全量开始。剩余边界：
     - **原因一直在时反复踢、反复重连，框架不做防风暴**：例如自己的实体始终超过帧上限（超员的人堆自 2026-11-08 起走超额降级，不再断开）。一个循环的服务端成本是一次鉴权握手 + 一次 `Join` + 一次编码尝试，节奏由客户端的重连退避决定，上限是接入层已有的握手预算与单 IP 连接上限。不另加按玩家的冷却（维护者决定不做，[DESIGN-TODO“保持现状的决定”](DESIGN-TODO.md#待维护者决定不急)第 10 项）。发现靠 `player.sync.session_lost_disconnect.total{reason}` 持续增长与 Warn 里反复出现的同一个玩家 ID；根治在业务侧（实体大小）。
     - **断开与 `settle` 之间可能多 settle 一次**：嵌入 TCP 的 `CloseSessions` 关 socket 后连接注销可能晚于场景的 `settle`，那次 `settle` 数到连接、把玩家留下；随后的会话关闭事件（`watchSessions`）再 settle 一次、玩家离场。没有新增状态，与推送拒收路径相同。

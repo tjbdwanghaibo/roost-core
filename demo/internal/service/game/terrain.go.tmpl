@@ -139,7 +139,7 @@ func startTerrainSync(registry *app.Registry, scene *Scene, m *terrainmap.Map) e
 	// 站着的建筑（启动对账核对通过的）进场景主视野（building_sync.go，方案 §27.10）；不接建筑的场景没有建筑。
 	buildings := scene.buildings.loadStanding(m)
 	slog.Info("terrain sync started", "edited_chunks", loaded, "view_radius", terrainViewRadius, "max_visible", terrainMaxVisible,
-		"max_objects", sceneTerrainMaxObjects, "snapshots_per_flush", terrainSnapshotsPerFlush,
+		"max_objects", scene.sessionObjects+terrainMaxVisible, "snapshots_per_flush", terrainSnapshotsPerFlush,
 		"buildings", buildings, "building_sync", scene.buildings != nil, "took", time.Since(started))
 	return nil
 }

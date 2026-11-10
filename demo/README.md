@@ -117,7 +117,7 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
   game 日志 `scene: replication session was closed by the manager` 给出原因（`reason`）；编码失败（`reason=too_large` / `encode_failed`）时服务端
   还会断开这个玩家（2026-10-22 起，`selfsync: a player's sync session was lost …` 限频 Warn 与 `player.sync.session_lost_disconnect.total{reason}`），
   机器人看到的是连接被关。持有的对象超过 Manager 的 `MaxObjects` 不再关会话（2026-11-08 起超额降级，方案 D17）：多出来的对象暂缓、视野从最远处收紧，
-  game 日志是限频 Warn `entitysync: a session is over its object limit …`，计 `entitysync_over_limit_deferred_total{namespace,reason}`（主视野上限见 `internal/service/game/scene.go` 的 `sceneMaxVisible`）。
+  game 日志是限频 Warn `entitysync: a session is over its object limit …`，计 `entitysync_over_limit_deferred_total{namespace,reason}`（主视野名额是场景配置 `gamescene.View.MaxVisible`：不开地形 64、开地形的普通场景 128；会话上限随之 100 / 164，见 `internal/service/game/scene.go` 的 `sceneSessionObjects`）。
 - **game 连本机 `127.0.0.1:2379` 的 etcd**：`configs/service/config.game.yaml` 的 `etcd.endpoints` 缺省指向本机，上面的 sed 不改它；
   game 用它做服务注册（`etcd.service_prefix`，键带工程名前缀 `/<工程名>/services/...`，租约 10 秒），与别的工程不冲突；
   2026-10-22 冒烟时本机恰好有一个在跑。本机没有、或要用隔离环境之外的 etcd 时改这一项。
@@ -184,8 +184,8 @@ go run ./cmd/terrainpack -out configs/terrain/demo.pack                         
 go run ./cmd/terrainpack -out configs/terrain/hills.pack -shape generated -seed 1    # 起伏的程序化地形（原来的缺省），BaseRevision 1
 ```
 
-缺省是 **1024m 见方的平地**（维护者 2026-11-10）：16 × 16 块，正好是普通场景能放下的最大地图（见下面“场景大小”；
-包本身约 18KB，启动装入 256 块约 20～60ms、视图约 3MiB）。整张图 401m（水位 400m 之上 1m）、全是草，45° 行走规则下每一步都走得通；挖下去超过
+缺省是 **1024m 见方的平地**（维护者 2026-11-10）：16 × 16 块（包本身约 18KB，启动装入 256 块约 20～60ms、视图约 3MiB）。普通场景能放下的
+最大地图是 2048m 见方（32 × 32 块，见下面“场景大小”，实测见方案 §29）；缺省包是否也改成 32 × 32 待维护者确认（方案 §29.7）。整张图 401m（水位 400m 之上 1m）、全是草，45° 行走规则下每一步都走得通；挖下去超过
 1m 就是水（超过 1.5m 要游泳），填回去又是陆地，“挖坑成湖、填平成陆”在缺省包上直接能演示。`-ground` 改平地的世界高度（厘米，
 10 厘米一档）。原来的缺省 `terrain.Generated` 起伏地形在 45° 规则下向东一步只有约 45.5% 的边走得通，缺省地图基本走不动，改为
 `-shape generated -seed N` 显式选择（测试、压测与客户端金样仍用它）。
@@ -254,7 +254,8 @@ scene:
   新生成工程需与包含本接线的同一 main/tag core 配套使用。旧功能/测量夹具保留 periodic 构造器，不代表生产默认；新模式未做容量压测。
 - **同步**：改过的块是 `terrain` 命名空间的同步对象（编辑账本不下发）；场景另有一个地形 Interest（视野 200m、至多 64 块），
   玩家主视野是它的观察者。地形按命名空间单独计（方案 D15，`ManagerConfig.Namespaces`）：一个会话至多持有 64 块地形、地形的全量每会话每次
-  Flush 至多 4 个；玩家 / 怪 / 场景仍是 100、不限快照，与不开地形时逐字节相同（会话的引用表合起来 164，每帧对象数仍按 100 切）。
+  Flush 至多 4 个；玩家 / 怪 / 场景 / 建筑是场景自己的上限（开地形的普通场景 164，即名额 128 + 3 + 33；分区场景 100）、不限快照，
+  与不开地形时逐字节相同（会话的引用表合起来 228 / 164，每帧对象数按前一类的上限切）。
   任一类超出上限不断开（超额降级，D17）：放不下的对象暂缓，对应的 Interest 从最远处收紧视野，有空位时逐步放宽。
   客户端用生成的 `ApplySyncTerrainChunkDao` 应用，按 `Version` 重建 mesh（C# 见 `client/dotnet/Roost.Client/Terrain/`）。
   分区场景的地形同步见下面的 P3。
@@ -315,13 +316,15 @@ scene:
 - **场景大小**（[方案 §23](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#23-普通场景取地形图大小实施结果2026-11-09)）：开了地形的普通场景，世界就是
   地形图（`gamescene.TerrainConfig(meta.Bounds())`）：场景实体的地面、场景同步的 AOI 与行走边界都是整张图，地图外的目标、瞬移、落点一律拒绝；
   出生点 (500, 500) 不变。服务 Init 先装地形、再按 `sceneWorld` 建场景（`lifecycle.EnsureWorldScene` 带上地图）。
-  普通场景能放下的地形图至多 1024m 见方的面积（如 16 × 16、32 × 8 块），更大的图（如 1w 方图）在打开地形包后、装入任何块前拒绝，
-  进程启动失败——大地图用分区场景。demo 缺省包（16 × 16 块）正好在这个上限上。不开地形、分区场景的场景实体仍是 `gamescene.DefaultConfig`（1000 × 1000）。
-- **主视野尺度**（[方案 §28](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#28-开地形场景的主视野尺度2026-11-10)）：主视野的尺度是场景配置
-  `gamescene.Config.View`。开了地形的普通场景按游戏尺度（`TerrainView`）：进入 30m、离开 33m，客户端（`scene_view`）可要 15～60m、步长 3m，
+  普通场景能放下的地形图至多 2048m 见方的面积（如 32 × 32、64 × 16 块；方案 §29，维护者口径“一个进程至少撑住 2048m × 2048m”），
+  更大的图（如 33 × 32 块、1w 方图）在打开地形包后、装入任何块前拒绝，进程启动失败——大地图用分区场景。整张 2048m 平地装入约 10ms、
+  视图约 12MiB（每块都改过时另有约 18MiB 的块实体），见方案 §29。demo 缺省包仍是 16 × 16 块。不开地形、分区场景的场景实体仍是 `gamescene.DefaultConfig`（1000 × 1000）。
+- **主视野尺度**（[方案 §29](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#29-游戏尺度参数视野-32m单进程-2048m同步-128-个2026-11-10)，
+  取代 §28 的 30m / 64 个）：主视野的尺度是场景配置 `gamescene.Config.View`。开了地形的普通场景按游戏尺度（`TerrainView`）：进入 32m、
+  离开 35.2m，客户端（`scene_view`）可要 16～64m、步长 3.2m，“最近 128 个”，会话上限 164（名额 + 自身 / 场景 / 队友 3 + 留给关系视野的 33），
   AOI 块边长 32m（`TerrainBlockSize`；1m 块在这个视野下超过观察者块预算 1024，构造被拒）；玩家、怪、建筑同一个视野，建筑按占地中心进出，
-  站在建筑旁边看得见它。“最近 64 个”与会话上限不变。不开地形的场景与分区场景仍是 demo 尺度（`DefaultView`：进入 1.2m、离开 1.5m、
-  客户端 0.6～2.7m、1m 块）。测量与待确认项（客户端开到 60m 时密集处 33m 外的玩家 / 怪会被建筑挤掉、下行上限约 35～46KB/s）见方案 §28。
+  站在建筑旁边看得见它。不开地形的场景与分区场景仍是 demo 尺度（`DefaultView`：进入 1.2m、离开 1.5m、客户端 0.6～2.7m、1m 块、最近 64 个、
+  会话 100）。128 个同时走时一个观察者约 73.5KB/s，超过每观察者 50KB/s 的预算（增量字节压缩另一轮在做，结论待其合入后重算），见方案 §29。
 - **分区场景**（跨格移动，[方案 §24](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#24-p3-跨格移动按地形判定t06-剩余2026-11-09)）：托管格的进程把
   `partitionSurface`（同一个 `Map.Walker()`，范围夹到分区世界）装成 cellworld 的地面钩子 `NodeConfig.Surface`：角色每拍沿位移逐点
   走，进入新的 1m 节点问 `Step`，被挡时玩家停下（速度清零，等下一个移动输入）、怪原路折回；交接之前走出本格的那一段读本进程视图里
@@ -365,13 +368,13 @@ scene:
   （重发已生效的拆除也答这个，不是 `duplicate`）。
 - **同步**：建筑是普通实体，与玩家、怪走同一条 entitysync 链路（`sync=true`，命名空间 `building` 只是客户端的分流键，生成的同步字段与
   packer），订阅跟随玩家与怪：与怪完全相同，经场景的 `ShowSubject` / `HideSubject` 进出**场景主视野**（位置是占地中心），同一套半径、
-  “最近 64 个”与超额降级；没有建筑自己的 Interest、`Namespaces` 一类或 `TypeSchedules` 条目（会话引用表仍是 164），按 Manager 的模式
+  “最近 128 个”与超额降级；没有建筑自己的 Interest、`Namespaces` 一类或 `TypeSchedules` 条目（会话引用表 164 + 地形 64），按 Manager 的模式
   发（on_change）。放置提交后进主视野，拆除提交后撤出并退役（客户端收到 remove；remove 还没发出去就在同一锚点再放的，登记排在退役之后），
   改参数是普通的 DAO 写、发只带 `Params` 的增量。客户端用生成的 `ApplySyncBuildingDao`，按 `ConfigID` 查配置表实例化预制体，按 `Params`
   设参数，按 `GX` / `GY` / `Facing` / `Foundation` 摆放。整平改的地形照常走地形块的同步（可编辑地形里只有地形块有自己的订阅与节奏）。
-  **主视野尺度**：建筑按占地中心进视野；开地形的普通场景主视野是游戏尺度（进入 30m、离开 33m、客户端最大 60m，见上面“主视野尺度”），
-  站在建筑旁边看得见它（keep 从外面看）。客户端开到 60m 时密集处 33m 外的玩家 / 怪会被建筑挤掉（“最近 64 个”不按类型分，维护者按推荐），
-  见[方案 §28](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#28-开地形场景的主视野尺度2026-11-10)。
+  **主视野尺度**：建筑按占地中心进视野；开地形的普通场景主视野是游戏尺度（进入 32m、离开 35.2m、客户端最大 64m、最近 128 个，见上面
+  “主视野尺度”），站在建筑旁边看得见它（keep 从外面看）。名额不按类型分（维护者按推荐），密集处客户端开大视野时远处的玩家 / 怪会被近处的建筑挤掉，
+  见[方案 §28](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#28-开地形场景的主视野尺度2026-11-10)、§29。
 - **重启与换版**：建筑（集合 `buildings`）、块的占地、账本的建筑数（`terrain_editors` schema 2）都随 DataEngine 落库，重启后
   原样读回，启动时对账（`ReconcileBuildings`）核对建筑与块的占地，并核对配置（配置 ID 没了或宽高变了计 `misconfigured`、保留不改）；
   核对通过的建筑在场景启动后进场景主视野。原始地形换版（D13）时块的地形改动照旧丢弃，建筑与占地保留：

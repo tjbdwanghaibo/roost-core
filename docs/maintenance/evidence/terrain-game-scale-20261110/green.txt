@@ -1,0 +1,52 @@
+=== RUN   TestBuildingsHaveNoReplicationOfTheirOwn
+--- PASS: TestBuildingsHaveNoReplicationOfTheirOwn (0.02s)
+=== RUN   TestBuildingsTakeMainViewPlacesLikeAnyoneElse
+    building_sync_test.go:511: main view full: 4 buildings, 124 monsters, neighbour held false (objects held 129: itself + 128 in the main view)
+    building_sync_test.go:517: a tower removed, nobody moved: neighbour held false
+    building_sync_test.go:556: ten monsters gone, the viewer standing still: 0 of 4 towers held (free places 10)
+--- PASS: TestBuildingsTakeMainViewPlacesLikeAnyoneElse (0.06s)
+=== RUN   TestManyBuildingsDegradeWithTheCrowd
+    building_sync_test.go:606: over the limit: deferred 2, evicted 0; held 164 objects, 2 buildings, 161 monsters
+--- PASS: TestManyBuildingsDegradeWithTheCrowd (0.02s)
+=== RUN   TestBuildingsAtTheTerrainMainViewScale
+    building_sync_test.go:658: hut 4×4: centre 2.5m from the node next to it, seen
+    building_sync_test.go:658: tower 3×3: centre 2.0m from the node next to it, seen
+    building_sync_test.go:658: hall 8×6: centre 3.5m from the node next to it, seen
+    building_sync_test.go:658: keep 12×12: centre 6.5m from the node next to it, seen
+--- PASS: TestBuildingsAtTheTerrainMainViewScale (0.04s)
+=== RUN   TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen
+--- PASS: TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen (0.03s)
+=== RUN   TestACrowdOverflowingASessionShrinksTheViewInsteadOfDisconnecting
+--- PASS: TestACrowdOverflowingASessionShrinksTheViewInsteadOfDisconnecting (0.04s)
+=== RUN   TestTerrainMainViewFitsTheBlockBudget
+    scene_view_scale_test.go:63: terrain view on the terrain blocks: block 3200, worst observer blocks 16 (default view) / 36 (widest view), budget 1024: <nil>
+    scene_view_scale_test.go:63: terrain view on 1m blocks: block 100, worst observer blocks 5184 (default view) / 18496 (widest view), budget 1024: scene: interest policy: policy: one observer would subscribe to more blocks than the budget allows: max leave radius 6720 over block size 100 covers 18496 blocks, budget is 1024
+    scene_view_scale_test.go:63: demo view on 1m blocks (no terrain): block 100, worst observer blocks 25 (default view) / 64 (widest view), budget 1024: <nil>
+--- PASS: TestTerrainMainViewFitsTheBlockBudget (0.00s)
+=== RUN   TestTheGameScaleMainViewHoldsTheNearest128
+=== RUN   TestTheGameScaleMainViewHoldsTheNearest128/the_nearest_128
+=== RUN   TestTheGameScaleMainViewHoldsTheNearest128/over_the_session_limit_of_164
+--- PASS: TestTheGameScaleMainViewHoldsTheNearest128 (0.19s)
+    --- PASS: TestTheGameScaleMainViewHoldsTheNearest128/the_nearest_128 (0.06s)
+    --- PASS: TestTheGameScaleMainViewHoldsTheNearest128/over_the_session_limit_of_164 (0.13s)
+=== RUN   TestMainViewMeasureSyncBytes
+    scene_view_scale_test.go:215: player: entering view [205] bytes, one step [140 140 140] bytes (frame payloads); four steps in one tick [464] bytes
+    scene_view_scale_test.go:245: monster: entering view (3 in one frame) [443] bytes, one patrol step [248 146 146 362] bytes (frame payloads; other monsters' steps may share the frame)
+--- PASS: TestMainViewMeasureSyncBytes (1.55s)
+=== RUN   TestMainViewMeasureMovingCrowdBytes
+=== RUN   TestMainViewMeasureMovingCrowdBytes/64_movers
+    scene_view_scale_test.go:316: 64 movers: entering view [2387 4703 4357] bytes; per beat (200ms) median 7606 bytes = 118.8 bytes per moved object; 37.1 KB/s at 5 beats a second (frame payloads, no message header); beats [7561 7562 7605 7605 7605 7606 7606 7651 7651 7690]
+=== RUN   TestMainViewMeasureMovingCrowdBytes/128_movers
+    scene_view_scale_test.go:316: 128 movers: entering view [3944 2281 3492 2627 3146 4011 2800 378] bytes; per beat (200ms) median 15090 bytes = 117.9 bytes per moved object; 73.7 KB/s at 5 beats a second (frame payloads, no message header); beats [15044 15045 15045 15046 15048 15090 15135 15137 15182 15309]
+--- PASS: TestMainViewMeasureMovingCrowdBytes (4.54s)
+    --- PASS: TestMainViewMeasureMovingCrowdBytes/64_movers (2.16s)
+    --- PASS: TestMainViewMeasureMovingCrowdBytes/128_movers (2.38s)
+=== RUN   TestAnOrdinarySceneTakesA2048mMap
+    scene_view_scale_test.go:698: 2048m flat map: 1024 chunks loaded in 9.971ms (open, load, reconcile)
+--- PASS: TestAnOrdinarySceneTakesA2048mMap (0.09s)
+=== RUN   TestTerrainSceneWorldAndItsLimit
+--- PASS: TestTerrainSceneWorldAndItsLimit (0.01s)
+=== RUN   TestTerrainDoesNotWidenThePlayerObjectLimit
+--- PASS: TestTerrainDoesNotWidenThePlayerObjectLimit (0.04s)
+PASS
+ok  	example.com/gd/internal/service/game	7.440s

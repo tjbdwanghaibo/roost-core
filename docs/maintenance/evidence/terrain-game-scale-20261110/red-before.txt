@@ -1,0 +1,27 @@
+# 修前红：cf89e081 生成的工程 + game_scale_red_test.go（方案 §29 新用例，编译垫片一处）
+# GOWORK=off go test -count=1 -run '<name>$' ./internal/service/game/
+## TestBuildingsAtTheTerrainMainViewScale
+--- FAIL: TestBuildingsAtTheTerrainMainViewScale (10.04s)
+    game_scale_red_test.go:81: timed out waiting for the player, the monster and the tower 31m away
+FAIL
+FAIL	example.com/gd/internal/service/game	10.931s
+FAIL
+## TestManyBuildingsDegradeWithTheCrowd
+--- FAIL: TestManyBuildingsDegradeWithTheCrowd (10.15s)
+    game_scale_red_test.go:142: timed out waiting for the viewer's session settled at its limit
+FAIL
+FAIL	example.com/gd/internal/service/game	10.620s
+FAIL
+## TestTheGameScaleMainViewHoldsTheNearest128
+--- FAIL: TestTheGameScaleMainViewHoldsTheNearest128 (0.43s)
+        game_scale_red_test.go:224: player 34000 holds 64 other subjects (itself: true), want the nearest 128
+        game_scale_red_test.go:250: player 35000 holds 100 objects (itself: true), want itself among exactly 164
+FAIL
+FAIL	example.com/gd/internal/service/game	1.012s
+FAIL
+## TestAnOrdinarySceneTakesA2048mMap
+--- FAIL: TestAnOrdinarySceneTakesA2048mMap (0.00s)
+    game_scale_red_test.go:269: 32 × 32 chunks (2048m × 2048m) on an ordinary scene: scene: terrain map 204800 × 204800 is too large for an ordinary scene: at most 1048576m² (about 1024m × 1024m); use a partitioned scene (scene.partition) for a map this size
+FAIL
+FAIL	example.com/gd/internal/service/game	0.471s
+FAIL

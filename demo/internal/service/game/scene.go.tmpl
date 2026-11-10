@@ -53,11 +53,12 @@ const (
 	// everyone within one interval.
 	sceneReplicationInterval = 50 * time.Millisecond
 
-	// The main view's radii are the scene's (gamescene.Config.View): the
-	// demo's scale (DefaultView: enter 1.2m, leave 1.5m, a client may ask
-	// for 0.6m～2.7m) without editable terrain, the game's scale
-	// (TerrainView: 30m / 33m, up to 60m, on 32m blocks) on an ordinary
-	// scene with terrain — editable terrain plan §28. BlockSize is the AOI
+	// The main view's radii and its cap are the scene's
+	// (gamescene.Config.View): the demo's scale (DefaultView: enter 1.2m,
+	// leave 1.5m, a client may ask for 0.6m～2.7m, the nearest 64) without
+	// editable terrain, the game's scale (TerrainView: 32m / 35.2m, up to
+	// 64m, the nearest 128, on 32m blocks) on an ordinary scene with terrain
+	// — editable terrain plan §29. BlockSize is the AOI
 	// grid's cell (the scene's Config too) and the number of cells an
 	// observer subscribes to is (⌈2·LeaveRadius/BlockSize⌉+1)², checked at
 	// start-up for the widest view a client may ask for (the policy's
@@ -74,30 +75,31 @@ const (
 	// subject, so there is nothing for a second level's bands to select
 	// (the client still names the level, and anything but 0 is refused).
 
-	// sceneMaxVisible caps how many subjects a player's main (spatial) view
-	// holds: when more are in range, the nearest ones win. Without it a
-	// crowded spot — every player starts at the same spawn point — puts
-	// everyone nearby into every view, and a player's replication session
-	// would hold more objects than the manager's Limits.MaxObjects
-	// (frame.DefaultLimits, 100: it is also how many objects one session may
-	// hold). The manager no longer closes such a session (over-limit
-	// degradation, maintainer decision D17): it defers the objects that do not
-	// fit and the Interest tightens the view from the farthest end, so the
-	// player keeps receiving frames. The cap still matters: inside the session
+	// The main view's cap (View.MaxVisible) says how many subjects a
+	// player's main (spatial) view holds: when more are in range, the
+	// nearest ones win. Without it a crowded spot — every player starts at
+	// the same spawn point — puts everyone nearby into every view, and a
+	// player's replication session would hold more objects than the
+	// manager's Limits.MaxObjects (how many objects one session may hold).
+	// The manager no longer closes such a session (over-limit degradation,
+	// maintainer decision D17): it defers the objects that do not fit and
+	// the Interest tightens the view from the farthest end, so the player
+	// keeps receiving frames. The cap still matters: inside the session
 	// limit nothing is ever deferred, and the crowd does not keep the view
 	// probing at its edge.
 	//
 	// The session holds the main view's subjects plus what reaches the player
 	// outside it: its own entity (self), the scene's subject (the scene view)
 	// and the other member of its duel / ranked team (GroupSize 2, one team
-	// at a time) — sceneReservedObjects. 64 leaves another 33 below the
-	// limit for relation views a game adds later (a guild — its members from
-	// the alliance mirror and the membership notices —, a party of more than
-	// two) without revisiting this number, and it is the usual order of
-	// "players drawn around you" for an MMO client. newSceneOn refuses a
-	// configuration in which the two no longer fit.
-	sceneMaxVisible      = 64
-	sceneReservedObjects = 3
+	// at a time) — sceneReservedObjects —, plus sceneRelationHeadroom for the
+	// relation views a game adds later (a guild — its members from the
+	// alliance mirror and the membership notices —, a party of more than
+	// two). sceneSessionObjects puts the three together, so the session limit
+	// follows the cap: the demo's 64 gives frame.DefaultLimits' 100 (the
+	// manager's Limits stay the default, byte for byte), the game scale's
+	// 128 gives 164 (plan §29).
+	sceneReservedObjects  = 3
+	sceneRelationHeadroom = 33
 
 	// A Join's replication session the transport could not open yet — it is
 	// still closing the player's previous one, which a quick reconnect over a
@@ -135,6 +137,9 @@ const SceneCapability app.ModName = "{{GAME_SERVICE}}.scene"
 type Scene struct {
 	manager  *entitysync.Manager
 	interest *policy.Interest
+	// sessionObjects 是一个会话可持有的玩家 / 怪 / 建筑 / 场景对象数（Manager 的 Limits.MaxObjects，sceneSessionObjects）；
+	// 开地形时地形另计 terrainMaxVisible（D15）。
+	sessionObjects int
 	// self binds, in a partitioned scene only, each member's own session to
 	// its Player subject with the "self" view (maintainer decision E4 = A):
 	// what the scene actor's mirror does not carry — exp, gold, the bag,
@@ -330,7 +335,7 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	}
 	service, ok := app.Lookup[*Service](registry, app.ModService)
  if !ok || service == nil { return nil, errors.New("scene: service sync observer is unavailable") }
- scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, watermark, config, sceneMaxVisible, terrainConfig, &service.sceneSync)
+ scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, watermark, config, config.View.MaxVisible, terrainConfig, &service.sceneSync)
 	if err != nil {
 		return nil, err
 	}
@@ -391,19 +396,24 @@ func newScene(transport scenePusher, watermark func() uint64, config gamescene.C
 // the player's TCP push; a test puts a SessionLifecycle transport under the
 // scene through here.
 func newSceneOn(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config) (*Scene, error) {
-	// A player's session holds its main view (at most sceneMaxVisible) plus
-	// sceneReservedObjects from outside it; together they must fit what the
-	// manager lets one session hold, or a crowd keeps the session over its
-	// limit (objects deferred, the view tightened) instead of within it.
-	if limit := frame.DefaultLimits().MaxObjects; sceneMaxVisible+sceneReservedObjects > limit {
-		return nil, fmt.Errorf("scene: a main view of %d plus %d reserved objects exceeds the %d objects one replication session may hold", sceneMaxVisible, sceneReservedObjects, limit)
-	}
-	return newSceneWithMainView(lane, transport, watermark, config, sceneMaxVisible)
+	return newSceneWithMainView(lane, transport, watermark, config, config.Normalize().View.MaxVisible)
 }
 
-// newSceneWithMainView is newSceneOn with the main view's cap given and not
-// checked against what a session may hold: a test oversizes it to have a
-// crowd overflow a session and see the over-limit degradation. 0 means no cap.
+// sceneSessionObjects is how many objects one replication session of the
+// scene may hold (the manager's Limits.MaxObjects, also its objects per
+// frame) for a main view of at most maxVisible: the main view, the
+// sceneReservedObjects from outside it and the sceneRelationHeadroom. Built
+// from the cap, the two always fit together: a crowd is cut by the cap
+// (the nearest ones win) and never reaches the session limit's deferral.
+// The demo's 64 → 100 (frame.DefaultLimits), the game scale's 128 → 164.
+func sceneSessionObjects(maxVisible int) int {
+	return maxVisible + sceneReservedObjects + sceneRelationHeadroom
+}
+
+// newSceneWithMainView is newSceneOn with the main view's cap given; the
+// session limit still follows the scene's View.MaxVisible
+// (sceneSessionObjects), so a test oversizes the cap to have a crowd
+// overflow a session and see the over-limit degradation. 0 means no cap.
 func newSceneWithMainView(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int) (*Scene, error) {
 	return newSceneWith(lane, transport, watermark, config, maxVisible, nil)
 }
@@ -412,8 +422,9 @@ func newSceneWithMainView(lane entitysync.Transport, transport scenePusher, wate
 // when terrainConfig is not nil. The terrain namespace then has its own object
 // limit (terrainMaxVisible) and its own snapshot budget
 // (terrainSnapshotsPerFlush per session and flush) — counted apart from
-// players and monsters, whose limit stays the default 100 with no snapshot
-// budget, so they replicate exactly as without terrain (terrain_sync.go,
+// players, monsters and buildings, whose limit stays the scene's
+// (sceneSessionObjects of View.MaxVisible) with no snapshot budget, so they
+// replicate exactly as without terrain (terrain_sync.go,
 // terrainNamespaceLimits; maintainer decision D15).
 func newSceneWith(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int, terrainConfig *terrainSyncConfig) (*Scene, error) {
  // 原周期构造器保留给历史功能/测量夹具；生产 NewScene 必须通过有提交观察者的构造路径。
@@ -430,6 +441,14 @@ func sceneTypeSchedules() map[uint32]entitysync.TypeSchedule {
 
 func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int, terrainConfig *terrainSyncConfig, observer *sceneSyncObserver) (*Scene, error) {
 	config = config.Normalize()
+	// 会话上限随主视野名额定（sceneSessionObjects）：demo 原尺度 64 → 100，即 frame.DefaultLimits，Limits 保持零值、与以前逐字节
+	// 相同；游戏尺度 128 → 164（方案 §29）。它也是每帧的对象数上限：客户端解码按自己的 maxObjects × 2 拒绝（Go frame.Decode、
+	// C# SyncFrame.Decode），缺省 100 即至多 200 个，收得下 164 个对象的帧。
+	var limits frame.Limits
+	sessionObjects := sceneSessionObjects(config.View.MaxVisible)
+	if sessionObjects != frame.DefaultLimits().MaxObjects {
+		limits.MaxObjects = sessionObjects
+	}
 	var namespaces map[string]entitysync.NamespaceLimits
 	if terrainConfig != nil {
 		namespaces = terrainNamespaceLimits()
@@ -457,6 +476,7 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 		DurableWatermark: watermark,
 		SessionLost:      scene.sessionLost,
 		Namespaces:       namespaces,
+		Limits:           limits,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("scene: replication manager: %w", err)
@@ -493,8 +513,8 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 			BlockSize:   config.BlockSize,
 			EnterRadius: config.View.EnterRadius,
 			LeaveRadius: config.View.LeaveRadius,
-			// The nearest sceneMaxVisible in range, not everyone in range:
-			// see sceneMaxVisible for why and for how the number was chosen.
+			// The nearest View.MaxVisible in range, not everyone in range:
+			// see sceneSessionObjects for how it and the session limit fit.
 			MaxVisible: maxVisible,
 
 			MinViewRadius:  config.View.MinRadius,
@@ -513,6 +533,7 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 		return nil, fmt.Errorf("scene: self binding: %w", err)
 	}
 	scene.manager, scene.interest, scene.self = manager, interest, self
+	scene.sessionObjects = sessionObjects
 	if terrainConfig != nil {
 		if scene.terrain, err = newTerrainSync(manager, *terrainConfig); err != nil {
 			interest.Close()

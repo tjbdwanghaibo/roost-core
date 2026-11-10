@@ -78,6 +78,14 @@ type moveWorld struct {
 
 func newMoveWorld(t *testing.T) *moveWorld {
 	t.Helper()
+	return newMoveWorldOn(t, gamescene.DefaultConfig())
+}
+
+// newMoveWorldOn is newMoveWorld on another map: the scene entity is built on
+// config (GetOrCreateOn, as EnsureWorldScene does for a terrain map) and the
+// replicated scene indexes the same world with the same main view.
+func newMoveWorldOn(t *testing.T, config gamescene.Config) *moveWorld {
+	t.Helper()
 	ctx := context.Background()
 	w := &moveWorld{t: t, ctx: ctx, clock: &businessTime{}}
 	w.clock.nanos.Store(time.Date(2027, 1, 15, 8, 0, 0, 0, time.UTC).UnixNano())
@@ -108,7 +116,7 @@ func newMoveWorld(t *testing.T) *moveWorld {
 	t.Cleanup(func() { _ = w.engine.Shutdown(context.Background()) })
 
 	w.recorder = newSceneRecorder()
-	bridge, err := newScene(w.recorder, nil, gamescene.DefaultConfig())
+	bridge, err := newScene(w.recorder, nil, config)
 	if err != nil {
 		t.Fatalf("new scene: %v", err)
 	}
@@ -142,7 +150,12 @@ func newMoveWorld(t *testing.T) *moveWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	area, _, err := scenes.GetOrCreate(ctx, lifecycle.WorldSceneUniqueID)
+	var area *sceneentity.Scene
+	if config == gamescene.DefaultConfig() {
+		area, _, err = scenes.GetOrCreate(ctx, lifecycle.WorldSceneUniqueID)
+	} else {
+		area, err = scenes.GetOrCreateOn(ctx, lifecycle.WorldSceneUniqueID, config)
+	}
 	if err != nil {
 		t.Fatalf("scene: %v", err)
 	}
