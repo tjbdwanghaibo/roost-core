@@ -59,6 +59,12 @@ TypeSchedules 支持同 Manager 内按 SubjectKind 配置周期脏增量；即�
 
 `scripts/test-seamless-demo.sh`（不开地形）的 14 个演练步骤稳定通过，最后在普通场景 sid 1003 上跑 2 个机器人（`cmd/loadtest`，阈值 p95 ≤ 16s）：2026-11-09 本分支与 main `3fb089d9` 都失败（16.45s；main 那次是公会 saga 等待超时、error_rate 1），2026-11-10 同机未改动的检出上失败（p95 19.48s）、同一天开地形演练分支上通过（13.54s）（[证据](evidence/terrain-partition-drill-20261110/README.md#原演练不开地形不退化)）。只有 2 个样本、机器有后台负载，没有区分是阈值过紧、同机多进程争用还是 saga 等待的问题；与地形、分区无关。开地形的演练（`ROOST_SEAMLESS_TERRAIN=1`）不跑这一步。
 
+**定位结论（2026-11-10 追加，已证实原因；未修，待维护者决定）**：不是性能退化。本机复现 p95 27.85s（2 个机器人都成功），所有请求 p50 ≤ 26ms；时间全在 saga 轮询上（每机器人 `gift_status` 47 次、`guild_op_status` 48 次，约 23.8s）。每笔 saga 约 3.8s（JetStream 上的终态记录：礼物完成 3.80s、补偿 7.56s、联盟领奖 3.82s）：演练有 5 个 game 进程共用同一份原生步骤，步骤落到非发送者 sid 的进程时 `gift_saga.go` `admit` 先 `handOver`、再拒绝这次投递，结果要等重投落到发送者进程才发布；日志里每个步骤被另外 4 个进程各拒一次（t、+0.25、+0.75、+1.75s），第 5 次投递在 +3.75s 到 sid 1003，正是 `nak_backoff_min` 250ms 起翻倍的退避。16s 阈值的依据是“一到两个 game 进程”，这个拓扑下 6 个原生步骤约 +22s，必然超；时过时不过推断取决于 sid 1003 在投递轮转中的位置（尚未确认），公会扣费步骤推断是同一机制（无日志，尚未确认）。可选：A. 演练脚本对这一步按拓扑放宽阈值或只起一个 game 进程跑它（只改测试，最小；推荐先做，不掩盖 B）；B. 产品侧让“不是我的步骤”更快到主人：路由拒绝用短的固定 NAK 延迟、或 `handOver` 后由主人直接发布结果、或按 sid 分步骤消费者（多 game 进程部署的 saga 延迟都会受益，需设计）。见[证据](evidence/perf-terrain-acceptance-20261110/README.md#第-2-轮无缝演练最后一步的-p95已定位)。
+
+## 2026-11-10：`scripts/perf/sync-business.sh` 夹具与当前 core 不兼容（已定位，未修）
+
+夹具 `scripts/perf/fixtures/sync_business_test.go.tmpl` 在 main `bc883581` 上直接失败：① 在已 `Start` 的 Nest 引擎上调实例级 `MustRegisterHandlerWithMeta`（只允许 Start 之前），panic；② 绕过 ① 之后，增量信封 v3 不带 Codec，经 `clientsync.DecodeFields` 按 `Codec() != 2` 拒绝；③ 再绕过 ② 之后，增量字节压缩后的载荷不是 `DecodeFields` 能解的字段替换（`unsupported DAO sync format`），夹具需要按 subject 记全量、用生成的 Apply 接增量。因此业务负载下的每 tick 开销、分配与 10% 常态下行没有当前数字；同步字节改由 `TestMainViewMeasure*` 用例测得，与估算相符（[证据](evidence/perf-terrain-acceptance-20261110/README.md#sync-business-没有测出数字夹具与当前-core-不兼容已定位未修)）。
+
 ## 2026-11-09：地形首批参数实施边界
 
 默认编辑配额与桶容量已降至 270，terrainpack 默认 HeightBase 已设为 −100 米（−10000 厘米）；不重写既有资源。按类型同步现已完成框架与 demo 接线；圆滑岸线仍只完成决策，原地形去重两项问题及 P3～P6 仍未完成。当前清单见 [地形进度总表](TERRAIN-STATUS.md)。功能测试、修正记录与预期跳过见 [实施状态](TERRAIN-DECISIONS-20261109.md)；未新增压测，历史 270 档临时数据不代替容量验收。
