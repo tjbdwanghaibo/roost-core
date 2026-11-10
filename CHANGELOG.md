@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- **版本要求**（codegen）：**生成物要求的最低 core 抬到 v1.43.0**（manifest `minimumVersions` 与 framework-compat 的 minimum lane）。v1.43.0 的生成物用帧协议 2 / 信封 v3、`entitysync.Decoder` 与 `entity.MergeSyncViewPriorities`，旧 core 线格式不兼容、缺这些 API；生成器缺省本来就取最新版。没有在发版时用 `--min-core`：project sync 类测试会联网解析最低版本，tag 未推时 pretag 必然失败。
+
 ## [v1.43.0] - 2026-11-10
 
 - **测试变化**（scripts）：**普通无缝演练最后一步的机器人阈值按 5 进程拓扑放宽到 p95 40s**（维护者 2026-11-10 定方案 A；[证据](docs/maintenance/evidence/perf-terrain-acceptance-20261110/README.md)）。5 个游戏进程共用 saga 步骤队列，步骤被非属主进程各拒一次、按 250ms 倍增重投，约多出 22s；缺省 16s 按一两个进程定，必然超。不是性能退化；产品侧的路由重投加速没做。复跑 14 步 ok，最后一步 p95 29.05s。

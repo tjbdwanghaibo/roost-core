@@ -26,9 +26,9 @@ var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`)
 
 // minimumVersions 是当前生成物要求的最低框架版本；latest 仍是默认策略。
-// v1.43.0（待抬高）：实体同步帧协议 2 / subject 信封 v3（增量不带身份、有状态 Decoder）与 DAO 增量不带 entity_id，
+// v1.43.0：实体同步帧协议 2 / subject 信封 v3（增量不带身份、有状态 Decoder）与 DAO 增量不带 entity_id，
 // 生成物调用 entity.MergeSyncViewPriorities、entitysync.Decoder 与新的同步视图；旧 core 线格式不兼容、缺这些 API。
-// 发版时不能用 --min-core：project sync 类测试会联网取最低版本，tag 还没推时取不到；tag 推上去后再抬到 v1.43.0。
+// 抬高最低版本要在该版 tag 推上去之后单独提交：project sync 类测试会联网取最低版本，tag 未推时 pretag 必然失败。
 // v1.40.0：轻量整字段登记使用 nest.MarkPersistField 与 PersistChange.FullMask。
 // v1.39.0：递归 BSON 持久化生成物使用 nest.MarkPersistPath、PersistChange.Paths 与
 // SyncChange.ReplacementCount；新生成物配 v1.38.0 实编因缺少这些 API 失败。
@@ -48,7 +48,7 @@ var releaseVersionPattern = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)$`
 // wiring/selfsync、entitytimer）同样包含在内，不能接入更早的 core。
 // 此版本尚未发布时，验收用本地 source-head replace；发布后再验证真正的 minimum 下载。
 var minimumVersions = VersionSpec{
-	Core: "v1.40.0",
+	Core: "v1.43.0",
 }
 
 type Manifest struct {
