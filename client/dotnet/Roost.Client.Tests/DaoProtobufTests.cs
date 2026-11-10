@@ -28,6 +28,14 @@ internal static partial class Program
             Check(delta.Apply(baseline).Equals(expected), "Go/C# collection " + row.GetProperty("name").GetString());
             Check(baseline.Equals(before), "collection baseline unchanged");
         }
+        // 增量补丁不带实体 ID（服务端 MarshalSyncDelta / MarshalSyncChanges）：沿用基线的；带了别的 ID 拒绝。
+        var anonymous = new SyncHeroDao { SyncFormat = 3, Level = new SyncHeroDaoLevelField { Value = 7 } };
+        var continued = anonymous.Apply(full);
+        Check(continued.EntityId == full.EntityId && continued.Level.Value == 7 && continued.Name.Value == "hello", "delta without the entity id keeps the baseline's");
+        bool foreign = false;
+        try { new SyncHeroDao { EntityId = full.EntityId + 1, SyncFormat = 3, Level = new SyncHeroDaoLevelField { Value = 7 } }.Apply(full); }
+        catch (InvalidDataException) { foreign = true; }
+        Check(foreign, "delta naming another entity rejected");
         var invalid = new SyncHeroDao { EntityId = full.EntityId, SyncFormat = 3,
             Name = new SyncHeroDaoNameField { Value = "must-not-apply" },
             Friends = new SyncHeroDaoFriendsField { Delta = true, Length = 100 } };

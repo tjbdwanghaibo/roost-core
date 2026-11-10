@@ -25,23 +25,28 @@ type mirrorContent struct {
 
 // streamClient 是一个按会话解帧的客户端：ref → subject、subject → 最后一份载荷，以及按交付顺序的操作记录。
 type streamClient struct {
-	mu      sync.Mutex
-	refs    map[entitysync.SessionID]map[frame.ObjectRef]int64
-	objects map[entitysync.SessionID]map[int64]string
-	ops     map[entitysync.SessionID][]string
+	mu       sync.Mutex
+	refs     map[entitysync.SessionID]map[frame.ObjectRef]int64
+	objects  map[entitysync.SessionID]map[int64]string
+	ops      map[entitysync.SessionID][]string
+	decoders map[entitysync.SessionID]*entitysync.Decoder
 }
 
 func (c *streamClient) Push(_ context.Context, session entitysync.SessionID, data []byte) error {
-	decoded, err := entitysync.DecodeFrame(data, frame.DefaultLimits())
-	if err != nil {
-		return err
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.refs == nil {
 		c.refs = make(map[entitysync.SessionID]map[frame.ObjectRef]int64)
 		c.objects = make(map[entitysync.SessionID]map[int64]string)
 		c.ops = make(map[entitysync.SessionID][]string)
+		c.decoders = make(map[entitysync.SessionID]*entitysync.Decoder)
+	}
+	if c.decoders[session] == nil {
+		c.decoders[session] = entitysync.NewDecoder(frame.DefaultLimits())
+	}
+	decoded, err := c.decoders[session].Decode(data)
+	if err != nil {
+		return err
 	}
 	if c.refs[session] == nil {
 		c.refs[session] = make(map[frame.ObjectRef]int64)
@@ -52,10 +57,7 @@ func (c *streamClient) Push(_ context.Context, session entitysync.SessionID, dat
 		subject := refs[object.Ref]
 		payload := ""
 		for _, component := range object.Components {
-			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-			if err != nil {
-				return err
-			}
+			update := component.Update
 			subject = update.SubjectID
 			kind := "delta"
 			if update.Full {

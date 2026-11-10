@@ -23,18 +23,25 @@ func NewSceneSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker
 type sceneSyncPacker struct{ scene *Scene }
 
 func (packer sceneSyncPacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
-	return packer.pack(profile, dataengine.AllFields)
+	return packer.pack(profile, dataengine.AllFields, false)
 }
 
 func (packer sceneSyncPacker) PackSubjectDelta(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
-	return packer.pack(profile, mask)
+	return packer.pack(profile, mask, true)
 }
 
-func (packer sceneSyncPacker) pack(_ entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+// pack 编码视图允许的字段。delta 为真时是增量：DAO 补丁不带实体 ID（MarshalSyncDelta，客户端沿用基线的），
+// 全量仍带。
+func (packer sceneSyncPacker) pack(_ entity.SyncProfile, mask uint64, delta bool) (entity.FrozenSyncPayload, error) {
 	if packer.scene == nil {
 		return entity.FrozenSyncPayload{}, fmt.Errorf("scene sync packer: no entity")
 	}
-	raw := packer.scene.Dao().MarshalSync(mask)
+	var raw []byte
+	if delta {
+		raw = packer.scene.Dao().MarshalSyncDelta(mask)
+	} else {
+		raw = packer.scene.Dao().MarshalSync(mask)
+	}
 	if len(raw) == 0 {
 		return entity.FrozenSyncPayload{}, nil
 	}

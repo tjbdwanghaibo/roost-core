@@ -788,9 +788,10 @@ func TestReloadDuringUnloadReturnsReloadingSentinel(t *testing.T) {
 // 改由 Durability 0 的 finalizer 持久拒绝驱动同一卸载 / 重载路径）。
 
 type resyncSubscriber struct {
-	sync   *entitysync.Manager
-	frames chan []byte
-	ref    frame.ObjectRef
+	sync    *entitysync.Manager
+	frames  chan []byte
+	decoder *entitysync.Decoder // 订阅者的接收端，按顺序解帧
+	ref     frame.ObjectRef
 	// decided 收到卸载时“是否为订阅者重载”的判定（Unload 登记重载前查询的结果），让无订阅者用例不必猜时序。
 	decided chan bool
 }
@@ -864,13 +865,16 @@ func newResyncFixture(t *testing.T, rawID int64, subscribe bool) (reloadFixture,
 }
 
 // next 驱动 Flush 直到收到一帧（重载在后台 worker 上完成，这里只等事件发生，不靠固定睡眠判定结果）。
-func (sub *resyncSubscriber) next(t *testing.T, timeout time.Duration, what string) frame.Frame {
+func (sub *resyncSubscriber) next(t *testing.T, timeout time.Duration, what string) entitysync.ReceivedFrame {
 	t.Helper()
+	if sub.decoder == nil {
+		sub.decoder = entitysync.NewDecoder(frame.DefaultLimits())
+	}
 	deadline := time.Now().Add(timeout)
 	for {
 		select {
 		case raw := <-sub.frames:
-			decoded, err := entitysync.DecodeFrame(raw, frame.DefaultLimits())
+			decoded, err := sub.decoder.Decode(raw)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -887,15 +891,12 @@ func (sub *resyncSubscriber) next(t *testing.T, timeout time.Duration, what stri
 	}
 }
 
-func fullPayload(t *testing.T, object frame.ObjectDelta) (string, bool) {
+func fullPayload(t *testing.T, object entitysync.ReceivedObject) (string, bool) {
 	t.Helper()
 	if len(object.Components) != 1 {
 		t.Fatalf("object carries %d components", len(object.Components))
 	}
-	update, err := entitysync.DecodeSubjectUpdate(object.Components[0].Data, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	update := object.Components[0].Update
 	return string(update.Payload.BytesCopy()), update.Full
 }
 

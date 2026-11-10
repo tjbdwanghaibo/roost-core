@@ -1,24 +1,11 @@
 using System;
-using System.Buffers.Binary;
 using System.IO;
 using Roost.Client;
 
 internal static partial class Program
 {
-    private static byte[] SyncPacket(uint epoch, uint tick, uint baseline)
-    {
-        // 同一正式wire头；空对象帧用于隔离基线契约，业务payload仍由golden测试覆盖。
-        var raw = new byte[32];
-        BinaryPrimitives.WriteUInt32BigEndian(raw.AsSpan(0), 0x43525031);
-        BinaryPrimitives.WriteUInt16BigEndian(raw.AsSpan(4), 1);
-        raw[6] = baseline == 0 ? (byte)1 : (byte)2;
-        BinaryPrimitives.WriteUInt64BigEndian(raw.AsSpan(8), 1);
-        BinaryPrimitives.WriteUInt32BigEndian(raw.AsSpan(16), epoch);
-        BinaryPrimitives.WriteUInt32BigEndian(raw.AsSpan(20), tick);
-        BinaryPrimitives.WriteUInt32BigEndian(raw.AsSpan(24), baseline);
-        BinaryPrimitives.WriteUInt16BigEndian(raw.AsSpan(28), 1);
-        return raw;
-    }
+    // 同一正式wire头（帧协议2）；空对象帧用于隔离基线契约，业务payload仍由golden测试覆盖。
+    private static byte[] SyncPacket(uint epoch, uint tick, uint baseline) => SyncWire.Frame(baseline == 0, epoch, tick, baseline);
 
     private static void TestSyncReceiver()
     {

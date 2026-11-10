@@ -286,7 +286,7 @@ func NewManager(config ManagerConfig) (*Manager, error) {
 			config.Limits.MaxFrameBytes = min(config.Limits.MaxFrameBytes, limit)
 		}
 	}
-	if config.Limits.MaxFrameBytes < 32 {
+	if config.Limits.MaxFrameBytes < frame.MaxHeaderBytes {
 		return nil, fmt.Errorf("entitysync: frame limit smaller than protocol header")
 	}
 	classes, err := newSyncClasses(config.Namespaces, config.Limits.MaxObjects, config.SnapshotBudget)

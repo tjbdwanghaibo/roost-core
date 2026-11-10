@@ -16,20 +16,27 @@ import (
 
 // decodingClient 是按会话解帧的接收端：维护每个会话的对象表（ref → 实体 ID），Full 清空旧对象。
 type decodingClient struct {
-	mu      sync.Mutex
-	t       *testing.T
-	objects map[entitysync.SessionID]map[frame.ObjectRef]int64
-	creates map[entitysync.SessionID][]int64 // 每个会话收到过 create 的实体，按到达顺序
+	mu       sync.Mutex
+	t        *testing.T
+	objects  map[entitysync.SessionID]map[frame.ObjectRef]int64
+	creates  map[entitysync.SessionID][]int64 // 每个会话收到过 create 的实体，按到达顺序
+	decoders map[entitysync.SessionID]*entitysync.Decoder
 }
 
 func newDecodingClient(t *testing.T) *decodingClient {
-	return &decodingClient{t: t, objects: make(map[entitysync.SessionID]map[frame.ObjectRef]int64), creates: make(map[entitysync.SessionID][]int64)}
+	return &decodingClient{t: t, objects: make(map[entitysync.SessionID]map[frame.ObjectRef]int64), creates: make(map[entitysync.SessionID][]int64),
+		decoders: make(map[entitysync.SessionID]*entitysync.Decoder)}
 }
 
 func (c *decodingClient) Push(_ context.Context, session entitysync.SessionID, payload []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	decoded, err := entitysync.DecodeFrame(payload, frame.DefaultLimits())
+	decoder := c.decoders[session]
+	if decoder == nil {
+		decoder = entitysync.NewDecoder(frame.DefaultLimits())
+		c.decoders[session] = decoder
+	}
+	decoded, err := decoder.Decode(payload)
 	if err != nil {
 		c.t.Errorf("decode frame: %v", err)
 		return nil
@@ -42,13 +49,8 @@ func (c *decodingClient) Push(_ context.Context, session entitysync.SessionID, p
 	for _, object := range decoded.Objects {
 		switch object.Operation {
 		case frame.ObjectCreate:
-			update, err := entitysync.DecodeSubjectUpdate(object.Components[0].Data, 0)
-			if err != nil {
-				c.t.Errorf("decode update: %v", err)
-				continue
-			}
-			table[object.Ref] = update.SubjectID
-			c.creates[session] = append(c.creates[session], update.SubjectID)
+			table[object.Ref] = object.SubjectID
+			c.creates[session] = append(c.creates[session], object.SubjectID)
 		case frame.ObjectRemove:
 			if _, held := table[object.Ref]; !held {
 				c.t.Errorf("session %d: remove of a ref it does not hold", session)

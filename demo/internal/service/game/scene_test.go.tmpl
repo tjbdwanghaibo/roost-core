@@ -50,6 +50,35 @@ type sceneRecorder struct {
 	unavailable bool            // the whole access layer is gone: every push fails
 	closed      []func(gateway.TCPSessionClosed)
 	closures    map[int64]int // CloseSessions calls per player
+	// decoders is each player's client end: a delta carries no subject identity (it
+	// inherits it from the baseline the client holds), so admitted frames are decoded
+	// here, in order; decodedPush finds the result by the push.
+	decoders map[int64]*entitysync.Decoder
+}
+
+type receivedPush struct {
+	frame entitysync.ReceivedFrame
+	err   error
+}
+
+// receivedPushes: every push a sceneRecorder admitted, decoded by its player's decoder.
+var receivedPushes sync.Map
+
+// decodedPush is what the client made of one push. A push that did not come
+// through a sceneRecorder is decoded on its own (a full frame, or only its object table).
+func decodedPush(t *testing.T, push *pb.EntitySyncPush) entitysync.ReceivedFrame {
+	t.Helper()
+	if result, ok := receivedPushes.Load(push); ok {
+		if err := result.(receivedPush).err; err != nil {
+			t.Fatalf("decode frame: %v", err)
+		}
+		return result.(receivedPush).frame
+	}
+	decoded, err := entitysync.NewDecoder(frame.DefaultLimits()).Decode(push.Payload)
+	if err != nil {
+		t.Fatalf("decode frame: %v", err)
+	}
+	return decoded
 }
 
 func newSceneRecorder() *sceneRecorder {
@@ -77,6 +106,16 @@ func (recorder *sceneRecorder) PushPlayer(_ context.Context, playerID int64, mes
 		return err
 	}
 	recorder.pushes[playerID] = append(recorder.pushes[playerID], push)
+	if recorder.decoders == nil {
+		recorder.decoders = make(map[int64]*entitysync.Decoder)
+	}
+	decoder := recorder.decoders[playerID]
+	if decoder == nil {
+		decoder = entitysync.NewDecoder(frame.DefaultLimits())
+		recorder.decoders[playerID] = decoder
+	}
+	decoded, err := decoder.Decode(push.Payload)
+	receivedPushes.Store(push, receivedPush{decoded, err})
 	return nil
 }
 
@@ -187,16 +226,9 @@ func decodeSceneFrames(t *testing.T, _ int64, pushes []*pb.EntitySyncPush) map[i
 	t.Helper()
 	out := make(map[int64]map[string]any)
 	for _, push := range pushes {
-		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
-		if err != nil {
-			t.Fatalf("decode frame: %v", err)
-		}
-		for _, object := range decoded.Objects {
+		for _, object := range decodedPush(t, push).Objects {
 			for _, component := range object.Components {
-				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-				if err != nil {
-					t.Fatalf("decode subject update: %v", err)
-				}
+				update := component.Update
 				payload := update.Payload.BytesCopy()
 				if len(payload) == 0 {
 					continue
@@ -641,22 +673,12 @@ func heldSubjects(t *testing.T, pushes []*pb.EntitySyncPush) map[int64]bool {
 	t.Helper()
 	byRef := make(map[uint16]int64)
 	for _, push := range pushes {
-		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
-		if err != nil {
-			t.Fatalf("decode frame: %v", err)
-		}
-		for _, object := range decoded.Objects {
+		for _, object := range decodedPush(t, push).Objects {
 			switch object.Operation {
 			case frame.ObjectRemove:
 				delete(byRef, object.Ref.ID)
 			case frame.ObjectCreate:
-				for _, component := range object.Components {
-					update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-					if err != nil {
-						t.Fatalf("decode subject update: %v", err)
-					}
-					byRef[object.Ref.ID] = update.SubjectID
-				}
+				byRef[object.Ref.ID] = object.SubjectID
 			}
 		}
 	}
@@ -1743,16 +1765,9 @@ func sceneFullUpdates(t *testing.T, pushes []*pb.EntitySyncPush) map[int64]map[s
 	t.Helper()
 	out := make(map[int64]map[string]any)
 	for _, push := range pushes {
-		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
-		if err != nil {
-			t.Fatalf("decode frame: %v", err)
-		}
-		for _, object := range decoded.Objects {
+		for _, object := range decodedPush(t, push).Objects {
 			for _, component := range object.Components {
-				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-				if err != nil {
-					t.Fatalf("decode subject update: %v", err)
-				}
+				update := component.Update
 				if !update.Full {
 					continue
 				}

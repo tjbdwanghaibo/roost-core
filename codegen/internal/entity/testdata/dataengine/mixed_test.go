@@ -33,6 +33,7 @@ type mixedClient struct {
 	tick, epoch uint32
 	objects     map[frame.ObjectRef]traderSnapshot
 	versions    map[frame.ObjectRef]uint64
+	decoder     *entitysync.Decoder // 增量的身份从基线继承，按顺序解；下面的对象表与版本是客户端自己的复核
 }
 type mixedLoad struct {
 	ctx                   context.Context
@@ -83,7 +84,7 @@ func (l *mixedLoad) start(t *testing.T, scheduler *nest.NestMgr, access *entity.
 		var err error
 		if i%max(1, len(ids)/l.players) == 0 && len(l.clients) < l.players {
 			sid := entitysync.SessionID(id)
-			l.clients[sid] = &mixedClient{objects: make(map[frame.ObjectRef]traderSnapshot), versions: make(map[frame.ObjectRef]uint64)}
+			l.clients[sid] = &mixedClient{objects: make(map[frame.ObjectRef]traderSnapshot), versions: make(map[frame.ObjectRef]uint64), decoder: entitysync.NewDecoder(frame.DefaultLimits())}
 			if err = l.manager.OpenSession(sid); err != nil {
 				t.Fatal(err)
 			}
@@ -137,13 +138,13 @@ func (l *mixedLoad) start(t *testing.T, scheduler *nest.NestMgr, access *entity.
 	}()
 }
 func (l *mixedLoad) receive(_ context.Context, sid entitysync.SessionID, raw []byte) error {
-	f, err := entitysync.DecodeFrame(raw, frame.DefaultLimits())
-	if err != nil {
-		return err
-	}
 	c := l.clients[sid]
 	if c == nil {
 		return fmt.Errorf("unknown client %d", sid)
+	}
+	f, err := c.decoder.Decode(raw)
+	if err != nil {
+		return err
 	}
 	if c.epoch != f.Epoch {
 		clear(c.objects)
@@ -178,10 +179,7 @@ func (l *mixedLoad) receive(_ context.Context, sid entitysync.SessionID, raw []b
 		if len(object.Components) != 1 {
 			return fmt.Errorf("component count")
 		}
-		update, err := entitysync.DecodeSubjectUpdate(object.Components[0].Data, 0)
-		if err != nil {
-			return err
-		}
+		update := object.Components[0].Update
 		if exists && old.ID != update.SubjectID {
 			return fmt.Errorf("reference mismatch")
 		}
@@ -189,7 +187,7 @@ func (l *mixedLoad) receive(_ context.Context, sid entitysync.SessionID, raw []b
 			return fmt.Errorf("version gap")
 		}
 		var value traderSnapshot
-		if err = bson.Unmarshal(update.Payload.BytesCopy(), &value); err != nil {
+		if err := bson.Unmarshal(update.Payload.BytesCopy(), &value); err != nil {
 			return err
 		}
 		if value.ID != update.SubjectID {

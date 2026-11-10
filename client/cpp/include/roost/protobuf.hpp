@@ -350,14 +350,17 @@ inline void apply_dao_patch(const google::protobuf::Message &patch,
   if (r->GetUInt32(patch, format) != 3 ||
       (!full && state.GetReflection()->GetUInt32(state, format) != 3))
     throw std::invalid_argument("unsupported DAO sync format");
-  if (!full &&
-      r->GetInt64(patch, id) != state.GetReflection()->GetInt64(state, id))
+  // A delta may leave the entity id out (0) and keep the baseline's; when it
+  // carries one, it must match.
+  auto patch_id = r->GetInt64(patch, id);
+  auto state_id = state.GetReflection()->GetInt64(state, id);
+  if (!full && patch_id != 0 && patch_id != state_id)
     throw std::invalid_argument("DAO identity mismatch");
   std::unique_ptr<google::protobuf::Message> next(state.New());
   if (!full)
     next->CopyFrom(state);
   const auto *out = next->GetReflection();
-  out->SetInt64(next.get(), id, r->GetInt64(patch, id));
+  out->SetInt64(next.get(), id, full ? patch_id : state_id);
   out->SetUInt32(next.get(), format, 3);
   std::vector<const pb_field *> fields;
   r->ListFields(patch, &fields);

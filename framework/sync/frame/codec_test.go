@@ -3,6 +3,7 @@
 package frame
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"strings"
@@ -107,19 +108,24 @@ func TestFrameCodecEnforcesLimitsAndRefusesCorruptBytes(t *testing.T) {
 		t.Fatalf("trailing bytes = %v", err)
 	}
 	foreign := append([]byte(nil), encoded...)
-	binary.BigEndian.PutUint32(foreign[0:4], 0xdeadbeef)
+	binary.BigEndian.PutUint16(foreign[0:2], 0xdead)
 	if _, err := Decode(foreign, limits); !errors.Is(err, ErrInvalidFrame) || !strings.Contains(err.Error(), "unsupported header") {
 		t.Fatalf("foreign magic = %v", err)
 	}
 	newer := append([]byte(nil), encoded...)
-	binary.BigEndian.PutUint16(newer[4:6], ProtocolVersion+1)
+	newer[2] = ProtocolVersion + 1
 	if _, err := Decode(newer, limits); !errors.Is(err, ErrInvalidFrame) || !strings.Contains(err.Error(), "unsupported header") {
 		t.Fatalf("newer protocol = %v", err)
 	}
-	reserved := append([]byte(nil), encoded...)
-	reserved[7] = 1
-	if _, err := Decode(reserved, limits); !errors.Is(err, ErrInvalidFrame) || !strings.Contains(err.Error(), "unsupported header") {
-		t.Fatalf("reserved byte set = %v", err)
+	unknownKind := append([]byte(nil), encoded...)
+	unknownKind[3] = 9
+	if _, err := Decode(unknownKind, limits); !errors.Is(err, ErrInvalidFrame) || !strings.Contains(err.Error(), "unknown frame kind") {
+		t.Fatalf("unknown kind = %v", err)
+	}
+	// 非最短的 varint（StreamID 7 写成 0x87 0x00）：同一帧只允许一种编码。
+	padded := append(append(append([]byte(nil), encoded[:4]...), 0x87, 0x00), encoded[5:]...)
+	if _, err := Decode(padded, limits); !errors.Is(err, ErrInvalidFrame) || !strings.Contains(err.Error(), "malformed varint") {
+		t.Fatalf("non-minimal varint = %v", err)
 	}
 	decoded, err := Decode(encoded, limits)
 	if err != nil || len(decoded.Objects) != 3 || decoded.BaseTick != 4 {
@@ -149,7 +155,7 @@ func TestEncodeFrameRefusesCountsAndSizesTheWireFormatCannotCarry(t *testing.T) 
 	headersOnly := Frame{SnapshotMeta: SnapshotMeta{StreamID: 7, Epoch: 1, Tick: 5, SchemaVersion: 1}, Kind: Delta, BaseTick: 4,
 		Objects: []ObjectDelta{{Operation: ObjectRemove, Ref: ObjectRef{ID: 1, Generation: 1}}, {Operation: ObjectRemove, Ref: ObjectRef{ID: 2, Generation: 1}}}}
 	tiny := DefaultLimits()
-	tiny.MaxFrameBytes = 40 // 32 字节头 + 一个 9 字节对象头就越界
+	tiny.MaxFrameBytes = 12 // 9 字节头 + 一个 3 字节 remove 放得下，第二个就越界
 	if encoded, err := Encode(headersOnly, tiny); !errors.Is(err, ErrFrameTooLarge) {
 		t.Fatalf("Encode over MaxFrameBytes with component-less objects = (%d bytes, %v), want ErrFrameTooLarge", len(encoded), err)
 	}
@@ -159,7 +165,7 @@ func TestEncodeFrameRefusesCountsAndSizesTheWireFormatCannotCarry(t *testing.T) 
 		Objects: []ObjectDelta{{Operation: ObjectCreate, Ref: ObjectRef{ID: 1, Generation: 1}, Archetype: 10,
 			Components: []ComponentDelta{{Operation: ComponentSet, TypeID: 1, SchemaVersion: 1, Data: []byte("pos")}}}}}
 	snug := DefaultLimits()
-	snug.MaxFrameBytes = 45 // 32 + 9 放得下对象头，再加 9 + 3 的组件就越界
+	snug.MaxFrameBytes = 16 // 9 字节头 + 5 字节对象头放得下，再加 4 + 3 的组件就越界
 	if encoded, err := Encode(oneComponent, snug); !errors.Is(err, ErrFrameTooLarge) {
 		t.Fatalf("Encode whose component pushes past MaxFrameBytes = (%d bytes, %v), want ErrFrameTooLarge", len(encoded), err)
 	}
@@ -174,34 +180,71 @@ func TestEncodeFrameRefusesCountsAndSizesTheWireFormatCannotCarry(t *testing.T) 
 
 func TestDecodeFrameRefusesHeaderCountsBeforeReadingOrAllocating(t *testing.T) {
 	limits := DefaultLimits()
+	// 帧头：magic、协议、Delta、StreamID 7、Epoch 1、Tick 5、回退 1、Schema 1，后接对象数。
+	header := []byte{0x52, 0x46, ProtocolVersion, uint8(Delta), 7, 1, 5, 1, 1}
+	// 头部声称 65535 个对象，后面什么都没有：答案是"超限"，不是"截断"。
+	if _, err := Decode(append(append([]byte(nil), header...), 0xff, 0xff, 0x03), limits); !errors.Is(err, ErrObjectLimit) {
+		t.Fatalf("Decode with an oversized object count = %v, want ErrObjectLimit", err)
+	}
+	// 对象数在上限内但剩余字节放不下：截断，不按声称的数量分配。
+	if _, err := Decode(append(append([]byte(nil), header...), 100, 2), limits); !errors.Is(err, ErrInvalidFrame) || !strings.Contains(err.Error(), "truncated") {
+		t.Fatalf("Decode with more objects than bytes = %v, want truncated", err)
+	}
+	// 第一个对象（update，ref 1/1）声称 65535 个组件。
+	object := append(append([]byte(nil), header...), 1, uint8(ObjectUpdate), 1, 1)
+	if _, err := Decode(append(append([]byte(nil), object...), 0xff, 0xff, 0x03), limits); !errors.Is(err, ErrComponentLimit) {
+		t.Fatalf("Decode with an oversized component count = %v, want ErrComponentLimit", err)
+	}
+	// 第一个组件（set，类型 1，schema 1）声称的载荷长度超过 MaxComponentBytes（也超过剩余字节）。
+	component := append(append([]byte(nil), object...), 1, uint8(ComponentSet), 1, 1)
+	oversized := binary.AppendUvarint(append([]byte(nil), component...), uint64(limits.MaxComponentBytes+1))
+	if _, err := Decode(oversized, limits); !errors.Is(err, ErrComponentTooLarge) {
+		t.Fatalf("Decode with an oversized payload length = %v, want ErrComponentTooLarge", err)
+	}
+	// 载荷长度在上限内但超过剩余字节：同样是超限而不是分配后再截断。
+	if _, err := Decode(append(append([]byte(nil), component...), 64), limits); !errors.Is(err, ErrComponentTooLarge) {
+		t.Fatalf("Decode with a payload length past the end = %v, want ErrComponentTooLarge", err)
+	}
+	// 同一帧编码后再解码相同。
 	encoded, err := Encode(validDelta(), limits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 头部声称 65535 个对象，后面什么都没有：答案是"超限"，不是"截断"。
-	header := append([]byte(nil), encoded[:32]...)
-	binary.BigEndian.PutUint16(header[30:32], 0xFFFF)
-	if _, err := Decode(header, limits); !errors.Is(err, ErrObjectLimit) {
-		t.Fatalf("Decode with an oversized object count = %v, want ErrObjectLimit", err)
+	if !bytes.HasPrefix(encoded, header) {
+		t.Fatalf("encoded header % x, want prefix % x", encoded[:len(header)], header)
 	}
-	// 第一个对象声称 65535 个组件。
-	object := append([]byte(nil), encoded[:41]...)
-	binary.BigEndian.PutUint16(object[30:32], 1)
-	binary.BigEndian.PutUint16(object[39:41], 0xFFFF)
-	if _, err := Decode(object, limits); !errors.Is(err, ErrComponentLimit) {
-		t.Fatalf("Decode with an oversized component count = %v, want ErrComponentLimit", err)
+}
+
+// 小计数下每一部分只占几个字节：位置增量这类一帧一个对象、一个组件的更新，帧头（10）加对象头（4）加组件头（4）不超过 18 字节。
+// 计数取上限时各部分不超过 MaxHeaderBytes / MaxObjectHeaderBytes / MaxComponentHeaderBytes（组帧方按它们预留）。
+func TestFrameOverheadIsSmallAndBoundedByTheDeclaredMaxima(t *testing.T) {
+	small := Frame{SnapshotMeta: SnapshotMeta{StreamID: 1, Epoch: 2, Tick: 90, SchemaVersion: 1}, Kind: Delta, BaseTick: 89,
+		Objects: []ObjectDelta{{Operation: ObjectUpdate, Ref: ObjectRef{ID: 3, Generation: 1},
+			Components: []ComponentDelta{{Operation: ComponentSet, TypeID: 1, SchemaVersion: 1, Data: []byte("12345")}}}}}
+	encoded, err := Encode(small, DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
 	}
-	// 第一个组件声称的载荷长度超过 MaxComponentBytes（也超过剩余字节）。
-	component := append([]byte(nil), encoded[:50]...)
-	binary.BigEndian.PutUint16(component[30:32], 1)
-	binary.BigEndian.PutUint16(component[39:41], 1)
-	binary.BigEndian.PutUint32(component[46:50], uint32(limits.MaxComponentBytes+1))
-	if _, err := Decode(component, limits); !errors.Is(err, ErrComponentTooLarge) {
-		t.Fatalf("Decode with an oversized payload length = %v, want ErrComponentTooLarge", err)
+	if overhead := len(encoded) - 5; overhead > 18 {
+		t.Fatalf("one small update costs %d bytes of frame overhead, want at most 18", overhead)
 	}
-	// 载荷长度在上限内但超过剩余字节：同样是超限而不是分配后再截断。
-	binary.BigEndian.PutUint32(component[46:50], 64)
-	if _, err := Decode(component, limits); !errors.Is(err, ErrComponentTooLarge) {
-		t.Fatalf("Decode with a payload length past the end = %v, want ErrComponentTooLarge", err)
+	limits := DefaultLimits()
+	limits.MaxObjects = 1 << 15
+	big := Frame{SnapshotMeta: SnapshotMeta{StreamID: ^uint64(0), Epoch: ^uint32(0), Tick: ^uint32(0), SchemaVersion: ^uint16(0)}, Kind: Delta, BaseTick: 1}
+	for id := 1; id <= 1<<15; id++ {
+		big.Objects = append(big.Objects, ObjectDelta{Operation: ObjectRemove, Ref: ObjectRef{ID: uint16(id), Generation: ^uint16(0)}})
+	}
+	big.Objects[0] = ObjectDelta{Operation: ObjectCreate, Ref: ObjectRef{ID: ^uint16(0), Generation: ^uint16(0)}, Archetype: ^uint16(0),
+		Components: []ComponentDelta{{Operation: ComponentSet, TypeID: ^uint16(0), SchemaVersion: ^uint16(0), Data: make([]byte, 1<<16)}}}
+	limits.MaxComponentBytes = 1 << 17
+	if got := encodedHeaderBytes(big); got > MaxHeaderBytes {
+		t.Fatalf("widest header %d bytes > MaxHeaderBytes %d", got, MaxHeaderBytes)
+	}
+	create := big.Objects[0]
+	if got := encodedObjectBytes(create) - len(create.Components[0].Data); got > MaxObjectHeaderBytes+MaxComponentHeaderBytes {
+		t.Fatalf("widest object and component headers %d bytes > %d", got, MaxObjectHeaderBytes+MaxComponentHeaderBytes)
+	}
+	if _, err := Encode(big, limits); err != nil {
+		t.Fatal(err)
 	}
 }

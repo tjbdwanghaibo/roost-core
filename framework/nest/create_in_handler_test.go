@@ -13,7 +13,6 @@ import (
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
-	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 )
 
 // handler 内 CreateInScope 新建的实体属于当前事务：提交确认前 Sync 不外发；回滚或拒绝时从 EntityManager 撤销、
@@ -52,17 +51,10 @@ func init() {
 // createdSubjects 解出一帧里每个 subject 携带的首字节内容；ObjectRemove 不带内容，不出现在结果里。
 func createdSubjects(t *testing.T, raw []byte) map[int64]byte {
 	t.Helper()
-	f, err := entitysync.DecodeFrame(raw, frame.DefaultLimits())
-	if err != nil {
-		t.Fatal(err)
-	}
 	out := map[int64]byte{}
-	for _, o := range f.Objects {
+	for _, o := range received(t, raw).Objects {
 		for _, c := range o.Components {
-			u, err := entitysync.DecodeSubjectUpdate(c.Data, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
+			u := c.Update
 			if b := u.Payload.BytesCopy(); len(b) > 0 {
 				out[u.SubjectID] = b[0]
 			}
@@ -90,10 +82,7 @@ func drainSubjects(t *testing.T, frames chan []byte) map[int64]byte {
 func newCreateInScopeSync(t *testing.T, watermark func() uint64) (*entitysync.Manager, chan []byte) {
 	t.Helper()
 	frames := make(chan []byte, 64)
-	m, err := entitysync.NewManager(entitysync.ManagerConfig{Mode: entitysync.ModePeriodic, Interval: time.Hour, DurableWatermark: watermark, Transport: entitysync.TransportFunc(func(_ context.Context, _ entitysync.SessionID, p []byte) error {
-		frames <- append([]byte(nil), p...)
-		return nil
-	})})
+	m, err := entitysync.NewManager(entitysync.ManagerConfig{Mode: entitysync.ModePeriodic, Interval: time.Hour, DurableWatermark: watermark, Transport: decodingTransport(frames)})
 	if err != nil {
 		t.Fatal(err)
 	}

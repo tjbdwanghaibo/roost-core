@@ -85,25 +85,20 @@ func (c *client) views(t testing.TB, wait time.Duration) (kind frame.Kind, got m
 		t.Fatalf("packet %+v is not a Sync push on message %d", packet, testMessageID)
 	}
 	got = map[string]string{}
-	applied, err := c.receiver.Receive(packet.Payload, func(decoded frame.Frame) error {
-		kind = decoded.Kind
-		for _, object := range decoded.Objects {
-			if object.Operation == frame.ObjectRemove {
-				got["removed"] = fmt.Sprint(object.Ref)
-				continue
-			}
-			for _, component := range object.Components {
-				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-				if err != nil {
-					return err
-				}
-				got[update.Namespace+"/"+update.Profile.Key] = string(update.Payload.BytesCopy())
-			}
+	decoded, err := c.receiver.Decode(packet.Payload)
+	if err != nil {
+		t.Fatalf("frame not applied: %v", err)
+	}
+	kind = decoded.Kind
+	for _, object := range decoded.Objects {
+		if object.Operation == frame.ObjectRemove {
+			got["removed"] = fmt.Sprint(object.Ref)
+			continue
 		}
-		return nil
-	})
-	if err != nil || !applied {
-		t.Fatalf("frame not applied: applied=%v err=%v", applied, err)
+		for _, component := range object.Components {
+			update := component.Update
+			got[update.Namespace+"/"+update.Profile.Key] = string(update.Payload.BytesCopy())
+		}
 	}
 	return kind, got, true
 }

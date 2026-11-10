@@ -170,6 +170,8 @@ func (lane *businessTCP) consume(conn net.Conn) {
 	versions := make(map[int64]uint64)
 	var epoch uint64
 	var clock uint64
+	// decoder 是这条连接的接收端（增量的 subject 身份从基线继承，按顺序解）；下面的时钟与版本是测量客户端自己的复核。
+	decoder := entitysync.NewDecoder(frame.DefaultLimits())
 	for {
 		var header [20]byte
 		if _, err := io.ReadFull(conn, header[:]); err != nil {
@@ -187,7 +189,7 @@ func (lane *businessTCP) consume(conn net.Conn) {
 		}
 		received := time.Now()
 		tick := int(binary.LittleEndian.Uint64(header[12:]))
-		decoded, err := entitysync.DecodeFrame(payload, frame.DefaultLimits())
+		decoded, err := decoder.Decode(payload)
 		if err != nil {
 			lane.fail(err)
 			return
@@ -205,11 +207,7 @@ func (lane *businessTCP) consume(conn net.Conn) {
 		var updates int64
 		for _, object := range decoded.Objects {
 			for _, component := range object.Components {
-				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-				if err != nil {
-					lane.fail(err)
-					return
-				}
+				update := component.Update
 				if !update.Full && versions[update.SubjectID] != update.BaseVersion {
 					lane.fail(fmt.Errorf("subject %d base %d, client %d", update.SubjectID, update.BaseVersion, versions[update.SubjectID]))
 					return

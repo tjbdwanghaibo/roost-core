@@ -1368,6 +1368,10 @@ type sceneWatcher struct {
 	subjects map[int64]map[string]any
 	frames   int
 	failure  error
+	// decoder is the client end of the stream: a delta names no subject (it
+	// inherits the identity of the baseline the client holds), so frames are
+	// decoded in order, by one decoder per connection.
+	decoder *entitysync.Decoder
 }
 
 func (watcher *sceneWatcher) consume(payload []byte) {
@@ -1375,7 +1379,13 @@ func (watcher *sceneWatcher) consume(payload []byte) {
 	defer watcher.mu.Unlock()
 	// One push is one complete frame for this session: its Epoch/Tick are
 	// the session's own clock, and each object is one subject.
-	decoded, err := entitysync.DecodeFrame(payload, frame.DefaultLimits())
+	if watcher.decoder == nil {
+		watcher.decoder = entitysync.NewDecoder(frame.DefaultLimits())
+	}
+	decoded, err := watcher.decoder.Decode(payload)
+	if errors.Is(err, entitysync.ErrStaleFrame) {
+		return
+	}
 	if err != nil {
 		watcher.failure = fmt.Errorf("decode state frame: %w", err)
 		return
@@ -1383,11 +1393,7 @@ func (watcher *sceneWatcher) consume(payload []byte) {
 	watcher.frames++
 	for _, object := range decoded.Objects {
 		for _, component := range object.Components {
-			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-			if err != nil {
-				watcher.failure = fmt.Errorf("decode subject update: %w", err)
-				return
-			}
+			update := component.Update
 			payload := update.Payload.BytesCopy()
 			if len(payload) == 0 {
 				continue

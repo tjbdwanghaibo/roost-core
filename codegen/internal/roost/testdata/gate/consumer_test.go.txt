@@ -390,16 +390,17 @@ func TestGeneratedGateNestDAOAndWAL(t *testing.T) {
 		if (wire.Header{Flags: snapshot.Flags}).Kind() != wire.PayloadSync || snapshot.MsgID != 501 {
 			t.Fatalf("initial Sync packet=%+v", snapshot)
 		}
-		full, err := entitysync.DecodeFrame(snapshot.Payload, frame.DefaultLimits())
+		receiver := entitysync.NewDecoder(frame.DefaultLimits())
+		full, err := receiver.Decode(snapshot.Payload)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(full.Objects) != 1 || len(full.Objects[0].Components) != 1 {
 			t.Fatalf("snapshot=%+v", full)
 		}
-		initial, err := entitysync.DecodeSubjectUpdate(full.Objects[0].Components[0].Data, 0)
-		if err != nil || !initial.Full || initial.SubjectID != player.ID() {
-			t.Fatalf("initial update=%+v error=%v", initial, err)
+		initial := full.Objects[0].Components[0].Update
+		if !initial.Full || initial.SubjectID != player.ID() {
+			t.Fatalf("initial update=%+v", initial)
 		}
 		data, err := pb.MarshalAddExpRequest(&pb.AddExpRequest{Amount: 250})
 		if err != nil {
@@ -415,16 +416,16 @@ func TestGeneratedGateNestDAOAndWAL(t *testing.T) {
 				t.Fatal(err)
 			}
 			if (wire.Header{Flags: response.Flags}).Kind() == wire.PayloadSync {
-				delta, err := entitysync.DecodeFrame(response.Payload, frame.DefaultLimits())
+				delta, err := receiver.Decode(response.Payload)
 				if err != nil {
 					t.Fatal(err)
 				}
 				if delta.Epoch != full.Epoch || delta.Tick <= full.Tick || len(delta.Objects) != 1 || len(delta.Objects[0].Components) != 1 {
 					t.Fatalf("delta frame=%+v", delta)
 				}
-				update, err := entitysync.DecodeSubjectUpdate(delta.Objects[0].Components[0].Data, 0)
-				if err != nil || update.Full || update.SubjectID != player.ID() || update.BaseVersion != initial.Version || update.Version <= initial.Version || update.Payload.Len() == 0 {
-					t.Fatalf("delta=%+v err=%v", update, err)
+				update := delta.Objects[0].Components[0].Update
+				if update.Full || update.SubjectID != player.ID() || update.BaseVersion != initial.Version || update.Version <= initial.Version || update.Payload.Len() == 0 {
+					t.Fatalf("delta=%+v", update)
 				}
 				gotDelta = true
 			} else {

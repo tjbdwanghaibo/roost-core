@@ -9,21 +9,26 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 )
 
-// 用正式 Receiver 消费真实编码帧，重建客户端对象表；传输仍为内存捕获，不冒充 TCP 验收。
+// 用正式 Decoder 消费真实编码帧，重建客户端对象表；传输仍为内存捕获，不冒充 TCP 验收。
 type fogClient struct {
-	receiver *frame.Receiver
+	receiver *entitysync.Decoder
 	objects  map[frame.ObjectRef]int64
 	fulls    int
 	last     []byte
 }
 
 func newFogClient() *fogClient {
-	return &fogClient{receiver: frame.NewReceiver(frame.DefaultLimits()), objects: map[frame.ObjectRef]int64{}}
+	return &fogClient{receiver: entitysync.NewDecoder(frame.DefaultLimits()), objects: map[frame.ObjectRef]int64{}}
 }
 func (c *fogClient) consume(t *testing.T, frames [][]byte) {
 	t.Helper()
 	for _, raw := range frames {
-		applied, e := c.receiver.Receive(raw, func(f frame.Frame) error {
+		f, e := c.receiver.Decode(raw)
+		if errors.Is(e, entitysync.ErrStaleFrame) {
+			t.Fatal("fresh frame rejected")
+		}
+		check(t, e)
+		e = func() error {
 			if f.Kind == frame.Full {
 				clear(c.objects)
 				c.fulls++
@@ -34,10 +39,7 @@ func (c *fogClient) consume(t *testing.T, frames [][]byte) {
 					continue
 				}
 				for _, component := range obj.Components {
-					u, e := entitysync.DecodeSubjectUpdate(component.Data, 0)
-					if e != nil {
-						return e
-					}
+					u := component.Update
 					if u.SubjectID != 99 || string(u.Payload.BytesCopy()) != `{"objective":99}` {
 						return errors.New("sensitive or unexpected view payload")
 					}
@@ -45,11 +47,8 @@ func (c *fogClient) consume(t *testing.T, frames [][]byte) {
 				}
 			}
 			return nil
-		})
+		}()
 		check(t, e)
-		if !applied {
-			t.Fatal("fresh frame rejected")
-		}
 		c.last = append([]byte(nil), raw...)
 	}
 }
@@ -89,10 +88,8 @@ func verifyFogRecovery(t *testing.T, f *fog, load func() (state, error)) {
 	if alice.fulls <= fulls || len(alice.objects) != 1 || len(bob.objects) != 0 {
 		t.Fatal("reconnect failed to rebuild latest authorized Full")
 	}
-	applied, e := alice.receiver.Receive(old, func(frame.Frame) error { return errors.New("old epoch reached application") })
-	check(t, e)
-	if applied {
-		t.Fatal("old epoch applied after reconnect")
+	if _, e := alice.receiver.Decode(old); !errors.Is(e, entitysync.ErrStaleFrame) {
+		t.Fatal("old epoch applied after reconnect", e)
 	}
 	t.Log("encoded view: alliance/scout removal, failed authority refresh holds publication, reconnect rebuilds Full, revoked member absent, old epoch refused")
 }

@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
       if (receiver.receive(data.data(), data.size(), changes))
         throw std::runtime_error("duplicate applied");
       auto corrupt = data;
-      corrupt[23]++;
+      corrupt[6]++; // tick 3 -> 4: not a duplicate, so the body is read
       corrupt.pop_back();
       try {
         receiver.receive(corrupt.data(), corrupt.size(), changes);
@@ -31,37 +31,39 @@ int main(int argc, char **argv) {
       receiver.reset();
       if (!receiver.receive(data.data(), data.size(), changes))
         throw std::runtime_error("reset failed");
-      auto write = [](roost::bytes &bytes, size_t at, uint64_t value,
-                      size_t width) {
-        for (size_t i = width; i > 0; --i) {
-          bytes[at + i - 1] = uint8_t(value);
-          value >>= 8;
-        }
-      };
-      auto delta = data;
-      delta[6] = 2;
-      delta[32] = 2;
-      write(delta, 20, 4, 4);
-      write(delta, 24, 3, 4);
-      write(delta, 56, 0, 2);
-      write(delta, 70, 4, 8);
-      write(delta, 78, 3, 8);
+      // The Go golden is epoch 2, tick 3, object 1/2 holding subject version
+      // 3 (frame protocol 2, subject envelope v3). A delta frame (tick 4 on
+      // tick 3) updates that object with an envelope that names no subject:
+      // base 3, step 1, the payload; the identity comes from the baseline.
+      roost::bytes delta = {0x52, 0x46, 2, 2, 1, 2, 4, 1, 1, 1,
+                            2,    1,    2, 1, 1, 1, 1, 5, 0, 3,
+                            1,    8,    43};
       if (!receiver.receive(delta.data(), delta.size(), changes) ||
-          changes.size() != 1 || changes[0].kind != roost::change_kind::delta)
-        throw std::runtime_error("delta missing");
-      auto remove = roost::bytes(delta.begin(), delta.begin() + 41);
-      remove[32] = 3;
-      write(remove, 20, 5, 4);
-      write(remove, 24, 4, 4);
-      write(remove, 39, 0, 2);
+          changes.size() != 1 || changes[0].kind != roost::change_kind::delta ||
+          changes[0].update.id != 9007199254740993LL ||
+          changes[0].update.name != "avatar" ||
+          changes[0].update.profile != "owner" ||
+          changes[0].update.version != 4)
+        throw std::runtime_error("delta missing or identity not inherited");
+      // A delta on a stale subject version (base 3 again, at tick 5) is a gap.
+      roost::bytes stale = {0x52, 0x46, 2, 2, 1, 2, 5, 1, 1, 1,
+                            2,    1,    2, 1, 1, 1, 1, 5, 0, 3,
+                            1,    8,    44};
+      try {
+        receiver.receive(stale.data(), stale.size(), changes);
+        throw std::logic_error("subject gap accepted");
+      } catch (const std::runtime_error &) {
+      }
+      receiver.reset();
+      receiver.receive(data.data(), data.size(), changes);
+      receiver.receive(delta.data(), delta.size(), changes);
+      roost::bytes remove = {0x52, 0x46, 2, 2, 1, 2, 5, 1, 1, 1, 3, 1, 2};
       if (!receiver.receive(remove.data(), remove.size(), changes) ||
           changes.size() != 1 || changes[0].kind != roost::change_kind::remove)
         throw std::runtime_error("remove missing");
       receiver.reset();
       receiver.receive(data.data(), data.size(), changes);
-      auto empty = roost::bytes(data.begin(), data.begin() + 32);
-      write(empty, 20, 4, 4);
-      write(empty, 30, 0, 2);
+      roost::bytes empty = {0x52, 0x46, 2, 1, 1, 2, 4, 1, 0};
       receiver.receive(empty.data(), empty.size(), changes);
       if (changes.size() != 1 || !changes[0].snapshot_replacement)
         throw std::runtime_error("full replacement removal missing");

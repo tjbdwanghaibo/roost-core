@@ -247,29 +247,30 @@ func TestLayersOfSeveralViewsTakeTheRicherOrTheUnion(t *testing.T) {
 
 // viewLog 解码每一帧，按 (会话, 目标) 记下客户端最近收到的那份 subject 更新（视图身份与载荷）。
 type viewLog struct {
-	mu     sync.Mutex
-	frames map[entitysync.SessionID]int
-	last   map[[2]int64]entity.SubjectSyncUpdate
+	mu       sync.Mutex
+	frames   map[entitysync.SessionID]int
+	last     map[[2]int64]entity.SubjectSyncUpdate
+	decoders map[entitysync.SessionID]*entitysync.Decoder
 }
 
 func (l *viewLog) Push(_ context.Context, session entitysync.SessionID, data []byte) error {
-	decoded, err := entitysync.DecodeFrame(data, frame.DefaultLimits())
-	if err != nil {
-		return err
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.last == nil {
 		l.last, l.frames = make(map[[2]int64]entity.SubjectSyncUpdate), make(map[entitysync.SessionID]int)
+		l.decoders = make(map[entitysync.SessionID]*entitysync.Decoder)
+	}
+	if l.decoders[session] == nil {
+		l.decoders[session] = entitysync.NewDecoder(frame.DefaultLimits())
+	}
+	decoded, err := l.decoders[session].Decode(data)
+	if err != nil {
+		return err
 	}
 	l.frames[session]++
 	for _, object := range decoded.Objects {
 		for _, component := range object.Components {
-			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-			if err != nil {
-				return err
-			}
-			l.last[[2]int64{int64(session), update.SubjectID}] = update
+			l.last[[2]int64{int64(session), component.Update.SubjectID}] = component.Update
 		}
 	}
 	return nil

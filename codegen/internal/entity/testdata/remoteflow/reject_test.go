@@ -223,6 +223,7 @@ type rejectRig struct {
 	runtime   *engine.Runtime
 	wal       *nestwal.WAL
 	sync      *entitysync.Manager
+	decoder   *entitysync.Decoder // 会话 1 的接收端：增量的身份从基线继承，按顺序解
 	recorder  *vaultFrames
 	scheduler *nest.NestMgr
 	// localCommitter 是 Runtime 交给 Nest 的正式提交器（Projector），RunIsolatedTransaction 用例用它。
@@ -434,8 +435,11 @@ func (rig *rejectRig) take(t *testing.T, id int64) []vaultFrame {
 	rig.recorder.frames = nil
 	rig.recorder.mu.Unlock()
 	var out []vaultFrame
+	if rig.decoder == nil {
+		rig.decoder = entitysync.NewDecoder(frame.DefaultLimits())
+	}
 	for _, data := range frames {
-		decoded, err := entitysync.DecodeFrame(data, frame.DefaultLimits())
+		decoded, err := rig.decoder.Decode(data)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -447,10 +451,7 @@ func (rig *rejectRig) take(t *testing.T, id int64) []vaultFrame {
 				continue
 			}
 			for _, component := range object.Components {
-				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-				if err != nil {
-					t.Fatal(err)
-				}
+				update := component.Update
 				if update.SubjectID != id {
 					continue
 				}

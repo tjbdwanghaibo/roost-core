@@ -540,29 +540,31 @@ type frameSink struct {
 	updates int
 	// err 汇总解帧失败与 Manager 丢掉的会话。
 	err error
+	// decoders 是每个会话的接收端：增量的身份从基线继承，要按顺序解。
+	decoders map[entitysync.SessionID]*entitysync.Decoder
 }
 
 func (s *frameSink) Push(_ context.Context, session entitysync.SessionID, data []byte) error {
-	decoded, err := entitysync.DecodeFrame(data, frameLimits)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.seen == nil {
+		s.seen = make(map[entitysync.SessionID]map[int64]spatial.Point)
+		s.decoders = make(map[entitysync.SessionID]*entitysync.Decoder)
+	}
+	if s.decoders[session] == nil {
+		s.decoders[session] = entitysync.NewDecoder(frameLimits)
+	}
+	decoded, err := s.decoders[session].Decode(data)
 	if err != nil {
 		s.err = errors.Join(s.err, err)
 		return nil
-	}
-	if s.seen == nil {
-		s.seen = make(map[entitysync.SessionID]map[int64]spatial.Point)
 	}
 	if s.seen[session] == nil {
 		s.seen[session] = make(map[int64]spatial.Point)
 	}
 	for _, object := range decoded.Objects {
 		for _, component := range object.Components {
-			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-			if err != nil {
-				s.err = errors.Join(s.err, err)
-				continue
-			}
+			update := component.Update
 			raw := update.Payload.AppendTo(nil)
 			if len(raw) != 16 {
 				continue

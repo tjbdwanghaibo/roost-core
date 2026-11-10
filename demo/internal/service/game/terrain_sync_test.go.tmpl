@@ -36,7 +36,7 @@ import (
 )
 
 // 地形同步（terrain_sync.go，可编辑地形方案 §7 / §9 P2）在生成的真实玩家 TCP 接入上：客户端是一个 Go 实现的接收端
-// （frame.Receiver + 生成的 ApplySyncTerrainChunkDao，与 C# / C++ 客户端同一协议），从回环 socket 读帧、应用改过的块，
+// （entitysync.Decoder + 生成的 ApplySyncTerrainChunkDao，与 C# / C++ 客户端同一协议），从回环 socket 读帧、应用改过的块，
 // 断言它与服务端的实体 / 视图逐点相同。存储是 terrain_test.go 的离线替身（提交器只收下记录），同步、编码、传输、
 // 解码都是正式代码。
 
@@ -173,7 +173,7 @@ func (h *terrainSyncHarness) assertClientMatches(t *testing.T, client *terrainCl
 type terrainClient struct {
 	connection net.Conn
 	mu         sync.Mutex
-	receiver   *frame.Receiver
+	receiver   *entitysync.Decoder
 	refs       map[frame.ObjectRef]int64 // 对象引用 → subject（实体 ID）
 	namespaces map[int64]string
 	chunks     map[int64]*db.SyncTerrainChunkDao
@@ -248,7 +248,7 @@ func dialTerrainClient(t *testing.T, addr string, playerID int64) *terrainClient
 	}
 	_ = connection.SetReadDeadline(time.Time{})
 	// 缺省帧上限就够：会话的引用表合起来可持有 164 个，但每帧对象数仍按场景的 Limits.MaxObjects（100）切分。
-	client := &terrainClient{connection: connection, receiver: frame.NewReceiver(frame.DefaultLimits()),
+	client := &terrainClient{connection: connection, receiver: entitysync.NewDecoder(frame.DefaultLimits()),
 		refs: map[frame.ObjectRef]int64{}, namespaces: map[int64]string{}, chunks: map[int64]*db.SyncTerrainChunkDao{}, buildings: map[int64]*db.SyncBuildingDao{},
 		positions: map[int64]spatial.Point{}, movedAt: map[int64]time.Time{}, chunkAt: map[int64]time.Time{}}
 	go client.read()
@@ -266,7 +266,12 @@ func (client *terrainClient) read() {
 		}
 		client.mu.Lock()
 		received := receivedFrame{wireBytes: wire.HeaderSize + len(packet.Payload), frameBytes: len(packet.Payload)}
-		_, err = client.receiver.Receive(packet.Payload, func(f frame.Frame) error { return client.apply(f, &received) })
+		var decoded entitysync.ReceivedFrame
+		if decoded, err = client.receiver.Decode(packet.Payload); err == nil {
+			err = client.apply(decoded, &received)
+		} else if errors.Is(err, entitysync.ErrStaleFrame) {
+			err = nil
+		}
 		if err != nil && client.err == nil {
 			client.err = err
 		}
@@ -276,7 +281,7 @@ func (client *terrainClient) read() {
 }
 
 // apply 应用一帧（持 mu）：Full 先清空旧对象；地形块用生成的 ApplySyncTerrainChunkDao（全量时基线为 nil）。
-func (client *terrainClient) apply(f frame.Frame, received *receivedFrame) error {
+func (client *terrainClient) apply(f entitysync.ReceivedFrame, received *receivedFrame) error {
 	if f.Kind == frame.Full {
 		received.full = true
 		clear(client.refs)
@@ -294,10 +299,7 @@ func (client *terrainClient) apply(f frame.Frame, received *receivedFrame) error
 			continue
 		}
 		for _, component := range object.Components {
-			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-			if err != nil {
-				return err
-			}
+			update := component.Update
 			client.refs[object.Ref] = update.SubjectID
 			client.namespaces[update.SubjectID] = update.Namespace
 			if update.Namespace == "building" {
@@ -316,7 +318,7 @@ func (client *terrainClient) apply(f frame.Frame, received *receivedFrame) error
 				}
 				client.buildings[update.SubjectID] = next
 				received.buildings = append(received.buildings, buildingUpdate{subject: update.SubjectID, full: update.Full,
-					componentBytes: len(component.Data), payloadBytes: len(raw), params: patch.Params != nil})
+					componentBytes: component.Size, payloadBytes: len(raw), params: patch.Params != nil})
 				continue
 			}
 			if update.Namespace != "terrain" {
@@ -358,7 +360,7 @@ func (client *terrainClient) apply(f frame.Frame, received *receivedFrame) error
 			}
 			client.chunks[update.SubjectID] = next
 			client.chunkAt[update.SubjectID] = time.Now()
-			u := terrainUpdate{subject: update.SubjectID, full: update.Full, componentBytes: len(component.Data), payloadBytes: len(raw), materials: patch.Materials != nil}
+			u := terrainUpdate{subject: update.SubjectID, full: update.Full, componentBytes: component.Size, payloadBytes: len(raw), materials: patch.Materials != nil}
 			if patch.Heights != nil {
 				u.heightsDelta, u.heightUpdates = patch.Heights.Delta, len(patch.Heights.Updates)
 			}

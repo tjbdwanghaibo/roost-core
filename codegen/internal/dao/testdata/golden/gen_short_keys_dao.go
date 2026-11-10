@@ -734,6 +734,12 @@ func (d *ShortKeysDao) MarshalSync(mask uint64) []byte {
 	return d.marshalSyncPB(mask)
 }
 
+// MarshalSyncDelta 与 MarshalSync 相同，但不带实体 ID：给增量用（packer 的 PackSubjectDelta），接收端沿用基线的
+// 实体 ID（生成的 Apply / ApplySync 在有基线时接受 0）。全量（PackSubjectSnapshot）仍用 MarshalSync。
+func (d *ShortKeysDao) MarshalSyncDelta(mask uint64) []byte {
+	return d.marshalSyncPatch(mask, 0)
+}
+
 func (d *ShortKeysDao) ApplySync(raw []byte) error {
 	return d.applySyncPB(raw)
 }

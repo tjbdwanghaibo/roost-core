@@ -2,6 +2,7 @@ package nestgame
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -33,7 +34,7 @@ type syncClientObject struct {
 }
 type syncLoadClient struct {
 	mu       sync.Mutex
-	receiver *frame.Receiver
+	receiver *entitysync.Decoder
 	objects  map[int64]syncClientObject
 	refs     map[frame.ObjectRef]int64
 }
@@ -104,7 +105,7 @@ func newSyncGameLoad(t *testing.T, units []*Unit, c gameConfig, lane entitysync.
 		t.Fatal(err)
 	}
 	for index := range load.clients {
-		load.clients[index] = syncLoadClient{receiver: frame.NewReceiver(frame.DefaultLimits()), objects: make(map[int64]syncClientObject), refs: make(map[frame.ObjectRef]int64)}
+		load.clients[index] = syncLoadClient{receiver: entitysync.NewDecoder(frame.DefaultLimits()), objects: make(map[int64]syncClientObject), refs: make(map[frame.ObjectRef]int64)}
 	}
 	t.Cleanup(func() {
 		load.interest.Close()
@@ -145,7 +146,7 @@ func newSelfSyncGameLoad(t *testing.T, units []*Unit, c gameConfig, access *enti
 		enableUnitSync(unit)
 	}
 	for index := range load.clients {
-		load.clients[index] = syncLoadClient{receiver: frame.NewReceiver(frame.DefaultLimits()), objects: make(map[int64]syncClientObject), refs: make(map[frame.ObjectRef]int64)}
+		load.clients[index] = syncLoadClient{receiver: entitysync.NewDecoder(frame.DefaultLimits()), objects: make(map[int64]syncClientObject), refs: make(map[frame.ObjectRef]int64)}
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -240,7 +241,14 @@ func (load *syncGameLoad) apply(index int, raw []byte) error {
 	client := &load.clients[index]
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	_, err := client.receiver.Receive(raw, func(f frame.Frame) error {
+	received, err := client.receiver.Decode(raw)
+	if errors.Is(err, entitysync.ErrStaleFrame) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return func(f entitysync.ReceivedFrame) error {
 		if f.Kind == frame.Full {
 			clear(client.objects)
 			clear(client.refs)
@@ -253,10 +261,7 @@ func (load *syncGameLoad) apply(index int, raw []byte) error {
 				continue
 			}
 			for _, component := range object.Components {
-				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-				if err != nil {
-					return err
-				}
+				update := component.Update
 				previous, exists := client.objects[update.SubjectID]
 				if !update.Full && (!exists || previous.version != update.BaseVersion) {
 					return fmt.Errorf("subject %d missing baseline %d", update.SubjectID, update.BaseVersion)
@@ -302,8 +307,7 @@ func (load *syncGameLoad) apply(index int, raw []byte) error {
 		}
 		load.frames.Add(1)
 		return nil
-	})
-	return err
+	}(received)
 }
 
 // wanted 是玩家 index 的客户端此刻应该持有的对象：场景是 AOI 可见集合加自己，自身视图只有自己。

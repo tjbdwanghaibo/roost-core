@@ -1,5 +1,4 @@
 using System;
-using System.Buffers.Binary;
 using System.IO;
 using System.Collections.Generic;
 using Roost.Client;
@@ -16,30 +15,23 @@ internal static partial class Program
             (update, previous) => { decoded++; return Convert.ToHexString(update.Payload); });
         Check(views.Receive(RawSync) && views.Current.Count == 1 && decoded == 1, "create decoded subject view");
         Check(!views.Receive(RawSync) && decoded == 1, "duplicate frame not reapplied");
-        // 在正式 Go 金样上更改帧操作与 subject 基线，验证帧连续但 subject 有缺口时仍拒绝。
-        var delta = (byte[])RawSync.Clone();
-        delta[6] = 2;
-        BinaryPrimitives.WriteUInt32BigEndian(delta.AsSpan(20), source.Tick + 1);
-        BinaryPrimitives.WriteUInt32BigEndian(delta.AsSpan(24), source.Tick);
-        delta[32] = 2;
-        const int subjectOffset = 32 + 9 + 9;
-        BinaryPrimitives.WriteUInt16BigEndian(delta.AsSpan(subjectOffset + 6), 0);
-        BinaryPrimitives.WriteUInt64BigEndian(delta.AsSpan(subjectOffset + 20), subject.Version + 1);
-        BinaryPrimitives.WriteUInt64BigEndian(delta.AsSpan(subjectOffset + 28), subject.Version + 9);
-        Refuses(() => views.Receive(delta), "subject gap");
+        // 在正式 Go 金样之后接一帧连续的增量帧，但 subject 基线有缺口：仍拒绝。增量信封不带身份，从基线继承。
+        var obj = source.Objects[0];
+        var gap = SyncWire.Frame(false, source.Epoch, source.Tick + 1, source.Tick,
+            SyncWire.Object(2, obj.Id, obj.Generation, SyncWire.Delta(subject.Version + 9, subject.Version + 10, 8, 43)));
+        Refuses(() => views.Receive(gap), "subject gap");
         Check(views.Current.Count == 1 && decoded == 1, "failed frame kept previous view");
         views.Reset();
         Check(views.Current.Count == 0, "connection reset clears views");
         views.Receive(RawSync);
-        BinaryPrimitives.WriteUInt64BigEndian(delta.AsSpan(subjectOffset + 28), subject.Version);
+        var delta = SyncWire.Frame(false, source.Epoch, source.Tick + 1, source.Tick,
+            SyncWire.Object(2, obj.Id, obj.Generation, SyncWire.Delta(subject.Version, subject.Version + 1, 8, 43)));
         Check(views.Receive(delta) && decoded == 3, "continuous subject delta");
-        var remove = new byte[41];
-        Array.Copy(delta, remove, 32);
-        BinaryPrimitives.WriteUInt32BigEndian(remove.AsSpan(20), source.Tick + 2);
-        BinaryPrimitives.WriteUInt32BigEndian(remove.AsSpan(24), source.Tick + 1);
-        remove[32] = 3;
-        BinaryPrimitives.WriteUInt16BigEndian(remove.AsSpan(33), source.Objects[0].Id);
-        BinaryPrimitives.WriteUInt16BigEndian(remove.AsSpan(35), source.Objects[0].Generation);
+        var inherited = views.Current[(obj.Id, obj.Components[0].TypeId)].Update;
+        Check(inherited.SubjectId == subject.SubjectId && inherited.Namespace == subject.Namespace && inherited.Profile == subject.Profile &&
+            inherited.Encoding == subject.Encoding && inherited.Version == subject.Version + 1 && !inherited.Full, "delta inherits the subject identity");
+        Refuses(() => SubjectUpdate.Decode(SyncWire.Delta(subject.Version, subject.Version + 1, 8, 43)), "delta without a baseline");
+        var remove = SyncWire.Frame(false, source.Epoch, source.Tick + 2, source.Tick + 1, SyncWire.Remove(obj.Id, obj.Generation));
         Check(views.Receive(remove) && views.Current.Count == 0, "remove clears view");
         var notifications = new List<EntityChange>();
         views.Reset();
@@ -58,10 +50,7 @@ internal static partial class Program
             notifications[2].RemovalReason == EntityRemovalReason.Server && notifications[2].Current == null,
             "callback failure preserves baseline for next removal");
         views.Reset(); views.Receive(RawSync);
-        var emptyFull = new byte[32];
-        Array.Copy(RawSync, emptyFull, 32);
-        BinaryPrimitives.WriteUInt32BigEndian(emptyFull.AsSpan(20), source.Tick + 3);
-        BinaryPrimitives.WriteUInt16BigEndian(emptyFull.AsSpan(30), 0);
+        var emptyFull = SyncWire.Frame(true, source.Epoch, source.Tick + 3, 0);
         notifications.Clear();
         views.Receive(emptyFull, changed: batch => notifications.AddRange(batch));
         Check(views.Current.Count == 0 && notifications.Count == 1 &&

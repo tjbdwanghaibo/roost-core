@@ -248,7 +248,8 @@ func (s *session) encode(entries []frameEntry, cfg wireConfig, work *encodeWorks
 	}()
 	var frames []encodedFrame
 	counts := encodedFrame{}
-	size := 32 // frame 协议头
+	// 按各部分编码的上限预留（frame.Max*Bytes），实际帧只会更短，分帧后每帧不越过 maxBytes。
+	size := frame.MaxHeaderBytes
 	finish := func() error {
 		if len(objects) == 0 && (len(frames) > 0 || !s.owesEmptyFull()) {
 			return nil
@@ -276,16 +277,16 @@ func (s *session) encode(entries []frameEntry, cfg wireConfig, work *encodeWorks
 				continue
 			}
 		}
-		entryBytes := 9 // 完整 ObjectDelta 的协议头
+		entryBytes := frame.MaxObjectHeaderBytes // 完整 ObjectDelta 的协议头
 		if entry.kind != entryRemove {
 			data, err := entry.update.encode(cfg.limits.MaxComponentBytes)
 			if err != nil {
 				return nil, err
 			}
-			entryBytes += 9 + len(data)
+			entryBytes += frame.MaxComponentHeaderBytes + len(data)
 		}
-		if entryBytes > maxBytes-32 {
-			return nil, fmt.Errorf("%w: complete entity %d needs %d bytes", frame.ErrFrameTooLarge, entry.subjectID, entryBytes+32)
+		if entryBytes > maxBytes-frame.MaxHeaderBytes {
+			return nil, fmt.Errorf("%w: complete entity %d needs %d bytes", frame.ErrFrameTooLarge, entry.subjectID, entryBytes+frame.MaxHeaderBytes)
 		}
 		if len(objects) > 0 && (len(objects) == perFrame || entryBytes > maxBytes-size) {
 			if err := finish(); err != nil {
@@ -295,7 +296,7 @@ func (s *session) encode(entries []frameEntry, cfg wireConfig, work *encodeWorks
 			s = s.clone()
 			clear(objects)
 			clear(components)
-			objects, size, counts = objects[:0], 32, encodedFrame{}
+			objects, size, counts = objects[:0], frame.MaxHeaderBytes, encodedFrame{}
 		}
 		object, ok, err := s.objectFor(entry, cfg, components[len(objects):len(objects)+1])
 		if err != nil {
@@ -348,7 +349,11 @@ func (s *session) objectFor(entry frameEntry, cfg wireConfig, component []frame.
 			return frame.ObjectDelta{}, false, err
 		}
 		component[0] = frame.ComponentDelta{Operation: frame.ComponentSet, TypeID: cfg.componentType, SchemaVersion: cfg.componentSchema, Data: data}
-		return frame.ObjectDelta{Operation: operation, Ref: ref, Archetype: cfg.archetype, Components: component}, true, nil
+		archetype := uint16(0) // 只有 create 带 archetype（帧协议 2）
+		if operation == frame.ObjectCreate {
+			archetype = cfg.archetype
+		}
+		return frame.ObjectDelta{Operation: operation, Ref: ref, Archetype: archetype, Components: component}, true, nil
 	case entryUpdate:
 		if !exists {
 			return frame.ObjectDelta{}, false, fmt.Errorf("%w: session %d has no baseline for subject %d", ErrWireFrame, s.id, entry.subjectID)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/client/wire"
@@ -73,6 +74,10 @@ func TestSceneWatcherReadsSyncFlaggedFrames(t *testing.T) {
 	}
 }
 
+// syncEpochs 给 syncFrame 的每一帧一个新 epoch：一帧是一份新的全量，同一个接收端按顺序都收下（同 epoch、同 tick
+// 的第二帧会被当作重复帧丢掉）。
+var syncEpochs atomic.Uint32
+
 // syncFrame 编出一帧：一个 subject 的完整更新，字段取 document。
 func syncFrame(t *testing.T, subjectID int64, document *db.SyncPlayerDao) []byte {
 	t.Helper()
@@ -92,7 +97,7 @@ func syncFrame(t *testing.T, subjectID int64, document *db.SyncPlayerDao) []byte
 		t.Fatal(err)
 	}
 	payload, err := frame.Encode(frame.Frame{
-		SnapshotMeta: frame.SnapshotMeta{StreamID: 1, Epoch: 1, Tick: 1, SchemaVersion: 1},
+		SnapshotMeta: frame.SnapshotMeta{StreamID: 1, Epoch: syncEpochs.Add(1), Tick: 1, SchemaVersion: 1},
 		Kind:         frame.Full,
 		Objects: []frame.ObjectDelta{{
 			Operation:  frame.ObjectCreate,

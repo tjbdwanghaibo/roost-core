@@ -835,6 +835,16 @@ func (d *{{.Dao.Name}}) MarshalSync(mask uint64) []byte {
 {{- end}}
 }
 
+// MarshalSyncDelta 与 MarshalSync 相同，但不带实体 ID：给增量用（packer 的 PackSubjectDelta），接收端沿用基线的
+// 实体 ID（生成的 Apply / ApplySync 在有基线时接受 0）。全量（PackSubjectSnapshot）仍用 MarshalSync。
+func (d *{{.Dao.Name}}) MarshalSyncDelta(mask uint64) []byte {
+{{- if syncFields .Dao.Fields}}
+ return d.marshalSyncPatch(mask, 0)
+{{- else}}
+ return nil
+{{- end}}
+}
+
 func (d *{{.Dao.Name}}) ApplySync(raw []byte) error {
 {{- if syncFields .Dao.Fields}}
  return d.applySyncPB(raw)

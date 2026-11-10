@@ -51,6 +51,27 @@ class sync_receiver {
       auto b = take(n);
       return std::string(b.begin(), b.end());
     }
+    // Unsigned varint, shortest encoding only, at most limit (frame protocol 2).
+    uint64_t varint(uint64_t limit) {
+      uint64_t v = 0;
+      size_t start = at;
+      for (unsigned shift = 0;; shift += 7) {
+        if (at >= size || shift > 63)
+          throw std::runtime_error("truncated Sync varint");
+        uint8_t b = p[at++];
+        if (shift == 63 && b > 1)
+          throw std::runtime_error("overlong Sync varint");
+        v |= uint64_t(b & 0x7f) << shift;
+        if (b < 0x80)
+          break;
+      }
+      size_t n = 1;
+      for (uint64_t x = v; x >= 0x80; x >>= 7)
+        ++n;
+      if (v > limit || at - start != n)
+        throw std::runtime_error("malformed Sync varint");
+      return v;
+    }
   };
   using key = std::pair<uint16_t, uint16_t>;
   std::map<uint16_t, uint16_t> objects_;
@@ -59,34 +80,62 @@ class sync_receiver {
   uint32_t epoch_ = 0, tick_ = 0;
   uint16_t schema_ = 0;
   bool needs_full_ = true;
-  static subject decode(const bytes &b) {
+  // Subject envelope v3: flags(1) (bit0 full, bit1 mask, bit2 reason).
+  // Full: varint id, kind, version, base, [mask], [reason], encoding, lod(1),
+  //       varint schema, varint length + namespace, varint length + profile
+  //       ("default" travels as empty), payload.
+  // Delta: varint base, version - base (>= 1), [mask], [reason], payload; it
+  //       carries no identity and inherits it from the baseline of the same
+  //       object and component, whose version must equal base.
+  static subject decode(const bytes &b, const subject *baseline) {
     reader r{b.data(), b.size()};
     subject s;
-    if (r.number(4) != 0x52535355 || r.number(2) != 2)
-      throw std::runtime_error("bad subject header");
-    auto flags = r.number(2);
-    if (flags > 1)
+    auto flags = r.number(1);
+    if (flags & ~uint64_t(7))
       throw std::runtime_error("bad subject flags");
-    s.full = flags == 1;
-    s.id = int64_t(r.number(8));
-    s.kind = uint32_t(r.number(4));
-    s.version = r.number(8);
-    s.base = r.number(8);
-    s.mask = r.number(8);
-    r.number(4);
-    s.encoding = uint16_t(r.number(2));
-    s.lod = uint8_t(r.number(1));
-    if (r.number(1))
-      throw std::runtime_error("bad subject reserved byte");
-    s.schema = uint32_t(r.number(4));
-    auto ns = r.number(2), profile = r.number(2), length = r.number(4);
-    s.name = r.text(size_t(ns));
-    s.profile = r.text(size_t(profile));
-    s.payload = r.take(size_t(length));
-    if (s.profile.empty())
-      s.profile = "default";
-    if (!s.id || r.at != r.size)
-      throw std::runtime_error("bad subject length/id");
+    s.full = flags & 1;
+    auto optional = [&] {
+      if (flags & 2) {
+        s.mask = r.varint(UINT64_MAX);
+        if (!s.mask)
+          throw std::runtime_error("bad subject mask");
+      }
+      if ((flags & 4) && !r.varint(UINT32_MAX))
+        throw std::runtime_error("bad subject reason");
+    };
+    if (s.full) {
+      s.id = int64_t(r.varint(UINT64_MAX));
+      s.kind = uint32_t(r.varint(UINT32_MAX));
+      s.version = r.varint(UINT64_MAX);
+      s.base = r.varint(UINT64_MAX);
+      optional();
+      s.encoding = uint16_t(r.varint(UINT16_MAX));
+      s.lod = uint8_t(r.number(1));
+      s.schema = uint32_t(r.varint(UINT32_MAX));
+      s.name = r.text(size_t(r.varint(UINT16_MAX)));
+      s.profile = r.text(size_t(r.varint(UINT16_MAX)));
+      if (s.profile.empty())
+        s.profile = "default";
+      if (!s.id)
+        throw std::runtime_error("bad subject id");
+    } else {
+      if (!baseline)
+        throw std::runtime_error("missing subject baseline");
+      s.base = r.varint(UINT64_MAX);
+      auto step = r.varint(UINT64_MAX - s.base);
+      if (!step || s.base != baseline->version)
+        throw std::runtime_error("subject version/identity gap");
+      s.version = s.base + step;
+      optional();
+      s.id = baseline->id;
+      s.kind = baseline->kind;
+      s.name = baseline->name;
+      s.profile = baseline->profile;
+      s.encoding = baseline->encoding;
+      s.schema = baseline->schema;
+      s.lod = baseline->lod;
+    }
+    s.payload = r.take(r.size - r.at);
     return s;
   }
 
@@ -108,18 +157,21 @@ public:
     try {
       if (!data || size > 4u * 1024 * 1024)
         throw std::runtime_error("Sync size limit");
+      // Frame protocol 2: magic "RF"(2) protocol(1) kind(1), then varints:
+      // stream, epoch, tick, [delta: tick - base], schema, object count.
       reader r{data, size};
-      if (r.number(4) != 0x43525031 || r.number(2) != 1)
+      if (r.number(2) != 0x5246 || r.number(1) != 2)
         throw std::runtime_error("bad Sync header");
       auto flags = r.number(1);
-      if ((flags != 1 && flags != 2) || r.number(1))
+      if (flags != 1 && flags != 2)
         throw std::runtime_error("bad Sync flags");
       bool full = flags == 1;
-      auto stream = r.number(8);
-      auto epoch = uint32_t(r.number(4)), tick = uint32_t(r.number(4)),
-           base = uint32_t(r.number(4));
-      auto schema = uint16_t(r.number(2));
-      auto count = r.number(2);
+      auto stream = r.varint(UINT64_MAX);
+      auto epoch = uint32_t(r.varint(UINT32_MAX)),
+           tick = uint32_t(r.varint(UINT32_MAX));
+      uint32_t base = full ? 0 : tick - uint32_t(r.varint(tick));
+      auto schema = uint16_t(r.varint(UINT16_MAX));
+      auto count = r.varint(UINT16_MAX);
       if (!stream || !epoch || !tick || !schema ||
           (full ? base != 0 : base == 0 || base >= tick) || count > 200)
         throw std::runtime_error("bad Sync baseline");
@@ -136,8 +188,10 @@ public:
       std::set<std::pair<uint16_t, uint16_t>> seen;
       for (uint64_t i = 0; i < count; ++i) {
         auto op = r.number(1);
-        auto id = uint16_t(r.number(2)), gen = uint16_t(r.number(2));
-        auto archetype = r.number(2), components = r.number(2);
+        auto id = uint16_t(r.varint(UINT16_MAX)),
+             gen = uint16_t(r.varint(UINT16_MAX));
+        uint64_t archetype = op == 1 ? r.varint(UINT16_MAX) : 0;
+        uint64_t components = op == 3 ? 0 : r.varint(UINT16_MAX);
         if (!id || !gen || op < 1 || op > 3 || (full && op != 1) ||
             (op == 1 && !archetype) || (op == 3 && components) ||
             components > 128 || !seen.emplace(id, gen).second)
@@ -163,8 +217,12 @@ public:
         std::set<uint16_t> components_seen;
         for (uint64_t c = 0; c < components; ++c) {
           auto operation = r.number(1);
-          auto type = uint16_t(r.number(2));
-          auto version = r.number(2), length = r.number(4);
+          auto type = uint16_t(r.varint(UINT16_MAX));
+          uint64_t version = 0, length = 0;
+          if (operation == 1) {
+            version = r.varint(UINT16_MAX);
+            length = r.varint(UINT32_MAX);
+          }
           if (!type || !components_seen.insert(type).second || operation < 1 ||
               operation > 2 || length > 65536 ||
               (operation == 1 && version != 1) ||
@@ -180,20 +238,10 @@ public:
             }
             continue;
           }
-          auto update = decode(r.take(size_t(length)));
-          if (!update.full) {
-            if (old == next.end())
-              throw std::runtime_error("missing subject baseline");
-            const auto &previous = old->second;
-            if (previous.id != update.id || previous.kind != update.kind ||
-                previous.name != update.name ||
-                previous.profile != update.profile ||
-                previous.encoding != update.encoding ||
-                previous.schema != update.schema ||
-                previous.lod != update.lod || previous.version != update.base ||
-                update.version <= update.base)
-              throw std::runtime_error("subject version/identity gap");
-          }
+          // A delta inherits its identity from the baseline and must continue
+          // its version (decode checks both).
+          auto update = decode(r.take(size_t(length)),
+                               old == next.end() ? nullptr : &old->second);
           result.push_back(
               {update.full ? change_kind::full : change_kind::delta, id, gen,
                type, update, false});

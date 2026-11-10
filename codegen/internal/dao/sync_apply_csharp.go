@@ -42,8 +42,9 @@ func buildTrackedSyncCSharp(defs *Definitions) []byte {
 		fmt.Fprintf(&b, `// 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
 public static Sync%[1]s Apply(this Sync%[1]s patch,Sync%[1]s previous){
  if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
- if(previous!=null&&(previous.SyncFormat!=3||previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
- var next=previous==null?new Sync%[1]s():previous.Clone();next.EntityId=patch.EntityId;next.SyncFormat=3;
+ // 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+ if(previous!=null&&(previous.SyncFormat!=3||patch.EntityId!=0&&previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
+ var next=previous==null?new Sync%[1]s():previous.Clone();if(previous==null)next.EntityId=patch.EntityId;next.SyncFormat=3;
 `, dao.Name)
 		for _, f := range filterSync(dao.Fields) {
 			name := syncCSharpProperty(toSnake(f.Name), "Sync"+dao.Name)

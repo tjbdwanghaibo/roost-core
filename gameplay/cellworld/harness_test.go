@@ -440,6 +440,8 @@ type clientModel struct {
 	creates map[entitysync.SessionID]map[int64]int
 	removes map[entitysync.SessionID][]clientRemove
 	frames  int
+	// decoders 是每个会话的接收端：增量的身份从基线继承，要按顺序解。
+	decoders map[entitysync.SessionID]*entitysync.Decoder
 }
 
 type clientRemove struct {
@@ -455,12 +457,18 @@ func newClientModel() *clientModel {
 }
 
 func (c *clientModel) Push(_ context.Context, session entitysync.SessionID, data []byte) error {
-	decoded, err := entitysync.DecodeFrame(data, frame.DefaultLimits())
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.decoders == nil {
+		c.decoders = map[entitysync.SessionID]*entitysync.Decoder{}
+	}
+	if c.decoders[session] == nil {
+		c.decoders[session] = entitysync.NewDecoder(frame.DefaultLimits())
+	}
+	decoded, err := c.decoders[session].Decode(data)
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.frames++
 	if c.refs[session] == nil {
 		c.refs[session], c.holds[session], c.creates[session] = map[frame.ObjectRef]int64{}, map[int64]EntityState{}, map[int64]int{}
@@ -469,10 +477,7 @@ func (c *clientModel) Push(_ context.Context, session entitysync.SessionID, data
 		subject := c.refs[session][object.Ref]
 		var state EntityState
 		for _, component := range object.Components {
-			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-			if err != nil {
-				return err
-			}
+			update := component.Update
 			subject = update.SubjectID
 			if err := msgpack.Unmarshal(update.Payload.BytesCopy(), &state); err != nil {
 				return err

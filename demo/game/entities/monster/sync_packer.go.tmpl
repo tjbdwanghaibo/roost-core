@@ -29,14 +29,16 @@ var monsterViews, monsterViewsErr = dataengine.NewSyncViewSet(db.MonsterDaoSyncF
 )
 
 func (packer monsterSyncPacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
-	return packer.pack(profile, dataengine.AllFields)
+	return packer.pack(profile, dataengine.AllFields, false)
 }
 
 func (packer monsterSyncPacker) PackSubjectDelta(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
-	return packer.pack(profile, mask)
+	return packer.pack(profile, mask, true)
 }
 
-func (packer monsterSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+// pack 编码视图允许的字段。delta 为真时是增量：DAO 补丁不带实体 ID（MarshalSyncDelta，客户端沿用基线的），
+// 全量仍带。
+func (packer monsterSyncPacker) pack(profile entity.SyncProfile, mask uint64, delta bool) (entity.FrozenSyncPayload, error) {
 	if packer.monster == nil {
 		return entity.FrozenSyncPayload{}, fmt.Errorf("monster sync packer: no entity")
 	}
@@ -51,7 +53,12 @@ func (packer monsterSyncPacker) pack(profile entity.SyncProfile, mask uint64) (e
 	if mask == 0 {
 		return entity.FrozenSyncPayload{}, nil
 	}
-	raw := packer.monster.Dao().MarshalSync(mask)
+	var raw []byte
+	if delta {
+		raw = packer.monster.Dao().MarshalSyncDelta(mask)
+	} else {
+		raw = packer.monster.Dao().MarshalSync(mask)
+	}
 	if len(raw) == 0 {
 		return entity.FrozenSyncPayload{}, nil
 	}

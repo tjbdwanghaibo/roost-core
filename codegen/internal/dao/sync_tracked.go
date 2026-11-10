@@ -216,16 +216,18 @@ func (s *syncSchema) buildNestedPatches() error {
 func (s *syncSchema) emitDAOTracked(dao DaoDef, shapes map[string]syncShape) {
 	var capture, apply strings.Builder
 	name := "Sync" + dao.Name
-	fmt.Fprintf(&capture, `// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。
+	fmt.Fprintf(&capture, `// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。它产出增量补丁：
+// 不带实体 ID，接收端沿用基线的（Apply 时 previous 的 EntityID）。
 func(d *%[1]s) MarshalSyncChanges(mask uint64)[]byte {
  return d.tracker.ReadSyncChanges(func(change *dataengine.SyncChange) []byte {
- if change.Full(){return d.marshalSyncPB(mask)}
- patch:=&%[2]s{EntityID:d.id,SyncFormat:3};changed:=false
+ if change.Full(){return d.marshalSyncPatch(mask,0)}
+ patch:=&%[2]s{SyncFormat:3};changed:=false
 `, dao.Name, name)
 	fmt.Fprintf(&apply, `// Apply%[1]s 验证整个补丁后发布新快照，previous 与 patch 均按只读使用。
 func Apply%[1]s(patch,previous *%[1]s)(*%[1]s,error){
  if patch==nil||patch.SyncFormat!=3{return nil,fmt.Errorf("unsupported DAO sync format")}
- if previous!=nil&&(previous.SyncFormat!=3||previous.EntityID!=patch.EntityID){return nil,fmt.Errorf("sync baseline identity or format mismatch")}
+ // 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+ if previous!=nil&&(previous.SyncFormat!=3||patch.EntityID!=0&&previous.EntityID!=patch.EntityID){return nil,fmt.Errorf("sync baseline identity or format mismatch")}
  next:=&%[1]s{EntityID:patch.EntityID,SyncFormat:3};if previous!=nil{*next=*previous}
 `, name)
 	for i, field := range dao.Fields {

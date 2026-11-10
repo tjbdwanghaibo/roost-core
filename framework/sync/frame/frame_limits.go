@@ -6,7 +6,9 @@ import (
 )
 
 // ProtocolVersion 是帧格式版本，写在帧头；Decode 只接受当前版本。
-const ProtocolVersion uint16 = 1
+// 2（2026-11-10）：整数改为无符号 varint，只对某种操作有意义的字段只在那种操作里出现（见 Encode）；
+// 组件数据是 entitysync 的 subject 信封 v3。不兼容 1，升级须先停旧进程、客户端同步升级。
+const ProtocolVersion uint8 = 2
 
 var (
 	ErrInvalidObjectRef  = errors.New("frame: invalid object ref")

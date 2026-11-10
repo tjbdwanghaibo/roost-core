@@ -192,10 +192,10 @@ func (h *harness) flush(t testing.TB) {
 	}
 }
 
-// client 是一个按正式协议读的玩家连接：frame.Receiver 维护基线，DecodeSubjectUpdate 取出自己的状态。
+// client 是一个按正式协议读的玩家连接：entitysync.Decoder 维护基线并解出自己的状态。
 type client struct {
 	connection net.Conn
-	receiver   *frame.Receiver
+	receiver   *entitysync.Decoder
 	epoch      uint32 // 最近一帧的 epoch（state 记下）
 }
 
@@ -209,7 +209,7 @@ func dial(t testing.TB, h *harness, playerID int64) *client {
 	if err := wire.Write(connection, []*wire.Packet{{MsgID: 0, Seq: 1, Payload: []byte("player:" + strconv.FormatInt(playerID, 10))}}, wire.DefaultMaxPayload); err != nil {
 		t.Fatal(err)
 	}
-	return &client{connection: connection, receiver: frame.NewReceiver(frame.Limits{})}
+	return &client{connection: connection, receiver: entitysync.NewDecoder(frame.Limits{})}
 }
 
 // read 读下一个包。
@@ -239,21 +239,15 @@ func (c *client) state(t testing.TB) (frame.Kind, string) {
 	}
 	var kind frame.Kind
 	var payload string
-	applied, err := c.receiver.Receive(packet.Payload, func(decoded frame.Frame) error {
-		kind, c.epoch = decoded.Kind, decoded.Epoch
-		for _, object := range decoded.Objects {
-			for _, component := range object.Components {
-				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-				if err != nil {
-					return err
-				}
-				payload = string(update.Payload.BytesCopy())
-			}
+	decoded, err := c.receiver.Decode(packet.Payload)
+	if err != nil {
+		t.Fatalf("frame not applied: %v", err)
+	}
+	kind, c.epoch = decoded.Kind, decoded.Epoch
+	for _, object := range decoded.Objects {
+		for _, component := range object.Components {
+			payload = string(component.Update.Payload.BytesCopy())
 		}
-		return nil
-	})
-	if err != nil || !applied {
-		t.Fatalf("frame not applied: applied=%v err=%v", applied, err)
 	}
 	return kind, payload
 }

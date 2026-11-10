@@ -134,6 +134,7 @@ type client struct {
 	seq      uint32
 	pending  map[uint32]chan *transport.Packet
 	refs     map[frame.ObjectRef]int64
+	decoder  *entitysync.Decoder // 增量的 subject 身份从基线继承，按顺序解
 	held     map[int64]*object
 	removes  []removal
 	creates  map[int64]int
@@ -185,10 +186,10 @@ func (c *client) start() {
 }
 
 func (c *client) consume(payload []byte) {
-	decoded, err := entitysync.DecodeFrame(payload, frame.DefaultLimits())
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	decoded, err := c.decoder.Decode(payload)
 	if err != nil {
 		c.failure = fmt.Errorf("%s: decode frame: %w", c.name, err)
 		return
@@ -199,11 +200,7 @@ func (c *client) consume(payload []byte) {
 		fields := map[string]any{}
 		ns := ""
 		for _, component := range obj.Components {
-			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-			if err != nil {
-				c.failure = fmt.Errorf("%s: decode update: %w", c.name, err)
-				return
-			}
+			update := component.Update
 			subject, ns = update.SubjectID, update.Namespace
 			if len(update.Payload.BytesCopy()) == 0 {
 				continue
@@ -403,7 +400,7 @@ func login(ctx context.Context, accounts *svcaccount.BusClient, name string, sid
 		return nil, err
 	}
 	c := &client{name: name, sid: sid, playerID: role.PlayerID, raw: raw,
-		pending: map[uint32]chan *transport.Packet{}, refs: map[frame.ObjectRef]int64{}, held: map[int64]*object{}, creates: map[int64]int{}}
+		pending: map[uint32]chan *transport.Packet{}, refs: map[frame.ObjectRef]int64{}, decoder: entitysync.NewDecoder(frame.DefaultLimits()), held: map[int64]*object{}, creates: map[int64]int{}}
 	if err := raw.WritePackets([]*transport.Packet{playertcp.AuthPacket(fmt.Sprintf("session:%d:%s", role.PlayerID, session.Token))}); err != nil {
 		raw.Close()
 		return nil, err

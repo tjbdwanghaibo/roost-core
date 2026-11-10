@@ -47,7 +47,10 @@ func TestGeneratedDAOChangesReachBothSyncModes(t *testing.T) {
 			if err = m.Flush(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			<-frames
+			decoder := entitysync.NewDecoder(frame.DefaultLimits())
+			if _, err = decoder.Decode(<-frames); err != nil {
+				t.Fatal(err)
+			}
 			name := nest.NewHandlerName("generated_set_" + mode.String())
 			nest.MustRegisterMemoryHandler(name, func(es []entity.IThreadSafeEntity, _ []any, _ ...nest.HandlerOption) (any, error) {
 				es[0].(*Avatar).state.SetValue(42)
@@ -66,14 +69,11 @@ func TestGeneratedDAOChangesReachBothSyncModes(t *testing.T) {
 			}
 			select {
 			case raw := <-frames:
-				f, err := entitysync.DecodeFrame(raw, frame.DefaultLimits())
+				f, err := decoder.Decode(raw)
 				if err != nil {
 					t.Fatal(err)
 				}
-				update, err := entitysync.DecodeSubjectUpdate(f.Objects[0].Components[0].Data, 0)
-				if err != nil {
-					t.Fatal(err)
-				}
+				update := f.Objects[0].Components[0].Update
 				if got := binary.LittleEndian.Uint64(update.Payload.BytesCopy()); got != 42 {
 					t.Fatalf("value %d", got)
 				}

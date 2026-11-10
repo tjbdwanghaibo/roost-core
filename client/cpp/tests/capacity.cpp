@@ -8,24 +8,27 @@
 #include <sys/resource.h>
 #endif
 using bytes = roost::bytes;
-static void number(bytes &b, uint64_t n, size_t width) {
-  for (size_t i = width; i > 0; --i)
-    b.push_back(uint8_t(n >> (8 * (i - 1))));
+static void varint(bytes &b, uint64_t n) {
+  for (; n >= 0x80; n >>= 7)
+    b.push_back(uint8_t(n | 0x80));
+  b.push_back(uint8_t(n));
 }
+static void text(bytes &b, const std::string &s) {
+  varint(b, s.size());
+  b.insert(b.end(), s.begin(), s.end());
+}
+// Frame protocol 2 with subject envelope v3 (see roost/sync.hpp).
 static bytes packet(uint32_t tick, bool full, bool create,
                     const std::vector<uint16_t> &ids,
                     std::vector<uint64_t> &versions) {
-  bytes out;
-  number(out, 0x43525031, 4);
-  number(out, 1, 2);
-  number(out, full ? 1 : 2, 1);
-  number(out, 0, 1);
-  number(out, 1, 8);
-  number(out, 1, 4);
-  number(out, tick, 4);
-  number(out, full ? 0 : tick - 1, 4);
-  number(out, 1, 2);
-  number(out, ids.size(), 2);
+  bytes out = {0x52, 0x46, 2, uint8_t(full ? 1 : 2)};
+  varint(out, 1);
+  varint(out, 1);
+  varint(out, tick);
+  if (!full)
+    varint(out, 1);
+  varint(out, 1);
+  varint(out, ids.size());
   for (auto id : ids) {
     uint64_t previous = versions[id]++;
     roost::dao::sync::SyncHeroDao dao;
@@ -33,35 +36,32 @@ static bytes packet(uint32_t tick, bool full, bool create,
     dao.set_sync_format(3);
     dao.mutable_level()->set_value(int(versions[id]));
     auto payload = dao.SerializeAsString();
-    bytes body;
-    number(body, 0x52535355, 4);
-    number(body, 2, 2);
-    number(body, create ? 1 : 0, 2);
-    number(body, id, 8);
-    number(body, 1, 4);
-    number(body, versions[id], 8);
-    number(body, create ? 0 : previous, 8);
-    number(body, 0, 8);
-    number(body, 0, 4);
-    number(body, 2, 2);
-    number(body, 0, 1);
-    number(body, 0, 1);
-    number(body, 1, 4);
-    number(body, 4, 2);
-    number(body, 7, 2);
-    number(body, payload.size(), 4);
-    const std::string names = "herodefault";
-    body.insert(body.end(), names.begin(), names.end());
+    bytes body = {uint8_t(create ? 1 : 0)};
+    if (create) {
+      varint(body, id);
+      varint(body, 1);
+      varint(body, versions[id]);
+      varint(body, 0);
+      varint(body, 2);
+      body.push_back(0);
+      varint(body, 1);
+      text(body, "hero");
+      text(body, "");
+    } else {
+      varint(body, previous);
+      varint(body, versions[id] - previous);
+    }
     body.insert(body.end(), payload.begin(), payload.end());
-    number(out, create ? 1 : 2, 1);
-    number(out, id, 2);
-    number(out, 1, 2);
-    number(out, create ? 1 : 0, 2);
-    number(out, 1, 2);
-    number(out, 1, 1);
-    number(out, 1, 2);
-    number(out, 1, 2);
-    number(out, body.size(), 4);
+    out.push_back(uint8_t(create ? 1 : 2));
+    varint(out, id);
+    varint(out, 1);
+    if (create)
+      varint(out, 1);
+    varint(out, 1);
+    out.push_back(1);
+    varint(out, 1);
+    varint(out, 1);
+    varint(out, body.size());
     out.insert(out.end(), body.begin(), body.end());
   }
   return out;

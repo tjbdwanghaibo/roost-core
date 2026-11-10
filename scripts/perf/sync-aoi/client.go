@@ -219,6 +219,8 @@ func runClient(c config) error {
 // 最后与 Interest 的真实可见集合逐项比较，不能只用“平均 50 个”掩盖漏发。
 func consume(conn net.Conn, c config, onBarrier func(), sessionID ...int64) (r clientResult) {
 	refs := make(map[frame.ObjectRef]objectState)
+	// decoder 是这条连接的接收端：增量的 subject 身份从基线继承，要按顺序解；下面的对象表与版本核对是测量客户端自己的复核。
+	decoder := entitysync.NewDecoder(frameLimits(c))
 	measured := make(map[int64]int64)
 	var epoch, clock uint32
 	for {
@@ -278,7 +280,7 @@ func consume(conn net.Conn, c config, onBarrier func(), sessionID ...int64) (r c
 			r.err = fmt.Errorf("unexpected packet kind %d", kind)
 			return
 		}
-		decoded, err := entitysync.DecodeFrame(raw, frameLimits(c))
+		decoded, err := decoder.Decode(raw)
 		if err != nil {
 			r.err = err
 			return
@@ -330,11 +332,7 @@ func consume(conn net.Conn, c config, onBarrier func(), sessionID ...int64) (r c
 				r.err = fmt.Errorf("unexpected component count %d", len(object.Components))
 				return
 			}
-			update, err := entitysync.DecodeSubjectUpdate(object.Components[0].Data, 0)
-			if err != nil {
-				r.err = err
-				return
-			}
+			update := object.Components[0].Update
 			if exists && current.ID != update.SubjectID {
 				r.err = fmt.Errorf("reference subject changed without create")
 				return

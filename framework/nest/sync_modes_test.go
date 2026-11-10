@@ -3,6 +3,7 @@ package nest
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,10 +23,7 @@ func syncTestManager(t *testing.T, e *rollbackTestEntity, mode entitysync.SyncMo
 	}
 	e.EnableSync(entity.EntitySyncCreateParam{Enabled: true, EntityID: e.ID(), Namespace: "test", Packer: entity.SubjectSyncPackFunc{Snapshot: packed, Delta: func(p entity.SyncProfile, _ uint64) (entity.FrozenSyncPayload, error) { return packed(p) }}})
 	frames := make(chan []byte, 32)
-	m, err := entitysync.NewManager(entitysync.ManagerConfig{Mode: mode, Interval: time.Hour, Transport: entitysync.TransportFunc(func(_ context.Context, _ entitysync.SessionID, p []byte) error {
-		frames <- append([]byte(nil), p...)
-		return nil
-	})})
+	m, err := entitysync.NewManager(entitysync.ManagerConfig{Mode: mode, Interval: time.Hour, Transport: decodingTransport(frames)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,19 +45,48 @@ func syncTestManager(t *testing.T, e *rollbackTestEntity, mode entitysync.SyncMo
 	t.Cleanup(func() { _ = m.Close(context.Background()) })
 	return m, frames, packs
 }
+
+// decodingTransport 是单会话的传输替身：每一帧按到达顺序交给同一个接收端解（增量的身份从基线继承，不能单独解），
+// 原始字节送进 frames，解出的结果用 received 按这份字节找回。
+func decodingTransport(frames chan []byte) entitysync.TransportFunc {
+	decoder := entitysync.NewDecoder(frame.DefaultLimits())
+	var mu sync.Mutex
+	return func(_ context.Context, _ entitysync.SessionID, p []byte) error {
+		mu.Lock()
+		defer mu.Unlock()
+		raw := append([]byte(nil), p...)
+		got, err := decoder.Decode(raw)
+		receivedFrames.Store(&raw[0], receivedResult{got, err})
+		frames <- raw
+		return nil
+	}
+}
+
+type receivedResult struct {
+	frame entitysync.ReceivedFrame
+	err   error
+}
+
+// receivedFrames：decodingTransport 送出的每一帧（按首字节地址）的解码结果。
+var receivedFrames sync.Map
+
+func received(t *testing.T, raw []byte) entitysync.ReceivedFrame {
+	t.Helper()
+	result, ok := receivedFrames.Load(&raw[0])
+	if !ok {
+		t.Fatal("frame did not come through decodingTransport")
+	}
+	if err := result.(receivedResult).err; err != nil {
+		t.Fatalf("decode frame: %v", err)
+	}
+	return result.(receivedResult).frame
+}
+
 func syncValue(t *testing.T, raw []byte) byte {
 	t.Helper()
-	f, err := entitysync.DecodeFrame(raw, frame.DefaultLimits())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, o := range f.Objects {
+	for _, o := range received(t, raw).Objects {
 		for _, c := range o.Components {
-			u, err := entitysync.DecodeSubjectUpdate(c.Data, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			return u.Payload.BytesCopy()[0]
+			return c.Update.Payload.BytesCopy()[0]
 		}
 	}
 	t.Fatal("missing update")

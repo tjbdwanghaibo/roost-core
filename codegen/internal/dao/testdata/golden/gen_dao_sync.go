@@ -7940,7 +7940,11 @@ func (patch *SyncHeroDao) Values() (map[string]any, error) {
 	if patch == nil || patch.SyncFormat != 3 {
 		return nil, fmt.Errorf("unsupported DAO sync format")
 	}
-	out := map[string]any{"_id": patch.EntityID}
+	out := map[string]any{}
+	// 增量补丁不带实体 ID（沿用基线的），这时没有 _id。
+	if patch.EntityID != 0 {
+		out["_id"] = patch.EntityID
+	}
 	if patch.Name != nil {
 		out["name"] = patch.Name.Value
 	}
@@ -7988,8 +7992,11 @@ func (patch *SyncHeroDao) Values() (map[string]any, error) {
 	}
 	return out, nil
 }
-func (d *HeroDao) marshalSyncPB(mask uint64) []byte {
-	patch := &SyncHeroDao{EntityID: d.id, SyncFormat: 3}
+func (d *HeroDao) marshalSyncPB(mask uint64) []byte { return d.marshalSyncPatch(mask, d.id) }
+
+// marshalSyncPatch 编码字段替换补丁；id 为 0 时不带实体 ID（增量：接收端沿用基线的）。
+func (d *HeroDao) marshalSyncPatch(mask uint64, id int64) []byte {
+	patch := &SyncHeroDao{EntityID: id, SyncFormat: 3}
 	changed := false
 	if mask&heroDaoFieldName != 0 {
 		patch.Name = &SyncHeroDaoNameField{Value: d.name}
@@ -8042,6 +8049,10 @@ func (d *HeroDao) applySyncPB(raw []byte) error {
 	patch, err := UnmarshalSyncHeroDao(raw)
 	if err != nil {
 		return err
+	}
+	// 增量补丁不带实体 ID，沿用这份 DAO 的。
+	if patch.EntityID == 0 {
+		patch.EntityID = d.id
 	}
 	if d.id != 0 && d.id != patch.EntityID {
 		return fmt.Errorf("DAO identity changed")
@@ -8407,13 +8418,14 @@ func applySyncHeroDaoMountField(patch *SyncHeroDaoMountField, previous SyncOptio
 	return previous, nil
 }
 
-// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。
+// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。它产出增量补丁：
+// 不带实体 ID，接收端沿用基线的（Apply 时 previous 的 EntityID）。
 func (d *HeroDao) MarshalSyncChanges(mask uint64) []byte {
 	return d.tracker.ReadSyncChanges(func(change *dataengine.SyncChange) []byte {
 		if change.Full() {
-			return d.marshalSyncPB(mask)
+			return d.marshalSyncPatch(mask, 0)
 		}
-		patch := &SyncHeroDao{EntityID: d.id, SyncFormat: 3}
+		patch := &SyncHeroDao{SyncFormat: 3}
 		changed := false
 		if mask&heroDaoFieldName != 0 {
 			patch.Name = captureSyncHeroDaoNameField(d, change.Child(dataengine.SyncStep{Field: 2}))
@@ -8467,7 +8479,8 @@ func ApplySyncHeroDao(patch, previous *SyncHeroDao) (*SyncHeroDao, error) {
 	if patch == nil || patch.SyncFormat != 3 {
 		return nil, fmt.Errorf("unsupported DAO sync format")
 	}
-	if previous != nil && (previous.SyncFormat != 3 || previous.EntityID != patch.EntityID) {
+	// 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+	if previous != nil && (previous.SyncFormat != 3 || patch.EntityID != 0 && previous.EntityID != patch.EntityID) {
 		return nil, fmt.Errorf("sync baseline identity or format mismatch")
 	}
 	next := &SyncHeroDao{EntityID: patch.EntityID, SyncFormat: 3}
@@ -8590,7 +8603,11 @@ func (patch *SyncShortKeysDao) Values() (map[string]any, error) {
 	if patch == nil || patch.SyncFormat != 3 {
 		return nil, fmt.Errorf("unsupported DAO sync format")
 	}
-	out := map[string]any{"_id": patch.EntityID}
+	out := map[string]any{}
+	// 增量补丁不带实体 ID（沿用基线的），这时没有 _id。
+	if patch.EntityID != 0 {
+		out["_id"] = patch.EntityID
+	}
 	if patch.Experience != nil {
 		out["1"] = patch.Experience.Value
 	}
@@ -8608,8 +8625,11 @@ func (patch *SyncShortKeysDao) Values() (map[string]any, error) {
 	}
 	return out, nil
 }
-func (d *ShortKeysDao) marshalSyncPB(mask uint64) []byte {
-	patch := &SyncShortKeysDao{EntityID: d.id, SyncFormat: 3}
+func (d *ShortKeysDao) marshalSyncPB(mask uint64) []byte { return d.marshalSyncPatch(mask, d.id) }
+
+// marshalSyncPatch 编码字段替换补丁；id 为 0 时不带实体 ID（增量：接收端沿用基线的）。
+func (d *ShortKeysDao) marshalSyncPatch(mask uint64, id int64) []byte {
+	patch := &SyncShortKeysDao{EntityID: id, SyncFormat: 3}
 	changed := false
 	if mask&shortKeysDaoFieldExperience != 0 {
 		patch.Experience = &SyncShortKeysDaoExperienceField{Value: d.experience}
@@ -8638,6 +8658,10 @@ func (d *ShortKeysDao) applySyncPB(raw []byte) error {
 	patch, err := UnmarshalSyncShortKeysDao(raw)
 	if err != nil {
 		return err
+	}
+	// 增量补丁不带实体 ID，沿用这份 DAO 的。
+	if patch.EntityID == 0 {
+		patch.EntityID = d.id
 	}
 	if d.id != 0 && d.id != patch.EntityID {
 		return fmt.Errorf("DAO identity changed")
@@ -8824,13 +8848,14 @@ func applySyncShortKeysDaoFollowersField(patch *SyncShortKeysDaoFollowersField, 
 	return next, nil
 }
 
-// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。
+// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。它产出增量补丁：
+// 不带实体 ID，接收端沿用基线的（Apply 时 previous 的 EntityID）。
 func (d *ShortKeysDao) MarshalSyncChanges(mask uint64) []byte {
 	return d.tracker.ReadSyncChanges(func(change *dataengine.SyncChange) []byte {
 		if change.Full() {
-			return d.marshalSyncPB(mask)
+			return d.marshalSyncPatch(mask, 0)
 		}
-		patch := &SyncShortKeysDao{EntityID: d.id, SyncFormat: 3}
+		patch := &SyncShortKeysDao{SyncFormat: 3}
 		changed := false
 		if mask&shortKeysDaoFieldExperience != 0 {
 			patch.Experience = captureSyncShortKeysDaoExperienceField(d, change.Child(dataengine.SyncStep{Field: 2}))
@@ -8860,7 +8885,8 @@ func ApplySyncShortKeysDao(patch, previous *SyncShortKeysDao) (*SyncShortKeysDao
 	if patch == nil || patch.SyncFormat != 3 {
 		return nil, fmt.Errorf("unsupported DAO sync format")
 	}
-	if previous != nil && (previous.SyncFormat != 3 || previous.EntityID != patch.EntityID) {
+	// 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+	if previous != nil && (previous.SyncFormat != 3 || patch.EntityID != 0 && previous.EntityID != patch.EntityID) {
 		return nil, fmt.Errorf("sync baseline identity or format mismatch")
 	}
 	next := &SyncShortKeysDao{EntityID: patch.EntityID, SyncFormat: 3}
@@ -8911,7 +8937,11 @@ func (patch *SyncLongKeysDao) Values() (map[string]any, error) {
 	if patch == nil || patch.SyncFormat != 3 {
 		return nil, fmt.Errorf("unsupported DAO sync format")
 	}
-	out := map[string]any{"_id": patch.EntityID}
+	out := map[string]any{}
+	// 增量补丁不带实体 ID（沿用基线的），这时没有 _id。
+	if patch.EntityID != 0 {
+		out["_id"] = patch.EntityID
+	}
 	if patch.Experience != nil {
 		out["experience"] = patch.Experience.Value
 	}
@@ -8929,8 +8959,11 @@ func (patch *SyncLongKeysDao) Values() (map[string]any, error) {
 	}
 	return out, nil
 }
-func (d *LongKeysDao) marshalSyncPB(mask uint64) []byte {
-	patch := &SyncLongKeysDao{EntityID: d.id, SyncFormat: 3}
+func (d *LongKeysDao) marshalSyncPB(mask uint64) []byte { return d.marshalSyncPatch(mask, d.id) }
+
+// marshalSyncPatch 编码字段替换补丁；id 为 0 时不带实体 ID（增量：接收端沿用基线的）。
+func (d *LongKeysDao) marshalSyncPatch(mask uint64, id int64) []byte {
+	patch := &SyncLongKeysDao{EntityID: id, SyncFormat: 3}
 	changed := false
 	if mask&longKeysDaoFieldExperience != 0 {
 		patch.Experience = &SyncLongKeysDaoExperienceField{Value: d.experience}
@@ -8959,6 +8992,10 @@ func (d *LongKeysDao) applySyncPB(raw []byte) error {
 	patch, err := UnmarshalSyncLongKeysDao(raw)
 	if err != nil {
 		return err
+	}
+	// 增量补丁不带实体 ID，沿用这份 DAO 的。
+	if patch.EntityID == 0 {
+		patch.EntityID = d.id
 	}
 	if d.id != 0 && d.id != patch.EntityID {
 		return fmt.Errorf("DAO identity changed")
@@ -9145,13 +9182,14 @@ func applySyncLongKeysDaoFollowersField(patch *SyncLongKeysDaoFollowersField, pr
 	return next, nil
 }
 
-// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。
+// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。它产出增量补丁：
+// 不带实体 ID，接收端沿用基线的（Apply 时 previous 的 EntityID）。
 func (d *LongKeysDao) MarshalSyncChanges(mask uint64) []byte {
 	return d.tracker.ReadSyncChanges(func(change *dataengine.SyncChange) []byte {
 		if change.Full() {
-			return d.marshalSyncPB(mask)
+			return d.marshalSyncPatch(mask, 0)
 		}
-		patch := &SyncLongKeysDao{EntityID: d.id, SyncFormat: 3}
+		patch := &SyncLongKeysDao{SyncFormat: 3}
 		changed := false
 		if mask&longKeysDaoFieldExperience != 0 {
 			patch.Experience = captureSyncLongKeysDaoExperienceField(d, change.Child(dataengine.SyncStep{Field: 2}))
@@ -9181,7 +9219,8 @@ func ApplySyncLongKeysDao(patch, previous *SyncLongKeysDao) (*SyncLongKeysDao, e
 	if patch == nil || patch.SyncFormat != 3 {
 		return nil, fmt.Errorf("unsupported DAO sync format")
 	}
-	if previous != nil && (previous.SyncFormat != 3 || previous.EntityID != patch.EntityID) {
+	// 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+	if previous != nil && (previous.SyncFormat != 3 || patch.EntityID != 0 && previous.EntityID != patch.EntityID) {
 		return nil, fmt.Errorf("sync baseline identity or format mismatch")
 	}
 	next := &SyncLongKeysDao{EntityID: patch.EntityID, SyncFormat: 3}
@@ -9232,7 +9271,11 @@ func (patch *SyncVarietyDao) Values() (map[string]any, error) {
 	if patch == nil || patch.SyncFormat != 3 {
 		return nil, fmt.Errorf("unsupported DAO sync format")
 	}
-	out := map[string]any{"_id": patch.EntityID}
+	out := map[string]any{}
+	// 增量补丁不带实体 ID（沿用基线的），这时没有 _id。
+	if patch.EntityID != 0 {
+		out["_id"] = patch.EntityID
+	}
 	if patch.SyncOnly != nil {
 		out["sync_only"] = patch.SyncOnly.Value
 	}
@@ -9271,8 +9314,11 @@ func (patch *SyncVarietyDao) Values() (map[string]any, error) {
 	}
 	return out, nil
 }
-func (d *VarietyDao) marshalSyncPB(mask uint64) []byte {
-	patch := &SyncVarietyDao{EntityID: d.id, SyncFormat: 3}
+func (d *VarietyDao) marshalSyncPB(mask uint64) []byte { return d.marshalSyncPatch(mask, d.id) }
+
+// marshalSyncPatch 编码字段替换补丁；id 为 0 时不带实体 ID（增量：接收端沿用基线的）。
+func (d *VarietyDao) marshalSyncPatch(mask uint64, id int64) []byte {
+	patch := &SyncVarietyDao{EntityID: id, SyncFormat: 3}
 	changed := false
 	if mask&varietyDaoFieldSyncOnly != 0 {
 		patch.SyncOnly = &SyncVarietyDaoSyncOnlyField{Value: d.syncOnly}
@@ -9319,6 +9365,10 @@ func (d *VarietyDao) applySyncPB(raw []byte) error {
 	patch, err := UnmarshalSyncVarietyDao(raw)
 	if err != nil {
 		return err
+	}
+	// 增量补丁不带实体 ID，沿用这份 DAO 的。
+	if patch.EntityID == 0 {
+		patch.EntityID = d.id
 	}
 	if d.id != 0 && d.id != patch.EntityID {
 		return fmt.Errorf("DAO identity changed")
@@ -9572,13 +9622,14 @@ func applySyncVarietyDaoCounterField(patch *SyncVarietyDaoCounterField, previous
 	return patch.Value, nil
 }
 
-// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。
+// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。它产出增量补丁：
+// 不带实体 ID，接收端沿用基线的（Apply 时 previous 的 EntityID）。
 func (d *VarietyDao) MarshalSyncChanges(mask uint64) []byte {
 	return d.tracker.ReadSyncChanges(func(change *dataengine.SyncChange) []byte {
 		if change.Full() {
-			return d.marshalSyncPB(mask)
+			return d.marshalSyncPatch(mask, 0)
 		}
-		patch := &SyncVarietyDao{EntityID: d.id, SyncFormat: 3}
+		patch := &SyncVarietyDao{SyncFormat: 3}
 		changed := false
 		if mask&varietyDaoFieldSyncOnly != 0 {
 			patch.SyncOnly = captureSyncVarietyDaoSyncOnlyField(d, change.Child(dataengine.SyncStep{Field: 3}))
@@ -9628,7 +9679,8 @@ func ApplySyncVarietyDao(patch, previous *SyncVarietyDao) (*SyncVarietyDao, erro
 	if patch == nil || patch.SyncFormat != 3 {
 		return nil, fmt.Errorf("unsupported DAO sync format")
 	}
-	if previous != nil && (previous.SyncFormat != 3 || previous.EntityID != patch.EntityID) {
+	// 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+	if previous != nil && (previous.SyncFormat != 3 || patch.EntityID != 0 && previous.EntityID != patch.EntityID) {
 		return nil, fmt.Errorf("sync baseline identity or format mismatch")
 	}
 	next := &SyncVarietyDao{EntityID: patch.EntityID, SyncFormat: 3}
@@ -9739,7 +9791,11 @@ func (patch *SyncWraithDao) Values() (map[string]any, error) {
 	if patch == nil || patch.SyncFormat != 3 {
 		return nil, fmt.Errorf("unsupported DAO sync format")
 	}
-	out := map[string]any{"_id": patch.EntityID}
+	out := map[string]any{}
+	// 增量补丁不带实体 ID（沿用基线的），这时没有 _id。
+	if patch.EntityID != 0 {
+		out["_id"] = patch.EntityID
+	}
 	if patch.PosX != nil {
 		out["pos_x"] = patch.PosX.Value
 	}
@@ -9760,8 +9816,11 @@ func (patch *SyncWraithDao) Values() (map[string]any, error) {
 	}
 	return out, nil
 }
-func (d *WraithDao) marshalSyncPB(mask uint64) []byte {
-	patch := &SyncWraithDao{EntityID: d.id, SyncFormat: 3}
+func (d *WraithDao) marshalSyncPB(mask uint64) []byte { return d.marshalSyncPatch(mask, d.id) }
+
+// marshalSyncPatch 编码字段替换补丁；id 为 0 时不带实体 ID（增量：接收端沿用基线的）。
+func (d *WraithDao) marshalSyncPatch(mask uint64, id int64) []byte {
+	patch := &SyncWraithDao{EntityID: id, SyncFormat: 3}
 	changed := false
 	if mask&wraithDaoFieldPosX != 0 {
 		patch.PosX = &SyncWraithDaoPosXField{Value: d.posX}
@@ -9792,6 +9851,10 @@ func (d *WraithDao) applySyncPB(raw []byte) error {
 	patch, err := UnmarshalSyncWraithDao(raw)
 	if err != nil {
 		return err
+	}
+	// 增量补丁不带实体 ID，沿用这份 DAO 的。
+	if patch.EntityID == 0 {
+		patch.EntityID = d.id
 	}
 	if d.id != 0 && d.id != patch.EntityID {
 		return fmt.Errorf("DAO identity changed")
@@ -9940,13 +10003,14 @@ func applySyncWraithDaoTrailField(patch *SyncWraithDaoTrailField, previous []int
 	return next, nil
 }
 
-// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。
+// MarshalSyncChanges 只读取 setter 标记的路径；不编码、解码或比较整份历史快照。它产出增量补丁：
+// 不带实体 ID，接收端沿用基线的（Apply 时 previous 的 EntityID）。
 func (d *WraithDao) MarshalSyncChanges(mask uint64) []byte {
 	return d.tracker.ReadSyncChanges(func(change *dataengine.SyncChange) []byte {
 		if change.Full() {
-			return d.marshalSyncPB(mask)
+			return d.marshalSyncPatch(mask, 0)
 		}
-		patch := &SyncWraithDao{EntityID: d.id, SyncFormat: 3}
+		patch := &SyncWraithDao{SyncFormat: 3}
 		changed := false
 		if mask&wraithDaoFieldPosX != 0 {
 			patch.PosX = captureSyncWraithDaoPosXField(d, change.Child(dataengine.SyncStep{Field: 2}))
@@ -9980,7 +10044,8 @@ func ApplySyncWraithDao(patch, previous *SyncWraithDao) (*SyncWraithDao, error) 
 	if patch == nil || patch.SyncFormat != 3 {
 		return nil, fmt.Errorf("unsupported DAO sync format")
 	}
-	if previous != nil && (previous.SyncFormat != 3 || previous.EntityID != patch.EntityID) {
+	// 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+	if previous != nil && (previous.SyncFormat != 3 || patch.EntityID != 0 && previous.EntityID != patch.EntityID) {
 		return nil, fmt.Errorf("sync baseline identity or format mismatch")
 	}
 	next := &SyncWraithDao{EntityID: patch.EntityID, SyncFormat: 3}

@@ -137,14 +137,9 @@ namespace Roost.Client
                         next.Remove(key); continue;
                     }
                     if (component.SchemaVersion != 1) throw new InvalidDataException("Unsupported EntitySync envelope schema.");
-                    var update = SubjectUpdate.Decode(component.Data);
                     next.TryGetValue(key, out var previous);
-                    bool sameIdentity = previous != null && previous.Update.SubjectId == update.SubjectId &&
-                        previous.Update.SubjectKind == update.SubjectKind && previous.Update.Namespace == update.Namespace &&
-                        previous.Update.Profile == update.Profile && previous.Update.Encoding == update.Encoding &&
-                        previous.Update.SchemaVersion == update.SchemaVersion && previous.Update.Lod == update.Lod;
-                    if (!update.Full && (!sameIdentity || previous!.Update.Version != update.BaseVersion || update.Version <= update.BaseVersion))
-                        throw new InvalidDataException("Entity subject baseline gap.");
+                    // 增量从同一对象、同一组件上的基线继承身份并核对BaseVersion（不连续即抛出，等新的Full）。
+                    var update = SubjectUpdate.Decode(component.Data, previous?.Update);
                     if (!codecs.TryGetValue((update.Namespace, update.Profile, update.Encoding, update.SchemaVersion), out var decode))
                         throw new InvalidDataException($"No codec registered for EntitySync namespace={update.Namespace}, profile={update.Profile}, encoding={update.Encoding}, schema={update.SchemaVersion}.");
                     object value = update.Payload.Length == 0 && !update.Full ? previous!.Value : decode(update, update.Full ? null : previous?.Value);

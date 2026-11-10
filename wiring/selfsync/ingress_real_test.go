@@ -223,7 +223,7 @@ func newGateSelfHarness(t *testing.T, configure func(*gateway.Config)) *gateSelf
 // gateClientConn 是经 Gate 连上的玩家：先读 ACK，之后只认 Sync 推送（跳过占位推送）。
 type gateClientConn struct {
 	connection net.Conn
-	receiver   *frame.Receiver
+	receiver   *entitysync.Decoder
 }
 
 func (h *gateSelfHarness) dial(t *testing.T, playerID int64) *gateClientConn {
@@ -240,7 +240,7 @@ func (h *gateSelfHarness) dial(t *testing.T, playerID int64) *gateClientConn {
 	if ack, err := wire.Read(connection, wire.DefaultMaxPayload); err != nil || ack.MsgID != 0 || ack.Seq != 1 {
 		t.Fatalf("authentication ACK = %+v, %v", ack, err)
 	}
-	return &gateClientConn{connection: connection, receiver: frame.NewReceiver(frame.Limits{})}
+	return &gateClientConn{connection: connection, receiver: entitysync.NewDecoder(frame.Limits{})}
 }
 
 // next 在 wait 内读下一个自身视图推送。closed 表示连接已被服务端关闭；两者都为零值表示 wait 内没有推送。
@@ -265,25 +265,20 @@ func (c *gateClientConn) next(t *testing.T, wait time.Duration) (kind frame.Kind
 		if packet.Flags != wire.FlagPush|wire.FlagSync || packet.MsgID != testMessageID {
 			t.Fatalf("packet %+v is not a self-view push", packet)
 		}
-		applied, err := c.receiver.Receive(packet.Payload, func(decoded frame.Frame) error {
-			kind = decoded.Kind
-			for _, object := range decoded.Objects {
-				for _, component := range object.Components {
-					update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-					if err != nil {
-						return err
-					}
-					state = string(update.Payload.BytesCopy())
-				}
-			}
-			return nil
-		})
+		decoded, err := c.receiver.Decode(packet.Payload)
+		if errors.Is(err, entitysync.ErrStaleFrame) {
+			continue
+		}
 		if err != nil {
 			t.Fatalf("self-view frame refused by the client's receiver: %v", err)
 		}
-		if applied {
-			return kind, state, true, false
+		kind = decoded.Kind
+		for _, object := range decoded.Objects {
+			for _, component := range object.Components {
+				state = string(component.Update.Payload.BytesCopy())
+			}
 		}
+		return kind, state, true, false
 	}
 }
 

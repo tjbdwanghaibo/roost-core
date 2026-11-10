@@ -592,7 +592,7 @@ const useCollectionDelta = true
 
 type selfClient struct {
 	conn     net.Conn
-	receiver *frame.Receiver
+	receiver *entitysync.Decoder
 	state    *db.PlayerDao
 	seq      uint32
 	log      []string
@@ -612,7 +612,7 @@ func dialSelf(t *testing.T, addr string, player int64) *selfClient {
 	if ack, err := wire.Read(conn, wire.DefaultMaxPayload); err != nil || ack.MsgID != 0 || ack.Seq != 1 {
 		t.Fatalf("login ack %+v %v", ack, err)
 	}
-	return &selfClient{conn: conn, receiver: frame.NewReceiver(frame.Limits{}), state: db.NewPlayerDao(), seq: 1, log: []string{"ack"}}
+	return &selfClient{conn: conn, receiver: entitysync.NewDecoder(frame.Limits{}), state: db.NewPlayerDao(), seq: 1, log: []string{"ack"}}
 }
 
 func (c *selfClient) next(t *testing.T) *wire.Packet {
@@ -629,39 +629,36 @@ func (c *selfClient) next(t *testing.T) *wire.Packet {
 	if packet.MsgID != msgid.MsgSelfSync {
 		t.Fatalf("sync push on message %d, want msgid.MsgSelfSync", packet.MsgID)
 	}
-	var kind frame.Kind
-	applied, err := c.receiver.Receive(packet.Payload, func(decoded frame.Frame) error {
-		kind = decoded.Kind
-		for _, object := range decoded.Objects {
-			for _, component := range object.Components {
-				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-				if err != nil {
-					return err
-				}
-				if update.Profile.Key != "self" {
-					return fmt.Errorf("profile %q, want self", update.Profile.Key)
-				}
-				patch, err := db.UnmarshalSyncPlayerDao(update.Payload.BytesCopy())
-                if err != nil { return err }
-                if patch.Gold != nil && patch.Gold.Value==7 && !update.Full && useCollectionDelta {
-                    if patch.Items==nil || !patch.Items.Delta || patch.Friends==nil || !patch.Friends.Delta { return fmt.Errorf("expected collection patches") }
-                }
-                if err := c.state.ApplySync(update.Payload.BytesCopy()); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
+	decoded, err := c.receiver.Decode(packet.Payload)
 	switch {
 	case errors.Is(err, frame.ErrBaselineMismatch):
 		c.log = append(c.log, "delta before full (skipped)")
+		return packet
 	case err != nil:
 		t.Fatalf("decode: %v", err)
-	case applied:
-		name := map[frame.Kind]string{frame.Full: "full", frame.Delta: "delta"}[kind]
-		c.log = append(c.log, fmt.Sprintf("%s gold=%d", name, c.state.GetGold()))
 	}
+	for _, object := range decoded.Objects {
+		for _, component := range object.Components {
+			update := component.Update
+			if update.Profile.Key != "self" {
+				t.Fatalf("profile %q, want self", update.Profile.Key)
+			}
+			patch, err := db.UnmarshalSyncPlayerDao(update.Payload.BytesCopy())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if patch.Gold != nil && patch.Gold.Value == 7 && !update.Full && useCollectionDelta {
+				if patch.Items == nil || !patch.Items.Delta || patch.Friends == nil || !patch.Friends.Delta {
+					t.Fatal("expected collection patches")
+				}
+			}
+			if err := c.state.ApplySync(update.Payload.BytesCopy()); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	name := map[frame.Kind]string{frame.Full: "full", frame.Delta: "delta"}[decoded.Kind]
+	c.log = append(c.log, fmt.Sprintf("%s gold=%d", name, c.state.GetGold()))
 	return packet
 }
 

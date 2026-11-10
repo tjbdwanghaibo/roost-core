@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent CRP/RSSS wrapper over Go generated DAO protobuf goldens."""
+"""Independent frame protocol 2 / subject envelope v3 wrapper over Go generated DAO protobuf goldens."""
 import json
 import pathlib
 import struct
@@ -11,61 +11,47 @@ repo = pathlib.Path(__file__).resolve().parents[3]
 rows = json.loads((repo / "client/spec/dao-sync.json").read_text())
 
 
+def varint(n):
+    out = bytearray()
+    while n >= 0x80:
+        out.append((n & 0x7F) | 0x80)
+        n >>= 7
+    out.append(n)
+    return bytes(out)
+
+
 def packet(tick, payload=None):
-    header = struct.pack(
-        "!4sHBBQIIIHH",
-        b"CRP1",
-        1,
-        1 if tick == 1 else 2,
-        0,
-        1,
-        1,
-        tick,
-        0 if tick == 1 else tick - 1,
-        1,
-        1,
-    )
+    # Frame protocol 2: magic "RF", protocol 2, kind; varints stream, epoch, tick, [tick-base], schema, objects.
+    header = b"RF" + bytes([2, 1 if tick == 1 else 2]) + varint(1) + varint(1) + varint(tick)
+    if tick != 1:
+        header += varint(1)
+    header += varint(1) + varint(1)
     if tick == 3:
-        return header + struct.pack("!BHHHH", 3, 1, 1, 0, 0)
-    body = (
-        struct.pack(
-            "!4sHHQ I QQQ I HBB I HHI",
-            b"RSSU",
-            2,
-            1 if tick == 1 else 0,
-            9007199254740993,
-            1,
-            tick,
-            0 if tick == 1 else tick - 1,
-            0,
-            0,
-            2,
-            0,
-            0,
-            1,
-            4,
-            7,
-            len(payload),
+        return header + bytes([3]) + varint(1) + varint(1)
+    if tick == 1:
+        # Full envelope: flags 1; id, kind, version, base, encoding 2, lod 0, schema 1, "hero", "" (default).
+        body = (
+            bytes([1])
+            + varint(9007199254740993)
+            + varint(1)
+            + varint(tick)
+            + varint(0)
+            + varint(2)
+            + bytes([0])
+            + varint(1)
+            + varint(4)
+            + b"hero"
+            + varint(0)
+            + payload
         )
-        + b"herodefault"
-        + payload
-    )
-    return (
-        header
-        + struct.pack(
-            "!BHHHHBHHI",
-            1 if tick == 1 else 2,
-            1,
-            1,
-            1 if tick == 1 else 0,
-            1,
-            1,
-            1,
-            1,
-            len(body),
-        )
-        + body
-    )
+    else:
+        # Delta envelope: flags 0; base, version - base; identity comes from the baseline.
+        body = bytes([0]) + varint(tick - 1) + varint(1) + payload
+    obj = bytes([1 if tick == 1 else 2]) + varint(1) + varint(1)
+    if tick == 1:
+        obj += varint(1)
+    obj += varint(1) + bytes([1]) + varint(1) + varint(1) + varint(len(body)) + body
+    return header + obj
 
 
 if __name__ == "__main__":

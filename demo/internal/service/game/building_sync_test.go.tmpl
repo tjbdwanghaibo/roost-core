@@ -33,7 +33,7 @@ import (
 
 // 建筑实体化与同步（可编辑地形方案 §27、§27.10）端到端：建筑是普通的同步实体，走与 Player / Monster 相同的 entitysync
 // 链路，订阅跟随玩家与怪（场景的 Manager、提交观察者 on_change、场景主视野、与怪相同的 ShowSubject / HideSubject）。客户端是 terrain_sync_test.go 的 Go 接收端
-// （frame.Receiver + 生成的 ApplySyncBuildingDao，与 C# / C++ 同一协议），从回环 socket 读帧。存储是 terrain_test.go 的
+// （entitysync.Decoder + 生成的 ApplySyncBuildingDao，与 C# / C++ 同一协议），从回环 socket 读帧。存储是 terrain_test.go 的
 // 离线替身；放置规则与参数槽来自工程的配置数据（configs/data，建筑配置表 building / building_param）。
 
 var demoConfigOnce sync.Once

@@ -56,10 +56,10 @@ func (partyEngine) NestOptions() []nest.NestOption {
 
 const partyNow int64 = 1800000000000
 
-// partyClient 是一条玩家连接上的客户端：用正式 Receiver 校验帧序与基线，按命名空间把对象分到两路——
+// partyClient 是一条玩家连接上的客户端：用正式 Decoder 校验帧序与基线（增量的身份从基线继承），按命名空间把对象分到两路——
 // party_room 是房间（记分板），player 是玩家自己（自身视图）。
 type partyClient struct {
-	receiver *frame.Receiver
+	receiver *entitysync.Decoder
 	boards   map[frame.ObjectRef]string         // 房间视图：记分板原文
 	selves   map[frame.ObjectRef]map[string]any // 自身视图：Player 的同步字段
 	fulls    int
@@ -85,67 +85,77 @@ func (w *partyWire) PushSyncPlayer(_ context.Context, player int64, messageID ui
 		c.err = fmt.Errorf("sync push on message %d, want the self_sync push id %d", messageID, msgid.MsgSelfSync)
 		return nil
 	}
-	if _, err := c.receiver.Receive(raw, func(f frame.Frame) error {
-		if f.Kind == frame.Full {
-			clear(c.boards)
-			clear(c.selves)
-			c.fulls++
-		}
-		for _, object := range f.Objects {
-			if object.Operation == frame.ObjectRemove {
-				delete(c.boards, object.Ref)
-				delete(c.selves, object.Ref)
-				continue
-			}
-			for _, component := range object.Components {
-				update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-				if err != nil {
-					return err
-				}
-				// 同一条连接上的两路按命名空间 + 视图键区分，客户端不需要第二个推送编号。
-				switch update.Namespace + "/" + update.Profile.Key {
-				case "party_room/" + roomentity.RoomSyncProfile.Key:
-					patch, err := db.UnmarshalSyncPartyRoomDao(update.Payload.BytesCopy())
-					if err != nil {
-						return err
-					}
-					doc, err := patch.Values()
-					if err != nil {
-						return err
-					}
-					// 视图白名单：成员只能收到公开记分板（加文档主键），State（种子、星星时刻、回执）一个字段都不能出现。
-					board, ok := doc["board"].(string)
-					if _, id := doc["_id"]; !ok || !id || len(doc) != 2 {
-						return fmt.Errorf("room view leaked or lost fields: %v", doc)
-					}
-					c.boards[object.Ref] = board
-				case "player/self":
-					patch, err := db.UnmarshalSyncPlayerDao(update.Payload.BytesCopy())
-					if err != nil {
-						return err
-					}
-					doc, err := patch.Values()
-					if err != nil {
-						return err
-					}
-					if update.SubjectID != entityOf(player) {
-						return fmt.Errorf("player %d received the self view of entity %d", player, update.SubjectID)
-					}
-					merged := c.selves[object.Ref]
-					if merged == nil || update.Full {
-						merged = map[string]any{}
-					}
-					for key, value := range doc {
-						merged[key] = value
-					}
-					c.selves[object.Ref] = merged
-				default:
-					return fmt.Errorf("unexpected sync stream %s/%s", update.Namespace, update.Profile.Key)
-				}
-			}
-		}
+	received, err := c.receiver.Decode(raw)
+	if errors.Is(err, entitysync.ErrStaleFrame) {
 		return nil
-	}); err != nil {
+	}
+	if err == nil {
+		err = func(f entitysync.ReceivedFrame) error {
+			if f.Kind == frame.Full {
+				clear(c.boards)
+				clear(c.selves)
+				c.fulls++
+			}
+			for _, object := range f.Objects {
+				if object.Operation == frame.ObjectRemove {
+					delete(c.boards, object.Ref)
+					delete(c.selves, object.Ref)
+					continue
+				}
+				for _, component := range object.Components {
+					update := component.Update
+					// 同一条连接上的两路按命名空间 + 视图键区分，客户端不需要第二个推送编号。
+					switch update.Namespace + "/" + update.Profile.Key {
+					case "party_room/" + roomentity.RoomSyncProfile.Key:
+						patch, err := db.UnmarshalSyncPartyRoomDao(update.Payload.BytesCopy())
+						if err != nil {
+							return err
+						}
+						doc, err := patch.Values()
+						if err != nil {
+							return err
+						}
+						// 视图白名单：成员只能收到公开记分板（全量另加文档主键，增量补丁可以不带主键、沿用基线的），
+						// State（种子、星星时刻、回执）一个字段都不能出现。
+						board, ok := doc["board"].(string)
+						_, id := doc["_id"]
+						fields := 1
+						if id {
+							fields++
+						}
+						if !ok || update.Full && !id || len(doc) != fields {
+							return fmt.Errorf("room view leaked or lost fields: %v", doc)
+						}
+						c.boards[object.Ref] = board
+					case "player/self":
+						patch, err := db.UnmarshalSyncPlayerDao(update.Payload.BytesCopy())
+						if err != nil {
+							return err
+						}
+						doc, err := patch.Values()
+						if err != nil {
+							return err
+						}
+						if update.SubjectID != entityOf(player) {
+							return fmt.Errorf("player %d received the self view of entity %d", player, update.SubjectID)
+						}
+						merged := c.selves[object.Ref]
+						if merged == nil || update.Full {
+							merged = map[string]any{}
+						}
+						for key, value := range doc {
+							merged[key] = value
+						}
+						c.selves[object.Ref] = merged
+					default:
+						return fmt.Errorf("unexpected sync stream %s/%s", update.Namespace, update.Profile.Key)
+					}
+				}
+			}
+			return nil
+		}(received)
+	}
+	if err != nil {
 		c.err = err
 	}
 	return nil
@@ -174,7 +184,7 @@ func (w *partyWire) CloseSessions(player int64, _ error) int {
 func (w *partyWire) open(player int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.clients[player] = &partyClient{receiver: frame.NewReceiver(frame.DefaultLimits()), boards: map[frame.ObjectRef]string{}, selves: map[frame.ObjectRef]map[string]any{}}
+	w.clients[player] = &partyClient{receiver: entitysync.NewDecoder(frame.DefaultLimits()), boards: map[frame.ObjectRef]string{}, selves: map[frame.ObjectRef]map[string]any{}}
 }
 
 func (w *partyWire) close(player int64) {

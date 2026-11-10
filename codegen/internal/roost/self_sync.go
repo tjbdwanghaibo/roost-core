@@ -120,7 +120,7 @@ package protocoldef
 
 // SelfSyncPush 是 access.player.self_sync 的推送编号：服务端用 PushSyncPlayer 以 Sync 载荷类型推原始
 // entity-sync 帧（不经这个 PB 外壳），客户端按包头载荷类型 + msgid.MsgSelfSync 交给帧解码器
-// （frame.Receiver + entitysync.DecodeSubjectUpdate，见 wiring/selfsync 的客户端示例）。
+// （entitysync.Decoder，见 wiring/selfsync 的客户端示例）。
 // 这个文件归项目所有，只在缺失时生成一次；编号与别的协议冲突时直接改下面的 id。
 type SelfSyncPush struct {
 	Payload []byte `+"`pb:\"1\"`"+`

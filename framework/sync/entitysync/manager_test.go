@@ -22,14 +22,18 @@ import (
 // 下面每条都是一个会话层面的承诺：它自己收到了什么、别人的失败与它无关、订阅撤掉
 // 不以"通知到它"为前提。
 
-// recordingTransport is the wire end a test can watch and break.
+// recordingTransport is the wire end a test can watch and break. Every
+// admitted frame is also decoded in order by that session's Decoder, the way
+// a client would (a delta carries no identity: it needs the stream's history);
+// decodeFrame finds the result by the recorded bytes.
 type recordingTransport struct {
-	mu     sync.Mutex
-	frames map[SessionID][][]byte
-	fail   map[SessionID]error
-	retry  error
-	opened map[SessionID]int
-	closed map[SessionID]int
+	mu       sync.Mutex
+	frames   map[SessionID][][]byte
+	decoders map[SessionID]*Decoder
+	fail     map[SessionID]error
+	retry    error
+	opened   map[SessionID]int
+	closed   map[SessionID]int
 }
 
 func newRecordingTransport() *recordingTransport {
@@ -45,9 +49,31 @@ func (t *recordingTransport) Push(_ context.Context, session SessionID, frame []
 	if err := t.fail[session]; err != nil {
 		return err
 	}
-	t.frames[session] = append(t.frames[session], append([]byte(nil), frame...))
+	recorded := append([]byte(nil), frame...)
+	t.frames[session] = append(t.frames[session], recorded)
+	if t.decoders == nil {
+		t.decoders = make(map[SessionID]*Decoder)
+	}
+	decoder := t.decoders[session]
+	if decoder == nil {
+		decoder = NewDecoder(frameLimitsForDecoding)
+		t.decoders[session] = decoder
+	}
+	received, err := decoder.Decode(recorded)
+	receivedFrames.Store(&recorded[0], receivedResult{received, err})
 	return nil
 }
+
+// frameLimitsForDecoding 是测试接收端的上限：放宽对象数，覆盖测试里调大的 Limits。
+var frameLimitsForDecoding = frame.Limits{MaxObjects: 1 << 15, MaxComponentsPerObject: 64, MaxComponentBytes: 1 << 20, MaxFrameBytes: 16 << 20}
+
+type receivedResult struct {
+	frame ReceivedFrame
+	err   error
+}
+
+// receivedFrames：recordingTransport 记录的每一帧（按首字节地址）在它的会话 Decoder 上的解码结果。
+var receivedFrames sync.Map
 
 func (t *recordingTransport) SessionOpened(session SessionID) error {
 	t.mu.Lock()
@@ -85,28 +111,34 @@ func (t *recordingTransport) setRetry(err error) {
 // decoded is one frame as a client sees it: per subject, the operation and
 // the update it carried.
 type decoded struct {
-	wire    frame.Frame
-	objects map[int64]frame.ObjectOperation
-	updates map[int64]entity.SubjectSyncUpdate
+	wire     frame.Frame
+	objects  map[int64]frame.ObjectOperation
+	updates  map[int64]entity.SubjectSyncUpdate
+	subjects map[frame.ObjectRef]int64
 }
 
 func decodeFrame(t *testing.T, data []byte) decoded {
 	t.Helper()
-	got, err := DecodeFrame(data, frame.DefaultLimits())
+	got, err := DecodeFrame(data, frameLimitsForDecoding)
 	if err != nil {
 		t.Fatalf("decode frame: %v", err)
 	}
-	out := decoded{wire: got, objects: make(map[int64]frame.ObjectOperation), updates: make(map[int64]entity.SubjectSyncUpdate)}
-	refs := make(map[frame.ObjectRef]int64)
-	for _, object := range got.Objects {
+	var received ReceivedFrame
+	if result, ok := receivedFrames.Load(&data[0]); ok {
+		received, err = result.(receivedResult).frame, result.(receivedResult).err
+	} else {
+		// 不是 recordingTransport 记下的帧：只能独立解（全量帧，或只看对象表的调用）。
+		received, err = NewDecoder(frameLimitsForDecoding).Decode(data)
+	}
+	if err != nil {
+		t.Fatalf("decode subject updates: %v", err)
+	}
+	out := decoded{wire: got, objects: make(map[int64]frame.ObjectOperation), updates: make(map[int64]entity.SubjectSyncUpdate), subjects: make(map[frame.ObjectRef]int64)}
+	for _, object := range received.Objects {
+		out.subjects[object.Ref] = object.SubjectID
 		for _, component := range object.Components {
-			update, err := DecodeSubjectUpdate(component.Data, 0)
-			if err != nil {
-				t.Fatalf("decode subject update: %v", err)
-			}
-			out.objects[update.SubjectID] = object.Operation
-			out.updates[update.SubjectID] = update
-			refs[object.Ref] = update.SubjectID
+			out.objects[component.Update.SubjectID] = object.Operation
+			out.updates[component.Update.SubjectID] = component.Update
 		}
 		if object.Operation == frame.ObjectRemove {
 			// A remove names only the ref; the test records it under the ref's id.

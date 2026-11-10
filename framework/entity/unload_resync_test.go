@@ -94,6 +94,7 @@ type resyncHarness struct {
 	sync    *entitysync.Manager
 	loader  *scriptedLoader
 	frames  chan []byte
+	decoder *entitysync.Decoder // 订阅者的接收端，按顺序解帧
 	runs    atomic.Int32
 	stop    func(context.Context) error
 	// unhookLoader 注销 loader（DataEngine Runtime 停机时的动作），取消在途共享加载（RR-20260926-54）。
@@ -155,13 +156,16 @@ func (h *resyncHarness) resident(id int64, label string, subscribe bool) *resync
 	return value
 }
 
-func (h *resyncHarness) nextFrame(timeout time.Duration, what string) frame.Frame {
+func (h *resyncHarness) nextFrame(timeout time.Duration, what string) entitysync.ReceivedFrame {
 	h.t.Helper()
+	if h.decoder == nil {
+		h.decoder = entitysync.NewDecoder(frame.DefaultLimits())
+	}
 	deadline := time.Now().Add(timeout)
 	for {
 		select {
 		case raw := <-h.frames:
-			decoded, err := entitysync.DecodeFrame(raw, frame.DefaultLimits())
+			decoded, err := h.decoder.Decode(raw)
 			if err != nil {
 				h.t.Fatal(err)
 			}
@@ -185,15 +189,12 @@ func (h *resyncHarness) unload(value entity.IThreadSafeEntity) {
 	}
 }
 
-func payloadOf(t *testing.T, object frame.ObjectDelta) string {
+func payloadOf(t *testing.T, object entitysync.ReceivedObject) string {
 	t.Helper()
 	if len(object.Components) != 1 {
 		t.Fatalf("object carries %d components", len(object.Components))
 	}
-	update, err := entitysync.DecodeSubjectUpdate(object.Components[0].Data, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	update := object.Components[0].Update
 	if !update.Full {
 		t.Fatalf("update is not full: %+v", update)
 	}

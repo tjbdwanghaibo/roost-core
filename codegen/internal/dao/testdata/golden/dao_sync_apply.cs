@@ -228,8 +228,9 @@ next.Delta=false;next.Removed.Clear();return next;
 // 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
 public static SyncHeroDao Apply(this SyncHeroDao patch,SyncHeroDao previous){
  if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
- if(previous!=null&&(previous.SyncFormat!=3||previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
- var next=previous==null?new SyncHeroDao():previous.Clone();next.EntityId=patch.EntityId;next.SyncFormat=3;
+ // 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+ if(previous!=null&&(previous.SyncFormat!=3||patch.EntityId!=0&&previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
+ var next=previous==null?new SyncHeroDao():previous.Clone();if(previous==null)next.EntityId=patch.EntityId;next.SyncFormat=3;
 if(patch.Name!=null)next.Name=ApplyField(patch.Name,previous==null?null:previous.Name);
 if(patch.Level!=null)next.Level=ApplyField(patch.Level,previous==null?null:previous.Level);
 if(patch.Exp!=null)next.Exp=ApplyField(patch.Exp,previous==null?null:previous.Exp);
@@ -326,8 +327,9 @@ next.Patch=null;return next;
 // 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
 public static SyncShortKeysDao Apply(this SyncShortKeysDao patch,SyncShortKeysDao previous){
  if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
- if(previous!=null&&(previous.SyncFormat!=3||previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
- var next=previous==null?new SyncShortKeysDao():previous.Clone();next.EntityId=patch.EntityId;next.SyncFormat=3;
+ // 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+ if(previous!=null&&(previous.SyncFormat!=3||patch.EntityId!=0&&previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
+ var next=previous==null?new SyncShortKeysDao():previous.Clone();if(previous==null)next.EntityId=patch.EntityId;next.SyncFormat=3;
 if(patch.Experience!=null)next.Experience=ApplyField(patch.Experience,previous==null?null:previous.Experience);
 if(patch.Equipment!=null)next.Equipment=ApplyField(patch.Equipment,previous==null?null:previous.Equipment);
 if(patch.Followers!=null)next.Followers=ApplyField(patch.Followers,previous==null?null:previous.Followers);
@@ -372,8 +374,9 @@ return next;
 // 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
 public static SyncLongKeysDao Apply(this SyncLongKeysDao patch,SyncLongKeysDao previous){
  if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
- if(previous!=null&&(previous.SyncFormat!=3||previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
- var next=previous==null?new SyncLongKeysDao():previous.Clone();next.EntityId=patch.EntityId;next.SyncFormat=3;
+ // 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+ if(previous!=null&&(previous.SyncFormat!=3||patch.EntityId!=0&&previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
+ var next=previous==null?new SyncLongKeysDao():previous.Clone();if(previous==null)next.EntityId=patch.EntityId;next.SyncFormat=3;
 if(patch.Experience!=null)next.Experience=ApplyField(patch.Experience,previous==null?null:previous.Experience);
 if(patch.Equipment!=null)next.Equipment=ApplyField(patch.Equipment,previous==null?null:previous.Equipment);
 if(patch.Followers!=null)next.Followers=ApplyField(patch.Followers,previous==null?null:previous.Followers);
@@ -418,8 +421,9 @@ return next;
 // 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
 public static SyncVarietyDao Apply(this SyncVarietyDao patch,SyncVarietyDao previous){
  if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
- if(previous!=null&&(previous.SyncFormat!=3||previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
- var next=previous==null?new SyncVarietyDao():previous.Clone();next.EntityId=patch.EntityId;next.SyncFormat=3;
+ // 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+ if(previous!=null&&(previous.SyncFormat!=3||patch.EntityId!=0&&previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
+ var next=previous==null?new SyncVarietyDao():previous.Clone();if(previous==null)next.EntityId=patch.EntityId;next.SyncFormat=3;
 if(patch.SyncOnly!=null)next.SyncOnly=ApplyField(patch.SyncOnly,previous==null?null:previous.SyncOnly);
 if(patch.FastItems!=null)next.FastItems=ApplyField(patch.FastItems,previous==null?null:previous.FastItems);
 if(patch.ShardedTags!=null)next.ShardedTags=ApplyField(patch.ShardedTags,previous==null?null:previous.ShardedTags);
@@ -483,8 +487,9 @@ return update;
 // 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
 public static SyncWraithDao Apply(this SyncWraithDao patch,SyncWraithDao previous){
  if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
- if(previous!=null&&(previous.SyncFormat!=3||previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
- var next=previous==null?new SyncWraithDao():previous.Clone();next.EntityId=patch.EntityId;next.SyncFormat=3;
+ // 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+ if(previous!=null&&(previous.SyncFormat!=3||patch.EntityId!=0&&previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
+ var next=previous==null?new SyncWraithDao():previous.Clone();if(previous==null)next.EntityId=patch.EntityId;next.SyncFormat=3;
 if(patch.PosX!=null)next.PosX=ApplyField(patch.PosX,previous==null?null:previous.PosX);
 if(patch.PosY!=null)next.PosY=ApplyField(patch.PosY,previous==null?null:previous.PosY);
 if(patch.Buffs!=null)next.Buffs=ApplyField(patch.Buffs,previous==null?null:previous.Buffs);

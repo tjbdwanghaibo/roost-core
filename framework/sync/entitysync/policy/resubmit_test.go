@@ -22,29 +22,30 @@ import (
 
 // opLog decodes every frame and records, per session, the object operations in delivery order.
 type opLog struct {
-	mu  sync.Mutex
-	ops map[entitysync.SessionID][]string
+	mu       sync.Mutex
+	ops      map[entitysync.SessionID][]string
+	decoders map[entitysync.SessionID]*entitysync.Decoder
 }
 
 func (l *opLog) Push(_ context.Context, session entitysync.SessionID, data []byte) error {
-	decoded, err := entitysync.DecodeFrame(data, frame.DefaultLimits())
-	if err != nil {
-		return err
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.ops == nil {
 		l.ops = make(map[entitysync.SessionID][]string)
+		l.decoders = make(map[entitysync.SessionID]*entitysync.Decoder)
+	}
+	if l.decoders[session] == nil {
+		l.decoders[session] = entitysync.NewDecoder(frame.DefaultLimits())
+	}
+	decoded, err := l.decoders[session].Decode(data)
+	if err != nil {
+		return err
 	}
 	for _, object := range decoded.Objects {
 		name := map[frame.ObjectOperation]string{frame.ObjectCreate: "create", frame.ObjectUpdate: "update", frame.ObjectRemove: "remove"}[object.Operation]
 		subject := int64(-1)
 		for _, component := range object.Components {
-			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-			if err != nil {
-				return err
-			}
-			subject = update.SubjectID
+			subject = component.Update.SubjectID
 		}
 		l.ops[session] = append(l.ops[session], fmt.Sprintf("%s:%d", name, subject))
 	}

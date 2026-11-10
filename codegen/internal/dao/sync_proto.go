@@ -153,10 +153,12 @@ func buildSyncSchema(defs *Definitions, pkg string) ([]byte, []byte, error) {
 		var marshal, apply strings.Builder
 		shapes := make(map[string]syncShape)
 		var values strings.Builder
-		fmt.Fprintf(&values, "// Values 读取字段替换或已应用快照；集合补丁必须先通过 Apply 合并，避免丢失删除与列表操作。\nfunc(patch *Sync%s) Values() (map[string]any,error) { if patch==nil || patch.SyncFormat!=3{return nil,fmt.Errorf(\"unsupported DAO sync format\")};out:=map[string]any{\"_id\":patch.EntityID}\n", dao.Name)
-		fmt.Fprintf(&marshal, "func(d *%s) marshalSyncPB(mask uint64) []byte { patch:=&Sync%s{EntityID:d.id,SyncFormat:3}; changed:=false\n", dao.Name, dao.Name)
+		fmt.Fprintf(&values, "// Values 读取字段替换或已应用快照；集合补丁必须先通过 Apply 合并，避免丢失删除与列表操作。\nfunc(patch *Sync%s) Values() (map[string]any,error) { if patch==nil || patch.SyncFormat!=3{return nil,fmt.Errorf(\"unsupported DAO sync format\")};out:=map[string]any{}\n// 增量补丁不带实体 ID（沿用基线的），这时没有 _id。\nif patch.EntityID!=0{out[\"_id\"]=patch.EntityID}\n", dao.Name)
+		fmt.Fprintf(&marshal, "func(d *%[1]s) marshalSyncPB(mask uint64) []byte { return d.marshalSyncPatch(mask,d.id) }\n// marshalSyncPatch 编码字段替换补丁；id 为 0 时不带实体 ID（增量：接收端沿用基线的）。\nfunc(d *%[1]s) marshalSyncPatch(mask uint64,id int64) []byte { patch:=&Sync%[1]s{EntityID:id,SyncFormat:3}; changed:=false\n", dao.Name)
 		fmt.Fprintf(&apply, `func(d *%[1]s) applySyncPB(raw []byte) error {
  patch,err:=UnmarshalSync%[1]s(raw);if err!=nil{return err}
+ // 增量补丁不带实体 ID，沿用这份 DAO 的。
+ if patch.EntityID==0{patch.EntityID=d.id}
  if d.id!=0 && d.id!=patch.EntityID{return fmt.Errorf("DAO identity changed")}
  previous,err:=UnmarshalSync%[1]s(d.marshalSyncPB(^uint64(0)));if err!=nil{return err}
  previous.EntityID=patch.EntityID

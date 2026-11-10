@@ -25,6 +25,7 @@ type selfLane struct {
 	mu        sync.Mutex
 	frames    map[entitysync.SessionID][]selfFrame
 	offline   map[entitysync.SessionID]bool
+	decoders  map[entitysync.SessionID]*entitysync.Decoder // 只解准入的帧
 	block     chan struct{}
 	entered   chan struct{}
 	blockOnce sync.Once
@@ -51,22 +52,6 @@ func (lane *selfLane) Push(_ context.Context, session entitysync.SessionID, raw 
 			<-lane.block
 		})
 	}
-	decoded, err := frame.Decode(raw, frame.DefaultLimits())
-	if err != nil {
-		return err
-	}
-	record := selfFrame{kind: decoded.Kind}
-	for _, object := range decoded.Objects {
-		entry := selfObject{operation: object.Operation}
-		for _, component := range object.Components {
-			update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-			if err != nil {
-				return err
-			}
-			entry.subject, entry.full, entry.profile = update.SubjectID, update.Full, update.Profile.Key
-		}
-		record.objects = append(record.objects, entry)
-	}
 	lane.mu.Lock()
 	defer lane.mu.Unlock()
 	if lane.offline[session] {
@@ -74,6 +59,23 @@ func (lane *selfLane) Push(_ context.Context, session entitysync.SessionID, raw 
 	}
 	if lane.frames == nil {
 		lane.frames = make(map[entitysync.SessionID][]selfFrame)
+		lane.decoders = make(map[entitysync.SessionID]*entitysync.Decoder)
+	}
+	if lane.decoders[session] == nil {
+		lane.decoders[session] = entitysync.NewDecoder(frame.DefaultLimits())
+	}
+	decoded, err := lane.decoders[session].Decode(raw)
+	if err != nil {
+		return err
+	}
+	record := selfFrame{kind: decoded.Kind}
+	for _, object := range decoded.Objects {
+		entry := selfObject{operation: object.Operation}
+		for _, component := range object.Components {
+			update := component.Update
+			entry.subject, entry.full, entry.profile = update.SubjectID, update.Full, update.Profile.Key
+		}
+		record.objects = append(record.objects, entry)
 	}
 	lane.frames[session] = append(lane.frames[session], record)
 	return nil

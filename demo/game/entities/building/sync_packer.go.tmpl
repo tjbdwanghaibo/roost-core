@@ -29,15 +29,17 @@ func NewBuildingSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPac
 type buildingSyncPacker struct{ building *Building }
 
 func (packer buildingSyncPacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
-	return packer.pack(profile, dataengine.AllFields)
+	return packer.pack(profile, dataengine.AllFields, false)
 }
 
 func (packer buildingSyncPacker) PackSubjectDelta(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
-	return packer.pack(profile, mask)
+	return packer.pack(profile, mask, true)
 }
 
 // pack 只交出视图允许的字段；未知视图返回 entity.ErrSyncViewUnknown，不扩大字段权限。
-func (packer buildingSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+// pack 编码视图允许的字段。delta 为真时是增量：DAO 补丁不带实体 ID（MarshalSyncDelta，客户端沿用基线的），
+// 全量仍带。
+func (packer buildingSyncPacker) pack(profile entity.SyncProfile, mask uint64, delta bool) (entity.FrozenSyncPayload, error) {
 	if buildingViewsErr != nil {
 		return entity.FrozenSyncPayload{}, fmt.Errorf("building sync packer: %w", buildingViewsErr)
 	}
@@ -51,7 +53,12 @@ func (packer buildingSyncPacker) pack(profile entity.SyncProfile, mask uint64) (
 	if mask &= view.Fields; mask == 0 {
 		return entity.FrozenSyncPayload{}, nil
 	}
-	raw := packer.building.Dao().MarshalSync(mask)
+	var raw []byte
+	if delta {
+		raw = packer.building.Dao().MarshalSyncDelta(mask)
+	} else {
+		raw = packer.building.Dao().MarshalSync(mask)
+	}
 	if len(raw) == 0 {
 		return entity.FrozenSyncPayload{}, nil
 	}

@@ -569,6 +569,7 @@ type unloadResyncFixture struct {
 	access   *entity.ManagerAccess
 	sync     *entitysync.Manager
 	frames   chan []byte
+	decoder  *entitysync.Decoder // 订阅者的接收端：增量从基线继承身份，要按顺序解
 	ref      frame.ObjectRef
 	resident *unloadResyncEntity
 	runtime  *Runtime
@@ -643,13 +644,16 @@ func newUnloadResyncFixture(t *testing.T, uniqueID int64) *unloadResyncFixture {
 	return f
 }
 
-func (f *unloadResyncFixture) next(what string) frame.Frame {
+func (f *unloadResyncFixture) next(what string) entitysync.ReceivedFrame {
 	f.t.Helper()
+	if f.decoder == nil {
+		f.decoder = entitysync.NewDecoder(frame.DefaultLimits())
+	}
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		select {
 		case raw := <-f.frames:
-			decoded, err := entitysync.DecodeFrame(raw, frame.DefaultLimits())
+			decoded, err := f.decoder.Decode(raw)
 			if err != nil {
 				f.t.Fatal(err)
 			}
@@ -666,13 +670,9 @@ func (f *unloadResyncFixture) next(what string) frame.Frame {
 	}
 }
 
-func (f *unloadResyncFixture) level(object frame.ObjectDelta) int32 {
+func (f *unloadResyncFixture) level(object entitysync.ReceivedObject) int32 {
 	f.t.Helper()
-	update, err := entitysync.DecodeSubjectUpdate(object.Components[0].Data, 0)
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	payload := update.Payload.BytesCopy()
+	payload := object.Components[0].Update.Payload.BytesCopy()
 	if len(payload) != 1 {
 		f.t.Fatalf("payload=%v", payload)
 	}

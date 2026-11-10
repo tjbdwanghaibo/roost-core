@@ -3,6 +3,7 @@ package game
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -98,53 +99,57 @@ func runGateLoad(t *testing.T, addr, ticket string, player *playerentity.Player,
 			t.Fatal(e)
 		}
 		client = session.New(conn, registry, &requests)
-		receiver := frame.NewReceiver(frame.DefaultLimits())
+		receiver := entitysync.NewDecoder(frame.DefaultLimits())
 		fields := map[string]any{}
 		stream, expectations := observations, pending
 		client.RegisterPushHandler(501, func(message *session.Message) {
 			observation := gateLoadObservation{}
-			applied, e := receiver.Receive(message.Packet.Payload, func(f frame.Frame) error {
-				for _, obj := range f.Objects {
-					if obj.Operation == frame.ObjectRemove {
-						observation.kind = robot.SyncRemove
-						clear(fields)
-						continue
-					}
-					for _, component := range obj.Components {
-						update, e := entitysync.DecodeSubjectUpdate(component.Data, 0)
-						if e != nil {
-							return e
-						}
-						if update.SubjectID != player.ID() {
-							return fmt.Errorf("unexpected subject")
-						}
-						patch, e := clientsync.DecodeFields(update)
-						if e != nil {
-							return e
-						}
-						observation.kind = robot.SyncDelta
-						if update.Full {
-							observation.kind = robot.SyncFull
+			f, e := receiver.Decode(message.Packet.Payload)
+			applied := e == nil
+			if errors.Is(e, entitysync.ErrStaleFrame) {
+				e = nil
+			}
+			if applied {
+				e = func() error {
+					for _, obj := range f.Objects {
+						if obj.Operation == frame.ObjectRemove {
+							observation.kind = robot.SyncRemove
 							clear(fields)
+							continue
 						}
-						for key, value := range patch {
-							fields[key] = value
+						for _, component := range obj.Components {
+							update := component.Update
+							if update.SubjectID != player.ID() {
+								return fmt.Errorf("unexpected subject")
+							}
+							patch, e := clientsync.DecodeFields(update)
+							if e != nil {
+								return e
+							}
+							observation.kind = robot.SyncDelta
+							if update.Full {
+								observation.kind = robot.SyncFull
+								clear(fields)
+							}
+							for key, value := range patch {
+								fields[key] = value
+							}
 						}
 					}
-				}
-				if observation.kind != robot.SyncRemove {
-					var ok bool
-					observation.exp, ok = fields["exp"].(int64)
-					if !ok {
-						return fmt.Errorf("missing typed exp")
+					if observation.kind != robot.SyncRemove {
+						var ok bool
+						observation.exp, ok = fields["exp"].(int64)
+						if !ok {
+							return fmt.Errorf("missing typed exp")
+						}
+						observation.level, ok = fields["level"].(int32)
+						if !ok {
+							return fmt.Errorf("missing typed level")
+						}
 					}
-					observation.level, ok = fields["level"].(int32)
-					if !ok {
-						return fmt.Errorf("missing typed level")
-					}
-				}
-				return nil
-			})
+					return nil
+				}()
+			}
 			observation.err = e
 			if e == nil && !applied {
 				return

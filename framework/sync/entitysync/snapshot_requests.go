@@ -17,6 +17,8 @@ type snapshotRequests struct {
 	// estimates 记住字节预算下最近一次捕获的冷创建大小，只用于计划阶段判断能否准入；
 	// 真正准入仍按本轮最新捕获的实际编码计算。意图结算或撤销时随索引项一起删除。
 	estimates map[*subscription]int
+	// smallest 是这一路记下过的最小冷创建大小，给从未捕获过的意图作预估（见 estimateLocked）。
+	smallest int
 }
 
 type snapshotRequestGroup struct {
@@ -66,13 +68,17 @@ func (r *snapshotRequests) update(subj *subject, sid SessionID, sub *subscriptio
 	group.ordered = nil
 }
 
-// estimateLocked 返回计划用的冷创建字节数；从未捕获过的请求按最小可能大小计，
-// 因此排在前面的未知请求只会让预估偏小，不会误挡后面的候选。调用方持有 r.mu。
+// estimateLocked 返回计划用的冷创建字节数；从未捕获过的请求按这一路见过的最小冷创建计（还没见过时按信封可能的最小长度），
+// 因此排在前面的未知请求只会让预估偏小、不会误挡后面的候选，同类对象的预估又与实际相近，不会每个窗口多捕获一批再延后。
+// 信封 v3 的变长编码让“可能的最小长度”远小于常见对象（v2 有 64 字节定长头，二者相近），所以要用见过的大小。调用方持有 r.mu。
 func (r *snapshotRequests) estimateLocked(sub *subscription) int {
 	if bytes, ok := r.estimates[sub]; ok {
 		return bytes
 	}
-	return snapshotObjectOverhead + subjectHeaderBytes
+	if r.smallest > 0 {
+		return r.smallest
+	}
+	return snapshotObjectOverhead + minFullEnvelopeBytes
 }
 
 // recordEstimates 在捕获后记下各冷创建的实际大小；已不在索引中的意图不记录，避免残留。
@@ -87,6 +93,9 @@ func (r *snapshotRequests) recordEstimates(sizes map[*subscription]int) {
 			r.estimates = make(map[*subscription]int)
 		}
 		r.estimates[sub] = bytes
+		if r.smallest == 0 || bytes < r.smallest {
+			r.smallest = bytes
+		}
 	}
 }
 

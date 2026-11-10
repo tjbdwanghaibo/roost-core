@@ -899,9 +899,10 @@ func TestAsyncLoadSlowConsumerDoesNotDelayHealthyBaseline(t *testing.T) {
 		defer cancel()
 		_ = queue.Close(ctx)
 	}()
-	received := make(chan frame.Frame, 4)
+	received := make(chan ReceivedFrame, 4)
 	fail := make(chan error, 1)
 	go func() {
+		decoder := NewDecoder(frame.DefaultLimits())
 		for range 3 {
 			var size [4]byte
 			_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -914,7 +915,7 @@ func TestAsyncLoadSlowConsumerDoesNotDelayHealthyBaseline(t *testing.T) {
 				fail <- err
 				return
 			}
-			f, err := DecodeFrame(raw, frame.DefaultLimits())
+			f, err := decoder.Decode(raw)
 			if err != nil {
 				fail <- err
 				return
@@ -954,9 +955,9 @@ func TestAsyncLoadSlowConsumerDoesNotDelayHealthyBaseline(t *testing.T) {
 			} else if f.Objects[0].Ref != ref {
 				t.Fatal("healthy reference reset")
 			}
-			update, err := DecodeSubjectUpdate(f.Objects[0].Components[0].Data, 0)
-			if err != nil || update.Version != uint64(i) || (i > 0 && update.BaseVersion != uint64(i-1)) {
-				t.Fatalf("version: %+v %v", update, err)
+			update := f.Objects[0].Components[0].Update
+			if update.Version != uint64(i) || (i > 0 && update.BaseVersion != uint64(i-1)) {
+				t.Fatalf("version: %+v", update)
 			}
 		case err := <-fail:
 			t.Fatal(err)

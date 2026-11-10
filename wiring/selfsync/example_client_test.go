@@ -18,12 +18,12 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/selfsync"
 )
 
-// SelfStateClient 是 Go 客户端解码自身视图的最小写法：一个连接一个 frame.Receiver；
-// 按包头的载荷类型挑出 Sync 推送，Receiver 核对基线（全量先清空、增量要接得上），
-// DecodeSubjectUpdate 取出 subject 与业务 packer 写的字节，再交给业务自己的解码（生成 DAO 的 UnmarshalSync 等）。
+// SelfStateClient 是 Go 客户端解码自身视图的最小写法：一个连接一个 entitysync.Decoder；
+// 按包头的载荷类型挑出 Sync 推送，Decoder 核对基线（全量先清空、增量要接得上，增量的 subject 身份从基线继承），
+// 解出 subject 与业务 packer 写的字节，再交给业务自己的解码（生成 DAO 的 UnmarshalSync 等）。
 type SelfStateClient struct {
 	connection net.Conn
-	receiver   *frame.Receiver
+	decoder    *entitysync.Decoder
 	messageID  uint32
 }
 
@@ -43,11 +43,11 @@ func DialSelfState(address, ticket string, messageID uint32) (*SelfStateClient, 
 		_ = connection.Close()
 		return nil, fmt.Errorf("login refused: %v", err)
 	}
-	return &SelfStateClient{connection: connection, receiver: frame.NewReceiver(frame.Limits{}), messageID: messageID}, nil
+	return &SelfStateClient{connection: connection, decoder: entitysync.NewDecoder(frame.Limits{}), messageID: messageID}, nil
 }
 
 // Next 读到下一份自身状态为止。其他推送（PB、Lockstep）交给各自的处理；连接上第一份全量之前收到的增量
-// 被 Receiver 拒绝（frame.ErrBaselineMismatch），跳过即可，下一帧全量会到。
+// 被 Decoder 拒绝（frame.ErrBaselineMismatch），跳过即可，下一帧全量会到；旧代或重复帧（entitysync.ErrStaleFrame）同样跳过。
 func (c *SelfStateClient) Next() (full bool, state string, err error) {
 	for {
 		_ = c.connection.SetReadDeadline(time.Now().Add(3 * time.Second))
@@ -59,27 +59,20 @@ func (c *SelfStateClient) Next() (full bool, state string, err error) {
 		if header.Kind() != wire.PayloadSync || packet.MsgID != c.messageID {
 			continue
 		}
-		applied, err := c.receiver.Receive(packet.Payload, func(decoded frame.Frame) error {
-			full = decoded.Kind == frame.Full
-			for _, object := range decoded.Objects {
-				for _, component := range object.Components {
-					update, err := entitysync.DecodeSubjectUpdate(component.Data, 0)
-					if err != nil {
-						return err
-					}
-					state = string(update.Payload.BytesCopy())
-				}
-			}
-			return nil
-		})
+		decoded, err := c.decoder.Decode(packet.Payload)
 		switch {
-		case errors.Is(err, frame.ErrBaselineMismatch):
+		case errors.Is(err, frame.ErrBaselineMismatch), errors.Is(err, entitysync.ErrStaleFrame):
 			continue
 		case err != nil:
 			return false, "", err
-		case applied:
-			return full, state, nil
 		}
+		full = decoded.Kind == frame.Full
+		for _, object := range decoded.Objects {
+			for _, component := range object.Components {
+				state = string(component.Update.Payload.BytesCopy())
+			}
+		}
+		return full, state, nil
 	}
 }
 

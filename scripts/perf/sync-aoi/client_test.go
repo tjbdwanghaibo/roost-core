@@ -27,17 +27,19 @@ func TestClientValidatesContentVersionAndVisibility(t *testing.T) {
 			done := make(chan clientResult, 1)
 			go func() { defer client.Close(); done <- consume(client, c, func() {}) }()
 			tick := 0
+			serverSide := entitysync.NewDecoder(frame.DefaultLimits()) // 读出服务端发的更新，好改坏它
 			manager, err := entitysync.NewManager(entitysync.ManagerConfig{Transport: entitysync.TransportFunc(func(_ context.Context, _ entitysync.SessionID, raw []byte) error {
+				received, e := serverSide.Decode(raw)
+				if e != nil {
+					return e
+				}
 				if tick == 1 && fault == "version" {
 					decoded, e := entitysync.DecodeFrame(raw, frame.DefaultLimits())
 					if e != nil {
 						return e
 					}
-					update, e := entitysync.DecodeSubjectUpdate(decoded.Objects[0].Components[0].Data, 0)
-					if e != nil {
-						return e
-					}
-					update.BaseVersion = 999
+					update := received.Objects[0].Components[0].Update
+					update.BaseVersion, update.Version = 999, 1000
 					data, e := entitysync.EncodeSubjectUpdate(update, 0)
 					if e != nil {
 						return e

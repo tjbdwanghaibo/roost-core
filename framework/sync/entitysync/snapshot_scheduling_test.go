@@ -205,7 +205,8 @@ func (s *mutableSnapshot) subject(id int64) *entity.SubjectSyncState {
 }
 
 // 大对象 X 排在 backlog 个小对象之后、每窗口另来 1 个新小对象：被字节预算挡住的窗口不重新捕获 / 编码 X，也不把积压小对象反复
-// 捕获后再延后；超出实际交付的捕获数有常数上界，积压翻倍时上界不变。
+// 捕获后再延后；超出实际交付的捕获数有常数上界，积压翻倍时上界不变。多捕获只来自两处，各不超过一个窗口的容量：
+// 第一个窗口没有见过任何大小、按信封最小长度预估；X 第一次被计划时按见过的小对象预估，实际放不下，它之后同一计划里的小对象延后。
 // 历史：RR-20260926-04。
 func TestByteBlockedSnapshotsAreNotRecapturedEveryWindow(t *testing.T) {
 	for _, backlog := range []int{30, 60} {
@@ -232,6 +233,8 @@ func testByteBlockedSnapshotRecapture(t *testing.T, mode SyncMode, backlog int) 
 	for range backlog {
 		addSmall()
 	}
+	small := snapshotObjectOverhead + subjectUpdateBytes(entity.SubjectSyncUpdate{SubjectID: 1, Version: 1, Full: true, Payload: entity.CopyFrozenSyncPayload(1, make([]byte, 10))})
+	perWindow := 300 / small
 	x := &mutableSnapshot{marker: 7, size: 1000}
 	if err := m.Register(x.subject(5000)); err != nil {
 		t.Fatal(err)
@@ -254,7 +257,7 @@ func testByteBlockedSnapshotRecapture(t *testing.T, mode SyncMode, backlog int) 
 		}
 		captured := m.Stats().SnapshotsCaptured
 		t.Logf("X delivered at window %d: X packs=%d SnapshotsCaptured=%d objects=%d", window, x.packs, captured, objects)
-		if x.packs > 2 || captured > uint64(objects)+2 {
+		if x.packs > 2 || captured > uint64(objects+2*perWindow) {
 			t.Fatalf("blocked windows re-encoded snapshots: X packs=%d SnapshotsCaptured=%d delivered objects=%d windows=%d", x.packs, captured, objects, window)
 		}
 		return

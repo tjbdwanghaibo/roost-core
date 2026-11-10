@@ -33,9 +33,11 @@ func counterValue(name string, labels metrics.Labels) int64 {
 	return 0
 }
 
-// underLimitGolden 是 underLimitScenario 全部帧的 SHA-256，取自超额降级之前的实现（b4699758）：
-// 从不超出持有上限的会话，帧逐字节与以前相同。
-const underLimitGolden = "e59a0815e7ac14be0011dcf6bf35d63921fd9244f7f5ef4a72ea92015933efd4"
+// underLimitGolden 是 underLimitScenario 全部帧的 SHA-256：从不超出持有上限的会话，帧逐字节与以前相同。
+// 最初取自超额降级之前的实现（b4699758）；2026-11-10 换帧协议 2 / 信封 v3 时重取：同一场景在旧格式（cf89e081）与
+// 新格式下逐帧解出的结构（帧时钟、对象操作与引用、每个更新的身份、版本、mask 与载荷）逐项相同，只有编码变了
+// （证据 docs/maintenance/evidence/sync-delta-bytes-20261110）。
+const underLimitGolden = "328e339f3a74ad7fe05d3121799dd7c0c458c28537888bf41d7a32803b378d99"
 
 // underLimitScenario 跑一段从不超出持有上限的交付：多会话、两类上限（含满额时同 tick 的 remove + create 替换）、
 // 快照预算、增量、Hold/Ready、held 会话、注销、换 profile。返回按会话、按顺序拼起来的全部帧。
@@ -158,13 +160,7 @@ func (c *clientTable) apply(t *testing.T, frames [][]byte) {
 				if _, exists := c.refs[object.Ref]; exists {
 					t.Fatalf("create of a ref the client already holds: %v", object.Ref)
 				}
-				for _, component := range object.Components {
-					update, err := DecodeSubjectUpdate(component.Data, 0)
-					if err != nil {
-						t.Fatal(err)
-					}
-					c.refs[object.Ref] = update.SubjectID
-				}
+				c.refs[object.Ref] = got.subjects[object.Ref]
 			case frame.ObjectRemove:
 				if _, exists := c.refs[object.Ref]; !exists {
 					t.Fatalf("remove of a ref the client does not hold: %v", object.Ref)

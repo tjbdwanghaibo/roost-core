@@ -1,0 +1,204 @@
+package game
+
+import (
+	"fmt"
+	"testing"
+	"time"
+
+	"{{MODULE}}/game/clientsync"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// 走一步的下行字节（主视野带宽的主体，方案 §28 的下行估算）：一个看的人，另一个玩家走一步（移动心跳 200ms 一步）、
+// 四个玩家同一拍各走一步、一只怪巡逻一步。每一步是一份只带位置的增量：除了位置字段，帧里只有帧头、对象头、组件头与
+// subject 信封（不带 subject ID、命名空间、视图键这些基线里已有的身份），DAO 补丁里也不重复实体 ID。
+// 上限（帧的 payload，含帧头，线上另加 16 字节消息头）：
+//
+//	玩家走一步单独一帧 ≤ 32 字节，同一帧里每多一个走了一步的玩家 ≤ 22 字节，怪走一步单独一帧 ≤ 32 字节。
+//
+// 修前（帧协议 1 / 信封 v2）分别是 140、108、146 字节（证据 docs/maintenance/evidence/sync-delta-bytes-20261110）。
+const (
+	playerStepFrameLimit  = 32
+	extraStepObjectLimit  = 22
+	monsterStepFrameLimit = 32
+)
+
+func TestScenePositionStepsCarryLittleBesidesThePosition(t *testing.T) {
+	loadSpawnData(t)
+	w := newMoveWorld(t)
+	const watcherID, walkerID = int64(9841), int64(9842)
+	w.join(watcherID, spatial.Point{X: 500, Y: 500})
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.recorder.take(watcherID)
+	walker := w.join(walkerID, spatial.Point{X: 510, Y: 500})
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.recorder.take(watcherID)
+	if _, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, walker.ID(), w.area.ID(), 546, 500, 0); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		w.clock.advance(200 * time.Millisecond)
+		want := spatial.Point{X: 510 + int64(12*(i+1)), Y: 500}
+		eventually(t, "a step", func() (bool, string) {
+			at := walker.MapBasic().Published().Pos
+			return at == want, fmt.Sprint(at)
+		})
+		w.settle(walker.ID())
+		if err := w.bridge.Flush(w.ctx); err != nil {
+			t.Fatal(err)
+		}
+		pushes := w.recorder.take(watcherID)
+		requirePositionOnly(t, "a player's step", pushes, 1)
+		if size := len(pushes[0].Payload); size > playerStepFrameLimit {
+			t.Fatalf("a player's step is a %d-byte frame, want at most %d", size, playerStepFrameLimit)
+		}
+	}
+	{
+		// 同一拍四个玩家各走一步：帧头分摊之后每个对象的边际字节。场景的复制循环每 50ms 自己也会 Flush，四个增量可能
+		// 分在几帧里，所以按帧扣掉同一帧头（同一 SnapshotMeta 的空帧编码）再除以帧里的对象数，与分成几帧无关。
+		var group []*player.Player
+		for i := range int64(4) {
+			group = append(group, w.join(9850+i, spatial.Point{X: 510, Y: 520 + 10*i}))
+		}
+		if err := w.bridge.Flush(w.ctx); err != nil {
+			t.Fatal(err)
+		}
+		w.recorder.take(watcherID)
+		starts := make(map[int64]int64, len(group))
+		for _, p := range group {
+			starts[p.ID()] = p.MapBasic().Published().Pos.X
+			if _, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, p.ID(), w.area.ID(), 600, p.MapBasic().Published().Pos.Y, 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		w.clock.advance(200 * time.Millisecond)
+		for _, p := range group {
+			eventually(t, "a group step", func() (bool, string) {
+				at := p.MapBasic().Published().Pos
+				return at.X > starts[p.ID()], fmt.Sprint(at)
+			})
+			w.settle(p.ID())
+		}
+		if err := w.bridge.Flush(w.ctx); err != nil {
+			t.Fatal(err)
+		}
+		pushes := w.recorder.take(watcherID)
+		requirePositionOnly(t, "steps in one tick", pushes, -1)
+		objects := 0
+		for _, push := range pushes {
+			n, perObject := perObjectBytes(t, "steps in one tick", push)
+			objects += n
+			if perObject > extraStepObjectLimit {
+				t.Fatalf("each extra moving player costs %d bytes in the frame, want at most %d", perObject, extraStepObjectLimit)
+			}
+		}
+		if objects != len(group) {
+			t.Fatalf("the four steps reached the watcher as %d objects, want %d", objects, len(group))
+		}
+	}
+
+	spawn := w.startTestSpawner()
+	eventually(t, "the monsters", func() (bool, string) { return spawn.Count() == 3, fmt.Sprint(spawn.Count()) })
+	for _, id := range spawn.IDs() {
+		w.settle(id)
+	}
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.recorder.take(watcherID)
+	first := spawn.monster(spawn.IDs()[0])
+	eventually(t, "the patrol starts walking", func() (bool, string) {
+		return locked(w, first.ID(), first.ActorComp().Moving), "idle"
+	})
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	w.recorder.take(watcherID)
+	home := first.MapBasic().Published().Pos
+	w.clock.advance(200 * time.Millisecond)
+	eventually(t, "a patrol step", func() (bool, string) {
+		return first.MapBasic().Published().Pos != home, fmt.Sprint(first.MapBasic().Published().Pos)
+	})
+	w.settle(first.ID())
+	if err := w.bridge.Flush(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	// 别的怪可能同一拍也走了：只看带这只怪的那一帧里它自己的边际，单独成帧时整帧不超过上限。
+	pushes := w.recorder.take(watcherID)
+	if len(pushes) == 0 {
+		t.Fatal("the patrol step did not reach the watcher")
+	}
+	requirePositionOnly(t, "a patrol step", pushes, -1)
+	for _, push := range pushes {
+		objects, perObject := perObjectBytes(t, "a patrol step", push)
+		if objects == 1 && len(push.Payload) > monsterStepFrameLimit {
+			t.Fatalf("a monster's patrol step is a %d-byte frame, want at most %d", len(push.Payload), monsterStepFrameLimit)
+		}
+		if perObject > extraStepObjectLimit {
+			t.Fatalf("each patrol step costs %d bytes in the frame, want at most %d", perObject, extraStepObjectLimit)
+		}
+	}
+}
+
+// perObjectBytes：一帧里对象的个数与平均每个对象的字节（整帧减去同一 SnapshotMeta 的空帧编码，即帧头）。
+func perObjectBytes(t *testing.T, what string, push *pb.EntitySyncPush) (int, int) {
+	t.Helper()
+	received := decodedPush(t, push)
+	header, err := frame.Encode(frame.Frame{SnapshotMeta: received.SnapshotMeta, Kind: received.Kind, BaseTick: received.BaseTick}, frame.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(received.Objects)
+	if n == 0 {
+		t.Fatalf("%s: an empty %d-byte frame", what, len(push.Payload))
+	}
+	perObject := (len(push.Payload) - len(header)) / n
+	t.Logf("%s: a %d-byte frame of %d objects, %d per object after the %d-byte frame header", what, len(push.Payload), n, perObject, len(header))
+	return n, perObject
+}
+
+// requirePositionOnly：每一帧都是增量帧，每个对象是一份不带身份的增量，补丁里除了位置（pos_x / pos_y，有时连同朝向
+// facing）没有别的字段；objects ≥ 0 时帧数为 1、对象数为 objects。逐项记下帧头、对象头与组件头、信封、载荷的字节。
+func requirePositionOnly(t *testing.T, what string, pushes []*pb.EntitySyncPush, objects int) {
+	t.Helper()
+	if objects >= 0 && len(pushes) != 1 {
+		t.Fatalf("%s reached the watcher as %d frames, want 1", what, len(pushes))
+	}
+	for _, push := range pushes {
+		received := decodedPush(t, push)
+		if received.Kind != frame.Delta || objects >= 0 && len(received.Objects) != objects {
+			t.Fatalf("%s: frame kind %v with %d objects, want a delta with %d", what, received.Kind, len(received.Objects), objects)
+		}
+		components, envelopes, payloads := 0, 0, 0
+		for _, object := range received.Objects {
+			for _, component := range object.Components {
+				update := component.Update
+				if update.Full || object.Operation != frame.ObjectUpdate {
+					t.Fatalf("%s: subject %d came as op %v full=%v, want a delta", what, update.SubjectID, object.Operation, update.Full)
+				}
+				fields, err := clientsync.DecodeFields(update)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for name := range fields {
+					if name != "pos_x" && name != "pos_y" && name != "facing" {
+						t.Fatalf("%s: subject %d's delta carries %q (%v); a step changes only the position", what, update.SubjectID, name, fields)
+					}
+				}
+				components++
+				envelopes += component.Size - update.Payload.Len()
+				payloads += update.Payload.Len()
+			}
+		}
+		t.Logf("%s: frame %d bytes = headers %d + envelopes %d + DAO patches %d (%d objects)", what, len(push.Payload),
+			len(push.Payload)-envelopes-payloads, envelopes, payloads, components)
+	}
+}
