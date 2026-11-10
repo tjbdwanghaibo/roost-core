@@ -1,5 +1,14 @@
 # 当前已知限制与验证边界
 
+## 2026-11-10：实体同步增量字节（帧协议 2 / 信封 v3）之后的剩余项
+
+一步移动已从 140 字节降到 30 字节（[证据](evidence/sync-delta-bytes-20261110/README.md)），剩下的是：
+
+- **场景主视野用的是缺省视图 `"*"`（需要维护者决定）**：game-demo 的 `policy.InterestConfig` 没配 Bands，主视野 `DefineRelationView(sceneView, SyncProfile{})`，附近玩家收到的是 Player 的全部同步字段，包括别人的 exp、gold、items、attr_base、attr_final（[证据 §6](evidence/sync-delta-bytes-20261110/README.md#6-每个同步字段是否需要发给其他客户端demo-player--monster) 逐字段列了是否需要）。这既是多发字节（玩家全量 78 字节里约一半），也是私有字段对旁人可见。选项：A（推荐）主视野改用 packer 里已有的 `near` 视图（`Name, Level, PosX, PosY, SceneID, Facing, Equipment, GuildID`），必要时加上 `cell_hp` / `cell_max_hp`；代价是改 `scene.go.tmpl` 的主视野配置与相关 demo 用例的字段断言。B 保持现状，只在文档里说明 demo 不做字段权限。本轮没改：`scene.go.tmpl` 同时在做主视野尺度的改动。
+- **“同一视图的 packer 始终用同一个 Codec”是前提，没有在服务端强制**：增量信封不带 Codec，接收端沿用全量的。仓库内的 packer（生成的 DAO packer、self_sync、测试 packer）都满足；自定义 packer 若在同一视图里换 Codec，客户端会按全量的 Codec 去解增量载荷，结果取决于两种格式能否互相解析（尚未确认会不会静默错用）。需要时可在 Manager 按（subject, 视图）记下全量的 Codec，增量不符就改发全量。
+- **继续省字节的候选**（证据 §3，按收益）：增量补丁不带 `sync_format`（3 字节）；标量字段包装改 proto3 `optional`（每字段 2 字节）；增量不写 Mask（1 字节）；“一个对象一个组件”的帧简写（约 3 字节 / 对象）；BaseVersion 只发低位（运行久了 1～3 字节，削弱逐对象版本核对，需决定）；全量的命名空间改编号（只省全量）。远处降频 / 距离 LOD 本轮按要求不做。
+- **未运行**：C++ 的 protobuf 用例（`ROOST_PROTOBUF_TESTS=ON`，`client/cpp/tests/views.py` 已按新 API 改写）本机没有 protoc，没跑；C++ 不带 protobuf 的 ctest（含 sync 解码）已跑通过。
+
 ## 2026-11-10：建筑进场景主视野后的 demo 尺度（维护者 2026-11-10：主视野已按推荐放大，见地形方案 §28；偶发已定位修复，见本条末段）
 
 建筑的订阅改为与怪相同的场景主视野之后（[方案 §27.10](FEATURE-2026-11-08-editable-terrain.md#2710-订阅改为场景主视野维护者-2026-11-10)），demo 主视野的尺度（进入 1.2m、离开 1.5m、客户端最大 2.7m，按占地中心）对 3～12m 的建筑明显太小：站在建筑旁边紧挨着的节点上，缺省视野四种建筑都看不见，最大视野只看得见 hut 与 tower，keep 要走进占地里才看得见。另外 `policy.AOI` 的 `MaxVisible` 是近似语义，被上限忽略的目标在它下一次移动时才重新参选——建筑从不移动，视野满时后放的建筑要等看的人移动才进来（会话级超额降级 D17 的放回不受影响）。主视野尺度、按类型名额、按占地范围、静止目标重新参选四项待维护者确认，本轮未改主视野参数；测量见[证据](evidence/building-main-interest-20261110/README.md)。

@@ -161,7 +161,7 @@ handler 的最后一个参数 `nowUnixMilli` 是约定名的业务时间参数�
 | `MatchmakingOpensOneRoomPerMatch` | 同一请求重放不重复排队、第二张有效票被拒；2～8 人弹性队列里四人等待不满 20 秒时策略不出组、提交报 `ErrGroupNotReady`，业务时间推进 20 秒后四人成局、同一票集合并发两次 Commit 是同一局；同一 Match 并发开房三次是同一房间；换名单 / 换 Match 被拒且房间不变；每人一个 Run、重放 Enter 同一个 Run、第二个 Run 被拒；`Current` 带回房间 | service/match 与 service/session 的正式领域语义（内存存储）；开房 handler 以房间里记下的 Match 识别重放 |
 | `CodeRoomFullAndLateJoinRejected` | 房主开房间码房间，7 人加入到 8 人满，第 9 人被拒且状态不变；重复加入无变化；开局后加入被拒 | 被拒的命令回滚：State、Board、心跳与期限都不变 |
 | `HostLeaveTransfersHost` | lobby 里房主离开，房主转给下一个座位、座位让出；非房主开局被拒；局内房主离开同样转移，座位记为离开 | 房主是业务事实，存在房间状态里 |
-| `HeartbeatDrivesRoundsAndGroupSync` | 没有输入时，心跳按业务时间放出星星、结束回合；每次 Flush 后四个客户端（正式 `frame.Receiver` 解码）与服务端 Board 逐字节相同，客户端文档里只有 `board`；业务时钟一次跳过两回合，一拍结算，结算后心跳与期限都停 | 心跳回调在实体锁与事务内；Board 的变化经 Nest 提交门进入下一次 Flush；同步组让全体成员订阅同一视图 |
+| `HeartbeatDrivesRoundsAndGroupSync` | 没有输入时，心跳按业务时间放出星星、结束回合；每次 Flush 后四个客户端（正式 `entitysync.Decoder` 解码）与服务端 Board 逐字节相同，客户端文档里只有 `board`；业务时钟一次跳过两回合，一拍结算，结算后心跳与期限都停 | 心跳回调在实体锁与事务内；Board 的变化经 Nest 提交门进入下一次 Flush；同步组让全体成员订阅同一视图 |
 | `FirstGrabWinsAndDuplicateInputDedup` | 四人并发抢同一颗星，只有一人得分、三人 late；重投三次回执不变、分数不变；旧序号、跳号、错类型、旧连接代都拒绝且不改状态 | 单实体 Nest 串行 + 业务序号去重 |
 | `FoulEliminationAndUndoRollback` | 抢跑两次淘汰，之后输入被拒；输入写入后 handler 失败，State、Board、心跳、期限全部回滚，重试成功 | undo 覆盖 DAO、心跳启停与定时器增删 |
 | `ReconnectWithinGraceReturnsToSameRoom` | 断线后其他成员看到离线；宽限内经 `session.Current` 找回同一房间，连接代加一；旧连接的断开晚到不踢新连接，旧连接代输入被拒；新连接从全量开始 | 连接代与票号由业务存在房间里；断线后成员关系保留，会话重开的那个同步周期同步组重新订阅（框架做，业务不再调用） |
@@ -299,7 +299,7 @@ bash scripts/test-party-room-generated.sh
 
 ### 12. 业务纵切证明什么
 
-- **证明**：公共 CLI 生成的 Player / PartyRoom DAO、实体心跳（真实驱动循环、批量投递）、持久实体定时器、`nopersist,sync` 字段与业务 packer、多实体 Sender 与 Nest 在 18 个组合下的事务、undo 回滚（含心跳启停与定时器）、锁顺序、业务幂等与时间判定；正式 `wiring/nest` Mod + `wiring/selfsync`（自身视图 + 房间同步组，同一个 Manager）经 Nest 提交门把同一份记分板推给全体成员、把 Player 推给本人（正式 `frame.Receiver` 解码、按命名空间分流、视图白名单）；`service/match` 与 `service/session` 的正式领域实现（内存存储）在成局、进房、重连、归还里的语义；业务层补位（第 6A 节）在离开后挂票、并发成局只消耗一次房间票、进房 handler 按座位拒绝超员、截止撤票与迟到成局全部拒绝、补位的人进 session 并收到全量里的行为。
+- **证明**：公共 CLI 生成的 Player / PartyRoom DAO、实体心跳（真实驱动循环、批量投递）、持久实体定时器、`nopersist,sync` 字段与业务 packer、多实体 Sender 与 Nest 在 18 个组合下的事务、undo 回滚（含心跳启停与定时器）、锁顺序、业务幂等与时间判定；正式 `wiring/nest` Mod + `wiring/selfsync`（自身视图 + 房间同步组，同一个 Manager）经 Nest 提交门把同一份记分板推给全体成员、把 Player 推给本人（正式 `entitysync.Decoder` 解码、按命名空间分流、视图白名单）；`service/match` 与 `service/session` 的正式领域实现（内存存储）在成局、进房、重连、归还里的语义；业务层补位（第 6A 节）在离开后挂票、并发成局只消耗一次房间票、进房 handler 按座位拒绝超员、截止撤票与迟到成局全部拒绝、补位的人进 session 并收到全量里的行为。
 - **不证明**：提交器是替身，不含文件 WAL fsync 与 Mongo；房间销毁只做内存卸载；match / session 用内存存储，不含 Redis 与 RPC；玩家接入层是替身（连接激活 / 关闭直接调 `OnActive` / `OnClosed`，推送进内存客户端），没有经嵌入 TCP / 独立 Gate、慢消费者断开、真实客户端（同一入口的真实 TCP 用例在 `wiring/selfsync` 的 `TestGroupsShareTheSelfSyncConnection`）；单进程；补位的“两个匹配器实例”是同一进程里的两个 goroutine，没有多进程匹配器、Redis 存储上的补位与补位吞吐；心跳在 `-race` 下的少量房间运行，没有房间数量、心跳负载与推送带宽的容量数据；夹具里的数值是样例。
 
 ### 13. 真实 WAL / Mongo 崩溃恢复

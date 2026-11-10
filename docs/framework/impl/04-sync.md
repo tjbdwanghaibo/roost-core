@@ -161,6 +161,18 @@
 
 回归：[over_limit_test.go](../../../framework/sync/entitysync/over_limit_test.go)（未超额逐字节不变、暂缓与放回、钉住挤掉最低优先级、钉住一个暂缓中的订阅、Hold/Ready 从零计、暂缓不占 Drain 与预算、RetryLater 重试的 tick、健康降级与指标、-race churn 下客户端表与服务端引用表一致、仍在暂缓时周期再通知）、[manager_test.go](../../../framework/sync/entitysync/manager_test.go) 的 `TestOneFramePerSessionPerTickSplitOnlyAtTheObjectLimit` / `TestNamespaceObjectLimitsAreCountedPerClass`（原断言关会话，改为断言暂缓与另一类不受影响）、[interest_over_limit_test.go](../../../framework/sync/entitysync/policy/interest_over_limit_test.go)（两种应用模式下收缩到最近的 N 个并在人群散去后恢复、`MaxVisible` 大于会话上限、self 不暂缓、Group 等空位、关系视野的 pair 由主视野让位），`wiring/selfsync` 的 `TestALostSessionDisconnectsThePlayerUnlessThePushWasRefused` 第 2a 步，生成工程 `TestACrowdOverflowingASessionShrinksTheViewInsteadOfDisconnecting`、`TestTerrainDoesNotWidenThePlayerObjectLimit`、`TestTerrainChunksOverTheirLimitShrinkTheView`（真实 TCP 客户端解出的对象表与服务端持有集合一致、被丢的是最远的、无断开）。证据见 [evidence/sync-overcap-degrade-20261108](../../maintenance/evidence/sync-overcap-degrade-20261108/README.md)。
 
+## 2H. 线格式与客户端解码（帧协议 2 / 信封 v3，2026-11-10）
+
+一步移动原先单帧 140 字节，其中位置只有 5 字节；改动后 30 字节（同一帧每多一个对象 20 字节）。拆解与依据见 [sync-delta-bytes 证据](../../maintenance/evidence/sync-delta-bytes-20261110/README.md)，格式见 [ENTITY_SYNC 线格式](../ENTITY_SYNC.md#线格式帧协议-2--信封-v3)。修改时保持：
+
+1. **帧（[codec.go](../../../framework/sync/frame/codec.go)）**：整数是最短 uvarint，非最短编码、超过声明上限、计数大于剩余字节都当损坏拒绝（解码前不按计数分配）。增量帧写 `Tick−BaseTick`，所以 `BaseTick < Tick` 是格式本身的要求。Archetype 只在 create 上（`validateFrame` 拒绝 update / remove 带 archetype）。`frame.MaxHeaderBytes` / `MaxObjectHeaderBytes` / `MaxComponentHeaderBytes` 是各部分编码长度的上限：[session.go](../../../framework/sync/entitysync/session.go) 的分帧按上限预留，所以实际帧只会比预算短，不会越过 `MaxFrameBytes`。
+2. **信封（[wire.go](../../../framework/sync/entitysync/wire.go)）**：增量只有标志、BaseVersion、`Version−BaseVersion`、可选 mask / reason 与载荷；身份（subject ID、Kind、命名空间、视图键、Codec、LOD、视图 schema）只在全量里。依据：会话里 ObjectRef 在持有期间只对应一个 subject（换 subject 必先 remove 再 create，create 一定是全量），增量的身份由接收端从同一 ObjectRef、同一组件类型的上一份更新继承；BaseVersion 仍逐个核对。前提：同一视图的 packer 始终用同一个 Codec（`entity.SubjectSyncPacker` 的现有实现都是这样，KNOWN-LIMITS 记有这条前提）。
+3. **客户端 `entitysync.Decoder`**：先过 `frame.Receiver`（流、epoch、tick、基线），再在复制出的对象表上解信封；整帧成功才替换对象表，失败时状态不变且之后只收全量。拒绝：create 一个仍持有的 ref、代际不符、ref 改换 subject、没有基线的增量、版本不连续（BaseVersion 不等于持有的 Version）。旧 epoch / 重复 tick 返回 `ErrStaleFrame`。C# `SubjectUpdate.Decode(data, baseline)` 与 C++ `roost::sync_receiver` 同一规则，三种实现由 `client/spec/packets.json` 的 sync 金样对齐。
+4. **快照预算的估算（[snapshot_requests.go](../../../framework/sync/entitysync/snapshot_requests.go)）**：没测过大小的候选按本 lane 已测到的最小一份估算（没有时按最小全量信封），不能退回“只算最小信封”：增量变小后最小信封远小于真实全量，同一窗口会多捕获一倍再被字节预算挡回（`TestByteBlockedSnapshotsAreNotRecapturedEveryWindow`）。
+5. **DAO 补丁**：增量用生成的 `MarshalSyncDelta` / `MarshalSyncChanges`，不带 `entity_id`；全量用 `MarshalSync`（[DAO-SYNC-PROTOBUF](../DAO-SYNC-PROTOBUF.md)）。
+
+回归：[codec_test.go](../../../framework/sync/frame/codec_test.go) `TestFrameOverheadIsSmallAndBoundedByTheDeclaredMaxima`；[wire_test.go](../../../framework/sync/entitysync/wire_test.go) `TestAPositionDeltaCarriesLittleBesidesThePosition`（单帧开销 ≤24、每多一个对象 ≤12）、`TestSubjectEnvelopeRoundTripsAndADeltaInheritsItsIdentity`、`TestDecoderRefusesWhatDoesNotContinueTheStream`（缺口、出错后只收全量、重放、伪造 ref 改换 subject、旧版本增量）；生成工程 `TestScenePositionStepsCarryLittleBesidesThePosition`（真实场景链路：玩家 / 怪一步单帧 ≤32 字节，每对象 ≤22 字节，补丁只有位置字段）。`over_limit_test.go` 的“未超额逐字节不变”金样随格式换了哈希，结构（对象、组件、信封字段）与修前逐项相同，核对方法见证据。
+
 ## 3. 并发、失败与恢复的修改检查
 
 修改前沿正式调用入口确认拥有者、锁/事务作用域、准入点和释放点。明确拒绝、已经接纳、结果未知、持久确认、投影完成分别给出错误与收尾责任。改变公开类型、配置或线格式时，同时更新生成器、调用方与使用篇，避免同一 tag 的实现和文档产生两套契约。
@@ -211,7 +223,7 @@
 | [subscriptions.go](../../../framework/sync/entitysync/subscriptions.go) | `SubscriptionSource` |
 | [trace.go](../../../framework/sync/entitysync/trace.go) | `SyncTraceEvent`、`SyncTrace` |
 | [transport.go](../../../framework/sync/entitysync/transport.go) | `SessionID`、`Transport`、`TransportFunc`、`SessionLifecycle`、`AsyncTransport`、`FrameSizeLimiter` |
-| [wire.go](../../../framework/sync/entitysync/wire.go) | 函数/方法或内部实现；见源码 |
+| [wire.go](../../../framework/sync/entitysync/wire.go) | `WireVersion`、`EncodeSubjectUpdate`、`DecodeFrame`、`Decoder`、`ReceivedFrame`、`ReceivedObject`、`ReceivedComponent`、`ErrStaleFrame`（§2H） |
 | [workspace.go](../../../framework/sync/entitysync/workspace.go) | 函数/方法或内部实现；见源码 |
 
 ### sync/entitysync/policy
@@ -348,6 +360,7 @@
 - [benchmark_test.go](../../../framework/sync/entitysync/benchmark_test.go)
 - [manager_lifecycle_test.go](../../../framework/sync/entitysync/manager_lifecycle_test.go)：`TestAsyncTransportRetriesTheTickWhenTheResidentBudgetIsExhausted`、`TestAReopenedSessionStartsAboveEveryEpochItsReceiverHasSeen`、`TestInFlightDeliveryCannotOverwriteNewIntent`、`TestStopAndCloseRespectDeadlineWhileAnotherFlushIsInFlight`、`TestStopCancelsPushAndPreventsRestartUntilItReturns`、`TestCloseReleasesStateAfterFinalFlushError`、`TestModeConfigurationRequiresProducerAndKeepsDefault`；其余 12 项见文件
 - [over_limit_test.go](../../../framework/sync/entitysync/over_limit_test.go)：§2G 列出的超额降级用例
+- [wire_test.go](../../../framework/sync/entitysync/wire_test.go)：`TestAPositionDeltaCarriesLittleBesidesThePosition`、`TestSubjectEnvelopeRoundTripsAndADeltaInheritsItsIdentity`、`TestDecoderRefusesWhatDoesNotContinueTheStream`（§2H）
 - [manager_test.go](../../../framework/sync/entitysync/manager_test.go)：`TestEachSessionGetsASnapshotThenDeltasAndOnePackServesThemAll`、`TestAFailingSessionIsClosedAloneAndTheOthersStillReceive`、`TestRetryLaterAbandonsTheTickWithoutBlamingAnySession`、`TestUnsubscribeAndUnregisterOweARemoveOnlyToWhoHoldsTheObject`、`TestCloseSessionForgetsItsSubscriptionsWithoutAFrame`；其余 19 项见文件（含按命名空间的持有上限 `TestNamespaceObjectLimitsAreCountedPerClass` 等 5 项）
 - [resubmit_test.go](../../../framework/sync/entitysync/resubmit_test.go)：`TestRetractedSubscriptionsWithoutAPolicyAreNotRestored`、`TestRetractedPolicySubscriptionsAreHandedBackOnceAfterReRegistration`、`TestReleasedOrUnregisteredRetractionsAreNotHandedBack`、`TestResubmitInterruptedByASecondRetractionIsHandedBackAgain`、`TestQueuedResubmitReturnsToTheRetractionTableOnce`；其余 4 项见文件
 - [retirement_test.go](../../../framework/sync/entitysync/retirement_test.go)：`TestRetractSyncSubjectRemovesHeldObjectsBeforeRecreate`、`TestRetractSyncSubjectDoesNotRetireALaterRegistration`、`TestRegisterAfterRetirementCompletesOnceTheRemoveIsOut`、`TestRegisterAfterRetirementCompletesWhenTheLastSubscriberCloses`、`TestAQueuedRegistrationIsBoundedAndCancellable`；其余 11 项见文件
@@ -372,7 +385,7 @@
 ### sync/frame
 
 - [benchmark_test.go](../../../framework/sync/frame/benchmark_test.go)
-- [codec_test.go](../../../framework/sync/frame/codec_test.go)：`TestEncodeFrameRefusesEachMalformedDelta`、`TestFrameCodecEnforcesLimitsAndRefusesCorruptBytes`、`TestEncodeFrameRefusesCountsAndSizesTheWireFormatCannotCarry`、`TestDecodeFrameRefusesHeaderCountsBeforeReadingOrAllocating`
+- [codec_test.go](../../../framework/sync/frame/codec_test.go)：`TestEncodeFrameRefusesEachMalformedDelta`、`TestFrameCodecEnforcesLimitsAndRefusesCorruptBytes`、`TestEncodeFrameRefusesCountsAndSizesTheWireFormatCannotCarry`、`TestDecodeFrameRefusesHeaderCountsBeforeReadingOrAllocating`、`TestFrameOverheadIsSmallAndBoundedByTheDeclaredMaxima`
 - [receiver_test.go](../../../framework/sync/frame/receiver_test.go)：`TestReceiverGapRequiresFullAndIgnoresOldEpoch`、`TestReceiverApplicationFailureRequiresRecovery`、`TestReceiverPanicDoesNotLeaveUsableBaselineOrBusyReceiver`、`TestReceiverResetInsideCallbackCannotRestoreOldBaseline`、`TestReceiverRejectsStreamAndSchemaSwitchAndMalformedFrame`
 
 ### sync/lockstep

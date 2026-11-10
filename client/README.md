@@ -127,9 +127,9 @@ bits3..7必须为0。PB请求/响应flags=0，PB推送=1，Sync推送=3；Lockst
 - 跨语言金样：`client/spec/packets.json`的`auth_generation`（票据`ticket`，代号最高位为1，检验按无符号64位大端写出）。Go（`TestClientProtocolGolden*`）、C#（`Roost.Client.Tests`）和C++（`native_client`）都用同一票据与代号编码，并与金样逐字节比对。
 - 混用：服务端对没带代号的一方仍按“后完成者胜出”处理，只要同一会话的两次握手有一次没带代号就退回这条规则。不是这三套运行库的自建客户端要自己按上面的布局与生成规则实现；自建接入服务若直接把首包载荷当票据读，需要先拆信封（Go用`wire.DecodeAuth`，C#用`AuthPayload.Decode`）。
 
-正式生成的player TCP要求客户端首包和后续包seq非零、单连接按线上发送顺序递增（允许uint32回绕）。C#在发送锁内分配seq；推送seq属于服务器独立空间，即使与请求相同也不能匹配待应答请求。正式TCP接收PB业务请求和显式注册的Lockstep Notify，客户端Sync请求在Dispatch前拒绝。类型不符在decoder/handler前拒绝，各类共用同一个message_id注册表。原始Sync推送复用既有frame v1 / SubjectUpdate v2 / 应用packer；内部版本未随外层改变。
+正式生成的player TCP要求客户端首包和后续包seq非零、单连接按线上发送顺序递增（允许uint32回绕）。C#在发送锁内分配seq；推送seq属于服务器独立空间，即使与请求相同也不能匹配待应答请求。正式TCP接收PB业务请求和显式注册的Lockstep Notify，客户端Sync请求在Dispatch前拒绝。类型不符在decoder/handler前拒绝，各类共用同一个message_id注册表。原始Sync推送的载荷是帧协议2 / subject信封v3（2026-11-10起，见`docs/framework/ENTITY_SYNC.md`线格式一节）；外层包头不变。
 
-Go封包实现是`client/wire`，robot TCP/WebSocket与正式生成的player TCP/探针/loadtest共用它。Go客户端解码Entity Sync自身视图（`access.player.self_sync`）的写法见`wiring/selfsync/example_client_test.go`：每连接一个`frame.Receiver`，`DecodeSubjectUpdate`取出载荷交给DAO的`ApplySync`，随测试运行；C#本轮没有对应样例。现有`sync/nettransport`的UDP/KCP/QUIC channel管理不在本次改造范围；没有据此宣称所有传输或公网TLS已统一。
+Go封包实现是`client/wire`，robot TCP/WebSocket与正式生成的player TCP/探针/loadtest共用它。Go客户端解码Entity Sync自身视图（`access.player.self_sync`）的写法见`wiring/selfsync/example_client_test.go`：每连接一个`entitysync.Decoder`（增量信封从基线继承身份，必须按连接有状态地解），取出载荷交给DAO的`ApplySync`，随测试运行；C#用`SubjectUpdate.Decode(data, baseline)`或`EntityViews`，C++用`roost::sync_receiver`。现有`sync/nettransport`的UDP/KCP/QUIC channel管理不在本次改造范围；没有据此宣称所有传输或公网TLS已统一。
 
 ## 服务端与代码生成
 

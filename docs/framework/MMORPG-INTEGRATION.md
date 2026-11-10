@@ -19,7 +19,7 @@ Player 当前**静态绑定 game sid**：跨服玩法由 Remote / Saga 协作，
 | 角色资产、血量、任务、地图归属 | Player Entity 的 DAO；组件提供业务方法；Nest 串行修改 | 在 handler 内用生成的 mutator 写入，网络端点不能裸改 DAO |
 | 交易托管、怪物归属、副本事实 | 独立 Trade / Monster / Scene Entity，必要时有自己的 DAO | 已知参与者一次传入多实体 Sender，由 Nest 排序取锁、同事务提交 |
 | 谁能看到谁 | `policy.Interest` 的地图 AOI、关系来源与同步 Profile | 由权威位置更新索引；它是派生索引，不能反向覆盖 DAO |
-| 客户端已经看到什么 | `entitysync.Manager` 的会话、epoch、基线与 ObjectRef；客户端 `frame.Receiver` | 收到 Full 先清旧视图，连续应用 Delta；旧 epoch 忽略，缺口重建全量 |
+| 客户端已经看到什么 | `entitysync.Manager` 的会话、epoch、基线与 ObjectRef；客户端 `entitysync.Decoder` | 收到 Full 先清旧视图，连续应用 Delta；旧 epoch 忽略，缺口重建全量 |
 
 夹具里的 Scene 带人数 / 副本完成事实，所以持久化；game-demo 的地形 Scene 可从配置重建，标记 `noPersist=true lifetime=runtime_rebuild`（[模板](../../demo/game/entities/scene/entity.go.tmpl)）。两者是不同业务模型，不能照搬注解。
 
@@ -249,7 +249,7 @@ ROOST_MMORPG_REAL=1 bash scripts/test-mmorpg-generated.sh
 bash scripts/test-mmorpg-scenes.sh
 ```
 
-脚本用当前生成器生成新的 game-demo（`--skip-deps`，replace 指回当前仓库），放入[多地图接法](../../scripts/testdata/mmorpg/scene_runtime.go.txt)与[测试](../../scripts/testdata/mmorpg/scene_runtime_test.go.txt)，用 demo 的玩家 TCP 接入和框架 `frame.Receiver` 做客户端（载荷是 DAO 同步 PB 补丁，客户端按对象保留快照，用生成的 `db.UnmarshalSyncPlayerDao` / `db.ApplySyncPlayerDao` 合并后读 `Values()`），检查：相同坐标的跨图隔离、旧图删除、目标图全量、业务准入失败后 held 重试、旧 epoch 帧不被应用、断线后按权威归属重连恢复、空间视图不泄露私有字段（`TestMMORPGTwoScenesTCPTransferRetryAndReconnect`）；之后对消费者 build / vet。
+脚本用当前生成器生成新的 game-demo（`--skip-deps`，replace 指回当前仓库），放入[多地图接法](../../scripts/testdata/mmorpg/scene_runtime.go.txt)与[测试](../../scripts/testdata/mmorpg/scene_runtime_test.go.txt)，用 demo 的玩家 TCP 接入和框架 `entitysync.Decoder` 做客户端（载荷是 DAO 同步 PB 补丁，客户端按对象保留快照，用生成的 `db.UnmarshalSyncPlayerDao` / `db.ApplySyncPlayerDao` 合并后读 `Values()`），检查：相同坐标的跨图隔离、旧图删除、目标图全量、业务准入失败后 held 重试、旧 epoch 帧不被应用、断线后按权威归属重连恢复、空间视图不泄露私有字段（`TestMMORPGTwoScenesTCPTransferRetryAndReconnect`）；之后对消费者 build / vet。
 
 单场景的已有 demo 回归还覆盖：观察另一玩家变化、离场删除、停读连接被关闭而健康连接继续消费、重连全量恢复、旧 session 的迟到断开不删除重连后的新成员、卸载重载后观察者恢复。在新生成的 game-demo 中运行：
 

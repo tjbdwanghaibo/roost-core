@@ -59,7 +59,7 @@ equip.SetRunesAt(0, gem)
 
 同一嵌套对象只能属于一个位置，不能把已绑定的对象再放到其他 key/index；用新对象或明确转移所有权。移除/替换后旧对象不再向原父节点报告变化。插入中间、删除中间、排序或整体重排用 `SetAll`（嵌套列表用 `SetX`）发送替换，不生成相对 splice；索引不会因补丁重试产生二次移动。
 
-直接 `MarshalSync(mask)` 继续发送字段替换。`MarshalSyncChanges(mask)` 读取当前变化记录但不消费，须在 Entity 锁保护下使用。默认 `self_sync` 已接入；自定义 packer 若要使用该能力，应在 `PackSubjectDelta` 调用它、在 Snapshot 调用完整编码，并实现 `entity.SubjectSyncChangePacker` 委托同一 DAO 的版本获取和确认。多 DAO 自定义 packer需要自行管理各 DAO 捕获版本，不能共用一个未经映射的序号。未接入的 packer 仍使用字段替换。
+直接 `MarshalSync(mask)` 继续发送字段替换。**实体 ID 只在全量里**（2026-11-10）：`MarshalSync` 带 `entity_id`，给全量（`PackSubjectSnapshot`）用；增量用 `MarshalSyncDelta(mask)`（字段替换）或 `MarshalSyncChanges(mask)`（变化树），二者都不带 `entity_id`。生成的 `ApplySync*`（Go / C#）在增量上把缺省的 0 当作沿用基线的 ID，带了与基线不同的 ID 照旧拒绝；`Values()` 在没有 ID 的增量上不给 `_id`。依据：EntitySync 信封 v3 的增量本来就从同一对象引用的全量继承 subject ID（[ENTITY_SYNC 线格式](ENTITY_SYNC.md#线格式帧协议-2--信封-v3)），补丁里再带一遍是重复的 2～10 字节。自定义 packer 的增量若仍用 `MarshalSync` 也照样能被应用，只是多带 ID。`MarshalSyncChanges(mask)` 读取当前变化记录但不消费，须在 Entity 锁保护下使用。默认 `self_sync` 已接入；自定义 packer 若要使用该能力，应在 `PackSubjectDelta` 调用它、在 Snapshot 调用完整编码，并实现 `entity.SubjectSyncChangePacker` 委托同一 DAO 的版本获取和确认。多 DAO 自定义 packer需要自行管理各 DAO 捕获版本，不能共用一个未经映射的序号。未接入的 packer 仍使用字段替换。
 
 ## 客户端接入
 

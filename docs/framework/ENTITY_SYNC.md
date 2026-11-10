@@ -75,7 +75,7 @@ Push 期间若换 profile、撤订或退役，旧捕获只结算匹配的订阅 
 
 `OpenSession(id)` 之后才能订阅；`OpenHeldSession(id)` 开一个 **held** 的会话——可订阅、不出帧——`ReadySession(id)` 之后第一帧是新 epoch 的 FrameFull。
 客户端在登录应答之后才装解码器的部署用它消掉首帧竞态（demo：`enter_game` held，客户端发 `scene_ready`）。`HoldSession(id)` 让一个在收帧的会话重新开始（重连、客户端重置）。
-Hold → Ready 的结果是：接收端的对象表等于 Ready 时仍在的订阅。新 epoch 的 Full 让上一 epoch 的对象全部作废，所以 held 期间（或 Ready 之后、新 Full 之前）撤掉的订阅不欠 remove；撤到一个订阅都不剩时，这一 lifetime 交付过帧的会话会收到一个不含对象的 Full（`session.owesEmptyFull`），接收端照样清空，从未收过帧的会话不发。因此“暂停发布 → 读权限 → Apply → Ready”也可以用 Hold，代价是 Ready 后全部对象按全量重发；接收端收到 Full 时要先清空旧对象（`frame.Receiver` 的约定）。2026-10-21 之前没有对象时不发帧，接收端会一直留着最后撤掉的对象。
+Hold → Ready 的结果是：接收端的对象表等于 Ready 时仍在的订阅。新 epoch 的 Full 让上一 epoch 的对象全部作废，所以 held 期间（或 Ready 之后、新 Full 之前）撤掉的订阅不欠 remove；撤到一个订阅都不剩时，这一 lifetime 交付过帧的会话会收到一个不含对象的 Full（`session.owesEmptyFull`），接收端照样清空，从未收过帧的会话不发。因此“暂停发布 → 读权限 → Apply → Ready”也可以用 Hold，代价是 Ready 后全部对象按全量重发；接收端收到 Full 时要先清空旧对象（`entitysync.Decoder` / `frame.Receiver` 的约定）。2026-10-21 之前没有对象时不发帧，接收端会一直留着最后撤掉的对象。
 `CloseSession(id)` 丢会话状态并从每个 subject 删掉它的订阅，不欠任何帧。会话 id 由政策定义
 （demo 用 player id，接入层对该玩家的全部连接扇出），只要求稳定、唯一。`Transport` 可选实现 `SessionLifecycle` 以跟随开关。
 旧 Push 仅可采纳到仍匹配的会话状态；Hold/重开后旧帧不覆盖新状态，旧错误也不能关闭新会话。Transport 必须把已开始的 Push 固定到原连接，已准入字节不能撤回。
@@ -102,7 +102,7 @@ Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Clo
 
 **为什么不直接用 `Group` 或自建 Manager。** 同一进程打开 self_sync 后：
 
-1. Nest 只有一个 EntitySync 观察者位置。业务再经 `NestOptionWithEntitySync` 塞一个自建 Manager 会被 Nest Mod 自己的选项**静默覆盖**（收不到提交捕获与回滚撤回，periodic 下毫无报错）。现在 `wiring/nest.Mod.Provide` 拒绝这种装配（`ErrEntitySyncObserverConflict`）。两个 Manager 推同一条连接还要两个推送编号、两套 epoch，客户端要分别维护两个 `frame.Receiver`。
+1. Nest 只有一个 EntitySync 观察者位置。业务再经 `NestOptionWithEntitySync` 塞一个自建 Manager 会被 Nest Mod 自己的选项**静默覆盖**（收不到提交捕获与回滚撤回，periodic 下毫无报错）。现在 `wiring/nest.Mod.Provide` 拒绝这种装配（`ErrEntitySyncObserverConflict`）。两个 Manager 推同一条连接还要两个推送编号、两套 epoch，客户端要分别维护两个 `entitysync.Decoder`。
 2. 把 `Group` 挂到 self_sync 的 Manager 上（`Mod.EntitySync()`）在 Manager 与线格式层面可以共存：同一会话、同一帧里两个对象，客户端按每个更新的命名空间 + 视图键分流。但会话归 `SelfView`：登录后第一个政策阶段之前 `Join` 被拒（`session is not open`）；断线重连时会话关闭、组订阅随之删除，`Group` 仍记着成员，重连后房间**静默断供**（实测：重连后第一帧只有 `player/self`，下一周期无推送）。业务拿不到“会话何时重开”的时机，没法补 `Join`。
 
 **做法。** `GroupView` 与 `SelfView` 同一写法、装在同一个 Manager 上、政策阶段排在 `SelfView` 之后：
@@ -112,18 +112,29 @@ Manager 维护每个 session lifetime 的 subjects 反向索引，Hold/Ready/Clo
 - `GroupView` 拥有组实体的登记：`Disband` 退订全部成员并 `Unregister`，同 ID 再成组走 remove-before-create。
 - `wiring/selfsync.Groups` 只做装配与提交边界：`Config.Groups` 交给 `selfsync.New`，Nest Mod Init 时随自身视图装上；组实体加载按 kind 转交 `EntityLoaded`；`Join / Leave / Disband` 在 Nest 事务里调用时推迟到提交之后（`nest.AfterCommit`），事务回滚就不发生，事务外调用立即记下。组 ID 是组实体 ID，成员是玩家 ID（自身视图的会话 ID，玩家实体 ID 用 `entity.GetUniqueIDFromEntityID` 换）。
 
-**线上怎么区分两路。** 同一条玩家连接、同一个推送编号（`msgid.MsgSelfSync`）、同一个会话、同一个 epoch：一帧里可以同时有玩家自己与房间两个对象，客户端按每个更新自带的 `Namespace`（实体标记的 `syncNamespace`）与 `Profile.Key` 分流——自身视图是 Player 的命名空间 + `self`，组视图是组实体的命名空间 + `GroupsConfig.Profile.Key`。只用一个 `frame.Receiver`；重连后的 Full 同时带回两路（`wiring/selfsync` 的 `TestGroupsShareTheSelfSyncConnection` 走真实 TCP）。
+**线上怎么区分两路。** 同一条玩家连接、同一个推送编号（`msgid.MsgSelfSync`）、同一个会话、同一个 epoch：一帧里可以同时有玩家自己与房间两个对象，客户端按每个更新自带的 `Namespace`（实体标记的 `syncNamespace`）与 `Profile.Key` 分流——自身视图是 Player 的命名空间 + `self`，组视图是组实体的命名空间 + `GroupsConfig.Profile.Key`。只用一个 `entitysync.Decoder`；重连后的 Full 同时带回两路（`wiring/selfsync` 的 `TestGroupsShareTheSelfSyncConnection` 走真实 TCP）。
 
 取舍与确认过程见 [FEATURE-2026-10-31-room-sync-groups](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/FEATURE-2026-10-31-room-sync-groups.md)。
 
 **限制。** 离线成员每个政策阶段被复查一次（一次 `SubscribeStamped` 失败返回），代价与“有离线成员的组”的成员数成正比；成员关系不持久；`Groups` 只能装在 self_sync 的 Manager 上（会话归自身视图），没打开 self_sync 的进程用 `Group` 并自己开关会话。`GroupsConfig.Profile.Key` 必填：组视图的字段权限由 packer 按视图键决定。
 
-## 线格式（v2）
+## 线格式（帧协议 2 / 信封 v3）
 
 一帧就是一个 `framework/sync/frame.Frame`：`Epoch/Tick` 是该会话的时钟，`StreamID` 恒为流常量 1，`SchemaVersion` 来自 `ManagerConfig.FrameSchemaVersion`；
 Epoch 在一个 Manager 内单调递增、跨会话 ID 共享：每次 `OpenSession` 与 `HoldSession` 都取下一个值，客户端不能假设首帧 epoch 为 1。同一会话 ID 关掉又打开、新 lifetime 的帧落到同一个接收端时，新全量因此总是比接收端已收过的帧 epoch 更大，会被接受而不是当旧包丢掉。框架自带的政策（自身视图、game-demo 场景）不在原连接上重开：推送在活着的连接上被拒时传输关闭该玩家的连接（[impl/04-sync §2C](impl/04-sync.md#2c-自身视图selfview的生命周期)），这一条是 Manager 自身的防御。
-每个对象一个组件，数据是 `EncodeSubjectUpdate`（subject id、namespace、profile、version/base、mask、payload）。
-客户端 `entitysync.DecodeFrame` → 每组件 `DecodeSubjectUpdate`。全部走可靠通道；datagram 分片不再用于实体同步。
+每个对象一个组件，数据是 `EncodeSubjectUpdate` 编出的 subject 信封（`WireVersion` 3）。全部走可靠通道；datagram 分片不再用于实体同步。
+
+**帧（`frame.ProtocolVersion` 2）**：魔数 `RF`、协议版本、帧类型各 1～2 字节，其余整数一律是最短 uvarint（非最短编码当损坏拒绝）：StreamID、Epoch、Tick、增量帧的 `Tick−BaseTick`、SchemaVersion、对象数；对象是操作（1 字节）、Ref.ID、Ref.Generation、**只有 create 带** Archetype、非 remove 的组件数；组件是操作、TypeID，set 再带 SchemaVersion、长度与数据。帧头的上限是 `frame.MaxHeaderBytes`、每对象 / 每组件头的上限是 `MaxObjectHeaderBytes` / `MaxComponentHeaderBytes`，Manager 分帧按这些上限预留，实际帧只会更短。
+
+**subject 信封（`entitysync.WireVersion` 3）**：首字节是标志（全量、带 mask、带 reason）。
+- 全量：subject ID、Kind、Version、BaseVersion、[Mask]、[Reason]、Codec、LOD、Profile.SchemaVersion、命名空间、视图键（`default` 写成空串）、载荷。
+- 增量：BaseVersion、`Version−BaseVersion`（≥1）、[Mask]、[Reason]、载荷。subject ID、Kind、命名空间、视图键、Codec、LOD、视图 schema 都不在线上，由接收端从同一 ObjectRef（会话内的短 ID）、同一组件类型上次收到的全量继承。
+
+增量能省掉身份的依据：同一会话里 ObjectRef 与 subject 一一对应，换 subject 必然先 remove 再 create（create 一定是全量）；BaseVersion 仍逐个对象核对，接收端持有的版本不等于 BaseVersion 就拒绝，所以丢帧、乱序、重放照样过不了校验。一个视图（命名空间 + 视图键）的 packer 必须始终用同一个 Codec，增量才能沿用全量的 Codec。
+
+**客户端**：增量信封不能单独解码，必须用有状态的 `entitysync.Decoder`（每连接一个）：`Decode(frameBytes)` 先过 `frame.Receiver` 的流校验（epoch、tick、基线），再按对象表解每个信封，返回 `ReceivedFrame`（对象的 `SubjectID`、每组件的 `SubjectSyncUpdate` 与线上字节数）。旧 epoch 或已收过的 tick 返回 `ErrStaleFrame`（跳过即可）；其他错误之后 Decoder 只接受新的全量。全量帧先清空旧对象。C# 是 `SubjectUpdate.Decode(data, baseline)`（`EntityViews` 自动传上一次的更新），C++ 是 `roost::sync_receiver`（按它的对象表传基线）。
+
+DAO 同步 PB 的增量补丁不再带 `entity_id`（生成的 `MarshalSyncDelta` / `MarshalSyncChanges`），只有全量带；`ApplySync*` 在增量上接受缺省的 0，带了不同的 ID 照旧拒绝（[DAO-SYNC-PROTOBUF](DAO-SYNC-PROTOBUF.md)）。一步移动的典型字节（game-demo 主视野，玩家或怪走一步、只改 pos_x）：帧头 10 + 对象头 4 + 组件头 4 + 信封 4 + DAO 补丁 8 = 30 字节，同一帧每多一个对象 20 字节；修前是 140 / 108 字节。逐字节拆解与前后对照见 [sync-delta-bytes 证据](../maintenance/evidence/sync-delta-bytes-20261110/README.md)。
 
 组帧以**完整 EntitySync 更新包**为最小单元，一个外层帧可装多个完整实体包。对象数量或字节上限不足时，将下一个实体包整体放入下一帧；不会截断 payload。单包超过硬上限明确失败。Transport 可选实现 `FrameSizeLimiter` 声明最大帧大小，AsyncTransport 适配器自动转发单消息限制；自定义包装需扣除自身头部开销并转发能力。
 
@@ -139,7 +150,7 @@ Epoch 在一个 Manager 内单调递增、跨会话 ID 共享：每次 `OpenSess
 - `NamespaceLimits.SnapshotBudget`：该命名空间单独的冷创建预算，与 Manager 级预算、其他命名空间互不占额度；每一路各自轮转会话与实体（游标、两类来源交替）、各自计字节软上限与窗口，RetryLater 中断准入时每一路只给实际尝试过的会话计费、游标不越过该路计划里未尝试的会话。零值表示该命名空间不限快照（不继承 Manager 级预算）。
 - 分类键是 subject 的 `Namespace`（codegen `syncNamespace`），不是订阅来源：命名空间是对象自己的属性，一个对象经几个来源订阅也只占一个引用、只属于一类；它也是客户端的分流键。类别在登记时按状态的命名空间确定，`Rebind` 不改变。
 - **超出一类的上限**按下面[超额降级](#超额降级会话持有对象超过上限)处理（2026-11-08 起，D17）：只暂缓该类放不下的新对象、不关会话，计数与告警点名命名空间（没列出的那一类标签为 `*`）；另一类照常。政策的上限（该命名空间所用 Interest 的 `AOIConfig.MaxVisible`）应不大于它的 `MaxObjects`，否则会一直在边界上暂缓、收紧。同一 tick 先 remove 再 create，满额的类里换对象不超限；Hold/Ready、关闭重开从零计；退役（remove-before-create）先归还名额。
-- **帧与客户端**：每帧对象数仍按 `Limits.MaxObjects` 切分，只有引用表上限变成各类之和，所以接收端（Go `frame.Receiver`、C# `SyncFrame.Decode` 的 `maxObjects`）照旧按 `Limits.MaxObjects` 配置，不需要知道总数；客户端若显式设对象表容量（C# `EntityViews` 的 `maxObjects`，缺省 10000），不得小于各类之和。
+- **帧与客户端**：每帧对象数仍按 `Limits.MaxObjects` 切分，只有引用表上限变成各类之和，所以接收端（Go `entitysync.Decoder` 的 `frame.Limits`、C# `SyncFrame.Decode` 的 `maxObjects`）照旧按 `Limits.MaxObjects` 配置，不需要知道总数；客户端若显式设对象表容量（C# `EntityViews` 的 `maxObjects`，缺省 10000），不得小于各类之和。
 - **默认不变**：不配置（nil）时与没有这一项逐字节相同（既有用例不改断言即通过）；列出某个命名空间也不改变其他命名空间的任何字节（`TestNamespaceLimitsLeaveUnlistedNamespacesByteIdentical`）。实现：`framework/sync/entitysync/namespaces.go`（类别与持有计数）、`snapshot_budget.go`（`snapshotLane`，每路一份额度、游标与待快照索引）。
 
 game-demo 的场景：玩家 / 怪 / 场景沿用 100、不限快照，`terrain` 命名空间上限 64、每会话每次 Flush 至多 4 个全量（`demo/internal/service/game/terrain_sync.go.tmpl` 的 `terrainNamespaceLimits`）。
