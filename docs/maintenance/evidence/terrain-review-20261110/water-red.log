@@ -1,0 +1,33 @@
+=== RUN   TestReviewWaterMetadataCopy
+    review_water_1110_test.go:15: returned metadata aliases View: metadata level=200, actual water=100
+--- FAIL: TestReviewWaterMetadataCopy (0.00s)
+=== RUN   TestReviewWaterDepthNeverNegative
+=== RUN   TestReviewWaterDepthNeverNegative/0
+=== RUN   TestReviewWaterDepthNeverNegative/2147483647
+    review_water_1110_test.go:31: valid water metadata produces negative depth: -2147473649
+--- FAIL: TestReviewWaterDepthNeverNegative (0.00s)
+    --- PASS: TestReviewWaterDepthNeverNegative/0 (0.00s)
+    --- FAIL: TestReviewWaterDepthNeverNegative/2147483647 (0.00s)
+=== RUN   TestReviewWaterMetadataCopy
+    review_water_1110_test.go:15: returned metadata aliases View: metadata level=200, actual water=100
+--- FAIL: TestReviewWaterMetadataCopy (0.00s)
+=== RUN   TestReviewWaterDepthNeverNegative
+=== RUN   TestReviewWaterDepthNeverNegative/0
+=== RUN   TestReviewWaterDepthNeverNegative/2147483647
+    review_water_1110_test.go:31: valid water metadata produces negative depth: -2147473649
+--- FAIL: TestReviewWaterDepthNeverNegative (0.00s)
+    --- PASS: TestReviewWaterDepthNeverNegative/0 (0.00s)
+    --- FAIL: TestReviewWaterDepthNeverNegative/2147483647 (0.00s)
+=== RUN   TestReviewWaterMetadataCopy
+    review_water_1110_test.go:15: returned metadata aliases View: metadata level=200, actual water=100
+--- FAIL: TestReviewWaterMetadataCopy (0.00s)
+=== RUN   TestReviewWaterDepthNeverNegative
+=== RUN   TestReviewWaterDepthNeverNegative/0
+=== RUN   TestReviewWaterDepthNeverNegative/2147483647
+    review_water_1110_test.go:31: valid water metadata produces negative depth: -2147473649
+--- FAIL: TestReviewWaterDepthNeverNegative (0.00s)
+    --- PASS: TestReviewWaterDepthNeverNegative/0 (0.00s)
+    --- FAIL: TestReviewWaterDepthNeverNegative/2147483647 (0.00s)
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	0.020s
+FAIL

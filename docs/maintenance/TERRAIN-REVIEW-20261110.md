@@ -49,3 +49,27 @@ go test -race ./gameplay/cellworld -count=1
 五包通过，分别见 [四包日志](evidence/terrain-review-20261110/packages-race.log) 与 [cellworld 日志](evidence/terrain-review-20261110/cellworld-race.log)。正常回归未包含后来新增、预期失败的审查探针；不能把探针失败隐去并称“全部测试通过”。
 
 未执行：最新生成 demo 的真实 Mongo/WAL 验收、Unity、跨机与容量验收。随后 main 更新到 `3d1ec2b5` 的建筑/区域水位等逻辑属于继续审查范围，本报告不把尚未汇总的新结论混入上一轮结果。
+
+## 续审：区域水位与建筑（基线 3d1ec2b5）
+
+以下为后续独立审查结果，不沿用上一轮的包测试结果。生成正式 game-demo，自定义 module `example.com/reviewplanet`，core replace 指向该基线，运行正式 `roost generate`。建筑相关回归 `go test -mod=mod -race ./internal/service/game -run 'Building|Buildings' -count=1` 通过（7.428s，[日志](evidence/terrain-review-20261110/buildings-race.log)）；真实 Mongo 用例受 `ROOST_TERRAIN_IT_MONGO_URI` 门控制，本轮未运行。没有重现并关闭已登记的建筑同步偶发全量问题。
+
+### RV-20261110-03：View.Meta 泄漏可写的水位区域切片（P2，已复现，未修复）
+
+位置：[view.go:104](https://github.com/tjbdwanghaibo/roost-core/blob/3d1ec2b5/gameplay/terrain/view.go#L104)。新增 `WaterRegions []WaterRegion` 后，`View.Meta()` 仍直接按值返回结构体；切片底层数组与内部状态共享。接入方取出 metadata 副本并修改某区域，会改坏 View 内的 metadata，但实际查询用的 `water` 缓存没有更新。`Pack.Meta()` 已复制切片，`View.Meta()` 漏了同样处理；demo 的 `Map.Meta()` 也应一并审视。
+
+复现：一个区域水位 100，`copy := view.Meta()` 后设置 `copy.WaterRegions[0].Level = 200`。随后 `view.Meta().WaterLevelOf(key)` 返回 200，`view.WaterLevelOf(key)` 仍为 100。连续三轮复现。影响是调用方修改“副本”后，同一 View 的元数据与水域权威查询相互矛盾；并发改读还存在共享数组风险，本轮没有把 race 风险当作已动态复现的竞争。
+
+修复建议：所有公开 metadata 值返回边界均复制 WaterRegions（或明确采用不可变封装），保留区域配置只能随资源换版的契约；不要只更新缓存来默许任意外部写入。验收需检查 Pack/View/Map 三个入口，修改返回值不改变内部状态，各水位查询保持一致。
+
+### RV-20261110-04：合法水位配置可使 WaterDepth 返回负数（P3，已复现，未修复）
+
+位置：[view.go:44](https://github.com/tjbdwanghaibo/roost-core/blob/3d1ec2b5/gameplay/terrain/view.go#L44)。`Ground.Depth()` 用 int32 计算 `WaterLevel - Height`，而 Meta.Validate 只验证地面高度能表示，没有约束水位与最低地面的差值。两个合法 int32 的差可能超出 int32。
+
+复现：HeightBase = -10000，raw = 0，WaterLevel = MaxInt32，配置通过 Validate 和读包，WaterDepth 返回 **-2147473649**，但该点明确是水。水位 0 的正常对照返回正水深、通过；边界失败连续三轮。C# `TerrainGround.Depth` 也使用 int 差值，源码存在同样计算边界，本轮没有运行 C# 探针。
+
+影响限于极端但被接受的配置，不是默认水位必现。建议两端采用足够宽的返回类型，或一致拒绝差值不可表示的地图配置；不要只在 Go 侧改规则。验收覆盖全局与区域水位、负 HeightBase、无水哨兵，以及 Go/C# 一致性。
+
+两项复现的[探针](evidence/terrain-review-20261110/water_probe_test.go.txt)和[三轮日志](evidence/terrain-review-20261110/water-red.log)已保留。将探针放入对应基线 `gameplay/terrain/review_water_1110_test.go` 后执行 `go test ./gameplay/terrain -run TestReviewWater -count=3 -v`。这是审查预期失败用例，未混入正式测试集。
+
+收尾拉取时 main 又前进到 `7c5e6a90`（增量字节压缩等改动）；上述两个水位入口未在该轮差异中修改，但本节实测基线仍为 `3d1ec2b5`。新一批线格式和客户端编解码修改尚不属于本报告已完成验证范围。
