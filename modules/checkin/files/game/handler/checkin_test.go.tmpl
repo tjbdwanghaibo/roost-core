@@ -1,0 +1,159 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+const checkinDay = 24 * time.Hour
+
+type checkinFixture struct {
+	engine    *nest.NestMgr
+	player    *playerentity.Player
+	claims    *sender.CheckinClaimSender
+	committer *walletCommitter
+	now       atomic.Int64
+}
+
+// newCheckinFixture 用替身提交器起一个 Nest，业务时钟由用例拨：签到按业务时间的 UTC 日切分。
+func newCheckinFixture(t *testing.T) *checkinFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterCheckinClaimNestHandlers()
+	f := &checkinFixture{committer: &walletCommitter{}}
+	f.now.Store(time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC).UnixMilli())
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	id, err := entity.BuildEntityID(92001, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = built.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(walletGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.claims = sender.NewCheckinClaimSender(f.engine)
+	return f
+}
+
+func (f *checkinFixture) claim() (*pb.CheckinClaimResponse, error) {
+	return f.claims.Sync_CheckinClaim(context.Background(), f.player.ID(), &pb.CheckinClaimRequest{})
+}
+
+func (f *checkinFixture) mustClaim(t *testing.T) *pb.CheckinClaimResponse {
+	t.Helper()
+	response, err := f.claim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+// snapshot 在业务 worker 上持实体锁读签到进度与余额。
+func (f *checkinFixture) snapshot(t *testing.T) (streak, total int32, coins int64) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		state := f.player.Dao().GetCheckin()
+		streak, total = state.GetStreak(), state.GetTotal()
+		coins = f.player.Dao().GetWallet().GetCoins()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return streak, total, coins
+}
+
+func TestCheckinFirstClaimPaysTheBaseReward(t *testing.T) {
+	f := newCheckinFixture(t)
+	response := f.mustClaim(t)
+	if response.Streak != 1 || response.Reward != playerentity.CheckinBaseReward || response.Balance != playerentity.CheckinBaseReward {
+		t.Fatalf("response = %+v", response)
+	}
+}
+
+func TestCheckinSecondClaimOnTheSameDayWritesNothing(t *testing.T) {
+	f := newCheckinFixture(t)
+	f.mustClaim(t)
+	f.now.Add(int64(3 * time.Hour / time.Millisecond)) // 同一个 UTC 日
+	if _, err := f.claim(); !errors.Is(err, apperrors.ErrCheckinDone) {
+		t.Fatalf("err = %v, want checkin_done", err)
+	}
+	if streak, total, coins := f.snapshot(t); streak != 1 || total != 1 || coins != playerentity.CheckinBaseReward {
+		t.Fatalf("refusal wrote: streak=%d total=%d coins=%d", streak, total, coins)
+	}
+}
+
+func TestCheckinConsecutiveDaysGrowTheStreakAndReward(t *testing.T) {
+	f := newCheckinFixture(t)
+	f.mustClaim(t)
+	f.now.Add(int64(checkinDay / time.Millisecond))
+	second := f.mustClaim(t)
+	if second.Streak != 2 || second.Reward != 2*playerentity.CheckinBaseReward || second.Balance != 3*playerentity.CheckinBaseReward {
+		t.Fatalf("second day = %+v", second)
+	}
+	// 连续天数超过封顶后奖励不再增长。
+	for day := 3; day <= playerentity.CheckinStreakCap+1; day++ {
+		f.now.Add(int64(checkinDay / time.Millisecond))
+		f.mustClaim(t)
+	}
+	f.now.Add(int64(checkinDay / time.Millisecond))
+	capped := f.mustClaim(t)
+	if capped.Streak != playerentity.CheckinStreakCap+2 || capped.Reward != playerentity.CheckinStreakCap*playerentity.CheckinBaseReward {
+		t.Fatalf("capped day = %+v", capped)
+	}
+}
+
+func TestCheckinMissedDayResetsTheStreak(t *testing.T) {
+	f := newCheckinFixture(t)
+	f.mustClaim(t)
+	f.now.Add(int64(checkinDay / time.Millisecond))
+	f.mustClaim(t)
+	f.now.Add(int64(2 * checkinDay / time.Millisecond)) // 断签一天
+	response := f.mustClaim(t)
+	if response.Streak != 1 || response.Reward != playerentity.CheckinBaseReward {
+		t.Fatalf("after a missed day = %+v", response)
+	}
+	if _, total, _ := f.snapshot(t); total != 3 {
+		t.Fatalf("total = %d, want 3", total)
+	}
+}
+
+// 签到进度与货币在同一笔事务里：提交被拒绝时两者一起回滚，之后同一天还能再领。
+func TestCheckinRejectedCommitRollsBackProgressAndCoins(t *testing.T) {
+	f := newCheckinFixture(t)
+	f.committer.reject.Store(true)
+	if _, err := f.claim(); err == nil {
+		t.Fatal("a rejected commit reported success")
+	}
+	f.committer.reject.Store(false)
+	if streak, total, coins := f.snapshot(t); streak != 0 || total != 0 || coins != 0 {
+		t.Fatalf("rollback left streak=%d total=%d coins=%d", streak, total, coins)
+	}
+	if response := f.mustClaim(t); response.Streak != 1 || response.Balance != playerentity.CheckinBaseReward {
+		t.Fatalf("claim after rollback = %+v", response)
+	}
+}

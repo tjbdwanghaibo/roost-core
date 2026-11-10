@@ -1,0 +1,21 @@
+name: checkin
+summary: 每日签到：按业务时间的 UTC 日切分，连续天数加成，奖励经货币模块发放
+requires: [wallet]
+conflicts: []
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+entity: Player
+state:
+  - field: Checkin
+    type: CheckinState
+    store: checkin
+    dao: persist,sync
+    comment: Checkin 是签到模块给玩家本人看的进度（最近签到日、连续天数、累计次数）。
+component: Checkin
+protocols: [CheckinClaim]
+errcodes: [checkin_done]
+verify:
+  packages: [./game/handler]
+  run: ^TestCheckin
+  pass: 5

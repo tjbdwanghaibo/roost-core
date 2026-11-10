@@ -1,0 +1,13 @@
+package checkin
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleCheckinClaim 是签到协议的入口；目标取认证会话的玩家，是否已签在 Nest handler 的锁内判断。
+//
+//roost:endpoint nest=CheckinClaim
+func (controller *Controller) HandleCheckinClaim(ctx *playeraccess.Context, req *pb.CheckinClaimRequest) (*pb.CheckinClaimResponse, error) {
+	return controller.dispatchCheckinClaim(ctx, req)
+}

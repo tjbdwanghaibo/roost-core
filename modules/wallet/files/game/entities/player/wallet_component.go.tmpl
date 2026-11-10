@@ -1,0 +1,87 @@
+package player
+
+import (
+	"fmt"
+	"math"
+
+	db "{{MODULE}}/db"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:Wallet}}
+const CompTypeWallet entity.ComponentType = {{ID:component:Wallet}}
+
+// WalletComponent 是玩家货币的业务逻辑。它不保存事务会改的状态：余额在 PlayerDao.Wallet、
+// 回执在 PlayerDao.WalletLedger 里，经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
+type WalletComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+
+// IWalletEntity 是 Nest handler 用这个组件时的窄实体接口；getter 由生成的 Entity 接线实现。
+// 别的模块在自己的 handler 里要动货币时，目标接口里嵌入它即可（两个组件在同一个实体上，同一笔事务）。
+type IWalletEntity interface {
+	entity.IThreadSafeEntity
+	WalletComp() *WalletComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeWallet, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("wallet component: owner %T is not *Player", owner)
+		}
+		return &WalletComponent{owner: typed}, nil
+	})
+}
+
+func (component *WalletComponent) Name() string { return "wallet" }
+
+// Owner 只在实体存活且被 Nest 锁住期间可用。
+func (component *WalletComponent) Owner() *Player { return component.owner }
+
+// 下面是业务方法。不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
+
+// WalletLedgerLimit 是回执账本的上限：满了拒绝新的业务键，不淘汰旧回执。
+const WalletLedgerLimit = 128
+
+// Apply 按业务键 key 给余额加 delta（负数为扣）。同一个 key 重复调用返回第一次的结果，
+// delta 不同则拒绝；余额不足、溢出、账本已满都不写任何字段。
+func (component *WalletComponent) Apply(key string, delta int64) (int64, error) {
+	if key == "" || delta == 0 {
+		return 0, apperrors.ErrWalletInvalid
+	}
+	dao := component.owner.Dao()
+	ledger := dao.GetWalletLedger()
+	if receipt, ok := ledger.GetReceipts(key); ok {
+		if receipt.GetDelta() != delta {
+			return 0, apperrors.ErrWalletConflict
+		}
+		return receipt.GetBalance(), nil
+	}
+	if ledger.ReceiptsLen() >= WalletLedgerLimit {
+		return 0, apperrors.ErrWalletLedgerFull
+	}
+	coins := dao.GetWallet().GetCoins()
+	if delta < 0 && coins < -delta {
+		return 0, apperrors.ErrWalletShort
+	}
+	if delta > 0 && coins > math.MaxInt64-delta {
+		return 0, apperrors.ErrWalletOverflow
+	}
+	balance := coins + delta
+	dao.GetWallet().SetCoins(balance)
+	receipt := &db.WalletReceipt{}
+	receipt.SetDelta(delta)
+	receipt.SetBalance(balance)
+	ledger.SetReceiptsKey(key, receipt)
+	return balance, nil
+}
+
+// Balance 返回当前余额。
+func (component *WalletComponent) Balance() int64 { return component.owner.Dao().GetWallet().GetCoins() }
+
+// ErrWalletAmount 是“金额必须为正”的拒绝。
+func ErrWalletAmount() error { return apperrors.ErrWalletInvalid }

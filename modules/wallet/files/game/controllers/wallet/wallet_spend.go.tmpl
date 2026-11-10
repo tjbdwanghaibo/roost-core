@@ -1,0 +1,13 @@
+package wallet
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleWalletSpend 是消费协议的入口；目标取认证会话的玩家，金额与余额在 Nest handler 的锁内校验。
+//
+//roost:endpoint nest=WalletSpend
+func (controller *Controller) HandleWalletSpend(ctx *playeraccess.Context, req *pb.WalletSpendRequest) (*pb.WalletSpendResponse, error) {
+	return controller.dispatchWalletSpend(ctx, req)
+}

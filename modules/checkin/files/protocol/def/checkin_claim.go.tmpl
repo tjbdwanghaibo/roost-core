@@ -1,0 +1,18 @@
+//go:build protocoldef
+
+package protocoldef
+
+type CheckinClaimRequest struct{}
+type CheckinClaimResponse struct {
+	Code    int32  `pb:"1"`
+	Reason  string `pb:"2"`
+	Streak  int32  `pb:"3"`
+	Reward  int64  `pb:"4"`
+	Balance int64  `pb:"5"`
+}
+
+//roost:protocol group=game handler=checkin
+type CheckinClaimProtocol interface {
+	//roost:msg id={{ID:protocol:CheckinClaim}}
+	CheckinClaim(CheckinClaimRequest) CheckinClaimResponse
+}

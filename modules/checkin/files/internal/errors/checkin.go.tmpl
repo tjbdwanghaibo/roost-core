@@ -1,0 +1,6 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 签到模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+var ErrCheckinDone = errcode.Define({{ID:errcode:checkin_done}}, "checkin_done", "already checked in today")

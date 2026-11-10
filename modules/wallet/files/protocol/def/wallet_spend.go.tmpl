@@ -1,0 +1,19 @@
+//go:build protocoldef
+
+package protocoldef
+
+type WalletSpendRequest struct {
+	Key    string `pb:"1"`
+	Amount int64  `pb:"2"`
+}
+type WalletSpendResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	Balance int64 `pb:"3"`
+}
+
+//roost:protocol group=game handler=wallet
+type WalletSpendProtocol interface {
+	//roost:msg id={{ID:protocol:WalletSpend}}
+	WalletSpend(WalletSpendRequest) WalletSpendResponse
+}

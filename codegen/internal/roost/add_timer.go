@@ -407,70 +407,47 @@ func lastSegment(typeName string) string {
 // addTimerDaoFields 在 DAO 定义里加节点 map 与种子两个字段（文本插在结构体的右括号前，保留业务注释）。
 // 两个字段已经按同样的类型存在时不改（业务先手写了它们）；名字被占用、类型不同则拒绝。
 func addTimerDaoFields(root string, names timerNames) (string, []byte, []byte, error) {
-	dir := filepath.Join(root, "db", "def")
-	entries, err := os.ReadDir(dir)
+	source, err := locateDaoStruct(root, names.Dao)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("read DAO definitions: %w", err)
+		return "", nil, nil, err
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+	if source == nil {
+		return "", nil, nil, fmt.Errorf("DAO %s is not defined in db/def; the timer nodes are stored in it", names.Dao)
+	}
+	path, raw := source.path, source.raw
+	mapType, seedType := "map[int64]*"+names.Node, "int64"
+	found := 0
+	for _, wanted := range [][2]string{{names.MapField, mapType}, {names.SeedField, seedType}} {
+		name, want := wanted[0], wanted[1]
+		got, _, ok := source.fieldType(name)
+		if !ok {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
-		raw, err := os.ReadFile(path)
-		if err != nil {
-			return "", nil, nil, err
+		if got != want {
+			return "", nil, nil, fmt.Errorf("%s: %s.%s already exists as %s; the timer component needs it as %s (choose another name with --component)", relativeSlash(root, path), names.Dao, name, got, want)
 		}
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, path, raw, parser.ParseComments)
-		if err != nil {
-			return "", nil, nil, fmt.Errorf("parse %s: %w", relativeSlash(root, path), err)
-		}
-		structure := findStruct(file, names.Dao)
-		if structure == nil {
-			continue
-		}
-		mapType, seedType := "map[int64]*"+names.Node, "int64"
-		found := 0
-		for _, field := range structure.Fields.List {
-			for _, ident := range field.Names {
-				var want string
-				switch ident.Name {
-				case names.MapField:
-					want = mapType
-				case names.SeedField:
-					want = seedType
-				default:
-					continue
-				}
-				if got := exprString(fset, field.Type); got != want {
-					return "", nil, nil, fmt.Errorf("%s: %s.%s already exists as %s; the timer component needs it as %s (choose another name with --component)", relativeSlash(root, path), names.Dao, ident.Name, got, want)
-				}
-				found++
-			}
-		}
-		if found == 2 {
-			return path, raw, raw, nil
-		}
-		if found != 0 {
-			return "", nil, nil, fmt.Errorf("%s: %s has only one of %s / %s; add both or neither", relativeSlash(root, path), names.Dao, names.MapField, names.SeedField)
-		}
-		closing := fset.Position(structure.Fields.Closing).Offset
-		fields := fmt.Sprintf(`
+		found++
+	}
+	if found == 2 {
+		return path, raw, raw, nil
+	}
+	if found != 0 {
+		return "", nil, nil, fmt.Errorf("%s: %s has only one of %s / %s; add both or neither", relativeSlash(root, path), names.Dao, names.MapField, names.SeedField)
+	}
+	closing := source.fset.Position(source.structure.Fields.Closing).Offset
+	fields := fmt.Sprintf(`
 	// %[1]s 是 %[2]sComponent 的定时器节点（roost add timer 加入）：节点 ID -> 节点。这份 map 就是全部期限，
 	// 增删改都在触发它的 Nest 事务里经组件写回，随事务提交 / 回滚；没有别的存储。
 	%[1]s map[int64]*%[3]s `+"`store:\"%[4]s\" dao:\"persist,map=fast\"`"+`
 	// %[5]s 是分配过的最大节点 ID，持久化：重启后不会把已经交出去的 ID 再分配一次。
 	%[5]s int64 `+"`store:\"%[6]s\" dao:\"persist\"`"+`
 `, names.MapField, names.CompType, names.Node, names.MapKey, names.SeedField, names.SeedKey)
-		edited := append(append(append([]byte(nil), raw[:closing]...), []byte(fields)...), raw[closing:]...)
-		formatted, err := format.Source(edited)
-		if err != nil {
-			return "", nil, nil, fmt.Errorf("format %s: %w", relativeSlash(root, path), err)
-		}
-		return path, raw, formatted, nil
+	edited := append(append(append([]byte(nil), raw[:closing]...), []byte(fields)...), raw[closing:]...)
+	formatted, err := format.Source(edited)
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("format %s: %w", relativeSlash(root, path), err)
 	}
-	return "", nil, nil, fmt.Errorf("DAO %s is not defined in db/def; the timer nodes are stored in it", names.Dao)
+	return path, raw, formatted, nil
 }
 
 func findStruct(file *ast.File, name string) *ast.StructType {

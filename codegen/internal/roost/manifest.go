@@ -66,6 +66,9 @@ type Manifest struct {
 	// TimeDomains 是场景时间域（roost add timedomain --entity <Scene>），键为实体名（snake）。
 	TimeDomains map[string]TimeDomainSpec `yaml:"time_domains,omitempty"`
 	IDs         map[string]IDSpace        `yaml:"ids,omitempty"`
+	// Modules 是已安装的业务模块（roost module add），键为模块名：每个模块在本工程里拥有的文件、
+	// 主 DAO 字段与分配到的号。由安装器写入；手工改它不会改动工程里的文件。
+	Modules map[string]InstalledModule `yaml:"modules,omitempty"`
 
 	// configuredShutdown is each service's longest shutdown.total_timeout
 	// found in the project's configs, filled by withConfiguredShutdown when

@@ -1,0 +1,17 @@
+package dbdef
+
+// WalletState 是玩家本人可见的货币状态。
+type WalletState struct {
+	Coins int64 `store:"1"`
+}
+
+// WalletLedger 记录每个业务键的结果，重复请求返回第一次的结果。
+type WalletLedger struct {
+	Receipts map[string]*WalletReceipt `store:"1"`
+}
+
+// WalletReceipt 是一次加减的结果。
+type WalletReceipt struct {
+	Delta   int64 `store:"1"`
+	Balance int64 `store:"2"`
+}

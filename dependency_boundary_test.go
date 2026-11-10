@@ -243,7 +243,7 @@ func moduleLayer(rel string) string {
 		first = rel[:index]
 	}
 	switch first {
-	case "wiring", "codegen", "demo":
+	case "wiring", "codegen", "demo", "modules":
 		return first
 	default:
 		return "core"
@@ -261,6 +261,8 @@ func moduleLayer(rel string) string {
 //	         internal/configschema（服务配置的声明，App、生成器与 doctor 共用，A4 ①），
 //	         见 TestSharedConfigRulesStayALeaf
 //	demo     模板目录，除 embed 声明外没有可编译代码
+//	modules  业务模块的模板目录（roost module add 安装的源码），与 demo 同样只有 embed 声明；
+//	         生成器的安装器读它，core 与装配层都不依赖它
 func layerViolation(layer, name string) string {
 	if name != modulePath && !strings.HasPrefix(name, modulePath+"/") {
 		return ""
@@ -278,11 +280,11 @@ func layerViolation(layer, name string) string {
 		}
 		return "装配层不得 import " + target + " 层"
 	case "codegen":
-		if target == "demo" || name == sharedConfigRules || name == sharedConfigSchema || name == sharedConfigFile {
+		if target == "demo" || target == "modules" || name == sharedConfigRules || name == sharedConfigSchema || name == sharedConfigFile {
 			return ""
 		}
 		return "生成器保持独立于它生成的运行时，不得 import " + target + " 层"
-	case "demo":
+	case "demo", "modules":
 		return ""
 	}
 	return ""
@@ -363,6 +365,8 @@ func TestLayerViolation(t *testing.T) {
 		{"core", core + "/wiring/mail"},
 		{"core", core + "/codegen/internal/roost"},
 		{"core", core + "/demo"},
+		{"core", core + "/modules"},
+		{"wiring", core + "/modules"},
 		{"wiring", core + "/codegen/internal/roost"},
 		// 生成器不依赖它生成的那个运行时。
 		{"codegen", core + "/framework/entity"},
@@ -382,6 +386,7 @@ func TestLayerViolation(t *testing.T) {
 		{"wiring", core + "/framework/dataengine/engine"},
 		{"wiring", core + "/wiring/mail"},
 		{"codegen", core + "/demo"},
+		{"codegen", core + "/modules"},
 		{"codegen", core + "/codegen/internal/roost"},
 		{"codegen", core + "/framework/configdata/rules"},
 		{"codegen", core + "/internal/configfile"},
@@ -403,6 +408,7 @@ func TestModuleLayer(t *testing.T) {
 		"wiring":                                   "wiring",
 		"codegen/cmd/roost/main.go":                "codegen",
 		"demo/embed.go":                            "demo",
+		"modules/embed.go":                         "modules",
 		"dependency_boundary_test.go":              "core",
 		"kitchen/sink.go":                          "core", // 前缀相同但不是那个目录
 	} {

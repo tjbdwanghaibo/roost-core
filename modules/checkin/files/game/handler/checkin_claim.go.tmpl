@@ -1,0 +1,17 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerCheckinClaim 领今天的签到奖励。nowUnixMilli 由 Nest 填这条消息冻结的业务时间，客户端不传时间。
+//
+//roost:nest rollback=undo durability=strict
+func handlerCheckinClaim(target player.ICheckinEntity, request *pb.CheckinClaimRequest, nowUnixMilli int64) (*pb.CheckinClaimResponse, error) {
+	result, err := target.CheckinComp().Claim(nowUnixMilli)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.CheckinClaimResponse{Streak: result.Streak, Reward: result.Reward, Balance: result.Balance}, nil
+}

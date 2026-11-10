@@ -1,0 +1,26 @@
+name: wallet
+summary: 玩家货币：余额、按业务键幂等的加减、消费协议
+requires: []
+conflicts: []
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+entity: Player
+state:
+  - field: Wallet
+    type: WalletState
+    store: wallet
+    dao: persist,sync
+    comment: Wallet 是货币模块给玩家本人看的状态（余额），随同步下发。
+  - field: WalletLedger
+    type: WalletLedger
+    store: wallet_ledger
+    dao: persist
+    comment: WalletLedger 是货币模块的幂等回执，只落库、不下发。
+component: Wallet
+protocols: [WalletSpend]
+errcodes: [wallet_short, wallet_invalid, wallet_conflict, wallet_ledger_full, wallet_overflow]
+verify:
+  packages: [./game/handler]
+  run: ^TestWallet
+  pass: 7

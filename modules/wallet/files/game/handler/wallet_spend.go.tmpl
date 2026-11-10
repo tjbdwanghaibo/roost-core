@@ -1,0 +1,20 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerWalletSpend 是客户端发起的消费：扣 request.Amount，按 request.Key 幂等。
+//
+//roost:nest rollback=undo durability=strict
+func handlerWalletSpend(target player.IWalletEntity, request *pb.WalletSpendRequest) (*pb.WalletSpendResponse, error) {
+	if request.Amount <= 0 {
+		return nil, player.ErrWalletAmount()
+	}
+	balance, err := target.WalletComp().Apply(request.Key, -request.Amount)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.WalletSpendResponse{Balance: balance}, nil
+}

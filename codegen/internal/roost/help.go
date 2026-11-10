@@ -139,6 +139,22 @@ roost add saga gift -service game -steps debit,credit -native debit,credit -enti
 roost add effect player.level_up -consumer game`,
 	},
 	{
+		Name: "module", Aliases: []string{"modules", "business-module", "compose"},
+		Summary: "安装现成的业务模块（货币、签到……）：按需求组合出自己的服务逻辑",
+		Usage: `roost module list [--json]
+roost module plan <name> [<name> ...] [--json] [--service <service>]
+roost module add  <name> [<name> ...] [--json] [--service <service>]
+roost module verify [<name> ...] [--json]`,
+		Configuration: `业务模块是一个现成的业务单元：自带状态结构体、组件、Nest handler、协议、错误码与场景测试。它不是生成器输出——安装时把源码写进工程，之后归工程所有，project sync / upgrade 不改写，直接在上面改。list 列出内置模块（在工程里执行时标出已安装的）；plan 只预览，不改动工程：依赖的安装顺序、会先执行的 roost add（实体的主 DAO、玩家接入）、追加的 DAO 字段、分配的号、写入的文件；add 按这份计划安装并运行生成器，已安装的模块不再处理，重复执行没有变化；verify 跑已装模块自带的场景（通过数必须等于清单里的数、零跳过），再跑 go build、go vet、roost id check 与 roost generate --check。--json 给 agent 用，plan 与 add 输出同一个结构（applied 区分）。约定：模块的状态是嵌套结构体，作为顶层字段追加到所挂实体主 DAO 的末尾（字段名与存储键带模块名）；同步与否按顶层字段决定，所以既有客户端可见状态又有服务端账本的模块写两个字段。协议号、错误码、组件号从 roost.yaml 的 ids 段分配并记入 roost.yaml 的 modules.<name>——那是这个模块在本工程里的归属清单（文件、字段、号）；分配过的号与存储键不回收，没有卸载命令。模板的落点已被业务文件占用时拒绝安装、不覆盖；任何一步失败时模块写过的业务文件与 roost.yaml 恢复原样。模块库里没有的需求用 roost add entity / component / dao / handler / protocol / endpoint 手写，可以照着已装模块的文件写。模块目录与写法见 roost-core 仓库的 modules/README.md，能力清单见 docs/framework/CAPABILITIES.md。`,
+		Example: `roost project new shop -module example.com/shop -template game
+cd shop
+roost module list
+roost module plan checkin          # checkin 依赖 wallet：两个都会装
+roost module add checkin
+roost module verify
+# 之后在 game/entities/player/checkin_component.go 里改奖励规则，改完再 roost module verify`,
+	},
+	{
 		Name: "access", Aliases: []string{"player-access", "gateway-access"},
 		Summary: "生成已认证玩家协议边界并装配到指定 Service",
 		Usage: `roost add access player --service <service>

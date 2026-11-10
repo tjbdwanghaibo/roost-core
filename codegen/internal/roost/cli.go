@@ -45,6 +45,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer) er
 		return runGenerate(ctx, args[1:], stdout, stderr)
 	case "add":
 		return runAdd(args[1:], stdout, stderr)
+	case "module":
+		return runModule(ctx, args[1:], stdout, stderr)
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
 	case "id":

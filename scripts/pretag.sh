@@ -134,6 +134,7 @@ genre_scripts=(
   scripts/test-turn-pvp-generated.sh
   scripts/test-coop-roguelike-generated.sh
   scripts/test-social-sim-generated.sh
+  scripts/test-modules-generated.sh
 )
 genre_logs="$(mktemp -d "${TMPDIR:-/tmp}/roost-pretag-genres.XXXXXX")"
 genre_start=$SECONDS
