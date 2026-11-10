@@ -71,6 +71,7 @@ DIAG freeze busy subject=… inflight=false frozen=true frozenGen=2 gen=3 versio
   - 在途捕获提交后版本前进，这份增量被拒绝复用，Flush 在 Entity 锁内按新基线重新捕获，只带确认之后的变化，列表操作不重放。
   - 在途捕获被整轮重试作废时，版本不变，原样复用。
 - 批次 `Commit` 清脏位时，一并释放同代际的过时冻结。
+  边界：冻结在 Entity 锁内打包时不持状态锁，在途批次的 `Commit` 恰好落在“取走旧冻结”与“放回新冻结”之间时，这份新冻结仍会留到下一次捕获。它的增量基线已过时、不会被复用，只是字节晚归还，与修前留存的方式相同。
 - 代价：交付在途时提交的变化，Flush 多取一次 Entity 锁、多打包一次增量。修前是每个观察者多收一份全量。
 
 game-demo 的 `TestBuildingsReachAnotherClientOverRealTCP` 改为两次改参数都必须是增量。原来第一次允许全量，理由是 preserveDirty 的那段注释已改正。
@@ -101,4 +102,17 @@ game-demo 的 `TestBuildingsReachAnotherClientOverRealTCP` 改为两次改参数
 
 ## 5. 验证
 
-VERIFY_PLACEHOLDER
+合入 main `3d1ec2b5` 之后，在本分支上跑，均为 `GOWORK=off`：
+
+| 命令 | 结果 |
+| --- | --- |
+| `gofmt -l framework/entity framework/sync`；`go build ./...`；`go vet ./...` | 无输出 / 通过 |
+| `go test -race -count=1 ./framework/sync/... ./framework/entity/...` | 全部 ok |
+| `go run ./cmd/glsvet ./framework/nest ./framework/entity ./framework/dataengine/engine ./framework/sync/entitysync` | 无发现（在合入前的提交上跑） |
+| `go test -count=1 .`（根包） | ok |
+| `python3 scripts/check-doc-anchors.py` | 265 个文件，0 个断链 |
+| `go test -count=1 ./codegen/internal/roost/` | ok |
+| `go test -count=1 ./...` | 全部 ok |
+| 生成 game-demo：`go build ./...`、`go vet ./...`、`go test -count=1 ./...` | 全部 ok |
+| 生成 game-demo：`go test -race -count=1 ./internal/service/game/ ./game/scene/...` | ok |
+| `bash scripts/test-sync-modes-generated.sh`（不需要外部依赖） | ok |
