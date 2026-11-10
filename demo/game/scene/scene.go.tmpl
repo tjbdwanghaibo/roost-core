@@ -37,44 +37,47 @@ type Config struct {
 // View 是场景主视野（场景同步 policy.Interest 的 AOI 视野，玩家、怪、建筑共用一个）的尺度，世界单位厘米：
 //   - EnterRadius / LeaveRadius：缺省视野的进入 / 离开半径，差值是滞回量（站在边上不反复进出）；
 //   - MinRadius / MaxLeaveRadius / RadiusStep：客户端可以要的视野（scene_view）先夹到 [MinRadius, MaxLeaveRadius − 滞回量]，
-//     再从 MinRadius 起按 RadiusStep 向下取整；客户端最大视野（进入半径）= MaxLeaveRadius − 滞回量。
+//     再从 MinRadius 起按 RadiusStep 向下取整；客户端最大视野（进入半径）= MaxLeaveRadius − 滞回量；
+//   - MaxVisible：主视野“最近 N 个”（AOI 的 MaxVisible：范围里多于 N 个时只留最近的 N 个）。一个会话能持有的对象数
+//     （场景 Manager 的 Limits.MaxObjects）由它推出：N + 自身 / 场景 / 队友 3 + 留给关系视野的 33
+//     （internal/service/<game>/scene.go 的 sceneSessionObjects），所以名额与会话上限一起随尺度定。
 //
 // 观察者的块预算按 MaxLeaveRadius / Config.BlockSize 算（(⌈2·MaxLeaveRadius / BlockSize⌉ + 1)² 块，policy 的缺省上限 1024），
-// 所以视野与块边长要一起定：TerrainConfig 把两者一起放大。“最近 N 个”（MaxVisible）不在这里：它受会话对象上限约束，
-// 由场景同步按会话预算定（internal/service/<game>/scene.go 的 sceneMaxVisible），与尺度无关。
+// 所以视野与块边长要一起定：TerrainConfig 把两者一起放大。
 type View struct {
 	EnterRadius    int64
 	LeaveRadius    int64
 	MinRadius      int64
 	MaxLeaveRadius int64
 	RadiusStep     int64
+	MaxVisible     int
 }
 
-// DefaultView 是 demo 原来的尺度：进入 1.2m、离开 1.5m、客户端 0.6m～2.7m（离开 3m）、步长 0.3m，按 0.6m/s 走路的人设计，
-// 配 100（1m）的块：最坏每个观察者 64 块。不开地形的场景与分区场景的 Base 都用它（分区场景的 witness 半径按它的离开
+// DefaultView 是 demo 原来的尺度：进入 1.2m、离开 1.5m、客户端 0.6m～2.7m（离开 3m）、步长 0.3m、最近 64 个（会话 100），
+// 按 0.6m/s 走路的人设计，配 100（1m）的块：最坏每个观察者 64 块。不开地形的场景与分区场景的 Base 都用它（分区场景的 witness 半径按它的离开
 // 上限校验：settings.PartitionMaxBaseLeaveRadius）。
 func DefaultView() View {
-	return View{EnterRadius: 120, LeaveRadius: 150, MinRadius: 60, MaxLeaveRadius: DefaultMaxLeaveRadius, RadiusStep: 30}
+	return View{EnterRadius: 120, LeaveRadius: 150, MinRadius: 60, MaxLeaveRadius: DefaultMaxLeaveRadius, RadiusStep: 30, MaxVisible: 64}
 }
 
 // DefaultMaxLeaveRadius 是 DefaultView 的离开上限（常量，供分区场景的编译期一致性断言）。
 const DefaultMaxLeaveRadius = 300
 
-// TerrainView 是开地形的普通场景的主视野（维护者 2026-11-10 按推荐，可编辑地形方案 §28）：游戏尺度，进入 30m、离开 33m、
-// 客户端 15m～60m（离开 63m）、步长 3m。建筑边长 3～12m、按占地中心进视野，人站在建筑旁边要看得见它（keep 12 × 12 的
-// 中心离旁边的节点 6.5m）；玩家与怪用同一个视野，所以彼此也在 30m 以内可见（原来 1.2m）。最小值与步长按原尺度的比例（最小 = 缺省的一半、
-// 步长 = 滞回量）。
+// TerrainView 是开地形的普通场景的主视野：游戏尺度（维护者 2026-11-10 口径“一般视野是 32m 左右”“同步的 entity 数量一般是
+// 128 左右”，可编辑地形方案 §29；§28 的 30m / 64 个由它取代）。进入 32m（正好一个 AOI 块边长）、离开 35.2m（滞回 10%）、
+// 客户端 16m～64m（离开 67.2m，客户端最大约缺省的 2 倍）、步长 3.2m、最近 128 个（会话 164）。最小值与步长按原尺度的比例
+// （最小 = 缺省的一半、步长 = 滞回量），32m 与 64m 都在量化网格上（16 + 5 × 3.2、16 + 15 × 3.2）；滞回取 3m 时 16m 起
+// 按 3m 取整得不到 32m 与 64m。建筑边长 3～12m、按占地中心进视野，人站在建筑旁边看得见它（keep 中心离旁边的节点 6.5m）；
+// 玩家与怪用同一个视野。
 func TerrainView() View {
-	return View{EnterRadius: 3000, LeaveRadius: 3300, MinRadius: 1500, MaxLeaveRadius: 6300, RadiusStep: 300}
+	return View{EnterRadius: 3200, LeaveRadius: 3520, MinRadius: 1600, MaxLeaveRadius: 6720, RadiusStep: 320, MaxVisible: 128}
 }
 
-// TerrainBlockSize 是开地形的普通场景的 AOI 块边长（32m，半个地形块）。视野放大到 30m 后块边长 100 不再可用：缺省视野
-// 每个观察者 68² = 4624 块、客户端最大视野 128² = 16384 块，都超过 policy 的观察者块预算 1024，构造即拒绝
-// （ErrInterestBudget）。32m 时缺省视野最坏 4² = 16 块、最大视野 5² = 25 块。按方案 §28 的同机交替测量选定：1024m 地图、
-// 1000 人时每次复制 32m 与 16m 在噪声内相同（约 3.2ms）、都比 10m 快，32m 每个观察者平均订阅的块最少（9 块，16m 是 26、
-// 10m 是 57）、常驻内存与每次分配也最少。
+// TerrainBlockSize 是开地形的普通场景的 AOI 块边长（32m，半个地形块）。视野放大到游戏尺度后块边长 100 不再可用：缺省视野
+// 每个观察者 72² = 5184 块、客户端最大视野 136² = 18496 块，都超过 policy 的观察者块预算 1024，构造即拒绝
+// （ErrInterestBudget）。32m 时缺省视野最坏 4² = 16 块、最大视野 6² = 36 块。方案 §28 在 30m 视野上同机交替测量选定
+// （32m 与 16m 每次复制在噪声内相同、都比 10m 快，32m 订阅的块最少），§29 在 32m 视野、2048m 地图上复核。
 const TerrainBlockSize = 3200
-
 // DefaultConfig is the demo's one map: a 1000×1000 field on a 100-unit grid,
 // seen at the demo's scale (DefaultView).
 func DefaultConfig() Config {
@@ -85,17 +88,16 @@ func DefaultConfig() Config {
 // map itself (terrain.Meta.Bounds — origin (0, 0), one world unit is a
 // centimetre), so every place of the map can be walked to and nothing outside
 // it can, seen at the game's scale (TerrainView on TerrainBlockSize blocks:
-// editable terrain plan §28). The spawn point stays the default map's (a
+// editable terrain plan §29). The spawn point stays the default map's (a
 // terrain map is at least one chunk, 64m, so it always contains it).
 //
-// A map larger than maxTerrainArea (1024m × 1024m, 16 × 16 chunks) is
+// A map larger than maxTerrainArea (2048m × 2048m, 32 × 32 chunks) is
 // refused, with a reason: a world that size is a partitioned scene's
-// (scene.partition), not one process's. The limit was the AOI block table's
-// (spatial.MaxBlockCount blocks of 1m: 56MiB of index, plan §23) and is kept
-// as the ordinary scene's map budget now that the blocks are 32m (the same
-// map is about 0.06MiB of index): the whole terrain of an ordinary scene is
-// loaded into the one process, and plan §28 leaves widening it to the
-// maintainer.
+// (scene.partition), not one process's. The limit is the ordinary scene's
+// map budget, not the AOI block table's (2048m is 64 × 64 blocks of 32m,
+// about 0.2MiB of index): the whole terrain of an ordinary scene is loaded
+// into the one process, and plan §29 measured that load at 2048m (the
+// maintainer's 2026-11-10 bar: one process holds at least 2048m × 2048m).
 func TerrainConfig(bounds spatial.Rect) (Config, error) {
 	config := DefaultConfig()
 	bounds = spatial.NormalizeRect(bounds)
@@ -108,7 +110,7 @@ func TerrainConfig(bounds spatial.Rect) (Config, error) {
 	}
 	cols, rows := spatial.DivideCeil(bounds.Max.X, TerrainBlockSize), spatial.DivideCeil(bounds.Max.Y, TerrainBlockSize)
 	if cols > spatial.MaxBlockCount/rows {
-		// 面积上限之内不会发生（1024m 见方是 32 × 32 块）；留着是为了块边长将来改小时不会悄悄越过块表上限。
+		// 面积上限之内不会发生（2048m 见方是 64 × 64 块）；留着是为了块边长将来改小时不会悄悄越过块表上限。
 		return Config{}, fmt.Errorf("scene: terrain map %d × %d needs %d × %d AOI blocks of %d, at most %d", bounds.Max.X, bounds.Max.Y, cols, rows, TerrainBlockSize, spatial.MaxBlockCount)
 	}
 	config.Width, config.Height = bounds.Max.X, bounds.Max.Y
@@ -117,9 +119,9 @@ func TerrainConfig(bounds spatial.Rect) (Config, error) {
 }
 
 // maxTerrainSide is the side of the largest square map TerrainConfig accepts
-// (world units: 1024m), and maxTerrainArea its area.
+// (world units: 2048m), and maxTerrainArea its area.
 const (
-	maxTerrainSide = 1024 * 100
+	maxTerrainSide = 2048 * 100
 	maxTerrainArea = maxTerrainSide * maxTerrainSide
 )
 
@@ -136,6 +138,10 @@ func (c Config) Normalize() Config {
 	// 没给视野（零值）取 demo 原尺度：分区场景的 Base 世界、测试夹具手写的 Config 都是这样。
 	if c.View == (View{}) {
 		c.View = DefaultView()
+	}
+	// 给了半径没给名额：取 demo 原尺度的 64（0 在 AOI 里是“不限”，会让会话上限推不出来）。
+	if c.View.MaxVisible <= 0 {
+		c.View.MaxVisible = DefaultView().MaxVisible
 	}
 	return c
 }

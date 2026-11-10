@@ -104,6 +104,15 @@
 | 64 | 35.5 KB/s | 49.9 KB/s | 7.6 KB/s | 9.2 KB/s | 17.6 KB/s |
 | 128 | 70.1 KB/s | 99.8 KB/s | 14.6 KB/s | 17.8 KB/s | 35.2 KB/s |
 
+**实测（同机同用例 `TestMainViewMeasureMovingCrowdBytes`，[地形方案 §29.6](../../FEATURE-2026-11-08-editable-terrain.md#296-每观察者下行增量字节压缩后-128-个同时动约-186kbs在-50kbs-以内)）**：开地形的普通场景，N 个玩家在观察者周围 10～29m 沿切线斜走（每步改 `pos_x` 与 `pos_y`），每拍（200ms）复制一次，帧 payload 不含消息头，这一行 KB = 1024 字节：
+
+| 对象数 | 修前：每对象 / 下行 | 修后：每对象 / 下行 |
+| ---: | ---: | ---: |
+| 64 | 119.3 字节 / 37.3KB/s | 30.4 字节 / 9.5KB/s |
+| 128 | 117.6 字节 / 73.5KB/s | 29.7 字节 / 18.6KB/s |
+
+进入视野的全量合计：64 个 11447 → 7022 字节，128 个 22583 → 13893 字节。
+
 算式：修前批量 = N × 5 × 108 + 20 × (32 + 16)；修前最坏 = N × 5 × (140 + 16)；修后批量 = N × 5 × 22（斜走 27）+ 20 × (12 + 16)；修后最坏 = N × 5 × (12 + 27 + 16)。128 个对象同时走在 50 KB/s 预算内，单轴移动约占 30%。进入视野的全量、建筑与地形块不在此估算里。
 
 ## 6. 每个同步字段是否需要发给其他客户端（demo Player / Monster）
@@ -168,18 +177,22 @@ player 的 packer 已经定义了 `near` 视图（`Name, Level, PosX, PosY, Scen
 | 增量也按全量带全部身份 | `TestAPositionDeltaCarriesLittleBesidesThePosition`：`one position step costs 38 bytes besides the position patch, want at most 24` |
 | 解码不查“对象引用换了 subject” | `TestDecoderRefusesWhatDoesNotContinueTheStream`：`another subject on the ref: accepted` |
 | 没测过大小的快照候选退回按最小信封估算 | `TestByteBlockedSnapshotsAreNotRecapturedEveryWindow`：`blocked windows re-encoded snapshots: X packs=2 SnapshotsCaptured=46 delivered objects=31 windows=6` |
-| demo 的玩家 / 怪 packer 增量改回 `MarshalSync`（带 `entity_id`） | `TestScenePositionStepsCarryLittleBesidesThePosition`：`a player's step: subject 10078212's delta carries "_id" …`；放过 `_id` 之后：`a player's step is a 35-byte frame, want at most 32`，再放开单帧上限：`each extra moving player costs 25 bytes in the frame, want at most 22` |
+| demo 的玩家 / 怪 packer 增量改回 `MarshalSync`（带 `entity_id`） | `TestScenePositionStepsCarryLittleBesidesThePosition`：`a player's step: subject 10078212's delta carries "_id" …`；放过 `_id` 之后：`a player's step is a 35-byte frame, want at most 32`，再放开单帧上限：`each extra moving player costs 25 bytes in the frame, want at most 22`，再放开每对象上限：`a monster's patrol step is a 35-byte frame, want at most 32` |
 
 **未超额逐字节不变的金样**：`over_limit_test.go` 的 `TestUnderTheLimitFramesAreByteIdentical` 钉的是整段帧字节的哈希，格式变了哈希必然变。为确认“未超额时内容与修前相同”这一承诺没被顺手破坏，在修前与修后源码上各跑同一用例，把每帧的对象（操作、ref、代际）、组件与解出的信封字段（subject、kind、版本、基线、mask、reason、命名空间、视图键、载荷）逐行打出，两份输出逐字相同，然后才换新哈希。
 
 ## 9. 验证
 
-见提交说明；本节列出命令与结果。
+全部 `GOWORK=off`，在本机运行；需要真实依赖（Mongo / NATS / Redis）的用例按缺省跳过，由协调方另跑。
 
 | 项 | 结果 |
 | --- | --- |
-| `gofmt` / `go vet ./...` / `go build ./...`（`GOWORK=off`） | 通过 |
-| `go test -race -count=1 ./framework/sync/... ./framework/entity/...` | 见提交说明 |
-| `go test -count=1 ./...`（全量） | 见提交说明 |
-| 生成的 game-demo build / vet / test，场景同步包 `-race` | 见提交说明 |
-| C#：`Roost.Client.Tests`、`Roost.Client.Terrain.Tests` | 见提交说明 |
+| `gofmt` / `go vet ./...` / `go build ./...` | 通过 |
+| `go test -race -count=1 ./framework/sync/... ./framework/entity/...` | 通过 |
+| `go run ./cmd/glsvet ./framework/nest ./framework/entity ./framework/dataengine/engine ./framework/sync/entitysync` | 通过 |
+| `go test -count=1 ./...`（全量，合并 main 之前）；合并后重跑 `.`、`./codegen/...`、`./demo/...` | 通过 |
+| `bash scripts/test-sync-modes-generated.sh` | 通过 |
+| `python3 scripts/check-doc-anchors.py` | 通过 |
+| 生成的 game-demo：build / vet、`go test ./...`、`internal/service/game`、`cmd/loadtest`、`game/entities/...` 加 `-race`、`roost id check`、`roost generate --check` | 通过（合并 main 之后重新生成重跑；合并前的一轮暴露一处旧断言——玩家视图过滤用例按“增量带 `_id`”数字段，已改为只断言 `pos_x`）|
+| C#：`Roost.Client.Tests -- client/spec/packets.json`、`Roost.Client.Terrain.Tests -- client/spec` | 通过（含 golden sync、Sync receiver、EntityViews、DAO PB Go/C# 用例） |
+| C++：`scripts/test-client-cpp.sh`（不带 protobuf） | 5 项 ctest 通过；protobuf 用例本机无 protoc 未跑 |

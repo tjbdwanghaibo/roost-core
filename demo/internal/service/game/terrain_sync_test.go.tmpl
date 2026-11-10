@@ -74,7 +74,7 @@ func startTerrainSyncHarness(t *testing.T, chunksX, chunksY int32, radius int64,
 	}, options...)
 	bounds := p.m.Meta().Bounds()
 	config := gamescene.Config{Width: bounds.Max.X, Height: bounds.Max.Y, BlockSize: 300, Spawn: spatial.Point{X: bounds.Max.X / 2, Y: bounds.Max.Y / 2}}
-	scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, nil, config, sceneMaxVisible,
+	scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, nil, config, gamescene.DefaultView().MaxVisible,
 		&terrainSyncConfig{bounds: bounds, radius: radius, maxVisible: maxVisible}, observer)
 	if err != nil {
 		t.Fatal(err)
@@ -608,7 +608,7 @@ func TestATerrainViewAtItsCapKeepsTheSession(t *testing.T) {
 	}
 	if stats := h.scene.manager.Stats(); stats.SessionsLost != 0 || stats.OverLimitDeferred != 0 {
 		t.Fatalf("%d replication sessions lost, %d objects deferred over a limit (object limit %d): the view's cap keeps the session inside it",
-			stats.SessionsLost, stats.OverLimitDeferred, sceneTerrainMaxObjects)
+			stats.SessionsLost, stats.OverLimitDeferred, h.scene.sessionObjects+terrainMaxVisible)
 	}
 	if n := h.transport.ActiveSessions(playerID); n != 1 {
 		t.Fatalf("the player has %d connections, want 1", n)
@@ -639,7 +639,7 @@ func TestTerrainLeavesPlayerAndMonsterReplicationByteIdentical(t *testing.T) {
 		if withTerrain {
 			terrainConfig = defaultTerrainSync(spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}})
 		}
-		scene, err := newSceneWith(sceneLane{transport: recorder}, recorder, nil, config, sceneMaxVisible, terrainConfig)
+		scene, err := newSceneWith(sceneLane{transport: recorder}, recorder, nil, config, config.View.MaxVisible, terrainConfig)
 		if err != nil {
 			t.Fatal(err)
 		}

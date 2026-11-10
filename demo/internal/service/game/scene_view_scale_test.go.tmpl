@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,23 +18,29 @@ import (
 	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
 	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/lifecycle"
 	gamescene "{{MODULE}}/game/scene"
+	"{{MODULE}}/game/settings"
+	"{{MODULE}}/game/terrainmap"
 	"{{MODULE}}/protocol/pb"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// 开地形场景的主视野尺度（可编辑地形方案 §28）：视野放大到 30m / 33m、客户端最大 60m 之后，AOI 的块边长与预算怎样定，
-// 以及一张 1024m 的地图在玩家 / 怪 / 建筑混合的密度下每批移动、内存、订阅块数、下行与“最近 64 个”的挤占各是多少。
-// 场景是生产的构造（newSceneWith：场景的 Manager、主视野 Interest、会话），只有推送换成计数的替身。
+// 开地形场景的主视野尺度（可编辑地形方案 §28、§29）：游戏尺度的视野（§29：进入 32m / 离开 35.2m、客户端最大 64m、最近 128 个、
+// 会话 164）下 AOI 的块边长与预算怎样定，2048m 地图（普通场景的上限）在玩家 / 怪 / 建筑混合的密度下每批移动、内存、订阅块数、
+// 下行与名额的挤占各是多少，以及 128 个对象同时移动时一个观察者的下行字节。场景是生产的构造（newSceneWith：场景的 Manager、
+// 主视野 Interest、会话），只有推送换成计数的替身。
 
-// 视野放大之后块边长 100 不能再用：缺省视野每个观察者 68² 块、客户端最大视野 128² 块，超过 policy 的观察者块预算 1024，
-// 场景构造被拒（ErrInterestBudget）。TerrainConfig 的块边长下，16 × 16 块（1024m，普通场景的上限）的地图构造得出来，
+// 视野放大之后块边长 100 不能再用：缺省视野每个观察者 72² 块、客户端最大视野 136² 块，超过 policy 的观察者块预算 1024，
+// 场景构造被拒（ErrInterestBudget）。TerrainConfig 的块边长下，32 × 32 块（2048m，普通场景的上限）的地图构造得出来，
 // 缺省视野与最大视野的最坏订阅块数都在预算里；不开地形的缺省地图仍是原尺度。
 func TestTerrainMainViewFitsTheBlockBudget(t *testing.T) {
-	meta := terrain.Meta{BaseRevision: 1, ChunksX: 16, ChunksY: 16}
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: 32, ChunksY: 32}
 	config, err := gamescene.TerrainConfig(meta.Bounds())
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +59,7 @@ func TestTerrainMainViewFitsTheBlockBudget(t *testing.T) {
 		{"demo view on 1m blocks (no terrain)", gamescene.DefaultConfig(), true},
 	} {
 		recorder := newSceneRecorder()
-		scene, err := newSceneWith(sceneLane{transport: recorder}, recorder, nil, c.config, sceneMaxVisible, nil)
+		scene, err := newSceneWith(sceneLane{transport: recorder}, recorder, nil, c.config, c.config.View.MaxVisible, nil)
 		t.Logf("%s: block %d, worst observer blocks %d (default view) / %d (widest view), budget %d: %v",
 			c.name, c.config.BlockSize, worst(c.config.View.LeaveRadius, c.config.BlockSize), worst(c.config.View.MaxLeaveRadius, c.config.BlockSize), policy.DefaultMaxObserverBlocks, err)
 		if c.ok != (err == nil) || !c.ok && !errors.Is(err, policy.ErrInterestBudget) {
@@ -59,6 +69,88 @@ func TestTerrainMainViewFitsTheBlockBudget(t *testing.T) {
 			_ = scene.Close(context.Background())
 		}
 	}
+}
+
+// 游戏尺度的名额与会话上限（维护者 2026-11-10：“同步的 entity 数量一般是 128 左右”，方案 §29）：开地形的普通场景里，
+// 32m 以内站着 139 个别的玩家，每个玩家的主视野恰好持有最近的 128 个（不被截到 demo 的 64），会话不关；把名额拿掉（超额
+// 降级 D17 的前提），170 个人挤在一起时每个会话收敛到恰好 164 个（128 + 自身 / 场景 / 队友 3 + 33）、没有人断开，丢掉的
+// 都不比留着的近。数字写成字面量，不引用实现的常量。
+func TestTheGameScaleMainViewHoldsTheNearest128(t *testing.T) {
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: 2, ChunksY: 2}
+	config, err := gamescene.TerrainConfig(meta.Bounds())
+	if err != nil {
+		t.Fatal(err)
+	}
+	centre := spatial.Point{X: terrain.ChunkSize, Y: terrain.ChunkSize}
+	crowd := func(t *testing.T, scene *Scene, recorder *sceneRecorder, players int, base int64) (ids []int64, subjects map[int64]int64, positions map[int64]spatial.Point) {
+		t.Helper()
+		scene.watchSessions(recorder)
+		ctx := context.Background()
+		if err := scene.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = scene.Close(closeCtx)
+		})
+		subjects, positions = map[int64]int64{}, map[int64]spatial.Point{}
+		for i := range int64(players) {
+			// 1m 一格、13 列：最远的两人相距约 19m，人人都在别人的 32m 以内。
+			at := spatial.Point{X: centre.X + 100*(i%13), Y: centre.Y + 100*(i/13)}
+			subject := newScenePlayer(t, base+i)
+			joinReady(t, scene, ctx, subject, at)
+			ids = append(ids, base+i)
+			subjects[base+i], positions[subject.ID()] = subject.ID(), at
+		}
+		flushOverCrowd(t, scene, ctx)
+		return ids, subjects, positions
+	}
+
+	t.Run("the nearest 128", func(t *testing.T) {
+		recorder := newSceneRecorder()
+		scene, err := newScene(recorder, nil, config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids, subjects, positions := crowd(t, scene, recorder, 140, 34000)
+		if stats := scene.manager.Stats(); stats.SessionsLost != 0 || stats.OverLimitDeferred != 0 {
+			t.Fatalf("%d sessions lost, %d objects deferred: the cap of 128 should keep every session inside its limit", stats.SessionsLost, stats.OverLimitDeferred)
+		}
+		for _, playerID := range ids {
+			held := heldSubjects(t, recorder.take(playerID))
+			if !held[subjects[playerID]] || len(held)-1 != 128 {
+				t.Fatalf("player %d holds %d other subjects (itself: %v), want the nearest 128", playerID, len(held)-1, held[subjects[playerID]])
+			}
+			assertDroppedAreFarthest(t, playerID, positions[subjects[playerID]], subjects[playerID], held, positions)
+		}
+	})
+	t.Run("over the session limit of 164", func(t *testing.T) {
+		recorder := newSceneRecorder()
+		scene, err := newSceneWithMainView(sceneLane{transport: recorder}, recorder, nil, config, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		disconnectsBefore := sessionLostDisconnects()
+		ids, subjects, positions := crowd(t, scene, recorder, 170, 35000)
+		stats := scene.manager.Stats()
+		if stats.SessionsLost != 0 || stats.OverLimitWaiting != 0 || stats.OverLimitDeferred == 0 {
+			t.Fatalf("over the limit: %d sessions lost, %d waiting, %d ever deferred (want 0, 0 and the crowd overflowing)", stats.SessionsLost, stats.OverLimitWaiting, stats.OverLimitDeferred)
+		}
+		if got := sessionLostDisconnects() - disconnectsBefore; got != 0 {
+			t.Fatalf("%d players were disconnected for a lost session", got)
+		}
+		for _, playerID := range ids {
+			if closed := recorder.closuresOf(playerID); closed != 0 {
+				t.Fatalf("player %d was disconnected %d times", playerID, closed)
+			}
+			held := heldSubjects(t, recorder.take(playerID))
+			if !held[subjects[playerID]] || len(held) != 164 {
+				t.Fatalf("player %d holds %d objects (itself: %v), want itself among exactly 164", playerID, len(held), held[subjects[playerID]])
+			}
+			assertDroppedAreFarthest(t, playerID, positions[subjects[playerID]], subjects[playerID], held, positions)
+		}
+	})
 }
 
 // 玩家与怪的同步字节（下行估算用，方案 §28）：一个看的人，另一个玩家走一步（移动心跳 200ms 一步）、一只怪巡逻一步，
@@ -156,6 +248,95 @@ func TestMainViewMeasureSyncBytes(t *testing.T) {
 	}
 }
 
+// 一群人同时走时一个观察者的下行（方案 §29 的带宽估算）：开地形的普通场景（游戏尺度的主视野），看的人站着，周围 32m 以内
+// N 个玩家同时走（MoveTarget，移动心跳 200ms 一步、0.6m/s），每一拍之后复制一次；记看的人收到的帧字节。N = 64 是 §28 的
+// 名额，N = 128 是 §29 的名额。这是测量：只断言每一拍 N 个人的增量都到了（名额没有把人截掉），字节与 KB/s 写日志。
+func TestMainViewMeasureMovingCrowdBytes(t *testing.T) {
+	loadSpawnData(t)
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: 2, ChunksY: 2}
+	config, err := gamescene.TerrainConfig(meta.Bounds())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, movers := range []int{64, 128} {
+		t.Run(fmt.Sprintf("%d movers", movers), func(t *testing.T) {
+			w := newMoveWorldOn(t, config)
+			centre := spatial.Point{X: terrain.ChunkSize, Y: terrain.ChunkSize}
+			const watcherID = int64(36000)
+			w.join(watcherID, centre)
+			walkers := make([]*player.Player, 0, movers)
+			for i := range movers {
+				// 10m～29m 一圈排开，沿切线方向走 20m：十步之内都在看的人的 32m 以内。
+				r := 1000 + float64(15*i)
+				angle := 2 * math.Pi * float64(i) / float64(movers)
+				at := spatial.Point{X: centre.X + int64(r*math.Cos(angle)), Y: centre.Y + int64(r*math.Sin(angle))}
+				walker := w.join(36001+int64(i), at)
+				walkers = append(walkers, walker)
+				goal := spatial.Point{X: at.X - int64(2000*math.Sin(angle)), Y: at.Y + int64(2000*math.Cos(angle))}
+				if _, err := syncsender.NewMoveTargetSender(w.engine).MultiSync_MoveTarget(w.ctx, walker.ID(), w.area.ID(), goal.X, goal.Y, 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range 3 {
+				if err := w.bridge.Flush(w.ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			entered := payloadSizes(w.recorder.take(watcherID))
+			const beats = 10
+			var stepBytes []int
+			for range beats {
+				before := make([]spatial.Point, len(walkers))
+				for i, walker := range walkers {
+					before[i] = walker.MapBasic().Published().Pos
+				}
+				w.clock.advance(200 * time.Millisecond)
+				for i, walker := range walkers {
+					eventually(t, "a step", func() (bool, string) {
+						at := walker.MapBasic().Published().Pos
+						return at != before[i], fmt.Sprint(at)
+					})
+					w.settle(walker.ID())
+				}
+				if err := w.bridge.Flush(w.ctx); err != nil {
+					t.Fatal(err)
+				}
+				pushes := w.recorder.take(watcherID)
+				if got := len(movedIn(t, pushes)); got != movers {
+					t.Fatalf("a beat reached the watcher with %d moved objects, want all %d", got, movers)
+				}
+				total := 0
+				for _, size := range payloadSizes(pushes) {
+					total += size
+				}
+				stepBytes = append(stepBytes, total)
+			}
+			slices.Sort(stepBytes)
+			median := stepBytes[len(stepBytes)/2]
+			t.Logf("%d movers: entering view %v bytes; per beat (200ms) median %d bytes = %.1f bytes per moved object; %.1f KB/s at 5 beats a second (frame payloads, no message header); beats %v",
+				movers, entered, median, float64(median)/float64(movers), float64(median)*5/1024, stepBytes)
+		})
+	}
+}
+
+// movedIn 是这些帧里带组件增量（不是 create / remove）的对象。
+func movedIn(t *testing.T, pushes []*pb.EntitySyncPush) map[uint16]bool {
+	t.Helper()
+	out := map[uint16]bool{}
+	for _, push := range pushes {
+		decoded, err := entitysync.DecodeFrame(push.Payload, frame.DefaultLimits())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, object := range decoded.Objects {
+			if object.Operation == frame.ObjectUpdate {
+				out[object.Ref.ID] = true
+			}
+		}
+	}
+	return out
+}
+
 func payloadSizes(pushes []*pb.EntitySyncPush) []int {
 	var out []int
 	for _, push := range pushes {
@@ -189,12 +370,22 @@ func (p *countingPusher) take() (bytes, frames int64) {
 	return bytes, frames
 }
 
-// scaleWorld 是基准的人群：1024m 见方的地图（16 × 16 块，普通场景的上限）；中央 320m 见方的镇子里每 10m 一座建筑
-// （1024 座，即方案 §27.3 的“每 100m² 一座”）和 500 个玩家，另 500 个玩家与 2000 只怪散在全图。一半玩家、四分之一
-// 的怪在走：玩家 6m/s、怪 3m/s，移动心跳 200ms 一步，所以每次复制（50ms）走四分之一的人。建筑不动。
+// scaleCrowd 是基准的人群，按方案 §28 的密度：每 1024m 见方一个 320m 见方的镇子（每 10m 一座建筑，1024 座，即 §27.3 的
+// “每 100m² 一座”，加 500 个玩家），另 500 个玩家与 2000 只怪散在这 1024m 见方里。2048m 的地图面积是 4 倍：4 个镇子
+// （各在一个象限的中央）、4096 座建筑、4000 个玩家、8000 只怪（方案 §29）。一半玩家、四分之一的怪在走：玩家 6m/s、
+// 怪 3m/s，移动心跳 200ms 一步，所以每次复制（50ms）走四分之一的人。建筑不动。
+type scaleCrowd struct {
+	mapSide int64 // 世界单位
+}
+
+// quadrants 是地图里 1024m 见方的格子数（每个格子一个镇子）。
+func (c scaleCrowd) quadrants() int64 { return (c.mapSide / scaleQuadrant) * (c.mapSide / scaleQuadrant) }
+
+// scaleWorld 是放好人群的场景。
 type scaleWorld struct {
 	scene    *Scene
 	pusher   *countingPusher
+	mapSide  int64
 	at       map[int64]spatial.Point // 实体 ID → 位置（玩家、怪、建筑）
 	kind     map[int64]string
 	players  []int64 // 玩家号
@@ -211,16 +402,15 @@ type scaleMover struct {
 }
 
 const (
-	scaleMapSide   = 1024 * 100
+	scaleQuadrant  = 1024 * 100
 	scaleTownSide  = 320 * 100
-	scaleTownMin   = (scaleMapSide - scaleTownSide) / 2
 	scaleBuildings = 32 // 每边，10m 一座
 )
 
-func newScaleWorld(tb testing.TB, config gamescene.Config, viewRadius int64) *scaleWorld {
+func newScaleWorld(tb testing.TB, config gamescene.Config, crowd scaleCrowd, viewRadius int64) *scaleWorld {
 	tb.Helper()
 	pusher := &countingPusher{}
-	scene, err := newSceneWith(sceneLane{transport: pusher}, pusher, nil, config, sceneMaxVisible, nil)
+	scene, err := newSceneWith(sceneLane{transport: pusher}, pusher, nil, config, config.View.MaxVisible, nil)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -229,11 +419,9 @@ func newScaleWorld(tb testing.TB, config gamescene.Config, viewRadius int64) *sc
 		defer cancel()
 		_ = scene.Close(ctx)
 	})
-	w := &scaleWorld{scene: scene, pusher: pusher, at: map[int64]spatial.Point{}, kind: map[int64]string{}, town: map[int64]bool{}}
+	w := &scaleWorld{scene: scene, pusher: pusher, mapSide: crowd.mapSide, at: map[int64]spatial.Point{}, kind: map[int64]string{}, town: map[int64]bool{}}
 	ctx := context.Background()
 	random := rand.New(rand.NewPCG(20261110, 28))
-	townMin, townMax := spatial.Point{X: scaleTownMin, Y: scaleTownMin}, spatial.Point{X: scaleTownMin + scaleTownSide - 1, Y: scaleTownMin + scaleTownSide - 1}
-	mapMin, mapMax := spatial.Point{}, spatial.Point{X: scaleMapSide - 1, Y: scaleMapSide - 1}
 	in := func(lo, hi spatial.Point) spatial.Point {
 		return spatial.Point{X: lo.X + random.Int64N(hi.X-lo.X+1), Y: lo.Y + random.Int64N(hi.Y-lo.Y+1)}
 	}
@@ -242,7 +430,9 @@ func newScaleWorld(tb testing.TB, config gamescene.Config, viewRadius int64) *sc
 		return int64(float64(step) * math.Cos(angle)), int64(float64(step) * math.Sin(angle))
 	}
 	monster.RegisterEntity()
-	show := func(unique int64, at spatial.Point, kind string) int64 {
+	unique := int64(500_000)
+	show := func(at spatial.Point, kind string) int64 {
+		unique++
 		id, err := entity.BuildEntityID(unique, monster.EntityKindMonster)
 		if err != nil {
 			tb.Fatal(err)
@@ -258,22 +448,10 @@ func newScaleWorld(tb testing.TB, config gamescene.Config, viewRadius int64) *sc
 		w.at[value.ID()], w.kind[value.ID()] = at, kind
 		return value.ID()
 	}
-	// 建筑：静止的目标（AOI 不分类型；字节按方案 §27 实测的建筑全量 / 增量另算）。
-	for i := range scaleBuildings * scaleBuildings {
-		show(500_000+int64(i), spatial.Point{X: scaleTownMin + 500 + int64(i%scaleBuildings)*1000, Y: scaleTownMin + 500 + int64(i/scaleBuildings)*1000}, "building")
-		w.building++
-	}
-	for i := range 2000 {
-		at := in(mapMin, mapMax)
-		id := show(600_000+int64(i), at, "monster")
-		if i%4 == 0 {
-			dx, dy := direction(60) // 3m/s × 0.2s
-			w.movers = append(w.movers, scaleMover{id: id, dx: dx, dy: dy, min: mapMin, max: mapMax})
-		}
-	}
 	player.RegisterEntity()
-	for i := range 1000 {
-		playerID := int64(700_000 + i)
+	playerID := int64(700_000)
+	join := func(at spatial.Point, inTown bool) int64 {
+		playerID++
 		id, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
 		if err != nil {
 			tb.Fatal(err)
@@ -283,12 +461,6 @@ func newScaleWorld(tb testing.TB, config gamescene.Config, viewRadius int64) *sc
 			tb.Fatal(err)
 		}
 		value := built.(*player.Player)
-		lo, hi := mapMin, mapMax
-		if i < 500 {
-			lo, hi = townMin, townMax
-			w.town[playerID] = true
-		}
-		at := in(lo, hi)
 		if err := scene.Join(ctx, value, at); err != nil {
 			tb.Fatal(err)
 		}
@@ -302,9 +474,37 @@ func newScaleWorld(tb testing.TB, config gamescene.Config, viewRadius int64) *sc
 		}
 		w.at[value.ID()], w.kind[value.ID()] = at, "player"
 		w.players = append(w.players, playerID)
-		if i%2 == 0 {
-			dx, dy := direction(120) // 6m/s × 0.2s
-			w.movers = append(w.movers, scaleMover{id: value.ID(), dx: dx, dy: dy, min: lo, max: hi})
+		w.town[playerID] = inTown
+		return value.ID()
+	}
+	side := crowd.mapSide / scaleQuadrant
+	for q := range crowd.quadrants() {
+		origin := spatial.Point{X: (q % side) * scaleQuadrant, Y: (q / side) * scaleQuadrant}
+		townMin := spatial.Point{X: origin.X + (scaleQuadrant-scaleTownSide)/2, Y: origin.Y + (scaleQuadrant-scaleTownSide)/2}
+		townMax := spatial.Point{X: townMin.X + scaleTownSide - 1, Y: townMin.Y + scaleTownSide - 1}
+		quadMin, quadMax := origin, spatial.Point{X: origin.X + scaleQuadrant - 1, Y: origin.Y + scaleQuadrant - 1}
+		// 建筑：静止的目标（AOI 不分类型；字节按方案 §27 实测的建筑全量 / 增量另算）。
+		for i := range scaleBuildings * scaleBuildings {
+			show(spatial.Point{X: townMin.X + 500 + int64(i%scaleBuildings)*1000, Y: townMin.Y + 500 + int64(i/scaleBuildings)*1000}, "building")
+			w.building++
+		}
+		for i := range 2000 {
+			id := show(in(quadMin, quadMax), "monster")
+			if i%4 == 0 {
+				dx, dy := direction(60) // 3m/s × 0.2s
+				w.movers = append(w.movers, scaleMover{id: id, dx: dx, dy: dy, min: quadMin, max: quadMax})
+			}
+		}
+		for i := range 1000 {
+			lo, hi := quadMin, quadMax
+			if i < 500 {
+				lo, hi = townMin, townMax
+			}
+			id := join(in(lo, hi), i < 500)
+			if i%2 == 0 {
+				dx, dy := direction(120) // 6m/s × 0.2s
+				w.movers = append(w.movers, scaleMover{id: id, dx: dx, dy: dy, min: lo, max: hi})
+			}
 		}
 	}
 	// 放进去之后跑到稳定（每个人的初次全量都发完）。
@@ -345,10 +545,15 @@ func (w *scaleWorld) step(tb testing.TB) {
 	}
 }
 
-// observe 是此刻每个玩家主视野的统计：可见多少、其中多少建筑、镇子里的玩家漏掉了多少进入半径以内的对象（被“最近 64 个”
-// 挤掉的）、订阅多少块。
+// observe 是此刻每个玩家主视野的统计：可见多少、其中多少建筑、镇子里的玩家漏掉了多少进入半径以内的对象（被名额挤掉的）、
+// 订阅多少块。
 func (w *scaleWorld) observe(enter, leave, block int64) (visible, buildings, missedInTown, blocks float64) {
 	var townObservers int
+	byBlock := map[[2]int64][]int64{} // 进入半径的候选：按 enter 边长的格子分桶，只看周围九格
+	cell := func(p spatial.Point) [2]int64 { return [2]int64{p.X / enter, p.Y / enter} }
+	for id, p := range w.at {
+		byBlock[cell(p)] = append(byBlock[cell(p)], id)
+	}
 	for _, playerID := range w.players {
 		self, _ := entity.BuildEntityID(playerID, player.EntityKindPlayer)
 		at := w.at[self]
@@ -361,15 +566,20 @@ func (w *scaleWorld) observe(enter, leave, block int64) (visible, buildings, mis
 			}
 		}
 		lo := func(v int64) int64 { return max(v-leave, 0) / block }
-		hi := func(v int64) int64 { return min(v+leave, scaleMapSide-1) / block }
+		hi := func(v int64) int64 { return min(v+leave, w.mapSide-1) / block }
 		blocks += float64((hi(at.X) - lo(at.X) + 1) * (hi(at.Y) - lo(at.Y) + 1))
 		if !w.town[playerID] {
 			continue
 		}
 		townObservers++
-		for id, p := range w.at {
-			if id != self && spatial.DistanceSquared(at, p) <= enter*enter && !seen[id] {
-				missedInTown++
+		home := cell(at)
+		for dx := int64(-1); dx <= 1; dx++ {
+			for dy := int64(-1); dy <= 1; dy++ {
+				for _, id := range byBlock[[2]int64{home[0] + dx, home[1] + dy}] {
+					if id != self && spatial.DistanceSquared(at, w.at[id]) <= enter*enter && !seen[id] {
+						missedInTown++
+					}
+				}
 			}
 		}
 	}
@@ -377,12 +587,16 @@ func (w *scaleWorld) observe(enter, leave, block int64) (visible, buildings, mis
 	return visible / n, buildings / n, missedInTown / float64(townObservers), blocks / n
 }
 
-// 主视野尺度的成本（方案 §28）：每次复制（50ms，约 250 个移动）的耗时与分配；之后报告每个玩家的可见数、可见的建筑数、镇子
-// 里漏掉的 30m（最大视野时 60m）以内的对象数、订阅块数，进出视野的下行（全量 / remove，不含位置增量），以及整个场景
-// （块表、会话、可见集）的常驻内存。
+// 主视野尺度的成本（方案 §28、§29）：每次复制（50ms，1024m 地图约 250 个移动、2048m 约 1000 个）的耗时与分配；之后报告
+// 每个玩家的可见数、可见的建筑数、镇子里漏掉的进入半径以内的对象数、订阅块数，进出视野的下行（全量 / remove，不含位置
+// 增量），以及整个场景（块表、会话、可见集）的常驻内存。
+//
+// 变体：map1024/old-view30m-64 是 §28 的参数（进入 30m / 离开 33m、最近 64 个、会话 100，32m 块），与 §29 的
+// map1024/view32m-128 在同一张图、同一群人上对照；map2048/* 是 §29 的 2048m 地图（4 倍的人群），块边长 16m / 32m / 64m
+// 复核 32m 是否仍合适，view64m 是人人都要客户端最大视野。
 func BenchmarkSceneMainViewScale(b *testing.B) {
-	terrainConfig := func(block int64) gamescene.Config {
-		meta := terrain.Meta{BaseRevision: 1, ChunksX: 16, ChunksY: 16}
+	terrainConfig := func(chunks int32, block int64) gamescene.Config {
+		meta := terrain.Meta{BaseRevision: 1, ChunksX: chunks, ChunksY: chunks}
 		config, err := gamescene.TerrainConfig(meta.Bounds())
 		if err != nil {
 			b.Fatal(err)
@@ -390,26 +604,28 @@ func BenchmarkSceneMainViewScale(b *testing.B) {
 		config.BlockSize = block
 		return config
 	}
-	demo := gamescene.DefaultConfig()
-	demo.Width, demo.Height = scaleMapSide, scaleMapSide
+	old := terrainConfig(16, 3200)
+	old.View = gamescene.View{EnterRadius: 3000, LeaveRadius: 3300, MinRadius: 1500, MaxLeaveRadius: 6300, RadiusStep: 300, MaxVisible: 64}
 	type variant struct {
 		name   string
 		config gamescene.Config
+		crowd  scaleCrowd
 		radius int64 // 0 = 缺省视野
 	}
-	variants := []variant{{"demo-view/block100", demo, 0}}
-	for _, block := range []int64{1000, 1600, 3200, 6400} {
-		variants = append(variants, variant{fmt.Sprintf("view30m/block%d", block), terrainConfig(block), 0})
+	variants := []variant{
+		{"map1024/old-view30m-64/block3200", old, scaleCrowd{mapSide: 16 * terrain.ChunkSize}, 0},
+		{"map1024/view32m-128/block3200", terrainConfig(16, 3200), scaleCrowd{mapSide: 16 * terrain.ChunkSize}, 0},
 	}
-	for _, block := range []int64{1000, 1600, 3200, 6400} {
-		variants = append(variants, variant{fmt.Sprintf("view60m/block%d", block), terrainConfig(block), 6000})
+	for _, block := range []int64{1600, 3200, 6400} {
+		variants = append(variants, variant{fmt.Sprintf("map2048/view32m-128/block%d", block), terrainConfig(32, block), scaleCrowd{mapSide: 32 * terrain.ChunkSize}, 0})
 	}
+	variants = append(variants, variant{"map2048/view64m-128/block3200", terrainConfig(32, 3200), scaleCrowd{mapSide: 32 * terrain.ChunkSize}, 6400})
 	for _, v := range variants {
 		b.Run(v.name, func(b *testing.B) {
 			var before, after runtime.MemStats
 			runtime.GC()
 			runtime.ReadMemStats(&before)
-			w := newScaleWorld(b, v.config, v.radius)
+			w := newScaleWorld(b, v.config, v.crowd, v.radius)
 			runtime.GC()
 			runtime.ReadMemStats(&after)
 			b.ReportAllocs()
@@ -432,4 +648,184 @@ func BenchmarkSceneMainViewScale(b *testing.B) {
 			b.ReportMetric(float64(int64(after.HeapAlloc)-int64(before.HeapAlloc))/(1<<20), "heap-MiB")
 		})
 	}
+}
+
+// 普通场景装得下 2048m × 2048m 的地形图（维护者 2026-11-10：“大地图一般一个进程至少能撑住 2048*2048 的级别”，方案 §29）：
+// 32 × 32 块的平地包按启动的顺序（terrainRegion 定范围 → 打开 → 接建筑 → 装入 → 建筑对账）整张装进一个进程，1024 块都装上；
+// 场景实体与场景同步的世界就是这张图（游戏尺度的主视野、32m 块），场景与地形同步构造得出来。面积再大一点（33 × 32 块）
+// 在 terrainRegion 里、装入任何块之前拒绝，错误指向分区场景。数字写成字面量。
+func TestAnOrdinarySceneTakesA2048mMap(t *testing.T) {
+	for _, tc := range []struct {
+		chunksX, chunksY int32
+		ok               bool
+	}{{32, 32, true}, {64, 16, true}, {33, 32, false}, {32, 33, false}, {64, 17, false}} {
+		meta := terrain.Meta{BaseRevision: 1, ChunksX: tc.chunksX, ChunksY: tc.chunksY}
+		_, err := terrainRegion(meta, settings.ScenePartition{}, 1001)
+		if tc.ok != (err == nil) || !tc.ok && !strings.Contains(err.Error(), "partitioned scene") {
+			t.Fatalf("%d × %d chunks (%dm × %dm) on an ordinary scene: %v", tc.chunksX, tc.chunksY, tc.chunksX*64, tc.chunksY*64, err)
+		}
+	}
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: 32, ChunksY: 32, HeightBase: -10000}
+	pack := filepath.Join(t.TempDir(), "game-scale.pack")
+	if err := terrain.WritePackFile(pack, meta, terrain.Flat(meta, 1010, terrain.GenGrass)); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	p := startTerrainProcess(t, pack, func(meta terrain.Meta) (terrainmap.Region, error) {
+		return terrainRegion(meta, settings.ScenePartition{}, 1001)
+	}, &memoryChunkStore{})
+	took := time.Since(started)
+	if p.stats.Chunks != 1024 || p.stats.Base != 1024 || p.stats.Corrupt+p.stats.StaleBase != 0 {
+		t.Fatalf("loading the 2048m map: %+v, want all 1024 chunks from the base pack", p.stats)
+	}
+	world, err := sceneWorld(settings.ScenePartition{}, p.m)
+	if err != nil || world.Width != 204800 || world.Height != 204800 || world.BlockSize != 3200 || world.View.EnterRadius != 3200 {
+		t.Fatalf("the scene's world on the 2048m map: %+v, %v", world, err)
+	}
+	replicated, err := replicatedWorld(settings.ScenePartition{}, p.m)
+	if err != nil || replicated != world {
+		t.Fatalf("the replicated world: %+v, %v", replicated, err)
+	}
+	recorder := newSceneRecorder()
+	scene, err := newSceneWith(sceneLane{transport: recorder}, recorder, nil, replicated, replicated.View.MaxVisible, defaultTerrainSync(p.m.Meta().Bounds()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scene.terrain.attach(p.m)
+	_ = scene.Close(context.Background())
+	t.Logf("2048m flat map: %d chunks loaded in %v (open, load, reconcile)", p.stats.Base, took)
+}
+
+// 2048m 地图整张装入的测量（方案 §29）：平地与 -shape generated 各一张 32 × 32 块的包（另有 16 × 16 块的 1024m 与超过上限的
+// 64 × 64 块 4096m 平地作对照，以及“每块都改过”的 2048m 平地：块记录全部读出、每块一个 TerrainChunk 实体——离线替身在
+// 打开之前把记录建成实体，代替生产的冷加载，所以这一项“打开”的增量是 1024 个实体），按 startTerrain 的顺序装入，记每一段的耗时
+// 与常驻堆（GC 之后的 HeapAlloc 增量）：打开（terrainRegion + 读包头 + 空视图 + 占位表）、装入（读记录 + 装视图）、
+// 场景（场景同步的 Manager、主视野与地形 Interest 的块表）、地形同步启动（loadEdited：改过的块装成实体并登记）。
+// 写包与包大小另记。重，只在 ROOST_TERRAIN_SCALE_MEASURE=1 时跑。
+func TestTerrainGameScaleLoadMeasure(t *testing.T) {
+	if os.Getenv("ROOST_TERRAIN_SCALE_MEASURE") == "" {
+		t.Skip("measurement: set ROOST_TERRAIN_SCALE_MEASURE=1 to load whole 1024m / 2048m maps (plan §29)")
+	}
+	rounds := 3
+	heap := func() uint64 {
+		var m runtime.MemStats
+		runtime.GC()
+		runtime.GC()
+		runtime.ReadMemStats(&m)
+		return m.HeapAlloc
+	}
+	mib := func(a, b uint64) float64 { return (float64(b) - float64(a)) / (1 << 20) }
+	for _, c := range []struct {
+		name   string
+		chunks int32
+		shape  string
+		edited bool
+	}{
+		{"map1024/flat", 16, "flat", false},
+		{"map2048/flat", 32, "flat", false},
+		{"map2048/generated", 32, "generated", false},
+		{"map2048/flat-every-chunk-edited", 32, "flat", true},
+		// 4096m 超过普通场景的上限：terrainRegion 会拒绝，这里绕过它（整张图作本进程的范围）只为量“上限再放宽一倍”的代价。
+		{"map4096/flat-over-the-limit", 64, "flat", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			region := func(meta terrain.Meta) (terrainmap.Region, error) {
+				return terrainRegion(meta, settings.ScenePartition{}, 1001)
+			}
+			if c.chunks > 32 {
+				region = wholeMap
+			}
+			meta := terrain.Meta{BaseRevision: 1, ChunksX: c.chunks, ChunksY: c.chunks, HeightBase: -10000, WaterLevel: 100}
+			pack := filepath.Join(t.TempDir(), "scale.pack")
+			source := terrain.Flat(meta, 1010, terrain.GenGrass)
+			if c.shape == "generated" {
+				meta.HeightBase, meta.WaterLevel = 0, 40000
+				source = terrain.Generated(meta, terrainSeed)
+			}
+			written := time.Now()
+			if err := terrain.WritePackFile(pack, meta, source); err != nil {
+				t.Fatal(err)
+			}
+			writeTook := time.Since(written)
+			info, err := os.Stat(pack)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := &memoryChunkStore{}
+			if c.edited {
+				// 每块改一个点（Edit 的内部写入口，一块一笔事务），停进程、把实体写成“库里的记录”。
+				p := startTerrainProcess(t, pack, region, store)
+				var edits []terrainmap.SampleEdit
+				for y := range int64(c.chunks) {
+					for x := range int64(c.chunks) {
+						edits = append(edits, terrainmap.SampleEdit{GX: x*64 + 10, GY: y*64 + 10, Height: 1020, Material: 2})
+					}
+				}
+				if _, err := p.m.Edit(p.ctx, edits); err != nil {
+					t.Fatal(err)
+				}
+				p.stop()
+				p.persist(store)
+			}
+			for round := range rounds {
+				base := heap()
+				started := time.Now()
+				var opened uint64
+				var openTook time.Duration
+				p := startTerrainProcessWith(t, pack, region, store, func(p *terrainProcess) {
+					openTook = time.Since(started)
+					opened = heap()
+				})
+				loadTook := time.Since(started)
+				loaded := heap()
+				sceneStarted := time.Now()
+				replicated, err := replicatedWorld(settings.ScenePartition{}, p.m)
+				if c.chunks > 32 {
+					// 超过上限的图：TerrainConfig 拒绝，按同样的视野与块边长手写世界。
+					replicated, err = gamescene.Config{Width: meta.Bounds().Max.X, Height: meta.Bounds().Max.Y, BlockSize: gamescene.TerrainBlockSize, Spawn: gamescene.DefaultConfig().Spawn, View: gamescene.TerrainView()}, nil
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				recorder := newSceneRecorder()
+				scene, err := newSceneWith(sceneLane{transport: recorder}, recorder, nil, replicated, replicated.View.MaxVisible, defaultTerrainSync(p.m.Meta().Bounds()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				scene.terrain.attach(p.m)
+				sceneTook := time.Since(sceneStarted)
+				withScene := heap()
+				syncStarted := time.Now()
+				shown, err := scene.terrain.loadEdited(p.ctx, p.m, lifecycleChunks(t, p))
+				if err != nil {
+					t.Fatal(err)
+				}
+				syncTook := time.Since(syncStarted)
+				synced := heap()
+				regionStarted := time.Now()
+				for range 1000 {
+					_, _ = region(meta)
+				}
+				regionTook := time.Since(regionStarted) / 1000
+				if want := int(c.chunks) * int(c.chunks); p.stats.Chunks != want || p.stats.Base+p.stats.Overlays != want || (c.edited && shown != want) {
+					t.Fatalf("loaded %+v, %d edited chunks shown; want all %d", p.stats, shown, want)
+				}
+				t.Logf("%s round %d: pack %.1fMiB written in %v; terrainRegion %v; open %v (+%.1fMiB); start to loaded %v (+%.1fMiB after open: view and records; overlays %d, base %d); scene and terrain sync built in %v (+%.2fMiB: AOI block tables); loadEdited %v, %d chunks (+%.1fMiB); resident in all %.1fMiB",
+					c.name, round, float64(info.Size())/(1<<20), writeTook, regionTook, openTook, mib(base, opened), loadTook, mib(opened, loaded), p.stats.Overlays, p.stats.Base,
+					sceneTook, mib(loaded, withScene), syncTook, shown, mib(withScene, synced), mib(base, synced))
+				_ = scene.Close(context.Background())
+				p.stop()
+			}
+		})
+	}
+}
+
+// lifecycleChunks 是进程的 TerrainChunk lifecycle（startTerrainSync 经 registry 取的同一个，地形同步启动用）。
+func lifecycleChunks(t *testing.T, p *terrainProcess) terrainmap.Chunks {
+	t.Helper()
+	chunks, err := lifecycle.NewTerrainChunkLifecycle(entity.NewManagerAccess(p.entities))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return chunks
 }

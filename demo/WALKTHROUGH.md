@@ -458,11 +458,11 @@ Player 的 DAO setter ─ MarkSync(mask) ─▶ Player.PublishSyncDirty() ─▶
 - **被看的用 entity id，看的人用 player id**。entity id 把 unique id、kind、category 打包进一个 int64，跨 kind 唯一；unique id
   只在 kind 内唯一，拿它索引目标会让 Player 42 和 Monster 42 相撞。观察者是玩家，就是 player id，也是 Manager 的会话 id；
   `Enter(playerID, entityID, …)` 两个都给，玩家实体到 player id 的换算只在 `playerOf` 一处。
-- **主视野最多看 64 个（`sceneMaxVisible`）**：范围内多于 64 个时只留最近的 64 个（AOI 的 `MaxVisible`，近的进来挤掉最远的）。
+- **主视野最多看 64 个（`gamescene.View.MaxVisible`；开地形的普通场景是游戏尺度的 128、会话上限 164，见可编辑地形方案 §29）**：范围内多于 64 个时只留最近的 64 个（AOI 的 `MaxVisible`，近的进来挤掉最远的）。
   所有玩家从同一出生点进场，不设上限时挤在出生点的人加上旁边的怪会让每个玩家的复制会话持有超过 Manager 的 `Limits.MaxObjects`
   （缺省 100，也是一个会话能持有的对象数）。2026-10-22 的登录风暴里 100 个机器人的会话全部因此被关；2026-11-08 起超额不再关会话
   （超额降级，方案 D17：暂缓放不下的对象、主视野从最远处收紧），但上限仍要设——在会话上限以内就从不暂缓，视野也不会在边界上反复试探。取值：会话除主视野外还持有自己、场景实体、对局队友（GroupSize 2，同时只在一个队里）
-  共 3 个（`sceneReservedObjects`），64 + 3 离 100 还留 33 个，给以后加的关系视野（公会、多人队伍）；`newSceneOn` 启动时核对两者之和不超过上限。
+  共 3 个（`sceneReservedObjects`），64 + 3 离 100 还留 33 个（`sceneRelationHeadroom`），给以后加的关系视野（公会、多人队伍）；会话上限由名额推出（`sceneSessionObjects` = 名额 + 3 + 33），两者总放得下。
   回归：`TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen`（100 个玩家 + 3 只怪挤在出生点，会话都不关、每人恰好看到 64 个）。
   反过来去掉上限（`TestACrowdOverflowingASessionShrinksTheViewInsteadOfDisconnecting`，101 个玩家）时没有会话被关、没有人被断开，
   每人收敛到恰好 100 个对象（自己 + 最近的 99 人），去掉的都不比留下的近。

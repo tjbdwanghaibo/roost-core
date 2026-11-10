@@ -1,0 +1,90 @@
+## M1 进入半径回到 30m: RED
+--- FAIL: TestBuildingsHaveNoReplicationOfTheirOwn (0.02s)
+    building_sync_test.go:463: scene: interest policy: policy: invalid interest config: enter radius 3000 is not on the view radius grid (min 1600, step 320)
+--- FAIL: TestManyBuildingsDegradeWithTheCrowd (0.02s)
+    building_sync_test.go:575: scene: interest policy: policy: invalid interest config: enter radius 3000 is not on the view radius grid (min 1600, step 320)
+--- FAIL: TestBuildingsAtTheTerrainMainViewScale (0.01s)
+    building_sync_test.go:632: scene: interest policy: policy: invalid interest config: enter radius 3000 is not on the view radius grid (min 1600, step 320)
+--- FAIL: TestTerrainMainViewFitsTheBlockBudget (0.00s)
+    scene_view_scale_test.go:63: terrain view on the terrain blocks: block 3200, worst observer blocks 16 (default view) / 36 (widest view), budget 1024: scene: interest policy: policy: invalid interest config: enter radius 3000 is not on the view radius grid (min 1600, step 320)
+
+## M2 去掉滞回（离开 32m）: RED
+--- FAIL: TestBuildingsAtTheTerrainMainViewScale (0.03s)
+    building_sync_test.go:695: stepping back 2m (33～33.4m, inside the 35.2m leave radius): player false, monster false, tower false; want all kept
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:674: ordinary with terrain: sceneWorld = {Width:12800 Height:6400 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3200 LeaveRadius:3200 MinRadius:1600 MaxLeaveRadius:6720 RadiusStep:320 MaxVisible:128}} <nil>, want {Width:12800 Height:6400 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3200 LeaveRadius:3520 MinRadius:1600 MaxLeaveRadius:6720 RadiusStep:320 MaxVisible:128}}
+
+## M3 离开上限 6300（客户端最大 60m）: RED
+--- FAIL: TestBuildingsAtTheTerrainMainViewScale (0.04s)
+    building_sync_test.go:712: the widest view a client can have: {LOD:0 Radius:5760}, <nil>; want 64m
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:674: ordinary with terrain: sceneWorld = {Width:12800 Height:6400 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3200 LeaveRadius:3520 MinRadius:1600 MaxLeaveRadius:6300 RadiusStep:320 MaxVisible:128}} <nil>, want {Width:12800 Height:6400 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3200 LeaveRadius:3520 MinRadius:1600 MaxLeaveRadius:6720 RadiusStep:320 MaxVisible:128}}
+
+## M4 开地形的名额仍是 64: RED
+--- FAIL: TestBuildingsHaveNoReplicationOfTheirOwn (0.00s)
+    building_sync_test.go:451: an ordinary terrain scene's session object table holds 164, want 228 (players, monsters, buildings and the scene 164 + terrain 64)
+--- FAIL: TestManyBuildingsDegradeWithTheCrowd (10.03s)
+    building_sync_test.go:592: timed out waiting for the viewer's session settled at its limit
+--- FAIL: TestTheGameScaleMainViewHoldsTheNearest128 (0.21s)
+    --- FAIL: TestTheGameScaleMainViewHoldsTheNearest128/the_nearest_128 (0.07s)
+        scene_view_scale_test.go:123: player 34000 holds 64 other subjects (itself: true), want the nearest 128
+    --- FAIL: TestTheGameScaleMainViewHoldsTheNearest128/over_the_session_limit_of_164 (0.14s)
+
+## M5 会话上限不随名额（固定 100）: RED
+--- FAIL: TestBuildingsHaveNoReplicationOfTheirOwn (0.00s)
+    building_sync_test.go:451: an ordinary terrain scene's session object table holds 164, want 228 (players, monsters, buildings and the scene 164 + terrain 64)
+--- FAIL: TestManyBuildingsDegradeWithTheCrowd (10.02s)
+    building_sync_test.go:592: timed out waiting for the viewer's session settled at its limit
+--- FAIL: TestTheGameScaleMainViewHoldsTheNearest128 (0.15s)
+    --- FAIL: TestTheGameScaleMainViewHoldsTheNearest128/the_nearest_128 (0.06s)
+        scene_view_scale_test.go:118: 0 sessions lost, 4060 objects deferred: the cap of 128 should keep every session inside its limit
+    --- FAIL: TestTheGameScaleMainViewHoldsTheNearest128/over_the_session_limit_of_164 (0.09s)
+
+## M6 Manager 不设 Limits: RED
+--- FAIL: TestManyBuildingsDegradeWithTheCrowd (10.02s)
+    building_sync_test.go:592: timed out waiting for the viewer's session settled at its limit
+--- FAIL: TestTheGameScaleMainViewHoldsTheNearest128 (0.17s)
+    --- FAIL: TestTheGameScaleMainViewHoldsTheNearest128/the_nearest_128 (0.06s)
+        scene_view_scale_test.go:118: 0 sessions lost, 4060 objects deferred: the cap of 128 should keep every session inside its limit
+    --- FAIL: TestTheGameScaleMainViewHoldsTheNearest128/over_the_session_limit_of_164 (0.10s)
+        scene_view_scale_test.go:149: player 35000 holds 100 objects (itself: true), want itself among exactly 164
+
+## M7 地图上限仍是 1024m: RED
+--- FAIL: TestTerrainMainViewFitsTheBlockBudget (0.00s)
+    scene_view_scale_test.go:46: scene: terrain map 204800 × 204800 is too large for an ordinary scene: at most 1048576m² (about 1024m × 1024m); use a partitioned scene (scene.partition) for a map this size
+--- FAIL: TestAnOrdinarySceneTakesA2048mMap (0.00s)
+    scene_view_scale_test.go:667: 32 × 32 chunks (2048m × 2048m) on an ordinary scene: scene: terrain map 204800 × 204800 is too large for an ordinary scene: at most 1048576m² (about 1024m × 1024m); use a partitioned scene (scene.partition) for a map this size
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:705: 32 × 32 chunks: config {Width:0 Height:0 BlockSize:0 Spawn:{X:0 Y:0} View:{EnterRadius:0 LeaveRadius:0 MinRadius:0 MaxLeaveRadius:0 RadiusStep:0 MaxVisible:0}} scene: terrain map 204800 × 204800 is too large for an ordinary scene: at most 1048576m² (about 1024m × 1024m); use a partitioned scene (scene.partition) for a map this size, region {Own:{Min:{X:0 Y:0} Max:{X:0 Y:0}} Load:{Min:{X:0 Y:0} Max:{X:0 Y:0}}} scene: terrain map 204800 × 204800 is too large for an ordinary scene: at most 1048576m² (about 1024m × 1024m); use a partitioned scene (scene.partition) for a map this size
+
+## M8 地图上限放到 2112m（33 块）: RED
+--- FAIL: TestAnOrdinarySceneTakesA2048mMap (0.00s)
+    scene_view_scale_test.go:667: 33 × 32 chunks (2112m × 2048m) on an ordinary scene: <nil>
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:710: 33 × 32 chunks on an ordinary scene: config <nil>, region <nil>; want both refused, pointing at a partitioned scene
+
+## M9 不开地形的名额也改成 128: RED
+--- FAIL: TestBuildingsHaveNoReplicationOfTheirOwn (0.00s)
+    building_sync_test.go:454: a partitioned terrain scene's session object table holds 228, want 164 (100 + terrain 64)
+--- FAIL: TestACrowdedSpawnPointKeepsEveryReplicationSessionOpen (0.04s)
+    scene_test.go:514: player 20000 holds 102 other subjects, want the main view's cap 64
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:685: the map without terrain changed: {Width:1000 Height:1000 BlockSize:100 Spawn:{X:500 Y:500} View:{EnterRadius:120 LeaveRadius:150 MinRadius:60 MaxLeaveRadius:300 RadiusStep:30 MaxVisible:128}}
+--- FAIL: TestTerrainDoesNotWidenThePlayerObjectLimit (0.05s)
+    terrain_sync_test.go:775: with terrain on: 0 sessions lost, 0 objects ever deferred (want 0 lost and the crowd overflowing)
+
+## M10 Normalize 不补名额: GREEN(未变红)
+
+
+## M1b 进入 / 离开放大一档（35.2m / 38.4m，仍在量化网格上）: RED
+--- FAIL: TestBuildingsAtTheTerrainMainViewScale (0.03s)
+    building_sync_test.go:687: a monster 33.4m away entered the main view: the enter radius is wider than 32m
+--- FAIL: TestAnOrdinarySceneTakesA2048mMap (0.11s)
+    scene_view_scale_test.go:685: the scene's world on the 2048m map: {Width:204800 Height:204800 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3520 LeaveRadius:3840 MinRadius:1600 MaxLeaveRadius:6720 RadiusStep:320 MaxVisible:128}}, <nil>
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:674: ordinary with terrain: sceneWorld = {Width:12800 Height:6400 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3520 LeaveRadius:3840 MinRadius:1600 MaxLeaveRadius:6720 RadiusStep:320 MaxVisible:128}} <nil>, want {Width:12800 Height:6400 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3200 LeaveRadius:3520 MinRadius:1600 MaxLeaveRadius:6720 RadiusStep:320 MaxVisible:128}}
+
+## M10 Normalize 不补名额: RED
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:697: a view without a cap normalizes to a cap of 0, want 64
+

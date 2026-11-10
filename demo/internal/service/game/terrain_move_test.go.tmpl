@@ -101,7 +101,7 @@ func newTerrainMoveWorld(t *testing.T, waterLevel int32) *terrainMoveWorld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bridge, err := newSceneWithObserver(sceneLane{transport: transport}, transport, nil, replicated, sceneMaxVisible,
+	bridge, err := newSceneWithObserver(sceneLane{transport: transport}, transport, nil, replicated, replicated.View.MaxVisible,
 		&terrainSyncConfig{bounds: meta.Bounds(), radius: terrainViewRadius, maxVisible: terrainMaxVisible}, observer)
 	if err != nil {
 		t.Fatal(err)
@@ -644,8 +644,9 @@ func TestTerrainSceneIsTheTerrainMap(t *testing.T) {
 }
 
 // 场景的世界怎么定（sceneWorld：服务 Init 建场景实体；replicatedWorld：NewScene 建场景同步的 AOI）：没有地形、或分区场景，是原来的缺省地图（逐字段相同）；
-// 普通场景有地形时是地形图。普通场景放得下的地形图以 AOI 块表为界（gamescene.TerrainConfig）：16 × 16 块（1024m，正好
-// spatial.MaxBlockCount 个 1m 的块）可以，再大一块就拒绝——在装入任何块之前（terrainRegion），分区场景不受这个限制。
+// 普通场景有地形时是地形图。普通场景放得下的地形图按面积为界（gamescene.TerrainConfig，方案 §29：维护者口径一个进程至少
+// 撑住 2048m × 2048m）：32 × 32 块（2048m）以及同面积的 64 × 16、1024 × 1 块可以，面积再大一点就拒绝——在装入任何块之前
+// （terrainRegion），分区场景不受这个限制。
 func TestTerrainSceneWorldAndItsLimit(t *testing.T) {
 	small := terrain.Meta{BaseRevision: 1, ChunksX: 2, ChunksY: 1}
 	pack := filepath.Join(t.TempDir(), "world.pack")
@@ -663,9 +664,10 @@ func TestTerrainSceneWorldAndItsLimit(t *testing.T) {
 		{"no terrain", settings.ScenePartition{}, nil, gamescene.DefaultConfig()},
 		{"partitioned without terrain", partitioned, nil, gamescene.DefaultConfig()},
 		{"partitioned with terrain", partitioned, m, gamescene.DefaultConfig()},
-		// 开地形的普通场景：地形图，游戏尺度的主视野（进入 30m / 离开 33m / 客户端 15～60m，步长 3m）与 32m 的块（方案 §28）。
+		// 开地形的普通场景：地形图，游戏尺度的主视野（进入 32m / 离开 35.2m / 客户端 16～64m，步长 3.2m，最近 128 个）与
+		// 32m 的块（方案 §29）。
 		{"ordinary with terrain", settings.ScenePartition{}, m, gamescene.Config{Width: 2 * terrain.ChunkSize, Height: terrain.ChunkSize, BlockSize: 3200, Spawn: gamescene.DefaultConfig().Spawn,
-			View: gamescene.View{EnterRadius: 3000, LeaveRadius: 3300, MinRadius: 1500, MaxLeaveRadius: 6300, RadiusStep: 300}}},
+			View: gamescene.View{EnterRadius: 3200, LeaveRadius: 3520, MinRadius: 1600, MaxLeaveRadius: 6720, RadiusStep: 320, MaxVisible: 128}}},
 	} {
 		got, err := sceneWorld(tc.partition, tc.m)
 		if err != nil || got != tc.want {
@@ -676,9 +678,10 @@ func TestTerrainSceneWorldAndItsLimit(t *testing.T) {
 			t.Fatalf("%s: replicatedWorld = %+v %v, want %+v", tc.name, replicated, err, tc.want)
 		}
 	}
-	// 不开地形的场景逐字段不变：地图、块、出生点与 demo 原尺度的主视野（进入 1.2m / 离开 1.5m / 客户端 0.6～2.7m，步长 0.3m）。
+	// 不开地形的场景逐字段不变：地图、块、出生点与 demo 原尺度的主视野（进入 1.2m / 离开 1.5m / 客户端 0.6～2.7m，步长 0.3m，
+	// 最近 64 个——会话上限因此仍是 frame.DefaultLimits 的 100）。
 	if lifecycle.WorldSceneConfig() != gamescene.DefaultConfig() || gamescene.DefaultConfig() != (gamescene.Config{Width: 1000, Height: 1000, BlockSize: 100, Spawn: spatial.Point{X: 500, Y: 500},
-		View: gamescene.View{EnterRadius: 120, LeaveRadius: 150, MinRadius: 60, MaxLeaveRadius: 300, RadiusStep: 30}}) {
+		View: gamescene.View{EnterRadius: 120, LeaveRadius: 150, MinRadius: 60, MaxLeaveRadius: 300, RadiusStep: 30, MaxVisible: 64}}) {
 		t.Fatalf("the map without terrain changed: %+v", lifecycle.WorldSceneConfig())
 	}
 	// 分区场景的 Base 世界（网格）保持 demo 原尺度的主视野。
@@ -689,11 +692,15 @@ func TestTerrainSceneWorldAndItsLimit(t *testing.T) {
 	if got := (gamescene.Config{Width: 10, Height: 10, BlockSize: 5}).Normalize().View; got != gamescene.DefaultView() {
 		t.Fatalf("a config without a view normalizes to %+v", got)
 	}
+	// 给了半径没给名额：名额取 demo 原尺度的 64（0 在 AOI 里是“不限”，会话上限就推不出来）。
+	if got := (gamescene.Config{View: gamescene.View{EnterRadius: 120, LeaveRadius: 150, MinRadius: 60, MaxLeaveRadius: 300, RadiusStep: 30}}).Normalize().View.MaxVisible; got != 64 {
+		t.Fatalf("a view without a cap normalizes to a cap of %d, want 64", got)
+	}
 
 	for _, tc := range []struct {
 		chunksX, chunksY int32
 		ok               bool
-	}{{16, 16, true}, {32, 8, true}, {17, 16, false}, {16, 17, false}, {157, 157, false}, {1024, 1, false}} {
+	}{{16, 16, true}, {32, 32, true}, {64, 16, true}, {1024, 1, true}, {33, 32, false}, {32, 33, false}, {1025, 1, false}, {157, 157, false}} {
 		meta := terrain.Meta{BaseRevision: 1, ChunksX: tc.chunksX, ChunksY: tc.chunksY}
 		config, err := gamescene.TerrainConfig(meta.Bounds())
 		region, regionErr := terrainRegion(meta, settings.ScenePartition{}, 1001)

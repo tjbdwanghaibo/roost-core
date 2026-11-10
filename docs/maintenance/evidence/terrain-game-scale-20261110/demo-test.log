@@ -1,0 +1,88 @@
+?   	example.com/gd	[no test files]
+?   	example.com/gd/cmd/accountctl	[no test files]
+?   	example.com/gd/cmd/healthprobe	[no test files]
+ok  	example.com/gd/cmd/loadtest	0.946s
+?   	example.com/gd/cmd/playerprobe	[no test files]
+?   	example.com/gd/cmd/schemamigrate	[no test files]
+ok  	example.com/gd/cmd/sidmerge	0.993s
+ok  	example.com/gd/cmd/sidmove	1.560s
+ok  	example.com/gd/cmd/terrainpack	2.002s
+?   	example.com/gd/configs/generated	[no test files]
+?   	example.com/gd/configs/schema	[no test files]
+ok  	example.com/gd/db	2.240s
+?   	example.com/gd/db/def	[no test files]
+ok  	example.com/gd/db/migrations	2.686s
+ok  	example.com/gd/deploy/docker	2.956s
+?   	example.com/gd/game/activity	[no test files]
+ok  	example.com/gd/game/actor	3.335s
+?   	example.com/gd/game/alliancerule	[no test files]
+?   	example.com/gd/game/battle	[no test files]
+?   	example.com/gd/game/chatroom	[no test files]
+?   	example.com/gd/game/clientsync	[no test files]
+ok  	example.com/gd/game/controllers/player	4.777s
+ok  	example.com/gd/game/dungeon	4.641s
+?   	example.com/gd/game/effects	[no test files]
+?   	example.com/gd/game/entities	[no test files]
+ok  	example.com/gd/game/entities/alliance	5.087s
+ok  	example.com/gd/game/entities/alliance_member	5.571s
+?   	example.com/gd/game/entities/building	[no test files]
+ok  	example.com/gd/game/entities/monster	5.569s
+ok  	example.com/gd/game/entities/player	5.671s
+?   	example.com/gd/game/entities/scene	[no test files]
+?   	example.com/gd/game/entities/scene_actor	[no test files]
+ok  	example.com/gd/game/entities/team	5.859s
+ok  	example.com/gd/game/entities/terrain_chunk	5.778s
+ok  	example.com/gd/game/entities/terrain_editor	5.822s
+ok  	example.com/gd/game/entities/world	6.229s
+?   	example.com/gd/game/equipment	[no test files]
+?   	example.com/gd/game/flags	[no test files]
+ok  	example.com/gd/game/gameplay/attribute	5.299s
+ok  	example.com/gd/game/gift	5.610s
+?   	example.com/gd/game/guild	[no test files]
+ok  	example.com/gd/game/handler	4.331s
+ok  	example.com/gd/game/handler/sender	4.757s
+?   	example.com/gd/game/handler/syncsender	[no test files]
+?   	example.com/gd/game/lifecycle	[no test files]
+?   	example.com/gd/game/matchmaking	[no test files]
+ok  	example.com/gd/game/partition	4.933s
+?   	example.com/gd/game/playeraccess	[no test files]
+?   	example.com/gd/game/protocol_bootstrap	[no test files]
+?   	example.com/gd/game/protocol_handlers/player	[no test files]
+?   	example.com/gd/game/purchase	[no test files]
+?   	example.com/gd/game/ranking	[no test files]
+ok  	example.com/gd/game/rewards	5.206s
+ok  	example.com/gd/game/runtimeid	5.423s
+?   	example.com/gd/game/scene	[no test files]
+ok  	example.com/gd/game/scene/runtime	5.481s
+ok  	example.com/gd/game/settings	5.532s
+ok  	example.com/gd/game/skills	5.087s
+?   	example.com/gd/game/terrainmap	[no test files]
+ok  	example.com/gd/internal/access/player	4.213s
+ok  	example.com/gd/internal/access/player/tcp	4.663s
+?   	example.com/gd/internal/bootstrap	[no test files]
+?   	example.com/gd/internal/errors	[no test files]
+?   	example.com/gd/internal/frameworkdeps	[no test files]
+?   	example.com/gd/internal/registry	[no test files]
+ok  	example.com/gd/internal/rpc/alliance	4.467s
+ok  	example.com/gd/internal/service/account	4.584s
+?   	example.com/gd/internal/service/activity	[no test files]
+ok  	example.com/gd/internal/service/alliance	4.344s
+?   	example.com/gd/internal/service/chat	[no test files]
+ok  	example.com/gd/internal/service/game	69.345s
+?   	example.com/gd/internal/service/global	[no test files]
+?   	example.com/gd/internal/service/mail	[no test files]
+?   	example.com/gd/internal/service/match	[no test files]
+ok  	example.com/gd/internal/service/platform	1.586s
+?   	example.com/gd/internal/service/rank	[no test files]
+?   	example.com/gd/internal/service/session	[no test files]
+?   	example.com/gd/loadtest/playertcp	[no test files]
+?   	example.com/gd/loadtest/protocol	[no test files]
+?   	example.com/gd/protocol/def	[no test files]
+?   	example.com/gd/protocol/msgid	[no test files]
+?   	example.com/gd/protocol/pb	[no test files]
+?   	example.com/gd/protocol/player_bind	[no test files]
+?   	example.com/gd/saga/alliance_donate	[no test files]
+?   	example.com/gd/saga/alliance_found	[no test files]
+?   	example.com/gd/saga/alliance_reward	[no test files]
+?   	example.com/gd/saga/gift_item	[no test files]
+exit=0
