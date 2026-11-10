@@ -21,7 +21,7 @@
     },
     {
       "name": "params_delta",
-      "payload": "08ef80908380a003f87f032a040a020509",
+      "payload": "f87f032a040a020509",
       "want": "08ef80908380a003f87f03120208011a03089221220208022a040a020509320208013a02086e420208645a0408da8603",
       "full": false,
       "state": 1,
@@ -38,7 +38,7 @@
     },
     {
       "name": "replace_without_params",
-      "payload": "08ef80908380a003f87f03220208042a0032005a0b0880808080f8ffffffff01",
+      "payload": "f87f03220208042a0032005a0b0880808080f8ffffffff01",
       "want": "08ef80908380a003f87f03120208011a03089221220208042a0032003a02086e420208645a0b0880808080f8ffffffff01",
       "full": false,
       "state": 1,
@@ -52,7 +52,7 @@
     },
     {
       "name": "remove_delta",
-      "payload": "08ef80908380a003f87f0312001a0022002a003a0042005a00",
+      "payload": "f87f0312001a0022002a003a0042005a00",
       "want": "08ef80908380a003f87f0312001a0022002a0032003a0042005a00",
       "full": false,
       "state": 0,

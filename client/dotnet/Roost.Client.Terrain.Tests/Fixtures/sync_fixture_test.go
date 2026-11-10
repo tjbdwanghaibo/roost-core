@@ -241,7 +241,8 @@ func TestWriteTerrainChunkSyncFixture(t *testing.T) {
 	}
 }
 
-// buildingStep 是建筑同步夹具的一步：payload 是 entitysync 会下发的载荷（建筑 packer 的 MarshalSync，全量或按字段），
+// buildingStep 是建筑同步夹具的一步：payload 是 entitysync 会下发的载荷（与 demo 建筑 packer 相同：全量 MarshalSync 带实体 ID，
+// 增量 MarshalSyncDelta 按字段、不带实体 ID，客户端沿用基线的），
 // want 是 Go 生成 DAO 此刻的全量；其余是客户端摆放建筑要读的字段（方案 §27：配置 ID + 参数 + 锚点 / 朝向 / 地基）。
 type buildingStep struct {
 	Name       string  `json:"name"`
@@ -305,7 +306,7 @@ func TestWriteBuildingSyncFixture(t *testing.T) {
 			t.Fatal(err)
 		}
 		mask := d.DirtyTracker().TakeEntitySyncDirty()
-		return d.MarshalSync(mask)
+		return d.MarshalSyncDelta(mask)
 	}
 	place := func(config int32, params []int32, facing int32, foundation int32) func() {
 		return func() {

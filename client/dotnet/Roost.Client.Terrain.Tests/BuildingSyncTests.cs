@@ -21,11 +21,13 @@ internal static partial class Program
             string name = step.GetProperty("name").GetString()!;
             var patch = SyncBuildingDao.Parser.ParseFrom(Convert.FromHexString(step.GetProperty("payload").GetString()!));
             var want = SyncBuildingDao.Parser.ParseFrom(Convert.FromHexString(step.GetProperty("want").GetString()!));
-            Check(patch.EntityId == entityId && patch.SyncFormat == 3, name + ": identity");
-            if (step.GetProperty("full").GetBoolean()) previous = null;
+            bool full = step.GetProperty("full").GetBoolean();
+            // 全量带实体 ID；增量（服务端 packer 的 MarshalSyncDelta）不带，合并后沿用基线的。
+            Check(patch.EntityId == (full ? entityId : 0) && patch.SyncFormat == 3, name + ": identity");
+            if (full) previous = null;
             var before = previous?.Clone();
             var next = patch.Apply(previous);
-            Check(next.Equals(want), name + ": C# Apply equals the Go DAO");
+            Check(next.Equals(want) && next.EntityId == entityId, name + ": C# Apply equals the Go DAO");
             Check(previous == null || previous.Equals(before), name + ": baseline not mutated");
             var wantParams = step.GetProperty("params").EnumerateArray().Select(v => v.GetInt32()).ToArray();
             Check((next.State?.Value ?? 0) == step.GetProperty("state").GetInt32() &&
