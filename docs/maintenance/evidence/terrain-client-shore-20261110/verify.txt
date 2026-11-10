@@ -1,0 +1,16 @@
+PASS terrain golden: pack SHA-256, water regions, 6 chunks decoded, 246 queries equal Go (bytes and Stream)
+PASS terrain neighbour rules: zero weight, map edge, not loaded, out of map
+PASS terrain bad pack: magic, version, geometry, sizes, checksum, index range, truncation
+PASS terrain corrupt chunk: SHA-256, short read, malformed plain text, isolation
+PASS terrain overlay rules: shape, version, base revision, monotonic, copy, notifications
+PASS terrain concurrent queries: 52043 reads during 1998 overlay swaps, none mixed versions
+PASS terrain mesh: 25026 vertices equal Height, seams continuous before and after an edge edit, map edge, missing chunks
+PASS terrain DAO sync: Go full + heights / materials list delta + whole materials + whole heights through the generated C# Apply, 650 queries equal Go View
+PASS building DAO sync: Go full + parameter delta + config change + removal through the generated C# Apply
+PASS terrain shore rules: equal-to-level samples and edges are land, saddle connected / separated / tied, planar exact, no NaN
+PASS terrain shore circle: 49 points (coarse 46), max deviation 0.2425cm (coarse 0.363cm), 26934 exact contour samples within bound, 489592 lattice points, 150 visual/authoritative differences all within the bound
+PASS terrain shore golden: 70000 Go window points equal (70 visual differences within the bound), 5727600 sweep points (6079 within the bound), 12 chain ends joined across chunks, 6 closed on seams, 0 seam ends at samples, max deviation 0.9628cm
+PASS terrain lod: 42 level combinations tile the chunk, shared edges use the same vertices, no T-junctions
+PASS terrain chunk build: heights equal the grid, seams agree, dependencies inverse, 20155 samples outside the declared reads ignored, edge edit and LOD stitching detected
+PASS terrain rebuild scheduler: late / unconfirmed neighbours, edge edit published as one group, interior edit alone, out-of-order and superseded jobs dropped, unload/reload, reconnect, LOD stitching, drop, base/water switch; random 4000 ops: dispatched 579, published 116 in 122 batches, discarded 460, executor backlog ≤ 2, then settled current
+PASS terrain
