@@ -1,0 +1,674 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	generated "{{MODULE}}/configs/generated"
+	db "{{MODULE}}/db"
+	building "{{MODULE}}/game/entities/building"
+	gamescene "{{MODULE}}/game/scene"
+	"{{MODULE}}/game/terrainmap"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+// 建筑实体化与同步（可编辑地形方案 §27）端到端：建筑是普通的同步实体，走与 Player / Monster 相同的 entitysync 链路
+// （场景的 Manager、提交观察者 on_change、自己的 Interest 与命名空间）。客户端是 terrain_sync_test.go 的 Go 接收端
+// （frame.Receiver + 生成的 ApplySyncBuildingDao，与 C# / C++ 同一协议），从回环 socket 读帧。存储是 terrain_test.go 的
+// 离线替身；放置规则与参数槽来自工程的配置数据（configs/data，建筑配置表 building / building_param）。
+
+var demoConfigOnce sync.Once
+
+// useDemoConfig 让本进程的缺省配置 Store 是工程的配置数据（configs/data：建筑配置表在里面；同 loadSpawnData）。只装一次；
+// 换配置的用例自己换、自己换回。
+func useDemoConfig(t *testing.T) {
+	t.Helper()
+	demoConfigOnce.Do(func() {
+		if configdata.DefaultStore() != nil {
+			return
+		}
+		useConfigStore(loadConfigDir(t, filepath.Join("..", "..", "..", "configs", "data")))
+	})
+}
+
+// useConfigStore 让 store 成为进程的配置：缺省 Store（Nest 之外的 ActiveSnapshot）与请求钉住的运行期快照（Nest 事务里的
+// ActiveSnapshot，fctx.RuntimeConfig）。返回换回原来的函数。
+func useConfigStore(store *configdata.Store) (restore func()) {
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	configdata.SetDefaultStore(store)
+	fctx.SetRuntimeConfig(store.Current())
+	return func() {
+		configdata.SetDefaultStore(previousStore)
+		fctx.SetRuntimeConfig(previousConfig)
+	}
+}
+
+// loadConfigDir 装入一个配置目录（全部生成的表）。Store 的加载会把它设成进程的配置（缺省 Store 与运行期快照），这里装完
+// 换回原来的，由调用方决定用不用它。
+func loadConfigDir(t *testing.T, dir string) *configdata.Store {
+	t.Helper()
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	defer func() {
+		configdata.SetDefaultStore(previousStore)
+		fctx.SetRuntimeConfig(previousConfig)
+	}()
+	registry := configdata.NewRegistry()
+	if err := generated.RegisterGeneratedConfigData(registry); err != nil {
+		t.Fatal(err)
+	}
+	store := configdata.NewStore(registry, dir)
+	if _, err := store.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+// buildingSyncPack 是 8 × 8 块（512m）的平地包：原始值 5000（500m），水位 400m，处处可放。
+func buildingSyncPack(t *testing.T, dir string) string {
+	t.Helper()
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: 8, ChunksY: 8, WaterLevel: 40000}
+	path := filepath.Join(dir, "buildings.pack")
+	if err := terrain.WritePackFile(path, meta, terrain.Flat(meta, buildingFlat, 3)); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// startBuildingSyncHarness 起一个接建筑的普通场景进程，接线与生产相同：Nest 装提交观察者（场景按 on_change 发、地形块
+// 1 秒一批），NewScene 打开建筑同步并 attach，Start 之后登记启动对账通过的建筑（startTerrainSync 的 loadStanding）。
+func startBuildingSyncHarness(t *testing.T, pack string, store *memoryChunkStore) *terrainSyncHarness {
+	t.Helper()
+	transport, addr := startScenePlayerTransport(t)
+	observer := &sceneSyncObserver{}
+	p := startTerrainProcessWith(t, pack, wholeMap, store, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.EditPointsPerSecond = 0
+		p.m.SetPolicy(policy)
+	}, nest.NestOptionWithEntitySync(observer))
+	bounds := p.m.Meta().Bounds()
+	config := gamescene.Config{Width: bounds.Max.X, Height: bounds.Max.Y, BlockSize: 300, Spawn: spatial.Point{X: bounds.Max.X / 2, Y: bounds.Max.Y / 2}}
+	scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, nil, config, sceneMaxVisible, defaultTerrainSync(bounds, p.m.BuildingsEnabled()), observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scene.terrain.buildings == nil {
+		t.Fatal("the scene has no building replication")
+	}
+	scene.terrain.attach(p.m)
+	scene.watchSessions(transport)
+	h := &terrainSyncHarness{ctx: context.Background(), transport: transport, addr: addr, process: p, scene: scene, pack: pack, observer: observer}
+	if err := scene.Start(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	scene.terrain.buildings.loadStanding(p.m)
+	t.Cleanup(func() { h.close() })
+	return h
+}
+
+// close 关场景（可重复调用）。
+func (h *terrainSyncHarness) close() {
+	closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = h.scene.Close(closeCtx)
+}
+
+// clientBuilding 是客户端持有的建筑（Apply 合并好的完整 SyncBuildingDao）；没有时 nil。
+func (client *terrainClient) building(id int64) *db.SyncBuildingDao {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.buildings[id]
+}
+
+// heldBuildings 是客户端持有的建筑 ID。
+func (client *terrainClient) heldBuildings() []int64 {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	var out []int64
+	for id := range client.buildings {
+		out = append(out, id)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// buildingMatches 报告客户端的这座建筑是否正是服务端实体此刻的同步字段（ConfigID、Params、属主、锚点、朝向、地基、站着）。
+func buildingMatches(got *db.SyncBuildingDao, want building.State) bool {
+	if got == nil || !want.Standing {
+		return false
+	}
+	foundation := int32(-1 << 31)
+	if want.Leveled {
+		foundation = want.Foundation
+	}
+	var params []int32
+	if got.Params != nil {
+		params = got.Params.Value
+	}
+	// 值为零的字段（锚点 0、朝向 0）在全量里可能不带：按零读。
+	var gx, gy, facing int32
+	if got.GX != nil {
+		gx = got.GX.Value
+	}
+	if got.GY != nil {
+		gy = got.GY.Value
+	}
+	if got.Facing != nil {
+		facing = got.Facing.Value
+	}
+	return got.State != nil && got.State.Value == 1 && got.Owner != nil && got.Owner.Value == want.Owner &&
+		got.ConfigID != nil && got.ConfigID.Value == want.ConfigID && slices.Equal(params, want.Params) &&
+		int64(gx) == want.Lot.GX && int64(gy) == want.Lot.GY && facing == want.Facing &&
+		got.Foundation != nil && got.Foundation.Value == foundation
+}
+
+// buildingUpdatesOf 是 frames 里 subject 的全部建筑更新。
+func buildingUpdatesOf(frames []receivedFrame, subject int64) []buildingUpdate {
+	var out []buildingUpdate
+	for _, f := range frames {
+		for _, u := range f.buildings {
+			if u.subject == subject {
+				out = append(out, u)
+			}
+		}
+	}
+	return out
+}
+
+const (
+	buildingViewer  = int64(30201) // 连着 TCP、看建筑的玩家
+	buildingBuilder = buildingOwner // 放置 / 改参数的玩家（不连接）
+)
+
+// 建筑与玩家、怪走同一条同步链路（方案 §27）：另一个玩家的 TCP 客户端看到建筑出现（全量：配置 ID、补齐的参数、锚点、朝向、
+// 地基、属主）、参数修改（on_change 增量，只有 Params）、拆除（remove）；建筑离开视野时从客户端消失、回来时再以全量出现
+// （带此刻的参数）；拆除之后同一锚点再放一座（同一个实体）照样出现。视野外的建筑不发。
+func TestBuildingsReachAnotherClientOverRealTCP(t *testing.T) {
+	h := startBuildingSyncHarness(t, buildingSyncPack(t, t.TempDir()), &memoryChunkStore{})
+	m := h.process.m
+	home, away := spatial.Point{X: 10000, Y: 10000}, spatial.Point{X: 45000, Y: 45000}
+	client := h.join(t, buildingViewer, home)
+
+	// 视野里的一座 hall（朝向 1：占地 6 × 8），只给第一个参数，第二个取缺省；远处一座 tower，在视野外。
+	hallAt := building.Placement{ConfigID: 2, GX: 110, GY: 100, Facing: 1, Params: []int32{3}}
+	placed, err := m.Place(h.ctx, buildingBuilder, 1, hallAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(placed.Building.Params, []int32{3, 0}) || placed.Building.Lot.W != 6 || placed.Building.Lot.H != 8 {
+		t.Fatalf("the placed hall: %+v", placed.Building)
+	}
+	far, err := m.Place(h.ctx, buildingBuilder, 2, building.Placement{ConfigID: 3, GX: 450, GY: 450})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hallID, farID := placed.Building.ID, far.Building.ID
+	state := func(id int64) building.State {
+		t.Helper()
+		gx, gy := building.AnchorOf(id)
+		return buildingAt(t, h.process, gx, gy)
+	}
+	h.flushUntil(t, "the hall on the viewer's client", func() bool { return buildingMatches(client.building(hallID), state(hallID)) })
+	if held := client.heldBuildings(); !slices.Equal(held, []int64{hallID}) {
+		t.Fatalf("the viewer holds buildings %v, want only the hall %d (the tower is 480m away)", held, hallID)
+	}
+	frames := client.takeFrames()
+	if ups := buildingUpdatesOf(frames, hallID); len(ups) == 0 || !ups[0].full {
+		t.Fatalf("the hall entering view: %+v, want a full update first", ups)
+	}
+	full := buildingUpdatesOf(frames, hallID)[0]
+
+	// 改参数：属主改，客户端收到 Params；非属主、重复序号什么都不写。
+	if _, err := m.SetParams(h.ctx, buildingOther, 1, 110, 100, []int32{7, 7}); !errors.Is(err, terrainmap.ErrDenied) {
+		t.Fatalf("another player changing the hall: %v", err)
+	}
+	changed, err := m.SetParams(h.ctx, buildingBuilder, 3, 110, 100, []int32{5, 9})
+	if err != nil || !slices.Equal(changed.Building.Params, []int32{5, 9}) {
+		t.Fatalf("the owner changing the hall: %+v, %v", changed, err)
+	}
+	if again, err := m.SetParams(h.ctx, buildingBuilder, 3, 110, 100, []int32{1, 1}); err != nil || !again.Duplicate || !slices.Equal(again.Building.Params, []int32{5, 9}) {
+		t.Fatalf("the same change again: %+v, %v", again, err)
+	}
+	h.flushUntil(t, "the parameter change on the viewer's client", func() bool { return buildingMatches(client.building(hallID), state(hallID)) })
+	// 第一次改动可能以全量（重同步）到达：放置事务的脏位在登记之前就记在实体的同步状态上，按 on_change 的合并窗口，新订阅
+	// 先只拿快照、保留脏位，于是下一次捕获只能用全量追上（entitysync 的通用规则，玩家、怪同样，方案 §27 记录）。之后的
+	// 改动是只带 Params 的增量。
+	if ups := buildingUpdatesOf(client.takeFrames(), hallID); len(ups) != 1 || !ups[0].params {
+		t.Fatalf("the first parameter change went out as %+v, want one update carrying the parameters", ups)
+	}
+	if _, err := m.SetParams(h.ctx, buildingBuilder, 4, 110, 100, []int32{6}); err != nil {
+		t.Fatal(err)
+	}
+	h.flushUntil(t, "the second parameter change on the viewer's client", func() bool { return buildingMatches(client.building(hallID), state(hallID)) })
+	if got := client.building(hallID).Params.Value; !slices.Equal(got, []int32{6, 0}) {
+		t.Fatalf("the client's parameters after [6]: %v, want [6 0] (the second slot back to its default)", got)
+	}
+	ups := buildingUpdatesOf(client.takeFrames(), hallID)
+	if len(ups) != 1 || ups[0].full || !ups[0].params {
+		t.Fatalf("the second parameter change went out as %+v, want one delta carrying the parameters", ups)
+	}
+	delta := ups[0]
+
+	// 走远：hall 离开视野、从客户端消失，远处的 tower 进来；走回来：hall 以全量回来（带改过的参数），tower 走掉。
+	h.scene.terrain.moved(buildingViewer, away)
+	h.flushUntil(t, "the view moving to the far corner", func() bool {
+		return slices.Equal(client.heldBuildings(), []int64{farID}) && buildingMatches(client.building(farID), state(farID))
+	})
+	h.scene.terrain.moved(buildingViewer, home)
+	h.flushUntil(t, "the hall back in view", func() bool {
+		return slices.Equal(client.heldBuildings(), []int64{hallID}) && buildingMatches(client.building(hallID), state(hallID))
+	})
+	if ups := buildingUpdatesOf(client.takeFrames(), hallID); len(ups) == 0 || !ups[0].full {
+		t.Fatalf("the hall coming back into view: %+v, want a full update", ups)
+	}
+
+	// 拆除：客户端收到 remove；同一锚点再放一座 hut（同一个实体），又出现。
+	if _, err := m.Remove(h.ctx, buildingBuilder, 5, 110, 100); err != nil {
+		t.Fatal(err)
+	}
+	h.flushUntil(t, "the removal on the viewer's client", func() bool { return len(client.heldBuildings()) == 0 })
+	hut, err := m.Place(h.ctx, buildingBuilder, 6, building.Placement{ConfigID: 1, GX: 110, GY: 100, Params: []int32{6}})
+	if err != nil || hut.Building.ID != hallID {
+		t.Fatalf("a hut on the hall's anchor: %+v, %v", hut, err)
+	}
+	h.flushUntil(t, "the hut on the viewer's client", func() bool { return buildingMatches(client.building(hallID), state(hallID)) })
+	if got := client.building(hallID); got.ConfigID.Value != 1 || !slices.Equal(got.Params.Value, []int32{6}) {
+		t.Fatalf("the client's hut: %+v", got)
+	}
+	if err := client.failure(); err != nil {
+		t.Fatal(err)
+	}
+	if lost := h.scene.manager.Stats().SessionsLost; lost != 0 {
+		t.Fatalf("%d replication sessions were lost", lost)
+	}
+	// 预算（方案 §27）：一座建筑的全量与改参数的增量都只有几十字节。
+	t.Logf("building full: component %d bytes (payload %d); parameter delta: component %d bytes (payload %d)",
+		full.componentBytes, full.payloadBytes, delta.componentBytes, delta.payloadBytes)
+	if full.componentBytes > 160 || delta.componentBytes > 112 {
+		t.Fatalf("building updates are bigger than the §27 budget assumed: full %d, delta %d bytes", full.componentBytes, delta.componentBytes)
+	}
+}
+
+// 重启之后，同步与库一致：启动对账核对通过的建筑登记为 subject，重新登录的客户端收到的正是库里的建筑（配置 ID、改过的
+// 参数、朝向、地基）；拆掉的那座不出现。
+func TestBuildingSyncAfterARestart(t *testing.T) {
+	dir := t.TempDir()
+	pack := buildingSyncPack(t, dir)
+	store := &memoryChunkStore{}
+	h := startBuildingSyncHarness(t, pack, store)
+	m := h.process.m
+	for i, p := range []building.Placement{
+		{ConfigID: 2, GX: 110, GY: 100, Facing: 1, Params: []int32{3, 4}},
+		{ConfigID: 4, GX: 140, GY: 90, Level: true},
+		{ConfigID: 1, GX: 100, GY: 130},
+	} {
+		if _, err := m.Place(h.ctx, buildingBuilder, uint64(i+1), p); err != nil {
+			t.Fatalf("placement %d: %v", i, err)
+		}
+	}
+	if _, err := m.SetParams(h.ctx, buildingBuilder, 4, 110, 100, []int32{6}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Remove(h.ctx, buildingBuilder, 5, 100, 130); err != nil {
+		t.Fatal(err)
+	}
+	want := buildingsOf(h.process)
+	if len(want) != 2 || !slices.Equal(want[0].Params, []int32{6, 0}) && !slices.Equal(want[1].Params, []int32{6, 0}) {
+		t.Fatalf("before the restart: %+v", want)
+	}
+	h.close()
+	h.process.stop()
+	h.process.persist(store)
+
+	again := startBuildingSyncHarness(t, pack, store)
+	if again.process.buildingStats != (terrainmap.BuildingStats{Standing: 2}) {
+		t.Fatalf("reconcile after the restart: %+v", again.process.buildingStats)
+	}
+	if n := again.scene.terrain.buildings.standingCount(); n != 2 {
+		t.Fatalf("%d buildings registered for replication after the restart, want 2", n)
+	}
+	client := again.join(t, buildingViewer, spatial.Point{X: 10000, Y: 10000})
+	again.flushUntil(t, "the restarted buildings on a client", func() bool {
+		if len(client.heldBuildings()) != len(want) {
+			return false
+		}
+		for _, b := range want {
+			if !buildingMatches(client.building(b.ID), b) {
+				return false
+			}
+		}
+		return true
+	})
+	if got := buildingsOf(again.process); !sameBuildings(got, want) {
+		t.Fatalf("buildings after the restart:\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+// 放置 / 拆除的提交后回调可能乱序到达：建筑同步只认锚点块更大的 LotRevision，迟到的“拆了”不会把站着的建筑撤出视野，
+// 迟到的“放了”也不会把拆了的建筑放回来。
+func TestBuildingSyncTakesTheLatestRevision(t *testing.T) {
+	h := startBuildingSyncHarness(t, buildingSyncPack(t, t.TempDir()), &memoryChunkStore{})
+	m, sync := h.process.m, h.scene.terrain.buildings
+	if _, err := m.Place(h.ctx, buildingBuilder, 1, building.Placement{ConfigID: 1, GX: 110, GY: 100}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := building.EntityID(110, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := h.process.entities.Get(id).(*building.Building)
+	lot := terrainmap.BuildingCommit{Building: b, Lot: buildingAt(t, h.process, 110, 100).Lot}
+	rev := m.ReconciledBuildings() // 空：建筑是启动之后放的
+	if len(rev) != 0 || sync.standingCount() != 1 {
+		t.Fatalf("after the placement: reconciled %d, standing %d", len(rev), sync.standingCount())
+	}
+	// 放置提交写了锚点块的 LotRevision 1：一份修订号 1 的“拆了”是迟到的，丢掉。
+	late := lot
+	late.Revision, late.Standing = 1, false
+	sync.committed(late)
+	if sync.standingCount() != 1 {
+		t.Fatal("a late removal notice hid a standing building")
+	}
+	client := h.join(t, buildingViewer, spatial.Point{X: 10000, Y: 10000})
+	h.flushUntil(t, "the hut on the client", func() bool { return len(client.heldBuildings()) == 1 })
+	// 真的拆除（修订号 2），然后迟到的“放了”（修订号 1）：建筑保持撤出。
+	if _, err := m.Remove(h.ctx, buildingBuilder, 2, 110, 100); err != nil {
+		t.Fatal(err)
+	}
+	stale := lot
+	stale.Revision, stale.Standing = 1, true
+	sync.committed(stale)
+	if sync.standingCount() != 0 {
+		t.Fatal("a late placement notice showed a removed building")
+	}
+	h.flushUntil(t, "the removal on the client", func() bool { return len(client.heldBuildings()) == 0 })
+}
+
+// 改参数（方案 §27）：只有属主能改；同一（玩家, 序号）只生效一次，与笔刷、放置共用账本（用过的序号答 Duplicate）；个数多于槽、
+// 值越界、锚点上没有建筑都在写任何东西之前拒绝；没给的槽取缺省值；参数不改变占地（块的记录、占位、地形都不动）。
+func TestBuildingParamsChangeOncePerSeqByTheOwner(t *testing.T) {
+	p := buildingProcess(t, buildingPack(t, t.TempDir(), 1), &memoryChunkStore{}, nil)
+	if _, err := p.m.Place(p.ctx, buildingOwner, 1, tower(10, 10)); err != nil {
+		t.Fatal(err)
+	}
+	if got := buildingAt(t, p, 10, 10).Params; !slices.Equal(got, []int32{1, 0, 3}) {
+		t.Fatalf("a tower placed without parameters: %v, want the defaults [1 0 3]", got)
+	}
+	if _, err := p.m.Brush(p.ctx, buildingOwner, 2, terrain.Brush{Op: terrain.BrushPaint, X: 9000, Y: 9000, Radius: 300, Material: 9}); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name   string
+		player int64
+		seq    uint64
+		gx, gy int64
+		params []int32
+		want   error
+	}{
+		{"another player", buildingOther, 1, 10, 10, []int32{2}, terrainmap.ErrDenied},
+		{"four values for three slots", buildingOwner, 3, 10, 10, []int32{1, 1, 1, 1}, terrainmap.ErrBuildingParams},
+		{"a value above its max", buildingOwner, 3, 10, 10, []int32{5}, terrainmap.ErrBuildingParams},
+		{"a value below its min", buildingOwner, 3, 10, 10, []int32{0}, terrainmap.ErrBuildingParams},
+		{"more values than any building has", buildingOwner, 3, 10, 10, make([]int32, building.MaxParams+1), terrainmap.ErrBuildingParams},
+		{"no building on the anchor", buildingOwner, 3, 30, 30, []int32{2}, terrainmap.ErrNoBuilding},
+		{"a node that is not the anchor", buildingOwner, 3, 11, 10, []int32{2}, terrainmap.ErrNoBuilding},
+	} {
+		before := snapshotBuildings(t, p)
+		if _, err := p.m.SetParams(p.ctx, c.player, c.seq, c.gx, c.gy, c.params); !errors.Is(err, c.want) {
+			t.Fatalf("%s: %v, want %v", c.name, err, c.want)
+		}
+		if !before.equal(snapshotBuildings(t, p)) {
+			t.Fatalf("%s: a refused change wrote something", c.name)
+		}
+	}
+	// 用过的序号（放置的 1、笔刷的 2）答 Duplicate，什么都不写。
+	for _, seq := range []uint64{1, 2} {
+		before := snapshotBuildings(t, p)
+		if r, err := p.m.SetParams(p.ctx, buildingOwner, seq, 10, 10, []int32{4}); err != nil || !r.Duplicate {
+			t.Fatalf("a change on used sequence %d: %+v, %v", seq, r, err)
+		}
+		if !before.equal(snapshotBuildings(t, p)) {
+			t.Fatalf("a duplicate change on sequence %d wrote something", seq)
+		}
+	}
+	lotBefore := buildingAt(t, p, 10, 10).Lot
+	terrainBefore := snapshotTerrain(p.m)
+	r, err := p.m.SetParams(p.ctx, buildingOwner, 3, 10, 10, []int32{4, 1})
+	if err != nil || r.Duplicate || !slices.Equal(r.Building.Params, []int32{4, 1, 3}) || r.LastSeq != 3 {
+		t.Fatalf("the owner's change: %+v, %v (want [4 1 3]: the third slot keeps its default)", r, err)
+	}
+	if again, err := p.m.SetParams(p.ctx, buildingOwner, 3, 10, 10, []int32{2}); err != nil || !again.Duplicate || !slices.Equal(again.Building.Params, []int32{4, 1, 3}) {
+		t.Fatalf("the same change again: %+v, %v", again, err)
+	}
+	if got := buildingAt(t, p, 10, 10); got.Lot != lotBefore || !slices.Equal(got.Params, []int32{4, 1, 3}) {
+		t.Fatalf("after the change: %+v", got)
+	}
+	if after := snapshotTerrain(p.m); !slices.Equal(after.ground, terrainBefore.ground) {
+		t.Fatal("a parameter change touched the terrain")
+	}
+	checkBuildingRecords(t, p)
+	// 拆了之后不能再改。
+	if _, err := p.m.Remove(p.ctx, buildingOwner, 4, 10, 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.m.SetParams(p.ctx, buildingOwner, 5, 10, 10, []int32{2}); !errors.Is(err, terrainmap.ErrNoBuilding) {
+		t.Fatalf("changing a removed building: %v", err)
+	}
+}
+
+// 配置检查（方案 §27）：跨行规则在启动（guardBuildingConfig 对当前快照）与每次热更新（Validate）执行；热更新不许删已有
+// 配置 ID、不许改已有配置的宽高，可以加配置、加参数槽、改范围。被拒的热更新留着旧快照。
+func TestBuildingConfigRulesAndReloads(t *testing.T) {
+	source := filepath.Join("..", "..", "..", "configs", "data")
+	copyConfig := func(t *testing.T) string {
+		t.Helper()
+		dir := t.TempDir()
+		entries, err := os.ReadDir(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			raw, err := os.ReadFile(filepath.Join(source, e.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, e.Name()), raw, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
+	}
+	edit := func(t *testing.T, dir, file string, change func([]map[string]any) []map[string]any) {
+		t.Helper()
+		path := filepath.Join(dir, file)
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rows []map[string]any
+		if err := json.Unmarshal(raw, &rows); err != nil {
+			t.Fatal(err)
+		}
+		out, err := json.MarshalIndent(change(rows), "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, out, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setField := func(id float64, key string, value any) func([]map[string]any) []map[string]any {
+		return func(rows []map[string]any) []map[string]any {
+			for _, row := range rows {
+				if row["id"] == id {
+					row[key] = value
+				}
+			}
+			return rows
+		}
+	}
+	dropRow := func(id float64) func([]map[string]any) []map[string]any {
+		return func(rows []map[string]any) []map[string]any {
+			return slices.DeleteFunc(rows, func(row map[string]any) bool { return row["id"] == id })
+		}
+	}
+
+	// 热更新也会把 Store 设成进程的配置：用例结束换回来。
+	previousStore, previousConfig := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() {
+		configdata.SetDefaultStore(previousStore)
+		fctx.SetRuntimeConfig(previousConfig)
+	})
+	// 启动：工程的配置合规；跨行规则坏了的配置让启动失败。
+	good := loadConfigDir(t, copyConfig(t))
+	stop, err := guardBuildingConfig(good)
+	if err != nil {
+		t.Fatalf("the project's building config: %v", err)
+	}
+	defer stop()
+	catalog, err := building.CatalogOf(good.Current())
+	if err != nil || len(catalog) != 4 || len(catalog[3].Params) != 3 || len(catalog[4].Params) != 0 || !catalog[4].MustLevel {
+		t.Fatalf("the project's catalog: %+v, %v", catalog, err)
+	}
+	for _, bad := range []struct {
+		name   string
+		file   string
+		change func([]map[string]any) []map[string]any
+	}{
+		{"a slot gap", "building_param.json", setField(302, "slot", 5)},
+		{"a repeated slot", "building_param.json", setField(302, "slot", 0)},
+		{"default above max", "building_param.json", setField(101, "default", 9)},
+		{"min above max", "building_param.json", setField(101, "min", 8)},
+		{"a repeated name", "building_param.json", setField(202, "name", "wall_color")},
+		{"a side wider than a chunk", "building.json", setField(4, "w", 65)},
+	} {
+		dir := copyConfig(t)
+		edit(t, dir, bad.file, bad.change)
+		if _, err := guardBuildingConfig(loadConfigDir(t, dir)); !errors.Is(err, building.ErrCatalog) {
+			t.Fatalf("start with %s: %v, want ErrCatalog", bad.name, err)
+		}
+	}
+
+	// 热更新：被拒的留着旧快照；合规的加配置、加槽、改范围照常生效。
+	dir := good.Dir()
+	for _, refused := range []struct {
+		name   string
+		file   string
+		change func([]map[string]any) []map[string]any
+	}{
+		{"the hut's width", "building.json", setField(1, "w", 5)},
+		{"the tower removed", "building.json", dropRow(3)},
+		{"a slot gap", "building_param.json", setField(302, "slot", 5)},
+	} {
+		raw := map[string][]byte{}
+		for _, f := range []string{"building.json", "building_param.json"} {
+			raw[f], _ = os.ReadFile(filepath.Join(dir, f))
+		}
+		if refused.name == "the tower removed" {
+			edit(t, dir, "building_param.json", func(rows []map[string]any) []map[string]any {
+				return slices.DeleteFunc(rows, func(row map[string]any) bool { return row["building"] == float64(3) })
+			})
+		}
+		edit(t, dir, refused.file, refused.change)
+		before := good.Current()
+		if _, err := good.ReloadWithReason(context.Background(), "test: "+refused.name); err == nil {
+			t.Fatalf("a reload with %s was accepted", refused.name)
+		}
+		if good.Current() != before {
+			t.Fatalf("a refused reload (%s) replaced the snapshot", refused.name)
+		}
+		for f, b := range raw {
+			if err := os.WriteFile(filepath.Join(dir, f), b, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	edit(t, dir, "building.json", func(rows []map[string]any) []map[string]any {
+		return append(rows, map[string]any{"id": 5, "name": "well", "model": "building/well", "w": 2, "h": 2, "max_rise": 30, "max_cut": 100, "must_level": false})
+	})
+	edit(t, dir, "building_param.json", func(rows []map[string]any) []map[string]any {
+		rows = setField(101, "max", 15)(rows)
+		return append(rows, map[string]any{"id": 102, "building": 1, "slot": 1, "name": "chimney", "min": 0, "max": 1, "default": 1})
+	})
+	if _, err := good.ReloadWithReason(context.Background(), "test: add a config and a slot"); err != nil {
+		t.Fatalf("a compatible reload: %v", err)
+	}
+	catalog, err = building.CatalogOf(good.Current())
+	if err != nil || len(catalog) != 5 || len(catalog[1].Params) != 2 || catalog[1].Params[0].Max != 15 {
+		t.Fatalf("after the compatible reload: %+v, %v", catalog, err)
+	}
+	// 存量值按新配置读：缺的槽取缺省值。
+	if got := catalog[1].ParamsOf([]int32{7}); !slices.Equal(got, []int32{7, 1}) {
+		t.Fatalf("a stored hut's parameters read on the new config: %v", got)
+	}
+}
+
+// 重启时配置文件换了（热更新挡不住的情形）：建筑的配置 ID 没有了或宽高变了，启动对账计 Misconfigured、建筑保留、
+// 什么都不改，占位照旧挡路。
+func TestBuildingReconcileReportsAConfigDrift(t *testing.T) {
+	store := &memoryChunkStore{}
+	pack := buildingPack(t, t.TempDir(), 1)
+	p := buildingProcess(t, pack, store, nil)
+	if _, err := p.m.Place(p.ctx, buildingOwner, 1, hut(10, 10)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.m.Place(p.ctx, buildingOwner, 2, tower(30, 30)); err != nil {
+		t.Fatal(err)
+	}
+	want := buildingsOf(p)
+	p.stop()
+	p.persist(store)
+
+	dir := t.TempDir()
+	source := filepath.Join("..", "..", "..", "configs", "data")
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		raw, _ := os.ReadFile(filepath.Join(source, e.Name()))
+		switch e.Name() {
+		case "building.json":
+			var rows []map[string]any
+			_ = json.Unmarshal(raw, &rows)
+			rows = slices.DeleteFunc(rows, func(row map[string]any) bool { return row["id"] == float64(3) })
+			for _, row := range rows {
+				if row["id"] == float64(1) {
+					row["w"] = 5
+				}
+			}
+			raw, _ = json.Marshal(rows)
+		case "building_param.json":
+			var rows []map[string]any
+			_ = json.Unmarshal(raw, &rows)
+			rows = slices.DeleteFunc(rows, func(row map[string]any) bool { return row["building"] == float64(3) })
+			raw, _ = json.Marshal(rows)
+		}
+		if err := os.WriteFile(filepath.Join(dir, e.Name()), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(useConfigStore(loadConfigDir(t, dir)))
+
+	q := buildingProcess(t, pack, store, nil)
+	if wantStats := (terrainmap.BuildingStats{Standing: 2, Misconfigured: 2}); q.buildingStats != wantStats {
+		t.Fatalf("reconcile with a drifted config: %+v, want %+v", q.buildingStats, wantStats)
+	}
+	if got := buildingsOf(q); !sameBuildings(got, want) {
+		t.Fatalf("buildings after the drift:\n%+v\nwant\n%+v", got, want)
+	}
+	if len(q.m.ReconciledBuildings()) != 2 {
+		t.Fatal("misconfigured buildings are not replicated")
+	}
+	checkBuildingRecords(t, q)
+}

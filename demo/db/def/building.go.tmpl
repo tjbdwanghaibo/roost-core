@@ -1,31 +1,47 @@
 package dbdef
 
-// BuildingDao 是一座建筑（可编辑地形 P4）：放在一块地形上的持久实体。实体 ID 由占地的锚点节点（占地矩形左下角的 1m
-// 采样点）确定（game/entities/building 的 UniqueID），占地互不重叠，所以一个锚点至多一座站着的建筑。
+// BuildingDao 是一座建筑（可编辑地形 P4，方案 §27）：放在一块地形上的持久实体，数据是“哪一种预制建筑（ConfigID，配置表
+// building 的 ID）+ 玩家给的修改参数值（Params）+ 放在哪、朝哪”。实体 ID 由占地的锚点节点（占地矩形左下角的 1m 采样点）
+// 确定（game/entities/building 的 UniqueID），占地互不重叠，所以一个锚点至多一座站着的建筑。
 //
-// 拆除不删档：State 置 0（空地），字段清空，记录留着——确定性 ID 删档后不能再建（DataEngine 的墓碑），同一锚点以后
-// 还要能放新建筑。建筑占着哪些节点的权威记录在它占地覆盖的每一块地形上（TerrainChunkDao.Lots），放置 / 拆除与这里在
-// 同一笔 Nest 事务里写。
+// 同步：建筑与玩家、怪一样是普通的同步实体（sync=true，命名空间 "building"），标了 sync 的字段就是客户端要的全部——
+// 客户端按 ConfigID 查配置表得到预制体与占地宽高，按 Params 设参数，按 GX / GY / Facing / Foundation 摆放。占地只由
+// 配置的宽高与朝向决定，参数不改变占地。State 也同步：拆除事务清空记录之后、撤出视野之前的那一帧里客户端看到 State 0，
+// 不应再画它。
 //
-// 本轮只持久、不同步：放置者从答复（BuildingResponse）拿到建筑状态；别的玩家看到建筑的同步方式（建筑自己的同步命名空间，
-// 还是挂在地形块的同步上）待维护者确认（可编辑地形方案 §25）。整平地基改的地形照常走地形块的同步。store 键按仓库规则
-// 写数字短键，改动须按 codegen/docs/TAGS.zh-CN.md 处理。
+// 拆除不删档：State 置 0（空地），字段清空，记录留着——确定性 ID 删档后不能再建（DataEngine 的墓碑），同一锚点以后还要
+// 能放新建筑。建筑占着哪些节点的权威记录在它占地覆盖的每一块地形上（TerrainChunkDao.Lots，服务端内部的串行化索引，
+// 不同步），放置 / 拆除与这里在同一笔 Nest 事务里写。
 //
-//roost:dao coll=buildings db=main schema=1
+// store 键按仓库规则写数字短键，改动须按 codegen/docs/TAGS.zh-CN.md 处理。schema 2（方案 §27）：类型（键 3 的 Kind）
+// 改为配置 ID（键 9 的 ConfigID），加 Params（键 10）与锚点 GX / GY（键 11、12），同步字段打开；键 3 弃用，不得复用。
+// 项目未上线，不迁移旧文档，旧 schema 的记录按 ErrSchemaMismatch 拒绝（升级须清空 buildings 与 terrain_chunks）。
+//
+//roost:dao coll=buildings db=main schema=2
 type BuildingDao struct {
 	// State：0 = 空地（从没放过或已拆除），1 = 站着。
-	State int32 `dao:"persist" store:"1"`
-	// Owner 是放置它的玩家 ID（拆除只允许属主；属主的编辑账本记着他的建筑数）。
-	Owner int64 `dao:"persist" store:"2"`
-	// Kind 是建筑类型（game/entities/building 的 Catalog）。
-	Kind int32 `dao:"persist" store:"3"`
-	// Facing 是朝向 0～3（每档 90°）；1、3 时占地的宽高与类型的宽高互换。
-	Facing int32 `dao:"persist" store:"4"`
-	// W、H 是占地的宽（沿 X）与高（沿 Y），单位是 1m 节点；占地 = 节点 [锚点X, 锚点X+W) × [锚点Y, 锚点Y+H)。
+	State int32 `dao:"persist,sync" store:"1"`
+	// Owner 是放置它的玩家 ID（拆除、改参数只允许属主；属主的编辑账本记着他的建筑数）。
+	Owner int64 `dao:"persist,sync" store:"2"`
+	// ConfigID 是建筑配置表（configs/schema/building.go）的 ID：客户端按它找预制体，服务端按它找放置规则与参数槽。
+	ConfigID int32 `dao:"persist,sync" store:"9"`
+	// Params 是修改参数值，下标是配置里参数槽的 Slot（building_param 表）。放置时补齐到配置的槽数、逐个按 [Min, Max] 校验；
+	// 配置之后加了槽时存量建筑的值较短，读取规则见 game/entities/building 的 Spec.ParamsOf（缺的槽取缺省值，多出的忽略）。
+	// 至多 8 个（MaxParams）。
+	Params []int32 `dao:"persist,sync" store:"10"`
+	// Facing 是朝向 0～3（每档 90°）；1、3 时占地的宽高与配置的宽高互换。
+	Facing int32 `dao:"persist,sync" store:"4"`
+	// GX、GY 是锚点节点（占地左下角的 1m 采样点，世界坐标 = 节点 × 100 厘米）。与实体 ID 推出的锚点相同（放置时写，对账时
+	// 核对）；存一份是给客户端直接摆放，不用解实体 ID。
+	GX int32 `dao:"persist,sync" store:"11"`
+	GY int32 `dao:"persist,sync" store:"12"`
+	// W、H 是放置时按配置与朝向算出的占地宽（沿 X）与高（沿 Y），单位是 1m 节点；占地 = 节点 [GX, GX+W) × [GY, GY+H)。
+	// 只持久、不同步：它是服务端核对“块上的占地记录”用的那一份（客户端由配置 + 朝向推出同一个值）；配置的宽高改了时
+	// 启动对账按它报 Misconfigured，不改玩家的建筑。
 	W int32 `dao:"persist" store:"5"`
 	H int32 `dao:"persist" store:"6"`
 	// Foundation 是整平地基的世界高度（厘米，与 HeightBase 无关，原始地形换版后仍有意义）；-2147483648 表示没有整平。
-	Foundation int32 `dao:"persist" store:"7"`
+	Foundation int32 `dao:"persist,sync" store:"7"`
 	// BaseRevision 是放置时原始地形包的版本。原始地形换版（D13）之后与包不同的建筑由地形服务启动时按规则处置。
 	BaseRevision int64 `dao:"persist" store:"8"`
 }

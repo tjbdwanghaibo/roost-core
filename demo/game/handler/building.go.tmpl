@@ -7,10 +7,11 @@ import (
 	"{{MODULE}}/game/terrainmap"
 )
 
-// 建筑的三个事务（可编辑地形 P4，game/terrainmap 发起）：都是 rollback=undo durability=strict——回复与占位表的发布都在
-// WAL 持久之后，回滚的事务由生成 setter 的逆操作还原块、建筑与账本。目标组是建筑占地覆盖的全部地形块（至多 2 × 2 块），
-// 加建筑实体（与块同在 World 档，按 ID 排序取锁）与玩家的编辑账本（PlayerScoped，最后取锁）。块、建筑实体与账本由调用方
-// 先经 lifecycle 的 GetOrCreate 建出（handler 只能锁已存在的实体）。业务都在 terrainmap.Map，经 terrainmap.Active() 找到。
+// 建筑的四个事务（可编辑地形 P4 / 方案 §27，game/terrainmap 发起）：都是 rollback=undo durability=strict——回复、占位表的
+// 发布与建筑同步的登记 / 撤出都在 WAL 持久之后，回滚的事务由生成 setter 的逆操作还原块、建筑与账本。放置 / 拆除 / 对账
+// 的目标组是建筑占地覆盖的全部地形块（至多 2 × 2 块），加建筑实体（与块同在 World 档，按 ID 排序取锁）与玩家的编辑账本
+// （PlayerScoped，最后取锁）；改参数不改变占地，只锁建筑与账本。块、建筑实体与账本由调用方先经 lifecycle 的 GetOrCreate
+// 建出（handler 只能锁已存在的实体）。业务都在 terrainmap.Map，经 terrainmap.Active() 找到。
 
 // handlerBuildingPlace 是玩家放置一座建筑（Map.Place 发起）：判重、重叠 / 高差 / 水位 / 建筑数检查、可选的地基整平、
 // 建筑实体、每块记占地、账本记序号（terrainmap.Map.ApplyPlace）。
@@ -35,8 +36,20 @@ func handlerBuildingRemove(targets []terrain_chunk.ISurfaceEntity, site building
 	return m.ApplyRemove(targets, site, editor, seq)
 }
 
+// handlerBuildingParams 是属主改一座建筑的修改参数值（Map.SetParams 发起，terrainmap.Map.ApplyParams）：判重、属主、按
+// 建筑的配置补齐与校验，写 Params、账本记序号。提交后观看它的客户端按 on_change 收到增量。
+//
+//roost:nest rollback=undo durability=strict
+func handlerBuildingParams(site building.ISiteEntity, editor terrain_editor.ILedgerEntity, seq int64, params []int32) (building.Result, error) {
+	m := terrainmap.Active()
+	if m == nil {
+		return building.Result{}, terrainmap.ErrDisabled
+	}
+	return m.ApplyParams(site, editor, seq, params)
+}
+
 // handlerBuildingRebase 是启动对账里的一座建筑（Map.ReconcileBuildings 发起，Install 之后）：核对建筑与块上的占地记录
-// 一致，原始地形换版时按新版本处置（terrainmap.Map.ApplyRebase）。lot 是块记录里的占地（terrain_chunk.Lot 的打包值）。
+// 一致、配置对得上，原始地形换版时按新版本处置（terrainmap.Map.ApplyRebase）。lot 是块记录里的占地（terrain_chunk.Lot 的打包值）。
 //
 //roost:nest rollback=undo durability=strict
 func handlerBuildingRebase(targets []terrain_chunk.ISurfaceEntity, site building.ISiteEntity, lot int64) (building.Rebase, error) {

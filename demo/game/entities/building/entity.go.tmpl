@@ -11,12 +11,16 @@ import (
 // EntityKindBuilding 是建筑的 kind（不复用已删实体的号：5 是旧 Guild、8 是旧 AllianceShard）。
 const EntityKindBuilding entity.EntityKind = 13
 
+// SyncNamespaceBuilding 是建筑的同步命名空间（实体标记 syncNamespace="building"），客户端按它分流。
+const SyncNamespaceBuilding = "building"
+
 // IBuildingEntity is the lock-safe business view used by Nest handlers.
 type IBuildingEntity interface{ entity.IThreadSafeEntity }
 
-// Building 是放在地形上的一座建筑（可编辑地形 P4，方案 §6）：类型、属主、朝向、占地、地基高度，数据在 BuildingDao
-// （SiteComponent）。放置、拆除由地形服务（game/terrainmap 的 Place / Remove）发起：建筑与它占地覆盖的地形块、玩家的
-// 编辑账本在同一笔 Nest 事务里锁住、一起提交或回滚。
+// Building 是放在地形上的一座建筑（可编辑地形 P4，方案 §6 / §27）：一种预制的整体建筑（ConfigID，配置表 building）加
+// 玩家给的修改参数值（Params），以及属主、锚点、朝向、地基高度，数据在 BuildingDao（SiteComponent）。放置、拆除、改参数
+// 由地形服务（game/terrainmap 的 Place / Remove / SetParams）发起：放置 / 拆除时建筑与它占地覆盖的地形块、玩家的编辑账本
+// 在同一笔 Nest 事务里锁住、一起提交或回滚；改参数只锁建筑与账本（参数不改变占地）。
 //
 // 实体 ID：UniqueID(gx, gy) 由占地的锚点节点（左下角的 1m 采样点）确定。占地互不重叠，一个锚点至多一座站着的建筑；拆除
 // 不删档（State 0），同一锚点之后可以再放。ID 是确定性的、可能已有持久记录，所以只能经 GetOrCreate 建，不能直接 Create。
@@ -24,9 +28,13 @@ type IBuildingEntity interface{ entity.IThreadSafeEntity }
 // Category：rank 2（World，与地形块同档）：放置事务锁住它与占地覆盖的块（同档内按 ID 排序取锁），再锁玩家的编辑账本
 // （PlayerScoped）。
 //
-// 只归锚点所在格的进程写；首版只在不分区的普通场景放置（分区场景拒绝，方案 §25）。
+// 同步（方案 §27）：与 Player / Monster 同一条链路——sync=true，命名空间 "building"，packer 见 sync_packer.go；站着的建筑
+// 由 game 服务的建筑同步（internal/service/<game>/building_sync.go）登记为场景 Manager 的 subject、放进建筑自己的
+// Interest（按锚点位置），客户端用生成的 ApplySyncBuildingDao 应用。改参数是普通的 DAO 写，提交后按 on_change 发增量。
 //
-//roost:entity id=13 entityKind=EntityKindBuilding category=entity.EntityCategoryWorld
+// 只归锚点所在格的进程写；首版只在不分区的普通场景放置（分区场景拒绝，方案 §25 / §27）。
+//
+//roost:entity id=13 entityKind=EntityKindBuilding category=entity.EntityCategoryWorld sync=true syncNamespace="building" subjectPacker=NewBuildingSyncPacker
 type Building struct {
 	*entity.EntityBase
 	entity.ComponentManager
@@ -64,3 +72,15 @@ func AnchorOf(entityID int64) (gx, gy int64) {
 
 // Anchor 是这座建筑的锚点节点。
 func (b *Building) Anchor() (gx, gy int64) { return AnchorOf(b.ID()) }
+
+// PublishSyncDirty 把这次改动标脏的同步字段交给本建筑的 subject（与 TerrainChunk / Player 的 PublishSyncDirty 同一做法）。
+// SiteComponent 每次写完 DAO 调一次。场景装了提交观察者时，提交准入也会按事务条目标脏，这里的标记并入同一事务条目，不会
+// 双发；没登记为 subject 的建筑（放置事务提交之后才登记）标了也不记，登记后进入视野发全量。
+func (b *Building) PublishSyncDirty() {
+	if b == nil {
+		return
+	}
+	if mask := b.TakeEntitySyncChanges(); mask != 0 {
+		b.MarkSyncDirty(mask)
+	}
+}

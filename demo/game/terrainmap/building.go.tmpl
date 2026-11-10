@@ -1,6 +1,14 @@
 package terrainmap
 
-// 建筑（可编辑地形 P4，方案 §6 / §25）：放置、拆除、占位与原始地形换版后的对账。
+// 建筑（可编辑地形 P4，方案 §6 / §25 / §27）：放置、拆除、改参数、占位与原始地形换版后的对账。
+//
+// 数据（方案 §27）：一座建筑是一种预制的整体（配置表 building 的 ID）加玩家给的修改参数值（building_param 的槽），放置
+// 规则（宽高、坡度、整平）都来自配置（building.SpecOf，按当前请求钉住的配置快照）。占地只由配置的宽高与朝向决定，
+// 参数不改变占地，所以改参数只锁建筑与账本、不锁块。
+//
+// 同步（方案 §27）：建筑实体本身就是同步对象（与 Player / Monster 同一条 entitysync 链路），放置 / 拆除提交之后经
+// SetBuildingCommitted 通知建筑同步登记 / 撤出视野；改参数是普通的 DAO 写，按 on_change 发增量。块上的 Lots 只是下面
+// 说的服务端串行化索引，不同步给客户端：客户端的占位由建筑实体（ConfigID、GX / GY、Facing）+ 配置推出。
 //
 // 权威与串行化点：一座建筑占着哪些 1m 节点，权威记录在它占地覆盖的每一块地形上（TerrainChunkDao.Lots），不在进程内存
 // 里。放置 / 拆除是一笔多实体 Nest 事务，锁住占地覆盖的全部块（至多 2 × 2 块）、建筑实体（ID 由锚点决定）与玩家的
@@ -38,9 +46,13 @@ import (
 var (
 	// ErrBuildingsDisabled：本进程不接建筑（没有调用 EnableBuildings：分区场景，或没有地形）。
 	ErrBuildingsDisabled = errors.New("terrain: this scene takes no buildings")
-	// ErrBuild：放置 / 拆除请求不合法（类型、朝向、锚点不在地图里、玩家 ID 或序号不在范围内）。
+	// ErrBuild：放置 / 拆除 / 改参数请求不合法（朝向、锚点不在地图里、玩家 ID 或序号不在范围内、必须整平的建筑没有整平）。
 	ErrBuild = errors.New("terrain: building request refused")
-	// ErrSlope：占地的地面高差超过这种建筑的上限（不整平时 Spec.MaxRise，整平时 Spec.MaxCut）。
+	// ErrBuildingConfig：配置表里没有请求的建筑配置 ID（building.ErrUnknownConfig）。
+	ErrBuildingConfig = building.ErrUnknownConfig
+	// ErrBuildingParams：修改参数个数多于配置的槽数，或有值不在槽的范围里（building.ErrParams）。
+	ErrBuildingParams = building.ErrParams
+	// ErrSlope：占地的地面高差超过这种建筑的上限（不整平时配置的 MaxRise，整平时 MaxCut）。
 	ErrSlope = errors.New("terrain: the ground under the building is too uneven")
 	// ErrUnderwater：占地有节点（整平之后的高度）低于所在块的水位线。
 	ErrUnderwater = errors.New("terrain: the building would stand in water")
@@ -62,6 +74,18 @@ type BuildingSender interface {
 	MultiGroupSync_BuildingPlace(ctx context.Context, targets []int64, site int64, editor int64, seq int64, placement building.Placement) (building.Result, error)
 	MultiGroupSync_BuildingRemove(ctx context.Context, targets []int64, site int64, editor int64, seq int64) (building.Result, error)
 	MultiGroupSync_BuildingRebase(ctx context.Context, targets []int64, site int64, lot int64) (building.Rebase, error)
+	MultiSync_BuildingParams(ctx context.Context, site int64, editor int64, seq int64, params []int32) (building.Result, error)
+}
+
+// BuildingCommit 是一笔放置 / 拆除提交之后的建筑（SetBuildingCommitted 的通知，启动对账通过的建筑同样以它交给
+// 建筑同步）：Standing 为真表示这里站着这座建筑（登记为 subject、放进视野），为假表示拆了（撤出视野）。Revision 是锚点
+// 所在块（占地覆盖的块里坐标最小的那块）此后的 LotRevision：同一座建筑的每次放置 / 拆除都写这一块，所以它随提交次序
+// 严格递增；提交后回调可能乱序到达，接收方只认更大的修订号。
+type BuildingCommit struct {
+	Building *building.Building
+	Lot      terrain_chunk.Lot
+	Standing bool
+	Revision int64
 }
 
 // BuildRules 是业务给放置的权限钩子（可选：Rules 同时实现它时生效）。在 Nest 之外、事务之前调用，返回非 nil 即拒绝
@@ -123,6 +147,16 @@ func (t *occupancyTable) occupied(key terrain.ChunkKey, index int32) bool {
 	return false
 }
 
+// revision 是块当前发布的占地修订号（没有建筑时 0）。
+func (t *occupancyTable) revision(key terrain.ChunkKey) int64 {
+	if slot := t.slot(key); slot != nil {
+		if s := slot.Load(); s != nil {
+			return s.rev
+		}
+	}
+	return 0
+}
+
 // lots 是块当前发布的占地（只读，不要改）。
 func (t *occupancyTable) lots(key terrain.ChunkKey) []terrain_chunk.Lot {
 	if slot := t.slot(key); slot != nil {
@@ -137,6 +171,34 @@ func (t *occupancyTable) lots(key terrain.ChunkKey) []terrain_chunk.Lot {
 // 调用（分区场景的 Ghost 带还没有建筑副本，方案 §25）；Install 之前调用。
 func (m *Map) EnableBuildings(buildings Buildings, sender BuildingSender) {
 	m.buildings, m.buildingSender = buildings, sender
+}
+
+// SetBuildingCommitted 登记建筑放置 / 拆除提交后的通知（建筑同步用它登记 / 撤出 subject）：在提交后回调里调用（WAL
+// 落盘之后、锁已放开），不得阻塞。nil 撤销。玩家能进来之前调用。
+func (m *Map) SetBuildingCommitted(notify func(BuildingCommit)) {
+	if notify == nil {
+		m.buildingCommitted.Store(nil)
+		return
+	}
+	m.buildingCommitted.Store(&notify)
+}
+
+// ReconciledBuildings 是启动对账核对通过的站着的建筑（ReconcileBuildings 之后；Mismatched 的不在里面）。建筑同步在
+// 场景启动之后、玩家能进来之前按它登记 subject。
+func (m *Map) ReconciledBuildings() []BuildingCommit { return slices.Clone(m.reconciled) }
+
+// announceBuilding 是放置 / 拆除事务的“提交后通知建筑同步”一步：在 handler 里、Lots 写完之后调用，取锚点块此后的
+// LotRevision，登记为提交后回调；回滚的事务不通知。
+func (m *Map) announceBuilding(site *building.Building, lot terrain_chunk.Lot, standing bool, anchorChunk *terrain_chunk.SurfaceComponent) {
+	notify := m.buildingCommitted.Load()
+	if notify == nil {
+		return
+	}
+	change := BuildingCommit{Building: site, Lot: lot, Standing: standing, Revision: anchorChunk.LotRevision()}
+	announce := func() { (*notify)(change) }
+	if !nest.AfterCommit(announce) {
+		announce()
+	}
 }
 
 // BuildingsEnabled 报告本进程是否接建筑。
@@ -178,8 +240,8 @@ func (m *Map) publishLots(surfaces []*terrain_chunk.SurfaceComponent) error {
 // Place 是玩家放置一座建筑的入口（协议 Building 的端点调用）：校验 → 扣改动点数配额 → 权限 → 账本、占地覆盖的块与
 // 建筑实体第一次用的先建出 → 一笔多实体事务（handler BuildingPlace）。会等数据库与 WAL：只能在 Nest 业务 worker 之外调用。
 //
-// 拒绝（全部在写任何东西之前，拒绝时零写入）：ErrDisabled / ErrBuildingsDisabled；ErrBuild（序号、玩家、类型、朝向、
-// 占地不在地图里）；ErrNotOwned / ErrUnloadable（占地覆盖的块不归本进程写或装不进来）；ErrRateLimited（配额：每次至少
+// 拒绝（全部在写任何东西之前，拒绝时零写入）：ErrDisabled / ErrBuildingsDisabled；ErrBuildingConfig（配置 ID 未知）、
+// ErrBuildingParams（参数个数 / 范围）；ErrBuild（序号、玩家、朝向、占地不在地图里、必须整平却没整平）；ErrNotOwned / ErrUnloadable（占地覆盖的块不归本进程写或装不进来）；ErrRateLimited（配额：每次至少
 // MinEditPoints，整平再加会改高度的节点数，与笔刷同一个桶）；ErrDenied（BuildRules）；事务里：ErrStale / ErrSeqAhead、
 // ErrOccupied（锚点或占地有建筑）、ErrBuildingLimit、ErrSlope、ErrUnderwater。
 //
@@ -195,6 +257,7 @@ func (m *Map) Place(ctx context.Context, playerID int64, seq uint64, p building.
 	if err != nil {
 		return building.Result{}, err
 	}
+	p.Params = slices.Clone(p.Params)
 	refund := func() {}
 	if rate := m.policy.EditPointsPerSecond; rate > 0 {
 		points := m.policy.MinEditPoints
@@ -269,6 +332,54 @@ func (m *Map) Remove(ctx context.Context, playerID int64, seq uint64, gx, gy int
 	return result, nil
 }
 
+// SetParams 是属主改锚点在节点 (gx, gy) 的建筑的修改参数值的入口（协议 Building 的 op 3）：占地按进程内占位表找（找不到
+// 答 ErrNoBuilding，不建任何实体），再在一笔两实体事务（handler BuildingParams：建筑与玩家的编辑账本，参数不改变占地，
+// 不锁块）里判重、核对属主、按建筑的配置补齐与校验参数（同 Place：个数不多于槽数，没给的取缺省值）。配额计
+// MinEditPoints（与拆除相同）。拒绝：同 Remove 的序号 / 配额，事务里 ErrNoBuilding、ErrDenied（不是属主）、
+// ErrBuildingConfig（建筑的配置 ID 在当前配置里没有了）、ErrBuildingParams。重复的序号答 Duplicate、什么都不写。
+//
+// 提交之后观看这座建筑的客户端按 on_change 收到 Params 的增量（建筑实体是同步对象，方案 §27）。
+func (m *Map) SetParams(ctx context.Context, playerID int64, seq uint64, gx, gy int64, params []int32) (building.Result, error) {
+	if m == nil {
+		return building.Result{}, ErrDisabled
+	}
+	if !m.BuildingsEnabled() {
+		return building.Result{}, ErrBuildingsDisabled
+	}
+	if err := checkIdentity(playerID, seq); err != nil {
+		return building.Result{}, err
+	}
+	if _, err := building.UniqueID(gx, gy); err != nil {
+		return building.Result{}, fmt.Errorf("%w: %w", ErrBuild, err)
+	}
+	if len(params) > building.MaxParams {
+		return building.Result{}, fmt.Errorf("%w: %d values, at most %d", ErrBuildingParams, len(params), building.MaxParams)
+	}
+	lot, found := m.lotAnchoredAt(gx, gy)
+	if !found {
+		return building.Result{}, fmt.Errorf("%w: anchor (%d, %d)", ErrNoBuilding, gx, gy)
+	}
+	if err := m.checkChunks(lot.Chunks()); err != nil {
+		return building.Result{}, err
+	}
+	if rate := m.policy.EditPointsPerSecond; rate > 0 && !m.quota.take(playerID, m.policy.MinEditPoints, rate) {
+		return building.Result{}, fmt.Errorf("%w: player %d: changing a building's parameters", ErrRateLimited, playerID)
+	}
+	ledger, err := m.ledgerFor(ctx, playerID)
+	if err != nil {
+		return building.Result{}, err
+	}
+	site, err := m.siteFor(ctx, lot)
+	if err != nil {
+		return building.Result{}, err
+	}
+	result, err := m.buildingSender.MultiSync_BuildingParams(ctx, site.ID(), ledger, int64(seq), slices.Clone(params))
+	if err != nil {
+		return building.Result{}, fmt.Errorf("terrain: building parameters: %w", err)
+	}
+	return result, nil
+}
+
 // lotAnchoredAt 在进程内占位表里找锚点在 (gx, gy) 的占地。
 func (m *Map) lotAnchoredAt(gx, gy int64) (terrain_chunk.Lot, bool) {
 	key := terrain.ChunkKey{X: int32(gx / terrain.ChunkSamples), Y: int32(gy / terrain.ChunkSamples)}
@@ -296,9 +407,19 @@ func (m *Map) checkPlacement(playerID int64, seq uint64, p building.Placement) (
 	if err := checkIdentity(playerID, seq); err != nil {
 		return terrain_chunk.Lot{}, nil, err
 	}
-	lot, ok := p.Lot()
+	spec, err := building.SpecOf(p.ConfigID)
+	if err != nil {
+		return terrain_chunk.Lot{}, nil, err
+	}
+	if _, err := spec.Normalize(p.Params); err != nil {
+		return terrain_chunk.Lot{}, nil, err
+	}
+	if spec.MustLevel && !p.Level {
+		return terrain_chunk.Lot{}, nil, fmt.Errorf("%w: building config %d must be placed on a levelled foundation", ErrBuild, p.ConfigID)
+	}
+	lot, ok := p.Lot(spec)
 	if !ok {
-		return terrain_chunk.Lot{}, nil, fmt.Errorf("%w: kind %d facing %d", ErrBuild, p.Kind, p.Facing)
+		return terrain_chunk.Lot{}, nil, fmt.Errorf("%w: config %d facing %d", ErrBuild, p.ConfigID, p.Facing)
 	}
 	if err := lot.Valid(m.meta); err != nil {
 		return terrain_chunk.Lot{}, nil, fmt.Errorf("%w: %w", ErrBuild, err)
@@ -345,10 +466,11 @@ func (m *Map) buildingTargets(ctx context.Context, playerID int64, lot terrain_c
 	if chunks, err = m.chunkIDs(ctx, keys); err != nil {
 		return 0, nil, 0, err
 	}
-	if site, err = m.siteFor(ctx, lot); err != nil {
+	b, err := m.siteFor(ctx, lot)
+	if err != nil {
 		return 0, nil, 0, err
 	}
-	return ledger, chunks, site, nil
+	return ledger, chunks, b.ID(), nil
 }
 
 // chunkIDs 建出（或冷加载）这些块的实体，返回实体 ID。
@@ -368,17 +490,17 @@ func (m *Map) chunkIDs(ctx context.Context, keys []terrain.ChunkKey) ([]int64, e
 	return ids, nil
 }
 
-// siteFor 建出（或冷加载）锚点在 lot 左下角的建筑实体，返回实体 ID。
-func (m *Map) siteFor(ctx context.Context, lot terrain_chunk.Lot) (int64, error) {
+// siteFor 建出（或冷加载）锚点在 lot 左下角的建筑实体。
+func (m *Map) siteFor(ctx context.Context, lot terrain_chunk.Lot) (*building.Building, error) {
 	unique, err := building.UniqueID(lot.GX, lot.GY)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %w", ErrBuild, err)
+		return nil, fmt.Errorf("%w: %w", ErrBuild, err)
 	}
 	site, _, err := m.buildings.GetOrCreate(ctx, unique)
 	if err != nil {
-		return 0, fmt.Errorf("terrain: building at (%d, %d): %w", lot.GX, lot.GY, err)
+		return nil, fmt.Errorf("terrain: building at (%d, %d): %w", lot.GX, lot.GY, err)
 	}
-	return site.ID(), nil
+	return site, nil
 }
 
 // levelPlan 是整平一份占地的计划：目标高度（占地各节点高度原始值的平均，四舍五入）、各节点的最低 / 最高，以及会改高度
@@ -547,10 +669,11 @@ func (m *Map) level(surfaces []*terrain_chunk.SurfaceComponent, lot terrain_chun
 // rollback=undo 事务里运行，只读内存、整数运算，可以在 short 池里执行。
 //
 //  1. 判重：账本答 Duplicate → 返回 Duplicate 与建筑当前状态，什么都不写；Stale / Ahead → *SeqError。
-//  2. 校验：目标正是占地覆盖的块；锚点没有站着的建筑；玩家建筑数没到上限；块上的 Lots 与占位钩子不占占地任何节点；
-//     高差与水位（整平时按整平之后）。
-//  3. 写：整平（可选，地形改动走 SurfaceComponent.Apply）、建筑实体、每块记占地（AddLot）、账本记序号与建筑数加一；
-//     提交后发布占位表。
+//  2. 校验：配置 ID 在当前配置里、参数按配置补齐后都在范围里、必须整平的整平了（与 Place 的事务前检查同一规则，这里按
+//     事务钉住的配置快照再查一次，以它为准）；目标正是占地覆盖的块；锚点没有站着的建筑；玩家建筑数没到上限；块上的
+//     Lots 与占位钩子不占占地任何节点；高差与水位（整平时按整平之后）。
+//  3. 写：整平（可选，地形改动走 SurfaceComponent.Apply）、建筑实体（配置 ID、补齐的参数、锚点、朝向、占地、地基）、
+//     每块记占地（AddLot）、账本记序号与建筑数加一；提交后发布占位表、通知建筑同步（登记 subject、放进视野）。
 //
 // 1～2 的拒绝在第一次写之前；3 之后不会失败（每块 MaxLots 也在 2 里查）。事务回滚时块、建筑与账本都由 setter 的逆操作
 // 还原，提交后回调不执行。
@@ -559,9 +682,20 @@ func (m *Map) ApplyPlace(targets []terrain_chunk.ISurfaceEntity, site building.I
 		return building.Result{}, fmt.Errorf("%w: edit sequence %d", ErrBuild, seq)
 	}
 	ledger, s := editor.LedgerComp(), site.SiteComp()
-	lot, ok := p.Lot()
+	spec, err := building.SpecOf(p.ConfigID)
+	if err != nil {
+		return building.Result{}, err
+	}
+	params, err := spec.Normalize(p.Params)
+	if err != nil {
+		return building.Result{}, err
+	}
+	if spec.MustLevel && !p.Level {
+		return building.Result{}, fmt.Errorf("%w: building config %d must be placed on a levelled foundation", ErrBuild, p.ConfigID)
+	}
+	lot, ok := p.Lot(spec)
 	if !ok {
-		return building.Result{}, fmt.Errorf("%w: kind %d facing %d", ErrBuild, p.Kind, p.Facing)
+		return building.Result{}, fmt.Errorf("%w: config %d facing %d", ErrBuild, p.ConfigID, p.Facing)
 	}
 	surfaces, err := m.buildingSurfaces(targets, lot)
 	if err != nil {
@@ -591,7 +725,7 @@ func (m *Map) ApplyPlace(targets []terrain_chunk.ISurfaceEntity, site building.I
 	if err != nil {
 		return building.Result{}, err
 	}
-	plan, err := m.checkGround(building.Catalog[p.Kind], lot, p.Level, g)
+	plan, err := m.checkGround(spec, lot, p.Level, g)
 	if err != nil {
 		return building.Result{}, err
 	}
@@ -603,7 +737,7 @@ func (m *Map) ApplyPlace(targets []terrain_chunk.ISurfaceEntity, site building.I
 		}
 		foundation = m.meta.WorldHeight(plan.target)
 	}
-	if err := s.Place(ledger.Owner().PlayerID(), p, lot, foundation, p.Level, m.meta.BaseRevision); err != nil {
+	if err := s.Place(ledger.Owner().PlayerID(), p, params, lot, foundation, p.Level, m.meta.BaseRevision); err != nil {
 		return building.Result{}, err
 	}
 	for _, surface := range surfaces {
@@ -614,13 +748,15 @@ func (m *Map) ApplyPlace(targets []terrain_chunk.ISurfaceEntity, site building.I
 	if err := m.publishLots(surfaces); err != nil {
 		return building.Result{}, err
 	}
+	m.announceBuilding(s.Owner(), lot, true, surfaces[0])
 	ledger.Record(seq)
 	ledger.AddBuildings(1)
 	return building.Result{Building: s.State(), Chunks: chunkVersions(surfaces), LastSeq: ledger.LastSeq()}, nil
 }
 
 // ApplyRemove 是 handler BuildingRemove 的业务（锁与事务同 ApplyPlace）：判重 → 建筑站着、属主是这个玩家、占地正是
-// 目标块、每块都记着这份占地 → 每块去掉占地、建筑清空、账本记序号与建筑数减一；提交后发布占位表。地形不复原。
+// 目标块、每块都记着这份占地 → 每块去掉占地、建筑清空、账本记序号与建筑数减一；提交后发布占位表、通知建筑同步（撤出
+// 视野）。地形不复原。
 func (m *Map) ApplyRemove(targets []terrain_chunk.ISurfaceEntity, site building.ISiteEntity, editor terrain_editor.ILedgerEntity, seq int64) (building.Result, error) {
 	if seq < 1 {
 		return building.Result{}, fmt.Errorf("%w: edit sequence %d", ErrBuild, seq)
@@ -655,9 +791,46 @@ func (m *Map) ApplyRemove(targets []terrain_chunk.ISurfaceEntity, site building.
 	if err := m.publishLots(surfaces); err != nil {
 		return building.Result{}, err
 	}
+	m.announceBuilding(s.Owner(), state.Lot, false, surfaces[0])
 	ledger.Record(seq)
 	ledger.AddBuildings(-1)
 	return building.Result{Building: s.State(), Chunks: chunkVersions(surfaces), LastSeq: ledger.LastSeq()}, nil
+}
+
+// ApplyParams 是 handler BuildingParams 的业务（建筑实体与玩家账本一起锁住；参数不改变占地，不锁块）：判重 → 建筑
+// 站着、属主是这个玩家 → 按建筑配置补齐与校验参数（以事务钉住的配置快照为准）→ 写 Params（与现在相同时不写）、账本记
+// 序号。拒绝都在第一次写之前。提交后建筑的同步按 on_change 发 Params 的增量（建筑已是 subject，不需要另行通知）。
+func (m *Map) ApplyParams(site building.ISiteEntity, editor terrain_editor.ILedgerEntity, seq int64, params []int32) (building.Result, error) {
+	if seq < 1 {
+		return building.Result{}, fmt.Errorf("%w: edit sequence %d", ErrBuild, seq)
+	}
+	ledger, s := editor.LedgerComp(), site.SiteComp()
+	state := s.State()
+	switch verdict := ledger.Check(seq); verdict {
+	case terrain_editor.Duplicate:
+		return building.Result{Duplicate: true, Building: state, LastSeq: ledger.LastSeq()}, nil
+	case terrain_editor.Stale, terrain_editor.Ahead:
+		return building.Result{}, &SeqError{PlayerID: ledger.Owner().PlayerID(), Seq: seq, LastSeq: ledger.LastSeq(), Verdict: verdict}
+	}
+	if !state.Standing {
+		gx, gy := s.Owner().Anchor()
+		return building.Result{}, fmt.Errorf("%w: anchor (%d, %d)", ErrNoBuilding, gx, gy)
+	}
+	if player := ledger.Owner().PlayerID(); state.Owner != player {
+		return building.Result{}, fmt.Errorf("%w: building %d belongs to player %d, not %d", ErrDenied, state.ID, state.Owner, player)
+	}
+	spec, err := building.SpecOf(state.ConfigID)
+	if err != nil {
+		return building.Result{}, err
+	}
+	values, err := spec.Normalize(params)
+	if err != nil {
+		return building.Result{}, err
+	}
+	// 校验完毕，开始写。
+	s.SetParams(values)
+	ledger.Record(seq)
+	return building.Result{Building: s.State(), LastSeq: ledger.LastSeq()}, nil
 }
 
 // checkLotsHold 核对每一块都记着这份占地（建筑实体与块的记录一致）。
@@ -686,6 +859,9 @@ type BuildingStats struct {
 	Unfit int
 	// Mismatched 是建筑实体与块上的占地记录对不上的（不改任何东西，记 Error）。
 	Mismatched int
+	// Misconfigured 是配置对不上的建筑（配置 ID 在当前配置里没有了，或配置的宽高按朝向推出的占地与建筑存下的占地不同）：
+	// 保留、什么都不改，记 Warn（方案 §27：热更新不许删配置、改宽高；这里兜住重启时换了配置文件的情形）。
+	Misconfigured int
 }
 
 // ReconcileBuildings 是启动阶段的建筑对账：Load 读到的块记录里每一份占地，冷加载它的建筑实体，一笔事务（handler
@@ -700,6 +876,7 @@ func (m *Map) ReconcileBuildings(ctx context.Context) (BuildingStats, error) {
 	if !m.BuildingsEnabled() {
 		return stats, nil
 	}
+	m.reconciled = nil
 	seen := map[terrain_chunk.Lot]bool{}
 	var lots []terrain_chunk.Lot
 	for _, key := range m.Keys() {
@@ -727,7 +904,7 @@ func (m *Map) ReconcileBuildings(ctx context.Context) (BuildingStats, error) {
 		if err != nil {
 			return stats, err
 		}
-		verdict, err := m.buildingSender.MultiGroupSync_BuildingRebase(ctx, chunkIDs, site, lot.Pack())
+		verdict, err := m.buildingSender.MultiGroupSync_BuildingRebase(ctx, chunkIDs, site.ID(), lot.Pack())
 		switch {
 		case errors.Is(err, ErrLotMismatch):
 			stats.Mismatched++
@@ -745,6 +922,12 @@ func (m *Map) ReconcileBuildings(ctx context.Context) (BuildingStats, error) {
 			stats.Unfit++
 			slog.Warn("terrain: a building does not fit the new base terrain; it is kept", "lot", lot.String(), "reason", verdict.Unfit.Error())
 		}
+		if verdict.Misconfigured != nil {
+			stats.Misconfigured++
+			slog.Warn("terrain: a building's config no longer matches it (config row removed or footprint changed); it is kept as it is",
+				"lot", lot.String(), "reason", verdict.Misconfigured.Error())
+		}
+		m.reconciled = append(m.reconciled, BuildingCommit{Building: site, Lot: lot, Standing: true, Revision: m.occupancy.revision(lot.Chunks()[0])})
 	}
 	return stats, nil
 }
@@ -758,8 +941,8 @@ func (m *Map) ApplyRebase(targets []terrain_chunk.ISurfaceEntity, site building.
 	}
 	s := site.SiteComp()
 	state := s.State()
-	if !state.Standing || state.Lot != lot {
-		return building.Rebase{}, fmt.Errorf("%w: building %d (standing %v, lot %v), chunk records %v", ErrLotMismatch, state.ID, state.Standing, state.Lot, lot)
+	if !state.Standing || state.Lot != lot || !s.AnchorRecorded() {
+		return building.Rebase{}, fmt.Errorf("%w: building %d (standing %v, lot %v, anchor recorded %v), chunk records %v", ErrLotMismatch, state.ID, state.Standing, state.Lot, s.AnchorRecorded(), lot)
 	}
 	surfaces, err := m.buildingSurfaces(targets, lot)
 	if err != nil {
@@ -768,10 +951,19 @@ func (m *Map) ApplyRebase(targets []terrain_chunk.ISurfaceEntity, site building.
 	if err := checkLotsHold(surfaces, lot); err != nil {
 		return building.Rebase{}, err
 	}
-	if state.BaseRevision == m.meta.BaseRevision {
-		return building.Rebase{}, nil
+	// 配置核对（每次启动，与原始地形是否换版无关）：配置 ID 还在、按配置与朝向推出的占地就是存下的占地。对不上的只报告。
+	var verdict building.Rebase
+	spec, err := building.SpecOf(state.ConfigID)
+	if err == nil {
+		if want, _ := spec.Lot(lot.GX, lot.GY, state.Facing); want != lot {
+			err = fmt.Errorf("building config %d at facing %d gives the lot %v, the building holds %v", state.ConfigID, state.Facing, want, lot)
+		}
 	}
-	verdict := building.Rebase{Rebased: true, From: state.BaseRevision}
+	verdict.Misconfigured = err
+	if state.BaseRevision == m.meta.BaseRevision {
+		return verdict, nil
+	}
+	verdict.Rebased, verdict.From = true, state.BaseRevision
 	g := groundCheck{data: map[terrain.ChunkKey]terrain.Chunk{}, fresh: map[terrain.ChunkKey]bool{}}
 	for _, surface := range surfaces {
 		data, fromRecord, err := m.baseFor(surface)
@@ -797,8 +989,13 @@ func (m *Map) ApplyRebase(targets []terrain_chunk.ISurfaceEntity, site building.
 		}
 	}
 	if verdict.Unfit == nil {
-		// 整平过的占地此时是平的（高差 0），只剩水位要查；没整平的按放置时的规则查高差与水位。
-		if _, err := m.checkGround(building.Catalog[state.Kind], lot, false, g); err != nil {
+		// 整平过的占地此时是平的（高差 0），只剩水位要查；没整平的按放置时的规则查高差与水位。配置对不上时没有可信的
+		// 高差上限，只查水位（MaxRise 取最大）。
+		rules := spec
+		if verdict.Misconfigured != nil {
+			rules = building.Spec{MaxRise: math.MaxInt32}
+		}
+		if _, err := m.checkGround(rules, lot, false, g); err != nil {
 			verdict.Unfit = err
 		}
 	}

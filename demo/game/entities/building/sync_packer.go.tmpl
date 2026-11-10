@@ -1,0 +1,59 @@
+package building
+
+import (
+	"fmt"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// BuildingSyncCodec 是建筑同步载荷的编码号：载荷是 BuildingDao 的同步 PB（MarshalSync），客户端交给生成的
+// ApplySyncBuildingDao（C# / C++ 用同一份 dao_sync.proto 的生成 Apply）。与 Player / Monster 的 packer 同一个形状：
+// 同步链路对“不是玩家的东西”没有特例（方案 §27）。
+const BuildingSyncCodec uint16 = 2
+
+// buildingViews 只有一个视图：缺省视图（建筑 Interest 不配分档），字段是 DAO 上全部标了 sync 的字段——State、Owner、
+// ConfigID、Params、Facing、GX、GY、Foundation。占地宽高与 BaseRevision 只持久，不下发。
+var buildingViews, buildingViewsErr = dataengine.NewSyncViewSet(db.BuildingDaoSyncFields(),
+	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}},
+)
+
+// NewBuildingSyncPacker 是实体标记 subjectPacker= 指名的工厂。全量与增量都是按字段的 MarshalSync：一座建筑的同步字段
+// 合起来几十字节，改参数时整个 Params 字段重发（至多 8 个 int32），不需要按下标的变化树。
+func NewBuildingSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+	owner, _ := value.(*Building)
+	return buildingSyncPacker{building: owner}
+}
+
+type buildingSyncPacker struct{ building *Building }
+
+func (packer buildingSyncPacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+	return packer.pack(profile, dataengine.AllFields)
+}
+
+func (packer buildingSyncPacker) PackSubjectDelta(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	return packer.pack(profile, mask)
+}
+
+// pack 只交出视图允许的字段；未知视图返回 entity.ErrSyncViewUnknown，不扩大字段权限。
+func (packer buildingSyncPacker) pack(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	if buildingViewsErr != nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("building sync packer: %w", buildingViewsErr)
+	}
+	if packer.building == nil {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("building sync packer: the entity is not a *Building")
+	}
+	view, ok := buildingViews.Lookup(profile)
+	if !ok {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("%w: %+v", entity.ErrSyncViewUnknown, profile)
+	}
+	if mask &= view.Fields; mask == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	raw := packer.building.Dao().MarshalSync(mask)
+	if len(raw) == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	return entity.TakeFrozenSyncPayload(BuildingSyncCodec, raw), nil
+}

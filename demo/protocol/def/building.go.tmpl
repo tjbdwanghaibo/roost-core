@@ -2,31 +2,39 @@
 
 package protocoldef
 
-// 建筑（可编辑地形 P4）：放置、拆除一座建筑。本轮建筑本身不同步，放置者按答复显示；别的玩家看到建筑的同步方式待定
-// （可编辑地形方案 §25）。整平改了的地形走地形块的同步。坐标单位是 1m 节点（世界采样点，世界坐标 = 节点 × 100 厘米）。
+// 建筑（可编辑地形 P4 / 方案 §27）：放置、拆除一座建筑，改它的修改参数。建筑是普通的同步实体：放置、改参数、拆除的
+// 结果经场景的同步流（命名空间 "building"，生成的 ApplySyncBuildingDao）到达看得见它的每个客户端（含放置者自己），客户端
+// 按 ConfigID 查配置表 building 得到预制体，按 Params 设参数；答复只是这一次请求的结论。整平改了的地形走地形块的同步。
+// 坐标单位是 1m 节点（世界采样点，世界坐标 = 节点 × 100 厘米）。
 
 // BuildingRequest 是一次放置或拆除。
 //
 //   - Seq：编辑序号，与玩家 ID 一起是请求的身份，与 TerrainEdit 共用同一个序号空间与同一份服务端账本（D18）：新请求用
 //     上一次的序号 + 1，结果未知时用同一个 Seq 重发（已生效的答 Duplicate）；不知道上一次用到哪里时先发 TerrainEdit 的
 //     Seq = 0 查询。取值 1～2^63−1。
-//   - Op：1 放置、2 拆除（拆除只看 GX、GY：锚点上的建筑，只有属主能拆）。
-//   - Kind：建筑类型（demo：1 hut 4×4、2 hall 8×6、3 tower 3×3）；GX、GY：锚点（占地左下角节点）；Facing：0～3，1、3 时
-//     宽高互换；Level：放置时把占地整平到占地各节点的平均高度（地形编辑，计改动点数配额）。
+//   - Op：1 放置、2 拆除、3 改参数（拆除与改参数只看 GX、GY：锚点上的建筑，只有属主能拆、能改）。
+//   - ConfigID：建筑配置表 building 的 ID（demo：1 hut 4×4、2 hall 8×6、3 tower 3×3、4 keep 12×12 必须整平）；占地只由
+//     配置的宽高与朝向决定。
+//   - Params：修改参数值，下标是配置表 building_param 的槽（Slot）；个数不能多于槽数，没给的（从末尾起）取槽的缺省值，
+//     每个值在槽的 [Min, Max] 里。放置与改参数用同一规则；改参数不改变占地。
+//   - GX、GY：锚点（占地左下角节点）；Facing：0～3，1、3 时宽高互换；Level：放置时把占地整平到占地各节点的平均高度
+//     （地形编辑，计改动点数配额）。
 type BuildingRequest struct {
-	Seq    uint64 `pb:"1"`
-	Op     int32  `pb:"2"`
-	Kind   int32  `pb:"3"`
-	GX     int64  `pb:"4"`
-	GY     int64  `pb:"5"`
-	Facing int32  `pb:"6"`
-	Level  bool   `pb:"7"`
+	Seq      uint64  `pb:"1"`
+	Op       int32   `pb:"2"`
+	ConfigID int32   `pb:"3"`
+	GX       int64   `pb:"4"`
+	GY       int64   `pb:"5"`
+	Facing   int32   `pb:"6"`
+	Level    bool    `pb:"7"`
+	Params   []int32 `pb:"8"`
 }
 
-// BuildingResponse 答复一次放置 / 拆除：Code 0 时 Standing / BuildingID / Foundation 是建筑此刻的状态（拆除后 Standing 为
-// false），Chunks 是占地覆盖的每一块此后的地形版本，Duplicate 表示这个 Seq 已经生效过、这次什么都没做。LastSeq 是服务端
+// BuildingResponse 答复一次放置 / 拆除 / 改参数：Code 0 时 Standing / BuildingID / ConfigID / Params / Foundation 是建筑此刻的
+// 状态（拆除后 Standing 为 false），Chunks 是占地覆盖的每一块此后的地形版本，Duplicate 表示这个 Seq 已经生效过、这次什么都没做。LastSeq 是服务端
 // 此刻已应用的最大序号（Code 0 与 terrain_seq 时给出）。拒绝时什么都没写。
-// Codes: terrain_disabled, building_disabled（分区场景）, building_bad, terrain_not_owned, terrain_unavailable, terrain_rate,
+// Codes: terrain_disabled, building_disabled（分区场景）, building_bad, building_config（配置 ID 未知）, building_params
+// （参数个数 / 范围）, terrain_not_owned, terrain_unavailable, terrain_rate,
 // terrain_denied（权限，或拆除别人的建筑）, terrain_occupied（锚点或占地已有建筑）, building_slope, building_underwater,
 // building_limit, building_missing, terrain_seq。
 type BuildingResponse struct {
@@ -39,6 +47,8 @@ type BuildingResponse struct {
 	Leveled    bool                  `pb:"7"`
 	Chunks     []TerrainChunkVersion `pb:"8"`
 	LastSeq    int64                 `pb:"9"`
+	ConfigID   int32                 `pb:"10"`
+	Params     []int32               `pb:"11"`
 }
 
 //roost:protocol group=game handler=player

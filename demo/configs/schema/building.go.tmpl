@@ -1,0 +1,30 @@
+package schema
+
+// Building 是建筑的配置（可编辑地形 P4，方案 §27）：一行是一种预制的建筑——客户端按 Model 实例化的预制体 / 模型，
+// 加上服务端放置时检查的规则。建筑实体（BuildingDao）只记配置 ID 与玩家给的修改参数值（Params，按 BuildingParam 的
+// 槽定义），客户端拿到 ConfigID + Params + 锚点 / 朝向 / 地基高度就能实例化。
+//
+// 占地只由这里的宽高（W、H，1m 节点，朝向 1、3 时互换）决定，修改参数不改变占地；将来参数要影响占地，须先在这里声明
+// （例如“某个槽是长度”），并同步改服务端的占地推导与客户端。已有配置 ID 的 W / H 不能在热更新里改（改占地就是新的
+// 配置 ID）：已经站着的建筑的占地记在它覆盖的地形块上，改了宽高两边就对不上。规则由 game 服务的配置检查
+// （internal/service/<game>/building_config.go）在启动与每次热更新时执行；行内能用 tag 表达的规则写在 tag 上，
+// configdata 在每次加载 / 热更新时检查，`roost generate` 转换 CSV 时先查一遍。
+//
+//   - MaxRise：不整平时占地内各节点地面高度的最大差（厘米）；超过即坡太陡，不能放。
+//   - MaxCut：整平时允许的最大高差（厘米）：整平把占地压到一个高度，挖填量随高差变大，超过即拒绝。
+//   - MustLevel：为真时只能整平放置（不整平的请求答 building_bad）。
+//   - 不在水下：所有类型都不能建在水位线以下（方案 §6），没有配置项。
+//
+//roost:table name=building key=ID
+type Building struct {
+	ID int32 `csv:"id" json:"id" title:"ID" required:"true" unique:"true" min:"1"`
+	// Name 是给策划与日志看的名字。
+	Name string `csv:"name" json:"name" title:"Name" required:"true"`
+	// Model 是客户端预制体 / 模型的标识；服务端不读它，只随配置表发给客户端。
+	Model     string `csv:"model" json:"model" title:"Model" required:"true"`
+	W         int32  `csv:"w" json:"w" title:"W" required:"true" min:"1"`
+	H         int32  `csv:"h" json:"h" title:"H" required:"true" min:"1"`
+	MaxRise   int32  `csv:"max_rise" json:"max_rise" title:"MaxRise" required:"true" min:"0"`
+	MaxCut    int32  `csv:"max_cut" json:"max_cut" title:"MaxCut" required:"true" min:"0"`
+	MustLevel bool   `csv:"must_level" json:"must_level" title:"MustLevel"`
+}

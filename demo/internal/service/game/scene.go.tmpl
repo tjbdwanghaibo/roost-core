@@ -12,6 +12,7 @@ import (
 
 	"{{MODULE}}/game/actor"
 	player "{{MODULE}}/game/entities/player"
+ building "{{MODULE}}/game/entities/building"
  terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	"{{MODULE}}/game/settings"
@@ -324,7 +325,9 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	// (terrain_partition.go, P3).
 	var terrainConfig *terrainSyncConfig
 	if terrainMap != nil {
-		terrainConfig = defaultTerrainSync(terrainMap.Meta().Bounds())
+		// 接建筑的普通场景（terrainmap.Map.BuildingsEnabled）同时打开建筑同步：建筑是普通的同步实体，自己的 Interest 与
+		// 命名空间（building_sync.go，方案 §27）。
+		terrainConfig = defaultTerrainSync(terrainMap.Meta().Bounds(), terrainMap.BuildingsEnabled())
 	}
 	service, ok := app.Lookup[*Service](registry, app.ModService)
  if !ok || service == nil { return nil, errors.New("scene: service sync observer is unavailable") }
@@ -416,7 +419,7 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 	config = config.Normalize()
 	var namespaces map[string]entitysync.NamespaceLimits
 	if terrainConfig != nil {
-		namespaces = terrainNamespaceLimits()
+		namespaces = terrainNamespaceLimits(*terrainConfig)
 	}
 	scene := &Scene{members: make(map[int64]sceneMember), teams: make(map[int64]policy.ViewID), sessions: transport}
 	// The durability gate: a pipelined deployment acknowledges a transaction
@@ -427,7 +430,11 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
  var schedules map[uint32]entitysync.TypeSchedule
  if observer != nil {
   mode = entitysync.ModeOnChange
-  schedules = map[uint32]entitysync.TypeSchedule{uint32(terrain_chunk.EntityKindTerrainChunk): {Mode:entitysync.ModePeriodic, Interval:time.Second}}
+  // 地形块 1 秒一批（方案 §22.5）；建筑与玩家、怪一样按变化发（on_change，方案 §27），写明是为了读这里就知道每类怎么发。
+  schedules = map[uint32]entitysync.TypeSchedule{
+   uint32(terrain_chunk.EntityKindTerrainChunk): {Mode:entitysync.ModePeriodic, Interval:time.Second},
+   uint32(building.EntityKindBuilding): {Mode:entitysync.ModeOnChange},
+  }
  }
  manager, err := entitysync.NewManager(entitysync.ManagerConfig{
         Mode: mode,

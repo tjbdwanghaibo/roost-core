@@ -1,0 +1,58 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+
+	building "{{MODULE}}/game/entities/building"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// 建筑配置的检查（方案 §27）：配置表 building / building_param 的行内规则（必填、唯一、最小值、引用）写在 schema 的 tag 上，
+// configdata 在每次加载 / 热更新时检查；这里是 tag 表达不了的跨行规则，在同一份声明（building.CatalogOf）上执行两处：
+//   - 启动时对当前快照：不合规的配置让进程启动失败（在地形服务对账、玩家能放置之前）；
+//   - 每次热更新的 Validate 阶段对新快照：不合规、或删了已有配置 ID、改了已有配置的宽高（building.CheckReload）的热更新
+//     被拒绝，旧快照留着。
+//
+// 所以业务（building.SpecOf）读到的快照总是合规的。
+const buildingConfigHook = "{{GAME_SERVICE}}.building_config"
+
+// installBuildingConfig 检查当前快照并登记热更新检查，返回撤销登记的函数。
+func installBuildingConfig(registry *app.Registry) (func(), error) {
+	store, ok := app.Lookup[*configdata.Store](registry, mods.ModConfigData)
+	if !ok || store == nil {
+		return nil, fmt.Errorf("{{GAME_SERVICE}}: capability %q not found; the building configs live in config data", mods.ModConfigData)
+	}
+	return guardBuildingConfig(store)
+}
+
+// guardBuildingConfig 是 installBuildingConfig 在一个配置 Store 上的两步：检查当前快照，登记热更新的 Validate。
+func guardBuildingConfig(store *configdata.Store) (func(), error) {
+	catalog, err := building.CatalogOf(store.Current())
+	if err != nil {
+		return nil, fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	slog.Info("building configs checked", "configs", len(catalog))
+	unsubscribe := store.AddReloadListener(configdata.ReloadHook{
+		HookName: buildingConfigHook,
+		Validate: func(_ context.Context, event configdata.ReloadEvent) error { return checkBuildingReload(event.Old, event.New) },
+	})
+	return unsubscribe, nil
+}
+
+// checkBuildingReload 是热更新的检查：新快照的建筑配置合规，且相对旧快照没有删配置 ID、没有改宽高。
+func checkBuildingReload(old, next *configdata.Snapshot) error {
+	after, err := building.CatalogOf(next)
+	if err != nil {
+		return err
+	}
+	before, err := building.CatalogOf(old)
+	if err != nil {
+		// 旧快照本身过不了检查（不会发生：它也是经这里进来的）时只看新快照。
+		return nil
+	}
+	return building.CheckReload(before, after)
+}

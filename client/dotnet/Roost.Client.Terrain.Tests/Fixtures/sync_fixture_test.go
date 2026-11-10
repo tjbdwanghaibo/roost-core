@@ -240,3 +240,126 @@ func TestWriteTerrainChunkSyncFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// buildingStep 是建筑同步夹具的一步：payload 是 entitysync 会下发的载荷（建筑 packer 的 MarshalSync，全量或按字段），
+// want 是 Go 生成 DAO 此刻的全量；其余是客户端摆放建筑要读的字段（方案 §27：配置 ID + 参数 + 锚点 / 朝向 / 地基）。
+type buildingStep struct {
+	Name       string  `json:"name"`
+	Payload    string  `json:"payload"`
+	Want       string  `json:"want"`
+	Full       bool    `json:"full"`
+	State      int32   `json:"state"`
+	Owner      int64   `json:"owner"`
+	ConfigID   int32   `json:"config_id"`
+	Params     []int32 `json:"params"`
+	Facing     int32   `json:"facing"`
+	GX         int32   `json:"gx"`
+	GY         int32   `json:"gy"`
+	Foundation int32   `json:"foundation"`
+}
+
+type buildingFixture struct {
+	Description string         `json:"description"`
+	EntityID    int64          `json:"entity_id"`
+	Steps       []buildingStep `json:"steps"`
+}
+
+// TestWriteBuildingSyncFixture 写出 Building 同步夹具（方案 §27）：放置（全量）、改参数（只有 Params 的增量）、再放一种
+// 没有参数的建筑（Params 清空）、拆除（State 0 与清空的字段）。C# 测试用生成的 Apply 合并，逐步与 Go 的全量相等。
+func TestWriteBuildingSyncFixture(t *testing.T) {
+	out := os.Getenv("BUILDING_FIXTURE_OUT")
+	if out == "" {
+		t.Fatal("BUILDING_FIXTURE_OUT is required (run regen.sh)")
+	}
+	const entityID = int64(13)<<40 | 6553711 // kind 13，锚点 (110, 100)
+	d := NewBuildingDao()
+	d.SetId(entityID)
+	d.Init()
+	var mirror *SyncBuildingDao
+	var steps []buildingStep
+	record := func(name string, payload []byte, full bool) {
+		want := d.MarshalSync(^uint64(0))
+		patch, err := UnmarshalSyncBuildingDao(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if full {
+			mirror = nil
+		}
+		if mirror, err = ApplySyncBuildingDao(patch, mirror); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := MarshalSyncBuildingDao(mirror); string(got) != string(want) {
+			t.Fatalf("%s: Go apply did not reconstruct the DAO", name)
+		}
+		params := make([]int32, d.ParamsLen())
+		for i := range params {
+			params[i], _ = d.GetParams(i)
+		}
+		steps = append(steps, buildingStep{Name: name, Payload: hex.EncodeToString(payload), Want: hex.EncodeToString(want), Full: full,
+			State: d.GetState(), Owner: d.GetOwner(), ConfigID: d.GetConfigID(), Params: params, Facing: d.GetFacing(),
+			GX: d.GetGX(), GY: d.GetGY(), Foundation: d.GetFoundation()})
+	}
+	edit := func(name string, fn func()) []byte {
+		if _, err := nest.RunIsolatedTransaction(context.Background(), fixtureCommitter{}, "building", func() (any, error) { fn(); return nil, nil }); err != nil {
+			t.Fatal(err)
+		}
+		mask := d.DirtyTracker().TakeEntitySyncDirty()
+		return d.MarshalSync(mask)
+	}
+	place := func(config int32, params []int32, facing int32, foundation int32) func() {
+		return func() {
+			d.SetState(1)
+			d.SetOwner(4242)
+			d.SetConfigID(config)
+			d.SetParamsAll(params)
+			d.SetFacing(facing)
+			d.SetGX(110)
+			d.SetGY(100)
+			d.SetW(6)
+			d.SetH(8)
+			d.SetFoundation(foundation)
+			d.SetBaseRevision(1)
+		}
+	}
+	edit("place", place(2, []int32{3, 0}, 1, 50010))
+	record("place_full", d.MarshalSync(^uint64(0)), true)
+	record("params_delta", edit("params", func() { d.SetParamsAll([]int32{5, 9}) }), false)
+	record("replace_without_params", edit("replace", place(4, nil, 0, -1<<31)), false)
+	record("remove_delta", edit("remove", func() {
+		d.SetState(0)
+		d.SetOwner(0)
+		d.SetConfigID(0)
+		d.SetParamsAll(nil)
+		d.SetFacing(0)
+		d.SetGX(0)
+		d.SetGY(0)
+		d.SetW(0)
+		d.SetH(0)
+		d.SetFoundation(0)
+		d.SetBaseRevision(0)
+	}), false)
+	if patch, _ := UnmarshalSyncBuildingDao(mustHex(t, steps[1].Payload)); patch.Params == nil || patch.ConfigID != nil || patch.State != nil {
+		t.Fatalf("the parameter change carried more than the parameters: %+v", patch)
+	}
+	raw, err := json.MarshalIndent(buildingFixture{
+		Description: "Building DAO sync payloads written by the generated Go DAO (codegen/cmd/dao on demo/db/def/building.go.tmpl). " +
+			"Regenerate with regen.sh.",
+		EntityID: entityID, Steps: steps,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(out, append(raw, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustHex(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}

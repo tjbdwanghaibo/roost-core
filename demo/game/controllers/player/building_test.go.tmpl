@@ -16,7 +16,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
-// 建筑端点只做两件事：线上的值换成放置 / 拆除请求，terrainmap 的拒绝换成业务码。校验、事务、占位与重启见
+// 建筑端点只做两件事：线上的值换成放置 / 拆除 / 改参数请求，terrainmap 的拒绝换成业务码。校验、事务、占位与重启见
 // internal/service/<game>/terrain_building_test.go。
 
 // 没配地形的服务器答 terrain_disabled，不是内部错误。
@@ -26,7 +26,7 @@ func TestBuildingWithoutTerrainAnswersDisabled(t *testing.T) {
 	}
 	controller := &Controller{registry: app.NewRegistry(viper.New())}
 	response, err := controller.HandleBuilding(&playeraccess.Context{BaseCtx: context.Background(), PlayerID: 7, MsgID: msgid.MsgBuilding, Seq: 1},
-		&pb.BuildingRequest{Seq: 1, Op: 1, Kind: 1, GX: 10, GY: 10})
+		&pb.BuildingRequest{Seq: 1, Op: 1, ConfigID: 1, GX: 10, GY: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +43,8 @@ func TestBuildingRefusalsMapToTheirCodes(t *testing.T) {
 	}{
 		{terrainmap.ErrBuildingsDisabled, apperrors.ErrBuildingDisabled},
 		{terrainmap.ErrBuild, apperrors.ErrBuildingBad},
+		{terrainmap.ErrBuildingConfig, apperrors.ErrBuildingConfig},
+		{terrainmap.ErrBuildingParams, apperrors.ErrBuildingParams},
 		{terrainmap.ErrSlope, apperrors.ErrBuildingSlope},
 		{terrainmap.ErrUnderwater, apperrors.ErrBuildingUnderwater},
 		{terrainmap.ErrBuildingLimit, apperrors.ErrBuildingLimit},

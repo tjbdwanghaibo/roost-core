@@ -3,6 +3,60 @@
 namespace Roost.Dao.Sync {
 public static class DaoSyncApply {
 // 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
+public static SyncBuildingDao Apply(this SyncBuildingDao patch,SyncBuildingDao previous){
+ if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
+ if(previous!=null&&(previous.SyncFormat!=3||previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
+ var next=previous==null?new SyncBuildingDao():previous.Clone();next.EntityId=patch.EntityId;next.SyncFormat=3;
+if(patch.State!=null)next.State=ApplyField(patch.State,previous==null?null:previous.State);
+if(patch.Owner!=null)next.Owner=ApplyField(patch.Owner,previous==null?null:previous.Owner);
+if(patch.ConfigId!=null)next.ConfigId=ApplyField(patch.ConfigId,previous==null?null:previous.ConfigId);
+if(patch.Params!=null)next.Params=ApplyField(patch.Params,previous==null?null:previous.Params);
+if(patch.Facing!=null)next.Facing=ApplyField(patch.Facing,previous==null?null:previous.Facing);
+if(patch.Gx!=null)next.Gx=ApplyField(patch.Gx,previous==null?null:previous.Gx);
+if(patch.Gy!=null)next.Gy=ApplyField(patch.Gy,previous==null?null:previous.Gy);
+if(patch.Foundation!=null)next.Foundation=ApplyField(patch.Foundation,previous==null?null:previous.Foundation);
+return next;}
+private static SyncBuildingDaoStateField ApplyField(SyncBuildingDaoStateField patch,SyncBuildingDaoStateField previous){
+var update=patch.Clone();
+return update;
+}
+private static SyncBuildingDaoOwnerField ApplyField(SyncBuildingDaoOwnerField patch,SyncBuildingDaoOwnerField previous){
+var update=patch.Clone();
+return update;
+}
+private static SyncBuildingDaoConfigIDField ApplyField(SyncBuildingDaoConfigIDField patch,SyncBuildingDaoConfigIDField previous){
+var update=patch.Clone();
+return update;
+}
+private static SyncBuildingDaoParamsField ApplyField(SyncBuildingDaoParamsField patch,SyncBuildingDaoParamsField previous){
+var update=patch.Clone();
+if(!update.Delta){if(update.Length!=0||update.Updates.Count!=0)throw new System.IO.InvalidDataException("Operations on replacement.");return update;}
+if(previous==null||update.Length>(ulong)previous.Value.Count+(ulong)update.Updates.Count||update.Length>int.MaxValue)throw new System.IO.InvalidDataException("Invalid list length or missing baseline.");
+foreach(var pair in update.Updates)if(pair.Key>=update.Length)throw new System.IO.InvalidDataException("List index out of bounds.");
+var baseline=previous.Clone();var next=new SyncBuildingDaoParamsField();
+for(ulong index=0;index<update.Length;index++){
+if(update.Updates.TryGetValue(index,out var value))next.Value.Add(value);
+else if(index<(ulong)baseline.Value.Count)next.Value.Add(baseline.Value[(int)index]);
+else throw new System.IO.InvalidDataException("List append has a hole.");}
+return next;
+}
+private static SyncBuildingDaoFacingField ApplyField(SyncBuildingDaoFacingField patch,SyncBuildingDaoFacingField previous){
+var update=patch.Clone();
+return update;
+}
+private static SyncBuildingDaoGXField ApplyField(SyncBuildingDaoGXField patch,SyncBuildingDaoGXField previous){
+var update=patch.Clone();
+return update;
+}
+private static SyncBuildingDaoGYField ApplyField(SyncBuildingDaoGYField patch,SyncBuildingDaoGYField previous){
+var update=patch.Clone();
+return update;
+}
+private static SyncBuildingDaoFoundationField ApplyField(SyncBuildingDaoFoundationField patch,SyncBuildingDaoFoundationField previous){
+var update=patch.Clone();
+return update;
+}
+// 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
 public static SyncTerrainChunkDao Apply(this SyncTerrainChunkDao patch,SyncTerrainChunkDao previous){
  if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
  if(previous!=null&&(previous.SyncFormat!=3||previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");

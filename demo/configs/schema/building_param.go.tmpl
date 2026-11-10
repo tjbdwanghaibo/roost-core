@@ -1,0 +1,20 @@
+package schema
+
+// BuildingParam 是一种建筑的一个可修改参数槽（方案 §27）：玩家放置时给、之后属主可以改的一个整数（颜色、旗帜、开关、
+// 等级……由客户端解释）。建筑实体的 Params[Slot] 就是这个槽的值。
+//
+// 一种建筑的槽从 0 开始连续编号、名字不重复，Min ≤ Default ≤ Max，至多 8 个（BuildingDao.Params 有界）；这些跨行规则由
+// game 服务的配置检查在启动与每次热更新时执行（internal/service/<game>/building_config.go），行内规则在 tag 上。
+//
+//roost:table name=building_param key=ID
+type BuildingParam struct {
+	ID int32 `csv:"id" json:"id" title:"ID" required:"true" unique:"true" min:"1"`
+	// Building 是这个槽属于哪种建筑（building 表的 ID）。
+	Building int32 `csv:"building" json:"building" title:"Building" required:"true" ref:"building"`
+	// Slot 是槽在 Params 里的下标。
+	Slot    int32  `csv:"slot" json:"slot" title:"Slot" required:"true" min:"0"`
+	Name    string `csv:"name" json:"name" title:"Name" required:"true"`
+	Min     int32  `csv:"min" json:"min" title:"Min" required:"true"`
+	Max     int32  `csv:"max" json:"max" title:"Max" required:"true"`
+	Default int32  `csv:"default" json:"default" title:"Default" required:"true"`
+}

@@ -109,7 +109,7 @@ func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
 	}
 	if buildingStats.Standing > 0 {
 		slog.Info("terrain buildings reconciled", "standing", buildingStats.Standing, "rebased", buildingStats.Rebased,
-			"unfit", buildingStats.Unfit, "mismatched", buildingStats.Mismatched)
+			"unfit", buildingStats.Unfit, "mismatched", buildingStats.Mismatched, "misconfigured", buildingStats.Misconfigured)
 	}
 	if buildingStats.Mismatched > 0 {
 		slog.Error("terrain: some buildings disagree with their chunk lot records; they were left as they are", "mismatched", buildingStats.Mismatched)
@@ -121,7 +121,8 @@ func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
 	return m, nil
 }
 
-// startTerrainSync 把本进程写的、改过的块装成实体并登记为场景同步的 subject（terrain_sync.go 的 loadEdited）。在 Init
+// startTerrainSync 把本进程写的、改过的块装成实体并登记为场景同步的 subject（terrain_sync.go 的 loadEdited），接建筑时
+// 再把站着的建筑登记为建筑同步的 subject（building_sync.go 的 loadStanding）。在 Init
 // 里、场景启动之后、玩家能进来之前运行（启动阶段的 Mongo 读，不在 Nest 业务 worker 上）。
 func startTerrainSync(registry *app.Registry, scene *Scene, m *terrainmap.Map) error {
 	chunks, err := lifecycle.TerrainChunkFromRegistry(registry)
@@ -135,8 +136,11 @@ func startTerrainSync(registry *app.Registry, scene *Scene, m *terrainmap.Map) e
 	if err != nil {
 		return err
 	}
+	// 站着的建筑（启动对账核对通过的）登记为建筑同步的 subject（building_sync.go，方案 §27）；不接建筑的场景没有建筑同步。
+	buildings := scene.terrain.buildings.loadStanding(m)
 	slog.Info("terrain sync started", "edited_chunks", loaded, "view_radius", terrainViewRadius, "max_visible", terrainMaxVisible,
-		"max_objects", sceneTerrainMaxObjects, "snapshots_per_flush", terrainSnapshotsPerFlush, "took", time.Since(started))
+		"max_objects", sceneTerrainMaxObjects, "snapshots_per_flush", terrainSnapshotsPerFlush,
+		"buildings", buildings, "building_sync", scene.terrain.buildings != nil, "took", time.Since(started))
 	return nil
 }
 

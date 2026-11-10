@@ -94,9 +94,16 @@ func buildingProcess(t *testing.T, pack string, store *memoryChunkStore, edit fu
 	})
 }
 
-func hut(gx, gy int64) building.Placement { return building.Placement{Kind: 1, GX: gx, GY: gy} }
+// hut、hall、tower 是 demo 配置表（configs/table/building.csv）的 1、2、3 号建筑：4 × 4、8 × 6、3 × 3。
+func hut(gx, gy int64) building.Placement { return building.Placement{ConfigID: 1, GX: gx, GY: gy} }
 func hall(gx, gy int64, level bool) building.Placement {
-	return building.Placement{Kind: 2, GX: gx, GY: gy, Level: level}
+	return building.Placement{ConfigID: 2, GX: gx, GY: gy, Level: level}
+}
+func tower(gx, gy int64) building.Placement { return building.Placement{ConfigID: 3, GX: gx, GY: gy} }
+
+// sameBuildings 比较两组建筑快照（State 含参数切片，不能用 ==）。
+func sameBuildings(a, b []building.State) bool {
+	return slices.EqualFunc(a, b, building.State.Equal)
 }
 
 // buildingAt 是锚点 (gx, gy) 上建筑实体的状态；没有实体时是零值。
@@ -242,7 +249,7 @@ func (s buildingSnapshot) equal(o buildingSnapshot) bool {
 	standing := func(states []building.State) []building.State {
 		return slices.DeleteFunc(slices.Clone(states), func(b building.State) bool { return !b.Standing })
 	}
-	return slices.Equal(standing(s.buildings), standing(o.buildings))
+	return sameBuildings(standing(s.buildings), standing(o.buildings))
 }
 
 // 放置的校验：每一种拒绝都在写任何东西之前（块、视图、建筑、账本、提交数都不变）；合规的放置写下建筑、每块的占地、
@@ -256,7 +263,8 @@ func TestBuildingPlacementChecks(t *testing.T) {
 	if err != nil || placed.Duplicate || !placed.Building.Standing || placed.Building.Leveled {
 		t.Fatalf("a hut on flat ground: %+v, %v", placed, err)
 	}
-	if got := buildingAt(t, p, 10, 10); got.Owner != buildingOwner || got.Lot != (terrain_chunk.Lot{GX: 10, GY: 10, W: 4, H: 4}) || got.BaseRevision != 1 {
+	if got := buildingAt(t, p, 10, 10); got.Owner != buildingOwner || got.ConfigID != 1 || !slices.Equal(got.Params, []int32{0}) ||
+		got.Lot != (terrain_chunk.Lot{GX: 10, GY: 10, W: 4, H: 4}) || got.BaseRevision != 1 {
 		t.Fatalf("the hut's record: %+v", got)
 	}
 	if v, _ := p.m.View().Version(terrain.ChunkKey{}); v != 0 {
@@ -271,12 +279,18 @@ func TestBuildingPlacementChecks(t *testing.T) {
 	}{
 		{"the same lot", hut(10, 10), terrainmap.ErrOccupied},
 		{"a lot overlapping one node", hut(13, 13), terrainmap.ErrOccupied},
-		{"another kind on the anchor", building.Placement{Kind: 3, GX: 10, GY: 10}, terrainmap.ErrOccupied},
+		{"another config on the anchor", tower(10, 10), terrainmap.ErrOccupied},
 		{"under the regional water level", hut(140, 80), terrainmap.ErrUnderwater},
 		{"a hall across a 70cm slope, not levelled", hall(70, 10, false), terrainmap.ErrSlope},
 		{"a hall across a 7m slope, levelled", hall(70, 70, true), terrainmap.ErrSlope},
-		{"an unknown kind", building.Placement{Kind: 9, GX: 30, GY: 30}, terrainmap.ErrBuild},
-		{"a bad facing", building.Placement{Kind: 1, GX: 30, GY: 30, Facing: 4}, terrainmap.ErrBuild},
+		{"an unknown config", building.Placement{ConfigID: 9, GX: 30, GY: 30}, terrainmap.ErrBuildingConfig},
+		{"config 0", building.Placement{GX: 30, GY: 30}, terrainmap.ErrBuildingConfig},
+		{"more values than the hut's one slot", building.Placement{ConfigID: 1, GX: 30, GY: 30, Params: []int32{1, 1}}, terrainmap.ErrBuildingParams},
+		{"a value above its slot's max", building.Placement{ConfigID: 1, GX: 30, GY: 30, Params: []int32{8}}, terrainmap.ErrBuildingParams},
+		{"a value below its slot's min", building.Placement{ConfigID: 3, GX: 30, GY: 30, Params: []int32{0}}, terrainmap.ErrBuildingParams},
+		{"the third slot out of range", building.Placement{ConfigID: 3, GX: 30, GY: 30, Params: []int32{2, 1, 8}}, terrainmap.ErrBuildingParams},
+		{"a keep that must be levelled, not levelled", building.Placement{ConfigID: 4, GX: 30, GY: 30}, terrainmap.ErrBuild},
+		{"a bad facing", building.Placement{ConfigID: 1, GX: 30, GY: 30, Facing: 4}, terrainmap.ErrBuild},
 		{"off the map's edge", hut(190, 10), terrainmap.ErrBuild},
 		{"a negative anchor", hut(-1, 10), terrainmap.ErrBuild},
 	} {
@@ -339,7 +353,7 @@ func TestBuildingPlacementAppliesOncePerSeq(t *testing.T) {
 		t.Fatal(err)
 	}
 	again, err := p.m.Place(p.ctx, buildingOwner, 1, hut(10, 10))
-	if err != nil || !again.Duplicate || again.Building != first.Building {
+	if err != nil || !again.Duplicate || !again.Building.Equal(first.Building) {
 		t.Fatalf("the same placement again: %+v, %v", again, err)
 	}
 	if _, err := p.m.Brush(p.ctx, buildingOwner, 2, terrain.Brush{Op: terrain.BrushPaint, X: 9000, Y: 9000, Radius: 300, Material: 9}); err != nil {
@@ -525,7 +539,7 @@ func TestBuildingsSurviveARestart(t *testing.T) {
 	store := &memoryChunkStore{}
 	limit := func(policy *terrainmap.Policy) { policy.MaxBuildings = 3 }
 	p := buildingProcess(t, pack, store, limit)
-	for i, place := range []building.Placement{hut(10, 10), hall(60, 20, true), {Kind: 3, GX: 63, GY: 63}} {
+	for i, place := range []building.Placement{hut(10, 10), hall(60, 20, true), tower(63, 63)} {
 		if _, err := p.m.Place(p.ctx, buildingOwner, uint64(i+1), place); err != nil {
 			t.Fatalf("placement %d: %v", i, err)
 		}
@@ -543,7 +557,7 @@ func TestBuildingsSurviveARestart(t *testing.T) {
 		t.Fatalf("reconcile after a restart on the same pack: %+v", q.buildingStats)
 	}
 	// 冷加载：对账已经把每座建筑装成实体。
-	if got := buildingsOf(q); !slices.Equal(got, want) {
+	if got := buildingsOf(q); !sameBuildings(got, want) {
 		t.Fatalf("buildings after the restart:\n%+v\nwant\n%+v", got, want)
 	}
 	if after := snapshotTerrain(q.m); !slices.Equal(after.ground, terrainBefore.ground) {
@@ -553,7 +567,7 @@ func TestBuildingsSurviveARestart(t *testing.T) {
 	if _, err := q.m.Place(q.ctx, buildingOwner, 4, hut(30, 30)); !errors.Is(err, terrainmap.ErrBuildingLimit) {
 		t.Fatalf("the limit after the restart: %v", err)
 	}
-	if r, err := q.m.Place(q.ctx, buildingOwner, 3, building.Placement{Kind: 3, GX: 63, GY: 63}); err != nil || !r.Duplicate {
+	if r, err := q.m.Place(q.ctx, buildingOwner, 3, tower(63, 63)); err != nil || !r.Duplicate {
 		t.Fatalf("the last placement replayed after the restart: %+v, %v", r, err)
 	}
 	if _, err := q.m.Remove(q.ctx, buildingOwner, 5, 63, 63); err != nil {
@@ -593,7 +607,7 @@ func TestBuildingsAcrossABaseRevision(t *testing.T) {
 	for i := range got {
 		w := want[i]
 		w.BaseRevision = 2
-		if got[i] != w {
+		if !got[i].Equal(w) {
 			t.Fatalf("building %d after the revision: %+v, want %+v", i, got[i], w)
 		}
 	}
@@ -668,9 +682,10 @@ func TestBuildingsAreRefusedWithoutEnableBuildings(t *testing.T) {
 	}
 }
 
-// 真实 Mongo 上的建筑重启（门变量同 TestTerrainRestartRealMongo）：放置（一座整平、跨两块）与拆除都是 strict 事务 →
-// WAL → 投影，库里有两份建筑文档（拆掉的那份是清空的记录）；重启后对账找到站着的那座、占位与地基高度都在；换版
-// （BaseRevision 2）后建筑留着、地基按原世界高度重新整平。
+// 真实 Mongo 上的建筑重启（门变量同 TestTerrainRestartRealMongo）：放置（一座整平、跨两块）、改参数与拆除都是 strict 事务 →
+// WAL → 投影，库里有两份建筑文档（拆掉的那份是清空的记录）；重启后对账找到站着的那座（配置 ID 与改过的参数都在，并在
+// 对账通过的建筑里，建筑同步按它登记）、占位与地基高度都在；换版（BaseRevision 2）后建筑留着、地基按原世界高度重新整平。
+// 序号：1 放置 hall、2 放置 hut、3 拆 hut、4 改 hall 的参数。
 func TestBuildingRestartRealMongo(t *testing.T) {
 	uri := os.Getenv("ROOST_TERRAIN_IT_MONGO_URI")
 	if uri == "" {
@@ -710,6 +725,9 @@ func TestBuildingRestartRealMongo(t *testing.T) {
 	if _, err := first.m.Remove(ctx, buildingOwner, 3, 10, 10); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := first.m.SetParams(ctx, buildingOwner, 4, 60, 20, []int32{5, 9}); err != nil {
+		t.Fatal(err)
+	}
 	first.stop(t)
 	count, err := client.Database(physical).Collection(db.BuildingDaoCollection).CountDocuments(ctx, map[string]any{})
 	if err != nil || count != 2 {
@@ -719,6 +737,12 @@ func TestBuildingRestartRealMongo(t *testing.T) {
 	second := startRealTerrainProcess(t, ctx, client, databases, physical, walDir, pack)
 	if second.buildingStats != (terrainmap.BuildingStats{Standing: 1}) {
 		t.Fatalf("reconcile after the restart: %+v", second.buildingStats)
+	}
+	if standing := second.m.ReconciledBuildings(); len(standing) != 1 || standing[0].Building == nil ||
+		standing[0].Building.Dao().GetConfigID() != 2 || standing[0].Lot != (terrain_chunk.Lot{GX: 60, GY: 20, W: 8, H: 6}) {
+		t.Fatalf("the reconciled buildings after the restart: %+v", standing)
+	} else if got := standing[0].Building.SiteComp().State().Params; !slices.Equal(got, []int32{5, 9}) {
+		t.Fatalf("the hall's parameters after the restart: %v, want [5 9]", got)
 	}
 	if !occupied(second.m, 60, 20) || !occupied(second.m, 67, 25) || occupied(second.m, 10, 10) || occupied(second.m, 68, 20) {
 		t.Fatal("the occupancy after the restart differs from the buildings")

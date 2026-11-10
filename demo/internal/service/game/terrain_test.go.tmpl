@@ -140,6 +140,7 @@ func startTerrainProcess(t *testing.T, pack string, region func(terrain.Meta) (t
 // Load 里的第一笔丢弃事务）。
 func startTerrainProcessWith(t *testing.T, pack string, region func(terrain.Meta) (terrainmap.Region, error), store coredata.Store, beforeLoad func(*terrainProcess), options ...nest.NestOption) *terrainProcess {
 	t.Helper()
+	useDemoConfig(t)
 	handler.RegisterTerrainEditNestHandlers()
 	handler.RegisterBuildingNestHandlers()
 	terrain_chunk.RegisterEntity()
@@ -729,6 +730,7 @@ type realTerrainProcess struct {
 
 func startRealTerrainProcess(t *testing.T, ctx context.Context, client fmongo.IMongo, databases *coredata.DatabaseMap, physical, walDir, pack string) *realTerrainProcess {
 	t.Helper()
+	useDemoConfig(t)
 	handler.RegisterTerrainEditNestHandlers()
 	handler.RegisterBuildingNestHandlers()
 	terrain_chunk.RegisterEntity()

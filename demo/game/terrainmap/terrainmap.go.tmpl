@@ -220,6 +220,11 @@ type Map struct {
 	// buildings、buildingSender 在 EnableBuildings 之后非 nil（只在不分区的普通场景）；Install 之前设定，之后只读。
 	buildings      Buildings
 	buildingSender BuildingSender
+	// buildingCommitted 是建筑放置 / 拆除提交后的通知（建筑同步把站着的建筑登记为 subject、拆掉的撤出视野）；nil 时不通知。
+	// 见 SetBuildingCommitted。
+	buildingCommitted atomic.Pointer[func(BuildingCommit)]
+	// reconciled 是启动对账核对通过的站着的建筑（ReconcileBuildings 写一次，之后只读）：建筑同步启动时按它登记 subject。
+	reconciled []BuildingCommit
 }
 
 // Open 打开原始地形包、建空视图。region 由 regionOf 按包的地图参数算出（调用方据此把分区格裁到地图里）。

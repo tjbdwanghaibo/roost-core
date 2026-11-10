@@ -38,7 +38,7 @@ var ErrTerrainSeq = errcode.Define(100059, "terrain_seq", "terrain edit sequence
 // ErrBuildingDisabled：这个场景不接建筑（分区场景，方案 §25：邻格还看不到建筑占位）。
 var ErrBuildingDisabled = errcode.Define(100060, "building_disabled", "buildings cannot be placed in this scene")
 
-// ErrBuildingBad：请求不合法（类型、朝向、锚点不在地图里、操作、编辑序号）。
+// ErrBuildingBad：请求不合法（朝向、锚点不在地图里、操作、编辑序号、必须整平的建筑没有整平）。
 var ErrBuildingBad = errcode.Define(100061, "building_bad", "building request refused")
 
 // ErrBuildingSlope：占地的地面高差超过这种建筑的上限（不整平时 MaxRise，整平时 MaxCut）。
@@ -52,3 +52,9 @@ var ErrBuildingLimit = errcode.Define(100064, "building_limit", "building limit 
 
 // ErrBuildingMissing：拆除的锚点上没有建筑。
 var ErrBuildingMissing = errcode.Define(100065, "building_missing", "no building stands here")
+
+// ErrBuildingConfig：建筑配置 ID 不在配置表 building 里（方案 §27）。
+var ErrBuildingConfig = errcode.Define(100066, "building_config", "unknown building config")
+
+// ErrBuildingParams：修改参数个数多于配置的槽数，或有值不在槽的范围里（方案 §27）。
+var ErrBuildingParams = errcode.Define(100067, "building_params", "building parameters refused")

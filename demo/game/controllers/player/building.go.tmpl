@@ -13,8 +13,8 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
-// HandleBuilding 是玩家放置 / 拆除一座建筑（可编辑地形 P4，普通场景）。校验、配额、权限、建实体与一笔多实体事务都在
-// terrainmap.Map.Place / Remove 里（这里只把线上的值换成请求、把拒绝换成业务码）；它会等数据库与 WAL，端点本来就在
+// HandleBuilding 是玩家放置 / 拆除一座建筑、改它的修改参数（可编辑地形 P4 / 方案 §27，普通场景）。校验、配额、权限、建实体
+// 与事务都在 terrainmap.Map.Place / Remove / SetParams 里（这里只把线上的值换成请求、把拒绝换成业务码）；它会等数据库与 WAL，端点本来就在
 // Nest 业务 worker 之外。
 func (controller *Controller) HandleBuilding(context *playeraccess.Context, request *pb.BuildingRequest) (*pb.BuildingResponse, error) {
 	if context == nil || request == nil {
@@ -32,10 +32,12 @@ func (controller *Controller) HandleBuilding(context *playeraccess.Context, requ
 	switch request.Op {
 	case 1:
 		result, err = m.Place(context.Context(), context.PlayerID, request.Seq, building.Placement{
-			Kind: request.Kind, GX: request.GX, GY: request.GY, Facing: request.Facing, Level: request.Level,
+			ConfigID: request.ConfigID, Params: request.Params, GX: request.GX, GY: request.GY, Facing: request.Facing, Level: request.Level,
 		})
 	case 2:
 		result, err = m.Remove(context.Context(), context.PlayerID, request.Seq, request.GX, request.GY)
+	case 3:
+		result, err = m.SetParams(context.Context(), context.PlayerID, request.Seq, request.GX, request.GY, request.Params)
 	default:
 		code, reason := errcode.ClientError(apperrors.ErrBuildingBad)
 		return &pb.BuildingResponse{Code: code, Reason: reason}, nil
@@ -46,6 +48,7 @@ func (controller *Controller) HandleBuilding(context *playeraccess.Context, requ
 	response := &pb.BuildingResponse{
 		Duplicate: result.Duplicate, Standing: result.Building.Standing, BuildingID: result.Building.ID,
 		Foundation: result.Building.Foundation, Leveled: result.Building.Leveled, LastSeq: result.LastSeq,
+		ConfigID: result.Building.ConfigID, Params: result.Building.Params,
 	}
 	for _, chunk := range result.Chunks {
 		response.Chunks = append(response.Chunks, pb.TerrainChunkVersion{ChunkX: chunk.Key.X, ChunkY: chunk.Key.Y, Version: chunk.Version})
@@ -72,6 +75,10 @@ func buildingError(err error) error {
 	switch {
 	case errors.Is(err, terrainmap.ErrBuildingsDisabled):
 		return apperrors.ErrBuildingDisabled
+	case errors.Is(err, terrainmap.ErrBuildingConfig):
+		return apperrors.ErrBuildingConfig
+	case errors.Is(err, terrainmap.ErrBuildingParams):
+		return apperrors.ErrBuildingParams
 	case errors.Is(err, terrainmap.ErrBuild):
 		return apperrors.ErrBuildingBad
 	case errors.Is(err, terrainmap.ErrSlope):

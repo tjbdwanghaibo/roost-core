@@ -168,7 +168,8 @@ func (h *terrainSyncHarness) assertClientMatches(t *testing.T, client *terrainCl
 	}
 }
 
-// terrainClient 是一个读帧、应用地形块的客户端。别的命名空间（玩家、怪）只记个数。
+// terrainClient 是一个读帧、应用地形块与建筑的客户端（建筑用生成的 ApplySyncBuildingDao，building_sync_test.go）。别的
+// 命名空间（玩家、怪）只记个数与位置。
 type terrainClient struct {
 	connection net.Conn
 	mu         sync.Mutex
@@ -176,6 +177,7 @@ type terrainClient struct {
 	refs       map[frame.ObjectRef]int64 // 对象引用 → subject（实体 ID）
 	namespaces map[int64]string
 	chunks     map[int64]*db.SyncTerrainChunkDao
+	buildings  map[int64]*db.SyncBuildingDao
 	frames     []receivedFrame
 	err        error
 	// positions 是别的命名空间里带 pos_x / pos_y 的 subject（玩家、怪）最近收到的位置，movedAt 是收到它的时刻；
@@ -192,6 +194,16 @@ type receivedFrame struct {
 	terrain               []terrainUpdate
 	others                int
  otherIDs []int64
+	// buildings 是这一帧里的建筑更新（building_sync_test.go）。
+	buildings []buildingUpdate
+}
+
+// buildingUpdate 是一帧里的一个建筑更新：componentBytes 是 EntitySync 组件（subject 头 + 载荷），payloadBytes 是 DAO 同步 PB。
+type buildingUpdate struct {
+	subject                      int64
+	full                         bool
+	componentBytes, payloadBytes int
+	params                       bool // 带了 Params 字段
 }
 
 // sameMaterials 比较客户端收到的材质（DAO 同步的 repeated uint32，Go 侧 []uint16）与服务端视图的每点 1 字节。
@@ -237,7 +249,7 @@ func dialTerrainClient(t *testing.T, addr string, playerID int64) *terrainClient
 	_ = connection.SetReadDeadline(time.Time{})
 	// 缺省帧上限就够：会话的引用表合起来可持有 164 个，但每帧对象数仍按场景的 Limits.MaxObjects（100）切分。
 	client := &terrainClient{connection: connection, receiver: frame.NewReceiver(frame.DefaultLimits()),
-		refs: map[frame.ObjectRef]int64{}, namespaces: map[int64]string{}, chunks: map[int64]*db.SyncTerrainChunkDao{},
+		refs: map[frame.ObjectRef]int64{}, namespaces: map[int64]string{}, chunks: map[int64]*db.SyncTerrainChunkDao{}, buildings: map[int64]*db.SyncBuildingDao{},
 		positions: map[int64]spatial.Point{}, movedAt: map[int64]time.Time{}, chunkAt: map[int64]time.Time{}}
 	go client.read()
 	return client
@@ -270,6 +282,7 @@ func (client *terrainClient) apply(f frame.Frame, received *receivedFrame) error
 		clear(client.refs)
 		clear(client.namespaces)
 		clear(client.chunks)
+		clear(client.buildings)
 	}
 	for _, object := range f.Objects {
 		if object.Operation == frame.ObjectRemove {
@@ -277,6 +290,7 @@ func (client *terrainClient) apply(f frame.Frame, received *receivedFrame) error
 			delete(client.refs, object.Ref)
 			delete(client.namespaces, subject)
 			delete(client.chunks, subject)
+			delete(client.buildings, subject)
 			continue
 		}
 		for _, component := range object.Components {
@@ -286,6 +300,25 @@ func (client *terrainClient) apply(f frame.Frame, received *receivedFrame) error
 			}
 			client.refs[object.Ref] = update.SubjectID
 			client.namespaces[update.SubjectID] = update.Namespace
+			if update.Namespace == "building" {
+				raw := update.Payload.BytesCopy()
+				patch, err := db.UnmarshalSyncBuildingDao(raw)
+				if err != nil {
+					return err
+				}
+				previous := client.buildings[update.SubjectID]
+				if update.Full {
+					previous = nil
+				}
+				next, err := db.ApplySyncBuildingDao(patch, previous)
+				if err != nil {
+					return fmt.Errorf("apply building %d: %w", update.SubjectID, err)
+				}
+				client.buildings[update.SubjectID] = next
+				received.buildings = append(received.buildings, buildingUpdate{subject: update.SubjectID, full: update.Full,
+					componentBytes: len(component.Data), payloadBytes: len(raw), params: patch.Params != nil})
+				continue
+			}
 			if update.Namespace != "terrain" {
 				received.others++
  received.otherIDs=append(received.otherIDs,update.SubjectID)
@@ -363,9 +396,11 @@ func (client *terrainClient) held() (terrainObjects, others int) {
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	for _, ns := range client.namespaces {
-		if ns == "terrain" {
+		switch ns {
+		case "terrain":
 			terrainObjects++
-		} else {
+		case "building":
+		default:
 			others++
 		}
 	}
@@ -600,7 +635,7 @@ func TestTerrainLeavesPlayerAndMonsterReplicationByteIdentical(t *testing.T) {
 		config := gamescene.DefaultConfig()
 		var terrainConfig *terrainSyncConfig
 		if withTerrain {
-			terrainConfig = defaultTerrainSync(spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}})
+			terrainConfig = defaultTerrainSync(spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}}, false)
 		}
 		scene, err := newSceneWith(sceneLane{transport: recorder}, recorder, nil, config, sceneMaxVisible, terrainConfig)
 		if err != nil {
@@ -707,7 +742,7 @@ func TestTerrainDoesNotWidenThePlayerObjectLimit(t *testing.T) {
 	recorder := newSceneRecorder()
 	config := gamescene.DefaultConfig()
 	scene, err := newSceneWith(sceneLane{transport: recorder}, recorder, nil, config, 0,
-		defaultTerrainSync(spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}}))
+		defaultTerrainSync(spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}}, false))
 	if err != nil {
 		t.Fatal(err)
 	}

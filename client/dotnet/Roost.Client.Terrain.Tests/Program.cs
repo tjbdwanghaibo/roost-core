@@ -5,7 +5,8 @@ using System.Text.Json;
 using Roost.Client.Terrain;
 
 // 地形 SDK 的测试入口：dotnet run --project client/dotnet/Roost.Client.Terrain.Tests -- client/spec
-// 金样（Go 写出的 terrain-golden.pack + terrain-queries.json）、坏包 / 坏块、覆盖块规则、mesh 网格与 DAO 同步夹具。
+// 金样（Go 写出的 terrain-golden.pack + terrain-queries.json）、坏包 / 坏块、覆盖块规则、mesh 网格与 DAO 同步夹具（地形块、
+// 建筑）。
 internal static partial class Program
 {
     private static void Check(bool ok, string message) { if (!ok) throw new Exception("FAIL " + message); }
@@ -40,6 +41,7 @@ internal static partial class Program
         TestConcurrentQueries(pack);
         TestMesh(pack);
         TestDaoSync(pack, Path.Combine(AppContext.BaseDirectory, "Fixtures", "terrain-chunk-sync.json"));
+        TestBuildingSync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "building-sync.json"));
         Console.WriteLine("PASS terrain");
         return 0;
     }

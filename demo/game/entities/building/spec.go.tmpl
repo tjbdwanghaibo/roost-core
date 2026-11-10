@@ -1,0 +1,205 @@
+package building
+
+import (
+	"cmp"
+	"errors"
+	"fmt"
+	"slices"
+	"sync/atomic"
+
+	generated "{{MODULE}}/configs/generated"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+)
+
+// 建筑的配置（方案 §27）：配置表 building（一行一种预制建筑：模型、占地宽高、放置规则）与 building_param（每种建筑的
+// 修改参数槽）在这里合成 Spec。跨行规则（槽从 0 连续、名字不重复、Min ≤ Default ≤ Max、至多 MaxParams 个、宽高放得进
+// 一块的边长）由 CatalogOf 一次检查：game 服务在启动时对当前快照、在每次热更新的 Validate 阶段对新快照调用它，不合规的
+// 配置让启动失败 / 热更新被拒（internal/service/<game>/building_config.go），所以业务读到的快照总是合规的。
+
+var (
+	// ErrUnknownConfig：配置表里没有这个建筑配置 ID。
+	ErrUnknownConfig = errors.New("building: unknown building config")
+	// ErrParams：修改参数的个数多于配置的槽数，或某个值不在槽的 [Min, Max] 里。
+	ErrParams = errors.New("building: parameters refused")
+	// ErrCatalog：建筑配置表本身不合规（跨行规则）。
+	ErrCatalog = errors.New("building: building config tables are invalid")
+)
+
+// MaxParams 是一种建筑至多几个修改参数槽（BuildingDao.Params 有界，同步载荷至多 8 个 int32）。
+const MaxParams = 8
+
+// ParamSlot 是一个修改参数槽（building_param 的一行）：Params[下标] 的名字与取值范围。
+type ParamSlot struct {
+	Name     string
+	Min, Max int32
+	Default  int32
+}
+
+// Spec 是一种建筑的配置（building 的一行加它的参数槽）。W、H 是朝向 0 时的占地（1m 节点）。
+//
+//   - MaxRise：不整平时，占地内各节点地面高度的最大差（厘米）；超过即坡太陡，不能放。
+//   - MaxCut：整平时允许的最大高差（厘米）：整平把占地压到一个高度，挖填量随高差变大，超过即拒绝（大工程不该一笔做完）。
+//   - MustLevel：只能整平放置。
+//   - 不在水下：占地的每个节点（整平之后的高度）都不能低于所在块的水位线（方案 §6；没有可以建在水里的类型）。
+//
+// 占地只由 W、H 与朝向决定，修改参数不改变占地（参数要影响占地须先在配置里声明，见 configs/schema/building.go）。
+type Spec struct {
+	ConfigID  int32
+	Name      string
+	Model     string
+	W, H      int32
+	MaxRise   int32
+	MaxCut    int32
+	MustLevel bool
+	Params    []ParamSlot
+}
+
+// Lot 是锚点 (gx, gy)、朝向 facing 时的占地：宽高按朝向转（1、3 时互换）。朝向不在 0～3 时 ok 为 false。
+func (s Spec) Lot(gx, gy int64, facing int32) (terrain_chunk.Lot, bool) {
+	if facing < 0 || facing > 3 {
+		return terrain_chunk.Lot{}, false
+	}
+	w, h := s.W, s.H
+	if facing%2 == 1 {
+		w, h = h, w
+	}
+	return terrain_chunk.Lot{GX: gx, GY: gy, W: w, H: h}, true
+}
+
+// Normalize 是一次放置 / 改参数请求里的参数在这种建筑上的值：个数不能多于槽数，没给的槽（从末尾起）取缺省值，每个值都在
+// 槽的 [Min, Max] 里。返回新切片，不改 given。
+func (s Spec) Normalize(given []int32) ([]int32, error) {
+	if len(given) > len(s.Params) {
+		return nil, fmt.Errorf("%w: %d values for the %d parameter slots of building config %d", ErrParams, len(given), len(s.Params), s.ConfigID)
+	}
+	out := make([]int32, len(s.Params))
+	for i, slot := range s.Params {
+		v := slot.Default
+		if i < len(given) {
+			v = given[i]
+		}
+		if v < slot.Min || v > slot.Max {
+			return nil, fmt.Errorf("%w: building config %d slot %d (%s) = %d, outside [%d, %d]", ErrParams, s.ConfigID, i, slot.Name, v, slot.Min, slot.Max)
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// ParamsOf 是按当前配置读一座建筑存下的参数：存的值比槽少时（配置之后加了槽）缺的取缺省值，比槽多时（配置删了末尾的槽）
+// 多出的忽略；值本身原样返回（配置收窄了范围时不改玩家存下的值）。客户端按同一规则读（方案 §27）。
+func (s Spec) ParamsOf(stored []int32) []int32 {
+	out := make([]int32, len(s.Params))
+	for i, slot := range s.Params {
+		if i < len(stored) {
+			out[i] = stored[i]
+		} else {
+			out[i] = slot.Default
+		}
+	}
+	return out
+}
+
+// Catalog 是一份配置快照里的全部建筑配置，按配置 ID。
+type Catalog map[int32]Spec
+
+// CatalogOf 从配置快照合成建筑配置并检查跨行规则；快照里没有 building 表时是空表（每个配置 ID 都未知）。
+func CatalogOf(snapshot *configdata.Snapshot) (Catalog, error) {
+	catalog := Catalog{}
+	rows, ok := generated.BuildingTableFrom(snapshot)
+	if !ok {
+		return catalog, nil
+	}
+	var problems []error
+	for _, row := range rows.Rows() {
+		if row.W > terrain_chunk.MaxLotSide || row.H > terrain_chunk.MaxLotSide {
+			problems = append(problems, fmt.Errorf("building %d (%s): %d × %d does not fit a %d-node chunk side", row.ID, row.Name, row.W, row.H, terrain_chunk.MaxLotSide))
+		}
+		catalog[row.ID] = Spec{ConfigID: row.ID, Name: row.Name, Model: row.Model, W: row.W, H: row.H,
+			MaxRise: row.MaxRise, MaxCut: row.MaxCut, MustLevel: row.MustLevel}
+	}
+	slots := map[int32][]generated.BuildingParamCfg{}
+	if params, ok := generated.BuildingParamTableFrom(snapshot); ok {
+		for _, row := range params.Rows() {
+			slots[row.Building] = append(slots[row.Building], row)
+		}
+	}
+	for id, rows := range slots {
+		spec, known := catalog[id]
+		if !known {
+			problems = append(problems, fmt.Errorf("building_param rows name building %d, which is not in the building table", id))
+			continue
+		}
+		slices.SortFunc(rows, func(a, b generated.BuildingParamCfg) int { return cmp.Compare(a.Slot, b.Slot) })
+		if len(rows) > MaxParams {
+			problems = append(problems, fmt.Errorf("building %d has %d parameter slots, at most %d", id, len(rows), MaxParams))
+		}
+		names := map[string]bool{}
+		for i, row := range rows {
+			switch {
+			case row.Slot != int32(i):
+				problems = append(problems, fmt.Errorf("building %d: parameter slots must be 0, 1, 2, ... without gaps or repeats; row %d has slot %d where %d is expected", id, row.ID, row.Slot, i))
+			case names[row.Name]:
+				problems = append(problems, fmt.Errorf("building %d: parameter name %q is used twice (row %d)", id, row.Name, row.ID))
+			case row.Min > row.Default || row.Default > row.Max:
+				problems = append(problems, fmt.Errorf("building %d slot %d (%s): want min %d <= default %d <= max %d", id, row.Slot, row.Name, row.Min, row.Default, row.Max))
+			}
+			names[row.Name] = true
+			spec.Params = append(spec.Params, ParamSlot{Name: row.Name, Min: row.Min, Max: row.Max, Default: row.Default})
+		}
+		catalog[id] = spec
+	}
+	if len(problems) > 0 {
+		return nil, fmt.Errorf("%w: %w", ErrCatalog, errors.Join(problems...))
+	}
+	return catalog, nil
+}
+
+// CheckReload 是热更新的附加规则：已有配置 ID 不能删、宽高不能改（站着的建筑的占地记在地形块上，改宽高两边就对不上；
+// 改占地就是新的配置 ID）。参数槽可以加、可以改范围（存量值按 ParamsOf 读），不在这里拦。
+func CheckReload(old, next Catalog) error {
+	var problems []error
+	for id, before := range old {
+		after, kept := next[id]
+		switch {
+		case !kept:
+			problems = append(problems, fmt.Errorf("building %d (%s) was removed; buildings of it may stand in the world", id, before.Name))
+		case after.W != before.W || after.H != before.H:
+			problems = append(problems, fmt.Errorf("building %d (%s): footprint %d × %d -> %d × %d; a new footprint needs a new config id", id, before.Name, before.W, before.H, after.W, after.H))
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%w: %w", ErrCatalog, errors.Join(problems...))
+	}
+	return nil
+}
+
+// catalogCache 是最近一次读到的快照与它的建筑配置：同一快照只合成一次（业务在每次放置时按当前请求钉住的快照查）。
+type catalogEntry struct {
+	snapshot *configdata.Snapshot
+	catalog  Catalog
+	err      error
+}
+
+var catalogCache atomic.Pointer[catalogEntry]
+
+// SpecOf 是当前请求钉住的配置快照（configdata.ActiveSnapshot）里配置 ID 的建筑配置。没有这一行答 ErrUnknownConfig；
+// 配置表本身不合规（启动与热更新的检查会挡住，正常读不到）答 ErrCatalog。
+func SpecOf(configID int32) (Spec, error) {
+	snapshot := configdata.ActiveSnapshot()
+	entry := catalogCache.Load()
+	if entry == nil || entry.snapshot != snapshot {
+		catalog, err := CatalogOf(snapshot)
+		entry = &catalogEntry{snapshot: snapshot, catalog: catalog, err: err}
+		catalogCache.Store(entry)
+	}
+	if entry.err != nil {
+		return Spec{}, entry.err
+	}
+	spec, ok := entry.catalog[configID]
+	if !ok {
+		return Spec{}, fmt.Errorf("%w: %d", ErrUnknownConfig, configID)
+	}
+	return spec, nil
+}

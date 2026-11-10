@@ -47,6 +47,8 @@ type Service struct {
 	cellHandlers   *cellworld.Handlers
 	owners         *PlayerOwners
 	stopFlags      func()
+	// stopBuildingConfig 撤销建筑配置的热更新检查（building_config.go）。
+	stopBuildingConfig func()
 	stopPresence   func()
 	activity       *ActivityRunner
 	stopActivity   func()
@@ -112,6 +114,14 @@ func (s *Service) Init(registry *app.Registry) error {
 	// the chunks of this process's cell are loaded — edited ones from their
 	// records, the rest from the base pack — and published. Without
 	// scene.terrain.pack there is none and nothing else changes.
+	// The building configs (building_config.go) before the terrain: the
+	// terrain's startup reconciliation reads them, and a config table that
+	// breaks a cross-row rule must stop the process here.
+	stopBuildingConfig, err := installBuildingConfig(registry)
+	if err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
+	}
+	s.stopBuildingConfig = stopBuildingConfig
 	terrainMap, err := startTerrain(registry)
 	if err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: %w", err)
@@ -384,6 +394,10 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	if s.stopPresence != nil {
 		s.stopPresence()
 		s.stopPresence = nil
+	}
+	if s.stopBuildingConfig != nil {
+		s.stopBuildingConfig()
+		s.stopBuildingConfig = nil
 	}
 	if s.stopFlags != nil {
 		s.stopFlags()

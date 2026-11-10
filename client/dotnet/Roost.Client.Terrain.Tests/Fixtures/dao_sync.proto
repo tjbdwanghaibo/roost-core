@@ -4,6 +4,63 @@ syntax = "proto3";
 package roost.dao.sync;
 
 // roost:source=go_def
+message SyncBuildingDaoStateField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncBuildingDaoOwnerField {
+  int64 value = 1;
+}
+
+// roost:source=go_def
+message SyncBuildingDaoConfigIDField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncBuildingDaoParamsField {
+  repeated int32 value = 1;
+  bool delta = 2;
+  map<uint64, int32> updates = 3;
+  uint64 length = 4;
+}
+
+// roost:source=go_def
+message SyncBuildingDaoFacingField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncBuildingDaoGXField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncBuildingDaoGYField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncBuildingDaoFoundationField {
+  int32 value = 1;
+}
+
+// roost:source=go_def
+message SyncBuildingDao {
+  int64 entity_id = 1;
+  uint32 sync_format = 2047;
+  SyncBuildingDaoStateField state = 2;
+  SyncBuildingDaoOwnerField owner = 3;
+  SyncBuildingDaoConfigIDField config_id = 4;
+  SyncBuildingDaoParamsField params = 5;
+  SyncBuildingDaoFacingField facing = 6;
+  SyncBuildingDaoGXField gx = 7;
+  SyncBuildingDaoGYField gy = 8;
+  SyncBuildingDaoFoundationField foundation = 11;
+}
+
+// roost:source=go_def
 message SyncTerrainChunkDaoBaseRevisionField {
   int64 value = 1;
 }
