@@ -42,6 +42,12 @@ internal static partial class Program
         TestMesh(pack);
         TestDaoSync(pack, Path.Combine(AppContext.BaseDirectory, "Fixtures", "terrain-chunk-sync.json"));
         TestBuildingSync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "building-sync.json"));
+        TestShoreRules();
+        TestShoreCircle();
+        TestShoreGolden(spec);
+        TestLod();
+        TestChunkBuild(pack);
+        TestRebuildScheduler(pack);
         Console.WriteLine("PASS terrain");
         return 0;
     }

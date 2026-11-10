@@ -1,0 +1,30 @@
+M1 saddle always connected: RED: Unhandled exception. System.Exception: FAIL separated saddle: two polygons
+M2 tied saddle counted as water: RED: Unhandled exception. System.Exception: FAIL tied saddle: water corners separated
+M3 equal-to-level sample counted as water: RED: Unhandled exception. System.Exception: FAIL crossing next to a sample at the water level is 1/20 of a cell away from it
+M4 seam crossing measured from the other end: green: 
+M5 no subdivision: RED: client/dotnet/Roost.Client/Terrain/TerrainShore.cs(444,17): error CS0162: 检测到无法访问的代码 [client/dotnet/Roost.Client/Roost.Client.csproj]
+M6 deviation measured at the parameter midpoint: RED: Unhandled exception. System.Exception: FAIL exact contour point in cell (28,34) is 0.2425038480795984cm from the shoreline, bound 0.24249857858857277
+M7 neighbour levels ignored (no seams): RED: client/dotnet/Roost.Client/Terrain/TerrainShore.cs(279,17): error CS0162: 检测到无法访问的代码 [client/dotnet/Roost.Client/Roost.Client.csproj]
+M8 LOD edge uses own step: RED: Unhandled exception. System.Exception: FAIL lod 0|1: shared edge uses the same vertices
+M9 reads table misses bottom-right: RED: 
+M10 publish ignores seams: RED: client/dotnet/Roost.Client/Terrain/TerrainRebuildScheduler.cs(344,21): error CS0162: 检测到无法访问的代码 [client/dotnet/Roost.Client/Roost.Client.csproj]
+M11 freshness ignores data: RED: Unhandled exception. System.Exception: FAIL edge edit: the old mesh stays shown and is reported expired
+M12 session generation not checked: green: 
+M12b session generation not checked (both places): RED: Unhandled exception. System.Exception: FAIL reconnect: the job from the previous session is not published, though its data did not change since
+M13 terrain generation not checked: green: 
+M14 confirmation not required: RED: Unhandled exception. System.Exception: FAIL scheduler did not settle
+M15 unload keeps confirmation: RED: Unhandled exception. System.Exception: FAIL reload: the base chunk is not used before it is confirmed
+M16 in-flight cap ignored: RED: Unhandled exception. System.Exception: FAIL bounded: executor backlog 6, in flight 6
+M17 pending not deduplicated: RED: Unhandled exception. System.Exception: FAIL late neighbours: published once the overlay is confirmed
+M18 latest-job check removed: green: 
+M19 dirty marks ignore the changed box: RED: Unhandled exception. System.Exception: FAIL edge edit: nothing published with 2 of 4 rebuilds outstanding, got (2,0)
+M20 LOD change does not dirty neighbours: RED: Unhandled exception. System.Exception: FAIL lod change: the chunk and its three in-map edge neighbours rebuild (1)
+M4b seam crossing off by 1e-9 cm (not the canonical Crossing): RED: Unhandled exception. System.Exception: FAIL chain end (3856.4285714285716, 12800) of (0,1) closes on a seam (Top)
+M5b no subdivision: RED: Unhandled exception. System.Exception: FAIL circle: tolerance met within depth (max 0.3627710595056452)
+M7b neighbour levels ignored (no seams): RED: Unhandled exception. System.Exception: FAIL all-water chunk: map-edge and level seams, none towards a same-level neighbour
+M9 reads table misses bottom-right: RED: Unhandled exception. System.InvalidOperationException: build (0,1): sample (64, 63) needs chunk offset (1, -1), which was not captured
+M10b publish ignores seams: RED: Unhandled exception. System.Exception: FAIL edge edit: nothing published with 3 of 4 rebuilds outstanding, got (0,1)
+M13b terrain generation not checked (both places): RED: Unhandled exception. System.Exception: FAIL switch: results of the old terrain are not published, though the heights are identical
+M14b confirmation not required (dispatch and publish): RED: Unhandled exception. System.Exception: FAIL late neighbours: base data of an unconfirmed neighbour is not used
+M21 build reads clamp ignored at map edge (gradient one-sided): RED: Unhandled exception. System.Exception: FAIL central difference
+M12c session generation not checked (both places): RED: Unhandled exception. System.Exception: FAIL reconnect: the job from the previous session is not published, though its data did not change since
