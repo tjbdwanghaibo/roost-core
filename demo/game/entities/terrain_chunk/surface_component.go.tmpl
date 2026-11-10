@@ -270,6 +270,9 @@ func (component *SurfaceComponent) Data() (terrain.Chunk, bool, error) {
 // 玩家请求的判重不在块上（在玩家的编辑账本 terrain_editor），丢弃不影响旧请求的重放被认出来。记录已经不是
 // staleRevision（别的进程或上一次启动已处理、或已按新包改过）时什么都不写，返回 false。
 //
+// 站在这块上的建筑的占地（Lots）不动：建筑在原始地形换版后的处置由地形服务按建筑决定（terrainmap 的建筑对账），块的
+// 丢弃只丢地形改动。
+//
 // 为什么是“重置”而不是删档：TerrainChunk 的 ID 由块坐标确定，DataEngine 删档会留下墓碑，删过档的 ID 不能再用
 // （docs/framework/guide/03-dataengine.md“删档后该 ID 不可再用”），这一块就再也改不了了。重置走同一条正式写路径
 // （Nest 事务 → WAL → 投影），库里留下的是 Version 0 的空记录，装入时按原始块看待。
@@ -307,4 +310,76 @@ func OverlayOf(dao *db.TerrainChunkDao) (overlay terrain.Overlay, ok bool, err e
 		BaseRevision: dao.GetBaseRevision(), Version: dao.GetVersion(),
 		Heights: heightsOf(dao), Materials: materials,
 	}, true, nil
+}
+
+// ---- 建筑占地（可编辑地形 P4）----
+
+// Lots 是站在本块上的建筑的占地（DAO 的 Lots 解包）。记录里有不是本程序写出的值时返回 terrain.ErrInvalidChunk。
+// 只在本块的锁内调用。
+func (component *SurfaceComponent) Lots() ([]Lot, error) {
+	return LotsOf(component.Owner().Dao())
+}
+
+// LotsOf 是 dao 的占地（规则同 SurfaceComponent.Lots）；地形服务启动时用它读没有装成实体的记录。
+func LotsOf(dao *db.TerrainChunkDao) ([]Lot, error) {
+	var lots []Lot
+	var bad error
+	dao.RangeLots(func(i int, v int64) bool {
+		l, err := UnpackLot(v)
+		if err != nil {
+			bad = fmt.Errorf("lot %d: %w", i, err)
+			return false
+		}
+		lots = append(lots, l)
+		return true
+	})
+	return lots, bad
+}
+
+// LotRevision 是占地的修订号（每次 AddLot / RemoveLot 加一）。
+func (component *SurfaceComponent) LotRevision() int64 { return component.Owner().Dao().GetLotRevision() }
+
+// Occupancy 是本块当前的占位（由 Lots 现算，见 OccupancyOf）。只在本块的锁内调用：放置检查重叠、笔刷检查改到建筑脚下，
+// 都读这一份——它与放置 / 拆除在同一把锁、同一笔事务里，所以并发的放置看得见彼此（进程内给行走判定的占位表是提交后
+// 发布的副本，可能晚几毫秒，不能用来做这个检查）。
+func (component *SurfaceComponent) Occupancy() (Occupancy, error) {
+	lots, err := component.Lots()
+	if err != nil {
+		return Occupancy{}, fmt.Errorf("chunk %v: %w", component.Owner().Key(), err)
+	}
+	return OccupancyOf(component.Owner().Key(), lots), nil
+}
+
+// AddLot 把一份占地记进本块（放置事务里，与建筑实体同一笔）：调用方已在锁内确认与已有占地不重叠。本块已有 MaxLots 份
+// 时拒绝、什么都不写。LotRevision 加一。整字段写（Lots 至多 64 项，约几百字节）。
+func (component *SurfaceComponent) AddLot(l Lot) error {
+	dao := component.Owner().Dao()
+	if dao.LotsLen() >= MaxLots {
+		return fmt.Errorf("terrain chunk %v already holds %d building lots", component.Owner().Key(), MaxLots)
+	}
+	lots := make([]int64, 0, dao.LotsLen()+1)
+	dao.RangeLots(func(_ int, v int64) bool { lots = append(lots, v); return true })
+	dao.SetLotsAll(append(lots, l.Pack()))
+	dao.SetLotRevision(dao.GetLotRevision() + 1)
+	return nil
+}
+
+// RemoveLot 从本块去掉一份占地（拆除事务里），返回是否找到；找到时 LotRevision 加一。
+func (component *SurfaceComponent) RemoveLot(l Lot) bool {
+	dao := component.Owner().Dao()
+	packed, found := l.Pack(), false
+	lots := make([]int64, 0, dao.LotsLen())
+	dao.RangeLots(func(_ int, v int64) bool {
+		if v == packed && !found {
+			found = true
+		} else {
+			lots = append(lots, v)
+		}
+		return true
+	})
+	if found {
+		dao.SetLotsAll(lots)
+		dao.SetLotRevision(dao.GetLotRevision() + 1)
+	}
+	return found
 }

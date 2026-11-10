@@ -32,8 +32,9 @@ import (
 //   - 对角（gx、gy 都变）：除了对角本身，两条“先横后竖 / 先竖后横”的正交路线也都要走得通（不切角），移动在拐角
 //     附近无论先进入哪个正交节点都不会被挡。
 //
-// 站立高度：普通节点是地面高度；水深（WaterLevel − 地面）超过 WadeDepth 的节点是“游泳”节点，站立高度取水面
-// WaterLevel（浮在水面上），所以水里节点之间没有高差、上岸按“水面 → 岸上地面”的高差判定。
+// 站立高度：普通节点是地面高度；水深（水位线 − 地面）超过 WadeDepth 的节点是“游泳”节点，站立高度取水面（浮在水面
+// 上），所以同一水位里的节点之间没有高差、上岸按“水面 → 岸上地面”的高差判定。水位线取节点所属块的水位（区域水位或
+// 全局水位，View.WaterLevelOf），与 View.IsWater / WaterDepth 是同一个来源（方案 D3，P4）。
 //
 // 1m 采样下的取值说明：正交一步的坡度上限是 MaxSlope·100/1000 厘米；MaxStep 只在它大于这个值时起作用（缺省 45° 时
 // 1m 内 100 厘米的高差都算坡，MaxStep 50 不起作用，保留给调低坡度上限的玩法）。陡崖在采样间距内是一面“坡”：MaxDrop
@@ -217,40 +218,40 @@ func (w *Walker) Standable(p spatial.Point) bool {
 // Swimming 报告世界坐标 p 所属的节点是不是游泳节点（水深超过 WadeDepth）。地图外返回 ErrOutOfMap，块没装入返回
 // ErrNotLoaded。客户端按同一规则自己算，不需要同步状态。
 func (w *Walker) Swimming(p spatial.Point) (bool, error) {
-	ground, err := w.nodeGround(p)
+	ground, level, err := w.nodeGround(p)
 	if err != nil {
 		return false, err
 	}
-	return w.swims(ground), nil
+	return w.swims(ground, level), nil
 }
 
-// StandZ 返回站在世界坐标 p 的角色的高度（厘米）：游泳节点上是水面 WaterLevel，否则是 p 处的地面高度
+// StandZ 返回站在世界坐标 p 的角色的高度（厘米）：游泳节点上是水面（节点所属块的水位线），否则是 p 处的地面高度
 // （View.Height，双线性插值）。服务端位置只有 X / Y（cellworld EntityState、DAO 都没有 Z），高度由它推出，
 // 客户端同算。错误同 View.Height。
 func (w *Walker) StandZ(p spatial.Point) (int32, error) {
-	ground, err := w.nodeGround(p)
+	ground, level, err := w.nodeGround(p)
 	if err != nil {
 		return 0, err
 	}
-	if w.swims(ground) {
-		return w.View.meta.WaterLevel, nil
+	if w.swims(ground, level) {
+		return level, nil
 	}
 	return w.View.Height(p.X, p.Y)
 }
 
-// nodeGround 返回 p 所属节点的地面高度。
-func (w *Walker) nodeGround(p spatial.Point) (int32, error) {
+// nodeGround 返回 p 所属节点的地面高度与节点所属块的水位线。
+func (w *Walker) nodeGround(p spatial.Point) (ground, level int32, err error) {
 	if err := w.View.inMap(p.X, p.Y); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	c := w.Cell(p)
-	return w.View.Height(c.X*SampleSpacing, c.Y*SampleSpacing)
+	ground, err = w.View.Height(c.X*SampleSpacing, c.Y*SampleSpacing)
+	return ground, w.View.WaterLevelOf(ChunkKey{X: int32(c.X / ChunkSamples), Y: int32(c.Y / ChunkSamples)}), err
 }
 
-// swims 报告地面高度 ground 的节点是不是游泳节点。
-func (w *Walker) swims(ground int32) bool {
-	water := w.View.meta.WaterLevel
-	return ground < water && int64(water)-int64(ground) > int64(w.Rules.WadeDepth)
+// swims 报告地面高度 ground、水位线 level 的节点是不是游泳节点。
+func (w *Walker) swims(ground, level int32) bool {
+	return ground < level && int64(level)-int64(ground) > int64(w.Rules.WadeDepth)
 }
 
 // footingAt 计算节点 (gx, gy) 的 footing。s 非 nil 时块取这次搜索的快照，否则直接读视图的槽位（移动每次判定只读
@@ -273,8 +274,8 @@ func (w *Walker) footingAt(s *search, gx, gy int64) footing {
 	index := int32((gy%ChunkSamples)*ChunkSamples + gx%ChunkSamples)
 	ground := w.View.meta.WorldHeight(c.heights[index])
 	f := footing{stand: ground, speed: 1000, known: true, enter: true}
-	if w.swims(ground) {
-		f.stand = w.View.meta.WaterLevel
+	if level := w.View.water[w.View.meta.index(key)]; w.swims(ground, level) {
+		f.stand = level
 		if w.Rules.SwimSpeed > 0 {
 			f.speed = w.Rules.SwimSpeed
 		} else {

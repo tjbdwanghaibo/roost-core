@@ -138,3 +138,12 @@ func (component *LedgerComponent) Record(seq int64) {
 	dao.SetLastSeq(next.Last)
 	dao.SetWindow(int64(next.Bits))
 }
+
+// Buildings 是这个玩家现在站着的建筑数（可编辑地形 P4）。
+func (component *LedgerComponent) Buildings() int64 { return component.Owner().Dao().GetBuildings() }
+
+// AddBuildings 在放置（+1）/ 拆除（−1）的同一笔事务里改建筑数：事务回滚时由 setter 的逆操作一起撤销。
+func (component *LedgerComponent) AddBuildings(delta int64) {
+	dao := component.Owner().Dao()
+	dao.SetBuildings(dao.GetBuildings() + delta)
+}

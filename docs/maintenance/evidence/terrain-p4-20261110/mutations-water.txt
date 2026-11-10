@@ -1,0 +1,67 @@
+# 水位区域变异（gameplay/terrain，go test -count=1 ./gameplay/terrain）。第一轮 W1 / W5 的写法没编译过或断言不准，第二轮（下半部分）重写后重跑；临时目录已替换为 $TMPDIR。
+# --- 第一轮
+== W1-probe-ignores-regions: exit 1
+   FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain [build failed]
+   FAIL
+== W2-walker-ignores-regions: exit 1
+   --- FAIL: TestWalkerSwimsByTheSameWaterLevelAsTheQueries (0.02s)
+   water_test.go:229: standing in the lake region: speed 1000, defined true; want the swim speed
+   FAIL
+   FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	1.825s
+   FAIL
+== W3-standz-global: exit 1
+   --- FAIL: TestWalkerSwimsByTheSameWaterLevelAsTheQueries (0.01s)
+   water_test.go:208: node (64, 0) swims: stand at 40000, want the water level 45000
+   FAIL
+   FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	1.825s
+   FAIL
+== W4-overlap-not-checked: exit 1
+   --- FAIL: TestWaterRegionsRoundTripAndAreChecked (0.01s)
+   water_test.go:77: overlapping regions: <nil>, want ErrBadPack and ErrInvalidMeta
+   water_test.go:98: writing regions "overlap": <nil>, want ErrInvalidMeta
+   FAIL
+   FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	1.854s
+   FAIL
+== W5-checksum-skips-regions: exit 1
+   --- FAIL: TestClientBrushGolden (0.00s)
+   brush_test.go:471: ../../client/spec/terrain-golden.pack: terrain: bad base pack: header / index checksum mismatch
+   --- FAIL: TestClientTerrainGolden (0.00s)
+   golden_test.go:250: ../../client/spec/terrain-golden.pack: terrain: bad base pack: header / index checksum mismatch
+   --- FAIL: TestWaterRegionsRoundTripAndAreChecked (0.01s)
+   water_test.go:28: $TMPDIR/TestWaterRegionsRoundTripAndAreChecked2882768679/001/map.pack: terrain: bad base pack: header / index checksum mismatch
+   --- FAIL: TestDigALakeFillItBackByTheChunksWaterLevel (0.00s)
+   water_test.go:115: $TMPDIR/TestDigALakeFillItBackByTheChunksWaterLevel1647174557/001/map.pack: terrain: bad base pack: header / index checksum mismatch
+== W6-equal-water-is-water: exit 1
+   --- FAIL: TestIsWaterAgainstWaterLevel (0.01s)
+   view_test.go:254: ground exactly at the water level is water
+   --- FAIL: TestDigALakeFillItBackByTheChunksWaterLevel (0.01s)
+   water_test.go:151: ground raw 4000: water true depth 0, want false 0
+   water_test.go:159: ground filled to the lake surface 450m is still water: {Height:45000 Material:0 Water:true WaterLevel:45000}
+   FAIL
+   FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	1.747s
+   FAIL
+== W7-region-out-of-map-allowed: exit 1
+   --- FAIL: TestWaterRegionsRoundTripAndAreChecked (0.01s)
+   water_test.go:98: writing regions "outside": <nil>, want ErrInvalidMeta
+   FAIL
+   FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	1.762s
+   FAIL
+# --- 第二轮（W1、W5 重写）
+== W1-probe-ignores-regions: exit 1
+   --- FAIL: TestClientTerrainGolden (0.00s)
+   golden_test.go:250: golden queries reach the regional water level in chunks map[], want one per region
+   --- FAIL: TestDigALakeFillItBackByTheChunksWaterLevel (0.01s)
+   water_test.go:130: ground 420m in the 450m lake region: {Height:42000 Material:0 Water:false WaterLevel:40000}, want 30m of water
+   water_test.go:133: WaterDepth in the lake region = 0, <nil>, want 3000
+   water_test.go:136: a region without water: {Height:42000 Material:0 Water:false WaterLevel:40000}
+   --- FAIL: TestWalkerSwimsByTheSameWaterLevelAsTheQueries (0.01s)
+   water_test.go:198: node (64, 0): Swimming true, query water false depth 0 (level 40000)
+== W5-checksum-skips-regions: exit 1
+   --- FAIL: TestClientBrushGolden (0.00s)
+   brush_test.go:471: ../../client/spec/terrain-golden.pack: terrain: bad base pack: header / index checksum mismatch
+   --- FAIL: TestClientTerrainGolden (0.00s)
+   golden_test.go:250: ../../client/spec/terrain-golden.pack: terrain: bad base pack: header / index checksum mismatch
+   --- FAIL: TestWaterRegionsRoundTripAndAreChecked (0.01s)
+   water_test.go:69: a flipped water level: <nil>, want ErrBadPack
+   water_test.go:77: overlapping regions: $TMPDIR/TestWaterRegionsRoundTripAndAreChecked852472626/003/overlapping: terrain: bad base pack: header / index checksum mismatch, want ErrBadPack and ErrInvalidMeta
+   FAIL

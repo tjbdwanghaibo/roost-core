@@ -1,0 +1,745 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math/rand/v2"
+	"os"
+	"path/filepath"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	db "{{MODULE}}/db"
+	building "{{MODULE}}/game/entities/building"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
+	"{{MODULE}}/game/terrainmap"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
+	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
+)
+
+// 建筑（可编辑地形 P4，普通场景）端到端：真实 Nest 引擎与生成的 handler / Sender / lifecycle、真实地形包与视图；持久
+// 层与重启用 terrain_test.go 的替身（memoryChunkStore、persist / restoreEntities）。真实 Mongo 上的同一条重启流程见
+// TestBuildingRestartRealMongo。
+//
+// 测试地图（buildingPack）：3 × 2 块，原始值 5000（500m），全局水位 400m。
+//   - 块 (0,0)、(0,1)、(2,0)：平地。
+//   - 块 (1,0)：缓坡，沿 X 每米升 10cm（4m 宽的 hut 高差 30cm，8m 宽的 hall 高差 70cm）。
+//   - 块 (1,1)：陡坡，沿 X 每米升 1m。
+//   - 块 (2,1)：水位区域 600m，整块在水下。
+// 版本 2：全图抬高 20m（原始值 + 200）；块 (0,1) 加一个 700m 的水位区域（原来的平地在新版本里在水下）。
+
+const (
+	buildingFlat  = uint16(5000)
+	buildingOwner = brushPlayer
+	buildingOther = brushPlayer + 1
+)
+
+func buildingMeta(revision int64) terrain.Meta {
+	meta := terrain.Meta{BaseRevision: revision, ChunksX: 3, ChunksY: 2, WaterLevel: 40000,
+		WaterRegions: []terrain.WaterRegion{{MinX: 2, MinY: 1, MaxX: 3, MaxY: 2, Level: 60000}}}
+	if revision >= 2 {
+		meta.WaterRegions = append(meta.WaterRegions, terrain.WaterRegion{MinX: 0, MinY: 1, MaxX: 1, MaxY: 2, Level: 70000})
+	}
+	return meta
+}
+
+func buildingGround(revision int64) terrain.ChunkSource {
+	lift := uint16(0)
+	if revision >= 2 {
+		lift = 200
+	}
+	return func(key terrain.ChunkKey) (terrain.Chunk, error) {
+		c := terrain.NewChunk()
+		for i := range c.Heights {
+			h := buildingFlat
+			switch key {
+			case terrain.ChunkKey{X: 1, Y: 0}:
+				h += uint16(i % terrain.ChunkSamples)
+			case terrain.ChunkKey{X: 1, Y: 1}:
+				h += 10 * uint16(i%terrain.ChunkSamples)
+			}
+			c.Heights[i], c.Materials[i] = h+lift, 3
+		}
+		return c, nil
+	}
+}
+
+func buildingPack(t *testing.T, dir string, revision int64) string {
+	t.Helper()
+	path := filepath.Join(dir, fmt.Sprintf("building-r%d.pack", revision))
+	if err := terrain.WritePackFile(path, buildingMeta(revision), buildingGround(revision)); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// buildingProcess 是接建筑的普通场景进程：玩家编辑不限频（配额另有用例），edit 可以再改 Policy。
+func buildingProcess(t *testing.T, pack string, store *memoryChunkStore, edit func(*terrainmap.Policy)) *terrainProcess {
+	t.Helper()
+	return startTerrainProcessWith(t, pack, wholeMap, store, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.EditPointsPerSecond = 0
+		if edit != nil {
+			edit(&policy)
+		}
+		p.m.SetPolicy(policy)
+	})
+}
+
+func hut(gx, gy int64) building.Placement { return building.Placement{Kind: 1, GX: gx, GY: gy} }
+func hall(gx, gy int64, level bool) building.Placement {
+	return building.Placement{Kind: 2, GX: gx, GY: gy, Level: level}
+}
+
+// buildingAt 是锚点 (gx, gy) 上建筑实体的状态；没有实体时是零值。
+func buildingAt(t *testing.T, p *terrainProcess, gx, gy int64) building.State {
+	t.Helper()
+	id, err := building.EntityID(gx, gy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := p.entities.Get(id).(*building.Building); e != nil {
+		return e.SiteComp().State()
+	}
+	return building.State{}
+}
+
+// chunkLots 是块实体 DAO 里记的占地（没有实体时 nil）。
+func chunkLots(t *testing.T, p *terrainProcess, key terrain.ChunkKey) []terrain_chunk.Lot {
+	t.Helper()
+	e, _ := p.entities.Get(mustChunkID(t, key)).(*terrain_chunk.TerrainChunk)
+	if e == nil {
+		return nil
+	}
+	lots, err := terrain_chunk.LotsOf(e.Dao())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lots
+}
+
+// buildingsOf 是本进程全部站着的建筑。
+func buildingsOf(p *terrainProcess) []building.State {
+	var out []building.State
+	p.entities.Range(func(e entity.IThreadSafeEntity) bool {
+		if b, ok := e.(*building.Building); ok && b != nil {
+			if s := b.SiteComp().State(); s.Standing {
+				out = append(out, s)
+			}
+		}
+		return true
+	})
+	slices.SortFunc(out, func(a, b building.State) int { return int(a.ID - b.ID) })
+	return out
+}
+
+// ledgerBuildings 是玩家编辑账本记的建筑数（没有账本时 0）。
+func ledgerBuildings(t *testing.T, p *terrainProcess, player int64) int64 {
+	t.Helper()
+	id, err := terrain_editor.EntityID(player)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _ := p.entities.Get(id).(*terrain_editor.TerrainEditor); e != nil {
+		return e.LedgerComp().Buildings()
+	}
+	return 0
+}
+
+// checkBuildingRecords 是建筑对账的不变式（每个用例收尾都查）：站着的建筑两两不重叠；每座建筑的占地记在它覆盖的
+// 每一块上，每一块记的占地都有一座站着的、锚点与占地相同的建筑；行走判定的占位表逐点等于站着的建筑占地的并集；每个
+// 玩家账本的建筑数等于他站着的建筑数。
+func checkBuildingRecords(t *testing.T, p *terrainProcess) {
+	t.Helper()
+	standing := buildingsOf(p)
+	byLot := map[terrain_chunk.Lot]building.State{}
+	owners := map[int64]int64{}
+	for i, b := range standing {
+		for _, o := range standing[i+1:] {
+			if b.Lot.Overlaps(o.Lot) {
+				t.Fatalf("buildings %v and %v overlap", b.Lot, o.Lot)
+			}
+		}
+		if gx, gy := building.AnchorOf(b.ID); gx != b.Lot.GX || gy != b.Lot.GY {
+			t.Fatalf("building %d anchored at (%d, %d) holds the lot %v", b.ID, gx, gy, b.Lot)
+		}
+		byLot[b.Lot] = b
+		owners[b.Owner]++
+		for _, key := range b.Lot.Chunks() {
+			if !slices.Contains(chunkLots(t, p, key), b.Lot) {
+				t.Fatalf("chunk %v does not record the lot of building %v", key, b.Lot)
+			}
+		}
+	}
+	for _, key := range p.m.Keys() {
+		lots := chunkLots(t, p, key)
+		for _, l := range lots {
+			if _, ok := byLot[l]; !ok {
+				t.Fatalf("chunk %v records the lot %v and no building stands on it", key, l)
+			}
+		}
+		want := terrain_chunk.OccupancyOf(key, lots)
+		for index := int32(0); index < terrain.ChunkPoints; index++ {
+			if p.m.Occupied(key, index) != want.Has(index) {
+				t.Fatalf("chunk %v point %d: walkers see occupied %v, the chunk's lots say %v", key, index, p.m.Occupied(key, index), want.Has(index))
+			}
+		}
+	}
+	for _, player := range []int64{buildingOwner, buildingOther} {
+		if got := ledgerBuildings(t, p, player); got != owners[player] {
+			t.Fatalf("player %d's ledger counts %d buildings, %d stand", player, got, owners[player])
+		}
+	}
+}
+
+// buildingSnapshot 是会被放置 / 拆除写到的全部状态：每块（DAO、视图），全部建筑实体，两个玩家的账本与提交数。
+type buildingSnapshot struct {
+	chunks    map[terrain.ChunkKey]chunkState
+	lots      map[terrain.ChunkKey][]terrain_chunk.Lot
+	buildings []building.State
+	ledgers   [2]terrain_editor.SeqWindow
+	counts    [2]int64
+	commits   int64
+}
+
+func snapshotBuildings(t *testing.T, p *terrainProcess) buildingSnapshot {
+	t.Helper()
+	s := buildingSnapshot{chunks: allStates(t, p), lots: map[terrain.ChunkKey][]terrain_chunk.Lot{}, commits: p.committer.commits.Load()}
+	for _, key := range p.m.Keys() {
+		s.lots[key] = chunkLots(t, p, key)
+	}
+	p.entities.Range(func(e entity.IThreadSafeEntity) bool {
+		if b, ok := e.(*building.Building); ok && b != nil {
+			s.buildings = append(s.buildings, b.SiteComp().State())
+		}
+		return true
+	})
+	slices.SortFunc(s.buildings, func(a, b building.State) int { return int(a.ID - b.ID) })
+	for i, player := range []int64{buildingOwner, buildingOther} {
+		s.ledgers[i], s.counts[i] = ledgerOf(t, p, player), ledgerBuildings(t, p, player)
+	}
+	return s
+}
+
+func (s buildingSnapshot) equal(o buildingSnapshot) bool {
+	if !sameStates(s.chunks, o.chunks) || s.ledgers != o.ledgers || s.counts != o.counts || s.commits != o.commits {
+		return false
+	}
+	for key, lots := range s.lots {
+		if !slices.Equal(lots, o.lots[key]) {
+			return false
+		}
+	}
+	// 拒绝之前可以建出（冷加载）空的建筑实体：只比较站着的。
+	standing := func(states []building.State) []building.State {
+		return slices.DeleteFunc(slices.Clone(states), func(b building.State) bool { return !b.Standing })
+	}
+	return slices.Equal(standing(s.buildings), standing(o.buildings))
+}
+
+// 放置的校验：每一种拒绝都在写任何东西之前（块、视图、建筑、账本、提交数都不变）；合规的放置写下建筑、每块的占地、
+// 账本的序号与建筑数，行走判定随即看到占位。
+func TestBuildingPlacementChecks(t *testing.T) {
+	p := buildingProcess(t, buildingPack(t, t.TempDir(), 1), &memoryChunkStore{}, func(policy *terrainmap.Policy) { policy.MaxBuildings = 3 })
+	seq := uint64(0)
+	next := func() uint64 { seq++; return seq }
+
+	placed, err := p.m.Place(p.ctx, buildingOwner, next(), hut(10, 10))
+	if err != nil || placed.Duplicate || !placed.Building.Standing || placed.Building.Leveled {
+		t.Fatalf("a hut on flat ground: %+v, %v", placed, err)
+	}
+	if got := buildingAt(t, p, 10, 10); got.Owner != buildingOwner || got.Lot != (terrain_chunk.Lot{GX: 10, GY: 10, W: 4, H: 4}) || got.BaseRevision != 1 {
+		t.Fatalf("the hut's record: %+v", got)
+	}
+	if v, _ := p.m.View().Version(terrain.ChunkKey{}); v != 0 {
+		t.Fatalf("an unlevelled building changed the terrain: chunk version %d", v)
+	}
+	checkBuildingRecords(t, p)
+
+	for _, c := range []struct {
+		name string
+		p    building.Placement
+		want error
+	}{
+		{"the same lot", hut(10, 10), terrainmap.ErrOccupied},
+		{"a lot overlapping one node", hut(13, 13), terrainmap.ErrOccupied},
+		{"another kind on the anchor", building.Placement{Kind: 3, GX: 10, GY: 10}, terrainmap.ErrOccupied},
+		{"under the regional water level", hut(140, 80), terrainmap.ErrUnderwater},
+		{"a hall across a 70cm slope, not levelled", hall(70, 10, false), terrainmap.ErrSlope},
+		{"a hall across a 7m slope, levelled", hall(70, 70, true), terrainmap.ErrSlope},
+		{"an unknown kind", building.Placement{Kind: 9, GX: 30, GY: 30}, terrainmap.ErrBuild},
+		{"a bad facing", building.Placement{Kind: 1, GX: 30, GY: 30, Facing: 4}, terrainmap.ErrBuild},
+		{"off the map's edge", hut(190, 10), terrainmap.ErrBuild},
+		{"a negative anchor", hut(-1, 10), terrainmap.ErrBuild},
+	} {
+		before := snapshotBuildings(t, p)
+		if _, err := p.m.Place(p.ctx, buildingOwner, next(), c.p); !errors.Is(err, c.want) {
+			t.Fatalf("%s: %v, want %v", c.name, err, c.want)
+		}
+		if !before.equal(snapshotBuildings(t, p)) {
+			t.Fatalf("%s: a refused placement wrote something", c.name)
+		}
+	}
+	// 拒绝没有用掉序号：账本只记成功的那一笔（跳号可以，下一笔照常）。
+	if got := ledgerOf(t, p, buildingOwner); got.Last != 1 {
+		t.Fatalf("refusals moved the ledger: %+v", got)
+	}
+
+	// 整平：hall 跨块 (0,0)/(1,0)，原始值 5000×4 列 + 5000..5003，平均 5000.75 → 5001；两块都写，版本加一。
+	levelled, err := p.m.Place(p.ctx, buildingOwner, next(), hall(60, 20, true))
+	if err != nil || !levelled.Building.Leveled || levelled.Building.Foundation != 50010 {
+		t.Fatalf("a levelled hall across two chunks: %+v, %v", levelled, err)
+	}
+	if want := []terrain_chunk.ChunkVersion{{Key: terrain.ChunkKey{X: 0, Y: 0}, Version: 1}, {Key: terrain.ChunkKey{X: 1, Y: 0}, Version: 1}}; !slices.Equal(levelled.Chunks, want) {
+		t.Fatalf("chunk versions %v, want %v", levelled.Chunks, want)
+	}
+	for gy := int64(20); gy < 26; gy++ {
+		for gx := int64(60); gx < 68; gx++ {
+			if h := sampleHeight(t, p.m, gx, gy); h != 50010 {
+				t.Fatalf("node (%d, %d) at %d cm after levelling, want 50010", gx, gy, h)
+			}
+		}
+	}
+	if h := sampleHeight(t, p.m, 68, 20); h != 50000+4*10 {
+		t.Fatalf("levelling touched node (68, 20) outside the lot: %d", h)
+	}
+	checkBuildingRecords(t, p)
+
+	// 上限 3：第三座可以，第四座答 ErrBuildingLimit；别的玩家有自己的上限。
+	if _, err := p.m.Place(p.ctx, buildingOwner, next(), hut(30, 30)); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotBuildings(t, p)
+	if _, err := p.m.Place(p.ctx, buildingOwner, next(), hut(40, 40)); !errors.Is(err, terrainmap.ErrBuildingLimit) {
+		t.Fatalf("a fourth building with a limit of 3: %v", err)
+	}
+	if !before.equal(snapshotBuildings(t, p)) {
+		t.Fatal("a placement over the limit wrote something")
+	}
+	if _, err := p.m.Place(p.ctx, buildingOther, 1, hut(40, 40)); err != nil {
+		t.Fatalf("another player's first building: %v", err)
+	}
+	checkBuildingRecords(t, p)
+}
+
+// 放置与地形编辑共用（玩家, 序号）与同一份账本：同一笔重发答 Duplicate、只建一座；用过的序号（笔刷用的也算）答
+// Duplicate 什么都不做；跳得太远答 *SeqError。
+func TestBuildingPlacementAppliesOncePerSeq(t *testing.T) {
+	p := buildingProcess(t, buildingPack(t, t.TempDir(), 1), &memoryChunkStore{}, nil)
+	first, err := p.m.Place(p.ctx, buildingOwner, 1, hut(10, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := p.m.Place(p.ctx, buildingOwner, 1, hut(10, 10))
+	if err != nil || !again.Duplicate || again.Building != first.Building {
+		t.Fatalf("the same placement again: %+v, %v", again, err)
+	}
+	if _, err := p.m.Brush(p.ctx, buildingOwner, 2, terrain.Brush{Op: terrain.BrushPaint, X: 9000, Y: 9000, Radius: 300, Material: 9}); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotBuildings(t, p)
+	if r, err := p.m.Place(p.ctx, buildingOwner, 2, hut(30, 30)); err != nil || !r.Duplicate {
+		t.Fatalf("a placement on the brush's sequence: %+v, %v", r, err)
+	}
+	var seqErr *terrainmap.SeqError
+	if _, err := p.m.Place(p.ctx, buildingOwner, 2+terrain_editor.MaxSeqAhead+1, hut(30, 30)); !errors.As(err, &seqErr) || seqErr.Verdict != terrain_editor.Ahead {
+		t.Fatalf("a sequence too far ahead: %v", err)
+	}
+	if !before.equal(snapshotBuildings(t, p)) {
+		t.Fatal("a duplicate or out-of-window placement wrote something")
+	}
+	if got := ledgerBuildings(t, p, buildingOwner); got != 1 {
+		t.Fatalf("ledger counts %d buildings, want 1", got)
+	}
+	checkBuildingRecords(t, p)
+}
+
+// 拆除：只有属主能拆；锚点上没有建筑答 ErrNoBuilding、不建任何实体；拆除后占位与账本建筑数都回去，地形（整平过的
+// 地基）不复原；同一锚点可以再放（建筑记录是清空，不是删档）。
+func TestBuildingRemoval(t *testing.T) {
+	p := buildingProcess(t, buildingPack(t, t.TempDir(), 1), &memoryChunkStore{}, nil)
+	if _, err := p.m.Place(p.ctx, buildingOwner, 1, hall(60, 20, true)); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotBuildings(t, p)
+	if _, err := p.m.Remove(p.ctx, buildingOther, 1, 60, 20); !errors.Is(err, terrainmap.ErrDenied) {
+		t.Fatalf("removing another player's building: %v", err)
+	}
+	empty, err := building.EntityID(30, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.m.Remove(p.ctx, buildingOwner, 2, 30, 30); !errors.Is(err, terrainmap.ErrNoBuilding) || p.entities.Get(empty) != nil {
+		t.Fatalf("removing nothing: %v (entity created: %v)", err, p.entities.Get(empty) != nil)
+	}
+	if _, err := p.m.Remove(p.ctx, buildingOwner, 2, 61, 20); !errors.Is(err, terrainmap.ErrNoBuilding) {
+		t.Fatalf("removing by a node that is not the anchor: %v", err)
+	}
+	if !before.equal(snapshotBuildings(t, p)) {
+		t.Fatal("a refused removal wrote something")
+	}
+	removed, err := p.m.Remove(p.ctx, buildingOwner, 2, 60, 20)
+	if err != nil || removed.Building.Standing {
+		t.Fatalf("the owner removes it: %+v, %v", removed, err)
+	}
+	// 重发已生效的拆除：锚点上已经没有建筑，答 ErrNoBuilding（不是 Duplicate：没有建筑就不进事务、不建实体；对客户端
+	// 两者的结论相同——建筑已不在）。
+	if _, err := p.m.Remove(p.ctx, buildingOwner, 2, 60, 20); !errors.Is(err, terrainmap.ErrNoBuilding) {
+		t.Fatalf("the same removal again: %v", err)
+	}
+	if h := sampleHeight(t, p.m, 60, 20); h != 50010 {
+		t.Fatalf("the levelled foundation was restored on removal: %d", h)
+	}
+	checkBuildingRecords(t, p)
+	if _, err := p.m.Place(p.ctx, buildingOwner, 3, hut(60, 20)); err != nil {
+		t.Fatalf("a new building on the same anchor: %v", err)
+	}
+	checkBuildingRecords(t, p)
+}
+
+// 笔刷改到建筑脚下的节点答 ErrOccupied、什么都不写（块的锁里读块的 Lots）；改旁边不受影响。
+func TestBrushUnderABuildingIsRefused(t *testing.T) {
+	p := buildingProcess(t, buildingPack(t, t.TempDir(), 1), &memoryChunkStore{}, nil)
+	if _, err := p.m.Place(p.ctx, buildingOwner, 1, hut(10, 10)); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotBuildings(t, p)
+	if _, err := p.m.Brush(p.ctx, buildingOther, 1, terrain.Brush{Op: terrain.BrushRaise, X: 1200, Y: 1200, Radius: 150, Strength: 10}); !errors.Is(err, terrainmap.ErrOccupied) {
+		t.Fatalf("a brush under the hut: %v", err)
+	}
+	if !before.equal(snapshotBuildings(t, p)) {
+		t.Fatal("a brush refused for a building wrote something")
+	}
+	if _, err := p.m.Brush(p.ctx, buildingOther, 2, terrain.Brush{Op: terrain.BrushRaise, X: 2500, Y: 2500, Radius: 300, Strength: 10}); err != nil {
+		t.Fatalf("a brush next to the hut: %v", err)
+	}
+}
+
+// 行走与寻路绕开建筑：Walker.Occupied 读提交后发布的占位表；拆除后又能走。
+func TestWalkersGoAroundBuildings(t *testing.T) {
+	p := buildingProcess(t, buildingPack(t, t.TempDir(), 1), &memoryChunkStore{}, nil)
+	lot := terrain_chunk.Lot{GX: 20, GY: 20, W: 8, H: 6}
+	from, to := spatial.Point{X: 1500, Y: 2200}, spatial.Point{X: 3300, Y: 2200}
+	through := func() bool {
+		t.Helper()
+		w := p.m.Walker()
+		route, err := w.FindPath(from, to, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, pt := range route.Points {
+			if cell := w.Cell(pt); lot.Contains(cell.X, cell.Y) {
+				return true
+			}
+		}
+		return false
+	}
+	if !through() {
+		t.Fatal("before the building the straight route does not cross its lot; the test would prove nothing")
+	}
+	if _, err := p.m.Place(p.ctx, buildingOwner, 1, hall(20, 20, false)); err != nil {
+		t.Fatal(err)
+	}
+	if through() {
+		t.Fatal("the route still crosses the building")
+	}
+	w := p.m.Walker()
+	if _, ok := w.Step(spatial.Point{X: 19, Y: 22}, spatial.Point{X: 20, Y: 22}); ok {
+		t.Fatal("a walker steps into the building")
+	}
+	if _, err := p.m.Remove(p.ctx, buildingOwner, 2, 20, 20); err != nil {
+		t.Fatal(err)
+	}
+	if !through() {
+		t.Fatal("after the removal the route still goes around")
+	}
+}
+
+// 并发放置不重叠：16 个玩家各 12 次在 30m × 20m 的一片地上（跨块 (0,0)/(1,0)）随机放 hut。串行化点是块的锁：两份
+// 占地有公共节点就有公共的块，Nest 按块串行，后到的在锁里看见前一笔的 Lots。成功的都站着、两两不重叠，块的记录、
+// 占位表与账本建筑数一致；失败的只有 ErrOccupied。
+func TestBuildingConcurrentPlacementsNeverOverlap(t *testing.T) {
+	p := buildingProcess(t, buildingPack(t, t.TempDir(), 1), &memoryChunkStore{}, func(policy *terrainmap.Policy) { policy.MaxBuildings = 64 })
+	const players, attempts = 16, 12
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		placed  int
+		refused int
+		failure error
+	)
+	for i := range players {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			player := buildingOwner + 100 + int64(i)
+			rng := rand.New(rand.NewPCG(20261110, uint64(i)))
+			for seq := uint64(1); seq <= attempts; seq++ {
+				_, err := p.m.Place(p.ctx, player, seq, hut(44+rng.Int64N(27), 10+rng.Int64N(17)))
+				mu.Lock()
+				switch {
+				case err == nil:
+					placed++
+				case errors.Is(err, terrainmap.ErrOccupied):
+					refused++
+				case failure == nil:
+					failure = err
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if failure != nil {
+		t.Fatal(failure)
+	}
+	standing := buildingsOf(p)
+	if len(standing) != placed || placed == 0 || refused == 0 {
+		t.Fatalf("%d placed, %d refused, %d standing: want every success standing and some contention", placed, refused, len(standing))
+	}
+	checkBuildingRecords(t, p)
+	counts := map[int64]int64{}
+	for _, b := range standing {
+		counts[b.Owner]++
+	}
+	for player, n := range counts {
+		if got := ledgerBuildings(t, p, player); got != n {
+			t.Fatalf("player %d's ledger counts %d buildings, %d stand", player, got, n)
+		}
+	}
+	t.Logf("%d placed, %d refused as occupied", placed, refused)
+}
+
+// 重启一致：建筑、每块的占地、占位表、账本的建筑数（上限照样生效）与序号都从“库”里原样读回；重启后照常拆除。
+func TestBuildingsSurviveARestart(t *testing.T) {
+	dir := t.TempDir()
+	pack := buildingPack(t, dir, 1)
+	store := &memoryChunkStore{}
+	limit := func(policy *terrainmap.Policy) { policy.MaxBuildings = 3 }
+	p := buildingProcess(t, pack, store, limit)
+	for i, place := range []building.Placement{hut(10, 10), hall(60, 20, true), {Kind: 3, GX: 63, GY: 63}} {
+		if _, err := p.m.Place(p.ctx, buildingOwner, uint64(i+1), place); err != nil {
+			t.Fatalf("placement %d: %v", i, err)
+		}
+	}
+	if _, err := p.m.Place(p.ctx, buildingOther, 1, hut(100, 40)); err != nil {
+		t.Fatal(err)
+	}
+	checkBuildingRecords(t, p)
+	want, terrainBefore := buildingsOf(p), snapshotTerrain(p.m)
+	p.stop()
+	p.persist(store)
+
+	q := buildingProcess(t, pack, store, limit)
+	if q.buildingStats != (terrainmap.BuildingStats{Standing: 4}) {
+		t.Fatalf("reconcile after a restart on the same pack: %+v", q.buildingStats)
+	}
+	// 冷加载：对账已经把每座建筑装成实体。
+	if got := buildingsOf(q); !slices.Equal(got, want) {
+		t.Fatalf("buildings after the restart:\n%+v\nwant\n%+v", got, want)
+	}
+	if after := snapshotTerrain(q.m); !slices.Equal(after.ground, terrainBefore.ground) {
+		t.Fatal("the terrain differs after the restart")
+	}
+	checkBuildingRecords(t, q)
+	if _, err := q.m.Place(q.ctx, buildingOwner, 4, hut(30, 30)); !errors.Is(err, terrainmap.ErrBuildingLimit) {
+		t.Fatalf("the limit after the restart: %v", err)
+	}
+	if r, err := q.m.Place(q.ctx, buildingOwner, 3, building.Placement{Kind: 3, GX: 63, GY: 63}); err != nil || !r.Duplicate {
+		t.Fatalf("the last placement replayed after the restart: %+v, %v", r, err)
+	}
+	if _, err := q.m.Remove(q.ctx, buildingOwner, 5, 63, 63); err != nil {
+		t.Fatalf("removal after the restart: %v", err)
+	}
+	checkBuildingRecords(t, q)
+}
+
+// 原始地形换版（D13，方案 §25 待确认的推荐做法）：块的地形改动丢弃，建筑与占地保留；整平过地基的在新地形上重新整平到
+// 原来的地基世界高度，不合规的（新版本里在水下）保留并计 Unfit；建筑记下新版本，再重启不再处置。对账前后建筑集合、
+// 块的记录、占位表、账本一致。
+func TestBuildingsAcrossABaseRevision(t *testing.T) {
+	dir := t.TempDir()
+	store := &memoryChunkStore{}
+	p := buildingProcess(t, buildingPack(t, dir, 1), store, nil)
+	for i, place := range []building.Placement{hut(10, 10), hall(60, 20, true), hut(10, 80)} {
+		if _, err := p.m.Place(p.ctx, buildingOwner, uint64(i+1), place); err != nil {
+			t.Fatalf("placement %d: %v", i, err)
+		}
+	}
+	want := buildingsOf(p)
+	p.stop()
+	p.persist(store)
+
+	pack2 := buildingPack(t, dir, 2)
+	q := buildingProcess(t, pack2, store, nil)
+	if q.stats.Discarded != 2 {
+		t.Fatalf("discarded %d chunk records, want the 2 the levelling wrote", q.stats.Discarded)
+	}
+	if want := (terrainmap.BuildingStats{Standing: 3, Rebased: 3, Unfit: 1}); q.buildingStats != want {
+		t.Fatalf("reconcile across the revision: %+v, want %+v", q.buildingStats, want)
+	}
+	got := buildingsOf(q)
+	if len(got) != len(want) {
+		t.Fatalf("buildings after the revision: %+v", got)
+	}
+	for i := range got {
+		w := want[i]
+		w.BaseRevision = 2
+		if got[i] != w {
+			t.Fatalf("building %d after the revision: %+v, want %+v", i, got[i], w)
+		}
+	}
+	for gy := int64(20); gy < 26; gy++ {
+		for gx := int64(60); gx < 68; gx++ {
+			if h := sampleHeight(t, q.m, gx, gy); h != 50010 {
+				t.Fatalf("node (%d, %d) at %d cm on the new base, want the old foundation 50010", gx, gy, h)
+			}
+		}
+	}
+	if h := sampleHeight(t, q.m, 59, 20); h != 52000 {
+		t.Fatalf("node (59, 20) outside the lot: %d cm, want the new base 52000", h)
+	}
+	checkBuildingRecords(t, q)
+	q.stop()
+	q.persist(store)
+
+	r := buildingProcess(t, pack2, store, nil)
+	if want := (terrainmap.BuildingStats{Standing: 3}); r.buildingStats != want {
+		t.Fatalf("reconcile on the same revision again: %+v, want %+v", r.buildingStats, want)
+	}
+	checkBuildingRecords(t, r)
+}
+
+// 建筑记录与块的占地对不上（正常不会发生：两者总在同一笔事务里写；这里删掉“库”里的建筑文档造出来）：对账计
+// Mismatched、什么都不改，占位照旧挡路。
+func TestBuildingReconcileReportsAMismatch(t *testing.T) {
+	store := &memoryChunkStore{}
+	pack := buildingPack(t, t.TempDir(), 1)
+	p := buildingProcess(t, pack, store, nil)
+	if _, err := p.m.Place(p.ctx, buildingOwner, 1, hut(10, 10)); err != nil {
+		t.Fatal(err)
+	}
+	p.stop()
+	p.persist(store)
+	id, err := building.EntityID(10, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(store.docs, id)
+
+	q := buildingProcess(t, pack, store, nil)
+	if want := (terrainmap.BuildingStats{Standing: 1, Mismatched: 1}); q.buildingStats != want {
+		t.Fatalf("reconcile: %+v, want %+v", q.buildingStats, want)
+	}
+	if !slices.Equal(chunkLots(t, q, terrain.ChunkKey{}), []terrain_chunk.Lot{{GX: 10, GY: 10, W: 4, H: 4}}) {
+		t.Fatal("the mismatch was changed")
+	}
+	key, index := terrain.PointIndex(1100, 1100)
+	if !q.m.Occupied(key, int32(index)) {
+		t.Fatal("the lot no longer blocks walkers")
+	}
+}
+
+// 分区场景（没有 EnableBuildings，见 startTerrain）不接建筑：放置、拆除答 ErrBuildingsDisabled，什么都不写。
+func TestBuildingsAreRefusedWithoutEnableBuildings(t *testing.T) {
+	p := startTerrainProcessWith(t, buildingPack(t, t.TempDir(), 1), wholeMap, &memoryChunkStore{}, func(p *terrainProcess) {
+		p.m.EnableBuildings(nil, nil)
+	})
+	if p.m.BuildingsEnabled() {
+		t.Fatal("buildings enabled")
+	}
+	before := snapshotBuildings(t, p)
+	if _, err := p.m.Place(p.ctx, buildingOwner, 1, hut(10, 10)); !errors.Is(err, terrainmap.ErrBuildingsDisabled) {
+		t.Fatalf("place: %v", err)
+	}
+	if _, err := p.m.Remove(p.ctx, buildingOwner, 1, 10, 10); !errors.Is(err, terrainmap.ErrBuildingsDisabled) {
+		t.Fatalf("remove: %v", err)
+	}
+	if !before.equal(snapshotBuildings(t, p)) {
+		t.Fatal("a refused placement wrote something")
+	}
+}
+
+// 真实 Mongo 上的建筑重启（门变量同 TestTerrainRestartRealMongo）：放置（一座整平、跨两块）与拆除都是 strict 事务 →
+// WAL → 投影，库里有两份建筑文档（拆掉的那份是清空的记录）；重启后对账找到站着的那座、占位与地基高度都在；换版
+// （BaseRevision 2）后建筑留着、地基按原世界高度重新整平。
+func TestBuildingRestartRealMongo(t *testing.T) {
+	uri := os.Getenv("ROOST_TERRAIN_IT_MONGO_URI")
+	if uri == "" {
+		t.Skip("ROOST_TERRAIN_IT_MONGO_URI not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	client, err := mongodriver.NewClient(fmongo.DefaultConfig(uri), mongodriver.IndexMigrationPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close(context.Background()) })
+	physical := fmt.Sprintf("terrain_building_it_%d", time.Now().UnixNano())
+	t.Cleanup(func() { _ = client.Database(physical).Drop(context.Background()) })
+	databases, _, err := coredata.NewDatabaseMap(coredata.DatabaseMapConfig{
+		Declared: coredata.DeclaredDatabases(), Configured: map[string]string{db.TerrainChunkDaoDBName: physical},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	pack := buildingPack(t, dir, 1)
+	walDir := filepath.Join(dir, "wal")
+	occupied := func(m *terrainmap.Map, gx, gy int64) bool {
+		key, index := terrain.PointIndex(gx*terrain.SampleSpacing, gy*terrain.SampleSpacing)
+		return m.Occupied(key, int32(index))
+	}
+
+	first := startRealTerrainProcess(t, ctx, client, databases, physical, walDir, pack)
+	first.m.SetPolicy(func() terrainmap.Policy { p := terrainmap.DefaultPolicy; p.EditPointsPerSecond = 0; return p }())
+	if _, err := first.m.Place(ctx, buildingOwner, 1, hall(60, 20, true)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.m.Place(ctx, buildingOwner, 2, hut(10, 10)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.m.Remove(ctx, buildingOwner, 3, 10, 10); err != nil {
+		t.Fatal(err)
+	}
+	first.stop(t)
+	count, err := client.Database(physical).Collection(db.BuildingDaoCollection).CountDocuments(ctx, map[string]any{})
+	if err != nil || count != 2 {
+		t.Fatalf("%d building documents in Mongo (%v), want 2", count, err)
+	}
+
+	second := startRealTerrainProcess(t, ctx, client, databases, physical, walDir, pack)
+	if second.buildingStats != (terrainmap.BuildingStats{Standing: 1}) {
+		t.Fatalf("reconcile after the restart: %+v", second.buildingStats)
+	}
+	if !occupied(second.m, 60, 20) || !occupied(second.m, 67, 25) || occupied(second.m, 10, 10) || occupied(second.m, 68, 20) {
+		t.Fatal("the occupancy after the restart differs from the buildings")
+	}
+	if h := sampleHeight(t, second.m, 64, 22); h != 50010 {
+		t.Fatalf("the foundation after the restart: %d cm", h)
+	}
+	if _, err := second.m.Place(ctx, buildingOwner, 3, hut(10, 10)); err != nil {
+		t.Fatalf("a replay of the removal's sequence: %v", err) // 3 已用过：答 Duplicate，不报错
+	}
+	if occupied(second.m, 10, 10) {
+		t.Fatal("a placement on a used sequence built something")
+	}
+	second.stop(t)
+
+	third := startRealTerrainProcess(t, ctx, client, databases, physical, walDir, buildingPack(t, dir, 2))
+	if third.buildingStats != (terrainmap.BuildingStats{Standing: 1, Rebased: 1}) || third.stats.Discarded != 2 {
+		t.Fatalf("start on revision 2: buildings %+v, load %+v", third.buildingStats, third.stats)
+	}
+	if h := sampleHeight(t, third.m, 64, 22); h != 50010 || !occupied(third.m, 60, 20) {
+		t.Fatalf("the foundation on revision 2: %d cm (occupied %v)", h, occupied(third.m, 60, 20))
+	}
+	third.stop(t)
+}

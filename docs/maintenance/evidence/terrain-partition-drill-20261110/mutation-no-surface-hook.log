@@ -1,0 +1,9 @@
+seamless: work dir <tmp>, evidence <scratch>/ev-mut
+seamless: project hook: sed -i '' 's/cfg.Surface = partitionSurface(m, grid)/_ = partitionSurface/' internal/service/game/partition.go && ! grep -q 'cfg.Surface =' internal/service/game/partition.go
+2026/11/10 08:48:06 INFO bus: subscribed subject=cwdemo.svc.seamlessdrill.0
+2026/11/10 08:48:06 INFO bus: subscribed subject=cwdemo.svc.seamlessdrill.all
+STEP terrain_start ok {"a_loaded":6,"b_loaded":6,"base_digest":"8cd20cc00750a325","base_only_loaded":0}
+STEP terrain_ghost_edit ok {"b_edit_on_a_chunk":"terrain_not_owned","b_ghost_after_answer_ms":3.382,"b_view_far_chunk_loaded":false,"clients_after_request_ms":{"ta_(0,0)":36.725,"ta_(1,0)":22.095,"tb_(0,0)":37.084,"tb_(1,0)":23.121,"tw_(0,0)":37.079,"tw_(1,0)":23.097},"edit_rtt_ms":21.94,"far_edit_rtt_ms":36.665,"owner_version":1}
+seamlessdrill: FAIL: (b) pW stops at the step: not reached within 15s (not a real on A (on B: true map[attack:10 epoch:2 hp:100 id:102436901 idle:false kind:1 max_hp:100 owner:(0,0) panel_ver:1 power:30 role:real vx:600 vy:0 x:20673 y:3000]))
+seamless: drill failed (status 1); logs in <scratch>/ev-mut
+exit=1

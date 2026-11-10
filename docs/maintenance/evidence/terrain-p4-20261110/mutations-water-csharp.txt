@@ -1,0 +1,5 @@
+# 水位区域 C# 变异（dotnet run 金样校验，Roost.Client.Terrain.Tests）
+== C1-csharp-probe-ignores-regions: exit 134
+   Unhandled exception. System.Exception: FAIL query (0, 6400): got 74105/4/True/74265, Go 74105/4/False/-2147483648
+== C2-csharp-checksum-skips-regions: exit 134
+   Unhandled exception. System.Exception: FAIL golden water region count

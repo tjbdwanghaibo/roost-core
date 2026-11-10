@@ -12,6 +12,7 @@ import (
 	lifecycle "{{MODULE}}/game/lifecycle"
 	"{{MODULE}}/game/rewards"
 	"{{MODULE}}/game/settings"
+	"{{MODULE}}/game/terrainmap"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
 	apperrors "{{MODULE}}/internal/errors"
 	rpcalliance "{{MODULE}}/internal/rpc/alliance"
@@ -55,6 +56,7 @@ const (
 	gmSceneRoot = "gm.scene.root"
 	gmSceneTime = "gm.scene.time_rate"
 	gmScenePart = "gm.scene.partition"
+	gmTerrainProbe = "gm.terrain.probe"
 	gmActClose  = "gm.activity.close"
 	gmFlagList  = "gm.flag.list"
 	gmFlagSet   = "gm.flag.set"
@@ -457,6 +459,28 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 					return admin.Result{Data: data}, nil
 				}
 				data, err := partitioned.stats(ctx)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				return admin.Result{Data: data}, nil
+			},
+		},
+		{
+			Name: gmTerrainProbe,
+			Description: "this process's editable terrain view, read only: for each of {\"chunks\": [[x, y], ...]} whether this " +
+				"process writes it, whether it is loaded, its version, the version its replica subscription reports, and a digest " +
+				"of its data (FNV-1a 64 of the heights, little endian, then the materials); for each of {\"points\": [[x, y], ...]} " +
+				"the world height in centimetres or why it cannot be read. At most 64 chunks and 256 points.",
+			Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
+				m := terrainmap.Active()
+				if m == nil {
+					return admin.Result{}, apperrors.ErrTerrainDisabled
+				}
+				payload, err := admin.DecodePayload[gmTerrainProbePayload](command)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				data, err := terrainProbe(m, payload)
 				if err != nil {
 					return admin.Result{}, err
 				}

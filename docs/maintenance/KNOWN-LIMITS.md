@@ -10,6 +10,10 @@ TypeSchedules 支持同 Manager 内按 SubjectKind 配置周期脏增量；即�
 
 **已修复（未发版，2026-11-10）**：按 A 实施。每子步位移按千分位整数算，不足 1 单位的零头存在 `ActorState.FracX` / `FracY`（随 DAO 回滚、随交接 Offer 带走，线上格式 v8），位置仍是整数单位；400/s 与 10/s 在不规则拍长下与 速度 × 时间 相差不到 1 单位（`TestIntegrationKeepsTheSubUnitRemainder` 修前红、修后绿）。剩下的边界：每个子步仍在千分位上截断，丢不到 1 千分位（400/s、50ms 档平均约十万分之二点五）；游泳进出速度不同的地面格时缩放剩下的位移，再截断一次千分位。各情形的零头规则见 [cellworld README“位置零头”](../../gameplay/cellworld/README.md)，修复记录见 [证据](evidence/cellworld-subunit-20261110/README.md)、CHANGELOG `[Unreleased]`。
 
+## 2026-11-10：无缝演练最后一步（普通场景机器人压测阈值）时过时不过（尚未确认）
+
+`scripts/test-seamless-demo.sh`（不开地形）的 14 个演练步骤稳定通过，最后在普通场景 sid 1003 上跑 2 个机器人（`cmd/loadtest`，阈值 p95 ≤ 16s）：2026-11-09 本分支与 main `3fb089d9` 都失败（16.45s；main 那次是公会 saga 等待超时、error_rate 1），2026-11-10 同机未改动的检出上失败（p95 19.48s）、同一天开地形演练分支上通过（13.54s）（[证据](evidence/terrain-partition-drill-20261110/README.md#原演练不开地形不退化)）。只有 2 个样本、机器有后台负载，没有区分是阈值过紧、同机多进程争用还是 saga 等待的问题；与地形、分区无关。开地形的演练（`ROOST_SEAMLESS_TERRAIN=1`）不跑这一步。
+
 ## 2026-11-09：地形首批参数实施边界
 
 默认编辑配额与桶容量已降至 270，terrainpack 默认 HeightBase 已设为 −100 米（−10000 厘米）；不重写既有资源。按类型同步现已完成框架与 demo 接线；圆滑岸线仍只完成决策，原地形去重两项问题及 P3～P6 仍未完成。当前清单见 [地形进度总表](TERRAIN-STATUS.md)。功能测试、修正记录与预期跳过见 [实施状态](TERRAIN-DECISIONS-20261109.md)；未新增压测，历史 270 档临时数据不代替容量验收。

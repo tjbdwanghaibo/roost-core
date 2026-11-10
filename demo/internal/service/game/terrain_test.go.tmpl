@@ -15,6 +15,7 @@ import (
 	"time"
 
 	db "{{MODULE}}/db"
+	building "{{MODULE}}/game/entities/building"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"{{MODULE}}/game/handler"
@@ -29,6 +30,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	mongodriver "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/driver"
 )
@@ -124,9 +126,11 @@ type terrainProcess struct {
 	committer *terrainCommitter
 	m         *terrainmap.Map
 	stats     terrainmap.LoadStats
+	// buildingStats 是启动时建筑对账（ReconcileBuildings）的结果。
+	buildingStats terrainmap.BuildingStats
 }
 
-// startTerrainProcess 照 startTerrain 的顺序：打开包、按 store 里的记录装入、发布。
+// startTerrainProcess 照 startTerrain 的顺序：打开包、接建筑（不分区的普通场景）、按 store 里的记录装入、发布、建筑对账。
 func startTerrainProcess(t *testing.T, pack string, region func(terrain.Meta) (terrainmap.Region, error), store coredata.Store) *terrainProcess {
 	t.Helper()
 	return startTerrainProcessWith(t, pack, region, store, nil)
@@ -137,8 +141,10 @@ func startTerrainProcess(t *testing.T, pack string, region func(terrain.Meta) (t
 func startTerrainProcessWith(t *testing.T, pack string, region func(terrain.Meta) (terrainmap.Region, error), store coredata.Store, beforeLoad func(*terrainProcess), options ...nest.NestOption) *terrainProcess {
 	t.Helper()
 	handler.RegisterTerrainEditNestHandlers()
+	handler.RegisterBuildingNestHandlers()
 	terrain_chunk.RegisterEntity()
 	terrain_editor.RegisterEntity()
+	building.RegisterEntity()
 	p := &terrainProcess{t: t, ctx: context.Background(), entities: entity.NewEntityManager(), committer: &terrainCommitter{}}
 	if memory, ok := store.(*memoryChunkStore); ok {
 		p.restoreEntities(memory)
@@ -160,10 +166,15 @@ func startTerrainProcessWith(t *testing.T, pack string, region func(terrain.Meta
 	if err != nil {
 		t.Fatal(err)
 	}
+	buildings, err := lifecycle.NewBuildingLifecycle(access)
+	if err != nil {
+		t.Fatal(err)
+	}
 	p.m, err = terrainmap.Open(pack, region, chunks, editors, syncsender.NewTerrainEditSender(p.engine))
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.m.EnableBuildings(buildings, syncsender.NewBuildingSender(p.engine))
 	if beforeLoad != nil {
 		beforeLoad(p)
 	}
@@ -172,6 +183,9 @@ func startTerrainProcessWith(t *testing.T, pack string, region func(terrain.Meta
 	}
 	terrainmap.Install(p.m)
 	t.Cleanup(p.stop)
+	if p.buildingStats, err = p.m.ReconcileBuildings(p.ctx); err != nil {
+		t.Fatal(err)
+	}
 	return p
 }
 
@@ -201,6 +215,14 @@ func (p *terrainProcess) restoreEntities(store *memoryChunkStore) {
 			}
 			param = &entity.EntityCreateParam{Kind: terrain_editor.EntityKindTerrainEditor, Id: id,
 				Dao: map[string]entity.DaoInterface{db.TerrainEditorDaoCollection: dao}}
+		case db.BuildingDaoCollection:
+			dao := db.NewBuildingDao()
+			dao.SetId(id)
+			if err := dao.RestorePersisted(doc.Data, doc.Schema, doc.Version); err != nil {
+				p.t.Fatalf("restore building %d: %v", id, err)
+			}
+			param = &entity.EntityCreateParam{Kind: building.EntityKindBuilding, Id: id,
+				Dao: map[string]entity.DaoInterface{db.BuildingDaoCollection: dao}}
 		default:
 			p.t.Fatalf("document %d in an unknown collection %q", id, doc.Key.Resource)
 		}
@@ -224,8 +246,8 @@ func (p *terrainProcess) stop() {
 	}
 }
 
-// persist 把本进程每个 TerrainChunk 实体与 editorPlayers 里玩家的编辑账本的 DAO 编成“库里的文档”（进程停下之后
-// 调用：没有并发访问）。
+// persist 把本进程每个 TerrainChunk 实体、每个 Building 实体与 editorPlayers 里玩家的编辑账本的 DAO 编成“库里的
+// 文档”（进程停下之后调用：没有并发访问）。
 func (p *terrainProcess) persist(store *memoryChunkStore) {
 	p.t.Helper()
 	store.mu.Lock()
@@ -247,6 +269,15 @@ func (p *terrainProcess) persist(store *memoryChunkStore) {
 			Data: value.Dao().Marshal(), Schema: db.TerrainChunkDaoSchemaVersion, Version: 1,
 		}
 	}
+	p.entities.Range(func(e entity.IThreadSafeEntity) bool {
+		if b, ok := e.(*building.Building); ok && b != nil {
+			store.docs[b.ID()] = coredata.RawDocument{
+				Key:  coredata.DocumentKey{Database: db.BuildingDaoDBName, Resource: db.BuildingDaoCollection, ID: b.ID()},
+				Data: b.Dao().Marshal(), Schema: db.BuildingDaoSchemaVersion, Version: 1,
+			}
+		}
+		return true
+	})
 	for _, player := range editorPlayers {
 		id, err := terrain_editor.EntityID(player)
 		if err != nil {
@@ -603,6 +634,70 @@ func TestTerrainRegionFollowsThePartition(t *testing.T) {
 	}
 }
 
+// gm.terrain.probe（terrainProbe）：报告的版本与摘要跟着视图走（编辑之后变、与按定义重算的摘要相同），点的高度是视图
+// 里的原始值；不归本进程写、没装着的块与点如实报告；超过上限、地图外的块拒绝。
+func TestTerrainProbeReportsTheView(t *testing.T) {
+	partition := settings.ScenePartition{Enabled: true, CellSize: terrain.ChunkSize, Cols: 3, Rows: 2, Owners: []string{"1001", "1002", "1003", "1004", "1005", "1006"}, GhostBand: 500, Hysteresis: 50}
+	p := startTerrainProcessWith(t, writeTerrainPack(t, t.TempDir(), 1), func(meta terrain.Meta) (terrainmap.Region, error) {
+		return terrainRegion(meta, partition, 1001)
+	}, &memoryChunkStore{}, func(p *terrainProcess) {
+		policy := terrainmap.DefaultPolicy
+		policy.EditPointsPerSecond = 0
+		p.m.SetPolicy(policy)
+	})
+	probe := func() map[string]any {
+		t.Helper()
+		data, err := terrainProbe(p.m, gmTerrainProbePayload{Chunks: [][2]int32{{0, 0}, {1, 0}, {2, 0}}, Points: [][2]int64{{3200, 3200}, {13000, 100}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	chunk := func(data map[string]any, i int) map[string]any { return data["chunks"].([]map[string]any)[i] }
+	point := func(data map[string]any, i int) map[string]any { return data["points"].([]map[string]any)[i] }
+	digestOf := func(key terrain.ChunkKey) string {
+		c, _, _ := p.m.View().Chunk(key)
+		return terrainChunkDigest(c.Heights, c.Materials)
+	}
+	before := probe()
+	own, ghost, outside := chunk(before, 0), chunk(before, 1), chunk(before, 2)
+	if own["owned"] != true || own["loaded"] != true || own["version"] != int64(0) || own["held"] != int64(0) || own["digest"] != digestOf(terrain.ChunkKey{}) {
+		t.Fatalf("own chunk before any edit: %v", own)
+	}
+	if ghost["owned"] != false || ghost["loaded"] != true || ghost["version"] != int64(0) {
+		t.Fatalf("ghost-band chunk: %v", ghost)
+	}
+	if outside["owned"] != false || outside["loaded"] != false || outside["held"] != int64(-1) || outside["digest"] != nil {
+		t.Fatalf("a chunk outside this process's region: %v", outside)
+	}
+	if h, err := p.m.Height(3200, 3200); err != nil || point(before, 0)["height"] != h {
+		t.Fatalf("point (3200, 3200): %v, view %d %v", point(before, 0), h, err)
+	}
+	if point(before, 1)["err"] == nil {
+		t.Fatalf("a point on an unloaded chunk: %v", point(before, 1))
+	}
+	if _, err := p.m.Brush(p.ctx, brushPlayer, 1, terrain.Brush{Op: terrain.BrushRaise, X: 3200, Y: 3200, Radius: 300, Falloff: terrain.FalloffConstant, Strength: 50}); err != nil {
+		t.Fatal(err)
+	}
+	after := probe()
+	if c := chunk(after, 0); c["version"] != int64(1) || c["digest"] == own["digest"] || c["digest"] != digestOf(terrain.ChunkKey{}) {
+		t.Fatalf("own chunk after a raise: %v (before %v)", c, own)
+	}
+	// 高度是世界高度（厘米）：原始值 + 50 是 + 500 厘米（夹在原始值上限 16383 以内）。
+	if got, was := point(after, 0)["height"].(int32), point(before, 0)["height"].(int32); got != min(was+500, p.m.Meta().WorldHeight(16383)) {
+		t.Fatalf("the raised point: %d, want %d + 500", got, was)
+	}
+	for _, bad := range []gmTerrainProbePayload{
+		{Chunks: make([][2]int32, terrainProbeMaxChunks+1)},
+		{Points: make([][2]int64, terrainProbeMaxPoints+1)},
+		{Chunks: [][2]int32{{3, 0}}},
+	} {
+		if _, err := terrainProbe(p.m, bad); !errors.Is(err, admin.ErrCommandInvalid) {
+			t.Fatalf("probe %d chunks / %d points %v: %v, want ErrCommandInvalid", len(bad.Chunks), len(bad.Points), bad.Chunks, err)
+		}
+	}
+}
+
 func mustChunkID(t *testing.T, key terrain.ChunkKey) int64 {
 	t.Helper()
 	id, err := terrain_chunk.EntityID(key)
@@ -628,13 +723,17 @@ type realTerrainProcess struct {
 	m       *terrainmap.Map
 	stats   terrainmap.LoadStats
 	fatal   chan error
+	// buildingStats 是启动时建筑对账的结果。
+	buildingStats terrainmap.BuildingStats
 }
 
 func startRealTerrainProcess(t *testing.T, ctx context.Context, client fmongo.IMongo, databases *coredata.DatabaseMap, physical, walDir, pack string) *realTerrainProcess {
 	t.Helper()
 	handler.RegisterTerrainEditNestHandlers()
+	handler.RegisterBuildingNestHandlers()
 	terrain_chunk.RegisterEntity()
 	terrain_editor.RegisterEntity()
+	building.RegisterEntity()
 	p := &realTerrainProcess{fatal: make(chan error, 1)}
 	store, err := engine.NewMongoStore(client, engine.MongoStoreConfig{DefaultDatabase: physical, Databases: databases})
 	if err != nil {
@@ -685,14 +784,22 @@ func startRealTerrainProcess(t *testing.T, ctx context.Context, client fmongo.IM
 	if err != nil {
 		t.Fatal(err)
 	}
+	buildings, err := lifecycle.NewBuildingLifecycle(access)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if p.m, err = terrainmap.Open(pack, wholeMap, chunks, editors, syncsender.NewTerrainEditSender(p.engine)); err != nil {
 		t.Fatal(err)
 	}
+	p.m.EnableBuildings(buildings, syncsender.NewBuildingSender(p.engine))
 	if p.stats, err = p.m.Load(ctx, p.runtime.Store); err != nil {
 		t.Fatal(err)
 	}
 	terrainmap.Install(p.m)
 	t.Cleanup(func() { p.stop(t) })
+	if p.buildingStats, err = p.m.ReconcileBuildings(ctx); err != nil {
+		t.Fatal(err)
+	}
 	return p
 }
 

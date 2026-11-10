@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"math"
+	"slices"
 
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
@@ -128,8 +129,36 @@ type Meta struct {
 	ChunksX, ChunksY int32
 	// HeightBase 是高度原始值 0 对应的世界高度（厘米）。
 	HeightBase int32
-	// WaterLevel 是全局水位线（世界高度，厘米）：地面高度低于它的位置是水（方案 §5）。不要水时设 math.MinInt32。
+	// WaterLevel 是全局水位线（世界高度，厘米）：不在任何 WaterRegions 里的块，地面高度低于它的位置是水（方案 §5）。
+	// 不要水时设 math.MinInt32。
 	WaterLevel int32
+	// WaterRegions 是按区域配置的水位线（方案 D3“全局 / 区域水位线”，P4）：区域里的块用区域的 Level 代替 WaterLevel。
+	// 区域按块对齐、互不重叠（Validate 检查），所以每一块恰好有一条水位线（WaterLevelOf）。至多 MaxWaterRegions 个。
+	// 记在原始地形包里（格式版本 2），服务端与客户端读同一份，不另外同步。
+	WaterRegions []WaterRegion
+}
+
+// WaterRegion 是一片按块对齐的矩形区域的水位线：块坐标半开区间 [MinX, MaxX) × [MinY, MaxY) 里的每一块，地面高度低于
+// Level（世界高度，厘米）的位置是水；Level 为 math.MinInt32 表示这片区域没有水。
+//
+// 为什么按块对齐：一块只有一条水位线，水面在块内是一个平面——客户端按块生成水面与岸线（Marching Squares 用这块的
+// 水位，T03）、水位变化按块失效，服务端判定按节点所属的块取水位，不需要跨块计算。区域边界处两侧水位不同时水面在块边
+// 上有台阶，由美术把区域边界放在高于两侧水位的岸上（地形包工具不替美术判断）。
+type WaterRegion struct {
+	MinX, MinY, MaxX, MaxY int32
+	Level                  int32
+}
+
+// MaxWaterRegions 是一张图最多的区域水位数（包的区域表有界；打开时两两检查不重叠）。
+const MaxWaterRegions = 1024
+
+// Contains 报告块是否在区域里。
+func (r WaterRegion) Contains(k ChunkKey) bool {
+	return k.X >= r.MinX && k.Y >= r.MinY && k.X < r.MaxX && k.Y < r.MaxY
+}
+
+func (r WaterRegion) overlaps(o WaterRegion) bool {
+	return r.MinX < o.MaxX && o.MinX < r.MaxX && r.MinY < o.MaxY && o.MinY < r.MaxY
 }
 
 // 地图规模上限：每边 MaxChunksPerSide 块（约 65km），总块数 MaxChunks；超过的包当作损坏拒绝（索引表大小有界）。
@@ -146,7 +175,37 @@ func (m Meta) Validate() error {
 	if int64(m.HeightBase)+math.MaxUint16*HeightStep > math.MaxInt32 {
 		return fmt.Errorf("%w: height base %d overflows int32 at the highest raw height", ErrInvalidMeta, m.HeightBase)
 	}
+	if len(m.WaterRegions) > MaxWaterRegions {
+		return fmt.Errorf("%w: %d water regions, at most %d", ErrInvalidMeta, len(m.WaterRegions), MaxWaterRegions)
+	}
+	for i, r := range m.WaterRegions {
+		if r.MinX < 0 || r.MinY < 0 || r.MinX >= r.MaxX || r.MinY >= r.MaxY || r.MaxX > m.ChunksX || r.MaxY > m.ChunksY {
+			return fmt.Errorf("%w: water region %d %+v is empty or outside the %d × %d chunks", ErrInvalidMeta, i, r, m.ChunksX, m.ChunksY)
+		}
+		for j := range i {
+			if r.overlaps(m.WaterRegions[j]) {
+				return fmt.Errorf("%w: water regions %d %+v and %d %+v overlap", ErrInvalidMeta, j, m.WaterRegions[j], i, r)
+			}
+		}
+	}
 	return nil
+}
+
+// WaterLevelOf 返回块的水位线：所在区域的 Level，不在任何区域里时是全局 WaterLevel。区域互不重叠，结果唯一。
+// 逐个比较区域（至多 MaxWaterRegions 个）；查询热路径用 View 里按块预先算好的表（View.WaterLevelOf）。
+func (m Meta) WaterLevelOf(k ChunkKey) int32 {
+	for _, r := range m.WaterRegions {
+		if r.Contains(k) {
+			return r.Level
+		}
+	}
+	return m.WaterLevel
+}
+
+// Equal 报告两份地图参数是否完全相同（含区域水位，按顺序比较）。
+func (m Meta) Equal(o Meta) bool {
+	return m.BaseRevision == o.BaseRevision && m.ChunksX == o.ChunksX && m.ChunksY == o.ChunksY &&
+		m.HeightBase == o.HeightBase && m.WaterLevel == o.WaterLevel && slices.Equal(m.WaterRegions, o.WaterRegions)
 }
 
 // Chunks 返回地图的总块数。

@@ -15,13 +15,15 @@ namespace Roost.Client.Terrain
         public TerrainChunk(ushort[] heights, byte[] materials) { Heights = heights; Materials = materials; }
     }
 
-    // 打开的原始地形包（格式版本 1，与 Go gameplay/terrain/pack.go 头注释的逐字节布局相同）：
+    // 打开的原始地形包（格式版本 2，与 Go gameplay/terrain/pack.go 头注释的逐字节布局相同）：
     //
     //   偏移 0    包头 128 字节（magic "RTERRAIN"、格式版本、BaseRevision、块数、几何常量、HeightBase、WaterLevel、
-    //             codec、索引偏移与项长、metaSHA256 = SHA-256(包头前 96 字节 ‖ 索引表)）
+    //             codec、索引偏移与项长、区域水位个数（偏移 68）、metaSHA256 = SHA-256(包头前 96 字节 ‖ 索引表 ‖ 区域表)）
     //   偏移 128  索引表，每块 44 字节：offset uint64、length uint32、SHA-256（块存储字节）
+    //   之后      区域表，每项 20 字节：minX、minY、maxX、maxY（uint32 块坐标，半开）、level（int32）
     //   之后      每块独立的 raw DEFLATE 数据（明文 = 4096 个平面预测差分 zigzag uvarint 高度 ‖ 4096 字节材质）
     //
+    // 版本 1 的包（没有区域水位）按 TerrainPackVersionException 拒绝，用新工具重新生成。
     // 打开时只读入并校验包头与索引表（1w 地图约 1MB），块数据按需 ReadChunk，每次读块校验该块的 SHA-256。
     // 来源可以是随机读的 Stream（文件、StreamingAssets 的 FileStream）或整份字节（Addressables / UnityWebRequest
     // 读到的 byte[]）。
@@ -31,9 +33,10 @@ namespace Roost.Client.Terrain
     public sealed class TerrainPack : IDisposable
     {
         private const string Magic = "RTERRAIN";
-        private const uint FormatVersion = 1;
+        private const uint FormatVersion = 2;
         private const int HeaderSize = 128;
         private const int IndexEntrySize = 44;
+        private const int RegionEntrySize = 20;
         private const int MetaHashOffset = 96;
         private const uint CodecPlaneDeltaFlate = 1;
         // 单块存储字节的上限：明文最多 16KB，DEFLATE 对不可压数据只多很少的块头；超过即视为损坏（与 Go 相同）。
@@ -81,14 +84,16 @@ namespace Roost.Client.Terrain
                 var head = new byte[HeaderSize];
                 if (size < HeaderSize) throw new TerrainBadPackException($"read header: {size} bytes, want at least {HeaderSize}");
                 source.Read(0, head);
-                var meta = ParseHeader(head);
-                long dataStart = HeaderSize + (long)meta.Chunks * IndexEntrySize;
+                var meta = ParseHeader(head, out int regions);
+                long indexEnd = HeaderSize + (long)meta.Chunks * IndexEntrySize;
+                long dataStart = indexEnd + (long)regions * RegionEntrySize;
                 if (dataStart > size)
-                    throw new TerrainBadPackException($"file of {size} bytes is shorter than its index table ({dataStart} bytes)");
+                    throw new TerrainBadPackException($"file of {size} bytes is shorter than its index and water region tables ({dataStart} bytes)");
                 var table = new byte[dataStart - HeaderSize];
                 source.Read(HeaderSize, table);
                 if (!MetaSum(head, table).AsSpan().SequenceEqual(head.AsSpan(MetaHashOffset, 32)))
                     throw new TerrainBadPackException("header / index checksum mismatch");
+                if (regions > 0) meta = WithRegions(meta, table.AsSpan((int)(indexEnd - HeaderSize)), regions);
                 var entries = new IndexEntry[meta.Chunks];
                 for (int i = 0; i < entries.Length; i++)
                 {
@@ -114,8 +119,25 @@ namespace Roost.Client.Terrain
             }
         }
 
-        // 解析并校验包头的定长字段，检查顺序与 Go parseHeader 相同（决定同一个坏包报哪一类错误）。
-        private static TerrainMeta ParseHeader(byte[] head)
+        // 读区域表并按区域规则整体校验（与 Go openPack 相同：校验和通过之后），不合法的区域报坏包。
+        private static TerrainMeta WithRegions(TerrainMeta meta, ReadOnlySpan<byte> table, int n)
+        {
+            var regions = new TerrainWaterRegion[n];
+            for (int i = 0; i < n; i++)
+            {
+                var e = table.Slice(i * RegionEntrySize, RegionEntrySize);
+                regions[i] = new TerrainWaterRegion(
+                    BinaryPrimitives.ReadInt32LittleEndian(e), BinaryPrimitives.ReadInt32LittleEndian(e.Slice(4)),
+                    BinaryPrimitives.ReadInt32LittleEndian(e.Slice(8)), BinaryPrimitives.ReadInt32LittleEndian(e.Slice(12)),
+                    BinaryPrimitives.ReadInt32LittleEndian(e.Slice(16)));
+            }
+            try { return new TerrainMeta(meta.BaseRevision, meta.ChunksX, meta.ChunksY, meta.HeightBase, meta.WaterLevel, regions); }
+            catch (ArgumentException error) { throw new TerrainBadPackException(error.Message); }
+        }
+
+        // 解析并校验包头的定长字段，检查顺序与 Go parseHeader 相同（决定同一个坏包报哪一类错误）。regions 是区域水位个数，
+        // 区域本身在校验和通过之后读。
+        private static TerrainMeta ParseHeader(byte[] head, out int regions)
         {
             var h = head.AsSpan();
             for (int i = 0; i < Magic.Length; i++)
@@ -134,6 +156,9 @@ namespace Roost.Client.Terrain
             if (indexOffset != HeaderSize || entry != IndexEntrySize) throw new TerrainBadPackException($"index at {indexOffset} with {entry}-byte entries");
             uint cx = BinaryPrimitives.ReadUInt32LittleEndian(h.Slice(24)), cy = BinaryPrimitives.ReadUInt32LittleEndian(h.Slice(28));
             if (cx > int.MaxValue || cy > int.MaxValue) throw new TerrainBadPackException($"{cx} × {cy} chunks");
+            uint regionCount = BinaryPrimitives.ReadUInt32LittleEndian(h.Slice(68));
+            if (regionCount > TerrainMeta.MaxWaterRegions) throw new TerrainBadPackException($"{regionCount} water regions, at most {TerrainMeta.MaxWaterRegions}");
+            regions = (int)regionCount;
             long baseRevision = BinaryPrimitives.ReadInt64LittleEndian(h.Slice(16));
             int heightBase = BinaryPrimitives.ReadInt32LittleEndian(h.Slice(44)), waterLevel = BinaryPrimitives.ReadInt32LittleEndian(h.Slice(48));
             if (cx < 1 || cy < 1 || cx > TerrainGeometry.MaxChunksPerSide || cy > TerrainGeometry.MaxChunksPerSide)

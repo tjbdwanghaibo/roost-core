@@ -10,6 +10,8 @@ import (
 	"slices"
 	"sync"
 	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
 // testMeta 是单测用的小地图：3 × 2 块，水位线在生成地形的中段。
@@ -40,7 +42,7 @@ func equalChunk(a, b Chunk) bool {
 func TestPackRoundTrip(t *testing.T) {
 	src := Generated(testMeta, testSeed)
 	p, _ := writeTestPack(t, testMeta, src)
-	if p.Meta() != testMeta {
+	if !p.Meta().Equal(testMeta) {
 		t.Fatalf("meta %+v, want %+v", p.Meta(), testMeta)
 	}
 	for key := range ChunksIn(testMeta.Bounds()) {
@@ -190,8 +192,8 @@ func TestOpenRejectsBadHeaderAndIndex(t *testing.T) {
 	mutate("index-sum", flip(packHeaderSize+12), ErrBadPack)
 	mutate("meta-hash", flip(packMetaHashOff), ErrBadPack)
 	mutate("truncated-index", func(b []byte) []byte { return b[:dataStart-1] }, ErrBadPack)
-	mutate("truncated-data", func(b []byte) []byte { return b[:len(b)-1] }, ErrBadPack) // 最后一块越出文件
-	mutate("version", func(b []byte) []byte { binary.LittleEndian.PutUint32(b[8:], 2); return b }, ErrPackVersion)
+	mutate("truncated-data", func(b []byte) []byte { return b[:len(b)-1] }, ErrBadPack)                              // 最后一块越出文件
+	mutate("version-1", func(b []byte) []byte { binary.LittleEndian.PutUint32(b[8:], 1); return b }, ErrPackVersion) // 版本 1 的包（没有区域水位）不兼容
 	mutate("spacing", func(b []byte) []byte { binary.LittleEndian.PutUint32(b[36:], 50); return b }, ErrPackVersion)
 }
 
@@ -343,5 +345,44 @@ func TestRAWImport(t *testing.T) {
 	short, _ := RAWImport{Heights: bytes.NewReader(make([]byte, 10)), Width: 64, Height: 64}.Source(meta)
 	if _, err := short(ChunkKey{}); err == nil {
 		t.Fatal("a short RAW file was accepted")
+	}
+}
+
+// 平地：每块每点都是同一高度与材质，图外的块报 ErrOutOfMap；写成包后整张图处处可走（与 Generated 相反：缺省的起伏
+// 地形在 45° 规则下大半的边走不通，所以 demo 的缺省包改用平地）。
+func TestFlatIsTheSameEverywhereAndWalkable(t *testing.T) {
+	meta := Meta{BaseRevision: 1, ChunksX: 2, ChunksY: 1, HeightBase: -10000, WaterLevel: 40000}
+	src := Flat(meta, 5010, GenGrass)
+	for _, key := range []ChunkKey{{X: 0, Y: 0}, {X: 1, Y: 0}} {
+		c, err := src(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range c.Heights {
+			if c.Heights[i] != 5010 || c.Materials[i] != GenGrass {
+				t.Fatalf("chunk %v point %d: height %d material %d", key, i, c.Heights[i], c.Materials[i])
+			}
+		}
+	}
+	if _, err := src(ChunkKey{X: 2}); !errors.Is(err, ErrOutOfMap) {
+		t.Fatalf("a chunk outside the map: %v", err)
+	}
+	pack, _ := writeTestPack(t, meta, src)
+	w := Walker{View: NewView(pack), Rules: DefaultWalkRules}
+	if err := w.View.LoadBase(ChunkKey{X: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.View.LoadBase(ChunkKey{X: 1}); err != nil {
+		t.Fatal(err)
+	}
+	for gy := int64(0); gy < ChunkSamples; gy++ {
+		for gx := int64(0); gx+1 < 2*ChunkSamples; gx++ {
+			if _, ok := w.Step(spatial.Point{X: gx, Y: gy}, spatial.Point{X: gx + 1, Y: gy}); !ok {
+				t.Fatalf("flat ground: no step from (%d, %d) east", gx, gy)
+			}
+		}
+	}
+	if g, err := w.View.Probe(5000, 3000); err != nil || g.Water || g.Height != 40100 {
+		t.Fatalf("flat ground 1m above the water: %+v, %v", g, err)
 	}
 }

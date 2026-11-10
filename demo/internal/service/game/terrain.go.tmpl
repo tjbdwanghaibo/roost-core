@@ -2,7 +2,9 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
@@ -66,6 +69,15 @@ func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
 	if err != nil {
 		return nil, fmt.Errorf("terrain: %w", err)
 	}
+	// 建筑（P4）只在不分区的普通场景：分区场景邻格的 Ghost 带还没有建筑占位的副本（方案 §25），放置答 building_disabled。
+	if !partition.Enabled {
+		buildings, err := lifecycle.BuildingFromRegistry(registry)
+		if err != nil {
+			_ = m.Close()
+			return nil, fmt.Errorf("terrain: %w", err)
+		}
+		m.EnableBuildings(buildings, syncsender.NewBuildingSender(nestClient))
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), terrainLoadTimeout)
 	defer cancel()
 	started := time.Now()
@@ -88,6 +100,20 @@ func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
 			"stale_base", stats.StaleBase, "corrupt", stats.Corrupt)
 	}
 	terrainmap.Install(m)
+	// 建筑对账在 Install 之后（handler 经 terrainmap.Active() 找到本 Map）、玩家能进来之前：核对建筑与块上的占地记录，
+	// 原始地形换版时按新版本处置（见 terrainmap.Map.ReconcileBuildings）。
+	buildingStats, err := m.ReconcileBuildings(ctx)
+	if err != nil {
+		_ = m.Close()
+		return nil, fmt.Errorf("terrain: %w", err)
+	}
+	if buildingStats.Standing > 0 {
+		slog.Info("terrain buildings reconciled", "standing", buildingStats.Standing, "rebased", buildingStats.Rebased,
+			"unfit", buildingStats.Unfit, "mismatched", buildingStats.Mismatched)
+	}
+	if buildingStats.Mismatched > 0 {
+		slog.Error("terrain: some buildings disagree with their chunk lot records; they were left as they are", "mismatched", buildingStats.Mismatched)
+	}
 	if err := registry.Register(TerrainCapability, m); err != nil {
 		_ = m.Close()
 		return nil, fmt.Errorf("terrain: publish: %w", err)
@@ -172,4 +198,67 @@ func installSurface(sceneTerrain gamescene.Terrain, m *terrainmap.Map) {
 	walker := m.Walker()
 	sceneTerrain.SetSurface(&walker)
 	slog.Info("terrain movement installed", "rules", fmt.Sprintf("%+v", walker.Rules), "bounds", sceneTerrain.Bounds())
+}
+
+// ---- gm.terrain.probe（只读观测：开地形的分区场景真实进程演练用它比较各进程的视图）----
+
+// terrainProbeMaxChunks / terrainProbeMaxPoints 是一次 gm.terrain.probe 至多查的块数与点数（运维命令，不让一次请求复制
+// 整张大地图）。
+const (
+	terrainProbeMaxChunks = 64
+	terrainProbeMaxPoints = 256
+)
+
+// gmTerrainProbePayload 是 gm.terrain.probe 的载荷：chunks 是块坐标 [x, y]，points 是世界坐标 [x, y]（厘米）。
+type gmTerrainProbePayload struct {
+	Chunks [][2]int32 `json:"chunks"`
+	Points [][2]int64 `json:"points"`
+}
+
+// terrainProbe 报告本进程地形视图里的块与点：每块是否归本进程写、是否装着、视图里的版本、副本订阅时报给拥有者的版本
+// （Map.ReplicaHeld）与数据摘要（terrainChunkDigest）；每点是视图里的世界高度（厘米，View.Height）或查询错误（块没装着答 not loaded）。
+// 只读视图的原子槽位，不取锁、不等 Nest；不同进程（拥有者、Ghost 带、客户端）按同一摘要比较“是否同一份数据”。
+func terrainProbe(m *terrainmap.Map, payload gmTerrainProbePayload) (map[string]any, error) {
+	if len(payload.Chunks) > terrainProbeMaxChunks || len(payload.Points) > terrainProbeMaxPoints {
+		return nil, fmt.Errorf("%w: at most %d chunks and %d points per probe", admin.ErrCommandInvalid, terrainProbeMaxChunks, terrainProbeMaxPoints)
+	}
+	meta := m.Meta()
+	chunks := make([]map[string]any, 0, len(payload.Chunks))
+	for _, c := range payload.Chunks {
+		key := terrain.ChunkKey{X: c[0], Y: c[1]}
+		if !meta.Contains(key) {
+			return nil, fmt.Errorf("%w: chunk %v is outside the map %dx%d", admin.ErrCommandInvalid, key, meta.ChunksX, meta.ChunksY)
+		}
+		data, version, loaded := m.View().Chunk(key)
+		out := map[string]any{"x": key.X, "y": key.Y, "owned": m.Owns(key), "loaded": loaded, "held": m.ReplicaHeld(key)}
+		if loaded {
+			out["version"], out["digest"] = version, terrainChunkDigest(data.Heights, data.Materials)
+		}
+		chunks = append(chunks, out)
+	}
+	points := make([]map[string]any, 0, len(payload.Points))
+	for _, p := range payload.Points {
+		out := map[string]any{"x": p[0], "y": p[1]}
+		if h, err := m.Height(p[0], p[1]); err != nil {
+			out["err"] = err.Error()
+		} else {
+			out["height"] = h
+		}
+		points = append(points, out)
+	}
+	return map[string]any{"base_revision": meta.BaseRevision, "own": m.Region().Own, "commit_failures": m.CommitFailures(),
+		"chunks": chunks, "points": points}, nil
+}
+
+// terrainChunkDigest 是一块数据的摘要：FNV-1a 64 依次过 4096 个高度（小端 2 字节）与 4096 个材质（1 字节），十六进制。
+// 客户端从同步收到的块（材质是 []uint16、取值 0～255）按同一规则算，与服务端比较。
+func terrainChunkDigest(heights []uint16, materials []byte) string {
+	h := fnv.New64a()
+	buf := make([]byte, 0, 2*len(heights)+len(materials))
+	for _, v := range heights {
+		buf = binary.LittleEndian.AppendUint16(buf, v)
+	}
+	buf = append(buf, materials...)
+	_, _ = h.Write(buf)
+	return fmt.Sprintf("%016x", h.Sum64())
 }

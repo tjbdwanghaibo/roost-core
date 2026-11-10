@@ -39,7 +39,7 @@ codegen 的其他模板是 `fmt.Sprintf` 出来的字符串字面量。demo 的�
 | `internal/service/<服务>/` | 各服务进程：game 的消费者、matchmaker、scene、battle、GM；account / chat / session 的 collaborators |
 | `internal/rpc/alliance/`、`internal/service/alliance/`、`game/alliancerule/`、`game/entities/alliance*/` | 联盟服务（[联盟服务方案](../docs/maintenance/FEATURE-2026-11-04-alliance-service.md)）：独立的 alliance 进程独占 Alliance / AllianceMember（Remote 托管、`service=alliance`），对已有实体的写走路由 RPC（发往实体的 owner；Alliance 起服预加载并登记路由），建盟走随机路由，请求回执与改动同事务；守卫是名单的缓存、跨实例收尾丢了由下一个请求自愈（联盟不产生任何 effect：成员通知由服务层写成功后直接发，预约期限是持有守卫的进程里的到期回调，跨实例宣战是宣战方事务里的持久“等确认”标记 + 直接调用对方 `AcknowledgeWar`），守卫 `snapshots=none` 不发 Remote 快照；运维命令 `alliance.info` / `alliance.guard` / `alliance.transfer` / `alliance.stop_founding` |
 | `game/guild/`、`saga/alliance_*/`、`internal/service/<game>/alliance_saga.go`、`alliance_notice.go` | game 侧的公会：game 只装联盟的只读 Mirror（`game/entities/alliance/mirror.go`），玩家所在公会是自己的副本 `PlayerDao.GuildID`，入会 / 退会一次 RPC，建盟扣费 / 捐献 / 领奖各一个 saga（Player 原生步骤 + 调 RPC 的 Mongo 步骤），接收成员变化通知推给在线玩家；见 [WALKTHROUGH](WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror) |
-| `game/terrainmap/`、`game/entities/terrain_chunk/`、`internal/service/<game>/terrain.go`、`terrain_sync.go`、`game/controllers/player/terrain_edit.go`、`cmd/terrainpack` | 可编辑地形（P1 / P2 单格、P3 普通场景的移动与寻路，缺省关闭）：地形包、被改过的块的实体、启动装入、玩家笔刷编辑与地形同步、高度场上的行走与寻路，见[可编辑地形](#可编辑地形p1)、[玩家编辑与同步](#玩家编辑与同步p2)、[移动与寻路](#移动与寻路p3) |
+| `game/terrainmap/`、`game/entities/terrain_chunk/`、`game/entities/building/`、`internal/service/<game>/terrain.go`、`terrain_sync.go`、`game/controllers/player/terrain_edit.go`、`cmd/terrainpack` | 可编辑地形（P1 / P2 单格、P3 普通场景的移动与寻路，缺省关闭）：地形包、被改过的块的实体、启动装入、玩家笔刷编辑与地形同步、高度场上的行走与寻路、P4 水位区域与普通场景的建筑，见[可编辑地形](#可编辑地形p1)、[玩家编辑与同步](#玩家编辑与同步p2)、[移动与寻路](#移动与寻路p3)、[水与建筑](#水与建筑p4) |
 | `internal/access/player/tcp/` | 玩家 TCP 接入的鉴权（`auth.go`） |
 | `configs/` | 配置表 schema、CSV、生成数据与各服务配置 |
 | `cmd/loadtest`、`loadtest/` | 机器人压测与场景脚本；`cmd/accountctl` 是操作员工具 |
@@ -180,12 +180,20 @@ scene:
 `TerrainChunk` 实体（`db/def/terrain_chunk.go`），装入时覆盖原始块；从没改过的块不建实体、不读库。
 
 ```bash
-go run ./cmd/terrainpack -out configs/terrain/demo.pack     # 2 × 1 块（128m × 64m）的确定性程序化地形，BaseRevision 1
+go run ./cmd/terrainpack -out configs/terrain/demo.pack                              # 16 × 16 块（1024m × 1024m）的平地，BaseRevision 2
+go run ./cmd/terrainpack -out configs/terrain/hills.pack -shape generated -seed 1    # 起伏的程序化地形（原来的缺省），BaseRevision 1
 ```
 
+缺省是 **1024m 见方的平地**（维护者 2026-11-10）：16 × 16 块，正好是普通场景能放下的最大地图（AOI 块表约 56MiB、每次 GC 多约 3ms，见下面“场景大小”；
+包本身约 18KB，启动装入 256 块约 20～60ms、视图约 3MiB）。整张图 401m（水位 400m 之上 1m）、全是草，45° 行走规则下每一步都走得通；挖下去超过
+1m 就是水（超过 1.5m 要游泳），填回去又是陆地，“挖坑成湖、填平成陆”在缺省包上直接能演示。`-ground` 改平地的世界高度（厘米，
+10 厘米一档）。原来的缺省 `terrain.Generated` 起伏地形在 45° 规则下向东一步只有约 45.5% 的边走得通，缺省地图基本走不动，改为
+`-shape generated -seed N` 显式选择（测试、压测与客户端金样仍用它）。
+
 新生成包默认 `HeightBase = -10000` 厘米（−100 米），普通地面若取世界高度 0，对应原始高度 1000；`-height-base` 可显式覆盖。
-`-water-level` 是独立的世界水位，仍默认 40000 厘米，不随高度基准平移。该程序化地图不是平地 0 的美术地图。
-更改已有地图基准要换 BaseRevision 并走现有 D13 处理，不能只改旧包头；通用 terrain 库仍支持其他基准。
+`-water-level` 是独立的世界水位，仍默认 40000 厘米，不随高度基准平移（平地缺省跟着它取水位 + 1m）。
+更改已有地图基准要换 BaseRevision 并走现有 D13 处理，不能只改旧包头；通用 terrain 库仍支持其他基准。`-base-revision` 不给时按
+形状取：平地 2、起伏地形 1（同一个版本号只对应一份原始地形：缺省包从起伏换成平地，版本号跟着换）。
 
 ```yaml
 scene:
@@ -196,8 +204,8 @@ scene:
 - **装哪些块、写哪些块**：不分区时整张图都归本进程；分区场景（`scene.partition`）里本 sid 托管的格的块归本进程写，本格外扩
   `ghost_band` 范围内的块也装入（邻格的块只读：启动时按库里的记录装入，之后由写它的格推送，见下面的 P3）；只做 Base 的 sid 不装块。开地形的分区场景要求 `cell_size`
   是 6400（一块）的整数倍，一块不跨两个格，加载配置时检查；demo 缺省的 3000 不满足，例如：
-  `cell_size: 6400`、`cols: 2`、`rows: 1`、`owners: ["1001", "1002"]`（世界 12800 × 6400，正好是缺省地形包的 2 × 1 块；
-  `spawn_x` / `spawns` 要落在新的世界里）。
+  `cell_size: 51200`、`cols: 2`、`rows: 2`、`owners: ["1001", "1002", "1003", "1004"]`（四个 512m 的格，世界 102400 × 102400，
+  正好是缺省地形包的 16 × 16 块；`spawn_x` / `spawns` 要落在新的世界里）。
 - **查询**：能力 `<game>.terrain`（`*terrainmap.Map`）的 `Height` / `Material` / `IsWater` / `Probe`，世界坐标是厘米；
   不取锁，可以在 Nest handler 里调。块没装（不在本进程范围、或它的记录装不进来）答 `terrain.ErrNotLoaded`。
 - **改块**：内部写入口 `Map.Edit`（一组采样点的高度与材质；一块一笔 strict 事务，handler `TerrainEdit`），提交后才进视图；
@@ -277,9 +285,13 @@ scene:
 - **编辑**：玩家的编辑在他连着的进程上执行，仍只能改这个进程写的块；改 Ghost 带或别的格的块答 `terrain_not_owned`（100054，`terrainmap.ErrNotOwned`），整笔不写，
   跨格编辑是 P5。
 - **观测**：`gm.scene.partition` 多一栏 `terrain`（副本计数：订阅、推送、应用、旧版本、包版本不同丢弃、错拥有者等；Ghost 带块数、
-  客户端想要的块与副本数）。
+  客户端想要的块与副本数）。只读 GM `gm.terrain.probe`（`{"chunks": [[x, y], ...], "points": [[x, y], ...]}`，至多 64 块、256 点）报本进程
+  地形视图里每块是否本进程写、是否装着、版本、副本订阅报的版本与数据摘要（FNV-1a 64：高度小端 2 字节、再材质 1 字节），每点的世界
+  高度；不开分区的进程同样可用。比较各进程（拥有者、Ghost 带）与客户端按同一规则算的摘要，就知道是不是同一份数据。
 - **测试**：`terrain_partition_test.go`（三个进程：两个格 + 一个只做 Base，真实 TCP 客户端）：边界编辑到邻格 Ghost 与别的进程的
   客户端、小编辑是增量、玩家走远订阅跟着走、推送全丢由续期补齐、旧消息倒序重放不回退、重启补齐、D13 撤回、跨格编辑仍拒绝。
+  真实多进程（真实 NATS / Mongo / Redis，kill -9 格进程）：仓库的 `ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh`
+  （[演练证据](../docs/maintenance/evidence/terrain-partition-drill-20261110/README.md)）。
 - **升级**：cellworld 线上格式 v7，v6 及更早的消息按坏消息丢弃；未上线，先停旧进程再起新进程。存储不变。
 
 ### 移动与寻路（P3）
@@ -288,7 +300,7 @@ scene:
 分区场景的格内积分按同一套规则判定（见下面“分区场景”）。不开地形时一切与之前相同（`TestWithoutASurfaceTheMapIsTheFlatGrid` 与原有移动用例）。
 
 - **接线**：服务 Init 在地形同步就绪后调 `installSurface`，把 `terrainmap.Map.Walker()`（`terrain.DefaultWalkRules`，建筑占位取
-  `Rules.Occupied`）装到场景的 `Terrain().SetSurface`，范围夹到场景的世界（即地形图，见下面“场景大小”）。`actor.Surface` 是每个 `Move` 的 `MoveConfig.Surface`：
+  进程内的建筑占位表或 `Rules.Occupied`，见下面 P4）装到场景的 `Terrain().SetSurface`，范围夹到场景的世界（即地形图，见下面“场景大小”）。`actor.Surface` 是每个 `Move` 的 `MoveConfig.Surface`：
   每拍读一次，地形改动后的下一步就按新地形判定。
 - **规则**：1m 地面节点之间坡度 ≤ 45°、陡降 ≤ 3 米可走；水深 > 50 厘米是游泳（速度 60%，站立高度是水面）；地图外、块没装的节点
   不可进入。服务端位置只有 X / Y，高度按 `Walker.StandZ` 推出，客户端同算；不加 Z 字段，cellworld 线上格式不变。
@@ -304,7 +316,7 @@ scene:
   地形图（`gamescene.TerrainConfig(meta.Bounds())`）：场景实体的地面、场景同步的 AOI 与行走边界都是整张图，地图外的目标、瞬移、落点一律拒绝；
   AOI 块边长、视野半径与出生点 (500, 500) 不变。服务 Init 先装地形、再按 `sceneWorld` 建场景（`lifecycle.EnsureWorldScene` 带上地图）。
   AOI 的块表按块数预先分配，普通场景能放下的地形图至多 2^20 个 1m 的块（1024m 见方，如 16 × 16 块；块表约 56MiB、每次 GC 多约 3ms），
-  更大的图（如 1w 方图）在打开地形包后、装入任何块前拒绝，进程启动失败——大地图用分区场景。demo 缺省的 2 × 1 块只多约 0.4MiB。
+  更大的图（如 1w 方图）在打开地形包后、装入任何块前拒绝，进程启动失败——大地图用分区场景。demo 缺省包（2026-11-10 起 16 × 16 块）正好在这个上限上：块表约 56MiB、构造约 12ms、每次 GC 多约 3ms（2 × 1 块时只多约 0.4MiB）。
   不开地形、分区场景的场景实体仍是 `gamescene.DefaultConfig`（1000 × 1000）。
 - **分区场景**（跨格移动，[方案 §24](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#24-p3-跨格移动按地形判定t06-剩余2026-11-09)）：托管格的进程把
   `partitionSurface`（同一个 `Map.Walker()`，范围夹到分区世界）装成 cellworld 的地面钩子 `NodeConfig.Surface`：角色每拍沿位移逐点
@@ -313,6 +325,36 @@ scene:
   进场位置不按 `Standable` 检查（站在不可走的节点上的角色一步不动）。测试：`terrain_partition_test.go` 的
   `TestTerrainPartitionWalkAcrossCellsFollowsTheEdits`（真实 Map、改块事务与副本，真实 cellworld Node 积分替身 NPC）。
 - **限制**：陡壁深坑会困住玩家（服务端不替玩家找出路）；路线开头可能先折回起点节点中心（≤ 约 0.7m）。
+
+### 水与建筑（P4）
+
+[方案 §25](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#25-p4-水与建筑实施结果2026-11-10)。
+
+- **水位**：地形包（格式版本 2）里除了全局水位线 `WaterLevel`，还可以按块对齐的矩形区域配水位（`terrain.Meta.WaterRegions`，
+  `terrainpack -water-region minX,minY,maxX,maxY,level` 可重复，块坐标、半开区间）。一个块只有一个水位：在区域里取区域的，否则取全局的。
+  `IsWater` / `Probe` / 行走 / 放置都按地面高度与所在块的水位比较（同一个来源，客户端 C# 也按它），所以挖到水位以下就是水、填回水位
+  以上就是陆地，规则确定、可以复现。区域水位不随原始地形之外的东西变（换水位 = 换包，走 D13）。
+- **协议**：`Building`（msgid 10039，`protocol/def/building.go`）：`op` 1 放置（类型、锚点节点、朝向、是否整平）/ 2 拆除（锚点），
+  编辑序号 `Seq` 与 `TerrainEdit` 同一个（玩家, 序号）空间、同一份账本：重发答 `duplicate`，续号用 `TerrainEdit` 的 `Seq = 0`。
+  demo 的类型（`game/entities/building` 的 `Catalog`）：1 hut 4×4、2 hall 8×6、3 tower 3×3，朝向 1、3 时宽高互换。
+- **放置校验**（拒绝时零写入，业务码 100060～100065）：占地在地图里、块归本进程且装着；锚点与占地上没有别的建筑；玩家站着的建筑数
+  未到上限（`Policy.MaxBuildings`，缺省 16）；占地内地面高差不超过类型的上限（不整平 `MaxRise`，整平 `MaxCut`）；每个节点（整平
+  时按整平之后的高度）不低于所在块的水位。整平把占地压到占地各节点高度的平均（四舍五入），是同一笔事务里的一次地形编辑，计改动点数
+  配额（每次至少 20 点，整平再加改动节点数）。
+- **事务与串行化点**：一次放置 / 拆除是一笔 strict 事务，锁住占地覆盖的块（至多 4 块）、建筑实体（ID 由锚点节点决定）与玩家的
+  编辑账本。建筑占着哪些节点的权威记录在块上（`TerrainChunkDao.Lots`，schema 4，只持久不同步），重叠检查在块的锁里读它——两份占地
+  只要有一个公共节点就有一块共同的块，Nest 按块串行，并发放置不会重叠。笔刷也在块的锁里读它，改到建筑脚下答 `terrain_occupied`。
+- **占位**：行走与寻路（`Map.Walker()`）读进程内的占位表：每块一个原子槽位，启动时按块的记录建好，放置 / 拆除提交之后换新；
+  `Rules.Occupied` 仍是业务另外的占位钩子。
+- **拆除**：只有属主能拆；建筑记录清空（确定性 ID 不删档，同一锚点以后还能放），地形不复原；锚点上没有建筑答 `building_missing`
+  （重发已生效的拆除也答这个，不是 `duplicate`）。
+- **重启与换版**：建筑（集合 `buildings`）、块的占地、账本的建筑数（`terrain_editors` schema 2）都随 DataEngine 落库，重启后
+  原样读回，启动时对账（`ReconcileBuildings`）核对建筑与块的占地。原始地形换版（D13）时块的地形改动照旧丢弃，建筑与占地保留：
+  整平过地基的按原来的地基世界高度在新地形上重新整平，然后按放置规则检查，不合规的保留并计 `unfit`、记 Warn（推荐做法，待维护者确认）。
+- **范围**：只在不分区的普通场景（分区场景不接建筑，答 `building_disabled`，跨格建筑是 P5）；建筑本身本轮不同步给别的玩家
+  （放置者按答复显示，同步方式待确认），整平改的地形照常走地形块的同步。
+- **测试**：`internal/service/<game>/terrain_building_test.go`（校验、整平、判重、拆除、笔刷、绕行、并发、重启、换版、对账）；
+  `TestBuildingRestartRealMongo` 在 `ROOST_TERRAIN_IT_MONGO_URI` 指向副本集时用真实 DataEngine 跑重启与换版。
 
 ## 改这里的东西之后
 

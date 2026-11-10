@@ -1,0 +1,67 @@
+package player
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/game/terrainmap"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// 建筑端点只做两件事：线上的值换成放置 / 拆除请求，terrainmap 的拒绝换成业务码。校验、事务、占位与重启见
+// internal/service/<game>/terrain_building_test.go。
+
+// 没配地形的服务器答 terrain_disabled，不是内部错误。
+func TestBuildingWithoutTerrainAnswersDisabled(t *testing.T) {
+	if terrainmap.Active() != nil {
+		t.Skip("a terrain map is installed in this process")
+	}
+	controller := &Controller{registry: app.NewRegistry(viper.New())}
+	response, err := controller.HandleBuilding(&playeraccess.Context{BaseCtx: context.Background(), PlayerID: 7, MsgID: msgid.MsgBuilding, Seq: 1},
+		&pb.BuildingRequest{Seq: 1, Op: 1, Kind: 1, GX: 10, GY: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != codeOf(apperrors.ErrTerrainDisabled) {
+		t.Fatalf("code %d (%s), want terrain_disabled", response.Code, response.Reason)
+	}
+}
+
+// 建筑自己的拒绝先认（包在别的错误里也认得出），其余与地形编辑同一张表；基础设施错误答 internal。
+func TestBuildingRefusalsMapToTheirCodes(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want error
+	}{
+		{terrainmap.ErrBuildingsDisabled, apperrors.ErrBuildingDisabled},
+		{terrainmap.ErrBuild, apperrors.ErrBuildingBad},
+		{terrainmap.ErrSlope, apperrors.ErrBuildingSlope},
+		{terrainmap.ErrUnderwater, apperrors.ErrBuildingUnderwater},
+		{terrainmap.ErrBuildingLimit, apperrors.ErrBuildingLimit},
+		{terrainmap.ErrNoBuilding, apperrors.ErrBuildingMissing},
+		{terrainmap.ErrOccupied, apperrors.ErrTerrainOccupied},
+		{terrainmap.ErrDenied, apperrors.ErrTerrainDenied},
+		{terrainmap.ErrRateLimited, apperrors.ErrTerrainRate},
+		{terrainmap.ErrNotOwned, apperrors.ErrTerrainNotOwned},
+		{terrainmap.ErrDisabled, apperrors.ErrTerrainDisabled},
+		{terrainmap.ErrSeqAhead, apperrors.ErrTerrainSeq},
+	} {
+		wrapped := fmt.Errorf("terrain: place building: %w", c.err)
+		if got := buildingError(wrapped); !errors.Is(got, c.want) || codeOf(got) == errcode.CodeInternal {
+			t.Errorf("%v mapped to %v (code %d), want %v", c.err, got, codeOf(got), c.want)
+		}
+	}
+	for _, internal := range []error{errors.New("wal: disk full"), terrainmap.ErrLotMismatch} {
+		if got := buildingError(internal); codeOf(got) != errcode.CodeInternal {
+			t.Errorf("%v mapped to code %d, want internal", internal, codeOf(got))
+		}
+	}
+}

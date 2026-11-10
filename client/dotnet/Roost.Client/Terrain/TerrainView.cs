@@ -11,9 +11,13 @@ namespace Roost.Client.Terrain
         public int Height { get; }
         // 所在 1m 格左下角采样点的材质编号。
         public byte Material { get; }
-        // 地面低于水位线（Height < TerrainMeta.WaterLevel）。
+        // 地面低于所在块的水位线（Height < WaterLevel）。
         public bool Water { get; }
-        public TerrainGround(int height, byte material, bool water) { Height = height; Material = material; Water = water; }
+        // 所在块的水位线（区域水位或全局水位，TerrainMeta.WaterLevelOf）。
+        public int WaterLevel { get; }
+        // 水深（厘米）：水位线减地面高度；不是水时为 0（与 Go Ground.Depth 相同）。
+        public int Depth => Water ? WaterLevel - Height : 0;
+        public TerrainGround(int height, byte material, bool water, int waterLevel) { Height = height; Material = material; Water = water; WaterLevel = waterLevel; }
     }
 
     // TryProbe 的结果：不抛异常的查询入口给每帧热路径（射线、贴地）用。
@@ -75,6 +79,8 @@ namespace Roost.Client.Terrain
     {
         private readonly TerrainPack pack;
         private readonly TerrainChunkData?[] chunks;
+        // 每块的水位线（TerrainMeta.WaterLevelOf，构造时算好、之后不变；与 Go View.water 相同）。
+        private readonly int[] water;
         private readonly object writeGate = new object();
         private int loaded;
 
@@ -88,7 +94,12 @@ namespace Roost.Client.Terrain
             this.pack = pack ?? throw new ArgumentNullException(nameof(pack));
             Meta = pack.Meta;
             chunks = new TerrainChunkData?[Meta.Chunks];
+            water = new int[Meta.Chunks];
+            for (int i = 0; i < water.Length; i++) water[i] = Meta.WaterLevelOf(new ChunkKey(i % Meta.ChunksX, i / Meta.ChunksX));
         }
+
+        // 块的水位线（区域水位或全局水位），O(1)；块不在地图内时是全局水位线。与 Go View.WaterLevelOf 相同。
+        public int WaterLevelOf(ChunkKey key) => Meta.Contains(key) ? water[Meta.IndexOf(key)] : Meta.WaterLevel;
 
         // 装着的块数。
         public int Count => Volatile.Read(ref loaded);
@@ -227,8 +238,11 @@ namespace Roost.Client.Terrain
             return c.Materials[i];
         }
 
-        // 地面是否低于水位线（Height(x, y) < WaterLevel，等于不算水），错误同 Height。
+        // 地面是否低于所在块的水位线（Height(x, y) < WaterLevelOf(包含 (x, y) 的块)，等于不算水），错误同 Height。
         public bool IsWater(long x, long y) => Probe(x, y).Water;
+
+        // 水深（厘米，TerrainGround.Depth），错误同 Height。
+        public int WaterDepth(long x, long y) => Probe(x, y).Depth;
 
         // 一次取得高度、材质与是否为水，错误同 Height。高度与材质出自本块的同一个版本。
         public TerrainGround Probe(long x, long y)
@@ -270,7 +284,8 @@ namespace Roost.Client.Terrain
             long num = (h00 * (s - fx) + h10 * fx) * (s - fy) + (h01 * (s - fx) + h11 * fx) * fy;
             int h = Meta.HeightBase + (int)((num * TerrainGeometry.HeightStep + s * s / 2) / (s * s));
             byte m = c00.Materials[(int)((gy % n) * n + gx % n)];
-            ground = new TerrainGround(h, m, h < Meta.WaterLevel);
+            int level = water[Meta.IndexOf(new ChunkKey(cx0, cy0))];
+            ground = new TerrainGround(h, m, h < level, level);
             return TerrainQueryStatus.Ok;
         }
 

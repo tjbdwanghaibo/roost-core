@@ -1,4 +1,4 @@
-# terrain：可编辑地形的底座（P1 框架部分 + P2 笔刷 + P3 行走与寻路、块副本）
+# terrain：可编辑地形的底座（P1 框架部分 + P2 笔刷 + P3 行走与寻路、块副本 + P4 区域水位）
 
 [可编辑地形方案](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md) P1 的框架部分：块坐标、原始地形包（base pack）的读写、内存中的地形视图与整数定点查询。纯逻辑加文件 I/O，不依赖 Nest / DataEngine / entitysync。P2 加了笔刷（`brush.go`：抬高 / 降低 / 整平 / 改材质的纯整数计算，见下文“笔刷”）。P3 加了行走规则与寻路（`walk.go`：坡度 / 台阶 / 下落 / 游泳的判定与高度场 A*，见下文“行走与寻路”）。被玩家改过的块（`TerrainChunk` 实体、持久化、同步、重启一致）由上层接入，本包只接收它们的数据作为覆盖块。实测数字见证据目录：[P1](../../docs/maintenance/evidence/terrain-p1-20261108/README.md)、[P2](../../docs/maintenance/evidence/terrain-p2-20261108/README.md)。
 
@@ -21,22 +21,25 @@
 
 **注意 cellworld 的格尺寸**：方案 §2.1 / §8.1 的 `cell_size` 3072、`ghost_band` 500 是按“1 单位 = 1 米”写的。按厘米，48 块的格是 `cell_size` 307200，500m 的 Ghost 带是 `ghost_band` 50000；格边长必须是 6400 的整数倍（块不跨格），网格原点也要落在 6400 的整数倍上。
 
-## 原始地形包（格式版本 1）
+## 原始地形包（格式版本 2）
 
 单文件，整数全部小端。字段的逐字节布局在 [pack.go](pack.go) 头注释。
 
 ```
-包头 128 字节：magic "RTERRAIN"、格式版本 1、BaseRevision、ChunksX / ChunksY、
-              每块采样数 64、采样间隔 100、高度步长 10、HeightBase、WaterLevel、codec 1、
-              索引偏移与项长、metaSHA256 = SHA-256(包头前 96 字节 ‖ 索引表)
+包头 128 字节：magic "RTERRAIN"、格式版本 2、BaseRevision、ChunksX / ChunksY、
+              每块采样数 64、采样间隔 100、高度步长 10、HeightBase、WaterLevel（全局水位）、codec 1、
+              索引偏移与项长、区域水位个数、metaSHA256 = SHA-256(包头前 96 字节 ‖ 索引表 ‖ 区域表)
 索引表       ChunksX·ChunksY 项（行优先），每项 offset uint64、length uint32、SHA-256（块存储字节）
+区域表       每项 minX、minY、maxX、maxY（块坐标，半开）、level（世界高度厘米；MinInt32 = 没有水）
 块数据       每块独立压缩，按索引顺序排列
 ```
+
+版本 2（2026-11-10，P4）在版本 1 上加了区域水位；版本 1 的包按 `ErrPackVersion` 拒绝，用新工具重新生成（不兼容旧包）。
 
 - **打开**（`OpenPack`）只读包头与索引表（1w 地图约 1MB），整体校验 `metaSHA256`、每项偏移在数据区内；包头或索引坏了返回 `ErrBadPack`，版本或几何常量不符返回 `ErrPackVersion`。
 - **读块**（`Pack.ReadChunk`）：一次 `ReadAt`、校验这块的 SHA-256、解码，返回新分配的 `Chunk`。坏块返回 `ErrCorruptChunk`（带块坐标），其他块照常可读；不返回默认数据。实测翻转块数据中间一个比特，DEFLATE 解码仍然“成功”，只有 SHA-256 能发现。可被任意多个 goroutine 并发调用。
 - **写**（`WritePack(io.WriterAt, …)` / `WritePackFile(path, …)`）：`ChunkSource` 逐块给数据，按批（256 块）并行取块与压缩、按索引顺序写出，输出与并行度无关、逐字节确定。`WritePackFile` 写同目录临时文件、fsync 后改名，失败时原文件不变。
-- **数据来源**：`RAWImport{…}.Source(meta)` 读美术导出的 RAW16 高度图 + RAW8 材质图（大小端、Y 翻转、按 `MaxHeight` 换算可选；图不必是块的整数倍，图外采样复制图边）；`Generated(meta, seed)` 是只用整数运算的确定性程序化地形，供测试、压测与金样。没有做命令行工具，游戏工具链直接调库函数。
+- **数据来源**：`RAWImport{…}.Source(meta)` 读美术导出的 RAW16 高度图 + RAW8 材质图（大小端、Y 翻转、按 `MaxHeight` 换算可选；图不必是块的整数倍，图外采样复制图边）；`Generated(meta, seed)` 是只用整数运算的确定性程序化地形，供测试、压测与金样。`Flat(meta, raw, material)` 是一张平地（每点同一高度与材质），game-demo 的 `terrainpack` 缺省用它（起伏的 `Generated` 在 45° 行走规则下大半的边走不通，不适合演示）。没有做命令行工具，游戏工具链直接调库函数。
 
 ### 块编码（codec 1）
 
@@ -90,9 +93,9 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 - gx+1 越出地图右边界时用 gx 列（边缘复制），上边界同理：地图边上的查询不需要地图外数据。
 - 其余情况下邻点可能在右 / 上 / 右上邻块，**邻块没装入返回 `ErrNotLoaded`**（错误里带块坐标），不猜测。地图外返回 `ErrOutOfMap`。
 - `Material(x, y)` = 采样点 (gx, gy) 的材质（所在 1m 格左下角，总在本块）。
-- `IsWater(x, y)` = `Height(x, y) < WaterLevel`（全局水位线，方案 §5；等于水位线不算水）。
+- **水**（方案 §5、D3“全局 / 区域水位线”，P4）：一块恰好一条水位线 `Meta.WaterLevelOf(块)`——块在某片区域水位（`Meta.WaterRegions`，按块对齐、互不重叠、至多 1024 片）里取区域的 `Level`，否则取全局 `WaterLevel`；`View` 在 `NewView` 时按块算好表（`View.WaterLevelOf`，O(1)）。`IsWater(x, y)` = `Height(x, y) < ` 包含 (x, y) 的块的水位线（等于不算水）；`WaterDepth(x, y)` = 水位线 − 地面（不是水为 0）；`Probe` 的 `Ground.WaterLevel` / `Depth()`。挖到水位线以下自动是水、填到水位线及以上自动是陆地，不存“是不是水”、不需要跨块计算，客户端同算。区域边界两侧水位不同时水面在块边上有台阶，美术把区域边界放在高于两侧水位的岸上。
 
-**金样**：[client/spec/terrain-golden.pack](../../client/spec/terrain-golden.pack)（3 × 2 块：程序化地形加一块 0 / 65535 棋盘格与斜坡的边界情形块）与 [terrain-queries.json](../../client/spec/terrain-queries.json)（包与每块解码后的 SHA-256，246 个位置的期望高度 / 材质 / 水，含块边界、四块交点、地图边缘、地图外）。客户端实现读这个包、逐块核对、全部装入后逐点核对。`TestClientTerrainGolden` 检查提交的包能解出金样数据、从它重新算出的 JSON 与提交的逐字节相同（不要求包与重新压缩的逐字节相同，Go 版本升级不会让它变红）；改格式或算法时 `go test ./gameplay/terrain -run TestClientTerrainGolden -update`。证据目录里的 `check_golden.py` 是只按本文与 pack.go 写的独立实现，246 个位置全部一致。C# 已在 `client/dotnet/Roost.Client/Terrain/`，C++ 未做。
+**金样**：[client/spec/terrain-golden.pack](../../client/spec/terrain-golden.pack)（3 × 2 块：程序化地形加一块 0 / 65535 棋盘格与斜坡的边界情形块）与 [terrain-queries.json](../../client/spec/terrain-queries.json)（包与每块解码后的 SHA-256，246 个位置的期望高度 / 材质 / 水 / 所在块的水位线，含块边界、四块交点、地图边缘、地图外；包里有两片区域水位：块 (1,1) 高出全局 3m、块 (0,1) 没有水）。客户端实现读这个包、逐块核对、全部装入后逐点核对。`TestClientTerrainGolden` 检查提交的包能解出金样数据、从它重新算出的 JSON 与提交的逐字节相同（不要求包与重新压缩的逐字节相同，Go 版本升级不会让它变红）；改格式或算法时 `go test ./gameplay/terrain -run TestClientTerrainGolden -update`。P1 证据目录里的 `check_golden.py` 是只按本文与 pack.go 写的独立实现（当时是格式版本 1、没有区域水位，246 个位置全部一致；格式版本 2 之后未重跑）。C# 已在 `client/dotnet/Roost.Client/Terrain/`，C++ 未做。
 
 ## 笔刷（P2，`brush.go`，客户端须逐位相同）
 
@@ -113,7 +116,7 @@ Height = HeightBase + (num·HeightStep + S²/2) / S²                        // 
 移动与寻路共用一套判定（[方案 §22](../../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#22-p3-移动与寻路实施结果2026-11-09)），全是整数、只读视图、不取锁、不分配（`Step`），可以在 Nest short 池里调用。
 
 - **节点**：1m 采样点 `(gx, gy)`；世界坐标 `p` 属于最近的采样点（`Walker.Cell`，四舍五入；在地图 / `Bounds` 里时夹到可用节点范围）。节点的地面高度就是采样点高度（只读本块，没有插值）。
-- **站立高度**：普通节点是地面；水深（`WaterLevel − 地面`）超过 `WadeDepth` 的是游泳节点，站立高度取水面，速度 `SwimSpeed`‰（0 = 不能游泳：深水不可进入，站在里面的可以走出来）。
+- **站立高度**：普通节点是地面；水深（节点所属块的水位线 − 地面，与 `View.WaterDepth` 同一来源）超过 `WadeDepth` 的是游泳节点，站立高度取水面（那块的水位线），速度 `SwimSpeed`‰（0 = 不能游泳：深水不可进入，站在里面的可以走出来）。
 - **相邻一步** `a → b`（八邻域，`run` 正交 100、对角 141 厘米，`dh` = 站立高度差）：上行 `dh·1000 ≤ MaxSlope·run` 或 `dh ≤ MaxStep`；下行 `|dh|·1000 ≤ MaxSlope·run` 或 `|dh| ≤ max(MaxStep, MaxDrop)`；对角还要两条正交拐角路线都走得通（不切角）。地图外、`Bounds` 外、块没装入（不猜）、`Occupied` 钩子（建筑占位，P4）为真的节点不可进入。
 - **缺省规则** `DefaultWalkRules`：坡度 45°（1000‰）、台阶 50 厘米、陡降 3 米、涉水 50 厘米、游泳 60%、上坡代价 2（爬 1 米折 2 米平路）、下坡代价 0、寻路估价放大 1.5 倍（`SearchWeight` 1500）。判定只看高度差，与 `HeightBase` 正负无关。
 - **`Step(from, to)`**：移动逐节点问（实现 `movement.Surface`）；`from == to` 表示站着，只要求节点有定义。**`Standable(p)`**：能否放在这里（瞬移、出生点、寻路终点）。**`StandZ(p)`**：站立高度（游泳节点是水面，否则 `View.Height` 的插值高度）——服务端位置只有 X / Y，高度由它推出，客户端同算。**`Swimming(p)`**。

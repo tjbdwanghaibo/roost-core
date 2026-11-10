@@ -94,6 +94,22 @@ func (r RAWImport) rawHeight(pixel uint16) uint16 {
 	return uint16((uint64(pixel)*uint64(r.MaxHeight) + denom/2) / denom)
 }
 
+// Flat 返回一张平地：每个采样点高度原始值都是 raw、材质都是 material，同一参数在任何机器上逐位相同。用于演示与
+// 手工试玩（game-demo 的 terrainpack 缺省就是它：45° 行走规则下处处可走，地面略高于水位，挖下去就成水）；
+// 测试、压测、客户端金样与压缩率仍用起伏的 Generated。
+func Flat(meta Meta, raw uint16, material byte) ChunkSource {
+	return func(key ChunkKey) (Chunk, error) {
+		if !meta.Contains(key) {
+			return Chunk{}, fmt.Errorf("%w: chunk %v", ErrOutOfMap, key)
+		}
+		c := NewChunk()
+		for i := range c.Heights {
+			c.Heights[i], c.Materials[i] = raw, material
+		}
+		return c, nil
+	}
+}
+
 // 生成器用到的材质编号（只是生成器的约定，不是框架对材质的定义；材质表归业务）。
 const (
 	GenGrass   byte = 0

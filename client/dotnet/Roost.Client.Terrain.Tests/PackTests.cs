@@ -24,6 +24,16 @@ internal static partial class Program
             Check(m.BaseRevision == meta.GetProperty("base_revision").GetInt64() && m.ChunksX == meta.GetProperty("chunks_x").GetInt32() &&
                   m.ChunksY == meta.GetProperty("chunks_y").GetInt32() && m.HeightBase == meta.GetProperty("height_base").GetInt32() &&
                   m.WaterLevel == meta.GetProperty("water_level").GetInt32(), "golden meta");
+            var regions = meta.GetProperty("water_regions");
+            Check(m.WaterRegions.Count == regions.GetArrayLength() && m.WaterRegions.Count > 0, "golden water region count");
+            for (int i = 0; i < m.WaterRegions.Count; i++)
+            {
+                var r = regions[i];
+                var got = m.WaterRegions[i];
+                Check(got.MinX == r.GetProperty("min_x").GetInt32() && got.MinY == r.GetProperty("min_y").GetInt32() &&
+                      got.MaxX == r.GetProperty("max_x").GetInt32() && got.MaxY == r.GetProperty("max_y").GetInt32() &&
+                      got.Level == r.GetProperty("level").GetInt32(), $"golden water region {i}");
+            }
             Check(meta.GetProperty("chunk_samples").GetInt32() == TerrainGeometry.ChunkSamples &&
                   meta.GetProperty("sample_spacing").GetInt32() == TerrainGeometry.SampleSpacing &&
                   meta.GetProperty("height_step").GetInt32() == TerrainGeometry.HeightStep, "golden geometry constants");
@@ -42,7 +52,7 @@ internal static partial class Program
             Check(chunks == 6, "golden has 6 chunks");
 
             var view = LoadAll(pack);
-            int queries = 0, outside = 0;
+            int queries = 0, outside = 0, regional = 0;
             foreach (var q in golden.GetProperty("queries").EnumerateArray())
             {
                 long x = q.GetProperty("x").GetInt64(), y = q.GetProperty("y").GetInt64();
@@ -61,17 +71,20 @@ internal static partial class Program
                     int height = q.GetProperty("height").GetInt32();
                     byte material = (byte)q.GetProperty("material").GetInt32();
                     bool water = q.GetProperty("water").GetBoolean();
+                    int level = q.GetProperty("water_level").GetInt32();
                     var g = view.Probe(x, y);
-                    Check(g.Height == height && g.Material == material && g.Water == water,
-                        $"{where}: got {g.Height}/{g.Material}/{g.Water}, Go {height}/{material}/{water}");
+                    Check(g.Height == height && g.Material == material && g.Water == water && g.WaterLevel == level,
+                        $"{where}: got {g.Height}/{g.Material}/{g.Water}/{g.WaterLevel}, Go {height}/{material}/{water}/{level}");
+                    Check(view.WaterDepth(x, y) == (water ? level - height : 0), where + " water depth");
+                    if (level != m.WaterLevel) regional++;
                     Check(view.Height(x, y) == height && view.Material(x, y) == material && view.IsWater(x, y) == water, where + " single queries");
                     Check(view.TryProbe(x, y, out var t, out _) == TerrainQueryStatus.Ok && t.Height == height, where + " TryProbe");
                 }
                 queries++;
             }
-            Check(queries == 246 && outside > 0, $"golden queries: {queries}");
+            Check(queries == 246 && outside > 0 && regional > 0, $"golden queries: {queries}, {regional} at a regional water level");
         }
-        Console.WriteLine("PASS terrain golden: pack SHA-256, 6 chunks decoded, 246 queries equal Go (bytes and Stream)");
+        Console.WriteLine("PASS terrain golden: pack SHA-256, water regions, 6 chunks decoded, 246 queries equal Go (bytes and Stream)");
     }
 
     private static TerrainView LoadAll(TerrainPack pack)
@@ -130,7 +143,11 @@ internal static partial class Program
             Throws<T>(() => TerrainPack.Open(new MemoryStream(data)).Dispose(), why + " (stream)");
         }
         Bad<TerrainBadPackException>("magic", d => d[0] ^= 1);
-        Bad<TerrainPackVersionException>("format version", d => BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(8), 2));
+        Bad<TerrainPackVersionException>("format version 1 (no water regions)", d => BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(8), 1));
+        Bad<TerrainBadPackException>("too many water regions", d => BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(68), 1025));
+        Bad<TerrainBadPackException>("water region byte (covered by the checksum)", d => d[RegionsAt(d) + 16] ^= 1);
+        // 第二片区域 [0,1)×[1,2) 向右扩到 maxX = 2，与第一片 [1,2)×[1,2) 重叠，重算校验和：校验和对了，区域规则仍拒绝。
+        Bad<TerrainBadPackException>("overlapping water regions", d => BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(RegionsAt(d) + 20 + 8), 2), reseal: true);
         Bad<TerrainBadPackException>("header size", d => BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(12), 64));
         Bad<TerrainPackVersionException>("chunk samples", d => BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(32), 32));
         Bad<TerrainPackVersionException>("sample spacing", d => BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(36), 50));
@@ -142,7 +159,7 @@ internal static partial class Program
         Bad<TerrainBadPackException>("too many chunks", d => BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(28), 1025));
         Bad<TerrainBadPackException>("chunk count above int32", d => BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(24), 0x80000000));
         Bad<TerrainBadPackException>("height base overflow", d => BinaryPrimitives.WriteInt32LittleEndian(d.AsSpan(44), int.MaxValue));
-        Bad<TerrainBadPackException>("reserved byte (covered by the checksum)", d => d[70] = 1);
+        Bad<TerrainBadPackException>("reserved byte (covered by the checksum)", d => d[80] = 1);
         Bad<TerrainBadPackException>("BaseRevision changed without the checksum", d => d[16] ^= 1);
         Bad<TerrainBadPackException>("index byte", d => d[HeaderSize + 20] ^= 1);
         Bad<TerrainBadPackException>("meta checksum byte", d => d[MetaHashOffset] ^= 1);
@@ -283,7 +300,7 @@ internal static partial class Program
         foreach (var s in stored) size += s.Length;
         var d = new byte[size];
         Encoding("RTERRAIN").CopyTo(d, 0);
-        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(8), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(8), 2);
         BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(12), HeaderSize);
         BinaryPrimitives.WriteInt64LittleEndian(d.AsSpan(16), revision);
         BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(24), (uint)chunksX);
@@ -312,15 +329,20 @@ internal static partial class Program
 
     private static byte[] Encoding(string s) => System.Text.Encoding.ASCII.GetBytes(s);
 
-    // 按当前包头的块数重算 metaSHA256（包头前 96 字节 ‖ 索引表）。
+    // 按当前包头的块数与区域数重算 metaSHA256（包头前 96 字节 ‖ 索引表 ‖ 区域表）。
     private static void Reseal(byte[] d)
     {
         int chunks = (int)(BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(24)) * BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(28)));
-        var buffer = new byte[MetaHashOffset + chunks * EntrySize];
+        int tables = chunks * EntrySize + (int)BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(68)) * 20;
+        var buffer = new byte[MetaHashOffset + tables];
         d.AsSpan(0, MetaHashOffset).CopyTo(buffer);
-        d.AsSpan(HeaderSize, chunks * EntrySize).CopyTo(buffer.AsSpan(MetaHashOffset));
+        d.AsSpan(HeaderSize, tables).CopyTo(buffer.AsSpan(MetaHashOffset));
         SHA256.HashData(buffer).CopyTo(d, MetaHashOffset);
     }
+
+    // 区域表的偏移（紧跟索引表）。
+    private static int RegionsAt(byte[] d) =>
+        HeaderSize + (int)(BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(24)) * BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(28))) * EntrySize;
 
     private static (int Offset, int Length) Entry(byte[] d, int index)
     {

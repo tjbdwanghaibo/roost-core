@@ -195,7 +195,7 @@ func NewReplicator(cfg ReplicatorConfig) (*Replicator, error) {
 		return nil, fmt.Errorf("%w: self, send and owner lookup are required", ErrReplicatorConfig)
 	case cfg.Source != nil && cfg.Owns == nil:
 		return nil, fmt.Errorf("%w: an owner needs Owns", ErrReplicatorConfig)
-	case cfg.Source != nil && cfg.Source.Meta() != cfg.Meta:
+	case cfg.Source != nil && !cfg.Source.Meta().Equal(cfg.Meta):
 		return nil, fmt.Errorf("%w: the source view is on another pack", ErrReplicatorConfig)
 	case cfg.Renew <= 0 || cfg.Lease <= cfg.Renew || cfg.Tick <= 0 || cfg.Inbox < 0 || cfg.MaxMessage <= 0:
 		return nil, fmt.Errorf("%w: renew %v must be positive and lease %v longer", ErrReplicatorConfig, cfg.Renew, cfg.Lease)

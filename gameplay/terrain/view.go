@@ -34,8 +34,18 @@ type Ground struct {
 	Height int32
 	// Material 是所在 1m 格左下角采样点的材质编号。
 	Material byte
-	// Water 表示地面低于水位线（Height < Meta.WaterLevel）。
+	// Water 表示地面低于所在块的水位线（Height < WaterLevel）。
 	Water bool
+	// WaterLevel 是所在块的水位线（Meta.WaterLevelOf：区域水位或全局水位，世界高度，厘米）。
+	WaterLevel int32
+}
+
+// Depth 是水深（厘米）：水位线减地面高度；不是水时为 0。
+func (g Ground) Depth() int32 {
+	if !g.Water {
+		return 0
+	}
+	return g.WaterLevel - g.Height
 }
 
 // View 是一张地图在本进程内已装入的块：原始块（从 Pack 读出）与覆盖块（上层给的改过的块）。
@@ -55,6 +65,9 @@ type Ground struct {
 type View struct {
 	meta Meta
 	pack *Pack
+	// water 是每块的水位线（下标同块表，Meta.WaterLevelOf 的结果），NewView 时算好、之后不变：查询与 Walker.Step 每次
+	// 判断水都要它，逐个比较区域会让热路径随区域数变慢。1w 地图约 100KB。
+	water []int32
 
 	writeMu sync.Mutex // 串行 LoadBase / SetOverlay / Unload 的安装步骤
 	chunks  []atomic.Pointer[viewChunk]
@@ -70,7 +83,21 @@ type viewChunk struct {
 
 // NewView 返回空的视图，原始块从 p 读取，地图参数取自 p 的包头。p 的生命周期长于 View。
 func NewView(p *Pack) *View {
-	return &View{meta: p.Meta(), pack: p, chunks: make([]atomic.Pointer[viewChunk], p.Meta().Chunks())}
+	meta := p.Meta()
+	water := make([]int32, meta.Chunks())
+	for i := range water {
+		water[i] = meta.WaterLevelOf(ChunkKey{X: int32(i % int(meta.ChunksX)), Y: int32(i / int(meta.ChunksX))})
+	}
+	return &View{meta: meta, pack: p, water: water, chunks: make([]atomic.Pointer[viewChunk], meta.Chunks())}
+}
+
+// WaterLevelOf 返回块的水位线（区域水位或全局水位，世界高度，厘米），与 Meta.WaterLevelOf 相同、O(1)。块不在地图内时
+// 返回全局水位线。不取锁，可以在 Nest short 池里调用。
+func (v *View) WaterLevelOf(key ChunkKey) int32 {
+	if !v.meta.Contains(key) {
+		return v.meta.WaterLevel
+	}
+	return v.water[v.meta.index(key)]
 }
 
 // Meta 返回地图参数。
@@ -254,10 +281,18 @@ func (v *View) Material(x, y int64) (byte, error) {
 	return c.materials[i], nil
 }
 
-// IsWater 报告世界坐标 (x, y) 的地面是否低于水位线（Height(x, y) < Meta.WaterLevel），错误同 Height。
+// IsWater 报告世界坐标 (x, y) 的地面是否低于水位线（Height(x, y) < 所在块的水位线，等于不算水），错误同 Height。
+// 水位线取 (x, y) 所在 1m 格左下角采样点所属的块（即包含 (x, y) 的块）：区域水位或全局水位（Meta.WaterLevelOf）。
+// 挖到水位线以下自动是水、填到水位线以上自动是陆地，不存“是不是水”，客户端按同一规则算（方案 §5、D3）。
 func (v *View) IsWater(x, y int64) (bool, error) {
 	g, err := v.probe(x, y)
 	return g.Water, err
+}
+
+// WaterDepth 返回世界坐标 (x, y) 的水深（厘米，Ground.Depth：水位线 − 地面高度，不是水时为 0），错误同 Height。
+func (v *View) WaterDepth(x, y int64) (int32, error) {
+	g, err := v.probe(x, y)
+	return g.Depth(), err
 }
 
 // Probe 一次取得高度、材质与是否为水，错误同 Height。高度与材质出自本块的同一个版本。
@@ -310,5 +345,6 @@ func (v *View) probe(x, y int64) (Ground, error) {
 	num := (h00*(s-fx)+h10*fx)*(s-fy) + (h01*(s-fx)+h11*fx)*fy
 	h := v.meta.HeightBase + int32((num*HeightStep+s*s/2)/(s*s))
 	m := c[0][0].materials[(gy%ChunkSamples)*ChunkSamples+gx%ChunkSamples]
-	return Ground{Height: h, Material: m, Water: h < v.meta.WaterLevel}, nil
+	level := v.water[v.meta.index(ChunkKey{X: cx0, Y: cy0})]
+	return Ground{Height: h, Material: m, Water: h < level, WaterLevel: level}, nil
 }

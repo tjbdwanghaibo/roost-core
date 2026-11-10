@@ -1,0 +1,23 @@
+# demo 缺省地形改为平地（方案 §25.6）
+# 1. 新的 cmd/terrainpack 用例跑在改动前的 main.go 上（go test -count=1 ./cmd/terrainpack）：
+--- FAIL: TestTerrainPackDefaultsAndHeightQueries (0.01s)
+    main_test.go:31: unexpected defaults: {BaseRevision:1 ChunksX:2 ChunksY:1 HeightBase:-10000 WaterLevel:40000 WaterRegions:[]}
+--- FAIL: TestTerrainPackExplicitBaseAndWaterRemainIndependent (0.00s)
+    main_test.go:120: flag provided but not defined: -ground
+--- FAIL: TestTerrainPackRejectsArgumentsBeforeWriting (0.01s)
+        main_test.go:177: accepted invalid arguments
+--- FAIL: TestTerrainPackGeneratedShapeIsTheOldDefault (0.00s)
+    main_test.go:191: flag provided but not defined: -shape
+FAIL
+FAIL	example.com/gd/cmd/terrainpack	0.459s
+FAIL
+
+# 2. 2 × 1 块缺省地图上向东一步走得通的边（DefaultWalkRules，临时测量用例，跑完删除）：
+#    第一行是 -shape generated -seed 1（即原来的缺省包），第二行是新的缺省平地
+zz_measure_test.go:32: [-shape generated -seed 1]: east steps walkable 3700/8128 = 45.5%
+zz_measure_test.go:32: []: east steps walkable 8128/8128 = 100.0%
+
+# 3. 16 × 16 块的缺省平地包（维护者 2026-11-10 补充；临时测量用例，同机 3 次，跑完删除）：
+zz_measure_test.go:36: 16x16 flat default pack: write 112.290875ms, 18560 bytes; open + load 256 chunks 36.5425ms, view heap +3102 KiB
+zz_measure_test.go:36: 16x16 flat default pack: write 157.692167ms, 18560 bytes; open + load 256 chunks 59.259458ms, view heap +3102 KiB
+zz_measure_test.go:36: 16x16 flat default pack: write 144.61425ms, 18560 bytes; open + load 256 chunks 18.608084ms, view heap +3102 KiB
