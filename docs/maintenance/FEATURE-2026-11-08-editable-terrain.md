@@ -1423,7 +1423,7 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 
 生成的 game-demo 全量 `go build` / `go vet` / `go test ./...` 通过；`internal/service/game`、`game/scene/...`、`game/lifecycle`、`game/settings`、`game/terrainmap` `-race` 通过，场景 / 建筑 / 地形同步相关用例 `-race -count=3` 通过；`roost id check`、`roost generate --check` 通过。core 侧根包、`codegen/internal/roost`、文档锚点检查通过。没有真实依赖、真实进程演练与 Unity；C# 代码未改。
 
-### 29.8 待维护者确认
+### 29.8 待维护者确认（维护者 2026-11-10 确认按推荐）
 
 实施方按推荐先定、已实施的取舍（推荐标★）：
 

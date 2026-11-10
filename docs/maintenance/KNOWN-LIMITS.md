@@ -15,9 +15,9 @@
 
 一步移动已从 140 字节降到 30 字节（[证据](evidence/sync-delta-bytes-20261110/README.md)），剩下的是：
 
-- **场景主视野用的是缺省视图 `"*"`（需要维护者决定）**：game-demo 的 `policy.InterestConfig` 没配 Bands，主视野 `DefineRelationView(sceneView, SyncProfile{})`，附近玩家收到的是 Player 的全部同步字段，包括别人的 exp、gold、items、attr_base、attr_final（[证据 §6](evidence/sync-delta-bytes-20261110/README.md#6-每个同步字段是否需要发给其他客户端demo-player--monster) 逐字段列了是否需要）。这既是多发字节（玩家全量 78 字节里约一半），也是私有字段对旁人可见。选项：A（推荐）主视野改用 packer 里已有的 `near` 视图（`Name, Level, PosX, PosY, SceneID, Facing, Equipment, GuildID`），必要时加上 `cell_hp` / `cell_max_hp`；代价是改 `scene.go.tmpl` 的主视野配置与相关 demo 用例的字段断言。B 保持现状，只在文档里说明 demo 不做字段权限。本轮没改：`scene.go.tmpl` 同时在做主视野尺度的改动。
-- **“同一视图的 packer 始终用同一个 Codec”是前提，没有在服务端强制**：增量信封不带 Codec，接收端沿用全量的。仓库内的 packer（生成的 DAO packer、self_sync、测试 packer）都满足；自定义 packer 若在同一视图里换 Codec，客户端会按全量的 Codec 去解增量载荷，结果取决于两种格式能否互相解析（尚未确认会不会静默错用）。需要时可在 Manager 按（subject, 视图）记下全量的 Codec，增量不符就改发全量。
-- **继续省字节的候选**（证据 §3，按收益）：增量补丁不带 `sync_format`（3 字节）；标量字段包装改 proto3 `optional`（每字段 2 字节）；增量不写 Mask（1 字节）；“一个对象一个组件”的帧简写（约 3 字节 / 对象）；BaseVersion 只发低位（运行久了 1～3 字节，削弱逐对象版本核对，需决定）；全量的命名空间改编号（只省全量）。远处降频 / 距离 LOD 本轮按要求不做。
+- **场景主视野用的是缺省视图 `"*"`（维护者 2026-11-10：这是同步视图的问题，由业务层处理 DAO 的视图，实施中）**：game-demo 的 `policy.InterestConfig` 没配 Bands，主视野 `DefineRelationView(sceneView, SyncProfile{})`，附近玩家收到的是 Player 的全部同步字段，包括别人的 exp、gold、items、attr_base、attr_final（[证据 §6](evidence/sync-delta-bytes-20261110/README.md#6-每个同步字段是否需要发给其他客户端demo-player--monster) 逐字段列了是否需要）。这既是多发字节（玩家全量 78 字节里约一半），也是私有字段对旁人可见。选项：A（推荐）主视野改用 packer 里已有的 `near` 视图（`Name, Level, PosX, PosY, SceneID, Facing, Equipment, GuildID`），必要时加上 `cell_hp` / `cell_max_hp`；代价是改 `scene.go.tmpl` 的主视野配置与相关 demo 用例的字段断言。B 保持现状，只在文档里说明 demo 不做字段权限。本轮没改：`scene.go.tmpl` 同时在做主视野尺度的改动。
+- **“同一视图的 packer 始终用同一个 Codec”是前提，没有在服务端强制（维护者 2026-11-10：服务端加校验，实施中）**：增量信封不带 Codec，接收端沿用全量的。仓库内的 packer（生成的 DAO packer、self_sync、测试 packer）都满足；自定义 packer 若在同一视图里换 Codec，客户端会按全量的 Codec 去解增量载荷，结果取决于两种格式能否互相解析（尚未确认会不会静默错用）。需要时可在 Manager 按（subject, 视图）记下全量的 Codec，增量不符就改发全量。
+- **继续省字节的候选**（证据 §3，按收益；维护者 2026-11-10：先不做）：增量补丁不带 `sync_format`（3 字节）；标量字段包装改 proto3 `optional`（每字段 2 字节）；增量不写 Mask（1 字节）；“一个对象一个组件”的帧简写（约 3 字节 / 对象）；BaseVersion 只发低位（运行久了 1～3 字节，削弱逐对象版本核对，需决定）；全量的命名空间改编号（只省全量）。远处降频 / 距离 LOD 本轮按要求不做。
 - **未运行**：C++ 的 protobuf 用例（`ROOST_PROTOBUF_TESTS=ON`，`client/cpp/tests/views.py` 已按新 API 改写）本机没有 protoc，没跑；C++ 不带 protobuf 的 ctest（含 sync 解码）已跑通过。
 
 ## 2026-11-10：建筑进场景主视野后的 demo 尺度（维护者 2026-11-10：主视野已按推荐放大，见地形方案 §28；偶发已定位修复，见本条末段）
@@ -34,7 +34,7 @@
 
 TypeSchedules 支持同 Manager 内按 SubjectKind 配置周期脏增量；即时快照独立交付并保留待发变化。代价：脏周期内的即时快照使下一次周期更新回退 Full；仍按 tick 检查 pending 脏集合，提交观察者可能合并唤醒，不宣称消除全部调度成本。game-demo 生产 Scene 已改成 on_change/地形 1 秒；历史功能/测量夹具仍保留原周期构造器，本批未跑新性能验收；原两项去重问题和岸线仍待实施。见 [类型调度契约](../framework/ENTITY_SYNC.md#按实体类型的同步节奏2026-11-09)。
 
-## 2026-11-10：cellworld 按经过时间积分的子步截断（已证实；维护者 2026-11-10 选定按千分位整数累计零头，实施中；已修复，未发版）
+## 2026-11-10：cellworld 按经过时间积分的子步截断（已证实；维护者 2026-11-10 选定按千分位整数累计零头；已修复，未发版）
 
 `gameplay/cellworld` `integrate` 每个子步按 `VX*dt/1s` 向零截断。按 `Beat.Elapsed` 积分（`dcd0a0c4`）之后 dt 不再恒为 `Period`，每拍平均少走约 0.5 个单位：400/s 实测 389～391/s（约 2.5%），速度越低比例越大；`VX*Period` 本来就不是整数的低速（如 10/s、50ms 档每拍 0.5）在修改前后都会被截成 0、不动。只影响位置精度，不影响交接几何（冻结点仍在 H + 一步以内）。可选：A. 在角色状态里带一个不足一个单位的余量（DAO 字段，随事务回滚；推荐，精确但加一个字段）；B. 接受并在 cellworld README 写明“速度按整数单位每子步截断”。证据见 [cellworld 整包偶发失败](evidence/cellworld-realclock-flakes-20261110/README.md)。
 
