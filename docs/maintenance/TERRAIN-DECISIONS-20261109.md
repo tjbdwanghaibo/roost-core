@@ -126,3 +126,5 @@ main 接入时把本节合入地形定稿方案的客户端/水域章节及 P2/P
 ## 已采用：只有地形块实体特殊，其余都是普通实体（2026-11-10）
 
 维护者确认：可编辑地形里只有 TerrainChunk（地形块）有专门的同步与副本逻辑（独立 Interest、按周期同步、Ghost 副本）；Building、TerrainEditor 以及后续新增的实体都按普通实体处理，持久、同步、订阅走与 Player / Monster 相同的正式链路。建筑的订阅因此跟随玩家与怪（场景主视野），不单设 Interest 与同步命名空间。块上的 `Lots` 是服务端内部的并发串行化索引（放置在块锁内查重叠），不同步、不构成第二条建筑链路。同日确认：截断修复四项、§25.5、§25.6、§27.9 其余各项按推荐；cellworld 真实时钟用例统一整治一轮。详见[方案 §27.9](FEATURE-2026-11-08-editable-terrain.md)。
+
+状态（2026-11-10）：已在分支 `feat/building-main-interest` 实施，待合入。Building 与 Monster 同样经场景 `ShowSubject` / `HideSubject` 进出主视野，建筑自己的 Interest、`Namespaces` 里的 `building` 一类与 `TypeSchedules` 条目已删；TerrainEditor 本来就是普通实体（持久、不同步、无订阅），无需改。demo 尺度的主视野（进入 1.2m、最大 2.7m）对 3～12m 的建筑明显太小，主视野尺度等四项待维护者确认，测量与选项见[方案 §27.10](FEATURE-2026-11-08-editable-terrain.md#2710-订阅改为场景主视野维护者-2026-11-10)。

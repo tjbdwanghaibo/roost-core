@@ -635,7 +635,7 @@ func TestTerrainLeavesPlayerAndMonsterReplicationByteIdentical(t *testing.T) {
 		config := gamescene.DefaultConfig()
 		var terrainConfig *terrainSyncConfig
 		if withTerrain {
-			terrainConfig = defaultTerrainSync(spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}}, false)
+			terrainConfig = defaultTerrainSync(spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}})
 		}
 		scene, err := newSceneWith(sceneLane{transport: recorder}, recorder, nil, config, sceneMaxVisible, terrainConfig)
 		if err != nil {
@@ -742,7 +742,7 @@ func TestTerrainDoesNotWidenThePlayerObjectLimit(t *testing.T) {
 	recorder := newSceneRecorder()
 	config := gamescene.DefaultConfig()
 	scene, err := newSceneWith(sceneLane{transport: recorder}, recorder, nil, config, 0,
-		defaultTerrainSync(spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}}, false))
+		defaultTerrainSync(spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}}))
 	if err != nil {
 		t.Fatal(err)
 	}

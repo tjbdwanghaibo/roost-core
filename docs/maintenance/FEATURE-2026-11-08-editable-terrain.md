@@ -1079,6 +1079,8 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 
 ### 27.3 同步：与 Player / Monster 同一条链路
 
+> **变更（维护者 2026-11-10，[§27.10](#2710-订阅改为场景主视野维护者-2026-11-10)）**：下面“订阅”“对象上限（D15）”两条与“预算”里的视野数字是首版（建筑自己的 Interest 200m / 128、命名空间 `building` 单独计 128、引用表 292），已改为与 Monster 完全相同地进场景主视野；`TypeSchedules` 不再有建筑条目。其余各条（packer、登记 / 撤出的时机与修订号、启动登记、继承的契约、客户端、字节数）仍然成立，撤出改为与怪相同的 `HideSubject`（退役 subject）。
+
 - **实体**：`Building` 加 `sync=true syncNamespace="building" subjectPacker=NewBuildingSyncPacker`；packer 与 Player / Monster 同形（一个缺省视图、全量与增量都是按字段的 `MarshalSync`）。生成的同步字段、`dao_sync.proto`、Go / C# Apply 都由正式生成器出。
 - **Manager 与节奏**：场景同一个 entitysync Manager、同一条玩家连接与推送编号；`TypeSchedules` 写明建筑按变化发（on_change），与玩家、怪相同（地形块仍是 1 秒一批）。
 - **订阅**：建筑自己的 `policy.Interest`（独立订阅来源，与地形块同一做法），按位置订阅：subject 是站着的建筑、位置是占地中心；观察者是玩家，视点就是玩家的地形视点（`terrainSync` 的 watch / moved / unwatch 同时报给它）。视野进入半径 200m、离开 220m、块 64m，`MaxVisible` 128。
@@ -1104,7 +1106,7 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 
 ### 27.6 分区场景（只写设计，本轮不接）
 
-分区场景仍拒绝放置（`building_disabled`，P5）。同步链路要接时：建筑归锚点所在格的进程写（与块相同），客户端连在 Base 进程上。照地形块副本（§21、`terrain_chunk.Replica`）的做法，格进程把站着的建筑推给 Base 与邻格：Base 上是只读副本（同一实体 ID、命名空间、编码，没有 DAO 与事务），登记到 Base 场景 Manager、放进同一种建筑 Interest，视点来自格的 witness（与地形视点同一来源）；邻格 Ghost 带里只要占位（`Lots` 的副本）给行走与跨格移动判定。跨格占地（一座建筑的块分属两格）需要两格的块锁在同一笔事务里，是跨进程事务（Remote）或“占地不跨格”的规则二选一，属 P5 决策。
+分区场景仍拒绝放置（`building_disabled`，P5）。同步链路要接时：建筑归锚点所在格的进程写（与块相同），客户端连在 Base 进程上。照地形块副本（§21、`terrain_chunk.Replica`）的做法，格进程把站着的建筑推给 Base 与邻格：Base 上是只读副本（同一实体 ID、命名空间、编码，没有 DAO 与事务），登记到 Base 场景 Manager；它怎样进玩家的视野按 §27.10 的原则走玩家与怪在分区场景里的那一套（格的 witness 与 Base 上的镜像），不单设建筑 Interest，具体接法属 P5（首版这里写的是“放进同一种建筑 Interest，视点来自格的 witness”，已作废）；邻格 Ghost 带里只要占位（`Lots` 的副本）给行走与跨格移动判定。跨格占地（一座建筑的块分属两格）需要两格的块锁在同一笔事务里，是跨进程事务（Remote）或“占地不跨格”的规则二选一，属 P5 决策。
 
 ### 27.7 验证
 
@@ -1127,7 +1129,7 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 
 - 真实 Mongo 用例没有运行；没有真实进程演练（整进程的 `installBuildingConfig` / `loadStanding` 接线只有编译与单元覆盖）；没有 Unity 表现。
 - 第一次改动以全量发出（27.3 末条）是 entitysync 的通用行为，未改。
-- 建筑视野的半径与上限（200m / 128）是估算值，没有按真实玩法测。
+- ~~建筑视野的半径与上限（200m / 128）是估算值，没有按真实玩法测。~~ 已随 §27.10 删除；现在是场景主视野的半径与上限，demo 尺度的影响见 §27.10。
 - 配置热更新收窄了参数范围时，存量值不改（可能在新范围外），客户端按存量值显示。
 - 建筑实体是 World 档、常驻；若以后允许卸载，要像玩家一样接 `ConfigureUnloadResync`。
 
@@ -1144,3 +1146,75 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 | ⑦ 改参数的配额 | 每次 `MinEditPoints`（20 点） | ★ 与拆除相同；或单独的限频 |
 
 **维护者 2026-11-10 决定**：① 建筑的订阅跟随玩家与怪（进场景主视野，与 Monster 的 `ShowSubject` 相同，不单设 Interest / 命名空间），实施中；其余各项按推荐。**原则**：可编辑地形里只有 TerrainChunk（地形块实体）是特殊的，其他实体（Building、TerrainEditor 等）都按普通实体处理——持久、同步、订阅走与 Player / Monster 相同的正式链路，不为它们另造通道；块上的 `Lots` 只作服务端内部串行化索引，不改变这一原则。
+
+### 27.10 订阅改为场景主视野（维护者 2026-11-10）
+
+维护者 2026-11-10：“建筑订阅跟随玩家和monster,后续只有terrainentity特使，别的entity都是普通的entity”。本节实施 §27.9 ① 的决定，并按“可编辑地形里只有 TerrainChunk 是特殊实体”的原则审视其他实体。证据、命令、修前红原文与变异见 [evidence/building-main-interest-20261110](evidence/building-main-interest-20261110/README.md)。
+
+**接法：与 Monster 完全相同**
+
+| 项 | 首版（§27.3） | 现在 |
+| --- | --- | --- |
+| 订阅来源 | 建筑自己的 `policy.Interest`（进入 200m / 离开 220m、块 64m、`MaxVisible` 128） | 场景主视野那个 Interest（与玩家、怪同一个：进入 1.2m / 离开 1.5m / 客户端最大 2.7m、`MaxVisible` 64、超额降级 D17） |
+| 进 / 出 | `Manager.Register` + 自己的 `Interest.Show` / `Hide`（拆除不退役） | `Scene.ShowSubject`（登记 + 主视野 Show，位置是占地中心）/ `Scene.HideSubject`（主视野 Hide + 退役 subject），就是 spawner 给怪用的两个入口 |
+| 视点 | 玩家的地形视点（`terrainSync` 的 watch / moved / unwatch 同时报给建筑） | 玩家自己的主视野（跟着玩家实体走），没有建筑专用的视点 |
+| `ManagerConfig.Namespaces`（D15） | `terrain` 64 + `building` 128 | 只有 `terrain` 64；建筑与玩家、怪、场景同在 `Limits.MaxObjects`（100）那一类 |
+| 会话引用表上限 | 100 + 64 + 128 = 292 | 100 + 64 = 164（`sceneTerrainMaxObjects`，与 §27 之前相同） |
+| `TypeSchedules` | 地形块 periodic 1s + 建筑 on_change（显式条目） | 只有地形块（`sceneTypeSchedules`）；建筑与玩家、怪一样没有条目，按 Manager 的模式发（生产 on_change，结果与首版相同） |
+| 命名空间 `building` | 客户端分流键 + Manager 的单独一类 | 只是客户端分流键（与 `monster` 相同），生成的同步字段、packer、C# Apply 不变 |
+
+删除的建筑专用逻辑：`building_sync.go` 里的 Interest、视野常量（`buildingViewRadius` / `buildingViewHysteresis` / `buildingMaxVisible`）、`watch` / `move` / `unwatch` / `close`；`terrainSyncConfig.buildings` / `buildingMaxVisible` 与 `terrainSync.buildings`（地形视点不再转报）；`terrainNamespaceLimits` 里的 `building` 一类；`TypeSchedules` 的建筑条目。`building_sync.go` 只剩建筑与怪不同的那一点——**什么时候** Show / Hide：怪由 spawner 在一个 goroutine 上建与杀，建筑由放置 / 拆除的 Nest 事务决定，所以仍是提交后通知（`nest.AfterCommit` → `Map.SetBuildingCommitted`）、按锚点块 `LotRevision` 丢迟到通知、启动时 `loadStanding`；接线改为 `Scene.attachBuildings`（NewScene 在接建筑的普通场景调用）。
+
+两处随之改动（都不是建筑专用的分支）：
+
+- **`Scene.ShowSubject` 改用 `Manager.RegisterAfterRetirement`**（与 `Join` 相同）。拆除现在经 `HideSubject` 退役 subject；同一锚点再放是同一个实体 ID，若拆除欠订阅者的 remove 还没发出去，普通 `Register` 答 `ErrSubjectRetiring`，建筑就再也不显示（变异 M1 实测）。排在退役之后登记则先 remove 后 create；主视野的订阅在退役期间被拒、按 Interest 的重试表下一次结算再说。怪每次都是新 ID，对怪这就是 `Register`。
+- **修订号判定与 Show / Hide 在同一把锁里做**。首版在锁外调用 Show / Hide：两个提交后回调并发时，修订号较小的那个可能在判定通过之后、生效之前被较大的那个超过，倒序生效。现在持锁调用（两者只取 Manager / Interest 的短锁、不等待）。这是结构性守卫：没有构造出并发倒序的红用例（变异 M9“放回锁外”不变红），保证只到“同一座建筑的通知按修订号次序生效”，不覆盖进程内别的地方对同一 subject 的调用。
+
+**其他实体的审视**
+
+| 实体 / 数据 | 结论 |
+| --- | --- |
+| TerrainChunk（与 `terrain_chunk.Replica`） | 唯一的特殊实体，不变：自己的 Interest（200m / 64）、`Namespaces` 的 `terrain` 一类（64、每会话每 Flush 4 个全量）、`TypeSchedules` 1 秒一批、分区场景的 Ghost 副本与只读副本 |
+| Building | 本节：普通实体 |
+| TerrainEditor（玩家编辑账本） | 本来就是普通实体：PlayerScoped、DataEngine 持久、经生成的 lifecycle `GetOrCreate`，与块 / 建筑在同一笔 Nest 事务里锁；不同步（`sync` 未开，客户端从答复的 `LastSeq` 知道进度），没有任何订阅或专用通道，无需改 |
+| 块上的 `Lots` / `LotRevision` | 不是实体，是服务端内部的串行化索引（§27.4）：放置 / 笔刷在块锁内查重叠，只持久、不同步；进程内占位表（行走 / 寻路）由它发布。客户端看到的建筑全部来自 Building 实体 + 配置，`Lots` 不构成第二条建筑链路 |
+| `Map.SetBuildingCommitted` 通知、`LotRevision` 判定、`loadStanding` | 进出场景的时机（相当于 spawner 的“建好了 / 杀掉了”），不是订阅或同步通道；建筑经事务产生，所以通知在提交之后、乱序要靠修订号 |
+| Scene（时间域）、SceneActor、Monster、Player | 不属于可编辑地形；本轮不动 |
+
+**主视野对建筑的影响（测量，demo 尺度）**
+
+主视野是 §23 留下的 demo 尺度（世界单位厘米：进入 1.2m、离开 1.5m、客户端可要到进入 2.7m / 离开 3m；最近 64 个；会话 100）。建筑按**占地中心**进出。`building_sync_test.go` 的测量：
+
+| 情形 | 结果 |
+| --- | --- |
+| 站在建筑旁边紧挨着的空节点上（离占地中心 (短边 + 1) / 2 米：hut 2.5m、tower 2m、hall 3.5m、keep 6.5m） | 缺省视野四种都看不见；客户端最大视野只看得见 hut 与 tower，hall 与 keep 看不见；keep 要站到中心 1.2m 以内（占地里面）才看得见（`TestBuildingsAtTheDemoMainViewScale`） |
+| 主视野里最多几座建筑 | demo 最小的建筑是 3 × 3：两座占地中心至少差 3m（切比雪夫距离），缺省视野（直径 2.4m）至多 1 座，最大视野（直径 5.4m）至多 4 座 |
+| 建筑挤占玩家 / 怪的名额 | 会：四座 tower（2.12m）+ 60 只怪（2.16～2.32m）占满 64 个，2.35m 的另一个玩家被挤出主视野（`TestBuildingsTakeMainViewPlacesLikeAnyoneElse`）。demo 尺度下建筑至多占 4 个名额，挤占只在视野本来就满时发生 |
+| 空出名额之后 | AOI 的 `MaxVisible` 是近似语义（`policy.AOIConfig`：被忽略的目标在它下一次移动时重新参选）：拆掉一座 tower，被挤出的玩家要自己动一下才进来；反过来，先被 64 只更近的怪占满、后放的 4 座 tower 被忽略，走掉 10 只怪、看的人站着不动时仍是 0 座，动 1cm 后 4 座都到。**建筑从不移动**，所以只有看的人移动才会让它重新参选 |
+| 会话超额（D17） | 主视野不设上限、97 只怪 + 4 座 tower + 自身 = 102 > 100：不断开，收敛到 100（2 座 tower 暂缓，`OverLimitDeferred` 2、`Evicted` 0）；拆掉留着的两座，暂缓的两座随即进来，不需要谁移动（`TestManyBuildingsDegradeWithTheCrowd`） |
+| 字节数 | 不变：hall 全量 132 字节（载荷 53）、改参数增量 94 字节（载荷 15） |
+
+结论：**demo 尺度明显不适合建筑**——主视野是按 0.6m/s 的人设计的 1～3m，而建筑边长 3～12m，按占地中心进视野时人站在建筑旁边看不见它（keep 从外面永远看不见）。反过来，若把主视野放大到建筑尺度，按 §27.3 的估算密度（每 100m² 一座）半径约 45m 内就有 64 座建筑，“最近 64 个”会被建筑占满、把更远的玩家 / 怪挤掉，会话也更容易超过 100。本轮**不改主视野参数**，列为待确认：
+
+| 待确认 | 选项（推荐标★） | 代价 |
+| --- | --- | --- |
+| A 开地形场景的主视野尺度 | ★ 按游戏尺度调大（例如进入 30m / 离开 33m / 客户端最大 60m，`MaxVisible` 64 与块边长随之重定），玩家、怪、建筑一起用；或保持 1.2m（建筑在 demo 里只作接线演示，基本看不见） | 玩家 / 怪也在 30m 外可见，候选与下行变多；要重跑 §23 的 AOI 基准、D17 与场景同步用例，demo 的移动速度 / 巡逻范围可能也要跟着放大 |
+| B 主视野名额是否按类型分 | ★ 先不分（A 定下之后按实测再看）；或按类型给名额 / 优先级（例如建筑至多 N 个、玩家优先） | 分类型要给 `policy.AOI` 的 `MaxVisible` 加按命名空间或 Profile 优先级的取舍——框架改动，“建筑与怪完全相同”就多了一条按类型的规则 |
+| C 建筑按占地中心还是占地范围进视野 | ★ 先按中心（与怪一样是一个点）；或 AOI 支持目标带半径（离占地最近点进视野） | 带半径是框架改动（AOI 索引按扩展块登记，`MaxObservedBlocks` 已有），大建筑才需要 |
+| D 静止目标被上限忽略后的重新参选 | ★ 接受近似（玩家通常在动；会话级超额降级 D17 的放回不受影响）；或在 AOI 里有空位时重评被忽略的候选 | 重评是 `policy.AOI` 的框架改动，要测批量重评成本（`BenchmarkAOIBatchRecompute`） |
+
+**验证**（生成的 game-demo，`building_sync_test.go`）
+
+| 用例 | 内容 |
+| --- | --- |
+| `TestBuildingsReachAnotherClientOverRealTCP`（改） | 另一个玩家的真实 TCP 客户端站在 hall 上：出现（全量）、改参数（增量）、**走出主视野 3m 外消失**（首版的 200m 建筑视野下不会消失）、走到 tower 上看到 tower、走回来全量回来、拆除 remove、同一锚点再放、拆了马上再放 |
+| `TestABuildingPlacedAgainBeforeItsRemoveWentOut`（新） | 复制循环不跑：拆除欠着 remove 时同一锚点再放，客户端先 remove 后收到新 tower 的全量 |
+| `TestBuildingsHaveNoReplicationOfTheirOwn`（新） | `Namespaces` 只有 `terrain`、引用表 164、`TypeSchedules` 只有地形块、Manager on_change |
+| `TestBuildingsTakeMainViewPlacesLikeAnyoneElse`（新） | 4 座 tower + 60 只怪挤掉 2.35m 的玩家；拆一座、玩家动一下进来；被忽略的 tower 在看的人动 1cm 后进来（站着不动的结果只记日志） |
+| `TestManyBuildingsDegradeWithTheCrowd`（新） | 超额降级：102 个收敛到 100、不断开、建筑与怪同一类；拆掉留着的两座，暂缓的两座进来 |
+| `TestBuildingsAtTheDemoMainViewScale`（新） | 上表第一行的测量 |
+| `TestBuildingSyncAfterARestart`、`TestBuildingSyncTakesTheLatestRevision`（改） | 看的人站到每座建筑上核对；拆掉的那座在原位不出现（参照怪到了、建筑没到） |
+
+修前红：新用例在改动前的代码（`21f631e1` 生成的工程，测试只加了编译垫片）上 6 个红（主视野走出 3m 不消失、`Namespaces` 有 `building`、主视野挤不掉邻居、超额等不到、hut 在缺省视野里看得见、重启后在一座建筑上同时持有两座）。变异 9 项里 8 项红；M9（Show / Hide 放回锁外）不变红，见上。C# 客户端、DAO、协议、存储都不变。
+
+**未覆盖**：TCP 用例在重负载下偶发“第二次改参数以全量发出”（新代码 3 次，改动前的代码同样负载 0/400；内容正确，只是编码），尚未确认，见 KNOWN-LIMITS 与证据 §3。真实 Mongo、真实进程演练、Unity 表现仍未跑（同 §27.8）；分区场景仍不接建筑（§27.6 的设计已改为按本节原则走玩家与怪在分区场景里的可见性，不单设建筑 Interest，接法属 P5）。

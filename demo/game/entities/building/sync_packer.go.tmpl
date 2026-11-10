@@ -13,7 +13,7 @@ import (
 // 同步链路对“不是玩家的东西”没有特例（方案 §27）。
 const BuildingSyncCodec uint16 = 2
 
-// buildingViews 只有一个视图：缺省视图（建筑 Interest 不配分档），字段是 DAO 上全部标了 sync 的字段——State、Owner、
+// buildingViews 只有一个视图：缺省视图（场景主视野不配分档，与玩家、怪相同），字段是 DAO 上全部标了 sync 的字段——State、Owner、
 // ConfigID、Params、Facing、GX、GY、Foundation。占地宽高与 BaseRevision 只持久，不下发。
 var buildingViews, buildingViewsErr = dataengine.NewSyncViewSet(db.BuildingDaoSyncFields(),
 	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}},

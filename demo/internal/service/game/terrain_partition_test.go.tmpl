@@ -136,7 +136,7 @@ func startPartitionProc(t *testing.T, net *partitionNet, grid *cellworld.Grid, s
 	transport, addr := startScenePlayerTransport(t)
 	bounds := process.m.Meta().Bounds()
 	config := gamescene.Config{Width: bounds.Max.X, Height: bounds.Max.Y, BlockSize: 300, Spawn: spatial.Point{X: bounds.Max.X / 2, Y: bounds.Max.Y / 2}}
-	scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, nil, config, sceneMaxVisible, defaultTerrainSync(bounds, false), observer)
+	scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, nil, config, sceneMaxVisible, defaultTerrainSync(bounds), observer)
 	if err != nil {
 		t.Fatal(err)
 	}

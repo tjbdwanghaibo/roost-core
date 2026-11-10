@@ -1,0 +1,32 @@
+    building_sync_test.go:351: timed out waiting for the hall leaving the main view 3m away
+--- FAIL: TestBuildingsReachAnotherClientOverRealTCP (10.04s)
+--- PASS: TestABuildingPlacedAgainBeforeItsRemoveWentOut (0.03s)
+    building_sync_test.go:444: the scene manager's namespace limits: map[building:{MaxObjects:128 SnapshotBudget:{MaxObjects:0 MaxBytes:0 PerSessionObjects:0}} terrain:{MaxObjects:64 SnapshotBudget:{MaxObjects:0 MaxBytes:0 PerSessionObjects:4}}], want only "terrain"
+--- FAIL: TestBuildingsHaveNoReplicationOfTheirOwn (0.00s)
+    building_sync_test.go:507: the neighbour 2.35m away is still held: the main view holds 66 objects
+--- FAIL: TestBuildingsTakeMainViewPlacesLikeAnyoneElse (0.03s)
+    building_sync_test.go:592: timed out waiting for the viewer's session settled at its limit
+--- FAIL: TestManyBuildingsDegradeWithTheCrowd (10.03s)
+    building_sync_test.go:669: hut 4×4: centre 2.5m from the node next to it; default view (1.2m) sees it true, widest view (2.7m) sees it true
+    building_sync_test.go:672: hut 4×4 next to it: default view sees it true (want false), widest view true (want true)
+--- FAIL: TestBuildingsAtTheDemoMainViewScale (0.05s)
+    building_sync_test.go:724: timed out waiting for a restarted building on a client
+--- FAIL: TestBuildingSyncAfterARestart (10.03s)
+--- PASS: TestBuildingSyncTakesTheLatestRevision (0.04s)
+--- PASS: TestBuildingParamsChangeOncePerSeqByTheOwner (0.02s)
+--- PASS: TestBuildingConfigRulesAndReloads (0.01s)
+--- PASS: TestBuildingReconcileReportsAConfigDrift (0.01s)
+--- PASS: TestBuildingPlacementChecks (0.01s)
+--- PASS: TestBuildingPlacementAppliesOncePerSeq (0.01s)
+--- PASS: TestBuildingRemoval (0.01s)
+--- PASS: TestBrushUnderABuildingIsRefused (0.01s)
+--- PASS: TestWalkersGoAroundBuildings (0.01s)
+--- PASS: TestBuildingConcurrentPlacementsNeverOverlap (0.01s)
+--- PASS: TestBuildingsSurviveARestart (0.02s)
+--- PASS: TestBuildingsAcrossABaseRevision (0.02s)
+--- PASS: TestBuildingReconcileReportsAMismatch (0.01s)
+--- PASS: TestBuildingsAreRefusedWithoutEnableBuildings (0.01s)
+--- SKIP: TestBuildingRestartRealMongo (0.00s)
+FAIL
+FAIL	example.com/gd/internal/service/game	31.201s
+FAIL

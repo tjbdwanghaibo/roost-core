@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,17 +15,24 @@ import (
 	generated "{{MODULE}}/configs/generated"
 	db "{{MODULE}}/db"
 	building "{{MODULE}}/game/entities/building"
+	monster "{{MODULE}}/game/entities/monster"
+	player "{{MODULE}}/game/entities/player"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	gamescene "{{MODULE}}/game/scene"
 	"{{MODULE}}/game/terrainmap"
 	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/frame"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
-// 建筑实体化与同步（可编辑地形方案 §27）端到端：建筑是普通的同步实体，走与 Player / Monster 相同的 entitysync 链路
-// （场景的 Manager、提交观察者 on_change、自己的 Interest 与命名空间）。客户端是 terrain_sync_test.go 的 Go 接收端
+// 建筑实体化与同步（可编辑地形方案 §27、§27.10）端到端：建筑是普通的同步实体，走与 Player / Monster 相同的 entitysync
+// 链路，订阅跟随玩家与怪（场景的 Manager、提交观察者 on_change、场景主视野、与怪相同的 ShowSubject / HideSubject）。客户端是 terrain_sync_test.go 的 Go 接收端
 // （frame.Receiver + 生成的 ApplySyncBuildingDao，与 C# / C++ 同一协议），从回环 socket 读帧。存储是 terrain_test.go 的
 // 离线替身；放置规则与参数槽来自工程的配置数据（configs/data，建筑配置表 building / building_param）。
 
@@ -86,8 +94,16 @@ func buildingSyncPack(t *testing.T, dir string) string {
 }
 
 // startBuildingSyncHarness 起一个接建筑的普通场景进程，接线与生产相同：Nest 装提交观察者（场景按 on_change 发、地形块
-// 1 秒一批），NewScene 打开建筑同步并 attach，Start 之后登记启动对账通过的建筑（startTerrainSync 的 loadStanding）。
+// 1 秒一批），场景的世界与 AOI 就是地形图（gamescene.TerrainConfig，与 NewScene 相同），主视野是生产的 sceneMaxVisible，
+// attachBuildings 把放置 / 拆除接到场景的 ShowSubject / HideSubject，Start 之后登记启动对账通过的建筑（loadStanding）。
 func startBuildingSyncHarness(t *testing.T, pack string, store *memoryChunkStore) *terrainSyncHarness {
+	t.Helper()
+	return startBuildingSyncHarnessWith(t, pack, store, sceneMaxVisible, true)
+}
+
+// startBuildingSyncHarnessWith 同上，主视野的上限由 mainView 给（0 表示不设上限：超额降级的用例用它让会话超过 100）；
+// started 为假时不起复制循环，只有测试自己的 Flush（用来让“欠着的 remove”停在两次 Flush 之间）。
+func startBuildingSyncHarnessWith(t *testing.T, pack string, store *memoryChunkStore, mainView int, started bool) *terrainSyncHarness {
 	t.Helper()
 	transport, addr := startScenePlayerTransport(t)
 	observer := &sceneSyncObserver{}
@@ -97,24 +113,92 @@ func startBuildingSyncHarness(t *testing.T, pack string, store *memoryChunkStore
 		p.m.SetPolicy(policy)
 	}, nest.NestOptionWithEntitySync(observer))
 	bounds := p.m.Meta().Bounds()
-	config := gamescene.Config{Width: bounds.Max.X, Height: bounds.Max.Y, BlockSize: 300, Spawn: spatial.Point{X: bounds.Max.X / 2, Y: bounds.Max.Y / 2}}
-	scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, nil, config, sceneMaxVisible, defaultTerrainSync(bounds, p.m.BuildingsEnabled()), observer)
+	config, err := gamescene.TerrainConfig(bounds)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scene.terrain.buildings == nil {
-		t.Fatal("the scene has no building replication")
-	}
-	scene.terrain.attach(p.m)
-	scene.watchSessions(transport)
-	h := &terrainSyncHarness{ctx: context.Background(), transport: transport, addr: addr, process: p, scene: scene, pack: pack, observer: observer}
-	if err := scene.Start(h.ctx); err != nil {
+	scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, nil, config, mainView, defaultTerrainSync(bounds), observer)
+	if err != nil {
 		t.Fatal(err)
 	}
-	scene.terrain.buildings.loadStanding(p.m)
+	scene.terrain.attach(p.m)
+	if scene.attachBuildings(p.m) == nil {
+		t.Fatal("the scene takes no buildings")
+	}
+	scene.watchSessions(transport)
+	h := &terrainSyncHarness{ctx: context.Background(), transport: transport, addr: addr, process: p, scene: scene, pack: pack, observer: observer}
+	if started {
+		if err := scene.Start(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.buildingSync().loadStanding(p.m)
 	t.Cleanup(func() { h.close() })
 	return h
 }
+
+// buildingSync 是场景的建筑接线（放置 / 拆除 → ShowSubject / HideSubject）。
+func (h *terrainSyncHarness) buildingSync() *buildingSync { return h.scene.buildings }
+
+// walk 让一个玩家走到 to：与生产的移动相同，场景的主视野跟着玩家的实体走（Interest.Move），地形视野跟着报告的视点走。
+func (h *terrainSyncHarness) walk(t *testing.T, playerID int64, to spatial.Point) {
+	t.Helper()
+	id, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.scene.interest.Move(id, to); err != nil {
+		t.Fatalf("player %d walking to %v: %v", playerID, to, err)
+	}
+	h.scene.terrain.moved(playerID, to)
+}
+
+// showMonster 与 spawner 一样把一只怪放进场景（ShowSubject：登记、放进主视野）。
+func (h *terrainSyncHarness) showMonster(t *testing.T, uniqueID int64, at spatial.Point) int64 {
+	t.Helper()
+	monster.RegisterEntity()
+	id, err := entity.BuildEntityID(uniqueID, monster.EntityKindMonster)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: monster.EntityKindMonster, Id: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := built.(*monster.Monster)
+	if err := h.scene.ShowSubject(h.ctx, value.Sync(), value.ID(), at); err != nil {
+		t.Fatal(err)
+	}
+	return value.ID()
+}
+
+// heldIn 是客户端此刻持有的、命名空间为 namespace 的对象。
+func (client *terrainClient) heldIn(namespace string) map[int64]bool {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	out := map[int64]bool{}
+	for id, ns := range client.namespaces {
+		if ns == namespace {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// heldCount 是客户端此刻持有的对象数（全部命名空间）。
+func (client *terrainClient) heldCount() int {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return len(client.namespaces)
+}
+
+// lotCentreOf 是一座站着的建筑的占地中心（它在主视野里的位置）。
+func lotCentreOf(t *testing.T, h *terrainSyncHarness, id int64) spatial.Point {
+	t.Helper()
+	gx, gy := building.AnchorOf(id)
+	return lotCentre(buildingAt(t, h.process, gx, gy).Lot)
+}
+
 
 // close 关场景（可重复调用）。
 func (h *terrainSyncHarness) close() {
@@ -186,26 +270,29 @@ func buildingUpdatesOf(frames []receivedFrame, subject int64) []buildingUpdate {
 }
 
 const (
-	buildingViewer  = int64(30201) // 连着 TCP、看建筑的玩家
-	buildingBuilder = buildingOwner // 放置 / 改参数的玩家（不连接）
+	buildingViewer    = int64(30201) // 连着 TCP、看建筑的玩家
+	buildingNeighbour = int64(30202) // 连着 TCP、站在看建筑的玩家附近的另一个玩家
+	buildingBuilder   = buildingOwner // 放置 / 改参数的玩家（不连接）
 )
 
-// 建筑与玩家、怪走同一条同步链路（方案 §27）：另一个玩家的 TCP 客户端看到建筑出现（全量：配置 ID、补齐的参数、锚点、朝向、
-// 地基、属主）、参数修改（on_change 增量，只有 Params）、拆除（remove）；建筑离开视野时从客户端消失、回来时再以全量出现
-// （带此刻的参数）；拆除之后同一锚点再放一座（同一个实体）照样出现。视野外的建筑不发。
+// 建筑与玩家、怪走同一条同步链路、同一个场景主视野（方案 §27、§27.10）：另一个玩家的 TCP 客户端站在 hall 上，看到它出现
+// （全量：配置 ID、补齐的参数、锚点、朝向、地基、属主）、参数修改（on_change 增量，只有 Params）；走出主视野（3m 外，主视野
+// 离开半径 1.5m）hall 从客户端消失，走到远处的 tower 上看到 tower，走回来 hall 再以全量出现（带此刻的参数）；拆除收到
+// remove；同一锚点再放一座（同一个实体）照样出现——包括拆除的 remove 还没发出去就再放（退役之后再登记，先 remove 后 create）。
 func TestBuildingsReachAnotherClientOverRealTCP(t *testing.T) {
 	h := startBuildingSyncHarness(t, buildingSyncPack(t, t.TempDir()), &memoryChunkStore{})
 	m := h.process.m
-	home, away := spatial.Point{X: 10000, Y: 10000}, spatial.Point{X: 45000, Y: 45000}
+	// hall 放在 (110, 100)、朝向 1（占地 6 × 8）：占地中心 (112.5m, 103.5m)。看的人先站在那里。
+	home := spatial.Point{X: 11250, Y: 10350}
 	client := h.join(t, buildingViewer, home)
 
-	// 视野里的一座 hall（朝向 1：占地 6 × 8），只给第一个参数，第二个取缺省；远处一座 tower，在视野外。
+	// 主视野里的一座 hall，只给第一个参数，第二个取缺省；远处一座 tower，在主视野外。
 	hallAt := building.Placement{ConfigID: 2, GX: 110, GY: 100, Facing: 1, Params: []int32{3}}
 	placed, err := m.Place(h.ctx, buildingBuilder, 1, hallAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(placed.Building.Params, []int32{3, 0}) || placed.Building.Lot.W != 6 || placed.Building.Lot.H != 8 {
+	if !slices.Equal(placed.Building.Params, []int32{3, 0}) || placed.Building.Lot.W != 6 || placed.Building.Lot.H != 8 || lotCentre(placed.Building.Lot) != home {
 		t.Fatalf("the placed hall: %+v", placed.Building)
 	}
 	far, err := m.Place(h.ctx, buildingBuilder, 2, building.Placement{ConfigID: 3, GX: 450, GY: 450})
@@ -259,12 +346,15 @@ func TestBuildingsReachAnotherClientOverRealTCP(t *testing.T) {
 	}
 	delta := ups[0]
 
-	// 走远：hall 离开视野、从客户端消失，远处的 tower 进来；走回来：hall 以全量回来（带改过的参数），tower 走掉。
-	h.scene.terrain.moved(buildingViewer, away)
-	h.flushUntil(t, "the view moving to the far corner", func() bool {
+	// 走出主视野：3m 外 hall 消失（建筑跟着主视野走，不再有 200m 的建筑视野）；走到 tower 上看到 tower；走回来 hall 以
+	// 全量回来（带改过的参数），tower 走掉。
+	h.walk(t, buildingViewer, spatial.Point{X: home.X + 300, Y: home.Y})
+	h.flushUntil(t, "the hall leaving the main view 3m away", func() bool { return len(client.heldBuildings()) == 0 })
+	h.walk(t, buildingViewer, lotCentreOf(t, h, farID))
+	h.flushUntil(t, "the tower in the main view", func() bool {
 		return slices.Equal(client.heldBuildings(), []int64{farID}) && buildingMatches(client.building(farID), state(farID))
 	})
-	h.scene.terrain.moved(buildingViewer, home)
+	h.walk(t, buildingViewer, home)
 	h.flushUntil(t, "the hall back in view", func() bool {
 		return slices.Equal(client.heldBuildings(), []int64{hallID}) && buildingMatches(client.building(hallID), state(hallID))
 	})
@@ -272,7 +362,7 @@ func TestBuildingsReachAnotherClientOverRealTCP(t *testing.T) {
 		t.Fatalf("the hall coming back into view: %+v, want a full update", ups)
 	}
 
-	// 拆除：客户端收到 remove；同一锚点再放一座 hut（同一个实体），又出现。
+	// 拆除：客户端收到 remove；同一锚点再放一座 hut（同一个实体），站到它上面看到它。
 	if _, err := m.Remove(h.ctx, buildingBuilder, 5, 110, 100); err != nil {
 		t.Fatal(err)
 	}
@@ -281,10 +371,22 @@ func TestBuildingsReachAnotherClientOverRealTCP(t *testing.T) {
 	if err != nil || hut.Building.ID != hallID {
 		t.Fatalf("a hut on the hall's anchor: %+v, %v", hut, err)
 	}
+	h.walk(t, buildingViewer, lotCentre(hut.Building.Lot))
 	h.flushUntil(t, "the hut on the viewer's client", func() bool { return buildingMatches(client.building(hallID), state(hallID)) })
 	if got := client.building(hallID); got.ConfigID.Value != 1 || !slices.Equal(got.Params.Value, []int32{6}) {
 		t.Fatalf("the client's hut: %+v", got)
 	}
+	// 拆了马上再放：客户端最后持有的是新放的 tower（remove 还没发出去时的次序见 TestABuildingPlacedAgainBeforeItsRemoveWentOut）。
+	if _, err := m.Remove(h.ctx, buildingBuilder, 7, 110, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Place(h.ctx, buildingBuilder, 8, building.Placement{ConfigID: 3, GX: 110, GY: 100}); err != nil {
+		t.Fatal(err)
+	}
+	h.flushUntil(t, "the tower placed again before the hut's remove went out", func() bool {
+		got := client.building(hallID)
+		return got != nil && got.ConfigID.Value == 3 && buildingMatches(got, state(hallID))
+	})
 	if err := client.failure(); err != nil {
 		t.Fatal(err)
 	}
@@ -299,8 +401,287 @@ func TestBuildingsReachAnotherClientOverRealTCP(t *testing.T) {
 	}
 }
 
-// 重启之后，同步与库一致：启动对账核对通过的建筑登记为 subject，重新登录的客户端收到的正是库里的建筑（配置 ID、改过的
-// 参数、朝向、地基）；拆掉的那座不出现。
+// 拆除的 remove 还没发出去就在同一锚点再放（同一个实体 ID）：拆除经 HideSubject 让 subject 退役、欠看着它的客户端一个
+// remove，再放经 ShowSubject 把登记排在退役之后——客户端先收到 remove，再收到新放的 tower 的全量，最后持有 tower。
+// 复制循环不跑，两次 Flush 之间的次序是确定的。
+func TestABuildingPlacedAgainBeforeItsRemoveWentOut(t *testing.T) {
+	h := startBuildingSyncHarnessWith(t, buildingSyncPack(t, t.TempDir()), &memoryChunkStore{}, sceneMaxVisible, false)
+	m := h.process.m
+	placed, err := m.Place(h.ctx, buildingBuilder, 1, building.Placement{ConfigID: 1, GX: 110, GY: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := placed.Building.ID
+	client := h.join(t, buildingViewer, lotCentre(placed.Building.Lot))
+	h.flushUntil(t, "the hut on the client", func() bool { return client.building(id) != nil })
+	client.takeFrames()
+	if _, err := m.Remove(h.ctx, buildingBuilder, 2, 110, 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Place(h.ctx, buildingBuilder, 3, building.Placement{ConfigID: 3, GX: 110, GY: 100}); err != nil {
+		t.Fatal(err)
+	}
+	h.flushUntil(t, "the tower placed again on the client", func() bool {
+		got := client.building(id)
+		return got != nil && got.ConfigID.Value == 3
+	})
+	gx, gy := building.AnchorOf(id)
+	if got := client.building(id); !buildingMatches(got, buildingAt(t, h.process, gx, gy)) {
+		t.Fatalf("the client's tower: %+v", got)
+	}
+	if ups := buildingUpdatesOf(client.takeFrames(), id); len(ups) == 0 || !ups[len(ups)-1].full {
+		t.Fatalf("the tower placed again arrived as %+v, want a full update", ups)
+	}
+	if err := client.failure(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 建筑没有自己的订阅来源与同步配置（方案 §27.10）：Manager 的按命名空间配置里只有地形块，会话引用表上限是场景的 100 加
+// 地形的 64；按类型的调度里只有地形块（1 秒一批），建筑与玩家、怪一样没有条目、按 Manager 的模式（on_change）发。
+func TestBuildingsHaveNoReplicationOfTheirOwn(t *testing.T) {
+	limits := terrainNamespaceLimits()
+	if _, own := limits[building.SyncNamespaceBuilding]; own || len(limits) != 1 {
+		t.Fatalf("the scene manager's namespace limits: %+v, want only %q", limits, terrainNamespace)
+	}
+	if got := limits[terrainNamespace]; got.MaxObjects != terrainMaxVisible || got.SnapshotBudget.PerSessionObjects != terrainSnapshotsPerFlush {
+		t.Fatalf("the terrain namespace: %+v", got)
+	}
+	if want := frame.DefaultLimits().MaxObjects + terrainMaxVisible; sceneTerrainMaxObjects != want {
+		t.Fatalf("a session's object table holds %d, want %d (players, monsters, buildings and the scene 100 + terrain 64)", sceneTerrainMaxObjects, want)
+	}
+	if sceneTerrainMaxObjects != 164 {
+		t.Fatalf("a session's object table holds %d, want 164", sceneTerrainMaxObjects)
+	}
+	schedules := sceneTypeSchedules()
+	if _, own := schedules[uint32(building.EntityKindBuilding)]; own || len(schedules) != 1 {
+		t.Fatalf("the scene manager's type schedules: %+v, want only the terrain chunk", schedules)
+	}
+	if got := schedules[uint32(terrain_chunk.EntityKindTerrainChunk)]; got.Mode != entitysync.ModePeriodic || got.Interval != time.Second {
+		t.Fatalf("the terrain chunk's schedule: %+v", got)
+	}
+	h := startBuildingSyncHarness(t, buildingSyncPack(t, t.TempDir()), &memoryChunkStore{})
+	if mode := h.scene.manager.Mode(); mode != entitysync.ModeOnChange {
+		t.Fatalf("the scene manager sends %v, want on_change for buildings like for players and monsters", mode)
+	}
+}
+
+// 四座 tower 围着看的人（占地中心都在 2.12m，客户端要了 2.4m 的视野）：主视野的“最近 64 个”里建筑与玩家、怪一起按距离
+// 排，4 座 tower + 60 只更远一点的怪正好 64 个，站在 2.35m 的另一个玩家被挤出主视野。拆掉一座 tower 空出一个位置：AOI 的
+// MaxVisible 是近似的（policy.AOIConfig：被忽略的目标在它下一次移动时重新参选，不在空出位置的那一刻），所以另一个玩家
+// 动一下才进来。反过来，先被怪占满、后放的 tower 被忽略：建筑从不移动，怪走掉之后看的人自己动一下才看见它们（方案 §27.10
+// 记录的 demo 尺度影响；“站着不动看不见”这一半只记日志，不作断言）。
+func TestBuildingsTakeMainViewPlacesLikeAnyoneElse(t *testing.T) {
+	h := startBuildingSyncHarness(t, buildingSyncPack(t, t.TempDir()), &memoryChunkStore{})
+	m := h.process.m
+	towers := [][2]int64{{100, 100}, {103, 100}, {100, 103}, {103, 103}}
+	for i, at := range towers {
+		if _, err := m.Place(h.ctx, buildingBuilder, uint64(i+1), building.Placement{ConfigID: 3, GX: at[0], GY: at[1]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 四座 tower 的公共角：到每个占地中心 √(150² + 150²) ≈ 212cm。
+	corner := spatial.Point{X: 10250, Y: 10250}
+	client := h.join(t, buildingViewer, corner)
+	if view, err := h.scene.SetView(buildingViewer, policy.ObserverView{Radius: 240}); err != nil || view.Radius != 240 {
+		t.Fatalf("a 2.4m view: %+v, %v", view, err)
+	}
+	neighbourAt := spatial.Point{X: corner.X, Y: corner.Y + 235}
+	neighbourClient := h.join(t, buildingNeighbour, neighbourAt)
+	neighbour, err := entity.BuildEntityID(buildingNeighbour, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const monsters = sceneMaxVisible - 4
+	monsterIDs := make([]int64, 0, monsters)
+	for i := range monsters {
+		// 216～232cm，一圈排开：比 tower 远、比另一个玩家近。
+		r := 216 + float64(i%17)
+		angle := 2 * math.Pi * float64(i) / monsters
+		at := spatial.Point{X: corner.X + int64(r*math.Cos(angle)), Y: corner.Y + int64(r*math.Sin(angle))}
+		monsterIDs = append(monsterIDs, h.showMonster(t, 7600+int64(i), at))
+	}
+	h.flushUntil(t, "the four towers and the monsters in the main view", func() bool {
+		return len(client.heldIn(building.SyncNamespaceBuilding)) == 4 && len(client.heldIn("monster")) == monsters
+	})
+	if client.heldIn("player")[neighbour] {
+		t.Fatalf("the neighbour 2.35m away is still held: the main view holds %d objects", client.heldCount())
+	}
+	t.Logf("main view full: %d buildings, %d monsters, neighbour held %v (objects held %d: itself + %d in the main view)",
+		len(client.heldIn(building.SyncNamespaceBuilding)), len(client.heldIn("monster")), client.heldIn("player")[neighbour], client.heldCount(), client.heldCount()-1)
+	if _, err := m.Remove(h.ctx, buildingBuilder, 5, towers[0][0], towers[0][1]); err != nil {
+		t.Fatal(err)
+	}
+	h.flushUntil(t, "the removed tower leaving", func() bool { return len(client.heldIn(building.SyncNamespaceBuilding)) == 3 })
+	t.Logf("a tower removed, nobody moved: neighbour held %v", client.heldIn("player")[neighbour])
+	h.walk(t, buildingNeighbour, spatial.Point{X: neighbourAt.X, Y: neighbourAt.Y - 1})
+	h.flushUntil(t, "the neighbour taking the removed tower's place once it moves", func() bool {
+		return client.heldIn("player")[neighbour] && len(client.heldIn("monster")) == monsters
+	})
+
+	// 先被怪占满，后放的 tower（比怪远）被忽略；怪走掉 10 只之后，看的人站着不动时 tower 不会自己进来，动 1cm 就进来。
+	for _, id := range monsterIDs {
+		h.scene.HideSubject(h.ctx, id)
+	}
+	h.walk(t, buildingNeighbour, spatial.Point{X: corner.X + 30000, Y: corner.Y})
+	if _, err := m.Remove(h.ctx, buildingBuilder, 6, towers[1][0], towers[1][1]); err != nil {
+		t.Fatal(err)
+	}
+	h.flushUntil(t, "the main view emptied", func() bool { return client.heldCount() == 3 })
+	crowd := make([]int64, 0, sceneMaxVisible)
+	for i := range sceneMaxVisible {
+		r := 100 + float64(i%50)
+		angle := 2 * math.Pi * float64(i) / sceneMaxVisible
+		crowd = append(crowd, h.showMonster(t, 7700+int64(i), spatial.Point{X: corner.X + int64(r*math.Cos(angle)), Y: corner.Y + int64(r*math.Sin(angle))}))
+	}
+	h.flushUntil(t, "a crowd of monsters closer than the towers", func() bool {
+		return len(client.heldIn("monster")) == sceneMaxVisible && len(client.heldIn(building.SyncNamespaceBuilding)) == 0
+	})
+	for i, at := range towers[:2] {
+		if _, err := m.Place(h.ctx, buildingBuilder, uint64(7+i), building.Placement{ConfigID: 3, GX: at[0], GY: at[1]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range crowd[:10] {
+		h.scene.HideSubject(h.ctx, id)
+	}
+	h.flushUntil(t, "ten monsters leaving", func() bool { return len(client.heldIn("monster")) == sceneMaxVisible-10 })
+	for range 10 {
+		if err := h.scene.Flush(h.ctx); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Logf("ten monsters gone, the viewer standing still: %d of 4 towers held (free places %d)",
+		len(client.heldIn(building.SyncNamespaceBuilding)), sceneMaxVisible-(client.heldCount()-1))
+	h.walk(t, buildingViewer, spatial.Point{X: corner.X + 1, Y: corner.Y})
+	h.flushUntil(t, "the towers once the viewer moves", func() bool { return len(client.heldIn(building.SyncNamespaceBuilding)) == 4 })
+	for _, c := range []*terrainClient{client, neighbourClient} {
+		if err := c.failure(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if lost := h.scene.manager.Stats().SessionsLost; lost != 0 {
+		t.Fatalf("%d replication sessions were lost", lost)
+	}
+}
+
+// 会话超额（D17）时建筑与玩家、怪一起降级：主视野不设上限，97 只怪（1.2～2m）加 4 座 tower（2.12m）加自身是 102 个对象，
+// 超过会话的 100。会话不断开，收敛到 100 个：自身、97 只怪与 2 座 tower（建筑与怪同在缺省一类，按距离丢最远的，4 座
+// 等距）。拆掉留着的两座，暂缓的两座随即进来。
+func TestManyBuildingsDegradeWithTheCrowd(t *testing.T) {
+	h := startBuildingSyncHarnessWith(t, buildingSyncPack(t, t.TempDir()), &memoryChunkStore{}, 0, true)
+	m := h.process.m
+	for i, at := range [][2]int64{{100, 100}, {103, 100}, {100, 103}, {103, 103}} {
+		if _, err := m.Place(h.ctx, buildingBuilder, uint64(i+1), building.Placement{ConfigID: 3, GX: at[0], GY: at[1]}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	corner := spatial.Point{X: 10250, Y: 10250}
+	client := h.join(t, buildingViewer, corner)
+	if view, err := h.scene.SetView(buildingViewer, policy.ObserverView{Radius: 240}); err != nil || view.Radius != 240 {
+		t.Fatalf("a 2.4m view: %+v, %v", view, err)
+	}
+	const monsters = 97
+	for i := range monsters {
+		r := 120 + float64(i%80)
+		angle := 2 * math.Pi * float64(i) / monsters
+		h.showMonster(t, 7800+int64(i), spatial.Point{X: corner.X + int64(r*math.Cos(angle)), Y: corner.Y + int64(r*math.Sin(angle))})
+	}
+	disconnectsBefore := sessionLostDisconnects()
+	limit := frame.DefaultLimits().MaxObjects
+	h.flushUntil(t, "the viewer's session settled at its limit", func() bool {
+		stats := h.scene.manager.Stats()
+		return stats.OverLimitWaiting == 0 && client.heldCount() == limit && len(client.heldIn("monster")) == monsters
+	})
+	stats := h.scene.manager.Stats()
+	if stats.OverLimitDeferred == 0 {
+		t.Fatal("no object was ever deferred: the buildings did not count with the crowd (the test's premise)")
+	}
+	if got := len(client.heldIn(building.SyncNamespaceBuilding)); got != 2 {
+		t.Fatalf("the viewer holds %d towers, want the 2 that fit in %d objects", got, limit)
+	}
+	if stats.SessionsLost != 0 || sessionLostDisconnects() != disconnectsBefore {
+		t.Fatalf("the crowd lost %d sessions", stats.SessionsLost)
+	}
+	t.Logf("over the limit: deferred %d, evicted %d; held %d objects, %d buildings, %d monsters",
+		stats.OverLimitDeferred, stats.OverLimitEvicted, client.heldCount(), len(client.heldIn(building.SyncNamespaceBuilding)), len(client.heldIn("monster")))
+	// 拆掉留着的两座：暂缓的两座进来（超额降级的放回不等谁移动）。
+	held := client.heldBuildings()
+	for i, id := range held {
+		gx, gy := building.AnchorOf(id)
+		if _, err := m.Remove(h.ctx, buildingBuilder, uint64(5+i), gx, gy); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.flushUntil(t, "the two deferred towers once the held ones are removed", func() bool {
+		got := client.heldBuildings()
+		return len(got) == 2 && !slices.Contains(got, held[0]) && !slices.Contains(got, held[1]) && client.heldCount() == limit
+	})
+	if err := client.failure(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// demo 尺度下主视野对建筑的实际效果（方案 §27.10 的测量）：建筑按占地中心进主视野，主视野进入半径 1.2m、客户端最大
+// 2.7m（离开 3m）。站在每座建筑旁边紧挨着的空节点上（离占地中心 (边长 + 1) / 2 米，取短边一侧）：缺省视野四种建筑
+// 都看不见；最大视野只看得见 hut（2.5m）与 tower（2m），hall（3.5m）与 keep（6.5m）看不见。站到 keep 的中心才看得见它。
+// 这条钉住的是 demo 现在的尺度；主视野的半径若按维护者的决定调整，按新尺度改这里的期望。
+func TestBuildingsAtTheDemoMainViewScale(t *testing.T) {
+	h := startBuildingSyncHarness(t, buildingSyncPack(t, t.TempDir()), &memoryChunkStore{})
+	m := h.process.m
+	const wide = buildingNeighbour // 要了最大视野的玩家
+	near := h.join(t, buildingViewer, spatial.Point{X: 5000, Y: 5000})
+	far := h.join(t, wide, spatial.Point{X: 5000, Y: 5000})
+	view, err := h.scene.SetView(wide, policy.ObserverView{Radius: 100_000})
+	if err != nil || view.Radius != sceneMaxLeaveRadius-(sceneLeaveRadius-sceneEnterRadius) {
+		t.Fatalf("the widest view: %+v, %v", view, err)
+	}
+	cases := []struct {
+		name            string
+		placement       building.Placement
+		nearSees, wideSees bool
+	}{
+		{"hut 4×4", building.Placement{ConfigID: 1, GX: 100, GY: 100}, false, true},
+		{"tower 3×3", building.Placement{ConfigID: 3, GX: 140, GY: 100}, false, true},
+		{"hall 8×6", building.Placement{ConfigID: 2, GX: 180, GY: 100}, false, false},
+		{"keep 12×12", building.Placement{ConfigID: 4, GX: 220, GY: 100, Level: true}, false, false},
+	}
+	for i, c := range cases {
+		placed, err := m.Place(h.ctx, buildingBuilder, uint64(i+1), c.placement)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		lot, centre := placed.Building.Lot, lotCentre(placed.Building.Lot)
+		// 短边一侧、紧挨着占地的空节点：离中心 (短边 + 1) / 2 米。
+		probe := spatial.Point{X: centre.X - (int64(lot.W)+1)*terrain.SampleSpacing/2, Y: centre.Y}
+		if lot.H < lot.W {
+			probe = spatial.Point{X: centre.X, Y: centre.Y - (int64(lot.H)+1)*terrain.SampleSpacing/2}
+		}
+		h.walk(t, buildingViewer, probe)
+		h.walk(t, wide, probe)
+		// 同一处放一只怪作参照：两人都收到它时，同一次政策结算里该进视野的建筑也已经到了。
+		marker := h.showMonster(t, 7900+int64(i), spatial.Point{X: probe.X, Y: probe.Y + 10})
+		h.flushUntil(t, c.name+": the marker on both clients", func() bool {
+			return near.heldIn("monster")[marker] && far.heldIn("monster")[marker]
+		})
+		id := placed.Building.ID
+		nearSees, wideSees := near.heldIn(building.SyncNamespaceBuilding)[id], far.heldIn(building.SyncNamespaceBuilding)[id]
+		t.Logf("%s: centre %.1fm from the node next to it; default view (1.2m) sees it %v, widest view (%.1fm) sees it %v",
+			c.name, math.Sqrt(float64(spatial.DistanceSquared(centre, probe)))/100, nearSees, float64(view.Radius)/100, wideSees)
+		if nearSees != c.nearSees || wideSees != c.wideSees {
+			t.Fatalf("%s next to it: default view sees it %v (want %v), widest view %v (want %v)", c.name, nearSees, c.nearSees, wideSees, c.wideSees)
+		}
+		h.scene.HideSubject(h.ctx, marker)
+		if i == len(cases)-1 {
+			h.walk(t, buildingViewer, centre)
+			h.flushUntil(t, "the keep seen from its centre", func() bool { return near.heldIn(building.SyncNamespaceBuilding)[id] })
+		}
+	}
+}
+
+// 重启之后，同步与库一致：启动对账核对通过的建筑登记进场景，重新登录的客户端走到每座建筑上收到的正是库里的建筑（配置 ID、
+// 改过的参数、朝向、地基）；拆掉的那座不出现。
 func TestBuildingSyncAfterARestart(t *testing.T) {
 	dir := t.TempDir()
 	pack := buildingSyncPack(t, dir)
@@ -319,6 +700,7 @@ func TestBuildingSyncAfterARestart(t *testing.T) {
 	if _, err := m.SetParams(h.ctx, buildingBuilder, 4, 110, 100, []int32{6}); err != nil {
 		t.Fatal(err)
 	}
+	removedAt := lotCentre(buildingAt(t, h.process, 100, 130).Lot)
 	if _, err := m.Remove(h.ctx, buildingBuilder, 5, 100, 130); err != nil {
 		t.Fatal(err)
 	}
@@ -334,31 +716,33 @@ func TestBuildingSyncAfterARestart(t *testing.T) {
 	if again.process.buildingStats != (terrainmap.BuildingStats{Standing: 2}) {
 		t.Fatalf("reconcile after the restart: %+v", again.process.buildingStats)
 	}
-	if n := again.scene.terrain.buildings.standingCount(); n != 2 {
+	if n := again.buildingSync().standingCount(); n != 2 {
 		t.Fatalf("%d buildings registered for replication after the restart, want 2", n)
 	}
-	client := again.join(t, buildingViewer, spatial.Point{X: 10000, Y: 10000})
-	again.flushUntil(t, "the restarted buildings on a client", func() bool {
-		if len(client.heldBuildings()) != len(want) {
-			return false
-		}
-		for _, b := range want {
-			if !buildingMatches(client.building(b.ID), b) {
-				return false
-			}
-		}
-		return true
-	})
+	client := again.join(t, buildingViewer, lotCentre(want[0].Lot))
+	for _, b := range want {
+		again.walk(t, buildingViewer, lotCentre(b.Lot))
+		again.flushUntil(t, "a restarted building on a client", func() bool {
+			return slices.Equal(client.heldBuildings(), []int64{b.ID}) && buildingMatches(client.building(b.ID), b)
+		})
+	}
+	// 拆掉的那座：站在它原来的位置，参照的怪到了，建筑没有。
+	again.walk(t, buildingViewer, removedAt)
+	marker := again.showMonster(t, 7990, removedAt)
+	again.flushUntil(t, "the marker where the removed hut stood", func() bool { return client.heldIn("monster")[marker] })
+	if held := client.heldBuildings(); len(held) != 0 {
+		t.Fatalf("the removed hut came back after the restart: %v", held)
+	}
 	if got := buildingsOf(again.process); !sameBuildings(got, want) {
 		t.Fatalf("buildings after the restart:\n%+v\nwant\n%+v", got, want)
 	}
 }
 
-// 放置 / 拆除的提交后回调可能乱序到达：建筑同步只认锚点块更大的 LotRevision，迟到的“拆了”不会把站着的建筑撤出视野，
+// 放置 / 拆除的提交后回调可能乱序到达：建筑同步只认锚点块更大的 LotRevision，迟到的“拆了”不会把站着的建筑撤出主视野，
 // 迟到的“放了”也不会把拆了的建筑放回来。
 func TestBuildingSyncTakesTheLatestRevision(t *testing.T) {
 	h := startBuildingSyncHarness(t, buildingSyncPack(t, t.TempDir()), &memoryChunkStore{})
-	m, sync := h.process.m, h.scene.terrain.buildings
+	m, sync := h.process.m, h.buildingSync()
 	if _, err := m.Place(h.ctx, buildingBuilder, 1, building.Placement{ConfigID: 1, GX: 110, GY: 100}); err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +763,7 @@ func TestBuildingSyncTakesTheLatestRevision(t *testing.T) {
 	if sync.standingCount() != 1 {
 		t.Fatal("a late removal notice hid a standing building")
 	}
-	client := h.join(t, buildingViewer, spatial.Point{X: 10000, Y: 10000})
+	client := h.join(t, buildingViewer, lotCentre(lot.Lot))
 	h.flushUntil(t, "the hut on the client", func() bool { return len(client.heldBuildings()) == 1 })
 	// 真的拆除（修订号 2），然后迟到的“放了”（修订号 1）：建筑保持撤出。
 	if _, err := m.Remove(h.ctx, buildingBuilder, 2, 110, 100); err != nil {

@@ -28,9 +28,9 @@ type IBuildingEntity interface{ entity.IThreadSafeEntity }
 // Category：rank 2（World，与地形块同档）：放置事务锁住它与占地覆盖的块（同档内按 ID 排序取锁），再锁玩家的编辑账本
 // （PlayerScoped）。
 //
-// 同步（方案 §27）：与 Player / Monster 同一条链路——sync=true，命名空间 "building"，packer 见 sync_packer.go；站着的建筑
-// 由 game 服务的建筑同步（internal/service/<game>/building_sync.go）登记为场景 Manager 的 subject、放进建筑自己的
-// Interest（按锚点位置），客户端用生成的 ApplySyncBuildingDao 应用。改参数是普通的 DAO 写，提交后按 on_change 发增量。
+// 同步（方案 §27、§27.10）：普通实体，与 Player / Monster 同一条链路——sync=true，命名空间 "building"（客户端的分流键，
+// 与 "monster" 一样），packer 见 sync_packer.go；站着的建筑由 game 服务（internal/service/<game>/building_sync.go）与怪
+// 一样经场景的 ShowSubject 登记、放进场景主视野（位置是占地中心），客户端用生成的 ApplySyncBuildingDao 应用。改参数是普通的 DAO 写，提交后按 on_change 发增量。
 //
 // 只归锚点所在格的进程写；首版只在不分区的普通场景放置（分区场景拒绝，方案 §25 / §27）。
 //
