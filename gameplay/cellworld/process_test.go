@@ -704,6 +704,20 @@ func (mp *mpWorld) beatsUpTo(sid int32, at time.Time) int {
 	return mp.regionBeats(sid, time.Unix(0, 0), at)
 }
 
+func (mp *mpWorld) beatTimes(sid int32) []time.Time {
+	cell, ok := mp.grid.CellOf(sid)
+	if !ok || mp.procs[cell] == nil {
+		return nil
+	}
+	var out []time.Time
+	for _, e := range mp.procs[cell].eventsSnapshot() {
+		if e.Ev == "tick" {
+			out = append(out, time.Unix(0, e.T))
+		}
+	}
+	return out
+}
+
 func (mp *mpWorld) realAt(sid int32, id int64, epoch uint64, acquired bool) (time.Time, bool) {
 	cell, ok := mp.grid.CellOf(sid)
 	if !ok || mp.procs[cell] == nil {

@@ -249,6 +249,13 @@ func (w *world) beatsUpTo(sid int32, at time.Time) int {
 	return n
 }
 
+func (w *world) beatTimes(sid int32) []time.Time {
+	cell, _ := w.grid.CellOf(sid)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return slices.Clone(w.beats[cell])
+}
+
 // realAt 返回角色 id 的 epoch 在格 sid 取得（acquired）或失去 Real 的提交时刻。
 func (w *world) realAt(sid int32, id int64, epoch uint64, acquired bool) (time.Time, bool) {
 	cell, ok := w.grid.CellOf(sid)
@@ -466,7 +473,21 @@ func (w *world) cellDiag(diag *strings.Builder, id int64) {
 // world 的 hook 记录，多进程是子进程报告的 tick / real 事件）。
 type timeline interface {
 	beatsUpTo(sid int32, at time.Time) int
+	beatTimes(sid int32) []time.Time
 	realAt(sid int32, id int64, epoch uint64, acquired bool) (time.Time, bool)
+}
+
+// stallOf 是格在 [from, to] 这段时间里区域心跳的最长停顿（相邻两拍完成时刻之差减一个 Period，不小于 0）：负载下
+// 驱动与 Nest 被饿住时各格的心跳一起停顿，它度量“环境慢了多少”。
+func stallOf(beats []time.Time, from, to time.Time) time.Duration {
+	var worst time.Duration
+	for i := 1; i < len(beats); i++ {
+		if beats[i].Before(from) || beats[i-1].After(to) {
+			continue
+		}
+		worst = max(worst, beats[i].Sub(beats[i-1])-worldPeriod)
+	}
+	return worst
 }
 
 // gapRule 是相邻两份 witness 之间允许的间隔。
@@ -474,26 +495,28 @@ type timeline interface {
 //   - edge：换手（epoch 变了）时，旧格在最后一份之后、冻结提交之前空过的拍数，与新格在装入提交之后、发出第一份之前
 //     空过的拍数，各自的上限（正常是 0～1）；
 //   - transit：换手时旧格冻结提交到新格装入提交之间的墙钟上限。这一段只有消息（Offer 出站、传输、新格的 Nest 事务），
-//     没有心跳，无法按拍数计；取心跳经过时间的上限 max(1s, Period)（transitCap），只抓“交接被结构性地拖长”的回归。
+//     没有心跳，无法按拍数计；取心跳经过时间的上限 max(1s, Period)（transitCap），再加上旧格的区域心跳在这段时间里的
+//     最长停顿（stallOf）：真实的 CPU 饥饿让各格的心跳一起停顿，上限随之放宽；新格自己的装入变慢（锁着它的 Scene）
+//     不会让旧格停顿，照样抓得住。
 type gapRule struct {
 	beats, edge int
 	transit     time.Duration
 }
 
-// transitCap 是换手时消息段的墙钟上限：等于心跳 Beat.Elapsed 的上限 max(1s, Period)。负载下（整包 -race 加 8 个满载
-// 进程）这一段实测到过 0.6s：Offer 在出站队列、传输与新格 Scene 的 Nest 队列里排队，心跳照常在走，所以按拍数计会误报，
-// 原来 200ms 的总间隔上限也因此约一半遍数误报。
+// transitCap 是换手时消息段墙钟上限的基数：等于心跳 Beat.Elapsed 的上限 max(1s, Period)。负载下（整包 -race 加 8 个
+// 满载进程）这一段实测到过 0.6s（两端心跳照常在走：Offer 在出站队列、传输与新格 Scene 的 Nest 队列里排队，所以不能按
+// 拍数计），平均负载 60 时到过 1.5s（同时旧格心跳也停顿了，由 stallOf 补上）；无负载时 2～10ms。
 const transitCap = time.Second
 
 // continuity 是 checkContinuity 的观察值（最坏情况）。墙钟最大间隔只记录，不断言。
 type continuity struct {
-	worstMiss, worstBeats, worstEdge int
-	worstTransit, worstGap           time.Duration
+	worstMiss, worstBeats, worstEdge   int
+	worstTransit, worstStall, worstGap time.Duration
 }
 
 func (c continuity) String() string {
-	return fmt.Sprintf("worst consecutive miss=%d, same-cell gap=%d beats, handoff edge=%d beats, handoff transit=%v (worst wall gap %v)",
-		c.worstMiss, c.worstBeats, c.worstEdge, c.worstTransit, c.worstGap)
+	return fmt.Sprintf("worst consecutive miss=%d, same-cell gap=%d beats, handoff edge=%d beats, handoff transit=%v, old-cell stall=%v (worst wall gap %v)",
+		c.worstMiss, c.worstBeats, c.worstEdge, c.worstTransit, c.worstStall, c.worstGap)
 }
 
 // checkContinuity：静止 NPC 落在玩家 witness 半径内（按 witness 里玩家自己的位置算）时必须出现在 witness 里；连续缺失
@@ -557,11 +580,13 @@ func checkContinuity(t *testing.T, views []View, npcs map[int64]spatial.Point, m
 		before := tl.beatsUpTo(prev.Cell, released) - int(prev.Tick)
 		after := int(v.Tick) - tl.beatsUpTo(v.Cell, acquired)
 		transit := acquired.Sub(released)
+		stall := stallOf(tl.beatTimes(prev.Cell), released, acquired)
 		c.worstEdge, c.worstTransit = max(c.worstEdge, before, after), max(c.worstTransit, transit)
-		if before > rule.edge || after > rule.edge || transit > rule.transit {
+		c.worstStall = max(c.worstStall, stall)
+		if before > rule.edge || after > rule.edge || transit > rule.transit+stall {
 			t.Errorf("view gap between view %d (cell %d epoch %d tick %d) and %d (cell %d epoch %d tick %d), wall %v: old cell idle %d beats before the freeze, "+
-				"new cell idle %d beats after the install (limit %d each), freeze to install %v (limit %v)",
-				i-1, prev.Cell, prev.Epoch, prev.Tick, i, v.Cell, v.Epoch, v.Tick, v.At.Sub(prev.At), before, after, rule.edge, transit, rule.transit)
+				"new cell idle %d beats after the install (limit %d each), freeze to install %v (limit %v + the old cell's stall %v)",
+				i-1, prev.Cell, prev.Epoch, prev.Tick, i, v.Cell, v.Epoch, v.Tick, v.At.Sub(prev.At), before, after, rule.edge, transit, rule.transit, stall)
 		}
 	}
 	return c
