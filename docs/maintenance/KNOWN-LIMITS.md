@@ -66,6 +66,8 @@ RV-20261107-01 已修复（未发版，见 CHANGELOG `[Unreleased]`）：原结�
 
 **RV-20261106-02 已修复（未发版，2026-11-07）**：读代码判断为夹具等待不足——停下时最后一次交接的旧格等 OfferReply / 隐式确认、区域表等角色报告，都是异步几跳，固定 sleep 3 拍不够。改为有期限的收尾条件（5s，超时打印各格记录、交接计数与出站队列）并断言没有交接靠放弃收尾，原断言不变；新增 `TestWorldJitterAtBoundarySlowHandoffConclusion` 让收尾消息晚 1s，旧等待下三轮复现审查的失败签名（owner sid=101 epoch=13、`(1,0)` frozen），新等待通过。本机（macOS）完整包 race 1 轮、非 race 5 轮通过；审查时的 Linux 原始失败样本未在本机复现，若收尾真的卡住会超时并带诊断失败，不会被掩盖。
 
+**2026-11-10 续（真实时钟用例统一整治）**：整包 `-race` 加压时的收尾超时（旧格 `accepted=1`、区域表仍 frozen；上一轮 `TestWorldStraightCrossing`“frozen 4.4s”记为尚未确认）已定位为实现缺陷并修复（未发版）：冻结报告经出站队列晚于交接结论到达，`applyReports` 重建了一条永久的 frozen 记录；回归 `TestLateFreezeReportDoesNotResurrectTheRecord`，见 CHANGELOG `[Unreleased]`。其余间歇失败（`view gap` 墙钟阈值、攻击前 Ghost 未到、sleep 后立即断言等）是用例写法，已统一改为“等结论、有期限、超时打诊断”与按心跳拍数计间隔，变异证明承诺未放宽。同负载（8 个满载进程 + 4 份整包 -race 并行，load 中位 19～42）对照：改后 13/14 通过（唯一一次是回复全丢用例与 3s 放弃期限赛跑，已把该用例期限放到 10s），main 6/14；无额外负载 3/3。仍按墙钟、负载更高时可能误报的只剩协议自己的墙钟期限（HandoffAbort 3s、租约 1s、GhostTTL），各处注释写明。证据见 [cellworld 真实时钟用例整治](evidence/cellworld-clock-cleanup-20261110/README.md)。
+
 ## 最新 Linux 复验（2026-11-03，v1.40.1）
 
 NATS 关闭表与 SLG 恢复夹具原问题已在 Linux 复验通过；etcd 停止屏障相关两用例各五轮通过。Lockstep 慢快照的深缓冲链路仍会断开，完整包及独立重复运行均有失败，不能关闭或据定向回归宣布上线验收完成。详见 [复验报告](FOLLOWUP-REVIEW-20261102.md)；下方历史结论不覆盖本节。

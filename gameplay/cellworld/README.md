@@ -150,7 +150,7 @@ Cell 进程是普通 roost App：`app.New(...).Singleton(kitredis.SingletonStore
 
 ## 并发与契约
 
-- 区域表只在 Scene 的 Nest 锁内读写；角色状态只在角色的 Nest 锁内读写；锁序 Scene（World 档）在前、角色（Other 档）在后。角色心跳不锁 Scene：它的结果在提交后经出站队列批量报给 Scene 的 handler。
+- 区域表只在 Scene 的 Nest 锁内读写；角色状态只在角色的 Nest 锁内读写；锁序 Scene（World 档）在前、角色（Other 档）在后。角色心跳不锁 Scene：它的结果在提交后经出站队列批量报给 Scene 的 handler。区域表的本地记录只由装入（Offer / Enter / Spawn，锁 Scene 的事务里直接写）建立，交接结论与离场也在锁 Scene 的事务里直接删；经出站队列晚到的报告找不到记录时丢弃（计 `StaleDrops`），不重建（2026-11-10 修复：冻结报告晚于交接结论到达会留下一条永久的 frozen，`TestLateFreezeReportDoesNotResurrectTheRecord`）。
 - 外发一律在提交之后：回滚的事务不外发。
 - 消息至多一次：每个实体的版本是 (epoch, seq)，接收端只接受更新的版本；交接靠重传与幂等回复，伤害靠 HitID 去重（去重表在目标实体上，随交接带走）；mirror 按对象版本取新的。
 - 同一 (实体, epoch) 至多一个格取得 Real；同一进程里同一 ID 至多一个实体（EntityManager 保证）。
@@ -169,6 +169,8 @@ Cell 进程是普通 roost App：`app.New(...).Singleton(kitredis.SingletonStore
 | `ext_test.go` | 扩展消息（v7）：按命名空间交给处理器、提交后回调里可发、`CloseIngress` 之后不再调用、旧版本与空内容按坏消息丢弃；地形边界块副本在回环与真实 nats-server 上推到邻格（`ROOST_TERRAIN_REPLICA_PERF=1` 记延迟与字节）；跨格移动按地形：副本缺块时停下、副本到了再走，真实 Node + 回环 + 两格各自的视图与 Replicator 上玩家在邻格块的墙前停住（交接之前）、墙挖平后交接、新格按自己的视图在坑前停住；`BenchmarkIntegrateOnSurface` |
 | `process_test.go` | 每个 Cell 是一个带单实例锁的 App 子进程（私有 redis-server）：跨进程至多一个 Real 与伤害只结算一次、kill -9 后按快照恢复、同 sid 第二个进程被拒、Base 进程消失后 SceneActor 清理 |
 | `measure_test.go` | 原型测量：`ROOST_CELLWORLD_PERF=1 GOWORK=off go test -run TestCellWorldMeasure -v ./gameplay/cellworld/`（档位 `ROOST_CELLWORLD_PERF_NPCS=1000,5000`，窗口 `ROOST_CELLWORLD_PERF_SECONDS=20`；D1：`ROOST_CELLWORLD_PERF_IDLE_MS=1000`，玩家分布 `ROOST_CELLWORLD_PERF_PLAYERS=spread|cell`） |
+
+**真实时钟下怎么写断言**（2026-11-10 统一整治，[证据](../../docs/maintenance/evidence/cellworld-clock-cleanup-20261110/README.md)）：集成用例跑在真实时钟上，心跳驱动按系统时间醒来、迟到的拍不补跑，消息经真实 goroutine 投递。所以等异步结论一律“等结论成立、有期限、超时打诊断”（`eventually` / `waitSettled` / `waitView`，期限集中在 `harness_test.go` 的 `settleWithin` 5s——长于缺省 `HandoffAbort` / `LeaseTimeout` 3s、`AttackDeadline` / `PanelDeadline` 2s——与 `travelWithin` 10s），不写“sleep 固定时长后立即断言”；“过几拍再看”的窗口按格实际执行的拍数计（`waitBeats` / `waitBaseBeats`）；间隔与频率以拍数为尺子：witness 同格相邻两份看该格自己的拍号，换手拆成“旧格停发到冻结”“新格装入到第一份”两段按拍数、中间只有消息的一段按墙钟 `transitCap`（= 心跳经过时间上限 max(1s, Period)）加上旧格区域心跳在这段时间里的最长停顿；升档后的拍数以区域心跳为尺子。仍按墙钟的只剩负向窗口（看一件事在一段时间里没发生；负载下只会变弱、不会误报）、慢档等按墙钟周期的上限，以及上面这段消息的上限，各处注释写明。
 
 Sync mirror 的单测在 `framework/sync/entitysync/policy/mirror_test.go`。
 
