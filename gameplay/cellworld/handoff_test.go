@@ -1,12 +1,15 @@
 package cellworld
 
 import (
+	"context"
 	"fmt"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	fentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 )
 
@@ -225,6 +228,69 @@ func TestHandoffConcurrentCrossingBack(t *testing.T) {
 	sid, _ := w.waitSettled(1, settleWithin) // 回复扣住 400ms：停下时最后一次交接还没收尾
 	cell, _ := w.grid.CellOf(sid)
 	w.assertSingleReal(actorID(1), cell)
+}
+
+// holdFreezeReport 把含 id 冻结报告的那一批区域报告的投递挡住，直到 release 成立（期限 settleWithin）；其余照常交给引擎。
+// 报告由出站 goroutine 攒批投给 Scene，挡住它就是“报告晚到”。
+type holdFreezeReport struct {
+	nest.Client
+	id      int64
+	release func() bool
+	held    atomic.Bool // 挡过一次
+	passed  atomic.Bool // 挡住的那一批已经交给引擎
+}
+
+func (h *holdFreezeReport) Dispatch(ctx context.Context, handler nest.HandlerName, id int64, p nest.Params, opts ...nest.SendOpt) error {
+	if handler != hReports || h.held.Load() {
+		return h.Client.Dispatch(ctx, handler, id, p, opts...)
+	}
+	batch, _ := p[0].([]ActorReport)
+	if !slices.ContainsFunc(batch, func(r ActorReport) bool { return r.State.ID == h.id && r.Role == RoleFrozen }) {
+		return h.Client.Dispatch(ctx, handler, id, p, opts...)
+	}
+	h.held.Store(true)
+	for deadline := time.Now().Add(settleWithin); !h.release() && time.Now().Before(deadline); {
+		time.Sleep(time.Millisecond)
+	}
+	err := h.Client.Dispatch(ctx, handler, id, p, opts...)
+	h.passed.Store(true)
+	return err
+}
+
+// 冻结的报告晚于交接结论到达区域表：角色心跳里冻结、提交后先发 Offer 再把冻结报告交给出站 goroutine 攒批投给 Scene；
+// 交接结论（OfferReply / 新格 Ghost 的隐式确认）在锁 Scene + 角色的事务里直接改区域表（删本地记录、留 owner = 新格的
+// Ghost）。报告那一批晚到时不能再建出一条冻结记录：角色已交出、实体已销毁，没有任何东西会再清掉它——旧格的 Inspect
+// 一直报 frozen，区域表把它当本地实体给别的玩家的 witness（停在冻结点），新 owner 发来的 Ghost 更新被它挡住。
+// 整包 -race 加压时 TestNATSWorldDiagonalThroughFourCellCorner 收尾超时的现场就是这样：旧格 accepted=1、aborted=0，
+// 区域表里仍是 frozen（2026-11-10 的诊断；此前 TestWorldStraightCrossing“frozen 4.4s”记为尚未确认）。这里把含冻结报告
+// 的那一批挡到旧格收到 OfferReply 之后，确定性地造出这个顺序。
+func TestLateFreezeReportDoesNotResurrectTheRecord(t *testing.T) {
+	spec, _ := loopbackSpec(t, 2, 1)
+	a, b := CellID{0, 0}, CellID{1, 0}
+	var started atomic.Pointer[world]
+	hold := &holdFreezeReport{id: actorID(1), release: func() bool {
+		w := started.Load()
+		return w != nil && w.cells[a].node.Stats().HandoffsAccepted > 0
+	}}
+	spec.cellMod = func(cfg *NodeConfig) {
+		if cfg.SID == 101 {
+			hold.Client, cfg.Nest = cfg.Nest, hold
+		}
+	}
+	w := startWorld(t, spec)
+	started.Store(w)
+	w.enter(1, spatial.Point{X: 9950, Y: 5000})
+	w.move(1, 1000, 0)
+	w.waitView(1, settleWithin, "view from B", func(v View) bool { return v.Cell == w.grid.SID(b) })
+	w.move(1, 0, 0)
+	waitFor(t, settleWithin, "the held freeze report to be handed to the engine", hold.passed.Load)
+	if !hold.held.Load() || w.cells[a].node.Stats().HandoffsAccepted == 0 {
+		t.Fatalf("the freeze report was not held until the conclusion (held %v, accepted %d)", hold.held.Load(), w.cells[a].node.Stats().HandoffsAccepted)
+	}
+	w.assertSingleReal(actorID(1), b)
+	if s, ok := w.roleOf(a, actorID(1)); ok && (s.Role != "ghost" || s.Owner != b) {
+		t.Fatalf("A holds %+v after the handoff, want nothing or a ghost owned by B", s)
+	}
 }
 
 // 斜穿四格的交接链 A → B → D：先沿 +x 进 B，再沿 +y 进 D；epoch 3，D 是唯一 Real。
