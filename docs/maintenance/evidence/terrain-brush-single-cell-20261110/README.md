@@ -43,3 +43,12 @@
 
 - `ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh`：(a) 步已改写（跨格笔刷答 `terrain_cross_cell`、两块与 `LastSeq` 不变；B 发起、整份落在 A 格块 (1,0) 的笔刷转发执行，再改回；记 `b_cross_cell_refused_rtt_ms` 与 `b_forward_to_a_rtt_ms`），只编译与 vet，真实运行在合入时。
 - C# / dotnet 测试：没有改 C# 代码；C# 地形夹具 `regen.sh` 核对模式一致。
+
+## 合入前的真实依赖验证（协调方，2026-11-10）
+
+在本分支 HEAD 上，用私有 mirror-local 依赖（真实 Mongo / Redis / NATS，跑完即清理）执行：
+
+- `scripts/test-demo-generated.sh`：10 项真实依赖用例全部 PASS。
+- `ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh`：六步全部 ok。`terrain_ghost_edit` 的跨格笔刷在 Base 上被拒（往返 0.057ms，不经网络）；B 发起、整份落在 A 格的笔刷转发执行，往返 48.9ms / 15.8ms（升高 / 改回）。
+- 生成 game-demo 的 `internal/service/game` 在 `-race -count=3` 下通过（252s，单独运行）；“尚未确认”的那次 flake 没有复现。
+- 同轮：根包、`gameplay/...`、`codegen/...`，生成 game-demo 全测（36 个包），`test-sync-modes-generated.sh`，C# 地形测试，全部通过。
