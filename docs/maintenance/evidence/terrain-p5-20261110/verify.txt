@@ -1,1 +1,44 @@
-验证结果在合入 origin/main 之后补上（见下一次提交）。
+P5 跨格编辑 / 分区建筑 / 分区视野：合入 origin/main edea1991（地形确认来源方案 A）之后的最终验证
+（GOWORK=off，macOS / arm64，后台有其他负载；生成工程放在会话临时目录，replace 指向本工作树）
+
+== core
+gofmt -l framework gameplay infra wiring service codegen     （无输出）
+go build ./...                                               ok
+go vet ./gameplay/... ./codegen/... ./wiring/...             ok
+go test -race -count=1 ./gameplay/terrain ./gameplay/movement
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/terrain	4.933s
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/movement	32.838s
+go test -race -count=2 ./gameplay/cellworld
+ok  	github.com/tjbdwanghaibo/roost-core/gameplay/cellworld	297.095s
+go test -count=1 .
+ok  	github.com/tjbdwanghaibo/roost-core	10.495s
+python3 scripts/check-doc-anchors.py
+checked 273 files, 0 broken
+go test -count=1 ./codegen/internal/roost/
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	270.312s
+
+== 生成工程（project new gd -module example.com/gd -template game-demo --skip-deps；replace；go mod tidy）
+go build ./...                                               ok
+go vet ./...                                                 ok
+go test -count=1 ./...                                       全部 ok（无 FAIL）
+go test -race -count=1 -run 'Terrain|Building|Partition|Relay' ./internal/service/game/
+ok  	example.com/gd/internal/service/game	51.961s
+go test -race -count=1 ./game/terrainmap/... ./game/entities/terrain_chunk/ ./game/entities/terrain_editor/ ./game/entities/terrain_cell_editor/ ./game/entities/building/ ./game/controllers/player/
+ok  	example.com/gd/game/entities/terrain_chunk	2.719s
+ok  	example.com/gd/game/entities/terrain_editor	2.068s
+ok  	example.com/gd/game/entities/terrain_cell_editor	1.504s
+ok  	example.com/gd/game/controllers/player	2.531s
+roost id check                                               IDs are valid
+roost generate --check                                       generated files are up to date
+无缝演练程序（scripts/testdata/seamless/drill.go.txt + terrain.go.txt 展开后 go vet）  ok；没有运行演练
+
+== 合入 70623709 之后出现、已处理的红
+生成工程 cmd/sidmerge TestTheChecklistReadsThisProjectsConfigAndDAOs：
+    databases = [{Logical:main ServerScoped:true Physical:gd Handling:dbscope=sid DAOs: sidmerge migrate copies <physical>_<A> into <physical>_<B> ...}], want the shared logical database "main"
+codegen TestDoctorMergeReadinessReadsTheChecklist：
+    merge-readiness detail "merging a server: dbscope=sid databases moved by sidmerge migrate: main; shared databases both deployments must map to the same place: none; ..." lacks "dbscope=sid databases moved by sidmerge migrate: none"
+原因：格账本 TerrainCellEditor 是 db=main dbscope=sid，main 成为混合库。处理见方案 §30.8 ⑧：用例改断言；
+doctor 摘要每个逻辑库都列进“两侧同址”（修前 TestMergeChecklistSummary 加断言 "same place: main, zone (" 为红，修后绿）。
+
+== 没有跑
+C# / dotnet（本轮没有改 C#）；真实依赖与真实多进程演练；性能。
