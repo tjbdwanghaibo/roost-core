@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"math"
 	"os"
 	"slices"
 	"testing"
@@ -33,6 +34,11 @@ func goldenSource() (Meta, ChunkSource) {
 	}
 	slices.Sort(all)
 	meta.WaterLevel = meta.WorldHeight(all[len(all)/2])
+	// 区域水位（格式版本 2）：块 (1,1) 的水位高出全局 3m，块 (0,1) 没有水，用来核对客户端按块取水位线。
+	meta.WaterRegions = []WaterRegion{
+		{MinX: 1, MinY: 1, MaxX: 2, MaxY: 2, Level: meta.WaterLevel + 300},
+		{MinX: 0, MinY: 1, MaxX: 1, MaxY: 2, Level: math.MinInt32},
+	}
 	gen := Generated(meta, goldenSeed)
 	return meta, func(key ChunkKey) (Chunk, error) {
 		c, err := gen(key)
@@ -75,6 +81,16 @@ type goldenMeta struct {
 	HeightStep    int   `json:"height_step"`
 	HeightBase    int32 `json:"height_base"`
 	WaterLevel    int32 `json:"water_level"`
+	// WaterRegions 是区域水位（块坐标半开区间，level 是世界高度厘米；-2147483648 表示没有水）。
+	WaterRegions []goldenRegion `json:"water_regions"`
+}
+
+type goldenRegion struct {
+	MinX  int32 `json:"min_x"`
+	MinY  int32 `json:"min_y"`
+	MaxX  int32 `json:"max_x"`
+	MaxY  int32 `json:"max_y"`
+	Level int32 `json:"level"`
 }
 
 type goldenChunk struct {
@@ -93,7 +109,9 @@ type goldenQuery struct {
 	Height   *int32 `json:"height,omitempty"`
 	Material *byte  `json:"material,omitempty"`
 	Water    *bool  `json:"water,omitempty"`
-	Error    string `json:"error,omitempty"`
+	// WaterLevel 是这个位置所在块的水位线（区域水位或全局水位）。
+	WaterLevel *int32 `json:"water_level,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // goldenPoints 是金样的采样位置：每块的角与内部、块边界两侧、四块交点、地图边缘、边界情形块、伪随机点、地图外。
@@ -142,7 +160,7 @@ func buildGolden(t *testing.T, meta Meta, src ChunkSource) []byte {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	if p.Meta() != meta {
+	if !p.Meta().Equal(meta) {
 		t.Fatalf("golden pack meta %+v, want %+v", p.Meta(), meta)
 	}
 	out := goldenFile{
@@ -150,11 +168,16 @@ func buildGolden(t *testing.T, meta Meta, src ChunkSource) []byte {
 			"Decode every chunk of the pack and check the SHA-256 values, then load all chunks and check each query: " +
 			"height = height_base + (num*height_step + S*S/2) / (S*S) with S = sample_spacing and " +
 			"num = (h00*(S-fx) + h10*fx)*(S-fy) + (h01*(S-fx) + h11*fx)*fy (integer, edge samples replicated at the map border); " +
-			"material is the sample at (floor(x/S), floor(y/S)); water = (height less than water_level); points outside the map give error out_of_map.",
+			"material is the sample at (floor(x/S), floor(y/S)); the water level of a point is the level of the water region holding its chunk " +
+			"(chunk = (floor(x/6400), floor(y/6400)); regions are half-open chunk rectangles that never overlap), otherwise the global water_level; " +
+			"water = (height less than that water level); points outside the map give error out_of_map.",
 		Pack:       "terrain-golden.pack",
 		PackSHA256: hexSum(raw),
 		Meta: goldenMeta{BaseRevision: meta.BaseRevision, ChunksX: meta.ChunksX, ChunksY: meta.ChunksY, ChunkSamples: ChunkSamples,
 			SampleSpacing: SampleSpacing, HeightStep: HeightStep, HeightBase: meta.HeightBase, WaterLevel: meta.WaterLevel},
+	}
+	for _, r := range meta.WaterRegions {
+		out.Meta.WaterRegions = append(out.Meta.WaterRegions, goldenRegion{MinX: r.MinX, MinY: r.MinY, MaxX: r.MaxX, MaxY: r.MaxY, Level: r.Level})
 	}
 	v := NewView(p)
 	for key := range ChunksIn(meta.Bounds()) {
@@ -178,6 +201,7 @@ func buildGolden(t *testing.T, meta Meta, src ChunkSource) []byte {
 			HeightsSHA256: hexSum(le), MaterialsSHA256: hexSum(c.Materials)})
 	}
 	water := 0
+	regional := map[ChunkKey]bool{}
 	for _, pt := range goldenPoints(meta) {
 		q := goldenQuery{X: pt[0], Y: pt[1]}
 		g, err := v.Probe(pt[0], pt[1])
@@ -187,15 +211,21 @@ func buildGolden(t *testing.T, meta Meta, src ChunkSource) []byte {
 		case err != nil:
 			t.Fatal(err)
 		default:
-			q.Height, q.Material, q.Water = &g.Height, &g.Material, &g.Water
+			q.Height, q.Material, q.Water, q.WaterLevel = &g.Height, &g.Material, &g.Water, &g.WaterLevel
 			if g.Water {
 				water++
+			}
+			if key := ChunkOf(pt[0], pt[1]); g.WaterLevel != meta.WaterLevel {
+				regional[key] = true
 			}
 		}
 		out.Queries = append(out.Queries, q)
 	}
 	if water == 0 || water == len(out.Queries) {
 		t.Fatalf("golden queries have %d water points out of %d: no contrast", water, len(out.Queries))
+	}
+	if len(regional) != len(meta.WaterRegions) {
+		t.Fatalf("golden queries reach the regional water level in chunks %v, want one per region", regional)
 	}
 	content, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {

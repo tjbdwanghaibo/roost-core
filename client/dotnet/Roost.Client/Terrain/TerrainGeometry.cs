@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Roost.Client.Terrain
 {
@@ -72,9 +73,27 @@ namespace Roost.Client.Terrain
         public override string ToString() => "(" + X + "," + Y + ")";
     }
 
+    // 一片按块对齐的矩形区域的水位线（与 Go terrain.WaterRegion 相同）：块坐标半开区间 [MinX, MaxX) × [MinY, MaxY) 里的
+    // 每一块，地面高度低于 Level（世界高度，厘米）的位置是水；Level 为 int.MinValue 表示没有水。区域互不重叠。
+    public readonly struct TerrainWaterRegion
+    {
+        public int MinX { get; }
+        public int MinY { get; }
+        public int MaxX { get; }
+        public int MaxY { get; }
+        public int Level { get; }
+        public TerrainWaterRegion(int minX, int minY, int maxX, int maxY, int level) { MinX = minX; MinY = minY; MaxX = maxX; MaxY = maxY; Level = level; }
+        public bool Contains(ChunkKey key) => key.X >= MinX && key.Y >= MinY && key.X < MaxX && key.Y < MaxY;
+        internal bool Overlaps(TerrainWaterRegion o) => MinX < o.MaxX && o.MinX < MaxX && MinY < o.MaxY && o.MinY < MaxY;
+        public override string ToString() => $"[{MinX},{MaxX})×[{MinY},{MaxY}) level {Level}";
+    }
+
     // 一张地图的参数，记在原始地形包的包头里（与 Go terrain.Meta 相同）。
     public sealed class TerrainMeta
     {
+        // 一张图最多的区域水位数（与 Go terrain.MaxWaterRegions 相同）。
+        public const int MaxWaterRegions = 1024;
+
         // 原始地形的版本；覆盖块（TerrainChunk DAO）的 BaseRevision 必须等于它。
         public long BaseRevision { get; }
         // 地图每边的块数：地图覆盖世界坐标 [0, ChunksX·6400) × [0, ChunksY·6400)。
@@ -82,16 +101,45 @@ namespace Roost.Client.Terrain
         public int ChunksY { get; }
         // 高度原始值 0 对应的世界高度（厘米）。
         public int HeightBase { get; }
-        // 全局水位线（世界高度，厘米）：地面高度低于它的位置是水。
+        // 全局水位线（世界高度，厘米）：不在任何区域里的块，地面高度低于它的位置是水。
         public int WaterLevel { get; }
+        // 区域水位（包格式版本 2，可编辑地形 P4 / D3）：区域里的块用区域的 Level 代替 WaterLevel。
+        public IReadOnlyList<TerrainWaterRegion> WaterRegions { get; }
 
         public TerrainMeta(long baseRevision, int chunksX, int chunksY, int heightBase, int waterLevel)
+            : this(baseRevision, chunksX, chunksY, heightBase, waterLevel, Array.Empty<TerrainWaterRegion>()) { }
+
+        // 检查与 Go Meta.Validate 相同：块数、高度基准、区域个数 ≤ MaxWaterRegions、每片区域非空且在地图内、两两不重叠。
+        public TerrainMeta(long baseRevision, int chunksX, int chunksY, int heightBase, int waterLevel, IReadOnlyList<TerrainWaterRegion> waterRegions)
         {
             if (chunksX < 1 || chunksY < 1 || chunksX > TerrainGeometry.MaxChunksPerSide || chunksY > TerrainGeometry.MaxChunksPerSide)
                 throw new ArgumentOutOfRangeException(nameof(chunksX), $"{chunksX} × {chunksY} chunks, each side must be in [1, {TerrainGeometry.MaxChunksPerSide}]");
             if ((long)heightBase + ushort.MaxValue * (long)TerrainGeometry.HeightStep > int.MaxValue)
                 throw new ArgumentOutOfRangeException(nameof(heightBase), $"height base {heightBase} overflows int32 at the highest raw height");
+            if (waterRegions == null) throw new ArgumentNullException(nameof(waterRegions));
+            if (waterRegions.Count > MaxWaterRegions)
+                throw new ArgumentOutOfRangeException(nameof(waterRegions), $"{waterRegions.Count} water regions, at most {MaxWaterRegions}");
+            var regions = new TerrainWaterRegion[waterRegions.Count];
+            for (int i = 0; i < regions.Length; i++)
+            {
+                var r = waterRegions[i];
+                if (r.MinX < 0 || r.MinY < 0 || r.MinX >= r.MaxX || r.MinY >= r.MaxY || r.MaxX > chunksX || r.MaxY > chunksY)
+                    throw new ArgumentOutOfRangeException(nameof(waterRegions), $"water region {i} {r} is empty or outside the {chunksX} × {chunksY} chunks");
+                for (int j = 0; j < i; j++)
+                    if (r.Overlaps(regions[j])) throw new ArgumentException($"water regions {j} {regions[j]} and {i} {r} overlap", nameof(waterRegions));
+                regions[i] = r;
+            }
             BaseRevision = baseRevision; ChunksX = chunksX; ChunksY = chunksY; HeightBase = heightBase; WaterLevel = waterLevel;
+            WaterRegions = regions;
+        }
+
+        // 块的水位线：所在区域的 Level，不在任何区域里时是全局 WaterLevel（与 Go Meta.WaterLevelOf 相同）。逐个比较区域；
+        // 查询热路径用 TerrainView 里按块预先算好的表（TerrainView.WaterLevelOf）。
+        public int WaterLevelOf(ChunkKey key)
+        {
+            foreach (var r in WaterRegions)
+                if (r.Contains(key)) return r.Level;
+            return WaterLevel;
         }
 
         // 地图的总块数。

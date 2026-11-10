@@ -18,6 +18,14 @@
 // (cell_size: 6400, cols: 2, rows: 1). A real game's pack comes from its
 // artists' height and material maps (terrain.RAWImport), not from here.
 //
+// Regional water levels (editable terrain D3, pack format 2) are repeatable
+// -water-region flags of chunk rectangles, half-open, that must not overlap:
+//
+//	go run ./cmd/terrainpack -chunks-x 4 -chunks-y 2 -water-region 2,0,4,1,45000
+//
+// puts chunks x 2..3, y 0 under a 450m lake surface; every other chunk keeps
+// -water-level. A level of -2147483648 means a dry region.
+//
 // Bump -base-revision whenever the base terrain changes, including HeightBase.
 // Owned old-revision edits are reset through the entity/DataEngine path (D13);
 // never silently reinterpret an existing pack or edited samples at a new base.
@@ -31,6 +39,8 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 )
@@ -52,6 +62,8 @@ func run(args []string, output io.Writer) error {
 	revision := flags.Int64("base-revision", 1, "the base terrain's revision, recorded in the pack header and in every edited chunk")
 	heightBase := flags.Int64("height-base", -10000, "world height of raw height 0, in centimetres (default -100m)")
 	waterLevel := flags.Int64("water-level", 40000, "global water level, in world centimetres; independent of height-base")
+	var regions waterRegions
+	flags.Var(&regions, "water-region", "a regional water level `minX,minY,maxX,maxY,level`: half-open chunk rectangle, level in world centimetres (repeatable, no overlaps)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -67,7 +79,7 @@ func run(args []string, output io.Writer) error {
 
 	meta := terrain.Meta{
 		BaseRevision: *revision, ChunksX: int32(*chunksX), ChunksY: int32(*chunksY),
-		HeightBase: int32(*heightBase), WaterLevel: int32(*waterLevel),
+		HeightBase: int32(*heightBase), WaterLevel: int32(*waterLevel), WaterRegions: regions,
 	}
 	if err := meta.Validate(); err != nil {
 		return err
@@ -78,8 +90,31 @@ func run(args []string, output io.Writer) error {
 	if err := terrain.WritePackFile(*out, meta, terrain.Generated(meta, *seed)); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(output, "terrainpack: wrote %s: %d x %d chunks, base revision %d, height base %d, water level %d\n", *out, meta.ChunksX, meta.ChunksY, meta.BaseRevision, meta.HeightBase, meta.WaterLevel)
+	_, err := fmt.Fprintf(output, "terrainpack: wrote %s: %d x %d chunks, base revision %d, height base %d, water level %d, %d water regions\n", *out, meta.ChunksX, meta.ChunksY, meta.BaseRevision, meta.HeightBase, meta.WaterLevel, len(meta.WaterRegions))
 	return err
+}
+
+// waterRegions 是可重复的 -water-region 参数。每个值五个整数，按 int32 解析（越界即报错，不截断）；区域规则（在图内、
+// 不重叠、个数上限）由 terrain.Meta.Validate 在写包之前检查。
+type waterRegions []terrain.WaterRegion
+
+func (r *waterRegions) String() string { return fmt.Sprint([]terrain.WaterRegion(*r)) }
+
+func (r *waterRegions) Set(value string) error {
+	parts := strings.Split(value, ",")
+	if len(parts) != 5 {
+		return fmt.Errorf("water region %q: want minX,minY,maxX,maxY,level", value)
+	}
+	var v [5]int32
+	for i, part := range parts {
+		n, err := strconv.ParseInt(strings.TrimSpace(part), 10, 32)
+		if err != nil {
+			return fmt.Errorf("water region %q: %w", value, err)
+		}
+		v[i] = int32(n)
+	}
+	*r = append(*r, terrain.WaterRegion{MinX: v[0], MinY: v[1], MaxX: v[2], MaxY: v[3], Level: v[4]})
+	return nil
 }
 
 func fail(err error) {

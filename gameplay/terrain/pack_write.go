@@ -25,7 +25,7 @@ func WritePack(w io.WriterAt, meta Meta, src ChunkSource) (int64, error) {
 	}
 	n := meta.Chunks()
 	index := make([]indexEntry, n)
-	offset := int64(packHeaderSize) + int64(n)*packIndexEntry
+	offset := int64(packHeaderSize) + int64(n)*packIndexEntry + int64(len(meta.WaterRegions))*packRegionEntry
 	workers := runtime.GOMAXPROCS(0)
 	encoded := make([][]byte, writeBatch)
 	errs := make([]error, writeBatch)
@@ -87,15 +87,23 @@ func encodeFrom(src ChunkSource, meta Meta, i int) ([]byte, error) {
 	return data, nil
 }
 
-// encodeHeader 编出包头与索引表（格式见 pack.go）。
+// encodeHeader 编出包头与紧随其后的两张表（索引表、区域表，连在一起；格式见 pack.go）。
 func encodeHeader(meta Meta, index []indexEntry) (head, table []byte) {
 	le := binary.LittleEndian
-	table = make([]byte, len(index)*packIndexEntry)
+	table = make([]byte, len(index)*packIndexEntry+len(meta.WaterRegions)*packRegionEntry)
 	for i, e := range index {
 		b := table[i*packIndexEntry:]
 		le.PutUint64(b, e.offset)
 		le.PutUint32(b[8:], e.length)
 		copy(b[12:], e.sum[:])
+	}
+	for i, r := range meta.WaterRegions {
+		b := table[len(index)*packIndexEntry+i*packRegionEntry:]
+		le.PutUint32(b, uint32(r.MinX))
+		le.PutUint32(b[4:], uint32(r.MinY))
+		le.PutUint32(b[8:], uint32(r.MaxX))
+		le.PutUint32(b[12:], uint32(r.MaxY))
+		le.PutUint32(b[16:], uint32(r.Level))
 	}
 	head = make([]byte, packHeaderSize)
 	copy(head, packMagic)
@@ -112,6 +120,7 @@ func encodeHeader(meta Meta, index []indexEntry) (head, table []byte) {
 	le.PutUint32(head[52:], codecPlaneDeltaFlate)
 	le.PutUint64(head[56:], packHeaderSize)
 	le.PutUint32(head[64:], packIndexEntry)
+	le.PutUint32(head[68:], uint32(len(meta.WaterRegions)))
 	sum := metaSum(head, table)
 	copy(head[packMetaHashOff:], sum[:])
 	return head, table

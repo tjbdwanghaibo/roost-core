@@ -40,7 +40,7 @@ func equalChunk(a, b Chunk) bool {
 func TestPackRoundTrip(t *testing.T) {
 	src := Generated(testMeta, testSeed)
 	p, _ := writeTestPack(t, testMeta, src)
-	if p.Meta() != testMeta {
+	if !p.Meta().Equal(testMeta) {
 		t.Fatalf("meta %+v, want %+v", p.Meta(), testMeta)
 	}
 	for key := range ChunksIn(testMeta.Bounds()) {
@@ -190,8 +190,8 @@ func TestOpenRejectsBadHeaderAndIndex(t *testing.T) {
 	mutate("index-sum", flip(packHeaderSize+12), ErrBadPack)
 	mutate("meta-hash", flip(packMetaHashOff), ErrBadPack)
 	mutate("truncated-index", func(b []byte) []byte { return b[:dataStart-1] }, ErrBadPack)
-	mutate("truncated-data", func(b []byte) []byte { return b[:len(b)-1] }, ErrBadPack) // 最后一块越出文件
-	mutate("version", func(b []byte) []byte { binary.LittleEndian.PutUint32(b[8:], 2); return b }, ErrPackVersion)
+	mutate("truncated-data", func(b []byte) []byte { return b[:len(b)-1] }, ErrBadPack)                              // 最后一块越出文件
+	mutate("version-1", func(b []byte) []byte { binary.LittleEndian.PutUint32(b[8:], 1); return b }, ErrPackVersion) // 版本 1 的包（没有区域水位）不兼容
 	mutate("spacing", func(b []byte) []byte { binary.LittleEndian.PutUint32(b[36:], 50); return b }, ErrPackVersion)
 }
 

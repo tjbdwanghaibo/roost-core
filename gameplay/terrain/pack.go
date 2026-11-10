@@ -9,13 +9,14 @@ import (
 	"io"
 	"math"
 	"os"
+	"slices"
 )
 
-// 原始地形包（base pack）格式，版本 1。单文件，全部整数小端：
+// 原始地形包（base pack）格式，版本 2。单文件，全部整数小端：
 //
 //	偏移 0    包头 128 字节
 //	  0  magic         [8]byte  "RTERRAIN"
-//	  8  formatVersion uint32   = 1
+//	  8  formatVersion uint32   = 2
 //	 12  headerSize    uint32   = 128
 //	 16  baseRevision  int64
 //	 24  chunksX       uint32
@@ -24,24 +25,28 @@ import (
 //	 36  sampleSpacing uint32   = 100（世界单位）
 //	 40  heightStep    uint32   = 10（世界单位）
 //	 44  heightBase    int32
-//	 48  waterLevel    int32
+//	 48  waterLevel    int32    全局水位线
 //	 52  codec         uint32   = 1（codec.go）
 //	 56  indexOffset   uint64   = 128
 //	 64  indexEntry    uint32   = 44
-//	 68  保留          [28]byte 全零
-//	 96  metaSHA256    [32]byte = SHA-256(包头前 96 字节 ‖ 索引表)
+//	 68  waterRegions  uint32   区域水位的个数（≤ MaxWaterRegions）
+//	 72  保留          [24]byte 全零
+//	 96  metaSHA256    [32]byte = SHA-256(包头前 96 字节 ‖ 索引表 ‖ 区域表)
 //	偏移 128  索引表 chunksX·chunksY 项，按块行优先（下标 = y·chunksX + x），每项 44 字节：
 //	  0  offset uint64   块数据在文件里的偏移
 //	  8  length uint32   块数据字节数
 //	 12  sha256 [32]byte 块数据（存储字节，即压缩后）的 SHA-256
-//	之后  块数据，codec 1 的编码见 codec.go
+//	之后      区域表 waterRegions 项，每项 20 字节：minX、minY、maxX、maxY（uint32，块坐标，半开）、level（int32）
+//	之后      块数据，codec 1 的编码见 codec.go
 //
-// 包头与索引表由 metaSHA256 整体校验（打开时一次），每块由自己的 SHA-256 校验（每次读块）。
+// 包头、索引表与区域表由 metaSHA256 整体校验（打开时一次），每块由自己的 SHA-256 校验（每次读块）。
+// 版本 2（2026-11-10，可编辑地形 P4）在版本 1 上加了区域水位（D3）；版本 1 的包按 ErrPackVersion 拒绝，用新工具重新生成。
 const (
 	packMagic       = "RTERRAIN"
-	packVersion     = 1
+	packVersion     = 2
 	packHeaderSize  = 128
 	packIndexEntry  = 44
+	packRegionEntry = 20
 	packMetaHashOff = 96
 	// maxStoredChunk 是单块存储字节的上限：明文最多 16KB，DEFLATE 对不可压数据只增加很少的块头；超过即视为损坏。
 	maxStoredChunk = 64 << 10
@@ -98,13 +103,14 @@ func openPack(f *os.File) (*Pack, error) {
 	if _, err := f.ReadAt(head, 0); err != nil {
 		return nil, fmt.Errorf("%w: read header: %v", ErrBadPack, err)
 	}
-	meta, chunks, err := parseHeader(head)
+	meta, chunks, regions, err := parseHeader(head)
 	if err != nil {
 		return nil, err
 	}
-	dataStart := int64(packHeaderSize) + int64(chunks)*packIndexEntry
+	indexEnd := int64(packHeaderSize) + int64(chunks)*packIndexEntry
+	dataStart := indexEnd + int64(regions)*packRegionEntry
 	if dataStart > size {
-		return nil, fmt.Errorf("%w: file of %d bytes is shorter than its index table (%d bytes)", ErrBadPack, size, dataStart)
+		return nil, fmt.Errorf("%w: file of %d bytes is shorter than its index and water region tables (%d bytes)", ErrBadPack, size, dataStart)
 	}
 	table := make([]byte, dataStart-packHeaderSize)
 	if _, err := f.ReadAt(table, packHeaderSize); err != nil {
@@ -112,6 +118,10 @@ func openPack(f *os.File) (*Pack, error) {
 	}
 	if sum := metaSum(head, table); !bytes.Equal(sum[:], head[packMetaHashOff:]) {
 		return nil, fmt.Errorf("%w: header / index checksum mismatch", ErrBadPack)
+	}
+	meta.WaterRegions = decodeWaterRegions(table[indexEnd-packHeaderSize:], regions)
+	if err := meta.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrBadPack, err)
 	}
 	index := make([]indexEntry, chunks)
 	for i := range index {
@@ -128,29 +138,34 @@ func openPack(f *os.File) (*Pack, error) {
 	return &Pack{f: f, meta: meta, index: index}, nil
 }
 
-// parseHeader 解析并校验包头的定长字段（不含 metaSHA256，它要连同索引表一起算）。
-func parseHeader(head []byte) (Meta, int, error) {
+// parseHeader 解析并校验包头的定长字段（不含 metaSHA256，它要连同索引表、区域表一起算），返回块数与区域水位个数。
+// 区域本身在校验和通过之后由 openPack 读出、整体校验。
+func parseHeader(head []byte) (Meta, int, int, error) {
 	le := binary.LittleEndian
 	if string(head[:8]) != packMagic {
-		return Meta{}, 0, fmt.Errorf("%w: magic %q", ErrBadPack, head[:8])
+		return Meta{}, 0, 0, fmt.Errorf("%w: magic %q", ErrBadPack, head[:8])
 	}
 	if v := le.Uint32(head[8:]); v != packVersion {
-		return Meta{}, 0, fmt.Errorf("%w: format version %d, this build reads %d", ErrPackVersion, v, packVersion)
+		return Meta{}, 0, 0, fmt.Errorf("%w: format version %d, this build reads %d", ErrPackVersion, v, packVersion)
 	}
 	if hs := le.Uint32(head[12:]); hs != packHeaderSize {
-		return Meta{}, 0, fmt.Errorf("%w: header size %d", ErrBadPack, hs)
+		return Meta{}, 0, 0, fmt.Errorf("%w: header size %d", ErrBadPack, hs)
 	}
 	samples, spacing, step, codec := le.Uint32(head[32:]), le.Uint32(head[36:]), le.Uint32(head[40:]), le.Uint32(head[52:])
 	if samples != ChunkSamples || spacing != SampleSpacing || step != HeightStep || codec != codecPlaneDeltaFlate {
-		return Meta{}, 0, fmt.Errorf("%w: chunk samples %d, spacing %d, height step %d, codec %d; this build uses %d, %d, %d, %d",
+		return Meta{}, 0, 0, fmt.Errorf("%w: chunk samples %d, spacing %d, height step %d, codec %d; this build uses %d, %d, %d, %d",
 			ErrPackVersion, samples, spacing, step, codec, ChunkSamples, SampleSpacing, HeightStep, codecPlaneDeltaFlate)
 	}
 	if off, entry := le.Uint64(head[56:]), le.Uint32(head[64:]); off != packHeaderSize || entry != packIndexEntry {
-		return Meta{}, 0, fmt.Errorf("%w: index at %d with %d-byte entries", ErrBadPack, off, entry)
+		return Meta{}, 0, 0, fmt.Errorf("%w: index at %d with %d-byte entries", ErrBadPack, off, entry)
 	}
 	cx, cy := le.Uint32(head[24:]), le.Uint32(head[28:])
 	if cx > math.MaxInt32 || cy > math.MaxInt32 {
-		return Meta{}, 0, fmt.Errorf("%w: %d × %d chunks", ErrBadPack, cx, cy)
+		return Meta{}, 0, 0, fmt.Errorf("%w: %d × %d chunks", ErrBadPack, cx, cy)
+	}
+	regions := le.Uint32(head[68:])
+	if regions > MaxWaterRegions {
+		return Meta{}, 0, 0, fmt.Errorf("%w: %d water regions, at most %d", ErrBadPack, regions, MaxWaterRegions)
 	}
 	meta := Meta{
 		BaseRevision: int64(le.Uint64(head[16:])),
@@ -159,12 +174,30 @@ func parseHeader(head []byte) (Meta, int, error) {
 		WaterLevel: int32(le.Uint32(head[48:])),
 	}
 	if err := meta.Validate(); err != nil {
-		return Meta{}, 0, fmt.Errorf("%w: %v", ErrBadPack, err)
+		return Meta{}, 0, 0, fmt.Errorf("%w: %v", ErrBadPack, err)
 	}
-	return meta, meta.Chunks(), nil
+	return meta, meta.Chunks(), int(regions), nil
 }
 
-// metaSum 是包头前 96 字节与索引表的 SHA-256。
+// decodeWaterRegions 读区域表（n 项，每项 packRegionEntry 字节）。块坐标按 uint32 读，越出 int32 的值变成负数，由
+// Meta.Validate 拒绝。
+func decodeWaterRegions(table []byte, n int) []WaterRegion {
+	if n == 0 {
+		return nil
+	}
+	le := binary.LittleEndian
+	regions := make([]WaterRegion, n)
+	for i := range regions {
+		e := table[i*packRegionEntry:]
+		regions[i] = WaterRegion{
+			MinX: int32(le.Uint32(e)), MinY: int32(le.Uint32(e[4:])), MaxX: int32(le.Uint32(e[8:])), MaxY: int32(le.Uint32(e[12:])),
+			Level: int32(le.Uint32(e[16:])),
+		}
+	}
+	return regions
+}
+
+// metaSum 是包头前 96 字节与索引表、区域表的 SHA-256（table 是两张表连在一起）。
 func metaSum(head, table []byte) [sha256.Size]byte {
 	h := sha256.New()
 	h.Write(head[:packMetaHashOff])
@@ -174,8 +207,12 @@ func metaSum(head, table []byte) [sha256.Size]byte {
 	return sum
 }
 
-// Meta 返回包头记录的地图参数。
-func (p *Pack) Meta() Meta { return p.meta }
+// Meta 返回包头记录的地图参数（WaterRegions 是副本，调用方改它不影响包）。
+func (p *Pack) Meta() Meta {
+	m := p.meta
+	m.WaterRegions = slices.Clone(m.WaterRegions)
+	return m
+}
 
 // ChunkSum 返回块存储字节的 SHA-256（索引表里的值，不读块数据），客户端可以用它核对自己的资源。
 func (p *Pack) ChunkSum(key ChunkKey) ([sha256.Size]byte, error) {
