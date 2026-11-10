@@ -499,3 +499,202 @@ func TestModulesInstallOntoAProjectWithBusinessCodeAndRollBackOnFailure(t *testi
 		t.Fatalf("verify: %v\n%+v", err, report)
 	}
 }
+
+// tenModuleStructsTest 写进生成工程的 db 包：主 DAO 下挂十个模块形状的嵌套结构体时，
+// 改其中一个的子字段，同步补丁与持久补丁都只带这一处。
+const tenModuleStructsTest = `package db
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"slices"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+type tenCommitter struct{ records []nest.CommitRecord }
+
+func (c *tenCommitter) Commit(_ context.Context, record nest.CommitRecord) error {
+	c.records = append(c.records, record)
+	return nil
+}
+
+func tenTx(t *testing.T, committer *tenCommitter, fn func() error) error {
+	t.Helper()
+	_, err := nest.RunIsolatedTransaction(context.Background(), committer, "ten", func() (any, error) { return nil, fn() })
+	return err
+}
+
+// seededPlayer 每个结构体都有内容：一个标量、一百个 map 元素、十个嵌套对象。
+func seededPlayer(t *testing.T) *PlayerDao {
+	t.Helper()
+	source := NewPlayerDao()
+	source.SetId(1001)
+	if err := tenTx(t, &tenCommitter{}, func() error {
+		fill := func(setLevel func(int32), setItem func(int32, int64), setSlot func(int32, *ModSlot)) {
+			setLevel(1)
+			for key := int32(0); key < 100; key++ {
+				setItem(key, int64(key))
+			}
+			for key := int32(0); key < 10; key++ {
+				slot := &ModSlot{}
+				slot.SetPower(int64(key))
+				setSlot(key, slot)
+			}
+		}
+		fill(source.GetMod0().SetLevel, source.GetMod0().SetItemsKey, source.GetMod0().SetSlotsKey)
+		fill(source.GetMod1().SetLevel, source.GetMod1().SetItemsKey, source.GetMod1().SetSlotsKey)
+		fill(source.GetMod2().SetLevel, source.GetMod2().SetItemsKey, source.GetMod2().SetSlotsKey)
+		fill(source.GetMod3().SetLevel, source.GetMod3().SetItemsKey, source.GetMod3().SetSlotsKey)
+		fill(source.GetMod4().SetLevel, source.GetMod4().SetItemsKey, source.GetMod4().SetSlotsKey)
+		fill(source.GetMod5().SetLevel, source.GetMod5().SetItemsKey, source.GetMod5().SetSlotsKey)
+		fill(source.GetMod6().SetLevel, source.GetMod6().SetItemsKey, source.GetMod6().SetSlotsKey)
+		fill(source.GetMod7().SetLevel, source.GetMod7().SetItemsKey, source.GetMod7().SetSlotsKey)
+		fill(source.GetMod8().SetLevel, source.GetMod8().SetItemsKey, source.GetMod8().SetSlotsKey)
+		fill(source.GetMod9().SetLevel, source.GetMod9().SetItemsKey, source.GetMod9().SetSlotsKey)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 从持久字节重建一份：变化记录是干净的，之后的补丁只反映用例里的改动。
+	player := NewPlayerDao()
+	player.SetId(1001)
+	if err := player.Unmarshal(source.Marshal()); err != nil {
+		t.Fatal(err)
+	}
+	player.DirtyTracker().SetVersion(1)
+	return player
+}
+
+func TestTenModuleStructsSyncAndPersistOnlyWhatChanged(t *testing.T) {
+	player := seededPlayer(t)
+	full := player.MarshalSync(^uint64(0))
+	committer := &tenCommitter{}
+	if err := tenTx(t, committer, func() error {
+		player.GetMod2().SetLevel(9)       // 同步的结构体：标量
+		player.GetMod2().SetItemsKey(7, 70) // 同步的结构体：一个 map 元素
+		slot, _ := player.GetMod4().GetSlots(3)
+		slot.SetPower(99)                // 同步的结构体：嵌套对象的子字段
+		player.GetMod5().SetLevel(9)     // 只落库的结构体
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 同步补丁：只有 Mod2 与 Mod4，且比全量小一个数量级以上。
+	delta := player.MarshalSyncChanges(player.DirtyTracker().SyncDirtyMask())
+	patch, err := UnmarshalSyncPlayerDao(delta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if patch.Mod2 == nil || patch.Mod4 == nil {
+		t.Fatalf("the changed structs are missing from the sync patch: %+v", patch)
+	}
+	if patch.Mod0 != nil || patch.Mod6 != nil || patch.Mod8 != nil {
+		t.Fatalf("an untouched struct is in the sync patch: %+v", patch)
+	}
+	if patch.Mod2.Patch == nil || patch.Mod4.Patch == nil {
+		t.Fatal("a sub-field change was sent as a whole-struct replacement")
+	}
+	if len(delta)*10 > len(full) {
+		t.Fatalf("delta is %d bytes, full is %d: the delta is not incremental", len(delta), len(full))
+	}
+	mirror := NewPlayerDao()
+	if err := mirror.ApplySync(full); err != nil {
+		t.Fatal(err)
+	}
+	if err := mirror.ApplySync(delta); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(mirror.MarshalSync(^uint64(0)), player.MarshalSync(^uint64(0))) {
+		t.Fatal("full + delta does not rebuild the current state")
+	}
+
+	// 持久补丁：按路径，只有改过的四处；只落库的 Mod5 在这里、不在同步补丁里。
+	if len(committer.records) != 1 || len(committer.records[0].Mutations) != 1 {
+		t.Fatalf("records: %+v", committer.records)
+	}
+	mutation := committer.records[0].Mutations[0]
+	if mutation.Kind != dataengine.MutationPatch {
+		t.Fatalf("mutation kind = %v, want a patch", mutation.Kind)
+	}
+	elements, err := bson.Raw(mutation.Patch.SetBSON).Elements()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, element := range elements {
+		keys = append(keys, element.Key())
+	}
+	slices.Sort(keys)
+	if want := []string{"mod2.1", "mod2.2.7", "mod4.3.3.1", "mod5.1"}; !slices.Equal(keys, want) {
+		t.Fatalf("persisted paths = %v, want %v", keys, want)
+	}
+	t.Logf("sync full %d bytes, delta %d bytes; persist patch %d bytes for %d paths", len(full), len(delta), len(mutation.Patch.SetBSON), len(keys))
+
+	// 失败的事务：值回到原样，提交器没有收到记录。
+	refused := errors.New("refused")
+	if err := tenTx(t, committer, func() error { player.GetMod6().SetLevel(5); player.GetMod7().SetItemsKey(1, 555); return refused }); !errors.Is(err, refused) {
+		t.Fatalf("err = %v", err)
+	}
+	item, _ := player.GetMod7().GetItems(1)
+	if player.GetMod6().GetLevel() != 1 || item != 1 || len(committer.records) != 1 {
+		t.Fatalf("a refused transaction left level=%d item=%d records=%d", player.GetMod6().GetLevel(), item, len(committer.records))
+	}
+}
+`
+
+// 主 DAO 下挂十个模块形状的嵌套结构体（五个同步、五个只落库，各含标量、map、嵌套对象）时，
+// 增量同步与按路径落库照常工作：改一个子字段，两种补丁都只带这一处。这是“模块状态用嵌套结构体”
+// 这条决定在规模上的验证（方案第 11.10 节）。
+func TestTenModuleStructsUnderOneDAO(t *testing.T) {
+	if testing.Short() {
+		t.Skip("generates a project and runs go test in it")
+	}
+	t.Parallel()
+	root, roost, _ := moduleProject(t, "tenmods")
+	roost("add", "dao", "Player", "--entity", "Player")
+	var types strings.Builder
+	types.WriteString("package dbdef\n\n// ModSlot 是各结构体共用的嵌套对象。\ntype ModSlot struct {\n\tPower int64 `store:\"1\"`\n}\n")
+	var fields []daoFieldSpec
+	for i := 0; i < 10; i++ {
+		name := "Mod" + strconv.Itoa(i)
+		types.WriteString("\ntype " + name + "State struct {\n\tLevel int32 `store:\"1\"`\n\tItems map[int32]int64 `store:\"2\"`\n\tSlots map[int32]*ModSlot `store:\"3\"`\n}\n")
+		intent := "persist,sync"
+		if i%2 == 1 {
+			intent = "persist"
+		}
+		fields = append(fields, daoFieldSpec{Name: name, Type: name + "State", Store: strings.ToLower(name), Dao: intent})
+	}
+	if err := os.WriteFile(filepath.Join(root, "db", "def", "tenmods.go"), []byte(types.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source, err := locateDaoStruct(root, "PlayerDao")
+	if err != nil || source == nil {
+		t.Fatalf("locate PlayerDao: %v %v", source, err)
+	}
+	updated, err := source.appendFields(root, fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source.path, updated, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	roost("generate")
+	if err := os.WriteFile(filepath.Join(root, "db", "tenmods_test.go"), []byte(tenModuleStructsTest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output, err := runModuleTool(context.Background(), root, "go", "test", "-mod=mod", "-race", "-count=1", "-v", "-run", "^TestTenModuleStructs", "./db")
+	if err != nil || !bytes.Contains(output, []byte("--- PASS: TestTenModuleStructsSyncAndPersistOnlyWhatChanged")) {
+		t.Fatalf("ten module structs: %v\n%s", err, output)
+	}
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.Contains(line, "sync full") {
+			t.Log(strings.TrimSpace(line))
+		}
+	}
+}
