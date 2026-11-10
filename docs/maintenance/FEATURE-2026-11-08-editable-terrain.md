@@ -1203,6 +1203,8 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 | C 建筑按占地中心还是占地范围进视野 | ★ 先按中心（与怪一样是一个点）；或 AOI 支持目标带半径（离占地最近点进视野） | 带半径是框架改动（AOI 索引按扩展块登记，`MaxObservedBlocks` 已有），大建筑才需要 |
 | D 静止目标被上限忽略后的重新参选 | ★ 接受近似（玩家通常在动；会话级超额降级 D17 的放回不受影响）；或在 AOI 里有空位时重评被忽略的候选 | 重评是 `policy.AOI` 的框架改动，要测批量重评成本（`BenchmarkAOIBatchRecompute`） |
 
+**维护者 2026-11-10 决定**：A 按推荐（开地形的场景按游戏尺度放大主视野，实施中），B、C、D 按推荐；`TestBuildingsReachAnotherClientOverRealTCP` 的偶发（第二次改参数以全量发出）要查，实施中。
+
 **验证**（生成的 game-demo，`building_sync_test.go`）
 
 | 用例 | 内容 |
