@@ -799,9 +799,15 @@ func TestCellsInSeparateProcesses(t *testing.T) {
 	crossing := w.viewsOf(1)
 	cont := checkContinuity(t, crossing, npcs, natsMaxMiss, natsGap, mp)
 	w.checkClient(1, npcs)
-	// 前提：A 看得见 B 边界带里的目标（A 的 witness 里有它的 Ghost）。Cell 在子进程里，只能从 witness 看。
-	w.waitView(1, settleWithin, "the target in A's witness", func(v View) bool {
-		return v.Cell == w.grid.SID(CellID{0, 0}) && slices.ContainsFunc(v.Entities, func(e EntityState) bool { return e.ID == target })
+	// 前提：攻击者停在攻击距离内、A 看得见目标。“回到 9600 以西”是看到 witness 才停，负载下控制延迟可能让玩家多走
+	// 几百单位，离目标（10200, 5200）超出攻击距离 800（加压时 10 刀全按 OutOfRange 被拒）。所以先以 200/s 闭环走回
+	// x ≥ 9650（多走也到不了 B 的交接线 10100），停稳，再等 A 的 witness 里有目标（Cell 在子进程里，只能从 witness 看）。
+	w.move(1, 200, 0)
+	w.waitView(1, travelWithin, "back within attack range", func(v View) bool { return v.Self.X >= 9650 })
+	w.move(1, 0, 0)
+	w.waitView(1, settleWithin, "stopped in A with the target in view", func(v View) bool {
+		return v.Cell == w.grid.SID(CellID{0, 0}) && v.Self.VX == 0 &&
+			slices.ContainsFunc(v.Entities, func(e EntityState) bool { return e.ID == target })
 	})
 	var hits []HitID
 	for range 10 {
