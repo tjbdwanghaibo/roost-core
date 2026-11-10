@@ -5,8 +5,9 @@ import (
 	"testing"
 )
 
-// doctor 的 merge-readiness 读工程自己的 cmd/sidmerge 给出的合服清单：game-demo 的 DAO 都在共享逻辑库 main，
-// 生成配置的 syncbus 走 JetStream（按 sid 的 durable），RPC 走 core NATS。它是只读的提示，不让 doctor 失败。
+// doctor 的 merge-readiness 读工程自己的 cmd/sidmerge 给出的合服清单：game-demo 的 DAO 都在逻辑库 main，其中地形格账本
+// TerrainCellEditor 按 sid 分库，所以 main 既要 migrate 也要两侧同址；生成配置的 syncbus 走 JetStream（按 sid 的
+// durable），RPC 走 core NATS。它是只读的提示，不让 doctor 失败。
 func TestDoctorMergeReadinessReadsTheChecklist(t *testing.T) {
 	t.Parallel()
 	// cmd/sidmerge 用的 wiring/sidmerge 还没发版：编译当前工作树。
@@ -18,7 +19,7 @@ func TestDoctorMergeReadinessReadsTheChecklist(t *testing.T) {
 	if item.Status != StatusOK {
 		t.Fatalf("merge-readiness = %+v", item)
 	}
-	for _, want := range []string{"dbscope=sid databases moved by sidmerge migrate: none", "same place: main", "(confirm by hand): syncbus", "business merges"} {
+	for _, want := range []string{"dbscope=sid databases moved by sidmerge migrate: main", "same place: main (", "(confirm by hand): syncbus", "business merges"} {
 		if !strings.Contains(item.Detail, want) {
 			t.Fatalf("merge-readiness detail %q lacks %q", item.Detail, want)
 		}
@@ -33,7 +34,9 @@ func TestMergeChecklistSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"migrate: zone", "same place: main", "(confirm by hand): syncbus;", "1 business merges"} {
+	// zone 按 sid 分库，但同一逻辑库里不按 sid 的 DAO 仍要两侧同址（sidmerge 的 co-location 检查对每个逻辑库都做），
+	// 所以它同时出现在两张表里。
+	for _, want := range []string{"migrate: zone", "same place: main, zone (", "(confirm by hand): syncbus;", "1 business merges"} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("summary %q lacks %q", summary, want)
 		}

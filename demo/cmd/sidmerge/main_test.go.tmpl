@@ -7,8 +7,10 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/sidmerge"
 )
 
-// 合服清单按本工程自己的配置与 DAO 声明给出：game-demo 的 DAO 都在共享逻辑库 main（不按 sid 分库），所以合服不搬
-// 任何数据，只要求两侧把 main 映射到同一位置；持久总线清单列出生成配置里的 JetStream 用法。
+// 合服清单按本工程自己的配置与 DAO 声明给出：game-demo 的 DAO 都在逻辑库 main。其中只有地形格账本
+// TerrainCellEditor 是 dbscope=sid（分区场景每个格进程写自己的 <物理名>_<sid>），所以 main 是混合库：按 sid 的部分
+// 由 sidmerge migrate 搬（不开分区的工程这部分没有文档，搬的是空集），其余 DAO 照共享库处理，要求两侧把 main
+// 映射到同一位置；持久总线清单列出生成配置里的 JetStream 用法。
 func TestTheChecklistReadsThisProjectsConfigAndDAOs(t *testing.T) {
 	cfg, err := loadConfig("../../" + defaultConfig)
 	if err != nil {
@@ -27,8 +29,8 @@ func TestTheChecklistReadsThisProjectsConfigAndDAOs(t *testing.T) {
 			main = &list.Databases[i]
 		}
 	}
-	if main == nil || main.ServerScoped {
-		t.Fatalf("databases = %+v, want the shared logical database %q", list.Databases, db.DatabaseMain)
+	if len(list.Databases) != 1 || main == nil || !main.ServerScoped || main.Physical == "" {
+		t.Fatalf("databases = %+v, want only the logical database %q, scoped by sid for TerrainCellEditor", list.Databases, db.DatabaseMain)
 	}
 	persistent := map[string]bool{}
 	for _, item := range list.Bus {

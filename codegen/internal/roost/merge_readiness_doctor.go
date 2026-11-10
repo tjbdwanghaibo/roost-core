@@ -78,12 +78,13 @@ func summarizeMergeChecklist(raw []byte) (string, error) {
 	if len(list.Databases) == 0 {
 		return "", errors.New("the checklist names no logical database; does cmd/sidmerge import the project's db package?")
 	}
-	var shared, scoped, addressed []string
+	// 按 sid 分库的逻辑库里也可能有不按 sid 的 DAO（混合库，例如 game-demo 的 main 只有地形格账本按 sid）：
+	// sidmerge 对每个逻辑库都做 co-location 检查，所以每个逻辑库都列进“两侧同址”，按 sid 的再列进 migrate。
+	var colocated, scoped, addressed []string
 	for _, database := range list.Databases {
+		colocated = append(colocated, database.Logical)
 		if database.ServerScoped {
 			scoped = append(scoped, database.Logical)
-		} else {
-			shared = append(shared, database.Logical)
 		}
 	}
 	for _, item := range list.Bus {
@@ -97,8 +98,8 @@ func summarizeMergeChecklist(raw []byte) (string, error) {
 		}
 		return strings.Join(values, ", ")
 	}
-	return fmt.Sprintf("merging a server: dbscope=sid databases moved by sidmerge migrate: %s; shared databases both deployments must map to the same place: %s; "+
+	return fmt.Sprintf("merging a server: dbscope=sid databases moved by sidmerge migrate: %s; databases both deployments must map to the same place: %s (their non-sid DAOs); "+
 		"persistent bus items addressed to a sid (confirm by hand): %s; %d business merges to plan. "+
 		"Full list: go run ./cmd/sidmerge checklist; runbook: docs/framework/PLAYER-MIGRATION.md §6",
-		none(scoped), none(shared), none(addressed), len(list.Business)), nil
+		none(scoped), none(colocated), none(addressed), len(list.Business)), nil
 }
