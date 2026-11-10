@@ -59,8 +59,9 @@ namespace Roost.Client.Terrain
     //   - 视图的 ChunkChanged：按变化的采样矩形算出读到它的块（TerrainChunkBuilder.Dependents，含法线的一圈邻域），
     //     只改块内部时邻块不重建；卸下（Unloaded）同时撤销这一块的确认。
     //   - Want / Drop：显示集合与每块的 LOD；LOD 变化让四个共边邻块的接缝也变脏。
-    //   - Confirm：依赖块在本会话里的覆盖块状态已确认（例如已收到它的全量、或服务端已表明它没改过）。基础包可读不等于覆盖块已确认，
-    //     所以缺省要求确认后才算就绪（TerrainRebuildOptions.RequireConfirmation）。
+    //   - Confirm / Unconfirm：依赖块在本会话里的覆盖块状态已确认（已收到它的全量、或服务端已表明它没改过）/ 不再确认。基础包
+    //     可读不等于覆盖块已确认，所以缺省要求确认后才算就绪（TerrainRebuildOptions.RequireConfirmation）。确认来源是服务端
+    //     地形视野里每一块的 TerrainChunk 对象（没改过的块是 Version 0 的就绪标记，方案 §31.9），由 TerrainChunkSync 接到这里。
     //   - BeginSession（断线重连 / 重新登录）：会话代际加一，全部确认作废，全部块变脏，在途结果作废。
     //   - SwitchTerrain（基础包换版、水位随包换）：地形代际加一，同上，并改用新视图。
     //
@@ -186,6 +187,17 @@ namespace Roost.Client.Terrain
                 if (view.GetChunk(key) == null) return false;
                 confirmed.Add(key);
                 return true;
+            }
+        }
+
+        // 撤销块 key 的确认（服务端不再告诉本会话这块的状态：对象离开了地形视野、被移除）。返回它之前是否已确认。
+        // 读到它的结果之后都不再就绪 / 不再是当前的（TryGetShown 的 current = false），重新 Confirm 且数据未变时恢复，不必重建。
+        public bool Unconfirm(ChunkKey key)
+        {
+            lock (gate)
+            {
+                CheckOpen();
+                return confirmed.Remove(key);
             }
         }
 
