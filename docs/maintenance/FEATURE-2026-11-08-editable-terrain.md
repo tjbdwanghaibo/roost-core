@@ -744,7 +744,7 @@ type TerrainChunkDao struct {
 
 - 订阅重算按玩家数 × 视点周围块数（292m 半径约 100 块）算，T09 规模（单格数千玩家）未测；拥有者的订阅表、推送扇出没有上限测量。
 - 客户端第一次看到别的进程写的块是新订阅的即时全量（实测约 7～48ms），之后的更新按 TerrainChunk 的 1 秒周期合并；Ghost 带不受这个周期影响。
-- 真实 Mongo / WAL 下的崩溃重启（“只推持久版本”的前提）只靠 strict 契约推出，本轮没有真实依赖的崩溃演练；`scripts/test-seamless-demo.sh` 的分区配置 `cell_size` 3000 不满足开地形的要求，演练没有覆盖地形。
+- 真实 Mongo / WAL 下的崩溃重启（“只推持久版本”的前提）只靠 strict 契约推出，本轮没有真实依赖的崩溃演练；`scripts/test-seamless-demo.sh` 的分区配置 `cell_size` 3000 不满足开地形的要求，演练没有覆盖地形。（2026-11-10 补：开地形的分区场景真实多进程演练，含 kill -9 格进程后重启、真实 Mongo / WAL，见 [§26](#26-开地形的分区场景真实多进程演练t05t062026-11-10)；“提交了但答复没到”的在途编辑仍没有稳定构造出来。）
 
 **验证**（2026-11-09，Apple M5，go1.27.3，`GOWORK=off`；生成工程 `--skip-deps` + replace 到本分支）：
 
@@ -907,7 +907,7 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 
 ### 24.4 未覆盖与限制
 
-- demo 用例里的 NPC 是替身实体：demo 的 SceneActor / Monster 经进程级的 `partition.Node()` 找 Node，一个测试进程里装不下两个格；`startPartition` 里装钩子的三行只有真实进程演练（`scripts/test-seamless-demo.sh` 开地形的配置）覆盖，本轮没跑（真实依赖由维护者跑）。现有演练配置的 `cell_size` 3000 不满足开地形的要求（§21），要另配。
+- demo 用例里的 NPC 是替身实体：demo 的 SceneActor / Monster 经进程级的 `partition.Node()` 找 Node，一个测试进程里装不下两个格；`startPartition` 里装钩子的三行只有真实进程演练（`scripts/test-seamless-demo.sh` 开地形的配置）覆盖，本轮没跑（真实依赖由维护者跑）。**2026-11-10 已补**：`ROOST_SEAMLESS_TERRAIN=1` 的演练覆盖这几行，去掉装钩子的那一行演练变红（[§26](#26-开地形的分区场景真实多进程演练t05t062026-11-10)）。现有演练配置的 `cell_size` 3000 不满足开地形的要求（§21），要另配。
 - 玩家端没有新的 TCP 用例：玩家停下后客户端看到的是 witness 里的位置（与停在世界边缘相同的路径），cellworld 的 `TestCrossCellWalkFollowsTheNeighboursTerrain` 用 Base 收到的 witness 断言。
 - 副本的新旧：判定用本进程当时持有的副本版本。拥有者刚提交、副本还没到的那几毫秒（推送丢了时至多 1 秒）里，旧格可能让角色走过邻格刚抬起的地方，或在刚挖平的地方停下；交接后新格按最新数据判定。T09 规模下副本延迟未测。
 - 刷怪点与进场位置不按 `Standable` 检查：站在不可走节点上的角色一步不走（不猜），不会被挪到附近能站的点。
@@ -922,3 +922,31 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 | 分区世界比地形图大 | 图外不可走（Walker 规则），启动记 Warn | ★ 不可走（不猜，与“块没装入”一致）；或图外不判高度（只按世界边缘走）；或启动拒绝（配置校验要求地形图覆盖分区世界） |
 | 刷怪点 / 进场位置 | 不检查 `Standable` | ★ 先不查（demo 原型，站不住的角色只是不动）；或刷怪 / 进场时按 `Standable` 跳过或挪到最近能站的节点（同普通场景的 `Place`） |
 | 每点问 `Cell` 的成本 | 全速玩家每拍约 1µs | ★ 先保持，T09 实测后再定；或 `Surface` 增加节点边长，按格边界解析求交（每拍只问跨过的边界，接口变化） |
+
+## 26. 开地形的分区场景真实多进程演练（T05、T06，2026-11-10）
+
+本地分支 `feat/terrain-partition-drill`（基于 main `960e485c`，未推送）。补 §21 与 §24.4 留下的“开地形的无缝演练、真实 Mongo / WAL 崩溃演练、`startPartition` 装钩子的几行”。§25 留给同期 P4 那一轮。证据、命令与每步数字见 [evidence/terrain-partition-drill-20261110](evidence/terrain-partition-drill-20261110/README.md)。
+
+**入口**：`scripts/test-seamless-demo.sh` 加 `ROOST_SEAMLESS_TERRAIN=1` 模式，复用依赖准备、生成工程、端口检查与清理；客户端步骤在 `scripts/testdata/seamless/terrain.go.txt`（与原 `drill.go.txt` 编成同一程序，`-terrain` 选步骤）。不设时原演练逐字不变（客户端只多认 `terrain` 命名空间，原演练不会收到）。另加 `ROOST_SEAMLESS_PROJECT_HOOK`（生成之后、编译之前在工程里执行一条命令）供变异验证。
+
+**配置**：4 × 2 块平地包（演练程序写出），`cell_size` 12800（两块）、2 × 1 格（A = sid 1001、B = sid 1002），`ghost_band` 600 = `view_radius` 400 + `hysteresis` 200；1000、1004 只做 Base。演练用平地，是因为 demo 缺省程序化包上向东一步只有 45.5% 走得通，角色会被天然坡随机挡住。
+
+**读视图**：生成 demo 新增只读 GM `gm.terrain.probe`（`internal/service/<game>/terrain.go` 的 `terrainProbe`）：每块报是否本进程写、是否装着、视图版本、副本订阅报的版本（`Map.ReplicaHeld`）与数据摘要（FNV-1a 64：高度小端 2 字节、再材质 1 字节），每点报世界高度；至多 64 块、256 点。客户端按同一规则算自己收到的块，所以“拥有者、Ghost 带、各进程客户端是同一份数据”可以逐块判定。用例 `TestTerrainProbeReportsTheView`。
+
+**步骤与结论**（两次完整运行都通过）：
+
+| 步骤 | 结论 |
+| --- | --- |
+| (a) A 改边界块与远处块 | B 的 Ghost 带在答复后一次轮询（约 3～4ms）内对齐；B、1004、A 上的客户端在答复之后 1ms 内拿到、摘要相同；远处块不进 B 的视图、只作为客户端副本；B 改 A 的块答 `terrain_not_owned` |
+| (b) 真实 SceneActor | B 紧挨分界线抬 5m 的坎，坎到 A 的 Ghost 带 10～16ms；Base 在 1004 的玩家越过分界线、**停在 12949**（坎的第一个节点从 12950 起），2 秒内一直是 A 的 Real；挖平后再走 109～114ms 交给 B |
+| (b) 真实 Monster | 怪困在 A 的墙与 B 的坎之间连续折回 4 次（东侧折回点 12933～12942 ≤ 12949，从没交给 B）；坎挖平后约 3.3s 交给 B |
+| (c) kill -9 格 B 后重启 | 答复过的编辑重启后版本、摘要不变；A 的 Ghost 带与 B 对齐、B 的 Ghost 带补上停机期间 A 的编辑，都在 readyz 之前完成；连续编辑的账本 LastSeq = 最后答复的序号 = 块版本（在途的一笔没有生效），重发答 Duplicate；重新登录的客户端 52～88ms 内拿到 |
+| 收尾 | 8 块在每个装着它的进程与三个客户端里都与拥有者一致 |
+| 变异：去掉 `cfg.Surface = partitionSurface(m, grid)` | (b) 变红：玩家走过坎、交给 B、走到 x 20673 |
+| 不开地形的原演练 | 14 步通过；最后的普通场景机器人压测同机一次通过（p95 13.54s）、一次失败（19.48s），与本项无关，登记 KNOWN-LIMITS“尚未确认” |
+
+**没有发现框架或 demo 的缺陷**；演练程序自己的两处错误（没登记实体种类时 `BuildEntityID` 报错、业务码按文本比较）已改，记在证据里。
+
+**未覆盖**：跨格寻路（没有入口）；“提交了但答复没到”的在途编辑；格 A、只做 Base 进程的崩溃与换版（D13）的真实进程演练；消息丢失 / 延迟注入、跨机、T09 规模；起伏地形上的真实进程移动。演练要真实依赖，不进 pretag。
+
+**待维护者确认**（实施方先按推荐做了）：① `gm.terrain.probe` 留作 demo 的运维 / 诊断命令（★）还是只给演练用；② 演练用平地包（★），还是给 `cmd/terrainpack` 加平地 / 平缓选项、或改缓 `terrain.Generated`（包字节变化须换 BaseRevision）；③ 演练保持手动（★）还是进 pretag（多约 2 分钟、要求真实依赖）。

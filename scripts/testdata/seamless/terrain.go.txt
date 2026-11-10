@@ -1,0 +1,991 @@
+// 开地形的分区场景演练（seamlessdrill -terrain，scripts/test-seamless-demo.sh 的 ROOST_SEAMLESS_TERRAIN=1）：与
+// drill.go 同一个程序（同一套登录、玩家 TCP、同步帧解码与 GM），换一套地形专用的步骤。地图与分区（脚本写的配置）：
+//
+//   - 地形包：4 × 2 块的平地（-write-flat-pack 写出：原始高度 1000 = 世界高度 0、没有水），256m × 128m；
+//   - 分区：2 × 1 个 12800（两块）见方的格，格 (0,0) 归 sid 1001（A）、格 (1,0) 归 sid 1002（B），分界线 x = 12800；
+//     ghost_band 600 = view_radius 400 + hysteresis 200，所以越过分界线 200 才交接（x ≥ 13000）。A 的地形视图装着本格
+//     与 B 的块 (2, *)（Ghost 带），B 装着本格与 A 的块 (1, *)；sid 1000、1004 只做 Base，不装块；
+//   - 刷怪：格 A 里一只沿 X 往返的怪（y = 9000，600 单位 / 秒）；玩家进场点 (11800, 3000)，也在格 A。
+//
+// 玩家：pA 连 A（改 A 的块）、pB 与 pB2 连 B（改 B 的块）、pW 连只做 Base 的 sid 1004（跨格走的玩家，也是“别的进程上
+// 的客户端”）。每一步打印 “STEP <名字> ok …”，失败以非零退出；evidence.json 记下各步的数字。
+package main
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"flag"
+	"fmt"
+	"hash/fnv"
+	"math"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"MMO_MODULE/db"
+	terrain_chunk "MMO_MODULE/game/entities/terrain_chunk"
+	"MMO_MODULE/protocol/msgid"
+	"MMO_MODULE/protocol/pb"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+var (
+	terrainMode   = flag.Bool("terrain", false, "run the editable-terrain drill instead of the partition drill")
+	writeFlatPack = flag.String("write-flat-pack", "", "write the terrain drill's flat 4 x 2 chunk pack to this path and exit")
+)
+
+const (
+	tBoundary = 12800           // 格 A / B 的分界线 x
+	tHandoff  = tBoundary + 200 // 越过它才交接（hysteresis 200）
+	tSpeed    = 600             // max_speed
+	tFlatRaw  = 1000            // 平地的原始高度
+	tPlayerY  = 3000            // 玩家走的线（进场点的 y）
+	tMonsterY = 9000            // 怪走的线
+	tStepRaw  = 50              // 高坎：原始值 + 50 = 5 米（DefaultWalkRules：1 米内超过 1 米、台阶超过 0.5 米都走不上去）
+	// 业务码（internal/errors/terrain.go）：terrain_not_owned、terrain_rate。
+	codeTerrainNotOwned = 100054
+	codeTerrainRate     = 100056
+)
+
+// writeFlatTerrainPack 写演练用的地形包：4 × 2 块、每点原始高度 1000、没有水（WaterLevel 取最小值），BaseRevision 1。
+func writeFlatTerrainPack(path string) error {
+	meta := terrain.Meta{BaseRevision: 1, ChunksX: 4, ChunksY: 2, HeightBase: -10000, WaterLevel: math.MinInt32}
+	return terrain.WritePackFile(path, meta, func(terrain.ChunkKey) (terrain.Chunk, error) {
+		c := terrain.NewChunk()
+		for i := range c.Heights {
+			c.Heights[i] = tFlatRaw
+		}
+		return c, nil
+	})
+}
+
+// ---- 客户端一侧的地形块 ----
+
+// terrainHeld 是一个客户端收到的地形块（terrain 命名空间，生成的 ApplySyncTerrainChunkDao 应用全量与增量）与每块每个
+// 版本第一次到达的时刻。由 client.mu 保护。
+type terrainHeld struct {
+	chunks map[int64]*db.SyncTerrainChunkDao
+	seen   map[int64]map[int64]time.Time
+}
+
+// applyTerrain 应用一个地形块更新（持 c.mu，在 consume 里调用）。
+func (c *client) applyTerrain(update entity.SubjectSyncUpdate, now time.Time) error {
+	if c.terrain == nil {
+		c.terrain = &terrainHeld{chunks: map[int64]*db.SyncTerrainChunkDao{}, seen: map[int64]map[int64]time.Time{}}
+	}
+	patch, err := db.UnmarshalSyncTerrainChunkDao(update.Payload.BytesCopy())
+	if err != nil {
+		return err
+	}
+	previous := c.terrain.chunks[update.SubjectID]
+	if update.Full {
+		previous = nil
+	}
+	next, err := db.ApplySyncTerrainChunkDao(patch, previous)
+	if err != nil {
+		return fmt.Errorf("apply terrain chunk %d: %w", update.SubjectID, err)
+	}
+	c.terrain.chunks[update.SubjectID] = next
+	if next.Version != nil {
+		versions := c.terrain.seen[update.SubjectID]
+		if versions == nil {
+			versions = map[int64]time.Time{}
+			c.terrain.seen[update.SubjectID] = versions
+		}
+		if _, ok := versions[next.Version.Value]; !ok {
+			versions[next.Version.Value] = now
+		}
+	}
+	return nil
+}
+
+// forgetTerrain 是地形块被 remove（持 c.mu）。
+func (c *client) forgetTerrain(subject int64) {
+	if c.terrain != nil {
+		delete(c.terrain.chunks, subject)
+	}
+}
+
+// chunkID 是客户端持有的 key 那一块的 subject ID。按唯一号认（KeyOf）：本程序没有登记实体种类，BuildEntityID 解析
+// 不出类别、拼不出完整 ID。没有这块时 ok 为 false。持 c.mu 调用。
+func (c *client) chunkID(key terrain.ChunkKey) (int64, bool) {
+	if c.terrain == nil {
+		return 0, false
+	}
+	for id := range c.terrain.chunks {
+		if terrain_chunk.KeyOf(id) == key {
+			return id, true
+		}
+	}
+	return 0, false
+}
+
+// chunk 是客户端持有的一块：版本与数据摘要（与 gm.terrain.probe 同一规则）；没有这块时 ok 为 false。
+func (c *client) chunk(key terrain.ChunkKey) (version int64, digest string, ok bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id, held := c.chunkID(key)
+	if !held {
+		return 0, "", false
+	}
+	got := c.terrain.chunks[id]
+	if got == nil || got.Version == nil || got.Heights == nil || got.Materials == nil {
+		return 0, "", false
+	}
+	materials := make([]byte, len(got.Materials.Value))
+	for i, v := range got.Materials.Value {
+		materials[i] = byte(v)
+	}
+	return got.Version.Value, chunkDigest(got.Heights.Value, materials), true
+}
+
+// terrainSummary 列出客户端持有的地形块与版本（诊断）。
+func (c *client) terrainSummary() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.terrain == nil {
+		return "nothing"
+	}
+	var parts []string
+	for id, chunk := range c.terrain.chunks {
+		v := int64(-1)
+		if chunk.Version != nil {
+			v = chunk.Version.Value
+		}
+		heights, materials := -1, -1
+		if chunk.Heights != nil {
+			heights = len(chunk.Heights.Value)
+		}
+		if chunk.Materials != nil {
+			materials = len(chunk.Materials.Value)
+		}
+		parts = append(parts, fmt.Sprintf("%v:v%d/h%d/m%d", terrain_chunk.KeyOf(id), v, heights, materials))
+	}
+	sort.Strings(parts)
+	return "[" + strings.Join(parts, " ") + "]"
+}
+
+// chunkSeenAt 是客户端第一次收到这块这个版本的时刻。
+func (c *client) chunkSeenAt(key terrain.ChunkKey, version int64) (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	id, held := c.chunkID(key)
+	if !held {
+		return time.Time{}, false
+	}
+	at, ok := c.terrain.seen[id][version]
+	return at, ok
+}
+
+// chunkDigest：FNV-1a 64 依次过高度（小端 2 字节）与材质（1 字节），十六进制。与 demo 的 terrainChunkDigest 同一定义。
+func chunkDigest(heights []uint16, materials []byte) string {
+	h := fnv.New64a()
+	buf := make([]byte, 0, 2*len(heights)+len(materials))
+	for _, v := range heights {
+		buf = binary.LittleEndian.AppendUint16(buf, v)
+	}
+	buf = append(buf, materials...)
+	_, _ = h.Write(buf)
+	return fmt.Sprintf("%016x", h.Sum64())
+}
+
+// ---- 服务端一侧：gm.terrain.probe ----
+
+type chunkProbe struct {
+	Owned, Loaded bool
+	Version, Held int64
+	Digest        string
+}
+
+func (p chunkProbe) String() string {
+	if !p.Loaded {
+		return fmt.Sprintf("{owned %v not loaded held %d}", p.Owned, p.Held)
+	}
+	return fmt.Sprintf("{owned %v v%d held %d %s}", p.Owned, p.Version, p.Held, p.Digest)
+}
+
+var allChunks = func() []terrain.ChunkKey {
+	var keys []terrain.ChunkKey
+	for y := int32(0); y < 2; y++ {
+		for x := int32(0); x < 4; x++ {
+			keys = append(keys, terrain.ChunkKey{X: x, Y: y})
+		}
+	}
+	return keys
+}()
+
+// probe 读 sid 进程地形视图里的块与点（点答世界高度；读不到时 heights 里没有它）。
+func probe(ctx context.Context, sid int32, keys []terrain.ChunkKey, points ...[2]int64) (map[terrain.ChunkKey]chunkProbe, map[[2]int64]int64, error) {
+	chunks := make([][2]int32, 0, len(keys))
+	for _, k := range keys {
+		chunks = append(chunks, [2]int32{k.X, k.Y})
+	}
+	data, err := gm(ctx, sid, "gm.terrain.probe", map[string]any{"chunks": chunks, "points": points})
+	if err != nil {
+		return nil, nil, err
+	}
+	out := map[terrain.ChunkKey]chunkProbe{}
+	rawChunks, _ := data["chunks"].([]any)
+	for _, item := range rawChunks {
+		m, _ := item.(map[string]any)
+		key := terrain.ChunkKey{X: int32(asInt(m["x"])), Y: int32(asInt(m["y"]))}
+		p := chunkProbe{Held: asInt(m["held"])}
+		p.Owned, _ = m["owned"].(bool)
+		p.Loaded, _ = m["loaded"].(bool)
+		if p.Loaded {
+			p.Version = asInt(m["version"])
+			p.Digest, _ = m["digest"].(string)
+		}
+		out[key] = p
+	}
+	heights := map[[2]int64]int64{}
+	rawPoints, _ := data["points"].([]any)
+	for _, item := range rawPoints {
+		m, _ := item.(map[string]any)
+		if _, ok := m["height"]; ok {
+			heights[[2]int64{asInt(m["x"]), asInt(m["y"])}] = asInt(m["height"])
+		}
+	}
+	return out, heights, nil
+}
+
+// ownerAt 等拥有者 sid 的视图到达答复里的版本 version（视图在提交后更新），返回那时的状态。
+func ownerAt(ctx context.Context, sid int32, key terrain.ChunkKey, version int64) (chunkProbe, error) {
+	var got chunkProbe
+	err := pollFast(ctx, 5*time.Second, fmt.Sprintf("sid %d's view of its chunk %v reaches version %d", sid, key, version), func() (bool, string) {
+		var err error
+		got, err = probeOne(ctx, sid, key)
+		if err != nil {
+			return false, err.Error()
+		}
+		return got.Owned && got.Loaded && got.Version == version, got.String()
+	})
+	return got, err
+}
+
+// probeOne 是一块在 sid 进程里的状态。
+func probeOne(ctx context.Context, sid int32, key terrain.ChunkKey) (chunkProbe, error) {
+	got, _, err := probe(ctx, sid, []terrain.ChunkKey{key})
+	return got[key], err
+}
+
+// heightAt 是 sid 进程视图里一点的世界高度（厘米）。
+func heightAt(ctx context.Context, sid int32, x, y int64) (int64, bool, error) {
+	_, heights, err := probe(ctx, sid, nil, [2]int64{x, y})
+	h, ok := heights[[2]int64{x, y}]
+	return h, ok, err
+}
+
+// waitAligned 等 sid 进程视图里的 key 与 want（拥有者的版本与摘要）相同，返回从 since 起的耗时（5ms 轮询，上限 timeout）。
+func waitAligned(ctx context.Context, sid int32, key terrain.ChunkKey, want chunkProbe, since time.Time, timeout time.Duration, what string) (time.Duration, error) {
+	var took time.Duration
+	err := pollFast(ctx, timeout, what, func() (bool, string) {
+		got, err := probeOne(ctx, sid, key)
+		if err != nil {
+			return false, err.Error()
+		}
+		took = time.Since(since)
+		return got.Loaded && got.Version == want.Version && got.Digest == want.Digest, fmt.Sprintf("sid %d chunk %v %v want v%d %s", sid, key, got, want.Version, want.Digest)
+	})
+	return took, err
+}
+
+// waitClientHolds 等客户端持有 key 的 want 版本与摘要，返回第一次收到这个版本的时刻距 since 的耗时。
+func waitClientHolds(ctx context.Context, c *client, key terrain.ChunkKey, want chunkProbe, since time.Time, timeout time.Duration) (time.Duration, error) {
+	err := pollFast(ctx, timeout, c.name+" holds chunk "+key.String(), func() (bool, string) {
+		version, digest, ok := c.chunk(key)
+		if err := c.err(); err != nil {
+			return false, err.Error()
+		}
+		return ok && version == want.Version && digest == want.Digest, fmt.Sprintf("held %v v%d %s want v%d %s", ok, version, digest, want.Version, want.Digest)
+	})
+	if err != nil {
+		return 0, fmt.Errorf("%w; the client holds terrain %s; its process (sid %d) partition terrain %v", err, c.terrainSummary(), c.sid, replicaStats(ctx, c.sid))
+	}
+	at, _ := c.chunkSeenAt(key, want.Version)
+	return max(at.Sub(since), 0), nil
+}
+
+// pollFast 是 waitFor 的 5ms 版本（测延迟用）。
+func pollFast(ctx context.Context, timeout time.Duration, what string, cond func() (bool, string)) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		ok, detail := cond()
+		if ok {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s: not reached within %s (%s)", what, timeout, detail)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+// ---- 编辑 ----
+
+type brush struct {
+	op           int32 // 1 抬高、2 降低
+	x, y, radius int64
+	strength     int32
+}
+
+func raise(x, y, radius int64, strength int32) brush {
+	return brush{op: 1, x: x, y: y, radius: radius, strength: strength}
+}
+func lower(b brush) brush { b.op = 2; return b }
+
+// edit 发一次笔刷（常数衰减）。配额不够（terrain_rate）时退避后用同一序号重发。
+func (c *client) edit(ctx context.Context, seq uint64, b brush) (*pb.TerrainEditResponse, error) {
+	for attempt := 0; ; attempt++ {
+		raw, err := c.call(ctx, msgid.MsgTerrainEdit, must(pb.MarshalTerrainEditRequest(&pb.TerrainEditRequest{
+			Seq: seq, Op: b.op, X: b.x, Y: b.y, Radius: b.radius, Falloff: 0, Strength: b.strength,
+		})))
+		if err != nil {
+			return nil, err
+		}
+		r, err := pb.UnmarshalTerrainEditResponse(raw)
+		if err != nil {
+			return nil, err
+		}
+		if r.Code == codeTerrainRate && attempt < 20 {
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		return r, nil
+	}
+}
+
+// mustEdit 是一次必须生效的编辑；返回答复里 key 的新版本。
+func (c *client) mustEdit(ctx context.Context, seq uint64, b brush, key terrain.ChunkKey) (int64, error) {
+	r, err := c.edit(ctx, seq, b)
+	if err != nil {
+		return 0, err
+	}
+	if r.Code != 0 || r.Duplicate {
+		return 0, fmt.Errorf("%s edit seq %d %+v: code %d %s duplicate %v", c.name, seq, b, r.Code, r.Reason, r.Duplicate)
+	}
+	for _, chunk := range r.Chunks {
+		if chunk.ChunkX == key.X && chunk.ChunkY == key.Y {
+			return chunk.Version, nil
+		}
+	}
+	return 0, fmt.Errorf("%s edit seq %d: chunk %v not in the answer %+v", c.name, seq, key, r.Chunks)
+}
+
+// lastSeq 是 Seq = 0 的查询：服务端已应用的最大序号。
+func (c *client) lastSeq(ctx context.Context) (int64, error) {
+	r, err := c.edit(ctx, 0, brush{})
+	if err != nil {
+		return 0, err
+	}
+	if r.Code != 0 {
+		return 0, fmt.Errorf("%s last seq: code %d %s", c.name, r.Code, r.Reason)
+	}
+	return r.LastSeq, nil
+}
+
+// ---- 分区状态 ----
+
+// realIn 是 sid 这个格进程的区域表里 id 作为 Real 的状态（不在或不是 Real 时 ok 为 false）。
+func realIn(ctx context.Context, sid int32, id int64) (map[string]any, bool, error) {
+	entities, err := cellEntities(ctx, sid)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, e := range entities {
+		if asInt(e["id"]) == id && e["role"] == "real" {
+			return e, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+func ownerOf(ctx context.Context, baseSid int32, playerID int64) (int64, map[string]any, error) {
+	state, err := gm(ctx, baseSid, "gm.scene.partition", map[string]any{"player_id": playerID})
+	if err != nil {
+		return 0, nil, err
+	}
+	return asInt(state["owner_sid"]), state, nil
+}
+
+func cellStat(ctx context.Context, sid int32, key string) int64 {
+	stats, err := gm(ctx, sid, "gm.scene.partition", nil)
+	if err != nil {
+		return -1
+	}
+	return nodeStat(stats, key)
+}
+
+func replicaStats(ctx context.Context, sid int32) map[string]any {
+	stats, err := gm(ctx, sid, "gm.scene.partition", nil)
+	if err != nil {
+		return map[string]any{"err": err.Error()}
+	}
+	t, _ := stats["terrain"].(map[string]any)
+	return t
+}
+
+func ms(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
+
+// ---- 演练 ----
+
+func runTerrain(ctx context.Context) error {
+	accountsClient, stop, err := accounts()
+	if err != nil {
+		return err
+	}
+	defer stop()
+	nonce := strconv.FormatInt(time.Now().UnixNano()%1_000_000_000, 36)
+	pA, err := login(ctx, accountsClient, "ta", 1001, nonce)
+	if err != nil {
+		return err
+	}
+	pB, err := login(ctx, accountsClient, "tb", 1002, nonce)
+	if err != nil {
+		return err
+	}
+	pB2, err := login(ctx, accountsClient, "tb2", 1002, nonce)
+	if err != nil {
+		return err
+	}
+	pW, err := login(ctx, accountsClient, "tw", 1004, nonce)
+	if err != nil {
+		return err
+	}
+	for _, c := range []*client{pA, pB, pB2, pW} {
+		c := c
+		if err := waitFor(ctx, 10*time.Second, c.name+" sees itself", func() (bool, string) {
+			s, ok := c.self()
+			return ok && s.hp() > 0, fmt.Sprintf("self %d err %v", c.actorID, c.err())
+		}); err != nil {
+			return err
+		}
+	}
+
+	// 0. 起点：各进程装着的块（A：块 0～2 列，B：1～3 列，只做 Base 的 1000 / 1004 不装），全部是原始块（Version 0）、摘要相同。
+	views := map[int32]map[terrain.ChunkKey]chunkProbe{}
+	for _, sid := range []int32{1000, 1001, 1002, 1004} {
+		got, _, err := probe(ctx, sid, allChunks)
+		if err != nil {
+			return err
+		}
+		views[sid] = got
+	}
+	base := views[1001][terrain.ChunkKey{}].Digest
+	for _, key := range allChunks {
+		for sid, wantLoaded := range map[int32]bool{1001: key.X <= 2, 1002: key.X >= 1, 1000: false, 1004: false} {
+			got := views[sid][key]
+			wantOwned := sid == 1001 && key.X <= 1 || sid == 1002 && key.X >= 2
+			if got.Loaded != wantLoaded || got.Owned != wantOwned || got.Loaded && (got.Version != 0 || got.Digest != base) {
+				return fmt.Errorf("start: sid %d chunk %v is %v, want loaded %v owned %v at version 0 %s (a fresh database is required)", sid, key, got, wantLoaded, wantOwned, base)
+			}
+		}
+	}
+	if h, ok, err := heightAt(ctx, 1001, 11800, tPlayerY); err != nil || !ok || h != 0 {
+		return fmt.Errorf("start: A's height at the spawn: %d %v %v, want 0 (flat pack)", h, ok, err)
+	}
+	step("terrain_start", map[string]any{"base_digest": base, "a_loaded": 6, "b_loaded": 6, "base_only_loaded": 0})
+
+	seqA, seqB := uint64(0), uint64(0)
+	nextA := func() uint64 { seqA++; return seqA }
+	nextB := func() uint64 { seqB++; return seqB }
+
+	// (a) 格 A 在边界块 (1,0)（B 的 Ghost 带里）编辑：B 的视图（Ghost 带）与 B 上、只做 Base 的 1004 上的客户端都看到；A 的
+	//     远处块 (0,0) 不在 B 的 Ghost 带里：B 的视图不装，B 与 1004 的客户端经副本看到。B 改 A 的块仍拒绝。
+	boundaryKey, farKey := terrain.ChunkKey{X: 1}, terrain.ChunkKey{}
+	sent := time.Now()
+	v, err := pA.mustEdit(ctx, nextA(), raise(12000, 1000, 200, 10), boundaryKey)
+	if err != nil {
+		return err
+	}
+	answered := time.Now()
+	ownerBoundary, err := ownerAt(ctx, 1001, boundaryKey, v)
+	if err != nil {
+		return err
+	}
+	ghostTook, err := waitAligned(ctx, 1002, boundaryKey, ownerBoundary, answered, 5*time.Second, "B's ghost band takes A's boundary edit")
+	if err != nil {
+		return err
+	}
+	farSent := time.Now()
+	v, err = pA.mustEdit(ctx, nextA(), raise(3000, 1000, 200, 10), farKey)
+	if err != nil {
+		return err
+	}
+	farAnswered := time.Now()
+	ownerFar, err := ownerAt(ctx, 1001, farKey, v)
+	if err != nil {
+		return err
+	}
+	clientTook := map[string]float64{}
+	for _, c := range []*client{pB, pW, pA} {
+		for key, want := range map[terrain.ChunkKey]chunkProbe{boundaryKey: ownerBoundary, farKey: ownerFar} {
+			since := sent // 从发出编辑请求算起（客户端的到达时刻是读到那一帧时记下的）
+			if key == farKey {
+				since = farSent
+			}
+			took, err := waitClientHolds(ctx, c, key, want, since, 5*time.Second)
+			if err != nil {
+				return fmt.Errorf("(a) %w", err)
+			}
+			clientTook[c.name+"_"+key.String()] = ms(took)
+		}
+	}
+	if got, err := probeOne(ctx, 1002, farKey); err != nil || got.Loaded {
+		return fmt.Errorf("(a) B's view holds A's far chunk %v (%v): only the ghost band is loaded", got, err)
+	}
+	if r, err := pB.edit(ctx, nextB(), raise(12000, 1200, 200, 10)); err != nil || r.Code != codeTerrainNotOwned {
+		return fmt.Errorf("(a) B editing A's chunk: %v %+v, want terrain_not_owned", err, r)
+	}
+	seqB-- // 拒绝的请求不记序号
+	step("terrain_ghost_edit", map[string]any{"edit_rtt_ms": ms(answered.Sub(sent)), "far_edit_rtt_ms": ms(farAnswered.Sub(farSent)),
+		"owner_version": ownerBoundary.Version, "b_ghost_after_answer_ms": ms(ghostTook), "clients_after_request_ms": clientTook,
+		"b_view_far_chunk_loaded": false, "b_edit_on_a_chunk": "terrain_not_owned"})
+
+	// (b1) 真实 SceneActor：B 紧挨分界线（x 13000～13600、y 3000 那一行）抬起 5 米的坎，推到 A 的 Ghost 带；pW（Base 是只做
+	//      Base 的 1004，SceneActor 在格 A）朝东走：越过分界线、停在坎前最后一个整数点 12949（坎的第一个节点从 12950 起），
+	//      没到交接线 13000，一直是 A 的 Real；坎挖平后接着走，交给 B。
+	playerStep := raise(13300, tPlayerY, 300, tStepRaw)
+	stepKey := terrain.ChunkKey{X: 2}
+	v, err = pB.mustEdit(ctx, nextB(), playerStep, stepKey)
+	if err != nil {
+		return err
+	}
+	stepAnswered := time.Now()
+	ownerStep, err := ownerAt(ctx, 1002, stepKey, v)
+	if err != nil {
+		return err
+	}
+	stepGhost, err := waitAligned(ctx, 1001, stepKey, ownerStep, stepAnswered, 5*time.Second, "A's ghost band takes B's step")
+	if err != nil {
+		return err
+	}
+	if h, ok, err := heightAt(ctx, 1001, 13000, tPlayerY); err != nil || !ok || h != tStepRaw*10 {
+		return fmt.Errorf("(b) A's view at the step's first node: %d %v %v, want %d", h, ok, err, tStepRaw*10)
+	}
+	// pW 自己的 SceneActor 的完整 ID 取客户端从同步里认出的那个（本程序没有登记实体种类，不自己拼 ID）。
+	pW.mu.Lock()
+	actorW := pW.actorID
+	pW.mu.Unlock()
+	if _, isReal, err := realIn(ctx, 1001, actorW); err != nil || !isReal {
+		return fmt.Errorf("(b) pW's scene actor is not a real on A: %v", err)
+	}
+	blocksBefore := cellStat(ctx, 1001, "SurfaceBlocks")
+	walkStart := time.Now()
+	if err := pW.moveIntent(ctx, tSpeed, 0); err != nil {
+		return err
+	}
+	var stopped map[string]any
+	if err := waitFor(ctx, 15*time.Second, "pW stops at the step", func() (bool, string) {
+		e, isReal, err := realIn(ctx, 1001, actorW)
+		if err != nil {
+			return false, err.Error()
+		}
+		if !isReal {
+			b, onB, _ := realIn(ctx, 1002, actorW)
+			return false, fmt.Sprintf("not a real on A (on B: %v %v)", onB, b)
+		}
+		stopped = e
+		return asInt(e["vx"]) == 0 && asInt(e["x"]) > tBoundary, fmt.Sprintf("%v", e)
+	}); err != nil {
+		return fmt.Errorf("(b) %w", err)
+	}
+	stopTook := time.Since(walkStart)
+	stopX := asInt(stopped["x"])
+	if stopX > 12949 || stopX <= tBoundary || asInt(stopped["y"]) != tPlayerY {
+		return fmt.Errorf("(b) pW stopped at (%d, %d), want past the boundary %d and at most 12949 on y %d", stopX, asInt(stopped["y"]), tBoundary, tPlayerY)
+	}
+	// 停住之后 2 秒：仍是 A 的 Real、位置不变，Base 记的拥有者是 A，B 没有它的 Real，客户端看到的自己就在停下的位置。
+	holdUntil := time.Now().Add(2 * time.Second)
+	for time.Now().Before(holdUntil) {
+		e, isReal, err := realIn(ctx, 1001, actorW)
+		if err != nil || !isReal || asInt(e["x"]) != stopX {
+			return fmt.Errorf("(b) pW after stopping: real on A %v at %v (%v), want held at %d", isReal, e, err, stopX)
+		}
+		if _, onB, _ := realIn(ctx, 1002, actorW); onB {
+			return fmt.Errorf("(b) pW became a real on B while held at the step")
+		}
+		if owner, state, err := ownerOf(ctx, 1004, pW.playerID); err != nil || owner != 1001 {
+			return fmt.Errorf("(b) the Base says pW is owned by %d (%v %v), want 1001", owner, state, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	selfW, _ := pW.self()
+	if selfW.pos().X != stopX {
+		return fmt.Errorf("(b) pW's client shows itself at %v, the cell holds it at %d", selfW.pos(), stopX)
+	}
+	blocks := cellStat(ctx, 1001, "SurfaceBlocks") - blocksBefore
+	if blocks < 1 {
+		return fmt.Errorf("(b) A's SurfaceBlocks did not move (%d)", blocks)
+	}
+	v, err = pB.mustEdit(ctx, nextB(), lower(playerStep), stepKey)
+	if err != nil {
+		return err
+	}
+	levelAnswered := time.Now()
+	ownerLevel, err := ownerAt(ctx, 1002, stepKey, v)
+	if err != nil {
+		return err
+	}
+	if ownerLevel.Digest != base {
+		return fmt.Errorf("(b) the levelled chunk %v is not the flat base %s again", ownerLevel, base)
+	}
+	levelGhost, err := waitAligned(ctx, 1001, stepKey, ownerLevel, levelAnswered, 5*time.Second, "A's ghost band takes the levelled step")
+	if err != nil {
+		return err
+	}
+	crossStart := time.Now()
+	if err := pW.moveIntent(ctx, tSpeed, 0); err != nil {
+		return err
+	}
+	var crossed time.Duration
+	if err := waitFor(ctx, 10*time.Second, "pW is handed to B", func() (bool, string) {
+		owner, state, err := ownerOf(ctx, 1004, pW.playerID)
+		crossed = time.Since(crossStart)
+		return err == nil && owner == 1002, fmt.Sprintf("%v %v", state, err)
+	}); err != nil {
+		return fmt.Errorf("(b) %w", err)
+	}
+	if err := pW.moveIntent(ctx, 0, 0); err != nil {
+		return err
+	}
+	onB, isRealOnB, err := realIn(ctx, 1002, actorW)
+	if err != nil || !isRealOnB || asInt(onB["x"]) < tHandoff {
+		return fmt.Errorf("(b) pW after the handover: real on B %v %v (%v)", isRealOnB, onB, err)
+	}
+	step("terrain_player_step", map[string]any{"step_ghost_after_answer_ms": ms(stepGhost), "stop_x": stopX, "want_stop_x": 12949,
+		"stop_after_intent_ms": stopTook.Milliseconds(), "held_ms": 2000, "a_surface_blocks": blocks,
+		"level_ghost_after_answer_ms": ms(levelGhost), "handed_to_b_after_intent_ms": crossed.Milliseconds(), "x_on_b": asInt(onB["x"])})
+
+	// (b2) 真实 Monster：格 A 里沿 y = 9000 往返的怪朝东经过 x 11300～12300 时，B 在分界线后抬起同样的坎（块 (2,1)，Ghost 带），
+	//      A 在它身后 x 10400～11000 立一道墙（块 (1,1)，A 自己的）：怪越过分界线、在坎前折回（不交给 B），在墙前再折回，
+	//      困在两者之间；坎挖平后怪交给 B。
+	monster, err := findTerrainMonster(ctx)
+	if err != nil {
+		return err
+	}
+	monsterKey, wallKey := terrain.ChunkKey{X: 2, Y: 1}, terrain.ChunkKey{X: 1, Y: 1}
+	monsterStep := raise(13300, tMonsterY, 300, tStepRaw)
+	wall := raise(10700, tMonsterY, 300, tStepRaw)
+	var caughtAt map[string]any
+	waitedFor := time.Now()
+	if err := pollFast(ctx, 100*time.Second, "the monster walks east through x 11300..12300 on A", func() (bool, string) {
+		e, isReal, err := realIn(ctx, 1001, monster)
+		if err != nil {
+			return false, err.Error()
+		}
+		caughtAt = e
+		return isReal && asInt(e["vx"]) > 0 && asInt(e["x"]) >= 11300 && asInt(e["x"]) <= 12300, fmt.Sprintf("%v", e)
+	}); err != nil {
+		return fmt.Errorf("(b) %w", err)
+	}
+	waited := time.Since(waitedFor)
+	var wg sync.WaitGroup
+	var stepErr, wallErr error
+	var stepVersion int64
+	stepSeq, wallSeq := nextB(), nextA()
+	wg.Add(2)
+	go func() { defer wg.Done(); stepVersion, stepErr = pB.mustEdit(ctx, stepSeq, monsterStep, monsterKey) }()
+	go func() { defer wg.Done(); _, wallErr = pA.mustEdit(ctx, wallSeq, wall, wallKey) }()
+	wg.Wait()
+	if err := errors.Join(stepErr, wallErr); err != nil {
+		return err
+	}
+	ownerMStep, err := ownerAt(ctx, 1002, monsterKey, stepVersion)
+	if err != nil {
+		return err
+	}
+	if _, err := waitAligned(ctx, 1001, monsterKey, ownerMStep, time.Now(), 5*time.Second, "A's ghost band takes the monster's step"); err != nil {
+		return err
+	}
+	editedAt, _, _ := realIn(ctx, 1001, monster)
+	turns, err := watchCorral(ctx, monster, 4, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("(b) %w (caught at %v, after the edits at %v)", err, caughtAt, editedAt)
+	}
+	v, err = pB.mustEdit(ctx, nextB(), lower(monsterStep), monsterKey)
+	if err != nil {
+		return err
+	}
+	levelM, err := ownerAt(ctx, 1002, monsterKey, v)
+	if err != nil {
+		return err
+	}
+	if _, err := waitAligned(ctx, 1001, monsterKey, levelM, time.Now(), 5*time.Second, "A's ghost band takes the levelled monster step"); err != nil {
+		return err
+	}
+	levelledAt := time.Now()
+	var handedAfter time.Duration
+	if err := waitFor(ctx, 20*time.Second, "the monster is handed to B", func() (bool, string) {
+		e, isReal, err := realIn(ctx, 1002, monster)
+		handedAfter = time.Since(levelledAt)
+		return err == nil && isReal, fmt.Sprintf("%v %v", e, err)
+	}); err != nil {
+		return fmt.Errorf("(b) %w", err)
+	}
+	step("terrain_monster_step", map[string]any{"monster": monster, "waited_for_the_monster_ms": waited.Milliseconds(),
+		"caught_at": caughtAt, "after_the_edits": editedAt, "turns": turns, "handed_to_b_after_levelling_ms": handedAfter.Milliseconds()})
+
+	// (c) 格进程崩溃重启：B 提交一次边界编辑（块 (2,0)，在 A 的 Ghost 带里）、答复到了就读一次 B 的视图，然后 pB2 在 B 的
+	//     块 (3,1) 上连续编辑，期间 kill -9 B；B 停机时 A 改它的边界块 (1,1)（B 的 Ghost 带）。B 重启之后：块 (2,0) 仍是崩溃
+	//     前读到的版本与数据（WAL 持久），A 的 Ghost 带与它对齐；B 的 Ghost 带补上 A 停机期间的编辑；pB2 的账本 LastSeq 不小于
+	//     最后一次答复成功的序号，且块 (3,1) 的版本等于 LastSeq（块与账本同一笔事务）；用同一序号重发答 Duplicate。
+	if *killCmd == "" || *restartCmd == "" {
+		return errors.New("(c) -kill and -restart are required")
+	}
+	crashKey, burstKey := terrain.ChunkKey{X: 2}, terrain.ChunkKey{X: 3, Y: 1}
+	v, err = pB.mustEdit(ctx, nextB(), raise(14000, 1000, 200, 10), crashKey)
+	if err != nil {
+		return err
+	}
+	committed, err := ownerAt(ctx, 1002, crashKey, v)
+	if err != nil {
+		return err
+	}
+	type ack struct {
+		seq uint64
+		at  time.Time
+	}
+	var (
+		burstMu  sync.Mutex
+		acks     []ack
+		burstErr error
+	)
+	burstDone := make(chan struct{})
+	go func() {
+		defer close(burstDone)
+		for seq := uint64(1); ; seq++ {
+			r, err := pB2.edit(ctx, seq, raise(22000+int64(seq%20)*100, tMonsterY, 100, 1))
+			burstMu.Lock()
+			if err != nil || r.Code != 0 {
+				burstErr = fmt.Errorf("seq %d: %v %+v", seq, err, r)
+				burstMu.Unlock()
+				return
+			}
+			acks = append(acks, ack{seq, time.Now()})
+			burstMu.Unlock()
+			time.Sleep(50 * time.Millisecond)
+		}
+	}()
+	if err := waitFor(ctx, 10*time.Second, "pB2's burst got 5 answers", func() (bool, string) {
+		burstMu.Lock()
+		defer burstMu.Unlock()
+		return len(acks) >= 5, fmt.Sprintf("%d acks, %v", len(acks), burstErr)
+	}); err != nil {
+		return fmt.Errorf("(c) %w", err)
+	}
+	aHeldBeforeKill, _ := probeOne(ctx, 1001, crashKey)
+	killedAt := time.Now()
+	if err := shell(*killCmd); err != nil {
+		return fmt.Errorf("(c) kill: %w", err)
+	}
+	<-burstDone
+	burstMu.Lock()
+	lastAck := acks[len(acks)-1]
+	ackCount, burstEnd := len(acks), burstErr
+	burstMu.Unlock()
+	pB.raw.Close()
+	pB2.raw.Close()
+	downKey := terrain.ChunkKey{X: 1, Y: 1}
+	v, err = pA.mustEdit(ctx, nextA(), raise(12000, 7000, 200, 10), downKey)
+	if err != nil {
+		return err
+	}
+	ownerDown, err := ownerAt(ctx, 1001, downKey, v)
+	if err != nil {
+		return err
+	}
+	if err := shell(*restartCmd); err != nil {
+		return fmt.Errorf("(c) restart: %w", err)
+	}
+	readyAt := time.Now()
+	afterRestart, err := probeOne(ctx, 1002, crashKey)
+	if err != nil {
+		return err
+	}
+	if afterRestart.Version != committed.Version || afterRestart.Digest != committed.Digest {
+		return fmt.Errorf("(c) B's chunk %v after the restart is %v, before the kill (answered) %v", crashKey, afterRestart, committed)
+	}
+	aAligned, err := waitAligned(ctx, 1001, crashKey, committed, readyAt, 10*time.Second, "A's ghost band matches B after the restart")
+	if err != nil {
+		return fmt.Errorf("(c) %w", err)
+	}
+	bCaughtUp, err := waitAligned(ctx, 1002, downKey, ownerDown, readyAt, 10*time.Second, "B's ghost band catches up with A's edit made while B was down")
+	if err != nil {
+		return fmt.Errorf("(c) %w", err)
+	}
+	burstOwner, err := probeOne(ctx, 1002, burstKey)
+	if err != nil {
+		return err
+	}
+	pB2again, err := login(ctx, accountsClient, "tb2", 1002, nonce)
+	if err != nil {
+		return err
+	}
+	defer pB2again.raw.Close()
+	last, err := pB2again.lastSeq(ctx)
+	if err != nil {
+		return err
+	}
+	if last < int64(lastAck.seq) || burstOwner.Version != last {
+		return fmt.Errorf("(c) after the restart pB2's ledger says %d, the burst chunk is at %v; the last answered seq was %d", last, burstOwner, lastAck.seq)
+	}
+	again, err := pB2again.edit(ctx, lastAck.seq, raise(22000+int64(lastAck.seq%20)*100, tMonsterY, 100, 1))
+	if err != nil || again.Code != 0 || !again.Duplicate {
+		return fmt.Errorf("(c) resending the last answered seq %d: %v %+v, want duplicate", lastAck.seq, err, again)
+	}
+	if got, _ := probeOne(ctx, 1002, burstKey); got.Version != burstOwner.Version || got.Digest != burstOwner.Digest {
+		return fmt.Errorf("(c) the duplicate changed the chunk: %v -> %v", burstOwner, got)
+	}
+	pBagain, err := login(ctx, accountsClient, "tb", 1002, nonce)
+	if err != nil {
+		return err
+	}
+	defer pBagain.raw.Close()
+	clientsAfter := map[string]float64{}
+	for _, c := range []*client{pBagain, pW, pA} {
+		for key, want := range map[terrain.ChunkKey]chunkProbe{crashKey: committed, downKey: ownerDown, burstKey: burstOwner} {
+			took, err := waitClientHolds(ctx, c, key, want, readyAt, 15*time.Second)
+			if err != nil {
+				return fmt.Errorf("(c) %w", err)
+			}
+			clientsAfter[c.name+"_"+key.String()] = ms(took)
+		}
+	}
+	var reenter time.Duration
+	reenterErr := waitFor(ctx, 20*time.Second, "pW re-entered on B", func() (bool, string) {
+		owner, state, err := ownerOf(ctx, 1004, pW.playerID)
+		reenter = time.Since(readyAt)
+		return err == nil && owner == 1002 && asInt(state["epoch"]) > 0, fmt.Sprintf("%v %v", state, err)
+	})
+	detail := map[string]any{"committed_before_kill": committed.String(), "a_held_before_kill": aHeldBeforeKill.String(),
+		"down_seconds": readyAt.Sub(killedAt).Seconds(), "b_after_restart": afterRestart.String(),
+		"a_ghost_aligned_after_ready_ms": ms(aAligned), "b_ghost_caught_up_after_ready_ms": ms(bCaughtUp),
+		"burst_answers": ackCount, "burst_last_answered_seq": lastAck.seq, "burst_end": fmt.Sprint(burstEnd),
+		"burst_answer_to_kill_ms": killedAt.Sub(lastAck.at).Milliseconds(), "ledger_last_seq_after_restart": last,
+		"burst_chunk_after_restart": burstOwner.String(), "resend_last_answered": "duplicate", "clients_after_ready_ms": clientsAfter}
+	if reenterErr == nil {
+		detail["pw_reentered_on_b_after_ready_ms"] = reenter.Milliseconds()
+	} else {
+		detail["pw_reentered_on_b"] = reenterErr.Error()
+	}
+	step("terrain_cell_restart", detail)
+
+	// 收尾核对：每一块在每个装着它的进程里与拥有者的版本、摘要相同；三个客户端持有的改过的块也一样。
+	final := map[int32]map[terrain.ChunkKey]chunkProbe{}
+	for _, sid := range []int32{1001, 1002} {
+		got, _, err := probe(ctx, sid, allChunks)
+		if err != nil {
+			return err
+		}
+		final[sid] = got
+	}
+	table := map[string]string{}
+	for _, key := range allChunks {
+		ownerSid := int32(1001)
+		if key.X >= 2 {
+			ownerSid = 1002
+		}
+		owner := final[ownerSid][key]
+		table[key.String()] = owner.String()
+		for sid, view := range final {
+			if got := view[key]; got.Loaded && (got.Version != owner.Version || got.Digest != owner.Digest) {
+				return fmt.Errorf("final: chunk %v on sid %d is %v, the owner %d has %v", key, sid, got, ownerSid, owner)
+			}
+		}
+		if owner.Version == 0 {
+			continue
+		}
+		for _, c := range []*client{pBagain, pW, pA} {
+			if _, err := waitClientHolds(ctx, c, key, owner, time.Now(), 5*time.Second); err != nil {
+				return fmt.Errorf("final: %w", err)
+			}
+		}
+	}
+	step("terrain_consistent", map[string]any{"chunks": table, "replicas_a": replicaStats(ctx, 1001), "replicas_b": replicaStats(ctx, 1002),
+		"replicas_1004": replicaStats(ctx, 1004)})
+	return nil
+}
+
+// findTerrainMonster 找到演练里唯一的那只怪（在 A 或 B 的区域表里是 Real）。
+func findTerrainMonster(ctx context.Context) (int64, error) {
+	var found []int64
+	for _, sid := range []int32{1001, 1002} {
+		entities, err := cellEntities(ctx, sid)
+		if err != nil {
+			return 0, err
+		}
+		for _, e := range entities {
+			if e["role"] == "real" && entity.GetEntityKindFromID(asInt(e["id"])) == kindMonster {
+				found = append(found, asInt(e["id"]))
+			}
+		}
+	}
+	if len(found) != 1 {
+		return 0, fmt.Errorf("want exactly one monster in the terrain drill, found %v", found)
+	}
+	return found[0], nil
+}
+
+// watchCorral 盯着被坎与墙困住的怪，直到看到 turns 次折回：每次在坎前折回时它越过了分界线、没到 12949 之后，在墙前折回时
+// 不在 11050 之前；期间它一直是 A 的 Real、B 没有它。返回每次折回前看到的最远点。
+func watchCorral(ctx context.Context, monster int64, turns int, timeout time.Duration) ([]string, error) {
+	deadline := time.Now().Add(timeout)
+	var out []string
+	var lastVX, far int64 // far：当前方向上看到的最远点
+	east := 0
+	for len(out) < turns {
+		if time.Now().After(deadline) {
+			return out, fmt.Errorf("the monster turned %d times within %s (%v), want %d", len(out), timeout, out, turns)
+		}
+		e, isReal, err := realIn(ctx, 1001, monster)
+		if err != nil {
+			return out, err
+		}
+		if !isReal {
+			b, onB, _ := realIn(ctx, 1002, monster)
+			return out, fmt.Errorf("the monster left A while corralled (turns %v; real on B %v: %v)", out, onB, b)
+		}
+		x, vx := asInt(e["x"]), asInt(e["vx"])
+		if asInt(e["y"]) != tMonsterY {
+			return out, fmt.Errorf("the monster left its line: %v", e)
+		}
+		switch {
+		case lastVX == 0:
+			far = x
+		case lastVX > 0 && vx < 0: // 在坎前折回
+			if far <= tBoundary || far > 12949 {
+				return out, fmt.Errorf("the monster turned back at x %d, want past the boundary %d and at most 12949", far, tBoundary)
+			}
+			out = append(out, fmt.Sprintf("east %d", far))
+			east++
+			far = x
+		case lastVX < 0 && vx > 0: // 在墙前折回
+			if far < 11050 {
+				return out, fmt.Errorf("the monster turned back at x %d, want not before the wall (11050)", far)
+			}
+			out = append(out, fmt.Sprintf("west %d", far))
+			far = x
+		case vx > 0:
+			far = max(far, x)
+		case vx < 0:
+			far = min(far, x)
+		}
+		if vx != 0 {
+			lastVX = vx
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if east == 0 {
+		return out, errors.New("the monster never turned back at the step")
+	}
+	return out, nil
+}

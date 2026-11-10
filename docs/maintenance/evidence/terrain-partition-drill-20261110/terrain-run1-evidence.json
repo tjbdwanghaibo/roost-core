@@ -1,0 +1,197 @@
+{
+  "terrain_cell_restart": {
+    "a_ghost_aligned_after_ready_ms": 1.634,
+    "a_held_before_kill": "{owned false v3 held 3 4c0ba895892ff647}",
+    "b_after_restart": "{owned true v3 held 3 4c0ba895892ff647}",
+    "b_ghost_caught_up_after_ready_ms": 1.906,
+    "burst_answer_to_kill_ms": 17,
+    "burst_answers": 5,
+    "burst_chunk_after_restart": "{owned true v5 held 5 fecf7c1bc570ea2a}",
+    "burst_end": "seq 6: tb2: connection closed \u003cnil\u003e",
+    "burst_last_answered_seq": 5,
+    "clients_after_ready_ms": {
+      "ta_(1,1)": 0,
+      "ta_(2,0)": 0,
+      "ta_(3,1)": 0,
+      "tb_(1,1)": 65.744,
+      "tb_(2,0)": 65.744,
+      "tb_(3,1)": 88.385,
+      "tw_(1,1)": 0,
+      "tw_(2,0)": 0,
+      "tw_(3,1)": 0
+    },
+    "committed_before_kill": "{owned true v3 held 3 4c0ba895892ff647}",
+    "down_seconds": 5.767380917,
+    "ledger_last_seq_after_restart": 5,
+    "pw_reentered_on_b_after_ready_ms": 95,
+    "resend_last_answered": "duplicate"
+  },
+  "terrain_consistent": {
+    "chunks": {
+      "(0,0)": "{owned true v1 held 1 16bbf8b0ad9a5997}",
+      "(0,1)": "{owned true v0 held 0 8cd20cc00750a325}",
+      "(1,0)": "{owned true v1 held 1 c608d8309548f567}",
+      "(1,1)": "{owned true v2 held 2 c36292261d14a4ec}",
+      "(2,0)": "{owned true v3 held 3 4c0ba895892ff647}",
+      "(2,1)": "{owned true v2 held 2 8cd20cc00750a325}",
+      "(3,0)": "{owned true v0 held 0 8cd20cc00750a325}",
+      "(3,1)": "{owned true v5 held 5 fecf7c1bc570ea2a}"
+    },
+    "replicas_1004": {
+      "client_chunks": 8,
+      "ghost_chunks": 0,
+      "replicas": 6,
+      "replicator": {
+        "Ahead": 0,
+        "Applied": 14,
+        "ApplyErrors": 0,
+        "BaseRevisionDrops": 0,
+        "ChunkBytesOut": 0,
+        "ChunksIn": 14,
+        "ChunksOut": 0,
+        "DecodeErrors": 0,
+        "InboxDrops": 0,
+        "NotOwned": 0,
+        "PushedOut": 0,
+        "SendDrops": 0,
+        "Stale": 0,
+        "Subscribers": 0,
+        "SubscribesIn": 0,
+        "SubscribesOut": 56,
+        "Unloaded": 0,
+        "Unwanted": 0,
+        "WrongOwner": 0
+      }
+    },
+    "replicas_a": {
+      "client_chunks": 4,
+      "ghost_chunks": 2,
+      "replicas": 3,
+      "replicator": {
+        "Ahead": 0,
+        "Applied": 10,
+        "ApplyErrors": 0,
+        "BaseRevisionDrops": 0,
+        "ChunkBytesOut": 729,
+        "ChunksIn": 10,
+        "ChunksOut": 9,
+        "DecodeErrors": 0,
+        "InboxDrops": 0,
+        "NotOwned": 0,
+        "PushedOut": 8,
+        "SendDrops": 0,
+        "Stale": 0,
+        "Subscribers": 2,
+        "SubscribesIn": 54,
+        "SubscribesOut": 31,
+        "Unloaded": 0,
+        "Unwanted": 0,
+        "WrongOwner": 0
+      }
+    },
+    "replicas_b": {
+      "client_chunks": 4,
+      "ghost_chunks": 2,
+      "replicas": 3,
+      "replicator": {
+        "Ahead": 0,
+        "Applied": 1,
+        "ApplyErrors": 0,
+        "BaseRevisionDrops": 0,
+        "ChunkBytesOut": 0,
+        "ChunksIn": 1,
+        "ChunksOut": 0,
+        "DecodeErrors": 0,
+        "InboxDrops": 0,
+        "NotOwned": 0,
+        "PushedOut": 0,
+        "SendDrops": 0,
+        "Stale": 0,
+        "Subscribers": 1,
+        "SubscribesIn": 1,
+        "SubscribesOut": 2,
+        "Unloaded": 0,
+        "Unwanted": 0,
+        "WrongOwner": 0
+      }
+    }
+  },
+  "terrain_ghost_edit": {
+    "b_edit_on_a_chunk": "terrain_not_owned",
+    "b_ghost_after_answer_ms": 3.32,
+    "b_view_far_chunk_loaded": false,
+    "clients_after_request_ms": {
+      "ta_(0,0)": 26.873,
+      "ta_(1,0)": 22.692,
+      "tb_(0,0)": 27.187,
+      "tb_(1,0)": 23.185,
+      "tw_(0,0)": 27.262,
+      "tw_(1,0)": 23.161
+    },
+    "edit_rtt_ms": 22.619,
+    "far_edit_rtt_ms": 26.845,
+    "owner_version": 1
+  },
+  "terrain_monster_step": {
+    "after_the_edits": {
+      "attack": 0,
+      "epoch": 1,
+      "hp": 100,
+      "id": 2323454559942804497,
+      "idle": false,
+      "kind": 2,
+      "max_hp": 0,
+      "owner": "(0,0)",
+      "panel_ver": 0,
+      "power": 0,
+      "role": "real",
+      "vx": 600,
+      "vy": 0,
+      "x": 11342,
+      "y": 9000
+    },
+    "caught_at": {
+      "attack": 0,
+      "epoch": 1,
+      "hp": 100,
+      "id": 2323454559942804497,
+      "idle": false,
+      "kind": 2,
+      "max_hp": 0,
+      "owner": "(0,0)",
+      "panel_ver": 0,
+      "power": 0,
+      "role": "real",
+      "vx": 600,
+      "vy": 0,
+      "x": 11312,
+      "y": 9000
+    },
+    "handed_to_b_after_levelling_ms": 3365,
+    "monster": 2323454559942804497,
+    "turns": [
+      "east 12934",
+      "west 11059",
+      "east 12939",
+      "west 11057"
+    ],
+    "waited_for_the_monster_ms": 3118
+  },
+  "terrain_player_step": {
+    "a_surface_blocks": 1,
+    "handed_to_b_after_intent_ms": 114,
+    "held_ms": 2000,
+    "level_ghost_after_answer_ms": 9.258,
+    "step_ghost_after_answer_ms": 9.98,
+    "stop_after_intent_ms": 1945,
+    "stop_x": 12949,
+    "want_stop_x": 12949,
+    "x_on_b": 13008
+  },
+  "terrain_start": {
+    "a_loaded": 6,
+    "b_loaded": 6,
+    "base_digest": "8cd20cc00750a325",
+    "base_only_loaded": 0
+  }
+}
