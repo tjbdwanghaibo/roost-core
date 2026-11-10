@@ -53,29 +53,26 @@ const (
 	// everyone within one interval.
 	sceneReplicationInterval = 50 * time.Millisecond
 
-	// Interest radii. BlockSize is the AOI grid's cell (the scene's Config)
-	// and the number of cells an observer subscribes to is
-	// (⌈2·LeaveRadius/BlockSize⌉+1)², so a cell about the size of the view
-	// radius gives the classic nine cells. EnterRadius < LeaveRadius is the
-	// hysteresis that keeps a player on the boundary from re-sending a
-	// snapshot every step.
-	sceneEnterRadius = 120
-	sceneLeaveRadius = 150
-
-	// A client may ask for a different view radius (scene_view). The server
-	// clamps the request to [sceneMinViewRadius, sceneMaxLeaveRadius −
-	// hysteresis] and rounds it down to a multiple of sceneViewRadiusStep
-	// above the minimum, so a modified client cannot widen its view past
-	// what the block budget was checked for at start-up, and small jitters
-	// in the requested value do not each resubscribe. The leave radius
-	// follows the view radius with the same 30-unit hysteresis as the
-	// default. The demo has one LOD level: its packer does not pack less for
-	// a far subject, so there is nothing for a second level's bands to
-	// select (the client still names the level, and anything but 0 is
-	// refused).
-	sceneMinViewRadius  = 60
-	sceneMaxLeaveRadius = 300
-	sceneViewRadiusStep = 30
+	// The main view's radii are the scene's (gamescene.Config.View): the
+	// demo's scale (DefaultView: enter 1.2m, leave 1.5m, a client may ask
+	// for 0.6m～2.7m) without editable terrain, the game's scale
+	// (TerrainView: 30m / 33m, up to 60m, on 32m blocks) on an ordinary
+	// scene with terrain — editable terrain plan §28. BlockSize is the AOI
+	// grid's cell (the scene's Config too) and the number of cells an
+	// observer subscribes to is (⌈2·LeaveRadius/BlockSize⌉+1)², checked at
+	// start-up for the widest view a client may ask for (the policy's
+	// MaxObserverBlocks budget), so the two are chosen together.
+	// EnterRadius < LeaveRadius is the hysteresis that keeps a player on
+	// the boundary from re-sending a snapshot every step. A client's
+	// request (scene_view) is clamped to [View.MinRadius,
+	// View.MaxLeaveRadius − hysteresis] and rounded down to a multiple of
+	// View.RadiusStep above the minimum, so a modified client cannot widen
+	// its view past what the block budget was checked for, and small
+	// jitters in the requested value do not each resubscribe. The leave
+	// radius follows the view radius with the default's hysteresis. The
+	// demo has one LOD level: its packer does not pack less for a far
+	// subject, so there is nothing for a second level's bands to select
+	// (the client still names the level, and anything but 0 is refused).
 
 	// sceneMaxVisible caps how many subjects a player's main (spatial) view
 	// holds: when more are in range, the nearest ones win. Without it a
@@ -359,6 +356,9 @@ func replicatedWorld(partitioned settings.ScenePartition, m *terrainmap.Map) (ga
 		return gamescene.Config{
 			Width: int64(partitioned.Cols) * partitioned.CellSize, Height: int64(partitioned.Rows) * partitioned.CellSize,
 			BlockSize: partitionBlockSize, Spawn: spatial.Point{X: partitioned.SpawnX, Y: partitioned.SpawnY},
+			// 分区场景的主视野保持 demo 原尺度：客户端看到的只来自 witness，witness 半径按这个尺度的离开上限校验
+			// （settings.PartitionMaxBaseLeaveRadius）；放大要连同 witness / Ghost 带一起改（可编辑地形方案 §28）。
+			View: gamescene.DefaultView(),
 		}, nil
 	}
 	return sceneWorld(partitioned, m)
@@ -491,15 +491,15 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 		AOI: policy.AOIConfig{
 			Bounds:      spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}},
 			BlockSize:   config.BlockSize,
-			EnterRadius: sceneEnterRadius,
-			LeaveRadius: sceneLeaveRadius,
+			EnterRadius: config.View.EnterRadius,
+			LeaveRadius: config.View.LeaveRadius,
 			// The nearest sceneMaxVisible in range, not everyone in range:
 			// see sceneMaxVisible for why and for how the number was chosen.
 			MaxVisible: maxVisible,
 
-			MinViewRadius:  sceneMinViewRadius,
-			MaxLeaveRadius: sceneMaxLeaveRadius,
-			ViewRadiusStep: sceneViewRadiusStep,
+			MinViewRadius:  config.View.MinRadius,
+			MaxLeaveRadius: config.View.MaxLeaveRadius,
+			ViewRadiusStep: config.View.RadiusStep,
 		},
 	})
 	if err != nil {

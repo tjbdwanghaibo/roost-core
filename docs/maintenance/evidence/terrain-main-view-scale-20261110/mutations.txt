@@ -1,0 +1,43 @@
+== M1-terrain-keeps-default-view
+--- FAIL: TestBuildingsTakeMainViewPlacesLikeAnyoneElse (10.04s)
+    building_sync_test.go:500: timed out waiting for the four towers and the monsters in the main view
+--- FAIL: TestManyBuildingsDegradeWithTheCrowd (10.06s)
+    building_sync_test.go:587: timed out waiting for the viewer's session settled at its limit
+== M2-terrain-keeps-1m-blocks
+--- FAIL: TestBuildingsTakeMainViewPlacesLikeAnyoneElse (0.02s)
+    building_sync_test.go:474: scene: interest policy: policy: one observer would subscribe to more blocks than the budget allows: max leave radius 6300 over block size 100 covers 16384 blocks, budget is 1024
+--- FAIL: TestManyBuildingsDegradeWithTheCrowd (0.01s)
+    building_sync_test.go:570: scene: interest policy: policy: one observer would subscribe to more blocks than the budget allows: max leave radius 6300 over block size 100 covers 16384 blocks, budget is 1024
+== M3-aoi-ignores-config-view
+--- FAIL: TestBuildingsTakeMainViewPlacesLikeAnyoneElse (0.02s)
+    building_sync_test.go:474: scene: interest policy: policy: invalid interest config: view radius range [1500, leave 6300] must contain the default view (enter 120, leave 3300)
+--- FAIL: TestManyBuildingsDegradeWithTheCrowd (0.01s)
+    building_sync_test.go:570: scene: interest policy: policy: invalid interest config: view radius range [1500, leave 6300] must contain the default view (enter 120, leave 3300)
+== M4-no-hysteresis
+--- FAIL: TestBuildingsAtTheTerrainMainViewScale (0.03s)
+    building_sync_test.go:689: stepping back 2m (31～32m, inside the 33m leave radius): player false, monster false, tower false; want all kept
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:672: ordinary with terrain: sceneWorld = {Width:12800 Height:6400 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3000 LeaveRadius:3000 MinRadius:1500 MaxLeaveRadius:6300 RadiusStep:300}} <nil>, want {Width:12800 Height:6400 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3000 LeaveRadius:3300 MinRadius:1500 MaxLeaveRadius:6300 RadiusStep:300}}
+== M5-client-max-leave-60m
+--- FAIL: TestBuildingsAtTheTerrainMainViewScale (0.04s)
+    building_sync_test.go:706: the widest view a client can have: {LOD:0 Radius:5700}, <nil>; want 60m
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:672: ordinary with terrain: sceneWorld = {Width:12800 Height:6400 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3000 LeaveRadius:3300 MinRadius:1500 MaxLeaveRadius:6000 RadiusStep:300}} <nil>, want {Width:12800 Height:6400 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3000 LeaveRadius:3300 MinRadius:1500 MaxLeaveRadius:6300 RadiusStep:300}}
+== M6-default-scaled-too
+--- FAIL: TestSceneViewRequestWidensClampsAndIsRateLimited (0.00s)
+    scene_test.go:923: premise: 220 units away is visible with the default view
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:682: the map without terrain changed: {Width:1000 Height:1000 BlockSize:100 Spawn:{X:500 Y:500} View:{EnterRadius:3000 LeaveRadius:3300 MinRadius:1500 MaxLeaveRadius:6300 RadiusStep:300}}
+== M7-normalize-no-default-view
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:690: a config without a view normalizes to {EnterRadius:0 LeaveRadius:0 MinRadius:0 MaxLeaveRadius:0 RadiusStep:0}
+--- FAIL: TestTerrainChunksReachAClientOverRealTCPAndMatchAfterAReconnect (0.02s)
+    terrain_sync_test.go:454: scene: interest policy: policy: invalid interest config
+== M8-no-map-area-limit
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:707: 17 × 16 chunks on an ordinary scene: config <nil>, region <nil>; want both refused, pointing at a partitioned scene
+== M9-enter-33m
+--- FAIL: TestBuildingsAtTheTerrainMainViewScale (0.03s)
+    building_sync_test.go:682: a monster 31m away entered the main view: the enter radius is wider than 30m
+--- FAIL: TestTerrainSceneWorldAndItsLimit (0.01s)
+    terrain_move_test.go:672: ordinary with terrain: sceneWorld = {Width:12800 Height:6400 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3300 LeaveRadius:3600 MinRadius:1500 MaxLeaveRadius:6300 RadiusStep:300}} <nil>, want {Width:12800 Height:6400 BlockSize:3200 Spawn:{X:500 Y:500} View:{EnterRadius:3000 LeaveRadius:3300 MinRadius:1500 MaxLeaveRadius:6300 RadiusStep:300}}

@@ -924,13 +924,15 @@ func TestSceneViewRequestWidensClampsAndIsRateLimited(t *testing.T) {
 		t.Fatal("premise: 220 units away is visible with the default view")
 	}
 	view, err := scene.SetView(viewerID, policy.ObserverView{Radius: 10_000})
-	if err != nil || view != (policy.ObserverView{Radius: sceneMaxLeaveRadius - (sceneLeaveRadius - sceneEnterRadius)}) {
-		t.Fatalf("SetView = %+v, %v; want the radius clamped to the scene's maximum", view, err)
+	// 不开地形的场景是 demo 原尺度（gamescene.DefaultView）：最大视野 2.7m（离开上限 3m 减滞回 0.3m），写成字面量，
+	// 开地形场景放大主视野（方案 §28）不能改到这里。
+	if err != nil || view != (policy.ObserverView{Radius: 270}) {
+		t.Fatalf("SetView = %+v, %v; want the radius clamped to the scene's maximum 270", view, err)
 	}
 	if !sees() {
 		t.Fatal("the widened view did not subscribe the player that came into range")
 	}
-	if _, err := scene.SetView(viewerID, policy.ObserverView{Radius: sceneEnterRadius}); !errors.Is(err, policy.ErrObserverViewRate) {
+	if _, err := scene.SetView(viewerID, policy.ObserverView{Radius: 120}); !errors.Is(err, policy.ErrObserverViewRate) {
 		t.Fatalf("a second change within a second: %v", err)
 	}
 	if _, err := scene.SetView(viewerID, policy.ObserverView{LOD: 1}); !errors.Is(err, policy.ErrObserverView) {
