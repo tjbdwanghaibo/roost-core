@@ -82,6 +82,8 @@ seamlessdrill: FAIL: (b) pW stops at the step: not reached within 15s (not a rea
 
 ## 待维护者确认（实施方先按推荐做了）
 
+维护者 2026-11-10 确认：下列各项按推荐。
+
 | 项 | 现状 | 选项（推荐标★） |
 | --- | --- | --- |
 | 1. 读视图的手段 | 生成 demo 新增只读 GM `gm.terrain.probe`（每次至多 64 块、256 点，admin 令牌，不取锁、不等 Nest） | ★ 保留为 demo 的运维 / 诊断命令（演练与排障共用）；或只在演练里用（需另找读各进程视图的办法，例如测试专用构建标签） |
