@@ -437,8 +437,7 @@ func (m *Manager) evictForPinned(sid SessionID, batch *flushSession, class uint8
 			batch.entries[index].kind, batch.entries[index].update = entryRemove, nil
 			batch.settlements[index].evict = true
 		} else {
-			settle := captureSettlement(v.subj, v.sub, 0, false)
-			settle.evict = true
+			settle := evictSettlement(v.subj, v.sub)
 			batch.entries = append(batch.entries, frameEntry{subjectID: v.subj.id, kind: entryRemove, class: class})
 			batch.settlements = append(batch.settlements, settle)
 		}

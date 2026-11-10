@@ -5,6 +5,8 @@ package entitysync
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -251,5 +253,100 @@ func TestDecoderRefusesWhatDoesNotContinueTheStream(t *testing.T) {
 	}
 	if _, err := decoder.Decode(forged(entity.SubjectSyncUpdate{SubjectID: 1, Version: current.Version + 1, BaseVersion: current.Version})); err != nil {
 		t.Fatalf("a delta continuing the baseline was refused: %v", err)
+	}
+}
+
+// 增量信封不带 codec，接收端按基线全量的 codec 解增量载荷。服务端的承诺：一个会话收到的每个载荷，都按产生它的
+// codec 被解读——自定义 packer 在同一视图里中途换 codec 时，持有旧 codec 基线的会话不会收到按旧 codec 去解的增量，
+// 改收一份新 codec 的全量（Reason = Resync，计 entitysync_codec_resyncs_total）；已持有新 codec 基线的会话照常收增量。
+// 载荷文本里写着产生它的 codec，接收端解出的 codec 与之不符就是“静默错用”。
+func TestADeltaInAnotherCodecThanTheBaselineGoesOutAsAFull(t *testing.T) {
+	transport := newRecordingTransport()
+	manager := newTestManager(t, transport, ManagerConfig{})
+	codec := uint16(1)
+	const hiddenField = 0x2
+	state := entity.NewSubjectSyncState(entity.SubjectSyncCreateParam{
+		Enabled: true, SubjectID: 1001, Namespace: "codec_switch", SubjectKind: 1,
+		Packer: entity.SubjectSyncPackFunc{
+			Snapshot: func(entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+				return entity.CopyFrozenSyncPayload(codec, fmt.Appendf(nil, "full@%d", codec)), nil
+			},
+			Delta: func(_ entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+				if mask == hiddenField {
+					// 视图里没有这个字段：空载荷，codec 0（同 demo 的 packer 返回零值）。
+					return entity.FrozenSyncPayload{}, nil
+				}
+				return entity.CopyFrozenSyncPayload(codec, fmt.Appendf(nil, "delta@%d", codec)), nil
+			},
+		},
+	})
+	if err := manager.Register(state); err != nil {
+		t.Fatal(err)
+	}
+	resyncsBefore := counterValue("entitysync_codec_resyncs_total", map[string]string{"namespace": "codec_switch"})
+	// 每个会话解出的 1001 的全部更新，逐个核对“解出的 codec 就是写进载荷的 codec”。
+	received := func(session SessionID) []entity.SubjectSyncUpdate {
+		t.Helper()
+		var out []entity.SubjectSyncUpdate
+		for _, raw := range transport.take(session) {
+			if update, ok := decodeFrame(t, raw).updates[1001]; ok {
+				text := string(update.Payload.BytesCopy())
+				if want := fmt.Sprintf("@%d", update.Payload.Codec()); text != "" && !strings.HasSuffix(text, want) {
+					t.Fatalf("session %d read %q as codec %d", session, text, update.Payload.Codec())
+				}
+				out = append(out, update)
+			}
+		}
+		return out
+	}
+
+	open(t, manager, 1)
+	mustSubscribe(t, manager, 1, 1001, entity.SyncProfile{})
+	mustFlush(t, manager)
+	if got := received(1); len(got) != 1 || !got[0].Full || got[0].Payload.Codec() != 1 {
+		t.Fatalf("session 1 first got %+v, want a codec-1 full", got)
+	}
+
+	// packer 换成 codec 2；会话 2 此刻订阅，它的基线是 codec 2 的全量。
+	codec = 2
+	open(t, manager, 2)
+	mustSubscribe(t, manager, 2, 1001, entity.SyncProfile{})
+	mustFlush(t, manager)
+	if got := received(2); len(got) != 1 || !got[0].Full || got[0].Payload.Codec() != 2 {
+		t.Fatalf("session 2 first got %+v, want a codec-2 full", got)
+	}
+	received(1)
+
+	state.MarkDirty(0x1)
+	mustFlush(t, manager)
+	mustFlush(t, manager)
+	first := received(1)
+	if len(first) != 1 || !first[0].Full || first[0].Reason != entity.SyncFullReasonResync || first[0].Payload.Codec() != 2 {
+		t.Fatalf("session 1 (codec-1 baseline) got %+v after the switch, want one codec-2 full with reason resync", first)
+	}
+	second := received(2)
+	if len(second) != 1 || second[0].Full || second[0].Payload.Codec() != 2 {
+		t.Fatalf("session 2 (codec-2 baseline) got %+v, want one codec-2 delta", second)
+	}
+	if got := manager.Stats().CodecResyncs; got != 1 {
+		t.Fatalf("Stats().CodecResyncs = %d, want 1", got)
+	}
+	if got := counterValue("entitysync_codec_resyncs_total", map[string]string{"namespace": "codec_switch"}) - resyncsBefore; got != 1 {
+		t.Fatalf("entitysync_codec_resyncs_total{namespace=codec_switch} rose by %d, want 1", got)
+	}
+
+	// 之后两边都在 codec 2 上：照常是增量，不再重同步。中间一份空载荷的增量（codec 0）不改变基线的 codec——与接收端
+	// 的 Decoder 相同——之后的非空增量照常是增量。
+	for _, mask := range []uint64{0x1, hiddenField, 0x1} {
+		state.MarkDirty(mask)
+		mustFlush(t, manager)
+		for _, session := range []SessionID{1, 2} {
+			if got := received(session); len(got) != 1 || got[0].Full {
+				t.Fatalf("session %d got %+v for mask %#x once both hold codec 2, want one delta", session, got, mask)
+			}
+		}
+	}
+	if got := manager.Stats().CodecResyncs; got != 1 {
+		t.Fatalf("Stats().CodecResyncs = %d after deltas in the baseline's codec, want still 1", got)
 	}
 }

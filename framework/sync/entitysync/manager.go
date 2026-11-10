@@ -222,6 +222,9 @@ type Manager struct {
 	overLimitDeferred atomic.Uint64
 	overLimitEvicted  atomic.Uint64
 	overLimitWarn     overLimitWarnGate
+	// codecResyncs / codecWarn：增量的 codec 与会话基线不同、改发全量的累计次数与限频 Warn 的闸门（flush.go codecMismatchLocked）。
+	codecResyncs atomic.Uint64
+	codecWarn    overLimitWarnGate
 
 	// resubmitMu 保护框架撤销的订阅记录（见 policy_queue.go）；叶子锁。
 	resubmitMu             sync.Mutex
@@ -1079,6 +1082,9 @@ type ManagerStats struct {
 	OverLimitWaiting  int
 	OverLimitDeferred uint64
 	OverLimitEvicted  uint64
+	// CodecResyncs 是累计“增量载荷的 codec 与会话持有的基线不同，改发全量”的次数（每会话每次计一）。正常为 0：
+	// 同一视图的 packer 应始终用同一个 codec；不为 0 说明有 packer 换了 codec（或空全量之后出现了非空增量）。
+	CodecResyncs uint64
 }
 
 // Stats 读取增量维护的计数，不遍历订阅；需要逐项核对时用 AuditStats。
@@ -1117,6 +1123,7 @@ func (m *Manager) Stats() ManagerStats {
 		DurabilityDeferred: m.deferred.Load(), FlushFailures: m.flushFailures.Load(),
 		MaxSubjects: m.config.MaxSubjects, MaxSessions: m.config.MaxSessions,
 		OverLimitWaiting: m.overLimitWaitingTotal(), OverLimitDeferred: m.overLimitDeferred.Load(), OverLimitEvicted: m.overLimitEvicted.Load(),
+		CodecResyncs: m.codecResyncs.Load(),
 	}
 }
 

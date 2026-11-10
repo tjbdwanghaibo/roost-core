@@ -71,6 +71,8 @@ var playerViews, _ = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 
 同一目标被几个视野看见时：层级之间是包含关系（一个的字段是另一个的子集）就只订阅数据多的那个，身份就是它本身；不是包含关系就**各层级的数据都同步**——订阅它们的并集 `entity.UnionSyncProfiles(...)`（`Key` 为各层级身份排序后用 `+` 连接，例如 `alliance+far@1`），`SyncViewSet.Lookup` 把并集解析成字段的并集，`NewMaskedSyncPacker` / 按 `Lookup` 打包的 packer 不用改。包含关系按 `InterestConfig.ViewSets` 里每个实体类型的字段判断；不配 `ViewSets` 时不知道字段，不同层级一律取并集身份。业务视图 Key 不能含 `+`、`@`。
 
+**谁拿哪个视图是业务配置**：`BandLayer` 不配时主视野 0 档是缺省视图，缺省视图通常是全部同步字段——附近的人会收到别人的私有字段。业务按“他人可见”声明一个视图给主视野、按关系声明关系视野的层级，本人经 self 仍用缺省视图（`SelfLayer`）。`ViewSets` 配上之后 Interest 在构造时核对每类实体都声明了每个用到的层级（不会用到某层级的类型也要声明，例如怪的“队友”层级，字段可以与“他人”相同），并按字段包含关系合并，本人在队伍里仍是缺省视图、队友站在身边不在两个层级之间来回换；Manager 的 `ProfilePriorities` 用 `entity.MergeSyncViewPriorities` 从同一批视图集得到。game-demo 的做法（Player / Monster / Building 的“字段 × 视图”表、主视野 `near`、队伍 `team`）见 [demo/README“同步视图”](../../../demo/README.md#同步视图谁看见哪些字段)。
+
 **主视野**：玩家 `Enter` / `Watch` 时自带一个空间视野（镜头），只挂给自己，计入挂接数；D14 的入口都作用于它：
 
 | 登记 | 看 | 被看 | 移动 | 退出 |
