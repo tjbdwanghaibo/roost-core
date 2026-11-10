@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -84,6 +85,9 @@ type settlement struct {
 	subj     *subject
 	version  uint64
 	remove   bool
+	// full / codec：本项交付的是不是全量、载荷 codec；全量结算后成为会话的基线 codec（subscription.codec）。
+	full  bool
+	codec uint16
 	// evict：本批这一项是为钉住的订阅让位而发的 remove（evictForPinned）；结算时订阅不删除，转为超额暂缓。
 	evict         bool
 	snapshotClass snapshotClass
@@ -273,15 +277,18 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 						}
 						if update, ok := updateFor(snapshots, sub.profile); ok {
 							work[sid].entries = append(work[sid].entries, frameEntry{subjectID: id, kind: entryCreate, class: subj.class, update: update})
-							work[sid].settlements = append(work[sid].settlements, captureSettlement(subj, sub, item.Version(), false))
+							work[sid].settlements = append(work[sid].settlements, captureSettlement(subj, sub, update.update))
 						}
 					case kindLive:
 						if !dirty || waiting {
 							continue
 						}
 						if update, ok := updateFor(deltas, sub.profile); ok {
+							if m.codecMismatchLocked(subj, sid, sub, update.update) {
+								continue
+							}
 							work[sid].entries = append(work[sid].entries, frameEntry{subjectID: id, kind: entryUpdate, class: subj.class, update: update})
-							work[sid].settlements = append(work[sid].settlements, captureSettlement(subj, sub, item.Version(), false))
+							work[sid].settlements = append(work[sid].settlements, captureSettlement(subj, sub, update.update))
 						}
 					}
 				}
@@ -290,7 +297,7 @@ func (m *Manager) flush(ctx context.Context, force bool) (result error) {
 		for sid, sub := range subj.subscribers {
 			if sub.kind == kindLeaving && !held[sid] && work[sid] != nil {
 				work[sid].entries = append(work[sid].entries, frameEntry{subjectID: id, kind: entryRemove, class: subj.class})
-				work[sid].settlements = append(work[sid].settlements, captureSettlement(subj, sub, 0, true))
+				work[sid].settlements = append(work[sid].settlements, removeSettlement(subj, sub))
 			}
 		}
 		subj.mu.Unlock()
@@ -528,10 +535,56 @@ func (m *Manager) traceSelectedEntries(sid SessionID, sess *session, entries []f
 	}
 }
 
-// captureSettlement 在 subject 锁内记录本轮捕获对应的意图。
-func captureSettlement(subj *subject, sub *subscription, version uint64, remove bool) settlement {
+// captureSettlement 在 subject 锁内记录本轮交付一份更新对应的意图：结算后会话持有 update.Version；
+// update 是全量时，会话的基线 codec 换成它的载荷 codec（见 subscription.codec）。
+func captureSettlement(subj *subject, sub *subscription, update entity.SubjectSyncUpdate) settlement {
 	sub.inFlight = true
-	return settlement{subj: subj, sub: sub, revision: sub.revision, version: version, remove: remove, snapshotClass: sub.snapshotClass}
+	return settlement{subj: subj, sub: sub, revision: sub.revision, version: update.Version, full: update.Full, codec: update.Payload.Codec(), snapshotClass: sub.snapshotClass}
+}
+
+// removeSettlement 在 subject 锁内记录本轮发出 remove 对应的意图。
+func removeSettlement(subj *subject, sub *subscription) settlement {
+	sub.inFlight = true
+	return settlement{subj: subj, sub: sub, revision: sub.revision, remove: true, snapshotClass: sub.snapshotClass}
+}
+
+// evictSettlement 在 subject 锁内记录“为钉住的订阅让位”发出 remove 的意图（over_limit.go evictForPinned）。
+func evictSettlement(subj *subject, sub *subscription) settlement {
+	sub.inFlight = true
+	return settlement{subj: subj, sub: sub, revision: sub.revision, evict: true, snapshotClass: sub.snapshotClass}
+}
+
+// codecMetric 计“增量的 codec 与会话基线不同、改发全量”的次数；namespace 标签是 subject 的同步命名空间（随实体类型
+// 有限，不含实体或会话身份）。
+const codecMetric = "entitysync_codec_resyncs_total"
+
+// codecMismatchLocked 守住线格式 v3 的前提“增量沿用基线全量的 codec”（docs/framework/ENTITY_SYNC.md“线格式”）：
+// 一份非空的非全量更新，载荷 codec 与会话持有的基线不同时，接收端会按基线的 codec 去解它——可能解错而不报错。
+// 这时不发这份增量：订阅转回待快照（基线作废），subject 排进下一次 Flush，会话收到当前状态的全量（Reason = Resync，
+// 带新 codec），之后的增量按新 codec 解。只影响基线 codec 不符的会话；同一份增量照常发给基线已是新 codec 的会话。
+// 空载荷的增量不带字节、codec 无关，照常发出。返回 true 表示已拒绝这份增量。调用方持有 subj.mu。
+func (m *Manager) codecMismatchLocked(subj *subject, sid SessionID, sub *subscription, update entity.SubjectSyncUpdate) bool {
+	if update.Full || update.Payload.Len() == 0 || update.Payload.Codec() == sub.codec {
+		return false
+	}
+	namespace := subj.state.Namespace()
+	m.codecResyncs.Add(1)
+	metrics.IncCounter(codecMetric, metrics.Labels{"namespace": namespace}, 1)
+	if ok, suppressed := m.codecWarn.take(time.Now()); ok {
+		// 限频（每个 Manager 10 秒至多一条，与超额降级同一闸门实现）：自定义 packer 换 codec 是编程问题，不是负载。
+		slog.Warn("entitysync: a delta's codec differs from the session's baseline; sending a full instead",
+			"manager", m.config.Name, "namespace", namespace, "subject", subj.id, "session", sid,
+			"baseline_codec", sub.codec, "delta_codec", update.Payload.Codec(), "suppressed", suppressed)
+	}
+	sub.baseVersion = 0
+	sub.sendWaiting = time.Time{}
+	m.changeSubscriptionKindLocked(subj, sid, sub, kindSnapshot)
+	if sess := m.session(sid); sess != nil {
+		m.traceSnapshotRequest(subj, sess)
+	}
+	m.markPending(subj.id)
+	m.WakeSync()
+	return true
 }
 
 func releaseInFlight(work map[SessionID]*flushSession) {
@@ -584,6 +637,9 @@ func (m *Manager) settleSubscriptions(sid SessionID, settlements []settlement) {
 					settle.subj.profilesValid = false
 				}
 				sub.baseVersion = settle.version
+				if settle.full {
+					sub.codec = settle.codec
+				}
 				sub.sendWaiting = time.Time{}
 				m.changeSubscriptionKindLocked(settle.subj, sid, sub, kindLive)
 				sub.snapshotClass = snapshotArrival

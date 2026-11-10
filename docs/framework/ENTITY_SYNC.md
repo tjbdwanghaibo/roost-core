@@ -132,6 +132,8 @@ Epoch 在一个 Manager 内单调递增、跨会话 ID 共享：每次 `OpenSess
 
 增量能省掉身份的依据：同一会话里 ObjectRef 与 subject 一一对应，换 subject 必然先 remove 再 create（create 一定是全量）；BaseVersion 仍逐个对象核对，接收端持有的版本不等于 BaseVersion 就拒绝，所以丢帧、乱序、重放照样过不了校验。一个视图（命名空间 + 视图键）的 packer 必须始终用同一个 Codec，增量才能沿用全量的 Codec。
 
+**Codec 一致由服务端保证（2026-11-10）**：增量沿用基线全量的 Codec，所以 Manager 按（会话, subject）记下会话持有的基线 Codec（最近一次交付并结算的全量的载荷 Codec；增量不改它，空载荷的增量也不改，与 `Decoder` 相同）。一份非空的非全量更新的 Codec 与之不同时，不发这份增量：这个会话的订阅转回待快照（基线作废），subject 排进下一次 Flush，会话收到当前状态的全量（`Reason = Resync`，带新 Codec），之后的增量按新 Codec 解；同一份增量照常发给基线已是新 Codec 的会话。代价是这个会话晚一个 Flush 看到这次变化、多收一份全量；计 `entitysync_codec_resyncs_total{namespace}`、`ManagerStats.CodecResyncs`，限频 Warn（[OBSERVABILITY](OBSERVABILITY.md)）。不在 packer 注册或打包时拒绝：Codec 只有打包之后才知道，换 Codec（例如载荷格式升级）本身合法，拒绝打包会让这个 subject 的同步停住；按会话判断也只让真正持有旧 Codec 基线的会话多收一次全量。正常为 0，仓库里的 packer（生成的 DAO packer、self_sync、demo、测试）同一视图都只用一个 Codec（`TestADeltaInAnotherCodecThanTheBaselineGoesOutAsAFull`）。
+
 **客户端**：增量信封不能单独解码，必须用有状态的 `entitysync.Decoder`（每连接一个）：`Decode(frameBytes)` 先过 `frame.Receiver` 的流校验（epoch、tick、基线），再按对象表解每个信封，返回 `ReceivedFrame`（对象的 `SubjectID`、每组件的 `SubjectSyncUpdate` 与线上字节数）。旧 epoch 或已收过的 tick 返回 `ErrStaleFrame`（跳过即可）；其他错误之后 Decoder 只接受新的全量。全量帧先清空旧对象。C# 是 `SubjectUpdate.Decode(data, baseline)`（`EntityViews` 自动传上一次的更新），C++ 是 `roost::sync_receiver`（按它的对象表传基线）。
 
 DAO 同步 PB 的增量补丁不再带 `entity_id`（生成的 `MarshalSyncDelta` / `MarshalSyncChanges`），只有全量带；`ApplySync*` 在增量上接受缺省的 0，带了不同的 ID 照旧拒绝（[DAO-SYNC-PROTOBUF](DAO-SYNC-PROTOBUF.md)）。一步移动的典型字节（game-demo 主视野，玩家或怪走一步、只改 pos_x）：帧头 10 + 对象头 4 + 组件头 4 + 信封 4 + DAO 补丁 8 = 30 字节，同一帧每多一个对象 20 字节；修前是 140 / 108 字节。逐字节拆解与前后对照见 [sync-delta-bytes 证据](../maintenance/evidence/sync-delta-bytes-20261110/README.md)。
