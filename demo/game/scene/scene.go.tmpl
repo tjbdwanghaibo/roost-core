@@ -62,7 +62,7 @@ const DefaultMaxLeaveRadius = 300
 
 // TerrainView 是开地形的普通场景的主视野（维护者 2026-11-10 按推荐，可编辑地形方案 §28）：游戏尺度，进入 30m、离开 33m、
 // 客户端 15m～60m（离开 63m）、步长 3m。建筑边长 3～12m、按占地中心进视野，人站在建筑旁边要看得见它（keep 12 × 12 的
-// 中心离旁边的节点 6.5m）；玩家与怪用同一个视野，所以也在 30m 外可见。最小值与步长按原尺度的比例（最小 = 缺省的一半、
+// 中心离旁边的节点 6.5m）；玩家与怪用同一个视野，所以彼此也在 30m 以内可见（原来 1.2m）。最小值与步长按原尺度的比例（最小 = 缺省的一半、
 // 步长 = 滞回量）。
 func TerrainView() View {
 	return View{EnterRadius: 3000, LeaveRadius: 3300, MinRadius: 1500, MaxLeaveRadius: 6300, RadiusStep: 300}
