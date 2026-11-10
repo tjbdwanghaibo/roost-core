@@ -29,10 +29,11 @@ type teamWorld struct {
 	bases map[int32]*testProc
 
 	mu        sync.Mutex
-	authority map[int64]Group         // 测试里的“权威”（game 里是 Remote 托管的 Team 实体）
-	resyncs   map[int64]int           // GroupResync 被调用的次数，按 Player 实体
-	snaps     map[[2]int32][]int64    // kindGroupSnap：(发送 sid, 收件 sid) → 快照里的角色
-	notices   map[int32][]groupNotice // kindGroupNotice：收件 sid → 通知
+	authority map[int64]Group          // 测试里的“权威”（game 里是 Remote 托管的 Team 实体）
+	resyncs   map[int64]int            // GroupResync 被调用的次数，按 Player 实体
+	snaps     map[[2]int32][]int64     // kindGroupSnap：(发送 sid, 收件 sid) → 快照里的角色
+	snapAt    map[[2]int32][]time.Time // 同上，每份快照发出（交给传输）的时刻
+	notices   map[int32][]groupNotice  // kindGroupNotice：收件 sid → 通知
 	dropNote  bool
 	resyncMod func(*NodeConfig)
 }
@@ -40,7 +41,7 @@ type teamWorld struct {
 func startTeamWorld(t *testing.T, mod func(*NodeConfig)) *teamWorld {
 	spec, lb := loopbackSpec(t, 2, 1)
 	tw := &teamWorld{lb: lb, bases: map[int32]*testProc{}, authority: map[int64]Group{}, resyncs: map[int64]int{},
-		snaps: map[[2]int32][]int64{}, notices: map[int32][]groupNotice{}, resyncMod: mod}
+		snaps: map[[2]int32][]int64{}, snapAt: map[[2]int32][]time.Time{}, notices: map[int32][]groupNotice{}, resyncMod: mod}
 	spec.baseMod = tw.baseMod(worldBaseSID)
 	lb.setFault(func(subject string, m *wireMsg) (bool, bool, time.Duration) {
 		tw.mu.Lock()
@@ -49,6 +50,7 @@ func startTeamWorld(t *testing.T, mod func(*NodeConfig)) *teamWorld {
 		case kindGroupSnap:
 			key := [2]int32{m.From, sidOfSubject(subject)}
 			tw.snaps[key] = append(tw.snaps[key], m.GroupSnap.State.ID)
+			tw.snapAt[key] = append(tw.snapAt[key], time.Now())
 		case kindGroupNotice:
 			tw.notices[sidOfSubject(subject)] = append(tw.notices[sidOfSubject(subject)], *m.GroupNotice)
 			return tw.dropNote, false, 0
@@ -123,7 +125,7 @@ func (tw *teamWorld) enterOn(sid int32, unique int64, at spatial.Point) {
 	if err := base.node.Enter(ctx, pl.ID(), actorID(unique), at, 100); err != nil {
 		tw.t.Fatal(err)
 	}
-	waitFor(tw.t, 5*time.Second, "own scene actor on the client", func() bool {
+	waitFor(tw.t, settleWithin, "own scene actor on the client", func() bool {
 		_, ok := base.client.held(unique)[actorID(unique)]
 		return ok
 	})
@@ -175,7 +177,7 @@ func (tw *teamWorld) waitHolds(sid int32, viewer, target int64, what string, con
 	tw.t.Helper()
 	var last EntityState
 	var present bool
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(settleWithin)
 	for time.Now().Before(deadline) {
 		if last, present = tw.holds(sid, viewer, target); present && cond(last) {
 			return last
@@ -209,7 +211,7 @@ func TestGroupPanelAcrossBases(t *testing.T) {
 	tw.enterOn(worldBaseSID, 1, spatial.Point{X: 2000, Y: 5000})
 	tw.enterOn(teamBase2, 2, spatial.Point{X: 17000, Y: 5000})
 	tw.enterOn(worldBaseSID, 3, spatial.Point{X: 8000, Y: 2000})
-	time.Sleep(3 * teamEvery)
+	time.Sleep(3 * teamEvery) // 负向窗口：组队之前彼此看不见（负载下只会更弱，不会误报）
 	for _, pair := range [][2]int64{{1, 2}, {1, 3}, {2, 1}} {
 		sid := int32(worldBaseSID)
 		if pair[0] == 2 {
@@ -240,11 +242,18 @@ func TestGroupPanelAcrossBases(t *testing.T) {
 	if got := tw.snapsFrom(teamBase2, worldBaseSID); !slices.Contains(got, actorID(2)) {
 		t.Fatalf("base %d sent snapshots of %v to base %d, want player 2", teamBase2, got, worldBaseSID)
 	}
-	// 一个周期一份：1s 里每名队员发出的快照数在 [1s / 周期 - 2, 1s / 周期 + 2] 之间（不是每拍一份）。
+	// 一个周期一份，不是每拍一份。原来数墙钟 1s 里的份数、要求在 [3, 7]：负载下 Base 的心跳被推迟（不补跑），1s 里的份数
+	// 会少于 3。现在窗口是玩家 2 的 Base 跑满 10 拍心跳（WatchPeriod 100ms，名义 1s；迟到的拍不补，10 拍至少跨 ~1s 墙钟）：
+	// 下限按拍数——每拍至多发一份、相邻两份至少隔一个周期，10 拍里至少 10 × 100ms / 200ms - 2 = 3 份（停发时为 0）；上限按
+	// 墙钟——一个周期至多一份，份数不超过窗口墙钟 / 周期 + 2（每拍都发时 10 拍 10 份，超过）。负载只会让窗口的墙钟变长，
+	// 上限随之放宽、下限不变，都不会误报。
 	before := len(tw.snapsFrom(teamBase2, worldBaseSID))
-	time.Sleep(time.Second)
-	if got := len(tw.snapsFrom(teamBase2, worldBaseSID)) - before; got < int(time.Second/teamEvery)-2 || got > int(time.Second/teamEvery)+2 {
-		t.Fatalf("player 2's base sent %d snapshots in 1s, want about %d (one per %v)", got, time.Second/teamEvery, teamEvery)
+	start := time.Now()
+	tw.bases[teamBase2].waitBaseBeats(10)
+	wall := time.Since(start)
+	got := len(tw.snapsFrom(teamBase2, worldBaseSID)) - before
+	if low, high := int(10*100*time.Millisecond/teamEvery)-2, int(wall/teamEvery)+2; got < low || got > high {
+		t.Fatalf("player 2's base sent %d snapshots in 10 beats (%v), want between %d and %d (one per %v)", got, wall, low, high, teamEvery)
 	}
 }
 
@@ -258,20 +267,21 @@ func TestGroupPanelExpiresWhenTheBaseStopsAndComesBack(t *testing.T) {
 	tw.form(g)
 	tw.waitHolds(worldBaseSID, 1, 2, "the teammate", func(s EntityState) bool { return s.X == 17000 })
 
-	stopped := time.Now()
 	tw.bases[teamBase2].stop()
-	// 最后一份快照最早在停之前一个周期（加一拍心跳）发出：停后 hold - 周期 - 一拍之内面板里还有它。
-	time.Sleep(teamHold - teamEvery - 150*time.Millisecond)
-	if _, ok := tw.holds(worldBaseSID, 1, 2); !ok {
-		t.Fatalf("player 2 left player 1's panel %v after its base stopped, before 3 periods (%v) without a snapshot", time.Since(stopped), teamHold)
-	}
-	waitFor(t, 3*time.Second, "player 2 removed from player 1's panel", func() bool {
+	waitFor(t, settleWithin, "player 2 removed from player 1's panel", func() bool {
 		_, ok := tw.removalOf(worldBaseSID, 1, 2)
 		return ok
 	})
+	// 以最后一份快照为起点（原来以停的时刻为起点、下限减去一个周期与一拍的估计，负载下最后一份可能更早发出）：不早于
+	// 它之后 GroupHold 移除（mirror 按收到时刻保留 hold，收到不早于发出）；不晚于 hold 加 transitCap（过期靠 Base 与 Sync
+	// 的定时清理，负载下推迟；只抓“按 hold 根本不过期 / 过期慢一个量级”）。
 	at, _ := tw.removalOf(worldBaseSID, 1, 2)
-	if gone := at.Sub(stopped); gone < teamHold-teamEvery-150*time.Millisecond || gone > teamHold+500*time.Millisecond {
-		t.Fatalf("player 2 left player 1's panel %v after its base stopped, want about %v (3 periods without a snapshot)", gone, teamHold)
+	tw.mu.Lock()
+	sent := tw.snapAt[[2]int32{teamBase2, worldBaseSID}]
+	tw.mu.Unlock()
+	last := sent[len(sent)-1]
+	if gone := at.Sub(last); gone < teamHold || gone > teamHold+transitCap {
+		t.Fatalf("player 2 left player 1's panel %v after its last snapshot, want no earlier than the %v hold and within %v more", gone, teamHold, transitCap)
 	}
 
 	// 重启：内存里的成员表没了，持久的组 ID 还在（game 里是 Player 的 TeamID）——版本 0 表示成员未知，Base 去权威重读。
@@ -279,7 +289,7 @@ func TestGroupPanelExpiresWhenTheBaseStopsAndComesBack(t *testing.T) {
 	pl := base.player(2)
 	pl.group.v = Group{ID: teamID}
 	tw.enterOn(teamBase2, 2, spatial.Point{X: 17000, Y: 5000})
-	waitFor(t, 3*time.Second, "a resync of player 2 after its base restarted", func() bool {
+	waitFor(t, settleWithin, "a resync of player 2 after its base restarted", func() bool {
 		tw.mu.Lock()
 		defer tw.mu.Unlock()
 		return tw.resyncs[playerEntityID(2)] > 0
@@ -333,12 +343,12 @@ func TestGroupNoticesChangeTheRoster(t *testing.T) {
 	g2 := Group{ID: teamID, Ver: 2, Members: []GroupMember{m1}}
 	tw.setAuthority(g2)
 	tw.setGroup(teamBase2, 2, testGroupCmd{set: true, group: Group{}, notice: &g2, former: []GroupMember{m2}})
-	waitFor(t, 2*time.Second, "player 1 adopts version 2", func() bool { return tw.groupOf(worldBaseSID, 1).Ver == 2 })
+	waitFor(t, settleWithin, "player 1 adopts version 2", func() bool { return tw.groupOf(worldBaseSID, 1).Ver == 2 })
 	if got := tw.groupOf(worldBaseSID, 1); len(got.Members) != 1 || got.Members[0] != m1 {
 		t.Fatalf("player 1's roster after player 2 left: %+v, want only player 1", got)
 	}
 	left := time.Now()
-	waitFor(t, 2*time.Second, "player 2 removed from player 1's panel", func() bool {
+	waitFor(t, settleWithin, "player 2 removed from player 1's panel", func() bool {
 		_, ok := tw.removalOf(worldBaseSID, 1, 2)
 		return ok
 	})
@@ -346,9 +356,10 @@ func TestGroupNoticesChangeTheRoster(t *testing.T) {
 		t.Fatalf("player 2 left the panel %v after the notice, want well before the %v expiry", at.Sub(left), teamHold)
 	}
 
-	// 迟到 / 重复的版本 1 通知：版本不更新，不采纳。
+	// 迟到 / 重复的版本 1 通知：版本不更新，不采纳。窗口到 Base 1 真的把它当作不新的通知丢掉为止（原来 sleep 3 个周期）。
+	stale := tw.bases[worldBaseSID].node.Stats().GroupStale
 	tw.setGroup(teamBase2, 2, testGroupCmd{notice: &g1})
-	time.Sleep(3 * teamEvery)
+	waitFor(t, settleWithin, "the late notice dropped as stale", func() bool { return tw.bases[worldBaseSID].node.Stats().GroupStale > stale })
 	if got := tw.groupOf(worldBaseSID, 1); got.Ver != 2 {
 		t.Fatalf("a late version-1 notice moved player 1's roster to %+v", got)
 	}
@@ -365,8 +376,8 @@ func TestGroupNoticesChangeTheRoster(t *testing.T) {
 	g4 := Group{ID: teamID, Ver: 4}
 	tw.setAuthority(g4)
 	tw.setGroup(worldBaseSID, 1, testGroupCmd{set: true, group: Group{}, notice: &g4, former: []GroupMember{m1, m2}})
-	waitFor(t, 2*time.Second, "player 2's roster cleared by the disband", func() bool { return tw.groupOf(teamBase2, 2).ID == 0 })
-	waitFor(t, 2*time.Second, "player 1 removed from player 2's panel", func() bool {
+	waitFor(t, settleWithin, "player 2's roster cleared by the disband", func() bool { return tw.groupOf(teamBase2, 2).ID == 0 })
+	waitFor(t, settleWithin, "player 1 removed from player 2's panel", func() bool {
 		_, ok := tw.holds(teamBase2, 2, 1)
 		return !ok
 	})
@@ -389,7 +400,7 @@ func TestGroupResyncCoversALostNotice(t *testing.T) {
 	before := tw.resyncs[playerEntityID(1)]
 	tw.mu.Unlock()
 	tw.setGroup(teamBase2, 2, testGroupCmd{set: true, group: Group{}, notice: &g2, former: []GroupMember{m2}})
-	waitFor(t, 3*time.Second, "player 1 resynced to version 2", func() bool { return tw.groupOf(worldBaseSID, 1).Ver == 2 })
+	waitFor(t, settleWithin, "player 1 resynced to version 2", func() bool { return tw.groupOf(worldBaseSID, 1).Ver == 2 })
 	tw.mu.Lock()
 	after := tw.resyncs[playerEntityID(1)]
 	dropped := len(tw.notices[worldBaseSID])
@@ -397,7 +408,7 @@ func TestGroupResyncCoversALostNotice(t *testing.T) {
 	if after <= before || dropped == 0 {
 		t.Fatalf("resyncs of player 1 %d -> %d, notices dropped on the way to base %d: %d; want the change to come from a resync", before, after, worldBaseSID, dropped)
 	}
-	waitFor(t, 2*time.Second, "player 2 removed from player 1's panel", func() bool {
+	waitFor(t, settleWithin, "player 2 removed from player 1's panel", func() bool {
 		_, ok := tw.holds(worldBaseSID, 1, 2)
 		return !ok
 	})
@@ -411,7 +422,8 @@ func TestGroupPanelMergesWithTheSpatialView(t *testing.T) {
 	tw.waitHolds(worldBaseSID, 1, 2, "the neighbour in view before the team", func(s EntityState) bool { return true })
 	g := Group{ID: teamID, Ver: 1, Members: []GroupMember{teamMember(1, worldBaseSID), teamMember(2, teamBase2)}}
 	tw.form(g)
-	time.Sleep(3 * teamEvery)
+	// 前提：Base 1 已经收到 2 的队伍快照（组视野接上了），再走出空间视野（原来 sleep 3 个周期）。
+	waitFor(t, settleWithin, "a team snapshot of player 2 at base 1", func() bool { return tw.bases[worldBaseSID].node.Stats().GroupSnapsIn > 0 })
 	ctx, cancel := tw.ctx()
 	defer cancel()
 	if err := tw.bases[teamBase2].node.Move(ctx, playerEntityID(2), 1000, 0); err != nil {
@@ -421,7 +433,9 @@ func TestGroupPanelMergesWithTheSpatialView(t *testing.T) {
 	if err := tw.bases[teamBase2].node.Move(ctx, playerEntityID(2), 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(3 * teamEvery)
+	// 走出视野之后再收 3 份快照（原来 sleep 3 个周期）：之间它一直由快照供着，不删不重建。
+	in := tw.bases[worldBaseSID].node.Stats().GroupSnapsIn
+	waitFor(t, settleWithin, "three more team snapshots at base 1", func() bool { return tw.bases[worldBaseSID].node.Stats().GroupSnapsIn >= in+3 })
 	if _, ok := tw.holds(worldBaseSID, 1, 2); !ok {
 		t.Fatal("the teammate left player 1's panel after walking out of view")
 	}

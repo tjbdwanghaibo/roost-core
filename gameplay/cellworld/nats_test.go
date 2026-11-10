@@ -74,22 +74,22 @@ func natsSpec(t testing.TB, cols, rows int32) worldSpec {
 	}}
 }
 
-// 真实 NATS 上的视野约定比进程内替身多留一拍。
-const (
-	natsMaxMiss = 2
-	natsMaxGap  = 4*worldPeriod + 50*time.Millisecond
-)
+// 真实 NATS 上的视野约定比进程内替身多留一拍：同格 5 拍（原约定“4 拍 + 50ms”），换手两端各 3 拍（不同连接之间不保序，
+// 旧格最后一份可能晚于新格的第一份到达而被 Base 当作过期丢掉）。
+const natsMaxMiss = 2
+
+var natsGap = gapRule{beats: 5, edge: 3, transit: transitCap}
 
 func TestNATSWorldStraightCrossing(t *testing.T) {
-	scenarioStraightCrossing(t, startWorld(t, natsSpec(t, 2, 1)), natsMaxMiss, natsMaxGap)
+	scenarioStraightCrossing(t, startWorld(t, natsSpec(t, 2, 1)), natsMaxMiss, natsGap)
 }
 
 func TestNATSWorldJitterAtBoundary(t *testing.T) {
-	scenarioJitter(t, startWorld(t, natsSpec(t, 2, 1)), natsMaxMiss, natsMaxGap, nil)
+	scenarioJitter(t, startWorld(t, natsSpec(t, 2, 1)), natsMaxMiss, natsGap, nil)
 }
 
 func TestNATSWorldDiagonalThroughFourCellCorner(t *testing.T) {
-	scenarioDiagonal(t, startWorld(t, natsSpec(t, 2, 2)), natsMaxMiss, natsMaxGap)
+	scenarioDiagonal(t, startWorld(t, natsSpec(t, 2, 2)), natsMaxMiss, natsGap)
 }
 
 func TestNATSWorldAttackAcrossBoundary(t *testing.T) {

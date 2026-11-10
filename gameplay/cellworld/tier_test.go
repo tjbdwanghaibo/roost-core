@@ -1,6 +1,7 @@
 package cellworld
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"sync/atomic"
 	"testing"
@@ -43,10 +44,19 @@ func (w *world) waitIdle(cell CellID, id int64, want bool, timeout time.Duration
 	return time.Now()
 }
 
-// beatsOver 返回该格在 d 内执行的角色心跳数。
+// beatsOver 返回该格在 d（墙钟）内执行的角色心跳数。只用于上限（慢档按墙钟的 IdlePeriod 跳，负载下拍数只会更少）。
 func (w *world) beatsOver(cell CellID, d time.Duration) uint64 {
 	before := w.cells[cell].node.Stats().ActorBeats
 	time.Sleep(d)
+	return w.cells[cell].node.Stats().ActorBeats - before
+}
+
+// actorBeatsPer 返回该格在接下来 n 拍区域心跳里执行的角色心跳数：快档的角色与区域心跳同周期（Period），以区域心跳为
+// 尺子，负载下两者一起被推迟，比值不变。
+func (w *world) actorBeatsPer(cell CellID, n int) uint64 {
+	w.t.Helper()
+	before := w.cells[cell].node.Stats().ActorBeats
+	w.waitBeats(cell, n)
 	return w.cells[cell].node.Stats().ActorBeats - before
 }
 
@@ -58,8 +68,8 @@ func TestIdleTierWithoutPlayersAndWakeOnApproach(t *testing.T) {
 	a, b := CellID{0, 0}, CellID{1, 0}
 	npc := npcID(21)
 	w.spawn(a, EntityState{ID: npc, X: 9800, Y: 5000, HP: 100})
-	w.waitIdle(a, npc, true, 3*time.Second)
-	if beats := w.beatsOver(a, 2*time.Second); beats > 4 {
+	w.waitIdle(a, npc, true, settleWithin)
+	if beats := w.beatsOver(a, 2*time.Second); beats > 4 { // 上限：负载只会让拍数更少
 		t.Fatalf("idle npc beat %d times in 2s, want <= 4 (period %v)", beats, testIdlePeriod)
 	}
 
@@ -68,21 +78,23 @@ func TestIdleTierWithoutPlayersAndWakeOnApproach(t *testing.T) {
 	// 400/s 下约 1.5s。
 	w.enter(1, spatial.Point{X: 11000, Y: 5000})
 	w.move(1, -400, 0)
-	w.waitView(1, 5*time.Second, "player near the npc", func(v View) bool { return v.Self.X <= 10500 })
+	w.waitView(1, settleWithin, "player near the npc", func(v View) bool { return v.Self.X <= 10500 })
 	w.move(1, 0, 0)
 	near := time.Now()
 	if sid, _ := w.owner(1); sid != w.grid.SID(b) {
 		t.Fatalf("player owned by %d, want B (%d): the npc must be woken by a ghost", sid, w.grid.SID(b))
 	}
-	woke := w.waitIdle(a, npc, false, 2*time.Second)
+	woke := w.waitIdle(a, npc, false, settleWithin)
 	t.Logf("npc fast %v after the player stopped 700 from it (it was woken while the player walked in)", woke.Sub(near))
-	if beats := w.beatsOver(a, time.Second); beats < 15 {
-		t.Fatalf("woken npc beat %d times in 1s, want >= 15 (period %v)", beats, worldPeriod)
+	// 原来断言“1s 内至少 15 拍”：负载下心跳被推迟、不补跑，墙钟窗口里的拍数会少。承诺是“升回快档”，即与区域心跳同
+	// 周期：在 A 的 20 拍区域心跳里 NPC 至少跳 15 拍（仍在慢档时只有 1 拍左右）。
+	if beats := w.actorBeatsPer(a, 20); beats < 15 {
+		t.Fatalf("woken npc beat %d times in 20 region beats, want >= 15 (period %v)", beats, worldPeriod)
 	}
 
 	// 玩家走远（离 NPC 2000）：滞后 IdleAfter 之后降档。
 	w.move(1, 1000, 0)
-	w.waitView(1, 5*time.Second, "player far away", func(v View) bool { return v.Self.X >= 11800 })
+	w.waitView(1, settleWithin, "player far away", func(v View) bool { return v.Self.X >= 11800 })
 	w.move(1, 0, 0)
 	w.waitIdle(a, npc, true, testIdleAfter+3*time.Second)
 }
@@ -114,7 +126,7 @@ func TestIdleTierNoFlappingAtWakeEdge(t *testing.T) {
 
 	edge := npcAt.X + worldViewRadius // W 取缺省 = ViewRadius；NPC 静止，没有漂移余量
 	w.enter(1, spatial.Point{X: edge - 30, Y: 5000})
-	w.waitIdle(a, npc, false, 2*time.Second)
+	w.waitIdle(a, npc, false, settleWithin)
 	w.resetViews(1)
 	for i := range 20 {
 		vx := int64(400)
@@ -122,7 +134,7 @@ func TestIdleTierNoFlappingAtWakeEdge(t *testing.T) {
 			vx = -400
 		}
 		w.move(1, vx, 0)
-		w.waitView(1, 5*time.Second, "turn at the wake edge", func(v View) bool {
+		w.waitView(1, settleWithin, "turn at the wake edge", func(v View) bool {
 			if vx > 0 {
 				return v.Self.X >= edge+50
 			}
@@ -139,10 +151,10 @@ func TestIdleTierNoFlappingAtWakeEdge(t *testing.T) {
 		t.Fatalf("while the player hovered at the wake edge: %d promotions, %d demotions; want 1 and 0 (longest stretch outside W in the witness %v < IdleAfter %v)", up, down, outside, idleAfter)
 	}
 	w.move(1, 1000, 0)
-	w.waitView(1, 5*time.Second, "player far away", func(v View) bool { return v.Self.X >= 7500 })
+	w.waitView(1, settleWithin, "player far away", func(v View) bool { return v.Self.X >= 7500 })
 	w.move(1, 0, 0)
 	w.waitIdle(a, npc, true, idleAfter+3*time.Second)
-	time.Sleep(2 * testIdlePeriod)
+	w.waitBeats(a, int(2*testIdlePeriod/worldPeriod)) // 负向窗口：再过 2 个慢档周期的区域心跳，看不再换档
 	end := node.Stats()
 	if up, down := end.TierFast-start.TierFast, end.TierIdle-start.TierIdle; up != 1 || down != 1 {
 		t.Fatalf("after the player left: %d promotions, %d demotions; want 1 and 1", up, down)
@@ -182,7 +194,7 @@ func TestIdleTierGhostSurvivesSlowBeats(t *testing.T) {
 	a, b := CellID{0, 0}, CellID{1, 0}
 	npc := npcID(23)
 	w.spawn(a, EntityState{ID: npc, X: 9500, Y: 5000, HP: 100})
-	w.waitIdle(a, npc, true, 3*time.Second)
+	w.waitIdle(a, npc, true, settleWithin)
 	missing := 0
 	for deadline := time.Now().Add(3 * testIdlePeriod); time.Now().Before(deadline); {
 		if s, ok := w.roleOf(b, npc); !ok || s.Role != "ghost" {
@@ -211,15 +223,20 @@ func TestIdleTierFastCrossingHandsOffInsideBand(t *testing.T) {
 	a, b := CellID{0, 0}, CellID{1, 0}
 	npc := npcID(24)
 	w.spawn(a, EntityState{ID: npc, X: 7000, Y: 5000, VX: 800, HP: 100})
-	w.waitIdle(a, npc, true, 2*time.Second)
+	w.waitIdle(a, npc, true, settleWithin)
 	waitFor(t, 8*time.Second, "npc real in B", func() bool { s, ok := w.roleOf(b, npc); return ok && s.Role == "real" })
 	step := int64(800) * int64(worldPeriod) / int64(time.Second)
 	limit := 10000 + w.grid.Hysteresis() + step
 	if x := offeredAt.Load(); x == 0 || x > limit {
 		t.Fatalf("idle npc froze at x=%d, want x <= %d (boundary + H + one %v step)", x, limit, worldPeriod)
 	}
-	// 旧格在收到“已接受”的那笔事务里留下 Ghost，之后新格的慢拍更新它（一拍 800，仍在旧格边界带 1000 以内）。
-	waitFor(t, testIdlePeriod/2, "ghost left in A", func() bool { g, ok := w.roleOf(a, npc); return ok && g.Role == "ghost" && g.Owner == b })
+	// 旧格在收到“已接受”的那笔事务里留下 Ghost，之后新格的慢拍更新它（一拍 800，仍在旧格边界带 1000 以内）。原来给 A
+	// 半个慢档周期（500ms）出现 Ghost，用期限区分“接受时留下”与“新格下一个慢拍才补上”，负载下会误报；现在等 A 离开冻结，
+	// 离开的那一刻就必须是 owner = B 的 Ghost（接受时没留 Ghost 的话，先看到的是记录消失）。
+	waitFor(t, settleWithin, "A leaves its frozen state", func() bool { s, ok := w.roleOf(a, npc); return !ok || s.Role != "frozen" })
+	if g, ok := w.roleOf(a, npc); !ok || g.Role != "ghost" || g.Owner != b {
+		t.Fatalf("A holds %+v (known %v) right after the handoff, want a ghost owned by B", g, ok)
+	}
 	if idle, _ := w.idleOf(b, npc); !idle {
 		t.Fatal("npc handed over while idle was installed fast; the tier should travel with the handoff")
 	}
@@ -244,7 +261,7 @@ func TestIdleTierDamageAcrossBoundaryAppliedOnce(t *testing.T) {
 	a, b := CellID{0, 0}, CellID{1, 0}
 	target := npcID(25)
 	w.spawn(b, EntityState{ID: target, X: 10300, Y: 5000, VX: -400, HP: 100})
-	w.waitIdle(b, target, true, 3*time.Second)
+	w.waitIdle(b, target, true, settleWithin)
 
 	lossy := lossyFault(5)
 	var hold atomic.Int64
@@ -274,7 +291,7 @@ func TestIdleTierDamageAcrossBoundaryAppliedOnce(t *testing.T) {
 		hits = append(hits, w.attack(1, target, 2))
 		time.Sleep(100 * time.Millisecond)
 	}
-	results := w.waitResults(len(hits), 5*time.Second)
+	results := w.waitResults(len(hits), settleWithin)
 	applications := w.applications()
 	byHit := map[HitID]AttackResult{}
 	for _, r := range results {
@@ -298,21 +315,23 @@ func TestIdleTierDamageAcrossBoundaryAppliedOnce(t *testing.T) {
 		if first := firstHit.Load(); first == 0 || first > at.UnixNano() {
 			t.Fatalf("first damage applied at %v, npc promoted at %v: no damage reached the idle npc", time.Unix(0, first), at)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(settleWithin):
 		t.Fatal("npc never promoted while the player stood next to it")
 	}
-	time.Sleep(3 * worldPeriod)
-	var hp int32 = -1
-	for _, cell := range []CellID{a, b} {
-		for _, s := range w.inspect(cell) {
-			if s.State.ID == target && s.Role == "real" {
-				hp = s.State.HP
+	// 等目标的 Real（可能刚交接）HP 与结算次数一致；每次重算结算次数（“未知”的那刀可能稍后才结算）。
+	eventually(t, settleWithin, "target hp matching the applications", func() (bool, string) {
+		apps := w.applications()
+		hp := int32(-1)
+		for _, cell := range []CellID{a, b} {
+			for _, s := range w.inspect(cell) {
+				if s.State.ID == target && s.Role == "real" {
+					hp = s.State.HP
+				}
 			}
 		}
-	}
-	if want := int32(100 - 2*len(applications)); hp != want {
-		t.Fatalf("target hp = %d, want %d (applications %d)", hp, want, len(applications))
-	}
+		want := int32(100 - 2*len(apps))
+		return hp == want, fmt.Sprintf("target hp = %d, want %d (applications %d)", hp, want, len(apps))
+	})
 	t.Logf("results %d, applications %d", len(byHit), len(applications))
 }
 
