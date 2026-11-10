@@ -1,0 +1,94 @@
+# 变异（生成的 game-demo 上逐项只改一处、跑相关用例、还原；原始输出的第一条失败）
+
+== p5-cell-ledger-ahead: RED
+$ env GOWORK=off go test -count=1 ./game/entities/terrain_cell_editor/
+    ledger_component_test.go:22: seq 3145728 on last 0: ahead, want fresh
+
+== p5-cell-ledger-no-dedup: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:406: the same sequence again: {Parts:[{SID:101 Chunks:[(3,0)] Answer:{Outcome:unknown Refusal:the cell's result is unknown: runtime error: negative shift amount Chunks:[] Points:0 LastSeq:0 Building:{ID:0 Standing:false Owner:0 ConfigID:0 Params:[] Facing:0 Lot:[0,0)×[0,0)
+    terrain_relay_test.go:447: the same sequence after the loss: {Parts:[{SID:101 Chunks:[(3,0)] Answer:{Outcome:unknown Refusal:the cell's result is unknown: runtime error: negative shift amount Chunks:[] Points:0 LastSeq:0 Building:{ID:0 Standing:false Owner:0 ConfigID:0 Params:[] Facing:0 Lot:[0,
+
+== p5-cell-owns-all: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:336: cross-cell brush: {Parts:[{SID:101 Chunks:[(3,0)] Answer:{Outcome:refused Refusal:terrain: chunk is not written by this process (cell: terrain: chunk is not written by this process: chunk (4,0)) Chunks:[] Points:0 LastSeq:0 Building:{ID:0 Standing:false Owner:0 ConfigI
+    terrain_relay_test.go:397: summary cell 101: terrain: chunk is not written by this process (cell: terrain: chunk is not written by this process: chunk (4,0)), want the refusing cell's reason
+
+== p5-cross-cell-lot-allowed: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:669: a lot across two cells: {Parts:[{SID:101 Chunks:[(3,0)] Answer:{Outcome:refused Refusal:terrain: chunk is not written by this process (cell: terrain: chunk is not written by this process: chunk (4,0)) Chunks:[] Points:0 LastSeq:0 Building:{ID:0 Standing:false Owner:0 C
+
+== p5-ghost-lots-dropped: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:718: timed out waiting for the neighbour's ghost band takes the building's lot
+
+== p5-ghost-lots-not-at-start: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:733: the restarted neighbour does not see the building
+
+== p5-ghost-no-lots: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:718: timed out waiting for the neighbour's ghost band takes the building's lot
+
+== p5-issue-not-recorded: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:340: base ledger: again false last 0
+    terrain_relay_test.go:409: the base ledger did not see the retry
+
+== p5-local-over-net: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:366: 2 requests went over the net, want only the other cell's
+
+== p5-no-answer-cache: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:442: no resend reached the cell: map[answers_in:1 busy_drops:0 cached_replies:0 decode_errors:0 execs:0 in_flight_repeats:0 requests_in:0 requests_out:2 resends:30 stray_answers:0 timeouts:1] / map[answers_in:0 busy_drops:0 cached_replies:0 decode_errors:0 execs:31 in_fligh
+
+== p5-no-incarnation-check: GREEN（未杀死）
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+
+== p5-no-inflight-dedup: GREEN（未杀死）
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+
+== p5-no-push-after-lots: GREEN（未杀死）
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+
+== p5-no-refund: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:598: a brush within what should be left (250 points) after the refund: terrain: edit point quota used up: player 4242: the edit may change 193 points
+
+== p5-partition-small-view: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainSceneWorldAndItsLimit ./internal/service/game/
+    terrain_move_test.go:695: the partitioned terrain scene's main view: {Width:51200 Height:25600 BlockSize:200 Spawn:{X:0 Y:0} View:{EnterRadius:120 LeaveRadius:150 MinRadius:60 MaxLeaveRadius:300 RadiusStep:30 MaxVisible:64}}, <nil>
+
+== p5-pending-not-coded: RED
+$ env GOWORK=off go test -count=1 ./game/controllers/player/
+    building_test.go:63: terrain: the edit's result in some cell is not known yet; send it again with the same sequence mapped to terrain: place building: terrain: the edit's result in some cell is not known yet; send it again with the same sequence (code 1), want terrain_pending: the edit's result 
+    terrain_edit_test.go:96: terrain: the edit's result in some cell is not known yet; send it again with the same sequence mapped to terrain: brush at (1, 2): terrain: the edit's result in some cell is not known yet; send it again with the same sequence (code 1), want terrain_pending: the edit's re
+
+== p5-settings-no-view-check: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRegionFollowsThePartition ./internal/service/game/
+    terrain_test.go:646: view_radius 400 with terrain: <nil>
+
+== p5-split-one-owner: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:338: cross-cell brush: parts map[101:applied], want map[101:applied 102:applied]
+    terrain_relay_test.go:397: summary <nil>, want the refusing cell's reason
+
+== p5-summary-ignores-refusal: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:397: summary <nil>, want the refusing cell's reason
+    terrain_relay_test.go:690: a cross-cell brush over a building: {Parts:[{SID:101 Chunks:[(3,0)] Answer:{Outcome:refused Refusal:terrain: the edit touches ground a building stands on (cell: terrain: the edit touches ground a building stands on: chunk (3,0) point 1978) Chunks:[] Points:0 LastSeq:0 
+
+== p5-timeout-is-applied: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:434: summary <nil>, want pending
+    terrain_relay_test.go:514: answers lost: {Parts:[{SID:101 Chunks:[(3,0)] Answer:{Outcome:applied Refusal:<nil> Chunks:[{Key:(3,0) Version:1}] Points:322 LastSeq:1 Building:{ID:0 Standing:false Owner:0 ConfigID:0 Params:[] Facing:0 Lot:[0,0)×[0,0) Foundation:0 Leveled:false BaseRevision:0}}} {SI
+
+== p5-unknown-refunded: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay ./internal/service/game/
+    terrain_relay_test.go:624: the unknown part's points came back to the bucket: <nil>
+
+== p5-wire-version-unchecked: RED
+$ env GOWORK=off go test -count=1 -run TestTerrainRelay|TestTerrainPartitionGhostBandSees ./internal/service/game/
+    terrain_relay_test.go:810: version: a bad message was not counted as a decode error
+

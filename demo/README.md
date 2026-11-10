@@ -205,7 +205,10 @@ scene:
   `ghost_band` 范围内的块也装入（邻格的块只读：启动时按库里的记录装入，之后由写它的格推送，见下面的 P3）；只做 Base 的 sid 不装块。开地形的分区场景要求 `cell_size`
   是 6400（一块）的整数倍，一块不跨两个格，加载配置时检查；demo 缺省的 3000 不满足，例如：
   `cell_size: 51200`、`cols: 2`、`rows: 2`、`owners: ["1001", "1002", "1003", "1004"]`（四个 512m 的格，世界 102400 × 102400，
-  正好是缺省地形包的 16 × 16 块；`spawn_x` / `spawns` 要落在新的世界里）。
+  正好是缺省地形包的 16 × 16 块；`spawn_x` / `spawns` 要落在新的世界里）。开地形的分区场景的主视野是游戏尺度（P5：与开地形的
+  普通场景同一份 `TerrainView`，32m、最近 128 个），客户端看到的只来自 witness，所以还要 `view_radius` ≥ 6720（离开上限，
+  加载配置时查）、`ghost_band` ≥ `view_radius` + `hysteresis`，例如 `view_radius: 6800`、`hysteresis: 200`、`ghost_band: 7000`
+  （[方案 §30.5](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#305-分区场景的主视野放大到游戏尺度)）。
 - **查询**：能力 `<game>.terrain`（`*terrainmap.Map`）的 `Height` / `Material` / `IsWater` / `Probe`，世界坐标是厘米；
   不取锁，可以在 Nest handler 里调。块没装（不在本进程范围、或它的记录装不进来）答 `terrain.ErrNotLoaded`。
 - **改块**：内部写入口 `Map.Edit`（一组采样点的高度与材质；一块一笔 strict 事务，handler `TerrainEdit`），提交后才进视图；
@@ -220,7 +223,7 @@ scene:
 ### 玩家编辑与同步（P2）
 
 单格（[方案 §14](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#14-p2-服务端单格实施结果2026-11-08)）：玩家连在
-自己所在格的 game 进程上，跨格编辑（转发给目标格）是 P3。
+自己所在格的 game 进程上；分区场景的跨格编辑见下面的 P5。
 
 - **协议**：`TerrainEdit`（msgid 10038，`protocol/def/terrain_edit.go`）：编辑序号 `Seq`（见下面“幂等”）、操作（1 抬高 /
   2 降低 / 3 整平 / 4 改材质）、中心（厘米）、半径（厘米）、衰减（0 常数 / 1 线性 / 2 平滑）、强度（高度原始值，1 = 10cm）、
@@ -283,14 +286,14 @@ scene:
 - **邻格玩家看到别的格改过的块**：玩家连在自己的 Base 进程上。Base 进程按本进程玩家的地形视点（进场位置，之后是 cellworld
   witness 里玩家自己的位置）订阅周围 292m 内别的进程写的块，改过的块作为只读副本（`terrain_chunk.Replica`）进场景的同一个
   同步 Manager 与地形 Interest：对象 ID、命名空间、编码、按下标的增量、1 秒周期与 64 块上限都与本格的块相同，客户端不用区分。
-- **编辑**：玩家的编辑在他连着的进程上执行，仍只能改这个进程写的块；改 Ghost 带或别的格的块答 `terrain_not_owned`（100054，`terrainmap.ErrNotOwned`），整笔不写，
-  跨格编辑是 P5。
+- **编辑**：玩家的编辑由他连着的 Base 拆给写这些块的格（P5，见下面“跨格编辑”）；内部写入口 `Map.Edit` / 单格的 `Map.Brush` 仍只改本进程
+  写的块，别的块答 `terrain_not_owned`（100054，`terrainmap.ErrNotOwned`）。
 - **观测**：`gm.scene.partition` 多一栏 `terrain`（副本计数：订阅、推送、应用、旧版本、包版本不同丢弃、错拥有者等；Ghost 带块数、
   客户端想要的块与副本数）。只读 GM `gm.terrain.probe`（`{"chunks": [[x, y], ...], "points": [[x, y], ...]}`，至多 64 块、256 点）报本进程
   地形视图里每块是否本进程写、是否装着、版本、副本订阅报的版本与数据摘要（FNV-1a 64：高度小端 2 字节、再材质 1 字节），每点的世界
   高度；不开分区的进程同样可用。比较各进程（拥有者、Ghost 带）与客户端按同一规则算的摘要，就知道是不是同一份数据。
 - **测试**：`terrain_partition_test.go`（三个进程：两个格 + 一个只做 Base，真实 TCP 客户端）：边界编辑到邻格 Ghost 与别的进程的
-  客户端、小编辑是增量、玩家走远订阅跟着走、推送全丢由续期补齐、旧消息倒序重放不回退、重启补齐、D13 撤回、跨格编辑仍拒绝。
+  客户端、小编辑是增量、玩家走远订阅跟着走、推送全丢由续期补齐、旧消息倒序重放不回退、重启补齐、D13 撤回、单格入口改别的格的块仍拒绝。
   真实多进程（真实 NATS / Mongo / Redis，kill -9 格进程）：仓库的 `ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh`
   （[演练证据](../docs/maintenance/evidence/terrain-partition-drill-20261110/README.md)）。
 - **升级**：cellworld 线上格式 v7，v6 及更早的消息按坏消息丢弃；未上线，先停旧进程再起新进程。存储不变。
@@ -379,12 +382,33 @@ scene:
   原样读回，启动时对账（`ReconcileBuildings`）核对建筑与块的占地，并核对配置（配置 ID 没了或宽高变了计 `misconfigured`、保留不改）；
   核对通过的建筑在场景启动后进场景主视野。原始地形换版（D13）时块的地形改动照旧丢弃，建筑与占地保留：
   整平过地基的按原来的地基世界高度在新地形上重新整平，然后按放置规则检查，不合规的保留并计 `unfit`、记 Warn（推荐做法，待维护者确认）。
-- **范围**：只在不分区的普通场景（分区场景不接建筑，答 `building_disabled`，跨格建筑是 P5）。
+- **范围**：普通场景与分区场景（P5：放置 / 拆除 / 改参数由玩家的 Base 转发给写占地的格；占地跨两个格答 `building_cross_cell`；
+  邻格 Ghost 带里的建筑经地形副本对行走判定可见；别的 Base 上的客户端还看不见建筑，见下面“跨格编辑”）。
 - **测试**：`internal/service/<game>/terrain_building_test.go`（校验、整平、判重、拆除、笔刷、绕行、并发、重启、换版、对账）；
   `building_sync_test.go`（真实 TCP 上另一个客户端在主视野里看到出现 / 改参数 / 拆除、走出主视野消失回来再出现、拆除欠着 remove 时再放，
   没有建筑自己的同步配置，与玩家 / 怪共享主视野名额与超额降级，demo 尺度测量，重启后同步与库一致，迟到的提交后通知不倒序，改参数的属主与
   判重，配置的跨行规则与热更新，配置漂移的对账）；`TestBuildingRestartRealMongo` 在
   `ROOST_TERRAIN_IT_MONGO_URI` 指向副本集时用真实 DataEngine 跑重启（含改过的参数）与换版。
+
+### 跨格编辑与分区场景的建筑（P5）
+
+[方案 §30](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#30-p5-跨格编辑分区场景的建筑与游戏尺度的分区视野t082026-11-10)。
+分区场景里玩家连在自己的 Base 上，块只归包含它的格写：
+
+- **拆分与转发**：Base 校验参数、按笔刷覆盖的点数（`Brush.Footprint`）预扣配额、调权限钩子，在玩家面向客户端的账本（`TerrainEditor`）里
+  发号（handler `TerrainEditIssue`：过期 / 超前答 `terrain_seq`），再按格拆成几份（`terrainmap.Map.RelayBrush` 等），本进程托管的那一份直接执行，
+  别的经 cellworld 扩展消息（`terrain-edit`，`internal/service/<game>/terrain_relay.go`）送给那个格。格一笔 strict 事务执行自己那一份（`Map.Exec`），
+  判重用玩家在本格的账本 `TerrainCellEditor`（kind 14，集合 `terrain_cell_editors`，按 sid 分库）。
+- **结论**：答复逐块带 `Outcome`（1 执行了、2 以前执行过、3 拒绝、4 结果未知）；各格独立提交（D5），部分格拒绝时其余照常、答第一个拒绝的码；
+  有格期限内（2s）没有结论答 `terrain_pending`（100068）——客户端用同一个 `Seq` 重发：执行过的格答 Duplicate，不会改第二次。
+- **配额**：Base 扣，按结论多退：执行了的计实际改动点数、结果未知的计它覆盖的点数、拒绝 / 重复的不计，至少 `MinEditPoints`。
+- **建筑**：占地在一个格里的放置 / 拆除 / 改参数转发给那个格；跨格答 `building_cross_cell`（100069）；建筑数上限按格计。块上的占地随地形副本推给
+  邻格，Ghost 带里的建筑行走判定看得见（启动时也按库里的记录装入）。
+- **观测**：`gm.scene.partition` 多一栏 `terrain_relay`（发出、重发、答复、超时、迟到答复；收到、在途重复、缓存答复、忙时丢弃、执行次数、坏消息）。
+- **测试**：`terrain_relay_test.go`（两个格 + 只做 Base 的进程，进程内网：拆分、部分拒绝、答复 / 请求丢失、重复与迟到、格与 Base 重启、配额、建筑、
+  Ghost 带占位、线上格式）。真实多进程：`ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh` 的 (a) 步有一笔跨格笔刷（本轮未运行）。
+- **限制**：跨格占地的建筑、别的 Base 上的客户端看见建筑、跨格寻路未做；改 `scene.partition.owners`（格换进程）要先停机，格账本不跟着搬。
+- **升级**：副本线上格式 v2、跨格编辑线上格式 v1，旧进程不互通，先停旧进程再起新进程；新集合 `terrain_cell_editors`。
 
 ## 改这里的东西之后
 

@@ -1106,6 +1106,8 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 
 ### 27.6 分区场景（只写设计，本轮不接）
 
+（更新 2026-11-10：P5 已实施单格内的建筑、Ghost 带的占位与跨格占地的拒绝，见 [§30.4](#304-分区场景的建筑)；建筑副本给别的 Base 上的客户端仍未做。）
+
 分区场景仍拒绝放置（`building_disabled`，P5）。同步链路要接时：建筑归锚点所在格的进程写（与块相同），客户端连在 Base 进程上。照地形块副本（§21、`terrain_chunk.Replica`）的做法，格进程把站着的建筑推给 Base 与邻格：Base 上是只读副本（同一实体 ID、命名空间、编码，没有 DAO 与事务），登记到 Base 场景 Manager；它怎样进玩家的视野按 §27.10 的原则走玩家与怪在分区场景里的那一套（格的 witness 与 Base 上的镜像），不单设建筑 Interest，具体接法属 P5（首版这里写的是“放进同一种建筑 Interest，视点来自格的 witness”，已作废）；邻格 Ghost 带里只要占位（`Lots` 的副本）给行走与跨格移动判定。跨格占地（一座建筑的块分属两格）需要两格的块锁在同一笔事务里，是跨进程事务（Remote）或“占地不跨格”的规则二选一，属 P5 决策。
 
 ### 27.7 验证
@@ -1435,7 +1437,104 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 | ④ 会话上限的余量 | ★ 沿用 33 个关系视野余量：128 + 3 + 33 = 164 | 或收紧到 128 + 3 + 少量（如 140）：引用表与每帧对象数小一些，关系视野（公会、多人队伍）的余量变少 |
 | ⑤ 2048m / 4000 人的复制成本 | ★ 接受：缺省视野每次复制约 20ms / 50ms、场景约 280MiB；人人开到 64m 约 43ms、540MiB | 或限制客户端最大视野（如 48m）：订阅与重评成本下降，空旷处看得近一些 |
 | ⑥ 下行超过 50KB/s | 已重算（29.6）：增量字节压缩后 128 个同时动约 18.6KB/s（压缩前 73.5KB/s），在预算内，不再需要决定 | — |
-| ⑦ 分区场景 | ★ 仍是 demo 原尺度（64 个、会话 100），随 P5 一起放大（§28.6） | 或现在放大：witness / Ghost 带 / 格边长一起重定并重测 |
+| ⑦ 分区场景 | ★ 仍是 demo 原尺度（64 个、会话 100），随 P5 一起放大（§28.6）。**已随 P5 放大，见 [§30.5](#305-分区场景的主视野放大到游戏尺度)** | 或现在放大：witness / Ghost 带 / 格边长一起重定并重测 |
+
+## 30. P5 跨格编辑、分区场景的建筑与游戏尺度的分区视野（T08，2026-11-10）
+
+维护者 2026-11-10：未完成的代码先完成，验收后置。本节是 T08 的代码部分：跨格编辑（拆分、转发、各格一笔事务、配额、部分成功与结果未知的对账）、分区场景的建筑（单格可放、Ghost 带的占位、跨格占地）、分区场景的主视野放大到游戏尺度（§29.8 ⑦）。真实依赖与真实多进程演练由维护者跑（`ROOST_SEAMLESS_TERRAIN=1 scripts/test-seamless-demo.sh` 已按本节更新）。[证据](evidence/terrain-p5-20261110/README.md)。
+
+### 30.1 拆分与转发
+
+玩家连在自己的 Base 进程上；块只归包含它的格的进程写（§4）。一次编辑由玩家的 Base 拆成“每个格一份”（`terrainmap.Map.RelayBrush` / `RelayPlace` / `RelayRemove` / `RelayParams`，`game/terrainmap/relay.go`）：
+
+1. 事务前校验（不看块归属）：参数、Policy（半径、增量、块数，`checkBrushParams` / `checkPlacementParams`）；覆盖到的块按写它的格分组（`Forwarder.OwnerOf` = 分区网格，没有格写的块答 `ErrNotOwned`）。
+2. 配额（Base 扣，30.3）与权限钩子（`Rules.AllowEdit` / `BuildRules.AllowBuild`，在 Base 调，与单格相同）。
+3. **发号**：玩家面向客户端的账本（`TerrainEditor`，全局库，只有玩家的 Base 写）一笔 strict 事务（handler `TerrainEditIssue`）：过期 / 超前答 `terrain_seq`（不转发）；新的记下；发过的（客户端的重试）答 `Again`、照样再转发。记下在转发之前落盘：`LastSeq` 查询（Seq = 0）答的数覆盖每一个可能已在某个格执行了的序号，客户端从 `LastSeq + 1` 续号不会撞上格里用过的序号。
+4. **转发**：每个格一份 `PartRequest`（身份是客户端的（玩家, 序号），笔刷整笔转发，格自己按同一几何算出归它写的块：`Brush.ApplyIn` / `Footprint`，§30.6），并行发出、等齐。本进程托管的那一格直接执行，不经网络。
+5. **格执行**（`Map.Exec`）：一笔 strict 事务锁住这一部分的块（建筑：占地的块 + 建筑实体）与玩家在本格的账本（`TerrainCellEditor`，kind 14，`dbscope=sid`：每个格进程写自己的库）；不扣配额、不调权限钩子。账本规则同 D18 的窗口，只是不判超前（Base 判过；玩家在别的格编辑很久之后第一次来本格，序号比本格的 `LastSeq` 大很多是正常的）。同一（玩家, 序号）在一个格至多执行一次。
+6. **汇总**（`RelayResult.Err`）：各格 Applied / Duplicate 是成功；有 Unknown 答 `terrain_pending`（不论别的格）；否则答第一个拒绝的原因（按 sid 升序）。答复逐块带结论（`TerrainChunkVersion.Outcome`：1 执行了、2 以前执行过、3 拒绝、4 结果未知）。
+
+进程间是 cellworld 扩展消息（命名空间 `terrain-edit`，`internal/service/<game>/terrain_relay.go`），至多一次：Base 按（Base 的 incarnation, 序号）每 250ms 重发、2s 期限，格对同一身份正在执行的忽略、执行完的确定结论缓存 4096 条（重发直接答缓存），结果未知的不缓存（重发再执行一次，账本答 Duplicate），同时执行至多 64 份、满了丢（Base 会重发）。线上格式首字节是版本 1。
+
+### 30.2 责任方（完成判据）
+
+| 情形 | 谁负责、怎么收敛 |
+| --- | --- |
+| 部分格拒绝（占位、权限之外的拒绝、块装不进来） | 不补、不回滚（D5）：已执行的格保留，答复逐块列出结论，汇总码是第一个拒绝的原因。客户端可以用同一序号重发：已执行的格答 Duplicate，拒绝过的格再判一次（与单格“拒绝不记序号”的语义相同） |
+| 期限内没有结论（丢包、格忙、格的事务结果未知） | Base 在期限内按同一身份重发，格去重；期限到了这一份是 Unknown、汇总 `terrain_pending`，**由客户端用同一个序号重发**（与单格“结果未知”的规则相同）：Base 账本答 Again 再转发，执行过的格答 Duplicate，没执行的这次执行 |
+| 重发、重复、迟到的消息 | 格：同一身份在途忽略、确定结论按缓存答；跨身份由持久的格账本答 Duplicate。Base：只认自己这次启动、正在等、发给那个 sid 的答复。不会双写 |
+| 格进程重启 | 块与格账本是 strict 持久；重启后同一序号再来，账本答 Duplicate 或执行一次 |
+| Base 进程重启 | 面向客户端的账本是 strict 持久；客户端重发同上（Again → 各格 Duplicate / 执行）。Base 不持久“没完成的编辑”：客户端不再重发时，结果未知的那一份停在它实际的状态（执行了或没有），接缝由各格的副本推送最终一致（T05） |
+| 接缝 | 各格独立提交；邻格的 Ghost 带与客户端经副本跟上各格的提交（T05，§21），没有跨格原子性（D5） |
+
+**编辑日志压实：不需要。** 判重是两份定长账本（每玩家 2 个 int64 + 建筑数，Base 一份、每个格一份），不随编辑次数增长；块上没有编辑记录（T02 起），副本按整块推最新已提交状态（§21），没有要回放的日志。
+
+### 30.3 配额（D16，Base 扣）
+
+Base 没装这些块（只做 Base 的进程不装块），按 `Brush.Footprint`（每块覆盖的采样点数；一次笔刷只改高度或只改材质，所以它是实际改动点数的上限，见待确认 ③）预扣，至少 `MinEditPoints`；格答回实际改动的点数，Base 按结论多退：Applied 计实际点数、Unknown 计它的 Footprint（可能已生效，不退）、Refused / Duplicate 计 0，合计至少 `MinEditPoints`。转发之前的拒绝（权限、账本过期 / 超前）退到 `MinEditPoints`。建筑：放置预扣 `MinEditPoints` + 占地面积（整平时），Applied 计 `MinEditPoints` + 实际整平点数；拆除、改参数 `MinEditPoints`。配额只在 Base 的进程内存（重启从满桶开始，与单格相同）。
+
+### 30.4 分区场景的建筑
+
+- **单格内的建筑**：分区场景接建筑（`EnableBuildings` 不再只在普通场景）。放置 / 拆除 / 改参数由玩家的 Base 转发给写占地（拆除、改参数：锚点所在块）的格，那个格一笔事务（块、建筑实体、玩家在本格的账本）；建筑实体照旧归锚点所在格写（ID 由锚点决定，全局库，只有一个进程写）。
+- **跨格占地：首版拒绝**（`building_cross_cell`，100069，在转发之前、什么都不写、不发号）。原因：一座建筑的放置要在一笔事务里锁住占地覆盖的全部块（§25 的串行化点），跨格就是跨进程事务；“占地不跨格”是 §27.6 列的二选一里成本低的一边。代价：格边上一条宽度 = 建筑边长的带里放不下跨边的建筑（hut 4m、keep 12m）。见待确认 ①。
+- **Ghost 带里邻格的建筑对行走判定可见**：建筑是普通实体，只有地形块特殊，不另开通道——块上的占地（`Lots`，§25 的串行化索引）随地形副本一起推（`ReplicatorConfig.Lots`，副本线上格式 v2：订阅带“要占位”与持有的修订号，块状态带修订号 + 打包的占地；只有占位变了时不带块数据）。占地提交后（`publishLots` 之后的 `SetLotsCommitted`）立即推送；订阅续期按修订号补齐。邻格收到后进同一张占位表（`Map.ApplyReplicaLots`，修订号只进不退），`Walker` 不能走进去；启动时 Ghost 带的占地也按库里的记录装入（以前只装本格的，开发中发现：重启后要等第一次续期才看得见，修前红见证据）。
+- **建筑数上限按格计**（每个格的账本数自己格里的建筑）：见待确认 ②。
+- **客户端看见邻格 Base 上的建筑：未覆盖**。建筑实体在写它的格进程上进那个进程的场景主视野（与普通场景相同的 `ShowSubject`），连在别的 Base 上的玩家看不见（需要像地形块那样的只读副本，§27.6）。列入未覆盖。
+
+### 30.5 分区场景的主视野放大到游戏尺度
+
+开地形的分区场景，Base 的主视野改为与开地形的普通场景同一份 `TerrainView`（进入 32m、离开 35.2m、客户端 16～64m、离开上限 67.2m、最近 128 个）与 32m 的 AOI 块（`replicatedWorld`）；不开地形的分区场景不变（demo 尺度、2m 块）。客户端看到的只来自 witness，所以：
+
+- `view_radius`（R）≥ 离开上限 6720（`settings.PartitionTerrainMaxBaseLeaveRadius`，加载配置时查；`replicatedWorld` 运行期再核对一次，测试断言它与 `TerrainView().MaxLeaveRadius` 相等）；
+- `ghost_band`（G）≥ R + `hysteresis`（H），`wake_radius` + H ≤ G（原有检查）；`cell_size` > G（网格）且是 6400 的倍数。
+- 推荐一组：R 6800、H 200、G 7000，格 ≥ 128m（演练用 12800 × 2；正式地图建议格远大于 G，例如 512m～1024m）。70m 的 Ghost 带比一块宽，一个格装入本格外两列块；演练的 4 × 2 块小图上每个格都装下整张图（演练里“远处的块不在 Ghost 带里”的那一步因此改为“也在 Ghost 带里”）。
+- 成本没有实测：witness 半径从 4m 到 68m，每个 witness 里的对象多得多（cellworld 的 witness 是按半径全量列出）；Ghost 带从 5m 到 70m，Ghost 数与副本订阅的块数随之增加。列入未覆盖（T09）。
+
+### 30.6 gameplay/terrain 的底座
+
+`Brush.ApplyIn(meta, limits, chunks, part)`：只算 part 里的块（与整笔应用的结果逐点相同，各份拼起来就是整笔）；`Brush.Footprint`：每块覆盖的采样点数；`View.BrushChangesIn`。副本的占位记录（`ReplicaLotStore`、`ReplicatorConfig.Lots`，线上格式 v2）。见 `gameplay/terrain/README.md`。
+
+### 30.7 验证
+
+| 用例 | 内容 |
+| --- | --- |
+| `terrain_relay_test.go` `TestTerrainRelaySplitsABrushAcrossCells` | 两个格 + 只做 Base 的进程（进程内网，正式 Map / Nest / 生成代码）：跨格笔刷拆成两份、各一笔事务，两块与整图上应用一次逐点相同，版本 1，两个格账本与 Base 账本各记一次；玩家在格上时本格那一份不经网络 |
+| `TestTerrainRelayPartialRefusalKeepsTheOtherCell` | 一个格拒绝（占位钩子），另一个格提交、不回滚，汇总是拒绝原因、拒绝的格什么都没写；同一序号重发：Again，已执行的 Duplicate、拒绝过的执行 |
+| `TestTerrainRelayUnknownResultsAreRetriedOnce` | 格的答复全丢：重发被缓存 / 在途去重吸收，期限后 Unknown、`ErrPending`，格只执行一次；网好后同一序号全是 Duplicate、版本不变；请求全丢：格没执行，重发后执行一次 |
+| `TestTerrainRelayDuplicatedAndLateMessagesWriteOnce` | 每条消息投两次、事后全部重放：版本与格账本不变，迟到的答复被忽略 |
+| `TestTerrainRelayReconcilesAfterRestarts` | 答复丢了的那一份在格上已执行；格重启后同一序号 Duplicate、不写第二次；Base 重启后 Again、各格 Duplicate，`LastSeq` 是 1，新序号照常 |
+| `TestTerrainRelayChargesTheBaseByWhatWasApplied` | 冻结时钟：什么都不改的跨格笔刷只计 `MinEditPoints`（下一份在余额内的笔刷能过）；一个格结果未知时它的 Footprint 不退（补到差 1 点时最小的笔刷被拒、再补 0.1s 通过） |
+| `TestTerrainRelayBuildingsStayInOneCell` | Base 转发放置到写占地的格（建筑在那个格、不在 Base；格的行走判定看得见），重发 Duplicate；改参数、拆除转发；跨格占地在转发前拒绝、不留实体、不发号；跨格笔刷改到格里建筑占着的点：那个格拒绝、另一个格执行 |
+| `TestTerrainPartitionGhostBandSeesNeighbourBuildings` | 格 101 在交界块上放建筑：102 的 Ghost 带经副本收到占位（`LotsApplied`），102 的 `Walker` 走不进去；102 重启后启动即看得见；拆除后又能走 |
+| `TestTerrainRelayWireFormat` | 四种请求、五种答复往返；截断、尾随字节拒绝；版本、kind、op 不对计 decode error；可跨进程的拒绝原因还原为同一哨兵错误，没有归类的是 `ErrCellFailed` |
+| `terrain_cell_editor` 账本 | 超前的序号在格上是 Fresh；窗口与重复同玩家账本；DAO 往返；回滚撤销 |
+| 控制器 | `terrain_pending` / `building_cross_cell` 的码；答复逐块的结论与汇总码 |
+| 视野 | `TestTerrainSceneWorldAndItsLimit`：开地形的分区场景是 `TerrainView` + 32m 块，不开地形的不变，witness 半径不够时拒绝；`TestTerrainRegionFollowsThePartition`：推荐的一组数通过，`view_radius` 400 拒绝 |
+| 变异 | 22 项：19 项红，3 项未杀死（各有兜底，见证据） |
+
+修前红：跨格编辑与 Ghost 带占位在改动前没有入口（改动前的代码对跨格编辑答 `terrain_not_owned`，分区场景放置答 `building_disabled`，无缝演练 (a) 步也是按“拒绝”写的），这些用例在修前的代码上编译不过，不能当红；每条行为的红由“只撤掉守卫它的那一行”的变异给出。开发中真实变红一次：Ghost 带的占地启动时不装（`the restarted neighbour does not see the building`），已修。
+
+### 30.8 待维护者确认（实施方按推荐★先定、已实施）
+
+| 项 | 现状 | 选项与代价 |
+| --- | --- | --- |
+| ① 跨格占地 | ★ 拒绝（`building_cross_cell`） | 或实现：两格的块锁在一笔跨进程事务里（Remote / saga 两阶段），代价是放置延迟与故障面；或把建筑交给锚点所在格、邻格只读占位（会出现两格同时放的重叠，需要另一条串行化） |
+| ② 建筑数上限 | ★ 按格计（每格的账本只数本格的建筑） | 或全局计：Base 的账本记数，放置结果未知时 Base 计数与实际不一致，需要对账 |
+| ③ 配额口径 | ★ 预扣 Footprint（覆盖点数），格答回实际改动的点数（高度、材质各计一次，与单格同一口径）多退 | 现在的笔刷一次只改其一，实际 ≤ Footprint；以后有同时改两样的笔刷时预扣要计两倍 |
+| ④ 期限与重发 | ★ 250ms 重发、2s 期限、格缓存 4096 条确定结论、并发 64 | 期限短则 `terrain_pending` 多、客户端重发多；长则玩家等得久 |
+| ⑤ Base 不持久未完成的编辑 | ★ 不持久：客户端负责用同一序号重发（与单格相同） | 或 Base 持久一个出站表、重启后自己补齐：多一张表与恢复流程，客户端不重发时也最终完成 |
+| ⑥ 格到进程的映射改动 | ★ 运维规则：改 `owners` 先停机、等客户端在途重试结束（格账本不跟着搬） | 或格账本按格（而不是 sid）分库：`dbscope` 要支持按格，生成器改动 |
+| ⑦ 分区视野的推荐数 | ★ R 6800、H 200、G 7000（R 取离开上限 6720 之上的整数） | 或 R = 6720 正好、G 6920；或更大的滞回 |
+
+### 30.9 未覆盖
+
+- 真实依赖（Mongo / WAL / NATS）与真实多进程演练：演练配置与 (a) 步已更新（跨格笔刷由 B 拆给 A 与自己、两块都执行，再反向改回），**没有运行**；`TestTerrainEditLedgerRealMongo` 等真实 Mongo 用例没有为格账本另写。
+- 客户端看见别的 Base 上的建筑（建筑副本，§27.6）。
+- 跨格占地的建筑；跨格寻路。
+- 游戏尺度分区视野的成本（witness 列表、Ghost 数、副本订阅），T09 规模。
+- Unity 端对 `Outcome` / `terrain_pending` 的处理（C# SDK 没有改：答复是生成的协议类型）。
+- 玩家换 Base 进程之后旧进程里的 `TerrainEditor` 副本（尚未确认，[KNOWN-LIMITS](KNOWN-LIMITS.md)）；分区场景里建筑进 Base 场景主视野的接线只有编译与单元覆盖。
+- 变异未杀死三项（立即推送占位、格的在途去重、答复的 incarnation 核对），原因见证据。
 
 ## 31. 客户端岸线与重建调度（T03 / T04 算法层，2026-11-10）
 
