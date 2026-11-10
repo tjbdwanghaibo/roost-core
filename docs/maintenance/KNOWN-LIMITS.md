@@ -1,5 +1,9 @@
 # 当前已知限制与验证边界
 
+## 2026-11-10：地形确认来源（就绪标记）的边界
+
+可编辑地形 §31.7 ③ 按维护者定的 A 实施（[方案 §31.9](FEATURE-2026-11-08-editable-terrain.md#319-确认来源就绪标记317-③-a2026-11-10)，分支 `feat/terrain-confirm-source`，未合入、未发版）：地形视野里每一块都下发 TerrainChunk 对象，没改过的块是 Version 0 的就绪标记，C# `TerrainChunkSync` 据此 `Confirm` / `Unconfirm`。留下的边界：① 可确认的显示半径约 100m（一块就绪要 8 个邻块都已确认，地形视野 200m、视点每 8m 上报）；要更远需放大地形视野，300m 约 69 块，超过地形 64 的上限，要连同 `terrainMaxVisible` 与会话上限一起改——**待维护者确认**是否需要；② 进场时视野里 29～37 块按地形快照预算每 Flush 4 个，约 8～10 次 Flush（约 0.4～0.5s）后才全部可确认，期间显示原有网格或空洞；③ 原始地形包里坏了的块（服务端装不进视图）、分区场景里拥有者装不进的块没有标记，客户端永远不确认（后者每次订阅续期都会再问一次）；④ C# 接入层只用构造的说法核对时序，没有用真实 entitysync 帧驱动 `EntityViews` → `TerrainChunkSync`，Unity 未跑；⑤ 没有在真实依赖（mirror-local）与无缝演练上跑过（合入时跑）。证据见 [evidence/terrain-confirm-source-20261110](evidence/terrain-confirm-source-20261110/README.md)。
+
 ## 2026-11-10：开地形场景同步 128 个对象时每观察者的下行（已重算：增量字节压缩后约 18.6KB/s，在 50KB/s 以内）
 
 维护者 2026-11-10 口径“同步的 entity 数量一般是 128 左右”实施后（[地形方案 §29](FEATURE-2026-11-08-editable-terrain.md#29-游戏尺度参数视野-32m单进程-2048m同步-128-个2026-11-10)），开地形的普通场景主视野“最近 128 个”。`TestMainViewMeasureMovingCrowdBytes`（帧 payload、不含线上消息头，KB = 1024 字节，同机同用例）：

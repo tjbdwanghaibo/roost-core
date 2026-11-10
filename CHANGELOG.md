@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- **新增 / 行为变化**（game-demo + C# 客户端 `Roost.Client.Terrain`）：**可编辑地形的确认来源：地形视野里每一块都下发 TerrainChunk 对象，没改过的块是 Version 0 的就绪标记**（维护者 2026-11-10 对方案 §31.7 ③ 定 A；[方案 §31.9](docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#319-确认来源就绪标记317-③-a2026-11-10)、[证据](docs/maintenance/evidence/terrain-confirm-source-20261110/README.md)）。服务端：`terrain_chunk.Base`（同 ID / 命名空间 / 编码，全量只有 `BaseRevision` 与 `Version 0`），`startTerrainSync` 给本进程写的原始块登记标记，第一次改时同一 ID 以实体状态重新登记（Manager rebind，订阅者不收 remove、改收实体全量）；分区场景对客户端想要、本进程还没有说法的块订阅时 `Held` 报 −1，拥有者答原始块后登记标记。客户端：新 `TerrainChunkSync`（`Apply` / `Remove` / `BeginSession` / `SwitchTerrain`）把对象接到 `TerrainView` 与调度器的确认；`TerrainRebuildScheduler` 新增 `Unconfirm`。
+  - **行为变化**：每会话的地形对象从“视野里改过的块”变为“视野里全部块”（普通场景约 29～37 个，地形上限 64 不变）；进场多约 30 个约 20 字节的标记全量，按地形快照预算分 8～10 次 Flush。玩家 / 怪 / 建筑不受影响。
+  - **升级要求**：客户端把 Version 0 的 TerrainChunk 当“没改过、可确认”，不要再当“实体已建、还没提交”忽略；接 `TerrainRebuildScheduler` 时经 `TerrainChunkSync` 确认（见 client/README“地形”）。未部署，不做旧客户端兼容。
+  - **测试夹具**：C# 建筑同步夹具的增量改用 `MarshalSyncDelta`（不带 entity_id），与 demo 建筑 packer 实际下发一致。
+
 - **行为变化**（game-demo）：**场景里别的玩家只收到“他人可见”的视图，不再收到 exp / gold / items / 属性**（维护者 2026-11-10：“同步数据是同步视图的问题，业务层处理，处理 dao 的视图的问题”；[证据](docs/maintenance/evidence/sync-views-codec-20261110/README.md)）。视图在业务层声明一次：Player / Monster / Building 的 packer 按 DAO 字段名列出视图并导出 `SyncViews()`，场景主视野（`BandLayer`）给 `near`、队伍关系视野给新的 `team`（字段同 near、优先级更高）、本人经 self 仍是缺省视图（全部字段）；场景把三份视图集交给 Interest 的 `ViewSets`（构造时核对）、把优先级交给 Manager（`entity.MergeSyncViewPriorities`）。Player 的 `near` 加了 `cell_hp` / `cell_max_hp`。框架未改。字段 × 视图见 [demo/README“同步视图”](demo/README.md#同步视图谁看见哪些字段)。玩家进入别人视野 117 → 85 字节、128 个玩家进入视野 13.9 → 9.8 KB，走一步不变（30 字节）。回归 `TestEachObserverGetsOnlyItsViewOfAPlayer`（修前红：`a player nearby received the player's private "exp"`、`observer 9302 holds player … in view "default", want "near"`）；`TestSceneReplicatesOnePlayersChangeToAnother` 原断言“别的玩家收到 exp”即被改掉的泄露，改为断言不带 exp。
   - **升级要求**：客户端按（命名空间, 视图键, 编码, schema）注册解码器的（C# `EntityViews.RegisterDao`、C++ `register_dao`），要为 `player`、`monster`、`building` 各注册 `near` 与 `team`；线格式不变。
 
