@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [v1.43.0] - 2026-11-10
+
 - **测试变化**（scripts）：**普通无缝演练最后一步的机器人阈值按 5 进程拓扑放宽到 p95 40s**（维护者 2026-11-10 定方案 A；[证据](docs/maintenance/evidence/perf-terrain-acceptance-20261110/README.md)）。5 个游戏进程共用 saga 步骤队列，步骤被非属主进程各拒一次、按 250ms 倍增重投，约多出 22s；缺省 16s 按一两个进程定，必然超。不是性能退化；产品侧的路由重投加速没做。复跑 14 步 ok，最后一步 p95 29.05s。
 
 - **修复**（scripts/perf）：`sync-business.sh` 的业务夹具在当前 core 上跑不起来（Start 之后在引擎实例上注册处理器 panic；别人 `near` 视图上的空载荷增量被 `clientsync.DecodeFields` 按 Codec 0 / `sync_format` 0 拒绝），按帧协议 2 / 信封 v3 的契约重写：处理器在 `init()` 里包级注册；接收端用 `entitysync.Decoder`，按 subject 记生成的全量、增量经 `ApplySyncPlayerDao` 合并、空载荷增量跳过，合并后与本 tick 提交后的 DAO 核对。只改夹具与文档，生产代码不变。见[证据](docs/maintenance/evidence/perf-terrain-acceptance-20261110/README.md#夹具重写2026-11-10-追加已修复)。
