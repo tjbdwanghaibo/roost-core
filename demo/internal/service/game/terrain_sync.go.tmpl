@@ -35,8 +35,8 @@ import (
 // （entitysync.ManagerConfig.Namespaces，terrainNamespaceLimits）——一个会话最多持有 64 块地形（terrainMaxVisible），
 // 地形的全量每会话每次 Flush 至多 4 个（terrainSnapshotsPerFlush）。玩家 / 怪 / 场景不在其中，仍是场景原来的上限 100
 // （主视野 64 + 自身 / 场景 / 队友 3 + 留给关系视野的 33）、不限快照，交付与不开地形时逐字节相同。会话的对象引用表合起来
-// 可持有 164 个，接建筑的普通场景再加建筑的 128 个（building_sync.go，方案 §27）共 292 个（sceneTerrainMaxObjects），
-// 每帧对象数仍按 100 切，所以客户端的帧上限不用改。地形块超过 64（视野上限
+// 可持有 164 个（sceneTerrainMaxObjects；建筑与玩家、怪同在 100 那一类，不另计，方案 §27.10），每帧对象数仍按 100 切，
+// 所以客户端的帧上限不用改。可编辑地形里只有地形块是这样单独的一类、单独的订阅来源。地形块超过 64（视野上限
 // 配错）与玩家 / 怪超过 100 一样不断开（超额降级，D17）：Manager 暂缓放不下的块并通知地形的 Interest，视野收紧到放得下、
 // 从最远的块开始退订，有空位时逐步放宽；计 entitysync_over_limit_deferred_total{namespace="terrain"}。
 //
@@ -54,10 +54,9 @@ const (
 	terrainSnapshotsPerFlush = 4
 	// terrainViewStep 是玩家离上次报告的视点多远才移动地形视野（8m）：远小于离开滞回 20m，不会漏掉进出。
 	terrainViewStep = 800
-	// sceneTerrainMaxObjects 是开了地形的场景里一个会话的对象引用表上限：场景原有的上限（玩家 / 怪 / 场景，单独计）
-	// 加地形的上限（单独计），接建筑的普通场景再加建筑的上限（单独计，building_sync.go，方案 §27）。客户端若显式设对象表
-	// 容量（C# EntityViews 的 maxObjects），不得小于它。
-	sceneTerrainMaxObjects = 100 + terrainMaxVisible + buildingMaxVisible
+	// sceneTerrainMaxObjects 是开了地形的场景里一个会话的对象引用表上限：场景原有的上限（玩家 / 怪 / 建筑 / 场景，一类）
+	// 加地形的上限（单独计）。客户端若显式设对象表容量（C# EntityViews 的 maxObjects），不得小于它。
+	sceneTerrainMaxObjects = 100 + terrainMaxVisible
 )
 
 // terrainSyncConfig 是地形同步的参数：地图范围（AOI 的边界）与视野。测试用更大的半径制造“视野里的改过的块超过
@@ -66,14 +65,10 @@ type terrainSyncConfig struct {
 	bounds     spatial.Rect
 	radius     int64
 	maxVisible int
-	// buildings 打开建筑同步（building_sync.go）：只在接建筑的普通场景（terrainmap.Map.BuildingsEnabled）。建筑视野用玩家的
-	// 地形视点，buildingMaxVisible 是它的上限（测试可改）。
-	buildings          bool
-	buildingMaxVisible int
 }
 
-func defaultTerrainSync(bounds spatial.Rect, buildings bool) *terrainSyncConfig {
-	return &terrainSyncConfig{bounds: bounds, radius: terrainViewRadius, maxVisible: terrainMaxVisible, buildings: buildings, buildingMaxVisible: buildingMaxVisible}
+func defaultTerrainSync(bounds spatial.Rect) *terrainSyncConfig {
+	return &terrainSyncConfig{bounds: bounds, radius: terrainViewRadius, maxVisible: terrainMaxVisible}
 }
 
 // terrainSync 是地形的订阅组织：一个 Interest（玩家是观察者、改过的块是 subject）加启动 / 提交后的登记。
@@ -84,9 +79,6 @@ type terrainSync struct {
 	manager  *entitysync.Manager
 	interest *policy.Interest
 	bounds   spatial.Rect
-	// buildings 是建筑同步（building_sync.go）：自己的 Interest，视点就是这里的地形视点（watch / moved / unwatch 一起报）。
-	// 不接建筑的场景（分区场景、测试）为 nil。
-	buildings *buildingSync
 
 	mu       sync.Mutex
 	shown    map[int64]struct{}     // 已登记、已放进 Interest 的块实体 ID
@@ -126,14 +118,7 @@ func newTerrainSync(manager *entitysync.Manager, config terrainSyncConfig) (*ter
 	if err != nil {
 		return nil, fmt.Errorf("terrain sync: interest policy: %w", err)
 	}
-	s := &terrainSync{manager: manager, interest: interest, bounds: config.bounds, shown: map[int64]struct{}{}, reported: map[int64]spatial.Point{}}
-	if config.buildings {
-		if s.buildings, err = newBuildingSync(manager, config.bounds, config.buildingMaxVisible); err != nil {
-			interest.Close()
-			return nil, err
-		}
-	}
-	return s, nil
+	return &terrainSync{manager: manager, interest: interest, bounds: config.bounds, shown: map[int64]struct{}{}, reported: map[int64]spatial.Point{}}, nil
 }
 
 // clamp 把场景里的位置夹进地形图（场景比地形图大时，图外的玩家从最近的图边看）。
@@ -153,7 +138,6 @@ func (s *terrainSync) watch(playerID int64, at spatial.Point) {
 	if err := s.interest.Watch(playerID, at, policy.ObserverView{}); err != nil {
 		slog.Warn("terrain sync: player not watching the terrain", "player_id", playerID, "err", err)
 	}
-	s.buildings.watch(playerID, at)
 	s.notify(playerID, at, true)
 }
 
@@ -174,7 +158,6 @@ func (s *terrainSync) moved(playerID int64, at spatial.Point) {
 	if err := s.interest.MoveView(playerID, at); err != nil && !errors.Is(err, policy.ErrInterestUnknown) {
 		slog.Debug("terrain sync: view not moved", "player_id", playerID, "err", err)
 	}
-	s.buildings.move(playerID, at)
 	s.notify(playerID, at, true)
 }
 
@@ -189,7 +172,6 @@ func (s *terrainSync) unwatch(playerID int64) {
 	if err := s.interest.Unwatch(playerID); err != nil && !errors.Is(err, policy.ErrInterestUnknown) {
 		slog.Debug("terrain sync: player not released", "player_id", playerID, "err", err)
 	}
-	s.buildings.unwatch(playerID)
 	s.notify(playerID, spatial.Point{}, false)
 }
 
@@ -258,16 +240,13 @@ func (s *terrainSync) shownCount() int {
 	return len(s.shown)
 }
 
-// attach 把地形同步接到 Map 上：之后提交的改块（第一次改的块）在提交后登记为 subject；接建筑时，放置 / 拆除提交之后
-// 建筑登记 / 撤出建筑视野（building_sync.go）。
+// attach 把地形同步接到 Map 上：之后提交的改块（第一次改的块）在提交后登记为 subject。建筑不经这里：它们是普通实体，
+// 进场景主视野（Scene.attachBuildings，building_sync.go）。
 func (s *terrainSync) attach(m *terrainmap.Map) {
 	if s == nil || m == nil {
 		return
 	}
 	m.SetCommitted(s.show)
-	if s.buildings != nil {
-		m.SetBuildingCommitted(s.buildings.committed)
-	}
 }
 
 // loadEdited 把本进程写的、改过的块装成实体并登记为 subject（启动阶段，Map.Load 之后、玩家进来之前）。Map.Load 只把
@@ -317,7 +296,6 @@ func (s *terrainSync) close() {
 		return
 	}
 	s.interest.Close()
-	s.buildings.close()
 }
 
 // terrainMoves 是开了地形同步的场景给玩家与怪的 movement.Space：在场景原来的 Space（actor.InterestMoves）之外，
@@ -342,16 +320,12 @@ func (moves terrainMoves) QueueMove(e coreentity.IThreadSafeEntity, at spatial.P
 	return nil
 }
 
-// terrainNamespaceLimits 是开了地形的场景 Manager 的按命名空间配置："terrain" 单独计上限与快照预算；接建筑时加
-// "building"，单独计上限（建筑视野的 MaxVisible），不设快照预算（一座建筑的全量只有几十字节，方案 §27 的预算）。
-func terrainNamespaceLimits(config terrainSyncConfig) map[string]entitysync.NamespaceLimits {
-	limits := map[string]entitysync.NamespaceLimits{
+// terrainNamespaceLimits 是开了地形的场景 Manager 的按命名空间配置：只有 "terrain" 单独计上限与快照预算。玩家、怪、
+// 场景、建筑都不在其中，同在 Limits.MaxObjects（100）那一类、不限快照（方案 D15、§27.10）。
+func terrainNamespaceLimits() map[string]entitysync.NamespaceLimits {
+	return map[string]entitysync.NamespaceLimits{
 		terrainNamespace: {MaxObjects: terrainMaxVisible, SnapshotBudget: entitysync.SnapshotBudget{PerSessionObjects: terrainSnapshotsPerFlush}},
 	}
-	if config.buildings {
-		limits[buildingNamespace] = entitysync.NamespaceLimits{MaxObjects: config.buildingMaxVisible}
-	}
-	return limits
 }
 
 // terrainNamespace 是 TerrainChunk 实体（与别的格写的块的副本）的同步命名空间，客户端按它分流。

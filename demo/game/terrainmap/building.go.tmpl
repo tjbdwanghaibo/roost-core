@@ -6,8 +6,9 @@ package terrainmap
 // 规则（宽高、坡度、整平）都来自配置（building.SpecOf，按当前请求钉住的配置快照）。占地只由配置的宽高与朝向决定，
 // 参数不改变占地，所以改参数只锁建筑与账本、不锁块。
 //
-// 同步（方案 §27）：建筑实体本身就是同步对象（与 Player / Monster 同一条 entitysync 链路），放置 / 拆除提交之后经
-// SetBuildingCommitted 通知建筑同步登记 / 撤出视野；改参数是普通的 DAO 写，按 on_change 发增量。块上的 Lots 只是下面
+// 同步（方案 §27、§27.10）：建筑实体本身就是同步对象，是普通实体（与 Player / Monster 同一条 entitysync 链路、同一个
+// 场景主视野），放置 / 拆除提交之后经 SetBuildingCommitted 通知场景，与怪一样 ShowSubject / HideSubject；改参数是普通的
+// DAO 写，按 on_change 发增量。块上的 Lots 只是下面
 // 说的服务端串行化索引，不同步给客户端：客户端的占位由建筑实体（ConfigID、GX / GY、Facing）+ 配置推出。
 //
 // 权威与串行化点：一座建筑占着哪些 1m 节点，权威记录在它占地覆盖的每一块地形上（TerrainChunkDao.Lots），不在进程内存
@@ -78,7 +79,7 @@ type BuildingSender interface {
 }
 
 // BuildingCommit 是一笔放置 / 拆除提交之后的建筑（SetBuildingCommitted 的通知，启动对账通过的建筑同样以它交给
-// 建筑同步）：Standing 为真表示这里站着这座建筑（登记为 subject、放进视野），为假表示拆了（撤出视野）。Revision 是锚点
+// 建筑同步）：Standing 为真表示这里站着这座建筑（进场景主视野），为假表示拆了（撤出主视野、subject 退役）。Revision 是锚点
 // 所在块（占地覆盖的块里坐标最小的那块）此后的 LotRevision：同一座建筑的每次放置 / 拆除都写这一块，所以它随提交次序
 // 严格递增；提交后回调可能乱序到达，接收方只认更大的修订号。
 type BuildingCommit struct {
@@ -173,7 +174,7 @@ func (m *Map) EnableBuildings(buildings Buildings, sender BuildingSender) {
 	m.buildings, m.buildingSender = buildings, sender
 }
 
-// SetBuildingCommitted 登记建筑放置 / 拆除提交后的通知（建筑同步用它登记 / 撤出 subject）：在提交后回调里调用（WAL
+// SetBuildingCommitted 登记建筑放置 / 拆除提交后的通知（场景用它让建筑进出主视野）：在提交后回调里调用（WAL
 // 落盘之后、锁已放开），不得阻塞。nil 撤销。玩家能进来之前调用。
 func (m *Map) SetBuildingCommitted(notify func(BuildingCommit)) {
 	if notify == nil {

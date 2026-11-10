@@ -359,19 +359,23 @@ scene:
   `Rules.Occupied` 仍是业务另外的占位钩子。
 - **拆除**：只有属主能拆；建筑记录清空（确定性 ID 不删档，同一锚点以后还能放），地形不复原；锚点上没有建筑答 `building_missing`
   （重发已生效的拆除也答这个，不是 `duplicate`）。
-- **同步**：建筑与玩家、怪走同一条 entitysync 链路（`sync=true`，命名空间 `building`，生成的同步字段与 packer），登记为场景
-  Manager 的 subject，放进建筑自己的 Interest（视野 200m、上限 128，视点就是玩家的地形视点），Manager 的 `Namespaces` 里单独计
-  128 个（会话引用表合起来 292）；按变化发（`TypeSchedules` 里 on_change）。放置提交后登记并放进视野，拆除提交后撤出视野（客户端收到
-  remove），改参数是普通的 DAO 写、发只带 `Params` 的增量。客户端用生成的 `ApplySyncBuildingDao`，按 `ConfigID` 查配置表实例化预制体，
-  按 `Params` 设参数，按 `GX` / `GY` / `Facing` / `Foundation` 摆放。整平改的地形照常走地形块的同步。
+- **同步**：建筑是普通实体，与玩家、怪走同一条 entitysync 链路（`sync=true`，命名空间 `building` 只是客户端的分流键，生成的同步字段与
+  packer），订阅跟随玩家与怪：与怪完全相同，经场景的 `ShowSubject` / `HideSubject` 进出**场景主视野**（位置是占地中心），同一套半径、
+  “最近 64 个”与超额降级；没有建筑自己的 Interest、`Namespaces` 一类或 `TypeSchedules` 条目（会话引用表仍是 164），按 Manager 的模式
+  发（on_change）。放置提交后进主视野，拆除提交后撤出并退役（客户端收到 remove；remove 还没发出去就在同一锚点再放的，登记排在退役之后），
+  改参数是普通的 DAO 写、发只带 `Params` 的增量。客户端用生成的 `ApplySyncBuildingDao`，按 `ConfigID` 查配置表实例化预制体，按 `Params`
+  设参数，按 `GX` / `GY` / `Facing` / `Foundation` 摆放。整平改的地形照常走地形块的同步（可编辑地形里只有地形块有自己的订阅与节奏）。
+  **demo 尺度的限制**：主视野是给人的 1.2m（客户端最大 2.7m），建筑按占地中心进视野，站在建筑旁边基本看不见它（keep 要走进占地里），
+  主视野尺度待维护者确认（[方案 §27.10](../docs/maintenance/FEATURE-2026-11-08-editable-terrain.md#2710-订阅改为场景主视野维护者-2026-11-10)）。
 - **重启与换版**：建筑（集合 `buildings`）、块的占地、账本的建筑数（`terrain_editors` schema 2）都随 DataEngine 落库，重启后
   原样读回，启动时对账（`ReconcileBuildings`）核对建筑与块的占地，并核对配置（配置 ID 没了或宽高变了计 `misconfigured`、保留不改）；
-  核对通过的建筑在场景启动后登记为同步 subject。原始地形换版（D13）时块的地形改动照旧丢弃，建筑与占地保留：
+  核对通过的建筑在场景启动后进场景主视野。原始地形换版（D13）时块的地形改动照旧丢弃，建筑与占地保留：
   整平过地基的按原来的地基世界高度在新地形上重新整平，然后按放置规则检查，不合规的保留并计 `unfit`、记 Warn（推荐做法，待维护者确认）。
 - **范围**：只在不分区的普通场景（分区场景不接建筑，答 `building_disabled`，跨格建筑是 P5）。
 - **测试**：`internal/service/<game>/terrain_building_test.go`（校验、整平、判重、拆除、笔刷、绕行、并发、重启、换版、对账）；
-  `building_sync_test.go`（真实 TCP 上另一个客户端看到出现 / 改参数 / 拆除、离开视野消失回来再出现，重启后同步与库一致，迟到的提交后
-  通知不倒序，改参数的属主与判重，配置的跨行规则与热更新，配置漂移的对账）；`TestBuildingRestartRealMongo` 在
+  `building_sync_test.go`（真实 TCP 上另一个客户端在主视野里看到出现 / 改参数 / 拆除、走出主视野消失回来再出现、拆除欠着 remove 时再放，
+  没有建筑自己的同步配置，与玩家 / 怪共享主视野名额与超额降级，demo 尺度测量，重启后同步与库一致，迟到的提交后通知不倒序，改参数的属主与
+  判重，配置的跨行规则与热更新，配置漂移的对账）；`TestBuildingRestartRealMongo` 在
   `ROOST_TERRAIN_IT_MONGO_URI` 指向副本集时用真实 DataEngine 跑重启（含改过的参数）与换版。
 
 ## 改这里的东西之后

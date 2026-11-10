@@ -12,8 +12,7 @@ import (
 
 	"{{MODULE}}/game/actor"
 	player "{{MODULE}}/game/entities/player"
- building "{{MODULE}}/game/entities/building"
- terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	"{{MODULE}}/game/settings"
 	gamescene "{{MODULE}}/game/scene"
@@ -201,6 +200,11 @@ type Scene struct {
 	// replicas of the chunks other cells write, terrain_partition.go). Nil
 	// without terrain. Set before Start, never changed.
 	terrain *terrainSync
+	// buildings turns placements and removals into ShowSubject / HideSubject
+	// on this scene — buildings are seen like monsters, in the main view
+	// (building_sync.go, plan §27.10). Nil without buildings. Set before
+	// Start, never changed.
+	buildings *buildingSync
 
 	// partition is this process's part of a partitioned scene
 	// (partition.go), installed once by Init before any player can join; nil
@@ -325,9 +329,7 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	// (terrain_partition.go, P3).
 	var terrainConfig *terrainSyncConfig
 	if terrainMap != nil {
-		// 接建筑的普通场景（terrainmap.Map.BuildingsEnabled）同时打开建筑同步：建筑是普通的同步实体，自己的 Interest 与
-		// 命名空间（building_sync.go，方案 §27）。
-		terrainConfig = defaultTerrainSync(terrainMap.Meta().Bounds(), terrainMap.BuildingsEnabled())
+		terrainConfig = defaultTerrainSync(terrainMap.Meta().Bounds())
 	}
 	service, ok := app.Lookup[*Service](registry, app.ModService)
  if !ok || service == nil { return nil, errors.New("scene: service sync observer is unavailable") }
@@ -336,6 +338,9 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 		return nil, err
 	}
 	scene.terrain.attach(terrainMap)
+	// 接建筑的普通场景（terrainmap.Map.BuildingsEnabled）：建筑是普通的同步实体，与怪一样经 ShowSubject / HideSubject
+	// 进出这个场景的主视野（building_sync.go，方案 §27.10）。
+	scene.attachBuildings(terrainMap)
 	scene.unloads, scene.loads = access, loads
 	// The connection telling us it is gone beats waiting to fail a push to
 	// it: a player who logs off while nothing is happening used to stay in
@@ -415,11 +420,19 @@ func newSceneWith(lane entitysync.Transport, transport scenePusher, watermark fu
  return newSceneWithObserver(lane, transport, watermark, config, maxVisible, terrainConfig, nil)
 }
 
+// sceneTypeSchedules 是生产场景 Manager（on_change）里按实体类型的例外：只有地形块 1 秒一批（方案 §22.5）。玩家、怪、
+// 场景与建筑都没有条目，按 Manager 的模式发（on_change）——可编辑地形里只有地形块是特殊实体（方案 §27.10）。
+func sceneTypeSchedules() map[uint32]entitysync.TypeSchedule {
+	return map[uint32]entitysync.TypeSchedule{
+		uint32(terrain_chunk.EntityKindTerrainChunk): {Mode: entitysync.ModePeriodic, Interval: time.Second},
+	}
+}
+
 func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, watermark func() uint64, config gamescene.Config, maxVisible int, terrainConfig *terrainSyncConfig, observer *sceneSyncObserver) (*Scene, error) {
 	config = config.Normalize()
 	var namespaces map[string]entitysync.NamespaceLimits
 	if terrainConfig != nil {
-		namespaces = terrainNamespaceLimits(*terrainConfig)
+		namespaces = terrainNamespaceLimits()
 	}
 	scene := &Scene{members: make(map[int64]sceneMember), teams: make(map[int64]policy.ViewID), sessions: transport}
 	// The durability gate: a pipelined deployment acknowledges a transaction
@@ -430,11 +443,7 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
  var schedules map[uint32]entitysync.TypeSchedule
  if observer != nil {
   mode = entitysync.ModeOnChange
-  // 地形块 1 秒一批（方案 §22.5）；建筑与玩家、怪一样按变化发（on_change，方案 §27），写明是为了读这里就知道每类怎么发。
-  schedules = map[uint32]entitysync.TypeSchedule{
-   uint32(terrain_chunk.EntityKindTerrainChunk): {Mode:entitysync.ModePeriodic, Interval:time.Second},
-   uint32(building.EntityKindBuilding): {Mode:entitysync.ModeOnChange},
-  }
+  schedules = sceneTypeSchedules()
  }
  manager, err := entitysync.NewManager(entitysync.ManagerConfig{
         Mode: mode,
@@ -1062,13 +1071,33 @@ func (bridge *Scene) ShowSubject(_ context.Context, state *coreentity.SubjectSyn
 	if bridge == nil || bridge.manager == nil {
 		return errors.New("scene: not started")
 	}
-	if err := bridge.manager.Register(state); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
+	// A subject still retiring from its HideSubject — a building removed and
+	// placed again on the same anchor (the same entity id) before the remove
+	// went out — is registered once the retirement is done, remove before
+	// create; the interest's subscribe is refused (ErrSubjectRetiring) until
+	// then and said again on each settle. A monster's id is new every time,
+	// so for monsters this is Register.
+	if _, err := bridge.manager.RegisterAfterRetirement(state, registeredAfterRetirement(subjectID)); err != nil && !errors.Is(err, entitysync.ErrSubjectRegistered) {
 		return fmt.Errorf("scene: register subject %d: %w", subjectID, err)
 	}
 	if err := bridge.interest.Show(subjectID, at); err != nil {
 		return fmt.Errorf("scene: show subject %d: %w", subjectID, err)
 	}
 	return nil
+}
+
+// registeredAfterRetirement reports a ShowSubject registration that was
+// queued behind a retirement and then did not happen. Cancelled is the
+// subject hidden again before its retirement finished (a removal right after
+// the placement): nothing to show.
+func registeredAfterRetirement(subjectID int64) func(error) {
+	return func(err error) {
+		switch {
+		case err == nil, errors.Is(err, entitysync.ErrRegistrationCancelled), errors.Is(err, entitysync.ErrManagerClosed):
+		default:
+			slog.Error("scene: a subject shown again was not registered; players will not see it", "subject_id", subjectID, "err", err)
+		}
+	}
 }
 
 // HideSubject is the reverse: the thing is gone, everyone watching is told on
