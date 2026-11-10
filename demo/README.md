@@ -125,6 +125,42 @@ go run ./cmd/loadtest -count 6 -account-nats nats://127.0.0.1:14222
   （Redis Cluster 用 `-redis-cluster <种子,…>`；`make dev-run` 已代为执行）。
 - **`player:<id>` 凭据与 demo 渠道不是认证**：只为了让裸客户端跑通 demo，上线前按[功能逐项说明 · auth.go](WALKTHROUGH.md#authgo两种凭据)替换。
 
+## 同步视图：谁看见哪些字段
+
+维护者 2026-11-10：“同步数据是同步视图的问题，业务层处理”。字段的可见性在业务层声明一次：每个同步实体的 packer
+（`game/entities/<kind>/sync_packer.go`）按 DAO 字段名列出视图（`dataengine.NewSyncViewSet`），场景
+（`internal/service/game/scene.go`）只决定谁拿哪个视图——本人经 self 拿缺省视图（全部字段）、主视野里的别人拿 `near`、
+队伍关系视野拿 `team`、场景主体是缺省视图，分区场景的本人绑定拿 `self`。场景把三类实体的视图集交给 Interest 的 `ViewSets`
+（构造时核对每类实体都声明了每个用到的视图，缺了拒绝启动）、把优先级交给 Manager（`entity.MergeSyncViewPriorities`）。
+框架不认识字段，没有为 demo 加特例。
+
+**Player**（✓ = 视图里有）
+
+| 字段 | default（本人） | near（主视野里的别人） | team（队友，不论距离） | self（分区场景的本人） | 说明 |
+| --- | :-: | :-: | :-: | :-: | --- |
+| `name`、`level`、`equipment`、`guild_id` | ✓ | ✓ | ✓ | ✓ | 头顶名字、等级、外观、公会名牌 |
+| `pos_x`、`pos_y`、`facing` | ✓ | ✓ | ✓ | | 分区场景的位置随 SceneActor 的 mirror 走 |
+| `scene_id` | ✓ | ✓ | ✓ | | 只在全量里（2～5 字节）；多场景共用一个 Manager 的玩法（MMORPG 夹具）靠它 |
+| `cell_hp`、`cell_max_hp` | ✓ | ✓ | ✓ | | 血条 |
+| `exp`、`gold`、`items` | ✓ | | | ✓ | 私有 |
+| `attr_base`、`attr_final`、`cell_attack`、`cell_power` | ✓ | | | | 私有（属性、战斗面板） |
+
+`team` 与 `near` 字段相同、身份不同：队友面板要多给（例如 `attr_final`）时只改 `team` 一行；`team` 的优先级比 `near` 小，
+队友站在身边时订阅仍是 `team`（不是两者的并集），走近走远不换视图、不重发全量。`far`（LOD 1，名字、等级、位置、场景）
+是距离分档的示例，场景没配分档，不用。
+
+**Monster**：default 全部字段；`near` / `team` = `template`、`pos_x`、`pos_y`、`facing`、`hp`、`rooted`（没有 `scene_id`）；
+`far` = `template`、`pos_x`、`pos_y`。**Building**：同步字段（`state`、`owner`、`config_id`、`params`、`facing`、`gx`、`gy`、
+`foundation`）对谁都公开，default / `near` / `team` 相同。怪与建筑不会是队员，`team` 是因为 Interest 要求每类实体都声明
+每个用到的视图。**Scene**（时间域）与 **TerrainChunk** 各只有一个视图。
+
+字节（`TestMainViewMeasureSyncBytes`、`TestMainViewMeasureMovingCrowdBytes`，帧 payload）：一名玩家进入别人视野
+117 → 85 字节，三只怪 238 → 235 字节，64 / 128 个玩家进入视野合计约 7.0 / 13.9 KB → 5.0 / 9.8 KB；走一步的增量不变（30 字节）。
+客户端按（命名空间, 视图键, 编码, schema）注册解码器（C# `EntityViews.RegisterDao`、C++ `register_dao`）时，`player`、`monster`、
+`building` 要各注册 `near` 与 `team`（同一个 DAO 同步 PB 解码器）；本人仍是 `default`。回归：`TestEachObserverGetsOnlyItsViewOfAPlayer`（本人 / 附近的人 / 远处的队友 / 身边的队友各自收到的字段与视图键，
+改等级经验之后只有本人收到 exp）。证据见
+[sync-views-codec](../docs/maintenance/evidence/sync-views-codec-20261110/README.md)。
+
 ## 分区场景（原型，分支 feat/seamless-world-prototype）
 
 缺省不分区：没有 `scene.partition` 的配置，game 跑普通场景，上面的一切照旧。`scene.partition.enabled: true` 把本进程的场景变成

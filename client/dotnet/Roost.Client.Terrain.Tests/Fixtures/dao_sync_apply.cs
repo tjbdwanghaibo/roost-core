@@ -5,8 +5,9 @@ public static class DaoSyncApply {
 // 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
 public static SyncBuildingDao Apply(this SyncBuildingDao patch,SyncBuildingDao previous){
  if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
- if(previous!=null&&(previous.SyncFormat!=3||previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
- var next=previous==null?new SyncBuildingDao():previous.Clone();next.EntityId=patch.EntityId;next.SyncFormat=3;
+ // 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+ if(previous!=null&&(previous.SyncFormat!=3||patch.EntityId!=0&&previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
+ var next=previous==null?new SyncBuildingDao():previous.Clone();if(previous==null)next.EntityId=patch.EntityId;next.SyncFormat=3;
 if(patch.State!=null)next.State=ApplyField(patch.State,previous==null?null:previous.State);
 if(patch.Owner!=null)next.Owner=ApplyField(patch.Owner,previous==null?null:previous.Owner);
 if(patch.ConfigId!=null)next.ConfigId=ApplyField(patch.ConfigId,previous==null?null:previous.ConfigId);
@@ -59,8 +60,9 @@ return update;
 // 一个补丁全部验证成功后才交回新视图，旧视图不会部分更新。
 public static SyncTerrainChunkDao Apply(this SyncTerrainChunkDao patch,SyncTerrainChunkDao previous){
  if(patch==null||patch.SyncFormat!=3)throw new System.IO.InvalidDataException("Unsupported DAO sync format.");
- if(previous!=null&&(previous.SyncFormat!=3||previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
- var next=previous==null?new SyncTerrainChunkDao():previous.Clone();next.EntityId=patch.EntityId;next.SyncFormat=3;
+ // 增量补丁可以不带实体 ID（0），沿用 previous 的；带了就必须一致。
+ if(previous!=null&&(previous.SyncFormat!=3||patch.EntityId!=0&&previous.EntityId!=patch.EntityId))throw new System.IO.InvalidDataException("DAO identity or format mismatch.");
+ var next=previous==null?new SyncTerrainChunkDao():previous.Clone();if(previous==null)next.EntityId=patch.EntityId;next.SyncFormat=3;
 if(patch.BaseRevision!=null)next.BaseRevision=ApplyField(patch.BaseRevision,previous==null?null:previous.BaseRevision);
 if(patch.Version!=null)next.Version=ApplyField(patch.Version,previous==null?null:previous.Version);
 if(patch.Heights!=null)next.Heights=ApplyField(patch.Heights,previous==null?null:previous.Heights);

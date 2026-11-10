@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"{{MODULE}}/game/actor"
+	building "{{MODULE}}/game/entities/building"
+	monster "{{MODULE}}/game/entities/monster"
 	player "{{MODULE}}/game/entities/player"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	sceneentity "{{MODULE}}/game/entities/scene"
@@ -453,6 +455,10 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 	if terrainConfig != nil {
 		namespaces = terrainNamespaceLimits()
 	}
+	views, priorities, err := sceneViewSets()
+	if err != nil {
+		return nil, err
+	}
 	scene := &Scene{members: make(map[int64]sceneMember), teams: make(map[int64]policy.ViewID), sessions: transport}
 	// The durability gate: a pipelined deployment acknowledges a transaction
 	// before its WAL record is durable, so content can be newer than what
@@ -477,6 +483,8 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 		SessionLost:      scene.sessionLost,
 		Namespaces:       namespaces,
 		Limits:           limits,
+		// 各视图的优先级（packer 声明的，见 sceneViewSets）：Interest 合并层级、超额时的先后都按它。
+		ProfilePriorities: priorities,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("scene: replication manager: %w", err)
@@ -486,9 +494,13 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 	// a PLAYER id — the manager's session id — and what it sees are ENTITY
 	// ids, unique across kinds, so a Player 42 and a Monster 42 never
 	// collide; playerOf is the one translation from a player's entity to its
-	// player id. Bands are deliberately not configured: a band only means
-	// something once the packer can pack less for a far subject, and the
-	// demo's packer is mask-opaque.
+	// player id. Bands are not configured (one band, the main view's whole
+	// radius); what the band gives is a VIEW: BandLayer says the main view
+	// shows its subjects with the "near" view (what others may see of a
+	// player: no exp / gold / items / attributes), self shows a player its
+	// own entity with the default view (everything), and ViewSets has the
+	// Interest check at construction that every kind on the map declares
+	// every view these hand out (sceneNearLayer, sceneViewSets).
 	//
 	// ApplyMode is the game-type choice for queued moves: ApplySync applies
 	// them in the tick's policy phase (seen by the very next tick) and allows a
@@ -508,6 +520,8 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
 		// its time domain), so one view fans out to everyone on the map; the
 		// framework's default of 4096 players per view would cap the map.
 		MaxPlayersPerView: sceneMaxMembers,
+		BandLayer:         func(int, int) coreentity.SyncProfile { return sceneNearLayer },
+		ViewSets:          views,
 		AOI: policy.AOIConfig{
 			Bounds:      spatial.Rect{Max: spatial.Point{X: config.Width, Y: config.Height}},
 			BlockSize:   config.BlockSize,
@@ -548,6 +562,50 @@ func newSceneWithObserver(lane entitysync.Transport, transport scenePusher, wate
   }
  }
 	return scene, nil
+}
+
+// 场景给出的同步层级（视图身份）；每个视图的字段由各实体的 packer 声明（game/entities/<kind>/sync_packer.go）。
+//
+//	本人看自己               缺省视图（SelfLayer 零值）：全部同步字段
+//	主视野里的别人           sceneNearLayer：他人可见的字段（Player 没有 exp、gold、items、属性；怪没有 scene_id）
+//	队伍关系视野（不论距离） sceneTeamLayer：队友可见的字段（demo 里与 near 相同）
+//	场景主体（时间域）       缺省视图（sceneView）
+//
+// 视野不认识字段：同一目标被几个层级看见时，Interest 按 ViewSets 里的字段包含关系只订阅数据多的那个（本人在队伍里时是
+// 缺省视图；near 与 team 字段相同，按优先级留 team，队友走近走远不换视图），彼此不包含才取并集。
+var (
+	sceneNearLayer = coreentity.SyncProfile{Key: "near"}
+	sceneTeamLayer = coreentity.SyncProfile{Key: "team"}
+)
+
+// sceneViewSets 是场景 Interest 的 ViewSets（按同步命名空间）与 Manager 的视图优先级：主视野与关系视野上会出现的每类实体
+// （玩家、怪、建筑）各一份。构造 Interest 时核对每个层级在每类实体里都已声明，缺了拒绝启动，不在运行中才发现
+// ErrSyncViewUnknown。场景主体（scene）的 packer 只有一个视图、不看 profile，不在其中；分区场景的 mirror 自己打包
+// （partition.go packMirror），同样不看 profile。
+func sceneViewSets() (map[string]*coreentity.SyncViewSet, map[coreentity.SyncProfile]int, error) {
+	loads := []struct {
+		namespace string
+		load      func() (*coreentity.SyncViewSet, error)
+	}{
+		{player.SyncNamespacePlayer, player.SyncViews},
+		{monster.SyncNamespaceMonster, monster.SyncViews},
+		{building.SyncNamespaceBuilding, building.SyncViews},
+	}
+	views := make(map[string]*coreentity.SyncViewSet, len(loads))
+	sets := make([]*coreentity.SyncViewSet, 0, len(loads))
+	for _, kind := range loads {
+		set, err := kind.load()
+		if err != nil {
+			return nil, nil, fmt.Errorf("scene: %s sync views: %w", kind.namespace, err)
+		}
+		views[kind.namespace] = set
+		sets = append(sets, set)
+	}
+	priorities, err := coreentity.MergeSyncViewPriorities(sets...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("scene: sync view priorities: %w", err)
+	}
+	return views, priorities, nil
 }
 
 // partitionSelfProfile is the Player view a member of a partitioned scene
@@ -1141,7 +1199,10 @@ func (bridge *Scene) HideSubject(_ context.Context, subjectID int64) {
 // attached to every member's player id. A member who was in an earlier team
 // leaves that one first; a team view nobody is attached to any more is
 // removed. Being in the team's members also covers the member's own entity,
-// which it already sees through self — the two give the same layer.
+// which it already sees through self: self gives the default view, the team
+// the "team" view, and the default view holds every field of it, so the
+// member's own subscription stays the default view (sceneViewSets).
+// What a teammate sees of the others is the "team" view (sceneTeamLayer).
 func (bridge *Scene) SetTeam(members []int64) {
 	if bridge == nil || bridge.interest == nil {
 		return
@@ -1159,7 +1220,7 @@ func (bridge *Scene) SetTeam(members []int64) {
 	bridge.teamMu.Lock()
 	bridge.lastTeam++
 	team := bridge.lastTeam
-	err := bridge.interest.DefineRelationView(team, coreentity.SyncProfile{})
+	err := bridge.interest.DefineRelationView(team, sceneTeamLayer)
 	if err == nil {
 		err = bridge.interest.SetViewMembers(team, subjects)
 	}

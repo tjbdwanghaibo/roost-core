@@ -35,10 +35,13 @@ type subscription struct {
 	// 空位出现时由 releaseOverLimit 清除并重新排进 pending。离开 kindSnapshot 时随之清除（changeSubscriptionKindLocked）。
 	// 放在 inFlight 旁边占它的填充字节，不加大结构体。
 	overLimit bool
-	lifetime  *sessionLifetime
-	sources   map[*SubscriptionSource]entity.SyncProfile
-	profile   entity.SyncProfile
-	kind      subscriptionKind
+	// codec 是会话持有的基线（最近一次交付并结算的全量）载荷的 codec。增量信封不带 codec，接收端按它解增量载荷，
+	// 所以非空增量的 codec 与它不同时不能发增量，改发全量（codecMismatchLocked）。同样放在填充字节里。
+	codec    uint16
+	lifetime *sessionLifetime
+	sources  map[*SubscriptionSource]entity.SyncProfile
+	profile  entity.SyncProfile
+	kind     subscriptionKind
 	// snapshotClass 只决定冷对象创建的调度；有效 Profile 和线协议语义不变。
 	snapshotClass snapshotClass
 	baseVersion   uint64

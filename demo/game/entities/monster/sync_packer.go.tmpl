@@ -22,11 +22,27 @@ func NewMonsterSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPack
 
 type monsterSyncPacker struct{ monster *Monster }
 
+// Monster 的同步视图。字段 × 视图：
+//
+//	字段                               default  near（主视野）  team  far
+//	template、pos_x、pos_y            ✓        ✓              ✓     ✓
+//	facing、hp、rooted                ✓        ✓              ✓     —
+//	scene_id                          ✓        —              —     —
+//
+// 场景主视野给 near：怪与看它的人在同一场景，scene_id 不发。team 是队伍关系视野的层级——怪不会是队员，但场景的
+// Interest 要求每类实体都声明它用到的每个层级（policy.InterestConfig.ViewSets），这里与 near 相同；default 没有订阅方
+// 用它（分区场景的 mirror 自己打包），保留为全部字段。
+var monsterPublicFields = []string{"Template", "PosX", "PosY", "Facing", "HP", "Rooted"}
+
 var monsterViews, monsterViewsErr = dataengine.NewSyncViewSet(db.MonsterDaoSyncFields(),
 	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}, Priority: -1},
-	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: []string{"Template", "PosX", "PosY", "Facing", "HP", "Rooted"}, Priority: 0},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: monsterPublicFields, Priority: 0},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "team"}, Fields: monsterPublicFields, Priority: -1},
 	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "far", LOD: 1}, Fields: []string{"Template", "PosX", "PosY"}, Priority: 10},
 )
+
+// SyncViews 是 Monster 的视图集，用途同 player.SyncViews。
+func SyncViews() (*entity.SyncViewSet, error) { return monsterViews, monsterViewsErr }
 
 func (packer monsterSyncPacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
 	return packer.pack(profile, dataengine.AllFields, false)
