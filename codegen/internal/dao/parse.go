@@ -22,7 +22,14 @@ type Definitions struct {
 	Daos      []DaoDef
 	RedisDaos []RedisDaoDef
 	Nested    []NestedDef
+
+	// structs 是定义目录里全部文件声明的结构体。嵌套类型按它查，所以嵌套类型可以写在任何文件里，
+	// 与文件名的字典序无关（resolveNestedDefs）。
+	structs map[string]*ast.StructType
 }
+
+// maxDaoFields 是一个 DAO 的顶层字段数上限：脏位与同步掩码是 uint64，每个顶层字段占一位。
+const maxDaoFields = 64
 
 // DaoDef is a DAO struct definition.
 type DaoDef struct {
@@ -169,6 +176,15 @@ func parseDefDir(dir string) (*Definitions, error) {
 		}
 	}
 
+	// 逐文件那一遍只认得本文件声明的结构体，结果取决于文件名顺序；全部解析完之后用全部结构体再认一遍。
+	if err := resolveNestedDefs(defs, defs.structs); err != nil {
+		return nil, err
+	}
+	for _, dao := range defs.Daos {
+		if len(dao.Fields) > maxDaoFields {
+			return nil, fmt.Errorf("dao %s has %d fields; a DAO holds at most %d top-level fields (the dirty and sync masks are uint64, one bit per field). Group related fields into a nested struct: it takes one bit and its sub-fields still persist and sync incrementally", dao.Name, len(dao.Fields), maxDaoFields)
+		}
+	}
 	// 全部文件解析完再查：“是不是嵌套类型”以最终的嵌套类型集合为准，与生成时 isNestedType 看到的一致。
 	if err := validateReferenceShapes(defs); err != nil {
 		return nil, err
@@ -305,6 +321,10 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 				continue
 			}
 			allStructs[typeSpec.Name.Name] = structType
+			if defs.structs == nil {
+				defs.structs = make(map[string]*ast.StructType)
+			}
+			defs.structs[typeSpec.Name.Name] = structType
 		}
 	}
 
@@ -445,7 +465,16 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 		}
 	}
 
-	// Third pass: auto-detect nested structs from DAO field types recursively.
+	return resolveNestedDefs(defs, allStructs)
+}
+
+// resolveNestedDefs 从全部 DAO 的字段出发，广度优先找出它们引用的嵌套结构体（连同嵌套类型再引用的），
+// 按发现顺序追加到 defs.Nested；structs 是这一遍认得的结构体。
+//
+// 调用两种：每解析完一个文件用该文件自己的结构体调一次（这是原有的发现顺序，生成物里嵌套类型的
+// 排列由它决定，保持不变）；全部文件解析完再用 defs.structs 调一次，补上逐文件那一遍认不到的——
+// 定义在排在 DAO 文件之前的文件里的嵌套类型，以及跨文件互相引用的嵌套类型。
+func resolveNestedDefs(defs *Definitions, structs map[string]*ast.StructType) error {
 	nestedNames := make(map[string]bool)
 	for _, nested := range defs.Nested {
 		nestedNames[nested.Name] = true
@@ -458,13 +487,21 @@ func extractDefs(fset *token.FileSet, f *ast.File, defs *Definitions) error {
 			}
 		}
 	}
+	// 已认出的嵌套类型引用的类型也要再看一遍：它们可能定义在当时还没解析到的文件里。
+	for _, nested := range defs.Nested {
+		for _, field := range nested.Fields {
+			if name := resolveNestedName(field); name != "" {
+				queue = append(queue, name)
+			}
+		}
+	}
 	for len(queue) > 0 {
 		name := queue[0]
 		queue = queue[1:]
 		if nestedNames[name] {
 			continue
 		}
-		st, ok := allStructs[name]
+		st, ok := structs[name]
 		if !ok {
 			continue
 		}
