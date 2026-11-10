@@ -13,11 +13,18 @@ import (
 // 同步链路对“不是玩家的东西”没有特例（方案 §27）。
 const BuildingSyncCodec uint16 = 2
 
-// buildingViews 只有一个视图：缺省视图（场景主视野不配分档，与玩家、怪相同），字段是 DAO 上全部标了 sync 的字段——State、Owner、
-// ConfigID、Params、Facing、GX、GY、Foundation。占地宽高与 BaseRevision 只持久，不下发。
+// buildingViews：建筑的同步字段——State、Owner、ConfigID、Params、Facing、GX、GY、Foundation（DAO 上全部标了 sync 的字段；
+// 占地宽高与 BaseRevision 只持久，不下发）——对谁都公开，三个视图字段相同：near 是场景主视野给的层级（与玩家、怪同一个），
+// team 是队伍关系视野的层级（建筑不会是队员，场景的 Interest 要求每类实体都声明它用到的每个层级），default 是缺省视图。
+// 优先级与 Player / Monster 的同名视图一致（Manager 只有一张优先级表，entity.MergeSyncViewPriorities 要求一致）。
 var buildingViews, buildingViewsErr = dataengine.NewSyncViewSet(db.BuildingDaoSyncFields(),
-	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}},
+	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}, Priority: -1},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: []string{"*"}, Priority: 0},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "team"}, Fields: []string{"*"}, Priority: -1},
 )
+
+// SyncViews 是 Building 的视图集，用途同 player.SyncViews。
+func SyncViews() (*entity.SyncViewSet, error) { return buildingViews, buildingViewsErr }
 
 // NewBuildingSyncPacker 是实体标记 subjectPacker= 指名的工厂。全量与增量都是按字段的 MarshalSync：一座建筑的同步字段
 // 合起来几十字节，改参数时整个 Params 字段重发（至多 8 个 int32），不需要按下标的变化树。

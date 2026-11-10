@@ -415,16 +415,151 @@ func TestSceneReplicatesOnePlayersChangeToAnother(t *testing.T) {
 	if !ok {
 		t.Fatalf("the watcher received no update for subject %d; got %v", mover.ID(), updates)
 	}
-	// The delta carries the fields the mask named — the ones AddExp changed.
+	// The delta carries the fields the mask named — the ones AddExp changed —
+	// that another player may see: the level, not the exp (the watcher sees
+	// the mover through the main view's "near" view, which has no private
+	// fields; TestEachObserverGetsOnlyItsViewOfAPlayer has every view).
 	if _, ok := document["level"]; !ok {
 		t.Errorf("the delta does not carry the level that changed: %v", document)
 	}
-	if _, ok := document["exp"]; !ok {
-		t.Errorf("the delta does not carry the exp that changed: %v", document)
+	if _, ok := document["exp"]; ok {
+		t.Errorf("the delta carries the mover's private exp to another player: %v", document)
 	}
 	// And not the ones it did not: a delta is not a snapshot.
 	if _, ok := document["items"]; ok {
 		t.Errorf("the delta carries a field the mutation never touched: %v", document)
+	}
+}
+
+// playerPrivateFields 是 Player 只给本人看的同步字段：别的玩家（主视野里的、队友）都不该收到（同步视图的字段表见
+// demo/README“同步视图”）。
+var playerPrivateFields = []string{"exp", "gold", "items", "attr_base", "attr_final", "cell_attack", "cell_power"}
+
+// 场景里谁看见一名玩家的哪些字段：视图由 Player 的 packer 声明（game/entities/player/sync_packer.go），场景的主视野与
+// 队伍关系视野各自给出层级（internal/service/game/scene.go 的 sceneLayers）。
+//   - 本人：缺省视图，全部同步字段；
+//   - 主视野里的其他玩家：near——名字、等级、位置、场景、朝向、外观、公会、血条（cell_hp / cell_max_hp），没有私有字段；
+//   - 队友（队伍关系视野，站得再远也看得见）：team，与 near 同样的字段；队友同时站在主视野里也还是 team（字段相同、
+//     team 优先），不是两个层级的并集，走近走远不换视图；本人在队伍里也还是缺省视图（缺省视图包含 team 的全部字段）。
+//
+// 改等级与经验（AddExp）之后：本人的增量带 level 与 exp，别人的增量只带 level。别人收到的全量比本人的小（字节写日志，
+// 修前修后对照见 docs/maintenance/evidence/sync-views-codec-20261110）。
+func TestEachObserverGetsOnlyItsViewOfAPlayer(t *testing.T) {
+	recorder := newSceneRecorder()
+	scene, err := newScene(recorder, nil, gamescene.DefaultConfig())
+	if err != nil {
+		t.Fatalf("new scene: %v", err)
+	}
+	ctx := context.Background()
+	if err := scene.Start(ctx); err != nil {
+		t.Fatalf("start scene: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = scene.Close(closeCtx)
+	})
+
+	const (
+		ownerID        = int64(9301)
+		nearbyID       = int64(9302)
+		teammateID     = int64(9303)
+		nearTeammateID = int64(9304)
+	)
+	owner := newScenePlayer(t, ownerID)
+	nearby := newScenePlayer(t, nearbyID)
+	teammate := newScenePlayer(t, teammateID)
+	nearTeammate := newScenePlayer(t, nearTeammateID)
+	joinReady(t, scene, ctx, owner, spatial.Point{X: 500, Y: 500})
+	joinReady(t, scene, ctx, nearby, spatial.Point{X: 520, Y: 500})
+	// 远到主视野看不见：只有队伍让他看见 owner。
+	joinReady(t, scene, ctx, teammate, spatial.Point{X: 900, Y: 900})
+	// 队友，同时站在主视野里。
+	joinReady(t, scene, ctx, nearTeammate, spatial.Point{X: 480, Y: 500})
+	scene.SetTeam([]int64{ownerID, teammateID, nearTeammateID})
+	for range 2 {
+		if err := scene.Flush(ctx); err != nil {
+			t.Fatalf("flush after joins: %v", err)
+		}
+	}
+	// 每个观察者收到的 owner 全量：字段、视图与 DAO 载荷字节。
+	fullOf := func(observer int64, view string) (map[string]any, int) {
+		t.Helper()
+		var fields map[string]any
+		size := 0
+		for _, push := range recorder.take(observer) {
+			for _, object := range decodedPush(t, push).Objects {
+				for _, component := range object.Components {
+					if update := component.Update; update.SubjectID == owner.ID() && update.Full {
+						if update.Profile.Key != view {
+							t.Errorf("observer %d holds player %d in view %q, want %q", observer, owner.ID(), update.Profile.Key, view)
+						}
+						document, err := clientsync.DecodeFields(update)
+						if err != nil {
+							t.Fatal(err)
+						}
+						fields, size = document, update.Payload.Len()
+					}
+				}
+			}
+		}
+		if fields == nil {
+			t.Fatalf("observer %d received no full of player %d", observer, owner.ID())
+		}
+		return fields, size
+	}
+	own, ownBytes := fullOf(ownerID, "default")
+	seenNearby, nearbyBytes := fullOf(nearbyID, "near")
+	seenByTeammate, teammateBytes := fullOf(teammateID, "team")
+	seenByNearTeammate, _ := fullOf(nearTeammateID, "team")
+	for _, field := range append([]string{"name", "level", "pos_x", "pos_y", "scene_id", "facing", "equipment", "guild_id", "cell_hp", "cell_max_hp"}, playerPrivateFields...) {
+		if _, ok := own[field]; !ok {
+			t.Errorf("the player's own full lacks %q: %v", field, own)
+		}
+	}
+	for who, seen := range map[string]map[string]any{"a player nearby": seenNearby, "a teammate": seenByTeammate, "a teammate nearby": seenByNearTeammate} {
+		for _, field := range playerPrivateFields {
+			if _, ok := seen[field]; ok {
+				t.Errorf("%s received the player's private %q: %v", who, field, seen)
+			}
+		}
+		for _, field := range []string{"name", "level", "pos_x", "pos_y", "facing", "equipment", "guild_id", "cell_hp", "cell_max_hp"} {
+			if _, ok := seen[field]; !ok {
+				t.Errorf("%s did not receive the player's public %q: %v", who, field, seen)
+			}
+		}
+	}
+	if nearbyBytes >= ownBytes || teammateBytes >= ownBytes {
+		t.Errorf("others' full is not smaller than the player's own: own %d bytes, nearby %d, teammate %d", ownBytes, nearbyBytes, teammateBytes)
+	}
+	t.Logf("player %d's full DAO payload: own view %d bytes, as seen nearby %d bytes, as seen by a teammate %d bytes", owner.ID(), ownBytes, nearbyBytes, teammateBytes)
+
+	counters := newSceneWorld(t)
+	client := newSceneNest(t, map[int64]entity.IThreadSafeEntity{
+		owner.ID(): owner, nearby.ID(): nearby, teammate.ID(): teammate, nearTeammate.ID(): nearTeammate, counters.ID(): counters,
+	})
+	gained, err := syncsender.NewAddExpSender(client).MultiSync_AddExp(ctx, owner.ID(), counters.ID(), 250)
+	if err != nil {
+		t.Fatalf("add exp: %v", err)
+	}
+	if gained == 0 {
+		t.Fatal("the mutation did not level the player up")
+	}
+	if err := scene.Flush(ctx); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	for _, observer := range []int64{ownerID, nearbyID, teammateID, nearTeammateID} {
+		document, ok := decodeSceneFrames(t, observer, recorder.take(observer))[owner.ID()]
+		if !ok {
+			t.Fatalf("observer %d received no update of player %d", observer, owner.ID())
+		}
+		if _, ok := document["level"]; !ok {
+			t.Errorf("observer %d: the delta does not carry the level that changed: %v", observer, document)
+		}
+		_, carriesExp := document["exp"]
+		if wantExp := observer == ownerID; carriesExp != wantExp {
+			t.Errorf("observer %d: the delta carries exp = %v, want %v: %v", observer, carriesExp, wantExp, document)
+		}
 	}
 }
 
@@ -1083,7 +1218,9 @@ func TestSceneRetriesASubscribeTheRoomRefused(t *testing.T) {
 	if !ok {
 		t.Fatalf("the watcher received nothing for teammate %d; got %v", later.ID(), updates)
 	}
-	for _, field := range []string{"_id", "level", "exp"} {
+	// A teammate gets the "team" view: no exp, but the name and the level are
+	// in it and a delta here would carry neither (nothing changed them).
+	for _, field := range []string{"_id", "level", "name"} {
 		if _, ok := document[field]; !ok {
 			t.Errorf("the retried subscribe delivered %q-less state, so it was not a snapshot: %v", field, document)
 		}

@@ -22,14 +22,32 @@ func NewPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacke
 	return playerSyncPacker{player: owner}
 }
 
-// 通过生成 DAO 的字段词汇表定义视图，字段位变化不要求业务手工修改掩码。
-// default 保持原有全字段行为；near/far 是业务可显式订阅的示例，不自动扩大授权。
-// packer 在实体锁内执行，不再加锁、不阻塞。
+// Player 的同步视图（同步视图由业务按 DAO 字段声明：维护者 2026-11-10“同步视图的问题，业务层处理 DAO 的视图”）。
+// 字段名是生成 DAO 的字段词汇表（字段位变化不要求手工改掩码）；谁拿到哪个视图由订阅方给出（场景主视野、队伍关系视野、
+// 分区场景的自身绑定，见 internal/service/game/scene.go 的 sceneLayers），packer 只认这里声明过的视图，未知视图报错、
+// 不扩大字段权限。字段 × 视图：
+//
+//	字段                                   default（本人）  near（他人）  team（队友）  far  self（分区场景本人）
+//	name、level、equipment、guild_id         ✓               ✓             ✓             name、level  ✓
+//	pos_x、pos_y、scene_id                   ✓               ✓             ✓             ✓    —
+//	facing                                   ✓               ✓             ✓             —    —
+//	cell_hp、cell_max_hp（血条）             ✓               ✓             ✓             —    —
+//	exp、gold、items                         ✓               —             —             —    ✓
+//	attr_base、attr_final、cell_attack、cell_power  ✓        —             —             —    —
+//
+// default 是普通场景里玩家经 self 看自己（policy.InterestConfig.SelfLayer 零值）：全部同步字段。near 是场景主视野里
+// 的其他玩家；team 是队伍关系视野（不论距离），与 near 同样的字段——单独一个身份，队友面板要多给（例如 attr_final）时
+// 只改这一行，不影响旁人；priority 比 near 小，队友同时在主视野里时订阅保持 team，走近走远不换视图、不重发全量。
+// far 是距离分档的示例（场景没配分档，不用）。self 见下。packer 在实体锁内执行，不再加锁、不阻塞。
 type playerSyncPacker struct{ player *Player }
+
+// playerPublicFields 是别的玩家看得见的字段（near / team）。
+var playerPublicFields = []string{"Name", "Level", "PosX", "PosY", "SceneID", "Facing", "Equipment", "GuildID", "CellHP", "CellMaxHP"}
 
 var playerViews, playerViewsErr = dataengine.NewSyncViewSet(db.PlayerDaoSyncFields(),
 	entity.NamedSyncView{Profile: entity.SyncProfile{}, Fields: []string{"*"}, Priority: -1},
-	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: []string{"Name", "Level", "PosX", "PosY", "SceneID", "Facing", "Equipment", "GuildID"}, Priority: 0},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "near"}, Fields: playerPublicFields, Priority: 0},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "team"}, Fields: playerPublicFields, Priority: -1},
 	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "far", LOD: 1}, Fields: []string{"Name", "Level", "PosX", "PosY", "SceneID"}, Priority: 10},
 	// self is what a member of a partitioned scene gets of its own Player (maintainer decision E4 = A): its own
 	// state. Not the position and not the HP — the scene actor's mirror carries those, and the partitioned scene's
@@ -37,6 +55,10 @@ var playerViews, playerViewsErr = dataengine.NewSyncViewSet(db.PlayerDaoSyncFiel
 	// partitioned scene waits on the maintainer, FEATURE §11).
 	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"Name", "Level", "Exp", "Gold", "Items", "Equipment", "GuildID"}, Priority: 0},
 )
+
+// SyncViews 是 Player 的视图集（不可变，可共享）：场景把它交给 Interest（policy.InterestConfig.ViewSets）在构造时核对
+// 每个层级都已声明，并用各视图的优先级配置 Manager（entity.MergeSyncViewPriorities）。
+func SyncViews() (*entity.SyncViewSet, error) { return playerViews, playerViewsErr }
 
 // A snapshot is what a brand-new subscriber gets, and what a resync produces:
 // every synced field, not only the dirty ones.
