@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"{{MODULE}}/game/terrainmap"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
 
@@ -19,6 +20,10 @@ type scenePartition interface {
 	// TeamRules are scene.partition.team's limits the team endpoints pass to
 	// the Team's handlers: the most members, and how long an invitation lasts.
 	TeamRules() (maxMembers int32, inviteTTL time.Duration)
+	// TerrainForwarder is how the player's terrain edits and building operations
+	// reach the cells that write their chunks (editable terrain P5); nil
+	// without terrain.
+	TerrainForwarder() terrainmap.Forwarder
 }
 
 // partitionCapability is what the game service publishes its partitioned
@@ -36,4 +41,13 @@ func (controller *Controller) Partition() scenePartition {
 		return nil
 	}
 	return partition
+}
+
+// terrainForwarder is the partitioned scene's forwarder for terrain edits, or
+// nil on an ordinary scene (the edit runs on this process, terrainmap.Map.Brush).
+func (controller *Controller) terrainForwarder() terrainmap.Forwarder {
+	if partition := controller.Partition(); partition != nil {
+		return partition.TerrainForwarder()
+	}
+	return nil
 }

@@ -69,14 +69,22 @@ func startTerrain(registry *app.Registry) (*terrainmap.Map, error) {
 	if err != nil {
 		return nil, fmt.Errorf("terrain: %w", err)
 	}
-	// 建筑（P4）只在不分区的普通场景：分区场景邻格的 Ghost 带还没有建筑占位的副本（方案 §25），放置答 building_disabled。
-	if !partition.Enabled {
-		buildings, err := lifecycle.BuildingFromRegistry(registry)
+	// 建筑（P4）：普通场景与分区场景都接（P5：分区场景的放置由玩家的 Base 转发给写占地的格，邻格的 Ghost 带经地形副本
+	// 收到占位，方案 §30）。
+	buildings, err := lifecycle.BuildingFromRegistry(registry)
+	if err != nil {
+		_ = m.Close()
+		return nil, fmt.Errorf("terrain: %w", err)
+	}
+	m.EnableBuildings(buildings, syncsender.NewBuildingSender(nestClient))
+	// 托管格的进程执行别的 Base 转发来的那一份编辑（P5），账本是玩家在本格的 TerrainCellEditor（按 sid 分库）。
+	if partition.Enabled && !m.Region().Own.Empty() {
+		cellEditors, err := lifecycle.TerrainCellEditorFromRegistry(registry)
 		if err != nil {
 			_ = m.Close()
 			return nil, fmt.Errorf("terrain: %w", err)
 		}
-		m.EnableBuildings(buildings, syncsender.NewBuildingSender(nestClient))
+		m.EnableCell(cellEditors)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), terrainLoadTimeout)
 	defer cancel()

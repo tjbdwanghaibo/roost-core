@@ -13,7 +13,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
-// HandleBuilding 是玩家放置 / 拆除一座建筑、改它的修改参数（可编辑地形 P4 / 方案 §27，普通场景）。校验、配额、权限、建实体
+// HandleBuilding 是玩家放置 / 拆除一座建筑、改它的修改参数（可编辑地形 P4 / 方案 §27；分区场景转发给写占地的格，P5）。校验、配额、权限、建实体
 // 与事务都在 terrainmap.Map.Place / Remove / SetParams 里（这里只把线上的值换成请求、把拒绝换成业务码）；它会等数据库与 WAL，端点本来就在
 // Nest 业务 worker 之外。
 func (controller *Controller) HandleBuilding(context *playeraccess.Context, request *pb.BuildingRequest) (*pb.BuildingResponse, error) {
@@ -24,6 +24,9 @@ func (controller *Controller) HandleBuilding(context *playeraccess.Context, requ
 	if m == nil {
 		code, reason := errcode.ClientError(apperrors.ErrTerrainDisabled)
 		return &pb.BuildingResponse{Code: code, Reason: reason}, nil
+	}
+	if fw := controller.terrainForwarder(); fw != nil {
+		return controller.relayBuilding(context, request, m, fw), nil
 	}
 	var (
 		result building.Result
@@ -54,6 +57,41 @@ func (controller *Controller) HandleBuilding(context *playeraccess.Context, requ
 		response.Chunks = append(response.Chunks, pb.TerrainChunkVersion{ChunkX: chunk.Key.X, ChunkY: chunk.Key.Y, Version: chunk.Version})
 	}
 	return response, nil
+}
+
+// relayBuilding 是分区场景的建筑操作（P5）：玩家的 Base 转发给写占地的格（占地跨格的放置答 building_cross_cell），
+// 答复的建筑状态与块版本来自那个格的结论。
+func (controller *Controller) relayBuilding(context *playeraccess.Context, request *pb.BuildingRequest, m *terrainmap.Map, fw terrainmap.Forwarder) *pb.BuildingResponse {
+	var (
+		result terrainmap.RelayResult
+		err    error
+	)
+	switch request.Op {
+	case 1:
+		result, err = m.RelayPlace(context.Context(), context.PlayerID, request.Seq, building.Placement{
+			ConfigID: request.ConfigID, Params: request.Params, GX: request.GX, GY: request.GY, Facing: request.Facing, Level: request.Level,
+		}, fw)
+	case 2:
+		result, err = m.RelayRemove(context.Context(), context.PlayerID, request.Seq, request.GX, request.GY, fw)
+	case 3:
+		result, err = m.RelayParams(context.Context(), context.PlayerID, request.Seq, request.GX, request.GY, request.Params, fw)
+	default:
+		code, reason := errcode.ClientError(apperrors.ErrBuildingBad)
+		return &pb.BuildingResponse{Code: code, Reason: reason}
+	}
+	if err != nil {
+		return buildingRefusal(context, request, err)
+	}
+	response := &pb.BuildingResponse{Duplicate: result.Duplicate(), LastSeq: result.LastSeq, Chunks: relayChunks(result)}
+	response.Code, response.Reason = relayCode(context, request.Seq, result, buildingError)
+	if len(result.Parts) == 1 {
+		if answer := result.Parts[0].Answer; answer.Outcome == terrainmap.OutcomeApplied || answer.Outcome == terrainmap.OutcomeDuplicate {
+			state := answer.Building
+			response.Standing, response.BuildingID, response.Foundation, response.Leveled = state.Standing, state.ID, state.Foundation, state.Leveled
+			response.ConfigID, response.Params = state.ConfigID, state.Params
+		}
+	}
+	return response
 }
 
 // buildingRefusal 是一次拒绝的答复：业务码（基础设施错误答 internal 并记日志）；序号不在窗口里时带上 LastSeq。
@@ -89,6 +127,8 @@ func buildingError(err error) error {
 		return apperrors.ErrBuildingLimit
 	case errors.Is(err, terrainmap.ErrNoBuilding):
 		return apperrors.ErrBuildingMissing
+	case errors.Is(err, terrainmap.ErrBuildCrossCell):
+		return apperrors.ErrBuildingCrossCell
 	}
 	return terrainError(err)
 }

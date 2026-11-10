@@ -1,13 +1,14 @@
 package handler
 
 import (
+	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"{{MODULE}}/game/terrainmap"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 )
 
-// 地形块的三个改块事务与一个账本读取（可编辑地形，game/terrainmap 发起）。改块事务都是 rollback=undo durability=strict：
+// 地形块的改块事务与账本的读取 / 发号（可编辑地形，game/terrainmap 发起）。改块事务都是 rollback=undo durability=strict：
 // 回复与视图更新都在 WAL 持久之后，回滚的事务由生成 setter 的逆操作还原 DAO、不改变视图。第一次改的块、第一次编辑的
 // 玩家账本由调用方先经 lifecycle 的 GetOrCreate 建出空实体（handler 只能锁已存在的实体）。handler 是包级函数，前两个
 // 经 terrainmap.Active() 拿到本进程的 Map。
@@ -35,6 +36,28 @@ func handlerTerrainBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_
 		return terrain_chunk.BrushResult{}, terrainmap.ErrDisabled
 	}
 	return m.ApplyBrush(targets, editor, seq, brush)
+}
+
+// handlerTerrainBrushPart 是分区场景里格执行一次跨格编辑的本格部分（P5，Map.Exec 发起：Base 经 cellworld 扩展消息转发来的
+// 子请求，或 Base 就是本进程时直接调用）：targets 是笔刷覆盖到的块里归本进程写的那几块，editor 是玩家在本格的账本
+// （TerrainCellEditor）；判重、算笔刷、写块、记序号同 TerrainBrush（terrainmap.Map.ApplyBrushPart）。
+//
+//roost:nest rollback=undo durability=strict
+func handlerTerrainBrushPart(targets []terrain_chunk.ISurfaceEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+	m := terrainmap.Active()
+	if m == nil {
+		return terrain_chunk.BrushResult{}, terrainmap.ErrDisabled
+	}
+	return m.ApplyBrushPart(targets, editor, seq, brush)
+}
+
+// handlerTerrainEditIssue 是分区场景里玩家的 Base 给一次编辑发号（P5，转发之前，terrainmap.ApplyIssue）：在玩家面向客户端的
+// 账本（TerrainEditor）里判这个序号——过期 / 超前拒绝，新的记下，发过的答 Again（客户端的重试，照样再转发）。strict：
+// 记下之后才转发，所以 LastSeq 查询答的序号覆盖每一个可能已在某个格执行了的编辑。
+//
+//roost:nest rollback=undo durability=strict
+func handlerTerrainEditIssue(editor terrain_editor.ILedgerEntity, seq int64) (terrain_editor.Issue, error) {
+	return terrainmap.ApplyIssue(editor, seq)
 }
 
 // handlerTerrainEditSeq 读玩家编辑账本已应用的最大序号（Map.LastSeq 发起：客户端不知道上一次用到哪里时续号用）。只读，

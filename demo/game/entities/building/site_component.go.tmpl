@@ -29,11 +29,15 @@ func (p Placement) Lot(spec Spec) (terrain_chunk.Lot, bool) { return spec.Lot(p.
 // Result 是一次放置 / 拆除 / 改参数（handler BuildingPlace / BuildingRemove / BuildingParams）的结果：Duplicate 表示这个（玩家, 序号）已经应用过、
 // 这次什么都没写；Building 是建筑此刻的状态（拆除后 State 为 0）；Chunks 是占地覆盖的每一块此后的地形版本（整平改了
 // 地形的块版本加一；改参数不碰块，为空）；LastSeq 是玩家编辑账本此后的 LastSeq。
+//
+// Points 是放置时整平改了高度的节点数（不整平、拆除、改参数为 0）：分区场景里转发放置的 Base 按占地面积预扣配额，格答回
+// 这个数后多退（可编辑地形 P5）。
 type Result struct {
 	Duplicate bool
 	Building  State
 	Chunks    []terrain_chunk.ChunkVersion
 	LastSeq   int64
+	Points    int
 }
 
 // Rebase 是一次换版对账（handler BuildingRebase）的结论：Rebased 表示建筑原来基于另一版原始地形（From），这次按当前版本

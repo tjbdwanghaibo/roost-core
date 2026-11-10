@@ -58,7 +58,8 @@ const partitionMirrorTTL = time.Second
 // 场景桥自己的视野是 sceneView（1<<40）与匹配队伍的计数器（从 1 起），玩家号不超过 52 位，三段不相交。
 const partitionTeamViews policy.ViewID = 1 << 53
 
-// partitionBlockSize 是分区模式下 Base 的 Interest 的 AOI 网格边长（世界比普通地图大得多）。
+// partitionBlockSize 是不开地形的分区模式下 Base 的 Interest 的 AOI 网格边长（世界比普通地图大得多）；开地形时是
+// gamescene.TerrainBlockSize（主视野是游戏尺度，见 replicatedWorld）。
 const partitionBlockSize = 200
 
 // Base 的最大离开半径必须与 settings 声明里检查的那个数一致：view_radius 的下限按它校验。
@@ -77,6 +78,9 @@ type partitionRuntime struct {
 	mirrors *policy.Mirrors[cellworld.EntityState]
 	// terrain 是可编辑地形的副本端点（terrain_partition.go：Ghost 带推送、邻格玩家可见）；没有地形时为 nil。
 	terrain *partitionTerrain
+	// relay 是跨格编辑的端点（terrain_relay.go，P5：本进程玩家的编辑转发给写那些块的格、执行别的 Base 转发来的那一份）；
+	// 没有地形时为 nil。
+	relay *terrainRelay
 	// push 是玩家连接的推送（player TCP Runtime.PushPlayer）：攻击结论推给攻击方。没有接入层时为 nil。
 	push    func(ctx context.Context, playerID int64, msgID uint32, message any) error
 	cancel  context.CancelFunc
@@ -190,6 +194,22 @@ func startPartition(registry *app.Registry, config settings.ScenePartition, area
 		cfg.Ext = map[string]cellworld.ExtHandler{terrainReplicaSpace: rt.terrain.deliver}
 		cfg.Hooks.Witness = rt.terrain.witness
 	}
+	// 跨格编辑（P5）：玩家的编辑与建筑操作经他的 Base 拆给写那些块的格（terrainmap.Map.RelayBrush 等），每个格那一份经本
+	// Node 的扩展消息送达、在格上一笔 strict 事务执行（terrainmap.Map.Exec）。
+	if m := terrainmap.Active(); m != nil {
+		rt.relay, err = newTerrainRelay(relayConfig{
+			Self: identity.Sid, OwnerOf: partitionOwnerOf(grid, m.Meta()), Exec: m.Exec,
+			Send: func(to int32, body []byte) bool { return rt.node.SendExt(to, terrainEditSpace, body) },
+		})
+		if err != nil {
+			rt.mirrors.Close()
+			return nil, fmt.Errorf("partition: %w", err)
+		}
+		if cfg.Ext == nil {
+			cfg.Ext = map[string]cellworld.ExtHandler{}
+		}
+		cfg.Ext[terrainEditSpace] = rt.relay.deliver
+	}
 	// 跨格移动按地形判定（P3 / T06）：托管格的进程积分时问本进程地形视图上的行走规则，交接之前走出本格的那一段读
 	// Ghost 带里邻格块的副本。不开地形、只做 Base 的进程不装，积分与之前相同。
 	if m := terrainmap.Active(); m != nil && rt.cell != nil {
@@ -253,7 +273,8 @@ func (rt *partitionRuntime) stop() {
 	if rt == nil {
 		return
 	}
-	// 地形副本先停：它经 Node 发消息、往场景的 Manager 登记副本。
+	// 跨格编辑先停（在途的执行要 Nest），地形副本再停：它们经 Node 发消息、往场景的 Manager 登记副本。
+	rt.relay.stop()
 	rt.terrain.stop()
 	if rt.cancel != nil {
 		rt.cancel()
@@ -450,6 +471,15 @@ func attackResultPush(r cellworld.AttackResult) *pb.AttackResultPush {
 // ---- 端点用的能力（PartitionCapability）----
 
 // TeamRules are scene.partition.team's limits for the team endpoints.
+// TerrainForwarder 是本进程玩家的地形编辑与建筑操作的转发通道（P5，game/controllers/player 的端点用它调
+// terrainmap.Map.RelayBrush 等）；没有地形时为 nil。
+func (rt *partitionRuntime) TerrainForwarder() terrainmap.Forwarder {
+	if rt == nil || rt.relay == nil {
+		return nil
+	}
+	return rt.relay
+}
+
 func (rt *partitionRuntime) TeamRules() (int32, time.Duration) {
 	return rt.config.Team.MaxMembers, rt.config.Team.InviteTTL
 }
@@ -537,6 +567,9 @@ func (rt *partitionRuntime) stats(ctx context.Context) (map[string]any, error) {
 			"applied": rt.panelsApplied.Load(), "duplicate": rt.panelsDuplicate.Load(), "unknown": rt.panelsUnknown.Load(),
 		},
 		"spawned": rt.spawned.Load(),
+	}
+	if rt.relay != nil {
+		out["terrain_relay"] = rt.relay.stats()
 	}
 	if rt.terrain != nil {
 		out["terrain"] = rt.terrain.stats()

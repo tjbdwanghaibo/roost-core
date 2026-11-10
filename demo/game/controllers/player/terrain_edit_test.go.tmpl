@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"testing"
 
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/game/terrainmap"
@@ -87,6 +89,7 @@ func TestTerrainRefusalsMapToTheirCodes(t *testing.T) {
 		{terrainmap.ErrSeqAhead, apperrors.ErrTerrainSeq},
 		{&terrainmap.SeqError{Seq: 3, LastSeq: 900, Verdict: terrain_editor.Stale}, apperrors.ErrTerrainSeq},
 		{&terrainmap.SeqError{Seq: 9_000_000, LastSeq: 900, Verdict: terrain_editor.Ahead}, apperrors.ErrTerrainSeq},
+		{terrainmap.ErrPending, apperrors.ErrTerrainPending},
 	} {
 		wrapped := fmt.Errorf("terrain: brush at (1, 2): %w", c.err)
 		if got := terrainError(wrapped); !errors.Is(got, c.want) || codeOf(got) == errcode.CodeInternal {
@@ -110,5 +113,41 @@ func TestTerrainSeqRefusalCarriesTheLastSeq(t *testing.T) {
 	}
 	if r := terrainRefusal(access, request, terrainmap.ErrOccupied); r.Code != codeOf(apperrors.ErrTerrainOccupied) || r.LastSeq != 0 {
 		t.Fatalf("an occupied refusal: %+v, want terrain_occupied without LastSeq", r)
+	}
+}
+
+// 分区场景的转发编辑（P5）：答复逐块带结论——执行了 / 以前执行过的格列出它答回的块与版本，拒绝 / 结果未知的格列出
+// 它那一部分的块（版本 0）；汇总码：有结果未知的答 terrain_pending（不论别的格），否则第一个拒绝的原因；格答回的
+// 没有归类的失败答 internal。
+func TestTerrainRelayAnswerCarriesEachCellsOutcome(t *testing.T) {
+	access := &playeraccess.Context{BaseCtx: context.Background(), PlayerID: 7, MsgID: msgid.MsgTerrainEdit, Seq: 1}
+	left, right := terrain.ChunkKey{X: 3}, terrain.ChunkKey{X: 4}
+	applied := terrainmap.RelayPart{SID: 101, Chunks: []terrain.ChunkKey{left}, Answer: terrainmap.PartAnswer{
+		Outcome: terrainmap.OutcomeApplied, Chunks: []terrain_chunk.ChunkVersion{{Key: left, Version: 5}}}}
+	refused := terrainmap.RelayPart{SID: 102, Chunks: []terrain.ChunkKey{right}, Answer: terrainmap.PartAnswer{
+		Outcome: terrainmap.OutcomeRefused, Refusal: terrainmap.RefusalErr(terrainmap.RefusalCode(terrainmap.ErrOccupied), "point 9")}}
+	unknown := refused
+	unknown.Answer = terrainmap.PartAnswer{Outcome: terrainmap.OutcomeUnknown, Refusal: errors.New("no answer")}
+	failed := refused
+	failed.Answer = terrainmap.PartAnswer{Outcome: terrainmap.OutcomeRefused, Refusal: terrainmap.RefusalErr(0, "disk")}
+	for _, c := range []struct {
+		name   string
+		parts  []terrainmap.RelayPart
+		code   int32
+		chunks []pb.TerrainChunkVersion
+	}{
+		{"both done", []terrainmap.RelayPart{applied}, 0, []pb.TerrainChunkVersion{{ChunkX: 3, Version: 5, Outcome: 1}}},
+		{"one refused", []terrainmap.RelayPart{applied, refused}, codeOf(apperrors.ErrTerrainOccupied),
+			[]pb.TerrainChunkVersion{{ChunkX: 3, Version: 5, Outcome: 1}, {ChunkX: 4, Outcome: 3}}},
+		{"one unknown", []terrainmap.RelayPart{applied, unknown}, codeOf(apperrors.ErrTerrainPending),
+			[]pb.TerrainChunkVersion{{ChunkX: 3, Version: 5, Outcome: 1}, {ChunkX: 4, Outcome: 4}}},
+		{"an unclassified failure", []terrainmap.RelayPart{applied, failed}, errcode.CodeInternal,
+			[]pb.TerrainChunkVersion{{ChunkX: 3, Version: 5, Outcome: 1}, {ChunkX: 4, Outcome: 3}}},
+	} {
+		result := terrainmap.RelayResult{Parts: c.parts, LastSeq: 9}
+		code, _ := relayCode(access, 9, result, terrainError)
+		if code != c.code || !slices.Equal(relayChunks(result), c.chunks) {
+			t.Errorf("%s: code %d chunks %+v, want %d %+v", c.name, code, relayChunks(result), c.code, c.chunks)
+		}
 	}
 }

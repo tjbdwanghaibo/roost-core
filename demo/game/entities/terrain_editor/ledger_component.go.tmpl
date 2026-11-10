@@ -127,6 +127,9 @@ func (component *LedgerComponent) Window() SeqWindow {
 // LastSeq 是已应用的最大序号（0 = 还没有）。
 func (component *LedgerComponent) LastSeq() int64 { return component.Owner().Dao().GetLastSeq() }
 
+// PlayerID 是账本所属的玩家。
+func (component *LedgerComponent) PlayerID() int64 { return component.Owner().PlayerID() }
+
 // Check 判断序号 seq（须 ≥ 1），只读。
 func (component *LedgerComponent) Check(seq int64) Verdict { return component.Window().Check(seq) }
 
@@ -137,6 +140,13 @@ func (component *LedgerComponent) Record(seq int64) {
 	dao := component.Owner().Dao()
 	dao.SetLastSeq(next.Last)
 	dao.SetWindow(int64(next.Bits))
+}
+
+// Issue 是分区场景里 Base 给一次编辑“发号”的结果（handler TerrainEditIssue，可编辑地形 P5）：Again 表示这个序号以前已经
+// 发出过（这次是客户端的重试：照样再转发给各格，由各格的账本判断自己那一部分是否已执行）；LastSeq 是此后的最大序号。
+type Issue struct {
+	Again   bool
+	LastSeq int64
 }
 
 // Buildings 是这个玩家现在站着的建筑数（可编辑地形 P4）。

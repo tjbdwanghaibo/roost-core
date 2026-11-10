@@ -1,0 +1,76 @@
+package terrain_cell_editor
+
+import (
+	"fmt"
+
+	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type=2014
+const CompTypeLedger entity.ComponentType = 2014
+
+// LedgerComponent 是玩家在本格的编辑账本，数据全部在 TerrainCellEditorDao（回滚统一走 DAO 的生成 setter 逆操作）。判定用
+// terrain_editor.SeqWindow，唯一的差别是不答 Ahead（见 TerrainCellEditor 的说明）。方法只在本实体的 Nest 锁内调用。
+type LedgerComponent struct {
+	entity.ComponentBase
+	owner *TerrainCellEditor
+}
+
+// ILedgerEntity is the narrow lock-safe view for Nest handlers.
+type ILedgerEntity interface {
+	entity.IThreadSafeEntity
+	LedgerComp() *LedgerComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeLedger, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*TerrainCellEditor)
+		if !ok {
+			return nil, fmt.Errorf("terrain cell editor ledger component: owner %T is not *TerrainCellEditor", owner)
+		}
+		return &LedgerComponent{owner: typed}, nil
+	})
+}
+
+func (component *LedgerComponent) Name() string { return "terrain_cell_editor_ledger" }
+
+// Owner is available only while the Entity is alive and locked by Nest.
+func (component *LedgerComponent) Owner() *TerrainCellEditor { return component.owner }
+
+// Window 是账本当前的值。
+func (component *LedgerComponent) Window() terrain_editor.SeqWindow {
+	dao := component.Owner().Dao()
+	return terrain_editor.SeqWindow{Last: dao.GetLastSeq(), Bits: uint64(dao.GetWindow())}
+}
+
+// PlayerID 是账本所属的玩家。
+func (component *LedgerComponent) PlayerID() int64 { return component.Owner().PlayerID() }
+
+// LastSeq 是本格已应用的最大序号（0 = 还没有）。
+func (component *LedgerComponent) LastSeq() int64 { return component.Owner().Dao().GetLastSeq() }
+
+// Check 判断序号 seq（须 ≥ 1），只读：同 SeqWindow.Check，但比 LastSeq 大多少都答 Fresh（超前由 Base 的账本判过）。
+func (component *LedgerComponent) Check(seq int64) terrain_editor.Verdict {
+	if verdict := component.Window().Check(seq); verdict != terrain_editor.Ahead {
+		return verdict
+	}
+	return terrain_editor.Fresh
+}
+
+// Record 记下本格已应用的序号 seq（须是 Check 答 Fresh 的序号），在同一笔事务里调用，回滚时一起撤销。
+func (component *LedgerComponent) Record(seq int64) {
+	next := component.Window().Record(seq)
+	dao := component.Owner().Dao()
+	dao.SetLastSeq(next.Last)
+	dao.SetWindow(int64(next.Bits))
+}
+
+// Buildings 是这个玩家站在本格里的建筑数。
+func (component *LedgerComponent) Buildings() int64 { return component.Owner().Dao().GetBuildings() }
+
+// AddBuildings 在放置（+1）/ 拆除（−1）的同一笔事务里改建筑数。
+func (component *LedgerComponent) AddBuildings(delta int64) {
+	dao := component.Owner().Dao()
+	dao.SetBuildings(dao.GetBuildings() + delta)
+}

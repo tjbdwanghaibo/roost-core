@@ -1,0 +1,24 @@
+package dbdef
+
+// TerrainCellEditorDao 是分区场景里一个玩家在一个格进程上的地形编辑账本（可编辑地形 P5，跨格编辑）：玩家的编辑请求经
+// 他的 Base 进程拆给写这些块的格进程，每个格只执行自己那一部分，按（玩家 ID, 编辑序号）判重的记录就在这个格上、与
+// 这个格的块同一笔事务。字段与判定规则同 TerrainEditorDao（已应用的最大序号与它下面 64 个序号的应用位图），只是“已应用”
+// 指“这个格的那一部分已应用”；建筑数也只数站在这个格里的建筑。
+//
+// 实体 ID 就是玩家的 unique ID（与 TerrainEditor 同一个号，kind 不同）；dbscope=sid：每个格进程（一个 sid 托管一个格）
+// 写自己的库，同一个玩家在各个格上的账本是各自库里的不同文档，不会有两个进程写同一个文档。格到进程的映射是静态的
+// （scene.partition.owners）；改映射（一个格换到别的 sid）时这些账本不跟着搬，须先停机、等客户端的在途重试结束（见可编辑
+// 地形方案 §30）。
+//
+// 只持久、不同步。store 键按仓库规则写数字短键，改动须按 codegen/docs/TAGS.zh-CN.md 处理。
+//
+//roost:dao coll=terrain_cell_editors db=main dbscope=sid schema=1
+type TerrainCellEditorDao struct {
+	// LastSeq 是这个玩家在本格已应用的最大编辑序号；0 表示还没有应用过任何编辑。序号范围 1～MaxInt64。
+	LastSeq int64 `dao:"persist" store:"1"`
+	// Window 是 LastSeq 下面 64 个序号的应用位图：第 i 位（0～63）为 1 表示序号 LastSeq−1−i 已在本格应用。按位使用，
+	// 第 63 位为 1 时数值为负。
+	Window int64 `dao:"persist" store:"2"`
+	// Buildings 是这个玩家现在站在本格里的建筑数（放置加一、拆除减一，与建筑实体同一笔事务）。
+	Buildings int64 `dao:"persist" store:"3"`
+}

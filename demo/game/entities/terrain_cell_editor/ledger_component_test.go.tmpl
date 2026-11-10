@@ -1,0 +1,102 @@
+package terrain_cell_editor
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	db "{{MODULE}}/db"
+	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 玩家在本格的账本（P5）：规则同 terrain_editor.SeqWindow，只是不答 Ahead——玩家在别的格编辑了很久之后第一次来到本格，
+// 序号比本格的 LastSeq 大很多是正常的（超前由 Base 的账本判过）。窗口内的重复照样答 Duplicate，窗口外答 Stale。
+func TestCellLedgerNeverRefusesAFarAheadSequence(t *testing.T) {
+	e := newTestCellEditor(t, 7)
+	far := int64(terrain_editor.MaxSeqAhead) * 3
+	for _, seq := range []int64{far, far + 1} {
+		if err := in(e, func(l *LedgerComponent) error {
+			if v := l.Check(seq); v != terrain_editor.Fresh {
+				t.Fatalf("seq %d on last %d: %v, want fresh", seq, l.LastSeq(), v)
+			}
+			l.Record(seq)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	l := e.LedgerComp()
+	if l.Check(far) != terrain_editor.Duplicate || l.Check(far+1) != terrain_editor.Duplicate {
+		t.Fatalf("recorded sequences are not duplicates: %+v", l.Window())
+	}
+	if l.Check(far-terrain_editor.WindowSize-1) != terrain_editor.Stale {
+		t.Fatalf("a sequence below the window: %v", l.Check(far-terrain_editor.WindowSize-1))
+	}
+	if l.Check(far+1+terrain_editor.MaxSeqAhead*2) != terrain_editor.Fresh {
+		t.Fatal("a far-ahead sequence is refused on the cell")
+	}
+	if e.PlayerID() != 7 || l.PlayerID() != 7 {
+		t.Fatalf("player id %d", e.PlayerID())
+	}
+}
+
+// 账本在 DAO 上原样持久、原样读回（含建筑数）；回滚的事务撤销 Record 与建筑数。
+func TestCellLedgerPersistsAndRollsBack(t *testing.T) {
+	e := newTestCellEditor(t, 4242)
+	if err := in(e, func(l *LedgerComponent) error {
+		l.Record(65)
+		l.Record(2)
+		l.AddBuildings(1)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	restored := db.NewTerrainCellEditorDao()
+	restored.SetId(e.ID())
+	if err := restored.RestorePersisted(e.Dao().Marshal(), db.TerrainCellEditorDaoSchemaVersion, 1); err != nil {
+		t.Fatal(err)
+	}
+	if restored.GetLastSeq() != 65 || uint64(restored.GetWindow()) != 1<<62 || restored.GetBuildings() != 1 {
+		t.Fatalf("restored last %d window %064b buildings %d", restored.GetLastSeq(), uint64(restored.GetWindow()), restored.GetBuildings())
+	}
+	rollback := errors.New("a later step of the transaction failed")
+	if err := in(e, func(l *LedgerComponent) error { l.Record(66); l.AddBuildings(1); return rollback }); !errors.Is(err, rollback) {
+		t.Fatalf("rolled-back record: %v", err)
+	}
+	if l := e.LedgerComp(); l.Check(66) != terrain_editor.Fresh || l.LastSeq() != 65 || l.Buildings() != 1 {
+		t.Fatalf("after a rolled-back record: last %d buildings %d, 66 %v", l.LastSeq(), l.Buildings(), l.Check(66))
+	}
+	for _, bad := range []int64{0, -1, int64(entity.UniqueIDMask) + 1} {
+		if _, err := UniqueID(bad); err == nil {
+			t.Fatalf("player %d: a cell editor id for an invalid player", bad)
+		}
+	}
+}
+
+type nullCommitter struct{}
+
+func (nullCommitter) Commit(context.Context, nest.CommitRecord) error { return nil }
+
+func newTestCellEditor(t *testing.T, playerID int64) *TerrainCellEditor {
+	t.Helper()
+	RegisterEntity()
+	unique, err := UniqueID(playerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := NewTerrainCellEditor(&entity.EntityCreateParam{IsCreate: true, UniqueID: unique, Kind: EntityKindTerrainCellEditor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// in 在一笔独立事务（rollback=undo）里跑 f；f 返回错误时事务回滚。
+func in(e *TerrainCellEditor, f func(*LedgerComponent) error) error {
+	_, err := nest.RunIsolatedTransaction(context.Background(), nullCommitter{}, "terrain_cell_editor_ledger", func() (any, error) {
+		return nil, f(e.LedgerComp())
+	})
+	return err
+}

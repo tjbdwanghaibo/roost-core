@@ -20,10 +20,14 @@ const CompTypeSurface entity.ComponentType = 2011
 // Duplicate 表示这个（玩家, 序号）已经应用过：这次什么都没写，Chunks 是各块当前的版本——重复请求得到明确的“已应用”，
 // 而不是再改一次。序号低于账本窗口（过期）或大出太多时不是结果而是错误（terrainmap.ErrStale / ErrSeqAhead），这时
 // 只有 LastSeq 有意义。判重见 game/entities/terrain_editor。
+//
+// Points 是这次实际改动的点数（高度、材质各算一次，口径同配额；Duplicate 时为 0）：分区场景里转发编辑的 Base 按事前的
+// 几何上限预扣配额，格答回这个数后多退（可编辑地形 P5）。
 type BrushResult struct {
 	Duplicate bool
 	Chunks    []ChunkVersion
 	LastSeq   int64
+	Points    int
 }
 
 // ChunkVersion 是一块与它的版本。

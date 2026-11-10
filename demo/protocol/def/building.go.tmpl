@@ -33,10 +33,12 @@ type BuildingRequest struct {
 // BuildingResponse 答复一次放置 / 拆除 / 改参数：Code 0 时 Standing / BuildingID / ConfigID / Params / Foundation 是建筑此刻的
 // 状态（拆除后 Standing 为 false），Chunks 是占地覆盖的每一块此后的地形版本，Duplicate 表示这个 Seq 已经生效过、这次什么都没做。LastSeq 是服务端
 // 此刻已应用的最大序号（Code 0 与 terrain_seq 时给出）。拒绝时什么都没写。
-// Codes: terrain_disabled, building_disabled（分区场景）, building_bad, building_config（配置 ID 未知）, building_params
+// 分区场景（可编辑地形 P5）：请求由玩家所在的 Base 转发给写占地的格；占地跨两个格答 building_cross_cell；转发后期限内没有
+// 结论答 terrain_pending（用同一个 Seq 重发）；Chunks 的 Outcome 是那个格的结论（见 TerrainChunkVersion）。建筑数上限按格计。
+// Codes: terrain_disabled, building_disabled（进程不接建筑）, building_bad, building_config（配置 ID 未知）, building_params
 // （参数个数 / 范围）, terrain_not_owned, terrain_unavailable, terrain_rate,
 // terrain_denied（权限，或拆除别人的建筑）, terrain_occupied（锚点或占地已有建筑）, building_slope, building_underwater,
-// building_limit, building_missing, terrain_seq。
+// building_limit, building_missing, terrain_seq, building_cross_cell, terrain_pending。
 type BuildingResponse struct {
 	Code       int32                 `pb:"1"`
 	Reason     string                `pb:"2"`

@@ -14,7 +14,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
-// HandleTerrainEdit 是玩家的一次笔刷编辑（可编辑地形 P2，单格）。校验、频率、领地钩子、建块与一笔多实体事务都在
+// HandleTerrainEdit 是玩家的一次笔刷编辑（可编辑地形 P2；分区场景跨格转发见 P5 / terrainmap.Map.RelayBrush）。校验、频率、领地钩子、建块与一笔多实体事务都在
 // terrainmap.Map.Brush 里（这里只把线上的整数换成笔刷参数、把拒绝换成业务码）；它会等数据库与 WAL，端点本来就在
 // Nest 业务 worker 之外。改动经同步流下发（改过的块是 terrain 命名空间的同步对象），答复只带各块的新版本与 LastSeq。
 // Seq = 0 是查询：只答 LastSeq（Map.LastSeq），不看其余字段、不编辑。
@@ -39,6 +39,16 @@ func (controller *Controller) HandleTerrainEdit(context *playeraccess.Context, r
 		code, reason := errcode.ClientError(apperrors.ErrTerrainBrush)
 		return &pb.TerrainEditResponse{Code: code, Reason: reason}, nil
 	}
+	// 分区场景（P5）：玩家的 Base 拆给写这些块的格，各格一笔事务；答复逐块带结论（Outcome）。
+	if fw := controller.terrainForwarder(); fw != nil {
+		result, err := m.RelayBrush(context.Context(), context.PlayerID, request.Seq, brush, fw)
+		if err != nil {
+			return terrainRefusal(context, request, err), nil
+		}
+		response := &pb.TerrainEditResponse{Duplicate: result.Duplicate(), LastSeq: result.LastSeq, Chunks: relayChunks(result)}
+		response.Code, response.Reason = relayCode(context, request.Seq, result, terrainError)
+		return response, nil
+	}
 	result, err := m.Brush(context.Context(), context.PlayerID, request.Seq, brush)
 	if err != nil {
 		return terrainRefusal(context, request, err), nil
@@ -62,6 +72,40 @@ func terrainRefusal(context *playeraccess.Context, request *pb.TerrainEditReques
 		response.LastSeq = seqErr.LastSeq
 	}
 	return response
+}
+
+// relayChunks 是一次转发编辑逐块的结论：已执行 / 以前执行过的格列出它锁住的每一块此后的版本；拒绝 / 结果未知的格列出
+// 它那一部分的块，Version 为 0（没有意义）。
+func relayChunks(result terrainmap.RelayResult) []pb.TerrainChunkVersion {
+	var chunks []pb.TerrainChunkVersion
+	for _, part := range result.Parts {
+		outcome := int32(part.Answer.Outcome)
+		switch part.Answer.Outcome {
+		case terrainmap.OutcomeApplied, terrainmap.OutcomeDuplicate:
+			for _, chunk := range part.Answer.Chunks {
+				chunks = append(chunks, pb.TerrainChunkVersion{ChunkX: chunk.Key.X, ChunkY: chunk.Key.Y, Version: chunk.Version, Outcome: outcome})
+			}
+		default:
+			for _, key := range part.Chunks {
+				chunks = append(chunks, pb.TerrainChunkVersion{ChunkX: key.X, ChunkY: key.Y, Outcome: outcome})
+			}
+		}
+	}
+	return chunks
+}
+
+// relayCode 是一次转发编辑汇总的业务码（RelayResult.Err：有结果未知的格答 terrain_pending，否则第一个拒绝的原因）；
+// 基础设施错误答 internal 并记日志。
+func relayCode(context *playeraccess.Context, seq uint64, result terrainmap.RelayResult, mapErr func(error) error) (int32, string) {
+	err := result.Err()
+	if err == nil {
+		return 0, ""
+	}
+	code, reason := errcode.ClientError(mapErr(err))
+	if code == errcode.CodeInternal {
+		slog.Error("terrain relay failed", "player_id", context.PlayerID, "seq", seq, "err", err)
+	}
+	return code, reason
 }
 
 // brushOf 把线上的整数换成笔刷参数；越出字段类型范围的值不合法（不截断：截断会把一个非法请求变成另一个合法请求）。
@@ -97,6 +141,8 @@ func terrainError(err error) error {
 		return apperrors.ErrTerrainOccupied
 	case errors.Is(err, terrainmap.ErrStale), errors.Is(err, terrainmap.ErrSeqAhead):
 		return apperrors.ErrTerrainSeq
+	case errors.Is(err, terrainmap.ErrPending):
+		return apperrors.ErrTerrainPending
 	}
 	return err
 }

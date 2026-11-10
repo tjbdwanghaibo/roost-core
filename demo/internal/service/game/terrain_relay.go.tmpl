@@ -1,0 +1,629 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"math/rand/v2"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	building "{{MODULE}}/game/entities/building"
+	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
+	"{{MODULE}}/game/terrainmap"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+)
+
+// 分区场景的跨格编辑的进程间部分（可编辑地形 P5，方案 §30）：玩家的 Base 把一次编辑的每个格那一份（terrainmap.PartRequest）
+// 发给写这些块的格进程，格执行完答回结论（terrainmap.PartAnswer）。拆分、配额、发号与汇总在 game/terrainmap/relay.go；
+// 这里只是“送到、等回、去重”。
+//
+// 传输是本进程 cellworld Node 的扩展消息（命名空间 terrainEditSpace），至多一次，可能丢失、重复、乱序。协议：
+//   - 身份：每个请求带 (Base 的 incarnation, 序号)。incarnation 是 Base 进程每次启动随机取的 64 位数，序号在进程内递增；
+//     答复带回同一身份，Base 只认自己这一次启动、正在等的请求的答复，并且只认它发给的那个 sid 的答复。
+//   - Base：发出后每 relayResendEvery 按同一身份重发，直到拿到答复或 relayDeadline 到期（答 OutcomeUnknown）。
+//   - 格：同一身份正在执行时重发的请求忽略（执行完会答）；执行完的确定结论（Applied / Duplicate / Refused）按身份缓存
+//     relayAnswerCache 条，重发直接答缓存（答复丢了的那次也拿到原来的结论，不变成 Duplicate）；结果未知的不缓存，重发
+//     再执行一次（格的账本按（玩家, 序号）判重，执行过的答 Duplicate）。同时执行的请求至多 relayMaxInFlight 个，满了丢掉
+//     新请求（Base 会重发）。缓存、在途表只在内存：格重启之后同一身份再来，由持久的账本答 Duplicate 或执行。
+//
+// 并发：deliver 在 Node 的传输回调上（不能阻塞）：只解码、查表、起 goroutine。格的执行在自己的 goroutine 上（terrainmap.Map.Exec
+// 会等 Nest 与 WAL）；Base 的 Forward 在玩家端点的 goroutine 上等。mu 保护 pending、running、done。stop 先撤掉收件
+// （之后的 deliver 丢弃）、取消在途执行的 context，再等它们结束：在 Nest 停下之前调用。
+const (
+	// terrainEditSpace 是跨格编辑在 cellworld 扩展消息里的命名空间。
+	terrainEditSpace = "terrain-edit"
+	// terrainEditWire 是跨格编辑消息的线上格式版本：首字节，不同即丢弃（不兼容旧进程：升级先停旧进程）。
+	terrainEditWire byte = 1
+	// relayResendEvery 是 Base 重发一份请求的间隔；relayDeadline 是 Base 等一份请求的结论的上限，过了答 OutcomeUnknown、
+	// 由客户端用同一个序号重发。格的一份执行通常几毫秒（WAL 落盘），2s 覆盖短暂的丢包与格进程忙。
+	relayResendEvery = 250 * time.Millisecond
+	relayDeadline    = 2 * time.Second
+	// relayExecTimeout 是格执行一份请求的上限（等 Nest、WAL）；超时的结论是 OutcomeUnknown。
+	relayExecTimeout = 10 * time.Second
+	// relayMaxInFlight 是格同时执行的请求数上限；relayAnswerCache 是格缓存的确定结论条数（先进先出）。
+	relayMaxInFlight = 64
+	relayAnswerCache = 4096
+	// relayMaxDetail 是答复里拒绝原因文本的字节上限（只用于日志）。
+	relayMaxDetail = 256
+)
+
+const (
+	relayKindRequest byte = 1
+	relayKindAnswer  byte = 2
+)
+
+// relayConfig 是 terrainRelay 的依赖。
+type relayConfig struct {
+	// Self 是本进程的 sid。
+	Self int32
+	// OwnerOf 是写一块的格进程的 sid（分区网格）。
+	OwnerOf func(terrain.ChunkKey) (int32, bool)
+	// Send 经 cellworld Node 的扩展消息发出（非阻塞，可能丢）。
+	Send func(to int32, body []byte) bool
+	// Exec 执行转发来的一份请求（terrainmap.Map.Exec；测试里换成先装好本进程的 Map 再执行）。
+	Exec func(ctx context.Context, req terrainmap.PartRequest) terrainmap.PartAnswer
+	// ResendEvery / Deadline：0 用 relayResendEvery / relayDeadline（测试缩短）。
+	ResendEvery, Deadline time.Duration
+}
+
+// relayKey 是格这一侧一份请求的身份：发件的 sid 与它给的 (incarnation, 序号)。
+type relayKey struct {
+	from int32
+	inc  uint64
+	id   uint64
+}
+
+// relayWaiter 是 Base 一侧正在等的一份请求：只认 to 的答复。
+type relayWaiter struct {
+	to     int32
+	answer chan terrainmap.PartAnswer
+}
+
+// terrainRelay 是一个分区进程的跨格编辑端点：Base 一侧是 terrainmap.Forwarder，格一侧执行别的 Base 发来的请求。
+type terrainRelay struct {
+	cfg relayConfig
+	inc uint64
+	seq atomic.Uint64
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	execs  sync.WaitGroup
+	sem    chan struct{}
+
+	mu      sync.Mutex
+	stopped bool
+	pending map[uint64]relayWaiter
+	running map[relayKey]struct{}
+	done    map[relayKey]terrainmap.PartAnswer
+	order   []relayKey
+
+	requestsOut, resends, answersIn, timeouts, strayAnswers atomic.Uint64
+	requestsIn, inFlightRepeats, cachedReplies, busyDrops, executed, decodeErrors atomic.Uint64
+}
+
+func newTerrainRelay(cfg relayConfig) (*terrainRelay, error) {
+	if cfg.Self == 0 || cfg.OwnerOf == nil || cfg.Send == nil || cfg.Exec == nil {
+		return nil, errors.New("terrain relay: sid, owner lookup, send and exec are required")
+	}
+	if cfg.ResendEvery <= 0 {
+		cfg.ResendEvery = relayResendEvery
+	}
+	if cfg.Deadline <= 0 {
+		cfg.Deadline = relayDeadline
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &terrainRelay{
+		cfg: cfg, inc: rand.Uint64() | 1, ctx: ctx, cancel: cancel, sem: make(chan struct{}, relayMaxInFlight),
+		pending: map[uint64]relayWaiter{}, running: map[relayKey]struct{}{}, done: map[relayKey]terrainmap.PartAnswer{},
+	}, nil
+}
+
+// OwnerOf 实现 terrainmap.Forwarder。
+func (r *terrainRelay) OwnerOf(key terrain.ChunkKey) (int32, bool) { return r.cfg.OwnerOf(key) }
+
+// Forward 实现 terrainmap.Forwarder：本进程的那一份直接执行；别的格发出去、按同一身份重发，等到结论或期限。
+func (r *terrainRelay) Forward(ctx context.Context, sid int32, req terrainmap.PartRequest) terrainmap.PartAnswer {
+	if sid == r.cfg.Self {
+		return r.cfg.Exec(ctx, req)
+	}
+	id := r.seq.Add(1)
+	body, err := encodeRelayRequest(r.inc, id, req)
+	if err != nil {
+		return terrainmap.PartAnswer{Outcome: terrainmap.OutcomeRefused, Refusal: fmt.Errorf("%w: %w", terrainmap.ErrBrush, err)}
+	}
+	waiter := relayWaiter{to: sid, answer: make(chan terrainmap.PartAnswer, 1)}
+	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return terrainmap.PartAnswer{Outcome: terrainmap.OutcomeRefused, Refusal: terrainmap.ErrDisabled}
+	}
+	r.pending[id] = waiter
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.pending, id)
+		r.mu.Unlock()
+	}()
+	deadline := time.NewTimer(r.cfg.Deadline)
+	defer deadline.Stop()
+	resend := time.NewTicker(r.cfg.ResendEvery)
+	defer resend.Stop()
+	r.requestsOut.Add(1)
+	r.cfg.Send(sid, body)
+	for {
+		select {
+		case answer := <-waiter.answer:
+			return answer
+		case <-resend.C:
+			r.resends.Add(1)
+			r.cfg.Send(sid, body)
+		case <-deadline.C:
+			r.timeouts.Add(1)
+			return terrainmap.PartAnswer{Outcome: terrainmap.OutcomeUnknown, Refusal: fmt.Errorf("cell %d did not answer within %v", sid, r.cfg.Deadline)}
+		case <-ctx.Done():
+			r.timeouts.Add(1)
+			return terrainmap.PartAnswer{Outcome: terrainmap.OutcomeUnknown, Refusal: ctx.Err()}
+		case <-r.ctx.Done():
+			r.timeouts.Add(1)
+			return terrainmap.PartAnswer{Outcome: terrainmap.OutcomeUnknown, Refusal: errors.New("this process is stopping")}
+		}
+	}
+}
+
+// deliver 是 cellworld 扩展消息的处理器（传输回调，不能阻塞）。
+func (r *terrainRelay) deliver(from int32, body []byte) {
+	if len(body) < 2 || body[0] != terrainEditWire {
+		r.decodeErrors.Add(1)
+		return
+	}
+	switch body[1] {
+	case relayKindRequest:
+		inc, id, req, err := decodeRelayRequest(body)
+		if err != nil {
+			r.decodeErrors.Add(1)
+			return
+		}
+		r.serve(relayKey{from: from, inc: inc, id: id}, req)
+	case relayKindAnswer:
+		inc, id, answer, err := decodeRelayAnswer(body)
+		if err != nil {
+			r.decodeErrors.Add(1)
+			return
+		}
+		r.answered(from, inc, id, answer)
+	default:
+		r.decodeErrors.Add(1)
+	}
+}
+
+// serve 是格这一侧收到一份请求：去重、限并发、在自己的 goroutine 上执行，答回结论。
+func (r *terrainRelay) serve(key relayKey, req terrainmap.PartRequest) {
+	r.requestsIn.Add(1)
+	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return
+	}
+	if answer, ok := r.done[key]; ok {
+		r.mu.Unlock()
+		r.cachedReplies.Add(1)
+		r.reply(key, answer)
+		return
+	}
+	if _, ok := r.running[key]; ok {
+		r.mu.Unlock()
+		r.inFlightRepeats.Add(1)
+		return
+	}
+	select {
+	case r.sem <- struct{}{}:
+	default:
+		r.mu.Unlock()
+		r.busyDrops.Add(1)
+		return
+	}
+	r.running[key] = struct{}{}
+	r.execs.Add(1)
+	r.mu.Unlock()
+	go func() {
+		defer r.execs.Done()
+		defer func() { <-r.sem }()
+		ctx, cancel := context.WithTimeout(r.ctx, relayExecTimeout)
+		answer := r.cfg.Exec(ctx, req)
+		cancel()
+		r.executed.Add(1)
+		r.mu.Lock()
+		delete(r.running, key)
+		if answer.Outcome != terrainmap.OutcomeUnknown {
+			r.remember(key, answer)
+		}
+		r.mu.Unlock()
+		r.reply(key, answer)
+	}()
+}
+
+// remember 缓存一份确定的结论（先进先出，至多 relayAnswerCache 条）。调用方持有 mu。
+func (r *terrainRelay) remember(key relayKey, answer terrainmap.PartAnswer) {
+	if len(r.order) >= relayAnswerCache {
+		delete(r.done, r.order[0])
+		r.order = r.order[1:]
+	}
+	r.done[key] = answer
+	r.order = append(r.order, key)
+}
+
+func (r *terrainRelay) reply(key relayKey, answer terrainmap.PartAnswer) {
+	r.cfg.Send(key.from, encodeRelayAnswer(key.inc, key.id, answer))
+}
+
+// answered 是 Base 这一侧收到一份答复：只交给这一次启动、正在等、发给 from 的那份请求（非阻塞）。
+func (r *terrainRelay) answered(from int32, inc, id uint64, answer terrainmap.PartAnswer) {
+	if inc != r.inc {
+		r.strayAnswers.Add(1)
+		return
+	}
+	r.mu.Lock()
+	waiter, ok := r.pending[id]
+	r.mu.Unlock()
+	if !ok || waiter.to != from {
+		r.strayAnswers.Add(1)
+		return
+	}
+	r.answersIn.Add(1)
+	select {
+	case waiter.answer <- answer:
+	default:
+	}
+}
+
+// stop 撤掉收件、取消并等在途的执行。可重复调用；Nest 停下之前调用。
+func (r *terrainRelay) stop() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.stopped = true
+	r.mu.Unlock()
+	r.cancel()
+	r.execs.Wait()
+}
+
+// stats 是 gm.scene.partition 的跨格编辑一栏。
+func (r *terrainRelay) stats() map[string]any {
+	return map[string]any{
+		"requests_out": r.requestsOut.Load(), "resends": r.resends.Load(), "answers_in": r.answersIn.Load(), "timeouts": r.timeouts.Load(),
+		"stray_answers": r.strayAnswers.Load(), "requests_in": r.requestsIn.Load(), "in_flight_repeats": r.inFlightRepeats.Load(),
+		"cached_replies": r.cachedReplies.Load(), "busy_drops": r.busyDrops.Load(), "execs": r.executed.Load(), "decode_errors": r.decodeErrors.Load(),
+	}
+}
+
+// partitionOwnerOf 是写一块的格进程（块不跨格：cell_size 是块边长的整数倍）。
+func partitionOwnerOf(grid *cellworld.Grid, meta terrain.Meta) func(terrain.ChunkKey) (int32, bool) {
+	return func(key terrain.ChunkKey) (int32, bool) {
+		if !meta.Contains(key) {
+			return 0, false
+		}
+		cell, ok := grid.CellAt(key.Bounds().Min)
+		if !ok {
+			return 0, false
+		}
+		owner := grid.SID(cell)
+		return owner, owner != 0
+	}
+}
+
+// ---- 线上格式 ----
+//
+// 请求：版本、kind=1、incarnation（8 字节大端）、序号、op、玩家、序号（编辑），然后按 op：
+//   笔刷：Op、X、Y、Radius、Falloff、Strength、Target、Material；放置：ConfigID、参数个数与各值、GX、GY、Facing、Level；
+//   拆除：GX、GY；改参数：GX、GY、参数个数与各值。
+// 答复：版本、kind=2、incarnation、序号、结论、拒绝码（terrainmap.RefusalCode）、原因文本、点数、LastSeq、块数与各块
+// （X、Y、Version）、有无建筑，有时建筑状态（ID、Standing、Owner、ConfigID、参数、Facing、占地（Pack）、Foundation、
+// Leveled、BaseRevision）。整数都是 varint（有符号）/ uvarint（个数、点数）。
+
+var errRelayWire = errors.New("terrain relay: malformed message")
+
+type relayWriter struct{ b []byte }
+
+func (w *relayWriter) byte(v byte)    { w.b = append(w.b, v) }
+func (w *relayWriter) int(v int64)    { w.b = binary.AppendVarint(w.b, v) }
+func (w *relayWriter) uint(v uint64)  { w.b = binary.AppendUvarint(w.b, v) }
+func (w *relayWriter) bool(v bool) {
+	if v {
+		w.byte(1)
+	} else {
+		w.byte(0)
+	}
+}
+func (w *relayWriter) fixed(v uint64) { w.b = binary.BigEndian.AppendUint64(w.b, v) }
+func (w *relayWriter) ints(vs []int32) {
+	w.uint(uint64(len(vs)))
+	for _, v := range vs {
+		w.int(int64(v))
+	}
+}
+
+type relayReader struct {
+	b   []byte
+	err error
+}
+
+func (r *relayReader) fail() {
+	if r.err == nil {
+		r.err = errRelayWire
+	}
+}
+
+func (r *relayReader) byte() byte {
+	if r.err != nil || len(r.b) < 1 {
+		r.fail()
+		return 0
+	}
+	v := r.b[0]
+	r.b = r.b[1:]
+	return v
+}
+
+func (r *relayReader) int() int64 {
+	if r.err != nil {
+		return 0
+	}
+	v, n := binary.Varint(r.b)
+	if n <= 0 {
+		r.fail()
+		return 0
+	}
+	r.b = r.b[n:]
+	return v
+}
+
+func (r *relayReader) uint() uint64 {
+	if r.err != nil {
+		return 0
+	}
+	v, n := binary.Uvarint(r.b)
+	if n <= 0 {
+		r.fail()
+		return 0
+	}
+	r.b = r.b[n:]
+	return v
+}
+
+func (r *relayReader) bool() bool {
+	switch r.byte() {
+	case 0:
+		return false
+	case 1:
+		return true
+	}
+	r.fail()
+	return false
+}
+
+func (r *relayReader) fixed() uint64 {
+	if r.err != nil || len(r.b) < 8 {
+		r.fail()
+		return 0
+	}
+	v := binary.BigEndian.Uint64(r.b)
+	r.b = r.b[8:]
+	return v
+}
+
+func (r *relayReader) int32() int32 {
+	v := r.int()
+	if v != int64(int32(v)) {
+		r.fail()
+	}
+	return int32(v)
+}
+
+func (r *relayReader) ints(limit int) []int32 {
+	n := r.uint()
+	if n > uint64(limit) {
+		r.fail()
+		return nil
+	}
+	if n == 0 {
+		return nil
+	}
+	vs := make([]int32, n)
+	for i := range vs {
+		vs[i] = r.int32()
+	}
+	return vs
+}
+
+func (r *relayReader) end() error {
+	if r.err == nil && len(r.b) != 0 {
+		r.fail()
+	}
+	return r.err
+}
+
+func encodeRelayRequest(inc, id uint64, req terrainmap.PartRequest) ([]byte, error) {
+	w := relayWriter{b: make([]byte, 0, 64)}
+	w.byte(terrainEditWire)
+	w.byte(relayKindRequest)
+	w.fixed(inc)
+	w.uint(id)
+	w.byte(byte(req.Op))
+	w.int(req.PlayerID)
+	w.int(req.Seq)
+	switch req.Op {
+	case terrainmap.PartBrush:
+		b := req.Brush
+		w.byte(byte(b.Op))
+		w.int(b.X)
+		w.int(b.Y)
+		w.int(b.Radius)
+		w.byte(byte(b.Falloff))
+		w.uint(uint64(b.Strength))
+		w.uint(uint64(b.Target))
+		w.byte(b.Material)
+	case terrainmap.PartPlace:
+		p := req.Placement
+		if len(p.Params) > building.MaxParams {
+			return nil, fmt.Errorf("%d parameters, at most %d", len(p.Params), building.MaxParams)
+		}
+		w.int(int64(p.ConfigID))
+		w.ints(p.Params)
+		w.int(p.GX)
+		w.int(p.GY)
+		w.int(int64(p.Facing))
+		w.bool(p.Level)
+	case terrainmap.PartRemove:
+		w.int(req.GX)
+		w.int(req.GY)
+	case terrainmap.PartParams:
+		if len(req.Params) > building.MaxParams {
+			return nil, fmt.Errorf("%d parameters, at most %d", len(req.Params), building.MaxParams)
+		}
+		w.int(req.GX)
+		w.int(req.GY)
+		w.ints(req.Params)
+	default:
+		return nil, fmt.Errorf("unknown operation %d", req.Op)
+	}
+	return w.b, nil
+}
+
+func decodeRelayRequest(body []byte) (inc, id uint64, req terrainmap.PartRequest, err error) {
+	r := relayReader{b: body[2:]}
+	inc, id = r.fixed(), r.uint()
+	req.Op = terrainmap.PartOp(r.byte())
+	req.PlayerID, req.Seq = r.int(), r.int()
+	switch req.Op {
+	case terrainmap.PartBrush:
+		req.Brush.Op = terrain.BrushOp(r.byte())
+		req.Brush.X, req.Brush.Y, req.Brush.Radius = r.int(), r.int(), r.int()
+		req.Brush.Falloff = terrain.Falloff(r.byte())
+		strength, target := r.uint(), r.uint()
+		if strength > 0xFFFF || target > 0xFFFF {
+			r.fail()
+		}
+		req.Brush.Strength, req.Brush.Target = uint16(strength), uint16(target)
+		req.Brush.Material = r.byte()
+	case terrainmap.PartPlace:
+		req.Placement.ConfigID = r.int32()
+		req.Placement.Params = r.ints(building.MaxParams)
+		req.Placement.GX, req.Placement.GY = r.int(), r.int()
+		req.Placement.Facing = r.int32()
+		req.Placement.Level = r.bool()
+	case terrainmap.PartRemove:
+		req.GX, req.GY = r.int(), r.int()
+	case terrainmap.PartParams:
+		req.GX, req.GY = r.int(), r.int()
+		req.Params = r.ints(building.MaxParams)
+	default:
+		r.fail()
+	}
+	return inc, id, req, r.end()
+}
+
+func encodeRelayAnswer(inc, id uint64, a terrainmap.PartAnswer) []byte {
+	w := relayWriter{b: make([]byte, 0, 64)}
+	w.byte(terrainEditWire)
+	w.byte(relayKindAnswer)
+	w.fixed(inc)
+	w.uint(id)
+	w.byte(byte(a.Outcome))
+	detail := ""
+	if a.Refusal != nil {
+		detail = a.Refusal.Error()
+		if len(detail) > relayMaxDetail {
+			detail = detail[:relayMaxDetail]
+		}
+	}
+	w.byte(terrainmap.RefusalCode(a.Refusal))
+	w.uint(uint64(len(detail)))
+	w.b = append(w.b, detail...)
+	w.uint(uint64(max(a.Points, 0)))
+	w.int(a.LastSeq)
+	w.uint(uint64(len(a.Chunks)))
+	for _, c := range a.Chunks {
+		w.int(int64(c.Key.X))
+		w.int(int64(c.Key.Y))
+		w.int(c.Version)
+	}
+	s := a.Building
+	w.bool(s.ID != 0)
+	if s.ID != 0 {
+		w.int(s.ID)
+		w.bool(s.Standing)
+		w.int(s.Owner)
+		w.int(int64(s.ConfigID))
+		w.ints(s.Params)
+		w.int(int64(s.Facing))
+		lot := int64(0)
+		if s.Lot.W > 0 && s.Lot.H > 0 {
+			lot = s.Lot.Pack()
+		}
+		w.int(lot)
+		w.int(int64(s.Foundation))
+		w.bool(s.Leveled)
+		w.int(s.BaseRevision)
+	}
+	return w.b
+}
+
+func decodeRelayAnswer(body []byte) (inc, id uint64, a terrainmap.PartAnswer, err error) {
+	r := relayReader{b: body[2:]}
+	inc, id = r.fixed(), r.uint()
+	a.Outcome = terrainmap.Outcome(r.byte())
+	if a.Outcome < terrainmap.OutcomeApplied || a.Outcome > terrainmap.OutcomeUnknown {
+		r.fail()
+	}
+	code := r.byte()
+	n := r.uint()
+	if n > relayMaxDetail || n > uint64(len(r.b)) {
+		r.fail()
+		return 0, 0, a, r.err
+	}
+	detail := string(r.b[:n])
+	r.b = r.b[n:]
+	switch a.Outcome {
+	case terrainmap.OutcomeRefused:
+		a.Refusal = terrainmap.RefusalErr(code, detail)
+	case terrainmap.OutcomeUnknown:
+		a.Refusal = fmt.Errorf("the cell's result is unknown: %s", detail)
+	}
+	points := r.uint()
+	if points > 1<<20 {
+		r.fail()
+	}
+	a.Points = int(points)
+	a.LastSeq = r.int()
+	chunks := r.uint()
+	if chunks > 16 {
+		r.fail()
+		return 0, 0, a, r.err
+	}
+	for range chunks {
+		x, y, version := r.int32(), r.int32(), r.int()
+		a.Chunks = append(a.Chunks, terrain_chunk.ChunkVersion{Key: terrain.ChunkKey{X: x, Y: y}, Version: version})
+	}
+	if r.bool() {
+		s := &a.Building
+		s.ID = r.int()
+		s.Standing = r.bool()
+		s.Owner = r.int()
+		s.ConfigID = r.int32()
+		s.Params = r.ints(building.MaxParams)
+		s.Facing = r.int32()
+		if lot := r.int(); lot != 0 {
+			if s.Lot, err = terrain_chunk.UnpackLot(lot); err != nil {
+				r.fail()
+			}
+		}
+		s.Foundation = r.int32()
+		s.Leveled = r.bool()
+		s.BaseRevision = r.int()
+	}
+	return inc, id, a, r.end()
+}

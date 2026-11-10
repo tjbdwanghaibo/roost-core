@@ -11,7 +11,8 @@ var ErrTerrainDisabled = errcode.Define(100052, "terrain_disabled", "this server
 // ErrTerrainBrush：笔刷参数不合法（操作、衰减、半径、强度、目标高度、编辑序号超出 1～2^63−1、中心在地图外）或超出玩家编辑的上限。
 var ErrTerrainBrush = errcode.Define(100053, "terrain_brush", "brush refused")
 
-// ErrTerrainNotOwned：笔刷覆盖到的块归别的格进程写（P2 只做单格；跨格转发是 P3）。
+// ErrTerrainNotOwned：笔刷 / 占地覆盖到的块没有进程写（在分区网格外，或它的格没有托管进程），或收到转发的格不写这块
+// （格到进程的映射在途中变了）。分区场景里跨格的编辑由玩家的 Base 转发给写这些块的格（可编辑地形 P5），不因为跨格答这个码。
 var ErrTerrainNotOwned = errcode.Define(100054, "terrain_not_owned", "this ground is edited by another cell")
 
 // ErrTerrainUnavailable：块的记录装不进来（损坏，或基于旧原始地形且没能丢弃），等运维处理；不是玩家的错，也不是内部错误。
@@ -35,7 +36,7 @@ var ErrTerrainSeq = errcode.Define(100059, "terrain_seq", "terrain edit sequence
 // terrain_unavailable、terrain_rate、terrain_denied（领地 / 权限，或拆除别人的建筑）、terrain_occupied（锚点或占地有建筑）、
 // terrain_seq（序号不在玩家编辑账本的窗口里）。
 
-// ErrBuildingDisabled：这个场景不接建筑（分区场景，方案 §25：邻格还看不到建筑占位）。
+// ErrBuildingDisabled：这个进程不接建筑（没有建筑的 lifecycle；分区场景自 P5 起接建筑）。
 var ErrBuildingDisabled = errcode.Define(100060, "building_disabled", "buildings cannot be placed in this scene")
 
 // ErrBuildingBad：请求不合法（朝向、锚点不在地图里、操作、编辑序号、必须整平的建筑没有整平）。
@@ -58,3 +59,12 @@ var ErrBuildingConfig = errcode.Define(100066, "building_config", "unknown build
 
 // ErrBuildingParams：修改参数个数多于配置的槽数，或有值不在槽的范围里（方案 §27）。
 var ErrBuildingParams = errcode.Define(100067, "building_params", "building parameters refused")
+
+// ErrTerrainPending：分区场景里这次编辑转发给某个格之后，期限内没拿到结论（或那个格的事务结果未知），可能已经生效
+// （可编辑地形 P5）。用同一个 Seq 重发：已生效的部分答 Duplicate、不会再改一次，没生效的部分这次执行。答复的 Chunks
+// 逐块带结论（Outcome），已确定的块照常列出。
+var ErrTerrainPending = errcode.Define(100068, "terrain_pending", "the edit's result is not known yet; send it again with the same sequence")
+
+// ErrBuildingCrossCell：分区场景里建筑的占地跨了两个格（可编辑地形 P5 首版不支持：一座建筑的放置要在一笔事务里锁住
+// 占地覆盖的全部块）。换个位置，让占地落在一个格里。
+var ErrBuildingCrossCell = errcode.Define(100069, "building_cross_cell", "the building's lot straddles two cells")

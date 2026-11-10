@@ -2,7 +2,8 @@
 
 package protocoldef
 
-// 可编辑地形的玩家编辑（可编辑地形方案 P2，单格）：一次笔刷。玩家所在进程就是写这块地的格进程（跨格转发是 P3）；
+// 可编辑地形的玩家编辑（可编辑地形方案 P2）：一次笔刷。普通场景里玩家所在进程写整张图；分区场景（P5）里玩家所在的
+// Base 把笔刷拆给写这些块的格进程，各格独立提交（不是原子的，D5），答复逐块带结论（TerrainChunkVersion.Outcome）。
 // 改动不从答复里来，而是从同一条同步流：改过的块是 terrain 命名空间的同步对象（TerrainChunkDao 的 BaseRevision /
 // Version / Heights / Materials），客户端用生成的 ApplySyncTerrainChunkDao 应用、按 Version 重建 mesh。客户端可以用
 // 同一笔刷算法（gameplay/terrain 的 Brush，金样 client/spec/terrain-brush.json）先在本地预测。
@@ -30,18 +31,26 @@ type TerrainEditRequest struct {
 }
 
 // TerrainChunkVersion 是一块（块坐标）在这次编辑之后的版本；0 表示仍是原始块。
+//
+// Outcome 只在分区场景（P5）给出，是写这块的格对这次编辑的结论：1 这次执行了、2 以前执行过（这次没写）、3 拒绝（这块
+// 没改，原因是答复的 Code）、4 结果未知（可能已生效，用同一个 Seq 重发）。3、4 时 Version 没有意义。普通场景为 0。
 type TerrainChunkVersion struct {
 	ChunkX  int32 `pb:"1"`
 	ChunkY  int32 `pb:"2"`
 	Version int64 `pb:"3"`
+	Outcome int32 `pb:"4"`
 }
 
 // TerrainEditResponse 答复一次编辑：Code 0 时 Chunks 是笔刷覆盖到的每一块提交后的版本，Duplicate 表示这个 Seq 已经
 // 生效过、这次什么都没改。LastSeq 是服务端此刻已应用的最大序号，在 Code 0（含 Seq = 0 的查询）与 terrain_seq 时给出。
-// 拒绝时什么都没写。Codes: terrain_disabled, terrain_brush（参数不合法或超出上限）, terrain_not_owned（这块地归别的格进程写）,
+// 普通场景拒绝时什么都没写。Codes: terrain_disabled, terrain_brush（参数不合法或超出上限）, terrain_not_owned（这块地没有进程写）,
 // terrain_unavailable（这块暂时不能改）, terrain_rate（改动点数配额用完：每人每秒 270 点）, terrain_denied（领地 / 权限）,
 // terrain_occupied（有建筑）, terrain_seq（Seq 不在服务端的窗口里：Seq ≤ LastSeq 表示太旧——已无法确认当时是否生效，
-// 这次没做，也不要换新号重发同一笔；Seq > LastSeq 表示跳得太远——这次没做，从 LastSeq + 1 续号再发）。
+// 这次没做，也不要换新号重发同一笔；Seq > LastSeq 表示跳得太远——这次没做，从 LastSeq + 1 续号再发），
+// terrain_pending（分区场景：有格期限内没有结论，可能已生效；用同一个 Seq 重发）。
+//
+// 分区场景（P5）的部分成功：Code 是第一个拒绝的格的原因，Chunks 里 Outcome 为 1 / 2 的块已经生效（不回滚，D5）。
+// 用同一个 Seq 重发是安全的：已生效的块答 2，拒绝过的块再判一次。
 type TerrainEditResponse struct {
 	Code      int32                 `pb:"1"`
 	Reason    string                `pb:"2"`

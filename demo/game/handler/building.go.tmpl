@@ -2,6 +2,7 @@ package handler
 
 import (
 	building "{{MODULE}}/game/entities/building"
+	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 	"{{MODULE}}/game/terrainmap"
@@ -46,6 +47,36 @@ func handlerBuildingParams(site building.ISiteEntity, editor terrain_editor.ILed
 		return building.Result{}, terrainmap.ErrDisabled
 	}
 	return m.ApplyParams(site, editor, seq, params)
+}
+
+// handlerBuildingPlacePart / handlerBuildingRemovePart / handlerBuildingParamsPart 是分区场景里写这块地的格执行玩家的 Base
+// 转发来的放置 / 拆除 / 改参数（P5，Map.Exec 发起）：同上面三个，账本是玩家在本格的 TerrainCellEditor。
+//
+//roost:nest rollback=undo durability=strict
+func handlerBuildingPlacePart(targets []terrain_chunk.ISurfaceEntity, site building.ISiteEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, placement building.Placement) (building.Result, error) {
+	m := terrainmap.Active()
+	if m == nil {
+		return building.Result{}, terrainmap.ErrDisabled
+	}
+	return m.ApplyPlacePart(targets, site, editor, seq, placement)
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerBuildingRemovePart(targets []terrain_chunk.ISurfaceEntity, site building.ISiteEntity, editor terrain_cell_editor.ILedgerEntity, seq int64) (building.Result, error) {
+	m := terrainmap.Active()
+	if m == nil {
+		return building.Result{}, terrainmap.ErrDisabled
+	}
+	return m.ApplyRemovePart(targets, site, editor, seq)
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerBuildingParamsPart(site building.ISiteEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, params []int32) (building.Result, error) {
+	m := terrainmap.Active()
+	if m == nil {
+		return building.Result{}, terrainmap.ErrDisabled
+	}
+	return m.ApplyParamsPart(site, editor, seq, params)
 }
 
 // handlerBuildingRebase 是启动对账里的一座建筑（Map.ReconcileBuildings 发起，Install 之后）：核对建筑与块上的占地记录

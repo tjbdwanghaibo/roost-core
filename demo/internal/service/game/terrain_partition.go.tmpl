@@ -59,6 +59,9 @@ type partitionTerrain struct {
 	mu       sync.Mutex
 	clients  map[terrain.ChunkKey]struct{}                     // 本进程玩家附近、别的进程写的块
 	replicas map[terrain.ChunkKey]*terrain_chunk.Replica // clients 里改过的块的副本（已登记为 subject）
+	// clientLots 是只给客户端看的块（不在 Ghost 带）最后收到的占位修订号：只为了订阅时报给拥有者、不让它每次续期都重发；
+	// 占位本身不用（客户端看建筑走建筑实体，P5 未覆盖跨 Base 的建筑可见）。
+	clientLots map[terrain.ChunkKey]int64
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -86,7 +89,7 @@ func newPartitionTerrain(m *terrainmap.Map, sync *terrainSync, grid *cellworld.G
 	}
 	p := &partitionTerrain{
 		m: m, sync: sync, ghost: map[terrain.ChunkKey]struct{}{}, views: map[int64]spatial.Point{}, wake: make(chan struct{}, 1),
-		clients: map[terrain.ChunkKey]struct{}{}, replicas: map[terrain.ChunkKey]*terrain_chunk.Replica{},
+		clients: map[terrain.ChunkKey]struct{}{}, replicas: map[terrain.ChunkKey]*terrain_chunk.Replica{}, clientLots: map[terrain.ChunkKey]int64{},
 	}
 	for _, key := range m.GhostKeys() {
 		p.ghost[key] = struct{}{}
@@ -108,7 +111,8 @@ func newPartitionTerrain(m *terrainmap.Map, sync *terrainSync, grid *cellworld.G
 		},
 	}
 	if !m.Region().Own.Empty() {
-		cfg.Source, cfg.Owns = m.View(), m.Owns
+		// 本格写的块的建筑占地随块一起推给邻格的 Ghost 带（P5）：邻格的行走判定看得见站在 Ghost 带里的建筑。
+		cfg.Source, cfg.Owns, cfg.Lots = m.View(), m.Owns, m.ReplicaLots
 	}
 	rep, err := terrain.NewReplicator(cfg)
 	if err != nil {
@@ -131,6 +135,8 @@ func (p *partitionTerrain) start() {
 		p.sync.show(chunk)
 		p.rep.Changed(chunk.Key())
 	})
+	// 块上的占地提交之后（放置 / 拆除 / 对账，P5）：推给订阅了它的副本（推送带当前的占位记录）。
+	p.m.SetLotsCommitted(p.rep.Changed)
 	p.sync.setFollow(p.follow)
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel, p.done = cancel, make(chan struct{})
@@ -154,6 +160,7 @@ func (p *partitionTerrain) stop() {
 	<-p.done
 	p.cancel = nil
 	p.m.SetCommitted(p.sync.show)
+	p.m.SetLotsCommitted(nil)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for key, r := range p.replicas {
@@ -161,6 +168,7 @@ func (p *partitionTerrain) stop() {
 		delete(p.replicas, key)
 	}
 	clear(p.clients)
+	clear(p.clientLots)
 }
 
 // witness 是 cellworld 的 witness 观察点（Base 接受了一份 witness，在提交后回调上）：玩家自己的位置就是地形视点。
@@ -339,10 +347,39 @@ func (p *partitionTerrain) Forget(key terrain.ChunkKey) {
 	if _, wanted := p.clients[key]; wanted {
 		return
 	}
+	delete(p.clientLots, key)
 	if r := p.replicas[key]; r != nil {
 		p.sync.hideReplica(r)
 		delete(p.replicas, key)
 	}
+}
+
+// HeldLots（terrain.ReplicaLotStore）：Ghost 带的块报占位表里的修订号；只给客户端看的块报最后收到的修订号。
+func (p *partitionTerrain) HeldLots(key terrain.ChunkKey) int64 {
+	if _, ghost := p.ghost[key]; ghost {
+		return p.m.ReplicaLotsHeld(key)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.clientLots[key]
+}
+
+// ApplyLots（terrain.ReplicaLotStore）：Ghost 带的块装进占位表（行走判定看得见邻格的建筑）；只给客户端看的块只记修订号。
+// 修订号只进不退：不比持有的大答 ErrStaleOverlay。
+func (p *partitionTerrain) ApplyLots(key terrain.ChunkKey, rev int64, lots []int64) error {
+	if _, ghost := p.ghost[key]; ghost {
+		if held := p.m.ReplicaLotsHeld(key); rev <= held {
+			return fmt.Errorf("%w: lots revision %d, held %d", terrain.ErrStaleOverlay, rev, held)
+		}
+		return p.m.ApplyReplicaLots(key, rev, lots)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if rev <= p.clientLots[key] {
+		return fmt.Errorf("%w: lots revision %d, held %d", terrain.ErrStaleOverlay, rev, p.clientLots[key])
+	}
+	p.clientLots[key] = rev
+	return nil
 }
 
 // stats 是 gm.scene.partition 的地形一栏：副本端点的计数、Ghost 带块数、客户端想要的块与已登记的副本数。

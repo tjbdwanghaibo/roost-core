@@ -1,0 +1,54 @@
+package terrain_cell_editor
+
+import (
+	"fmt"
+
+	db "{{MODULE}}/db"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+// EntityKindTerrainCellEditor 是分区场景里玩家在一个格上的地形编辑账本的 kind。
+const EntityKindTerrainCellEditor entity.EntityKind = 14
+
+// ITerrainCellEditorEntity is the lock-safe business view used by Nest handlers.
+type ITerrainCellEditorEntity interface{ entity.IThreadSafeEntity }
+
+// TerrainCellEditor 是分区场景里一个玩家在本格进程上的地形编辑账本（可编辑地形 P5，跨格编辑）：玩家的一次编辑经他的
+// Base 进程拆成各格的一部分（game/terrainmap 的 Relay*），每个格按（玩家, 编辑序号）判断自己那一部分是否已经执行过——
+// 账本就在这个格上，与这一部分覆盖的块（或建筑）同一笔 Nest 事务锁住、一起提交或回滚。规则与 terrain_editor 的 SeqWindow
+// 相同（同一序号在本格至多执行一次），只是不判“超前”：超前由玩家 Base 上面向客户端的账本（TerrainEditor）判过，
+// 一个玩家在别的格编辑了很久之后第一次来到本格时，序号比本格的 LastSeq 大很多是正常的。
+//
+// 实体 ID：UniqueID(playerID) = 玩家的 unique ID（kind 与 Player、TerrainEditor 不同，所以是另一个实体）；DAO 按 sid
+// 分库（每个格进程写自己的库）。ID 是确定性的，只能经 GetOrCreate 建。
+//
+// Category：PlayerScoped（排在 World 之后取锁）：一笔事务先锁块与建筑（World），再锁账本。
+//
+//roost:entity id=14 entityKind=EntityKindTerrainCellEditor category=entity.EntityCategoryPlayerScoped
+type TerrainCellEditor struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	ledger *LedgerComponent         `comp:"CompTypeLedger"`
+	dao    *db.TerrainCellEditorDao `dao:"terrain_cell_editor"`
+}
+
+// UniqueID 返回玩家在本格的账本的实体唯一号：就是玩家的 unique ID，须在 1～entity.UniqueIDMask。
+func UniqueID(playerID int64) (int64, error) {
+	if playerID <= 0 || uint64(playerID) > entity.UniqueIDMask {
+		return 0, fmt.Errorf("terrain cell editor: player id %d is outside 1..%d", playerID, entity.UniqueIDMask)
+	}
+	return playerID, nil
+}
+
+// EntityID 返回玩家在本格的账本的完整实体 ID。
+func EntityID(playerID int64) (int64, error) {
+	unique, err := UniqueID(playerID)
+	if err != nil {
+		return 0, err
+	}
+	return entity.BuildEntityID(unique, EntityKindTerrainCellEditor)
+}
+
+// PlayerID 是这个账本所属的玩家（UniqueID 的逆）。
+func (e *TerrainCellEditor) PlayerID() int64 { return entity.GetUniqueIDFromEntityID(e.ID()) }

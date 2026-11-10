@@ -38,6 +38,7 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	db "{{MODULE}}/db"
+	terrain_cell_editor "{{MODULE}}/game/entities/terrain_cell_editor"
 	terrain_chunk "{{MODULE}}/game/entities/terrain_chunk"
 	terrain_editor "{{MODULE}}/game/entities/terrain_editor"
 )
@@ -111,12 +112,30 @@ type Editors interface {
 	GetOrCreate(ctx context.Context, uniqueID int64) (*terrain_editor.TerrainEditor, bool, error)
 }
 
-// Editor 是改块事务的 Sender（生成的 syncsender.TerrainEditSender：handler 文件 game/handler/terrain_edit.go 里的四个 handler）。
+// CellEditors 是分区场景里玩家在本格的编辑账本的 lifecycle（生成的 *lifecycle.TerrainCellEditorLifecycle，P5）。
+type CellEditors interface {
+	GetOrCreate(ctx context.Context, uniqueID int64) (*terrain_cell_editor.TerrainCellEditor, bool, error)
+}
+
+// Editor 是改块事务的 Sender（生成的 syncsender.TerrainEditSender：handler 文件 game/handler/terrain_edit.go 里的 handler）。
 type Editor interface {
 	Sync_TerrainEdit(ctx context.Context, id int64, edits []terrain_chunk.PointEdit) (int64, error)
 	MultiGroupSync_TerrainBrush(ctx context.Context, targets []int64, editor int64, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error)
+	MultiGroupSync_TerrainBrushPart(ctx context.Context, targets []int64, editor int64, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error)
 	Sync_TerrainDiscard(ctx context.Context, id int64, staleRevision int64, currentRevision int64) (bool, error)
 	Sync_TerrainEditSeq(ctx context.Context, editor int64) (int64, error)
+	Sync_TerrainEditIssue(ctx context.Context, editor int64, seq int64) (terrain_editor.Issue, error)
+}
+
+// seqLedger 是事务里判重的编辑账本：不分区时是玩家的 TerrainEditor（判重与面向客户端的序号是同一份），分区场景的格上是
+// 玩家在本格的 TerrainCellEditor（P5：只判本格那一部分，不判超前）。只在账本实体的 Nest 锁内调用。
+type seqLedger interface {
+	Check(seq int64) terrain_editor.Verdict
+	Record(seq int64)
+	LastSeq() int64
+	PlayerID() int64
+	Buildings() int64
+	AddBuildings(delta int64)
 }
 
 // Policy 是玩家编辑的上限（方案 §4 / §8.1 初值）。不做成配置：它们与客户端的笔刷 UI 一起定，改了要让客户端知道；
@@ -225,6 +244,12 @@ type Map struct {
 	buildingCommitted atomic.Pointer[func(BuildingCommit)]
 	// reconciled 是启动对账核对通过的站着的建筑（ReconcileBuildings 写一次，之后只读）：建筑同步启动时按它登记 subject。
 	reconciled []BuildingCommit
+
+	// cellEditors 在 EnableCell 之后非 nil（分区场景里托管格的进程，P5）：本格执行跨格编辑的一部分时用的账本。Install 之前
+	// 设定，之后只读。
+	cellEditors CellEditors
+	// lotsCommitted 是块上的占地（Lots）提交并发布之后的通知（分区场景：把占位推给邻格的 Ghost 带，P5）；nil 时不通知。
+	lotsCommitted atomic.Pointer[func(terrain.ChunkKey)]
 }
 
 // Open 打开原始地形包、建空视图。region 由 regionOf 按包的地图参数算出（调用方据此把分区格裁到地图里）。
@@ -405,9 +430,10 @@ func (m *Map) Load(ctx context.Context, store coredata.Store) (LoadStats, error)
 	var base []terrain.ChunkKey
 	for _, key := range keys {
 		record, ok := records[key]
-		if ok && record.err == nil && len(record.lots) > 0 && m.Owns(key) {
+		if ok && record.err == nil && len(record.lots) > 0 {
 			// 建筑占地（P4）：不论这块有没有地形改动（Version 0 的记录也可以有占地），也不论下面是否丢弃地形改动（丢弃不动
-			// 占地，换版后的建筑由 ReconcileBuildings 处置），按记录发布给行走判定。
+			// 占地，换版后的建筑由 ReconcileBuildings 处置），按记录发布给行走判定。Ghost 带里邻格的块同样按库里已提交的
+			// 记录装入（P5），之后由地形副本跟上（修订号只进不退）。
 			m.occupancy.publish(key, record.lotRevision, record.lots)
 		}
 		switch {
@@ -927,8 +953,27 @@ func (m *Map) LastSeq(ctx context.Context, playerID int64) (int64, error) {
 	return last, nil
 }
 
-// checkBrush 是事务之前的校验（只读内存），返回覆盖到的块。
+// checkBrush 是事务之前的校验（只读内存），返回覆盖到的块：参数与 Policy（checkBrushParams），覆盖到的块都归本进程写、
+// 都装得进来。
 func (m *Map) checkBrush(playerID int64, seq uint64, brush terrain.Brush) ([]terrain.ChunkKey, error) {
+	keys, err := m.checkBrushParams(playerID, seq, brush)
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range keys {
+		if !m.Owns(key) {
+			return nil, fmt.Errorf("%w: chunk %v", ErrNotOwned, key)
+		}
+		if cause := m.unloadableErr(key); cause != nil {
+			return nil, fmt.Errorf("%w: chunk %v: %v", ErrUnloadable, key, cause)
+		}
+	}
+	return keys, nil
+}
+
+// checkBrushParams 是不看块归属的那部分校验（分区场景的 Base 转发之前也查它，P5）：（玩家, 序号）的范围、笔刷参数、
+// Policy 的半径 / 增量 / 块数，返回覆盖到的块。
+func (m *Map) checkBrushParams(playerID int64, seq uint64, brush terrain.Brush) ([]terrain.ChunkKey, error) {
 	p := m.policy
 	if seq == 0 || seq > math.MaxInt64 {
 		return nil, fmt.Errorf("%w: player %d edit sequence %d outside 1..%d", ErrBrush, playerID, seq, int64(math.MaxInt64))
@@ -952,14 +997,6 @@ func (m *Map) checkBrush(playerID int64, seq uint64, brush terrain.Brush) ([]ter
 	if len(keys) > p.MaxChunks {
 		return nil, fmt.Errorf("%w: the brush covers %d chunks, at most %d", ErrBrush, len(keys), p.MaxChunks)
 	}
-	for _, key := range keys {
-		if !m.Owns(key) {
-			return nil, fmt.Errorf("%w: chunk %v", ErrNotOwned, key)
-		}
-		if cause := m.unloadableErr(key); cause != nil {
-			return nil, fmt.Errorf("%w: chunk %v: %v", ErrUnloadable, key, cause)
-		}
-	}
 	return keys, nil
 }
 
@@ -974,10 +1011,33 @@ func (m *Map) checkBrush(playerID int64, seq uint64, brush terrain.Brush) ([]ter
 //
 // 1～3 的拒绝在第一次写之前；4 之后不会失败。事务回滚（提交被拒）时块与账本都由 setter 的逆操作还原，提交后回调不执行。
 func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+	return m.applyBrush(targets, editor.LedgerComp(), seq, brush)
+}
+
+// ApplyBrushPart 是 handler TerrainBrushPart 的业务（分区场景的格执行跨格编辑的本格部分，P5）：同 ApplyBrush，账本是玩家在
+// 本格的 TerrainCellEditor，目标组是笔刷覆盖到的块里归本进程写的那几块（Map.ownedPart）。
+func (m *Map) ApplyBrushPart(targets []terrain_chunk.ISurfaceEntity, editor terrain_cell_editor.ILedgerEntity, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
+	return m.applyBrush(targets, editor.LedgerComp(), seq, brush)
+}
+
+// ownedPart 是笔刷覆盖到的块里归本进程写的那几块（按 (Y, X) 升序）。不分区时覆盖到的块必须都归本进程（Brush 事前已查），
+// 就是全部；分区场景的格只执行这一部分。
+func (m *Map) ownedPart(brush terrain.Brush) []terrain.ChunkKey {
+	covered := brush.Chunks(m.meta)
+	part := covered[:0:0]
+	for _, key := range covered {
+		if m.Owns(key) {
+			part = append(part, key)
+		}
+	}
+	return part
+}
+
+// applyBrush 是 ApplyBrush / ApplyBrushPart 的共同部分（步骤见 ApplyBrush）。
+func (m *Map) applyBrush(targets []terrain_chunk.ISurfaceEntity, ledger seqLedger, seq int64, brush terrain.Brush) (terrain_chunk.BrushResult, error) {
 	if seq < 1 {
 		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: edit sequence %d", ErrBrush, seq)
 	}
-	ledger := editor.LedgerComp()
 	surfaces := make([]*terrain_chunk.SurfaceComponent, len(targets))
 	for i, target := range targets {
 		surfaces[i] = target.SurfaceComp()
@@ -997,11 +1057,11 @@ func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_
 	case terrain_editor.Duplicate:
 		return terrain_chunk.BrushResult{Duplicate: true, Chunks: versions(), LastSeq: ledger.LastSeq()}, nil
 	case terrain_editor.Stale, terrain_editor.Ahead:
-		return terrain_chunk.BrushResult{}, &SeqError{PlayerID: ledger.Owner().PlayerID(), Seq: seq, LastSeq: ledger.LastSeq(), Verdict: verdict}
+		return terrain_chunk.BrushResult{}, &SeqError{PlayerID: ledger.PlayerID(), Seq: seq, LastSeq: ledger.LastSeq(), Verdict: verdict}
 	}
-	want := brush.Chunks(m.meta)
-	if len(want) != len(surfaces) {
-		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: the brush covers %d chunks, the transaction holds %d", ErrBrush, len(want), len(surfaces))
+	want := m.ownedPart(brush)
+	if len(want) == 0 || len(want) != len(surfaces) {
+		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: the brush covers %d chunks written here, the transaction holds %d", ErrBrush, len(want), len(surfaces))
 	}
 	before := make(map[terrain.ChunkKey]terrain.Chunk, len(surfaces))
 	fresh := make(map[terrain.ChunkKey]bool, len(surfaces))
@@ -1026,20 +1086,29 @@ func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_
 		}
 		before[key], fresh[key] = data, !fromRecord
 	}
-	changes, err := brush.Apply(m.meta, m.policy.Limits, before)
+	changes, err := brush.ApplyIn(m.meta, m.policy.Limits, before, want)
 	if err != nil {
 		return terrain_chunk.BrushResult{}, fmt.Errorf("%w: %w", ErrBrush, err)
 	}
 	byKey := make(map[terrain.ChunkKey][]terrain_chunk.PointEdit, len(changes))
+	points := 0
 	for _, change := range changes {
 		edits := make([]terrain_chunk.PointEdit, len(change.Points))
 		occupied := occupancy[change.Key]
+		was := before[change.Key]
 		for i, p := range change.Points {
 			// 建筑占地在块的锁里读（块的 Lots，与放置同一把锁）；业务另外的占位经钩子。
 			if occupied.Has(p.Index) || m.rules != nil && m.rules.Occupied(change.Key, p.Index) {
 				return terrain_chunk.BrushResult{}, fmt.Errorf("%w: chunk %v point %d", ErrOccupied, change.Key, p.Index)
 			}
 			edits[i] = terrain_chunk.PointEdit{Index: p.Index, Height: p.Height, Material: p.Material}
+			// 实际改动的点数（口径同配额：高度、材质各算一次）：分区场景的 Base 按它多退预扣的配额。
+			if p.Height != was.Heights[p.Index] {
+				points++
+			}
+			if p.Material != was.Materials[p.Index] {
+				points++
+			}
 		}
 		byKey[change.Key] = edits
 	}
@@ -1059,7 +1128,7 @@ func (m *Map) ApplyBrush(targets []terrain_chunk.ISurfaceEntity, editor terrain_
 		}
 	}
 	ledger.Record(seq)
-	return terrain_chunk.BrushResult{Chunks: versions(), LastSeq: ledger.LastSeq()}, nil
+	return terrain_chunk.BrushResult{Chunks: versions(), LastSeq: ledger.LastSeq(), Points: points}, nil
 }
 
 // pointQuota 是每个玩家的改动点数令牌桶：每秒补 rate 个、最多攒 rate 个，满桶时可以透支一次（见 Brush 的“配额”）。

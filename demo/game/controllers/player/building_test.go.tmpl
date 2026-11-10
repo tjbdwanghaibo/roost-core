@@ -55,6 +55,8 @@ func TestBuildingRefusalsMapToTheirCodes(t *testing.T) {
 		{terrainmap.ErrNotOwned, apperrors.ErrTerrainNotOwned},
 		{terrainmap.ErrDisabled, apperrors.ErrTerrainDisabled},
 		{terrainmap.ErrSeqAhead, apperrors.ErrTerrainSeq},
+		{terrainmap.ErrBuildCrossCell, apperrors.ErrBuildingCrossCell},
+		{terrainmap.ErrPending, apperrors.ErrTerrainPending},
 	} {
 		wrapped := fmt.Errorf("terrain: place building: %w", c.err)
 		if got := buildingError(wrapped); !errors.Is(got, c.want) || codeOf(got) == errcode.CodeInternal {
