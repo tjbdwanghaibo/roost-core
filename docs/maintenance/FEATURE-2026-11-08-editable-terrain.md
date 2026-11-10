@@ -922,3 +922,85 @@ TerrainChunk 按 1 秒周期下发，玩家位置变化即发；服务端行走�
 | 分区世界比地形图大 | 图外不可走（Walker 规则），启动记 Warn | ★ 不可走（不猜，与“块没装入”一致）；或图外不判高度（只按世界边缘走）；或启动拒绝（配置校验要求地形图覆盖分区世界） |
 | 刷怪点 / 进场位置 | 不检查 `Standable` | ★ 先不查（demo 原型，站不住的角色只是不动）；或刷怪 / 进场时按 `Standable` 跳过或挪到最近能站的节点（同普通场景的 `Place`） |
 | 每点问 `Cell` 的成本 | 全速玩家每拍约 1µs | ★ 先保持，T09 实测后再定；或 `Surface` 增加节点边长，按格边界解析求交（每拍只问跨过的边界，接口变化） |
+
+## 25. P4 水与建筑实施结果（2026-11-10）
+
+分支 `feat/terrain-p4`（基于 main `960e485c`）。完成[进度总表](TERRAIN-STATUS.md) T07 的服务端部分：区域水位线（D3）与普通场景的建筑（放置校验、地基整平、拆除、占位、并发、重启与换版处置）。证据、命令与变异红文本见 [evidence/terrain-p4-20261110](evidence/terrain-p4-20261110/README.md)。§26 留给同期另一轮。
+
+### 25.1 水位线（D3：全局 / 区域）
+
+- **数据来源：原始地形包的元数据**（不是配置键）。`terrain.Meta.WaterRegions`：块对齐的半开矩形 `[MinX, MaxX) × [MinY, MaxY)`（块坐标）与区域水位 `Level`（世界高度，厘米；`math.MinInt32` 表示这片没有水）。区域在图内、非空、互不重叠，至多 1024 个（`MaxWaterRegions`），`Meta.Validate` 检查。一块只有一个水位：在区域里取区域的，否则取全局 `WaterLevel`（`Meta.WaterLevelOf`）。选包而不是配置：服务端、C# 客户端读同一个文件、同一份 SHA-256 校验，不会一端按配置、一端按包；换水位就是换包，走 D13。块对齐让一块一个水面，客户端岸线（T03）每块只有一个等高值。
+- **包格式版本 2**：包头第 68 字节是区域数，区域表（每项 20 字节：四个 int32 块坐标 + 水位）紧跟块索引表之后，包头 / 索引的 SHA-256 覆盖它。版本 1 的包拒绝（未上线不兼容，升级须用新 `terrainpack` 重新生成）。
+- **同一来源**：`View` 在 `NewView` 时按块算好水位表；`IsWater` / `Probe`（`Ground.WaterLevel`、`Depth()`）/ `WaterDepth`、`Walker` 的游泳判定与 `StandZ`、建筑的“不在水下”都按“地面高度 < 所在块的水位”判（等于不算水）。所以挖到水位以下就是水、填回水位以上就是陆地，同一份包与同一组编辑在任何一端得到同一结论（`TestDigALakeFillItBackByTheChunksWaterLevel`、`TestWalkerSwimsByTheSameWaterLevelAsTheQueries`）。区域边界两侧水位不同时，行走按两节点各自块的水位判（湖边 30m 落差两个方向都挡，449.5m 湖岸照常走）。
+- **C#**：`TerrainMeta.WaterRegions`、`TerrainPack` 版本 2、`TerrainView` 每块水位与 `WaterDepth`，金样 `client/spec/terrain-golden.pack` 与 `terrain-queries.json` 加了两个区域（块 (1,1) 水位 +300m，块 (0,1) 无水）与逐查询的 `water_level`，Go 与 C# 逐点一致。
+- **工具**：`terrainpack -water-region minX,minY,maxX,maxY,level`（可重复）。
+
+### 25.2 建筑（普通场景）
+
+实体与数据（全部按正式 codegen / demo 模板生成，`codegen/internal/roost/demo.go` 的步骤）：
+
+| 名字 | 内容 |
+| --- | --- |
+| `Building`（kind 13，World 等级，集合 `buildings` schema 1） | 状态（0 空地 / 1 站着）、属主、类型、朝向、占地宽高、地基世界高度（没整平是 MinInt32）、放置时的 `BaseRevision`；只持久不同步。实体 ID 由锚点节点（占地左下角的 1m 采样点）决定，只经 `GetOrCreate`；拆除清空记录、不删档（确定性 ID 删档后不能再建，同一锚点还要能放） |
+| `TerrainChunkDao` schema 4 | 加 `Lots []int64`（store 6，这块上的建筑占地，每项 int64 打包锚点与宽高）与 `LotRevision`（store 7，每次增删加一）；只持久不同步，不动 `Version` |
+| `TerrainEditorDao` schema 2 | 加 `Buildings`（store 3，玩家站着的建筑数） |
+| 协议 `Building`（10039） | `op` 1 放置（类型、锚点、朝向、是否整平）/ 2 拆除（锚点）；答复建筑状态、各块版本、`last_seq`；业务码 100060～100065（`building_disabled` / `building_bad` / `building_slope` / `building_underwater` / `building_limit` / `building_missing`），其余与地形编辑共用 |
+
+规则（`game/terrainmap/building.go`）：
+
+1. **身份**：与笔刷共用（玩家 ID, 编辑序号）与同一份账本（D18）：重发答 `duplicate`，窗口外答 `terrain_seq`。拆除的重发有一点不同：锚点上已经没有建筑时直接答 `building_missing`（不进事务、不建实体），对客户端的结论与 `duplicate` 相同。
+2. **校验**（全部在第一次写之前，拒绝零写入）：类型 / 朝向 / 占地在图里；块归本进程且装着；锚点上没有站着的建筑；占地的每个节点不在块的 `Lots` 里、业务钩子 `Rules.Occupied` 不占；玩家建筑数 < `Policy.MaxBuildings`（缺省 16）；高差（占地各节点最高 − 最低）不超过类型的 `MaxRise`（不整平）或 `MaxCut`（整平）；每个节点（整平时按整平后的高度）不低于所在块的水位；每块至多 64 份占地。可选的业务权限钩子 `BuildRules.AllowBuild`（`Rules` 同时实现它时生效，事务之前）。
+3. **整平**：把占地压到占地各节点高度原始值的平均（四舍五入），是同一笔事务里的 `SurfaceComponent.Apply`（整字段守卫照常、版本加一、提交后进视图并登记同步）。配额与笔刷同一个桶：每次至少 20 点，整平再加会改高度的节点数（事务前在视图上估算）。
+4. **事务**：`handler BuildingPlace / BuildingRemove`（`rollback=undo durability=strict`），目标是占地覆盖的块（至多 2 × 2，组目标）、建筑实体与玩家账本；写建筑、每块 `AddLot`、账本记序号与建筑数。拆除只许属主（`terrain_denied`），地形不复原。
+5. **串行化点：块的锁**。权威占地在块上（`Lots`），重叠检查在块的锁里读它；两份占地只要有一个公共节点，就有一块是两笔事务共同的目标，Nest 按块串行，后到的那笔看得见前一笔已提交的 `Lots`。笔刷同样锁块、改到 `Lots` 的节点答 `terrain_occupied`。所以并发放置不会重叠，也不会有笔刷改到正在放的建筑脚下。
+6. **占位推导（行走 / 寻路）**：`Map.Walker()` 的 `Occupied` = 进程内占位表 OR `Rules.Occupied`。占位表每块一个原子槽位（占地 + 由它算出的 4096 位位图），`Load` 时按块记录建好，放置 / 拆除在 `nest.AfterCommit` 里按 `LotRevision` 换新（只接受更大的修订号，回调乱序也不回退）。它只给行走读（无锁，可以在 short 池里），不用于放置检查：提交与发布之间有一小段时间。寻路的路线不因占位变化失效（`Route.Fresh` 只看块版本）；路线上新出现的建筑由移动逐节点挡住，下一次请求重新寻路。
+7. **重启**：建筑、块的占地、账本都随 DataEngine 落库；`Load` 按块记录发布占位（Version 0、只有占地的记录也算），启动时 `ReconcileBuildings` 对每份占地冷加载它的建筑、一笔事务（`handler BuildingRebase`）核对“建筑站着、占地相同、每块都记着它”。对不上（正常不会发生）计 `Mismatched`、记 Error、什么都不改。
+8. **原始地形换版（D13 之后）**：块的地形改动照旧丢弃（`Discard` 不动 `Lots`），建筑与占地保留；建筑的 `BaseRevision` 与包不同时：整平过地基的，把占地重新整平到原来的地基**世界高度**（与 `HeightBase` 无关；超出新包的高度范围算不合规）；然后按放置规则查水位与高差，不合规的保留、计 `Unfit`、记 Warn（不自动拆玩家的资产）；记下新版本，再启动不再处置。重新整平是一次地形编辑，不计玩家配额。
+9. **分区场景**：不接建筑（`startTerrain` 只在不分区时调用 `EnableBuildings`），放置 / 拆除答 `building_disabled`。邻格 Ghost 带还没有建筑占位的副本，跨格建筑是 P5。
+
+**与第 6 节设计的差别**：第 6 节写的是“占位不单独持久化，加载时由本格建筑实体推出”。实施改成占位记在块上（持久），原因是串行化点：重叠检查要在一把放置事务一定会拿的锁里读到已提交的占位。块的锁满足（两份重叠的占地必有公共块）；由建筑实体推出的内存索引要么在事务外（AfterCommit 之后才更新，并发放置在这段时间里看不见彼此），要么是事务里要回滚的进程内状态（违反 A1：事务改的状态在 DAO 里）。代价：每块多一个至多 64 项的 int64 列表（约 0.5KB），放置多写一次块的记录（不改 `Version`、不同步）。
+
+**同步与预算**：本轮建筑实体不同步（DAO 字段只持久）：放置者按答复显示，别的玩家暂时看不到建筑，见下面待确认。整平改的地形走地形块同步：一座 8 × 6 的 hall 至多改 48 个高度点，增量约 0.4KB，与一次 r≈2m 的笔刷相当，受同一配额约束，不改变 D15 的地形命名空间预算与 50KB/s 的估算。
+
+### 25.3 验证
+
+| 用例 | 内容 |
+| --- | --- |
+| `gameplay/terrain` `TestWaterRegionsRoundTripAndAreChecked` | 区域写读往返；越界、重叠、空区域、超过 1024 个、改了一个字节的水位都拒绝 |
+| `TestDigALakeFillItBackByTheChunksWaterLevel` | 区域里挖到区域水位以下是水（深度、`WaterLevel` 正确），填回到水位是陆地；无水区域挖多深都不是水；区域外仍按全局水位 |
+| `TestWalkerSwimsByTheSameWaterLevelAsTheQueries` | 每个节点的游泳判定与查询的“是水”一致，`StandZ` 是所在块的水位；区域边界两侧的落差与湖岸 |
+| `TestClientTerrainGolden` / C# `PackTests` | 金样每个区域都被查询到，Go 与 C# 逐点相同；C# 坏包（版本 1、区域数超限、改一个区域字节、重叠）拒绝 |
+| demo `TestBuildingPlacementChecks` | 合规放置；同一占地、重叠一个节点、锚点上换类型、区域水下、70cm 坡不整平、7m 坡整平、未知类型、坏朝向、出图、负锚点都拒绝且零写入；跨两块整平到 5001（50010cm），两块版本 1、占地外不动；上限 3 |
+| `TestBuildingPlacementAppliesOncePerSeq` | 同一序号重发只建一座；笔刷用过的序号答 Duplicate；跳太远答 Ahead；都不写 |
+| `TestBuildingRemoval` | 非属主 `terrain_denied`；空锚点 / 非锚点 `building_missing` 且不建实体；拆除后占位与账本回去、地基不复原；同一锚点再放 |
+| `TestBrushUnderABuildingIsRefused` | 笔刷改到建筑脚下 `terrain_occupied` 零写入；旁边照常 |
+| `TestWalkersGoAroundBuildings` | 放置前直线路线穿过占地；放置后 `FindPath` 绕开、`Step` 进不去；拆除后又穿过 |
+| `TestBuildingConcurrentPlacementsNeverOverlap`（`-race`） | 16 个玩家各 12 次在 30m × 20m（跨两块）随机放 hut：约 20 座站着、约 170 次 `terrain_occupied`，两两不重叠，块记录 / 占位表 / 账本一致 |
+| `TestBuildingsSurviveARestart` | 四座建筑（含跨两块整平、跨四块）停机落“库”后重启：对账 `Standing 4`，建筑、地形、占位、账本一致；上限照样生效、重放答 Duplicate、照常拆除 |
+| `TestBuildingsAcrossABaseRevision` | 换版：两块地形改动丢弃；三座建筑全部 `Rebased`，整平的地基回到 50010cm（新地形 52000cm）、占地外是新地形；新版本里在水下的计 `Unfit` 但保留；再启动不再处置 |
+| `TestBuildingReconcileReportsAMismatch` | 库里删掉建筑文档：对账 `Mismatched 1`，块的占地不动、照样挡路 |
+| `TestBuildingsAreRefusedWithoutEnableBuildings` | 不接建筑时放置 / 拆除 `building_disabled`，零写入 |
+| controller `TestBuildingRefusalsMapToTheirCodes` 等 | 建筑的拒绝先认，其余同地形编辑；`ErrLotMismatch` 与基础设施错误答 internal |
+| `TestBuildingRestartRealMongo` | 真实 DataEngine 上的放置 / 拆除 / 重启 / 换版；门变量 `ROOST_TERRAIN_IT_MONGO_URI`，本轮**没有运行**（不连真实库），`scripts/test-demo-generated.sh` 已挂入 |
+| 变异 | 水位：7 项 Go + 2 项 C# 全红。建筑 14 项里 13 项红（锁内不查重叠、水位用全局、行走 / 笔刷不看建筑、Load 不发布、换版不重新整平 / 不查不合规、拆除不查属主、账本不计数、坡度上限、丢弃清掉占地、不查上限、不记占地）；“重叠检查改读发布表”没变红，见 25.4 |
+
+### 25.4 未覆盖与限制
+
+- **“锁内读块的占地”没有专门的红测试**：把重叠检查改成读进程内发布表的变异，在 `-race` 与 5 轮下都没变红——测试用的提交器在内存里，提交与发布之间只有微秒，16 × 12 的并发放置碰不到。保证来自结构（检查与写在同一笔事务、同一组块锁里），“锁内不查重叠”的变异会让并发用例出现重叠（证据里有原文）。真实 WAL 下这段时间是 fsync 的量级，更容易撞上，所以不能改读发布表。
+- 建筑不同步（见待确认）；建筑没有“建造中 / 损坏”等状态，只有站着 / 空地；类型表是 demo 的常量，不是配置。
+- 真实 Mongo 用例没有运行；整进程（`startTerrain` 的新接线、分区场景不接建筑）只有编译与单元覆盖，没有真实进程演练。
+- 换版处置只按“水位、高差”判不合规，不处理新地形与地基之间过大的挖填（重新整平不看 `MaxCut`）。
+- 拆除地形不复原；玩家离线 / 删号后的建筑归属不处理。
+- 每块的 `Occupancy` 在锁内按 `Lots` 现算（至多 64 份 × 占地节点），没有缓存；没有测成本。
+
+### 25.5 待维护者确认（实施方先按推荐做了）
+
+| 项 | 现状 | 选项（推荐标★） |
+| --- | --- | --- |
+| 水位数据来源 | 地形包元数据，块对齐区域 | ★ 包元数据（两端同一文件同一校验，换水位走 D13）；或服务端配置键（运营可改，但客户端要另行下发、与包可能不一致）；或节点粒度的水位图（更细，包更大、客户端岸线更复杂） |
+| 占位的权威记录 | 块上的 `Lots`（持久） | ★ 块上持久（串行化点就是块锁，见 25.2）；或按第 6 节由建筑实体推出（需要在事务里维护可回滚的进程内索引，违反 A1，或接受并发放置的窗口） |
+| 建筑的同步 | 不同步 | ★ 建筑自己的命名空间（`building`，按块的 Interest 一样订阅，单座约 40 字节，D15 单独计上限）；或把类型 / 朝向打包进块的 `Lots` 并让 `Lots` 随地形块同步（不多一个命名空间，但只有改过的块是同步对象，要把有建筑的块也登记） |
+| 换版后的建筑 | 保留；整平的地基按原世界高度重新整平；不合规的保留并计 `Unfit` | ★ 保留并重新整平（不动玩家资产，地基高度玩家看得到）；或保留但不动地形（地基与新地形可能脱开）；或自动拆除不合规的（返还资源的规则另定） |
+| 拆除的重发 | 锚点上没有建筑答 `building_missing` | ★ 照现在（不为找不到的建筑建实体、开事务）；或先查账本，已应用过的答 `duplicate`（多一次账本冷加载与事务） |
+| 拆除时的地形 | 不复原 | ★ 不复原（与玩家挖的坑一样留着）；或按放置前的高度复原（要在建筑上存一份原地形） |
+| 每人建筑上限 | `Policy.MaxBuildings` 16，demo 常量 | ★ 16（demo 原型）；正式值随玩法定 |

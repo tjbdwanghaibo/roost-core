@@ -1,0 +1,102 @@
+# 建筑变异（生成的 game-demo；go test -count=1 -run "Building|Walkers|Brush" ./internal/service/game/，B2 见文件末尾说明）。B2 / B14 第一次的写法没编译过，重写后的结果在后面。
+== B1-overlap-not-checked-in-lock: exit 1
+   --- FAIL: TestBuildingPlacementChecks (0.05s)
+   terrain_building_test.go:285: a lot overlapping one node: <nil>, want terrain: the edit touches ground a building stands on
+   --- FAIL: TestBuildingConcurrentPlacementsNeverOverlap (0.05s)
+   terrain_building_test.go:508: buildings [46,50)×[10,14) and [47,51)×[12,16) overlap
+   FAIL
+   FAIL	example.com/gd/internal/service/game	2.288s
+   FAIL
+== B2-overlap-read-from-published-table: exit 1
+   FAIL	example.com/gd/internal/service/game [build failed]
+   FAIL
+== B3-water-uses-global-level: exit 1
+   --- FAIL: TestBuildingPlacementChecks (0.02s)
+   terrain_building_test.go:285: under the regional water level: <nil>, want terrain: the building would stand in water
+   --- FAIL: TestBuildingsAcrossABaseRevision (0.03s)
+   terrain_building_test.go:587: reconcile across the revision: {Standing:3 Rebased:3 Unfit:0 Mismatched:0}, want {Standing:3 Rebased:3 Unfit:1 Mismatched:0}
+   FAIL
+   FAIL	example.com/gd/internal/service/game	1.295s
+   FAIL
+== B4-walker-ignores-buildings: exit 1
+   --- FAIL: TestWalkersGoAroundBuildings (0.01s)
+   terrain_building_test.go:452: the route still crosses the building
+   FAIL
+   FAIL	example.com/gd/internal/service/game	1.228s
+   FAIL
+== B5-brush-ignores-buildings: exit 1
+   --- FAIL: TestBrushUnderABuildingIsRefused (0.05s)
+   terrain_building_test.go:416: a brush under the hut: <nil>
+   FAIL
+   FAIL	example.com/gd/internal/service/game	3.378s
+   FAIL
+== B6-load-does-not-publish-lots: exit 1
+   --- FAIL: TestBuildingsSurviveARestart (0.04s)
+   terrain_building_test.go:543: reconcile after a restart on the same pack: {Standing:0 Rebased:0 Unfit:0 Mismatched:0}
+   --- FAIL: TestBuildingsAcrossABaseRevision (0.02s)
+   terrain_building_test.go:587: reconcile across the revision: {Standing:0 Rebased:0 Unfit:0 Mismatched:0}, want {Standing:3 Rebased:3 Unfit:1 Mismatched:0}
+   --- FAIL: TestBuildingReconcileReportsAMismatch (0.02s)
+   terrain_building_test.go:640: reconcile: {Standing:0 Rebased:0 Unfit:0 Mismatched:0}, want {Standing:1 Rebased:0 Unfit:0 Mismatched:1}
+   FAIL
+   FAIL	example.com/gd/internal/service/game	1.276s
+== B7-rebase-skips-relevel: exit 1
+   --- FAIL: TestBuildingsAcrossABaseRevision (0.04s)
+   terrain_building_test.go:603: node (60, 20) at 52000 cm on the new base, want the old foundation 50010
+   FAIL
+   FAIL	example.com/gd/internal/service/game	1.525s
+   FAIL
+== B8-remove-skips-owner-check: exit 1
+   --- FAIL: TestBuildingRemoval (0.02s)
+   terrain_building_test.go:374: removing another player's building: <nil>
+   FAIL
+   FAIL	example.com/gd/internal/service/game	1.500s
+   FAIL
+== B9-ledger-count-not-kept: exit 1
+   --- FAIL: TestBuildingPlacementChecks (0.02s)
+   terrain_building_test.go:265: player 4242's ledger counts 0 buildings, 1 stand
+   --- FAIL: TestBuildingPlacementAppliesOncePerSeq (0.02s)
+   terrain_building_test.go:360: ledger counts 0 buildings, want 1
+   --- FAIL: TestBuildingRemoval (0.02s)
+   terrain_building_test.go:401: player 4242's ledger counts -1 buildings, 0 stand
+   --- FAIL: TestBuildingConcurrentPlacementsNeverOverlap (0.02s)
+   terrain_building_test.go:515: player 4342's ledger counts 0 buildings, 3 stand
+== B10-slope-limit-always-maxcut: exit 1
+   --- FAIL: TestBuildingPlacementChecks (0.01s)
+   terrain_building_test.go:285: a hall across a 70cm slope, not levelled: <nil>, want terrain: the ground under the building is too uneven
+   FAIL
+   FAIL	example.com/gd/internal/service/game	1.118s
+   FAIL
+== B11-rebase-ignores-unfit: exit 1
+   --- FAIL: TestBuildingsAcrossABaseRevision (0.03s)
+   terrain_building_test.go:587: reconcile across the revision: {Standing:3 Rebased:3 Unfit:0 Mismatched:0}, want {Standing:3 Rebased:3 Unfit:1 Mismatched:0}
+   FAIL
+   FAIL	example.com/gd/internal/service/game	1.230s
+   FAIL
+== B12-discard-clears-lots: exit 1
+   --- FAIL: TestBuildingsAcrossABaseRevision (0.02s)
+   terrain_building_test.go:587: reconcile across the revision: {Standing:3 Rebased:1 Unfit:1 Mismatched:2}, want {Standing:3 Rebased:3 Unfit:1 Mismatched:0}
+   FAIL
+   FAIL	example.com/gd/internal/service/game	1.440s
+   FAIL
+== B13-limit-not-checked: exit 1
+   --- FAIL: TestBuildingPlacementChecks (0.05s)
+   terrain_building_test.go:322: a fourth building with a limit of 3: <nil>
+   --- FAIL: TestBuildingsSurviveARestart (0.03s)
+   terrain_building_test.go:554: the limit after the restart: <nil>
+   FAIL
+   FAIL	example.com/gd/internal/service/game	1.171s
+   FAIL
+== B14-place-skips-addlot: exit 1
+   FAIL	example.com/gd/internal/service/game [build failed]
+   FAIL
+== B2-overlap-read-from-published-table: exit 0
+== B2r-same-under-race: exit 0
+== B14-place-skips-addlot: exit 1
+   --- FAIL: TestBuildingPlacementChecks (0.01s)
+   terrain_building_test.go:265: chunk (0,0) does not record the lot of building [10,14)×[10,14)
+   --- FAIL: TestBuildingPlacementAppliesOncePerSeq (0.01s)
+   terrain_building_test.go:362: chunk (0,0) does not record the lot of building [10,14)×[10,14)
+   --- FAIL: TestBuildingRemoval (0.02s)
+   terrain_building_test.go:374: removing another player's building: terrain: no building stands here: anchor (60, 20)
+   --- FAIL: TestBrushUnderABuildingIsRefused (0.02s)
+   terrain_building_test.go:416: a brush under the hut: <nil>
