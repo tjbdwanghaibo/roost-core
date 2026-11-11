@@ -636,8 +636,29 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, `runtime.Native("debit", giftitem.TopicDebit, steps.debit, kitsaga.WithSidRoute()`) || !strings.Contains(steps, "runtime.Mongo(\"deliver\", giftitem.TopicDeliver") || !strings.Contains(steps, "RequestID: \"gift:\" + command.IdempotencyKey") {
 		t.Errorf("gift saga does not run the Nest steps natively while keeping the mail step on the Mongo inbox")
 	}
-	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "kitsaga.NewSteps(registry, giftSagaSteps)") || !strings.Contains(steps, "saga.BounceStep(saga.SidRoute(state.FromSID)") || strings.Contains(steps, "saga.NewDataEngineStepInbox(") {
+	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "kitsaga.NewSteps(registry, giftSagaSteps)") || !strings.Contains(steps, "saga.BounceStep(saga.SidRoute(admission.SID)") || strings.Contains(steps, "saga.NewDataEngineStepInbox(") {
 		t.Errorf("gift saga does not assemble its consumers through the framework's step runtime, or does not bounce a step for a sender bound elsewhere")
+	}
+	// 准入按玩家当前的绑定（rehome 模块）：换服中的退回不带路由，绑定别处的退回并给出当前 sid；
+	// 载荷里的 sid 不再决定，旧的 playerMoving 钩子与它的 TODO 已经删掉。公会的玩家步骤走同一个函数。
+	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "owners.AdmitBound(ctx, playerID)") || !strings.Contains(steps, `saga.BounceStep("", `) || strings.Contains(steps, "playerMoving") || strings.Contains(steps, "notMoving") {
+		t.Errorf("gift saga does not admit its Player steps by the sender's current binding")
+	}
+	if steps := read("internal/service/game/alliance_saga.go"); !strings.Contains(steps, `admitByBinding(ctx, steps.owners, "guild saga", state.PlayerID)`) || strings.Contains(steps, "playerMoving") {
+		t.Errorf("the guild sagas do not admit their Player steps by the player's current binding")
+	}
+	// 驻留表实现并发布 rehome 模块的 Residency；GM 有换服命令；demo 自己的换服前检查在盘上。
+	if owners := read("internal/service/game/playerowner.go"); !strings.Contains(owners, "var _ gamerehome.Residency = (*PlayerOwners)(nil)") || !strings.Contains(owners, "gamerehome.Binding(ctx, registry, playerID)") {
+		t.Errorf("PlayerOwners is not the rehome module's Residency, or does not ask the current binding through the module")
+	}
+	if service := read("internal/service/game/service.go"); !strings.Contains(service, "registry.Register(gamerehome.ResidencyCapability, gamerehome.Residency(owners))") {
+		t.Errorf("the game service does not publish its ownership table as the rehome module's Residency")
+	}
+	if gm := read("internal/service/game/gm.go"); !strings.Contains(gm, `"gm.player.rehome"`) || !strings.Contains(gm, "rehome.Move(ctx, playerID, payload.To, note)") {
+		t.Errorf("the game GM lacks gm.player.rehome, or it does not go through the rehome module's server-side entry")
+	}
+	if checks := read("internal/service/game/rehome_checks.go"); !strings.Contains(checks, `gamerehome.OnApplying("game"`) || !strings.Contains(checks, `player.OnRehomeApplying("game"`) {
+		t.Errorf("the demo's own checks before a server change are not registered:\n%s", checks)
 	}
 	// The debit is routed to the sender's sid from the start (plan ③, 2026-11-11).
 	if definition := read("saga/gift_item/definition.go"); !strings.Contains(definition, "CompensateTopic: TopicDebitCompensation, Routed: true}") || strings.Contains(definition, "TopicDeliverCompensation, Routed: true") {
@@ -736,6 +757,15 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	flow := read("game/controllers/player/enter_game.go")
 	if !strings.Contains(flow, "Sync_EnterInit(") {
 		t.Errorf("the demo's enter flow does not run the enter module's first-time init:\n%s", flow)
+	}
+	// rehome 与 enter 都装着：联动登记了进入前检查与到达。demo 的进入流程在把玩家接入服务（Serve）、装载实体之前
+	// 跑检查，并把拒绝里的目标服带进应答。
+	check, serve := strings.Index(flow, "gameenter.RunEntering("), strings.Index(flow, "owners.Serve(")
+	if check < 0 || serve < 0 || check > serve || !strings.Contains(flow, "gamerehome.OwnerSID(err)") {
+		t.Errorf("the demo's enter flow does not run the checks before entering ahead of taking the player into service:\n%s", flow)
+	}
+	if glue := read("game/controllers/rehome/rehome_enter.go"); !strings.Contains(glue, `gameenter.OnEntering("rehome"`) || !strings.Contains(glue, `gameenter.OnEntered("rehome"`) {
+		t.Errorf("the rehome+enter glue was not written into the demo:\n%s", glue)
 	}
 	// enter 与 chat 都装着：chat 的联动文件登记了进入钩子，demo 的进入流程执行钩子而不是自己加在线名单。
 	if !strings.Contains(flow, "gameenter.RunEntered(") || strings.Contains(flow, "Presence().Add(") {
