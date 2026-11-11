@@ -12,6 +12,13 @@
   - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：模块还少（13 类玩法与 game-demo 的大部分业务尚未拆成模块），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
   - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
 
+- **变更 / 协议变化**（game-demo + modules）：**game-demo 的排行榜改用 leaderboard 模块，demo 不再带 `game/ranking` 与 `RankTop`**（维护者 2026-11-11：“做 demo 换用”；“demo 的功能多的话，可以拆到模版中去”“模版可以复杂，能兼容简单就可以”——demo 比模块多的能力搬进模块，缺省用法保持开箱可用）。
+  - 模块（场景数 15 → 20）：榜的身份与规则拆成归工程所有的 `game/leaderboard/leaderboard_board.go`（榜名、范围、`CurrentSeason()`、分数范围、一屏多长；`CurrentSeason` 由常量改为函数，可按时钟算）；`LeaderboardTop` 回包带上自己的名次（`MyOnBoard / MyRank / MyScore`，原来 demo 的 `RankTop` 的做法）；`Submit` 不再收幂等键（快照加 UpdateMax 本身幂等；带请求号时分数没变也要抢一次去重环，见 `service/rank` 的 Redis 存储），新增分周期的 `SubmitSeason`；`TotalBoard()` 改为 `CurrentBoard()` / `Board(season)`。
+  - demo：生成时安装 leaderboard，只覆盖 `leaderboard_board.go`（通关次数榜 `clears`、赛季 1、一屏 10 行）；副本结算在领奖事务之外调 `SubmitSeason`，通关数为 0 不提交；压测机器人改用 `LeaderboardTop`。副本通关计数（`DungeonClears`、领奖账本）是副本玩法，留在 demo。
+  - 协议：`RankTop` 删除，改用 `LeaderboardTop` / `LeaderboardMe`（controller 域 `leaderboard`）；`Entries[].Value` → `Rows[].Score`。`RankTop` 空出的消息号 10016 被分配给 `ChatSend`（原 10040）。读自己名次失败时整条请求回失败码，不再回“没上榜”。
+  - **升级要求**：已生成的工程不迁移（未上线）；重新生成。
+  - 验证：重新生成的 demo build / vet / id check / generate --check 通过，`go test ./...` 42 个包通过（跳过的 14 条与换用前逐条相同），`roost module verify` leaderboard 20；`TestDungeonClearsBoardCountsEachRunOnceRealRedis` 在本机隔离 Redis 上通过；`go test ./codegen/internal/roost -run 'TestDemo|TestModule'` 通过；全新工程单装与十一个模块一起装的验收通过。真实依赖下的 `make dev-run` 没有跑，压测机器人的 `leaderboard_top` 只到编译。
+
 - **变更 / 协议变化**（modules）：**mailbox 的附件种类成为登记点，新增联动 mailbox + bag（道具附件）**。
   - 附件由“只有金币”改为（种类、号、数量）：金币的线上格式不变（`{"type":"coins","amount":100}`），道具是 `{"type":"item","id":1001,"amount":3}`。`game/mailbox` 的 `RegisterType` 登记一个种类的校验（纯函数），实体包的 `RegisterMailboxGrant` 登记怎么发、发完持有多少（与领取账本同一笔事务）；金币内置。没登记的种类、只登记了校验没有发放方式的种类都不可领：归还预留、答 `mailbox_attachment`、邮件保持未领。
   - 协议：`MailboxClaimResponse` 的 `Coins / Balance` 改为 `AttachmentType / AttachmentID / Amount / Held`；`MailboxEntry` 的 `Coins` 改为 `AttachmentType / AttachmentID / Amount`。Nest handler `MailboxClaimReward` 的参数跟着改。场景数 21 → 28（原 21 条规则都在）。

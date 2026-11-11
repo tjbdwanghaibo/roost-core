@@ -14,7 +14,7 @@
 | [enter](enter/module.yaml) | 进入游戏：`EnterGame` 端点加载或创建 Player，每次进入都跑一遍“首次初始化”（做过没有记在档里），新玩家的初始发放写在 `game/entities/player/enter_first.go`；之后执行别的功能登记的进入钩子（`game/enter` 的 `OnEntered`）；安装时打开玩家 TCP 接入与自身视图 | 无 | `PlayerDao.Enter`（只落库） | 6 |
 | [profile](profile/module.yaml) | 玩家档案：名字、等级、经验；改名协议 `ProfileRename`（非空、合法 UTF-8、至多 16 个字符，不查重）；服务端发经验的 handler `ProfileAddExp`（每级 100 经验，可连升多级）；升级钩子写在 `game/entities/player/profile_levelup.go` | 无 | `PlayerDao.Profile`（同步） | 16 |
 | [bag](bag/module.yaml) | 玩家背包：道具号到数量的堆叠背包（至多 200 种、单种至多 999999）；组件入口 `Add` / `Remove` / `Count` / `Has`；丢弃协议 `BagDiscard`；服务端发放 handler `BagGrant`；哪些道具号合法写在 `game/entities/player/bag_items.go`（缺省只要求为正） | 无 | `PlayerDao.Bag`（同步） | 12 |
-| [leaderboard](leaderboard/module.yaml) | 排行榜：一张全服总分榜，前 N 名（`LeaderboardTop`，缺省 10、至多 50）与自己的名次（`LeaderboardMe`）；提交分数是给服务端别的功能调的函数 `leaderboard.Submit`（提交当前总分的快照，只升不降），不对客户端开放 | 无（要求业务服务 `uses: [rank]`） | 无 | 15 |
+| [leaderboard](leaderboard/module.yaml) | 排行榜：缺省一张全服总分榜；前 N 名连同自己的名次（`LeaderboardTop`，缺省 10、至多 50）、只查自己的名次（`LeaderboardMe`）；提交分数是给服务端别的功能调的函数 `leaderboard.Submit` / `SubmitSeason`（当前总分的快照，只升不降，不带幂等键），不对客户端开放；榜名、范围、周期、分数范围、一屏多长写在 `game/leaderboard/leaderboard_board.go`。game-demo 用的就是它 | 无（要求业务服务 `uses: [rank]`） | 无 | 20 |
 | [mailbox](mailbox/module.yaml) | 邮件：分页列出自己的邮件（`MailboxList`）、领取附件（`MailboxClaim`）；经托管的 mail 服务按“预留 → 发放 → 确认”三步领取，Player 上的领取账本保证每封至多到账一次；附件是（种类、号、数量），种类是登记点：金币内置，别的种类由登记了校验（`game/mailbox` 的 `RegisterType`）与发放方式（`RegisterMailboxGrant`）的功能提供 | wallet（要求业务服务 `uses: [mail]`） | `PlayerDao.MailboxLedger`（只落库） | 28 |
 | [quest](quest/module.yaml) | 每日任务：按业务日惰性清零的进度；服务端推进（组件入口 `Advance`、不对客户端开放的 handler `QuestAdvance`）；领奖协议 `QuestClaim`，金币经货币模块在同一笔事务里到账；任务表写在 `game/entities/player/quest_catalog.go` | wallet | `PlayerDao.Quest`（同步） | 18 |
 | [stamina](stamina/module.yaml) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go` | wallet | `PlayerDao.Stamina`（同步） | 25 |
@@ -29,7 +29,7 @@
 | mailbox + bag | 道具附件：登记 `item` 这个附件种类，领取时道具进背包，与领取账本同一笔事务；背包拒绝时邮件保持未领（`game/mailbox/mailbox_item.go`、`game/entities/player/mailbox_item.go`） | 9 |
 | quest + checkin | 签到成功时把每日任务“签到一次”推进一次，与签到同一笔事务（`game/entities/player/quest_checkin.go`） | 3 |
 
-以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter` 与 `chat`；其余模块是照 demo 与夹具的做法拆出来的独立版本，demo 自己的背包、经验、排行榜与邮件还没有换成它们。
+以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter`、`chat` 与 `leaderboard`；demo 自己的背包、经验与邮件正在换成对应的模块。
 
 ## 使用
 
@@ -132,6 +132,8 @@ verify:
 | `{{ID:protocol:<name>}}`、`{{ID:errcode:<name>}}`、`{{ID:component:<name>}}` | 安装时从 `roost.yaml` 的 `ids` 段分配的号 |
 
 ### 必须遵守的约定
+
+- **模块可以做全、做复杂，但简单用法必须照样能用**（维护者 2026-11-11）：game-demo 里有的能力（查配置表、分赛季、一次请求带回多样数据……）做进模块，不为了“简单”砍功能；全新的 `-template game` 工程不做任何配置直接 `roost module add <模块>`，缺省就要能工作、验收全绿，复杂能力在此之上填数据或打开。判断一个功能放不放进模块：放进去之后，不用它的简单工程会不会被迫多做事——不会，就放进模块。工程要改的规则与数据放进归工程所有的业务文件（或模块自带的配置表），逻辑文件不带规则。
 
 - **状态自带**：只动自己的状态结构体，不往别的模块的结构体里加字段。挂在已有实体上的状态一律是嵌套结构体，不新建 DAO。
 - **同步按顶层字段决定**：`dao: persist,sync` 下发给客户端，`dao: persist` 只落库。既有客户端可见状态又有服务端账本的模块写两个字段（wallet 就是）。嵌套类型内部的字段只写 `store` 键。

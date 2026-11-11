@@ -614,7 +614,7 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | 2 | bag | 道具背包：增减、上限、按道具号堆叠 | — | 已有（12 条） |
 | 2 | stamina | 体力：随时间恢复、消耗、用货币补满（每日次数） | wallet | 已有（25 条） |
 | 2 | quest | 每日任务：进度、领奖、按业务日清零 | wallet | 已有（18 条）；签到推进经 quest+checkin 联动 |
-| 2 | leaderboard | 排行：提交分数、查前 N 名与自己的名次 | 托管 rank 服务 | 已有（15 条） |
+| 2 | leaderboard | 排行：提交分数（可分周期）、一次请求查前 N 名与自己的名次；榜的规则是业务文件 | 托管 rank 服务 | 已有（20 条）；game-demo 的通关榜在用 |
 | 2 | mailbox | 邮件：列表、领附件；附件种类是登记点，金币内置，道具经 mailbox + bag 联动 | 托管 mail 服务；wallet | 已有（28 条；联动 mailbox+bag 9 条、mailbox+enter 3 条） |
 | 3 | shop | 用货币买道具，每日 / 终身限购 | wallet、bag；配置表（`tables`） | 已有（17 条）（目录是业务文件，没有用配置表） |
 | 3 | room | 带座位的房间实体：进出、连接代际、房主 | 独立实体（安装器要支持模块自带实体） | 未做 |
