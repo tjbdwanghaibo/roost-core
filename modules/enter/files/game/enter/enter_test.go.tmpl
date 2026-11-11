@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 )
 
 // withHooks 把登记表换成这条用例自己的，结束时换回去：工程里别的功能在 init 里登记的钩子不参与。
@@ -95,5 +96,180 @@ func TestEnterHookRegistrationMistakesPanic(t *testing.T) {
 	mustPanic("a nil hook", func() { OnEntered("mailbox", nil) })
 	if failed := RunEntered(context.Background(), nil, Entered{}); len(failed) != 0 {
 		t.Fatalf("failed hooks = %v after rejected registrations", failed)
+	}
+}
+
+// withChecks 把进入前检查的登记表换成这条用例自己的，结束时换回去。
+func withChecks(t *testing.T) {
+	t.Helper()
+	checksMu.Lock()
+	saved := checks
+	checks = map[string]Check{}
+	checksMu.Unlock()
+	t.Cleanup(func() {
+		checksMu.Lock()
+		checks = saved
+		checksMu.Unlock()
+	})
+}
+
+// 没有登记任何检查时放行（与没有这个登记点时相同）；登记了的按名字顺序逐个执行，
+// 每一条都拿到玩家号与会话的 claims，全部放行才算放行。
+func TestEnterChecksRunInNameOrderAndAllMustPass(t *testing.T) {
+	withChecks(t)
+	if err := RunEntering(context.Background(), nil, Entering{PlayerID: 94003}); err != nil {
+		t.Fatalf("with no checks registered the enter was refused: %v", err)
+	}
+	var order []string
+	var seen []Entering
+	record := func(name string) Check {
+		return func(_ context.Context, _ *app.Registry, entering Entering) error {
+			order = append(order, name)
+			seen = append(seen, entering)
+			return nil
+		}
+	}
+	OnEntering("rehome", record("rehome"))
+	OnEntering("ban", record("ban"))
+	OnEntering("zeta", record("zeta"))
+	entering := Entering{PlayerID: 94003, Claims: map[string]string{"server_id": "7", "bind_epoch": "2"}}
+	if err := RunEntering(context.Background(), nil, entering); err != nil {
+		t.Fatalf("three passing checks refused the enter: %v", err)
+	}
+	if want := []string{"ban", "rehome", "zeta"}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("order = %v, want %v", order, want)
+	}
+	for i, got := range seen {
+		if !reflect.DeepEqual(got, entering) {
+			t.Fatalf("check %d saw %+v, want %+v", i, got, entering)
+		}
+	}
+}
+
+// 一条检查拒绝：后面的不再执行，返回的就是它的错误——码还在，端点据此答客户端。
+// 进入钩子的登记表与它无关：检查不会被当成钩子执行，钩子也不会被当成检查。
+func TestEnterCheckRefusalStopsTheRestAndKeepsItsCode(t *testing.T) {
+	withChecks(t)
+	withHooks(t)
+	ran := map[string]int{}
+	refusal := errcode.Wrap(errcode.ErrRetryable, errors.New("the player is changing servers"))
+	OnEntering("a", func(context.Context, *app.Registry, Entering) error { ran["a"]++; return nil })
+	OnEntering("b", func(context.Context, *app.Registry, Entering) error { ran["b"]++; return refusal })
+	OnEntering("c", func(context.Context, *app.Registry, Entering) error { ran["c"]++; return nil })
+	OnEntered("b", func(context.Context, *app.Registry, Entered) error { ran["hook"]++; return nil })
+	err := RunEntering(context.Background(), nil, Entering{PlayerID: 94004})
+	if err != refusal {
+		t.Fatalf("err = %v, want the refusing check's own error", err)
+	}
+	if code, _ := errcode.ClientError(err); code != 4 {
+		t.Fatalf("client code = %d, want 4 (the code the check refused with)", code)
+	}
+	if ran["a"] != 1 || ran["b"] != 1 || ran["c"] != 0 || ran["hook"] != 0 {
+		t.Fatalf("ran %v, want a and b once, c and the enter hook never", ran)
+	}
+	// 进入钩子照常跑自己的，不经过检查。
+	if failed := RunEntered(context.Background(), nil, Entered{PlayerID: 94004}); len(failed) != 0 || ran["hook"] != 1 || ran["b"] != 1 {
+		t.Fatalf("after RunEntered: failed=%v ran=%v, want the hook once and no check", failed, ran)
+	}
+}
+
+// 检查的登记写错同样在启动时暴露。
+func TestEnterCheckRegistrationMistakesPanic(t *testing.T) {
+	withChecks(t)
+	pass := func(context.Context, *app.Registry, Entering) error { return nil }
+	OnEntering("rehome", pass)
+	mustPanic := func(what string, register func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Fatalf("%s did not panic", what)
+			}
+		}()
+		register()
+	}
+	mustPanic("a duplicate name", func() { OnEntering("rehome", pass) })
+	mustPanic("an empty name", func() { OnEntering("", pass) })
+	mustPanic("a nil check", func() { OnEntering("ban", nil) })
+	if err := RunEntering(context.Background(), nil, Entering{}); err != nil {
+		t.Fatalf("err = %v after rejected registrations", err)
+	}
+}
+
+// 被检查拒绝的进入什么都没碰：load（加载或创建 Player、首次初始化）没有被调用，进入钩子没有执行，
+// 返回的是那条检查的错误，端点据此把它的码答给客户端。
+func TestEnterRefusedByACheckLoadsNothingAndRunsNoHook(t *testing.T) {
+	withChecks(t)
+	withHooks(t)
+	refusal := errcode.Wrap(errcode.ErrRetryable, errors.New("the player is bound to another server"))
+	var checked []Entering
+	OnEntering("rehome", func(_ context.Context, _ *app.Registry, entering Entering) error {
+		checked = append(checked, entering)
+		return refusal
+	})
+	loads, hooked := 0, 0
+	OnEntered("chat", func(context.Context, *app.Registry, Entered) error { hooked++; return nil })
+	entering := Entering{PlayerID: 94005, Claims: map[string]string{"server_id": "7", "transfer": "9:t-1"}}
+	entered, err := Enter(context.Background(), nil, entering, func(context.Context) (InitResult, error) {
+		loads++
+		return InitResult{First: true}, nil
+	})
+	if err != refusal {
+		t.Fatalf("err = %v, want the check's refusal", err)
+	}
+	if code, _ := errcode.ClientError(err); code != 4 {
+		t.Fatalf("client code = %d, want 4", code)
+	}
+	if loads != 0 || hooked != 0 {
+		t.Fatalf("load ran %d times and the enter hook %d times after a refusal, want 0 and 0", loads, hooked)
+	}
+	if !reflect.DeepEqual(entered, Entered{}) {
+		t.Fatalf("a refused enter returned %+v", entered)
+	}
+	if len(checked) != 1 || !reflect.DeepEqual(checked[0], entering) {
+		t.Fatalf("the check saw %+v, want once with the player and the session claims", checked)
+	}
+}
+
+// 放行的进入：检查 → load → 钩子，钩子拿到 load 的结果与同一份 claims。load 失败时钩子不跑、错误原样返回。
+// 没有登记任何检查时同样走到 load 与钩子。
+func TestEnterAdmittedLoadsThenRunsTheHooksWithTheSessionClaims(t *testing.T) {
+	withChecks(t)
+	withHooks(t)
+	var steps []string
+	var hooked []Entered
+	OnEntered("chat", func(_ context.Context, _ *app.Registry, entered Entered) error {
+		steps = append(steps, "hook")
+		hooked = append(hooked, entered)
+		return nil
+	})
+	load := func(context.Context) (InitResult, error) {
+		steps = append(steps, "load")
+		return InitResult{First: true, FirstAtUnixMilli: 1_700_000_000_000}, nil
+	}
+	claims := map[string]string{"server_id": "7"}
+	// 没有检查。
+	entered, err := Enter(context.Background(), nil, Entering{PlayerID: 94006, Claims: claims}, load)
+	want := Entered{PlayerID: 94006, InitResult: InitResult{First: true, FirstAtUnixMilli: 1_700_000_000_000}, Claims: claims}
+	if err != nil || !reflect.DeepEqual(entered, want) {
+		t.Fatalf("entered = %+v err = %v, want %+v", entered, err, want)
+	}
+	// 有一条放行的检查：它排在 load 之前。
+	OnEntering("rehome", func(context.Context, *app.Registry, Entering) error { steps = append(steps, "check"); return nil })
+	if _, err := Enter(context.Background(), nil, Entering{PlayerID: 94006, Claims: claims}, load); err != nil {
+		t.Fatal(err)
+	}
+	if wantSteps := []string{"load", "hook", "check", "load", "hook"}; !reflect.DeepEqual(steps, wantSteps) {
+		t.Fatalf("steps = %v, want %v", steps, wantSteps)
+	}
+	if len(hooked) != 2 || !reflect.DeepEqual(hooked[0], want) || !reflect.DeepEqual(hooked[1], want) {
+		t.Fatalf("hooks saw %+v, want twice %+v", hooked, want)
+	}
+	// load 失败：钩子不跑。
+	down := errors.New("store is away")
+	if _, err := Enter(context.Background(), nil, Entering{PlayerID: 94006}, func(context.Context) (InitResult, error) { return InitResult{}, down }); err != down {
+		t.Fatalf("err = %v, want the load's error", err)
+	}
+	if len(hooked) != 2 {
+		t.Fatalf("the enter hook ran after a failed load (%d runs)", len(hooked))
 	}
 }

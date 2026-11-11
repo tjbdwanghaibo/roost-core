@@ -21,4 +21,4 @@ protocols: [EnterGame]
 verify:
   packages: [./game/handler, ./game/enter]
   run: ^TestEnter
-  pass: 6
+  pass: 11

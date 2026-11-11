@@ -4,6 +4,11 @@
 // 邮件把离线期间的全服邮件合并进邮箱……），进入端点不该认识它们。功能在自己的包里用 init 登记一个钩子，
 // 进入端点在首次初始化成功之后调 RunEntered，按名字顺序逐个执行。
 //
+// 登记点有两个，互不相干：
+//
+//   - 进入前检查（OnEntering / RunEntering）：在加载或创建 Player 之前执行，能否决这一次进入；
+//   - 进入钩子（OnEntered / RunEntered）：进入成功之后执行，失败只记日志。
+//
 // 这个包不 import 任何 controller 或实体包，所以谁都可以 import 它而不成环。
 package enter
 
@@ -41,6 +46,96 @@ type Entered struct {
 	Claims map[string]string
 }
 
+// Entering 是一次还没有被放行的进入：会话已经认证，Player 还没有加载或创建。
+type Entering struct {
+	PlayerID int64
+	// Claims 与 Entered.Claims 同源：这次进入所用的已认证会话带的 claims，可为 nil，只读。
+	// 检查同样要把“没有这个键”当成正常情况，自己决定那时是放行、拒绝还是去问权威。
+	Claims map[string]string
+}
+
+// Check 是一条进入前检查：这名玩家这一次能不能进入本进程。它在端点的请求上下文里、任何实体操作之前执行，约定是：
+//
+//   - 返回 nil 放行；返回错误就不让进入——端点不加载也不创建 Player、不跑首次初始化、不跑进入钩子，
+//     把错误的码答给客户端。所以拒绝要返回带码错误（errcode.Define 出来的），否则客户端只看到“服务器错误”；
+//   - 只读：它回答“能不能进”，不改任何状态。检查之后别的检查仍可能拒绝，这一次进入未必发生；
+//   - 可以重复：重连、重试登录帧都会再调；
+//   - 要快：它占用登录请求的时间预算，跨进程调用要用传进来的 ctx。检查自己出错（问不到权威）时
+//     放行还是拒绝由检查决定——返回错误就是拒绝。
+//
+// 用它的是“这名玩家此刻不该由本进程服务”这一类判断（单个玩家换服：正在换服、已经绑定到别的服）。
+// 进入之后顺带做的事不放在这里，用 OnEntered。
+type Check func(ctx context.Context, registry *app.Registry, entering Entering) error
+
+var (
+	checksMu sync.RWMutex
+	checks   = map[string]Check{}
+)
+
+// OnEntering 登记一条进入前检查，name 用功能自己的名字（模块名）。与 OnEntered 一样只在 init 里调用，
+// 重名、空名或 nil 直接 panic。没有登记任何检查的工程，进入流程与没有这个登记点时完全相同。
+func OnEntering(name string, check Check) {
+	if name == "" || check == nil {
+		panic("enter: OnEntering needs a name and a check")
+	}
+	checksMu.Lock()
+	defer checksMu.Unlock()
+	if _, taken := checks[name]; taken {
+		panic(fmt.Sprintf("enter: check %q is registered twice", name))
+	}
+	checks[name] = check
+}
+
+// RunEntering 按名字顺序执行全部检查，遇到第一个拒绝就停下并原样返回它的错误（errors.Is / errcode 的码都还在），
+// 后面的检查不再执行；全部放行、或者没有登记任何检查时返回 nil。
+// Enter 在 load 之前调用它；工程自己改写进入流程、不经 Enter 时也在加载或创建 Player 之前调，返回错误就不要继续。
+func RunEntering(ctx context.Context, registry *app.Registry, entering Entering) error {
+	checksMu.RLock()
+	names := make([]string, 0, len(checks))
+	for name := range checks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	run := make([]Check, len(names))
+	for i, name := range names {
+		run[i] = checks[name]
+	}
+	checksMu.RUnlock()
+	for i, check := range run {
+		if err := check(ctx, registry, entering); err != nil {
+			slog.Info("enter: refused by a check", "check", names[i], "player_id", entering.PlayerID, "err", err)
+			return err
+		}
+	}
+	return nil
+}
+
+// Enter 是一次进入的骨架，进入端点只调它：检查 → load → 钩子。
+//
+//  1. 进入前检查（RunEntering）。任何一条拒绝就到此为止：load 不会被调用——不加载也不创建 Player、
+//     不跑首次初始化——钩子也不跑，返回的是那条检查的错误。
+//  2. load 由端点给出：加载或创建 Player 并提交首次初始化，返回它的结果。它失败时原样返回它的错误，钩子不跑。
+//  3. 进入钩子（RunEntered），拿到的 Entered 带着 load 的结果与同一份 claims。钩子失败只记日志。
+//
+// 骨架放在这个包里而不是端点里，是为了让“被拒绝的进入什么都没碰”这件事不依赖端点怎么写：
+// 工程改写进入端点（加自己的登录步骤）时，要么仍然把加载与初始化包成 load 交给 Enter，
+// 要么自己按这个顺序调 RunEntering 与 RunEntered。
+func Enter(ctx context.Context, registry *app.Registry, entering Entering, load func(context.Context) (InitResult, error)) (Entered, error) {
+	if load == nil {
+		return Entered{}, fmt.Errorf("enter: Enter needs a load step")
+	}
+	if err := RunEntering(ctx, registry, entering); err != nil {
+		return Entered{}, err
+	}
+	result, err := load(ctx)
+	if err != nil {
+		return Entered{}, err
+	}
+	entered := Entered{PlayerID: entering.PlayerID, InitResult: result, Claims: entering.Claims}
+	RunEntered(ctx, registry, entered)
+	return entered, nil
+}
+
 // Hook 是进入之后顺带做的一件事。它在事务之外、端点的请求上下文里执行，约定是：
 //
 //   - 可以重复：同一名玩家每次进入都会调，重连、重试登录帧也会调；
@@ -69,7 +164,7 @@ func OnEntered(name string, hook Hook) {
 }
 
 // RunEntered 按名字顺序执行全部钩子，返回失败的钩子名（给测试与排查用；调用方不必处理）。
-// 进入端点在首次初始化成功之后调用它；工程自己改写进入流程时也在同一个位置调。
+// Enter 在 load 成功之后调用它；工程自己改写进入流程、不经 Enter 时也在首次初始化成功之后调。
 func RunEntered(ctx context.Context, registry *app.Registry, entered Entered) []string {
 	hooksMu.RLock()
 	names := make([]string, 0, len(hooks))
