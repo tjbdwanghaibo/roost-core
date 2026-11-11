@@ -2,6 +2,7 @@ package {{GAME_SERVICE_PKG}}
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -10,7 +11,7 @@ import (
 	sceneentity "{{MODULE}}/game/entities/scene"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	lifecycle "{{MODULE}}/game/lifecycle"
-	"{{MODULE}}/game/rewards"
+	gamemailbox "{{MODULE}}/game/mailbox"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/terrainmap"
 	accessplayertcp "{{MODULE}}/internal/access/player/tcp"
@@ -24,7 +25,6 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
-	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
 // GM commands: the operator surface of the game process.
@@ -137,6 +137,9 @@ type gmMailSendPayload struct {
 	Body     string `json:"body"`
 	ItemID   int64  `json:"item_id,omitempty"`
 	Count    int32  `json:"count,omitempty"`
+	// Coins attaches coins instead of an item stack (the wallet module's
+	// balance; claimed through the same MailboxClaim).
+	Coins int64 `json:"coins,omitempty"`
 }
 
 // registerGMCommands is called from Init, after every Mod has started.
@@ -288,7 +291,7 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 		},
 		{
 			Name:        gmMailSend,
-			Description: "send a mail to a player: {player_id, subject, body, item_id?, count?}; item_id/count attach a reward the player claims through ClaimMail",
+			Description: "send a mail to a player: {player_id, subject, body, item_id?, count?, coins?}; item_id/count attach an item stack, coins attaches coins (one or the other), claimed through MailboxClaim",
 			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
 				payload, err := admin.DecodePayload[gmMailSendPayload](cmd)
 				if err != nil {
@@ -302,21 +305,28 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 				if err != nil {
 					return admin.Result{}, err
 				}
-				request := svcmail.SendRequest{
-					Audience: svcmail.AudienceDirect, Recipients: []int64{playerID},
-					Subject: payload.Subject, Body: payload.Body, ExpiresInSeconds: levelUpMailExpiresIn,
+				letter := gamemailbox.Letter{
+					To: playerID, Subject: payload.Subject, Body: payload.Body, ExpiresInSeconds: levelUpMailExpiresIn,
 					// Idempotent per trace: an operator retrying the same
 					// command (same trace id) does not send twice.
 					RequestID: gmRequestID(cmd),
 				}
-				if payload.ItemID != 0 {
-					attachment, err := rewards.Encode(rewards.Reward{ItemID: payload.ItemID, Count: payload.Count})
-					if err != nil {
-						return admin.Result{}, fmt.Errorf("%w: %v", admin.ErrCommandInvalid, err)
-					}
-					request.Attachment = attachment
+				// One attachment per mail: an item stack or coins, not both.
+				switch {
+				case payload.ItemID != 0 && payload.Coins != 0:
+					return admin.Result{}, fmt.Errorf("%w: a mail carries one attachment: item_id/count or coins, not both", admin.ErrCommandInvalid)
+				case payload.ItemID != 0:
+					letter.Attachment = gamemailbox.Item(payload.ItemID, int64(payload.Count))
+				case payload.Coins != 0:
+					letter.Attachment = gamemailbox.Coins(payload.Coins)
 				}
-				envelope, err := mailer.Send(ctx, request)
+				// The mailbox module's sender: an attachment the mailbox
+				// cannot grant (an unknown kind, a count that is not positive)
+				// is refused here, before a mail nobody can claim is stored.
+				envelope, err := gamemailbox.SendTo(ctx, mailer, letter)
+				if errors.Is(err, gamemailbox.ErrLetterInvalid) {
+					return admin.Result{}, fmt.Errorf("%w: %v", admin.ErrCommandInvalid, err)
+				}
 				if err != nil {
 					return admin.Result{}, err
 				}

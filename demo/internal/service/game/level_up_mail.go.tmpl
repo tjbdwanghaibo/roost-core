@@ -3,15 +3,16 @@ package {{GAME_SERVICE_PKG}}
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"{{MODULE}}/game/effects"
+	gamemailbox "{{MODULE}}/game/mailbox"
 	"{{MODULE}}/game/rewards"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/framework/nestwal"
 	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
-	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
 const (
@@ -40,8 +41,13 @@ const (
 // through it would commit atomically with the receipt. Mail is a bus call,
 // not a Mongo write, which is why the second layer matters. A failed Send is
 // retried with backoff; an effect that can never be mailed (its payload does
-// not decode) is marked poison and dropped with an ERROR instead of being
-// redelivered forever.
+// not decode, or its reward is not an attachment the mailbox can grant —
+// gamemailbox.ErrLetterInvalid) is marked poison and dropped with an ERROR
+// instead of being redelivered forever.
+//
+// The send itself is the mailbox module's sender (gamemailbox.SendTo): one
+// direct mail to one player, the attachment validated before it can reach a
+// mailbox, the idempotency key required.
 func startLevelUpMailer(ctx context.Context, registry *app.Registry) (fnats.IJetStreamSubscription, error) {
 	mail, err := Mail(registry)
 	if err != nil {
@@ -54,21 +60,28 @@ func startLevelUpMailer(ctx context.Context, registry *app.Registry) (fnats.IJet
 			return kitdataengine.PoisonEffect(fmt.Errorf("level-up mail: decode effect %s: %w", envelope.EffectID, err))
 		}
 		// The reward rides in the attachment; the player claims it through
-		// the ClaimMail endpoint, which grants it into the Bag exactly once
-		// per mail (mail's ReserveClaim / CommitClaim).
-		attachment, err := rewards.Encode(rewards.LevelUpReward(event.Level))
-		if err != nil {
-			return kitdataengine.PoisonEffect(fmt.Errorf("level-up mail: effect %s: %w", envelope.EffectID, err))
+		// the mailbox module's MailboxClaim endpoint, which grants it into
+		// the Bag exactly once per mail (mail's ReserveClaim / CommitClaim
+		// around the Mailbox component's ledger).
+		reward := rewards.LevelUpReward(event.Level)
+		if reward == (gamemailbox.Attachment{}) {
+			// SendTo takes the zero attachment to mean "a mail with nothing
+			// attached". A level-up mail always carries a reward, so a reward
+			// function that returns nothing (a bad hot patch) is dropped like
+			// any other reward that cannot be granted, not mailed empty.
+			return kitdataengine.PoisonEffect(fmt.Errorf("level-up mail: effect %s: level %d has no reward", envelope.EffectID, event.Level))
 		}
-		_, err = mail.Send(ctx, svcmail.SendRequest{
-			Audience:         svcmail.AudienceDirect,
-			Recipients:       []int64{event.PlayerID},
+		_, err := gamemailbox.SendTo(ctx, mail, gamemailbox.Letter{
+			To:               event.PlayerID,
 			Subject:          fmt.Sprintf("Level %d reached", event.Level),
 			Body:             fmt.Sprintf("Congratulations on reaching level %d. Here is your reward.", event.Level),
-			Attachment:       attachment,
+			Attachment:       reward,
 			ExpiresInSeconds: levelUpMailExpiresIn,
 			RequestID:        envelope.EffectID,
 		})
+		if errors.Is(err, gamemailbox.ErrLetterInvalid) {
+			return kitdataengine.PoisonEffect(fmt.Errorf("level-up mail: effect %s: %w", envelope.EffectID, err))
+		}
 		return err
 	})
 }

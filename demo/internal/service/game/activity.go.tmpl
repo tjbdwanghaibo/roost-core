@@ -15,7 +15,7 @@ import (
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	world "{{MODULE}}/game/entities/world"
 	lifecycle "{{MODULE}}/game/lifecycle"
-	"{{MODULE}}/game/rewards"
+	gamemailbox "{{MODULE}}/game/mailbox"
 	"{{MODULE}}/game/settings"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	coreentity "github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -537,15 +537,14 @@ func (runner *ActivityRunner) settle(ctx context.Context, activityID string, dis
 		if !ok {
 			continue
 		}
-		attachment, encodeErr := rewards.Encode(rewards.Reward{ItemID: reward.ItemID, Count: reward.Count})
-		if encodeErr != nil {
-			return fmt.Errorf("encode reward: %w", encodeErr)
-		}
-		if _, sendErr := runner.mailer.Send(ctx, svcmail.SendRequest{
-			Audience: svcmail.AudienceDirect, Recipients: []int64{playerID},
+		// The mailbox module's sender: one mail per (activity, player) however
+		// often the dispatch is redelivered, the reward validated before it can
+		// reach a mailbox.
+		if _, sendErr := gamemailbox.SendTo(ctx, runner.mailer, gamemailbox.Letter{
+			To:      playerID,
 			Subject: fmt.Sprintf("Race %s: rank %d", activityID, rank+1),
 			Body:    fmt.Sprintf("You finished rank %d with %d points.", rank+1, int64(entry.Score)),
-			Attachment: attachment, ExpiresInSeconds: activitySettleMailExpiresIn,
+			Attachment: gamemailbox.Item(reward.ItemID, int64(reward.Count)), ExpiresInSeconds: activitySettleMailExpiresIn,
 			RequestID: gameactivity.MailRequestID(activityID, playerID),
 		}); sendErr != nil {
 			return fmt.Errorf("mail rank %d: %w", rank+1, sendErr)

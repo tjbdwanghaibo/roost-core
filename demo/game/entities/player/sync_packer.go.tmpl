@@ -32,7 +32,7 @@ func NewPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacke
 //	pos_x、pos_y、scene_id                   ✓               ✓             ✓             ✓    —
 //	facing                                   ✓               ✓             ✓             —    —
 //	cell_hp、cell_max_hp（血条）             ✓               ✓             ✓             —    —
-//	exp、gold、bag                           ✓               —             —             —    ✓
+//	exp、gold、bag、wallet                   ✓               —             —             —    ✓
 //	attr_base、attr_final、cell_attack、cell_power  ✓        —             —             —    —
 //
 // default 是普通场景里玩家经 self 看自己（policy.InterestConfig.SelfLayer 零值）：全部同步字段。near 是场景主视野里
@@ -53,7 +53,7 @@ var playerViews, playerViewsErr = dataengine.NewSyncViewSet(db.PlayerDaoSyncFiel
 	// state. Not the position and not the HP — the scene actor's mirror carries those, and the partitioned scene's
 	// position and HP live on the cell; not the attribute maps either (which combat field lives where in a
 	// partitioned scene waits on the maintainer, FEATURE §11).
-	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"Name", "Level", "Exp", "Gold", "Bag", "Equipment", "GuildID"}, Priority: 0},
+	entity.NamedSyncView{Profile: entity.SyncProfile{Key: "self"}, Fields: []string{"Name", "Level", "Exp", "Gold", "Bag", "Wallet", "Equipment", "GuildID"}, Priority: 0},
 )
 
 // SyncViews 是 Player 的视图集（不可变，可共享）：场景把它交给 Interest（policy.InterestConfig.ViewSets）在构造时核对

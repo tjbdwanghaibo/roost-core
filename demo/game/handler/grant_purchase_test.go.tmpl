@@ -16,7 +16,7 @@ import (
 // must grant nothing.
 //
 // It runs against the real generated handler in a real Nest transaction, on
-// the same harness the mail ledger uses.
+// the shared harness (claim_harness_test.go).
 
 func TestAPaidOrderIsGrantedOnce(t *testing.T) {
 	subject, client, committer := newClaimHarness(t)

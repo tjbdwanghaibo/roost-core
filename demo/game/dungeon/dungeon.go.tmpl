@@ -85,8 +85,8 @@ func ClaimWindowClosed(resolvedAtUnix, nowUnix int64) bool {
 // the App lets a process start up to a minute behind the deployment's
 // business-time high-water mark (framework/app business_time.go), so the
 // ledger keeps a record a comfortable multiple of that longer. It only costs
-// records kept ten minutes longer; game/rewards uses the same margin for the
-// mail ledger.
+// records kept ten minutes longer; the mailbox module (game/mailbox) uses the
+// same margin for the mail ledger.
 const LedgerPruneGraceSeconds int64 = 10 * 60
 
 // LedgerMayForget reports whether a paid run resolved at resolvedAtUnix may

@@ -26,7 +26,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitremoteentity "github.com/tjbdwanghaibo/roost-core/wiring/remoteentity"
 	svcactivity "github.com/tjbdwanghaibo/roost-core/service/activity"
-	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 	svcmatch "github.com/tjbdwanghaibo/roost-core/service/match"
 	svcplatform "github.com/tjbdwanghaibo/roost-core/service/platform"
 	svcsession "github.com/tjbdwanghaibo/roost-core/service/session"
@@ -58,7 +57,6 @@ type Controller struct {
 	// announcement and the online set go through it; SendChat / ChatHistory are
 	// its own endpoints, not this controller's.
 	chat *chatctl.Controller
-	mailer     svcmail.Mail
 	sessions   svcsession.Session
 	payments   svcplatform.Platform
 	purchases  atomic.Pointer[purchaseDrainer]
@@ -223,10 +221,6 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("player controller: %w", err)
 	}
-	mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
-	if !ok || mailer == nil {
-		return nil, fmt.Errorf("player controller: capability %q not found; list mail under services.<game>.uses", svcmail.CapabilityName)
-	}
 	sessions, ok := app.Lookup[svcsession.Session](registry, svcsession.CapabilityName)
 	if !ok || sessions == nil {
 		return nil, fmt.Errorf("player controller: capability %q not found; list session under services.<game>.uses", svcsession.CapabilityName)
@@ -280,7 +274,7 @@ func FromRegistry(registry *app.Registry) (*Controller, error) {
 	return &Controller{
 		registry: registry, nestClient: client, players: players, teams: teams,
 		alliances: alliances, allianceMirrors: allianceMirrors, guildSettings: guildSettings,
-		matcher: matcher, chat: chat, mailer: mailer, sessions: sessions,
+		matcher: matcher, chat: chat, sessions: sessions,
 		payments: payments, paymentSecret: paymentSecret,
 		serverSID: serverSID, ids: ids,
 		teamIDs: mongoClient.Database(databases.Physical(db.TeamDaoDBName)).Collection("_team_id_sequence"),
@@ -318,14 +312,6 @@ func (controller *Controller) Chat() *chatctl.Controller {
 		return nil
 	}
 	return controller.chat
-}
-
-// Mailer is the mail service, reached over the bus.
-func (controller *Controller) Mailer() svcmail.Mail {
-	if controller == nil {
-		return nil
-	}
-	return controller.mailer
 }
 
 // Sessions is the session service (bounded runs), reached over the bus.

@@ -17,7 +17,6 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
-	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
 )
 
 // EnterGame is the demo's login, called by the enter domain's endpoint
@@ -153,30 +152,32 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 	// alliance service's, and a failure leaves the copy as it is without
 	// failing the login.
 	controller.refreshGuild(context)
-	// Server-wide mail (AudienceBroadcast) sent while this player was offline
-	// reaches the mailbox now: the login half of mail.LazyBroadcast. The mail
-	// service records the profile and merges every broadcast that is this
-	// player's — the server's, everyone's, and one sent after the role was
-	// created (the built-in condition) — exactly once; List and Summary top up
-	// from the same profile afterwards. Without LazyBroadcast configured
-	// (internal/service/mail/collaborators.go Broadcast()) it is a no-op.
-	// A game with guild-wide broadcasts adds mail.GuildScope(guild) here — the
-	// guild the player is shown in, as refreshGuild checks it — and pulls again
-	// when a membership notice says the player joined or left. Best effort — a
-	// failed pull is retried by the next List / Summary / login.
-	if mailer := controller.Mailer(); mailer != nil {
-		if profile, ok := BroadcastProfile(context.Session, boundSID); !ok {
-			slog.Warn("enter_game: the session carries no role creation time; server-wide mail not pulled", "player_id", context.PlayerID)
-		} else if _, pullErr := mailer.PullBroadcasts(context.Context(), context.PlayerID, profile); pullErr != nil {
-			slog.Warn("enter_game: server-wide mail not pulled", "player_id", context.PlayerID, "err", pullErr)
-		}
-	}
 	// The enter module's hooks (game/enter): what other modules do when a
-	// player enters. The chat module's glue (game/chat/chat_enter.go, written
-	// because both modules are installed) puts the player in this process's
-	// online set here, so from now on they receive world-channel pushes. A
-	// failed hook is logged and does not fail the login.
-	gameenter.RunEntered(context.Context(), controller.registry, gameenter.Entered{PlayerID: context.PlayerID, InitResult: entered})
+	// player enters, each written as that module's glue with the enter module
+	// because both are installed. A failed hook is logged and does not fail the
+	// login. The hooks get the session's claims (Entered.Claims) — the facts
+	// the authenticator recorded from account — beside the first-enter time.
+	//
+	//   - chat (game/chat/chat_enter.go) puts the player in this process's
+	//     online set, so from now on they receive world-channel pushes.
+	//   - mailbox (game/controllers/mailbox/mailbox_enter.go) is the login half
+	//     of mail.LazyBroadcast: server-wide mail (AudienceBroadcast) sent while
+	//     this player was offline reaches the mailbox now. The mail service
+	//     records the profile and merges every broadcast that is this player's
+	//     exactly once; List and Summary top up from the same profile
+	//     afterwards. The profile is the module's BroadcastProfileOnEnter, read
+	//     from the claims: registered when the role was created
+	//     (RoleCreatedAtClaim), in the scope of the serving server
+	//     (ServerIDClaim — boundSID above, checked by Serve) and, for a role
+	//     whose origin server was merged into this one, of the origin too
+	//     (OriginServerIDClaim). Without LazyBroadcast configured
+	//     (internal/service/mail/collaborators.go Broadcast()) it is a no-op.
+	//     A game with guild-wide broadcasts adds mail.GuildScope(guild) in that
+	//     function and pulls again when a membership notice says the player
+	//     joined or left.
+	gameenter.RunEntered(context.Context(), controller.registry, gameenter.Entered{
+		PlayerID: context.PlayerID, InitResult: entered, Claims: context.Session.Principal().Claims,
+	})
 	// The login announcement stays the demo's own decision: the game says so on
 	// the world channel through the chat module's privileged system path — a
 	// client cannot publish there. The request id is the session and frame, so
@@ -238,31 +239,4 @@ func BoundServerID(session gateway.Session) (int32, bool) {
 		return 0, false
 	}
 	return int32(sid), true
-}
-
-// BroadcastProfile 是登录端点拉全服邮件用的画像：本服范围加上认证器从 account 取来的角色建立时间
-// （svcaccount.RoleCreatedAtClaim）。没有这个 claim 或值不是正整数时回答 false：注册时间未知就无法
-// 判断“注册时间早于发送时间”，不拉取，而不是把玩家当成老玩家。
-//
-// 别名合服之后，原服并入本服的角色（svcaccount.OriginServerIDClaim 与本服不同）另带原服范围：合服前发给
-// 原服、这个角色还没拉到的全服邮件照样属于他。这是 game-demo 的业务选择，框架不规定。
-func BroadcastProfile(session gateway.Session, serverID int32) (svcmail.BroadcastProfile, bool) {
-	if session == nil {
-		return svcmail.BroadcastProfile{}, false
-	}
-	raw, ok := session.Principal().Claims[svcaccount.RoleCreatedAtClaim]
-	if !ok {
-		return svcmail.BroadcastProfile{}, false
-	}
-	createdAt, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || createdAt <= 0 {
-		return svcmail.BroadcastProfile{}, false
-	}
-	scopes := []string{svcmail.ServerScope(serverID)}
-	if raw, ok := session.Principal().Claims[svcaccount.OriginServerIDClaim]; ok {
-		if origin, err := strconv.ParseInt(raw, 10, 32); err == nil && origin > 0 && int32(origin) != serverID {
-			scopes = append(scopes, svcmail.ServerScope(int32(origin)))
-		}
-	}
-	return svcmail.BroadcastProfile{Scopes: scopes, RegisteredAtUnix: createdAt}, true
 }

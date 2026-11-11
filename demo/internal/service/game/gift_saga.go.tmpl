@@ -10,7 +10,7 @@ import (
 	player "{{MODULE}}/game/entities/player"
 	"{{MODULE}}/game/gift"
 	syncsender "{{MODULE}}/game/handler/syncsender"
-	"{{MODULE}}/game/rewards"
+	gamemailbox "{{MODULE}}/game/mailbox"
 	giftitem "{{MODULE}}/saga/gift_item"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -356,13 +356,12 @@ func (steps giftSteps) deliver(ctx context.Context, command saga.Command) (saga.
 		}
 		return saga.Completion{}, err
 	}
-	attachment, err := rewards.Encode(rewards.Reward{ItemID: state.ItemID, Count: state.Count})
-	if err != nil {
-		return refuse(err.Error()), nil
-	}
-	_, err = steps.mailer.Send(ctx, svcmail.SendRequest{
-		Audience: svcmail.AudienceDirect, Recipients: []int64{state.To},
-		Subject: gift.Subject(state), Body: gift.Body(state), Attachment: attachment,
+	// The mailbox module's sender. The gifted stack rides as an item
+	// attachment (gamemailbox.Item, the kind the mailbox and bag modules
+	// register together); the recipient claims it through MailboxClaim.
+	_, err = gamemailbox.SendTo(ctx, steps.mailer, gamemailbox.Letter{
+		To: state.To, Subject: gift.Subject(state), Body: gift.Body(state),
+		Attachment:       gamemailbox.Item(state.ItemID, int64(state.Count)),
 		ExpiresInSeconds: gift.MailExpiresIn,
 		// One mail per step, however many times the command is delivered
 		// and however many attempts the step takes. Required: the mail is
@@ -371,6 +370,11 @@ func (steps giftSteps) deliver(ctx context.Context, command saga.Command) (saga.
 		RequestID: "gift:" + command.IdempotencyKey,
 	})
 	if err != nil {
+		// A gift that is not an attachment the mailbox can grant will not
+		// become one on a retry: a business refusal, so the saga compensates.
+		if errors.Is(err, gamemailbox.ErrLetterInvalid) {
+			return refuse(err.Error()), nil
+		}
 		if code, reason := errcode.ClientError(err); code != errcode.CodeInternal {
 			return refuse(reason), nil
 		}
