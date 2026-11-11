@@ -1,0 +1,43 @@
+//go:build protocoldef
+
+package protocoldef
+
+// ShopBuyRequest 是用金币买道具的请求。
+//
+// Key 是客户端为“这一次购买”生成的请求键，用来防重发。1 到 64 个字节，只能用 ASCII 字母、数字与 - _ :
+// 三种符号（UUID、“会话号:本地递增号”都可以），否则答 shop_key_invalid。
+//
+//   - 超时或断线后重发，必须带同一个 Key、同一个 GoodsID 与 Count。服务端认出来时不再扣钱、不再发货、
+//     不再记限购，回答与第一次相同的结果。同一个 Key 换了商品或份数答 shop_key_conflict。
+//   - 服务端只记这个玩家最近 64 次成功购买的 Key。一个 Key 成功之后又成功买了 64 次，它就被淘汰，
+//     再用它重发会当成一次新的购买（再扣一次钱、再发一次货，受限购约束）。所以重发要在紧接着的
+//     重试里做完，不要把很久以前的请求翻出来重放；新的购买一律换新的 Key。
+//   - 被拒绝的请求不留记录：同一个 Key 重发会重新判断一遍（例如钱够了之后就会成功）。
+type ShopBuyRequest struct {
+	Key     string `pb:"1"`
+	GoodsID int64  `pb:"2"`
+	// Count 是买几份（不是道具个数；一份里有几个道具由商品目录决定）。
+	Count int64 `pb:"3"`
+}
+
+// ShopBuyResponse 是这一笔购买在成交那一刻的结果；重发得到的是第一次的这份结果，不是现在的余额与持有量。
+// 当前的余额、背包与限购计数以自身视图同步下来的 Wallet / Bag / Shop 为准。
+type ShopBuyResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	// Cost 是这一笔扣的金币，Balance 是扣完之后的余额。
+	Cost    int64 `pb:"3"`
+	Balance int64 `pb:"4"`
+	// ItemID 是发放的道具号，Gained 是这一笔发了几个，Held 是发完之后的持有数量。
+	ItemID int64 `pb:"5"`
+	Gained int64 `pb:"6"`
+	Held   int64 `pb:"7"`
+	// Bought 是这一笔之后该商品在限购周期内（每日限购是当天，终身限购是累计）已买的份数；不限购的商品为 0。
+	Bought int64 `pb:"8"`
+}
+
+//roost:protocol group=game handler=shop
+type ShopBuyProtocol interface {
+	//roost:msg id={{ID:protocol:ShopBuy}}
+	ShopBuy(ShopBuyRequest) ShopBuyResponse
+}

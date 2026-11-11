@@ -1,0 +1,676 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"reflect"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	db "{{MODULE}}/db"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+// 场景用自己的商品目录，数字都写死在这里：工程改了 shop_goods.go 里的样例，这些用例不该变红；
+// 被测规则改错了，这些用例要变红。
+const (
+	shopTestPotion   = 1  // 不限购：10 金币 1 个道具 1001
+	shopTestTicket   = 2  // 每日限购 3 份：30 金币一份，一份 5 个道具 1002
+	shopTestPack     = 3  // 终身限购 2 份：200 金币 1 个道具 1003
+	shopTestOff      = 4  // 已下架的每日限购商品
+	shopTestBulk     = 5  // 不限购：5 金币一份，一份 10 个道具 1005（道具总数先于总价溢出）
+	shopTestCheap    = 6  // 不限购：4 金币 1 个道具 1006（4 × (2^62+1) 回绕成 4）
+	shopTestGem      = 7  // 每日限购 2 份：20 金币 1 个道具 1007
+	shopTestBadge    = 8  // 终身限购 1 份：50 金币 1 个道具 1008
+	shopTestBadItem  = 9  // 目录写错：道具号 0，背包不收
+	shopTestTitle    = 10 // 终身限购 1 份：40 金币 1 个道具 1010
+	shopTestUnknown  = 99
+	shopTestWindow   = 64 // 去重窗口保留最近 64 次成功购买
+	shopTestKeyBytes = 64 // 请求键至多 64 字节
+	shopTestMaxStack = 999999
+	shopTestMaxKinds = 200
+)
+
+func shopTestGoods() map[int64]playerentity.ShopGoods {
+	return map[int64]playerentity.ShopGoods{
+		shopTestPotion:  {ItemID: 1001, ItemCount: 1, Price: 10},
+		shopTestTicket:  {ItemID: 1002, ItemCount: 5, Price: 30, Limit: playerentity.ShopLimitDaily, LimitCount: 3},
+		shopTestPack:    {ItemID: 1003, ItemCount: 1, Price: 200, Limit: playerentity.ShopLimitLifetime, LimitCount: 2},
+		shopTestOff:     {ItemID: 1004, ItemCount: 1, Price: 10, Limit: playerentity.ShopLimitDaily, LimitCount: 5, Off: true},
+		shopTestBulk:    {ItemID: 1005, ItemCount: 10, Price: 5},
+		shopTestCheap:   {ItemID: 1006, ItemCount: 1, Price: 4},
+		shopTestGem:     {ItemID: 1007, ItemCount: 1, Price: 20, Limit: playerentity.ShopLimitDaily, LimitCount: 2},
+		shopTestBadge:   {ItemID: 1008, ItemCount: 1, Price: 50, Limit: playerentity.ShopLimitLifetime, LimitCount: 1},
+		shopTestBadItem: {ItemID: 0, ItemCount: 1, Price: 10},
+		shopTestTitle:   {ItemID: 1010, ItemCount: 1, Price: 40, Limit: playerentity.ShopLimitLifetime, LimitCount: 1},
+	}
+}
+
+const shopDay = 24 * time.Hour
+
+// 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。
+type shopGetter map[int64]entity.IThreadSafeEntity
+
+func (g shopGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+
+func (g shopGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// shopCommitter 是替身提交器：不落盘，reject 打开时拒绝提交，用来验证回滚。
+type shopCommitter struct{ reject atomic.Bool }
+
+func (c *shopCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	return nil
+}
+
+type shopFixture struct {
+	engine    *nest.NestMgr
+	player    *playerentity.Player
+	buys      *sender.ShopBuySender
+	committer *shopCommitter
+	now       atomic.Int64
+}
+
+// newShopFixture 用替身提交器起一个 Nest，装上测试目录，给玩家 coins 个金币。业务时钟由用例拨：
+// 每日限购按业务日切分（测试里是缺省的 UTC 零点），起点是 2026-11-10 09:00 UTC。
+// clock.SetSource 与商品目录都是进程级的：一个用例里只建一个 fixture。
+func newShopFixture(t *testing.T, coins int64) *shopFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterShopBuyNestHandlers()
+	RegisterWalletGrantNestHandlers()
+	RegisterBagGrantNestHandlers()
+	t.Cleanup(playerentity.SetShopGoodsForTest(shopTestGoods()))
+	f := &shopFixture{committer: &shopCommitter{}}
+	f.now.Store(time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC).UnixMilli())
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	id, err := entity.BuildEntityID(96001, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = built.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(shopGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.buys = sender.NewShopBuySender(f.engine)
+	if coins > 0 {
+		// 用货币模块的服务端发放 handler 给钱，不直接写别的模块的状态。
+		if _, err := sender.NewWalletGrantSender(f.engine).Sync_WalletGrant(context.Background(), f.player.ID(), "shop-test-seed", coins); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f
+}
+
+// advance 把业务时钟拨快（负数为回拨）。
+func (f *shopFixture) advance(d time.Duration) { f.now.Add(int64(d / time.Millisecond)) }
+
+// grantItem 用背包模块的服务端发放 handler 往背包里放道具，用来把背包摆成“放不下”的样子。
+func (f *shopFixture) grantItem(t *testing.T, itemID, count int64) {
+	t.Helper()
+	if _, err := sender.NewBagGrantSender(f.engine).Sync_BagGrant(context.Background(), f.player.ID(), itemID, count); err != nil {
+		t.Fatalf("grant item %d x%d: %v", itemID, count, err)
+	}
+}
+
+func (f *shopFixture) buy(key string, goodsID, count int64) (*pb.ShopBuyResponse, error) {
+	return f.buys.Sync_ShopBuy(context.Background(), f.player.ID(), &pb.ShopBuyRequest{Key: key, GoodsID: goodsID, Count: count})
+}
+
+func (f *shopFixture) mustBuy(t *testing.T, key string, goodsID, count int64) *pb.ShopBuyResponse {
+	t.Helper()
+	response, err := f.buy(key, goodsID, count)
+	if err != nil {
+		t.Fatalf("buy %q goods %d x%d: %v", key, goodsID, count, err)
+	}
+	return response
+}
+
+// shopSnapshot 是一笔购买可能改到的全部事实：钱、货、限购、回执。
+type shopSnapshot struct {
+	Coins    int64
+	Items    map[int64]int64
+	Day      int64
+	Daily    map[int64]int64
+	Lifetime map[int64]int64
+	Receipts int
+	NextSeq  int64
+}
+
+// snapshot 在业务 worker 上持实体锁读。只读自己的状态与购买会动的余额、背包。
+func (f *shopFixture) snapshot(t *testing.T) shopSnapshot {
+	t.Helper()
+	got := shopSnapshot{Items: map[int64]int64{}, Daily: map[int64]int64{}, Lifetime: map[int64]int64{}}
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		dao := f.player.Dao()
+		got.Coins = dao.GetWallet().GetCoins()
+		dao.GetBag().RangeItems(func(itemID, count int64) bool {
+			got.Items[itemID] = count
+			return true
+		})
+		state := dao.GetShop()
+		got.Day = state.GetDay()
+		state.RangeDaily(func(goodsID, count int64) bool {
+			got.Daily[goodsID] = count
+			return true
+		})
+		state.RangeLifetime(func(goodsID, count int64) bool {
+			got.Lifetime[goodsID] = count
+			return true
+		})
+		got.Receipts = dao.GetShopLedger().ReceiptsLen()
+		got.NextSeq = dao.GetShopLedger().GetNextSeq()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// wantSnapshot 断言钱、货、限购、回执恰好是 want。
+func (f *shopFixture) wantSnapshot(t *testing.T, when string, want shopSnapshot) {
+	t.Helper()
+	if want.Items == nil {
+		want.Items = map[int64]int64{}
+	}
+	if want.Daily == nil {
+		want.Daily = map[int64]int64{}
+	}
+	if want.Lifetime == nil {
+		want.Lifetime = map[int64]int64{}
+	}
+	if got := f.snapshot(t); !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s:\n got %+v\nwant %+v", when, got, want)
+	}
+}
+
+// wantRefused 断言这一笔被 want 拒绝，并且什么都没写：钱、货、限购、回执与拒绝之前一模一样。
+func (f *shopFixture) wantRefused(t *testing.T, what string, want error, key string, goodsID, count int64) {
+	t.Helper()
+	before := f.snapshot(t)
+	if _, err := f.buy(key, goodsID, count); !errors.Is(err, want) {
+		t.Fatalf("%s: err = %v, want %v", what, err, want)
+	}
+	if after := f.snapshot(t); !reflect.DeepEqual(before, after) {
+		t.Fatalf("%s: the refusal wrote:\nbefore %+v\n after %+v", what, before, after)
+	}
+}
+
+// 正常购买：扣总价、按“份数 × 每份数量”发道具、限购按份数记、留一条回执；回包是成交那一刻的结果。
+func TestShopBuyChargesCoinsGrantsItemsAndCountsTheLimit(t *testing.T) {
+	f := newShopFixture(t, 1000)
+	response := f.mustBuy(t, "k1", shopTestTicket, 2)
+	want := &pb.ShopBuyResponse{Cost: 60, Balance: 940, ItemID: 1002, Gained: 10, Held: 10, Bought: 2}
+	if !reflect.DeepEqual(response, want) {
+		t.Fatalf("response = %+v, want %+v", response, want)
+	}
+	f.wantSnapshot(t, "after buying 2 tickets", shopSnapshot{
+		Coins: 940, Items: map[int64]int64{1002: 10},
+		Day: 20261110, Daily: map[int64]int64{shopTestTicket: 2},
+		Receipts: 1, NextSeq: 1,
+	})
+	// 终身限购记在另一张表里；已有的道具接着堆叠。
+	pack := f.mustBuy(t, "k2", shopTestPack, 1)
+	if pack.Cost != 200 || pack.Balance != 740 || pack.ItemID != 1003 || pack.Gained != 1 || pack.Held != 1 || pack.Bought != 1 {
+		t.Fatalf("pack response = %+v", pack)
+	}
+	again := f.mustBuy(t, "k3", shopTestTicket, 1)
+	if again.Cost != 30 || again.Balance != 710 || again.Gained != 5 || again.Held != 15 || again.Bought != 3 {
+		t.Fatalf("third ticket response = %+v", again)
+	}
+	f.wantSnapshot(t, "after three purchases", shopSnapshot{
+		Coins: 710, Items: map[int64]int64{1002: 15, 1003: 1},
+		Day: 20261110, Daily: map[int64]int64{shopTestTicket: 3}, Lifetime: map[int64]int64{shopTestPack: 1},
+		Receipts: 3, NextSeq: 3,
+	})
+}
+
+// 不限购的商品不记数：买多少次，两张限购表都是空的（计数只为有限购的商品存在，所以有界）。
+func TestShopUnlimitedGoodsKeepNoCount(t *testing.T) {
+	f := newShopFixture(t, 1000)
+	for i := 1; i <= 5; i++ {
+		response := f.mustBuy(t, fmt.Sprintf("k%d", i), shopTestPotion, 3)
+		if response.Bought != 0 || response.Cost != 30 || response.Held != int64(3*i) {
+			t.Fatalf("purchase %d: response = %+v", i, response)
+		}
+	}
+	f.wantSnapshot(t, "after 5 unlimited purchases", shopSnapshot{
+		Coins: 850, Items: map[int64]int64{1001: 15},
+		Day:      20261110,
+		Receipts: 5, NextSeq: 5,
+	})
+}
+
+// 请求键为空、超过 64 字节、含字母数字与 - _ : 之外的字符被拒；正好 64 字节、UUID、“会话:序号”可以用。
+// 键会成为落库文档里的字段名：空字节编码不了，“.”与开头的“$”在存储里有特殊含义。
+func TestShopInvalidKeyIsRefused(t *testing.T) {
+	f := newShopFixture(t, 1000)
+	f.wantRefused(t, "empty key", apperrors.ErrShopKeyInvalid, "", shopTestPotion, 1)
+	f.wantRefused(t, "65-byte key", apperrors.ErrShopKeyInvalid, strings.Repeat("k", shopTestKeyBytes+1), shopTestPotion, 1)
+	for _, key := range []string{"a\x00b", "a.b", "$set", "a b", "a/b", "键", "k\n", "a@b", "a{b", "a[b", "a`b"} {
+		f.wantRefused(t, fmt.Sprintf("key %q", key), apperrors.ErrShopKeyInvalid, key, shopTestPotion, 1)
+	}
+	if response := f.mustBuy(t, strings.Repeat("k", shopTestKeyBytes), shopTestPotion, 1); response.Balance != 990 {
+		t.Fatalf("64-byte key: response = %+v", response)
+	}
+	if response := f.mustBuy(t, "3f2b8c1e-9d4a-4c7b-8e21-0a1b2c3d4e5f", shopTestPotion, 1); response.Balance != 980 {
+		t.Fatalf("uuid key: response = %+v", response)
+	}
+	if response := f.mustBuy(t, "Session_7:000129-AZaz", shopTestPotion, 1); response.Balance != 970 {
+		t.Fatalf("session:seq key: response = %+v", response)
+	}
+}
+
+// 份数不为正被拒。负的份数不能变成“负的总价”给玩家加钱。
+func TestShopInvalidCountIsRefused(t *testing.T) {
+	f := newShopFixture(t, 1000)
+	for _, count := range []int64{0, -1, math.MinInt64} {
+		f.wantRefused(t, fmt.Sprintf("count %d", count), apperrors.ErrShopCountInvalid, "k1", shopTestPotion, count)
+		f.wantRefused(t, fmt.Sprintf("count %d of a limited goods", count), apperrors.ErrShopCountInvalid, "k1", shopTestTicket, count)
+	}
+}
+
+// 目录里没有的商品号、已下架的商品被拒；目录行写错（单价或每份数量不为正、限购类型不认识）也不卖。
+func TestShopUnknownOffShelfOrMalformedGoodsAreRefused(t *testing.T) {
+	f := newShopFixture(t, 1000)
+	for _, goodsID := range []int64{shopTestUnknown, 0, -1} {
+		f.wantRefused(t, fmt.Sprintf("unknown goods %d", goodsID), apperrors.ErrShopGoodsInvalid, "k1", goodsID, 1)
+	}
+	f.wantRefused(t, "off-shelf goods", apperrors.ErrShopGoodsInvalid, "k1", shopTestOff, 1)
+
+	malformed := shopTestGoods()
+	malformed[101] = playerentity.ShopGoods{ItemID: 1001, ItemCount: 1, Price: 0}
+	malformed[102] = playerentity.ShopGoods{ItemID: 1001, ItemCount: 1, Price: -10}
+	malformed[103] = playerentity.ShopGoods{ItemID: 1001, ItemCount: 0, Price: 10}
+	malformed[104] = playerentity.ShopGoods{ItemID: 1001, ItemCount: -1, Price: 10}
+	malformed[105] = playerentity.ShopGoods{ItemID: 1001, ItemCount: 1, Price: 10, Limit: playerentity.ShopLimitKind(7), LimitCount: 5}
+	t.Cleanup(playerentity.SetShopGoodsForTest(malformed))
+	for goodsID := int64(101); goodsID <= 105; goodsID++ {
+		f.wantRefused(t, fmt.Sprintf("malformed goods %d", goodsID), apperrors.ErrShopGoodsInvalid, "k1", goodsID, 1)
+	}
+	// 目录里正常的商品不受影响。
+	if response := f.mustBuy(t, "k1", shopTestPotion, 1); response.Balance != 990 {
+		t.Fatalf("response = %+v", response)
+	}
+}
+
+// 钱不够：原样透出货币模块的 wallet_short；差 1 个金币也不行，正好够可以。
+func TestShopNotEnoughCoinsIsRefusedWithTheWalletCode(t *testing.T) {
+	f := newShopFixture(t, 59)
+	f.wantRefused(t, "59 coins for a 60-coin purchase", apperrors.ErrWalletShort, "k1", shopTestTicket, 2)
+	f.wantRefused(t, "59 coins for a 200-coin pack", apperrors.ErrWalletShort, "k1", shopTestPack, 1)
+	if response := f.mustBuy(t, "k1", shopTestTicket, 1); response.Balance != 29 {
+		t.Fatalf("response = %+v", response)
+	}
+	f.wantRefused(t, "29 coins for a 30-coin purchase", apperrors.ErrWalletShort, "k2", shopTestTicket, 1)
+	// 被拒的请求不留回执：同一个键在钱够了之后重发就成功。
+	if _, err := sender.NewWalletGrantSender(f.engine).Sync_WalletGrant(context.Background(), f.player.ID(), "top-up", 1); err != nil {
+		t.Fatal(err)
+	}
+	if response := f.mustBuy(t, "k2", shopTestTicket, 1); response.Balance != 0 || response.Bought != 2 {
+		t.Fatalf("after the top-up: response = %+v", response)
+	}
+}
+
+// 背包放不下：原样透出背包模块的码，已经扣的钱随整笔回滚，限购与回执也不记。
+func TestShopFullBagIsRefusedWithTheBagCodeAndCoinsComeBack(t *testing.T) {
+	f := newShopFixture(t, 1000)
+	// 单种上限 999999：差 4 个满，一份 5 个放不下（不做“能放多少放多少”）。
+	f.grantItem(t, 1002, shopTestMaxStack-4)
+	f.wantRefused(t, "stack full", apperrors.ErrBagStackFull, "k1", shopTestTicket, 1)
+	// 目录里的道具号背包不认。
+	f.wantRefused(t, "item the bag refuses", apperrors.ErrBagItemInvalid, "k1", shopTestBadItem, 1)
+	// 种类上限 200：背包里已有 200 种道具（1002、1007 与 198 种别的），新种类放不下；已有的种类照常买。
+	f.grantItem(t, 1007, 1)
+	for itemID := int64(5001); itemID <= 5198; itemID++ {
+		f.grantItem(t, itemID, 1)
+	}
+	f.wantRefused(t, "kinds full", apperrors.ErrBagKindsFull, "k1", shopTestPotion, 1)
+	if response := f.mustBuy(t, "k1", shopTestGem, 1); response.Balance != 980 || response.Held != 2 || response.Bought != 1 {
+		t.Fatalf("buying a kind already in the full bag: response = %+v", response)
+	}
+}
+
+// 总价溢出：单价 × 份数超出 int64 时被拒，不能回绕成一个很小的总价；道具总数溢出同样被拒。
+func TestShopTotalPriceOverflowIsRefused(t *testing.T) {
+	f := newShopFixture(t, 1000)
+	// 10 × (MaxInt64/10 + 1) 超出 int64。
+	f.wantRefused(t, "price overflow", apperrors.ErrShopOverflow, "k1", shopTestPotion, math.MaxInt64/10+1)
+	f.wantRefused(t, "price overflow at the largest count", apperrors.ErrShopOverflow, "k1", shopTestPotion, math.MaxInt64)
+	// 4 × (2^62 + 1) 回绕之后正好是 4：不查溢出就是 4 个金币买走 2^62+1 份。
+	f.wantRefused(t, "price wrapping to 4 coins", apperrors.ErrShopOverflow, "k1", shopTestCheap, 1<<62+1)
+	// 30 × count 溢出而 count 远超每日限购：答的是溢出还是超限都不写；这里固定为先查溢出。
+	f.wantRefused(t, "price overflow of a limited goods", apperrors.ErrShopOverflow, "k1", shopTestTicket, math.MaxInt64/30+1)
+	// 一份 10 个、单价 5：总价 5 × count 还在 int64 内，道具总数 10 × count 已经溢出。
+	f.wantRefused(t, "item amount overflow", apperrors.ErrShopOverflow, "k1", shopTestBulk, math.MaxInt64/10+1)
+	// 没溢出但买不起的大数走货币的拒绝，说明上面不是“数大就拒”。
+	f.wantRefused(t, "huge but representable total", apperrors.ErrWalletShort, "k1", shopTestPotion, math.MaxInt64/10)
+}
+
+// 提交被拒绝时，钱、货、限购（每日与终身）、回执一起回滚；之后同一个键重发是一次新的购买。
+func TestShopRejectedCommitRollsBackCoinsItemsLimitsAndReceipt(t *testing.T) {
+	f := newShopFixture(t, 1000)
+	f.mustBuy(t, "k0", shopTestTicket, 1)
+	before := f.snapshot(t)
+	f.committer.reject.Store(true)
+	if _, err := f.buy("k1", shopTestTicket, 2); err == nil {
+		t.Fatal("a rejected daily-limited purchase reported success")
+	}
+	if _, err := f.buy("k2", shopTestPack, 1); err == nil {
+		t.Fatal("a rejected lifetime-limited purchase reported success")
+	}
+	if _, err := f.buy("k3", shopTestPotion, 1); err == nil {
+		t.Fatal("a rejected unlimited purchase reported success")
+	}
+	f.committer.reject.Store(false)
+	f.wantSnapshot(t, "after the rejected commits", before)
+	// 回执也回滚了：k1 重发不是“认出来、返回第一次的结果”，而是真的买一次。
+	response := f.mustBuy(t, "k1", shopTestTicket, 2)
+	if response.Cost != 60 || response.Balance != 910 || response.Held != 15 || response.Bought != 3 {
+		t.Fatalf("buy after rollback: response = %+v", response)
+	}
+	if response := f.mustBuy(t, "k2", shopTestPack, 1); response.Balance != 710 || response.Bought != 1 {
+		t.Fatalf("pack after rollback: response = %+v", response)
+	}
+	f.wantSnapshot(t, "after retrying", shopSnapshot{
+		Coins: 710, Items: map[int64]int64{1002: 15, 1003: 1},
+		Day: 20261110, Daily: map[int64]int64{shopTestTicket: 3}, Lifetime: map[int64]int64{shopTestPack: 1},
+		Receipts: 3, NextSeq: 3,
+	})
+}
+
+// 买到限购上限之后：再买被拒且零写入；剩 1 份时买 2 份整笔被拒（不做“能买几份买几份”）；
+// 别的商品照常卖；上限之内最后一份照常成交。
+func TestShopAtTheLimitFurtherPurchasesAreRefusedAndOtherGoodsStillSell(t *testing.T) {
+	f := newShopFixture(t, 2000)
+	f.mustBuy(t, "k1", shopTestTicket, 2)
+	f.wantRefused(t, "2 shares with 1 left today", apperrors.ErrShopLimit, "k2", shopTestTicket, 2)
+	f.wantRefused(t, "far more than the limit", apperrors.ErrShopLimit, "k2", shopTestTicket, 1000)
+	if response := f.mustBuy(t, "k2", shopTestTicket, 1); response.Bought != 3 || response.Held != 15 {
+		t.Fatalf("the last share: response = %+v", response)
+	}
+	f.wantRefused(t, "a 4th share today", apperrors.ErrShopLimit, "k3", shopTestTicket, 1)
+	// 一次买超过上限的份数，从没买过也被拒。
+	f.wantRefused(t, "3 packs with a lifetime limit of 2", apperrors.ErrShopLimit, "k3", shopTestPack, 3)
+	if response := f.mustBuy(t, "k3", shopTestPack, 2); response.Bought != 2 {
+		t.Fatalf("2 packs at once: response = %+v", response)
+	}
+	f.wantRefused(t, "a 3rd pack", apperrors.ErrShopLimit, "k4", shopTestPack, 1)
+	// 到上限之后别的商品照常卖，到上限的商品接着被拒。
+	if response := f.mustBuy(t, "k4", shopTestPotion, 1); response.Held != 1 {
+		t.Fatalf("another goods at the limit: response = %+v", response)
+	}
+	if response := f.mustBuy(t, "k5", shopTestGem, 2); response.Bought != 2 {
+		t.Fatalf("another limited goods: response = %+v", response)
+	}
+	f.wantRefused(t, "still at the limit", apperrors.ErrShopLimit, "k6", shopTestTicket, 1)
+	f.wantSnapshot(t, "at the limits", shopSnapshot{
+		Coins: 2000 - 90 - 400 - 10 - 40, Items: map[int64]int64{1001: 1, 1002: 15, 1003: 2, 1007: 2},
+		Day: 20261110, Daily: map[int64]int64{shopTestTicket: 3, shopTestGem: 2}, Lifetime: map[int64]int64{shopTestPack: 2},
+		Receipts: 5, NextSeq: 5,
+	})
+}
+
+// 每日限购跨业务日清零：当天最后一毫秒还是拒，过了业务日起点（测试里是 UTC 零点）就能再买，
+// 计数从 0 起算，Day 跟着换成新的业务日。
+func TestShopDailyLimitResetsOnTheNextBusinessDay(t *testing.T) {
+	f := newShopFixture(t, 2000)
+	f.mustBuy(t, "k1", shopTestTicket, 3)
+	f.mustBuy(t, "k2", shopTestGem, 1)
+	f.advance(15*time.Hour - time.Millisecond) // 2026-11-10 23:59:59.999 UTC
+	f.wantRefused(t, "the last millisecond of the day", apperrors.ErrShopLimit, "k3", shopTestTicket, 1)
+	f.advance(time.Millisecond) // 2026-11-11 00:00:00 UTC
+	// 跨天后没有成功购买之前不写：被拒的请求不触发清零。
+	f.wantRefused(t, "over the fresh limit on the new day", apperrors.ErrShopLimit, "k3", shopTestTicket, 4)
+	if response := f.mustBuy(t, "k3", shopTestTicket, 2); response.Bought != 2 || response.Held != 25 {
+		t.Fatalf("first purchase of the new day: response = %+v", response)
+	}
+	// 昨天的计数整张清掉，包括今天还没买的商品。
+	f.wantSnapshot(t, "on the new day", shopSnapshot{
+		Coins: 2000 - 90 - 20 - 60, Items: map[int64]int64{1002: 25, 1007: 1},
+		Day: 20261111, Daily: map[int64]int64{shopTestTicket: 2},
+		Receipts: 3, NextSeq: 3,
+	})
+	f.wantRefused(t, "2 more with 1 left", apperrors.ErrShopLimit, "k4", shopTestTicket, 2)
+	// 隔好几天再来也一样。
+	f.advance(5 * shopDay)
+	if response := f.mustBuy(t, "k4", shopTestTicket, 3); response.Bought != 3 {
+		t.Fatalf("five days later: response = %+v", response)
+	}
+	if got := f.snapshot(t); got.Day != 20261116 || got.Daily[shopTestTicket] != 3 {
+		t.Fatalf("five days later: day = %d daily = %v", got.Day, got.Daily)
+	}
+}
+
+// 终身限购跨业务日不清：每日那张表清了，终身那张原样留着。
+func TestShopLifetimeLimitSurvivesTheBusinessDay(t *testing.T) {
+	f := newShopFixture(t, 2000)
+	f.mustBuy(t, "k1", shopTestPack, 1)
+	f.mustBuy(t, "k2", shopTestBadge, 1)
+	f.mustBuy(t, "k3", shopTestTicket, 3)
+	f.advance(shopDay)
+	f.wantRefused(t, "the badge on the next day", apperrors.ErrShopLimit, "k4", shopTestBadge, 1)
+	if response := f.mustBuy(t, "k4", shopTestPack, 1); response.Bought != 2 {
+		t.Fatalf("second pack on the next day: response = %+v", response)
+	}
+	f.wantSnapshot(t, "on the next day", shopSnapshot{
+		Coins: 2000 - 200 - 50 - 90 - 200, Items: map[int64]int64{1002: 15, 1003: 2, 1008: 1},
+		Day: 20261111, Lifetime: map[int64]int64{shopTestPack: 2, shopTestBadge: 1},
+		Receipts: 4, NextSeq: 4,
+	})
+	f.advance(30 * shopDay)
+	f.wantRefused(t, "a 3rd pack a month later", apperrors.ErrShopLimit, "k5", shopTestPack, 1)
+}
+
+// 业务时钟回拨到前一天：每日限购不清零（宁可少卖，不多卖），Day 不往回走。
+func TestShopClockSetBackDoesNotResetTheDailyLimit(t *testing.T) {
+	f := newShopFixture(t, 2000)
+	f.mustBuy(t, "k1", shopTestTicket, 3)
+	f.advance(-shopDay)
+	f.wantRefused(t, "after the clock went back a day", apperrors.ErrShopLimit, "k2", shopTestTicket, 1)
+	f.mustBuy(t, "k2", shopTestPotion, 1)
+	if got := f.snapshot(t); got.Day != 20261110 || got.Daily[shopTestTicket] != 3 {
+		t.Fatalf("after a purchase on the earlier day: day = %d daily = %v", got.Day, got.Daily)
+	}
+}
+
+// 同一个键重发：不再扣钱、不再发货、不再记限购，回答第一次的结果——即使这中间余额、持有量、
+// 限购计数都变了，即使这一笔买的是限购的最后一份，即使已经跨了业务日、商品已经下架。
+func TestShopResendWithTheSameKeyChargesOnceAndRepeatsTheFirstAnswer(t *testing.T) {
+	f := newShopFixture(t, 1000)
+	first := f.mustBuy(t, "k1", shopTestTicket, 2)
+	afterFirst := f.snapshot(t)
+	resent := f.mustBuy(t, "k1", shopTestTicket, 2)
+	if !reflect.DeepEqual(resent, first) {
+		t.Fatalf("resend = %+v, want the first answer %+v", resent, first)
+	}
+	f.wantSnapshot(t, "after the resend", afterFirst)
+
+	// 中间又买了别的：余额、持有量、已买份数都变了，k1 的回答不变。
+	last := f.mustBuy(t, "k2", shopTestTicket, 1) // 当天第 3 份，到上限
+	f.mustBuy(t, "k3", shopTestPotion, 4)
+	settled := f.snapshot(t)
+	if resent := f.mustBuy(t, "k1", shopTestTicket, 2); !reflect.DeepEqual(resent, first) {
+		t.Fatalf("resend after other purchases = %+v, want the first answer %+v", resent, first)
+	}
+	// k2 买的是最后一份：重发得到的是成交结果，不是“超过限购”。
+	if resent := f.mustBuy(t, "k2", shopTestTicket, 1); !reflect.DeepEqual(resent, last) || resent.Bought != 3 {
+		t.Fatalf("resend of the purchase that hit the limit = %+v, want %+v", resent, last)
+	}
+	f.wantSnapshot(t, "after resending k1 and k2", settled)
+
+	// 同一个键换了商品或份数：客户端用错了键，拒绝且不写。
+	f.wantRefused(t, "k1 with another count", apperrors.ErrShopKeyConflict, "k1", shopTestTicket, 1)
+	f.wantRefused(t, "k1 with another goods", apperrors.ErrShopKeyConflict, "k1", shopTestPotion, 2)
+	f.wantRefused(t, "k3 with a goods of the same total price", apperrors.ErrShopKeyConflict, "k3", shopTestGem, 2)
+
+	// 跨业务日、商品下架之后重发：仍是第一次的结果，连每日清零都不做。
+	f.advance(shopDay)
+	offShelf := shopTestGoods()
+	ticket := offShelf[shopTestTicket]
+	ticket.Off = true
+	offShelf[shopTestTicket] = ticket
+	t.Cleanup(playerentity.SetShopGoodsForTest(offShelf))
+	if resent := f.mustBuy(t, "k1", shopTestTicket, 2); !reflect.DeepEqual(resent, first) {
+		t.Fatalf("resend on the next day = %+v, want the first answer %+v", resent, first)
+	}
+	f.wantSnapshot(t, "after the resend on the next day", settled)
+}
+
+// 去重窗口只留最近 64 次成功购买：第 65 次起淘汰最旧的回执，窗口不再长大，购买照常成交；
+// 还在窗口里的键重发不扣钱，被淘汰的键重发当成一次新的购买（协议注释里写明的行为）。
+func TestShopReceiptWindowEvictsTheOldestAndKeepsWorking(t *testing.T) {
+	f := newShopFixture(t, 10000)
+	const purchases = shopTestWindow + 10
+	for i := 1; i <= purchases; i++ {
+		if response := f.mustBuy(t, fmt.Sprintf("k%d", i), shopTestPotion, 1); response.Balance != int64(10000-10*i) {
+			t.Fatalf("purchase %d: response = %+v", i, response)
+		}
+	}
+	full := shopSnapshot{
+		Coins: 10000 - 10*purchases, Items: map[int64]int64{1001: purchases},
+		Day:      20261110,
+		Receipts: shopTestWindow, NextSeq: purchases,
+	}
+	f.wantSnapshot(t, "after 74 purchases", full)
+	// 最新的键与窗口里最旧的键（第 11 次）都还认得出来。
+	if resent := f.mustBuy(t, fmt.Sprintf("k%d", purchases), shopTestPotion, 1); resent.Balance != full.Coins || resent.Held != purchases {
+		t.Fatalf("resend of the newest key: response = %+v", resent)
+	}
+	if resent := f.mustBuy(t, "k11", shopTestPotion, 1); resent.Balance != 10000-10*11 || resent.Held != 11 {
+		t.Fatalf("resend of the oldest surviving key: response = %+v", resent)
+	}
+	f.wantSnapshot(t, "after resending keys inside the window", full)
+	// 第 10 次的回执已被淘汰：重发是一次新的购买，再扣一次钱、再发一次货，并占一条新回执。
+	if resent := f.mustBuy(t, "k10", shopTestPotion, 1); resent.Balance != full.Coins-10 || resent.Held != purchases+1 {
+		t.Fatalf("resend of an evicted key: response = %+v", resent)
+	}
+	f.wantSnapshot(t, "after resending an evicted key", shopSnapshot{
+		Coins: full.Coins - 10, Items: map[int64]int64{1001: purchases + 1},
+		Day:      20261110,
+		Receipts: shopTestWindow, NextSeq: purchases + 1,
+	})
+	// 它挤掉的是当时最旧的第 11 次，第 12 次还在。
+	if resent := f.mustBuy(t, "k12", shopTestPotion, 1); resent.Balance != 10000-10*12 {
+		t.Fatalf("resend of k12: response = %+v", resent)
+	}
+	if resent := f.mustBuy(t, "k11", shopTestPotion, 1); resent.Balance != full.Coins-20 {
+		t.Fatalf("k11 was evicted by the re-run of k10 and should be a new purchase: response = %+v", resent)
+	}
+}
+
+// 限购计数有界：目录里已经没有的商品号、限购类型换了的商品，旧计数在下一次成功购买时清掉；
+// 下架的商品还在目录里，计数保留；被拒绝的购买不清（不写任何字段）。
+func TestShopStaleCountsAreDroppedOnTheNextSuccessfulPurchase(t *testing.T) {
+	f := newShopFixture(t, 2000)
+	f.mustBuy(t, "k1", shopTestTicket, 1)
+	f.mustBuy(t, "k2", shopTestGem, 2)
+	f.mustBuy(t, "k3", shopTestPack, 1)
+	f.mustBuy(t, "k4", shopTestBadge, 1)
+	f.mustBuy(t, "k5", shopTestTitle, 1)
+	counted := f.snapshot(t)
+	if !reflect.DeepEqual(counted.Daily, map[int64]int64{shopTestTicket: 1, shopTestGem: 2}) ||
+		!reflect.DeepEqual(counted.Lifetime, map[int64]int64{shopTestPack: 1, shopTestBadge: 1, shopTestTitle: 1}) {
+		t.Fatalf("before the catalog change: daily = %v lifetime = %v", counted.Daily, counted.Lifetime)
+	}
+
+	// 新目录：体力券改成不限购，宝石（每日限购）与称号（终身限购）从目录里删掉，礼包下架，
+	// 徽章从终身限购改成每日限购。
+	changed := shopTestGoods()
+	ticket := changed[shopTestTicket]
+	ticket.Limit, ticket.LimitCount = playerentity.ShopLimitNone, 0
+	changed[shopTestTicket] = ticket
+	delete(changed, shopTestGem)
+	delete(changed, shopTestTitle)
+	pack := changed[shopTestPack]
+	pack.Off = true
+	changed[shopTestPack] = pack
+	badge := changed[shopTestBadge]
+	badge.Limit = playerentity.ShopLimitDaily
+	changed[shopTestBadge] = badge
+	t.Cleanup(playerentity.SetShopGoodsForTest(changed))
+
+	f.wantRefused(t, "the removed daily goods", apperrors.ErrShopGoodsInvalid, "k6", shopTestGem, 1)
+	f.wantRefused(t, "the removed lifetime goods", apperrors.ErrShopGoodsInvalid, "k6", shopTestTitle, 1)
+	f.wantRefused(t, "the off-shelf goods", apperrors.ErrShopGoodsInvalid, "k6", shopTestPack, 1)
+	// 一次成功的购买（买的是别的商品）顺手清掉过期的计数。
+	f.mustBuy(t, "k6", shopTestPotion, 1)
+	f.wantSnapshot(t, "after the next purchase", shopSnapshot{
+		Coins: 2000 - 30 - 40 - 200 - 50 - 40 - 10, Items: map[int64]int64{1001: 1, 1002: 5, 1003: 1, 1007: 2, 1008: 1, 1010: 1},
+		Day: 20261110, Lifetime: map[int64]int64{shopTestPack: 1},
+		Receipts: 6, NextSeq: 6,
+	})
+	// 徽章现在按每日限购从 0 算；体力券不限购、不再记数。
+	if response := f.mustBuy(t, "k7", shopTestBadge, 1); response.Bought != 1 {
+		t.Fatalf("badge under its new daily limit: response = %+v", response)
+	}
+	if response := f.mustBuy(t, "k8", shopTestTicket, 5); response.Bought != 0 {
+		t.Fatalf("ticket without a limit: response = %+v", response)
+	}
+	got := f.snapshot(t)
+	if !reflect.DeepEqual(got.Daily, map[int64]int64{shopTestBadge: 1}) || !reflect.DeepEqual(got.Lifetime, map[int64]int64{shopTestPack: 1}) {
+		t.Fatalf("after buying under the new catalog: daily = %v lifetime = %v", got.Daily, got.Lifetime)
+	}
+}
+
+// Shop 下发给玩家本人（客户端要显示“今天还能买几份”），ShopLedger 只落库。
+// 只断言商店自己的字段：同一个 DAO 上还有别的模块的字段。
+func TestShopLimitCountsAreSyncedAndTheLedgerIsNot(t *testing.T) {
+	var state, ledger bool
+	for _, field := range db.PlayerDaoSyncFields() {
+		switch field.Name {
+		case "Shop":
+			state = true
+		case "ShopLedger":
+			ledger = true
+		}
+	}
+	if !state {
+		t.Fatal("PlayerDao.Shop is not synced: the player would not see how many shares are left")
+	}
+	if ledger {
+		t.Fatal("PlayerDao.ShopLedger is synced: the receipts are a server-side ledger")
+	}
+}

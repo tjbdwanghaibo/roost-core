@@ -212,7 +212,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | --- | --- | --- | --- | --- |
 | `roost module list` | 列出内置业务模块；在工程里执行时标出已安装的 | `roost module list [--json]` | 正式。目录以它的输出为准 | [modules](../../modules/README.md) |
 | `roost module plan` | 只预览，不改动工程：依赖的安装顺序、会先执行的 `roost add`、追加的 DAO 字段、分配的号、写入的文件 | `roost module plan <name…> [--json] [--service <svc>]` | 正式。`--json` 与 `add` 同一个结构 | 同上 |
-| `roost module add` | 安装模块（连同依赖）并运行生成器；已安装的不再处理 | `roost module add <name…> [--json] [--service <svc>]` | 正式。落点被业务文件占用时拒绝、不覆盖；失败时模块写过的文件与 `roost.yaml` 恢复；没有卸载，分配过的号与存储键不回收 | 同上 |
+| `roost module add` | 安装模块（连同依赖）并运行生成器；已安装的不再处理；这次装的模块与已装的模块之间有联动文件（`glue <模块> with <另一个模块>`）时一并写进工程 | `roost module add <name…> [--json] [--service <svc>]` | 正式。落点被业务文件占用时拒绝、不覆盖；失败时模块写过的文件与 `roost.yaml` 恢复；没有卸载，分配过的号与存储键不回收 | 同上 |
 | `roost module verify` | 跑已装模块自带的场景（通过数等于清单里的数、零跳过），再跑 build、vet、ID 检查与生成物漂移检查 | `roost module verify [name…] [--json]` | 正式。场景用替身提交器，不代表真实依赖验收 | 同上 |
 
 ## 现成的业务参考
@@ -224,9 +224,12 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 能力 | 一句话说明 | 怎么接入 | 状态与主要边界 | 文档 |
 | --- | --- | --- | --- | --- |
 | 货币 wallet | 余额；两个入口：`Add`（调用方自己记着“做过没有”的发放与扣除，不留回执）、`Apply`（带业务键，同一个键在去重窗口内只生效一次）；客户端消费协议；服务端发放 handler | `roost module add wallet`；别的业务在自己的组件里调 `WalletComp().Add(delta)` 或 `WalletComp().Apply(key, delta)` | 现成模块。单一货币；去重窗口只留最近 128 次带业务键的加减，是短期防重发不是永久账本，周期性发放用 `Add` | [modules](../../modules/README.md) |
-| 每日签到 checkin | 按业务日（业务时区与每日重置时刻）切分，连续天数加成，奖励经货币模块在同一笔事务里发放 | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。奖励规则是样例，在组件里改；跨天后没有新写入时客户端看到的仍是上一次的记录，按 `LastDay` 比对 | 同上 |
+| 每日签到 checkin | 按业务日（业务时区与每日重置时刻）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功的登记点 `OnCheckinClaimed`（别的功能在同一笔事务里顺带做事） | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。奖励规则是样例，在组件里改；钩子返回错误会让这一次签到整笔回滚；跨天后没有新写入时客户端看到的仍是上一次的记录，按 `LastDay` 比对 | 同上 |
 | 聊天 chat | 世界频道与一对一私聊：发送、向在线玩家推送、按序号翻历史；系统公告入口（`AnnounceWorld`，给服务端别的功能用）；消息存在托管的 chat 服务里，频道政策与消息体校验在工程这一侧 | `roost module add chat`（业务服务要 `uses: [chat]`，`-template game` 已有；安装时替换 chat 服务的拒绝桩，并要求玩家 TCP 接入）；game-demo 用的就是它 | 现成模块。在线名单按进程计，多个 game 进程不互相扇出；没有群组频道；不经过 Nest，不改任何实体 | 同上 |
-| 进入游戏 enter | 登录后的第一条请求：加载或创建 Player，并跑“首次初始化”（做过没有记在档里，建档后崩溃下次进入补上）；新玩家的初始发放写在一个业务文件里 | `roost module add enter`；安装时一并打开玩家 TCP 接入与自身视图 | 现成模块。不含鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）；端点里“建档 → 初始化”的串接没有离线用例 | 同上 |
+| 进入游戏 enter | 登录后的第一条请求：加载或创建 Player，并跑“首次初始化”（做过没有记在档里，建档后崩溃下次进入补上）；新玩家的初始发放写在一个业务文件里；进入之后的登记点 `game/enter` 的 `OnEntered`（别的功能在玩家进入后顺带做事：聊天上线、拉全服邮件） | `roost module add enter`；安装时一并打开玩家 TCP 接入与自身视图；自己的功能要在进入时做事，在自己的包的 `init` 里调 `gameenter.OnEntered(名字, 钩子)` | 现成模块。不含鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）；端点里“建档 → 初始化 → 钩子”的串接没有离线用例；进入钩子在事务之外、失败只记日志 | 同上 |
+| 每日任务 quest | 按业务日惰性清零的任务进度；服务端推进（组件入口 `Advance`，或不对客户端开放的 handler `QuestAdvance`）；领奖协议，金币在同一笔事务里到账；任务表是一个业务文件 | `roost module add quest`（依赖 wallet）；别的功能在自己的事务里调 `QuestComp().Advance(任务号, 次数, nowUnixMilli)`；同时装了 checkin 时签到自动推进“签到一次” | 现成模块。装上之后任务不会自己动，除了签到那一条都要工程接线；推进不判重，由调用方保证只算一次；跨天后没有新写入时客户端看到的仍是昨天的记录，按 `Day` 比对；奖励只有金币 | 同上 |
+| 体力 stamina | 随业务时间惰性恢复到上限（不用定时器）；消耗、发放、查询的组件入口；花金币补满的协议（每业务日限次、逐次涨价）；服务端发放 handler；规则是一个业务文件 | `roost module add stamina`（依赖 wallet）；别的功能在自己的事务里调 `StaminaComp().Spend(n, nowUnixMilli)` | 现成模块。同步只在写入时发生，客户端要按上限、周期与服务器业务时间自己推算当前值；发放超过硬顶静默截断（看返回的 `Granted`）；调高上限等于给已满的玩家立即补到新上限；补满协议不带请求键 | 同上 |
+| 商店 shop | 用金币买道具：扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键防重发；商品目录是一个业务文件 | `roost module add shop`（依赖 wallet 与 bag） | 现成模块。样例目录装上就在卖，要换成自己的；请求键只在最近 64 次成功购买内去重，更早的键重发会再买一次；没有“期望价格”校验、多货币、打折、全服库存；目录是 Go 表不是配置表 | 同上 |
 | 玩家档案 profile | 名字、等级、经验；改名协议；服务端发经验的 handler（每级固定经验、可连升多级）；升级钩子是一个业务文件 | `roost module add profile`；别的业务调 `ProfileComp().AddExp(n)`，升级奖励写在 `profile_levelup.go` | 现成模块。名字不查重（全服唯一用 directory 服务）、不查敏感词；每级 100 经验是样例；没有等级上限 | 同上 |
 | 玩家背包 bag | 道具号到数量的堆叠背包：增、减、查；丢弃协议；服务端发放 handler | `roost module add bag`；别的业务在自己的组件里调 `BagComp().Add / Remove / Has` | 现成模块。没有格子、装备、过期与道具表：道具号合法性在 `bag_items.go`，缺省只要求为正；至多 200 种、单种至多 999999 | 同上 |
 | 排行榜 leaderboard | 一张全服总分榜：前 N 名与自己的名次两条协议；提交分数的函数给服务端别的功能调 | `roost module add leaderboard`（业务服务要 `uses: [rank]`，`-template game` 已有）；持有总分的功能在事务之外调 `leaderboard.Submit` | 现成模块。只升不降；只有一个榜、一个周期，换周期是改常量后发版；与改总分的事务不是原子的，失败靠重试或下一次提交补上 | 同上 |
@@ -329,7 +332,10 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 抽卡保底 | 配置表（按值捕获）+ 幂等序号账本，同一事务里改保底计数与发卡；规则需手写业务 | 卡牌 RPG 夹具 |
 | 离线收益、建造 / 行军倒计时 | 实体持久定时器（离线只补一次）+ 按区间惰性结算 | 放置模拟夹具；SLG 夹具的建造、行军与离线收益 |
 | 每日签到 | 现成模块 checkin（`roost module add checkin`，连同 wallet） | 模块 checkin |
-| 每日重置、体力恢复 | 业务日与时区 + DAO 里存上次重置的业务日，惰性重置；体力按服务器时间惰性恢复；需手写业务 | 模块 checkin 的日界写法；放置模拟夹具的每日奖励；合成休闲夹具的体力 |
+| 每日任务 | 现成模块 quest（`roost module add quest`，连同 wallet）：进度、领奖、按业务日清零；什么时候推进由各功能调 `Advance` | 模块 quest；签到推进看 quest + checkin 联动 |
+| 体力恢复 | 现成模块 stamina（`roost module add stamina`，连同 wallet）：惰性恢复、消耗、金币补满 | 模块 stamina；合成休闲夹具的体力 |
+| 商店、限购 | 现成模块 shop（`roost module add shop`，连同 wallet 与 bag）：金币买道具、每日 / 终身限购、请求键防重发；充值到账走 platform 服务 | 模块 shop；game-demo 的充值发货 |
+| 每日重置 | 业务日与时区 + DAO 里存上次重置的业务日，惰性重置；需手写业务 | 模块 checkin、quest 的日界写法；放置模拟夹具的每日奖励 |
 | 玩家间交易、转账 | 多实体事务与锁序 | MMORPG 夹具的托管交易 |
 | 跨服送礼、跨服交易 | Saga（原生步骤 + 补偿） | game-demo“送礼 saga”；MMORPG 的双 sid 赠礼脚本 |
 | 组队副本 | match（成局）+ session（一次运行）+ 多实体事务（领奖） | game-demo“匹配组队”“副本”；MMORPG 夹具的组队 |

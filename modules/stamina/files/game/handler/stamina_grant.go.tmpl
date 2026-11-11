@@ -1,0 +1,16 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerStaminaGrant 是服务端发放体力（奖励、GM、别的服务触发），不对客户端开放：没有协议与端点，
+// 由服务端代码经生成的 Sender 调用。返回实际加上的点数与发放后的体力；超出硬顶的部分被截掉
+// （见 StaminaComponent.Grant）。nowUnixMilli 由 Nest 填这条消息冻结的业务时间。
+//
+// 它不判重，调一次发一次。调用方有“这一次发过没有”的事实要记（邮件附件、订单、任务奖励）时，
+// 不要用它：在自己的 Nest handler 里先判自己的状态，再调同一个实体上的 StaminaComp().Grant，
+// 事实与体力在同一笔事务里提交或回滚。
+//
+//roost:nest rollback=undo durability=strict
+func handlerStaminaGrant(target player.IStaminaEntity, amount int64, nowUnixMilli int64) (player.StaminaGrantResult, error) {
+	return target.StaminaComp().Grant(amount, nowUnixMilli)
+}

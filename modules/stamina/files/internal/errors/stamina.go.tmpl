@@ -1,0 +1,12 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 体力模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+// 补满时金币不够用的是货币模块的 wallet_short，不在这里另立一个码。
+var (
+	ErrStaminaInvalid     = errcode.Define({{ID:errcode:stamina_invalid}}, "stamina_invalid", "stamina amount must be positive")
+	ErrStaminaShort       = errcode.Define({{ID:errcode:stamina_short}}, "stamina_short", "not enough stamina")
+	ErrStaminaFull        = errcode.Define({{ID:errcode:stamina_full}}, "stamina_full", "stamina is already full")
+	ErrStaminaRefillLimit = errcode.Define({{ID:errcode:stamina_refill_limit}}, "stamina_refill_limit", "no stamina refills left today")
+)

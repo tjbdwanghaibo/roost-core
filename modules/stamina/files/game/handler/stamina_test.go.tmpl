@@ -1,0 +1,638 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	db "{{MODULE}}/db"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+// 下面的数是需求里的规则，写死在测试里、不引用 stamina_rules.go：上限 100、硬顶 999、
+// 每 5 分钟（300000 毫秒）恢复 1 点、每个业务日能买 3 次补满、价格依次 50 / 100 / 150。
+// 工程改了规则文件之后，这些场景要跟着改数。
+const (
+	staminaPeriod = int64(300_000)
+	staminaDay    = int64(24 * 60 * 60 * 1000)
+)
+
+// 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。
+type staminaGetter map[int64]entity.IThreadSafeEntity
+
+func (g staminaGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+
+func (g staminaGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// staminaCommitter 是替身提交器：不落盘，reject 打开时拒绝提交，用来验证回滚。
+type staminaCommitter struct{ reject atomic.Bool }
+
+func (c *staminaCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	return nil
+}
+
+type staminaFixture struct {
+	engine    *nest.NestMgr
+	player    *playerentity.Player
+	refills   *sender.StaminaRefillSender
+	grants    *sender.StaminaGrantSender
+	coins     *sender.WalletGrantSender
+	committer *staminaCommitter
+	// start 是用例开始时的业务时间（2026-11-10 09:00 UTC），now 是由用例拨的当前业务时间。
+	start int64
+	now   atomic.Int64
+	// coinKeys 给每次发金币一个不同的业务键（货币的发放 handler 按键去重）。
+	coinKeys int
+}
+
+// newStaminaFixture 用替身提交器起一个 Nest，业务时钟由用例拨：体力按业务时间恢复，购买次数按业务日
+// （测试里是缺省的 UTC 零点）清零。clock.SetSource 是进程级的：一个用例里只建一个 fixture。
+func newStaminaFixture(t *testing.T) *staminaFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterStaminaRefillNestHandlers()
+	RegisterStaminaGrantNestHandlers()
+	RegisterWalletGrantNestHandlers()
+	f := &staminaFixture{committer: &staminaCommitter{}}
+	f.start = time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC).UnixMilli()
+	f.now.Store(f.start)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	id, err := entity.BuildEntityID(93001, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = built.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(staminaGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.refills = sender.NewStaminaRefillSender(f.engine)
+	f.grants = sender.NewStaminaGrantSender(f.engine)
+	f.coins = sender.NewWalletGrantSender(f.engine)
+	return f
+}
+
+// staminaFacts 是体力模块关心的全部事实：自己的四个字段，加上购买补满会动的金币余额。
+type staminaFacts struct {
+	value, settledAt, refillDay int64
+	refillCount                 int32
+	coins                       int64
+}
+
+// facts 在业务 worker 上持实体锁读存着的状态（不结算）。
+func (f *staminaFixture) facts(t *testing.T) staminaFacts {
+	t.Helper()
+	var out staminaFacts
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		state := f.player.Dao().GetStamina()
+		out = staminaFacts{value: state.GetValue(), settledAt: state.GetSettledAt(), refillDay: state.GetRefillDay(), refillCount: state.GetRefillCount()}
+		out.coins = f.player.Dao().GetWallet().GetCoins()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func (f *staminaFixture) expectFacts(t *testing.T, what string, want staminaFacts) {
+	t.Helper()
+	if got := f.facts(t); got != want {
+		t.Fatalf("%s: state = %+v, want %+v", what, got, want)
+	}
+}
+
+// expectRefused 断言一次调用被 want 拒绝，并且一个字段都没写（before 是调用前读的事实）。
+func (f *staminaFixture) expectRefused(t *testing.T, what string, err, want error, before staminaFacts) {
+	t.Helper()
+	if !errors.Is(err, want) {
+		t.Fatalf("%s: err = %v, want %v", what, err, want)
+	}
+	f.expectFacts(t, what+" (a refusal must write nothing)", before)
+}
+
+func (f *staminaFixture) giveCoins(t *testing.T, amount int64) {
+	t.Helper()
+	f.coinKeys++
+	if _, err := f.coins.Sync_WalletGrant(context.Background(), f.player.ID(), fmt.Sprintf("stamina-test-%d", f.coinKeys), amount); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// staminaCallHandler 是只在测试里登记的 Nest handler：在一笔真实的事务里调组件入口。
+// Spend 与 Current 是给服务端别的功能在自己的 handler 里调的，模块没有为它们单独建 handler，
+// 所以测试用生成代码登记 handler 的同一个公开接口登记一个；业务时间取法也与生成代码相同（fctx.NowMilli）。
+// swallow 为 true 时它吞掉组件的拒绝、以成功结束——事务照常提交，Nest 不会替组件撤回任何写入，
+// 用来确认“拒绝时零写入”是组件自己做到的（先查后写），不是靠 handler 返回错误之后的回滚。
+var staminaCallHandler = nest.NewHandlerName("staminaTestCall")
+
+var registerStaminaCallHandler sync.Once
+
+type staminaCallResult struct {
+	value int64
+	err   error
+}
+
+func (f *staminaFixture) call(op string, n int64, swallow bool) (int64, error) {
+	registerStaminaCallHandler.Do(func() {
+		nest.MustRegisterHandlerWithMeta(staminaCallHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+			component := es[0].(playerentity.IStaminaEntity).StaminaComp()
+			now := fctx.NowMilli()
+			var value int64
+			var err error
+			switch params[0].(string) {
+			case "spend":
+				value, err = component.Spend(params[1].(int64), now)
+			case "grant":
+				var result playerentity.StaminaGrantResult
+				result, err = component.Grant(params[1].(int64), now)
+				value = result.Value
+			case "refill":
+				var result playerentity.StaminaRefillResult
+				result, err = component.Refill(now)
+				value = result.Value
+			case "current":
+				value = component.Current(now)
+			default:
+				return nil, fmt.Errorf("unknown op %v", params[0])
+			}
+			if err != nil && params[2].(bool) {
+				return staminaCallResult{err: err}, nil
+			}
+			return staminaCallResult{value: value}, err
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	})
+	ret, err := f.engine.Request(context.Background(), staminaCallHandler, f.player.ID(), nest.NewParams(op, n, swallow))
+	if err != nil {
+		return 0, err
+	}
+	result := ret.(staminaCallResult)
+	return result.value, result.err
+}
+
+func (f *staminaFixture) spend(n int64) (int64, error) { return f.call("spend", n, false) }
+
+func (f *staminaFixture) mustSpend(t *testing.T, n, want int64) {
+	t.Helper()
+	left, err := f.spend(n)
+	if err != nil || left != want {
+		t.Fatalf("spend %d: left = %d, err = %v; want %d", n, left, err, want)
+	}
+}
+
+// expectCurrent 断言此刻（f.now）的体力。Current 只读：它前后存着的状态必须一样。
+func (f *staminaFixture) expectCurrent(t *testing.T, what string, want int64) {
+	t.Helper()
+	before := f.facts(t)
+	got, err := f.call("current", 0, false)
+	if err != nil || got != want {
+		t.Fatalf("%s: current = %d, err = %v; want %d", what, got, err, want)
+	}
+	f.expectFacts(t, what+" (Current must not write)", before)
+}
+
+func (f *staminaFixture) grant(amount int64) (playerentity.StaminaGrantResult, error) {
+	return f.grants.Sync_StaminaGrant(context.Background(), f.player.ID(), amount)
+}
+
+func (f *staminaFixture) mustGrant(t *testing.T, amount, wantGranted, wantValue int64) {
+	t.Helper()
+	result, err := f.grant(amount)
+	if err != nil || result.Granted != wantGranted || result.Value != wantValue {
+		t.Fatalf("grant %d: result = %+v, err = %v; want granted %d, value %d", amount, result, err, wantGranted, wantValue)
+	}
+}
+
+func (f *staminaFixture) refill() (*pb.StaminaRefillResponse, error) {
+	return f.refills.Sync_StaminaRefill(context.Background(), f.player.ID(), &pb.StaminaRefillRequest{})
+}
+
+func (f *staminaFixture) mustRefill(t *testing.T, wantCost, wantBalance int64, wantCount int32) {
+	t.Helper()
+	response, err := f.refill()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Value != 100 || response.Cost != wantCost || response.Balance != wantBalance || response.RefillCount != wantCount {
+		t.Fatalf("refill = %+v, want value 100, cost %d, balance %d, count %d", response, wantCost, wantBalance, wantCount)
+	}
+}
+
+// 从没有过体力写入的玩家是满的，而且读它不会写出一份状态来。
+func TestStaminaNewPlayerIsFullWithoutAnyWrite(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.expectCurrent(t, "a new player", 100)
+	f.expectFacts(t, "a new player", staminaFacts{})
+}
+
+// 从满扣下来：恢复时钟从这一次消耗的时刻起算。
+func TestStaminaSpendDeductsAndStartsTheClock(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.mustSpend(t, 30, 70)
+	f.expectFacts(t, "after the first spend", staminaFacts{value: 70, settledAt: f.start})
+	f.expectCurrent(t, "right after the spend", 70)
+	f.mustSpend(t, 70, 0)
+	f.expectFacts(t, "spent down to zero", staminaFacts{value: 0, settledAt: f.start})
+}
+
+// 每满一个周期恢复 1 点：差 1 毫秒不给，恰好在边界上给。
+func TestStaminaRegensOnePointExactlyAtEachPeriodBoundary(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.mustSpend(t, 30, 70)
+	f.now.Store(f.start + staminaPeriod - 1)
+	f.expectCurrent(t, "one millisecond before the first point", 70)
+	f.now.Store(f.start + staminaPeriod)
+	f.expectCurrent(t, "exactly one period", 71)
+	f.now.Store(f.start + 2*staminaPeriod - 1)
+	f.expectCurrent(t, "one millisecond before the second point", 71)
+	f.now.Store(f.start + 2*staminaPeriod)
+	f.expectCurrent(t, "exactly two periods", 72)
+	// 恰好在边界上扣：这一点已经到手，起点落在边界上、没有零头。
+	f.mustSpend(t, 72, 0)
+	f.expectFacts(t, "spent everything on the boundary", staminaFacts{value: 0, settledAt: f.start + 2*staminaPeriod})
+}
+
+// 结算只前进整周期，不足一个周期的时间留着：下一点还是在原来的节拍上到，不因为中间有一次写入而推迟。
+func TestStaminaSettlementKeepsTheRemainder(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.mustSpend(t, 30, 70)
+	f.now.Store(f.start + 2*staminaPeriod + 123_456)
+	f.mustSpend(t, 1, 71) // 70 + 恢复的 2 点 - 1
+	f.expectFacts(t, "after a spend in the middle of a period", staminaFacts{value: 71, settledAt: f.start + 2*staminaPeriod})
+	f.now.Store(f.start + 3*staminaPeriod - 1)
+	f.expectCurrent(t, "one millisecond before the original beat", 71)
+	f.now.Store(f.start + 3*staminaPeriod)
+	f.expectCurrent(t, "on the original beat", 72)
+}
+
+// 恢复到上限为止；满了之后的时间不累计，下一次消耗从它自己的时刻重新计时。
+func TestStaminaRegenStopsAtTheCapAndRestartsFromTheNextSpend(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.mustSpend(t, 5, 95)
+	f.now.Store(f.start + 5*staminaPeriod - 1)
+	f.expectCurrent(t, "one millisecond before full", 99)
+	f.now.Store(f.start + 5*staminaPeriod)
+	f.expectCurrent(t, "exactly full", 100)
+	spentAt := f.start + 50*staminaPeriod + 7_000
+	f.now.Store(spentAt)
+	f.expectCurrent(t, "long after full", 100)
+	f.mustSpend(t, 1, 99)
+	f.expectFacts(t, "the clock restarts at the spend", staminaFacts{value: 99, settledAt: spentAt})
+	f.now.Store(spentAt + staminaPeriod - 1)
+	f.expectCurrent(t, "the time spent full does not count", 99)
+	f.now.Store(spentAt + staminaPeriod)
+	f.expectCurrent(t, "one period after the spend", 100)
+}
+
+// 消耗的每一种拒绝都不写：点数不为正、体力不够（按此刻恢复之后的数判断，不是按存着的数）。
+func TestStaminaSpendRefusalsWriteNothing(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.mustSpend(t, 100, 0)
+	f.now.Store(f.start + staminaPeriod + 1_000) // 恢复了 1 点
+	before := staminaFacts{value: 0, settledAt: f.start}
+	f.expectFacts(t, "setup", before)
+	_, err := f.spend(2)
+	f.expectRefused(t, "spend 2 with 1 point", err, apperrors.ErrStaminaShort, before)
+	_, err = f.spend(0)
+	f.expectRefused(t, "spend 0", err, apperrors.ErrStaminaInvalid, before)
+	_, err = f.spend(-5)
+	f.expectRefused(t, "spend -5", err, apperrors.ErrStaminaInvalid, before)
+	_, err = f.spend(math.MaxInt64)
+	f.expectRefused(t, "spend the largest int64", err, apperrors.ErrStaminaShort, before)
+	f.mustSpend(t, 1, 0) // 恢复的那 1 点能用
+	f.expectFacts(t, "the regenerated point was spendable", staminaFacts{value: 0, settledAt: f.start + staminaPeriod})
+}
+
+// 时钟回拨（now 早于恢复时钟的起点）：不扣体力、不报错、起点不动；业务时间重新走过起点后照原节拍恢复。
+func TestStaminaClockRollbackNeitherChargesNorFails(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.mustSpend(t, 30, 70)
+	f.now.Store(f.start - 3_600_000)
+	f.expectCurrent(t, "an hour before the clock start", 70)
+	f.mustSpend(t, 10, 60)
+	f.expectFacts(t, "a spend during the rollback keeps the clock start", staminaFacts{value: 60, settledAt: f.start})
+	f.mustGrant(t, 5, 5, 65)
+	f.expectFacts(t, "a grant during the rollback keeps the clock start", staminaFacts{value: 65, settledAt: f.start})
+	f.now.Store(f.start + staminaPeriod - 1)
+	f.expectCurrent(t, "back on the original beat, one millisecond early", 65)
+	f.now.Store(f.start + staminaPeriod)
+	f.expectCurrent(t, "back on the original beat", 66)
+}
+
+// 隔了很久（5 年、500 年）回来：恰好是满的，不溢出成负数或天文数字，之后照常消耗与恢复。
+func TestStaminaYearsAwayDoesNotOverflow(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.mustSpend(t, 100, 0)
+	fiveYears := f.start + 5*365*staminaDay
+	f.now.Store(fiveYears)
+	f.expectCurrent(t, "five years later", 100)
+	f.mustSpend(t, 40, 60)
+	f.expectFacts(t, "a spend five years later", staminaFacts{value: 60, settledAt: fiveYears})
+	fiveCenturies := f.start + 500*365*staminaDay
+	f.now.Store(fiveCenturies)
+	f.expectCurrent(t, "five centuries later", 100)
+	f.mustSpend(t, 1, 99)
+	f.expectFacts(t, "a spend five centuries later", staminaFacts{value: 99, settledAt: fiveCenturies})
+	f.now.Store(fiveCenturies + staminaPeriod)
+	f.expectCurrent(t, "regen still works after that", 100)
+}
+
+// 发放可以超过上限；超过上限时不恢复、也不会被拉回上限；扣回上限以下的那一刻重新计时。
+func TestStaminaGrantGoesAboveTheCapAndTheClockStaysStopped(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.mustGrant(t, 50, 50, 150)
+	f.expectFacts(t, "granted on top of a full bar", staminaFacts{value: 150})
+	f.now.Store(f.start + 100*staminaPeriod)
+	f.expectCurrent(t, "above the cap after a long time", 150)
+	f.mustSpend(t, 20, 130)
+	f.expectFacts(t, "still above the cap: the clock stays stopped", staminaFacts{value: 130})
+	f.mustSpend(t, 30, 100)
+	f.expectFacts(t, "exactly at the cap: the clock stays stopped", staminaFacts{value: 100})
+	crossedAt := f.start + 200*staminaPeriod + 11
+	f.now.Store(crossedAt)
+	f.mustSpend(t, 1, 99)
+	f.expectFacts(t, "crossed below the cap", staminaFacts{value: 99, settledAt: crossedAt})
+	f.now.Store(crossedAt + staminaPeriod)
+	f.expectCurrent(t, "one period after crossing", 100)
+}
+
+// 发放到硬顶 999 为止，超出的部分截掉、不拒绝；已在硬顶时发 0 点、不写；点数不为正才拒绝。
+func TestStaminaGrantIsTruncatedAtTheHardCap(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.mustGrant(t, 898, 898, 998)
+	f.mustGrant(t, 5, 1, 999)
+	atHardCap := staminaFacts{value: 999}
+	f.expectFacts(t, "at the hard cap", atHardCap)
+	f.mustGrant(t, 10, 0, 999)
+	f.expectFacts(t, "a grant at the hard cap writes nothing", atHardCap)
+	_, err := f.grant(0)
+	f.expectRefused(t, "grant 0", err, apperrors.ErrStaminaInvalid, atHardCap)
+	_, err = f.grant(-1)
+	f.expectRefused(t, "grant -1", err, apperrors.ErrStaminaInvalid, atHardCap)
+	// 一次给出 int64 的最大值：不溢出，照样停在硬顶。
+	f.mustSpend(t, 999, 0)
+	f.mustGrant(t, math.MaxInt64, 999, 999)
+	f.expectFacts(t, "the largest grant stops at the hard cap", atHardCap)
+	// 到硬顶之后一切照常：能扣、能再发。
+	f.mustSpend(t, 500, 499)
+	f.mustGrant(t, 1, 1, 500)
+}
+
+// 没满时发放：恢复的点数先结算进去，零头保留；发到上限时钟就停。
+func TestStaminaGrantBelowTheCapKeepsTheRemainder(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.mustSpend(t, 50, 50)
+	f.now.Store(f.start + staminaPeriod + 100_000)
+	f.mustGrant(t, 10, 10, 61) // 50 + 恢复的 1 点 + 10
+	f.expectFacts(t, "a grant below the cap", staminaFacts{value: 61, settledAt: f.start + staminaPeriod})
+	f.now.Store(f.start + 2*staminaPeriod - 1)
+	f.expectCurrent(t, "one millisecond before the original beat", 61)
+	f.now.Store(f.start + 2*staminaPeriod)
+	f.expectCurrent(t, "on the original beat", 62)
+	f.mustGrant(t, 38, 38, 100)
+	f.expectFacts(t, "granted exactly up to the cap: the clock stops", staminaFacts{value: 100})
+}
+
+// 购买补满：补到上限、按当日第 1 次的价格扣金币；补满后时钟停下，之前攒的零头作废，
+// 下一次消耗起重新计时。
+func TestStaminaRefillFillsChargesAndStopsTheClock(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.giveCoins(t, 1000)
+	f.mustSpend(t, 40, 60)
+	f.now.Store(f.start + 200_000) // 一个周期的三分之二
+	f.mustRefill(t, 50, 950, 1)
+	f.expectFacts(t, "after the refill", staminaFacts{value: 100, refillDay: 20261110, refillCount: 1, coins: 950})
+	f.now.Store(f.start + 10*staminaPeriod)
+	f.expectCurrent(t, "long after the refill", 100)
+	spentAt := f.start + 10*staminaPeriod + 200_000
+	f.now.Store(spentAt)
+	f.mustSpend(t, 1, 99)
+	f.expectFacts(t, "the first spend after the refill starts the clock", staminaFacts{value: 99, settledAt: spentAt, refillDay: 20261110, refillCount: 1, coins: 950})
+	f.now.Store(spentAt + staminaPeriod - 1)
+	f.expectCurrent(t, "no leftover time from before the refill", 99)
+	f.now.Store(spentAt + staminaPeriod)
+	f.expectCurrent(t, "one period after that spend", 100)
+}
+
+// 价格随当日第几次购买递增（50、100、150）；第 4 次被拒绝，不扣钱、不补体力、不动次数。
+func TestStaminaRefillPriceGrowsAndTheDailyLimitRefuses(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.giveCoins(t, 1000)
+	f.mustSpend(t, 10, 90)
+	f.mustRefill(t, 50, 950, 1)
+	f.mustSpend(t, 10, 90)
+	f.mustRefill(t, 100, 850, 2)
+	f.mustSpend(t, 10, 90)
+	f.mustRefill(t, 150, 700, 3)
+	f.mustSpend(t, 10, 90)
+	before := staminaFacts{value: 90, settledAt: f.start, refillDay: 20261110, refillCount: 3, coins: 700}
+	f.expectFacts(t, "three refills bought", before)
+	_, err := f.refill()
+	f.expectRefused(t, "the fourth refill of the day", err, apperrors.ErrStaminaRefillLimit, before)
+	// 同一个业务日的 23:00：这 14 个小时里体力恢复满了，再扣一次才轮得到次数这条规则。
+	late := f.start + 14*60*60*1000
+	f.now.Store(late)
+	f.mustSpend(t, 10, 90)
+	before = staminaFacts{value: 90, settledAt: late, refillDay: 20261110, refillCount: 3, coins: 700}
+	_, err = f.refill()
+	f.expectRefused(t, "still the same business day", err, apperrors.ErrStaminaRefillLimit, before)
+}
+
+// 次数按业务日清零：前一天最后 1 毫秒用完 3 次，零点整又能买，价格回到 50；
+// 连着很多天每天买满都照常（次数是一个计数加一个日期，不是越记越长的账本）。
+func TestStaminaRefillCountResetsOnTheNextBusinessDay(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.giveCoins(t, 100_000)
+	coins := int64(100_000)
+	midnight := time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC).UnixMilli()
+	f.now.Store(midnight - 1)
+	prices := []int64{50, 100, 150}
+	for i, price := range prices {
+		f.mustSpend(t, 10, 90)
+		coins -= price
+		f.mustRefill(t, price, coins, int32(i+1))
+	}
+	f.mustSpend(t, 10, 90)
+	before := staminaFacts{value: 90, settledAt: midnight - 1, refillDay: 20261110, refillCount: 3, coins: coins}
+	_, err := f.refill()
+	f.expectRefused(t, "the last millisecond of the day", err, apperrors.ErrStaminaRefillLimit, before)
+	f.now.Store(midnight)
+	coins -= 50
+	f.mustRefill(t, 50, coins, 1)
+	f.expectFacts(t, "the first refill of the next day", staminaFacts{value: 100, refillDay: 20261111, refillCount: 1, coins: coins})
+	for day := int64(1); day <= 40; day++ {
+		f.now.Store(midnight + day*staminaDay)
+		for i, price := range prices {
+			f.mustSpend(t, 10, 90)
+			coins -= price
+			f.mustRefill(t, price, coins, int32(i+1))
+		}
+		f.mustSpend(t, 10, 90)
+		if _, err := f.refill(); !errors.Is(err, apperrors.ErrStaminaRefillLimit) {
+			t.Fatalf("day %d: the fourth refill err = %v, want stamina_refill_limit", day, err)
+		}
+		f.mustSpend(t, 90, 0) // 把体力用光，下一天不是靠恢复满的
+	}
+	if got := f.facts(t); got.refillDay != 20261221 || got.refillCount != 3 || got.coins != coins {
+		t.Fatalf("after 40 more days: %+v, want day 20261221, count 3, coins %d", got, coins)
+	}
+}
+
+// 已满时拒绝购买：新玩家、靠恢复刚好满的（存着的数还没满）、被发放到上限以上的，都不扣钱不计次数。
+func TestStaminaRefillWhenFullWritesNothing(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.giveCoins(t, 1000)
+	_, err := f.refill()
+	f.expectRefused(t, "a new player", err, apperrors.ErrStaminaFull, staminaFacts{coins: 1000})
+	f.mustSpend(t, 1, 99)
+	f.now.Store(f.start + staminaPeriod)
+	_, err = f.refill()
+	f.expectRefused(t, "full by regen exactly now", err, apperrors.ErrStaminaFull, staminaFacts{value: 99, settledAt: f.start, coins: 1000})
+	f.mustGrant(t, 50, 50, 150)
+	_, err = f.refill()
+	f.expectRefused(t, "above the cap", err, apperrors.ErrStaminaFull, staminaFacts{value: 150, coins: 1000})
+}
+
+// 金币不够：货币模块拒绝（wallet_short），体力、次数、金币都不动；差的那 1 个金币补上就能买。
+func TestStaminaRefillWithoutEnoughCoinsWritesNothing(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.giveCoins(t, 49)
+	f.mustSpend(t, 40, 60)
+	before := staminaFacts{value: 60, settledAt: f.start, coins: 49}
+	_, err := f.refill()
+	f.expectRefused(t, "49 coins for a 50 coin refill", err, apperrors.ErrWalletShort, before)
+	f.giveCoins(t, 1)
+	f.mustRefill(t, 50, 0, 1)
+}
+
+// 业务日回拨（今天比记着的购买日还早）：次数不清零，沿用记着的日期——时钟往回拨不会多出购买次数。
+func TestStaminaRefillDayRollbackKeepsTheCount(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.giveCoins(t, 1000)
+	f.mustSpend(t, 10, 90)
+	f.mustRefill(t, 50, 950, 1)
+	f.mustSpend(t, 10, 90)
+	f.mustRefill(t, 100, 850, 2)
+	f.now.Store(f.start - staminaDay) // 前一个业务日
+	f.mustSpend(t, 10, 90)
+	f.mustRefill(t, 150, 700, 3)
+	f.expectFacts(t, "a refill on a rolled-back day", staminaFacts{value: 100, refillDay: 20261110, refillCount: 3, coins: 700})
+	f.mustSpend(t, 10, 90)
+	before := f.facts(t)
+	_, err := f.refill()
+	f.expectRefused(t, "the rolled-back day has no fresh allowance", err, apperrors.ErrStaminaRefillLimit, before)
+}
+
+// 体力只存在 DAO 里：提交被拒绝时消耗、发放、购买（连同扣掉的金币）都回滚，之后照常能做。
+func TestStaminaRejectedCommitRollsBackStaminaAndCoins(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.giveCoins(t, 1000)
+	untouched := staminaFacts{coins: 1000}
+	f.committer.reject.Store(true)
+	if _, err := f.spend(30); err == nil {
+		t.Fatal("a rejected commit reported a successful spend")
+	}
+	f.expectFacts(t, "a rolled back spend", untouched)
+	if _, err := f.grant(50); err == nil {
+		t.Fatal("a rejected commit reported a successful grant")
+	}
+	f.expectFacts(t, "a rolled back grant", untouched)
+	f.committer.reject.Store(false)
+	f.mustSpend(t, 40, 60)
+	spent := staminaFacts{value: 60, settledAt: f.start, coins: 1000}
+	f.committer.reject.Store(true)
+	if _, err := f.refill(); err == nil {
+		t.Fatal("a rejected commit reported a successful refill")
+	}
+	f.expectFacts(t, "a rolled back refill", spent)
+	f.committer.reject.Store(false)
+	f.mustRefill(t, 50, 950, 1)
+	f.expectFacts(t, "the refill after the rollback", staminaFacts{value: 100, refillDay: 20261110, refillCount: 1, coins: 950})
+}
+
+// 调用方吞掉了拒绝、事务照常提交：体力、次数、金币仍然一个字段都没动。
+// 别的功能在自己的 handler 里调这些入口时，可能在被拒绝后继续做别的事。
+func TestStaminaRefusalsWriteNothingEvenWhenTheCallerIgnoresThem(t *testing.T) {
+	f := newStaminaFixture(t)
+	f.giveCoins(t, 49)
+	f.mustSpend(t, 100, 0)
+	f.now.Store(f.start + 3*staminaPeriod + 5) // 存着 0，此刻是 3
+	before := staminaFacts{value: 0, settledAt: f.start, coins: 49}
+	_, err := f.call("spend", 4, true)
+	f.expectRefused(t, "ignored: spend more than there is", err, apperrors.ErrStaminaShort, before)
+	_, err = f.call("spend", 0, true)
+	f.expectRefused(t, "ignored: spend 0", err, apperrors.ErrStaminaInvalid, before)
+	_, err = f.call("grant", -1, true)
+	f.expectRefused(t, "ignored: grant -1", err, apperrors.ErrStaminaInvalid, before)
+	_, err = f.call("refill", 0, true)
+	f.expectRefused(t, "ignored: refill without coins", err, apperrors.ErrWalletShort, before)
+	// 已满：先买满，再吞掉一次“已满”的拒绝。
+	f.giveCoins(t, 951)
+	f.mustRefill(t, 50, 950, 1)
+	full := staminaFacts{value: 100, refillDay: 20261110, refillCount: 1, coins: 950}
+	_, err = f.call("refill", 0, true)
+	f.expectRefused(t, "ignored: refill when full", err, apperrors.ErrStaminaFull, full)
+	// 次数用完：再买两次，然后吞掉一次“次数用完”的拒绝。
+	f.mustSpend(t, 10, 90)
+	f.mustRefill(t, 100, 850, 2)
+	f.mustSpend(t, 10, 90)
+	f.mustRefill(t, 150, 700, 3)
+	f.mustSpend(t, 10, 90)
+	limited := f.facts(t)
+	_, err = f.call("refill", 0, true)
+	f.expectRefused(t, "ignored: refill over the daily limit", err, apperrors.ErrStaminaRefillLimit, limited)
+}
+
+// Stamina 下发给客户端：客户端要靠它推算当前体力。只断言体力模块自己的字段：
+// 同一个 DAO 上还有别的模块的字段，它们同不同步与本模块无关。
+func TestStaminaStateIsSynced(t *testing.T) {
+	for _, field := range db.PlayerDaoSyncFields() {
+		if field.Name == "Stamina" {
+			return
+		}
+	}
+	t.Fatal("PlayerDao.Stamina is not in the sync field table: the player would not see the stamina")
+}

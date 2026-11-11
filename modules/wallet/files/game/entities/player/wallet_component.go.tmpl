@@ -54,8 +54,12 @@ const WalletReceiptWindow = 128
 // 去重只在窗口内成立：之后又发生了 WalletReceiptWindow 次带业务键的加减，这个 key 的回执就被淘汰，
 // 再用它会当成新的一次执行。所以它只防短期重发；要长期“只发一次”的发放（签到、任务奖励、订单到账）
 // 由调用方在自己的状态里记下这个事实，并改用 Add——事实与余额在同一笔事务里提交或回滚。
+//
+// key 会成为落库文档里的字段名，所以只收 1 到 WalletKeyMaxLen 个字节、由 ASCII 字母、数字与 - _ : 组成的键
+// （UUID、十六进制串、“会话号:序号”都在内）。别的键在写入之前就拒绝：带空字节的编码不了，
+// 带 . 或以 $ 开头的在存储里有特殊含义，不限长的键能把账本撑大。
 func (component *WalletComponent) Apply(key string, delta int64) (int64, error) {
-	if key == "" || delta == 0 {
+	if !walletKeyValid(key) || delta == 0 {
 		return 0, apperrors.ErrWalletInvalid
 	}
 	ledger := component.owner.Dao().GetWalletLedger()
@@ -80,6 +84,24 @@ func (component *WalletComponent) Apply(key string, delta int64) (int64, error) 
 	receipt.SetSeq(seq)
 	ledger.SetReceiptsKey(key, receipt)
 	return balance, nil
+}
+
+// WalletKeyMaxLen 是业务键的最大字节数。
+const WalletKeyMaxLen = 64
+
+func walletKeyValid(key string) bool {
+	if key == "" || len(key) > WalletKeyMaxLen {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '-', c == '_', c == ':':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Add 给余额加 delta（负数为扣），不留回执。给自己记着“这一次做过没有”的调用方用：

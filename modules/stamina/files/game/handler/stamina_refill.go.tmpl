@@ -1,0 +1,18 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerStaminaRefill 是客户端发起的购买：花金币把体力补到上限。nowUnixMilli 由 Nest 填这条消息
+// 冻结的业务时间，客户端不传时间、也不传价格。规则与拒绝见 StaminaComponent.Refill。
+//
+//roost:nest rollback=undo durability=strict
+func handlerStaminaRefill(target player.IStaminaEntity, request *pb.StaminaRefillRequest, nowUnixMilli int64) (*pb.StaminaRefillResponse, error) {
+	result, err := target.StaminaComp().Refill(nowUnixMilli)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.StaminaRefillResponse{Value: result.Value, Cost: result.Cost, Balance: result.Balance, RefillCount: result.Count}, nil
+}

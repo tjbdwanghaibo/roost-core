@@ -1,0 +1,21 @@
+name: stamina
+summary: 玩家体力：随业务时间惰性恢复（不用定时器）到上限，消耗 / 发放 / 查询的组件入口，花金币补满的协议（每业务日限次、逐次涨价），服务端发放 handler
+requires: [wallet]
+conflicts: []
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+entity: Player
+state:
+  - field: Stamina
+    type: StaminaState
+    store: stamina
+    dao: persist,sync
+    comment: Stamina 是体力模块给玩家本人看的状态（上次结算后的体力、恢复时钟的起点、当日已买补满的次数），随同步下发；当前体力由客户端按 StaminaState 注释里的公式推算。
+component: Stamina
+protocols: [StaminaRefill]
+errcodes: [stamina_invalid, stamina_short, stamina_full, stamina_refill_limit]
+verify:
+  packages: [./game/handler, ./game/entities/player]
+  run: ^TestStamina
+  pass: 25

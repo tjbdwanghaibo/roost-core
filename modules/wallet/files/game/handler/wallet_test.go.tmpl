@@ -234,3 +234,31 @@ func TestWalletOnlyTheVisibleStateIsSynced(t *testing.T) {
 		t.Fatal("PlayerDao.WalletLedger is synced: receipts are server-side state")
 	}
 }
+
+// 业务键会成为落库文档里的字段名：太长、带空字节、带 . 或 $ 这类存储里有特殊含义的字符的键，
+// 在写入之前就拒绝（wallet_invalid），不留回执、不动余额；UUID、十六进制串、“会话号:序号”这类键可用。
+func TestWalletApplyRefusesKeysThatCannotBeStored(t *testing.T) {
+	f := newWalletFixture(t)
+	f.grant(t, "seed-1", 1000)
+	coins, receipts := f.snapshot(t)
+	long := ""
+	for i := 0; i < 65; i++ {
+		long += "k"
+	}
+	for _, key := range []string{long, "a.b", "$set", "a\x00b", "has space", "键"} {
+		if _, err := f.spend(key, 10); !errors.Is(err, apperrors.ErrWalletInvalid) {
+			t.Fatalf("key %q: err = %v, want wallet_invalid", key, err)
+		}
+		if gotCoins, gotReceipts := f.snapshot(t); gotCoins != coins || gotReceipts != receipts {
+			t.Fatalf("key %q: a refused key wrote: coins=%d receipts=%d", key, gotCoins, gotReceipts)
+		}
+	}
+	for i, key := range []string{long[:64], "0f8fad5b-d9cb-469f-a165-70867728950e", "session_7:42"} {
+		if _, err := f.spend(key, 10); err != nil {
+			t.Fatalf("key %q: %v", key, err)
+		}
+		if gotCoins, gotReceipts := f.snapshot(t); gotCoins != coins-int64(i+1)*10 || gotReceipts != receipts+i+1 {
+			t.Fatalf("key %q: coins=%d receipts=%d", key, gotCoins, gotReceipts)
+		}
+	}
+}

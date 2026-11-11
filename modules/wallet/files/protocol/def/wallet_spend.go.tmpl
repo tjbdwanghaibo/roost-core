@@ -3,6 +3,8 @@
 package protocoldef
 
 type WalletSpendRequest struct {
+	// Key 是客户端生成的请求键：1 到 64 个字节，只含 ASCII 字母、数字与 - _ :（UUID、“会话号:序号”都可以）；
+	// 别的键答 wallet_invalid。同一个键在去重窗口内重发不再扣第二次。
 	Key    string `pb:"1"`
 	Amount int64  `pb:"2"`
 }

@@ -1,0 +1,14 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 商店模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+// 钱不够、背包放不下不在这里：购买原样透出货币模块与背包模块的码（wallet_short、bag_stack_full、bag_kinds_full……）。
+var (
+	ErrShopKeyInvalid   = errcode.Define({{ID:errcode:shop_key_invalid}}, "shop_key_invalid", "request key is empty, too long or has characters other than letters, digits, - _ :")
+	ErrShopKeyConflict  = errcode.Define({{ID:errcode:shop_key_conflict}}, "shop_key_conflict", "the request key was used for another purchase")
+	ErrShopCountInvalid = errcode.Define({{ID:errcode:shop_count_invalid}}, "shop_count_invalid", "buy count must be positive")
+	ErrShopGoodsInvalid = errcode.Define({{ID:errcode:shop_goods_invalid}}, "shop_goods_invalid", "unknown goods or not on sale")
+	ErrShopOverflow     = errcode.Define({{ID:errcode:shop_overflow}}, "shop_overflow", "total price or item amount overflows")
+	ErrShopLimit        = errcode.Define({{ID:errcode:shop_limit}}, "shop_limit", "purchase limit reached")
+)

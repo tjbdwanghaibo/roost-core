@@ -1,0 +1,30 @@
+package dbdef
+
+// StaminaState 是玩家本人可见的体力状态。
+//
+// 体力随服务器业务时间恢复，但服务端不用定时器逐点加：这里存的是“上次结算”的结果，只在有写入
+// （消耗、发放、补满）时更新。所以客户端不能直接显示 Value，要拿自己对过服务器时间的当前时刻 now
+// （Unix 毫秒）按下面的公式推算——服务端每次读写用的是同一个公式（staminaSettle）：
+//
+//	Value >= 上限                    当前体力 = Value（已满或被发放到上限以上，不恢复）
+//	否则，恢复周期 <= 0 或 now <= SettledAt   当前体力 = Value
+//	否则 n = (now - SettledAt) / 恢复周期（整除）
+//	     当前体力 = min(上限, Value + n)
+//	     还没满时，距下一点还有 恢复周期 - (now - SettledAt) % 恢复周期 毫秒
+//
+// 上限与恢复周期是 game/entities/player/stamina_rules.go 里的规则，不在这份状态里：客户端要用同一份数。
+//
+// 从没有过体力写入的玩家是零值（Value 0、SettledAt 0），按公式就是满体力：新玩家不用初始化。
+type StaminaState struct {
+	// Value 是上次结算后的体力，不为负。它可以超过上限：发放不受上限限制，只受硬顶限制。
+	Value int64 `store:"1"`
+	// SettledAt 是恢复时钟的起点（Unix 毫秒）：已经结算进 Value 的恢复算到这一刻为止，
+	// 不足一个周期的时间留在它之后，不丢。Value 不低于上限时它是 0（时钟停着，满了之后的时间不累计）；
+	// 把体力从“不低于上限”扣到上限以下的那一次消耗，把它设成当时的时刻，从那一刻重新计时。
+	SettledAt int64 `store:"2"`
+	// RefillDay 是最近一次花金币补满所在的业务日（YYYYMMDD 的十进制数，如 20261110）；0 表示从没买过。
+	RefillDay int64 `store:"3"`
+	// RefillCount 是 RefillDay 那个业务日里已经买过的次数。它按业务日惰性清零：跨日之后没有新的购买时
+	// 存的仍是旧的一天的次数，客户端要比对 RefillDay 与今天的业务日，RefillDay 更早就按 0 次显示。
+	RefillCount int32 `store:"4"`
+}

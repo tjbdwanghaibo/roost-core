@@ -1,0 +1,14 @@
+package shop
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleShopBuy 是购买协议的入口；目标取认证会话的玩家（只能给自己买），
+// 商品、价格、限购与请求键的去重都在 Nest handler 的锁内判断。
+//
+//roost:endpoint nest=ShopBuy
+func (controller *Controller) HandleShopBuy(ctx *playeraccess.Context, req *pb.ShopBuyRequest) (*pb.ShopBuyResponse, error) {
+	return controller.dispatchShopBuy(ctx, req)
+}

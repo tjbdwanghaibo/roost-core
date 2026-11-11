@@ -1,0 +1,38 @@
+package dbdef
+
+// ShopState 是玩家本人可见的限购计数：客户端用它显示“今天还能买几份”“这个礼包买过没有”。
+// 只给目录里有限购的商品记数；不限购的商品不占位置，目录里已经没有的商品号在下一次成功购买时清掉，
+// 所以两张表的大小都不超过目录里有限购的商品数。
+type ShopState struct {
+	// Day 是 Daily 这张表属于哪个业务日（YYYYMMDD，如 20261110）；0 表示还没买过每日限购的商品。
+	// 每日清零是惰性的：跨天后要等下一次成功购买才清。客户端显示前比对 Day 与当前业务日，
+	// Day 不是今天就把 Daily 当成全空。
+	Day int64 `store:"1"`
+	// Daily 是商品号 -> Day 这个业务日里已买的份数，只有每日限购的商品。
+	Daily map[int64]int64 `store:"2"`
+	// Lifetime 是商品号 -> 累计已买的份数，只有终身限购的商品；跨业务日不清。
+	Lifetime map[int64]int64 `store:"3"`
+}
+
+// ShopLedger 是购买请求的去重窗口：最近若干次成功购买的结果，同一个请求键重发时原样返回第一次的结果。
+// 它不是永久账本：超出窗口的旧回执按先后顺序淘汰（见 ShopComponent.Buy）。
+type ShopLedger struct {
+	// Receipts 是请求键 -> 那一次购买的结果。
+	Receipts map[string]*ShopReceipt `store:"1"`
+	// NextSeq 是下一条回执的序号；只增不减，用来找最旧的回执。
+	NextSeq int64 `store:"2"`
+}
+
+// ShopReceipt 是一次成功购买的结果。GoodsID 与 Count 用来认出“同一个键换了内容”，其余字段是回包。
+type ShopReceipt struct {
+	GoodsID int64 `store:"1"`
+	Count   int64 `store:"2"`
+	Cost    int64 `store:"3"`
+	Balance int64 `store:"4"`
+	ItemID  int64 `store:"5"`
+	Gained  int64 `store:"6"`
+	Held    int64 `store:"7"`
+	Bought  int64 `store:"8"`
+	// Seq 是这条回执写入时的序号，越小越旧。
+	Seq int64 `store:"9"`
+}

@@ -1,0 +1,76 @@
+package player
+
+// 这个文件是商品目录：商店卖什么、一份里有几个道具、多少钱、怎么限购。ShopComponent.Buy 只通过
+// shopGoodsByID 读它，规则数据都在这里，组件里没有。
+//
+// 模块不带配置表，缺省目录是下面这张 Go 表，自带三条样例，上线前换成自己的商品。
+// 项目接上自己的配置表之后（roost add table shop_goods，再 roost generate），只改 shopGoodsByID 一处：
+//
+//	row, ok := generated.ShopGoodsByID(goodsID)   // configs/generated 里生成的访问器
+//	if !ok {
+//		return ShopGoods{}, false
+//	}
+//	return ShopGoods{ItemID: row.ItemID, ItemCount: row.ItemCount, Price: row.Price,
+//		Limit: ShopLimitKind(row.Limit), LimitCount: row.LimitCount, Off: row.Off}, true
+//
+// 生成的访问器读的是钉在本次请求上的配置快照，同一笔购买里两次读不会因为热更而不一致。
+// 改成读配置表之后 shopGoodsTable 与 SetShopGoodsForTest 可以删掉，场景测试改成装载测试用的配置。
+//
+// 改目录时要知道的三件事：
+//   - 商品暂时不卖用 Off，不要删行。删掉的商品号，它的限购计数会在玩家下一次成功购买时清掉，
+//     以后同一个号重新上架，终身限购从 0 算起。
+//   - 改一个商品的限购类型（每日 <-> 终身、有 -> 无）同样会丢掉它原来类型下的计数。
+//   - 商品号发布后不要挪给别的商品用：玩家身上的限购计数是按商品号记的。
+
+// ShopLimitKind 是限购类型。
+type ShopLimitKind int32
+
+const (
+	// ShopLimitNone 不限购；这种商品不记数。
+	ShopLimitNone ShopLimitKind = 0
+	// ShopLimitDaily 每个业务日至多买 LimitCount 份，跨业务日清零。
+	ShopLimitDaily ShopLimitKind = 1
+	// ShopLimitLifetime 这个玩家一共至多买 LimitCount 份，永不清零。
+	ShopLimitLifetime ShopLimitKind = 2
+)
+
+// ShopGoods 是目录里的一个商品。一个商品只卖一种道具、只收金币。
+type ShopGoods struct {
+	// ItemID 是发放的道具号，要过背包的道具号规则（bag_items.go）。
+	ItemID int64
+	// ItemCount 是一份里有几个道具，必须为正。
+	ItemCount int64
+	// Price 是一份的金币单价，必须为正：这一版不卖免费商品（免费领取属于奖励，不是购买）。
+	Price int64
+	// Limit 与 LimitCount 是限购：类型与份数上限（按份数算，不按道具个数）。不限购时 LimitCount 不看。
+	Limit      ShopLimitKind
+	LimitCount int64
+	// Off 为 true 表示已下架：不能买，但限购计数保留，重新上架后接着算。
+	Off bool
+}
+
+// shopGoodsTable 是缺省的商品目录：商品号 -> 商品。
+var shopGoodsTable = map[int64]ShopGoods{
+	// 不限购：10 金币一瓶药水（道具 1001）。
+	1: {ItemID: 1001, ItemCount: 1, Price: 10},
+	// 每日限购：30 金币一份、一份 5 张体力券（道具 1002），每个业务日至多 3 份。
+	2: {ItemID: 1002, ItemCount: 5, Price: 30, Limit: ShopLimitDaily, LimitCount: 3},
+	// 终身限购：200 金币的新手礼包（道具 1003），每个玩家只能买 1 份。
+	3: {ItemID: 1003, ItemCount: 1, Price: 200, Limit: ShopLimitLifetime, LimitCount: 1},
+}
+
+// shopGoodsByID 回答“这个商品号现在是什么商品”；目录里没有时返回 false。
+// 购买的校验、限购计数的清理都只调它，接配置表时改这里。
+func shopGoodsByID(goodsID int64) (ShopGoods, bool) {
+	goods, ok := shopGoodsTable[goodsID]
+	return goods, ok
+}
+
+// SetShopGoodsForTest 把商品目录整份换成 table，返回换回原目录的函数。只给场景测试用：
+// 测试带自己的目录，工程改了上面的样例也不会让模块的场景变红。它改的是进程级的目录，
+// 业务代码不要调；测试里在没有购买请求在途时调，用完执行返回的函数。
+func SetShopGoodsForTest(table map[int64]ShopGoods) (restore func()) {
+	previous := shopGoodsTable
+	shopGoodsTable = table
+	return func() { shopGoodsTable = previous }
+}

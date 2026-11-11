@@ -1,0 +1,14 @@
+package stamina
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleStaminaRefill 是购买补满协议的入口；目标取认证会话的玩家，体力是否已满、当日次数与金币
+// 都在 Nest handler 的锁内判断。
+//
+//roost:endpoint nest=StaminaRefill
+func (controller *Controller) HandleStaminaRefill(ctx *playeraccess.Context, req *pb.StaminaRefillRequest) (*pb.StaminaRefillResponse, error) {
+	return controller.dispatchStaminaRefill(ctx, req)
+}

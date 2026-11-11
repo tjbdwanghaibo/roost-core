@@ -1,0 +1,26 @@
+name: shop
+summary: 商店：用金币买道具（ShopBuy），扣钱、发货、记限购在一笔事务里；每日 / 终身限购；请求键防重发；商品目录在 game/entities/player/shop_goods.go
+requires: [wallet, bag]
+conflicts: []
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+entity: Player
+state:
+  - field: Shop
+    type: ShopState
+    store: shop
+    dao: persist,sync
+    comment: Shop 是商店模块给玩家本人看的限购计数（每日限购属于哪个业务日、各商品已买份数），随同步下发。
+  - field: ShopLedger
+    type: ShopLedger
+    store: shop_ledger
+    dao: persist
+    comment: ShopLedger 是商店模块的去重窗口（最近若干次成功购买的结果），只落库、不下发。
+component: Shop
+protocols: [ShopBuy]
+errcodes: [shop_key_invalid, shop_key_conflict, shop_count_invalid, shop_goods_invalid, shop_overflow, shop_limit]
+verify:
+  packages: [./game/handler]
+  run: ^TestShop
+  pass: 17

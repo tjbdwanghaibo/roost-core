@@ -1,0 +1,25 @@
+//go:build protocoldef
+
+package protocoldef
+
+// StaminaRefill 花金币把体力补到上限。请求没有字段：价格由服务端按当日第几次购买决定，客户端不传价格、
+// 不传时间。体力状态（PlayerDao.Stamina）另经自身视图同步；客户端显示的当前体力要按
+// db/def/stamina.go 里 StaminaState 注释的公式推算，不直接显示同步下来的 Value。
+type StaminaRefillRequest struct{}
+type StaminaRefillResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	// Value 是补满之后的体力（上限）；补满后恢复时钟停着，下一次消耗起重新计时。
+	Value int64 `pb:"3"`
+	// Cost 是这一次花掉的金币，Balance 是花完之后的余额。
+	Cost    int64 `pb:"4"`
+	Balance int64 `pb:"5"`
+	// RefillCount 是今天（业务日）已经买了几次，含这一次。
+	RefillCount int32 `pb:"6"`
+}
+
+//roost:protocol group=game handler=stamina
+type StaminaRefillProtocol interface {
+	//roost:msg id={{ID:protocol:StaminaRefill}}
+	StaminaRefill(StaminaRefillRequest) StaminaRefillResponse
+}

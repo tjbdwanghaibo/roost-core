@@ -1,0 +1,26 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerShopBuy 是客户端发起的购买：用金币买 request.Count 份 request.GoodsID，按 request.Key 防重发。
+// 扣钱、发道具、记限购、记回执在这一笔事务里；任何一步被拒绝都把错误原样返回，Nest 回滚已经写过的字段，
+// 所以不要在这里吞掉错误改走别的分支。nowUnixMilli 由 Nest 填这条消息冻结的业务时间，每日限购按它算业务日。
+//
+//roost:nest rollback=undo durability=strict
+func handlerShopBuy(target player.IShopEntity, request *pb.ShopBuyRequest, nowUnixMilli int64) (*pb.ShopBuyResponse, error) {
+	result, err := target.ShopComp().Buy(request.Key, request.GoodsID, request.Count, nowUnixMilli)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.ShopBuyResponse{
+		Cost:    result.Cost,
+		Balance: result.Balance,
+		ItemID:  result.ItemID,
+		Gained:  result.Gained,
+		Held:    result.Held,
+		Bought:  result.Bought,
+	}, nil
+}
