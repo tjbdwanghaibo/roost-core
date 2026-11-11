@@ -274,12 +274,22 @@ published     same            role      role     role     role      role      ro
 published     same-refused    role      role     role     role      role      role
 published     other           limit     limit    limit    limit     limit     limit
 published     resolve         unres     unres    unres    unres     unres     unres
+
+# A role-transfer hold (transfer.go) is not a creation plan. The allowance is
+# taken by an existing role, so every create is a role-limit refusal — the
+# same name too: that role may not be bound to this server yet — and the
+# operator cannot release it. Like a published slot, it never reads the name.
+hold          same            limit     limit    limit    limit     limit     limit
+hold          same-refused    limit     limit    limit    limit     limit     limit
+hold          other           limit     limit    limit    limit     limit     limit
+hold          resolve         unres     unres    unres    unres     unres     unres
 `
 
 func TestCreationTableEveryCell(t *testing.T) {
 	slots := map[string]slotState{
 		"absent": slotAbsent, "foreign": slotForeign, "malformed": slotMalformed,
 		"unadmitted": slotPendingUnadmitted, "admitted": slotPendingAdmitted, "published": slotPublished,
+		"hold": slotTransferHold,
 	}
 	entries := map[string]creationEntry{
 		"same": entrySameName, "same-refused": entrySameNameRefused, "other": entryOtherName, "resolve": entryResolve,
@@ -344,6 +354,9 @@ func TestCreationTableClassifiers(t *testing.T) {
 		{"plan without player id", slotOf(func(s *Slot) { s.Creation.PlayerID = 0 }), true, slotMalformed},
 		{"pending", slotOf(func(*Slot) {}), true, slotPendingUnadmitted},
 		{"admitted", slotOf(func(s *Slot) { s.Creation.Admitted = true }), true, slotPendingAdmitted},
+		// 换服占位带着角色的 PlayerID 与建角计划，但它先是占位：不按已发布处理。
+		{"transfer hold", slotOf(func(s *Slot) { s.PlayerID = 42; s.Creation.Admitted = true; s.TransferID = "t-1" }), true, slotTransferHold},
+		{"transfer hold of another account", slotOf(func(s *Slot) { s.AccountID = "b"; s.PlayerID = 42; s.TransferID = "t-1" }), true, slotForeign},
 	} {
 		if got := classifySlot(tc.slot, tc.found, "a", 1); got != tc.want {
 			t.Errorf("classifySlot(%s) = %d, want %d", tc.name, got, tc.want)

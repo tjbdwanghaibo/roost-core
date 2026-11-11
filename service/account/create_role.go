@@ -64,6 +64,13 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 			if !found || stored.Value.CreationID != slot.Value.Creation.ID {
 				return Role{}, fmt.Errorf("%w: completed creation has no matching role", ErrConflict)
 			}
+			if stored.Value.ServerID != serverID {
+				// 角色已经换服走了，这个 slot 是提交之后还没删掉的旧服 slot（transfer.go 的收尾）。收尾补完
+				// 之前名额仍按已占用回答，与换一个名字时相同；不把绑定在别的服的角色当作本服的建角结果交回。
+				s.report.Refused("create_role", "role_limit")
+				return Role{}, fmt.Errorf("%w: the slot of %s on server %d still belongs to role %d, which moved to server %d; "+
+					"its transfer is not settled yet", ErrRoleLimit, accountID, serverID, stored.Value.PlayerID, stored.Value.ServerID)
+			}
 			return stored.Value.clone(), nil
 		case actResume:
 			return s.resumeRoleCreation(ctx, key, slot)
@@ -87,6 +94,10 @@ func (s *Service) createRole(ctx context.Context, accountID string, serverID int
 			if state == slotPublished {
 				s.report.Refused("create_role", "role_limit")
 				return Role{}, fmt.Errorf("%w: %s already holds a role on server %d", ErrRoleLimit, accountID, serverID)
+			}
+			if state == slotTransferHold {
+				s.report.Refused("create_role", "role_limit")
+				return Role{}, fmt.Errorf("%w: role transfer %s holds the slot of %s on server %d", ErrRoleLimit, slot.Value.TransferID, accountID, serverID)
 			}
 			return Role{}, fmt.Errorf("%w: another name is pending on server %d", ErrRoleLimit, serverID)
 		case actRefuseConflict:
@@ -310,15 +321,23 @@ func (s *Service) releaseCreationSlot(ctx context.Context, key string, slot vers
 // identity: every role this version writes carries one, and roles written
 // before creation plans existed are not supported (maintainer 2026-10-13).
 func (s *Service) roleReady(ctx context.Context, role Role) error {
+	_, err := s.readySlot(ctx, role)
+	return err
+}
+
+// readySlot 返回角色当前可用的 slot：在它的绑定服上、属于这个角色和它的建角计划、属于当前这一代绑定
+// （Slot.BindEpoch，换服见 transfer.go）。换服的占位属于下一代，提交后没删掉的旧服 slot 属于上一代，
+// 都不算；所以一个角色同一时刻至多有一个可用的 slot。
+func (s *Service) readySlot(ctx context.Context, role Role) (Slot, error) {
 	if role.CreationID == "" {
-		return fmt.Errorf("%w: role %d has no creation identity", ErrConflict, role.PlayerID)
+		return Slot{}, fmt.Errorf("%w: role %d has no creation identity", ErrConflict, role.PlayerID)
 	}
 	slot, found, err := s.cfg.Slots.Get(ctx, slotKeyFor(role.AccountID, role.ServerID))
 	if err != nil {
-		return err
+		return Slot{}, err
 	}
-	if !found || slot.Value.PlayerID != role.PlayerID || slot.Value.Creation.ID != role.CreationID {
-		return fmt.Errorf("%w: role creation is pending reconciliation", ErrConflict)
+	if !found || slot.Value.PlayerID != role.PlayerID || slot.Value.Creation.ID != role.CreationID || slot.Value.BindEpoch != role.BindEpoch {
+		return Slot{}, fmt.Errorf("%w: role creation is pending reconciliation", ErrConflict)
 	}
-	return nil
+	return slot.Value, nil
 }

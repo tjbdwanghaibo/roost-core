@@ -289,6 +289,9 @@ func (s *Service) SelectRole(ctx context.Context, accountID string, playerID int
 	if err := s.roleReady(ctx, role.Value); err != nil {
 		return Session{}, err
 	}
+	// 上一次换服的结果已定、slot 上的收尾没做完（transfer.go）：登录是玩家换服之后一定会走到的写入口，
+	// 在这里补完。补不完不挡登录——角色已经可用，收尾只是让出另一个服的名额。
+	s.settleTransferBestEffort(ctx, role.Value)
 	// 承载服先于签发解析：解析不了（承载服缺失、两跳）就不发会话。
 	serving, err := s.servingServer(ctx, role.Value.ServerID)
 	if err != nil {
@@ -314,7 +317,7 @@ func (s *Service) SelectRole(ctx context.Context, accountID string, playerID int
 	}
 	return Session{
 		PlayerID: playerID, AccountID: accountID, ServerID: role.Value.ServerID, ServingServerID: serving,
-		Token: token, ExpiresAtUnix: issued.Add(s.cfg.SessionTTL).Unix(),
+		Token: token, ExpiresAtUnix: issued.Add(s.cfg.SessionTTL).Unix(), Transfer: cloneOf(role.Value.Transfer),
 	}, nil
 }
 
@@ -340,7 +343,8 @@ func (s *Service) ValidateSession(ctx context.Context, playerID int64, token str
 // UpdateProfile replaces a role's opaque game profile.
 //
 // This is the only way a role's mutable payload changes, and it can change
-// nothing else: not the account it belongs to, not its name, not its server.
+// nothing else: not the account it belongs to, not its name, not its server
+// (the server changes only through a role transfer, transfer.go).
 // The implementation this replaces had one merge-upsert that could reparent a
 // role to another account and rename it while orphaning the old reservation.
 func (s *Service) UpdateProfile(ctx context.Context, accountID string, playerID int64, profile []byte) (Role, error) {
