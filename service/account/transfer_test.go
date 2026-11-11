@@ -667,6 +667,28 @@ func TestAbortInterruptedAfterTheRoleWriteIsFinishedByResending(t *testing.T) {
 	}
 }
 
+// 中止之后占位没撤掉、也没有人重发 Abort：下一次往同一个服发起时先把它撤掉，不会被自己留下的占位挡住。
+func TestAnOpenAbortTailIsFinishedByTheNextBegin(t *testing.T) {
+	s, cfg, role, session, slots, _ := faultyTransferFixture(t)
+	ctx := context.Background()
+	mustBegin(t, s, role.PlayerID, transferTo("t-1", homeSID, awaySID, 0))
+	slots.failDelete.Store(true)
+	if _, err := s.AbortRoleTransfer(ctx, role.PlayerID, "t-1", "hook vetoed"); !errors.Is(err, errInjected) {
+		t.Fatalf("Abort with the hold delete failing = %v, want the injected failure", err)
+	}
+	slots.failDelete.Store(false)
+	if hold, found := slotAt(t, cfg, role.AccountID, awaySID); !found || hold.TransferID != "t-1" {
+		t.Fatalf("the fixture must leave the hold of t-1 behind: %+v (found %v)", hold, found)
+	}
+
+	mustBegin(t, s, role.PlayerID, transferTo("t-2", homeSID, awaySID, 0))
+	if hold, found := slotAt(t, cfg, role.AccountID, awaySID); !found || hold.TransferID != "t-2" {
+		t.Fatalf("the target slot = %+v (found %v), want the hold of t-2", hold, found)
+	}
+	mustCommit(t, s, role.PlayerID, "t-2")
+	mustBeBoundTo(t, s, cfg, role, session.Token, awaySID, 1)
+}
+
 // 迟到的收尾不会删掉角色后来换回来的 slot：1 → 2（t-1）之后又 2 → 1（t-2），再拿 t-1 提交之后的角色
 // 快照去跑一遍收尾（一次卡了很久才继续的 Commit 重发就是这样）。slot 记着自己属于哪一代绑定，收尾只删
 // 代数更旧的。
