@@ -2,6 +2,24 @@
 
 日期：2026-11-01。最近一轮审查基线：`0400e8d4255179d056e306af7a0d0f397d9a03bd`（main，已与远端对齐）。本轮审核 Nest / DataEngine / Sync，随后按授权修复 RV-09。此前 RV-07/08 的修前基线为 `0a4e775469fe92d1a53d8e6f9f745126694b6cec`，红绿证据保留在下文。
 
+## 2026-11-12：战斗适配器结果契约（RV-20261112-01，P1，已修复）
+
+生成 combat 业务模块时，真实技能编译器 → Runtime → CombatAdapter / StatusBridge 链路返回 `host contract violation: ... succeeded=true reason=""`。伤害已计算或状态已施加，但 Runtime 拒绝该结果，Nest 事务回滚，合法施法无法完成。
+
+根因在适配器的 15 处成功结果：只设置 `Succeeded: true`，遗漏显式 `FailureReason: ExpectedFailureNone`。Runtime 的 `validateResultOutcome` 按既有契约要求二者一致；空字符串代表没有提供结论，不能放宽为成功。免疫、零治疗和移除不存在状态等无变化结果同样需要 `none`。
+
+修复在 combatcomponent 内统一 `successfulOutcome()`，适配器和状态桥使用同一构造，保留 Runtime 检查。新增回归实际执行伤害、治疗、护盾、施加/移除/驱散状态、属性修饰与免疫共 13 次结果断言；不只检查数值变化。修前 13 次都缺少原因，修后整个 combatcomponent 包 race 通过。业务模块另通过真实 Runtime 验证效果、延迟推进与事务回滚，结果记在模块验收中。
+
+证据：[修前](evidence/combat-outcome-20261112/red.log)、[修后](evidence/combat-outcome-20261112/green.log)。复跑：`GOWORK=off go test -race -count=1 ./gameplay/skill/combatcomponent`。此项仅覆盖适配器结果边界，不代表重新完成全仓审计。
+
+## 2026-11-12：Nest 生成器文件级导入（RV-20261112-02，P2，已修复）
+
+全模块组合时，Dungeon 与 Terrain 在不同源文件中分别用 `logic` 别名引用自己的业务包，这是合法 Go。生成器却把同一 handler 包所有文件的 imports 合并进每个文件，随后只按别名筛选，导致包装器和 Sender 同时出现两条不同路径的 `logic` 导入，组合工程无法编译。
+
+根因是 `parseFile` 消费 `collectPackageRemoteStructFields` 时同时合并了包级 imports。跨文件请求只需共享字段元数据，Remote 访问器本来就在请求声明文件中单独生成，因此删除不必要的 imports 汇总及 `mergeImports`，类型签名只解析当前源文件导入。没有重命名业务别名来绕过生成器缺陷，也不影响框架运行期 Nest。
+
+回归用同包两个文件分别以 `logic` 引用 `encoding/json` 和 `encoding/xml`，检查包装器导入精确归属，并实际类型检查两个 Sender 包。修前红、修后整个生成器包通过（包含跨文件 Remote 字段与请求访问器生成测试）。证据：[修前](evidence/gameplay-modules-20261112/nest-imports-red.log)、[修后](evidence/gameplay-modules-20261112/nest-imports-green.log)、[原组合失败](evidence/gameplay-modules-20261112/first-combination-failure.json)。复跑：`GOWORK=off go test -count=1 ./codegen/internal/nest`。完整模块组合结果见[本批验收](evidence/gameplay-modules-20261112/README.md)。
+
 ## 当前结论
 
 - **2026-11-02 Linux 审查续报复核**：已合入固定 review 分支的报告与探针，旧维护流水账保留历史链接；移除不再需要的提交豁免。NATS / SLG 夹具问题已复现并修复；Lockstep 缺少心跳已用缩短空闲期限及禁用心跳对照确认；etcd 补齐内核停止屏障，但 Linux 历史 3ms 成功样本的精确原因仍需原环境复测。详见下节。

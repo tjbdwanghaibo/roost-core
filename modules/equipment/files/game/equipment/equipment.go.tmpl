@@ -1,0 +1,34 @@
+package equipment
+
+import generated "{{MODULE}}/configs/generated"
+
+const (
+	SlotWeapon int32 = 1
+	SlotArmor  int32 = 2
+	MaxSlots   int32 = 32
+	MaxLevel   int32 = 10000
+	MaxStat    int64 = 1000000000000
+)
+
+type Result struct {
+	Slot     int32
+	Replaced int64
+}
+
+// Lookup 读取服务的正式 configdata 快照；非法配置只拒绝这件物品，不在热路径做 I/O。
+func Lookup(itemID int64) (slot int32, attack, hp int64, ok bool) {
+	r, found := generated.EquipmentItemByItemID(itemID)
+	if !found || r.Slot < 1 || r.Slot > MaxSlots || r.Attack < 0 || r.HP < 0 || r.Attack > MaxStat || r.HP > MaxStat {
+		return 0, 0, 0, false
+	}
+	return r.Slot, r.Attack, r.HP, true
+}
+func SlotFor(itemID int64) (int32, bool) { slot, _, _, ok := Lookup(itemID); return slot, ok }
+func ValidSlot(slot int32) bool          { return slot >= 1 && slot <= MaxSlots }
+func Slots() []int32 {
+	out := make([]int32, MaxSlots)
+	for i := range out {
+		out[i] = int32(i + 1)
+	}
+	return out
+}

@@ -1,0 +1,39 @@
+package scene
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+
+// Region 是静态服务器区域；触发由玩家已验证的位置计算，客户端不汇报“进入区域”。
+type Region struct {
+	ID     int64
+	Bounds spatial.Rect
+}
+type RegionEvent struct {
+	ID      int64
+	Entered bool
+}
+
+// Object 是静态交互对象。状态性 NPC/建筑可由上层用独立 Entity 实现，不能在这里放共享可变字段。
+type Object struct {
+	ID       int64
+	Position spatial.Point
+	Radius   int64
+	Text     string
+}
+
+func (s *Space) RegionsAt(at spatial.Point) []int64 {
+	var ids []int64
+	for _, region := range s.config.Regions {
+		if region.Bounds.Contains(at) {
+			ids = append(ids, region.ID)
+		}
+	}
+	return ids
+}
+func (s *Space) Object(id int64) (Object, bool) {
+	for _, object := range s.config.Objects {
+		if object.ID == id {
+			return object, true
+		}
+	}
+	return Object{}, false
+}

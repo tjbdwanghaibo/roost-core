@@ -1,0 +1,105 @@
+package player
+
+import (
+	"fmt"
+	"slices"
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+
+	"{{MODULE}}/db"
+)
+
+type actorSyncRegistration struct {
+	profile entity.SyncProfile
+	fields  []string
+}
+
+var actorSyncFields = map[string]actorSyncRegistration{}
+
+// OnActorSyncFields 只在init登记一个有限视图的明确字段白名单。self始终只来自PlayerDao，
+// 附加CombatDAO等服务器权威不会因安装更多组件而被默认打包。业务模块不能把*授予旁观者。
+func OnActorSyncFields(name string, profile entity.SyncProfile, fields ...string) {
+	profile = profile.Normalize()
+	if name == "" || len(fields) == 0 || profile == policy.SelfProfile.Normalize() {
+		panic("actor: invalid sync view registration")
+	}
+	if _, exists := actorSyncFields[name]; exists {
+		panic("actor: duplicate sync view registration")
+	}
+	for _, field := range fields {
+		if field == "" || field == "*" {
+			panic("actor: public fields require explicit names")
+		}
+	}
+	actorSyncFields[name] = actorSyncRegistration{profile: profile, fields: slices.Clone(fields)}
+}
+
+var actorSyncViews = sync.OnceValues(func() (*entity.SyncViewSet, error) {
+	views := []entity.NamedSyncView{{Profile: policy.SelfProfile, Fields: []string{"*"}}}
+	indexes := map[entity.SyncProfile]int{}
+	names := make([]string, 0, len(actorSyncFields))
+	for name := range actorSyncFields {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		registration := actorSyncFields[name]
+		index, found := indexes[registration.profile]
+		if !found {
+			index = len(views)
+			indexes[registration.profile] = index
+			views = append(views, entity.NamedSyncView{Profile: registration.profile})
+		}
+		views[index].Fields = append(views[index].Fields, registration.fields...)
+	}
+	for i := range views {
+		slices.Sort(views[i].Fields)
+		views[i].Fields = slices.Compact(views[i].Fields)
+	}
+	return dataengine.NewSyncViewSet((*db.PlayerDao)(nil).SyncFields(), views...)
+})
+
+// NewActorPlayerSyncPacker 是Player唯一工厂；scene通过登记扩展有限视图，不再创建另一份packer。
+func NewActorPlayerSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+	return actorPlayerPacker{owner: value.(*Player)}
+}
+
+type actorPlayerPacker struct{ owner *Player }
+
+func (p actorPlayerPacker) PackSubjectSnapshot(profile entity.SyncProfile) (entity.FrozenSyncPayload, error) {
+	return p.pack(profile, dataengine.AllFields, false)
+}
+func (p actorPlayerPacker) PackSubjectDelta(profile entity.SyncProfile, mask uint64) (entity.FrozenSyncPayload, error) {
+	return p.pack(profile, mask, true)
+}
+func (p actorPlayerPacker) SubjectSyncChangeVersion() uint64 {
+	return p.owner.Dao().DirtyTracker().SyncChangeVersion()
+}
+func (p actorPlayerPacker) AcknowledgeSubjectSyncChanges(version uint64) {
+	p.owner.Dao().DirtyTracker().AcknowledgeSyncChanges(version)
+}
+func (p actorPlayerPacker) pack(profile entity.SyncProfile, mask uint64, changes bool) (entity.FrozenSyncPayload, error) {
+	views, err := actorSyncViews()
+	if err != nil {
+		return entity.FrozenSyncPayload{}, err
+	}
+	view, ok := views.Lookup(profile)
+	if !ok {
+		return entity.FrozenSyncPayload{}, fmt.Errorf("%w: %+v", entity.ErrSyncViewUnknown, profile)
+	}
+	mask &= view.Fields
+	if mask == 0 {
+		return entity.FrozenSyncPayload{}, nil
+	}
+	dao := p.owner.Dao()
+	var raw []byte
+	if changes {
+		raw = dao.MarshalSyncChanges(mask)
+	} else {
+		raw = dao.MarshalSync(mask)
+	}
+	return entity.TakeFrozenSyncPayload(2, raw), nil
+}

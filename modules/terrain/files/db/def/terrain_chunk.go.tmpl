@@ -1,0 +1,15 @@
+package dbdef
+
+// TerrainChunkDao 的Lots是占地串行化权威；View只是已提交的行走投影。
+//
+//roost:dao coll=terrain_chunk db=main
+type TerrainChunkDao struct {
+	SceneID      int64           `dao:"persist,sync" store:"1"`
+	X            int32           `dao:"persist,sync" store:"2"`
+	Y            int32           `dao:"persist,sync" store:"3"`
+	BaseRevision int64           `dao:"persist,sync" store:"4"`
+	Version      int64           `dao:"persist,sync" store:"5"`
+	Heights      []uint16        `dao:"persist,sync" store:"6"`
+	Materials    []uint16        `dao:"persist,sync" store:"7"`
+	Lots         map[int32]int64 `dao:"persist,nosync" store:"8"`
+}

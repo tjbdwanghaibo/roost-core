@@ -22,16 +22,16 @@
 4. 换服：[方案](FEATURE-2026-11-11-player-rehome.md)、[PLAYER-MIGRATION §7](../framework/PLAYER-MIGRATION.md)。
 5. 仓库规则：[AGENTS.md](../../AGENTS.md)、[维护手册](README.md)。
 
-## 2. 现在的状态（2026-11-11 晚）
+## 2. 现在的状态（2026-11-12）
 
 | 项 | 状态 |
 | --- | --- |
-| 模块 | 15 个：wallet、checkin、task、stamina、shop、bag、profile、chat、enter、leaderboard、mailbox、skillbook、room、turn、rehome；场景数以各自的 `module.yaml` 与 `scripts/test-modules-generated.sh` 为准 |
-| 模块间联动 | 5 组：chat + enter、mailbox + enter、mailbox + bag、task + checkin、rehome + enter |
+| 模块 | 29 个：原有 15 个，加 actor、scene、monster、attribute、equipment、combat、dungeon、terrain、naming、cdkey、notice、gacha、friends、idle；场景数以各自的 `module.yaml` 与 `scripts/test-modules-generated.sh` 为准 |
+| 模块间联动 | 原有 5 组，加属性/装备、场景/聊天与公开字段、战斗/目录/场景/装备、副本/排行榜、地形/怪物；精确清单以 module.yaml 为准 |
 | 配方 | casual、turn-pvp：`roost project new -recipe`，细节见 modules/README；平台身份验证、可信匹配和胜负仍是业务接入点 |
-| 登记点 | enter 的事务内首次初始化（OnFirstEnter）、进入前检查（能否决登录）与进入钩子；checkin 的签到钩子；mailbox 的附件种类；rehome 的换服前检查 / 离开时 / 到达后 |
-| 安装器 | 服务级接线点（`runtime`）、模块自带实体（`entities`）、定时器类型分配（`timer_types`）都已实现；模块可以带配置表（bag 的道具表） |
-| game-demo 用的模块 | enter、chat、leaderboard、bag、profile、mailbox（连带 wallet）、skillbook、rehome，全部在同一步里安装 |
+| 登记点 | enter 的事务内首次初始化、进入前后；checkin 签到；mailbox 附件；rehome 换服；profile 升级；actor 进出与每拍；scene 区域/交互/公开字段；skillbook 编译环境 |
+| 安装器 | 服务级接线点、自带实体、定时器、配置表；新增 heartbeat/directory 代办、attribute feature、附加 DAO 聚合与明确的 Sync packer |
+| game-demo 用的模块 | enter、chat、leaderboard、bag、profile、mailbox（连带 wallet）、skillbook、rehome、attribute、equipment，同一步安装；移动复用 actor Body，保留 demo 的 cellworld/地形适配 |
 | 单个玩家换服 | 一期已实现并合入（account 接口、DataEngine 交出实体、模块 rehome、demo 接线），**只有离线验证**；二、三期见 §4 的 K |
 | 审查 | `fix/core-game-server-review` 上的三项缺陷（RV-20261111-BM-01/02/03：换服占位、换服重放、wallet 最小整数扣款）已修；那个分支的 KNOWN-LIMITS 里“三项 P2 尚未修复”一段要在那边关闭 |
 
@@ -57,11 +57,11 @@
 | activity | 活动榜、定时结算、发奖 | 可用定时器类型分配 |
 | gm | 运维命令：加道具、加经验、发补偿邮件、换服 | 各模块各带自己的命令，还是一个 gm 模块汇总，先定形态 |
 | matchmaking | 排队、成局 | 与 team、matchroom 一起看 |
-| dungeon | 进入、结算、领奖账本、通关计数 | 通关榜已用 leaderboard |
+| dungeon | 已实现模块：进入、真实 level 阶段、结算、领奖账本、通关计数 | 通关榜联动已用 leaderboard；demo 专有玩法尚未迁移 |
 
 ### B. 不依赖新能力、随时可迁的
 
-equipment（穿戴、卸下、槽位由道具决定；依赖 bag）、attribute（基础值、装备加成、等级成长；依赖 profile，与 equipment 联动）、purchase（付费订单恰好一次发货、订单账本——现在挂在 demo 的 `claim_ledgers.go`；依赖 bag 与 platform 服务）、worldstats（World 上的全服累计；是否单独成模块待定）。
+equipment 与 attribute 模块及 game-demo 接入已实现；尚余 purchase（付费订单恰好一次发货、订单账本——现在挂在 demo 的 `claim_ledgers.go`；依赖 bag 与 platform 服务）、worldstats（World 上的全服累计；是否单独成模块待定）。
 
 ### C. 配方（直接服务最终目标，模块已经够拼第一个）
 
@@ -72,7 +72,7 @@ equipment（穿戴、卸下、槽位由道具决定；依赖 bag）、attribute�
 ### D. 还缺的登记点与联动（每个都要有真实使用者）
 
 - wallet 的“消费成功”（区分 `Apply` 命中去重回执与首次生效；task 的“消费三次”在等它）。
-- profile 的升级（现在是业务文件钩子，别的模块挂不上）。enter 的事务内首次发放登记点已经完成，由 casual 配方实际使用。
+- profile 升级已提供按名字登记的钩子，由 attribute 实际使用；升级奖励邮件联动仍待做。enter 的事务内首次发放登记点已经完成，由 casual 配方实际使用。
 - leaderboard 的提交时机；stamina 的消耗；shop 的购买成功。
 - rehome 的其余联动：mailbox（离开前按旧范围拉一次全服邮件）、chat（离开时移出在线名单）、leaderboard（按服的榜离开时移除）、room / turn（在房间里时拒绝换服）。
 
@@ -86,7 +86,7 @@ matchroom（匹配成局后移交到 room）、team（队伍实体）、guild（
 
 ### G. 场景（维护者 2026-11-11 同意的顺序）
 
-把 demo 的场景（Scene 实体、进出、移动与视野、刷怪、心跳与同步接线，约 2900 行）拆成模块 `scene` → 加功能：多场景管理（按需创建销毁、切换）→ 区域触发（可接 task 的事件）→ 附近聊天（chat + scene 联动）→ 分线 → 可交互对象。怪物、巡逻、分区场景、可编辑地形与建筑随它处理。
+场景线 actor / scene / monster / attribute / equipment / combat / dungeon / terrain 已实现模块，包含多场景/分线、区域与交互、附近聊天、巡逻追击与单进程地形/建筑；各模块边界见 modules/README。game-demo 已统一属性/装备与共享 Body；其 cellworld 分区、LOD/队伍视图、SceneReady 和玩法刷怪等适配仍独立，尚未整体安装 scene/monster/dungeon/terrain 模块。不能把模块可用描述为 demo 全面迁移完成。cellworld 按新分工继续留作原型。
 
 ### H. 规则数据
 
@@ -155,3 +155,24 @@ shop 的商品目录、task 的任务表改成配置表（照 bag 的道具表�
 - 本机原始日志 `/tmp/roost-recipes-full-repo.jsonl`、`/tmp/roost-recipes-final-targeted.log`、`/tmp/roost-recipes-modules-final.log`、`/tmp/roost-recipes-demo-*.log`；复跑入口为本批命令、`scripts/test-modules-generated.sh` 与新生成工程的 `go test ./...`。文档锚点检查 286 文件 / 0 断链。
 - CBM 已核对本批候选路径；3 处新模板的局部解析缺口来自协议 ID 占位与 Go 复合字面量，均已逐段读源码并以生成工程补证，未把图谱当作完整解析证明。
 - `compose.md` 只更新配方入口、模块数和首次发放登记点等事实；skill 结构仍留给原会话。下一批仍是 D 的消费/升级等真实联动与 E 的任务事件，13 类夹具迁配方、独立 skill-only 验收及真实存储联合验收未完成。
+
+
+### 场景线与六个补充模块（2026-11-12）
+
+本会话承担新方案中“另一个 agent”的全部模块范围。已新增 actor、scene、monster、attribute、equipment、combat、dungeon、terrain、naming、cdkey、notice、gacha、friends、idle，共 14 个；全库 29 个。各模块的正式入口、持久/同步事实、恢复、上限和验收边界见模块 README。
+
+- 共用接线：缺少 heartbeat/directory 时沿用正式 add mod；attribute 使用现有生成器。附加 DAO 声明复用实体聚合/加载/事务；actor 提供唯一 PlayerDao 同步工厂，scene 只登记公开视图。自身同步在所有声明就位之后开启，协议、配置、业务和生成物一起回滚。没有放宽多 DAO 的默认同步守卫。
+- 服务停止：Scene 先关准入，再在管理锁外调用按 kind 登记的退出者；Monster 按 Scene 实例退场，避免 Terrain 先停时资源无法排空。Combat 用单个有界后台执行器提交双人事务；Nest 增加与 RequestSettled 同义的 RequestMultiSettled，真实完成前不释放资源。Sync Manager 经 Registry 暴露现有实例，未创建第二套调度器。
+- 生命周期复核：Monster 的初生/重生/伤害/退出都携带不可变本地实例身份，取得 Monster 与 Scene 锁后校验；避免按 ID 排队期间发生同 ID 重建而误改新实例。Remove 已提交但回复丢失时，Scene 排空仍调用已登记退出者，不因成员列表已空而遗忘销毁责任。25 个 Monster 场景与 11 个可编译变异通过，见[红绿证据](evidence/gameplay-modules-20261112/README.md)。
+- Combat 真实 Runtime 验收发现并修复 combatcomponent 成功结果遗漏 FailureReason=none；红绿证据见 CORE-REVIEW 的 RV-20261112-01。Runtime 严格检查保留，未知结果不伪装成功。
+- demo 属性/装备改成模块，删除重复实现，协议为 EquipmentEquip；Actor Body 从同一模板消费。Player schema 升至 3，旧 schema 2 拒绝；新工程使用新数据/新 WAL，教学离线迁移示例同步到当前 schema。cellworld、LOD/队伍视图等独有适配仍保留，不能宣称 demo 全部迁移结束。
+- 本批未发布，验收以当前 source-head 的 go.mod replace 为准。新增模块依赖 ModEntitySync 与 RequestMultiSettled；发版后按 manifest.go 既有规则再提高最低 core 版本并验证真实下载，不在 tag 尚不存在时预设未来版本号。
+
+最终验收已完成，原始失败、修复原因和补测都保留在[本批证据](evidence/gameplay-modules-20261112/README.md)：
+
+- 完整模块脚本退出 0。正序/反序两套全新工程各 29 模块、15 组联动、43 项报告、598 PASS / 0 SKIP；build/vet、ID/生成漂移、重复安装、全包测试全部通过。增量安装阶段也完整通过。
+- 全仓首轮 9,770 PASS / 99 条条件 SKIP / 2 FAIL；两个失败是生成文档遗漏 Directory 和测试误要求同步 AttributeGear，修复后原入口均补测通过。之后组合验收发现的 Nest 文件级导入问题与六条 DAO 夹具错误也已修复并通过完整组合；不把定向补跑记作第二次全仓通过。
+- 新 game-demo 774 PASS / 14 条预期 SKIP / 0 FAIL；模块验收 229 PASS / 0 SKIP。另补 Robot 字段名回归并通过 loadtest 包 race；新生成器再次核对 demo 无生成漂移。Monster、Combat、Nest 完成/排空与其他相关 race/变异证据分别保留。
+- CBM 已刷新，所有本批代码证据路径核对 freshness；局部模板解析范围直接读源码补证。`compose.md` 仅两处事实更新，结构未改。
+
+本会话分工的 14 个模块已实现并通过上述验收；不代表整份 backlog 已清空。仍未做本批模块的真实存储/Gate 联合验收、Linux、跨机、性能与长稳；demo 剩余专有适配及原会话的任务仍按本文和补充分工推进。本批仅提交推送 `feat/business-modules`，没有合入 main 或发版。

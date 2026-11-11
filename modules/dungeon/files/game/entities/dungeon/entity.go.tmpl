@@ -1,0 +1,26 @@
+package dungeon
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	db "{{MODULE}}/db"
+)
+
+const EntityKindDungeon entity.EntityKind = {{ID:entity:Dungeon}}
+
+// Dungeon 是服务端创建的权威关卡；World锁序使领奖能按固定顺序同时锁Dungeon和Player。
+// 两个DAO由生成器在创建、加载、删除和聚合提交时一并接线。
+//
+//roost:entity id={{ID:entity:Dungeon}} entityKind=EntityKindDungeon category=entity.EntityCategoryWorld service={{GAME_SERVICE}}
+type Dungeon struct {
+	*entity.EntityBase
+	entity.DaoManager
+	dao   *db.DungeonDao      `dao:"dungeon"`
+	level *db.DungeonLevelDAO `dao:"level_state"`
+}
+
+type IDungeonEntity interface {
+	entity.IThreadSafeEntity
+	RunState() *Dungeon
+}
+
+func (run *Dungeon) RunState() *Dungeon { return run }

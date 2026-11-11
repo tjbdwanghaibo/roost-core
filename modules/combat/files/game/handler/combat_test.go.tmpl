@@ -1,0 +1,955 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	corecombat "github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"go.mongodb.org/mongo-driver/v2/bson"
+
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/actor"
+	gamecombat "{{MODULE}}/game/combat"
+	controller "{{MODULE}}/game/controllers/combat"
+	player "{{MODULE}}/game/entities/player"
+	gameattr "{{MODULE}}/game/gameplay/attribute"
+	sender "{{MODULE}}/game/handler/syncsender"
+	gameheartbeat "{{MODULE}}/game/heartbeat"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/game/skillbook"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+type combatGetter map[int64]entity.IThreadSafeEntity
+
+func (g combatGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if p := g[id]; p != nil {
+		return p, nil
+	}
+	return nil, fmt.Errorf("unknown %d", id)
+}
+
+func (g combatGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		p, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = p
+	}
+	return out, nil
+}
+
+type combatCommitter struct {
+	reject  atomic.Bool
+	commits atomic.Int64
+	block   atomic.Pointer[combatCommitBlock]
+}
+
+type combatCommitBlock struct{ entered, release chan struct{} }
+
+func (c *combatCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	c.commits.Add(1)
+	if block := c.block.Swap(nil); block != nil {
+		close(block.entered)
+		<-block.release
+	}
+	if c.reject.Load() {
+		return errors.New("combat commit rejected")
+	}
+	return nil
+}
+
+type combatFixture struct {
+	engine   *nest.NestMgr
+	players  []*player.Player
+	getter   combatGetter
+	commit   *combatCommitter
+	now      atomic.Int64
+	registry *app.Registry
+	stop     func(context.Context) error
+}
+
+func newCombatFixture(t *testing.T) *combatFixture {
+	t.Helper()
+	player.RegisterEntity()
+	RegisterCombatReadyNestHandlers()
+	RegisterCombatCastNestHandlers()
+	RegisterCombatStepNestHandlers()
+	RegisterCombatLeaveNestHandlers()
+	RegisterCombatTickNestHandlers()
+	f := &combatFixture{getter: combatGetter{}, commit: &combatCommitter{}, registry: app.NewRegistry(viper.New())}
+	f.now.Store(time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC).UnixMilli())
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	for i := range 3 {
+		id, err := entity.BuildEntityID(int64(98201+i), player.EntityKindPlayer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		e, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.players = append(f.players, e.(*player.Player))
+		f.getter[id] = e
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(f.getter), nest.NestOptionWithTransactionCommitter(f.commit), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	f.engine.MustRegisterHandlerWithMeta(nest.NewHandlerName("combatFixtureAction"), func(_ []entity.IThreadSafeEntity, p []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, p[0].(func() error)()
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.registry.Register("nest", nest.Client(f.engine)); err != nil {
+		t.Fatal(err)
+	}
+	stopSkills, err := skillbook.Start(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopCombat, err := gamecombat.Start(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.stop = stopCombat
+	t.Cleanup(func() {
+		if err := stopCombat(context.Background()); err != nil {
+			t.Error(err)
+		}
+		if err := stopSkills(context.Background()); err != nil {
+			t.Error(err)
+		}
+		for _, p := range f.players {
+			p.CombatComp().OnDestroy(0)
+			p.ActorComp().OnDestroy(0)
+		}
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.must(t, func() error {
+		for i, p := range f.players {
+			if err := p.ActorComp().Body().Enter(actor.Environment{ID: 1, Space: actor.Nowhere{}}, spatial.Point{X: int64(i * 100)}, 0); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return f
+}
+
+func (f *combatFixture) ids() []int64 {
+	out := make([]int64, len(f.players))
+	for i, p := range f.players {
+		out[i] = p.ID()
+	}
+	return out
+}
+
+func (f *combatFixture) action(fn func() error) error {
+	_, err := f.engine.RequestMulti(context.Background(), nest.NewHandlerName("combatFixtureAction"), f.ids(), nest.NewParams(fn))
+	return err
+}
+
+func (f *combatFixture) must(t *testing.T, fn func() error) {
+	t.Helper()
+	if err := f.action(fn); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *combatFixture) read(t *testing.T, fn func()) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() {
+		for _, p := range f.players {
+			p.GetMutex().Lock()
+		}
+		defer func() {
+			for i := len(f.players) - 1; i >= 0; i-- {
+				f.players[i].GetMutex().Unlock()
+			}
+		}()
+		fn()
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *combatFixture) ready(t *testing.T, i int) {
+	t.Helper()
+	if _, err := sender.NewCombatReadySender(f.engine).Sync_CombatReady(context.Background(), f.players[i].ID(), &pb.CombatReadyRequest{Sequence: 1, Ready: true}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *combatFixture) pair(t *testing.T) {
+	f.ready(t, 0)
+	f.ready(t, 1)
+}
+
+func (f *combatFixture) cast(i, j int, seq int64, name string) (*pb.CombatCastResponse, error) {
+	return sender.NewCombatCastSender(f.engine).MultiSync_CombatCast(context.Background(), f.players[i].ID(), f.players[j].ID(), &pb.CombatCastRequest{Sequence: seq, PeerID: int64(98201 + j), SkillID: "skill.{{PROJECT}}.combat." + name})
+}
+
+func (f *combatFixture) mustCast(t *testing.T, i, j int, seq int64, name string) *pb.CombatCastResponse {
+	t.Helper()
+	r, err := f.cast(i, j, seq, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func (f *combatFixture) step(seq int64) (*pb.CombatStepResponse, error) {
+	return sender.NewCombatStepSender(f.engine).MultiSync_CombatStep(context.Background(), f.players[0].ID(), f.players[1].ID(), &pb.CombatStepRequest{Sequence: seq})
+}
+
+func (f *combatFixture) mustStep(t *testing.T, seq int64) *pb.CombatStepResponse {
+	t.Helper()
+	r, err := f.step(seq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func (f *combatFixture) snapshot(t *testing.T) []string {
+	out := []string{}
+	var readErr error
+	f.read(t, func() {
+		for _, p := range f.players {
+			raw, err := p.Dao().CaptureRollbackState()
+			if err != nil {
+				readErr = err
+				return
+			}
+			// BSON map 序列化顺序无意义；解码为map后规范JSON比较全部字段，不忽略任何业务状态。
+			var value bson.M
+			decoder := bson.NewDecoder(bson.NewDocumentReader(bytes.NewReader(raw)))
+			decoder.DefaultDocumentM()
+			if err = decoder.Decode(&value); err != nil {
+				readErr = err
+				return
+			}
+			raw, err = json.Marshal(value)
+			if err != nil {
+				readErr = err
+				return
+			}
+			out = append(out, string(raw))
+			raw, err = p.CombatComp().Core().Dao().CaptureRollbackState()
+			if err != nil {
+				readErr = err
+				return
+			}
+			out = append(out, string(raw))
+		}
+	})
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	return out
+}
+
+func (f *combatFixture) health(t *testing.T, i int) int64 {
+	var hp int64
+	f.read(t, func() { hp = f.players[i].CombatComp().Core().Combatant().Health })
+	return hp
+}
+
+func (f *combatFixture) gates(t *testing.T, i int) (bool, bool) {
+	var move, cast bool
+	f.read(t, func() { b := f.players[i].ActorComp().Body(); move, cast = b.CanMove(), b.CanCast() })
+	return move, cast
+}
+
+func TestCombatNeedsBothParticipantsConsent(t *testing.T) {
+	f := newCombatFixture(t)
+	f.ready(t, 0)
+	before := f.snapshot(t)
+	if _, err := f.cast(0, 1, 2, "strike"); !errors.Is(err, apperrors.ErrCombatConsent) {
+		t.Fatalf("consent %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("consent refusal wrote")
+	}
+}
+
+func TestCombatStrikeUsesCompiledAttackAndTwoDAOs(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	r := f.mustCast(t, 0, 1, 2, "strike")
+	if r.PeerHealth != 90 || r.Health != 100 || r.CastID == 0 || f.health(t, 1) != 90 {
+		t.Fatalf("strike result %+v", r)
+	}
+}
+
+func TestCombatExactReplayDoesNotDamageTwice(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	first := f.mustCast(t, 0, 1, 2, "strike")
+	before := f.snapshot(t)
+	again := f.mustCast(t, 0, 1, 2, "strike")
+	if !reflect.DeepEqual(first, again) || !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("replay changed facts")
+	}
+}
+
+func TestCombatReusedSequenceConflicts(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "strike")
+	before := f.snapshot(t)
+	if _, err := f.cast(0, 1, 2, "bolt"); !errors.Is(err, apperrors.ErrCombatConflict) {
+		t.Fatalf("conflict %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("conflict wrote")
+	}
+}
+
+func TestCombatStaleAndSkippedSequenceFail(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "strike")
+	for _, seq := range []int64{0, 1, 4, math.MaxInt64} {
+		if _, err := f.cast(0, 1, seq, "strike"); err == nil {
+			t.Fatalf("sequence %d accepted", seq)
+		}
+	}
+}
+
+func TestCombatCooldownIsRestoredFromCheckpoint(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "strike")
+	before := f.snapshot(t)
+	if _, err := f.cast(0, 1, 3, "strike"); !errors.Is(err, apperrors.ErrCombatSkill) {
+		t.Fatalf("cooldown %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("cooldown changed facts")
+	}
+}
+
+func TestCombatCooldownExpiresOnServerTime(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "strike")
+	f.now.Add(1000)
+	r := f.mustCast(t, 0, 1, 3, "strike")
+	if r.PeerHealth != 80 {
+		t.Fatalf("after cooldown %+v", r)
+	}
+}
+
+func TestCombatDelayedSkillRunsAtItsDueTick(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	r := f.mustCast(t, 0, 1, 2, "bolt")
+	if r.PeerHealth != 100 || !r.Pending {
+		t.Fatalf("bolt start %+v", r)
+	}
+	f.now.Add(150)
+	if r := f.mustStep(t, 3); r.PeerHealth != 100 {
+		t.Fatalf("early bolt %+v", r)
+	}
+	f.now.Add(50)
+	if r := f.mustStep(t, 4); r.PeerHealth != 90 || r.Pending {
+		t.Fatalf("due bolt %+v", r)
+	}
+}
+
+func TestCombatRejectedCastRollsBackBindingsHealthAndCooldown(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	before := f.snapshot(t)
+	f.commit.reject.Store(true)
+	if _, err := f.cast(0, 1, 2, "strike"); err == nil {
+		t.Fatal("commit accepted")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("rejected cast leaked")
+	}
+	f.commit.reject.Store(false)
+	if r := f.mustCast(t, 0, 1, 2, "strike"); r.PeerHealth != 90 {
+		t.Fatal("rejected cast consumed cooldown")
+	}
+}
+
+func TestCombatRejectedDelayedTickKeepsScheduledDamage(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "bolt")
+	f.now.Add(200)
+	before := f.snapshot(t)
+	f.commit.reject.Store(true)
+	if _, err := f.step(3); err == nil {
+		t.Fatal("tick commit accepted")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("delayed rollback leaked")
+	}
+	f.commit.reject.Store(false)
+	if r := f.mustStep(t, 3); r.PeerHealth != 90 {
+		t.Fatalf("delayed retry %+v", r)
+	}
+	f.now.Add(50)
+	if r := f.mustStep(t, 4); r.PeerHealth != 90 {
+		t.Fatal("delayed damage repeated")
+	}
+}
+
+func TestCombatStunDrivesActorGates(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "stun")
+	move, cast := f.gates(t, 1)
+	if move || cast {
+		t.Fatalf("stun gates move=%v cast=%v", move, cast)
+	}
+}
+
+func TestCombatBuffExpiresThroughFormalDriver(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "stun")
+	f.now.Add(1000)
+	f.mustStep(t, 3)
+	move, cast := f.gates(t, 1)
+	if !move || !cast {
+		t.Fatal("expired stun still gates")
+	}
+}
+
+func TestCombatRejectedBuffRestoresDerivedStates(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	before := f.snapshot(t)
+	f.commit.reject.Store(true)
+	if _, err := f.cast(0, 1, 2, "stun"); err == nil {
+		t.Fatal("buff commit accepted")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("buff rollback leaked")
+	}
+	move, cast := f.gates(t, 1)
+	if !move || !cast {
+		t.Fatal("rolled back buff kept actor gate")
+	}
+}
+
+func TestCombatSilenceRejectsPeerCast(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "silence")
+	before := f.snapshot(t)
+	if _, err := f.cast(1, 0, 2, "strike"); !errors.Is(err, apperrors.ErrCombatSilenced) {
+		t.Fatalf("silence %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("silence refusal wrote")
+	}
+}
+
+func TestCombatCrossSceneFailsBeforeBinding(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.must(t, func() error {
+		return f.players[1].ActorComp().Body().Enter(actor.Environment{ID: 2, Space: actor.Nowhere{}}, spatial.Point{}, 0)
+	})
+	if _, err := f.cast(0, 1, 2, "strike"); !errors.Is(err, apperrors.ErrCombatScene) {
+		t.Fatalf("scene %v", err)
+	}
+}
+
+func TestCombatDistanceOverflowCannotPassAdmission(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.must(t, func() error {
+		f.players[0].ActorComp().Body().Map.SetPos(spatial.Point{X: math.MinInt64})
+		f.players[1].ActorComp().Body().Map.SetPos(spatial.Point{X: math.MaxInt64})
+		return nil
+	})
+	if _, err := f.cast(0, 1, 2, "strike"); !errors.Is(err, apperrors.ErrCombatRange) {
+		t.Fatalf("range %v", err)
+	}
+}
+
+func TestCombatThirdParticipantCannotJoinBoundPair(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.ready(t, 2)
+	f.mustCast(t, 0, 1, 2, "strike")
+	before := f.snapshot(t)
+	if _, err := f.cast(2, 1, 2, "strike"); !errors.Is(err, apperrors.ErrCombatBusy) {
+		t.Fatalf("third party %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("third party wrote")
+	}
+}
+
+func TestCombatClockBackwardsDoesNotDiscardCast(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "bolt")
+	before := f.snapshot(t)
+	f.now.Add(-50)
+	if _, err := f.step(3); err == nil {
+		t.Fatal("backward step accepted")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("clock rollback changed facts")
+	}
+}
+
+func TestCombatExternalHPWriteRejectsWorldRestore(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "strike")
+	f.must(t, func() error {
+		v := f.players[1].CombatComp().Core().Combatant()
+		v.Health--
+		f.players[1].CombatComp().Core().InitCombatant(v)
+		return nil
+	})
+	before := f.snapshot(t)
+	f.now.Add(50)
+	if _, err := f.step(3); !errors.Is(err, apperrors.ErrCombatBoundary) {
+		t.Fatalf("HP boundary %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("boundary refusal wrote")
+	}
+}
+
+func TestCombatExternalBuffWriteRejectsWorldRestore(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "strike")
+	f.must(t, func() error {
+		f.players[1].CombatComp().Core().ApplyBuff(corecombat.BuffSpec{ID: 99, Tags: []corecombat.Tag{"root"}, DurationTicks: 10}, int64(player.CombatClock.TickAt(time.UnixMilli(f.now.Load()))), f.players[0].ID())
+		return nil
+	})
+	f.now.Add(50)
+	if _, err := f.step(3); !errors.Is(err, apperrors.ErrCombatBoundary) {
+		t.Fatalf("buff boundary %v", err)
+	}
+}
+
+func TestCombatAttributeChangesEnterTheNextWorldRevision(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "strike")
+	f.must(t, func() error {
+		f.players[0].Dao().GetAttributeBase().SetValues(map[int32]int64{int32(gameattr.AttrHP): 100, int32(gameattr.AttrAttack): 40})
+		return f.players[0].AttributeComp().Refresh()
+	})
+	f.now.Add(1000)
+	r := f.mustCast(t, 0, 1, 3, "strike")
+	if r.PeerHealth != 50 {
+		t.Fatalf("updated attack %+v", r)
+	}
+}
+
+func TestCombatLeaveClearsConsentAndDelayedWork(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "bolt")
+	if _, err := sender.NewCombatLeaveSender(f.engine).MultiSync_CombatLeave(context.Background(), f.players[0].ID(), f.players[1].ID(), &pb.CombatLeaveRequest{Sequence: 3}); err != nil {
+		t.Fatal(err)
+	}
+	f.now.Add(500)
+	if _, err := f.cast(0, 1, 4, "strike"); !errors.Is(err, apperrors.ErrCombatConsent) {
+		t.Fatalf("leave consent %v", err)
+	}
+	if f.health(t, 1) != 100 {
+		t.Fatal("leave retained delayed hit")
+	}
+}
+
+func TestCombatAliasDAOIsRegisteredAndRoundTrips(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "strike")
+	var count int
+	var raw []byte
+	var version uint32
+	var readErr error
+	f.read(t, func() {
+		f.players[1].RangeDao(func(d entity.DaoInterface) {
+			if d.CollName() == "combat_state" {
+				count++
+			}
+		})
+		raw, version, readErr = f.players[1].CombatComp().Core().Dao().MarshalPersisted()
+	})
+	if count != 1 || readErr != nil {
+		t.Fatalf("combat DAO registered %d %v", count, readErr)
+	}
+	restored := db.NewCombatDAO()
+	restored.SetId(f.players[1].ID())
+	if err := restored.RestorePersisted(raw, version, 0); err != nil {
+		t.Fatal(err)
+	}
+	again, _, err := restored.MarshalPersisted()
+	if err != nil || !reflect.DeepEqual(raw, again) {
+		t.Fatal("combat persisted round trip")
+	}
+}
+
+func TestCombatProtocolUsesSessionAndReportsBusinessCodes(t *testing.T) {
+	f := newCombatFixture(t)
+	c, err := controller.FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2 {
+		r, err := c.HandleCombatReady(&playeraccess.Context{PlayerID: int64(98201 + i)}, &pb.CombatReadyRequest{Sequence: 1, Ready: true})
+		if err != nil || r == nil || r.Code != 0 {
+			t.Fatalf("ready protocol %+v %v", r, err)
+		}
+	}
+	r, err := c.HandleCombatCast(&playeraccess.Context{PlayerID: 98201}, &pb.CombatCastRequest{Sequence: 2, PeerID: 98202, SkillID: "skill.{{PROJECT}}.combat.strike"})
+	if err != nil || r == nil || r.Code != 0 || r.PeerHealth != 90 {
+		t.Fatalf("cast protocol %+v %v", r, err)
+	}
+	r, err = c.HandleCombatCast(&playeraccess.Context{PlayerID: 98202}, &pb.CombatCastRequest{Sequence: 2, PeerID: 98202, SkillID: "skill.{{PROJECT}}.combat.strike"})
+	code, _ := errcode.ClientError(apperrors.ErrCombatInvalid)
+	if err != nil || r == nil || r.Code != code {
+		t.Fatalf("session protocol %+v %v", r, err)
+	}
+}
+
+func TestCombatConcurrentReplaySharesOneReceipt(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := f.cast(0, 1, 2, "strike")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.health(t, 1) != 90 {
+		t.Fatal("concurrent double damage")
+	}
+}
+
+func TestCombatUnknownSkillDoesNotBindParticipants(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	before := f.snapshot(t)
+	if _, err := f.cast(0, 1, 2, "missing"); !errors.Is(err, apperrors.ErrCombatSkill) {
+		t.Fatalf("unknown skill %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("unknown skill bound pair")
+	}
+}
+
+func TestCombatCorruptedCheckpointFailsClosed(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "strike")
+	f.must(t, func() error { f.players[0].Dao().GetCombatPrivate().SetRuntime([]byte("broken")); return nil })
+	if _, err := f.step(3); !errors.Is(err, apperrors.ErrCombatBoundary) {
+		t.Fatalf("checkpoint %v", err)
+	}
+}
+
+func TestCombatHeartbeatQueueRunsTheTwoEntityTick(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	if err := gameheartbeat.Driver.Bind(f.engine, func(id int64) entity.IThreadSafeEntity { return f.getter[id] }); err != nil {
+		t.Fatal(err)
+	}
+	if err := gameheartbeat.Driver.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := gameheartbeat.Driver.Stop(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.mustCast(t, 0, 1, 2, "bolt")
+	f.now.Add(200)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.health(t, 1) == 90 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("heartbeat damage missing: %d", f.health(t, 1))
+}
+
+func TestCombatLeavingSceneCancelsWindup(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "bolt")
+	f.must(t, func() error { return f.players[1].ActorComp().Body().Leave() })
+	f.now.Add(200)
+	r := f.mustStep(t, 3)
+	if !r.Ended || r.Pending || r.PeerHealth != 100 {
+		t.Fatalf("left scene %+v", r)
+	}
+}
+
+func TestCombatChangingSceneCancelsWindupAndControl(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "stun")
+	f.must(t, func() error {
+		return f.players[1].ActorComp().Body().Enter(actor.Environment{ID: 2, Space: actor.Nowhere{}}, spatial.Point{}, 0)
+	})
+	f.now.Add(50)
+	r := f.mustStep(t, 3)
+	if !r.Ended {
+		t.Fatalf("changed scene %+v", r)
+	}
+	move, cast := f.gates(t, 1)
+	if !move || !cast {
+		t.Fatal("scene end kept control")
+	}
+}
+
+func TestCombatSameTickAttributeInputWaitsForNextTick(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "strike")
+	f.must(t, func() error {
+		f.players[0].Dao().GetAttributeBase().SetValues(map[int32]int64{int32(gameattr.AttrHP): 100, int32(gameattr.AttrAttack): 40})
+		return f.players[0].AttributeComp().Refresh()
+	})
+	before := f.snapshot(t)
+	if _, err := f.cast(0, 1, 3, "bolt"); !errors.Is(err, apperrors.ErrCombatSkill) {
+		t.Fatalf("same tick %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("same tick wrote")
+	}
+	f.now.Add(50)
+	f.mustCast(t, 0, 1, 3, "bolt")
+	f.now.Add(200)
+	if r := f.mustStep(t, 4); r.PeerHealth != 50 {
+		t.Fatalf("next tick attack %+v", r)
+	}
+}
+
+func TestCombatSameTickStepPreservesFrozenWorld(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "bolt")
+	var before, after []byte
+	f.read(t, func() { before = append([]byte(nil), f.players[0].Dao().GetCombatPrivate().GetHostAll()...) })
+	f.must(t, func() error {
+		f.players[0].Dao().GetAttributeBase().SetValues(map[int32]int64{int32(gameattr.AttrHP): 100, int32(gameattr.AttrAttack): 40})
+		return f.players[0].AttributeComp().Refresh()
+	})
+	f.mustStep(t, 3)
+	f.read(t, func() { after = append([]byte(nil), f.players[0].Dao().GetCombatPrivate().GetHostAll()...) })
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("same tick altered world")
+	}
+	f.now.Add(200)
+	if r := f.mustStep(t, 4); r.PeerHealth != 90 {
+		t.Fatalf("cast_start snapshot changed %+v", r)
+	}
+}
+
+// reload 走真实附加DAO加载工厂；只替身化存储读写，不把旧组件复用为“恢复”。
+func (f *combatFixture) reload(t *testing.T) {
+	t.Helper()
+	type saved struct {
+		id              int64
+		primary, combat []byte
+		schema          uint32
+	}
+	values := make([]saved, 2)
+	var saveErr error
+	f.read(t, func() {
+		for i := range 2 {
+			p := f.players[i]
+			v := &values[i]
+			v.id = p.ID()
+			v.primary = p.Dao().Marshal()
+			v.combat, v.schema, saveErr = p.CombatComp().Core().Dao().MarshalPersisted()
+			if saveErr != nil {
+				return
+			}
+		}
+	})
+	if saveErr != nil {
+		t.Fatal(saveErr)
+	}
+	for i, v := range values {
+		old := f.players[i]
+		old.CombatComp().OnDestroy(0)
+		old.ActorComp().OnDestroy(0)
+		primary := db.NewPlayerDao()
+		if err := primary.RestorePersisted(v.primary, db.PlayerDaoSchemaVersion, 0); err != nil {
+			t.Fatal(err)
+		}
+		combat := db.NewCombatDAO()
+		combat.SetId(v.id)
+		if err := combat.RestorePersisted(v.combat, v.schema, 0); err != nil {
+			t.Fatal(err)
+		}
+		value, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: false, Id: v.id, Kind: player.EntityKindPlayer, Dao: map[string]entity.DaoInterface{db.PlayerDaoCollection: primary, db.CombatDAOCollection: combat}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		p := value.(*player.Player)
+		if p.CombatComp().Core().Dao() != combat {
+			t.Fatal("loaded CombatDAO identity changed")
+		}
+		f.players[i] = p
+		f.getter[v.id] = p
+	}
+	f.must(t, func() error {
+		for i := range 2 {
+			if err := f.players[i].ActorComp().Body().Enter(actor.Environment{ID: 1, Space: actor.Nowhere{}}, spatial.Point{X: int64(i * 100)}, 0); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func TestCombatReloadContinuesDelayedSkill(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "bolt")
+	f.reload(t)
+	f.now.Add(200)
+	if r := f.mustStep(t, 3); r.PeerHealth != 90 {
+		t.Fatalf("loaded bolt %+v", r)
+	}
+	f.now.Add(50)
+	if r := f.mustStep(t, 4); r.PeerHealth != 90 {
+		t.Fatal("loaded bolt repeated")
+	}
+}
+
+func TestCombatReloadRejectsExternalHPWrite(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "bolt")
+	f.reload(t)
+	f.must(t, func() error {
+		p := f.players[1].CombatComp().Core()
+		v := p.Combatant()
+		v.Health = 80
+		p.InitCombatant(v)
+		return nil
+	})
+	before := f.snapshot(t)
+	f.now.Add(200)
+	if _, err := f.step(3); !errors.Is(err, apperrors.ErrCombatBoundary) {
+		t.Fatalf("loaded external hp %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("failed loaded boundary changed state")
+	}
+}
+
+func TestCombatReloadProjectsBuffAndRollbackKeepsIt(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "stun")
+	f.reload(t)
+	if move, cast := f.gates(t, 1); move || cast {
+		t.Fatal("loaded buff lost actor state")
+	}
+	f.now.Add(1000)
+	before := f.snapshot(t)
+	f.commit.reject.Store(true)
+	if _, err := f.step(3); err == nil {
+		t.Fatal("expired buff commit accepted")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("expired buff rollback changed state")
+	}
+	if move, cast := f.gates(t, 1); move || cast {
+		t.Fatal("expired buff rollback lost actor state")
+	}
+	f.commit.reject.Store(false)
+	f.mustStep(t, 3)
+	if move, cast := f.gates(t, 1); !move || !cast {
+		t.Fatal("loaded buff failed to expire")
+	}
+}
+
+func TestCombatStopWaitsForActualQueuedTransaction(t *testing.T) {
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "bolt")
+	f.now.Add(200)
+	block := &combatCommitBlock{entered: make(chan struct{}), release: make(chan struct{})}
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(block.release) }) })
+	f.commit.block.Store(block)
+	var epoch uint64
+	f.read(t, func() { epoch = f.players[0].Dao().GetCombatPrivate().GetEpoch() })
+	if !gamecombat.Queue(f.players[0].ID(), f.players[1].ID(), epoch) {
+		t.Fatal("queue refused")
+	}
+	select {
+	case <-block.entered:
+	case <-time.After(time.Second):
+		t.Fatal("queued transaction not entered")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := f.stop(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stop returned before settle: %v", err)
+	}
+	if _, err := gamecombat.Program("skill.{{PROJECT}}.combat.bolt"); err != nil {
+		t.Fatal("timed out stop released runtime")
+	}
+	if gamecombat.Queue(f.players[0].ID(), f.players[1].ID(), epoch) {
+		t.Fatal("stopping service accepted work")
+	}
+	release.Do(func() { close(block.release) })
+	if err := f.stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.health(t, 1) != 90 {
+		t.Fatal("stop lost committed delayed hit")
+	}
+	if _, err := gamecombat.Program("skill.{{PROJECT}}.combat.bolt"); err == nil {
+		t.Fatal("settled stop retained runtime")
+	}
+}

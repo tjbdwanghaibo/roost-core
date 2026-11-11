@@ -1,0 +1,317 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/state"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"{{MODULE}}/game/actor"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	gameheartbeat "{{MODULE}}/game/heartbeat"
+	"{{MODULE}}/protocol/pb"
+)
+
+type actorGetter struct{ value *player.Player }
+
+func (g actorGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if id == g.value.ID() {
+		return g.value, nil
+	}
+	return nil, fmt.Errorf("unknown %d", id)
+}
+func (g actorGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+type actorCommitter struct{ reject atomic.Bool }
+
+func (c *actorCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("actor injected commit rejection")
+	}
+	return nil
+}
+
+type actorFixture struct {
+	t      *testing.T
+	value  *player.Player
+	engine *nest.NestMgr
+	commit *actorCommitter
+}
+
+var actorTestHandler = nest.NewHandlerName("module_actor.test")
+
+func newActorFixture(t *testing.T) *actorFixture {
+	t.Helper()
+	player.RegisterEntity()
+	id, err := entity.BuildEntityID(76001, player.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: player.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &actorFixture{t: t, value: value.(*player.Player), commit: &actorCommitter{}}
+	RegisterActorMoveNestHandlers()
+	RegisterActorStopNestHandlers()
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(actorGetter{f.value}), nest.NestOptionWithTransactionCommitter(f.commit), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	f.engine.MustRegisterHandlerWithMeta(actorTestHandler, func(es []entity.IThreadSafeEntity, p []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, p[0].(func(*player.Player) error)(es[0].(*player.Player))
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+		f.value.ActorComp().OnDestroy(entity.EntityDestroyReason(0))
+	})
+	return f
+}
+func (f *actorFixture) run(fn func(*player.Player) error) error {
+	_, err := f.engine.Request(context.Background(), actorTestHandler, f.value.ID(), nest.NewParams(fn))
+	return err
+}
+func (f *actorFixture) must(fn func(*player.Player) error) {
+	f.t.Helper()
+	if err := f.run(fn); err != nil {
+		f.t.Fatal(err)
+	}
+}
+func (f *actorFixture) place() {
+	f.must(func(p *player.Player) error {
+		return p.ActorComp().Body().Enter(actor.Environment{ID: 1, Space: actor.Nowhere{}}, spatial.Point{X: 10, Y: 20}, 9000)
+	})
+}
+func (f *actorFixture) tick() {
+	f.must(func(p *player.Player) error {
+		return p.ActorComp().Body().Tick(heartbeat.Beat{Now: time.Unix(1900000000, 0), Elapsed: 200 * time.Millisecond})
+	})
+}
+func (f *actorFixture) position() spatial.Point {
+	var out spatial.Point
+	f.must(func(p *player.Player) error { out = p.ActorComp().Body().Position(); return nil })
+	return out
+}
+
+func TestActorWorksWithoutScene(t *testing.T) {
+	f := newActorFixture(t)
+	f.place()
+	if got := f.position(); got != (spatial.Point{X: 10, Y: 20}) {
+		t.Fatal(got)
+	}
+}
+func TestActorMovePBUsesTheAuthenticatedEntityAndServerSpeed(t *testing.T) {
+	f := newActorFixture(t)
+	f.place()
+	wire, err := pb.MarshalActorMoveRequest(&pb.ActorMoveRequest{X: 100, Y: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := pb.UnmarshalActorMoveRequest(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sender.NewActorMoveSender(f.engine).Sync_ActorMove(context.Background(), f.value.ID(), req); err != nil {
+		t.Fatal(err)
+	}
+	f.tick()
+	if got := f.position(); got != (spatial.Point{X: 22, Y: 20}) {
+		t.Fatalf("position %v", got)
+	}
+}
+func TestActorRootPausesAndResumesMovement(t *testing.T) {
+	f := newActorFixture(t)
+	f.place()
+	f.must(func(p *player.Player) error {
+		b := p.ActorComp().Body()
+		if err := b.Walk([]spatial.Point{{X: 100, Y: 20}}, 50); err != nil {
+			return err
+		}
+		return b.States.Add(actor.Rooted, state.Source{Kind: 1, ID: 1})
+	})
+	f.tick()
+	if f.position().X != 10 {
+		t.Fatal("root moved")
+	}
+	f.must(func(p *player.Player) error {
+		return p.ActorComp().Body().States.Remove(actor.Rooted, state.Source{Kind: 1, ID: 1})
+	})
+	f.tick()
+	if f.position().X != 20 {
+		t.Fatal("did not resume")
+	}
+}
+func TestActorStopCancelsMovement(t *testing.T) {
+	f := newActorFixture(t)
+	f.place()
+	f.must(func(p *player.Player) error { return p.ActorComp().Body().Walk([]spatial.Point{{X: 100, Y: 20}}, 50) })
+	if _, err := sender.NewActorStopSender(f.engine).Sync_ActorStop(context.Background(), f.value.ID(), &pb.ActorStopRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	f.tick()
+	if f.position().X != 10 {
+		t.Fatal("stopped actor moved")
+	}
+}
+func TestActorLeaveStoresPositionAndFacing(t *testing.T) {
+	f := newActorFixture(t)
+	f.place()
+	f.must(func(p *player.Player) error { return p.ActorComp().Body().Leave() })
+	f.must(func(p *player.Player) error {
+		id, pos, facing := p.ActorComp().SavedPosition()
+		if id != 1 || pos != (spatial.Point{X: 10, Y: 20}) || facing != 9000 || p.ActorComp().Body().Map.InScene() {
+			t.Fatalf("saved %d %v %d", id, pos, facing)
+		}
+		return nil
+	})
+}
+func TestActorFailedMovementStartRollsBackThePath(t *testing.T) {
+	f := newActorFixture(t)
+	f.place()
+	failed := errors.New("later handler failed")
+	if err := f.run(func(p *player.Player) error {
+		if err := p.ActorComp().Body().Walk([]spatial.Point{{X: 100, Y: 20}}, 50); err != nil {
+			return err
+		}
+		return failed
+	}); !errors.Is(err, failed) {
+		t.Fatal(err)
+	}
+	f.tick()
+	if f.position().X != 10 {
+		t.Fatal("rolled-back path moved")
+	}
+}
+func TestActorFailedLeaveRestoresMembershipAndSavedPosition(t *testing.T) {
+	f := newActorFixture(t)
+	f.place()
+	failed := errors.New("refuse leave")
+	if err := f.run(func(p *player.Player) error {
+		if err := p.ActorComp().Body().Leave(); err != nil {
+			return err
+		}
+		return failed
+	}); !errors.Is(err, failed) {
+		t.Fatal(err)
+	}
+	f.must(func(p *player.Player) error {
+		id, _, _ := p.ActorComp().SavedPosition()
+		if id != 0 || !p.ActorComp().Body().Map.InScene() {
+			t.Fatal("leave was not rolled back")
+		}
+		return nil
+	})
+}
+func TestActorCommitRefusalRestoresSavedAndLivePosition(t *testing.T) {
+	f := newActorFixture(t)
+	f.place()
+	f.commit.reject.Store(true)
+	if err := f.run(func(p *player.Player) error { return p.ActorComp().Body().Leave() }); err == nil {
+		t.Fatal("wanted commit rejection")
+	}
+	f.commit.reject.Store(false)
+	f.must(func(p *player.Player) error {
+		id, _, _ := p.ActorComp().SavedPosition()
+		if id != 0 || !p.ActorComp().Body().Map.InScene() || p.ActorComp().Body().Position().X != 10 {
+			t.Fatal("commit rejection left partial state")
+		}
+		return nil
+	})
+}
+
+type actorWall struct{}
+
+func (actorWall) InBounds(p spatial.Point) bool {
+	return p.X >= 0 && p.Y >= 0 && p.X < 100 && p.Y < 100
+}
+func (actorWall) Blocked(p spatial.Point) bool { return p.X >= 15 }
+func TestActorUsesTheEnteredSpacesTerrain(t *testing.T) {
+	f := newActorFixture(t)
+	f.must(func(p *player.Player) error {
+		return p.ActorComp().Body().Enter(actor.Environment{ID: 2, Space: actor.Nowhere{}, Ground: actorWall{}}, spatial.Point{X: 10, Y: 20}, 0)
+	})
+	f.must(func(p *player.Player) error { return p.ActorComp().Body().Walk([]spatial.Point{{X: 50, Y: 20}}, 50) })
+	f.tick()
+	if got := f.position().X; got != 14 {
+		t.Fatalf("crossed wall: %d", got)
+	}
+}
+func TestActorRepeatedEnterDoesNotTeleport(t *testing.T) {
+	f := newActorFixture(t)
+	f.place()
+	f.must(func(p *player.Player) error {
+		return p.ActorComp().Body().Enter(actor.Environment{ID: 1, Space: actor.Nowhere{}}, spatial.Point{X: 90, Y: 90}, 0)
+	})
+	if got := f.position(); got != (spatial.Point{X: 10, Y: 20}) {
+		t.Fatal(got)
+	}
+}
+func TestActorRejectsOversizedPathAndSelfFollow(t *testing.T) {
+ f := newActorFixture(t)
+ if _,err:=actor.New(f.value,actor.Config{MaxPathPoints:actor.MaxConfiguredPathPoints+1});err==nil{t.Fatal("unbounded configured path budget")}
+ if _,err:=actor.New(f.value,actor.Config{MaxPathPoints:-1});err==nil{t.Fatal("negative configured path budget")}
+	f.place()
+	f.must(func(p *player.Player) error {
+		b := p.ActorComp().Body()
+		if err := b.Walk(make([]spatial.Point, 257), 50); err == nil {
+			t.Fatal("oversized path accepted")
+		}
+		if err := b.Follow(p.ID(), 50, 2); err == nil {
+			t.Fatal("self follow accepted")
+		}
+		if b.Move.Moving() {
+			t.Fatal("invalid command moved")
+		}
+		return nil
+	})
+}
+func TestActorHeartbeatAdvancesThroughNest(t *testing.T) {
+	f := newActorFixture(t)
+	f.place()
+	if err := gameheartbeat.Driver.Bind(f.engine, func(id int64) entity.IThreadSafeEntity {
+		if id == f.value.ID() {
+			return f.value
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gameheartbeat.Driver.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := gameheartbeat.Driver.Stop(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.must(func(p *player.Player) error { return p.ActorComp().Body().Walk([]spatial.Point{{X: 15, Y: 20}}, 100) })
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if f.position().X == 15 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("heartbeat never arrived, at %v", f.position())
+}

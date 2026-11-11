@@ -1,0 +1,17 @@
+name: gacha
+summary: 抽卡：CSV 权重与保底；单抽和十连同事务扣金币、发背包道具，最近64次请求防重放
+requires: [wallet, bag]
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode, config]
+entity: Player
+state:
+  - {field: Gacha, type: GachaState, store: gacha, dao: 'persist,sync', comment: 每个卡池距离上次保底道具的抽数；最多记64池，客户端只读。}
+  - {field: GachaLedger, type: GachaLedger, store: gacha_ledger, dao: persist, comment: 最近64次成功抽卡回执；不占货币去重窗口，不下发。}
+component: Gacha
+protocols: [GachaDraw]
+errcodes: [gacha_key_invalid, gacha_key_conflict, gacha_count_invalid, gacha_pool_invalid, gacha_overflow, gacha_pool_limit]
+verify:
+  packages: [./game/handler, ./game/entities/player]
+  run: ^TestGacha
+  pass: 24

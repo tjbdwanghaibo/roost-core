@@ -425,6 +425,7 @@ feature，并要求目标 Service 有 nest Mod。access.player.transports 是显
 | configdata | 本地配置数据加载 | 无 |
 | etcd | 服务发现与分布式配置 | 无 |
 | redis | Redis 访问 | 无 |
+| directory | Redis 共享目录：两阶段占名与 owner 校验；命名空间前缀和 reservation_ttl 由工程配置 | redis |
 | mongo | MongoDB 访问 | 无 |
 | nats | NATS 消息传输 | 无 |
 | manager | 业务 Manager（内存单例逻辑）的生命周期：按 DependsOn 依赖序启动、逆序停止 | 无 |

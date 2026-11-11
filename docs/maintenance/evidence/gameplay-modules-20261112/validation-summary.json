@@ -1,0 +1,38 @@
+{
+  "exit_code": 0,
+  "modules": 29,
+  "planned_glue": 15,
+  "verified_glue": 14,
+  "projects": [
+    {
+      "project": "foundry",
+      "report_items": 43,
+      "passed": 598,
+      "skipped": 0,
+      "project_checks": 4,
+      "all_packages_test": true,
+      "repeat_install_clean": true
+    },
+    {
+      "project": "citadel",
+      "report_items": 43,
+      "passed": 598,
+      "skipped": 0,
+      "project_checks": 4,
+      "all_packages_test": true,
+      "repeat_install_clean": true
+    }
+  ],
+  "project_check_names": [
+    "go build ./...",
+    "go vet ./...",
+    "roost id check",
+    "roost generate --check"
+  ],
+  "snapshot_path": "/tmp/roost-modules-business-snapshot-approved-20261112/test-modules-generated.sh",
+  "snapshot_sha256": "8b09d5a29095caca7f70f9c187287b93c84bbb0a2640de32f58beb19188a19a8",
+  "source_freeze": "2026-11-12T02:48:15+08:00",
+  "run_directory": "/tmp/roost-modules-business-complete-20261112",
+  "run_log_sha256": "ba68c52c75c4cbba75ef5ec74855206c84eaf6408c5f399b1d6d5ed11efc483a",
+  "external_services": "Not run; offline commit/transport substitutes, with localhost TCP tests."
+}

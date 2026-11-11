@@ -1,0 +1,748 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/state"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+	"{{MODULE}}/game/actor"
+	monstercontroller "{{MODULE}}/game/controllers/monster"
+	scenecontroller "{{MODULE}}/game/controllers/scene"
+	monster "{{MODULE}}/game/entities/monster"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	"{{MODULE}}/game/handler"
+	sender "{{MODULE}}/game/handler/syncsender"
+	gameheartbeat "{{MODULE}}/game/heartbeat"
+	rules "{{MODULE}}/game/monster"
+	"{{MODULE}}/game/playeraccess"
+	gamescene "{{MODULE}}/game/scene"
+	sceneservice "{{MODULE}}/game/scene/service"
+	"{{MODULE}}/protocol/pb"
+)
+
+type monsterCommit struct{}
+
+func (monsterCommit) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+type monsterFixture struct {
+	t        *testing.T
+	access   *entity.ManagerAccess
+	engine   *nest.NestMgr
+	sync     *entitysync.Manager
+	scenes   *sceneservice.Manager
+	manager  *Manager
+	registry *app.Registry
+	now      atomic.Int64
+}
+
+var monsterTestHandler = nest.NewHandlerName("module_monster.test")
+
+func newMonsterFixture(t *testing.T) *monsterFixture {
+	t.Helper()
+	monster.RegisterEntity()
+	sceneentity.RegisterEntity()
+	player.RegisterEntity()
+	f := &monsterFixture{t: t, access: entity.NewManagerAccess(entity.NewEntityManager())}
+	f.now.Store(1800000000000)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	var err error
+	f.sync, err = entitysync.NewManager(entitysync.ManagerConfig{Transport: entitysync.TransportFunc(func(context.Context, entitysync.SessionID, []byte) error { return nil })})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(f.access), nest.NestOptionWithTransactionCommitter(monsterCommit{}), nest.NestOptionWithEntitySync(f.sync), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	for _, register := range []func(*nest.NestMgr) error{handler.RegisterMonsterSpawnNestHandlersOn, handler.RegisterMonsterDamageNestHandlersOn, handler.RegisterMonsterRemoveNestHandlersOn, handler.RegisterMonsterInspectNestHandlersOn, handler.RegisterSceneChangeNestHandlersOn, handler.RegisterSceneCloseNestHandlersOn, handler.RegisterSceneDrainNestHandlersOn} {
+		if err := register(f.engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.engine.MustRegisterHandlerWithMeta(monsterTestHandler, func(es []entity.IThreadSafeEntity, p []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, p[0].(func(entity.IThreadSafeEntity) error)(es[0])
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityAsync})
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	cfg := viper.New()
+	cfg.Set("sid", 1000)
+	f.registry = app.NewRegistry(cfg)
+	for key, value := range map[app.ModName]any{mods.ModNest: f.engine, mods.ModEntityRuntime: f.access, mods.ModEntitySync: f.sync} {
+		if err := f.registry.Register(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stopActor, err := actor.Start(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sceneservice.Start(f.registry); err != nil {
+		t.Fatal(err)
+	}
+	f.scenes, err = sceneservice.FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.manager, err = newManager(f.access, f.engine, f.scenes, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.manager.Stop(context.Background()); err != nil {
+			t.Error(err)
+		}
+		if err := stopActor(context.Background()); err != nil {
+			t.Error(err)
+		}
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+		f.sync.Close(context.Background())
+		f.access.Manager().Range(func(e entity.IThreadSafeEntity) bool { e.OnDestroy(entity.DestroyReasonCommon); return true })
+	})
+	return f
+}
+func (f *monsterFixture) spawn(spec rules.Spec) *monster.Monster {
+	f.t.Helper()
+	id, err := f.manager.Spawn(context.Background(), 1, spec)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return f.access.Manager().Get(id).(*monster.Monster)
+}
+func (f *monsterFixture) run(e entity.IThreadSafeEntity, fn func(entity.IThreadSafeEntity) error) error {
+	_, err := f.engine.Request(context.Background(), monsterTestHandler, e.ID(), nest.NewParams(fn))
+	return err
+}
+func (f *monsterFixture) must(m *monster.Monster, fn func(*monster.Monster) error) {
+	f.t.Helper()
+	if err := f.run(m, func(e entity.IThreadSafeEntity) error { return fn(e.(*monster.Monster)) }); err != nil {
+		f.t.Fatal(err)
+	}
+}
+func (f *monsterFixture) snapshot(m *monster.Monster) monster.Snapshot {
+	var out monster.Snapshot
+	f.must(m, func(m *monster.Monster) error { out = m.MonsterActorComp().Snapshot(); return nil })
+	return out
+}
+func (f *monsterFixture) tick(m *monster.Monster) {
+	f.now.Add(200)
+	f.must(m, func(m *monster.Monster) error {
+		return m.MonsterActorComp().Body().Tick(heartbeat.Beat{Now: time.UnixMilli(f.now.Load()), Elapsed: 200 * time.Millisecond})
+	})
+}
+func (f *monsterFixture) area() *sceneentity.Scene {
+	_, id, err := f.scenes.IDs(0, 1)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return f.access.Manager().Get(id).(*sceneentity.Scene)
+}
+func (f *monsterFixture) player() *player.Player {
+	f.t.Helper()
+	built, err := f.access.Create(&entity.EntityCreateParam{IsCreate: true, UniqueID: 1001, Kind: player.EntityKindPlayer})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	p := built.(*player.Player)
+	if err := f.sync.OpenSession(entitysync.SessionID(p.UniqueID())); err != nil {
+		f.t.Fatal(err)
+	}
+	c, err := scenecontroller.FromRegistry(f.registry)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	out, err := c.HandleSceneChange(&playeraccess.Context{PlayerID: p.UniqueID()}, &pb.SceneChangeRequest{ToID: 1})
+	if err != nil || out.Code != 0 {
+		f.t.Fatalf("enter=%+v %v", out, err)
+	}
+	return p
+}
+func TestMonsterSpawnVisibleAndPBInspect(t *testing.T) {
+	f := newMonsterFixture(t)
+	p := f.player()
+	m := f.spawn(rules.DefaultSpec())
+	s := f.snapshot(m)
+	if s.HP != 100 || s.LifeSeq != 1 || s.X != 80 || s.Y != 80 || s.Template != 1 {
+		t.Fatal(s)
+	}
+	if !slices.Contains(f.area().Space().Interest.Seen(p.UniqueID()), m.ID()) {
+		t.Fatal("monster not visible")
+	}
+	c, err := monstercontroller.FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := pb.MarshalMonsterInspectRequest(&pb.MonsterInspectRequest{MonsterID: m.ID()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := pb.UnmarshalMonsterInspectRequest(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := c.HandleMonsterInspect(&playeraccess.Context{PlayerID: p.UniqueID()}, req)
+	if err != nil || out.Code != 0 || out.LifeSeq != 1 || out.HP != 100 {
+		t.Fatalf("inspect=%+v %v", out, err)
+	}
+}
+func TestMonsterPatrolMovesThroughActor(t *testing.T) {
+	f := newMonsterFixture(t)
+	m := f.spawn(rules.DefaultSpec())
+	f.tick(m)
+	f.tick(m)
+	if s := f.snapshot(m); s.X <= 80 || s.Y <= 80 {
+		t.Fatal(s)
+	}
+}
+func TestMonsterRootedStopsAndResumesPatrol(t *testing.T) {
+	f := newMonsterFixture(t)
+	m := f.spawn(rules.DefaultSpec())
+	f.must(m, func(m *monster.Monster) error {
+		return m.MonsterActorComp().Body().States.Add(actor.Rooted, state.Source{Kind: 1, ID: 1})
+	})
+	f.tick(m)
+	f.tick(m)
+	if f.snapshot(m).X != 80 {
+		t.Fatal("rooted moved")
+	}
+	f.must(m, func(m *monster.Monster) error {
+		return m.MonsterActorComp().Body().States.Remove(actor.Rooted, state.Source{Kind: 1, ID: 1})
+	})
+	f.tick(m)
+	f.tick(m)
+	if f.snapshot(m).X <= 80 {
+		t.Fatal("root never resumed")
+	}
+}
+func TestMonsterChasesPublishedPlayerWithoutRestartingSlowFollow(t *testing.T) {
+	f := newMonsterFixture(t)
+	p := f.player()
+	spec := rules.DefaultSpec()
+	spec.At = spatial.Point{X: 60, Y: 50}
+	spec.Speed = 1
+	m := f.spawn(spec)
+	for i := 0; i < 12; i++ {
+		f.tick(m)
+	}
+	s := f.snapshot(m)
+	if s.X >= 60 || s.X <= 50 {
+		t.Fatal(s)
+	}
+	f.must(m, func(m *monster.Monster) error {
+		if m.Dao().GetBrain().GetTarget() != p.ID() {
+			t.Fatal("target not remembered")
+		}
+		return nil
+	})
+}
+func TestMonsterOutsideSenseRadiusKeepsPatrolling(t *testing.T) {
+	f := newMonsterFixture(t)
+	f.player()
+	spec := rules.DefaultSpec()
+	spec.SenseRadius = 1
+	m := f.spawn(spec)
+	f.tick(m)
+	f.tick(m)
+	if f.snapshot(m).X <= 80 {
+		t.Fatal("outside player changed patrol")
+	}
+}
+func TestMonsterFailedDecisionRollsBackCursorAndMovement(t *testing.T) {
+	f := newMonsterFixture(t)
+	m := f.spawn(rules.DefaultSpec())
+	failure := errors.New("later transaction failed")
+	err := f.run(m, func(e entity.IThreadSafeEntity) error {
+		m := e.(*monster.Monster)
+		if err := m.MonsterActorComp().Body().Tick(heartbeat.Beat{Now: time.UnixMilli(f.now.Load()), Elapsed: 200 * time.Millisecond}); err != nil {
+			return err
+		}
+		return failure
+	})
+	if !errors.Is(err, failure) {
+		t.Fatal(err)
+	}
+	f.must(m, func(m *monster.Monster) error {
+		if m.Dao().GetBrain().GetCorner() != 0 || m.MonsterActorComp().Body().Move.Moving() {
+			t.Fatal("AI survived rollback")
+		}
+		return nil
+	})
+	f.tick(m)
+	f.tick(m)
+	if f.snapshot(m).X <= 80 {
+		t.Fatal("retry could not act")
+	}
+}
+func TestMonsterDeathHidesButRetainsSpawnSlotUntilRespawn(t *testing.T) {
+	f := newMonsterFixture(t)
+	p := f.player()
+	m := f.spawn(rules.DefaultSpec())
+	if _, err := f.manager.Damage(context.Background(), m.ID(), 1, 100); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.snapshot(m); s.HP != 0 || s.SceneID != 0 {
+		t.Fatal(s)
+	}
+	if slices.Contains(f.area().Space().Interest.Seen(p.UniqueID()), m.ID()) {
+		t.Fatal("dead monster visible")
+	}
+	if err := f.scenes.Close(context.Background(), 1); err == nil {
+		t.Fatal("scene closed with spawn slot")
+	}
+	if _, err := sender.NewMonsterSpawnSender(f.engine).MultiSync_MonsterSpawn(context.Background(), m.ID(), f.area().ID(), m.Target(f.area())); err == nil {
+		t.Fatal("respawn before deadline")
+	}
+	f.now.Add(5000)
+	if _, err := sender.NewMonsterSpawnSender(f.engine).MultiSync_MonsterSpawn(context.Background(), m.ID(), f.area().ID(), m.Target(f.area())); err != nil {
+		t.Fatal(err)
+	}
+	if s := f.snapshot(m); s.LifeSeq != 2 || s.HP != 100 || s.X != 80 || s.Y != 80 {
+		t.Fatal(s)
+	}
+}
+func TestMonsterOldLifeDamageAndCommandsAreRejected(t *testing.T) {
+	f := newMonsterFixture(t)
+	m := f.spawn(rules.DefaultSpec())
+	if _, err := f.manager.Damage(context.Background(), m.ID(), 1, 100); err != nil {
+		t.Fatal(err)
+	}
+	f.now.Add(5000)
+	if _, err := sender.NewMonsterSpawnSender(f.engine).MultiSync_MonsterSpawn(context.Background(), m.ID(), f.area().ID(), m.Target(f.area())); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.manager.Damage(context.Background(), m.ID(), 1, 30); err == nil {
+		t.Fatal("old life damaged new life")
+	}
+	if err := f.run(m, func(e entity.IThreadSafeEntity) error { return e.(*monster.Monster).MonsterActorComp().Decide(1) }); err == nil {
+		t.Fatal("old AI command accepted")
+	}
+	if f.snapshot(m).HP != 100 {
+		t.Fatal("old damage changed HP")
+	}
+}
+func TestMonsterDestroyRemovesEntityAndReleasesSceneSlot(t *testing.T) {
+	f := newMonsterFixture(t)
+	m := f.spawn(rules.DefaultSpec())
+	if err := f.manager.Destroy(context.Background(), m.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if f.access.Manager().Get(m.ID()) != nil || len(f.manager.IDs()) != 0 {
+		t.Fatal("entity survived destroy")
+	}
+	if err := f.scenes.Close(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestMonsterInvalidRulesAndShardAreRefusedBeforeCreating(t *testing.T) {
+	f := newMonsterFixture(t)
+	spec := rules.DefaultSpec()
+	spec.Speed = 0
+	if _, err := f.manager.Spawn(context.Background(), 1, spec); err == nil {
+		t.Fatal("invalid rules accepted")
+	}
+	if len(f.manager.IDs()) != 0 {
+		t.Fatal("invalid rules created entity")
+	}
+	if _, err := newManager(f.access, f.engine, f.scenes, 0); err == nil {
+		t.Fatal("invalid sid accepted")
+	}
+}
+func TestMonsterStopDrainsAndRefusesNewPopulation(t *testing.T) {
+	f := newMonsterFixture(t)
+	m := f.spawn(rules.DefaultSpec())
+	if err := f.manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.manager.Spawn(context.Background(), 1, rules.DefaultSpec()); err == nil {
+		t.Fatal("spawn after stop")
+	}
+	if f.access.Manager().Get(m.ID()) != nil {
+		t.Fatal("stop leaked monster")
+	}
+}
+func TestMonsterRealHeartbeatPatrolAndRespawn(t *testing.T) {
+	f := newMonsterFixture(t)
+	clock.SetSource(nil)
+	spec := rules.DefaultSpec()
+	spec.RespawnDelay = time.Second
+	m := f.spawn(spec)
+	if err := gameheartbeat.Driver.Bind(f.engine, f.access.Manager().Get); err != nil {
+		t.Fatal(err)
+	}
+	if err := gameheartbeat.Driver.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := gameheartbeat.Driver.Stop(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	deadline := time.Now().Add(4 * time.Second)
+	moved := false
+	for time.Now().Before(deadline) {
+		if f.snapshot(m).X > 80 {
+			moved = true
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !moved {
+		t.Fatal("real heartbeat did not patrol")
+	}
+	if _, err := f.manager.Damage(context.Background(), m.ID(), 1, 100); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		if s := f.snapshot(m); s.LifeSeq == 2 && s.HP == 100 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("real heartbeat did not respawn")
+}
+func TestMonsterFailedSpawnDoesNotLeakEntityOrMembership(t *testing.T) {
+	f := newMonsterFixture(t)
+	config := gamescene.DefaultConfig()
+	config.Capacity = 1
+	if _, err := f.scenes.Open(2, config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.manager.Spawn(context.Background(), 2, rules.DefaultSpec()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.manager.Spawn(context.Background(), 2, rules.DefaultSpec()); err == nil {
+		t.Fatal("full scene accepted spawn")
+	}
+	if len(f.manager.IDs()) != 1 {
+		t.Fatal("failed spawn leaked lifecycle record")
+	}
+}
+
+func TestMonsterDefaultRuntimeStartSpawnsAndRegistersIngress(t *testing.T) {
+	f := newMonsterFixture(t)
+	if err := f.manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stop, err := Start(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stop == nil {
+		t.Fatal("missing stop")
+	}
+	f.manager, err = FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.manager.IDs()) != 1 {
+		t.Fatal("default population missing")
+	}
+	if err := app.CloseRegisteredIngress(context.Background(), f.registry); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.manager.Spawn(context.Background(), 1, rules.DefaultSpec()); err == nil {
+		t.Fatal("ingress close still admits spawns")
+	}
+}
+func TestMonsterFailedDeathRestoresVisibilityAndMovement(t *testing.T) {
+	f := newMonsterFixture(t)
+	p := f.player()
+	m := f.spawn(rules.DefaultSpec())
+	failure := errors.New("later death transaction failed")
+	if err := f.run(m, func(e entity.IThreadSafeEntity) error {
+		if _, err := e.(*monster.Monster).MonsterActorComp().Damage(1, 100, f.now.Load()); err != nil {
+			return err
+		}
+		return failure
+	}); !errors.Is(err, failure) {
+		t.Fatal(err)
+	}
+	s := f.snapshot(m)
+	if s.HP != 100 || s.LifeSeq != 1 || s.SceneID == 0 {
+		t.Fatal(s)
+	}
+	if !slices.Contains(f.area().Space().Interest.Seen(p.UniqueID()), m.ID()) {
+		t.Fatal("rolled-back death hid monster")
+	}
+	f.tick(m)
+	f.tick(m)
+	if f.snapshot(m).X <= 80 {
+		t.Fatal("rolled-back death stopped movement")
+	}
+}
+
+var monsterRemoveReplyLost = errors.New("injected lost remove reply")
+
+type monsterLostRemoveClient struct {
+	nest.Client
+	lost bool
+}
+
+func (c *monsterLostRemoveClient) RequestMulti(ctx context.Context, name nest.HandlerName, ids []int64, args nest.Params, opts ...nest.SendOpt) (any, error) {
+	result, err := c.Client.RequestMulti(ctx, name, ids, args, opts...)
+	if err == nil && name == nest.NewHandlerName("handlerMonsterRemove") && !c.lost {
+		c.lost = true
+		return nil, monsterRemoveReplyLost
+	}
+	return result, err
+}
+func TestMonsterDrainRetriesWhenRemoveCommittedButReplyWasLost(t *testing.T) {
+	f := newMonsterFixture(t)
+	if err := f.manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Start(f.registry); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := FromRegistry(f.registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.manager = manager
+	area := f.area()
+	ids := manager.IDs()
+	if len(ids) != 1 {
+		t.Fatal(ids)
+	}
+	id := ids[0]
+	manager.operations.Lock()
+	manager.client = &monsterLostRemoveClient{Client: f.engine}
+	manager.operations.Unlock()
+	if err := f.scenes.Drain(context.Background(), 1); !errors.Is(err, monsterRemoveReplyLost) {
+		t.Fatal("remove reply fault was not reached", err)
+	}
+	if err := f.run(area, func(entity.IThreadSafeEntity) error {
+		if area.Dao().MembersLen() != 0 {
+			return errors.New("remove did not commit before lost reply")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if f.access.Manager().Get(id) == nil || len(manager.IDs()) != 1 {
+		t.Fatal("unknown result destroyed or forgot the monster")
+	}
+	if err := f.scenes.Drain(context.Background(), 1); err != nil {
+		t.Fatal("retry failed", err)
+	}
+	if f.access.Manager().Get(id) != nil || len(manager.IDs()) != 0 {
+		t.Fatal("drain retry leaked retired lifecycle record")
+	}
+	if f.access.Manager().Get(area.ID()) != nil {
+		t.Fatal("drain retry retained empty scene")
+	}
+}
+func TestMonsterDestroyRejectsAReplacementEntityInstance(t *testing.T) {
+	f := newMonsterFixture(t)
+	old := f.spawn(rules.DefaultSpec())
+	id, unique := old.ID(), old.UniqueID()
+	if err := f.manager.lives.Destroy(context.Background(), old, entity.DestroyReasonCommon, false); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := f.manager.lives.CreateMonster(context.Background(), unique, monster.CreateParams{Spec: rules.DefaultSpec()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 只在夹具中清理失效记录；正式管理器拒绝接管另一实例，不能删掉新生命周期。
+	defer func() {
+		f.manager.operations.Lock()
+		delete(f.manager.records, id)
+		f.manager.operations.Unlock()
+	}()
+	sent := false
+	f.manager.client = &monsterInterleavingClient{Client: f.engine, name: nest.NewHandlerName("handlerMonsterRemove"), before: func([]int64) error { sent = true; return nil }}
+	if err := f.manager.Destroy(context.Background(), id); err == nil {
+		t.Fatal("replacement lifecycle was accepted")
+	}
+	if sent {
+		t.Fatal("known replacement reached Nest instead of early refusal")
+	}
+	if f.access.Manager().Get(id) != replacement {
+		t.Fatal("replacement entity was destroyed")
+	}
+	f.must(replacement, func(m *monster.Monster) error {
+		if m.Dao().GetBrain().GetRetired() {
+			return errors.New("replacement lifecycle was retired")
+		}
+		return nil
+	})
+}
+
+// monsterInterleavingClient 只安排确定交错，转发仍走真实 Nest；不替换业务 handler 或生命周期。
+type monsterInterleavingClient struct {
+	nest.Client
+	name      nest.HandlerName
+	before    func([]int64) error
+	completed chan error
+}
+
+func (c *monsterInterleavingClient) RequestMulti(ctx context.Context, name nest.HandlerName, ids []int64, args nest.Params, opts ...nest.SendOpt) (any, error) {
+	matched := name == c.name && c.before != nil
+	if matched {
+		before := c.before
+		c.before = nil
+		if err := before(ids); err != nil {
+			return nil, err
+		}
+	}
+	result, err := c.Client.RequestMulti(ctx, name, ids, args, opts...)
+	if matched && c.completed != nil {
+		c.completed <- err
+	}
+	return result, err
+}
+
+// checkMonsterReplacement 固定在服务已选定记录、正式 Sender 尚未投递之间替换一个实例。
+// 每个调用者是独立场景，覆盖初生/异步重刷/伤害/退出分别遇到 Monster 或 Scene 同ID重建。
+func checkMonsterReplacement(t *testing.T, operation string, replaceScene bool) {
+	t.Helper()
+	f := newMonsterFixture(t)
+	ctx := context.Background()
+	area := f.area()
+	var original *monster.Monster
+	var id int64
+	if operation != "Spawn" {
+		original = f.spawn(rules.DefaultSpec())
+		id = original.ID()
+		if operation == "Respawn" {
+			if _, err := f.manager.Damage(ctx, id, 1, 100); err != nil {
+				t.Fatal(err)
+			}
+			f.now.Add(6000)
+		}
+	}
+	var checked *monster.Monster
+	var checkedArea *sceneentity.Scene
+	var before monster.Snapshot
+	var memberBefore bool
+	name := "handlerMonster" + operation
+	if operation == "Respawn" {
+		name = "handlerMonsterSpawn"
+	}
+	if operation == "Destroy" {
+		name = "handlerMonsterRemove"
+	}
+	done := make(chan error, 1)
+	hook := &monsterInterleavingClient{Client: f.engine, name: nest.NewHandlerName(name), completed: done}
+	hook.before = func(ids []int64) error {
+		id = ids[0]
+		original = f.access.Manager().Get(id).(*monster.Monster)
+		checked, checkedArea = original, area
+		if replaceScene {
+			unique, config := area.UniqueID(), area.Config()
+			if err := f.access.Destroy(ctx, area, entity.DestroyReasonCommon, false); err != nil {
+				return err
+			}
+			made, err := f.access.Create(&entity.EntityCreateParam{IsCreate: true, UniqueID: unique, Kind: sceneentity.EntityKindScene, Param: sceneentity.CreateParams{Config: config, Manager: f.sync, PlayerKind: player.EntityKindPlayer, Loaded: f.access.Manager().Get}})
+			if err != nil {
+				return err
+			}
+			checkedArea = made.(*sceneentity.Scene)
+			if err := f.run(checkedArea, func(entity.IThreadSafeEntity) error { return checkedArea.Admit(id) }); err != nil {
+				return err
+			}
+		} else {
+			unique := original.UniqueID()
+			if err := sender.NewMonsterRemoveSender(f.engine).MultiSync_MonsterRemove(ctx, id, area.ID(), original.Target(area)); err != nil {
+				return err
+			}
+			if err := f.manager.lives.Destroy(ctx, original, entity.DestroyReasonCommon, false); err != nil {
+				return err
+			}
+			made, err := f.manager.lives.CreateMonster(ctx, unique, monster.CreateParams{Spec: rules.DefaultSpec()})
+			if err != nil {
+				return err
+			}
+			checked = made
+			if _, err := sender.NewMonsterSpawnSender(f.engine).MultiSync_MonsterSpawn(ctx, id, area.ID(), checked.Target(area)); err != nil {
+				return err
+			}
+		}
+		before = f.snapshot(checked)
+		return f.run(checkedArea, func(entity.IThreadSafeEntity) error { _, memberBefore = checkedArea.Dao().GetMembers(id); return nil })
+	}
+	f.manager.operations.Lock()
+	f.manager.client = hook
+	f.manager.operations.Unlock()
+	// 外部重建的实例不属于原管理器；夹具只撤销旧记录，不让清理接管新实例。
+	defer func() { f.manager.operations.Lock(); delete(f.manager.records, id); f.manager.operations.Unlock() }()
+	var err error
+	switch operation {
+	case "Spawn":
+		_, err = f.manager.Spawn(ctx, 1, rules.DefaultSpec())
+	case "Damage":
+		_, err = f.manager.Damage(ctx, id, 1, 10)
+	case "Destroy":
+		err = f.manager.Destroy(ctx, id)
+	case "Respawn":
+		f.manager.offer(id)
+		select {
+		case err = <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("respawn queue did not dispatch")
+		}
+	default:
+		t.Fatal("unknown operation", operation)
+	}
+	if checked == nil {
+		t.Fatal("replacement interleaving was not reached", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "lifecycle instance changed") {
+		t.Fatalf("stale %s was not rejected: %v", operation, err)
+	}
+	f.must(checked, func(m *monster.Monster) error {
+		if m.MonsterActorComp().Snapshot() != before || m.Dao().GetBrain().GetRetired() {
+			return errors.New("replacement transaction changed monster")
+		}
+		return nil
+	})
+	if err := f.run(checkedArea, func(entity.IThreadSafeEntity) error {
+		_, memberAfter := checkedArea.Dao().GetMembers(id)
+		if memberAfter != memberBefore {
+			return errors.New("replacement transaction changed scene membership")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestMonsterSpawnRejectsReplacementMonsterInFlight(t *testing.T) {
+	checkMonsterReplacement(t, "Spawn", false)
+}
+func TestMonsterSpawnRejectsReplacementSceneInFlight(t *testing.T) {
+	checkMonsterReplacement(t, "Spawn", true)
+}
+func TestMonsterRespawnRejectsReplacementMonsterInFlight(t *testing.T) {
+	checkMonsterReplacement(t, "Respawn", false)
+}
+func TestMonsterRespawnRejectsReplacementSceneInFlight(t *testing.T) {
+	checkMonsterReplacement(t, "Respawn", true)
+}
+func TestMonsterDamageRejectsReplacementMonsterInFlight(t *testing.T) {
+	checkMonsterReplacement(t, "Damage", false)
+}
+func TestMonsterDamageRejectsReplacementSceneInFlight(t *testing.T) {
+	checkMonsterReplacement(t, "Damage", true)
+}
+func TestMonsterDestroyRejectsReplacementMonsterInFlight(t *testing.T) {
+	checkMonsterReplacement(t, "Destroy", false)
+}
+func TestMonsterDestroyRejectsReplacementSceneInFlight(t *testing.T) {
+	checkMonsterReplacement(t, "Destroy", true)
+}

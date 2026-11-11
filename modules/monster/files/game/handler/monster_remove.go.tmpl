@@ -1,0 +1,23 @@
+package handler
+
+import (
+	"fmt"
+	monster "{{MODULE}}/game/entities/monster"
+	scene "{{MODULE}}/game/entities/scene"
+)
+
+//roost:nest rollback=undo durability=async
+func handlerMonsterRemove(target monster.IMonsterEntity, area scene.ISceneEntity, expected monster.Target) error {
+	if err := expected.Check(target, area); err != nil {
+		return err
+	}
+	c := target.MonsterActorComp()
+	if c.Body().Map.InScene() && c.Body().Map.SceneID() != area.ID() {
+		return fmt.Errorf("monster: different scene")
+	}
+	if err := c.Retire(); err != nil {
+		return err
+	}
+	area.Scene().Depart(target.ID())
+	return nil
+}

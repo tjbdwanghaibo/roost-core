@@ -1,0 +1,17 @@
+# 双人战斗模块
+
+`roost module add combat` 安装 actor、attribute、skillbook，启用正式 CombatDAO 和4条工程自有技能JSON。模块提供固定双人PVP会话，不是开放世界混战：双方先以各自认证会话调用 CombatReady 同意，再由 CombatCast 指定对手和启动目录技能ID；已绑定期间拒绝第三人。CombatStep显式推进，CombatLeave投降结束。每名玩家Sequence从1递增，只有最近一次同参数重试返回原回执，旧序列和冲突拒绝。
+
+默认技能ID为 `skill.<工程名>.combat.strike|bolt|stun|silence`。strike按施法开始Attack快照伤害；bolt延迟4tick结算；stun和silence持续20tick。1tick=50ms，使用服务端墙钟时间域，不跟随scene倍速；技能均20tick冷却。编译发生在skillbook服务启动，只读Program查询、Runtime及冷却/排程全部使用正式skill机制；伤害/Buff使用CombatComponent、HostAdapter、StatusBridge、DriveBuffs，Buff通过BindStates派生actor门控。
+
+双方须同一有效scene且施法准入距离不超过5000。延迟技能锁定目标，同一地图里移远仍追踪命中；双方不再处于同一有效scene时，下一拍中止整场、清同意和控制、丢弃延迟任务。世界输入每50ms拍冻结；同一拍发生移动/换装时，新施法拒绝等待下一拍，Step同拍不换输入。已冻结的cast_start属性不被之后换装改写。
+
+HP、护盾与Buff唯一权威在附加CombatDAO，它通过类型别名、正式实体声明、DaoBuilders和Aggregate加载/提交。PlayerDao.Combat是公开投影与同意绑定，CombatPrivate持有单调请求回执；canonical（ID较小）玩家保存整场Host与Runtime。Host持久边界包括revision、tick、事件游标/未消费事件、上一拍输入和双方CombatDAO规范JSON哈希。恢复先核权威字节，再恢复Runtime，下一Advance才纳入新移动/属性输入。直接绕过会话改HP/Buff会导致下一拍拒绝，不能拿常数revision伪造恢复。
+
+每次操作只在本次Nest锁内解析两个参与者，不从Manager偷取第三实体。Runtime是事务局部实例；checkpoint、Host、双CombatDAO、玩家投影一起提交或撤销，提交拒绝不会消耗冷却、漏掉延迟伤害或留下控制。退出不补血、不复活；会话冷却随结束丢弃，下场需双方重新同意。可信恢复/治疗应在明确的会话边界内设计，不绕过Host写战斗权威。
+
+自动推进用停止态共享heartbeat登记，提交后向有界128队列投ID/代际，每owner至多一项。单个服务worker通过RequestMultiSettled等待真实双实体事务完成；队满或失败下一拍重试，快池不阻塞等待、不创建每请求goroutine。停止先拒绝新入队、排空已入队和实际执行，再释放服务；超时保留资源供再次等待。明确的CombatStep也走同一Runtime/Host。
+
+当前Host支持已声明参与者的属性读取和战斗/状态命令。范围选择、召唤、投射物世界、持久技能变量等需完整世界适配，明确拒绝，不伪造命中。monster尚未接入这套固定双人恢复边界。跨服、真实存储恢复、TCP及长稳未验；模块场景使用真实生成PB/controller/Nest与替身提交器，不能称生产验收。
+
+独立生成验收固定36个基础场景；安装scene增加2个公开同步场景，安装equipment增加2个真实换装与战斗世界边界场景。附加DAO加载恢复、提交拒绝回滚与Stop实际排空都有独立断言，不以子测试或跳过补计数。

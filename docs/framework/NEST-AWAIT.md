@@ -23,6 +23,8 @@ nest:
 
 `NestOptionWithWorkerPools(short, long, io)` 可在直接构造引擎时配置三池。旧二参数调用改为 `NestOptionWithWorkerPools(short, WorkerPoolConfig{}, io)`，中间空配置沿用长业务池默认值。
 
+服务级执行器如果必须等到多实体请求真正结束后才能释放资源，可使用 `(*NestMgr).RequestMultiSettled`。它与 `RequestMulti` 复用准入、排序、Guard 和提交路径，但准入成功后不因调用 context 取消或 SyncWait 到期提前返回；返回值是该次执行的真实结果。调用 context 仍传给 handler。只能从 Nest 外调用，不能在持实体锁的 handler 中等待；停机等待超时时必须保留 worker 和依赖，供后续继续排空。普通网络请求继续用有等待期限的 `RequestMulti`。
+
 ## 初始化注册 Kind
 
 ```go

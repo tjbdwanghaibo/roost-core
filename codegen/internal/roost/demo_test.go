@@ -127,7 +127,7 @@ func TestDemoStepsLeaveModuleComponentsToTheModules(t *testing.T) {
 	if installed < 0 {
 		t.Fatal("no step installs the modules")
 	}
-	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome"; got != want {
+	if got, want := strings.Join(modules, " "), "enter chat leaderboard bag profile mailbox skillbook rehome attribute equipment"; got != want {
 		t.Errorf("the modules are installed as %q, want %q: the order decides every allocated id, so a newly adopted module goes at the end", got, want)
 	}
 	catalog, err := loadModuleCatalog()
@@ -334,13 +334,13 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// demo 建在背包组件上的写入都换用模块的入口；充值订单的领取账本是 demo 自己的文件，仍是 BagComponent 上的方法
 	// （邮件的领取账本是 mailbox 模块的，见下面 mailbox 那一段）。
 	for rel, call := range map[string]string{
-		"game/handler/add_item.go":       "target.BagComp().Add(itemID, int64(count))",
-		"game/handler/gift_debit.go":     "target.BagComp().Remove(itemID, int64(count))",
-		"game/handler/gift_refund.go":    "target.BagComp().Add(itemID, int64(count))",
-		"game/handler/guild_debit.go":    "target.BagComp().Remove(itemID, int64(count))",
-		"game/handler/guild_credit.go":   "target.BagComp().Add(itemID, int64(count))",
-		"game/handler/equip_item.go":     "target.BagComp().Remove(itemID, 1)",
-		"game/handler/grant_purchase.go": "bag.Add(itemID, int64(count))",
+		"game/handler/add_item.go":                    "target.BagComp().Add(itemID, int64(count))",
+		"game/handler/gift_debit.go":                  "target.BagComp().Remove(itemID, int64(count))",
+		"game/handler/gift_refund.go":                 "target.BagComp().Add(itemID, int64(count))",
+		"game/handler/guild_debit.go":                 "target.BagComp().Remove(itemID, int64(count))",
+		"game/handler/guild_credit.go":                "target.BagComp().Add(itemID, int64(count))",
+		"game/entities/player/equipment_component.go": "c.owner.BagComp().Remove(itemID, 1)",
+		"game/handler/grant_purchase.go":              "bag.Add(itemID, int64(count))",
 	} {
 		if body := read(rel); !strings.Contains(body, call) {
 			t.Errorf("%s does not go through the bag module's component (%s):\n%s", rel, call, body)
@@ -548,11 +548,11 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// pointers to another struct. Two P1 defects lived in exactly that path
 	// and no generated project could see them, because nothing in the demo
 	// had one (U-0236, U-0238, U-0245).
-	if def := read("db/def/player.go"); !strings.Contains(def, "Equipment Equipment") || !strings.Contains(def, "Slots map[int32]*GearPiece") {
+	if def := read("db/def/player.go"); !strings.Contains(def, "Equipment EquipmentState") || !strings.Contains(read("db/def/equipment.go"), "Slots map[int32]*GearPiece") {
 		t.Errorf("the Player DAO has no nested struct field, so the demo never exercises two-level dirty propagation")
 	}
 	// 持久 schema 继续声明，用于加载前的严格版本校验。
-	if def := read("db/def/player.go"); !strings.Contains(def, "schema=2") {
+	if def := read("db/def/player.go"); !strings.Contains(def, "schema=3") {
 		t.Errorf("the Player DAO does not declare a schema version, so stored data cannot be checked")
 	}
 	// Entity sync: the Player is a replicated subject, the scene is the room
@@ -704,7 +704,7 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// The event chain: the profile module's level-up hook (the demo's own
 	// version of the project-owned file) emits on the transaction, the service
 	// consumes with an inbox and sends mail keyed by the effect id.
-	if hook := read("game/entities/player/profile_levelup.go"); !strings.Contains(hook, "effects.EmitPlayerLevelUp(") || !strings.Contains(hook, "AttributeComp().LevelUp(") {
+	if hook := read("game/entities/player/profile_levelup.go"); !strings.Contains(hook, "effects.EmitPlayerLevelUp(") || strings.Contains(hook, "AttributeComp().LevelUp(") || !strings.Contains(read("game/entities/player/attribute_component.go"), "OnProfileLevelUp(") {
 		t.Errorf("the level-up hook does not raise the attributes and emit the level-up effect:\n%s", hook)
 	}
 	if service := read("internal/service/game/service.go"); !strings.Contains(service, "startLevelUpMailer(") {

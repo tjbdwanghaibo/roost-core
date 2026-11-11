@@ -1,0 +1,13 @@
+package dbdef
+
+// TerrainBuildingDao 代表固定锚点的建筑槽；拆除留下槽与版本，不能把旧请求当新操作。
+//
+//roost:dao coll=terrain_building db=main
+type TerrainBuildingDao struct {
+	SceneID  int64 `dao:"persist,sync" store:"1"`
+	GX       int32 `dao:"persist,sync" store:"2"`
+	GY       int32 `dao:"persist,sync" store:"3"`
+	OwnerID  int64 `dao:"persist,sync" store:"4"`
+	Standing bool  `dao:"persist,sync" store:"5"`
+	Version  int64 `dao:"persist,sync" store:"6"`
+}

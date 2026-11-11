@@ -1,0 +1,82 @@
+//go:build protocoldef
+
+package protocoldef
+
+// 编辑只带操作、坐标与序号，owner与实体ID由可信服务端从认证玩家和已开地图推导。
+type TerrainBrushRequest struct {
+	SceneID  int64  `pb:"1"`
+	Sequence int64  `pb:"2"`
+	Op       string `pb:"3"`
+	X        int64  `pb:"4"`
+	Y        int64  `pb:"5"`
+	Radius   int64  `pb:"6"`
+	Strength int32  `pb:"7"`
+	Material int32  `pb:"8"`
+}
+type TerrainEditResult struct {
+	ProjectionPending bool  `pb:"6"`
+	Sequence          int64 `pb:"1"`
+	Duplicate         bool  `pb:"2"`
+	Changed           int32 `pb:"3"`
+	BuildingID        int64 `pb:"4"`
+	Standing          bool  `pb:"5"`
+}
+type TerrainBrushResponse struct {
+	Code   int32              `pb:"1"`
+	Reason string             `pb:"2"`
+	Result *TerrainEditResult `pb:"3"`
+}
+type TerrainBuildRequest struct {
+	SceneID  int64 `pb:"1"`
+	Sequence int64 `pb:"2"`
+	X        int64 `pb:"3"`
+	Y        int64 `pb:"4"`
+}
+type TerrainBuildResponse struct {
+	Code   int32              `pb:"1"`
+	Reason string             `pb:"2"`
+	Result *TerrainEditResult `pb:"3"`
+}
+type TerrainRemoveRequest struct {
+	SceneID  int64 `pb:"1"`
+	Sequence int64 `pb:"2"`
+	X        int64 `pb:"3"`
+	Y        int64 `pb:"4"`
+}
+type TerrainRemoveResponse struct {
+	Code   int32              `pb:"1"`
+	Reason string             `pb:"2"`
+	Result *TerrainEditResult `pb:"3"`
+}
+type TerrainQueryRequest struct {
+	SceneID int64 `pb:"1"`
+	X       int32 `pb:"2"`
+	Y       int32 `pb:"3"`
+}
+type TerrainChunkInfo struct {
+	SceneID      int64    `pb:"1"`
+	X            int32    `pb:"2"`
+	Y            int32    `pb:"3"`
+	BaseRevision int64    `pb:"4"`
+	Version      int64    `pb:"5"`
+	Heights      []uint32 `pb:"6"`
+	Materials    []byte   `pb:"7"`
+}
+type TerrainQueryResponse struct {
+	LastSequence int64             `pb:"4"`
+	Code         int32             `pb:"1"`
+	Reason       string            `pb:"2"`
+	Chunk        *TerrainChunkInfo `pb:"3"`
+}
+
+//roost:protocol group=game handler=terrain
+type TerrainProtocol interface {
+	//roost:msg id={{ID:protocol:TerrainBrush}}
+	TerrainBrush(TerrainBrushRequest) TerrainBrushResponse
+	//roost:msg id={{ID:protocol:TerrainBuild}}
+	TerrainBuild(TerrainBuildRequest) TerrainBuildResponse
+	//roost:msg id={{ID:protocol:TerrainRemove}}
+	TerrainRemove(TerrainRemoveRequest) TerrainRemoveResponse
+	//roost:msg id={{ID:protocol:TerrainQuery}}
+	TerrainQuery(TerrainQueryRequest) TerrainQueryResponse
+}

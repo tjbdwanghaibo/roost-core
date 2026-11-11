@@ -1,0 +1,10 @@
+=== RUN   TestMonsterDrainRetriesWhenRemoveCommittedButReplyWasLost
+    monster_test.go:544: drain retry leaked retired lifecycle record
+    monster_test.go:105: entity index 1: nest: invalid message: entity id 0: entity id: invalid: empty id
+--- FAIL: TestMonsterDrainRetriesWhenRemoveCommittedButReplyWasLost (0.00s)
+=== RUN   TestMonsterDestroyRejectsAReplacementEntityInstance
+    monster_test.go:573: replacement lifecycle was retired
+--- FAIL: TestMonsterDestroyRejectsAReplacementEntityInstance (0.00s)
+FAIL
+FAIL	example.com/custom/drainrecover/game/monster/service	0.585s
+FAIL

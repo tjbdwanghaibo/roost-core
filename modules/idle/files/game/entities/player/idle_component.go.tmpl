@@ -1,0 +1,111 @@
+package player
+
+import (
+	"fmt"
+	"math"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:Idle}}
+const CompTypeIdle entity.ComponentType = {{ID:component:Idle}}
+
+// IdleComponent 只持有所属玩家；业务状态和回执全在 DAO，由 Nest 统一提交与回滚。
+// 业务入口只能在持有 Player 锁的 Nest 事务里调用，错误必须原样交还 Nest，不可吞掉。
+type IdleComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+type IIdleEntity interface {
+	entity.IThreadSafeEntity
+	IdleComp() *IdleComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeIdle, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("idle component: owner %T is not *Player", owner)
+		}
+		return &IdleComponent{owner: typed}, nil
+	})
+}
+func (component *IdleComponent) Name() string   { return "idle" }
+func (component *IdleComponent) Owner() *Player { return component.owner }
+
+// IdleResult 是最后一次成功领取的回包。首次领取只初始化起点，Reward 为0。
+type IdleResult struct {
+	Reward, Balance, SettledAt, Sequence int64
+	Capped                               bool
+}
+
+// Claim 在同一笔事务发金币并前移结算游标，提交拒绝或钱包溢出时连序号一同回滚。
+// 当前序号重试即使跨天也不再结算；更旧序号和跳号都拒绝。账本永远只存一条。
+func (component *IdleComponent) Claim(sequence, nowUnixMilli int64) (IdleResult, error) {
+	state := component.owner.Dao().GetIdle()
+	receipt := component.owner.Dao().GetIdleReceipt()
+	if sequence > 0 && state.GetInitialized() && sequence == state.GetSequence() {
+		return IdleResult{Reward: receipt.GetReward(), Balance: receipt.GetBalance(), SettledAt: receipt.GetSettledAt(), Sequence: sequence, Capped: receipt.GetCapped()}, nil
+	}
+	if sequence <= 0 || state.GetSequence() == math.MaxInt64 || sequence != state.GetSequence()+1 {
+		return IdleResult{}, apperrors.ErrIdleSequence
+	}
+	if nowUnixMilli <= 0 {
+		return IdleResult{}, apperrors.ErrIdleRules
+	}
+	reward, settled, capped := int64(0), nowUnixMilli, false
+	if state.GetInitialized() {
+		var err error
+		reward, settled, capped, err = idleAccrue(state.GetSettledAt(), nowUnixMilli, component.idleRules())
+		if err != nil {
+			return IdleResult{}, err
+		}
+	}
+	balance := component.owner.Dao().GetWallet().GetCoins()
+	if reward > 0 {
+		var err error
+		balance, err = component.owner.WalletComp().Add(reward)
+		if err != nil {
+			return IdleResult{}, err
+		}
+	}
+	state.SetInitialized(true)
+	state.SetSettledAt(settled)
+	state.SetSequence(sequence)
+	receipt.SetReward(reward)
+	receipt.SetBalance(balance)
+	receipt.SetSettledAt(settled)
+	receipt.SetCapped(capped)
+	return IdleResult{Reward: reward, Balance: balance, SettledAt: settled, Sequence: sequence, Capped: capped}, nil
+}
+
+// idleAccrue 不逐秒循环；不足一周期的时间留给下次，触达任一上限时丢弃所有超量和零头。
+// 正时间相减不会溢出；乘法前先按金额上限比较，极大时间跨度也不会回绕成负收益。
+func idleAccrue(last, now int64, r IdleRules) (reward, settled int64, capped bool, err error) {
+	if last <= 0 || now <= 0 || r.PeriodMillis <= 0 || r.CoinsPerPeriod <= 0 || r.OfflineCapMillis < r.PeriodMillis || r.RewardCap <= 0 {
+		return 0, 0, false, apperrors.ErrIdleRules
+	}
+	if now < last {
+		return 0, 0, false, apperrors.ErrIdleClockBack
+	}
+	elapsed := now - last
+	available := min(elapsed, r.OfflineCapMillis)
+	units := available / r.PeriodMillis
+	capped = elapsed >= r.OfflineCapMillis
+	if units > r.RewardCap/r.CoinsPerPeriod {
+		reward = r.RewardCap
+		capped = true
+	} else {
+		reward = units * r.CoinsPerPeriod
+		if reward >= r.RewardCap {
+			capped = true
+		}
+	}
+	settled = last + units*r.PeriodMillis
+	if capped {
+		settled = now
+	}
+	return reward, settled, capped, nil
+}

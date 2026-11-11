@@ -10,17 +10,11 @@ import (
 // ProfileComponent.AddExp 让这名玩家从 from 级升到 to 级（to > from）之后调用一次，一次发放连升多级也只调一次。
 // 它与经验、等级在同一笔事务里；返回错误时整笔事务回滚，等级和经验退回发放之前。
 //
-// demo 里“升了级”有两个后果，都写在这里，都随这笔事务提交或回滚：
-//
-//   - 属性：等级是档案的，一级值多少属性是属性系统的。AttributeComponent.LevelUp 抬高 Base 层、重组 Final、
-//     把两层写回 DAO，并把这次变更交给场景同步（PublishSyncDirty）。
-//   - 事件：发 player.level_up 这个 effect（game/effects）。它记进同一条提交记录，提交之后才送出，回滚则不送；
-//     奖励邮件由它的消费者发（internal/service/<game>/level_up_mail.go），这里不知道邮件的存在。
-//     payload 里的等级是升级之后的等级 to；连升多级只发一条。
+// 属性成长由 attribute 模块的 OnProfileLevelUp 登记点处理；这里只提交 demo 的升级邮件事件。
+// 连升多级只发一次，事件与经验写入同一事务。
 //
 // 这个文件里只放 onLevelUp 一个函数：模块的场景测试会把整个文件换成一个总是失败的钩子来验证回滚。
 func (component *ProfileComponent) onLevelUp(from, to int32) error {
-	component.owner.AttributeComp().LevelUp(to - from)
 	if err := effects.EmitPlayerLevelUp(component.owner.UniqueID(), to); err != nil {
 		return fmt.Errorf("profile: %w", err)
 	}

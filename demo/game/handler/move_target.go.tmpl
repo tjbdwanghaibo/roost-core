@@ -3,20 +3,20 @@ package handler
 import (
 	"errors"
 
-	player "{{MODULE}}/game/entities/player"
-	sceneentity "{{MODULE}}/game/entities/scene"
-	apperrors "{{MODULE}}/internal/errors"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	apperrors "{{MODULE}}/internal/errors"
 )
 
 // handlerMoveTarget starts a server-driven walk (the client sends the goal,
 // the server's heartbeat moves the player). It
-// returns the id of the action that carries the walk out.
+// returns the actual movement token as an opaque request identifier.
 //
 //   - follow == 0: walk to (x, y). The route is the scene's PathFind — the
-//     expensive part, done once here and handed to the MoveTo action as its
+//     expensive part, done once here and handed to the shared Body as its
 //     path, never recomputed per beat. A goal the search proves unreachable
 //     is refused with the same position error as an unwalkable teleport; one
 //     beyond the search's budget is walked in a straight line, stopped by the
@@ -32,8 +32,8 @@ import (
 // handler returns before the first step; the client sees the walk in the
 // replicated position (pos_x / pos_y / facing) frame by frame.
 //
-// The action is started last: the action list does not roll back with the
-// transaction, so every check that can fail comes first.
+// The shared actor.Body records the move and its heartbeat in this Nest undo transaction;
+// any subsequent error restores the previous move as well as position.
 //
 //roost:nest rollback=undo durability=async
 func handlerMoveTarget(target player.IMapEntity, area sceneentity.ISceneEntity, x int64, y int64, follow int64) (int64, error) {
@@ -71,13 +71,13 @@ func handlerMoveTarget(target player.IMapEntity, area sceneentity.ISceneEntity, 
 	case err != nil:
 		return 0, errcode.Wrap(apperrors.ErrScenePosition, err, "reason", "no route", "to_x", to.X, "to_y", to.Y)
 	}
-	// The route starts at the player's own cell; the action wants the cells
+	// The route starts at the player's own cell; Body wants the cells
 	// still to walk.
 	if len(path) > 0 && path[0] == component.Pos() {
 		path = path[1:]
 	}
 	if len(path) == 0 {
-		// Already standing on the goal: nothing to walk, no action (id 0).
+		// Already standing on the goal: nothing to walk, token 0.
 		return 0, nil
 	}
 	return component.WalkTo(path)

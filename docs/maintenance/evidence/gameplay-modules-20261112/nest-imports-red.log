@@ -1,0 +1,5 @@
+--- FAIL: TestGeneratedImportsStayInTheHandlerSourceFile (0.01s)
+    generated_signatures_test.go:58: /var/folders/xs/zdtklw_n019_s8w_tvqnxygh0000gp/T/TestGeneratedImportsStayInTheHandlerSourceFile1080760658/001/json_nest_gen.go: file-scoped logic import = [encoding/json encoding/xml], want only encoding/json
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/codegen/internal/nest	0.649s
+FAIL

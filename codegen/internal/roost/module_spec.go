@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"go/token"
 	"io/fs"
 	"path"
 	"regexp"
@@ -38,8 +39,12 @@ type ModuleSpec struct {
 	// State 是追加到 Entity 主 DAO 末尾的顶层字段，类型是模块自带的嵌套结构体。
 	// 同步与否按顶层字段决定：既有客户端可见状态又有服务端账本的模块写两个字段。
 	State []ModuleStateField `yaml:"state" json:"state,omitempty"`
+	// DAOs 把模块提供的独立 DAO 接到 Entity；加载与事务参与者由正式 entity/lifecycle 生成器接线。
+	DAOs []ModuleDAOField `yaml:"daos" json:"daos,omitempty"`
 	// Component 是挂在 Entity 上的组件名（PascalCase）；组件号在安装时分配。
 	Component string `yaml:"component" json:"component,omitempty"`
+	// SyncPacker 把模块自带的有限视图打包器接到目标实体；不覆盖已有业务打包器。
+	SyncPacker string `yaml:"sync_packer,omitempty" json:"sync_packer,omitempty"`
 	// TimerTypes 在 Entity 的持久定时器中分配类型号；定时器组件提供 register<模块组件>Timers(*entitytimer.Handlers)。
 	TimerTypes []string `yaml:"timer_types" json:"timer_types,omitempty"`
 	// Protocols / Errcodes 是模板里 {{ID:protocol:<name>}} / {{ID:errcode:<name>}} 用到的名字，号在安装时分配。
@@ -68,7 +73,7 @@ type ModuleRuntime struct {
 	Start   string `yaml:"start" json:"start"`     // func(*app.Registry) (func(context.Context) error, error)
 }
 
-// ModuleNeeds 是模块对工程的前提。安装器只检查、不替工程打开：缺什么给出要执行的命令。
+// ModuleNeeds 是模块对工程的前提。heartbeat 可经正式 add mod 代办，其余缺项给出接入命令。
 type ModuleNeeds struct {
 	Mods     []string `yaml:"mods" json:"mods,omitempty"`
 	Features []string `yaml:"features" json:"features,omitempty"`
@@ -95,6 +100,13 @@ type ModuleStateField struct {
 	Store   string `yaml:"store" json:"store"`
 	Dao     string `yaml:"dao" json:"dao"`
 	Comment string `yaml:"comment" json:"comment,omitempty"`
+}
+
+// ModuleDAOField 引用工程 db 包中的 DAO（可为框架 DAO 的类型别名），不复制其状态。
+type ModuleDAOField struct {
+	Field string `yaml:"field" json:"field"`
+	Type  string `yaml:"type" json:"type"`
+	Tag   string `yaml:"tag" json:"tag"`
 }
 
 // ModuleWith 是模块与另一个模块的一组联动文件。
@@ -127,6 +139,8 @@ type InstalledModule struct {
 	IDs map[string]map[string]int64 `yaml:"ids,omitempty"`
 	// State 是它追加的主 DAO 字段，写成 <Dao>.<Field>。
 	State []string `yaml:"state,omitempty"`
+	// DAOs 记录附加 DAO 的实体字段、类型和集合，便于归属核对。
+	DAOs []string `yaml:"daos,omitempty"`
 	// Files 是它写入的业务文件（工程内相对路径）。
 	Files []string `yaml:"files,omitempty"`
 	// With 是它已经写进工程的联动文件：另一个模块的名字 -> 文件。有键就表示这一对已经接过，不再处理。
@@ -301,7 +315,7 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 			return fmt.Errorf("a module cannot require or conflict with itself")
 		}
 	}
-	if (len(spec.State) > 0 || spec.Component != "") && !modulePascalPattern.MatchString(spec.Entity) {
+	if (len(spec.State) > 0 || len(spec.DAOs) > 0 || spec.Component != "" || spec.SyncPacker != "") && !modulePascalPattern.MatchString(spec.Entity) {
 		return fmt.Errorf("entity %q must be the PascalCase Entity the state and component attach to", spec.Entity)
 	}
 	if spec.Component != "" && !modulePascalPattern.MatchString(spec.Component) {
@@ -337,7 +351,23 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 			return fmt.Errorf("entity %s lifecycle is supplied by the installer, not files/", name)
 		}
 	}
+	if spec.SyncPacker != "" && !modulePascalPattern.MatchString(spec.SyncPacker) {
+		return fmt.Errorf("sync_packer %q must be an exported factory name", spec.SyncPacker)
+	}
 	prefix := toPascal(spec.Name)
+	seenDAOFields, seenDAOTags := map[string]bool{}, map[string]bool{}
+	for _, field := range spec.DAOs {
+		if !token.IsIdentifier(field.Field) || field.Field == "_" || !strings.HasPrefix(field.Field, spec.Name) {
+			return fmt.Errorf("DAO field %q must be a Go identifier starting with %s", field.Field, spec.Name)
+		}
+		if !modulePascalPattern.MatchString(field.Type) || !moduleStorePattern.MatchString(field.Tag) || !strings.HasPrefix(field.Tag, spec.Name) {
+			return fmt.Errorf("DAO %s needs an exported db type and a tag starting with %s", field.Field, spec.Name)
+		}
+		if seenDAOFields[field.Field] || seenDAOTags[field.Tag] || field.Field == toSnake(spec.Component) {
+			return fmt.Errorf("DAO %s duplicates a field, collection or component", field.Field)
+		}
+		seenDAOFields[field.Field], seenDAOTags[field.Tag] = true, true
+	}
 	seenFields := map[string]bool{}
 	for _, field := range spec.State {
 		// 字段名带模块名：两个模块不会往同一个 DAO 追加同名字段，归属一眼可见。

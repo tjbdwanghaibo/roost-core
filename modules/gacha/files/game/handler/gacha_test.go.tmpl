@@ -1,0 +1,442 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"{{MODULE}}/configs/schema"
+	controller "{{MODULE}}/game/controllers/gacha"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+type gachaGetter map[int64]entity.IThreadSafeEntity
+
+func (g gachaGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+func (g gachaGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+type gachaCommitter struct{ reject atomic.Bool }
+
+func (c *gachaCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	return nil
+}
+
+type gachaFixture struct {
+	engine    *nest.NestMgr
+	player    *playerentity.Player
+	committer *gachaCommitter
+	now       atomic.Int64
+}
+
+func newGachaFixture(t *testing.T, coins int64) *gachaFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterGachaDrawNestHandlers()
+	RegisterWalletGrantNestHandlers()
+	RegisterBagGrantNestHandlers()
+	gachaLoad(t, gachaPools(), gachaDrops())
+	f := &gachaFixture{committer: &gachaCommitter{}}
+	f.now.Store(time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC).UnixMilli())
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.now.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	id, err := entity.BuildEntityID(98101, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = built.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(gachaGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	f.engine.MustRegisterHandlerWithMeta(nest.NewHandlerName("gachaTestSetup"), func(_ []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+		params[0].(func())()
+		return nil, nil
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	if coins > 0 {
+		if _, err := sender.NewWalletGrantSender(f.engine).Sync_WalletGrant(context.Background(), id, "gacha-seed", coins); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f
+}
+
+// local 只在业务 worker 持实体锁读写夹具前置状态，场景的动作仍走正式生成 Sender。
+func (f *gachaFixture) local(t *testing.T, fn func()) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() { f.player.GetMutex().Lock(); defer f.player.GetMutex().Unlock(); fn() }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func gachaPools() []schema.GachaPool {
+	return []schema.GachaPool{
+		{ID: 1, Price: 10, PityAfter: 3, PityItemID: 1002},
+		{ID: 2, Price: 20, PityAfter: 3, PityItemID: 1003},
+		{ID: 3, Price: math.MaxInt64, PityAfter: 3, PityItemID: 1002},
+		{ID: 4, Price: 10, PityAfter: 3, PityItemID: 1002, Off: true},
+	}
+}
+func gachaDrops() []schema.GachaDrop {
+	return []schema.GachaDrop{
+		{ID: 1, PoolID: 1, ItemID: 1001, Weight: 1}, {ID: 2, PoolID: 1, ItemID: 1002, Weight: 0},
+		{ID: 3, PoolID: 2, ItemID: 1003, Weight: 1},
+		{ID: 4, PoolID: 3, ItemID: 1001, Weight: 1}, {ID: 5, PoolID: 3, ItemID: 1002, Weight: 0},
+	}
+}
+
+// 用例独立加载 item/gacha_pool/gacha_drop 三张表，不借用其他模块的测试。两处进程配置都恢复。
+// 有些用例故意直接装无效数据，验证组件能在 schema 校验之外拒绝坏的跨表关联。
+func gachaLoad(t *testing.T, pools []schema.GachaPool, drops []schema.GachaDrop) {
+	t.Helper()
+	dir := t.TempDir()
+	rows := map[string]any{"item": []schema.Item{{ID: 1001, Name: "a"}, {ID: 1002, Name: "b"}, {ID: 1003, Name: "c"}}, "gacha_pool": pools, "gacha_drop": drops}
+	for name, data := range rows {
+		raw, err := json.Marshal(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name+".json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg := configdata.NewRegistry()
+	configdata.MustRegisterTable(reg, configdata.TableDef[int64, schema.Item]{Name: "item", File: "item.json", Key: func(r schema.Item) int64 { return r.ID }})
+	configdata.MustRegisterTable(reg, configdata.TableDef[int64, schema.GachaPool]{Name: "gacha_pool", File: "gacha_pool.json", Key: func(r schema.GachaPool) int64 { return r.ID }})
+	configdata.MustRegisterTable(reg, configdata.TableDef[int64, schema.GachaDrop]{Name: "gacha_drop", File: "gacha_drop.json", Key: func(r schema.GachaDrop) int64 { return r.ID }})
+	previous, config := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previous); fctx.SetRuntimeConfig(config) })
+	if _, err := configdata.NewStore(reg, dir).Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type gachaSnapshot struct {
+	Coins         int64
+	Items, Misses map[int64]int64
+	Receipts      int
+	Sequence      int64
+}
+
+func (f *gachaFixture) snapshot(t *testing.T) gachaSnapshot {
+	out := gachaSnapshot{Items: map[int64]int64{}, Misses: map[int64]int64{}}
+	f.local(t, func() {
+		d := f.player.Dao()
+		out.Coins = d.GetWallet().GetCoins()
+		out.Receipts = d.GetGachaLedger().ReceiptsLen()
+		out.Sequence = d.GetGachaLedger().GetNextSeq()
+		d.GetBag().RangeItems(func(k, v int64) bool { out.Items[k] = v; return true })
+		d.GetGacha().RangeMisses(func(k, v int64) bool { out.Misses[k] = v; return true })
+	})
+	return out
+}
+func (f *gachaFixture) draw(key string, pool, count int64) (*pb.GachaDrawResponse, error) {
+	return sender.NewGachaDrawSender(f.engine).Sync_GachaDraw(context.Background(), f.player.ID(), &pb.GachaDrawRequest{Key: key, PoolID: pool, Count: count})
+}
+func (f *gachaFixture) mustDraw(t *testing.T, key string, pool, count int64) *pb.GachaDrawResponse {
+	t.Helper()
+	r, err := f.draw(key, pool, count)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func (f *gachaFixture) refuse(t *testing.T, want error, key string, pool, count int64) {
+	t.Helper()
+	before := f.snapshot(t)
+	if _, err := f.draw(key, pool, count); !errors.Is(err, want) {
+		t.Fatalf("refusal = %v, want %v", err, want)
+	}
+	if after := f.snapshot(t); !reflect.DeepEqual(before, after) {
+		t.Fatalf("refusal wrote: before %+v after %+v", before, after)
+	}
+}
+func (f *gachaFixture) grant(t *testing.T, id, count int64) {
+	t.Helper()
+	if _, err := sender.NewBagGrantSender(f.engine).Sync_BagGrant(context.Background(), f.player.ID(), id, count); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestGachaSingleChargesAndGrants(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	r := f.mustDraw(t, "one", 1, 1)
+	if r.Cost != 10 || r.Balance != 90 || r.Misses != 1 || !reflect.DeepEqual(r.Items, []int64{1001}) {
+		t.Fatalf("single result %+v", r)
+	}
+	s := f.snapshot(t)
+	if s.Coins != 90 || s.Items[1001] != 1 || s.Receipts != 1 || s.Misses[1] != 1 {
+		t.Fatalf("single facts %+v", s)
+	}
+}
+func TestGachaTenAppliesPityInsideTheSameTransaction(t *testing.T) {
+	f := newGachaFixture(t, 1000)
+	r := f.mustDraw(t, "ten", 1, 10)
+	want := []int64{1001, 1001, 1002, 1001, 1001, 1002, 1001, 1001, 1002, 1001}
+	if r.Cost != 100 || r.Balance != 900 || r.Misses != 1 || !reflect.DeepEqual(r.Items, want) {
+		t.Fatalf("ten result %+v", r)
+	}
+	s := f.snapshot(t)
+	if s.Items[1001] != 7 || s.Items[1002] != 3 || s.Receipts != 1 {
+		t.Fatalf("ten facts %+v", s)
+	}
+}
+func TestGachaNaturalRareResetsPity(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	f.write(t, func() { f.player.Dao().GetGacha().SetMissesKey(2, 1) })
+	r := f.mustDraw(t, "rare", 2, 1)
+	if r.Misses != 0 || !reflect.DeepEqual(r.Items, []int64{1003}) {
+		t.Fatalf("rare result %+v", r)
+	}
+}
+func TestGachaPoolsHaveIndependentPity(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	f.mustDraw(t, "a", 1, 1)
+	f.mustDraw(t, "b", 2, 1)
+	f.mustDraw(t, "c", 1, 1)
+	if got := f.snapshot(t).Misses; got[1] != 2 || got[2] != 0 {
+		t.Fatalf("pool pity %+v", got)
+	}
+}
+func TestGachaReplayReturnsOriginalWithoutWrites(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	first := f.mustDraw(t, "a", 1, 1)
+	f.mustDraw(t, "b", 1, 1)
+	before := f.snapshot(t)
+	again := f.mustDraw(t, "a", 1, 1)
+	if !reflect.DeepEqual(first, again) || !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("replay changed result or state")
+	}
+}
+func TestGachaConflictingKeyIsRejected(t *testing.T) {
+	f := newGachaFixture(t, 1000)
+	f.mustDraw(t, "a", 1, 1)
+	f.refuse(t, apperrors.ErrGachaKeyConflict, "a", 2, 1)
+	f.refuse(t, apperrors.ErrGachaKeyConflict, "a", 1, 10)
+}
+func TestGachaRejectsUnsafeKeys(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	for _, key := range []string{"", strings.Repeat("x", 65), "$x", "x.y", "a\x00b", "中文"} {
+		f.refuse(t, apperrors.ErrGachaKeyInvalid, key, 1, 1)
+	}
+	f.mustDraw(t, strings.Repeat("a", 64), 1, 1)
+}
+func TestGachaOnlySingleOrTenAllowed(t *testing.T) {
+	f := newGachaFixture(t, 1000)
+	for _, count := range []int64{-1, 0, 2, 9, 11, math.MaxInt64} {
+		f.refuse(t, apperrors.ErrGachaCountInvalid, "bad", 1, count)
+	}
+}
+func TestGachaRejectsUnknownOrClosedPool(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	f.refuse(t, apperrors.ErrGachaPoolInvalid, "a", 99, 1)
+	f.refuse(t, apperrors.ErrGachaPoolInvalid, "b", 4, 1)
+}
+func TestGachaRejectsInvalidCrossTableRules(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	for _, drops := range [][]schema.GachaDrop{
+		{{ID: 1, PoolID: 1, ItemID: 1001, Weight: 1}},
+		{{ID: 1, PoolID: 1, ItemID: 1002, Weight: 0}},
+		{{ID: 1, PoolID: 1, ItemID: 9999, Weight: 1}, {ID: 2, PoolID: 1, ItemID: 1002, Weight: 1}},
+		{{ID: 1, PoolID: 1, ItemID: 1001, Weight: math.MaxInt64}, {ID: 2, PoolID: 1, ItemID: 1002, Weight: 1}},
+		{{ID: 1, PoolID: 1, ItemID: 1001, Weight: -1}, {ID: 2, PoolID: 1, ItemID: 1002, Weight: 1}},
+	} {
+		gachaLoad(t, gachaPools(), drops)
+		f.refuse(t, apperrors.ErrGachaPoolInvalid, "bad", 1, 1)
+	}
+}
+func TestGachaInsufficientCoinsWriteNothing(t *testing.T) {
+	f := newGachaFixture(t, 9)
+	f.refuse(t, apperrors.ErrWalletShort, "a", 1, 1)
+}
+func TestGachaFullBagRollsBackCharge(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	f.grant(t, 1001, 999999)
+	f.refuse(t, apperrors.ErrBagStackFull, "a", 1, 1)
+}
+func TestGachaTenCapacityRefusalWritesNothing(t *testing.T) {
+	f := newGachaFixture(t, 1000)
+	f.grant(t, 1001, 999997)
+	f.refuse(t, apperrors.ErrBagStackFull, "ten", 1, 10)
+}
+func TestGachaCommitRejectionRollsBackThenRetries(t *testing.T) {
+	f := newGachaFixture(t, 1000)
+	before := f.snapshot(t)
+	f.committer.reject.Store(true)
+	if _, err := f.draw("a", 1, 10); err == nil {
+		t.Fatal("commit accepted")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("rejected draw leaked facts")
+	}
+	f.committer.reject.Store(false)
+	r := f.mustDraw(t, "a", 1, 10)
+	if r.Balance != 900 || f.snapshot(t).Receipts != 1 {
+		t.Fatal("retry did not apply exactly once")
+	}
+}
+func TestGachaReceiptWindowEvictsOnlyTheOldest(t *testing.T) {
+	f := newGachaFixture(t, 1000)
+	for i := 1; i <= 65; i++ {
+		f.mustDraw(t, fmt.Sprintf("k%d", i), 1, 1)
+	}
+	s := f.snapshot(t)
+	if s.Receipts != 64 || s.Sequence != 65 || s.Coins != 350 {
+		t.Fatalf("window %+v", s)
+	}
+	f.mustDraw(t, "k2", 1, 1)
+	if !reflect.DeepEqual(s, f.snapshot(t)) {
+		t.Fatal("retained key wrote")
+	}
+	f.mustDraw(t, "k1", 1, 1)
+	if after := f.snapshot(t); after.Coins != 340 || after.Sequence != 66 || after.Receipts != 64 {
+		t.Fatalf("eviction %+v", after)
+	}
+}
+func TestGachaOverflowRefusesBeforeCharging(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	f.refuse(t, apperrors.ErrGachaOverflow, "a", 3, 10)
+	f.write(t, func() { f.player.Dao().GetGachaLedger().SetNextSeq(math.MaxInt64) })
+	f.refuse(t, apperrors.ErrGachaOverflow, "b", 1, 1)
+}
+func TestGachaTrackedPoolsStayBounded(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	f.write(t, func() {
+		for id := int64(10); id < 74; id++ {
+			f.player.Dao().GetGacha().SetMissesKey(id, 0)
+		}
+	})
+	f.refuse(t, apperrors.ErrGachaPoolLimit, "a", 1, 1)
+}
+func TestGachaReturnedItemsDoNotAliasReceipt(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	r := f.mustDraw(t, "a", 1, 1)
+	r.Items[0] = 9999
+	if again := f.mustDraw(t, "a", 1, 1); again.Items[0] != 1001 {
+		t.Fatal("response mutated receipt")
+	}
+}
+func TestGachaReplaySurvivesConfigRemoval(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	first := f.mustDraw(t, "a", 1, 1)
+	gachaLoad(t, []schema.GachaPool{}, []schema.GachaDrop{})
+	again := f.mustDraw(t, "a", 1, 1)
+	if !reflect.DeepEqual(first, again) {
+		t.Fatal("replay re-evaluated configuration")
+	}
+	f.refuse(t, apperrors.ErrGachaPoolInvalid, "b", 1, 1)
+}
+func TestGachaNilRequestRefuses(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	if _, err := sender.NewGachaDrawSender(f.engine).Sync_GachaDraw(context.Background(), f.player.ID(), nil); !errors.Is(err, apperrors.ErrGachaKeyInvalid) {
+		t.Fatalf("nil request %v", err)
+	}
+}
+func TestGachaConcurrentDuplicateChargesOnce(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, err := f.draw("same", 1, 1); errs <- err }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := f.snapshot(t)
+	if s.Coins != 90 || s.Items[1001] != 1 || s.Receipts != 1 {
+		t.Fatalf("concurrent facts %+v", s)
+	}
+}
+
+// 先装满普通奖励再赌稀有奖励不能成为免成本刷稀有的入口；即使当前保底进度还不会出1002，也要先验证全部候选空间。
+func TestGachaFullCandidateCannotBeUsedToReroll(t *testing.T) {
+	f := newGachaFixture(t, 1000)
+	f.grant(t, 1002, 999999)
+	for i := 0; i < 3; i++ {
+		f.refuse(t, apperrors.ErrBagStackFull, fmt.Sprintf("try%d", i), 1, 1)
+	}
+}
+
+func TestGachaProtocolBoundaryUsesSessionAndReturnsCodes(t *testing.T) {
+	f := newGachaFixture(t, 100)
+	reg := app.NewRegistry(viper.New())
+	if err := reg.Register("nest", nest.Client(f.engine)); err != nil {
+		t.Fatal(err)
+	}
+	ctl, err := controller.FromRegistry(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &playeraccess.Context{PlayerID: 98101}
+	response, err := ctl.HandleGachaDraw(ctx, &pb.GachaDrawRequest{Key: "a", PoolID: 1, Count: 2})
+	code, _ := errcode.ClientError(apperrors.ErrGachaCountInvalid)
+	if err != nil || response == nil || response.Code != code {
+		t.Fatalf("protocol refusal %+v %v", response, err)
+	}
+	response, err = ctl.HandleGachaDraw(ctx, &pb.GachaDrawRequest{Key: "a", PoolID: 1, Count: 1})
+	if err != nil || response == nil || response.Code != 0 || response.Balance != 90 {
+		t.Fatalf("protocol success %+v %v", response, err)
+	}
+}
+
+// write 用实例内的事务 handler 构造边界存档，不能在只读 RunLocal 中写持久 DAO。
+func (f *gachaFixture) write(t *testing.T, fn func()) {
+	t.Helper()
+	if _, err := f.engine.Request(context.Background(), nest.NewHandlerName("gachaTestSetup"), f.player.ID(), nest.NewParams(fn)); err != nil {
+		t.Fatal(err)
+	}
+}

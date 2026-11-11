@@ -139,17 +139,17 @@ func parseFile(path string) ([]*FuncInfo, string, error) {
 	}
 
 	pkg := file.Name.Name
-	remoteStructFields, packageImports, err := collectPackageRemoteStructFields(path, pkg)
+	remoteStructFields, err := collectPackageRemoteStructFields(path, pkg)
 	if err != nil {
 		return nil, "", err
 	}
 
-	// Collect imports from source file
+	// 类型签名中的导入别名只属于当前源文件，不能合并同包其他文件的导入。
+	// 跨文件的 Remote 请求只共享字段元数据；其访问器在请求声明文件里单独生成。
 	var imports []ImportInfo
 	for _, imp := range file.Imports {
 		imports = append(imports, importInfoFromSpec(imp))
 	}
-	imports = mergeImports(imports, packageImports)
 
 	var funcs []*FuncInfo
 	for _, decl := range file.Decls {
@@ -251,14 +251,13 @@ func validateTransactionOptions(rollback string, durability string) error {
 	return nil
 }
 
-func collectPackageRemoteStructFields(path string, pkg string) (map[string][]remoteStructFieldInfo, []ImportInfo, error) {
+func collectPackageRemoteStructFields(path string, pkg string) (map[string][]remoteStructFieldInfo, error) {
 	dir := filepath.Dir(path)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	ret := make(map[string][]remoteStructFieldInfo)
-	var imports []ImportInfo
 	fset := token.NewFileSet()
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
@@ -271,28 +270,25 @@ func collectPackageRemoteStructFields(path string, pkg string) (map[string][]rem
 		filePath := filepath.Join(dir, name)
 		file, err := parser.ParseFile(fset, filePath, nil, parser.ParseComments)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%s: %w", filePath, err)
+			return nil, fmt.Errorf("%s: %w", filePath, err)
 		}
 		if file.Name == nil || file.Name.Name != pkg {
 			continue
 		}
-		for _, imp := range file.Imports {
-			imports = append(imports, importInfoFromSpec(imp))
-		}
 		fields, err := collectRemoteStructFields(file)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%s: %w", filePath, err)
+			return nil, fmt.Errorf("%s: %w", filePath, err)
 		}
 		for typeName, items := range fields {
 			for _, item := range items {
 				if remoteAliasExists(ret[typeName], item.Access.Alias) {
-					return nil, nil, fmt.Errorf("nest: duplicate remote alias %q on %s", item.Access.Alias, typeName)
+					return nil, fmt.Errorf("nest: duplicate remote alias %q on %s", item.Access.Alias, typeName)
 				}
 				ret[typeName] = append(ret[typeName], item)
 			}
 		}
 	}
-	return ret, mergeImports(nil, imports), nil
+	return ret, nil
 }
 
 func importInfoFromSpec(imp *ast.ImportSpec) ImportInfo {
@@ -303,20 +299,6 @@ func importInfoFromSpec(imp *ast.ImportSpec) ImportInfo {
 		info.Alias = imp.Name.Name
 	}
 	return info
-}
-
-func mergeImports(base []ImportInfo, extra []ImportInfo) []ImportInfo {
-	seen := make(map[string]bool, len(base)+len(extra))
-	ret := make([]ImportInfo, 0, len(base)+len(extra))
-	for _, imp := range append(base, extra...) {
-		key := imp.Alias + "\x00" + imp.Path
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		ret = append(ret, imp)
-	}
-	return ret
 }
 
 func collectRemoteStructFields(file *ast.File) (map[string][]remoteStructFieldInfo, error) {

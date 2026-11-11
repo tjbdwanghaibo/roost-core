@@ -1,0 +1,30 @@
+package combat
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleCombatReady 只信认证会话里的source；同意位由双方各自的认证Ready请求写入。
+func (c *Controller) HandleCombatReady(ctx *playeraccess.Context, req *pb.CombatReadyRequest) (*pb.CombatReadyResponse, error) {
+	if ctx == nil || req == nil {
+		return nil, fmt.Errorf("combat: context and request required")
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	var out *pb.CombatReadyResponse
+	if err == nil {
+		out, err = sender.NewCombatReadySender(c.nestClient).Sync_CombatReady(ctx.Context(), id, req)
+	}
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		return &pb.CombatReadyResponse{Code: code, Reason: reason}, nil
+	}
+	return out, nil
+}

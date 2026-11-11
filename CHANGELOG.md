@@ -23,6 +23,13 @@
   - 仍然开着的窗口（KNOWN-LIMITS“单个玩家换服”）：入会请求已发出、比离开钩子的询问晚到联盟服务；别人替他改成员关系（GM 代加入、会长批准）发生在询问之后；推送失败时被提前摘掉的连接与独立 Gate 部署不在排空的保证里。
   - **接口变化**：`Residency` 新增 `Quiesce(ctx, move)`，`Profile` 新增 `Recheck(ctx, move)`；`RehomePrepare` 对同一个换服 ID 的重发改为重跑事务内检查。自己实现 `Residency` 的工程要补 `Quiesce`，并让自己的写闸门拒绝迁出表里的玩家。模块场景数 30 → 40（`modules/rehome/module.yaml`、`scripts/test-modules-generated.sh`、模块目录同步）。
   - 文档：[换服方案“审查之后的修正”](docs/maintenance/FEATURE-2026-11-11-player-rehome.md)、[PLAYER-MIGRATION §7](docs/framework/PLAYER-MIGRATION.md#7-单个玩家换服account-一侧)、KNOWN-LIMITS、demo WALKTHROUGH。
+- **新增**（modules）：场景线 actor / scene / monster / attribute / equipment / combat / dungeon / terrain，以及 naming / cdkey / notice / gacha / friends / idle；正式模块安装、独立协议与固定场景验收。scene 包含多地图/分线、区域与交互、按地图排空、附近聊天及显式公开视图；terrain 使用持久块/建筑与投影重建。模块的本地/跨服、持久化及外部依赖验证边界见 [目录](modules/README.md)，不把替身提交器场景视作生产验收。
+- **接线**（codegen/wiring）：模块代办 heartbeat / directory Mod 与 attribute feature；支持附加 DAO 聚合声明和显式 Sync packer，拒绝覆盖业务视图。Nest 发布所属 EntitySync Manager 能力，模块复用同一个实例；`RequestMultiSettled` 供外部执行器等待真实多实体请求完成并排空，不改变业务加锁/提交语义。
+- **整理**（game-demo）：属性、装备改用模块；移除重复组件/handler/协议，Robot 使用 EquipmentEquip；升级奖励钩子只发事件，属性成长由模块登记点负责。Player 持久 schema 升至 3，旧 schema 2 数据明确拒绝；使用新数据目录/数据库，不复用旧 WAL，本轮不提供旧格式兼容。
+- **修复**（gameplay/skill/combatcomponent）：伤害、治疗、护盾及状态效果的成功结果补齐 `ExpectedFailureNone`，避免真实 Runtime 拒绝合法效果；包含无变化与免疫路径。保留 Runtime 的严格检查，红绿证据及原因见 [RV-20261112-01](docs/maintenance/CORE-REVIEW.md#2026-11-12战斗适配器结果契约rv-20261112-01p1已修复)。
+- **修复**（codegen/nest）：生成包装器与 Sender 的导入恢复为源文件作用域，避免两个合法 handler 文件对不同业务包使用同一别名时，组合工程出现重复导入和错误类型。保留跨文件 Remote 请求元数据及其独立访问器生成；见 [RV-20261112-02](docs/maintenance/CORE-REVIEW.md#2026-11-12nest-生成器文件级导入rv-20261112-02p2已修复)。
+- **本批验证**：完整模块脚本通过，29 模块正序/反序两个工程各 598 PASS / 0 SKIP，build/vet/ID/漂移、全包测试和重复安装通过。新 game-demo 774 PASS / 14 条预期 SKIP；模块验收 229/0。全仓首轮两处失败已修复并在原入口补测，组合验收发现的导入作用域和聚合恢复夹具问题也已关闭；完整计数、红绿证据与未覆盖范围见[本批验收](docs/maintenance/evidence/gameplay-modules-20261112/README.md)。不包含真实存储、跨机或性能结论。
+
 - **新增**（codegen/modules）：`roost project new -recipe casual|turn-pvp` 复用 game 底座、模块安装、自动联动、ID 与自身同步；支持自定义业务服务，失败不发布半个工程。生成正式 Account session 认证器与业务 `RECIPE.md`；平台身份/角色号分配、匹配/胜负保留明确接入边界。配方内层安装延后依赖解析，`--skip-deps` 不再提前执行 tidy，普通 module add 仍校验依赖。
 - **新增**（modules/enter）：事务内 `OnFirstEnter` 登记点，先执行业务 firstEnter 再按名字执行钩子，最后写初始化事实；休闲配方用它发初始金币，提交失败整笔回滚，重复进入不重复发放。enter 验收 11 → 14；未改 Nest / DataEngine / Sync 底层。
 

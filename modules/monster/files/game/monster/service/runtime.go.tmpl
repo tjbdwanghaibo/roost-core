@@ -1,0 +1,331 @@
+// Package service 管理本进程怪物的出生槽位。构造/销毁实体和等待Nest只在业务worker之外执行。
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"log/slog"
+	"sync"
+	monster "{{MODULE}}/game/entities/monster"
+	scene "{{MODULE}}/game/entities/scene"
+	sender "{{MODULE}}/game/handler/syncsender"
+	lifecycle "{{MODULE}}/game/lifecycle"
+	rules "{{MODULE}}/game/monster"
+	sceneservice "{{MODULE}}/game/scene/service"
+)
+
+const Capability app.ModName = "gameplay.monster"
+const MaxMonsters = 256
+const sequenceBits = 34
+const maxSequence = int64(1)<<sequenceBits - 1
+
+type record struct {
+	value   *monster.Monster
+	area    *scene.Scene
+	areaID  int64 // 出生时固定，不能在旧Scene卸载后再读其已清理的ID。
+	target  monster.Target
+	retired bool // 只有MonsterRemove明确成功才置位；未知回复必须重走Nest。
+}
+
+// Manager的表只记录生命周期槽位，不复制HP、位置、目标或在途AI状态；业务事实只在实体DAO。
+type Manager struct {
+	lives           *lifecycle.MonsterLifecycle
+	operations      sync.Mutex
+	records         map[int64]record
+	access          *entity.ManagerAccess
+	client          nest.Client
+	scenes          *sceneservice.Manager
+	base, sequence  int64
+	queue           chan int64
+	ctx             context.Context
+	cancel          context.CancelFunc
+	gate            sync.Mutex
+	closed          bool
+	work            sync.WaitGroup
+	drained         chan struct{}
+	once            sync.Once
+	unregisterScene func()
+}
+
+func FromRegistry(r *app.Registry) (*Manager, error) {
+	m, ok := app.Lookup[*Manager](r, Capability)
+	if !ok || m == nil {
+		return nil, fmt.Errorf("monster: runtime unavailable")
+	}
+	return m, nil
+}
+func Start(r *app.Registry) (func(context.Context) error, error) {
+	access, ok := app.Lookup[*entity.ManagerAccess](r, mods.ModEntityRuntime)
+	if !ok || access == nil {
+		return nil, fmt.Errorf("monster: entity runtime missing")
+	}
+	client, ok := app.Lookup[nest.Client](r, mods.ModNest)
+	if !ok || client == nil {
+		return nil, fmt.Errorf("monster: Nest missing")
+	}
+	scenes, err := sceneservice.FromRegistry(r)
+	if err != nil {
+		return nil, err
+	}
+	var identity app.ServiceIdentity
+	if err := app.LoadConfig(r.Config(), &identity); err != nil {
+		return nil, err
+	}
+	m, err := newManager(access, client, scenes, identity.Sid)
+	if err != nil {
+		return nil, err
+	}
+	unregister, err := scenes.RegisterDrainer(monster.EntityKindMonster, m.DrainScene)
+	if err != nil {
+		return m.Stop, err
+	}
+	m.unregisterScene = unregister
+	if err := app.AddIngress(r, "monster lifecycle", app.IngressFunc(m.CloseIngress)); err != nil {
+		return m.Stop, err
+	}
+	if err := r.Register(Capability, m); err != nil {
+		return m.Stop, err
+	}
+	if _, err := m.Spawn(context.Background(), 1, rules.DefaultSpec()); err != nil {
+		return m.Stop, err
+	}
+	return m.Stop, nil
+}
+func newManager(access *entity.ManagerAccess, client nest.Client, scenes *sceneservice.Manager, sid int32) (*Manager, error) {
+	if access == nil || client == nil || scenes == nil || sid <= 0 || sid > 65535 {
+		return nil, fmt.Errorf("monster: invalid runtime or sid")
+	}
+	lives, err := lifecycle.NewMonsterLifecycle(access)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &Manager{records: map[int64]record{}, access: access, lives: lives, client: client, scenes: scenes, base: int64(entity.StaticUniqueIDBase) | int64(sid)<<sequenceBits, queue: make(chan int64, 64), ctx: ctx, cancel: cancel, drained: make(chan struct{})}
+	m.work.Add(1)
+	go m.run()
+	return m, nil
+}
+
+// admit与CloseIngress共用门，Wait开始后不允许再Add；关闭会取消所有已接受操作的出向Nest等待。
+func (m *Manager) admit(ctx context.Context) (context.Context, func(), error) {
+	m.gate.Lock()
+	if m.closed {
+		m.gate.Unlock()
+		return nil, nil, fmt.Errorf("monster: stopping")
+	}
+	m.work.Add(1)
+	m.gate.Unlock()
+	child, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(m.ctx, cancel)
+	return child, func() { stop(); cancel(); m.work.Done() }, nil
+}
+func (m *Manager) CloseIngress(ctx context.Context) error {
+	m.once.Do(func() {
+		m.gate.Lock()
+		m.closed = true
+		m.gate.Unlock()
+		m.cancel()
+		go func() { m.work.Wait(); close(m.drained) }()
+	})
+	select {
+	case <-m.drained:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Spawn只接受可信服务端规则。完整EntityID返回给combat/GM；ID按sid分段，与Player动态号隔离。
+func (m *Manager) Spawn(ctx context.Context, sceneID int64, spec rules.Spec) (int64, error) {
+	if err := spec.Validate(); err != nil {
+		return 0, err
+	}
+	ctx, done, err := m.admit(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer done()
+	m.operations.Lock()
+	defer m.operations.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(m.records) >= MaxMonsters {
+		return 0, fmt.Errorf("monster: population full")
+	}
+	_, id, err := m.scenes.IDs(0, sceneID)
+	if err != nil {
+		return 0, err
+	}
+	area, ok := m.access.Manager().Get(id).(*scene.Scene)
+	if !ok {
+		return 0, fmt.Errorf("monster: scene disappeared")
+	}
+	if spec.SenseRadius > area.Config().Sight {
+		return 0, fmt.Errorf("monster: sense radius exceeds scene sight")
+	}
+	if m.sequence >= maxSequence {
+		return 0, fmt.Errorf("monster: id sequence exhausted")
+	}
+	m.sequence++
+	unique := m.base | m.sequence
+	monsterID, err := entity.BuildEntityID(unique, monster.EntityKindMonster)
+	if err != nil {
+		return 0, err
+	}
+	mob, err := m.lives.CreateMonster(ctx, unique, monster.CreateParams{Spec: spec,
+		Sense: func(at spatial.Point, radius int64) []rules.Candidate {
+			seen := area.Space().Sense(at, radius)
+			out := make([]rules.Candidate, len(seen))
+			for i, v := range seen {
+				out[i] = rules.Candidate{ID: v.ID, At: v.Position}
+			}
+			return out
+		}, Respawn: m.offer})
+	if err != nil {
+		return 0, err
+	}
+	r := record{value: mob, area: area, areaID: id, target: mob.Target(area)}
+	m.records[monsterID] = r
+	_, err = sender.NewMonsterSpawnSender(m.client).MultiSync_MonsterSpawn(ctx, monsterID, r.areaID, r.target)
+	if err != nil {
+		cleanup := m.destroy(ctx, monsterID)
+		if cleanup == nil {
+			return 0, err
+		}
+		return monsterID, errors.Join(err, cleanup)
+	}
+	return monsterID, nil
+}
+
+// Damage的生命代际来自此前读取的快照，旧生命上的迟到结算被组件拒绝。
+func (m *Manager) Damage(ctx context.Context, id int64, life uint64, amount int64) (monster.Snapshot, error) {
+	ctx, done, err := m.admit(ctx)
+	if err != nil {
+		return monster.Snapshot{}, err
+	}
+	defer done()
+	m.operations.Lock()
+	defer m.operations.Unlock()
+	r, ok := m.records[id]
+	if !ok {
+		return monster.Snapshot{}, fmt.Errorf("monster: unknown id")
+	}
+	return sender.NewMonsterDamageSender(m.client).MultiSync_MonsterDamage(ctx, id, r.areaID, r.target, life, amount)
+}
+
+// Destroy先在Monster+Scene事务停心跳/离场/释放成员，再移除实体；移除失败保留记录，可重试。
+func (m *Manager) Destroy(ctx context.Context, id int64) error {
+	ctx, done, err := m.admit(ctx)
+	if err != nil {
+		return err
+	}
+	defer done()
+	m.operations.Lock()
+	defer m.operations.Unlock()
+	return m.destroy(ctx, id)
+}
+func (m *Manager) destroy(ctx context.Context, id int64) error {
+	r, ok := m.records[id]
+	if !ok {
+		return nil
+	}
+	current := m.access.Manager().Get(id)
+	if current == nil {
+		// 只删本管理器的失效记录；Scene会在自己的事务清除缺失成员。
+		delete(m.records, id)
+		return nil
+	}
+	if current != r.value {
+		return fmt.Errorf("monster: lifecycle instance changed")
+	}
+	if !r.retired {
+		if err := sender.NewMonsterRemoveSender(m.client).MultiSync_MonsterRemove(ctx, id, r.areaID, r.target); err != nil {
+			return err
+		}
+		r.retired = true
+		m.records[id] = r
+	}
+	// Remove已明确提交之后，Destroy重试不再需要Scene仍存在；仍核对上述实例所有权。
+	if err := m.lives.Destroy(ctx, r.value, entity.DestroyReasonCommon, false); err != nil {
+		return err
+	}
+	delete(m.records, id)
+	return nil
+}
+
+// offer只在心跳提交后调用，绝不等待；队列满或关闭就放弃，本实体下一秒还会重试。
+func (m *Manager) offer(id int64) {
+	select {
+	case <-m.ctx.Done():
+		return
+	default:
+	}
+	select {
+	case m.queue <- id:
+	default:
+	}
+}
+func (m *Manager) run() {
+	defer m.work.Done()
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case id := <-m.queue:
+			m.operations.Lock()
+			r, ok := m.records[id]
+			if ok {
+				if _, err := sender.NewMonsterSpawnSender(m.client).MultiSync_MonsterSpawn(m.ctx, id, r.areaID, r.target); err != nil && m.ctx.Err() == nil {
+					slog.Warn("monster respawn deferred", "id", id, "err", err)
+				}
+			}
+			m.operations.Unlock()
+		}
+	}
+}
+func (m *Manager) IDs() []int64 {
+	m.operations.Lock()
+	defer m.operations.Unlock()
+	out := make([]int64, 0, len(m.records))
+	for id := range m.records {
+		out = append(out, id)
+	}
+	return out
+}
+
+// DrainScene 供Scene正式关图调用；Scene已关准入，不再接受该图的新Spawn。
+// 按实例匹配，避免同号重开后迟到退出误删新图的怪。与在途Spawn/重刷共用operations，
+// 不关闭整个Manager，也不停止其他地图。死亡待重生的记录同样经Remove+生命周期清理。
+func (m *Manager) DrainScene(ctx context.Context, area *scene.Scene) error {
+	m.operations.Lock()
+	defer m.operations.Unlock()
+	var result error
+	for id, r := range m.records {
+		if r.area == area {
+			result = errors.Join(result, m.destroy(ctx, id))
+		}
+	}
+	return result
+}
+func (m *Manager) Stop(ctx context.Context) error {
+	if err := m.CloseIngress(ctx); err != nil {
+		return err
+	}
+	m.operations.Lock()
+	var result error
+	for id := range m.records {
+		result = errors.Join(result, m.destroy(ctx, id))
+	}
+	m.operations.Unlock()
+	if result == nil && m.unregisterScene != nil {
+		m.unregisterScene()
+	}
+	return result
+}

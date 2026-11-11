@@ -1,0 +1,20 @@
+=== RUN   TestWithDungeonLeaderboardRefreshAfterRestartAndWindow
+2026/11/12 02:46:50 WARN dungeon: committed clear not yet projected player_id=96101 season=1 clears=1 err="leaderboard submit: player 96101 total 1 season 1: injected rank unavailable"
+2026/11/12 02:46:50 WARN dungeon: committed clear not yet projected player_id=96101 season=1 clears=2 err="leaderboard submit: player 96101 total 2 season 1: injected rank unavailable"
+--- PASS: TestWithDungeonLeaderboardRefreshAfterRestartAndWindow (0.02s)
+=== RUN   TestDungeonColdRestorePreservesProgressAndMultiEntityClaim
+2026/11/12 02:46:50 WARN dungeon: committed clear not yet projected player_id=96101 season=1 clears=1 err="leaderboard: capability \"service.rank\" not found; list rank under services.<service>.uses in roost.yaml"
+2026/11/12 02:46:50 WARN dungeon: committed clear not yet projected player_id=96101 season=1 clears=1 err="leaderboard: capability \"service.rank\" not found; list rank under services.<service>.uses in roost.yaml"
+--- PASS: TestDungeonColdRestorePreservesProgressAndMultiEntityClaim (0.01s)
+=== RUN   TestDungeonColdRestoreRejectsHalfAggregateAndIdentityMismatch
+--- PASS: TestDungeonColdRestoreRejectsHalfAggregateAndIdentityMismatch (0.00s)
+PASS
+ok  	example.com/studio/confluence/game/controllers/dungeon	1.300s
+=== RUN   TestTerrainBrushCommitsFourChunksAndPlayerLedger
+--- PASS: TestTerrainBrushCommitsFourChunksAndPlayerLedger (0.04s)
+=== RUN   TestTerrainBuildingLocksFourChunksSiteAndLedger
+--- PASS: TestTerrainBuildingLocksFourChunksSiteAndLedger (0.02s)
+=== RUN   TestTerrainColdRestoreKeepsEditsLotsBuildingsAndSequence
+--- PASS: TestTerrainColdRestoreKeepsEditsLotsBuildingsAndSequence (0.11s)
+PASS
+ok  	example.com/studio/confluence/game/controllers/terrain	1.422s

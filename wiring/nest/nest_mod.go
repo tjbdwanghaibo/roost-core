@@ -258,6 +258,9 @@ func (m *Mod) Provide(registry *app.Registry) error {
 	m.registry = registry
 	m.bindDurableWatermark(m.engine)
 	capabilities := []mods.Capability{{Name: mods.ModNest, Value: m.engine}}
+	if m.entitySync != nil {
+		capabilities = append(capabilities, mods.Capability{Name: mods.ModEntitySync, Value: m.entitySync})
+	}
 	if _, exists := registry.Get(mods.ModEntityRuntime); !exists {
 		capabilities = append(capabilities, mods.Capability{Name: mods.ModEntityRuntime, Value: m.getter})
 	}

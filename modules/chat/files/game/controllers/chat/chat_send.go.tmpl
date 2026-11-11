@@ -26,6 +26,17 @@ func (controller *Controller) HandleChatSend(context *playeraccess.Context, requ
 		}
 		return &pb.ChatSendResponse{Code: code, Reason: reason}, nil
 	}
+	body := []byte(request.Text)
+	if err := gamechat.ValidateText(body); err != nil {
+		return refuse(fmt.Errorf("%w: %v", svcchat.ErrMessageInvalid, err))
+	}
+	if send := localChannels[request.Kind]; send != nil {
+		response, err := send(controller, context, request)
+		if err != nil {
+			return refuse(err)
+		}
+		return response, nil
+	}
 	channel, ok := gamechat.ChannelOf(request.Kind, request.Target)
 	if !ok || channel.Kind == svcchat.ChannelSystem {
 		return refuse(fmt.Errorf("%w: kind %q is not one a player may publish to", svcchat.ErrChannelInvalid, request.Kind))
@@ -33,10 +44,6 @@ func (controller *Controller) HandleChatSend(context *playeraccess.Context, requ
 	sender := gamechat.PlayerSender(context.PlayerID)
 	if err := gamechat.Allow(sender, channel); err != nil {
 		return refuse(fmt.Errorf("%w: %v", svcchat.ErrNotPermitted, err))
-	}
-	body := []byte(request.Text)
-	if err := gamechat.ValidateText(body); err != nil {
-		return refuse(fmt.Errorf("%w: %v", svcchat.ErrMessageInvalid, err))
 	}
 	requestID := fmt.Sprintf("chat:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
 	message, err := controller.messaging.Publish(context.Context(), sender, svcchat.PublishRequest{

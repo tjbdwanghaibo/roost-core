@@ -1,0 +1,29 @@
+package profile
+
+import (
+	"context"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// Renamer 是事务之外的可选正式改名入口；只在 init 登记，之后只读。
+type Renamer func(context.Context, *app.Registry, int64, string) (string, error)
+
+var rename Renamer
+
+func RegisterRenamer(fn Renamer) {
+	if fn == nil || rename != nil {
+		panic("profile: invalid or duplicate renamer")
+	}
+	rename = fn
+}
+func Rename(ctx context.Context, r *app.Registry, id int64, name string) (string, bool, error) {
+	if rename == nil {
+		return "", false, nil
+	}
+	if r == nil {
+		return "", true, fmt.Errorf("profile: registry required")
+	}
+	value, err := rename(ctx, r, id, name)
+	return value, true, err
+}

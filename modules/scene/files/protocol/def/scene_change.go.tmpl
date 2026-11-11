@@ -1,0 +1,23 @@
+//go:build protocoldef
+
+package protocoldef
+
+// FromID 是上次应答里的场景号，仅用于声明要锁的参与者，handler 会复查实际归属。
+// ToID=0 离场；进入目标只能选服务端已开放的场景。
+type SceneChangeRequest struct {
+	FromID int64 `pb:"1"`
+	ToID   int64 `pb:"2"`
+}
+type SceneChangeResponse struct {
+	Code    int32  `pb:"1"`
+	Reason  string `pb:"2"`
+	SceneID int64  `pb:"3"`
+	X       int64  `pb:"4"`
+	Y       int64  `pb:"5"`
+}
+
+//roost:protocol group=game handler=scene
+type SceneChangeProtocol interface {
+	//roost:msg id={{ID:protocol:SceneChange}}
+	SceneChange(SceneChangeRequest) SceneChangeResponse
+}

@@ -445,9 +445,9 @@ roost module verify               # 模块自带场景 + build / vet / id check 
 
 安装的步骤与契约：
 
-1. **前置骨架**：实体没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程没有玩家接入时执行 `roost add access player --service <service>`；模块清单的 `access` 另可要求 `roost add lifecycle <Entity>`、`roost add transport tcp` 与打开 `access.player.self_sync`（等同手工改 `roost.yaml` 再 `project sync`）。它们各自是完整的工程状态，后面失败时不回退；`plan` 逐条列出。
+1. **前置骨架**：实体没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程没有玩家接入时执行 `roost add access player --service <service>`；模块清单的 `access` 另可要求 `roost add lifecycle <Entity>` 与 `roost add transport tcp`，heartbeat / directory 也可由安装器代办。它们各自是完整的工程状态，后面失败时不回退；`plan` 逐条列出。`access.player.self_sync` 则在模块文件全部就位后开启，随模块安装回滚，避免中间状态尚无显式 packer 时错误校验附加 DAO。
 2. **状态**：模块的状态字段追加到实体主 DAO 的**末尾**，类型是模块自带的嵌套结构体。追加在末尾是因为同步的 PB 字段号按定义顺序排。同名字段已按同样的类型与标签存在时跳过；类型或标签不同、存储键已被占用时拒绝。
-3. **组件与文件**：模板先渲染进工程，再追加状态、接组件；自带实体最后补 lifecycle。落点已有内容不同的文件时拒绝（`already exists and is not this module's file`），不覆盖。唯一的例外是模块清单 `replaces` 列出的生成桩（目前是托管服务默认拒绝一切的 `internal/service/<name>/collaborators.go`）：它仍与生成器写出的内容逐字节相同时替换，`plan` 里标明；改过一个字符就拒绝（`has been edited since it was generated`）。
+3. **组件与文件**：模板先渲染进工程，再追加状态、接组件；`daos` 追加独立 DAO 聚合声明，`sync_packer` 接明确的同步工厂，已有业务工厂时拒绝覆盖；自带实体最后补 lifecycle。落点已有内容不同的文件时拒绝（`already exists and is not this module's file`），不覆盖。唯一的例外是模块清单 `replaces` 列出的生成桩（目前是托管服务默认拒绝一切的 `internal/service/<name>/collaborators.go`）：它仍与生成器写出的内容逐字节相同时替换，`plan` 里标明；改过一个字符就拒绝（`has been edited since it was generated`）。
    - **联动文件**：模块可以带与另一个模块的联动（`modules/<name>/with/<另一个模块>/`）。这次装的模块与已装的或同一次装的模块凑成一对、而这一对有联动时，全部模块写完之后把联动文件写进工程，归属记在拥有它的模块的 `modules.<name>.with.<另一个模块>` 下；`plan` / `add` 输出 `glue <模块> with <另一个模块>`，`--json` 里是 `glue` 数组。落点已有内容不同的文件时拒绝（`already exists and is not this glue file`）。两个都早已装好的不补。`verify` 把联动自带的场景单独列一项 `<模块>+<另一个模块>`。
 4. **号**：实体号、协议号、错误码、组件号从 `roost.yaml` 的 `ids` 段分配；一次安装多个模块时不会相撞，已装模块记录里的号即使文件被删也不再发出。
 5. **记录**：`roost.yaml` 的 `modules.<name>` 记下摘要、号、状态字段、文件、目标 service、requires 与可选 runtime。

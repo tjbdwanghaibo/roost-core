@@ -1,0 +1,134 @@
+package player
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"slices"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+//roost:component type={{ID:component:Friends}}
+const CompTypeFriends entity.ComponentType = {{ID:component:Friends}}
+
+type FriendsComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+type IFriendsEntity interface {
+	entity.IThreadSafeEntity
+	FriendsComp() *FriendsComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeFriends, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		p, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("friends owner %T", owner)
+		}
+		return &FriendsComponent{owner: p}, nil
+	})
+}
+func (c *FriendsComponent) Name() string { return "friends" }
+
+// 名单分别限制在 64 人；重复请求不占第二份名额。
+const FriendsLimit = 64
+const (
+	FriendsApply   int32 = 1
+	FriendsAccept  int32 = 2
+	FriendsRemove  int32 = 3
+	FriendsBlock   int32 = 4
+	FriendsUnblock int32 = 5
+	FriendsReject  int32 = 6
+)
+
+type FriendsSnapshot struct{ Peers, Incoming, Blocked []int64 }
+
+// Change 只可在同时锁住双方的 Nest 事务内调用；先检查全部容量和权限，再写双方 DAO。
+// ID 保存的是完整 EntityID，客户端快照转回玩家号。跨服实体不允许拿镜像替代。
+func (c *FriendsComponent) Change(peer *FriendsComponent, action int32) error {
+	if peer == nil || c.owner.ID() == peer.owner.ID() {
+		return apperrors.ErrFriendsInvalid
+	}
+	a, b := c.owner.Dao().GetFriends(), peer.owner.Dao().GetFriends()
+	aid, bid := c.owner.ID(), peer.owner.ID()
+	_, af := a.GetPeers(bid)
+	_, bf := b.GetPeers(aid)
+	_, ab := a.GetBlocked(bid)
+	_, bb := b.GetBlocked(aid)
+	switch action {
+	case FriendsApply:
+		if ab || bb {
+			return apperrors.ErrFriendsBlocked
+		}
+		if af && bf {
+			return nil
+		}
+		if _, ok := b.GetIncoming(aid); ok {
+			return nil
+		}
+		if a.PeersLen() >= FriendsLimit || b.PeersLen() >= FriendsLimit || b.IncomingLen() >= FriendsLimit {
+			return apperrors.ErrFriendsFull
+		}
+		b.SetIncomingKey(aid, true)
+	case FriendsAccept:
+		if ab || bb {
+			return apperrors.ErrFriendsBlocked
+		}
+		if af && bf {
+			return nil
+		}
+		if _, ok := a.GetIncoming(bid); !ok {
+			return apperrors.ErrFriendsApplicationMissing
+		}
+		if (!af && a.PeersLen() >= FriendsLimit) || (!bf && b.PeersLen() >= FriendsLimit) {
+			return apperrors.ErrFriendsFull
+		}
+		a.SetPeersKey(bid, true)
+		b.SetPeersKey(aid, true)
+		a.DelIncomingKey(bid)
+		b.DelIncomingKey(aid)
+	case FriendsRemove:
+		a.DelPeersKey(bid)
+		b.DelPeersKey(aid)
+		a.DelIncomingKey(bid)
+		b.DelIncomingKey(aid)
+	case FriendsBlock:
+		if !ab && a.BlockedLen() >= FriendsLimit {
+			return apperrors.ErrFriendsFull
+		}
+		a.SetBlockedKey(bid, true)
+		a.DelPeersKey(bid)
+		b.DelPeersKey(aid)
+		a.DelIncomingKey(bid)
+		b.DelIncomingKey(aid)
+	case FriendsUnblock:
+		a.DelBlockedKey(bid)
+	case FriendsReject:
+		a.DelIncomingKey(bid)
+	default:
+		return apperrors.ErrFriendsInvalid
+	}
+	return nil
+}
+
+// Snapshot 返回排序后的值拷贝，只能在本人的实体锁内读取。
+func (c *FriendsComponent) Snapshot() FriendsSnapshot {
+	s := c.owner.Dao().GetFriends()
+	out := FriendsSnapshot{}
+	s.RangePeers(func(id int64, _ bool) bool {
+		out.Peers = append(out.Peers, entity.GetUniqueIDFromEntityID(id))
+		return true
+	})
+	s.RangeIncoming(func(id int64, _ bool) bool {
+		out.Incoming = append(out.Incoming, entity.GetUniqueIDFromEntityID(id))
+		return true
+	})
+	s.RangeBlocked(func(id int64, _ bool) bool {
+		out.Blocked = append(out.Blocked, entity.GetUniqueIDFromEntityID(id))
+		return true
+	})
+	slices.Sort(out.Peers)
+	slices.Sort(out.Incoming)
+	slices.Sort(out.Blocked)
+	return out
+}

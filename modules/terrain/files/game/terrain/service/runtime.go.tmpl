@@ -1,0 +1,419 @@
+// Package service 在Nest锁外加载Pack与持久实体，随后把地形接到正式场景Ground/Surface和entitysync。
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"log/slog"
+	"os"
+	"sort"
+	"sync"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	building "{{MODULE}}/game/entities/terrain_building"
+	chunk "{{MODULE}}/game/entities/terrain_chunk"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/lifecycle"
+	gamescene "{{MODULE}}/game/scene"
+	scenes "{{MODULE}}/game/scene/service"
+	logic "{{MODULE}}/game/terrain"
+)
+
+const Capability app.ModName = "gameplay.terrain"
+
+type Runtime struct {
+	mu        sync.Mutex
+	worlds    map[int64]*logic.World
+	areas     map[int64]*sceneentity.Scene
+	registry  *app.Registry
+	scenes    *scenes.Manager
+	sender    *sender.TerrainSender
+	temporary string
+}
+
+func FromRegistry(registry *app.Registry) (*Runtime, error) {
+	runtime, ok := app.Lookup[*Runtime](registry, Capability)
+	if !ok || runtime == nil {
+		return nil, errors.New("terrain: runtime unavailable")
+	}
+	return runtime, nil
+}
+
+// DefaultPack 用正式写包器生成固定revision=1、128m平地；临时文件不承载玩家编辑，玩家编辑只存DAO。
+func DefaultPack() (string, error) {
+	file, err := os.CreateTemp("", "roost-terrain-*.pack")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	meta := core.Meta{BaseRevision: 1, ChunksX: 2, ChunksY: 2, WaterLevel: 0}
+	_, err = core.WritePack(file, meta, core.Flat(meta, 100, 0))
+	err = errors.Join(err, file.Close())
+	if err != nil {
+		os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+func Start(registry *app.Registry) (func(context.Context) error, error) {
+	manager, err := scenes.FromRegistry(registry)
+	if err != nil {
+		return nil, err
+	}
+	client, ok := app.Lookup[nest.Client](registry, mods.ModNest)
+	if !ok || client == nil {
+		return nil, errors.New("terrain: Nest unavailable")
+	}
+	runtime := &Runtime{worlds: map[int64]*logic.World{}, areas: map[int64]*sceneentity.Scene{}, registry: registry, scenes: manager, sender: sender.NewTerrainSender(client)}
+	path, err := DefaultPack()
+	if err != nil {
+		return nil, err
+	}
+	runtime.temporary = path
+	if _, err := runtime.Open(context.Background(), 2, path); err != nil {
+		os.Remove(path)
+		return nil, err
+	}
+	if err := registry.Register(Capability, runtime); err != nil {
+		return nil, errors.Join(err, runtime.Stop(context.Background()))
+	}
+	return runtime.Stop, nil
+}
+
+// Open只供可信服务端；同一sceneID不得改包或复用为另一份编辑空间。所有加载发生在业务worker之外。
+func (r *Runtime) Open(ctx context.Context, id int64, path string) (*logic.World, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.worlds) >= logic.MaxMaps || r.worlds[id] != nil {
+		return nil, logic.ErrFull
+	}
+	if _, _, err := r.scenes.IDs(0, id); err == nil {
+		return nil, fmt.Errorf("terrain: scene already open")
+	}
+	world, err := logic.OpenWorld(id, path)
+	if err != nil {
+		return nil, err
+	}
+	success := false
+	defer func() {
+		if !success {
+			if r.areas[id] != nil {
+				_ = r.scenes.Close(context.Background(), id)
+				delete(r.areas, id)
+				delete(r.worlds, id)
+			}
+			world.Pack.Close()
+		}
+	}()
+	world.SceneID, err = entity.BuildEntityID(id, sceneentity.EntityKindScene)
+	if err != nil {
+		return nil, err
+	}
+	chunks, err := lifecycle.TerrainChunkFromRegistry(r.registry)
+	if err != nil {
+		return nil, err
+	}
+	ids := []int64{}
+	values := []*chunk.TerrainChunk{}
+	for _, key := range world.Keys() {
+		unique, _ := logic.ChunkUnique(id, key)
+		value, _, err := chunks.GetOrCreate(ctx, unique)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, value.ID())
+		values = append(values, value)
+	}
+	states, err := r.sender.MultiGroupSync_TerrainLoad(ctx, ids, world)
+	if err != nil {
+		return nil, err
+	}
+	for _, state := range states {
+		if err := world.Publish(state); err != nil {
+			return nil, err
+		}
+	}
+	restored, err := r.loadBuildings(ctx, world, states)
+	if err != nil {
+		return nil, err
+	}
+	config := gamescene.Config{Template: "terrain", Line: 1, Bounds: world.Meta().Bounds(), Spawn: world.Spawn, BlockSize: core.ChunkSize, Sight: 2 * core.ChunkSize, Capacity: 1000, Ground: world, Surface: world.Walker}
+	if !config.Bounds.Contains(config.Spawn) {
+		config.Spawn = spatial.Point{X: 1000, Y: 1000}
+	}
+	area, err := r.scenes.Open(id, config)
+	if err != nil {
+		return nil, err
+	}
+	r.worlds[id], r.areas[id] = world, area
+	world.SiteCommit = func(value entity.IThreadSafeEntity, at spatial.Point, standing bool) error {
+		if standing {
+			return area.Space().Enter(value, at)
+		}
+		return area.Space().Leave(value)
+	}
+	// 权威地形、占地与建筑已经全部验证。同步注册失败保留可用地图，明确记录待恢复状态。
+	for i, value := range values {
+		state := states[i]
+		at := spatial.Point{X: int64(state.Key.X)*core.ChunkSize + core.ChunkSize/2, Y: int64(state.Key.Y)*core.ChunkSize + core.ChunkSize/2}
+		if err := area.Space().Enter(value, at); err != nil {
+			world.MarkFailure()
+			slog.Error("terrain: initial chunk sync needs refresh", "scene", id, "id", value.ID(), "err", err)
+		}
+	}
+	for _, site := range restored {
+		if err := world.PublishSite(site.value, site.state); err != nil {
+			world.MarkFailure()
+			slog.Error("terrain: initial building sync needs refresh", "scene", id, "id", site.value.ID(), "err", err)
+		}
+	}
+
+	success = true
+	return world, nil
+}
+
+type restoredSite struct {
+	value *building.TerrainBuilding
+	state logic.SiteState
+}
+
+func (r *Runtime) loadBuildings(ctx context.Context, world *logic.World, states []logic.ChunkState) ([]restoredSite, error) {
+	var restored []restoredSite
+	sites, err := lifecycle.TerrainBuildingFromRegistry(r.registry)
+	if err != nil {
+		return nil, err
+	}
+	counts := map[int64]int{}
+	for _, state := range states {
+		for _, id := range state.Lots {
+			counts[id]++
+		}
+	}
+	seen := map[int64]bool{}
+	for _, state := range states {
+		for _, id := range state.Lots {
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			if counts[id] != 4 {
+				return nil, errors.New("terrain: building must occupy exactly four nodes")
+			}
+			unique := entity.GetUniqueIDFromEntityID(id)
+			value, err := sites.Get(ctx, unique)
+			if err != nil {
+				return nil, err
+			}
+			if value.ID() != id {
+				return nil, logic.ErrInvalid
+			}
+			snapshot, err := r.sender.Sync_TerrainSite(ctx, value.ID(), world)
+			if err != nil {
+				return nil, err
+			}
+			if !snapshot.Standing {
+				return nil, errors.New("terrain: lot refers to removed building")
+			}
+			command := logic.Command{SceneID: world.ID, X: snapshot.X, Y: snapshot.Y}
+			for key, indices := range command.Footprint() {
+				found := false
+				for _, s := range states {
+					if s.Key != key {
+						continue
+					}
+					found = true
+					for _, index := range indices {
+						if s.Lots[index] != id {
+							return nil, errors.New("terrain: incomplete building footprint")
+						}
+					}
+				}
+				if !found {
+					return nil, errors.New("terrain: building footprint outside map")
+				}
+			}
+			restored = append(restored, restoredSite{value: value, state: snapshot})
+		}
+	}
+	return restored, nil
+}
+func (r *Runtime) World(id int64) (*logic.World, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	world := r.worlds[id]
+	if world == nil {
+		return nil, logic.ErrDenied
+	}
+	return world, nil
+}
+func (r *Runtime) Execute(ctx context.Context, playerID int64, command logic.Command) (logic.Result, error) {
+	world, err := r.World(command.SceneID)
+	if err != nil {
+		return logic.Result{}, err
+	}
+	if err := command.Validate(world.Meta()); err != nil {
+		return logic.Result{}, err
+	}
+	playerFull, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return logic.Result{}, err
+	}
+	keys := command.Brush().Chunks(world.Meta())
+	if command.Op == "build" || command.Op == "remove" {
+		keys = nil
+		for key := range command.Footprint() {
+			keys = append(keys, key)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Y != keys[j].Y {
+			return keys[i].Y < keys[j].Y
+		}
+		return keys[i].X < keys[j].X
+	})
+	ids := make([]int64, 0, len(keys))
+	for _, key := range keys {
+		unique, _ := logic.ChunkUnique(world.ID, key)
+		id, err := entity.BuildEntityID(unique, chunk.EntityKindTerrainChunk)
+		if err != nil {
+			return logic.Result{}, err
+		}
+		ids = append(ids, id)
+	}
+	if command.Op != "build" && command.Op != "remove" {
+		return r.sender.MultiGroupSync_TerrainBrush(ctx, ids, playerFull, world, command)
+	}
+	sites, err := lifecycle.TerrainBuildingFromRegistry(r.registry)
+	if err != nil {
+		return logic.Result{}, err
+	}
+	unique, err := logic.SiteUnique(world.ID, int32(command.X/core.SampleSpacing), int32(command.Y/core.SampleSpacing))
+	if err != nil {
+		return logic.Result{}, err
+	}
+	var site *building.TerrainBuilding
+	if command.Op == "build" {
+		site, _, err = sites.GetOrCreate(ctx, unique)
+	} else {
+		site, err = sites.Get(ctx, unique)
+	}
+	if err != nil {
+		return logic.Result{}, err
+	}
+	return r.sender.MultiGroupSync_TerrainBuild(ctx, ids, site.ID(), playerFull, world, command)
+}
+func (r *Runtime) Query(ctx context.Context, playerID, sceneID int64, key core.ChunkKey) (logic.ChunkState, error) {
+	world, err := r.World(sceneID)
+	if err != nil {
+		return logic.ChunkState{}, err
+	}
+	if !world.Meta().Contains(key) {
+		return logic.ChunkState{}, logic.ErrInvalid
+	}
+	unique, err := logic.ChunkUnique(sceneID, key)
+	if err != nil {
+		return logic.ChunkState{}, err
+	}
+	chunkID, err := entity.BuildEntityID(unique, chunk.EntityKindTerrainChunk)
+	if err != nil {
+		return logic.ChunkState{}, err
+	}
+	playerFull, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return logic.ChunkState{}, err
+	}
+	return r.sender.MultiSync_TerrainQuery(ctx, chunkID, playerFull, world)
+}
+func (r *Runtime) Stop(ctx context.Context) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var result error
+	for id, world := range r.worlds {
+		if err := r.scenes.Drain(ctx, id); err != nil {
+			result = errors.Join(result, err)
+			continue
+		}
+		result = errors.Join(result, world.Pack.Close())
+		delete(r.worlds, id)
+		delete(r.areas, id)
+	}
+	if len(r.worlds) == 0 && r.temporary != "" {
+		result = errors.Join(result, os.Remove(r.temporary))
+		r.temporary = ""
+	}
+	return result
+}
+
+// Refresh由可信服务器在告警后调用；从DAO重新投影，既不发新编辑序号，也不改变持久事实。
+// 玩家重连仍走entitysync全量；这里恢复的是本进程View/建筑subject注册，不声称网络投递完成。
+func (r *Runtime) Refresh(ctx context.Context, id int64) error {
+	world, err := r.World(id)
+	if err != nil {
+		return err
+	}
+	generation := world.Failures()
+	ids := []int64{}
+	for _, key := range world.Keys() {
+		unique, _ := logic.ChunkUnique(id, key)
+		full, _ := entity.BuildEntityID(unique, chunk.EntityKindTerrainChunk)
+		ids = append(ids, full)
+	}
+	states, err := r.sender.MultiGroupSync_TerrainLoad(ctx, ids, world)
+	if err != nil {
+		return err
+	}
+	for _, state := range states {
+		if err := world.Publish(state); err != nil {
+			return err
+		}
+	}
+	// 已知建筑包括拆除前曾发布的槽；重查版本后可恢复一次失败的隐藏。
+	for _, value := range world.KnownSites() {
+		state, err := r.sender.Sync_TerrainSite(ctx, value.ID(), world)
+		if err != nil {
+			return err
+		}
+		if err := world.PublishSite(value, state); err != nil {
+			return err
+		}
+	}
+	r.mu.Lock()
+	area := r.areas[id]
+	r.mu.Unlock()
+	if area == nil {
+		return logic.ErrDenied
+	}
+	chunks, err := lifecycle.TerrainChunkFromRegistry(r.registry)
+	if err != nil {
+		return err
+	}
+	for _, state := range states {
+		unique, _ := logic.ChunkUnique(id, state.Key)
+		value, err := chunks.Get(ctx, unique)
+		if err != nil {
+			return err
+		}
+		at := spatial.Point{X: int64(state.Key.X)*core.ChunkSize + core.ChunkSize/2, Y: int64(state.Key.Y)*core.ChunkSize + core.ChunkSize/2}
+		if err := area.Space().Enter(value, at); err != nil {
+			return err
+		}
+	}
+	restored, err := r.loadBuildings(ctx, world, states)
+	if err != nil {
+		return err
+	}
+	for _, site := range restored {
+		if err := world.PublishSite(site.value, site.state); err != nil {
+			return err
+		}
+	}
+	world.Recovered(generation)
+	return nil
+}

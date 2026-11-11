@@ -1,0 +1,13 @@
+package player
+
+import gamescene "{{MODULE}}/game/scene"
+
+// OnSceneFields 只在init登记附近玩家能看的PlayerDao顶层字段；未登记字段保持私有。
+// 唯一packer与本人视图由actor提供，本模块仅扩展scene公开视图。
+func OnSceneFields(name string, fields ...string) {
+	if name == "" {
+		panic("scene: empty field registration")
+	}
+	OnActorSyncFields("scene."+name, gamescene.Public, fields...)
+}
+func init() { OnSceneFields("actor", "Actor") }

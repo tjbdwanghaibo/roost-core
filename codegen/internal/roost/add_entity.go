@@ -141,6 +141,15 @@ func wireComponentField(raw []byte, path, entityType, fieldName, componentType s
 }
 
 func wireDAOField(raw []byte, path, entityType, importPath, collection, daoType string) ([]byte, error) {
+	fieldName := collection
+	if strings.EqualFold(strings.TrimSuffix(daoType, "Dao"), entityType) {
+		fieldName = "dao"
+	}
+	return wireNamedDAOField(raw, path, entityType, importPath, fieldName, collection, daoType)
+}
+
+// wireNamedDAOField 同时用于 add dao 与模块附加 DAO；只追加声明，不另建运行时注册路径。
+func wireNamedDAOField(raw []byte, path, entityType, importPath, fieldName, collection, daoType string) ([]byte, error) {
 	file, fset, entityAlias, structure, err := parseEntityAggregate(raw, path, entityType)
 	if err != nil {
 		return nil, err
@@ -152,10 +161,6 @@ func wireDAOField(raw []byte, path, entityType, importPath, collection, daoType 
 	dbAlias, err := ensureImport(file, importPath, "db")
 	if err != nil {
 		return nil, err
-	}
-	fieldName := collection
-	if strings.EqualFold(strings.TrimSuffix(daoType, "Dao"), entityType) {
-		fieldName = "dao"
 	}
 	if structHasNamedField(structure, fieldName) {
 		return nil, fmt.Errorf("entity %s already contains field %s", entityType, fieldName)

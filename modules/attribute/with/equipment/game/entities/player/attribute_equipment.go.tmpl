@@ -1,0 +1,34 @@
+package player
+
+import (
+	rules "{{MODULE}}/game/equipment"
+	gameattr "{{MODULE}}/game/gameplay/attribute"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+// 仅安装 attribute 与 equipment 时登记。加载重建与穿脱共用同一规则，不保留组件外可变缓存。
+func init() {
+	OnAttributeGear("equipment", func(owner *Player) (*gameattr.Combat, error) {
+		p := &gameattr.Combat{}
+		var invalid bool
+		owner.EquipmentComp().RangeWorn(func(_ int32, itemID int64, level int32) bool {
+			_, attack, hp, ok := rules.Lookup(itemID)
+			if !ok {
+				return true
+			} // 已移除的规则不再提供属性，但穿戴事实保留，迁移由工程负责。
+			if level < 1 || level > rules.MaxLevel {
+				invalid = true
+				return false
+			}
+			p.SetAttack(p.Attack + attack*int64(level))
+			p.SetHP(p.HP + hp*int64(level))
+			return true
+		})
+		if invalid {
+			return nil, apperrors.ErrEquipmentLevelInvalid
+		}
+		p.Update()
+		return p, nil
+	})
+	OnEquipmentChanged("attribute", func(c *EquipmentComponent) error { return c.Owner().AttributeComp().RefreshGear() })
+}

@@ -1,0 +1,17 @@
+package player
+
+import (
+	"testing"
+
+	"{{MODULE}}/configs/schema"
+)
+
+// 确切边界比概率统计稳定，也能抓住把 < 写成 <= 的可编译变异。
+func TestGachaWeightsUseExactHalfOpenIntervals(t *testing.T) {
+	drops := []schema.GachaDrop{{ItemID: 11, Weight: 2}, {ItemID: 22, Weight: 0}, {ItemID: 33, Weight: 3}}
+	for roll, want := range []int64{11, 11, 33, 33, 33} {
+		if got := gachaPick(drops, int64(roll)); got != want {
+			t.Fatalf("roll %d = %d, want %d", roll, got, want)
+		}
+	}
+}

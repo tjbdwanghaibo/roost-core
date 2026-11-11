@@ -23,4 +23,4 @@ errcodes: [profile_name_empty, profile_name_long, profile_name_invalid, profile_
 verify:
   packages: [./game/handler]
   run: ^TestProfile
-  pass: 19
+  pass: 20

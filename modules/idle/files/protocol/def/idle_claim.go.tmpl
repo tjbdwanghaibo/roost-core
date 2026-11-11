@@ -1,0 +1,27 @@
+//go:build protocoldef
+
+package protocoldef
+
+// IdleClaimRequest 初次 Sequence=1，之后每次新领取必须恰为上次成功序号+1。
+// 最近一次重试返回原回包；更旧序号拒绝。首次领取只开始计时，不追溯建档前收益。
+type IdleClaimRequest struct {
+	Sequence int64 `pb:"1"`
+}
+
+// IdleClaimResponse 的 SettledAt 是已消费到的服务器毫秒时刻；未满一周期的零头保留。
+// Capped 表示触达时间或金额上限，超量时间和零头已丢弃。在线时间同样累计。
+type IdleClaimResponse struct {
+	Code      int32  `pb:"1"`
+	Reason    string `pb:"2"`
+	Reward    int64  `pb:"3"`
+	Balance   int64  `pb:"4"`
+	SettledAt int64  `pb:"5"`
+	Sequence  int64  `pb:"6"`
+	Capped    bool   `pb:"7"`
+}
+
+//roost:protocol group=game handler=idle
+type IdleClaimProtocol interface {
+	//roost:msg id={{ID:protocol:IdleClaim}}
+	IdleClaim(IdleClaimRequest) IdleClaimResponse
+}

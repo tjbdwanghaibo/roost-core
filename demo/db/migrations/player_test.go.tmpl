@@ -61,26 +61,26 @@ func TestPlayerStepMovesTheWeaponIntoItsSlot(t *testing.T) {
 	}
 	for _, weapon := range []any{int64(2001), int32(2001), float64(2001)} {
 		document := &Document{Fields: v1Player(42, 5, bson.M{"weapon_id": weapon}), version: 1}
-		if err := steps.RunFrom(context.Background(), document, 1, 2); err != nil {
+		if err := steps.RunFrom(context.Background(), document, 1, int32(db.PlayerDaoSchemaVersion)); err != nil {
 			t.Fatalf("weapon %T: %v", weapon, err)
 		}
-		if _, left := document.Fields["weapon_id"]; left || document.DataVersion() != 2 {
+		if _, left := document.Fields["weapon_id"]; left || document.DataVersion() != int32(db.PlayerDaoSchemaVersion) {
 			t.Fatalf("weapon %T: weapon_id left or version %d", weapon, document.DataVersion())
 		}
-		slot := document.Fields["equipment"].(bson.M)["slots"].(bson.M)["1"].(bson.M)
-		if slot["item_id"] != int64(2001) || profileField(document.Fields, "1") != "p42" {
+		slot := document.Fields["equipment"].(bson.M)["1"].(bson.M)["1"].(bson.M)
+		if slot["1"] != int64(2001) || profileField(document.Fields, "1") != "p42" {
 			t.Fatalf("weapon %T: slot=%v profile=%v", weapon, slot, document.Fields["profile"])
 		}
 	}
 	bare := &Document{Fields: v1Player(43, 5, nil), version: 1}
-	if err := steps.RunFrom(context.Background(), bare, 1, 2); err != nil {
+	if err := steps.RunFrom(context.Background(), bare, 1, int32(db.PlayerDaoSchemaVersion)); err != nil {
 		t.Fatal(err)
 	}
 	if _, present := bare.Fields["equipment"]; present {
 		t.Fatal("a player who wore nothing was given an equipment sub-document")
 	}
 	broken := &Document{Fields: v1Player(44, 5, bson.M{"weapon_id": "sword"}), version: 1}
-	if err := steps.RunFrom(context.Background(), broken, 1, 2); err == nil {
+	if err := steps.RunFrom(context.Background(), broken, 1, int32(db.PlayerDaoSchemaVersion)); err == nil {
 		t.Fatal("a weapon_id that is not a number was accepted")
 	}
 }
@@ -156,7 +156,7 @@ func TestPlayerMigrationRefusesBeforeWriting(t *testing.T) {
 	ctx := context.Background()
 	for name, bad := range map[string]bson.M{
 		"bad weapon":      v1Player(9, 1, bson.M{"weapon_id": "sword"}),
-		"future schema":   {"_id": int64(9), "_version": int64(1), "_schema": int64(3)},
+		"future schema":   {"_id": int64(9), "_version": int64(1), "_schema": int64(db.PlayerDaoSchemaVersion+1)},
 		"remote envelope": {"_id": int64(9), "_ver": int64(1), "_schema": int64(1), "_version": int64(1)},
 		"no version":      {"_id": int64(9), "_schema": int64(1)},
 	} {

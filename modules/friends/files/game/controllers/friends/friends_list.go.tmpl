@@ -1,0 +1,28 @@
+package friends
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	player "{{MODULE}}/game/entities/player"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+func (c *Controller) HandleFriendsList(ctx *playeraccess.Context, req *pb.FriendsListRequest) (*pb.FriendsListResponse, error) {
+	if ctx == nil || req == nil {
+		return nil, fmt.Errorf("friends: context and request required")
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	out := &pb.FriendsListResponse{}
+	if err == nil {
+		var s player.FriendsSnapshot
+		s, err = syncsender.NewFriendsListSender(c.nestClient).Sync_FriendsList(ctx.Context(), id)
+		out.Peers, out.Incoming, out.Blocked = s.Peers, s.Incoming, s.Blocked
+	}
+	if err != nil {
+		out.Code, out.Reason = errcode.ClientError(err)
+	}
+	return out, nil
+}

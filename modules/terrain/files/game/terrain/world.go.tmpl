@@ -1,0 +1,165 @@
+package terrain
+
+import (
+	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	"sync"
+	"sync/atomic"
+)
+
+// World只提供不可变原始数据与提交后的投影。放置重叠必须查锁内DAO，不能以这里的占位缓存为权威。
+type World struct {
+	failures   atomic.Uint64
+	siteMu     sync.Mutex
+	sites      map[int64]committedSite
+	SiteCommit func(entity.IThreadSafeEntity, spatial.Point, bool) error
+	Spawn      spatial.Point
+	ID         int64
+	SceneID    int64
+	Pack       *core.Pack
+	View       *core.View
+	Walker     *core.Walker
+	bases      map[core.ChunkKey]core.Chunk
+	lots       [4]atomic.Pointer[committedLots]
+}
+type committedLots struct {
+	version int64
+	cells   map[int32]int64
+}
+
+func OpenWorld(id int64, path string) (*World, error) {
+	if id < 2 || id > MaxSceneID {
+		return nil, ErrInvalid
+	}
+	pack, err := core.OpenPack(path)
+	if err != nil {
+		return nil, err
+	}
+	meta := pack.Meta()
+	if meta.ChunksX > 2 || meta.ChunksY > 2 {
+		pack.Close()
+		return nil, fmt.Errorf("terrain: at most 2 by 2 chunks per map")
+	}
+	world := &World{ID: id, Pack: pack, View: core.NewView(pack), sites: map[int64]committedSite{}, bases: map[core.ChunkKey]core.Chunk{}}
+	for y := int32(0); y < meta.ChunksY; y++ {
+		for x := int32(0); x < meta.ChunksX; x++ {
+			key := core.ChunkKey{X: x, Y: y}
+			if err := world.View.LoadBase(key); err != nil {
+				pack.Close()
+				return nil, err
+			}
+			data, _, loaded := world.View.Chunk(key)
+			if !loaded {
+				pack.Close()
+				return nil, core.ErrNotLoaded
+			}
+			world.bases[key] = data
+		}
+	}
+	world.Spawn = spatial.Point{X: 6000, Y: 6000}
+	if !meta.Bounds().Contains(world.Spawn) {
+		world.Spawn = spatial.Point{X: 1000, Y: 1000}
+	}
+	rules := core.DefaultWalkRules
+	rules.SwimSpeed = 0
+	world.Walker = &core.Walker{View: world.View, Rules: rules, Occupied: world.Occupied}
+	return world, nil
+}
+func (w *World) Meta() core.Meta { return w.Pack.Meta() }
+func (w *World) Base(key core.ChunkKey) (core.Chunk, error) {
+	data, ok := w.bases[key]
+	if !ok {
+		return core.Chunk{}, core.ErrOutOfMap
+	}
+	return data.Clone(), nil
+}
+func (w *World) Keys() []core.ChunkKey {
+	meta := w.Meta()
+	keys := make([]core.ChunkKey, 0, meta.Chunks())
+	for y := int32(0); y < meta.ChunksY; y++ {
+		for x := int32(0); x < meta.ChunksX; x++ {
+			keys = append(keys, core.ChunkKey{X: x, Y: y})
+		}
+	}
+	return keys
+}
+func (w *World) Occupied(key core.ChunkKey, index int32) bool {
+	if key.X < 0 || key.X >= 2 || key.Y < 0 || key.Y >= 2 {
+		return true
+	}
+	state := w.lots[key.Y*2+key.X].Load()
+	return state != nil && state.cells[index] != 0
+}
+
+// Publish只接不可变快照，版本单调；一次多块提交逐块发布，不承诺跨块插值原子快照。
+func (w *World) Publish(state ChunkState) error {
+	if state.BaseRevision != w.Meta().BaseRevision {
+		return ErrBase
+	}
+	err := w.View.SetOverlay(state.Key, core.Overlay{BaseRevision: state.BaseRevision, Version: state.Version, Heights: state.Heights, Materials: state.Materials})
+	if errors.Is(err, core.ErrStaleOverlay) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	cells := make(map[int32]int64, len(state.Lots))
+	for index, id := range state.Lots {
+		cells[index] = id
+	}
+	slot := &w.lots[state.Key.Y*2+state.Key.X]
+	for {
+		old := slot.Load()
+		if old != nil && old.version > state.Version {
+			return nil
+		}
+		if slot.CompareAndSwap(old, &committedLots{version: state.Version, cells: cells}) {
+			return nil
+		}
+	}
+}
+func (w *World) InBounds(at spatial.Point) bool { return w.Meta().Bounds().Contains(at) }
+func (w *World) Blocked(at spatial.Point) bool {
+	if !w.InBounds(at) {
+		return true
+	}
+	return !w.Walker.Standable(at)
+}
+
+// Failures记录本地投影失败代际；恢复只清除自身开始前看到的一代，不吞掉并发新失败。
+func (w *World) Failures() uint64            { return w.failures.Load() }
+func (w *World) MarkFailure()                { w.failures.Add(1) }
+func (w *World) Recovered(generation uint64) { w.failures.CompareAndSwap(generation, 0) }
+
+type committedSite struct {
+	value   entity.IThreadSafeEntity
+	version int64
+}
+
+func (w *World) PublishSite(value entity.IThreadSafeEntity, state SiteState) error {
+	w.siteMu.Lock()
+	defer w.siteMu.Unlock()
+	if previous, ok := w.sites[value.ID()]; ok && previous.version > state.Version {
+		return nil
+	}
+	if w.SiteCommit == nil {
+		return errors.New("terrain: scene publication not initialized")
+	}
+	if err := w.SiteCommit(value, spatial.Point{X: state.X, Y: state.Y}, state.Standing); err != nil {
+		return err
+	}
+	w.sites[value.ID()] = committedSite{value: value, version: state.Version}
+	return nil
+}
+func (w *World) KnownSites() []entity.IThreadSafeEntity {
+	w.siteMu.Lock()
+	defer w.siteMu.Unlock()
+	out := make([]entity.IThreadSafeEntity, 0, len(w.sites))
+	for _, state := range w.sites {
+		out = append(out, state.value)
+	}
+	return out
+}

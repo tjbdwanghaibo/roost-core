@@ -1,0 +1,23 @@
+name: friends
+summary: 同服好友：申请、同意、拒绝、双向删除、单向黑名单；两个 Player 同一笔 Nest 事务，名单有界
+requires: []
+conflicts: []
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+access:
+  transport: tcp
+entity: Player
+state:
+  - field: Friends
+    type: FriendsState
+    store: friends
+    dao: persist
+    comment: Friends 保存有界的双向好友、收到的申请与单向黑名单；仅经本人查询返回。
+component: Friends
+protocols: [FriendsChange, FriendsList]
+errcodes: [friends_invalid, friends_full, friends_blocked, friends_application_missing]
+verify:
+  packages: [./game/handler, ./game/controllers/friends]
+  run: ^TestFriends
+  pass: 12

@@ -148,7 +148,7 @@ var kitConfigSchemas = map[string]configschema.Schema{
 	"directory": {Keys: []configschema.Key{
 		{Name: "service_metrics.enabled", Kind: "bool", Default: "true", Help: "false 关掉本进程全部服务的业务指标"},
 		{Name: "directory.key_prefix", Kind: "string", Help: "Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）", Starter: true, Example: "roost:{project}:directory", Required: true},
-		{Name: "directory.reservation_ttl", Kind: "duration", Min: "1ns", Help: "Required and positive: a reservation that never expires burns the key when the caller dies.\nThere is no default because the right value depends on how long the caller's commit path takes.", Required: true},
+		{Name: "directory.reservation_ttl", Kind: "duration", Min: "1ns", Help: "Required and positive: a reservation that never expires burns the key when the caller dies.\nThere is no default because the right value depends on how long the caller's commit path takes.", Starter: true, Example: "60s", Required: true},
 	}},
 	"etcd": {Keys: []configschema.Key{
 		{Name: "server_type", Kind: "string", Help: "服务类型，App 按启动的子命令写入"},

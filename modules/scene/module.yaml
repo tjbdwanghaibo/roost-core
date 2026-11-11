@@ -1,0 +1,44 @@
+name: scene
+summary: 场景实体、多图与分线、原子切换、区域 AOI 与公开字段同步、独立时间域
+requires: [actor]
+needs:
+  mods: [nest, heartbeat]
+  features: [entity, dao, protocol]
+access: {transport: tcp, self_sync: true, lifecycle: true}
+entity: Player
+entities: [Scene]
+sync_packer: NewActorPlayerSyncPacker
+state:
+  - {field: SceneRuntime, type: SceneRuntimeState, store: scene_runtime, dao: 'nopersist,nosync', comment: 当前区域集合，只在场景运行期使用。}
+  - {field: SceneInteraction, type: SceneInteractionState, store: scene_interaction, dao: 'persist,nosync', comment: 交互连续序号与最后应答，防止重发重复触发。}
+protocols: [SceneChange, SceneInteract]
+runtime: {package: game/scene/service, start: Start}
+verify:
+  packages: [./game/controllers/scene]
+  run: ^TestScene
+  pass: 26
+with:
+  chat:
+    summary: 同进程同场景附近即时聊天，无历史和补发
+    verify:
+      packages: [./game/controllers/scene]
+      run: ^TestWithSceneChat
+      pass: 5
+  profile:
+    summary: 公开 Profile，其余私有状态仅本人可见
+    verify:
+      packages: [./game/controllers/scene]
+      run: ^TestWithSceneProfile
+      pass: 2
+  attribute:
+    summary: 公开 AttributeFinal，其余私有状态仅本人可见
+    verify:
+      packages: [./game/controllers/scene]
+      run: ^TestWithSceneAttribute
+      pass: 2
+  equipment:
+    summary: 公开 Equipment，其余私有状态仅本人可见
+    verify:
+      packages: [./game/controllers/scene]
+      run: ^TestWithSceneEquipment
+      pass: 2

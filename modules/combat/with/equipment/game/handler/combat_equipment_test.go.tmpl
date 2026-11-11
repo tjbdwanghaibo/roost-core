@@ -1,0 +1,57 @@
+package handler
+
+import (
+	"errors"
+	"reflect"
+	"testing"
+
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+func combatEquipWeapon(f *combatFixture) error {
+	p := f.players[0]
+	if _, err := p.BagComp().Add(1003, 1); err != nil {
+		return err
+	}
+	_, _, err := p.EquipmentComp().Equip(1003, 1)
+	return err
+}
+
+func TestWithCombatEquipmentRefreshesOnlyAtNextTick(t *testing.T) {
+	equipmentLoad(t, equipmentRows())
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "strike")
+	f.must(t, func() error { return combatEquipWeapon(f) })
+	if _, err := f.cast(0, 1, 3, "bolt"); !errors.Is(err, apperrors.ErrCombatSkill) {
+		t.Fatalf("same tick equipment cast %v", err)
+	}
+	f.now.Add(50)
+	f.mustCast(t, 0, 1, 3, "bolt")
+	f.now.Add(200)
+	if r := f.mustStep(t, 4); r.PeerHealth != 65 {
+		t.Fatalf("equipped attack %+v", r)
+	}
+}
+
+func TestWithCombatEquipmentRejectedChangeKeepsWorldBoundary(t *testing.T) {
+	equipmentLoad(t, equipmentRows())
+	f := newCombatFixture(t)
+	f.pair(t)
+	f.mustCast(t, 0, 1, 2, "strike")
+	before := f.snapshot(t)
+	f.commit.reject.Store(true)
+	if err := f.action(func() error { return combatEquipWeapon(f) }); err == nil {
+		t.Fatal("equipment commit accepted")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("rejected equipment changed world")
+	}
+	f.commit.reject.Store(false)
+	f.now.Add(50)
+	f.mustCast(t, 0, 1, 3, "bolt")
+	f.now.Add(200)
+	if r := f.mustStep(t, 4); r.PeerHealth != 80 {
+		t.Fatalf("rejected equipment changed attack %+v", r)
+	}
+}

@@ -1,6 +1,33 @@
 package skillbook
 
-import "github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+import (
+	"sort"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+)
+
+var compileEnvironmentHooks = map[string]func(*skill.CompileEnvironment){}
+
+// OnCompileEnvironment 仅在包 init 登记业务 Host 的编译能力；运行期不允许更换规则。
+// 每次编译基于独立默认环境，按名字调用，摘要在全部扩展后统一计算。
+func OnCompileEnvironment(name string, apply func(*skill.CompileEnvironment)) {
+	if name == "" || apply == nil || compileEnvironmentHooks[name] != nil {
+		panic("skillbook: invalid or duplicate compile environment hook: " + name)
+	}
+	compileEnvironmentHooks[name] = apply
+}
 
 // CompileEnvironment 是工程自己的技能编译环境；自定义 Host 能力与函数在这里登记。
-func CompileEnvironment() skill.CompileEnvironment { return skill.DefaultCompileEnvironment() }
+func CompileEnvironment() skill.CompileEnvironment {
+	environment := skill.DefaultCompileEnvironment()
+	names := make([]string, 0, len(compileEnvironmentHooks))
+	for name := range compileEnvironmentHooks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		compileEnvironmentHooks[name](&environment)
+	}
+	environment.Digest = skill.AuthorityDigest(environment)
+	return environment
+}

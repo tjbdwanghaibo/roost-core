@@ -1,0 +1,10 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 业务码由安装器分配；钱包和背包的拒绝原样透出。
+var (
+	ErrIdleSequence  = errcode.Define({{ID:errcode:idle_sequence}}, "idle_sequence", "claim sequence must be the next one; older requests are rejected")
+	ErrIdleClockBack = errcode.Define({{ID:errcode:idle_clock_back}}, "idle_clock_back", "business clock is before the last settlement")
+	ErrIdleRules     = errcode.Define({{ID:errcode:idle_rules}}, "idle_rules", "idle rules or business time is invalid")
+)

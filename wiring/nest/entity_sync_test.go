@@ -37,6 +37,9 @@ func TestEntitySyncModConfigurationAndLifecycle(t *testing.T) {
 			if err := mod.Provide(registry); err != nil {
 				t.Fatal(err)
 			}
+			if manager, ok := app.Lookup[*entitysync.Manager](registry, mods.ModEntitySync); !ok || manager != mod.EntitySync() {
+				t.Fatal("registry must expose the same owned sync manager")
+			}
 			if err := mod.Start(); err != nil {
 				t.Fatal(err)
 			}

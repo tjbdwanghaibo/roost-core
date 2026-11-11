@@ -1,0 +1,25 @@
+package scene
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+func (c *Controller) HandleSceneInteract(ctx *playeraccess.Context, request *pb.SceneInteractRequest) (*pb.SceneInteractResponse, error) {
+	if ctx == nil || request == nil {
+		return nil, fmt.Errorf("scene: invalid interaction")
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		return nil, err
+	}
+	_, area, err := c.manager.IDs(0, request.SceneID)
+	if err != nil {
+		return nil, err
+	}
+	return sender.NewSceneInteractSender(c.client).MultiSync_SceneInteract(ctx.Context(), id, area, request.Sequence, request.ObjectID)
+}

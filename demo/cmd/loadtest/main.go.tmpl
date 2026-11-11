@@ -60,13 +60,13 @@ const profileName = "demo"
 func main() {
 	endpoint := flag.String("endpoint", "127.0.0.1:7000", "player TCP address")
 	count := flag.Int("count", 10, "robot population")
- executor := flag.String("executor", "pool", "pool, looping, or arrival-rate; rates count whole scenarios, not messages")
- rate := flag.Float64("rate", 10, "arrival-rate scenarios started per second")
- maxConcurrent := flag.Int("max-concurrent", 1024, "arrival-rate in-flight robot limit")
- seed := flag.Int64("seed", 1, "reproducible scenario RNG seed")
- rampStep := flag.Int("ramp-step", 1, "robots started per ramp step")
- rampInterval := flag.Duration("ramp-interval", 0, "delay between population ramp steps")
- reportPath := flag.String("report", "", "optional JSON report output file")
+	executor := flag.String("executor", "pool", "pool, looping, or arrival-rate; rates count whole scenarios, not messages")
+	rate := flag.Float64("rate", 10, "arrival-rate scenarios started per second")
+	maxConcurrent := flag.Int("max-concurrent", 1024, "arrival-rate in-flight robot limit")
+	seed := flag.Int64("seed", 1, "reproducible scenario RNG seed")
+	rampStep := flag.Int("ramp-step", 1, "robots started per ramp step")
+	rampInterval := flag.Duration("ramp-interval", 0, "delay between population ramp steps")
+	reportPath := flag.String("report", "", "optional JSON report output file")
 	duration := flag.Duration("duration", 0, "bound the run; 0 lets every robot finish its scenario once")
 	scenarioDir := flag.String("scenarios", "loadtest/scenarios", "directory of scenario YAML files")
 	scenarioName := flag.String("scenario", "demo", "scenario to run")
@@ -95,13 +95,13 @@ func main() {
 	}
 	defer login.Close()
 
-	cfg := runner.Config{Executor: runner.Executor(*executor), Count:*count, Rate:*rate, MaxConcurrent:*maxConcurrent,Seed:*seed,Duration:*duration,Scenario:*scenarioName,Ramp:runner.Ramp{Step:*rampStep,Interval:*rampInterval},Transport:transport.Config{Type:playertcp.TransportType,Endpoint:*endpoint}}
- if cfg.Executor != runner.ExecutorPool && cfg.Duration <= 0 {
-  fmt.Fprintln(os.Stderr,"loadtest: looping/arrival-rate requires a positive -duration")
-  os.Exit(2)
- }
- ops := gameOpsClient{addr: *gameOps, token: *adminToken, http: &http.Client{Timeout: 15 * time.Second}}
- if err := run(cfg, *scenarioDir, *firstPlayerID, *maxErrorRate, *maxP95, *reportPath, login, ops); err != nil {
+	cfg := runner.Config{Executor: runner.Executor(*executor), Count: *count, Rate: *rate, MaxConcurrent: *maxConcurrent, Seed: *seed, Duration: *duration, Scenario: *scenarioName, Ramp: runner.Ramp{Step: *rampStep, Interval: *rampInterval}, Transport: transport.Config{Type: playertcp.TransportType, Endpoint: *endpoint}}
+	if cfg.Executor != runner.ExecutorPool && cfg.Duration <= 0 {
+		fmt.Fprintln(os.Stderr, "loadtest: looping/arrival-rate requires a positive -duration")
+		os.Exit(2)
+	}
+	ops := gameOpsClient{addr: *gameOps, token: *adminToken, http: &http.Client{Timeout: 15 * time.Second}}
+	if err := run(cfg, *scenarioDir, *firstPlayerID, *maxErrorRate, *maxP95, *reportPath, login, ops); err != nil {
 		fmt.Fprintf(os.Stderr, "loadtest: %v\n", err)
 		os.Exit(1)
 	}
@@ -126,7 +126,7 @@ func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRat
 				Run: cfg,
 				Thresholds: []loadtest.Threshold{
 					{Metric: "error_rate", Max: maxErrorRate},
- {Metric:"drop_rate",Max:0},
+					{Metric: "drop_rate", Max: 0},
 					{Metric: "p95", Max: maxP95},
 				},
 			},
@@ -156,10 +156,14 @@ func run(cfg runner.Config, scenarioDir string, firstPlayerID int64, maxErrorRat
 		return err
 	}
 	report, err := json.MarshalIndent(snapshot, "", "  ")
- if err != nil { return err }
- if reportPath != "" {
-  if err := os.WriteFile(reportPath,append(report,'\n'),0o644);err != nil {return fmt.Errorf("write report: %w",err)}
- }
+	if err != nil {
+		return err
+	}
+	if reportPath != "" {
+		if err := os.WriteFile(reportPath, append(report, '\n'), 0o644); err != nil {
+			return fmt.Errorf("write report: %w", err)
+		}
+	}
 	fmt.Println(string(report))
 	if snapshot.State != loadtest.StateFinished {
 		// snapshot.Error names the violated threshold with its actual value
@@ -572,7 +576,8 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 		}))
 	// move_target: send a goal and let the server walk there (the client
 	// sends intent, the player's own heartbeat moves it). The answer
-	// only says the walk started and where it starts; the walk itself
+	// ActionID is the opaque movement token (not an actionflow queue index);
+	// the answer says the walk started and where it starts; the walk itself
 	// arrives as replicated positions, which move_arrive waits for.
 	action.MustRegisterCall[pb.MoveTargetRequest, pb.MoveTargetResponse](actions, protocols, "move_target", msgid.MsgMoveTarget,
 		action.OnResp(func(rb *robot.Context, resp *pb.MoveTargetResponse) error {
@@ -590,8 +595,8 @@ func registerCalls(actions *action.Registry, protocols *protocol.Registry) {
 	// equip: wear the sword the scenario granted. The response says which
 	// slot it went in — the client does not choose, because a slot is a
 	// property of the item.
-	action.MustRegisterCall[pb.EquipRequest, pb.EquipResponse](actions, protocols, "equip", msgid.MsgEquip,
-		action.OnResp(func(rb *robot.Context, resp *pb.EquipResponse) error {
+	action.MustRegisterCall[pb.EquipmentEquipRequest, pb.EquipmentEquipResponse](actions, protocols, "equip", msgid.MsgEquipmentEquip,
+		action.OnResp(func(rb *robot.Context, resp *pb.EquipmentEquipResponse) error {
 			if err := coded(resp.Code, resp.Reason); err != nil {
 				return err
 			}
@@ -1029,8 +1034,8 @@ func (pbCodec) Marshal(value any) ([]byte, error) {
 		return pb.MarshalMoveRequest(message)
 	case *pb.MoveTargetRequest:
 		return pb.MarshalMoveTargetRequest(message)
-	case *pb.EquipRequest:
-		return pb.MarshalEquipRequest(message)
+	case *pb.EquipmentEquipRequest:
+		return pb.MarshalEquipmentEquipRequest(message)
 	case *pb.PurchaseRequest:
 		return pb.MarshalPurchaseRequest(message)
 	case *pb.ActivityStandingRequest:
@@ -1176,8 +1181,8 @@ func (pbCodec) Unmarshal(data []byte, target any) error {
 			return err
 		}
 		*message = *decoded
-	case *pb.EquipResponse:
-		decoded, err := pb.UnmarshalEquipResponse(data)
+	case *pb.EquipmentEquipResponse:
+		decoded, err := pb.UnmarshalEquipmentEquipResponse(data)
 		if err != nil {
 			return err
 		}

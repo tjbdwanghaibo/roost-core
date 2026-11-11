@@ -7,7 +7,6 @@ import (
 
 	"{{MODULE}}/game/equipment"
 	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
-	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/nest"
 )
 
@@ -29,16 +28,12 @@ func (c *equipmentCommitter) Commit(_ context.Context, record dataengine.CommitR
 
 func newEquippedPlayer(t *testing.T) *Player {
 	t.Helper()
-	RegisterEntity()
-	id, err := entity.BuildEntityID(7700, EntityKindPlayer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Kind: EntityKindPlayer, Id: id})
-	if err != nil {
-		t.Fatalf("build player: %v", err)
-	}
-	return built.(*Player)
+	subject := newAttributePlayer(t, 7700)
+	if _, err := nest.RunIsolatedTransaction(context.Background(), &equipmentCommitter{}, "seed_equipment", func() (any, error) {
+		if _, err := subject.BagComp().Add(ironSwordID, 1); err != nil { return nil, err }
+		return subject.BagComp().Add(steelSword, 1)
+	}); err != nil { t.Fatal(err) }
+	return subject
 }
 
 const (

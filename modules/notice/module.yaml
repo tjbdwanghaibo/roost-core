@@ -1,0 +1,10 @@
+name: notice
+summary: 公告与跑马灯：可信服务端入口和GM命令，复用chat系统发布、历史和在线推送，默认不周期播放
+requires: [chat]
+runtime:
+  package: game/notice
+  start: Start
+verify:
+  packages: [./game/notice]
+  run: ^TestNotice
+  pass: 8

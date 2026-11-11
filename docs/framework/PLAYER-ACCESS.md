@@ -1,6 +1,6 @@
 # 业务层如何处理玩家协议
 
-玩家接入层已经由生成器提供，不需要再创建一个 Session 服务。本篇以 demo 中的“穿戴装备”为例：客户端只提交物品 ID，服务器从已认证连接取得玩家 ID，通过 Nest 修改背包和装备，最后返回响应。
+玩家接入层已经由生成器提供，不需要再创建一个 Session 服务。本篇以 demo 使用的 equipment 模块“穿戴装备”为例：客户端只提交物品 ID，服务器从已认证连接取得玩家 ID，通过 Nest 修改背包和装备，最后返回响应。
 
 ## 1. 请求经过哪些层
 
@@ -8,9 +8,9 @@
 客户端 PB 请求
   → Gate / Game TCP（连接与认证）
   → playeraccess.ProtocolRegistry（协议校验、解码、请求上下文）
-  → player.Controller.HandleEquip（业务入口）
-  → syncsender.EquipItemSender（生成的 Nest 调用）
-  → handlerEquipItem（Entity 保护下的业务和事务）
+  → equipment.Controller.HandleEquipmentEquip（业务入口）
+  → syncsender.EquipmentEquipSender（生成的 Nest 调用）
+  → handlerEquipmentEquip（Entity 保护下的业务和事务）
   → Controller 返回 PB 响应 → 接入层编码、回包
 ```
 
@@ -18,34 +18,34 @@
 
 ## 2. 定义协议
 
-下面是已有 demo 的定义；已有工程不要重复添加相同消息号。源码为 [equip.go.tmpl](../../demo/protocol/def/equip.go.tmpl)。
+下面是已有 demo 的定义；已有工程不要重复添加相同消息号。源码为 [equipment_equip.go.tmpl](../../modules/equipment/files/protocol/def/equipment_equip.go.tmpl)。
 
 ```go
 //go:build protocoldef
 
 package protocoldef
 
-type EquipRequest struct {
+type EquipmentEquipRequest struct {
     ItemID int64 `pb:"1"`
 }
 
-type EquipResponse struct {
+type EquipmentEquipResponse struct {
     Code     int32  `pb:"1"`
     Reason   string `pb:"2"`
     Slot     int32  `pb:"3"`
     Replaced int64  `pb:"4"`
 }
 
-//roost:protocol group=game handler=player
-type EquipProtocol interface {
+//roost:protocol group=game handler=equipment
+type EquipmentEquipProtocol interface {
     //roost:msg id=10018
-    Equip(EquipRequest) EquipResponse
+    EquipmentEquip(EquipmentEquipRequest) EquipmentEquipResponse
 }
 ```
 
-在生成工程执行 `go generate ./...`，生成 PB 类型、编解码、消息号和注册代码。启动接线通过 `RegisterPlayerProtocols` 注册 Controller，再封存注册表。框架负责解码和回包，Controller 不要再手动写 socket，否则可能重复响应。
+在生成工程执行 `go generate ./...`，生成 PB 类型、编解码、消息号和注册代码。启动接线通过 `RegisterEquipmentProtocols` 注册 Controller，再封存注册表。框架负责解码和回包，Controller 不要再手动写 socket，否则可能重复响应。
 
-启用 player access 后，生成器还会按 `handler=player` 在 `game/controllers/player` 自动补齐 `Controller`、`FromRegistry` 和缺少的 `HandleXxx`。请求参数是 `*playeraccess.Context` 与对应 PB 请求；有响应的协议返回 `(*pb.XxxResponse, error)`，单向请求只返回 `error`。新方法先返回“not implemented”错误，必须补业务才能提供服务；该错误会进入接入层的错误处理，不是成功响应。
+启用 player access 后，生成器还会按 `handler=equipment` 在 `game/controllers/equipment` 自动补齐 `Controller`、`FromRegistry` 和缺少的 `HandleXxx`。请求参数是 `*playeraccess.Context` 与对应 PB 请求；有响应的协议返回 `(*pb.XxxResponse, error)`，单向请求只返回 `error`。新方法先返回“not implemented”错误，必须补业务才能提供服务；该错误会进入接入层的错误处理，不是成功响应。
 
 这些骨架生成后属于业务代码：重复生成、`--force`、项目同步都不覆盖或删除已有实现。方法可以移动到同包其他 Go 文件；生成器按 Controller 的方法声明查重。已有类型与 `FromRegistry` 必须配套；同名文件占用但缺少对应方法时会明确报冲突。协议删除或签名变更后，业务方法由开发者调整，编译负责校验类型是否仍匹配。`roost generate --check` 会报告缺失的骨架。
 
@@ -53,83 +53,54 @@ type EquipProtocol interface {
 
 ## 3. Controller：把协议转换成业务调用
 
-以下方法与 demo 的真实接口一致，放在业务工程 `game/controllers/player` 包中。依赖已有 Controller 的 `NestClient()`；`player` 指业务工程的 `game/entities/player`，`syncsender` 指 `game/handler/syncsender`，`playeraccess` 指 `game/playeraccess`，`pb` 指 `protocol/pb`。完整 imports 见 [Controller 源码](../../demo/game/controllers/player/equip.go.tmpl)。
+equipment 模块的 [Controller](../../modules/equipment/files/game/controllers/equipment/equipment_equip.go.tmpl) 只声明正式端点：
 
 ```go
-func (controller *Controller) HandleEquip(
-    ctx *playeraccess.Context, req *pb.EquipRequest,
-) (*pb.EquipResponse, error) {
-    if ctx == nil || req == nil {
-        return nil, fmt.Errorf("equip: context and request are required")
-    }
-    // 使用认证身份，不能让客户端传入另一个玩家 ID。
-    id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
-    if err != nil {
-        return nil, err
-    }
-
-    // Controller 在 Nest 业务池外，允许等待 Sender 的处理结果。
-    result, err := syncsender.NewEquipItemSender(controller.NestClient()).
-        Sync_EquipItem(ctx.Context(), id, req.ItemID)
-    if err != nil {
-        code, reason := errcode.ClientError(err)
-        if code == errcode.CodeInternal {
-            slog.Error("equip failed", "player_id", ctx.PlayerID, "err", err)
-        }
-        return &pb.EquipResponse{Code: code, Reason: reason}, nil
-    }
-    return &pb.EquipResponse{Slot: result.Slot, Replaced: result.Replaced}, nil
+//roost:endpoint nest=EquipmentEquip
+func (c *Controller) HandleEquipmentEquip(
+    ctx *playeraccess.Context, req *pb.EquipmentEquipRequest,
+) (*pb.EquipmentEquipResponse, error) {
+    return c.dispatchEquipmentEquip(ctx, req)
 }
 ```
 
-`ctx.PlayerID` 是玩家业务 ID；Nest 需要编码 Entity Kind 后的完整 Entity ID，因此不能直接把 PlayerID 当 Entity ID 传给 Sender。Controller 只做接入编排：依赖可变实体状态的校验必须放进下面的 handler，避免“检查时有装备，真正写入时已被另一个请求拿走”。
+生成的 dispatch 从认证上下文取 PlayerID、构造实体号、调用 Nest Sender，并把业务错误转换成 Code / Reason。Controller 在 Nest 业务池外可以等待回复；依赖可变实体状态的校验仍放在 handler 中。
 
 ## 4. Nest handler：在实体保护下执行
 
-以下是现有 [装备 handler](../../demo/game/handler/equip_item.go.tmpl) 的业务过程。`equipment`、`apperrors` 都是 demo 的业务包，不是需要新增到 core 的公共抽象。
+[装备 handler](../../modules/equipment/files/game/handler/equipment_equip.go.tmpl) 调用模块组件：
 
 ```go
 //roost:nest rollback=undo durability=strict
-func handlerEquipItem(
-    target player.IPlayerFullEntity, itemID int64,
-) (equipment.Result, error) {
-    slot, wearable := equipment.SlotFor(itemID)
-    if !wearable {
-        return equipment.Result{}, errcode.Wrap(
-            apperrors.ErrItemUnknown, nil, "item_id", itemID)
+func handlerEquipmentEquip(
+    target player.IEquipmentEntity, request *pb.EquipmentEquipRequest,
+) (*pb.EquipmentEquipResponse, error) {
+    if request == nil {
+        return nil, apperrors.ErrEquipmentItemInvalid
     }
-    if _, err := target.BagComp().RemoveItem(itemID, 1); err != nil {
-        return equipment.Result{}, err
-    }
-    _, replaced, err := target.EquipmentComp().Equip(itemID, 1)
+    slot, replaced, err := target.EquipmentComp().Equip(request.ItemID, 1)
     if err != nil {
-        return equipment.Result{}, err
+        return nil, err
     }
-    if replaced != 0 {
-        if _, err := target.BagComp().AddItem(replaced, 1); err != nil {
-            return equipment.Result{}, err
-        }
-    }
-    target.AttributeComp().RefreshGear()
-    return equipment.Result{Slot: slot, Replaced: replaced}, nil
+    return &pb.EquipmentEquipResponse{Slot: slot, Replaced: replaced}, nil
 }
 ```
 
-业务在 handler 中操作组件，不手动获取 Entity 锁。移出背包、装备替换、旧装备放回和属性刷新共用事务；`strict` 等待 WAL 持久化，不等于 Mongo 投影已经完成。生成 Sender 的参数是实体 ID，handler 收到的是对应实体接口；多个实体的例子见 [AddExp Controller](../../demo/game/controllers/player/add_exp.go.tmpl) 和 [handler](../../demo/game/handler/add_exp.go.tmpl)。
+`EquipmentComponent.Equip` 负责扣新物品、换槽、退旧物品；attribute 联动负责同事务重算属性。调用方不能再次扣包。业务不手动取 Entity 锁，错误交还 Nest 统一回滚；strict 等待 WAL 持久化，不表示 Mongo 投影已完成。多实体例子见 [AddExp Controller](../../demo/game/controllers/player/add_exp.go.tmpl) 和 [handler](../../demo/game/handler/add_exp.go.tmpl)。
 
 ## 5. Agent 能否发送响应
 
-能。常规写法就是在 Controller 中返回 `&pb.EquipResponse{...}, nil`，生成的注册链负责编码，并带原请求序号回给当前连接。`playeraccess.Context` 本身没有接收任意 PB 对象的 `SendResponse` 方法。
+能。常规写法就是在 Controller 中返回 `&pb.EquipmentEquipResponse{...}, nil`，生成的注册链负责编码，并带原请求序号回给当前连接。`playeraccess.Context` 本身没有接收任意 PB 对象的 `SendResponse` 方法。
 
-需要手动回包时，现有 `ctx.Session.Reply` 接收 `playeraccess.Response`，不是原始 PB 对象。例如在 `HandleEquip` 内：
+需要手动回包时，现有 `ctx.Session.Reply` 接收 `playeraccess.Response`，不是原始 PB 对象。例如在 `HandleEquipmentEquip` 内：
 
 ```go
-payload, err := pb.MarshalEquipResponse(&pb.EquipResponse{Slot: 1})
+payload, err := pb.MarshalEquipmentEquipResponse(&pb.EquipmentEquipResponse{Slot: 1})
 if err != nil {
     return nil, err
 }
 err = ctx.Session.Reply(ctx.Context(), &playeraccess.Response{
-    MessageID: msgid.MsgEquip,
+    MessageID: msgid.MsgEquipmentEquip,
     Sequence:  ctx.Seq,
     Payload:   payload,
 })

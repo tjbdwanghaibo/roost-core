@@ -1,0 +1,493 @@
+{
+  "source_baseline": "ec7661037e577d88604ea3e42191e6eb6510a9bd + working tree changes",
+  "scope": "macOS source-head with GOWORK=off and local core replace; not production acceptance",
+  "first_repository_run": {
+    "test_results": {
+      "pass": 9770,
+      "skip": 99,
+      "fail": 2
+    },
+    "package_results": {
+      "skip": 24,
+      "pass": 163,
+      "fail": 1
+    },
+    "failures": [
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "test": "TestGeneratedBeginnerAndManifestDocumentationIsComplete"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "test": "TestClientSDKAgainstGeneratedPlayerTCP"
+      }
+    ],
+    "skips": [
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "test": "TestGeneratedSagaNativeStepsAndEffectConsumer"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/cache",
+        "test": "TestLayeredExpiredLocalCopyDoesNotVetoAuthorityRealRedis"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/cache",
+        "test": "TestRefHMapPatchKeepsTheWholeRecordAliveRealRedis"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/cache",
+        "test": "TestRefHMapRegistryGuardAcceptsSameLayoutConcurrencyRealRedis"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/cache",
+        "test": "TestRefHMapSchemaRegistryPromises"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/cache",
+        "test": "TestRefHMapContractsRealRedis"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/cache",
+        "test": "TestRefHMapBoundaryContractsRealRedis"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/cache",
+        "test": "TestRefHMapUnknownWrite"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "test": "TestGateGeneratedBusinessConsumer"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/entity",
+        "test": "TestEntityRangeContract/EntityManager.Range/clear_inside_the_callback"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/entity",
+        "test": "TestEntityRangeContract/EntityManager.RangeByCategory/clear_inside_the_callback"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/entity",
+        "test": "TestEntityRangeContract/EntityManager.RangeGroupEntities/clear_inside_the_callback"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/entity",
+        "test": "TestEntityRangeContract/ManagerAccess.Range/clear_inside_the_callback"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/nestwal",
+        "test": "TestNestWALCrashChildProcess"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine",
+        "test": "TestRealMongoStartupDrainOutlastsALeftoverTransaction"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat/internal/bench",
+        "test": "TestDeliveryRun"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/terrain",
+        "test": "TestReplicaMeasure"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/terrain",
+        "test": "TestScale10k"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/terrain",
+        "test": "TestScaleCodecChoice"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/network/gateway",
+        "test": "TestAcrossGatesTheCSharpClientThatAbandonsAHandshakeKeepsItsNewerConnection"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$caster.position/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$caster.position/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$caster.position/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$ability.self/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$ability.self/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$ability.self/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.mode/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.mode/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.mode/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.mode/spawn_step"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.elapsed_ticks/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.elapsed_ticks/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.elapsed_ticks/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.charge_bp/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.charge_bp/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.charge_bp/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.release_reason/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.release_reason/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.release_reason/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.pulse_index/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.pulse_index/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.pulse_index/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.stock/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.stock/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.stock/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.max_stock/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.max_stock/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$cast.max_stock/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$owner.position/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$owner.position/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$owner.position/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$spawn/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$spawn/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$spawn/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.tick/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.tick/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.tick/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.membership_ticks/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.membership_ticks/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.membership_ticks/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.enter_count/cast_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.enter_count/phase_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/skill",
+        "test": "TestEvalContextTableCellsAgreeWithCompilerAndRuntime/$event.enter_count/spawn_start"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/redis",
+        "test": "TestCompareAndDeleteOnlyRemovesTheValueItWasShownIntegration"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/redis",
+        "test": "TestIndexIsMaintainedInTheSameWriteIntegration"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/redis",
+        "test": "TestIndexScorePrecisionSurvivesLuaIntegration"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/redis",
+        "test": "TestCompareAndSetAllIsAllOrNothingIntegration"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/cellworld",
+        "test": "TestCellWorldMeasure"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver",
+        "test": "TestMGetReturnsOneElementPerKeyIncludingMisses"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver",
+        "test": "TestMGetWithNoKeysMakesNoRoundTrip"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/driver",
+        "test": "TestMGetPreservesBinaryValues"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest",
+        "test": "TestDeleteKeysRemovesOnlyKeysContainingThePrefix"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/redis/redistest",
+        "test": "TestDeleteKeysRemovesOnlyKeysContainingThePrefixOnCluster"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore",
+        "test": "TestConditionalIndexRetirementIntegration/cluster_false"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore",
+        "test": "TestConditionalIndexRetirementIntegration/cluster_true"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore",
+        "test": "TestConditionalDeleteProtectsRecreatedIdentity/redis"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore",
+        "test": "TestUpdateAllRetriesAsAWholeOnRedisIntegration"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore",
+        "test": "TestIndexDeferMovesAnExistingEntryAndCreatesNothingIntegration"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/gameplay/cellworld",
+        "test": "TestCellProcessChild"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/activity",
+        "test": "TestActivityClusterRecoversPartialCompletion"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/directory",
+        "test": "TestDirectoryDeleteCannotRemoveRecreatedOwner/redis/cancel/owner-b"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/directory",
+        "test": "TestDirectoryDeleteCannotRemoveRecreatedOwner/redis/cancel/owner-a"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/directory",
+        "test": "TestDirectoryDeleteCannotRemoveRecreatedOwner/redis/release/owner-b"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/directory",
+        "test": "TestDirectoryDeleteCannotRemoveRecreatedOwner/redis/release/owner-a"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/match",
+        "test": "TestCrossPartitionCommitRunsOnRedisCluster"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/platform",
+        "test": "TestRetirementCannotHideLatePaidOrder/reconstruct_false"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/platform",
+        "test": "TestRetirementCannotHideLatePaidOrder/reconstruct_true"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/platform",
+        "test": "TestPendingMaintenanceControls/ghost_only"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/platform",
+        "test": "TestPendingMaintenanceControls/existing_paid_order"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/platform",
+        "test": "TestPendingMaintenanceControls/defer_does_not_resurrect_terminal"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/platform",
+        "test": "TestAStoredOrderIsImmediatelyEnumerableIntegration"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/platform",
+        "test": "TestATerminalOrderLeavesTheIndexIntegration"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/platform",
+        "test": "TestBackoffMovesAnOrderInTheIndexIntegration"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/service/platform",
+        "test": "TestAnIndexEntryWithNoOrderIsRetiredIntegration"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/wiring/activity",
+        "test": "TestActivityTaggedClusterLifecycle"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/wiring/platform",
+        "test": "TestPlatformTaggedClusterControl"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/wiring/rank",
+        "test": "TestRankTaggedClusterLifecycle"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "test": "TestDoctorPlayerTCPPassesAfterAuthAndConfig"
+      },
+      {
+        "package": "github.com/tjbdwanghaibo/roost-core/codegen/internal/roost",
+        "test": "TestGeneratedComposeShapeCheckCatchesTheTmpfsShapeComposeUpRefuses"
+      }
+    ]
+  },
+  "fresh_game_demo": {
+    "test_results": {
+      "pass": 774,
+      "skip": 14
+    },
+    "package_results": {
+      "skip": 66,
+      "pass": 49
+    },
+    "failures": [],
+    "skips": [
+      {
+        "package": "example.com/studio/gameplaycheck/db/migrations",
+        "test": "TestPlayerMigrationRealMongo"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/deploy/docker",
+        "test": "TestProductionComposeResolvesToTheShapeTheDeploymentReliesOn"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/game/controllers/player",
+        "test": "TestDungeonClearsBoardCountsEachRunOnceRealRedis"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/internal/service/alliance",
+        "test": "TestStopFoundingSendsNewAlliancesToTheOtherInstances"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/internal/service/platform",
+        "test": "TestPurchaseDeliveryDurableWinner/standalone"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/internal/service/platform",
+        "test": "TestPurchaseDeliveryDurableWinner/cluster"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/internal/service/game",
+        "test": "TestActivityBoardKeepsTheLatestCumulativeScore"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/internal/service/game",
+        "test": "TestTerrainGameScaleLoadMeasure"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/internal/service/game",
+        "test": "TestBuildingRestartRealMongo"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/internal/service/game",
+        "test": "TestTerrainMeasureUpdateBytes"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/internal/service/game",
+        "test": "TestTerrainMeasureDownlinkScenarios"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/internal/service/game",
+        "test": "TestTerrainMeasureBrushCost"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/internal/service/game",
+        "test": "TestTerrainRestartRealMongo"
+      },
+      {
+        "package": "example.com/studio/gameplaycheck/internal/service/game",
+        "test": "TestTerrainEditLedgerRealMongo"
+      }
+    ]
+  }
+}

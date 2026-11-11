@@ -1,0 +1,14 @@
+package handler
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+
+	player "{{MODULE}}/game/entities/player"
+)
+
+// handlerCombatTick 仅供本服有界驱动调用，没有客户端协议；同一代际重复拍为时间幂等。
+//
+//roost:nest rollback=undo durability=strict
+func handlerCombatTick(source, peer player.ICombatEntity, epoch uint64) error {
+	return source.CombatComp().Tick(peer.CombatComp(), epoch, fctx.Now())
+}

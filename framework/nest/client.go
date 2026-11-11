@@ -135,15 +135,37 @@ func (mgr *NestMgr) DispatchMulti(ctx context.Context, name HandlerName, ids []i
 
 // RequestMulti 是 DispatchMulti 的同步版本。
 func (mgr *NestMgr) RequestMulti(ctx context.Context, name HandlerName, ids []int64, params Params, opts ...SendOpt) (any, error) {
+	ch, timeout, err := mgr.beginMultiRequest(ctx, name, ids, params, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return mgr.waitResult(ctx, ch, timeout)
+}
+
+// RequestMultiSettled 与 RequestSettled 的完成语义相同，全部目标仍在同一笔多实体事务中执行。
+// 仅供 handler 外的执行器排空：已准入后必须收到真实完成回复，不能把调用方取消当作事务结束。
+func (mgr *NestMgr) RequestMultiSettled(ctx context.Context, name HandlerName, ids []int64, params Params, opts ...SendOpt) (any, error) {
+	ch, _, err := mgr.beginMultiRequest(ctx, name, ids, params, opts...)
+	if err != nil {
+		return nil, err
+	}
+	ret := <-ch
+	if err, ok := ret.(error); ok {
+		return nil, err
+	}
+	return ret, nil
+}
+
+func (mgr *NestMgr) beginMultiRequest(ctx context.Context, name HandlerName, ids []int64, params Params, opts ...SendOpt) (<-chan any, time.Duration, error) {
 	if len(ids) == 0 {
-		return nil, fmt.Errorf("%w: empty entity ids", ErrInvalidMessage)
+		return nil, 0, fmt.Errorf("%w: empty entity ids", ErrInvalidMessage)
 	}
 	if err := validateClientDispatch(mgr, ctx, "RequestMulti", name, ErrSyncInHandler); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	fullIDs, err := normalizeClientIDs(ids)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	msg, ch := GenSyncMsg(MsgTypeMulti)
 	msg.Tids = fullIDs // 不再重复复制；调用方原切片仍与消息隔离。
@@ -151,9 +173,9 @@ func (mgr *NestMgr) RequestMulti(ctx context.Context, name HandlerName, ids []in
 	checkRemoteIds(msg, msg.Tids)
 	requestTimeout := msg.Context.SyncWait
 	if err := mgr.admit(msg, opts...); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return mgr.waitResult(ctx, ch, requestTimeout)
+	return ch, requestTimeout, nil
 }
 
 // DispatchMultiGroup 异步投递分组多目标消息；组边界经 HandlerOptionWithGroup 交给 handler。

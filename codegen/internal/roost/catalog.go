@@ -82,6 +82,11 @@ var modCatalog = map[string]modSpec{
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/redis", Alias: "kitredis", Constructor: "kitredis.NewRedisMod()",
 		DevService: "redis",
 	},
+	// directory 是 Redis 上的共享目录 Mod，不是独立的托管 RPC 服务。
+	"directory": {
+		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/directory", Alias: "kitdirectory",
+		Constructor: "kitdirectory.NewMod(directory.NormalizeLower, nil)", Depends: []string{"redis"},
+	},
 	"mongo": {
 		ImportPath: "github.com/tjbdwanghaibo/roost-core/wiring/mongo", Alias: "kitmongo", Constructor: "kitmongo.NewMongoMod()",
 		DevService: "mongo",

@@ -1,0 +1,13 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 业务码由安装器分配；钱包和背包的拒绝原样透出。
+var (
+	ErrGachaKeyInvalid   = errcode.Define({{ID:errcode:gacha_key_invalid}}, "gacha_key_invalid", "invalid request key")
+	ErrGachaKeyConflict  = errcode.Define({{ID:errcode:gacha_key_conflict}}, "gacha_key_conflict", "request key already used with different pool or count")
+	ErrGachaCountInvalid = errcode.Define({{ID:errcode:gacha_count_invalid}}, "gacha_count_invalid", "draw count must be one or ten")
+	ErrGachaPoolInvalid  = errcode.Define({{ID:errcode:gacha_pool_invalid}}, "gacha_pool_invalid", "pool is unavailable or its configuration is invalid")
+	ErrGachaOverflow     = errcode.Define({{ID:errcode:gacha_overflow}}, "gacha_overflow", "draw price or receipt sequence overflows")
+	ErrGachaPoolLimit    = errcode.Define({{ID:errcode:gacha_pool_limit}}, "gacha_pool_limit", "player has reached the tracked pool limit")
+)

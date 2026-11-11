@@ -1,0 +1,27 @@
+package dbdef
+
+// CombatState 仅同步公开事实；HP/护盾/Buff的唯一权威在附加CombatDAO，此处每次提交前投影。
+type CombatState struct {
+	Initialized bool  `store:"1"`
+	Ready       bool  `store:"2"`
+	Opponent    int64 `store:"3"`
+	Health      int64 `store:"4"`
+	MaxHealth   int64 `store:"5"`
+	Shield      int64 `store:"6"`
+	Alive       bool  `store:"7"`
+	Rooted      bool  `store:"8"`
+	Silenced    bool  `store:"9"`
+}
+
+// CombatPrivateState 的请求序列跨会话单调增长，仅缓存最近一次结果；旧序列永远拒绝。
+// ID较小的一方持有双人Runtime与Host完整边界，另一方这两个字段为空；不向场景观察者下发。
+type CombatPrivateState struct {
+	Sequence int64  `store:"1"`
+	Kind     string `store:"2"`
+	Skill    string `store:"3"`
+	Target   int64  `store:"4"`
+	Reply    []byte `store:"5"`
+	Runtime  []byte `store:"6"`
+	Host     []byte `store:"7"`
+	Epoch    uint64 `store:"8"`
+}

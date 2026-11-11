@@ -72,7 +72,7 @@ func TestModuleRuntimeInstallationIsTransactional(t *testing.T) {
 	if moduleProjectDigest(t, root) != before {
 		t.Fatal("repeated install changed the project")
 	}
-	if report, err := VerifyModules(context.Background(), root, []string{"skillbook"}, nil); err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 8 {
+	if report, err := VerifyModules(context.Background(), root, []string{"skillbook"}, nil); err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 11 {
 		t.Fatalf("verify: %v %+v", err, report)
 	}
 }

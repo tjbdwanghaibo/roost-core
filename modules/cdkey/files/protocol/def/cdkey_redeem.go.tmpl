@@ -1,0 +1,18 @@
+//go:build protocoldef
+
+package protocoldef
+
+type CdkeyRedeemRequest struct {
+	Cdkey string `pb:"1"`
+}
+type CdkeyRedeemResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	MailID string `pb:"3"`
+}
+
+//roost:protocol group=game handler=cdkey
+type CdkeyRedeemProtocol interface {
+	//roost:msg id={{ID:protocol:CdkeyRedeem}}
+	CdkeyRedeem(CdkeyRedeemRequest) CdkeyRedeemResponse
+}

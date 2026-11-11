@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -22,8 +23,24 @@ func TestSkillbookStartsTheGameCatalog(t *testing.T) {
 	defer stop(context.Background())
 	ids, warnings, err := Read(registry)
 	// 默认数据和 game-demo 都保留这一份工程自有的 fireball 定义。
-	if err != nil || !reflect.DeepEqual(ids, []string{"skill.{{PROJECT}}.fireball"}) || warnings != 0 {
+	if err != nil || !slices.Contains(ids, "skill.{{PROJECT}}.fireball") || !slices.IsSorted(ids) || len(slices.Compact(slices.Clone(ids))) != len(ids) || warnings != 0 {
 		t.Fatalf("catalog = %v, warnings %d, err %v", ids, warnings, err)
+	}
+}
+
+func TestSkillbookCompileEnvironmentRunsHooksBeforeDigest(t *testing.T) {
+	original := compileEnvironmentHooks
+	compileEnvironmentHooks = map[string]func(*skill.CompileEnvironment){}
+	t.Cleanup(func() { compileEnvironmentHooks = original })
+	var order []string
+	OnCompileEnvironment("z-last", func(environment *skill.CompileEnvironment) {
+		order = append(order, "z")
+		environment.Digest = "must-be-recomputed"
+	})
+	OnCompileEnvironment("a-first", func(_ *skill.CompileEnvironment) { order = append(order, "a") })
+	first, second := CompileEnvironment(), CompileEnvironment()
+	if !reflect.DeepEqual(order, []string{"a", "z", "a", "z"}) || first.Digest != skill.AuthorityDigest(first) || second.Digest != first.Digest {
+		t.Fatalf("unstable environment: hooks=%v first=%s second=%s", order, first.Digest, second.Digest)
 	}
 }
 
@@ -81,11 +98,15 @@ func TestSkillbookDuplicateStartPreservesTheRunningCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stop(context.Background())
+	before, _, err := Read(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if duplicate, err := Start(registry); err == nil || duplicate != nil {
 		t.Fatal("duplicate start accepted")
 	}
 	ids, _, err := Read(registry)
-	if err != nil || !reflect.DeepEqual(ids, []string{"skill.{{PROJECT}}.fireball"}) {
+	if err != nil || !reflect.DeepEqual(ids, before) {
 		t.Fatalf("running catalog lost: %v %v", ids, err)
 	}
 }
@@ -104,5 +125,56 @@ func TestSkillbookStopClosesReadsAndCanBeRepeated(t *testing.T) {
 	}
 	if err := stop(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSkillbookReturnsTheStartupProgramAndChecksItsDigest(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	stop, err := Start(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop(context.Background())
+	id := "skill.{{PROJECT}}.fireball"
+	program, err := LookupProgram(registry, id)
+	if err != nil || skill.Inspect(program).ID != id {
+		t.Fatalf("lookup %v %v", program, err)
+	}
+	resolver, err := Resolver(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolver.ResolveProgram(id, skill.Inspect(program).Identity.GameplayDigest)
+	if err != nil || resolved != program {
+		t.Fatalf("resolver %v", err)
+	}
+	if _, err := resolver.ResolveProgram(id, "other-version"); !errors.Is(err, skill.ErrCheckpointProgram) {
+		t.Fatal("wrong digest accepted", err)
+	}
+	if _, err := LookupProgram(registry, "missing"); !errors.Is(err, skill.ErrCheckpointProgram) {
+		t.Fatal("unknown program", err)
+	}
+	stop(context.Background())
+	if _, err := resolver.ResolveProgram(id, skill.Inspect(program).Identity.GameplayDigest); err == nil {
+		t.Fatal("stopped resolver remained live")
+	}
+}
+func TestSkillbookOwnsThePublishedProgramMap(t *testing.T) {
+	compiled, err := skills.CompileAll(CompileEnvironment())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := app.NewRegistry(viper.New())
+	stop, err := start(registry, func() (*skills.Catalog, error) { return compiled, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop(context.Background())
+	id := "skill.{{PROJECT}}.fireball"
+	expected := compiled.Programs[id]
+	delete(compiled.Programs, id)
+	actual, err := LookupProgram(registry, id)
+	if err != nil || actual != expected {
+		t.Fatal("shared program map", err)
 	}
 }

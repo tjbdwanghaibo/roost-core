@@ -14,7 +14,7 @@ import (
 )
 
 // Controller 持有聊天端点的依赖：chat 服务的客户端、玩家连接的推送面、本进程的在线名单。
-// 聊天不改任何 Entity，不经过 Nest。
+// 持久频道不改 Entity；可选本地频道自行经 Nest 读取授权范围，然后在锁外推送。
 type Controller struct {
 	registry  *app.Registry
 	messaging svcchat.Messaging

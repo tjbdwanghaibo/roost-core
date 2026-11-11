@@ -1,0 +1,25 @@
+name: attribute
+summary: 属性：生成的Combat profile与Container分层，基础/装备/最终属性，档案升级同事务成长
+requires: [profile]
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode, attribute]
+entity: Player
+state:
+  - {field: AttributeBase, type: AttributeValues, store: attribute_base, dao: 'persist,sync', comment: 基础属性；无记录时按档案等级派生。}
+  - {field: AttributeGear, type: AttributeValues, store: attribute_gear, dao: 'nopersist,nosync', comment: 装备来源临时层，加载重算。}
+  - {field: AttributeFinal, type: AttributeValues, store: attribute_final, dao: 'nopersist,sync', comment: 最终属性视图，加载重算并同步。}
+component: Attribute
+protocols: [AttributeGet]
+errcodes: [attribute_overflow]
+verify:
+  packages: [./game/handler, ./game/gameplay/attribute]
+  run: ^TestAttribute
+  pass: 16
+with:
+  equipment:
+    summary: 穿卸同事务重算属性；加载按已穿装备重建非持久层
+    verify:
+      packages: [./game/handler]
+      run: ^TestWithAttributeEquipment
+      pass: 8

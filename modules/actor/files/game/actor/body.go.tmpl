@@ -1,0 +1,293 @@
+// Package actor 提供实体共用的移动接线；位置权威在DAO，空间索引只接收提交后的事实。
+package actor
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/heartbeat"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/state"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+)
+
+const (
+	Rooted                  state.ID = 1
+	Silenced                state.ID = 2
+	MovePeriod                       = 200 * time.Millisecond
+	SavePeriod                       = 10 * time.Second
+	MaxPathPoints                    = 256
+	MaxConfiguredPathPoints          = 4096
+)
+
+var ErrCannotMove = errors.New("actor: movement is disabled")
+var Catalog = newCatalog()
+
+func newCatalog() *state.Catalog {
+	value, err := state.NewCatalog(state.Def{ID: Rooted, Name: "rooted"}, state.Def{ID: Silenced, Name: "silenced"})
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
+// Environment 由所在场景传入，也可由房间提供。actor 不查场景表、不管理观察者。
+// 地形与时间域必须支持无锁读取已提交状态；Space 的进出沿用 MapBasic 提交后回调。
+type Environment struct {
+	ID      int64
+	Space   movement.Space
+	Ground  spatial.Terrain
+	Surface movement.Surface
+	Time    *timedomain.Domain
+}
+
+// Hooks 全在当前实体锁和事务内调用，只能改当前实体或已持锁的参与者；错误由调用者原样返回。
+// 不在这些回调里发 RPC、取别的实体锁或开启 goroutine。
+type Hooks struct {
+	Enter     func(*Body) error
+	Leave     func(*Body) error
+	AfterTick func(*Body, heartbeat.Beat) error
+}
+
+type Config struct {
+	Fields movement.Fields
+	Save   func(int64, spatial.Point, movement.Facing) error
+	Hooks  Hooks
+	// MaxPathPoints 是路径点预算；0用默认256，最多4096。
+	MaxPathPoints int
+	// Surface 是可选的动态地面提供者，每拍读取一次；nil用Environment.Surface。
+	Surface func() movement.Surface
+}
+
+type bodyState struct {
+	environment Environment
+	lastDomain  time.Time
+}
+
+// Body 为 Player / Monster 共用；所有方法除 Map.Published 外只在实体锁内调用。
+// Move 的路径、MapBasic 的归属、心跳启停及此处环境均随 Nest undo 回滚。
+// 不缓存另一份位置，也不引入不能回滚的动作队列；巡逻/战斗可以在外层用 actionflow 组织这些动作。
+type Body struct {
+	Owner   entity.IThreadSafeEntity
+	Host    *heartbeat.Host
+	Map     *movement.MapBasic
+	Move    *movement.Move
+	States  *state.Set
+	config  Config
+	beat    *heartbeat.Reg
+	current bodyState
+}
+
+func New(owner entity.IThreadSafeEntity, config Config) (*Body, error) {
+	if owner == nil {
+		return nil, errors.New("actor: owner is required")
+	}
+	if config.MaxPathPoints == 0 {
+		config.MaxPathPoints = MaxPathPoints
+	}
+	if config.MaxPathPoints < 1 || config.MaxPathPoints > MaxConfiguredPathPoints {
+		return nil, errors.New("actor: invalid path point limit")
+	}
+	body := &Body{Owner: owner, Host: newHost(owner), config: config}
+	var err error
+	mapConfig := movement.MapConfig{Fields: config.Fields, Save: config.Save, SaveOnLeave: config.Save != nil}
+	if config.Save != nil {
+		mapConfig.SaveEvery = SavePeriod
+	}
+	body.Map, err = movement.NewMapBasic(owner, body.Host, mapConfig)
+	if err != nil {
+		body.Close()
+		return nil, err
+	}
+	body.Move, err = movement.NewMove(body.Map, movement.MoveConfig{Terrain: bodyGround{body}, Surface: func() movement.Surface {
+		if body.config.Surface != nil {
+			return body.config.Surface()
+		}
+		return body.current.environment.Surface
+	}, Locate: movement.LocateIn(Get)})
+	if err != nil {
+		body.Close()
+		return nil, err
+	}
+	body.States = state.NewSet(state.NewStateDao(owner.ID(), "actor", Catalog), state.SetConfig{})
+	body.beat, err = body.Host.Register("actor.move", MovePeriod, body.Tick)
+	if err != nil {
+		body.Close()
+		return nil, err
+	}
+	return body, nil
+}
+
+// Enter 只放置实体，不创建地图；重复进入同一空间保留现有站位。
+// 切换时 Leave 的存档与新位置同一事务，失败不留下半次切图。
+func (body *Body) Enter(env Environment, at spatial.Point, facing movement.Facing) error {
+	if env.ID <= 0 || env.Space == nil {
+		return errors.New("actor: positive space id and Space are required")
+	}
+	if env.Ground != nil && (!env.Ground.InBounds(at) || env.Ground.Blocked(at)) {
+		return errors.New("actor: position is blocked")
+	}
+	if env.Surface != nil {
+		if _, ok := env.Surface.Step(env.Surface.Cell(at), env.Surface.Cell(at)); !ok {
+			return errors.New("actor: position has no standable surface")
+		}
+	}
+	if body.Map.InScene() && body.Map.SceneID() == env.ID {
+		return nil
+	}
+	if body.Map.InScene() {
+		if err := body.Leave(); err != nil {
+			return err
+		}
+	}
+	body.remember()
+	body.current = bodyState{environment: env}
+	if env.Time != nil {
+		body.current.lastDomain = env.Time.Now()
+	}
+	if err := body.Map.Enter(env.ID, env.Space, at); err != nil {
+		return err
+	}
+	body.Map.SetFacing(facing)
+	if body.config.Hooks.Enter != nil {
+		if err := body.config.Hooks.Enter(body); err != nil {
+			return err
+		}
+	}
+	if body.config.Hooks.AfterTick != nil {
+		return body.beat.Start()
+	}
+	return nil
+}
+
+func (body *Body) Leave() error {
+	if !body.Map.InScene() {
+		return nil
+	}
+	if body.config.Hooks.Leave != nil {
+		if err := body.config.Hooks.Leave(body); err != nil {
+			return err
+		}
+	}
+	if err := body.Map.Leave(); err != nil {
+		return err
+	}
+	body.Stop()
+	body.remember()
+	body.current = bodyState{}
+	body.beat.Stop()
+	return nil
+}
+func (body *Body) CanMove() bool           { return body.Map.InScene() && !body.States.Has(Rooted) }
+func (body *Body) CanCast() bool           { return body.Map.InScene() && !body.States.Has(Silenced) }
+func (body *Body) Position() spatial.Point { return body.Map.Pos() }
+
+// Environment 是当前实体锁内的场景接线；不能把它当作另一个实体的可写状态。
+func (body *Body) Environment() Environment { return body.current.environment }
+
+func (body *Body) Walk(path []spatial.Point, speed float64) error {
+	if !body.CanMove() {
+		return ErrCannotMove
+	}
+	if len(path) > body.config.MaxPathPoints {
+		return fmt.Errorf("actor: path exceeds %d points", body.config.MaxPathPoints)
+	}
+	if _, err := body.Move.MoveTo(path, speed); err != nil {
+		return err
+	}
+	body.resetDomainClock()
+	return body.beat.Start()
+}
+func (body *Body) Follow(target int64, speed float64, keep int64) error {
+	if !body.CanMove() {
+		return ErrCannotMove
+	}
+	if _, err := body.Move.Follow(target, speed, keep, true); err != nil {
+		return err
+	}
+	body.resetDomainClock()
+	return body.beat.Start()
+}
+
+// MoveHeartbeat 返回此Body的正式移动注册，供持锁的业务诊断观察Active/Period等状态。
+// 业务启停仍应走Walk/Follow/Stop，不能另挂一条推进同一个Move的心跳。
+func (body *Body) MoveHeartbeat() *heartbeat.Reg { return body.beat }
+func (body *Body) Stop() {
+	body.Move.Stop(0)
+	if body.config.Hooks.AfterTick == nil {
+		body.beat.Stop()
+	}
+}
+func (body *Body) resetDomainClock() {
+	body.remember()
+	if domain := body.current.environment.Time; domain != nil {
+		body.current.lastDomain = domain.Now()
+	}
+}
+
+// Tick 由正式 heartbeat 登记调用。测试可在 Nest 中送同一函数，以可控时间检查结果。
+// 域时间按相邻读数算，但一拍仍有 Elapsed 上限；慢拍不追帧、不补跑动作。
+func (body *Body) Tick(beat heartbeat.Beat) error {
+	if !body.Map.InScene() {
+		body.beat.Stop()
+		return nil
+	}
+	elapsed := beat.Elapsed
+	if domain := body.current.environment.Time; domain != nil {
+		reading := domain.Read()
+		body.remember()
+		elapsed = max(time.Duration(0), reading.Now.Sub(body.current.lastDomain))
+		elapsed = min(elapsed, time.Duration(float64(heartbeat.DefaultMaxElapsed)*reading.Rate))
+		body.current.lastDomain = reading.Now
+		beat.Now, beat.Elapsed = reading.Now, elapsed
+	}
+	if body.CanMove() && body.Move.Moving() {
+		result := body.Move.Advance(body.Move.Token(), elapsed)
+		if result.Err != nil {
+			return result.Err
+		}
+	}
+	if body.config.Hooks.AfterTick != nil {
+		if err := body.config.Hooks.AfterTick(body, beat); err != nil {
+			return err
+		}
+	}
+	if !body.Move.Moving() && body.config.Hooks.AfterTick == nil {
+		body.beat.Stop()
+	}
+	return nil
+}
+func (body *Body) remember() {
+	old := body.current
+	nest.RecordUndo(body, 0, func() error { body.current = old; return nil })
+}
+func (body *Body) Close() {
+	if body.Map != nil {
+		body.Map.OnDestroy()
+	}
+	if body.Host != nil {
+		body.Host.OnDestroy()
+	}
+}
+
+type bodyGround struct{ body *Body }
+
+func (g bodyGround) InBounds(p spatial.Point) bool {
+	ground := g.body.current.environment.Ground
+	return ground == nil || ground.InBounds(p)
+}
+func (g bodyGround) Blocked(p spatial.Point) bool {
+	ground := g.body.current.environment.Ground
+	return ground != nil && ground.Blocked(p)
+}
+
+// Nowhere 可用于房间内站位；没有 AOI 不等于没有位置。
+type Nowhere struct{}
+
+func (Nowhere) Enter(entity.IThreadSafeEntity, spatial.Point) error     { return nil }
+func (Nowhere) Leave(entity.IThreadSafeEntity) error                    { return nil }
+func (Nowhere) QueueMove(entity.IThreadSafeEntity, spatial.Point) error { return nil }

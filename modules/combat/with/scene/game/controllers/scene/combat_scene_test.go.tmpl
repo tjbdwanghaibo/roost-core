@@ -1,0 +1,75 @@
+package scene
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	corecombat "github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
+
+	"{{MODULE}}/db"
+	player "{{MODULE}}/game/entities/player"
+	gamescene "{{MODULE}}/game/scene"
+)
+
+func TestWithCombatSceneSnapshotPublishesOnlyProjection(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.must(p, func(p *player.Player) error {
+		p.Dao().GetCombat().SetHealth(77)
+		p.Dao().GetCombat().SetRooted(true)
+		p.Dao().GetCombatPrivate().SetSequence(123)
+		p.Dao().GetCombatPrivate().SetRuntime([]byte("private checkpoint"))
+		p.CombatComp().Core().InitCombatant(corecombat.Combatant{Alive: true, Health: 99, MaxHealth: 100})
+		packer := player.NewActorPlayerSyncPacker(p)
+		for _, view := range []entity.SyncProfile{gamescene.Public, policy.SelfProfile} {
+			payload, err := packer.PackSubjectSnapshot(view)
+			if err != nil {
+				return err
+			}
+			copy := db.NewPlayerDao()
+			if err = copy.ApplySync(payload.BytesCopy()); err != nil {
+				return err
+			}
+			if copy.GetCombat().GetHealth() != 77 || !copy.GetCombat().GetRooted() {
+				return fmt.Errorf("combat public projection missing: %d", copy.GetCombat().GetHealth())
+			}
+			if copy.GetCombatPrivate().GetSequence() != 0 || len(copy.GetCombatPrivate().GetRuntimeAll()) != 0 {
+				return fmt.Errorf("combat private checkpoint leaked")
+			}
+		}
+		return nil
+	})
+}
+
+func TestWithCombatSceneDeltaPublishesOnlyProjection(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.must(p, func(p *player.Player) error {
+		p.Dao().GetCombat().SetHealth(77)
+		p.Dao().GetCombat().SetRooted(true)
+		p.Dao().GetCombatPrivate().SetSequence(123)
+		p.Dao().GetCombatPrivate().SetRuntime([]byte("private checkpoint"))
+		p.CombatComp().Core().InitCombatant(corecombat.Combatant{Alive: true, Health: 99, MaxHealth: 100})
+		packer := player.NewActorPlayerSyncPacker(p)
+		for _, view := range []entity.SyncProfile{gamescene.Public, policy.SelfProfile} {
+			payload, err := packer.PackSubjectDelta(view, dataengine.AllFields)
+			if err != nil {
+				return err
+			}
+			copy := db.NewPlayerDao()
+			if err = copy.ApplySync(payload.BytesCopy()); err != nil {
+				return err
+			}
+			if copy.GetCombat().GetHealth() != 77 || !copy.GetCombat().GetRooted() {
+				return fmt.Errorf("combat public projection missing: %d", copy.GetCombat().GetHealth())
+			}
+			if copy.GetCombatPrivate().GetSequence() != 0 || len(copy.GetCombatPrivate().GetRuntimeAll()) != 0 {
+				return fmt.Errorf("combat private checkpoint leaked")
+			}
+		}
+		return nil
+	})
+}

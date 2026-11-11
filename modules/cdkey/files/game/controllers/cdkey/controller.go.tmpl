@@ -1,0 +1,95 @@
+package cdkey
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	gamecdkey "{{MODULE}}/game/cdkey"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	mailbox "{{MODULE}}/game/mailbox"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+type Controller struct {
+	registry  *app.Registry
+	ledger    *sender.CdkeySender
+	directory directory.Directory
+	mailer    mailbox.Sender
+}
+
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("cdkey: registry is required")
+	}
+	client, ok := app.Lookup[nest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("cdkey: nest client is required")
+	}
+	dir, ok := app.Lookup[directory.Directory](registry, mods.ModDirectory)
+	if !ok || dir == nil {
+		return nil, fmt.Errorf("cdkey: directory client is required")
+	}
+	mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
+	if !ok || mailer == nil {
+		return nil, fmt.Errorf("cdkey: mail client is required")
+	}
+	return &Controller{registry: registry, ledger: sender.NewCdkeySender(client), directory: dir, mailer: mailer}, nil
+}
+func (controller *Controller) Registry() *app.Registry { return controller.registry }
+
+// Redeem 是客户端与可信服务端共用的协调入口，只能在实体事务外调用。
+// 严格持久意图 -> directory 永久占用 -> mailbox.SendTo -> 严格持久回执。
+// 任一步结果未知都保留意图、用同一码重试；绝不 Cancel/Release 占用，避免旧请求仍发件时新玩家抢到码。
+// directory 对同一 owner 的重放不是互斥锁；并发重放靠 mail 的同一发送键与玩家回执去重。
+func (controller *Controller) Redeem(ctx context.Context, playerID int64, code string) (gamecdkey.Intent, error) {
+	if playerID <= 0 {
+		return gamecdkey.Intent{}, apperrors.ErrCdkeyInvalid
+	}
+	id, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return gamecdkey.Intent{}, err
+	}
+	intent, err := controller.ledger.Sync_CdkeyPrepare(ctx, id, code)
+	if err != nil || intent.MailID != "" {
+		return intent, err
+	}
+	claim, err := controller.directory.Reserve(ctx, intent.ClaimKey(playerID), directory.Owner(strconv.FormatInt(playerID, 10)), time.Minute)
+	if err != nil {
+		if directory.Code(err) == directory.CodeKeyTaken {
+			return gamecdkey.Intent{}, apperrors.ErrCdkeyTaken
+		}
+		return gamecdkey.Intent{}, err
+	}
+	if _, err := controller.directory.Commit(ctx, claim); err != nil {
+		return gamecdkey.Intent{}, err
+	}
+	envelope, err := mailbox.SendTo(ctx, controller.mailer, mailbox.Letter{To: playerID, Subject: intent.Subject, Body: intent.Body, Attachment: mailbox.Coins(intent.Coins), ExpiresInSeconds: intent.ExpiresInSeconds, RequestID: intent.RequestID(playerID)})
+	if err != nil {
+		return gamecdkey.Intent{}, err
+	}
+	return controller.ledger.Sync_CdkeyComplete(ctx, id, intent.Code, envelope.ID)
+}
+
+func (controller *Controller) HandleCdkeyRedeem(ctx *playeraccess.Context, request *pb.CdkeyRedeemRequest) (*pb.CdkeyRedeemResponse, error) {
+	if ctx == nil || request == nil {
+		return nil, fmt.Errorf("cdkey: context and request are required")
+	}
+	result, err := controller.Redeem(ctx.Context(), ctx.PlayerID, request.Cdkey)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		return &pb.CdkeyRedeemResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.CdkeyRedeemResponse{MailID: result.MailID}, nil
+}

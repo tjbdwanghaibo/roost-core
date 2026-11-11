@@ -1,0 +1,107 @@
+// Package notice 是可信服务端公告入口。没有玩家协议；周期播放应由项目调度器用每次播放的稳定事件键调用。
+package notice
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/admin"
+	gamechat "{{MODULE}}/game/chat"
+	chatcontroller "{{MODULE}}/game/controllers/chat"
+)
+
+const Capability app.ModName = "notice.publisher"
+const CommandAnnounce = "gm.notice.announce"
+const CommandMarquee = "gm.notice.marquee"
+
+type announcer interface {
+	AnnounceWorld(context.Context, string, string) error
+}
+type Publisher struct {
+	chat    announcer
+	stopped atomic.Bool
+}
+
+// Publish 经 chat 的正式系统发布入口持久化并向本进程在线玩家推送；漏掉的推送由 ChatHistory 补读。
+// kind 是 announce 或 marquee，通过中文前缀表达展示意图；客户端可以按前缀选择表现。不是另一条旁路广播。
+// key 必须稳定、同键内容不可变。chat 保留期内重复不新增历史，但在线推送可能重复，客户端按 Seq 去重。
+// 调用在 Nest 外执行；没有定时器、goroutine 或自建在线名单。
+func (publisher *Publisher) Publish(ctx context.Context, kind, text, key string) error {
+	if publisher == nil || publisher.chat == nil || publisher.stopped.Load() {
+		return fmt.Errorf("notice: publisher is stopped")
+	}
+	prefix := ""
+	switch kind {
+	case "announce":
+		prefix = "公告："
+	case "marquee":
+		prefix = "跑马灯："
+	default:
+		return fmt.Errorf("%w: unknown notice kind", admin.ErrCommandInvalid)
+	}
+	if strings.TrimSpace(text) == "" || strings.TrimSpace(key) == "" || len(key) > 64 {
+		return fmt.Errorf("%w: text and stable key are required (key <= 64 bytes)", admin.ErrCommandInvalid)
+	}
+	if err := gamechat.ValidateText([]byte(prefix + text)); err != nil {
+		return fmt.Errorf("%w: %v", admin.ErrCommandInvalid, err)
+	}
+	return publisher.chat.AnnounceWorld(ctx, prefix+text, "notice:"+kind+":"+key)
+}
+
+// FromRegistry 供可信业务代码取启动时发布的入口，不经玩家网络端点。
+func FromRegistry(registry *app.Registry) (*Publisher, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("notice: registry is required")
+	}
+	publisher, ok := app.Lookup[*Publisher](registry, Capability)
+	if !ok || publisher == nil {
+		return nil, fmt.Errorf("notice: publisher is unavailable")
+	}
+	return publisher, nil
+}
+
+// Start 由模块服务适配器调用。GM 使用现有 admin token 与审计，不自动开启 HTTP 运维入口。
+func Start(registry *app.Registry) (func(context.Context) error, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("notice: registry is required")
+	}
+	chat, err := chatcontroller.FromRegistry(registry)
+	if err != nil {
+		return nil, err
+	}
+	return start(registry, chat)
+}
+
+func start(registry *app.Registry, chat announcer) (func(context.Context) error, error) {
+	commands, ok := app.Lookup[*admin.Registry](registry, app.ModAdmin)
+	if !ok || commands == nil {
+		return nil, fmt.Errorf("notice: admin registry is unavailable")
+	}
+	publisher := &Publisher{chat: chat}
+	if err := registry.Register(Capability, publisher); err != nil {
+		return nil, err
+	}
+	for _, definition := range []struct{ name, kind string }{{CommandAnnounce, "announce"}, {CommandMarquee, "marquee"}} {
+		if err := commands.Register(admin.CommandDef{Name: definition.name, Description: "发布系统公告：{text, key}；key 是稳定业务键，同键内容不可变", Handler: func(ctx context.Context, command admin.Command) (admin.Result, error) {
+			payload, err := admin.DecodePayload[struct {
+				Text string `json:"text"`
+				Key  string `json:"key"`
+			}](command)
+			if err != nil {
+				return admin.Result{}, err
+			}
+			if err := publisher.Publish(ctx, definition.kind, payload.Text, payload.Key); err != nil {
+				return admin.Result{}, err
+			}
+			return admin.Result{Data: map[string]any{"kind": definition.kind, "key": payload.Key}}, nil
+		}}); err != nil {
+			publisher.stopped.Store(true)
+			return nil, err
+		}
+	}
+	// 本模块不持后台任务或依赖的释放责任；依赖排空由 App 的 chat/admin 生命周期负责。
+	return func(context.Context) error { publisher.stopped.Store(true); return nil }, nil
+}

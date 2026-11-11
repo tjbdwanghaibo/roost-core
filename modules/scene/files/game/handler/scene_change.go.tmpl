@@ -1,0 +1,81 @@
+package handler
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerSceneChange 的 areas 包含当前图与目标图，初次入场只有目标，离场只有当前图。
+// 两张图和玩家一起持锁：容量、成员、存档、心跳和位置一起提交或撤销。
+// 不能把客户端的 From 当事实；锁内重新核对玩家实际归属，不一致即拒绝重试。
+//
+//roost:nest rollback=undo durability=async
+func handlerSceneChange(target player.IActorEntity, areas []sceneentity.ISceneEntity, toID int64) (*pb.SceneChangeResponse, error) {
+	body := target.ActorComp().Body()
+	fromID := body.Map.SceneID()
+	var from, to *sceneentity.Scene
+	if len(areas) > 2 {
+		return nil, fmt.Errorf("scene: too many participants")
+	}
+	for _, item := range areas {
+		if item.ID() == fromID {
+			from = item.Scene()
+		}
+		if item.ID() == toID {
+			to = item.Scene()
+		}
+	}
+	if fromID != 0 && from == nil || toID != 0 && to == nil {
+		return nil, fmt.Errorf("scene: stale membership")
+	}
+	if toID == fromID {
+		if to != nil {
+			if err := to.Admit(target.ID()); err != nil {
+				return nil, err
+			}
+			nest.AfterCommit(func() { to.Space().Interest.Resubscribe(target.UniqueID()) })
+		}
+		at := body.Position()
+		return &pb.SceneChangeResponse{SceneID: rawSceneID(to), X: at.X, Y: at.Y}, nil
+	}
+	if to != nil {
+		if err := to.Admit(target.ID()); err != nil {
+			return nil, err
+		}
+	}
+	if from != nil {
+		if err := body.Leave(); err != nil {
+			return nil, err
+		}
+		from.Depart(target.ID())
+	}
+	if to == nil {
+		return &pb.SceneChangeResponse{}, nil
+	}
+	preferred := to.Config().Spawn
+	savedID, saved, facing := target.ActorComp().SavedPosition()
+	if savedID == toID {
+		preferred = saved
+	} else {
+		facing = movement.Facing(0)
+	}
+	at, err := to.Space().Placement(preferred)
+	if err != nil {
+		return nil, err
+	}
+	if err := body.Enter(to.Environment(), at, facing); err != nil {
+		return nil, err
+	}
+	return &pb.SceneChangeResponse{SceneID: to.UniqueID(), X: at.X, Y: at.Y}, nil
+}
+
+func rawSceneID(area *sceneentity.Scene) int64 {
+	if area == nil {
+		return 0
+	}
+	return area.UniqueID()
+}

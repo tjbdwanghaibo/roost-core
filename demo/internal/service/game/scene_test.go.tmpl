@@ -552,7 +552,7 @@ func TestProfileModuleWritesReplicateThroughTheCommitObserver(t *testing.T) {
 
 // playerPrivateFields 是 Player 只给本人看的同步字段：别的玩家（主视野里的、队友）都不该收到（同步视图的字段表见
 // demo/README“同步视图”）。
-var playerPrivateFields = []string{"profile_private", "bag", "attr_base", "attr_final", "cell_attack", "cell_power"}
+var playerPrivateFields = []string{"profile_private", "bag", "attribute_base", "attribute_final", "cell_attack", "cell_power"}
 
 // 场景里谁看见一名玩家的哪些字段：视图由 Player 的 packer 声明（game/entities/player/sync_packer.go），场景的主视野与
 // 队伍关系视野各自给出层级（internal/service/game/scene.go 的 sceneLayers）。

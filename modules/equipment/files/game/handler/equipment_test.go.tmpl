@@ -1,0 +1,403 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"{{MODULE}}/configs/schema"
+	"{{MODULE}}/db"
+	controller "{{MODULE}}/game/controllers/equipment"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/configdata"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+)
+
+type equipmentGetter map[int64]entity.IThreadSafeEntity
+
+func (g equipmentGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+func (g equipmentGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+type equipmentCommitter struct{ reject atomic.Bool }
+
+func (c *equipmentCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	return nil
+}
+
+type equipmentFixture struct {
+	engine    *nest.NestMgr
+	player    *playerentity.Player
+	committer *equipmentCommitter
+}
+
+func newEquipmentFixture(t *testing.T) *equipmentFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterEquipmentEquipNestHandlers()
+	RegisterEquipmentUnequipNestHandlers()
+	RegisterBagGrantNestHandlers()
+	equipmentLoad(t, equipmentRows())
+	f := &equipmentFixture{committer: &equipmentCommitter{}}
+	id, err := entity.BuildEntityID(98104, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = e.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(equipmentGetter{id: e}), nest.NestOptionWithTransactionCommitter(f.committer), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	f.engine.MustRegisterHandlerWithMeta(nest.NewHandlerName("equipmentTestAction"), func(_ []entity.IThreadSafeEntity, p []any, _ ...nest.HandlerOption) (any, error) {
+		return nil, p[0].(func() error)()
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	if err = f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+func (f *equipmentFixture) local(t *testing.T, fn func()) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() { f.player.GetMutex().Lock(); defer f.player.GetMutex().Unlock(); fn() }); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *equipmentFixture) action(fn func() error) error {
+	_, err := f.engine.Request(context.Background(), nest.NewHandlerName("equipmentTestAction"), f.player.ID(), nest.NewParams(fn))
+	return err
+}
+func (f *equipmentFixture) write(t *testing.T, fn func()) {
+	t.Helper()
+	if err := f.action(func() error { fn(); return nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func equipmentRows() []schema.EquipmentItem {
+	return []schema.EquipmentItem{{ItemID: 1001, Slot: 2, HP: 25}, {ItemID: 1002, Slot: 1, Attack: 5}, {ItemID: 1003, Slot: 1, Attack: 15, HP: 5}}
+}
+func equipmentLoad(t *testing.T, rows []schema.EquipmentItem) {
+	t.Helper()
+	dir := t.TempDir()
+	for n, v := range map[string]any{"item": []schema.Item{{ID: 1001, Name: "a", MaxStack: 2}, {ID: 1002, Name: "b", MaxStack: 10}, {ID: 1003, Name: "c", MaxStack: 10}}, "equipment_item": rows} {
+		raw, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, n+".json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reg := configdata.NewRegistry()
+	configdata.MustRegisterTable(reg, configdata.TableDef[int64, schema.Item]{Name: "item", File: "item.json", Key: func(r schema.Item) int64 { return r.ID }})
+	configdata.MustRegisterTable(reg, configdata.TableDef[int64, schema.EquipmentItem]{Name: "equipment_item", File: "equipment_item.json", Key: func(r schema.EquipmentItem) int64 { return r.ItemID }})
+	previous, cfg := configdata.DefaultStore(), fctx.RuntimeConfig()
+	t.Cleanup(func() { configdata.SetDefaultStore(previous); fctx.SetRuntimeConfig(cfg) })
+	if _, err := configdata.NewStore(reg, dir).Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type equipmentSnapshot struct {
+	Bag  map[int64]int64
+	Worn map[int32][2]int64
+}
+
+func (f *equipmentFixture) snapshot(t *testing.T) equipmentSnapshot {
+	out := equipmentSnapshot{Bag: map[int64]int64{}, Worn: map[int32][2]int64{}}
+	f.local(t, func() {
+		f.player.Dao().GetBag().RangeItems(func(k, v int64) bool { out.Bag[k] = v; return true })
+		f.player.EquipmentComp().RangeWorn(func(slot int32, item int64, level int32) bool {
+			out.Worn[slot] = [2]int64{item, int64(level)}
+			return true
+		})
+	})
+	return out
+}
+func (f *equipmentFixture) grant(t *testing.T, id, count int64) {
+	t.Helper()
+	if _, err := sender.NewBagGrantSender(f.engine).Sync_BagGrant(context.Background(), f.player.ID(), id, count); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *equipmentFixture) equip(id int64) (*pb.EquipmentEquipResponse, error) {
+	return sender.NewEquipmentEquipSender(f.engine).Sync_EquipmentEquip(context.Background(), f.player.ID(), &pb.EquipmentEquipRequest{ItemID: id})
+}
+func (f *equipmentFixture) unequip(slot int32) (*pb.EquipmentUnequipResponse, error) {
+	return sender.NewEquipmentUnequipSender(f.engine).Sync_EquipmentUnequip(context.Background(), f.player.ID(), &pb.EquipmentUnequipRequest{Slot: slot})
+}
+func (f *equipmentFixture) mustEquip(t *testing.T, id int64) *pb.EquipmentEquipResponse {
+	t.Helper()
+	r, err := f.equip(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func (f *equipmentFixture) mustUnequip(t *testing.T, slot int32) *pb.EquipmentUnequipResponse {
+	t.Helper()
+	r, err := f.unequip(slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+var equipmentRejectHook atomic.Bool
+
+func init() {
+	playerentity.OnEquipmentChanged("zz_equipment_test", func(*playerentity.EquipmentComponent) error {
+		if equipmentRejectHook.Load() {
+			return errors.New("equipment hook rejected")
+		}
+		return nil
+	})
+}
+func TestEquipmentEquipConsumesOne(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 2)
+	r := f.mustEquip(t, 1003)
+	s := f.snapshot(t)
+	if r.Slot != 1 || r.Replaced != 0 || s.Bag[1003] != 1 || s.Worn[1] != [2]int64{1003, 1} {
+		t.Fatalf("equip result %+v %+v", r, s)
+	}
+}
+func TestEquipmentReplacementReturnsOldItem(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1002, 1)
+	f.grant(t, 1003, 1)
+	f.mustEquip(t, 1002)
+	r := f.mustEquip(t, 1003)
+	s := f.snapshot(t)
+	if r.Replaced != 1002 || s.Bag[1002] != 1 || s.Bag[1003] != 0 || s.Worn[1][0] != 1003 {
+		t.Fatalf("replacement %+v %+v", r, s)
+	}
+}
+func TestEquipmentUnequipReturnsItem(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1001, 1)
+	f.mustEquip(t, 1001)
+	r := f.mustUnequip(t, 2)
+	s := f.snapshot(t)
+	if !r.Found || r.ItemID != 1001 || len(s.Worn) != 0 || s.Bag[1001] != 1 {
+		t.Fatalf("unequip %+v %+v", r, s)
+	}
+}
+func TestEquipmentDuplicateEquipConsumesNothing(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 1)
+	f.mustEquip(t, 1003)
+	before := f.snapshot(t)
+	r := f.mustEquip(t, 1003)
+	if r.Replaced != 0 || !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("duplicate consumed")
+	}
+}
+func TestEquipmentEmptySlotIsIdempotent(t *testing.T) {
+	f := newEquipmentFixture(t)
+	before := f.snapshot(t)
+	r := f.mustUnequip(t, 1)
+	if r.Found || r.ItemID != 0 || !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("empty unequip wrote")
+	}
+}
+func TestEquipmentMissingItemRejects(t *testing.T) {
+	f := newEquipmentFixture(t)
+	before := f.snapshot(t)
+	if _, err := f.equip(1003); !errors.Is(err, apperrors.ErrBagShort) {
+		t.Fatalf("short %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("short wrote")
+	}
+}
+func TestEquipmentInvalidItemAndSlotReject(t *testing.T) {
+	f := newEquipmentFixture(t)
+	if _, err := f.equip(999); !errors.Is(err, apperrors.ErrEquipmentItemInvalid) {
+		t.Fatalf("item %v", err)
+	}
+	for _, slot := range []int32{-1, 0, 33} {
+		if _, err := f.unequip(slot); !errors.Is(err, apperrors.ErrEquipmentSlotInvalid) {
+			t.Fatalf("slot %v", err)
+		}
+	}
+}
+func TestEquipmentInvalidLevelRejects(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 1)
+	before := f.snapshot(t)
+	for _, level := range []int32{0, -1, 10001} {
+		err := f.action(func() error { _, _, err := f.player.EquipmentComp().Equip(1003, level); return err })
+		if !errors.Is(err, apperrors.ErrEquipmentLevelInvalid) {
+			t.Fatalf("level %v", err)
+		}
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("level wrote")
+	}
+}
+func TestEquipmentFullReturnRollsBackUnequip(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1001, 1)
+	f.mustEquip(t, 1001)
+	f.grant(t, 1001, 2)
+	before := f.snapshot(t)
+	if _, err := f.unequip(2); !errors.Is(err, apperrors.ErrBagStackFull) {
+		t.Fatalf("full %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("full lost equipment")
+	}
+}
+func TestEquipmentFailedReplacementRestoresNewItem(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1002, 1)
+	f.mustEquip(t, 1002)
+	f.grant(t, 1002, 10)
+	f.grant(t, 1003, 1)
+	before := f.snapshot(t)
+	if _, err := f.equip(1003); !errors.Is(err, apperrors.ErrBagStackFull) {
+		t.Fatalf("return %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("replacement lost new item")
+	}
+}
+func TestEquipmentCommitFailureRestoresBagAndSlots(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 1)
+	before := f.snapshot(t)
+	f.committer.reject.Store(true)
+	if _, err := f.equip(1003); err == nil {
+		t.Fatal("commit accepted")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("equipment commit leaked")
+	}
+	f.committer.reject.Store(false)
+	f.mustEquip(t, 1003)
+}
+func TestEquipmentHookFailureRestoresBagAndSlots(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 1)
+	before := f.snapshot(t)
+	equipmentRejectHook.Store(true)
+	t.Cleanup(func() { equipmentRejectHook.Store(false) })
+	if _, err := f.equip(1003); err == nil {
+		t.Fatal("hook accepted")
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("equipment hook leaked")
+	}
+}
+func TestEquipmentConcurrentDuplicateConsumesOne(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 2)
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, err := f.equip(1003); errs <- err }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s := f.snapshot(t); s.Bag[1003] != 1 || len(s.Worn) != 1 {
+		t.Fatalf("concurrent %+v", s)
+	}
+}
+func TestEquipmentProtocolReturnsBusinessCodes(t *testing.T) {
+	f := newEquipmentFixture(t)
+	reg := app.NewRegistry(viper.New())
+	if err := reg.Register("nest", nest.Client(f.engine)); err != nil {
+		t.Fatal(err)
+	}
+	c, err := controller.FromRegistry(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &playeraccess.Context{PlayerID: 98104}
+	r, err := c.HandleEquipmentEquip(ctx, &pb.EquipmentEquipRequest{ItemID: 1003})
+	code, _ := errcode.ClientError(apperrors.ErrBagShort)
+	if err != nil || r == nil || r.Code != code {
+		t.Fatalf("protocol rejection %+v %v", r, err)
+	}
+	f.grant(t, 1003, 1)
+	r, err = c.HandleEquipmentEquip(ctx, &pb.EquipmentEquipRequest{ItemID: 1003})
+	if err != nil || r == nil || r.Code != 0 || r.Slot != 1 {
+		t.Fatalf("protocol equip %+v %v", r, err)
+	}
+	u, err := c.HandleEquipmentUnequip(ctx, &pb.EquipmentUnequipRequest{Slot: 1})
+	if err != nil || u == nil || u.Code != 0 || !u.Found || u.ItemID != 1003 {
+		t.Fatalf("protocol unequip %+v %v", u, err)
+	}
+}
+func TestEquipmentInvalidRuleFailsBeforeBagWrite(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.grant(t, 1003, 1)
+	before := f.snapshot(t)
+	equipmentLoad(t, []schema.EquipmentItem{{ItemID: 1003, Slot: 33, HP: 5}})
+	if _, err := f.equip(1003); !errors.Is(err, apperrors.ErrEquipmentItemInvalid) {
+		t.Fatalf("rule %v", err)
+	}
+	if !reflect.DeepEqual(before, f.snapshot(t)) {
+		t.Fatal("rule wrote")
+	}
+}
+func TestEquipmentNilPieceIsAnEmptySlot(t *testing.T) {
+	f := newEquipmentFixture(t)
+	f.write(t, func() { f.player.Dao().GetEquipment().SetSlots(map[int32]*db.GearPiece{1: nil}) })
+	if r := f.mustUnequip(t, 1); r.Found {
+		t.Fatal("nil piece found")
+	}
+	f.grant(t, 1003, 1)
+	f.mustEquip(t, 1003)
+	if s := f.snapshot(t); s.Worn[1][0] != 1003 {
+		t.Fatal("nil slot unusable")
+	}
+}

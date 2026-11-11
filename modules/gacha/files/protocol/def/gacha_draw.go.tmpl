@@ -1,0 +1,27 @@
+//go:build protocoldef
+
+package protocoldef
+
+// GachaDrawRequest 的 Key 是1~64字节的 ASCII 字母/数字/-/_/:，Count 只能为1或10。
+// 重试必须保留同一 Key、池号、次数；只保留最近64次成功请求。窗口外旧键可再次扣款，不得重放。
+type GachaDrawRequest struct {
+	Key    string `pb:"1"`
+	PoolID int64  `pb:"2"`
+	Count  int64  `pb:"3"`
+}
+
+// GachaDrawResponse 是成交时的结果；重放返回原样快照，最新余额和保底以自身同步视图为准。
+type GachaDrawResponse struct {
+	Code    int32   `pb:"1"`
+	Reason  string  `pb:"2"`
+	Cost    int64   `pb:"3"`
+	Balance int64   `pb:"4"`
+	Items   []int64 `pb:"5"`
+	Misses  int64   `pb:"6"`
+}
+
+//roost:protocol group=game handler=gacha
+type GachaDrawProtocol interface {
+	//roost:msg id={{ID:protocol:GachaDraw}}
+	GachaDraw(GachaDrawRequest) GachaDrawResponse
+}

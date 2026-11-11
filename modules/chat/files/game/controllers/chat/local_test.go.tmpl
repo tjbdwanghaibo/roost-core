@@ -1,0 +1,35 @@
+package chat
+
+import (
+	"strings"
+	"testing"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+var localTestCalls int
+
+func init() {
+	OnLocalChannel("module_chat_test", func(_ *Controller, ctx *playeraccess.Context, r *pb.ChatSendRequest) (*pb.ChatSendResponse, error) {
+		localTestCalls++
+		return &pb.ChatSendResponse{Seq: ctx.PlayerID}, nil
+	})
+}
+func TestChatLocalChannelValidatesBeforeDispatch(t *testing.T) {
+	c := &Controller{}
+	before := localTestCalls
+	response, err := c.HandleChatSend(&playeraccess.Context{PlayerID: 42}, &pb.ChatSendRequest{Kind: "module_chat_test", Text: strings.Repeat("x", 257)})
+	if err != nil || response.Code == 0 || localTestCalls != before {
+		t.Fatal("invalid local text dispatched", response, err)
+	}
+	response, err = c.HandleChatSend(&playeraccess.Context{PlayerID: 42}, &pb.ChatSendRequest{Kind: "module_chat_test", Text: "hello"})
+	if err != nil || response.Seq != 42 || localTestCalls != before+1 {
+		t.Fatal("local channel not dispatched", response, err)
+	}
+}
+func TestChatLocalChannelHasNoHistory(t *testing.T) {
+	response, err := (&Controller{}).HandleChatHistory(&playeraccess.Context{PlayerID: 42}, &pb.ChatHistoryRequest{Kind: "module_chat_test"})
+	if err != nil || response.Code == 0 {
+		t.Fatal("local history accepted", response, err)
+	}
+}

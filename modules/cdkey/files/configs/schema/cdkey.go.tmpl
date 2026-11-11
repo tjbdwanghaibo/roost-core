@@ -1,0 +1,17 @@
+package schema
+
+// Cdkey 是兑换码表。已发行的 Code 永不复用，Mode 与奖励不改；新活动换新码。
+// 一码一次的 once 由共享 directory 判定，player 表示每名玩家一次。
+// StartsAtUnix/EndsAtUnix 为业务时间秒，0 表示这一侧没有边界；只控制首次受理。
+//
+//roost:table name=cdkey key=Code
+type Cdkey struct {
+	Code             string `csv:"code" json:"code" required:"true" unique:"true"`
+	Mode             string `csv:"mode" json:"mode" required:"true"`
+	Coins            int64  `csv:"coins" json:"coins" min:"1"`
+	Subject          string `csv:"subject" json:"subject" required:"true"`
+	Body             string `csv:"body" json:"body"`
+	ExpiresInSeconds int64  `csv:"expires_in_seconds" json:"expires_in_seconds" min:"1"`
+	StartsAtUnix     int64  `csv:"starts_at_unix" json:"starts_at_unix" min:"0"`
+	EndsAtUnix       int64  `csv:"ends_at_unix" json:"ends_at_unix" min:"0"`
+}

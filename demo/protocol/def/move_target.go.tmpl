@@ -15,7 +15,7 @@ type MoveTargetRequest struct {
 	Follow int64 `pb:"3"`
 }
 
-// MoveTargetResponse says whether the walk started. ActionID names it (0:
+// MoveTargetResponse says whether the walk started. ActionID is its opaque movement token (0:
 // the player already stands on the goal, nothing to walk). X / Y are where
 // the player is NOW — the start of the walk — and the walk itself arrives as
 // the replicated pos_x / pos_y / facing, frame by frame; a refused request

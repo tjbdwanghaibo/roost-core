@@ -1,0 +1,9 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrCdkeyInvalid = errcode.Define({{ID:errcode:cdkey_invalid}}, "cdkey_invalid", "兑换码无效或不在有效期")
+	ErrCdkeyFull    = errcode.Define({{ID:errcode:cdkey_full}}, "cdkey_full", "兑换记录已满")
+	ErrCdkeyTaken   = errcode.Define({{ID:errcode:cdkey_taken}}, "cdkey_taken", "兑换码已被占用")
+)

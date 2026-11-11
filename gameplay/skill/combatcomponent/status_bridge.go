@@ -208,7 +208,7 @@ func (bridge *StatusBridge) modifyStatusInstance(command skill.ModifyStatusInsta
 		if bridge.HasGameplayTag != nil {
 			for _, immunity := range policy.ImmunityTags {
 				if bridge.HasGameplayTag(command.Target, immunity) {
-					return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Immune: true, PreviousStacks: beforeStacks, CurrentStacks: beforeStacks, DueTick: beforeDue, Status: command.Status}}}, nil
+					return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: successfulOutcome(), Result: skill.StatusResult{Immune: true, PreviousStacks: beforeStacks, CurrentStacks: beforeStacks, DueTick: beforeDue, Status: command.Status}}}, nil
 				}
 			}
 		}
@@ -244,7 +244,7 @@ func (bridge *StatusBridge) modifyStatusInstance(command skill.ModifyStatusInsta
 	if removedStacks < 0 {
 		removedStacks = 0
 	}
-	return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Applied: true, Removed: removed, PreviousStacks: beforeStacks, CurrentStacks: currentStacks, RemovedStacks: removedStacks, DueTick: dueTick, PreviousDueTick: beforeDue, Status: command.Status, Created: created}}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: successfulOutcome(), Result: skill.StatusResult{Applied: true, Removed: removed, PreviousStacks: beforeStacks, CurrentStacks: currentStacks, RemovedStacks: removedStacks, DueTick: dueTick, PreviousDueTick: beforeDue, Status: command.Status, Created: created}}}, nil
 }
 
 func (bridge *StatusBridge) setStacks(component *CombatComponent, id combat.BuffInstanceID, stacks int64) (combat.BuffInstance, bool) {
@@ -338,7 +338,7 @@ func (bridge *StatusBridge) applyStatus(command skill.StatusCommand) (skill.Effe
 				context.Result = "immune"
 				receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "status_immune", Entity: command.Target, Context: context}})
 				receipt.Changed = true
-				return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Immune: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
+				return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: successfulOutcome(), Result: skill.StatusResult{Immune: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
 			}
 		}
 	}
@@ -368,7 +368,7 @@ func (bridge *StatusBridge) applyStatus(command skill.StatusCommand) (skill.Effe
 		context.Result = "immune"
 		receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "status_immune", Entity: command.Target, Context: context}})
 		receipt.Changed = true
-		return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Immune: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
+		return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: successfulOutcome(), Result: skill.StatusResult{Immune: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
 	}
 	for _, instance := range component.ActiveBuffs() {
 		if instance.Spec.ID == spec.ID && instance.DueTick > dueTick {
@@ -379,7 +379,7 @@ func (bridge *StatusBridge) applyStatus(command skill.StatusCommand) (skill.Effe
 	receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "status_applied", Entity: command.Target, Context: context}})
 	receipt.Changed = true
 	currentStacks := bridge.buffStacks(component, spec.ID)
-	return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Applied: true, PreviousStacks: previousStacks, CurrentStacks: currentStacks, DueTick: skill.Tick(dueTick)}}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: successfulOutcome(), Result: skill.StatusResult{Applied: true, PreviousStacks: previousStacks, CurrentStacks: currentStacks, DueTick: skill.Tick(dueTick)}}}, nil
 }
 
 func (bridge *StatusBridge) removeStatus(command skill.RemoveStatusCommand) (skill.EffectResult, error) {
@@ -402,14 +402,14 @@ func (bridge *StatusBridge) removeStatus(command skill.RemoveStatusCommand) (ski
 		}
 	}
 	if removed == 0 {
-		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
+		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: successfulOutcome(), Result: skill.StatusResult{PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
 	}
 	context := command.Event
 	context.Owner, context.Target, context.Result = command.SourceOwner, command.Target, "status_removed"
 	receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "status_removed", Entity: command.Target, Context: context}})
 	receipt.Changed = true
 	currentStacks := bridge.buffStacks(component, id)
-	return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Removed: true, PreviousStacks: previousStacks, CurrentStacks: currentStacks, RemovedStacks: previousStacks - currentStacks}}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: successfulOutcome(), Result: skill.StatusResult{Removed: true, PreviousStacks: previousStacks, CurrentStacks: currentStacks, RemovedStacks: previousStacks - currentStacks}}}, nil
 }
 
 func (bridge *StatusBridge) dispelStatus(command skill.DispelStatusCommand) (skill.EffectResult, error) {
@@ -426,7 +426,7 @@ func (bridge *StatusBridge) dispelStatus(command skill.DispelStatusCommand) (ski
 	}
 	removed := component.DispelBuffs(tag, command.Count)
 	if len(removed) == 0 {
-		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
+		return skill.EffectResult{Commit: skill.CommitReceipt{Revision: bridge.Revision.CurrentRevision()}, Payload: skill.StatusEffectResult{ResultOutcome: successfulOutcome(), Result: skill.StatusResult{PreviousStacks: previousStacks, CurrentStacks: previousStacks}}}, nil
 	}
 	removedStacks := 0
 	for _, instance := range removed {
@@ -436,7 +436,7 @@ func (bridge *StatusBridge) dispelStatus(command skill.DispelStatusCommand) (ski
 	context.Target, context.Result = command.Target, "status_dispelled"
 	receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "status_dispelled", Entity: command.Target, Context: context}})
 	receipt.Changed = true
-	return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.StatusResult{Removed: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks - removedStacks, RemovedStacks: removedStacks}}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.StatusEffectResult{ResultOutcome: successfulOutcome(), Result: skill.StatusResult{Removed: true, PreviousStacks: previousStacks, CurrentStacks: previousStacks - removedStacks, RemovedStacks: removedStacks}}}, nil
 }
 
 func (bridge *StatusBridge) applyAttributeModifier(command skill.AttributeModifierCommand) (skill.EffectResult, error) {
@@ -467,7 +467,7 @@ func (bridge *StatusBridge) applyAttributeModifier(command skill.AttributeModifi
 	context.Owner, context.Target, context.Result = command.SourceOwner, command.Target, "attribute_modifier_applied"
 	receipt := bridge.Revision.CommitEffect([]EffectEvent{{Kind: "attribute_modifier_applied", Entity: command.Target, Context: context}})
 	receipt.Changed = true
-	return skill.EffectResult{Commit: receipt, Payload: skill.AttributeModifierEffectResult{ResultOutcome: skill.ResultOutcome{Succeeded: true}, Result: skill.AttributeModifierResult{Applied: true, DueTick: skill.Tick(tick) + command.DurationTicks}}}, nil
+	return skill.EffectResult{Commit: receipt, Payload: skill.AttributeModifierEffectResult{ResultOutcome: successfulOutcome(), Result: skill.AttributeModifierResult{Applied: true, DueTick: skill.Tick(tick) + command.DurationTicks}}}, nil
 }
 
 func containsBuffTag(tags []combat.Tag, want combat.Tag) bool {

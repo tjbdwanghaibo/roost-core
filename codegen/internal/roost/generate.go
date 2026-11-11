@@ -51,7 +51,7 @@ type GenerateOptions struct {
 	// builds stay warm.
 	Force  bool
 	Stdout io.Writer
-	// syncProject 只供模块安装使用：新增自带实体或定时器时，在同一暂存树里刷新 owner / shutdown / 定时器接线。
+	// syncProject 只供模块安装使用：新增自带实体、定时器或开启自身同步时，在同一暂存树里刷新 owner / shutdown / 定时器接线。
 	// 普通 generate 仍要求调用方显式 project sync，不隐式接受手工改过的工程结构。
 	syncProject bool
 	// deferDependencies 只用于新工程的内层配方安装；依赖解析由 project new 的外层 CLI 决定。
@@ -246,8 +246,10 @@ func GenerateTransactional(ctx context.Context, root string, options GenerateOpt
 	if err != nil {
 		return err
 	}
-	if _, err := checkSelfSync(absRoot, manifest); err != nil {
-		return err
+	if !options.syncProject {
+		if _, err := checkSelfSync(absRoot, manifest); err != nil {
+			return err
+		}
 	}
 	stage, err := os.MkdirTemp(filepath.Dir(absRoot), ".roost-generate-*")
 	if err != nil {
@@ -270,6 +272,11 @@ func GenerateTransactional(ctx context.Context, root string, options GenerateOpt
 			return inProjectPaths(err, stage, absRoot)
 		}
 		if _, err := syncManifest(stage, manifest); err != nil {
+			return inProjectPaths(err, stage, absRoot)
+		}
+		// 模块安装可在本次开启 self_sync。先在暂存树补齐正式推送定义，
+		// 再校验完整工程；不能要求安装前就存在这份尚未生成的业务文件。
+		if _, err := checkSelfSync(stage, manifest); err != nil {
 			return inProjectPaths(err, stage, absRoot)
 		}
 	}

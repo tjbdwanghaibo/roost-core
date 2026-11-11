@@ -1,3 +1,4 @@
+// Package actor 的 Body 由 actor 模块唯一模板提供；本文件保留 demo 的场景与原型业务接线。
 // Package actor is what every thing that ACTS on the map shares: the
 // process's heartbeat driver, the action vocabulary, the state catalog, and
 // the narrow seam between a moving entity and the scene's interest policy.
@@ -33,7 +34,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	gamescene "{{MODULE}}/game/scene"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/actionflow"
@@ -41,14 +41,17 @@ import (
 	"github.com/tjbdwanghaibo/roost-core/gameplay/movement"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combat"
-	"github.com/tjbdwanghaibo/roost-core/gameplay/state"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	gamescene "{{MODULE}}/game/scene"
 )
 
 // Heartbeat is the process's heartbeat driver. Every heartbeat host in the
 // game (a player's, a monster's, the scene's) comes from it.
 var Heartbeat = heartbeat.NewDriver(heartbeat.Config{Name: "game"})
+
+// newHost 是共享 Body 的宿主接线。demo 的 Scene/Monster/cellworld 仍使用本驱动，避免再建一套计时源。
+func newHost(owner entity.IThreadSafeEntity) *heartbeat.Host { return Heartbeat.NewHost(owner) }
 
 // The action vocabulary. The numbers are the game's; the framework only asks
 // that they are unique in Registry.
@@ -93,15 +96,7 @@ func Groups(kind actionflow.ActionKind) (actionflow.ActionGroup, bool) {
 	return 0, false
 }
 
-// State bits. Rooted is derived from a buff (combatcomponent.BindStates):
-// the buff is the one holder of the effect — its duration, its dispel — and
-// the state only says "some buff with this tag is on". It is not synced as a
-// state bit: the monster mirrors it into its own DAO (MonsterDao.Rooted),
-// which is what its packer already ships.
-const (
-	Rooted state.ID = 1
-)
-
+// Rooted 的状态号与 Catalog 来自 actor 模块的共享 Body；demo 的 buff 标签规则留在这里。
 // TagRoot is the buff tag that roots.
 const TagRoot combat.Tag = "root"
 
@@ -121,17 +116,6 @@ func RootBuff(seconds int64) combat.BuffSpec {
 		spec.DurationTicks = seconds * int64(time.Second/SkillClock.Length)
 	}
 	return spec
-}
-
-// Catalog declares the game's state bits once.
-var Catalog = mustCatalog()
-
-func mustCatalog() *state.Catalog {
-	catalog, err := state.NewCatalog(state.Def{ID: Rooted, Name: "rooted"})
-	if err != nil {
-		panic(err)
-	}
-	return catalog
 }
 
 // lookup is the read-only entity view (EntityManager.Get: no load, no wait).
@@ -283,23 +267,8 @@ func (s InterestMoves) QueueMove(e entity.IThreadSafeEntity, at spatial.Point) e
 	return nil
 }
 
-// Nowhere is the Space of a scene that has no replication bridge (a test, or
-// a scene built before the bridge is installed): moves are not reported to
-// anyone.
-type Nowhere struct{}
-
-func (Nowhere) Enter(entity.IThreadSafeEntity, spatial.Point) error   { return nil }
-func (Nowhere) Leave(entity.IThreadSafeEntity) error                  { return nil }
-func (Nowhere) QueueMove(entity.IThreadSafeEntity, spatial.Point) error { return nil }
-
-// SavePeriod is how often a player's position is written to its persistent
-// fields while it is on the map (movement.MapConfig.SaveEvery): the live
-// position is nopersist, so this bounds how much walking a
-// crash or an unload without a leave can lose.
-const SavePeriod = 10 * time.Second
-
 var (
 	_ spatial.Terrain = Ground{}
-	_ movement.Space = InterestMoves{}
-	_ movement.Space = Nowhere{}
+	_ movement.Space  = InterestMoves{}
+	_ movement.Space  = Nowhere{}
 )

@@ -1,0 +1,19 @@
+package handler
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/infra/base/spatial"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerActorMove 的速度是服务端规则，客户端只能指定目标；每一步经过实际场景地形校验。
+//
+//roost:nest rollback=undo durability=async
+func handlerActorMove(target player.IActorEntity, request *pb.ActorMoveRequest) (*pb.ActorMoveResponse, error) {
+	body := target.ActorComp().Body()
+	if err := body.Walk([]spatial.Point{{X: request.X, Y: request.Y}}, 60); err != nil {
+		return nil, err
+	}
+	pos := body.Position()
+	return &pb.ActorMoveResponse{X: pos.X, Y: pos.Y}, nil
+}

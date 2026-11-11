@@ -1,0 +1,11 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrDungeonInvalid    = errcode.Define({{ID:errcode:dungeon_invalid}}, "dungeon_invalid", "副本参数无效或同ID内容冲突")
+	ErrDungeonOwner      = errcode.Define({{ID:errcode:dungeon_owner}}, "dungeon_owner", "不是该副本的参与者")
+	ErrDungeonUnfinished = errcode.Define({{ID:errcode:dungeon_unfinished}}, "dungeon_unfinished", "副本尚未成功完成")
+	ErrDungeonWindow     = errcode.Define({{ID:errcode:dungeon_window}}, "dungeon_window", "副本领奖窗口已关闭")
+	ErrDungeonFull       = errcode.Define({{ID:errcode:dungeon_full}}, "dungeon_full", "副本账本或通关计数已达上限")
+)

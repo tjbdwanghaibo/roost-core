@@ -1,0 +1,28 @@
+name: dungeon
+summary: 持久副本：gameplay/level阶段事件条件动作、可信开局与推进、玩家恰好一次经验奖励和有界通关账本
+requires: [profile]
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+entities: [Dungeon]
+entity: Player
+component: Dungeon
+state:
+  - field: Dungeon
+    type: PlayerDungeonState
+    store: dungeon
+    dao: persist
+    comment: Dungeon 是副本领奖账本和各赛季通关数，拒绝未安全过期的账本溢出。
+protocols: [DungeonView, DungeonClaim]
+errcodes: [dungeon_invalid, dungeon_owner, dungeon_unfinished, dungeon_window, dungeon_full]
+verify:
+  packages: [./game/controllers/dungeon]
+  run: ^TestDungeon
+  pass: 19
+with:
+  leaderboard:
+    summary: 副本通关数在领奖提交后按赛季UpdateMax投影，失败回报BoardPending，重复领取或RefreshLeaderboard恢复
+    verify:
+      packages: [./game/controllers/dungeon]
+      run: ^TestWithDungeonLeaderboard
+      pass: 3

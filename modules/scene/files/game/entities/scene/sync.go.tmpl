@@ -1,0 +1,23 @@
+package scene
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"{{MODULE}}/db"
+	gamescene "{{MODULE}}/game/scene"
+)
+
+func NewSceneSyncPacker(value entity.IThreadSafeEntity) entity.SubjectSyncPacker {
+	owner := value.(*Scene)
+	views, err := dataengine.NewSyncViewSet((*db.SceneDao)(nil).SyncFields(),
+		entity.NamedSyncView{Profile: gamescene.Public, Fields: []string{"AnchorBusiness", "AnchorDomain", "Rate"}})
+	if err != nil {
+		panic(fmt.Sprintf("scene sync schema: %v", err))
+	}
+	packer, err := entity.NewMaskedSyncPacker(views, 2, func(mask uint64) ([]byte, error) { return owner.Dao().MarshalSync(mask), nil })
+	if err != nil {
+		panic(err)
+	}
+	return packer
+}

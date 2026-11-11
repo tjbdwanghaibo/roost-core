@@ -1,0 +1,180 @@
+package player
+
+import (
+	"fmt"
+	"math"
+	"math/rand/v2"
+
+	"{{MODULE}}/configs/schema"
+	db "{{MODULE}}/db"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:Gacha}}
+const CompTypeGacha entity.ComponentType = {{ID:component:Gacha}}
+
+// GachaComponent 只持有所属玩家；业务状态和回执全在 DAO，由 Nest 统一提交与回滚。
+// 业务入口只能在持有 Player 锁的 Nest 事务里调用，错误必须原样交还 Nest，不可吞掉。
+type GachaComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+type IGachaEntity interface {
+	entity.IThreadSafeEntity
+	GachaComp() *GachaComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeGacha, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("gacha component: owner %T is not *Player", owner)
+		}
+		return &GachaComponent{owner: typed}, nil
+	})
+}
+func (component *GachaComponent) Name() string   { return "gacha" }
+func (component *GachaComponent) Owner() *Player { return component.owner }
+
+const GachaReceiptWindow = 64
+const GachaMaxPools = 64
+
+// GachaResult 的 Items 按抽取顺序返回，每项代表一个道具；它和持久回执没有共享切片。
+type GachaResult struct {
+	Cost, Balance int64
+	Items         []int64
+	Misses        int64
+}
+
+func gachaKeyValid(key string) bool {
+	if len(key) < 1 || len(key) > 64 {
+		return false
+	}
+	for _, c := range []byte(key) {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '-' || c == '_' || c == ':') {
+			return false
+		}
+	}
+	return true
+}
+
+// Draw 用同一笔事务扣费、发奖、更新保底并记回执；中途背包或提交拒绝时，必须由 Nest 整笔回滚。
+// 随机结果只在成功回执中成为持久事实；被拒绝的尝试没有结果，重试可以重新抽样。
+// 重放先于配置查询，因此下架/热更后仍回放原结果；同键换池或次数拒绝。窗口外旧键视为新请求。
+func (component *GachaComponent) Draw(key string, poolID, count int64) (GachaResult, error) {
+	if !gachaKeyValid(key) {
+		return GachaResult{}, apperrors.ErrGachaKeyInvalid
+	}
+	ledger := component.owner.Dao().GetGachaLedger()
+	if old, ok := ledger.GetReceipts(key); ok {
+		if old.GetPoolID() != poolID || old.GetCount() != count {
+			return GachaResult{}, apperrors.ErrGachaKeyConflict
+		}
+		items := make([]int64, old.ItemsLen())
+		old.RangeItems(func(index int, value int64) bool { items[index] = value; return true })
+		return GachaResult{Cost: old.GetCost(), Balance: old.GetBalance(), Items: items, Misses: old.GetMisses()}, nil
+	}
+	if count != 1 && count != 10 {
+		return GachaResult{}, apperrors.ErrGachaCountInvalid
+	}
+	pool, drops, total, err := gachaRules(poolID)
+	if err != nil {
+		return GachaResult{}, err
+	}
+	if pool.Price > math.MaxInt64/count || ledger.GetNextSeq() == math.MaxInt64 {
+		return GachaResult{}, apperrors.ErrGachaOverflow
+	}
+	state := component.owner.Dao().GetGacha()
+	misses, exists := state.GetMisses(poolID)
+	if !exists && state.MissesLen() >= GachaMaxPools {
+		return GachaResult{}, apperrors.ErrGachaPoolLimit
+	}
+	if misses < 0 || misses == math.MaxInt64 {
+		return GachaResult{}, apperrors.ErrGachaPoolInvalid
+	}
+	// 在抽样之前保守检查每种候选奖品最多来 count 个时也能收下，且有足够新种类槽位。
+	// 否则玩家可先塞满低价值道具，利用拒绝零扣费反复尝试直到抽中高价值道具。
+	if err := component.checkGachaCapacity(drops, count); err != nil {
+		return GachaResult{}, err
+	}
+	cost := pool.Price * count
+	balance, err := component.owner.WalletComp().Add(-cost)
+	if err != nil {
+		return GachaResult{}, err
+	}
+	items := make([]int64, 0, count)
+	for i := int64(0); i < count; i++ {
+		var itemID int64
+		if misses+1 >= pool.PityAfter {
+			itemID = pool.PityItemID
+		} else {
+			itemID = gachaPick(drops, rand.Int64N(total))
+		}
+		if _, err := component.owner.BagComp().Add(itemID, 1); err != nil {
+			return GachaResult{}, err
+		}
+		if itemID == pool.PityItemID {
+			misses = 0
+		} else {
+			misses++
+		}
+		items = append(items, itemID)
+	}
+	state.SetMissesKey(poolID, misses)
+	if ledger.ReceiptsLen() >= GachaReceiptWindow {
+		var oldest string
+		var seq int64
+		ledger.RangeReceipts(func(key string, r *db.GachaReceipt) bool {
+			if oldest == "" || r.GetSeq() < seq {
+				oldest, seq = key, r.GetSeq()
+			}
+			return true
+		})
+		ledger.DelReceiptsKey(oldest)
+	}
+	seq := ledger.GetNextSeq() + 1
+	ledger.SetNextSeq(seq)
+	receipt := &db.GachaReceipt{}
+	receipt.SetPoolID(poolID)
+	receipt.SetCount(count)
+	receipt.SetCost(cost)
+	receipt.SetBalance(balance)
+	receipt.SetItems(items)
+	receipt.SetMisses(misses)
+	receipt.SetSeq(seq)
+	ledger.SetReceiptsKey(key, receipt)
+	return GachaResult{Cost: cost, Balance: balance, Items: append([]int64(nil), items...), Misses: misses}, nil
+}
+
+// checkGachaCapacity 保守按所有候选奖励预留空间，不消耗随机数、不写 DAO。
+// 也包含零权重的保底项；因此空间不足时可能拒绝一个实际能放下的随机结果，换来无可操纵的重抽窗口。
+func (component *GachaComponent) checkGachaCapacity(drops []schema.GachaDrop, count int64) error {
+	seen := map[int64]bool{}
+	newKinds := 0
+	for _, row := range drops {
+		if seen[row.ItemID] {
+			continue
+		}
+		seen[row.ItemID] = true
+		maxStack, ok := bagItemRule(row.ItemID)
+		if !ok {
+			return apperrors.ErrBagItemInvalid
+		}
+		if maxStack <= 0 || maxStack > BagMaxStack {
+			maxStack = BagMaxStack
+		}
+		held := component.owner.BagComp().Count(row.ItemID)
+		if held > maxStack || count > maxStack-held {
+			return apperrors.ErrBagStackFull
+		}
+		if held == 0 {
+			newKinds++
+		}
+	}
+	if component.owner.Dao().GetBag().ItemsLen()+min(newKinds, int(count)) > BagMaxKinds {
+		return apperrors.ErrBagKindsFull
+	}
+	return nil
+}

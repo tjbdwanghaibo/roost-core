@@ -1,0 +1,23 @@
+package handler
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+
+	player "{{MODULE}}/game/entities/player"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerCombatStep 声明参与者后才接触Host；失败返回Nest，两个CombatDAO与PlayerDAO一起回滚。
+//
+//roost:nest rollback=undo durability=strict
+func handlerCombatStep(source, peer player.ICombatEntity, request *pb.CombatStepRequest) (*pb.CombatStepResponse, error) {
+	if request == nil {
+		return nil, apperrors.ErrCombatInvalid
+	}
+	r, err := source.CombatComp().Step(peer.CombatComp(), request.Sequence, fctx.Now())
+	if err != nil {
+		return nil, err
+	}
+	return &pb.CombatStepResponse{Sequence: r.Sequence, CastID: r.CastID, Health: r.Health, PeerHealth: r.PeerHealth, Alive: r.Alive, PeerAlive: r.PeerAlive, Pending: r.Pending, Ended: r.Ended}, nil
+}

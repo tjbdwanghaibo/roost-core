@@ -1,0 +1,10 @@
+package dbdef
+
+// EquipmentState 最多32个槽，每槽一件；没有物品实例或随机词条。等级为可信服务端强化级，不接受客户端指定。
+type EquipmentState struct {
+	Slots map[int32]*GearPiece `store:"1"`
+}
+type GearPiece struct {
+	ItemID int64 `store:"1"`
+	Level  int32 `store:"2"`
+}

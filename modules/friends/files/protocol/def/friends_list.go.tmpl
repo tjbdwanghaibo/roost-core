@@ -1,0 +1,18 @@
+//go:build protocoldef
+
+package protocoldef
+
+type FriendsListRequest struct{}
+type FriendsListResponse struct {
+	Code     int32   `pb:"1"`
+	Reason   string  `pb:"2"`
+	Peers    []int64 `pb:"3"`
+	Incoming []int64 `pb:"4"`
+	Blocked  []int64 `pb:"5"`
+}
+
+//roost:protocol group=game handler=friends
+type FriendsListProtocol interface {
+	//roost:msg id={{ID:protocol:FriendsList}}
+	FriendsList(FriendsListRequest) FriendsListResponse
+}

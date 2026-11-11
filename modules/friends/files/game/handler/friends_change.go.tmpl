@@ -1,0 +1,10 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerFriendsChange 将两份 Player DAO 放进同一提交记录；提交失败两边一起回滚。
+//
+//roost:nest rollback=undo durability=strict
+func handlerFriendsChange(actor player.IFriendsEntity, peer player.IFriendsEntity, action int32) error {
+	return actor.FriendsComp().Change(peer.FriendsComp(), action)
+}

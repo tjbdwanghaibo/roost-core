@@ -1,0 +1,11 @@
+package actor
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+//roost:endpoint nest=ActorStop
+func (controller *Controller) HandleActorStop(ctx *playeraccess.Context, req *pb.ActorStopRequest) (*pb.ActorStopResponse, error) {
+	return controller.dispatchActorStop(ctx, req)
+}

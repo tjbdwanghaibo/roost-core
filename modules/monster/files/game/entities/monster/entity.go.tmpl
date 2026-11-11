@@ -1,0 +1,16 @@
+package monster
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	db "{{MODULE}}/db"
+)
+
+const EntityKindMonster entity.EntityKind = {{ID:entity:Monster}}
+
+//roost:entity id={{ID:entity:Monster}} entityKind=EntityKindMonster category=entity.EntityCategoryPlayer noPersist=true lifetime=runtime_rebuild sync=true subjectPacker=NewMonsterSyncPacker service={{GAME_SERVICE}}
+type Monster struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	dao *db.MonsterDao `dao:"monster"`
+}

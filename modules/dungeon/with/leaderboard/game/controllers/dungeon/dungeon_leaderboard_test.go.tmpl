@@ -1,0 +1,116 @@
+package dungeon
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/fctx"
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+	logic "{{MODULE}}/game/dungeon"
+	leaderboard "{{MODULE}}/game/leaderboard"
+)
+
+// 替身只替换服务传输；正式leaderboard.SubmitSeason必须传入UpdateMax与持久总数，且不占Nest业务worker。
+type dungeonRankClient = svcrank.Rank
+
+type dungeonRank struct {
+	dungeonRankClient
+	mu    sync.Mutex
+	fail  bool
+	calls int
+	board svcrank.Board
+	score svcrank.Score
+}
+
+func (r *dungeonRank) Submit(_ context.Context, board svcrank.Board, score svcrank.Score, mode svcrank.UpdateMode, requestID string) (svcrank.Entry, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	if nest.CurrentRollbackTx() != nil || fctx.BlockingError("dungeon rank projection") != nil {
+		return svcrank.Entry{}, errors.New("rank projection ran inside Nest")
+	}
+	if mode != svcrank.UpdateMax || requestID != "" {
+		return svcrank.Entry{}, errors.New("projection is not idempotent UpdateMax")
+	}
+	if r.fail {
+		return svcrank.Entry{}, errors.New("injected rank unavailable")
+	}
+	if score.Value > r.score.Value {
+		r.score = score
+	}
+	r.board = board
+	return svcrank.Entry{Score: r.score, Rank: 1}, nil
+}
+func dungeonInstallRank(t *testing.T, f *dungeonFixture) *dungeonRank {
+	t.Helper()
+	r := &dungeonRank{}
+	if err := f.controller.registry.Register(svcrank.CapabilityName, svcrank.Rank(r)); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func TestWithDungeonLeaderboardUsesPersistedSeasonAndUpdateMax(t *testing.T) {
+	f := newDungeonFixture(t)
+	r := dungeonInstallRank(t, f)
+	f.clear(t, 1001, 7)
+	a, err := f.claim(1001)
+	if err != nil || a.BoardPending {
+		t.Fatalf("projection=%+v %v", a, err)
+	}
+	if _, err := f.claim(1001); err != nil {
+		t.Fatal(err)
+	}
+	if r.calls != 2 || r.board != leaderboard.Board(7) || r.score.OwnerID != dungeonPlayer || r.score.Value != 1 {
+		t.Fatalf("rank=%+v", r)
+	}
+	f.assertPlayer(t, 1, 1)
+}
+func TestWithDungeonLeaderboardFailureKeepsRewardAndReplayRecovers(t *testing.T) {
+	f := newDungeonFixture(t)
+	r := dungeonInstallRank(t, f)
+	r.fail = true
+	f.clear(t, 1001, 1)
+	a, err := f.claim(1001)
+	if err != nil || !a.Claimed || !a.BoardPending {
+		t.Fatalf("failure=%+v %v", a, err)
+	}
+	f.assertPlayer(t, 1, 1)
+	r.fail = false
+	writes := f.commit.writes.Load()
+	a, err = f.claim(1001)
+	if err != nil || a.Claimed || a.BoardPending || r.score.Value != 1 || r.calls != 2 || f.commit.writes.Load() != writes {
+		t.Fatalf("retry=%+v %v", a, err)
+	}
+}
+func TestWithDungeonLeaderboardRefreshAfterRestartAndWindow(t *testing.T) {
+	f := newDungeonFixture(t)
+	r := dungeonInstallRank(t, f)
+	r.fail = true
+	f.clear(t, 1001, 1)
+	if _, err := f.claim(1001); err != nil {
+		t.Fatal(err)
+	}
+	f.clear(t, 1002, 1)
+	if _, err := f.claim(1002); err != nil {
+		t.Fatal(err)
+	}
+	f.restart(t)
+	r = dungeonInstallRank(t, f)
+	f.now.Add((logic.ClaimWindowSeconds + 1) * 1000)
+	writes := f.commit.writes.Load()
+	a, err := f.controller.RefreshLeaderboard(context.Background(), dungeonPlayer, 1)
+	if err != nil || a.BoardPending || a.Claimed || r.score.Value != 2 || f.commit.writes.Load() != writes {
+		t.Fatalf("refresh=%+v %v", a, err)
+	}
+	// 乱序旧快照不能把已投影总数拉低；领取窗口之外仍可恢复，不依赖旧run存活。
+	if err := publishClaim(context.Background(), f.controller.registry, dungeonPlayer, logic.ClaimResult{Season: 1, Clears: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if r.score.Value != 2 {
+		t.Fatal("stale snapshot lowered rank")
+	}
+	f.assertPlayer(t, 2, 2)
+}

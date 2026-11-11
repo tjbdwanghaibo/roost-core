@@ -1,0 +1,307 @@
+// Package combat 把技能Host限制在当前Nest已声明并持锁的两名参与者中，绝不隐式加载第三人。
+package combat
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
+	"sort"
+
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill/combatcomponent"
+)
+
+const MaxHostBytes = 256 << 10
+
+var ErrBoundary = errors.New("combat: authoritative world differs from checkpoint boundary")
+var ErrUnsupported = errors.New("combat: this duel Host does not support this operation")
+
+// Participant 仅由持有双方锁的handler构造。Input是外部移动/成长产生的下一拍输入，不直接改CombatDAO。
+type Participant interface {
+	ID() int64
+	Core() *combatcomponent.CombatComponent
+	Input() Input
+}
+type Input struct {
+	ID                int64
+	SceneID           int64
+	X, Y              int64
+	MaxHealth, Attack int64
+}
+type hostEvent struct {
+	Event skill.RuntimeEvent
+	Tags  []skill.GameplayTagHandle
+}
+type hostState struct {
+	Version  int
+	Revision skill.WorldRevision
+	Tick     skill.Tick
+	Cursor   skill.EventCursor
+	Events   []hostEvent
+	Inputs   []Input
+	Hashes   map[int64]string
+}
+
+// Host的revision、tick、事件游标/未消费事件、上一拍输入与CombatDAO哈希同checkpoint持久提交。
+// 恢复先核对HP/Buff等权威字节，随后Advance才将新位置/装备属性纳入世界并推进revision。
+type Host struct {
+	state        hostState
+	participants map[skill.EntityID]Participant
+	environment  skill.CompileEnvironment
+	adapter      *combatcomponent.HostAdapter
+	pending      bool
+}
+
+func NewHost(raw []byte, ps []Participant, environment skill.CompileEnvironment) (*Host, error) {
+	if len(ps) != 2 {
+		return nil, ErrBoundary
+	}
+	h := &Host{participants: map[skill.EntityID]Participant{}, environment: environment, pending: true}
+	for _, p := range ps {
+		if p == nil || p.ID() <= 0 || p.Core() == nil {
+			return nil, ErrBoundary
+		}
+		h.participants[skill.EntityID(p.ID())] = p
+	}
+	if len(h.participants) != 2 {
+		return nil, ErrBoundary
+	}
+
+	// 恢复先对照实际战斗DAO，不能给过期世界套用checkpoint的revision。
+	if len(raw) > 0 {
+		if len(raw) > MaxHostBytes {
+			return nil, ErrBoundary
+		}
+		if err := json.Unmarshal(raw, &h.state); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrBoundary, err)
+		}
+		if h.state.Version != 1 || len(h.state.Inputs) != 2 || len(h.state.Hashes) != 2 || len(h.state.Events) > 256 {
+			return nil, ErrBoundary
+		}
+		for _, p := range ps {
+			hash, err := combatHash(p)
+			if err != nil {
+				return nil, err
+			}
+			if h.state.Hashes[p.ID()] != hash {
+				return nil, ErrBoundary
+			}
+		}
+	} else {
+		h.state = hostState{Version: 1, Inputs: h.inputs(), Hashes: map[int64]string{}}
+	}
+
+	// Resolver只认识当前调用已声明并持锁的两名参与者。
+	h.adapter = &combatcomponent.HostAdapter{Resolver: h, Revision: h, Catalog: environment.Gameplay}
+	h.adapter.Status = &combatcomponent.StatusBridge{Resolver: h, Revision: h, Catalog: environment.Gameplay, CurrentTick: func() skill.Tick { return h.state.Tick }}
+	return h, nil
+}
+
+func combatHash(p Participant) (string, error) {
+	raw, err := p.Core().Dao().CaptureRollbackState()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func (h *Host) inputs() []Input {
+	out := make([]Input, 0, 2)
+	for _, p := range h.participants {
+		out = append(out, p.Input())
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func (h *Host) CombatComponent(id skill.EntityID) (*combatcomponent.CombatComponent, bool) {
+	p, ok := h.participants[id]
+	if !ok {
+		return nil, false
+	}
+	return p.Core(), true
+}
+
+func (h *Host) AuthorityIdentity() skill.AuthorityIdentity {
+	return skill.AuthorityIdentity{Revision: h.environment.Revision, Digest: h.environment.Digest}
+}
+
+func (h *Host) HostCapabilities() skill.HostCapabilityTable { return h.adapter.HostCapabilities() }
+
+func (h *Host) CurrentRevision() skill.WorldRevision { return h.state.Revision }
+
+func (h *Host) Advance(tick skill.Tick) (skill.WorldRevision, error) {
+	if tick < h.state.Tick {
+		return h.state.Revision, skill.ErrReverseAdvance
+	}
+
+	// 外部移动和属性来源只在新拍开始纳入；HP和Buff仍由CombatDAO持有。
+	inputs := h.state.Inputs
+	if h.pending {
+		inputs = h.inputs()
+		for _, input := range inputs {
+			p := h.participants[skill.EntityID(input.ID)]
+			if input.MaxHealth <= 0 || input.Attack < 0 {
+				return 0, ErrBoundary
+			}
+			core := p.Core()
+			if core.AttributeBase(2) != input.Attack {
+				core.SetAttributeBase(2, input.Attack)
+			}
+			if core.AttributeBase(3) != 60 {
+				core.SetAttributeBase(3, 60)
+			}
+			v := core.Combatant()
+			if v.MaxHealth != input.MaxHealth {
+				v.MaxHealth = input.MaxHealth
+				v.Health = min(v.Health, v.MaxHealth)
+				core.InitCombatant(v)
+			}
+		}
+	}
+
+	// Buff推进走正式组件，派生actor门控跟随同一事务回滚。
+	changed := h.pending && !reflect.DeepEqual(inputs, h.state.Inputs) || tick != h.state.Tick
+	h.state.Inputs = inputs
+	h.pending = false
+	h.state.Tick = tick
+	for _, p := range h.participants {
+		before := len(p.Core().ActiveBuffs())
+		if err := p.Core().StepBuffsToTick(int64(tick)); err != nil {
+			return 0, err
+		}
+		if before != len(p.Core().ActiveBuffs()) {
+			changed = true
+		}
+	}
+	if changed {
+		h.CommitEffect(nil)
+	}
+	return h.state.Revision, nil
+}
+
+func (h *Host) CommitEffect(events []combatcomponent.EffectEvent) skill.CommitReceipt {
+	h.state.Revision++
+	for _, event := range events {
+		h.state.Cursor++
+		ctx := event.Context
+		ctx.WorldRevision = h.state.Revision
+		ctx.Tick = h.state.Tick
+		h.state.Events = append(h.state.Events, hostEvent{Event: skill.RuntimeEvent{Cursor: h.state.Cursor, Revision: h.state.Revision, Tick: h.state.Tick, Kind: event.Kind, Entity: event.Entity, Context: ctx}, Tags: ctx.GameplayTags()})
+	}
+	return skill.CommitReceipt{Revision: h.state.Revision, Changed: true}
+}
+
+func (h *Host) Events(after skill.EventCursor) []skill.RuntimeEvent {
+	out := []skill.RuntimeEvent{}
+	for _, saved := range h.state.Events {
+		if saved.Event.Cursor > after {
+			e := saved.Event
+			e.Context = e.Context.WithGameplayTags(saved.Tags)
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func (h *Host) CompactEventsThrough(cursor skill.EventCursor) {
+	at := 0
+	for at < len(h.state.Events) && h.state.Events[at].Event.Cursor <= cursor {
+		at++
+	}
+	h.state.Events = append([]hostEvent(nil), h.state.Events[at:]...)
+}
+
+func (h *Host) Read(request skill.ReadRequest) (skill.ReadResult, error) {
+	if request.Meta.RequiredRevision > h.state.Revision {
+		return skill.ReadResult{}, skill.ErrRevisionUnavailable
+	}
+	if pos, ok := request.Payload.(skill.PositionRead); ok {
+		for _, input := range h.state.Inputs {
+			if input.ID == int64(pos.Entity) {
+				return skill.ReadResult{Meta: skill.QueryResultMeta{Revision: h.state.Revision}, Value: skill.PositionRuntimeValue(skill.Position{X: input.X, Y: input.Y})}, nil
+			}
+		}
+		return skill.ReadResult{}, skill.ErrEntityNotFound
+	}
+	if a, ok := request.Payload.(skill.AttributeRead); ok && a.Attribute == 1 {
+		c, found := h.CombatComponent(a.Entity)
+		if !found {
+			return skill.ReadResult{}, skill.ErrEntityNotFound
+		}
+		return skill.ReadResult{Meta: skill.QueryResultMeta{Revision: h.state.Revision}, Value: skill.AttributeRuntimeValue(h.environment.Gameplay, a.Attribute, c.Combatant().Health)}, nil
+	}
+	r, handled, err := h.adapter.Read(request)
+	if !handled && err == nil {
+		err = ErrUnsupported
+	}
+	return r, err
+}
+
+func (h *Host) PayCosts(p skill.CostPayment) (skill.CommitReceipt, error) {
+	return h.adapter.PayCosts(p)
+}
+
+func (h *Host) Apply(command skill.EffectCommand) (skill.EffectResult, error) {
+	if command.Meta.RequiredRevision > h.state.Revision {
+		return skill.EffectResult{}, skill.ErrRevisionUnavailable
+	}
+	r, handled, err := h.adapter.Apply(command)
+	if !handled && err == nil {
+		err = ErrUnsupported
+	}
+	return r, err
+}
+
+// 当前模块只开放直接双人目标；范围选择/召唤/投射物/持久技能变量需要完整世界宿主，明确拒绝而不伪造成功。
+func (h *Host) Select(skill.SelectRequest) (skill.SelectResult, error) {
+	return skill.SelectResult{}, ErrUnsupported
+}
+
+func (h *Host) ReadState(skill.StateReadRequest) (skill.StateReadResult, error) {
+	return skill.StateReadResult{}, ErrUnsupported
+}
+
+func (h *Host) ModifyState(skill.StateMutationCommand) (skill.StateMutationResult, error) {
+	return skill.StateMutationResult{}, ErrUnsupported
+}
+
+func (h *Host) StepSpawn(skill.SpawnStepCommand, skill.SpawnHostState) (skill.SpawnStepResult, error) {
+	return skill.SpawnStepResult{}, ErrUnsupported
+}
+
+func (h *Host) StopSpawn(skill.SpawnStopCommand, skill.SpawnHostState) (skill.CommitReceipt, error) {
+	return skill.CommitReceipt{}, ErrUnsupported
+}
+
+func (h *Host) Save() ([]byte, error) {
+	if len(h.state.Events) > 256 {
+		return nil, ErrBoundary
+	}
+	h.state.Hashes = map[int64]string{}
+	for _, p := range h.participants {
+		hash, err := combatHash(p)
+		if err != nil {
+			return nil, err
+		}
+		h.state.Hashes[p.ID()] = hash
+	}
+	raw, err := json.Marshal(h.state)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > MaxHostBytes {
+		return nil, ErrBoundary
+	}
+	return raw, nil
+}
+
+var _ skill.Host = (*Host)(nil)
+var _ skill.HostEventCompactor = (*Host)(nil)
+
+// InputsChanged 用于同tick新输入拒绝：世界按50ms拍冻结，不在一拍中混用新站位与旧技能快照。
+func (h *Host) InputsChanged() bool { return !reflect.DeepEqual(h.state.Inputs, h.inputs()) }

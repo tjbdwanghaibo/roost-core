@@ -1,0 +1,17 @@
+=== RUN   TestModuleMonsterInstallsWithRuntimeAndBehaviorMutations
+    module_monster_test.go:55: compiled mutation killed by TestMonsterOldLifeDamageAndCommandsAreRejected
+    module_monster_test.go:55: compiled mutation killed by TestMonsterDeathHidesButRetainsSpawnSlotUntilRespawn
+    module_monster_test.go:55: compiled mutation killed by TestMonsterChasesPublishedPlayerWithoutRestartingSlowFollow
+--- PASS: TestModuleMonsterInstallsWithRuntimeAndBehaviorMutations (25.40s)
+=== RUN   TestModuleMonsterDrainRecoveryMutations
+    module_monster_test.go:97: compiled mutation caught: TestMonsterDrainRetriesWhenRemoveCommittedButReplyWasLost
+    module_monster_test.go:97: compiled mutation caught: TestMonsterDestroyRejectsAReplacementEntityInstance
+    module_monster_test.go:97: compiled mutation caught: TestMonsterSpawnRejectsReplacementSceneInFlight
+    module_monster_test.go:97: compiled mutation caught: TestMonsterRespawnRejectsReplacementMonsterInFlight
+    module_monster_test.go:97: compiled mutation caught: TestMonsterDamageRejectsReplacementMonsterInFlight
+    module_monster_test.go:97: compiled mutation caught: TestMonsterDestroyRejectsReplacementMonsterInFlight
+    module_monster_test.go:97: compiled mutation caught: TestMonsterDamageRejectsReplacementMonsterInFlight
+    module_monster_test.go:97: compiled mutation caught: TestMonsterDamageRejectsReplacementSceneInFlight
+--- PASS: TestModuleMonsterDrainRecoveryMutations (26.58s)
+PASS
+ok  	github.com/tjbdwanghaibo/roost-core/codegen/internal/roost	52.700s

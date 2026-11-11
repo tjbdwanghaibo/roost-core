@@ -1,0 +1,251 @@
+package handler
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	core "github.com/tjbdwanghaibo/roost-core/gameplay/terrain"
+	"log/slog"
+	"sort"
+	player "{{MODULE}}/game/entities/player"
+	building "{{MODULE}}/game/entities/terrain_building"
+	chunk "{{MODULE}}/game/entities/terrain_chunk"
+	logic "{{MODULE}}/game/terrain"
+)
+
+// 初始化只在开图装载时调用；整组先校验再写，半份/旧版档不会被原始包覆盖。
+//
+//roost:nest rollback=undo durability=strict
+func handlerTerrainLoad(targets []chunk.ITerrainChunkEntity, world *logic.World) ([]logic.ChunkState, error) {
+	if world == nil || len(targets) != world.Meta().Chunks() {
+		return nil, logic.ErrInvalid
+	}
+	keys := world.Keys()
+	for i, target := range targets {
+		if err := target.ChunkState().Initialize(world, keys[i]); err != nil {
+			return nil, err
+		}
+	}
+	out := make([]logic.ChunkState, len(targets))
+	for i, target := range targets {
+		out[i] = target.ChunkState().State()
+	}
+	return out, nil
+}
+
+func terrainTargets(targets []chunk.ITerrainChunkEntity, world *logic.World, keys []core.ChunkKey) (map[core.ChunkKey]*chunk.TerrainChunk, error) {
+	if world == nil || len(targets) < 1 || len(targets) > 4 || len(targets) != len(keys) {
+		return nil, logic.ErrInvalid
+	}
+	out := map[core.ChunkKey]*chunk.TerrainChunk{}
+	for _, target := range targets {
+		value := target.ChunkState()
+		state := value.State()
+		if err := value.Validate(world, state.Key); err != nil {
+			return nil, err
+		}
+		if out[state.Key] != nil {
+			return nil, logic.ErrInvalid
+		}
+		out[state.Key] = value
+	}
+	for _, key := range keys {
+		if out[key] == nil {
+			return nil, logic.ErrInvalid
+		}
+	}
+	return out, nil
+}
+func terrainPublish(world *logic.World, targets map[core.ChunkKey]*chunk.TerrainChunk) error {
+	snapshots := make([]logic.ChunkState, 0, len(targets))
+	for _, target := range targets {
+		snapshots = append(snapshots, target.State())
+	}
+	if !nest.AfterCommit(func() {
+		for _, state := range snapshots {
+			if err := world.Publish(state); err != nil {
+				world.MarkFailure()
+				slog.Error("terrain: committed overlay needs reload", "scene", world.ID, "key", state.Key, "version", state.Version, "err", err)
+			}
+		}
+	}) {
+		return nest.ErrTransactionClosed
+	}
+	return nil
+}
+
+// 全部参与块+Player在同一严格事务内；先查权威Lots再写地形，结果未知按同Seq/Digest重试。
+//
+//roost:nest rollback=undo durability=strict
+func handlerTerrainBrush(targets []chunk.ITerrainChunkEntity, target player.ITerrainEntity, world *logic.World, command logic.Command) (logic.Result, error) {
+	if world == nil || command.SceneID != world.ID {
+		return logic.Result{}, logic.ErrInvalid
+	}
+	if err := command.Validate(world.Meta()); err != nil {
+		return logic.Result{}, err
+	}
+	result, duplicate, err := target.TerrainComp().Check(command, world.SceneID)
+	if err != nil || duplicate {
+		return result, err
+	}
+	if command.Op == "build" || command.Op == "remove" {
+		return logic.Result{}, logic.ErrInvalid
+	}
+	brush := command.Brush()
+	if logic.DistanceToSpawn(world, command.Point(), command.Radius) {
+		return logic.Result{}, logic.ErrDenied
+	}
+	chunks, err := terrainTargets(targets, world, brush.Chunks(world.Meta()))
+	if err != nil {
+		return result, err
+	}
+	data := map[core.ChunkKey]core.Chunk{}
+	for key, value := range chunks {
+		state := value.State()
+		data[key] = core.Chunk{Heights: state.Heights, Materials: state.Materials}
+	}
+	changes, err := brush.Apply(world.Meta(), core.Limits{Bedrock: 0, Ceiling: 200}, data)
+	if err != nil {
+		return result, err
+	}
+	for _, change := range changes {
+		for _, point := range change.Points {
+			if id, _ := chunks[change.Key].Dao().GetLots(point.Index); id != 0 {
+				return result, logic.ErrOccupied
+			}
+		}
+	}
+	result = logic.Result{Sequence: command.Sequence}
+	for _, change := range changes {
+		chunks[change.Key].Apply(change.Points)
+		result.Changed += int32(len(change.Points))
+	}
+	if err := target.TerrainComp().Record(command, result, 0); err != nil {
+		return result, err
+	}
+	return result, terrainPublish(world, chunks)
+}
+
+// 建筑固定2x2占位，跨角点至多4块；拆除必须属主与每块Lots都匹配，地表保持当前编辑结果。
+//
+//roost:nest rollback=undo durability=strict
+func handlerTerrainBuild(targets []chunk.ITerrainChunkEntity, site building.ITerrainBuildingEntity, target player.ITerrainEntity, world *logic.World, command logic.Command) (logic.Result, error) {
+	if world == nil || command.SceneID != world.ID || command.Op != "build" && command.Op != "remove" {
+		return logic.Result{}, logic.ErrInvalid
+	}
+	if err := command.Validate(world.Meta()); err != nil {
+		return logic.Result{}, err
+	}
+	result, duplicate, err := target.TerrainComp().Check(command, world.SceneID)
+	if err != nil || duplicate {
+		return result, err
+	}
+	value := site.BuildingState()
+	if err := value.Validate(command, target.UniqueID()); err != nil {
+		return result, err
+	}
+	footprint := command.Footprint()
+	if command.Op == "build" {
+		for key, indices := range footprint {
+			spawnKey := core.ChunkOf(world.Spawn.X, world.Spawn.Y)
+			if key != spawnKey {
+				continue
+			}
+			_, spawnIndex := core.PointIndex(world.Spawn.X, world.Spawn.Y)
+			for _, index := range indices {
+				if index == int32(spawnIndex) {
+					return result, logic.ErrDenied
+				}
+			}
+		}
+	}
+	keys := make([]core.ChunkKey, 0, len(footprint))
+	for key := range footprint {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Y != keys[j].Y {
+			return keys[i].Y < keys[j].Y
+		}
+		return keys[i].X < keys[j].X
+	})
+	chunks, err := terrainTargets(targets, world, keys)
+	if err != nil {
+		return result, err
+	}
+	delta := int32(-1)
+	id := int64(0)
+	if command.Op == "build" {
+		delta = 1
+		id = site.ID()
+		if target.TerrainComp().BuildingCount() >= logic.MaxBuildings {
+			return result, logic.ErrFull
+		}
+	}
+	var low, high int64
+	first := true
+	for key, indices := range footprint {
+		state := chunks[key].State()
+		for _, index := range indices {
+			occupied := state.Lots[index]
+			if command.Op == "build" && occupied != 0 {
+				return result, logic.ErrOccupied
+			}
+			if command.Op == "remove" && occupied != site.ID() {
+				return result, fmt.Errorf("terrain: building/lot mismatch")
+			}
+			height := int64(world.Meta().WorldHeight(state.Heights[index]))
+			if first {
+				low, high, first = height, height, false
+			}
+			low = min(low, height)
+			high = max(high, height)
+			if command.Op == "build" && height < int64(world.View.WaterLevelOf(key)) {
+				return result, logic.ErrInvalid
+			}
+		}
+	}
+	if command.Op == "build" && high-low > 50 {
+		return result, logic.ErrInvalid
+	}
+	for key, indices := range footprint {
+		chunks[key].SetLots(indices, id)
+	}
+	value.Set(command, target.UniqueID())
+	result = logic.Result{Sequence: command.Sequence, Changed: 4, BuildingID: site.ID(), Standing: command.Op == "build"}
+	if err := target.TerrainComp().Record(command, result, delta); err != nil {
+		return result, err
+	}
+	snapshot := logic.SiteState{X: command.X, Y: command.Y, Standing: result.Standing, Version: value.Dao().GetVersion()}
+	if !nest.AfterCommit(func() {
+		if err := world.PublishSite(site, snapshot); err != nil {
+			world.MarkFailure()
+			slog.Error("terrain: building sync needs reload", "scene", world.ID, "id", site.ID(), "err", err)
+		}
+	}) {
+		return result, nest.ErrTransactionClosed
+	}
+
+	return result, terrainPublish(world, chunks)
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerTerrainQuery(value chunk.ITerrainChunkEntity, target player.ITerrainEntity, world *logic.World) (logic.ChunkState, error) {
+	if world == nil || target.ActorComp().Body().Map.SceneID() != world.SceneID {
+		return logic.ChunkState{}, logic.ErrDenied
+	}
+	state := value.ChunkState().State()
+	if err := value.ChunkState().Validate(world, state.Key); err != nil {
+		return state, err
+	}
+	state.LastSequence = target.TerrainComp().Sequence()
+	return state, nil
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerTerrainSite(site building.ITerrainBuildingEntity, world *logic.World) (logic.SiteState, error) {
+	d := site.BuildingState().Dao()
+	if world == nil || d.GetSceneID() != world.ID {
+		return logic.SiteState{}, logic.ErrInvalid
+	}
+	return logic.SiteState{X: int64(d.GetGX()) * core.SampleSpacing, Y: int64(d.GetGY()) * core.SampleSpacing, Standing: d.GetStanding(), Version: d.GetVersion()}, nil
+}

@@ -1,0 +1,18 @@
+package handler
+
+import (
+	gamecdkey "{{MODULE}}/game/cdkey"
+	player "{{MODULE}}/game/entities/player"
+)
+
+// 两个 handler 只操作玩家持久事实，不在 Nest 快/长 worker 中发 RPC。
+//
+//roost:nest rollback=undo durability=strict
+func handlerCdkeyPrepare(target player.ICdkeyEntity, code string, nowUnixMilli int64) (gamecdkey.Intent, error) {
+	return target.CdkeyComp().Prepare(code, nowUnixMilli)
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerCdkeyComplete(target player.ICdkeyEntity, code string, mailID string) (gamecdkey.Intent, error) {
+	return target.CdkeyComp().Complete(code, mailID)
+}

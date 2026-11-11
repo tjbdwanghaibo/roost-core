@@ -1,0 +1,11 @@
+package actor
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+//roost:endpoint nest=ActorMove
+func (controller *Controller) HandleActorMove(ctx *playeraccess.Context, req *pb.ActorMoveRequest) (*pb.ActorMoveResponse, error) {
+	return controller.dispatchActorMove(ctx, req)
+}

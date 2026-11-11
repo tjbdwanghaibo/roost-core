@@ -1,0 +1,17 @@
+name: idle
+summary: 离线收益：按结算间隔惰性发金币，时间与金额双上限、保留零头、拒绝回拨、单调序号防重
+requires: [wallet]
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+entity: Player
+state:
+  - {field: Idle, type: IdleState, store: idle, dao: 'persist,sync', comment: 离线结算游标和最后成功序号；首次领取建立起点，不追溯建档之前。}
+  - {field: IdleReceipt, type: IdleReceipt, store: idle_receipt, dao: persist, comment: 只保存最后一次成功领取的完整回包，更旧序号一律拒绝。}
+component: Idle
+protocols: [IdleClaim]
+errcodes: [idle_sequence, idle_clock_back, idle_rules]
+verify:
+  packages: [./game/handler, ./game/entities/player]
+  run: ^TestIdle
+  pass: 19

@@ -1,0 +1,10 @@
+package handler
+
+import scene "{{MODULE}}/game/entities/scene"
+
+// handlerSceneTime 仅供可信管理逻辑调用；客户端无权改变整个场景的时间。
+//
+//roost:nest rollback=undo durability=async
+func handlerSceneTime(target scene.ISceneEntity, rate float64) error {
+	return target.Scene().TimeDomain().SetRate(rate)
+}

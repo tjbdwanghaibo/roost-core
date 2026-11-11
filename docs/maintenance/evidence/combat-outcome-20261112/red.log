@@ -1,0 +1,17 @@
+--- FAIL: TestAdapterSuccessOutcomesSatisfyRuntimeContract (0.00s)
+    result_outcome_test.go:23: skill.DamageEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+    result_outcome_test.go:23: skill.HealEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+    result_outcome_test.go:23: skill.HealEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+    result_outcome_test.go:23: skill.ShieldEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+    result_outcome_test.go:23: skill.ShieldEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+    result_outcome_test.go:39: skill.StatusEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+    result_outcome_test.go:39: skill.StatusEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+    result_outcome_test.go:39: skill.StatusEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+    result_outcome_test.go:39: skill.StatusEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+    result_outcome_test.go:39: skill.StatusEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+    result_outcome_test.go:39: skill.StatusEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+    result_outcome_test.go:39: skill.AttributeModifierEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+    result_outcome_test.go:46: skill.StatusEffectResult inconsistent outcome: {Succeeded:true FailureReason:}
+FAIL
+FAIL	github.com/tjbdwanghaibo/roost-core/gameplay/skill/combatcomponent	0.974s
+FAIL

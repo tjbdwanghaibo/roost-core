@@ -1,0 +1,79 @@
+package naming
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	"time"
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// resume 不持实体锁，不在 Nest worker 内执行 Redis/RPC。顺序严格为：
+// 持久意图→Reserve→持久claim→Commit目录→持久档案→Release旧名→完成。
+// 任一结果未知都保留意图和占名；绝不在超时或提交失败时 Cancel/Release 新名。
+func (c *Controller) resume(ctx context.Context, id int64, t player.NamingTicket) (string, error) {
+	var err error
+	if t.Phase == 1 {
+		claim, e := c.names.Reserve(ctx, "player-name/"+t.Target, directory.Owner(t.Owner), time.Minute)
+		if e != nil {
+			if errors.Is(e, directory.ErrKeyTaken) {
+				_, abort := c.profile.Step(ctx, id, t.Seq, t.Operation, 4, "", "")
+				if abort != nil {
+					return "", abort
+				}
+			}
+			return "", e
+		}
+		t, err = c.profile.Step(ctx, id, t.Seq, t.Operation, 1, claim.Key, claim.Token)
+		if err != nil {
+			return "", err
+		}
+	}
+	if t.Phase == 2 {
+		claim := directory.Claim{Key: t.ClaimKey, Owner: directory.Owner(t.Owner), Token: t.ClaimToken}
+		_, err = c.names.Commit(ctx, claim)
+		if err != nil {
+			// 明确失效的 token 永远不能再提交，撤掉本地凭据以便同 key 重试重新 Reserve。
+			// 未知错误不走这里；不能把可能已永久提交的名字退回临时态。
+			if errors.Is(err, directory.ErrClaimNotFound) || errors.Is(err, directory.ErrClaimStale) {
+				if _, reset := c.profile.Step(ctx, id, t.Seq, t.Operation, 5, t.ClaimKey, t.ClaimToken); reset != nil {
+					return "", reset
+				}
+			}
+			return "", err
+		}
+		t, err = c.profile.Step(ctx, id, t.Seq, t.Operation, 2, t.ClaimKey, t.ClaimToken)
+		if err != nil {
+			return "", err
+		}
+	}
+	if t.Phase == 3 {
+		if t.OldKey != "" && t.OldKey != t.ClaimKey {
+			// 旧 Release 可能已成功但回包丢失；名字被下一位占有说明旧 owner 已退出，完成清理即可。
+			// CAS 始终核对旧 owner，不能再去释放新 owner 的名字。
+			if err = c.names.Release(ctx, t.OldKey, directory.Owner(t.OldOwner)); err != nil && !errors.Is(err, directory.ErrOwnerMismatch) {
+				return "", err
+			}
+		}
+		t, err = c.profile.Step(ctx, id, t.Seq, t.Operation, 3, "", "")
+		if err != nil {
+			return "", err
+		}
+	}
+	return t.Target, nil
+}
+func (c *Controller) HandleNamingRename(ctx *playeraccess.Context, req *pb.NamingRenameRequest) (*pb.NamingRenameResponse, error) {
+	if ctx == nil || req == nil {
+		return nil, fmt.Errorf("naming: context and request required")
+	}
+	name, err := c.Rename(ctx.Context(), ctx.PlayerID, req.RequestKey, req.Name)
+	out := &pb.NamingRenameResponse{Name: name}
+	if err != nil {
+		out.Code, out.Reason = errcode.ClientError(err)
+	}
+	return out, nil
+}

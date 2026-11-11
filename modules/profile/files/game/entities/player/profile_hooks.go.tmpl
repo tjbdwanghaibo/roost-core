@@ -1,0 +1,46 @@
+package player
+
+import (
+	"fmt"
+	"sort"
+	"sync"
+)
+
+// ProfileLevelUpHook 在原有 onLevelUp 成功之后执行。只可修改已锁住的同一个 Player，不能做外部 I/O。
+// 任一错误返回给 AddExp，调用方必须把错误交还 Nest，等级、经验及全部钩子写入一起回滚。
+type ProfileLevelUpHook func(component *ProfileComponent, from, to int32) error
+
+var profileLevelUpMu sync.RWMutex
+var profileLevelUpHooks = map[string]ProfileLevelUpHook{}
+
+// OnProfileLevelUp 仅在启动 init 登记；空名、nil 和重复名直接 panic。执行按名字排序。
+func OnProfileLevelUp(name string, hook ProfileLevelUpHook) {
+	if name == "" || hook == nil {
+		panic("profile: level-up hook needs name and function")
+	}
+	profileLevelUpMu.Lock()
+	defer profileLevelUpMu.Unlock()
+	if _, ok := profileLevelUpHooks[name]; ok {
+		panic(fmt.Sprintf("profile: duplicate level-up hook %q", name))
+	}
+	profileLevelUpHooks[name] = hook
+}
+func runProfileLevelUp(c *ProfileComponent, from, to int32) error {
+	profileLevelUpMu.RLock()
+	names := make([]string, 0, len(profileLevelUpHooks))
+	for name := range profileLevelUpHooks {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	hooks := make([]ProfileLevelUpHook, len(names))
+	for i, name := range names {
+		hooks[i] = profileLevelUpHooks[name]
+	}
+	profileLevelUpMu.RUnlock()
+	for i, h := range hooks {
+		if err := h(c, from, to); err != nil {
+			return fmt.Errorf("profile: level-up hook %s: %w", names[i], err)
+		}
+	}
+	return nil
+}

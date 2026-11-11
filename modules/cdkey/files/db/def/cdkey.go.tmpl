@@ -1,0 +1,17 @@
+package dbdef
+
+// CdkeyLedger 保留有界的兑换意图与成功回执。不能淘汰后当新请求再发奖；满额拒绝新码，旧码仍可恢复。
+type CdkeyLedger struct {
+	Receipts map[string]*CdkeyReceipt `store:"1"`
+}
+
+// CdkeyReceipt 冻结首次接受时的规则。即使配置随后下架，已受理的兑换仍按原奖励续做。
+type CdkeyReceipt struct {
+	Mode             string `store:"1"`
+	Coins            int64  `store:"2"`
+	Subject          string `store:"3"`
+	Body             string `store:"4"`
+	ExpiresInSeconds int64  `store:"5"`
+	// MailID 非空表示发件已确认；空表示在途，不表示发件未发生。
+	MailID string `store:"6"`
+}

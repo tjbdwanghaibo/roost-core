@@ -1,0 +1,73 @@
+package scene
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync/policy"
+	"testing"
+	"{{MODULE}}/db"
+	player "{{MODULE}}/game/entities/player"
+	gamescene "{{MODULE}}/game/scene"
+)
+
+func TestWithSceneAttributeSnapshotSeparatesPrivateFields(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.must(p, func(p *player.Player) error {
+		p.Dao().GetAttributeBase().SetValues(map[int32]int64{1: 913})
+		p.Dao().GetAttributeGear().SetValues(map[int32]int64{1: 812})
+		p.Dao().GetAttributeFinal().SetValues(map[int32]int64{1: 725})
+		packer := player.NewActorPlayerSyncPacker(p)
+		decode := func(view entity.SyncProfile) *db.PlayerDao {
+			_ = dataengine.AllFields
+			payload, err := packer.PackSubjectSnapshot(view)
+			if err != nil {
+				t.Fatal(err)
+			}
+			copy := db.NewPlayerDao()
+			if err := copy.ApplySync(payload.BytesCopy()); err != nil {
+				t.Fatal(err)
+			}
+			return copy
+		}
+		pub, self := decode(gamescene.Public), decode(policy.SelfProfile)
+		if pub.GetAttributeFinal().ValuesLen() != 1 || pub.GetAttributeBase().ValuesLen() != 0 || pub.GetAttributeGear().ValuesLen() != 0 {
+			return fmt.Errorf("public field missing or private field leaked")
+		}
+		if self.GetAttributeBase().ValuesLen() != 1 {
+			return fmt.Errorf("self private field missing")
+		}
+		return nil
+	})
+}
+func TestWithSceneAttributeDeltaSeparatesPrivateFields(t *testing.T) {
+	f := newSceneFixture(t)
+	p := f.player(1001)
+	f.must(p, func(p *player.Player) error {
+		p.Dao().GetAttributeBase().SetValues(map[int32]int64{1: 913})
+		p.Dao().GetAttributeGear().SetValues(map[int32]int64{1: 812})
+		p.Dao().GetAttributeFinal().SetValues(map[int32]int64{1: 725})
+		packer := player.NewActorPlayerSyncPacker(p)
+		decode := func(view entity.SyncProfile) *db.PlayerDao {
+			_ = dataengine.AllFields
+			payload, err := packer.PackSubjectDelta(view, dataengine.AllFields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			copy := db.NewPlayerDao()
+			if err := copy.ApplySync(payload.BytesCopy()); err != nil {
+				t.Fatal(err)
+			}
+			return copy
+		}
+		pub, self := decode(gamescene.Public), decode(policy.SelfProfile)
+		if pub.GetAttributeFinal().ValuesLen() != 1 || pub.GetAttributeBase().ValuesLen() != 0 || pub.GetAttributeGear().ValuesLen() != 0 {
+			return fmt.Errorf("public field missing or private field leaked")
+		}
+		if self.GetAttributeBase().ValuesLen() != 1 {
+			return fmt.Errorf("self private field missing")
+		}
+		return nil
+	})
+}

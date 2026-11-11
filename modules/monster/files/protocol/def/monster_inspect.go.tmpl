@@ -1,0 +1,24 @@
+//go:build protocoldef
+
+package protocoldef
+
+// MonsterID 是完整EntityID（AOI同步subject id）；客户端没有出生/伤害/杀怪权限。
+type MonsterInspectRequest struct {
+	MonsterID int64 `pb:"1"`
+}
+type MonsterInspectResponse struct {
+	Code      int32  `pb:"1"`
+	Reason    string `pb:"2"`
+	MonsterID int64  `pb:"3"`
+	LifeSeq   uint64 `pb:"4"`
+	HP        int64  `pb:"5"`
+	Template  int32  `pb:"6"`
+	X         int64  `pb:"7"`
+	Y         int64  `pb:"8"`
+}
+
+//roost:protocol group=game handler=monster
+type MonsterInspectProtocol interface {
+	//roost:msg id={{ID:protocol:MonsterInspect}}
+	MonsterInspect(MonsterInspectRequest) MonsterInspectResponse
+}

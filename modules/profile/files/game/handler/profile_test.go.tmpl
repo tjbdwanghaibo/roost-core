@@ -114,11 +114,11 @@ func newProfileFixture(t *testing.T) *profileFixture {
 
 // rename 走客户端协议对应的 handler，返回存下的名字。
 func (f *profileFixture) rename(name string) (string, error) {
-	response, err := f.renames.Sync_ProfileRename(context.Background(), f.player.ID(), &pb.ProfileRenameRequest{Name: name})
+	value, err := f.engine.Request(context.Background(), profileLocalRenameHandler, f.player.ID(), nest.NewParams(name))
 	if err != nil {
 		return "", err
 	}
-	return response.Name, nil
+	return value.(string), nil
 }
 
 // addExp 走服务端发经验的 handler，返回升了几级。
@@ -704,5 +704,28 @@ func TestProfileExpStaysOutOfTheHalfOthersMaySee(t *testing.T) {
 		}
 	}); got != public {
 		t.Fatalf("a rename dirtied %#x, want only Profile (%#x)", got, public)
+	}
+}
+
+var profileLocalRenameHandler = nest.NewHandlerName("profileTestLocalRename")
+
+func init() {
+	nest.MustRegisterHandlerWithMeta(profileLocalRenameHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+		return es[0].(*playerentity.Player).ProfileComp().Rename(params[0].(string))
+	}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+}
+
+// 正式旧 Sender 独立安装时仍可改名；组合 naming 时必须执行其拒绝守卫。
+func TestProfileFormalRenameHonorsInstalledPolicy(t *testing.T) {
+	f := newProfileFixture(t)
+	response, err := f.renames.Sync_ProfileRename(context.Background(), f.player.ID(), &pb.ProfileRenameRequest{Name: "Formal"})
+	if policy, ok := any(f.player).(interface{ CheckProfileRenameRequest() error }); ok {
+		if !errors.Is(err, policy.CheckProfileRenameRequest()) || f.facts(t).name != "" {
+			t.Fatalf("guard err=%v", err)
+		}
+		return
+	}
+	if err != nil || response.Name != "Formal" || f.facts(t).name != "Formal" {
+		t.Fatalf("response=%+v err=%v", response, err)
 	}
 }

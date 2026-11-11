@@ -1,0 +1,18 @@
+//go:build protocoldef
+
+package protocoldef
+
+type AttributeGetRequest struct{}
+type AttributeGetResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	HP     int64  `pb:"3"`
+	Attack int64  `pb:"4"`
+	Power  int64  `pb:"5"`
+}
+
+//roost:protocol group=game handler=attribute
+type AttributeGetProtocol interface {
+	//roost:msg id={{ID:protocol:AttributeGet}}
+	AttributeGet(AttributeGetRequest) AttributeGetResponse
+}

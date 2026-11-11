@@ -1,0 +1,35 @@
+package handler
+
+import (
+	logic "{{MODULE}}/game/dungeon"
+	runentity "{{MODULE}}/game/entities/dungeon"
+	player "{{MODULE}}/game/entities/player"
+)
+
+// 所有handler只操作本地实体；RPC排行榜投影在controller提交之后进行。
+//
+//roost:nest rollback=undo durability=strict
+func handlerDungeonOpen(run runentity.IDungeonEntity, playerID int64, season int64, nowUnixMilli int64) (logic.Snapshot, error) {
+	return run.RunState().Open(playerID, season, nowUnixMilli)
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerDungeonDefeated(run runentity.IDungeonEntity, instance string, epoch uint64, source string, sequence uint64, enemy string, nowUnixMilli int64) (logic.Snapshot, error) {
+	return run.RunState().Defeated(instance, epoch, source, sequence, enemy, nowUnixMilli)
+}
+
+//roost:nest rollback=undo durability=strict
+func handlerDungeonView(run runentity.IDungeonEntity, playerID int64, nowUnixMilli int64) (logic.Snapshot, error) {
+	return run.RunState().View(playerID, nowUnixMilli)
+}
+
+// handlerDungeonClaim 同时锁权威关卡和领奖玩家；请求不提供奖励、结果、赛季或结算时间。
+//
+//roost:nest rollback=undo durability=strict
+func handlerDungeonClaim(run runentity.IDungeonEntity, target player.IDungeonRewardEntity, nowUnixMilli int64) (logic.ClaimResult, error) {
+	season, amount, resolvedAt, err := run.RunState().Reward(target.DungeonComp().PlayerID())
+	if err != nil {
+		return logic.ClaimResult{}, err
+	}
+	return target.DungeonComp().Claim(run.RunState().ID(), season, amount, resolvedAt, nowUnixMilli/1000)
+}

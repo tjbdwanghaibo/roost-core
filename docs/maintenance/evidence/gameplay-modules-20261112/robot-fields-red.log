@@ -1,0 +1,6 @@
+--- FAIL: TestSceneScenarioWaitsForDeclaredSyncFields (0.00s)
+    scene_watch_test.go:63: scene_expect waits for unknown Player sync field "attr_base"
+    scene_watch_test.go:63: scene_expect waits for unknown Player sync field "attr_final"
+FAIL
+FAIL	example.com/studio/gameplaycheck/cmd/loadtest	0.604s
+FAIL

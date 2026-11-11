@@ -37,7 +37,7 @@ Player 当前**静态绑定 game sid**：跨服玩法由 Remote / Saga 协作，
 | 权威战斗与冷却 | 多实体 Nest、本条消息冻结的业务时间（handler 的 `nowUnixMilli` 从 fctx 填）、单调输入序号 | `MMORPGStrike` 校验存活、同地图、顺序、冷却，再改怪物血量与击杀归属 | 战斗公式、命中、距离和预测；样例不是完整即时战斗系统 |
 | Buff、死亡与复活 | 持久实体定时器（`roost add timer`，`entitytimer.Host` / `Driver`） | `MMORPGBuff` / `MMORPGRevive` 与[到期回调](../../scripts/testdata/mmorpg/timer_handlers.go.txt)；回调只改自己已锁的实体 | 叠加、驱散、刷新、死亡损失、复活点；离线到期在加载后补触发一次 |
 | 掉落、任务与副本结算 | Player / Monster / Scene 同事务的业务事实 | `MMORPGLoot` / `MMORPGQuest` / `MMORPGCompleteInstance`：领奖与领取事实一起写，Boss 死亡才完成副本 | 掉落分配、任务条件、进度锁定、重置和奖励政策 |
-| 背包、装备与属性 | Player 组件、嵌套 DAO、Nest rollback | [EquipItem](../../demo/game/handler/equip_item.go.tmpl)：背包扣新装备、换装、归还旧装备、刷新属性同事务 | 格数、绑定、强化与数值；派生属性不能成为另一份权威 |
+| 背包、装备与属性 | Player 组件、嵌套 DAO、Nest rollback | [EquipItem](../../modules/equipment/files/game/handler/equipment_equip.go.tmpl)：背包扣新装备、换装、归还旧装备、刷新属性同事务 | 格数、绑定、强化与数值；派生属性不能成为另一份权威 |
 | 技能与配置 | `gameplay/skill`、configdata、不可变 Program | [技能指南](guide/08-skill.md)、[配置指南](guide/07-config.md)；Parse → Compile → Host → Runtime | Host 的权威副作用、配置版本、跨 tick 状态与恢复；Skill Runtime 不自动进入 Nest undo |
 | 匹配、聊天与战斗房间 | match / chat / session、Lockstep | game-demo 正式机器人执行聊天、组队匹配、房间战斗和状态同步（`cmd/loadtest`） | MMORPG 世界状态同步不必采用 Lockstep；按具体玩法选择 |
 | 公会与跨服读取 | 实体服务（Remote 托管 `service=`、路由 RPC）、Mirror、Saga | demo 的 alliance 服务与 game 侧公会（[WALKTHROUGH](../../demo/WALKTHROUGH.md#跨服务公会--alliance-服务写走-rpc-或-saga读走-mirror)）；[Remote 指南](guide/05-remote-mirror.md)；真实进程端到端 `scripts/test-alliance-e2e.sh`（私有依赖，手动跑，见 [联盟服务方案 §7 阶段 5](../maintenance/FEATURE-2026-11-04-alliance-service.md#7-实施记录)） | 公会权限、命名、成员与跨服观察政策；Mirror 是快照，不授予写权 |

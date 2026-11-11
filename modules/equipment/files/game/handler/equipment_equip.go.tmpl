@@ -1,0 +1,21 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+// 所有错误交还 Nest，背包、穿戴及属性联动整笔回滚。
+//
+//roost:nest rollback=undo durability=strict
+func handlerEquipmentEquip(target player.IEquipmentEntity, request *pb.EquipmentEquipRequest) (*pb.EquipmentEquipResponse, error) {
+	if request == nil {
+		return nil, apperrors.ErrEquipmentItemInvalid
+	}
+	slot, replaced, err := target.EquipmentComp().Equip(request.ItemID, 1)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.EquipmentEquipResponse{Slot: slot, Replaced: replaced}, nil
+}

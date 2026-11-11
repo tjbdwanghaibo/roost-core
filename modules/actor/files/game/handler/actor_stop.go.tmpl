@@ -1,0 +1,14 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+//roost:nest rollback=undo durability=async
+func handlerActorStop(target player.IActorEntity, request *pb.ActorStopRequest) (*pb.ActorStopResponse, error) {
+	body := target.ActorComp().Body()
+	body.Stop()
+	pos := body.Position()
+	return &pb.ActorStopResponse{X: pos.X, Y: pos.Y}, nil
+}

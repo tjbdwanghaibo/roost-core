@@ -1,0 +1,141 @@
+package scene
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/timedomain"
+	"{{MODULE}}/db"
+	"{{MODULE}}/game/actor"
+	gamescene "{{MODULE}}/game/scene"
+)
+
+const EntityKindScene entity.EntityKind = {{ID:entity:Scene}}
+
+//roost:entity id={{ID:entity:Scene}} entityKind=EntityKindScene category=entity.EntityCategoryWorld noPersist=true lifetime=runtime_rebuild sync=true subjectPacker=NewSceneSyncPacker service={{GAME_SERVICE}}
+type Scene struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	dao    *db.SceneDao `dao:"scene"`
+	config gamescene.Config
+	space  *gamescene.Space
+	domain *timedomain.Domain
+	loaded func(int64) entity.IThreadSafeEntity
+}
+
+// CreateParams 由服务端开图入口提供；客户端无法创建场景或选择地图配置。
+type CreateParams struct {
+	Config     gamescene.Config
+	Manager    *entitysync.Manager
+	PlayerKind entity.EntityKind
+	Loaded     func(int64) entity.IThreadSafeEntity
+}
+
+type ISceneEntity interface {
+	entity.IThreadSafeEntity
+	Scene() *Scene
+}
+
+func (s *Scene) Scene() *Scene                  { return s }
+func (s *Scene) Space() *gamescene.Space        { return s.space }
+func (s *Scene) Config() gamescene.Config       { return s.config.Clone() }
+func (s *Scene) TimeDomain() *timedomain.Domain { return s.domain }
+func (s *Scene) Environment() actor.Environment {
+	return actor.Environment{ID: s.ID(), Space: s.space, Ground: s.space, Surface: s.config.Surface, Time: s.domain}
+}
+
+func (s *Scene) OnInitFinish(param *entity.EntityCreateParam) error {
+	config, ok := param.Param.(CreateParams)
+	if !ok {
+		return fmt.Errorf("scene: use scene/service.Open with CreateParams")
+	}
+	space, err := gamescene.NewSpace(config.Manager, config.Config, config.PlayerKind)
+	if err != nil {
+		return err
+	}
+	s.config, s.space = config.Config.Clone(), space
+	s.loaded = config.Loaded
+	s.domain, err = timedomain.New(sceneTime{s}, timedomain.Config{MinRate: 0, MaxRate: 4})
+	if err != nil {
+		space.Close()
+		return err
+	}
+	return nil
+}
+
+func (s *Scene) OnDestroy(entity.EntityDestroyReason) {
+	if s.space != nil {
+		s.space.Close()
+	}
+}
+
+// Admit / Depart 必须与相关 actor 同时持锁。关闭检查、容量与成员变更同一事务，不留 Enter/Close 竞态。
+func (s *Scene) Admit(id int64) error {
+	if s.Dao().GetClosed() || s.Dao().GetClosing() {
+		return fmt.Errorf("scene: closed")
+	}
+	if _, found := s.Dao().GetMembers(id); found {
+		return nil
+	}
+	s.purgeMissing()
+	if s.Dao().MembersLen() >= s.config.Capacity {
+		return fmt.Errorf("scene: full")
+	}
+	s.Dao().SetMembers(id, true)
+	return nil
+}
+func (s *Scene) Depart(id int64) { s.Dao().DelMembers(id) }
+func (s *Scene) Close() error {
+	s.purgeMissing()
+	if s.Dao().MembersLen() != 0 {
+		return fmt.Errorf("scene: still has members")
+	}
+	s.Dao().SetClosed(true)
+	if !nest.AfterCommit(s.space.Close) {
+		s.space.Close()
+	}
+	return nil
+}
+
+// BeginClosing 先关准入再排空，停机中的重试不会接进新的玩家。
+func (s *Scene) BeginClosing() []int64 {
+	s.Dao().SetClosing(true)
+	s.purgeMissing()
+	var ids []int64
+	s.Dao().RangeMembers(func(id int64, _ bool) bool { ids = append(ids, id); return true })
+	return ids
+}
+func (s *Scene) purgeMissing() {
+	if s.loaded == nil {
+		return
+	}
+	var missing []int64
+	s.Dao().RangeMembers(func(id int64, _ bool) bool {
+		if s.loaded(id) == nil {
+			missing = append(missing, id)
+		}
+		return true
+	})
+	for _, id := range missing {
+		s.Dao().DelMembers(id)
+		forget := func() { _ = s.space.Forget(id) }
+		if !nest.AfterCommit(forget) {
+			forget()
+		}
+	}
+}
+
+type sceneTime struct{ scene *Scene }
+
+func (f sceneTime) TimeDomain() timedomain.State {
+	dao := f.scene.Dao()
+	return timedomain.State{AnchorBusinessNano: dao.GetAnchorBusiness(), AnchorDomainNano: dao.GetAnchorDomain(), Rate: dao.GetRate()}
+}
+func (f sceneTime) SetTimeDomain(value timedomain.State) {
+	dao := f.scene.Dao()
+	dao.SetAnchorBusiness(value.AnchorBusinessNano)
+	dao.SetAnchorDomain(value.AnchorDomainNano)
+	dao.SetRate(value.Rate)
+}

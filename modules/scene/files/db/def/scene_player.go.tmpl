@@ -1,0 +1,11 @@
+package dbdef
+
+type SceneRuntimeState struct {
+	Regions []int64 `store:"1"`
+}
+type SceneInteractionState struct {
+	Sequence uint64 `store:"1"`
+	SceneID  int64  `store:"2"`
+	ObjectID int64  `store:"3"`
+	Text     string `store:"4"`
+}

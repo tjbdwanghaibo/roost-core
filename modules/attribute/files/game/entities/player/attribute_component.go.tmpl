@@ -1,0 +1,148 @@
+package player
+
+import (
+	"fmt"
+	"math"
+	"reflect"
+
+	gameattr "{{MODULE}}/game/gameplay/attribute"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	coreattr "github.com/tjbdwanghaibo/roost-core/gameplay/attribute"
+)
+
+//roost:component type={{ID:component:Attribute}}
+const CompTypeAttribute entity.ComponentType = {{ID:component:Attribute}}
+
+// AttributeComponent 的事务事实只在 DAO。基础层持久化；装备层、最终层在加载后重建，不缓存可变 profile。
+type AttributeComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+type IAttributeEntity interface {
+	entity.IThreadSafeEntity
+	AttributeComp() *AttributeComponent
+}
+
+var Gear = coreattr.Selector{Layer: "gear"}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeAttribute, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		p, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("attribute owner %T", owner)
+		}
+		return &AttributeComponent{owner: p}, nil
+	})
+	OnProfileLevelUp("attribute", func(c *ProfileComponent, from, to int32) error { return c.Owner().AttributeComp().LevelUp(to - from) })
+}
+func (c *AttributeComponent) Name() string   { return "attribute" }
+func (c *AttributeComponent) Owner() *Player { return c.owner }
+
+// OnInitFinish 只重建 nopersist 层，不因读取新档或旧档而写持久状态。
+func (c *AttributeComponent) OnInitFinish(_ *entity.EntityCreateParam, _ bool) error {
+	return c.refresh(false, c.baseAt(c.owner.ProfileComp().Level()))
+}
+func (c *AttributeComponent) baseAt(level int32) *gameattr.Combat {
+	if c.owner.Dao().GetAttributeBase().ValuesLen() == 0 {
+		return gameattr.ForLevel(level)
+	}
+	p := &gameattr.Combat{}
+	values := map[coreattr.AttrID]coreattr.AttrValue{}
+	c.owner.Dao().GetAttributeBase().RangeValues(func(k int32, v int64) bool { values[coreattr.AttrID(k)] = coreattr.AttrValue(v); return true })
+	p.LoadValues(values)
+	return p
+}
+
+// Final 返回副本；调用方先取得 Player 的执行权，副本可以在锁释放后供战斗计算使用。
+func (c *AttributeComponent) Final() (*gameattr.Combat, bool) {
+	if c.owner.Dao().GetAttributeFinal().ValuesLen() == 0 {
+		return nil, false
+	}
+	p := &gameattr.Combat{}
+	v := map[coreattr.AttrID]coreattr.AttrValue{}
+	c.owner.Dao().GetAttributeFinal().RangeValues(func(k int32, n int64) bool { v[coreattr.AttrID(k)] = coreattr.AttrValue(n); return true })
+	p.LoadValues(v)
+	return p, true
+}
+
+// Container 的三层均为副本，外部 Apply/Live 不会改动实体，正式写入须经 Refresh/LevelUp。
+func (c *AttributeComponent) Container() *coreattr.Container {
+	out := coreattr.NewContainer()
+	out.Install(coreattr.Base, c.baseAt(c.owner.ProfileComp().Level()))
+	g := &gameattr.Combat{}
+	v := map[coreattr.AttrID]coreattr.AttrValue{}
+	c.owner.Dao().GetAttributeGear().RangeValues(func(k int32, n int64) bool { v[coreattr.AttrID(k)] = coreattr.AttrValue(n); return true })
+	g.LoadValues(v)
+	out.Install(Gear, g)
+	if f, ok := c.Final(); ok {
+		out.Install(coreattr.Final, f)
+	}
+	return out
+}
+
+// Refresh 在已锁住的 Nest 事务中重算全部层，初次将默认基础值记入持久层；配置热更不主动扫描在线玩家。
+func (c *AttributeComponent) Refresh() error {
+	return c.refresh(true, c.baseAt(c.owner.ProfileComp().Level()))
+}
+func (c *AttributeComponent) RefreshGear() error { return c.Refresh() }
+
+// LevelUp 由 profile 登记点调用一次，不逐级循环；原有基础层的自定义加成会保留。
+func (c *AttributeComponent) LevelUp(levels int32) error {
+	if levels <= 0 {
+		return nil
+	}
+	p := c.baseAt(c.owner.ProfileComp().Level() - levels)
+	if !attributeSafe(p) || p.HP > math.MaxInt64/4-int64(levels)*10 || p.Attack > math.MaxInt64/4-int64(levels)*2 {
+		return apperrors.ErrAttributeOverflow
+	}
+	p.LevelUp(levels)
+	return c.refresh(true, p)
+}
+func attributeSafe(p *gameattr.Combat) bool {
+	return p != nil && p.HP >= 0 && p.Attack >= 0 && p.HP <= math.MaxInt64/4 && p.Attack <= math.MaxInt64/4
+}
+func attributeValues(p *gameattr.Combat) map[int32]int64 {
+	out := map[int32]int64{}
+	values := map[coreattr.AttrID]coreattr.AttrValue{}
+	p.ExportValues(values)
+	for id, v := range values {
+		if v != 0 {
+			out[int32(id)] = int64(v)
+		}
+	}
+	return out
+}
+func (c *AttributeComponent) refresh(persist bool, base *gameattr.Combat) error {
+	gear, err := attributeGear(c.owner)
+	if err != nil {
+		return err
+	}
+	if !attributeSafe(base) || !attributeSafe(gear) || base.HP > math.MaxInt64/4-gear.HP || base.Attack > math.MaxInt64/4-gear.Attack {
+		return apperrors.ErrAttributeOverflow
+	}
+	// 经正式 Container.Apply 写直接属性并由生成的 profile 仅推导一次 Power；不把各层派生值相加。
+	container := coreattr.NewContainer()
+	container.Install(coreattr.Final, &gameattr.Combat{})
+	container.Apply(coreattr.Final, map[coreattr.AttrID]coreattr.AttrValue{gameattr.AttrHP: coreattr.AttrValue(base.HP + gear.HP), gameattr.AttrAttack: coreattr.AttrValue(base.Attack + gear.Attack)})
+	final := container.Snapshot(coreattr.Final).Profile.(*gameattr.Combat)
+	d := c.owner.Dao()
+	baseValues, gearValues, finalValues := attributeValues(base), attributeValues(gear), attributeValues(final)
+	old := map[int32]int64{}
+	d.GetAttributeBase().RangeValues(func(k int32, v int64) bool { old[k] = v; return true })
+	if persist && !reflect.DeepEqual(old, baseValues) {
+		d.GetAttributeBase().SetValues(baseValues)
+	}
+	old = map[int32]int64{}
+	d.GetAttributeGear().RangeValues(func(k int32, v int64) bool { old[k] = v; return true })
+	if !reflect.DeepEqual(old, gearValues) {
+		d.GetAttributeGear().SetValues(gearValues)
+	}
+	old = map[int32]int64{}
+	d.GetAttributeFinal().RangeValues(func(k int32, v int64) bool { old[k] = v; return true })
+	if !reflect.DeepEqual(old, finalValues) {
+		d.GetAttributeFinal().SetValues(finalValues)
+	}
+	return nil
+}

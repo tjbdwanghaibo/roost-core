@@ -1,0 +1,130 @@
+package dungeon
+
+import (
+	"context"
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"log/slog"
+	logic "{{MODULE}}/game/dungeon"
+	runentity "{{MODULE}}/game/entities/dungeon"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/lifecycle"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+type Controller struct {
+	registry *app.Registry
+	sender   *sender.DungeonSender
+	counts   *sender.DungeonCountsSender
+}
+
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("dungeon: registry is required")
+	}
+	client, ok := app.Lookup[nest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("dungeon: Nest is required")
+	}
+	return &Controller{registry: registry, sender: sender.NewDungeonSender(client), counts: sender.NewDungeonCountsSender(client)}, nil
+}
+func (controller *Controller) Registry() *app.Registry { return controller.registry }
+func runEntityID(uniqueID int64) (int64, error) {
+	if uniqueID <= 0 {
+		return 0, fmt.Errorf("dungeon: positive uniqueID required")
+	}
+	return entity.BuildEntityID(uniqueID, runentity.EntityKindDungeon)
+}
+
+// Open 仅限可信服务器，ID来自项目全局分配器且永不复用；获取/创建和幂等初始化可以在回包丢失后续做。
+func (controller *Controller) Open(ctx context.Context, uniqueID, playerID, season int64) (logic.Snapshot, error) {
+	id, err := runEntityID(uniqueID)
+	if err != nil {
+		return logic.Snapshot{}, err
+	}
+	if playerID <= 0 || season <= 0 {
+		return logic.Snapshot{}, fmt.Errorf("dungeon: player and season must be positive")
+	}
+	runs, err := lifecycle.DungeonFromRegistry(controller.registry)
+	if err != nil {
+		return logic.Snapshot{}, err
+	}
+	if _, _, err := runs.GetOrCreate(ctx, uniqueID); err != nil {
+		return logic.Snapshot{}, err
+	}
+	return controller.sender.Sync_DungeonOpen(ctx, id, playerID, season)
+}
+
+// Defeated 由可信战斗服务发事实；Source固定为有限来源，Sequence单调，相同序号只能重发同一内容。
+func (controller *Controller) Defeated(ctx context.Context, uniqueID int64, instance string, epoch uint64, source string, sequence uint64, enemy string) (logic.Snapshot, error) {
+	id, err := runEntityID(uniqueID)
+	if err != nil {
+		return logic.Snapshot{}, err
+	}
+	return controller.sender.Sync_DungeonDefeated(ctx, id, instance, epoch, source, sequence, enemy)
+}
+
+// publishClaim 由leaderboard联动在启动前登记；仅投影已提交的事实，不参与奖励事务。
+var publishClaim func(context.Context, *app.Registry, int64, logic.ClaimResult) error
+
+func (controller *Controller) Claim(ctx context.Context, uniqueID, playerID int64) (logic.ClaimResult, error) {
+	runID, err := runEntityID(uniqueID)
+	if err != nil {
+		return logic.ClaimResult{}, err
+	}
+	if playerID <= 0 {
+		return logic.ClaimResult{}, fmt.Errorf("dungeon: playerID is required")
+	}
+	playerIDFull, err := entity.BuildEntityID(playerID, player.EntityKindPlayer)
+	if err != nil {
+		return logic.ClaimResult{}, err
+	}
+	result, err := controller.sender.MultiSync_DungeonClaim(ctx, runID, playerIDFull)
+	if err != nil {
+		return logic.ClaimResult{}, err
+	}
+	controller.publish(ctx, playerID, &result)
+	return result, nil
+}
+func (controller *Controller) publish(ctx context.Context, playerID int64, result *logic.ClaimResult) {
+	if publishClaim != nil {
+		if err := publishClaim(ctx, controller.registry, playerID, *result); err != nil {
+			result.BoardPending = true
+			slog.Warn("dungeon: committed clear not yet projected", "player_id", playerID, "season", result.Season, "clears", result.Clears, "err", err)
+		}
+	}
+}
+func (controller *Controller) HandleDungeonView(ctx *playeraccess.Context, request *pb.DungeonViewRequest) (*pb.DungeonViewResponse, error) {
+	if ctx == nil || ctx.PlayerID <= 0 || request == nil {
+		return nil, fmt.Errorf("dungeon: authenticated context and request required")
+	}
+	response := &pb.DungeonViewResponse{}
+	id, err := runEntityID(request.RunID)
+	if err == nil {
+		var result logic.Snapshot
+		result, err = controller.sender.Sync_DungeonView(ctx.Context(), id, ctx.PlayerID)
+		if err == nil {
+			response.Info = &pb.DungeonInfo{RunID: request.RunID, Instance: result.Instance, Epoch: result.Epoch, Phase: result.Phase, Stage: result.Stage, Kills: result.Kills, Result: result.Result, ResolvedAtUnix: result.ResolvedAtUnix}
+		}
+	}
+	if err != nil {
+		response.Code, response.Reason = errcode.ClientError(err)
+	}
+	return response, nil
+}
+func (controller *Controller) HandleDungeonClaim(ctx *playeraccess.Context, request *pb.DungeonClaimRequest) (*pb.DungeonClaimResponse, error) {
+	if ctx == nil || ctx.PlayerID <= 0 || request == nil {
+		return nil, fmt.Errorf("dungeon: authenticated context and request required")
+	}
+	result, err := controller.Claim(ctx.Context(), request.RunID, ctx.PlayerID)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		return &pb.DungeonClaimResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.DungeonClaimResponse{Claimed: result.Claimed, ExpGranted: result.ExpGranted, LevelsGained: result.LevelsGained, Season: result.Season, Clears: result.Clears, TotalClears: result.TotalClears, BoardPending: result.BoardPending}, nil
+}

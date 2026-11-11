@@ -1,0 +1,42 @@
+package monster
+
+import (
+	"fmt"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	monster "{{MODULE}}/game/entities/monster"
+	player "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+type Controller struct{ client nest.Client }
+
+func FromRegistry(r *app.Registry) (*Controller, error) {
+	client, ok := app.Lookup[nest.Client](r, "nest")
+	if !ok || client == nil {
+		return nil, fmt.Errorf("monster: Nest missing")
+	}
+	return &Controller{client}, nil
+}
+func (c *Controller) HandleMonsterInspect(ctx *playeraccess.Context, req *pb.MonsterInspectRequest) (*pb.MonsterInspectResponse, error) {
+	if ctx == nil || req == nil {
+		return nil, fmt.Errorf("monster: context and request required")
+	}
+	id, err := entity.BuildEntityID(ctx.PlayerID, player.EntityKindPlayer)
+	if err == nil && !entity.MatchEntityID(req.MonsterID, monster.EntityKindMonster) {
+		err = fmt.Errorf("monster: invalid id")
+	}
+	var response *pb.MonsterInspectResponse
+	if err == nil {
+		response, err = sender.NewMonsterInspectSender(c.client).MultiSync_MonsterInspect(ctx.Context(), id, req.MonsterID)
+	}
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		return &pb.MonsterInspectResponse{Code: code, Reason: reason}, nil
+	}
+	return response, nil
+}

@@ -1,0 +1,247 @@
+// Package service 装配本进程的场景，不执行玩家的业务修改。
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/framework/sync/entitysync"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	player "{{MODULE}}/game/entities/player"
+	sceneentity "{{MODULE}}/game/entities/scene"
+	sender "{{MODULE}}/game/handler/syncsender"
+	gamescene "{{MODULE}}/game/scene"
+)
+
+const Capability app.ModName = "gameplay.scene"
+const MaxScenes = 128
+
+type drainer struct {
+	run func(context.Context, *sceneentity.Scene) error
+}
+
+type Manager struct {
+	mu       sync.Mutex // 仅串行化开关图管理，不参与 actor 心跳或 AOI。
+	areas    map[int64]*sceneentity.Scene
+	stopping bool                         // Stop 一经开始，不能再次开图；失败可重试排空。
+	draining map[int64]*sceneentity.Scene // 目标准入门，按实例区分关图后的同号新图。
+	drainers map[entity.EntityKind]*drainer
+	access   *entity.ManagerAccess
+	client   nest.Client
+	sync     *entitysync.Manager
+}
+
+func FromRegistry(registry *app.Registry) (*Manager, error) {
+	manager, ok := app.Lookup[*Manager](registry, Capability)
+	if !ok || manager == nil {
+		return nil, errors.New("scene: runtime is unavailable")
+	}
+	return manager, nil
+}
+
+func Start(registry *app.Registry) (func(context.Context) error, error) {
+	access, ok := app.Lookup[*entity.ManagerAccess](registry, mods.ModEntityRuntime)
+	if !ok || access == nil {
+		return nil, errors.New("scene: entity runtime is required")
+	}
+	client, ok := app.Lookup[nest.Client](registry, mods.ModNest)
+	if !ok || client == nil {
+		return nil, errors.New("scene: Nest is required")
+	}
+	syncManager, ok := app.Lookup[*entitysync.Manager](registry, mods.ModEntitySync)
+	if !ok || syncManager == nil {
+		return nil, errors.New("scene: enable access.player.self_sync")
+	}
+	m := &Manager{areas: make(map[int64]*sceneentity.Scene), draining: make(map[int64]*sceneentity.Scene), drainers: make(map[entity.EntityKind]*drainer), access: access, client: client, sync: syncManager}
+	if _, err := m.Open(1, gamescene.DefaultConfig()); err != nil {
+		return nil, err
+	}
+	if err := registry.Register(Capability, m); err != nil {
+		return m.Stop, err
+	}
+	return m.Stop, nil
+}
+
+// Open 的编号由可信服务端分配。本批场景从配置重建；重启后需要用同样配置重新打开。
+func (m *Manager) Open(uniqueID int64, config gamescene.Config) (*sceneentity.Scene, error) {
+	if uniqueID <= 0 {
+		return nil, fmt.Errorf("scene: invalid id")
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopping {
+		return nil, fmt.Errorf("scene: stopping")
+	}
+	if current := m.areas[uniqueID]; current != nil {
+		return nil, fmt.Errorf("scene: id already open")
+	}
+	if len(m.areas) >= MaxScenes {
+		return nil, fmt.Errorf("scene: scene limit")
+	}
+	value, err := m.access.Create(&entity.EntityCreateParam{IsCreate: true, UniqueID: uniqueID, Kind: sceneentity.EntityKindScene,
+		Param: sceneentity.CreateParams{Config: config, Manager: m.sync, PlayerKind: player.EntityKindPlayer, Loaded: m.access.Manager().Get}})
+	if err != nil {
+		return nil, err
+	}
+	area := value.(*sceneentity.Scene)
+	if err := area.Space().BindMetadata(area.Sync()); err != nil {
+		return nil, errors.Join(err, m.access.Destroy(context.Background(), area, entity.DestroyReasonCommon, false))
+	}
+	m.areas[uniqueID] = area
+	return area, nil
+}
+
+// IDs 返回请求参与者的快照；即使取完后发生关闭，Nest 中的 closed 检查仍会拒绝进入。
+func (m *Manager) IDs(from, to int64) ([]int64, int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var ids []int64
+	var target int64
+	for _, id := range []int64{from, to} {
+		if id == 0 {
+			continue
+		}
+		area := m.areas[id]
+		if area == nil {
+			return nil, 0, fmt.Errorf("scene: %d is not open", id)
+		}
+		if id == to && (m.stopping || m.draining[id] == area) {
+			return nil, 0, fmt.Errorf("scene: %d is closing", id)
+		}
+		if len(ids) == 0 || ids[0] != area.ID() {
+			ids = append(ids, area.ID())
+		}
+		if id == to {
+			target = area.ID()
+		}
+	}
+	return ids, target, nil
+}
+
+func (m *Manager) Close(ctx context.Context, uniqueID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.closeLocked(ctx, uniqueID)
+}
+func (m *Manager) closeLocked(ctx context.Context, id int64) error {
+	area := m.areas[id]
+	if area == nil {
+		return nil
+	}
+	if err := sender.NewSceneCloseSender(m.client).Sync_SceneClose(ctx, area.ID()); err != nil {
+		return err
+	}
+	if err := m.access.Destroy(ctx, area, entity.DestroyReasonCommon, false); err != nil {
+		return err
+	}
+	delete(m.areas, id)
+	delete(m.draining, id)
+	return nil
+}
+
+// RegisterDrainer 由依赖模块启动时登记本kind的正式退出入口。回调在Nest和Manager锁外执行，
+// 必须按传入Scene实例清理自己的成员，不能停止其他图；失败须保留可重试状态。
+func (m *Manager) RegisterDrainer(kind entity.EntityKind, run func(context.Context, *sceneentity.Scene) error) (func(), error) {
+	if kind == player.EntityKindPlayer || run == nil {
+		return nil, fmt.Errorf("scene: invalid drainer")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopping || m.drainers[kind] != nil {
+		return nil, fmt.Errorf("scene: duplicate or stopping drainer")
+	}
+	entry := &drainer{run: run}
+	m.drainers[kind] = entry
+	return func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.drainers[kind] == entry {
+			delete(m.drainers, kind)
+		}
+	}, nil
+}
+
+// Drain 先在Scene事务关准入，再在管理锁之外通知成员所属模块退场，最后撤玩家并关闭。
+// 不能持m.mu调用成员退出：Monster.Spawn等入口按自身锁→IDs顺序工作，反向等待会死锁。
+func (m *Manager) Drain(ctx context.Context, id int64) error {
+	m.mu.Lock()
+	area := m.areas[id]
+	if area == nil {
+		m.mu.Unlock()
+		return nil
+	}
+	_, err := sender.NewSceneDrainSender(m.client).Sync_SceneBeginClosing(ctx, area.ID())
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	m.draining[id] = area
+	// 不能按成员表筛kind：退出事务可能已Depart，但回复丢失/生命周期销毁失败，
+	// 所属模块仍有待清理记录。每个已登记模块按Scene实例核对自己的记录。
+	callbacks := make(map[entity.EntityKind]*drainer, len(m.drainers))
+	for kind, callback := range m.drainers {
+		callbacks[kind] = callback
+	}
+	m.mu.Unlock()
+	var result error
+	for _, callback := range callbacks {
+		result = errors.Join(result, callback.run(ctx, area))
+	}
+	if result != nil {
+		return result
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// 允许另一个成功Drain/Close先完成；同号新Scene绝不能被本次迟到清理关闭。
+	if m.areas[id] != area {
+		return nil
+	}
+	return m.drainLocked(ctx, id)
+}
+func (m *Manager) drainLocked(ctx context.Context, id int64) error {
+	area := m.areas[id]
+	if area == nil {
+		return nil
+	}
+	members, err := sender.NewSceneDrainSender(m.client).Sync_SceneBeginClosing(ctx, area.ID())
+	if err != nil {
+		return err
+	}
+	var result error
+	for _, member := range members {
+		value := m.access.Manager().Get(member)
+		if value == nil {
+			continue
+		}
+		if value.GetEntityKind() != player.EntityKindPlayer {
+			result = errors.Join(result, fmt.Errorf("scene: dependent member %d remains", member))
+			continue
+		}
+		result = errors.Join(result, sender.NewSceneDrainSender(m.client).MultiSync_SceneEvacuate(ctx, member, area.ID()))
+	}
+	return errors.Join(result, m.closeLocked(ctx, id))
+}
+
+// Stop 全局关闭开图/进入准入后逐图排空。依赖退出失败时保留场景，下一次Stop继续做。
+func (m *Manager) Stop(ctx context.Context) error {
+	m.mu.Lock()
+	m.stopping = true
+	ids := make([]int64, 0, len(m.areas))
+	for id := range m.areas {
+		ids = append(ids, id)
+	}
+	m.mu.Unlock()
+	var result error
+	for _, id := range ids {
+		result = errors.Join(result, m.Drain(ctx, id))
+	}
+	return result
+}

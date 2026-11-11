@@ -48,7 +48,7 @@ type config struct {
 	mods.ServiceMetricsConfig
 	Directory struct {
 		KeyPrefix      string        `config:"key_prefix" required:"true" example:"roost:{project}:directory" help:"Redis 键前缀：必填、没有缺省（缺省值在每套部署里都一样，共用一个 Redis 的两套部署会静默共享状态）"`
-		ReservationTTL time.Duration `config:"reservation_ttl" required:"true" min:"1ns" help:"Required and positive: a reservation that never expires burns the key when the caller dies.\nThere is no default because the right value depends on how long the caller's commit path takes."`
+		ReservationTTL time.Duration `config:"reservation_ttl" required:"true" example:"60s" min:"1ns" help:"Required and positive: a reservation that never expires burns the key when the caller dies.\nThere is no default because the right value depends on how long the caller's commit path takes."`
 	} `config:"directory"`
 }
 
