@@ -43,6 +43,40 @@ const (
 	mailboxCodeRangeInvalid   int32 = 590112
 )
 
+// 测试自己登记两个种类，方式与正式的种类相同（只在 init 里；本包的 init 在 game/mailbox 与实体包之后跑）：
+//
+//   - mailboxTestVoucher 只登记了“合不合法”、没有登记发放方式的“券”：解得出来，但领不了。
+//   - mailboxTestChest 两样都登记了：号是 1 到 3 的“宝箱”，开出 数量×号 个金币。它报的持有量故意
+//     不是钱包余额（余额 + 5000），这样“回包里是这个种类自己的持有量”看得出来。
+const (
+	mailboxTestVoucher gamemailbox.Type = "mailbox_test_voucher"
+	mailboxTestChest   gamemailbox.Type = "mailbox_test_chest"
+)
+
+// mailboxTestBagGlue 报告这个工程里有没有 mailbox 与 bag 的联动：联动自带的测试文件在 init 里把它置为 true。
+// 它看的是“联动的文件在不在”，不问被测代码“道具登记了没有”——没有联动的工程里道具邮件必须领不了，
+// 这件事不能因为被测代码把道具认了下来就不再检查。
+var mailboxTestBagGlue bool
+
+func init() {
+	gamemailbox.RegisterType(mailboxTestVoucher, func(gamemailbox.Attachment) error { return nil })
+	gamemailbox.RegisterType(mailboxTestChest, func(attachment gamemailbox.Attachment) error {
+		if attachment.ID < 1 || attachment.ID > 3 {
+			return fmt.Errorf("chest %d does not exist", attachment.ID)
+		}
+		return nil
+	})
+	playerentity.RegisterMailboxGrant(mailboxTestChest, playerentity.MailboxGrant{
+		Grant: func(owner *playerentity.Player, attachment gamemailbox.Attachment) (int64, error) {
+			balance, err := owner.WalletComp().Add(attachment.Amount * attachment.ID)
+			return balance + 5000, err
+		},
+		Held: func(owner *playerentity.Player, _ gamemailbox.Attachment) int64 {
+			return owner.WalletComp().Balance() + 5000
+		},
+	})
+}
+
 // mailboxEnvelopes 是进程内的信封存储（service/mail 自己的测试替身不导出）。Create 不覆盖。
 type mailboxEnvelopes struct {
 	mu    sync.Mutex
@@ -258,6 +292,18 @@ func (f *mailboxEndpointFixture) entry(t *testing.T, playerID int64, mailID stri
 	return mailbox.Entries[mailID]
 }
 
+// listed 在玩家的第一页列表里找一封邮件。
+func (f *mailboxEndpointFixture) listed(t *testing.T, playerID int64, mailID string) pb.MailboxEntry {
+	t.Helper()
+	for _, mail := range f.list(t, playerID, "", 0).Mails {
+		if mail.MailID == mailID {
+			return mail
+		}
+	}
+	t.Fatalf("mail %s is not in the list of %d", mailID, playerID)
+	return pb.MailboxEntry{}
+}
+
 // 正常路径：列表里看到可领的金币邮件 → 领取 → 钱到账、mail 服务标成已领 → 列表不再可领；
 // 已完整领过的邮件再领，答 mail 服务的“已领取”，不再发钱。
 func TestMailboxClaimEndpointReservesGrantsAndCommits(t *testing.T) {
@@ -268,12 +314,16 @@ func TestMailboxClaimEndpointReservesGrantsAndCommits(t *testing.T) {
 	if listed.Code != 0 || len(listed.Mails) != 1 || listed.Unread != 1 {
 		t.Fatalf("list = %+v", listed)
 	}
-	if got := listed.Mails[0]; got.MailID != mailID || got.Subject != "level reward" || !got.HasAttachment || !got.Claimable || got.Coins != 100 || got.ExpiresAtUnix != mailboxEpoch+3600 {
+	if got := listed.Mails[0]; got.MailID != mailID || got.Subject != "level reward" || !got.HasAttachment || !got.Claimable || got.ExpiresAtUnix != mailboxEpoch+3600 {
 		t.Fatalf("listed mail = %+v", got)
+	}
+	// 列表与领取回包用同样的三个字段说附件是什么：种类、号（金币为 0）、数量。
+	if got := listed.Mails[0]; got.AttachmentType != "coins" || got.AttachmentID != 0 || got.Amount != 100 {
+		t.Fatalf("listed attachment = %+v, want 100 coins", got)
 	}
 
 	claimed := f.claim(t, mailboxPlayerA, mailID)
-	if claimed.Code != 0 || claimed.Coins != 100 || claimed.Balance != 100 {
+	if claimed.Code != 0 || claimed.AttachmentType != "coins" || claimed.AttachmentID != 0 || claimed.Amount != 100 || claimed.Held != 100 {
 		t.Fatalf("claim = %+v, want 100 coins and a balance of 100", claimed)
 	}
 	if coins, ledger := f.wallet(t); coins != 100 || ledger != 1 {
@@ -287,7 +337,7 @@ func TestMailboxClaimEndpointReservesGrantsAndCommits(t *testing.T) {
 	}
 
 	again := f.claim(t, mailboxPlayerA, mailID)
-	if again.Code != mailboxCodeAlreadyClaimed || again.Coins != 0 {
+	if again.Code != mailboxCodeAlreadyClaimed || again.AttachmentType != "" || again.Amount != 0 || again.Held != 0 {
 		t.Fatalf("second claim = %+v, want the mail service's already-claimed code", again)
 	}
 	if coins, _ := f.wallet(t); coins != 100 {
@@ -306,7 +356,7 @@ func TestMailboxClaimEndpointRetryAfterLostCommitPaysOnce(t *testing.T) {
 
 	f.mail.loseCommits.Store(1)
 	first := f.claim(t, mailboxPlayerA, mailID)
-	if first.Code != 0 || first.Coins != 100 || first.Balance != 100 {
+	if first.Code != 0 || first.Amount != 100 || first.Held != 100 {
 		t.Fatalf("claim with a lost commit = %+v, want success: the coins are in the wallet", first)
 	}
 	token := f.entry(t, mailboxPlayerA, mailID).ClaimToken
@@ -322,11 +372,11 @@ func TestMailboxClaimEndpointRetryAfterLostCommitPaysOnce(t *testing.T) {
 
 	// 20 分钟后（租约早已到期，邮件一小时后才过期）先领另一封——这次首次发放会顺手清理账本——再重试第一封。
 	f.advance(20 * 60)
-	if other := f.claim(t, mailboxPlayerA, otherID); other.Code != 0 || other.Coins != 50 || other.Balance != 150 {
+	if other := f.claim(t, mailboxPlayerA, otherID); other.Code != 0 || other.Amount != 50 || other.Held != 150 {
 		t.Fatalf("claiming another mail = %+v", other)
 	}
 	retry := f.claim(t, mailboxPlayerA, mailID)
-	if retry.Code != 0 || retry.Coins != 100 || retry.Balance != 150 {
+	if retry.Code != 0 || retry.AttachmentType != "coins" || retry.AttachmentID != 0 || retry.Amount != 100 || retry.Held != 150 {
 		t.Fatalf("retry after the lease = %+v, want this mail's 100 coins reported and the balance still 150", retry)
 	}
 	if coins, ledger := f.wallet(t); coins != 150 || ledger != 2 {
@@ -341,35 +391,113 @@ func TestMailboxClaimEndpointRetryAfterLostCommitPaysOnce(t *testing.T) {
 	}
 }
 
-// 这一版发不了的附件（这里是道具）：归还预留、答 mailbox_attachment，邮件保持未领、不被占用，
-// 认识它的版本上线后还能领。列表里它有附件但不可领。
+// 这一版解不出来的附件：归还预留、答 mailbox_attachment，邮件保持未领、不被占用，认识它的版本上线后还能领。
+// 列表里它有附件但不可领、说不出是什么。三种：种类没登记；带着不认识的字段（旧 demo 的道具写法）；
+// 以及没装 bag（没有联动）的工程里一份写得完全正确的道具附件——道具这个种类由联动登记，没有它就是没登记。
+// 装了联动的工程里最后一种是合法的，由联动自己的用例覆盖。
 func TestMailboxClaimEndpointUnknownAttachmentIsReleasedAndStaysUnclaimed(t *testing.T) {
 	f := newMailboxEndpointFixture(t)
-	mailID := f.send(t, mailboxPlayerA, "an item", []byte(`{"type":"item","item_id":1002,"count":1}`))
+	unknown := map[string]string{
+		"a type nobody registered": `{"type":"gem","id":7,"amount":1}`,
+		"unknown fields":           `{"type":"item","item_id":1002,"count":1}`,
+	}
+	if !mailboxTestBagGlue {
+		unknown["an item without the bag glue"] = `{"type":"item","id":1001,"amount":3}`
+	}
+	wantCode, _ := errcode.ClientError(apperrors.ErrMailboxAttachment)
+	for name, raw := range unknown {
+		mailID := f.send(t, mailboxPlayerA, name, []byte(raw))
+		if got := f.listed(t, mailboxPlayerA, mailID); !got.HasAttachment || got.Claimable || got.AttachmentType != "" || got.AttachmentID != 0 || got.Amount != 0 {
+			t.Fatalf("%s: listed mail = %+v, want an attachment that is not claimable and not described", name, got)
+		}
+		refused := f.claim(t, mailboxPlayerA, mailID)
+		if refused.Code != wantCode || refused.AttachmentType != "" || refused.Amount != 0 || refused.Held != 0 {
+			t.Fatalf("%s: claim = %+v, want mailbox_attachment (%d)", name, refused, wantCode)
+		}
+		if coins, ledger := f.wallet(t); coins != 0 || ledger != 0 {
+			t.Fatalf("%s: the refusal wrote: coins=%d ledger=%d", name, coins, ledger)
+		}
+		entry := f.entry(t, mailboxPlayerA, mailID)
+		if entry.Status == svcmail.StatusClaimed {
+			t.Fatalf("%s: a mail whose attachment could not be granted was marked claimed", name)
+		}
+		if entry.ClaimDeadlineUnix != 0 {
+			t.Fatalf("%s: the reservation was not released: held until %d", name, entry.ClaimDeadlineUnix)
+		}
+		// 没有等租约：马上就能再预留。
+		if _, err := f.service.ReserveClaim(context.Background(), mailboxPlayerA, mailID, ""); err != nil {
+			t.Fatalf("%s: the mail is stuck after the refusal: %v", name, err)
+		}
+	}
+}
 
-	listed := f.list(t, mailboxPlayerA, "", 0)
-	if len(listed.Mails) != 1 || !listed.Mails[0].HasAttachment || listed.Mails[0].Claimable || listed.Mails[0].Coins != 0 {
-		t.Fatalf("listed mail = %+v, want an attachment that is not claimable", listed.Mails)
+// 解得出来、但种类没有登记发放方式的附件：列表里说得出它是什么（种类、号、数量），但不可领；
+// 领取时发放入口拒绝，端点归还预留、答 mailbox_attachment，零写入，邮件保持未领。
+func TestMailboxClaimEndpointTypeWithoutAGrantIsReleasedAndStaysUnclaimed(t *testing.T) {
+	f := newMailboxEndpointFixture(t)
+	mailID := f.send(t, mailboxPlayerA, "a voucher", []byte(`{"type":"mailbox_test_voucher","id":3,"amount":2}`))
+
+	got := f.listed(t, mailboxPlayerA, mailID)
+	if !got.HasAttachment || got.Claimable {
+		t.Fatalf("listed mail = %+v, want an attachment that is not claimable", got)
+	}
+	if got.AttachmentType != "mailbox_test_voucher" || got.AttachmentID != 3 || got.Amount != 2 {
+		t.Fatalf("listed attachment = %+v, want 2 of voucher 3", got)
 	}
 
 	wantCode, _ := errcode.ClientError(apperrors.ErrMailboxAttachment)
 	refused := f.claim(t, mailboxPlayerA, mailID)
-	if refused.Code != wantCode || refused.Coins != 0 {
+	if refused.Code != wantCode || refused.AttachmentType != "" || refused.Amount != 0 || refused.Held != 0 {
 		t.Fatalf("claim = %+v, want mailbox_attachment (%d)", refused, wantCode)
 	}
 	if coins, ledger := f.wallet(t); coins != 0 || ledger != 0 {
 		t.Fatalf("the refusal wrote: coins=%d ledger=%d", coins, ledger)
 	}
 	entry := f.entry(t, mailboxPlayerA, mailID)
-	if entry.Status == svcmail.StatusClaimed {
-		t.Fatal("a mail whose attachment could not be granted was marked claimed")
+	if entry.Status == svcmail.StatusClaimed || entry.ClaimDeadlineUnix != 0 {
+		t.Fatalf("after the refusal the mail is %+v, want released and unclaimed", entry)
 	}
-	if entry.ClaimDeadlineUnix != 0 {
-		t.Fatalf("the reservation was not released: held until %d", entry.ClaimDeadlineUnix)
-	}
-	// 没有等租约：马上就能再预留。
 	if _, err := f.service.ReserveClaim(context.Background(), mailboxPlayerA, mailID, ""); err != nil {
 		t.Fatalf("the mail is stuck after the refusal: %v", err)
+	}
+}
+
+// 登记了发放方式的种类经端点走同样的三步：列表里可领，说得出种类、号、数量；领取把这三样原样交给
+// 发放入口，回包带回它们与这个种类自己报的持有量；确认丢失后的重试不再发，回的是此刻的持有量。
+func TestMailboxClaimEndpointGrantsARegisteredType(t *testing.T) {
+	f := newMailboxEndpointFixture(t)
+	mailID := f.send(t, mailboxPlayerA, "a chest", []byte(`{"type":"mailbox_test_chest","id":2,"amount":30}`))
+	coinMail := f.send(t, mailboxPlayerA, "pocket money", mailboxCoins(t, 10))
+
+	got := f.listed(t, mailboxPlayerA, mailID)
+	if !got.HasAttachment || !got.Claimable || got.AttachmentType != "mailbox_test_chest" || got.AttachmentID != 2 || got.Amount != 30 {
+		t.Fatalf("listed mail = %+v, want claimable: 30 of chest 2", got)
+	}
+
+	// 2 号箱 30 个开出 60 个金币；确认丢了。
+	f.mail.loseCommits.Store(1)
+	claimed := f.claim(t, mailboxPlayerA, mailID)
+	if claimed.Code != 0 || claimed.AttachmentType != "mailbox_test_chest" || claimed.AttachmentID != 2 || claimed.Amount != 30 || claimed.Held != 5060 {
+		t.Fatalf("claim = %+v, want 30 of chest 2 and the chest's own holding 5060", claimed)
+	}
+	if coins, ledger := f.wallet(t); coins != 60 || ledger != 1 {
+		t.Fatalf("after the claim: coins=%d ledger=%d, want 60 and one record", coins, ledger)
+	}
+
+	// 租约到期后先领一封金币邮件，再重试宝箱那一封：不再发，持有量是现在的。
+	f.advance(60)
+	if coins := f.claim(t, mailboxPlayerA, coinMail); coins.Code != 0 || coins.AttachmentType != "coins" || coins.Held != 70 {
+		t.Fatalf("coin claim = %+v, want a balance of 70", coins)
+	}
+	retry := f.claim(t, mailboxPlayerA, mailID)
+	if retry.Code != 0 || retry.AttachmentType != "mailbox_test_chest" || retry.AttachmentID != 2 || retry.Amount != 30 || retry.Held != 5070 {
+		t.Fatalf("retry = %+v, want 30 of chest 2 reported and the chest's current holding 5070", retry)
+	}
+	if coins, ledger := f.wallet(t); coins != 70 || ledger != 2 {
+		t.Fatalf("the retry granted again: coins=%d ledger=%d, want 70 and two records", coins, ledger)
+	}
+	if status := f.entry(t, mailboxPlayerA, mailID).Status; status != svcmail.StatusClaimed {
+		t.Fatalf("the retry did not commit the mail: status %q", status)
 	}
 }
 
@@ -382,7 +510,7 @@ func TestMailboxClaimEndpointRefusedGrantReleasesTheReservation(t *testing.T) {
 	f.mail.afterReserve = func() { f.advance(3600) } // 预留之后耽搁到邮件过期
 	refused := f.claim(t, mailboxPlayerA, late)
 	f.mail.afterReserve = nil
-	if refused.Code != mailboxCodeExpired || refused.Coins != 0 {
+	if refused.Code != mailboxCodeExpired || refused.Amount != 0 || refused.Held != 0 {
 		t.Fatalf("a grant that executed after the expiry = %+v, want the mail-expired code", refused)
 	}
 	if coins, ledger := f.wallet(t); coins != 0 || ledger != 0 {
@@ -426,10 +554,10 @@ func TestMailboxListEndpointPagesOnlyTheCallersMail(t *testing.T) {
 	if page.Mails[0].MailID != third || page.Mails[1].MailID != second {
 		t.Fatalf("first page is not newest first: %+v", page.Mails)
 	}
-	if plain := page.Mails[1]; plain.HasAttachment || plain.Claimable || plain.Coins != 0 {
+	if plain := page.Mails[1]; plain.HasAttachment || plain.Claimable || plain.AttachmentType != "" || plain.Amount != 0 {
 		t.Fatalf("a mail without an attachment = %+v", plain)
 	}
-	if rich := page.Mails[0]; !rich.Claimable || rich.Coins != 30 {
+	if rich := page.Mails[0]; !rich.Claimable || rich.AttachmentType != "coins" || rich.Amount != 30 {
 		t.Fatalf("a coin mail = %+v", rich)
 	}
 	rest := f.list(t, mailboxPlayerA, page.NextCursor, 2)

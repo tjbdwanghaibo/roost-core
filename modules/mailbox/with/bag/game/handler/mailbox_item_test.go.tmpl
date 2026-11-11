@@ -1,0 +1,226 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	sender "{{MODULE}}/game/handler/syncsender"
+	gamemailbox "{{MODULE}}/game/mailbox"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+)
+
+// mailbox 与 bag 的联动在发放入口上的规则：道具附件进背包，与“这封到过账”同一笔事务，每封至多一次。
+// 用的是邮件模块自己的 fixture（本包的 mailbox_test.go）：真实生成的 handler、真实的 Nest 事务、替身提交器。
+// 需求里的数（单种上限 999999、种类上限 200）写死，不引用背包的常量。
+
+// 告诉邮件模块自己的用例：这个工程里有 mailbox 与 bag 的联动，道具附件发得了（见 mailbox_test.go）。
+func init() { mailboxTestBagGlue = true }
+
+// withMailboxBagItems 在业务 worker 上持实体锁把背包整份读出来：道具号 -> 数量。
+func withMailboxBagItems(t *testing.T, f *mailboxFixture) map[int64]int64 {
+	t.Helper()
+	items := map[int64]int64{}
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		f.player.Dao().GetBag().RangeItems(func(itemID, count int64) bool {
+			items[itemID] = count
+			return true
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return items
+}
+
+// withMailboxBagWant 断言背包恰好是 want：多一个键、少一个键、数量不同都算错。
+func withMailboxBagWant(t *testing.T, f *mailboxFixture, when string, want map[int64]int64) {
+	t.Helper()
+	got := withMailboxBagItems(t, f)
+	if len(got) != len(want) {
+		t.Fatalf("%s: bag = %v, want %v", when, got, want)
+	}
+	for itemID, count := range want {
+		if held, ok := got[itemID]; !ok || held != count {
+			t.Fatalf("%s: bag = %v, want %v", when, got, want)
+		}
+	}
+}
+
+// withMailboxBagStock 经背包自己的服务端发放 handler 往背包里放道具（用例的前置状态，不经邮件）。
+func withMailboxBagStock(t *testing.T, f *mailboxFixture, itemID, count int64) {
+	t.Helper()
+	RegisterBagGrantNestHandlers()
+	if _, err := sender.NewBagGrantSender(f.engine).Sync_BagGrant(context.Background(), f.player.ID(), itemID, count); err != nil {
+		t.Fatalf("stock %d of item %d: %v", count, itemID, err)
+	}
+}
+
+// withMailboxBagDiscard 经背包的丢弃 handler 拿走道具：玩家腾出位置。
+func withMailboxBagDiscard(t *testing.T, f *mailboxFixture, itemID, count int64) {
+	t.Helper()
+	RegisterBagDiscardNestHandlers()
+	if _, err := sender.NewBagDiscardSender(f.engine).Sync_BagDiscard(context.Background(), f.player.ID(), &pb.BagDiscardRequest{ItemID: itemID, Count: count}); err != nil {
+		t.Fatalf("discard %d of item %d: %v", count, itemID, err)
+	}
+}
+
+// 道具邮件首次到达：道具进背包一次，账本记一条，回的持有量是这个道具号在背包里的数量。
+// 同一封再到达（发放成功、确认丢失之后的重试）不再发，回的是此刻的数量；不同的邮件各发各的。
+func TestWithMailboxBagItemMailLandsInTheBagOnce(t *testing.T) {
+	f := newMailboxFixture(t)
+	const expires = mailboxStart + 3600
+	result, err := f.claimAs("mail-1", gamemailbox.Item(1001, 3), expires)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Claimed || result.Held != 3 {
+		t.Fatalf("first claim = %+v, want a first grant bringing item 1001 to 3", result)
+	}
+	withMailboxBagWant(t, f, "after the first claim", map[int64]int64{1001: 3})
+	if got := f.snapshot(t); got.coins != 0 || got.ledger != 1 || got.commits != 1 {
+		t.Fatalf("after the first claim: %+v, want no coins, one ledger record, one commit", got)
+	}
+	if !f.recorded(t, "mail-1") {
+		t.Fatal("the mail id is not in the ledger: a replay would be granted again")
+	}
+	// 重放：不再发，回的是现在的数量。邮件过期之后的重放同样只确认。
+	for attempt, now := range []int64{mailboxStart, mailboxStart + 30, expires + 1} {
+		f.setNow(now)
+		replay, err := f.claimAs("mail-1", gamemailbox.Item(1001, 3), expires)
+		if err != nil {
+			t.Fatalf("replay %d: %v", attempt, err)
+		}
+		if replay.Claimed || replay.Held != 3 {
+			t.Fatalf("replay %d = %+v, want Claimed=false with item 1001 still at 3", attempt, replay)
+		}
+	}
+	withMailboxBagWant(t, f, "after the replays", map[int64]int64{1001: 3})
+	// 另一封同样的道具、再一封别的道具：各发各的，持有量按各自的道具号算。
+	f.setNow(mailboxStart)
+	if again, err := f.claimAs("mail-2", gamemailbox.Item(1001, 2), expires); err != nil || !again.Claimed || again.Held != 5 {
+		t.Fatalf("a second mail with the same item = %+v, err = %v, want item 1001 at 5", again, err)
+	}
+	if other, err := f.claimAs("mail-3", gamemailbox.Item(1002, 7), expires); err != nil || !other.Claimed || other.Held != 7 {
+		t.Fatalf("a mail with another item = %+v, err = %v, want item 1002 at 7", other, err)
+	}
+	withMailboxBagWant(t, f, "after three mails", map[int64]int64{1001: 5, 1002: 7})
+	// 第一封此刻重放：回的是道具 1001 现在的数量 5，不是它当初到账后的 3，也不是别的道具的数量。
+	if replay, err := f.claimAs("mail-1", gamemailbox.Item(1001, 3), expires); err != nil || replay.Claimed || replay.Held != 5 {
+		t.Fatalf("a late replay = %+v, err = %v, want Claimed=false with item 1001 at 5", replay, err)
+	}
+	if got := f.snapshot(t); got.coins != 0 || got.ledger != 3 {
+		t.Fatalf("after three mails and the replays: %+v, want no coins and three records", got)
+	}
+}
+
+// 背包拒绝（放入后超过单种上限、种类数已满）时原样返回背包的码，什么也不写、邮件不进账本；
+// 玩家腾出位置之后同一封还能领，这时才到账、才记账本。不是道具的号在进背包之前就被拒绝。
+func TestWithMailboxBagRefusalByTheBagWritesNothingAndTheMailStaysClaimable(t *testing.T) {
+	f := newMailboxFixture(t)
+	const expires = mailboxStart + 3600
+	// 道具 1001 离单种上限 999999 只差 1；再放 199 种，背包里正好 200 种。
+	withMailboxBagStock(t, f, 1001, 999998)
+	want := map[int64]int64{1001: 999998}
+	for itemID := int64(2001); itemID <= 2199; itemID++ {
+		withMailboxBagStock(t, f, itemID, 1)
+		want[itemID] = 1
+	}
+	before := f.snapshot(t)
+	if _, err := f.claimAs("stack-mail", gamemailbox.Item(1001, 2), expires); !errors.Is(err, apperrors.ErrBagStackFull) {
+		t.Fatalf("2 more of an item 1 short of the stack limit: err = %v, want bag_stack_full", err)
+	}
+	if _, err := f.claimAs("kinds-mail", gamemailbox.Item(5000, 1), expires); !errors.Is(err, apperrors.ErrBagKindsFull) {
+		t.Fatalf("a 201st kind of item: err = %v, want bag_kinds_full", err)
+	}
+	for name, attachment := range map[string]gamemailbox.Attachment{
+		"zero item id":     gamemailbox.Item(0, 1),
+		"negative item id": gamemailbox.Item(-1001, 1),
+	} {
+		if _, err := f.claimAs("bad-mail", attachment, expires); !errors.Is(err, apperrors.ErrMailboxAttachment) {
+			t.Fatalf("%s: err = %v, want mailbox_attachment", name, err)
+		}
+	}
+	withMailboxBagWant(t, f, "after the refusals", want)
+	if got := f.snapshot(t); got != before {
+		t.Fatalf("the refusals wrote: %+v, was %+v", got, before)
+	}
+	if f.recorded(t, "stack-mail") || f.recorded(t, "kinds-mail") || f.recorded(t, "bad-mail") {
+		t.Fatal("a refused claim left a ledger record: the mail could never be claimed")
+	}
+	// 腾出位置：丢掉 1 个 1001，丢光 2001 这一种。两封邮件现在各自到账一次。
+	withMailboxBagDiscard(t, f, 1001, 1)
+	withMailboxBagDiscard(t, f, 2001, 1)
+	if result, err := f.claimAs("stack-mail", gamemailbox.Item(1001, 2), expires); err != nil || !result.Claimed || result.Held != 999999 {
+		t.Fatalf("claim after making room = %+v, err = %v, want item 1001 at 999999", result, err)
+	}
+	if result, err := f.claimAs("kinds-mail", gamemailbox.Item(5000, 1), expires); err != nil || !result.Claimed || result.Held != 1 {
+		t.Fatalf("claim after making room = %+v, err = %v, want item 5000 at 1", result, err)
+	}
+	want[1001] = 999999
+	delete(want, 2001)
+	want[5000] = 1
+	withMailboxBagWant(t, f, "after the retried claims", want)
+	if got := f.snapshot(t); got.ledger != 2 || !f.recorded(t, "stack-mail") || !f.recorded(t, "kinds-mail") {
+		t.Fatalf("after the retried claims: %+v, want both mails in the ledger", got)
+	}
+}
+
+// 道具与账本记录在同一笔事务里：提交被拒绝时两者一起回滚，之后同一封还能领。
+func TestWithMailboxBagRejectedCommitRollsBackItemsAndLedger(t *testing.T) {
+	f := newMailboxFixture(t)
+	const expires = mailboxStart + 3600
+	withMailboxBagStock(t, f, 1001, 10)
+	before := f.snapshot(t)
+	f.committer.reject.Store(true)
+	if _, err := f.claimAs("mail-1", gamemailbox.Item(1001, 3), expires); err == nil {
+		t.Fatal("a rejected commit reported success")
+	}
+	if _, err := f.claimAs("mail-2", gamemailbox.Item(1002, 4), expires); err == nil {
+		t.Fatal("a rejected commit reported success")
+	}
+	f.committer.reject.Store(false)
+	withMailboxBagWant(t, f, "after the rollback", map[int64]int64{1001: 10})
+	if got := f.snapshot(t); got != before {
+		t.Fatalf("rollback left %+v, was %+v", got, before)
+	}
+	if f.recorded(t, "mail-1") || f.recorded(t, "mail-2") {
+		t.Fatal("rollback left the mail in the ledger: the player would never get the items")
+	}
+	if result, err := f.claimAs("mail-1", gamemailbox.Item(1001, 3), expires); err != nil || !result.Claimed || result.Held != 13 {
+		t.Fatalf("claim after the rollback = %+v, err = %v, want item 1001 at 13", result, err)
+	}
+	withMailboxBagWant(t, f, "after the retried claim", map[int64]int64{1001: 13})
+}
+
+// 装了背包之后金币邮件还是原来的规则：金币经货币模块到账、不碰背包，持有量是余额；
+// 道具邮件不碰余额。两种邮件共用一本账本，各自至多一次。
+func TestWithMailboxBagCoinMailsStillGoToTheWallet(t *testing.T) {
+	f := newMailboxFixture(t)
+	const expires = mailboxStart + 3600
+	f.mustPay(t, "coin-mail", 100, expires, 100)
+	withMailboxBagWant(t, f, "after a coin mail", map[int64]int64{})
+	if result, err := f.claimAs("item-mail", gamemailbox.Item(1001, 3), expires); err != nil || !result.Claimed || result.Held != 3 {
+		t.Fatalf("item mail = %+v, err = %v, want item 1001 at 3", result, err)
+	}
+	if got := f.snapshot(t); got.coins != 100 || got.ledger != 2 {
+		t.Fatalf("after one coin mail and one item mail: %+v, want 100 coins and two records", got)
+	}
+	// 各自重放：金币回余额 100，道具回数量 3，都不再发。
+	if replay, err := f.claim("coin-mail", 100, expires); err != nil || replay.Claimed || replay.Held != 100 {
+		t.Fatalf("coin replay = %+v, err = %v, want Claimed=false with the balance 100", replay, err)
+	}
+	if replay, err := f.claimAs("item-mail", gamemailbox.Item(1001, 3), expires); err != nil || replay.Claimed || replay.Held != 3 {
+		t.Fatalf("item replay = %+v, err = %v, want Claimed=false with item 1001 at 3", replay, err)
+	}
+	// 金币带道具号仍被拒绝：装了背包不会让它变成“发道具”。
+	if _, err := f.claimAs("odd-mail", gamemailbox.Attachment{Type: gamemailbox.TypeCoins, ID: 1001, Amount: 5}, expires); !errors.Is(err, apperrors.ErrMailboxAttachment) {
+		t.Fatalf("coins with an item id: err = %v, want mailbox_attachment", err)
+	}
+	withMailboxBagWant(t, f, "at the end", map[int64]int64{1001: 3})
+	if got := f.snapshot(t); got.coins != 100 || got.ledger != 2 {
+		t.Fatalf("at the end: %+v, want 100 coins and two records", got)
+	}
+}

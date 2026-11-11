@@ -4,18 +4,22 @@ package protocoldef
 
 // MailboxClaimRequest 领一封邮件的附件。MailID 取自 MailboxList 的条目；领的是谁的邮件取认证会话。
 // 没收到回包就用同一个 MailID 重发：附件至多到账一次。上一次其实已经完整领完时，
-// 重发会收到 mail 服务的“已领取”码（Code 非 0），当作已领即可，余额以自身视图为准。
+// 重发会收到 mail 服务的“已领取”码（Code 非 0），当作已领即可，持有量以自身视图为准。
 type MailboxClaimRequest struct {
 	MailID string `pb:"1"`
 }
 
-// MailboxClaimResponse 带回这封邮件发了多少金币（Coins）与到账后的余额（Balance）。
-// 上一次发了钱但没来得及确认时，重发仍答成功：Coins 是这封邮件的数额、Balance 是当前余额，不会多发。
+// MailboxClaimResponse 带回这封邮件发了什么与发放后的持有量，对任何种类的附件都是这四个字段：
+// AttachmentType 是种类（"coins" 金币、"item" 道具……），AttachmentID 是种类内部的号（道具号；金币为 0），
+// Amount 是这封邮件发的数量，Held 是到账后玩家持有多少（金币是余额，道具是这个道具号的数量）。
+// 上一次发了奖励但没来得及确认时，重发仍答成功：前三个字段照旧，Held 是当前的持有量，不会多发。
 type MailboxClaimResponse struct {
-	Code    int32  `pb:"1"`
-	Reason  string `pb:"2"`
-	Coins   int64  `pb:"3"`
-	Balance int64  `pb:"4"`
+	Code           int32  `pb:"1"`
+	Reason         string `pb:"2"`
+	AttachmentType string `pb:"3"`
+	AttachmentID   int64  `pb:"4"`
+	Amount         int64  `pb:"5"`
+	Held           int64  `pb:"6"`
 }
 
 //roost:protocol group=game handler=mailbox

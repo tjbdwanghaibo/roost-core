@@ -1,8 +1,13 @@
-// Package mailbox 是邮件附件在本工程这一侧的约定：附件的字节是什么意思，以及“这封邮件发过没有”
+// Package mailbox 是邮件附件在本工程这一侧的约定：附件的字节是什么意思、有哪些种类，以及“这封邮件发过没有”
 // 这件事可以记多久。mail 托管服务把附件当作不透明字节、保证每封只交付一次预留；字节里是什么奖励由游戏决定，
 // 所以发件方（GM、活动、别的功能给玩家发奖励邮件）与领取方（MailboxClaim 端点）共用这个包，不各写一份。
 //
-// 这里只有纯函数，不读时钟、不碰实体：端点、Player 上的 Mailbox 组件与测试都 import 它。
+// 附件的种类是一个登记点：金币内置，别的种类（道具……）由提供它的功能在自己的文件里用 init 登记
+// （RegisterType）。这里只管“这样的附件合不合法”；“怎么发到玩家身上”登记在 Player 实体包
+// （RegisterMailboxGrant），因为这个包不能认识实体。
+//
+// 这里只有纯函数，不读时钟、不碰实体，不 import 任何 controller 或实体包：端点、Player 上的 Mailbox 组件、
+// 别的功能与测试都可以 import 它而不成环。
 package mailbox
 
 import (
@@ -10,29 +15,97 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sync"
 )
 
-// Type 是附件的种类。附件带种类字段，将来加新的奖励种类（例如道具）时：在这里加一个常量、
-// 在 Attachment 里加它的字段、在 validate 里加一个分支，再让领取端点按种类调用对应的发放。
+// Type 是附件的种类，也是线上格式里 "type" 的值，发布后不要改名。
 type Type string
 
-// TypeCoins 是货币附件：Amount 个金币，经货币模块到账。这一版只认它。
+// TypeCoins 是货币附件：Amount 个金币，经货币模块到账。它是内置的种类，ID 必须为 0。
 const TypeCoins Type = "coins"
 
-// Attachment 是一封邮件的附件：一种奖励。
+// Attachment 是一封邮件的附件：一种奖励，写成（种类，号，数量）。
+//
+// 线上格式是 JSON 对象，例如金币 {"type":"coins","amount":100}、道具 {"type":"item","id":1001,"amount":3}。
+// 三个字段对所有种类都是同一个意思，新种类不往这里加字段：一份奖励说不成“哪一种的第几号、多少个”的，
+// 不属于邮件附件，由它自己的功能发放。
 type Attachment struct {
 	Type Type `json:"type"`
-	// Amount 是 TypeCoins 的金币数量，必须为正。
+	// ID 是这个种类内部的号（道具号……）。没有号的种类（金币）必须为 0，为 0 时不写进字节。
+	ID int64 `json:"id,omitempty"`
+	// Amount 是数量，任何种类都必须为正。
 	Amount int64 `json:"amount,omitempty"`
 }
 
 // Coins 是 amount 个金币的附件，给发件方用：mailbox.Encode(mailbox.Coins(100))。
 func Coins(amount int64) Attachment { return Attachment{Type: TypeCoins, Amount: amount} }
 
+// Validator 判断一份本种类的附件合不合法，不合法时返回原因。它拿到的附件种类已经是登记的那个、
+// 数量已经为正（这两条对所有种类成立，由 Validate 先判）；号的规则完全由它决定。
+//
+// 它必须是纯函数：发件方编码、列表、领取端点、发放事务都会调它，同一份附件每次的回答要一样。
+// 所以不要在里面读配置表这类会变的数据——“这个道具号今天还在不在表里”留给发放的那一步去拒绝。
+type Validator func(attachment Attachment) error
+
+var (
+	typesMu sync.RWMutex
+	// types 是登记过的种类。金币内置；其余在各自文件的 init 里经 RegisterType 加进来。
+	types = map[Type]Validator{TypeCoins: validateCoins}
+)
+
+// RegisterType 登记一种附件。只在 init 里调用：有哪些种类是程序结构的一部分，之后只读。
+// 空名、nil、重名是写错了，直接 panic，不留到某封邮件领不了才发现。
+//
+// 登记只让这种附件“解得出来”。要能领，还要在 Player 实体包登记它的发放方式（RegisterMailboxGrant）；
+// 只登记了这一半的种类，列表里不可领，领取答 mailbox_attachment、邮件保持未领。
+func RegisterType(kind Type, validate Validator) {
+	if kind == "" || validate == nil {
+		panic("mailbox: RegisterType needs a type name and a validator")
+	}
+	typesMu.Lock()
+	defer typesMu.Unlock()
+	if _, taken := types[kind]; taken {
+		panic(fmt.Sprintf("mailbox: attachment type %q is registered twice", kind))
+	}
+	types[kind] = validate
+}
+
+// Registered 报告这个种类登记过没有。
+func Registered(kind Type) bool {
+	typesMu.RLock()
+	defer typesMu.RUnlock()
+	_, known := types[kind]
+	return known
+}
+
+// Validate 报告这份附件能不能作为奖励发放：种类登记过、数量为正、并且通过这个种类自己的校验。
+// Encode、Decode 与发放入口（MailboxComponent.Claim）用的是同一个判断。
+// 没登记的种类一律拒绝——包括别的进程版本认识、而这个进程没装对应功能的种类。
+func Validate(attachment Attachment) error {
+	typesMu.RLock()
+	validate, known := types[attachment.Type]
+	typesMu.RUnlock()
+	if !known {
+		return fmt.Errorf("mailbox: attachment type %q is not one this version can grant", attachment.Type)
+	}
+	if attachment.Amount <= 0 {
+		return fmt.Errorf("mailbox: an amount of %d is not a grantable reward", attachment.Amount)
+	}
+	return validate(attachment)
+}
+
+// validateCoins 是金币的校验：金币没有号。带了号的金币附件不知道发件方想表达什么，不猜。
+func validateCoins(attachment Attachment) error {
+	if attachment.ID != 0 {
+		return fmt.Errorf("mailbox: coins carry no id, got %d", attachment.ID)
+	}
+	return nil
+}
+
 // Encode 把附件编码成交给 mail 服务的字节（SendRequest.Attachment）。发不出去的附件在这里就拒绝，
 // 不让一封领不了的邮件进玩家的邮箱。
 func Encode(attachment Attachment) ([]byte, error) {
-	if err := attachment.validate(); err != nil {
+	if err := Validate(attachment); err != nil {
 		return nil, err
 	}
 	return json.Marshal(attachment)
@@ -41,9 +114,9 @@ func Encode(attachment Attachment) ([]byte, error) {
 // Decode 解析附件字节。凡是这一版不能完整发放的都拒绝，绝不发一部分：
 //
 //   - 不是 JSON 对象、对象后面还有多余内容；
-//   - 种类不认识（新版本发出的道具附件落到旧进程上）；
+//   - 种类没登记（新版本发出的附件落到旧进程上，或者提供这个种类的功能没装）；
 //   - 带有这一版不认识的字段（“金币外加别的东西”不能只发金币就把邮件标成已领）；
-//   - 金币数量不是正数。
+//   - 数量不是正数，或者没通过这个种类自己的校验（金币带了号、道具没有号……）。
 //
 // 被拒绝的附件怎么处理由领取端点决定：归还预留（CancelClaim）、答 mailbox_attachment，
 // 邮件留在邮箱里保持未领——认识它的版本上线后还能领，而不是被旧进程吞掉。
@@ -57,29 +130,18 @@ func Decode(raw []byte) (Attachment, error) {
 	if _, err := decoder.Token(); err != io.EOF {
 		return Attachment{}, fmt.Errorf("mailbox: attachment has trailing data")
 	}
-	if err := attachment.validate(); err != nil {
+	if err := Validate(attachment); err != nil {
 		return Attachment{}, err
 	}
 	return attachment, nil
 }
 
-func (attachment Attachment) validate() error {
-	switch attachment.Type {
-	case TypeCoins:
-		if attachment.Amount <= 0 {
-			return fmt.Errorf("mailbox: %d coins is not a grantable reward", attachment.Amount)
-		}
-		return nil
-	default:
-		return fmt.Errorf("mailbox: attachment type %q is not one this version can grant", attachment.Type)
-	}
-}
-
 // ClaimResult 是发放事务的结果。Claimed 为 false 表示重复到达：这封邮件已经到过账，这一次什么也没改。
-// Balance 是玩家此刻的余额，两种情况下都填，所以客户端拿到的回答是同一组数字。
+// Held 是玩家此刻持有多少这份附件说的东西（金币是余额，道具是这个道具号的数量），两种情况下都填，
+// 所以客户端拿到的回答是同一组数字。
 type ClaimResult struct {
 	Claimed bool
-	Balance int64
+	Held    int64
 }
 
 // ClaimWindowClosed 报告：过期时刻为 expiresAtUnix 的邮件，在 nowUnix 是否已经不能首次发放。

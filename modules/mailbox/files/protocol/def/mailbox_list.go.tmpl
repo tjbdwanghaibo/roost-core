@@ -10,18 +10,21 @@ type MailboxListRequest struct {
 }
 
 // MailboxEntry 是客户端看到的一封邮件：信封加上这名玩家对它的状态。
-// Claimable 是“现在领会成功吗”：mail 服务说可以预留，并且附件是这一版发得了的奖励。
-// 客户端不要从 Status 猜（Status 表达不了“正被一次在途的领取占着”）。
-// Coins 是附件里的金币数；没有附件、或附件不是这一版认识的奖励时为 0。
+// Claimable 是“现在领会成功吗”：mail 服务说可以预留，并且附件是这一版发得了的奖励
+// （解得出来，并且这个种类登记了发放方式）。客户端不要从 Status 猜（Status 表达不了“正被一次在途的领取占着”）。
+// AttachmentType / AttachmentID / Amount 是附件的种类、种类内部的号（道具号；金币为 0）与数量，
+// 含义与 MailboxClaimResponse 的同名字段相同；没有附件、或附件这一版解不出来时为空与 0。
 type MailboxEntry struct {
-	MailID        string `pb:"1"`
-	Subject       string `pb:"2"`
-	Body          string `pb:"3"`
-	Status        string `pb:"4"`
-	HasAttachment bool   `pb:"5"`
-	Claimable     bool   `pb:"6"`
-	ExpiresAtUnix int64  `pb:"7"`
-	Coins         int64  `pb:"8"`
+	MailID         string `pb:"1"`
+	Subject        string `pb:"2"`
+	Body           string `pb:"3"`
+	Status         string `pb:"4"`
+	HasAttachment  bool   `pb:"5"`
+	Claimable      bool   `pb:"6"`
+	ExpiresAtUnix  int64  `pb:"7"`
+	AttachmentType string `pb:"8"`
+	AttachmentID   int64  `pb:"9"`
+	Amount         int64  `pb:"10"`
 }
 
 // MailboxListResponse 是一页邮件。NextCursor 为空表示到底；Unread 是整个邮箱的未读数，不是这一页的。

@@ -233,7 +233,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 玩家档案 profile | 名字、等级、经验；改名协议；服务端发经验的 handler（每级固定经验、可连升多级）；升级钩子是一个业务文件 | `roost module add profile`；别的业务调 `ProfileComp().AddExp(n)`，升级奖励写在 `profile_levelup.go` | 现成模块。名字不查重（全服唯一用 directory 服务）、不查敏感词；每级 100 经验是样例；没有等级上限 | 同上 |
 | 玩家背包 bag | 道具号到数量的堆叠背包：增、减、查；丢弃协议；服务端发放 handler | `roost module add bag`；别的业务在自己的组件里调 `BagComp().Add / Remove / Has` | 现成模块。没有格子、装备、过期与道具表：道具号合法性在 `bag_items.go`，缺省只要求为正；至多 200 种、单种至多 999999 | 同上 |
 | 排行榜 leaderboard | 一张全服总分榜：前 N 名与自己的名次两条协议；提交分数的函数给服务端别的功能调 | `roost module add leaderboard`（业务服务要 `uses: [rank]`，`-template game` 已有）；持有总分的功能在事务之外调 `leaderboard.Submit` | 现成模块。只升不降；只有一个榜、一个周期，换周期是改常量后发版；与改总分的事务不是原子的，失败靠重试或下一次提交补上 | 同上 |
-| 邮件 mailbox | 分页列出自己的邮件、领取金币附件；每封至多到账一次 | `roost module add mailbox`（连同 wallet；业务服务要 `uses: [mail]`，`-template game` 已有） | 现成模块。附件只认金币（别的附件不可领，保持未领）；没有发件方、已读与删除协议；启用 `LazyBroadcast` 的工程要自己在进入游戏时调 `PullBroadcasts` | 同上 |
+| 邮件 mailbox | 分页列出自己的邮件、领取附件；每封至多到账一次；附件种类是登记点（金币内置；装了 bag 时道具附件可发可领；装了 enter 时进入游戏自动拉全服邮件） | `roost module add mailbox`（连同 wallet；业务服务要 `uses: [mail]`，`-template game` 已有）；发件方用 `mailbox.Encode(mailbox.Coins(n))` / `mailbox.Item(道具号, n)` 编码附件；自己的奖励种类在 `init` 里登记校验与发放方式 | 现成模块。一封邮件只有一份附件；没有登记发放方式的种类不可领、保持未领；满背包的道具邮件一直显示可领、领取时答背包的码；没有发件方、已读与删除协议 | 同上 |
 
 ### 13 类玩法纵切
 
@@ -297,7 +297,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 需求或类型 | 结论 | 是哪条限制 | 出处 |
 | --- | --- | --- | --- |
-| 按玩法的配方（`roost project new -recipe`）、把 13 类玩法与 game-demo 拆成模块 | 只有设计 | 业务模块安装器已实现（见“业务模块命令”），目前有八个模块，game-demo 用上了其中的 enter 与 chat；配方与其余玩法、demo 其余功能的迁移是方案的后几期 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
+| 按玩法的配方（`roost project new -recipe`）、把 13 类玩法与 game-demo 拆成模块 | 只有设计 | 业务模块安装器已实现（见“业务模块命令”），目前有十一个模块和四组模块间联动，game-demo 用上了其中的 enter 与 chat；配方与其余玩法、demo 其余功能的迁移是方案的后几期 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
 | 业务模块的卸载 | 不做 | 分配过的号与存储键不回收；要去掉一个模块时按 `roost.yaml` 的 `modules.<name>` 归属清单手工删 | [业务模块方案“决定一览”](../maintenance/FEATURE-2026-11-10-business-modules.md#决定一览) |
 | FPS / 动作射击 | 不建议 | 心跳档位最短 50ms；没有延迟补偿与命中回溯，没有通用客户端预测；玩家接入只有 TCP | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型) |
 | 无缝开放世界（多进程分区） | 只有原型 | Player 静态 sid、Interest 按进程；cellworld 是原型不是正式能力；正式做法是同进程多地图加按 sid 分服 | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#框架服务与-game-demo) |
@@ -346,7 +346,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 回合制对战 | 房间实体 + 多实体事务 + 持久回合定时器 | 回合 PvP 夹具；卡牌 RPG 夹具的回合定时器 |
 | 断线重连 | 自身视图重连全量、组同步保留成员关系、Lockstep 追帧或快照恢复；座位与连接代际接管需手写业务 | 派对房间、自走棋、回合 PvP 夹具；[KNOWN-LIMITS“同一 SessionID 的重连”](../maintenance/KNOWN-LIMITS.md#同一-sessionid-的重连) |
 | 排行榜 | 现成模块 leaderboard（`roost module add leaderboard`）：总分榜前 N 名与自己的名次；多个榜、赛季奖励照 rank 服务手写 | 模块 leaderboard；game-demo“排行榜” |
-| 邮件列表、领附件 | 现成模块 mailbox（`roost module add mailbox`，连同 wallet）：列表与领取金币附件；道具附件需手写 | 模块 mailbox；game-demo“邮件” |
+| 邮件列表、领附件 | 现成模块 mailbox（`roost module add mailbox`，连同 wallet）：列表与领取；金币附件内置，道具附件装了 bag 就有，别的奖励种类登记进去 | 模块 mailbox；game-demo“邮件” |
 | 全服邮件、补偿邮件 | mail 服务的广播邮件；GM 命令发单人补偿 | game-demo“邮件”“GM 运维面” |
 | 聊天 | 现成模块 chat（`roost module add chat`）：世界与私聊；群组频道需手写 | 模块 chat；game-demo“聊天”（用的就是它） |
 | 公会、联盟跨进程 / 跨服 | Remote 托管实体 + 路由 RPC + Mirror + Saga | game-demo“公会 = alliance 服务”（联盟服务方案实施中）；SLG 夹具的联盟活动联合链路 |

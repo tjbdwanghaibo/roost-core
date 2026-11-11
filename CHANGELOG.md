@@ -12,6 +12,14 @@
   - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：模块还少（13 类玩法与 game-demo 的大部分业务尚未拆成模块），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
   - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
 
+- **变更 / 协议变化**（modules）：**mailbox 的附件种类成为登记点，新增联动 mailbox + bag（道具附件）**。
+  - 附件由“只有金币”改为（种类、号、数量）：金币的线上格式不变（`{"type":"coins","amount":100}`），道具是 `{"type":"item","id":1001,"amount":3}`。`game/mailbox` 的 `RegisterType` 登记一个种类的校验（纯函数），实体包的 `RegisterMailboxGrant` 登记怎么发、发完持有多少（与领取账本同一笔事务）；金币内置。没登记的种类、只登记了校验没有发放方式的种类都不可领：归还预留、答 `mailbox_attachment`、邮件保持未领。
+  - 协议：`MailboxClaimResponse` 的 `Coins / Balance` 改为 `AttachmentType / AttachmentID / Amount / Held`；`MailboxEntry` 的 `Coins` 改为 `AttachmentType / AttachmentID / Amount`。Nest handler `MailboxClaimReward` 的参数跟着改。场景数 21 → 28（原 21 条规则都在）。
+  - 联动 mailbox + bag（9 条场景）：装了 bag 时登记 `item` 种类，领取时道具进背包；背包拒绝（堆叠满、种类满）时整笔回滚、归还预留、原样答背包的码，邮件保持未领，腾位后还能领。只装 mailbox 时道具附件仍被拒绝（有用例钉住）。
+  - **升级要求**：无兼容处理（没有工程在用旧字段；game-demo 的邮件是它自己的一套，不受影响）。
+  - 验证：70 条变异全部被杀；只装 mailbox、先 mailbox 后 bag、先 bag 后 mailbox、全部一起四种安装下 `roost module verify` 分项全对。
+  - 整批的收口验证（十一个模块、四组联动）：全新工程一次装完，`roost module verify` 十五项场景数全对加四项工程检查，重复安装无变化，`go test ./...` 通过；`scripts/test-modules-generated.sh` 通过（逐个叠加与全新工程换顺序两条路径）；`go test ./codegen/internal/roost -run 'TestDemo|TestModule'` 通过。全部是离线场景（替身提交器、进程内 mail 服务），没有跑真实依赖。
+
 - **新增**（modules）：**第三批业务模块 quest、stamina、shop，以及 checkin 的签到钩子**（维护者 2026-11-11：按建议“先补模块间登记点并继续拆下一批”）。
   - `quest`（18 条场景，依赖 wallet）：每日任务，按业务日惰性清零；服务端推进（`Advance` 与不对客户端开放的 `QuestAdvance`）；领奖协议 `QuestClaim`，金币在同一笔事务里到账；任务表是业务文件。
   - `stamina`（25 条，依赖 wallet）：体力随业务时间惰性恢复到上限（不用定时器）；组件入口 `Spend` / `Grant`（超硬顶截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler；规则是业务文件。

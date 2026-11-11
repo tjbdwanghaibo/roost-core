@@ -1,0 +1,77 @@
+package mailbox
+
+import "testing"
+
+// 告诉邮件模块自己的用例：这个工程里有 mailbox 与 bag 的联动，道具附件是合法的（见 mailbox_test.go）。
+func init() { mailboxTestBagGlue = true }
+
+// 道具附件的线上格式是（种类，号，数量），编码再解码得回同一份；字段顺序与空白不影响解析。
+func TestWithMailboxBagItemAttachmentRoundTrips(t *testing.T) {
+	if !Registered(TypeItem) {
+		t.Fatal("the item type is not registered")
+	}
+	raw, err := Encode(Item(1001, 3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 线上格式是约定的一部分：别的进程（GM 工具、活动服务）可能不经这个包直接拼。
+	if string(raw) != `{"type":"item","id":1001,"amount":3}` {
+		t.Fatalf("encoded attachment = %s", raw)
+	}
+	attachment, err := Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attachment != (Attachment{Type: "item", ID: 1001, Amount: 3}) {
+		t.Fatalf("decoded = %+v, want 3 of item 1001", attachment)
+	}
+	if attachment, err := Decode([]byte(" {\"amount\": 999999, \"id\": 7, \"type\": \"item\"}\n")); err != nil || attachment != Item(7, 999999) {
+		t.Fatalf("reordered fields: %+v %v", attachment, err)
+	}
+	// 登记了道具之后金币还是原来的金币：格式不变，仍然不能带号。
+	if raw, err := Encode(Coins(250)); err != nil || string(raw) != `{"type":"coins","amount":250}` {
+		t.Fatalf("coins encode as %s %v", raw, err)
+	}
+	if attachment, err := Decode([]byte(`{"type":"coins","amount":250}`)); err != nil || attachment != Coins(250) {
+		t.Fatalf("coins decode as %+v %v", attachment, err)
+	}
+	if attachment, err := Decode([]byte(`{"type":"coins","id":1001,"amount":250}`)); err == nil {
+		t.Fatalf("coins with an item id decoded as %+v", attachment)
+	}
+}
+
+// 不是道具的号、不为正的数量在编码与解码时都被拒绝；解码仍然不接受多余的字段与旧写法。
+func TestWithMailboxBagItemAttachmentRefusesWhatIsNotAnItem(t *testing.T) {
+	for name, attachment := range map[string]Attachment{
+		"no id":           {Type: TypeItem, Amount: 3},
+		"zero id":         Item(0, 3),
+		"negative id":     Item(-1001, 3),
+		"zero amount":     Item(1001, 0),
+		"negative amount": Item(1001, -3),
+	} {
+		if raw, err := Encode(attachment); err == nil {
+			t.Errorf("%s: encoded as %s", name, raw)
+		}
+	}
+	for name, raw := range map[string]string{
+		"no id":                 `{"type":"item","amount":3}`,
+		"zero id":               `{"type":"item","id":0,"amount":3}`,
+		"negative id":           `{"type":"item","id":-1001,"amount":3}`,
+		"fractional id":         `{"type":"item","id":1001.5,"amount":3}`,
+		"id as text":            `{"type":"item","id":"1001","amount":3}`,
+		"id past int64":         `{"type":"item","id":9223372036854775808,"amount":3}`,
+		"no amount":             `{"type":"item","id":1001}`,
+		"zero amount":           `{"type":"item","id":1001,"amount":0}`,
+		"negative amount":       `{"type":"item","id":1001,"amount":-3}`,
+		"fractional amount":     `{"type":"item","id":1001,"amount":0.5}`,
+		"type in another case":  `{"type":"Item","id":1001,"amount":3}`,
+		"unknown field":         `{"type":"item","id":1001,"amount":3,"bound":true}`,
+		"the demo item reward":  `{"type":"item","item_id":1002,"count":1}`,
+		"two items in an array": `[{"type":"item","id":1001,"amount":3},{"type":"item","id":1002,"amount":1}]`,
+		"trailing object":       `{"type":"item","id":1001,"amount":3}{"type":"coins","amount":5}`,
+	} {
+		if attachment, err := Decode([]byte(raw)); err == nil {
+			t.Errorf("%s: decoded %s as %+v", name, raw, attachment)
+		}
+	}
+}

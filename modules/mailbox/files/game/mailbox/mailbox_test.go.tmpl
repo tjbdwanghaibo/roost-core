@@ -1,13 +1,47 @@
 package mailbox
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
+
+// 测试自己登记一个种类，方式与正式的种类相同（只在 init 里）：号必须是 1 到 9 的“票”。
+// 校验函数把收到的附件记下来，用例据此断言它什么时候被调、拿到的是什么。
+const mailboxTestTicket Type = "mailbox_test_ticket"
+
+var (
+	mailboxTestTicketSeen []Attachment
+	errMailboxTestTicket  = errors.New("a ticket id must be 1..9")
+)
+
+func init() {
+	RegisterType(mailboxTestTicket, func(attachment Attachment) error {
+		mailboxTestTicketSeen = append(mailboxTestTicketSeen, attachment)
+		if attachment.ID < 1 || attachment.ID > 9 {
+			return errMailboxTestTicket
+		}
+		return nil
+	})
+}
+
+// mailboxTestBagGlue 报告这个工程里有没有 mailbox 与 bag 的联动：联动自带的测试文件在 init 里把它置为 true。
+// 它看的是“联动的文件在不在”，不问被测代码“道具登记了没有”——没有联动的工程里道具附件必须被拒绝，
+// 这件事不能因为被测代码把道具认了下来就不再检查。
+var mailboxTestBagGlue bool
+
+// mailboxItemWithoutBag 是一份写得完全正确的道具附件。道具这个种类由 mailbox 与 bag 的联动登记；
+// 工程里没有那份联动（没装 bag）时它必须与任何没登记的种类一样被拒绝（第三个返回值为 true）。
+// 装了联动的工程里它是合法的，由联动自己的用例覆盖，这里不重复。
+func mailboxItemWithoutBag() (Attachment, string, bool) {
+	return Attachment{Type: "item", ID: 1001, Amount: 3}, `{"type":"item","id":1001,"amount":3}`, !mailboxTestBagGlue
+}
 
 func TestMailboxAttachmentRoundTripsCoins(t *testing.T) {
 	raw, err := Encode(Coins(250))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 线上格式是约定的一部分：别的进程（GM 工具、活动服务）可能不经这个包直接拼。
+	// 线上格式是约定的一部分：别的进程（GM 工具、活动服务）可能不经这个包直接拼。金币没有号，字节里不写 id。
 	if string(raw) != `{"type":"coins","amount":250}` {
 		t.Fatalf("encoded attachment = %s", raw)
 	}
@@ -15,23 +49,36 @@ func TestMailboxAttachmentRoundTripsCoins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if attachment.Type != TypeCoins || attachment.Amount != 250 {
-		t.Fatalf("decoded = %+v, want 250 coins", attachment)
+	if attachment != (Attachment{Type: TypeCoins, Amount: 250}) {
+		t.Fatalf("decoded = %+v, want 250 coins with no id", attachment)
 	}
-	// 字段顺序与空白不影响解析。
-	if attachment, err := Decode([]byte(" {\"amount\": 3, \"type\": \"coins\"}\n")); err != nil || attachment.Amount != 3 {
-		t.Fatalf("reordered fields: %+v %v", attachment, err)
+	// 字段顺序与空白不影响解析；写明 id 为 0 与不写是同一份附件。
+	for _, same := range []string{
+		" {\"amount\": 3, \"type\": \"coins\"}\n",
+		`{"type":"coins","id":0,"amount":3}`,
+	} {
+		if attachment, err := Decode([]byte(same)); err != nil || attachment != Coins(3) {
+			t.Fatalf("%s: %+v %v, want 3 coins", same, attachment, err)
+		}
 	}
 }
 
 // 发不出去的附件在编码时就拒绝，不让一封领不了的邮件进邮箱。
 func TestMailboxEncodeRefusesWhatCannotBeGranted(t *testing.T) {
-	for name, attachment := range map[string]Attachment{
-		"zero coins":     Coins(0),
-		"negative coins": Coins(-1),
-		"no type":        {Amount: 5},
-		"unknown type":   {Type: "item", Amount: 5},
-	} {
+	refused := map[string]Attachment{
+		"zero coins":                       Coins(0),
+		"negative coins":                   Coins(-1),
+		"no type":                          {Amount: 5},
+		"a type nobody registered":         {Type: "gem", ID: 1, Amount: 5},
+		"a registered type in other case":  {Type: "Coins", Amount: 5},
+		"coins with an id":                 {Type: TypeCoins, ID: 1001, Amount: 5},
+		"refused by the type's validator":  {Type: mailboxTestTicket, ID: 10, Amount: 1},
+		"a registered type with no amount": {Type: mailboxTestTicket, ID: 5},
+	}
+	if item, _, withoutBag := mailboxItemWithoutBag(); withoutBag {
+		refused["an item without the bag glue"] = item
+	}
+	for name, attachment := range refused {
 		if raw, err := Encode(attachment); err == nil {
 			t.Errorf("%s: encoded as %s", name, raw)
 		}
@@ -40,28 +87,121 @@ func TestMailboxEncodeRefusesWhatCannotBeGranted(t *testing.T) {
 
 // 这一版不能完整发放的附件一律拒绝，绝不发一部分；端点据此归还预留、让邮件保持未领。
 func TestMailboxDecodeRefusesWhatThisVersionCannotGrant(t *testing.T) {
-	for name, raw := range map[string]string{
-		"empty":                ``,
-		"not json":             `coins:5`,
-		"null":                 `null`,
-		"array":                `[{"type":"coins","amount":5}]`,
-		"no type":              `{"amount":5}`,
-		"unknown type":         `{"type":"item","amount":5}`,
-		"type in another case": `{"type":"Coins","amount":5}`,
-		"unknown field":        `{"type":"coins","amount":5,"item_id":1002}`,
-		"zero amount":          `{"type":"coins","amount":0}`,
-		"missing amount":       `{"type":"coins"}`,
-		"negative amount":      `{"type":"coins","amount":-5}`,
-		"fractional amount":    `{"type":"coins","amount":1.5}`,
-		"amount as text":       `{"type":"coins","amount":"5"}`,
-		"amount past int64":    `{"type":"coins","amount":9223372036854775808}`,
-		"trailing object":      `{"type":"coins","amount":5}{"type":"coins","amount":5}`,
-		"trailing text":        `{"type":"coins","amount":5} x`,
-		"the demo item reward": `{"item_id":1002,"count":1}`,
-	} {
+	refused := map[string]string{
+		"empty":                           ``,
+		"not json":                        `coins:5`,
+		"null":                            `null`,
+		"array":                           `[{"type":"coins","amount":5}]`,
+		"no type":                         `{"amount":5}`,
+		"a type nobody registered":        `{"type":"gem","id":1,"amount":5}`,
+		"type in another case":            `{"type":"Coins","amount":5}`,
+		"unknown field":                   `{"type":"coins","amount":5,"item_id":1002}`,
+		"zero amount":                     `{"type":"coins","amount":0}`,
+		"missing amount":                  `{"type":"coins"}`,
+		"negative amount":                 `{"type":"coins","amount":-5}`,
+		"fractional amount":               `{"type":"coins","amount":1.5}`,
+		"amount as text":                  `{"type":"coins","amount":"5"}`,
+		"amount past int64":               `{"type":"coins","amount":9223372036854775808}`,
+		"coins with an id":                `{"type":"coins","id":1001,"amount":5}`,
+		"fractional id":                   `{"type":"coins","id":0.5,"amount":5}`,
+		"id as text":                      `{"type":"mailbox_test_ticket","id":"5","amount":1}`,
+		"id past int64":                   `{"type":"mailbox_test_ticket","id":9223372036854775808,"amount":1}`,
+		"refused by the type's validator": `{"type":"mailbox_test_ticket","id":10,"amount":1}`,
+		"trailing object":                 `{"type":"coins","amount":5}{"type":"coins","amount":5}`,
+		"trailing text":                   `{"type":"coins","amount":5} x`,
+		"the demo item reward":            `{"item_id":1002,"count":1}`,
+	}
+	if _, raw, withoutBag := mailboxItemWithoutBag(); withoutBag {
+		refused["an item without the bag glue"] = raw
+	}
+	for name, raw := range refused {
 		if attachment, err := Decode([]byte(raw)); err == nil {
 			t.Errorf("%s: decoded %s as %+v", name, raw, attachment)
 		}
+	}
+}
+
+// 登记过的种类合不合法由它登记的校验函数说了算；种类与数量这两条对所有种类成立的规则先判，
+// 校验函数只在这两条都过了之后、且只为自己的种类被调用。
+func TestMailboxRegisteredTypeIsJudgedByItsValidator(t *testing.T) {
+	if !Registered(mailboxTestTicket) || !Registered(TypeCoins) || Registered("gem") || Registered("") {
+		t.Fatal("Registered does not report exactly the registered types")
+	}
+	mailboxTestTicketSeen = nil
+	ticket := Attachment{Type: mailboxTestTicket, ID: 7, Amount: 2}
+	raw, err := Encode(ticket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 任何种类都是同一个线上格式：种类、号、数量。
+	if string(raw) != `{"type":"mailbox_test_ticket","id":7,"amount":2}` {
+		t.Fatalf("encoded attachment = %s", raw)
+	}
+	decoded, err := Decode(raw)
+	if err != nil || decoded != ticket {
+		t.Fatalf("decoded = %+v %v, want %+v", decoded, err, ticket)
+	}
+	if len(mailboxTestTicketSeen) != 2 || mailboxTestTicketSeen[0] != ticket || mailboxTestTicketSeen[1] != ticket {
+		t.Fatalf("the validator saw %+v, want the ticket once per Encode and Decode", mailboxTestTicketSeen)
+	}
+	// 校验函数拒绝：Encode、Decode、Validate 都拒绝，原因是它给的那个。
+	mailboxTestTicketSeen = nil
+	bad := Attachment{Type: mailboxTestTicket, ID: 10, Amount: 2}
+	if err := Validate(bad); !errors.Is(err, errMailboxTestTicket) {
+		t.Fatalf("Validate = %v, want the validator's own error", err)
+	}
+	if _, err := Encode(bad); !errors.Is(err, errMailboxTestTicket) {
+		t.Fatalf("Encode = %v, want the validator's own error", err)
+	}
+	if _, err := Decode([]byte(`{"type":"mailbox_test_ticket","id":10,"amount":2}`)); !errors.Is(err, errMailboxTestTicket) {
+		t.Fatalf("Decode = %v, want the validator's own error", err)
+	}
+	// 数量不为正、别的种类的附件：不会交到这个校验函数手里。
+	mailboxTestTicketSeen = nil
+	if err := Validate(Attachment{Type: mailboxTestTicket, ID: 7}); err == nil {
+		t.Fatal("a ticket with no amount is valid")
+	}
+	if err := Validate(Attachment{Type: mailboxTestTicket, ID: 7, Amount: -1}); err == nil {
+		t.Fatal("a ticket with a negative amount is valid")
+	}
+	if err := Validate(Coins(5)); err != nil {
+		t.Fatal(err)
+	}
+	if err := Validate(Attachment{Type: "gem", ID: 7, Amount: 1}); err == nil {
+		t.Fatal("an unregistered type is valid")
+	}
+	if len(mailboxTestTicketSeen) != 0 {
+		t.Fatalf("the ticket validator was handed %+v", mailboxTestTicketSeen)
+	}
+}
+
+// 登记是程序结构的一部分：空名、nil、重名直接 panic，而且不改变已经登记的东西。
+func TestMailboxRegisterTypeRefusesBadRegistrations(t *testing.T) {
+	accept := func(Attachment) error { return nil }
+	panics := func(register func()) (panicked bool) {
+		defer func() { panicked = recover() != nil }()
+		register()
+		return false
+	}
+	for name, register := range map[string]func(){
+		"empty name":                   func() { RegisterType("", accept) },
+		"nil validator":                func() { RegisterType("mailbox_test_never", nil) },
+		"the built-in coins again":     func() { RegisterType(TypeCoins, accept) },
+		"a registered type once again": func() { RegisterType(mailboxTestTicket, accept) },
+	} {
+		if !panics(register) {
+			t.Errorf("%s: RegisterType did not panic", name)
+		}
+	}
+	if Registered("") || Registered("mailbox_test_never") {
+		t.Fatal("a refused registration was recorded")
+	}
+	// 重名的登记没有顶掉原来的校验：金币带号仍被拒绝，票的号仍要在 1..9。
+	if err := Validate(Attachment{Type: TypeCoins, ID: 1, Amount: 5}); err == nil {
+		t.Fatal("re-registering coins replaced its validator")
+	}
+	if err := Validate(Attachment{Type: mailboxTestTicket, ID: 10, Amount: 1}); !errors.Is(err, errMailboxTestTicket) {
+		t.Fatalf("re-registering the ticket replaced its validator: %v", err)
 	}
 }
 

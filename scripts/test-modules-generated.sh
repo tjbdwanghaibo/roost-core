@@ -114,7 +114,9 @@ commit_all enter
 "$roost" module add profile bag leaderboard mailbox > "$review_root/add-batch2.log"
 grep -q 'module wallet: already installed' "$review_root/add-batch2.log"
 grep -q 'glue mailbox with enter: written' "$review_root/add-batch2.log"
-expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=16 bag=12 leaderboard=15 mailbox=21 mailbox+enter=3
+# bag 与 mailbox 同一次装：道具附件的联动（mailbox 的附件种类登记点）也在这一步写。
+grep -q 'glue mailbox with bag: written' "$review_root/add-batch2.log"
+expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=16 bag=12 leaderboard=15 mailbox=28 mailbox+enter=3 mailbox+bag=9
 go test -mod=mod ./... > "$review_root/test-all-batch2.log" 2>&1 || { tail -30 "$review_root/test-all-batch2.log"; exit 1; }
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    collaborators:mail' "$review_root/doctor.log" && grep -q '^OK    collaborators:rank' "$review_root/doctor.log"
@@ -128,6 +130,7 @@ grep -q 'prerequisite (did run): roost add transport tcp' "$review_root/add-all.
 grep -q 'prerequisite (did run): set access.player.self_sync: true' "$review_root/add-all.log"
 grep -q 'self_sync: true' roost.yaml
 grep -q 'glue chat with enter: written' "$review_root/add-all.log" && grep -q 'glue mailbox with enter: written' "$review_root/add-all.log"
+grep -q 'glue mailbox with bag: written' "$review_root/add-all.log"
 # 第三批：quest（依赖已装的 wallet）。checkin 已在，签到推进每日任务的联动随它写进工程。
 "$roost" module add quest stamina shop > "$review_root/add-quest.log"
 grep -q 'glue quest with checkin: written' "$review_root/add-quest.log"
@@ -136,7 +139,7 @@ grep -q 'module bag: already installed' "$review_root/add-quest.log"
 commit_all all
 "$roost" module add enter bag mailbox quest shop > "$review_root/add-all-again.log"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
-expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=16 bag=12 leaderboard=15 mailbox=21 mailbox+enter=3 quest=18 quest+checkin=3 stamina=25 shop=17
+expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=16 bag=12 leaderboard=15 mailbox=28 mailbox+enter=3 mailbox+bag=9 quest=18 quest+checkin=3 stamina=25 shop=17
 go test -mod=mod ./... > "$review_root/test-all-harbor.log" 2>&1 || { tail -30 "$review_root/test-all-harbor.log"; exit 1; }
 
 succeeded=1

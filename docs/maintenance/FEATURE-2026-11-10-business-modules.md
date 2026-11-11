@@ -1,6 +1,6 @@
 # 功能设计：业务模块与配方（2026-11-10）
 
-**状态：第 2 期（最小闭环）已实施，第 3～6 期未开始（维护者 2026-11-10 确认下表四项决定，同日“你直接做之前的文档的逻辑”）。** 已有的：`roost module list / plan / add / verify` 与八个模块（清单与状态见第 18 节），game-demo 的聊天与进入游戏已改用模块，现行说明在 [modules/README](../../modules/README.md)、[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module) 与[能力清单](../framework/CAPABILITIES.md)，限制在 [KNOWN-LIMITS“业务模块”](KNOWN-LIMITS.md#业务模块roost-module)。还没有的：配方、现有 13 类玩法与 game-demo 的迁移——它们仍是 [roost-genre skill](../agent-skills/roost-genre/SKILL.md) 加 `scripts/testdata/<genre>/` 夹具与 `-template game-demo`。实施结果与方案的出入见[第 17 节](#17-第-2-期实施记录2026-11-10)。
+**状态：第 2 期（最小闭环）已实施，第 3～6 期未开始（维护者 2026-11-10 确认下表四项决定，同日“你直接做之前的文档的逻辑”）。** 已有的：`roost module list / plan / add / verify` 与十一个模块、模块间联动（清单与状态见第 18 节，实施记录见第 19 节），game-demo 的聊天与进入游戏已改用模块，现行说明在 [modules/README](../../modules/README.md)、[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module) 与[能力清单](../framework/CAPABILITIES.md)，限制在 [KNOWN-LIMITS“业务模块”](KNOWN-LIMITS.md#业务模块roost-module)。还没有的：配方、现有 13 类玩法与 game-demo 的迁移——它们仍是 [roost-genre skill](../agent-skills/roost-genre/SKILL.md) 加 `scripts/testdata/<genre>/` 夹具与 `-template game-demo`。实施结果与方案的出入见[第 17 节](#17-第-2-期实施记录2026-11-10)。
 
 **文档分两部分**：第 0～9 节是设计（做什么、为什么）；第 10 节起是实施方案（改哪些文件、怎么改、怎么验收），供实施者按期执行。实施者先读[第 10 节](#10-实施者须知)。
 
@@ -615,7 +615,7 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | 2 | stamina | 体力：随时间恢复、消耗、用货币补满（每日次数） | wallet | 已有（25 条） |
 | 2 | quest | 每日任务：进度、领奖、按业务日清零 | wallet | 已有（18 条）；签到推进经 quest+checkin 联动 |
 | 2 | leaderboard | 排行：提交分数、查前 N 名与自己的名次 | 托管 rank 服务 | 已有（15 条） |
-| 2 | mailbox | 邮件：列表、领附件进货币 / 背包 | 托管 mail 服务；wallet（这一版附件只有金币，没有接 bag） | 已有（21 条） |
+| 2 | mailbox | 邮件：列表、领附件；附件种类是登记点，金币内置，道具经 mailbox + bag 联动 | 托管 mail 服务；wallet | 已有（28 条；联动 mailbox+bag 9 条、mailbox+enter 3 条） |
 | 3 | shop | 用货币买道具，每日 / 终身限购 | wallet、bag；配置表（`tables`） | 已有（17 条）（目录是业务文件，没有用配置表） |
 | 3 | room | 带座位的房间实体：进出、连接代际、房主 | 独立实体（安装器要支持模块自带实体） | 未做 |
 | 3 | matchroom | 匹配成局到房间的移交 | 托管 match 服务；room | 未做 |
@@ -626,30 +626,30 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 
 每个新模块的验收不变：全新工程上单独安装、与已有模块一起安装、重复安装无变化、`roost module verify` 的场景数；写进 `scripts/test-modules-generated.sh`。每批做完用一个只凭 skill 的 agent 按一段不重合的需求实测一遍。
 
-## 19. 暂停点（2026-11-11）
+## 19. 第三批与登记点的实施记录（2026-11-11）
 
-维护者 2026-11-11：“如果已经使用额度了可以先暂停，等限量解除再继续实施”。当时 5 小时额度已用满，在这里停下。分支 `feat/business-modules` 已推送，下面是停下时的状态，接手时从这里继续。
+维护者 2026-11-11：“按照你的建议实施”（先补模块间登记点并继续拆下一批；game-demo 换用 profile / bag / leaderboard / mailbox 排在其后）。中途因 5 小时额度用满按维护者要求暂停过一次，恢复后三个被停掉的 agent 从各自的记录续做完成。
 
-**已合入并推送**
+**做了的**
 
-- 联动文件机制（清单 `with`）与 enter 的进入钩子、chat + enter、mailbox + enter 两组联动、game-demo 进入流程改走钩子（门禁脚本在这个提交上通过）。
-- quest 模块、checkin 的签到钩子 `OnCheckinClaimed`、quest + checkin 联动（在全新工程上 `module verify` 通过；门禁脚本已按新场景数改写，**没有重跑**）。
+- 安装器：联动文件（清单 `with`、`with/<另一个模块>/`），见 [modules/README](../../modules/README.md)“清单”一节。
+- 四处登记点与四组联动：enter 的进入钩子（chat + enter、mailbox + enter）；checkin 的签到钩子（quest + checkin）；mailbox 的附件种类（mailbox + bag）。
+- 第三批模块：quest（18）、stamina（25）、shop（17）。
+- wallet 业务键的长度与字符限制（shop 的作者对照时发现，先红后绿）。
+- game-demo 的进入流程改走进入钩子。
 
-**做到一半、没有合入**（都在各自的临时 worktree 里，未提交；agent 被中途停掉，文件留在磁盘上）
+**与原计划的出入**
 
-| 内容 | worktree（分支） | 停下时的状态 |
-| --- | --- | --- |
-| stamina 模块（体力：惰性恢复、消耗、金币补满） | `worktrees/bm-stamina`（`tmp/bm-stamina`） | 开发工程里已写完并跑通，正在搬成模板；`modules/stamina/` 不完整，验收与变异自检没有做 |
-| shop 模块（金币买道具、每日 / 终身限购、同键重发不重复扣费） | `worktrees/bm-shop`（`tmp/bm-shop`） | `modules/shop/` 有清单与部分模板；验收没有做 |
-| mailbox 附件种类登记点 + mailbox + bag 联动（道具附件） | `worktrees/bm-mailkind`（`tmp/bm-mailkind`） | `modules/mailbox/files/` 下 12 个文件改到一半（附件改成“种类、号、数量”，协议与 handler 跟着改）；`with/bag/` 还没有；不能直接合 |
+- 第 18 节原写 mailbox“领附件进货币 / 背包”依赖 bag：实际 mailbox 只 `requires` wallet，道具附件是联动，不装 bag 的工程不受影响。
+- shop 原写依赖配置表：安装器还不支持模块带配置表，商品目录是 Go 写的业务文件。
+- 登记点没有做成“安装器往别的模块的文件里追加一行”（三个模块的作者都提过这个想法）：那要改写归工程所有的业务文件。做成了“提供方留登记函数、接入方带一个自己的文件在 init 里登记”，安装器只负责在两个模块都在时把这个文件写进去。
 
-三份任务的说明在会话 scratch 的 `module-brief.md` 加各自的任务提示里；接手时可以让原 agent 续做，或按上表从 worktree 里的半成品重做。它们各自要过的验收见第 18 节末尾，mailbox 那一项另外要求“只装 mailbox 时道具附件仍被拒绝”。
+**没做的（按建议的先后）**
 
-**之后还要做的**
-
-1. 三项合入后：把场景数写进 `scripts/test-modules-generated.sh` 并重跑；`go test ./codegen/internal/roost -run 'TestDemo|TestModule'`；根包门禁与文档锚点。
-2. 文档补齐：[能力清单](../framework/CAPABILITIES.md)（quest / stamina / shop 的行、enter 与 mailbox 的行、“需求条目 → 能力”）、skill 的[按需求组合](../agent-skills/roost-genre/references/compose.md)（模块清单、联动文件、怎样在自己的功能里登记进入钩子）、KNOWN-LIMITS（新模块的边界）。目前只有 modules/README、命令参考与 CHANGELOG 跟上了。
-3. 仍然没有登记点的地方：wallet 的“消费成功”（每日任务“消费三次”现在没有东西推进它；要区分 `Apply` 命中去重回执与首次生效）、profile 的升级、enter 的首次发放（事务内）、往 leaderboard 提交分数的时机。
-4. 第 18 节清单里剩下的 room / matchroom / turn（要安装器先支持模块自带实体与定时器类型）与配方。
-5. game-demo 换用 profile / bag / leaderboard / mailbox：排在 mailbox 的道具附件之后。
-6. 用一个只凭 skill 的 agent 按一段不重合的需求再实测一遍（第二、三批模块与联动机制还没有被这样测过）。
+1. game-demo 换用 profile / bag / leaderboard / mailbox。前提已具备（道具附件可登记），但 demo 的背包、经验、邮件比模块多：装备栏、升级经 outbox 发奖励邮件、领奖账本与排行榜同一个准入。要逐块对照后决定是模块补功能还是 demo 覆盖模块文件，没有开始。
+2. 还缺的登记点：wallet 的“消费成功”（要区分 `Apply` 命中去重回执与首次生效）、profile 的升级、enter 的首次发放（事务内）、leaderboard 的提交时机。每个都要有一个真实用它的模块一起做。
+3. room / matchroom / turn：要安装器先支持模块自带实体与定时器类型分配。
+4. 配置表与模块配置（shop 的商品、quest 的任务表、stamina 的规则、bag 的道具表现在都是 Go 写的业务文件）；规则导出给客户端（stamina 的上限与周期、当前业务日）。
+5. 配方（`-recipe`）与 13 类玩法夹具的迁移。
+6. 用一个只凭 skill 的 agent 按一段不重合的需求再实测一遍：第二、三批模块与联动机制还没有被这样测过。
+7. 真实依赖下的验证：模块端点经 TCP 的整条链路、mailbox 经 NATS / Redis 的路径、game-demo 的 `make dev-run`。全部模块验收都是离线场景（替身提交器、进程内 mail 服务）。

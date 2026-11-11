@@ -17,7 +17,7 @@ import (
 // HandleMailboxClaim 把一封邮件的附件发给玩家：mail 服务的三步领取，中间夹一笔 Nest 事务。
 //
 //	ReserveClaim            mail 服务交出附件与 token；token 对（玩家，邮件）恒定，重试多少次都是同一个
-//	Sync_MailboxClaimReward Nest 锁住 Player 的一笔事务：金币到账，邮件 id 记进账本，两者同一次提交
+//	Sync_MailboxClaimReward Nest 锁住 Player 的一笔事务：附件到账，邮件 id 记进账本，两者同一次提交
 //	CommitClaim             mail 服务把邮件标成已领；回包丢了再确认一次，同一个 token 幂等
 //
 // 让领取恰好一次的是中间那一步。三次调用拼不成一个事务（邮件在另一个进程），所以窗口是真的：
@@ -28,18 +28,19 @@ import (
 // 每一种中途失败的去向：
 //
 //   - 预留被拒（邮件不存在、不是收件人、已过期、已领、正被占用）：原样答 mail 服务的码，什么都没动。
-//   - 附件这一版发不了（解不出、种类不认识）：CancelClaim 归还预留，答 mailbox_attachment。
-//     邮件保持未领，不会卡在“被占用”直到租约到期，也不会被标成已领。
-//   - 发放被拒（邮件在排队期间过期、余额溢出、玩家还没进入游戏、提交失败）：事务已回滚，账本里没有这一封，
-//     CancelClaim 归还预留，答对应的码。
-//   - 发放成功但 CommitClaim 失败：钱已到账，照常答成功并记 ERROR。邮件在 mail 服务那边仍是未领，
+//   - 附件这一版发不了（解不出、种类没登记、没通过种类自己的校验）：CancelClaim 归还预留，
+//     答 mailbox_attachment。邮件保持未领，不会卡在“被占用”直到租约到期，也不会被标成已领。
+//   - 发放被拒（种类没有登记发放方式、邮件在排队期间过期、余额溢出、背包放不下、玩家还没进入游戏、
+//     提交失败）：事务已回滚，账本里没有这一封，CancelClaim 归还预留，答对应的码
+//     （发放方式自己的拒绝原样透出，例如货币或背包模块的码）。
+//   - 发放成功但 CommitClaim 失败：奖励已到账，照常答成功并记 ERROR。邮件在 mail 服务那边仍是未领，
 //     玩家下次再领这一封时账本挡住重复发放、并把确认补上。
 //
 // 仍然开着的窗口：预留成功后、发放前进程崩溃——邮件被占到租约到期（缺省 30 秒），玩家等一会儿再领，
 // 什么都没丢；CommitClaim 丢失——账本挡的是重复发放，不是重复尝试，邮件在列表里会再显示一次可领。
 //
 // 上一次已经完整成功（已确认）而只是回包丢了的重发，预留会被 mail 服务以“已领取”拒绝，
-// 客户端收到那个码就当作已领，余额以自身视图为准。
+// 客户端收到那个码就当作已领，持有量以自身视图为准。
 func (controller *Controller) HandleMailboxClaim(context *playeraccess.Context, request *pb.MailboxClaimRequest) (*pb.MailboxClaimResponse, error) {
 	if context == nil || request == nil {
 		return nil, fmt.Errorf("mailbox_claim endpoint: context and request are required")
@@ -75,7 +76,7 @@ func (controller *Controller) HandleMailboxClaim(context *playeraccess.Context, 
 		return nil, fmt.Errorf("mailbox_claim endpoint: %w", err)
 	}
 	// 业务时间不在这里传：Nest 在发放执行时填，排队耽搁多久都按执行那一刻判断过期。
-	result, err := controller.rewards.Sync_MailboxClaimReward(ctx, entityID, request.MailID, attachment.Amount, claim.ExpiresAtUnix)
+	result, err := controller.rewards.Sync_MailboxClaimReward(ctx, entityID, request.MailID, string(attachment.Type), attachment.ID, attachment.Amount, claim.ExpiresAtUnix)
 	if err != nil {
 		// 发放没有发生（事务连同账本记录一起回滚），预留可以归还。即使这个错误其实是“等结果超时、
 		// 事务稍后仍然提交了”，归还也是安全的：下一次领取会在账本上认出这封邮件。
@@ -83,13 +84,16 @@ func (controller *Controller) HandleMailboxClaim(context *playeraccess.Context, 
 		return refuse(err, "grant")
 	}
 	if !result.Claimed {
-		// 这封邮件已经到过账：这一次是 CommitClaim 丢失之后的重试。下面把确认补上，回的是玩家现有的余额。
+		// 这封邮件已经到过账：这一次是 CommitClaim 丢失之后的重试。下面把确认补上，回的是玩家现有的持有量。
 		slog.Info("mailbox_claim: attachment was already granted; committing the mail only", "player_id", context.PlayerID, "mail_id", request.MailID)
 	}
 	if _, err := controller.mailer.CommitClaim(ctx, context.PlayerID, request.MailID, claim.Token); err != nil {
-		// 钱已到账，只是 mail 服务那边没记上。答成功（客户端确实拿到了），记 ERROR；
+		// 奖励已到账，只是 mail 服务那边没记上。答成功（客户端确实拿到了），记 ERROR；
 		// 不归还预留、不回滚发放：账本已经保证这封邮件不会再发第二次。
 		slog.Error("mailbox_claim: granted but not committed", "player_id", context.PlayerID, "mail_id", request.MailID, "err", err)
 	}
-	return &pb.MailboxClaimResponse{Coins: attachment.Amount, Balance: result.Balance}, nil
+	return &pb.MailboxClaimResponse{
+		AttachmentType: string(attachment.Type), AttachmentID: attachment.ID,
+		Amount: attachment.Amount, Held: result.Held,
+	}, nil
 }

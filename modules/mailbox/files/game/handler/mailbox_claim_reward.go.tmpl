@@ -7,9 +7,12 @@ import (
 	gamemailbox "{{MODULE}}/game/mailbox"
 )
 
-// handlerMailboxClaimReward 把一封邮件的金币附件发给玩家，每封邮件至多一次。不对客户端开放：
-// 由 MailboxClaim 端点在 mail 服务预留成功之后调用，mailID、amount、expiresAtUnix 都来自那次预留，
+// handlerMailboxClaimReward 把一封邮件的附件发给玩家，每封邮件至多一次。不对客户端开放：
+// 由 MailboxClaim 端点在 mail 服务预留成功之后调用，mailID、附件、expiresAtUnix 都来自那次预留，
 // 不来自客户端请求。
+//
+// 附件按（种类，号，数量）三个基本类型传：Nest 的参数不传结构体。attachmentType 是 gamemailbox.Type 的值
+// （"coins"、"item"……），attachmentID 是种类内部的号（金币为 0）。
 //
 // nowUnixMilli 由 Nest 填这条消息冻结的业务时间——是发放执行的时刻，不是端点排队之前读的时刻。
 // 过期准入必须用它：预留在过期前取得、排队到过期后才执行的请求，要按执行时刻判断。
@@ -17,6 +20,7 @@ import (
 // 规则本身见 MailboxComponent.Claim。
 //
 //roost:nest rollback=undo durability=strict
-func handlerMailboxClaimReward(target player.IMailboxEntity, mailID string, amount int64, expiresAtUnix int64, nowUnixMilli int64) (gamemailbox.ClaimResult, error) {
-	return target.MailboxComp().Claim(mailID, amount, expiresAtUnix, time.UnixMilli(nowUnixMilli).Unix())
+func handlerMailboxClaimReward(target player.IMailboxEntity, mailID string, attachmentType string, attachmentID int64, amount int64, expiresAtUnix int64, nowUnixMilli int64) (gamemailbox.ClaimResult, error) {
+	attachment := gamemailbox.Attachment{Type: gamemailbox.Type(attachmentType), ID: attachmentID, Amount: amount}
+	return target.MailboxComp().Claim(mailID, attachment, expiresAtUnix, time.UnixMilli(nowUnixMilli).Unix())
 }

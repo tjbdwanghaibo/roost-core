@@ -1,0 +1,183 @@
+package mailbox
+
+import (
+	"context"
+	"testing"
+
+	"{{MODULE}}/game/handler"
+	sender "{{MODULE}}/game/handler/syncsender"
+	gamemailbox "{{MODULE}}/game/mailbox"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+// mailbox 与 bag 的联动在端点上的规则：道具邮件走同样的三步领取，道具进背包。
+// 用的是邮件模块自己的 fixture（本包的 mailbox_test.go）：真实的 mail 服务（进程内存储）加真实的 Nest。
+
+// 告诉邮件模块自己的用例：这个工程里有 mailbox 与 bag 的联动，道具邮件领得了（见 mailbox_test.go）。
+func init() { mailboxTestBagGlue = true }
+
+// withMailboxBagItem 是 amount 个 itemID 号道具的附件字节。
+func withMailboxBagItem(t *testing.T, itemID, amount int64) []byte {
+	t.Helper()
+	raw, err := gamemailbox.Encode(gamemailbox.Item(itemID, amount))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// withMailboxBagCount 在业务 worker 上持实体锁读玩家 A 背包里 itemID 的数量与背包的种类数。
+func withMailboxBagCount(t *testing.T, f *mailboxEndpointFixture, itemID int64) (count int64, kinds int) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		count = f.player.BagComp().Count(itemID)
+		kinds = f.player.Dao().GetBag().ItemsLen()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return count, kinds
+}
+
+// 正常路径：列表里看到可领的道具邮件（种类、道具号、数量）→ 领取 → 道具进背包、mail 服务标成已领
+// → 列表不再可领；已完整领过的再领答“已领取”，不再发。同一个邮箱里的金币邮件照旧进钱包，
+// 两种邮件的回包是同样的四个字段。
+func TestWithMailboxBagEndpointClaimsAnItemMail(t *testing.T) {
+	f := newMailboxEndpointFixture(t)
+	itemMail := f.send(t, mailboxPlayerA, "a sword", withMailboxBagItem(t, 1001, 3))
+	coinMail := f.send(t, mailboxPlayerA, "pocket money", mailboxCoins(t, 100))
+
+	listed := f.listed(t, mailboxPlayerA, itemMail)
+	if !listed.HasAttachment || !listed.Claimable || listed.AttachmentType != "item" || listed.AttachmentID != 1001 || listed.Amount != 3 {
+		t.Fatalf("listed item mail = %+v, want claimable: 3 of item 1001", listed)
+	}
+
+	claimed := f.claim(t, mailboxPlayerA, itemMail)
+	if claimed.Code != 0 || claimed.AttachmentType != "item" || claimed.AttachmentID != 1001 || claimed.Amount != 3 || claimed.Held != 3 {
+		t.Fatalf("claim = %+v, want 3 of item 1001 and 3 held", claimed)
+	}
+	if count, kinds := withMailboxBagCount(t, f, 1001); count != 3 || kinds != 1 {
+		t.Fatalf("after the claim the bag holds %d of item 1001 in %d kinds, want 3 in 1", count, kinds)
+	}
+	if coins, ledger := f.wallet(t); coins != 0 || ledger != 1 {
+		t.Fatalf("after the item claim: coins=%d ledger=%d, want no coins and one record", coins, ledger)
+	}
+	if status := f.entry(t, mailboxPlayerA, itemMail).Status; status != svcmail.StatusClaimed {
+		t.Fatalf("the mail service holds the mail as %q, want claimed", status)
+	}
+	if after := f.listed(t, mailboxPlayerA, itemMail); after.Claimable || after.Status != "claimed" {
+		t.Fatalf("list after the claim = %+v", after)
+	}
+
+	again := f.claim(t, mailboxPlayerA, itemMail)
+	if again.Code != mailboxCodeAlreadyClaimed || again.Amount != 0 || again.Held != 0 {
+		t.Fatalf("second claim = %+v, want the mail service's already-claimed code", again)
+	}
+	if count, _ := withMailboxBagCount(t, f, 1001); count != 3 {
+		t.Fatalf("a second claim changed item 1001 to %d", count)
+	}
+
+	// 金币邮件：进钱包，不进背包。
+	coins := f.claim(t, mailboxPlayerA, coinMail)
+	if coins.Code != 0 || coins.AttachmentType != "coins" || coins.AttachmentID != 0 || coins.Amount != 100 || coins.Held != 100 {
+		t.Fatalf("coin claim = %+v, want 100 coins and a balance of 100", coins)
+	}
+	if count, kinds := withMailboxBagCount(t, f, 1001); count != 3 || kinds != 1 {
+		t.Fatalf("a coin mail changed the bag: %d of item 1001 in %d kinds", count, kinds)
+	}
+	if balance, ledger := f.wallet(t); balance != 100 || ledger != 2 {
+		t.Fatalf("after both claims: coins=%d ledger=%d, want 100 and two records", balance, ledger)
+	}
+}
+
+// 三步领取留下的窗口对道具同样成立：发放成功、CommitClaim 丢了。租约到期后重试再预留、再来发放一次——
+// 账本认出这封邮件，不发第二份，补上确认；回包里的持有量是道具现在的数量。
+func TestWithMailboxBagEndpointRetryAfterLostCommitGrantsOnce(t *testing.T) {
+	f := newMailboxEndpointFixture(t)
+	mailID := f.send(t, mailboxPlayerA, "a sword", withMailboxBagItem(t, 1001, 3))
+	otherID := f.send(t, mailboxPlayerA, "another sword", withMailboxBagItem(t, 1001, 4))
+
+	f.mail.loseCommits.Store(1)
+	first := f.claim(t, mailboxPlayerA, mailID)
+	if first.Code != 0 || first.Amount != 3 || first.Held != 3 {
+		t.Fatalf("claim with a lost commit = %+v, want success: the items are in the bag", first)
+	}
+	if status := f.entry(t, mailboxPlayerA, mailID).Status; status == svcmail.StatusClaimed {
+		t.Fatal("premise: the commit was not lost")
+	}
+	// 租约内重试：mail 服务说有一次领取在途，不发。
+	if held := f.claim(t, mailboxPlayerA, mailID); held.Code != mailboxCodeClaimHeld {
+		t.Fatalf("retry inside the lease = %+v, want the claim-held code", held)
+	}
+	// 20 分钟后先领另一封同样的道具，再重试第一封。
+	f.advance(20 * 60)
+	if other := f.claim(t, mailboxPlayerA, otherID); other.Code != 0 || other.Amount != 4 || other.Held != 7 {
+		t.Fatalf("claiming another mail = %+v, want 4 more and 7 held", other)
+	}
+	retry := f.claim(t, mailboxPlayerA, mailID)
+	if retry.Code != 0 || retry.AttachmentType != "item" || retry.AttachmentID != 1001 || retry.Amount != 3 || retry.Held != 7 {
+		t.Fatalf("retry after the lease = %+v, want this mail's 3 of item 1001 reported and 7 still held", retry)
+	}
+	if count, _ := withMailboxBagCount(t, f, 1001); count != 7 {
+		t.Fatalf("the retry granted again: item 1001 is at %d, want 7", count)
+	}
+	if _, ledger := f.wallet(t); ledger != 2 {
+		t.Fatalf("the ledger holds %d records, want two", ledger)
+	}
+	if status := f.entry(t, mailboxPlayerA, mailID).Status; status != svcmail.StatusClaimed {
+		t.Fatalf("the retry did not commit the mail: status %q", status)
+	}
+}
+
+// 背包放不下（这里是单种上限 999999）：事务回滚，端点归还预留、原样答背包的码，零写入，
+// 邮件没有被标成已领、列表里仍然可领；玩家丢掉一些之后不用等租约就能再领，这时才到账。
+func TestWithMailboxBagEndpointBagRefusalReleasesTheReservation(t *testing.T) {
+	f := newMailboxEndpointFixture(t)
+	handler.RegisterBagGrantNestHandlers()
+	handler.RegisterBagDiscardNestHandlers()
+	if _, err := sender.NewBagGrantSender(f.engine).Sync_BagGrant(context.Background(), f.player.ID(), 1001, 999998); err != nil {
+		t.Fatal(err)
+	}
+	mailID := f.send(t, mailboxPlayerA, "two swords", withMailboxBagItem(t, 1001, 2))
+
+	wantCode, _ := errcode.ClientError(apperrors.ErrBagStackFull)
+	refused := f.claim(t, mailboxPlayerA, mailID)
+	if refused.Code != wantCode || refused.AttachmentType != "" || refused.Amount != 0 || refused.Held != 0 {
+		t.Fatalf("claim into a full stack = %+v, want bag_stack_full (%d)", refused, wantCode)
+	}
+	if count, kinds := withMailboxBagCount(t, f, 1001); count != 999998 || kinds != 1 {
+		t.Fatalf("the refused grant wrote the bag: %d of item 1001 in %d kinds", count, kinds)
+	}
+	if coins, ledger := f.wallet(t); coins != 0 || ledger != 0 {
+		t.Fatalf("the refused grant wrote: coins=%d ledger=%d", coins, ledger)
+	}
+	if entry := f.entry(t, mailboxPlayerA, mailID); entry.ClaimDeadlineUnix != 0 || entry.Status == svcmail.StatusClaimed {
+		t.Fatalf("after the refused grant the mail is %+v, want released and unclaimed", entry)
+	}
+	if listed := f.listed(t, mailboxPlayerA, mailID); !listed.Claimable {
+		t.Fatalf("after the refused grant the mail is listed as %+v, want still claimable", listed)
+	}
+
+	// 丢掉 1 个，马上再领（没有等租约）：到账。
+	if _, err := sender.NewBagDiscardSender(f.engine).Sync_BagDiscard(context.Background(), f.player.ID(), &pb.BagDiscardRequest{ItemID: 1001, Count: 1}); err != nil {
+		t.Fatal(err)
+	}
+	claimed := f.claim(t, mailboxPlayerA, mailID)
+	if claimed.Code != 0 || claimed.Amount != 2 || claimed.Held != 999999 {
+		t.Fatalf("claim after making room = %+v, want 2 more and 999999 held", claimed)
+	}
+	if count, _ := withMailboxBagCount(t, f, 1001); count != 999999 {
+		t.Fatalf("item 1001 is at %d, want 999999", count)
+	}
+	if _, ledger := f.wallet(t); ledger != 1 {
+		t.Fatalf("the ledger holds %d records, want one", ledger)
+	}
+	if status := f.entry(t, mailboxPlayerA, mailID).Status; status != svcmail.StatusClaimed {
+		t.Fatalf("the mail service holds the mail as %q, want claimed", status)
+	}
+}

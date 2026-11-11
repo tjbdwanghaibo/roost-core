@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	player "{{MODULE}}/game/entities/player"
 	gamemailbox "{{MODULE}}/game/mailbox"
 	"{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
@@ -33,11 +34,12 @@ func (controller *Controller) HandleMailboxList(context *playeraccess.Context, r
 			Status: string(item.Status), HasAttachment: item.Envelope.HasAttachment(),
 			ExpiresAtUnix: item.Envelope.ExpiresAtUnix,
 		}
-		// 可领 = mail 服务说现在能预留，并且附件是这一版发得了的奖励。解不出来的附件领取时会被拒绝
-		// （见 HandleMailboxClaim），所以这里不告诉客户端它可领。
+		// 可领 = mail 服务说现在能预留，并且附件是这一版发得了的奖励：解得出来、种类登记了发放方式。
+		// 两者缺一，领取时都会被拒绝（见 HandleMailboxClaim），所以这里不告诉客户端它可领。
+		// 解得出来但没有发放方式的附件仍然填种类、号、数量：客户端可以照样展示它是什么。
 		if attachment, decodeErr := gamemailbox.Decode(item.Envelope.Attachment); decodeErr == nil {
-			entry.Coins = attachment.Amount
-			entry.Claimable = item.Claimable
+			entry.AttachmentType, entry.AttachmentID, entry.Amount = string(attachment.Type), attachment.ID, attachment.Amount
+			entry.Claimable = item.Claimable && player.MailboxGrantable(attachment.Type)
 		}
 		response.Mails = append(response.Mails, entry)
 	}
