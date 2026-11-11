@@ -45,6 +45,18 @@ func handlerStartGuildOp(target player.IBagEntity, op string, state []byte, coin
 	default:
 		return "", fmt.Errorf("guild saga: unknown operation %q", op)
 	}
+	// The Player steps (debit / grant and their compensations) are routed to
+	// the player's bound sid: the route is read from the state the endpoint
+	// encoded (guild.Encode refuses a state without one), so the saga's
+	// address and the payload the steps check can never disagree.
+	decoded, err := guild.Decode(state)
+	if err != nil {
+		return "", err
+	}
+	if decoded.SID <= 0 {
+		return "", fmt.Errorf("guild saga: player %d names no sid; the Player steps cannot be routed", decoded.PlayerID)
+	}
+	start.Route = saga.SidRoute(decoded.SID)
 	start.BusinessKey = businessKey
 	start.Data = state
 	start.DeadlineAt = time.Now().Add(guild.Deadline) //glsvet:system-clock a saga deadline is the coordinator's system time

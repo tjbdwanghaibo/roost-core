@@ -265,12 +265,11 @@ for name in enter own_state straight jitter diagonal attack_across_0 attack_acro
 	grep -q "^STEP $name ok" "$out/drill.log" || { echo "seamless: step $name did not pass" >&2; exit 1; }
 done
 # 普通场景不回归：demo 自己的机器人（cmd/loadtest，完整链路）在没有分区配置的 sid 1003 上跑一轮。
-# 阈值 40s 而不是 loadtest 缺省的 16s（维护者 2026-11-10 定，方案 A）：16s 按一两个游戏进程定（最慢的机器人 7～10s 的两倍）。
-# 本演练起 5 个游戏进程，共用一条 saga 步骤队列：步骤属于发起方的 sid，落到另外 4 个进程上会被各拒一次、
-# 按 nak_backoff_min 250ms 起倍增重投，第 5 次才到属主（约 +3.75s / 步），场景里约 6 个这样的步骤，
-# 合计多出约 22s，实测 p95 27.9～30.4s（见 docs/maintenance/evidence/perf-terrain-acceptance-20261110/README.md）。
-# 40s = 健康上沿 10s + 22.5s 路由重投，再留约 25% 余量；仍能抓住 saga 链路的真退化。
-if ! go run -mod=mod ./cmd/loadtest -endpoint 127.0.0.1:7003 -server-id 1003 -count 2 -max-p95 40 -account-nats "$nats_url" -nats-prefix cwdemo \
+# 阈值用 loadtest 缺省的 16s（按一两个游戏进程定：最慢的机器人 7～10s 的两倍）。本演练起 5 个游戏进程；
+# saga 中写 Player 的步骤按发起方的 sid 确切路由（维护者 2026-11-11 方案 ③），只投给属主进程的 durable，
+# 不再在另外 4 个进程上各拒一次、按 nak 退避重投（11-10 时每步约 +3.75s、合计约 22s，p95 27.9～30.4s，
+# 当时临时放宽到 40s）。路由后实测 p95 5.0s，见 docs/maintenance/evidence/saga-step-sid-route-20261111/README.md。
+if ! go run -mod=mod ./cmd/loadtest -endpoint 127.0.0.1:7003 -server-id 1003 -count 2 -account-nats "$nats_url" -nats-prefix cwdemo \
 	-report "$out/loadtest-1003.json" >"$out/loadtest-1003.log" 2>&1; then
 	echo "seamless: the demo robots failed on the ordinary scene (sid 1003); see $out/loadtest-1003.log" >&2
 	tail -20 "$out/loadtest-1003.log" >&2

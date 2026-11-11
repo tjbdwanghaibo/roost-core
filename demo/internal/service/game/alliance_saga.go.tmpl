@@ -17,10 +17,7 @@ import (
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/ownerroute"
 	"github.com/tjbdwanghaibo/roost-core/infra/network/servicerpc"
-	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
 )
 
@@ -54,18 +51,20 @@ import (
 // command is redelivered and the same request id is sent again, which the
 // service answers from its receipt if the first one did take effect.
 //
-// The Player steps run only on the player's bound sid: admission and handoff
-// exactly as for the gift saga (gift_saga.go admitPhase / handOver), over a
-// handoff module of their own.
+// The Player steps run only on the player's bound sid, by the same mechanism
+// as the gift saga's debit: they are routed steps (Routed: true in the three
+// definitions — roost add saga -routed), StartGuildOp names the player's sid
+// as the saga's route (saga.SidRoute(guild.State.SID)), the coordinator
+// delivers them to that sid's durable only, and admitBound there is the last
+// guard against a second writer (gift_saga.go admitBound, the same verdicts).
+// The guild steps are Mongo steps any game process may run: shared durables.
 const (
 	// guildSagaSteps names the guild step consumers: durables
-	// `game-alliance-<step>`, inbox `_game-alliance_step_inbox`.
+	// `game-alliance-<step>` (the Player steps' `game-alliance-<step>-<sid>`),
+	// inbox `_game-alliance_step_inbox`.
 	guildSagaSteps = "game-alliance"
 
-	guildHandoffModule  = "game.alliance.handoff"
-	guildHandoffMsgName = "alliance.step.handoff"
-
-	// The native steps, by the name a handoff carries.
+	// The native steps' registration names.
 	phaseFoundDebit     = "found-debit"
 	phaseFoundRefund    = "found-refund"
 	phaseDonateDebit    = "donate-debit"
@@ -73,18 +72,6 @@ const (
 	phaseRewardGrant    = "reward-grant"
 	phaseRewardTakeBack = "reward-take-back"
 )
-
-// guildStepHandoff is a guild saga's Player step that arrived at the wrong
-// game process, on its way to the player's bound sid (giftStepHandoff's twin).
-type guildStepHandoff struct {
-	PlayerID int64        `json:"player_id"`
-	SID      int32        `json:"sid"`
-	Phase    string       `json:"phase"`
-	Command  saga.Command `json:"command"`
-}
-
-// MsgName pins the wire name (see giftStepHandoff.MsgName).
-func (guildStepHandoff) MsgName() string { return guildHandoffMsgName }
 
 // guildAlliance is the part of the alliance RPC the guild steps call. The
 // process's is the generated client (rpcalliance.CapabilityName, assembled
@@ -100,8 +87,6 @@ type guildSteps struct {
 	nest      corenest.Client
 	alliances guildAlliance
 	owners    playerOwnership
-	runtime   *kitsaga.Steps
-	handoff   *ownerroute.Router[guildStepHandoff, int32, sidRoute]
 }
 
 // startGuildSagas registers the guild steps and starts their consumers, in
@@ -120,28 +105,11 @@ func startGuildSagas(ctx context.Context, registry *app.Registry) (*kitsaga.Step
 	if !ok || owners == nil {
 		return nil, fmt.Errorf("guild sagas: player ownership (%s) is not published yet; it must be registered before the step consumers subscribe", PlayerOwnerCapability)
 	}
-	busClient, ok := app.Lookup[bus.IBus](registry, mods.ModBus)
-	if !ok || busClient == nil {
-		return nil, fmt.Errorf("guild sagas: capability %q not found", mods.ModBus)
-	}
 	runtime, err := kitsaga.NewSteps(registry, guildSagaSteps)
 	if err != nil {
 		return nil, fmt.Errorf("guild sagas: %w", err)
 	}
-	steps := guildSteps{nest: nestClient, alliances: alliances, owners: owners, runtime: runtime}
-	steps.handoff = &ownerroute.Router[guildStepHandoff, int32, sidRoute]{
-		LocalSid:  owners.SID(),
-		Routes:    sidRoutes{},
-		Transport: ownerroute.NewBusTransport[guildStepHandoff](busClient, "{{GAME_SERVICE}}", guildHandoffModule),
-		Executor:  steps.runHandoff,
-		KeyOf:     func(cmd *guildStepHandoff) int32 { return cmd.SID },
-		ValidKey:  func(sid int32) bool { return sid > 0 },
-	}
-	// The receiving half first, so no peer can forward to a process that is
-	// not listening yet (the gift saga's order).
-	if err := ownerroute.RegisterBusHandler(busClient, guildHandoffModule, guildHandoffMsgName, steps.runHandoff); err != nil {
-		return nil, fmt.Errorf("guild sagas: register handoff handler: %w", err)
-	}
+	steps := guildSteps{nest: nestClient, alliances: alliances, owners: owners}
 	steps.register(runtime)
 	if err := runtime.Start(ctx); err != nil {
 		return nil, fmt.Errorf("guild sagas: %w", err)
@@ -150,11 +118,12 @@ func startGuildSagas(ctx context.Context, registry *app.Registry) (*kitsaga.Step
 }
 
 // register names the twelve steps against the generated topic constants.
-// The Player steps carry the admission check; the guild steps do not — any
-// game process may call the alliance service.
+// The Player steps are routed to the player's sid and carry the ownership
+// check; the guild steps are not — any game process may call the alliance
+// service.
 func (steps guildSteps) register(runtime *kitsaga.Steps) {
 	native := func(phase, topic string, body saga.NativeStepBody) {
-		runtime.Native(phase, topic, body, kitsaga.WithAdmit(steps.admitOwned(phase)))
+		runtime.Native(phase, topic, body, kitsaga.WithSidRoute(), kitsaga.WithAdmit(steps.admitBound))
 	}
 	native(phaseFoundDebit, alliancefound.TopicDebit, steps.debitCoins)
 	native(phaseFoundRefund, alliancefound.TopicDebitCompensation, steps.refundCoins)
@@ -345,70 +314,33 @@ func guildTarget(command saga.Command) (guild.State, int64, error) {
 	return state, playerID, nil
 }
 
-// --- admission and handoff of the Player steps (gift_saga.go's rules) ---
+// --- the Player steps' ownership check (gift_saga.go admitBound's rules) ---
 
-func (steps guildSteps) admitOwned(phase string) func(context.Context, saga.Command) error {
-	return func(ctx context.Context, command saga.Command) error {
-		if steps.owners == nil {
-			return nil
-		}
-		state, err := guild.Decode(command.Payload)
-		if err != nil {
-			// Admission answers "whose work is this", not "is it valid": a
-			// payload no process can read is admitted, and the step refuses it.
-			slog.Warn("guild saga: admitting a step whose payload is unreadable", "command", command.ID, "err", err)
-			return nil
-		}
-		if state.SID <= 0 {
-			return fmt.Errorf("guild saga: step %s for player %d names no sid; it cannot be routed", command.ID, state.PlayerID)
-		}
-		local, err := steps.owners.AdmitBound(state.PlayerID, state.SID)
-		if !local {
-			steps.handOver(ctx, phase, state, command)
-			return fmt.Errorf("guild saga: player %d is bound to sid %d, not this process; leaving the step for it", state.PlayerID, state.SID)
-		}
-		if err != nil {
-			return fmt.Errorf("guild saga: player %d: %w", state.PlayerID, err)
-		}
+// admitBound is the last guard on a routed Player step: a payload without a
+// sid is rejected (logged; not migrated, maintainer decision 2026-11-11), a
+// player bound to another sid is bounced back to the coordinator with his
+// binding as the new route, a copy being unloaded is retried on this sid.
+func (steps guildSteps) admitBound(_ context.Context, command saga.Command) error {
+	if steps.owners == nil {
 		return nil
 	}
-}
-
-// handOver routes a Player step to the player's bound sid; best effort, the
-// redelivery is the safety net.
-func (steps guildSteps) handOver(ctx context.Context, phase string, state guild.State, command saga.Command) {
-	if steps.handoff == nil {
-		return
-	}
-	if err := steps.handoff.Route(ctx, &guildStepHandoff{PlayerID: state.PlayerID, SID: state.SID, Phase: phase, Command: command}); err != nil {
-		slog.Warn("guild saga: step not handed over; redelivery will find the player's sid", "player_id", state.PlayerID, "sid", state.SID, "phase", phase, "err", err)
-	}
-}
-
-// runHandoff runs a Player step another process handed over: envelope and
-// payload must agree, the framework checks phase against topic, and the
-// player must be served here — otherwise nothing runs and the holder of the
-// message keeps redelivering.
-func (steps guildSteps) runHandoff(ctx context.Context, cmd *guildStepHandoff) error {
-	if cmd == nil {
-		return fmt.Errorf("guild saga: empty handoff")
-	}
-	state, err := guild.Decode(cmd.Command.Payload)
+	state, err := guild.Decode(command.Payload)
 	if err != nil {
-		return fmt.Errorf("guild saga: handoff payload: %w", err)
+		// Admission answers "whose work is this", not "is it valid": a
+		// payload no process can read is admitted, and the step refuses it.
+		slog.Warn("guild saga: admitting a step whose payload is unreadable", "command", command.ID, "err", err)
+		return nil
 	}
-	if state.PlayerID != cmd.PlayerID || state.SID != cmd.SID {
-		return fmt.Errorf("guild saga: handoff for player %d on sid %d carries a step for player %d on sid %d", cmd.PlayerID, cmd.SID, state.PlayerID, state.SID)
+	if state.SID <= 0 {
+		slog.Error("guild saga: rejecting a step whose payload names no sid", "player_id", state.PlayerID, "command", command.ID, "saga_id", command.SagaID)
+		return saga.RejectStep(fmt.Sprintf("guild step %s for player %d names no sid; it cannot be routed", command.ID, state.PlayerID))
 	}
-	err = steps.runtime.RunHandedOver(ctx, cmd.Phase, cmd.Command, func(context.Context, saga.Command) bool {
-		if steps.owners == nil {
-			return true
-		}
-		local, err := steps.owners.AdmitBound(state.PlayerID, state.SID)
-		return local && err == nil
-	})
+	local, err := steps.owners.AdmitBound(state.PlayerID, state.SID)
+	if !local {
+		return saga.BounceStep(saga.SidRoute(state.SID), fmt.Sprintf("player %d is bound to sid %d", state.PlayerID, state.SID))
+	}
 	if err != nil {
-		return fmt.Errorf("guild saga: handoff %s: %w", cmd.Phase, err)
+		return fmt.Errorf("guild saga: player %d: %w", state.PlayerID, err)
 	}
 	return nil
 }

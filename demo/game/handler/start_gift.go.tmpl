@@ -28,9 +28,11 @@ import (
 //
 // fromSID is the sid of the process running this transaction — the sender's
 // bound sid, because a player is only served on the sid their role is bound
-// to. The debit and its refund change the sender's Player, so the step
-// consumers route them by it (gift_saga.go); a gift that names no sid could
-// not be routed, and Encode refuses it.
+// to. The debit and its refund change the sender's Player, so the saga is
+// routed by it: StartRequest.Route = saga.SidRoute(fromSID), and the
+// coordinator delivers those two steps to that sid's consumers only
+// (gift_saga.go). A gift that names no sid could not be routed, and Encode
+// refuses it; the coordinator refuses a routed saga without a route too.
 //
 //roost:nest rollback=undo durability=strict
 func handlerStartGift(target player.IBagEntity, fromPlayerID int64, fromSID int32, toPlayerID int64, itemID int64, count int32, sagaID string) (string, error) {
@@ -47,6 +49,7 @@ func handlerStartGift(target player.IBagEntity, fromPlayerID int64, fromSID int3
 	if err := saga.EmitStart(saga.StartRequest{
 		Type: giftitem.Type, DefinitionVersion: giftitem.Version, BusinessKey: sagaID,
 		Data: state, DeadlineAt: time.Now().Add(gift.Deadline), //glsvet:system-clock a saga deadline is the coordinator's system time
+		Route: saga.SidRoute(fromSID),
 	}); err != nil {
 		return "", err
 	}

@@ -41,11 +41,14 @@ func busChecklist(from side) []BusItem {
 		},
 		{
 			Name: "saga stream", Persistent: true,
-			Where:          fmt.Sprintf("JetStream streams %s_G0..G%d (subjects %s.<partition>.>); step consumers are shared durables (game-demo: game-gift-<step>)", from.saga.Layout.Stream, from.saga.Layout.Groups-1, from.saga.Layout.Prefix),
+			Where: fmt.Sprintf("JetStream streams %s_G0..G%d (subjects %s.<partition>.>); Mongo step consumers are shared durables (game-demo: game-gift-deliver), routed steps have one durable per sid (game-demo: game-gift-debit-%s, subjects %s.*.ev.to.%s.<topic>)", from.saga.Layout.Stream, from.saga.Layout.Groups-1, from.saga.Layout.Prefix, sid, from.saga.Layout.Prefix, sid),
+			// 路由步骤的命令只投给 A 的 durable，但“全部 saga 终态”（下面的检查）之后不会再有路由到 A 的命令：没有会丢的消息，
+			// 所以不按“发往 A 的持久消息”要求人工确认；A 留下的路由 durable 没有待投消息，清理守卫按流末计它的 floor，不挡清理，
+			// 删掉只是回收资源。
 			AddressedToSID: false,
-			AfterMerge:     "a step command can carry the sender's bound sid in its payload (game-demo gift.State.FromSID) and is admitted only by that sid's process, which no longer exists",
-			Action:         "every saga must be terminal before the merge (checked: saga:<stream>)",
-			Source:         "demo/internal/service/game/gift_saga.go.tmpl (admitOwned, giftHandoffRouter)",
+			AfterMerge:     "a routed step (game-demo: the gift's debit and refund, the guild sagas' Player steps) is delivered only to the sid the saga was started with (saga.StartRequest.Route): a saga still routed to A would never advance past its timeouts; once every saga is terminal A's routed durables are idle leftovers",
+			Action:         fmt.Sprintf("every saga must be terminal before the merge (checked: saga:<stream>); after the merge delete A's routed durables on every saga stream: nats consumer ls %s_G<g> | grep -- '-%s$' ; nats consumer rm %s_G<g> <name>", from.saga.Layout.Stream, sid, from.saga.Layout.Stream),
+			Source:         "framework/saga/step_consumer.go (StepConsumerConfig.Route); demo/internal/service/game/gift_saga.go.tmpl (register, admitBound)",
 		},
 	}
 	syncbus := BusItem{

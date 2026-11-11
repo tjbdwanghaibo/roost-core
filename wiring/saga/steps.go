@@ -24,7 +24,8 @@ import (
 //   - 从 Registry 取 JetStream（命令消费、结果发布、准入信号桶）与 Mongo（Mongo 步骤）；按 saga.* 的声明取分区布局、回执保留期、
 //     saga 库与准入参数（ParticipantSettings）；
 //   - 每个步骤一个 JetStream durable（`<group>-<name>`，每条 saga 流上同名，过滤全部分区的这个主题），同一服务的全部副本共用；
-//     执行后把结果直接发回命令所属分区的 in.res，PubAck 之后才 ack 命令；
+//     按 sid 路由的步骤（WithSidRoute，定义里 Step.Routed）每个 sid 一个 durable（`<group>-<name>-<sid>`，只过滤投给本 sid 的
+//     命令），只有本 sid 的进程绑定它；执行后把结果直接发回命令所属分区的 in.res，PubAck 之后才 ack 命令；
 //   - 原生步骤的回执在被改的实体里（Begin 查、Complete 写，roost add saga -native 生成回执字段）；Mongo 步骤的回执在
 //     saga 库的 `_<group>_step_inbox`（按操作一个文档，TTL = saga.receipt_retention）；
 //   - 有原生步骤且准入开启时，每 saga.admission.signal_interval 把本进程 DataEngine 投影积压（WAL 未投影记录数）发到准入信号桶
@@ -35,8 +36,10 @@ import (
 // 配置沿用 saga.* 与 dataengine.*，没有新键。Steps 不是 App Mod：步骤体常要用服务 Init 里才发布的能力（例如玩家驻留表），
 // 而 Mod 在服务 Init 之前启动；服务在 Init 里 Start、在 Shutdown 里 Drain。
 //
-// 按 sid / 分片决定“这条命令归不归本进程”属于业务的拓扑，框架不替业务猜：WithAdmit 在执行之前问业务，拒绝时消息 nak 给别的
-// 副本；业务若要把命令直接转交给归属进程，由接收方调用 RunHandedOver。
+// 投递地址：只能在某个 sid 上执行的步骤（改的是绑定在那个 sid 上的实体）用 WithSidRoute，发起方在启动时把属主 sid 写进
+// StartRequest.Route（coresaga.SidRoute），协调器把命令直接投给那个 sid 的 durable，别的进程收不到（维护者 2026-11-11 方案 ③）。
+// “这个实体此刻是不是本进程的”仍由业务回答：WithAdmit 在执行之前问，属主核对失败时退回发送端（coresaga.BounceStep）或拒收
+// （coresaga.RejectStep），见 coresaga.StepConsumerConfig.Admit。
 type Steps struct {
 	registry *app.Registry
 	group    string
@@ -76,17 +79,21 @@ func (l *loadSignal) stop(ctx context.Context, remove bool) error {
 	return l.publisher.Remove(ctx)
 }
 
-// ErrStepsNotStarted 表示 Steps 还没有 Start，RunHandedOver 无法执行（回执保留期等参数在 Start 时才读）。
-var ErrStepsNotStarted = errors.New("saga steps: not started")
-
 // StepOption 调整一个步骤消费者。
 type StepOption func(*registeredStep)
 
-// WithAdmit 设置步骤的准入判定（coresaga.StepConsumerConfig.Admit）：在执行之前询问，非 nil 错误时这次投递 nak、按退避
-// 重新提供给任意副本。必须廉价、无副作用，且不能处处拒绝（没有进程准入的命令会重投到 MaxDeliver）。
-// 不设置表示全部准入（单进程部署）。
+// WithAdmit 设置步骤的准入判定（coresaga.StepConsumerConfig.Admit）：在执行之前询问；退回（coresaga.BounceStep）与拒收
+// （coresaga.RejectStep）把结论发回协调器后 ack，其他错误 nak、按退避重投给同一个 durable。必须廉价、无副作用，且不能处处
+// 返回普通错误（没有进程准入的命令会重投到 MaxDeliver）。不设置表示全部准入（单进程部署）。
 func WithAdmit(admit func(context.Context, coresaga.Command) error) StepOption {
 	return func(step *registeredStep) { step.admit = admit }
+}
+
+// WithSidRoute 让步骤按 sid 确切投递：这一步在定义里必须是路由步骤（coresaga.Step.Routed），发起方在 StartRequest.Route 写
+// coresaga.SidRoute(属主 sid)。消费者只过滤投给本进程 sid（saga Mod 的 sid 配置）的命令，durable 名是 `<group>-<name>-<sid>`。
+// 同一进程里有 saga 协调器时，Start 会核对定义：一边路由一边不路由的命令永远到不了消费者，启动就报错。
+func WithSidRoute() StepOption {
+	return func(step *registeredStep) { step.sidRouted = true }
 }
 
 type registeredStep struct {
@@ -96,6 +103,8 @@ type registeredStep struct {
 	native  coresaga.NativeStepBody
 	mongo   coresaga.StepHandler
 	admit   func(context.Context, coresaga.Command) error
+	// sidRouted 见 WithSidRoute。
+	sidRouted bool
 }
 
 var stepNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -200,9 +209,16 @@ func (s *Steps) Start(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := s.checkRoutes(participant); err != nil {
+		_ = load.stop(context.WithoutCancel(ctx), true)
+		return err
+	}
 	subs := make([]fnats.IJetStreamSubscription, 0, len(s.steps)*participant.Layout.Groups)
 	for _, step := range s.steps {
 		config := coresaga.StepConsumerConfig{Durable: step.durable, Topic: step.topic, Admit: step.countedAdmit(), ReceiptRetention: participant.ReceiptRetention}
+		if step.sidRouted {
+			config.Route = coresaga.SidRoute(participant.Sid)
+		}
 		var stepSubs []fnats.IJetStreamSubscription
 		if step.native != nil {
 			stepSubs, err = coresaga.SubscribeNativeStep(ctx, jetstream, participant.Layout, config, step.countedNative())
@@ -230,6 +246,33 @@ func (s *Steps) Start(ctx context.Context) error {
 	s.participant, s.subs, s.load, s.started = participant, subs, load, true
 	return nil
 }
+
+// checkRoutes 核对按 sid 路由的步骤：本进程要有 sid；同一进程里有 saga 协调器（saga Mod 已登记 Engine）时，消费者的路由与
+// 定义里这个主题的 Step.Routed 必须一致——定义路由、消费者不路由（或反过来）时，命令投到没有人过滤的 subject 上，只能等超时。
+// 协调器不在本进程（拆分部署）时只能靠两边用同一份生成的定义，这里不查。
+func (s *Steps) checkRoutes(participant Participant) error {
+	engine, _ := app.Lookup[routedTopics](s.registry, mods.ModSaga)
+	for _, step := range s.steps {
+		if step.sidRouted && participant.Sid <= 0 {
+			return fmt.Errorf("saga steps %s: step %q routes by sid but this process has no sid (sid = %d)", s.group, step.name, participant.Sid)
+		}
+		if engine == nil {
+			continue
+		}
+		if routed, known := engine.RoutedTopic(step.topic); known && routed != step.sidRouted {
+			return fmt.Errorf("saga steps %s: step %q on topic %q: the saga definition says routed=%t but the consumer says routed=%t (WithSidRoute); commands would never reach it",
+				s.group, step.name, step.topic, routed, step.sidRouted)
+		}
+	}
+	return nil
+}
+
+// routedTopics 是 checkRoutes 向协调器问的那一个问题（*coresaga.Engine 实现它）。
+type routedTopics interface {
+	RoutedTopic(topic string) (routed, known bool)
+}
+
+var _ routedTopics = (*coresaga.Engine)(nil)
 
 // transactionLifetimeParameter 是 Mongo 服务端回收打开事务的时限参数（秒）。
 const transactionLifetimeParameter = "transactionLifetimeLimitSeconds"
@@ -357,54 +400,7 @@ func (s *Steps) Stop() {
 	_ = load.stop(ctx, false)
 }
 
-// RunHandedOver 在本进程执行一条被转交过来的原生步骤命令（另一个进程的 WithAdmit 判定“不归它”后经业务自己的通道
-// 送来；按 sid / 分片转交是业务的拓扑）。检查依次是：
-//
-//  1. name 是登记过的原生步骤，命令的主题就是该步骤订阅的主题——转交信封说是 A、命令其实是 B（例如扣款信封包着退款
-//     命令）会在执行任何东西之前被拒绝，返回错误；
-//  2. 命令合法、未过截止（过了返回 nil，协调器按超时处理）；
-//  3. accept 复核归属（不信任发送方的结论）：false 表示不在本进程执行，安静返回 nil，转交方的重投兜底；nil 表示全部接受；
-//  4. 运行步骤体（coresaga.RunNativeStep）：与消费者的互斥由实体锁与实体里的回执保证——谁先提交谁生效，另一条读到回执回放。
-//     这里不发布结果、不 ack：原消息仍在转交方手里，它的重投读到回执后把结果发回协调器；转交丢失只多耗时间，不丢步骤。
-//
-// 未 Start 时第 4 步返回 ErrStepsNotStarted。
-func (s *Steps) RunHandedOver(ctx context.Context, name string, command coresaga.Command, accept func(context.Context, coresaga.Command) bool) error {
-	if s == nil {
-		return ErrStepsNotStarted
-	}
-	s.mu.Lock()
-	step, started, retention := s.byName[name], s.started, s.participant.ReceiptRetention
-	s.mu.Unlock()
-	switch {
-	case step == nil:
-		return fmt.Errorf("saga steps %s: handed-over step %q is not registered", s.group, name)
-	case step.native == nil:
-		return fmt.Errorf("saga steps %s: handed-over step %q is not a native step", s.group, name)
-	case command.Topic != step.topic:
-		return fmt.Errorf("saga steps %s: handed-over step %q carries a command published on %q, want %q", s.group, name, command.Topic, step.topic)
-	}
-	if err := command.Validate(); err != nil {
-		return fmt.Errorf("saga steps %s: handed-over command: %w", s.group, err)
-	}
-	if !time.Now().Before(command.DeadlineAt) {
-		return nil
-	}
-	if accept != nil && !accept(ctx, command) {
-		return nil
-	}
-	if !started {
-		return ErrStepsNotStarted
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	processCtx, cancel := context.WithDeadline(ctx, command.DeadlineAt)
-	defer cancel()
-	_, err := coresaga.RunNativeStep(processCtx, command, retention, step.countedNative())
-	return err
-}
-
-// countedAdmit 记下准入拒绝（转交与回压在日志之外唯一可见的地方）。
+// countedAdmit 记下准入没有放行的投递（重投、退回与拒收都算；退回与拒收另有 saga.step.bounced_total / rejected_total）。
 func (step *registeredStep) countedAdmit() func(context.Context, coresaga.Command) error {
 	if step.admit == nil {
 		return nil

@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+- **新增 / 行为变化 / 协议 / 格式**（framework/saga + wiring/saga + codegen + game-demo）：**saga 步骤按 sid 确切路由**（维护者 2026-11-11 定方案 ③：“理想情况是有确切的路由，而不是多个争抢”“改做3吧”；[方案](docs/maintenance/FEATURE-2026-11-11-saga-step-sid-route.md)、[契约](docs/framework/SAGA.md#按-sid-确切路由路由步骤维护者-2026-11-11-方案-③)、[证据](docs/maintenance/evidence/saga-step-sid-route-20261111/README.md)）。此前同一服务的全部 game 进程共用一个 durable 消费原生步骤，非属主拒绝（nak）后结果要等原消息按 250ms 倍增的退避轮到属主，5 进程时每步约多 3.75s。
+  - 框架：定义里 `Step.Routed`，启动时 `StartRequest.Route`（`saga.SidRoute(属主 sid)`；有路由步骤而没有 Route 的启动被拒绝，`ErrInvalidRecord`）。协调器把路由步骤的命令发到 `<prefix>.<k>.ev.to.<route>.<topic>`（仍在分区的 `<prefix>.<k>.>` 里，流的 subjects 不变），`Command.Route` 带地址；参与方 `kitsaga.WithSidRoute()`（框架层 `StepConsumerConfig.Route`）的 durable 是 `<group>-<step>-<sid>`、只过滤投给本 sid 的命令，非属主进程收不到。`Steps.Start` 核对本进程有 sid、同进程有协调器时与定义的路由一致（`Engine.RoutedTopic`），不一致拒绝启动。准入新增两种结论：`saga.BounceStep(route, reason)` 退回协调器（不执行、零写入、发回可重试失败并可带新地址，协调器消耗一次尝试、按退避改投；指标 `saga.step.bounced_total`），`saga.RejectStep(reason)` 拒收（发回不可重试失败；`saga.step.rejected_total`）。删除 `Steps.RunHandedOver` 与 `ErrStepsNotStarted`。
+  - codegen：`roost add saga ... -routed <step>`（定义 `Routed: true`，`EmitStart` / `Start` 多一个 `route` 参数，生成的登记加 `WithSidRoute`）。
+  - game-demo：赠礼扣款 / 退款与公会玩家步骤（建盟、捐献的扣费，领奖的发放及各自的补偿）改为路由步骤，`StartGift` / `StartGuildOp` 写 Route；删除总线交接（`giftStepHandoff`、`guildStepHandoff`、`runHandoff`、`handOver`、`admitOwned`）；属主核对 `admitBound` 保留：不绑定本服 → 退回并指明绑定的 sid，载荷没有 sid → 拒收并记 ERROR，副本卸载中 → 在本服稍后重试。`gift_handoff_test.go` 换成 `gift_route_test.go`。
+  - 回归 `TestARoutedStepIsDeliveredOnlyToTheOwnerSidsConsumer`（修前红：`non-owner sids [1000 1001] received the step; the result came after 750ms of nak backoff over 3 deliveries`），另有退回改投、持续退回走补偿、属主停机、没有 Route 拒绝的用例；五处框架变异与两处生成工程变异各自变红。
+  - **JetStream 资源**：每个路由步骤（每个方向）的 durable 数从 1 变成部署的 sid 数（demo 每个 sid 每条 saga 流 8 个）。
+  - **升级要求**（未部署，不兼容）：saga **WireVersion 3 → 4**（记录 / 命令 / 启动意图 / 退回结果多了 `Route`，摘要含 Route）：先让全部 saga 到终态，**先停旧进程（协调器与步骤进程）再起新进程**，删 saga 流与快照 / 准入桶；改成路由的步骤留下的旧共享 durable（demo：`game-gift-debit`、`game-gift-debit-undo`、`game-alliance-*-debit` 等）要删掉。业务工程重新生成（定义多了 `Routed`、有路由步骤的 `EmitStart` / `Start` 签名变了）。没有路由 sid 的旧载荷直接拒绝，不迁移。
+  - 剩下的边界：一笔 saga 只有一个路由地址；退回消耗一次尝试；game-demo 没有单个玩家换服的状态（待确认，见方案 §7）。
+- **测试变化**（scripts）：**普通无缝演练最后一步的机器人阈值恢复 loadtest 缺省 p95 16s**（撤掉 v1.43.0 的 `-max-p95 40`）。saga 步骤按 sid 路由后不再有非属主进程拒绝、nak 退避重投的约 22s；本机私有真实依赖复跑 14 步 ok，最后一步 p95 5.00s（11-10 为 27.85s），[证据](docs/maintenance/evidence/saga-step-sid-route-20261111/README.md#真实依赖演练)。
+
 - **版本要求**（codegen）：**生成物要求的最低 core 抬到 v1.43.0**（manifest `minimumVersions` 与 framework-compat 的 minimum lane）。v1.43.0 的生成物用帧协议 2 / 信封 v3、`entitysync.Decoder` 与 `entity.MergeSyncViewPriorities`，旧 core 线格式不兼容、缺这些 API；生成器缺省本来就取最新版。没有在发版时用 `--min-core`：project sync 类测试会联网解析最低版本，tag 未推时 pretag 必然失败。
 
 ## [v1.43.0] - 2026-11-10

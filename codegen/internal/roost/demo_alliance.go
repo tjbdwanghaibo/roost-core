@@ -101,9 +101,9 @@ func demoAllianceSteps(gameService string) []demoScaffoldStep {
 		// The game side (phase 4): the guild is the alliance service's.
 		{write: "game/entities/alliance/mirror.go", why: "the alliance mirror DTO a game server reads (//roost:mirror), in the shape a write answers with"},
 		{write: "game/guild/guild.go", why: "the game's side: the price of a guild, the guild sagas' payload, the service's four answers as client codes"},
-		{add: &AddOptions{Kind: "saga", Name: "AllianceFound", Service: gameService, Steps: []string{"debit", "found"}}, why: "found a guild: the fee from the Bag (native), then Found on the alliance service (Mongo step)"},
-		{add: &AddOptions{Kind: "saga", Name: "AllianceDonate", Service: gameService, Steps: []string{"debit", "donate"}}, why: "donate: the coins from the Bag (native), then Donate (Mongo step)"},
-		{add: &AddOptions{Kind: "saga", Name: "AllianceReward", Service: gameService, Steps: []string{"claim", "grant"}}, why: "the guild reward: ClaimReward on the guard (Mongo step), then the grant (native)"},
+		{add: &AddOptions{Kind: "saga", Name: "AllianceFound", Service: gameService, Steps: []string{"debit", "found"}, Routed: []string{"debit"}}, why: "found a guild: the fee from the Bag (native), then Found on the alliance service (Mongo step)"},
+		{add: &AddOptions{Kind: "saga", Name: "AllianceDonate", Service: gameService, Steps: []string{"debit", "donate"}, Routed: []string{"debit"}}, why: "donate: the coins from the Bag (native), then Donate (Mongo step)"},
+		{add: &AddOptions{Kind: "saga", Name: "AllianceReward", Service: gameService, Steps: []string{"claim", "grant"}, Routed: []string{"grant"}}, why: "the guild reward: ClaimReward on the guard (Mongo step), then the grant (native)"},
 		{write: "saga/alliance_found/steps.go", why: "registration lives with the service (alliance_saga.go): bound-sid admission and the alliance RPC"},
 		{write: "saga/alliance_donate/steps.go", why: "registration lives with the service (alliance_saga.go)"},
 		{write: "saga/alliance_reward/steps.go", why: "registration lives with the service (alliance_saga.go)"},

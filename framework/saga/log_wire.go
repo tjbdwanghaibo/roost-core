@@ -12,12 +12,13 @@ import (
 
 // log_wire.go 是 JetStream 协调器的线格式（WireVersion 3，设计 §4.2）：分区事件、三类输入、判定回复与查询、快照清单与正文。
 // 一律 JSON；解码按版本精确匹配，不兼容更早的版本（线上未部署，升级需清空，见 CHANGELOG）。3 相对 2：记录多了必填的
-// Lifecycle，操作键改为 "<ID>:<生命周期>:<方向>:<步骤>"（RV-20261030-01）。坏输入（解码失败、版本不对、
+// Lifecycle，操作键改为 "<ID>:<生命周期>:<方向>:<步骤>"（RV-20261030-01）。4 相对 3：路由步骤（记录、命令、启动意图与退回结果多了
+// Route，启动摘要与回执摘要含 Route），路由步骤的命令事件改发 <prefix>.<k>.ev.to.<route>.<topic>（2026-11-11 按 sid 确切路由）。坏输入（解码失败、版本不对、
 // 内容校验不过）由分区计数并跳过，输入水位照常前进（日志里的输入不能 Term）；坏事件与坏快照说明权威日志本身不可信，分区不启动。
 
 // WireVersion 是 saga 全部线上消息的格式版本：分区事件、输入、快照清单、准入信号与 Nest 启动 effect。不兼容旧版本（1 是已删除
-// 的 Redis 协调器与它的信封，2 是没有生命周期标识的记录与操作键），解码按版本精确匹配。
-const WireVersion uint16 = 3
+// 的 Redis 协调器与它的信封，2 是没有生命周期标识的记录与操作键，3 是没有路由键的记录与命令），解码按版本精确匹配。
+const WireVersion uint16 = 4
 
 // replyHeader 是启动 / 运维意图上的业务头：所有者把判定经核心 NATS 发到这个 subject（只给这一次尝试，选项 R-A）。
 const replyHeader = "Roost-Saga-Reply"
@@ -86,7 +87,8 @@ func receiptDigest(c Completion) string {
 		Retryable bool   `json:"retryable"`
 		Data      []byte `json:"data"`
 		Error     string `json:"error"`
-	}{c.CommandID, c.IdempotencyKey, c.SagaID, c.Success, c.Retryable, c.Data, c.Error}
+		Route     string `json:"route,omitempty"`
+	}{c.CommandID, c.IdempotencyKey, c.SagaID, c.Success, c.Retryable, c.Data, c.Error, c.Route}
 	raw, _ := json.Marshal(stable) // 只有字符串、布尔与字节切片，不会失败
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])

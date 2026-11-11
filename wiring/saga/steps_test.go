@@ -217,47 +217,82 @@ func TestStepsDrainWaitsForInFlightDeliveriesWithinTheContext(t *testing.T) {
 	}
 }
 
-// 转交接收方的检查在取执行权之前：未登记的名字、不是原生步骤、命令主题与该步骤订阅的主题不一致（扣款信封包着
-// 退款命令）都拒绝，而且在归属复核之前（不为拒绝的转交把玩家接入本进程）；未 Start 时报 ErrStepsNotStarted。
-func TestStepsRunHandedOverChecksTheStepBeforeTheClaim(t *testing.T) {
-	steps, _ := NewSteps(app.NewRegistry(sagaTestConfig()), "game-gift")
-	steps.Native("debit", "gift.debit", nativeBody)
+// 按 sid 路由的步骤（WithSidRoute）：每个 sid 一个 durable `<group>-<name>-<sid>`，只过滤投给本 sid 的命令
+// （roost.saga.*.ev.to.<sid>.<topic>）；不路由的步骤照旧共用 `<group>-<name>`。本进程没有 sid 时拒绝启动。
+func TestStepsRouteSidBoundStepsToThisSidsDurable(t *testing.T) {
+	js := &stepsJetStream{}
+	registry := stepsRegistry(t, js)
+	registry.Config().Set("sid", 1002)
+	steps, _ := NewSteps(registry, "game-gift")
+	steps.Native("debit", "gift.debit", nativeBody, WithSidRoute())
 	steps.Mongo("deliver", "gift.deliver", func(context.Context, coresaga.Command) (coresaga.Completion, error) {
-		return coresaga.Completion{}, nil
+		return coresaga.Completion{Success: true}, nil
 	})
+	if err := steps.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := []struct{ durable, subject string }{{"game-gift-debit-1002", "roost.saga.*.ev.to.1002.gift.debit"}, {"game-gift-deliver", "roost.saga.*.ev.cmd.gift.deliver"}}
+	if len(js.configs) != len(want) {
+		t.Fatalf("subscribed %d consumers, want %d", len(js.configs), len(want))
+	}
+	for i, w := range want {
+		if got := js.configs[i]; got.Durable != w.durable || got.FilterSubject != w.subject {
+			t.Errorf("consumer %d = %s on %s, want %s on %s", i, got.Durable, got.FilterSubject, w.durable, w.subject)
+		}
+	}
+
+	noSid := &stepsJetStream{}
+	unnamed, _ := NewSteps(stepsRegistry(t, noSid), "game-gift")
+	unnamed.Native("debit", "gift.debit", nativeBody, WithSidRoute())
+	if err := unnamed.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "has no sid") || len(noSid.configs) != 0 {
+		t.Fatalf("a sid-routed step in a process without a sid: %v (%d consumers), want refused before subscribing", err, len(noSid.configs))
+	}
+}
+
+// definitionTopics 是协调器的替身：按定义回答 RoutedTopic（*coresaga.Engine 的同一规则由 framework/saga 的用例钉住）。
+type definitionTopics coresaga.Definition
+
+func (d definitionTopics) RoutedTopic(topic string) (bool, bool) {
+	for _, step := range d.Steps {
+		if step.ForwardTopic == topic || step.CompensateTopic == topic {
+			return step.Routed, true
+		}
+	}
+	return false, false
+}
+
+// 同一进程里有协调器时，消费者的路由必须与定义一致：定义路由、消费者不路由（命令发往 ev.to.<sid>，没人过滤），或者反过来，
+// 启动就报错，不订阅任何东西。
+func TestStepsRefuseARouteThatDisagreesWithTheDefinition(t *testing.T) {
+	definition := coresaga.Definition{Type: "gift", Version: 1, Steps: []coresaga.Step{
+		{Name: "debit", ForwardTopic: "gift.debit", CompensateTopic: "gift.debit.compensate", Routed: true, Timeout: time.Second, MaxAttempts: 1, BackoffMin: time.Millisecond, BackoffMax: time.Millisecond},
+		{Name: "deliver", ForwardTopic: "gift.deliver", CompensateTopic: "gift.deliver.compensate", Timeout: time.Second, MaxAttempts: 1, BackoffMin: time.Millisecond, BackoffMax: time.Millisecond},
+	}}
+	engine := definitionTopics(definition)
 	for name, tc := range map[string]struct {
-		step, topic, want string
+		topic  string
+		routed bool
+		want   string
 	}{
-		"unknown step":   {"refund", "gift.debit.compensate", "not registered"},
-		"mongo step":     {"deliver", "gift.deliver", "not a native step"},
-		"topic mismatch": {"debit", "gift.debit.compensate", `published on "gift.debit.compensate", want "gift.debit"`},
+		"routed definition, plain consumer":     {"gift.debit", false, "routed=true but the consumer says routed=false"},
+		"compensation follows its step":         {"gift.debit.compensate", false, "routed=true but the consumer says routed=false"},
+		"plain definition, sid-routed consumer": {"gift.deliver", true, "routed=false but the consumer says routed=true"},
 	} {
-		accepted := false
-		err := steps.RunHandedOver(context.Background(), tc.step, stepCommand("cmd-"+tc.step, tc.topic), func(context.Context, coresaga.Command) bool {
-			accepted = true
-			return true
-		})
-		if accepted {
-			t.Errorf("%s: the ownership check ran for a handoff that should have been refused first", name)
+		js := &stepsJetStream{}
+		registry := stepsRegistry(t, js)
+		registry.Config().Set("sid", 1000)
+		if err := registry.Register(mods.ModSaga, engine); err != nil {
+			t.Fatal(err)
 		}
-		if err == nil || !strings.Contains(err.Error(), tc.want) || errors.Is(err, ErrStepsNotStarted) {
-			t.Errorf("%s: %v, want a refusal mentioning %q", name, err, tc.want)
+		steps, _ := NewSteps(registry, "game-gift")
+		var options []StepOption
+		if tc.routed {
+			options = append(options, WithSidRoute())
 		}
-	}
-	if err := steps.RunHandedOver(context.Background(), "debit", stepCommand("cmd-ok", "gift.debit"), nil); !errors.Is(err, ErrStepsNotStarted) {
-		t.Fatalf("a valid handoff before Start = %v, want ErrStepsNotStarted", err)
-	}
-	// 归属复核说“不归我”：安静放弃（nil），不取执行权；过了截止的命令连复核都不问。
-	if err := steps.RunHandedOver(context.Background(), "debit", stepCommand("cmd-foreign", "gift.debit"), func(context.Context, coresaga.Command) bool { return false }); err != nil {
-		t.Fatalf("a handoff the accept callback declines = %v, want nil", err)
-	}
-	late := stepCommand("cmd-late", "gift.debit")
-	late.DeadlineAt = time.Now().Add(-time.Second)
-	if err := steps.RunHandedOver(context.Background(), "debit", late, func(context.Context, coresaga.Command) bool {
-		t.Error("the ownership check ran for an expired handoff")
-		return true
-	}); err != nil {
-		t.Fatalf("an expired handoff = %v, want nil", err)
+		steps.Native("step", tc.topic, nativeBody, options...)
+		if err := steps.Start(context.Background()); err == nil || !strings.Contains(err.Error(), tc.want) || len(js.configs) != 0 {
+			t.Errorf("%s: %v (%d consumers), want refused with %q before subscribing", name, err, len(js.configs), tc.want)
+		}
 	}
 }
 

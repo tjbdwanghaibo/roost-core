@@ -178,7 +178,9 @@ Nest 200ms 慢请求继续逐请求记录完成日志和耗时；包含消息身
 | `saga.step.attempt_replayed_total` | Counter | 同一操作实例已有回执（成功或本代际拒绝），这次尝试不执行、把那次的结果再发一次（U-0280） |
 | `saga.step.run_total{consumer,result}` | Counter | 业务步骤运行时（`wiring/saga` 的 `Steps`，D12）执行步骤体的次数，consumer 是 durable 名（`<group>-<step>`）。原生步骤 `ok` = Nest 调用成功（业务拒绝也算 ok，结论在回执里）、`error` = 结果未知；Mongo 步骤 `ok` / `refused`（completion 失败）/ `error`，Mongo 事务重试会重复调用、按调用计。回放与重复投递不计 |
 | `saga.step.run_duration{consumer}` | Histogram | 同上一次执行的耗时（原生步骤含 Nest 提交与 strict 落盘） |
-| `saga.step.admit_refused_total{consumer}` | Counter | `WithAdmit` 拒绝的投递（命令不归本进程，nak 给别的副本或转交）。多进程分片时有稳定的低速率是正常的；某个 consumer 持续高、而步骤迟迟不完成，说明没有任何进程准入它（归属表或转交出了问题） |
+| `saga.step.admit_refused_total{consumer}` | Counter | `WithAdmit` 没有放行的投递（暂时不能执行而 nak，以及下面的退回与拒收）。按 sid 路由的步骤只投给属主，正常时接近 0；某个 consumer 持续高、而步骤迟迟不完成，说明属主一直不准入它（归属表、卸载卡住或路由地址错了） |
+| `saga.step.bounced_total{consumer}` | Counter | 准入退回发送端的命令（`saga.BounceStep`：实体不绑定本 sid 或正在换服，发回可重试失败、可带新地址，协调器消耗一次尝试改投）。持续增长说明路由地址与实体绑定不一致或换服迟迟不完成 |
+| `saga.step.rejected_total{consumer}` | Counter | 准入拒收的命令（`saga.RejectStep`：永远不能执行，例如载荷没有路由需要的 sid；发回不可重试失败并记 ERROR）。应为 0 |
 | `saga.step.mongo_txn_lifetime_exceeds_budget{group}` | Counter | 参与方启动探针（设计 T-A）读到 Mongo `transactionLifetimeLimitSeconds` 长于缺省步骤预算窗口（`saga.step_defaults` 补齐缺省后 MaxAttempts × Timeout 加退避，框架缺省 26.5s），每组步骤启动时至多一次，同时 WARN。**非零即部署违约**：被杀参与方的遗留事务可能拖过在途步骤的全部尝试，部署要求 20s（[SAGA.md](SAGA.md)「进程被强杀时遗留的 Mongo 事务」）。托管库拒绝 `getParameter` 时只记一条 INFO“未探测” |
 | `saga.partition.rejected_input_total{kind,reason}` | Counter | 协调器分区跳过的坏输入：`kind` = start / result / op / unknown，`reason` = decode / content / identity / not_waiting / definition_missing / subject。日志里的输入不能 Term，跳过后输入水位照常前进 |
 | `saga.partition.fail_stop_total{reason}` | Counter | 协调器分区 fail-stop：`fenced`（期望序号被别的写者推进）、`publish_unknown`（发布结果未知超过 `saga.publish_unknown_budget`）、`rejected`（流满等服务端明确拒绝）、`error`；**非零即查**，进程经 RuntimeFailure 停下 |
@@ -564,8 +566,10 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `saga.start.rejected_total` | Counter | `saga/nest_start_consumer.go:IncCounter` |
 | `saga.step.admit_refused_total` | Counter | `wiring/saga/steps.go:IncCounter` |
 | `saga.step.attempt_replayed_total` | Counter | `saga/step_consumer.go:IncCounter` |
+| `saga.step.bounced_total` | Counter | `saga/step_consumer.go:IncCounter` |
 | `saga.step.expired_unexecuted_total` | Counter | `saga/step_consumer.go:IncCounter` |
 | `saga.step.mongo_txn_lifetime_exceeds_budget` | Counter | `wiring/saga/steps.go:IncCounter` |
+| `saga.step.rejected_total` | Counter | `saga/step_consumer.go:IncCounter` |
 | `saga.step.run_duration` | Histogram | `wiring/saga/steps.go:ObserveHistogram` |
 | `saga.step.run_total` | Counter | `wiring/saga/steps.go:IncCounter` |
 | `scene_session_open_failed_total` | Counter | `demo/internal/service/game/scene.go.tmpl (template)` |

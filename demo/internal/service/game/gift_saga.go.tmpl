@@ -13,10 +13,8 @@ import (
 	"{{MODULE}}/game/rewards"
 	giftitem "{{MODULE}}/saga/gift_item"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/bus"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
-	"github.com/tjbdwanghaibo/roost-core/infra/network/ownerroute"
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
@@ -32,7 +30,8 @@ import (
 // partition log; the four consumers below each take one topic — debit, its
 // compensation, deliver, its compensation — run the business, and publish the
 // result straight back to the command's partition, acknowledging the command
-// only after that publish.
+// only after that publish. Debit and its compensation are delivered only to
+// the sender's sid (routed steps, see register).
 //
 // What a step is allowed to be: idempotent per command. The framework offers
 // two shapes and this saga uses both, because its steps are two kinds of work:
@@ -82,9 +81,11 @@ import (
 // the receipt if the commit did happen; the next attempt comes from the
 // coordinator after the step timeout.
 const (
-	// giftSagaSteps names this service's gift step consumers: every durable
-	// is `<name>-<step>` (shared by all replicas of the service), the Mongo
-	// step inbox is `_<name>_step_inbox` in the saga database.
+	// giftSagaSteps names this service's gift step consumers: deliver's
+	// durable is `<name>-deliver` (shared by all replicas of the service),
+	// debit's and refund's are `<name>-<step>-<sid>` (routed: one per sid,
+	// bound by that sid's process only), the Mongo step inbox is
+	// `_<name>_step_inbox` in the saga database.
 	giftSagaSteps = "{{GAME_SERVICE}}-gift"
 	// giftRecipientNotFound is deliver's refusal for a recipient with no
 	// Player document. The check reads the Player DAO's collection directly
@@ -124,30 +125,12 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (*kitsaga.Steps,
 	if !ok || owners == nil {
 		return nil, fmt.Errorf("gift saga: player ownership (%s) is not published yet; it must be registered before the step consumers subscribe", PlayerOwnerCapability)
 	}
-	busClient, ok := app.Lookup[bus.IBus](registry, mods.ModBus)
-	if !ok || busClient == nil {
-		return nil, fmt.Errorf("gift saga: capability %q not found", mods.ModBus)
-	}
 	runtime, err := kitsaga.NewSteps(registry, giftSagaSteps)
 	if err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
 	}
 	players := kitdataengine.DAOCollection(mongoClient, databases, db.NewPlayerDao(), 0)
-	steps := giftSteps{nest: nestClient, mailer: mailer, players: players, owners: owners, runtime: runtime}
-	// The handoff path: a step that lands on the wrong process is sent to the
-	// one the sender is bound to instead of only being refused.
-	//
-	// The address needs no lookup: the command carries the sender's bound sid
-	// (gift.State.FromSID, written by the process that started the gift), a
-	// player stays bound to one sid, and one process runs per sid (the App
-	// singleton lock). The router sends to `<prefix>.svc.{{GAME_SERVICE}}.<sid>`.
-	steps.handoff = giftHandoffRouter(owners.SID(), ownerroute.NewBusTransport[giftStepHandoff](busClient, "{{GAME_SERVICE}}", giftHandoffModule), steps.runHandoff)
-	// The receiving half. It is registered before the consumers subscribe, so
-	// a process cannot forward to a peer that is not listening yet — the peer
-	// registered this handler in its own Init for the same reason.
-	if err := ownerroute.RegisterBusHandler(busClient, giftHandoffModule, giftHandoffMsgName, steps.runHandoff); err != nil {
-		return nil, fmt.Errorf("gift saga: register handoff handler: %w", err)
-	}
+	steps := giftSteps{nest: nestClient, mailer: mailer, players: players, owners: owners}
 	steps.register(runtime)
 	if err := runtime.Start(ctx); err != nil {
 		return nil, fmt.Errorf("gift saga: %w", err)
@@ -156,28 +139,34 @@ func startGiftSaga(ctx context.Context, registry *app.Registry) (*kitsaga.Steps,
 }
 
 // register names the four steps. The topic constants come from the generated
-// definition, so a durable and its filter can never drift apart, and the step
-// names are what a handoff names (giftHandoffPhase*), so the receiver runs the
-// same body the consumer would have.
+// definition, so a durable and its filter can never drift apart.
 //
-// Admission is set on the two steps that write the sender's Player and left
-// out on the two that do not: deliver is a mail call, which any process may
-// make, and pinning it to the owner would only make it wait.
+// Debit and its compensation write the sender's Player, which only the
+// process of the sender's bound sid may load: they are routed steps
+// (saga/gift_item/definition.go, Routed: true — roost add saga -routed debit),
+// so the coordinator delivers each command straight to the durable of the sid
+// StartGift named (saga.StartRequest.Route = saga.SidRoute(FromSID)) and no
+// other process ever sees it (maintainer decision 2026-11-11, plan ③). The
+// admission on them is the last guard against a second writer, not the
+// router: see admitBound.
+//
+// Deliver is a mail call, which any process may make: it stays on the shared
+// durable, and pinning it to the owner would only make it wait.
 func (steps giftSteps) register(runtime *kitsaga.Steps) {
-	runtime.Native(giftHandoffPhaseDebit, giftitem.TopicDebit, steps.debit, kitsaga.WithAdmit(steps.admitOwned(giftHandoffPhaseDebit)))
-	runtime.Native(giftHandoffPhaseRefund, giftitem.TopicDebitCompensation, steps.refund, kitsaga.WithAdmit(steps.admitOwned(giftHandoffPhaseRefund)))
+	runtime.Native("debit", giftitem.TopicDebit, steps.debit, kitsaga.WithSidRoute(), kitsaga.WithAdmit(steps.admitBound))
+	runtime.Native("debit-undo", giftitem.TopicDebitCompensation, steps.refund, kitsaga.WithSidRoute(), kitsaga.WithAdmit(steps.admitBound))
 	runtime.Mongo("deliver", giftitem.TopicDeliver, steps.deliver)
 	runtime.Mongo("deliver-undo", giftitem.TopicDeliverCompensation, steps.nothingToUndo)
 }
 
 // playerOwnership is the part of PlayerOwners these steps ask about. Declared
 // here rather than taking *PlayerOwners so a test could stand it in; the
-// handoff tests use the real table.
+// route tests (gift_route_test.go) use the real table.
 //
 // 静态绑定：步骤命令携带发送方绑定的 sid，准入只问“这个 sid 是不是本服”。是本服
 // 就接入（建立或刷新驻留记录，算一次使用），发送方离线、没有副本也照常执行——Nest 在 io 池冷加载他，
-// 驻留记录让闲置卸载之后收走这份副本；不是本服就不建记录，交给那个 sid。驻留记录因此只会出现在玩家
-// 绑定的那个 sid 上，不会有两个写者。
+// 驻留记录让闲置卸载之后收走这份副本；不是本服就不建记录，把步骤退回协调器、指明那个 sid。驻留记录因此
+// 只会出现在玩家绑定的那个 sid 上，不会有两个写者。
 type playerOwnership interface {
 	// AdmitBound: local=false → the player is bound to another sid, nothing
 	// was recorded here; local=true, err=nil → served here (counted as use);
@@ -185,227 +174,81 @@ type playerOwnership interface {
 	AdmitBound(playerID int64, boundSID int32) (local bool, err error)
 }
 
-// giftStepHandoff is a step that arrived at the wrong process, on its way to
-// the right one. It carries the whole command, because the owner re-derives
-// everything from it and trusts none of the sender's conclusions except the
-// address it was sent to — which it checks again anyway.
-type giftStepHandoff struct {
-	PlayerID int64 `json:"player_id"`
-	// FromSID is the sender's bound sid copied from the command's payload: the
-	// address the handoff is routed to, and what the receiver checks again.
-	FromSID int32        `json:"from_sid"`
-	Phase   string       `json:"phase"`
-	Command saga.Command `json:"command"`
-}
-
-// MsgName pins the wire name. Without it the bus would use "%T", which puts
-// this package's name in the protocol: renaming the Go package would then
-// silently stop two processes from understanding each other.
-func (giftStepHandoff) MsgName() string { return giftHandoffMsgName }
-
-const (
-	// giftHandoffModule is the bus module both halves of the handoff agree
-	// on; it is a routing address, not a capability name.
-	giftHandoffModule  = "{{GAME_SERVICE}}.gift.handoff"
-	giftHandoffMsgName = "gift.step.handoff"
-	// The phases a handoff can carry are the names the two native steps are
-	// registered under (register), so the receiver runs that step's body.
-	giftHandoffPhaseDebit  = "debit"
-	giftHandoffPhaseRefund = "debit-undo"
-)
-
 type giftSteps struct {
 	nest   corenest.Client
 	mailer svcmail.Mail
 	// players is the Player DAO's physical collection (kitdataengine.DAOCollection),
 	// where deliver looks the recipient up.
 	players fmongo.ICollection
-	// runtime is the framework's step consumers; a handed-over step runs
-	// through it too (runHandoff).
-	runtime *kitsaga.Steps
 	// owners is who may touch which player. nil means a single-process
 	// deployment, where every player is this process's.
 	owners playerOwnership
-	// handoff sends a step to the process its sender is bound to. nil disables
-	// forwarding, which leaves plain back-pressure: correct, just slower.
-	handoff *ownerroute.Router[giftStepHandoff, int32, sidRoute]
 }
 
-// sidRoute is a game server's address as core's ownerroute sees it: the sid
-// whose `<prefix>.svc.{{GAME_SERVICE}}.<sid>` subject a handed-over step is
-// sent to.
-type sidRoute struct{ sid int32 }
-
-// OwnerRouteSid implements ownerroute.OwnerRoute.
-func (route sidRoute) OwnerRouteSid() int32 { return route.sid }
-
-// sidRoutes is the handoff's resolver. There is no table to look anything up
-// in: a player is bound to one sid for life and the command carries it, so
-// the route of sid N is simply sid N. A sid of 0 is no route (the command
-// named no sender sid), which ownerroute reports as not found.
-type sidRoutes struct{}
-
-// GetRoute implements ownerroute.Resolver.
-func (sidRoutes) GetRoute(_ context.Context, sid int32) (sidRoute, bool, error) {
-	return sidRoute{sid: sid}, sid > 0, nil
-}
-
-// giftHandoffRouter is the sending half of the handoff: core's ownerroute,
-// keyed by the sender's bound sid. Production and the tests build it here so
-// they route by the same key.
-func giftHandoffRouter(localSID int32, transport ownerroute.Transport[giftStepHandoff], execute func(context.Context, *giftStepHandoff) error) *ownerroute.Router[giftStepHandoff, int32, sidRoute] {
-	return &ownerroute.Router[giftStepHandoff, int32, sidRoute]{
-		LocalSid:  localSID,
-		Routes:    sidRoutes{},
-		Transport: transport,
-		Executor:  execute,
-		KeyOf:     func(cmd *giftStepHandoff) int32 { return cmd.FromSID },
-		ValidKey:  func(sid int32) bool { return sid > 0 },
-	}
-}
-
-// runHandoff executes a step this process was handed by another one.
+// admitBound is debit's and refund's admission: may THIS process run this
+// command at all? It is the last guard against a second writer, not the
+// router — the coordinator already delivered the command to this sid's
+// durable because StartGift named the sender's sid as the saga's route.
 //
-// The difference from the consumer path is that there is no JetStream
-// delivery here: kitsaga.Steps.RunHandedOver runs the step body directly. The
-// two paths still exclude each other — both go through the Player's Nest lock
-// and the receipt in it, so whichever commits first runs the business and the
-// other replays its receipt.
+// Why it still exists: loading a player bound to another sid here is the
+// corruption (two entity runtimes, two version counters, one document, and the
+// loser is a `fatal projection version conflict` that takes a process down —
+// GAME_DEMO_TEMPLATE §9.11). It is wired as saga.StepConsumerConfig.Admit rather
+// than as the first line of the handler because a handler-level refusal would
+// already have loaded the sender's Player (Nest loads a declared cold target
+// before the handler runs); ahead of the Nest call a refusal writes nothing.
 //
-// Nothing is published or acknowledged here. The process that forwarded the
-// step still holds the message and naks it until a redelivery lands on a
-// process that may run it; that redelivery finds the receipt this transaction
-// wrote and publishes the result. A lost handoff therefore costs latency,
-// never the step: the ordinary redelivery is the safety net.
-func (steps giftSteps) runHandoff(ctx context.Context, cmd *giftStepHandoff) error {
-	if cmd == nil {
-		return fmt.Errorf("gift saga: empty handoff")
-	}
-	// The envelope is the address and the payload is what runs; checking one
-	// player and running another would undo the check below. A handoff whose
-	// two disagree is refused before anything is recorded or claimed.
-	state, err := gift.Decode(cmd.Command.Payload)
-	if err != nil {
-		return fmt.Errorf("gift saga: handoff payload: %w", err)
-	}
-	if state.From != cmd.PlayerID || state.FromSID != cmd.FromSID {
-		return fmt.Errorf("gift saga: handoff for player %d on sid %d carries a step for player %d on sid %d", cmd.PlayerID, cmd.FromSID, state.From, state.FromSID)
-	}
-	// The phase is envelope too, and it picks the transaction: a debit
-	// envelope around the refund's command would take the items a second
-	// time under the refund's receipt. The framework refuses, before anything
-	// runs, a phase that is not a registered native step and a command not
-	// published on that step's topic. The accept callback then
-	// checks ownership again rather than trusting the address: running a step
-	// for a player bound to another sid is the corruption all of this exists
-	// to prevent. Not served here, or its copy is being unloaded: do nothing,
-	// the holder of the message keeps redelivering. A sid of 0 is never this
-	// process's, so a payload with no sender sid ends here too.
-	err = steps.runtime.RunHandedOver(ctx, cmd.Phase, cmd.Command, func(context.Context, saga.Command) bool {
-		if steps.owners == nil {
-			return true
-		}
-		local, err := steps.owners.AdmitBound(state.From, state.FromSID)
-		return local && err == nil
-	})
-	if err != nil {
-		return fmt.Errorf("gift saga: handoff %s: %w", cmd.Phase, err)
-	}
-	// nil also covers a handoff that was dropped (not ours, expired) or that
-	// replayed an existing receipt; saga.step.run_total counts the runs.
-	slog.Debug("gift saga: handled a step handed over by another process", "player_id", cmd.PlayerID, "phase", cmd.Phase, "command", cmd.Command.ID)
-	return nil
-}
-
-// admitOwned is the consumers' admission predicate: may THIS process run this
-// command at all?
+// Its verdicts (roost-core SAGA.md, 按 sid 确切路由):
 //
-// The step consumers share one JetStream durable across every game process, so
-// a command about player X arrives at whichever process is free — not at the
-// one that has X loaded. Loading X here as well is the corruption: two entity
-// runtimes, two version counters, one document, and the loser is a
-// `fatal projection version conflict` that takes a process down
-// (GAME_DEMO_TEMPLATE §9.11).
+//   - the payload names no sender sid: saga.RejectStep, logged as an error.
+//     Such a payload cannot be routed at all — StartGift refuses to start it
+//     (gift.Encode) and the coordinator refuses a routed saga without a route
+//     — so this only meets a payload from before from_sid existed, which is
+//     not migrated (maintainer decisions 2026-10-05 / 2026-11-11). The
+//     coordinator gets a non-retryable failure: a debit fails the gift, a
+//     refund goes to manual_required.
+//   - the sender is bound to another sid (the command reached a sid that is
+//     not his): saga.BounceStep back to the coordinator with his binding as
+//     the new route, so the next attempt goes there. With static binding the
+//     binding is the payload's FromSID; the route and FromSID are written from
+//     the same value at start, so this only happens if the two disagree.
+//   - the sender is bound here but his copy is being unloaded: a plain error,
+//     so the delivery is redelivered to this sid's durable after a backoff and
+//     finds the unload finished. There is no better process to give it to.
 //
-// It is wired as saga.StepConsumerConfig.Admit rather than as the first line
-// of the handler, and that placement is the whole point: a handler-level
-// refusal would already have loaded the sender's Player into this process
-// (Nest loads a declared cold target before the handler runs), which is the
-// second runtime this check exists to prevent. With the predicate ahead of
-// the Nest call, a refused delivery leaves nothing behind and the next
-// delivery can go to the owner.
-//
-// The refusal alone is back-pressure, not routing: the message is offered
-// again to any consumer of the durable, so the sender's process gets it after
-// a bounce or two rather than directly. The handoff (handOver) is what makes
-// the work start there now; the message itself cannot be moved to another
-// process's consumer.
-func (steps giftSteps) admitOwned(phase string) func(context.Context, saga.Command) error {
-	return func(ctx context.Context, command saga.Command) error {
-		return steps.admitPhase(ctx, phase, command)
-	}
-}
-
-func (steps giftSteps) admitPhase(ctx context.Context, phase string, command saga.Command) error {
+// A player "moving between sids" has no state in this demo: players never
+// change sid (static binding; moving a whole sid to another machine keeps the
+// route, and the commands wait on that sid's durable for the new process). A
+// game that adds a player move answers it here with saga.BounceStep("", …) —
+// back to the coordinator, retried at the old route until the move completes
+// and the old sid can name the new one — never with a nak, which on a routed
+// durable only comes back to this same process.
+func (steps giftSteps) admitBound(_ context.Context, command saga.Command) error {
 	if steps.owners == nil {
 		return nil
 	}
 	// Decode only. Admission needs the player id and nothing else: resolving
 	// the entity id here would make "is the Player kind registered yet" part
-	// of a question that is purely about ownership, and its failure mode is
-	// the worst one available — an unreadable payload would be ADMITTED.
+	// of a question that is purely about ownership.
 	state, err := gift.Decode(command.Payload)
 	if err != nil {
 		// Not a gift payload. Admit it and let the handler produce the real
-		// refusal: admission answers "whose work is this", not "is it valid",
-		// and a payload no process can read must not bounce forever.
+		// refusal: admission answers "whose work is this", not "is it valid".
 		slog.Warn("gift saga: admitting a step whose payload is not a gift", "command", command.ID, "err", err)
 		return nil
 	}
 	if state.FromSID <= 0 {
-		// Nobody can route this step, and guessing would be worse: admitting
-		// it wherever the sender happens to be resident is how a second
-		// writer appears. Refused on every process until the saga's deadline;
-		// payloads from before from_sid existed are not migrated
-		// (maintainer decision 2026-10-05).
-		slog.Error("gift saga: refusing a step whose payload names no sender sid", "player_id", state.From, "command", command.ID, "saga_id", command.SagaID)
-		return fmt.Errorf("gift saga: step %s for player %d names no sender sid; it cannot be routed", command.ID, state.From)
+		slog.Error("gift saga: rejecting a step whose payload names no sender sid", "player_id", state.From, "command", command.ID, "saga_id", command.SagaID)
+		return saga.RejectStep(fmt.Sprintf("gift step %s for player %d names no sender sid; it cannot be routed", command.ID, state.From))
 	}
 	local, err := steps.owners.AdmitBound(state.From, state.FromSID)
 	if !local {
-		// Hand it over, then refuse. The two halves do different jobs: the
-		// handoff gets the work started on the sender's sid NOW, and the
-		// refusal keeps this message — unacknowledged — until a redelivery
-		// lands on the sender's process, which replays the receipt and
-		// publishes the result. If the handoff never arrives, the redelivery
-		// still converges there the slow way, which is why this is safe to be
-		// fire and forget.
-		steps.handOver(ctx, phase, state, command)
-		// Logged, because otherwise this is invisible: the refusal travels
-		// back as a nak and nothing in the process says the work moved.
-		slog.Info("gift saga: step left to the sender's sid", "player_id", state.From, "owner_sid", state.FromSID, "command", command.ID)
-		return fmt.Errorf("gift saga: player %d is bound to sid %d, not this process; leaving the step for it", state.From, state.FromSID)
+		return saga.BounceStep(saga.SidRoute(state.FromSID), fmt.Sprintf("player %d is bound to sid %d", state.From, state.FromSID))
 	}
 	if err != nil {
-		// This sid's player, but the copy is being unloaded: refuse this
-		// delivery and let the redelivery find the unload finished. There is
-		// no better process to hand it to.
 		return fmt.Errorf("gift saga: player %d: %w", state.From, err)
 	}
 	return nil
-}
-
-// handOver routes one step to the sender's bound sid. Failures are logged and
-// dropped on purpose: this is an optimisation over redelivery, and treating a
-// bus hiccup as a step failure would make the slow path less reliable than no
-// handoff at all.
-func (steps giftSteps) handOver(ctx context.Context, phase string, state gift.State, command saga.Command) {
-	if steps.handoff == nil {
-		return
-	}
-	if err := steps.handoff.Route(ctx, &giftStepHandoff{PlayerID: state.From, FromSID: state.FromSID, Phase: phase, Command: command}); err != nil {
-		slog.Warn("gift saga: step not handed over; redelivery will find the sender's sid", "player_id", state.From, "owner_sid", state.FromSID, "phase", phase, "err", err)
-	}
 }
 
 // debit takes the items out of the sender's Bag. The sender may have spent
@@ -438,8 +281,8 @@ func (steps giftSteps) debit(ctx context.Context, step saga.NativeStep) error {
 // offline, cold sender; Nest loads declared cold targets on its io pool, so
 // "offline" is not a reason for the compensation to fail.
 //
-// 重试预算：退款只能在发送方绑定的 sid 上执行（admitOwned），那个 sid 的进程崩溃重启期间，别的进程
-// 只拒绝、不回答，每一次尝试都等到 Timeout；补偿的重试用尽就是 manual_required，要人工处理。一次
+// 重试预算：退款只投给发送方绑定的 sid（路由步骤，admitBound 核对），那个 sid 的进程崩溃重启期间，命令留在
+// 它的 durable 上没有人取，每一次尝试都等到 Timeout；补偿的重试用尽就是 manual_required，要人工处理。一次
 // 崩溃重启最长约为 singleton.startup_wait（30s，新进程等旧锁的上限）+ singleton.ttl（15s，旧进程最后
 // 一次续期之后键还活着的时间）+ 被拉起与 Init 的余量（按 45s 留），合计 90s。所以 debit 这一步（它的
 // 补偿就是退款）在 game 服务的配置里覆盖为 `saga.steps.gift_item.debit.max_attempts: 15`（Timeout 5s、

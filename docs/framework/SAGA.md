@@ -45,6 +45,7 @@ Saga 用于跨越多个独立事务域的业务流程。单个 Nest handler、�
 | subject | 内容 |
 | --- | --- |
 | `<prefix>.<k>.ev.cmd.<topic>` / `.ev.done` / `.ev.none` | 分区事件：带命令 / 终态 / 无命令的变化（事件携带这笔 saga 的完整新状态） |
+| `<prefix>.<k>.ev.to.<route>.<topic>` | 路由步骤（`Step.Routed`）的命令事件：只投给路由键 `<route>`（按 sid 路由时是十进制 sid），见[按 sid 确切路由](#按-sid-确切路由路由步骤维护者-2026-11-11-方案-③) |
 | `<prefix>.<k>.in.start` / `.in.res` / `.in.op` | 输入：启动意图、步骤结果、运维意图（Resume / Compensate） |
 | `<prefix>.q.<k>` / `<prefix>.q.list`（核心 NATS，不进流） | 所有者查询：Get / 判定补查；List 散播 |
 
@@ -229,8 +230,41 @@ return left, step.Complete(true, "")
 8. **分工**：步骤模板不需要自己按 `IdempotencyKey` 做业务幂等——前提是业务写在生效点的同一事务里（原生：Nest 事务；Mongo 步骤：handler 拿到的
    Mongo 事务 ctx）。不在事务里的副作用（调用另一个服务，如 gift deliver 发邮件）不受这个保证，仍要按 `IdempotencyKey` 幂等（mail 的 `RequestID`）。
 
-转交路径（另一个进程的 `WithAdmit` 判定命令不归它后经业务自己的通道送来）用 `Steps.RunHandedOver`：核对步骤名与主题、截止与归属后经同一个
-`RunNativeStep` 运行步骤体，**不发布、不 ack**（原消息持有者的重投读到回执后发结果）；与消费者的互斥由实体锁与回执保证。
+### 按 sid 确切路由（路由步骤，维护者 2026-11-11 方案 ③）
+
+只能在某个 sid 上执行的步骤（改的是绑定在那个 sid 上的实体，例如 demo 赠礼的扣款 / 退款、公会 saga 的玩家步骤）声明为**路由步骤**，命令直接投给
+属主 sid，不再由同一服务的全部进程争抢一个共享 durable。此前的做法（共享 durable + 非属主 `WithAdmit` 拒绝 nak + 经总线交接给属主）让结果要等
+原消息按 nak 退避（250ms 起倍增）轮到属主才发布：5 个 game 进程时每个原生步骤约多 3.75s（[证据](../maintenance/evidence/perf-terrain-acceptance-20261110/README.md#第-2-轮无缝演练最后一步的-p95已定位)）。
+
+- **声明**：定义里 `Step.Routed = true`（`roost add saga ... -routed <step>` 生成；正向与补偿同一个声明）。有路由步骤的定义，启动时必须带
+  `StartRequest.Route`（按 sid 路由用 `saga.SidRoute(属主 sid)`；生成的 `EmitStart` / `Start` 因此多一个 `route` 参数）。**没有 Route 的启动被拒绝**
+  （`ErrInvalidRecord`，分区记 `rejected_input_total{kind="start",reason="route"}`）；Route 必须是至多 64 字节的 subject token。Route 进启动摘要。
+- **投递**：协调器派发路由步骤时把这笔 saga 当前的 `Record.Route` 写进 `Command.Route`，命令事件发在 `<prefix>.<k>.ev.to.<route>.<topic>`。它仍在
+  分区的 `<prefix>.<k>.>` 里，**流的 subjects 不变**；不路由的步骤照旧发 `ev.cmd.<topic>`。
+- **消费**：参与方用 `kitsaga.WithSidRoute()` 登记（框架层是 `StepConsumerConfig.Route`）：durable 名是 `<group>-<step>-<sid>`，过滤
+  `<prefix>.*.ev.to.<sid>.<topic>`，只有这个 sid 的进程绑定它，别的进程收不到。**JetStream 资源**：每条 saga 流上，每个路由步骤（每个方向）的
+  durable 数从 1 变成“部署的 sid 数”（demo：赠礼 2 个方向 + 公会玩家步骤 6 个方向 = 8 个路由 durable / sid / 流）；不路由的步骤仍各 1 个。同一进程
+  里有协调器时 `Steps.Start` 用 `Engine.RoutedTopic` 核对定义与消费者的路由是否一致，不一致拒绝启动（一边路由一边不路由的命令永远到不了）；协调器
+  在别的进程时靠两边用同一份生成的定义。本进程没有 sid 时拒绝启动。
+- **属主核对仍在**：路由不是防第二个写者的保证，属主进程收到步骤后 `WithAdmit` 仍核对“这个实体此刻是不是本进程的”，结论有三种（`StepConsumerConfig.Admit`）：
+  - **退回发送端**（`saga.BounceStep(route, reason)`）：不执行、零写入（在步骤体与实体加载之前），把一份可重试失败发回命令所属分区（`Completion.Route`
+    带新地址，空表示照原地址），PubAck 之后 ack。协调器按步骤预算安排下一次尝试（**退回消耗一次尝试**、按退避），有新地址就改 `Record.Route`，下一次
+    尝试投到新地址；尝试用尽走补偿（补偿方向用尽是 `ManualRequired`）。用于“实体已不绑定本 sid”（给出最新绑定）与“实体正在换服”（不给地址，换服完成
+    前照原地址重试，完成后旧 sid 退回时给出新 sid）。**不用 nak**：路由 durable 只有本 sid 绑定，nak 只会投回自己。计 `saga.step.bounced_total{consumer}`。
+  - **拒收**（`saga.RejectStep(reason)`）：命令永远不能执行（例如载荷里没有路由需要的 sid），发回不可重试失败（正向随即补偿，补偿方向 `ManualRequired`），
+    ERROR 日志，计 `saga.step.rejected_total{consumer}`。旧载荷不兼容、不迁移、不兜底（维护者 2026-10-05 / 2026-11-11）。
+  - **暂时不能执行**（其他错误，例如实体副本正在卸载）：nak，按退避重投给**同一个** durable（同一个 sid）。
+- **属主停机**：命令留在它的 durable 上（未确认），别的 sid 拿不到；协调器照常按 `Timeout` 判超时、派下一次尝试到同一地址，尝试用尽走补偿——超时
+  与补偿语义与之前相同（此前别的进程只会拒绝，同样等到超时）。属主恢复后积压的各次尝试依次投给它，同一操作至多生效一次（回执），回放的结果
+  `CommandID` 是生效的那次；协调器按回执摘要去重、按“成功接收规则”接收迟到成功。
+- **重复投递**：JetStream 重投与协调器的新尝试都只到属主，沿用回执去重（原生：实体里的回执；Mongo：收件箱），结果 MsgID `res.<CommandID>`。
+  同一条命令被退回两次时两份结果相同即重复；换服完成前后退回的地址不同时，第二份按身份冲突被分区跳过（`rejected_input_total{reason="identity"}`，
+  无害：协调器已按第一份推进）。
+- **限制**：一笔 saga 只有一个路由地址（`Record.Route`）：全部路由步骤投给同一个 sid。改两个不同 sid 上实体的 saga（例如两个玩家之间的交易）需要按步骤
+  的地址，未实现。换服中的状态由业务提供；game-demo 的玩家是静态绑定、没有单个玩家换服（整服搬机器时 sid 不变、命令在 durable 上等新进程，见
+  [PLAYER-MIGRATION](PLAYER-MIGRATION.md)），它的退回只用于“载荷里的 sid 与本服不符”。
+
+此前的“转交”（非属主经总线把命令交给属主、`Steps.RunHandedOver`）已删除：确切路由下命令不会落到非属主。
 
 #### 原生步骤的提交方式（维护者 2026-10-29 决定）
 
@@ -417,7 +451,7 @@ Nest handler 不应持有 Entity 锁等待整笔 Saga 完成。
 
 - NATS ≥ 2.12.1、JetStream 文件存储、saga 流 R3（`saga.replicas: 3`）；Mongo 副本集（Mongo 步骤与 DataEngine 投影的事务）且
   `transactionLifetimeLimitSeconds=20`；协调器进程 `singleton.enabled=true`。
-- 步骤消费者是每条 saga 流上的同名 durable（`<group>-<step>`），参与方必须与协调器用同一份 `saga.subject_prefix` / `stream` / `partitions` /
+- 步骤消费者是每条 saga 流上的同名 durable（`<group>-<step>`；路由步骤每个 sid 一个 `<group>-<step>-<sid>`），参与方必须与协调器用同一份 `saga.subject_prefix` / `stream` / `partitions` /
   `stream_groups`（`kitsaga.ParticipantSettings`）。下线一个步骤时删掉它在每条流上的 durable，否则清理被它挡住；关掉冷副本时同样删掉
   `<stream>_G<g>-cold-copy`。
 - 冷副本（`saga.cold_copy.enabled`）要求协调器进程有 Mongo Mod、Mongo 可写；投影跑在协调器进程里（选项 C-A），Mongo 与协调器
@@ -427,4 +461,6 @@ Nest handler 不应持有 Entity 锁等待整笔 Saga 完成。
   停旧协调器与步骤进程、排空参与方 WAL，删除旧 saga 流 / Redis 键前缀 / 上述集合，再起新版本（新流、新桶）。WireVersion 1 的信封一律拒绝。
   WireVersion 2 → 3（记录加 `Lifecycle`、操作键改为 `<saga>:<生命周期>:<phase>:<step>`，RV-20261030-01）同样不迁移：旧事件与快照解不开、分区
   不启动，旧格式的启动 effect 被中继拒收；先让全部 saga 到终态、停旧进程、删 saga 流与快照 / 准入桶后再起新版本。参与方实体与 Mongo 收件箱里
-  旧键形状的回执不会再被读到，按保留期剪掉即可。
+  旧键形状的回执不会再被读到，按保留期剪掉即可。WireVersion 3 → 4（路由步骤：记录 / 命令 / 启动意图 / 退回结果多了 `Route`，摘要含 Route，路由
+  命令改发 `ev.to.<route>.<topic>`，2026-11-11）同样不迁移：先让全部 saga 到终态、停旧进程（协调器与步骤进程都停，旧进程订阅的共享 durable
+  不会收到新的路由命令）、删 saga 流与快照 / 准入桶后再起新版本；改成路由的步骤留下的旧共享 durable（`<group>-<step>`）要删掉，否则挡住清理。

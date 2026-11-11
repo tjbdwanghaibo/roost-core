@@ -110,7 +110,7 @@ func prepareStart(request StartRequest, maxPayload int) (StartRequest, error) {
 // newStartRecord 是一笔新 saga 的第一版记录：Pending、正向第 0 步、版本 1，立即到期；启动摘要独立保存原始意图。
 // request 已经过 prepareStart；lifecycle 是这一笔的生命周期标识（newLifecycle），每次新建都不同。
 func newStartRecord(request StartRequest, id, lifecycle string, now time.Time) (Record, error) {
-	record := Record{ID: id, Lifecycle: lifecycle, Type: request.Type, DefinitionVersion: request.DefinitionVersion, BusinessKey: request.BusinessKey, Status: StatusPending, Phase: PhaseForward, Step: 0, Version: 1, Data: append([]byte(nil), request.Data...), NextRunAt: now, DeadlineAt: request.DeadlineAt, CreatedAt: now, UpdatedAt: now}
+	record := Record{ID: id, Lifecycle: lifecycle, Type: request.Type, DefinitionVersion: request.DefinitionVersion, BusinessKey: request.BusinessKey, Status: StatusPending, Phase: PhaseForward, Step: 0, Version: 1, Data: append([]byte(nil), request.Data...), Route: request.Route, NextRunAt: now, DeadlineAt: request.DeadlineAt, CreatedAt: now, UpdatedAt: now}
 	// Data / DeadlineAt 是运行状态，原始启动身份必须独立持久保存。
 	intentDigest, err := startIntentDigest(request)
 	if err != nil {
@@ -133,13 +133,27 @@ func startIntentDigest(request StartRequest) (string, error) {
 		DefinitionVersion uint32    `json:"definition_version"`
 		Data              []byte    `json:"data,omitempty"`
 		DeadlineAt        time.Time `json:"deadline_at,omitempty"`
-	}{request.Type, request.BusinessKey, request.DefinitionVersion, request.Data, request.DeadlineAt}
+		Route             string    `json:"route,omitempty"`
+	}{request.Type, request.BusinessKey, request.DefinitionVersion, request.Data, request.DeadlineAt, request.Route}
 	raw, err := json.Marshal(intent)
 	if err != nil {
 		return "", fmt.Errorf("%w: start intent digest: %v", ErrInvalidRecord, err)
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// checkStartRoute 是启动时的路由检查：定义里有路由步骤（Step.Routed）就必须带合法的 StartRequest.Route——没有地址的路由
+// 步骤投不到任何消费者，只能等到截止，所以在启动时拒绝（维护者 2026-10-05 / 2026-11-11：不带路由 sid 的旧载荷不兼容、不兜底）。
+// 不路由的定义带了 Route 也接受（不影响投递，只是记录在案）；Route 本身必须是合法路由键。
+func checkStartRoute(definition Definition, request StartRequest) error {
+	if request.Route != "" && !validRoute(request.Route) {
+		return fmt.Errorf("%w: saga %s/%d: route %q is not a subject token of at most 64 bytes", ErrInvalidRecord, definition.Type, definition.Version, request.Route)
+	}
+	if request.Route == "" && definition.routed() {
+		return fmt.Errorf("%w: saga %s/%d has routed steps and the start names no route (StartRequest.Route)", ErrInvalidRecord, definition.Type, definition.Version)
+	}
+	return nil
 }
 
 // ---- 到期 ----
@@ -203,6 +217,10 @@ func planDue(record Record, definition Definition, defined bool, now time.Time) 
 		payload = record.LateData
 	}
 	command := Command{ID: after.CommandID, IdempotencyKey: after.OperationKey, SagaID: record.ID, SagaType: record.Type, DefinitionVersion: record.DefinitionVersion, BusinessKey: record.BusinessKey, Step: record.Step, StepName: step.Name, Phase: record.Phase, Attempt: after.Attempt, Topic: topic, Payload: append([]byte(nil), payload...), DeadlineAt: after.NextRunAt, CreatedAt: now}
+	if step.Routed {
+		// 路由步骤投给这笔 saga 当前的地址（启动时的 Route，或参与方退回时给的新地址）。
+		command.Route = record.Route
+	}
 	return duePlan{cause: causeDispatch, after: after, command: &command}
 }
 
@@ -488,6 +506,10 @@ func applyCompletion(record Record, definition Definition, result Completion) Re
 			after = nextCompensation(after, now)
 		}
 		return after
+	}
+	if result.Route != "" {
+		// 参与方退回了这一步并给出新地址（StepBounce）：下一次尝试投到那里。退回本身是一次可重试失败，照常消耗一次尝试。
+		after.Route = result.Route
 	}
 	if !result.Retryable {
 		if after.Phase == PhaseCompensate {

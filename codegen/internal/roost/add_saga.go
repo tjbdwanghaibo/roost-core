@@ -21,6 +21,8 @@ const (
 type sagaStep struct {
 	snake, pascal string
 	native        bool
+	// routed：只投给属主 sid（-routed，saga.Step.Routed）。
+	routed bool
 }
 
 // sagaHandlerTarget 是原生步骤 handler 锁的实体与组件（与 add handler 同一套解析），以及放回执的实体主 DAO 与它在实体上的
@@ -32,7 +34,7 @@ type sagaHandlerTarget struct {
 
 // parseSagaSteps 按书写顺序解析 -steps 与 -native：-steps 的顺序就是 Definition.Steps 的下标顺序（Saga 按下标推进、
 // 按下标倒序补偿），蛇形化后同名的两步报错；-native 必须是 -steps 的子集，同样不许重复。
-func parseSagaSteps(name string, steps, native []string) ([]sagaStep, error) {
+func parseSagaSteps(name string, steps, native, routed []string) ([]sagaStep, error) {
 	if len(steps) == 0 {
 		return nil, fmt.Errorf("saga %s requires -steps", name)
 	}
@@ -70,6 +72,19 @@ func parseSagaSteps(name string, steps, native []string) ([]sagaStep, error) {
 		seenNative[stepSnake] = true
 		out[position].native = true
 	}
+	seenRouted := make(map[string]bool, len(routed))
+	for _, stepName := range routed {
+		stepSnake := toSnake(stepName)
+		position, ok := index[stepSnake]
+		if !ok {
+			return nil, fmt.Errorf("-routed step %q is not in -steps (%s): -routed names which of the saga's steps run only on the sid that owns their entity", stepName, strings.Join(names, ", "))
+		}
+		if seenRouted[stepSnake] {
+			return nil, fmt.Errorf("duplicate saga step %q in -routed", stepSnake)
+		}
+		seenRouted[stepSnake] = true
+		out[position].routed = true
+	}
 	return out, nil
 }
 
@@ -92,7 +107,7 @@ func sagaPaths(snake string, steps []sagaStep) []string {
 // planSaga 生成 add saga 的全部文件内容。任何校验失败都在写盘之前返回，错误输入不改动工程。
 func planSaga(root string, m Manifest, o AddOptions, service string) ([]syncChange, error) {
 	snake, pascal := toSnake(o.Name), toPascal(o.Name)
-	steps, err := parseSagaSteps(o.Name, o.Steps, o.Native)
+	steps, err := parseSagaSteps(o.Name, o.Steps, o.Native, o.Routed)
 	if err != nil {
 		return nil, err
 	}
@@ -215,13 +230,17 @@ func renderSagaDefinition(snake string, steps []sagaStep) string {
 		// No budget here: Timeout / MaxAttempts / Backoff come from the saga
 		// Mod's config (saga.step_defaults, overridden per step under
 		// saga.steps.<type>.<step>), filled in by Engine.Register.
-		fmt.Fprintf(&definitionSteps, "\t\t{Name: %q, ForwardTopic: Topic%s, CompensateTopic: Topic%sCompensation},\n", step.snake, step.pascal, step.pascal)
+		routed := ""
+		if step.routed {
+			routed = ", Routed: true"
+		}
+		fmt.Fprintf(&definitionSteps, "\t\t{Name: %q, ForwardTopic: Topic%s, CompensateTopic: Topic%sCompensation%s},\n", step.snake, step.pascal, step.pascal, routed)
 		fmt.Fprintf(&topics, "\t// Topic%s is the forward topic of step %s.\n", step.pascal, step.snake)
 		fmt.Fprintf(&topics, "\tTopic%s = %q\n", step.pascal, snake+"."+step.snake)
 		fmt.Fprintf(&topics, "\t// Topic%sCompensation is its compensation topic.\n", step.pascal)
 		fmt.Fprintf(&topics, "\tTopic%sCompensation = %q\n", step.pascal, snake+"."+step.snake+".compensate")
 	}
-	return fmt.Sprintf(`package %s
+	out := fmt.Sprintf(`package %s
 
 import (
 	"context"
@@ -305,6 +324,35 @@ func Start(ctx context.Context, engine *saga.Engine, businessKey string, state [
 	return engine.StartSaga(ctx, saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})
 }
 `, snake, snake, topics.String(), snake, definitionSteps.String())
+	if anyRoutedStep(steps) {
+		out = routeSagaStarts(out)
+	}
+	return out
+}
+
+func anyRoutedStep(steps []sagaStep) bool {
+	for _, step := range steps {
+		if step.routed {
+			return true
+		}
+	}
+	return false
+}
+
+// routeSagaStarts 给有路由步骤（-routed）的定义的 EmitStart / Start 加上 route 参数：路由步骤只投给 route 那个 sid，
+// 启动时不给 route 会被协调器拒绝（saga.StartRequest.Route）。
+func routeSagaStarts(out string) string {
+	for _, r := range [][2]string{
+		{"func EmitStart(businessKey string, state []byte, deadline time.Time) error {\n\treturn saga.EmitStart(saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})",
+			"func EmitStart(businessKey, route string, state []byte, deadline time.Time) error {\n\treturn saga.EmitStart(saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline, Route: route})"},
+		{"func Start(ctx context.Context, engine *saga.Engine, businessKey string, state []byte, deadline time.Time) (saga.Record, error) {\n\treturn engine.StartSaga(ctx, saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline})",
+			"func Start(ctx context.Context, engine *saga.Engine, businessKey, route string, state []byte, deadline time.Time) (saga.Record, error) {\n\treturn engine.StartSaga(ctx, saga.StartRequest{Type: Type, DefinitionVersion: Version, BusinessKey: businessKey, Data: state, DeadlineAt: deadline, Route: route})"},
+		{"// EmitStart is the production entry point from a Nest handler:",
+			"// route is where the routed steps run: saga.SidRoute(the sid that owns their\n// entity), usually the sid of the process starting the saga. A saga with\n// routed steps and no route is refused.\n//\n// EmitStart is the production entry point from a Nest handler:"},
+	} {
+		out = strings.Replace(out, r[0], r[1], 1)
+	}
+	return out
 }
 
 // renderSagaSteps 生成 saga/<name>/steps.go：状态编码、步骤体、按主题常量的登记与启动入口。业务文件，只建一次。
@@ -366,14 +414,18 @@ func renderSagaSteps(module, service, snake, pascal string, steps []sagaStep, ta
 	var register, bodies strings.Builder
 	for _, step := range steps {
 		forward, compensate := "run"+step.pascal, "compensate"+step.pascal
+		route := ""
+		if step.routed {
+			route = ", kitsaga.WithSidRoute()"
+		}
 		if step.native {
-			fmt.Fprintf(&register, "\tsteps.Native(%q, Topic%s, bodies.%s)\n", step.snake, step.pascal, forward)
-			fmt.Fprintf(&register, "\tsteps.Native(%q, Topic%sCompensation, bodies.%s)\n", step.snake+"_compensation", step.pascal, compensate)
+			fmt.Fprintf(&register, "\tsteps.Native(%q, Topic%s, bodies.%s%s)\n", step.snake, step.pascal, forward, route)
+			fmt.Fprintf(&register, "\tsteps.Native(%q, Topic%sCompensation, bodies.%s%s)\n", step.snake+"_compensation", step.pascal, compensate, route)
 			writeNativeStepBody(&bodies, snake, pascal, step, target, false)
 			writeNativeStepBody(&bodies, snake, pascal, step, target, true)
 		} else {
-			fmt.Fprintf(&register, "\tsteps.Mongo(%q, Topic%s, bodies.%s)\n", step.snake, step.pascal, forward)
-			fmt.Fprintf(&register, "\tsteps.Mongo(%q, Topic%sCompensation, bodies.%s)\n", step.snake+"_compensation", step.pascal, compensate)
+			fmt.Fprintf(&register, "\tsteps.Mongo(%q, Topic%s, bodies.%s%s)\n", step.snake, step.pascal, forward, route)
+			fmt.Fprintf(&register, "\tsteps.Mongo(%q, Topic%sCompensation, bodies.%s%s)\n", step.snake+"_compensation", step.pascal, compensate, route)
 			writeMongoStepBody(&bodies, snake, step, false)
 			writeMongoStepBody(&bodies, snake, step, true)
 		}
@@ -422,8 +474,10 @@ import (
 // above saga.admission.high_records new sagas are refused
 // (saga.ErrBackpressure; a start effect is retried) and running ones carry on.
 // More load needs more processes: shard by sid (each process owns its sids'
-// entities) and add an admission check on the native steps (kitsaga.WithAdmit,
-// below) so a command runs on the process that owns its entity. The formal
+// entities), route the steps that change such an entity to its sid
+// (roost add saga ... -routed <step>: the coordinator delivers them to that
+// sid's durable only) and keep an ownership check on them (kitsaga.WithAdmit,
+// below) as the last guard against a second writer. The formal
 // implementation measured about 1050 sagas/s (native forward steps, 128
 // concurrent, three-node JetStream R3) on one macOS machine; Linux and
 // cross-machine runs are not measured:
@@ -431,7 +485,8 @@ import (
 // Guide: %[6]s §2.1
 
 // StepsGroup names the step consumers: each step's JetStream durable is
-// <group>-<step name>, shared by every replica of the service, and the Mongo
+// <group>-<step name>, shared by every replica of the service (a routed step's
+// is <group>-<step name>-<sid>, bound only by that sid's process), and the Mongo
 // steps' inbox is _<group>_step_inbox in the saga database. Do not rename it
 // once deployed: commands left on the old durables are not handed to new ones.
 const StepsGroup = %[7]q
@@ -479,11 +534,12 @@ func StartSteps(ctx context.Context, registry *app.Registry, deps StepDeps) (*ki
 //
 // No admission is set: every replica takes any command. That is right for one
 // process per service. With several processes that each own some entities
-// (players bound to a sid), a native step that runs on the wrong process loads
-// another process's entity: give each Native call
-// kitsaga.WithAdmit(func(ctx context.Context, command saga.Command) error { ... })
-// that refuses a command whose entity this process does not own (the refused
-// delivery is offered to another replica), as game-demo's gift saga does.
+// (players bound to a sid), route the steps that change them (-routed: a
+// routed step's commands go only to the owner sid's durable) and give each of
+// them kitsaga.WithAdmit(func(ctx context.Context, command saga.Command) error { ... })
+// that checks the entity really is this process's: saga.BounceStep sends a
+// command for an entity bound elsewhere (or moving) back to the coordinator,
+// saga.RejectStep refuses one that can never run, as game-demo's gift saga does.
 func RegisterSteps(steps *kitsaga.Steps, deps StepDeps) {
 	bodies := stepBodies{deps: deps}
 %[11]s}
