@@ -1,0 +1,78 @@
+// Package room 是服务端开房/断线的入口。它不对客户端开放创建或任意玩家的修改权限。
+package room
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	roomentity "{{MODULE}}/game/entities/room"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/lifecycle"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+// EntityID 把对外的房间唯一号转换成 Room Entity ID，不能把其他种类的完整 Entity ID 交给 Sender。
+func EntityID(roomID int64) (int64, error) {
+	if roomID <= 0 {
+		return 0, apperrors.ErrRoomInvalid
+	}
+	id, err := entity.BuildEntityID(roomID, roomentity.EntityKindRoom)
+	if err != nil {
+		return 0, apperrors.ErrRoomInvalid
+	}
+	return id, nil
+}
+
+// Open 接收服务端分配且不复用的 uniqueID。GetOrCreate + 幂等初始化允许在丢回包后重试；
+// 初始化失败时不销毁共享实体，后续相同请求可以补齐。存储错误原样返回，不能当作“尚未创建”。
+func Open(ctx context.Context, registry *app.Registry, uniqueID int64, capacity int32) error {
+	id, err := EntityID(uniqueID)
+	if err != nil {
+		return err
+	}
+	if capacity < 1 || capacity > roomentity.MaxSeats {
+		return apperrors.ErrRoomInvalid
+	}
+	if registry == nil {
+		return fmt.Errorf("room: registry is required")
+	}
+	client, ok := app.Lookup[nest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return fmt.Errorf("room: nest client is unavailable")
+	}
+	rooms, err := lifecycle.RoomFromRegistry(registry)
+	if err != nil {
+		return err
+	}
+	if _, _, err := rooms.GetOrCreate(ctx, uniqueID); err != nil {
+		return err
+	}
+	return syncsender.NewRoomOpenSender(client).Sync_RoomOpen(ctx, id, capacity)
+}
+
+// Disconnect 由接入层在关闭连接时调；epoch 必须是该连接最后成功 Join/Reconnect 得到的值。
+// 断线只改在线标记；踢出、掉线保留时长、按房间广播等策略由上层玩法组合。
+func Disconnect(ctx context.Context, client nest.Client, roomID, playerID int64, epoch uint64) (bool, error) {
+	id, err := EntityID(roomID)
+	if err != nil {
+		return false, err
+	}
+	if client == nil {
+		return false, fmt.Errorf("room: nest client is required")
+	}
+	return syncsender.NewRoomDisconnectSender(client).Sync_RoomDisconnect(ctx, id, playerID, epoch)
+}
+
+// ConnectionKey 来自服务端 Session：直连 TCP 与 Gate 代理都提供随机 nonce。
+// 不能退化为 PlayerID / SessionID，也不能从客户端 PB 里取，否则旧连接可以操作新席位。
+func ConnectionKey(session gateway.Session) (string, error) {
+	identified, ok := session.(interface{ ConnectionID() string })
+	if !ok || identified.ConnectionID() == "" || len(identified.ConnectionID()) > 128 {
+		return "", apperrors.ErrRoomInvalid
+	}
+	return identified.ConnectionID(), nil
+}

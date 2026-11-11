@@ -20,6 +20,10 @@
 | [stamina](stamina/module.yaml) | 体力：随业务时间惰性恢复到上限（不用定时器，客户端按同步下来的字段自己推算）；组件入口 `Spend` / `Grant`（可超上限到硬顶，超出截断）/ `Current`；花金币补满的协议 `StaminaRefill`（每业务日限次、逐次涨价）；服务端发放 handler `StaminaGrant`；规则写在 `game/entities/player/stamina_rules.go` | wallet | `PlayerDao.Stamina`（同步） | 25 |
 | [shop](shop/module.yaml) | 商店：协议 `ShopBuy` 用金币买道具，扣钱、发货、记限购在一笔事务里；每业务日 / 终身限购；请求键在最近 64 次成功购买的窗口内防重发；商品目录写在 `game/entities/player/shop_goods.go` | wallet、bag | `PlayerDao.Shop`（同步）、`PlayerDao.ShopLedger`（只落库） | 17 |
 
+| [skillbook](skillbook/module.yaml) | 技能目录：服务启动时编译 `game/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 8 |
+| [room](room/README.md) | 自带 Room Entity、DAO 与 lifecycle：1～64 席、加入/退出、房主交接、重连代际、关闭；服务端开房，客户端只能操作自己的当前连接 | 无（安装时代办玩家 TCP 接入；鉴权与启用配置仍归工程） | `RoomDao`（只落库；成员读 PB 快照） | 22 |
+| [turn](turn/README.md) | 固定名单的顺序回合：命令序号与重放、持久超时、离线不追帧；PB 查询；无默认伤害/胜负规则 | room | `RoomDao.Turn` 与实体定时器节点（只落库） | 25 |
+
 两个模块都装着时还会多出**联动文件**（不论先装哪个，在第二个装上的那一次写）：
 
 | 联动 | 做什么 | 场景数 |
@@ -29,7 +33,7 @@
 | mailbox + bag | 道具附件：登记 `item` 这个附件种类，领取时道具进背包，与领取账本同一笔事务；背包拒绝时邮件保持未领（`game/mailbox/mailbox_item.go`、`game/entities/player/mailbox_item.go`） | 9 |
 | task + checkin | 签到成功时把每日任务“签到一次”推进一次，与签到同一笔事务（`game/entities/player/task_checkin.go`） | 3 |
 
-以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter`、`chat`、`leaderboard`、`bag`、`profile` 与 `mailbox`（连带 `wallet`）。
+以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter`、`chat`、`leaderboard`、`bag`、`profile`、`mailbox` 与 `skillbook`（连带 `wallet`）。
 
 ## 使用
 
@@ -51,15 +55,15 @@ agent 用 `--json`：`list`、`plan`、`add`、`verify` 都支持；`plan` 与 `
 ## 安装做了什么
 
 1. **前置骨架**：实体还没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程还没有玩家接入时执行 `roost add access player --service <service>`。
-2. **状态**：把模块的状态字段追加到实体主 DAO 的**末尾**。类型是模块自带的嵌套结构体（`db/def/<module>.go`）。
-3. **组件**：把模块的组件接到实体上。
-4. **文件**：把 `files/` 下的模板渲染后写进工程。落点已被业务文件占用时拒绝，不覆盖。
-5. **记录**：在 `roost.yaml` 的 `modules.<name>` 记下这个模块拥有的文件、字段和分配到的号。
-6. **生成**：运行全部生成器。
+2. **模块文件与自带实体**：先写模板；`entities` 声明的实体分配实体号并由模块提供 Entity / DAO，安装器补 lifecycle。已有实体、DAO 或 lifecycle 的标准落点被占用时拒绝，不接管业务文件。
+3. **状态**：把模块的状态字段追加到实体主 DAO 的**末尾**。类型是模块自带的嵌套结构体（`db/def/<module>.go`）。
+4. **组件**：把模块的组件接到实体上。
+5. **记录**：在 `roost.yaml` 的 `modules.<name>` 记下这个模块拥有的文件、字段、分配到的号、目标 `service`、`requires` 与可选 `runtime`。
+6. **生成**：运行全部生成器。自带实体时同时刷新 owner / handler / shutdown 接线；有 `runtime` 时生成服务适配层。全部生成物与需刷新配置一起暂存、提交，失败不会留下半套接线。
 
 两个模块之间的**联动文件**在第 4 步之后写：这次装的模块与工程里已有的（或同一次装的）模块凑成一对、而这一对有联动时，把联动文件写进工程，归属记在拥有它的模块的 `with` 下。`plan` 与 `add` 的输出里是 `glue <模块> with <另一个模块>`。两个都早已装好的不补。
 
-第 2～6 步任何一步失败，模块写过的业务文件与 `roost.yaml` 恢复原样。已安装的模块不再处理，重复执行没有变化。没有卸载命令：分配过的号与存储键不回收，要去掉一个模块时按 `roost.yaml` 里的归属清单手工删。
+第 2～6 步任何一步失败，模块写过的业务文件与 `roost.yaml` 恢复原样。已安装的模块不再处理，重复执行没有变化。没有卸载命令：分配过的号与存储键不回收，要去掉一个模块时按 `roost.yaml` 里的归属清单手工删；先检查是否仍被其他模块依赖。服务不再包含任何 runtime 模块时，还需删除该服务的 `modules_gen.go` 并执行 `project sync`，让 bootstrap 恢复业务 `New()`；仍有 runtime 模块时由生成器重写适配层。
 
 ## 写一个模块
 
@@ -70,6 +74,32 @@ modules/<name>/
   module.yaml          清单
   files/<工程内路径>.tmpl   模板，按安装后的真实路径存放
 ```
+
+### 自带实体
+
+`entities: [Room]` 声明模块拥有的实体，`entity: Room` 仍表示组件/追加状态的挂靠目标，两者含义不同。每个自带实体必须有 `files/game/entities/<snake>/entity.go.tmpl` 与 `files/db/def/<snake>.go.tmpl`；实体号用 `{{ID:entity:Room}}`，所属服务用 `{{GAME_SERVICE}}`。安装器复用 `roost add lifecycle` 的实现生成 `game/lifecycle/<snake>.go`，模板不要再带第二份 lifecycle。
+
+实体、DAO、lifecycle 都记入归属清单，并在模块安装的回滚边界内。它们不作为先执行、失败后保留的前置命令。实体号与其他号一样按最小空号分配，扫描已有代码与安装记录，已分配号不回收。依赖模块可以通过 `requires` 使用先安装的实体；需要追加状态时仍声明自己的 `entity` / `state` / `component`。
+
+安装器在生成暂存区先同步服务归属，再生成全部接口；bootstrap、相关 shutdown 配置、模块源码和清单失败时一并回退。普通 `roost generate` 的行为不变，手工修改实体归属仍需 `project sync`。第一个使用者是 [room](room/README.md)；scene / team / guild 等尚未迁移。
+
+### 服务级启动与停机
+
+需要服务级资源的模块在 `module.yaml` 声明：
+
+```yaml
+runtime:
+  package: game/skillbook
+  start: Start
+```
+
+工程内入口为 `func Start(*app.Registry) (func(context.Context) error, error)`。返回的停止函数可为 nil；启动失败但已有部分资源时，也要返回对应停止函数。启动入口在全部框架 Mod 启动后、业务 `Service.Init` 前运行，可以发布 Registry 能力。按名称稳定遍历模块，并先启动 `requires` 列出的依赖；业务先停，再按反向顺序停模块。模块不能在启动时依赖业务 `Service.Init` 才发布的能力。
+
+安装器根据 `roost.yaml` 生成 `internal/service/<service>/modules_gen.go`，bootstrap 用 `NewWithModules()` 构造适配层。它嵌入实际 `*Service`，保留配置声明、Nest 接线等可选接口，**不改业务 `service.go`**。手动绕过 bootstrap 使用 `New()` 不会启动模块；嵌入工程应使用 `NewWithModules()`。`project sync` 与 `generate` 重写适配层，模块业务文件仍归工程。
+
+App 在 Init 失败后调用 Shutdown，适配层只清理已经启动（包括部分启动失败）且提供停止函数的模块；业务 Init 被调用后即纳入清理。停机函数必须等待真实退出并遵守 ctx，返回错误时停止继续关闭依赖，保留回调；再次 Shutdown 从未完成处继续，不重复关闭已成功退出的模块。模块停止共享业务服务的停机时间预算，不自动增加超时时间。失败不会自动重启；当前一个服务实例只允许一轮 Init → Shutdown，调用方不能并发调用生命周期。
+
+模块只安装到一个业务服务。依赖必须属于同一服务；跨进程调用仍走框架 RPC，不是模块启动依赖。新增后台消费者还须按 App 的输入关闭契约登记 ingress，不能以取消 context 代替排空。`skillbook` 是首个使用者：只读目录不需要后台任务，客户端不再临时编译第二份目录。
 
 ### 清单
 
@@ -83,6 +113,7 @@ needs:
   features: [protocol, entity, dao, errcode]
   uses: []                   # 业务服务必须 uses 的托管框架服务（rank、mail……）
 entity: Player               # 状态与组件挂在哪个实体上
+entities: []                 # 自带实体名字；与挂靠既有实体分开，见上文
 state:                       # 追加到主 DAO 末尾的顶层字段
   - field: Wallet            # 以模块名开头
     type: WalletState        # 模块在 db/def 里定义的嵌套结构体
@@ -90,6 +121,7 @@ state:                       # 追加到主 DAO 末尾的顶层字段
     dao: persist,sync
     comment: 写进 DAO 定义的注释
 component: Wallet            # 挂在实体上的组件
+timer_types: []              # 实体内的持久定时器类型名，例如 turn 的 [TurnDeadline]
 protocols: [WalletSpend]     # 模板里 {{ID:protocol:<name>}} 用到的名字
 errcodes: [wallet_short]     # 模板里 {{ID:errcode:<name>}} 用到的名字
 access:                      # 要求的玩家接入形态，由安装器代办（见下）
@@ -129,7 +161,9 @@ verify:
 | `{{MODULE}}` | 工程的 Go module 路径 |
 | `{{PROJECT}}` | 工程名 |
 | `{{GAME_SERVICE}}`、`{{GAME_SERVICE_PKG}}` | 模块装进的业务服务名与它的 Go 包名 |
-| `{{ID:protocol:<name>}}`、`{{ID:errcode:<name>}}`、`{{ID:component:<name>}}` | 安装时从 `roost.yaml` 的 `ids` 段分配的号 |
+| `{{ID:entity:<name>}}`、`{{ID:protocol:<name>}}`、`{{ID:errcode:<name>}}`、`{{ID:component:<name>}}` | 安装时从 `roost.yaml` 的 `ids` 段分配的号 |
+| `{{ID:timer:<name>}}` | 实体内持久定时器类型号，写入 `timers.<entity>.types` |
+| `{{TIMER_COMPONENT}}` | 实际定时器组件的 PascalCase 名 |
 
 ### 必须遵守的约定
 
@@ -167,3 +201,13 @@ bash scripts/test-modules-generated.sh
 ```
 
 第一条包含在生成工程上真实安装并验收的用例（约一分钟）。第二条是发版门禁里的那一条：全新工程、自定义 module 名、逐个模块安装、组合安装、重复安装无变化。
+
+## 模块的持久定时器
+
+清单写 `timer_types: [TurnDeadline]`，同时声明 `entity` / `component`；模板以 `{{ID:timer:TurnDeadline}}` 定义显式 int32 常量。安装器复用已有的实体定时器，缺失时补同一套组件、DAO 节点与 bootstrap 驱动。模板中的 `{{TIMER_COMPONENT}}` 是实际定时器组件的 PascalCase 名，支持项目自定义组件名。
+
+模块在实际定时器组件上实现 `register<模块组件>Timers(*entitytimer.Handlers)`；安装器按语法树把调用追加到业务登记函数（只允许直接顺序登记，不在未知控制流后插代码）。构造阶段只绑定定时器组件的方法，真正触发时再找其他组件；不能依赖组件构造顺序。
+
+类型号按实体分配，从 1 起避开已有 int32 常量、静态 Register 实参、`timers.<entity>.types` 和已安装记录；新组件的示例占 1。无法静态确定时拒绝。不要把登记表交给外部函数或缓存起来后再登记；本包显式接收 `*entitytimer.Handlers` 的登记方法可互相调用。已分配的号不回收，作用域写入 `modules.<module>.timer_entity`；归属与 types 不一致时清单校验失败。普通工程级 `roost id next` 不分配 timer 类型。
+
+该步骤属于模块安装事务：类型号、DAO / Entity 改写、业务回调登记与生成接线一起回滚。`plan --json` 的 `timer` 列出作用域、复用/新建和最终定时器定义。首个真实使用者与完整边界见 [turn](turn/README.md)。

@@ -1,0 +1,16 @@
+name: room
+summary: 持久化房间：有限座位、进出、房主交接、重连代际；服务端开房，客户端只能操作自己的席位
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+access:
+  transport: tcp
+entities: [Room]
+entity: Room
+component: Room
+protocols: [RoomJoin, RoomReconnect, RoomLeave, RoomView, RoomClose]
+errcodes: [room_invalid, room_unopened, room_closed, room_full, room_not_member, room_stale_epoch, room_not_host]
+verify:
+  packages: [./game/handler, ./game/controllers/room]
+  run: ^TestRoom
+  pass: 22

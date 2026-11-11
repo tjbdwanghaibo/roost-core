@@ -1,0 +1,108 @@
+package skillbook
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+
+	"{{MODULE}}/game/skills"
+)
+
+func TestSkillbookStartsTheGameCatalog(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	stop, err := Start(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop(context.Background())
+	ids, warnings, err := Read(registry)
+	// 默认数据和 game-demo 都保留这一份工程自有的 fireball 定义。
+	if err != nil || !reflect.DeepEqual(ids, []string{"skill.{{PROJECT}}.fireball"}) || warnings != 0 {
+		t.Fatalf("catalog = %v, warnings %d, err %v", ids, warnings, err)
+	}
+}
+
+func TestSkillbookSortsAndCopiesTheResponse(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	_, err := start(registry, func() (*skills.Catalog, error) {
+		return &skills.Catalog{
+			Programs:    map[string]*skill.Program{"shield": nil, "dash": nil},
+			Diagnostics: map[string][]skill.Diagnostic{"dash.json": {{Severity: skill.DiagnosticWarning}}},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, warnings, err := Read(registry)
+	if err != nil || !reflect.DeepEqual(ids, []string{"dash", "shield"}) || warnings != 1 {
+		t.Fatalf("%v %d %v", ids, warnings, err)
+	}
+	ids[0] = "changed by caller"
+	again, _, err := Read(registry)
+	if err != nil || !reflect.DeepEqual(again, []string{"dash", "shield"}) {
+		t.Fatalf("shared result: %v %v", again, err)
+	}
+}
+
+func TestSkillbookCompileFailurePublishesNothing(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	failure := errors.New("invalid skill definition")
+	stop, err := start(registry, func() (*skills.Catalog, error) { return nil, failure })
+	if stop != nil || !errors.Is(err, failure) {
+		t.Fatalf("compile result: %v, stop set %v", err, stop != nil)
+	}
+	if _, _, err := Read(registry); err == nil {
+		t.Fatal("failed catalog was published")
+	}
+}
+
+func TestSkillbookRejectsMissingInputs(t *testing.T) {
+	if _, err := Start(nil); err == nil {
+		t.Fatal("nil registry accepted")
+	}
+	registry := app.NewRegistry(viper.New())
+	if stop, err := start(registry, func() (*skills.Catalog, error) { return nil, nil }); err == nil || stop != nil {
+		t.Fatal("nil catalog accepted")
+	}
+	if _, _, err := Read(nil); err == nil {
+		t.Fatal("nil registry read succeeded")
+	}
+}
+
+func TestSkillbookDuplicateStartPreservesTheRunningCatalog(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	stop, err := Start(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop(context.Background())
+	if duplicate, err := Start(registry); err == nil || duplicate != nil {
+		t.Fatal("duplicate start accepted")
+	}
+	ids, _, err := Read(registry)
+	if err != nil || !reflect.DeepEqual(ids, []string{"skill.{{PROJECT}}.fireball"}) {
+		t.Fatalf("running catalog lost: %v %v", ids, err)
+	}
+}
+
+func TestSkillbookStopClosesReadsAndCanBeRepeated(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	stop, err := Start(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Read(registry); err == nil {
+		t.Fatal("stopped catalog can still be read")
+	}
+	if err := stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}

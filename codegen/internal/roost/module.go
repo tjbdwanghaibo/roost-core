@@ -173,11 +173,21 @@ func printModulePlan(stdout io.Writer, plan ModulePlan) {
 		} else {
 			fmt.Fprintf(stdout, "module %s: will install\n", item.Name)
 		}
+		if item.Runtime != nil {
+			fmt.Fprintf(stdout, "  runtime:   %s.%s (before service Init; stop after service Shutdown)\n", item.Runtime.Package, item.Runtime.Start)
+		}
 		for _, state := range item.State {
 			fmt.Fprintf(stdout, "  state:     %s\n", state)
 		}
 		if item.Component != "" {
 			fmt.Fprintf(stdout, "  component: %s\n", item.Component)
+		}
+		if item.Timer != nil {
+			action := "reuse"
+			if item.Timer.Create {
+				action = "create"
+			}
+			fmt.Fprintf(stdout, "  timer:     %s %s.%s (component id %d)\n", action, item.Timer.Entity, item.Timer.Spec.Component, item.Timer.Spec.ID)
 		}
 		for _, kind := range moduleIDKinds {
 			names := make([]string, 0, len(item.IDs[kind]))

@@ -51,6 +51,9 @@ type GenerateOptions struct {
 	// builds stay warm.
 	Force  bool
 	Stdout io.Writer
+	// syncProject 只供模块安装使用：新增自带实体或定时器时，在同一暂存树里刷新 owner / shutdown / 定时器接线。
+	// 普通 generate 仍要求调用方显式 project sync，不隐式接受手工改过的工程结构。
+	syncProject bool
 }
 
 type generator struct {
@@ -83,6 +86,7 @@ func forceArg(args []string, force bool) []string {
 
 func generatorsFor(m Manifest, force bool) []generator {
 	return []generator{
+		{Name: "module-service", Always: true, Run: func(root string, w io.Writer) error { return generateModuleServices(root, m) }},
 		{Feature: "dao", Name: "dao", Prefixes: []string{"db/def/"}, Run: func(root string, w io.Writer) error {
 			return dao.Run(forceArg([]string{"-def", under(root, dao.DefaultDefDir), "-out", under(root, dao.DefaultOutDir)}, force), w)
 		}},
@@ -257,6 +261,16 @@ func GenerateTransactional(ctx context.Context, root string, options GenerateOpt
 	if err != nil {
 		return fmt.Errorf("snapshot generation inputs: %w", err)
 	}
+	var refreshed []string
+	if options.syncProject {
+		refreshed, err = refreshGeneratedShutdownConfigs(stage, manifest.withEntityOwners(stage))
+		if err != nil {
+			return inProjectPaths(err, stage, absRoot)
+		}
+		if _, err := syncManifest(stage, manifest); err != nil {
+			return inProjectPaths(err, stage, absRoot)
+		}
+	}
 	var stagedStdout, stagedStderr bytes.Buffer
 	selected := generatorsFor(manifest, options.Force)
 	if options.Changed {
@@ -282,7 +296,7 @@ func GenerateTransactional(ctx context.Context, root string, options GenerateOpt
 	if err != nil {
 		return err
 	}
-	dependencyChanges, err := planExplicitStagedFiles(absRoot, stage, "go.mod", "go.sum")
+	dependencyChanges, err := planExplicitStagedFiles(absRoot, stage, append(refreshed, "go.mod", "go.sum")...)
 	if err != nil {
 		return err
 	}

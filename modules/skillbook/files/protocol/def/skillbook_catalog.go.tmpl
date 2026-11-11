@@ -15,8 +15,8 @@ type SkillCatalogResponse struct {
 	Warnings int32    `pb:"4"`
 }
 
-//roost:protocol group=game handler=player
+//roost:protocol group=game handler=skillbook
 type SkillCatalogProtocol interface {
-	//roost:msg id=10012
+	//roost:msg id={{ID:protocol:SkillCatalog}}
 	SkillCatalog(SkillCatalogRequest) SkillCatalogResponse
 }

@@ -1,0 +1,11 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrTurnInvalid    = errcode.Define({{ID:errcode:turn_invalid}}, "turn_invalid", "turn invalid")
+	ErrTurnNotRunning = errcode.Define({{ID:errcode:turn_not_running}}, "turn_not_running", "turn not running")
+	ErrTurnNotActor   = errcode.Define({{ID:errcode:turn_not_actor}}, "turn_not_actor", "turn not actor")
+	ErrTurnSequence   = errcode.Define({{ID:errcode:turn_sequence}}, "turn_sequence", "turn sequence")
+	ErrTurnExpired    = errcode.Define({{ID:errcode:turn_expired}}, "turn_expired", "turn expired")
+)

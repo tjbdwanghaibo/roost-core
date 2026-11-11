@@ -1,0 +1,62 @@
+package skillbook
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"sort"
+	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+
+	"{{MODULE}}/game/skills"
+)
+
+const Capability app.ModName = "skillbook.catalog"
+
+// Catalog 在启动时构造，发布之后只读；停止后拒绝查询。结果切片不与调用者共享。
+type Catalog struct {
+	ids      []string
+	warnings int32
+	stopped  atomic.Bool
+}
+
+// Start 在业务 Init 前编译并发布目录；失败不会发布半份结果。
+func Start(registry *app.Registry) (func(context.Context) error, error) {
+	return start(registry, func() (*skills.Catalog, error) { return skills.CompileAll(CompileEnvironment()) })
+}
+
+func start(registry *app.Registry, compile func() (*skills.Catalog, error)) (func(context.Context) error, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("skillbook: registry is required")
+	}
+	compiled, err := compile()
+	if err != nil {
+		return nil, fmt.Errorf("skillbook: compile: %w", err)
+	}
+	if compiled == nil {
+		return nil, fmt.Errorf("skillbook: compiler returned no catalog")
+	}
+	catalog := &Catalog{}
+	for id := range compiled.Programs {
+		catalog.ids = append(catalog.ids, id)
+	}
+	sort.Strings(catalog.ids)
+	for _, diagnostics := range compiled.Diagnostics {
+		catalog.warnings += int32(len(diagnostics))
+	}
+	if err := registry.Register(Capability, catalog); err != nil {
+		return nil, err
+	}
+	slog.Info("skill catalog compiled", "skills", len(catalog.ids), "warnings", catalog.warnings)
+	return func(context.Context) error { catalog.stopped.Store(true); return nil }, nil
+}
+
+// Read 返回独立的响应数据，不让调用方修改启动目录。
+func Read(registry *app.Registry) ([]string, int32, error) {
+	catalog, ok := app.Lookup[*Catalog](registry, Capability)
+	if !ok || catalog == nil || catalog.stopped.Load() {
+		return nil, 0, fmt.Errorf("skillbook: catalog is not running")
+	}
+	return append([]string(nil), catalog.ids...), catalog.warnings, nil
+}

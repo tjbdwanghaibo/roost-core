@@ -1,0 +1,169 @@
+package turn
+
+import (
+	"context"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/network/gateway"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	roomentity "{{MODULE}}/game/entities/room"
+	"{{MODULE}}/game/handler"
+	syncsender "{{MODULE}}/game/handler/syncsender"
+	"{{MODULE}}/game/playeraccess"
+	roomlogic "{{MODULE}}/game/room"
+	"{{MODULE}}/protocol/pb"
+)
+
+type turnEndpointCommitter struct{}
+
+func (turnEndpointCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+type turnEndpointFixture struct {
+	registry   *app.Registry
+	controller *Controller
+	access     *entity.ManagerAccess
+}
+
+func newTurnEndpointFixture(t *testing.T) *turnEndpointFixture {
+	t.Helper()
+	roomentity.RegisterEntity()
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	engine := nest.NewEngine(nest.NestOptionWithGetter(access), nest.NestOptionWithTransactionCommitter(turnEndpointCommitter{}), nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	for _, register := range []func(*nest.NestMgr) error{handler.RegisterRoomOpenNestHandlersOn, handler.RegisterRoomJoinNestHandlersOn, handler.RegisterRoomViewNestHandlersOn, handler.RegisterRoomLeaveNestHandlersOn, handler.RegisterRoomReconnectNestHandlersOn, handler.RegisterRoomDisconnectNestHandlersOn, handler.RegisterRoomCloseNestHandlersOn, handler.RegisterTurnStartNestHandlersOn, handler.RegisterTurnEndNestHandlersOn, handler.RegisterTurnViewNestHandlersOn} {
+		if err := register(engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	registry := app.NewRegistry(viper.New())
+	if err := registry.Register(app.ModName("nest"), engine); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(mods.ModEntityRuntime, access); err != nil {
+		t.Fatal(err)
+	}
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &turnEndpointFixture{registry: registry, controller: controller, access: access}
+}
+
+func openTurnEndpointRoom(t *testing.T, f *turnEndpointFixture) {
+	t.Helper()
+	if err := roomlogic.Open(context.Background(), f.registry, 82001, 3); err != nil {
+		t.Fatal(err)
+	}
+	id, err := roomlogic.EntityID(82001)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, idPlayer := range []int64{101, 102} {
+		key := "a"
+		if idPlayer == 102 {
+			key = "b"
+		}
+		if _, err := syncsender.NewRoomJoinSender(f.controller.NestClient()).Sync_RoomJoin(context.Background(), id, idPlayer, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+func TestTurnEndpointUsesAuthenticatedActor(t *testing.T) {
+	f := newTurnEndpointFixture(t)
+	openTurnEndpointRoom(t, f)
+	response, err := f.controller.HandleTurnStart(turnContext(101, "a"), &pb.TurnStartRequest{RoomID: 82001, Epoch: 1, TurnMillis: 1000, MaxTurns: 8})
+	if err != nil || response.Code != 0 || response.Info.Round != 1 || response.Info.ActorID != 101 {
+		t.Fatalf("start: %+v %v", response, err)
+	}
+	denied, err := f.controller.HandleTurnEnd(turnContext(102, "b"), &pb.TurnEndRequest{RoomID: 82001, Epoch: 2, Round: 1, Sequence: 1})
+	if err != nil || denied.Code == 0 || denied.Info != nil {
+		t.Fatalf("wrong actor: %+v %v", denied, err)
+	}
+	accepted, err := f.controller.HandleTurnEnd(turnContext(101, "a"), &pb.TurnEndRequest{RoomID: 82001, Epoch: 1, Round: 1, Sequence: 1})
+	if err != nil || accepted.Code != 0 || accepted.Info.Round != 2 || accepted.Info.ActorID != 102 || accepted.Info.Sequence != 1 {
+		t.Fatalf("end: %+v %v", accepted, err)
+	}
+}
+func TestTurnEndpointPBPreservesCommandAndSnapshot(t *testing.T) {
+	f := newTurnEndpointFixture(t)
+	openTurnEndpointRoom(t, f)
+	raw, err := pb.MarshalTurnStartRequest(&pb.TurnStartRequest{RoomID: 82001, Epoch: 1, TurnMillis: 1000, MaxTurns: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := pb.UnmarshalTurnStartRequest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := f.controller.HandleTurnStart(turnContext(101, "a"), request)
+	if err != nil || response.Code != 0 {
+		t.Fatalf("start: %+v %v", response, err)
+	}
+	raw, err = pb.MarshalTurnStartResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := pb.UnmarshalTurnStartResponse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Info.Round != 1 || decoded.Info.Deadline <= 0 || decoded.Info.MaxTurns != 8 || decoded.Info.TurnMillis != 1000 || len(decoded.Info.Players) != 2 || decoded.Info.Players[1] != 102 {
+		t.Fatalf("PB snapshot: %+v", decoded.Info)
+	}
+	raw, err = pb.MarshalTurnEndRequest(&pb.TurnEndRequest{RoomID: 82001, Epoch: 1, Round: 1, Sequence: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := pb.UnmarshalTurnEndRequest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := f.controller.HandleTurnEnd(turnContext(101, "a"), command)
+	if err != nil || result.Code != 0 || result.Info.Sequence != 1 {
+		t.Fatalf("PB command: %+v %v", result, err)
+	}
+}
+func TestTurnEndpointRejectsMissingIdentityAndOldConnection(t *testing.T) {
+	f := newTurnEndpointFixture(t)
+	openTurnEndpointRoom(t, f)
+	request := &pb.TurnViewRequest{RoomID: 82001, Epoch: 1}
+	if _, err := f.controller.HandleTurnView(nil, request); err == nil {
+		t.Fatal("nil context accepted")
+	}
+	if _, err := f.controller.HandleTurnView(turnContext(101, "a"), nil); err == nil {
+		t.Fatal("nil request accepted")
+	}
+	for _, ctx := range []*playeraccess.Context{turnContext(101, "old"), turnContext(103, "outsider"), {PlayerID: 101}} {
+		reply, err := f.controller.HandleTurnView(ctx, request)
+		if err != nil || reply.Code == 0 || reply.Info != nil {
+			t.Fatalf("identity: %+v %v", reply, err)
+		}
+	}
+}
+
+type turnSession struct {
+	playerID int64
+	key      string
+}
+
+func (s turnSession) Principal() gateway.Principal {
+	return gateway.Principal{PlayerID: s.playerID, SessionID: "account-session"}
+}
+func (s turnSession) Reply(context.Context, any) error { return nil }
+func (s turnSession) Close(error) error                { return nil }
+func (s turnSession) ConnectionID() string             { return s.key }
+func turnContext(playerID int64, key string) *playeraccess.Context {
+	return &playeraccess.Context{PlayerID: playerID, Session: turnSession{playerID: playerID, key: key}}
+}

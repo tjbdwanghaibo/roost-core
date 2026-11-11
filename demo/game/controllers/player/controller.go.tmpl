@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,7 +16,6 @@ import (
 	"{{MODULE}}/game/purchase"
 	"{{MODULE}}/game/runtimeid"
 	"{{MODULE}}/game/settings"
-	"{{MODULE}}/game/skills"
 	rpcalliance "{{MODULE}}/internal/rpc/alliance"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
@@ -77,10 +75,7 @@ type Controller struct {
 	// incarnation of this sid, or another sid, never reuses one).
 	teamIDs fmongo.ICollection
 
-	// The skill catalog, compiled from game/skills/*.json on first use.
-	skillsOnce   sync.Once
-	skillCatalog *skills.Catalog
-	skillErr     error
+
 }
 
 // battleRouter is the slice of the game service's battle manager the

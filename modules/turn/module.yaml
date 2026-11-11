@@ -1,0 +1,21 @@
+name: turn
+summary: 房间内顺序回合：当前行动者、命令序号与重放、持久超时推进
+requires: [room]
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode, nest]
+entity: Room
+component: Turn
+timer_types: [TurnDeadline]
+state:
+  - field: Turn
+    type: TurnState
+    store: turn
+    dao: persist,nosync
+    comment: 回合事实与超时节点在同一笔 Nest 事务中提交。
+protocols: [TurnStart, TurnEnd, TurnView]
+errcodes: [turn_invalid, turn_not_running, turn_not_actor, turn_sequence, turn_expired]
+verify:
+  packages: [./game/handler, ./game/controllers/turn]
+  run: ^TestTurn
+  pass: 25

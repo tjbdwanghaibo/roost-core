@@ -50,7 +50,7 @@ PY
 project="$(new_project atelier example.com/studio/atelier)"
 cd "$project"
 "$roost" module list > "$review_root/list.log"
-for name in wallet checkin chat enter profile bag leaderboard mailbox task stamina shop; do
+for name in wallet checkin chat enter profile bag leaderboard mailbox task stamina shop skillbook room turn rehome; do
   grep -q "^  $name " "$review_root/list.log" || { cat "$review_root/list.log"; echo "roost module list does not show $name" >&2; exit 1; }
 done
 "$roost" module plan checkin --json > "$review_root/plan.json"
@@ -103,7 +103,7 @@ grep -q 'prerequisite (did run): set access.player.self_sync: true' "$review_roo
 grep -q 'glue chat with enter: written' "$review_root/add-enter.log"
 [[ -f game/chat/chat_enter.go ]]
 grep -q 'self_sync: true' roost.yaml
-expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2
+expect_verify wallet=9 checkin=8 chat=8 enter=11 chat+enter=2
 go test -mod=mod ./... > "$review_root/test-all.log" 2>&1 || { tail -30 "$review_root/test-all.log"; exit 1; }
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    self-sync' "$review_root/doctor.log"
@@ -116,30 +116,44 @@ grep -q 'module wallet: already installed' "$review_root/add-batch2.log"
 grep -q 'glue mailbox with enter: written' "$review_root/add-batch2.log"
 # bag 与 mailbox 同一次装：道具附件的联动（mailbox 的附件种类登记点）也在这一步写。
 grep -q 'glue mailbox with bag: written' "$review_root/add-batch2.log"
-expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9
+expect_verify wallet=9 checkin=8 chat=8 enter=11 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9
 go test -mod=mod ./... > "$review_root/test-all-batch2.log" 2>&1 || { tail -30 "$review_root/test-all-batch2.log"; exit 1; }
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    collaborators:mail' "$review_root/doctor.log" && grep -q '^OK    collaborators:rank' "$review_root/doctor.log"
 [[ "$(grep -c '^FAIL' "$review_root/doctor.log")" == 3 ]] || { grep '^FAIL' "$review_root/doctor.log"; echo "unexpected doctor failures" >&2; exit 1; }
 
+# 自带 Room 在已有业务工程上增量安装；其 Entity / DAO / lifecycle 与 owner 接线一次完成。
+commit_all batch2
+"$roost" module add room > "$review_root/add-room.log"
+[[ -f game/entities/room/entity.go && -f db/def/room.go && -f game/lifecycle/room.go ]]
+expect_verify wallet=9 checkin=8 chat=8 enter=11 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 room=22
+
+# A3: reuse the room installed above, and wire its persistent deadline atomically.
+commit_all room
+"$roost" module add turn > "$review_root/add-turn.log"
+expect_verify wallet=9 checkin=8 chat=8 enter=11 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 room=22 turn=25
+
 # 8. 全新工程、一条命令、与上面相反的顺序装全部模块：结果与安装顺序无关，重复安装无变化。
 project="$(new_project harbor example.com/studio/harbor)"
 cd "$project"
-"$roost" module add mailbox leaderboard bag profile chat checkin enter > "$review_root/add-all.log"
+"$roost" module add turn room mailbox leaderboard bag profile chat checkin enter > "$review_root/add-all.log"
 grep -q 'prerequisite (did run): roost add transport tcp' "$review_root/add-all.log"
 grep -q 'prerequisite (did run): set access.player.self_sync: true' "$review_root/add-all.log"
 grep -q 'self_sync: true' roost.yaml
 grep -q 'glue chat with enter: written' "$review_root/add-all.log" && grep -q 'glue mailbox with enter: written' "$review_root/add-all.log"
 grep -q 'glue mailbox with bag: written' "$review_root/add-all.log"
 # 第三批：task（依赖已装的 wallet）。checkin 已在，签到推进每日任务的联动随它写进工程。
-"$roost" module add task stamina shop > "$review_root/add-task.log"
+"$roost" module add task stamina shop skillbook > "$review_root/add-task.log"
+# rehome（单个玩家换服）：enter 已在，进入前检查 / 到达 / 意图对账的联动随它写进工程。
+"$roost" module add rehome > "$review_root/add-rehome.log"
+grep -q 'glue rehome with enter: written' "$review_root/add-rehome.log"
 grep -q 'glue task with checkin: written' "$review_root/add-task.log"
 grep -q 'module bag: already installed' "$review_root/add-task.log"
 ! grep -rn '{{' db/def game/entities game/handler game/controllers internal/errors protocol/def >/dev/null
 commit_all all
-"$roost" module add enter bag mailbox task shop > "$review_root/add-all-again.log"
+"$roost" module add enter bag mailbox task shop skillbook room turn rehome > "$review_root/add-all-again.log"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
-expect_verify wallet=9 checkin=8 chat=8 enter=6 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17
+expect_verify wallet=9 checkin=8 chat=8 enter=11 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17 skillbook=8 room=22 turn=25 rehome=30 rehome+enter=5
 go test -mod=mod ./... > "$review_root/test-all-harbor.log" 2>&1 || { tail -30 "$review_root/test-all-harbor.log"; exit 1; }
 
 succeeded=1

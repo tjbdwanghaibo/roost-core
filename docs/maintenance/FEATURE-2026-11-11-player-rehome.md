@@ -135,6 +135,12 @@ DataEngine 是三块基础之一：这一处改动只加新入口，不改 `Unlo
 | 二 | demo 全量联动：队伍与匹配（换服前必须不在队里 / 自动取消排队）、副本与战斗中拒绝、场景（离开时离场景、到达回出生点）、联盟 `HomeSID` 惰性修正、全服邮件范围、名下建筑的规则；其余联动（mailbox、chat、leaderboard）；真实依赖演练（两个 game sid + account + saga，每个阶段后 kill -9） | 未开始 |
 | 三 | 在途换服的索引、列举与过期清扫；`sidmerge` 清单加“无在途换服”；物理库不同的服；合服交叉；独立 Gate（转给 game 的绑定不带 claim） | 未开始 |
 
+### 停点（2026-11-11，5 小时额度用满）
+
+模块 `rehome` 做到一半时停下：agent 被中途停掉，半成品在 worktree `worktrees/rehome-module`（分支 `tmp/rehome-module`，从 `78768966` 切出）——已有 2 个提交（`modules/rehome/` 的清单、`files/`、`with/`，以及 enter 的进入前检查），另有 2 个文件改到一半未提交（`game/rehome/rehome_binding.go` 与它的测试）；停下时它正要做“生成 demo 检查”和模块目录用例，**验收与变异自检都没有做完，不能直接合**。接手时让原 agent 续做，或从这个 worktree 的现状接着做。之后还剩 demo 接线（§5）。
+
+维护者 2026-11-11 对后续验证节奏的要求：完整测试（门禁脚本、codegen 的 TestDemo、重新生成 demo 的全量测试）不必每次修改都跑，**最后统一跑一次**；每一步只跑与改动直接相关的检查。
+
 ### 接手后半的提示
 
 - 模块的 `Residency` 缺省实现调 `wiring/dataengine` 的 `Mod.HandOffEntity`，返回值的 `Release(ctx) error` 会等待、会失败（它先卸载交出期间被读回内存的实例），要处理 `ErrEntityUnloadBusy` 并重试；交出成立后的写入拿到 `ErrEntityHandedOff`（不要重试），进行中拿到可重试的 `ErrEntityUnloading`。调用顺序：先断开会话、离场景、退订，再交出。

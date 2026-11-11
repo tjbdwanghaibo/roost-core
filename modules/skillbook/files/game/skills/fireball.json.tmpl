@@ -1,0 +1,7 @@
+{
+ "schema":"roost.skill/v2", "id":"skill.{{PROJECT}}.fireball", "name":"Fireball",
+ "description":"Default catalog entry; replace with the game's skill definition.",
+ "activation":{"type":"active","policy":{"mode":"tap"}},"input_schema":{"type":"none"},
+ "cooldown_ticks":0,"costs":[],"memory":{},"initial_phase":"cast",
+ "phases":[{"id":"cast","timeout_ticks":0,"on":{"enter":{"flow":"finish","reason":"done"}}}]
+}

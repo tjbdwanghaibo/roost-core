@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+- **新增（业务模块 A3）**：模块可用 `timer_types` 申请实体内持久定时器类型；复用已有组件或在安装事务内补齐，类型与归属有清单校验，回调登记与生成失败一起回滚。新增 `turn`（依赖 room）：固定名单的顺序回合、成功命令序号与最后一次重放、持久超时、不追帧、PB 接入；25 个离线场景。无默认胜负规则、自动广播或真实存储/网络容量结论。使用方式见 [turn](modules/turn/README.md)。
+
+- **新增**（modules / codegen）：模块清单 `entities` 支持自带 Entity、DAO、lifecycle 与实体号分配；安装事务包含服务 owner / handler / shutdown 接线，失败整体回退，重复安装保留业务修改。新增 `room` 基础模块：1～64 席、房主交接、进出、CAS 重连、服务端开房与断线入口，22 条离线场景。房间操作同时检查可信连接 nonce 与持久代际，Gate 代理 Session 补齐只读 `ConnectionID()`；旧连接迟到的 Join/View/Leave 或断线不能影响新连接。自动断线订阅、房间广播、匹配移交与回合超时不在本批。详见 [room](modules/room/README.md) 与[交接](docs/maintenance/HANDOFF-2026-11-11-module-backlog.md)。 验证：全仓 164 测试包通过；13 模块 + 4 联动 228 PASS / 0 SKIP；重新生成 game-demo 670 PASS / 14 预期 SKIP；Room/Gate 定向 race、三项变异自检、build/vet、ID 与生成物漂移检查通过。
+
+
+- **新增**（业务模块 A1）：清单 `runtime` 声明服务级启动入口，安装记录保存 service、requires 与 runtime；生成 `modules_gen.go` 服务适配层，bootstrap 使用 `NewWithModules()`。保留业务 Service 文件及其可选接口；模块按依赖在业务 Init 前启动，业务先停、模块反向停，部分启动失败可清理、停机失败保留依赖供重试。生成过程与其他产物一起暂存提交，重复安装不变。接线契约见 [modules](modules/README.md#服务级启动与停机)。
+- **新增 / 统一实现**（skillbook + game-demo）：技能目录模块提供启动编译与 `SkillCatalog` 查询，同一份目录经 Registry 发布；JSON 和编译环境归工程。demo 只覆盖技能 JSON，删除 controller 的第二份目录缓存，消息号改由模块分配；场景使用本服务自己的 Nest 同步观察器，兼容服务适配层。模块自带 8 条场景和供 doctor 使用的目录编译检查。升级不兼容旧生成工程，请重新生成；不含技能执行 Host 或热更新。
+- **本批验证**：全仓 `go test -timeout 30m ./...` 164 个包通过；模块生成脚本 12 模块 + 4 联动共 206 PASS / 0 SKIP；新 game-demo 670 PASS / 14 显式开启项 SKIP、47 个有测试的包通过，build / vet、模块验收 135/0、ID / 生成漂移通过；独立 skill 自定义工程 177 个模块场景通过，新工程复验两项 doctor 问题已修。三项变异自检有效；根包和文档锚点通过。边界与复跑入口见 [业务模块交接 §2.1](docs/maintenance/HANDOFF-2026-11-11-module-backlog.md#21-本批接续结果)；真实依赖验收未做。
+
+
 - **新增**（dataengine）：**交出实体 `Runtime.HandOffEntity` / `EntityHandOff.Release`**（单个玩家换服的源服一侧，[方案 §3.2](docs/maintenance/FEATURE-2026-11-11-player-rehome.md#32-dataengine交出实体)；业务经 `wiring/dataengine` 的 `Mod.HandOffEntity`）。把一个实体的写权交给另一个进程之前，本进程先保证“写过的都在库里、不会再被重放”，并从此不再写它，直到显式 `Release` 或进程退出。只加入口：`UnloadEntity` 与投影、checkpoint 路径的行为不变（`reserve` 多一次空表判断）。
   - 与 `entity.unload` 的差别：实体不在内存里也立屏障；排空投影之后还要等 WAL checkpoint 盖过该实体的记录，再卸载；屏障返回后保持。保持期间写到该实体的事务（含冷加载之后的写入、新建与删除它的记录）在 WAL 准入处以新错误 `ErrEntityHandedOff` 拒绝并回滚（同时满足 `nest.ErrCommitRejected`）；它不是“稍后重试”，与 `ErrEntityUnloading` 互不满足 `errors.Is`。交出进行中、结论未定时拿到的仍是可重试的 `ErrEntityUnloading`。
   - 为什么等 checkpoint（先写用例证实）：单 mutation 快路记录不写事务标记，重放只靠文档上的 `_version` 与 `_last_tx`；“已投影、checkpoint 未确认”时另一个写者推进了文档，重放就是 fatal 的 `ErrProjectionConflict`——同一进程的下一轮回放 fail-stop，重启后启动恢复失败。刻画用例 `TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument`（替身）与 `TestRealMongoUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument`（真实副本集）在改动前的代码上通过；带事务标记的记录重放安全。

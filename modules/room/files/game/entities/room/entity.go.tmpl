@@ -1,0 +1,19 @@
+package room
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	db "{{MODULE}}/db"
+)
+
+const EntityKindRoom entity.EntityKind = {{ID:entity:Room}}
+
+// Room 是归属一个业务服务的持久实体。跨玩家修改由同一个 Room 的 Nest 锁串行化；
+// World 类别排在 Player 之前，后续涉及房间与玩家的事务也保持统一锁序。
+//
+//roost:entity id={{ID:entity:Room}} entityKind=EntityKindRoom category=entity.EntityCategoryWorld service={{GAME_SERVICE}}
+type Room struct {
+	*entity.EntityBase
+	entity.ComponentManager
+	entity.DaoManager
+	dao *db.RoomDao `dao:"room"`
+}

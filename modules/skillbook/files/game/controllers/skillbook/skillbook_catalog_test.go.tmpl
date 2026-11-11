@@ -1,0 +1,53 @@
+package skillbook
+
+import (
+	"context"
+	"reflect"
+	"testing"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+
+	"{{MODULE}}/game/playeraccess"
+	book "{{MODULE}}/game/skillbook"
+	"{{MODULE}}/protocol/pb"
+)
+
+func TestSkillbookControllerReadsTheStartupCatalog(t *testing.T) {
+	registry := app.NewRegistry(viper.New())
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &playeraccess.Context{}
+	request := &pb.SkillCatalogRequest{}
+	before, err := controller.HandleSkillCatalog(ctx, request)
+	if err != nil || before == nil || before.Code == 0 {
+		t.Fatalf("before start: %v %v", before, err)
+	}
+	stop, err := book.Start(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop(context.Background())
+	response, err := controller.HandleSkillCatalog(ctx, request)
+	if err != nil || response == nil || response.Code != 0 || response.Warnings != 0 || !reflect.DeepEqual(response.Skills, []string{"skill.{{PROJECT}}.fireball"}) {
+		t.Fatalf("after start: %v %v", response, err)
+	}
+}
+
+func TestSkillbookControllerRejectsMissingInputs(t *testing.T) {
+	if _, err := FromRegistry(nil); err == nil {
+		t.Fatal("nil registry accepted")
+	}
+	controller, err := FromRegistry(app.NewRegistry(viper.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.HandleSkillCatalog(nil, &pb.SkillCatalogRequest{}); err == nil {
+		t.Fatal("nil context accepted")
+	}
+	if _, err := controller.HandleSkillCatalog(&playeraccess.Context{}, nil); err == nil {
+		t.Fatal("nil request accepted")
+	}
+}

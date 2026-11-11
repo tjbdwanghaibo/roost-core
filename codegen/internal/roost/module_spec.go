@@ -25,17 +25,23 @@ type ModuleSpec struct {
 	Name    string `yaml:"name" json:"name"`
 	Summary string `yaml:"summary" json:"summary"`
 	// Requires 是必须先装的模块；Conflicts 是不能同装的模块。
-	Requires  []string     `yaml:"requires" json:"requires,omitempty"`
-	Conflicts []string     `yaml:"conflicts" json:"conflicts,omitempty"`
-	Needs     ModuleNeeds  `yaml:"needs" json:"needs"`
-	Access    ModuleAccess `yaml:"access" json:"access"`
+	Requires  []string       `yaml:"requires" json:"requires,omitempty"`
+	Conflicts []string       `yaml:"conflicts" json:"conflicts,omitempty"`
+	Needs     ModuleNeeds    `yaml:"needs" json:"needs"`
+	Access    ModuleAccess   `yaml:"access" json:"access"`
+	Runtime   *ModuleRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 	// Entity 是模块状态与组件挂靠的实体（PascalCase，如 Player）。没有状态也没有组件的模块可以不写。
 	Entity string `yaml:"entity" json:"entity,omitempty"`
+	// Entities 是模块自带的实体：模板提供 Entity 与 DAO 定义，安装器分配实体号、补 lifecycle。
+	// 与 Entity（挂靠目标）分开：例如 turn 可以挂到 room 模块拥有的 Room 上。
+	Entities []string `yaml:"entities" json:"entities,omitempty"`
 	// State 是追加到 Entity 主 DAO 末尾的顶层字段，类型是模块自带的嵌套结构体。
 	// 同步与否按顶层字段决定：既有客户端可见状态又有服务端账本的模块写两个字段。
 	State []ModuleStateField `yaml:"state" json:"state,omitempty"`
 	// Component 是挂在 Entity 上的组件名（PascalCase）；组件号在安装时分配。
 	Component string `yaml:"component" json:"component,omitempty"`
+	// TimerTypes 在 Entity 的持久定时器中分配类型号；定时器组件提供 register<模块组件>Timers(*entitytimer.Handlers)。
+	TimerTypes []string `yaml:"timer_types" json:"timer_types,omitempty"`
 	// Protocols / Errcodes 是模板里 {{ID:protocol:<name>}} / {{ID:errcode:<name>}} 用到的名字，号在安装时分配。
 	Protocols []string `yaml:"protocols" json:"protocols,omitempty"`
 	Errcodes  []string `yaml:"errcodes" json:"errcodes,omitempty"`
@@ -52,6 +58,13 @@ type ModuleSpec struct {
 	Files []string `yaml:"-" json:"files"`
 	// Digest 是清单与全部模板内容的摘要，记进 roost.yaml：之后能看出已装的是不是这一版。
 	Digest string `yaml:"-" json:"digest"`
+}
+
+// ModuleRuntime 声明模块在业务服务中的启动入口。函数返回 stop（可为 nil）与 error；
+// 返回 error 时仍可同时返回 stop，App 的失败停机路径会调用它。
+type ModuleRuntime struct {
+	Package string `yaml:"package" json:"package"` // 工程内 import 路径，如 game/skillbook
+	Start   string `yaml:"start" json:"start"`     // func(*app.Registry) (func(context.Context) error, error)
 }
 
 // ModuleNeeds 是模块对工程的前提。安装器只检查、不替工程打开：缺什么给出要执行的命令。
@@ -103,8 +116,13 @@ type ModuleVerify struct {
 // InstalledModule 是 roost.yaml 里 modules.<name> 的记录：这个模块在本工程里拥有什么。
 // 它是归属清单的数据来源，也是重复安装判等的依据；分配过的号与存储键不回收。
 type InstalledModule struct {
-	Digest string `yaml:"digest"`
-	// IDs 是 kind -> 名字 -> 号（protocol / errcode / component）。
+	Digest   string         `yaml:"digest"`
+	Service  string         `yaml:"service,omitempty"`
+	Runtime  *ModuleRuntime `yaml:"runtime,omitempty"`
+	Requires []string       `yaml:"requires,omitempty"`
+	// TimerEntity 是 timer 类型号的作用域（实体 snake 名）；其他 ID 仍为工程级。
+	TimerEntity string `yaml:"timer_entity,omitempty"`
+	// IDs 是 kind -> 名字 -> 号（entity / protocol / errcode / component / timer）。
 	IDs map[string]map[string]int64 `yaml:"ids,omitempty"`
 	// State 是它追加的主 DAO 字段，写成 <Dao>.<Field>。
 	State []string `yaml:"state,omitempty"`
@@ -121,8 +139,8 @@ var (
 	moduleIDPlaceholder = regexp.MustCompile(`\{\{ID:([a-z]+):([A-Za-z0-9_]+)\}\}`)
 )
 
-// moduleIDKinds 是模块能申请的 ID 种类，与 roost.yaml 的 ids 段同名。
-var moduleIDKinds = []string{"component", "errcode", "protocol"}
+// moduleIDKinds 是模块能申请的 ID 种类；timer 在实体内分配，其他种类对应 roost.yaml 的 ids 段。
+var moduleIDKinds = []string{"entity", "component", "errcode", "protocol", "timer"}
 
 // loadModuleCatalog 读出全部内置模块，按名字排序。
 func loadModuleCatalog() (map[string]ModuleSpec, error) {
@@ -162,7 +180,7 @@ func loadModuleCatalogFS(source fs.FS) (map[string]ModuleSpec, error) {
 				return nil, fmt.Errorf("module %s names unknown module %q", spec.Name, other)
 			}
 		}
-		for _, rel := range spec.Files {
+		for _, rel := range spec.ownedFiles() {
 			if err := claim(rel, "module "+name); err != nil {
 				return nil, err
 			}
@@ -288,6 +306,36 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 	if spec.Component != "" && !modulePascalPattern.MatchString(spec.Component) {
 		return fmt.Errorf("component %q must be PascalCase", spec.Component)
 	}
+	if len(spec.TimerTypes) > 0 {
+		if spec.Component == "" || !modulePascalPattern.MatchString(spec.Entity) {
+			return fmt.Errorf("timer_types requires entity and component")
+		}
+		seen := map[string]bool{}
+		for _, name := range spec.TimerTypes {
+			if !modulePascalPattern.MatchString(name) || seen[name] {
+				return fmt.Errorf("timer_types: %q must be a unique PascalCase name", name)
+			}
+			seen[name] = true
+		}
+	}
+	if err := validateModuleRuntime(spec.Runtime); err != nil {
+		return err
+	}
+	seenEntities := map[string]bool{}
+	for _, name := range spec.Entities {
+		if !modulePascalPattern.MatchString(name) || seenEntities[name] {
+			return fmt.Errorf("entities: %q must be a unique PascalCase name", name)
+		}
+		seenEntities[name] = true
+		for _, rel := range moduleEntityDefinitions(name) {
+			if !contains(spec.Files, rel) {
+				return fmt.Errorf("entity %s requires template %s", name, rel)
+			}
+		}
+		if contains(spec.Files, moduleEntityLifecycle(name)) {
+			return fmt.Errorf("entity %s lifecycle is supplied by the installer, not files/", name)
+		}
+	}
 	prefix := toPascal(spec.Name)
 	seenFields := map[string]bool{}
 	for _, field := range spec.State {
@@ -399,7 +447,13 @@ func (spec ModuleSpec) withNames() []string {
 
 // declaredIDs 是清单声明要分配的号：kind -> 名字集合。
 func (spec ModuleSpec) declaredIDs() map[string]map[string]bool {
-	declared := map[string]map[string]bool{"component": {}, "errcode": {}, "protocol": {}}
+	declared := map[string]map[string]bool{"entity": {}, "component": {}, "errcode": {}, "protocol": {}, "timer": {}}
+	for _, name := range spec.TimerTypes {
+		declared["timer"][name] = true
+	}
+	for _, name := range spec.Entities {
+		declared["entity"][name] = true
+	}
 	if spec.Component != "" {
 		declared["component"][spec.Component] = true
 	}
@@ -410,6 +464,24 @@ func (spec ModuleSpec) declaredIDs() map[string]map[string]bool {
 		declared["protocol"][name] = true
 	}
 	return declared
+}
+
+func moduleEntityDefinitions(name string) []string {
+	return []string{"game/entities/" + toSnake(name) + "/entity.go", "db/def/" + toSnake(name) + ".go"}
+}
+
+func moduleEntityLifecycle(name string) string {
+	return "game/lifecycle/" + toSnake(name) + ".go"
+}
+
+// ownedFiles 包括模板和安装时补出的 lifecycle；计划、冲突检查、回滚与归属使用同一份清单。
+func (spec ModuleSpec) ownedFiles() []string {
+	files := append([]string(nil), spec.Files...)
+	for _, name := range spec.Entities {
+		files = append(files, moduleEntityLifecycle(name))
+	}
+	sort.Strings(files)
+	return files
 }
 
 // moduleInstallOrder 把 requested 连同它们的依赖排成安装顺序（依赖在前），并拒绝环与互斥。
@@ -470,4 +542,19 @@ func sortedModuleNames(catalog map[string]ModuleSpec) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+var moduleRuntimePackagePattern = regexp.MustCompile(`^game/[a-z][a-z0-9_]*(/[a-z][a-z0-9_]*)*$`)
+
+func validateModuleRuntime(runtime *ModuleRuntime) error {
+	if runtime == nil {
+		return nil
+	}
+	if !moduleRuntimePackagePattern.MatchString(runtime.Package) {
+		return fmt.Errorf("runtime.package %q must be a project-local game package", runtime.Package)
+	}
+	if !modulePascalPattern.MatchString(runtime.Start) {
+		return fmt.Errorf("runtime.start %q must name an exported Go function", runtime.Start)
+	}
+	return nil
 }

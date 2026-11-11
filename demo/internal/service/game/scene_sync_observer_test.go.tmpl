@@ -2,6 +2,8 @@ package {{GAME_SERVICE_PKG}}
 
 import (
  "context"
+ "github.com/spf13/viper"
+ "github.com/tjbdwanghaibo/roost-core/framework/app"
  "testing"
  "testing/synctest"
  "sync/atomic"
@@ -68,4 +70,22 @@ func TestSceneSyncObserverForwardsCommitWakeAndRetraction(t *testing.T) {
    if err!=nil||len(f.Objects)!=1||f.Objects[0].Operation!=frame.ObjectRemove{t.Fatalf("retract: %+v %v",f,err)}
   default:t.Fatal("retraction was not forwarded")}
  })
+}
+
+// App 保存模块适配层，Nest 仍必须绑定业务 Service 自己的观察器，Scene 随后接同一份。
+func TestModuleServicePreservesTheNestSceneObserver(t *testing.T) {
+ service:=NewWithModules()
+ registry:=app.NewRegistry(viper.New())
+ if err:=registry.Register(app.ModService,service);err!=nil{t.Fatal(err)}
+ provider,ok:=app.Lookup[interface{NestSyncObserver()entity.SyncCommitObserver}](registry,app.ModService)
+ if !ok {t.Fatal("module adapter lost NestSyncObserver")}
+ observer:=provider.NestSyncObserver()
+ if observer!=service.Service.NestSyncObserver(){t.Fatal("adapter and business use different observers")}
+ engine:=nest.NewEngine(nest.NestOptionWithEntitySync(observer))
+ defer engine.Shutdown(context.Background())
+ manager,err:=entitysync.NewManager(entitysync.ManagerConfig{Mode:entitysync.ModeOnChange,Transport:entitysync.TransportFunc(func(context.Context,entitysync.SessionID,[]byte)error{return nil})})
+ if err!=nil{t.Fatal(err)}
+ defer manager.Close(context.Background())
+ if err:=service.sceneSync.attach(manager);err!=nil{t.Fatal(err)}
+ if err:=manager.Start(context.Background());err!=nil{t.Fatal(err)}
 }

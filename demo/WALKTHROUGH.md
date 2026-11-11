@@ -622,9 +622,10 @@ demo 在模块之上接的线：
 
 ## 技能目录：启动时编译，客户端可查
 
-`game/skills/fireball.json` 是 demo 的一个技能定义（`roost add skill` 生成骨架，再写上契约说明），`game/skills/catalog.go` 把目录下的 JSON
-嵌进二进制并用 `gameplay/skill` 严格 `Parse` + `Compile`。game 服务在 `Init` 里先编译整份目录——**编不过就不起来**（一个坏定义死在启动，
-不死在第一个客户端请求里），warning 数进日志；`SkillCatalog` 端点（10012）把编译出的 id 列给客户端，机器人断言至少一个且 0 warning。
+技能目录来自 [skillbook 模块](../modules/README.md)，demo 只覆盖规则数据 `game/skills/fireball.json`。模块的 `game/skills/catalog.go` 把目录下的 JSON
+嵌进二进制并用 `gameplay/skill` 严格 `Parse` + `Compile`。生成的服务适配层在业务 `Init` 前编译整份目录——**编不过就不起来**；
+warning 数进日志，编译环境在 `game/skillbook/skillbook_rules.go`。`game/controllers/skillbook` 的 `SkillCatalog` 端点读取启动时发布的同一份目录，
+返回排序后的 id 与 warning 数；消息号安装时分配，见 `roost.yaml` 的 `modules.skillbook.ids`，机器人断言至少一个且 0 warning。
 技能**执行**（Host 读已锁 Entity、确定性 tick、checkpoint / replay）刻意没进 demo，见 `roost help skill`。
 
 ## 实时战斗：lockstep 帧同步（匹配之后的那一段）

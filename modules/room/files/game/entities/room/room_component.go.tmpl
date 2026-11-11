@@ -1,0 +1,281 @@
+package room
+
+import (
+	"fmt"
+	"math"
+	"slices"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	db "{{MODULE}}/db"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+//roost:component type={{ID:component:Room}}
+const CompTypeRoom entity.ComponentType = {{ID:component:Room}}
+
+// RoomComponent 的方法只能在 Nest 持锁事务中调用。所有可变事实都经 DAO setter 写入，
+// 没有另一份内存房间表；提交失败时座位、房主与代际一起回滚。
+type RoomComponent struct {
+	entity.ComponentBase
+	owner *Room
+}
+
+type IRoomEntity interface {
+	entity.IThreadSafeEntity
+	RoomComp() *RoomComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeRoom, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		value, ok := owner.(*Room)
+		if !ok {
+			return nil, fmt.Errorf("room component: owner %T is not *Room", owner)
+		}
+		return &RoomComponent{owner: value}, nil
+	})
+}
+
+func (component *RoomComponent) Name() string { return "room" }
+
+// RoomSnapshot 是脱离实体的值快照，可以在解锁后编码；Epoch 只返回给当前玩家的当前连接；连接 nonce 永不进入公开快照。
+type RoomSnapshot struct {
+	Capacity int32
+	HostID   int64
+	Closed   bool
+	Epoch    uint64
+	Seats    []SeatSnapshot
+}
+
+type SeatSnapshot struct {
+	PlayerID  int64
+	Slot      int32
+	Connected bool
+}
+
+// MaxSeats 是基础房间的容量上限；大规模场景使用独立的空间/视野模块。
+const MaxSeats int32 = 64
+
+// Open 只供服务端：uniqueID 的分配和开房权限由调用方负责。重复初始化相同规则不重置已开房间，
+// 初始化后崩溃可以重试；已关闭的 ID 永不再开。
+func (component *RoomComponent) Open(capacity int32) error {
+	if capacity < 1 || capacity > MaxSeats {
+		return apperrors.ErrRoomInvalid
+	}
+	dao := component.owner.Dao()
+	if dao.GetClosed() {
+		return apperrors.ErrRoomClosed
+	}
+	if dao.GetCapacity() != 0 && dao.GetCapacity() != capacity {
+		return apperrors.ErrRoomInvalid
+	}
+	if dao.GetCapacity() == 0 {
+		dao.SetCapacity(capacity)
+	}
+	return nil
+}
+
+func (component *RoomComponent) checkOpen() error {
+	dao := component.owner.Dao()
+	if dao.GetClosed() {
+		return apperrors.ErrRoomClosed
+	}
+	if dao.GetCapacity() == 0 {
+		return apperrors.ErrRoomUnopened
+	}
+	return nil
+}
+
+// Join 是席位准入，重复加入不换代际、不挤掉原席位。更换连接要显式 Reconnect。
+// 这个基础模块不跨房检查玩家唯一归属；匹配/组队业务需要在自己的 Player+Room 事务里增加约束。
+func (component *RoomComponent) Join(playerID int64, connection string) (RoomSnapshot, error) {
+	if playerID <= 0 || !validRoomConnection(connection) {
+		return RoomSnapshot{}, apperrors.ErrRoomInvalid
+	}
+	if err := component.checkOpen(); err != nil {
+		return RoomSnapshot{}, err
+	}
+	dao := component.owner.Dao()
+	if seat, exists := dao.GetSeats(playerID); exists {
+		if seat.GetConnection() != connection {
+			return RoomSnapshot{}, apperrors.ErrRoomStaleEpoch
+		}
+		return component.snapshot(playerID), nil
+	}
+	if dao.SeatsLen() >= int(dao.GetCapacity()) {
+		return RoomSnapshot{}, apperrors.ErrRoomFull
+	}
+	epoch, err := component.nextEpoch()
+	if err != nil {
+		return RoomSnapshot{}, err
+	}
+	occupied := make([]bool, int(dao.GetCapacity())+1)
+	dao.RangeSeats(func(_ int64, seat *db.RoomSeat) bool { occupied[seat.GetSlot()] = true; return true })
+	var slot int32 = 1
+	for occupied[slot] {
+		slot++
+	}
+	seat := &db.RoomSeat{}
+	seat.SetSlot(slot)
+	seat.SetEpoch(epoch)
+	seat.SetConnection(connection)
+	seat.SetConnected(true)
+	dao.SetSeats(playerID, seat)
+	if dao.GetHostID() == 0 {
+		dao.SetHostID(playerID)
+	}
+	return component.snapshot(playerID), nil
+}
+
+func (component *RoomComponent) nextEpoch() (uint64, error) {
+	dao := component.owner.Dao()
+	// BSON 的无符号数也以有符号 int64 保存，到上限拒绝，不能溢出或让编码失败。
+	if dao.GetEpochSeed() >= math.MaxInt64 {
+		return 0, apperrors.ErrRoomInvalid
+	}
+	next := dao.GetEpochSeed() + 1
+	dao.SetEpochSeed(next)
+	return next, nil
+}
+
+// Reconnect 用调用方最后确认的代际做 CAS；同代际的并发重连至多一条成功。
+// 同一物理连接重放返回原结果；换连接时带上客户端最后保存的 Epoch，不盲目接管。
+func (component *RoomComponent) Reconnect(playerID int64, expectedEpoch uint64, connection string) (RoomSnapshot, error) {
+	if !validRoomConnection(connection) {
+		return RoomSnapshot{}, apperrors.ErrRoomInvalid
+	}
+	if err := component.checkOpen(); err != nil {
+		return RoomSnapshot{}, err
+	}
+	seat, exists := component.owner.Dao().GetSeats(playerID)
+	if !exists {
+		return RoomSnapshot{}, apperrors.ErrRoomNotMember
+	}
+	// 同一物理连接的重连回包丢失可以重放，不能凭旧 Join 接管另一个连接。
+	if seat.GetConnection() == connection {
+		if !seat.GetConnected() {
+			return RoomSnapshot{}, apperrors.ErrRoomStaleEpoch
+		}
+		return component.snapshot(playerID), nil
+	}
+	if expectedEpoch == 0 || seat.GetEpoch() != expectedEpoch {
+		return RoomSnapshot{}, apperrors.ErrRoomStaleEpoch
+	}
+	next, err := component.nextEpoch()
+	if err != nil {
+		return RoomSnapshot{}, err
+	}
+	seat.SetEpoch(next)
+	seat.SetConnection(connection)
+	seat.SetConnected(true)
+	return component.snapshot(playerID), nil
+}
+
+func (component *RoomComponent) member(playerID int64, epoch uint64) (*db.RoomSeat, error) {
+	if err := component.checkOpen(); err != nil {
+		return nil, err
+	}
+	seat, ok := component.owner.Dao().GetSeats(playerID)
+	if !ok {
+		return nil, apperrors.ErrRoomNotMember
+	}
+	if epoch == 0 || seat.GetEpoch() != epoch {
+		return nil, apperrors.ErrRoomStaleEpoch
+	}
+	return seat, nil
+}
+
+// Disconnect 是服务端断线回调入口。接入层在成功 Join/Reconnect 后捕获该 Epoch；
+// 旧连接迟到的关闭事件返回 false，不影响新连接，也不踢出座位或转移房主。
+func (component *RoomComponent) Disconnect(playerID int64, epoch uint64) bool {
+	seat, err := component.member(playerID, epoch)
+	if err != nil || !seat.GetConnected() {
+		return false
+	}
+	seat.SetConnected(false)
+	return true
+}
+
+// Leave 退出自己的当前席位。重复退出（尚未重入）成功；旧代际不能移除重入后的席位。
+// 房主离开时由座位号最小的成员接任；最后一人离开关闭房间，ID 不复用。
+func (component *RoomComponent) Leave(playerID int64, epoch uint64, connection string) error {
+	if playerID <= 0 || epoch == 0 || !validRoomConnection(connection) {
+		return apperrors.ErrRoomInvalid
+	}
+	dao := component.owner.Dao()
+	if _, exists := dao.GetSeats(playerID); !exists {
+		return nil
+	}
+	seat, err := component.member(playerID, epoch)
+	if err != nil {
+		return err
+	}
+	if seat.GetConnection() != connection {
+		return apperrors.ErrRoomStaleEpoch
+	}
+	dao.DelSeats(playerID)
+	if dao.SeatsLen() == 0 {
+		dao.SetHostID(0)
+		dao.SetClosed(true)
+	} else if dao.GetHostID() == playerID {
+		var hostID int64
+		lowest := MaxSeats + 1
+		dao.RangeSeats(func(id int64, seat *db.RoomSeat) bool {
+			if seat.GetSlot() < lowest {
+				lowest, hostID = seat.GetSlot(), id
+			}
+			return true
+		})
+		dao.SetHostID(hostID)
+	}
+	return nil
+}
+
+func (component *RoomComponent) Close(playerID int64, epoch uint64, connection string) error {
+	seat, err := component.member(playerID, epoch)
+	if err != nil {
+		return err
+	}
+	if seat.GetConnection() != connection {
+		return apperrors.ErrRoomStaleEpoch
+	}
+	dao := component.owner.Dao()
+	if dao.GetHostID() != playerID {
+		return apperrors.ErrRoomNotHost
+	}
+	for _, seat := range component.snapshot(playerID).Seats {
+		dao.DelSeats(seat.PlayerID)
+	}
+	dao.SetHostID(0)
+	dao.SetClosed(true)
+	return nil
+}
+
+func (component *RoomComponent) View(playerID int64, connection string) (RoomSnapshot, error) {
+	if err := component.checkOpen(); err != nil {
+		return RoomSnapshot{}, err
+	}
+	seat, exists := component.owner.Dao().GetSeats(playerID)
+	if !exists {
+		return RoomSnapshot{}, apperrors.ErrRoomNotMember
+	}
+	if seat.GetConnection() != connection {
+		return RoomSnapshot{}, apperrors.ErrRoomStaleEpoch
+	}
+	return component.snapshot(playerID), nil
+}
+
+func (component *RoomComponent) snapshot(playerID int64) RoomSnapshot {
+	dao := component.owner.Dao()
+	out := RoomSnapshot{Capacity: dao.GetCapacity(), HostID: dao.GetHostID(), Closed: dao.GetClosed()}
+	if seat, exists := dao.GetSeats(playerID); exists {
+		out.Epoch = seat.GetEpoch()
+	}
+	dao.RangeSeats(func(id int64, seat *db.RoomSeat) bool {
+		out.Seats = append(out.Seats, SeatSnapshot{PlayerID: id, Slot: seat.GetSlot(), Connected: seat.GetConnected()})
+		return true
+	})
+	slices.SortFunc(out.Seats, func(a, b SeatSnapshot) int { return int(a.Slot) - int(b.Slot) })
+	return out
+}
+
+func validRoomConnection(connection string) bool { return connection != "" && len(connection) <= 128 }

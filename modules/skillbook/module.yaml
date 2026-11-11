@@ -1,0 +1,12 @@
+name: skillbook
+summary: 技能目录：服务启动编译游戏 JSON 技能，客户端读取同一份目录；定义与编译环境归业务
+needs:
+  features: [protocol]
+runtime:
+  package: game/skillbook
+  start: Start
+protocols: [SkillCatalog]
+verify:
+  packages: [./game/skillbook, ./game/controllers/skillbook]
+  run: ^TestSkillbook
+  pass: 8

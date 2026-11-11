@@ -290,9 +290,9 @@ func (lane sceneLane) Push(ctx context.Context, session entitysync.SessionID, fr
 	return selfsync.PushPlayerFrame(ctx, lane.transport, int64(session), msgid.MsgEntitySync, frame)
 }
 
-// NewScene assembles the manager, the policy and the lane from the process's
-// capabilities.
-func NewScene(registry *app.Registry) (*Scene, error) {
+// newScene 使用本服务已交给 Nest 的观察器；不从 Registry 断言具体 Service 类型，
+// 因为 App 注册的服务可能包含模块生命周期适配层。
+func (s *Service) newScene(registry *app.Registry) (*Scene, error) {
 	transport, ok := app.Lookup[*accessplayertcp.Runtime](registry, accessplayertcp.Name)
 	if !ok || transport == nil {
 		return nil, errors.New("scene: player tcp runtime is unavailable")
@@ -335,9 +335,7 @@ func NewScene(registry *app.Registry) (*Scene, error) {
 	if terrainMap != nil {
 		terrainConfig = defaultTerrainSync(terrainMap.Meta().Bounds())
 	}
-	service, ok := app.Lookup[*Service](registry, app.ModService)
- if !ok || service == nil { return nil, errors.New("scene: service sync observer is unavailable") }
- scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, watermark, config, config.View.MaxVisible, terrainConfig, &service.sceneSync)
+	scene, err := newSceneWithObserver(sceneLane{transport: transport}, transport, watermark, config, config.View.MaxVisible, terrainConfig, &s.sceneSync)
 	if err != nil {
 		return nil, err
 	}

@@ -510,6 +510,8 @@ timers 是 roost add timer --entity <Entity> 写下的按实体持久定时器�
         service: game      # 运行该实体 Nest 的服务，bootstrap 在这里装驱动
         dao: PlayerDao     # 节点所在 DAO（add 时在它的定义里加了 Timers / TimerSeed）
 
+模块也可以声明 timer_types：安装器在 timers.<entity>.types 记录已分配类型号，modules.<name>.timer_entity / ids.timer 记录归属。类型号按实体唯一且不回收；以 module plan 展示的计划为准。
+
 不要只手工添加条目；使用 roost add timer，让 DAO 字段、实体组件字段与生成部分一起更新。定时器类型与
 回调写在 game/entities/<entity>/<component>_handlers.go（业务文件）。去掉条目后生成部分不会自动删除。
 

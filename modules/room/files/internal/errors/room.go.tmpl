@@ -1,0 +1,13 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+var (
+	ErrRoomInvalid    = errcode.Define({{ID:errcode:room_invalid}}, "room_invalid", "invalid room operation")
+	ErrRoomUnopened   = errcode.Define({{ID:errcode:room_unopened}}, "room_unopened", "room is not initialized")
+	ErrRoomClosed     = errcode.Define({{ID:errcode:room_closed}}, "room_closed", "room is closed")
+	ErrRoomFull       = errcode.Define({{ID:errcode:room_full}}, "room_full", "room is full")
+	ErrRoomNotMember  = errcode.Define({{ID:errcode:room_not_member}}, "room_not_member", "player is not in this room")
+	ErrRoomStaleEpoch = errcode.Define({{ID:errcode:room_stale_epoch}}, "room_stale_epoch", "room connection generation changed")
+	ErrRoomNotHost    = errcode.Define({{ID:errcode:room_not_host}}, "room_not_host", "only the host can close this room")
+)

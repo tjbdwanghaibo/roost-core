@@ -414,6 +414,8 @@ timedomain 字段、拒绝的输入逐字节不变、清单校验、`roost add m
 
 `roost add` 生成的是空骨架。业务模块是另一回事：一个提前写好并验收过的业务单元（状态结构体、组件、Nest handler、协议、错误码、场景测试），源码在仓库 [modules](../../modules/README.md)，由 `roost module add` 写进工程。写进去之后归工程所有，`project sync` / `upgrade` 不改写——它不是生成器输出，只是不用自己从头写。
 
+需要回合与超时的工程可用 `roost module add turn`（自动装 room）。模块清单 `timer_types` 按 Entity 分配持久类型号，复用已有定时器；类型号、回调登记与生成接线在安装失败时一起回滚。`module plan --json` 的 `timer` 列出实际组件和分配结果，边界见 [turn](../../modules/turn/README.md)。
+
 ```bash
 roost module list                 # 内置模块；在工程里执行时标出已安装的（*）
 roost module plan checkin         # 只预览，不改动工程
@@ -430,15 +432,17 @@ roost module verify               # 模块自带场景 + build / vet / id check 
 | `add <name…>` | 按同一份计划安装，运行全部生成器 | 已安装的模块不再处理；不覆盖业务文件 |
 | `verify [name…]` | 每个已装模块跑自带场景，要求通过数等于清单里的数、零跳过；再跑 `go build`、`go vet`、`roost id check`、`roost generate --check` | 场景用替身提交器，不连真实依赖 |
 
+自带实体用清单 `entities: [Room]`：模板提供 Entity / DAO，`{{ID:entity:Room}}` 分配实体号，安装器补 lifecycle，并在同一暂存区刷新 owner / handler 接线；失败整体回退，不作为保留的前置步骤。细节见 [modules/README](../../modules/README.md#自带实体)。
+
 安装的步骤与契约：
 
 1. **前置骨架**：实体没有主 DAO 时执行 `roost add dao <Entity> --entity <Entity>`；模块有协议而工程没有玩家接入时执行 `roost add access player --service <service>`；模块清单的 `access` 另可要求 `roost add lifecycle <Entity>`、`roost add transport tcp` 与打开 `access.player.self_sync`（等同手工改 `roost.yaml` 再 `project sync`）。它们各自是完整的工程状态，后面失败时不回退；`plan` 逐条列出。
 2. **状态**：模块的状态字段追加到实体主 DAO 的**末尾**，类型是模块自带的嵌套结构体。追加在末尾是因为同步的 PB 字段号按定义顺序排。同名字段已按同样的类型与标签存在时跳过；类型或标签不同、存储键已被占用时拒绝。
-3. **组件与文件**：组件接到实体上，模板渲染后写进工程。落点已有内容不同的文件时拒绝（`already exists and is not this module's file`），不覆盖。唯一的例外是模块清单 `replaces` 列出的生成桩（目前是托管服务默认拒绝一切的 `internal/service/<name>/collaborators.go`）：它仍与生成器写出的内容逐字节相同时替换，`plan` 里标明；改过一个字符就拒绝（`has been edited since it was generated`）。
+3. **组件与文件**：模板先渲染进工程，再追加状态、接组件；自带实体最后补 lifecycle。落点已有内容不同的文件时拒绝（`already exists and is not this module's file`），不覆盖。唯一的例外是模块清单 `replaces` 列出的生成桩（目前是托管服务默认拒绝一切的 `internal/service/<name>/collaborators.go`）：它仍与生成器写出的内容逐字节相同时替换，`plan` 里标明；改过一个字符就拒绝（`has been edited since it was generated`）。
    - **联动文件**：模块可以带与另一个模块的联动（`modules/<name>/with/<另一个模块>/`）。这次装的模块与已装的或同一次装的模块凑成一对、而这一对有联动时，全部模块写完之后把联动文件写进工程，归属记在拥有它的模块的 `modules.<name>.with.<另一个模块>` 下；`plan` / `add` 输出 `glue <模块> with <另一个模块>`，`--json` 里是 `glue` 数组。落点已有内容不同的文件时拒绝（`already exists and is not this glue file`）。两个都早已装好的不补。`verify` 把联动自带的场景单独列一项 `<模块>+<另一个模块>`。
-4. **号**：协议号、错误码、组件号从 `roost.yaml` 的 `ids` 段分配；一次安装多个模块时不会相撞，已装模块记录里的号即使文件被删也不再发出。
-5. **记录**：`roost.yaml` 的 `modules.<name>` 记下摘要、号、状态字段与文件。
-6. **生成**：运行全部生成器（暂存区里生成，成功才提交）。
+4. **号**：实体号、协议号、错误码、组件号从 `roost.yaml` 的 `ids` 段分配；一次安装多个模块时不会相撞，已装模块记录里的号即使文件被删也不再发出。
+5. **记录**：`roost.yaml` 的 `modules.<name>` 记下摘要、号、状态字段、文件、目标 service、requires 与可选 runtime。
+6. **生成**：运行全部生成器（暂存区里生成，成功才提交）。有 runtime 的模块生成 `internal/service/<service>/modules_gen.go`，bootstrap 用 `NewWithModules()`；不覆盖业务 Service.Init/Shutdown。模块按依赖先启动、业务先停止再反向停模块，启动失败同样清理、停机失败保留依赖。声明和边界见 [服务级启动与停机](../../modules/README.md#服务级启动与停机)。
 
 第 2～6 步任何一步失败，模块写过的业务文件与 `roost.yaml` 恢复到第 2 步之前。重复执行 `add` 没有变化。没有卸载命令。
 

@@ -1,0 +1,517 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	room "{{MODULE}}/game/entities/room"
+	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+)
+
+type roomGetter map[int64]entity.IThreadSafeEntity
+
+func (g roomGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if value := g[id]; value != nil {
+		return value, nil
+	}
+	return nil, fmt.Errorf("missing room %d", id)
+}
+func (g roomGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		value, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = value
+	}
+	return out, nil
+}
+
+// 只验证事务契约，不模拟 Mongo 持久性。reject 在提交阶段拒绝，不能只测 handler 返回错误。
+type roomCommitter struct{ reject atomic.Bool }
+
+func (c *roomCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected room commit failure")
+	}
+	return nil
+}
+
+type roomFixture struct {
+	engine      *nest.NestMgr
+	value       *room.Room
+	commit      *roomCommitter
+	id          int64
+	open        *sender.RoomOpenSender
+	joins       *sender.RoomJoinSender
+	views       *sender.RoomViewSender
+	leaves      *sender.RoomLeaveSender
+	reconnects  *sender.RoomReconnectSender
+	disconnects *sender.RoomDisconnectSender
+	closes      *sender.RoomCloseSender
+}
+
+func newRoomFixture(t *testing.T, capacity int32) *roomFixture {
+	t.Helper()
+	room.RegisterEntity()
+	id, err := entity.BuildEntityID(74001, room.EntityKindRoom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: room.EntityKindRoom})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &roomFixture{value: built.(*room.Room), id: id, commit: &roomCommitter{}}
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(roomGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.commit),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	for _, register := range []func(*nest.NestMgr) error{RegisterRoomOpenNestHandlersOn, RegisterRoomJoinNestHandlersOn, RegisterRoomViewNestHandlersOn, RegisterRoomLeaveNestHandlersOn, RegisterRoomReconnectNestHandlersOn, RegisterRoomDisconnectNestHandlersOn, RegisterRoomCloseNestHandlersOn} {
+		if err := register(f.engine); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.open = sender.NewRoomOpenSender(f.engine)
+	f.joins = sender.NewRoomJoinSender(f.engine)
+	f.views = sender.NewRoomViewSender(f.engine)
+	f.leaves = sender.NewRoomLeaveSender(f.engine)
+	f.reconnects = sender.NewRoomReconnectSender(f.engine)
+	f.disconnects = sender.NewRoomDisconnectSender(f.engine)
+	f.closes = sender.NewRoomCloseSender(f.engine)
+	if capacity != 0 {
+		if err := f.open.Sync_RoomOpen(context.Background(), id, capacity); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f
+}
+func (f *roomFixture) join(t *testing.T, playerID int64) room.RoomSnapshot {
+	t.Helper()
+	value, err := f.joins.Sync_RoomJoin(context.Background(), f.id, playerID, fmt.Sprintf("connection-%d", playerID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+func (f *roomFixture) view(t *testing.T, playerID int64, connection ...string) room.RoomSnapshot {
+	t.Helper()
+	key := fmt.Sprintf("connection-%d", playerID)
+	if len(connection) > 0 {
+		key = connection[0]
+	}
+	value, err := f.views.Sync_RoomView(context.Background(), f.id, playerID, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+func (f *roomFixture) leave(t *testing.T, playerID int64, epoch uint64) {
+	t.Helper()
+	if err := f.leaves.Sync_RoomLeave(context.Background(), f.id, playerID, epoch, fmt.Sprintf("connection-%d", playerID)); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *roomFixture) locked(t *testing.T, fn func()) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() { f.value.GetMutex().Lock(); defer f.value.GetMutex().Unlock(); fn() }); err != nil {
+		t.Fatal(err)
+	}
+}
+func (f *roomFixture) document(t *testing.T) []byte {
+	t.Helper()
+	var raw []byte
+	f.locked(t, func() { raw = f.value.Dao().Marshal() })
+	return raw
+}
+
+// BSON map 顺序不参与断言；比较解码后的字段，包括公开快照不会带出的 seed / closed。
+func (f *roomFixture) unchanged(t *testing.T, before []byte) {
+	t.Helper()
+	decode := func(raw []byte) bson.M {
+		decoder := bson.NewDecoder(bson.NewDocumentReader(bytes.NewReader(raw)))
+		decoder.DefaultDocumentM()
+		var document bson.M
+		if err := decoder.Decode(&document); err != nil {
+			t.Fatal(err)
+		}
+		return document
+	}
+	a, b := decode(before), decode(f.document(t))
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("room changed after rejected operation: before=%v after=%v", a, b)
+	}
+}
+
+func TestRoomOpenIsBoundedAndIdempotent(t *testing.T) {
+	f := newRoomFixture(t, 0)
+	before := f.document(t)
+	for _, capacity := range []int32{0, 65} {
+		if err := f.open.Sync_RoomOpen(context.Background(), f.id, capacity); !errors.Is(err, apperrors.ErrRoomInvalid) {
+			t.Fatalf("capacity %d: %v", capacity, err)
+		}
+	}
+	f.unchanged(t, before)
+	if _, err := f.joins.Sync_RoomJoin(context.Background(), f.id, 101, fmt.Sprintf("connection-%d", 101)); !errors.Is(err, apperrors.ErrRoomUnopened) {
+		t.Fatal(err)
+	}
+	if err := f.open.Sync_RoomOpen(context.Background(), f.id, 2); err != nil {
+		t.Fatal(err)
+	}
+	f.join(t, 101)
+	before = f.document(t)
+	if err := f.open.Sync_RoomOpen(context.Background(), f.id, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.open.Sync_RoomOpen(context.Background(), f.id, 3); !errors.Is(err, apperrors.ErrRoomInvalid) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+}
+func TestRoomJoinHasStableSeatsHostAndReplay(t *testing.T) {
+	f := newRoomFixture(t, 4)
+	a := f.join(t, 101)
+	b := f.join(t, 102)
+	replay := f.join(t, 101)
+	if a.Epoch != 1 || b.Epoch != 2 || replay.Epoch != 1 || replay.HostID != 101 || replay.Capacity != 4 {
+		t.Fatalf("%+v %+v %+v", a, b, replay)
+	}
+	if want := []room.SeatSnapshot{{PlayerID: 101, Slot: 1, Connected: true}, {PlayerID: 102, Slot: 2, Connected: true}}; !reflect.DeepEqual(replay.Seats, want) {
+		t.Fatalf("seats=%+v", replay.Seats)
+	}
+}
+func TestRoomInvalidPlayerCannotConsumeASeat(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	before := f.document(t)
+	for _, id := range []int64{0, -1} {
+		if _, err := f.joins.Sync_RoomJoin(context.Background(), f.id, id, fmt.Sprintf("connection-%d", id)); !errors.Is(err, apperrors.ErrRoomInvalid) {
+			t.Fatal(err)
+		}
+	}
+	f.unchanged(t, before)
+	if got := f.join(t, 101); got.Epoch != 1 || got.Seats[0].Slot != 1 {
+		t.Fatal(got)
+	}
+}
+func TestRoomFullRejectionDoesNotConsumeGeneration(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	f.join(t, 102)
+	before := f.document(t)
+	if _, err := f.joins.Sync_RoomJoin(context.Background(), f.id, 103, fmt.Sprintf("connection-%d", 103)); !errors.Is(err, apperrors.ErrRoomFull) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+	f.leave(t, 102, 2)
+	if got := f.join(t, 103); got.Epoch != 3 || got.Seats[1].Slot != 2 {
+		t.Fatal(got)
+	}
+}
+func TestRoomHostPassesToLowestOccupiedSeat(t *testing.T) {
+	f := newRoomFixture(t, 4)
+	f.join(t, 300)
+	f.join(t, 200)
+	f.join(t, 100)
+	f.leave(t, 300, 1)
+	got := f.view(t, 100)
+	if got.HostID != 200 || len(got.Seats) != 2 || got.Seats[0].Slot != 2 {
+		t.Fatal(got)
+	}
+}
+func TestRoomJoinReusesTheLowestFreeSeat(t *testing.T) {
+	f := newRoomFixture(t, 4)
+	f.join(t, 101)
+	f.join(t, 102)
+	f.join(t, 103)
+	f.leave(t, 102, 2)
+	got := f.join(t, 104)
+	if got.Epoch != 4 || len(got.Seats) != 3 || got.Seats[1].PlayerID != 104 || got.Seats[1].Slot != 2 {
+		t.Fatal(got)
+	}
+}
+func TestRoomLastLeaveClosesAndCannotReopen(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	f.leave(t, 101, 1)
+	f.leave(t, 101, 1)
+	if _, err := f.joins.Sync_RoomJoin(context.Background(), f.id, 102, fmt.Sprintf("connection-%d", 102)); !errors.Is(err, apperrors.ErrRoomClosed) {
+		t.Fatal(err)
+	}
+	if err := f.open.Sync_RoomOpen(context.Background(), f.id, 2); !errors.Is(err, apperrors.ErrRoomClosed) {
+		t.Fatal(err)
+	}
+	f.locked(t, func() {
+		if f.value.Dao().GetHostID() != 0 || !f.value.Dao().GetClosed() || f.value.Dao().SeatsLen() != 0 {
+			t.Error("last leave did not close")
+		}
+	})
+}
+func TestRoomReconnectFencesOldDisconnectAndLeave(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	got, err := f.reconnects.Sync_RoomReconnect(context.Background(), f.id, 101, 1, "new-connection")
+	if err != nil || got.Epoch != 2 {
+		t.Fatalf("%+v %v", got, err)
+	}
+	changed, err := f.disconnects.Sync_RoomDisconnect(context.Background(), f.id, 101, 1)
+	if err != nil || changed {
+		t.Fatalf("stale disconnect: %v %v", changed, err)
+	}
+	if err := f.leaves.Sync_RoomLeave(context.Background(), f.id, 101, 1, "connection-101"); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatal(err)
+	}
+	if err := f.leaves.Sync_RoomLeave(context.Background(), f.id, 101, 2, "connection-101"); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatalf("old connection guessed new epoch: %v", err)
+	}
+	if _, err := f.joins.Sync_RoomJoin(context.Background(), f.id, 101, "connection-101"); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatalf("late old join: %v", err)
+	}
+	if _, err := f.views.Sync_RoomView(context.Background(), f.id, 101, "connection-101"); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatalf("late old view: %v", err)
+	}
+	replay, err := f.reconnects.Sync_RoomReconnect(context.Background(), f.id, 101, 1, "new-connection")
+	if err != nil || replay.Epoch != 2 {
+		t.Fatalf("lost reconnect reply: %+v %v", replay, err)
+	}
+	if got := f.view(t, 101, "new-connection"); len(got.Seats) != 1 || !got.Seats[0].Connected || got.Epoch != 2 {
+		t.Fatal(got)
+	}
+}
+func TestRoomDisconnectKeepsSeatAndHost(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	f.join(t, 102)
+	changed, err := f.disconnects.Sync_RoomDisconnect(context.Background(), f.id, 101, 1)
+	if err != nil || !changed {
+		t.Fatalf("%v %v", changed, err)
+	}
+	changed, err = f.disconnects.Sync_RoomDisconnect(context.Background(), f.id, 101, 1)
+	if err != nil || changed {
+		t.Fatalf("repeat: %v %v", changed, err)
+	}
+	got := f.view(t, 101)
+	if got.HostID != 101 || len(got.Seats) != 2 || got.Seats[0].Connected {
+		t.Fatal(got)
+	}
+	replay := f.join(t, 101)
+	if replay.Epoch != 1 || replay.Seats[0].Connected {
+		t.Fatal("Join silently replaced the disconnected generation")
+	}
+	got, err = f.reconnects.Sync_RoomReconnect(context.Background(), f.id, 101, 1, "new-connection")
+	if err != nil || got.Epoch != 3 || !got.Seats[0].Connected {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+func TestRoomConcurrentReconnectHasOneWinner(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	var wg sync.WaitGroup
+	type outcome struct {
+		key string
+		err error
+	}
+	results := make(chan outcome, 2)
+	for i := range 2 {
+		key := fmt.Sprintf("competing-%d", i)
+		wg.Go(func() {
+			_, err := f.reconnects.Sync_RoomReconnect(context.Background(), f.id, 101, 1, key)
+			results <- outcome{key: key, err: err}
+		})
+	}
+	wg.Wait()
+	close(results)
+	wins, stale := 0, 0
+	var winner string
+	for result := range results {
+		err := result.err
+		if err == nil {
+			winner = result.key
+			wins++
+		} else if errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+			stale++
+		} else {
+			t.Fatal(err)
+		}
+	}
+	if wins != 1 || stale != 1 || f.view(t, 101, winner).Epoch != 2 {
+		t.Fatalf("wins=%d stale=%d", wins, stale)
+	}
+}
+func TestRoomLeaveAndRejoinNeverReusesGeneration(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	f.join(t, 102)
+	f.leave(t, 101, 1)
+	got := f.join(t, 101)
+	if got.Epoch != 3 || got.HostID != 102 {
+		t.Fatal(got)
+	}
+	if err := f.leaves.Sync_RoomLeave(context.Background(), f.id, 101, 1, "connection-101"); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatal(err)
+	}
+	changed, err := f.disconnects.Sync_RoomDisconnect(context.Background(), f.id, 101, 1)
+	if err != nil || changed {
+		t.Fatalf("%v %v", changed, err)
+	}
+}
+func TestRoomOnlyTheCurrentHostCanClose(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	f.join(t, 102)
+	before := f.document(t)
+	if err := f.closes.Sync_RoomClose(context.Background(), f.id, 102, 2, "connection-102"); !errors.Is(err, apperrors.ErrRoomNotHost) {
+		t.Fatal(err)
+	}
+	if err := f.closes.Sync_RoomClose(context.Background(), f.id, 101, 9, "connection-101"); !errors.Is(err, apperrors.ErrRoomStaleEpoch) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+	if err := f.closes.Sync_RoomClose(context.Background(), f.id, 101, 1, "connection-101"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.joins.Sync_RoomJoin(context.Background(), f.id, 103, fmt.Sprintf("connection-%d", 103)); !errors.Is(err, apperrors.ErrRoomClosed) {
+		t.Fatal(err)
+	}
+	f.locked(t, func() {
+		if f.value.Dao().SeatsLen() != 0 || f.value.Dao().GetHostID() != 0 {
+			t.Error("close retained members")
+		}
+	})
+}
+func TestRoomViewIsMembersOnlyAndDetached(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	f.join(t, 102)
+	if _, err := f.views.Sync_RoomView(context.Background(), f.id, 103, fmt.Sprintf("connection-%d", 103)); !errors.Is(err, apperrors.ErrRoomNotMember) {
+		t.Fatal(err)
+	}
+	got := f.view(t, 101)
+	got.Seats[0].PlayerID = 999
+	if again := f.view(t, 102); again.Epoch != 2 || again.Seats[0].PlayerID != 101 {
+		t.Fatal(again)
+	}
+}
+func TestRoomRejectedJoinRollsBackSeatHostAndSeed(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	before := f.document(t)
+	f.commit.reject.Store(true)
+	if _, err := f.joins.Sync_RoomJoin(context.Background(), f.id, 101, fmt.Sprintf("connection-%d", 101)); err == nil {
+		t.Fatal("commit rejection acknowledged")
+	}
+	f.unchanged(t, before)
+	f.commit.reject.Store(false)
+	if got := f.join(t, 101); got.HostID != 101 || got.Epoch != 1 {
+		t.Fatal(got)
+	}
+}
+func TestRoomRejectedReconnectRollsBackNestedSeatAndSeed(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	if _, err := f.disconnects.Sync_RoomDisconnect(context.Background(), f.id, 101, 1); err != nil {
+		t.Fatal(err)
+	}
+	before := f.document(t)
+	f.commit.reject.Store(true)
+	if _, err := f.reconnects.Sync_RoomReconnect(context.Background(), f.id, 101, 1, "new-connection"); err == nil {
+		t.Fatal("commit rejection acknowledged")
+	}
+	f.unchanged(t, before)
+	f.commit.reject.Store(false)
+	got, err := f.reconnects.Sync_RoomReconnect(context.Background(), f.id, 101, 1, "new-connection")
+	if err != nil || got.Epoch != 2 || !got.Seats[0].Connected {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+func TestRoomRejectedLeaveRollsBackHostAndMembers(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	f.join(t, 102)
+	before := f.document(t)
+	f.commit.reject.Store(true)
+	if err := f.leaves.Sync_RoomLeave(context.Background(), f.id, 101, 1, "connection-101"); err == nil {
+		t.Fatal("commit rejection acknowledged")
+	}
+	f.unchanged(t, before)
+	f.commit.reject.Store(false)
+	if got := f.view(t, 101); got.HostID != 101 || len(got.Seats) != 2 {
+		t.Fatal(got)
+	}
+}
+func TestRoomStoredStateRetainsConnectionFence(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	f.join(t, 102)
+	if _, err := f.reconnects.Sync_RoomReconnect(context.Background(), f.id, 101, 1, "new-connection"); err != nil {
+		t.Fatal(err)
+	}
+	raw := f.document(t)
+	restored := newRoomFixture(t, 0)
+	var decodeErr error
+	restored.locked(t, func() { decodeErr = restored.value.Dao().Unmarshal(raw) })
+	if decodeErr != nil {
+		t.Fatal(decodeErr)
+	}
+	if got := restored.view(t, 101, "new-connection"); got.Epoch != 3 || got.HostID != 101 || len(got.Seats) != 2 {
+		t.Fatal(got)
+	}
+	changed, err := restored.disconnects.Sync_RoomDisconnect(context.Background(), restored.id, 101, 1)
+	if err != nil || changed {
+		t.Fatalf("stale close after reload: %v %v", changed, err)
+	}
+	got, err := restored.reconnects.Sync_RoomReconnect(context.Background(), restored.id, 101, 3, "next-connection")
+	if err != nil || got.Epoch != 4 {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func TestRoomGenerationExhaustionRejectsWithoutWrapping(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	// 准备边界持久存量，不在事务外调用业务 setter。
+	raw, err := bson.Marshal(bson.M{"_id": f.id, "_schema": int32(1), "1": int32(2), "4": int64(math.MaxInt64)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.locked(t, func() { err = f.value.Dao().Unmarshal(raw) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := f.document(t)
+	if _, err := f.joins.Sync_RoomJoin(context.Background(), f.id, 101, "connection-101"); !errors.Is(err, apperrors.ErrRoomInvalid) {
+		t.Fatal(err)
+	}
+	f.unchanged(t, before)
+}
+func TestRoomRejectedCloseRestoresAllSeatsAndHost(t *testing.T) {
+	f := newRoomFixture(t, 2)
+	f.join(t, 101)
+	f.join(t, 102)
+	before := f.document(t)
+	f.commit.reject.Store(true)
+	if err := f.closes.Sync_RoomClose(context.Background(), f.id, 101, 1, "connection-101"); err == nil {
+		t.Fatal("commit rejection acknowledged")
+	}
+	f.unchanged(t, before)
+	f.commit.reject.Store(false)
+	if got := f.view(t, 102); got.HostID != 101 || len(got.Seats) != 2 {
+		t.Fatal(got)
+	}
+}

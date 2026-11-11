@@ -1,0 +1,10 @@
+package handler
+
+import room "{{MODULE}}/game/entities/room"
+
+// handlerRoomView 在 Room 的 Nest 锁内处理。持久事实提交成功后才向调用者确认。
+//
+//roost:nest rollback=undo durability=strict
+func handlerRoomView(target room.IRoomEntity, playerID int64, connection string) (room.RoomSnapshot, error) {
+	return target.RoomComp().View(playerID, connection)
+}

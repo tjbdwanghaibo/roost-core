@@ -1,0 +1,23 @@
+package skillbook
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+	"{{MODULE}}/game/playeraccess"
+	book "{{MODULE}}/game/skillbook"
+	"{{MODULE}}/protocol/pb"
+)
+
+func (c *Controller) HandleSkillCatalog(ctx *playeraccess.Context, request *pb.SkillCatalogRequest) (*pb.SkillCatalogResponse, error) {
+	if ctx == nil || request == nil {
+		return nil, fmt.Errorf("skillbook: context and request are required")
+	}
+	ids, warnings, err := book.Read(c.registry)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		return &pb.SkillCatalogResponse{Code: code, Reason: reason}, nil
+	}
+	return &pb.SkillCatalogResponse{Skills: ids, Warnings: warnings}, nil
+}

@@ -1,0 +1,15 @@
+package skills_test
+
+import (
+	"testing"
+
+	"{{MODULE}}/game/skillbook"
+	"{{MODULE}}/game/skills"
+)
+
+// doctor 的 skills:catalog 和服务启动共用编译环境，坏定义在起服前就被拒绝。
+func TestSkillCatalogCompiles(t *testing.T) {
+	if _, err := skills.CompileAll(skillbook.CompileEnvironment()); err != nil {
+		t.Fatal(err)
+	}
+}

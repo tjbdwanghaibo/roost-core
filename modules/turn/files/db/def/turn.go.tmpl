@@ -1,0 +1,23 @@
+package dbdef
+
+// TurnState 保存一场有限回合。房间 ID 不复用，一场结束后不在原 Room 里开第二场。
+// Players 是开局时按座位排序的固定名单；中途加入者只能观战，不抢占回合。
+type TurnState struct {
+	Status     int32         `store:"1"`
+	Round      int64         `store:"2"`
+	Active     int32         `store:"3"`
+	MaxTurns   int64         `store:"4"`
+	TurnMillis int64         `store:"5"`
+	Deadline   int64         `store:"6"`
+	TimerID    int64         `store:"7"`
+	Players    []*TurnPlayer `store:"8"`
+	Timeouts   int64         `store:"9"`
+}
+
+// TurnPlayer 只保留该玩家最后成功的命令序号与对应回合。完全相同的最后一条可以重放；
+// 更早的命令或同序号不同回合明确拒绝，不依赖客户端请求超时判断执行结果。
+type TurnPlayer struct {
+	PlayerID  int64 `store:"1"`
+	Sequence  int64 `store:"2"`
+	LastRound int64 `store:"3"`
+}
