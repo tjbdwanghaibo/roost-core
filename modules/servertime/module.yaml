@@ -1,0 +1,20 @@
+name: servertime
+summary: 服务器时间：客户端拿到服务器的业务时间、当前业务日、本业务日的起点与下一次每日重置的时刻（拉取 ServertimeSync、推送 ServertimeNow）；别的功能可直接调的纯函数 servertime.At / Now
+requires: []
+conflicts: []
+needs:
+  features: [protocol]
+access:
+  transport: tcp
+protocols: [ServertimeSync, ServertimeNow]
+verify:
+  packages: [./game/servertime, ./game/controllers/servertime]
+  run: ^TestServertime
+  pass: 12
+with:
+  enter:
+    summary: 玩家每次进入游戏时把服务器此刻的业务时间推给他（ServertimeNow）；推送不成只记日志，不让登录失败
+    verify:
+      packages: [./game/controllers/servertime]
+      run: ^TestWithServertimeEnter
+      pass: 3

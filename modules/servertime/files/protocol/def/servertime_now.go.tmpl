@@ -1,0 +1,53 @@
+//go:build protocoldef
+
+package protocoldef
+
+// ServertimeNowPush 是服务器的业务时间：现在几点、是哪个业务日、这个业务日从什么时候开始、下一次每日重置在什么时候。
+// 它既是主动推给客户端的那一条（装了 enter 模块时，每次进入游戏推一次），也是 ServertimeSync 应答里带的形状，
+// 客户端只处理一种。
+//
+// 签到、每日任务、体力、商店这些按业务日惰性清零的状态，客户端显示之前要拿状态里的 Day 与“当前业务日”比对；
+// 当前业务日就用这里的 Day，不要自己按时区推算。
+//
+// 这组值是“服务器生成这条消息那一刻”的快照，不会自己走。客户端的用法：
+//
+//  1. 收到时记下自己的单调时钟读数 m0（开机以来的毫秒数这一类；不要用设备的墙上时间，玩家可以改它）。
+//     之后任何时刻的业务时间 = NowUnixMilli +（单调时钟现在的读数 - m0）。每秒的倒计时由客户端自己走，
+//     不要每秒问一次。每次收到新的一份都整份换掉旧的，不与旧的求平均。
+//  2. 算出来的业务时间到达 NextResetUnixMilli 时，当前业务日就是 NextDay，手里各功能的 Day 都按“不是今天”处理；
+//     然后再问一次 ServertimeSync 拿新一天的起点与下一次重置（在线的客户端会在同一刻到点，各自随机晚几秒再问）。
+//  3. 其余要问一次的时机：进入游戏之后手里还没有时间（没装 enter 模块时服务器不会主动推；装了也只是尽力推，
+//     等一两秒没收到就自己问）；应用从后台回来或设备休眠醒来（有的平台单调时钟在休眠时不走）；
+//     以及隔一段时间（例如半小时）——两边时钟的走速有差别，一天能累积出几秒。
+//  4. 客户端算出来的业务时间是估计：刚同步完时比服务器慢一个网络时延，时间久了还有走速差。所以重置时刻前后
+//     几秒里，“今天做过没有”“能不能领”以服务器对那条请求的应答为准，不要假设客户端判断的跨天与服务器分毫不差。
+//
+// 业务时间不一定是真实时间：测试环境可以用 time.logic_offset 把业务时间整体前拨（生产必须为 0）。偏移、业务时区、
+// 每日重置时刻都只在服务进程启动时读一次，运行中不变，所以没有“时间被拨动”的广播。改它们要重启进程：
+// 玩家连接就在这个进程里（缺省的嵌入 TCP 接入）时连接随之断开，客户端重连进入游戏就拿到新的时间；
+// 连接不在这个进程里（独立 Gate）时，靠上面第 3 条的定期再问发现。
+type ServertimeNowPush struct {
+	// NowUnixMilli 是生成这条消息时的业务时间（Unix 毫秒）。
+	NowUnixMilli int64 `pb:"1"`
+	// Day 是当前业务日，YYYYMMDD 的十进制数（如 20261110），与各功能状态里的 Day 是同一种写法。
+	Day int64 `pb:"2"`
+	// DayStartUnixMilli 是当前业务日的起点，也就是最近一次每日重置的时刻（Unix 毫秒），不晚于 NowUnixMilli。
+	DayStartUnixMilli int64 `pb:"3"`
+	// NextResetUnixMilli 是下一次每日重置的时刻（Unix 毫秒），晚于 NowUnixMilli。倒计时 = 它减去当前业务时间。
+	// 它不一定是 DayStartUnixMilli 之后 24 小时：有夏令时的业务时区在切换那一天是 23 或 25 小时。
+	NextResetUnixMilli int64 `pb:"4"`
+	// NextDay 是从 NextResetUnixMilli 起的那个业务日（YYYYMMDD）。
+	NextDay int64 `pb:"5"`
+	// UTCOffsetSeconds 是 NowUnixMilli 这一刻业务时区比 UTC 快多少秒（东八区是 28800），用来显示服务器的墙上时间。
+	// 有夏令时的时区它会变：不要用它推算重置时刻，重置时刻只看 NextResetUnixMilli。
+	UTCOffsetSeconds int32 `pb:"6"`
+	// Zone 是给人看的业务时区名，缺省是 IANA 名（UTC、Asia/Shanghai）；工程可以在
+	// game/servertime/servertime_zone.go 里改成别的文案。
+	Zone string `pb:"7"`
+}
+
+//roost:protocol group=game handler=servertime
+type ServertimeNowProtocol interface {
+	//roost:msg id={{ID:protocol:ServertimeNow}}
+	ServertimeNow() ServertimeNowPush
+}

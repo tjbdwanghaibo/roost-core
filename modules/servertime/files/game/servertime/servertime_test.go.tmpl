@@ -1,0 +1,261 @@
+package servertime
+
+import (
+	"testing"
+	"time"
+	_ "time/tzdata" // 用例要加载 Asia/Shanghai 与 America/New_York：测试机没有 zoneinfo 时也能跑
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+// servertimeCalendar 把进程的业务日历换成（zone，dayStart），结束时换回去。
+// 生产里日历只在进程启动时按配置设一次；这里换的是各功能的 clock.BusinessDay 读的同一份。
+func servertimeCalendar(t *testing.T, zone, dayStart string) {
+	t.Helper()
+	calendar, err := clock.ParseCalendar(zone, dayStart)
+	if err != nil {
+		t.Fatalf("calendar %s %s: %v", zone, dayStart, err)
+	}
+	saved := clock.ProcessCalendar()
+	clock.SetCalendar(calendar)
+	t.Cleanup(func() { clock.SetCalendar(saved) })
+}
+
+// servertimeClock 把进程业务时钟的真实时间来源停在 *realUnixMilli，偏移设成 offset；结束时恢复。
+// 用例改 *realUnixMilli 就是拨时间。
+func servertimeClock(t *testing.T, realUnixMilli *int64, offset time.Duration) {
+	t.Helper()
+	saved := clock.Offset()
+	clock.SetSource(func() time.Time { return time.UnixMilli(*realUnixMilli) })
+	clock.SetOffset(offset)
+	t.Cleanup(func() {
+		clock.SetSource(nil)
+		clock.SetOffset(saved)
+	})
+}
+
+func servertimeWant(t *testing.T, label string, got, want Snapshot) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("%s:\n got  %+v\n want %+v", label, got, want)
+	}
+}
+
+// 普通时刻：UTC、零点重置。2026-11-10 08:30:15.250 UTC 属于 20261110，
+// 这一天从 11-10 00:00 到 11-11 00:00，下一个业务日是 20261111。
+func TestServertimeOrdinaryMoment(t *testing.T) {
+	servertimeCalendar(t, "UTC", "00:00")
+	servertimeWant(t, "2026-11-10 08:30:15.250 UTC", At(1794299415250), Snapshot{
+		NowUnixMilli:       1794299415250,
+		Day:                20261110,
+		DayStartUnixMilli:  1794268800000,
+		NextResetUnixMilli: 1794355200000,
+		NextDay:            20261111,
+		UTCOffsetSeconds:   0,
+		Zone:               "UTC",
+	})
+}
+
+// 重置时刻本身属于新的一天；前 1 毫秒还是旧的一天，它的“下一次重置”正是这一刻；后 1 毫秒与这一刻同一天。
+func TestServertimeResetInstantAndOneMillisecondEitherSide(t *testing.T) {
+	servertimeCalendar(t, "UTC", "00:00")
+	const reset = 1794355200000 // 2026-11-11 00:00:00.000 UTC
+	servertimeWant(t, "1ms before the reset", At(reset-1), Snapshot{
+		NowUnixMilli:       1794355199999,
+		Day:                20261110,
+		DayStartUnixMilli:  1794268800000,
+		NextResetUnixMilli: 1794355200000,
+		NextDay:            20261111,
+		Zone:               "UTC",
+	})
+	servertimeWant(t, "at the reset", At(reset), Snapshot{
+		NowUnixMilli:       1794355200000,
+		Day:                20261111,
+		DayStartUnixMilli:  1794355200000,
+		NextResetUnixMilli: 1794441600000,
+		NextDay:            20261112,
+		Zone:               "UTC",
+	})
+	servertimeWant(t, "1ms after the reset", At(reset+1), Snapshot{
+		NowUnixMilli:       1794355200001,
+		Day:                20261111,
+		DayStartUnixMilli:  1794355200000,
+		NextResetUnixMilli: 1794441600000,
+		NextDay:            20261112,
+		Zone:               "UTC",
+	})
+}
+
+// 每日重置不在零点（05:00）：凌晨 04:59:59.999 仍属于前一个日历日的业务日，05:00:00.000 才换天。
+func TestServertimeResetAtFiveInTheMorning(t *testing.T) {
+	servertimeCalendar(t, "UTC", "05:00")
+	servertimeWant(t, "2026-11-10 04:59:59.999 UTC", At(1794286799999), Snapshot{
+		NowUnixMilli:       1794286799999,
+		Day:                20261109,
+		DayStartUnixMilli:  1794200400000, // 11-09 05:00
+		NextResetUnixMilli: 1794286800000, // 11-10 05:00
+		NextDay:            20261110,
+		Zone:               "UTC",
+	})
+	servertimeWant(t, "2026-11-10 05:00:00.000 UTC", At(1794286800000), Snapshot{
+		NowUnixMilli:       1794286800000,
+		Day:                20261110,
+		DayStartUnixMilli:  1794286800000,
+		NextResetUnixMilli: 1794373200000, // 11-11 05:00
+		NextDay:            20261111,
+		Zone:               "UTC",
+	})
+}
+
+// 业务时区不是 UTC：UTC 的 11-10 16:30 在上海已经是 11-11 00:30，业务日是 20261111，
+// 起点与下一次重置是上海的零点（UTC 16:00）。再加上 05:00 重置：上海 11-11 04:59:59.999 还是 20261110。
+func TestServertimeBusinessZoneIsNotUTC(t *testing.T) {
+	servertimeCalendar(t, "Asia/Shanghai", "00:00")
+	servertimeWant(t, "2026-11-11 00:30 Asia/Shanghai", At(1794328200000), Snapshot{
+		NowUnixMilli:       1794328200000,
+		Day:                20261111,
+		DayStartUnixMilli:  1794326400000, // 11-11 00:00 +08:00
+		NextResetUnixMilli: 1794412800000, // 11-12 00:00 +08:00
+		NextDay:            20261112,
+		UTCOffsetSeconds:   28800,
+		Zone:               "Asia/Shanghai",
+	})
+	servertimeCalendar(t, "Asia/Shanghai", "05:00")
+	servertimeWant(t, "2026-11-11 04:59:59.999 Asia/Shanghai, reset 05:00", At(1794344399999), Snapshot{
+		NowUnixMilli:       1794344399999,
+		Day:                20261110,
+		DayStartUnixMilli:  1794258000000, // 11-10 05:00 +08:00
+		NextResetUnixMilli: 1794344400000, // 11-11 05:00 +08:00
+		NextDay:            20261111,
+		UTCOffsetSeconds:   28800,
+		Zone:               "Asia/Shanghai",
+	})
+}
+
+// 有夏令时的时区在切换那一天不是 24 小时。纽约 2026-03-08 拨快一小时：这个业务日只有 23 小时，
+// 同一天里切换前后的 UTC 偏移也不同（-5 小时变 -4 小时）。2026-11-01 拨回：这个业务日有 25 小时。
+// 05:00 重置时同理：03-07 05:00 到 03-08 05:00 只有 23 小时。
+func TestServertimeDaylightSavingDayIsNot24Hours(t *testing.T) {
+	servertimeCalendar(t, "America/New_York", "00:00")
+	servertimeWant(t, "2026-03-08 01:00 EST, before the switch", At(1772949600000), Snapshot{
+		NowUnixMilli:       1772949600000,
+		Day:                20260308,
+		DayStartUnixMilli:  1772946000000, // 03-08 00:00 -05:00
+		NextResetUnixMilli: 1773028800000, // 03-09 00:00 -04:00，起点之后 23 小时
+		NextDay:            20260309,
+		UTCOffsetSeconds:   -18000,
+		Zone:               "America/New_York",
+	})
+	servertimeWant(t, "2026-03-08 12:00 EDT, after the switch", At(1772985600000), Snapshot{
+		NowUnixMilli:       1772985600000,
+		Day:                20260308,
+		DayStartUnixMilli:  1772946000000,
+		NextResetUnixMilli: 1773028800000,
+		NextDay:            20260309,
+		UTCOffsetSeconds:   -14400,
+		Zone:               "America/New_York",
+	})
+	servertimeWant(t, "2026-11-01 12:00 EST, the 25-hour day", At(1793552400000), Snapshot{
+		NowUnixMilli:       1793552400000,
+		Day:                20261101,
+		DayStartUnixMilli:  1793505600000, // 11-01 00:00 -04:00
+		NextResetUnixMilli: 1793595600000, // 11-02 00:00 -05:00，起点之后 25 小时
+		NextDay:            20261102,
+		UTCOffsetSeconds:   -18000,
+		Zone:               "America/New_York",
+	})
+	servertimeCalendar(t, "America/New_York", "05:00")
+	servertimeWant(t, "2026-03-08 04:00 EDT, reset 05:00", At(1772956800000), Snapshot{
+		NowUnixMilli:       1772956800000,
+		Day:                20260307,
+		DayStartUnixMilli:  1772877600000, // 03-07 05:00 -05:00
+		NextResetUnixMilli: 1772960400000, // 03-08 05:00 -04:00，起点之后 23 小时
+		NextDay:            20260308,
+		UTCOffsetSeconds:   -14400,
+		Zone:               "America/New_York",
+	})
+}
+
+// Now 读的是进程业务时钟：真实时间 + time.logic_offset。真实时间是 11-10 23:00 UTC 时，
+// 偏移为 0 是 20261110；偏移 +2 小时业务时间是 11-11 01:00，已经是 20261111。
+// Now 每次现读：时钟走了，下一次调用就是新的时刻（不缓存）。
+func TestServertimeNowFollowsTheBusinessClockOffset(t *testing.T) {
+	servertimeCalendar(t, "UTC", "00:00")
+	realMilli := int64(1794351600000) // 2026-11-10 23:00:00 UTC
+	servertimeClock(t, &realMilli, 0)
+	servertimeWant(t, "offset 0", Now(), Snapshot{
+		NowUnixMilli:       1794351600000,
+		Day:                20261110,
+		DayStartUnixMilli:  1794268800000,
+		NextResetUnixMilli: 1794355200000,
+		NextDay:            20261111,
+		Zone:               "UTC",
+	})
+	clock.SetOffset(2 * time.Hour)
+	servertimeWant(t, "offset +2h", Now(), Snapshot{
+		NowUnixMilli:       1794358800000, // 2026-11-11 01:00:00 UTC
+		Day:                20261111,
+		DayStartUnixMilli:  1794355200000,
+		NextResetUnixMilli: 1794441600000,
+		NextDay:            20261112,
+		Zone:               "UTC",
+	})
+	realMilli -= 3_600_000 // 真实时间退到 22:00，业务时间是 11-11 00:00 整：恰好在重置时刻
+	servertimeWant(t, "offset +2h at the reset instant", Now(), Snapshot{
+		NowUnixMilli:       1794355200000,
+		Day:                20261111,
+		DayStartUnixMilli:  1794355200000,
+		NextResetUnixMilli: 1794441600000,
+		NextDay:            20261112,
+		Zone:               "UTC",
+	})
+	realMilli--
+	if got := Now(); got.Day != 20261110 || got.NowUnixMilli != 1794355199999 {
+		t.Fatalf("1ms earlier: day %d at %d, want 20261110 at 1794355199999", got.Day, got.NowUnixMilli)
+	}
+}
+
+// 这个模块存在的意义：同一时刻，这里给客户端的业务日与签到、任务、体力、商店判定用的业务日是同一个数。
+// 那些功能的写法是 int64(clock.BusinessDay(time.UnixMilli(nowUnixMilli)))，这里逐个时刻与它对上，
+// 同时核对快照自己说得通：起点 ≤ 现在 < 下一次重置；起点与“下一次重置前 1 毫秒”都还是这一天；
+// 下一次重置那一刻正好是 NextDay，并且 NextDay 晚于 Day。
+// 覆盖 UTC / 上海 / 纽约三种时区、零点 / 05:00 / 落在夏令时被跳过那一小时里的 02:30 三种重置时刻，
+// 时间段跨过纽约 2026 年两次夏令时切换，每 7 分 1 毫秒取一个时刻。
+func TestServertimeDayAgreesWithClockBusinessDay(t *testing.T) {
+	zones := []string{"UTC", "Asia/Shanghai", "America/New_York"}
+	starts := []string{"00:00", "05:00", "02:30"}
+	windows := [][2]int64{
+		{1772755200000, 1773187200000}, // 2026-03-06 00:00 UTC ～ 2026-03-11 00:00 UTC
+		{1793318400000, 1793750400000}, // 2026-10-30 00:00 UTC ～ 2026-11-04 00:00 UTC
+	}
+	checked := 0
+	for _, zone := range zones {
+		for _, start := range starts {
+			servertimeCalendar(t, zone, start)
+			for _, window := range windows {
+				for now := window[0]; now < window[1]; now += 7*60_000 + 1 {
+					got := At(now)
+					if want := int64(clock.BusinessDay(time.UnixMilli(now))); got.Day != want {
+						t.Fatalf("%s %s at %d: servertime day %d, clock.BusinessDay %d", zone, start, now, got.Day, want)
+					}
+					if !(got.DayStartUnixMilli <= now && now < got.NextResetUnixMilli) {
+						t.Fatalf("%s %s at %d: day [%d, %d) does not contain now", zone, start, now, got.DayStartUnixMilli, got.NextResetUnixMilli)
+					}
+					if day := int64(clock.BusinessDay(time.UnixMilli(got.DayStartUnixMilli))); day != got.Day {
+						t.Fatalf("%s %s at %d: the day start %d is in day %d, want %d", zone, start, now, got.DayStartUnixMilli, day, got.Day)
+					}
+					if day := int64(clock.BusinessDay(time.UnixMilli(got.NextResetUnixMilli - 1))); day != got.Day {
+						t.Fatalf("%s %s at %d: 1ms before the next reset %d is in day %d, want %d", zone, start, now, got.NextResetUnixMilli, day, got.Day)
+					}
+					if day := int64(clock.BusinessDay(time.UnixMilli(got.NextResetUnixMilli))); day != got.NextDay || got.NextDay <= got.Day {
+						t.Fatalf("%s %s at %d: the next reset %d is in day %d, snapshot says next day %d after day %d", zone, start, now, got.NextResetUnixMilli, day, got.NextDay, got.Day)
+					}
+					checked++
+				}
+			}
+		}
+	}
+	if checked < 9000 {
+		t.Fatalf("only %d moments were checked; the sweep is not running", checked)
+	}
+}

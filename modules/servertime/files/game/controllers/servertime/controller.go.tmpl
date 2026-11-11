@@ -1,0 +1,14 @@
+package servertime
+
+import (
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// Controller 是服务器时间端点的接收者。服务器时间不属于任何 Entity、没有状态、不经过 Nest，
+// 端点只读进程业务时钟，所以这里什么都不持有；推送要用的玩家连接在推的时候按能力名现取（PushNow）。
+type Controller struct{}
+
+// FromRegistry 由生成的协议绑定在每个进程里调用一次。
+func FromRegistry(*app.Registry) (*Controller, error) {
+	return &Controller{}, nil
+}

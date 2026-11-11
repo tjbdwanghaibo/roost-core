@@ -1,0 +1,27 @@
+package servertime
+
+import (
+	"context"
+
+	gameenter "{{MODULE}}/game/enter"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 这个文件是 servertime 与 enter 两个模块的联动：两个都装着时才有。
+//
+// 玩家每次进入游戏（含重连）都把服务器此刻的业务时间推给他（ServertimeNow）：客户端在收到 EnterGame 的应答、
+// 开始显示签到 / 任务 / 体力 / 商店之前就已经知道当前业务日与下一次重置的时刻，不必记得自己再问一次。
+// 推送在进入钩子里、端点答复之前交给连接，所以客户端一般先收到它、后收到 EnterGame 的应答：
+// 客户端在等应答的时候也要处理推送，但不要依赖这个先后。
+//
+// 这是进入钩子（见 game/enter）：推送不成（传输没装配、连接刚断、发送队列满）只由 enter 记一条日志，
+// 不让登录失败。那一次客户端没收到时间，按协议注释里的约定自己发 ServertimeSync——推送不是唯一的途径。
+// 服务进程重启（业务时间偏移 time.logic_offset 只在那时才会变）断开了连接的客户端重连、重新进入，也是经这里拿到新的时间。
+func init() {
+	gameenter.OnEntered("servertime", pushOnEnter)
+}
+
+func pushOnEnter(ctx context.Context, registry *app.Registry, entered gameenter.Entered) error {
+	return PushNow(ctx, registry, entered.PlayerID)
+}
