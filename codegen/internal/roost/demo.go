@@ -787,6 +787,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "internal/service/game/flags.go", why: "the table is the source and the store is rebuilt from it on every reload; also the one place that says what may be hot-patched"},
 		{write: "internal/service/game/playerowner.go", why: "serve only the players bound to this sid (server_id from account, and the current binding for background work), a local resident table behind the write gate, the rehome module's Residency with the table of players moved out, and idle unload as plain memory management"},
 		{write: "internal/service/game/rehome_checks.go", why: "the demo's own checks before a player may change servers (the rehome module's registration points): a guild or team member is refused, and so is every player of a server running the partitioned scene — the state those hold about a player's server is not moved with him yet"},
+		{write: "internal/service/game/rehome_checks_test.go", why: "换服前的公会 / 队伍检查撑到交出实体：标记之后的请求在写闸门被拒，标记之前准入的请求先执行完，再复核、再向联盟服务问权威的成员关系；检查之后才入会、入会应答迟到、通知迟到都中止（RV-20261111-BM-05）"},
 		{write: "internal/service/game/playerowner_test.go", why: "Serve 的三种结果、只有通过绑定校验才有驻留记录、卸载进行中不准入、登录等卸载结束、闲置卸载与使用的界定"},
 		{write: "internal/service/game/gift_saga_budget_test.go", why: "退款（debit 的补偿）的重试窗口覆盖发送方 sid 的一次崩溃重启：startup_wait + ttl + 拉起余量，按生成的 singleton 配置核对"},
 		{write: "internal/service/game/gift_route_test.go", why: "赠礼与公会的玩家步骤按 sid 确切路由：定义只路由写 Player 的步骤；属主核对——本服的离线发送方照常执行，绑定别的服的退回协调器并指明其 sid、不在本进程接入，没有 sid 的拒收，卸载中的在本服重试"},

@@ -356,6 +356,11 @@ func (owners *PlayerOwners) Admit(playerID int64) error {
 	}
 	owners.mu.Lock()
 	defer owners.mu.Unlock()
+	if away := owners.emigrants[playerID]; away != nil {
+		// 迁出表里的玩家——离开中的、已经换走的——不再开始任何新的事：从 Reserve 打上标记的那一刻起。
+		// 不等到交出实体：标记之后才准入的请求（他这时去加入一个公会）会让“换服前的检查”在提交之前失效。
+		return away.refusal()
+	}
 	state := owners.residents[playerID]
 	if state == nil {
 		return fmt.Errorf("%w: player %d has not been taken into service here", ErrNotServedHere, playerID)
@@ -550,8 +555,10 @@ func (away *emigrant) refusal() error {
 	return gamerehome.Elsewhere(away.move.PlayerID, away.move.To)
 }
 
-// Reserve 打上“离开中”的标记：从这一刻起 Serve 与 AdmitBound 不再给他建驻留记录，AdmitBound 答“换服中”。
-// 已有的驻留记录留着——到交出实体之前，本进程仍是他的写者，他连着的会话照常工作。
+// Reserve 打上“离开中”的标记：从这一刻起他新的请求在写闸门被拒（Admit / AdmitMessage），Serve 与 AdmitBound
+// 不再给他建驻留记录，AdmitBound 答“换服中”（saga 步骤退回、不带路由）。
+// 已有的驻留记录留着——到交出实体之前，本进程仍是他的写者：标记之前已经准入的请求照常执行完，
+// 别的服务发来的通知（公会成员变化）照常写进他的档。
 // 副本正在闲置卸载时拒绝：卸载会销毁内存里的实例，让它先结束，玩家稍后再申请。
 func (owners *PlayerOwners) Reserve(move gamerehome.Move) error {
 	owners.mu.Lock()
@@ -566,7 +573,46 @@ func (owners *PlayerOwners) Reserve(move gamerehome.Move) error {
 	return nil
 }
 
-// Depart 让他离开本进程：断开会话 → 离开场景并交出实体（屏障保持）→ 删驻留记录。成功之后 Admit 拒绝他的写入，
+// Quiesce 让他在本进程里安静下来：断开会话，等到他一条会话都不剩。
+//
+// 等的是“标记之前已经准入的请求都执行完了”。依据是玩家传输的两条性质（gateway 的 TCP 服务）：一条连接的读循环
+// 串行分发请求，同一时刻至多一个在执行；会话要等读循环退出——那个请求的 handler 已经返回，它的 Nest 事务
+// 已经提交或失败——之后才从按玩家的会话表里摘掉。所以 ActiveSessions 归零时，本进程里没有任何他自己的请求在执行；
+// 新的请求从 Reserve 起就被写闸门拒绝。断开会取消连接的 context：还在等联盟服务应答的入会请求因此很快返回，
+// 它在联盟服务那边生效了没有，由离开钩子去问联盟服务（rehome_checks.go）。
+//
+// 不在这个保证里的：推送失败时被传输提前摘掉的连接（它的 handler 可能还没返回，context 已取消）；
+// 不经会话进来的东西——saga 步骤（准入答“换服中”）、成员通知（照常写档，见 Reserve）。
+// 没有装连接（Fence）的进程没有会话可等。在 ctx 之内等不到返回错误，调用方中止换服。
+func (owners *PlayerOwners) Quiesce(ctx context.Context, move gamerehome.Move) error {
+	owners.mu.Lock()
+	away, fencer := owners.emigrants[move.PlayerID], owners.fencer
+	owners.mu.Unlock()
+	if away == nil || away.move.ID != move.ID {
+		return fmt.Errorf("player owners: transfer %s of player %d was not reserved", move.ID, move.PlayerID)
+	}
+	if fencer == nil {
+		return nil
+	}
+	fencer.CloseSessions(move.PlayerID, gamerehome.ErrSessionRehoming)
+	ticker := time.NewTicker(quiescePoll)
+	defer ticker.Stop()
+	for fencer.ActiveSessions(move.PlayerID) > 0 {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("player owners: requests of player %d admitted before the move are still running: %w", move.PlayerID, ctx.Err())
+		case <-ticker.C:
+			// 其间握手进来的连接发不出业务请求（写闸门），一并断开。
+			fencer.CloseSessions(move.PlayerID, gamerehome.ErrSessionRehoming)
+		}
+	}
+	return nil
+}
+
+// quiescePoll 是 Quiesce 等会话收尾时两次查看之间的间隔。
+const quiescePoll = 10 * time.Millisecond
+
+// Depart 让他离开本进程：（再）断开会话 → 离开场景并交出实体（屏障保持）→ 删驻留记录。成功之后
 // DataEngine 拒绝写到他的事务。失败是确定的“没有离开”：驻留记录原样，调用方中止换服。
 func (owners *PlayerOwners) Depart(ctx context.Context, move gamerehome.Move) error {
 	owners.mu.Lock()

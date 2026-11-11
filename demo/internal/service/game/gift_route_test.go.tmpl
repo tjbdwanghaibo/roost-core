@@ -12,6 +12,7 @@ import (
 	"{{MODULE}}/game/guild"
 	gamerehome "{{MODULE}}/game/rehome"
 	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/msgid"
 	alliancedonate "{{MODULE}}/saga/alliance_donate"
 	alliancefound "{{MODULE}}/saga/alliance_found"
 	alliancereward "{{MODULE}}/saga/alliance_reward"
@@ -361,10 +362,18 @@ func TestAStepForAPlayerThisProcessIsMovingOutIsBounced(t *testing.T) {
 		t.Fatalf("a second reservation = %v, want rehome_moving", err)
 	}
 	expectBounce(t, "a step for a player with the leaving mark", home.gifts.admitBound(ctx, command), "")
-	// Until he has left, this process is still his writer: the session he
-	// has keeps working.
-	if err := home.owners.Admit(world.player); err != nil {
-		t.Fatalf("writes before the hand-off = %v, want them admitted", err)
+	// From the mark on the write gate refuses his new requests (RV-20261111-BM-05):
+	// a request admitted after the checks could undo what they checked. The
+	// login message is exempt — the check before entering answers it.
+	if err := home.owners.Admit(world.player); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("a new request after the leaving mark = %v, want rehome_moving", err)
+	}
+	if err := home.owners.AdmitMessage(world.player, msgid.MsgEnterGame); err != nil {
+		t.Fatalf("the login message after the leaving mark = %v, want it left to the check before entering", err)
+	}
+	// Quiesce: nothing to wait for in a process with no connections.
+	if err := home.owners.Quiesce(ctx, move); err != nil {
+		t.Fatal(err)
 	}
 	// An abort before he left: served here again, nothing was handed off.
 	if err := home.owners.Settle(ctx, move, gamerehome.Aborted); err != nil {
@@ -372,6 +381,9 @@ func TestAStepForAPlayerThisProcessIsMovingOutIsBounced(t *testing.T) {
 	}
 	if err := home.gifts.admitBound(ctx, command); err != nil || len(home.departer.handed) != 0 {
 		t.Fatalf("after the abort the step = %v (handed off %v), want it admitted", err, home.departer.handed)
+	}
+	if err := home.owners.Admit(world.player); err != nil {
+		t.Fatalf("after the abort the write gate = %v, want the player admitted again", err)
 	}
 	// The move for real: mark, leave, commit.
 	move.ID = "move-2"
@@ -384,7 +396,7 @@ func TestAStepForAPlayerThisProcessIsMovingOutIsBounced(t *testing.T) {
 	if len(home.departer.handed) != 1 || home.departer.handed[0] != world.player {
 		t.Fatalf("handed off %v, want the player", home.departer.handed)
 	}
-	if home.owners.Admit(world.player) == nil || home.owners.Resident(world.player) {
+	if !errors.Is(home.owners.Admit(world.player), apperrors.ErrRehomeMoving) || home.owners.Resident(world.player) {
 		t.Fatal("after the hand-off the write gate still admits the player")
 	}
 	expectBounce(t, "a step after the hand-off, before the commit", home.gifts.admitBound(ctx, command), "")
@@ -479,6 +491,7 @@ func TestALoginWithClaimsFromBeforeTheMoveIsRefused(t *testing.T) {
 type routeProfile struct{}
 
 func (routeProfile) Prepare(context.Context, gamerehome.Move) error { return nil }
+func (routeProfile) Recheck(context.Context, gamerehome.Move) error { return nil }
 func (routeProfile) Cancel(context.Context, int64, string) error    { return nil }
 func (routeProfile) Arrive(context.Context, int64, int32) (gamerehome.ArriveResult, error) {
 	return gamerehome.ArriveResult{}, nil
