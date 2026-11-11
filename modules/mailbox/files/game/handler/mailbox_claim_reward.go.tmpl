@@ -1,0 +1,22 @@
+package handler
+
+import (
+	"time"
+
+	player "{{MODULE}}/game/entities/player"
+	gamemailbox "{{MODULE}}/game/mailbox"
+)
+
+// handlerMailboxClaimReward 把一封邮件的金币附件发给玩家，每封邮件至多一次。不对客户端开放：
+// 由 MailboxClaim 端点在 mail 服务预留成功之后调用，mailID、amount、expiresAtUnix 都来自那次预留，
+// 不来自客户端请求。
+//
+// nowUnixMilli 由 Nest 填这条消息冻结的业务时间——是发放执行的时刻，不是端点排队之前读的时刻。
+// 过期准入必须用它：预留在过期前取得、排队到过期后才执行的请求，要按执行时刻判断。
+// 邮件的过期时刻是 Unix 秒，这里按 mail 服务同样的取整（向下取到秒）换算后再比较。
+// 规则本身见 MailboxComponent.Claim。
+//
+//roost:nest rollback=undo durability=strict
+func handlerMailboxClaimReward(target player.IMailboxEntity, mailID string, amount int64, expiresAtUnix int64, nowUnixMilli int64) (gamemailbox.ClaimResult, error) {
+	return target.MailboxComp().Claim(mailID, amount, expiresAtUnix, time.UnixMilli(nowUnixMilli).Unix())
+}

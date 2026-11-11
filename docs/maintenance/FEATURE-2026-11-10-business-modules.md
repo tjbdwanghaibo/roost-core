@@ -1,6 +1,6 @@
 # 功能设计：业务模块与配方（2026-11-10）
 
-**状态：第 2 期（最小闭环）已实施，第 3～6 期未开始（维护者 2026-11-10 确认下表四项决定，同日“你直接做之前的文档的逻辑”）。** 已有的：`roost module list / plan / add / verify` 与两个模块（wallet、checkin），现行说明在 [modules/README](../../modules/README.md)、[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module) 与[能力清单](../framework/CAPABILITIES.md)，限制在 [KNOWN-LIMITS“业务模块”](KNOWN-LIMITS.md#业务模块roost-module)。还没有的：配方、现有 13 类玩法与 game-demo 的迁移——它们仍是 [roost-genre skill](../agent-skills/roost-genre/SKILL.md) 加 `scripts/testdata/<genre>/` 夹具与 `-template game-demo`。实施结果与方案的出入见[第 17 节](#17-第-2-期实施记录2026-11-10)。
+**状态：第 2 期（最小闭环）已实施，第 3～6 期未开始（维护者 2026-11-10 确认下表四项决定，同日“你直接做之前的文档的逻辑”）。** 已有的：`roost module list / plan / add / verify` 与八个模块（清单与状态见第 18 节），game-demo 的聊天与进入游戏已改用模块，现行说明在 [modules/README](../../modules/README.md)、[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module) 与[能力清单](../framework/CAPABILITIES.md)，限制在 [KNOWN-LIMITS“业务模块”](KNOWN-LIMITS.md#业务模块roost-module)。还没有的：配方、现有 13 类玩法与 game-demo 的迁移——它们仍是 [roost-genre skill](../agent-skills/roost-genre/SKILL.md) 加 `scripts/testdata/<genre>/` 夹具与 `-template game-demo`。实施结果与方案的出入见[第 17 节](#17-第-2-期实施记录2026-11-10)。
 
 **文档分两部分**：第 0～9 节是设计（做什么、为什么）；第 10 节起是实施方案（改哪些文件、怎么改、怎么验收），供实施者按期执行。实施者先读[第 10 节](#10-实施者须知)。
 
@@ -602,26 +602,26 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 
 ## 18. 模块清单与后续顺序（2026-11-11）
 
-后续是继续拆解：把 game-demo、13 类玩法夹具与两轮实测里反复手写的业务拆成模块。清单按“新工程最先需要什么”排。按决定 5，拆出来的模块只要求新生成的工程能直接用，不为以前生成的工程做兼容；已有的四个模块是照 demo 与夹具的做法写成的独立版本，demo 自己还没有改为使用它们（决定 3 的那一步仍待做）。
+后续是继续拆解：把 game-demo、13 类玩法夹具与两轮实测里反复手写的业务拆成模块。清单按“新工程最先需要什么”排。按决定 5，拆出来的模块只要求新生成的工程能直接用，不为以前生成的工程做兼容；game-demo 已改用 chat 与 enter 两个模块（生成时安装，见 `demo.go` 的 `demoModuleSteps`）；profile、bag、leaderboard、mailbox 是照 demo 的做法拆出来的独立版本，demo 自己的那几块还没有换成它们（决定 3 的那一步对这四个仍待做）。
 
 | 批次 | 模块 | 做什么 | 依赖 / 需要安装器先有的能力 | 状态 |
 | --- | --- | --- | --- | --- |
 | 1 | wallet | 货币：余额、`Add`、带去重窗口的 `Apply`、消费协议 | — | 已有（8 条） |
 | 1 | checkin | 每日签到，奖励经 wallet | wallet | 已有（6 条） |
-| 1 | chat | 世界与私聊的发送、翻历史 | 托管 chat 服务；`replaces`（已做） | 已有（6 条） |
-| 2 | enter | 进入游戏端点（建档）与首次初始化：做过没有记在档里，每次进入都问；新玩家的初始发放写在业务文件 `enter_first.go` 里（没有做模块间的自动登记）。安装时打开玩家 TCP 接入与自身视图 | 清单的 `access`（已做） | 已有（3 条） |
-| 2 | profile | 名字、等级、经验与升级 | — | 未做 |
-| 2 | bag | 道具背包：增减、上限、按道具号堆叠 | — | 未做 |
+| 1 | chat | 世界与私聊的发送、翻历史 | 托管 chat 服务；`replaces`（已做） | 已有（8 条）；game-demo 在用 |
+| 2 | enter | 进入游戏端点（建档）与首次初始化：做过没有记在档里，每次进入都问；新玩家的初始发放写在业务文件 `enter_first.go` 里（没有做模块间的自动登记）。安装时打开玩家 TCP 接入与自身视图 | 清单的 `access`（已做） | 已有（3 条）；game-demo 用它的协议、域与首次初始化 |
+| 2 | profile | 名字、等级、经验与升级 | — | 已有（16 条） |
+| 2 | bag | 道具背包：增减、上限、按道具号堆叠 | — | 已有（12 条） |
 | 2 | stamina | 体力：随时间恢复、消耗、用货币补满（每日次数） | wallet | 未做 |
 | 2 | quest | 每日任务：进度、领奖、按业务日清零 | wallet | 未做 |
-| 2 | leaderboard | 排行：提交分数、查前 N 名与自己的名次 | 托管 rank 服务 | 未做 |
-| 2 | mailbox | 邮件：列表、领附件进货币 / 背包 | 托管 mail 服务；wallet、bag | 未做 |
+| 2 | leaderboard | 排行：提交分数、查前 N 名与自己的名次 | 托管 rank 服务 | 已有（15 条） |
+| 2 | mailbox | 邮件：列表、领附件进货币 / 背包 | 托管 mail 服务；wallet（这一版附件只有金币，没有接 bag） | 已有（21 条） |
 | 3 | shop | 用货币买道具，每日 / 终身限购 | wallet、bag；配置表（`tables`） | 未做 |
 | 3 | room | 带座位的房间实体：进出、连接代际、房主 | 独立实体（安装器要支持模块自带实体） | 未做 |
 | 3 | matchroom | 匹配成局到房间的移交 | 托管 match 服务；room | 未做 |
 | 3 | turn | 回合推进：命令序号、超时（持久定时器） | room；定时器类型分配 | 未做 |
 | 4 | 配方 | `roost project new -recipe <name>`：一组模块加参数（休闲、回合对战……） | 模块够用之后 | 未做 |
 
-安装器还缺、按需要补的能力：模块自带实体（现在只能挂在已有实体上）、定时器类型分配、Init / Shutdown 接线点（推送、后台循环、初始化登记）、配置表、打开自身视图等 `roost.yaml` 装配的前置。每补一项都要有一个真实用到它的模块一起做，不先造空机制。
+安装器还缺、按需要补的能力：模块自带实体（现在只能挂在已有实体上）、定时器类型分配、Init / Shutdown 接线点（推送、后台循环）、配置表与模块配置、模块之间的登记点（第二批做下来最缺的一项：enter 的进入钩子让 mailbox 拉广播邮件、mailbox 的附件种类让 bag 登记道具附件、profile 的升级与 enter 的首次发放让别的模块挂奖励——现在都是改业务文件）。`module verify` 把子测试数进通过数、`roost add errcode` 一码一个文件与“一个模块一个错误文件”不一致，是做第二批时记下的两个小毛刺。每补一项都要有一个真实用到它的模块一起做，不先造空机制。
 
 每个新模块的验收不变：全新工程上单独安装、与已有模块一起安装、重复安装无变化、`roost module verify` 的场景数；写进 `scripts/test-modules-generated.sh`。每批做完用一个只凭 skill 的 agent 按一段不重合的需求实测一遍。

@@ -1,0 +1,14 @@
+package profile
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleProfileRename 是改名协议的入口；改的是认证会话的玩家，名字的规则在 Nest handler 的锁内校验，
+// 被拒绝时业务码经生成的转交代码写进回包的 Code / Reason。
+//
+//roost:endpoint nest=ProfileRename
+func (controller *Controller) HandleProfileRename(ctx *playeraccess.Context, req *pb.ProfileRenameRequest) (*pb.ProfileRenameResponse, error) {
+	return controller.dispatchProfileRename(ctx, req)
+}

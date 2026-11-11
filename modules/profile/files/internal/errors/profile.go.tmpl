@@ -1,0 +1,12 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 档案模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+var (
+	ErrProfileNameEmpty   = errcode.Define({{ID:errcode:profile_name_empty}}, "profile_name_empty", "name must not be empty")
+	ErrProfileNameLong    = errcode.Define({{ID:errcode:profile_name_long}}, "profile_name_long", "name is too long")
+	ErrProfileNameInvalid = errcode.Define({{ID:errcode:profile_name_invalid}}, "profile_name_invalid", "name is not valid UTF-8")
+	ErrProfileExpInvalid  = errcode.Define({{ID:errcode:profile_exp_invalid}}, "profile_exp_invalid", "exp amount must be positive")
+	ErrProfileExpOverflow = errcode.Define({{ID:errcode:profile_exp_overflow}}, "profile_exp_overflow", "exp or level out of range")
+)

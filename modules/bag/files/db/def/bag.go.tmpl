@@ -1,0 +1,8 @@
+package dbdef
+
+// BagState 是玩家本人可见的背包。
+type BagState struct {
+	// Items 是道具号 -> 持有数量。只存数量为正的道具：扣到 0 时删掉这个键，
+	// 所以键的个数就是“持有的道具种类数”，种类上限按它判断。
+	Items map[int64]int64 `store:"1"`
+}

@@ -6,7 +6,7 @@
 
 ## 0. 先说清楚能做到什么
 
-- **有现成模块的需求**：一条命令装进工程，带验收过的场景测试。目前只有四个模块：`enter`（进入游戏：建档、首次初始化、打开自身视图）、`wallet`（货币）、`checkin`（每日签到）、`chat`（聊天：世界与私聊的发送和翻历史）。新工程一般都先装 `enter`。以 `roost module list` 为准。
+- **有现成模块的需求**：一条命令装进工程，带验收过的场景测试。目前有八个模块：`enter`（进入游戏：建档、首次初始化、打开自身视图）、`wallet`（货币）、`checkin`（每日签到）、`chat`（聊天：世界与私聊的发送和翻历史）、`profile`（名字、等级、经验）、`bag`（堆叠背包）、`leaderboard`（总分榜）、`mailbox`（邮件列表与领金币附件）。新工程一般都先装 `enter`。以 `roost module list` 为准。
 - **这一档交付到哪**：业务逻辑写完、离线场景通过、有“进入游戏”端点（建档，第 4B 步）、客户端可见的状态接上自身视图（第 4A 步）。**不含**登录鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）、真实依赖、Robot 与网络验收——[SKILL §3.6](../SKILL.md) 的“网络验收”在这里没有做，报告里要写明。
 - **没有现成模块的需求**：用 `roost add …` 建骨架、手写业务。框架给的是事务、持久化、同步、定时、跨进程这些底座，规则要写。写法照已装模块的文件。
 - **框架不支持的需求**：如实说明并给出处，不拼假 demo。见 [SKILL §6](../SKILL.md) 与[能力清单“明确没有 / 不适合的”](../../../framework/CAPABILITIES.md#明确没有--不适合的)。
@@ -213,7 +213,7 @@ go test -mod=mod ./...                                            # 其余生成
 
 ## 7. 边界
 
-- 模块只有四个；enter、wallet、checkin 要求 `-template game` 的 `Player`，chat 要求业务服务 `uses: [chat]`（`-template game` 已有）。13 类玩法与 game-demo 的业务还不是模块，不能用 `roost module add` 装；它们的做法可以参考，代码要手写进工程。
+- 模块只有八个；enter、wallet、checkin、profile、bag、mailbox 要求 `-template game` 的 `Player`，chat / leaderboard / mailbox 分别要求业务服务 `uses: [chat]` / `[rank]` / `[mail]`（`-template game` 都已有）。模块之间没有自动接线：升级奖励、新玩家初始发放、上榜、广播邮件的拉取都要在各模块留的业务文件或自己的端点里写。13 类玩法与 game-demo 的其余业务还不是模块，不能用 `roost module add` 装；它们的做法可以参考，代码要手写进工程。
 - 没有卸载；分配过的号与存储键不回收。已装模块不会随 roost-core 升级自动更新。
 - 模块没有 Init / Shutdown、后台循环、定时器类型、压测步骤。
 - 细节与出处：[modules/README](../../../../modules/README.md)、[命令参考“业务模块”](../../../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)、[KNOWN-LIMITS“业务模块”](../../../maintenance/KNOWN-LIMITS.md#业务模块roost-module)。

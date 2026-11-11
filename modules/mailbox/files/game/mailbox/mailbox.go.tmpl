@@ -1,0 +1,120 @@
+// Package mailbox 是邮件附件在本工程这一侧的约定：附件的字节是什么意思，以及“这封邮件发过没有”
+// 这件事可以记多久。mail 托管服务把附件当作不透明字节、保证每封只交付一次预留；字节里是什么奖励由游戏决定，
+// 所以发件方（GM、活动、别的功能给玩家发奖励邮件）与领取方（MailboxClaim 端点）共用这个包，不各写一份。
+//
+// 这里只有纯函数，不读时钟、不碰实体：端点、Player 上的 Mailbox 组件与测试都 import 它。
+package mailbox
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+)
+
+// Type 是附件的种类。附件带种类字段，将来加新的奖励种类（例如道具）时：在这里加一个常量、
+// 在 Attachment 里加它的字段、在 validate 里加一个分支，再让领取端点按种类调用对应的发放。
+type Type string
+
+// TypeCoins 是货币附件：Amount 个金币，经货币模块到账。这一版只认它。
+const TypeCoins Type = "coins"
+
+// Attachment 是一封邮件的附件：一种奖励。
+type Attachment struct {
+	Type Type `json:"type"`
+	// Amount 是 TypeCoins 的金币数量，必须为正。
+	Amount int64 `json:"amount,omitempty"`
+}
+
+// Coins 是 amount 个金币的附件，给发件方用：mailbox.Encode(mailbox.Coins(100))。
+func Coins(amount int64) Attachment { return Attachment{Type: TypeCoins, Amount: amount} }
+
+// Encode 把附件编码成交给 mail 服务的字节（SendRequest.Attachment）。发不出去的附件在这里就拒绝，
+// 不让一封领不了的邮件进玩家的邮箱。
+func Encode(attachment Attachment) ([]byte, error) {
+	if err := attachment.validate(); err != nil {
+		return nil, err
+	}
+	return json.Marshal(attachment)
+}
+
+// Decode 解析附件字节。凡是这一版不能完整发放的都拒绝，绝不发一部分：
+//
+//   - 不是 JSON 对象、对象后面还有多余内容；
+//   - 种类不认识（新版本发出的道具附件落到旧进程上）；
+//   - 带有这一版不认识的字段（“金币外加别的东西”不能只发金币就把邮件标成已领）；
+//   - 金币数量不是正数。
+//
+// 被拒绝的附件怎么处理由领取端点决定：归还预留（CancelClaim）、答 mailbox_attachment，
+// 邮件留在邮箱里保持未领——认识它的版本上线后还能领，而不是被旧进程吞掉。
+func Decode(raw []byte) (Attachment, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var attachment Attachment
+	if err := decoder.Decode(&attachment); err != nil {
+		return Attachment{}, fmt.Errorf("mailbox: attachment is not a reward: %w", err)
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return Attachment{}, fmt.Errorf("mailbox: attachment has trailing data")
+	}
+	if err := attachment.validate(); err != nil {
+		return Attachment{}, err
+	}
+	return attachment, nil
+}
+
+func (attachment Attachment) validate() error {
+	switch attachment.Type {
+	case TypeCoins:
+		if attachment.Amount <= 0 {
+			return fmt.Errorf("mailbox: %d coins is not a grantable reward", attachment.Amount)
+		}
+		return nil
+	default:
+		return fmt.Errorf("mailbox: attachment type %q is not one this version can grant", attachment.Type)
+	}
+}
+
+// ClaimResult 是发放事务的结果。Claimed 为 false 表示重复到达：这封邮件已经到过账，这一次什么也没改。
+// Balance 是玩家此刻的余额，两种情况下都填，所以客户端拿到的回答是同一组数字。
+type ClaimResult struct {
+	Claimed bool
+	Balance int64
+}
+
+// ClaimWindowClosed 报告：过期时刻为 expiresAtUnix 的邮件，在 nowUnix 是否已经不能首次发放。
+// 它是发放入口（MailboxComponent.Claim）的准入判断，边界与 mail 服务自己的一致
+// （Envelope.Expired：nowUnix >= 过期时刻），所以“mail 服务不再给出新预留”与“游戏拒绝首次发放”是同一刻。
+//
+// mail 服务已经拒绝过期邮件的预留，游戏为什么还要判一次：过期之前取得的预留可能晚到（Nest 排队、
+// Player 冷加载、重试）。如果它是一封已到账邮件的重放，而账本这时已经把这封邮件忘了，
+// 只有这个判断能挡住第二次发放。所以它必须用发放**执行时**的业务时间，不能用调用方排队之前读的时间。
+//
+// 没有过期时刻（<= 0）的邮件无法放到时间轴上，这里不算关闭；发放入口另行拒绝这种请求（见 Claim）。
+func ClaimWindowClosed(expiresAtUnix, nowUnix int64) bool {
+	return expiresAtUnix > 0 && nowUnix >= expiresAtUnix
+}
+
+// LedgerPruneGraceSeconds 是邮件过期之后，账本还要记住“这封到过账”多久。
+//
+// 忘掉一条记录是安全的，当且仅当此后每一次到达账本的发放都会被 ClaimWindowClosed 拒绝。
+// 在同一个进程上，这个时刻就是过期时刻。跨进程不是：宕机重启后 Player 可能落到业务时钟稍慢的进程上
+// （App 允许进程启动时比部署的业务时间高水位慢 1 分钟），在那里晚到的重放还看得到窗口开着，
+// 只能靠账本还记得。所以记录比准入多留这个时间差的若干倍。调大只是多留一会儿；
+// 调到小于进程间的时钟差，重复发放的口子就重新打开。
+const LedgerPruneGraceSeconds int64 = 10 * 60
+
+// LedgerMayForget 报告：一条已到账的记录（邮件过期时刻 expiresAtUnix）在 nowUnix 能否从账本里清掉。
+// 它就是准入判断往后挪 LedgerPruneGraceSeconds——用一个定义另一个正是全部的论证：
+// 一条记录只有在这封邮件的首次发放一定被拒绝之后才会消失，哪怕换到慢这么多的时钟上。
+//
+// 账本的记忆以**邮件自己的过期时刻**为界（mail 服务随预留交回的 Claim.ExpiresAtUnix），
+// 不以游戏这边自定的固定保留期为界：固定保留期要靠“它比 mail.send_ttl 长”来论证，而 send_ttl 是
+// 另一个服务的配置，只要求为正，部署把邮件保留期调长是合法的，那时账本就会在邮件还能领的时候把它忘掉。
+// 资产正确性不能绑在别的服务的配置上，只能绑在那个服务给出的权威时刻上，并在发放执行的地方判断。
+// 同理，不能因为一次 CommitClaim 成功就删掉记录：确认之后同一预留的晚到重放仍可能到达。
+//
+// 没有过期时刻的记录不会被清掉（往不忘的方向错是安全的）；发放入口不会写出这种记录。
+func LedgerMayForget(expiresAtUnix, nowUnix int64) bool {
+	return ClaimWindowClosed(expiresAtUnix, nowUnix-LedgerPruneGraceSeconds)
+}

@@ -1,0 +1,14 @@
+package bag
+
+import (
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleBagDiscard 是丢弃协议的入口；目标取认证会话的玩家（只能丢自己的道具），
+// 数量与持有量在 Nest handler 的锁内校验。
+//
+//roost:endpoint nest=BagDiscard
+func (controller *Controller) HandleBagDiscard(ctx *playeraccess.Context, req *pb.BagDiscardRequest) (*pb.BagDiscardResponse, error) {
+	return controller.dispatchBagDiscard(ctx, req)
+}

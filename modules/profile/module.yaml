@@ -1,0 +1,21 @@
+name: profile
+summary: 玩家档案：名字、等级、经验；改名协议、服务端发经验（每级固定经验、可连升多级）与升级钩子
+requires: []
+conflicts: []
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+entity: Player
+state:
+  - field: Profile
+    type: ProfileState
+    store: profile
+    dao: persist,sync
+    comment: Profile 是档案模块给玩家本人看的状态（名字、等级、等级内经验），随同步下发。
+component: Profile
+protocols: [ProfileRename]
+errcodes: [profile_name_empty, profile_name_long, profile_name_invalid, profile_exp_invalid, profile_exp_overflow]
+verify:
+  packages: [./game/handler]
+  run: ^TestProfile
+  pass: 16

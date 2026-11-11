@@ -1,0 +1,536 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	db "{{MODULE}}/db"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。
+type profileGetter map[int64]entity.IThreadSafeEntity
+
+func (g profileGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+
+func (g profileGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// profileCommitter 是替身提交器：不落盘，reject 打开时拒绝提交，用来验证回滚；commits 数提交成功的次数，
+// 用来确认被拒绝的请求没有产生提交。
+type profileCommitter struct {
+	reject  atomic.Bool
+	commits atomic.Int64
+}
+
+func (c *profileCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	c.commits.Add(1)
+	return nil
+}
+
+type profileFixture struct {
+	engine    *nest.NestMgr
+	player    *playerentity.Player
+	renames   *sender.ProfileRenameSender
+	exps      *sender.ProfileAddExpSender
+	committer *profileCommitter
+}
+
+// profileFacts 是档案的三个值加上到此为止成功提交的次数。
+type profileFacts struct {
+	name    string
+	level   int32
+	exp     int64
+	commits int64
+}
+
+func newProfileFixture(t *testing.T) *profileFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterProfileRenameNestHandlers()
+	RegisterProfileAddExpNestHandlers()
+	f := &profileFixture{committer: &profileCommitter{}}
+	id, err := entity.BuildEntityID(95001, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = built.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(profileGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.renames = sender.NewProfileRenameSender(f.engine)
+	f.exps = sender.NewProfileAddExpSender(f.engine)
+	return f
+}
+
+// rename 走客户端协议对应的 handler，返回存下的名字。
+func (f *profileFixture) rename(name string) (string, error) {
+	response, err := f.renames.Sync_ProfileRename(context.Background(), f.player.ID(), &pb.ProfileRenameRequest{Name: name})
+	if err != nil {
+		return "", err
+	}
+	return response.Name, nil
+}
+
+// addExp 走服务端发经验的 handler，返回升了几级。
+func (f *profileFixture) addExp(amount int64) (int32, error) {
+	return f.exps.Sync_ProfileAddExp(context.Background(), f.player.ID(), amount)
+}
+
+func (f *profileFixture) mustAddExp(t *testing.T, amount int64, wantGained int32) {
+	t.Helper()
+	gained, err := f.addExp(amount)
+	if err != nil || gained != wantGained {
+		t.Fatalf("add %d exp: gained=%d err=%v, want %d levels", amount, gained, err, wantGained)
+	}
+}
+
+// facts 在业务 worker 上持实体锁读档案。
+func (f *profileFixture) facts(t *testing.T) profileFacts {
+	t.Helper()
+	var got profileFacts
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		profile := f.player.Dao().GetProfile()
+		got.name, got.level, got.exp = profile.GetName(), profile.GetLevel(), profile.GetExp()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got.commits = f.committer.commits.Load()
+	return got
+}
+
+// expectRefused 断言 err 是 want 这个业务码，并且档案的三个值与提交次数都和 before 一样（零写入）。
+func (f *profileFixture) expectRefused(t *testing.T, what string, err, want error, before profileFacts) {
+	t.Helper()
+	if !errors.Is(err, want) {
+		t.Fatalf("%s: err = %v, want %v", what, err, want)
+	}
+	if after := f.facts(t); after != before {
+		t.Fatalf("%s: the refusal wrote: %+v, was %+v", what, after, before)
+	}
+}
+
+func TestProfileRenameStoresTheTrimmedName(t *testing.T) {
+	f := newProfileFixture(t)
+	if got := f.facts(t); got != (profileFacts{}) {
+		t.Fatalf("a new player starts at %+v, want no name, level 0, exp 0", got)
+	}
+	name, err := f.rename(" \t Alice 小明 \n")
+	if err != nil || name != "Alice 小明" {
+		t.Fatalf("name=%q err=%v, want the name without the surrounding blanks", name, err)
+	}
+	if got := f.facts(t); got != (profileFacts{name: "Alice 小明", commits: 1}) {
+		t.Fatalf("after the rename: %+v", got)
+	}
+	// 改名可以重复做，后一次覆盖前一次；等级与经验不动。
+	f.mustAddExp(t, 130, 1)
+	if name, err := f.rename("Bob"); err != nil || name != "Bob" {
+		t.Fatalf("second rename: name=%q err=%v", name, err)
+	}
+	if got := f.facts(t); got != (profileFacts{name: "Bob", level: 1, exp: 30, commits: 3}) {
+		t.Fatalf("after the second rename: %+v", got)
+	}
+}
+
+// 上限是 16 个字符，按字符数而不是字节数：16 个汉字（48 字节）可以，首尾空白不计入。
+func TestProfileRenameAcceptsSixteenCharacters(t *testing.T) {
+	f := newProfileFixture(t)
+	sixteen := strings.Repeat("龙", 16)
+	if name, err := f.rename("  " + sixteen + "  "); err != nil || name != sixteen {
+		t.Fatalf("16 characters: name=%q err=%v", name, err)
+	}
+	if got := f.facts(t); got.name != sixteen {
+		t.Fatalf("stored name = %q", got.name)
+	}
+}
+
+func TestProfileRenameEmptyNameWritesNothing(t *testing.T) {
+	f := newProfileFixture(t)
+	if _, err := f.rename("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	before := f.facts(t)
+	for _, name := range []string{"", " ", " \t\r\n ", "　 "} {
+		_, err := f.rename(name)
+		f.expectRefused(t, fmt.Sprintf("rename to %q", name), err, apperrors.ErrProfileNameEmpty, before)
+	}
+}
+
+func TestProfileRenameTooLongNameWritesNothing(t *testing.T) {
+	f := newProfileFixture(t)
+	if _, err := f.rename("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	before := f.facts(t)
+	for _, name := range []string{strings.Repeat("a", 17), strings.Repeat("龙", 17), " " + strings.Repeat("龙", 17) + " ", strings.Repeat("a", 4096)} {
+		_, err := f.rename(name)
+		f.expectRefused(t, fmt.Sprintf("rename to %d bytes", len(name)), err, apperrors.ErrProfileNameLong, before)
+	}
+}
+
+func TestProfileRenameInvalidEncodingWritesNothing(t *testing.T) {
+	f := newProfileFixture(t)
+	if _, err := f.rename("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	before := f.facts(t)
+	// 单独的坏字节、夹在合法文字中间的坏字节、截断的多字节字符、全是坏字节（数起来不超过 16 个）。
+	for _, name := range []string{"\xff", "ab\xffcd", "小明\xe5\xb0", "\xff\xfe\xfd", " \xc0\x80 "} {
+		_, err := f.rename(name)
+		f.expectRefused(t, fmt.Sprintf("rename to %q", name), err, apperrors.ErrProfileNameInvalid, before)
+	}
+}
+
+// 每级 100 经验：不满 100 不升级，经验留着。
+func TestProfileAddExpBelowALevelKeepsTheLevel(t *testing.T) {
+	f := newProfileFixture(t)
+	f.mustAddExp(t, 40, 0)
+	f.mustAddExp(t, 59, 0)
+	if got := f.facts(t); got != (profileFacts{level: 0, exp: 99, commits: 2}) {
+		t.Fatalf("after 99 exp: %+v", got)
+	}
+}
+
+// 刚好凑满 100：升一级，等级内经验归零。
+func TestProfileAddExpReachingExactlyALevelLevelsUp(t *testing.T) {
+	f := newProfileFixture(t)
+	f.mustAddExp(t, 99, 0)
+	f.mustAddExp(t, 1, 1)
+	if got := f.facts(t); got != (profileFacts{level: 1, exp: 0, commits: 2}) {
+		t.Fatalf("after exactly 100 exp: %+v", got)
+	}
+	f.mustAddExp(t, 100, 1)
+	if got := f.facts(t); got != (profileFacts{level: 2, exp: 0, commits: 3}) {
+		t.Fatalf("after exactly 200 exp: %+v", got)
+	}
+}
+
+// 一次发放可以连升多级：30 + 345 = 375，升 3 级剩 75。
+func TestProfileAddExpGainsSeveralLevelsAtOnce(t *testing.T) {
+	f := newProfileFixture(t)
+	f.mustAddExp(t, 30, 0)
+	f.mustAddExp(t, 345, 3)
+	if got := f.facts(t); got != (profileFacts{level: 3, exp: 75, commits: 2}) {
+		t.Fatalf("after 375 exp: %+v", got)
+	}
+}
+
+func TestProfileAddExpNonPositiveAmountWritesNothing(t *testing.T) {
+	f := newProfileFixture(t)
+	f.mustAddExp(t, 150, 1)
+	before := f.facts(t)
+	for _, amount := range []int64{0, -1, -100, math.MinInt64} {
+		_, err := f.addExp(amount)
+		f.expectRefused(t, fmt.Sprintf("add %d exp", amount), err, apperrors.ErrProfileExpInvalid, before)
+	}
+}
+
+// 经验是 int64、等级是 int32：加出来放不下就整笔拒绝，不截断、不回绕。
+func TestProfileAddExpOverflowWritesNothing(t *testing.T) {
+	f := newProfileFixture(t)
+	f.mustAddExp(t, 150, 1) // 1 级，等级内经验 50
+	before := f.facts(t)
+	for _, amount := range []int64{
+		math.MaxInt64,       // 50 + amount 超出 int64
+		math.MaxInt64 - 49,  // 同上，刚好多 1
+		2147483647 * 100,    // 再升 2147483647 级：1 + 2147483647 超出 int32
+		2147483646*100 + 50, // 再升 2147483647 级的最小数额
+		math.MaxInt64 - 50,  // 经验放得下，等级放不下
+	} {
+		_, err := f.addExp(amount)
+		f.expectRefused(t, fmt.Sprintf("add %d exp", amount), err, apperrors.ErrProfileExpOverflow, before)
+	}
+}
+
+// 到了等级上限（int32 的最大值）之后：不够再升一级的经验照常收下，会再升级的发放被拒绝且零写入。
+func TestProfileAtTheTopLevelStillTakesExpBelowTheNextLevel(t *testing.T) {
+	f := newProfileFixture(t)
+	f.mustAddExp(t, 150, 1)
+	// 能升到的最高一级：再升 2147483646 级到 2147483647，等级内经验还是 50。
+	f.mustAddExp(t, 2147483646*100, 2147483646)
+	if got := f.facts(t); got.level != 2147483647 || got.exp != 50 {
+		t.Fatalf("at the top: %+v", got)
+	}
+	f.mustAddExp(t, 49, 0)
+	before := f.facts(t)
+	if before.level != 2147483647 || before.exp != 99 {
+		t.Fatalf("at the top after 49 more: %+v", before)
+	}
+	_, err := f.addExp(1)
+	f.expectRefused(t, "one more exp at the top level", err, apperrors.ErrProfileExpOverflow, before)
+}
+
+// profileDamageHandler 是只在测试里登记的 Nest handler：把等级和经验直接写成给定的值，用来造一份坏档。
+// DAO 只能在 Nest 事务里写，所以造坏档也得经 Nest；它用的是生成代码登记 handler 的同一个公开接口。
+var profileDamageHandler = nest.NewHandlerName("profileTestDamage")
+
+var registerProfileDamageHandler sync.Once
+
+func (f *profileFixture) damage(t *testing.T, level int32, exp int64) {
+	t.Helper()
+	registerProfileDamageHandler.Do(func() {
+		nest.MustRegisterHandlerWithMeta(profileDamageHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+			profile := es[0].(*playerentity.Player).Dao().GetProfile()
+			profile.SetLevel(params[0].(int32))
+			profile.SetExp(params[1].(int64))
+			return nil, nil
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	})
+	if _, err := f.engine.Request(context.Background(), profileDamageHandler, f.player.ID(), nest.NewParams(level, exp)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 存档里的经验或等级是负数说明档已经坏了：不在坏值上继续累加，也不把它“修”成看起来正常的值。
+func TestProfileAddExpOnDamagedStateIsRefused(t *testing.T) {
+	for _, damaged := range []struct {
+		what  string
+		level int32
+		exp   int64
+	}{
+		{"negative exp", 3, -5},
+		{"negative level", -2, 10},
+	} {
+		f := newProfileFixture(t)
+		f.damage(t, damaged.level, damaged.exp)
+		before := f.facts(t)
+		if before.level != damaged.level || before.exp != damaged.exp {
+			t.Fatalf("%s: the damaged state was not set up: %+v", damaged.what, before)
+		}
+		for _, amount := range []int64{1, 100, 1000} {
+			_, err := f.addExp(amount)
+			f.expectRefused(t, fmt.Sprintf("%s, add %d exp", damaged.what, amount), err, apperrors.ErrProfileExpOverflow, before)
+		}
+	}
+}
+
+// profileIgnoreErrorsHandler 是只在测试里登记的 Nest handler：调 Rename 与 AddExp 并吞掉它们的错误、
+// 以成功结束——事务照常提交，Nest 不会替组件撤回任何写入。用来确认“拒绝时零写入”是组件自己做到的
+// （先查后写），而不是靠 handler 返回错误之后的回滚：别的功能在自己的 handler 里调这两个方法时，
+// 可能在被拒绝后继续做别的事。
+var profileIgnoreErrorsHandler = nest.NewHandlerName("profileTestIgnoreErrors")
+
+var registerProfileIgnoreErrorsHandler sync.Once
+
+func (f *profileFixture) callIgnoringErrors(t *testing.T, name string, amount int64) {
+	t.Helper()
+	registerProfileIgnoreErrorsHandler.Do(func() {
+		nest.MustRegisterHandlerWithMeta(profileIgnoreErrorsHandler, func(es []entity.IThreadSafeEntity, params []any, _ ...nest.HandlerOption) (any, error) {
+			component := es[0].(playerentity.IProfileEntity).ProfileComp()
+			_, renameErr := component.Rename(params[0].(string))
+			_, expErr := component.AddExp(params[1].(int64))
+			if renameErr == nil || expErr == nil {
+				return nil, fmt.Errorf("this handler is for refused calls only: rename err=%v, add exp err=%v", renameErr, expErr)
+			}
+			return nil, nil
+		}, nest.HandlerMeta{Rollback: nest.RollbackUndo, Durability: nest.DurabilityStrict})
+	})
+	if _, err := f.engine.Request(context.Background(), profileIgnoreErrorsHandler, f.player.ID(), nest.NewParams(name, amount)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 调用方吞掉了拒绝、事务照常提交：档案仍然一个字段都没动。
+func TestProfileRefusalsWriteNothingEvenWhenTheCallerIgnoresThem(t *testing.T) {
+	f := newProfileFixture(t)
+	if _, err := f.rename("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	f.mustAddExp(t, 150, 1)
+	before := f.facts(t)
+	for _, refused := range []struct {
+		name   string
+		amount int64
+	}{
+		{"", 0},
+		{strings.Repeat("龙", 17), -30},
+		{"Bob\xff", math.MaxInt64},
+		{"   ", 2147483647 * 100},
+	} {
+		f.callIgnoringErrors(t, refused.name, refused.amount)
+		after := f.facts(t)
+		if after.name != before.name || after.level != before.level || after.exp != before.exp {
+			t.Fatalf("rename to %q and add %d exp, both refused and ignored, wrote: %+v, was %+v", refused.name, refused.amount, after, before)
+		}
+	}
+}
+
+// 提交被拒绝：改名、经验、等级都回滚；之后同样的请求照常生效。
+func TestProfileRejectedCommitRollsBackNameLevelAndExp(t *testing.T) {
+	f := newProfileFixture(t)
+	if _, err := f.rename("Alice"); err != nil {
+		t.Fatal(err)
+	}
+	f.mustAddExp(t, 150, 1)
+	before := f.facts(t)
+	f.committer.reject.Store(true)
+	if _, err := f.rename("Bob"); err == nil {
+		t.Fatal("a rejected rename reported success")
+	}
+	if _, err := f.addExp(40); err == nil { // 不升级的发放
+		t.Fatal("a rejected exp grant reported success")
+	}
+	if _, err := f.addExp(275); err == nil { // 升级的发放
+		t.Fatal("a rejected level-up reported success")
+	}
+	f.committer.reject.Store(false)
+	if after := f.facts(t); after != before {
+		t.Fatalf("rollback left %+v, was %+v", after, before)
+	}
+	if name, err := f.rename("Bob"); err != nil || name != "Bob" {
+		t.Fatalf("rename after the rollback: name=%q err=%v", name, err)
+	}
+	f.mustAddExp(t, 275, 3)
+	if got := f.facts(t); got.name != "Bob" || got.level != 4 || got.exp != 25 {
+		t.Fatalf("after the rollback and a retry: %+v", got)
+	}
+}
+
+// profileHookChildEnv 标记“这是换了升级钩子之后重新编译出来的那个测试进程”。
+const profileHookChildEnv = "PROFILE_TEST_LEVELUP_HOOK_FAILS"
+
+// profileFailingHook 是测试用的升级钩子：每次都返回错误，错误里带着收到的两个等级，以及它被调用时
+// 档里已经是几级、等级内经验是多少（钩子里读到的应当是升级之后的值）。
+const profileFailingHook = `package player
+
+import "fmt"
+
+func (component *ProfileComponent) onLevelUp(from, to int32) error {
+	return fmt.Errorf("injected level-up failure %d->%d, saw level %d exp %d", from, to, component.Level(), component.Exp())
+}
+`
+
+// 升级钩子返回错误时，这一次发放写下的经验和等级都回滚，发经验的请求以钩子的错误结束。
+//
+// 钩子是业务文件里的一个普通方法（game/entities/player/profile_levelup.go），生产代码里没有给测试留
+// 替换它的口子。所以这条用例用 go 的 -overlay 把那个文件换成一个总是返回错误的版本，重新编译本包的
+// 测试并只跑这一条：外层进程负责换文件和起子进程，子进程（带着 profileHookChildEnv）跑真正的场景。
+// 工程把钩子改成发奖励之后这条仍然成立：被换掉的是整个文件。钩子的签名改了，这里的替身要跟着改。
+func TestProfileLevelUpHookErrorRollsBackLevelAndExp(t *testing.T) {
+	if os.Getenv(profileHookChildEnv) == "1" {
+		profileFailingHookScenario(t)
+		return
+	}
+	packageDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hookFile := filepath.Join(filepath.Dir(packageDir), "entities", "player", "profile_levelup.go")
+	if _, err := os.Stat(hookFile); err != nil {
+		t.Fatalf("the level-up hook file is not where this test expects it: %v", err)
+	}
+	scratch := t.TempDir()
+	replacement := filepath.Join(scratch, "profile_levelup.go")
+	if err := os.WriteFile(replacement, []byte(profileFailingHook), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overlay, err := json.Marshal(map[string]map[string]string{"Replace": {hookFile: replacement}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlayFile := filepath.Join(scratch, "overlay.json")
+	if err := os.WriteFile(overlayFile, overlay, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	command := exec.CommandContext(ctx, "go", "test", "-mod=mod", "-count=1", "-vet=off", "-overlay", overlayFile,
+		"-run", "^TestProfileLevelUpHookErrorRollsBackLevelAndExp$", "-v", ".")
+	command.Dir = packageDir
+	command.Env = append(os.Environ(), profileHookChildEnv+"=1")
+	output, err := command.CombinedOutput()
+	// 子进程的输出只在失败时打印：成功时打印出来的 PASS 行会被按行数通过数的工具多数一条。
+	if err != nil || !strings.Contains(string(output), "--- PASS: TestProfileLevelUpHookErrorRollsBackLevelAndExp") {
+		t.Fatalf("the scenario with a failing level-up hook did not pass (err=%v):\n%s", err, output)
+	}
+}
+
+// profileFailingHookScenario 只在升级钩子被换成 profileFailingHook 的测试进程里跑。
+func profileFailingHookScenario(t *testing.T) {
+	f := newProfileFixture(t)
+	// 不升级的发放不调钩子：照常成功。
+	f.mustAddExp(t, 50, 0)
+	before := f.facts(t)
+	if before.level != 0 || before.exp != 50 {
+		t.Fatalf("before the level-up: %+v", before)
+	}
+	// 升一级：钩子收到 0 -> 1，此时档里已经是 1 级、等级内经验 10；它返回错误，经验和等级都退回去。
+	gained, err := f.addExp(60)
+	if err == nil || gained != 0 || !strings.Contains(err.Error(), "injected level-up failure 0->1, saw level 1 exp 10") {
+		t.Fatalf("level-up with a failing hook: gained=%d err=%v", gained, err)
+	}
+	if after := f.facts(t); after != before {
+		t.Fatalf("the failed level-up left %+v, was %+v", after, before)
+	}
+	// 连升多级只调一次钩子，收到的是起止等级。
+	gained, err = f.addExp(260)
+	if err == nil || gained != 0 || !strings.Contains(err.Error(), "injected level-up failure 0->3, saw level 3 exp 10") {
+		t.Fatalf("multi-level-up with a failing hook: gained=%d err=%v", gained, err)
+	}
+	if after := f.facts(t); after != before {
+		t.Fatalf("the failed multi-level-up left %+v, was %+v", after, before)
+	}
+	// 回滚之后还能继续发不升级的经验。
+	f.mustAddExp(t, 49, 0)
+	if got := f.facts(t); got.level != 0 || got.exp != 99 {
+		t.Fatalf("after the rollbacks: %+v", got)
+	}
+}
+
+// Profile 下发给玩家本人。只断言档案模块自己的字段：同一个 DAO 上还有别的模块的字段。
+func TestProfileStateIsSynced(t *testing.T) {
+	for _, field := range db.PlayerDaoSyncFields() {
+		if field.Name == "Profile" {
+			return
+		}
+	}
+	t.Fatal("PlayerDao.Profile is not in the sync field table: the player would not see the name, level and exp")
+}

@@ -1,0 +1,239 @@
+package leaderboard
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+)
+
+// leaderboardSubmitCall 是替身记下的一次 Submit：本模块交给 rank 服务的全部内容。
+type leaderboardSubmitCall struct {
+	board     svcrank.Board
+	score     svcrank.Score
+	mode      svcrank.UpdateMode
+	requestID string
+}
+
+// leaderboardRecordingRank 是 rank 客户端的记录式替身：只记下 Submit 收到了什么、回答预先给定的结果。
+// 它不模拟榜的行为；这里测的是“本模块向 rank 发了什么、对回答做了什么”。
+type leaderboardRecordingRank struct {
+	calls []leaderboardSubmitCall
+	entry svcrank.Entry
+	err   error
+}
+
+func (fake *leaderboardRecordingRank) Submit(_ context.Context, board svcrank.Board, score svcrank.Score, mode svcrank.UpdateMode, requestID string) (svcrank.Entry, error) {
+	fake.calls = append(fake.calls, leaderboardSubmitCall{board: board, score: score, mode: mode, requestID: requestID})
+	return fake.entry, fake.err
+}
+
+func (fake *leaderboardRecordingRank) Remove(context.Context, svcrank.Board, int64) error {
+	return errors.New("leaderboard test: Remove is not part of this module")
+}
+
+func (fake *leaderboardRecordingRank) Page(context.Context, svcrank.Board, int, int) (svcrank.Page, error) {
+	return svcrank.Page{}, errors.New("leaderboard test: Page is not used by Submit")
+}
+
+func (fake *leaderboardRecordingRank) Rank(context.Context, svcrank.Board, int64) (svcrank.Entry, bool, error) {
+	return svcrank.Entry{}, false, errors.New("leaderboard test: Rank is not used by Submit")
+}
+
+func (fake *leaderboardRecordingRank) Around(context.Context, svcrank.Board, int64, int) (svcrank.Page, error) {
+	return svcrank.Page{}, errors.New("leaderboard test: Around is not part of this module")
+}
+
+func (fake *leaderboardRecordingRank) Size(context.Context, svcrank.Board) (int64, error) {
+	return 0, errors.New("leaderboard test: Size is not part of this module")
+}
+
+// leaderboardRegistryWith 建一个只发布了 rank 能力的 Registry，与 ClientMod 在真实进程里发布的名字相同。
+func leaderboardRegistryWith(t *testing.T, client svcrank.Rank) *app.Registry {
+	t.Helper()
+	registry := app.NewRegistry(nil)
+	if err := registry.Register(svcrank.CapabilityName, client); err != nil {
+		t.Fatal(err)
+	}
+	return registry
+}
+
+func TestLeaderboardTotalBoardIsOneGlobalBoardInSeasonOne(t *testing.T) {
+	board := TotalBoard()
+	want := svcrank.Board{ID: "total", Scope: svcrank.ScopeGlobal, ScopeID: 0, Season: 1}
+	if board != want {
+		t.Fatalf("board = %+v, want %+v", board, want)
+	}
+	if err := board.Validate(); err != nil {
+		t.Fatalf("the rank service would refuse this board: %v", err)
+	}
+}
+
+func TestLeaderboardScoreRangeIsOneToATrillion(t *testing.T) {
+	for _, total := range []int64{1, 2, 999_999_999_999, 1_000_000_000_000} {
+		if err := ValidateScore(total); err != nil {
+			t.Errorf("total %d refused: %v", total, err)
+		}
+	}
+	for _, total := range []int64{0, -1, -1_000_000_000_000, 1_000_000_000_001, 1 << 62} {
+		err := ValidateScore(total)
+		if err == nil {
+			t.Errorf("total %d accepted", total)
+			continue
+		}
+		if !errors.Is(err, svcrank.ErrScoreInvalid) {
+			t.Errorf("total %d: error %v does not carry the score-invalid code", total, err)
+		}
+	}
+}
+
+func TestLeaderboardTopLimitDefaultsToTenAndStopsAtFifty(t *testing.T) {
+	for requested, want := range map[int32]int{
+		0: 10, -1: 10, -2147483648: 10,
+		1: 1, 10: 10, 11: 11, 49: 49, 50: 50,
+		51: 50, 200: 50, 201: 50, 2147483647: 50,
+	} {
+		if got := TopLimit(requested); got != want {
+			t.Errorf("TopLimit(%d) = %d, want %d", requested, got, want)
+		}
+	}
+}
+
+func TestLeaderboardStandingIsOffBoardUnlessFoundWithARank(t *testing.T) {
+	entry := svcrank.Entry{Rank: 3, Score: svcrank.Score{OwnerID: 1001, Value: 70}}
+	if got := StandingOf(entry, true); got != (Standing{OnBoard: true, Rank: 3, Score: 70}) {
+		t.Fatalf("found at rank 3: %+v", got)
+	}
+	if got := StandingOf(svcrank.Entry{}, false); got != (Standing{}) {
+		t.Fatalf("not found: %+v", got)
+	}
+	// 没找到时不管 entry 里有什么，回答都是全零：客户端不该看到“没上榜、70 分”。
+	if got := StandingOf(entry, false); got != (Standing{}) {
+		t.Fatalf("not found but an entry was passed: %+v", got)
+	}
+	// rank 服务在读分数与读名次之间这一行被删掉时回名次 0。
+	vanished := svcrank.Entry{Rank: 0, Score: svcrank.Score{OwnerID: 1001, Value: 70}}
+	if got := StandingOf(vanished, true); got != (Standing{}) {
+		t.Fatalf("found with rank 0 must read as off the board: %+v", got)
+	}
+}
+
+func TestLeaderboardSubmitSendsASnapshotWithMaxAndTheCallersKey(t *testing.T) {
+	fake := &leaderboardRecordingRank{entry: svcrank.Entry{Rank: 4, Score: svcrank.Score{OwnerID: 1001, Value: 120}}}
+	standing, err := Submit(context.Background(), leaderboardRegistryWith(t, fake), 1001, 120, "dungeon:77")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if standing != (Standing{OnBoard: true, Rank: 4, Score: 120}) {
+		t.Fatalf("standing = %+v", standing)
+	}
+	if len(fake.calls) != 1 {
+		t.Fatalf("rank received %d submits, want 1", len(fake.calls))
+	}
+	call := fake.calls[0]
+	if want := (svcrank.Board{ID: "total", Scope: svcrank.ScopeGlobal, Season: 1}); call.board != want {
+		t.Errorf("board = %+v, want %+v", call.board, want)
+	}
+	if call.mode != svcrank.UpdateMax {
+		t.Errorf("mode = %q: a total is a snapshot and must be submitted with max, never add or set", call.mode)
+	}
+	if call.score.OwnerID != 1001 || call.score.Value != 120 {
+		t.Errorf("score = %+v, want owner 1001 value 120", call.score)
+	}
+	if call.score.Tie != 0 {
+		t.Errorf("tie = %d: it must stay zero so the rank service stamps the time the score was reached", call.score.Tie)
+	}
+	if len(call.score.Brief) != 0 {
+		t.Errorf("brief = %q: the board stores no display data", call.score.Brief)
+	}
+	if call.requestID != "dungeon:77@120" {
+		t.Errorf("request id = %q, want the caller's key joined with the total", call.requestID)
+	}
+	// 同一个键、更高的总分：请求号不同，rank 的去重环不会把它当成重发吞掉。
+	if _, err := Submit(context.Background(), leaderboardRegistryWith(t, fake), 1001, 150, "dungeon:77"); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.calls[len(fake.calls)-1].requestID; got != "dungeon:77@150" {
+		t.Errorf("request id for the higher total = %q", got)
+	}
+}
+
+func TestLeaderboardSubmitRefusesBadInputBeforeCallingRank(t *testing.T) {
+	fake := &leaderboardRecordingRank{}
+	registry := leaderboardRegistryWith(t, fake)
+	type refusal struct {
+		name     string
+		playerID int64
+		total    int64
+		key      string
+		want     error
+	}
+	for _, c := range []refusal{
+		{"player zero", 0, 10, "k", svcrank.ErrOwnerInvalid},
+		{"negative player", -5, 10, "k", svcrank.ErrOwnerInvalid},
+		{"zero total", 1001, 0, "k", svcrank.ErrScoreInvalid},
+		{"negative total", 1001, -10, "k", svcrank.ErrScoreInvalid},
+		{"total above a trillion", 1001, 1_000_000_000_001, "k", svcrank.ErrScoreInvalid},
+		{"empty key", 1001, 10, "", svcrank.ErrRequestInvalid},
+		{"key of 129 bytes", 1001, 10, strings.Repeat("k", 129), svcrank.ErrRequestInvalid},
+	} {
+		standing, err := Submit(context.Background(), registry, c.playerID, c.total, c.key)
+		if err == nil {
+			t.Errorf("%s: accepted", c.name)
+			continue
+		}
+		if !errors.Is(err, c.want) {
+			t.Errorf("%s: error %v, want it to carry %v", c.name, err, c.want)
+		}
+		if standing != (Standing{}) {
+			t.Errorf("%s: a refusal returned standing %+v", c.name, standing)
+		}
+	}
+	if len(fake.calls) != 0 {
+		t.Fatalf("refused submits reached the rank service %d times: %+v", len(fake.calls), fake.calls)
+	}
+	// 边界内侧：128 字节的键、一万亿整的总分都能提交。
+	if _, err := Submit(context.Background(), registry, 1001, 1_000_000_000_000, strings.Repeat("k", 128)); err != nil {
+		t.Fatalf("a key of 128 bytes with the highest legal total: %v", err)
+	}
+	if len(fake.calls) != 1 {
+		t.Fatalf("the legal submit reached rank %d times", len(fake.calls))
+	}
+}
+
+func TestLeaderboardSubmitReturnsRankFailureToTheCaller(t *testing.T) {
+	fake := &leaderboardRecordingRank{
+		// 失败时 rank 可能仍带回一个值；调用方不该把它当成榜上的位置。
+		entry: svcrank.Entry{Rank: 9, Score: svcrank.Score{OwnerID: 1001, Value: 10}},
+		err:   svcrank.ErrConflict,
+	}
+	standing, err := Submit(context.Background(), leaderboardRegistryWith(t, fake), 1001, 10, "quest:5")
+	if !errors.Is(err, svcrank.ErrConflict) {
+		t.Fatalf("error = %v, want the rank service's own error so the caller can log and move on", err)
+	}
+	if standing != (Standing{}) {
+		t.Fatalf("a failed submit returned standing %+v", standing)
+	}
+	if len(fake.calls) != 1 {
+		t.Fatalf("Submit called rank %d times; retrying is the caller's decision", len(fake.calls))
+	}
+}
+
+func TestLeaderboardSubmitNeedsTheRankCapability(t *testing.T) {
+	if _, err := Submit(context.Background(), nil, 1001, 10, "k"); err == nil {
+		t.Fatal("a nil registry was accepted")
+	}
+	_, err := Submit(context.Background(), app.NewRegistry(nil), 1001, 10, "k")
+	if err == nil {
+		t.Fatal("a registry without the rank client was accepted")
+	}
+	if !strings.Contains(err.Error(), "uses") {
+		t.Fatalf("error %q does not say how to get the capability (services.<service>.uses)", err)
+	}
+	if _, err := Client(leaderboardRegistryWith(t, &leaderboardRecordingRank{})); err != nil {
+		t.Fatalf("a registry with the rank client: %v", err)
+	}
+}

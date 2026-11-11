@@ -1,0 +1,21 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerBagDiscard 是客户端发起的丢弃：从自己的背包里扣掉 request.Count 个 request.ItemID，
+// 回包带剩下的数量。丢掉的道具不去任何地方。
+//
+// 请求不带业务键：客户端超时后重发会再丢一次（数量不足时被拒）。客户端应以同步下来的背包为准，
+// 不要对丢弃做自动重发。
+//
+//roost:nest rollback=undo durability=strict
+func handlerBagDiscard(target player.IBagEntity, request *pb.BagDiscardRequest) (*pb.BagDiscardResponse, error) {
+	left, err := target.BagComp().Remove(request.ItemID, request.Count)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.BagDiscardResponse{ItemID: request.ItemID, Left: left}, nil
+}

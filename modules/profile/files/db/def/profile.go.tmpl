@@ -1,0 +1,11 @@
+package dbdef
+
+// ProfileState 是玩家本人可见的档案：名字、等级、经验。
+type ProfileState struct {
+	// Name 是显示名，存的是去掉首尾空白之后的名字；没改过名时为空。
+	Name string `store:"1"`
+	// Level 是等级，新档从 0 起，只由 ProfileComponent.AddExp 往上加。
+	Level int32 `store:"2"`
+	// Exp 是当前等级内的经验（升级时扣掉升级所需的部分），不是累计经验。
+	Exp int64 `store:"3"`
+}

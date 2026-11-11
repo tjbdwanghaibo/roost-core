@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 业务模块（roost module）在生成工程上的验收：全新工程、自定义 module 名、安装带依赖的模块、
-# 重复安装无变化、模块自带场景数与工程级检查、先装一个再装另一个（增量）。
+# 重复安装无变化、模块自带场景数与工程级检查、先装一个再装另一个（增量）、全部模块换顺序一次装完。
 # 离线：模块场景用替身提交器，不连 Mongo / NATS / Redis。
 set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,7 +50,9 @@ PY
 project="$(new_project atelier example.com/studio/atelier)"
 cd "$project"
 "$roost" module list > "$review_root/list.log"
-grep -q '^  wallet ' "$review_root/list.log" && grep -q '^  checkin ' "$review_root/list.log" && grep -q '^  chat ' "$review_root/list.log" && grep -q '^  enter ' "$review_root/list.log"
+for name in wallet checkin chat enter profile bag leaderboard mailbox; do
+  grep -q "^  $name " "$review_root/list.log" || { cat "$review_root/list.log"; echo "roost module list does not show $name" >&2; exit 1; }
+done
 "$roost" module plan checkin --json > "$review_root/plan.json"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "roost module plan changed the project" >&2; exit 1; }
 python3 - "$review_root/plan.json" <<'PY'
@@ -87,13 +89,16 @@ expect_verify wallet=8 checkin=6
 commit_all checkin
 "$roost" module add chat > "$review_root/add-chat.log"
 grep -q 'replaces the untouched generated stub' "$review_root/add-chat.log"
+grep -q 'prerequisite (did run): roost add transport tcp' "$review_root/add-chat.log"
 expect_verify wallet=8 checkin=6 chat=8
 "$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
 grep -q '^OK    collaborators:chat' "$review_root/doctor.log"
-# 6. enter：进入游戏端点，并由安装器打开玩家 TCP 接入与自身视图；之后 doctor 的 self-sync 为 OK。
+# 6. enter：进入游戏端点，并由安装器打开自身视图（玩家 TCP 接入已由 chat 在上一步装好，这里不再重复）；
+#    之后 doctor 的 self-sync 为 OK。enter 单独装时自己装 TCP 接入，见第 8 步。
 commit_all chat
 "$roost" module add enter > "$review_root/add-enter.log"
-grep -q 'prerequisite (did run): roost add transport tcp' "$review_root/add-enter.log"
+grep -q 'prerequisite (did run): set access.player.self_sync: true' "$review_root/add-enter.log"
+! grep -q 'roost add transport tcp' "$review_root/add-enter.log"
 grep -q 'self_sync: true' roost.yaml
 expect_verify wallet=8 checkin=6 chat=8 enter=3
 go test -mod=mod ./... > "$review_root/test-all.log" 2>&1 || { tail -30 "$review_root/test-all.log"; exit 1; }
@@ -101,6 +106,29 @@ go test -mod=mod ./... > "$review_root/test-all.log" 2>&1 || { tail -30 "$review
 grep -q '^OK    self-sync' "$review_root/doctor.log"
 # 除三个仍是拒绝桩的托管服务外没有别的 FAIL。
 [[ "$(grep -c '^FAIL' "$review_root/doctor.log")" == 3 ]] || { grep '^FAIL' "$review_root/doctor.log"; echo "unexpected doctor failures" >&2; exit 1; }
+# 7. 在已有四个模块的工程上再叠第二批：profile、bag、leaderboard（托管 rank）、mailbox（托管 mail，依赖已装的 wallet）。
+commit_all enter
+"$roost" module add profile bag leaderboard mailbox > "$review_root/add-batch2.log"
+grep -q 'module wallet: already installed' "$review_root/add-batch2.log"
+expect_verify wallet=8 checkin=6 chat=8 enter=3 profile=16 bag=12 leaderboard=15 mailbox=21
+go test -mod=mod ./... > "$review_root/test-all-batch2.log" 2>&1 || { tail -30 "$review_root/test-all-batch2.log"; exit 1; }
+"$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
+grep -q '^OK    collaborators:mail' "$review_root/doctor.log" && grep -q '^OK    collaborators:rank' "$review_root/doctor.log"
+[[ "$(grep -c '^FAIL' "$review_root/doctor.log")" == 3 ]] || { grep '^FAIL' "$review_root/doctor.log"; echo "unexpected doctor failures" >&2; exit 1; }
+
+# 8. 全新工程、一条命令、与上面相反的顺序装全部模块：结果与安装顺序无关，重复安装无变化。
+project="$(new_project harbor example.com/studio/harbor)"
+cd "$project"
+"$roost" module add mailbox leaderboard bag profile chat checkin enter > "$review_root/add-all.log"
+grep -q 'prerequisite (did run): roost add transport tcp' "$review_root/add-all.log"
+grep -q 'prerequisite (did run): set access.player.self_sync: true' "$review_root/add-all.log"
+grep -q 'self_sync: true' roost.yaml
+! grep -rn '{{' db/def game/entities game/handler game/controllers internal/errors protocol/def >/dev/null
+commit_all all
+"$roost" module add enter bag mailbox > "$review_root/add-all-again.log"
+[[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
+expect_verify wallet=8 checkin=6 chat=8 enter=3 profile=16 bag=12 leaderboard=15 mailbox=21
+go test -mod=mod ./... > "$review_root/test-all-harbor.log" 2>&1 || { tail -30 "$review_root/test-all-harbor.log"; exit 1; }
 
 succeeded=1
 echo "modules: ok"

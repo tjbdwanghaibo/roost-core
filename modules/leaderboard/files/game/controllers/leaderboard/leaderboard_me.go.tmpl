@@ -1,0 +1,31 @@
+package leaderboard
+
+import (
+	"fmt"
+	"log/slog"
+
+	gameleaderboard "{{MODULE}}/game/leaderboard"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleLeaderboardMe 读调用者自己在总分榜上的名次与分数。查的是谁取认证会话的玩家，从不取请求字段。
+// 没上榜（从没提交过分数）不是错误：Code 为 0、OnBoard 为 false、Rank 与 Score 为 0。
+// 名次与分数来自 rank 服务的同一次读取，互相不会矛盾；它与 LeaderboardTop 是两次读，可以相差一瞬。
+func (controller *Controller) HandleLeaderboardMe(context *playeraccess.Context, request *pb.LeaderboardMeRequest) (*pb.LeaderboardMeResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("leaderboard_me endpoint: context and request are required")
+	}
+	entry, found, err := controller.ranking.Rank(context.Context(), gameleaderboard.TotalBoard(), context.PlayerID)
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("leaderboard_me failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.LeaderboardMeResponse{Code: code, Reason: reason}, nil
+	}
+	standing := gameleaderboard.StandingOf(entry, found)
+	return &pb.LeaderboardMeResponse{OnBoard: standing.OnBoard, Rank: standing.Rank, Score: standing.Score}, nil
+}

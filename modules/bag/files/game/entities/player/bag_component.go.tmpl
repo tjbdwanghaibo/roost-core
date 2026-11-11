@@ -1,0 +1,115 @@
+package player
+
+import (
+	"fmt"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:Bag}}
+const CompTypeBag entity.ComponentType = {{ID:component:Bag}}
+
+// BagComponent 是玩家背包的业务逻辑。它不保存事务会改的状态：道具在 PlayerDao.Bag 里，
+// 经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
+type BagComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+
+// IBagEntity 是 Nest handler 用这个组件时的窄实体接口；getter 由生成的 Entity 接线实现。
+// 别的功能在自己的 handler 里要发道具或扣道具时，目标接口里嵌入它即可（同一个实体、同一笔事务）。
+type IBagEntity interface {
+	entity.IThreadSafeEntity
+	BagComp() *BagComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeBag, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("bag component: owner %T is not *Player", owner)
+		}
+		return &BagComponent{owner: typed}, nil
+	})
+}
+
+func (component *BagComponent) Name() string { return "bag" }
+
+// Owner 只在实体存活且被 Nest 锁住期间可用。
+func (component *BagComponent) Owner() *Player { return component.owner }
+
+// 下面是业务方法。不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
+
+const (
+	// BagMaxKinds 是背包里不同道具种类数的上限。背包整份随同步下发、整份落库，种类数必须有界。
+	// 到上限后只拒绝新种类；已有的种类照常加减，扣到 0 腾出的位置可以再放新种类。
+	BagMaxKinds = 200
+	// BagMaxStack 是单种道具的数量上限。它远小于 int64 的范围，所以数量相加不会溢出。
+	BagMaxStack = 999999
+)
+
+// Add 往背包里放 count 个 itemID，返回放入后的数量。
+//
+// 拒绝时不写任何字段：数量不为正（bag_count_invalid）、道具号不合法（bag_item_invalid，规则在
+// bag_items.go）、放入后超过单种上限（bag_stack_full，不做“能放多少放多少”）、背包里没有这种道具
+// 且种类数已到上限（bag_kinds_full）。
+//
+// 它不判重：同一次发放调用两次就发两次。“这一次发过没有”由调用方记在自己的状态里，
+// 并在同一笔事务里调它（事实与道具一起提交或回滚）。
+func (component *BagComponent) Add(itemID, count int64) (int64, error) {
+	if count <= 0 {
+		return 0, apperrors.ErrBagCountInvalid
+	}
+	if !bagItemValid(itemID) {
+		return 0, apperrors.ErrBagItemInvalid
+	}
+	bag := component.owner.Dao().GetBag()
+	current, held := bag.GetItems(itemID)
+	// 用减法比较：current + count 在 count 接近 int64 上限时会溢出成负数，绕过上限。
+	if count > BagMaxStack-current {
+		return 0, apperrors.ErrBagStackFull
+	}
+	if !held && bag.ItemsLen() >= BagMaxKinds {
+		return 0, apperrors.ErrBagKindsFull
+	}
+	bag.SetItemsKey(itemID, current+count)
+	return current + count, nil
+}
+
+// Remove 从背包里拿走 count 个 itemID，返回剩下的数量。数量不为正（bag_count_invalid）或
+// 持有不足（bag_short）时拒绝，不写任何字段；不做“有多少扣多少”。
+//
+// 剩 0 时删掉这个键，不留数量为 0 的条目：种类数按键的个数算，留着会白占一个种类的位置。
+// 这里不查道具号是否合法：没有这种道具自然是不足；有而道具后来下架了，也要能扣掉。
+func (component *BagComponent) Remove(itemID, count int64) (int64, error) {
+	if count <= 0 {
+		return 0, apperrors.ErrBagCountInvalid
+	}
+	bag := component.owner.Dao().GetBag()
+	current, _ := bag.GetItems(itemID)
+	if current < count {
+		return 0, apperrors.ErrBagShort
+	}
+	left := current - count
+	if left == 0 {
+		bag.DelItemsKey(itemID)
+	} else {
+		bag.SetItemsKey(itemID, left)
+	}
+	return left, nil
+}
+
+// Count 返回 itemID 的持有数量，没有时为 0。
+func (component *BagComponent) Count(itemID int64) int64 {
+	count, _ := component.owner.Dao().GetBag().GetItems(itemID)
+	return count
+}
+
+// Has 报告背包里是否至少有 count 个 itemID。它与 Remove 的判断一致：返回 true 时紧接着的
+// Remove(itemID, count) 一定成功，所以 count 不为正时返回 false。要一次扣多种道具的调用方
+// 先逐个 Has、全部满足再逐个 Remove；中途出错就让 handler 返回错误，Nest 会回滚已经扣掉的。
+func (component *BagComponent) Has(itemID, count int64) bool {
+	return count > 0 && component.Count(itemID) >= count
+}

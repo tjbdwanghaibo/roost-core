@@ -1,0 +1,12 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 邮件模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+// 邮件不存在、已过期、已领取、正被占用等由 mail 服务答它自己的码（service/mail 的 Code*），这里不重复定义。
+var (
+	// ErrMailboxInvalid 是发放入口拒绝的请求：邮件 id 为空、金额不是正数、或没有过期时刻。
+	ErrMailboxInvalid = errcode.Define({{ID:errcode:mailbox_invalid}}, "mailbox_invalid", "empty mail id, non-positive amount or missing expiry")
+	// ErrMailboxAttachment 是这一版发不了的附件：解不出来、种类不认识、带有不认识的字段。邮件保持未领。
+	ErrMailboxAttachment = errcode.Define({{ID:errcode:mailbox_attachment}}, "mailbox_attachment", "the attachment is not a reward this version can grant")
+)

@@ -1,0 +1,114 @@
+package mailbox
+
+import "testing"
+
+func TestMailboxAttachmentRoundTripsCoins(t *testing.T) {
+	raw, err := Encode(Coins(250))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 线上格式是约定的一部分：别的进程（GM 工具、活动服务）可能不经这个包直接拼。
+	if string(raw) != `{"type":"coins","amount":250}` {
+		t.Fatalf("encoded attachment = %s", raw)
+	}
+	attachment, err := Decode(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attachment.Type != TypeCoins || attachment.Amount != 250 {
+		t.Fatalf("decoded = %+v, want 250 coins", attachment)
+	}
+	// 字段顺序与空白不影响解析。
+	if attachment, err := Decode([]byte(" {\"amount\": 3, \"type\": \"coins\"}\n")); err != nil || attachment.Amount != 3 {
+		t.Fatalf("reordered fields: %+v %v", attachment, err)
+	}
+}
+
+// 发不出去的附件在编码时就拒绝，不让一封领不了的邮件进邮箱。
+func TestMailboxEncodeRefusesWhatCannotBeGranted(t *testing.T) {
+	for name, attachment := range map[string]Attachment{
+		"zero coins":     Coins(0),
+		"negative coins": Coins(-1),
+		"no type":        {Amount: 5},
+		"unknown type":   {Type: "item", Amount: 5},
+	} {
+		if raw, err := Encode(attachment); err == nil {
+			t.Errorf("%s: encoded as %s", name, raw)
+		}
+	}
+}
+
+// 这一版不能完整发放的附件一律拒绝，绝不发一部分；端点据此归还预留、让邮件保持未领。
+func TestMailboxDecodeRefusesWhatThisVersionCannotGrant(t *testing.T) {
+	for name, raw := range map[string]string{
+		"empty":                ``,
+		"not json":             `coins:5`,
+		"null":                 `null`,
+		"array":                `[{"type":"coins","amount":5}]`,
+		"no type":              `{"amount":5}`,
+		"unknown type":         `{"type":"item","amount":5}`,
+		"type in another case": `{"type":"Coins","amount":5}`,
+		"unknown field":        `{"type":"coins","amount":5,"item_id":1002}`,
+		"zero amount":          `{"type":"coins","amount":0}`,
+		"missing amount":       `{"type":"coins"}`,
+		"negative amount":      `{"type":"coins","amount":-5}`,
+		"fractional amount":    `{"type":"coins","amount":1.5}`,
+		"amount as text":       `{"type":"coins","amount":"5"}`,
+		"amount past int64":    `{"type":"coins","amount":9223372036854775808}`,
+		"trailing object":      `{"type":"coins","amount":5}{"type":"coins","amount":5}`,
+		"trailing text":        `{"type":"coins","amount":5} x`,
+		"the demo item reward": `{"item_id":1002,"count":1}`,
+	} {
+		if attachment, err := Decode([]byte(raw)); err == nil {
+			t.Errorf("%s: decoded %s as %+v", name, raw, attachment)
+		}
+	}
+}
+
+// 准入边界与 mail 服务一致：now >= 过期时刻即关闭。没有过期时刻的不算关闭（发放入口另行拒绝）。
+func TestMailboxClaimWindowClosesAtTheExpiry(t *testing.T) {
+	const expires = 1_800_000_060
+	for _, test := range []struct {
+		now    int64
+		closed bool
+	}{
+		{expires - 1, false},
+		{expires, true},
+		{expires + 1, true},
+	} {
+		if got := ClaimWindowClosed(expires, test.now); got != test.closed {
+			t.Errorf("ClaimWindowClosed(expires, expires%+d) = %v, want %v", test.now-expires, got, test.closed)
+		}
+	}
+	if ClaimWindowClosed(0, expires) || ClaimWindowClosed(-1, expires) {
+		t.Error("a mail with no expiry was reported closed")
+	}
+}
+
+// 账本比准入晚 10 分钟才忘：一条记录能忘的时候，这封邮件的首次发放早已被拒绝，时钟慢 10 分钟以内的进程上也一样。
+func TestMailboxLedgerForgetsOnlyAFullGraceAfterTheExpiry(t *testing.T) {
+	const expires = 1_800_000_060
+	for _, test := range []struct {
+		now    int64
+		forget bool
+	}{
+		{expires - 1, false},
+		{expires, false},
+		{expires + 599, false},
+		{expires + 600, true},
+		{expires + 601, true},
+	} {
+		if got := LedgerMayForget(expires, test.now); got != test.forget {
+			t.Errorf("LedgerMayForget(expires, expires%+d) = %v, want %v", test.now-expires, got, test.forget)
+		}
+	}
+	// 能忘 ⇒ 在慢了整整一个宽限的时钟上准入也已关闭。
+	for now := int64(expires - 5); now <= expires+700; now++ {
+		if LedgerMayForget(expires, now) && !ClaimWindowClosed(expires, now-600) {
+			t.Fatalf("at expires%+d the record may be forgotten while a clock 600s behind still admits a first grant", now-expires)
+		}
+	}
+	if LedgerMayForget(0, expires+100*365*24*3600) {
+		t.Error("a record with no expiry was forgotten")
+	}
+}

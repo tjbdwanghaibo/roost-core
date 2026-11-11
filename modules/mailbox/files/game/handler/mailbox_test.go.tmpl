@@ -1,0 +1,443 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	db "{{MODULE}}/db"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	gamemailbox "{{MODULE}}/game/mailbox"
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// 邮件附件的发放入口（handlerMailboxClaimReward）是三步领取里唯一能保证“每封至多到账一次”的地方：
+// 客户端打不开“发放成功、确认丢失、预留到期、重试再来”这个窗口（它在 mail 服务与游戏之间），
+// 所以在这里用真实生成的 handler、真实的 Nest 事务把它钉住。时间都是 Unix 秒；
+// 用例把业务时钟停在要的那一刻（handler 拿到的是这条消息冻结的业务时间）。
+
+// mailboxStart 是用例的起点时刻（Unix 秒）。
+const mailboxStart int64 = 1_800_000_000
+
+// 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。
+type mailboxGetter map[int64]entity.IThreadSafeEntity
+
+func (g mailboxGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+
+func (g mailboxGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// mailboxCommitter 是替身提交器：不落盘，数提交次数、记下最近一次提交声明的持久性；
+// reject 打开时拒绝提交，用来验证回滚。
+type mailboxCommitter struct {
+	reject     atomic.Bool
+	commits    atomic.Int64
+	durability atomic.Int32
+}
+
+func (c *mailboxCommitter) Commit(_ context.Context, record dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	c.commits.Add(1)
+	c.durability.Store(int32(record.Durability))
+	return nil
+}
+
+type mailboxFixture struct {
+	engine    *nest.NestMgr
+	player    *playerentity.Player
+	rewards   *sender.MailboxClaimRewardSender
+	committer *mailboxCommitter
+	nowMilli  atomic.Int64
+}
+
+// newMailboxFixture 用替身提交器起一个 Nest，业务时钟由用例拨。
+// clock.SetSource 是进程级的：一个用例里只建一个 fixture，后建的会顶掉前一个的时钟。
+func newMailboxFixture(t *testing.T) *mailboxFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterMailboxClaimRewardNestHandlers()
+	RegisterWalletGrantNestHandlers()
+	f := &mailboxFixture{committer: &mailboxCommitter{}}
+	f.setNow(mailboxStart)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.nowMilli.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+	id, err := entity.BuildEntityID(93001, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = built.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(mailboxGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.rewards = sender.NewMailboxClaimRewardSender(f.engine)
+	return f
+}
+
+// setNow 把业务时钟停在 unix 秒整。
+func (f *mailboxFixture) setNow(unix int64) { f.nowMilli.Store(unix * 1000) }
+
+// claim 走发放入口：邮件 mailID 带 amount 个金币，邮件自己在 expiresAtUnix 过期。
+func (f *mailboxFixture) claim(mailID string, amount, expiresAtUnix int64) (gamemailbox.ClaimResult, error) {
+	return f.rewards.Sync_MailboxClaimReward(context.Background(), f.player.ID(), mailID, amount, expiresAtUnix)
+}
+
+// mustPay 断言这是一次首次发放，余额到 wantBalance。
+func (f *mailboxFixture) mustPay(t *testing.T, mailID string, amount, expiresAtUnix, wantBalance int64) {
+	t.Helper()
+	result, err := f.claim(mailID, amount, expiresAtUnix)
+	if err != nil {
+		t.Fatalf("claim %s: %v", mailID, err)
+	}
+	if !result.Claimed || result.Balance != wantBalance {
+		t.Fatalf("claim %s = %+v, want a first grant bringing the balance to %d", mailID, result, wantBalance)
+	}
+}
+
+// mailboxSnapshot 是邮件模块自己的事实：余额、账本大小、提交次数。
+type mailboxSnapshot struct {
+	coins   int64
+	ledger  int
+	commits int64
+}
+
+// snapshot 在业务 worker 上持实体锁读。
+func (f *mailboxFixture) snapshot(t *testing.T) mailboxSnapshot {
+	t.Helper()
+	var out mailboxSnapshot
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		out.coins = f.player.Dao().GetWallet().GetCoins()
+		out.ledger = f.player.MailboxComp().LedgerSize()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out.commits = f.committer.commits.Load()
+	return out
+}
+
+// recorded 报告邮件是否在账本里。
+func (f *mailboxFixture) recorded(t *testing.T, mailID string) bool {
+	t.Helper()
+	var out bool
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		out = f.player.MailboxComp().Claimed(mailID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func TestMailboxFirstClaimPaysTheCoins(t *testing.T) {
+	f := newMailboxFixture(t)
+	result, err := f.claim("mail-1", 100, mailboxStart+3600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Claimed || result.Balance != 100 {
+		t.Fatalf("first claim = %+v, want a grant of 100", result)
+	}
+	if got := f.snapshot(t); got.coins != 100 || got.ledger != 1 || got.commits != 1 {
+		t.Fatalf("after the first claim: %+v, want 100 coins, one ledger record, one commit", got)
+	}
+	if !f.recorded(t, "mail-1") {
+		t.Fatal("the mail id is not in the ledger: a replay would be paid again")
+	}
+	// 发放必须在 handler 返回之前落盘（durability=strict）：端点拿到结果后紧接着让 mail 服务把邮件标成已领，
+	// 落盘之前进程崩溃就成了“邮件已领、钱没到”。
+	if got := dataengine.Durability(f.committer.durability.Load()); got != dataengine.DurabilityStrict {
+		t.Fatalf("the grant committed with durability %v, want strict", got)
+	}
+}
+
+// 同一封邮件第二次到达——发放成功、CommitClaim 丢了之后的重试正是这样——什么也不发，回的是同样的余额。
+// 没有账本判断时这里就是第二笔钱。邮件过期之后的重放同样只确认：钱早就到账了，这次到达是为了补上确认。
+func TestMailboxSameMailArrivingAgainPaysNothing(t *testing.T) {
+	f := newMailboxFixture(t)
+	const expires = mailboxStart + 3600
+	f.mustPay(t, "mail-1", 100, expires, 100)
+	before := f.snapshot(t)
+	for attempt, now := range []int64{mailboxStart, mailboxStart + 30, expires + 1} {
+		f.setNow(now)
+		result, err := f.claim("mail-1", 100, expires)
+		if err != nil {
+			t.Fatalf("replay %d: %v", attempt, err)
+		}
+		if result.Claimed || result.Balance != 100 {
+			t.Fatalf("replay %d = %+v, want Claimed=false with the same balance 100", attempt, result)
+		}
+	}
+	if got := f.snapshot(t); got.coins != 100 || got.ledger != 1 {
+		t.Fatalf("replays wrote: %+v, was %+v", got, before)
+	}
+}
+
+func TestMailboxDifferentMailsEachPay(t *testing.T) {
+	f := newMailboxFixture(t)
+	f.mustPay(t, "mail-1", 100, mailboxStart+3600, 100)
+	f.mustPay(t, "mail-2", 100, mailboxStart+3600, 200)
+	f.mustPay(t, "mail-3", 7, mailboxStart+60, 207)
+	if got := f.snapshot(t); got.coins != 207 || got.ledger != 3 {
+		t.Fatalf("three mails: %+v, want 207 coins and three records", got)
+	}
+}
+
+// 发放入口拒绝数额非法、没有邮件 id、没有过期时刻的请求，什么也不写。
+// 没有过期时刻的记录永远清不掉，账本就不再有界，所以不收。
+func TestMailboxInvalidRequestsWriteNothing(t *testing.T) {
+	f := newMailboxFixture(t)
+	f.mustPay(t, "mail-1", 100, mailboxStart+3600, 100)
+	before := f.snapshot(t)
+	for name, request := range map[string]struct {
+		mailID  string
+		amount  int64
+		expires int64
+	}{
+		"zero amount":     {"mail-2", 0, mailboxStart + 3600},
+		"negative amount": {"mail-2", -5, mailboxStart + 3600},
+		"empty mail id":   {"", 10, mailboxStart + 3600},
+		"no expiry":       {"mail-2", 10, 0},
+		"negative expiry": {"mail-2", 10, -1},
+	} {
+		_, err := f.claim(request.mailID, request.amount, request.expires)
+		if !errors.Is(err, apperrors.ErrMailboxInvalid) {
+			t.Errorf("%s: err = %v, want mailbox_invalid", name, err)
+		}
+	}
+	if got := f.snapshot(t); got != before {
+		t.Fatalf("refusals wrote: %+v, was %+v", got, before)
+	}
+	if f.recorded(t, "mail-2") {
+		t.Fatal("a refused claim left a ledger record")
+	}
+}
+
+// mail 服务在 now >= 过期时刻时拒绝预留；发放入口用同一个边界，按执行时的业务时间判断。
+// 预留在过期前取得、排队到过期后才执行的首次发放被拒绝，客户端拿到的码与 mail 服务拒绝过期邮件的相同。
+// 业务时间是毫秒、过期时刻是秒：过期前 1 毫秒仍然放行。
+func TestMailboxExpiredFirstGrantIsRefusedAtExecutionTime(t *testing.T) {
+	f := newMailboxFixture(t)
+	const expires = mailboxStart + 60
+	const mailExpiredCode = 590106 // service/mail 的 CodeExpired
+	// 窗口内：过期前 1 秒、过期前 1 毫秒都照发。
+	f.nowMilli.Store((expires - 1) * 1000)
+	f.mustPay(t, "a-second-before", 50, expires, 50)
+	f.nowMilli.Store(expires*1000 - 1)
+	f.mustPay(t, "a-millisecond-before", 50, expires, 100)
+	before := f.snapshot(t)
+	// 到期那一刻与之后：拒绝，什么也不写。
+	for mailID, nowMilli := range map[string]int64{
+		"at-the-expiry":    expires * 1000,
+		"after-the-expiry": (expires + 1) * 1000,
+	} {
+		f.nowMilli.Store(nowMilli)
+		result, err := f.claim(mailID, 50, expires)
+		if err == nil {
+			t.Fatalf("%s: an expired first grant was paid: %+v", mailID, result)
+		}
+		if code, _ := errcode.ClientError(err); code != mailExpiredCode {
+			t.Fatalf("%s: code = %d, want the mail service's expired code %d: %v", mailID, code, mailExpiredCode, err)
+		}
+		if got := f.snapshot(t); got != before || f.recorded(t, mailID) {
+			t.Fatalf("%s: the refusal wrote: %+v, was %+v", mailID, got, before)
+		}
+	}
+}
+
+// 账本迟早会忘掉过期的邮件；忘掉之后同一封邮件的在途旧请求（预留早于过期、执行晚于清理）不能再发一次。
+// 清理与执行时准入是一对：这条用例去掉任何一半都会红。
+func TestMailboxLateReplayAfterItsRecordWasPrunedIsRefused(t *testing.T) {
+	f := newMailboxFixture(t)
+	const expires = mailboxStart + 60
+	f.mustPay(t, "old", 100, expires, 100)
+	// 过期再过 10 分钟宽限之后，另一封邮件的发放顺手清掉这条记录。
+	f.setNow(expires + 600)
+	f.mustPay(t, "other", 5, mailboxStart+7*24*3600, 105)
+	if f.recorded(t, "old") {
+		t.Fatal("premise: the expired record was not pruned at the end of the grace")
+	}
+	before := f.snapshot(t)
+	// 旧预留现在才到：账本已经不记得它，只有过期准入挡得住。
+	result, err := f.claim("old", 100, expires)
+	if err == nil {
+		t.Fatalf("a replay whose record was pruned was paid again: %+v", result)
+	}
+	if got := f.snapshot(t); got != before || f.recorded(t, "old") {
+		t.Fatalf("the refused replay wrote: %+v, was %+v", got, before)
+	}
+}
+
+// 记录在邮件过期后还要留 10 分钟：宕机重启后 Player 可能落到业务时钟稍慢的进程上，
+// 那里晚到的旧请求看到的时间还没过期、准入放行，只能靠账本还记得这封邮件。
+func TestMailboxRecordOutlivesTheExpiryByTheGrace(t *testing.T) {
+	f := newMailboxFixture(t)
+	const expires = mailboxStart + 60
+	f.mustPay(t, "old", 100, expires, 100)
+	// 时钟靠前的进程：过期后、宽限结束前 1 秒有别的发放写账本，记录还在。
+	f.setNow(expires + 599)
+	f.mustPay(t, "other", 5, mailboxStart+7*24*3600, 105)
+	if !f.recorded(t, "old") {
+		t.Fatal("a record was pruned inside the grace after its mail's expiry")
+	}
+	// 时钟慢了 630 秒的进程执行在途的旧请求：按它的时间邮件还没过期。
+	f.setNow(expires - 30)
+	result, err := f.claim("old", 100, expires)
+	if err != nil {
+		t.Fatalf("replay on the slower clock: %v", err)
+	}
+	if result.Claimed || result.Balance != 105 {
+		t.Fatalf("a replay on a clock behind was paid again: %+v", result)
+	}
+	// 宽限结束：下一次首次发放把它清掉，还没过期的记录留着。
+	f.setNow(expires + 600)
+	f.mustPay(t, "another", 5, mailboxStart+7*24*3600, 110)
+	if f.recorded(t, "old") {
+		t.Fatal("a record whose mail expired a full grace ago is still held")
+	}
+	if !f.recorded(t, "other") || !f.recorded(t, "another") {
+		t.Fatal("a record whose mail is still claimable was pruned: a replay would be paid again")
+	}
+}
+
+// 领了很多封之后账本不无限增长：每小时领一封、每封邮件 3 小时后过期，账本里始终只有还没过期满宽限的那几封。
+// 清理不会让已领的邮件被重复发放：清掉的邮件重放被拒绝（已过期），还在账本里的重放不发钱。
+func TestMailboxLedgerStaysBoundedAfterManyClaims(t *testing.T) {
+	f := newMailboxFixture(t)
+	const (
+		mails    = 500
+		hour     = int64(3600)
+		lifetime = 3 * hour
+	)
+	expiry := func(i int) int64 { return mailboxStart + int64(i)*hour + lifetime }
+	largest := 0
+	for i := 0; i < mails; i++ {
+		f.setNow(mailboxStart + int64(i)*hour)
+		f.mustPay(t, fmt.Sprintf("mail-%d", i), 1, expiry(i), int64(i+1))
+		if size := f.snapshot(t).ledger; size > largest {
+			largest = size
+		}
+	}
+	// 第 i 封在第 i+3 小时过期、再过 10 分钟可清理，所以第 i+4 小时的发放把它清掉：账本里最多 4 条。
+	if largest != 4 {
+		t.Fatalf("the ledger peaked at %d records over %d claims, want 4", largest, mails)
+	}
+	after := f.snapshot(t)
+	if after.coins != mails || after.ledger != 4 {
+		t.Fatalf("after %d claims: %+v, want %d coins and 4 records", mails, after, mails)
+	}
+	// 每一封都重放一遍（各带当初预留时的过期时刻）：没有一封再发钱。
+	paidAgain, refused, confirmed := 0, 0, 0
+	for i := 0; i < mails; i++ {
+		result, err := f.claim(fmt.Sprintf("mail-%d", i), 1, expiry(i))
+		switch {
+		case err != nil:
+			refused++
+		case result.Claimed:
+			paidAgain++
+		default:
+			confirmed++
+		}
+	}
+	if paidAgain != 0 || confirmed != 4 || refused != mails-4 {
+		t.Fatalf("replaying all %d mails: paid again %d, confirmed %d, refused %d; want 0 / 4 / %d", mails, paidAgain, confirmed, refused, mails-4)
+	}
+	if got := f.snapshot(t); got.coins != mails || got.ledger != 4 {
+		t.Fatalf("the replays wrote: %+v, was %+v", got, after)
+	}
+	// 账本到过上限之后照常工作：新的一封照发。
+	f.setNow(mailboxStart + mails*hour)
+	f.mustPay(t, "one-more", 1, mailboxStart+mails*hour+lifetime, mails+1)
+}
+
+// 金币与账本记录在同一笔事务里：提交被拒绝时两者一起回滚（连同这一次顺手做的清理），之后同一封还能领。
+func TestMailboxRejectedCommitRollsBackCoinsAndLedger(t *testing.T) {
+	f := newMailboxFixture(t)
+	const expires = mailboxStart + 60
+	f.mustPay(t, "old", 100, expires, 100)
+	f.setNow(expires + 600) // 这一次发放会顺手清掉 old
+	before := f.snapshot(t)
+	f.committer.reject.Store(true)
+	if _, err := f.claim("new", 30, mailboxStart+7*24*3600); err == nil {
+		t.Fatal("a rejected commit reported success")
+	}
+	f.committer.reject.Store(false)
+	if got := f.snapshot(t); got != before {
+		t.Fatalf("rollback left %+v, was %+v", got, before)
+	}
+	if f.recorded(t, "new") {
+		t.Fatal("rollback left the mail in the ledger: the player would never be paid for it")
+	}
+	if !f.recorded(t, "old") {
+		t.Fatal("rollback did not restore the record the rejected transaction pruned")
+	}
+	// 回滚后同一封邮件可以再领：上一次没有生效。
+	f.mustPay(t, "new", 30, mailboxStart+7*24*3600, 130)
+}
+
+// 货币模块拒绝（余额溢出）时这封邮件不进账本、过期记录也不清理：玩家花掉一些之后还能领。
+func TestMailboxWalletRefusalWritesNothing(t *testing.T) {
+	f := newMailboxFixture(t)
+	const expires = mailboxStart + 60
+	f.mustPay(t, "old", 100, expires, 100)
+	if _, err := sender.NewWalletGrantSender(f.engine).Sync_WalletGrant(context.Background(), f.player.ID(), "fill", math.MaxInt64-100); err != nil {
+		t.Fatal(err)
+	}
+	f.setNow(expires + 600)
+	before := f.snapshot(t)
+	_, err := f.claim("new", 1, mailboxStart+7*24*3600)
+	if !errors.Is(err, apperrors.ErrWalletOverflow) {
+		t.Fatalf("err = %v, want wallet_overflow", err)
+	}
+	if got := f.snapshot(t); got != before || f.recorded(t, "new") || !f.recorded(t, "old") {
+		t.Fatalf("the refusal wrote: %+v, was %+v", got, before)
+	}
+}
+
+// 领取账本只落库、不下发。只断言邮件模块自己的字段：同一个 DAO 上还有别的模块的字段。
+func TestMailboxLedgerIsNotSynced(t *testing.T) {
+	for _, field := range db.PlayerDaoSyncFields() {
+		if field.Name == "MailboxLedger" {
+			t.Fatal("PlayerDao.MailboxLedger is synced: the claim ledger is server-side state")
+		}
+	}
+}

@@ -1,0 +1,40 @@
+//go:build protocoldef
+
+package protocoldef
+
+// MailboxListRequest 翻自己的邮箱，新的在前。Cursor 是上一页回的 NextCursor（第一页留空）；
+// Limit 为 0 用 mail 服务的缺省页大小，上限也由它决定。读的是谁的邮箱取认证会话，不取请求字段。
+type MailboxListRequest struct {
+	Cursor string `pb:"1"`
+	Limit  int32  `pb:"2"`
+}
+
+// MailboxEntry 是客户端看到的一封邮件：信封加上这名玩家对它的状态。
+// Claimable 是“现在领会成功吗”：mail 服务说可以预留，并且附件是这一版发得了的奖励。
+// 客户端不要从 Status 猜（Status 表达不了“正被一次在途的领取占着”）。
+// Coins 是附件里的金币数；没有附件、或附件不是这一版认识的奖励时为 0。
+type MailboxEntry struct {
+	MailID        string `pb:"1"`
+	Subject       string `pb:"2"`
+	Body          string `pb:"3"`
+	Status        string `pb:"4"`
+	HasAttachment bool   `pb:"5"`
+	Claimable     bool   `pb:"6"`
+	ExpiresAtUnix int64  `pb:"7"`
+	Coins         int64  `pb:"8"`
+}
+
+// MailboxListResponse 是一页邮件。NextCursor 为空表示到底；Unread 是整个邮箱的未读数，不是这一页的。
+type MailboxListResponse struct {
+	Code       int32          `pb:"1"`
+	Reason     string         `pb:"2"`
+	Mails      []MailboxEntry `pb:"3"`
+	NextCursor string         `pb:"4"`
+	Unread     int32          `pb:"5"`
+}
+
+//roost:protocol group=game handler=mailbox
+type MailboxListProtocol interface {
+	//roost:msg id={{ID:protocol:MailboxList}}
+	MailboxList(MailboxListRequest) MailboxListResponse
+}

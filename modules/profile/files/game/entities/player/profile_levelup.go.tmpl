@@ -1,0 +1,20 @@
+package player
+
+// onLevelUp 是升级钩子：AddExp 让这名玩家从 from 级升到 to 级（to > from）之后调用一次。
+// 一次发放连升多级也只调一次，升的是 from+1 … to 这几级。
+//
+// 这个文件归工程所有，升级奖励就写在这里。同一个实体上别的组件直接调，例如装了 wallet 模块时
+// 每升一级送 50 金币：
+//
+//	if _, err := component.owner.WalletComp().Add(int64(to-from) * 50); err != nil {
+//		return err
+//	}
+//
+// 用不留回执的入口（wallet 的 Add）：这一次升级只发一次由事务保证——钩子与经验、等级在同一笔事务里，
+// 要么都提交，要么都回滚。返回错误时整笔事务回滚：等级和经验退回发放之前，发经验的那个请求以这个错误结束。
+// 所以这里不要做事务之外的事（发消息、调别的服务），也不要按 to-from 逐级循环做重活：
+// 一次大额发放可以连升很多级，按级数算总数（像上面的乘法）或先给等级设上限。
+func (component *ProfileComponent) onLevelUp(from, to int32) error {
+	_, _ = from, to
+	return nil
+}

@@ -1,0 +1,476 @@
+package leaderboard
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+
+	gameleaderboard "{{MODULE}}/game/leaderboard"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+)
+
+// leaderboardFakeRank 是 rank 客户端的内存替身，按 service/rank 写明的语义实现本模块用到的部分：
+// 三种合并方式、每个玩家最近 8 个请求号的去重环、Tie 为 0 时填提交先后、分高在前同分 Tie 小在前、
+// 条数必须在 [1, 200]。它让“提交 → 查前 N → 查自己”能离线跑通，并记下端点交给 rank 的榜与条数。
+//
+// 它的边界：这是照接口文档写的替身，不是 rank 服务本身——真实的 Redis 脚本、跨进程调用、
+// 并发下的 compare-and-swap 都不在这里；那些由 roost-core 的 service/rank 自己的测试覆盖。
+type leaderboardFakeRank struct {
+	mu     sync.Mutex
+	boards map[svcrank.Board]map[int64]*leaderboardFakeRow
+	clock  int64
+
+	// 记下每次调用用的榜与 Page 收到的条数：端点不该读别的榜，也不该把超限的条数交给 rank。
+	seenBoards []svcrank.Board
+	pageLimits []int
+	rankOwners []int64
+
+	// 让下一次读失败 / 让 Rank 回答“找到但名次 0”（真实服务在两次读之间这一行被删掉时的回答）。
+	pageErr  error
+	rankErr  error
+	vanished bool
+}
+
+type leaderboardFakeRow struct {
+	value int64
+	tie   int64
+	ring  []string
+}
+
+func newLeaderboardFakeRank() *leaderboardFakeRank {
+	return &leaderboardFakeRank{boards: make(map[svcrank.Board]map[int64]*leaderboardFakeRow)}
+}
+
+func (fake *leaderboardFakeRank) Submit(_ context.Context, board svcrank.Board, score svcrank.Score, mode svcrank.UpdateMode, requestID string) (svcrank.Entry, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.seenBoards = append(fake.seenBoards, board)
+	if err := board.Validate(); err != nil {
+		return svcrank.Entry{}, err
+	}
+	if score.OwnerID == 0 {
+		return svcrank.Entry{}, svcrank.ErrOwnerInvalid
+	}
+	if mode == svcrank.UpdateAdd && requestID == "" {
+		return svcrank.Entry{}, svcrank.ErrRequestInvalid
+	}
+	fake.clock++
+	if score.Tie == 0 {
+		score.Tie = fake.clock
+	}
+	rows := fake.boards[board]
+	if rows == nil {
+		rows = make(map[int64]*leaderboardFakeRow)
+		fake.boards[board] = rows
+	}
+	row := rows[score.OwnerID]
+	if row != nil && requestID != "" {
+		for _, applied := range row.ring {
+			if applied == requestID {
+				return fake.entryLocked(board, score.OwnerID), nil
+			}
+		}
+	}
+	switch {
+	case row == nil:
+		row = &leaderboardFakeRow{value: score.Value, tie: score.Tie}
+		rows[score.OwnerID] = row
+	case mode == svcrank.UpdateSet:
+		row.value, row.tie = score.Value, score.Tie
+	case mode == svcrank.UpdateMax:
+		// 分数更高才换；相同分数保留较早的 Tie，重复提交不会把人往后挪。
+		if score.Value > row.value {
+			row.value, row.tie = score.Value, score.Tie
+		}
+	case mode == svcrank.UpdateAdd:
+		row.value, row.tie = row.value+score.Value, score.Tie
+	default:
+		return svcrank.Entry{}, svcrank.ErrScoreInvalid
+	}
+	if requestID != "" {
+		row.ring = append(row.ring, requestID)
+		if len(row.ring) > 8 {
+			row.ring = row.ring[len(row.ring)-8:]
+		}
+	}
+	return fake.entryLocked(board, score.OwnerID), nil
+}
+
+// orderedLocked 是一张榜按名次排好的玩家号：分高在前，同分 Tie 小在前，再同按玩家号小在前。
+func (fake *leaderboardFakeRank) orderedLocked(board svcrank.Board) []int64 {
+	rows := fake.boards[board]
+	owners := make([]int64, 0, len(rows))
+	for owner := range rows {
+		owners = append(owners, owner)
+	}
+	sort.Slice(owners, func(i, j int) bool {
+		a, b := rows[owners[i]], rows[owners[j]]
+		if a.value != b.value {
+			return a.value > b.value
+		}
+		if a.tie != b.tie {
+			return a.tie < b.tie
+		}
+		return owners[i] < owners[j]
+	})
+	return owners
+}
+
+func (fake *leaderboardFakeRank) entryLocked(board svcrank.Board, ownerID int64) svcrank.Entry {
+	for index, owner := range fake.orderedLocked(board) {
+		if owner == ownerID {
+			row := fake.boards[board][owner]
+			return svcrank.Entry{Rank: int64(index) + 1, Score: svcrank.Score{OwnerID: owner, Value: row.value, Tie: row.tie}}
+		}
+	}
+	return svcrank.Entry{}
+}
+
+func (fake *leaderboardFakeRank) Page(_ context.Context, board svcrank.Board, offset, limit int) (svcrank.Page, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.seenBoards = append(fake.seenBoards, board)
+	fake.pageLimits = append(fake.pageLimits, limit)
+	if fake.pageErr != nil {
+		return svcrank.Page{}, fake.pageErr
+	}
+	if offset < 0 || limit <= 0 || limit > 200 {
+		return svcrank.Page{}, fmt.Errorf("%w: offset %d limit %d", svcrank.ErrRangeInvalid, offset, limit)
+	}
+	owners := fake.orderedLocked(board)
+	page := svcrank.Page{Total: int64(len(owners))}
+	for index := offset; index < len(owners) && index < offset+limit; index++ {
+		row := fake.boards[board][owners[index]]
+		page.Entries = append(page.Entries, svcrank.Entry{
+			Rank: int64(index) + 1, Score: svcrank.Score{OwnerID: owners[index], Value: row.value, Tie: row.tie},
+		})
+	}
+	return page, nil
+}
+
+func (fake *leaderboardFakeRank) Rank(_ context.Context, board svcrank.Board, ownerID int64) (svcrank.Entry, bool, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.seenBoards = append(fake.seenBoards, board)
+	fake.rankOwners = append(fake.rankOwners, ownerID)
+	if fake.rankErr != nil {
+		return svcrank.Entry{}, false, fake.rankErr
+	}
+	row := fake.boards[board][ownerID]
+	if row == nil {
+		return svcrank.Entry{}, false, nil
+	}
+	if fake.vanished {
+		return svcrank.Entry{Rank: 0, Score: svcrank.Score{OwnerID: ownerID, Value: row.value, Tie: row.tie}}, true, nil
+	}
+	return fake.entryLocked(board, ownerID), true, nil
+}
+
+func (fake *leaderboardFakeRank) Remove(context.Context, svcrank.Board, int64) error {
+	return errors.New("leaderboard test: Remove is not part of this module")
+}
+
+func (fake *leaderboardFakeRank) Around(context.Context, svcrank.Board, int64, int) (svcrank.Page, error) {
+	return svcrank.Page{}, errors.New("leaderboard test: Around is not part of this module")
+}
+
+func (fake *leaderboardFakeRank) Size(context.Context, svcrank.Board) (int64, error) {
+	return 0, errors.New("leaderboard test: Size is not part of this module")
+}
+
+// leaderboardFixture 是一个装了排行榜端点的进程的最小形状：Registry 里只有 rank 客户端。
+type leaderboardFixture struct {
+	t          *testing.T
+	rank       *leaderboardFakeRank
+	registry   *app.Registry
+	controller *Controller
+}
+
+func newLeaderboardFixture(t *testing.T) *leaderboardFixture {
+	t.Helper()
+	rank := newLeaderboardFakeRank()
+	registry := app.NewRegistry(nil)
+	if err := registry.Register(svcrank.CapabilityName, svcrank.Rank(rank)); err != nil {
+		t.Fatal(err)
+	}
+	controller, err := FromRegistry(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &leaderboardFixture{t: t, rank: rank, registry: registry, controller: controller}
+}
+
+// submit 走服务端别的功能会走的那条路：game/leaderboard 的 Submit。
+func (fixture *leaderboardFixture) submit(playerID, total int64, key string) gameleaderboard.Standing {
+	fixture.t.Helper()
+	standing, err := gameleaderboard.Submit(context.Background(), fixture.registry, playerID, total, key)
+	if err != nil {
+		fixture.t.Fatalf("submit player %d total %d key %q: %v", playerID, total, key, err)
+	}
+	return standing
+}
+
+// top / me 以某个已认证玩家的身份发一条请求。端点返回 Go error 一律算失败：业务结果都在回包里。
+func (fixture *leaderboardFixture) top(playerID int64, limit int32) *pb.LeaderboardTopResponse {
+	fixture.t.Helper()
+	response, err := fixture.controller.HandleLeaderboardTop(&playeraccess.Context{PlayerID: playerID}, &pb.LeaderboardTopRequest{Limit: limit})
+	if err != nil || response == nil {
+		fixture.t.Fatalf("LeaderboardTop: response %v err %v", response, err)
+	}
+	return response
+}
+
+func (fixture *leaderboardFixture) me(playerID int64) *pb.LeaderboardMeResponse {
+	fixture.t.Helper()
+	response, err := fixture.controller.HandleLeaderboardMe(&playeraccess.Context{PlayerID: playerID}, &pb.LeaderboardMeRequest{})
+	if err != nil || response == nil {
+		fixture.t.Fatalf("LeaderboardMe: response %v err %v", response, err)
+	}
+	return response
+}
+
+func leaderboardRows(response *pb.LeaderboardTopResponse) string {
+	text := ""
+	for _, row := range response.Rows {
+		text += fmt.Sprintf("#%d p%d=%d ", row.Rank, row.PlayerID, row.Score)
+	}
+	return text
+}
+
+func TestLeaderboardSubmitThenTopThenMe(t *testing.T) {
+	fixture := newLeaderboardFixture(t)
+	fixture.submit(1001, 300, "dungeon:1")
+	fixture.submit(1002, 900, "dungeon:2")
+	fixture.submit(1003, 500, "dungeon:3")
+
+	top := fixture.top(1001, 2)
+	if top.Code != 0 || top.Total != 3 {
+		t.Fatalf("top: code %d reason %q total %d, want code 0 total 3", top.Code, top.Reason, top.Total)
+	}
+	if got := leaderboardRows(top); got != "#1 p1002=900 #2 p1003=500 " {
+		t.Fatalf("top 2 = %q", got)
+	}
+	if got := leaderboardRows(fixture.top(1001, 3)); got != "#1 p1002=900 #2 p1003=500 #3 p1001=300 " {
+		t.Fatalf("top 3 = %q", got)
+	}
+	// 每个人查到的是自己：身份取会话的玩家号，请求里没有可以填别人的字段。
+	for playerID, want := range map[int64]pb.LeaderboardMeResponse{
+		1001: {OnBoard: true, Rank: 3, Score: 300},
+		1002: {OnBoard: true, Rank: 1, Score: 900},
+		1003: {OnBoard: true, Rank: 2, Score: 500},
+	} {
+		if got := fixture.me(playerID); *got != want {
+			t.Errorf("me(%d) = %+v, want %+v", playerID, *got, want)
+		}
+	}
+	looked := append([]int64(nil), fixture.rank.rankOwners...)
+	sort.Slice(looked, func(i, j int) bool { return looked[i] < looked[j] })
+	if got := fmt.Sprint(looked); got != "[1001 1002 1003]" {
+		t.Fatalf("the endpoint asked rank about %s, want exactly the three session players", got)
+	}
+	// 读与写用的是同一张榜：服务端定的总分榜，全服、第 1 周期。
+	want := svcrank.Board{ID: "total", Scope: svcrank.ScopeGlobal, Season: 1}
+	for index, board := range fixture.rank.seenBoards {
+		if board != want {
+			t.Fatalf("call %d used board %+v, want %+v", index, board, want)
+		}
+	}
+	// 分数上涨后名次跟着变，Submit 带回的就是新位置。
+	if standing := fixture.submit(1001, 950, "dungeon:4"); standing != (gameleaderboard.Standing{OnBoard: true, Rank: 1, Score: 950}) {
+		t.Fatalf("standing after overtaking = %+v", standing)
+	}
+	if got := leaderboardRows(fixture.top(1002, 1)); got != "#1 p1001=950 " {
+		t.Fatalf("top 1 after overtaking = %q", got)
+	}
+}
+
+func TestLeaderboardTopNeverAsksRankForMoreThanFifty(t *testing.T) {
+	fixture := newLeaderboardFixture(t)
+	for player := int64(1); player <= 60; player++ {
+		fixture.submit(1000+player, player*10, fmt.Sprintf("quest:%d", player))
+	}
+	for _, c := range []struct {
+		limit int32
+		rows  int
+	}{
+		{0, 10}, {-3, 10}, {1, 1}, {10, 10}, {50, 50}, {51, 50}, {1000, 50}, {2147483647, 50},
+	} {
+		top := fixture.top(1001, c.limit)
+		if top.Code != 0 {
+			t.Fatalf("limit %d: code %d reason %q", c.limit, top.Code, top.Reason)
+		}
+		if len(top.Rows) != c.rows {
+			t.Errorf("limit %d: %d rows, want %d", c.limit, len(top.Rows), c.rows)
+		}
+		if top.Total != 60 {
+			t.Errorf("limit %d: total %d, want 60 (the whole board, not the page)", c.limit, top.Total)
+		}
+		// 榜头：第一行是分最高的 1060，名次从 1 连续往下。
+		for index, row := range top.Rows {
+			if row.Rank != int64(index)+1 || row.PlayerID != 1060-int64(index) || row.Score != 600-int64(index)*10 {
+				t.Fatalf("limit %d row %d = %+v", c.limit, index, row)
+			}
+		}
+	}
+	if got := fmt.Sprint(fixture.rank.pageLimits); got != "[10 10 1 10 50 50 50 50]" {
+		t.Fatalf("limits handed to the rank service = %s", got)
+	}
+}
+
+func TestLeaderboardMeOffTheBoardIsAnAnswerNotAnError(t *testing.T) {
+	fixture := newLeaderboardFixture(t)
+	// 空榜。
+	if got := fixture.me(1001); *got != (pb.LeaderboardMeResponse{}) {
+		t.Fatalf("me on an empty board = %+v, want code 0, off board, rank 0, score 0", *got)
+	}
+	// 榜上有别人、没有自己。
+	fixture.submit(1002, 40, "quest:1")
+	if got := fixture.me(1001); *got != (pb.LeaderboardMeResponse{}) {
+		t.Fatalf("me while only others are ranked = %+v", *got)
+	}
+	if got := fixture.rank.rankOwners; len(got) != 2 || got[0] != 1001 || got[1] != 1001 {
+		t.Fatalf("the endpoint looked up %v, want the session player 1001 twice", got)
+	}
+	// rank 在读分数与读名次之间这一行被删掉：回“找到、名次 0”，对客户端仍是没上榜。
+	fixture.submit(1001, 70, "quest:2")
+	fixture.rank.vanished = true
+	if got := fixture.me(1001); *got != (pb.LeaderboardMeResponse{}) {
+		t.Fatalf("me for a row removed mid-read = %+v, want off board", *got)
+	}
+	fixture.rank.vanished = false
+	if got := fixture.me(1001); *got != (pb.LeaderboardMeResponse{OnBoard: true, Rank: 1, Score: 70}) {
+		t.Fatalf("me once ranked = %+v", *got)
+	}
+	// 空榜的榜头同样不是错误。
+	empty := newLeaderboardFixture(t)
+	if top := empty.top(1001, 10); top.Code != 0 || len(top.Rows) != 0 || top.Total != 0 {
+		t.Fatalf("top of an empty board = %+v", *top)
+	}
+}
+
+func TestLeaderboardRepeatedAndStaleSubmitsNeverMoveTheBoard(t *testing.T) {
+	fixture := newLeaderboardFixture(t)
+	fixture.submit(1001, 100, "dungeon:1")
+	fixture.submit(1002, 100, "dungeon:2") // 同分、后到：排在 1001 后面
+	want := "#1 p1001=100 #2 p1002=100 "
+	if got := leaderboardRows(fixture.top(1001, 10)); got != want {
+		t.Fatalf("equal totals must rank whoever got there first: %q", got)
+	}
+	// 同一件事重发（同键同分）：不加分；1001 也不会因为重发被挪到同分的 1002 后面。
+	for range 3 {
+		if standing := fixture.submit(1001, 100, "dungeon:1"); standing != (gameleaderboard.Standing{OnBoard: true, Rank: 1, Score: 100}) {
+			t.Fatalf("a redelivered submit returned %+v", standing)
+		}
+	}
+	// 迟到的旧快照（不同的键、更低的总分）：不降分，返回的是榜上现有的位置。
+	if standing := fixture.submit(1001, 60, "dungeon:0"); standing != (gameleaderboard.Standing{OnBoard: true, Rank: 1, Score: 100}) {
+		t.Fatalf("a stale lower snapshot returned %+v", standing)
+	}
+	if got := leaderboardRows(fixture.top(1001, 10)); got != want {
+		t.Fatalf("board after duplicates and a stale snapshot = %q, want %q", got, want)
+	}
+	// 同一个键、更高的总分（那件事重放时总分已经涨了）：榜跟上，不被当成重发吞掉。
+	fixture.submit(1002, 180, "dungeon:2")
+	if got := *fixture.me(1002); got != (pb.LeaderboardMeResponse{OnBoard: true, Rank: 1, Score: 180}) {
+		t.Fatalf("the same key with a higher total must lift the board: %+v", got)
+	}
+}
+
+func TestLeaderboardReplayAfterTheDedupRingForgotStillAddsNothing(t *testing.T) {
+	fixture := newLeaderboardFixture(t)
+	// rank 服务只记每个玩家最近 8 个请求号。连续 20 件事各提交一次，第 1 件事的键早已被挤出去。
+	total := int64(0)
+	for event := 1; event <= 20; event++ {
+		total += 5
+		fixture.submit(1001, total, fmt.Sprintf("dungeon:%d", event))
+	}
+	if got := *fixture.me(1001); got != (pb.LeaderboardMeResponse{OnBoard: true, Rank: 1, Score: 100}) {
+		t.Fatalf("after 20 events of 5 points = %+v, want score 100", got)
+	}
+	// 第 1 件事重放两种形态：带当时的总分 5，或带现在的总分 100。哪一种都不能让榜变成别的数。
+	fixture.submit(1001, 5, "dungeon:1")
+	fixture.submit(1001, 100, "dungeon:1")
+	// 20 件事全部重放一遍（端点重试风暴）。
+	replay := int64(0)
+	for event := 1; event <= 20; event++ {
+		replay += 5
+		fixture.submit(1001, replay, fmt.Sprintf("dungeon:%d", event))
+	}
+	if got := *fixture.me(1001); got != (pb.LeaderboardMeResponse{OnBoard: true, Rank: 1, Score: 100}) {
+		t.Fatalf("after replaying every event = %+v, want the score still 100", got)
+	}
+	// 环满之后新的提交照常生效。
+	fixture.submit(1001, 105, "dungeon:21")
+	if got := *fixture.me(1001); got != (pb.LeaderboardMeResponse{OnBoard: true, Rank: 1, Score: 105}) {
+		t.Fatalf("the 21st event = %+v, want score 105", got)
+	}
+}
+
+func TestLeaderboardRankFailureReachesTheClientAsACode(t *testing.T) {
+	fixture := newLeaderboardFixture(t)
+	fixture.submit(1001, 100, "dungeon:1")
+
+	// 带码的失败：客户端拿到 rank 服务自己的码，回包里没有半截数据。
+	fixture.rank.pageErr = fmt.Errorf("%w: simulated", svcrank.ErrRangeInvalid)
+	top := fixture.top(1001, 10)
+	if top.Code != svcrank.CodeRangeInvalid || top.Reason == "" || len(top.Rows) != 0 || top.Total != 0 {
+		t.Fatalf("top on a coded failure = %+v", *top)
+	}
+	fixture.rank.rankErr = fmt.Errorf("%w: simulated", svcrank.ErrBoardInvalid)
+	me := fixture.me(1001)
+	if me.Code != svcrank.CodeBoardInvalid || me.Reason == "" || me.OnBoard || me.Rank != 0 || me.Score != 0 {
+		t.Fatalf("me on a coded failure = %+v", *me)
+	}
+
+	// 不带码的失败（rank 进程不可达）：内部错误码，不把下游的错误文本漏给客户端。
+	fixture.rank.pageErr = errors.New("dial tcp 10.0.0.9:4222: connection refused")
+	top = fixture.top(1001, 10)
+	if top.Code != errcode.CodeInternal || len(top.Rows) != 0 {
+		t.Fatalf("top while rank is unreachable = %+v", *top)
+	}
+	fixture.rank.rankErr = errors.New("dial tcp 10.0.0.9:4222: connection refused")
+	me = fixture.me(1001)
+	if me.Code != errcode.CodeInternal || me.OnBoard {
+		t.Fatalf("me while rank is unreachable = %+v", *me)
+	}
+	for _, reason := range []string{top.Reason, me.Reason} {
+		if reason == "" || strings.Contains(reason, "dial") || strings.Contains(reason, "10.0.0.9") || strings.Contains(reason, "refused") {
+			t.Fatalf("reason %q must be the generic internal reason, not the downstream error", reason)
+		}
+	}
+
+	// 失败不留后遗症：rank 恢复后同一个端点照常回答。
+	fixture.rank.pageErr, fixture.rank.rankErr = nil, nil
+	if got := leaderboardRows(fixture.top(1001, 10)); got != "#1 p1001=100 " {
+		t.Fatalf("top after rank recovered = %q", got)
+	}
+}
+
+func TestLeaderboardControllerRefusesToStartWithoutRank(t *testing.T) {
+	if _, err := FromRegistry(nil); err == nil {
+		t.Fatal("a nil registry was accepted")
+	}
+	if _, err := FromRegistry(app.NewRegistry(nil)); err == nil {
+		t.Fatal("a registry without the rank client was accepted: the process would start and fail on the first request")
+	}
+	fixture := newLeaderboardFixture(t)
+	if fixture.controller.Registry() != fixture.registry {
+		t.Fatal("the controller does not hand back its registry")
+	}
+	// 端点对空的上下文或请求返回 Go error（接入层的缺陷），不是业务回包。
+	if _, err := fixture.controller.HandleLeaderboardTop(nil, &pb.LeaderboardTopRequest{}); err == nil {
+		t.Fatal("LeaderboardTop accepted a nil context")
+	}
+	if _, err := fixture.controller.HandleLeaderboardMe(&playeraccess.Context{PlayerID: 1001}, nil); err == nil {
+		t.Fatal("LeaderboardMe accepted a nil request")
+	}
+}

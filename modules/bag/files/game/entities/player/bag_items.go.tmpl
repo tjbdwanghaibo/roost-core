@@ -1,0 +1,16 @@
+package player
+
+// bagItemValid 回答“这个道具号能不能进背包”。BagComponent.Add 在写入前调用它；
+// Remove 不调用：已经在背包里的道具即使后来下架，也要能扣、能丢。
+//
+// 缺省规则只有“道具号为正”，因为模块不带配置表。项目接上自己的道具表之后改这里，例如：
+//
+//	_, ok := generated.ItemByID(itemID)   // configs/generated，由 roost add table item 与 roost generate 产出
+//	return ok
+//
+// 生成的访问器读的是钉在本次请求上的配置快照，同一个 handler 里两次读不会因为热更而不一致。
+// 每种道具的堆叠上限不同时也从道具表读：把 BagComponent.Add 里的 BagMaxStack 换成按道具号取的上限
+// （不能超过 BagMaxStack，溢出保护靠它）。
+func bagItemValid(itemID int64) bool {
+	return itemID > 0
+}

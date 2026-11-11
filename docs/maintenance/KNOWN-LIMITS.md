@@ -512,14 +512,20 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 2026-11-10，[方案](FEATURE-2026-11-10-business-modules.md)第 2 期，现行说明见 [modules/README](../../modules/README.md) 与[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)。
 
-- **只有四个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）、enter（进入游戏）。13 类玩法与 game-demo 的业务还没有拆成模块，仍是各自的夹具与模板（拆解是方案的后续工作）。模块与生成器的改动只保证新生成的工程能直接用，不为以前生成的工程做兼容（维护者 2026-11-11）。按玩法一条命令出工程的配方（`-recipe`）没有做。
+- **只有八个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）、enter（进入游戏）、profile（档案）、bag（背包）、leaderboard（排行榜）、mailbox（邮件）。game-demo 只换用了 enter 与 chat；它自己的背包、经验、排行榜、邮件领取仍是 demo 的模板，13 类玩法也仍是各自的夹具（拆解是方案的后续工作）。模块与生成器的改动只保证新生成的工程能直接用，不为以前生成的工程做兼容（维护者 2026-11-11）。按玩法一条命令出工程的配方（`-recipe`）没有做。
 - **chat 模块的边界**：在线名单是每进程的内存集合，多个 game 进程不互相扇出世界频道的推送（要么各推各的在线玩家，要么改为订阅 chat 的流）；连接关闭的订阅在第一次取推送面时才挂上、进程退出时不单独退订；系统消息入口无条件授予（前提是 chat 只经内部总线可达，见 collaborators 的注释）；没有群组频道。端点不经过 Nest，没有离线用例——8 条场景覆盖频道规则、消息体校验、在线名单、连接关闭后移出名单与 collaborators 的政策。game-demo 用的就是这个模块（2026-11-11 统一，demo 自己不再带一份聊天实现）。
 - **没有卸载与升级**：安装只加不减，分配过的号与存储键不回收；内置模块之后变了，已装的模块不会跟着变，安装器只报告“装的是另一版”（`installed_other_version`），不给差异、不合并。
 - **模块绑定具体的实体名与工程形状**：wallet 与 checkin 挂在名为 `Player` 的实体上，按 `-template game` 的目录约定写文件（`game/entities/player/`、`game/handler/`、`game/controllers/<module>/`）。实体叫别的名字的工程装不了。
-- **没有运行期接线点**：模块不能声明 Init / Shutdown、后台循环或向 Registry 发布能力；现有两个模块不需要（组件挂在实体上，controller 用自己的 `FromRegistry`）。需要这些的模块（匹配清扫、effect 消费者）出现时再加。
+- **没有运行期接线点**：模块不能声明 Init / Shutdown、后台循环或向 Registry 发布能力；现有模块靠别的办法绕开（组件挂在实体上，controller 用自己的 `FromRegistry`，chat 的推送面在第一次用到时才取）。需要这些的模块（匹配清扫、effect 消费者）出现时再加。
 - **没有定时器类型分配、Robot 步骤**：模块不能带实体定时器类型，也不带压测步骤；两者留给方案第 3 期。
 - **enter 模块的边界**：它建档并跑首次初始化，安装时代办 `roost add transport tcp` 与 `access.player.self_sync: true`；但不做鉴权（`auth.go` 仍缺省拒绝，`roost config enable player-tcp` 也没有执行），所以真实客户端仍连不上。端点里“`GetOrCreate` 之后发首次初始化”的串接没有离线用例，3 条场景只到 Nest handler（首次执行、再进入不做、提交被拒后下次补上）。
 - **game-demo 只用了 enter 模块的协议、域与首次初始化**：进入流程本身仍是 demo 自己的（`game/controllers/player/enter_game.go`），demo 覆盖了模块的 `protocol/def/enter_game.go` 与 `game/controllers/enter/` 两个文件。enter 域的 controller 自己建一个 player controller，一个进程里因此有两个 player controller 实例；它们共享的东西（在线名单、归属、场景）都经 Registry 或进程级对象，不存在各自一份的状态，但往 player controller 上加每实例状态时要记得这一点。demo 的 `enter_first.go` 是模块的缺省版本（不发任何东西）：demo 没有把自己的新玩家初始化搬进这个钩子。
+- **模块之间没有登记点**：一个模块不能往另一个模块的入口里加一步，也不能向它登记一种扩展。已知的三处后果：装了 mailbox 与 enter、又启用 `LazyBroadcast` 的工程，要自己在进入游戏时调 `Mail.PullBroadcasts`，否则全服邮件到不了玩家（直发邮件不受影响）；mailbox 的附件只认金币，要发道具得改 mailbox 自己的文件（附件种类与发放分派）；profile 的升级奖励、enter 的新玩家发放、往 leaderboard 提交分数，都是在模块留的业务文件或工程自己的端点里手写。
+- **模块没有配置**：清单不能声明配置项或配置表。bag 的道具合法性、profile 的每级经验、leaderboard 的榜与周期、mailbox 的账本宽限（600 秒）都是代码里的常量或业务文件，要调只能改已装的文件。
+- **mailbox 的边界**：只在进程内验证过（真实的 mail `Service` 加内存存储），经 NATS 的 BusClient、Redis 存储、超时与重投没有跑过；确认丢失没有后台补偿（钱已到账，邮件仍显示可领，玩家再点一次才补上确认）；领取账本存在 Player 文档里、每次首次发放扫一遍；账本的遗忘以“邮件过期后再等 600 秒”为准，game 进程之间业务时钟差超过它时，已遗忘的邮件可能被晚到的重放再发一次；Nest 调用因等结果超时返回错误、事务其实已提交的那条路径没有用例（重试会在账本上认出来，不会多发）。没有发件方、已读与删除。
+- **leaderboard 的边界**：提交与改总分的事务不是原子的，提交失败时榜上暂时落后，靠同键重试或下一次分数变动补上；只升不降，一个错的大数提交上去之后压不下来（所以有上限一万亿的检查）；换周期是改 `CurrentSeason` 后发版，没有清榜协议。
+- **profile、bag 的边界**：名字不查重、不查敏感词；背包没有道具表、格子与过期。两者都是 demo“背包、经验与升级”的简化版，不是 demo 那一份的替代。
+- **`roost module verify` 把子测试数进通过数**：模块的场景测试因此不用 `t.Run`。
 - **不装 enter 时安装不打开客户端同步**：模块把状态字段标成 `sync`，但不改 `access.player`。要让客户端收到，需另外 `roost add transport tcp`、在 `roost.yaml` 加 `access.player.self_sync: true`、`roost project sync`（skill 的[按需求组合 §4A](../agent-skills/roost-genre/references/compose.md#4a-让客户端看到状态)）；`roost module verify` 不检查这一项。真实客户端连上还要实现 `auth.go` 并 `roost config enable player-tcp`。
 - **wallet 的去重窗口不是永久账本**：`Apply(key, delta)` 只在最近 128 次带业务键的加减内去重，更早的键被淘汰后再用会重新执行。长期“只发一次”由调用方在自己的状态里记事实并调 `Add`（checkin 这样做）。首版曾是“回执满了拒绝、不淘汰”，连续签到到第 129 天起签到与消费全部被拒，由只凭 skill 的实测发现并修掉（回归 `TestCheckinKeepsPayingPastTheWalletReceiptWindow`、`TestWalletOldReceiptsLeaveTheWindow`）。
 - **惰性清零对客户端可见**：签到进度（以及照它写的每日功能）在当天第一次写入时才更新；跨天后没有新写入时，客户端经自身视图看到的仍是上一次的记录，要自己按业务日字段比对。协议里没有带服务器当前的业务日。

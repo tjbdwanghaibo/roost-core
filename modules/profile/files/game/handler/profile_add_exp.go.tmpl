@@ -1,0 +1,15 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerProfileAddExp 是服务端发经验（任务、关卡、GM），不对客户端开放：没有协议也没有端点，
+// 由服务端代码经生成的 Sender（syncsender.NewProfileAddExpSender）调用。返回这一次升了几级。
+//
+// 它不判重，重发一次就多加一次：调用方的请求会重试时，先在自己的状态里记下“这一次发过”，
+// 或者把发经验写进自己的 handler（目标接口嵌入 player.IProfileEntity，直接调 ProfileComp().AddExp），
+// 让事实与经验在同一笔事务里。
+//
+//roost:nest rollback=undo durability=strict
+func handlerProfileAddExp(target player.IProfileEntity, amount int64) (int32, error) {
+	return target.ProfileComp().AddExp(amount)
+}

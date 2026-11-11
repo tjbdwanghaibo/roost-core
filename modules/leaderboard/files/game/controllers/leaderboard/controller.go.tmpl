@@ -1,0 +1,34 @@
+package leaderboard
+
+import (
+	"fmt"
+
+	gameleaderboard "{{MODULE}}/game/leaderboard"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcrank "github.com/tjbdwanghaibo/roost-core/service/rank"
+)
+
+// Controller 持有排行榜端点的依赖：rank 服务的客户端。读榜不改任何 Entity，不经过 Nest。
+// 这里只有读：提交分数不对客户端开放，入口是 game/leaderboard 的 Submit。
+type Controller struct {
+	registry *app.Registry
+	ranking  svcrank.Rank
+}
+
+// FromRegistry 在启动时取 rank 服务的客户端；取不到就让进程起不来，而不是等第一条请求再失败。
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	ranking, err := gameleaderboard.Client(registry)
+	if err != nil {
+		return nil, fmt.Errorf("leaderboard controller: %w", err)
+	}
+	return &Controller{registry: registry, ranking: ranking}, nil
+}
+
+// Registry 供需要别的能力的端点使用。
+func (controller *Controller) Registry() *app.Registry {
+	if controller == nil {
+		return nil
+	}
+	return controller.registry
+}

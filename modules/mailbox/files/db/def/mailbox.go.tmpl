@@ -1,0 +1,14 @@
+package dbdef
+
+// MailboxLedger 是邮件附件的领取账本：这名玩家已经到账的邮件。它只落库、不下发。
+//
+// 领一封邮件的附件是三次调用（mail 服务预留 → 本进程 Nest 事务发放 → mail 服务确认），拼不成一个事务。
+// 发放成功而确认丢失时，重试会再预留一次、再来发放一次；mail 服务无从知道游戏发没发，
+// 只有这里知道：邮件 id 与到账的钱写在同一笔事务里，第二次到达在账本上撞到自己，什么也不发。
+type MailboxLedger struct {
+	// Claims 是邮件 id -> 这封邮件自己的过期时刻（Unix 秒，mail 服务随预留交回的 ExpiresAtUnix）。
+	// 值不是“领取时间”：它决定这条记录什么时候可以忘掉——邮件过期后 mail 服务不再给出新预留，
+	// 发放入口也按执行时的业务时间拒绝过期邮件的首次发放，再过一段宽限这条记录才清理
+	// （规则见 game/mailbox.LedgerMayForget，执行在 MailboxComponent.Claim）。
+	Claims map[string]int64 `store:"1"`
+}

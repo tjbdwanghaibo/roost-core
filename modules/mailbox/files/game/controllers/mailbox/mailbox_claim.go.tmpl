@@ -1,0 +1,95 @@
+package mailbox
+
+import (
+	"fmt"
+	"log/slog"
+
+	player "{{MODULE}}/game/entities/player"
+	gamemailbox "{{MODULE}}/game/mailbox"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleMailboxClaim 把一封邮件的附件发给玩家：mail 服务的三步领取，中间夹一笔 Nest 事务。
+//
+//	ReserveClaim            mail 服务交出附件与 token；token 对（玩家，邮件）恒定，重试多少次都是同一个
+//	Sync_MailboxClaimReward Nest 锁住 Player 的一笔事务：金币到账，邮件 id 记进账本，两者同一次提交
+//	CommitClaim             mail 服务把邮件标成已领；回包丢了再确认一次，同一个 token 幂等
+//
+// 让领取恰好一次的是中间那一步。三次调用拼不成一个事务（邮件在另一个进程），所以窗口是真的：
+// 发放成功、CommitClaim 丢了、预留到期、重试用同一个 token 再预留一次。mail 服务只能把它算作重复尝试
+// （它无从知道游戏发没发）；游戏这边知道——第二次发放在账本上撞到自己，什么也不发，回的是同样的数字。
+// 账本为什么能清理、清理为什么不会放出重复发放，见 MailboxComponent.Claim 与 game/mailbox。
+//
+// 每一种中途失败的去向：
+//
+//   - 预留被拒（邮件不存在、不是收件人、已过期、已领、正被占用）：原样答 mail 服务的码，什么都没动。
+//   - 附件这一版发不了（解不出、种类不认识）：CancelClaim 归还预留，答 mailbox_attachment。
+//     邮件保持未领，不会卡在“被占用”直到租约到期，也不会被标成已领。
+//   - 发放被拒（邮件在排队期间过期、余额溢出、玩家还没进入游戏、提交失败）：事务已回滚，账本里没有这一封，
+//     CancelClaim 归还预留，答对应的码。
+//   - 发放成功但 CommitClaim 失败：钱已到账，照常答成功并记 ERROR。邮件在 mail 服务那边仍是未领，
+//     玩家下次再领这一封时账本挡住重复发放、并把确认补上。
+//
+// 仍然开着的窗口：预留成功后、发放前进程崩溃——邮件被占到租约到期（缺省 30 秒），玩家等一会儿再领，
+// 什么都没丢；CommitClaim 丢失——账本挡的是重复发放，不是重复尝试，邮件在列表里会再显示一次可领。
+//
+// 上一次已经完整成功（已确认）而只是回包丢了的重发，预留会被 mail 服务以“已领取”拒绝，
+// 客户端收到那个码就当作已领，余额以自身视图为准。
+func (controller *Controller) HandleMailboxClaim(context *playeraccess.Context, request *pb.MailboxClaimRequest) (*pb.MailboxClaimResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("mailbox_claim endpoint: context and request are required")
+	}
+	refuse := func(err error, stage string) (*pb.MailboxClaimResponse, error) {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("mailbox_claim failed", "player_id", context.PlayerID, "mail_id", request.MailID, "stage", stage, "err", err)
+		}
+		return &pb.MailboxClaimResponse{Code: code, Reason: reason}, nil
+	}
+	ctx := context.Context()
+	// scope 留空：直发邮件按收件人判断归属；广播邮件合并进邮箱时已经核对过范围，条目本身就是收件凭证。
+	claim, err := controller.mailer.ReserveClaim(ctx, context.PlayerID, request.MailID, "")
+	if err != nil {
+		return refuse(err, "reserve")
+	}
+	// release 归还这一次预留（按 token 与 Attempts 认领，晚到的归还清不掉更新的预留）。
+	// 归还失败只记日志：租约到期后邮件自己会重新可领。
+	release := func() {
+		if _, cancelErr := controller.mailer.CancelClaim(ctx, context.PlayerID, request.MailID, claim.Token, claim.Attempts); cancelErr != nil {
+			slog.Warn("mailbox_claim: reservation not released", "player_id", context.PlayerID, "mail_id", request.MailID, "err", cancelErr)
+		}
+	}
+	attachment, err := gamemailbox.Decode(claim.Attachment)
+	if err != nil {
+		release()
+		return refuse(fmt.Errorf("%w: %v", apperrors.ErrMailboxAttachment, err), "decode")
+	}
+	entityID, err := entity.BuildEntityID(context.PlayerID, player.EntityKindPlayer)
+	if err != nil {
+		release()
+		return nil, fmt.Errorf("mailbox_claim endpoint: %w", err)
+	}
+	// 业务时间不在这里传：Nest 在发放执行时填，排队耽搁多久都按执行那一刻判断过期。
+	result, err := controller.rewards.Sync_MailboxClaimReward(ctx, entityID, request.MailID, attachment.Amount, claim.ExpiresAtUnix)
+	if err != nil {
+		// 发放没有发生（事务连同账本记录一起回滚），预留可以归还。即使这个错误其实是“等结果超时、
+		// 事务稍后仍然提交了”，归还也是安全的：下一次领取会在账本上认出这封邮件。
+		release()
+		return refuse(err, "grant")
+	}
+	if !result.Claimed {
+		// 这封邮件已经到过账：这一次是 CommitClaim 丢失之后的重试。下面把确认补上，回的是玩家现有的余额。
+		slog.Info("mailbox_claim: attachment was already granted; committing the mail only", "player_id", context.PlayerID, "mail_id", request.MailID)
+	}
+	if _, err := controller.mailer.CommitClaim(ctx, context.PlayerID, request.MailID, claim.Token); err != nil {
+		// 钱已到账，只是 mail 服务那边没记上。答成功（客户端确实拿到了），记 ERROR；
+		// 不归还预留、不回滚发放：账本已经保证这封邮件不会再发第二次。
+		slog.Error("mailbox_claim: granted but not committed", "player_id", context.PlayerID, "mail_id", request.MailID, "err", err)
+	}
+	return &pb.MailboxClaimResponse{Coins: attachment.Amount, Balance: result.Balance}, nil
+}

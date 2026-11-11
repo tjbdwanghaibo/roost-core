@@ -1,0 +1,17 @@
+package handler
+
+import (
+	player "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/protocol/pb"
+)
+
+// handlerProfileRename 是客户端发起的改名。名字的规则在 ProfileComponent.Rename 里，拒绝时不写任何字段。
+//
+//roost:nest rollback=undo durability=strict
+func handlerProfileRename(target player.IProfileEntity, request *pb.ProfileRenameRequest) (*pb.ProfileRenameResponse, error) {
+	name, err := target.ProfileComp().Rename(request.Name)
+	if err != nil {
+		return nil, err
+	}
+	return &pb.ProfileRenameResponse{Name: name}, nil
+}

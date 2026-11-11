@@ -1,0 +1,36 @@
+package leaderboard
+
+import (
+	"fmt"
+	"log/slog"
+
+	gameleaderboard "{{MODULE}}/game/leaderboard"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleLeaderboardTop 读总分榜的榜头：一次跨进程的类型化调用，不涉及 Entity 锁。
+// 读哪张榜由服务端定（gameleaderboard.TotalBoard），请求只带条数，条数收进上限之后才交给 rank 服务。
+// 榜头说不了不在这一页上的人的事；“我在哪”是另一条协议 LeaderboardMe。
+func (controller *Controller) HandleLeaderboardTop(context *playeraccess.Context, request *pb.LeaderboardTopRequest) (*pb.LeaderboardTopResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("leaderboard_top endpoint: context and request are required")
+	}
+	page, err := controller.ranking.Page(context.Context(), gameleaderboard.TotalBoard(), 0, gameleaderboard.TopLimit(request.Limit))
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("leaderboard_top failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.LeaderboardTopResponse{Code: code, Reason: reason}, nil
+	}
+	response := &pb.LeaderboardTopResponse{Total: page.Total}
+	for _, entry := range page.Entries {
+		response.Rows = append(response.Rows, pb.LeaderboardRow{
+			Rank: entry.Rank, PlayerID: entry.Score.OwnerID, Score: entry.Score.Value,
+		})
+	}
+	return response, nil
+}

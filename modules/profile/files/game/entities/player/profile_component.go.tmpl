@@ -1,0 +1,134 @@
+package player
+
+import (
+	"fmt"
+	"math"
+	"strings"
+	"unicode/utf8"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+)
+
+//roost:component type={{ID:component:Profile}}
+const CompTypeProfile entity.ComponentType = {{ID:component:Profile}}
+
+// ProfileComponent 是玩家档案（名字、等级、经验）的业务逻辑。它不保存事务会改的状态：
+// 三个值都在 PlayerDao.Profile 里，经生成的 setter 修改，所以回滚只有 DAO 一处；不要在这里登记 undo。
+type ProfileComponent struct {
+	entity.ComponentBase
+	owner *Player
+}
+
+// IProfileEntity 是 Nest handler 用这个组件时的窄实体接口；getter 由生成的 Entity 接线实现。
+// 别的功能在自己的 handler 里要发经验时，目标接口里嵌入它即可（同一个实体，同一笔事务）。
+type IProfileEntity interface {
+	entity.IThreadSafeEntity
+	ProfileComp() *ProfileComponent
+}
+
+func init() {
+	entity.RegisterComponentFactory(CompTypeProfile, func(owner any, _ *entity.EntityCreateParam) (entity.ComponentInterfaceBase, error) {
+		typed, ok := owner.(*Player)
+		if !ok {
+			return nil, fmt.Errorf("profile component: owner %T is not *Player", owner)
+		}
+		return &ProfileComponent{owner: typed}, nil
+	})
+}
+
+// Name 是框架要的组件名，不是玩家的名字；玩家的名字见 DisplayName。
+func (component *ProfileComponent) Name() string { return "profile" }
+
+// Owner 只在实体存活且被 Nest 锁住期间可用。
+func (component *ProfileComponent) Owner() *Player { return component.owner }
+
+// 下面是业务方法。不要在组件里加锁：Nest 锁住所属实体之后才进入业务 handler。
+
+// ProfileNameMaxRunes 是名字的长度上限，按字符（rune）数而不是字节数：一个汉字算一个。
+const ProfileNameMaxRunes = 16
+
+// ProfileExpPerLevel 是每升一级需要的经验。曲线是平的：每一级都要这么多。
+// 要换成按等级查表的曲线时改 planExp，并保持“不按升级数逐级循环”（见那里的说明）。
+const ProfileExpPerLevel int64 = 100
+
+// Rename 把显示名改成 name 去掉首尾空白之后的结果，并返回存下的名字。
+// 拒绝且不写任何字段的情况：不是合法 UTF-8（profile_name_invalid）、去掉首尾空白后为空
+// （profile_name_empty）、去掉首尾空白后超过 ProfileNameMaxRunes 个字符（profile_name_long）。
+//
+// 编码要单独查：数字符时一个坏字节算一个字符，不查的话 16 个以内的坏字节序列会通过另外两条检查存进档里，
+// 之后同步给客户端的就是一段解不出来的名字。
+// 这里不查重名、不查敏感词、不限改名次数与花费：那些是项目自己的规则，加在这个函数里、写入之前。
+func (component *ProfileComponent) Rename(name string) (string, error) {
+	if !utf8.ValidString(name) {
+		return "", apperrors.ErrProfileNameInvalid
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", apperrors.ErrProfileNameEmpty
+	}
+	if utf8.RuneCountInString(name) > ProfileNameMaxRunes {
+		return "", apperrors.ErrProfileNameLong
+	}
+	component.owner.Dao().GetProfile().SetName(name)
+	return name, nil
+}
+
+// planExp 只读地算出发放 amount 之后的等级内经验与升级数，不写任何字段。
+//
+// 经验是 int64、等级是 int32：先确认加法不溢出、升级后的等级仍在 int32 内，再按平的曲线除余。
+// 不按升级数逐级循环：一次大额发放若逐级减，会按数额大小占住业务 worker。
+// 已存的经验或等级为负说明存档已坏，一并拒绝，不在坏值上继续累加。
+func (component *ProfileComponent) planExp(amount int64) (exp int64, gained int32, err error) {
+	if amount <= 0 {
+		return 0, 0, apperrors.ErrProfileExpInvalid
+	}
+	profile := component.owner.Dao().GetProfile()
+	currentExp, currentLevel := profile.GetExp(), profile.GetLevel()
+	if currentExp < 0 || currentLevel < 0 || amount > math.MaxInt64-currentExp {
+		return 0, 0, apperrors.ErrProfileExpOverflow
+	}
+	total := currentExp + amount
+	levels := total / ProfileExpPerLevel
+	if levels > int64(math.MaxInt32)-int64(currentLevel) {
+		return 0, 0, apperrors.ErrProfileExpOverflow
+	}
+	return total % ProfileExpPerLevel, int32(levels), nil
+}
+
+// AddExp 发放 amount 点经验，够升级就升（一次可以升多级），返回升了几级。
+// 数额不是正数（profile_exp_invalid）、经验或等级超出存储范围（profile_exp_overflow）时不写任何字段。
+//
+// 升了级就调一次 onLevelUp（profile_levelup.go，归工程所有，升级奖励写在那里）。它与经验、等级在
+// 同一笔事务里：它返回错误时这里原样返回，handler 以错误结束，Nest 把已经写下的经验和等级一起撤回。
+// 所以调用方拿到错误后不要吞掉继续提交——那样等级升了、奖励没发。
+//
+// 这个方法不判重：同一次发放调两次就加两次。“这一局、这个任务发过没有”由调用方记在自己的状态里，
+// 先判重再调它，事实与经验在同一笔事务里提交或回滚。
+func (component *ProfileComponent) AddExp(amount int64) (int32, error) {
+	exp, gained, err := component.planExp(amount)
+	if err != nil {
+		return 0, err
+	}
+	profile := component.owner.Dao().GetProfile()
+	profile.SetExp(exp)
+	if gained == 0 {
+		return 0, nil
+	}
+	from := profile.GetLevel()
+	profile.SetLevel(from + gained)
+	if err := component.onLevelUp(from, from+gained); err != nil {
+		return 0, err
+	}
+	return gained, nil
+}
+
+// DisplayName、Level、Exp 给已经持有实体锁的调用方读当前值。
+func (component *ProfileComponent) DisplayName() string {
+	return component.owner.Dao().GetProfile().GetName()
+}
+func (component *ProfileComponent) Level() int32 {
+	return component.owner.Dao().GetProfile().GetLevel()
+}
+func (component *ProfileComponent) Exp() int64 { return component.owner.Dao().GetProfile().GetExp() }

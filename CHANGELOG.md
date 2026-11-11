@@ -9,8 +9,18 @@
   - 约定：模块状态是嵌套结构体，追加在所挂实体主 DAO 的末尾，同步与否按顶层字段决定；协议号、错误码、组件号从 `roost.yaml` 的 `ids` 段分配，归属记在新的 `roost.yaml` `modules` 段。没有卸载。
   - 模块：`wallet`（余额；`Add` 给自己判重的调用方、`Apply` 带业务键并在最近 128 次的去重窗口内只生效一次；消费协议；8 条场景）、`checkin`（每日签到，按业务日切分，依赖 wallet，奖励在同一笔事务里发放，6 条场景）、`chat`（世界频道与私聊的发送、向在线玩家推送、翻历史、系统公告，经托管的 chat 服务，替换它默认拒绝一切的 collaborators，8 条场景）。`enter`（进入游戏：建档、首次初始化入口，安装时打开玩家 TCP 接入与自身视图，3 条场景）。模块清单的 `replaces` 让模块接管一个没改过的生成桩（业务改过就拒绝安装），`access` 让安装器代办玩家接入的前置。
   - 文档：新增[能力清单](docs/framework/CAPABILITIES.md)（按需求条目查 core 的能力、接入方式与现成参考）；roost-genre skill 新增“按需求组合”流程（[compose.md](docs/agent-skills/roost-genre/references/compose.md)），由一个只凭文档的 agent 按一段需求实测过一轮，暴露的模块缺陷与文档缺口已修（[实施记录 §17.5](docs/maintenance/FEATURE-2026-11-10-business-modules.md#175-只凭-skill-的实测2026-11-10)）。
-  - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：只有四个模块（13 类玩法与 game-demo 的业务尚未拆成模块），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
+  - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：模块还少（13 类玩法与 game-demo 的大部分业务尚未拆成模块），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
   - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
+
+- **新增**（modules）：**第二批业务模块 profile、bag、leaderboard、mailbox**（维护者 2026-11-11：“继续拆下一批”），照 game-demo 的做法拆成独立模块，只要求新生成的工程能直接用。
+  - `profile`（16 条场景）：名字、等级、经验；改名协议、服务端发经验、升级钩子（业务文件）。
+  - `bag`（12 条）：按道具号堆叠的背包；丢弃协议、服务端发放；道具合法性是业务文件。
+  - `leaderboard`（15 条）：全服总分榜的前 N 名与自己的名次，经托管的 rank 服务；提交分数是给服务端调的函数。
+  - `mailbox`（21 条，依赖 wallet）：邮件列表与领取金币附件，经托管的 mail 服务三步领取，Player 上的账本保证每封至多到账一次。
+  - 门禁 `scripts/test-modules-generated.sh` 增加两步：在已有四个模块的工程上叠这四个；全新工程换顺序一次装完八个并重复安装。
+  - 同一个脚本修了一条过时的断言：chat 模块自带 `access.transport: tcp` 之后，先装 chat 再装 enter 时 TCP 接入由 chat 那一步装好，脚本仍断言 enter 那一步执行 `roost add transport tcp`，从“demo 聊天改用 chat 模块”那个提交起这一条门禁是红的（当时只跑了 codegen 的用例，没有重跑这个脚本）。现在各步断言自己的前置。
+  - 验证：全新工程一次装八个，`roost module verify` 八个模块场景数全对（8 / 6 / 8 / 3 / 16 / 12 / 15 / 21）加四项工程检查，`go test ./...` 通过，`project doctor` 只剩 account / platform / session 三个拒绝桩。
+  - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：模块之间没有登记点、模块没有配置、game-demo 还没有换用这四个。
 
 - **变更 / 协议变化**（game-demo + modules）：**game-demo 的聊天改用 chat 业务模块，demo 自己不再带一份**（维护者 2026-11-11：“把 chat 和 enter 和 demo 中的统一”）。`-template game-demo` 生成时安装 chat 模块（`demo.go` 的 `demoModuleSteps`，排在全部 demo 步骤之后，协议号从 `ids` 段分配）；demo 的 `game/chatroom`、`controllers/player` 下的三个聊天文件、三个聊天协议定义、`internal/service/<game>/presence.go` 与 chat 的 collaborators 模板删除，登录公告与在线名单改经 `Controller.Chat()`（模块的 controller）。
   - 协议：`SendChat` 改名 `ChatSend`，三条聊天协议的 controller 域由 `player` 改为 `chat`，消息号由写死的 10006 / 10007 / 10101 改为安装时分配；消息体形状不变。压测机器人已跟着改名。

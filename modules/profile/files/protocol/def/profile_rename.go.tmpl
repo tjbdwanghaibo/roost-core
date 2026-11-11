@@ -1,0 +1,21 @@
+//go:build protocoldef
+
+package protocoldef
+
+// ProfileRenameRequest 是改名请求。改谁的名取已认证的连接，不取请求字段。
+type ProfileRenameRequest struct {
+	Name string `pb:"1"`
+}
+
+// ProfileRenameResponse：Name 是存下的名字（去掉了首尾空白），客户端以它为准显示。
+type ProfileRenameResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	Name   string `pb:"3"`
+}
+
+//roost:protocol group=game handler=profile
+type ProfileRenameProtocol interface {
+	//roost:msg id={{ID:protocol:ProfileRename}}
+	ProfileRename(ProfileRenameRequest) ProfileRenameResponse
+}

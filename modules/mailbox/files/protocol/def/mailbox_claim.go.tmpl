@@ -1,0 +1,25 @@
+//go:build protocoldef
+
+package protocoldef
+
+// MailboxClaimRequest 领一封邮件的附件。MailID 取自 MailboxList 的条目；领的是谁的邮件取认证会话。
+// 没收到回包就用同一个 MailID 重发：附件至多到账一次。上一次其实已经完整领完时，
+// 重发会收到 mail 服务的“已领取”码（Code 非 0），当作已领即可，余额以自身视图为准。
+type MailboxClaimRequest struct {
+	MailID string `pb:"1"`
+}
+
+// MailboxClaimResponse 带回这封邮件发了多少金币（Coins）与到账后的余额（Balance）。
+// 上一次发了钱但没来得及确认时，重发仍答成功：Coins 是这封邮件的数额、Balance 是当前余额，不会多发。
+type MailboxClaimResponse struct {
+	Code    int32  `pb:"1"`
+	Reason  string `pb:"2"`
+	Coins   int64  `pb:"3"`
+	Balance int64  `pb:"4"`
+}
+
+//roost:protocol group=game handler=mailbox
+type MailboxClaimProtocol interface {
+	//roost:msg id={{ID:protocol:MailboxClaim}}
+	MailboxClaim(MailboxClaimRequest) MailboxClaimResponse
+}

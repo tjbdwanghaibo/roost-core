@@ -1,0 +1,48 @@
+package mailbox
+
+import (
+	"fmt"
+
+	syncsender "{{MODULE}}/game/handler/syncsender"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+// Controller 持有邮件端点的依赖：mail 服务的客户端（列表、预留、确认、归还都是对它的跨进程调用），
+// 以及发放附件用的 Nest Sender（改 Player 只能经 Nest，端点自己不取实体锁）。
+type Controller struct {
+	registry *app.Registry
+	mailer   svcmail.Mail
+	rewards  *syncsender.MailboxClaimRewardSender
+}
+
+// FromRegistry 取 mail 服务的客户端（业务服务在 roost.yaml 里 uses: [mail] 时由 ClientMod 发布）与 Nest 客户端。
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("mailbox controller: app registry is required")
+	}
+	client, ok := app.Lookup[corenest.Client](registry, app.ModName("nest"))
+	if !ok || client == nil {
+		return nil, fmt.Errorf("mailbox controller: nest client is unavailable")
+	}
+	mailer, ok := app.Lookup[svcmail.Mail](registry, svcmail.CapabilityName)
+	if !ok || mailer == nil {
+		return nil, fmt.Errorf("mailbox controller: capability %q not found; list mail under services.<service>.uses in roost.yaml", svcmail.CapabilityName)
+	}
+	return newController(registry, client, mailer), nil
+}
+
+// newController 把依赖接成 Controller；FromRegistry 与本包的测试共用它。
+func newController(registry *app.Registry, client corenest.Client, mailer svcmail.Mail) *Controller {
+	return &Controller{registry: registry, mailer: mailer, rewards: syncsender.NewMailboxClaimRewardSender(client)}
+}
+
+// Registry 供需要别的能力的端点使用。
+func (controller *Controller) Registry() *app.Registry {
+	if controller == nil {
+		return nil
+	}
+	return controller.registry
+}

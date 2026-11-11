@@ -1,0 +1,12 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 背包模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+var (
+	ErrBagItemInvalid  = errcode.Define({{ID:errcode:bag_item_invalid}}, "bag_item_invalid", "unknown item")
+	ErrBagCountInvalid = errcode.Define({{ID:errcode:bag_count_invalid}}, "bag_count_invalid", "item count must be positive")
+	ErrBagShort        = errcode.Define({{ID:errcode:bag_short}}, "bag_short", "not enough items")
+	ErrBagStackFull    = errcode.Define({{ID:errcode:bag_stack_full}}, "bag_stack_full", "item stack is full")
+	ErrBagKindsFull    = errcode.Define({{ID:errcode:bag_kinds_full}}, "bag_kinds_full", "bag has no room for another kind of item")
+)

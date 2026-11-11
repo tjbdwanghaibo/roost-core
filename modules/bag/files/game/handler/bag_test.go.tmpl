@@ -1,0 +1,424 @@
+package handler
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"sync/atomic"
+	"testing"
+
+	db "{{MODULE}}/db"
+	playerentity "{{MODULE}}/game/entities/player"
+	sender "{{MODULE}}/game/handler/syncsender"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+)
+
+// 需求里的数在这里写死，不引用被测代码的常量：常量改错了这些用例要变红。
+const (
+	bagTestMaxKinds = 200    // 不同道具种类数的上限
+	bagTestMaxStack = 999999 // 单种道具的数量上限
+)
+
+// 测试替身自己带一份，不借用别的模块的测试文件：那些文件归工程所有，可能被改。
+type bagGetter map[int64]entity.IThreadSafeEntity
+
+func (g bagGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+
+func (g bagGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// bagCommitter 是替身提交器：不落盘，reject 打开时拒绝提交，用来验证回滚。
+type bagCommitter struct{ reject atomic.Bool }
+
+func (c *bagCommitter) Commit(context.Context, dataengine.CommitRecord) error {
+	if c.reject.Load() {
+		return errors.New("injected rejection")
+	}
+	return nil
+}
+
+type bagFixture struct {
+	engine    *nest.NestMgr
+	player    *playerentity.Player
+	discardTo *sender.BagDiscardSender
+	grantTo   *sender.BagGrantSender
+	committer *bagCommitter
+}
+
+func newBagFixture(t *testing.T) *bagFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	RegisterBagDiscardNestHandlers()
+	RegisterBagGrantNestHandlers()
+	f := &bagFixture{committer: &bagCommitter{}}
+	id, err := entity.BuildEntityID(95001, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = built.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(bagGetter{id: built}), nest.NestOptionWithTransactionCommitter(f.committer),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.discardTo = sender.NewBagDiscardSender(f.engine)
+	f.grantTo = sender.NewBagGrantSender(f.engine)
+	return f
+}
+
+// locked 在业务 worker 上持实体锁执行 read：只用来读，写入一律走 Nest handler。
+func (f *bagFixture) locked(t *testing.T, read func()) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		read()
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// snapshot 把背包整份读出来：道具号 -> 数量。键在不在、数量是多少都从这里断言。
+func (f *bagFixture) snapshot(t *testing.T) map[int64]int64 {
+	t.Helper()
+	items := map[int64]int64{}
+	f.locked(t, func() {
+		f.player.Dao().GetBag().RangeItems(func(itemID, count int64) bool {
+			items[itemID] = count
+			return true
+		})
+	})
+	return items
+}
+
+// wantItems 断言背包恰好是 want：多一个键、少一个键、数量不同都算错。
+func (f *bagFixture) wantItems(t *testing.T, when string, want map[int64]int64) {
+	t.Helper()
+	got := f.snapshot(t)
+	if len(got) != len(want) {
+		t.Fatalf("%s: bag = %v, want %v", when, got, want)
+	}
+	for itemID, count := range want {
+		if held, ok := got[itemID]; !ok || held != count {
+			t.Fatalf("%s: bag = %v, want %v", when, got, want)
+		}
+	}
+}
+
+// grant 走服务端发放的 handler，返回发放后的数量。
+func (f *bagFixture) grant(itemID, count int64) (int64, error) {
+	return f.grantTo.Sync_BagGrant(context.Background(), f.player.ID(), itemID, count)
+}
+
+func (f *bagFixture) mustGrant(t *testing.T, itemID, count int64) int64 {
+	t.Helper()
+	held, err := f.grant(itemID, count)
+	if err != nil {
+		t.Fatalf("grant %d x%d: %v", itemID, count, err)
+	}
+	return held
+}
+
+// discard 走客户端丢弃协议对应的 handler。
+func (f *bagFixture) discard(itemID, count int64) (*pb.BagDiscardResponse, error) {
+	return f.discardTo.Sync_BagDiscard(context.Background(), f.player.ID(), &pb.BagDiscardRequest{ItemID: itemID, Count: count})
+}
+
+func TestBagGrantAddsANewItem(t *testing.T) {
+	f := newBagFixture(t)
+	f.wantItems(t, "new player", map[int64]int64{})
+	if held := f.mustGrant(t, 1001, 5); held != 5 {
+		t.Fatalf("held = %d, want 5", held)
+	}
+	f.wantItems(t, "after the first grant", map[int64]int64{1001: 5})
+}
+
+func TestBagGrantStacksOnAnExistingItem(t *testing.T) {
+	f := newBagFixture(t)
+	f.mustGrant(t, 1001, 5)
+	if held := f.mustGrant(t, 1001, 7); held != 12 {
+		t.Fatalf("held = %d, want 12", held)
+	}
+	f.mustGrant(t, 1002, 1)
+	f.wantItems(t, "two kinds", map[int64]int64{1001: 12, 1002: 1})
+}
+
+// 丢弃协议对应的 handler：扣掉数量，回包带道具号与剩下的数量，别的道具不动。
+func TestBagDiscardRemovesItems(t *testing.T) {
+	f := newBagFixture(t)
+	f.mustGrant(t, 1001, 10)
+	f.mustGrant(t, 1002, 4)
+	response, err := f.discard(1001, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.ItemID != 1001 || response.Left != 7 {
+		t.Fatalf("response = %+v, want item 1001 with 7 left", response)
+	}
+	f.wantItems(t, "after discarding 3", map[int64]int64{1001: 7, 1002: 4})
+}
+
+// 扣到 0 时键消失，不留数量为 0 的条目：种类数按键的个数算。
+func TestBagDiscardToZeroDeletesTheKey(t *testing.T) {
+	f := newBagFixture(t)
+	f.mustGrant(t, 1001, 10)
+	f.mustGrant(t, 1002, 4)
+	response, err := f.discard(1001, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Left != 0 {
+		t.Fatalf("left = %d, want 0", response.Left)
+	}
+	f.wantItems(t, "after discarding everything of 1001", map[int64]int64{1002: 4})
+	// 删掉的道具再发放是一个新键，从 0 起算。
+	if held := f.mustGrant(t, 1001, 2); held != 2 {
+		t.Fatalf("held = %d, want 2", held)
+	}
+}
+
+func TestBagDiscardWithoutEnoughItemsWritesNothing(t *testing.T) {
+	f := newBagFixture(t)
+	f.mustGrant(t, 1001, 2)
+	if _, err := f.discard(1001, 3); !errors.Is(err, apperrors.ErrBagShort) {
+		t.Fatalf("discarding more than held: err = %v, want bag_short", err)
+	}
+	// 没有的道具也是不足，包括不合法的道具号：丢弃不查道具表。
+	for _, itemID := range []int64{1002, 0, -7} {
+		if _, err := f.discard(itemID, 1); !errors.Is(err, apperrors.ErrBagShort) {
+			t.Fatalf("discarding item %d that is not held: err = %v, want bag_short", itemID, err)
+		}
+	}
+	f.wantItems(t, "after the refusals", map[int64]int64{1001: 2})
+}
+
+func TestBagInvalidItemOrCountIsRefused(t *testing.T) {
+	f := newBagFixture(t)
+	f.mustGrant(t, 1001, 5)
+	for _, itemID := range []int64{0, -1} {
+		if _, err := f.grant(itemID, 1); !errors.Is(err, apperrors.ErrBagItemInvalid) {
+			t.Fatalf("grant item %d: err = %v, want bag_item_invalid", itemID, err)
+		}
+	}
+	for _, count := range []int64{0, -1, math.MinInt64} {
+		if _, err := f.grant(1001, count); !errors.Is(err, apperrors.ErrBagCountInvalid) {
+			t.Fatalf("grant count %d: err = %v, want bag_count_invalid", count, err)
+		}
+		if _, err := f.grant(1002, count); !errors.Is(err, apperrors.ErrBagCountInvalid) {
+			t.Fatalf("grant count %d of a new item: err = %v, want bag_count_invalid", count, err)
+		}
+		if _, err := f.discard(1001, count); !errors.Is(err, apperrors.ErrBagCountInvalid) {
+			t.Fatalf("discard count %d: err = %v, want bag_count_invalid", count, err)
+		}
+	}
+	f.wantItems(t, "after the refusals", map[int64]int64{1001: 5})
+}
+
+// 单种上限 999999：正好放满可以，多一个被拒且不写；数量大到相加会溢出 int64 时同样被拒。
+func TestBagStackOverflowIsRefused(t *testing.T) {
+	f := newBagFixture(t)
+	f.mustGrant(t, 1001, 1)
+	if held := f.mustGrant(t, 1001, bagTestMaxStack-1); held != bagTestMaxStack {
+		t.Fatalf("held = %d, want a full stack of %d", held, bagTestMaxStack)
+	}
+	f.mustGrant(t, 1002, 1)
+	refused := []struct {
+		itemID, count int64
+	}{
+		{1001, 1},                   // 满的那一种再加一个
+		{1002, bagTestMaxStack},     // 已有 1 个，再加一整堆
+		{1002, math.MaxInt64},       // 1 + MaxInt64 溢出成负数，不能绕过上限
+		{1003, bagTestMaxStack + 1}, // 新道具一次超过上限
+		{1003, math.MaxInt64},
+	}
+	for _, c := range refused {
+		if _, err := f.grant(c.itemID, c.count); !errors.Is(err, apperrors.ErrBagStackFull) {
+			t.Fatalf("grant %d x%d: err = %v, want bag_stack_full", c.itemID, c.count, err)
+		}
+	}
+	f.wantItems(t, "after the refusals", map[int64]int64{1001: bagTestMaxStack, 1002: 1})
+	// 满了之后照常能扣，扣掉的可以再补回到正好满。
+	if response, err := f.discard(1001, 10); err != nil || response.Left != bagTestMaxStack-10 {
+		t.Fatalf("discard from a full stack: response=%+v err=%v", response, err)
+	}
+	if held := f.mustGrant(t, 1001, 10); held != bagTestMaxStack {
+		t.Fatalf("held = %d, want %d", held, bagTestMaxStack)
+	}
+	if held := f.mustGrant(t, 1003, bagTestMaxStack); held != bagTestMaxStack {
+		t.Fatalf("a new item granted as one full stack: held = %d", held)
+	}
+}
+
+// 种类上限 200：到上限后新种类被拒且不写，已有的种类照常加减；扣空一种腾出的位置可以放新种类。
+func TestBagKindsCapRefusesNewKindsButKeepsExistingOnesWorking(t *testing.T) {
+	f := newBagFixture(t)
+	want := map[int64]int64{}
+	for i := int64(1); i <= bagTestMaxKinds; i++ {
+		f.mustGrant(t, i, 2)
+		want[i] = 2
+	}
+	f.wantItems(t, "at the cap", want)
+	if _, err := f.grant(5001, 1); !errors.Is(err, apperrors.ErrBagKindsFull) {
+		t.Fatalf("kind %d: err = %v, want bag_kinds_full", bagTestMaxKinds+1, err)
+	}
+	f.wantItems(t, "after the refused kind", want)
+
+	// 到上限之后已有的种类照常加、照常扣。
+	if held := f.mustGrant(t, 7, 3); held != 5 {
+		t.Fatalf("stacking at the cap: held = %d, want 5", held)
+	}
+	if response, err := f.discard(8, 1); err != nil || response.Left != 1 {
+		t.Fatalf("discarding at the cap: response=%+v err=%v", response, err)
+	}
+	want[7], want[8] = 5, 1
+	f.wantItems(t, "after working at the cap", want)
+
+	// 扣空一种，位置腾出来：新种类放得进去，再来一种又被拒。
+	if _, err := f.discard(8, 1); err != nil {
+		t.Fatal(err)
+	}
+	delete(want, 8)
+	if held := f.mustGrant(t, 5001, 1); held != 1 {
+		t.Fatalf("a new kind after one was emptied: held = %d", held)
+	}
+	want[5001] = 1
+	if _, err := f.grant(5002, 1); !errors.Is(err, apperrors.ErrBagKindsFull) {
+		t.Fatalf("err = %v, want bag_kinds_full", err)
+	}
+	f.wantItems(t, "back at the cap", want)
+}
+
+// Has 与 Remove 的判断一致；Count 对没有的道具是 0。别的功能扣道具前用它们判断。
+func TestBagHasMatchesWhatRemoveAccepts(t *testing.T) {
+	f := newBagFixture(t)
+	f.mustGrant(t, 1001, 5)
+	f.locked(t, func() {
+		bag := f.player.BagComp()
+		if got := bag.Count(1001); got != 5 {
+			t.Errorf("Count(1001) = %d, want 5", got)
+		}
+		if got := bag.Count(1002); got != 0 {
+			t.Errorf("Count of an item not held = %d, want 0", got)
+		}
+		cases := []struct {
+			itemID, count int64
+			want          bool
+		}{
+			{1001, 1, true}, {1001, 5, true}, {1001, 6, false},
+			{1001, 0, false}, {1001, -1, false},
+			{1002, 1, false}, {1002, 0, false},
+		}
+		for _, c := range cases {
+			if got := bag.Has(c.itemID, c.count); got != c.want {
+				t.Errorf("Has(%d, %d) = %v, want %v", c.itemID, c.count, got, c.want)
+			}
+		}
+	})
+}
+
+// 组件自己做到“拒绝时零写入”，不靠 handler 返回错误后的回滚：别的功能在自己的 handler 里调
+// Add / Remove，被拒后可能不返回错误而走别的分支（背包满了改发邮件），那时没有回滚替它擦掉半截写入。
+// 这里直接调组件、不经 Nest，所以每次拒绝之后立刻读 DAO。
+func TestBagComponentRefusalsWriteNothingWithoutARollback(t *testing.T) {
+	f := newBagFixture(t)
+	for i := int64(1); i <= bagTestMaxKinds; i++ {
+		f.mustGrant(t, i, 2)
+	}
+	f.mustGrant(t, 1, bagTestMaxStack-2) // 道具 1 放满
+	f.locked(t, func() {
+		bag := f.player.BagComp()
+		state := f.player.Dao().GetBag()
+		refusals := []struct {
+			name   string
+			call   func() (int64, error)
+			want   error
+			itemID int64
+			held   int64 // 拒绝之后这种道具应有的数量；0 表示键不存在
+		}{
+			{"add to a full stack", func() (int64, error) { return bag.Add(1, 1) }, apperrors.ErrBagStackFull, 1, bagTestMaxStack},
+			{"add a kind past the cap", func() (int64, error) { return bag.Add(5001, 1) }, apperrors.ErrBagKindsFull, 5001, 0},
+			{"add an invalid item", func() (int64, error) { return bag.Add(0, 1) }, apperrors.ErrBagItemInvalid, 0, 0},
+			{"add a non-positive count", func() (int64, error) { return bag.Add(2, -1) }, apperrors.ErrBagCountInvalid, 2, 2},
+			{"remove more than held", func() (int64, error) { return bag.Remove(2, 3) }, apperrors.ErrBagShort, 2, 2},
+			{"remove an item not held", func() (int64, error) { return bag.Remove(5001, 1) }, apperrors.ErrBagShort, 5001, 0},
+			{"remove a non-positive count", func() (int64, error) { return bag.Remove(2, 0) }, apperrors.ErrBagCountInvalid, 2, 2},
+		}
+		for _, c := range refusals {
+			if _, err := c.call(); !errors.Is(err, c.want) {
+				t.Errorf("%s: err = %v, want %v", c.name, err, c.want)
+			}
+			held, ok := state.GetItems(c.itemID)
+			if held != c.held || ok != (c.held != 0) || state.ItemsLen() != bagTestMaxKinds {
+				t.Errorf("%s wrote: item %d = %d (present=%v), kinds = %d", c.name, c.itemID, held, ok, state.ItemsLen())
+			}
+		}
+	})
+}
+
+// 提交被拒绝时，加、减、删键、新增键都回滚；之后同样的请求照常生效。
+func TestBagRejectedCommitRollsBack(t *testing.T) {
+	f := newBagFixture(t)
+	f.mustGrant(t, 1001, 10)
+	f.mustGrant(t, 1002, 4)
+	f.committer.reject.Store(true)
+	if _, err := f.discard(1001, 3); err == nil {
+		t.Fatal("a rejected discard reported success")
+	}
+	if _, err := f.discard(1002, 4); err == nil {
+		t.Fatal("a rejected discard-to-zero reported success")
+	}
+	if _, err := f.grant(1001, 5); err == nil {
+		t.Fatal("a rejected grant reported success")
+	}
+	if _, err := f.grant(1003, 1); err == nil {
+		t.Fatal("a rejected grant of a new item reported success")
+	}
+	f.committer.reject.Store(false)
+	f.wantItems(t, "after the rejected commits", map[int64]int64{1001: 10, 1002: 4})
+	if response, err := f.discard(1001, 3); err != nil || response.Left != 7 {
+		t.Fatalf("discard after rollback: response=%+v err=%v", response, err)
+	}
+	if held := f.mustGrant(t, 1003, 1); held != 1 {
+		t.Fatalf("grant after rollback: held = %d, want 1", held)
+	}
+	f.wantItems(t, "after retrying", map[int64]int64{1001: 7, 1002: 4, 1003: 1})
+}
+
+// Bag 下发给玩家本人。只断言背包自己的字段：同一个 DAO 上还有别的模块的字段。
+func TestBagStateIsSynced(t *testing.T) {
+	for _, field := range db.PlayerDaoSyncFields() {
+		if field.Name == "Bag" {
+			return
+		}
+	}
+	t.Fatal("PlayerDao.Bag is not synced: the player would not see the bag")
+}

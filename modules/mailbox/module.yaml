@@ -1,0 +1,22 @@
+name: mailbox
+summary: 邮件：分页列出自己的邮件、领取金币附件；经托管的 mail 服务三步领取，Player 上的领取账本保证每封至多到账一次
+requires: [wallet]
+conflicts: []
+needs:
+  mods: [nest]
+  features: [protocol, entity, dao, errcode]
+  uses: [mail]
+entity: Player
+state:
+  - field: MailboxLedger
+    type: MailboxLedger
+    store: mailbox_ledger
+    dao: persist
+    comment: MailboxLedger 是邮件模块的领取账本（已到账的邮件 id -> 该邮件的过期时刻），只落库、不下发。
+component: Mailbox
+protocols: [MailboxList, MailboxClaim]
+errcodes: [mailbox_invalid, mailbox_attachment]
+verify:
+  packages: [./game/handler, ./game/mailbox, ./game/controllers/mailbox]
+  run: ^TestMailbox
+  pass: 21

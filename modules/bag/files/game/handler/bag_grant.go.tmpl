@@ -1,0 +1,15 @@
+package handler
+
+import player "{{MODULE}}/game/entities/player"
+
+// handlerBagGrant 是服务端发放道具（奖励、GM、别的功能触发），不对客户端开放：没有协议与端点，
+// 由服务端代码经生成的 Sender 调用，返回发放后的数量。
+//
+// 它不判重，调一次发一次。调用方有“这一次发过没有”的事实要记（邮件附件、订单、任务奖励）时，
+// 不要用它：在自己的 Nest handler 里先判自己的状态，再调同一个实体上的 BagComp().Add，
+// 事实与道具在同一笔事务里提交或回滚。
+//
+//roost:nest rollback=undo durability=strict
+func handlerBagGrant(target player.IBagEntity, itemID int64, count int64) (int64, error) {
+	return target.BagComp().Add(itemID, count)
+}

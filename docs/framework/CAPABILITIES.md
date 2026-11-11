@@ -227,6 +227,10 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 每日签到 checkin | 按业务日（业务时区与每日重置时刻）切分，连续天数加成，奖励经货币模块在同一笔事务里发放 | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。奖励规则是样例，在组件里改；跨天后没有新写入时客户端看到的仍是上一次的记录，按 `LastDay` 比对 | 同上 |
 | 聊天 chat | 世界频道与一对一私聊：发送、向在线玩家推送、按序号翻历史；系统公告入口（`AnnounceWorld`，给服务端别的功能用）；消息存在托管的 chat 服务里，频道政策与消息体校验在工程这一侧 | `roost module add chat`（业务服务要 `uses: [chat]`，`-template game` 已有；安装时替换 chat 服务的拒绝桩，并要求玩家 TCP 接入）；game-demo 用的就是它 | 现成模块。在线名单按进程计，多个 game 进程不互相扇出；没有群组频道；不经过 Nest，不改任何实体 | 同上 |
 | 进入游戏 enter | 登录后的第一条请求：加载或创建 Player，并跑“首次初始化”（做过没有记在档里，建档后崩溃下次进入补上）；新玩家的初始发放写在一个业务文件里 | `roost module add enter`；安装时一并打开玩家 TCP 接入与自身视图 | 现成模块。不含鉴权（`auth.go` 缺省拒绝，谁是哪个玩家由它决定）；端点里“建档 → 初始化”的串接没有离线用例 | 同上 |
+| 玩家档案 profile | 名字、等级、经验；改名协议；服务端发经验的 handler（每级固定经验、可连升多级）；升级钩子是一个业务文件 | `roost module add profile`；别的业务调 `ProfileComp().AddExp(n)`，升级奖励写在 `profile_levelup.go` | 现成模块。名字不查重（全服唯一用 directory 服务）、不查敏感词；每级 100 经验是样例；没有等级上限 | 同上 |
+| 玩家背包 bag | 道具号到数量的堆叠背包：增、减、查；丢弃协议；服务端发放 handler | `roost module add bag`；别的业务在自己的组件里调 `BagComp().Add / Remove / Has` | 现成模块。没有格子、装备、过期与道具表：道具号合法性在 `bag_items.go`，缺省只要求为正；至多 200 种、单种至多 999999 | 同上 |
+| 排行榜 leaderboard | 一张全服总分榜：前 N 名与自己的名次两条协议；提交分数的函数给服务端别的功能调 | `roost module add leaderboard`（业务服务要 `uses: [rank]`，`-template game` 已有）；持有总分的功能在事务之外调 `leaderboard.Submit` | 现成模块。只升不降；只有一个榜、一个周期，换周期是改常量后发版；与改总分的事务不是原子的，失败靠重试或下一次提交补上 | 同上 |
+| 邮件 mailbox | 分页列出自己的邮件、领取金币附件；每封至多到账一次 | `roost module add mailbox`（连同 wallet；业务服务要 `uses: [mail]`，`-template game` 已有） | 现成模块。附件只认金币（别的附件不可领，保持未领）；没有发件方、已读与删除协议；启用 `LazyBroadcast` 的工程要自己在进入游戏时调 `PullBroadcasts` | 同上 |
 
 ### 13 类玩法纵切
 
@@ -290,7 +294,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 需求或类型 | 结论 | 是哪条限制 | 出处 |
 | --- | --- | --- | --- |
-| 按玩法的配方（`roost project new -recipe`）、把 13 类玩法与 game-demo 拆成模块 | 只有设计 | 业务模块安装器已实现（见“业务模块命令”），目前只有四个模块；配方与现有玩法、demo 的迁移是方案的后几期 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
+| 按玩法的配方（`roost project new -recipe`）、把 13 类玩法与 game-demo 拆成模块 | 只有设计 | 业务模块安装器已实现（见“业务模块命令”），目前有八个模块，game-demo 用上了其中的 enter 与 chat；配方与其余玩法、demo 其余功能的迁移是方案的后几期 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
 | 业务模块的卸载 | 不做 | 分配过的号与存储键不回收；要去掉一个模块时按 `roost.yaml` 的 `modules.<name>` 归属清单手工删 | [业务模块方案“决定一览”](../maintenance/FEATURE-2026-11-10-business-modules.md#决定一览) |
 | FPS / 动作射击 | 不建议 | 心跳档位最短 50ms；没有延迟补偿与命中回溯，没有通用客户端预测；玩家接入只有 TCP | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型) |
 | 无缝开放世界（多进程分区） | 只有原型 | Player 静态 sid、Interest 按进程；cellworld 是原型不是正式能力；正式做法是同进程多地图加按 sid 分服 | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#框架服务与-game-demo) |
@@ -319,7 +323,8 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 需求说法 | 用到的能力 | 最接近的现成参考 |
 | --- | --- | --- |
 | 玩家货币 | 现成模块 wallet（`roost module add wallet`）：余额、幂等加减、消费协议 | 模块 wallet；多种货币或充值到账照着它扩 |
-| 玩家背包 | Entity / Component / DAO + Nest handler（strict）+ 自身视图；状态放主 DAO 下自己的嵌套结构体；需手写业务 | game-demo“背包、经验与升级”；写法照模块 wallet |
+| 玩家背包 | 现成模块 bag（`roost module add bag`）：堆叠背包、丢弃协议、服务端发放 | 模块 bag；格子、装备栏照 game-demo“背包、经验与升级”“装备栏”扩 |
+| 名字、等级、经验 | 现成模块 profile（`roost module add profile`）：改名、发经验、升级钩子 | 模块 profile；game-demo“背包、经验与升级” |
 | 幂等扣发（重试不重复扣费、不重复发奖） | 实体上的持久业务事实（序号账本、领奖事实）+ 回复错误判别 | 卡牌 RPG、SLG 夹具；三类离散玩法的命令序号 |
 | 抽卡保底 | 配置表（按值捕获）+ 幂等序号账本，同一事务里改保底计数与发卡；规则需手写业务 | 卡牌 RPG 夹具 |
 | 离线收益、建造 / 行军倒计时 | 实体持久定时器（离线只补一次）+ 按区间惰性结算 | 放置模拟夹具；SLG 夹具的建造、行军与离线收益 |
@@ -334,9 +339,10 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | 帧同步对战 | Lockstep | MOBA 夹具；game-demo“lockstep 战斗” |
 | 回合制对战 | 房间实体 + 多实体事务 + 持久回合定时器 | 回合 PvP 夹具；卡牌 RPG 夹具的回合定时器 |
 | 断线重连 | 自身视图重连全量、组同步保留成员关系、Lockstep 追帧或快照恢复；座位与连接代际接管需手写业务 | 派对房间、自走棋、回合 PvP 夹具；[KNOWN-LIMITS“同一 SessionID 的重连”](../maintenance/KNOWN-LIMITS.md#同一-sessionid-的重连) |
-| 排行榜 | rank 服务 | game-demo“排行榜” |
+| 排行榜 | 现成模块 leaderboard（`roost module add leaderboard`）：总分榜前 N 名与自己的名次；多个榜、赛季奖励照 rank 服务手写 | 模块 leaderboard；game-demo“排行榜” |
+| 邮件列表、领附件 | 现成模块 mailbox（`roost module add mailbox`，连同 wallet）：列表与领取金币附件；道具附件需手写 | 模块 mailbox；game-demo“邮件” |
 | 全服邮件、补偿邮件 | mail 服务的广播邮件；GM 命令发单人补偿 | game-demo“邮件”“GM 运维面” |
-| 聊天 | chat 服务；频道策略是协作者，需手写 | game-demo“聊天” |
+| 聊天 | 现成模块 chat（`roost module add chat`）：世界与私聊；群组频道需手写 | 模块 chat；game-demo“聊天”（用的就是它） |
 | 公会、联盟跨进程 / 跨服 | Remote 托管实体 + 路由 RPC + Mirror + Saga | game-demo“公会 = alliance 服务”（联盟服务方案实施中）；SLG 夹具的联盟活动联合链路 |
 | 定时活动、跨服活动 | activity 服务 + 实体持久定时器（准点动作）；活动规则需手写业务 | SLG 夹具的联盟活动 |
 | 登录、账号、选角 | account 服务 + 嵌入 player TCP 的 `auth.go`；渠道验签需手写 | game-demo“登录与凭据” |

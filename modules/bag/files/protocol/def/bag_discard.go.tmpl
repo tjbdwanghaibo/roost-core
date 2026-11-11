@@ -1,0 +1,20 @@
+//go:build protocoldef
+
+package protocoldef
+
+type BagDiscardRequest struct {
+	ItemID int64 `pb:"1"`
+	Count  int64 `pb:"2"`
+}
+type BagDiscardResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	ItemID int64  `pb:"3"`
+	Left   int64  `pb:"4"`
+}
+
+//roost:protocol group=game handler=bag
+type BagDiscardProtocol interface {
+	//roost:msg id={{ID:protocol:BagDiscard}}
+	BagDiscard(BagDiscardRequest) BagDiscardResponse
+}

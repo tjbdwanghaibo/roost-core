@@ -1,0 +1,22 @@
+//go:build protocoldef
+
+package protocoldef
+
+// LeaderboardMeRequest 查自己在总分榜上的名次与分数。查的是谁取自已认证的连接，不取请求字段。
+type LeaderboardMeRequest struct{}
+
+// LeaderboardMeResponse：没上榜不是错误——Code 为 0、OnBoard 为 false、Rank 与 Score 都是 0。
+// 客户端先看 OnBoard 再用 Rank / Score，不要拿 Rank == 0 自己猜。
+type LeaderboardMeResponse struct {
+	Code    int32  `pb:"1"`
+	Reason  string `pb:"2"`
+	OnBoard bool   `pb:"3"`
+	Rank    int64  `pb:"4"`
+	Score   int64  `pb:"5"`
+}
+
+//roost:protocol group=game handler=leaderboard
+type LeaderboardMeProtocol interface {
+	//roost:msg id={{ID:protocol:LeaderboardMe}}
+	LeaderboardMe(LeaderboardMeRequest) LeaderboardMeResponse
+}

@@ -1,0 +1,45 @@
+package mailbox
+
+import (
+	"fmt"
+	"log/slog"
+
+	gamemailbox "{{MODULE}}/game/mailbox"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// HandleMailboxList 经 mail 服务翻一页玩家自己的邮箱：一次跨进程的类型化调用，不涉及 Entity 锁。
+// 读谁的邮箱取认证会话的玩家，从不取请求字段；mail 服务按这个玩家作用域读取，端点不用再查归属。
+// 页大小与游标的校验也在 mail 服务（负数拒绝、0 用缺省、超过上限截到上限）。
+func (controller *Controller) HandleMailboxList(context *playeraccess.Context, request *pb.MailboxListRequest) (*pb.MailboxListResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("mailbox_list endpoint: context and request are required")
+	}
+	page, err := controller.mailer.List(context.Context(), context.PlayerID, request.Cursor, int(request.Limit))
+	if err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("mailbox_list failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.MailboxListResponse{Code: code, Reason: reason}, nil
+	}
+	response := &pb.MailboxListResponse{NextCursor: page.NextCursor, Unread: page.Unread}
+	for _, item := range page.Items {
+		entry := pb.MailboxEntry{
+			MailID: item.Envelope.ID, Subject: item.Envelope.Subject, Body: item.Envelope.Body,
+			Status: string(item.Status), HasAttachment: item.Envelope.HasAttachment(),
+			ExpiresAtUnix: item.Envelope.ExpiresAtUnix,
+		}
+		// 可领 = mail 服务说现在能预留，并且附件是这一版发得了的奖励。解不出来的附件领取时会被拒绝
+		// （见 HandleMailboxClaim），所以这里不告诉客户端它可领。
+		if attachment, decodeErr := gamemailbox.Decode(item.Envelope.Attachment); decodeErr == nil {
+			entry.Coins = attachment.Amount
+			entry.Claimable = item.Claimable
+		}
+		response.Mails = append(response.Mails, entry)
+	}
+	return response, nil
+}

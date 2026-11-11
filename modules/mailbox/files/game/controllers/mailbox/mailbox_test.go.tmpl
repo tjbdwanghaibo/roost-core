@@ -1,0 +1,457 @@
+package mailbox
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	playerentity "{{MODULE}}/game/entities/player"
+	"{{MODULE}}/game/handler"
+	sender "{{MODULE}}/game/handler/syncsender"
+	gamemailbox "{{MODULE}}/game/mailbox"
+	"{{MODULE}}/game/playeraccess"
+	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/dataengine"
+	"github.com/tjbdwanghaibo/roost-core/framework/entity"
+	"github.com/tjbdwanghaibo/roost-core/framework/nest"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcmail "github.com/tjbdwanghaibo/roost-core/service/mail"
+)
+
+// 端点的三步串接在这里离线跑通：mail 服务是真实的 service/mail.Service（存储换成进程内的），
+// Nest 是真实的引擎加替身提交器，端点收到的是与接入层相同的 playeraccess.Context。
+// 没有 NATS / Redis / Mongo：跨进程的那一跳（BusClient）不在这一档里。
+
+const (
+	mailboxPlayerA int64 = 94001
+	mailboxPlayerB int64 = 94002
+	// mailboxEpoch 是用例的起点时刻（Unix 秒）。
+	mailboxEpoch int64 = 1_800_000_000
+	// mail 服务的码（service/mail 的 Code*），写死：这些是客户端协议的一部分。
+	mailboxCodeExpired        int32 = 590106
+	mailboxCodeAlreadyClaimed int32 = 590108
+	mailboxCodeClaimHeld      int32 = 590109
+	mailboxCodeRangeInvalid   int32 = 590112
+)
+
+// mailboxEnvelopes 是进程内的信封存储（service/mail 自己的测试替身不导出）。Create 不覆盖。
+type mailboxEnvelopes struct {
+	mu    sync.Mutex
+	items map[string]svcmail.Envelope
+}
+
+func (s *mailboxEnvelopes) Create(_ context.Context, envelope svcmail.Envelope) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.items[envelope.ID]; exists {
+		return false, nil
+	}
+	s.items[envelope.ID] = envelope
+	return true, nil
+}
+
+func (s *mailboxEnvelopes) Get(_ context.Context, id string) (svcmail.Envelope, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	envelope, ok := s.items[id]
+	return envelope, ok, nil
+}
+
+func (s *mailboxEnvelopes) GetMany(_ context.Context, ids []string) (map[string]svcmail.Envelope, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]svcmail.Envelope, len(ids))
+	for _, id := range ids {
+		if envelope, ok := s.items[id]; ok {
+			out[id] = envelope
+		}
+	}
+	return out, nil
+}
+
+// mailboxFaultyMail 在真实的 mail 服务前面注入两种故障：确认丢失（请求没到 mail 服务），
+// 以及预留之后、发放之前的耽搁（afterReserve，用来把时钟拨过邮件的过期时刻）。
+type mailboxFaultyMail struct {
+	svcmail.Mail
+	loseCommits  atomic.Int32
+	afterReserve func()
+}
+
+func (m *mailboxFaultyMail) ReserveClaim(ctx context.Context, playerID int64, mailID string, scope string) (svcmail.Claim, error) {
+	claim, err := m.Mail.ReserveClaim(ctx, playerID, mailID, scope)
+	if err == nil && m.afterReserve != nil {
+		m.afterReserve()
+	}
+	return claim, err
+}
+
+func (m *mailboxFaultyMail) CommitClaim(ctx context.Context, playerID int64, mailID string, token string) (svcmail.Entry, error) {
+	if m.loseCommits.Load() > 0 {
+		m.loseCommits.Add(-1)
+		return svcmail.Entry{}, errors.New("injected: commit request lost")
+	}
+	return m.Mail.CommitClaim(ctx, playerID, mailID, token)
+}
+
+type mailboxEndpointGetter map[int64]entity.IThreadSafeEntity
+
+func (g mailboxEndpointGetter) Get(_ context.Context, id int64, _ entity.EntityCategory) (entity.IThreadSafeEntity, error) {
+	if e := g[id]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("missing %d", id)
+}
+
+func (g mailboxEndpointGetter) GetMany(ctx context.Context, ids []int64, cats []entity.EntityCategory) ([]entity.IThreadSafeEntity, error) {
+	out := make([]entity.IThreadSafeEntity, len(ids))
+	for i, id := range ids {
+		e, err := g.Get(ctx, id, cats[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = e
+	}
+	return out, nil
+}
+
+// mailboxEndpointCommitter 是替身提交器：不落盘，一律接受。
+type mailboxEndpointCommitter struct{}
+
+func (mailboxEndpointCommitter) Commit(context.Context, dataengine.CommitRecord) error { return nil }
+
+type mailboxEndpointFixture struct {
+	controller *Controller
+	service    *svcmail.Service
+	mail       *mailboxFaultyMail
+	engine     *nest.NestMgr
+	player     *playerentity.Player
+	nowMilli   atomic.Int64
+	sends      int
+}
+
+// newMailboxEndpointFixture 起一个进程内的 mail 服务与一个 Nest，玩家 A 已进入游戏（有 Player 实体）。
+// clock.SetSource 是进程级的：一个用例里只建一个 fixture。mail 服务与 Nest 读同一个业务时钟。
+func newMailboxEndpointFixture(t *testing.T) *mailboxEndpointFixture {
+	t.Helper()
+	playerentity.RegisterEntity()
+	handler.RegisterMailboxClaimRewardNestHandlers()
+	handler.RegisterWalletGrantNestHandlers()
+	f := &mailboxEndpointFixture{}
+	f.nowMilli.Store(mailboxEpoch * 1000)
+	clock.SetSource(func() time.Time { return time.UnixMilli(f.nowMilli.Load()) })
+	t.Cleanup(func() { clock.SetSource(nil) })
+
+	service, err := svcmail.New(svcmail.Config{
+		Envelopes: &mailboxEnvelopes{items: map[string]svcmail.Envelope{}},
+		Mailboxes: versionstore.NewMemoryStore[int64, svcmail.Mailbox](),
+		Sends:     versionstore.NewMemoryStore[string, svcmail.SentRecord](),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.service = service
+	f.mail = &mailboxFaultyMail{Mail: service}
+
+	id, err := entity.BuildEntityID(mailboxPlayerA, playerentity.EntityKindPlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := entity.BuildEntity(&entity.EntityCreateParam{IsCreate: true, Id: id, Kind: playerentity.EntityKindPlayer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.player = built.(*playerentity.Player)
+	f.engine = nest.NewEngine(nest.NestOptionWithGetter(mailboxEndpointGetter{id: built}), nest.NestOptionWithTransactionCommitter(mailboxEndpointCommitter{}),
+		nest.NestOptionWithWorkerPools(nest.WorkerPoolConfig{Workers: 2, QueueCap: 64}, nest.WorkerPoolConfig{}, nest.WorkerPoolConfig{}))
+	if err := f.engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.engine.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
+	f.controller = newController(nil, f.engine, f.mail)
+	return f
+}
+
+// advance 把业务时钟拨快若干秒。
+func (f *mailboxEndpointFixture) advance(seconds int64) { f.nowMilli.Add(seconds * 1000) }
+
+// send 给玩家发一封一小时后过期的邮件，返回邮件 id。
+func (f *mailboxEndpointFixture) send(t *testing.T, to int64, subject string, attachment []byte) string {
+	t.Helper()
+	f.sends++
+	envelope, err := f.service.Send(context.Background(), svcmail.SendRequest{
+		Audience: svcmail.AudienceDirect, Recipients: []int64{to}, Subject: subject,
+		Attachment: attachment, ExpiresInSeconds: 3600, RequestID: fmt.Sprintf("send-%d", f.sends),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return envelope.ID
+}
+
+// mailboxCoins 是 amount 个金币的附件字节。
+func mailboxCoins(t *testing.T, amount int64) []byte {
+	t.Helper()
+	raw, err := gamemailbox.Encode(gamemailbox.Coins(amount))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// mailboxAs 是接入层交给端点的上下文：认证会话的玩家。
+func mailboxAs(playerID int64) *playeraccess.Context {
+	return &playeraccess.Context{PlayerID: playerID}
+}
+
+func (f *mailboxEndpointFixture) claim(t *testing.T, playerID int64, mailID string) *pb.MailboxClaimResponse {
+	t.Helper()
+	response, err := f.controller.HandleMailboxClaim(mailboxAs(playerID), &pb.MailboxClaimRequest{MailID: mailID})
+	if err != nil || response == nil {
+		t.Fatalf("claim %s: response=%v err=%v", mailID, response, err)
+	}
+	return response
+}
+
+func (f *mailboxEndpointFixture) list(t *testing.T, playerID int64, cursor string, limit int32) *pb.MailboxListResponse {
+	t.Helper()
+	response, err := f.controller.HandleMailboxList(mailboxAs(playerID), &pb.MailboxListRequest{Cursor: cursor, Limit: limit})
+	if err != nil || response == nil {
+		t.Fatalf("list: response=%v err=%v", response, err)
+	}
+	return response
+}
+
+// wallet 在业务 worker 上持实体锁读玩家 A 的余额与账本大小。
+func (f *mailboxEndpointFixture) wallet(t *testing.T) (coins int64, ledger int) {
+	t.Helper()
+	if err := f.engine.RunLocal(context.Background(), func() {
+		f.player.GetMutex().Lock()
+		defer f.player.GetMutex().Unlock()
+		coins = f.player.Dao().GetWallet().GetCoins()
+		ledger = f.player.MailboxComp().LedgerSize()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return coins, ledger
+}
+
+// entry 是 mail 服务里这封邮件对这名玩家的状态。
+func (f *mailboxEndpointFixture) entry(t *testing.T, playerID int64, mailID string) svcmail.Entry {
+	t.Helper()
+	mailbox, found, err := f.service.Mailbox(context.Background(), playerID)
+	if err != nil || !found {
+		t.Fatalf("mailbox of %d: found=%v err=%v", playerID, found, err)
+	}
+	return mailbox.Entries[mailID]
+}
+
+// 正常路径：列表里看到可领的金币邮件 → 领取 → 钱到账、mail 服务标成已领 → 列表不再可领；
+// 已完整领过的邮件再领，答 mail 服务的“已领取”，不再发钱。
+func TestMailboxClaimEndpointReservesGrantsAndCommits(t *testing.T) {
+	f := newMailboxEndpointFixture(t)
+	mailID := f.send(t, mailboxPlayerA, "level reward", mailboxCoins(t, 100))
+
+	listed := f.list(t, mailboxPlayerA, "", 0)
+	if listed.Code != 0 || len(listed.Mails) != 1 || listed.Unread != 1 {
+		t.Fatalf("list = %+v", listed)
+	}
+	if got := listed.Mails[0]; got.MailID != mailID || got.Subject != "level reward" || !got.HasAttachment || !got.Claimable || got.Coins != 100 || got.ExpiresAtUnix != mailboxEpoch+3600 {
+		t.Fatalf("listed mail = %+v", got)
+	}
+
+	claimed := f.claim(t, mailboxPlayerA, mailID)
+	if claimed.Code != 0 || claimed.Coins != 100 || claimed.Balance != 100 {
+		t.Fatalf("claim = %+v, want 100 coins and a balance of 100", claimed)
+	}
+	if coins, ledger := f.wallet(t); coins != 100 || ledger != 1 {
+		t.Fatalf("after the claim: coins=%d ledger=%d", coins, ledger)
+	}
+	if status := f.entry(t, mailboxPlayerA, mailID).Status; status != svcmail.StatusClaimed {
+		t.Fatalf("the mail service holds the mail as %q, want claimed", status)
+	}
+	if after := f.list(t, mailboxPlayerA, "", 0); len(after.Mails) != 1 || after.Mails[0].Claimable || after.Mails[0].Status != "claimed" {
+		t.Fatalf("list after the claim = %+v", after.Mails)
+	}
+
+	again := f.claim(t, mailboxPlayerA, mailID)
+	if again.Code != mailboxCodeAlreadyClaimed || again.Coins != 0 {
+		t.Fatalf("second claim = %+v, want the mail service's already-claimed code", again)
+	}
+	if coins, _ := f.wallet(t); coins != 100 {
+		t.Fatalf("a second claim changed the balance to %d", coins)
+	}
+}
+
+// 三步领取留下的窗口：发放成功、CommitClaim 丢了。玩家拿到的是成功；邮件在 mail 服务那边仍是未领，
+// 租约到期后重试用同一个 token 再预留一次、再来发放一次——账本认出这封邮件，不发第二笔，补上确认。
+// 重试隔了很久（远超租约与账本的清理宽限、但邮件还没过期）、中间还领过别的邮件也一样：
+// 账本记的是邮件自己的过期时刻，不是预留的租约。
+func TestMailboxClaimEndpointRetryAfterLostCommitPaysOnce(t *testing.T) {
+	f := newMailboxEndpointFixture(t)
+	mailID := f.send(t, mailboxPlayerA, "level reward", mailboxCoins(t, 100))
+	otherID := f.send(t, mailboxPlayerA, "another reward", mailboxCoins(t, 50))
+
+	f.mail.loseCommits.Store(1)
+	first := f.claim(t, mailboxPlayerA, mailID)
+	if first.Code != 0 || first.Coins != 100 || first.Balance != 100 {
+		t.Fatalf("claim with a lost commit = %+v, want success: the coins are in the wallet", first)
+	}
+	token := f.entry(t, mailboxPlayerA, mailID).ClaimToken
+	if status := f.entry(t, mailboxPlayerA, mailID).Status; status == svcmail.StatusClaimed || token == "" {
+		t.Fatalf("premise: the commit was not lost (status %q, token %q)", status, token)
+	}
+
+	// 租约（30 秒）还没到期：mail 服务说有一次领取在途，端点原样转告，不发钱。
+	held := f.claim(t, mailboxPlayerA, mailID)
+	if held.Code != mailboxCodeClaimHeld {
+		t.Fatalf("retry inside the lease = %+v, want the claim-held code", held)
+	}
+
+	// 20 分钟后（租约早已到期，邮件一小时后才过期）先领另一封——这次首次发放会顺手清理账本——再重试第一封。
+	f.advance(20 * 60)
+	if other := f.claim(t, mailboxPlayerA, otherID); other.Code != 0 || other.Coins != 50 || other.Balance != 150 {
+		t.Fatalf("claiming another mail = %+v", other)
+	}
+	retry := f.claim(t, mailboxPlayerA, mailID)
+	if retry.Code != 0 || retry.Coins != 100 || retry.Balance != 150 {
+		t.Fatalf("retry after the lease = %+v, want this mail's 100 coins reported and the balance still 150", retry)
+	}
+	if coins, ledger := f.wallet(t); coins != 150 || ledger != 2 {
+		t.Fatalf("the retry paid again: coins=%d ledger=%d, want 150 and two records", coins, ledger)
+	}
+	entry := f.entry(t, mailboxPlayerA, mailID)
+	if entry.Status != svcmail.StatusClaimed {
+		t.Fatalf("the retry did not commit the mail: status %q", entry.Status)
+	}
+	if entry.ClaimToken != token {
+		t.Fatalf("the retry was reserved under another token: %q, was %q", entry.ClaimToken, token)
+	}
+}
+
+// 这一版发不了的附件（这里是道具）：归还预留、答 mailbox_attachment，邮件保持未领、不被占用，
+// 认识它的版本上线后还能领。列表里它有附件但不可领。
+func TestMailboxClaimEndpointUnknownAttachmentIsReleasedAndStaysUnclaimed(t *testing.T) {
+	f := newMailboxEndpointFixture(t)
+	mailID := f.send(t, mailboxPlayerA, "an item", []byte(`{"type":"item","item_id":1002,"count":1}`))
+
+	listed := f.list(t, mailboxPlayerA, "", 0)
+	if len(listed.Mails) != 1 || !listed.Mails[0].HasAttachment || listed.Mails[0].Claimable || listed.Mails[0].Coins != 0 {
+		t.Fatalf("listed mail = %+v, want an attachment that is not claimable", listed.Mails)
+	}
+
+	wantCode, _ := errcode.ClientError(apperrors.ErrMailboxAttachment)
+	refused := f.claim(t, mailboxPlayerA, mailID)
+	if refused.Code != wantCode || refused.Coins != 0 {
+		t.Fatalf("claim = %+v, want mailbox_attachment (%d)", refused, wantCode)
+	}
+	if coins, ledger := f.wallet(t); coins != 0 || ledger != 0 {
+		t.Fatalf("the refusal wrote: coins=%d ledger=%d", coins, ledger)
+	}
+	entry := f.entry(t, mailboxPlayerA, mailID)
+	if entry.Status == svcmail.StatusClaimed {
+		t.Fatal("a mail whose attachment could not be granted was marked claimed")
+	}
+	if entry.ClaimDeadlineUnix != 0 {
+		t.Fatalf("the reservation was not released: held until %d", entry.ClaimDeadlineUnix)
+	}
+	// 没有等租约：马上就能再预留。
+	if _, err := f.service.ReserveClaim(context.Background(), mailboxPlayerA, mailID, ""); err != nil {
+		t.Fatalf("the mail is stuck after the refusal: %v", err)
+	}
+}
+
+// 发放被拒时事务已回滚，端点归还预留并答对应的码。两种拒绝：
+// 预留在过期前取得、发放排队到过期后才执行（按执行时刻拒绝，码与 mail 服务拒绝过期邮件相同）；
+// 货币模块拒绝（余额溢出）——玩家花掉一些之后不用等租约就能再领。
+func TestMailboxClaimEndpointRefusedGrantReleasesTheReservation(t *testing.T) {
+	f := newMailboxEndpointFixture(t)
+	late := f.send(t, mailboxPlayerA, "expires while queued", mailboxCoins(t, 100))
+	f.mail.afterReserve = func() { f.advance(3600) } // 预留之后耽搁到邮件过期
+	refused := f.claim(t, mailboxPlayerA, late)
+	f.mail.afterReserve = nil
+	if refused.Code != mailboxCodeExpired || refused.Coins != 0 {
+		t.Fatalf("a grant that executed after the expiry = %+v, want the mail-expired code", refused)
+	}
+	if coins, ledger := f.wallet(t); coins != 0 || ledger != 0 {
+		t.Fatalf("the refused grant wrote: coins=%d ledger=%d", coins, ledger)
+	}
+	if entry := f.entry(t, mailboxPlayerA, late); entry.ClaimDeadlineUnix != 0 || entry.Status == svcmail.StatusClaimed {
+		t.Fatalf("after the refused grant the mail is %+v, want released and unclaimed", entry)
+	}
+
+	if _, err := sender.NewWalletGrantSender(f.engine).Sync_WalletGrant(context.Background(), f.player.ID(), "fill", math.MaxInt64); err != nil {
+		t.Fatal(err)
+	}
+	full := f.send(t, mailboxPlayerA, "wallet is full", mailboxCoins(t, 1))
+	wantCode, _ := errcode.ClientError(apperrors.ErrWalletOverflow)
+	overflow := f.claim(t, mailboxPlayerA, full)
+	if overflow.Code != wantCode {
+		t.Fatalf("claim into a full wallet = %+v, want wallet_overflow (%d)", overflow, wantCode)
+	}
+	if coins, ledger := f.wallet(t); coins != math.MaxInt64 || ledger != 0 {
+		t.Fatalf("the refused grant wrote: coins=%d ledger=%d", coins, ledger)
+	}
+	if entry := f.entry(t, mailboxPlayerA, full); entry.ClaimDeadlineUnix != 0 || entry.Status == svcmail.StatusClaimed {
+		t.Fatalf("after the refused grant the mail is %+v, want released and unclaimed", entry)
+	}
+}
+
+// 列表只有调用者自己的邮件，新的在前，按游标翻页；没有附件的邮件不可领；非法的页大小由 mail 服务拒绝。
+func TestMailboxListEndpointPagesOnlyTheCallersMail(t *testing.T) {
+	f := newMailboxEndpointFixture(t)
+	first := f.send(t, mailboxPlayerA, "first", mailboxCoins(t, 10))
+	f.advance(1)
+	second := f.send(t, mailboxPlayerA, "second", nil)
+	f.advance(1)
+	third := f.send(t, mailboxPlayerA, "third", mailboxCoins(t, 30))
+	other := f.send(t, mailboxPlayerB, "for someone else", mailboxCoins(t, 999))
+
+	page := f.list(t, mailboxPlayerA, "", 2)
+	if page.Code != 0 || len(page.Mails) != 2 || page.Unread != 3 || page.NextCursor == "" {
+		t.Fatalf("first page = %+v", page)
+	}
+	if page.Mails[0].MailID != third || page.Mails[1].MailID != second {
+		t.Fatalf("first page is not newest first: %+v", page.Mails)
+	}
+	if plain := page.Mails[1]; plain.HasAttachment || plain.Claimable || plain.Coins != 0 {
+		t.Fatalf("a mail without an attachment = %+v", plain)
+	}
+	if rich := page.Mails[0]; !rich.Claimable || rich.Coins != 30 {
+		t.Fatalf("a coin mail = %+v", rich)
+	}
+	rest := f.list(t, mailboxPlayerA, page.NextCursor, 2)
+	if len(rest.Mails) != 1 || rest.Mails[0].MailID != first || rest.NextCursor != "" {
+		t.Fatalf("second page = %+v", rest)
+	}
+	for _, mail := range append(page.Mails, rest.Mails...) {
+		if mail.MailID == other {
+			t.Fatal("another player's mail is in the list")
+		}
+	}
+	if theirs := f.list(t, mailboxPlayerB, "", 0); len(theirs.Mails) != 1 || theirs.Mails[0].MailID != other {
+		t.Fatalf("player B's list = %+v", theirs.Mails)
+	}
+	// 别人的邮件也领不了：预留按认证玩家判断归属。
+	if stolen := f.claim(t, mailboxPlayerA, other); stolen.Code == 0 {
+		t.Fatalf("player A claimed player B's mail: %+v", stolen)
+	}
+	if coins, _ := f.wallet(t); coins != 0 {
+		t.Fatalf("claiming another player's mail paid %d coins", coins)
+	}
+	if bad := f.list(t, mailboxPlayerA, "", -1); bad.Code != mailboxCodeRangeInvalid || len(bad.Mails) != 0 {
+		t.Fatalf("a negative limit = %+v, want the mail service's range code", bad)
+	}
+}
