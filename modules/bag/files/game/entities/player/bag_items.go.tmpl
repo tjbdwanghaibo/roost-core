@@ -17,7 +17,7 @@ import generated "{{MODULE}}/configs/generated"
 // 装载配置时（没装道具表的测试）表是空的，任何道具都不合法：测试要先装一张道具表，写法见
 // game/handler/bag_test.go 的 bagTestLoadItems。
 //
-// 要换规则（道具分页签、某些道具不进背包、上限随玩家等级变）就改这个函数：返回 ok=false 的道具
+// 要换规则（某些道具不进背包、某一类道具统一一个上限、道具表换了名字）就改这个函数：返回 ok=false 的道具
 // 不能放入；maxStack 不为正表示不单独限制。不管这里返回多少，组件都会把上限钳到不超过 BagMaxStack，
 // 数量相加不溢出靠它；种类数上限 BagMaxKinds 也照常生效。
 func bagItemRule(itemID int64) (maxStack int64, ok bool) {
