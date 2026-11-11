@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	coredata "github.com/tjbdwanghaibo/roost-core/framework/dataengine"
 	engine "github.com/tjbdwanghaibo/roost-core/framework/dataengine/engine"
 	"github.com/tjbdwanghaibo/roost-core/framework/entity"
 	corenest "github.com/tjbdwanghaibo/roost-core/framework/nest"
@@ -24,6 +25,7 @@ import (
 	fmongo "github.com/tjbdwanghaibo/roost-core/infra/storage/mongo"
 	"github.com/tjbdwanghaibo/roost-core/infra/storage/mongo/mongotest"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type modJetStream struct{ streams int }
@@ -272,6 +274,98 @@ func TestModPublishesEntityProjectionBarrier(t *testing.T) {
 	}
 	if err := waiter.WaitEntityProjection(context.Background(), 1); err == nil {
 		t.Fatal("an unprovided Mod reported the entity's projections as landed")
+	}
+}
+
+// 换服模块经 ModDataEngine 交出实体：未装配的 Mod 明确失败；启动后交出一个不在内存里的实体，写它的记录经 Mod 这个
+// Nest committer 提交时在 WAL 之前以 ErrEntityHandedOff 拒绝，Release 之后照常准入并落库；两者在业务 worker 上都
+// fail-fast（会等待）。完整流程（排空、等 checkpoint、卸载、并发、停机）在 engine 的 TestEntityHandOff* 里。
+func TestModHandsOffAnEntityUntilReleased(t *testing.T) {
+	ctx := context.Background()
+	if handOff, err := NewMod().HandOffEntity(ctx, 1); err == nil || handOff != nil {
+		t.Fatalf("an unprovided Mod handed an entity off: %+v, %v", handOff, err)
+	}
+
+	cfg := newModConfig(t)
+	client := mongotest.NewClient()
+	registry := app.NewRegistry(cfg)
+	if err := registry.Register(mods.ModMongo, fmongo.IMongo(client)); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(mods.ModNatsJetStream, fnats.IJetStream(&modJetStream{})); err != nil {
+		t.Fatal(err)
+	}
+	registerModUnloadKind.Do(func() { entity.MustRegisterEntityKindCategory(modUnloadKind, 1) })
+	access := entity.NewManagerAccess(entity.NewEntityManager())
+	mod := NewMod(WithEntityAccess(access))
+	if err := mod.Init(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Provide(registry); err != nil {
+		t.Fatal(err)
+	}
+	if err := mod.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer mod.Stop()
+	scheduler := corenest.NewEngine(append(mod.NestOptions(), corenest.NestOptionWithGetter(access))...)
+	if err := scheduler.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer scheduler.Shutdown(ctx)
+
+	id, err := entity.BuildEntityID(78, modUnloadKind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var onWorker error
+	if err := scheduler.RunLocal(ctx, func() { _, onWorker = mod.HandOffEntity(ctx, id) }); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(onWorker, fctx.ErrBlockingInBusinessWorker) {
+		t.Fatalf("HandOffEntity on a business worker = %v, want ErrBlockingInBusinessWorker", onWorker)
+	}
+	handOff, err := mod.HandOffEntity(ctx, id)
+	if err != nil || handOff == nil || handOff.EntityID != id || handOff.Resident {
+		t.Fatalf("HandOffEntity = %+v, %v", handOff, err)
+	}
+
+	data, err := bson.Marshal(bson.M{"_id": id, "level": int32(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := corenest.CommitRecord{
+		ID: corenest.TransactionID{15: 7}, Durability: corenest.DurabilityStrict.Record(),
+		Mutations: []coredata.Mutation{{
+			Key:  coredata.DocumentKey{Database: "handoff", Resource: "handoff_heroes", ID: id},
+			Kind: coredata.MutationPut, NextVersion: 1, Schema: 1, Codec: "bson-v2", Data: data,
+		}},
+	}
+	if err := mod.Commit(ctx, record); !errors.Is(err, ErrEntityHandedOff) || !errors.Is(err, engine.ErrEntityHandedOff) || errors.Is(err, coredata.ErrEntityUnloading) {
+		t.Fatalf("write to a handed-off entity through the Mod = %v, want ErrEntityHandedOff (not the retryable ErrEntityUnloading)", err)
+	}
+	if stats := mod.Runtime().Projector.Stats(); stats.Committed != 0 || stats.HandedOffEntities != 1 || stats.HandOffAdmissionRejected != 1 {
+		t.Fatalf("stats while handed off = %+v", stats)
+	}
+
+	if err := scheduler.RunLocal(ctx, func() { onWorker = handOff.Release(ctx) }); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(onWorker, fctx.ErrBlockingInBusinessWorker) {
+		t.Fatalf("Release on a business worker = %v, want ErrBlockingInBusinessWorker", onWorker)
+	}
+	if err := handOff.Release(ctx); err != nil {
+		t.Fatalf("Release = %v", err)
+	}
+	if err := mod.Commit(ctx, record); err != nil {
+		t.Fatalf("write after Release = %v", err)
+	}
+	mod.TransactionReleased(record.ID)
+	if err := mod.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if doc, ok := client.Collection("handoff", "handoff_heroes").Lookup(id); !ok || doc["level"] != int32(1) {
+		t.Fatalf("stored after Release = %v (found=%v)", doc, ok)
 	}
 }
 
