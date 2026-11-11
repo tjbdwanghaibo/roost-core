@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	gameactivity "{{MODULE}}/game/activity"
+	rehomecontroller "{{MODULE}}/game/controllers/rehome"
 	player "{{MODULE}}/game/entities/player"
 	sceneentity "{{MODULE}}/game/entities/scene"
 	syncsender "{{MODULE}}/game/handler/syncsender"
@@ -47,6 +48,7 @@ const (
 	gmAddItem   = "gm.player.add_item"
 	gmAddExp    = "gm.player.add_exp"
 	gmJoinGuild = "gm.player.join_guild"
+	gmRehome    = "gm.player.rehome"
 	gmMailSend  = "gm.mail.send"
 	gmWorldStat = "gm.world.stats"
 	gmSagaGet   = "gm.saga.get"
@@ -129,6 +131,12 @@ type gmJoinGuildPayload struct {
 	PlayerID  int64  `json:"player_id"`
 	GuildID   int64  `json:"guild_id"`
 	RequestID string `json:"request_id"`
+}
+
+type gmRehomePayload struct {
+	PlayerID int64  `json:"player_id"`
+	To       int32  `json:"to"`
+	Note     string `json:"note"`
 }
 
 type gmMailSendPayload struct {
@@ -287,6 +295,45 @@ func registerGMCommands(registry *app.Registry, spawn *spawner, activity *Activi
 					"player_id": playerID, "joined": true, "guild_id": reply.Alliance.AllianceID,
 					"members": len(reply.Alliance.Members), "version": reply.Alliance.Version, "served_by": reply.ServedBySID,
 				}}, nil
+			},
+		},
+		{
+			Name: gmRehome,
+			Description: "move a player to another game server (the rehome module's server-side entry): {player_id, to, note}. " +
+				"Run it on the process of the server the player is bound to now (another one answers rehome_elsewhere). " +
+				"The player's cooldown and the allowed-target rule do not apply; the registered checks do (a guild or team member is refused), " +
+				"and so do the account service's own conditions (the target exists, is open, the account has no role there). " +
+				"accepted=true means the transfer is recorded with the account service and carries on in the background: the player's " +
+				"sessions are closed, the Player is handed off, the role is rebound. Read the outcome with accountctl show-role",
+			Handler: func(ctx context.Context, cmd admin.Command) (admin.Result, error) {
+				payload, err := admin.DecodePayload[gmRehomePayload](cmd)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				playerID, _, err := playerIDs(payload.PlayerID)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				if payload.To <= 0 {
+					return admin.Result{}, fmt.Errorf("%w: to (the target server's sid) is required", admin.ErrCommandInvalid)
+				}
+				// Looked up per call, like the transport above: a registry
+				// without the account client (a test's) still registers the rest.
+				rehome, err := rehomecontroller.FromRegistry(registry)
+				if err != nil {
+					return admin.Result{}, fmt.Errorf("gm: %w", err)
+				}
+				note := payload.Note
+				if cmd.Operator != "" {
+					note = "gm " + cmd.Operator + ": " + note
+				}
+				ticket, err := rehome.Move(ctx, playerID, payload.To, note)
+				if err != nil {
+					return admin.Result{}, err
+				}
+				slog.Info("gm.player.rehome: accepted", "player_id", playerID, "transfer_id", ticket.ID, "from", ticket.From, "to", ticket.To,
+					"trace_id", cmd.TraceID, "operator", cmd.Operator)
+				return admin.Result{Data: map[string]any{"player_id": playerID, "accepted": true, "transfer_id": ticket.ID, "from": ticket.From, "to": ticket.To}}, nil
 			},
 		},
 		{

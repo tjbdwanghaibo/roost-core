@@ -4,16 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"{{MODULE}}/game/gift"
 	"{{MODULE}}/game/guild"
+	gamerehome "{{MODULE}}/game/rehome"
+	apperrors "{{MODULE}}/internal/errors"
 	alliancedonate "{{MODULE}}/saga/alliance_donate"
 	alliancefound "{{MODULE}}/saga/alliance_found"
 	alliancereward "{{MODULE}}/saga/alliance_reward"
 	giftitem "{{MODULE}}/saga/gift_item"
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	"github.com/tjbdwanghaibo/roost-core/framework/saga"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
 )
 
 // A step that runs on a process which does not serve its player writes a
@@ -27,10 +35,16 @@ import (
 //
 //   - the definitions route exactly the Player steps;
 //   - admitBound, on the process the command reached, still checks the
-//     binding against the real ownership table (PlayerOwners.AdmitBound) and
-//     answers with the framework's verdicts: run, bounce back to the
-//     coordinator with the sender's sid, reject a payload with no sid, or
-//     retry here while the copy is being unloaded.
+//     player's CURRENT binding against the real ownership table
+//     (PlayerOwners.AdmitBound, which asks the account service about a player
+//     it has no record of) and answers with the framework's verdicts: run,
+//     bounce back to the coordinator with the sid he is bound to now, bounce
+//     with no route while he is changing servers, reject a payload with no
+//     sid, or retry here while the copy is being unloaded.
+//
+// The binding tests run on the real account service (memory stores) and two
+// real ownership tables, sids 1000 and 1001: a player's server changes there
+// the way it does in production — BeginRoleTransfer, CommitRoleTransfer.
 
 const (
 	routeLocalSID = int32(1000)
@@ -62,10 +76,140 @@ func giftCommand(t *testing.T, from int64, fromSID int32, route int32) saga.Comm
 }
 
 // routeSteps is one game process with sid local and its real ownership table
-// (empty — nobody has logged in).
+// (empty — nobody has logged in). It has no binding authority: a player it
+// has no record of counts as bound here. The tests that are about the binding
+// use routeWorld instead.
 func routeSteps(local int32) (giftSteps, *PlayerOwners) {
 	owners := newPlayerOwners(local, nil, nil)
 	return giftSteps{owners: owners}, owners
+}
+
+// routeWorld is the account service with servers 1000 and 1001 open and one
+// role, bound to 1000.
+type routeWorld struct {
+	accounts *svcaccount.Service
+	player   int64
+	nextID   int64
+}
+
+func (w *routeWorld) Allocate(context.Context, int32) (int64, error) {
+	w.nextID++
+	return 94_500 + w.nextID, nil
+}
+
+func newRouteWorld(t *testing.T) *routeWorld {
+	t.Helper()
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{
+		Normalize: directory.NormalizeLower, DefaultTTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &routeWorld{}
+	w.accounts, err = svcaccount.New(svcaccount.Config{
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
+		Names:    names,
+		Slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
+		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
+			return svcaccount.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
+		}),
+		Allocator:     w,
+		NameRules:     svcaccount.NameValidatorFunc(func(string) error { return nil }),
+		SessionSecret: "route-test-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, sid := range []int32{routeLocalSID, routeOtherSID} {
+		if _, err := w.accounts.UpsertServer(ctx, svcaccount.GameServer{ID: sid, Name: fmt.Sprintf("s%d", sid), Status: svcaccount.ServerOpen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	account, err := w.accounts.Login(ctx, svcaccount.Identity{Channel: "store", OpenID: "u1", Credential: "good"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	role, err := w.accounts.CreateRole(ctx, account.ID, routeLocalSID, "hero")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.player = role.PlayerID
+	return w
+}
+
+// routeDeparter stands where the scene and the DataEngine hand-off are: it
+// records which players were handed off and released.
+type routeDeparter struct{ handed, released []int64 }
+
+func (d *routeDeparter) DepartPlayer(_ context.Context, playerID int64) (func(context.Context) error, error) {
+	d.handed = append(d.handed, playerID)
+	return func(context.Context) error {
+		d.released = append(d.released, playerID)
+		return nil
+	}, nil
+}
+
+// routeServer is one game process of the world: its real ownership table,
+// wired the way service.go wires it — the current binding asked through the
+// rehome module (the table itself, published as the module's Residency, then
+// the account service) — and the gift and guild steps on top of it.
+type routeServer struct {
+	registry *app.Registry
+	owners   *PlayerOwners
+	departer *routeDeparter
+	gifts    giftSteps
+	guilds   guildSteps
+}
+
+func (w *routeWorld) server(t *testing.T, sid int32) *routeServer {
+	t.Helper()
+	config := viper.New()
+	config.Set("sid", sid)
+	registry := app.NewRegistry(config)
+	owners, err := NewPlayerOwners(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	departer := &routeDeparter{}
+	owners.HandOff(departer)
+	if err := registry.Register(svcaccount.CapabilityName, svcaccount.Accounts(w.accounts)); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Register(gamerehome.ResidencyCapability, gamerehome.Residency(owners)); err != nil {
+		t.Fatal(err)
+	}
+	return &routeServer{registry: registry, owners: owners, departer: departer, gifts: giftSteps{owners: owners}, guilds: guildSteps{owners: owners}}
+}
+
+// debit is a gift debit command for the world's player that reached this
+// server; the payload says the gift started on startedOn.
+func (w *routeWorld) debit(t *testing.T, startedOn, reached int32) saga.Command {
+	return giftCommand(t, w.player, startedOn, reached)
+}
+
+// guildDebit is the same command carrying a guild donation's Player step.
+func (w *routeWorld) guildDebit(t *testing.T, startedOn, reached int32) saga.Command {
+	t.Helper()
+	payload, err := json.Marshal(guild.State{PlayerID: w.player, SID: startedOn, Coins: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := giftCommand(t, w.player, startedOn, reached)
+	command.SagaType, command.Topic, command.Payload = alliancedonate.Type, alliancedonate.TopicDebit, payload
+	return command
+}
+
+// expectBounce checks that err is a bounce back to the coordinator with the
+// given route ("" = no new route).
+func expectBounce(t *testing.T, what string, err error, route string) {
+	t.Helper()
+	var bounce *saga.StepBounce
+	if !errors.As(err, &bounce) || bounce.Route != route {
+		t.Fatalf("%s = %v, want a bounce with route %q", what, err, route)
+	}
 }
 
 // Exactly the steps that write a Player are routed — the debit (whose
@@ -101,75 +245,260 @@ func TestAdmitRunsTheOwnersOwnStep(t *testing.T) {
 
 // The process the sender is bound to runs the step even when the sender is
 // offline and has no copy anywhere — the debit and, above all, the refund
-// must not wait for them to log in. Admission takes them into service here
-// (a resident record, so the idle unload covers the copy Nest loads cold for
-// the step), on this sid and nowhere else.
+// must not wait for them to log in. The table has no record of him, so it asks
+// where he is bound (the account service says: here) and takes him into
+// service (a resident record, so the idle unload covers the copy Nest loads
+// cold for the step), on this sid and nowhere else.
 func TestAnOfflineSendersStepRunsOnTheSidTheyAreBoundTo(t *testing.T) {
-	steps, owners := routeSteps(routeLocalSID)
-	if owners.Resident(42) {
+	world := newRouteWorld(t)
+	home := world.server(t, routeLocalSID)
+	if home.owners.Resident(world.player) {
 		t.Fatal("precondition: the sender is offline and not resident")
 	}
-	if err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeLocalSID)); err != nil {
+	if err := home.gifts.admitBound(context.Background(), world.debit(t, routeLocalSID, routeLocalSID)); err != nil {
 		t.Fatalf("the step of an offline sender bound to this sid was refused: %v", err)
 	}
-	if !owners.Resident(42) {
+	if !home.owners.Resident(world.player) {
 		t.Fatal("the admitted step left no resident record: the copy Nest loads for it would never be unloaded")
 	}
 }
 
-// A command that reached a sid its sender is not bound to (the saga's route
-// and the payload disagree) is bounced back to the coordinator — not nacked,
-// which on a routed durable would only come back here — naming the sender's
-// sid as the next attempt's route. Nothing is recorded: a resident record
-// would let this process load the Player while its own sid writes it too.
+// A command that reached a sid its sender is not bound to is bounced back to
+// the coordinator — not nacked, which on a routed durable would only come
+// back here — naming the sid he is bound to NOW as the next attempt's route.
+// The payload's sid does not decide: here it even names this server (the gift
+// "started here"), and the account service says he is bound to 1000. Nothing
+// is recorded: a resident record would let this process load the Player while
+// its own sid writes it too.
 func TestAStepForASenderBoundElsewhereIsBouncedToHisSid(t *testing.T) {
-	steps, owners := routeSteps(routeOtherSID)
-	err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeOtherSID))
-	var bounce *saga.StepBounce
-	if !errors.As(err, &bounce) || bounce.Route != saga.SidRoute(routeLocalSID) {
-		t.Fatalf("a step for a sender bound to sid %d = %v, want a bounce to route %s", routeLocalSID, err, saga.SidRoute(routeLocalSID))
-	}
-	if owners.Resident(42) {
+	world := newRouteWorld(t)
+	other := world.server(t, routeOtherSID)
+	err := other.gifts.admitBound(context.Background(), world.debit(t, routeOtherSID, routeOtherSID))
+	expectBounce(t, "a step for a sender bound to sid 1000 that reached 1001", err, saga.SidRoute(routeLocalSID))
+	if other.owners.Resident(world.player) {
 		t.Fatal("bouncing the step took a player bound to another sid into service here")
+	}
+	// The guild sagas' Player steps answer the same way.
+	expectBounce(t, "a guild step for a player bound to sid 1000 that reached 1001",
+		other.guilds.admitBound(context.Background(), world.guildDebit(t, routeOtherSID, routeOtherSID)), saga.SidRoute(routeLocalSID))
+	// The account service is away and this process knows nothing of him: a
+	// plain error (redelivered here), neither a bounce nor a rejection.
+	unreachable := world.server(t, routeOtherSID)
+	unreachable.owners.bound = func(context.Context, int64) (int32, bool, error) { return 0, false, errors.New("account is away") }
+	err = unreachable.gifts.admitBound(context.Background(), world.debit(t, routeLocalSID, routeOtherSID))
+	var bounce *saga.StepBounce
+	var rejection *saga.StepRejection
+	if err == nil || errors.As(err, &bounce) || errors.As(err, &rejection) || unreachable.owners.Resident(world.player) {
+		t.Fatalf("a step whose sender's binding cannot be asked = %v, want a plain error and no resident record", err)
 	}
 }
 
-// A step for a sender who is moving between sids is bounced back to the
+// A step for a sender who is changing servers (the rehome module; here the
+// transfer is recorded with the real account service) is bounced back to the
 // coordinator with no new route (the next attempt goes to the same sid and
 // does not spend an attempt — roost-core framework/saga
 // TestAStepBouncedDuringAMoveRunsOnceOnTheNewSid pins the coordinator side):
 // not run, and nothing is recorded — even on the sid he is still bound to.
-// Once the move is over the same command is admitted. The demo has no player
-// move yet (playerMoving, TODO 维护者 2026-11-11), so the hook is injected
-// here; its default never reports a move.
+// Once the transfer is committed the old sid bounces the same command naming
+// the new one, and the new sid admits it. The guild sagas' Player steps
+// follow the same rules.
 func TestAStepForAMovingSenderIsBouncedBackToTheSender(t *testing.T) {
-	steps, owners := routeSteps(routeLocalSID)
-	if steps.moving.isMoving(42) {
-		t.Fatal("the default hook reported a move; the demo has no player move state yet")
-	}
-	moving := map[int64]bool{42: true}
-	steps.moving = func(playerID int64) bool { return moving[playerID] }
-	err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeLocalSID))
-	var bounce *saga.StepBounce
-	if !errors.As(err, &bounce) || bounce.Route != "" {
-		t.Fatalf("a step for a moving sender = %v, want a bounce back to the coordinator with no new route", err)
-	}
-	if owners.Resident(42) {
-		t.Fatal("bouncing the step of a moving sender took him into service here")
-	}
-	moving[42] = false
-	if err := steps.admitBound(context.Background(), giftCommand(t, 42, routeLocalSID, routeLocalSID)); err != nil {
-		t.Fatalf("after the move the step = %v, want it admitted", err)
-	}
-	guildSteps := guildSteps{owners: owners, moving: func(int64) bool { return true }}
-	payload, err := json.Marshal(guild.State{PlayerID: 42, SID: routeLocalSID, Coins: 10})
-	if err != nil {
+	world := newRouteWorld(t)
+	ctx := context.Background()
+	old, next := world.server(t, routeLocalSID), world.server(t, routeOtherSID)
+	command, guildCommand := world.debit(t, routeLocalSID, routeLocalSID), world.guildDebit(t, routeLocalSID, routeLocalSID)
+	// Begin: the transfer is in flight; he is still bound to 1000.
+	if _, err := world.accounts.BeginRoleTransfer(ctx, world.player, svcaccount.TransferRequest{ID: "move-1", FromSID: routeLocalSID, To: routeOtherSID}); err != nil {
 		t.Fatal(err)
 	}
-	command := giftCommand(t, 42, routeLocalSID, routeLocalSID)
-	command.SagaType, command.Topic, command.Payload = alliancedonate.Type, alliancedonate.TopicDebit, payload
-	if err := guildSteps.admitBound(context.Background(), command); !errors.As(err, &bounce) || bounce.Route != "" {
-		t.Fatalf("a guild step for a moving player = %v, want a bounce with no new route", err)
+	expectBounce(t, "a step for a moving sender on the sid he is still bound to", old.gifts.admitBound(ctx, command), "")
+	expectBounce(t, "a guild step for a moving player", old.guilds.admitBound(ctx, guildCommand), "")
+	expectBounce(t, "a step for a moving sender on the sid he is moving to", next.gifts.admitBound(ctx, command), "")
+	if old.owners.Resident(world.player) || next.owners.Resident(world.player) {
+		t.Fatal("bouncing the step of a moving sender took him into service")
+	}
+	// Commit: he is bound to 1001 now. The old sid names it; the same command
+	// is admitted there, and only there.
+	if _, err := world.accounts.CommitRoleTransfer(ctx, world.player, "move-1"); err != nil {
+		t.Fatal(err)
+	}
+	expectBounce(t, "the step on the old sid after the commit", old.gifts.admitBound(ctx, command), saga.SidRoute(routeOtherSID))
+	expectBounce(t, "the guild step on the old sid after the commit", old.guilds.admitBound(ctx, guildCommand), saga.SidRoute(routeOtherSID))
+	if old.owners.Resident(world.player) {
+		t.Fatal("the old sid took a player who moved away into service")
+	}
+	if err := next.gifts.admitBound(ctx, command); err != nil {
+		t.Fatalf("the same command on the new sid = %v, want it admitted", err)
+	}
+	if !next.owners.Resident(world.player) {
+		t.Fatal("the admitted step left no resident record on the new sid")
+	}
+	if err := next.guilds.admitBound(ctx, guildCommand); err != nil {
+		t.Fatalf("the guild step on the new sid = %v, want it admitted", err)
+	}
+}
+
+// The same from the inside of the process that is moving him out: the table
+// of players moved out (the rehome module's Residency, implemented by the
+// ownership table) answers before anybody is asked. From the moment the
+// leaving mark is set a step is bounced with no route — the resident record
+// he still has does not admit it — and once he has left, the write gate
+// refuses him too. After the commit the table names the server he went to;
+// after an abort he is served here again.
+func TestAStepForAPlayerThisProcessIsMovingOutIsBounced(t *testing.T) {
+	world := newRouteWorld(t)
+	ctx := context.Background()
+	home := world.server(t, routeLocalSID)
+	command := world.debit(t, routeLocalSID, routeLocalSID)
+	if err := home.owners.Serve(ctx, world.player, routeLocalSID); err != nil {
+		t.Fatal(err)
+	}
+	move := gamerehome.Move{PlayerID: world.player, ID: "move-1", From: routeLocalSID, To: routeOtherSID}
+	if err := home.owners.Reserve(move); err != nil {
+		t.Fatal(err)
+	}
+	if err := home.owners.Reserve(move); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("a second reservation = %v, want rehome_moving", err)
+	}
+	expectBounce(t, "a step for a player with the leaving mark", home.gifts.admitBound(ctx, command), "")
+	// Until he has left, this process is still his writer: the session he
+	// has keeps working.
+	if err := home.owners.Admit(world.player); err != nil {
+		t.Fatalf("writes before the hand-off = %v, want them admitted", err)
+	}
+	// An abort before he left: served here again, nothing was handed off.
+	if err := home.owners.Settle(ctx, move, gamerehome.Aborted); err != nil {
+		t.Fatal(err)
+	}
+	if err := home.gifts.admitBound(ctx, command); err != nil || len(home.departer.handed) != 0 {
+		t.Fatalf("after the abort the step = %v (handed off %v), want it admitted", err, home.departer.handed)
+	}
+	// The move for real: mark, leave, commit.
+	move.ID = "move-2"
+	if err := home.owners.Reserve(move); err != nil {
+		t.Fatal(err)
+	}
+	if err := home.owners.Depart(ctx, move); err != nil {
+		t.Fatal(err)
+	}
+	if len(home.departer.handed) != 1 || home.departer.handed[0] != world.player {
+		t.Fatalf("handed off %v, want the player", home.departer.handed)
+	}
+	if home.owners.Admit(world.player) == nil || home.owners.Resident(world.player) {
+		t.Fatal("after the hand-off the write gate still admits the player")
+	}
+	expectBounce(t, "a step after the hand-off, before the commit", home.gifts.admitBound(ctx, command), "")
+	if err := home.owners.Settle(ctx, move, gamerehome.Committed); err != nil {
+		t.Fatal(err)
+	}
+	expectBounce(t, "a step after the commit", home.gifts.admitBound(ctx, command), saga.SidRoute(routeOtherSID))
+	if home.owners.Resident(world.player) || len(home.departer.released) != 0 {
+		t.Fatalf("after the commit: resident=%v released=%v, want neither", home.owners.Resident(world.player), home.departer.released)
+	}
+	if where, tracked := home.owners.Where(world.player); !tracked || where.Moving || where.Move.To != routeOtherSID {
+		t.Fatalf("the table says %+v (%v), want departed to 1001", where, tracked)
+	}
+}
+
+// A login with claims from before the move is refused. The session's
+// server_id still says 1000 — the static comparison in Serve's caller passes —
+// but the check before the login (the rehome module's Admit, which the
+// EnterGame endpoint runs through the enter module's registration point) reads
+// the table of players moved out, and Serve itself refuses to create a
+// resident record for a player in it. On the new server the same player, with
+// claims the authenticator wrote after the move, gets in.
+func TestALoginWithClaimsFromBeforeTheMoveIsRefused(t *testing.T) {
+	world := newRouteWorld(t)
+	ctx := context.Background()
+	old, next := world.server(t, routeLocalSID), world.server(t, routeOtherSID)
+	driver := func(server *routeServer) *gamerehome.Driver {
+		built, err := gamerehome.NewDriver(gamerehome.DriverConfig{
+			Registry: server.registry, Self: server.owners.SID(), Directory: gamerehome.RegistryDirectory(server.registry),
+			Residency: gamerehome.RegistryResidency(server.registry), Profile: routeProfile{},
+			EntityID: func(playerID int64) (int64, error) { return playerID, nil },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return built
+	}
+	before := map[string]string{svcaccount.ServerIDClaim: "1000", svcaccount.BindEpochClaim: "0"}
+	if err := driver(old).Admit(ctx, world.player, before); err != nil {
+		t.Fatalf("before the move the login check = %v, want it passed", err)
+	}
+	// The move: mark, record with account, leave, commit, settle.
+	move := gamerehome.Move{PlayerID: world.player, ID: "move-1", From: routeLocalSID, To: routeOtherSID}
+	if err := old.owners.Reserve(move); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := world.accounts.BeginRoleTransfer(ctx, world.player, svcaccount.TransferRequest{ID: move.ID, FromSID: routeLocalSID, To: routeOtherSID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := driver(old).Admit(ctx, world.player, before); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("during the move the login check = %v, want rehome_moving", err)
+	}
+	if err := old.owners.Serve(ctx, world.player, routeLocalSID); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("Serve during the move = %v, want rehome_moving", err)
+	}
+	if err := old.owners.Depart(ctx, move); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := world.accounts.CommitRoleTransfer(ctx, world.player, move.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.owners.Settle(ctx, move, gamerehome.Committed); err != nil {
+		t.Fatal(err)
+	}
+	err := driver(old).Admit(ctx, world.player, before)
+	if sid, known := gamerehome.OwnerSID(err); !errors.Is(err, apperrors.ErrRehomeElsewhere) || !known || sid != routeOtherSID {
+		t.Fatalf("after the move the login check with the old claims = %v (owner %d %v), want rehome_elsewhere naming 1001", err, sid, known)
+	}
+	err = old.owners.Serve(ctx, world.player, routeLocalSID)
+	if sid, known := gamerehome.OwnerSID(err); !errors.Is(err, apperrors.ErrRehomeElsewhere) || !known || sid != routeOtherSID {
+		t.Fatalf("Serve after the move = %v (owner %d %v), want rehome_elsewhere naming 1001", err, sid, known)
+	}
+	if old.owners.Resident(world.player) {
+		t.Fatal("the old server took a player who moved away into service")
+	}
+	// The old claims on the NEW server: its own static check refuses them
+	// (they name 1000), and so does the login check.
+	if err := driver(next).Admit(ctx, world.player, before); !errors.Is(err, apperrors.ErrRehomeElsewhere) {
+		t.Fatalf("the old claims on the new server = %v, want rehome_elsewhere", err)
+	}
+	after := map[string]string{svcaccount.ServerIDClaim: "1001", svcaccount.BindEpochClaim: "1"}
+	if err := driver(next).Admit(ctx, world.player, after); err != nil {
+		t.Fatalf("the login check on the new server = %v, want it passed", err)
+	}
+	if err := next.owners.Serve(ctx, world.player, routeOtherSID); err != nil || !next.owners.Resident(world.player) {
+		t.Fatalf("Serve on the new server = %v, want the player resident there", err)
+	}
+}
+
+// routeProfile stands where the Player's rehome transactions are; the login
+// check does not touch them.
+type routeProfile struct{}
+
+func (routeProfile) Prepare(context.Context, gamerehome.Move) error { return nil }
+func (routeProfile) Cancel(context.Context, int64, string) error    { return nil }
+func (routeProfile) Arrive(context.Context, int64, int32) (gamerehome.ArriveResult, error) {
+	return gamerehome.ArriveResult{}, nil
+}
+
+// The demo's own checks before a move (rehome_checks.go): a guild or team
+// member is refused; a player in neither is not.
+func TestAGuildOrTeamMemberMayNotChangeServers(t *testing.T) {
+	if err := rehomeBlockedBy(0, 0); err != nil {
+		t.Fatalf("a player in no guild and no team = %v, want allowed", err)
+	}
+	for _, guildID := range []int64{0, 7} {
+		for _, teamID := range []int64{0, 9} {
+			if guildID == 0 && teamID == 0 {
+				continue
+			}
+			if err := rehomeBlockedBy(guildID, teamID); !errors.Is(err, apperrors.ErrRehomeRefused) {
+				t.Fatalf("guild %d team %d = %v, want rehome_refused", guildID, teamID, err)
+			}
+		}
 	}
 }
 
@@ -220,31 +549,22 @@ func TestAStepForASenderBeingUnloadedIsRetriedHere(t *testing.T) {
 }
 
 // The guild sagas' Player steps answer the same way (alliance_saga.go
-// admitBound): bound elsewhere → bounce to his sid; no sid → reject.
+// admitBound): no sid → reject; this sid's own player → admitted and resident.
+// (Bound elsewhere and moving are pinned beside the gift's above.)
 func TestAGuildPlayerStepFollowsTheSameRules(t *testing.T) {
-	owners := newPlayerOwners(routeOtherSID, nil, nil)
-	steps := guildSteps{owners: owners}
-	command := func(sid int32) saga.Command {
-		payload, err := json.Marshal(guild.State{PlayerID: 42, SID: sid, Coins: 10})
-		if err != nil {
-			t.Fatal(err)
-		}
-		c := giftCommand(t, 42, routeLocalSID, routeOtherSID)
-		c.SagaType, c.Topic, c.Payload = alliancedonate.Type, alliancedonate.TopicDebit, payload
-		return c
-	}
-	var bounce *saga.StepBounce
-	if err := steps.admitBound(context.Background(), command(routeLocalSID)); !errors.As(err, &bounce) || bounce.Route != saga.SidRoute(routeLocalSID) {
-		t.Fatalf("a guild step for a player bound to sid %d = %v, want a bounce there", routeLocalSID, err)
-	}
+	world := newRouteWorld(t)
+	home := world.server(t, routeLocalSID)
 	var rejection *saga.StepRejection
-	if err := steps.admitBound(context.Background(), command(0)); !errors.As(err, &rejection) {
+	if err := home.guilds.admitBound(context.Background(), world.guildDebit(t, 0, routeLocalSID)); !errors.As(err, &rejection) {
 		t.Fatalf("a guild step with no sid = %v, want a rejection", err)
 	}
-	if err := steps.admitBound(context.Background(), command(routeOtherSID)); err != nil {
+	if home.owners.Resident(world.player) {
+		t.Fatal("rejecting a guild step with no sid took the player into service")
+	}
+	if err := home.guilds.admitBound(context.Background(), world.guildDebit(t, routeLocalSID, routeLocalSID)); err != nil {
 		t.Fatalf("a guild step for this sid's own player = %v, want it admitted", err)
 	}
-	if owners.Resident(42) != true {
+	if !home.owners.Resident(world.player) {
 		t.Fatal("the admitted guild step left no resident record")
 	}
 }

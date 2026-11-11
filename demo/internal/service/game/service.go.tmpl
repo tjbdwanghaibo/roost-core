@@ -8,6 +8,7 @@ import (
 
 	world "{{MODULE}}/game/entities/world"
 	lifecycle "{{MODULE}}/game/lifecycle"
+	gamerehome "{{MODULE}}/game/rehome"
 	"{{MODULE}}/game/settings"
 	"{{MODULE}}/game/skills"
 	"{{MODULE}}/game/terrainmap"
@@ -19,6 +20,7 @@ import (
 	fnats "github.com/tjbdwanghaibo/roost-core/infra/network/nats"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/cellworld"
 	"github.com/tjbdwanghaibo/roost-core/gameplay/skill"
+	kitdataengine "github.com/tjbdwanghaibo/roost-core/wiring/dataengine"
 	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
 	kitsaga "github.com/tjbdwanghaibo/roost-core/wiring/saga"
 )
@@ -237,9 +239,21 @@ func (s *Service) Init(registry *app.Registry) error {
 	if !ok || access == nil || access.Manager() == nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: entity runtime is unavailable, so an idle player could never be unloaded")
 	}
-	owners.Evict(playerEvictor{scene: scene, players: players, manager: access.Manager()})
+	// 换服（rehome 模块）用的是同一个东西的另一面：不是丢副本，而是把实体的写权交出去——离开场景、DataEngine
+	// 交出实体并保持屏障。DataEngine 不在（不该发生：Nest 的提交器就是它）时不装，换服在“离开”这一步被中止。
+	evictor := playerEvictor{scene: scene, players: players, manager: access.Manager()}
+	if dataEngine, ok := app.Lookup[*kitdataengine.Mod](registry, mods.ModDataEngine); ok && dataEngine != nil {
+		evictor.handOff = dataEngine
+	}
+	owners.Evict(evictor)
+	owners.HandOff(evictor)
 	if err := registry.Register(PlayerOwnerCapability, owners); err != nil {
 		return fmt.Errorf("{{GAME_SERVICE}}: publish player owners: %w", err)
+	}
+	// 同一张表，以 rehome 模块的 Residency 的名义再发布一次：模块的驱动器、进入前检查与 Binding 看到的迁出表
+	// 就是驻留表里的那一张，不会一边说“在本服”一边说“已迁走”。
+	if err := registry.Register(gamerehome.ResidencyCapability, gamerehome.Residency(owners)); err != nil {
+		return fmt.Errorf("{{GAME_SERVICE}}: publish player owners as the rehome residency: %w", err)
 	}
 	// 同一张表，再以接入边界的可选闸门名发布：从这里起每个玩家请求在到达 handler 之前都先检查，没有
 	// 在本进程接入服务（登录时校验 server_id）的玩家，所有端点一起拒绝。

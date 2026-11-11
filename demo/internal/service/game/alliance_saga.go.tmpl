@@ -87,9 +87,6 @@ type guildSteps struct {
 	nest      corenest.Client
 	alliances guildAlliance
 	owners    playerOwnership
-	// moving is the "is this player moving between sids" hook (gift_saga.go
-	// playerMoving, TODO 维护者 2026-11-11); nil is notMoving.
-	moving playerMoving
 }
 
 // startGuildSagas registers the guild steps and starts their consumers, in
@@ -320,12 +317,13 @@ func guildTarget(command saga.Command) (guild.State, int64, error) {
 // --- the Player steps' ownership check (gift_saga.go admitBound's rules) ---
 
 // admitBound is the last guard on a routed Player step: a payload without a
-// sid is rejected (logged; not migrated, maintainer decision 2026-11-11), a
-// player moving between sids is bounced back with no new route (playerMoving,
-// TODO 维护者 2026-11-11), a player bound to another sid is bounced back to the
-// coordinator with his binding as the new route, a copy being unloaded is
-// retried on this sid.
-func (steps guildSteps) admitBound(_ context.Context, command saga.Command) error {
+// sid is rejected (logged; not migrated, maintainer decision 2026-11-11); the
+// rest follows the player's CURRENT binding (PlayerOwners.AdmitBound — the
+// payload's sid is only the server the saga started on): a player changing
+// servers is bounced back with no new route, a player bound to another sid is
+// bounced back to the coordinator with that sid as the new route, a copy
+// being unloaded or a binding that cannot be asked is retried on this sid.
+func (steps guildSteps) admitBound(ctx context.Context, command saga.Command) error {
 	if steps.owners == nil {
 		return nil
 	}
@@ -340,15 +338,5 @@ func (steps guildSteps) admitBound(_ context.Context, command saga.Command) erro
 		slog.Error("guild saga: rejecting a step whose payload names no sid", "player_id", state.PlayerID, "command", command.ID, "saga_id", command.SagaID)
 		return saga.RejectStep(fmt.Sprintf("guild step %s for player %d names no sid; it cannot be routed", command.ID, state.PlayerID))
 	}
-	if steps.moving.isMoving(state.PlayerID) {
-		return saga.BounceStep("", fmt.Sprintf("player %d is moving between sids", state.PlayerID))
-	}
-	local, err := steps.owners.AdmitBound(state.PlayerID, state.SID)
-	if !local {
-		return saga.BounceStep(saga.SidRoute(state.SID), fmt.Sprintf("player %d is bound to sid %d", state.PlayerID, state.SID))
-	}
-	if err != nil {
-		return fmt.Errorf("guild saga: player %d: %w", state.PlayerID, err)
-	}
-	return nil
+	return admitByBinding(ctx, steps.owners, "guild saga", state.PlayerID)
 }

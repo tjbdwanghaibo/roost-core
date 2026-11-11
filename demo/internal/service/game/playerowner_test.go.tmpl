@@ -160,7 +160,7 @@ func serveInBackground(ctx context.Context, owners *PlayerOwners, playerID int64
 func unloadStuck(t *testing.T, owners *PlayerOwners, clock *time.Time, playerID int64) (evictor *blockingEvictor, endDrop func()) {
 	t.Helper()
 	owners.evictWait = 50 * time.Millisecond
-	if local, err := owners.AdmitBound(playerID, ownSID); !local || err != nil {
+	if local, err := admitHere(owners, playerID); !local || err != nil {
 		t.Fatalf("admit bound: %v %v", local, err)
 	}
 	evictor = newBlockingEvictor()
@@ -229,19 +229,50 @@ func TestServeAnswersEachOfItsThreeOutcomes(t *testing.T) {
 	})
 }
 
-// AdmitBound：命令里的 sid 不是本服 → local=false、不建记录（调用方转交）；是本服 → 建记录、放行。
-func TestAdmitBoundServesOnlyItsOwnSid(t *testing.T) {
+// admitHere 是这些用例里后台准入的写法：问当前绑定，回答“归不归本服”与错误。这张表没有装绑定的权威
+// （owners.bound 为 nil），没有驻留记录的玩家按“绑定在本服”处理；要别的回答的用例自己装一个。
+func admitHere(owners *PlayerOwners, playerID int64) (bool, error) {
+	admission, err := owners.AdmitBound(context.Background(), playerID)
+	return admission.Local, err
+}
+
+// AdmitBound 按当前绑定回答：权威说他在别的服 → 不归本服、给出那个服、不建记录（调用方转交）；说在换服 → 不建记录；
+// 问不到 → 错误、不建记录；说在本服 → 建记录、放行。有了驻留记录之后不再问。
+func TestAdmitBoundServesOnlyThePlayersBoundHere(t *testing.T) {
 	owners, _, _ := ownersUnderTest(t)
-	local, err := owners.AdmitBound(42, 2000)
-	if local || err != nil {
-		t.Fatalf("AdmitBound for a player bound elsewhere = %v, %v; want not local", local, err)
+	sid, moving, asked := int32(2000), false, 0
+	var away error
+	owners.bound = func(_ context.Context, playerID int64) (int32, bool, error) {
+		asked++
+		if playerID != 42 {
+			t.Errorf("asked about player %d, want 42", playerID)
+		}
+		return sid, moving, away
+	}
+	admission, err := owners.AdmitBound(context.Background(), 42)
+	if admission.Local || admission.Moving || admission.SID != 2000 || err != nil {
+		t.Fatalf("AdmitBound for a player bound elsewhere = %+v, %v; want not local, sid 2000", admission, err)
+	}
+	sid, moving = ownSID, true
+	if admission, err = owners.AdmitBound(context.Background(), 42); admission.Local || !admission.Moving || err != nil {
+		t.Fatalf("AdmitBound for a moving player = %+v, %v; want moving", admission, err)
+	}
+	moving, away = false, errors.New("account is away")
+	if admission, err = owners.AdmitBound(context.Background(), 42); admission.Local || !errors.Is(err, away) {
+		t.Fatalf("AdmitBound when the binding cannot be asked = %+v, %v; want the error and no admission", admission, err)
 	}
 	if hasRecord(owners, 42) || owners.Admit(42) == nil {
-		t.Fatal("background work for a player bound elsewhere left a resident record here")
+		t.Fatal("background work for a player not bound here left a resident record here")
 	}
-	local, err = owners.AdmitBound(42, ownSID)
-	if !local || err != nil {
-		t.Fatalf("AdmitBound for this sid's player = %v, %v", local, err)
+	away = nil
+	admission, err = owners.AdmitBound(context.Background(), 42)
+	if !admission.Local || admission.SID != ownSID || err != nil {
+		t.Fatalf("AdmitBound for this sid's player = %+v, %v", admission, err)
+	}
+	// 已经有驻留记录：不再问权威（哪怕它现在说别的）。
+	sid = 2000
+	if admission, err = owners.AdmitBound(context.Background(), 42); !admission.Local || err != nil || asked != 4 {
+		t.Fatalf("AdmitBound for a resident = %+v, %v after %d questions; want local without asking again (4)", admission, err, asked)
 	}
 	if err := owners.Admit(42); err != nil {
 		t.Fatalf("a player admitted for background work is not admitted: %v", err)
@@ -275,7 +306,7 @@ func TestLookingAtAPlayerIsNotUse(t *testing.T) {
 	if owners.Resident(77) || hasRecord(owners, 77) {
 		t.Fatal("looking at a player nobody admitted made them resident")
 	}
-	if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+	if local, err := admitHere(owners, 77); !local || err != nil {
 		t.Fatalf("admit bound: %v %v", local, err)
 	}
 	for range 4 {
@@ -296,7 +327,7 @@ func TestABackgroundAdmissionIsUnloadedWhenNobodyIsPlaying(t *testing.T) {
 	owners, _, clock := ownersUnderTest(t)
 	evictor := &evictorStub{}
 	owners.Evict(evictor)
-	if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+	if local, err := admitHere(owners, 77); !local || err != nil {
 		t.Fatalf("a background step could not take an offline player bound here: %v %v", local, err)
 	}
 	*clock = clock.Add(IdleUnload + time.Second)
@@ -309,7 +340,7 @@ func TestABackgroundAdmissionIsUnloadedWhenNobodyIsPlaying(t *testing.T) {
 		t.Fatal("this process still admits writes for a player it unloaded")
 	}
 	// 下一次后台工作在本进程重新接入（冷加载等投影屏障，不在本表里）。
-	if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+	if local, err := admitHere(owners, 77); !local || err != nil {
 		t.Fatalf("the unloaded player could not be taken back into service: %v %v", local, err)
 	}
 }
@@ -340,7 +371,7 @@ func TestWorkInProgressKeepsThePlayerResident(t *testing.T) {
 	owners, _, clock := ownersUnderTest(t)
 	evictor := &evictorStub{}
 	owners.Evict(evictor)
-	if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+	if local, err := admitHere(owners, 77); !local || err != nil {
 		t.Fatalf("admit bound: %v %v", local, err)
 	}
 	for range 5 {
@@ -363,7 +394,7 @@ func TestAPlayerTakenIntoServiceForNewWorkIsNotIdle(t *testing.T) {
 		enter func(*PlayerOwners) error
 	}{
 		{"admit-bound", func(owners *PlayerOwners) error {
-			if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+			if local, err := admitHere(owners, 77); !local || err != nil {
 				return errors.Join(errors.New("not admitted"), err)
 			}
 			return nil
@@ -414,7 +445,7 @@ func TestAUseBetweenTheSessionCheckAndTheMarkCancelsTheUnload(t *testing.T) {
 	}{
 		{"serve", func(owners *PlayerOwners) error { return owners.Serve(context.Background(), 77, ownSID) }},
 		{"admit-bound", func(owners *PlayerOwners) error {
-			if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+			if local, err := admitHere(owners, 77); !local || err != nil {
 				return errors.Join(errors.New("not admitted"), err)
 			}
 			return nil
@@ -433,7 +464,7 @@ func TestAUseBetweenTheSessionCheckAndTheMarkCancelsTheUnload(t *testing.T) {
 			}}, func() time.Time { return clock })
 			evictor := &evictorStub{}
 			owners.Evict(evictor)
-			if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+			if local, err := admitHere(owners, 77); !local || err != nil {
 				t.Fatalf("admit bound: %v %v", local, err)
 			}
 			clock = clock.Add(IdleUnload + time.Second)
@@ -458,7 +489,7 @@ func TestAUseBetweenTheSessionCheckAndTheMarkCancelsTheUnload(t *testing.T) {
 // 卸载扔不掉副本（实体忙）：记录保留，玩家继续服务，下一轮再试。
 func TestAnUnloadThatCannotDropTheCopyKeepsThePlayerInService(t *testing.T) {
 	owners, _, clock := ownersUnderTest(t)
-	if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+	if local, err := admitHere(owners, 77); !local || err != nil {
 		t.Fatalf("admit bound: %v %v", local, err)
 	}
 	owners.Evict(&evictorStub{fail: errors.New("the entity is busy")})
@@ -483,11 +514,11 @@ func TestAnUnloadInFlightAdmitsNothing(t *testing.T) {
 	owners.Evict(evictorFunc(func(_ context.Context, playerID int64) error {
 		calls++
 		admit = owners.Admit(playerID)
-		local, admitBound = owners.AdmitBound(playerID, ownSID)
+		local, admitBound = admitHere(owners, playerID)
 		resident = owners.Resident(playerID)
 		return nil
 	}))
-	if l, err := owners.AdmitBound(77, ownSID); !l || err != nil {
+	if l, err := admitHere(owners, 77); !l || err != nil {
 		t.Fatalf("admit bound: %v %v", l, err)
 	}
 	*clock = clock.Add(IdleUnload + time.Second)
@@ -516,7 +547,7 @@ func TestAnUnloadWhoseDropOutlivesItsWaitAdmitsNothingUntilTheDropEnds(t *testin
 		if err := owners.Admit(77); err == nil {
 			t.Fatal("Admit let work start on player 77 while the unload is still destroying the copy")
 		}
-		if local, err := owners.AdmitBound(77, ownSID); !local || err == nil {
+		if local, err := admitHere(owners, 77); !local || err == nil {
 			t.Fatalf("a background step was admitted while the copy is being destroyed: local=%v err=%v", local, err)
 		}
 		endDrop()
@@ -524,7 +555,7 @@ func TestAnUnloadWhoseDropOutlivesItsWaitAdmitsNothingUntilTheDropEnds(t *testin
 		if hasRecord(owners, 77) {
 			t.Fatal("the record outlived a drop that succeeded")
 		}
-		if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+		if local, err := admitHere(owners, 77); !local || err != nil {
 			t.Fatalf("player 77 could not be taken back into service after the drop ended: %v %v", local, err)
 		}
 		if err := owners.Admit(77); err != nil {
@@ -579,7 +610,7 @@ func TestALoginDuringAnUnloadEndsServed(t *testing.T) {
 	t.Run("ends-served", func(t *testing.T) {
 		owners, _, clock := ownersUnderTest(t)
 		owners.evictWait = 50 * time.Millisecond
-		if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+		if local, err := admitHere(owners, 77); !local || err != nil {
 			t.Fatalf("admit bound: %v %v", local, err)
 		}
 		evictor := newBlockingEvictor()
@@ -613,7 +644,7 @@ func TestALoginDuringAnUnloadEndsServed(t *testing.T) {
 	t.Run("the-record-is-gone-before-the-waiters-wake", func(t *testing.T) {
 		owners, _, _ := ownersUnderTest(t)
 		owners.evictWait = 5 * time.Second
-		if local, err := owners.AdmitBound(77, ownSID); !local || err != nil {
+		if local, err := admitHere(owners, 77); !local || err != nil {
 			t.Fatalf("admit bound: %v %v", local, err)
 		}
 		// 标记卸载，与 unloadOne 在锁内做的一样；runEviction 由测试在本 goroutine 上调用，它返回时

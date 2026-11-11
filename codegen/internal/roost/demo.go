@@ -790,7 +790,8 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 		{write: "cmd/sidmerge/main_test.go", why: "the merge checklist from this project's own config: the logical databases the DAOs declare, the shared ones that must be co-located, the persistent bus items"},
 		{write: "internal/service/game/flags_test.go", why: "启动即表里的值、reload 跟着变、表里删掉的开关消失、缺表时拒绝发布"},
 		{write: "internal/service/game/flags.go", why: "the table is the source and the store is rebuilt from it on every reload; also the one place that says what may be hot-patched"},
-		{write: "internal/service/game/playerowner.go", why: "static binding: serve only the players bound to this sid (server_id from account), a local resident table behind the write gate, and idle unload as plain memory management"},
+		{write: "internal/service/game/playerowner.go", why: "serve only the players bound to this sid (server_id from account, and the current binding for background work), a local resident table behind the write gate, the rehome module's Residency with the table of players moved out, and idle unload as plain memory management"},
+		{write: "internal/service/game/rehome_checks.go", why: "the demo's own checks before a player may change servers (the rehome module's registration points): a guild or team member is refused, and so is every player of a server running the partitioned scene — the state those hold about a player's server is not moved with him yet"},
 		{write: "internal/service/game/playerowner_test.go", why: "Serve 的三种结果、只有通过绑定校验才有驻留记录、卸载进行中不准入、登录等卸载结束、闲置卸载与使用的界定"},
 		{write: "internal/service/game/gift_saga_budget_test.go", why: "退款（debit 的补偿）的重试窗口覆盖发送方 sid 的一次崩溃重启：startup_wait + ttl + 拉起余量，按生成的 singleton 配置核对"},
 		{write: "internal/service/game/gift_route_test.go", why: "赠礼与公会的玩家步骤按 sid 确切路由：定义只路由写 Player 的步骤；属主核对——本服的离线发送方照常执行，绑定别的服的退回协调器并指明其 sid、不在本进程接入，没有 sid 的拒收，卸载中的在本服重试"},
@@ -820,7 +821,7 @@ func demoScaffoldSteps(gameService string) []demoScaffoldStep {
 // （落点已被占用时安装器拒绝安装）。
 func demoModuleSteps() []demoScaffoldStep {
 	return []demoScaffoldStep{
-		{modules: []string{"enter", "chat", "leaderboard", "bag", "profile", "mailbox"}, why: "enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); bag is the bag module (the Bag component, PlayerDao.Bag, the item table — which items exist and each one's stack cap —, the discard protocol, the server-side grant handler and the bag's error codes); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook); mailbox is the mailbox module (MailboxList / MailboxClaim, the claim ledger PlayerDao.MailboxLedger, the attachment kinds, the sender SendTo, with enter the pull of server-wide mail on entering and with bag the item attachment) and brings the wallet module it requires (coins, WalletSpend)"},
+		{modules: []string{"enter", "chat", "leaderboard", "bag", "profile", "mailbox", "rehome"}, why: "enter is the enter module (the EnterGame protocol, the Player's first-time initialization and its record); chat is the chat module (channels, send, push to online players, history, system announcements, the chat service's collaborators); leaderboard is the leaderboard module (the top page with the caller's own standing, the caller's standing alone, and the snapshot submit the dungeon settlement calls); bag is the bag module (the Bag component, PlayerDao.Bag, the item table — which items exist and each one's stack cap —, the discard protocol, the server-side grant handler and the bag's error codes); profile is the profile module (name, level and experience: the Profile component, PlayerDao.Profile / ProfilePrivate, rename, the read-only check before a grant, the card the ranked queue scores by, and the level-up hook); mailbox is the mailbox module (MailboxList / MailboxClaim, the claim ledger PlayerDao.MailboxLedger, the attachment kinds, the sender SendTo, with enter the pull of server-wide mail on entering and with bag the item attachment) and brings the wallet module it requires (coins, WalletSpend); rehome is the rehome module (moving one player to another game sid: the RehomeApply protocol and the server-side entry the GM command calls, PlayerDao.Rehome, account's begin / commit / abort, and with enter the check before a login and the arrival after it) — the demo publishes its PlayerOwners as the module's Residency and answers saga admission by the current binding"},
 		// demo 在 enter 模块之上的定制：模块装好之后覆盖它的三个业务文件。协议多几个字段，
 		// 端点交给 player controller 的 EnterGame（区服归属、登录预算、进场景、补单、公会、公告；
 		// 拉全服邮件与聊天上线是进入钩子，由 mailbox、chat 各自与 enter 的联动登记）。
@@ -850,6 +851,12 @@ func demoModuleSteps() []demoScaffoldStep {
 		// demo 的发件方（升级奖励、GM 补偿、活动结算、送礼的送达）import game/mailbox。它依赖的 wallet 跟着装进来
 		// （金币附件经它到账）。enter 与 bag 也在这一步里，所以两组联动一起写：进入游戏时拉全服邮件
 		// （画像读会话的 claims）、道具附件进背包（demo 的奖励邮件带的都是道具）。
+		//
+		// 换服是 rehome 模块：申请协议、驱动器、档里的换服记录、与 enter 的联动（进入前检查、到达）都是模块的，
+		// demo 不覆盖它的任何文件。demo 这一侧的接线在自己的文件里：驻留表实现模块的 Residency 并发布
+		// （playerowner.go、service.go），saga 步骤按当前绑定准入（gift_saga.go、alliance_saga.go），
+		// 登录在装载玩家之前跑进入前检查（game/controllers/player/enter_game.go），GM 命令 gm.player.rehome，
+		// 以及 demo 自己的换服前检查（rehome_checks.go）。
 	}
 }
 

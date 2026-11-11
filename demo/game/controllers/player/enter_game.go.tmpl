@@ -10,6 +10,7 @@ import (
 	apperrors "{{MODULE}}/internal/errors"
 	gameenter "{{MODULE}}/game/enter"
 	lifecycle "{{MODULE}}/game/lifecycle"
+	gamerehome "{{MODULE}}/game/rehome"
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	playeraccess "{{MODULE}}/game/playeraccess"
 	"{{MODULE}}/protocol/pb"
@@ -50,6 +51,24 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 		code, reason := errcode.ClientError(errcode.Wrap(apperrors.ErrPlayerElsewhere, nil, "player_id", context.PlayerID, "owner_sid", 0))
 		return &pb.EnterGameResponse{Code: code, Reason: reason}, nil
 	}
+	// 换服（rehome 模块）的进入前检查，在把玩家接入服务、装载实体之前：他正在换服答 rehome_moving，已经绑定到
+	// 别的服答 rehome_elsewhere（带他现在的服）。握手之后才换走的玩家，会话里的 server_id 仍是本服，上面的静态比较
+	// 拦不住——检查读的是会话里的绑定代数与在途换服、本进程的迁出表（驻留表以 Residency 的名义发布的那一张），
+	// 必要时问 account；换回本服的玩家也在这里撤掉旧的屏障。它是 enter 模块的登记点（game/enter 的 OnEntering，
+	// rehome 与 enter 的联动登记），所以别的功能以后登记的检查同样在这里生效。
+	if err := gameenter.RunEntering(context.Context(), controller.registry, gameenter.Entering{
+		PlayerID: context.PlayerID, Claims: context.Session.Principal().Claims,
+	}); err != nil {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("enter_game: a check before entering failed", "player_id", context.PlayerID, "err", err)
+		}
+		response := &pb.EnterGameResponse{Code: code, Reason: reason}
+		if sid, known := gamerehome.OwnerSID(err); known {
+			response.OwnerSID = sid
+		}
+		return response, nil
+	}
 	// Taking the player into service — waiting out an unload of their
 	// previous copy, then the load — runs on its own budget, a share of this
 	// request's dispatch deadline (player_access.tcp.login_timeout). A cold
@@ -73,6 +92,10 @@ func (controller *Controller) EnterGame(context *playeraccess.Context, request *
 			slog.Warn("enter_game: player is bound to another server", "player_id", context.PlayerID, "owner_sid", boundSID)
 			code, reason := errcode.ClientError(err)
 			return &pb.EnterGameResponse{Code:code, Reason:reason, OwnerSID:boundSID},nil
+		} else if sid, moved := gamerehome.OwnerSID(err); moved {
+			// 检查与接入之间他刚被换走（迁出表在建驻留记录的同一把锁下复核）。
+			code, reason := errcode.ClientError(err)
+			return &pb.EnterGameResponse{Code: code, Reason: reason, OwnerSID: sid}, nil
 		} else {
 			slog.Error("enter_game: player not taken into service", "player_id", context.PlayerID, "err", err)
 		}

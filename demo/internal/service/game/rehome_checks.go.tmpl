@@ -1,0 +1,57 @@
+package {{GAME_SERVICE_PKG}}
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	player "{{MODULE}}/game/entities/player"
+	gamerehome "{{MODULE}}/game/rehome"
+	"{{MODULE}}/game/settings"
+	apperrors "{{MODULE}}/internal/errors"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// demo 自己的换服前检查（rehome 模块的两个登记点）。换服只交接 Player 这一份档的写权；demo 里还有几样东西
+// 记着“这名玩家在哪个服”，换服时没有人替它们改——处置它们属于换服的二期。在那之前宁可拒绝，也不让玩家
+// 换了服、旧服的东西还挂着。玩家自己申请与 GM 发起（gm.player.rehome）同样受这些检查约束。
+//
+//   - 在公会里（PlayerDao.GuildID 非 0）：拒绝，先退出公会。联盟服务记着成员所在的服（捐献、领奖的 saga 按它路由），
+//     成员通知也按它投递；换服之后这些都指向旧服。
+//   - 在队伍里（PlayerDao.TeamID 非 0）：拒绝，先离队。成员表（Team 实体）记着每名成员的 Base sid。
+//   - 本服开着分区场景（scene.partition.enabled）：一律拒绝。玩家在格子进程上还有 SceneActor，
+//     它的租约、回写都认原来的 Base；离开时怎么收回它还没有接到换服的离开钩子上。
+//
+// 普通场景不在这里：离开本进程时驻留表先让他离开场景（PlayerOwners.Depart），到达之后登录照常把他放到出生点。
+//
+// 这里看不到、因而没有拦的（记在 KNOWN-LIMITS，二期处理）：匹配队列里的票据（match 服务按票据的时限自己作废，
+// 但撮合成功的通知会发到旧服）、进行中的副本与对战（session 服务的房间、lockstep 对局在旧服的进程里）、
+// 名下的建筑与地形账本（按 sid 分库）。运营要给这样的玩家换服，先确认他不在排队、不在副本或对战里。
+func init() {
+	gamerehome.OnApplying("{{GAME_SERVICE}}", refuseRehomeInAPartitionedScene)
+	player.OnRehomeApplying("{{GAME_SERVICE}}", func(owner *player.Player, _ gamerehome.Move, _ int64) error {
+		return rehomeBlockedBy(owner.Dao().GetGuildID(), owner.Dao().GetTeamID())
+	})
+}
+
+// rehomeBlockedBy 是事务内的那一条：只看这名玩家自己档里的两个事实。
+func rehomeBlockedBy(guildID, teamID int64) error {
+	switch {
+	case guildID != 0:
+		return errcode.Wrap(apperrors.ErrRehomeRefused, errors.New("leave the guild first"), "guild_id", guildID)
+	case teamID != 0:
+		return errcode.Wrap(apperrors.ErrRehomeRefused, errors.New("leave the team first"), "team_id", teamID)
+	}
+	return nil
+}
+
+// refuseRehomeInAPartitionedScene 是事务外的那一条：本服的场景是分区场景时不让换服。
+// 读不出配置（测试的 Registry 没有这些键）按“没开”处理：分区场景缺省是关的。
+func refuseRehomeInAPartitionedScene(_ context.Context, registry *app.Registry, move gamerehome.Move) error {
+	partition, err := settings.LoadPartition(registry)
+	if err != nil || !partition.Enabled {
+		return nil
+	}
+	return errcode.Wrap(apperrors.ErrRehomeRefused, fmt.Errorf("server %d runs a partitioned scene; moving its players is not supported yet", move.From), "player_id", move.PlayerID)
+}
