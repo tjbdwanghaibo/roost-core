@@ -25,7 +25,7 @@
 
 **进程异常退出（kill -9、掉电）时**：WAL 里可能有已确认给业务、但还没投影进 Mongo 的记录。此时不能在新机器用空 WAL 目录接管，否则这些写入丢失。正确做法是在**原 WAL 目录**上重启同一 sid（原机器，或把该持久卷原样挂到新机器，仍是单写者），让它恢复并投影，再正常停机、`wal-drained` 通过后继续第 4 步。崩溃进程的单实例锁要等 `singleton.ttl` 过期，重启会先等待这段时间。
 
-**空窗期长度**：从旧进程停机到新进程就绪，这个 sid 不处理请求。跨服 saga 的步骤重试预算要覆盖它：demo 的赠礼 saga 把 debit 的重试次数设成覆盖“一次崩溃重启”（`singleton.startup_wait + ttl + 45s`，见生成的 `config.game.yaml` 与 `gift_saga_budget_test.go`）；空窗超过预算的步骤会进入补偿或人工处理。
+**空窗期长度**：从旧进程停机到新进程就绪，这个 sid 不处理请求。跨服 saga 的步骤重试预算要覆盖它：demo 的赠礼 saga 把 debit 的重试次数设成覆盖“一次崩溃重启”（`singleton.startup_wait + ttl + 45s`，见生成的 `config.game.yaml` 与 `gift_saga_budget_test.go`）；空窗超过预算的步骤会进入补偿或人工处理。按 sid 路由的 saga 步骤（[SAGA §按 sid 确切路由](SAGA.md#按-sid-确切路由路由步骤维护者-2026-11-11-方案-③)）在空窗期留在这个 sid 的 durable `<group>-<step>-<sid>` 上，别的进程收不到，新进程绑定同一个 durable 后接着处理；路由地址不变，不需要改投。
 
 **与 Directory / global 路由的关系**：`service/directory` 是全局名字的预留 / 提交 / 释放，与玩家所在机器无关，迁移不需要动它。`service/global` 的 `RouteBinding`（game sid → global 实例，`BeginMigration` / `CompleteMigration` / `AbortMigration` 按 epoch CAS）描述的是“哪个 global 实例服务这个 game sid”，game sid 换机器时绑定不变；只有搬 global 实例本身时才走那套迁移。
 
@@ -123,9 +123,9 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 | 用法 | 持久？ | 按 sid 寻址？ | A 退役后 | 处理 |
 | --- | --- | --- | --- | --- |
 | DataEngine 效果流 `dataengine.effects.stream` | 是 | 否：共享 durable（game-demo `game-level-up-mail`、`game-activity-phase`，saga 的 `roost-saga-start` / `-result`） | 已发布的由 B 消费；A 暂存未发布的留在 outbox | outbox 检查 |
-| saga 流 `saga.stream` | 是 | 否：共享 durable（`game-gift-<step>`），但命令载荷可能带发起方 sid（赠礼 `FromSID`），只有那个 sid 的进程接纳 | 指向 A 的非终态 saga 永远推进不了 | saga 全部终态（检查） |
+| saga 流 `saga.stream` | 是 | 部分：Mongo 步骤是共享 durable（`game-gift-deliver` 等）；路由步骤（赠礼扣款 / 退款、公会玩家步骤）每个 sid 一个 durable `<group>-<step>-<sid>`，命令只投给 saga 的路由 sid | 路由到 A 的非终态 saga 推进不了（只到超时与补偿） | saga 全部终态（检查）；合服后删 A 的路由 durable（`nats consumer ls <流> \| grep -- '-A$'`） |
 | SyncBus（`syncbus.transport: jetstream`） | 是 | 是：每个主题每个 sid 一个 durable `sync_<topic>_<sid>_<hash>`（及 `.live`） | 广播副本无人消费，到流的 max age 丢弃；B 有自己的 durable，不丢只发给 A 的东西 | 合服后删 A 的 durable（`nats consumer ls <流> \| grep _A_`） |
-| 服务 RPC（`nats.rpc.transport: jetstream`） | 是 | 是：请求流里的实例 durable `rpc_<服务>_<sid>_<方法>`（game-demo 的赠礼步骤转交发往 `svc.game.<sid>`） | 发往 A 的请求等到 request TTL，调用方超时；不会重投给 B | 停服前确认 A 的实例 durable 没有积压，合服后删除。缺省 `core` 传输不落盘 |
+| 服务 RPC（`nats.rpc.transport: jetstream`） | 是 | 是：请求流里的实例 durable `rpc_<服务>_<sid>_<方法>` | 发往 A 的请求等到 request TTL，调用方超时；不会重投给 B | 停服前确认 A 的实例 durable 没有积压，合服后删除。缺省 `core` 传输不落盘 |
 | 可靠总线（`nats.reliable.enabled`） | 是（Redis） | 是：去重收件箱与死信按消费者 `<服务>:<sid>` | A 的死信无人重放 | 停 A 前用 admin `bus.dlq.*` 列出，重放到 B 或丢弃（业务决定）。缺省关闭 |
 | Remote 快照兴趣 | 是（Redis） | 是：消费者 sid | 按 `remote_entity.snapshot_interest_ttl` 过期 | 无 |
 

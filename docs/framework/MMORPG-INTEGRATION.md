@@ -263,7 +263,7 @@ go test -race -count=1 ./internal/service/game ./game/scene/... ./cmd/loadtest
 
 验收脚本 `scripts/test-mmorpg-cross-sid.sh` 对**已经启动**的 game-demo 运行，自己不起停服务、不改角色 sid。准备方式（隔离依赖、唯一工程名，端口按本机空闲情况选）：
 
-1. 在本仓库根目录生成工程，并让 core 依赖指向本地仓库——game-demo 用到的 D12 API（`kitsaga.WithAdmit`、`Steps.RunHandedOver`）还在 CHANGELOG `[Unreleased]`，已发布版本里没有：
+1. 在本仓库根目录生成工程，并让 core 依赖指向本地仓库——game-demo 用到的按 sid 路由的 saga 步骤（`kitsaga.WithSidRoute`、`saga.BounceStep`）还在 CHANGELOG `[Unreleased]`，已发布版本里没有：
 
    ```bash
    GOWORK=off go run ./codegen/cmd/roost project new <唯一名> -module example.com/<唯一名> -out <目录> -template game-demo --skip-deps

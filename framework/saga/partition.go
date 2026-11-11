@@ -175,7 +175,7 @@ func (r *round) emit(st *sagaState, kind string, command *Command) {
 	subject := r.p.e.layout.NoneEventSubject(r.p.k)
 	switch {
 	case command != nil:
-		subject = r.p.e.layout.CommandEventSubject(r.p.k, command.Topic)
+		subject = r.p.e.layout.commandEventSubject(r.p.k, command)
 	case st.Record.Status.Terminal():
 		subject = r.p.e.layout.DoneEventSubject(r.p.k)
 	}
@@ -271,10 +271,16 @@ func (r *round) start(msg fnats.LogMsg) {
 		r.verdict(reply, in.Attempt, verdictInvalid, func(v *pendingVerdict) { v.errText = err.Error() })
 		return
 	}
-	if _, ok := e.definition(request.Type, request.DefinitionVersion); !ok {
+	definition, ok := e.definition(request.Type, request.DefinitionVersion)
+	if !ok {
 		r.verdict(reply, in.Attempt, verdictDefinitionMissing, func(v *pendingVerdict) {
 			v.errText = fmt.Sprintf("%s/%d", request.Type, request.DefinitionVersion)
 		})
+		return
+	}
+	if err := checkStartRoute(definition, request); err != nil {
+		r.rejectInput("start", "route", err)
+		r.verdict(reply, in.Attempt, verdictInvalid, func(v *pendingVerdict) { v.errText = err.Error() })
 		return
 	}
 	id := IDOf(request.Type, request.BusinessKey)
@@ -491,7 +497,7 @@ func (r *round) operation(msg fnats.LogMsg) {
 			refuse(err)
 			return
 		}
-		after, err := planResume(record, defined, request, deadline)
+		after, err := planResume(record, definition, defined, request, deadline)
 		if err != nil {
 			refuse(err)
 			return

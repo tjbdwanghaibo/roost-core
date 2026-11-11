@@ -102,7 +102,7 @@ const maxReceiptPrunePerCommit = 16
 // Register 与配置检查要求它至少是每步重试窗口的 ReceiptRetentionFactor 倍（CheckReceiptRetention）。
 const DefaultStepReceiptRetention = 168 * time.Hour
 
-// nativeRun 是一次原生步骤运行（一次投递或一次转交）的状态：Begin / Complete 在 Nest 事务里（业务池 goroutine）写它，
+// nativeRun 是一次原生步骤运行（一次投递）的状态：Begin / Complete 在 Nest 事务里（业务池 goroutine）写它，
 // 结论经 AfterCommit 写入，消费者在 Nest 请求返回之后读。Nest 的回复晚于 AfterCommit（strict 的 Guard 释放回调、
 // pipelined 的完成泵都在回复之前跑），mu 只是让“请求出错返回、事务仍在别处提交”时的并发读写也安全。
 type nativeRun struct {
@@ -244,7 +244,7 @@ func (run *nativeRun) result() StepOutcome {
 //   - 步骤体返回错误 = 结果未知（Nest 提交可能已经发生）：调用方 nak / 稍后重试，重投时 Begin 读到回执就回放。
 //   - 步骤体返回 nil 但没有结论（没调 Nest handler，或 handler 没调 Complete 就成功返回）→ ErrNativeStepNoOutcome。
 //
-// 它不发布、不 ack：SubscribeNativeStep 据结论发结果再 ack；转交路径（命令由另一个进程转来）只执行，原消息持有者的重投收尾。
+// 它不发布、不 ack：SubscribeNativeStep 据结论发结果再 ack。
 // 与消费者的互斥由实体锁与回执保证。receiptRetention ≤ 0 取 DefaultStepReceiptRetention。
 func RunNativeStep(ctx context.Context, command Command, receiptRetention time.Duration, body NativeStepBody) (StepOutcome, error) {
 	if body == nil {

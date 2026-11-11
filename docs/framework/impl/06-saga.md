@@ -76,7 +76,7 @@ RV-20261101-02 的修前证据（main `c31e65cc`）：等待 NEWLIFE v2 却返�
 | --- | --- |
 | [config.go](../../../wiring/saga/config.go) | 配置声明（含 `saga.cold_copy.*`）与 `ValidateConfig`、`ownedPartitions`（P-A） |
 | [mod.go](../../../wiring/saga/mod.go) | saga Mod（Writer = `<sid>-<单实例锁 incarnation>`；冷副本开启时取 Mongo 能力）、`CheckConfigAcrossMods`（含“冷副本要 Mongo Mod”）、`ParticipantSettings`（含 `StepWindow`） |
-| [steps.go](../../../wiring/saga/steps.go) | `Steps`：登记、订阅、准入信号、`RunHandedOver`、`probeTransactionLifetime`、Drain / Stop 与指标 |
+| [steps.go](../../../wiring/saga/steps.go) | `Steps`：登记、订阅（`WithSidRoute` 按 sid 路由的 durable 与定义核对）、准入信号、`probeTransactionLifetime`、Drain / Stop 与指标 |
 | [step_budgets.go](../../../wiring/saga/step_budgets.go) | `saga.step_defaults` / `saga.steps` → `coresaga.StepBudgets` |
 
 </details>

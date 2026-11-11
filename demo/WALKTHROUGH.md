@@ -186,7 +186,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
   Data Engine outbox 把它送到协调器（saga Mod 在 game 进程里，`saga.start` 效果）。saga id = 发送方 + 完整会话的 SHA-256 摘要 + 帧序号；同一请求得到稳定 ID，重连后的同一帧号属于新请求。不能截断会话前缀：demo 会话以 `demo-玩家ID-时间戳` 命名，前缀可能完全不包含时间戳。
   这步不动背包：检查是建议性的，道具在 debit 之前被花掉，debit 会以同一个 coded 错误拒绝，saga 以 failed 结束、无事可补。
 - **步骤**（`internal/service/game/gift_saga.go`，四个步骤，**两种形状**，登记在框架的步骤运行时 `kitsaga.Steps` 上：
-  收件箱、durable、等待投影、停止与指标都是框架的，demo 只写步骤体与准入 / 转交）：
+  收件箱、durable、等待投影、停止与指标都是框架的，demo 只写步骤体与属主核对）：
   - debit（`GiftDebit`，`Bag.RemoveItem`，不够是 `item_short`）与它的补偿（`GiftRefund`，`AddItem`）走**原生路径**
     `Steps.Native`：步骤体把框架的 `saga.NativeStep` 交给 Nest handler，handler 在自己的事务里 `step.Complete(...)`，
     于是背包变更、命令回执、协调器等的完成结果是**同一条 WAL 记录**。重投会撞上回执、回放已存的完成结果而不是再扣一次；
@@ -205,10 +205,12 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
   - 业务拒绝也**提交**：不动数据，只写回执和一个失败的完成结果——协调器听不到的拒绝会让 saga 空等到 deadline。
     只有基础设施错误才返回 error（回滚，让投递退避重试）。
 - **在哪个进程执行**：debit / refund 改的是发送方的 Player，只在发送方绑定的 sid 上执行。`StartGift` 把发起进程的 sid
-  写进 saga 状态（`from_sid`；能发起赠礼的玩家一定在本服服务，也就一定绑定在这个 sid 上）。步骤消费者共用一个 durable，
-  落到别的 sid 的进程上时，准入（`kitsaga.WithAdmit`）拒绝（消息不 ack）并把步骤经 bus 转交给 `from_sid` 那个进程，由它
-  经 `Steps.RunHandedOver` 自己认领执行（框架先核对步骤名与命令主题，再由 demo 复核归属）；
-  发送方离线、内存里没有副本也照常执行。没有 `from_sid` 的载荷不能路由，一律拒绝并记 Error。
+  写进 saga 状态（`from_sid`；能发起赠礼的玩家一定在本服服务，也就一定绑定在这个 sid 上），同时把它作为 saga 的路由地址
+  （`StartRequest.Route = saga.SidRoute(from_sid)`）。debit / refund 是**路由步骤**（定义里 `Routed: true`，消费者
+  `kitsaga.WithSidRoute()`）：协调器只把它们投给 `from_sid` 那个进程的 durable（`game-gift-debit-<sid>`），别的进程收不到。
+  属主收到后准入（`kitsaga.WithAdmit`）仍核对绑定：不在本服就退回协调器并指明发送方的 sid（`saga.BounceStep`，不执行、零写入），
+  副本正在卸载就在本服稍后重试；发送方离线、内存里没有副本也照常执行。没有 `from_sid` 的载荷不能路由：启动被拒绝，万一到了步骤
+  也被拒收（`saga.RejectStep`）并记 Error。
 - **状态**：`GiftStatus`（10014）经 saga Engine 读记录。刚发完轮询会得到 `unknown`——start 意图还在 outbox → 协调器的路上；非本人的 saga 也是 `unknown`。
   终态：`completed` / `compensated` / `failed` / `manual_required`（补偿自己也拒绝了，例如退回时叠加已满——运维在 `gm.saga.list` 里看到并决定）。
 - **机器人**：送给自己（背包 −1）→ 轮询到终态 → `expect_gift completed` → 领邮件（背包 +1）；再送给玩家 1（从未进游戏）→ deliver 拒绝 → debit 补偿 →
@@ -233,7 +235,7 @@ FinishDungeon 端点 ─ Finish(playerID, runID, succeeded|failed, outcome) ─�
   `claim_guild_reward`（10029）：两个事务域，各一个 saga（`saga/alliance_found`、`alliance_donate`、`alliance_reward`）。端点
   `StartGuildOp` 在玩家锁内做建议性检查后 `saga.EmitStart`，立即答“已受理”与交易号（`SagaKey`），结果用 `guild_op_status`（10030）查。
   步骤在 `internal/service/<game>/alliance_saga.go`：Player 一侧是**原生步骤**（`GuildDebit` / `GuildCredit`，`durability=pipelined`，
-  回执在 `PlayerDao.SagaReceipts`，只在玩家绑定的 sid 上跑，准入 / 转交与送礼相同）；公会一侧是 **Mongo 步骤**，步骤体调 alliance RPC，
+  回执在 `PlayerDao.SagaReceipts`，按 sid 路由到玩家绑定的 sid、属主核对与送礼相同）；公会一侧是 **Mongo 步骤**，步骤体调 alliance RPC，
   请求号 = 命令的 `IdempotencyKey`。
 
   | saga | 正向 | 补偿 |

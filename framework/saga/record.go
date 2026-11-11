@@ -3,6 +3,7 @@ package saga
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -71,10 +72,15 @@ type Step struct {
 	Name            string
 	ForwardTopic    string
 	CompensateTopic string
-	Timeout         time.Duration
-	MaxAttempts     uint32
-	BackoffMin      time.Duration
-	BackoffMax      time.Duration
+	// Routed 表示这一步（正向与补偿）按路由键确切投递：命令事件发在 <prefix>.<k>.ev.to.<route>.<topic>
+	// （Layout.RoutedCommandEventSubject），route 是这笔 saga 的 Record.Route，只有过滤这个 route 的消费者收得到
+	// （StepConsumerConfig.Route）。用于只能在某个 sid 上执行的步骤（改的是绑定在那个 sid 上的实体），让命令直接投到属主，
+	// 不再由同一服务的全部进程争抢一个共享 durable。有路由步骤的定义，启动时必须带 StartRequest.Route（没有就拒绝启动）。
+	Routed      bool
+	Timeout     time.Duration
+	MaxAttempts uint32
+	BackoffMin  time.Duration
+	BackoffMax  time.Duration
 }
 
 // RetryWindow 是这一步一个操作从第一次派发到最后一次尝试截止的最长计划时间：MaxAttempts 次超时，加其间 MaxAttempts−1 次
@@ -230,6 +236,24 @@ func (d Definition) Validate() error {
 	return nil
 }
 
+// routed 报告定义里是否有路由步骤。
+func (d Definition) routed() bool {
+	for _, step := range d.Steps {
+		if step.Routed {
+			return true
+		}
+	}
+	return false
+}
+
+// compensateTopic 是这一步的补偿主题（不写时是 <ForwardTopic>.compensate，与派发同一规则）。
+func (s Step) compensateTopic() string {
+	if s.CompensateTopic != "" {
+		return s.CompensateTopic
+	}
+	return s.ForwardTopic + ".compensate"
+}
+
 // Record 是一个 saga 实例的持久状态。
 type Record struct {
 	ID                string
@@ -243,6 +267,10 @@ type Record struct {
 	Step           int
 	CompletedSteps int
 	Attempt        uint32
+	// Bounces 是当前操作的 Attempt 里被参与方退回（Completion.Bounced）的次数：退回的那次尝试照样占一个 Attempt，
+	// 让下一次派发换一个 CommandID（命令与结果的 MsgID 都由它派生，复用会被 JetStream 去重吞掉），但不计入尝试上限，
+	// 有效尝试数是 Attempt - Bounces。随 Attempt 一起清零。
+	Bounces uint32
 	// Incarnation 记 Resume 的代际，并编进 CommandID：Resume 会重置 Attempt，若不换代，恢复后的操作会复用同一 saga
 	// 上一生的 CommandID，撞上陈旧的 completion 回执，被当成重复而卡住。
 	Incarnation uint32
@@ -252,7 +280,11 @@ type Record struct {
 	// 正向一次只开一个操作、放弃即离开正向，所以最多一个；恒有 LateStep-1 >= CompletedSteps。
 	LateStep int
 	// LateData 是那次迟到成功的 Completion.Data，补偿第 LateStep-1 步的命令载荷；它的补偿结果不进入 Data 链。
-	LateData     []byte
+	LateData []byte
+	// Route 是路由步骤（Step.Routed）的投递地址（一个 subject token，按 sid 路由时是 SidRoute(sid)）：启动时取
+	// StartRequest.Route，参与方退回步骤并给出新地址时（StepBounce.Route，可重试失败的 Completion.Route）改成新地址，
+	// 下一次尝试投到那里。没有路由步骤的 saga 为空。
+	Route        string
 	Version      uint64
 	Data         []byte
 	LastError    string
@@ -281,7 +313,7 @@ func (r Record) Clone() Record {
 
 func (r Record) Validate() error {
 	waitingFields := r.OperationKey != "" && len(r.OperationKey) <= 192 && r.CommandID != "" && len(r.CommandID) <= 192 && r.Attempt > 0
-	if !validSubjectToken(r.ID, 128) || !validLifecycle(r.Lifecycle) || strings.TrimSpace(r.Type) != r.Type || r.Type == "" || len(r.Type) > 128 || r.DefinitionVersion == 0 || strings.TrimSpace(r.BusinessKey) != r.BusinessKey || r.BusinessKey == "" || len(r.BusinessKey) > 512 || len(r.Data) > 4<<20 || len(r.LastError) > 4096 || r.Status < StatusPending || r.Status > StatusManualRequired || r.Phase < PhaseForward || r.Phase > PhaseCompensate || r.Version == 0 || r.Step < 0 || r.CompletedSteps < 0 || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || (!r.Status.Terminal() && r.NextRunAt.IsZero()) || (r.Status == StatusWaiting) != waitingFields || (r.Status != StatusWaiting && (r.OperationKey != "" || r.CommandID != "")) || (r.Status == StatusCompensating && (r.Phase != PhaseCompensate || (r.CompletedSteps == 0 && r.LateStep == 0))) || (r.Status == StatusCompensated && r.CompletedSteps != 0) || !r.lateStepValid() {
+	if !validSubjectToken(r.ID, 128) || !validLifecycle(r.Lifecycle) || strings.TrimSpace(r.Type) != r.Type || r.Type == "" || len(r.Type) > 128 || r.DefinitionVersion == 0 || strings.TrimSpace(r.BusinessKey) != r.BusinessKey || r.BusinessKey == "" || len(r.BusinessKey) > 512 || len(r.Data) > 4<<20 || len(r.LastError) > 4096 || r.Status < StatusPending || r.Status > StatusManualRequired || r.Phase < PhaseForward || r.Phase > PhaseCompensate || r.Version == 0 || r.Step < 0 || r.CompletedSteps < 0 || r.CreatedAt.IsZero() || r.UpdatedAt.IsZero() || (!r.Status.Terminal() && r.NextRunAt.IsZero()) || (r.Status == StatusWaiting) != waitingFields || (r.Status != StatusWaiting && (r.OperationKey != "" || r.CommandID != "")) || (r.Status == StatusCompensating && (r.Phase != PhaseCompensate || (r.CompletedSteps == 0 && r.LateStep == 0))) || (r.Status == StatusCompensated && r.CompletedSteps != 0) || !r.lateStepValid() || (r.Route != "" && !validRoute(r.Route)) || r.Bounces > r.Attempt || (r.Status == StatusWaiting && r.Bounces >= r.Attempt) {
 		return ErrInvalidRecord
 	}
 	return nil
@@ -316,6 +348,8 @@ type Command struct {
 	CreatedAt         time.Time `json:"created_at"`
 	// Partition 是派发它的协调器分区：参与方把结果发回 <prefix>.<Partition>.in.res。
 	Partition uint16 `json:"partition,omitempty"`
+	// Route 是路由步骤这次尝试投递的地址（派发时的 Record.Route）；不路由的步骤为空。
+	Route string `json:"route,omitempty"`
 }
 
 func (c Command) Clone() Command {
@@ -324,7 +358,7 @@ func (c Command) Clone() Command {
 }
 
 func (c Command) Validate() error {
-	if len(c.ID) > 192 || c.ID == "" || len(c.IdempotencyKey) > 192 || c.IdempotencyKey == "" || !validSubjectToken(c.SagaID, 128) || strings.TrimSpace(c.SagaType) != c.SagaType || len(c.SagaType) > 128 || c.SagaType == "" || c.DefinitionVersion == 0 || strings.TrimSpace(c.BusinessKey) != c.BusinessKey || len(c.BusinessKey) > 512 || c.BusinessKey == "" || c.Step < 0 || strings.TrimSpace(c.StepName) != c.StepName || len(c.StepName) > 128 || c.StepName == "" || c.Phase < PhaseForward || c.Phase > PhaseCompensate || c.Attempt == 0 || !validSubject(c.Topic) || len(c.Payload) > 4<<20 || c.DeadlineAt.IsZero() || c.CreatedAt.IsZero() {
+	if len(c.ID) > 192 || c.ID == "" || len(c.IdempotencyKey) > 192 || c.IdempotencyKey == "" || !validSubjectToken(c.SagaID, 128) || strings.TrimSpace(c.SagaType) != c.SagaType || len(c.SagaType) > 128 || c.SagaType == "" || c.DefinitionVersion == 0 || strings.TrimSpace(c.BusinessKey) != c.BusinessKey || len(c.BusinessKey) > 512 || c.BusinessKey == "" || c.Step < 0 || strings.TrimSpace(c.StepName) != c.StepName || len(c.StepName) > 128 || c.StepName == "" || c.Phase < PhaseForward || c.Phase > PhaseCompensate || c.Attempt == 0 || !validSubject(c.Topic) || len(c.Payload) > 4<<20 || c.DeadlineAt.IsZero() || c.CreatedAt.IsZero() || (c.Route != "" && !validRoute(c.Route)) {
 		return ErrInvalidRecord
 	}
 	return nil
@@ -332,19 +366,25 @@ func (c Command) Validate() error {
 
 // Completion 是步骤执行方对一次尝试的结果：成功、拒绝（不可重试失败）或可重试失败。
 type Completion struct {
-	CommandID      string    `json:"command_id"`
-	IdempotencyKey string    `json:"idempotency_key"`
-	SagaID         string    `json:"saga_id"`
-	Success        bool      `json:"success"`
-	Retryable      bool      `json:"retryable,omitempty"`
-	Data           []byte    `json:"data,omitempty"`
-	Error          string    `json:"error,omitempty"`
-	CompletedAt    time.Time `json:"completed_at,omitempty"`
+	CommandID      string `json:"command_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	SagaID         string `json:"saga_id"`
+	Success        bool   `json:"success"`
+	Retryable      bool   `json:"retryable,omitempty"`
+	Data           []byte `json:"data,omitempty"`
+	Error          string `json:"error,omitempty"`
+	// Bounced 标记参与方退回的结果（StepBounce，只与可重试失败同时出现）：这次没有执行，命令回到发送端。协调器按它
+	// 重派，但不消耗尝试次数（维护者 2026-11-11：退回不算重试），时间上仍受 saga 截止约束。
+	Bounced bool `json:"bounced,omitempty"`
+	// Route 只出现在退回的结果上（Bounced）：这笔 saga 下一次尝试改投的地址；空表示照原地址重派。
+	Route       string    `json:"route,omitempty"`
+	CompletedAt time.Time `json:"completed_at,omitempty"`
 }
 
 // Validate 校验身份字段与结果组合：成功不能带错误或可重试标记，失败必须带错误。
 func (c Completion) Validate() error {
-	invalidOutcome := (c.Success && (c.Retryable || c.Error != "")) || (!c.Success && strings.TrimSpace(c.Error) == "")
+	invalidOutcome := (c.Success && (c.Retryable || c.Error != "")) || (!c.Success && strings.TrimSpace(c.Error) == "") ||
+		(c.Bounced && (c.Success || !c.Retryable)) || (c.Route != "" && (!c.Bounced || !validRoute(c.Route)))
 	if c.CommandID == "" || len(c.CommandID) > 192 || c.IdempotencyKey == "" || len(c.IdempotencyKey) > 192 || !validSubjectToken(c.SagaID, 128) || len(c.Error) > 4096 || len(c.Data) > 4<<20 || invalidOutcome {
 		return ErrInvalidRecord
 	}
@@ -368,6 +408,13 @@ func validLifecycle(lifecycle string) bool {
 	return validSubjectToken(lifecycle, 64) && !strings.Contains(lifecycle, ":")
 }
 
+// validRoute 校验路由键：一个 subject token，至多 64 字节。
+func validRoute(route string) bool { return validSubjectToken(route, 64) }
+
+// SidRoute 是按 sid 路由的路由键（十进制 sid）：发起方写进 StartRequest.Route，参与方按本进程 sid 过滤
+// （wiring/saga 的 WithSidRoute）。两边必须用同一个函数，地址才对得上。
+func SidRoute(sid int32) string { return strconv.FormatInt(int64(sid), 10) }
+
 func validSubjectToken(token string, maxLength int) bool {
 	if token == "" || len(token) > maxLength || strings.ContainsAny(token, ".*> \t\r\n") {
 		return false
@@ -383,6 +430,9 @@ type StartRequest struct {
 	DefinitionVersion uint32    `json:"definition_version"`
 	Data              []byte    `json:"data,omitempty"`
 	DeadlineAt        time.Time `json:"deadline_at,omitempty"`
+	// Route 是这笔 saga 路由步骤（Step.Routed）的投递地址，按 sid 路由时用 SidRoute(属主 sid)。定义里有路由步骤时必填，
+	// 缺了启动被拒绝（ErrInvalidRecord）；它进入启动摘要（同一业务键换了地址是另一个意图）。
+	Route string `json:"route,omitempty"`
 	// Now 只作测试钩子：所有者以自己的时钟为准，不上线。
 	Now time.Time `json:"-"`
 }

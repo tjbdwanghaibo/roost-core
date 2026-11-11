@@ -110,7 +110,7 @@ func prepareStart(request StartRequest, maxPayload int) (StartRequest, error) {
 // newStartRecord 是一笔新 saga 的第一版记录：Pending、正向第 0 步、版本 1，立即到期；启动摘要独立保存原始意图。
 // request 已经过 prepareStart；lifecycle 是这一笔的生命周期标识（newLifecycle），每次新建都不同。
 func newStartRecord(request StartRequest, id, lifecycle string, now time.Time) (Record, error) {
-	record := Record{ID: id, Lifecycle: lifecycle, Type: request.Type, DefinitionVersion: request.DefinitionVersion, BusinessKey: request.BusinessKey, Status: StatusPending, Phase: PhaseForward, Step: 0, Version: 1, Data: append([]byte(nil), request.Data...), NextRunAt: now, DeadlineAt: request.DeadlineAt, CreatedAt: now, UpdatedAt: now}
+	record := Record{ID: id, Lifecycle: lifecycle, Type: request.Type, DefinitionVersion: request.DefinitionVersion, BusinessKey: request.BusinessKey, Status: StatusPending, Phase: PhaseForward, Step: 0, Version: 1, Data: append([]byte(nil), request.Data...), Route: request.Route, NextRunAt: now, DeadlineAt: request.DeadlineAt, CreatedAt: now, UpdatedAt: now}
 	// Data / DeadlineAt 是运行状态，原始启动身份必须独立持久保存。
 	intentDigest, err := startIntentDigest(request)
 	if err != nil {
@@ -133,13 +133,32 @@ func startIntentDigest(request StartRequest) (string, error) {
 		DefinitionVersion uint32    `json:"definition_version"`
 		Data              []byte    `json:"data,omitempty"`
 		DeadlineAt        time.Time `json:"deadline_at,omitempty"`
-	}{request.Type, request.BusinessKey, request.DefinitionVersion, request.Data, request.DeadlineAt}
+		Route             string    `json:"route,omitempty"`
+	}{request.Type, request.BusinessKey, request.DefinitionVersion, request.Data, request.DeadlineAt, request.Route}
 	raw, err := json.Marshal(intent)
 	if err != nil {
 		return "", fmt.Errorf("%w: start intent digest: %v", ErrInvalidRecord, err)
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// checkStartRoute 是启动时的路由检查：定义里有路由步骤（Step.Routed）就必须带合法的 StartRequest.Route——没有地址的路由
+// 步骤投不到任何消费者，只能等到截止，所以在启动时拒绝（维护者 2026-10-05 / 2026-11-11：不带路由 sid 的旧载荷不兼容、不兜底）。
+// 不路由的定义带了 Route 也接受（不影响投递，只是记录在案）；Route 本身必须是合法路由键。
+func checkStartRoute(definition Definition, request StartRequest) error {
+	if request.Route != "" && !validRoute(request.Route) {
+		return fmt.Errorf("%w: saga %s/%d: route %q is not a subject token of at most 64 bytes", ErrInvalidRecord, definition.Type, definition.Version, request.Route)
+	}
+	if request.Route == "" && definition.routed() {
+		return fmt.Errorf("%w: saga %s/%d has routed steps and the start names no route (StartRequest.Route)", ErrInvalidRecord, definition.Type, definition.Version)
+	}
+	// 退回不消耗尝试次数（维护者 2026-11-11），路由步骤正向唯一的时间上限就是 saga 截止：没有截止的路由 saga 会按
+	// BackoffMax 一直退回重派，所以启动时就拒绝（维护者 2026-11-11 方案 A）。补偿方向仍等属主收下（退款只能落在属主上）。
+	if request.DeadlineAt.IsZero() && definition.routed() {
+		return fmt.Errorf("%w: saga %s/%d has routed steps and the start sets no deadline (StartRequest.DeadlineAt): a bounce does not use up attempts, so the deadline is the only bound", ErrInvalidRecord, definition.Type, definition.Version)
+	}
+	return nil
 }
 
 // ---- 到期 ----
@@ -203,6 +222,10 @@ func planDue(record Record, definition Definition, defined bool, now time.Time) 
 		payload = record.LateData
 	}
 	command := Command{ID: after.CommandID, IdempotencyKey: after.OperationKey, SagaID: record.ID, SagaType: record.Type, DefinitionVersion: record.DefinitionVersion, BusinessKey: record.BusinessKey, Step: record.Step, StepName: step.Name, Phase: record.Phase, Attempt: after.Attempt, Topic: topic, Payload: append([]byte(nil), payload...), DeadlineAt: after.NextRunAt, CreatedAt: now}
+	if step.Routed {
+		// 路由步骤投给这笔 saga 当前的地址（启动时的 Route，或参与方退回时给的新地址）。
+		command.Route = record.Route
+	}
 	return duePlan{cause: causeDispatch, after: after, command: &command}
 }
 
@@ -227,21 +250,25 @@ func prepareResume(request ResumeRequest, clock time.Time) (ResumeRequest, time.
 	return request, deadline, nil
 }
 
-// planResume 是 Resume 的目标记录：只有 Failed / ManualRequired 能 Resume；定义必须已注册；补偿方向停下、或有已完成
+// planResume 是 Resume 的目标记录：只有 Failed / ManualRequired 能 Resume；定义必须已注册；有路由步骤的不许清截止；补偿方向停下、或有已完成
 // 前缀 / 迟到步骤的记录继续补偿（先补迟到那一步，saga 方向 ④），否则回到正向重试当前步骤。新一生由 planTransition 开
 // （causeResume），之后的 CommandID 与 Resume 之前的所有回执不相交。request 已经过 prepareResume。
-func planResume(record Record, defined bool, request ResumeRequest, deadline time.Time) (Record, error) {
+func planResume(record Record, definition Definition, defined bool, request ResumeRequest, deadline time.Time) (Record, error) {
 	if record.Status != StatusFailed && record.Status != StatusManualRequired {
 		return Record{}, fmt.Errorf("saga: status %d cannot resume", record.Status)
 	}
 	if !defined {
 		return Record{}, fmt.Errorf("%w: %s/%d", ErrDefinitionMissing, record.Type, record.DefinitionVersion)
 	}
+	if request.ClearDeadline && definition.routed() {
+		// 同 checkStartRoute：有路由步骤的 saga 不能没有截止（维护者 2026-11-11 方案 A）。
+		return Record{}, fmt.Errorf("%w: saga %s/%d has routed steps; Resume may move its deadline but not clear it", ErrInvalidRecord, record.Type, record.DefinitionVersion)
+	}
 	now := request.Now
 	after := record.Clone()
 	after.Version++
 	after.UpdatedAt = now
-	after.Attempt = 0
+	after.Attempt, after.Bounces = 0, 0
 	after.LastError = ""
 	after.CommandID = ""
 	after.OperationKey = ""
@@ -425,7 +452,7 @@ func lateStepState(record Record, completion Completion, step int) Record {
 // 选择规则只有这一处。after 的版本、时间、错误由调用方设置。
 func nextCompensation(after Record, now time.Time) Record {
 	after.Phase = PhaseCompensate
-	after.Attempt = 0
+	after.Attempt, after.Bounces = 0, 0
 	after.CommandID = ""
 	after.OperationKey = ""
 	switch {
@@ -463,7 +490,7 @@ func applyCompletion(record Record, definition Definition, result Completion) Re
 		if result.Data != nil && !late {
 			after.Data = append(after.Data[:0], result.Data...)
 		}
-		after.Attempt = 0
+		after.Attempt, after.Bounces = 0, 0
 		after.LastError = ""
 		if record.Phase == PhaseForward {
 			after.CompletedSteps = record.Step + 1
@@ -489,6 +516,9 @@ func applyCompletion(record Record, definition Definition, result Completion) Re
 		}
 		return after
 	}
+	if result.Bounced {
+		return bounceState(after, definition, result, now)
+	}
 	if !result.Retryable {
 		if after.Phase == PhaseCompensate {
 			after.Status = StatusManualRequired
@@ -498,6 +528,35 @@ func applyCompletion(record Record, definition Definition, result Completion) Re
 		return compensationState(after, result.Error, now)
 	}
 	return retryState(after, definition, result.Error, now)
+}
+
+// bounceState 处理参与方退回（Completion.Bounced，StepBounce）：这次尝试没有执行，按退回的次数退避后重派同一步，
+// 给了新地址就改投那里（Record.Route）。退回不算重试（维护者 2026-11-11）：不计入 MaxAttempts，所以玩家换服再久也不会
+// 因为尝试用尽而补偿；正向的时间上限是 saga 截止——下一次派发不晚于截止，到期循环在截止时转补偿（planDue）。
+// 补偿方向没有截止，退回的补偿一直等到属主收下（退款类补偿只能落在属主上）。after 的版本已由调用方推进。
+func bounceState(after Record, definition Definition, result Completion, now time.Time) Record {
+	after.Bounces++
+	after.UpdatedAt = now
+	after.LastError = result.Error
+	if result.Route != "" {
+		after.Route = result.Route
+	}
+	step, ok := stepFor(after, definition)
+	if !ok {
+		after.Status = StatusManualRequired
+		after.NextRunAt = time.Time{}
+		return after
+	}
+	if after.Phase == PhaseForward {
+		after.Status = StatusPending
+	} else {
+		after.Status = StatusCompensating
+	}
+	after.NextRunAt = now.Add(backoff(after.ID, after.Bounces, step.BackoffMin, step.BackoffMax))
+	if after.Phase == PhaseForward && !after.DeadlineAt.IsZero() && after.DeadlineAt.Before(after.NextRunAt) {
+		after.NextRunAt = after.DeadlineAt
+	}
+	return after
 }
 
 // retryOrCompensate 是从已存记录出发的转移（到期循环的超时路径）：推进一次版本，再决定重试还是补偿。applyCompletion
@@ -522,13 +581,14 @@ func retryState(after Record, definition Definition, reason string, now time.Tim
 		after.NextRunAt = time.Time{}
 		return after
 	}
-	if after.Attempt < step.MaxAttempts {
+	// 退回的尝试不算（Bounces，见 bounceState）：只按真正执行过或超时的尝试数判上限、算退避。
+	if tried := after.Attempt - after.Bounces; tried < step.MaxAttempts {
 		if after.Phase == PhaseForward {
 			after.Status = StatusPending
 		} else {
 			after.Status = StatusCompensating
 		}
-		after.NextRunAt = now.Add(backoff(record.ID, after.Attempt, step.BackoffMin, step.BackoffMax))
+		after.NextRunAt = now.Add(backoff(record.ID, tried, step.BackoffMin, step.BackoffMax))
 		return after
 	}
 	if after.Phase == PhaseCompensate {
@@ -551,7 +611,7 @@ func beginCompensation(record Record, reason string, now time.Time) Record {
 func compensationState(after Record, reason string, now time.Time) Record {
 	after.UpdatedAt = now
 	after.LastError = reason
-	after.Attempt = 0
+	after.Attempt, after.Bounces = 0, 0
 	after.CommandID = ""
 	after.OperationKey = ""
 	if after.CompletedSteps == 0 && after.LateStep == 0 {

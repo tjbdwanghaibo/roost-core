@@ -330,6 +330,25 @@ func (e *Engine) definition(name string, version uint32) (Definition, bool) {
 	return d, ok
 }
 
+// RoutedTopic 报告本进程登记的定义里，主题 topic（某一步的正向或补偿主题）是否属于路由步骤（Step.Routed）。known=false
+// 表示没有定义用到这个主题（本进程不是这个 saga 的协调器，或主题写错）。wiring/saga 的 Steps 在同一进程里用它核对消费者
+// 与定义是否一致：一边路由、一边不路由时命令永远到不了消费者。
+func (e *Engine) RoutedTopic(topic string) (routed, known bool) {
+	if e == nil {
+		return false, false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for _, definition := range e.definitions {
+		for _, step := range definition.Steps {
+			if step.ForwardTopic == topic || step.compensateTopic() == topic {
+				return step.Routed, true
+			}
+		}
+	}
+	return false, false
+}
+
 // admit 是所有者处理启动意图时的权威准入判定；gated=false 表示没开准入。
 func (e *Engine) admit() (AdmissionState, bool) {
 	if e.gate == nil {
@@ -630,11 +649,15 @@ func (e *Engine) Stats() Stats {
 // ErrDefinitionMissing；ctx 到期仍无判定 → ErrStartUnconfirmed（意图已持久、结果未知，用同一请求重试安全）。
 // saga ID 恒为 IDOf(Type, BusinessKey)（选项 ID-A）；request.Now 不用（时间以所有者为准）。
 func (e *Engine) StartSaga(ctx context.Context, request StartRequest) (Record, error) {
-	if _, ok := e.definition(request.Type, request.DefinitionVersion); !ok {
+	definition, ok := e.definition(request.Type, request.DefinitionVersion)
+	if !ok {
 		return Record{}, fmt.Errorf("%w: %s/%d", ErrDefinitionMissing, request.Type, request.DefinitionVersion)
 	}
 	request, err := prepareStart(request, e.opts.MaxPayloadBytes)
 	if err != nil {
+		return Record{}, err
+	}
+	if err := checkStartRoute(definition, request); err != nil {
 		return Record{}, err
 	}
 	digest, err := startIntentDigest(request)

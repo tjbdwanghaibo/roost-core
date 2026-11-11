@@ -19,7 +19,8 @@ import (
 //
 // 结算规则（原生与 Mongo 相同）：
 //   - 坏信封 → Term + saga.consumer.rejected_total（启动中继同一口径）；
-//   - Admit 拒绝 → 原样返回（nak，留给能执行它的进程）；
+//   - Admit 拒绝 → 原样返回（nak，按退避重投给同一 durable）；Admit 退回（StepBounce）→ 不执行，把可重试失败（可带新地址）
+//     发回协调器分区，PubAck 后 ack；Admit 拒收（StepRejection）→ 不执行，把不可重试失败发回，PubAck 后 ack；
 //   - 执行 / 回放出错 → 结果未知，nak 退避重投，重投时读到回执就回放；
 //   - 过期未执行 → 直接 ack，计 saga.step.expired_unexecuted_total；
 //   - 执行或回放 → 发结果，PubAck 之后 ack；发布失败 → nak（重投回放同一回执，同一 MsgID 在去重窗口内被服务端丢弃，协调器也按回执去重）。
@@ -43,6 +44,10 @@ type StepHandler func(context.Context, Command) (Completion, error)
 type StepConsumerConfig struct {
 	// Durable 是消费者名（同一服务的全部副本共用）；Topic 是步骤的正向或补偿主题。
 	Durable, Topic string
+	// Route 非空表示这是路由步骤（Step.Routed）的消费者：只过滤投给这个路由键的命令
+	// （Layout.RoutedCommandFilter），JetStream 上的 durable 名是 <Durable>-<Route>——每个路由键（每个 sid）一个 durable，
+	// 只有那个 sid 的进程绑定它，别的进程收不到。空表示不路由：全部副本共用 <Durable>，过滤 Layout.CommandFilter。
+	Route string
 	// AckWait 不写取 DefaultStepAckWait。必须长于路由到这个主题的每个步骤的 Timeout；一次处理的时长以它为界。
 	AckWait       time.Duration
 	MaxDeliver    int
@@ -50,11 +55,20 @@ type StepConsumerConfig struct {
 	NakBackoffMin time.Duration
 	NakBackoffMax time.Duration
 
-	// Admit 判定本进程能否执行这条命令，在执行之前询问。
+	// Admit 判定本进程能否执行这条命令，在执行之前询问（步骤体还没运行、实体没有加载，所以拒绝是零写入）。必须廉价、无副作用。
+	// 返回值的三种结论：
 	//
-	// 一个服务的所有进程共享一个 durable：关于某个对象的命令投给空闲的消费者，而不是对象的所有者。不能碰这个对象的进程
-	// 必须说“不”。非 nil 错误原样返回给投递，消息按消费者的退避 nak 后重新提供给任意消费者（包括能执行它的那个）。所以
-	// Admit 必须廉价、无副作用，且不能处处拒绝：没有任何进程准入的命令会一直重投到 MaxDeliver。nil 表示全部准入。
+	//   - nil：执行。
+	//   - StepBounce（BounceStep）：这条命令此刻不该在这里执行，退回发送端（协调器）——消费者把一份退回结果（Completion.Bounced，
+	//     可重试失败，Route 带上新地址，空表示照原地址）发回命令所属分区，PubAck 之后 ack。协调器按退回次数退避后重派，
+	//     有新地址就投到那里；退回不算重试，不消耗尝试次数（维护者 2026-11-11），正向到 saga 截止走补偿，补偿方向一直等到
+	//     属主收下。用于路由步骤的属主核对：玩家已不绑定本 sid、或正在换服。不用 nak：路由步骤的 durable 只有这一个 sid
+	//     绑定，nak 只会把它再投回来。
+	//   - StepRejection（RejectStep）：这条命令永远不能执行（例如载荷里没有路由需要的 sid），把不可重试失败发回，PubAck 之后 ack。
+	//   - 其他错误：暂时不能执行（例如实体正在卸载），原样返回，nak 后按退避重投给同一个 durable。不路由的步骤里所有进程共享
+	//     durable，重投会落到任意进程；路由步骤只回到本 sid。没有任何进程准入的命令会一直重投到 MaxDeliver，所以不能处处返回它。
+	//
+	// nil 函数表示全部准入（单进程部署）。
 	Admit func(context.Context, Command) error
 
 	// NativeWorkers 是原生步骤消费者同时在途的处理数（每个订阅一份）：一次处理含一次 Nest 请求（WAL 落盘），逐条串行会把
@@ -67,13 +81,74 @@ type StepConsumerConfig struct {
 	ReceiptRetention time.Duration
 }
 
+// StepBounce 是准入把一条命令退回发送端（协调器）的结论（见 StepConsumerConfig.Admit）：这次不执行，下一次尝试投到 Route
+// （空表示原地址）。Reason 写进结果的 Error，同一条命令的重投应给出相同的 Reason 与 Route，两份结果才按回执摘要去重。
+type StepBounce struct {
+	Route  string
+	Reason string
+}
+
+func (b *StepBounce) Error() string {
+	if b.Route == "" {
+		return "saga: step bounced to the sender: " + b.Reason
+	}
+	return "saga: step bounced to the sender, next attempt to route " + b.Route + ": " + b.Reason
+}
+
+// BounceStep 返回准入的退回结论：route 是下一次尝试的地址（路由键，如 SidRoute(新 sid)；空表示照原地址重试），reason 是原因。
+func BounceStep(route, reason string) error { return &StepBounce{Route: route, Reason: reason} }
+
+// StepRejection 是准入拒收一条永远不能执行的命令的结论（见 StepConsumerConfig.Admit）：发回不可重试失败，协调器随即补偿。
+type StepRejection struct{ Reason string }
+
+func (r *StepRejection) Error() string { return "saga: step rejected: " + r.Reason }
+
+// RejectStep 返回准入的拒收结论。
+func RejectStep(reason string) error { return &StepRejection{Reason: reason} }
+
+// admitCommand 询问准入并处理它的结论。handled=true 表示这次投递已经结算（退回或拒收的结果已发回协调器，返回 nil 即 ack；
+// 发回失败返回错误即 nak，重投时再问一次）；handled=false 且 err=nil 表示执行；其他错误原样返回（nak）。
+func admitCommand(ctx context.Context, js fnats.IJetStream, layout Layout, config StepConsumerConfig, command Command) (bool, error) {
+	if config.Admit == nil {
+		return false, nil
+	}
+	err := config.Admit(ctx, command)
+	if err == nil {
+		return false, nil
+	}
+	completion := Completion{CommandID: command.ID, IdempotencyKey: command.IdempotencyKey, SagaID: command.SagaID}
+	var bounce *StepBounce
+	var rejection *StepRejection
+	switch {
+	case errors.As(err, &bounce):
+		if bounce.Route != "" && !validRoute(bounce.Route) {
+			return true, fmt.Errorf("saga: step %s bounced to an invalid route %q", command.ID, bounce.Route)
+		}
+		completion.Retryable, completion.Bounced, completion.Route, completion.Error = true, true, bounce.Route, bounce.Error()
+		metrics.IncCounter("saga.step.bounced_total", metrics.Labels{"consumer": config.Durable}, 1)
+		slog.Info("saga: step bounced to the sender", "command_id", command.ID, "saga_id", command.SagaID, "route", command.Route, "next_route", bounce.Route, "reason", bounce.Reason)
+	case errors.As(err, &rejection):
+		completion.Error = rejection.Error()
+		metrics.IncCounter("saga.step.rejected_total", metrics.Labels{"consumer": config.Durable}, 1)
+		slog.Error("saga: step rejected before it ran", "command_id", command.ID, "saga_id", command.SagaID, "route", command.Route, "reason", rejection.Reason)
+	default:
+		return false, err
+	}
+	publishCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := publishCompletion(publishCtx, js, layout, completion, int(command.Partition)); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 // defaultStepWorkers 是消费者在途处理数的缺省上限（每个订阅一份）：原生步骤的一次处理含一次 Nest 请求（WAL 落盘），
 // 回调逐条串行会把整条流的步骤吞吐压到一次 fsync 一条；同一实体的事务仍由 Nest 实体锁串行。
 const defaultStepWorkers = 32
 
 // stepConsumerDefaults 补齐消费者的投递参数并校验。workers 是在途处理上限（0 取缺省，不超过 MaxAckPending）。
 func stepConsumerDefaults(config StepConsumerConfig, workers int) (StepConsumerConfig, int, error) {
-	if config.Durable == "" || !validSubjectPath(config.Topic) {
+	if config.Durable == "" || !validSubjectPath(config.Topic) || (config.Route != "" && !validRoute(config.Route)) {
 		return config, 0, fmt.Errorf("saga: invalid step consumer configuration")
 	}
 	if config.AckWait <= 0 {
@@ -108,10 +183,15 @@ func subscribeStepStreams(ctx context.Context, js fnats.IJetStream, layout Layou
 	if err := layout.Validate(); err != nil {
 		return nil, err
 	}
+	durable, filter := config.Durable, layout.CommandFilter(config.Topic)
+	if config.Route != "" {
+		// 路由步骤：每个路由键一个 durable，只过滤投给这个键的命令。
+		durable, filter = config.Durable+"-"+config.Route, layout.RoutedCommandFilter(config.Route, config.Topic)
+	}
 	subs := make([]fnats.IJetStreamSubscription, 0, layout.Groups)
 	for _, stream := range layout.Streams() {
 		sub, err := js.Subscribe(ctx, fnats.JetStreamConsumerConfig{
-			Stream: stream, Name: config.Durable, Durable: config.Durable, FilterSubject: layout.CommandFilter(config.Topic),
+			Stream: stream, Name: durable, Durable: durable, FilterSubject: filter,
 			DeliverPolicy: fnats.JetStreamDeliverAll, AckWait: config.AckWait, MaxDeliver: config.MaxDeliver,
 			MaxAckPending: config.MaxAckPending, NakBackoffMin: config.NakBackoffMin, NakBackoffMax: config.NakBackoffMax,
 		}, handler)
@@ -119,7 +199,7 @@ func subscribeStepStreams(ctx context.Context, js fnats.IJetStream, layout Layou
 			for _, started := range subs {
 				started.Stop()
 			}
-			return nil, fmt.Errorf("saga: subscribe %s on %s: %w", config.Durable, stream, err)
+			return nil, fmt.Errorf("saga: subscribe %s on %s: %w", durable, stream, err)
 		}
 		subs = append(subs, sub)
 	}
@@ -144,10 +224,8 @@ func SubscribeNativeStep(ctx context.Context, js fnats.IJetStream, layout Layout
 			logConsumerError("native step decode", message, err)
 			return rejectEnvelope("native_step", err)
 		}
-		if config.Admit != nil {
-			if err := config.Admit(messageCtx, command); err != nil {
-				return err
-			}
+		if handled, err := admitCommand(messageCtx, js, layout, config, command); handled || err != nil {
+			return err
 		}
 		processCtx, cancel := context.WithTimeout(messageCtx, config.AckWait)
 		defer cancel()
@@ -185,10 +263,8 @@ func SubscribeMongoStep(ctx context.Context, js fnats.IJetStream, layout Layout,
 			logConsumerError("mongo step decode", message, err)
 			return rejectEnvelope("mongo_step", err)
 		}
-		if config.Admit != nil {
-			if err := config.Admit(messageCtx, command); err != nil {
-				return err
-			}
+		if handled, err := admitCommand(messageCtx, js, layout, config, command); handled || err != nil {
+			return err
 		}
 		processCtx, cancel := context.WithTimeout(messageCtx, config.AckWait)
 		defer cancel()

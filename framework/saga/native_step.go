@@ -47,7 +47,7 @@ import (
 
 // NativeStep 是原生步骤体在 Nest 事务里提交结果所需的全部：命令与这一次运行（回执检查与结论）。
 //
-// 只由框架构造（RunNativeStep：步骤消费者与转交路径），按值作为参数交给 Nest handler；零值的 Begin / Complete 返回
+// 只由框架构造（RunNativeStep：步骤消费者），按值作为参数交给 Nest handler；零值的 Begin / Complete 返回
 // ErrNoNativeStep。它只对这一次运行有效：不要保存，不要复制进脱离的 goroutine。
 type NativeStep struct {
 	command Command
@@ -55,7 +55,7 @@ type NativeStep struct {
 }
 
 // ErrNoNativeStep 表示 NativeStep 不是框架为这一次运行构造的（零值，或步骤体不在 RunNativeStep 里运行）。
-var ErrNoNativeStep = errors.New("saga: no native step run; run the body under the step consumer or Steps.RunHandedOver")
+var ErrNoNativeStep = errors.New("saga: no native step run; run the body under the step consumer")
 
 // Begin 是生成的 Nest 包装在业务函数之前调用的回执检查（选项 N-A），target 是 handler 的第一个锁目标，必须实现
 // StepReceiptHost（roost add saga -native 给实体生成回执字段与 SagaStepReceipts）。返回 replayed=true 时包装不调用业务函数、

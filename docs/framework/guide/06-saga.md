@@ -44,8 +44,9 @@ Nest 发起的 start（`EmitStart`）由 DataEngine 发布到效果流（`dataen
 
 ```go
 steps, err := kitsaga.NewSteps(registry, "game-gift")            // durable = game-gift-<step>，每条 saga 流上一个
-steps.Native("debit", giftitem.TopicDebit, s.debit, kitsaga.WithAdmit(s.admitOwned))
-steps.Native("debit-undo", giftitem.TopicDebitCompensation, s.refund, kitsaga.WithAdmit(s.admitOwned))
+// 路由步骤：只投给本进程 sid，durable = game-gift-debit-<sid>；admitBound 是属主核对（防第二个写者的最后一道）
+steps.Native("debit", giftitem.TopicDebit, s.debit, kitsaga.WithSidRoute(), kitsaga.WithAdmit(s.admitBound))
+steps.Native("debit-undo", giftitem.TopicDebitCompensation, s.refund, kitsaga.WithSidRoute(), kitsaga.WithAdmit(s.admitBound))
 steps.Mongo("deliver", giftitem.TopicDeliver, s.deliver)          // coresaga.StepHandler，Mongo 事务里运行
 if err := steps.Start(ctx); err != nil { ... }                   // 登记错误（重名、非法名、空处理函数）也在这里返回
 // Shutdown：steps.Drain(ctx)；超时再 steps.Stop()
@@ -70,10 +71,12 @@ if err := steps.Start(ctx); err != nil { ... }                   // 登记错误
   命令所属分区的 `in.res`，PubAck 之后才 ack；过期未执行直接 ack。同一实体的事务由 Nest 实体锁串行。
 - **Mongo 步骤**：handler 经传入 ctx 的 Mongo 写与回执同一事务；调用别的服务（发邮件）不在事务里，必须按 `IdempotencyKey` 幂等（demo 用它做 mail 的 RequestID）。
 - **准入信号**：有原生步骤时 `Steps` 把本进程 DataEngine 投影积压发到准入信号桶，积压过高时新 saga 被拒（`ErrBackpressure`，经 `EmitStart` 的启动会重试）。
-- **按 sid / 分片的准入与转交是业务的拓扑**，框架不替业务猜：`WithAdmit` 在执行之前问“这条命令归不归本进程”，拒绝时消息 nak 给别的副本；要把命令
-  直接送到归属进程，由业务自己的通道转交，接收方调用 `steps.RunHandedOver(ctx, name, command, accept)`——先核对 name 是登记过的原生步骤、命令主题与它
-  一致（扣款信封包着退款命令会被拒绝），再由 `accept` 复核归属（不信任发送方），最后运行同一个步骤体；与消费者的互斥由实体锁与回执保证，不发布、
-  不 ack，转交丢失只多耗时间。game-demo 的赠礼 saga（`internal/service/game/gift_saga.go`）是完整样例。
+- **按 sid 确切路由**（维护者 2026-11-11 方案 ③）：只能在某个 sid 上执行的步骤，定义里 `Routed: true`（`roost add saga ... -routed <step>`），
+  发起方在 `StartRequest.Route` 写 `saga.SidRoute(属主 sid)`（没写就拒绝启动），参与方 `kitsaga.WithSidRoute()`：协调器把命令发到
+  `ev.to.<sid>.<topic>`，只有那个 sid 的 durable 收到，非属主进程收不到，结果一次投递就发出，不再受 nak 退避控制。属主仍用 `WithAdmit` 核对实体
+  归属：不在本服（或正在换服）时 `saga.BounceStep` 退回协调器（不执行、零写入，可带新地址；退回不算重试，不消耗尝试次数，正向受 saga 截止约束），永远不能执行的 `saga.RejectStep` 拒收，
+  暂时不能执行的返回普通错误（nak 回到同一 sid）。细则与 JetStream 资源变化见 [SAGA §按 sid 确切路由](../SAGA.md#按-sid-确切路由路由步骤维护者-2026-11-11-方案-③)。
+  game-demo 的赠礼 saga（`internal/service/game/gift_saga.go`）与公会 saga（`alliance_saga.go`）是完整样例。
 - 底层 API（`SubscribeNativeStep` / `SubscribeMongoStep` / `RunNativeStep` / `NewLoadPublisher`）公开，只在需要自定义消费者参数时直接用。
 
 **生成器**：上面的写法由 `roost add saga` 与 `roost add effect` 生成骨架，生成物都是业务文件、只建一次，服务的 Init / Shutdown 归业务、生成器不改写：
@@ -92,7 +95,8 @@ roost add effect player.level_up -consumer game
   回执字段、实体加 `saga_receipts.go`（同一实体的第二个原生 saga 不再改动）。`-native` 必须是 `-steps` 的子集；服务要有 nest Mod。
 - 骨架默认拒绝：写完业务之前不会报告成功。`roost project doctor` 的 `saga-steps:<name>` / `effect-consumer:<service>/<func>`（只读 WARN）在生成了却没有
   服务启动时提示。
-- game-demo 的赠礼 saga 保留手写接线（`gift_saga.go`：按 sid 准入与转交要用服务 Init 里才有的玩家驻留表与总线），PlayerDao 的回执字段与
+- `-routed` 必须是 `-steps` 的子集：这些步骤在定义里 `Routed: true`，生成的登记加 `kitsaga.WithSidRoute()`，`EmitStart` / `Start` 多一个 `route` 参数。
+- game-demo 的赠礼 saga 保留手写接线（`gift_saga.go`：属主核对要用服务 Init 里才有的玩家驻留表），PlayerDao 的回执字段与
   `saga_receipts.go` 也是手写的参考实现。
 
 ## 3. 幂等与结果未知

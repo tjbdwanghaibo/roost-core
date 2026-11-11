@@ -66,8 +66,9 @@ const Deadline = 10 * time.Minute
 // payload of the next step and of the compensations (saga.Completion.Data).
 type State struct {
 	PlayerID int64 `json:"player_id"`
-	// SID is the player's bound sid, where the Player steps run (admission and
-	// handoff, as for the gift saga).
+	// SID is the player's bound sid, where the Player steps run: the saga's
+	// route (StartRequest.Route) is taken from it, and the step's admission
+	// checks it again, as for the gift saga.
 	SID int32 `json:"sid"`
 	// Coins is what the debit takes: the founding fee or the donation.
 	Coins int32 `json:"coins,omitempty"`

@@ -413,11 +413,18 @@ func TestDemoTemplateGeneratesABuildableWritePath(t *testing.T) {
 	// service's own RequestID dedupe.
 	// The glue (inboxes, publisher, durables, drain) is the framework's step
 	// runtime (D12 方向 A); the demo registers step bodies by name.
-	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "runtime.Native(giftHandoffPhaseDebit, giftitem.TopicDebit") || !strings.Contains(steps, "runtime.Mongo(\"deliver\", giftitem.TopicDeliver") || !strings.Contains(steps, "RequestID: \"gift:\" + command.IdempotencyKey") {
+	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, `runtime.Native("debit", giftitem.TopicDebit, steps.debit, kitsaga.WithSidRoute()`) || !strings.Contains(steps, "runtime.Mongo(\"deliver\", giftitem.TopicDeliver") || !strings.Contains(steps, "RequestID: \"gift:\" + command.IdempotencyKey") {
 		t.Errorf("gift saga does not run the Nest steps natively while keeping the mail step on the Mongo inbox")
 	}
-	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "kitsaga.NewSteps(registry, giftSagaSteps)") || !strings.Contains(steps, "steps.runtime.RunHandedOver(") || strings.Contains(steps, "saga.NewDataEngineStepInbox(") {
-		t.Errorf("gift saga does not assemble its consumers through the framework's step runtime")
+	if steps := read("internal/service/game/gift_saga.go"); !strings.Contains(steps, "kitsaga.NewSteps(registry, giftSagaSteps)") || !strings.Contains(steps, "saga.BounceStep(saga.SidRoute(state.FromSID)") || strings.Contains(steps, "saga.NewDataEngineStepInbox(") {
+		t.Errorf("gift saga does not assemble its consumers through the framework's step runtime, or does not bounce a step for a sender bound elsewhere")
+	}
+	// The debit is routed to the sender's sid from the start (plan ③, 2026-11-11).
+	if definition := read("saga/gift_item/definition.go"); !strings.Contains(definition, "CompensateTopic: TopicDebitCompensation, Routed: true}") || strings.Contains(definition, "TopicDeliverCompensation, Routed: true") {
+		t.Errorf("the gift definition does not route exactly the debit by sid")
+	}
+	if start := read("game/handler/start_gift.go"); !strings.Contains(start, "Route: saga.SidRoute(fromSID)") {
+		t.Errorf("StartGift does not route the saga to the sender's sid")
 	}
 	if debit := read("game/handler/gift_debit.go"); !strings.Contains(debit, "step.Complete(true, \"\")") || !strings.Contains(debit, "step.Complete(false, reason)") {
 		t.Errorf("the debit handler does not commit its receipt and outcome in the transaction")
