@@ -87,6 +87,12 @@ Begin 的拒绝：角色不存在或未就绪；`FromSID` 不是当前承载服�
 
 换服中 `SelectRole` / `ValidateSession` 照常返回并带 `Transfer`（握手失败客户端拿不到原因，拒绝留给登录端点）。两个认证器写新 claim。`accountctl` 加 `show-role`、`transfer-role begin|commit|abort`。
 
+**审查之后的两处修正（2026-11-11，`fix/core-game-server-review` 的 RV-20261111-BM-01 / BM-02）**——上面“Begin 结果未知时 `AbortRoleTransfer(id)` 拿确定结论”在两种时序下不成立，已修：
+
+- **BM-01 迟到的 Begin 留下占位**：Begin 写了角色、停在占位写入之前，Abort 看到“还没有占位”就收了尾并记 `Settled`，随后占位才落地；Begin 不复核，返回成功与旧的“换服在途”，之后重发的 Abort、`SelectRole`、下一次 Begin 都因为 `Settled` 跳过清理，目标服的名额被永久占住。现在 Begin 占完位再读一次角色，不认这次换服了就撤掉占位、答 `ErrTransferStale` / `ErrTransferInProgress` 并带回当前绑定；删占位统一成一条规则（`releaseStrayHold`：slot 在角色的绑定服上、或角色在途的换服就是它才作数，其余没有人认的撤掉），中止的收尾、迟到的 Begin / Commit、下一次 Begin、`CreateRole` 都走它，已中止的记录即使 `Settled` 也每次再看目标服——“占位刚写完进程就退出”因此由之后的入口收尾。
+- **BM-02 连续中止之后旧 Begin 被重放复活**：只留最近一次了结的 `LastTransfer`、中止不推进任何代数，`Begin A → Abort A → Begin B → Abort B` 之后原样重放 Begin A（它带的 `ExpectEpoch` 一直合法）会被受理。现在另设**换服尝试序号** `Role.TransferSeq`：每受理一次发起、每记下一次中止（含中止没发起过的 ID）加 1，随 `RoleBinding` 给出，`TransferRequest.ExpectSeq` 必须是当前值，在途 ID 的重发不看它。没有让中止推进 `BindEpoch`：它是绑定的代数，会话 claim、slot、模块判断“换回来了”（代数至少加 2）都按它。没有扩大“记住最近 N 个 ID”的环：淘汰之后仍然挡不住，单调序号不需要记住任何 ID。
+- 对调用方：`TransferRequest` 多一个必填语义的字段 `ExpectSeq`（零值只对从没发起、中止过换服的角色成立），`RoleBinding` 多 `TransferSeq`。模块 rehome 的驱动器、demo 的 `accountctl transfer-role begin` 已带上；自己直接调 `BeginRoleTransfer` 的代码要先读 `RoleBinding`。发起方会多遇到一种 `ErrTransferStale`（读绑定与发起之间有别的发起或中止落地），重读再发。
+
 ### 3.2 DataEngine：“交出实体”
 
 `Runtime.HandOffEntity(ctx, id) (*EntityHandOff, error)`，`EntityHandOff.Release(ctx) error`；`wiring/dataengine` 包一层（`Mod.HandOffEntity`、`ErrEntityHandedOff`）。与 `UnloadEntity` 的三点差别：实体不常驻时也立屏障；排空之后、卸载之前等 WAL checkpoint 盖过该实体已准入的记录；屏障保持到 `Release` 或进程退出。不新增持久状态。已实现（2026-11-11），契约与用法见 [guide/03 “交出实体”](../framework/guide/03-dataengine.md#交出实体handoffentity)，实现约束见 [impl/03 §2 第 13 条](../framework/impl/03-dataengine.md#2-必须保持的契约)。
@@ -153,7 +159,7 @@ DataEngine 是三块基础之一：这一处改动只加新入口，不改 `Unlo
 ### 接手后半的提示
 
 - 模块的 `Residency` 缺省实现调 `wiring/dataengine` 的 `Mod.HandOffEntity`，返回值的 `Release(ctx) error` 会等待、会失败（它先卸载交出期间被读回内存的实例），要处理 `ErrEntityUnloadBusy` 并重试；交出成立后的写入拿到 `ErrEntityHandedOff`（不要重试），进行中拿到可重试的 `ErrEntityUnloading`。调用顺序：先断开会话、离场景、退订，再交出。
-- account：Begin 结果未知时直接 `AbortRoleTransfer(id)` 拿确定结论；到达时不必重发 Commit，slot 的收尾会在玩家下次 `SelectRole` 时补完；两种拒绝都带回当前 `RoleBinding`。
+- account：Begin 结果未知时直接 `AbortRoleTransfer(id)` 拿确定结论；到达时不必重发 Commit，slot 的收尾会在玩家下次 `SelectRole` 时补完；两种拒绝都带回当前 `RoleBinding`。发起带上读到的 `BindEpoch` 与 `TransferSeq`（`ExpectEpoch` / `ExpectSeq`）；中止拿到的结论跨之后的发起与中止都成立（见 §3.1 末尾“审查之后的两处修正”）。
 - enter 的进入钩子现在带会话 claims（`Entered.Claims`，邮件换用时加的）；换服要加的“进入前检查”是另一个登记点（能否决登录），两者互不相干。认证器已把 `BindEpochClaim` 与 `TransferClaim` 写进 claims。
 - game-demo 的现状：进入游戏、聊天、排行榜、背包、档案、邮件都来自模块，全部模块在同一步里安装；`rehome` 加在模块列表末尾。`admitBound`、`playerMoving` 在 `demo/internal/service/game/gift_saga.go.tmpl` 与 `alliance_saga.go.tmpl`，v1.44.0 之后没有再动。
 - DataEngine 一侧留给维护者定的三点（见 [DataEngine 指南“交出实体”](../framework/guide/03-dataengine.md) 与 KNOWN-LIMITS）：`Release` 是现在的“先卸载再撤屏障”还是改成交出期间直接拒绝冷加载；等 checkpoint 用现在的轮询还是按实体记账；`ErrEntityHandedOff` 放在 `engine` 还是挪到 `ErrEntityUnloading` 旁边。

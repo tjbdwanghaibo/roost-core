@@ -627,14 +627,15 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 - **只有 account 一侧，端到端还不能用**：源服停写与断开、DataEngine 的“交出实体”、到达处理、业务模块 `rehome`、game-demo 的 `PlayerOwners` 与 saga 准入（`playerMoving` 钩子）都在实施中。account 不检查源服是否已经停写：现在只凭这四个接口（或 `accountctl transfer-role commit`）改绑一个在线玩家，会出现两个进程写同一个玩家。
 - **待维护者确认的决定**（方案 §6 第 1～4 项，按推荐项先实施）：接口上总线；`Role.ServerID` 改为“当前绑定服”、不另存建角服；目标服必须 open、未并入、账号在目标服没有角色；发起之后中途停下一律向前恢复。
-- **与方案的出入**（实施时按不变量调整）：① 中止的写入顺序是“先写角色、再删占位”（方案是反过来）：按方案的顺序，并发的提交会在占位被删之后把角色改绑过去，留下没有 slot 的角色（用例 `TestConcurrentTransferRequestsHaveOneWinner` 在那个顺序下变红：`ValidateSession: account: conflict: role creation is pending reconciliation`）。② slot 另记所属的绑定代数（`Slot.BindEpoch`）、`LastTransfer` 另记 `Epoch` / `Note` / `Settled`：提交的收尾按代数认旧 slot，迟到的收尾不会删掉角色换回来的 slot；`Settled` 让没做完的收尾能被下一次 `SelectRole` / `Begin` 发现并补完。③ 中止一个没发起成功的 ID 也记为已中止（挡住迟到的 Begin）。④ 人工提交带备注的入口 `Admin.CommitRoleTransferWithNote`（方案的 `CommitRoleTransfer` 没有备注参数）。
+- **与方案的出入**（实施时按不变量调整）：① 中止的写入顺序是“先写角色、再删占位”（方案是反过来）：按方案的顺序，并发的提交会在占位被删之后把角色改绑过去，留下没有 slot 的角色（用例 `TestConcurrentTransferRequestsHaveOneWinner` 在那个顺序下变红：`ValidateSession: account: conflict: role creation is pending reconciliation`）。② slot 另记所属的绑定代数（`Slot.BindEpoch`）、`LastTransfer` 另记 `Epoch` / `Note` / `Settled`：提交的收尾按代数认旧 slot，迟到的收尾不会删掉角色换回来的 slot；`Settled` 让没做完的收尾能被下一次 `SelectRole` / `Begin` 发现并补完。③ 中止一个没发起成功的 ID 也记为已中止（挡住迟到的 Begin）。④ 人工提交带备注的入口 `Admin.CommitRoleTransferWithNote`（方案的 `CommitRoleTransfer` 没有备注参数）。⑤ 另设换服尝试序号 `Role.TransferSeq`（发起带 `ExpectSeq`）与“占位以角色记录为准”的规则，见下面两条（审查 RV-20261111-BM-01 / BM-02 之后加的）。
 - **“涉及已合服的服”按“已并入另一服”解释**：角色的绑定服或目标服的 `MergedInto` 非 0 才拒绝；承载着别的服的服照常可作源或目标。`MergeServer` 不检查在途的换服（没有索引）：换服期间目标服被并走，提交被拒绝，由调用方中止。
 - **期限只记录**：account 不自动中止过期的换服，也不拒绝迟到的提交；没有在途换服的列举与清扫（方案三期）。
-- **换服 ID 的复用**只挡得住最近一次了结的那个 ID；调用方要用不重复的 ID。
+- **过期的 Begin 由 `TransferSeq` 挡住，ID 只认两个**（RV-20261111-BM-02 已修）：每受理一次发起、每记下一次中止（含中止没发起过的 ID），`Role.TransferSeq` 加 1，发起必须带当前值，所以中止之前发出的 Begin 无论隔了多少次发起与中止都不能被重放复活。按 ID 只认得出在途的那一次与最近了结的那一次（`LastTransfer` 只有一条），因此仍有两条边界：① 调用方拿一个早已了结的 ID、带着**当前**的代数与序号重新发起，会被当作新的换服受理（之后那个 ID 迟到的 Commit 会提交它）——换服 ID 仍要不重复；② 当前没有换服在途时，重发一个已被后来的了结覆盖掉的 ID 的 Abort，会被当作“中止一个没发起过的 ID”再记一次并返回成功，**即使那个 ID 当年是提交的**；调用方要判断“是否已提交”，看返回的绑定（`ServerID` / `BindEpoch`），不要只看 Abort 成没成。读绑定与发 Begin 之间有别的发起或中止落地时，发起方会得到 `ErrTransferStale`，重读再发。
 - **收尾是尽力而为的后半段**：结果已定、slot 没收尾时，另一头的名额仍按已占用回答（`ErrRoleLimit`），直到重发的 Commit / Abort、这个角色的下一次 `SelectRole` 或 `Begin` 补完；`SelectRole` 里补不完只记 Warn 与 `role_transfer.settle_failed`，不挡登录。
+- **没有人认的占位靠入口撤，没有后台清扫**（RV-20261111-BM-01 已修）：Begin / Commit 停在占位写入这一步时换服被中止，占位可能在中止收尾之后才落地。Begin 占完位会再读一次角色并撤掉自己留下的；进程在那之前退出的，由之后的入口撤——这个 ID 重发的 Abort、这个角色的 `SelectRole`、下一次受理的 Begin、Commit 补占位时、账号在那个服的 `CreateRole`。没有人再碰那个名额时占位一直在（不挡任何人，但 `show-role` 看不到它，只能直接读 slot）；`Admin.ResolvePendingCreation` 对它仍答 `ErrNotResolvable`、不撤。被拒绝的 Begin（例如重发一个已中止的 ID）不撤。代价：最近一次了结是中止的角色，每次 `SelectRole` 多读一次目标服的 slot，直到它下一次换服。判定规则（slot 在角色的绑定服上、或角色在途的换服就是它才作数；先读 slot 再读角色）依赖“占位只在角色写下 `Transfer` 之后才建”与“`LastTransfer` 被覆盖之前上一次的收尾已经做完”这两条写入顺序；改这两处要一起看 `releaseStrayHold`。
 - **建角服不再可得**：`OriginServerIDClaim` 在换服之后是当前绑定服；业务要按“最初的服”做显示或归属，得自己在玩家数据里记。
 - **物理库不同的服**：account 不知道两个服是否共用玩家数据的物理库；独立 Gate 转交给 game 的绑定不带 claims（两个新 claim 只在认证器那一侧可见）。
-- **验证边界**：单元用例在 Memory 与本机隔离的单机 Redis 上都跑（含注入失败的存储、并发的提交 / 中止），`wiring/integration` 有一条真实 Redis 用例；Redis Cluster 没有跑；没有真实进程（两个 game sid + account）的演练，那是游戏侧接上之后的事。
+- **验证边界**：单元用例在 Memory 与本机隔离的单机 Redis 上都跑（含注入失败的存储、并发的提交 / 中止、用 channel 固定的“占位写入之前 / 之后 × 中止 / 提交”交错与占位应答丢失），`wiring/integration` 有一条真实 Redis 用例；Redis Cluster 没有跑；没有真实进程（两个 game sid + account）的演练，那是游戏侧接上之后的事。
 
 ## 平台与外部验证
 
