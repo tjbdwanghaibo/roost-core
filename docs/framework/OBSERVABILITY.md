@@ -302,6 +302,9 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `dataengine.effects.best_effort_total{result}` | Counter | best_effort effect（`nest.EffectBestEffort`）的发送结论：`published` 已交给 core NATS、`dropped` 发送队列（`dataengine.effects.best_effort_queue`）满丢弃、`failed` 发布出错、`stopped` 进程停机中、`unavailable` 本进程没有 NATS 客户端。除 `published` 外每一条都是一次已持久的变更没有通知出去（至多一次，按契约丢弃，不重试）；持续增长时查 NATS 连接与消费方速度 |
 | `dataengine.entity_unload.total{result}` | Counter | 运维命令 `entity.unload`（D16）每次执行的结论：`unloaded`、`not_resident`（没有常驻，什么也没做）、`busy`（持有实体的事务在 timeout 内没结束、另一次卸载进行中、Remote 所有权不稳定）、`timeout`（在途投影没在 timeout 内完成）、`failed`（其他错误，例如非持久实体、Runtime 不可用）。只有运维手动触发，基线是零星几次 |
 | `dataengine.entity_unload.admission_rejected.total` | Counter | 卸载屏障在 WAL 准入处拒绝的写事务数（调用方拿到可重试的 `ErrEntityUnloading`）。卸载期间写到该实体的请求才会计入，正常只在 `entity.unload` 前后零星出现；持续增长说明卸载卡在投影上 |
+| `dataengine.entity_handoff.total{result}` | Counter | 交出实体（`Runtime.HandOffEntity`，单个玩家换服的源服一侧）每次调用的结论：`handed_off`、`already`（实体已处于交出状态，幂等返回同一份交出）、`busy`（持有实体的事务在期限内没结束，或同一实体上另一次交出 / 卸载 / Release 进行中）、`timeout`（在途投影或 WAL checkpoint 没在期限内完成）、`failed`（其他错误：非持久实体、不是完整 Entity ID、Remote 托管实体、Runtime 不可用、停机打断）。只在换服时出现；`timeout` 增多看投影积压与 Mongo |
+| `dataengine.entity_handoff.admission_rejected.total` | Counter | 交出屏障在 WAL 准入处拒绝的写事务数（调用方拿到 `ErrEntityHandedOff`，不是可重试错误）。正常接近 0：业务准入应当先于它把请求退回 / 指到实体当前绑定的服；持续增长说明有入口没过业务准入就在已交出的实体上写（GM、定时器、迟到的 saga 步骤） |
+| `dataengine.entity_handoff.held` | Gauge | 本进程当前保持着交出屏障（尚未 `Release`）的实体数。屏障只在内存里，进程重启归零；换了服的玩家不回来就一直计着，随换服次数增长是预期的 |
 | `dataengine.startup_drain_retry_total` | Counter | 启动排空（WAL 未投影记录写进 Mongo）失败后在启动期限（`dataengine.startup_timeout`）内的退避重试次数，同时 WARN。被 kill -9 的进程留下的投影事务持锁到 Mongo `transactionLifetimeLimitSeconds` 才回收（服务端每半个参数扫一次，最晚 1.5 倍参数），重启时偶发是正常的；期限到了仍失败则启动失败，按 WARN 里的错误查（设计 T-A，[SAGA.md](SAGA.md)「进程被强杀时遗留的 Mongo 事务」） |
 
 ### 全部源码指标索引
@@ -341,6 +344,9 @@ DESIGN-TODO D21 第 5 期（A9）。只有 `actionflow.BehaviorConfig.Metrics` �
 | `dataengine.dao.unknown_stored_key.total` | Counter | `dataengine/stored_keys.go:IncCounter` |
 | `dataengine.effect_consumer.handled_total` | Counter | `wiring/dataengine/effects.go:IncCounter` |
 | `dataengine.effects.best_effort_total` | Counter | `wiring/dataengine/effects_best_effort.go:IncCounter` |
+| `dataengine.entity_handoff.admission_rejected.total` | Counter | `dataengine/engine/entity_handoff.go:IncCounter` |
+| `dataengine.entity_handoff.held` | Gauge | `dataengine/engine/entity_handoff.go:SetGauge` |
+| `dataengine.entity_handoff.total` | Counter | `dataengine/engine/entity_handoff.go:IncCounter` |
 | `dataengine.entity_unload.admission_rejected.total` | Counter | `dataengine/engine/entity_unload.go:IncCounter` |
 | `dataengine.entity_unload.total` | Counter | `dataengine/engine/entity_unload.go:IncCounter` |
 | `dataengine.startup_drain_retry_total` | Counter | `dataengine/engine/runtime.go:IncCounter` |

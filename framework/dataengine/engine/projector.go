@@ -119,6 +119,10 @@ type ProjectorStats struct {
 	// coredata.ErrEntityUnloading 拒绝的准入次数。
 	UnloadingEntities       uint64
 	UnloadAdmissionRejected uint64
+	// HandedOffEntities 是当前处于交出屏障（Runtime.HandOffEntity，尚未 Release）的实体数；HandOffAdmissionRejected 是
+	// 因此以 ErrEntityHandedOff 拒绝的准入次数。
+	HandedOffEntities        uint64
+	HandOffAdmissionRejected uint64
 	// ParallelWindows 是以并行通道投影的窗口数，ParallelLanes 是这些窗口的通道数合计（÷ ParallelWindows 为平均通道数）。
 	ParallelWindows uint64
 	ParallelLanes   uint64
@@ -161,6 +165,9 @@ type Projector struct {
 	// unloadingEntities：实体 → 运维卸载屏障的令牌（entity_unload.go）。heldMu 保护，与准入同一临界区检查。
 	unloadingEntities map[int64]uint64
 	unloadToken       uint64
+	// handedOffEntities：实体 → 交出屏障的令牌（entity_handoff.go）。heldMu 保护，与准入同一临界区检查。
+	handedOffEntities map[int64]uint64
+	handOffToken      uint64
 
 	// localExecutor 是 Nest 绑定的业务池入口（BindLocalExecutor），运维卸载经它在业务池取实体锁。
 	localExecutor atomic.Pointer[func(func()) error]
@@ -172,6 +179,7 @@ type Projector struct {
 	fatalConflicts    atomic.Uint64
 	admissionRejected atomic.Uint64
 	unloadRejected    atomic.Uint64
+	handOffRejected   atomic.Uint64
 	parallelWindows   atomic.Uint64
 	parallelLanes     atomic.Uint64
 	// laneFailed 是测试缝：并行窗口某通道失败、停止补位标志已置位之后调用。生产为 nil。
@@ -517,11 +525,13 @@ func (projector *Projector) Stats() ProjectorStats {
 		WALUnacked:         projector.walUnacked.Load(),
 		AdmissionRejected:  projector.admissionRejected.Load(),
 		ProjectionFailures: projector.failures.Load(), FatalProjectionConflicts: projector.fatalConflicts.Load(),
-		UnloadAdmissionRejected: projector.unloadRejected.Load(),
-		ParallelWindows:         projector.parallelWindows.Load(), ParallelLanes: projector.parallelLanes.Load(),
+		UnloadAdmissionRejected:  projector.unloadRejected.Load(),
+		HandOffAdmissionRejected: projector.handOffRejected.Load(),
+		ParallelWindows:          projector.parallelWindows.Load(), ParallelLanes: projector.parallelLanes.Load(),
 	}
 	projector.heldMu.RLock()
 	stats.UnloadingEntities = uint64(len(projector.unloadingEntities))
+	stats.HandedOffEntities = uint64(len(projector.handedOffEntities))
 	projector.heldMu.RUnlock()
 	warning := projector.opts.WarnUnackedRecords
 	if warning == 0 {
@@ -598,6 +608,10 @@ func (projector *Projector) reserve(record coredata.CommitRecord, held bool) err
 	if _, exists := projector.admitted[id]; !exists {
 		// 运维卸载屏障（entity.unload）：同一临界区，登记之后不会再有写到该实体的记录准入。
 		if err := projector.checkUnloadingEntitiesLocked(record); err != nil {
+			return err
+		}
+		// 交出屏障（Runtime.HandOffEntity）：同一临界区，保持到 Release；没有交出时只是一次空表判断。
+		if err := projector.checkHandedOffEntitiesLocked(record); err != nil {
 			return err
 		}
 		if limit := projector.opts.MaxUnackedRecords; limit > 0 && uint64(len(projector.admitted)) >= limit {

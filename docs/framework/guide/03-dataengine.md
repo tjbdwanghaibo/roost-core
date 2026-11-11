@@ -139,6 +139,46 @@ curl -s -H 'X-Admin-Token: <token>' -X POST http://127.0.0.1:9100/admin/execute 
 
 改档与整档恢复不进框架：在线改档写成业务的 GM handler（一条普通 Nest 消息，strict 写入，操作者与原因写进业务记录，参考 `service/account` 的 `ResolvePendingCreation`）；整档恢复走 §3 的离线流程。
 
+### 交出实体（HandOffEntity）
+
+把一个实体的写权从本进程交给另一个进程时用（单个玩家换服的源服一侧，[方案 §3.2](../../maintenance/FEATURE-2026-11-11-player-rehome.md#32-dataengine交出实体)）。业务经 DataEngine Mod 调用：`handOff, err := mod.HandOffEntity(ctx, entityID)`（`wiring/dataengine`，实现是 `engine.Runtime.HandOffEntity`，[entity_handoff.go](../../../framework/dataengine/engine/entity_handoff.go)），之后 `handOff.Release(ctx)`。它不是 admin 命令。
+
+`HandOffEntity` 成功返回时本进程保证三件事，并一直保持到 `Release` 或进程退出：
+
+1. 该实体在本进程已准入的写入都已落库，而且 WAL 的 checkpoint 已经盖过它们——本进程以后的回放（含重启后的启动恢复）里不再有这个实体的记录。
+2. 实体不在本进程内存里（返回那一刻）。
+3. 写到该实体的事务在 WAL 准入处以 `ErrEntityHandedOff` 拒绝（同时满足 `nest.ErrCommitRejected`），Nest 在 Guard 内回滚；新建、删除它的记录走同一处准入，同样被拒。它与 `ErrEntityUnloading` 互不满足对方的 `errors.Is`：后者是“稍后重试”，前者是“这个实体不归本进程，不要在这里重试”（换服：把请求退回或指到它当前绑定的服）。
+
+与 `entity.unload`（`UnloadEntity`）的差别：
+
+| | `UnloadEntity` | `HandOffEntity` |
+| --- | --- | --- |
+| 实体不在内存里 | 什么也不做 | 同样立屏障 |
+| 等到什么 | 已准入的记录投影完成 | 投影完成，并且 checkpoint 盖过这些记录 |
+| 屏障 | 返回时撤销 | 保持到 `Release` 或进程退出 |
+| 返回后的写入 | 冷加载后照常 | 拒绝（`ErrEntityHandedOff`） |
+| Remote 托管实体 | 所有权稳定时支持 | 不支持（`ErrEntityHandOffUnsupported`，归属由 Remote 运行时交接） |
+
+为什么要等 checkpoint：投影完成先于 checkpoint。单 mutation 快路记录不写事务标记，重放只靠文档上的 `_version` 与 `_last_tx` 认出“已应用”（§3）；下一个写者推进文档之后两者都对不上，重放这条记录就是 fatal 的投影冲突——本进程的下一轮回放 fail-stop，重启后启动恢复失败、起不来。所以交出要等到本进程的 WAL 里不再有这个实体的记录可重放，才允许下一个写者动它。
+
+调用约束与失败：
+
+- `HandOffEntity` 与 `Release` 都会等待，只能在业务池之外调用（io 池、独立 goroutine）；在业务 worker 上调用直接返回 `fctx.ErrBlockingInBusinessWorker`，什么也不做。
+- 参数是完整 Entity ID；只传唯一号会被拒绝（`entity.ErrInvalidEntityID`）。
+- `ctx` 约束取实体锁、等投影、等 checkpoint。调用时 `ctx` 已结束：原样返回它的错误、什么也不做。等待中到期或被取消、持有实体的事务不结束、同一实体上另一次交出 / 卸载 / `Release` 正在进行：`ErrEntityUnloadBusy` / `ErrEntityUnloadTimeout`（与运维卸载同名，不包裹 `ctx` 的错误）。投影器已 fence、WAL 已 terminal、Runtime 停机：返回对应错误。这些都是确定的“没有交出”：返回 `nil` 与错误，屏障已撤销，实体与正常运行时一样，调用方保留写权，重试或放弃。
+- 交出进行中（结论未定）写到该实体的事务拿到的是可重试的 `ErrEntityUnloading`。
+- 对已交出的实体再次调用是幂等的（返回值的 `AlreadyHandedOff` 为真）：返回同一份交出，期间被加载回来的实例再卸载一次；任一返回值 `Release` 即解除，旧返回值不会解除之后的另一次交出。
+- 屏障只在内存里，不新增持久状态。进程重启后屏障不存在：重启后还该不该写这个实体，由调用方的权威在准入时回答（换服是 account 的绑定）。
+
+调用方怎么用：
+
+1. **先断开，再交出**：关闭该实体的会话、离开场景、退订它的 Sync 订阅。交出不拦加载：仍有订阅者时卸载后框架会为订阅者把它从库重载（`nest.unload_resync`），之后任何一次访问也会把它冷加载回来。这样的实例只读（写入被拒），而且在下一个写者写过之后落后于库。
+2. `HandOffEntity` 成功后，才让下一个写者接手（换服：向 account 提交改绑）。
+3. `Release` 只在本进程（重新）拥有这个实体的写权之后调用：交出被放弃（换服 Abort），或它后来又回到本进程。`Release` 先把此刻常驻的实例卸载（它可能落后于库；不卸载的话屏障一撤，落后实例上的第一笔写入就是投影冲突），再撤屏障；常驻实例在 `ctx` 内卸载不掉时返回 `ErrEntityUnloadBusy`、屏障保持，可以重试。重复 `Release`、对 `nil` 调用、Runtime 已停机时都返回 `nil`。
+4. 实体换走之后不回来，就不要 `Release`：屏障保持到进程退出，这正是“换走的玩家不在这里写”的进程内保证。
+
+对已交出的实体执行 `entity.unload` 照常工作（卸载期间加载回来的实例），它撤的只是自己的屏障。停机不受屏障影响（`Runtime.Shutdown` 照常排空）；交出还在等待时停机，交出以 `ErrRuntimeStopped` 失败。指标：`dataengine.entity_handoff.total{result}`、`dataengine.entity_handoff.admission_rejected.total`、`dataengine.entity_handoff.held`（[OBSERVABILITY](../OBSERVABILITY.md)）。
+
 ## 源码与核对范围
 
 当前设计的关键结论、纠正的旧口径及验证限制见 [文档—代码核对表](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/CONSISTENCY.md)。本篇不以测试数量证明全部路径正确；具体默认值与导出 API 以对应源码声明为准。

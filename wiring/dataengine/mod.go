@@ -469,6 +469,31 @@ func (mod *Mod) WaitEntityProjection(ctx context.Context, entityID int64) error 
 	return runtime.WaitEntityProjection(ctx, entityID)
 }
 
+// EntityHandOff 是一次成立的交出（engine.EntityHandOff）：屏障保持到它的 Release。
+type EntityHandOff = engine.EntityHandOff
+
+// ErrEntityHandedOff 是写到已交出实体的事务拿到的错误（engine.ErrEntityHandedOff，同时满足 nest.ErrCommitRejected）：
+// 不是“稍后重试”，这个实体在 Release 之前不归本进程写。交出还在进行时拿到的是可重试的 dataengine.ErrEntityUnloading。
+var ErrEntityHandedOff = engine.ErrEntityHandedOff
+
+// HandOffEntity 把实体（完整 Entity ID）的写权从本进程交出去（engine.Runtime.HandOffEntity，单个玩家换服的源服一侧）：
+// 等它在本进程已准入的写入全部落库、WAL checkpoint 盖过它们，把它从内存卸载，并从此拒绝写到它的事务
+// （ErrEntityHandedOff），直到返回值的 Release 或进程退出。实体不在内存里时同样立屏障。屏障不持久：进程重启后
+// 是否还能写这个实体，由调用方的权威（换服是 account 的绑定）在准入时回答。
+//
+// 用法：先断开该实体的会话、离开场景、退订（仍有 Sync 订阅者时框架会把它重新加载回来，只读、可能落后于库），再
+// 交出，成功后才让下一个写者接手；交出被放弃或实体后来回到本进程时调用 Release（它先卸载期间加载回来的实例）。
+// 两者都会等待，只能在 io 池或独立 goroutine 调用，业务 worker 上直接返回 fctx.ErrBlockingInBusinessWorker；
+// 失败（engine.ErrEntityUnloadBusy / ErrEntityUnloadTimeout 等）是确定的“没有交出”，返回 nil 与错误、屏障已撤销，
+// 调用方保留写权并重试或放弃。对已交出的实体再次调用是幂等的。
+func (mod *Mod) HandOffEntity(ctx context.Context, entityID int64) (*EntityHandOff, error) {
+	runtime := mod.Runtime()
+	if runtime == nil {
+		return nil, errors.New("dataengine mod: not provided")
+	}
+	return runtime.HandOffEntity(ctx, entityID)
+}
+
 func (mod *Mod) Repository() *engine.EntityRepository {
 	runtime := mod.Runtime()
 	if runtime == nil {

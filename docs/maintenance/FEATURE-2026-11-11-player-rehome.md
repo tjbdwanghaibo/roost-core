@@ -89,9 +89,15 @@ Begin 的拒绝：角色不存在或未就绪；`FromSID` 不是当前承载服�
 
 ### 3.2 DataEngine：“交出实体”
 
-`Runtime.HandOffEntity(ctx, id) (EntityHandOff, error)`，`EntityHandOff.Release()`；`wiring/dataengine` 包一层。与 `UnloadEntity` 的三点差别：实体不常驻时也立屏障；卸载后等 WAL checkpoint 盖过该实体最后一条已准入记录；屏障保持到 `Release()` 或进程退出。不新增持久状态。
+`Runtime.HandOffEntity(ctx, id) (*EntityHandOff, error)`，`EntityHandOff.Release(ctx) error`；`wiring/dataengine` 包一层（`Mod.HandOffEntity`、`ErrEntityHandedOff`）。与 `UnloadEntity` 的三点差别：实体不常驻时也立屏障；排空之后、卸载之前等 WAL checkpoint 盖过该实体已准入的记录；屏障保持到 `Release` 或进程退出。不新增持久状态。已实现（2026-11-11），契约与用法见 [guide/03 “交出实体”](../framework/guide/03-dataengine.md#交出实体handoffentity)，实现约束见 [impl/03 §2 第 13 条](../framework/impl/03-dataengine.md#2-必须保持的契约)。
 
-为什么要等 checkpoint：源服在“已投影、checkpoint 未确认”的窗口崩溃，而目标服随后推进了文档，源服重启重放单 mutation 记录时 `_last_tx` 对不上 → `ErrProjectionConflict`（fatal），起不来。**这是读代码的推断，实施时先写一条刻画现状的用例证实**；证实不了就不加这一步等待，并在这里改记结论。
+为什么要等 checkpoint：源服在“已投影、checkpoint 未确认”的窗口崩溃，而目标服随后推进了文档，源服重启重放单 mutation 记录时 `_last_tx` 对不上 → `ErrProjectionConflict`（fatal），起不来。**结论（2026-11-11）：推断已证实，等待已实现。** 刻画用例 `TestUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument`（Mongo 替身）与 `TestRealMongoUnconfirmedProjectionReplayedAfterAnotherWriterAdvancedTheDocument`（真实副本集）在没有任何改动的代码上通过：单 mutation 快路记录已投影、checkpoint 未确认，另一个写者把文档推进一版之后，重启后的启动回放是 fatal 的 `ErrProjectionConflict`；不必重启，同一进程的下一轮回放也一样（fail-stop）；没有别的写者时重放幂等；写事务标记的记录（带回执）在同样的情形下重放安全。窗口也比“崩溃”宽：并行投影窗口里别的通道失败时，快路记录会停在“已投影、未确认”直到那条通道恢复。
+
+实施时与本节原文不同、或原文没写的三处：
+
+- **`Release(ctx) error` 而不是 `Release()`**。交出不拦加载（卸载后重载、任何访问都能把实体读回来，那是只读的实例），目标服写过之后这样的实例落后于库；屏障一撤，它上面的第一笔写入就是投影冲突。所以 `Release` 要先卸载此刻常驻的实例（等待、可能因实体被占用而失败并保持屏障），只在本进程（重新）拥有写权之后调用：Abort，或玩家后来换回本服。
+- **两个错误**：交出进行中写入拿到可重试的 `ErrEntityUnloading`，成立之后是 `ErrEntityHandedOff`（不重试，互不满足对方的 `errors.Is`）。
+- **重复交出幂等**（第 2 步“可重做”）：返回同一份交出，期间加载回来的实例再卸载一次。Remote 托管实体拒绝。
 
 DataEngine 是三块基础之一：这一处改动只加新入口，不改 `UnloadEntity` 与投影路径的既有行为。
 
@@ -119,7 +125,7 @@ DataEngine 是三块基础之一：这一处改动只加新入口，不改 `Unlo
 3. 目标服必须 open、未并入、账号在目标服没有角色；涉及已合服的服一期拒绝。
 4. Begin 之后崩溃一律**向前恢复**，只有显式失败、运维、过期才 Abort。
 5. `RehomeApply` **缺省对客户端开放**（规则文件缺省允许、带冷却）。
-6. 模块名 `rehome`；checkpoint 等待先写用例证实再定（§3.2）。
+6. 模块名 `rehome`；checkpoint 等待先写用例证实再定（§3.2）——**已证实并实现（2026-11-11）**：替身与真实副本集上的刻画用例都得到 fatal 的 `ErrProjectionConflict`，`HandOffEntity` 等 checkpoint 盖过该实体的记录后才卸载、返回。另有一处需要确认：`Release` 带 `ctx`、会失败（§3.2 的说明）。
 
 ## 7. 分期
 

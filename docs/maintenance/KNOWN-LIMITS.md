@@ -358,6 +358,17 @@ GetOrCreate 路径已守住（维护者 2026-10-17 决定 [D10](https://github.c
 
 框架只提供与业务字段无关的 `entity.kick`（踢下线）与 `entity.unload`（排空投影后卸载），**不提供改档与恢复**（维护者 2026-10-20 决定 C，[DESIGN-TODO D16](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d16-单个实体--玩家的运维入口)，用法见 [guide/03 §6](../framework/guide/03-dataengine.md#单实体运维命令d16)）。`entity.unload` 之后任何访问都会立刻重新加载，不能当作改库的窗口。运行期直接改权威集合的结果按设计是确定的：只改字段时下一次投影覆盖改动；改 `_version`（恢复旧备份）时投影 fatal、进程 fence、重启起不来，直到人工处理（[维护手册 §4](README.md#4-故障处理)）。在线改档写成业务 GM handler，整档恢复走停服排空后的离线写回（[guide/03 §3](../framework/guide/03-dataengine.md#3-投影与幂等)）。
 
+### 交出实体（HandOffEntity）的边界
+
+`Runtime.HandOffEntity`（[guide/03 “交出实体”](../framework/guide/03-dataengine.md#交出实体handoffentity)）只保证本进程一侧：已准入的写入落库且不会再被重放、此后不写。以下不在它的保证里：
+
+- **屏障不持久**。进程重启后屏障不存在，重启后还能不能写这个实体由调用方的权威在准入时回答（换服是 account 的绑定）；没过业务准入的写入口在重启后的旧服上仍能加载并写一个已经换走的实体（[换服方案 §8](FEATURE-2026-11-11-player-rehome.md#8-已知风险与没查清的)的“加载守卫”，二期评估）。
+- **交出不拦加载**。交出期间实体可以被读回内存（仍有 Sync 订阅者时的卸载后重载、任何一次访问）；这样的实例只读，下一个写者写过之后落后于库，仍订阅着它的客户端看到的是旧内容。调用方要先断开会话、离开场景、退订再交出；`Release` 会把期间加载的实例卸载。要让已交出的实体在本进程根本加载不了，需要在冷加载入口加守卫（改冷加载路径的行为），没有做。
+- **`RollbackNone` 的 handler**。被屏障拒绝的事务按回滚策略撤销内存修改；`RollbackNone` 的 handler 在期间加载回来的实例上留下的修改不会落库，只留在那个只读实例里，`Release` 或再次交出时随实例丢弃。
+- **Remote 托管实体不支持**（`ErrEntityHandOffUnsupported`）。
+- **等 checkpoint 用轮询**（2 ms），没有在 checkpoint 路径上加通知；交出因此最多多等一个间隔。集合取的是全部“已投影、未确认”的记录，不按实体区分：别的实体的投影或 checkpoint 卡住（例如并行窗口里另一条通道持续失败）时，交出会等到期限并以 `ErrEntityUnloadTimeout` 失败，即使本实体的记录其实已被确认。
+- **验证范围**：正式 Nest + 文件 WAL + Mongo 替身的用例（含 `-race`、并发写入、停机、订阅者重载），真实副本集上的现状刻画与整条流程各一条（本机隔离环境）。没有跑两个真实进程的换服演练（每个阶段后 kill -9），那是换服二期的内容。
+
 ### DAO 持久键（D13）
 
 定义里字段必填的 `store:"x"` 就是持久键（v1.40.0 起；没有自动编号或 snake_case 回退，规则见 [tag 手册](../../codegen/docs/TAGS.zh-CN.md#必填的-store-键与变更告警v1400-起)），库里有、DAO 未声明的键不读入，下一次整文档写回即删除（维护者 2026-10-19，[DESIGN-TODO D13](https://github.com/tjbdwanghaibo/roost-core/blob/132ed79f689df01dc8df0ea3a44e9a768ee126d9/docs/maintenance/DESIGN-TODO.md#d13-dao-持久键的来源与水合时的键集合校验)）。
