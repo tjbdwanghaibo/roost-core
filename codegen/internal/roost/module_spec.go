@@ -36,9 +36,13 @@ type ModuleSpec struct {
 	// Component 是挂在 Entity 上的组件名（PascalCase）；组件号在安装时分配。
 	Component string `yaml:"component" json:"component,omitempty"`
 	// Protocols / Errcodes 是模板里 {{ID:protocol:<name>}} / {{ID:errcode:<name>}} 用到的名字，号在安装时分配。
-	Protocols []string     `yaml:"protocols" json:"protocols,omitempty"`
-	Errcodes  []string     `yaml:"errcodes" json:"errcodes,omitempty"`
-	Verify    ModuleVerify `yaml:"verify" json:"verify"`
+	Protocols []string `yaml:"protocols" json:"protocols,omitempty"`
+	Errcodes  []string `yaml:"errcodes" json:"errcodes,omitempty"`
+	// Replaces 是模块要接管的生成桩（工程内路径，必须也在 files/ 里）：生成器建一次、默认拒绝一切、
+	// 留给项目实现的文件，例如托管服务的 internal/service/chat/collaborators.go。只有它仍是没改过的
+	// 生成桩时才替换；业务改过就拒绝安装。
+	Replaces []string     `yaml:"replaces" json:"replaces,omitempty"`
+	Verify   ModuleVerify `yaml:"verify" json:"verify"`
 
 	// Files 是模板在工程里的落点（不带 .tmpl），由 files/ 目录读出，不写在清单里。
 	Files []string `yaml:"-" json:"files"`
@@ -212,6 +216,11 @@ func (spec ModuleSpec) validate(source fs.FS) error {
 			return fmt.Errorf("state field %s is listed twice", field.Field)
 		}
 		seenFields[field.Field] = true
+	}
+	for _, rel := range spec.Replaces {
+		if !contains(spec.Files, rel) {
+			return fmt.Errorf("replaces %s, but files/ has no template for it", rel)
+		}
 	}
 	if len(spec.Verify.Packages) == 0 || spec.Verify.Run == "" || spec.Verify.Pass <= 0 {
 		return fmt.Errorf("verify needs packages, run and a positive pass count")

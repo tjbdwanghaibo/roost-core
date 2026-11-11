@@ -1,0 +1,49 @@
+package chat
+
+import (
+	"fmt"
+	"log/slog"
+
+	gamechat "{{MODULE}}/game/chat"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+)
+
+// HandleChatSend 经 chat 服务发布一行：一次跨进程的类型化调用，不涉及 Entity 锁。
+// 发送者是认证会话的玩家，从不取请求字段；连接的会话号加帧序号是幂等键，重发的帧不会存两次。
+// 频道政策在这里先查一遍（省一次往返），chat 进程按同一份规则再查，以它为准。
+func (controller *Controller) HandleChatSend(context *playeraccess.Context, request *pb.ChatSendRequest) (*pb.ChatSendResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("chat_send endpoint: context and request are required")
+	}
+	refuse := func(err error) (*pb.ChatSendResponse, error) {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("chat_send failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.ChatSendResponse{Code: code, Reason: reason}, nil
+	}
+	channel, ok := gamechat.ChannelOf(request.Kind, request.Target)
+	if !ok {
+		return refuse(fmt.Errorf("%w: kind %q is not one a player may publish to", svcchat.ErrChannelInvalid, request.Kind))
+	}
+	sender := gamechat.PlayerSender(context.PlayerID)
+	if err := gamechat.Allow(sender, channel); err != nil {
+		return refuse(fmt.Errorf("%w: %v", svcchat.ErrNotPermitted, err))
+	}
+	body := []byte(request.Text)
+	if err := gamechat.ValidateText(body); err != nil {
+		return refuse(fmt.Errorf("%w: %v", svcchat.ErrMessageInvalid, err))
+	}
+	requestID := fmt.Sprintf("chat:%d:%s:%d", context.PlayerID, context.Session.Principal().SessionID, context.Seq)
+	message, err := controller.messaging.Publish(context.Context(), sender, svcchat.PublishRequest{
+		Channel: channel, Type: gamechat.TypeText, Body: body, RequestID: requestID,
+	})
+	if err != nil {
+		return refuse(err)
+	}
+	return &pb.ChatSendResponse{Seq: int64(message.Seq)}, nil
+}

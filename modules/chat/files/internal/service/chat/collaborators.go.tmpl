@@ -1,0 +1,57 @@
+// Package chat supplies the collaborators the chat service needs from this
+// project. 聊天模块（roost module add chat）写下这个文件，取代生成的拒绝桩；之后归工程所有。
+package chat
+
+import (
+	"context"
+	"errors"
+
+	gamechat "{{MODULE}}/game/chat"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/observe/servicemetrics"
+	"github.com/tjbdwanghaibo/roost-core/service/chat"
+)
+
+// Policy 决定谁能往一个频道发、谁能读。规则在 game/chat.Allow（game 进程的端点用同一份）：
+// 世界频道与一对一私聊对每个已认证玩家开放，其余拒绝。系统频道任何人可读，只有发布是特权。
+func Policy() chat.ChannelPolicy {
+	return chat.PolicyFuncs{
+		Publish: func(_ context.Context, who chat.Sender, channel chat.Channel) error {
+			return gamechat.Allow(who, channel)
+		},
+		Read: func(_ context.Context, viewer chat.Sender, channel chat.Channel) error {
+			if channel.Kind == chat.ChannelSystem {
+				return nil
+			}
+			return gamechat.Allow(viewer, channel)
+		},
+	}
+}
+
+// Bodies 登记本游戏允许的消息体类型：只有纯文本，用端点调用前的同一个校验函数。
+func Bodies() *chat.BodyRegistry {
+	registry := chat.NewBodyRegistry()
+	registry.MustRegister(gamechat.TypeText, chat.BodySpec{
+		Validator: chat.BodyValidatorFunc(gamechat.ValidateText),
+		MaxBytes:  gamechat.MaxTextBytes,
+	})
+	return registry
+}
+
+// System 认证特权入口（系统消息）。聊天模块不发系统消息，所以保持拒绝：
+// 要开放时在这里按传输身份（mTLS 对端、ctx 里的服务凭据）授权，不要无条件放行。
+func System() chat.SystemAuthenticator {
+	return chat.SystemAuthenticatorFunc(func(context.Context) (chat.SystemToken, error) {
+		return chat.SystemToken{}, errors.New("chat: this game publishes no system messages")
+	})
+}
+
+// Rules 是频道种类与它们的范围：服务的缺省（世界 / 群组共享，私聊按双方，系统特权），不改。
+func Rules() []chat.ChannelRule { return chat.DefaultChannelRules() }
+
+// Metrics receives the service's counters. The default writes them into the
+// process's metrics registry, served as service_* series on the ops /metrics
+// endpoint (labels service, op, reason, name, key). Turn them off with
+// service_metrics.enabled: false in config, or by returning nil here; nil
+// never fails an operation.
+func Metrics() servicemetrics.Reporter { return servicemetrics.NewMetricsReporter("chat") }

@@ -1,0 +1,48 @@
+package chat
+
+import (
+	"fmt"
+	"log/slog"
+
+	gamechat "{{MODULE}}/game/chat"
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+)
+
+// HandleChatHistory 从游标往后翻一个频道。读权限由 chat 服务按 collaborators 的政策检查。
+func (controller *Controller) HandleChatHistory(context *playeraccess.Context, request *pb.ChatHistoryRequest) (*pb.ChatHistoryResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("chat_history endpoint: context and request are required")
+	}
+	refuse := func(err error) (*pb.ChatHistoryResponse, error) {
+		code, reason := errcode.ClientError(err)
+		if code == errcode.CodeInternal {
+			slog.Error("chat_history failed", "player_id", context.PlayerID, "err", err)
+		}
+		return &pb.ChatHistoryResponse{Code: code, Reason: reason}, nil
+	}
+	channel, ok := gamechat.ChannelOf(request.Kind, request.Target)
+	if !ok {
+		return refuse(fmt.Errorf("%w: kind %q", svcchat.ErrChannelInvalid, request.Kind))
+	}
+	if request.AfterSeq < 0 {
+		return refuse(fmt.Errorf("%w: after_seq must not be negative", svcchat.ErrRequestInvalid))
+	}
+	page, err := controller.messaging.History(context.Context(), gamechat.PlayerSender(context.PlayerID), svcchat.HistoryQuery{
+		Channel: channel, AfterSeq: uint64(request.AfterSeq), Limit: int(request.Limit),
+	})
+	if err != nil {
+		return refuse(err)
+	}
+	response := &pb.ChatHistoryResponse{NextCursor: int64(page.NextCursor), HasMore: page.HasMore}
+	for _, message := range page.Messages {
+		response.Lines = append(response.Lines, pb.ChatLine{
+			Seq: int64(message.Seq), FromID: message.From.RoleID, FromName: message.From.Name,
+			Text: string(message.Body), System: message.Origin == svcchat.OriginSystem,
+		})
+	}
+	return response, nil
+}

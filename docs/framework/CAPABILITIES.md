@@ -225,6 +225,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 | --- | --- | --- | --- | --- |
 | 货币 wallet | 余额；两个入口：`Add`（调用方自己记着“做过没有”的发放与扣除，不留回执）、`Apply`（带业务键，同一个键在去重窗口内只生效一次）；客户端消费协议；服务端发放 handler | `roost module add wallet`；别的业务在自己的组件里调 `WalletComp().Add(delta)` 或 `WalletComp().Apply(key, delta)` | 现成模块。单一货币；去重窗口只留最近 128 次带业务键的加减，是短期防重发不是永久账本，周期性发放用 `Add` | [modules](../../modules/README.md) |
 | 每日签到 checkin | 按业务日（业务时区与每日重置时刻）切分，连续天数加成，奖励经货币模块在同一笔事务里发放 | `roost module add checkin`（依赖 wallet，一起装） | 现成模块。奖励规则是样例，在组件里改；跨天后没有新写入时客户端看到的仍是上一次的记录，按 `LastDay` 比对 | 同上 |
+| 聊天 chat | 世界频道与一对一私聊：发送、按序号翻历史；消息存在托管的 chat 服务里，频道政策与消息体校验在工程这一侧 | `roost module add chat`（业务服务要 `uses: [chat]`，`-template game` 已有；安装时替换 chat 服务的拒绝桩） | 现成模块。没有推送（客户端靠翻历史拉新消息）、没有系统消息、没有群组频道；不经过 Nest，不改任何实体 | 同上 |
 
 ### 13 类玩法纵切
 
@@ -288,7 +289,7 @@ CLI 入口 `codegen/cmd/roost`。骨架文件归业务、只建一次，之后 `
 
 | 需求或类型 | 结论 | 是哪条限制 | 出处 |
 | --- | --- | --- | --- |
-| 按玩法的配方（`roost project new -recipe`）、把 13 类玩法与 game-demo 拆成模块 | 只有设计 | 业务模块安装器已实现（见“业务模块命令”），目前只有两个模块；配方与现有玩法、demo 的迁移是方案的后几期 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
+| 按玩法的配方（`roost project new -recipe`）、把 13 类玩法与 game-demo 拆成模块 | 只有设计 | 业务模块安装器已实现（见“业务模块命令”），目前只有三个模块；配方与现有玩法、demo 的迁移是方案的后几期 | [业务模块方案](../maintenance/FEATURE-2026-11-10-business-modules.md) |
 | 业务模块的卸载 | 不做 | 分配过的号与存储键不回收；要去掉一个模块时按 `roost.yaml` 的 `modules.<name>` 归属清单手工删 | [业务模块方案“决定一览”](../maintenance/FEATURE-2026-11-10-business-modules.md#决定一览) |
 | FPS / 动作射击 | 不建议 | 心跳档位最短 50ms；没有延迟补偿与命中回溯，没有通用客户端预测；玩家接入只有 TCP | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型) |
 | 无缝开放世界（多进程分区） | 只有原型 | Player 静态 sid、Interest 按进程；cellworld 是原型不是正式能力；正式做法是同进程多地图加按 sid 分服 | [skill §6](../agent-skills/roost-genre/SKILL.md#6-不适合--暂缓的类型)、[KNOWN-LIMITS](../maintenance/KNOWN-LIMITS.md#框架服务与-game-demo) |

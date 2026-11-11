@@ -11,6 +11,8 @@
 | [wallet](wallet/module.yaml) | 玩家货币：余额；`Add`（调用方自己判重的发放与扣除）；`Apply`（带业务键、在最近 128 次的去重窗口内只生效一次）；消费协议 `WalletSpend`；服务端发放 handler `WalletGrant` | 无 | `PlayerDao.Wallet`（同步）、`PlayerDao.WalletLedger`（只落库） | 8 |
 | [checkin](checkin/module.yaml) | 每日签到：按业务日（`clock.BusinessDay`）切分，连续天数加成，奖励经货币模块在同一笔事务里发放 | wallet | `PlayerDao.Checkin`（同步） | 6 |
 
+| [chat](chat/module.yaml) | 聊天：世界频道与一对一私聊的发送（`ChatSend`）和按序号翻历史（`ChatHistory`），经托管的 chat 服务存储；替换 chat 服务默认拒绝一切的 collaborators | 无（要求业务服务 `uses: [chat]`，`-template game` 已有） | 无 | 6 |
+
 以 `roost module list` 的输出为准。
 
 ## 使用
@@ -72,11 +74,14 @@ state:                       # 追加到主 DAO 末尾的顶层字段
 component: Wallet            # 挂在实体上的组件
 protocols: [WalletSpend]     # 模板里 {{ID:protocol:<name>}} 用到的名字
 errcodes: [wallet_short]     # 模板里 {{ID:errcode:<name>}} 用到的名字
+replaces: []                 # 要接管的生成桩（见下），必须也在 files/ 里
 verify:
   packages: [./game/handler]
   run: ^TestWallet
   pass: 8                    # 恰好这么多条通过、零跳过
 ```
+
+`replaces` 用于生成器建一次、默认拒绝一切、留给项目实现的文件——目前认识托管服务的 `internal/service/<name>/collaborators.go`。安装时只有它仍是没改过的生成桩才替换；业务改过就拒绝安装。chat 模块用它接管 chat 服务的协作者。替换后的文件里不要再出现 `is not configured` 这句话：`project doctor` 靠它判断“还是拒绝桩”。
 
 `files` 不写在清单里，由 `files/` 目录读出。清单与模板必须对得上：模板用到的每个 `{{ID:...}}` 都要声明，声明的每个名字都要用到。
 

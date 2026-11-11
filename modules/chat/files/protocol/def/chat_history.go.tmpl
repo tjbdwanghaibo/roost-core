@@ -1,0 +1,36 @@
+//go:build protocoldef
+
+package protocoldef
+
+// ChatHistoryRequest 翻一个玩家可读的频道。AfterSeq 是游标（不含；0 表示从保留的最早一行开始），
+// Limit 必填，上限由 chat 服务决定。客户端没有推送，靠它拉新消息：记住上次的 NextCursor 再问。
+type ChatHistoryRequest struct {
+	Kind     string `pb:"1"`
+	Target   int64  `pb:"2"`
+	AfterSeq int64  `pb:"3"`
+	Limit    int32  `pb:"4"`
+}
+
+// ChatLine 是历史里的一行。系统消息的 FromID 为 0。
+type ChatLine struct {
+	Seq      int64  `pb:"1"`
+	FromID   int64  `pb:"2"`
+	FromName string `pb:"3"`
+	Text     string `pb:"4"`
+	System   bool   `pb:"5"`
+}
+
+// ChatHistoryResponse 按序号顺序返回若干行，以及接着翻的游标。
+type ChatHistoryResponse struct {
+	Code       int32      `pb:"1"`
+	Reason     string     `pb:"2"`
+	Lines      []ChatLine `pb:"3"`
+	NextCursor int64      `pb:"4"`
+	HasMore    bool       `pb:"5"`
+}
+
+//roost:protocol group=game handler=chat
+type ChatHistoryProtocol interface {
+	//roost:msg id={{ID:protocol:ChatHistory}}
+	ChatHistory(ChatHistoryRequest) ChatHistoryResponse
+}

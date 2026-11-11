@@ -1,0 +1,24 @@
+//go:build protocoldef
+
+package protocoldef
+
+// ChatSendRequest 发一行文本。Kind 是 "world" 或 "private"；Target 对 world 不用填（只有一个世界），
+// 对 private 是对方的玩家号。帧序号是幂等键：重发的帧不会把这一行存两次。
+type ChatSendRequest struct {
+	Kind   string `pb:"1"`
+	Target int64  `pb:"2"`
+	Text   string `pb:"3"`
+}
+
+// ChatSendResponse 带回 chat 服务给这条消息的频道内序号；历史按它翻页。
+type ChatSendResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	Seq    int64  `pb:"3"`
+}
+
+//roost:protocol group=game handler=chat
+type ChatSendProtocol interface {
+	//roost:msg id={{ID:protocol:ChatSend}}
+	ChatSend(ChatSendRequest) ChatSendResponse
+}

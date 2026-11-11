@@ -186,6 +186,10 @@ func printModulePlan(stdout io.Writer, plan ModulePlan) {
 			}
 		}
 		for _, file := range item.Files {
+			if contains(item.Replaces, file) {
+				fmt.Fprintf(stdout, "  file:      %s (replaces the untouched generated stub)\n", file)
+				continue
+			}
 			fmt.Fprintf(stdout, "  file:      %s\n", file)
 		}
 	}

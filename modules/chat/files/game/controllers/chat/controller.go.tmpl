@@ -1,0 +1,34 @@
+package chat
+
+import (
+	"fmt"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+)
+
+// Controller 持有聊天端点的依赖：chat 服务的客户端。聊天不改任何 Entity，不经过 Nest。
+type Controller struct {
+	registry  *app.Registry
+	messaging svcchat.Messaging
+}
+
+// FromRegistry 取 chat 服务的客户端（业务服务在 roost.yaml 里 uses: [chat] 时由 ClientMod 发布）。
+func FromRegistry(registry *app.Registry) (*Controller, error) {
+	if registry == nil {
+		return nil, fmt.Errorf("chat controller: app registry is required")
+	}
+	messaging, ok := app.Lookup[svcchat.Messaging](registry, svcchat.CapabilityName)
+	if !ok || messaging == nil {
+		return nil, fmt.Errorf("chat controller: capability %q not found; list chat under services.<service>.uses in roost.yaml", svcchat.CapabilityName)
+	}
+	return &Controller{registry: registry, messaging: messaging}, nil
+}
+
+// Registry 供需要别的能力的端点使用。
+func (controller *Controller) Registry() *app.Registry {
+	if controller == nil {
+		return nil
+	}
+	return controller.registry
+}

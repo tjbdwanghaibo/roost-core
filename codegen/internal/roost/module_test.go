@@ -698,3 +698,63 @@ func TestTenModuleStructsUnderOneDAO(t *testing.T) {
 		}
 	}
 }
+
+// 模块可以接管一个生成桩（托管服务默认拒绝一切的 collaborators.go），但只在它没被改过的时候：
+// 没改过就替换，业务改过一个字符就拒绝安装、工程不变。
+func TestModuleReplacesOnlyAnUntouchedGeneratedStub(t *testing.T) {
+	if testing.Short() {
+		t.Skip("generates a project and runs go build / vet / test in it")
+	}
+	t.Parallel()
+	root, roost, try := moduleProject(t, "parlor")
+	stub := filepath.Join(root, "internal", "service", "chat", "collaborators.go")
+	original, err := os.ReadFile(stub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(original, []byte("is not configured")) {
+		t.Fatalf("the generated chat collaborators are not the refusing stub:\n%s", original)
+	}
+
+	// 业务改过：拒绝，工程不变。
+	if err := os.WriteFile(stub, append(append([]byte(nil), original...), []byte("\n// 业务加的一行。\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := moduleProjectDigest(t, root)
+	if out, err := try("module", "add", "chat"); err == nil || !strings.Contains(err.Error(), "internal/service/chat/collaborators.go has been edited since it was generated") {
+		t.Fatalf("an edited stub: err = %v\n%s", err, out)
+	}
+	if moduleProjectDigest(t, root) != before {
+		t.Fatal("a refused install changed the project")
+	}
+
+	// 没改过：plan 写明会替换，add 之后是模块的实现，doctor 不再把它当拒绝桩。
+	if err := os.WriteFile(stub, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var plan ModulePlan
+	if err := json.Unmarshal([]byte(roost("module", "plan", "chat", "--json")), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Modules) != 1 || strings.Join(plan.Modules[0].Replaces, ",") != "internal/service/chat/collaborators.go" {
+		t.Fatalf("plan does not say which stub it replaces: %+v", plan.Modules)
+	}
+	roost("module", "add", "chat")
+	replaced, err := os.ReadFile(stub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(replaced, []byte(collaboratorUnconfiguredMarker)) || !bytes.Contains(replaced, []byte("gamechat.Allow")) {
+		t.Fatalf("the stub was not replaced by the module's collaborators:\n%s", replaced)
+	}
+	report, err := VerifyModules(context.Background(), root, nil, nil)
+	if err != nil || len(report.Modules) != 1 || report.Modules[0].Passed != 6 {
+		t.Fatalf("verify: %v\n%+v", err, report)
+	}
+	// 再装一次没有变化：现在这个文件是模块自己的。
+	installed := moduleProjectDigest(t, root)
+	roost("module", "add", "chat")
+	if moduleProjectDigest(t, root) != installed {
+		t.Fatal("installing chat again changed the project")
+	}
+}

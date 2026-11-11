@@ -1,0 +1,85 @@
+// Package chat 是聊天在本工程这一侧的约定：有哪些频道、一条消息长什么样、谁能发谁能读。
+// chat 托管服务是通用的（按频道存序号、执行工程交给它的政策），与游戏有关的规则都在这里；
+// game 进程的端点与 chat 进程的 collaborators 都 import 它，两边因此用同一套规则与消息类型名。
+package chat
+
+import (
+	"fmt"
+	"unicode/utf8"
+
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+)
+
+// TypeText 是登记给 chat 服务的唯一消息类型：UTF-8 文本，至多 MaxTextBytes 字节。
+const TypeText svcchat.MessageType = "text"
+
+// MaxTextBytes 是一条聊天的长度上限；chat 服务另有自己更宽的上限。
+const MaxTextBytes = 256
+
+// WorldChannelTarget 是世界频道的目标号：只有一个世界。分区的游戏把区号放在这里。
+const WorldChannelTarget int64 = 1
+
+// WorldChannel 是所有玩家说话的频道。
+var WorldChannel = svcchat.Channel{Kind: svcchat.ChannelWorld, Target: WorldChannelTarget}
+
+// PrivateChannel 是与 peer 的一对一会话（从发送者的角度寻址）。
+func PrivateChannel(peer int64) svcchat.Channel {
+	return svcchat.Channel{Kind: svcchat.ChannelPrivate, Target: peer}
+}
+
+// PlayerSender 把一名玩家报给 chat 服务。名字是显示用的快照；这里没有档案查询，用玩家号。
+func PlayerSender(playerID int64) svcchat.Sender {
+	return svcchat.Sender{RoleID: playerID, Name: fmt.Sprintf("player-%d", playerID)}
+}
+
+// ChannelOf 把协议里的频道种类与目标号换成频道。玩家能寻址的只有世界与私聊。
+func ChannelOf(kind string, target int64) (svcchat.Channel, bool) {
+	switch svcchat.ChannelKind(kind) {
+	case svcchat.ChannelWorld:
+		return WorldChannel, true
+	case svcchat.ChannelPrivate:
+		return PrivateChannel(target), true
+	default:
+		return svcchat.Channel{}, false
+	}
+}
+
+// ValidateText 是两个进程共用的消息体校验：chat 服务在发布时执行（经 BodyRegistry），
+// 端点在调用总线之前执行，写坏的一行不用往返一次就被拒绝。
+func ValidateText(body []byte) error {
+	if len(body) == 0 {
+		return fmt.Errorf("text is empty")
+	}
+	if len(body) > MaxTextBytes {
+		return fmt.Errorf("text is %d bytes, limit %d", len(body), MaxTextBytes)
+	}
+	if !utf8.Valid(body) {
+		return fmt.Errorf("text is not valid utf-8")
+	}
+	return nil
+}
+
+// Allow 是发布与读取共用的频道政策：世界频道与一对一私聊对每个已认证的玩家开放；
+// 群组频道拒绝（本模块没有队伍或公会，要开放时按它们的成员关系授权）；其余种类不对玩家开放。
+// 每一条拒绝都是写下来的决定，不是缺省。
+func Allow(who svcchat.Sender, channel svcchat.Channel) error {
+	switch channel.Kind {
+	case svcchat.ChannelWorld:
+		if channel.Target != WorldChannelTarget {
+			return fmt.Errorf("world %d does not exist (this game has world %d)", channel.Target, WorldChannelTarget)
+		}
+		return nil
+	case svcchat.ChannelPrivate:
+		if channel.Target == who.RoleID {
+			return fmt.Errorf("a private channel needs a peer other than the sender")
+		}
+		if channel.Target <= 0 {
+			return fmt.Errorf("a private channel needs a peer")
+		}
+		return nil
+	case svcchat.ChannelGroup:
+		return fmt.Errorf("this game has no groups; grant group channels from party or guild membership")
+	default:
+		return fmt.Errorf("channel kind %q is not open to players", channel.Kind)
+	}
+}

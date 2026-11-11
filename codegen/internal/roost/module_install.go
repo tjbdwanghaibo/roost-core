@@ -53,10 +53,12 @@ type ModulePlanItem struct {
 	// IDs 是 kind -> 名字 -> 号。
 	IDs map[string]map[string]int64 `json:"ids"`
 	// State 是追加的主 DAO 字段（<Dao>.<Field> <dao 标签>）；Component 是接到实体上的组件（<Entity>.<Component>）。
-	State     []string     `json:"state"`
-	Component string       `json:"component,omitempty"`
-	Files     []string     `json:"files"`
-	Verify    ModuleVerify `json:"verify"`
+	State     []string `json:"state"`
+	Component string   `json:"component,omitempty"`
+	Files     []string `json:"files"`
+	// Replaces 是 Files 里会替换掉的生成桩（仍是没改过的生成内容）。
+	Replaces []string     `json:"replaces,omitempty"`
+	Verify   ModuleVerify `json:"verify"`
 
 	spec ModuleSpec
 }
@@ -154,9 +156,21 @@ func planModules(root string, manifest Manifest, catalog map[string]ModuleSpec, 
 				if readErr != nil {
 					return ModulePlan{}, readErr
 				}
-				if !bytes.Equal(current, body) {
-					return ModulePlan{}, fmt.Errorf("module %s: %s already exists and is not this module's file; the installer does not overwrite business files (rename or remove it, or keep your own implementation and do not install %s)", spec.Name, rel, spec.Name)
+				if bytes.Equal(current, body) {
+					continue
 				}
+				if contains(spec.Replaces, rel) {
+					pristine, stubErr := isUntouchedGeneratedStub(manifest, rel, current)
+					if stubErr != nil {
+						return ModulePlan{}, stubErr
+					}
+					if pristine {
+						item.Replaces = append(item.Replaces, rel)
+						continue
+					}
+					return ModulePlan{}, fmt.Errorf("module %s: %s has been edited since it was generated; the module would replace it, and the installer does not overwrite business code (keep your implementation and do not install %s, or move your changes aside first)", spec.Name, rel, spec.Name)
+				}
+				return ModulePlan{}, fmt.Errorf("module %s: %s already exists and is not this module's file; the installer does not overwrite business files (rename or remove it, or keep your own implementation and do not install %s)", spec.Name, rel, spec.Name)
 			} else if !os.IsNotExist(err) {
 				return ModulePlan{}, err
 			}
@@ -611,4 +625,27 @@ func (source *daoStructSource) appendFields(root string, fields []daoFieldSpec) 
 		return nil, fmt.Errorf("format %s: %w", relativeSlash(root, source.path), err)
 	}
 	return formatted, nil
+}
+
+// isUntouchedGeneratedStub 报告工程里的 rel 是否仍是生成器当初写下、之后没被改过的桩。
+// 目前认识一种：托管框架服务的 internal/service/<name>/collaborators.go（默认拒绝一切，留给项目实现）。
+// 判定是逐字节的：与生成器现在会写出的内容相同才算；改过一个字符就是业务代码。
+func isUntouchedGeneratedStub(manifest Manifest, rel string, current []byte) (bool, error) {
+	const prefix, suffix = "internal/service/", "/collaborators.go"
+	if !strings.HasPrefix(rel, prefix) || !strings.HasSuffix(rel, suffix) {
+		return false, nil
+	}
+	name := strings.TrimSuffix(strings.TrimPrefix(rel, prefix), suffix)
+	if !manifest.isFrameworkService(name) {
+		return false, nil
+	}
+	stub := renderFrameworkCollaborators(manifest, name)
+	if bytes.Equal(current, []byte(stub)) {
+		return true, nil
+	}
+	formatted, err := format.Source([]byte(stub))
+	if err != nil {
+		return false, fmt.Errorf("format the generated %s stub: %w", rel, err)
+	}
+	return bytes.Equal(current, formatted), nil
 }

@@ -50,7 +50,7 @@ PY
 project="$(new_project atelier example.com/studio/atelier)"
 cd "$project"
 "$roost" module list > "$review_root/list.log"
-grep -q '^  wallet ' "$review_root/list.log" && grep -q '^  checkin ' "$review_root/list.log"
+grep -q '^  wallet ' "$review_root/list.log" && grep -q '^  checkin ' "$review_root/list.log" && grep -q '^  chat ' "$review_root/list.log"
 "$roost" module plan checkin --json > "$review_root/plan.json"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "roost module plan changed the project" >&2; exit 1; }
 python3 - "$review_root/plan.json" <<'PY'
@@ -83,6 +83,13 @@ expect_verify wallet=8
 grep -q 'module wallet: already installed' "$review_root/add-checkin.log"
 grep -q 'module checkin: installed' "$review_root/add-checkin.log"
 expect_verify wallet=8 checkin=6
+# 5. 再叠一个接管生成桩的模块：chat 替换 chat 托管服务的拒绝桩，doctor 不再把它当成未实现。
+commit_all checkin
+"$roost" module add chat > "$review_root/add-chat.log"
+grep -q 'replaces the untouched generated stub' "$review_root/add-chat.log"
+expect_verify wallet=8 checkin=6 chat=6
+"$roost" project doctor > "$review_root/doctor.log" 2>&1 || true
+grep -q '^OK    collaborators:chat' "$review_root/doctor.log"
 
 succeeded=1
 echo "modules: ok"

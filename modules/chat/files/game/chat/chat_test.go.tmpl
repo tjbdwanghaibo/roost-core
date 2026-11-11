@@ -1,0 +1,66 @@
+package chat
+
+import (
+	"strings"
+	"testing"
+
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+)
+
+func TestChatTextIsValidatedByLengthAndEncoding(t *testing.T) {
+	if err := ValidateText([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateText([]byte(strings.Repeat("a", 256))); err != nil {
+		t.Fatalf("a line at the limit: %v", err)
+	}
+	for name, body := range map[string][]byte{
+		"empty":       nil,
+		"too long":    []byte(strings.Repeat("a", 257)),
+		"not utf-8":   {0xff, 0xfe},
+		"empty slice": {},
+	} {
+		if err := ValidateText(body); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestChatChannelOfOnlyAddressesWorldAndPrivate(t *testing.T) {
+	if channel, ok := ChannelOf("world", 99); !ok || channel != WorldChannel {
+		t.Fatalf("world: %+v %v (the target is ignored: there is one world)", channel, ok)
+	}
+	if channel, ok := ChannelOf("private", 7); !ok || channel != PrivateChannel(7) {
+		t.Fatalf("private: %+v %v", channel, ok)
+	}
+	for _, kind := range []string{"system", "group", "", "World"} {
+		if _, ok := ChannelOf(kind, 1); ok {
+			t.Errorf("kind %q is addressable by a player", kind)
+		}
+	}
+}
+
+func TestChatPolicyOpensWorldAndPrivateToEveryPlayer(t *testing.T) {
+	who := PlayerSender(1001)
+	if err := Allow(who, WorldChannel); err != nil {
+		t.Fatalf("world: %v", err)
+	}
+	if err := Allow(who, PrivateChannel(1002)); err != nil {
+		t.Fatalf("private to a peer: %v", err)
+	}
+}
+
+func TestChatPolicyRefusesEverythingElse(t *testing.T) {
+	who := PlayerSender(1001)
+	for name, channel := range map[string]svcchat.Channel{
+		"another world":   {Kind: svcchat.ChannelWorld, Target: 2},
+		"private to self": PrivateChannel(1001),
+		"private to none": PrivateChannel(0),
+		"group":           {Kind: svcchat.ChannelGroup, Target: 5},
+		"system":          {Kind: svcchat.ChannelSystem},
+	} {
+		if err := Allow(who, channel); err == nil {
+			t.Errorf("%s: allowed", name)
+		}
+	}
+}

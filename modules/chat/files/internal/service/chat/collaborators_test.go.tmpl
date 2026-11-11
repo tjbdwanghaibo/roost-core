@@ -1,0 +1,43 @@
+package chat
+
+import (
+	"context"
+	"testing"
+
+	gamechat "{{MODULE}}/game/chat"
+
+	svcchat "github.com/tjbdwanghaibo/roost-core/service/chat"
+)
+
+// chat 进程执行的政策就是 game/chat 的规则：世界与私聊放行，其余拒绝；系统频道只读放行。
+func TestChatCollaboratorsEnforceTheGamePolicy(t *testing.T) {
+	policy := Policy()
+	who := gamechat.PlayerSender(1001)
+	ctx := context.Background()
+	if err := policy.CanPublish(ctx, who, gamechat.WorldChannel); err != nil {
+		t.Fatalf("publish to world: %v", err)
+	}
+	if err := policy.CanRead(ctx, who, gamechat.PrivateChannel(1002)); err != nil {
+		t.Fatalf("read a private conversation: %v", err)
+	}
+	system := svcchat.Channel{Kind: svcchat.ChannelSystem}
+	if err := policy.CanPublish(ctx, who, system); err == nil {
+		t.Fatal("a player may publish to the system channel")
+	}
+	if err := policy.CanRead(ctx, who, system); err != nil {
+		t.Fatalf("read the system channel: %v", err)
+	}
+	if err := policy.CanPublish(ctx, who, svcchat.Channel{Kind: svcchat.ChannelGroup, Target: 3}); err == nil {
+		t.Fatal("group channels are open although the game has no groups")
+	}
+}
+
+// 系统入口保持拒绝；文本类型登记在案。
+func TestChatCollaboratorsKeepTheSystemPathClosed(t *testing.T) {
+	if _, err := System().AuthenticateSystem(context.Background()); err == nil {
+		t.Fatal("the system path is open")
+	}
+	if Bodies() == nil {
+		t.Fatal("no body registry")
+	}
+}

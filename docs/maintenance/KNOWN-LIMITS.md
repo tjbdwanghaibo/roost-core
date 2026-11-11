@@ -512,9 +512,10 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 2026-11-10，[方案](FEATURE-2026-11-10-business-modules.md)第 2 期，现行说明见 [modules/README](../../modules/README.md) 与[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)。
 
-- **只有两个模块**：wallet（货币）与 checkin（每日签到）。13 类玩法与 game-demo 的业务还没有做成模块，仍是 `scripts/testdata/<玩法>/` 夹具与 `-template game-demo`；按玩法一条命令出工程的配方（`-recipe`）没有做。
+- **只有三个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）。模块是新写的，不从 game-demo 或玩法夹具迁移（维护者 2026-11-11：“不用考虑旧代码，能直接生成新的就行”）；13 类玩法与 game-demo 仍是各自的夹具与模板，不受模块影响。按玩法一条命令出工程的配方（`-recipe`）没有做。
+- **chat 模块只有发送与翻历史**：没有向在线玩家的推送（需要在线名单与连接关闭的钩子，即运行期接线点），客户端靠 `ChatHistory` 的游标拉新消息；系统消息入口保持拒绝；没有群组频道。端点不经过 Nest，没有离线用例——6 条场景只覆盖频道规则、消息体校验与 collaborators 的政策。
 - **没有卸载与升级**：安装只加不减，分配过的号与存储键不回收；内置模块之后变了，已装的模块不会跟着变，安装器只报告“装的是另一版”（`installed_other_version`），不给差异、不合并。
-- **模块绑定具体的实体名与工程形状**：两个模块都挂在名为 `Player` 的实体上，按 `-template game` 的目录约定写文件（`game/entities/player/`、`game/handler/`、`game/controllers/<module>/`）。实体叫别的名字的工程装不了。
+- **模块绑定具体的实体名与工程形状**：wallet 与 checkin 挂在名为 `Player` 的实体上，按 `-template game` 的目录约定写文件（`game/entities/player/`、`game/handler/`、`game/controllers/<module>/`）。实体叫别的名字的工程装不了。
 - **没有运行期接线点**：模块不能声明 Init / Shutdown、后台循环或向 Registry 发布能力；现有两个模块不需要（组件挂在实体上，controller 用自己的 `FromRegistry`）。需要这些的模块（匹配清扫、effect 消费者）出现时再加。
 - **没有定时器类型分配、Robot 步骤**：模块不能带实体定时器类型，也不带压测步骤；两者留给方案第 3 期。
 - **安装不打开客户端同步**：模块把状态字段标成 `sync`，但不改 `access.player`。要让客户端收到，需另外 `roost add transport tcp`、在 `roost.yaml` 加 `access.player.self_sync: true`、`roost project sync`（skill 的[按需求组合 §4A](../agent-skills/roost-genre/references/compose.md#4a-让客户端看到状态)）；`roost module verify` 不检查这一项。真实客户端连上还要实现 `auth.go` 并 `roost config enable player-tcp`。
