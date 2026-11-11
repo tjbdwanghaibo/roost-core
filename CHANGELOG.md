@@ -32,6 +32,8 @@
   - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：模块还少（13 类玩法与 game-demo 的大部分业务尚未拆成模块），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
   - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
 
+- **本轮收口验证**（2026-11-11；demo 换用四个模块、合入 v1.44.0、task 改名、换服框架侧两块之后的同一棵树）：重新生成 game-demo，`go build` / `go vet` / `roost id check` / `roost generate --check` 通过，`go test ./...` 45 个包通过、无 FAIL，`roost module verify` 十项全对（bag 17、chat 8、chat+enter 2、enter 6、leaderboard 20、mailbox 32、mailbox+bag 9、mailbox+enter 5、profile 19、wallet 9）；`scripts/test-modules-generated.sh` 通过（十一个模块、四组联动，脚本运行期间未改动）；`go test ./codegen/internal/roost -run 'TestDemo|TestModule'` 通过；排行榜的真实 Redis 用例在本机隔离环境通过。**没有跑**：真实依赖下的 `make dev-run` / `dev-smoke` 与压测机器人、`scripts/test-demo-generated.sh`、`scripts/test-mmorpg-cross-sid.sh`（它的客户端已按新协议改写，只编译过）、全仓 `go test ./...`（两个换服框架分支各自合入前跑过 164 个包，合在一起之后没有重跑）。
+
 - **变更 / 协议变化**（game-demo + modules）：**game-demo 的邮件改用 mailbox 模块（连带 wallet）**。至此 demo 的进入游戏、聊天、排行榜、背包、档案、邮件六块都来自模块。
   - 模块 mailbox（场景数 28 → 32）：新增发件入口 `mailbox.SendTo(ctx, mailer, Letter)`（一名玩家一封、附件先按 `Encode` 的判断校验、幂等键必填、缺省保留 7 天）；补两条 demo 钉住而模块没钉的规则（40 天后才过期的邮件第 39 天重放仍不发；账本清理后晚到的旧预留被拒时的错误码）。
   - 联动 mailbox + enter（3 → 5 条）：画像规则认会话 claims 里 account 的角色创建时间、本服与合服前的原服范围，没有 claims 的工程与原来一样。enter 的进入钩子为此带上会话的 claims（`Entered.Claims`，可为 nil；enter 自己不解释，场景数不变）。
