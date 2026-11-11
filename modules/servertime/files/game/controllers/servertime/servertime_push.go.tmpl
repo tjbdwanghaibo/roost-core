@@ -1,0 +1,54 @@
+package servertime
+
+import (
+	"context"
+	"fmt"
+
+	gameservertime "{{MODULE}}/game/servertime"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// toPush 把快照换成线上形状；推送与 ServertimeSync 的应答都用它，客户端只处理一种。
+func toPush(snapshot gameservertime.Snapshot) *pb.ServertimeNowPush {
+	return &pb.ServertimeNowPush{
+		NowUnixMilli:       snapshot.NowUnixMilli,
+		Day:                snapshot.Day,
+		DayStartUnixMilli:  snapshot.DayStartUnixMilli,
+		NextResetUnixMilli: snapshot.NextResetUnixMilli,
+		NextDay:            snapshot.NextDay,
+		PrevDay:            snapshot.PrevDay,
+		UTCOffsetSeconds:   snapshot.UTCOffsetSeconds,
+		Zone:               snapshot.Zone,
+	}
+}
+
+// pushTransport 是推送用到的玩家 TCP Runtime 的那一个方法。这里写成接口、能力按名字取，
+// 因为传输包 import 构造这个 controller 的协议绑定——反过来 import 它就成环了。
+type pushTransport interface {
+	PushPlayer(ctx context.Context, playerID int64, messageID uint32, value any) error
+}
+
+// playerTCPCapability 是 internal/access/player/tcp 的 Name：传输 Mod 发布 Runtime 用的能力名。
+const playerTCPCapability app.ModName = "access.player.tcp"
+
+// PushNow 把服务器此刻的业务时间（ServertimeNow）推给一名玩家的全部连接。给别的功能调用：
+// 装了 enter 模块时玩家每次进入游戏推一次（servertime_enter.go）；工程用自己的登录流程时，
+// 在玩家进入之后调它，或者让客户端进入后自己发一次 ServertimeSync。
+//
+// 推送只是省一次往返的捷径，不是客户端拿到时间的唯一途径：传输还没装配、玩家没有连接、发送队列满了都会返回错误，
+// 调用方记日志即可，不要因此让自己的操作失败——客户端随时可以用 ServertimeSync 自己问。
+// 每次调用都现取传输、现读时钟，这里不缓存任何东西。
+func PushNow(ctx context.Context, registry *app.Registry, playerID int64) error {
+	transport, ok := app.Lookup[pushTransport](registry, playerTCPCapability)
+	if !ok || transport == nil {
+		return fmt.Errorf("servertime: capability %q not found; the player tcp transport is not assembled", playerTCPCapability)
+	}
+	return pushNow(ctx, transport, playerID)
+}
+
+func pushNow(ctx context.Context, transport pushTransport, playerID int64) error {
+	return transport.PushPlayer(ctx, playerID, msgid.MsgServertimeNow, toPush(gameservertime.Now()))
+}

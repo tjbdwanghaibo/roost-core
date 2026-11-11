@@ -1,0 +1,122 @@
+package servertime
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	gameenter "{{MODULE}}/game/enter"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// servertimeEnterFailed 报告进入钩子里 servertime 这一个有没有失败（别的功能登记的钩子不看）。
+func servertimeEnterFailed(failed []string) bool {
+	for _, name := range failed {
+		if name == "servertime" {
+			return true
+		}
+	}
+	return false
+}
+
+// 钩子是经 game/enter 的登记表生效的：一次完整的进入（检查 → 加载 → 钩子）之后，玩家收到恰好一条
+// ServertimeNow，内容是进入那一刻的快照。UTC、05:00 重置，现在是 2026-11-10 04:59:59.999：业务日还是 20261109。
+func TestWithServertimeEnterPushesTheTimeOnEnter(t *testing.T) {
+	now := int64(1794286799999)
+	servertimeStage(t, "UTC", "05:00", &now)
+	transport := &servertimePushed{}
+	registry := app.NewRegistry(nil)
+	if err := registry.Register(playerTCPCapability, transport); err != nil {
+		t.Fatalf("register the transport: %v", err)
+	}
+	loaded := false
+	entered, err := gameenter.Enter(context.Background(), registry, gameenter.Entering{PlayerID: 95101}, func(context.Context) (gameenter.InitResult, error) {
+		loaded = true
+		if len(transport.calls) != 0 {
+			t.Fatalf("the time was pushed before the player was loaded")
+		}
+		return gameenter.InitResult{First: true, FirstAtUnixMilli: now}, nil
+	})
+	if err != nil || !loaded || entered.PlayerID != 95101 {
+		t.Fatalf("enter: entered %+v loaded %v err %v", entered, loaded, err)
+	}
+	if len(transport.calls) != 1 {
+		t.Fatalf("%d pushes after one enter, want exactly 1 (is the servertime hook registered?)", len(transport.calls))
+	}
+	call := transport.calls[0]
+	if call.playerID != 95101 || call.messageID != msgid.MsgServertimeNow {
+		t.Fatalf("pushed message %d to player %d, want message %d to player 95101", call.messageID, call.playerID, msgid.MsgServertimeNow)
+	}
+	push, ok := call.value.(*pb.ServertimeNowPush)
+	if !ok {
+		t.Fatalf("pushed a %T, want *pb.ServertimeNowPush", call.value)
+	}
+	servertimeWantPush(t, "push on enter", push, pb.ServertimeNowPush{
+		NowUnixMilli:       1794286799999,
+		Day:                20261109,
+		DayStartUnixMilli:  1794200400000,
+		NextResetUnixMilli: 1794286800000,
+		NextDay:            20261110,
+		PrevDay:            20261108,
+		Zone:               "UTC",
+	})
+
+	// 重连后再进入一次：时钟已经过了重置时刻，推的是新的一天，不是上一次的那一份。
+	now = 1794286800000
+	if failed := gameenter.RunEntered(context.Background(), registry, gameenter.Entered{PlayerID: 95101}); servertimeEnterFailed(failed) {
+		t.Fatalf("the servertime hook failed on the second enter: %v", failed)
+	}
+	if len(transport.calls) != 2 {
+		t.Fatalf("%d pushes after two enters, want 2", len(transport.calls))
+	}
+	servertimeWantPush(t, "push on the second enter", transport.calls[1].value.(*pb.ServertimeNowPush), pb.ServertimeNowPush{
+		NowUnixMilli:       1794286800000,
+		Day:                20261110,
+		DayStartUnixMilli:  1794286800000,
+		NextResetUnixMilli: 1794373200000,
+		NextDay:            20261111,
+		PrevDay:            20261109,
+		Zone:               "UTC",
+	})
+}
+
+// 传输不可用（这里是没有 Registry）时钟子失败，但进入照样成功：enter 只把失败的钩子名记下来。
+func TestWithServertimeEnterWithoutATransportStillEnters(t *testing.T) {
+	now := int64(1794299415250)
+	servertimeStage(t, "UTC", "00:00", &now)
+	if err := pushOnEnter(context.Background(), nil, gameenter.Entered{PlayerID: 95102}); err == nil {
+		t.Fatal("the hook reported success with no transport to push through")
+	}
+	if failed := gameenter.RunEntered(context.Background(), nil, gameenter.Entered{PlayerID: 95102}); !servertimeEnterFailed(failed) {
+		t.Fatalf("failed hooks = %v, want servertime among them", failed)
+	}
+	entered, err := gameenter.Enter(context.Background(), nil, gameenter.Entering{PlayerID: 95102}, func(context.Context) (gameenter.InitResult, error) {
+		return gameenter.InitResult{FirstAtUnixMilli: 1_700_000_000_000}, nil
+	})
+	if err != nil || entered.PlayerID != 95102 || entered.FirstAtUnixMilli != 1_700_000_000_000 {
+		t.Fatalf("enter without a transport: entered %+v err %v, want a successful enter", entered, err)
+	}
+}
+
+// 推送被传输拒绝（玩家的连接刚断、发送队列满）同样只是钩子失败：错误原样报给 enter 去记日志，进入照样成功。
+func TestWithServertimeEnterPushFailureStillEnters(t *testing.T) {
+	now := int64(1794299415250)
+	servertimeStage(t, "UTC", "00:00", &now)
+	refused := errors.New("no session for this player")
+	registry := app.NewRegistry(nil)
+	if err := registry.Register(playerTCPCapability, &servertimePushed{fail: refused}); err != nil {
+		t.Fatalf("register the transport: %v", err)
+	}
+	if err := pushOnEnter(context.Background(), registry, gameenter.Entered{PlayerID: 95103}); !errors.Is(err, refused) {
+		t.Fatalf("hook error = %v, want the transport's own error", err)
+	}
+	entered, err := gameenter.Enter(context.Background(), registry, gameenter.Entering{PlayerID: 95103}, func(context.Context) (gameenter.InitResult, error) {
+		return gameenter.InitResult{First: true, FirstAtUnixMilli: now}, nil
+	})
+	if err != nil || entered.PlayerID != 95103 || !entered.First {
+		t.Fatalf("enter with a refusing transport: entered %+v err %v, want a successful enter", entered, err)
+	}
+}

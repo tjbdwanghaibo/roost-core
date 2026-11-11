@@ -1,0 +1,77 @@
+// Package servertime 把“服务器现在是什么业务时间、是哪个业务日、下一次每日重置在什么时候”算成一组值。
+//
+// 为什么要有它：签到、每日任务、体力、商店这些功能都按业务日惰性清零（跨天之后要等下一次写入才清），
+// 客户端显示之前必须拿状态里的 Day 与“当前业务日”比对。当前业务日取决于部署的业务时区与每日重置时刻
+// （time.business_timezone / time.business_day_start）、夏令时，以及测试环境的业务时间偏移
+// （time.logic_offset），客户端自己推算很容易算错。这里用服务端判定业务日的同一个日历把答案算好交给客户端。
+//
+// 这个包只做计算，没有状态，不 import 任何 controller 与实体包：
+//
+//   - Nest handler 用 At(nowUnixMilli)，参数就是 Nest 填进来的那个 nowUnixMilli——得到的 Day 与
+//     int64(clock.BusinessDay(time.UnixMilli(nowUnixMilli))) 是同一个数，也就是各功能记进状态的那个 Day；
+//   - 不在 Nest 消息里的端点用 Now()，现读进程业务时钟。
+//
+// 对外展示的时区名是规则，写在 servertime_zone.go。
+package servertime
+
+import (
+	"time"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+// Snapshot 是某一个业务时刻的一组时间事实。它是那一刻的快照，不会自己走：
+// 拿到之后过了多久要由使用方自己加上去（客户端的用法见 protocol/def/servertime_now.go）。
+// 时刻一律是 Unix 毫秒的绝对时刻，业务日是 YYYYMMDD 的十进制数（如 20261110），与各功能存进状态的写法相同。
+type Snapshot struct {
+	// NowUnixMilli 是这份快照所在的业务时刻。业务时间 = 真实时间 + time.logic_offset，
+	// 偏移不为 0 的环境（测试）里它不等于真实时间。
+	NowUnixMilli int64
+	// Day 是 NowUnixMilli 所在的业务日。
+	Day int64
+	// DayStartUnixMilli 是这个业务日的起点（最近一次每日重置），不晚于 NowUnixMilli。
+	DayStartUnixMilli int64
+	// NextResetUnixMilli 是下一次每日重置的时刻，晚于 NowUnixMilli。它不一定是起点之后 24 小时：
+	// 有夏令时的业务时区在切换那一天是 23 或 25 小时。
+	NextResetUnixMilli int64
+	// NextDay 是从 NextResetUnixMilli 起的那个业务日。
+	NextDay int64
+	// PrevDay 是 Day 的前一个业务日（“昨天”）。连续签到这类“昨天做过没有”的判断用它，
+	// 算法与签到相同：这个业务日起点之前那一刻所在的业务日，不拿日期数字减一。
+	PrevDay int64
+	// UTCOffsetSeconds 是 NowUnixMilli 这一刻业务时区比 UTC 快多少秒（东八区是 28800）。
+	// 只用来显示业务时区的墙上时间；有夏令时的时区它会变，不要拿它推算重置时刻。
+	UTCOffsetSeconds int32
+	// Zone 是给人看的业务时区名，规则见 ZoneName。
+	Zone string
+}
+
+// At 是 nowUnixMilli 这一刻的快照，按进程的业务日历算——签到等功能用的 clock.BusinessDay 读的是同一份日历，
+// 所以同一个 nowUnixMilli 两边的业务日相同。只算不读时钟：同样的参数永远得到同样的结果（进程启动后日历不变）。
+func At(nowUnixMilli int64) Snapshot {
+	calendar := clock.ProcessCalendar()
+	now := time.UnixMilli(nowUnixMilli)
+	start := calendar.DayStart(now)
+	next := calendar.NextDayStart(now)
+	_, offsetSeconds := now.In(calendar.Location()).Zone()
+	return Snapshot{
+		NowUnixMilli:       nowUnixMilli,
+		Day:                int64(calendar.BusinessDay(now)),
+		DayStartUnixMilli:  start.UnixMilli(),
+		NextResetUnixMilli: next.UnixMilli(),
+		NextDay:            int64(calendar.BusinessDay(next)),
+		PrevDay:            int64(calendar.BusinessDay(start.Add(-time.Nanosecond))),
+		UTCOffsetSeconds:   int32(offsetSeconds),
+		Zone:               ZoneName(calendar.Location()),
+	}
+}
+
+// Now 是此刻的快照：现读进程业务时钟（真实时间 + time.logic_offset），每次调用都是新的时刻。
+// 给不在 Nest 消息里的端点用。Nest handler 不要调它，用 At(nowUnixMilli)：那条消息冻结的时间才是
+// handler 判定与记账用的时间，现读的时钟会比它晚，跨天的那一刻两者可能不是同一个业务日。
+//
+// 读进程业务时钟而不是 app.BusinessClock(registry)：Nest 给 handler 的 nowUnixMilli 来自进程业务时钟，
+// 这里与它同源，客户端拿到的业务日才和各功能判定用的一致（App 里两者本来就是同一份配置）。
+func Now() Snapshot {
+	return At(clock.UnixMilli())
+}

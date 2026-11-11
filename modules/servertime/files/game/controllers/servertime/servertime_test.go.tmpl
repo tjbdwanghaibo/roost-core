@@ -1,0 +1,225 @@
+package servertime
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+	_ "time/tzdata" // 用例要加载 Asia/Shanghai：测试机没有 zoneinfo 时也能跑
+
+	"{{MODULE}}/game/playeraccess"
+	"{{MODULE}}/protocol/msgid"
+	"{{MODULE}}/protocol/pb"
+	playerbind "{{MODULE}}/protocol/player_bind"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/base/clock"
+)
+
+// servertimeStage 把进程的业务日历换成（zone，dayStart），把进程业务时钟停在 *nowUnixMilli；结束时恢复。
+// 用例改 *nowUnixMilli 就是拨时间。
+func servertimeStage(t *testing.T, zone, dayStart string, nowUnixMilli *int64) {
+	t.Helper()
+	calendar, err := clock.ParseCalendar(zone, dayStart)
+	if err != nil {
+		t.Fatalf("calendar %s %s: %v", zone, dayStart, err)
+	}
+	savedCalendar, savedOffset := clock.ProcessCalendar(), clock.Offset()
+	clock.SetCalendar(calendar)
+	clock.SetOffset(0)
+	clock.SetSource(func() time.Time { return time.UnixMilli(*nowUnixMilli) })
+	t.Cleanup(func() {
+		clock.SetSource(nil)
+		clock.SetOffset(savedOffset)
+		clock.SetCalendar(savedCalendar)
+	})
+}
+
+// servertimePushed 是玩家传输的替身：记下每一次推送，或者按 fail 拒绝。
+type servertimePushed struct {
+	fail  error
+	calls []servertimePush
+}
+
+type servertimePush struct {
+	playerID  int64
+	messageID uint32
+	value     any
+}
+
+func (p *servertimePushed) PushPlayer(_ context.Context, playerID int64, messageID uint32, value any) error {
+	if p.fail != nil {
+		return p.fail
+	}
+	p.calls = append(p.calls, servertimePush{playerID: playerID, messageID: messageID, value: value})
+	return nil
+}
+
+func servertimeWantPush(t *testing.T, label string, got *pb.ServertimeNowPush, want pb.ServertimeNowPush) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("%s: no time in the message", label)
+	}
+	if *got != want {
+		t.Fatalf("%s:\n got  %+v\n want %+v", label, *got, want)
+	}
+}
+
+// 端点回答此刻的快照，并把请求里的 ClientTick 原样带回。上海、05:00 重置，
+// 现在是上海 2026-11-11 04:59:59.999（重置前 1 毫秒）：业务日还是 20261110，下一次重置在 1 毫秒之后。
+func TestServertimeSyncAnswersTheSnapshotAndEchoesTheClientTick(t *testing.T) {
+	now := int64(1794344399999)
+	servertimeStage(t, "Asia/Shanghai", "05:00", &now)
+	controller, err := FromRegistry(app.NewRegistry(nil))
+	if err != nil {
+		t.Fatalf("FromRegistry: %v", err)
+	}
+	response, err := controller.HandleServertimeSync(&playeraccess.Context{PlayerID: 95001}, &pb.ServertimeSyncRequest{ClientTick: 77_123_456})
+	if err != nil {
+		t.Fatalf("ServertimeSync: %v", err)
+	}
+	if response.Code != 0 || response.Reason != "" {
+		t.Fatalf("code %d reason %q, want success", response.Code, response.Reason)
+	}
+	if response.ClientTick != 77_123_456 {
+		t.Fatalf("client tick came back as %d, want the request's 77123456 untouched", response.ClientTick)
+	}
+	servertimeWantPush(t, "1ms before the reset", response.Time, pb.ServertimeNowPush{
+		NowUnixMilli:       1794344399999,
+		Day:                20261110,
+		DayStartUnixMilli:  1794258000000, // 11-10 05:00 +08:00
+		NextResetUnixMilli: 1794344400000, // 11-11 05:00 +08:00
+		NextDay:            20261111,
+		PrevDay:            20261109,
+		UTCOffsetSeconds:   28800,
+		Zone:               "Asia/Shanghai",
+	})
+}
+
+// 每一条应答都是“答它那一刻”的快照：时钟走过重置时刻 1 毫秒，下一条应答就是新的一天，
+// 而且与签到等功能判定用的 clock.BusinessDay 是同一个数。没带 ClientTick 的请求带回 0。
+func TestServertimeSyncIsTakenWhenItIsAnswered(t *testing.T) {
+	now := int64(1794355199999) // 2026-11-10 23:59:59.999 UTC
+	servertimeStage(t, "UTC", "00:00", &now)
+	controller, err := FromRegistry(app.NewRegistry(nil))
+	if err != nil {
+		t.Fatalf("FromRegistry: %v", err)
+	}
+	ask := func() *pb.ServertimeNowPush {
+		t.Helper()
+		response, err := controller.HandleServertimeSync(&playeraccess.Context{PlayerID: 95002}, &pb.ServertimeSyncRequest{})
+		if err != nil || response.Code != 0 || response.Time == nil {
+			t.Fatalf("ServertimeSync: response %+v err %v", response, err)
+		}
+		if response.ClientTick != 0 {
+			t.Fatalf("client tick %d on a request that carried none", response.ClientTick)
+		}
+		if want := int64(clock.BusinessDay(time.UnixMilli(now))); response.Time.Day != want {
+			t.Fatalf("at %d the endpoint says day %d, clock.BusinessDay says %d", now, response.Time.Day, want)
+		}
+		return response.Time
+	}
+	servertimeWantPush(t, "before the reset", ask(), pb.ServertimeNowPush{
+		NowUnixMilli:       1794355199999,
+		Day:                20261110,
+		DayStartUnixMilli:  1794268800000,
+		NextResetUnixMilli: 1794355200000,
+		NextDay:            20261111,
+		PrevDay:            20261109,
+		Zone:               "UTC",
+	})
+	now++ // 2026-11-11 00:00:00.000 UTC：恰好在重置时刻
+	servertimeWantPush(t, "at the reset", ask(), pb.ServertimeNowPush{
+		NowUnixMilli:       1794355200000,
+		Day:                20261111,
+		DayStartUnixMilli:  1794355200000,
+		NextResetUnixMilli: 1794441600000,
+		NextDay:            20261112,
+		PrevDay:            20261110,
+		Zone:               "UTC",
+	})
+}
+
+// 缺上下文或缺请求是接线错误，端点返回错误而不是一份看似正常的应答。
+func TestServertimeSyncRefusesAMissingContextOrRequest(t *testing.T) {
+	controller, err := FromRegistry(app.NewRegistry(nil))
+	if err != nil {
+		t.Fatalf("FromRegistry: %v", err)
+	}
+	if response, err := controller.HandleServertimeSync(nil, &pb.ServertimeSyncRequest{}); err == nil {
+		t.Fatalf("a nil context was answered: %+v", response)
+	}
+	if response, err := controller.HandleServertimeSync(&playeraccess.Context{PlayerID: 95003}, nil); err == nil {
+		t.Fatalf("a nil request was answered: %+v", response)
+	}
+}
+
+// PushNow 按能力名取玩家传输，把此刻的快照用 ServertimeNow 这个消息号推给指定玩家，恰好一条。
+func TestServertimePushNowSendsTheSnapshotToThePlayer(t *testing.T) {
+	now := int64(1794328200000) // 上海 2026-11-11 00:30
+	servertimeStage(t, "Asia/Shanghai", "00:00", &now)
+	transport := &servertimePushed{}
+	registry := app.NewRegistry(nil)
+	if err := registry.Register(playerTCPCapability, transport); err != nil {
+		t.Fatalf("register the transport: %v", err)
+	}
+	if playerTCPCapability != "access.player.tcp" {
+		t.Fatalf("the transport capability is %q, want access.player.tcp (internal/access/player/tcp.Name)", playerTCPCapability)
+	}
+	if err := PushNow(context.Background(), registry, 95004); err != nil {
+		t.Fatalf("PushNow: %v", err)
+	}
+	if len(transport.calls) != 1 {
+		t.Fatalf("%d pushes, want exactly 1", len(transport.calls))
+	}
+	call := transport.calls[0]
+	if call.playerID != 95004 || call.messageID != msgid.MsgServertimeNow {
+		t.Fatalf("pushed message %d to player %d, want message %d to player 95004", call.messageID, call.playerID, msgid.MsgServertimeNow)
+	}
+	// 走一遍真实的编码：传输拿到的（消息号，值）必须是生成的协议绑定登记过编码器的那一对，
+	// 否则推送要到线上才报“没有编码器”。再解码回来，客户端读到的就是这些字段。
+	protocols := playeraccess.NewProtocolRegistry()
+	if err := playerbind.RegisterServertimeNowEncoder(protocols); err != nil {
+		t.Fatalf("register the push encoder: %v", err)
+	}
+	payload, err := protocols.Encode(call.messageID, call.value)
+	if err != nil {
+		t.Fatalf("encode the push as the transport would: %v", err)
+	}
+	push, err := pb.UnmarshalServertimeNowPush(payload)
+	if err != nil {
+		t.Fatalf("decode the push as the client would: %v", err)
+	}
+	servertimeWantPush(t, "push on the wire", push, pb.ServertimeNowPush{
+		NowUnixMilli:       1794328200000,
+		Day:                20261111,
+		DayStartUnixMilli:  1794326400000,
+		NextResetUnixMilli: 1794412800000,
+		NextDay:            20261112,
+		PrevDay:            20261110,
+		UTCOffsetSeconds:   28800,
+		Zone:               "Asia/Shanghai",
+	})
+}
+
+// 推送不成是普通情况，PushNow 只把错误报给调用方：传输没装配（没有 Registry、Registry 里没有这个能力）时
+// 说明缺的是哪个能力；传输拒绝（玩家没有连接、队列满）时原样返回它的错误。两种情况都不 panic。
+func TestServertimePushNowReportsAnUnavailableTransport(t *testing.T) {
+	now := int64(1794299415250)
+	servertimeStage(t, "UTC", "00:00", &now)
+	for _, registry := range []*app.Registry{nil, app.NewRegistry(nil)} {
+		err := PushNow(context.Background(), registry, 95005)
+		if err == nil || !strings.Contains(err.Error(), "access.player.tcp") {
+			t.Fatalf("PushNow without a transport = %v, want an error naming the missing capability", err)
+		}
+	}
+	refused := errors.New("no session for this player")
+	registry := app.NewRegistry(nil)
+	if err := registry.Register(playerTCPCapability, &servertimePushed{fail: refused}); err != nil {
+		t.Fatalf("register the transport: %v", err)
+	}
+	if err := PushNow(context.Background(), registry, 95005); !errors.Is(err, refused) {
+		t.Fatalf("PushNow through a refusing transport = %v, want the transport's own error", err)
+	}
+}

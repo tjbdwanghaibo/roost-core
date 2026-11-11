@@ -1,0 +1,19 @@
+package servertime
+
+import (
+	"fmt"
+
+	"{{MODULE}}/game/playeraccess"
+	gameservertime "{{MODULE}}/game/servertime"
+	"{{MODULE}}/protocol/pb"
+)
+
+// HandleServertimeSync 回答服务器此刻的业务时间。时间现读进程业务时钟（不是连接建立或请求入队的时刻），
+// 所以应答里的快照就是“生成这条应答那一刻”。请求里的 ClientTick 原样带回，不解释：
+// 它是客户端自己的时钟读数，服务器的任何判断都不取客户端给的时间。
+func (controller *Controller) HandleServertimeSync(context *playeraccess.Context, request *pb.ServertimeSyncRequest) (*pb.ServertimeSyncResponse, error) {
+	if context == nil || request == nil {
+		return nil, fmt.Errorf("servertime_sync endpoint: context and request are required")
+	}
+	return &pb.ServertimeSyncResponse{ClientTick: request.ClientTick, Time: toPush(gameservertime.Now())}, nil
+}

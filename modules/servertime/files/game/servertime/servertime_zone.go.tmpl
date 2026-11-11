@@ -1,0 +1,15 @@
+package servertime
+
+import "time"
+
+// 这个文件归工程所有：对外展示的业务时区名在这里改。
+
+// ZoneName 是给客户端显示用的业务时区名，随每一份快照下发（Snapshot.Zone）。location 是部署配置的业务时区
+// （time.business_timezone）。
+//
+// 缺省原样用 IANA 名（UTC、Asia/Shanghai）：客户端可以直接显示，也可以拿它查自己的时区库。
+// 想显示成别的（“服务器时间”、“UTC+8”、按地区分的文案键）就改这个函数；
+// 它只影响显示，业务日与重置时刻不读它。
+func ZoneName(location *time.Location) string {
+	return location.String()
+}

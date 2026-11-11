@@ -1,0 +1,29 @@
+//go:build protocoldef
+
+package protocoldef
+
+// ServertimeSyncRequest 问服务器现在的业务时间。什么时候问、拿到之后怎么用见 ServertimeNowPush 的注释。
+type ServertimeSyncRequest struct {
+	// ClientTick 是客户端发出这条请求时自己单调时钟的读数，服务器原样带回、不解释、不参与任何判断
+	// （单位与起点由客户端自己定；不需要时填 0）。它让应答自带“这条请求是什么时候发的”：
+	// 客户端收到时用“现在的读数 - ClientTick”得到往返时延，不必为每条在途请求另外记账。
+	// 收到应答那一刻，服务器的业务时间在 NowUnixMilli 与 NowUnixMilli + 往返时延之间；
+	// 往返时延很大的那一次（网络卡顿）误差也大，丢掉重问。
+	ClientTick int64 `pb:"1"`
+}
+
+// ServertimeSyncResponse 的 Time 是服务器答这条请求那一刻的快照。这条协议没有业务上的拒绝，Code 总是 0。
+type ServertimeSyncResponse struct {
+	Code   int32  `pb:"1"`
+	Reason string `pb:"2"`
+	// ClientTick 是请求里的 ClientTick，原样带回。
+	ClientTick int64 `pb:"3"`
+	// Time 是服务器的业务时间，与推送同一个形状。
+	Time *ServertimeNowPush `pb:"4"`
+}
+
+//roost:protocol group=game handler=servertime
+type ServertimeSyncProtocol interface {
+	//roost:msg id={{ID:protocol:ServertimeSync}}
+	ServertimeSync(ServertimeSyncRequest) ServertimeSyncResponse
+}
