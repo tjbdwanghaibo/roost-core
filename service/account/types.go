@@ -440,9 +440,8 @@ type Session struct {
 const ServerIDClaim = "server_id"
 
 // OriginServerIDClaim 是认证器把角色的绑定服（Role.ServerID；别名合服里说的“原服”）记进 Principal.Claims
-// 用的键（十进制 sid），
-// 供业务显示原服标识（例如名字后缀“[A]”，显示规则由业务决定）与按原服归属的数据使用。路由与驻留
-// 不读它，读 ServerIDClaim。没有合服时两个值相同。
+// 用的键（十进制 sid），供业务显示原服标识（例如名字后缀“[A]”，显示规则由业务决定）与按原服归属的
+// 数据使用。路由与驻留不读它，读 ServerIDClaim。没有合服时两个值相同。
 const OriginServerIDClaim = "origin_server_id"
 
 // RoleCreatedAtClaim 是认证器把 ValidateSession 返回的 Role.CreatedAtUnix（十进制 Unix 秒）记进
