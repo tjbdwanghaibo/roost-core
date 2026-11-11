@@ -75,7 +75,7 @@ func locate(ctx context.Context, residency Residency, directory func() (Director
 		if err != nil {
 			return 0, false, err
 		}
-		if !returned && binding.Transfer == nil && binding.ServingServerID == self {
+		if !returned && binding.ServingServerID == self {
 			// account 说他归本服，绑定代数却证明不了他换回来过：屏障还在，本进程写不了他。按表回答。
 			return where.Move.To, false, nil
 		}
@@ -84,10 +84,11 @@ func locate(ctx context.Context, residency Residency, directory func() (Director
 }
 
 // readmit 处理“迁出表说他已经迁走，account 说他现在归本服”：这名玩家后来又换回来了。
-// 认定的条件是 account 上没有换服在途、承载服是本服、绑定代数至少比当初发起时大 2（换走一次、换回一次）；
-// 满足时撤掉旧记录与屏障（Settle(Kept)），本进程重新为他服务。撤不掉（实体正被占用）时返回错误，调用方稍后重试。
+// 认定的条件是承载服是本服、绑定代数至少比当初发起时大 2（换走一次、换回一次）；满足时撤掉旧记录与屏障
+// （Settle(Kept)），本进程重新为他服务。撤不掉（实体正被占用）时返回错误，调用方稍后重试。
+// 他回来之后是否又有一次换服在途不影响这个判断：那是下一次换服，源服是本服，由调用方接着处理。
 func readmit(ctx context.Context, residency Residency, self int32, where Whereabouts, binding svcaccount.RoleBinding) (returned bool, err error) {
-	if where.Moving || binding.Transfer != nil || binding.ServingServerID != self || binding.BindEpoch < where.Move.Epoch+2 {
+	if where.Moving || binding.ServingServerID != self || binding.BindEpoch < where.Move.Epoch+2 {
 		return false, nil
 	}
 	if err := residency.Settle(ctx, where.Move, Kept); err != nil {

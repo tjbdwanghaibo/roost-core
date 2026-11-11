@@ -145,6 +145,19 @@ func TestRehomeAdmitLetsAReturnedPlayerBackIn(t *testing.T) {
 	}
 	f.expectEvents(t, "binding 94301", "release 7094301")
 	f.expectFree(t)
+
+	// 换回来之后又有一次换服在途（运维发起的，去 1002），而本进程还记着第一次的“已迁走”：
+	// 先撤掉旧屏障，再按“源服是本服的在途换服”接手——答 rehome_moving，后台把它做完。
+	depart()
+	if err := f.admit(map[string]string{"server_id": "1000", "bind_epoch": "5", "transfer": "1002:t-9"}); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("returned and moving again: err = %v, want rehome_moving", err)
+	}
+	f.expectEvents(t, "release 7094301")
+	f.runBackground()
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-9")
+	if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move.To != 1002 || where.Move.Epoch != 5 {
+		t.Fatalf("the table says %+v (%v), want departed to 1002 from epoch 5", where, tracked)
+	}
 }
 
 // 本进程在受理之后重启过：迁出表是空的，account 上换服仍在途、源服是本服。这名玩家来进入时答 rehome_moving，
@@ -377,6 +390,11 @@ func TestRehomeBindingThroughTheRegistry(t *testing.T) {
 	ownDirectory := &rehomeDirectory{events: events, binding: svcaccount.RoleBinding{ServingServerID: 1003}}
 	ownResidency := NewLocalResidency(nil)
 	ownResidency.now = func() time.Time { return time.Unix(1_800_000_000, 0) }
+	// Driver 用的那一层每次用到时才取：在发布之前拿到手的，发布之后看到的也是工程自己的那一张。
+	lazyResidency, lazyDirectory := RegistryResidency(own), RegistryDirectory(own)
+	if _, err := lazyDirectory.Binding(context.Background(), rehomePlayer); err == nil {
+		t.Fatal("a directory answered before any was published")
+	}
 	if err := own.Register(DirectoryCapability, Directory(ownDirectory)); err != nil {
 		t.Fatal(err)
 	}
@@ -385,6 +403,15 @@ func TestRehomeBindingThroughTheRegistry(t *testing.T) {
 	}
 	if got := ResidencyOf(own); got != Residency(ownResidency) {
 		t.Fatalf("ResidencyOf = %v, want the published one", got)
+	}
+	if err := lazyResidency.Reserve(Move{PlayerID: 94309, ID: "t-9", From: 1000, To: 1001}); err != nil {
+		t.Fatal(err)
+	}
+	if where, tracked := ownResidency.Where(94309); !tracked || !where.Moving {
+		t.Fatalf("a reservation through the lazy residency did not reach the published one: %+v (%v)", where, tracked)
+	}
+	if binding, err := lazyDirectory.Binding(context.Background(), rehomePlayer); err != nil || binding.ServingServerID != 1003 {
+		t.Fatalf("the lazy directory answered %+v (%v), want the published one's 1003", binding, err)
 	}
 	if sid, moving, err := Binding(context.Background(), own, rehomePlayer); err != nil || sid != 1003 || moving {
 		t.Fatalf("Binding = %d %v %v, want 1003 from the published directory", sid, moving, err)

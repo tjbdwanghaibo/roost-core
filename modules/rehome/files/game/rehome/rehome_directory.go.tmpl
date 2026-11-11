@@ -44,6 +44,46 @@ func DirectoryOf(registry *app.Registry) (Directory, error) {
 	return accountDirectory{accounts: accounts}, nil
 }
 
+// RegistryDirectory 返回一个每次用到时才从 Registry 取的 Directory（DirectoryOf），理由同 RegistryResidency。
+// 取不到时每个方法返回 DirectoryOf 的错误（不带业务码：调用方按“结果未知”或“现在判断不了”处理）。
+func RegistryDirectory(registry *app.Registry) Directory {
+	return registryDirectory{registry: registry}
+}
+
+type registryDirectory struct{ registry *app.Registry }
+
+func (d registryDirectory) Binding(ctx context.Context, playerID int64) (svcaccount.RoleBinding, error) {
+	directory, err := DirectoryOf(d.registry)
+	if err != nil {
+		return svcaccount.RoleBinding{}, err
+	}
+	return directory.Binding(ctx, playerID)
+}
+
+func (d registryDirectory) Begin(ctx context.Context, playerID int64, request svcaccount.TransferRequest) (svcaccount.RoleBinding, error) {
+	directory, err := DirectoryOf(d.registry)
+	if err != nil {
+		return svcaccount.RoleBinding{}, err
+	}
+	return directory.Begin(ctx, playerID, request)
+}
+
+func (d registryDirectory) Commit(ctx context.Context, playerID int64, transferID string) (svcaccount.RoleBinding, error) {
+	directory, err := DirectoryOf(d.registry)
+	if err != nil {
+		return svcaccount.RoleBinding{}, err
+	}
+	return directory.Commit(ctx, playerID, transferID)
+}
+
+func (d registryDirectory) Abort(ctx context.Context, playerID int64, transferID string, reason string) (svcaccount.RoleBinding, error) {
+	directory, err := DirectoryOf(d.registry)
+	if err != nil {
+		return svcaccount.RoleBinding{}, err
+	}
+	return directory.Abort(ctx, playerID, transferID, reason)
+}
+
 // accountDirectory 把 Directory 接到 account 服务的客户端上。
 type accountDirectory struct{ accounts svcaccount.Accounts }
 

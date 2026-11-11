@@ -58,13 +58,14 @@ func DriverFromRegistry(registry *app.Registry) (*gamerehome.Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	directory, err := gamerehome.DirectoryOf(registry)
-	if err != nil {
+	// account 的客户端此刻必须已经发布（缺了在启动时暴露）；但 Driver 拿的是“用到时再取”的那一层：
+	// 业务服务自己的 Residency（以及自己的 Directory）可能在协议绑定之后才发布。
+	if _, err := gamerehome.DirectoryOf(registry); err != nil {
 		return nil, err
 	}
 	driver, err := gamerehome.NewDriver(gamerehome.DriverConfig{
-		Registry: registry, Self: self, Directory: directory,
-		Residency: gamerehome.ResidencyOf(registry), Profile: newProfile(client), EntityID: playerEntityID,
+		Registry: registry, Self: self, Directory: gamerehome.RegistryDirectory(registry),
+		Residency: gamerehome.RegistryResidency(registry), Profile: newProfile(client), EntityID: playerEntityID,
 	})
 	if err != nil {
 		return nil, err

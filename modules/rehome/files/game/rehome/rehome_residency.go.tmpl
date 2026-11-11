@@ -89,6 +89,26 @@ func ResidencyOf(registry *app.Registry) Residency {
 	return local
 }
 
+// RegistryResidency 返回一个每次用到时才从 Registry 取的 Residency（ResidencyOf）。Driver 用它而不是在
+// 建 Driver 时取一次：协议绑定建 Driver 的时刻早于业务服务发布自己的驻留表，取早了会拿到缺省的那一张，
+// 之后 Driver 与 Binding 就各看各的表。
+func RegistryResidency(registry *app.Registry) Residency {
+	return registryResidency{registry: registry}
+}
+
+type registryResidency struct{ registry *app.Registry }
+
+func (r registryResidency) Reserve(move Move) error { return ResidencyOf(r.registry).Reserve(move) }
+func (r registryResidency) Depart(ctx context.Context, move Move) error {
+	return ResidencyOf(r.registry).Depart(ctx, move)
+}
+func (r registryResidency) Settle(ctx context.Context, move Move, outcome Outcome) error {
+	return ResidencyOf(r.registry).Settle(ctx, move, outcome)
+}
+func (r registryResidency) Where(playerID int64) (Whereabouts, bool) {
+	return ResidencyOf(r.registry).Where(playerID)
+}
+
 // 断开会话时给连接的原因。
 var (
 	// ErrSessionRehoming：这名玩家正在换服，本进程不再为他服务。
