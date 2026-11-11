@@ -1,0 +1,32 @@
+package account
+
+import (
+	"context"
+	"fmt"
+
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+)
+
+// verifyChannel 是工程自己的登录渠道的入口：除开发登录（渠道 dev，见 login_dev.go）之外的每一次登录都到这里。
+//
+// 缺省一个渠道都没接，全部拒绝。上线前在这里接：按 identity.Channel 分支，把 identity.Credential
+// （平台 token、签名、收据）拿去向那个渠道验，例如
+//
+//	switch identity.Channel {
+//	case "appstore":
+//		return verifyAppStore(ctx, identity)
+//	}
+//
+// 接渠道时必须守住的三条（account 服务按这三条信任这里的回答）：
+//
+//   - 不认识的渠道、验不过的凭据：返回包着 svcaccount.ErrIdentityDenied 的错误。没有“先放行”的缺省。
+//   - 问不到渠道（超时、对方 5xx）：返回包着 svcaccount.ErrVerifierUnavailable 的错误，不能当成验过了。
+//     两种错误分开，客户端与运维才分得清“渠道说不行”和“没问到”。
+//   - 返回渠道确认的身份（Verified.OpenID 取渠道回答里的用户标识），不是客户端提交的 identity.OpenID：
+//     否则拿自己的凭据配上别人的 open id 就能登进别人的账号。
+//
+// 渠道的密钥、地址这类配置写成带 config 标签的结构体，用 app.LoadConfig 读（照 login_dev.go 的
+// devLoginConfig；需要 Registry 时照 identityVerifier 的 BindRegistry），不要直接读环境变量或 viper。
+func verifyChannel(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
+	return svcaccount.Verified{}, fmt.Errorf("%w: channel %q is not a login channel of this project", svcaccount.ErrIdentityDenied, identity.Channel)
+}

@@ -1,0 +1,73 @@
+package account
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	wiringaccount "github.com/tjbdwanghaibo/roost-core/wiring/account"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// firstPlayerID 是第一个玩家号之前的那个数：分配出来的号从 100001 起，避开手写测试数据爱用的小数。
+// 有玩家之后不要调小——调小会把已经发出去的号再发一遍。
+const firstPlayerID int64 = 100_000
+
+// playerIDCounterKey 是计数器在 Redis 里的键：<account.key_prefix>:player_id，与 account 自己的账号、角色、
+// 区服记录在同一个前缀下。共用一个 Redis 的两套部署靠前缀分开，各数各的；按前缀清数据时计数器跟着一起清。
+func playerIDCounterKey(prefix string) string { return prefix + ":player_id" }
+
+// playerIDCounter 用 account 进程的 Redis 里的一个 INCR 计数器分配玩家号。
+//
+// 分配器的要求是“跨进程、跨重启都不重复”：计数器在 Redis 里，持久、所有副本共用，满足；
+// 进程内计数器或时间戳不满足。全服一个计数器，不分服——号本身不说明角色在哪个服（换服、合服之后
+// 也不该说明）。要把区服编进号里（高位是服、低位是序号）的工程改 Allocate。
+// 计数器丢了（Redis 数据被清、换了前缀却没搬数据）会从头再数、发出重复的号：它与 account 的数据
+// 同生共死，备份与迁移时把这个键算在内。
+//
+// Redis 的客户端在 App 之前拿不到，所以实现 RegistryBound：account Mod 在 Provide 里把 Registry 交过来。
+type playerIDCounter struct {
+	handle atomic.Pointer[playerIDHandle]
+}
+
+type playerIDHandle struct {
+	client fredis.IRedis
+	key    string
+}
+
+func (counter *playerIDCounter) BindRegistry(registry *app.Registry) error {
+	client, err := mods.Redis(registry)
+	if err != nil {
+		return fmt.Errorf("login player id counter: %w", err)
+	}
+	// 与 account Mod 读的是同一个 account.key_prefix、同一套检查。
+	prefix, err := wiringaccount.KeyPrefix(registry.Config())
+	if err != nil {
+		return fmt.Errorf("login player id counter: %w", err)
+	}
+	counter.handle.Store(&playerIDHandle{client: client, key: playerIDCounterKey(prefix)})
+	return nil
+}
+
+// Allocate 实现 svcaccount.PlayerIDAllocator。Redis 出错时返回错误、不发号：建角失败可以重试，
+// 发出一个可能重复的号不能挽回。
+func (counter *playerIDCounter) Allocate(ctx context.Context, _ int32) (int64, error) {
+	handle := counter.handle.Load()
+	if handle == nil {
+		return 0, errors.New("login player id counter: not bound to a registry (the account Mod binds it in Provide)")
+	}
+	next, err := handle.client.Incr(ctx, handle.key)
+	if err != nil {
+		return 0, fmt.Errorf("login player id counter: %w", err)
+	}
+	return firstPlayerID + next, nil
+}
+
+var (
+	_ svcaccount.PlayerIDAllocator = (*playerIDCounter)(nil)
+	_ wiringaccount.RegistryBound  = (*playerIDCounter)(nil)
+)

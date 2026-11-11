@@ -1,0 +1,11 @@
+package errors
+
+import "github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+
+// 登录模块的业务码；码值在安装时从 roost.yaml 的 ids.errcode 分配，发布后不要改。
+var (
+	// ErrLoginElsewhere：这个会话的角色不由本服承载（account 说他的承载服是另一个 sid，或者会话里没有记下承载服），
+	// 本服不为他加载也不创建 Player。客户端重新选角，按选角结果里的承载服去连对的服。
+	// 握手本身是通过的——握手失败客户端拿不到原因，所以这一句由进入游戏的那一步答（game/login 的 Admit）。
+	ErrLoginElsewhere = errcode.Define({{ID:errcode:login_elsewhere}}, "login_elsewhere", "the role is served by another server; select the role again")
+)

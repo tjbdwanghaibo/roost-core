@@ -1,0 +1,104 @@
+package account
+
+import (
+	"context"
+	"crypto/subtle"
+	"fmt"
+	"strings"
+	"sync/atomic"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	wiringaccount "github.com/tjbdwanghaibo/roost-core/wiring/account"
+)
+
+// DevChannel 是开发登录的渠道名。客户端（或开发工具）这样登录：
+//
+//	Login(Identity{Channel: "dev", OpenID: <随便一个账号名>, Credential: <login.dev_token 的值>})
+//
+// 之后与正式渠道完全一样：CreateRole / SelectRole 拿会话令牌，握手出示 session:<player_id>:<token>。
+const DevChannel svcaccount.Channel = "dev"
+
+// devTokenPrefix：开发令牌必须以它开头。roost config check --production 按这个前缀认开发值，
+// 令牌带着它，生产配置里才藏不住（发布前的静态检查就会点名，不用等到进程起不来）。
+const devTokenPrefix = "dev-"
+
+// devLoginConfig 是 account 进程配置里的开发登录开关：
+//
+//	login:
+//	  dev_token: dev-随便什么    # 只写在开发配置（configs/service/config.account.yaml）里
+//
+// 不写或留空 = 没有开发登录（缺省）。知道这个令牌的人可以用任何账号名登录，所以它不是身份验证，
+// 只是“开发环境里别让路过的人随手进来”。
+type devLoginConfig struct {
+	Login struct {
+		DevToken string `config:"dev_token" example:"" help:"开发登录令牌：渠道 dev 的凭据，必须以 dev- 开头；留空关闭开发登录。生产配置里写了它进程不启动"`
+	} `config:"login"`
+}
+
+// ValidateConfig 在读配置时执行（进程启动时，任何登录之前）：
+//
+//   - 令牌不以 dev- 开头：拒绝。没有这个前缀，发布前的静态检查认不出它是开发令牌。
+//   - 生产配置（env / app.env / environment 是 prod / production）里写了令牌：拒绝，进程不启动。
+//     生产环境没有“先开着开发登录”这回事。
+func (c *devLoginConfig) ValidateConfig(production bool) error {
+	token := c.Login.DevToken
+	if token == "" {
+		return nil
+	}
+	if !strings.HasPrefix(token, devTokenPrefix) {
+		return fmt.Errorf("config: login.dev_token must start with %q (a development token the production checks can recognise)", devTokenPrefix)
+	}
+	if production {
+		return fmt.Errorf("config: login.dev_token is set in a production config; development login must be off in production")
+	}
+	return nil
+}
+
+// identityVerifier 是 account 的身份校验：开发渠道在这里判，其余渠道交给 verifyChannel（login_channels.go）。
+//
+// 开发令牌从 account 进程的配置读：collaborators 在 App 之前构造，所以实现 RegistryBound，
+// account Mod 在 Provide 里把 Registry 交过来。绑定之前（以及配置里没有令牌时）开发登录是关的。
+type identityVerifier struct {
+	devToken atomic.Pointer[string]
+}
+
+func (verifier *identityVerifier) BindRegistry(registry *app.Registry) error {
+	var settings devLoginConfig
+	if err := app.LoadConfig(registry.Config(), &settings); err != nil {
+		return fmt.Errorf("login verifier: %w", err)
+	}
+	token := settings.Login.DevToken
+	verifier.devToken.Store(&token)
+	return nil
+}
+
+var (
+	_ svcaccount.IdentityVerifier = (*identityVerifier)(nil)
+	_ wiringaccount.RegistryBound = (*identityVerifier)(nil)
+)
+
+// Verify 实现 svcaccount.IdentityVerifier。返回的是确认过的身份，不是提交上来的那一份。
+func (verifier *identityVerifier) Verify(ctx context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
+	if identity.Channel == DevChannel {
+		return verifier.verifyDev(identity)
+	}
+	return verifyChannel(ctx, identity)
+}
+
+// verifyDev：凭据等于配置的开发令牌就确认这个账号名。没有配置令牌时（缺省、生产）一律拒绝。
+// 比较用定长时间的写法，令牌不进日志也不进错误信息。
+func (verifier *identityVerifier) verifyDev(identity svcaccount.Identity) (svcaccount.Verified, error) {
+	token := verifier.devToken.Load()
+	if token == nil || *token == "" {
+		return svcaccount.Verified{}, fmt.Errorf("%w: development login is off (login.dev_token is not set in this process's config)", svcaccount.ErrIdentityDenied)
+	}
+	if subtle.ConstantTimeCompare([]byte(identity.Credential), []byte(*token)) != 1 {
+		return svcaccount.Verified{}, fmt.Errorf("%w: the development credential does not match", svcaccount.ErrIdentityDenied)
+	}
+	openID := strings.TrimSpace(identity.OpenID)
+	if openID == "" {
+		return svcaccount.Verified{}, fmt.Errorf("%w: open id is empty", svcaccount.ErrIdentityInvalid)
+	}
+	return svcaccount.Verified{Channel: DevChannel, OpenID: openID}, nil
+}

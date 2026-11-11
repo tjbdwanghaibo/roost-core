@@ -1,0 +1,52 @@
+package login
+
+import (
+	"context"
+	"fmt"
+
+	gameenter "{{MODULE}}/game/enter"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 这个文件是 login 与 enter 两个模块的联动：两个都装着时才有。它把 Admit 接到进入游戏的进入前检查上
+// （gameenter.OnEntering）：握手通过的会话在加载或创建 Player 之前，先看会话记的承载服是不是本服。
+//
+//   - 是本服：放行。
+//   - 是别的服、或者会话里没有记承载服：login_elsewhere，不加载也不创建 Player，客户端重新选角。
+//
+// 没有这一条，认证器往会话里记的承载服没有人看：连错服的玩家（合服、换服之后的旧地址，选错了服）
+// 会在本服被新建一份空档。握手时不拒是因为握手失败客户端拿不到原因。
+//
+// 与换服模块（rehome）一起装时两条检查都在：检查按名字顺序执行，这一条（login）在前，只做上面这个静态比较；
+// 握手之后才换走、正在换服、换回来这些要问迁出表与 account 的判断在后面那一条（rehome）。承载服不是本服的
+// 会话因此答 login_elsewhere 而不是 rehome_elsewhere——对客户端是同一件事：重新选角。
+//
+// 自己改写进入端点、不经 gameenter.Enter 的工程，在加载 Player 之前调 Admit，或者调 gameenter.RunEntering。
+func init() {
+	gameenter.OnEntering("login", admitOnEnter)
+}
+
+func admitOnEnter(_ context.Context, registry *app.Registry, entering gameenter.Entering) error {
+	self, err := selfServerID(registry)
+	if err != nil {
+		return err
+	}
+	return Admit(self, entering.PlayerID, entering.Claims)
+}
+
+// selfServerID 读本进程的 sid（每个服务进程都有的配置键 sid，也可以由 --sid 覆盖）。读不出来时返回错误，
+// 调用方不放行：不知道自己是哪个服，就判断不了玩家归不归自己。
+func selfServerID(registry *app.Registry) (int32, error) {
+	if registry == nil {
+		return 0, fmt.Errorf("login: the enter check needs the app registry to read this process's sid")
+	}
+	var identity app.ServiceIdentity
+	if err := app.LoadConfig(registry.Config(), &identity); err != nil {
+		return 0, fmt.Errorf("login: read this process's sid: %w", err)
+	}
+	if identity.Sid <= 0 {
+		return 0, fmt.Errorf("login: this process has no positive sid in its config")
+	}
+	return identity.Sid, nil
+}

@@ -1,0 +1,373 @@
+package account
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	fredis "github.com/tjbdwanghaibo/roost-core/infra/storage/redis"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+	wiringaccount "github.com/tjbdwanghaibo/roost-core/wiring/account"
+	"github.com/tjbdwanghaibo/roost-core/wiring/mods"
+)
+
+// 登录模块在 account 进程这一侧的场景：开发登录、渠道入口的缺省、玩家号计数器。
+// account 是真实的 svcaccount.Service（内存存储），协作者就是这个包交给 account Mod 的那几个，
+// 绑定方式也与 Mod 相同（BindRegistry）。场景名以 TestLogin 开头；数字写死。
+
+// loginCounterRedis 是计数器用到的那一点 Redis：整数键上的 INCR。别的调用经嵌入的 nil 接口 panic，
+// 协作者多用了哪个命令在这里看得见。fail 非 nil 时 INCR 返回它。
+type loginCounterRedis struct {
+	fredis.IRedis
+
+	mu     sync.Mutex
+	values map[string]int64
+	fail   error
+}
+
+func (r *loginCounterRedis) Incr(_ context.Context, key string) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fail != nil {
+		return 0, r.fail
+	}
+	if r.values == nil {
+		r.values = map[string]int64{}
+	}
+	r.values[key]++
+	return r.values[key], nil
+}
+
+func (r *loginCounterRedis) value(key string) int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.values[key]
+}
+
+// loginRegistry 是 account 进程的 Registry：配置加 Redis 客户端（client 为 nil 时不发布 Redis）。
+// settings 是配置键值，例如 "login.dev_token", "dev-local"。
+func loginRegistry(t *testing.T, client fredis.IRedis, settings ...string) *app.Registry {
+	t.Helper()
+	cfg := viper.New()
+	for i := 0; i+1 < len(settings); i += 2 {
+		cfg.Set(settings[i], settings[i+1])
+	}
+	registry := app.NewRegistry(cfg)
+	if client != nil {
+		if err := registry.Register(mods.ModRedis, client); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return registry
+}
+
+// loginBind 照 account Mod 的做法把 Registry 交给协作者。
+func loginBind(t *testing.T, collaborator any, registry *app.Registry) error {
+	t.Helper()
+	bound, ok := collaborator.(wiringaccount.RegistryBound)
+	if !ok {
+		t.Fatalf("%T does not bind to the registry", collaborator)
+	}
+	return bound.BindRegistry(registry)
+}
+
+// loginAccounts 用这个包的协作者建一个真实的 account（内存存储，服 1000 开放），时间停在 Unix 1800000000。
+func loginAccounts(t *testing.T, registry *app.Registry) *svcaccount.Service {
+	t.Helper()
+	verifier, allocator := Verifier(), Allocator()
+	if err := loginBind(t, verifier, registry); err != nil {
+		t.Fatal(err)
+	}
+	if err := loginBind(t, allocator, registry); err != nil {
+		t.Fatal(err)
+	}
+	now := func() time.Time { return time.Unix(1_800_000_000, 0) }
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{
+		Normalize: directory.NormalizeLower, DefaultTTL: time.Minute, Now: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := svcaccount.New(svcaccount.Config{
+		Accounts:      versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Roles:         versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers:       versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
+		Names:         names,
+		Slots:         versionstore.NewMemoryStore[string, svcaccount.Slot](),
+		Verifier:      verifier,
+		Allocator:     allocator,
+		NameRules:     NameRules(),
+		SessionSecret: "login-test-secret",
+		Now:           now,
+		SystemNow:     now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpsertServer(context.Background(), svcaccount.GameServer{ID: 1000, Name: "s1000", Status: svcaccount.ServerOpen}); err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+// 开发环境：配置里写了开发令牌，用渠道 dev 加这个令牌登录，建角、选角拿到的会话令牌 account 自己认。
+// 这就是“装上模块、写一行配置，就能登录”的那条路。
+func TestLoginDevTokenLogsInAndGetsASession(t *testing.T) {
+	redis := &loginCounterRedis{}
+	accounts := loginAccounts(t, loginRegistry(t, redis, "account.key_prefix", "roost:test:account", "login.dev_token", "dev-local"))
+	ctx := context.Background()
+
+	account, err := accounts.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: "dev-local"})
+	if err != nil {
+		t.Fatalf("development login: %v", err)
+	}
+	if account.ID != "dev:alice" || account.Channel != "dev" {
+		t.Fatalf("account = %+v, want dev:alice on channel dev", account)
+	}
+	role, err := accounts.CreateRole(ctx, account.ID, 1000, "alice")
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	if role.PlayerID != 100_001 {
+		t.Fatalf("the first player id is %d, want 100001", role.PlayerID)
+	}
+	session, err := accounts.SelectRole(ctx, account.ID, role.PlayerID)
+	if err != nil {
+		t.Fatalf("select role: %v", err)
+	}
+	validated, err := accounts.ValidateSession(ctx, session.PlayerID, session.Token)
+	if err != nil || validated.PlayerID != 100_001 || validated.ServingServerID != 1000 || validated.CreatedAtUnix != 1_800_000_000 {
+		t.Fatalf("the session does not validate: role %+v, err %v", validated, err)
+	}
+	// 同一个账号名再登录是同一个账号；另一个账号名是另一个账号、另一个玩家号。
+	again, err := accounts.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: "dev-local"})
+	if err != nil || again.ID != "dev:alice" {
+		t.Fatalf("logging in again: %+v, %v", again, err)
+	}
+	other, err := accounts.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "bob", Credential: "dev-local"})
+	if err != nil || other.ID != "dev:bob" {
+		t.Fatalf("a second developer: %+v, %v", other, err)
+	}
+	second, err := accounts.CreateRole(ctx, other.ID, 1000, "bob")
+	if err != nil || second.PlayerID != 100_002 {
+		t.Fatalf("the second role: %+v, %v", second, err)
+	}
+	if got := redis.value("roost:test:account:player_id"); got != 2 {
+		t.Fatalf("the player id counter is %d, want 2 under the account prefix", got)
+	}
+}
+
+// 开发令牌对不上、没配置、认证器还没绑定：开发登录一律拒绝，而且是“渠道说不行”，不是别的错误。
+func TestLoginDevTokenIsRefusedWhenWrongOrOff(t *testing.T) {
+	ctx := context.Background()
+	denied := func(what string, verifier svcaccount.IdentityVerifier, identity svcaccount.Identity) {
+		t.Helper()
+		verified, err := verifier.Verify(ctx, identity)
+		if !errors.Is(err, svcaccount.ErrIdentityDenied) {
+			t.Fatalf("%s: err = %v, want identity_denied", what, err)
+		}
+		if verified.Channel != "" || verified.OpenID != "" {
+			t.Fatalf("%s: a refusal confirms %+v", what, verified)
+		}
+		if err != nil && strings.Contains(err.Error(), "dev-local") {
+			t.Fatalf("%s: the error text carries the token: %v", what, err)
+		}
+	}
+	on := Verifier()
+	if err := loginBind(t, on, loginRegistry(t, nil, "login.dev_token", "dev-local")); err != nil {
+		t.Fatal(err)
+	}
+	for _, credential := range []string{"", "dev-", "dev-loca", "dev-local ", " dev-local", "DEV-LOCAL", "dev-local2", "alice"} {
+		denied("credential "+credential, on, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: credential})
+	}
+	if verified, err := on.Verify(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: "dev-local"}); err != nil || verified.OpenID != "alice" || verified.Channel != "dev" {
+		t.Fatalf("the right token: %+v, %v", verified, err)
+	}
+	// 账号名取确认过的那一份（去掉首尾空白），空账号名不确认。
+	if verified, err := on.Verify(ctx, svcaccount.Identity{Channel: "dev", OpenID: "  alice ", Credential: "dev-local"}); err != nil || verified.OpenID != "alice" {
+		t.Fatalf("an open id with spaces: %+v, %v", verified, err)
+	}
+	if _, err := on.Verify(ctx, svcaccount.Identity{Channel: "dev", OpenID: "  ", Credential: "dev-local"}); err == nil {
+		t.Fatal("an empty open id was confirmed")
+	}
+
+	// 配置里没有令牌（缺省）：任何凭据都不行，空凭据也不行。
+	off := Verifier()
+	if err := loginBind(t, off, loginRegistry(t, nil)); err != nil {
+		t.Fatal(err)
+	}
+	for _, credential := range []string{"", "dev-", "dev-local"} {
+		denied("development login off, credential "+credential, off, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: credential})
+	}
+	// 还没绑定 Registry 的认证器同样是关的。
+	denied("an unbound verifier", Verifier(), svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: ""})
+
+	// 经真实的 account：被拒的登录不产生账号。
+	accounts := loginAccounts(t, loginRegistry(t, &loginCounterRedis{}, "account.key_prefix", "roost:test:account", "login.dev_token", "dev-local"))
+	if _, err := accounts.Login(ctx, svcaccount.Identity{Channel: "dev", OpenID: "mallory", Credential: "guess"}); !errors.Is(err, svcaccount.ErrIdentityDenied) {
+		t.Fatalf("a wrong token through account.Login: %v", err)
+	}
+	if _, err := accounts.CreateRole(ctx, "dev:mallory", 1000, "mallory"); !errors.Is(err, svcaccount.ErrAccountMissing) {
+		t.Fatalf("the refused login left an account behind: %v", err)
+	}
+}
+
+// 生产配置下没有开发登录：写了开发令牌的生产配置读不过去（进程不启动），三种标明生产环境的写法都算；
+// 不带 dev- 前缀的令牌在任何环境都读不过去（生产检查认不出它）。没写令牌的生产配置正常启动，开发登录是关的。
+func TestLoginDevTokenIsRefusedByAProductionConfig(t *testing.T) {
+	ctx := context.Background()
+	for _, environment := range []string{"env", "app.env", "environment"} {
+		for _, value := range []string{"prod", "production", "Production"} {
+			verifier := Verifier()
+			err := loginBind(t, verifier, loginRegistry(t, nil, environment, value, "login.dev_token", "dev-local"))
+			if err == nil || !strings.Contains(err.Error(), "login.dev_token") {
+				t.Fatalf("%s=%s with a development token: err = %v, want the config refused naming login.dev_token", environment, value, err)
+			}
+			if _, err := verifier.Verify(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: "dev-local"}); !errors.Is(err, svcaccount.ErrIdentityDenied) {
+				t.Fatalf("%s=%s: the development token logged in after the config was refused: %v", environment, value, err)
+			}
+		}
+	}
+	for _, environment := range []string{"prod", "dev", ""} {
+		verifier := Verifier()
+		err := loginBind(t, verifier, loginRegistry(t, nil, "env", environment, "login.dev_token", "letmein"))
+		if err == nil || !strings.Contains(err.Error(), "login.dev_token") {
+			t.Fatalf("env=%q with a token that does not start with dev-: err = %v, want the config refused", environment, err)
+		}
+		if _, err := verifier.Verify(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: "letmein"}); !errors.Is(err, svcaccount.ErrIdentityDenied) {
+			t.Fatalf("env=%q: a token without the dev- prefix logged in: %v", environment, err)
+		}
+	}
+	production := Verifier()
+	if err := loginBind(t, production, loginRegistry(t, nil, "env", "prod")); err != nil {
+		t.Fatalf("a production config without a development token: %v", err)
+	}
+	for _, credential := range []string{"", "dev-local", "dev-"} {
+		if _, err := production.Verify(ctx, svcaccount.Identity{Channel: "dev", OpenID: "alice", Credential: credential}); !errors.Is(err, svcaccount.ErrIdentityDenied) {
+			t.Fatalf("production, credential %q: err = %v, want identity_denied", credential, err)
+		}
+	}
+	// 非生产环境、带前缀的令牌读得过去：上面的拒绝是因为环境与前缀。
+	if err := loginBind(t, Verifier(), loginRegistry(t, nil, "env", "dev", "login.dev_token", "dev-local")); err != nil {
+		t.Fatalf("a development config with a development token: %v", err)
+	}
+}
+
+// 除开发渠道之外，缺省一个渠道都没接：全部拒绝，拿着开发令牌换个渠道名也不行。
+func TestLoginOtherChannelsAreRefusedUntilTheProjectWiresThem(t *testing.T) {
+	verifier := Verifier()
+	if err := loginBind(t, verifier, loginRegistry(t, nil, "login.dev_token", "dev-local")); err != nil {
+		t.Fatal(err)
+	}
+	for _, channel := range []svcaccount.Channel{"appstore", "store", "guest", "DEV", "dev ", "device"} {
+		verified, err := verifier.Verify(context.Background(), svcaccount.Identity{Channel: channel, OpenID: "alice", Credential: "dev-local"})
+		if !errors.Is(err, svcaccount.ErrIdentityDenied) || errors.Is(err, svcaccount.ErrVerifierUnavailable) {
+			t.Fatalf("channel %q: err = %v, want identity_denied", channel, err)
+		}
+		if verified.OpenID != "" {
+			t.Fatalf("channel %q: confirmed %+v", channel, verified)
+		}
+	}
+}
+
+// 玩家号来自 account 的 Redis 里的一个计数器，键在 account.key_prefix 下：两个副本共用它、互不重号；
+// 另一套部署（另一个前缀）数自己的；并发分配不重号。第一个号是 100001。
+func TestLoginPlayerIDsComeFromOneCounterUnderTheAccountPrefix(t *testing.T) {
+	redis := &loginCounterRedis{}
+	ctx := context.Background()
+	bound := func(prefix string) svcaccount.PlayerIDAllocator {
+		t.Helper()
+		allocator := Allocator()
+		if err := loginBind(t, allocator, loginRegistry(t, redis, "account.key_prefix", prefix)); err != nil {
+			t.Fatal(err)
+		}
+		return allocator
+	}
+	allocate := func(allocator svcaccount.PlayerIDAllocator, serverID int32) int64 {
+		t.Helper()
+		id, err := allocator.Allocate(ctx, serverID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	replicaA, replicaB := bound("roost:a:account"), bound("roost:a:account")
+	if got := allocate(replicaA, 1000); got != 100_001 {
+		t.Fatalf("the first id is %d, want 100001", got)
+	}
+	if got := allocate(replicaB, 1001); got != 100_002 {
+		t.Fatalf("the second replica handed out %d, want 100002 (one counter for every replica and server)", got)
+	}
+	if got := allocate(replicaA, 1000); got != 100_003 {
+		t.Fatalf("the third id is %d, want 100003", got)
+	}
+	other := bound("roost:b:account")
+	if got := allocate(other, 1000); got != 100_001 {
+		t.Fatalf("another deployment's first id is %d, want 100001 from its own counter", got)
+	}
+	if a, b := redis.value("roost:a:account:player_id"), redis.value("roost:b:account:player_id"); a != 3 || b != 1 {
+		t.Fatalf("counters = %d and %d, want 3 under roost:a:account and 1 under roost:b:account", a, b)
+	}
+	ids := make([]int64, 50)
+	var wg sync.WaitGroup
+	for i := range ids {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			allocator := replicaA
+			if i%2 == 1 {
+				allocator = replicaB
+			}
+			id, err := allocator.Allocate(ctx, 1000)
+			if err != nil {
+				t.Error(err)
+			}
+			ids[i] = id
+		}(i)
+	}
+	wg.Wait()
+	seen := map[int64]bool{}
+	for _, id := range ids {
+		if id < 100_004 || id > 100_053 || seen[id] {
+			t.Fatalf("concurrent ids %v: %d is out of 100004..100053 or handed out twice", ids, id)
+		}
+		seen[id] = true
+	}
+}
+
+// 计数器不可用时不发号：没绑定、Redis 出错都返回错误；缺 Redis、缺 account.key_prefix 时绑定失败（进程不启动）。
+func TestLoginPlayerIDCounterFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	if id, err := Allocator().Allocate(ctx, 1000); err == nil || id != 0 {
+		t.Fatalf("an unbound counter handed out %d, err %v", id, err)
+	}
+	down := errors.New("redis: connection refused")
+	redis := &loginCounterRedis{fail: down}
+	allocator := Allocator()
+	if err := loginBind(t, allocator, loginRegistry(t, redis, "account.key_prefix", "roost:test:account")); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := allocator.Allocate(ctx, 1000); !errors.Is(err, down) || id != 0 {
+		t.Fatalf("with Redis down the counter handed out %d, err %v", id, err)
+	}
+	// Redis 恢复之后接着发，中间没有跳号也没有重号。
+	redis.mu.Lock()
+	redis.fail = nil
+	redis.mu.Unlock()
+	if id, err := allocator.Allocate(ctx, 1000); err != nil || id != 100_001 {
+		t.Fatalf("after Redis came back: id %d, err %v, want 100001", id, err)
+	}
+	if err := loginBind(t, Allocator(), loginRegistry(t, nil, "account.key_prefix", "roost:test:account")); err == nil {
+		t.Fatal("the counter bound without a Redis client")
+	}
+	if err := loginBind(t, Allocator(), loginRegistry(t, &loginCounterRedis{})); err == nil {
+		t.Fatal("the counter bound without account.key_prefix")
+	}
+}

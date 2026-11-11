@@ -1,0 +1,33 @@
+package login
+
+import (
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/infra/base/errcode"
+)
+
+// Admit 回答：带着这些 claims 的会话，本服（self 是本进程的 sid）该不该让这名玩家进入。
+// 它在加载或创建 Player 之前调用——装了 enter 模块时由联动文件接到进入前检查上；自己写进入流程的工程
+// 在加载 Player 之前调它，返回错误就不要继续，把错误的码答给客户端。
+//
+//   - nil：会话记的承载服就是本服，放行。
+//   - login_elsewhere：承载服是别的 sid（合服、换服之后连到了旧地址，或者客户端选错了服）。不拦的话，
+//     这名玩家会在一个不该写他的进程里被加载，没有档时还会被新建一份空档。
+//   - login_elsewhere（owner_sid 为 0）：会话里没有记承载服，或者记的不是正的 sid。认证器每次握手都写它，
+//     读不到说明认证器被改过、或者这次进入不是从握手来的；不知道归属就不放行。
+//
+// 只读、不问任何服务，可以重复调用。claims 是握手那一刻的快照：握手之后才换走的玩家这里看不出来，
+// 那是换服模块（rehome）的进入前检查与驻留屏障管的事。同理，换服在途（svcaccount.TransferClaim）这里不拒：
+// 在途的角色仍由源服承载，装了 rehome 时由它答 rehome_moving 并把停在半路的换服接着做完——这里抢先拒绝
+// 会让它做不了这件事。没装 rehome 的工程没有发起换服的入口；自己调 account 的换服接口的工程，要自己在
+// 进入前检查里处理在途的角色。
+func Admit(self int32, playerID int64, claims map[string]string) error {
+	serving, known := ServingServer(claims)
+	if !known {
+		return errcode.Wrap(apperrors.ErrLoginElsewhere, nil, "player_id", playerID, "owner_sid", 0)
+	}
+	if serving != self {
+		return errcode.Wrap(apperrors.ErrLoginElsewhere, nil, "player_id", playerID, "owner_sid", serving)
+	}
+	return nil
+}
