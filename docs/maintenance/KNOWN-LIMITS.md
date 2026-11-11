@@ -606,6 +606,21 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **消费者**：Gate 转交给 game 的绑定不带 Claims，game 侧需要原服标识时从自己的角色数据取；`OriginServerIDClaim` 只在认证器那一侧可见（嵌入 TCP 的 Principal 里两者都有）。CreateRole 被拒经总线时客户端看到的是 `ErrServerClosed` 的通用原因，“已并入 B”的详情只在 account 进程的错误里。 game-demo 拉全服邮件（D17）时，原服并入本服的角色另带原服范围 `ServerScope(A)`，合服前发给 A、还没拉到的全服邮件照样属于他——这是 demo 的业务选择，框架不规定。
 - **验证边界**：真实进程两服演练（私有环境，sid 1000 / 1001，[证据](https://github.com/tjbdwanghaibo/roost-core/blob/505a14edb9cffcf60d601785f824abcbc0ab02e9/docs/performance/benchmarks/d15-server-merge-20261020/README.md)）覆盖嵌入 TCP；独立 Gate 只有单元级（正式 account 服务 + `FixedGameResolver`）。演练里的 `dbscope=sid` 文档是直接写 Mongo 的（game-demo 没有用它的实体），B 的进程没有冷加载它们；玩家数据（共享库 main）经真实进程读写。
 
+### 单个玩家换服（模块 rehome 与 game-demo 接线）
+
+2026-11-11，[方案](FEATURE-2026-11-11-player-rehome.md)一期。
+
+- **只有离线验证**：模块的场景用替身提交器，交出实体是替身；game-demo 的用例用真实的 `account.Service`（内存存储）与两张真实的驻留表。真实的 `HandOffEntity` 路径（模块的缺省实现与 demo 的离开流程）、两个 game 进程加 account 的演练、每个阶段后 kill -9、checkpoint 等待实际要多久，都没有做。
+- **没装 enter 的工程要自己接两处**：加载 Player 之前调 `Driver.Admit`、进入之后调 `Driver.Arrive`，否则换走的玩家仍能进旧服、目标服不做到达。工程改写了进入端点（game-demo 就改写了）时要自己调 `gameenter.RunEntering`。
+- **向前恢复只由登录触发**：源服受理后重启、玩家又不再来登录源服的，换服停在在途；account 没有“列出在途换服”的索引，要用 `accountctl transfer-role commit|abort` 人工了结。`rehome.Binding`（saga 准入用）不触发恢复。
+- **结果未知时无限重发**：提交、中止、撤屏障在 account 或实体不给结论时按退避（封顶 30 秒）一直重发，没有上限也没有停机钩子（后台 goroutine 随进程退出，靠重启后的向前恢复）。account 长时间不可用时，这名玩家哪个服都进不去——有意如此。
+- **saga 准入可能发一次 account 调用**：本进程没有这名玩家的驻留记录时，属主核对要问 account 当前绑定；account 慢的时候步骤消费者会被拖住，account 不可用时离线玩家的步骤只能重投。
+- **迁出表只在玩家换回来时删行**，随换走的玩家数增长，进程重启清空；“已迁走”只直接回答 30 秒，之后向 account 核对（否则 A→B→A 时两个服各说“在对方那里”）。
+- **运维用 `accountctl` 直接发起的换服**没有记意图：目标服不做到达（不起冷却、不跑到达钩子）。事务外的到达钩子至多执行一次。
+- **离开钩子在断开会话之前执行**（设计原写断开在前）：钩子执行时客户端还连着。受理之后中止也会断开会话——没有推送协议，客户端在被受理之后唯一的信号是断线后重新选角。这两处与 `Serve` 不直接收 claims（claims 只在模块的 `Admit` 一处解释）、enter 模块的应答没有“目标服”字段，是实现时的取舍，等维护者定。
+- **game-demo 换服前拦了三样、没拦三样**：在公会或队伍里、本服开着分区场景时拒绝；**没有拦**匹配队列里的票据、进行中的副本与对战、名下建筑与地形账本——换服前检查看不到它们。联盟成员的 `HomeSID`、全服邮件的服范围也还没有随换服修正。
+- **物理库不同的服之间换服会在目标服新建空档**：靠规则文件的可去列表把关，没有框架检查。费用没有实现（模块不依赖货币，规则文件里写了做法）。
+
 ### 单个角色换服（account 一侧）
 
 单个玩家换服（[方案](FEATURE-2026-11-11-player-rehome.md)，一期实施中）里 account 的部分已实现（未发版）：`RoleBinding` / `BeginRoleTransfer` / `CommitRoleTransfer` / `AbortRoleTransfer`、认证器的两个新 claim、`accountctl show-role / transfer-role`，契约与 runbook 见 [PLAYER-MIGRATION §7](../framework/PLAYER-MIGRATION.md#7-单个玩家换服account-一侧)。当前边界：

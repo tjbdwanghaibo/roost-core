@@ -1,6 +1,6 @@
 # 单个玩家换服（改绑 game sid）（2026-11-11）
 
-状态：**设计已定稿、一期实施中**（account 一侧已实现并合入，见 §3.1 末尾的“实施结果”；DataEngine 的交出实体、模块 `rehome` 与 demo 接线未完）。维护者 2026-11-11：“main 中有一个未完成‘换服’逻辑，最后帮我完成，但是是以模块方式，如果底层的话就还是放在框架内”。本文是实施依据；第 6 节的六项是按推荐项先实施、**待维护者确认**的决定。
+状态：**一期已实现**（2026-11-11）：account 的换服接口、DataEngine 的交出实体、模块 `rehome`、enter 的进入前检查、game-demo 接线都已完成，**只有离线验证**；二、三期未开始。本文第 2～5 节是设计，实现与设计的出入记在 §3.1 末尾、§3.2 与下面的“一期后半的实施结果”；第 6 节的决定按推荐项实施，**仍待维护者确认**。
 
 起因：v1.44.0 让 saga 的路由步骤按 sid 确切投递（[saga 步骤按 sid 确切路由](FEATURE-2026-11-11-saga-step-sid-route.md) §3.5、§7 第 1 条），game-demo 给“玩家正在换服”留了钩子 `playerMoving`，缺省恒返回“不在换服中”，因为仓库里没有单个玩家换服的能力。
 
@@ -131,15 +131,24 @@ DataEngine 是三块基础之一：这一处改动只加新入口，不改 `Unlo
 
 | 期 | 内容 | 状态 |
 | --- | --- | --- |
-| 一 | account 接口与 accountctl；`HandOffEntity`；模块 `rehome` 最小形态、enter 的进入前检查、`with/enter`；demo 的 `admitBound` 与 `PlayerOwners` 接上并改写用例；文档 | **前半已合入**（account 接口与 accountctl、`HandOffEntity`）；**后半未开始**（模块 `rehome`、enter 的进入前检查、demo 接线）。2026-11-11 因额度在这里停下 |
+| 一 | account 接口与 accountctl；`HandOffEntity`；模块 `rehome` 最小形态、enter 的进入前检查、`with/enter`；demo 的 `admitBound` 与 `PlayerOwners` 接上并改写用例；文档 | **已实现**，只有离线验证 |
 | 二 | demo 全量联动：队伍与匹配（换服前必须不在队里 / 自动取消排队）、副本与战斗中拒绝、场景（离开时离场景、到达回出生点）、联盟 `HomeSID` 惰性修正、全服邮件范围、名下建筑的规则；其余联动（mailbox、chat、leaderboard）；真实依赖演练（两个 game sid + account + saga，每个阶段后 kill -9） | 未开始 |
 | 三 | 在途换服的索引、列举与过期清扫；`sidmerge` 清单加“无在途换服”；物理库不同的服；合服交叉；独立 Gate（转给 game 的绑定不带 claim） | 未开始 |
 
-### 停点（2026-11-11，5 小时额度用满）
+### 一期后半的实施结果（2026-11-11）
 
-模块 `rehome` 做到一半时停下：agent 被中途停掉，半成品在 worktree `worktrees/rehome-module`（分支 `tmp/rehome-module`，从 `78768966` 切出）——已有 2 个提交（`modules/rehome/` 的清单、`files/`、`with/`，以及 enter 的进入前检查），另有 2 个文件改到一半未提交（`game/rehome/rehome_binding.go` 与它的测试）；停下时它正要做“生成 demo 检查”和模块目录用例，**验收与变异自检都没有做完，不能直接合**。接手时让原 agent 续做，或从这个 worktree 的现状接着做。之后还剩 demo 接线（§5）。
+模块 `rehome`（30 条场景）、联动 rehome + enter（5 条）、enter 的进入前检查（enter 6 → 11 条）与 game-demo 接线已完成。现行说明：[modules/README](../../modules/README.md)、[PLAYER-MIGRATION §7](../framework/PLAYER-MIGRATION.md)、KNOWN-LIMITS“单个玩家换服”。与 §2～§5 设计的出入：
 
-维护者 2026-11-11 对后续验证节奏的要求：完整测试（门禁脚本、codegen 的 TestDemo、重新生成 demo 的全量测试）不必每次修改都跑，**最后统一跑一次**；每一步只跑与改动直接相关的检查。
+- **离开钩子在断开会话之前**（§2 写的是断开在前）：`Residency.Depart` 一个方法做完“断开会话 → 交出实体”，离开钩子排在它之前。
+- **受理之后中止也断开会话**；受理与断开之间留 500 毫秒让“已受理”的应答先到。
+- **迁出表的“已迁走”只直接回答 30 秒**，之后向 account 核对；“换回来”的认定是承载服是本服且绑定代数 ≥ 发起时 +2。
+- **意图对账用 `AbortRoleTransfer(id)` 拿确定结论**，不是只读。
+- 多一个错误码 `rehome_cooldown`；费用没有实现；缺省冷却 7 天。
+- enter 多了进入骨架 `gameenter.Enter`（检查 → 加载 → 钩子）：game-demo 覆盖了 enter 的端点文件，放在端点包里的测试到 demo 里会失败，骨架放进不被覆盖的 `game/enter` 才测得到“被拒绝的进入什么都没碰”。
+- game-demo：`PlayerOwners.Serve` 的签名没有改、不直接解析 claims（claims 只在模块的 `Admit` 一处解释，登录在 `Serve` 之前跑它，`Serve` 在锁内复核迁出表）；`AdmitBound` 按当前绑定回答；demo 自己的换服前检查拦公会、队伍、分区场景三样。
+- **没有用主线新加的服务级接线点**：rehome 目前没有必须在服务启动时做的事（迁出表用到时才建、驱动器每次用到时才取依赖、向前恢复由登录触发）。account 有了“在途换服”的索引（三期）之后值得用它在启动时续做、停机时收尾。
+
+维护者 2026-11-11 对验证节奏的要求：完整测试不必每次修改都跑，最后统一跑一次。
 
 ### 接手后半的提示
 

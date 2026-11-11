@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+- **新增**（modules + game-demo）：**业务模块 rehome——单个玩家换服（改绑 game sid）；enter 的进入前检查；game-demo 接上换服**（维护者 2026-11-11：“以模块方式，底层的放在框架内”；底层是下面两条：account 的换服接口与 DataEngine 的交出实体）。
+  - 模块 `rehome`（30 条场景）：申请协议 `RehomeApply` 与服务端入口 `Move`；驱动器按“记意图 → account 发起 → 离开钩子、断开会话、交出实体 → account 提交 → 目标服首次进入时到达”走，每一步失败的去向与崩溃后的向前恢复见[换服方案](docs/maintenance/FEATURE-2026-11-11-player-rehome.md)；`Directory`（缺省是 account）与 `Residency`（缺省是断开会话 + `HandOffEntity` + 进程内迁出表，工程可以换成自己的）两个接口；换服前检查、离开时、到达后三个登记点；给 saga 准入用的 `rehome.Binding`；规则（可去的服、冷却 7 天）在业务文件里。只有一个服的工程装上能用：换到不存在的服由 account 拒绝。
+  - enter（场景数 6 → 11）：进入前检查 `OnEntering` / `RunEntering`（在加载 Player 之前执行，返回带码错误就否决这次进入）与进入骨架 `Enter`。联动 rehome + enter（5 条）：正在换服答 `rehome_moving`、绑定在别的服答 `rehome_elsewhere` 并给出目标服、源服重启后把停在半路的换服接着做完、首次进入目标服时到达、意图对账。
+  - game-demo：生成时安装 rehome；`PlayerOwners` 实现驻留与迁出表；赠礼与公会 saga 的属主核对改为按**当前绑定**回答（换服中退回不带地址、绑定别处退回并给出新 sid），v1.44.0 留下的钩子 `playerMoving` / `notMoving` 与 TODO 删除；登录先过进入前检查；GM 命令 `gm.player.rehome`；demo 自己的换服前检查拦住在公会、在队伍、本服开着分区场景三种情况。
+  - 验证：模块验收（只装 rehome、与全部模块一起装、两种安装顺序）与变异自检（96 条杀 95 条，存活的一条是 enter 的端点绕过骨架，没有用例）；生成工程里 `TestAStepForAMovingSenderIsBouncedBackToTheSender` 改用真实的 `account.Service` 与两张驻留表；合并主线（服务级接线点与 skillbook、模块自带实体与 room、turn 的持久定时器）之后统一跑了一次完整测试，全部通过：重新生成 game-demo，build / vet / id check / generate --check，`go test ./...` 49 个包、无 FAIL，`roost module verify` 十三项全对；`scripts/test-modules-generated.sh`（十五个模块、五组联动，脚本运行期间未改动）；`go test ./codegen/internal/roost -run 'TestDemo|TestModule'`；全仓 `go test ./...` 164 个包。**只有离线验证**：真实的交出实体、两个 game 进程加 account 的演练、每个阶段后 kill -9 没有做；demo 接线没有做变异自检。边界见 [KNOWN-LIMITS“单个玩家换服”](docs/maintenance/KNOWN-LIMITS.md#单个玩家换服模块-rehome-与-game-demo-接线)。
+
 - **新增（业务模块 A3）**：模块可用 `timer_types` 申请实体内持久定时器类型；复用已有组件或在安装事务内补齐，类型与归属有清单校验，回调登记与生成失败一起回滚。新增 `turn`（依赖 room）：固定名单的顺序回合、成功命令序号与最后一次重放、持久超时、不追帧、PB 接入；25 个离线场景。无默认胜负规则、自动广播或真实存储/网络容量结论。使用方式见 [turn](modules/turn/README.md)。
 
 - **新增**（modules / codegen）：模块清单 `entities` 支持自带 Entity、DAO、lifecycle 与实体号分配；安装事务包含服务 owner / handler / shutdown 接线，失败整体回退，重复安装保留业务修改。新增 `room` 基础模块：1～64 席、房主交接、进出、CAS 重连、服务端开房与断线入口，22 条离线场景。房间操作同时检查可信连接 nonce 与持久代际，Gate 代理 Session 补齐只读 `ConnectionID()`；旧连接迟到的 Join/View/Leave 或断线不能影响新连接。自动断线订阅、房间广播、匹配移交与回合超时不在本批。详见 [room](modules/room/README.md) 与[交接](docs/maintenance/HANDOFF-2026-11-11-module-backlog.md)。 验证：全仓 164 测试包通过；13 模块 + 4 联动 228 PASS / 0 SKIP；重新生成 game-demo 670 PASS / 14 预期 SKIP；Room/Gate 定向 race、三项变异自检、build/vet、ID 与生成物漂移检查通过。

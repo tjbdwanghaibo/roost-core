@@ -142,7 +142,7 @@ DAO 标记的 `db=` 是逻辑库名，物理库名由 `dataengine.databases`（�
 
 把一个角色从它绑定的服改绑到另一个服（方案 [FEATURE-2026-11-11-player-rehome](../maintenance/FEATURE-2026-11-11-player-rehome.md)，其中第 6 节的决定按推荐项先实施、待维护者确认）。本节是 **account 一侧**的现行契约：绑定、换服状态、四个接口、运维工具（[service/account/transfer.go](../../service/account/transfer.go)、`transfer_test.go`）。
 
-游戏侧还没有接上：源服停写与断开会话、DataEngine 的“交出实体”、目标服的到达处理、业务模块 `rehome`、game-demo 的 `PlayerOwners` 与 saga 准入都在实施中。account **不知道也不检查**源服是否已经停写——`CommitRoleTransfer` 的调用方必须自己保证这一点，否则两个进程会同时写一个玩家（兜底只有投影的版本比较，冲突时进程 fail-stop）。
+游戏侧由业务模块 [rehome](../../modules/README.md) 接上（2026-11-11）：源服记意图 → account 发起 → 离开钩子、断开会话、DataEngine“交出实体”（之后拒写）→ account 提交 → 目标服首次进入时到达；每一步失败的去向与崩溃恢复见[换服方案](../maintenance/FEATURE-2026-11-11-player-rehome.md)。game-demo 已装上它：`PlayerOwners` 实现驻留与迁出表，saga 步骤按当前绑定准入，登录先过进入前检查，GM 命令 `gm.player.rehome`。**只有离线验证**（替身提交器、替身的交出实体）：真实的交出实体、两个 game 进程加 account 的演练、每个阶段后 kill -9 都没有做。
 
 ### 7.1 模型
 
@@ -218,7 +218,7 @@ go run ./cmd/accountctl transfer-role abort  -player 1000001 -id <ID> -note "源
 
 ### 7.5 边界
 
-- 只有 account 一侧；游戏侧流程实施中（见本节开头）。
+- 游戏侧流程已由模块 rehome 实现，只有离线验证（见本节开头）。
 - 一期不涉及**已并入另一服的服**：角色的绑定服已并入别服、或目标服已并入别服，发起都被拒绝；提交时目标服已并入别服也被拒绝。承载着别的服（别人并入它）的服是普通的源与目标。`MergeServer` 不检查有没有在途的换服指向被合并的服（没有在途换服的索引）。
 - 没有在途换服的列举与过期清扫；期限只记录。
 - 换服 ID 由调用方保证不复用：account 只挡得住“最近一次了结的那个 ID”。
