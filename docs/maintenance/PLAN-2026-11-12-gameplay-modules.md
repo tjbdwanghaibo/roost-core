@@ -36,19 +36,32 @@
 | --- | --- | --- | --- |
 | **login** | 用 account 服务的会话令牌做登录鉴权，替换生成的“一律拒绝”的鉴权桩（`replaces`）；渠道验签仍留给项目 | 最关键的缺口：现在装了 enter 真实客户端仍连不上 | 原会话 |
 | **servertime** | 进入游戏时下发服务器时间、当前业务日、下次重置时刻 | checkin、task、stamina、shop 都按业务日清零，客户端各自推算容易错 | 原会话 |
-| **naming** | 名字全服唯一（profile + directory 服务的联动） | profile 现在改名不查重 | 原会话 |
-| **cdkey** | 兑换码：一码一次或一人一次，发奖走 mailbox | 运营常用 | 原会话 |
-| **notice** | 公告、跑马灯（chat 的系统频道） | 运营常用 | 原会话 |
-| **gacha** | 抽卡：概率表（配置表）、保底、十连 | 卡牌类必备，夹具里有做法 | 原会话 |
-| **friends** | 好友、黑名单、申请 | 社交类必备 | 原会话 |
-| **idle** | 离线收益：按时长惰性结算 | 放置类必备，夹具里有做法 | 原会话 |
+| **naming** | 名字全服唯一（profile + directory 服务的联动） | profile 现在改名不查重 | **交出**（见 §4） |
+| **cdkey** | 兑换码：一码一次或一人一次，发奖走 mailbox | 运营常用 | **交出**（见 §4） |
+| **notice** | 公告、跑马灯（chat 的系统频道） | 运营常用 | **交出**（见 §4） |
+| **gacha** | 抽卡：概率表（配置表）、保底、十连 | 卡牌类必备，夹具里有做法 | **交出**（见 §4） |
+| **friends** | 好友、黑名单、申请 | 社交类必备 | **交出**（见 §4） |
+| **idle** | 离线收益：按时长惰性结算 | 放置类必备，夹具里有做法 | **交出**（见 §4） |
 | 各模块的机器人步骤 | 每个模块带自己的压测 / 验收步骤 | 现在所有模块验收都是离线的 | 待定 |
 
 ## 4. 分工与先后
 
 **场景会话（另一个 agent）**：`actor`（先于或同时于 scene 定下来）→ `scene` → `monster` → `attribute` / `equipment` → `combat` → `dungeon`（用上 level）→ `terrain`；安装器对 heartbeat 的代办。交接清单里的其余项照旧。
 
-**原会话**：`login` + `servertime`（先做，直接决定半成品能不能真的连上、客户端显示对不对）→ `naming`、`cdkey`、`notice` → `gacha`、`friends`、`idle`。另外收尾换服审查的 RV-20261111-BM-04 / 05（在 worktree `worktrees/fix-rehome-bm45`，分支 `tmp/fix-rehome-bm45`，本文也暂时提交在这个分支上，随修复一起合回主线）。
+**原会话**：`login` + `servertime`（直接决定半成品能不能真的连上、客户端显示对不对；都要动 enter 的接线）；收尾换服审查的 RV-20261111-BM-04 / 05（worktree `worktrees/fix-rehome-bm45`，分支 `tmp/fix-rehome-bm45`，本文也暂时提交在这个分支上，随修复一起合回主线）；最后重写给 agent 用的 skill。
+
+**交出的六个模块**（维护者 2026-11-12：“交出去”）：`naming`、`cdkey`、`notice`、`gacha`、`friends`、`idle`。可以由场景会话排在场景线之后做，也可以另开一个 agent 专做——它们只挂 Player、互相独立、不碰场景与 enter：
+
+| 模块 | 依赖 | 要点 |
+| --- | --- | --- |
+| naming | profile；业务服务 `uses: [directory]` | 做成 profile + directory 的联动或独立模块：改名先向 directory 两阶段占名，占不到答带码错误；改名与占名的失败回退要有场景 |
+| cdkey | mailbox（发奖走邮件） | 一码一次、一人一次两种；兑换事实记在玩家档里且有界；码表做成配置表；重复兑换零写入 |
+| notice | chat（系统频道 `AnnounceWorld`） | 公告、跑马灯：服务端入口加 GM；要不要定时播放先定（要的话用服务级接线点） |
+| gacha | wallet、bag | 概率表与保底做成配置表；一次事务里扣钱、改保底计数、发卡；十连；请求键防重发（照 shop）；参考 `scripts/testdata/card-rpg/` |
+| friends | — | 好友、黑名单、申请；双方各是一个 Player，用多实体 Nest 事务或申请邮件，先定一致性模型；列表有上限 |
+| idle | wallet | 离线收益按时长惰性结算（照 stamina 的写法：不要定时器）；收益上限；时钟回拨；参考 `scripts/testdata/idle-sim/` |
+
+每个模块照[待办交接](HANDOFF-2026-11-11-module-backlog.md) §3 的规矩：场景测试不用子测试、数字写死、变异自检、`verify.pass`；全新 `-template game` 工程零配置安装必须能用；公共文件（门禁脚本、modules/README、CAPABILITIES、CHANGELOG）只加自己的行。
 
 **两边都要注意**
 
