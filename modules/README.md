@@ -23,6 +23,7 @@
 | [skillbook](skillbook/module.yaml) | 技能目录：服务启动时编译 `game/skills/*.json`，失败拒绝起服；`SkillCatalog` 查询同一份目录，返回排序后的技能 ID 与 warning 数；默认带一个可编译技能，工程修改 JSON 与 `CompileEnvironment` | 无 | 无（服务级只读目录） | 8 |
 | [room](room/README.md) | 自带 Room Entity、DAO 与 lifecycle：1～64 席、加入/退出、房主交接、重连代际、关闭；服务端开房，客户端只能操作自己的当前连接 | 无（安装时代办玩家 TCP 接入；鉴权与启用配置仍归工程） | `RoomDao`（只落库；成员读 PB 快照） | 22 |
 | [turn](turn/README.md) | 固定名单的顺序回合：命令序号与重放、持久超时、离线不追帧；PB 查询；无默认伤害/胜负规则 | room | `RoomDao.Turn` 与实体定时器节点（只落库） | 25 |
+| [servertime](servertime/module.yaml) | 服务器时间：客户端拿到服务器的业务时间、当前业务日、前后两个业务日、本业务日起点与下一次每日重置的时刻（拉取 `ServertimeSync`，原样带回 `ClientTick`；推送 `ServertimeNow`）；给别的功能调的纯函数 `servertime.At(nowUnixMilli)` / `Now()`，与 `clock.BusinessDay` 同一份日历；`PushNow` 按能力名取玩家 TCP 传输；对外展示的时区名写在 `game/servertime/servertime_zone.go` | 无（玩家 TCP 接入安装时代办） | 无 | 12 |
 | [rehome](rehome/module.yaml) | 单个玩家换服（改绑 game sid）：申请协议 `RehomeApply` 与服务端入口 `Move`；account 的发起 / 提交 / 中止，结论按它带回的当前绑定判定；源服从“离开中”的标记起在写闸门拒绝这名玩家新的请求，受理之后断开会话、等在途的请求执行完、复核检查、跑离开钩子，再交出实体（之后拒写），目标服首次进入时到达；可去的服与冷却写在 `game/rehome/rehome_rules.go`；三个登记点（换服前检查、离开时、到达后）；给 saga 准入用的 `rehome.Binding`（这名玩家现在绑定在哪个服、是否正在换服）。game-demo 用的就是它 | 无（要求业务服务 `uses: [account]`） | `PlayerDao.Rehome`（只落库） | 40 |
 
 两个模块都装着时还会多出**联动文件**（不论先装哪个，在第二个装上的那一次写）：
@@ -33,6 +34,7 @@
 | mailbox + enter | 玩家进入游戏时把属于他的全服邮件合并进邮箱（`game/controllers/mailbox/mailbox_enter.go`）；画像缺省取首次进入的时间，会话带着 account 的角色创建时间与区服时改用它们（读 `gameenter.Entered.Claims`） | 5 |
 | mailbox + bag | 道具附件：登记 `item` 这个附件种类，领取时道具进背包，与领取账本同一笔事务；背包拒绝时邮件保持未领（`game/mailbox/mailbox_item.go`、`game/entities/player/mailbox_item.go`） | 9 |
 | task + checkin | 签到成功时把每日任务“签到一次”推进一次，与签到同一笔事务（`game/entities/player/task_checkin.go`） | 3 |
+| servertime + enter | 玩家每次进入游戏时把服务器此刻的业务时间推给他（`game/controllers/servertime/servertime_enter.go`）；推送不成只记日志，不让登录失败 | 3 |
 | rehome + enter | 进入前检查（正在换服答 `rehome_moving`，绑定在别的服答 `rehome_elsewhere` 并给出目标服；源服重启后在这里把停在半路的换服接着做完）；进入之后做到达与意图对账（`game/controllers/rehome/rehome_enter.go`） | 5 |
 
 以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter`、`chat`、`leaderboard`、`bag`、`profile`、`mailbox` 与 `skillbook`（连带 `wallet`）。

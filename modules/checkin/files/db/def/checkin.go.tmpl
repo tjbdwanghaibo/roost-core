@@ -2,6 +2,10 @@ package dbdef
 
 // CheckinState 是每日签到的进度。“哪一天”按业务日算（业务时区与每日重置时刻是部署配置，
 // time.business_timezone / time.business_day_start），存成 YYYYMMDD 的十进制数。
+//
+// 进度只在签到那一次写入时更新：跨天之后、当天签到之前，客户端手里仍是上一次的记录。显示之前要比对当前业务日
+// （装 servertime 模块，用它下发的 Day / PrevDay，不要按设备时区推算）：LastDay 等于 Day 是今天已签；
+// 等于 PrevDay 是今天还没签、连续天数还作数；更早则连续已断，按 0 显示，下一次签到从 1 重新计。
 type CheckinState struct {
 	// LastDay 是最近一次签到的业务日（如 20261110）；0 表示从未签到。
 	LastDay int64 `store:"1"`

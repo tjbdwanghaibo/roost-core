@@ -50,7 +50,7 @@ PY
 project="$(new_project atelier example.com/studio/atelier)"
 cd "$project"
 "$roost" module list > "$review_root/list.log"
-for name in wallet checkin chat enter profile bag leaderboard mailbox task stamina shop skillbook room turn rehome; do
+for name in wallet checkin chat enter profile bag leaderboard mailbox task stamina shop skillbook room turn rehome servertime; do
   grep -q "^  $name " "$review_root/list.log" || { cat "$review_root/list.log"; echo "roost module list does not show $name" >&2; exit 1; }
 done
 "$roost" module plan checkin --json > "$review_root/plan.json"
@@ -65,7 +65,7 @@ assert len(ids) == len(set(ids)), ids
 PY
 "$roost" module add checkin > "$review_root/add.log"
 grep -q 'example.com/studio/atelier/protocol/pb' game/handler/checkin_claim.go
-! grep -rn '{{' db/def game internal/errors protocol/def >/dev/null
+if grep -rnE '\{\{(ID:|MODULE|PROJECT|GAME_SERVICE|TIMER_COMPONENT)' db/def game internal/errors protocol/def; then echo "an installed file still carries a placeholder" >&2; exit 1; fi
 commit_all modules
 # 2. 重复安装：没有任何变化。
 "$roost" module add checkin wallet > "$review_root/add-again.log"
@@ -147,13 +147,16 @@ grep -q 'glue mailbox with bag: written' "$review_root/add-all.log"
 # rehome（单个玩家换服）：enter 已在，进入前检查 / 到达 / 意图对账的联动随它写进工程。
 "$roost" module add rehome > "$review_root/add-rehome.log"
 grep -q 'glue rehome with enter: written' "$review_root/add-rehome.log"
+# servertime（服务器时间）：不挂实体；enter 已在，进入时推送的联动随它写进工程。
+"$roost" module add servertime > "$review_root/add-servertime.log"
+grep -q 'glue servertime with enter: written' "$review_root/add-servertime.log"
 grep -q 'glue task with checkin: written' "$review_root/add-task.log"
 grep -q 'module bag: already installed' "$review_root/add-task.log"
-! grep -rn '{{' db/def game/entities game/handler game/controllers internal/errors protocol/def >/dev/null
+if grep -rnE '\{\{(ID:|MODULE|PROJECT|GAME_SERVICE|TIMER_COMPONENT)' db/def game internal/errors protocol/def; then echo "an installed file still carries a placeholder" >&2; exit 1; fi
 commit_all all
-"$roost" module add enter bag mailbox task shop skillbook room turn rehome > "$review_root/add-all-again.log"
+"$roost" module add enter bag mailbox task shop skillbook room turn rehome servertime > "$review_root/add-all-again.log"
 [[ -z "$(git status --porcelain)" ]] || { git status --short; echo "a repeated install changed the project" >&2; exit 1; }
-expect_verify wallet=14 checkin=8 chat=8 enter=14 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17 skillbook=8 room=22 turn=25 rehome=40 rehome+enter=5
+expect_verify wallet=14 checkin=8 chat=8 enter=14 chat+enter=2 profile=19 bag=17 leaderboard=20 mailbox=32 mailbox+enter=5 mailbox+bag=9 task=18 task+checkin=3 stamina=25 shop=17 skillbook=8 room=22 turn=25 rehome=40 rehome+enter=5 servertime=12 servertime+enter=3
 go test -mod=mod ./... > "$review_root/test-all-harbor.log" 2>&1 || { tail -30 "$review_root/test-all-harbor.log"; exit 1; }
 
 succeeded=1

@@ -8,8 +8,9 @@ package protocoldef
 // 客户端显示与判断“能不能领”之前必须比对 Day：服务端只在新的一天第一次推进任务时才清零，
 // 跨天之后、第一次推进之前，客户端手里仍是上一个业务日的记录。Day 不等于当前业务日时，
 // 按“今天全部任务进度为 0、都没领”显示；此时对昨天做完没领的任务发这条请求会被拒绝（task_incomplete）。
-// 当前业务日由客户端按服务器时间与部署的业务时区、每日重置时刻（time.business_timezone /
-// time.business_day_start）推算。
+// 当前业务日不要由客户端按时区推算：装 servertime 模块，用 ServertimeNow / ServertimeSync 给的 Day
+// （客户端时钟走到 NextResetUnixMilli 之后是 NextDay）。没装它的工程才需要按服务器时间与部署的业务时区、
+// 每日重置时刻（time.business_timezone / time.business_day_start）自己推算。
 type TaskClaimRequest struct {
 	// TaskID 是任务表里的任务号。
 	TaskID int64 `pb:"1"`

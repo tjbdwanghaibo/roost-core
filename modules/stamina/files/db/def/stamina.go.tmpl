@@ -3,8 +3,9 @@ package dbdef
 // StaminaState 是玩家本人可见的体力状态。
 //
 // 体力随服务器业务时间恢复，但服务端不用定时器逐点加：这里存的是“上次结算”的结果，只在有写入
-// （消耗、发放、补满）时更新。所以客户端不能直接显示 Value，要拿自己对过服务器时间的当前时刻 now
-// （Unix 毫秒）按下面的公式推算——服务端每次读写用的是同一个公式（staminaSettle）：
+// （消耗、发放、补满）时更新。所以客户端不能直接显示 Value，要拿当前的业务时间 now
+// （Unix 毫秒；装了 servertime 模块时是它下发的 NowUnixMilli 加上收到之后单调时钟走过的毫秒数，不是设备时间——
+// 业务时间可能带 time.logic_offset）按下面的公式推算——服务端每次读写用的是同一个公式（staminaSettle）：
 //
 //	Value >= 上限                    当前体力 = Value（已满或被发放到上限以上，不恢复）
 //	否则，恢复周期 <= 0 或 now <= SettledAt   当前体力 = Value
@@ -25,6 +26,6 @@ type StaminaState struct {
 	// RefillDay 是最近一次花金币补满所在的业务日（YYYYMMDD 的十进制数，如 20261110）；0 表示从没买过。
 	RefillDay int64 `store:"3"`
 	// RefillCount 是 RefillDay 那个业务日里已经买过的次数。它按业务日惰性清零：跨日之后没有新的购买时
-	// 存的仍是旧的一天的次数，客户端要比对 RefillDay 与今天的业务日，RefillDay 更早就按 0 次显示。
+	// 存的仍是旧的一天的次数，客户端要比对 RefillDay 与当前业务日（servertime 模块下发的 Day），RefillDay 更早就按 0 次显示。
 	RefillCount int32 `store:"4"`
 }

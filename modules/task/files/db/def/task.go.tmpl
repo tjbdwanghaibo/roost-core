@@ -6,6 +6,7 @@ package dbdef
 // 清零是惰性的：服务端只在新的一天第一次推进任务时才清空 Progress 与 Claimed 并改写 Day，没有定时器。
 // 所以跨天之后、第一次推进之前，这里（和客户端收到的）仍是上一个业务日的记录：
 // Day 不是当前业务日时，整份记录都按“今天还没有任何进度、什么都没领”看待。
+// 当前业务日取 servertime 模块下发的 Day（没装它的工程由客户端自己按业务时区推算）。
 type TaskState struct {
 	// Day 是 Progress 与 Claimed 所属的业务日（如 20261110）；0 表示从未推进过任务。
 	Day int64 `store:"1"`

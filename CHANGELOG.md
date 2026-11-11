@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- **新增**（modules/servertime）：服务器时间模块。协议 `ServertimeSync`（拉取，原样带回 `ClientTick`）与推送 `ServertimeNow`：业务时间、当前业务日、前后两个业务日、本业务日起点、下一次每日重置的时刻、业务时区的偏移与名字；纯函数 `servertime.At(nowUnixMilli)` / `Now()` 与 `clock.BusinessDay` 同一份日历。联动 servertime + enter：每次进入游戏推一次，推送不成只记日志。不挂实体、无状态；偏移与日历只在启动时读，不做“时间被拨动”的广播。场景 12 + 3 条，26 条变异全部被杀。checkin / task / stamina / shop 给客户端的注释改为指向它下发的业务日。只有离线场景，未验证真实 TCP 与独立 Gate。
+- **修复**（scripts/test-modules-generated.sh）：两处“安装后的文件不带占位符”的检查写成 `! grep …`，在 `set -e` 下取反的命令不触发退出，这条检查从未生效；改成明确的 `if grep …; then exit 1; fi`，并只认安装器的占位符（Go 的复合字面量里也有 `{{`）。
+
 - **修复**（modules/rehome）：**旧 Commit 的 stale 被误判为未提交，解除了已迁出玩家的源服保护**（`fix/core-game-server-review` 的续审 RV-20261111-BM-04，P1，[报告](https://github.com/tjbdwanghaibo/roost-core/blob/fix/core-game-server-review/docs/maintenance/BUSINESS-MODULES-FOLLOWUP-20261111.md)）。
   - 缺陷：换服 A 提交成功而应答丢失 → 角色在目标服又发起并中止了 B（account 的 `LastTransfer` 只剩 B）→ 源服重发 Commit A 得到 `ErrTransferStale` 与当前绑定（已在目标服、绑定代数已加 1）→ 驱动器当成“没提交”，`Settle(Aborted)` 撤掉交出屏障、删掉迁出记录、清掉意图，源服又能写这名玩家，带换服前 claims 的进入请求也被放行。中止一侧同理：重发的 Abort 对一个已被覆盖的 ID 会“成功”。
   - 根因：`conclude` 丢弃 Commit / Abort 带回的 `RoleBinding`，只按错误码推断这个换服 ID 的终态；而 account 按 ID 只认在途的与最近了结的那一次（[PLAYER-MIGRATION §7.5](docs/framework/PLAYER-MIGRATION.md#75-边界)）。
