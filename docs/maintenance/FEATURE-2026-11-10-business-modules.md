@@ -610,7 +610,7 @@ bash scripts/test-modules-generated.sh                      # modules: ok（wall
 | 1 | checkin | 每日签到，奖励经 wallet | wallet | 已有（8 条，含签到钩子 `OnCheckinClaimed`） |
 | 1 | chat | 世界与私聊的发送、翻历史 | 托管 chat 服务；`replaces`（已做） | 已有（8 条）；game-demo 在用 |
 | 2 | enter | 进入游戏端点（建档）与首次初始化：做过没有记在档里，每次进入都问；新玩家的初始发放写在业务文件 `enter_first.go` 里（没有做模块间的自动登记）。安装时打开玩家 TCP 接入与自身视图 | 清单的 `access`（已做） | 已有（6 条，含进入钩子的登记点）；game-demo 用它的协议、域、首次初始化与进入钩子 |
-| 2 | profile | 名字、等级、经验与升级 | — | 已有（16 条） |
+| 2 | profile | 名字、等级、经验与升级；只检查不执行的入口；给服务端读的名片；状态分“别人可见”与“只给本人”两个字段 | — | 已有（19 条）；game-demo 的档案在用 |
 | 2 | bag | 道具背包：增减、上限、按道具号堆叠；自带道具表（道具是否存在、每种的单种上限） | — | 已有（17 条）；game-demo 的背包在用 |
 | 2 | stamina | 体力：随时间恢复、消耗、用货币补满（每日次数） | wallet | 已有（25 条） |
 | 2 | quest | 每日任务：进度、领奖、按业务日清零 | wallet | 已有（18 条）；签到推进经 quest+checkin 联动 |

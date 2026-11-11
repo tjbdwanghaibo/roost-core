@@ -14,10 +14,18 @@
   - 边界见 [KNOWN-LIMITS“业务模块”](docs/maintenance/KNOWN-LIMITS.md#业务模块roost-module)：模块还少（13 类玩法与 game-demo 的大部分业务尚未拆成模块），没有配方、运行期接线点、定时器类型分配与 Robot 步骤，验收只到 Nest 场景（替身提交器）。
   - **升级要求**：无。已有工程的 `roost.yaml` 不变；`modules` 段只在安装模块后出现。发版门禁多一条 `scripts/test-modules-generated.sh`。
 
+- **变更 / 协议变化**（game-demo + modules）：**game-demo 的档案（名字、等级、经验）改用 profile 模块**。
+  - 模块（场景数 16 → 19）：状态拆成两个同步的顶层字段——`PlayerDao.Profile`（名字、等级，别的玩家也可以看）与 `PlayerDao.ProfilePrivate`（经验，只给本人），工程的同步视图按顶层字段挑，所以“别人看不到经验”不用改框架；新增只检查不执行的 `CheckAddExp`、给服务端按玩家号读的名片 handler `ProfileCard`；经验被拒时带上数额与当时的经验、等级。模块自身的存储键随之变化（经验挪到 `profile_private`）。
+  - demo：生成时安装 profile，只覆盖升级钩子 `profile_levelup.go`（属性随等级成长、发 `player.level_up`，与经验等级同一笔事务）；demo 自己的档案组件、`PlayerDao` 的 `Name / Level / Exp / Gold`、读等级的 handler `PlayerLevel`、错误码 `name_empty` 删除；公会归属与副本领奖账本挪到 demo 自己的两个文件（仍是 `ProfileComponent` 上的方法）。排位计分改读模块的 `ProfileCard`。
+  - 协议与数据：新增对客户端开放的 `ProfileRename`；Player 这一半的经验拒绝码由 `exp_amount` 变为模块的 `profile_exp_invalid` / `profile_exp_overflow`（World 累计超限仍是 `exp_amount`）；存储键 `name / level / exp / gold` 改为 `profile` 与 `profile_private` 两个子文档；客户端按子结构读，名字与等级一起走（改名的增量带等级、升级的增量带名字），只涨经验没升级时别的玩家没有增量。字段级的可见性没变。
+  - 与背包换用合在一起后：全部模块在同一步里安装（`enter, chat, leaderboard, bag, profile`），组件号与部分错误码号随之重排。
+  - **升级要求**：已生成的工程不迁移（未上线）；重新生成，客户端重新生成同步代码。
+  - 验证：见本轮收口。升级事件链（三条进经验的路都恰好带一条 `player.level_up`）与“模块的写入按生产接线照常复制、旁人拿不到经验”各有生成工程用例。
+
 - **变更 / 协议变化**（game-demo + modules）：**game-demo 的背包改用 bag 模块；bag 模块自带道具表**（同下一条的方向：demo 比模块多的能力搬进模块，简单用法保持开箱可用）。
   - 模块（场景数 12 → 17）：自带配置表 `configs/schema/item.go`、`configs/table/item.csv`（三行样例）——道具必须在表里、每种道具各自的单种上限（0 表示不单独限制，再钳到硬上限 999999）；规则入口由 `bagItemValid(itemID) bool` 改为 `bagItemRule(itemID) (maxStack, ok)`，缺省读道具表；拒绝带日志上下文。新增场景：上限来自表、上限调小不扣已有、道具下架后能数能丢不能放、没装载配置时一律拒绝、工程自己的表可用。模块带配置表不需要安装器新能力（`roost generate` 从 schema 与 CSV 产出登记与访问器），`needs.features` 加 `config`。
   - shop 与 mailbox + bag 联动的测试夹具改为先装道具表（背包缺省读表之后，不装表一律 `bag_item_invalid`）。
-  - demo：生成时安装 bag，只覆盖两个数据文件（道具表多 `attack` / `hp` 两列与 demo 的四行）；demo 自己的背包组件、`PlayerDao.Items`、四个错误码删除；领取邮件附件与充值订单的两本账本挪到 demo 自己的 `claim_ledgers.go`（仍是 `BagComponent` 上的方法）；建在背包组件上的 handler 步骤排到模块之后。
+  - demo：生成时安装 bag，只覆盖两个数据文件（道具表多 `attack` / `hp` 两列与 demo 的四行）；demo 自己的背包组件、`PlayerDao.Items`、四个错误码删除；领取邮件附件与充值订单的两本账本挪到 demo 自己的 `claim_ledgers.go`（仍是 `BagComponent` 上的方法）；建在背包组件上的 handler 不再有 `roost add handler` 骨架步骤（组件由模块稍后装进来），文件直接写出；全部模块在同一步里安装。
   - 协议与数据：`AddItem`（10000）字段不变；新增 `BagDiscard` 与服务端 handler `BagGrant`。错误码换成模块的（`bag_count_invalid` / `bag_item_invalid` / `bag_kinds_full` / `bag_short` / `bag_stack_full`，号在安装时分配，旧号有的换了含义）。DAO：`PlayerDao.Items map[int64]int32`（键 `items`）改为 `PlayerDao.Bag`（键 `bag`），在 DAO 末尾；客户端同步的字段号随之变化，客户端生成物要重新生成。规则差异：扣到 0 删键（原来留 0）、种类上限 200、每次变化同步整份背包（原来按键增量）。
   - **升级要求**：已生成的工程不迁移（未上线）；重新生成。
   - 验证：见本轮收口。背包变化经提交观察者同步给本人、旁人看不到，有生成工程用例（`bag_sync_test.go`，去掉观察者变红）。

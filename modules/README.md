@@ -12,7 +12,7 @@
 | [checkin](checkin/module.yaml) | 每日签到：按业务日（`clock.BusinessDay`）切分，连续天数加成，奖励经货币模块在同一笔事务里发放；签到成功后执行别的功能登记的钩子（`OnCheckinClaimed`，同一笔事务） | wallet | `PlayerDao.Checkin`（同步） | 8 |
 | [chat](chat/module.yaml) | 聊天：世界频道与一对一私聊的发送（`ChatSend`）、向在线玩家的推送（`ChatMessage`）、按序号翻历史（`ChatHistory`）、给服务端用的系统公告（`AnnounceWorld`）；经托管的 chat 服务存储，替换它默认拒绝一切的 collaborators。game-demo 用的就是它 | 无（要求业务服务 `uses: [chat]` 与玩家 TCP 接入，后者安装时代办） | 无 | 8 |
 | [enter](enter/module.yaml) | 进入游戏：`EnterGame` 端点加载或创建 Player，每次进入都跑一遍“首次初始化”（做过没有记在档里），新玩家的初始发放写在 `game/entities/player/enter_first.go`；之后执行别的功能登记的进入钩子（`game/enter` 的 `OnEntered`）；安装时打开玩家 TCP 接入与自身视图 | 无 | `PlayerDao.Enter`（只落库） | 6 |
-| [profile](profile/module.yaml) | 玩家档案：名字、等级、经验；改名协议 `ProfileRename`（非空、合法 UTF-8、至多 16 个字符，不查重）；服务端发经验的 handler `ProfileAddExp`（每级 100 经验，可连升多级）；升级钩子写在 `game/entities/player/profile_levelup.go` | 无 | `PlayerDao.Profile`（同步） | 16 |
+| [profile](profile/module.yaml) | 玩家档案：名字、等级、经验；改名协议 `ProfileRename`（非空、合法 UTF-8、至多 16 个字符，不查重）；服务端发经验的 handler `ProfileAddExp`（每级 100 经验，可连升多级）与只检查不执行的 `CheckAddExp`；给服务端按玩家号读的名片 handler `ProfileCard`（名字、等级）；升级钩子写在 `game/entities/player/profile_levelup.go`。game-demo 用的就是它 | 无 | `PlayerDao.Profile`（同步，名字与等级，别的玩家也可以看）、`PlayerDao.ProfilePrivate`（同步，经验，只给本人） | 19 |
 | [bag](bag/module.yaml) | 玩家背包：道具号到数量的堆叠背包（至多 200 种、单种硬上限 999999）；自带道具表 `configs/schema/item.go` 与 `configs/table/item.csv`（哪些道具存在、每种的单种上限；加道具只改 CSV 再 `roost generate`）；组件入口 `Add` / `Remove` / `Count` / `Has`；丢弃协议 `BagDiscard`；服务端发放 handler `BagGrant`；规则入口 `game/entities/player/bag_items.go`（缺省读道具表）。game-demo 用的就是它 | 无（要求 `config` 特性，`-template game` 缺省已开） | `PlayerDao.Bag`（同步） | 17 |
 | [leaderboard](leaderboard/module.yaml) | 排行榜：缺省一张全服总分榜；前 N 名连同自己的名次（`LeaderboardTop`，缺省 10、至多 50）、只查自己的名次（`LeaderboardMe`）；提交分数是给服务端别的功能调的函数 `leaderboard.Submit` / `SubmitSeason`（当前总分的快照，只升不降，不带幂等键），不对客户端开放；榜名、范围、周期、分数范围、一屏多长写在 `game/leaderboard/leaderboard_board.go`。game-demo 用的就是它 | 无（要求业务服务 `uses: [rank]`） | 无 | 20 |
 | [mailbox](mailbox/module.yaml) | 邮件：分页列出自己的邮件（`MailboxList`）、领取附件（`MailboxClaim`）；经托管的 mail 服务按“预留 → 发放 → 确认”三步领取，Player 上的领取账本保证每封至多到账一次；附件是（种类、号、数量），种类是登记点：金币内置，别的种类由登记了校验（`game/mailbox` 的 `RegisterType`）与发放方式（`RegisterMailboxGrant`）的功能提供 | wallet（要求业务服务 `uses: [mail]`） | `PlayerDao.MailboxLedger`（只落库） | 28 |
@@ -29,7 +29,7 @@
 | mailbox + bag | 道具附件：登记 `item` 这个附件种类，领取时道具进背包，与领取账本同一笔事务；背包拒绝时邮件保持未领（`game/mailbox/mailbox_item.go`、`game/entities/player/mailbox_item.go`） | 9 |
 | quest + checkin | 签到成功时把每日任务“签到一次”推进一次，与签到同一笔事务（`game/entities/player/quest_checkin.go`） | 3 |
 
-以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter`、`chat`、`leaderboard` 与 `bag`；demo 自己的经验与邮件正在换成对应的模块。
+以 `roost module list` 的输出为准。一个新工程装 `enter` 加需要的业务模块，就有了登录后的第一条请求、客户端可见的状态和业务本身。game-demo 目前用的是 `enter`、`chat`、`leaderboard`、`bag` 与 `profile`；demo 自己的邮件正在换成 mailbox。
 
 ## 使用
 
@@ -136,7 +136,7 @@ verify:
 - **模块可以做全、做复杂，但简单用法必须照样能用**（维护者 2026-11-11）：game-demo 里有的能力（查配置表、分赛季、一次请求带回多样数据……）做进模块，不为了“简单”砍功能；全新的 `-template game` 工程不做任何配置直接 `roost module add <模块>`，缺省就要能工作、验收全绿，复杂能力在此之上填数据或打开。判断一个功能放不放进模块：放进去之后，不用它的简单工程会不会被迫多做事——不会，就放进模块。工程要改的规则与数据放进归工程所有的业务文件（或模块自带的配置表），逻辑文件不带规则。
 
 - **状态自带**：只动自己的状态结构体，不往别的模块的结构体里加字段。挂在已有实体上的状态一律是嵌套结构体，不新建 DAO。
-- **同步按顶层字段决定**：`dao: persist,sync` 下发给客户端，`dao: persist` 只落库。既有客户端可见状态又有服务端账本的模块写两个字段（wallet 就是）。嵌套类型内部的字段只写 `store` 键。
+- **同步按顶层字段决定**：`dao: persist,sync` 下发给客户端，`dao: persist` 只落库。既有客户端可见状态又有服务端账本的模块写两个字段（wallet 就是）；有“别的玩家也能看”与“只给本人”两种状态的模块同样写两个字段（profile 就是：名字等级一个、经验一个），工程的同步视图按顶层字段挑。嵌套类型内部的字段只写 `store` 键。
 - **号不写死**：协议号、错误码、组件号一律用 `{{ID:...}}`。
 - **模块可以带配置表**：把 `configs/schema/<表>.go` 与 `configs/table/<表>.csv` 当普通模板放进 `files/`，清单 `needs.features` 加 `config`；表的登记、CSV 转换与 `generated.<表>ByID` 访问器由 `roost generate` 产出，不需要安装器另做什么。表名全库唯一；工程已有同名的表时落点被占用，装不了。读配置表的模块，场景测试带自己的表（只登记自己那张，写到临时目录），装载后把缺省 Store 与 `fctx.RuntimeConfig()` 一起换回（照 `modules/bag` 的测试）；依赖它的模块的测试同样要先装表。
 - **文件名带模块名**：`db/def/<module>.go`、`internal/errors/<module>.go`、`game/handler/<module>_<handler>.go`、`protocol/def/<module>_<protocol>.go`、`game/controllers/<module>/`。协议与 Nest handler 一个一个文件（`roost generate` 按文件名找它们）。

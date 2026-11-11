@@ -514,7 +514,7 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 
 2026-11-10，[方案](FEATURE-2026-11-10-business-modules.md)第 2 期，现行说明见 [modules/README](../../modules/README.md) 与[命令参考“业务模块”](../../codegen/docs/CODEGEN_REFERENCE.zh-CN.md#业务模块roost-module)。
 
-- **十一个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）、enter（进入游戏）、profile（档案）、bag（背包）、leaderboard（排行榜）、mailbox（邮件）、quest（每日任务）、stamina（体力）、shop（商店）。game-demo 换用了 enter、chat、leaderboard 与 bag；它自己的经验、邮件领取仍是 demo 的模板（换用进行中），13 类玩法也仍是各自的夹具（拆解是方案的后续工作）。带座位的房间、匹配到房间的移交、回合推进还不是模块（要安装器先支持模块自带实体与定时器类型）。模块与生成器的改动只保证新生成的工程能直接用，不为以前生成的工程做兼容（维护者 2026-11-11）。按玩法一条命令出工程的配方（`-recipe`）没有做。
+- **十一个模块**：wallet（货币）、checkin（每日签到）、chat（聊天）、enter（进入游戏）、profile（档案）、bag（背包）、leaderboard（排行榜）、mailbox（邮件）、quest（每日任务）、stamina（体力）、shop（商店）。game-demo 换用了 enter、chat、leaderboard、bag 与 profile；它自己的邮件领取仍是 demo 的模板（换用进行中），13 类玩法也仍是各自的夹具（拆解是方案的后续工作）。带座位的房间、匹配到房间的移交、回合推进还不是模块（要安装器先支持模块自带实体与定时器类型）。模块与生成器的改动只保证新生成的工程能直接用，不为以前生成的工程做兼容（维护者 2026-11-11）。按玩法一条命令出工程的配方（`-recipe`）没有做。
 - **chat 模块的边界**：在线名单是每进程的内存集合，多个 game 进程不互相扇出世界频道的推送（要么各推各的在线玩家，要么改为订阅 chat 的流）；连接关闭的订阅在第一次取推送面时才挂上、进程退出时不单独退订；系统消息入口无条件授予（前提是 chat 只经内部总线可达，见 collaborators 的注释）；没有群组频道。端点不经过 Nest，没有离线用例——8 条场景覆盖频道规则、消息体校验、在线名单、连接关闭后移出名单与 collaborators 的政策。game-demo 用的就是这个模块（2026-11-11 统一，demo 自己不再带一份聊天实现）。
 - **没有卸载与升级**：安装只加不减，分配过的号与存储键不回收；内置模块之后变了，已装的模块不会跟着变，安装器只报告“装的是另一版”（`installed_other_version`），不给差异、不合并。
 - **模块绑定具体的实体名与工程形状**：wallet 与 checkin 挂在名为 `Player` 的实体上，按 `-template game` 的目录约定写文件（`game/entities/player/`、`game/handler/`、`game/controllers/<module>/`）。实体叫别的名字的工程装不了。
@@ -535,7 +535,9 @@ Hold 之后撤到一个订阅都不剩时，Ready 后补发一个不含对象的
 - **leaderboard 的边界**：提交与改总分的事务不是原子的，提交失败时榜上暂时落后，靠重试或下一次分数变动补上（提交的是快照加 UpdateMax，本身幂等，不带请求键）；只升不降，一个错的大数提交上去之后压不下来（所以有分数上限的检查）；缺省是改 `leaderboard_board.go` 里 `CurrentSeason()` 的返回值后发版来换周期，也可以按业务时钟算，没有清榜协议；只有一张榜——读榜的两条协议固定读 `CurrentBoard()`，写入侧 `SubmitSeason` 只能选周期不能选榜，多张榜、读历史周期要手写。
 - **bag 的边界**：表名 `item` 是固定的，工程已有 `configs/schema/item.go` 或 `configs/table/item.csv` 时装不了（落点被占用），要先把自己的表挪开、装完再合并列；进程里没装载配置时背包拒绝一切放入（有意如此：不退回“正数就行”），所以装了 bag 之后，往背包里放道具的测试都要先装道具表，否则一律 `bag_item_invalid`；每次变化同步的是整份背包（至多 200 种），不是按键增量；道具从表里删掉后能数、能丢、不能再放，单种上限调小到持有量以下时只拒放入、不扣已有；没有格子、装备与过期。
 - **game-demo 的背包同步有一处冗余**：`Player.PublishSyncDirty` 与提交观察者各消费一份脏掩码，模块的写入只被观察者那份消费，所以背包变化后这名玩家下一次 `PublishSyncDirty`（走一步、加经验）会把整份背包再给本人发一次，内容相同。把 `Player.PublishSyncDirty` 改成用 `TakeEntitySyncChanges()`（TerrainChunk / Building 已经这样）应能消除，要动 Player 的整条同步路径，没有改。
-- **profile 的边界**：名字不查重、不查敏感词；是 demo“经验与升级”的简化版，demo 还没有换用它。
+- **profile 的边界**：名字不查重、不查敏感词；没有等级上限。在 game-demo 里，模块的 `ProfileAddExp` 只动 Player、不记 World 的全服累计（demo 自己的 AddExp 才记），demo 的入口都不走它；新开放的 `ProfileRename` 没有压测机器人覆盖。
+- **模块装进 game-demo 之后靠提交观察者同步**：模块的 handler 不调 demo 的 `PublishSyncDirty`，靠 Nest 的提交观察者复制（bag、profile 各有一条按生产接线的用例钉住）；没装观察者的夹具里模块的写入不会被推送。
+- **`roost add handler` 不能指向稍后才由模块装进来的组件**：game-demo 里建在 Bag / Profile 组件上的 handler 因此没有骨架步骤，文件直接写出；全部模块在同一步里安装，覆盖模块文件的 `write` 排在它之后（`TestDemoStepsLeaveModuleComponentsToTheModules` 钉住）。
 - **`roost module verify` 把子测试数进通过数**：模块的场景测试因此不用 `t.Run`。
 - **不装 enter 时安装不打开客户端同步**：模块把状态字段标成 `sync`，但不改 `access.player`。要让客户端收到，需另外 `roost add transport tcp`、在 `roost.yaml` 加 `access.player.self_sync: true`、`roost project sync`（skill 的[按需求组合 §4A](../agent-skills/roost-genre/references/compose.md#4a-让客户端看到状态)）；`roost module verify` 不检查这一项。真实客户端连上还要实现 `auth.go` 并 `roost config enable player-tcp`。
 - **wallet 的去重窗口不是永久账本**：`Apply(key, delta)` 只在最近 128 次带业务键的加减内去重，更早的键被淘汰后再用会重新执行。长期“只发一次”由调用方在自己的状态里记事实并调 `Add`（checkin 这样做）。首版曾是“回执满了拒绝、不淘汰”，连续签到到第 129 天起签到与消费全部被拒，由只凭 skill 的实测发现并修掉（回归 `TestCheckinKeepsPayingPastTheWalletReceiptWindow`、`TestWalletOldReceiptsLeaveTheWindow`）。
