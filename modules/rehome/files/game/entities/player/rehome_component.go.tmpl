@@ -48,7 +48,8 @@ func (component *RehomeComponent) Owner() *Player { return component.owner }
 //
 // 依次：
 //
-//  1. 同一个换服 ID 已经记着：什么都不做，返回成功（重发）。这个 ID 已经到达过：拒绝，一个 ID 只用一次。
+//  1. 同一个换服 ID 已经记着：不重记，只把第 4 步的事务内检查重跑一遍并返回它的结论（重发，以及驱动器
+//     在离开之前的复核）。这个 ID 已经到达过：拒绝，一个 ID 只用一次。
 //  2. 目标必须是另一个服。
 //  3. 规则（玩家自己申请时；服务端发起的不受约束）：目标在可去的列表里（gamerehome.TargetAllowed），
 //     距上一次到达已经过了冷却（gamerehome.Cooldown）。冷却按业务时间、从到达那一刻算。
@@ -63,6 +64,11 @@ func (component *RehomeComponent) Prepare(move gamerehome.Move, nowUnixMilli int
 		return fmt.Errorf("rehome: a transfer id is required")
 	}
 	if state.GetPendingID() == move.ID {
+		// 同一次换服再来：意图已经记着，不重记、不再看规则与冷却；事务内的检查重跑一遍。
+		// 驱动器在离开之前用它复核（Recheck）：申请时通过的检查，到交出实体之前未必还成立。
+		if err := runRehomeApplying(component.owner, move, nowUnixMilli); err != nil {
+			return gamerehome.Refused(err, "refused by a check")
+		}
 		return nil
 	}
 	if state.GetArrivedID() == move.ID {
@@ -141,5 +147,7 @@ func (component *RehomeComponent) clearIntent() {
 }
 
 // LastAt 是这名玩家上一次换服到达的业务时间（Unix 毫秒），没换过是 0；Count 是换过几次。给同一个实体上别的组件读。
-func (component *RehomeComponent) LastAt() int64 { return component.owner.Dao().GetRehome().GetLastAt() }
-func (component *RehomeComponent) Count() int32  { return component.owner.Dao().GetRehome().GetCount() }
+func (component *RehomeComponent) LastAt() int64 {
+	return component.owner.Dao().GetRehome().GetLastAt()
+}
+func (component *RehomeComponent) Count() int32 { return component.owner.Dao().GetRehome().GetCount() }

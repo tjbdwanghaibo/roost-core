@@ -1,0 +1,313 @@
+package rehome
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+	"github.com/tjbdwanghaibo/roost-core/infra/storage/versionstore"
+	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
+	"github.com/tjbdwanghaibo/roost-core/service/directory"
+)
+
+// 结论按 account 的当前绑定判定，不按单个错误码（RV-20261111-BM-04）。
+//
+// account 按换服 ID 只认两样：在途的那一次、最近了结的那一次。一次提交或中止的应答丢了之后，重发得到的回答
+// 说的是“这个 ID 现在是什么”——在此期间别的换服一旦了结，它就不认识这个 ID 了：重发的 Commit 得到 stale，
+// 重发的 Abort 被当成“中止一个没发起过的 ID”而成功。这两种回答都不等于“当年没有提交”。
+// 这里用真实的 account.Service（内存存储）把这些交错一一做出来；Residency 是真实的 LocalResidency，
+// 断开会话与交出实体是记事件的替身，held 是交出的屏障是否还在。
+
+const rehomeThird int32 = 1002
+
+type rehomeFixedAllocator struct{}
+
+func (rehomeFixedAllocator) Allocate(context.Context, int32) (int64, error) { return rehomePlayer, nil }
+
+// newRehomeAccounts 建一个真实的 account：三个对外开放的服 1000 / 1001 / 1002，玩家 94301 绑定在 1000，
+// 绑定代数 0，没有换过服。
+func newRehomeAccounts(t *testing.T) *svcaccount.Service {
+	t.Helper()
+	names, err := directory.New(versionstore.NewMemoryStore[string, directory.Entry](), directory.Config{
+		Normalize: directory.NormalizeLower, DefaultTTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounts, err := svcaccount.New(svcaccount.Config{
+		Accounts: versionstore.NewMemoryStore[string, svcaccount.Account](),
+		Roles:    versionstore.NewMemoryStore[int64, svcaccount.Role](),
+		Servers:  versionstore.NewMemoryStore[int32, svcaccount.GameServer](),
+		Slots:    versionstore.NewMemoryStore[string, svcaccount.Slot](),
+		Names:    names,
+		Verifier: svcaccount.VerifierFunc(func(_ context.Context, identity svcaccount.Identity) (svcaccount.Verified, error) {
+			return svcaccount.Verified{Channel: identity.Channel, OpenID: identity.OpenID}, nil
+		}),
+		Allocator:     rehomeFixedAllocator{},
+		NameRules:     svcaccount.NameValidatorFunc(func(string) error { return nil }),
+		SessionSecret: "rehome-conclusion-secret",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, sid := range []int32{rehomeSelf, rehomeTarget, rehomeThird} {
+		if _, err := accounts.UpsertServer(ctx, svcaccount.GameServer{ID: sid, Name: fmt.Sprint(sid), Status: svcaccount.ServerOpen}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	account, err := accounts.Login(ctx, svcaccount.Identity{Channel: "store", OpenID: "mover", Credential: "good"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := accounts.CreateRole(ctx, account.ID, rehomeSelf, "Mover"); err != nil {
+		t.Fatal(err)
+	}
+	return accounts
+}
+
+// rehomeLossyDirectory 把请求原样交给真实的 account，然后把第一次 Commit / Abort 的应答弄丢：
+// 请求已经生效，调用方只看到一个不带业务码的错误。弄丢之前先执行 later——在此期间 account 上发生的事。
+type rehomeLossyDirectory struct {
+	Directory
+	loseCommit, loseAbort bool
+	later                 func()
+	commits, aborts       int
+}
+
+func (d *rehomeLossyDirectory) Commit(ctx context.Context, playerID int64, transferID string) (svcaccount.RoleBinding, error) {
+	d.commits++
+	binding, err := d.Directory.Commit(ctx, playerID, transferID)
+	if d.loseCommit && d.commits == 1 && err == nil {
+		d.later()
+		return svcaccount.RoleBinding{}, errRehomeLost
+	}
+	return binding, err
+}
+
+func (d *rehomeLossyDirectory) Abort(ctx context.Context, playerID int64, transferID string, reason string) (svcaccount.RoleBinding, error) {
+	d.aborts++
+	binding, err := d.Directory.Abort(ctx, playerID, transferID, reason)
+	if d.loseAbort && d.aborts == 1 && err == nil {
+		d.later()
+		return svcaccount.RoleBinding{}, errRehomeLost
+	}
+	return binding, err
+}
+
+// rehomeLaterMoves 是“应答丢失之后、重发之前”account 上发生的事。
+type rehomeLaterMoves struct {
+	t        *testing.T
+	accounts *svcaccount.Service
+}
+
+// begin 以运维的身份从玩家当前的服发起一次到 to 的换服（带着读到的代数与序号）。
+func (m rehomeLaterMoves) begin(id string, to int32) {
+	m.t.Helper()
+	ctx := context.Background()
+	binding, err := m.accounts.RoleBinding(ctx, rehomePlayer)
+	if err != nil {
+		m.t.Fatal(err)
+	}
+	_, err = m.accounts.BeginRoleTransfer(ctx, rehomePlayer, svcaccount.TransferRequest{
+		ID: id, FromSID: binding.ServingServerID, To: to, ExpectEpoch: binding.BindEpoch, ExpectSeq: binding.TransferSeq,
+	})
+	if err != nil {
+		m.t.Fatal(err)
+	}
+}
+
+func (m rehomeLaterMoves) abort(id string) {
+	m.t.Helper()
+	if _, err := m.accounts.AbortRoleTransfer(context.Background(), rehomePlayer, id, "later attempt cancelled"); err != nil {
+		m.t.Fatal(err)
+	}
+}
+
+func (m rehomeLaterMoves) commit(id string) {
+	m.t.Helper()
+	if _, err := m.accounts.CommitRoleTransfer(context.Background(), rehomePlayer, id); err != nil {
+		m.t.Fatal(err)
+	}
+}
+
+// rehomeOutcome 是一次换服走完之后源服这一侧的三样东西，加上一条带换服前 claims 的进入请求的结果。
+type rehomeOutcome struct {
+	// held：交出实体的屏障还在；tracked / to：迁出表里有没有他、记着他去了哪；
+	// cancelled：档里这一次的意图被清了；admit：握手在换服之前的会话来进入时得到什么。
+	held, tracked bool
+	to            int32
+	cancelled     bool
+	admit         error
+	servingSID    int32
+	bindEpoch     uint64
+}
+
+// rehomeRunWithLostReply 用真实的 account 跑一次 1000 → 1001 的换服，弄丢第一次 Commit（或 Abort）的应答，
+// 在重发之前执行 later，跑完后台部分，返回源服这一侧的最终状态。leaveFails 让离开钩子失败，于是驱动器去中止。
+func rehomeRunWithLostReply(t *testing.T, loseCommit, leaveFails bool, later func(rehomeLaterMoves)) rehomeOutcome {
+	t.Helper()
+	f := newRehomeFixture(t)
+	accounts := newRehomeAccounts(t)
+	lossy := &rehomeLossyDirectory{Directory: accountDirectory{accounts: accounts}, loseCommit: loseCommit, loseAbort: !loseCommit}
+	lossy.later = func() { later(rehomeLaterMoves{t: t, accounts: accounts}) }
+	f.driver.directory = lossy
+	held := false
+	f.residency.handOff = func(context.Context, int64) (func(context.Context) error, error) {
+		held = true
+		return func(context.Context) error {
+			held = false
+			return nil
+		}, nil
+	}
+	if leaveFails {
+		OnLeaving("battle", func(context.Context, *app.Registry, Move) error { return errors.New("the battle has not settled") })
+	}
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	f.runBackground()
+	binding, err := accounts.RoleBinding(context.Background(), rehomePlayer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	where, tracked := f.residency.Where(rehomePlayer)
+	if tracked && where.Moving {
+		t.Fatalf("the transfer did not settle: %+v", where)
+	}
+	outcome := rehomeOutcome{held: held, tracked: tracked, to: where.Move.To, servingSID: binding.ServingServerID, bindEpoch: binding.BindEpoch}
+	for _, event := range f.events.take() {
+		if strings.HasPrefix(event, "cancel ") {
+			outcome.cancelled = true
+		}
+	}
+	// 握手在这次换服之前的会话：claims 说他在 1000、绑定代数 0。
+	outcome.admit = f.driver.Admit(context.Background(), rehomePlayer, map[string]string{"server_id": "1000", "bind_epoch": "0"})
+	return outcome
+}
+
+// expectFenced：account 说他归别的服——源服的保护必须都在：屏障没撤、迁出表记着他去了 sid、意图没有被清、
+// 换服前的会话进不来（答他现在的服）。
+func (o rehomeOutcome) expectFenced(t *testing.T, what string, sid int32) {
+	t.Helper()
+	owner, known := OwnerSID(o.admit)
+	if o.servingSID != sid || !o.held || !o.tracked || o.to != sid || o.cancelled || !errors.Is(o.admit, apperrors.ErrRehomeElsewhere) || !known || owner != sid {
+		t.Fatalf("%s: account says server %d (epoch %d); source has held=%v tracked=%v to=%d cancelled=%v admit=%v; want the fence kept, the table naming %d, the intent untouched and the old session refused",
+			what, o.servingSID, o.bindEpoch, o.held, o.tracked, o.to, o.cancelled, o.admit, sid)
+	}
+}
+
+// expectServedHere：account 说他归本服——屏障撤了、迁出表里没有他、这一次的意图清了、会话进得来。
+func (o rehomeOutcome) expectServedHere(t *testing.T, what string) {
+	t.Helper()
+	if o.servingSID != rehomeSelf || o.held || o.tracked || !o.cancelled || o.admit != nil {
+		t.Fatalf("%s: account says server %d (epoch %d); source has held=%v tracked=%v cancelled=%v admit=%v; want no fence, no record, the intent cleared and the session admitted",
+			what, o.servingSID, o.bindEpoch, o.held, o.tracked, o.cancelled, o.admit)
+	}
+}
+
+// 提交已经生效、应答丢了。重发之前不论 account 上又发生了什么，源服都按“他现在归谁”落定：
+// 仍归别的服就保持保护——哪怕重发的 Commit 得到的是 stale（那个 ID 已经被后来的了结覆盖）；
+// 只有他确实换回了本服（绑定代数比发起时至少大 2）才撤掉屏障。
+func TestRehomeLostCommitReplyIsSettledByTheCurrentBinding(t *testing.T) {
+	// 对照：之后什么都没发生，重发的 Commit 幂等成功。
+	rehomeRunWithLostReply(t, true, false, func(rehomeLaterMoves) {}).expectFenced(t, "nothing happened later", 1001)
+	// 他在 1001 又发起了一次去 1002 的换服，还在途：重发得到 stale。
+	rehomeRunWithLostReply(t, true, false, func(m rehomeLaterMoves) {
+		m.begin("later", rehomeThird)
+	}).expectFenced(t, "a later transfer is in flight", 1001)
+	// 那一次被中止了：account 最近了结的是它，不再认识原来的 ID。
+	rehomeRunWithLostReply(t, true, false, func(m rehomeLaterMoves) {
+		m.begin("later", rehomeThird)
+		m.abort("later")
+	}).expectFenced(t, "a later transfer was aborted", 1001)
+	// 那一次提交了：他现在在 1002。
+	rehomeRunWithLostReply(t, true, false, func(m rehomeLaterMoves) {
+		m.begin("later", rehomeThird)
+		m.commit("later")
+	}).expectFenced(t, "a later transfer was committed", 1002)
+	// 他换回了 1000（绑定代数 2）：源服重新归他，旧屏障撤掉。
+	back := rehomeRunWithLostReply(t, true, false, func(m rehomeLaterMoves) {
+		m.begin("back", rehomeSelf)
+		m.commit("back")
+	})
+	if back.bindEpoch != 2 {
+		t.Fatalf("bind epoch = %d after moving away and back, want 2", back.bindEpoch)
+	}
+	back.expectServedHere(t, "the player moved back")
+}
+
+// 中止已经生效、应答丢了（离开钩子失败，驱动器去中止）。重发的 Abort 对一个已经被覆盖的 ID 会“成功”——
+// account 把它当成中止一个没发起过的 ID——这同样不说明他还在本服：在此期间运维把他换走了的，源服必须立起保护。
+func TestRehomeLostAbortReplyIsSettledByTheCurrentBinding(t *testing.T) {
+	// 对照：之后什么都没发生，重发的 Abort 幂等成功，他留在本服。
+	rehomeRunWithLostReply(t, false, true, func(rehomeLaterMoves) {}).expectServedHere(t, "nothing happened later")
+	// 运维又发起了一次（1000 → 1001），还在途：这一次确实没有成，他仍绑定在本服。
+	inFlight := rehomeRunWithLostReply(t, false, true, func(m rehomeLaterMoves) {
+		m.begin("later", rehomeTarget)
+	})
+	if inFlight.servingSID != rehomeSelf || inFlight.held || inFlight.tracked || !inFlight.cancelled {
+		t.Fatalf("a later transfer is in flight: %+v; want this transfer settled as not committed", inFlight)
+	}
+	// 那一次被中止了。
+	rehomeRunWithLostReply(t, false, true, func(m rehomeLaterMoves) {
+		m.begin("later", rehomeTarget)
+		m.abort("later")
+	}).expectServedHere(t, "a later transfer was aborted")
+	// 那一次提交了：他已经在 1001。重发的 Abort 成功，但源服不能当成“没换走”——实体当初没有交出过，这里补交。
+	rehomeRunWithLostReply(t, false, true, func(m rehomeLaterMoves) {
+		m.begin("later", rehomeTarget)
+		m.commit("later")
+	}).expectFenced(t, "a later transfer was committed", 1001)
+	// 换走又换回来（绑定代数 2）：归本服。
+	back := rehomeRunWithLostReply(t, false, true, func(m rehomeLaterMoves) {
+		m.begin("away", rehomeTarget)
+		m.commit("away")
+		m.begin("back", rehomeSelf)
+		m.commit("back")
+	})
+	if back.bindEpoch != 2 {
+		t.Fatalf("bind epoch = %d after moving away and back, want 2", back.bindEpoch)
+	}
+	back.expectServedHere(t, "the player moved away and back")
+}
+
+// 进入时的意图对账走同一类判断：向 account 中止那个 ID 之后，看的是它带回的当前绑定。
+// 他归本服、那个 ID 不在途，才清意图；account 说他归别的服时——哪怕中止“成功”了——不清，报出来。
+func TestRehomeReconcileOnEnterIsSettledByTheCurrentBinding(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.profile.arrive = ArriveResult{StaleID: "t-old", StaleTo: 1001}
+	arrive := func() error { return f.driver.Arrive(context.Background(), rehomePlayer) }
+	// 中止成功，绑定在本服：清。
+	if err := arrive(); err != nil {
+		t.Fatal(err)
+	}
+	f.expectEvents(t, "arrive 94301 at 1000", "abort 94301 t-old", "cancel 94301 t-old")
+	// 中止成功（account 已经不认识这个 ID），但绑定在 1001：那一次其实提交了。不清。
+	f.directory.binding.ServingServerID, f.directory.binding.BindEpoch = 1001, 4
+	if err := arrive(); err == nil {
+		t.Fatal("the intent of a player the account service binds to another server was reconciled away")
+	}
+	f.expectEvents(t, "arrive 94301 at 1000", "abort 94301 t-old")
+	// 另一次换服在途（中止答 in-progress）而他仍绑定在本服：这个 ID 没有成，清。
+	f.directory.binding.ServingServerID, f.directory.binding.BindEpoch = 1000, 3
+	f.directory.binding.Transfer = &svcaccount.RoleTransfer{ID: "other", From: 1000, To: 1002, Epoch: 3}
+	f.directory.aborts = []error{svcaccount.ErrTransferInProgress}
+	if err := arrive(); err != nil {
+		t.Fatal(err)
+	}
+	f.expectEvents(t, "arrive 94301 at 1000", "abort 94301 t-old", "cancel 94301 t-old")
+	// 在途的正是这个 ID（中止的应答与绑定对不上）：不清。
+	f.directory.binding.Transfer = &svcaccount.RoleTransfer{ID: "t-old", From: 1000, To: 1001, Epoch: 3}
+	f.directory.aborts = []error{svcaccount.ErrTransferInProgress}
+	if err := arrive(); err == nil {
+		t.Fatal("the intent of a transfer still in flight was reconciled away")
+	}
+	f.expectEvents(t, "arrive 94301 at 1000", "abort 94301 t-old")
+}

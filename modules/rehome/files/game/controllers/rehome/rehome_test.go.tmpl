@@ -84,8 +84,11 @@ func (e *rehomeServerEvents) snapshot() []string {
 	return append([]string(nil), e.list...)
 }
 
-// rehomeTransport 站在玩家 TCP 传输的位置上：LocalResidency 只用它的 CloseSessions。
+// rehomeTransport 站在玩家 TCP 传输的位置上：LocalResidency 用它的 CloseSessions 与 ActiveSessions。
+// 这里没有真实的连接：断开之后就没有会话了，也就没有在途的请求可等。
 type rehomeTransport struct{ events *rehomeServerEvents }
+
+func (t rehomeTransport) ActiveSessions(int64) int { return 0 }
 
 func (t rehomeTransport) CloseSessions(playerID int64, reason error) int {
 	t.events.add(fmt.Sprintf("close %d: %v", playerID, reason))
@@ -295,8 +298,10 @@ func TestRehomeApplyEndpointMovesThePlayerToTheOtherServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{fmt.Sprintf("close %d: rehome: the player is changing servers", w.playerID), fmt.Sprintf("handoff %d", entityID)}
-	if got := source.events.snapshot(); len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+	// 断开两次：安静下来时一次，交出实体之前再一次（其间握手进来的连接）。
+	closed := fmt.Sprintf("close %d: rehome: the player is changing servers", w.playerID)
+	want := []string{closed, closed, fmt.Sprintf("handoff %d", entityID)}
+	if got := source.events.snapshot(); len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("on the source: %v, want %v", got, want)
 	}
 	if pendingID, pendingTo, lastAt, count := w.intent(); pendingID != response.TransferID || pendingTo != 1001 || lastAt != 0 || count != 0 {

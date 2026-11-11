@@ -21,7 +21,7 @@ errcodes: [rehome_refused, rehome_cooldown, rehome_moving, rehome_elsewhere]
 verify:
   packages: [./game/rehome, ./game/handler, ./game/controllers/rehome]
   run: ^TestRehome
-  pass: 30
+  pass: 37
 with:
   enter:
     summary: 进入前检查（正在换服答 rehome_moving，绑定在别的服答 rehome_elsewhere；源服重启后在这里把停在半路的换服接着做完）；进入之后做到达（首次进入目标服时生效一次）与意图对账

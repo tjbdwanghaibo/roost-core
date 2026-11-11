@@ -134,18 +134,25 @@ func (d *Driver) Arrive(ctx context.Context, playerID int64) error {
 		return nil
 	}
 	// 中止而不是只读一眼：只读看到“没有在途”之后，一个迟到的发起仍可能把这个 ID 做起来；
-	// 中止过的 ID account 不再接受发起，结论才是确定的。
-	_, err = d.directory.Abort(ctx, playerID, result.StaleID, "the intent was left behind; reconciled on enter")
-	switch classify(err) {
-	case answerDone, answerInProgress, answerRefused:
-		if err := d.profile.Cancel(ctx, playerID, result.StaleID); err != nil {
-			return fmt.Errorf("rehome: clear the stale intent %s: %w", result.StaleID, err)
-		}
-		slog.Info("rehome: cleared an intent whose transfer never happened", "player_id", playerID, "transfer_id", result.StaleID, "to", result.StaleTo)
-		return nil
-	case answerStale:
-		// account 说这个 ID 已经提交，可他被放行进了本服：两边对不上，不动意图，报出来。
-		return fmt.Errorf("rehome: the intent %s of player %d points at server %d and is committed, yet the player entered server %d", result.StaleID, playerID, result.StaleTo, d.self)
+	// 中止过的 ID account 不再接受发起。但“中止成了”不是结论——account 对一个早已提交、又被后来的了结
+	// 覆盖掉的 ID 同样答成功。清不清意图看中止带回的当前绑定：他确实归本服、这个 ID 不在途，才清。
+	binding, err := d.directory.Abort(ctx, playerID, result.StaleID, "the intent was left behind; reconciled on enter")
+	if classify(err) == answerUnknown {
+		return fmt.Errorf("rehome: reconcile the intent %s: %w", result.StaleID, err)
 	}
-	return fmt.Errorf("rehome: reconcile the intent %s: %w", result.StaleID, err)
+	if !bound(binding) {
+		if binding, err = d.directory.Binding(ctx, playerID); err != nil {
+			return fmt.Errorf("rehome: reconcile the intent %s: binding: %w", result.StaleID, err)
+		}
+	}
+	if binding.ServingServerID != d.self || (binding.Transfer != nil && binding.Transfer.ID == result.StaleID) {
+		// 他被放行进了本服，account 却说他归别的服（或者这个 ID 还在途）：两边对不上，不动意图，报出来。
+		return fmt.Errorf("rehome: the intent %s of player %d points at server %d, the account service binds him to server %d (transfer in flight: %v), yet he entered server %d",
+			result.StaleID, playerID, result.StaleTo, binding.ServingServerID, binding.Transfer != nil, d.self)
+	}
+	if err := d.profile.Cancel(ctx, playerID, result.StaleID); err != nil {
+		return fmt.Errorf("rehome: clear the stale intent %s: %w", result.StaleID, err)
+	}
+	slog.Info("rehome: cleared an intent whose transfer left the player on this server", "player_id", playerID, "transfer_id", result.StaleID, "to", result.StaleTo)
+	return nil
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 
 	gameenter "{{MODULE}}/game/enter"
+	gamerehome "{{MODULE}}/game/rehome"
+	"{{MODULE}}/protocol/msgid"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 )
@@ -31,6 +33,9 @@ import (
 func init() {
 	gameenter.OnEntering("rehome", admitOnEnter)
 	gameenter.OnEntered("rehome", arriveOnEnter)
+	// 进入游戏这条消息不受换服的写闸门约束：上面的进入前检查会给客户端带码的回答
+	// （rehome_moving / rehome_elsewhere），闸门先把连接关掉的话客户端就不知道原因了。
+	gamerehome.ExemptFromGate(msgid.MsgEnterGame)
 }
 
 func admitOnEnter(ctx context.Context, registry *app.Registry, entering gameenter.Entering) error {

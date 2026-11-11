@@ -44,6 +44,13 @@ func (e *rehomeEvents) add(format string, args ...any) {
 	e.list = append(e.list, fmt.Sprintf(format, args...))
 }
 
+// peek 看一眼到目前为止的事件，不清空。
+func (e *rehomeEvents) peek() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.list...)
+}
+
 func (e *rehomeEvents) take() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -80,21 +87,53 @@ func (d *rehomeDirectory) Binding(_ context.Context, playerID int64) (svcaccount
 	return d.binding, d.bindingErr
 }
 
+// 三个写入照 account 的做法带回当前绑定，并在照做时改它：发起成功记下在途的换服；提交成功把他改绑到目标服、
+// 绑定代数加一；中止成功清掉在途。脚本里的错误也照 account 的含义改绑定——提交得到 stale 是“这一次已被中止”，
+// 中止得到 stale 是“这一次已经提交”；不带业务码的错误是请求没有到达，什么都不改。
 func (d *rehomeDirectory) Begin(_ context.Context, playerID int64, request svcaccount.TransferRequest) (svcaccount.RoleBinding, error) {
 	d.events.add("begin %d %s", playerID, request.ID)
 	d.begun = request
-	return d.binding, rehomeNext(&d.begins)
+	err := rehomeNext(&d.begins)
+	if err == nil {
+		d.binding.Transfer = &svcaccount.RoleTransfer{ID: request.ID, From: request.FromSID, To: request.To, Epoch: request.ExpectEpoch}
+	}
+	return d.binding, err
 }
 
 func (d *rehomeDirectory) Commit(_ context.Context, playerID int64, transferID string) (svcaccount.RoleBinding, error) {
 	d.events.add("commit %d %s", playerID, transferID)
-	return d.binding, rehomeNext(&d.commits)
+	err := rehomeNext(&d.commits)
+	switch {
+	case err == nil:
+		d.rebind()
+	case errors.Is(err, svcaccount.ErrTransferStale):
+		d.binding.Transfer = nil
+	}
+	return d.binding, err
 }
 
 func (d *rehomeDirectory) Abort(_ context.Context, playerID int64, transferID string, reason string) (svcaccount.RoleBinding, error) {
 	d.events.add("abort %d %s", playerID, transferID)
 	d.reasons = append(d.reasons, reason)
-	return d.binding, rehomeNext(&d.aborts)
+	err := rehomeNext(&d.aborts)
+	switch {
+	case err == nil:
+		if d.binding.Transfer != nil && d.binding.Transfer.ID == transferID {
+			d.binding.Transfer = nil
+		}
+	case errors.Is(err, svcaccount.ErrTransferStale):
+		d.rebind()
+	}
+	return d.binding, err
+}
+
+// rebind 把在途的换服提交掉：改绑到它的目标服，绑定代数加一。
+func (d *rehomeDirectory) rebind() {
+	if transfer := d.binding.Transfer; transfer != nil {
+		d.binding.ServerID, d.binding.ServingServerID = transfer.To, transfer.To
+		d.binding.BindEpoch++
+		d.binding.Transfer = nil
+	}
 }
 
 // rehomeProfile 是玩家档上三笔事务的替身。
@@ -102,6 +141,7 @@ type rehomeProfile struct {
 	events     *rehomeEvents
 	prepared   []Move
 	prepareErr error
+	recheckErr error
 	cancelErr  error
 	arrive     ArriveResult
 	arriveErr  error
@@ -111,6 +151,11 @@ func (p *rehomeProfile) Prepare(_ context.Context, move Move) error {
 	p.events.add("prepare %s", move.ID)
 	p.prepared = append(p.prepared, move)
 	return p.prepareErr
+}
+
+func (p *rehomeProfile) Recheck(_ context.Context, move Move) error {
+	p.events.add("recheck %s", move.ID)
+	return p.recheckErr
 }
 
 func (p *rehomeProfile) Cancel(_ context.Context, playerID int64, transferID string) error {
@@ -231,7 +276,7 @@ func TestRehomeApplyWalksEveryStepInOrder(t *testing.T) {
 	OnLeaving("scene", func(_ context.Context, _ *app.Registry, move Move) error {
 		f.events.add("leave scene")
 		left = append(left, move)
-		// 离开钩子执行时这名玩家已经是“换服中”，会话还没有断开。
+		// 离开钩子执行时这名玩家已经是“换服中”，会话已经断开、在途的请求已经执行完。
 		if where, tracked := f.residency.Where(rehomePlayer); !tracked || !where.Moving {
 			t.Errorf("during the leave hook the table says %+v (%v), want moving", where, tracked)
 		}
@@ -261,7 +306,9 @@ func TestRehomeApplyWalksEveryStepInOrder(t *testing.T) {
 		t.Fatalf("%d background parts were started, want 1", len(f.background))
 	}
 	f.runBackground()
-	f.expectEvents(t, "leave scene", "close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-1")
+	// 后台：先断开会话并等在途的请求执行完，再在事务里复核一遍检查，然后才是离开钩子；之后交出实体、提交。
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1", "leave scene",
+		"close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-1")
 	if len(left) != 1 || left[0] != wantMove {
 		t.Fatalf("the leave hook saw %+v, want %+v", left, wantMove)
 	}
@@ -435,7 +482,9 @@ func TestRehomeLeaveHookFailureAborts(t *testing.T) {
 	}
 	f.events.take()
 	f.runBackground()
-	f.expectEvents(t, "abort 94301 t-1", "close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-1")
+	// 钩子在安静下来与复核之后才执行；它一失败，后面的钩子不再执行，实体没有被交出。
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1",
+		"abort 94301 t-1", "close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-1")
 	if len(f.directory.reasons) != 1 || !strings.Contains(f.directory.reasons[0], "leave hook battle: the battle has not settled") {
 		t.Fatalf("abort reasons = %q, want the failing hook named", f.directory.reasons)
 	}
@@ -456,7 +505,7 @@ func TestRehomeHandOffFailureAborts(t *testing.T) {
 	f.events.take()
 	f.runBackground()
 	f.expectEvents(t,
-		"close 94301: rehome: the player is changing servers", "handoff 7094301",
+		"close 94301: rehome: the player is changing servers", "recheck t-1", "close 94301: rehome: the player is changing servers", "handoff 7094301",
 		"abort 94301 t-1", "close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-1")
 	f.expectFree(t)
 	f.handOffErr = nil
@@ -480,7 +529,7 @@ func TestRehomeCommitOutcomeUnknownIsResentUntilCommitted(t *testing.T) {
 		}
 	}
 	f.runBackground()
-	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "handoff 7094301",
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1", "close 94301: rehome: the player is changing servers", "handoff 7094301",
 		"commit 94301 t-1", "commit 94301 t-1", "commit 94301 t-1")
 	if f.waits != 2 {
 		t.Fatalf("waited %d times between the commits, want 2", f.waits)
@@ -500,7 +549,7 @@ func TestRehomeCommitOutcomeUnknownThenAbortedReleasesTheEntity(t *testing.T) {
 	}
 	f.events.take()
 	f.runBackground()
-	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "handoff 7094301",
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1", "close 94301: rehome: the player is changing servers", "handoff 7094301",
 		"commit 94301 t-1", "commit 94301 t-1",
 		"release 7094301", "close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-1")
 	f.expectFree(t)
@@ -516,7 +565,7 @@ func TestRehomeCommitRefusedIsAbortedAndAnAbortFindingItCommittedSettlesCommitte
 	}
 	f.events.take()
 	f.runBackground()
-	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "handoff 7094301",
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1", "close 94301: rehome: the player is changing servers", "handoff 7094301",
 		"commit 94301 t-1", "abort 94301 t-1",
 		"release 7094301", "close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-1")
 	f.expectFree(t)
@@ -529,7 +578,8 @@ func TestRehomeCommitRefusedIsAbortedAndAnAbortFindingItCommittedSettlesCommitte
 	}
 	f.events.take()
 	f.runBackground()
-	f.expectEvents(t, "abort 94301 t-1", "close 94301: rehome: the player is changing servers", "handoff 7094301")
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1",
+		"abort 94301 t-1", "close 94301: rehome: the player is changing servers", "handoff 7094301")
 	if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move.To != 1001 {
 		t.Fatalf("the table says %+v (%v), want departed to 1001", where, tracked)
 	}
@@ -551,7 +601,7 @@ func TestRehomeReleaseBusyIsRetriedBeforeTheMarkIsWithdrawn(t *testing.T) {
 		}
 	}
 	f.runBackground()
-	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-1",
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1", "close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-1",
 		"release 7094301", "release 7094301", "release 7094301",
 		"close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-1")
 	if f.waits != 2 {

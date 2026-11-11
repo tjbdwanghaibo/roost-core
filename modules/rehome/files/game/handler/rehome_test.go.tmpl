@@ -197,7 +197,7 @@ func (f *rehomeFixture) expectRecord(t *testing.T, what string, want rehomeRecor
 }
 
 // 记意图：源服、目标服、换服 ID、记下的时刻都在档里；事务内的检查拿到的就是这一次换服。
-// 同一个换服 ID 重发什么都不变（检查也不再跑）。
+// 同一个换服 ID 重发不重记意图，只把事务内的检查重跑一遍（离开之前的复核）。
 func TestRehomePrepareRecordsTheIntentOncePerID(t *testing.T) {
 	f := newRehomeFixture(t)
 	start := f.now.Load()
@@ -215,9 +215,18 @@ func TestRehomePrepareRecordsTheIntentOncePerID(t *testing.T) {
 		t.Fatalf("the same id again: %v", err)
 	}
 	f.expectRecord(t, "after the same id again", want)
-	if rehomeTestChecked.Load() != 1 {
-		t.Fatalf("the check ran %d times, want still 1", rehomeTestChecked.Load())
+	// 同一个 ID 再来不重记意图，但事务内的检查重跑一遍：驱动器在离开之前用它复核。
+	if rehomeTestChecked.Load() != 2 {
+		t.Fatalf("the check ran %d times, want 2: the resend rechecks", rehomeTestChecked.Load())
 	}
+	// 复核时检查不成立了：拒绝，意图原样（由驱动器中止之后清）。冷却与规则不参与复核。
+	veto := errors.New("joined a guild meanwhile")
+	rehomeTestVeto.Store(&veto)
+	if err := f.prepare("t-1", 1000, 1001); !errors.Is(err, apperrors.ErrRehomeRefused) || !errors.Is(err, veto) {
+		t.Fatalf("the recheck with a failing check: %v, want rehome_refused wrapping the veto", err)
+	}
+	rehomeTestVeto.Store(nil)
+	f.expectRecord(t, "after the failed recheck", want)
 }
 
 // 规则与检查的拒绝，每一种都什么也没写：目标不是另一个服、没有换服 ID、事务内的检查否决

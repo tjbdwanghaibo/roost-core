@@ -23,6 +23,9 @@ import (
 type Profile interface {
 	// Prepare 在一笔事务里核对规则与事务内的检查并记下换服意图。拒绝时什么都没写。按换服 ID 幂等。
 	Prepare(ctx context.Context, move Move) error
+	// Recheck 在一笔事务里把事务内的换服前检查再跑一遍（不看规则与冷却，不写任何东西）。
+	// 驱动器在这名玩家安静下来之后、离开钩子之前调用：申请时通过的检查，到这时未必还成立。
+	Recheck(ctx context.Context, move Move) error
 	// Cancel 清掉这个换服 ID 的意图；档里的意图不是这个 ID 时什么都不做。
 	Cancel(ctx context.Context, playerID int64, transferID string) error
 	// Arrive 看一眼档里的意图：指向 sid（本服）的做到达，指向别的服的原样报回来。
@@ -69,14 +72,17 @@ const (
 //	  发起        Directory.Begin：account 登记换服、占住目标服的名额
 //	  —— 到这里答复“已受理”（Ticket）。前面任何一步不成：撤标记、清意图，答复拒绝的原因 ——
 //	后台：
-//	  离开钩子    登记的 OnLeaving
-//	  离开        Residency.Depart：断开会话、交出实体，屏障保持
+//	  安静下来    Residency.Quiesce：断开会话，等标记之前已经准入的请求执行完
+//	  复核        Profile.Recheck：事务内的换服前检查再跑一遍
+//	  离开钩子    登记的 OnLeaving：这时读到的事实不会再被他自己的请求改掉
+//	  交出        Residency.Depart：交出实体，屏障保持
 //	  提交        Directory.Commit：account 改绑到目标服
 //	  落定        Residency.Settle(Committed)：迁出表记“已迁走”
 //
 // 受理之后每一步失败的去向：
 //
-//   - 离开钩子失败、离开失败（实体被占用、超时）：Directory.Abort，然后 Settle(Aborted)（撤屏障与标记、
+//   - 安静不下来（在途的请求在预算内没有执行完）、复核不过、离开钩子失败、交出失败（实体被占用、超时）：
+//     Directory.Abort，然后 Settle(Aborted)（撤屏障与标记、
 //     断开仍连着的会话）、清意图。玩家留在本服，可以再申请。
 //   - Commit 明确说没有改绑（这个 ID 已被运维中止）：同上。
 //   - Commit 明确拒绝（目标服在此期间被删除或并入别的服、名额没了）：先 Abort，再同上。
@@ -197,10 +203,20 @@ func (d *Driver) Apply(ctx context.Context, request Request) (Ticket, error) {
 	}
 	// 发起带上开头读到的绑定代数与换服尝试序号：读到之后 account 上有别的发起或中止落了地，这个请求就过期了
 	// （answerStale）。序号也是“中止拿确定结论”的依据——见 beginUnknown。
-	_, err = d.directory.Begin(ctx, playerID, svcaccount.TransferRequest{
+	begun, err := d.directory.Begin(ctx, playerID, svcaccount.TransferRequest{
 		ID: move.ID, FromSID: d.self, To: move.To, ExpectEpoch: move.Epoch, ExpectSeq: binding.TransferSeq, Note: request.Note,
 	})
-	switch classify(err) {
+	kind := classify(err)
+	if kind == answerStale || kind == answerInProgress {
+		// 拒绝带回了当前绑定：开头读到之后他已经被换去了别的服（运维在别处提交了一次）。
+		// 这时不能只撤标记了事——本服不该再为他服务，按“已迁走”落定。
+		if bound(begun) && judge(move, d.self, begun) == standingGone {
+			move.To = begun.ServingServerID
+			d.spawn(func() { d.settle(move, Committed) })
+			return Ticket{}, Elsewhere(playerID, move.To)
+		}
+	}
+	switch kind {
 	case answerDone:
 	case answerInProgress:
 		d.withdraw(ctx, move, true)
@@ -238,13 +254,25 @@ func (d *Driver) Resume(move Move) error {
 // 并从此不让它再发起，所以中止成了就能肯定地说“没有换服在途”。这个结论不会过期：account 每记下一次中止
 // 就把换服尝试序号加 1，那个迟到的发起带的是旧序号，之后这名玩家再换几次服、再中止几次，它都发起不了。
 // 连中止的结果也不知道时，标记留着，后台接着问。
+//
+// “中止成了”本身不是结论（account 对不认识的 ID 也答成功）：结论是中止带回的绑定——他仍绑定在本服、
+// 这个 ID 不在途，才撤标记、答可重试。带回的绑定说他归别的服时按“已迁走”落定；判断不了的与中止未知同样处理。
 func (d *Driver) beginUnknown(ctx context.Context, move Move, beginErr error) error {
 	aborting, cancel := context.WithTimeout(context.WithoutCancel(ctx), callBudget)
-	_, abortErr := d.directory.Abort(aborting, move.PlayerID, move.ID, "the outcome of begin is unknown")
+	binding, abortErr := d.directory.Abort(aborting, move.PlayerID, move.ID, "the outcome of begin is unknown")
+	verdict := standingUnknown
+	if classify(abortErr) != answerUnknown {
+		verdict = d.verdict(aborting, move, binding)
+	}
 	cancel()
-	if kind := classify(abortErr); kind == answerDone || kind == answerInProgress || kind == answerRefused {
+	switch verdict {
+	case standingStays, standingReturned:
 		d.withdraw(ctx, move, true)
 		return errcode.Wrap(errcode.ErrRetryable, beginErr, "player_id", move.PlayerID)
+	case standingGone:
+		move.To = binding.ServingServerID
+		d.spawn(func() { d.settle(move, Committed) })
+		return Elsewhere(move.PlayerID, move.To)
 	}
 	slog.Error("rehome: the outcome of begin is unknown and so is the abort; asking until the account service answers",
 		"player_id", move.PlayerID, "transfer_id", move.ID, "begin_err", beginErr, "abort_err", abortErr)
@@ -253,18 +281,44 @@ func (d *Driver) beginUnknown(ctx context.Context, move Move, beginErr error) er
 	return fmt.Errorf("rehome: begin transfer %s of player %d: outcome unknown: %v", move.ID, move.PlayerID, beginErr)
 }
 
-// carry 是受理之后的后台部分：离开钩子 → 离开 → 提交 → 落定。
+// carry 是受理之后的后台部分：安静下来 → 复核 → 离开钩子 → 交出 → 提交 → 落定。
+//
+// 为什么是这个顺序：申请时的检查（事务内、事务外）只说明“那一刻可以换”。从那一刻到交出实体之间，
+// 这名玩家的状态还会变——标记之前已经准入的请求还在执行（它可能正在加入一个公会），别的服务的通知还在路上。
+// 所以先让他安静下来（Quiesce：断开会话，等标记之前准入的请求执行完；标记之后的新请求从 Reserve 起就被
+// 写闸门拒绝），再做两件事：把事务内的检查重跑一遍（Recheck，读的是他自己的档，这时已经没有他自己的请求会改它），
+// 然后跑离开钩子（事务外：可以去问别的服务里关于他的权威事实）。任何一步不成都中止这一次换服。
+// 之后才交出实体、提交。
+//
+// 安静之后仍会变的只有“不经本进程里他自己的请求”的那些事——别的玩家、别的服务主动改他的状态。
+// 它们拦不住，也不该由这里拦：需要的功能在离开钩子里向权威问清楚，并接受“问过之后又变了”要靠权威那一侧处理。
 func (d *Driver) carry(move Move) {
+	if d.grace > 0 {
+		time.Sleep(d.grace)
+	}
+	quiescing, cancel := context.WithTimeout(context.Background(), departBudget)
+	err := d.residency.Quiesce(quiescing, move)
+	cancel()
+	if err != nil {
+		slog.Warn("rehome: the player's running requests did not finish; aborting", "player_id", move.PlayerID, "transfer_id", move.ID, "err", err)
+		d.abandon(move, Aborted, "requests admitted before the move did not finish")
+		return
+	}
+	rechecking, cancel := context.WithTimeout(context.Background(), callBudget)
+	err = d.profile.Recheck(rechecking, move)
+	cancel()
+	if err != nil {
+		slog.Warn("rehome: a check that passed when the move was applied for no longer holds; aborting", "player_id", move.PlayerID, "transfer_id", move.ID, "err", err)
+		d.abandon(move, Aborted, fmt.Sprintf("recheck: %v", err))
+		return
+	}
 	leaving, cancel := context.WithTimeout(context.Background(), leaveBudget)
-	err := runLeaving(leaving, d.registry, move)
+	err = runLeaving(leaving, d.registry, move)
 	cancel()
 	if err != nil {
 		slog.Warn("rehome: a leave hook refused; aborting", "player_id", move.PlayerID, "transfer_id", move.ID, "err", err)
 		d.abandon(move, Aborted, err.Error())
 		return
-	}
-	if d.grace > 0 {
-		time.Sleep(d.grace)
 	}
 	departing, cancel := context.WithTimeout(context.Background(), departBudget)
 	err = d.residency.Depart(departing, move)
@@ -274,63 +328,105 @@ func (d *Driver) carry(move Move) {
 		d.abandon(move, Aborted, "the source server could not hand the player off")
 		return
 	}
-	if d.conclude(move, true, "") {
-		d.settle(move, Committed)
-		slog.Info("rehome: committed", "player_id", move.PlayerID, "transfer_id", move.ID, "from", move.From, "to", move.To)
-		return
-	}
-	d.settle(move, Aborted)
-	d.cancelIntent(move)
-	slog.Warn("rehome: the account service did not rebind the player; the transfer is aborted", "player_id", move.PlayerID, "transfer_id", move.ID)
+	verdict, binding := d.conclude(move, true, "")
+	d.finish(move, verdict, binding, Aborted)
 }
 
 // abandon 把一次换服中止到底：向 account 要到结论为止，再按结论落定。stays 是玩家留在本服时用哪种结论
-// （受理之前是 Kept，受理之后是 Aborted）。account 说已经提交时按已提交落定。
+// （受理之前是 Kept，受理之后是 Aborted）。
 func (d *Driver) abandon(move Move, stays Outcome, reason string) {
-	if d.conclude(move, false, reason) {
-		d.settle(move, Committed)
-		slog.Warn("rehome: aborting found the transfer already committed; the player is bound to the target", "player_id", move.PlayerID, "transfer_id", move.ID, "to", move.To)
-		return
-	}
-	d.settle(move, stays)
-	d.cancelIntent(move)
+	verdict, binding := d.conclude(move, false, reason)
+	d.finish(move, verdict, binding, stays)
 }
 
-// conclude 向 account 要这一次换服的结论，返回它是否已经提交。commit 为 true 时去提交，否则去中止；
-// 结果未知就原样重发，直到 account 明确回答。只在后台调用。
-func (d *Driver) conclude(move Move, commit bool, reason string) (committed bool) {
+// finish 按 conclude 的结论落定：
+//
+//   - 他归别的服：按已提交落定——屏障保持（没交出过的补交），迁出表记下他现在的服，意图不动
+//     （它跟着档走，由目标服到达时清）。不论这一次是提交成的，还是之后又换去了第三个服。
+//   - 这一次没有成、他仍在本服：按 stays 落定（撤屏障与标记），清意图。
+//   - 他换走之后又换回了本服：撤掉旧屏障与记录（Kept：不动他的连接），清掉这一次留下的意图。
+func (d *Driver) finish(move Move, verdict standing, binding svcaccount.RoleBinding, stays Outcome) {
+	switch verdict {
+	case standingGone:
+		move.To = binding.ServingServerID
+		d.settle(move, Committed)
+		slog.Info("rehome: the player is bound to another server; this process keeps its fence", "player_id", move.PlayerID,
+			"transfer_id", move.ID, "from", move.From, "to", move.To, "bind_epoch", binding.BindEpoch)
+	case standingReturned:
+		d.settle(move, Kept)
+		d.cancelIntent(move)
+		slog.Info("rehome: the player moved away and back before this transfer was settled here; this process serves him again",
+			"player_id", move.PlayerID, "transfer_id", move.ID, "bind_epoch", binding.BindEpoch)
+	default:
+		d.settle(move, stays)
+		d.cancelIntent(move)
+		slog.Warn("rehome: the transfer did not rebind the player; he stays on this server", "player_id", move.PlayerID, "transfer_id", move.ID)
+	}
+}
+
+// conclude 向 account 要这一次换服的结论。commit 为 true 时去提交，否则去中止；结果未知就原样重发，
+// 直到 account 明确回答。只在后台调用。
+//
+// 结论不从错误码推断（见 Directory 的注释）：account 一旦明确回答——照做了、stale、in-progress、拒绝——
+// 就按它带回的当前绑定判定（judge）。于是应答丢失之后重发得到的“不认识这个 ID”不会被读成“当年没有提交”：
+// 他归别的服就是归别的服。提交被拒绝而这一次仍在途时（目标服在此期间没了、名额没了），转去中止。
+// 返回的 standing 只会是 standingStays、standingGone 或 standingReturned。
+func (d *Driver) conclude(move Move, commit bool, reason string) (standing, svcaccount.RoleBinding) {
 	for attempt := 0; ; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), callBudget)
+		var binding svcaccount.RoleBinding
 		var err error
 		if commit {
-			_, err = d.directory.Commit(ctx, move.PlayerID, move.ID)
+			binding, err = d.directory.Commit(ctx, move.PlayerID, move.ID)
 		} else {
-			_, err = d.directory.Abort(ctx, move.PlayerID, move.ID, reason)
+			binding, err = d.directory.Abort(ctx, move.PlayerID, move.ID, reason)
+		}
+		verdict := standingUnknown
+		if classify(err) != answerUnknown {
+			verdict, binding = d.verdictAndBinding(ctx, move, binding)
 		}
 		cancel()
-		switch kind := classify(err); {
-		case kind == answerDone:
-			return commit
-		case kind == answerStale:
-			// 提交得到它：这个 ID 已被中止或不认识，没有改绑。中止得到它：这个 ID 已经提交。
-			return !commit
-		case kind == answerInProgress:
-			// 在途的是另一次换服：这个 ID 没有、也不会改绑。
-			return false
-		case kind == answerRefused && commit:
-			// 目标服在此期间没了、名额没了：account 上换服仍在途，由我们中止。
-			slog.Warn("rehome: commit refused; aborting", "player_id", move.PlayerID, "transfer_id", move.ID, "err", err)
-			commit, reason = false, "commit refused: "+err.Error()
+		switch {
+		case verdict == standingStays, verdict == standingGone, verdict == standingReturned:
+			return verdict, binding
+		case verdict == standingInFlight && commit:
+			// account 明确不肯提交、而这一次仍在途：由我们中止。
+			slog.Warn("rehome: commit refused while the transfer is still in flight; aborting", "player_id", move.PlayerID, "transfer_id", move.ID, "err", err)
+			commit, reason = false, fmt.Sprintf("commit refused: %v", err)
 			attempt = -1
 			continue
-		case kind == answerRefused:
-			// 中止被明确拒绝（角色不存在了）：没有什么可改绑的。
-			return false
 		}
 		slog.Warn("rehome: outcome unknown; sending the same request again", "player_id", move.PlayerID, "transfer_id", move.ID,
 			"commit", commit, "attempt", attempt+1, "err", err)
 		d.wait(attempt)
 	}
+}
+
+// bound 报告一份 RoleBinding 是不是真的带回了绑定（写入在拒绝时可能什么都没带回）。
+func bound(binding svcaccount.RoleBinding) bool {
+	return binding.PlayerID != 0 || binding.ServingServerID != 0
+}
+
+// verdict 是 verdictAndBinding 只要结论的写法。
+func (d *Driver) verdict(ctx context.Context, move Move, binding svcaccount.RoleBinding) standing {
+	verdict, _ := d.verdictAndBinding(ctx, move, binding)
+	return verdict
+}
+
+// verdictAndBinding 按一次写入带回的绑定判定；没带回就读一次。读不到是 standingUnknown；
+// account 说没有这个角色时没有什么可保护的，按“留在本服”处理。
+func (d *Driver) verdictAndBinding(ctx context.Context, move Move, binding svcaccount.RoleBinding) (standing, svcaccount.RoleBinding) {
+	if !bound(binding) {
+		read, err := d.directory.Binding(ctx, move.PlayerID)
+		switch {
+		case errors.Is(err, svcaccount.ErrRoleMissing):
+			return standingStays, svcaccount.RoleBinding{}
+		case err != nil:
+			return standingUnknown, svcaccount.RoleBinding{}
+		}
+		binding = read
+	}
+	return judge(move, d.self, binding), binding
 }
 
 // settle 落定结论，直到成功：撤屏障会因为实体正被占用而失败，失败时标记与屏障都还在，重试就是了。只在后台调用。

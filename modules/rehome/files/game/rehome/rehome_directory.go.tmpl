@@ -18,10 +18,16 @@ import (
 //     换服尝试序号（RoleBinding 的 BindEpoch / TransferSeq）；读到之后有别的发起或中止落了地就答
 //     svcaccount.ErrTransferStale，重读绑定再来。发起之后这一次已被中止或提交的，同样答它并带回当前绑定。
 //   - Commit：改绑到目标服。调用方保证源服已经不再写这名玩家。同一个 ID 重发幂等；
-//     答 svcaccount.ErrTransferStale 表示这个 ID 已被中止或不认识——没有改绑。
-//   - Abort：玩家留在源服，这个 ID 从此不能再提交、也不能再发起——中止之前发出的发起从此都过期，
-//     不论之后又有多少次换服。同一个 ID 重发幂等，没发起成的 ID 也可以中止；
-//     答 svcaccount.ErrTransferStale 表示这个 ID 已经提交——按已提交处理。
+//     答 svcaccount.ErrTransferStale 表示这个 ID **现在**不是在途的那一次，也不是最近了结的那一次。
+//   - Abort：这个 ID 从此不能再提交、也不能再发起——中止之前发出的发起从此都过期，不论之后又有多少次换服。
+//     同一个 ID 重发幂等；没发起成的 ID、以及早已了结而又被后来的了结覆盖掉的 ID 也都“中止成功”。
+//     答 svcaccount.ErrTransferStale 表示最近了结的正是这个 ID、而且它提交了。
+//
+// **一次写入的回答不说明这个 ID 的历史。** account 按换服 ID 只认两样：在途的那一次、最近了结的那一次；
+// 一个 ID 提交之后，只要这名玩家又有一次换服了结，再问它就是“不认识”——重发的 Commit 得到 stale，
+// 重发的 Abort 得到成功。所以写入的错误码只用来分“请求被处理了”与“结果未知”，这一次换服对本服意味着什么，
+// 一律看回答里带回的当前绑定（judge）：承载服、绑定代数、在途的换服。四个写入在成功、stale、in-progress
+// 时都带回当前绑定；没带回的（别的实现、别的拒绝）调用方再读一次 Binding。
 //
 // 不带业务码的错误（超时、总线错误）一律是“结果未知”：请求可能已经生效。
 type Directory interface {
@@ -106,6 +112,48 @@ func (d accountDirectory) Abort(ctx context.Context, playerID int64, transferID 
 	return d.accounts.AbortRoleTransfer(ctx, playerID, transferID, reason)
 }
 
+// standing 是一次换服对源服（本进程）意味着什么，由 judge 按当前绑定判定。
+type standing uint8
+
+const (
+	// standingUnknown：这份绑定判断不了（对不上的组合）。当作结果未知，稍后再问。
+	standingUnknown standing = iota
+	// standingInFlight：这一次换服仍在途。
+	standingInFlight
+	// standingStays：这一次没有提交，他仍绑定在本服（绑定代数还是发起时的那一代）。
+	standingStays
+	// standingGone：他归别的服。源服的保护必须留着——不论是这一次提交了，还是之后又换去了第三个服。
+	standingGone
+	// standingReturned：他换走之后又换回了本服（绑定代数比发起时至少大 2）。本服重新归他。
+	standingReturned
+)
+
+// judge 按 account 的当前绑定回答：move 这一次换服（从 self 发起、发起时绑定代数是 move.Epoch）之后，
+// 本进程还归不归这名玩家。只看三样——在途的是不是这个 ID、承载服是不是本服、绑定代数走了几步：
+//
+//   - 在途的就是这个 ID：还没有结论。
+//   - 承载服不是本服：他归别的服。
+//   - 承载服是本服、代数没变：从发起到现在没有任何一次提交，这一次没有成。
+//   - 承载服是本服、代数至少大 2：换走过、又换回来了。
+//   - 承载服是本服、代数恰好大 1，或者代数比发起时还小：一次提交只会把他带离本服，这样的绑定对不上，不下结论。
+//
+// 它不看这个 ID 当年是提交还是中止：那个事实 account 可能已经不记得了，而本服该不该写这名玩家只取决于现在。
+func judge(move Move, self int32, binding svcaccount.RoleBinding) standing {
+	switch {
+	case binding.Transfer != nil && binding.Transfer.ID == move.ID:
+		return standingInFlight
+	case binding.ServingServerID <= 0:
+		return standingUnknown
+	case binding.ServingServerID != self:
+		return standingGone
+	case binding.BindEpoch == move.Epoch:
+		return standingStays
+	case binding.BindEpoch >= move.Epoch+2:
+		return standingReturned
+	}
+	return standingUnknown
+}
+
 // answer 是 Directory 对一次写入的回答归成的类。
 type answer uint8
 
@@ -114,7 +162,8 @@ const (
 	answerUnknown answer = iota
 	// answerDone：照做了（含同一个 ID 的幂等重发）。
 	answerDone
-	// answerStale：调用方手里的绑定或换服 ID 已经不是当前的。Commit 得到它 = 没有改绑；Abort 得到它 = 已经提交。
+	// answerStale：调用方手里的绑定或换服 ID 已经不是当前的。它只说明请求被处理了、没有照做；
+	// 这一次换服提交了没有，看带回的绑定（judge），不看它。
 	answerStale
 	// answerInProgress：在途的是另一次换服。
 	answerInProgress

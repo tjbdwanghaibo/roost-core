@@ -12,6 +12,7 @@ import (
 	syncsender "{{MODULE}}/game/handler/syncsender"
 	gamerehome "{{MODULE}}/game/rehome"
 	apperrors "{{MODULE}}/internal/errors"
+	"{{MODULE}}/protocol/msgid"
 
 	"github.com/tjbdwanghaibo/roost-core/framework/app"
 	svcaccount "github.com/tjbdwanghaibo/roost-core/service/account"
@@ -89,6 +90,13 @@ func TestWithRehomeEnterChecksBeforeThePlayerIsLoaded(t *testing.T) {
 	}
 	if err := w.enter(source, before, &loads); !errors.Is(err, apperrors.ErrRehomeMoving) && !errors.Is(err, apperrors.ErrRehomeElsewhere) {
 		t.Fatalf("entering the source right after the transfer was accepted: err = %v, want rehome_moving (or rehome_elsewhere once it settled)", err)
+	}
+	// 离开中的玩家在写闸门被拒；进入游戏这条消息是豁免的（联动登记的），由上面的进入前检查给带码的回答。
+	if err := gamerehome.AdmitMessage(source.registry, w.playerID, msgid.MsgEnterGame); err != nil {
+		t.Fatalf("the enter message was refused at the gate: %v", err)
+	}
+	if err := gamerehome.AdmitMessage(source.registry, w.playerID, msgid.MsgRehomeApply); err == nil {
+		t.Fatal("a business message of a leaving player passed the gate")
 	}
 	w.settled(source)
 	// 换走之后：原来的服拒绝（旧会话与没有 claims 的都一样），新服放行。
@@ -235,7 +243,7 @@ func TestWithRehomeEnterResumesATransferAfterTheSourceRestarted(t *testing.T) {
 	if binding := w.binding(); binding.ServerID != 1001 || binding.BindEpoch != 1 || binding.Transfer != nil {
 		t.Fatalf("account binding = %+v, want server 1001 at epoch 1", binding)
 	}
-	if events := restarted.events.snapshot(); len(events) != 2 {
+	if events := restarted.events.snapshot(); len(events) != 3 {
 		t.Fatalf("on the restarted source: %v, want the sessions closed and the entity handed off", events)
 	}
 	if err := w.enter(restarted, withRehomeClaims(w.binding()), &loads); !errors.Is(err, apperrors.ErrRehomeElsewhere) {

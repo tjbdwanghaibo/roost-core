@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -44,17 +45,23 @@ type Whereabouts struct {
 //
 // 一次换服按这个顺序调用，同一名玩家同一时刻只有一次：
 //
-//	Reserve → （发起成了）Depart → Settle(Committed 或 Aborted)
+//	Reserve → （发起成了）Quiesce → [复核与离开钩子] → Depart → Settle(Committed 或 Aborted)
 //	Reserve → （没发起成）Settle(Kept)
 //
 // 之后这名玩家若又换回本服，调用方在发现时再 Settle(Kept) 一次，把旧记录与屏障撤掉。
 type Residency interface {
-	// Reserve 给这名玩家打上“离开中”的标记：从这一刻起 Where 回答“换服中”。它在向 account 发起之前调用，
-	// 所以 account 那边一有换服在途，本进程就已经在拒绝新的进入与后台步骤。
+	// Reserve 给这名玩家打上“离开中”的标记：从这一刻起 Where 回答“换服中”，**他新的业务请求在准入处被拒**
+	// （接入边界的写闸门、后台步骤的准入、进入前检查都看这张表）。它在向 account 发起之前调用，
+	// 所以 account 那边一有换服在途，本进程就已经不再替他开始任何新的事。
 	// 表里已经有这名玩家时拒绝：换服在途答 Moving，已经迁走答 Elsewhere。只做一次加锁读写，不等待。
 	Reserve(move Move) error
-	// Depart 让这名玩家离开本进程：断开他的会话，把实体的写权交出去（已准入的写入落库、从内存卸载、
-	// 之后写到它的事务被拒绝）。成功返回之后本进程不再写他，调用方才可以让 account 改绑。
+	// Quiesce 把这名玩家在本进程里安静下来：断开他的会话，并等到**标记之前已经准入的请求全部执行完**。
+	// 成功返回之后，本进程里没有任何代表他的请求在执行，新的也进不来——离开钩子从这一刻起读到的事实
+	// （他自己的档、别的服务里他的状态）不会再被本进程里他自己的请求改掉。在 ctx 之内等不到就返回错误，
+	// 调用方中止换服。会等待，不能在 Nest 业务 worker 上调用。可以重复调用。
+	Quiesce(ctx context.Context, move Move) error
+	// Depart 让这名玩家离开本进程：把实体的写权交出去（已准入的写入落库、从内存卸载、之后写到它的事务被拒绝）。
+	// 成功返回之后本进程不再写他，调用方才可以让 account 改绑。
 	// 失败是确定的“没有离开”：实体照常可写，调用方中止换服。会等待，不能在 Nest 业务 worker 上调用。
 	// 对已经离开的玩家再调一次是安全的。
 	Depart(ctx context.Context, move Move) error
@@ -85,8 +92,70 @@ func ResidencyOf(registry *app.Registry) Residency {
 	if local == nil {
 		local = NewLocalResidency(registry)
 		locals[registry] = local
+		publishGate(registry, local)
 	}
 	return local
+}
+
+// writeGateCapability 是 internal/access/player 的 WriteGateCapability：接入边界在每个玩家请求到达 handler 之前
+// 问一次的写闸门。按名字发布、按方法匹配（AdmitMessage），理由与玩家传输相同——这个包不能 import 接入层。
+const writeGateCapability app.ModName = "access.player.write_gate"
+
+// publishGate 把缺省的迁出表发布成接入边界的写闸门：表里的玩家（离开中、已迁走）发来的请求在到达 handler 之前被拒，
+// 连接随之关闭（接入层对闸门的拒绝就是这样处理的），客户端重新选角。
+//
+// 工程已经发布了自己的写闸门时这里什么都不发布（一个进程只有一个）：那个闸门要自己拒绝迁出表里的玩家——
+// 在它的 AdmitMessage 里调本包的 AdmitMessage(registry, playerID, messageID)。用自己的 Residency 的工程
+// （game-demo 的驻留表）本来就走不到这里，它的闸门与迁出表是同一个东西。
+func publishGate(registry *app.Registry, local *LocalResidency) {
+	if registry == nil {
+		return
+	}
+	if err := registry.Register(writeGateCapability, local); err != nil {
+		slog.Warn("rehome: this project publishes its own player write gate; it must refuse the players in the emigrant table itself (rehome.AdmitMessage)", "err", err)
+	}
+}
+
+// AdmitMessage 回答接入边界：这名玩家的这条消息现在能不能在本进程处理。迁出表里的玩家一律拒绝
+// （离开中 rehome_moving，已迁走 rehome_elsewhere），除了 ExemptFromGate 登记过的消息。
+// 给有自己的写闸门的工程在闸门里调用；缺省的迁出表自己就是闸门。
+func AdmitMessage(registry *app.Registry, playerID int64, messageID uint32) error {
+	return admitMessage(ResidencyOf(registry), playerID, messageID)
+}
+
+func admitMessage(residency Residency, playerID int64, messageID uint32) error {
+	if gateExempt(messageID) {
+		return nil
+	}
+	where, tracked := residency.Where(playerID)
+	switch {
+	case !tracked:
+		return nil
+	case where.Moving:
+		return Moving(playerID, where.Move.To)
+	}
+	return Elsewhere(playerID, where.Move.To)
+}
+
+var (
+	gateMu      sync.RWMutex
+	gateExempts = map[uint32]struct{}{}
+)
+
+// ExemptFromGate 登记一条不受写闸门约束的消息：它自己会检查迁出表、并给客户端一个带码的回答，
+// 闸门若先把连接关掉，客户端反而不知道原因。进入游戏的那条消息就是（rehome 与 enter 的联动登记它：
+// 进入前检查回答 rehome_moving / rehome_elsewhere）。只在 init 里调用。
+func ExemptFromGate(messageID uint32) {
+	gateMu.Lock()
+	defer gateMu.Unlock()
+	gateExempts[messageID] = struct{}{}
+}
+
+func gateExempt(messageID uint32) bool {
+	gateMu.RLock()
+	defer gateMu.RUnlock()
+	_, exempt := gateExempts[messageID]
+	return exempt
 }
 
 // RegistryResidency 返回一个每次用到时才从 Registry 取的 Residency（ResidencyOf）。Driver 用它而不是在
@@ -99,6 +168,9 @@ func RegistryResidency(registry *app.Registry) Residency {
 type registryResidency struct{ registry *app.Registry }
 
 func (r registryResidency) Reserve(move Move) error { return ResidencyOf(r.registry).Reserve(move) }
+func (r registryResidency) Quiesce(ctx context.Context, move Move) error {
+	return ResidencyOf(r.registry).Quiesce(ctx, move)
+}
 func (r registryResidency) Depart(ctx context.Context, move Move) error {
 	return ResidencyOf(r.registry).Depart(ctx, move)
 }
@@ -121,10 +193,14 @@ var (
 // 按名字取、写成接口，因为传输包 import 协议绑定、协议绑定 import controller——这个包不能反过来 import 它。
 const playerTCPCapability app.ModName = "access.player.tcp"
 
-// sessionCloser 是玩家传输上按玩家断开会话的入口（gateway.PlayerRuntime 的 CloseSessions）。
+// sessionCloser 是玩家传输上按玩家断开会话、问他还有几条会话的入口（gateway.PlayerRuntime）。
 type sessionCloser interface {
 	CloseSessions(playerID int64, reason error) int
+	ActiveSessions(playerID int64) int
 }
+
+// quiescePoll 是等会话收尾时两次查看之间的间隔。
+const quiescePoll = 10 * time.Millisecond
 
 // entityHandOff 是 DataEngine Mod 上交出实体的入口（wiring/dataengine 的 Mod.HandOffEntity）。
 type entityHandOff interface {
@@ -133,7 +209,16 @@ type entityHandOff interface {
 
 // LocalResidency 是 Residency 的缺省实现，给没有自己的驻留表的工程用：
 //
-//   - 断开会话：按能力名取玩家 TCP 传输，调它的 CloseSessions。进程里没有玩家传输（不接玩家的进程）就没有会话可断。
+//   - 写闸门：它自己就是接入边界的写闸门（AdmitMessage），第一次用到时发布（publishGate）：表里的玩家
+//     发来的请求在到达 handler 之前被拒。
+//   - 断开会话与排空（Quiesce）：按能力名取玩家 TCP 传输，CloseSessions 之后等 ActiveSessions 归零。
+//     这就是“标记之前已经准入的请求都执行完了”，依据是传输的两条性质：一条连接的读循环**串行**分发请求
+//     （同一时刻至多一个在执行，没有每请求一个 goroutine）；会话要等读循环退出——也就是那个请求的 handler
+//     返回、它的 Nest 事务已经提交或失败——之后才从按玩家的会话表里摘掉。断开会取消连接的 context，
+//     还在等别的服务应答的 handler 因此很快返回；它发出去的请求在那个服务上是否生效，由离开钩子去问那个服务。
+//     进程里没有玩家传输（不接玩家的进程）就没有会话可断、也没有请求可等。
+//     有两种情形不在这个保证里：推送失败时被传输提前摘掉的连接（它的 handler 可能还没返回，context 已取消），
+//     以及独立 Gate 部署下经 Game Ingress 转来的请求（那里的会话表不是这张，没有核对过）。
 //   - 交出实体：DataEngine Mod 的 HandOffEntity，屏障保持到 Release 或进程退出。
 //   - 迁出表：进程内的一张表，玩家 → 这一次换服、是否仍在换服、交出的句柄。它不持久：进程重启之后
 //     表是空的，这名玩家归谁由 account 回答（Driver.Admit、Binding 都会去问）。
@@ -144,8 +229,9 @@ type entityHandOff interface {
 type LocalResidency struct {
 	now func() time.Time
 	// closeSessions 与 handOff 是两个外部动作，测试替换它们；缺省实现按能力名从 Registry 取。
-	closeSessions func(playerID int64, reason error) int
-	handOff       func(ctx context.Context, entityID int64) (release func(context.Context) error, err error)
+	closeSessions  func(playerID int64, reason error) int
+	activeSessions func(playerID int64) int
+	handOff        func(ctx context.Context, entityID int64) (release func(context.Context) error, err error)
 
 	mu        sync.Mutex
 	emigrants map[int64]*emigrant
@@ -171,6 +257,13 @@ func NewLocalResidency(registry *app.Registry) *LocalResidency {
 				return 0
 			}
 			return transport.CloseSessions(playerID, reason)
+		},
+		activeSessions: func(playerID int64) int {
+			transport, ok := app.Lookup[sessionCloser](registry, playerTCPCapability)
+			if !ok || transport == nil {
+				return 0
+			}
+			return transport.ActiveSessions(playerID)
 		},
 		handOff: func(ctx context.Context, entityID int64) (func(context.Context) error, error) {
 			engine, ok := app.Lookup[entityHandOff](registry, mods.ModDataEngine)
@@ -200,11 +293,37 @@ func (r *LocalResidency) Reserve(move Move) error {
 	return nil
 }
 
+// AdmitMessage 让迁出表直接充当接入边界的写闸门（internal/access/player 的 WriteGate）。
+func (r *LocalResidency) AdmitMessage(playerID int64, messageID uint32) error {
+	return admitMessage(r, playerID, messageID)
+}
+
+func (r *LocalResidency) Quiesce(ctx context.Context, move Move) error {
+	if !r.holds(move) {
+		return fmt.Errorf("rehome: transfer %s of player %d was not reserved", move.ID, move.PlayerID)
+	}
+	r.closeSessions(move.PlayerID, ErrSessionRehoming)
+	// 会话从表里摘掉 = 它的读循环退出了 = 它正在执行的那个请求已经返回（见类型注释）。
+	// 写闸门从 Reserve 起就在拒绝新请求，所以归零之后不会再有；期间新建的连接发不出业务请求，一并断开。
+	ticker := time.NewTicker(quiescePoll)
+	defer ticker.Stop()
+	for r.activeSessions(move.PlayerID) > 0 {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("rehome: requests of player %d admitted before the move are still running: %w", move.PlayerID, ctx.Err())
+		case <-ticker.C:
+			r.closeSessions(move.PlayerID, ErrSessionRehoming)
+		}
+	}
+	return nil
+}
+
 func (r *LocalResidency) Depart(ctx context.Context, move Move) error {
 	if !r.holds(move) {
 		return fmt.Errorf("rehome: transfer %s of player %d was not reserved", move.ID, move.PlayerID)
 	}
-	// 先断开，再交出：连接上还有自身视图的订阅时，卸载之后框架会为订阅者把实体重新读回内存。
+	// Quiesce 之后握手进来的连接发不出业务请求，但握手本身会登记自身视图的订阅：连接上还有订阅时，
+	// 卸载之后框架会为订阅者把实体重新读回内存。所以交出之前再断开一次。
 	r.closeSessions(move.PlayerID, ErrSessionRehoming)
 	release, err := r.handOff(ctx, move.EntityID)
 	if err != nil {
@@ -259,6 +378,10 @@ func (r *LocalResidency) settleCommitted(ctx context.Context, move Move) error {
 	}
 	if entry.moving || entry.since.IsZero() {
 		entry.moving, entry.since = false, r.now()
+	}
+	if move.To > 0 {
+		// 调用方按 account 的当前绑定告诉我们他现在的服：它可能已经不是这一次换服的目标。
+		entry.move.To = move.To
 	}
 	handed := entry.release != nil
 	r.mu.Unlock()

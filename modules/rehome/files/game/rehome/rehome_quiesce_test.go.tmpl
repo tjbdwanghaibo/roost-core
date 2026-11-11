@@ -1,0 +1,241 @@
+package rehome
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	apperrors "{{MODULE}}/internal/errors"
+
+	"github.com/spf13/viper"
+	"github.com/tjbdwanghaibo/roost-core/framework/app"
+)
+
+// 离开中的玩家不再开始新的事，已经开始的要等它做完（RV-20261111-BM-05 在模块里的那一半）：
+// 标记一打上，写闸门就拒绝他新的请求；受理之后先断开会话、等标记之前准入的请求执行完，
+// 再复核事务内的检查、跑离开钩子。申请时通过的检查到这时不成立了，就中止。
+
+// rehomeTestMessage 是一条普通的业务消息号；rehomeTestExempt 是登记过豁免的（进入游戏那一类）。
+const (
+	rehomeTestMessage uint32 = 4_100_001
+	rehomeTestExempt  uint32 = 4_100_002
+)
+
+func init() { ExemptFromGate(rehomeTestExempt) }
+
+// 标记一打上，这名玩家新的业务请求就在写闸门被拒：申请还在检查的时候已经如此，受理之后、提交之后也一样
+// （提交之后答他去了哪）。豁免的消息（它自己会给带码的回答）与别的玩家不受影响；申请被拒、标记撤掉之后恢复。
+func TestRehomeLeavingPlayerIsRefusedAtTheGateFromTheMark(t *testing.T) {
+	f := newRehomeFixture(t)
+	gate := f.residency.AdmitMessage
+	if err := gate(rehomePlayer, rehomeTestMessage); err != nil {
+		t.Fatalf("before any move the gate refused the player: %v", err)
+	}
+	var duringCheck error
+	veto := errors.New("not today")
+	OnApplying("probe", func(context.Context, *app.Registry, Move) error {
+		duringCheck = gate(rehomePlayer, rehomeTestMessage)
+		return veto
+	})
+	if _, err := f.apply(); !errors.Is(err, veto) {
+		t.Fatalf("apply: %v, want the veto", err)
+	}
+	if !errors.Is(duringCheck, apperrors.ErrRehomeMoving) {
+		t.Fatalf("while the application was still being checked the gate answered %v, want rehome_moving: the mark comes first", duringCheck)
+	}
+	if err := gate(rehomePlayer, rehomeTestMessage); err != nil {
+		t.Fatalf("after a refused application the gate still refuses the player: %v", err)
+	}
+	veto = nil
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate(rehomePlayer, rehomeTestMessage); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("after acceptance the gate answered %v, want rehome_moving", err)
+	}
+	if err := gate(rehomePlayer, rehomeTestExempt); err != nil {
+		t.Fatalf("an exempt message was refused: %v", err)
+	}
+	if err := gate(rehomePlayer+1, rehomeTestMessage); err != nil {
+		t.Fatalf("another player was refused: %v", err)
+	}
+	f.runBackground()
+	err := gate(rehomePlayer, rehomeTestMessage)
+	if sid, known := OwnerSID(err); !errors.Is(err, apperrors.ErrRehomeElsewhere) || !known || sid != 1001 {
+		t.Fatalf("after the commit the gate answered %v, want rehome_elsewhere naming 1001", err)
+	}
+
+	// 缺省的迁出表第一次用到时把自己发布成接入边界的写闸门；工程已经有自己的闸门时不抢，
+	// 那个闸门在自己的 AdmitMessage 里调 rehome.AdmitMessage。
+	type writeGate interface {
+		AdmitMessage(playerID int64, messageID uint32) error
+	}
+	registry := app.NewRegistry(viper.New())
+	residency := ResidencyOf(registry)
+	published, ok := app.Lookup[writeGate](registry, "access.player.write_gate")
+	if !ok || published == nil {
+		t.Fatal("the default residency did not publish itself as the player write gate")
+	}
+	if err := residency.Reserve(Move{PlayerID: rehomePlayer, ID: "t-1", From: 1000, To: 1001}); err != nil {
+		t.Fatal(err)
+	}
+	if err := published.AdmitMessage(rehomePlayer, rehomeTestMessage); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("the published gate answered %v, want rehome_moving", err)
+	}
+	own := app.NewRegistry(viper.New())
+	if err := own.Register("access.player.write_gate", writeGate(rehomeOpenGate{})); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResidencyOf(own).Reserve(Move{PlayerID: rehomePlayer, ID: "t-1", From: 1000, To: 1001}); err != nil {
+		t.Fatal(err)
+	}
+	if kept, _ := app.Lookup[writeGate](own, "access.player.write_gate"); kept != writeGate(rehomeOpenGate{}) {
+		t.Fatal("the project's own write gate was replaced")
+	}
+	if err := AdmitMessage(own, rehomePlayer, rehomeTestMessage); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("rehome.AdmitMessage answered %v, want rehome_moving", err)
+	}
+	if err := AdmitMessage(own, rehomePlayer, rehomeTestExempt); err != nil {
+		t.Fatalf("rehome.AdmitMessage refused an exempt message: %v", err)
+	}
+}
+
+// rehomeOpenGate 是工程自己的写闸门：什么都放行。
+type rehomeOpenGate struct{}
+
+func (rehomeOpenGate) AdmitMessage(int64, uint32) error { return nil }
+
+// 标记之前已经准入、还在执行的请求：后台部分断开会话之后停在这里等它执行完——复核与离开钩子都还没有开始，
+// 新的请求在闸门被拒。它一执行完（会话从传输的表里摘掉），才依次是复核、离开钩子、交出、提交。
+// 时序由 channel 固定：reached 是“后台已经在等”，finished 是“那个请求执行完了”。
+func TestRehomeQuiesceWaitsForTheRequestsAdmittedBeforeTheMark(t *testing.T) {
+	f := newRehomeFixture(t)
+	reached, finished := make(chan struct{}), make(chan struct{})
+	signalled := false
+	f.residency.activeSessions = func(int64) int {
+		select {
+		case <-finished:
+			return 0
+		default:
+		}
+		if !signalled {
+			signalled = true
+			close(reached)
+		}
+		return 1
+	}
+	OnLeaving("guild", func(context.Context, *app.Registry, Move) error {
+		f.events.add("leave guild")
+		return nil
+	})
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	f.events.take()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f.runBackground()
+	}()
+	<-reached
+	// 那个请求还在执行：会话已经被断开，别的什么都没有开始。
+	for _, event := range f.events.peek() {
+		if !strings.HasPrefix(event, "close ") {
+			t.Fatalf("while a request admitted before the mark was still running, the move went on: %v", f.events.peek())
+		}
+	}
+	if err := f.residency.AdmitMessage(rehomePlayer, rehomeTestMessage); !errors.Is(err, apperrors.ErrRehomeMoving) {
+		t.Fatalf("a new request during the wait: %v, want rehome_moving", err)
+	}
+	f.events.add("request finished")
+	close(finished)
+	<-done
+	var order []string
+	for _, event := range f.events.take() {
+		if !strings.HasPrefix(event, "close ") {
+			order = append(order, event)
+		}
+	}
+	want := []string{"request finished", "recheck t-1", "leave guild", "handoff 7094301", "commit 94301 t-1"}
+	if strings.Join(order, " | ") != strings.Join(want, " | ") {
+		t.Fatalf("order = %v, want %v", order, want)
+	}
+	if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move.To != 1001 {
+		t.Fatalf("the table says %+v (%v), want departed to 1001", where, tracked)
+	}
+}
+
+// 在途的请求在预算内执行不完：安静不下来就不往下走——不复核、不跑离开钩子、不交出实体，中止这一次换服，
+// 他留在本服，可以再申请。
+func TestRehomeQuiesceThatDoesNotFinishAborts(t *testing.T) {
+	f := newRehomeFixture(t)
+	f.residency.activeSessions = func(int64) int { return 1 }
+	OnLeaving("guild", func(context.Context, *app.Registry, Move) error {
+		f.events.add("leave guild")
+		return nil
+	})
+	// 缺省实现本身：到期返回错误，期间一直在断开他的会话。
+	move := Move{PlayerID: rehomePlayer, EntityID: rehomeEntity, ID: "t-0", From: 1000, To: 1001, Epoch: 3}
+	if err := f.residency.Quiesce(context.Background(), move); err == nil {
+		t.Fatal("a move that was not reserved was quiesced")
+	}
+	if err := f.residency.Reserve(move); err != nil {
+		t.Fatal(err)
+	}
+	expiring, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	err := f.residency.Quiesce(expiring, move)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Quiesce with a request that never finishes: %v, want the deadline", err)
+	}
+	if err := f.residency.Settle(context.Background(), move, Kept); err != nil {
+		t.Fatal(err)
+	}
+	f.events.take()
+	// 驱动器：Quiesce 失败即中止。这里用一个立刻失败的 Quiesce，不等它的 30 秒预算。
+	f.driver.residency = rehomeStuckResidency{Residency: f.residency}
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	f.events.take()
+	f.runBackground()
+	f.expectEvents(t, "abort 94301 t-1", "close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-1")
+	f.expectFree(t)
+	if len(f.directory.reasons) != 1 || !strings.Contains(f.directory.reasons[0], "did not finish") {
+		t.Fatalf("abort reasons = %q, want the unfinished requests named", f.directory.reasons)
+	}
+}
+
+// rehomeStuckResidency 的 Quiesce 立刻失败：在途的请求没有执行完。
+type rehomeStuckResidency struct{ Residency }
+
+func (rehomeStuckResidency) Quiesce(context.Context, Move) error {
+	return errors.New("requests admitted before the move are still running")
+}
+
+// 申请时通过的事务内检查，到安静下来之后不成立了（标记之前准入的请求、别的服务的通知改了他的档）：
+// 复核不过就中止——离开钩子不执行、实体不交出、account 上撤销，他留在本服。
+func TestRehomeRecheckAfterQuiesceAbortsWhenACheckNoLongerHolds(t *testing.T) {
+	f := newRehomeFixture(t)
+	OnLeaving("guild", func(context.Context, *app.Registry, Move) error {
+		f.events.add("leave guild")
+		return nil
+	})
+	if _, err := f.apply(); err != nil {
+		t.Fatal(err)
+	}
+	f.events.take()
+	f.profile.recheckErr = Refused(errors.New("joined a guild meanwhile"), "refused by a check")
+	f.runBackground()
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-1",
+		"abort 94301 t-1", "close 94301: rehome: the server change was aborted; select the role again", "cancel 94301 t-1")
+	f.expectFree(t)
+	if len(f.directory.reasons) != 1 || !strings.Contains(f.directory.reasons[0], "joined a guild meanwhile") {
+		t.Fatalf("abort reasons = %q, want the failed check named", f.directory.reasons)
+	}
+	if f.directory.binding.ServingServerID != 1000 || f.directory.binding.Transfer != nil {
+		t.Fatalf("account binding = %+v, want the player still on 1000 with nothing in flight", f.directory.binding)
+	}
+}

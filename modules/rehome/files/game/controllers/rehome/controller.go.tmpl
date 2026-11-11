@@ -120,6 +120,11 @@ func (p *profile) Prepare(ctx context.Context, move gamerehome.Move) error {
 	return p.prepares.Sync_RehomePrepare(ctx, move.EntityID, move.ID, move.From, move.To, move.Operator)
 }
 
+// Recheck 就是同一个换服 ID 的 RehomePrepare 再发一次：意图已经记着时它只重跑事务内的检查。
+func (p *profile) Recheck(ctx context.Context, move gamerehome.Move) error {
+	return p.prepares.Sync_RehomePrepare(ctx, move.EntityID, move.ID, move.From, move.To, move.Operator)
+}
+
 func (p *profile) Cancel(ctx context.Context, playerID int64, transferID string) error {
 	entityID, err := playerEntityID(playerID)
 	if err != nil {

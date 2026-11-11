@@ -149,12 +149,14 @@ func TestRehomeAdmitLetsAReturnedPlayerBackIn(t *testing.T) {
 	// 换回来之后又有一次换服在途（运维发起的，去 1002），而本进程还记着第一次的“已迁走”：
 	// 先撤掉旧屏障，再按“源服是本服的在途换服”接手——答 rehome_moving，后台把它做完。
 	depart()
+	f.directory.binding.BindEpoch = 5
+	f.directory.binding.Transfer = &svcaccount.RoleTransfer{ID: "t-9", From: 1000, To: 1002, Epoch: 5}
 	if err := f.admit(map[string]string{"server_id": "1000", "bind_epoch": "5", "transfer": "1002:t-9"}); !errors.Is(err, apperrors.ErrRehomeMoving) {
 		t.Fatalf("returned and moving again: err = %v, want rehome_moving", err)
 	}
 	f.expectEvents(t, "release 7094301")
 	f.runBackground()
-	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-9")
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-9", "close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-9")
 	if where, tracked := f.residency.Where(rehomePlayer); !tracked || where.Moving || where.Move.To != 1002 || where.Move.Epoch != 5 {
 		t.Fatalf("the table says %+v (%v), want departed to 1002 from epoch 5", where, tracked)
 	}
@@ -171,6 +173,7 @@ func TestRehomeAdmitResumesATransferThisProcessDidNotFinish(t *testing.T) {
 		return nil
 	})
 	claims := map[string]string{"server_id": "1000", "bind_epoch": "3", "transfer": "1001:t-7"}
+	f.directory.binding.Transfer = &svcaccount.RoleTransfer{ID: "t-7", From: 1000, To: 1001, Epoch: 3}
 	if err := f.admit(claims); !errors.Is(err, apperrors.ErrRehomeMoving) {
 		t.Fatalf("err = %v, want rehome_moving", err)
 	}
@@ -186,7 +189,7 @@ func TestRehomeAdmitResumesATransferThisProcessDidNotFinish(t *testing.T) {
 	}
 	f.expectEvents(t)
 	f.runBackground()
-	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-7")
+	f.expectEvents(t, "close 94301: rehome: the player is changing servers", "recheck t-7", "close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-7")
 	want := Move{PlayerID: 94301, EntityID: 7_094_301, ID: "t-7", From: 1000, To: 1001, Epoch: 3}
 	if len(left) != 1 || left[0] != want {
 		t.Fatalf("the leave hook saw %+v, want %+v", left, want)
@@ -201,7 +204,7 @@ func TestRehomeAdmitResumesATransferThisProcessDidNotFinish(t *testing.T) {
 		t.Fatalf("err = %v, want rehome_moving", err)
 	}
 	g.runBackground()
-	g.expectEvents(t, "binding 94301", "close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-8")
+	g.expectEvents(t, "binding 94301", "close 94301: rehome: the player is changing servers", "recheck t-8", "close 94301: rehome: the player is changing servers", "handoff 7094301", "commit 94301 t-8")
 }
 
 // 进入之后：档里的意图指向本服就是到达，事务外的到达钩子各跑一次、失败只记日志；
@@ -249,12 +252,14 @@ func TestRehomeArriveRunsTheArrivedHooksAndReconcilesAStaleIntent(t *testing.T) 
 		t.Fatalf("err = %v, want the directory's error", err)
 	}
 	f.expectEvents(t, "arrive 94301 at 1000", "abort 94301 t-old")
-	// account 说那个 ID 已经提交：不清，报错。
+	// account 说那个 ID 已经提交、他绑定在 1001：不清，报错。
 	f.directory.aborts = []error{svcaccount.ErrTransferStale}
+	f.directory.binding.ServingServerID, f.directory.binding.BindEpoch = 1001, 4
 	if err := arrive(); err == nil {
 		t.Fatal("a committed transfer's intent was reconciled away")
 	}
 	f.expectEvents(t, "arrive 94301 at 1000", "abort 94301 t-old")
+	f.directory.binding.ServingServerID, f.directory.binding.BindEpoch = 1000, 3
 	// 这个意图正是本进程此刻在做的那一次：不对账——否则会把自己刚发起的换服中止掉。
 	if err := f.residency.Reserve(Move{PlayerID: rehomePlayer, ID: "t-old", From: 1000, To: 1001}); err != nil {
 		t.Fatal(err)
