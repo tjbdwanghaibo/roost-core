@@ -347,8 +347,15 @@ func (s *Service) readySlot(ctx context.Context, role Role) (Slot, error) {
 	if err != nil {
 		return Slot{}, err
 	}
-	if !found || slot.Value.PlayerID != role.PlayerID || slot.Value.Creation.ID != role.CreationID || slot.Value.BindEpoch != role.BindEpoch {
+	if !found || !slotServes(slot.Value, role) {
 		return Slot{}, fmt.Errorf("%w: role creation is pending reconciliation", ErrConflict)
 	}
 	return slot.Value, nil
+}
+
+// slotServes 判断 slot 是不是 role 当前可用的那一个：指向这个角色、是它的建角计划、属于它当前这一代绑定。
+// readySlot 与 RoleOnServer 共用这一条，“角色可用”只有一种说法。调用方保证 slot 在角色的绑定服上、
+// 角色带着建角身份（CreationID 非空）。
+func slotServes(slot Slot, role Role) bool {
+	return role.CreationID != "" && slot.PlayerID == role.PlayerID && slot.Creation.ID == role.CreationID && slot.BindEpoch == role.BindEpoch
 }

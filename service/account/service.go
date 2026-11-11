@@ -321,6 +321,62 @@ func (s *Service) SelectRole(ctx context.Context, accountID string, playerID int
 	}, nil
 }
 
+// RoleOnServer 返回 accountID 在 serverID 上的角色，照 SelectRole / ValidateSession 一样带着承载服
+// （ServingServerID）与在途的换服（Transfer）。只读：不签发会话、不改登录时间、不做换服的收尾。
+//
+// 它读的是名额（slot，键 accountID@serverID），再读 slot 指向的角色。各种状态的回答：
+//
+//   - 没有 slot：ErrRoleMissing。
+//   - slot 是待定的建角计划（PlayerID 为 0，含“角色记录已写下、slot 还没发布”）：ErrRoleMissing。角色
+//     还没发布，SelectRole 也选不了它；客户端用原来的名字再 CreateRole 一次把它续完。计划里的名字不交出去，
+//     与 CreateRole 换名被拒时的做法一致。
+//   - slot 已发布、角色绑定在这个服：返回角色。绑定服已并入别的服时 ServerID 仍是 serverID，
+//     ServingServerID 是承载服；换服在途时 Transfer 非空（角色仍由源服承载、照常可选）。
+//   - slot 是换服在目标服的占位、换服还没提交（或已中止、占位还没撤）：角色绑定在源服，在这个服上
+//     答 ErrRoleMissing；在源服上问得到它。
+//   - 换服已提交：新服上返回角色（占位标记清没清都一样，它已经是角色当前这一代的 slot）；旧服上那个
+//     还没删掉的 slot 答 ErrRoleMissing。
+//   - slot 与角色对不上——slot 记的账号 / 服不是问的这个、slot 指向的角色不存在或属于别的账号、角色在
+//     这个服但 slot 不是它当前这一代的：ErrConflict，与 SelectRole 对同一个角色的回答一致。绝不把别的
+//     账号的角色交出去。
+//
+// 以绑定服为准，不以承载服为准：并入 1 服的 2 服角色要用 serverID=2 问；用 1 问到的是账号在 1 服自己的角色。
+// accountID 为空答 ErrAccountMissing，serverID 不是正数答 ErrServerInvalid；不检查账号与区服记录是否存在
+// （不存在就没有 slot）。承载服解析不了（合服记录缺失、两跳）时原样返回那个错误。
+func (s *Service) RoleOnServer(ctx context.Context, accountID string, serverID int32) (Role, error) {
+	if strings.TrimSpace(accountID) == "" {
+		return Role{}, fmt.Errorf("%w: account id is empty", ErrAccountMissing)
+	}
+	if serverID <= 0 {
+		return Role{}, fmt.Errorf("%w: server id %d is not positive", ErrServerInvalid, serverID)
+	}
+	slot, found, err := s.cfg.Slots.Get(ctx, slotKeyFor(accountID, serverID))
+	if err != nil {
+		return Role{}, err
+	}
+	if !found || slot.Value.PlayerID == 0 {
+		return Role{}, fmt.Errorf("%w: %s has no role on server %d", ErrRoleMissing, accountID, serverID)
+	}
+	if slot.Value.AccountID != accountID || slot.Value.ServerID != serverID {
+		return Role{}, fmt.Errorf("%w: slot identity mismatch", ErrConflict)
+	}
+	role, found, err := s.cfg.Roles.Get(ctx, slot.Value.PlayerID)
+	if err != nil {
+		return Role{}, err
+	}
+	if !found || role.Value.AccountID != accountID {
+		return Role{}, fmt.Errorf("%w: the slot of %s on server %d names a role that is missing or belongs to another account", ErrConflict, accountID, serverID)
+	}
+	if role.Value.ServerID != serverID {
+		// 换服的占位，或提交之后还没删掉的旧服 slot：角色绑定在别的服。
+		return Role{}, fmt.Errorf("%w: %s has no role on server %d", ErrRoleMissing, accountID, serverID)
+	}
+	if !slotServes(slot.Value, role.Value) {
+		return Role{}, fmt.Errorf("%w: role creation is pending reconciliation", ErrConflict)
+	}
+	return s.withServing(ctx, role.Value)
+}
+
 // ValidateSession verifies a token and returns the role it names.
 func (s *Service) ValidateSession(ctx context.Context, playerID int64, token string) (Role, error) {
 	if _, err := security.VerifySessionToken(token, s.cfg.SessionSecret, playerID, s.cfg.SystemNow()); err != nil {

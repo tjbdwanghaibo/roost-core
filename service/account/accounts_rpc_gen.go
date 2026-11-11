@@ -43,6 +43,7 @@ const (
 	MethodUpdateProfile      = "account.UpdateProfile"
 	MethodMarkLogout         = "account.MarkLogout"
 	MethodGetServer          = "account.GetServer"
+	MethodRoleOnServer       = "account.RoleOnServer"
 	MethodRoleBinding        = "account.RoleBinding"
 	MethodBeginRoleTransfer  = "account.BeginRoleTransfer"
 	MethodCommitRoleTransfer = "account.CommitRoleTransfer"
@@ -61,6 +62,7 @@ var Methods = []string{
 	MethodUpdateProfile,
 	MethodMarkLogout,
 	MethodGetServer,
+	MethodRoleOnServer,
 	MethodRoleBinding,
 	MethodBeginRoleTransfer,
 	MethodCommitRoleTransfer,
@@ -213,6 +215,23 @@ type rpcGetServerResponse struct {
 	Server GameServer `json:"server"`
 }
 
+// rpcRoleOnServerRequest is the RoleOnServer request on the wire.
+//
+// Its fields are named after the interface method's PARAMETERS, so a payload
+// says what the method says. The client takes those parameters as arguments,
+// which is what keeps a caller's identity something the compiler asks for
+// rather than a struct field whose zero value looks valid.
+type rpcRoleOnServerRequest struct {
+	AccountID string `json:"account_id"`
+	ServerID  int32  `json:"server_id"`
+}
+
+// rpcRoleOnServerResponse is the RoleOnServer response on the wire.
+type rpcRoleOnServerResponse struct {
+	rpcStatus
+	Role Role `json:"role"`
+}
+
 // rpcRoleBindingRequest is the RoleBinding request on the wire.
 //
 // Its fields are named after the interface method's PARAMETERS, so a payload
@@ -352,6 +371,14 @@ func RegisterHandlers(b bus.IBus, service Accounts) error {
 			}
 			server, err := service.GetServer(ctx.Context(), wire.ServerID)
 			return rpcGetServerResponse{rpcStatus: statusOf(err), Server: server}, nil
+		},
+		MethodRoleOnServer: func(ctx *bus.RpcContext) (any, error) {
+			var wire rpcRoleOnServerRequest
+			if err := ctx.Decode(&wire); err != nil {
+				return rpcRoleOnServerResponse{rpcStatus: statusOf(fmt.Errorf("%w: %s", ErrRequestInvalid, err))}, nil
+			}
+			role, err := service.RoleOnServer(ctx.Context(), wire.AccountID, wire.ServerID)
+			return rpcRoleOnServerResponse{rpcStatus: statusOf(err), Role: role}, nil
 		},
 		MethodRoleBinding: func(ctx *bus.RpcContext) (any, error) {
 			var wire rpcRoleBindingRequest
@@ -532,6 +559,21 @@ func (c *BusClient) GetServer(ctx context.Context, serverID int32) (GameServer, 
 	return resp.Server, err
 }
 
+// RoleOnServer 返回 accountID 在 serverID 上的角色（一个账号在一个服至多一个）；只读。没有角色、角色还
+// 没发布、角色已经换到别的服，都答 ErrRoleMissing（各种 slot 状态的回答见 Service.RoleOnServer）。
+// 登录入口用它告诉客户端“你在这个服上的角色是谁”：换设备、重装之后客户端不知道自己的 player_id，
+// 拿另一个名字 CreateRole 只会得到 ErrRoleLimit。信任模型与 SelectRole 相同：可信调用方提供 accountID。
+// 没有“列出账号的全部角色 / 全部区服”：存储是键值的，没有扫描；区服清单由登录入口的配置给出。
+// RoleOnServer implements Accounts.
+func (c *BusClient) RoleOnServer(ctx context.Context, accountID string, serverID int32) (Role, error) {
+	var resp rpcRoleOnServerResponse
+	err := c.call(ctx, MethodRoleOnServer, rpcRoleOnServerRequest{
+		AccountID: accountID,
+		ServerID:  serverID,
+	}, &resp)
+	return resp.Role, err
+}
+
 // RoleBinding returns where a role is bound right now: its server, the
 // server that serves it, the bind epoch, the transfer seq, and the
 // transfer in flight or last settled. Read-only.
@@ -642,6 +684,10 @@ func (c capability) MarkLogout(ctx context.Context, accountID string, playerID i
 
 func (c capability) GetServer(ctx context.Context, serverID int32) (GameServer, error) {
 	return c.inner.GetServer(ctx, serverID)
+}
+
+func (c capability) RoleOnServer(ctx context.Context, accountID string, serverID int32) (Role, error) {
+	return c.inner.RoleOnServer(ctx, accountID, serverID)
 }
 
 func (c capability) RoleBinding(ctx context.Context, playerID int64) (RoleBinding, error) {

@@ -70,6 +70,13 @@ type Accounts interface {
 	// (wiring/account ServingGuardMod).
 	GetServer(ctx context.Context, serverID int32) (server GameServer, err error)
 
+	// RoleOnServer 返回 accountID 在 serverID 上的角色（一个账号在一个服至多一个）；只读。没有角色、角色还
+	// 没发布、角色已经换到别的服，都答 ErrRoleMissing（各种 slot 状态的回答见 Service.RoleOnServer）。
+	// 登录入口用它告诉客户端“你在这个服上的角色是谁”：换设备、重装之后客户端不知道自己的 player_id，
+	// 拿另一个名字 CreateRole 只会得到 ErrRoleLimit。信任模型与 SelectRole 相同：可信调用方提供 accountID。
+	// 没有“列出账号的全部角色 / 全部区服”：存储是键值的，没有扫描；区服清单由登录入口的配置给出。
+	RoleOnServer(ctx context.Context, accountID string, serverID int32) (role Role, err error)
+
 	// 单个角色换服（transfer.go）。四个接口都在总线上：发起与提交的是源服的 game 进程（它知道自己什么
 	// 时候停写、卸载完），冷准入时任何 game 进程都要读绑定。它们改的是一个角色自己的绑定，不是
 	// UpsertServer / MergeServer 那样改变所有玩家能登录到哪里的控制面写；调用方可信的前提与本接口其余
